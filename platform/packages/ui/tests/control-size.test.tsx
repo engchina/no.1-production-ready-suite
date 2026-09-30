@@ -162,4 +162,14 @@ describe("FieldActionRow（入力欄と操作の行）", () => {
     // 補足は行の外（下）に置く。
     expect(html.indexOf("<p>補足</p>")).toBeGreaterThan(html.indexOf("送信"));
   });
+
+  it("操作が無い（null）ときは操作の列を描かず、入力欄が行の幅いっぱいになる（#631）", () => {
+    const html = renderToStaticMarkup(
+      <FieldActionRow actions={null}>
+        <TextField id="password" label="一時パスワード" value="" onChange={noop} />
+      </FieldActionRow>
+    );
+    expect(html).not.toContain("shrink-0");
+    expect(html).toContain('id="password"');
+  });
 });

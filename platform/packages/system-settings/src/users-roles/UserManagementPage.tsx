@@ -10,9 +10,10 @@ import {
   type DataTableSort,
   StatusBadge,
   PageHeader,
+  FieldActionRow,
   FieldError,
-  FieldLabel,
   FieldLegend,
+  TextField,
   PageBody,
   useConfirm,
   ProcessingIndicator,
@@ -22,7 +23,6 @@ import {
   SaveErrorBanner,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
-  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import {
   useCallback,
@@ -124,9 +124,6 @@ const EMPTY_DRAFT: UserDraftState = {
   temporaryPassword: "",
 };
 
-// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
-const INPUT_CLASS = fieldControlClassName();
-
 function compareText(left: string, right: string, direction: DataTableSort["direction"]) {
   const result = left.localeCompare(right, "ja");
   return direction === "asc" ? result : -result;
@@ -192,6 +189,10 @@ export function UserManagementPage({
   );
 
   const editingUser = users.find((user) => user.user_uuid === editingId) ?? null;
+  // 一時パスワードの欄の操作（コピー・再発行）の失敗。欄の下に出し、欄の aria-describedby で結び付ける。
+  const temporaryPasswordActionError =
+    copyPasswordError ||
+    (resetPasswordError?.userUuid === editingUser?.user_uuid ? (resetPasswordError?.message ?? "") : "");
   const userFormReadOnly = activeView === "edit" && editingUser?.status !== "ACTIVE";
   const canSubmitUserForm = !userFormReadOnly;
   const accountActionBusy =
@@ -936,115 +937,91 @@ export function UserManagementPage({
                 noValidate
               >
                     <div className="grid gap-4 lg:grid-cols-2">
-                  <div className="grid gap-1.5 text-sm font-medium">
-                    <FieldLabel htmlFor="security-user-login-user-id" label={t("security.users.loginUserId")} required />
-                    <input
-                      ref={loginUserIdRef}
-                      id="security-user-login-user-id"
-                      required
-                      maxLength={64}
-                      disabled={activeView === "edit" || operationBusy}
-                      className={cn(INPUT_CLASS, fieldErrors.loginUserId && "border-danger-fg")}
-                      aria-invalid={fieldErrors.loginUserId ? "true" : undefined}
-                      aria-describedby={fieldErrors.loginUserId ? "security-user-login-user-id-error" : undefined}
-                      autoComplete="off"
-                      value={draft.loginUserId}
-                      onChange={(event) => updateDraftField("loginUserId", event.target.value)}
-                    />
-                    <FieldError id="security-user-login-user-id-error" message={fieldErrors.loginUserId} />
-                  </div>
-                  <div className="grid gap-1.5 text-sm font-medium">
-                    <FieldLabel htmlFor="security-user-display-name" label={t("security.users.displayName")} required />
-                    <input
-                      ref={displayNameRef}
-                      id="security-user-display-name"
-                      required
-                      disabled={inputReadOnly}
-                      className={cn(INPUT_CLASS, fieldErrors.displayName && "border-danger-fg")}
-                      aria-invalid={fieldErrors.displayName ? "true" : undefined}
-                      aria-describedby={fieldErrors.displayName ? "security-user-display-name-error" : undefined}
-                      value={draft.displayName}
-                      onChange={(event) => updateDraftField("displayName", event.target.value)}
-                    />
-                    <FieldError id="security-user-display-name-error" message={fieldErrors.displayName} />
-                  </div>
+                  <TextField
+                    ref={loginUserIdRef}
+                    id="security-user-login-user-id"
+                    label={t("security.users.loginUserId")}
+                    required
+                    maxLength={64}
+                    disabled={activeView === "edit" || operationBusy}
+                    error={fieldErrors.loginUserId}
+                    autoComplete="off"
+                    value={draft.loginUserId}
+                    onValueChange={(value) => updateDraftField("loginUserId", value)}
+                  />
+                  <TextField
+                    ref={displayNameRef}
+                    id="security-user-display-name"
+                    label={t("security.users.displayName")}
+                    required
+                    disabled={inputReadOnly}
+                    error={fieldErrors.displayName}
+                    value={draft.displayName}
+                    onValueChange={(value) => updateDraftField("displayName", value)}
+                  />
                     </div>
-                    <div className="grid gap-1.5 text-sm font-medium">
-                      <FieldLabel
-                        htmlFor="security-user-temporary-password"
-                        label={t(
-                          activeView === "create"
-                            ? "security.users.tempPassword"
-                            : "security.users.oneTimePassword.valueLabel"
-                        )}
-                      />
-                      <div
-                        className={cn(
-                          "grid min-w-0 gap-2",
-                          activeView === "edit" &&
-                            "sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start"
-                        )}
-                      >
-                        <input
-                          ref={temporaryPasswordRef}
-                          id="security-user-temporary-password"
-                          type={activeView === "create" ? "password" : "text"}
-                          readOnly={activeView === "edit"}
-                          disabled={inputReadOnly}
-                          className={cn(INPUT_CLASS, fieldErrors.temporaryPassword && "border-danger-fg")}
-                          aria-invalid={fieldErrors.temporaryPassword ? "true" : undefined}
-                          aria-describedby={
-                            fieldErrors.temporaryPassword
-                              ? "security-user-temporary-password-error"
-                              : activeView === "edit" &&
-                                  (copyPasswordError ||
-                                    (resetPasswordError?.userUuid === editingUser?.user_uuid &&
-                                      resetPasswordError?.message))
-                                ? "security-user-temporary-password-action-error"
-                                : undefined
-                          }
-                          autoComplete={activeView === "create" ? "new-password" : "off"}
-                          value={draft.temporaryPassword}
-                          onChange={(event) => {
-                            if (activeView === "create") {
-                              updateDraftField("temporaryPassword", event.target.value);
-                            }
-                          }}
-                          data-testid="security-user-temporary-password"
-                        />
-                        {activeView === "edit" ? (
+                    {/* 一時パスワード。作成では入力、編集では発行した値（読み取り専用）とコピーの操作の行。
+                        エラーは操作の下端がずれないよう footer に出す（#613 / #631）。 */}
+                    <FieldActionRow
+                      actions={
+                        activeView === "edit" ? (
                           <Button
                             type="button"
                             variant="secondary"
-                            className="w-full sm:w-auto"
                             disabled={userFormReadOnly || !draft.temporaryPassword}
                             onClick={() => void copyTemporaryPassword()}
                             data-testid="security-user-temporary-password-copy" icon={Copy}>
                             <span>{t("security.users.oneTimePassword.copy")}</span>
                           </Button>
-                        ) : null}
-                      </div>
-                      <FieldError
-                        id="security-user-temporary-password-error"
-                        message={fieldErrors.temporaryPassword}
-                      />
-                      {activeView === "edit" ? (
-                        <div
-                          id="security-user-temporary-password-action-error"
-                          data-testid="security-user-temporary-password-error"
-                        >
-                          <FormStatus
-                            tone="danger"
-                            message={
-                              copyPasswordError ||
-                              (resetPasswordError?.userUuid === editingUser?.user_uuid
-                                ? (resetPasswordError?.message ?? "")
-                                : "")
-                            }
+                        ) : null
+                      }
+                      footer={
+                        <>
+                          <FieldError
+                            id="security-user-temporary-password-error"
+                            message={fieldErrors.temporaryPassword}
                           />
-                        </div>
-                      ) : null}
-                    </div>
+                          {activeView === "edit" ? (
+                            <div
+                              id="security-user-temporary-password-action-error"
+                              data-testid="security-user-temporary-password-error"
+                            >
+                              <FormStatus tone="danger" message={temporaryPasswordActionError} />
+                            </div>
+                          ) : null}
+                        </>
+                      }
+                    >
+                      <TextField
+                        ref={temporaryPasswordRef}
+                        id="security-user-temporary-password"
+                        label={t(
+                          activeView === "create"
+                            ? "security.users.tempPassword"
+                            : "security.users.oneTimePassword.valueLabel"
+                        )}
+                        type={activeView === "create" ? "password" : "text"}
+                        readOnly={activeView === "edit"}
+                        disabled={inputReadOnly}
+                        aria-invalid={Boolean(fieldErrors.temporaryPassword)}
+                        aria-describedby={
+                          fieldErrors.temporaryPassword
+                            ? "security-user-temporary-password-error"
+                            : activeView === "edit" && temporaryPasswordActionError
+                              ? "security-user-temporary-password-action-error"
+                              : undefined
+                        }
+                        inputClassName={cn(fieldErrors.temporaryPassword && "border-danger-fg")}
+                        autoComplete={activeView === "create" ? "new-password" : "off"}
+                        value={draft.temporaryPassword}
+                        onValueChange={(value) => {
+                          if (activeView === "create") {
+                            updateDraftField("temporaryPassword", value);
+                          }
+                        }}
+                        data-testid="security-user-temporary-password"
+                      />
+                    </FieldActionRow>
                     <fieldset className="grid gap-2" disabled={inputReadOnly}>
                   {/* 必須は下の radiogroup の aria-required で伝えるので、legend のタグは読み上げない。 */}
                   <FieldLegend id="security-users-role-legend" required requiredAnnouncedByControl>

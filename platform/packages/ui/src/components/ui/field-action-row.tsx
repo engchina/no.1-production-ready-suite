@@ -5,7 +5,10 @@ import { cn } from "../../lib/utils";
 export interface FieldActionRowProps {
   /** 入力欄（TextField / TextareaField / SearchField / SelectField など 1 つ）。行の残りの幅を埋める。 */
   children: ReactNode;
-  /** 入力欄の右に並べる操作（Button。入力欄と同じ size にする）。 */
+  /**
+   * 入力欄の右に並べる操作（Button。入力欄と同じ size にする）。null / false なら操作の列を描かず、
+   * 入力欄が行の幅いっぱいになる（状態によって操作が無い欄も同じ構造のまま書ける。#631）。
+   */
   actions: ReactNode;
   /** 行の下に出す補足・エラー（欄の helper / error の代わり。欄の中に入れると操作の下端がずれるため）。 */
   footer?: ReactNode;
@@ -27,9 +30,11 @@ export function FieldActionRow({ children, actions, footer, className, ...props 
     <div className={cn("min-w-0 space-y-1.5", className)} data-testid={props["data-testid"]}>
       <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end" data-field-action-row="">
         <div className="min-w-0 flex-1 [&>*]:w-full">{children}</div>
-        <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-end [&>*]:w-full sm:[&>*]:w-auto">
-          {actions}
-        </div>
+        {actions === null || actions === undefined || actions === false ? null : (
+          <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-end [&>*]:w-full sm:[&>*]:w-auto">
+            {actions}
+          </div>
+        )}
       </div>
       {footer}
     </div>

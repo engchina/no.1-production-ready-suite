@@ -1,13 +1,12 @@
 import type { ChangeEvent, InputHTMLAttributes, ReactNode } from "react";
 
-import { cn } from "@engchina/production-ready-ui";
-
 import {
   Button,
   type ButtonProps,
+  cn,
+  FieldActionRow,
   FieldError,
-  FieldLabel,
-  fieldControlClassName,
+  TextField,
 } from "@engchina/production-ready-ui";
 
 export interface InputActionFieldAction {
@@ -25,7 +24,8 @@ export interface InputActionFieldAction {
 
 export interface InputActionFieldProps {
   id: string;
-  label: ReactNode;
+  /** 翻訳済みのラベル（TextField の label）。 */
+  label: string;
   value: string;
   onChange?: (value: string) => void;
   placeholder?: string;
@@ -45,8 +45,9 @@ export interface InputActionFieldProps {
 }
 
 /**
- * テキスト入力と右側の操作（取得・接続テスト）を同じ高さ（md 36px、タッチ端末は 44px）でそろえる欄。
- * 以前はマウス環境でも 44px（touchTarget）にしていたが、フォームのほかの欄（36px）とずれるためやめた（#613）。
+ * テキスト入力と右側の操作（取得・接続テスト）を 1 行に並べる欄（TextField + FieldActionRow）。
+ * 高さは入力欄・ボタンとも md 36px（タッチ端末は 44px）。操作は入力欄の下端にそろい、375px では下に全幅（#613）。
+ * 補足・エラーは FieldActionRow の footer に出す（欄の中に入れると操作の下端がずれるため）。#631 でネイティブの input から置き換えた。
  */
 export function InputActionField({
   id,
@@ -80,39 +81,15 @@ export function InputActionField({
   }
 
   return (
-    <div className={cn("space-y-1.5", className)}>
-      <FieldLabel
-        htmlFor={id}
-        label={label}
-        required={required}
-        requiredLabel={requiredLabel}
-      />
-      <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-        <input
-          id={id}
-          type={type}
-          value={value}
-          readOnly={readOnly}
-          disabled={disabled}
-          required={required}
-          aria-readonly={readOnly || undefined}
-          aria-required={required}
-          aria-invalid={Boolean(error)}
-          aria-describedby={inputDescribedBy}
-          autoComplete={autoComplete}
-          placeholder={placeholder}
-          data-testid={inputTestId}
-          onChange={handleChange}
-          className={fieldControlClassName({
-            className: cn(readOnly && "cursor-default text-fg-muted", inputClassName),
-          })}
-        />
-        {/* 入力と同じ行の操作なので、入力欄と同じ md（README §4「操作部品の高さと幅」）。 */}
+    <FieldActionRow
+      className={className}
+      actions={
+        // 入力と同じ行の操作なので、入力欄と同じ md（README §4「操作部品の高さと幅」）。
         <Button
           type={action.type ?? "button"}
           variant={action.variant ?? "secondary"}
           size="md"
-          className={cn("w-full", action.className)}
+          className={action.className}
           aria-label={action.ariaLabel}
           aria-describedby={actionError ? actionErrorId : undefined}
           icon={action.icon}
@@ -123,14 +100,42 @@ export function InputActionField({
         >
           <span>{action.label}</span>
         </Button>
-      </div>
-      {helper ? (
-        <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
-          {helper}
-        </p>
-      ) : null}
-      <FieldError id={errorId} message={error} />
-      <FieldError id={actionErrorId} message={actionError} />
-    </div>
+      }
+      footer={
+        <>
+          {helper ? (
+            <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
+              {helper}
+            </p>
+          ) : null}
+          <FieldError id={errorId} message={error} />
+          <FieldError id={actionErrorId} message={actionError} />
+        </>
+      }
+    >
+      <TextField
+        id={id}
+        label={label}
+        type={type}
+        value={value}
+        readOnly={readOnly}
+        disabled={disabled}
+        required={required}
+        requiredLabel={requiredLabel}
+        aria-readonly={readOnly || undefined}
+        // 補足・エラーは footer に出すので、TextField の helper / error ではなく aria で結び付ける。
+        aria-invalid={Boolean(error)}
+        aria-describedby={inputDescribedBy}
+        autoComplete={autoComplete}
+        placeholder={placeholder}
+        data-testid={inputTestId}
+        onChange={handleChange}
+        inputClassName={cn(
+          error && "border-danger-fg",
+          readOnly && "cursor-default text-fg-muted",
+          inputClassName
+        )}
+      />
+    </FieldActionRow>
   );
 }
