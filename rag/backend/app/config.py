@@ -198,11 +198,13 @@ EvaluationSuite = Literal[
     "standard",
     "strict",
 ]
+# 関係情報の構築(#621)。off = 構築しない、entities = 文書と章・節の見出しのつながりを構築する。
 GraphProfile = Literal[
     "off",
     "entities",
-    "full",
 ]
+# #621 で削除した関係情報の構築の値。backend/.env に残っていると起動を止めて書き換えを促す。
+REMOVED_GRAPH_PROFILES = frozenset({"full"})
 EnterpriseAiVlmInputMode = Literal["files_api", "inline_image"]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 # RAG 固有の設定（`RAG_*`）を置く `backend/.env`。
@@ -821,13 +823,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "画面と Nginx の待ち時間はこれより長くする。"
         ),
     )
-    rag_graph_enabled: bool = Field(
-        default=False,
-        description=(
-            "Oracle 内の軽量 KG / community summary を使う GraphRAG-lite 経路。"
-            "未整備環境では hybrid へ安全に fallback する。"
-        ),
-    )
     db_read_timeout_seconds: float = Field(
         default=8.0,
         gt=0.0,
@@ -904,9 +899,9 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_graph_profile: GraphProfile = Field(
         default="off",
         description=(
-            "GraphRAG アダプター(知識グラフ構築の深さ)。off(既定)は KG を構築しない、"
-            "entities は entities+relationships のみ、full は claims+community summary まで構築。"
-            "legacy の RAG_GRAPH_ENABLED=true は full 相当として扱う。"
+            "関係情報の構築。off(既定)は構築しない、entities は文書と章・節の見出しのつながりを"
+            "構築する(LLM は使わない)。ナレッジベースの関係情報グラフで見るためのもので、"
+            "回答の検索には使わない。"
         ),
     )
     rag_vector_index_profile: VectorIndexProfile = Field(
@@ -1500,20 +1495,16 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             return "files_api"
         return value
 
-    @model_validator(mode="after")
-    def normalize_legacy_graph_enabled(self) -> Self:
-        """legacy RAG_GRAPH_ENABLED=true を起動時に RAG_GRAPH_PROFILE へ寄せる(#274)。
-
-        legacy フラグは profile off を full 相当に読み替える。フラグのまま残すと、取込の構築判定
-        (graph_adapter)は full なのに、文書の構築予定・実効設定の表示は rag_graph_profile(off)を
-        見て食い違い、文書レシピで「構築しない」を選んでも full で構築される。profile を唯一の
-        正本にするため、ここで profile へ移してフラグを下ろす。
-        """
-        if self.rag_graph_enabled:
-            if self.rag_graph_profile == "off":
-                self.rag_graph_profile = "full"
-            self.rag_graph_enabled = False
-        return self
+    @field_validator("rag_graph_profile", mode="before")
+    @classmethod
+    def reject_removed_graph_profile(cls, value: object) -> object:
+        """削除した full(#621)は読み替えず、書き換え先を示して起動を止める。"""
+        if str(value).strip().casefold() in REMOVED_GRAPH_PROFILES:
+            raise ValueError(
+                "RAG_GRAPH_PROFILE=full は廃止しました(#621)。backend/.env の値を entities"
+                "(構築する)か off(構築しない)に書き換えてください。"
+            )
+        return value
 
     @model_validator(mode="after")
     def validate_ingestion_queue_lease(self) -> Self:

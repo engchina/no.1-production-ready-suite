@@ -77,7 +77,8 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
 - **Temporal GraphRAG**: 取込時に entity / relationship へ timestamp(`valid_from/valid_to`)を付与し、
   検索時に query の時間文脈(「最新の」「2024 年時点」)を抽出して Oracle の条件でフィルタする。
   回答の検索で graph を使う経路は #595 で削除したため、検索時の利用から設計し直す。設定は実装と同時に
-  追加する(未実装の設定は置かない。#301)。
+  追加する(未実装の設定は置かない。#301)。今の関係情報の構築(`entities`)は文書と章・節の見出しの
+  つながりだけを作る(読む経路の無かった claims / community summary は #621 で削除した)。
 - **RAPTOR 検索時昇格**: 既に summary node を索引済。leaf hit 時に対応する summary node を回答の文脈へ
   昇格する経路を、回答フローの small-to-big(親本文・前後の child)と合わせて追加する(opt-in)。
 

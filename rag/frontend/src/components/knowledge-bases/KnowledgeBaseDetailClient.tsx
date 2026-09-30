@@ -120,7 +120,7 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
         </CardContent>
       </Card>
 
-      {/* 関係情報(GraphRAG)の俯瞰。展開時のみ subgraph を取得。 */}
+      {/* 関係情報(文書と章・節の見出しのつながり)の俯瞰。展開時のみ subgraph を取得。 */}
       <KnowledgeBaseGraphView knowledgeBaseId={kb.id} />
 
       {/* 項目抽出で取り出す項目の定義(#548)。無ければ全体の既定を使う。構築設定として、構築フローの直前に置く(#555)。 */}

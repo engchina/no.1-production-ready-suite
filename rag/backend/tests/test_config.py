@@ -125,7 +125,7 @@ def test_unknown_evaluation_suite_is_rejected() -> None:
 
 
 def test_graph_profile_defaults_to_off() -> None:
-    """GraphRAG アダプターの既定 off は KG 非構築(現行挙動)と一致させる。"""
+    """関係情報の構築の既定は off(構築しない)。"""
     assert Settings().rag_graph_profile == "off"
 
 
@@ -139,6 +139,22 @@ def test_automatic_document_stage_progression_is_enabled_by_default() -> None:
 def test_unknown_graph_profile_is_rejected() -> None:
     with pytest.raises(ValidationError):
         Settings(rag_graph_profile="neo4j")
+
+
+def test_removed_full_graph_profile_stops_startup_with_guidance() -> None:
+    """削除した full(#621)は読み替えず、書き換え先を示して止める。"""
+    with pytest.raises(ValidationError) as error:
+        Settings(rag_graph_profile="full")
+    assert "RAG_GRAPH_PROFILE=full は廃止しました" in str(error.value)
+    assert "entities" in str(error.value)
+
+
+def test_legacy_graph_enabled_flag_is_not_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """legacy の RAG_GRAPH_ENABLED は #621 で廃止した(読まず、profile を変えない)。"""
+    monkeypatch.setenv("RAG_GRAPH_ENABLED", "true")
+    settings = Settings()
+    assert "rag_graph_enabled" not in Settings.model_fields
+    assert settings.rag_graph_profile == "off"
 
 
 def test_oracle_defaults_to_thin_mode(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -9,7 +9,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`関係情報の構築設定は構築方式を表示する (${viewport.name})`, async ({ page }) => {
+  test(`関係情報の構築設定は「構築しない」「構築する」を表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockGraph(page, "off");
@@ -18,22 +18,37 @@ for (const viewport of [
 
     // ナビ・画面タイトルは取込時の「関係情報の構築」(検索側の関係検索は検索方法。#301)。
     await expect(page.getByRole("heading", { name: "関係情報の構築", level: 1 })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /構築しない/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /軽量/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /フル/ })).toBeVisible();
+    // 選択肢は 2 つ。既定は色ではなく「既定」の文字で示す(#621)。
+    const radios = page.getByRole("radiogroup", { name: "取込のときに作るか" }).getByRole("radio");
+    await expect(radios).toHaveCount(2);
+    const off = page.getByRole("radio", { name: /構築しない/ });
+    await expect(off).toBeChecked();
+    await expect(page.locator('label[for="settings-graph-profile-off"]')).toContainText("既定");
+    await expect(page.locator('label[for="settings-graph-profile-entities"]')).not.toContainText("既定");
+    await expect(page.getByRole("radio", { name: /構築する/ })).toBeVisible();
+    // 何に使うか(関係情報グラフ。回答の検索には使わない)を書き、内部の英語の用語と保存値を出さない。
+    const main = page.getByRole("main");
+    await expect(main).toContainText("関係情報グラフ");
+    await expect(main).toContainText("回答の検索には使いません");
+    await expect(main).toContainText("再取込");
+    for (const term of ["entities", "relationships", "claims", "community", "GraphRAG", "現行挙動"]) {
+      await expect(main).not.toContainText(term);
+    }
+    // 見出しは画面のタイトルだけが「関係情報の構築」(カードの見出しで繰り返さない)。
+    await expect(page.getByRole("heading", { name: "関係情報の構築", exact: true })).toHaveCount(1);
     // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
     await expect((await openSidebarNav(page)).getByRole("link", { name: "関係情報の構築" })).toHaveAttribute("aria-current", "page");
     await expectNoHorizontalOverflow(page);
   });
 }
 
-test("関係情報の構築設定は full を選んで保存できる", async ({ page }) => {
+test("関係情報の構築設定は「構築する」を選んで保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let saved: unknown = null;
   await page.route("**/api/settings/graph", async (route) => {
     if (route.request().method() === "PATCH") {
       saved = route.request().postDataJSON();
-      await route.fulfill({ json: graphEnvelope("full") });
+      await route.fulfill({ json: graphEnvelope("entities") });
       return;
     }
     await route.fulfill({ json: graphEnvelope("off") });
@@ -41,14 +56,14 @@ test("関係情報の構築設定は full を選んで保存できる", async ({
 
   await page.goto("/settings/graph");
 
-  const full = page.getByRole("radio", { name: /フル/ });
-  await full.click();
-  await expect(full).toBeChecked();
+  const build = page.getByRole("radio", { name: /構築する/ });
+  await build.click();
+  await expect(build).toBeChecked();
 
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect(page.getByText("関係情報の構築設定を保存しました。")).toBeVisible();
-  expect(saved).toEqual({ profile: "full" });
+  expect(saved).toEqual({ profile: "entities" });
   await expectNoHorizontalOverflow(page);
 });
 
@@ -71,12 +86,12 @@ test("関係情報の構築設定の保存に失敗しても未保存の選択�
 
   await page.goto("/settings/graph");
 
-  const full = page.getByRole("radio", { name: /フル/ });
-  await full.click();
+  const build = page.getByRole("radio", { name: /構築する/ });
+  await build.click();
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect(page.getByText("関係情報設定を backend/.env へ保存できませんでした。")).toBeVisible();
-  await expect(full).toBeChecked();
+  await expect(build).toBeChecked();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
   await expect(page.getByRole("button", { name: "保存" })).toBeEnabled();
 });
@@ -109,24 +124,14 @@ async function collapseSidebar(page: Page) {
   });
 }
 
-function graphEnvelope(profile: string) {
-  const specs = [
-    { name: "off", enabled: false, build_claims: false, build_community_summaries: false },
-    { name: "entities", enabled: true, build_claims: false, build_community_summaries: false },
-    { name: "full", enabled: true, build_claims: true, build_community_summaries: true },
-  ];
-  const selected = specs.find((s) => s.name === profile) ?? specs[0];
+function graphEnvelope(profile: "off" | "entities") {
   return {
     data: {
       profile,
-      enabled: selected.enabled,
-      build_claims: selected.build_claims,
-      build_community_summaries: selected.build_community_summaries,
-      profiles: specs.map((s) => ({
-        ...s,
-        origin: "x",
-        recommended_for: ["general"],
-        selected: s.name === profile,
+      enabled: profile === "entities",
+      profiles: (["off", "entities"] as const).map((name) => ({
+        name,
+        selected: name === profile,
       })),
       config_source: "runtime",
     },
@@ -135,7 +140,7 @@ function graphEnvelope(profile: string) {
   };
 }
 
-async function mockGraph(page: Page, profile: string) {
+async function mockGraph(page: Page, profile: "off" | "entities") {
   await page.route("**/api/settings/graph", async (route) => {
     await route.fulfill({ json: graphEnvelope(profile) });
   });

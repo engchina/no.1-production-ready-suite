@@ -1236,26 +1236,26 @@ def test_update_evaluation_settings_rejects_unknown_suite() -> None:
 def test_graph_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_graph_profile", "entities")
-    monkeypatch.setattr(settings, "rag_graph_enabled", False)
 
     resp = client.get("/api/settings/graph")
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["profile"] == "entities"
-    assert body["enabled"] is True
-    assert body["build_claims"] is False
-    assert body["build_community_summaries"] is False
-    names = [item["name"] for item in body["profiles"]]
-    assert names == ["off", "entities", "full"]
-    selected = [item["name"] for item in body["profiles"] if item["selected"]]
-    assert selected == ["entities"]
+    assert body == {
+        "profile": "entities",
+        "enabled": True,
+        # 選択肢は「構築しない」「構築する」の 2 つ(#621)。
+        "profiles": [
+            {"name": "off", "selected": False},
+            {"name": "entities", "selected": True},
+        ],
+        "config_source": "runtime",
+    }
 
 
 def test_graph_settings_off_disables_build(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_graph_profile", "off")
-    monkeypatch.setattr(settings, "rag_graph_enabled", False)
 
     resp = client.get("/api/settings/graph")
 
@@ -1270,42 +1270,25 @@ def test_update_graph_settings_persists_env_and_mutates_runtime(
 ) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_graph_profile", "off")
-    monkeypatch.setattr(settings, "rag_graph_enabled", False)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
-    resp = client.patch("/api/settings/graph", json={"profile": "full"})
+    resp = client.patch("/api/settings/graph", json={"profile": "entities"})
 
     assert resp.status_code == 200
-    assert resp.json()["data"]["profile"] == "full"
-    assert resp.json()["data"]["build_community_summaries"] is True
-    assert settings.rag_graph_profile == "full"
+    assert resp.json()["data"]["profile"] == "entities"
+    assert resp.json()["data"]["enabled"] is True
+    assert settings.rag_graph_profile == "entities"
     env_text = env_file.read_text(encoding="utf-8")
-    assert "RAG_GRAPH_PROFILE=full" in env_text
-    assert "RAG_GRAPH_ENABLED=false" in env_text
-
-
-def test_update_graph_settings_off_clears_legacy_flag(
-    monkeypatch: MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """legacy RAG_GRAPH_ENABLED=true でも UI 保存で off を正本にできる(full へ戻らない)。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_graph_profile", "off")
-    monkeypatch.setattr(settings, "rag_graph_enabled", True)
-    env_file = _settings_env_file(monkeypatch, tmp_path)
-
-    resp = client.patch("/api/settings/graph", json={"profile": "off"})
-
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["profile"] == "off"
-    assert body["enabled"] is False
-    assert settings.rag_graph_enabled is False
-    assert "RAG_GRAPH_ENABLED=false" in env_file.read_text(encoding="utf-8")
+    assert "RAG_GRAPH_PROFILE=entities" in env_text
+    # legacy の RAG_GRAPH_ENABLED は #621 で廃止した(書かない)。
+    assert "RAG_GRAPH_ENABLED" not in env_text
 
 
 def test_update_graph_settings_rejects_unknown_profile() -> None:
     resp = client.patch("/api/settings/graph", json={"profile": "neo4j"})
+    assert resp.status_code == 422
+    # claims / community summary まで作る full は #621 で削除した。
+    resp = client.patch("/api/settings/graph", json={"profile": "full"})
     assert resp.status_code == 422
 
 

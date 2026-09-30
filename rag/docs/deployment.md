@@ -172,6 +172,36 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
+## 既存環境の更新手順（#621 関係情報の構築の選択肢を 2 つにする）
+
+#621 で、設定の「関係情報の構築」の選択肢を「構築しない」（`off`。既定）と「構築する」（`entities`）の 2 つにした。構築するのは、文書全体と章・節の見出し（表・図を含む）の「含む」のつながりで、LLM は使わない。ナレッジベースの「関係情報グラフ」で見るためのもので、回答の検索には使わない（#595）。
+
+- **`full` を削除した。** `full` が追加で作っていた claims（`rag_graph_claims`）と community summary（`rag_graph_community_summaries`）は、どの画面・API・検索も読んでいなかった。`full` と `entities` が作る関係情報グラフの中身（`rag_graph_entities`・`rag_graph_relationships`・`rag_graph_entity_chunks`）は同じ。
+- **legacy の `RAG_GRAPH_ENABLED` を削除した。** 読まない（`true` でも `full` に読み替えない）。設定画面の保存も書かない。
+- **backend/.env の `RAG_GRAPH_PROFILE=full` は起動を止める。** 読み替えず、書き換え先（`entities` か `off`）を示すエラーで止まる。
+- **保存済みの上書きの `full` は、migration `20260930_006_graph_profile_entities` が `entities` に書き換える**（文書・文書レシピの `processing_config`、ナレッジベースの `retrieval_config.ingestion`、取込ジョブの `settings_overrides.processing_config`、chunk_set に刻んだレシピ `recipe_subset`）。データを削除しない migration。
+- **migration `20260930_007_retire_graph_claims_community` が `rag_graph_claims`・`rag_graph_community_summaries` を削除する。** データを削除する migration なので、承認（CLI の `--allow-destructive`・画面の確認ダイアログ）が要る（上の「既存環境の更新手順の共通の注意」）。どちらも文書から作り直せる派生データで、読む経路が無かったため、書き出しは要らない。
+- 2 つの migration は同時に未適用になるので、承認するまではどちらも当たらない。その間も backend は動く。保存済みの `full` は `entities` として読み（上書きの設定全体を失わないため）、旧 `full` で構築した文書を再取込・削除するときは、残っている `rag_graph_claims` の行（関係情報の entity を参照する）を先に消す。
+
+### 手順
+
+1. #621 の版のコードを取得する（`git pull` など）。
+2. `backend/.env` に `RAG_GRAPH_PROFILE=full` があれば `RAG_GRAPH_PROFILE=entities` に書き換える（構築しない場合は `off`）。`RAG_GRAPH_ENABLED` の行があれば消す（残っても読まないが、`true` だった環境は、以前は `full` で構築していた。同じものを作り続けるなら `RAG_GRAPH_PROFILE=entities` にする）。
+3. backend と ingestion-worker を再起動する（`init_script.sh` の再実行でもよい。`init_script.sh` は承認を付けずに更新するので、この 2 つの migration は WARNING を出して当てずに進む）。
+4. システムテーブルを承認付きで更新する。画面の「システム設定 > データベース > RAG システムテーブル」の「作成・更新」の確認ダイアログで「削除して更新」を押すか、CLI で実行する。
+
+   ```bash
+   cd /u01/aipoc/no.1-production-ready-suite/rag/backend
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize --allow-destructive
+   ```
+
+5. `system_schema_cli status` が `ready` で、`retired_objects` と `pending_versions` が空であることを確かめる。
+
+### 旧 `full` で構築した文書
+
+- ナレッジベースの「関係情報グラフ」は、再取込しなくても今までどおり表示される（残す表の中身は `entities` と同じ）。
+- 文書詳細の関係情報の層は、再取込するまで「構築計画に含まれていますが、まだ実体化していません」と出る。層の ID は構築の設定値から作るため、`full` で記録した層と `entities` の層が別の ID になる。気になる文書は再取込する。`off` と `entities` の文書の層・chunk_set・索引は変わらない（層の ID の算法 `KEY_VERSION` は変えていない）。
+
 ## 既存環境の更新手順（#286: Docker Compose からネイティブ配備への移行）
 
 #286 で、RAG の backend・ingestion-worker・前処理・parser を Docker Compose から、サービスごとの uv の venv と
@@ -279,7 +309,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 
 - **`rag_answer_records.answer_engine` の列**: 保存済みの回答の記録（履歴）が、どの回答の方式で作られたかを表す。新しい記録には常に同じ値を書く。
 - **監査 `rag_search_audit` の標準の回答フローの内訳の列**（`memory_plan_id`・`agent_memory_*` など）: 既存の監査の行を変えないため残し、今は既定値を書く。
-- **関係情報の構築（知識グラフ。`rag_graph_*`）と navigation の要約の取り込み**: 回答の検索には使わないが、ナレッジベースの関係図と文書詳細が使う。
+- **関係情報の構築（`rag_graph_*`）と navigation の要約の取り込み**: 回答の検索には使わないが、ナレッジベースの関係図と文書詳細が使う（関係情報のうち、読む経路の無かった claims / community summary の表は #621 で削除した）。
 
 ### 手順
 

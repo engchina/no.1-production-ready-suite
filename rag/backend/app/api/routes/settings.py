@@ -799,7 +799,7 @@ async def update_evaluation_settings(
 
 @router.get("/graph", response_model=ApiResponse[GraphSettingsData])
 async def get_graph_settings() -> ApiResponse[GraphSettingsData]:
-    """GraphRAG アダプター(知識グラフ構築)の選択と解決内容を返す。"""
+    """関係情報の構築の選択(構築する / しない)を返す。"""
     return ApiResponse(data=_graph_settings_data(get_settings()))
 
 
@@ -810,15 +810,10 @@ async def update_graph_settings(
     """関係情報設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     candidate = settings.model_copy(
-        update={
-            "rag_graph_profile": normalize_graph_profile(payload.profile),
-            # UI で明示保存したら新 profile を正本にし、legacy の full 強制上書きを退役させる。
-            "rag_graph_enabled": False,
-        }
+        update={"rag_graph_profile": normalize_graph_profile(payload.profile)}
     )
     _persist_graph_settings(candidate)
     settings.rag_graph_profile = candidate.rag_graph_profile
-    settings.rag_graph_enabled = candidate.rag_graph_enabled
     return ApiResponse(data=_graph_settings_data(settings))
 
 
@@ -1166,18 +1161,8 @@ def _graph_settings_data(settings: Settings) -> GraphSettingsData:
     return GraphSettingsData(
         profile=runtime.profile,
         enabled=runtime.enabled,
-        build_claims=runtime.build_claims,
-        build_community_summaries=runtime.build_community_summaries,
         profiles=[
-            GraphProfileStatusData(
-                name=status.name,
-                origin=status.origin,
-                recommended_for=list(status.recommended_for),
-                selected=status.selected,
-                enabled=status.enabled,
-                build_claims=status.build_claims,
-                build_community_summaries=status.build_community_summaries,
-            )
+            GraphProfileStatusData(name=status.name, selected=status.selected)
             for status in runtime.profiles
         ],
         config_source="runtime",
@@ -1188,12 +1173,8 @@ def _persist_graph_settings(settings: Settings) -> None:
     """関係情報設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
-        {
-            "RAG_GRAPH_PROFILE": settings.rag_graph_profile,
-            # legacy フラグも併記して、profile を正本に固定する(off/entities を選べる状態にする)。
-            "RAG_GRAPH_ENABLED": str(settings.rag_graph_enabled).lower(),
-        },
-        section_comment="# GraphRAG アダプター",
+        {"RAG_GRAPH_PROFILE": settings.rag_graph_profile},
+        section_comment="# 関係情報の構築",
         error_detail="関係情報設定を backend/.env へ保存できませんでした。",
     )
 

@@ -169,21 +169,15 @@ def test_run_vector_index_remote(monkeypatch: MonkeyPatch) -> None:
 def test_run_graph_remote(monkeypatch: MonkeyPatch) -> None:
     _fake_post(
         monkeypatch,
-        {
-            "profile": "full",
-            "build_entities": True,
-            "build_relationships": True,
-            "build_claims": True,
-            "build_community_summary": True,
-        },
+        {"profile": "entities", "build_entities": True, "build_relationships": True},
     )
     from rag_pipeline_core.stage import GraphStageRequest
 
     client = PipelineStageClient(
         Settings(rag_graph_service_enabled=True, rag_graph_service_url="http://svc")
     )
-    res = client.run_graph(GraphStageRequest(profile="full"))
-    assert res is not None and res.build_claims is True
+    res = client.run_graph(GraphStageRequest(profile="entities"))
+    assert res is not None and res.build_relationships is True
 
 
 def test_vector_index_adapter_delegates_when_enabled(monkeypatch: MonkeyPatch) -> None:
