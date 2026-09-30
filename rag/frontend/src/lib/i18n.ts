@@ -262,18 +262,27 @@ export const ja = {
   "settings.parserAdapters.postParse.vision.openModel": "モデル設定を開く",
   "settings.parserAdapters.postParse.vision.prompt": "図・画像の読み取りプロンプト",
   "settings.parserAdapters.postParse.fieldExtraction.hint":
-    "解析した本文から、下で定義した項目（請求書番号・日付など）を OCI Enterprise AI で抽出し、検索に使える項目にします。文書ごとにモデルの呼び出しがかかります。",
+    "解析した本文から、下で定義した項目（標準は文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を OCI Enterprise AI で抽出し、検索の絞り込みに使える項目にします。有効にすると、文書ごとにモデルの呼び出しが 1 回増えます。",
   "settings.parserAdapters.postParse.fieldExtraction.definitions": "抽出する項目の定義",
   "settings.parserAdapters.postParse.fieldExtraction.count": "{count} 件",
+  "settings.parserAdapters.postParse.fieldExtraction.standard": "標準の項目",
   "settings.parserAdapters.postParse.fieldExtraction.empty":
-    "項目の定義がないため、有効にしても何も抽出しません。下の項目の定義で、抽出する項目を追加してください。",
+    "項目の定義が 0 件で保存されているため、ナレッジベースで項目を定義していない文書からは何も抽出しません。下の項目の定義で項目を追加するか、「標準の項目に戻す」を使ってください。",
   "settings.parserAdapters.postParse.navigationSummary.hint":
     "解析した文書の見出しの階層から章節の木を作り、章節ごとの要約を OCI Enterprise AI で作ります。章節をたどる検索と段階的な表示に使います。章節ごとにモデルの呼び出しがかかります（上限あり）。",
   "settings.parserAdapters.postParse.save": "解析後の処理を保存",
   "settings.parserAdapters.postParse.saved": "解析後の処理を保存しました。",
   "settings.parserAdapters.postParse.saveError": "解析後の処理を保存できませんでした。",
   "settings.extractionFields.description":
-    "項目抽出で取り出す項目の全体の既定です。項目名はモデルへの指示と抽出結果の名前に使います。ナレッジベースで項目を定義していない文書に、次の取込から使います。",
+    "項目抽出で取り出す項目の全体の既定です。項目名と説明はモデルへの指示に、項目名は抽出結果の名前に使います。ナレッジベースで項目を定義していない文書に、次の取込から使います。",
+  "settings.extractionFields.usingStandard":
+    "標準の項目を使っています（まだ保存していません）。編集して保存すると、保存した項目を使います。",
+  "settings.extractionFields.resetStandard": "標準の項目に戻す",
+  "settings.extractionFields.resetStandard.title": "標準の項目に戻しますか？",
+  "settings.extractionFields.resetStandard.description":
+    "保存した項目の定義を削除し、標準の 4 項目（文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を使います。編集中の変更も破棄します。抽出済みの値は次の取込まで変わりません。",
+  "settings.extractionFields.resetStandard.done": "標準の項目に戻しました。",
+  "settings.extractionFields.resetStandard.error": "標準の項目に戻せませんでした。",
   "settings.extractionFields.name": "項目名",
   "settings.extractionFields.fieldDescription": "説明",
   "settings.extractionFields.valueType": "値の型",
@@ -1824,7 +1833,9 @@ export const ja = {
   "flow.extraction.tableCellPosition": "r{row} c{col}",
   "flow.extraction.tableCellAria": "{table} {cell} {text}",
   "documents.processingConfig.fieldSchemaEmpty":
-    "抽出する項目定義が未設定のため、項目抽出は実行されません。文書解析の設定の「解析後の処理」で項目の定義を登録してください。",
+    "全体の既定の項目の定義が 0 件で保存されているため、ナレッジベースで項目を定義していない文書では項目抽出は実行されません。文書解析の設定の「解析後の処理」で項目を追加するか、標準の項目に戻してください。",
+  "documents.processingConfig.fieldSchemaStandard":
+    "標準の項目（文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を抽出します。文書が属するナレッジベースで項目を定義していれば、その項目を使います。",
   "flow.extraction.navigation.title": "章節ナビゲーション",
   "flow.extraction.assets.title": "図表の要約",
   "flow.extraction.fields.title": "抽出項目",

@@ -7,14 +7,20 @@ import {
   TextField,
 } from "@engchina/production-ready-ui";
 import type { UseMutationResult } from "@tanstack/react-query";
-import { Plus, RotateCcw, Save, Trash2 } from "lucide-react";
+import { Plus, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { ErrorState } from "@/components/StateViews";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { ApiError, type ExtractionFieldDefinition, type ExtractionFieldValueType } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
-import { useExtractionFieldsSettings, useUpdateExtractionFieldsSettings } from "@/lib/queries";
+import {
+  useExtractionFieldsSettings,
+  useResetExtractionFieldsSettings,
+  useUpdateExtractionFieldsSettings,
+} from "@/lib/queries";
+import { toast } from "@/lib/toast";
 
 import {
   EXTRACTION_FIELD_DESCRIPTION_MAX,
@@ -38,10 +44,39 @@ const VALUE_TYPE_OPTIONS: SelectFieldOption<ExtractionFieldValueType>[] =
 /**
  * 項目抽出で取り出す項目の定義（`/api/settings/extraction-fields`）を編集する（#528）。
  * 全体の既定の定義（KB に定義が無い文書に使う。#548）。文書解析の「解析後の処理」の項目抽出の中に置く。
+ * 一度も保存していない環境は標準の項目を使い、「標準の項目に戻す」で保存した定義を消せる（#556）。
  */
 export function ExtractionFieldsEditor() {
   const query = useExtractionFieldsSettings();
   const save = useUpdateExtractionFieldsSettings();
+  const reset = useResetExtractionFieldsSettings();
+  const confirm = useConfirm();
+  // 標準の項目に戻したら、編集中の内容も捨てて編集欄を作り直す（編集中なら保存値へそろわないため）。
+  const [formKey, setFormKey] = useState(0);
+
+  const resetToStandard = async () => {
+    const ok = await confirm({
+      title: t("settings.extractionFields.resetStandard.title"),
+      description: t("settings.extractionFields.resetStandard.description"),
+      confirmLabel: t("settings.extractionFields.resetStandard"),
+      tone: "warning",
+    });
+    if (!ok) return;
+    save.reset();
+    reset.mutate(undefined, {
+      onSuccess: () => {
+        setFormKey((key) => key + 1);
+        toast.success(t("settings.extractionFields.resetStandard.done"));
+      },
+      onError: (error) =>
+        toast.error(
+          error instanceof ApiError
+            ? error.message
+            : t("settings.extractionFields.resetStandard.error")
+        ),
+    });
+  };
+
   if (query.isPending) return <FormSkeleton fields={2} />;
   if (query.isError || !query.data) {
     return (
@@ -53,11 +88,36 @@ export function ExtractionFieldsEditor() {
       />
     );
   }
+  const usesStandard = query.data.uses_standard;
   return (
     <ExtractionFieldsForm
+      key={formKey}
       saved={query.data.fields}
       save={save}
       description={t("settings.extractionFields.description")}
+      notice={
+        usesStandard ? (
+          <FormStatus
+            tone="info"
+            className="text-xs"
+            message={t("settings.extractionFields.usingStandard")}
+          />
+        ) : null
+      }
+      extraActions={
+        <Button
+          type="button"
+          variant="secondary"
+          icon={Undo2}
+          loading={reset.isPending}
+          // 標準の項目を使っている間は戻すものが無い（編集中の変更は「変更を破棄」で戻す）。
+          disabled={usesStandard || save.isPending}
+          onClick={() => void resetToStandard()}
+          className="w-full sm:w-auto"
+        >
+          {t("settings.extractionFields.resetStandard")}
+        </Button>
+      }
     />
   );
 }
@@ -74,12 +134,15 @@ export function ExtractionFieldsForm({
   saved,
   save,
   description,
+  notice,
   extraActions,
   testId = "extraction-fields-editor",
 }: {
   saved: ExtractionFieldDefinition[];
   save: ExtractionFieldsSaveMutation;
   description: string;
+  /** 説明の下に出す定義の状態（全体の既定の「標準の項目を使っています」など）。 */
+  notice?: ReactNode;
   /** 保存・破棄の後ろに並べる操作（KB の「全体の既定に戻す」など）。 */
   extraActions?: ReactNode;
   testId?: string;
@@ -142,6 +205,7 @@ export function ExtractionFieldsForm({
   return (
     <div className="space-y-3" data-testid={testId}>
       <p className="text-xs leading-relaxed text-fg-muted">{description}</p>
+      {notice}
       {rows.length === 0 ? (
         <p className="rounded-md border border-dashed border-border px-3 py-4 text-sm text-fg-muted">
           {t("settings.extractionFields.none")}

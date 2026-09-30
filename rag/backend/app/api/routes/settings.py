@@ -72,8 +72,10 @@ from app.rag.evaluation_adapter import (
 )
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
-    load_field_schema,
+    load_saved_field_schema,
+    reset_field_schema,
     save_field_schema,
+    standard_field_definitions,
 )
 from app.rag.generation_adapter import (
     generation_adapter_runtime_settings,
@@ -783,8 +785,9 @@ async def activate_prompt_version_endpoint(
 
 
 def _extraction_fields_data() -> ExtractionFieldsSettingsData:
-    """field schema 定義を非機密 API 形へ変換する。"""
-    store = load_field_schema()
+    """field schema 定義を非機密 API 形へ変換する。未保存なら標準の項目(#556)。"""
+    saved = load_saved_field_schema()
+    fields = standard_field_definitions() if saved is None else saved.fields
     return ExtractionFieldsSettingsData(
         fields=[
             FieldDefinitionData(
@@ -792,8 +795,9 @@ def _extraction_fields_data() -> ExtractionFieldsSettingsData:
                 description=field.description,
                 value_type=field.value_type,
             )
-            for field in store.fields
-        ]
+            for field in fields
+        ],
+        uses_standard=saved is None,
     )
 
 
@@ -824,6 +828,20 @@ async def update_extraction_fields_settings(
         raise HTTPException(
             status_code=500, detail="抽出項目の定義を保存できませんでした。"
         ) from exc
+    return ApiResponse(data=_extraction_fields_data())
+
+
+@router.delete("/extraction-fields", response_model=ApiResponse[ExtractionFieldsSettingsData])
+async def reset_extraction_fields_settings() -> ApiResponse[ExtractionFieldsSettingsData]:
+    """保存した全体の既定を消し、標準の項目に戻す(「標準の項目に戻す」。#556)。
+
+    extraction-fields.json を消して「未設定」に戻すため、標準の項目を後の版で見直したときも
+    その版の標準の項目を使う。保存していないときも成功する(何度呼んでも同じ結果)。
+    """
+    try:
+        reset_field_schema()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="標準の項目に戻せませんでした。") from exc
     return ApiResponse(data=_extraction_fields_data())
 
 

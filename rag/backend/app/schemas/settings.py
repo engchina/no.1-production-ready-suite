@@ -865,9 +865,13 @@ class FieldDefinitionData(BaseModel):
 
 
 class ExtractionFieldsSettingsData(BaseModel):
-    """field 抽出 schema 定義の snapshot。"""
+    """field 抽出 schema 定義の snapshot。
+
+    `uses_standard` が真なら全体の既定を一度も保存しておらず、`fields` は標準の項目(#556)。
+    """
 
     fields: list[FieldDefinitionData] = Field(default_factory=list)
+    uses_standard: bool = False
     config_source: Literal["runtime"] = "runtime"
 
 
