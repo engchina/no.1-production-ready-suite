@@ -23,8 +23,10 @@ from app.config import (
 from app.rag.chunking import CHUNKING_STRATEGIES
 
 ChunkingStrategyName = ChunkingStrategy
-DEFAULT_CHUNKING_STRATEGY: ChunkingStrategyName = "structure_aware"
 DOCRAG_CHUNKING_STRATEGY_NAME: ChunkingStrategyName = "docrag_small_to_big"
+# 既定は DocRAG 親子階層(#594)。回答が親子の文脈(親本文・表の行グループ・根拠の元の要素)を
+# 前提にするため。解析結果が Docling でない文書は取込時に構造認識へ縮退する。
+DEFAULT_CHUNKING_STRATEGY: ChunkingStrategyName = DOCRAG_CHUNKING_STRATEGY_NAME
 # 画面の並び順。DocRAG 親子階層は、削除した「親子階層」があった位置(3 番目)に置く(#271)。
 CHUNKING_STRATEGY_ORDER: tuple[ChunkingStrategyName, ...] = (
     "structure_aware",
@@ -133,7 +135,7 @@ class ChunkingRuntimeSettings:
 
 
 def normalize_chunking_strategy(value: object) -> ChunkingStrategyName:
-    """未知の戦略名は既定 structure_aware へ寄せる。削除した戦略は後継へ読み替える。"""
+    """未知の戦略名は既定(DocRAG 親子階層)へ寄せる。削除した戦略は後継へ読み替える。"""
     normalized = str(value).strip().casefold()
     normalized = LEGACY_CHUNKING_STRATEGY_ALIASES.get(normalized, normalized)
     if normalized in CHUNKING_STRATEGIES or normalized == DOCRAG_CHUNKING_STRATEGY_NAME:

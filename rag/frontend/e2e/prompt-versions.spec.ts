@@ -48,9 +48,9 @@ for (const viewport of [
     await expect(page.getByText("標準版")).toBeVisible();
     await expect(page.getByText("監査版")).toBeVisible();
     await expect(page.getByRole("button", { name: "版を作成" })).toBeVisible();
-    // 版の system prompt は回答エンジンが DocRAG の業務ビューでは使われない(#300)。
+    // 版の system prompt は現在の回答では使われない(#300 / #594)。
     await expect(page.getByTestId("docrag-unused-note")).toContainText(
-      "回答エンジンが DocRAG の業務ビューでは使われません"
+      "現在の回答では使われません"
     );
     // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
     await expect((await openSidebarNav(page)).getByRole("link", { name: "回答プロンプト" })).toHaveAttribute("aria-current", "page");
@@ -204,7 +204,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 900 },
 ]) {
-  test(`DocRAG の回答生成テンプレートを検証・保存・既定に戻せて、各段は読み取り専用で見られる (${viewport.name})`, async ({
+  test(`回答生成テンプレートを検証・保存・既定に戻せて、各段は読み取り専用で見られる (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });

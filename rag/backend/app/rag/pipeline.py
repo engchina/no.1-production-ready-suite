@@ -10,7 +10,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import cast
+from typing import ClassVar, cast
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
@@ -237,7 +237,16 @@ def _query_with_history(history_text: str, query: str) -> str:
 
 
 class RagPipeline:
-    """ハイブリッド検索 + リランク + 生成の RAG パイプライン。"""
+    """ハイブリッド検索 + リランク + 生成の RAG パイプライン。
+
+    回答は DocRAG の回答フロー(``DocragAnswerEngine``)だけで行う(#594)。
+    """
+
+    # 旧 standard の回答フロー(この class の検索・根拠確認・生成の本体)を動かすか。
+    # #594 で回答を DocRAG だけにし、本番の経路からは設定できない(Settings・業務ビューに
+    # 対応する値は無い)。standard のコードとそのテストは #595 で消すため、それまで
+    # standard のテスト(tests/test_pipeline.py)だけが True にする。
+    _legacy_standard_engine: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -322,7 +331,7 @@ class RagPipeline:
                 diagnostics=diagnostics,
             )
 
-        if self._settings.rag_answer_engine == DOCRAG_ANSWER_ENGINE:
+        if not self._legacy_standard_engine:
             if request.retrieval_only:
                 return await self._run_docrag_retrieval(
                     request,

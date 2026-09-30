@@ -1024,10 +1024,9 @@ async def test_compare_ranks_unmeasured_metric_last() -> None:
     assert comparison.best_experiment_id == "a"
 
 
-def test_evaluation_settings_force_answer_engine_and_map_overrides() -> None:
-    """評価は全体の既定のまま根拠付き回答で動かし、experiment の上書きだけを一時適用する。"""
+def test_evaluation_settings_map_overrides() -> None:
+    """評価は全体の既定のまま動かし、experiment の上書きだけを一時適用する。"""
     base = Settings(
-        rag_answer_engine="standard",
         rag_docrag_query_strategy="auto_routing",
         rag_docrag_answer_flow="crag",
         rag_docrag_neighbor_child_count=3,
@@ -1051,9 +1050,7 @@ def test_evaluation_settings_force_answer_engine_and_map_overrides() -> None:
         ),
     )
 
-    assert default.rag_answer_engine == "docrag"
     assert default.rag_docrag_query_strategy == "auto_routing"
-    assert overridden.rag_answer_engine == "docrag"
     assert overridden.rag_docrag_query_strategy == "rag_fusion"
     assert overridden.rag_docrag_answer_flow == "standard_rag"
     assert overridden.rag_docrag_neighbor_child_count == 1
@@ -1062,7 +1059,7 @@ def test_evaluation_settings_force_answer_engine_and_map_overrides() -> None:
     assert overridden.rag_context_group_max_chunks == 2
     assert overridden.oracle_vector_target_accuracy == 90
     # 元の Settings は変えない。
-    assert base.rag_answer_engine == "standard"
+    assert base.rag_docrag_query_strategy == "auto_routing"
 
 
 async def test_evaluation_compare_applies_experiment_rag_overrides(
@@ -1109,7 +1106,6 @@ async def test_evaluation_compare_applies_experiment_rag_overrides(
     )
 
     assert [settings.rag_rrf_k for settings in observed_settings] == [60, 10]
-    assert [settings.rag_answer_engine for settings in observed_settings] == ["docrag", "docrag"]
     assert observed_settings[1].rag_docrag_query_strategy == "rag_fusion"
 
 

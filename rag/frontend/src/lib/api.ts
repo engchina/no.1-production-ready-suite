@@ -789,9 +789,8 @@ export interface KnowledgeBaseQueryConfig {
   post_retrieval_pipeline: PostRetrievalPipelineName | null;
   generation_profile: GenerationProfileName | null;
   guardrail_policy: GuardrailPolicyName | null;
-  /** 回答エンジン(standard / docrag)。null / 未指定はグローバル継承。 */
-  answer_engine?: AnswerEngineName | null;
-  /** DocRAG 回答フローの設定(回答エンジンが docrag のときだけ効く)。null / 未指定はグローバル継承。 */
+  // 回答エンジンの選択(answer_engine)は #594 で削除した(回答は DocRAG だけ)。
+  /** DocRAG 回答フローの設定。null / 未指定はグローバル継承。 */
   docrag_query_strategy?: DocragQueryStrategyName | null;
   docrag_answer_flow?: DocragAnswerFlowName | null;
   docrag_neighbor_child_count?: number | null;
@@ -810,7 +809,6 @@ export type DocragQueryStrategyName =
 
 export type DocragAnswerFlowName = "crag" | "standard_rag";
 
-export type AnswerEngineName = "standard" | "docrag";
 
 /** KB 単位の構築設定。query は legacy 互換として読めるが KB runtime では使わない。 */
 export interface KnowledgeBaseAdapterConfig {
@@ -1004,7 +1002,7 @@ export interface SearchRequestBody {
   business_view_id?: string | null;
   business_view_ids?: string[];
   generation_profile?: GenerationProfileName | null;
-  /** 回答を作らずに検索だけを行う(LLM を呼ばない。回答エンジンが docrag のときだけ効く。#593)。 */
+  /** 回答を作らずに検索だけを行う(LLM を呼ばない。#593)。 */
   retrieval_only?: boolean;
 }
 

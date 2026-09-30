@@ -38,6 +38,17 @@ from app.rag.request_context import (
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest, SearchStrategy
 
 
+@pytest.fixture(autouse=True)
+def _legacy_standard_engine(monkeypatch: MonkeyPatch) -> None:
+    """このファイルは旧 standard の回答フローのテスト。
+
+    回答は #594 で DocRAG だけになり、standard は本番の経路から呼ばれない。standard のコードを
+    #595 で消すまで、ここでだけ standard を動かして既存の挙動を確かめる(#595 でファイルごと
+    整理する)。DocRAG の回答は tests/test_docrag_answer_engine.py が確かめる。
+    """
+    monkeypatch.setattr(RagPipeline, "_legacy_standard_engine", True)
+
+
 def test_build_context_keeps_truncated_first_chunk_when_window_is_small() -> None:
     """context window が小さくても最初の根拠を完全には落とさない。"""
     context = _build_context(
@@ -4272,25 +4283,3 @@ async def test_pipeline_hyde_keeps_question_as_primary_graph_query() -> None:
     # 仮説文書は埋め込み検索の variant として使う。
     assert genai.embedded_texts == ["請求書 保管", hypothetical]
     assert response.diagnostics.hyde_generated is True
-
-
-async def test_standard_pipeline_ignores_retrieval_only() -> None:
-    """standard の挙動は変えない。retrieval_only は DocRAG のときだけ効く(#593)。"""
-    llm = ExplodingLlm()
-    pipeline = RagPipeline(
-        genai=StubGenAiClient(),
-        oracle=EmptyOracleClient(),
-        llm=llm,
-        settings=Settings(rag_answer_engine="standard"),
-    )
-
-    response = await pipeline.run(
-        SearchRequest(
-            query="存在しない社内規程",
-            knowledge_base_ids=["kb-pipeline-no-results"],
-            retrieval_only=True,
-        )
-    )
-
-    assert response.answer == NO_RESULTS_ANSWER
-    assert response.diagnostics.retrieval_strategy_adapter != "docrag_retrieval_only"

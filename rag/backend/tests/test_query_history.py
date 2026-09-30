@@ -16,7 +16,7 @@ from app.rag.pipeline import RagPipeline
 from app.rag.query_history import query_history_suggestions, record_query_history
 from app.schemas.search import SearchRequest
 from tests.support import AsgiTestClient
-from tests.test_pipeline import GroundedLlm, StubGenAiClient, StubOracleClient
+from tests.test_docrag_answer_engine import FakeGenAi, FakeOracle, _fake_llm
 
 client = AsgiTestClient(app)
 ENABLED = Settings(rag_query_history_enabled=True)
@@ -137,7 +137,12 @@ async def test_suggestions_follow_rag_poc_rules() -> None:
 
 
 async def test_pipeline_records_successful_questions(monkeypatch: pytest.MonkeyPatch) -> None:
-    class RecordingOracle(StubOracleClient):
+    """回答(DocRAG の回答フロー。#594)に成功した質問を、業務ビューごとに記録する。"""
+    import docrag.adapters.oci as docrag_oci
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+
+    class RecordingOracle(FakeOracle):
         def __init__(self) -> None:
             super().__init__()
             self.history: list[dict[str, Any]] = []
@@ -150,18 +155,17 @@ async def test_pipeline_records_successful_questions(monkeypatch: pytest.MonkeyP
 
     oracle = RecordingOracle()
     pipeline = RagPipeline(
-        genai=StubGenAiClient(),
-        oracle=oracle,
-        llm=GroundedLlm(),
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        oracle=oracle,  # type: ignore[arg-type]
         settings=Settings(rag_query_history_enabled=True),
     )
 
-    await pipeline.run(SearchRequest(query="承認条件は？", business_view_ids=["bv-1"]))
-    await pipeline.run(SearchRequest(query="業務ビューなし"))
+    await pipeline.run(SearchRequest(query="受注の登録方法は？", business_view_ids=["bv-1"]))
+    await pipeline.run(SearchRequest(query="業務ビューなしの受注の登録方法は？"))
 
     assert [
         (item["business_view_id"], item["question"], item["surface"]) for item in oracle.history
-    ] == [("bv-1", "承認条件は？", "search")]
+    ] == [("bv-1", "受注の登録方法は？", "search")]
 
 
 def test_query_suggestions_api(monkeypatch: pytest.MonkeyPatch) -> None:

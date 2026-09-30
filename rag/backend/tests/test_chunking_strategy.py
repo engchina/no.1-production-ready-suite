@@ -326,8 +326,9 @@ def test_chunking_runtime_settings_orders_and_marks_selected() -> None:
     assert selected == ["page_level"]
 
 
-def test_normalize_chunking_strategy_defaults_to_structure_aware() -> None:
-    assert normalize_chunking_strategy("nope") == "structure_aware"
+def test_normalize_chunking_strategy_defaults_to_docrag_small_to_big() -> None:
+    # 未知の値は既定(DocRAG 親子階層。#594)へ寄せる。
+    assert normalize_chunking_strategy("nope") == "docrag_small_to_big"
     assert normalize_chunking_strategy("page_level") == "page_level"
     # 撤去済み戦略は後継へ読み替える。
     assert normalize_chunking_strategy("sentence_window") == "recursive_character"

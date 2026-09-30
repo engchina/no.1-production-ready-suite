@@ -239,6 +239,66 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 - Unstructured の解析サービスは既定では配備しない（stack の `rag_enable_parser_unstructured`）。Docker で `parser-unstructured` を動かしていた Compute は、入力を有効にしてから `init_script.sh` を実行すると unit が作られる。入力を有効にしないと、以前の `compose_services.txt` を読む場合を除き unit は作られない。
 - 抽出レシピの ID は解析エンジンを含むため、既定のままの文書は次の取込から再抽出になる。
 
+## 既存環境の更新手順（#594 回答の方式を 1 つにする）
+
+#594 で回答の方式を、根拠照合・監査付きの回答（質問の振り分けと拡張 → 検索 → CRAG の根拠の判定 → 回答の生成 → 監査）の 1 つにし、回答エンジンの選択（`backend/.env` の `RAG_ANSWER_ENGINE` と、業務ビューの「回答エンジン」）を削除した。旧名との互換は持たない。仕組みと設定は [docrag-port.md](./docrag-port.md) を参照。
+
+### 変わること
+
+- **回答の方式が全員変わる。** 次の呼び出しは、これまでの標準の回答（`RAG_ANSWER_ENGINE` の既定 `standard`）から新しい方式に変わる。
+  - DEFAULT 業務ビュー（`query` が空で、全体の既定を継承していた）。
+  - 「回答エンジン」を継承していた業務ビューと、「標準」を明示していた業務ビューの RAG 検索・チャット。
+  - 業務ビューを指定しない呼び出し（MCP の `rag_search` / `/api/search` のナレッジベースだけの指定、品質評価、staging smoke）。
+  - ナレッジベースの検索テストとレシピの検索比較は、回答を作らずに検索だけを行う（#593 の検索だけの経路。LLM を呼ばない）。
+- **LLM の呼び出しが増える。** 標準の回答は 1 回の回答で回答の生成が 1 回（とオプションのクエリ拡張など）だった。新しい方式は、既定（質問の拡張 = 自動ルーティング、回答の生成方式 = CRAG）で、質問の振り分け・CRAG の根拠の判定（根拠が足りなければ検索文を書き換えて最大 3 回）・回答の生成・監査の順に、1 回の回答で少なくとも 4 回呼ぶ。チャットで会話履歴があると質問の書き換えが 1 回、「画面目録で操作画面を探す」を有効にすると 1 回増える。回答の時間と OCI Enterprise AI の利用量が増えるので、`RAG_ANSWER_TIMEOUT_SECONDS`（既定 300 秒）と利用の上限を見直す。回数を減らすときは、検索・回答設定 › 検索方法の「回答の検索と生成」（業務ビューごとは「検索・回答設定」）で、質問の拡張を「単純検索」、回答の生成方式を「通常 RAG」にする。
+- 回答の記録（`rag_answer_records`）は、すべての回答で保存する（保存期間は `RAG_ANSWER_RECORD_RETENTION_DAYS`）。品質評価の結果も新しい方式の回答になるので、更新の前の結果と比べるときは同じケースで評価し直す。
+- 業務ビューの「検索方法」「検索オプション」「根拠確認」「回答スタイル」「回答プロンプト」と、検索・回答設定の同じ名前の画面の設定は、回答に使われない（入力は残し、「現在の回答では、この設定は使われません。」と表示する。欄は #595 で削除する）。回答の上書きは、業務ビューの「質問の拡張」「回答の生成方式」「根拠の前後から加える数」「回答の検索のオプション」で行う（業務ビューの編集画面で常に表示する）。安全チェックは今までどおり質問と回答の両方に適用する。
+
+### 更新の前に確かめる
+
+`backend/.env` の `RAG_ANSWER_ENGINE` を確かめる（行が無いか `standard` なら、継承していた業務ビューもすべて変わる）。
+
+```bash
+grep '^RAG_ANSWER_ENGINE=' backend/.env
+```
+
+「回答エンジン」に標準（`standard`）を明示していた業務ビューを、Oracle で確かめる（`view_config` は業務ビューの設定の JSON）。
+
+```sql
+-- 「標準」を明示していた業務ビュー（#594 の後は新しい方式で回答する）
+SELECT business_view_id, name, status
+  FROM rag_business_views
+ WHERE JSON_VALUE(view_config, '$.query.answer_engine') = 'standard'
+ ORDER BY name;
+
+-- 回答エンジンの設定ごとの件数（「(継承)」は全体の既定を継承。DEFAULT 業務ビューを含む）
+SELECT NVL(JSON_VALUE(view_config, '$.query.answer_engine'), '(継承)') AS answer_engine,
+       status,
+       COUNT(*) AS view_count
+  FROM rag_business_views
+ GROUP BY NVL(JSON_VALUE(view_config, '$.query.answer_engine'), '(継承)'), status
+ ORDER BY answer_engine, status;
+```
+
+標準の回答と比べたい業務ビューは、更新の前に代表の質問の回答を控えておく（品質評価のケースにしておくと、更新の後に同じケースで比べられる）。
+
+### 手順
+
+1. `backend/.env` から `RAG_ANSWER_ENGINE` の行を削除する（`sed -i '/^RAG_ANSWER_ENGINE=/d' backend/.env`。直前の説明のコメント行も消してよい）。行が残っていても読まない。
+2. 業務ビューに保存済みの `query.answer_engine` は読み込み時に捨て、次に保存したときに消える（DDL・データの移行は要らない）。
+3. 回答の時間と利用量を見直す（上の「LLM の呼び出しが増える」）。
+4. 文書分割の既定を見直す（下の「文書分割の既定」）。
+5. backend を再起動する。
+
+### 文書分割の既定
+
+新しい回答は、親子で分割した chunk（`docrag_small_to_big`。画面の表示名は「DocRAG 親子階層」）を前提にする。親の本文（見出しの節）を回答の文脈にし、表は行グループごとに列見出しを付けた子で探し、根拠の元の要素（`source_record_refs`）から図の切り出しと要素ごとの強調を行う。そのため、#594 で `RAG_CHUNKING_STRATEGY` の既定を `structure_aware` から `docrag_small_to_big` に変えた。
+
+- `backend/.env` に `RAG_CHUNKING_STRATEGY` を書いていない環境（文書分割の画面で保存したことがない環境）では、レシピで分割方式を上書きしていない文書は、次に Chunk を作るときから親子で分割する。既存の chunk は自動では作り直さない。
+- 親子の分割は Docling の解析結果を入力にする。解析結果が Docling でない文書（Unstructured・MinerU・dots.ocr・OCI など）は、今までどおり構造認識で分割し、文書詳細の Chunk タブに「構造認識で分割しました」と表示する（[docrag-port.md の「使い方」2.](./docrag-port.md)）。
+- 構造認識で作った既存の chunk も、そのまま検索と回答に使える（同じまとまりの chunk をつないで親の代わりにする）。ただし、親が節の区切りにならない・表の列見出しを繰り返さない・根拠の図を切り出せない、ため回答の文脈が粗くなる。回答の品質を上げるには、Docling で解析した文書の Chunk を再作成する（chunk が変わるので embedding をやり直す。OCI Generative AI の利用が増える）。
+- 構造認識のまま使う場合は、`backend/.env` に `RAG_CHUNKING_STRATEGY=structure_aware` を書く（検索・回答設定 › 文書分割で構造認識を選んで保存しても同じ）。
+
 ## 既存環境の更新手順（#588 全文検索の分割方式の統合）
 
 #588 で全文検索（Oracle Text）の検索語の分割を、Sudachi（形態素解析）と文字種の区切りを組み合わせた 1 つの方式にし、選択を削除した（分割の中身は [rag-architecture.md の「ハイブリッド検索」](./rag-architecture.md)）。旧名との互換は持たない。
