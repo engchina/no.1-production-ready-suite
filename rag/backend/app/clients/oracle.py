@@ -11848,60 +11848,6 @@ CREATE TABLE {table_name} (
 """.strip()
 
 
-def oracle_prompt_version_schema_sql(
-    table_name: str = "rag_prompt_versions",
-) -> str:
-    """回答生成 custom system prompt の版管理 table DDL。"""
-
-    return f"""
-CREATE TABLE {table_name} (
-    version_id       VARCHAR2(64) PRIMARY KEY,
-    name             VARCHAR2(120) NOT NULL,
-    system_prompt    CLOB NOT NULL,
-    note             VARCHAR2(2000),
-    created_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    created_by_hash  CHAR(64)
-);
-
-CREATE INDEX {table_name}_created_idx
-    ON {table_name} (created_at DESC, version_id DESC);
-""".strip()
-
-
-def oracle_generation_settings_schema_sql(
-    table_name: str = "rag_generation_settings",
-    prompt_table: str = "rag_prompt_versions",
-) -> str:
-    """deploy-wide 回答生成設定の単例 table DDL。"""
-
-    return f"""
-CREATE TABLE {table_name} (
-    settings_key              VARCHAR2(32) PRIMARY KEY,
-    generation_profile        VARCHAR2(64) NOT NULL,
-    active_prompt_version_id  VARCHAR2(64),
-    revision                  NUMBER(19) DEFAULT 1 NOT NULL,
-    updated_at                TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    updated_by_hash           CHAR(64),
-    CONSTRAINT {table_name}_singleton_ck CHECK (settings_key = 'GLOBAL'),
-    CONSTRAINT {table_name}_profile_ck CHECK (
-        generation_profile IN (
-            'grounded_concise',
-            'detailed_cited',
-            'strict_extractive',
-            'structured_json',
-            'bilingual_ja_en',
-            'inline_cited',
-            'custom'
-        )
-    ),
-    CONSTRAINT {table_name}_revision_ck CHECK (revision >= 1),
-    CONSTRAINT {table_name}_active_prompt_fk
-        FOREIGN KEY (active_prompt_version_id)
-        REFERENCES {prompt_table} (version_id)
-);
-""".strip()
-
-
 def oracle_knowledge_base_schema_sql(
     knowledge_base_table: str = "rag_knowledge_bases",
     membership_table: str = "rag_document_knowledge_bases",
@@ -12747,60 +12693,6 @@ CREATE INDEX rag_graph_entity_chunks_chunk_idx
 
 CREATE INDEX rag_graph_entity_chunks_chunk_set_idx
     ON rag_graph_entity_chunks (chunk_set_id);
-""".strip()
-
-
-def oracle_agent_memory_schema_sql(table_name: str = "rag_agent_memories") -> str:
-    """Agent Memory を Oracle AI Database VECTOR と hash scope で保存する DDL を返す。"""
-    return f"""
-CREATE TABLE {table_name} (
-    memory_id        VARCHAR2(64) PRIMARY KEY,
-    tenant_id_hash   CHAR(64),
-    user_id_hash     CHAR(64),
-    role_id_hash     CHAR(64),
-    agent_id_hash    CHAR(64),
-    thread_id_hash   CHAR(64),
-    trace_id         VARCHAR2(64) NOT NULL,
-    memory_text      CLOB NOT NULL,
-    metadata_json    JSON,
-    embedding        VECTOR(1536, FLOAT32) NOT NULL,
-    usefulness_score NUMBER(8, 6) DEFAULT 0.5 NOT NULL,
-    eval_count       NUMBER(10) DEFAULT 0 NOT NULL,
-    created_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    updated_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    CONSTRAINT {table_name}_usefulness_ck
-        CHECK (usefulness_score >= 0 AND usefulness_score <= 1),
-    CONSTRAINT {table_name}_eval_count_ck
-        CHECK (eval_count >= 0)
-);
-
-CREATE VECTOR INDEX {table_name}_embedding_hnsw_idx
-    ON {table_name} (embedding)
-    ORGANIZATION INMEMORY NEIGHBOR GRAPH
-    DISTANCE COSINE
-    WITH TARGET ACCURACY 95
-    PARAMETERS (
-        TYPE HNSW,
-        NEIGHBORS 32,
-        EFCONSTRUCTION 500
-    );
-
-CREATE INDEX {table_name}_text_idx
-    ON {table_name} (memory_text)
-    INDEXTYPE IS CTXSYS.CONTEXT;
-
-CREATE INDEX {table_name}_scope_idx
-    ON {table_name} (
-        tenant_id_hash,
-        user_id_hash,
-        role_id_hash,
-        agent_id_hash,
-        thread_id_hash,
-        updated_at DESC
-    );
-
-CREATE INDEX {table_name}_trace_idx
-    ON {table_name} (trace_id);
 """.strip()
 
 
