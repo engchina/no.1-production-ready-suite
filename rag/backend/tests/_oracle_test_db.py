@@ -1,4 +1,4 @@
-"""実 Oracle 26ai を使う統合テスト用のヘルパー。
+"""実 Oracle AI Database を使う統合テスト用のヘルパー。
 
 共通 `platform/.env`（`PLATFORM_ORACLE_*`）の接続情報で実 DB に接続し、RAG スキーマの存在保証と
 テストが作成した行のクリーンアップを提供する。DB が未到達の環境では

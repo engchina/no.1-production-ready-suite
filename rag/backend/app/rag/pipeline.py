@@ -1409,7 +1409,7 @@ class RagPipeline:
         citations: list[RetrievedChunk],
         retrieval_plan: RetrievalPlan,
     ) -> tuple[int, str]:
-        """根拠付き回答を scoped Agent Memory として Oracle 26ai へ writeback する。"""
+        """根拠付き回答を scoped Agent Memory として Oracle AI Database へ writeback する。"""
         if (
             not self._settings.rag_agent_memory_writeback_enabled
             or not _agent_memory_scope_available()

@@ -1,4 +1,4 @@
-"""DocRAG 回答が検索範囲から読む語の一覧を、実 Oracle 26ai で確かめる。
+"""DocRAG 回答が検索範囲から読む語の一覧を、実 Oracle AI Database で確かめる。
 
 未到達なら oracle_db fixture が skip し、作成行は cleanup_to_baseline で後始末する。
 AI は決定論スタブ(oracle_db fixture)で、SQL だけを実 DB で評価する。

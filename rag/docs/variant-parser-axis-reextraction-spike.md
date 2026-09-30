@@ -69,7 +69,7 @@ chunk_set_id  = hash(source_sha256, preprocess, parser, chunking…) # 既存の
 - migration は「新表 + `rag_chunk_sets.extraction_id` 列作成 + 既存 `rag_documents.extraction` があれば
   owning extraction_id で 1 行 backfill(データ無しなら no-op)」。`rag_documents.extraction` 列は
   **下位互換の縮退読み用に当面残す**が正本ではない(後日 drop は別 migration)。
-- 版管理 migration artifact、**実 Oracle 26ai で検証必須**(未検証 DDL は積まない方針)。
+- 版管理 migration artifact、**実 Oracle AI Database で検証必須**(未検証 DDL は積まない方針)。
 
 ## 5. Materialization(loop の再構成)
 
@@ -144,7 +144,7 @@ reconcile(plan)                                              # extraction/chunk_
 - ✅ **レビューゲート = 案 A**(既定 owning のみレビュー、他 parser は派生として自動)。
 - ✅ **抽出数上限あり** = `MAX_EXTRACTIONS_PER_DOCUMENT`(既定 8 程度)、超過は owning 優先で打ち切り + warning。
 - ✅ **旧 `rag_documents.extraction` は即時に新表正本へ**(データ無しのため段階移行不要。列は当面縮退読み用に残す)。
-- ⚠ **DDL 検証**: 新表 + `rag_chunk_sets.extraction_id` + migration を **実 Oracle 26ai で検証**してから main へ
+- ⚠ **DDL 検証**: 新表 + `rag_chunk_sets.extraction_id` + migration を **実 Oracle AI Database で検証**してから main へ
   (未検証 DDL を積まない方針。P1/P3 で実 Oracle テスト必須)。
 
 ## 13. 非ゴール(この #6 では扱わない)

@@ -191,7 +191,7 @@ async def test_ingestion_loads_image_retrieval_prompt(monkeypatch: pytest.Monkey
 
 @pytest.mark.usefixtures("oracle_db")
 async def test_docrag_prompts_round_trip_on_real_oracle() -> None:
-    """実 Oracle 26ai で、編集したプロンプトの保存・上書き・削除ができる。"""
+    """実 Oracle AI Database で、編集したプロンプトの保存・上書き・削除ができる。"""
     from app.clients.oracle import OracleClient
 
     oracle = OracleClient()

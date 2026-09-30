@@ -4,7 +4,7 @@ OCI Generative AI の **ApplyGuardrails API**(`oci.generative_ai_inference`)を�
 テキストの content moderation / PII 検出 / prompt injection 検出を行う。回答生成は行わない
 **検出専用 API** であり、AGENTS.md §1 の「chat 推論 API を LLM/VLM に使わない」には抵触しない
 (ユーザ明示要望による OCI サービスの追加)。確定スタック(embedding/rerank=OCI GenAI、
-回答 LLM/VLM=Enterprise AI、ベクトル DB=Oracle 26ai)は不変で、別 LLM provider・外部
+回答 LLM/VLM=Enterprise AI、ベクトル DB=Oracle AI Database)は不変で、別 LLM provider・外部
 ベクトル DB は導入しない。
 
 未設定・SDK 失敗・呼び出し失敗時は非機密な例外へ変換し、呼び出し側が policy ごとの

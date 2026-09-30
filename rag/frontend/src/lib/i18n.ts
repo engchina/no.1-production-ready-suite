@@ -25,7 +25,7 @@ export const ja = {
     "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
   "dbGate.setupRequired.title": "RAG システムテーブルの準備が必要です",
   "dbGate.setupRequired.message":
-    "Oracle 26ai には接続できましたが、RAG に必要なテーブルまたは索引が不足しています。データベース設定の「システムテーブル」で「作成・更新」を実行してください。",
+    "データベースには接続できましたが、RAG に必要なテーブルまたは索引が不足しています。データベース設定の「システムテーブル」で「作成・更新」を実行してください。",
   "dbGate.openDatabaseSettings": "データベース設定を開く",
   "dbGate.openSystemTables": "システムテーブルを開く",
   "dbGate.settingsHint":
@@ -896,7 +896,7 @@ export const ja = {
     "検索時の精度とレイテンシのバランスを選択します。",
   "settings.vectorIndex.overview.title": "検索インデックス",
   "settings.vectorIndex.overview.description":
-    "Oracle 26ai AI Vector Search の検索時 target accuracy を選びます。検索時 accuracy は保存後すぐ反映されます。推奨 HNSW ビルド(NEIGHBORS / EFCONSTRUCTION)は現在の索引の値と比べ、違うときは下に生成される再作成 SQL を DBA が適用すると反映されます。",
+    "Oracle AI Vector Search の検索時 target accuracy を選びます。検索時 accuracy は保存後すぐ反映されます。推奨 HNSW ビルド(NEIGHBORS / EFCONSTRUCTION)は現在の索引の値と比べ、違うときは下に生成される再作成 SQL を DBA が適用すると反映されます。",
   "settings.vectorIndex.profile": "検索精度",
   "settings.vectorIndex.targetAccuracy": "検索時 target accuracy",
   "settings.vectorIndex.neighbors": "NEIGHBORS",
@@ -959,7 +959,7 @@ export const ja = {
     "取込時に文書内の関係情報をどこまで構築するかを選択します。検索側の関係検索は検索方法で制御します。",
   "settings.graph.overview.title": "関係情報の構築",
   "settings.graph.overview.description":
-    "Oracle 26ai 内に entities / relationships / claims / community summary をどこまで構築するかを選びます。既定は構築なしで現行挙動と一致します。",
+    "Oracle AI Database 内に entities / relationships / claims / community summary をどこまで構築するかを選びます。既定は構築なしで現行挙動と一致します。",
   "settings.graph.profile": "構築方式",
   "settings.graph.claims": "claims 抽出",
   "settings.graph.community": "community summary",
@@ -1064,7 +1064,7 @@ export const ja = {
     "保存した値は backend/.env(キー: RAG_HUGGINGFACE_TOKEN / RAG_HUGGINGFACE_ENDPOINT)に書き込まれ、サービス起動時に各 parser へ渡します。起動中のサービスは再起動で反映されます。",
   "settings.huggingface.hintCache":
     "モデルは各 parser の実行ユーザーのキャッシュ(~/.cache)へ保存します。本番は配備時にモデルを取得済みのため、この設定は実行時のダウンロードと認証にだけ使います。",
-  "settings.database.subtitle": "Oracle 26ai 接続を設定します。",
+  "settings.database.subtitle": "Oracle AI Database への接続を設定します。",
   // システムテーブルのカードは 3 製品共通（#325）。ここには RAG 固有の文言だけを置き、
   // それ以外は共通の既定（SYSTEM_TABLES_MESSAGES）を使う。
   "settings.database.systemTables.title": "RAG システムテーブル",
@@ -1099,7 +1099,7 @@ export const ja = {
   "settings.database.systemTables.confirm.description":
     "管理対象の RAG テーブルを削除して再作成します。DB 内の文書・chunk・設定・会話・監査・評価データは復元できません。",
 
-  "fileList.subtitle": "取込、chunking、embedding、Oracle 26ai 索引の状態を確認します。",
+  "fileList.subtitle": "取込、chunking、embedding、Oracle の索引の状態を確認します。",
   "fileList.searchPlaceholder": "ファイル名で検索",
   "fileList.filterAll": "すべて",
   "fileList.empty": "該当するドキュメントがありません。",
@@ -2699,7 +2699,7 @@ export const ja = {
   "search.meta.group": "同一グループ",
   "search.meta.neighbor": "隣接",
   "search.meta.compressed": "圧縮",
-  "search.pipeline": "埋め込み → Oracle 26ai ベクトル検索 → Cohere Rerank v4 fast → LLM 回答",
+  "search.pipeline": "埋め込み → Oracle AI Vector Search → Cohere Rerank v4 fast → LLM 回答",
 
   "evaluation.subtitle": "Golden set で RAG 品質を検証します。",
   "evaluation.suite.title": "品質評価",

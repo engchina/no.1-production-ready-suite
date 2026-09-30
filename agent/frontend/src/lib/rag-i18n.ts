@@ -561,7 +561,7 @@ export const ja = {
     "索引/検索精度の Vector Index アダプター(accuracy/latency)を選択します。",
   "settings.vectorIndex.overview.title": "索引/検索精度プロファイル",
   "settings.vectorIndex.overview.description":
-    "Oracle 26ai AI Vector Search の検索時 target accuracy を選びます。推奨 HNSW ビルドは参考値で、適用には索引再作成が必要です。",
+    "Oracle AI Vector Search の検索時 target accuracy を選びます。推奨 HNSW ビルドは参考値で、適用には索引再作成が必要です。",
   "settings.vectorIndex.profile": "精度プロファイル",
   "settings.vectorIndex.selected": "選択中",
   "settings.vectorIndex.recommendedFor": "推奨用途",
@@ -626,7 +626,7 @@ export const ja = {
     "取込時の知識グラフ構築(GraphRAG アダプター)の深さを選択します。検索側の graph 拡張は Retrieval アダプターで制御します。",
   "settings.graph.overview.title": "知識グラフ構築プロファイル",
   "settings.graph.overview.description":
-    "Oracle 26ai 内に entities / relationships / claims / community summary をどこまで構築するかを選びます。既定は構築なしで現行挙動と一致します。",
+    "Oracle AI Database 内に entities / relationships / claims / community summary をどこまで構築するかを選びます。既定は構築なしで現行挙動と一致します。",
   "settings.graph.profile": "構築プロファイル",
   "settings.graph.build": "構築内容",
   "settings.graph.claims": "claims 抽出",
@@ -697,7 +697,7 @@ export const ja = {
 
 
 
-  "settings.database.subtitle": "Oracle 26ai 接続を設定します。",
+  "settings.database.subtitle": "Oracle AI Database への接続を設定します。",
 
 
   "dashboard.title": "ダッシュボード",
@@ -775,7 +775,7 @@ export const ja = {
   "dashboard.ingestionQuality.parserBackend.localPartition": "ローカル partition",
   "dashboard.ingestionQuality.parserBackend.unsupported": "未対応",
 
-  "fileList.subtitle": "取込、chunking、embedding、Oracle 26ai 索引の状態を確認します。",
+  "fileList.subtitle": "取込、chunking、embedding、Oracle の索引の状態を確認します。",
   "fileList.searchPlaceholder": "ファイル名で検索",
   "fileList.filterAll": "すべて",
   "fileList.empty": "該当するドキュメントがありません。",
@@ -1352,7 +1352,7 @@ export const ja = {
   "search.meta.group": "同一グループ",
   "search.meta.neighbor": "隣接",
   "search.meta.compressed": "圧縮",
-  "search.pipeline": "埋め込み → Oracle 26ai ベクトル検索 → Cohere Rerank v4 fast → LLM 回答生成",
+  "search.pipeline": "埋め込み → Oracle AI Vector Search → Cohere Rerank v4 fast → LLM 回答生成",
   "search.selectAi.title": "Oracle Select AI",
   "search.selectAi.query": "自然言語クエリ",
   "search.selectAi.placeholder": "例：索引済み文書の件数をステータス別に集計",

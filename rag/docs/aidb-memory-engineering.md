@@ -36,7 +36,7 @@ Router の分岐結果は、自由検索ではなく Retrieval Plan として固
 - `plan_id`: trace と非機密 routing 情報から作る短い ID。
 - `purpose`: grounded answer、structured query boundary、relationship summary など。
 - `memory_sequence`: `evidence -> similar -> structure -> history`。
-- `memory_backends`: Oracle 26ai Hybrid Vector Search、Oracle AI Vector Search + OCI Rerank、GraphRAG-lite、Oracle Agent Memory Search policy。
+- `memory_backends`: Oracle AI Vector Search（hybrid search）、Oracle AI Vector Search + OCI Rerank、GraphRAG-lite、Oracle Agent Memory Search policy。
 - `query_shape`: hybrid/vector/keyword/graph/structured candidate。
 - `scope_keys`: tenant、ACL、dataset、source_acl、version、filter key。
 - `evidence_rules`: citation、scope、version、source ACL、contradiction の検証。
@@ -49,14 +49,14 @@ Retrieval は同じ候補集合を無差別に扱わず、役割を分ける。
 
 | memory type | 役割 | backend |
 |---|---|---|
-| evidence | 回答の主張を支える必須根拠 | Oracle 26ai Hybrid Vector Search + Oracle Text |
-| similar | 理解・説明を補助する類似情報 | Oracle 26ai AI Vector Search + OCI Cohere Rerank |
+| evidence | 回答の主張を支える必須根拠 | Oracle AI Vector Search（hybrid search） + Oracle Text |
+| similar | 理解・説明を補助する類似情報 | Oracle AI Vector Search + OCI Cohere Rerank |
 | structure | 関係・集計・構造条件 | GraphRAG-lite relationship boundary |
-| history | user / role / agent / thread の継続文脈 | Oracle 26ai `rag_agent_memories` |
+| history | user / role / agent / thread の継続文脈 | Oracle AI Database `rag_agent_memories` |
 
 ## Agent Memory Loop
 
-Agent Memory は外部ストアを使わず、Oracle 26ai 内の `rag_agent_memories` に保存する。
+Agent Memory は外部ストアを使わず、Oracle AI Database 内の `rag_agent_memories` に保存する。
 
 - scope: `tenant_id_hash`、`user_id_hash`、`role_id_hash`、`agent_id_hash`、`thread_id_hash`。raw ID は保存しない。
 - vector: `memory_text` を OCI Generative AI Cohere Embed v4 で `SEARCH_DOCUMENT` embedding 化し、`VECTOR(1536, FLOAT32)` に保存する。

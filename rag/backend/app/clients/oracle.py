@@ -1,4 +1,4 @@
-"""Oracle 26ai クライアント。
+"""Oracle AI Database クライアント。
 
 AI Vector Search によるベクトル検索（VECTOR(1536, FLOAT32)）と
 Oracle Text による keyword retrieval を担う。外部ベクトル DB は使わない。
@@ -447,7 +447,7 @@ class KnowledgeBaseNameConflictError(ValueError):
 
 
 class OracleClient:
-    """Oracle 26ai 接続・ベクトル検索クライアント。"""
+    """Oracle AI Database 接続・ベクトル検索クライアント。"""
 
     def __init__(
         self,
@@ -5210,7 +5210,7 @@ class OracleClient:
         top_k: int,
         filters: dict[str, str] | None = None,
     ) -> list[RetrievedChunk]:
-        """Oracle 26ai Agent Memory から scoped history context を取得する。"""
+        """Oracle AI Database の Agent Memory から scoped history context を取得する。"""
         del filters
         if top_k <= 0 or not _agent_memory_scope_available():
             return []
@@ -5336,7 +5336,7 @@ class OracleClient:
     async def _vector_search_with_oracle(
         self, embedding: list[float], top_k: int, filters: dict[str, str]
     ) -> list[RetrievedChunk]:
-        """Oracle 26ai AI Vector Search で近傍 chunk を取得する。"""
+        """Oracle AI Vector Search で近傍 chunk を取得する。"""
         where_sql, binds = _oracle_retrieval_where(filters)
         binds.update(
             {
@@ -12923,7 +12923,7 @@ async def test_oracle_connection(
         )
     except TimeoutError as exc:
         raise OracleConnectionTimeoutError(
-            f"Oracle 26ai 接続テストが {timeout_seconds:g} 秒でタイムアウトしました。"
+            f"Oracle AI Database の接続テストが {timeout_seconds:g} 秒でタイムアウトしました。"
             "データベースの起動状態、Wallet サービス名、ネットワーク到達性を確認してください。"
         ) from exc
 
@@ -13619,7 +13619,7 @@ CREATE INDEX {table_name}_recipe_status_idx
 
 
 def oracle_vector_schema_sql(table_name: str = "rag_chunks") -> str:
-    """Oracle 26ai VECTOR(1536, FLOAT32) + HNSW index の DDL 例を返す。"""
+    """Oracle AI Database VECTOR(1536, FLOAT32) + HNSW index の DDL 例を返す。"""
     return f"""
 {oracle_text_preferences_sql()}
 
@@ -14092,7 +14092,7 @@ CREATE INDEX rag_graph_entity_chunks_chunk_set_idx
 
 
 def oracle_agent_memory_schema_sql(table_name: str = "rag_agent_memories") -> str:
-    """Agent Memory を Oracle 26ai VECTOR と hash scope で保存する DDL を返す。"""
+    """Agent Memory を Oracle AI Database VECTOR と hash scope で保存する DDL を返す。"""
     return f"""
 CREATE TABLE {table_name} (
     memory_id        VARCHAR2(64) PRIMARY KEY,
