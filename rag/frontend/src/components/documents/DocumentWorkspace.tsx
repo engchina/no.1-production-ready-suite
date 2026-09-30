@@ -1189,12 +1189,24 @@ export function DocumentWorkspace({
           classification={doc.classification ?? null}
         />
 
-        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
-          {/* 左ペイン: 原本プレビュー(desktop は引用照合のアンカーとして sticky 固定)。
-              高さは 1 画面分(上下の余白を除いたビューポートの高さ)で、ページは内部でスクロールする(#349)。 */}
+        {/* 左右の幅（#579）。ページの大きさは左ペインの幅で決まる（高さは幅とページの縦横比から。#559）。
+            - xl（1280px〜）: 今までどおりほぼ半分ずつ。右ペインの幅（約 450px）をこれ以上削ると、右のタブが入り切らない。
+            - 2xl（1536px〜）: プレビュー 2 : 右 1 にし、右は 35rem（右のタブ 4 つが 1 行に入る幅）を下限にする。
+              1920px で左は約 800 → 1040px、ペインの高さは A4 縦で約 1.55 倍（1052 → 1628px）になる。
+              右ペインの幅（本文・構造化要素・Chunk・抽出エクスポートの作業）を残すため、2 : 1 より広くはしない。 */}
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] 2xl:grid-cols-[minmax(0,2fr)_minmax(35rem,1fr)]">
+          {/* 左ペイン: 原本プレビュー。高さは 1 画面分の固定ではなく、幅と文書のページの縦横比から決め、
+              幅に合わせたときに 1 ページ全体（とツールバー・強調の状態の行）が縦スクロールなしで入る(#559)。
+              - 決め方は DocumentPreview の sizing="page"（ページ画像は最も縦長のページ、寸法が分かるまでは A4 縦）。
+              - 下限: xl 以上は今までの 1 画面分（上下の余白を除く）。横長のページでも右ペインの作業の高さを
+                今より減らさない（余りはページの上下の余白になる）。xl 未満の縦積みは下限を設けず、ページの形の高さにする
+                （375px で A4 縦ならおよそ 1 画面の 2/3。1 画面分の枠に小さなページが浮く今の表示を詰める）。
+              - 上限: ビューア側で 2 画面分。極端に縦長の画像だけ内部スクロールになる。
+              - sticky はやめた: 1 画面より高いペインは sticky でも止まらず（右ペインと同じ高さなので動く余地がない）、
+                下端が画面の外に残るだけになるため。強調が画面の外にあるときは「強調した位置へ移動」(H) でページごと見せる。 */}
           <section
             data-testid="document-preview-pane"
-            className="flex h-[calc(100dvh-2rem)] min-h-[28rem] min-w-0 flex-col xl:sticky xl:top-4 xl:self-start"
+            className="flex min-w-0 flex-col xl:min-h-[max(28rem,calc(100dvh-2rem))]"
           >
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-semibold text-fg">{t("flow.preview")}</h3>
@@ -1236,7 +1248,7 @@ export function DocumentWorkspace({
               id={selectedPreviewVariant}
               value={selectedPreviewVariant}
               idPrefix="preview"
-              className="flex min-h-0 flex-1 flex-col"
+              className="flex flex-auto flex-col"
             >
               <DocumentPreview
                 documentId={documentId}
@@ -1252,16 +1264,18 @@ export function DocumentWorkspace({
                 focusBboxUnit={effectiveFocusBboxUnit}
                 focusPageSize={focusPageSize}
                 highlights={previewHighlights}
-                className="min-h-0 flex-1"
+                sizing="page"
               />
             </TabPanel>
           </section>
 
           {/* 右ペイン: 本文 / 構造化要素 / Chunk / エクスポート をタブ切替。
-              desktop は左のプレビューと同じ 1 画面分の高さにそろえ、タブの内容は内部でスクロールする(#349)。 */}
+              desktop は左のプレビューと同じ高さにそろえ、タブの内容は内部でスクロールする(#349 / #559)。
+              h-0 + min-h-full: 右ペインの内容は行の高さに寄与させず（h-0）、左ペインが決めた行の高さいっぱいに
+              伸ばす（min-h-full はグリッドの領域の高さ）。内容が多くても左より高くならない。 */}
           <section
             data-testid="document-inspector-pane"
-            className="min-w-0 xl:flex xl:h-[calc(100dvh-2rem)] xl:min-h-[28rem] xl:flex-col"
+            className="min-w-0 xl:flex xl:h-0 xl:min-h-full xl:flex-col"
           >
             <Tabs
               idPrefix="inspector"

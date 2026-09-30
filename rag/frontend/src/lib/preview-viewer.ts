@@ -75,6 +75,27 @@ export function previewLayout({
   };
 }
 
+/**
+ * ビューアの高さを決める縦横比（幅 / 高さ）。文書のうち最も縦長のページの値を使う（#559）。
+ *
+ * - ページごとに高さを変えると、ページ送りのたびに文書詳細の 2 ペインの高さが跳ねるため、文書で 1 つに決める。
+ *   最も縦長のページが幅に合わせて丸ごと入るので、横長のページは上下に余白を残して収まる。
+ * - 回転は含めない（利用者の一時的な操作で、ペインの高さを変えるほどではない。回した後は「全体を表示」で収まる）。
+ * - 寸法が 1 つも分からないうち（ページ一覧の取得前・画像の読み込み前）は A4 縦を仮定する。
+ */
+export function previewHeightAspect(
+  pageSizes: ReadonlyArray<{ width?: number | null; height?: number | null } | null | undefined>
+): number {
+  const aspects = pageSizes
+    .map((size) =>
+      size?.width && size.height && size.width > 0 && size.height > 0
+        ? size.width / size.height
+        : null
+    )
+    .filter((aspect): aspect is number => aspect != null && Number.isFinite(aspect));
+  return aspects.length > 0 ? Math.min(...aspects) : PREVIEW_DEFAULT_ASPECT;
+}
+
 export function clampZoom(value: number): number {
   if (!Number.isFinite(value)) return 100;
   return Math.min(PREVIEW_MAX_ZOOM, Math.max(PREVIEW_MIN_ZOOM, value));
