@@ -169,6 +169,13 @@ TIER 3   components/components.css  hover / focus / disabled の状態のみ。T
 - 使えないタブは `disabled` にし、理由は `disabledReason`（無効のときだけ HTML の `title`）で渡す。無効のタブはフォーカスを受けず Tooltip を出せないため。同じ理由を画面の別の場所（バナー等）に書いているときは渡さない
 - 絞り込み・モード・オン / オフの切り替え（見方ではないもの）は従来どおり `ToggleChip` / `Button` の `pressed`（UX 契約 buttons.md §6）
 
+**フォームを Tabs で分けたときは、エラーのあるタブを `invalid` で示す（#542）。**
+
+- 同じ設定の別の枠（モデル設定のプライマリ接続 / セカンダリ接続など）をタブで分けると、選んでいないタブの中の欄のエラーが見えない。`TabItem` の `invalid` を渡すと、ラベルの後ろに danger 色の `CircleAlert`（14px）を出し、読み上げでは `invalidLabel`（既定「入力にエラーがあります」）をタブの説明（`aria-describedby`）として伝える。色だけに頼らない（アイコンの形と読み上げの説明）。`data-invalid` も付く
+- 保存で止めたときは、最初のエラーがあるタブに切り替え、そのタブの最初のエラーの欄へフォーカスする（UX 契約 `messaging.md` §3.2.1。切り替えは呼び出し側が行う）
+- 保存していない入力があるタブは、既存の `badge`（件数と同じ見た目）に「未保存」を出してよい。1 つの保存で複数のタブの入力を送るときに、別のタブの変更に気付けるようにする
+- 欄のエラーそのものは従来どおり欄の直下の `FieldError`。タブの印はその場所を指す手がかりで、代わりにはしない
+
 ### `PageBody` / `Section`（新規）
 
 readme が規定していた「左右ガター 2rem / セクション間 1.5rem」の**唯一の実装**。これが無かったため3アプリがそれぞれ `<div style={{padding:'1.5rem 2rem', …}}>` を手書きしていました。**design system で最も確実に壊れる場所が唯一未実装**という状態でした。
@@ -823,6 +830,7 @@ QA に事前共有してください。**47点あります。**
 | 46 | **権限管理の「利用できる対象」の候補の行が名前と説明だけになり、高さがそろう** | 各行に名前・説明・内部の ID（等幅、32 桁の hash など）を並べ、行の高さが内容で変わった。高さに上限のあるスクロール領域の grid で行が `min-h-11` まで縮み、375px の 1 列では次の行の名前が前の行の ID・説明に重なった → ID は出さない。名前は 1 行・説明は 2 行で省略し（全文は `title`、チェックボックスの名前は全文）、説明を持つ候補がある対象ではすべての行が説明の 2 行分を取って高さがそろう。行は内容の高さ（`auto-rows-max`）で、縮めて重ねない。名前の行はバッジの高さを常に取る。ホバーで行の地が `surface-hover` になる。NL2SQL の業務プロファイル・Agent のエージェント / 業務ビューも同じ部品（説明を持たない対象は名前だけの行） | 利用者には ID が意味を持たず、何の対象かを名前と説明で見分ける。行の重なりを解消する（`RolePermissionTargetOption`、#521） |
 | 47 | **必須の欄に「必須」のタグがそろい、「(任意)」が消える** | 必須の欄でも `requiredLabel` を渡し忘れた欄・素の `<label>` の欄はタグが無く、一部の欄だけにタグがあった。任意の欄はラベル・placeholder に「(任意)」「（任意）」を書く画面があった（RAG・NL2SQL・Agent で 14 か所）→ backend の検証か送信ガードで必須の欄すべてにタグ「必須」と `aria-required`、任意の欄には何も付けない。チェックボックスの群・ラジオの必須は legend の後ろに同じタグ。NL2SQL / system-settings の独自の `FieldLabel` は共有部品になる（見た目は同じ） | 必須だけを 1 通りの印で示し、凡例なしで見分けられるようにする。placeholder をラベルの代わりにしない（§4「必須の表示」、WCAG 3.3.2 / 1.4.1 / 4.1.2、#531） |
 | 48 | **一覧の絞り込みの検索ボタンが無くなり、入力に合わせて絞り込む**（#535） | RAG の業務ビューの一覧: 検索欄（固定 `w-56`・先頭アイコンなし）+「名前・説明で検索」のボタン → ナレッジベースの一覧と同じ `SearchField`（先頭アイコン・消去、`w-64`、375px は全幅）でボタンなし。NL2SQL の学習候補・アプリ内フィードバック: 条件の行の右端の「絞り込み」（44px）→ ボタンなしで、条件を変えるとすぐ読み込む（読込中は一覧の上に経過時間とスピナー）。アプリ内フィードバックの検索欄は手書きの入力欄 → `SearchField`（44px、虫眼鏡・消去付き）。Agent のメモリの検索欄は手書きの入力欄（40px、地が `surface-sunken`）→ `SearchField`（36px、地は `surface`）。0 件の空の状態に「検索語をクリア」（RAG のナレッジベース・業務ビュー・文書、ユーザー・ロール・権限管理） | 同じ種類の画面（一覧の絞り込み）の操作を 3 製品でそろえる。押し忘れ・押し直しを無くす。0 件から 1 操作で戻れる（UX 契約 page-archetypes.md「一覧の絞り込みの検索」） |
+| 49 | **モデル設定の OCI Enterprise AI の接続がタブになり、エラーのあるタブに印が付く** | 「接続 1（既定）」「接続 2」の枠（`border` + `bg-surface-sunken`）を縦に並べ、各接続に自由入力の「表示名」があった → カードの中の共有の `Tabs`（「プライマリ接続」「セカンダリ接続」）で切り替え、表示名の欄は無い。未設定のセカンダリ接続は `EmptyState` と「セカンダリ接続を設定」、設定済みは入力欄と「セカンダリ接続を削除」（説明の行の右端、ghost の danger）。エラーのあるタブはラベルの後ろに danger 色の `CircleAlert`、未保存の入力があるタブは「未保存」のバッジ。Endpoint URL・Project OCID・API key の必須のタグは、プライマリ接続が 3 つとも「OCI 運用時必須」、セカンダリ接続が 3 つとも「必須」 | 同じ設定の別の枠はタブで切り替える（§4「`Tabs`」）。名前を画面・選択肢・保存値でそろえ、別のタブのエラーを見落とさない（#542） |
 
 ### API の非互換
 
@@ -847,6 +855,7 @@ QA に事前共有してください。**47点あります。**
 | `SearchField`（#535） | **新規 export。** `SearchField` / `SearchFieldProps` / `SEARCH_FIELD_DEBOUNCE_MS` / `trimSearchValue`、IME 対応の Enter の判定 `isImeComposing` / `isSubmitEnter` / `KeyboardEventLike`。`@engchina/production-ready-system-settings` の `SecuritySearchField` は `SearchField` で作り直し（`onChange` は確定した値で呼ぶ）、`resultCountLabel` と 0 件の「検索語をクリア」の `SecurityClearSearchAction` を追加 |
 | `--radius-control`（#384） | **新規トークン**（utility `rounded-control`）。`--button-radius` / `--input-radius` はその別名 |
 | `Tabs`（#396） | `TabItem` に `disabledReason`（無効のときだけ HTML の `title` として付ける）を追加。既存の props・id・aria・キー操作は変えない |
+| `Tabs`（#542） | `TabItem` に `invalid` / `invalidLabel` を追加し、`DEFAULT_TAB_INVALID_LABEL` を export。`invalid` のタブは `data-invalid` と、`aria-describedby` に `<idPrefix>-tab-<id>-invalid` を持つ（バッジがあればバッジの id と並べる）。既存の props・id・キー操作は変えない |
 | `Disclosure`（#397） | **新規 export。** `Disclosure` / `DisclosureProps` / `DisclosureVariant` / `DisclosureSurface` / `DisclosureTone` / `DisclosureSize`。`<details>` を包む開閉の標準形。adherence の lint が製品の JSX の `<details>` を検出する |
 | `DisclosureChevron`（#397） | 折りたたみの向きが `rotate-90`（左向き）→ `-rotate-90`（右向き）。`getComputedStyle(icon).rotate` を検証している E2E は `"90deg"` → `"-90deg"`。`expanded="group"` は残すが、入れ子の `<details>` では外側の open に引きずられるため新規コードは `Disclosure` か boolean を使う |
 | `Toaster`（#411） | `placement` プロップ（`"bottom-left" \| "bottom-right"`）を**削除。** 置き場所は `Toaster` が決める（md 以上は `PageHeader` に重ねてページの操作の左、md 未満は上端のバー）。`PageHeader` の `<header>` に `data-page-header`、ページの操作の並びに `data-page-header-actions` を付ける（`Toaster` が位置を読む）。通知の領域に `data-toast-placement`（`page-header` / `below-page-header` / `top-right` / `top-bar`） |

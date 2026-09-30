@@ -238,10 +238,18 @@ test.describe("Agent Runtime settings", () => {
 
     await page.goto("/settings/model");
     await expect(page.getByRole("heading", { name: "モデル設定", level: 1 })).toBeVisible();
-    // OCI Enterprise AI の接続は 2 件まで。登録モデルごとに接続を選ぶ（#533）。
-    await expect(page.getByRole("heading", { name: "接続 1（既定）" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "接続を追加" })).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "モデル 1 の接続" })).toContainText("接続 1");
+    // OCI Enterprise AI の接続はプライマリ接続・セカンダリ接続のタブ。登録モデルごとに接続を選ぶ（#533 / #542）。
+    const connectionTabs = page.getByRole("tablist", { name: "OCI Enterprise AI の接続" });
+    await expect(connectionTabs.getByRole("tab", { name: "プライマリ接続" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+    await connectionTabs.getByRole("tab", { name: "セカンダリ接続" }).click();
+    await expect(page.getByRole("button", { name: "セカンダリ接続を設定" })).toBeVisible();
+    await connectionTabs.getByRole("tab", { name: "プライマリ接続" }).click();
+    await expect(page.getByRole("combobox", { name: "モデル 1 の接続" })).toContainText(
+      "プライマリ接続"
+    );
     await page.getByRole("textbox", { name: "API key" }).fill("test-api-key");
     await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
     await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。").first()).toBeVisible();

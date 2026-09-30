@@ -154,7 +154,7 @@ def service_runtime_env(settings: Settings) -> dict[str, str]:
     「モデル画面で設定 → parser 再起動 → 稼働中」が成立する(parser は起動時に 1 回だけ env を
     読むため再起動が必要)。
     OCI parser は VLM 抽出だけを行うので、接続(endpoint / API key / project)は既定の Vision
-    モデルの接続を渡す(#533。接続 2 を選んだ Vision モデルでも parser が同じ接続で呼ぶ)。
+    モデルの接続を渡す(#533。セカンダリ接続を選んだ Vision モデルでも parser が同じ接続で呼ぶ)。
     """
     vlm_model = enterprise_ai_vision_model_id(settings)
     default_model = enterprise_ai_default_model_id(settings)

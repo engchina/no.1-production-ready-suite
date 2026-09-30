@@ -49,9 +49,7 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "oci_enterprise_ai_endpoint",
         "oci_enterprise_ai_project_ocid",
         "oci_enterprise_ai_api_key",
-        "oci_enterprise_ai_connection_name",
-        # OCI Enterprise AI の接続 2（#533）。API key は共通 `.env` だけに置く。
-        "oci_enterprise_ai_secondary_connection_name",
+        # OCI Enterprise AI のセカンダリ接続（#533）。API key は共通 `.env` だけに置く。
         "oci_enterprise_ai_secondary_endpoint",
         "oci_enterprise_ai_secondary_project_ocid",
         "oci_enterprise_ai_secondary_api_key",

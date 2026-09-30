@@ -92,7 +92,7 @@ def test_model_test_uses_connection_of_tested_model(
         "AsyncClient",
         lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
     )
-    # 保存済みの接続 2 の key（画面では空欄 = 保持）を使う。
+    # 保存済みのセカンダリ接続の key（画面では空欄 = 保持）を使う。
     saved = Settings(_env_file=None, oci_enterprise_ai_secondary_api_key="sk-saved-secondary")
     request = ModelSettingsTestRequest.model_validate(
         {"settings": _payload(), "target_type": target_type, "model_id": model_id}

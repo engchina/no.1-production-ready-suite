@@ -1476,6 +1476,44 @@ export type TextFieldProps = {
 - E2E: 1 画面に `tabpanel` が複数になる。`page.getByRole("tabpanel")` で引いていたテストは、ペイン（`getByTestId("document-inspector-pane")`）やパネルの名前（`{ name: "抽出エクスポート" }`）で絞る。
 - 単体テストは `packages/ui/tests/components.test.tsx`（役割・選択・無効の理由・キー操作）、実ブラウザは RAG の `e2e/document-workspace-file-processing.spec.ts`（「処理前/処理後と抽出エクスポートの形式は共有の Tabs で…」）。
 
+## Tabs — 変更（#542）: エラーのあるタブ
+
+フォームを複数のタブに分けたとき（モデル設定のプライマリ接続 / セカンダリ接続）、選んでいないタブの欄のエラーを見落とさないように、`TabItem` に `invalid` を足しました。ほかの props・id・キー操作は変えていません。
+
+```tsx
+<Tabs
+  idPrefix="enterprise-connection"
+  ariaLabel="OCI Enterprise AI の接続"
+  value={tab}
+  onChange={setTab}
+  items={[
+    { id: "primary", label: "プライマリ接続" },
+    // 保存で止めたときは、呼び出し側が最初のエラーのタブへ切り替えて、最初のエラーの欄へフォーカスする。
+    { id: "secondary", label: "セカンダリ接続", badge: unsaved ? "未保存" : undefined, invalid: hasErrors },
+  ]}
+/>
+```
+
+```ts
+export interface TabItem {
+  // …
+  /** タブの中に入力のエラーがある。ラベルの後ろに danger 色の CircleAlert、読み上げは invalidLabel。 */
+  invalid?: boolean;
+  /** invalid のときの読み上げの説明（翻訳済み）。既定 DEFAULT_TAB_INVALID_LABEL（「入力にエラーがあります」）。 */
+  invalidLabel?: string;
+}
+export declare const DEFAULT_TAB_INVALID_LABEL: string;
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 印はラベル（とバッジ）の後ろの `CircleAlert`（14px、`text-danger-fg`、`aria-hidden`） | エラーは利用者の対応が要る状態なので状態色を使う。アイコンの形でも伝え、色だけに頼らない（WCAG 1.4.1）。選択中のタブの下線・文字色は変えない |
+| 読み上げは `sr-only` の説明を `aria-describedby` で結ぶ（タブの名前は変えない） | タブの名前（「セカンダリ接続」）を保ったまま、フォーカスしたときに「入力にエラーがあります」と伝える。件数バッジと同じ結び方 |
+| `data-invalid` を付ける | E2E・単体テストで状態を引ける（見た目の class に依存しない） |
+| タブの切り替えとフォーカスは呼び出し側が行う | どの欄が最初のエラーかは画面が知っている。Tabs は表示と読み上げだけを持つ |
+
+- 単体テストは `packages/ui/tests/components.test.tsx`（「Tabs のエラーの表示（#542）」）。実ブラウザは RAG の `e2e/model-settings-switch.spec.ts`（「接続はプライマリ接続とセカンダリ接続のタブで切り替え…」）。
+
 ## Disclosure — **新規** / DisclosureChevron — 変更（#397）
 
 開閉できる領域の標準形です。ネイティブの `<details>` / `<summary>` を包み、見出しの行全体を押せる領域にし、開閉の状態を右端（`plain` は見出しの直後）の `DisclosureChevron` で示します。**製品で `<details>` / `<summary>` を手書きしないでください**（adherence の lint が JSX の `<details>` を検出します）。見た目と振る舞いの決定は README §4「`Disclosure`」。

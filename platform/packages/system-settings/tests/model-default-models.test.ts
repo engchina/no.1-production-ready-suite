@@ -65,7 +65,7 @@ describe("validateDefaultModels（#499。backend の validate_default_models と
         default_text_model_id: "",
         default_vision_model_id: "",
       }).default_vision_model_id,
-    ).toBe("既定の Vision モデルを選んでください。");
+    ).toBe("既定の Vision モデルを選択してください。");
     expect(
       validateDefaultModels({
         models,

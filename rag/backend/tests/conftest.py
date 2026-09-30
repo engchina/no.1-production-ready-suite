@@ -236,11 +236,9 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.model_settings_file = str(tmp_path / "model-settings.json")
     settings.oci_enterprise_ai_endpoint = ""
     settings.oci_enterprise_ai_project_ocid = ""
-    settings.oci_enterprise_ai_connection_name = ""
-    settings.oci_enterprise_ai_secondary_connection_name = ""
     settings.oci_enterprise_ai_secondary_endpoint = ""
     settings.oci_enterprise_ai_secondary_project_ocid = ""
-    # 接続 1・接続 2（#533）の API key の基準値を空にする。
+    # プライマリ接続・セカンダリ接続（#533）の API key の基準値を空にする。
     settings.prepare_model_secret_state("", "")
     settings.oci_enterprise_ai_models = []
     settings.oci_enterprise_ai_default_text_model = ""

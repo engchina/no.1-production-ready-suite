@@ -1995,7 +1995,6 @@
         "connections": [
           {
             "connection_id": "primary",
-            "display_name": "",
             "endpoint": "",
             "project_ocid": "",
             "api_key": "",
