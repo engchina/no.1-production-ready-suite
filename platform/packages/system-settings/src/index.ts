@@ -301,6 +301,13 @@ export {
   targetLoadRows,
   type RolePermissionsPageProps,
 } from "./permissions/RolePermissionsPage";
+// 権限管理の機能の一覧を左のナビにそろえる（#567）
+export {
+  arrangePermissionsByNav,
+  permissionNavSections,
+  type NavConfigSectionLike,
+  type PermissionNavSection,
+} from "./permissions/navLayout";
 export {
   ROLE_PERMISSIONS_MESSAGES,
   type RolePermissionTargetMessages,

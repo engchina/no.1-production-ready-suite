@@ -1,9 +1,13 @@
-import type {
-  RolePermissionTargetItem,
-  RolePermissionTargetSection,
-  RolePermissionsApi,
+import {
+  arrangePermissionsByNav,
+  permissionNavSections,
+  type PermissionDefinition,
+  type RolePermissionTargetItem,
+  type RolePermissionTargetSection,
+  type RolePermissionsApi,
 } from "@engchina/production-ready-system-settings";
 
+import { NAV_SECTIONS } from "@/components/layout/nav-config";
 import type { AccessTargetsData, AgentAccessTarget, SecurityRole } from "./api";
 import { t } from "./i18n";
 import { CAPABILITY_PERMISSIONS } from "./permissions";
@@ -21,9 +25,18 @@ export const BUSINESS_VIEW_ACCESS_KEY = "business-view-access";
 /** 業務ビュー ID の形式（backend の `PUT /security/roles/{id}/access` の検証と同じ）。 */
 export const BUSINESS_VIEW_ID_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/;
 
+/**
+ * 権限管理の機能の一覧は、左のナビ（nav-config の NAV_SECTIONS）を正本にして、グループ・並び順・名前を
+ * そろえる（#567）。ナビに無い権限（画面の中の操作を許可する capability の「実行・承認・管理の権限」）は、
+ * ナビの後ろに backend のカタログのまま置く。
+ */
+export function arrangeAgentPermissions(catalog: readonly PermissionDefinition[]): PermissionDefinition[] {
+  return arrangePermissionsByNav(catalog, permissionNavSections(NAV_SECTIONS, t));
+}
+
 export const PERMISSIONS_API: RolePermissionsApi<SecurityRole> = {
   roles: (includeArchived, options) => securityApi.roles(includeArchived, options),
-  permissions: (options) => securityApi.permissions(options),
+  permissions: (options) => securityApi.permissions(options).then(arrangeAgentPermissions),
   // 機能権限とエージェント / 業務ビューの対象範囲を Agent の保存 API（PUT /access）へ送る。
   // 全件が対象のとき（SYSTEM_ADMIN・agent.admin）は共通画面が空の一覧を渡す。
   save: (role, draft) =>

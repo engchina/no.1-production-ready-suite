@@ -1593,6 +1593,8 @@ class OracleClient:
                 """,
                 {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
             )
+            # None の bind は VARCHAR2 として送られ、NUMBER 列との COALESCE が ORA-00932 に
+            # なるため NUMBER へ CAST する。省略時は config_revision を記録する(#568)。
             _execute(
                 connection,
                 """
@@ -1604,7 +1606,7 @@ class OracleClient:
                         :extraction_recipe_id, active_extraction_recipe_id
                     ),
                     materialized_revision = COALESCE(
-                        :materialized_revision, config_revision
+                        CAST(:materialized_revision AS NUMBER), config_revision
                     ),
                     finished_at = SYSTIMESTAMP,
                     updated_at = SYSTIMESTAMP
