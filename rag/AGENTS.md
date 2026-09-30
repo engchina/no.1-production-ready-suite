@@ -113,6 +113,7 @@ KB は **どの文書を検索対象にするか(membership)だけ**を持つ純
 
 - 文書 membership(N:N。1 文書が複数 KB に所属可、1 KB が複数文書を束ねる)。
 - 名称 / 説明 / スコープ。
+- 例外として、項目抽出の項目の定義(何を取り出すか)は KB ごとに持てる(#548。無ければ全体の既定、複数 KB に属する文書は和集合。docs/knowledge-base-management.md の 8.4.1a)。項目抽出を行うかどうかは今までどおり文書レシピ / global が決める。
 
 文書の KB 出し入れは `rag_document_knowledge_bases` の行 add/delete **のみ**で、chunk へ波及しない(再プラン/materialize/GC を起こさない)。KB UI から preprocess/parser/chunking・検索方法・根拠確認・回答スタイル・安全チェック・品質評価を出さない。KB の legacy adapter/query config は読み取りのみ許容し、runtime では使わず、次回保存で再保存しない。
 

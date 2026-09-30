@@ -91,12 +91,14 @@ def _isolated_field_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 
 def _metadata_state(extraction: Mapping[str, object], *, field: bool) -> tuple[str, str]:
     from app.config import Settings
+    from app.rag import extraction_field_adapter as fields_mod
     from app.schemas.document import DocumentLayerStatusName
 
     status, reason = documents_route._metadata_layer_state(
         "項目抽出",
         extraction,
         Settings.model_construct(rag_field_extraction_enabled=field),
+        bool(fields_mod.load_field_schema().fields),
     )
     assert isinstance(status, DocumentLayerStatusName)
     return status.value, reason

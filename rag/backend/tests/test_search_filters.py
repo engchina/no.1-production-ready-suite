@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import json
+from datetime import UTC, date, datetime
+from decimal import Decimal
 
 import pytest
 
@@ -157,6 +159,119 @@ def test_retrieval_where_explicit_chunk_set_filters_and_bypasses_serving() -> No
     assert "cs.is_serving = 1" not in sql
     # KB スコープ(所属 KB の EXISTS)自体は維持する。
     assert "rag_document_knowledge_bases dkb" in sql
+
+
+def _field_filter(*conditions: dict[str, str]) -> dict[str, str]:
+    return {"extraction_fields": json.dumps(list(conditions), ensure_ascii=False)}
+
+
+def test_normalize_extraction_field_conditions_canonicalizes_typed_values() -> None:
+    """項目の条件(#549)は型ごとに値をそろえた JSON にする。"""
+    normalized = normalize_search_filters(
+        _field_filter(
+            {"name": " 金額 ", "value_type": "number", "op": "gte", "value": "1000000.0"},
+            {"name": "契約日", "value_type": "date", "op": "lte", "value": "2025-12-31"},
+            {"name": "更新あり", "value_type": "bool", "value": "TRUE"},
+            {"name": "契約番号", "value_type": "string", "value": " C-1 "},
+        )
+    )
+    assert json.loads(normalized["extraction_fields"]) == [
+        {"name": "金額", "value_type": "number", "op": "gte", "value": "1000000.0"},
+        {"name": "契約日", "value_type": "date", "op": "lte", "value": "2025-12-31"},
+        {"name": "更新あり", "value_type": "bool", "op": "eq", "value": "true"},
+        {"name": "契約番号", "value_type": "string", "op": "eq", "value": "C-1"},
+    ]
+    assert normalize_search_filters({"extraction_fields": "[]"}) == {}
+
+
+@pytest.mark.parametrize(
+    ("condition", "message"),
+    [
+        ({"name": "契約番号", "value_type": "string", "op": "gte", "value": "C"}, "演算子"),
+        ({"name": "更新あり", "value_type": "bool", "op": "lte", "value": "true"}, "演算子"),
+        ({"name": "金額", "value_type": "number", "op": "gte", "value": "百万"}, "数値"),
+        ({"name": "金額", "value_type": "number", "op": "gte", "value": "NaN"}, "数値"),
+        ({"name": "契約日", "value_type": "date", "op": "gte", "value": "2025/01/01"}, "YYYY"),
+        ({"name": "更新あり", "value_type": "bool", "value": "はい"}, "true か false"),
+        ({"name": "契約日", "value_type": "date", "op": "like", "value": "2025-01-01"}, "形式"),
+        ({"name": "金額", "value_type": "money", "value": "1"}, "形式"),
+        ({"name": "  ", "value_type": "string", "value": "x"}, "空"),
+        ({"name": "金額", "value_type": "number", "value": "1", "column": "x"}, "形式"),
+    ],
+    ids=[
+        "string-range",
+        "bool-range",
+        "number-text",
+        "number-nan",
+        "date-format",
+        "bool-text",
+        "unknown-op",
+        "unknown-type",
+        "blank-name",
+        "extra-key",
+    ],
+)
+def test_normalize_rejects_invalid_extraction_field_conditions(
+    condition: dict[str, str], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        normalize_search_filters(_field_filter(condition))
+
+
+def test_normalize_rejects_malformed_or_too_many_extraction_field_conditions() -> None:
+    with pytest.raises(ValueError, match="形式"):
+        normalize_search_filters({"extraction_fields": "{not json"})
+    too_many = [{"name": f"項目{i}", "value_type": "string", "value": "x"} for i in range(11)]
+    with pytest.raises(ValueError, match="10 件"):
+        normalize_search_filters(_field_filter(*too_many))
+
+
+def test_retrieval_where_builds_document_exists_per_extraction_field_condition() -> None:
+    """型ごとの条件は、採用中の抽出の項目を見る文書単位の EXISTS と型付きの bind になる。"""
+    filters = normalize_search_filters(
+        _field_filter(
+            {"name": "金額", "value_type": "number", "op": "gte", "value": "1000000"},
+            {"name": "契約日", "value_type": "date", "op": "lte", "value": "2025-12-31"},
+            {"name": "更新あり", "value_type": "bool", "value": "true"},
+            {"name": "契約番号", "value_type": "string", "value": "C-1"},
+        )
+    )
+    sql, binds = _oracle_retrieval_where(filters)
+
+    assert sql.count("FROM rag_document_extractions fx") == 4
+    assert "fx0.document_id = d.document_id" in sql
+    assert "JSON_TABLE(" in sql and "'$.fields[*]'" in sql
+    # 採用中(active な chunk_set が参照する)の抽出だけを見る。
+    assert "fx_cs0.extraction_recipe_id = fx0.extraction_recipe_id" in sql
+    assert "fx_cs0.is_active = 1" in sql
+    assert "fx_f0.field_number >= :filter_field_0_value" in sql
+    assert "fx_f1.field_date <= :filter_field_1_value" in sql
+    assert "LOWER(fx_f2.field_text) = :filter_field_2_value" in sql
+    assert "fx_f3.field_text = :filter_field_3_value" in sql
+    assert binds["filter_field_0_name"] == "金額"
+    assert binds["filter_field_0_value"] == Decimal("1000000")
+    assert binds["filter_field_1_value"] == date(2025, 12, 31)
+    assert binds["filter_field_2_value"] == "true"
+    assert binds["filter_field_3_value"] == "C-1"
+
+
+def test_retrieval_where_binds_extraction_field_name_and_value_without_interpolation() -> None:
+    """項目名と値は bind で渡し、SQL に埋めない(SQL injection を作らない)。"""
+    injected = "x' OR 1=1 --"
+    filters = normalize_search_filters(
+        _field_filter({"name": injected, "value_type": "string", "value": injected})
+    )
+    sql, binds = _oracle_retrieval_where(filters)
+    assert injected not in sql
+    assert binds["filter_field_0_name"] == injected
+    assert binds["filter_field_0_value"] == injected
+
+
+def test_retrieval_where_rejects_unvalidated_extraction_field_operator() -> None:
+    """検証を通らない演算子は SQL の組み立てでも拒否する(許可リストの外を SQL にしない)。"""
+    raw = json.dumps([{"name": "a", "value_type": "number", "op": "; DROP", "value": "1"}])
+    with pytest.raises(ValueError, match="形式"):
+        _oracle_retrieval_where({"extraction_fields": raw})
 
 
 def test_retrieval_where_chunk_set_filter_for_document_scope_experiment() -> None:

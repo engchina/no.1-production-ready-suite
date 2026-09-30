@@ -99,7 +99,7 @@
 | MOD-003 | API key 更新 | 新しい API key を入力して保存 | API key 本文は応答や画面に出ず、has_api_key が true になる | `model/model-settings.valid.json` |
 | MOD-004 | API key clear | clear_api_key を有効にして保存 | 保存後 has_api_key が false になる | `api/model-settings-clear-api-key.patch.json` |
 | MOD-005 | モデル追加/削除 | model row を追加し、削除確認する | 追加 row が保存 payload に含まれ、削除時は確認後に消える | `model/model-settings.valid.json` |
-| MOD-006 | 既定のモデルの整合性（#499） | モデル ID の変更・削除、画像入力（Vision）対応の切替と、既定の Vision モデル / 既定のテキストモデルの関係を見る | ID の変更には既定が追従する。既定に選んだモデルの削除・Vision 対応のオフ・Vision 対応のモデルがない状態は、保存前にフィールドのエラーで止まり、API も 422 で拒否する。既定のテキストモデルの未選択は「既定の Vision モデルを使う」 | `model/model-settings.invalid-default-model.json` |
+| MOD-006 | 既定のモデルの整合性（#499） | モデル ID の変更・削除、画像入力（Vision）対応の切替と、既定の Vision モデル / 既定のテキストモデルの関係を見る | ID の変更には既定が追従する。既定に選んだモデルの削除・Vision 対応のオフ・Vision 対応のモデルがない状態は、保存前にフィールドのエラーで止まり、API も 422 で拒否する。既定のテキストモデルも必須で、未選択の保存は「既定のテキストモデルを選択してください。」で止まる（#566） | `model/model-settings.invalid-default-model.json` |
 | MOD-007 | VLM 入力モード | `auto` / `files_api` / `inline_image` を切替 | 選択値が保存 payload に反映される | `api/model-settings.patch.json` |
 | MOD-008 | JSON テンプレート検証 | 不正 JSON template で保存 | 保存が失敗し、JSON object が必要と表示される | `model/model-settings.invalid-payload-template.json` |
 | MOD-009 | response path 検証 | `/` で始まらない path で保存 | 保存が失敗し、JSON pointer 形式の修正が求められる | `model/model-settings.invalid-response-path.json` |

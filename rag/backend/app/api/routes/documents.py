@@ -77,6 +77,7 @@ from app.rag.kb_adapter_config import (
 )
 from app.rag.layer_fingerprint import (
     changed_layer_inputs,
+    current_field_definitions,
     current_layer_inputs,
     recorded_layer_fingerprint,
 )
@@ -570,12 +571,27 @@ async def _mark_layers_rebuild_required(
         return
     if not rows:
         return
-    current_inputs = current_layer_inputs(global_settings)
+    try:
+        # 項目の定義は文書が属する KB で変わるため、層のある文書の定義を 1 回で読む(#548)。
+        field_sets = await oracle.list_documents_extraction_field_sets(
+            list(dict.fromkeys(str(row.get("document_id")) for row in rows))
+        )
+    except Exception:
+        logger.warning("documents_list_layer_fingerprints_failed", exc_info=True)
+        return
+    default_fields = load_field_schema().fields
+    inputs_by_document: dict[str, dict[str, object]] = {}
     flagged: set[str] = set()
     for row in rows:
         document_id = str(row.get("document_id"))
         if document_id in flagged:
             continue
+        if document_id not in inputs_by_document:
+            inputs_by_document[document_id] = current_layer_inputs(
+                global_settings,
+                current_field_definitions(field_sets.get(document_id, []), default_fields),
+            )
+        current_inputs = inputs_by_document[document_id]
         raw_config = (
             row.get("recipe_processing_config")
             if row.get("recipe_id") is not None
@@ -1543,8 +1559,11 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
         if any(row.get("recipe_id") is not None for row in rows)
         else {}
     )
-    # 作り直しの判定に使う今の入力(項目の定義は file を読むため、1 回だけ作る。#550)。
-    current_inputs = current_layer_inputs(effective_settings)
+    # 作り直しの判定に使う今の入力(項目の定義は文書が属する KB の定義か全体の既定。#548 / #550)。
+    current_inputs = current_layer_inputs(
+        effective_settings,
+        current_field_definitions(await oracle.list_document_extraction_field_sets(document_id)),
+    )
     chunk_sets: list[DocumentChunkSet] = []
     for row in rows:
         chunk_set = DocumentChunkSet.model_validate(row)
@@ -2047,12 +2066,14 @@ async def _record_recipe_artifact_layers(
     )
     raw_extraction = artifact.get("extraction_json") if artifact is not None else None
     extraction = raw_extraction if isinstance(raw_extraction, Mapping) else None
+    fields_configured = await _document_has_field_definitions(oracle, document_id)
     for layer, user_label in requested:
         status, reason = _materialized_layer_state(
             layer=layer,
             user_label=user_label,
             extraction=extraction,
             settings=settings,
+            field_definitions_configured=fields_configured,
         )
         await oracle.upsert_artifact_layer(
             layer_id=_recipe_layer_id(chunk_set_id, settings, layer),
@@ -3177,6 +3198,7 @@ async def _reconcile_plan_artifact_layers(
     """plan に含まれる派生 layer の状態を永続化する。"""
     configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
     effective_by_kb = _effective_ingestion_settings_by_kb(effective_settings, configs)
+    fields_configured = await _document_has_field_definitions(oracle, document_id)
     for chunk_set_id in plan.chunk_sets:
         for layer, user_label in _ARTIFACT_LAYER_LABELS:
             requested_ids = _requested_layer_ids_for_chunk_set(
@@ -3191,6 +3213,7 @@ async def _reconcile_plan_artifact_layers(
                     user_label=user_label,
                     extraction=detail.extraction,
                     settings=effective_settings,
+                    field_definitions_configured=fields_configured,
                 )
                 await oracle.upsert_artifact_layer(
                     layer_id=layer_id,
@@ -3207,12 +3230,20 @@ async def _reconcile_plan_artifact_layers(
                 )
 
 
+async def _document_has_field_definitions(oracle: OracleClient, document_id: str) -> bool:
+    """文書に効く項目抽出の定義(所属 KB の定義か全体の既定。#548)が 1 件以上あるか。"""
+    return bool(
+        current_field_definitions(await oracle.list_document_extraction_field_sets(document_id))
+    )
+
+
 def _materialized_layer_state(
     *,
     layer: str,
     user_label: str,
     extraction: Mapping[str, object] | None,
     settings: Settings,
+    field_definitions_configured: bool,
 ) -> tuple[DocumentLayerStatusName, str]:
     if not extraction:
         return (
@@ -3223,7 +3254,7 @@ def _materialized_layer_state(
             ),
         )
     if layer == "metadata":
-        return _metadata_layer_state(user_label, extraction, settings)
+        return _metadata_layer_state(user_label, extraction, settings, field_definitions_configured)
     if layer == "navigation":
         node_count = _navigation_node_count(extraction)
         if node_count > 0:
@@ -3248,15 +3279,20 @@ def _metadata_layer_state(
     user_label: str,
     extraction: Mapping[str, object],
     settings: Settings,
+    field_definitions_configured: bool,
 ) -> tuple[DocumentLayerStatusName, str]:
-    """項目抽出の成果物があれば実体化とする(図の要約は Vision の解析結果に含まれる。#497)。"""
+    """項目抽出の成果物があれば実体化とする(図の要約は Vision の解析結果に含まれる。#497)。
+
+    `field_definitions_configured` は、文書に効く項目の定義(所属 KB の定義か全体の既定)が
+    あるか(#548)。
+    """
     field_enabled = bool(getattr(settings, "rag_field_extraction_enabled", False))
     reasons: list[str] = []
     if field_enabled and not _fields_materialized(extraction):
-        if not load_field_schema().fields:
+        if not field_definitions_configured:
             reasons.append(
                 "項目抽出は有効ですが、抽出する項目定義(スキーマ)が未設定のため実行されません。"
-                "検索・回答設定で項目定義を登録してから再取込してください"
+                "ナレッジベースか文書解析の設定で項目定義を登録してから再取込してください"
             )
         else:
             reasons.append("項目抽出の成果物がまだありません")

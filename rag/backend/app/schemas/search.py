@@ -1,11 +1,21 @@
 """検索（RAG）関連スキーマ。"""
 
+import json
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Literal, Self
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from app.config import GenerationProfile
 from app.schemas.classification import normalize_category_value
@@ -39,7 +49,12 @@ SUPPORTED_SCALAR_SEARCH_FILTER_KEYS = (
     | SUPPORTED_SEARCH_LIST_FILTERS
 )
 
+# 項目抽出の値の条件(#549)。値は条件の JSON 配列の文字列(filters は dict[str, str] のため)。
+EXTRACTION_FIELD_FILTER_KEY = "extraction_fields"
+MAX_EXTRACTION_FIELD_CONDITIONS = 10
+
 SUPPORTED_SEARCH_FILTER_KEYS = {
+    EXTRACTION_FIELD_FILTER_KEY,
     "document_id",
     "knowledge_base_id",
     "chunk_set_id",
@@ -77,6 +92,91 @@ SUPPORTED_CONTENT_KIND_FILTERS = {
     "field",
     "section_summary",
 }
+
+
+# 型ごとに使える演算子(string / bool は一致だけ、number / date は一致と範囲)。
+_EXTRACTION_FIELD_OPERATORS: dict[str, frozenset[str]] = {
+    "string": frozenset({"eq"}),
+    "bool": frozenset({"eq"}),
+    "number": frozenset({"eq", "gte", "lte"}),
+    "date": frozenset({"eq", "gte", "lte"}),
+}
+
+
+class ExtractionFieldCondition(BaseModel):
+    """項目抽出の値の条件 1 件(#549)。`op` は eq(一致)・gte(以上)・lte(以下)。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    value_type: Literal["string", "number", "date", "bool"]
+    op: Literal["eq", "gte", "lte"] = "eq"
+    value: str = Field(min_length=1, max_length=500)
+
+    @field_validator("name", "value")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("項目の条件の項目名と値は空にできません。")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _validate_value(self) -> Self:
+        """型に合う演算子と値だけを受け付け、値を比較する形へそろえる。"""
+        if self.op not in _EXTRACTION_FIELD_OPERATORS[self.value_type]:
+            raise ValueError(f"項目の条件の演算子が型に合いません: {self.value_type} {self.op}")
+        if self.value_type == "number":
+            try:
+                number = Decimal(self.value)
+            except InvalidOperation as exc:
+                raise ValueError(f"項目の条件の値は数値にしてください: {self.value}") from exc
+            if not number.is_finite():
+                raise ValueError(f"項目の条件の値は数値にしてください: {self.value}")
+            self.value = format(number, "f")
+        elif self.value_type == "date":
+            try:
+                self.value = date.fromisoformat(self.value).isoformat()
+            except ValueError as exc:
+                raise ValueError(
+                    f"項目の条件の日付は YYYY-MM-DD で指定してください: {self.value}"
+                ) from exc
+        elif self.value_type == "bool":
+            if self.value.casefold() not in {"true", "false"}:
+                raise ValueError(f"項目の条件の値は true か false にしてください: {self.value}")
+            self.value = self.value.casefold()
+        return self
+
+
+_EXTRACTION_FIELD_CONDITIONS = TypeAdapter(
+    list[ExtractionFieldCondition],
+)
+
+
+def parse_extraction_field_filter(value: str) -> list[ExtractionFieldCondition]:
+    """`filters.extraction_fields`(条件の JSON 配列)を検証して条件にする(#549)。"""
+    try:
+        conditions = _EXTRACTION_FIELD_CONDITIONS.validate_json(value)
+    except ValidationError as exc:
+        messages = [str(error.get("msg", "")) for error in exc.errors()]
+        raise ValueError(
+            "項目の条件の形式が不正です: " + "; ".join(message for message in messages if message)
+        ) from exc
+    if len(conditions) > MAX_EXTRACTION_FIELD_CONDITIONS:
+        raise ValueError(f"項目の条件は {MAX_EXTRACTION_FIELD_CONDITIONS} 件までです。")
+    return conditions
+
+
+def _normalize_extraction_field_filter(value: str) -> str:
+    """項目の条件を検証し、そろえた JSON 文字列にする(空の配列は条件なし)。"""
+    conditions = parse_extraction_field_filter(value)
+    if not conditions:
+        return ""
+    return json.dumps(
+        [condition.model_dump() for condition in conditions],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 class SearchMode(StrEnum):
@@ -375,6 +475,9 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
         elif key in SUPPORTED_SEARCH_LIST_FILTERS:
             if formatted_kinds := _normalize_content_kind_list(cleaned):
                 normalized[key] = formatted_kinds
+        elif key == EXTRACTION_FIELD_FILTER_KEY:
+            if formatted_conditions := _normalize_extraction_field_filter(cleaned):
+                normalized[key] = formatted_conditions
         elif key in SUPPORTED_SEARCH_CLASSIFICATION_FILTERS:
             # 保存時と同じ表記の正規化(NFKC・空白)。番号の接頭辞は残し、比較の側で外す(#547)。
             if category := normalize_category_value(cleaned):
