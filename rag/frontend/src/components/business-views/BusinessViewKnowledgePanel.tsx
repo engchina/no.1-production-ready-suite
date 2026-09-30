@@ -12,6 +12,7 @@ import {
   ProcessingIndicator,
   Skeleton,
   Tabs,
+  TextareaField,
   toast,
   TimedLoadingState,
 } from "@engchina/production-ready-ui";
@@ -128,23 +129,15 @@ function DomainKeywordsEditor({ businessViewId }: { businessViewId: string }) {
   return (
     <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
       <div className="min-w-0 space-y-2">
-        <label
-          htmlFor="domain-keywords-editor"
-          className="text-sm font-medium text-fg"
-        >
-          {t("businessViews.domainKeywords.editorLabel")}
-        </label>
-        <p className="text-xs leading-relaxed text-fg-muted">
-          {t("businessViews.domainKeywords.help")}
-        </p>
-        <textarea
+        <TextareaField
           id="domain-keywords-editor"
+          label={t("businessViews.domainKeywords.editorLabel")}
+          helper={t("businessViews.domainKeywords.help")}
           value={text}
           onChange={(event) => setText(event.target.value)}
           rows={12}
           placeholder={t("businessViews.domainKeywords.placeholder")}
           disabled={save.isPending}
-          className="w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
         />
         <div className="flex flex-wrap items-center gap-2">
           <Button

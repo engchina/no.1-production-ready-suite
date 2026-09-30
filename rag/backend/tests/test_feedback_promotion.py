@@ -207,6 +207,8 @@ def test_evaluation_case_uses_corrected_answer_terms(monkeypatch: pytest.MonkeyP
     assert case["relevant_document_ids"] == []
     assert "部長" in "".join(case["expected_answer_keywords"])
     assert "課長" not in "".join(case["expected_answer_keywords"])
+    # 修正した回答を標準回答にする(品質評価で LLM による比較に使う。#591)。
+    assert "部長" in case["standard_answer"]
 
 
 def test_evaluation_case_for_helpful_feedback_uses_cited_documents(

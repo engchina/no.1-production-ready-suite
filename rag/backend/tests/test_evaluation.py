@@ -1,7 +1,8 @@
-"""RAG 評価ランナーのテスト。"""
+"""RAG 評価ランナーのテスト(#591 の 9 指標)。"""
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from typing import Any, cast
 
 import pytest
@@ -9,7 +10,14 @@ from pytest import LogCaptureFixture, MonkeyPatch
 
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
 from app.main import app
-from app.rag.evaluation import EVALUATION_CASE_ERROR_MESSAGE, EvaluationRunner
+from app.rag.evaluation import (
+    ANSWER_JUDGE_UNAVAILABLE_MESSAGE,
+    EVALUATION_CASE_ERROR_MESSAGE,
+    EvaluationRunner,
+    evaluation_settings,
+    is_abstained,
+    summarize_answer_judgement,
+)
 from app.rag.evaluation_adapter import resolve_evaluation_suite
 from app.rag.pipeline import (
     NO_RESULTS_ANSWER,
@@ -28,7 +36,6 @@ from app.schemas.evaluation import (
 from app.schemas.search import (
     RetrievedChunk,
     SearchDiagnostics,
-    SearchMode,
     SearchRequest,
     SearchResponse,
 )
@@ -36,9 +43,45 @@ from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
 
+EVALUATION_INPUT = {"question": "承認条件", "answer_text": "承認条件は 120000 円です。"}
+
+
+def _approval_response(
+    request: SearchRequest,
+    trace_id: str,
+    *,
+    evaluation_input: Mapping[str, object] | None = None,
+) -> SearchResponse:
+    return SearchResponse(
+        answer="承認条件は 120000 円です。",
+        citations=[
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:0",
+                text="承認条件: 120000",
+                score=1.0,
+                metadata={
+                    "page_start": 2,
+                    "page_end": 2,
+                    "element_ids": "el-approval",
+                    "docrag_model_used": True,
+                },
+            )
+        ],
+        trace_id=trace_id,
+        guardrail_warnings=[],
+        elapsed_ms=1.0,
+        diagnostics=SearchDiagnostics(
+            mode=request.mode.value,
+            top_k=request.top_k,
+            retrieved_count=1,
+            citation_count=1,
+        ),
+    ).with_evaluation_input(evaluation_input)
+
 
 class StubPipeline:
-    """評価ランナー用の固定レスポンス pipeline。"""
+    """評価ランナー用の固定レスポンス pipeline(回答の記録の評価入力つき)。"""
 
     def __init__(self) -> None:
         self.requests: list[SearchRequest] = []
@@ -53,47 +96,60 @@ class StubPipeline:
         assert trace_id
         self.requests.append(request)
         self.trace_ids.append(trace_id)
-        return SearchResponse(
-            answer="承認条件は 120000 円です。",
-            citations=[
-                RetrievedChunk(
-                    document_id="doc-1",
-                    chunk_id="doc-1:0",
-                    text="承認条件: 120000",
-                    score=1.0,
-                    metadata={
-                        "page_start": 2,
-                        "page_end": 2,
-                        "element_ids": "el-approval",
-                        "bbox": "[0.1, 0.2, 0.4, 0.3]",
-                        "content_kind": "text",
-                        "section_title": "承認",
-                        "section_path": "経費申請 > 承認",
-                    },
-                )
-            ],
-            trace_id=trace_id,
-            guardrail_warnings=[],
-            elapsed_ms=1.0,
-            diagnostics=SearchDiagnostics(
-                mode=request.mode.value,
-                top_k=request.top_k,
-                rerank_top_n=request.rerank_top_n,
-                retrieved_count=1,
-                reranked_count=1,
-                citation_count=1,
-            ),
+        return _approval_response(request, trace_id, evaluation_input=EVALUATION_INPUT)
+
+
+class FakeJudge:
+    """標準回答による評価(rag_poc の evaluate_answer_payload)の決定論スタブ。"""
+
+    def __init__(self, result: Mapping[str, object] | Exception) -> None:
+        self.result = result
+        self.calls: list[dict[str, object]] = []
+
+    async def __call__(
+        self,
+        *,
+        trace_id: str,
+        evaluation_input: Mapping[str, object],
+        standard_answer: str,
+        timeout_seconds: float,
+    ) -> Mapping[str, object]:
+        self.calls.append(
+            {
+                "trace_id": trace_id,
+                "evaluation_input": dict(evaluation_input),
+                "standard_answer": standard_answer,
+                "timeout_seconds": timeout_seconds,
+            }
         )
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
 
 
-class EmptyQualitySource:
-    """評価 runner の補助的な取込品質サマリを空で返す。"""
+def _completed_judgement(
+    *,
+    total: float = 18.0,
+    passed: bool = True,
+    claim_status: str = "supported",
+    coverage_cap: float = 5.0,
+    coverage_statuses: tuple[str, ...] = ("addressed",),
+) -> dict[str, object]:
+    return {
+        "status": "completed",
+        "total_score": total,
+        "max_score": 20,
+        "passed": passed,
+        "goal_alignment": "aligned",
+        "claim_checks": [{"status": claim_status}],
+        "coverage_checks": [{"status": status} for status in coverage_statuses],
+        "coverage_cap": coverage_cap,
+        "message": "4 軸で評価しました。",
+    }
 
-    async def list_document_extractions(self) -> list[dict[str, object]]:
-        return []
 
-
-async def test_evaluation_runner_computes_metrics() -> None:
+async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
+    """検索・根拠・回答の指標を、測れるケースだけで求める。"""
     pipeline = StubPipeline()
     runner = EvaluationRunner(pipeline=pipeline)
     metrics = await runner.run(
@@ -106,110 +162,50 @@ async def test_evaluation_runner_computes_metrics() -> None:
             )
         ],
         top_k=5,
-        rerank_top_n=3,
-        mode=SearchMode.KEYWORD,
         filters={"status": "indexed"},
     )
-    assert metrics.evaluated_k == 3
-    assert metrics.precision_at_k == 0.3333
-    assert metrics.recall_at_k == 1.0
+    assert metrics.context_recall == 1.0
     assert metrics.mrr == 1.0
-    assert metrics.answer_keyword_hit_rate == 1.0
-    assert metrics.groundedness_pass_rate == 1.0
     # 数字 1 件の一致だけで 1.0 に短絡せず、全回答 feature に対する比率を使う。
     assert metrics.faithfulness == 0.5
-    assert metrics.context_precision == 1.0
-    assert metrics.context_recall == 1.0
-    assert metrics.response_relevancy >= 0.8
-    assert metrics.noise_sensitivity == 1.0
     assert metrics.citation_traceability_coverage == 1.0
-    assert metrics.bbox_citation_coverage == 1.0
-    assert metrics.element_lineage_coverage == 1.0
-    assert metrics.content_kind_hit_rate == 1.0
-    assert metrics.section_coverage == 1.0
+    assert metrics.answer_keyword_hit_rate == 1.0
+    assert metrics.refusal_accuracy == 1.0
+    # 標準回答の無いケースだけなので、LLM による評価の指標は測らない。
+    assert metrics.claim_support_rate is None
+    assert metrics.requirement_coverage is None
+    assert metrics.answer_pass_rate is None
+    assert metrics.metric_case_counts == {
+        "context_recall": 1,
+        "mrr": 1,
+        "faithfulness": 1,
+        "citation_traceability_coverage": 1,
+        "claim_support_rate": 0,
+        "answer_keyword_hit_rate": 1,
+        "refusal_accuracy": 1,
+        "requirement_coverage": 0,
+        "answer_pass_rate": 0,
+    }
     assert metrics.passed is True
     assert metrics.threshold_failures == []
     assert metrics.failure_reason_counts == {}
-    assert len(metrics.case_results) == 1
     result = metrics.case_results[0]
     assert result.case_id == "case-1"
     assert result.trace_id == pipeline.trace_ids[0]
     assert result.status == "success"
     assert result.retrieved_document_ids == ["doc-1"]
-    assert result.relevant_document_ids == ["doc-1"]
     assert result.hit_document_ids == ["doc-1"]
-    assert result.precision_at_k == 0.3333
-    assert result.recall_at_k == 1.0
-    assert result.reciprocal_rank == 1.0
-    assert result.answer_keyword_hit is True
-    assert result.groundedness_passed is True
-    assert result.groundedness_score == 0.5
-    assert result.grounding_overlap_count >= 1
-    assert result.grounding_answer_feature_count >= 1
-    assert result.faithfulness == 0.5
-    assert result.context_precision == 1.0
     assert result.context_recall == 1.0
-    assert result.response_relevancy >= 0.8
-    assert result.noise_sensitivity == 1.0
-    assert result.citation_traceability_coverage == 1.0
-    assert result.bbox_citation_coverage == 1.0
-    assert result.element_lineage_coverage == 1.0
-    assert result.content_kind_hit_rate == 1.0
-    assert result.section_coverage == 1.0
-    assert result.guardrail_warnings == []
+    assert result.reciprocal_rank == 1.0
+    assert result.faithfulness == 0.5
+    assert result.grounding_overlap_count >= 1
+    assert result.answer_keyword_hit is True
+    assert result.abstained is False
+    assert result.refusal_correct is True
+    assert result.answer_evaluation is None
     assert result.failure_reasons == []
-    assert result.diagnostics.top_k == 5
-    assert result.diagnostics.rerank_top_n == 3
-    assert result.diagnostics.retrieved_count == 1
-    assert result.diagnostics.citation_count == 1
-    assert pipeline.requests[0].mode == SearchMode.KEYWORD
+    assert pipeline.requests[0].top_k == 5
     assert pipeline.requests[0].filters == {"status": "INDEXED"}
-
-
-async def test_evaluation_runner_scores_content_kind_and_section_expectations() -> None:
-    """document-level hit でも content kind / section が違えば評価で検知する。"""
-    pipeline = StubPipeline()
-    runner = EvaluationRunner(pipeline=pipeline)
-    metrics = await runner.run(
-        cases=[
-            EvaluationCase(
-                id="case-section-hit",
-                query="承認条件",
-                relevant_document_ids=["doc-1"],
-                expected_answer_keywords=["120000"],
-                expected_content_kind="text",
-                expected_section_paths=["経費申請 > 承認"],
-            ),
-            EvaluationCase(
-                id="case-section-miss",
-                query="料金表",
-                relevant_document_ids=["doc-1"],
-                expected_answer_keywords=["120000"],
-                expected_content_kind="table",
-                expected_section_paths=["経費申請 > 料金表"],
-            ),
-        ],
-        top_k=5,
-        rerank_top_n=3,
-        thresholds=EvaluationThresholds(
-            content_kind_hit_rate=0.8,
-            section_coverage=0.8,
-        ),
-    )
-
-    assert metrics.content_kind_hit_rate == 0.5
-    assert metrics.section_coverage == 0.5
-    assert metrics.passed is False
-    assert metrics.failure_reason_counts["content_kind_miss"] == 1
-    assert metrics.failure_reason_counts["section_miss"] == 1
-    threshold_failures = {failure.metric for failure in metrics.threshold_failures}
-    assert threshold_failures == {"content_kind_hit_rate", "section_coverage"}
-    assert metrics.case_results[0].content_kind_hit_rate == 1.0
-    assert metrics.case_results[0].section_coverage == 1.0
-    assert metrics.case_results[1].content_kind_hit_rate == 0.0
-    assert metrics.case_results[1].section_coverage == 0.0
-    assert "content_kind_miss" in metrics.case_results[1].failure_reasons
-    assert "section_miss" in metrics.case_results[1].failure_reasons
 
 
 async def test_evaluation_runner_passes_knowledge_base_scope_to_search_request() -> None:
@@ -220,7 +216,6 @@ async def test_evaluation_runner_passes_knowledge_base_scope_to_search_request()
     await runner.run(
         cases=[EvaluationCase(id="case-1", query="承認条件")],
         top_k=5,
-        rerank_top_n=3,
         knowledge_base_ids=["kb-1", "kb-2"],
     )
 
@@ -229,123 +224,29 @@ async def test_evaluation_runner_passes_knowledge_base_scope_to_search_request()
     assert request.filters["knowledge_base_id"] == "kb-1,kb-2"
 
 
-class QualitySource:
-    """評価 runner に保存済み取込品質レポートを渡す fake。"""
-
-    async def list_document_extractions(self) -> list[dict[str, object]]:
-        return [
-            {
-                "quality_report": {
-                    "parser_profile": "enterprise_ai_pdf_layout",
-                    "parser_backend": "enterprise_ai",
-                    "fallback_used": False,
-                    "risk_level": "medium",
-                    "page_count": 4,
-                    "page_coverage": 0.75,
-                    "table_count": 2,
-                    "figure_count": 0,
-                    "formula_count": 1,
-                    "element_count": 12,
-                    "low_confidence_count": 0,
-                    "failed_segment_count": 0,
-                    "long_document": False,
-                    "quality_warnings": ["table_structure_review", "formula_review"],
-                }
-            },
-            {
-                "quality_report": {
-                    "parser_profile": "enterprise_ai_image_ocr",
-                    "parser_backend": "enterprise_ai",
-                    "fallback_used": True,
-                    "risk_level": "high",
-                    "page_count": 35,
-                    "page_coverage": 0.5,
-                    "table_count": 0,
-                    "figure_count": 3,
-                    "formula_count": 0,
-                    "element_count": 40,
-                    "low_confidence_count": 2,
-                    "failed_segment_count": 1,
-                    "long_document": True,
-                    "quality_warnings": [
-                        "figure_ocr_review",
-                        "long_document",
-                        "low_confidence_elements",
-                        "failed_segments",
-                        "parser_fallback_used",
-                        "segment_extraction_artifact_cache_miss",
-                    ],
-                }
-            },
-        ]
-
-
-class SlowQualitySource:
-    """補助的な取込品質サマリが遅いケースを再現する fake。"""
-
-    async def list_document_extractions(self) -> list[dict[str, object]]:
-        await asyncio.sleep(1)
-        return [{"quality_report": {"risk_level": "high"}}]
-
-
-async def test_evaluation_runner_includes_ingestion_quality_summary() -> None:
-    """評価結果に表・画像・長文書の取込品質サマリを含める。"""
-    runner = EvaluationRunner(pipeline=StubPipeline(), quality_source=QualitySource())
+async def test_metrics_skip_cases_without_expectations() -> None:
+    """期待値を持たないケースは、その指標の分母に入れない(rag_poc と同じ)。"""
+    runner = EvaluationRunner(pipeline=StubPipeline())
 
     metrics = await runner.run(
-        cases=[EvaluationCase(id="case-quality", query="承認条件")],
+        cases=[
+            EvaluationCase(
+                id="with-keywords",
+                query="承認条件",
+                relevant_document_ids=["doc-1"],
+                expected_answer_keywords=["120000"],
+            ),
+            EvaluationCase(id="doc-only", query="承認条件", relevant_document_ids=["doc-2"]),
+        ],
         top_k=5,
-        rerank_top_n=3,
     )
 
-    quality = metrics.ingestion_quality
-    assert quality.document_count == 2
-    assert quality.table_document_count == 1
-    assert quality.figure_document_count == 1
-    assert quality.formula_document_count == 1
-    assert quality.low_confidence_document_count == 1
-    assert quality.fallback_document_count == 1
-    assert quality.failed_segment_document_count == 1
-    assert quality.segment_artifact_cache_miss_document_count == 1
-    assert quality.long_document_count == 1
-    assert quality.average_page_coverage == 0.625
-    assert quality.warning_counts == {
-        "table_structure_review": 1,
-        "formula_review": 1,
-        "figure_ocr_review": 1,
-        "long_document": 1,
-        "low_confidence_elements": 1,
-        "failed_segments": 1,
-        "parser_fallback_used": 1,
-        "segment_extraction_artifact_cache_miss": 1,
-    }
-    assert quality.risk_counts == {"low": 0, "medium": 1, "high": 1}
-    assert quality.parser_profile_counts == {
-        "enterprise_ai_pdf_layout": 1,
-        "enterprise_ai_image_ocr": 1,
-    }
-
-
-async def test_evaluation_runner_times_out_ingestion_quality_summary(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """取込品質サマリが遅くても evaluation 本体は成功として返す。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "db_read_timeout_seconds", 0.001)
-    runner = EvaluationRunner(
-        pipeline=StubPipeline(),
-        quality_source=SlowQualitySource(),
-        settings=settings,
-    )
-
-    metrics = await runner.run(
-        cases=[EvaluationCase(id="case-quality-timeout", query="承認条件")],
-        top_k=5,
-        rerank_top_n=3,
-    )
-
-    assert metrics.error_count == 0
-    assert metrics.ingestion_quality.document_count == 0
+    assert metrics.metric_case_counts["answer_keyword_hit_rate"] == 1
+    assert metrics.answer_keyword_hit_rate == 1.0
+    assert metrics.metric_case_counts["context_recall"] == 2
+    assert metrics.context_recall == 0.5
+    assert metrics.case_results[1].answer_keyword_hit is None
+    assert metrics.case_results[1].failure_reasons == ["retrieval_miss"]
 
 
 class DuplicateChunkPipeline:
@@ -361,23 +262,16 @@ class DuplicateChunkPipeline:
             answer="A 文書の承認条件が関連します。",
             citations=[
                 RetrievedChunk(
-                    document_id="doc-a",
-                    chunk_id="doc-a:0",
-                    text="A 文書には承認条件が記載されています。",
-                    score=1.0,
-                ),
-                RetrievedChunk(
-                    document_id="doc-a",
-                    chunk_id="doc-a:1",
-                    text="A 文書の補足説明です。",
-                    score=0.9,
-                ),
-                RetrievedChunk(
-                    document_id="doc-b",
-                    chunk_id="doc-b:0",
-                    text="B 文書の検索候補です。",
-                    score=0.8,
-                ),
+                    document_id=document_id,
+                    chunk_id=chunk_id,
+                    text=text,
+                    score=score,
+                )
+                for document_id, chunk_id, text, score in (
+                    ("doc-b", "doc-b:0", "B 文書の検索候補です。", 0.9),
+                    ("doc-a", "doc-a:0", "A 文書には承認条件が記載されています。", 0.8),
+                    ("doc-a", "doc-a:1", "A 文書の補足説明です。", 0.7),
+                )
             ],
             trace_id=trace_id or "trace",
             guardrail_warnings=[],
@@ -385,117 +279,19 @@ class DuplicateChunkPipeline:
         )
 
 
-async def test_evaluation_metrics_are_document_level_not_chunk_level() -> None:
+async def test_retrieval_metrics_are_document_level_not_chunk_level() -> None:
     runner = EvaluationRunner(pipeline=DuplicateChunkPipeline())
 
     metrics = await runner.run(
-        cases=[
-            EvaluationCase(
-                id="case-duplicate",
-                query="A",
-                relevant_document_ids=["doc-a"],
-                expected_answer_keywords=[],
-            )
-        ],
+        cases=[EvaluationCase(id="case-duplicate", query="A", relevant_document_ids=["doc-a"])],
         top_k=3,
-        rerank_top_n=3,
     )
 
-    assert metrics.precision_at_k == 0.3333
-    assert metrics.evaluated_k == 3
-    assert metrics.recall_at_k == 1.0
-    assert metrics.mrr == 1.0
-    assert metrics.groundedness_pass_rate == 1.0
-    assert metrics.case_results[0].retrieved_document_ids == ["doc-a", "doc-b"]
+    assert metrics.context_recall == 1.0
+    # 正解の文書は 2 番目の文書(chunk の数では数えない)。
+    assert metrics.mrr == 0.5
+    assert metrics.case_results[0].retrieved_document_ids == ["doc-b", "doc-a"]
     assert metrics.case_results[0].hit_document_ids == ["doc-a"]
-
-
-async def test_evaluation_runner_marks_threshold_gate_passed() -> None:
-    """aggregate 指標が閾値以上なら CI gate を passed にする。"""
-    runner = EvaluationRunner(pipeline=StubPipeline())
-
-    metrics = await runner.run(
-        cases=[
-            EvaluationCase(
-                id="case-pass",
-                query="承認条件",
-                relevant_document_ids=["doc-1"],
-                expected_answer_keywords=["120000"],
-            )
-        ],
-        top_k=5,
-        rerank_top_n=3,
-        thresholds=EvaluationThresholds(
-            precision_at_k=0.3,
-            recall_at_k=1.0,
-            mrr=1.0,
-            answer_keyword_hit_rate=1.0,
-            groundedness_pass_rate=1.0,
-            faithfulness=0.5,
-            context_precision=1.0,
-            context_recall=1.0,
-            noise_sensitivity=1.0,
-            citation_traceability_coverage=1.0,
-            bbox_citation_coverage=1.0,
-            element_lineage_coverage=1.0,
-        ),
-    )
-
-    assert metrics.passed is True
-    assert metrics.threshold_failures == []
-
-
-async def test_evaluation_runner_reports_threshold_failures() -> None:
-    """aggregate 指標が閾値を下回る場合は metric ごとの失敗を返す。"""
-    runner = EvaluationRunner(pipeline=MissPipeline())
-
-    metrics = await runner.run(
-        cases=[
-            EvaluationCase(
-                id="case-fail",
-                query="承認条件",
-                relevant_document_ids=["doc-a"],
-                expected_answer_keywords=["120000"],
-            )
-        ],
-        top_k=5,
-        rerank_top_n=3,
-        thresholds=EvaluationThresholds(
-            precision_at_k=0.1,
-            recall_at_k=0.9,
-            mrr=0.5,
-            answer_keyword_hit_rate=0.9,
-            groundedness_pass_rate=0.9,
-            faithfulness=0.9,
-            context_precision=0.9,
-            context_recall=0.9,
-            response_relevancy=0.9,
-            noise_sensitivity=0.9,
-            citation_traceability_coverage=0.9,
-            bbox_citation_coverage=0.9,
-            element_lineage_coverage=0.9,
-        ),
-    )
-
-    assert metrics.passed is False
-    assert [
-        (failure.metric, failure.actual, failure.threshold)
-        for failure in metrics.threshold_failures
-    ] == [
-        ("precision_at_k", 0.0, 0.1),
-        ("recall_at_k", 0.0, 0.9),
-        ("mrr", 0.0, 0.5),
-        ("answer_keyword_hit_rate", 0.0, 0.9),
-        ("groundedness_pass_rate", 0.0, 0.9),
-        ("faithfulness", 0.0, 0.9),
-        ("context_precision", 0.0, 0.9),
-        ("context_recall", 0.0, 0.9),
-        ("response_relevancy", 0.0, 0.9),
-        ("noise_sensitivity", 0.32, 0.9),
-        ("citation_traceability_coverage", 0.0, 0.9),
-        ("bbox_citation_coverage", 0.0, 0.9),
-        ("element_lineage_coverage", 0.0, 0.9),
-    ]
 
 
 class MissPipeline:
@@ -537,38 +333,18 @@ async def test_evaluation_case_result_exposes_miss_diagnostics() -> None:
             )
         ],
         top_k=5,
-        rerank_top_n=3,
     )
 
-    assert metrics.precision_at_k == 0.0
-    assert metrics.recall_at_k == 0.0
+    assert metrics.context_recall == 0.0
     assert metrics.mrr == 0.0
     assert metrics.answer_keyword_hit_rate == 0.0
-    assert metrics.groundedness_pass_rate == 0.0
     assert metrics.faithfulness == 0.0
-    assert metrics.context_precision == 0.0
-    assert metrics.context_recall == 0.0
-    assert metrics.response_relevancy == 0.0
-    assert metrics.noise_sensitivity == 0.32
+    # 答えるべきケースで答えたので、拒答の判定は正しい。
+    assert metrics.refusal_accuracy == 1.0
     result = metrics.case_results[0]
-    assert result.case_id == "case-miss"
-    assert result.trace_id
-    assert result.status == "success"
     assert result.retrieved_document_ids == ["doc-x"]
-    assert result.relevant_document_ids == ["doc-a"]
     assert result.hit_document_ids == []
-    assert result.precision_at_k == 0.0
-    assert result.recall_at_k == 0.0
-    assert result.reciprocal_rank == 0.0
-    assert result.answer_keyword_hit is False
-    assert result.groundedness_passed is False
-    assert result.groundedness_score == 0.0
     assert result.grounding_answer_feature_count > 0
-    assert result.faithfulness == 0.0
-    assert result.context_precision == 0.0
-    assert result.context_recall == 0.0
-    assert result.response_relevancy == 0.0
-    assert result.noise_sensitivity == 0.32
     assert result.guardrail_warnings == ["検索条件に一致する根拠が見つかりませんでした。"]
     assert result.failure_reasons == [
         "retrieval_miss",
@@ -583,6 +359,36 @@ async def test_evaluation_case_result_exposes_miss_diagnostics() -> None:
         "guardrail_warning": 1,
     }
     assert result.elapsed_ms == 12.5
+
+
+async def test_evaluation_runner_reports_threshold_failures() -> None:
+    """aggregate 指標が閾値を下回る場合は metric ごとの失敗を返す。"""
+    runner = EvaluationRunner(pipeline=MissPipeline())
+
+    metrics = await runner.run(
+        cases=[
+            EvaluationCase(
+                id="case-fail",
+                query="承認条件",
+                relevant_document_ids=["doc-a"],
+                expected_answer_keywords=["120000"],
+            )
+        ],
+        top_k=5,
+        thresholds=resolve_evaluation_suite("standard"),
+    )
+
+    assert metrics.passed is False
+    assert [
+        (failure.metric, failure.actual, failure.threshold)
+        for failure in metrics.threshold_failures
+    ] == [
+        ("context_recall", 0.0, 0.8),
+        ("mrr", 0.0, 0.6),
+        ("faithfulness", 0.0, 0.7),
+        ("citation_traceability_coverage", 0.0, 0.9),
+        ("answer_keyword_hit_rate", 0.0, 0.8),
+    ]
 
 
 class NoResultsPipeline:
@@ -603,66 +409,323 @@ class NoResultsPipeline:
         )
 
 
-@pytest.mark.parametrize("suite", ["retrieval_focused", "balanced", "strict_ci", "ragas_like"])
-async def test_expected_no_results_case_passes_every_suite(suite: str) -> None:
-    """正解が no-results の否定 case は、no-results で答えれば合格として数える(#301)。"""
+@pytest.mark.parametrize("suite", ["standard", "strict"])
+async def test_expected_refusal_case_passes_every_suite(suite: str) -> None:
+    """答えるべきでない質問に答えなければ合格(#301)。検索・根拠の指標は測らない。"""
     runner = EvaluationRunner(pipeline=NoResultsPipeline())
-    thresholds = resolve_evaluation_suite(suite)
-    assert thresholds is not None
 
     metrics = await runner.run(
-        cases=[
-            EvaluationCase(
-                id="case-negative",
-                query="存在しない社内規程の承認者は？",
-                relevant_document_ids=[],
-                expected_answer_keywords=[],
-            )
-        ],
+        cases=[EvaluationCase(id="case-negative", query="存在しない社内規程の承認者は？")],
         top_k=5,
-        rerank_top_n=3,
-        thresholds=thresholds,
+        thresholds=resolve_evaluation_suite(suite),
     )
 
     assert metrics.threshold_failures == []
     assert metrics.passed is True
-    assert metrics.precision_at_k == 1.0
-    assert metrics.recall_at_k == 1.0
-    assert metrics.mrr == 1.0
-    assert metrics.groundedness_pass_rate == 1.0
-    assert metrics.faithfulness == 1.0
-    assert metrics.response_relevancy == 1.0
+    assert metrics.refusal_accuracy == 1.0
+    assert metrics.context_recall is None
+    assert metrics.mrr is None
+    assert metrics.faithfulness is None
     assert metrics.failure_reason_counts == {}
     result = metrics.case_results[0]
-    assert result.reciprocal_rank == 1.0
-    assert result.groundedness_passed is True
-    assert result.groundedness_score == 1.0
+    assert result.abstained is True
+    assert result.refusal_correct is True
     assert result.failure_reasons == []
 
 
-async def test_positive_case_with_no_results_still_counts_low_groundedness() -> None:
-    """正解の document がある case で no-results になったら、従来どおり根拠なしとして数える。"""
+async def test_answerable_case_with_no_results_counts_unexpected_refusal() -> None:
+    """正解の文書があるケースで答えなかったら、検索の失敗と想定外の拒答として数える。"""
     runner = EvaluationRunner(pipeline=NoResultsPipeline())
 
     metrics = await runner.run(
         cases=[
-            EvaluationCase(
-                id="case-positive",
-                query="経費申請の承認者は？",
-                relevant_document_ids=["doc-a"],
-                expected_answer_keywords=[],
-            )
+            EvaluationCase(id="case-positive", query="承認者は？", relevant_document_ids=["doc-a"])
         ],
         top_k=5,
-        rerank_top_n=3,
     )
 
     assert metrics.mrr == 0.0
-    assert metrics.groundedness_pass_rate == 0.0
-    assert metrics.response_relevancy == 0.0
-    result = metrics.case_results[0]
-    assert result.groundedness_passed is False
-    assert result.failure_reasons == ["retrieval_miss", "low_groundedness", "guardrail_warning"]
+    assert metrics.refusal_accuracy == 0.0
+    assert metrics.case_results[0].failure_reasons == [
+        "retrieval_miss",
+        "unexpected_refusal",
+        "guardrail_warning",
+    ]
+
+
+async def test_unanswerable_case_answered_counts_unexpected_answer() -> None:
+    """answerable=false のケースで答えたら、想定外の回答として数える。"""
+    runner = EvaluationRunner(pipeline=StubPipeline())
+
+    metrics = await runner.run(
+        cases=[EvaluationCase(id="case-negative", query="承認条件", answerable=False)],
+        top_k=5,
+    )
+
+    assert metrics.refusal_accuracy == 0.0
+    assert metrics.case_results[0].failure_reasons == ["unexpected_answer"]
+
+
+def test_is_abstained_uses_answer_record_insufficient_reason() -> None:
+    """不足の理由を返し、モデルが使った根拠が無い回答は拒答とみなす。"""
+    request = SearchRequest(query="承認条件")
+    answered = _approval_response(request, "trace-1")
+    refused = answered.model_copy(
+        update={
+            "citations": [
+                chunk.model_copy(update={"metadata": {"docrag_model_used": False}})
+                for chunk in answered.citations
+            ],
+            "diagnostics": SearchDiagnostics(docrag={"insufficient_reason": "資料に記載がない"}),
+        }
+    )
+    partial = answered.model_copy(
+        update={"diagnostics": SearchDiagnostics(docrag={"insufficient_reason": "一部不足"})}
+    )
+
+    assert is_abstained(answered) is False
+    assert is_abstained(refused) is True
+    # 一部だけ不足でも、モデルが根拠を使って答えた回答は拒答ではない。
+    assert is_abstained(partial) is False
+
+
+def test_expects_answer_is_inferred_from_expectations() -> None:
+    assert EvaluationCase(id="a", query="q").expects_answer is False
+    assert EvaluationCase(id="b", query="q", expected_answer_keywords=["x"]).expects_answer
+    assert EvaluationCase(id="c", query="q", standard_answer="答え").expects_answer
+    assert not EvaluationCase(id="d", query="q", standard_answer="   ").expects_answer
+    assert not EvaluationCase(
+        id="e", query="q", relevant_document_ids=["doc"], answerable=False
+    ).expects_answer
+
+
+async def test_standard_answer_case_is_judged_with_answer_record() -> None:
+    """標準回答のあるケースは、回答の記録の評価入力を使って LLM で比較する。"""
+    judge = FakeJudge(_completed_judgement())
+    pipeline = StubPipeline()
+    runner = EvaluationRunner(pipeline=pipeline, answer_judge=judge)
+
+    metrics = await runner.run(
+        cases=[
+            EvaluationCase(
+                id="case-judged",
+                query="承認条件",
+                relevant_document_ids=["doc-1"],
+                standard_answer="承認条件は 120000 円です。",
+            ),
+            EvaluationCase(id="case-plain", query="承認条件", relevant_document_ids=["doc-1"]),
+        ],
+        top_k=5,
+        thresholds=resolve_evaluation_suite("strict"),
+    )
+
+    assert len(judge.calls) == 1
+    call = judge.calls[0]
+    assert call["trace_id"] == pipeline.trace_ids[0]
+    assert call["evaluation_input"] == EVALUATION_INPUT
+    assert call["standard_answer"] == "承認条件は 120000 円です。"
+    assert call["timeout_seconds"] == OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS
+    assert metrics.claim_support_rate == 1.0
+    assert metrics.requirement_coverage == 1.0
+    assert metrics.answer_pass_rate == 1.0
+    assert metrics.metric_case_counts["answer_pass_rate"] == 1
+    judgement = metrics.case_results[0].answer_evaluation
+    assert judgement is not None
+    assert judgement.status == "completed"
+    assert judgement.total_score == 18.0
+    assert judgement.passed is True
+    assert judgement.claims_supported is True
+    assert judgement.missing_content is False
+    assert metrics.case_results[1].answer_evaluation is None
+
+
+async def test_judgement_failures_are_reported_per_axis() -> None:
+    """根拠のない主張・必要な項目の欠落・不合格を、それぞれの失敗理由として残す。"""
+    judge = FakeJudge(
+        _completed_judgement(
+            total=12.0,
+            passed=False,
+            claim_status="contradicted",
+            coverage_cap=2.5,
+            coverage_statuses=("addressed", "missing"),
+        )
+    )
+    runner = EvaluationRunner(pipeline=StubPipeline(), answer_judge=judge)
+
+    metrics = await runner.run(
+        cases=[
+            EvaluationCase(
+                id="case-judged",
+                query="承認条件",
+                relevant_document_ids=["doc-1"],
+                standard_answer="承認者は部長です。",
+            )
+        ],
+        top_k=5,
+        thresholds=resolve_evaluation_suite("standard"),
+    )
+
+    assert metrics.claim_support_rate == 0.0
+    assert metrics.requirement_coverage == 0.5
+    assert metrics.answer_pass_rate == 0.0
+    assert metrics.case_results[0].failure_reasons == [
+        "unsupported_claim",
+        "missing_content",
+        "answer_failed",
+    ]
+    assert {failure.metric for failure in metrics.threshold_failures} >= {
+        "claim_support_rate",
+        "requirement_coverage",
+        "answer_pass_rate",
+    }
+    assert metrics.passed is False
+
+
+@pytest.mark.parametrize(
+    ("judge_result", "status"),
+    [
+        (TimeoutError(), "timeout"),
+        (RuntimeError("secret detail"), "error"),
+        ({"status": "input_too_large", "message": "入力上限を超えています。"}, "input_too_large"),
+    ],
+    ids=["timeout", "exception", "input_too_large"],
+)
+async def test_incomplete_judgement_is_not_counted_and_fails_the_gate(
+    judge_result: Mapping[str, object] | Exception, status: str
+) -> None:
+    """標準回答で評価できなかったケースは指標に入れず、評価を合格にしない。"""
+    runner = EvaluationRunner(pipeline=StubPipeline(), answer_judge=FakeJudge(judge_result))
+
+    metrics = await runner.run(
+        cases=[
+            EvaluationCase(
+                id="case-judged",
+                query="承認条件",
+                relevant_document_ids=["doc-1"],
+                standard_answer="承認者は部長です。",
+            )
+        ],
+        top_k=5,
+    )
+
+    judgement = metrics.case_results[0].answer_evaluation
+    assert judgement is not None
+    assert judgement.status == status
+    assert "secret detail" not in str(judgement.model_dump())
+    assert metrics.answer_pass_rate is None
+    assert metrics.case_results[0].failure_reasons == ["answer_evaluation_error"]
+    assert metrics.error_count == 0
+    assert metrics.passed is False
+
+
+async def test_judgement_is_unavailable_without_answer_record_input() -> None:
+    """回答の記録の評価入力が無い回答(別の回答エンジン)は、評価できない理由を残す。"""
+    judge = FakeJudge(_completed_judgement())
+    runner = EvaluationRunner(pipeline=MissPipeline(), answer_judge=judge)
+
+    metrics = await runner.run(
+        cases=[EvaluationCase(id="case", query="承認条件", standard_answer="部長です。")],
+        top_k=5,
+    )
+
+    judgement = metrics.case_results[0].answer_evaluation
+    assert judgement is not None
+    assert judgement.status == "unavailable"
+    assert judgement.message == ANSWER_JUDGE_UNAVAILABLE_MESSAGE
+    assert judge.calls == []
+
+
+def test_summarize_answer_judgement_normalizes_coverage() -> None:
+    judgement = summarize_answer_judgement(
+        _completed_judgement(coverage_cap=3.75, coverage_statuses=("partial",))
+    )
+    assert judgement.requirement_coverage == 0.75
+    assert judgement.missing_content is False
+    assert judgement.goal_alignment == "aligned"
+
+
+def test_saved_legacy_metrics_still_validate() -> None:
+    """削除した指標・失敗理由を含む保存済みの結果も読める(表示を壊さない)。"""
+    legacy = {
+        "case_count": 1,
+        "error_count": 0,
+        "evaluation_suite": "balanced",
+        "evaluated_k": 3,
+        "precision_at_k": 0.3333,
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "answer_keyword_hit_rate": 1.0,
+        "groundedness_pass_rate": 1.0,
+        "faithfulness": 0.5,
+        "context_recall": 1.0,
+        "bbox_citation_coverage": 1.0,
+        "passed": False,
+        "threshold_failures": [{"metric": "section_coverage", "actual": 0.5, "threshold": 0.8}],
+        "failure_reason_counts": {"section_miss": 1},
+        "case_results": [
+            {
+                "case_id": "c1",
+                "trace_id": "t1",
+                "precision_at_k": 0.3333,
+                "recall_at_k": 1.0,
+                "reciprocal_rank": 1.0,
+                "answer_keyword_hit": True,
+                "groundedness_passed": True,
+                "groundedness_score": 0.5,
+                "failure_reasons": ["section_miss"],
+                "elapsed_ms": 1.0,
+            }
+        ],
+        "ingestion_quality": {"document_count": 3},
+    }
+
+    metrics = EvaluationMetrics.model_validate(legacy)
+
+    assert metrics.mrr == 1.0
+    assert metrics.context_recall == 1.0
+    assert metrics.refusal_accuracy is None
+    assert metrics.threshold_failures[0].metric == "section_coverage"
+    assert metrics.failure_reason_counts == {"section_miss": 1}
+    assert metrics.case_results[0].reciprocal_rank == 1.0
+    assert "precision_at_k" not in metrics.model_dump()
+
+    comparison = EvaluationCompareResponse.model_validate(
+        {
+            "ranking_metric": "precision_at_k",
+            "best_experiment_id": "hybrid",
+            "results": [
+                {
+                    "rank": 1,
+                    "ranking_score": 0.5,
+                    "experiment": {
+                        "id": "hybrid",
+                        "mode": "hybrid",
+                        "rerank_top_n": 5,
+                        "rag_overrides": {"context_window_chars": 4096, "rrf_k": 30},
+                    },
+                    "metrics": legacy,
+                }
+            ],
+        }
+    )
+    assert comparison.ranking_metric == "precision_at_k"
+    overrides = comparison.results[0].experiment.rag_overrides
+    assert overrides is not None
+    assert overrides.rrf_k == 30
+
+
+class PartiallyFailingPipeline:
+    """一部 case だけ失敗する評価 runner 用 pipeline。"""
+
+    async def run(
+        self,
+        request: SearchRequest,
+        trace_id: str | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
+    ) -> SearchResponse:
+        if "失敗" in request.query:
+            raise RuntimeError("raw secret detail: INV-SECRET")
+        return _approval_response(request, trace_id or "trace-ok")
 
 
 async def test_evaluation_runner_isolates_case_errors(caplog: LogCaptureFixture) -> None:
@@ -686,17 +749,14 @@ async def test_evaluation_runner_isolates_case_errors(caplog: LogCaptureFixture)
                 ),
             ],
             top_k=5,
-            rerank_top_n=3,
         )
 
     assert metrics.case_count == 2
     assert metrics.error_count == 1
     assert metrics.passed is False
-    assert metrics.precision_at_k == 0.1667
-    assert metrics.recall_at_k == 0.5
-    assert metrics.mrr == 0.5
-    assert metrics.answer_keyword_hit_rate == 0.5
-    assert metrics.groundedness_pass_rate == 0.5
+    # 失敗したケースは指標の平均に入れない(error_count で数える)。
+    assert metrics.context_recall == 1.0
+    assert metrics.metric_case_counts["context_recall"] == 1
 
     ok_result, error_result = metrics.case_results
     assert ok_result.status == "success"
@@ -704,12 +764,8 @@ async def test_evaluation_runner_isolates_case_errors(caplog: LogCaptureFixture)
     assert error_result.status == "error"
     assert error_result.error_type == "RuntimeError"
     assert error_result.error_message == EVALUATION_CASE_ERROR_MESSAGE
-    assert error_result.retrieved_document_ids == []
     assert error_result.relevant_document_ids == ["doc-2"]
-    assert error_result.precision_at_k == 0.0
-    assert error_result.answer_keyword_hit is False
-    assert error_result.groundedness_passed is False
-    assert error_result.groundedness_score == 0.0
+    assert error_result.context_recall is None
     assert error_result.failure_reasons == ["case_error"]
     assert metrics.failure_reason_counts == {"case_error": 1}
     assert "INV-SECRET" not in str(error_result.model_dump(mode="json"))
@@ -721,9 +777,7 @@ async def test_evaluation_runner_isolates_case_errors(caplog: LogCaptureFixture)
     assert audit_event["outcome"] == "error"
     assert audit_event["error_stage"] == "evaluation"
     assert audit_event["error_type"] == "RuntimeError"
-    assert audit_event["retrieved_count"] == 0
     assert "INV-SECRET" not in str(audit_event)
-    assert "raw secret detail" not in str(audit_event)
 
 
 async def test_evaluation_runner_records_case_metrics(monkeypatch: MonkeyPatch) -> None:
@@ -735,402 +789,19 @@ async def test_evaluation_runner_records_case_metrics(monkeypatch: MonkeyPatch) 
     )
     runner = EvaluationRunner(pipeline=PartiallyFailingPipeline())
 
-    metrics = await runner.run(
+    await runner.run(
         cases=[
-            EvaluationCase(
-                id="case-ok",
-                query="承認条件",
-                relevant_document_ids=["doc-1"],
-                expected_answer_keywords=["120000"],
-            ),
-            EvaluationCase(
-                id="case-error",
-                query="INV-SECRET の失敗ケース",
-                relevant_document_ids=["doc-2"],
-                expected_answer_keywords=["999"],
-            ),
+            EvaluationCase(id="case-ok", query="承認条件", relevant_document_ids=["doc-1"]),
+            EvaluationCase(id="case-error", query="失敗ケース", relevant_document_ids=["doc-2"]),
         ],
         top_k=5,
-        rerank_top_n=3,
-        mode=SearchMode.HYBRID,
     )
 
-    assert metrics.error_count == 1
     assert [(mode, status) for mode, status, _ in observed] == [
         ("hybrid", "success"),
         ("hybrid", "error"),
     ]
     assert all(seconds >= 0 for _, _, seconds in observed)
-
-
-async def test_evaluation_runner_records_timeout_audit(
-    monkeypatch: MonkeyPatch,
-    caplog: LogCaptureFixture,
-) -> None:
-    """評価 case timeout は error result と脱敏済み RAG 監査ログに残す。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_answer_timeout_seconds", 0.001)
-    runner = EvaluationRunner(pipeline=SlowPipeline(), settings=settings)
-
-    with caplog.at_level(logging.INFO, logger="app.audit"):
-        metrics = await runner.run(
-            cases=[
-                EvaluationCase(
-                    id="case-timeout",
-                    query="INV-SECRET の timeout ケース",
-                    relevant_document_ids=["doc-timeout"],
-                    expected_answer_keywords=["timeout"],
-                )
-            ],
-            top_k=5,
-            rerank_top_n=3,
-        )
-
-    assert metrics.error_count == 1
-    assert metrics.passed is False
-    result = metrics.case_results[0]
-    assert result.status == "error"
-    assert result.error_type == "TimeoutError"
-    assert result.error_message is not None
-    assert "時間切れになった工程: 検索の準備" in result.error_message
-    assert "INV-SECRET" not in result.error_message
-    assert result.trace_id
-
-    audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
-    audit_event = cast(Any, audit_record).audit_event
-    assert audit_event["trace_id"] == result.trace_id
-    assert audit_event["outcome"] == "error"
-    assert audit_event["error_stage"] == "timeout"
-    assert audit_event["error_type"] == "TimeoutError"
-    assert "INV-SECRET" not in str(audit_event)
-
-
-def _timeout_cases() -> list[EvaluationCase]:
-    return [
-        EvaluationCase(
-            id="case-slow",
-            query="遅い: 承認条件は？",
-            relevant_document_ids=["doc-1"],
-            expected_answer_keywords=["120000"],
-        ),
-        EvaluationCase(
-            id="case-fast",
-            query="承認条件は？",
-            relevant_document_ids=["doc-1"],
-            expected_answer_keywords=["120000"],
-        ),
-    ]
-
-
-async def test_evaluation_case_is_limited_by_answer_timeout() -> None:
-    """評価の 1 ケースは、回答生成の上限（rag_answer_timeout_seconds）で打ち切る（#383）。
-
-    検索だけの上限（旧 rag_search_timeout_seconds、30 秒）では、agentic の業務ビューで LLM を
-    何度も呼ぶケースが打ち切られるため、チャット・検索の回答と同じ上限にそろえる。
-    """
-    settings = Settings(rag_answer_timeout_seconds=0.05)
-    pipeline = StagedSlowPipeline(sleep_seconds=1.0)
-    runner = EvaluationRunner(
-        pipeline=pipeline, quality_source=EmptyQualitySource(), settings=settings
-    )
-
-    metrics = await runner.run(cases=_timeout_cases(), top_k=5, rerank_top_n=3)
-
-    slow, fast = metrics.case_results
-    assert slow.status == "error"
-    assert slow.error_type == "TimeoutError"
-    assert slow.failure_reasons == ["case_error"]
-    # 時間切れになった工程を、工程の名前（SSE の stage と同じ）と文言の両方で残す。
-    assert slow.error_stage == "agentic_planning"
-    assert slow.error_message is not None
-    assert "上限の 1 秒以内に終わりませんでした" in slow.error_message
-    assert "時間切れになった工程: 検索の計画" in slow.error_message
-    assert "遅い" not in slow.error_message
-    # 時間切れのケースがあっても、評価は次のケースへ進む。
-    assert fast.status == "success"
-    assert fast.error_stage is None
-    assert pipeline.queries == ["遅い: 承認条件は？", "承認条件は？"]
-    assert metrics.case_count == 2
-    assert metrics.error_count == 1
-    assert metrics.passed is False
-
-
-async def test_evaluation_case_within_answer_timeout_succeeds() -> None:
-    """回答生成の上限内に終わるケースは、検索だけの上限（30 秒）の長さに関係なく成功する。"""
-    settings = Settings(rag_answer_timeout_seconds=5.0)
-    pipeline = StagedSlowPipeline(sleep_seconds=0.05)
-    runner = EvaluationRunner(
-        pipeline=pipeline, quality_source=EmptyQualitySource(), settings=settings
-    )
-
-    metrics = await runner.run(cases=_timeout_cases(), top_k=5, rerank_top_n=3)
-
-    assert [result.status for result in metrics.case_results] == ["success", "success"]
-    assert metrics.error_count == 0
-
-
-async def test_evaluation_time_budget_stops_remaining_cases() -> None:
-    """評価全体の上限に達したら、実行中のケースを打ち切り、残りのケースは実行せずに記録する。"""
-    settings = Settings(rag_answer_timeout_seconds=5.0)
-    pipeline = StagedSlowPipeline(sleep_seconds=1.0)
-    runner = EvaluationRunner(
-        pipeline=pipeline, quality_source=EmptyQualitySource(), settings=settings
-    )
-
-    metrics = await runner.run(
-        cases=_timeout_cases(), top_k=5, rerank_top_n=3, time_budget_seconds=0.05
-    )
-
-    slow, skipped = metrics.case_results
-    assert slow.status == "error"
-    assert slow.error_type == "TimeoutError"
-    assert slow.error_stage == "agentic_planning"
-    assert slow.error_message is not None
-    assert "評価全体の時間の上限に達したため" in slow.error_message
-    assert "時間切れになった工程: 検索の計画" in slow.error_message
-    assert skipped.status == "error"
-    assert skipped.error_type == "EvaluationTimeBudgetExceeded"
-    assert skipped.error_stage is None
-    assert skipped.failure_reasons == ["case_error"]
-    assert skipped.error_message is not None
-    assert "実行していません" in skipped.error_message
-    # 残りのケースは pipeline を呼ばない。
-    assert pipeline.queries == ["遅い: 承認条件は？"]
-    assert metrics.case_count == 2
-    assert metrics.error_count == 2
-    assert metrics.passed is False
-
-
-async def test_evaluation_compare_shares_time_budget_across_experiments() -> None:
-    """比較は、評価全体の上限を experiment の間で共有する（HTTP の待ちを超えない）。"""
-    settings = Settings(rag_answer_timeout_seconds=5.0)
-    pipeline = StagedSlowPipeline(sleep_seconds=1.0)
-    runner = EvaluationRunner(
-        pipeline=pipeline, quality_source=EmptyQualitySource(), settings=settings
-    )
-
-    comparison = await runner.compare(
-        cases=_timeout_cases(),
-        experiments=[
-            EvaluationExperiment(id="first", top_k=5, rerank_top_n=3),
-            EvaluationExperiment(id="second", top_k=5, rerank_top_n=3),
-        ],
-        time_budget_seconds=0.05,
-    )
-
-    by_id = {result.experiment.id: result for result in comparison.results}
-    assert by_id["first"].metrics.error_count == 2
-    assert [result.error_type for result in by_id["second"].metrics.case_results] == [
-        "EvaluationTimeBudgetExceeded",
-        "EvaluationTimeBudgetExceeded",
-    ]
-    assert pipeline.queries == ["遅い: 承認条件は？"]
-
-
-async def test_evaluation_runner_compares_experiments_and_ranks_best() -> None:
-    """同じ golden set で複数 RAG 設定を比較し、metric と失敗数で順位付けする。"""
-    runner = EvaluationRunner(pipeline=ComparePipeline())
-
-    comparison = await runner.compare(
-        cases=[
-            EvaluationCase(
-                id="case-compare",
-                query="承認条件",
-                relevant_document_ids=["doc-1"],
-                expected_answer_keywords=["120000"],
-            )
-        ],
-        experiments=[
-            EvaluationExperiment(
-                id="vector-small",
-                mode=SearchMode.VECTOR,
-                top_k=1,
-                rerank_top_n=1,
-            ),
-            EvaluationExperiment(
-                id="hybrid-wide",
-                mode=SearchMode.HYBRID,
-                top_k=3,
-                rerank_top_n=3,
-            ),
-        ],
-        ranking_metric="recall_at_k",
-    )
-
-    assert comparison.ranking_metric == "recall_at_k"
-    assert comparison.best_experiment_id == "hybrid-wide"
-    assert [result.rank for result in comparison.results] == [1, 2]
-    assert [result.experiment.id for result in comparison.results] == [
-        "hybrid-wide",
-        "vector-small",
-    ]
-    assert comparison.results[0].ranking_score == 1.0
-    assert comparison.results[0].metrics.failure_reason_counts == {}
-    assert comparison.results[1].ranking_score == 0.0
-    assert comparison.results[1].metrics.failure_reason_counts["retrieval_miss"] == 1
-
-
-async def test_evaluation_compare_applies_experiment_rag_overrides(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """compare experiment ごとの RAG override を一時 Settings として pipeline へ渡す。"""
-    observed_settings: list[Settings] = []
-
-    class CapturingRagPipeline:
-        def __init__(self, settings: Settings) -> None:
-            self.settings = settings
-            observed_settings.append(settings)
-
-        async def run(
-            self,
-            request: SearchRequest,
-            trace_id: str | None = None,
-            progress_callback: SearchStageProgressCallback | None = None,
-        ) -> SearchResponse:
-            return SearchResponse(
-                answer="承認条件は 120000 円です。",
-                citations=[
-                    RetrievedChunk(
-                        document_id="doc-1",
-                        chunk_id="doc-1:0",
-                        text="承認条件: 120000",
-                        score=1.0,
-                    )
-                ],
-                trace_id=trace_id or "trace",
-                guardrail_warnings=[],
-                elapsed_ms=1.0,
-                diagnostics=SearchDiagnostics(
-                    mode=request.mode.value,
-                    top_k=request.top_k,
-                    rerank_top_n=request.rerank_top_n,
-                    rrf_k=self.settings.rag_rrf_k,
-                    context_window_chars=self.settings.rag_context_window_chars,
-                    oracle_vector_target_accuracy=(self.settings.oracle_vector_target_accuracy),
-                    query_variant_count=(
-                        self.settings.rag_query_expansion_max_variants
-                        if self.settings.rag_query_expansion_enabled
-                        else 1
-                    ),
-                ),
-            )
-
-    async def keep_test_settings(settings: Settings) -> Settings:
-        return settings
-
-    monkeypatch.setattr("app.rag.evaluation.RagPipeline", CapturingRagPipeline)
-    monkeypatch.setattr(
-        "app.rag.evaluation.resolve_oracle_generation_settings",
-        keep_test_settings,
-    )
-    runner = EvaluationRunner(
-        quality_source=EmptyQualitySource(),
-        settings=Settings.model_construct(
-            rag_answer_timeout_seconds=30.0,
-            rag_rrf_k=60,
-            rag_context_window_chars=12000,
-            rag_context_neighbor_window=0,
-            rag_context_diversity_lambda=1.0,
-            rag_context_adaptive_expansion_enabled=False,
-            rag_context_adaptive_neighbor_window=1,
-            rag_context_adaptive_min_overlap=0.08,
-            rag_context_group_expansion_enabled=False,
-            rag_context_group_max_chunks=4,
-            rag_context_dependency_promotion_enabled=False,
-            rag_context_dependency_max_chunks=4,
-            rag_context_compression_enabled=False,
-            rag_context_compression_max_sentences=3,
-            rag_context_compression_max_chars_per_chunk=1200,
-            rag_query_expansion_enabled=True,
-            rag_query_expansion_max_variants=3,
-            oracle_vector_target_accuracy=95,
-        ),
-    )
-
-    comparison = await runner.compare(
-        cases=[
-            EvaluationCase(
-                id="case-overrides",
-                query="承認条件",
-                relevant_document_ids=["doc-1"],
-                expected_answer_keywords=["120000"],
-            )
-        ],
-        experiments=[
-            EvaluationExperiment(id="baseline", top_k=3, rerank_top_n=3),
-            EvaluationExperiment(
-                id="diverse-context",
-                top_k=3,
-                rerank_top_n=3,
-                rag_overrides=EvaluationRagOverrides(
-                    rrf_k=10,
-                    query_expansion_enabled=False,
-                    query_expansion_max_variants=2,
-                    context_window_chars=4096,
-                    context_neighbor_window=1,
-                    context_diversity_lambda=0.35,
-                    context_adaptive_expansion_enabled=True,
-                    context_adaptive_neighbor_window=2,
-                    context_adaptive_min_overlap=0.2,
-                    context_group_expansion_enabled=True,
-                    context_group_max_chunks=2,
-                    context_dependency_promotion_enabled=True,
-                    context_dependency_max_chunks=3,
-                    context_compression_enabled=True,
-                    context_compression_max_sentences=2,
-                    context_compression_max_chars_per_chunk=800,
-                    oracle_vector_target_accuracy=90,
-                ),
-            ),
-        ],
-        ranking_metric="mrr",
-    )
-
-    assert [settings.rag_rrf_k for settings in observed_settings] == [60, 10]
-    assert observed_settings[0].rag_context_diversity_lambda == 1.0
-    assert observed_settings[1].rag_context_diversity_lambda == 0.35
-    assert observed_settings[1].rag_context_neighbor_window == 1
-    assert observed_settings[1].rag_context_adaptive_expansion_enabled is True
-    assert observed_settings[1].rag_context_adaptive_neighbor_window == 2
-    assert observed_settings[1].rag_context_adaptive_min_overlap == 0.2
-    assert observed_settings[1].rag_context_group_expansion_enabled is True
-    assert observed_settings[1].rag_context_group_max_chunks == 2
-    assert observed_settings[1].rag_context_dependency_promotion_enabled is True
-    assert observed_settings[1].rag_context_dependency_max_chunks == 3
-    assert observed_settings[1].rag_context_compression_enabled is True
-    assert observed_settings[1].rag_context_compression_max_sentences == 2
-    assert observed_settings[1].rag_context_compression_max_chars_per_chunk == 800
-    assert observed_settings[1].rag_query_expansion_enabled is False
-    assert observed_settings[1].rag_context_window_chars == 4096
-    assert observed_settings[1].oracle_vector_target_accuracy == 90
-    assert comparison.results[0].metrics.case_results[0].diagnostics.rrf_k in {60, 10}
-
-
-class PartiallyFailingPipeline:
-    """一部 case だけ失敗する評価 runner 用 pipeline。"""
-
-    async def run(
-        self,
-        request: SearchRequest,
-        trace_id: str | None = None,
-        progress_callback: SearchStageProgressCallback | None = None,
-    ) -> SearchResponse:
-        if "失敗" in request.query:
-            raise RuntimeError("raw secret detail: INV-SECRET")
-        return SearchResponse(
-            answer="承認条件は 120000 円です。",
-            citations=[
-                RetrievedChunk(
-                    document_id="doc-1",
-                    chunk_id="doc-1:0",
-                    text="承認条件: 120000",
-                    score=1.0,
-                )
-            ],
-            trace_id=trace_id or "trace-ok",
-            guardrail_warnings=[],
-            elapsed_ms=2.0,
-        )
 
 
 class SlowPipeline:
@@ -1173,24 +844,120 @@ class StagedSlowPipeline:
                     )
                 )
             await asyncio.sleep(self._sleep_seconds)
-        return SearchResponse(
-            answer="承認条件は 120000 円です。",
-            citations=[
-                RetrievedChunk(
-                    document_id="doc-1",
-                    chunk_id="doc-1:0",
-                    text="承認条件: 120000",
-                    score=1.0,
+        return _approval_response(request, trace_id or "trace-ok")
+
+
+async def test_evaluation_runner_records_timeout_audit(
+    monkeypatch: MonkeyPatch,
+    caplog: LogCaptureFixture,
+) -> None:
+    """評価 case timeout は error result と脱敏済み RAG 監査ログに残す。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_answer_timeout_seconds", 0.001)
+    runner = EvaluationRunner(pipeline=SlowPipeline(), settings=settings)
+
+    with caplog.at_level(logging.INFO, logger="app.audit"):
+        metrics = await runner.run(
+            cases=[
+                EvaluationCase(
+                    id="case-timeout",
+                    query="INV-SECRET の timeout ケース",
+                    relevant_document_ids=["doc-timeout"],
                 )
             ],
-            trace_id=trace_id or "trace-ok",
-            guardrail_warnings=[],
-            elapsed_ms=2.0,
+            top_k=5,
         )
+
+    assert metrics.error_count == 1
+    assert metrics.passed is False
+    result = metrics.case_results[0]
+    assert result.status == "error"
+    assert result.error_type == "TimeoutError"
+    assert result.error_message is not None
+    assert "時間切れになった工程: 検索の準備" in result.error_message
+    assert "INV-SECRET" not in result.error_message
+
+    audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
+    audit_event = cast(Any, audit_record).audit_event
+    assert audit_event["trace_id"] == result.trace_id
+    assert audit_event["error_stage"] == "timeout"
+    assert "INV-SECRET" not in str(audit_event)
+
+
+def _timeout_cases() -> list[EvaluationCase]:
+    return [
+        EvaluationCase(id="case-slow", query="遅い: 承認条件は？", relevant_document_ids=["doc-1"]),
+        EvaluationCase(id="case-fast", query="承認条件は？", relevant_document_ids=["doc-1"]),
+    ]
+
+
+async def test_evaluation_case_is_limited_by_answer_timeout() -> None:
+    """評価の 1 ケースは、回答生成の上限（rag_answer_timeout_seconds）で打ち切る（#383）。"""
+    settings = Settings(rag_answer_timeout_seconds=0.05)
+    pipeline = StagedSlowPipeline(sleep_seconds=1.0)
+    runner = EvaluationRunner(pipeline=pipeline, settings=settings)
+
+    metrics = await runner.run(cases=_timeout_cases(), top_k=5)
+
+    slow, fast = metrics.case_results
+    assert slow.status == "error"
+    assert slow.error_type == "TimeoutError"
+    assert slow.failure_reasons == ["case_error"]
+    assert slow.error_stage == "agentic_planning"
+    assert slow.error_message is not None
+    assert "上限の 1 秒以内に終わりませんでした" in slow.error_message
+    assert "時間切れになった工程: 検索の計画" in slow.error_message
+    assert "遅い" not in slow.error_message
+    assert fast.status == "success"
+    assert pipeline.queries == ["遅い: 承認条件は？", "承認条件は？"]
+    assert metrics.error_count == 1
+    assert metrics.passed is False
+
+
+async def test_evaluation_time_budget_stops_remaining_cases() -> None:
+    """評価全体の上限に達したら、実行中のケースを打ち切り、残りのケースは実行せずに記録する。"""
+    settings = Settings(rag_answer_timeout_seconds=5.0)
+    pipeline = StagedSlowPipeline(sleep_seconds=1.0)
+    runner = EvaluationRunner(pipeline=pipeline, settings=settings)
+
+    metrics = await runner.run(cases=_timeout_cases(), top_k=5, time_budget_seconds=0.05)
+
+    slow, skipped = metrics.case_results
+    assert slow.status == "error"
+    assert slow.error_message is not None
+    assert "評価全体の時間の上限に達したため" in slow.error_message
+    assert skipped.error_type == "EvaluationTimeBudgetExceeded"
+    assert skipped.failure_reasons == ["case_error"]
+    assert pipeline.queries == ["遅い: 承認条件は？"]
+    assert metrics.error_count == 2
+
+
+async def test_evaluation_compare_shares_time_budget_across_experiments() -> None:
+    """比較は、評価全体の上限を experiment の間で共有する（HTTP の待ちを超えない）。"""
+    settings = Settings(rag_answer_timeout_seconds=5.0)
+    pipeline = StagedSlowPipeline(sleep_seconds=1.0)
+    runner = EvaluationRunner(pipeline=pipeline, settings=settings)
+
+    comparison = await runner.compare(
+        cases=_timeout_cases(),
+        experiments=[
+            EvaluationExperiment(id="first", top_k=5),
+            EvaluationExperiment(id="second", top_k=5),
+        ],
+        time_budget_seconds=0.05,
+    )
+
+    by_id = {result.experiment.id: result for result in comparison.results}
+    assert by_id["first"].metrics.error_count == 2
+    assert [result.error_type for result in by_id["second"].metrics.case_results] == [
+        "EvaluationTimeBudgetExceeded",
+        "EvaluationTimeBudgetExceeded",
+    ]
+    assert pipeline.queries == ["遅い: 承認条件は？"]
 
 
 class ComparePipeline:
-    """evaluation compare の順位付けを確認する pipeline。"""
+    """top_k が大きい設定だけ正解の文書を返す pipeline。"""
 
     async def run(
         self,
@@ -1198,21 +965,8 @@ class ComparePipeline:
         trace_id: str | None = None,
         progress_callback: SearchStageProgressCallback | None = None,
     ) -> SearchResponse:
-        if request.mode == SearchMode.HYBRID:
-            return SearchResponse(
-                answer="承認条件は 120000 円です。",
-                citations=[
-                    RetrievedChunk(
-                        document_id="doc-1",
-                        chunk_id="doc-1:0",
-                        text="承認条件: 120000",
-                        score=1.0,
-                    )
-                ],
-                trace_id=trace_id or "trace-hybrid",
-                guardrail_warnings=[],
-                elapsed_ms=2.0,
-            )
+        if request.top_k >= 3:
+            return _approval_response(request, trace_id or "trace-wide")
         return SearchResponse(
             answer="関連しない回答です。",
             citations=[
@@ -1223,17 +977,140 @@ class ComparePipeline:
                     score=0.8,
                 )
             ],
-            trace_id=trace_id or "trace-vector",
+            trace_id=trace_id or "trace-narrow",
             guardrail_warnings=[],
             elapsed_ms=2.0,
         )
 
 
+async def test_evaluation_runner_compares_experiments_and_ranks_best() -> None:
+    """同じ golden set で複数の回答設定を比較し、metric と失敗数で順位付けする。"""
+    runner = EvaluationRunner(pipeline=ComparePipeline())
+
+    comparison = await runner.compare(
+        cases=[
+            EvaluationCase(
+                id="case-compare",
+                query="承認条件",
+                relevant_document_ids=["doc-1"],
+                expected_answer_keywords=["120000"],
+            )
+        ],
+        experiments=[
+            EvaluationExperiment(id="narrow", top_k=1),
+            EvaluationExperiment(id="wide", top_k=3),
+        ],
+    )
+
+    assert comparison.ranking_metric == "context_recall"
+    assert comparison.best_experiment_id == "wide"
+    assert [result.experiment.id for result in comparison.results] == ["wide", "narrow"]
+    assert comparison.results[0].ranking_score == 1.0
+    assert comparison.results[1].ranking_score == 0.0
+    assert comparison.results[1].metrics.failure_reason_counts["retrieval_miss"] == 1
+
+
+async def test_compare_ranks_unmeasured_metric_last() -> None:
+    """順位の指標を測れなかった experiment は、測れたものの後ろに並べる。"""
+    runner = EvaluationRunner(pipeline=StubPipeline())
+
+    comparison = await runner.compare(
+        cases=[EvaluationCase(id="case", query="承認条件", relevant_document_ids=["doc-1"])],
+        experiments=[EvaluationExperiment(id="a"), EvaluationExperiment(id="b")],
+        ranking_metric="answer_pass_rate",
+    )
+
+    assert [result.ranking_score for result in comparison.results] == [None, None]
+    assert comparison.best_experiment_id == "a"
+
+
+def test_evaluation_settings_map_overrides() -> None:
+    """評価は全体の既定のまま動かし、experiment の上書きだけを一時適用する。"""
+    base = Settings(
+        rag_docrag_query_strategy="auto_routing",
+        rag_docrag_answer_flow="crag",
+        rag_docrag_neighbor_child_count=3,
+        rag_docrag_rerank_enabled=True,
+        rag_rrf_k=60,
+        rag_context_group_max_chunks=4,
+        oracle_vector_target_accuracy=95,
+    )
+
+    default = evaluation_settings(base, None)
+    overridden = evaluation_settings(
+        base,
+        EvaluationRagOverrides(
+            query_strategy="rag_fusion",
+            answer_flow="standard_rag",
+            neighbor_child_count=1,
+            rerank_enabled=False,
+            rrf_k=30,
+            context_group_max_chunks=2,
+            oracle_vector_target_accuracy=90,
+        ),
+    )
+
+    assert default.rag_docrag_query_strategy == "auto_routing"
+    assert overridden.rag_docrag_query_strategy == "rag_fusion"
+    assert overridden.rag_docrag_answer_flow == "standard_rag"
+    assert overridden.rag_docrag_neighbor_child_count == 1
+    assert overridden.rag_docrag_rerank_enabled is False
+    assert overridden.rag_rrf_k == 30
+    assert overridden.rag_context_group_max_chunks == 2
+    assert overridden.oracle_vector_target_accuracy == 90
+    # 元の Settings は変えない。
+    assert base.rag_docrag_query_strategy == "auto_routing"
+
+
+async def test_evaluation_compare_applies_experiment_rag_overrides(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """compare experiment ごとの上書きを一時 Settings として pipeline へ渡す。"""
+    observed_settings: list[Settings] = []
+
+    class CapturingRagPipeline:
+        def __init__(self, settings: Settings) -> None:
+            observed_settings.append(settings)
+
+        async def run(
+            self,
+            request: SearchRequest,
+            trace_id: str | None = None,
+            progress_callback: SearchStageProgressCallback | None = None,
+        ) -> SearchResponse:
+            return _approval_response(request, trace_id or "trace")
+
+    async def keep_test_settings(settings: Settings) -> Settings:
+        return settings
+
+    monkeypatch.setattr("app.rag.evaluation.RagPipeline", CapturingRagPipeline)
+    monkeypatch.setattr(
+        "app.rag.evaluation.resolve_oracle_generation_settings",
+        keep_test_settings,
+    )
+    runner = EvaluationRunner(
+        settings=Settings(rag_answer_timeout_seconds=30.0, rag_rrf_k=60),
+        answer_judge=FakeJudge(_completed_judgement()),
+    )
+
+    await runner.compare(
+        cases=[EvaluationCase(id="case", query="承認条件", relevant_document_ids=["doc-1"])],
+        experiments=[
+            EvaluationExperiment(id="baseline", top_k=3),
+            EvaluationExperiment(
+                id="fusion",
+                top_k=3,
+                rag_overrides=EvaluationRagOverrides(query_strategy="rag_fusion", rrf_k=10),
+            ),
+        ],
+    )
+
+    assert [settings.rag_rrf_k for settings in observed_settings] == [60, 10]
+    assert observed_settings[1].rag_docrag_query_strategy == "rag_fusion"
+
+
 def test_evaluation_api_rejects_empty_cases() -> None:
-    response = client.post(
-        "/api/evaluation/run",
-        json={"cases": [], "top_k": 5, "rerank_top_n": 3},
-    )
+    response = client.post("/api/evaluation/run", json={"cases": [], "top_k": 5})
 
     assert response.status_code == 422
     body = response.json()
@@ -1241,163 +1118,116 @@ def test_evaluation_api_rejects_empty_cases() -> None:
     assert body["error_messages"]
 
 
-def test_evaluation_api_rejects_threshold_out_of_range() -> None:
+@pytest.mark.parametrize(
+    "thresholds",
+    [{"context_recall": 1.1}, {"precision_at_k": 0.5}, {"groundedness_pass_rate": 0.9}],
+    ids=["out-of-range", "removed-precision", "removed-groundedness"],
+)
+def test_evaluation_api_rejects_invalid_thresholds(thresholds: dict[str, float]) -> None:
+    """範囲外の値と、削除した指標の閾値は受け付けない(gate が効かないまま通さない)。"""
     response = client.post(
         "/api/evaluation/run",
-        json={
-            "cases": [
-                {
-                    "id": "bad-threshold",
-                    "query": "承認条件",
-                    "relevant_document_ids": [],
-                    "expected_answer_keywords": [],
-                }
-            ],
-            "thresholds": {"recall_at_k": 1.1},
-        },
+        json={"cases": [{"id": "c", "query": "承認条件"}], "thresholds": thresholds},
     )
 
     assert response.status_code == 422
-    body = response.json()
-    assert body["data"] is None
-    assert body["error_messages"]
+    assert response.json()["error_messages"]
 
 
-def test_evaluation_api_rejects_rerank_top_n_larger_than_top_k() -> None:
+def test_evaluation_api_ignores_removed_run_fields(monkeypatch: MonkeyPatch) -> None:
+    """以前の golden set の mode / rerank_top_n / 削除した期待値の欄は無視して評価する。"""
+    captured: dict[str, Any] = {}
+
+    async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
+        captured.update(kwargs)
+        return EvaluationMetrics(case_count=1)
+
+    class NoopOracleClient:
+        async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
+            return "eval-1"
+
+    monkeypatch.setattr(EvaluationRunner, "run", fake_run)
+    monkeypatch.setattr("app.api.routes.evaluation.OracleClient", NoopOracleClient)
+
     response = client.post(
         "/api/evaluation/run",
         json={
             "cases": [
                 {
-                    "id": "bad-depth",
+                    "id": "c",
                     "query": "承認条件",
-                    "relevant_document_ids": [],
-                    "expected_answer_keywords": [],
+                    "expected_content_kind": "table",
+                    "expected_section_paths": ["経費 > 承認"],
                 }
             ],
-            "top_k": 2,
+            "mode": "keyword",
             "rerank_top_n": 3,
         },
     )
 
-    assert response.status_code == 422
-    body = response.json()
-    assert body["data"] is None
-    assert any("rerank_top_n は top_k 以下" in message for message in body["error_messages"])
+    assert response.status_code == 200
+    assert "mode" not in captured
+    assert captured["top_k"] == 20
 
 
 def test_evaluation_compare_api_rejects_duplicate_experiment_ids() -> None:
     response = client.post(
         "/api/evaluation/compare",
         json={
-            "cases": [
-                {
-                    "id": "case-1",
-                    "query": "承認条件",
-                    "relevant_document_ids": [],
-                    "expected_answer_keywords": [],
-                }
-            ],
-            "experiments": [
-                {"id": "same", "top_k": 5, "rerank_top_n": 3},
-                {"id": "same", "top_k": 10, "rerank_top_n": 5},
-            ],
+            "cases": [{"id": "case-1", "query": "承認条件"}],
+            "experiments": [{"id": "same", "top_k": 5}, {"id": "same", "top_k": 10}],
         },
     )
 
     assert response.status_code == 422
     body = response.json()
-    assert body["data"] is None
     assert any("experiment id が重複" in message for message in body["error_messages"])
 
 
-def test_evaluation_compare_api_rejects_invalid_rag_overrides() -> None:
+@pytest.mark.parametrize(
+    "experiment",
+    [
+        {"id": "removed-mode", "mode": "keyword"},
+        {"id": "removed-override", "rag_overrides": {"context_window_chars": 4096}},
+        {"id": "bad-strategy", "rag_overrides": {"query_strategy": "unknown"}},
+        {"id": "bad-neighbors", "rag_overrides": {"neighbor_child_count": 21}},
+    ],
+    ids=["removed-mode", "removed-override", "bad-strategy", "bad-neighbors"],
+)
+def test_evaluation_compare_api_rejects_invalid_experiments(experiment: dict[str, Any]) -> None:
+    """回答エンジンが使わない設定と、削除した上書きのキーは受け付けない。"""
     response = client.post(
         "/api/evaluation/compare",
-        json={
-            "cases": [
-                {
-                    "id": "case-1",
-                    "query": "承認条件",
-                    "relevant_document_ids": [],
-                    "expected_answer_keywords": [],
-                }
-            ],
-            "experiments": [
-                {
-                    "id": "bad-overrides",
-                    "top_k": 5,
-                    "rerank_top_n": 3,
-                    "rag_overrides": {
-                        "context_diversity_lambda": 1.2,
-                        "context_adaptive_neighbor_window": 6,
-                        "context_adaptive_min_overlap": -0.01,
-                        "context_group_max_chunks": 21,
-                        "context_dependency_max_chunks": 21,
-                        "context_neighbor_window": 6,
-                        "context_compression_max_sentences": 11,
-                        "context_compression_max_chars_per_chunk": 199,
-                    },
-                }
-            ],
-        },
+        json={"cases": [{"id": "case-1", "query": "承認条件"}], "experiments": [experiment]},
     )
 
     assert response.status_code == 422
-    body = response.json()
-    assert body["data"] is None
-    assert body["error_messages"]
+    assert response.json()["error_messages"]
 
 
 def test_evaluation_api_rejects_blank_case_query() -> None:
     response = client.post(
         "/api/evaluation/run",
-        json={
-            "cases": [
-                {
-                    "id": "blank-query",
-                    "query": "   ",
-                    "relevant_document_ids": [],
-                    "expected_answer_keywords": [],
-                }
-            ],
-            "top_k": 5,
-            "rerank_top_n": 3,
-        },
+        json={"cases": [{"id": "blank-query", "query": "   "}], "top_k": 5},
     )
 
     assert response.status_code == 422
-    body = response.json()
-    assert body["data"] is None
-    assert body["error_messages"]
+    assert response.json()["error_messages"]
 
 
 def test_evaluation_api_persists_redacted_artifact(monkeypatch: MonkeyPatch) -> None:
-    """評価 API は query 原文を除いた artifact summary を best-effort 保存する。"""
+    """評価 API は query・期待語・標準回答の原文を除いた artifact summary を保存する。"""
     artifacts: list[dict[str, Any]] = []
 
     class FakeEvaluationRunner:
         async def run(self, **kwargs: object) -> EvaluationMetrics:
             del kwargs
-            return EvaluationMetrics(
-                case_count=1,
-                evaluated_k=1,
-                precision_at_k=1.0,
-                recall_at_k=1.0,
-                mrr=1.0,
-                answer_keyword_hit_rate=1.0,
-                groundedness_pass_rate=1.0,
-                passed=True,
-            )
+            return EvaluationMetrics(case_count=1, passed=True)
 
     class FakeOracleClient:
         async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
             artifacts.append(artifact)
             return "eval-1"
-
-        async def get_knowledge_base(self, knowledge_base_id: str) -> None:
-            # この fake は KB 別の評価スイート上書きを使わない。
-            return None
 
     monkeypatch.setattr("app.api.routes.evaluation.EvaluationRunner", FakeEvaluationRunner)
     monkeypatch.setattr("app.api.routes.evaluation.OracleClient", FakeOracleClient)
@@ -1411,10 +1241,10 @@ def test_evaluation_api_persists_redacted_artifact(monkeypatch: MonkeyPatch) -> 
                     "query": "社外秘キーワード ABC-123 の承認条件",
                     "relevant_document_ids": ["doc-1"],
                     "expected_answer_keywords": ["ABC-123"],
+                    "standard_answer": "承認者は XYZ-999 部長です。",
                 }
             ],
             "top_k": 1,
-            "rerank_top_n": 1,
             "knowledge_base_ids": ["kb-1"],
         },
     )
@@ -1424,7 +1254,10 @@ def test_evaluation_api_persists_redacted_artifact(monkeypatch: MonkeyPatch) -> 
     artifact_text = str(artifacts[0])
     assert "社外秘キーワード" not in artifact_text
     assert "ABC-123" not in artifact_text
-    assert artifacts[0]["request_summary"]["cases"][0]["query_hash"]
+    assert "XYZ-999" not in artifact_text
+    case_summary = artifacts[0]["request_summary"]["cases"][0]
+    assert case_summary["query_hash"]
+    assert case_summary["standard_answer_hash"]
     assert artifacts[0]["knowledge_base_ids"] == ["kb-1"]
 
 
@@ -1437,16 +1270,7 @@ def test_evaluation_api_limits_whole_run_by_time_budget(monkeypatch: MonkeyPatch
     class CapturingEvaluationRunner:
         async def run(self, **kwargs: object) -> EvaluationMetrics:
             observed["run"] = kwargs.get("time_budget_seconds")
-            return EvaluationMetrics(
-                case_count=0,
-                evaluated_k=0,
-                precision_at_k=0.0,
-                recall_at_k=0.0,
-                mrr=0.0,
-                answer_keyword_hit_rate=0.0,
-                groundedness_pass_rate=0.0,
-                passed=True,
-            )
+            return EvaluationMetrics(case_count=0)
 
         async def compare(self, **kwargs: object) -> EvaluationCompareResponse:
             observed["compare"] = kwargs.get("time_budget_seconds")
@@ -1479,60 +1303,43 @@ def test_evaluation_api_limits_whole_run_by_time_budget(monkeypatch: MonkeyPatch
 
 
 @pytest.mark.usefixtures("oracle_db")
-def test_evaluation_api_runs_against_local_pipeline() -> None:
-    """API 経由でも golden set 評価メトリクスを返す。"""
+def test_evaluation_api_runs_against_local_pipeline(monkeypatch: MonkeyPatch) -> None:
+    """API 経由でも、回答エンジンの回答の記録から指標を返す(実 Oracle。LLM はスタブ)。"""
+    from app.rag.docrag_answer import DocragAnswerEngine, DocragAnswerOutcome
+
+    async def refuse(self: DocragAnswerEngine, request: SearchRequest) -> DocragAnswerOutcome:
+        del self, request
+        return DocragAnswerOutcome(
+            answer="資料からは確認できませんでした。",
+            citations=[],
+            diagnostics={"insufficient_reason": "該当する資料がありません。"},
+            context_text="",
+            evaluation_input=None,
+        )
+
+    monkeypatch.setattr(DocragAnswerEngine, "run", refuse)
     response = client.post(
         "/api/evaluation/run",
         json={
-            "cases": [
-                {
-                    "id": "empty-store",
-                    "query": "存在しない社内規程",
-                    "relevant_document_ids": [],
-                    "expected_answer_keywords": [],
-                }
-            ],
+            "cases": [{"id": "empty-store", "query": "存在しない社内規程"}],
             "top_k": 5,
-            "rerank_top_n": 3,
-            "mode": "hybrid",
             "knowledge_base_ids": ["kb-eval-empty-isolated"],
-            "thresholds": {
-                "precision_at_k": 1.0,
-                "recall_at_k": 1.0,
-                "answer_keyword_hit_rate": 1.0,
-            },
+            "suite": "strict",
         },
     )
 
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["case_count"] == 1
-    assert data["evaluated_k"] == 3
-    assert data["precision_at_k"] == 1.0
-    assert data["recall_at_k"] == 1.0
-    assert data["answer_keyword_hit_rate"] == 1.0
-    # 正解が no-results の否定 case を no-results で答えたので、groundedness も合格(#301)。
-    assert data["groundedness_pass_rate"] == 1.0
+    assert data["evaluation_suite"] == "strict"
+    # 答えるべきでない質問に答えなかったので合格(#301)。
+    assert data["refusal_accuracy"] == 1.0
+    assert data["context_recall"] is None
     assert data["passed"] is True
     assert data["threshold_failures"] == []
-    assert data["failure_reason_counts"] == {}
-    assert data["case_results"][0]["case_id"] == "empty-store"
-    assert data["case_results"][0]["retrieved_document_ids"] == []
-    assert data["case_results"][0]["answer_keyword_hit"] is True
-    assert data["case_results"][0]["groundedness_passed"] is True
-    assert data["case_results"][0]["failure_reasons"] == []
-
-
-def _minimal_eval_metrics() -> EvaluationMetrics:
-    return EvaluationMetrics(
-        case_count=1,
-        evaluated_k=1,
-        precision_at_k=1.0,
-        recall_at_k=1.0,
-        mrr=1.0,
-        answer_keyword_hit_rate=1.0,
-        groundedness_pass_rate=1.0,
-    )
+    result = data["case_results"][0]
+    assert result["abstained"] is True
+    assert result["failure_reasons"] == []
 
 
 def _eval_run_body() -> dict[str, Any]:
@@ -1551,68 +1358,53 @@ def _eval_run_body() -> dict[str, Any]:
 def test_run_evaluation_applies_suite_thresholds_when_request_omits(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """request に thresholds 未指定なら設定 suite の閾値を適用し suite を stamp する。"""
+    """request に thresholds 未指定なら設定の基準の閾値を適用し、基準を stamp する。"""
     captured: dict[str, Any] = {}
 
     async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
         captured["thresholds"] = kwargs.get("thresholds")
-        return _minimal_eval_metrics()
+        return EvaluationMetrics(case_count=1)
 
     monkeypatch.setattr(EvaluationRunner, "run", fake_run)
-    monkeypatch.setattr(get_settings(), "rag_evaluation_suite", "balanced")
+    monkeypatch.setattr(get_settings(), "rag_evaluation_suite", "strict")
 
     resp = client.post("/api/evaluation/run", json=_eval_run_body())
 
     assert resp.status_code == 200
-    assert resp.json()["data"]["evaluation_suite"] == "balanced"
-    thresholds = captured["thresholds"]
-    assert thresholds is not None
-    assert thresholds.groundedness_pass_rate == 0.9
+    assert resp.json()["data"]["evaluation_suite"] == "strict"
+    assert captured["thresholds"].refusal_accuracy == 1.0
 
 
 def test_run_evaluation_request_thresholds_take_precedence_over_suite(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """request の thresholds は suite より優先される。"""
+    """request の thresholds は基準より優先される(空の thresholds で判定を行わない)。"""
     captured: dict[str, Any] = {}
 
     async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
         captured["thresholds"] = kwargs.get("thresholds")
-        return _minimal_eval_metrics()
+        return EvaluationMetrics(case_count=1)
 
     monkeypatch.setattr(EvaluationRunner, "run", fake_run)
-    monkeypatch.setattr(get_settings(), "rag_evaluation_suite", "balanced")
 
-    body = {**_eval_run_body(), "thresholds": {"mrr": 0.42}, "suite": "strict_ci"}
+    body = {**_eval_run_body(), "thresholds": {"mrr": 0.42}, "suite": "strict"}
     resp = client.post("/api/evaluation/run", json=body)
 
     assert resp.status_code == 200
-    # suite は stamp されるが、閾値は request 明示が優先。
-    assert resp.json()["data"]["evaluation_suite"] == "strict_ci"
-    thresholds = captured["thresholds"]
-    assert thresholds is not None
-    assert thresholds.mrr == 0.42
-    assert thresholds.groundedness_pass_rate is None
+    assert resp.json()["data"]["evaluation_suite"] == "strict"
+    assert captured["thresholds"].mrr == 0.42
+    assert captured["thresholds"].refusal_accuracy is None
 
-
-def test_run_evaluation_request_only_keeps_no_preset_thresholds(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """既定 request_only は閾値なしで現行どおり(thresholds=None)。"""
-    captured: dict[str, Any] = {}
-
-    async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
-        captured["thresholds"] = kwargs.get("thresholds")
-        return _minimal_eval_metrics()
-
-    monkeypatch.setattr(EvaluationRunner, "run", fake_run)
-    monkeypatch.setattr(get_settings(), "rag_evaluation_suite", "request_only")
-
-    resp = client.post("/api/evaluation/run", json=_eval_run_body())
-
+    resp = client.post("/api/evaluation/run", json={**_eval_run_body(), "thresholds": {}})
     assert resp.status_code == 200
-    assert resp.json()["data"]["evaluation_suite"] == "request_only"
-    assert captured["thresholds"] is None
+    assert captured["thresholds"].model_dump(exclude_none=True) == {}
+
+
+def test_run_evaluation_rejects_removed_suite_name() -> None:
+    """削除した基準の名前は request では受け付けない(設定値は後継へ寄せる)。"""
+    resp = client.post("/api/evaluation/run", json={**_eval_run_body(), "suite": "strict_ci"})
+
+    assert resp.status_code == 422
 
 
 def test_run_evaluation_ignores_kb_legacy_evaluation_suite_when_request_omits(
@@ -1621,69 +1413,38 @@ def test_run_evaluation_ignores_kb_legacy_evaluation_suite_when_request_omits(
     """単一 KB 指定時も KB legacy evaluation_suite は使わずグローバル既定が効く。"""
     from app.api.routes import evaluation as evaluation_route
 
-    captured: dict[str, Any] = {}
-
     async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
-        captured["thresholds"] = kwargs.get("thresholds")
-        return _minimal_eval_metrics()
+        return EvaluationMetrics(case_count=1)
 
     class FakeOracleClient:
         async def get_knowledge_base(self, knowledge_base_id: str) -> None:
-            raise AssertionError("KB legacy query は評価 suite 解決で参照しない")
+            raise AssertionError("KB legacy query は評価の基準の解決で参照しない")
 
         async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
             return "eval-1"
 
     monkeypatch.setattr(EvaluationRunner, "run", fake_run)
     monkeypatch.setattr(evaluation_route, "OracleClient", FakeOracleClient)
-    monkeypatch.setattr(get_settings(), "rag_evaluation_suite", "balanced")
+    monkeypatch.setattr(get_settings(), "rag_evaluation_suite", "standard")
 
     body = {**_eval_run_body(), "knowledge_base_ids": ["kb-1"]}
     resp = client.post("/api/evaluation/run", json=body)
 
     assert resp.status_code == 200
-    # KB legacy strict_ci ではなく、グローバル balanced が選ばれる。
-    assert resp.json()["data"]["evaluation_suite"] == "balanced"
-    assert captured["thresholds"] is not None
-
-
-def test_run_evaluation_request_suite_beats_kb_suite(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """request の suite 明示は KB の evaluation_suite より優先される。"""
-    from app.api.routes import evaluation as evaluation_route
-
-    async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
-        return _minimal_eval_metrics()
-
-    class FakeOracleClient:
-        async def get_knowledge_base(self, knowledge_base_id: str) -> None:
-            raise AssertionError("request suite 指定時は KB を参照しない")
-
-        async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
-            return "eval-1"
-
-    monkeypatch.setattr(EvaluationRunner, "run", fake_run)
-    monkeypatch.setattr(evaluation_route, "OracleClient", FakeOracleClient)
-
-    body = {**_eval_run_body(), "knowledge_base_ids": ["kb-1"], "suite": "retrieval_focused"}
-    resp = client.post("/api/evaluation/run", json=body)
-
-    assert resp.status_code == 200
-    assert resp.json()["data"]["evaluation_suite"] == "retrieval_focused"
+    assert resp.json()["data"]["evaluation_suite"] == "standard"
 
 
 def test_compare_evaluation_stamps_resolved_suite_on_each_experiment(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """compare でも確定した評価スイートを各 experiment の metrics に残す(#277)。"""
+    """compare でも確定した評価の基準を各 experiment の metrics に残す(#277)。"""
     from app.api.routes import evaluation as evaluation_route
 
     captured: dict[str, Any] = {}
 
     async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
         captured["thresholds"] = kwargs.get("thresholds")
-        return _minimal_eval_metrics()
+        return EvaluationMetrics(case_count=1)
 
     class FakeOracleClient:
         async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
@@ -1691,7 +1452,7 @@ def test_compare_evaluation_stamps_resolved_suite_on_each_experiment(
 
     monkeypatch.setattr(EvaluationRunner, "run", fake_run)
     monkeypatch.setattr(evaluation_route, "OracleClient", FakeOracleClient)
-    monkeypatch.setattr(get_settings(), "rag_evaluation_suite", "balanced")
+    monkeypatch.setattr(get_settings(), "rag_evaluation_suite", "strict")
 
     body = {
         "cases": _eval_run_body()["cases"],
@@ -1701,56 +1462,17 @@ def test_compare_evaluation_stamps_resolved_suite_on_each_experiment(
 
     assert resp.status_code == 200
     results = resp.json()["data"]["results"]
-    assert [result["metrics"]["evaluation_suite"] for result in results] == [
-        "balanced",
-        "balanced",
-    ]
-    assert captured["thresholds"].groundedness_pass_rate == 0.9
+    assert [result["metrics"]["evaluation_suite"] for result in results] == ["strict", "strict"]
+    assert captured["thresholds"].claim_support_rate == 1.0
 
 
-class ExpandedContextPipeline:
-    """rerank 上位より多い document の citation を返す(隣接 context 展開の再現)。"""
+def test_threshold_skips_unmeasured_metrics() -> None:
+    """測れなかった指標(None)の閾値は判定しない。"""
+    from app.rag.evaluation import _threshold_failures
 
-    async def run(
-        self,
-        request: SearchRequest,
-        trace_id: str | None = None,
-        progress_callback: SearchStageProgressCallback | None = None,
-    ) -> SearchResponse:
-        return SearchResponse(
-            answer="A と B と C の承認条件です。",
-            citations=[
-                RetrievedChunk(
-                    document_id=document_id,
-                    chunk_id=f"{document_id}:0",
-                    text=f"{document_id} の承認条件です。",
-                    score=1.0,
-                )
-                for document_id in ("doc-a", "doc-b", "doc-c")
-            ],
-            trace_id=trace_id or "trace",
-            guardrail_warnings=[],
-            elapsed_ms=1.0,
-        )
-
-
-async def test_precision_at_k_counts_only_top_evaluated_documents() -> None:
-    """citation が evaluated_k より多くても precision@k は 1.0 を超えない(#277)。"""
-    runner = EvaluationRunner(pipeline=ExpandedContextPipeline())
-
-    metrics = await runner.run(
-        cases=[
-            EvaluationCase(
-                id="case-expanded",
-                query="承認条件",
-                relevant_document_ids=["doc-a", "doc-b", "doc-c"],
-            )
-        ],
-        top_k=1,
-        rerank_top_n=1,
+    failures = _threshold_failures(
+        EvaluationThresholds(answer_pass_rate=0.8, mrr=0.5),
+        {"answer_pass_rate": None, "mrr": 0.4},
     )
 
-    assert metrics.evaluated_k == 1
-    assert metrics.precision_at_k == 1.0
-    assert metrics.case_results[0].precision_at_k == 1.0
-    assert metrics.case_results[0].hit_document_ids == ["doc-a", "doc-b", "doc-c"]
+    assert [(failure.metric, failure.actual) for failure in failures] == [("mrr", 0.4)]

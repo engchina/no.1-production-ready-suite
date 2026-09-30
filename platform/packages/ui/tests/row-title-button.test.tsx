@@ -5,7 +5,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DataTable, RowTitleButton } from "../src";
-import { isClampedOverflow, ROW_TITLE_TOOLTIP_MAX_CHARS, rowTitleTooltipText } from "../src/components/data/row-title-button";
+import {
+  isClampedOverflow,
+  isPlainLeftClick,
+  ROW_TITLE_TOOLTIP_MAX_CHARS,
+  rowTitleTooltipText,
+} from "../src/components/data/row-title-button";
 import { TOOLTIP_SHOW_DELAY_MS } from "../src/components/ui/tooltip";
 
 // #421: 一覧の行の題名のボタン（RAG / Agent の EntityLayout、NL2SQL・system-settings の手書きから共有化）。
@@ -76,6 +81,50 @@ describe("RowTitleButton の見た目と属性", () => {
     expect(rowTitleTooltipText("𠮷𠮷𠮷", 2)).toBe("𠮷𠮷…");
   });
 
+  it("href を渡すとリンク（<a href>）になり、ボタンだけの属性は渡さない（#583）", () => {
+    const tag = openTag(
+      renderToStaticMarkup(
+        <RowTitleButton
+          title="経理ビュー"
+          href="/business-views?id=bv-1"
+          aria-label="経理ビュー を編集"
+          current
+          name="ignored"
+          onClick={() => undefined}
+        />
+      )
+    );
+    expect(tag).toMatch(/^<a /);
+    expect(tag).toContain('href="/business-views?id=bv-1"');
+    expect(tag).toContain('aria-label="経理ビュー を編集"');
+    expect(tag).toContain('aria-current="true"');
+    expect(tag).toContain("data-row-title-button");
+    expect(tag).toContain("pr-touch-target");
+    expect(tag).not.toContain("type=");
+    expect(tag).not.toContain("name=");
+    // リンクは :enabled を持たないので、ホバーの下線は group-enabled を付けない。
+    const html = renderToStaticMarkup(<RowTitleButton title="A" href="/a" onClick={() => undefined} />);
+    expect(html).toContain("group-hover/row-title:underline");
+    expect(html).not.toContain("group-enabled/row-title");
+  });
+
+  it("href があっても disabled ならリンクにしない（押せないボタンのまま）", () => {
+    const tag = openTag(renderToStaticMarkup(<RowTitleButton title="A" href="/a" disabled onClick={() => undefined} />));
+    expect(tag).toMatch(/^<button /);
+    expect(tag).not.toContain("href");
+  });
+
+  it("画面内で開くのは修飾キーの無い左クリックだけ（ほかは新しいタブ等のブラウザの既定）", () => {
+    const click = { button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false };
+    expect(isPlainLeftClick(click)).toBe(true);
+    expect(isPlainLeftClick({ ...click, ctrlKey: true })).toBe(false);
+    expect(isPlainLeftClick({ ...click, metaKey: true })).toBe(false);
+    expect(isPlainLeftClick({ ...click, shiftKey: true })).toBe(false);
+    expect(isPlainLeftClick({ ...click, altKey: true })).toBe(false);
+    expect(isPlainLeftClick({ ...click, button: 1 })).toBe(false);
+    expect(isPlainLeftClick({ ...click, defaultPrevented: true })).toBe(false);
+  });
+
   it("切り詰めの判定は scrollHeight と clientHeight の差（1px の丸めは無視する）", () => {
     expect(isClampedOverflow({ scrollHeight: 60, clientHeight: 40 })).toBe(true);
     expect(isClampedOverflow({ scrollHeight: 41, clientHeight: 40 })).toBe(false);
@@ -129,6 +178,44 @@ describe("RowTitleButton の操作", () => {
     // 行と題名のボタンの両方が「現在の項目」を持つ（行は背景と左バー、ボタンは Tab で届いたときの読み上げ）。
     expect(button.closest("tr")?.getAttribute("aria-current")).toBe("true");
     expect(button.getAttribute("aria-current")).toBe("true");
+  });
+
+  it("リンクの形: 普通のクリックは既定の遷移を止めて onClick、Ctrl / ⌘ + クリックは止めない（新しいタブ）", () => {
+    const onClick = vi.fn();
+    const onRowClick = vi.fn();
+    act(() =>
+      root.render(
+        <DataTable<{ id: string; name: string }>
+          columns={[
+            {
+              key: "name",
+              header: "名前",
+              rowHeader: true,
+              render: (row) => <RowTitleButton title={row.name} href={`/items?id=${row.id}`} onClick={() => onClick(row.id)} />,
+            },
+          ]}
+          rows={[{ id: "a", name: "A" }]}
+          getRowKey={(row) => row.id}
+          onRowClick={onRowClick}
+        />
+      )
+    );
+    const link = host.querySelector("a[data-row-title-button]") as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("/items?id=a");
+    const plain = new MouseEvent("click", { bubbles: true, cancelable: true });
+    act(() => {
+      link.dispatchEvent(plain);
+    });
+    expect(plain.defaultPrevented).toBe(true);
+    expect(onClick).toHaveBeenCalledTimes(1);
+    const withCtrl = new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true });
+    act(() => {
+      link.dispatchEvent(withCtrl);
+    });
+    expect(withCtrl.defaultPrevented).toBe(false);
+    expect(onClick).toHaveBeenCalledTimes(1);
+    // 行のクリック（onRowClick）はリンクのクリックを重ねて扱わない。
+    expect(onRowClick).not.toHaveBeenCalled();
   });
 
   it("ref を渡せる（詳細を閉じたときにフォーカスを戻す先）", () => {

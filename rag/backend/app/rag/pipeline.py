@@ -1783,7 +1783,8 @@ class RagPipeline:
             elapsed_ms=elapsed,
             diagnostics=diagnostics,
             answer_replaced=final_answer != outcome.answer,
-        )
+            # 品質評価が標準回答で比較するときに使う(応答には出さない。#591)。
+        ).with_evaluation_input(outcome.evaluation_input)
 
     async def _run_docrag_retrieval(
         self,

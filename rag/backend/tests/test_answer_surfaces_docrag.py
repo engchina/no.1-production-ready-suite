@@ -161,9 +161,11 @@ async def test_evaluation_runs_cases_with_docrag() -> None:
             )
         ],
         top_k=5,
-        rerank_top_n=3,
     )
 
     assert metrics.case_count == 1
+    assert metrics.error_count == 0
     assert metrics.answer_keyword_hit_rate == 1.0
-    assert metrics.recall_at_k == 1.0
+    assert metrics.context_recall == 1.0
+    # 回答の記録(引用・根拠・実行記録)から測る指標も求まる(#591)。
+    assert metrics.citation_traceability_coverage is not None

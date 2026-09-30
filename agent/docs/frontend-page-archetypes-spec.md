@@ -40,6 +40,7 @@
 
 - 開く・閉じるは履歴に積む。再読込・戻る / 進むで同じ対象が開く。新規作成に成功したら作成した対象へ、エディタで削除したら一覧へ、どちらも `replace` で移る（戻るで空の新規フォームや消えた対象へ戻さない）。
 - パンくずは共有 `Breadcrumbs`（一覧 › 対象名）を `PageHeader` の `breadcrumbs` に渡す。一覧へのリンクも §2 の離脱ガードの対象。
+- 保存・作成・導入・追加の失敗は、欄に結び付くもの（未入力・JSON の形式）は欄の直下、それ以外は `PageBody` の先頭の共有 `SaveErrorBanner` の 1 か所だけに出す（UX 契約 messaging.md §3.3.1。#585）。概要の節より上に置き、Toast には重ねない。testId は `agent-save-error` / `skill-save-error` / `mcp-server-save-error` / `plugin-install-error` / `marketplace-add-error`。
 - `PageHeader` の操作は「一覧に戻る」（secondary）と「保存 / 作成」（primary）。対象の操作は同じ `EntityAction[]` を一覧の行では `RowActionMenu`、エディタでは概要の `ObjectActionBar` に渡す。破壊的な操作（削除・アンインストール・実行先の削除）は `useConfirm` で確認する。
 - 一覧の行は、先頭セルの対象名のボタン（`RowTitleButton`）か行の操作以外の領域のクリックで開く。行の中のボタンは対象名と操作メニューの 2 つだけ。使える項目がない行のメニュー（既定の MCP サーバー）は disabled にする。
 - 業務 Agent の有効 / 無効は対象の操作にし、フォームの下書きに含めない（切り替えで一覧を取り直しても、編集中の内容を上書きしない）。新規作成だけは初期状態をフォームで選ぶ。
@@ -70,7 +71,7 @@
 | 外部 RAG / 外部 NL2SQL / ツール権限 / Command Policy / Runtime Safety | `useSettingsLeaveGuard` | 取得した設定との差分（prefix は集合、ツール権限の「既定」は未指定として比較） |
 | Control Plane バックアップ | `useSettingsLeaveGuard` | インポート JSON と理由。確認語（`REPLACE`）は対象外で、離脱で解除される |
 
-ブラウザの戻る / 進む（`popstate`）も、data router の `useBlocker` で確認する（#138）。A 型のエディタで未保存の編集があるときも、戻る / 進むで `?id=` が変わる前に破棄を確認する。
+ブラウザの戻る / 進む（`popstate`）も、data router の root（`main.tsx`）に 1 つだけ置いた共有の `UnsavedChangesBlocker` で確認する（#138 / #586）。A 型のエディタで未保存の編集があるときも、戻る / 進むで `?id=` が変わる前に破棄を確認する。
 
 ## 3. 作業状態の保持
 

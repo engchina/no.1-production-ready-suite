@@ -10,6 +10,7 @@ import {
   type SelectFieldOption,
   Skeleton,
   Switch,
+  TextareaField,
   TextField,
 } from "@engchina/production-ready-ui";
 import { History, Save } from "lucide-react";
@@ -118,23 +119,15 @@ function QueryHistoryForm({ saved }: { saved: QueryHistorySettingsData }) {
           }
         />
       </div>
-      <div>
-        <label htmlFor="query-history-blocklist" className="text-sm font-medium text-fg">
-          {t("settings.queryHistory.blocklist")}
-        </label>
-        <textarea
-          id="query-history-blocklist"
-          value={blocklistText}
-          rows={3}
-          disabled={save.isPending}
-          aria-describedby="query-history-blocklist-hint"
-          onChange={(event) => setBlocklistText(event.target.value)}
-          className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
-        />
-        <p id="query-history-blocklist-hint" className="mt-1 text-xs text-fg-muted">
-          {t("settings.queryHistory.blocklistHint")}
-        </p>
-      </div>
+      <TextareaField
+        id="query-history-blocklist"
+        label={t("settings.queryHistory.blocklist")}
+        helper={t("settings.queryHistory.blocklistHint")}
+        value={blocklistText}
+        rows={3}
+        disabled={save.isPending}
+        onChange={(event) => setBlocklistText(event.target.value)}
+      />
       <div className="flex flex-wrap items-center gap-3">
         <Button
           type="button"

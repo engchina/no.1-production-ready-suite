@@ -13,7 +13,7 @@ import {
 
 import { cn } from "../../lib/utils";
 import { Button, type ButtonVariantToneProps } from "../ui/button";
-import { FloatingActionMenu } from "../ui/floating-menu";
+import { contextualMenuLabel, FloatingActionMenu } from "../ui/floating-menu";
 import { measureClass } from "./PageBody";
 
 export interface PageHeaderAction {
@@ -72,15 +72,19 @@ export function orderActions(actions: PageHeaderAction[]): PageHeaderAction[] {
 }
 
 /**
- * 狭い画面（lg 未満）で見せる 1 つ。primary → secondary → utility の優先で選び、danger は常にメニュー側に置く。
+ * 狭い画面（lg 未満）で見せる 1 つ。primary → secondary → utility の優先で選び、danger はメニュー側に置く。
  * メニューは上から重要な順（secondary → utility → danger）。破壊的な操作を末尾に置き、誤タップを避ける。
+ * メニューに入るのが 1 つだけなら畳まず、広い画面と同じ並びで全部出す（#582。「一覧へ戻る」だけのメニューを
+ * 開かせない。ボタン 2 つなら 375px でも 1 行に収まり、メニューのボタンと同じ幅しか使わない）。
  */
 export function splitCompactActions(actions: PageHeaderAction[]) {
   // 同じ kind の中は渡した順を保つ（reverse すると同じ kind の順も逆になるため sort で並べる）。
   const byImportance = [...orderActions(actions)].sort((a, b) => ORDER[b.kind] - ORDER[a.kind]);
   if (byImportance.length <= 1) return { visible: byImportance, overflow: [] as PageHeaderAction[] };
   const visible = byImportance.find((action) => action.kind !== "danger");
-  return { visible: visible ? [visible] : [], overflow: byImportance.filter((action) => action !== visible) };
+  const overflow = byImportance.filter((action) => action !== visible);
+  if (visible && overflow.length === 1) return { visible: orderActions(actions), overflow: [] as PageHeaderAction[] };
+  return { visible: visible ? [visible] : [], overflow };
 }
 
 /** メニュー内のキー操作（WAI-ARIA Menu Button）。移動先の index、対象外のキーは null。 */
@@ -136,7 +140,9 @@ function ActionButton({ action, menuItem = false, onInvoked }: { action: PageHea
  * メニューは FloatingActionMenu（body へ Portal・fixed）で画面内に置く。トリガーが左寄り（375px で操作が
  * 折り返したとき）なら左端、右寄りなら右端にそろえ、どちらも入らなければ画面の内側にずらす（#363）。
  */
-function OverflowMenu({ actions, label }: { actions: PageHeaderAction[]; label: string }) {
+function OverflowMenu({ actions, label, context }: { actions: PageHeaderAction[]; label: string; context: string }) {
+  // 読み上げ名に対象（アクション群の名前）を足し、カードの「その他の操作」と区別する（#582）。
+  const accessibleName = contextualMenuLabel(label, context);
   const [open, setOpen] = useState(false);
   const menuId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -188,6 +194,7 @@ function OverflowMenu({ actions, label }: { actions: PageHeaderAction[]; label: 
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
+        aria-label={accessibleName}
         data-testid="page-actions-more"
         onClick={() => setOpen((current) => !current)}
       >
@@ -198,7 +205,7 @@ function OverflowMenu({ actions, label }: { actions: PageHeaderAction[]; label: 
           id={menuId}
           open={open}
           align="end"
-          ariaLabel={label}
+          ariaLabel={accessibleName}
           triggerRef={triggerRef}
           menuRef={menuRef}
           onKeyDown={onKeyDown}
@@ -255,7 +262,10 @@ export function PageHeader({
   actionsLabel?: string;
   /** アクション群の data-testid。 */
   actionsTestId?: string;
-  /** 狭い画面（lg 未満）で primary 以外をまとめるメニューのラベル（翻訳済み）。 */
+  /**
+   * 狭い画面（lg 未満）で primary 以外をまとめるメニューのラベル（翻訳済み）。読み上げ名は
+   * 「<moreActionsLabel>（<actionsLabel>）」になる（#582。カードの「その他の操作」と区別する）。
+   */
   moreActionsLabel?: string;
   /** `<Tabs>` を渡すとヘッダー下端に吸い付く（ビュー切替の唯一の置き場所）。 */
   tabs?: ReactNode;
@@ -272,7 +282,7 @@ export function PageHeader({
     actionNodes =
       list.length > 0 ? (
         <>
-          {overflow.length > 0 ? <OverflowMenu actions={overflow} label={moreActionsLabel} /> : null}
+          {overflow.length > 0 ? <OverflowMenu actions={overflow} label={moreActionsLabel} context={actionsLabel} /> : null}
           {visible.map((action, index) => (
             <Fragment key={action.id}>
               {/* グループの境界に軽い区切りと余白（buttons.md §5）。gap-2 と合わせて左右 1rem 空く。 */}

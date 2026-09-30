@@ -1593,31 +1593,32 @@ def test_update_vector_index_settings_rejects_unknown_profile() -> None:
 
 def test_evaluation_settings_reports_runtime_suite(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_evaluation_suite", "balanced")
+    monkeypatch.setattr(settings, "rag_evaluation_suite", "strict")
 
     resp = client.get("/api/settings/evaluation-suite")
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["suite"] == "balanced"
-    assert body["thresholds"]["groundedness_pass_rate"] == 0.9
+    assert body["suite"] == "strict"
+    assert body["thresholds"]["claim_support_rate"] == 1.0
     names = [item["name"] for item in body["suites"]]
-    assert names[0] == "request_only"
+    assert names == ["standard", "strict"]
     selected = [item["name"] for item in body["suites"] if item["selected"]]
-    assert selected == ["balanced"]
+    assert selected == ["strict"]
 
 
-def test_evaluation_settings_request_only_has_no_thresholds(
+def test_evaluation_settings_every_suite_has_thresholds(
     monkeypatch: MonkeyPatch,
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_evaluation_suite", "request_only")
+    monkeypatch.setattr(settings, "rag_evaluation_suite", "standard")
 
     resp = client.get("/api/settings/evaluation-suite")
 
     body = resp.json()["data"]
-    assert body["suite"] == "request_only"
-    assert body["thresholds"] == {}
+    assert body["suite"] == "standard"
+    assert body["thresholds"]["context_recall"] == 0.8
+    assert all(len(item["thresholds"]) == 9 for item in body["suites"])
 
 
 def test_update_evaluation_settings_persists_env_and_mutates_runtime(
@@ -1625,19 +1626,22 @@ def test_update_evaluation_settings_persists_env_and_mutates_runtime(
     tmp_path: Path,
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_evaluation_suite", "request_only")
+    monkeypatch.setattr(settings, "rag_evaluation_suite", "standard")
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
-    resp = client.patch("/api/settings/evaluation-suite", json={"suite": "strict_ci"})
+    resp = client.patch("/api/settings/evaluation-suite", json={"suite": "strict"})
 
     assert resp.status_code == 200
-    assert resp.json()["data"]["suite"] == "strict_ci"
-    assert settings.rag_evaluation_suite == "strict_ci"
-    assert "RAG_EVALUATION_SUITE=strict_ci" in env_file.read_text(encoding="utf-8")
+    assert resp.json()["data"]["suite"] == "strict"
+    assert settings.rag_evaluation_suite == "strict"
+    assert "RAG_EVALUATION_SUITE=strict" in env_file.read_text(encoding="utf-8")
 
 
 def test_update_evaluation_settings_rejects_unknown_suite() -> None:
     resp = client.patch("/api/settings/evaluation-suite", json={"suite": "autorag_tuner"})
+    assert resp.status_code == 422
+    # 削除した基準の名前は API では受け付けない(.env の旧値は起動時に後継へ寄せる)。
+    resp = client.patch("/api/settings/evaluation-suite", json={"suite": "strict_ci"})
     assert resp.status_code == 422
 
 

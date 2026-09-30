@@ -22,6 +22,10 @@
 - 3製品とも data router（`createBrowserRouter` + `RouterProvider`。既存の `<Routes>` は 1 つの splat route の中にそのまま置く）で動かす（#138）。共有の `useUnsavedChangesGuard` は次の 3 経路を守る。
   - 内部リンク：click を capture 段階で受けて確認する。修飾キー付きのクリック、`target="_blank"`、download、外部の origin、同じ URL は妨げない。
   - 再読込・タブを閉じる：`beforeunload`。
-  - ブラウザの back / forward：`useBlocker` で `historyAction === "POP"` の移動だけを止めて確認し、キャンセルなら URL を元に戻す。
+  - ブラウザの back / forward：`historyAction === "POP"` の移動だけを止めて確認し、キャンセルなら URL を元に戻す。
+- **back / forward の blocker はアプリで 1 つだけにする（#586）。** React Router は blocker を 1 つしか扱えず、複数あると「A router only supports one blocker at a time」を出し、**最後に登録した blocker だけ**で判定する（先に登録したフォームが未保存でも、戻るで確認が出ない）。そのため:
+  - 各製品は data router の root（`createBrowserRouter` の route の element）に共有の `UnsavedChangesBlocker` を **1 回だけ**置く。画面・部品で `useBlocker` を直接呼ばない。
+  - `useUnsavedChangesGuard` は `useBlocker` を呼ばず、dirty の間だけ自分の確認関数を共有の一覧に登録する。blocker はその一覧に 1 つでも未保存があれば止める。1 画面に未保存のフォームが複数あっても、確認は最初に登録したものの 1 回だけにする。
+  - `navigate()` で画面を離れる操作（ログアウトなど）は、移動の前に同じ一覧を使う `confirmUnsavedChanges()`（製品の `confirmPendingLeave`）を通す。製品で別の一覧を持たない。
 - 画面内のボタンが自分で確認してから `navigate` する流れ（PUSH / REPLACE）は hook で止めない（二重に確認しないため）。そのようなボタンは、移動の前に必ず同じ確認を通す。
 - 共有パッケージの画面（`@engchina/production-ready-system-settings` など）は、離脱の確認の文言を props（`draftGuardMessages` など）で受け取る。

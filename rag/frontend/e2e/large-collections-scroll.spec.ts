@@ -112,12 +112,8 @@ test(`評価のケース結果は多くても高さ固定・ヘッダー固定�
 
   await page.getByRole("button", { name: "評価実行" }).click();
 
-  await expect(page.getByText("数式を含む文書")).toBeVisible();
-  await expect(page.getByText("低信頼度文書")).toBeVisible();
-  await expect(page.getByText("Fallback 文書")).toBeVisible();
-  await expect(page.getByText("失敗 segment 文書")).toBeVisible();
-  await expect(page.getByText("平均 page coverage")).toBeVisible();
-  await expect(page.getByText("87.5%")).toBeVisible();
+  // 評価結果は観点ごとの指標とケースの表(取込品質の集計は #591 で評価の結果から外した)。
+  await expect(page.getByTestId("evaluation-metric-context_recall")).toContainText("100%");
 
   const table = page.getByRole("table").first();
   await expect(table).toBeVisible();
@@ -175,24 +171,16 @@ function evaluationMetrics(caseCount: number) {
     retrieved_document_ids: ["doc-1"],
     relevant_document_ids: ["doc-1"],
     hit_document_ids: ["doc-1"],
-    precision_at_k: 1,
-    recall_at_k: 1,
+    context_recall: 1,
     reciprocal_rank: 1,
-    answer_keyword_hit: true,
-    groundedness_passed: true,
-    groundedness_score: 1,
+    faithfulness: 1,
     grounding_overlap_count: 2,
     grounding_answer_feature_count: 2,
-    faithfulness: 1,
-    context_precision: 1,
-    context_recall: 1,
-    response_relevancy: 1,
-    noise_sensitivity: 1,
     citation_traceability_coverage: 1,
-    bbox_citation_coverage: 1,
-    element_lineage_coverage: 1,
-    content_kind_hit_rate: 1,
-    section_coverage: 1,
+    answer_keyword_hit: true,
+    abstained: false,
+    refusal_correct: true,
+    answer_evaluation: null,
     guardrail_warnings: [],
     failure_reasons: [],
     diagnostics: {},
@@ -203,40 +191,19 @@ function evaluationMetrics(caseCount: number) {
   return {
     case_count: caseCount,
     error_count: 0,
-    evaluated_k: 10,
-    precision_at_k: 1,
-    recall_at_k: 1,
-    mrr: 1,
-    answer_keyword_hit_rate: 1,
-    groundedness_pass_rate: 1,
-    faithfulness: 1,
-    context_precision: 1,
+    evaluation_suite: "standard",
     context_recall: 1,
-    response_relevancy: 1,
-    noise_sensitivity: 1,
+    mrr: 1,
+    faithfulness: 1,
     citation_traceability_coverage: 1,
-    bbox_citation_coverage: 1,
-    element_lineage_coverage: 1,
-    content_kind_hit_rate: 1,
-    section_coverage: 1,
+    claim_support_rate: null,
+    answer_keyword_hit_rate: 1,
+    refusal_accuracy: 1,
+    requirement_coverage: null,
+    answer_pass_rate: null,
     passed: true,
     threshold_failures: [],
     failure_reason_counts: {},
-    ingestion_quality: {
-      document_count: caseCount,
-      table_document_count: 0,
-      figure_document_count: 0,
-      formula_document_count: 2,
-      low_confidence_document_count: 3,
-      fallback_document_count: 1,
-      failed_segment_document_count: 1,
-      segment_artifact_cache_miss_document_count: 0,
-      long_document_count: 0,
-      average_page_coverage: 0.875,
-      risk_counts: { low: caseCount, medium: 0, high: 0 },
-      warning_counts: {},
-      parser_profile_counts: {},
-    },
     case_results: caseResults,
   };
 }

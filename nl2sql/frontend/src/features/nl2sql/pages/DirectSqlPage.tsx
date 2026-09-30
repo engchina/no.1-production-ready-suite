@@ -8,8 +8,7 @@ import {
   Banner,
   PageBody,
   ActionResultRegion,
-  FieldError,
-  FieldLabel,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -144,33 +143,23 @@ function ExecutableDirectSqlPage() {
       <PageHeader wide title={t("nav.directSql")} subtitle={t("nl2sql.sqlRunner.description")} />
       <PageBody wide className="grid gap-4" data-testid="nl2sql-direct-sql">
         <section className="grid gap-4 rounded-md border border-border bg-surface p-4">
-          <div className="grid gap-2">
-            <FieldLabel
-              htmlFor="direct-sql-input"
-              label={t("nl2sql.sqlRunner.label")}
-              required
-            />
-            <textarea
-              id="direct-sql-input"
-              value={sqlText}
-              onChange={(event) => {
-                setSqlFileResetSignal((current) => current + 1);
-                setSqlText(event.currentTarget.value);
-                setSqlError("");
-              }}
-              disabled={loading}
-              rows={12}
-              required
-              aria-required="true"
-              aria-invalid={sqlError ? "true" : undefined}
-              aria-describedby={sqlError ? "direct-sql-input-error" : undefined}
-              className={`min-h-64 rounded-md border bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring ${
-                sqlError ? "border-danger-fg" : "border-border-control"
-              }`}
-              placeholder={t("nl2sql.sqlRunner.placeholder")}
-            />
-            <FieldError id="direct-sql-input-error" message={sqlError} />
-          </div>
+          <TextareaField
+            id="direct-sql-input"
+            label={t("nl2sql.sqlRunner.label")}
+            required
+            error={sqlError || undefined}
+            value={sqlText}
+            onChange={(event) => {
+              setSqlFileResetSignal((current) => current + 1);
+              setSqlText(event.currentTarget.value);
+              setSqlError("");
+            }}
+            disabled={loading}
+            rows={12}
+            monospace
+            textareaClassName="min-h-64"
+            placeholder={t("nl2sql.sqlRunner.placeholder")}
+          />
           <SqlFileInput
             resetSignal={sqlFileResetSignal}
             disabled={loading}

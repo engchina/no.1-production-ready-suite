@@ -8,12 +8,11 @@ import {
   CardHeader,
   CardTitle,
   Button,
-  FieldError,
-  FieldLabel,
   FormStatus,
   RowActionMenu,
   type EntityAction,
   Switch,
+  TextareaField,
   TextField,
   TimedLoadingState,
   ListSkeleton,
@@ -182,33 +181,20 @@ export function PromptVersionsClient() {
             error={errors.name ?? undefined}
             required
           />
-          <div className="space-y-1.5">
-            <FieldLabel
-              htmlFor="prompt-version-system-prompt"
-              label={t("settings.prompts.form.systemPrompt")}
-              required
-              className="block"
-            />
-            <textarea
-              id="prompt-version-system-prompt"
-              aria-required="true"
-              aria-invalid={errors.systemPrompt ? true : undefined}
-              aria-describedby={errors.systemPrompt ? "prompt-version-system-prompt-error" : undefined}
-              value={systemPrompt}
-              maxLength={PROMPT_MAX}
-              onChange={(event) => {
-                setSystemPrompt(event.target.value);
-                setErrors((current) => ({ ...current, systemPrompt: null }));
-              }}
-              placeholder={t("settings.prompts.form.systemPromptPlaceholder")}
-              rows={6}
-              className={cn(
-                "w-full resize-y rounded-md border bg-surface p-3 text-sm leading-relaxed text-fg transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring",
-                errors.systemPrompt ? "border-danger-fg" : "border-border-control",
-              )}
-            />
-            <FieldError id="prompt-version-system-prompt-error" message={errors.systemPrompt} />
-          </div>
+          <TextareaField
+            id="prompt-version-system-prompt"
+            label={t("settings.prompts.form.systemPrompt")}
+            required
+            error={errors.systemPrompt ?? undefined}
+            value={systemPrompt}
+            maxLength={PROMPT_MAX}
+            onChange={(event) => {
+              setSystemPrompt(event.target.value);
+              setErrors((current) => ({ ...current, systemPrompt: null }));
+            }}
+            placeholder={t("settings.prompts.form.systemPromptPlaceholder")}
+            rows={6}
+          />
           <TextField
             id="prompt-version-note"
             label={t("settings.prompts.form.note")}

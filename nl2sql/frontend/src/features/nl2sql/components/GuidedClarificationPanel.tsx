@@ -9,6 +9,7 @@ import {
   FieldError,
   ProcessingIndicator,
   FieldLegend,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 
 import { isAbortError } from "@/lib/api";
@@ -510,20 +511,19 @@ export function GuidedClarificationPanel({
           ) : null}
 
           {currentQuestion.allow_free_text ? (
-            <label className="grid gap-1 text-sm font-medium text-fg">
-              <span>{t("nl2sql.clarification.other")}</span>
-              <textarea
-                value={freeText}
-                onChange={(event) => {
-                  setFreeText(event.currentTarget.value);
-                  if (event.currentTarget.value) setSelectedOptionIds([]);
-                }}
-                disabled={Boolean(busyAction)}
-                rows={2}
-                className="min-h-20 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring sm:text-sm"
-                placeholder={t("nl2sql.clarification.otherPlaceholder")}
-              />
-            </label>
+            <TextareaField
+              id="nl2sql-clarification-free-text"
+              label={t("nl2sql.clarification.other")}
+              value={freeText}
+              onChange={(event) => {
+                setFreeText(event.currentTarget.value);
+                if (event.currentTarget.value) setSelectedOptionIds([]);
+              }}
+              disabled={Boolean(busyAction)}
+              rows={2}
+              textareaClassName="min-h-20"
+              placeholder={t("nl2sql.clarification.otherPlaceholder")}
+            />
           ) : null}
           {!answerReady && error ? (
             <FieldError
@@ -602,16 +602,15 @@ export function GuidedClarificationPanel({
                   </div>
                 ))}
                 {question.allow_free_text ? (
-                  <label className="grid gap-1 text-sm text-fg">
-                    <span>{t("nl2sql.clarification.other")}</span>
-                    <textarea
-                      rows={2}
-                      value={value.freeText}
-                      disabled={Boolean(busyAction)}
-                      onChange={(event) => updateManualAnswer(question, { freeText: event.currentTarget.value })}
-                      className="min-h-20 rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 focus:border-focus-ring sm:text-sm"
-                    />
-                  </label>
+                  <TextareaField
+                    id={`nl2sql-clarification-manual-free-text-${question.id}`}
+                    label={t("nl2sql.clarification.other")}
+                    rows={2}
+                    value={value.freeText}
+                    disabled={Boolean(busyAction)}
+                    onChange={(event) => updateManualAnswer(question, { freeText: event.currentTarget.value })}
+                    textareaClassName="min-h-20"
+                  />
                 ) : null}
               </fieldset>
             );

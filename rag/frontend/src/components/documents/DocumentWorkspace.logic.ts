@@ -19,6 +19,25 @@ import { t, type I18nKey } from "@/lib/i18n";
 
 export type ChunkPreviewForm = Required<DocumentChunkPreviewRequest>;
 
+/**
+ * URL の `?recipe=` で選んだ処理レシピ。無い・見つからないときは先頭のレシピ。
+ * 文書詳細の見出し（PageHeader の状態）と本文（DocumentWorkspace）で同じレシピを指す（#581）。
+ */
+export function selectDocumentRecipe(
+  recipes: readonly DocumentRecipeView[] | undefined,
+  requestedRecipeId: string | null
+): DocumentRecipeView | null {
+  return recipes?.find((recipe) => recipe.recipe_id === requestedRecipeId) ?? recipes?.[0] ?? null;
+}
+
+/** 文書の表示上の状態（選んだレシピの状態、無ければ文書の状態）。 */
+export function documentDisplayStatus(
+  recipe: DocumentRecipeView | null,
+  documentStatus: FileStatus | undefined
+): FileStatus {
+  return recipe?.status ?? documentStatus ?? "UPLOADED";
+}
+
 export function chunkPreviewForm(recipe: DocumentRecipeView | null): ChunkPreviewForm {
   const config = recipe?.effective_processing_config;
   return {

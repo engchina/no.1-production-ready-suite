@@ -13,6 +13,7 @@ import {
   PageBody,
   ContentActionBar,
   ProcessingIndicator,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -232,24 +233,24 @@ function ViewJoinWherePanel({
             </p>
           ))}
           <div className="grid gap-3 lg:grid-cols-2">
-            <label className="grid gap-1 text-sm font-medium text-fg">
-              <span>{t("viewMgmt.joinWhere.join")}</span>
-              <textarea
-                readOnly
-                value={result.join_text}
-                rows={5}
-                className="min-h-32 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg outline-none"
-              />
-            </label>
-            <label className="grid gap-1 text-sm font-medium text-fg">
-              <span>{t("viewMgmt.joinWhere.where")}</span>
-              <textarea
-                readOnly
-                value={result.where_text}
-                rows={5}
-                className="min-h-32 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg outline-none"
-              />
-            </label>
+            <TextareaField
+              id="view-join-where-join-result"
+              label={t("viewMgmt.joinWhere.join")}
+              readOnly
+              value={result.join_text}
+              rows={5}
+              monospace
+              textareaClassName="min-h-32"
+            />
+            <TextareaField
+              id="view-join-where-where-result"
+              label={t("viewMgmt.joinWhere.where")}
+              readOnly
+              value={result.where_text}
+              rows={5}
+              monospace
+              textareaClassName="min-h-32"
+            />
           </div>
           {result.structure_markdown ? (
             <Disclosure summary={t("viewMgmt.joinWhere.structureResult")}>

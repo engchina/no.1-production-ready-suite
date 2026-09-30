@@ -6,10 +6,10 @@ import {
   CardHeader,
   CardTitle,
   Disclosure,
-  FieldLabel,
   FormStatus,
   Skeleton,
   StatusBadge,
+  TextareaField,
   useConfirm,
 } from "@engchina/production-ready-ui";
 import { RotateCcw, Save } from "lucide-react";
@@ -89,7 +89,6 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
   const dirty = content !== prompt.content;
   useLeaveGuard(dirty);
   const inputId = `docrag-prompt-${prompt.key}`;
-  const helperId = `${inputId}-helper`;
 
   async function reset() {
     const confirmed = await confirm({
@@ -113,41 +112,22 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
 
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
-        {/* 空のままでは保存できない（既定へ戻すのは「既定に戻す」）ので必須（#531）。 */}
-        <FieldLabel
-          htmlFor={inputId}
-          label={t(`settings.docragPrompts.${prompt.key}.field`)}
-          required
-        />
-        <StatusBadge
-          variant={prompt.customized ? "info" : "neutral"}
-          label={
-            prompt.customized
-              ? t("settings.docragPrompts.customized", {
-                  value: prompt.updated_at ? formatDateTime(prompt.updated_at) : "—",
-                })
-              : t("settings.docragPrompts.default")
-          }
-        />
-      </div>
-      <textarea
+      {/* 空のままでは保存できない（既定へ戻すのは「既定に戻す」）ので必須（#531）。 */}
+      <TextareaField
         id={inputId}
+        label={t(`settings.docragPrompts.${prompt.key}.field`)}
+        required
+        helper={t("settings.docragPrompts.placeholders", {
+          names: prompt.required_placeholders.map((name) => `{{${name}}}`).join("、"),
+        })}
         value={content}
         maxLength={PROMPT_MAX}
         rows={16}
         spellCheck={false}
-        aria-required="true"
+        monospace
         disabled={save.isPending}
-        aria-describedby={helperId}
         onChange={(event) => setContent(event.target.value)}
-        className="w-full resize-y rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-relaxed text-fg focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
       />
-      <p id={helperId} className="text-xs leading-relaxed text-fg-muted">
-        {t("settings.docragPrompts.placeholders", {
-          names: prompt.required_placeholders.map((name) => `{{${name}}}`).join("、"),
-        })}
-      </p>
       <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"
@@ -170,6 +150,17 @@ function DocragPromptEditor({ prompt }: { prompt: DocragPromptView }) {
         >
           {t("settings.docragPrompts.reset")}
         </Button>
+        {/* 既定値か変更済みか。ラベルは文字列だけを持つため、「既定に戻す」の隣に置く（#584）。 */}
+        <StatusBadge
+          variant={prompt.customized ? "info" : "neutral"}
+          label={
+            prompt.customized
+              ? t("settings.docragPrompts.customized", {
+                  value: prompt.updated_at ? formatDateTime(prompt.updated_at) : "—",
+                })
+              : t("settings.docragPrompts.default")
+          }
+        />
         {save.isSuccess && !dirty ? (
           <FormStatus
             tone="success"

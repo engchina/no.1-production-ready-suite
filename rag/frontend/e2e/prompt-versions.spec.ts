@@ -276,8 +276,8 @@ test("回答プロンプト版の未入力は欄の下に出す", async ({ page 
   await create.click();
 
   await expect(page.locator("#prompt-version-name")).toHaveAccessibleDescription(/版名を入力してください。/);
-  await expect(page.locator("#prompt-version-system-prompt-error")).toHaveText(
-    "system prompt を入力してください。"
+  await expect(page.locator("#prompt-version-system-prompt")).toHaveAccessibleDescription(
+    /system prompt を入力してください。/
   );
   await expect(page.locator("#prompt-version-system-prompt")).toHaveAttribute("aria-invalid", "true");
   await expect(page.locator("#prompt-version-name")).toBeFocused();

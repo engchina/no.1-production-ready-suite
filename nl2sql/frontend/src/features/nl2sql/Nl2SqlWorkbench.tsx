@@ -11,6 +11,7 @@ import {
   TimedLoadingState,
   DisclosureChevron,
   FieldLabel,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 import {
   useCallback,
@@ -1237,13 +1238,10 @@ function ExecutableNl2SqlWorkbench() {
                         ))}
                       </div>
                       <div className="grid gap-2">
-                        <FieldLabel
-                          htmlFor="nl2sql-question-input"
+                        <TextareaField
+                          id="nl2sql-question-input"
                           label={t("nl2sql.question.label")}
                           required
-                        />
-                        <textarea
-                          id="nl2sql-question-input"
                           ref={questionTextareaRef}
                           value={question}
                           onChange={(event) => {
@@ -1253,9 +1251,8 @@ function ExecutableNl2SqlWorkbench() {
                           }}
                           disabled={active}
                           rows={5}
-                          required
-                          aria-required="true"
-                          className="min-h-36 max-h-[16.625rem] resize-none rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring"
+                          resize="none"
+                          textareaClassName="min-h-36 max-h-[16.625rem]"
                           placeholder={t("nl2sql.question.placeholder")}
                         />
                         {guidedClarificationOpen ? (
@@ -1330,17 +1327,16 @@ function ExecutableNl2SqlWorkbench() {
                                 <p className="text-xs leading-5 text-fg-muted">
                                   {t("nl2sql.selectAiOverrides.hint")}
                                 </p>
-                                <label className="grid gap-1 text-sm font-medium text-fg">
-                                  <span>{t("nl2sql.selectAiOverrides.additionalInstructions")}</span>
-                                  <textarea
-                                    value={selectAiInstructionsOverride}
-                                    onChange={(event) => setSelectAiInstructionsOverride(event.currentTarget.value)}
-                                    disabled={active}
-                                    rows={3}
-                                    className="min-h-24 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring"
-                                    placeholder={t("nl2sql.selectAiOverrides.additionalInstructionsPlaceholder")}
-                                  />
-                                </label>
+                                <TextareaField
+                                  id="nl2sql-select-ai-instructions-override"
+                                  label={t("nl2sql.selectAiOverrides.additionalInstructions")}
+                                  value={selectAiInstructionsOverride}
+                                  onChange={(event) => setSelectAiInstructionsOverride(event.currentTarget.value)}
+                                  disabled={active}
+                                  rows={3}
+                                  textareaClassName="min-h-24"
+                                  placeholder={t("nl2sql.selectAiOverrides.additionalInstructionsPlaceholder")}
+                                />
                                 <div className="overflow-hidden rounded-md border border-border bg-surface">
                                   <Button className="w-full justify-between"
                                     type="button"
@@ -1365,21 +1361,22 @@ function ExecutableNl2SqlWorkbench() {
                                       size={16}
                                     />
                                   </Button>
-                                  <label
+                                  <div
                                     id="select-ai-role-override"
                                     hidden={!selectAiRolePanelOpen}
-                                    className="grid gap-1 border-t border-border p-3 text-sm font-medium text-fg"
+                                    className="border-t border-border p-3"
                                   >
-                                    <span>{t("nl2sql.selectAiOverrides.role")}</span>
-                                    <textarea
+                                    <TextareaField
+                                      id="nl2sql-select-ai-role-override-input"
+                                      label={t("nl2sql.selectAiOverrides.role")}
                                       value={selectAiRoleOverride}
                                       onChange={(event) => setSelectAiRoleOverride(event.currentTarget.value)}
                                       disabled={active}
                                       rows={2}
-                                      className="min-h-20 rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 focus:border-focus-ring"
+                                      textareaClassName="min-h-20"
                                       placeholder={t("nl2sql.selectAiOverrides.rolePlaceholder")}
                                     />
-                                  </label>
+                                  </div>
                                 </div>
                               </div>
                           </section>

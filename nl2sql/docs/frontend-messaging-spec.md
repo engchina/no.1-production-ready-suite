@@ -19,6 +19,10 @@
 - 構文例と対象に適用済みの修正 SQL を区別する。例の所有者・対象・列・説明文は利用者が実際の値へ置換する必要があることを明記し、コピーで入力変更・自動実行・確認ゲートの省略を行わない。
 - コピーには共通 `Button` の `secondary` / `sm` を使い、例の名前を含む `aria-label` を付ける。SQL はモバイル幅で折り返して表示し、コピー成功・失敗は既存 Toast で通知する。
 
+### 3.3.1 業務プロファイルのエディタの保存の失敗（#585）
+
+共通規約は [UX 契約 messaging.md §3.3.1](../../platform/docs/ux-contracts/messaging.md#331-全画面のエディタの保存の失敗585)。業務プロファイルのエディタ（`/profiles?profile=`）は、保存ボタンがヘッダーではなくフォームの中（実行確認語の欄と並ぶ）にあるため、欄に結び付かない保存（PATCH / POST）の失敗は保存ボタンの直下の `FormStatus`（`profile-save-error`）の 1 か所だけに出す。`toast.error` は出さない。名前の重複（409）は名前の欄の直下に出してフォーカスし、Oracle 同期の投入の失敗は今までどおりその下の保存結果の領域（`ProfileSaveResultRegion`）に出す。
+
 ## 3.7 処理中・経過時間（NL2SQL 固有）
 
 - request budget は `src/lib/requestPolicy.ts` を正本とする。`interactive-list = 60 秒`、`interactive-detail = 30 秒`、`job-control = 5 秒`。それ以上の処理は durable job とする。

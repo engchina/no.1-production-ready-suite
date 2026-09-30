@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
+  confirmUnsavedChanges,
   useSettingsDraftGuard,
   useUnsavedChangesGuard,
   type DraftGuardMessages,
@@ -25,37 +26,14 @@ function leaveMessages(): DraftGuardMessages {
 }
 
 /**
- * dirty な画面の確認関数の登録先。`navigate()` で移動する操作（ログアウトなど）が、
- * 移動の前に同じ確認を通すために使う（共有の guard はリンクの click・再読込・戻る / 進むだけを守る）。
+ * `navigate()` で画面を離れる前に呼ぶ（ログアウトなど）。dirty な画面がなければ即 true。確認は 1 回だけ出す。
+ * dirty な画面の一覧は共有のガードが持つ（戻る / 進むの blocker と同じ。#586）。
  */
-const activeGuards = new Set<{ current: () => Promise<boolean> }>();
-
-function useRegisterLeaveGuard(enabled: boolean, confirmLeave: () => Promise<boolean>) {
-  const ref = useRef(confirmLeave);
-  // 最新の確認関数を commit 時に入れる（render 中に ref を書かない）。
-  useLayoutEffect(() => {
-    ref.current = confirmLeave;
-  });
-  useEffect(() => {
-    if (!enabled) return;
-    activeGuards.add(ref);
-    return () => {
-      activeGuards.delete(ref);
-    };
-  }, [enabled]);
-}
-
-/** `navigate()` で画面を離れる前に呼ぶ。dirty な画面がなければ即 true。確認は 1 回だけ出す。 */
-export async function confirmPendingLeave(): Promise<boolean> {
-  const [first] = activeGuards;
-  return first ? first.current() : true;
-}
+export const confirmPendingLeave = confirmUnsavedChanges;
 
 /** 設定画面（1 画面 = 1 フォーム）の離脱ガード。保存中の離脱も止める。 */
 export function useSettingsLeaveGuard(isDirty: boolean, busy = false): () => Promise<boolean> {
-  const confirmLeave = useSettingsDraftGuard(isDirty, busy, leaveMessages());
-  useRegisterLeaveGuard(isDirty || busy, confirmLeave);
-  return confirmLeave;
+  return useSettingsDraftGuard(isDirty, busy, leaveMessages());
 }
 
 /**
@@ -78,7 +56,6 @@ export function useEditorLeaveGuard(isDirty: boolean, busy = false): { confirmCl
     });
   }, [busy, confirm, isDirty]);
   useUnsavedChangesGuard(isDirty || busy, confirmLeave);
-  useRegisterLeaveGuard(isDirty || busy, confirmLeave);
 
   const confirmClose = useCallback(async () => {
     if (!isDirty) return true;

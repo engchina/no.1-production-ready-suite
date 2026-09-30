@@ -7,14 +7,14 @@ test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await mockKnowledgeBases(page);
-  await mockEvaluationSuiteSettings(page, "balanced");
+  await mockEvaluationSuiteSettings(page, "standard");
 });
 
 for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`評価ページは品質評価の既定スイートを表示する (${viewport.name})`, async ({
+  test(`評価ページは既定の評価の基準を表示する (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -24,22 +24,25 @@ for (const viewport of [
     await expect(
       page.getByRole("heading", { name: "品質評価", level: 1 })
     ).toBeVisible();
-    // 既定は「設定の既定に従う」で、現在のグローバル既定(バランス)を表示する。
-    await expect(page.getByText("設定の既定に従う(現在: バランス)")).toBeVisible();
-    // 既定スイート(バランス)の閾値プレビューが見える。
-    await expect(page.getByText("Precision@K").first()).toBeVisible();
+    // 既定は「設定の既定に従う」で、現在のグローバル既定(標準)を表示する。
+    await expect(page.getByText("設定の既定に従う(現在: 標準)")).toBeVisible();
+    // 既定の基準(標準)の閾値プレビューが、指標の日本語名と百分率で見える(#591)。
+    const preview = page.getByTestId("evaluation-suite-thresholds");
+    await expect(preview.getByText("正解文書の再現率")).toBeVisible();
+    await expect(preview.getByText("80%").first()).toBeVisible();
+    await expect(preview.getByText("標準回答での合格")).toBeVisible();
     await expect(
-      page.getByRole("link", { name: "設定で既定スイートを変更" })
+      page.getByRole("link", { name: "設定で既定の基準を変更" })
     ).toHaveAttribute("href", "/settings/evaluation");
     await expectNoPageOverflow(page);
   });
 }
 
-test("既定スイートのまま評価実行すると suite を送らず適用スイートを表示する", async ({
+test("既定の基準のまま評価実行すると suite を送らず適用した基準を表示する", async ({
   page,
 }) => {
   const jobs = await mockEvaluationJobs(page, {
-    runResult: (payload) => evaluationMetrics((payload.suite as string) ?? "balanced"),
+    runResult: (payload) => evaluationMetrics((payload.suite as string) ?? "standard"),
     autoComplete: true,
   });
 
@@ -47,7 +50,7 @@ test("既定スイートのまま評価実行すると suite を送らず適用�
   await page.getByRole("button", { name: "評価実行" }).click();
 
   await expect.poll(() => jobs.runPayloads[0] && "suite" in jobs.runPayloads[0]).toBe(false);
-  await expect(page.getByText("適用スイート: バランス")).toBeVisible();
+  await expect(page.getByText("評価の基準: 標準")).toBeVisible();
 });
 
 for (const viewport of [
@@ -59,7 +62,7 @@ for (const viewport of [
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     const jobs = await mockEvaluationJobs(page, {
-      runResult: () => evaluationMetrics("balanced"),
+      runResult: () => evaluationMetrics("standard"),
     });
 
     await page.goto("/evaluation");
@@ -68,7 +71,7 @@ for (const viewport of [
     // 実行状況（#390）: 状態・件数・今のケース・経過時間（placement="job"）と取り消し。
     const panel = page.getByTestId("evaluation-run-job");
     await expect(panel.locator("[data-status-variant]")).toHaveText("実行中");
-    await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 1 件（0%）");
+    await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 2 件（0%）");
     await expect(page.getByTestId("evaluation-run-job-current-case")).toHaveText(
       "実行中のケース: policy-approval-flow-basic"
     );
@@ -82,9 +85,9 @@ for (const viewport of [
     await expectNoPageOverflow(page);
 
     jobs.complete("run");
-    await expect(page.getByText("適用スイート: バランス")).toBeVisible();
+    await expect(page.getByText("評価の基準: 標準")).toBeVisible();
     await expect(panel.locator("[data-status-variant]")).toHaveText("完了");
-    await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("1 / 1 件（100%）");
+    await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("2 / 2 件（100%）");
     await expect(timing.getByRole("timer")).toHaveAccessibleName(/処理時間 \d{2}:\d{2}/);
     await expect(panel.getByRole("button", { name: "取り消し" })).toHaveCount(0);
     await expect(page.getByTestId("evaluation-result-loading")).toHaveCount(0);
@@ -114,7 +117,7 @@ for (const viewport of [
 }
 
 test("実行中の評価は確認してから取り消せる", async ({ page }) => {
-  const jobs = await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("balanced") });
+  const jobs = await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("standard") });
 
   await page.goto("/evaluation");
   await page.getByRole("button", { name: "評価実行" }).click();
@@ -133,15 +136,15 @@ test("実行中の評価は確認してから取り消せる", async ({ page }) 
 });
 
 test("再読込しても実行中の評価の job の状態を表示し、失敗の理由を出す", async ({ page }) => {
-  const jobs = await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("balanced") });
+  const jobs = await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("standard") });
 
   await page.goto("/evaluation");
   await page.getByRole("button", { name: "評価実行" }).click();
-  await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 1 件（0%）");
+  await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 2 件（0%）");
 
   // 戻っただけで評価を送り直さず、保存した job id でサーバーの状態を確かめる（workspace-state.md）。
   await page.reload();
-  await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 1 件（0%）");
+  await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 2 件（0%）");
   expect(jobs.runPayloads).toHaveLength(1);
 
   jobs.fail("run", "品質評価の実行に失敗しました（RuntimeError）。");
@@ -151,28 +154,30 @@ test("再読込しても実行中の評価の job の状態を表示し、失敗
   await expect(panel.getByText("品質評価の実行に失敗しました（RuntimeError）。")).toBeVisible();
 });
 
-test("スイートを選ぶと閾値プレビューを更新し suite を送る", async ({ page }) => {
+test("基準を選ぶと閾値プレビューを更新し suite を送る", async ({ page }) => {
   const jobs = await mockEvaluationJobs(page, {
-    runResult: (payload) => evaluationMetrics((payload.suite as string) ?? "balanced"),
+    runResult: (payload) => evaluationMetrics((payload.suite as string) ?? "standard"),
     autoComplete: true,
   });
 
   await page.goto("/evaluation");
 
-  await page.getByRole("combobox", { name: "品質評価" }).click();
+  await page.getByRole("combobox", { name: "評価の基準" }).click();
   await page
-    .getByRole("listbox", { name: "品質評価" })
-    .getByRole("option", { name: /厳格 CI/ })
+    .getByRole("listbox", { name: "評価の基準" })
+    .getByRole("option", { name: "厳格", exact: true })
     .click();
 
-  // strict_ci の閾値(groundedness / citation traceability)がプレビューに出る。
-  await expect(page.getByText("Groundedness").first()).toBeVisible();
-  await expect(page.getByText("Citation Traceability").first()).toBeVisible();
+  // 厳格の閾値(主張の裏付け 100%)がプレビューに出る。
+  const preview = page.getByTestId("evaluation-suite-thresholds");
+  await expect(preview.getByRole("listitem").filter({ hasText: "主張の裏付け" })).toContainText(
+    "100%"
+  );
 
   await page.getByRole("button", { name: "評価実行" }).click();
 
-  await expect.poll(() => jobs.runPayloads[0]?.suite).toBe("strict_ci");
-  await expect(page.getByText("適用スイート: 厳格 CI")).toBeVisible();
+  await expect.poll(() => jobs.runPayloads[0]?.suite).toBe("strict");
+  await expect(page.getByText("評価の基準: 厳格")).toBeVisible();
   await expectNoPageOverflow(page);
 });
 
@@ -195,35 +200,26 @@ async function mockEvaluationSuiteSettings(page: Page, suite: string) {
 }
 
 function evaluationSuiteEnvelope(suite: string) {
-  const specs: { name: string; thresholds: Record<string, number>; focus_metrics: string[] }[] = [
-    { name: "request_only", thresholds: {}, focus_metrics: [] },
-    {
-      name: "retrieval_focused",
-      thresholds: { precision_at_k: 0.6, recall_at_k: 0.8, mrr: 0.7 },
-      focus_metrics: ["precision_at_k", "recall_at_k", "mrr"],
-    },
-    {
-      name: "balanced",
-      thresholds: { precision_at_k: 0.6, recall_at_k: 0.8, mrr: 0.7, groundedness_pass_rate: 0.9 },
-      focus_metrics: ["precision_at_k", "groundedness_pass_rate"],
-    },
-    {
-      name: "strict_ci",
-      thresholds: { groundedness_pass_rate: 0.95, citation_traceability_coverage: 0.9 },
-      focus_metrics: ["groundedness_pass_rate", "citation_traceability_coverage"],
-    },
-    {
-      name: "ragas_like",
-      thresholds: { faithfulness: 0.8, context_recall: 0.8 },
-      focus_metrics: ["faithfulness", "context_recall"],
-    },
+  const thresholds = (strict: boolean) => ({
+    context_recall: strict ? 0.9 : 0.8,
+    mrr: strict ? 0.8 : 0.6,
+    faithfulness: strict ? 0.8 : 0.7,
+    citation_traceability_coverage: strict ? 0.95 : 0.9,
+    claim_support_rate: strict ? 1 : 0.9,
+    answer_keyword_hit_rate: strict ? 0.9 : 0.8,
+    refusal_accuracy: strict ? 1 : 0.9,
+    requirement_coverage: strict ? 0.9 : 0.8,
+    answer_pass_rate: strict ? 0.8 : 0.7,
+  });
+  const specs = [
+    { name: "standard", thresholds: thresholds(false) },
+    { name: "strict", thresholds: thresholds(true) },
   ];
   const selected = specs.find((item) => item.name === suite) ?? specs[0];
   return {
     data: {
       suite,
       thresholds: selected.thresholds,
-      focus_metrics: selected.focus_metrics,
       suites: specs.map((item) => ({
         ...item,
         origin: "x",
@@ -239,67 +235,88 @@ function evaluationSuiteEnvelope(suite: string) {
 
 function evaluationMetrics(suite: string) {
   return {
-    case_count: 1,
+    case_count: 2,
     error_count: 0,
     evaluation_suite: suite,
-    evaluated_k: 10,
-    precision_at_k: 1,
-    recall_at_k: 1,
-    mrr: 1,
-    answer_keyword_hit_rate: 1,
-    groundedness_pass_rate: 1,
-    faithfulness: 1,
-    context_precision: 1,
     context_recall: 1,
-    response_relevancy: 1,
-    noise_sensitivity: 1,
+    mrr: 0.5,
+    faithfulness: 0.82,
     citation_traceability_coverage: 1,
-    bbox_citation_coverage: 1,
-    element_lineage_coverage: 1,
-    content_kind_hit_rate: 1,
-    section_coverage: 1,
+    claim_support_rate: 1,
+    answer_keyword_hit_rate: 1,
+    refusal_accuracy: 1,
+    requirement_coverage: 0.75,
+    answer_pass_rate: 1,
+    metric_case_counts: {
+      context_recall: 1,
+      mrr: 1,
+      faithfulness: 1,
+      citation_traceability_coverage: 1,
+      claim_support_rate: 1,
+      answer_keyword_hit_rate: 1,
+      refusal_accuracy: 2,
+      requirement_coverage: 1,
+      answer_pass_rate: 1,
+    },
     passed: true,
     threshold_failures: [],
     failure_reason_counts: {},
-    ingestion_quality: {
-      document_count: 1,
-      table_document_count: 0,
-      figure_document_count: 0,
-      long_document_count: 0,
-      risk_counts: { high: 0, medium: 0 },
-      warning_counts: {},
-      parser_profile_counts: {},
-    },
     case_results: [
       {
         case_id: "policy-approval-flow-basic",
         trace_id: "trace-eval",
         status: "success",
-        retrieved_document_ids: ["doc-1"],
+        retrieved_document_ids: ["doc-2", "doc-1"],
         relevant_document_ids: ["doc-1"],
         hit_document_ids: ["doc-1"],
-        precision_at_k: 1,
-        recall_at_k: 1,
-        reciprocal_rank: 1,
-        answer_keyword_hit: true,
-        groundedness_passed: true,
-        groundedness_score: 1,
+        context_recall: 1,
+        reciprocal_rank: 0.5,
+        faithfulness: 0.82,
         grounding_overlap_count: 2,
         grounding_answer_feature_count: 2,
-        faithfulness: 1,
-        context_precision: 1,
-        context_recall: 1,
-        response_relevancy: 1,
-        noise_sensitivity: 1,
         citation_traceability_coverage: 1,
-        bbox_citation_coverage: 1,
-        element_lineage_coverage: 1,
-        content_kind_hit_rate: 1,
-        section_coverage: 1,
+        answer_keyword_hit: true,
+        abstained: false,
+        refusal_correct: true,
+        answer_evaluation: {
+          status: "completed",
+          total_score: 18,
+          max_score: 20,
+          passed: true,
+          claims_supported: true,
+          requirement_coverage: 0.75,
+          missing_content: false,
+          goal_alignment: "aligned",
+          message: null,
+        },
         guardrail_warnings: [],
         failure_reasons: [],
         diagnostics: {},
         elapsed_ms: 15,
+        error_type: null,
+        error_message: null,
+      },
+      {
+        case_id: "out-of-scope-refusal",
+        trace_id: "trace-refusal",
+        status: "success",
+        retrieved_document_ids: [],
+        relevant_document_ids: [],
+        hit_document_ids: [],
+        context_recall: null,
+        reciprocal_rank: null,
+        faithfulness: null,
+        grounding_overlap_count: 0,
+        grounding_answer_feature_count: 0,
+        citation_traceability_coverage: null,
+        answer_keyword_hit: null,
+        abstained: true,
+        refusal_correct: true,
+        answer_evaluation: null,
+        guardrail_warnings: [],
+        failure_reasons: [],
+        diagnostics: {},
+        elapsed_ms: 12,
         error_type: null,
         error_message: null,
       },
@@ -308,7 +325,7 @@ function evaluationMetrics(suite: string) {
 }
 
 function evaluationMetricsWithTimedOutCase() {
-  const metrics = evaluationMetrics("balanced");
+  const metrics = evaluationMetrics("standard");
   const [success] = metrics.case_results;
   return {
     ...metrics,
@@ -324,11 +341,13 @@ function evaluationMetricsWithTimedOutCase() {
         status: "error",
         retrieved_document_ids: [],
         hit_document_ids: [],
-        precision_at_k: 0,
-        recall_at_k: 0,
-        reciprocal_rank: 0,
-        answer_keyword_hit: false,
-        groundedness_passed: false,
+        context_recall: null,
+        reciprocal_rank: null,
+        faithfulness: null,
+        answer_keyword_hit: null,
+        abstained: null,
+        refusal_correct: null,
+        answer_evaluation: null,
         failure_reasons: ["case_error"],
         elapsed_ms: 300000,
         error_type: "TimeoutError",
@@ -344,7 +363,7 @@ function evaluationMetricsWithTimedOutCase() {
 // #541: JSON の未入力・形式のエラーは、押せないボタンと Banner ではなく欄の直下に出し、その欄へフォーカスする。
 test("評価の JSON のエラーは欄の直下に出し、その欄へフォーカスする", async ({ page }) => {
   const jobs = await mockEvaluationJobs(page, {
-    runResult: (payload) => evaluationMetrics((payload.suite as string) ?? "balanced"),
+    runResult: (payload) => evaluationMetrics((payload.suite as string) ?? "standard"),
     autoComplete: true,
   });
 
@@ -354,24 +373,122 @@ test("評価の JSON のエラーは欄の直下に出し、その欄へフォ�
   const run = page.getByRole("button", { name: "評価実行" });
   await expect(run).toBeEnabled();
   await run.click();
-  await expect(page.locator("#evaluation-request-json-error")).toHaveText(
-    "Golden set JSON は有効な JSON で入力してください。"
-  );
+  await expect(request).toHaveAccessibleDescription(/Golden set JSON は有効な JSON で入力してください。/);
   await expect(request).toHaveAttribute("aria-invalid", "true");
   await expect(request).toBeFocused();
   await request.fill('{"cases": []}');
-  await expect(page.locator("#evaluation-request-json-error")).toHaveCount(0);
+  await expect(request).not.toHaveAttribute("aria-invalid", "true");
+  await expect(request).not.toHaveAccessibleDescription(/入力してください。/);
   await run.click();
-  await expect(page.locator("#evaluation-request-json-error")).toHaveText(
-    "Golden set JSON の cases を 1 件以上入力してください。"
-  );
+  await expect(request).toHaveAccessibleDescription(/Golden set JSON の cases を 1 件以上入力してください。/);
 
   await page.getByRole("button", { name: "サンプルを読み込む" }).click();
   const experiments = page.getByLabel("Experiments JSON");
   await experiments.fill("");
   await page.getByRole("button", { name: "比較実行" }).click();
-  await expect(page.locator("#evaluation-experiments-json-error")).toHaveText("Experiments JSON を入力してください。");
+  await expect(experiments).toHaveAccessibleDescription(/Experiments JSON を入力してください。/);
   await expect(experiments).toBeFocused();
   expect(jobs.runPayloads).toHaveLength(0);
   await expectNoPageOverflow(page);
+});
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`評価結果は検索・根拠・回答の観点ごとに 9 つの指標とケースの判定を出す (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockEvaluationJobs(page, {
+      runResult: () => ({
+        ...evaluationMetrics("standard"),
+        passed: false,
+        answer_pass_rate: null,
+        metric_case_counts: { ...evaluationMetrics("standard").metric_case_counts, answer_pass_rate: 0 },
+        threshold_failures: [{ metric: "mrr", actual: 0.5, threshold: 0.6 }],
+        failure_reason_counts: { partial_recall: 1 },
+      }),
+      autoComplete: true,
+    });
+
+    await page.goto("/evaluation");
+    await page.getByRole("button", { name: "評価実行" }).click();
+
+    for (const [id, name] of [
+      ["retrieval", "検索"],
+      ["grounding", "根拠"],
+      ["answer", "回答"],
+    ]) {
+      await expect(
+        page.getByTestId(`evaluation-perspective-${id}`).getByRole("heading", { name, exact: true })
+      ).toBeVisible();
+    }
+    const mrr = page.getByTestId("evaluation-metric-mrr");
+    await expect(mrr).toContainText("50%");
+    await expect(mrr).toContainText("対象 1 件");
+    // 閾値未達はアイコンと文言付きのバッジで示す(色だけに頼らない)。
+    await expect(mrr.locator("[data-status-variant]")).toHaveText("閾値未達");
+    // 測れなかった指標は 0% ではなく「—」と理由を出す。
+    const pass = page.getByTestId("evaluation-metric-answer_pass_rate");
+    await expect(pass).toContainText("—");
+    await expect(pass).toContainText("標準回答が必要");
+    await expect(page.getByText("正解文書の順位(MRR): 50% / 60%")).toBeVisible();
+    await expect(page.getByTestId("evaluation-failure-reasons")).toContainText(
+      "正解の文書の一部だけ取れた: 1"
+    );
+    const table = page.getByTestId("evaluation-case-scroll-region");
+    await expect(table.getByTestId("evaluation-case-judgement").first()).toContainText(
+      "合格 18 / 20 点"
+    );
+    await expect(table.getByTestId("evaluation-case-answer").nth(1)).toContainText("拒答した");
+    await expectNoPageOverflow(page);
+  });
+}
+
+test("保存済みの古い評価の結果(削除した指標・基準)も表示を壊さない", async ({ page }) => {
+  await mockEvaluationJobs(page, {
+    runResult: () => ({
+      case_count: 1,
+      error_count: 0,
+      evaluation_suite: "balanced",
+      evaluated_k: 3,
+      precision_at_k: 0.3333,
+      recall_at_k: 1,
+      mrr: 1,
+      answer_keyword_hit_rate: 1,
+      passed: false,
+      threshold_failures: [{ metric: "section_coverage", actual: 0.5, threshold: 0.8 }],
+      failure_reason_counts: { section_miss: 1 },
+      case_results: [
+        {
+          case_id: "legacy-case",
+          trace_id: "trace-legacy",
+          status: "success",
+          retrieved_document_ids: ["doc-1"],
+          relevant_document_ids: ["doc-1"],
+          hit_document_ids: ["doc-1"],
+          reciprocal_rank: 1,
+          answer_keyword_hit: true,
+          guardrail_warnings: [],
+          failure_reasons: ["section_miss"],
+          diagnostics: {},
+          elapsed_ms: 10,
+          error_type: null,
+          error_message: null,
+        },
+      ],
+    }),
+    autoComplete: true,
+  });
+
+  await page.goto("/evaluation");
+  await page.getByRole("button", { name: "評価実行" }).click();
+
+  await expect(page.getByText("評価の基準: balanced")).toBeVisible();
+  await expect(page.getByTestId("evaluation-metric-mrr")).toContainText("100%");
+  await expect(page.getByTestId("evaluation-metric-refusal_accuracy")).toContainText("—");
+  await expect(page.getByText("section_coverage: 50% / 80%")).toBeVisible();
+  await expect(page.getByTestId("evaluation-failure-reasons")).toContainText("section_miss: 1");
+  await expect(page.getByText("legacy-case")).toBeVisible();
 });
