@@ -608,16 +608,23 @@ async function mockPagedDbAdminObjectsApi(page: Page) {
     const url = new URL(route.request().url());
     const type = url.searchParams.get("type") ?? "all";
     const cursor = url.searchParams.get("cursor") ?? "";
+    // backend と同じく検索語（q）で名前・コメントを絞る。無視して先頭の 100 件を返すと、画面は読み込んだ候補を
+    // 検索語で絞るため 0 件になり、検索の結果を確かめるテストが応答の前の一瞬にしか通らない（#655）。
+    const query = (url.searchParams.get("q") ?? "").toLowerCase();
+    const matches = (item: { name: string; comment: string }) =>
+      !query || `${item.name} ${item.comment}`.toLowerCase().includes(query);
+    const matchedTables = tableItems.filter(matches);
+    const matchedViews = viewItems.filter(matches);
     const sourceItems =
-      type === "table" ? tableItems : type === "view" ? viewItems : [...tableItems, ...viewItems];
+      type === "table" ? matchedTables : type === "view" ? matchedViews : [...matchedTables, ...matchedViews];
     const items = cursor ? sourceItems.slice(100) : sourceItems.slice(0, 100);
     return fulfillJson(route, {
       runtime: "deterministic",
       owner: "APP",
       items,
       total: sourceItems.length,
-      table_count: type === "view" ? 0 : type === "table" ? sourceItems.length : tableItems.length,
-      view_count: type === "table" ? 0 : type === "view" ? sourceItems.length : viewItems.length,
+      table_count: type === "view" ? 0 : matchedTables.length,
+      view_count: type === "table" ? 0 : matchedViews.length,
       next_cursor: !cursor && sourceItems.length > 100 ? "paged-db-admin-objects-2" : null,
       refreshed_at: "2026-06-21T10:00:00.000Z",
       catalog_version: 1,

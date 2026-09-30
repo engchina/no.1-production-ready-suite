@@ -4232,7 +4232,7 @@ test("引用名の許可表ではスキーマ参照を大文字の同名表ま�
   await expect(page.getByRole("button", { name: "引用名の請求 を開閉" })).toBeVisible();
   await expect(page.getByRole("button", { name: "大文字の請求 を開閉" })).toHaveCount(0);
   // 検索で列詳細を読み込んでも、大文字の同名表の定義で置き換えない。
-  await page.getByRole("textbox", { name: "表・項目検索" }).fill("請求");
+  await page.getByRole("searchbox", { name: "表・項目検索" }).fill("請求");
   await expect(page.getByRole("button", { name: "引用名の請求 を開閉" })).toBeVisible();
   await expect(page.getByRole("button", { name: "大文字の請求 を開閉" })).toHaveCount(0);
   // 引用名の表の列詳細は token で要求する。引用なしの `Mixed_Case` は backend が `MIXED_CASE` と

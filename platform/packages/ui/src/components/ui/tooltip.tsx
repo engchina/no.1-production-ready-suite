@@ -116,6 +116,11 @@ export function tooltipDescribesTrigger(content: string, accessibleName: unknown
 
 /** ホバーで開いた Tooltip が最後に閉じた時刻（全 Tooltip で共有。隣のトリガーへ移ったときに待たずに出す）。 */
 let lastHoverCloseAt = Number.NEGATIVE_INFINITY;
+/**
+ * いま開いている Tooltip を閉じる関数（全 Tooltip で共有）。吹き出しは画面に 1 つだけ出す。ポインタを
+ * 別のボタンに置いたままキーボードで移ったときなどに、ホバーの吹き出しとフォーカスの吹き出しを重ねない。
+ */
+let closeActiveTooltip: (() => void) | null = null;
 
 export interface TooltipControllerOptions {
   onOpenChange: (open: boolean, reason: TooltipOpenReason | null) => void;
@@ -174,6 +179,13 @@ export function createTooltipController({
   const setOpen = (next: boolean, nextReason: TooltipOpenReason | null) => {
     if (open === next && reason === nextReason) return;
     if (open && !next && reason === "hover") lastHoverCloseAt = Date.now();
+    if (next && closeActiveTooltip !== close) {
+      // 先に開いていた吹き出しを閉じてから、この吹き出しを開いているものとして覚える。
+      closeActiveTooltip?.();
+      closeActiveTooltip = close;
+    } else if (!next && closeActiveTooltip === close) {
+      closeActiveTooltip = null;
+    }
     open = next;
     reason = next ? nextReason : null;
     onOpenChange(open, reason);
@@ -249,6 +261,7 @@ export function createTooltipController({
     dispose() {
       clearShow();
       clearHide();
+      if (closeActiveTooltip === close) closeActiveTooltip = null;
     },
   };
 }

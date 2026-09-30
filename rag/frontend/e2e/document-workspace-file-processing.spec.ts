@@ -219,10 +219,15 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
     element.scrollTop = element.scrollHeight;
   });
   const mainScrollTop = await main.evaluate((element) => element.scrollTop);
-  await page.mouse.wheel(0, 800);
-  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeGreaterThan(
-    mainScrollTop
-  );
+  // ペインの高さは A4 縦の縦横比（#559）で小数になる。scrollTop = scrollHeight で送った下端には 1px 未満の
+  // 余りが残り、Chromium は最初のホイールでその余りをペインで送って、同じ操作の間はペインに留まる。
+  // 利用者がホイールで下端まで送ったときと同じく、次のホイールから主ページへ引き継ぐことを確かめる（#656）。
+  await expect
+    .poll(async () => {
+      await page.mouse.wheel(0, 800);
+      return main.evaluate((element) => element.scrollTop);
+    })
+    .toBeGreaterThan(mainScrollTop);
 
   for (const tabName of ["構造化要素", "抽出エクスポート"]) {
     await page.getByRole("tab", { name: tabName, exact: false }).click();
