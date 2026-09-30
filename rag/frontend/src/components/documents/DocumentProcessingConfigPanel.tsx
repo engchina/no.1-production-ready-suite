@@ -2,6 +2,7 @@
 
 import { RotateCcw, Save, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 
 import {
   Banner,
@@ -14,14 +15,12 @@ import {
   ToggleChip,
   TimedLoadingState,
 } from "@engchina/production-ready-ui";
+import { canOpenNavRoute } from "@/components/layout/nav-config";
+import { useAuth } from "@/components/security/AuthProvider";
 import {
   ApiError,
-  type ChunkingStrategyName,
   type DocumentProcessingConfigData,
   type DocumentProcessingConfig,
-  type GraphProfileName,
-  type ParserAdapterBackend,
-  type PreprocessProfileName,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
@@ -36,65 +35,27 @@ import {
   useParserAdapterSettings,
   useUpdateDocumentRecipe,
 } from "@/lib/queries";
-import { parserBackendLabel } from "@/lib/source-profile-labels";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 import {
   RECIPE_CONFIG_FIELDS,
+  globalSettingsHref,
   recipeConfigGroups,
   type RecipeConfigField,
   type RecipeConfigGroup,
   type RecipeConfigItem,
 } from "./DocumentProcessingConfigPanel.logic";
-
-const PREPROCESS_VALUES = [
-  "passthrough",
-  "office_to_pdf",
-  "pdf_to_page_images",
-  "csv_to_json",
-  "excel_to_json",
-  "url_to_markdown",
-  "image_enhance",
-  "pii_redact",
-] as const;
-const PREPROCESS_OPTIONS: SelectFieldOption<PreprocessProfileName>[] = PREPROCESS_VALUES.map(
-  (value) => ({
-    value,
-    label: t(`settings.preprocess.profile.${value}` as I18nKey),
-  })
-);
-
-const PARSER_VALUES = [
-  "docling",
-  "unstructured",
-  "mineru",
-  "dots_ocr",
-  "oci_genai_vision",
-  "oci_document_understanding",
-] as const;
-const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = PARSER_VALUES.map((value) => ({
-  value,
-  label: parserBackendLabel(value),
-}));
-
-const CHUNKING_VALUES = [
-  "structure_aware",
-  "recursive_character",
-  "docrag_small_to_big",
-  "markdown_heading",
-  "page_level",
-  "fixed_size",
-  "fixed_delimiter",
-] as const;
-const CHUNKING_OPTIONS: SelectFieldOption<ChunkingStrategyName>[] = CHUNKING_VALUES.map(
-  (value) => ({ value, label: t(`settings.chunking.strategy.${value}` as I18nKey) })
-);
-
-const GRAPH_VALUES = ["off", "entities", "full"] as const;
-const GRAPH_OPTIONS: SelectFieldOption<GraphProfileName>[] = GRAPH_VALUES.map(
-  (value) => ({ value, label: t(`settings.graph.profile.${value}` as I18nKey) })
-);
+import {
+  CHUNKING_OPTIONS,
+  GRAPH_OPTIONS,
+  PARSER_OPTIONS,
+  PARSER_VALUES,
+  PREPROCESS_OPTIONS,
+  boolLabel,
+  optionLabel,
+  recipeConfigValueLabel,
+} from "./DocumentProcessingConfigPanel.values";
 
 function emptyConfig(): DocumentProcessingConfig {
   return {
@@ -123,24 +84,6 @@ function resolvedConfigs(data: DocumentProcessingConfigData) {
   return { processing: data.processing_config, effective: data.effective_processing_config };
 }
 
-function boolLabel(value: boolean | null) {
-  if (value === null) return "—";
-  return t(value ? "knowledgeBases.adapter.bool.enabled" : "knowledgeBases.adapter.bool.disabled");
-}
-
-function optionLabel<T extends string>(
-  value: T | null,
-  options: readonly SelectFieldOption<T>[]
-) {
-  return value === null ? "—" : (options.find((option) => option.value === value)?.label ?? value);
-}
-
-function parserOptionLabel(value: ParserAdapterBackend | null) {
-  if (value === null) return "—";
-  const option = PARSER_OPTIONS.find((candidate) => candidate.value === value);
-  return option?.label ?? t("documents.processingConfig.parserRemoved", { engine: value });
-}
-
 /** 上書きの一覧の各行の DOM id の接尾辞（`document-<接尾辞>-<documentId>`）。 */
 const EDITOR_ID_SUFFIX: Record<RecipeConfigField, string> = {
   preprocess_profile: "preprocess",
@@ -157,22 +100,6 @@ const EDITOR_ID_SUFFIX: Record<RecipeConfigField, string> = {
 };
 
 const CONFIG_GROUPS = recipeConfigGroups();
-
-/** 要約のカードに出す実効値。項目の並びは RECIPE_CONFIG_ITEMS が決める(#523)。 */
-function summaryValue(item: RecipeConfigItem, effective: DocumentProcessingConfig) {
-  switch (item.field) {
-    case "preprocess_profile":
-      return optionLabel(effective.preprocess_profile, PREPROCESS_OPTIONS);
-    case "parser_adapter_backend":
-      return parserOptionLabel(effective.parser_adapter_backend);
-    case "chunking_strategy":
-      return optionLabel(effective.chunking_strategy, CHUNKING_OPTIONS);
-    case "graph_profile":
-      return optionLabel(effective.graph_profile, GRAPH_OPTIONS);
-    default:
-      return boolLabel(effective[item.field] ?? null);
-  }
-}
 
 export function DocumentProcessingConfigPanel({
   documentId,
@@ -194,6 +121,7 @@ export function DocumentProcessingConfigPanel({
   sourceModality?: string | null;
 }) {
   const saveRecipe = useUpdateDocumentRecipe();
+  const { hasPermission } = useAuth();
   const savePending = saveRecipe.isPending;
   const saveError = saveRecipe.error;
   const [expanded, setExpanded] = useState(false);
@@ -254,6 +182,10 @@ export function DocumentProcessingConfigPanel({
     if (!configs) return null;
     const id = `document-${EDITOR_ID_SUFFIX[item.field]}-${documentId}`;
     const label = t(item.label);
+    // 「グローバル設定に従う」の値を変える画面（#528）。権限のない画面へのリンクは出さない。
+    const globalHref = canOpenNavRoute(item.globalSettings.route, hasPermission)
+      ? globalSettingsHref(item)
+      : null;
     switch (item.field) {
       case "preprocess_profile":
         return (
@@ -262,6 +194,7 @@ export function DocumentProcessingConfigPanel({
             field={item.field}
             id={id}
             label={label}
+            globalHref={globalHref}
             value={form.preprocess_profile}
             effectiveValue={configs.effective.preprocess_profile}
             options={PREPROCESS_OPTIONS}
@@ -277,6 +210,7 @@ export function DocumentProcessingConfigPanel({
             field={item.field}
             id={id}
             label={label}
+            globalHref={globalHref}
             value={form.parser_adapter_backend}
             effectiveValue={configs.effective.parser_adapter_backend}
             options={PARSER_OPTIONS}
@@ -294,6 +228,7 @@ export function DocumentProcessingConfigPanel({
             field={item.field}
             id={id}
             label={label}
+            globalHref={globalHref}
             value={form.chunking_strategy}
             effectiveValue={configs.effective.chunking_strategy}
             options={CHUNKING_OPTIONS}
@@ -309,6 +244,7 @@ export function DocumentProcessingConfigPanel({
             field={item.field}
             id={id}
             label={label}
+            globalHref={globalHref}
             value={form.graph_profile}
             effectiveValue={configs.effective.graph_profile}
             options={GRAPH_OPTIONS}
@@ -325,6 +261,7 @@ export function DocumentProcessingConfigPanel({
             field={field}
             id={id}
             label={label}
+            globalHref={globalHref}
             value={form[field] ?? null}
             effectiveValue={configs.effective[field] ?? null}
             disabled={disabled}
@@ -423,7 +360,7 @@ export function DocumentProcessingConfigPanel({
                           ) : null}
                         </div>
                         <span className="mt-0.5 block break-words text-xs font-medium text-fg">
-                          {summaryValue(item, configs.effective)}
+                          {recipeConfigValueLabel(item, configs.effective)}
                         </span>
                       </div>
                     );
@@ -535,6 +472,7 @@ function SelectRow<T extends string>({
   field,
   id,
   label,
+  globalHref,
   value,
   effectiveValue,
   options,
@@ -547,6 +485,7 @@ function SelectRow<T extends string>({
   field: RecipeConfigField;
   id: string;
   label: string;
+  globalHref: string | null;
   value: T | null;
   effectiveValue: T | null;
   options: readonly SelectFieldOption<T>[];
@@ -592,11 +531,11 @@ function SelectRow<T extends string>({
           buttonClassName="min-h-11"
         />
       ) : (
-        <p className="text-xs text-fg-muted">
-          {t("knowledgeBases.adapter.inheritResolved", {
-            value: optionLabel(effectiveValue, options),
-          })}
-        </p>
+        <InheritResolved
+          value={optionLabel(effectiveValue, options)}
+          label={label}
+          globalHref={globalHref}
+        />
       )}
       {hint ? <p className="text-xs text-fg-muted">{hint}</p> : null}
       {warning ? <FormStatus tone="warning" className="text-xs" message={warning} /> : null}
@@ -608,6 +547,7 @@ function BooleanRow({
   field,
   id,
   label,
+  globalHref,
   value,
   effectiveValue,
   disabled,
@@ -618,6 +558,7 @@ function BooleanRow({
   field: RecipeConfigField;
   id: string;
   label: string;
+  globalHref: string | null;
   value: boolean | null;
   effectiveValue: boolean | null;
   disabled: boolean;
@@ -662,12 +603,36 @@ function BooleanRow({
           </ToggleChip>
         </div>
       ) : (
-        <p className="text-xs text-fg-muted">
-          {t("knowledgeBases.adapter.inheritResolved", { value: boolLabel(effectiveValue) })}
-        </p>
+        <InheritResolved value={boolLabel(effectiveValue)} label={label} globalHref={globalHref} />
       )}
       {hint ? <p className="text-xs text-fg-muted">{hint}</p> : null}
       {warning ? <FormStatus tone="warning" className="text-xs" message={warning} /> : null}
     </div>
+  );
+}
+
+/** 「グローバル設定に従う: 値」と、その全体の既定を変える画面へのリンク（#528）。 */
+function InheritResolved({
+  value,
+  label,
+  globalHref,
+}: {
+  value: string;
+  label: string;
+  globalHref: string | null;
+}) {
+  return (
+    <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-muted">
+      <span>{t("knowledgeBases.adapter.inheritResolved", { value })}</span>
+      {globalHref ? (
+        <Link
+          to={globalHref}
+          aria-label={t("knowledgeBases.adapter.openGlobalSettingsAria", { name: label })}
+          className="inline-flex min-h-6 items-center font-medium text-accent-fg underline-offset-2 hover:underline"
+        >
+          {t("knowledgeBases.adapter.openGlobalSettings")}
+        </Link>
+      ) : null}
+    </p>
   );
 }

@@ -334,12 +334,16 @@ def test_default_is_a_reserved_knowledge_base_name(
     reserved_name: str,
 ) -> None:
     """DEFAULT は大文字小文字・前後空白にかかわらずユーザー名に使えない。"""
-    create_resp = client.post("/api/knowledge-bases", json={"name": reserved_name})
+    create_resp = client.post(
+        "/api/knowledge-bases", json={"name": reserved_name, "description": "説明"}
+    )
 
     assert create_resp.status_code == 422
     assert "DEFAULT は予約名のため使用できません。" in create_resp.json()["error_messages"][0]
 
-    detail = client.post("/api/knowledge-bases", json={"name": "社内規程"}).json()["data"]
+    detail = client.post(
+        "/api/knowledge-bases", json={"name": "社内規程", "description": "説明"}
+    ).json()["data"]
     update_resp = client.patch(
         f"/api/knowledge-bases/{detail['id']}",
         json={"name": reserved_name},
@@ -348,9 +352,78 @@ def test_default_is_a_reserved_knowledge_base_name(
     assert update_resp.status_code == 422
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"name": "社内規程"},
+        {"name": "社内規程", "description": ""},
+        {"name": "社内規程", "description": " \u3000\t"},
+        {"name": "社内規程", "description": None},
+        {"name": " ", "description": "就業規則"},
+    ],
+    ids=["missing", "empty", "blank", "null", "blank-name"],
+)
+def test_create_knowledge_base_requires_name_and_description(
+    fake_oracle: FakeKnowledgeBaseOracle,
+    payload: dict[str, object],
+) -> None:
+    """ナレッジベースの名前と説明は必須。未指定・空・空白だけ・null は 422 で作成しない（#521）。"""
+    response = client.post("/api/knowledge-bases", json=payload)
+
+    assert response.status_code == 422
+    assert fake_oracle.knowledge_bases == {}
+
+
+@pytest.mark.parametrize(
+    "description",
+    ["", "   ", None],
+    ids=["empty", "blank", "null"],
+)
+def test_update_knowledge_base_rejects_empty_description(
+    fake_oracle: FakeKnowledgeBaseOracle,
+    description: str | None,
+) -> None:
+    """更新で説明を空・空白だけ・null にはできない（#521）。"""
+    detail = client.post(
+        "/api/knowledge-bases", json={"name": "社内規程", "description": "就業規則"}
+    ).json()["data"]
+
+    response = client.patch(
+        f"/api/knowledge-bases/{detail['id']}", json={"description": description}
+    )
+
+    assert response.status_code == 422
+    assert "説明を入力してください。" in response.json()["error_messages"][0]
+    assert fake_oracle.knowledge_bases[detail["id"]].description == "就業規則"
+
+
+def test_knowledge_base_without_description_still_loads(
+    fake_oracle: FakeKnowledgeBaseOracle,
+) -> None:
+    """説明が必須になる前の説明なしの KB も一覧・詳細で読め、説明を入れて保存できる（#521）。"""
+    detail = client.post(
+        "/api/knowledge-bases", json={"name": "旧規程", "description": "仮"}
+    ).json()["data"]
+    fake_oracle.knowledge_bases[detail["id"]] = fake_oracle.knowledge_bases[
+        detail["id"]
+    ].model_copy(update={"description": None})
+
+    listed = client.get("/api/knowledge-bases").json()["data"]["items"]
+    assert next(item for item in listed if item["id"] == detail["id"])["description"] is None
+    assert client.get(f"/api/knowledge-bases/{detail['id']}").json()["data"]["description"] is None
+
+    updated = client.patch(
+        f"/api/knowledge-bases/{detail['id']}", json={"description": "  旧の就業規則  "}
+    )
+    assert updated.status_code == 200
+    assert updated.json()["data"]["description"] == "旧の就業規則"
+
+
 def test_knowledge_base_graph_endpoint(fake_oracle: FakeKnowledgeBaseOracle) -> None:
     """関係情報グラフ endpoint が空/データ/404 を返す。"""
-    detail = client.post("/api/knowledge-bases", json={"name": "社内規程"}).json()["data"]
+    detail = client.post(
+        "/api/knowledge-bases", json={"name": "社内規程", "description": "説明"}
+    ).json()["data"]
     kb_id = detail["id"]
 
     empty = client.get(f"/api/knowledge-bases/{kb_id}/graph")
@@ -377,11 +450,13 @@ def test_knowledge_base_graph_endpoint(fake_oracle: FakeKnowledgeBaseOracle) -> 
 
 def test_update_and_archive_knowledge_base(fake_oracle: FakeKnowledgeBaseOracle) -> None:
     """ナレッジベースの更新とアーカイブができる。"""
-    detail = client.post("/api/knowledge-bases", json={"name": "FAQ"}).json()["data"]
+    detail = client.post(
+        "/api/knowledge-bases", json={"name": "FAQ", "description": "説明"}
+    ).json()["data"]
 
     update_resp = client.patch(
         f"/api/knowledge-bases/{detail['id']}",
-        json={"name": "製品 FAQ", "description": None},
+        json={"name": "製品 FAQ", "description": "製品の問い合わせ"},
     )
 
     assert update_resp.status_code == 200
@@ -396,7 +471,9 @@ def test_default_knowledge_base_cannot_be_archived(
     fake_oracle: FakeKnowledgeBaseOracle,
 ) -> None:
     """DEFAULT のアーカイブ要求は競合として拒否する。"""
-    detail = client.post("/api/knowledge-bases", json={"name": "一時名"}).json()["data"]
+    detail = client.post(
+        "/api/knowledge-bases", json={"name": "一時名", "description": "説明"}
+    ).json()["data"]
     kb_id = detail["id"]
     fake_oracle.knowledge_bases[kb_id] = fake_oracle.knowledge_bases[kb_id].model_copy(
         update={"name": "DEFAULT"}
@@ -410,7 +487,9 @@ def test_default_knowledge_base_cannot_be_archived(
 
 def test_assign_and_list_knowledge_base_documents(fake_oracle: FakeKnowledgeBaseOracle) -> None:
     """既存文書をナレッジベースへ追加し、KB 文書一覧で確認できる。"""
-    detail = client.post("/api/knowledge-bases", json={"name": "社内規程"}).json()["data"]
+    detail = client.post(
+        "/api/knowledge-bases", json={"name": "社内規程", "description": "説明"}
+    ).json()["data"]
 
     assign_resp = client.post(
         f"/api/knowledge-bases/{detail['id']}/documents",
@@ -430,7 +509,9 @@ def test_assign_and_list_knowledge_base_documents(fake_oracle: FakeKnowledgeBase
 
 def test_document_knowledge_base_replace_endpoint(fake_oracle: FakeKnowledgeBaseOracle) -> None:
     """文書側 endpoint から所属ナレッジベースを置換できる。"""
-    detail = client.post("/api/knowledge-bases", json={"name": "社内規程"}).json()["data"]
+    detail = client.post(
+        "/api/knowledge-bases", json={"name": "社内規程", "description": "説明"}
+    ).json()["data"]
 
     replace_resp = client.put(
         "/api/documents/doc-1/knowledge-bases",
@@ -449,7 +530,9 @@ def test_archived_knowledge_base_rejects_assignment(
     fake_oracle: FakeKnowledgeBaseOracle,
 ) -> None:
     """アーカイブ済みナレッジベースには文書を追加できない。"""
-    detail = client.post("/api/knowledge-bases", json={"name": "旧規程"}).json()["data"]
+    detail = client.post(
+        "/api/knowledge-bases", json={"name": "旧規程", "description": "説明"}
+    ).json()["data"]
     assert client.post(f"/api/knowledge-bases/{detail['id']}/archive").status_code == 200
 
     resp = client.post(
@@ -469,6 +552,7 @@ def test_create_knowledge_base_rejects_adapter_config(
         "/api/knowledge-bases",
         json={
             "name": "Markdown FAQ",
+            "description": "説明",
             "adapter_config": {
                 "ingestion": {"chunking_strategy": "markdown_heading", "chunk_size": 1200},
             },
@@ -498,6 +582,7 @@ def test_patch_knowledge_base_rejects_adapter_config(
         "/api/knowledge-bases",
         json={
             "name": "Legacy KB",
+            "description": "説明",
             "retrieval_config": {"ingestion": {"chunking_strategy": "structure_aware"}},
         },
     ).json()["data"]
@@ -509,7 +594,7 @@ def test_patch_knowledge_base_rejects_adapter_config(
 
     assert resp.status_code == 422
     reloaded = client.get(f"/api/knowledge-bases/{created['id']}").json()["data"]
-    assert reloaded["description"] is None
+    assert reloaded["description"] == "説明"
     assert reloaded["adapter_config"]["ingestion"]["chunking_strategy"] == "structure_aware"
 
 
@@ -521,6 +606,7 @@ def test_knowledge_base_legacy_query_config_is_flagged(
         "/api/knowledge-bases",
         json={
             "name": "Legacy KB",
+            "description": "説明",
             "retrieval_config": {"query": {"generation_profile": "detailed_cited"}},
         },
     ).json()["data"]
@@ -542,9 +628,13 @@ def test_list_knowledge_bases_filters_by_ids_including_archived(
     fake_oracle: FakeKnowledgeBaseOracle,
 ) -> None:
     """ids を指定すると、その ID の KB だけを(status 省略時はアーカイブ済みも)返す(#302)。"""
-    first = client.post("/api/knowledge-bases", json={"name": "社内規程"}).json()["data"]
-    second = client.post("/api/knowledge-bases", json={"name": "製品 FAQ"}).json()["data"]
-    client.post("/api/knowledge-bases", json={"name": "設計資料"})
+    first = client.post(
+        "/api/knowledge-bases", json={"name": "社内規程", "description": "説明"}
+    ).json()["data"]
+    second = client.post(
+        "/api/knowledge-bases", json={"name": "製品 FAQ", "description": "説明"}
+    ).json()["data"]
+    client.post("/api/knowledge-bases", json={"name": "設計資料", "description": "説明"})
     assert client.post(f"/api/knowledge-bases/{second['id']}/archive").status_code == 200
 
     resp = client.get(
@@ -571,9 +661,14 @@ def test_create_knowledge_base_with_duplicate_name_returns_409(
     fake_oracle: FakeKnowledgeBaseOracle,
 ) -> None:
     """同じ名前の KB があると 500 ではなく 409 と日本語の理由を返す（#282）。"""
-    assert client.post("/api/knowledge-bases", json={"name": "社内規程"}).status_code == 200
+    assert (
+        client.post(
+            "/api/knowledge-bases", json={"name": "社内規程", "description": "説明"}
+        ).status_code
+        == 200
+    )
 
-    resp = client.post("/api/knowledge-bases", json={"name": "社内規程"})
+    resp = client.post("/api/knowledge-bases", json={"name": "社内規程", "description": "説明"})
 
     assert resp.status_code == 409
     assert resp.json()["error_messages"] == [
@@ -586,7 +681,9 @@ def test_rename_to_duplicate_name_returns_409(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """改名先の名前が使われているときも 409 にする。"""
-    created = client.post("/api/knowledge-bases", json={"name": "設計資料"}).json()["data"]
+    created = client.post(
+        "/api/knowledge-bases", json={"name": "設計資料", "description": "説明"}
+    ).json()["data"]
 
     async def conflicting_update(*_args: object, **_kwargs: object) -> KnowledgeBaseDetail:
         raise KnowledgeBaseNameConflictError()
@@ -603,7 +700,9 @@ def test_mutation_responses_include_refreshed_counts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """変更系 API の応答は、集計列を 0 で返す Oracle 操作の結果ではなく取り直した詳細を返す。"""
-    created = client.post("/api/knowledge-bases", json={"name": "社内規程"}).json()["data"]
+    created = client.post(
+        "/api/knowledge-bases", json={"name": "社内規程", "description": "説明"}
+    ).json()["data"]
     stored = fake_oracle.knowledge_bases[created["id"]]
     fake_oracle.knowledge_bases[created["id"]] = stored.model_copy(
         update={"document_count": 5, "indexed_document_count": 4, "error_document_count": 1}
@@ -636,7 +735,9 @@ def test_remove_default_only_membership_returns_409(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """DEFAULT にだけ所属する文書を外す操作は 409 と理由を返す。"""
-    created = client.post("/api/knowledge-bases", json={"name": "社内規程"}).json()["data"]
+    created = client.post(
+        "/api/knowledge-bases", json={"name": "社内規程", "description": "説明"}
+    ).json()["data"]
 
     async def reject_remove(*_args: object, **_kwargs: object) -> KnowledgeBaseDetail:
         raise ValueError("DEFAULT にだけ所属する文書は外せません。")
@@ -659,6 +760,7 @@ def test_effective_adapter_config_ignores_legacy_knowledge_base_overrides(
         "/api/knowledge-bases",
         json={
             "name": "Legacy 構築設定",
+            "description": "説明",
             # 旧 API で保存された legacy 構築上書き(retrieval_config カラムの保存値)。
             "retrieval_config": {
                 "ingestion": {"chunking_strategy": "page_level", "chunk_size": 1200}

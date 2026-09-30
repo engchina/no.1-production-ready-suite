@@ -24,6 +24,7 @@ from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalit
 from rag_pipeline_core.retrieval import decompose_retrieval_strategy
 
 from app import config as app_config
+from app.api.routes.documents import global_document_processing_config
 from app.clients.external_parser import (
     ENGINE_SPECS,
     ExternalParserBackend,
@@ -70,7 +71,9 @@ from app.rag.evaluation_adapter import (
     normalize_evaluation_suite,
 )
 from app.rag.extraction_field_adapter import (
+    FieldDefinition,
     load_field_schema,
+    save_field_schema,
 )
 from app.rag.generation_adapter import (
     generation_adapter_runtime_settings,
@@ -112,6 +115,7 @@ from app.rag.vector_index_adapter import (
 from app.schemas.common import ApiResponse
 from app.schemas.evaluation import EvaluationThresholds
 from app.schemas.settings import (
+    POST_PARSE_SETTING_FIELDS,
     AgenticProfileStatusData,
     AgenticSettingsData,
     AgenticSettingsUpdate,
@@ -129,6 +133,7 @@ from app.schemas.settings import (
     ExternalParserConnectionData,
     ExternalParserConnectionStatusData,
     ExtractionFieldsSettingsData,
+    ExtractionFieldsSettingsUpdate,
     FieldDefinitionData,
     GenerationProfileStatusData,
     GenerationSettingsData,
@@ -155,6 +160,8 @@ from app.schemas.settings import (
     ParserAdapterStatusData,
     ParserBackendCapabilityData,
     ParserServiceBackendData,
+    PipelineSettingsData,
+    PipelineSettingsUpdate,
     PreprocessProfileStatusData,
     PreprocessSettingsData,
     PreprocessSettingsUpdate,
@@ -405,24 +412,62 @@ async def get_external_parser_status(
 async def update_parser_adapter_settings(
     payload: ParserAdapterSettingsUpdate,
 ) -> ApiResponse[ParserAdapterSettingsData]:
-    """任意 parser adapter の backend/feature flag を共有設定と runtime へ反映する。"""
+    """任意 parser adapter の backend/feature flag と「解析後の処理」を保存し runtime へ反映する。
+
+    - 解析エンジン（`adapter_backend` と feature flag・接続）は model-settings.json（#103）。
+    - 「解析後の処理」（Vision・項目抽出・章節木。#528）は backend/.env。ほかのプロセスは
+      `.env` の更新時刻の変化で読み直す（#466）。
+    """
     settings = get_settings()
-    # モデル設定と同じ model-settings.json を、同じロックの下で書き換える（#103）。
-    # API key（モデル・parser）は JSON に書かず .env に保存し、旧 JSON に残っていれば移す（#106）。
-    try:
-        with MODEL_SETTINGS_STORE.lock(settings):
-            MODEL_SETTINGS_STORE.reload_if_changed(settings)
-            candidate = _parser_adapter_settings_candidate(settings, payload)
-            api_key = settings.oci_enterprise_ai_api_key
-            MODEL_SETTINGS_STORE.save(candidate, model_payload(settings), api_key=api_key)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="設定を共有永続化ファイルへ保存できませんでした。",
-        ) from exc
-    # 保存したファイルから読み直し、runtime を保存した状態にそろえる。
-    MODEL_SETTINGS_STORE.load(settings, refresh_secret=True)
+    post_parse_updates = _post_parse_settings_updates(payload)
+    parser_fields = payload.model_fields_set - set(POST_PARSE_SETTING_FIELDS)
+    if post_parse_updates:
+        # 先に .env を書く。失敗したら解析エンジンの設定も変えない（500）。
+        _persist_post_parse_settings(settings.model_copy(update=post_parse_updates))
+        for name, value in post_parse_updates.items():
+            setattr(settings, name, value)
+    if parser_fields:
+        # モデル設定と同じ model-settings.json を、同じロックの下で書き換える（#103）。
+        # API key（モデル・parser）は JSON に書かず .env に保存し、
+        # 旧 JSON に残っていれば移す（#106）。
+        try:
+            with MODEL_SETTINGS_STORE.lock(settings):
+                MODEL_SETTINGS_STORE.reload_if_changed(settings)
+                candidate = _parser_adapter_settings_candidate(settings, payload)
+                api_key = settings.oci_enterprise_ai_api_key
+                MODEL_SETTINGS_STORE.save(candidate, model_payload(settings), api_key=api_key)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="設定を共有永続化ファイルへ保存できませんでした。",
+            ) from exc
+        # 保存したファイルから読み直し、runtime を保存した状態にそろえる。
+        MODEL_SETTINGS_STORE.load(settings, refresh_secret=True)
     return ApiResponse(data=_parser_adapter_settings_data(settings))
+
+
+@router.get("/pipeline", response_model=ApiResponse[PipelineSettingsData])
+async def get_pipeline_settings() -> ApiResponse[PipelineSettingsData]:
+    """設定の概要: 工程の自動進行と、レシピ 11 項目の全体の既定を返す（#528）。"""
+    return ApiResponse(data=_pipeline_settings_data(get_settings()))
+
+
+@router.patch("/pipeline", response_model=ApiResponse[PipelineSettingsData])
+async def update_pipeline_settings(
+    payload: PipelineSettingsUpdate,
+) -> ApiResponse[PipelineSettingsData]:
+    """工程の自動進行を backend/.env と現在プロセスへ反映する（#528）。"""
+    settings = get_settings()
+    updates = {
+        f"rag_{name}": value
+        for name, value in payload.model_dump(exclude_unset=True).items()
+        if value is not None
+    }
+    if updates:
+        _persist_pipeline_settings(settings.model_copy(update=updates))
+        for name, value in updates.items():
+            setattr(settings, name, value)
+    return ApiResponse(data=_pipeline_settings_data(settings))
 
 
 @router.get("/preprocess", response_model=ApiResponse[PreprocessSettingsData])
@@ -758,6 +803,30 @@ async def get_extraction_fields_settings() -> ApiResponse[ExtractionFieldsSettin
     return ApiResponse(data=_extraction_fields_data())
 
 
+@router.patch("/extraction-fields", response_model=ApiResponse[ExtractionFieldsSettingsData])
+async def update_extraction_fields_settings(
+    payload: ExtractionFieldsSettingsUpdate,
+) -> ApiResponse[ExtractionFieldsSettingsData]:
+    """field 抽出 schema 定義を保存する（文書解析の「解析後の処理」で編集する。#528）。
+
+    name の重複（大文字小文字を区別しない）は 422。保存先は extraction-fields.json で、
+    取込は毎回ファイルから読むため、ほかのプロセスにも次の取込から効く。
+    """
+    definitions = [
+        FieldDefinition(name=field.name, description=field.description, value_type=field.value_type)
+        for field in payload.fields
+    ]
+    try:
+        save_field_schema(definitions)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500, detail="抽出項目の定義を保存できませんでした。"
+        ) from exc
+    return ApiResponse(data=_extraction_fields_data())
+
+
 @router.get("/guardrail", response_model=ApiResponse[GuardrailSettingsData])
 async def get_guardrail_settings() -> ApiResponse[GuardrailSettingsData]:
     """Guardrail アダプター(安全ポリシー)の選択と解決内容を返す。"""
@@ -1059,7 +1128,66 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         source_routes=route_data,
         backend_source_kind_matrix=_parser_adapter_backend_source_matrix(route_data),
         capabilities=_parser_backend_capabilities_data(),
+        vision_enabled=settings.rag_vision_enabled,
+        field_extraction_enabled=settings.rag_field_extraction_enabled,
+        navigation_summary_enabled=settings.rag_navigation_summary_enabled,
         config_source="runtime",
+    )
+
+
+def _post_parse_settings_updates(payload: ParserAdapterSettingsUpdate) -> dict[str, bool]:
+    """「解析後の処理」の更新（Settings の属性名 → 値）。省略・null の項目は変えない。"""
+    updates: dict[str, bool] = {}
+    for name in POST_PARSE_SETTING_FIELDS:
+        value = getattr(payload, name)
+        if value is not None:
+            updates[f"rag_{name}"] = value
+    return updates
+
+
+def _persist_post_parse_settings(settings: Settings) -> None:
+    """「解析後の処理」の全体の既定を backend/.env へ永続化する（#528）。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "RAG_VISION_ENABLED": _format_env_bool(settings.rag_vision_enabled),
+            "RAG_FIELD_EXTRACTION_ENABLED": _format_env_bool(settings.rag_field_extraction_enabled),
+            "RAG_NAVIGATION_SUMMARY_ENABLED": _format_env_bool(
+                settings.rag_navigation_summary_enabled
+            ),
+        },
+        section_comment="# 文書解析: 解析後の処理",
+        error_detail="解析後の処理の設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _pipeline_settings_data(settings: Settings) -> PipelineSettingsData:
+    """Settings から設定の概要の表示用データを作る。"""
+    return PipelineSettingsData(
+        auto_parse_after_preprocess_enabled=settings.rag_auto_parse_after_preprocess_enabled,
+        auto_chunk_after_extract_enabled=settings.rag_auto_chunk_after_extract_enabled,
+        auto_index_after_chunk_enabled=settings.rag_auto_index_after_chunk_enabled,
+        recipe_defaults=global_document_processing_config(settings),
+    )
+
+
+def _persist_pipeline_settings(settings: Settings) -> None:
+    """工程の自動進行を backend/.env へ永続化する（#528）。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "RAG_AUTO_PARSE_AFTER_PREPROCESS_ENABLED": _format_env_bool(
+                settings.rag_auto_parse_after_preprocess_enabled
+            ),
+            "RAG_AUTO_CHUNK_AFTER_EXTRACT_ENABLED": _format_env_bool(
+                settings.rag_auto_chunk_after_extract_enabled
+            ),
+            "RAG_AUTO_INDEX_AFTER_CHUNK_ENABLED": _format_env_bool(
+                settings.rag_auto_index_after_chunk_enabled
+            ),
+        },
+        section_comment="# 工程の自動進行",
+        error_detail="工程の自動進行の設定を backend/.env へ保存できませんでした。",
     )
 
 
@@ -1120,7 +1248,8 @@ def _parser_adapter_settings_candidate(
 ) -> Settings:
     """parser adapter 更新 payload から保存候補 settings を作る。"""
     updates: dict[str, object] = {
-        "rag_parser_adapter_backend": payload.adapter_backend,
+        # 省略したときは今の解析エンジンのまま（「解析後の処理」だけの保存。#528）。
+        "rag_parser_adapter_backend": payload.adapter_backend or base.rag_parser_adapter_backend,
         "rag_parser_docling_enabled": _optional_bool(
             payload.docling_enabled,
             base.rag_parser_docling_enabled,

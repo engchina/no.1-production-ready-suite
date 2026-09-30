@@ -42,6 +42,7 @@ import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import { useCreateKnowledgeBase, useKnowledgeBases } from "@/lib/queries";
+import { firstInvalidFieldId, focusFirstInvalidField } from "@/lib/required-fields";
 import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 import { useWorkspaceState } from "@/lib/workspace-state";
@@ -53,6 +54,7 @@ import {
   DESCRIPTION_MAX_LENGTH,
   NAME_MAX_LENGTH,
   useKnowledgeBaseActions,
+  validateKnowledgeBaseDescription,
   validateKnowledgeBaseName,
 } from "./knowledge-base-actions";
 
@@ -225,20 +227,30 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
   const create = useCreateKnowledgeBase();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [touched, setTouched] = useState(false);
+  // 欄ごとに、フォーカスが外れたとき・送信したときから検証結果を出す（messaging.md §3.2）。
+  const [touched, setTouched] = useState({ name: false, description: false });
   // 作成前の入力があるときだけ離脱を確認する（作成成功で入力は空に戻る）。
   useLeaveGuard(Boolean(name.trim() || description.trim()));
 
-  const nameError = touched ? validateKnowledgeBaseName(name) : null;
+  const nameError = touched.name ? validateKnowledgeBaseName(name) : null;
+  const descriptionError = touched.description ? validateKnowledgeBaseDescription(description) : null;
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setTouched(true);
-    if (validateKnowledgeBaseName(name)) return;
+    setTouched({ name: true, description: true });
+    // 名前と説明は必須（#521）。足りないときは送らず、最初の不正な欄へフォーカスを移す。
+    const errors = [
+      ["knowledge-base-name", validateKnowledgeBaseName(name)],
+      ["knowledge-base-description", validateKnowledgeBaseDescription(description)],
+    ] as const;
+    if (firstInvalidFieldId(errors)) {
+      focusFirstInvalidField(errors);
+      return;
+    }
     create.mutate(
       {
         name: name.trim(),
-        description: description.trim() || null,
+        description: description.trim(),
         default_search_mode: "hybrid",
         retrieval_config: {},
       },
@@ -246,7 +258,7 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
         onSuccess: (detail) => {
           setName("");
           setDescription("");
-          setTouched(false);
+          setTouched({ name: false, description: false });
           onCreated(detail.id);
           toast.success(t("knowledgeBases.toast.created"));
         },
@@ -269,15 +281,21 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
               requiredLabel={t("common.required")}
               value={name}
               onValueChange={setName}
-              onBlur={() => setTouched(true)}
+              onBlur={() => setTouched((current) => ({ ...current, name: true }))}
               error={nameError ?? undefined}
               maxLength={NAME_MAX_LENGTH}
             />
             <TextField
               id="knowledge-base-description"
               label={t("knowledgeBases.field.description")}
+              required
+              requiredLabel={t("common.required")}
               value={description}
               onValueChange={setDescription}
+              onBlur={() => setTouched((current) => ({ ...current, description: true }))}
+              placeholder={t("knowledgeBases.field.descriptionPlaceholder")}
+              helper={t("knowledgeBases.field.descriptionHelper")}
+              error={descriptionError ?? undefined}
               maxLength={DESCRIPTION_MAX_LENGTH}
             />
           </div>

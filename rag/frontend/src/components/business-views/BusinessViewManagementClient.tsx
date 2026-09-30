@@ -74,6 +74,11 @@ import { t } from "@/lib/i18n";
 import { useCustomLeaveGuard } from "@/lib/leave-guard";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import {
+  firstInvalidFieldId,
+  focusFirstInvalidField,
+  requiredTextError,
+} from "@/lib/required-fields";
+import {
   useArchiveBusinessView,
   useBusinessView,
   useBusinessViews,
@@ -154,6 +159,10 @@ function draftSignature(draft: BusinessViewDraft) {
 }
 const FILTERS: (BusinessViewStatus | "ALL")[] = ["ALL", "ACTIVE", "ARCHIVED"];
 const SCOPE_ERROR_ID = "business-view-scope-error";
+// API（BusinessViewCreateRequest / UpdateRequest）の上限。超えると 422 の英語の検証メッセージに
+// なるため入力で止める。
+const NAME_MAX_LENGTH = 256;
+const DESCRIPTION_MAX_LENGTH = 2000;
 
 const RETRIEVAL_OPTIONS: SelectFieldOption<RetrievalModeName>[] = [
   { value: "hybrid_rrf", label: t("settings.retrieval.strategy.hybrid_rrf") },
@@ -738,6 +747,8 @@ function BusinessViewEditor({
   const [description, setDescription] = useState(restored?.description ?? baseline.description);
   const [config, setConfig] = useState<BusinessViewConfig>(restored?.config ?? baseline.config);
   const [touched, setTouched] = useState(false);
+  // 説明はフォーカスが外れたとき・送信したときから検証結果を出す（messaging.md §3.2。#521）。
+  const [descriptionTouched, setDescriptionTouched] = useState(false);
   const draft = useMemo(() => ({ name, description, config }), [name, description, config]);
   const dirty = draftSignature(draft) !== draftSignature(baseline);
 
@@ -767,6 +778,7 @@ function BusinessViewEditor({
     setDescription(baseline.description);
     setConfig(baseline.config);
     setTouched(false);
+    setDescriptionTouched(false);
   };
 
   const isDefault = initial?.name === DEFAULT_BUSINESS_VIEW_NAME;
@@ -780,6 +792,8 @@ function BusinessViewEditor({
 
   const pending = create.isPending || update.isPending;
   const nameError = touched && !isDefault ? validateBusinessViewName(name) : null;
+  // 説明は必須（#521）。説明が空の既存の業務ビュー（DEFAULT を含む）は、保存するときに入力を求める。
+  const descriptionError = descriptionTouched ? validateBusinessViewDescription(description) : null;
   const scopeError =
     touched && config.knowledge_base_ids.length === 0
       ? t("businessViews.knowledgeBasesRequired")
@@ -796,14 +810,23 @@ function BusinessViewEditor({
     event.preventDefault();
     if (isArchived) return;
     setTouched(true);
-    if (validateBusinessViewName(name, isDefault) || config.knowledge_base_ids.length === 0) return;
+    setDescriptionTouched(true);
+    const fieldErrors = [
+      ["business-view-name", validateBusinessViewName(name, isDefault)],
+      ["business-view-description", validateBusinessViewDescription(description)],
+    ] as const;
+    if (firstInvalidFieldId(fieldErrors)) {
+      focusFirstInvalidField(fieldErrors);
+      return;
+    }
+    if (config.knowledge_base_ids.length === 0) return;
     if (mode === "edit" && initial) {
       update.mutate(
         {
           id: initial.id,
           payload: {
             ...(!isDefault ? { name: name.trim() } : {}),
-            description: description.trim() || null,
+            description: description.trim(),
             config,
           },
         },
@@ -824,7 +847,7 @@ function BusinessViewEditor({
       return;
     }
     create.mutate(
-      { name: name.trim(), description: description.trim() || null, config },
+      { name: name.trim(), description: description.trim(), config },
       {
         onSuccess: (detail) => {
           setBaseline(draft);
@@ -907,6 +930,8 @@ function BusinessViewEditor({
                 <TextField
                   id="business-view-name"
                   label={t("businessViews.field.name")}
+                  required={!isDefault}
+                  requiredLabel={t("common.required")}
                   value={name}
                   onValueChange={setName}
                   onBlur={() => setTouched(true)}
@@ -915,14 +940,21 @@ function BusinessViewEditor({
                   placeholder={t("businessViews.field.namePlaceholder")}
                   helper={isDefault ? t("businessViews.default.nameFixed") : undefined}
                   error={nameError || undefined}
+                  maxLength={NAME_MAX_LENGTH}
                   inputClassName={isDefault ? "cursor-default text-fg-muted" : undefined}
                 />
                 <TextField
                   id="business-view-description"
                   label={t("businessViews.field.description")}
+                  required
+                  requiredLabel={t("common.required")}
                   value={description}
                   onValueChange={setDescription}
+                  onBlur={() => setDescriptionTouched(true)}
                   placeholder={t("businessViews.field.descriptionPlaceholder")}
+                  helper={t("businessViews.field.descriptionHelper")}
+                  error={descriptionError || undefined}
+                  maxLength={DESCRIPTION_MAX_LENGTH}
                 />
               </div>
 
@@ -1255,6 +1287,11 @@ function KnowledgeBaseIssuesBanner({
       </div>
     </Banner>
   );
+}
+
+/** 説明の検証（作成・編集で共通。#521）。空・空白だけは入力を求める。 */
+function validateBusinessViewDescription(description: string) {
+  return requiredTextError(description, t("businessViews.descriptionRequired"));
 }
 
 function validateBusinessViewName(name: string, allowDefault = false) {
