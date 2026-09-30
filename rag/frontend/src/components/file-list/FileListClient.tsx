@@ -23,6 +23,7 @@ import {
   StatusBadge as UiStatusBadge,
   offsetForPage,
   offsetPagination,
+  ListToolbar,
 } from "@engchina/production-ready-ui";
 import { Link } from "react-router-dom";
 import { RefreshCw, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
@@ -342,29 +343,10 @@ export function FileListClient() {
           isRetrying={query.isFetching}
         />
 
-        {/* フィルタ + 検索 */}
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-1" role="group" aria-label={t("fileList.filterAll")}>
-            {FILTERS.map((f) => (
-              <ToggleChip
-                key={f}
-                selected={filter === f}
-                onClick={() => resetView(() => setFilter(f))}
-              >
-                {f === "ALL" ? t("fileList.filterAll") : t(`status.${f}`)}
-              </ToggleChip>
-            ))}
-          </div>
-          <div className="flex flex-wrap items-end gap-3">
-            <SelectField
-              id="file-list-knowledge-base"
-              label={t("fileList.knowledgeBaseFilter.label")}
-              value={knowledgeBaseId}
-              options={knowledgeBaseOptions}
-              onValueChange={(value) => resetView(() => setKnowledgeBaseId(value))}
-              className="w-60 [&_label]:text-xs"
-              buttonClassName="bg-surface"
-            />
+        {/* 一覧のツールバー: 左に検索、その右にナレッジベースと状態の絞り込み
+            （page-archetypes.md「一覧のツールバー」。#600）。 */}
+        <ListToolbar
+          search={
             <SearchField
               id="file-list-search"
               label={t("fileList.searchPlaceholder")}
@@ -377,10 +359,34 @@ export function FileListClient() {
               }
               maxLength={FILE_LIST_QUERY_MAX_LENGTH}
               placeholder={t("fileList.searchPlaceholder")}
-              className="w-56"
             />
-          </div>
-        </div>
+          }
+          filters={
+            <>
+              <SelectField
+                id="file-list-knowledge-base"
+                label={t("fileList.knowledgeBaseFilter.label")}
+                value={knowledgeBaseId}
+                options={knowledgeBaseOptions}
+                onValueChange={(value) => resetView(() => setKnowledgeBaseId(value))}
+                className="w-full @md:w-60 [&_label]:text-xs"
+                buttonClassName="bg-surface"
+              />
+              <div className="flex flex-wrap items-center gap-1" role="group" aria-label={t("fileList.filterAll")}>
+                {FILTERS.map((f) => (
+                  <ToggleChip
+                    key={f}
+                    selected={filter === f}
+                    onClick={() => resetView(() => setFilter(f))}
+                  >
+                    {f === "ALL" ? t("fileList.filterAll") : t(`status.${f}`)}
+                  </ToggleChip>
+                ))}
+              </div>
+            </>
+          }
+          testId="file-list-toolbar"
+        />
 
         {knowledgeBases.isError ? (
           <Banner severity="warning" title={t("knowledgeBaseScope.loadWarning")}>

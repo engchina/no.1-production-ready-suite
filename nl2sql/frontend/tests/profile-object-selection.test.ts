@@ -207,7 +207,9 @@ test("突合用集合は引用符と大文字小文字を吸収する", () => {
 test("チェック判定・トグル・件数が同じ正規化キーを共有する", () => {
   assert.match(profilePage, /selectedObjectKeys\(selectedItems\)/u);
   assert.match(profilePage, /toggleObjectSelection\(current\[key\], name\)/u);
-  assert.match(profilePage, /selected=\{selectedSet\.has\(normalizeObjectKey\(qualified\)\)\}/u);
+  // 候補の key と選択の集合が同じ正規化キー（共通の ListPicker の selectedKeys で判定する。#600）。
+  assert.match(profilePage, /key: normalizeObjectKey\(qualified\)/u);
+  assert.match(profilePage, /selectedKeys=\{selectedSet\}/u);
   assert.match(profilePage, /countSelectedObjectsInOwner\(selectedSet, owner\)/u);
   assert.doesNotMatch(profilePage, /name\.startsWith\(ownerKeyPrefix\)/u);
   assert.doesNotMatch(profilePage, /current\[key\]\.includes\(name\)/u);

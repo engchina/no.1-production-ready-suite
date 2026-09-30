@@ -997,6 +997,26 @@ export function useKnowledgeBaseSearch(params: { status?: KnowledgeBaseStatus; q
   });
 }
 
+/** 文書を選ぶ一覧（KB の「文書を追加」）で 1 回に取得する件数。続きは「さらに読み込む」で取る（#600）。 */
+export const DOCUMENT_CANDIDATE_PAGE_SIZE = 100;
+
+/**
+ * 文書を選ぶ一覧の候補（文書名のサーバー側検索 + ページング。#600）。数千〜数万件の文書を一度に読まず、
+ * `fetchNextPage` で続きを積む。検索語を変えている間は直前の候補を出したままにする。
+ */
+export function useDocumentCandidates(params: { q?: string }, options: { enabled?: boolean } = {}) {
+  return useInfiniteQuery({
+    queryKey: [...queryKeys.documents({ q: params.q, limit: DOCUMENT_CANDIDATE_PAGE_SIZE }), "candidates"],
+    queryFn: ({ pageParam }) =>
+      api.listDocuments({ q: params.q, limit: DOCUMENT_CANDIDATE_PAGE_SIZE, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) =>
+      lastPage.has_next ? lastPage.offset + lastPage.items.length : undefined,
+    placeholderData: keepPreviousData,
+    enabled: options.enabled ?? true,
+  });
+}
+
 /** 一覧 API の `ids` の上限（backend の `MAX_KNOWLEDGE_BASE_ID_FILTER`）。 */
 const KNOWLEDGE_BASE_ID_LOOKUP_LIMIT = 200;
 
@@ -1430,11 +1450,20 @@ export function useArchiveBusinessView() {
 }
 
 /** 既存文書をナレッジベースへ追加する。 */
+/** KB へ文書を追加する API の 1 回の上限（backend の `AssignDocumentsRequest.document_ids`）。 */
+const ASSIGN_DOCUMENTS_BATCH_SIZE = 200;
+
 export function useAssignDocumentsToKnowledgeBase() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, documentIds }: { id: string; documentIds: string[] }) =>
-      api.assignDocumentsToKnowledgeBase(id, { document_ids: documentIds }),
+    // API は 1 回に 200 件まで（`document_ids` の max_length）。それを超える選択は 200 件ずつ順に送る（#600）。
+    mutationFn: async ({ id, documentIds }: { id: string; documentIds: string[] }) => {
+      for (let start = 0; start < documentIds.length; start += ASSIGN_DOCUMENTS_BATCH_SIZE) {
+        await api.assignDocumentsToKnowledgeBase(id, {
+          document_ids: documentIds.slice(start, start + ASSIGN_DOCUMENTS_BATCH_SIZE),
+        });
+      }
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
       qc.invalidateQueries({ queryKey: ["documents"] });

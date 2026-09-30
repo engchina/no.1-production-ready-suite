@@ -32,6 +32,7 @@ import {
   ClearActionButton,
   SearchField,
   TextField,
+  ListToolbar,
 } from "@engchina/production-ready-ui";
 import { Archive, ArrowLeft, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useMemo, useRef, useState, type FormEvent } from "react";
@@ -434,39 +435,44 @@ function BusinessViewList({
           <EditorDraftNotice message={t("businessViews.draftPending")} onOpen={onCreate} />
         ) : null}
 
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div
-            className="flex flex-wrap items-center gap-1"
-            role="group"
-            aria-label={t("businessViews.filter.aria")}
-          >
-            {FILTERS.map((item) => (
-              <ToggleChip key={item} selected={filter === item} onClick={() => setFilter(item)}>
-                {item === "ALL"
-                  ? t("businessViews.filter.all")
-                  : item === "ACTIVE"
-                    ? t("businessViews.filter.active")
-                    : t("businessViews.filter.archived")}
-              </ToggleChip>
-            ))}
-          </div>
-          {/* 一覧の絞り込みは入力に合わせて適用する（検索ボタンを置かない。ナレッジベースの一覧と同じ部品・幅。#535）。 */}
-          <SearchField
-            id="business-view-search"
-            label={t("businessViews.search.placeholder")}
-            labelHidden
-            value={q}
-            onSearch={(next) => {
-              if (next !== q) setQ(next);
-            }}
-            clearLabel={t("common.clearSearch")}
-            resultCountLabel={
-              page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
-            }
-            placeholder={t("businessViews.search.placeholder")}
-            className="w-full sm:w-64"
-          />
-        </div>
+        {/* 一覧のツールバー: 左に検索、その右に状態の絞り込み（page-archetypes.md「一覧のツールバー」。#600）。
+            一覧の絞り込みは入力に合わせて適用する（検索ボタンを置かない。#535）。 */}
+        <ListToolbar
+          search={
+            <SearchField
+              id="business-view-search"
+              label={t("businessViews.search.placeholder")}
+              labelHidden
+              value={q}
+              onSearch={(next) => {
+                if (next !== q) setQ(next);
+              }}
+              clearLabel={t("common.clearSearch")}
+              resultCountLabel={
+                page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
+              }
+              placeholder={t("businessViews.search.placeholder")}
+            />
+          }
+          filters={
+            <div
+              className="flex flex-wrap items-center gap-1"
+              role="group"
+              aria-label={t("businessViews.filter.aria")}
+            >
+              {FILTERS.map((item) => (
+                <ToggleChip key={item} selected={filter === item} onClick={() => setFilter(item)}>
+                  {item === "ALL"
+                    ? t("businessViews.filter.all")
+                    : item === "ACTIVE"
+                      ? t("businessViews.filter.active")
+                      : t("businessViews.filter.archived")}
+                </ToggleChip>
+              ))}
+            </div>
+          }
+          testId="business-view-list-toolbar"
+        />
 
         {query.isError ? (
           <ErrorState

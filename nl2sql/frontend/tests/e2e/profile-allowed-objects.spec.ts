@@ -1152,10 +1152,15 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   await expect(tableList.getByLabel("APP.TABLE_01")).toBeChecked();
   await expect(viewList.getByLabel("APP.VIEW_02")).toBeChecked();
 
+  // 行は共通の ListPicker の選択肢（role=option。#600）。表とビューの一覧は同じ高さ（28rem）で中をスクロールする。
   const tableScrollRegion = page.getByTestId("profile-allowed-table-list-scroll-region");
-  const fit = await tableList.evaluate((node) => {
+  const viewScrollRegion = page.getByTestId("profile-allowed-view-list-scroll-region");
+  const [tablePanelBox, viewPanelBox] = await Promise.all([tableList.boundingBox(), viewList.boundingBox()]);
+  expect(Math.abs(tablePanelBox!.height - viewPanelBox!.height)).toBeLessThanOrEqual(1);
+  expect(await viewScrollRegion.evaluate((node) => node.clientHeight)).toBeGreaterThan(0);
+  const fit = await tableScrollRegion.evaluate((node) => {
     const listBox = node.getBoundingClientRect();
-    const rows = Array.from(node.querySelectorAll("label")).map((row) => row.getBoundingClientRect());
+    const rows = Array.from(node.querySelectorAll('[role="option"]')).map((row) => row.getBoundingClientRect());
     const visibleRows = rows.filter((row) => row.bottom <= listBox.bottom + 1 && row.top >= listBox.top - 1).length;
     return {
       listHeight: listBox.height,
@@ -1169,8 +1174,9 @@ test("業務プロファイルは表とビューを固定高リストで管理�
     scrollHeight: node.scrollHeight,
     overflowY: window.getComputedStyle(node).overflowY,
   }));
-  expect(fit.listHeight).toBeGreaterThanOrEqual(388);
-  expect(fit.listHeight).toBeLessThanOrEqual(396);
+  // md 未満は 5 行（17.5rem）、md 以上は 8 行（28rem）の高さ（一覧の表示密度。#265 / #600）。
+  const expectedListHeight = page.viewportSize()!.width < 768 ? 247 : 394;
+  expect(Math.abs(fit.listHeight - expectedListHeight)).toBeLessThanOrEqual(4);
   expect(fit.visibleRows).toBeGreaterThan(0);
   expect(fit.visibleRows).toBeLessThan(fit.totalRows);
   expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
@@ -1924,12 +1930,17 @@ test("小文字を含む owner は大文字の同名 owner と別のスキーマ
   await page.goto("/profiles?profile=default");
 
   const tableList = page.getByTestId("profile-allowed-table-list");
-  const mixedGroup = tableList.getByRole("region", { name: '"Sales" schema のオブジェクト' });
-  const upperGroup = tableList.getByRole("region", { name: "SALES schema のオブジェクト" });
+  // グループは見出し（件数・一括選択）と listbox「テーブル選択: <owner>」（共通の ListPicker。#600）。
+  const mixedGroup = tableList.getByTestId('profile-allowed-table-list-"sales"-schema');
+  const upperGroup = tableList.getByTestId("profile-allowed-table-list-sales-schema");
   await expect(mixedGroup).toBeVisible();
   await expect(upperGroup).toBeVisible();
-  const mixed = mixedGroup.getByLabel('"Sales".ORDERS', { exact: true });
-  const upper = upperGroup.getByLabel("SALES.ORDERS", { exact: true });
+  const mixed = tableList
+    .getByRole("listbox", { name: 'テーブル選択: "Sales"', exact: true })
+    .getByLabel('"Sales".ORDERS', { exact: true });
+  const upper = tableList
+    .getByRole("listbox", { name: "テーブル選択: SALES", exact: true })
+    .getByLabel("SALES.ORDERS", { exact: true });
   await expect(mixed).toBeVisible();
   await expect(upper).toBeVisible();
 
@@ -2354,16 +2365,17 @@ test("業務プロファイルの対象オブジェクト空状態はExcelプレ
   const tableList = page.getByTestId("profile-allowed-table-list");
   const viewList = page.getByTestId("profile-allowed-view-list");
 
-  await expect(tableList).toHaveAttribute("aria-label", "テーブル選択");
-  await expect(viewList).toHaveAttribute("aria-label", "ビュー選択");
+  await expect(tableList).toHaveAccessibleName("テーブル選択");
+  await expect(viewList).toHaveAccessibleName("ビュー選択");
   await expect(tableList.getByText("選択できるテーブルがありません。")).toBeVisible();
   await expect(tableList.getByText("Oracle からテーブルを読み込むとここに表示されます。")).toBeVisible();
   await expect(viewList.getByText("選択できるビューがありません。")).toBeVisible();
   await expect(viewList.getByText("Oracle からビューを読み込むとここに表示されます。")).toBeVisible();
-  await expect(tableList.locator("label")).toHaveCount(0);
-  await expect(viewList.locator("label")).toHaveCount(0);
+  await expect(tableList.getByRole("option")).toHaveCount(0);
+  await expect(viewList.getByRole("option")).toHaveCount(0);
 
-  const surface = await tableList.evaluate((node) => {
+  // 空の案内は一覧の領域（28rem）の中に出す（候補があるときと同じ高さ。#600）。
+  const surface = await page.getByTestId("profile-allowed-table-list-scroll-region").evaluate((node) => {
     const style = window.getComputedStyle(node);
     return {
       height: node.getBoundingClientRect().height,
@@ -2373,8 +2385,8 @@ test("業務プロファイルの対象オブジェクト空状態はExcelプレ
       noHorizontalOverflow: node.scrollWidth <= node.clientWidth + 1,
     };
   });
-  expect(surface.height).toBeGreaterThanOrEqual(388);
-  expect(surface.height).toBeLessThanOrEqual(396);
+  const expectedSurfaceHeight = page.viewportSize()!.width < 768 ? 247 : 394;
+  expect(Math.abs(surface.height - expectedSurfaceHeight)).toBeLessThanOrEqual(4);
   expect(surface.borderStyle).toBe("solid");
   expect(surface.backgroundColor).toBe("rgb(255, 255, 255)");
   expect(surface.dashedDescendants).toBe(0);
@@ -2652,16 +2664,16 @@ test("50 件超のスキーマでも仮想スクロールの行位置がずれ�
 
   await page.goto("/profiles?profile=default");
 
-  const virtualList = page
-    .getByTestId("profile-allowed-table-list")
-    .getByTestId("schema-object-virtual-list");
+  // 共通の ListPicker は 100 行を超えると見えている行だけを描く（#600）。
+  const virtualList = page.getByTestId("profile-allowed-table-list-scroll-region");
   await expect(virtualList).toBeVisible();
+  expect(await virtualList.getByRole("option").count()).toBeLessThan(60);
 
   await virtualList.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
   });
 
-  const lastRow = virtualList.locator('label:has(input[aria-label="APP.TABLE_120"])');
+  const lastRow = virtualList.getByLabel("APP.TABLE_120", { exact: true });
   await expect(lastRow).toBeVisible();
 
   // 行高の定数と実描画が一致していれば、末尾までスクロールした時点で
@@ -2978,7 +2990,7 @@ test("保存中はプロファイル編集と競合操作を固定し失敗後�
     await expect(name).toBeDisabled();
     await expect(page.getByLabel("実行確認語")).toBeDisabled();
     await expect(page.getByRole("button", { name: "一覧に戻る", exact: true })).toBeDisabled();
-    await expect(page.getByTestId("profile-allowed-table-list").getByRole("checkbox").first()).toBeDisabled();
+    await expect(page.getByTestId("profile-allowed-table-list").getByRole("option").first()).toBeDisabled();
   } finally { release?.(); }
   await expect(page.getByText("保存失敗テスト", { exact: true })).toBeVisible();
   await expect(name).toBeEnabled();

@@ -74,10 +74,13 @@ test("ナレッジベース管理で作成、文書追加、文書解除、ア�
   await expect(page.getByRole("heading", { name: "設計資料", level: 1 })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveValue("設計資料");
 
-  // 詳細ページで文書を追加する。
-  await page.getByRole("combobox", { name: "文書を追加" }).click();
-  await page.getByRole("option", { name: "guide.txt" }).click();
-  await page.getByRole("button", { name: "追加" }).click();
+  // 詳細ページで文書を追加する（「文書を追加」で候補の一覧を開き、選んで追加する。#600）。
+  await page.getByRole("button", { name: "文書を追加", exact: true }).click();
+  await page
+    .getByRole("listbox", { name: "追加する文書の候補" })
+    .getByRole("option", { name: "guide.txt" })
+    .click();
+  await page.getByRole("button", { name: "選択した 1 件を追加" }).click();
 
   await expect(page.getByText("文書をナレッジベースに追加しました。").first()).toBeVisible();
   await expect(page.getByRole("link", { name: "guide.txt" })).toBeVisible();
@@ -467,32 +470,163 @@ test("所属文書は 10 件ずつページングし、外して空になった�
   await expectNoPageOverflow(page);
 });
 
-test("追加候補は文書名で検索して選べる", async ({ page }) => {
+/** アプリの外観の設定（localStorage）でテーマを切り替える（`emulateMedia` では切り替わらない）。 */
+async function useTheme(page: Page, theme: "light" | "dark") {
+  await page.addInitScript((value) => {
+    window.localStorage.setItem(
+      "production-ready-rag.ui",
+      JSON.stringify({ state: { theme: value }, version: 0 })
+    );
+  }, theme);
+}
+
+function addCandidateDocuments(state: ReturnType<typeof createKnowledgeBaseState>, count: number) {
+  for (let index = 1; index <= count; index += 1) {
+    const number = String(index).padStart(4, "0");
+    state.documents.push(
+      makeDocument({ id: `doc-bulk-${number}`, file_name: `bulk-${number}.pdf`, status: "INDEXED" })
+    );
+  }
+}
+
+// #600: 数千〜数万件の文書から、検索して複数を選び、一度に追加する（共通の ListPicker）。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900, theme: "light" as const },
+  { name: "mobile", width: 375, height: 812, theme: "dark" as const },
+]) {
+  test(`文書を追加は 3,000 件から検索して複数を選び、一度に追加できる (${viewport.name} / ${viewport.theme})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await useTheme(page, viewport.theme);
+    const state = createKnowledgeBaseState();
+    addCandidateDocuments(state, 3000);
+    await mockKnowledgeBaseApi(page, state);
+    const candidateRequests: { q: string | null; offset: string | null; limit: string | null }[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/documents" && !url.searchParams.has("knowledge_base_id")) {
+        candidateRequests.push({
+          q: url.searchParams.get("q"),
+          offset: url.searchParams.get("offset"),
+          limit: url.searchParams.get("limit"),
+        });
+      }
+    });
+
+    await page.goto("/knowledge-bases/kb-1");
+    await expect(page.getByRole("heading", { name: "社内規程", level: 1 })).toBeVisible();
+    const toggle = page.getByRole("button", { name: "文書を追加", exact: true });
+    // 一覧のツールバー: 左に所属文書の検索、右に「文書を追加」（page-archetypes.md「一覧のツールバー」）。
+    const memberSearch = page.getByRole("searchbox", { name: "所属文書を検索" });
+    const [memberSearchBox, toggleBox] = await Promise.all([memberSearch.boundingBox(), toggle.boundingBox()]);
+    if (viewport.width >= 1024) expect(memberSearchBox!.x).toBeLessThan(toggleBox!.x);
+    // 狭い幅では縦に積み、検索欄が先頭。
+    else expect(memberSearchBox!.y).toBeLessThan(toggleBox!.y);
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    // 候補は開くまで読まない。
+    expect(candidateRequests).toHaveLength(0);
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const picker = page.getByTestId("knowledge-base-add-documents");
+    const search = picker.getByRole("searchbox", { name: "追加する文書を検索" });
+    await expect(search).toBeFocused();
+    const listbox = picker.getByRole("listbox", { name: "追加する文書の候補" });
+    await expect(listbox).toBeVisible();
+    // 数千件を一度に読まず、100 件ずつ読む。
+    expect(candidateRequests[0]).toEqual({ q: null, offset: "0", limit: "100" });
+    const footer = picker.getByTestId("knowledge-base-add-documents-footer");
+    await expect(footer).toContainText("100 / 3,002 件を表示、選択 0 件");
+    // すでに所属している文書は「追加済み」で選べない。
+    const assigned = listbox.getByRole("option", { name: "policy.txt" });
+    await expect(assigned).toHaveAttribute("aria-disabled", "true");
+    await expect(assigned).toContainText("追加済み");
+
+    // キーボード: listbox に入り、↓ と Space で選ぶ。
+    await listbox.focus();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Space");
+    await expect(listbox.getByRole("option", { name: "guide.txt" })).toHaveAttribute("aria-checked", "true");
+    await expect(footer).toContainText("選択 1 件");
+
+    // 続きを読み込む（offset 100）。
+    await picker.getByRole("button", { name: "さらに読み込む" }).click();
+    await expect(footer).toContainText("200 / 3,002 件を表示、選択 1 件");
+    expect(candidateRequests.some((request) => request.offset === "100" && request.q === null)).toBe(true);
+    // 100 行を超えたら、描く行は見えている範囲だけ（仮想スクロール）。
+    expect(await listbox.getByRole("option").count()).toBeLessThan(60);
+
+    // 文書名でサーバー側を検索する（入力に合わせて。検索ボタンは無い）。
+    await search.fill("bulk-295");
+    await expect.poll(() => candidateRequests.some((request) => request.q === "bulk-295")).toBe(true);
+    await expect(footer).toContainText("10 / 10 件を表示、選択 1 件");
+    await listbox.getByRole("option", { name: "bulk-2950.pdf" }).click();
+    await listbox.getByRole("option", { name: "bulk-2959.pdf" }).click();
+    await expect(footer).toContainText("選択 3 件");
+    // 検索語を変えても選択は残り、「選択中だけ表示」で確かめられる。
+    await search.fill("");
+    // 検索前に読み込んだ分（2 ページ）はキャッシュから戻る。
+    await expect(footer).toContainText("200 / 3,002 件を表示、選択 3 件");
+    const showSelected = picker.getByRole("button", { name: "選択中だけ表示（3）" });
+    await showSelected.click();
+    await expect(showSelected).toHaveAttribute("aria-pressed", "true");
+    await expect(listbox.getByRole("option")).toHaveCount(3);
+    await expect(listbox.getByRole("option", { name: "bulk-2950.pdf" })).toBeVisible();
+    await expectNoPageOverflow(page);
+
+    await picker.getByRole("button", { name: "選択した 3 件を追加" }).click();
+    await expect(page.getByText("文書をナレッジベースに追加しました。").first()).toBeVisible();
+    // 追加したら閉じて、起点のボタンへフォーカスを戻す。
+    await expect(picker).toHaveCount(0);
+    await expect(toggle).toBeFocused();
+    await expect(page.getByRole("link", { name: "bulk-2959.pdf" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "guide.txt" })).toBeVisible();
+    await expectNoPageOverflow(page);
+  });
+}
+
+test("所属文書は一覧の中を検索でき、検索語を変えると 1 ページ目に戻る", async ({ page }) => {
   const state = createKnowledgeBaseState();
-  state.documents.push(
-    makeDocument({ id: "doc-3", file_name: "security-handbook.pdf", knowledge_bases: [] })
-  );
+  const kb = state.knowledgeBases[0];
+  for (let index = 2; index <= 25; index += 1) {
+    state.documents.push(
+      makeDocument({
+        id: `doc-member-${index}`,
+        file_name: `member-${String(index).padStart(2, "0")}.txt`,
+        status: "INDEXED",
+        knowledge_bases: [{ id: kb.id, name: kb.name }],
+      })
+    );
+  }
+  refreshKnowledgeBaseCounts(state, kb.id);
   await mockKnowledgeBaseApi(page, state);
-  const candidateQueries: (string | null)[] = [];
+  const memberQueries: (string | null)[] = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
-    if (url.pathname === "/api/documents" && !url.searchParams.has("knowledge_base_id")) {
-      candidateQueries.push(url.searchParams.get("q"));
+    if (url.pathname === "/api/documents" && url.searchParams.get("knowledge_base_id") === "kb-1") {
+      memberQueries.push(url.searchParams.get("q"));
     }
   });
 
   await page.goto("/knowledge-bases/kb-1");
-  const search = page.getByRole("searchbox", { name: "追加する文書を検索" });
-  await search.fill("security");
-  await search.press("Enter");
-  await expect.poll(() => candidateQueries.includes("security")).toBe(true);
+  const pagination = page.getByTestId("knowledge-base-documents-pagination");
+  await expect(pagination).toContainText("1 - 10 / 25 件");
+  await pagination.getByRole("button", { name: "次へ" }).click();
+  await expect(pagination).toContainText("11 - 20 / 25 件");
 
-  await page.getByRole("combobox", { name: "文書を追加" }).click();
-  await expect(page.getByRole("option", { name: "security-handbook.pdf" })).toBeVisible();
-  await expect(page.getByRole("option", { name: "guide.txt" })).toHaveCount(0);
-  await page.getByRole("option", { name: "security-handbook.pdf" }).click();
-  await page.getByRole("button", { name: "追加", exact: true }).click();
-  await expect(page.getByRole("link", { name: "security-handbook.pdf" })).toBeVisible();
+  const search = page.getByRole("searchbox", { name: "所属文書を検索" });
+  await search.fill("member-1");
+  await expect.poll(() => memberQueries.includes("member-1")).toBe(true);
+  // 検索語が変わったら 1 ページ目へ戻る。10 件で 1 ページなのでページ送りは出さない。
+  await expect(page.getByRole("link", { name: /^member-1/ })).toHaveCount(10);
+  await expect(pagination).toHaveCount(0);
+
+  await search.fill("zzz");
+  await expect(page.getByText("検索に一致する所属文書がありません。")).toBeVisible();
+  await page.getByRole("button", { name: "検索語をクリア" }).last().click();
+  await expect(pagination).toContainText("1 - 10 / 25 件");
+  await expect(search).toHaveValue("");
   await expectNoPageOverflow(page);
 });
 
