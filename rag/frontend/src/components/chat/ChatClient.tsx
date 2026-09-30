@@ -41,6 +41,7 @@ import { CitationCard } from "@/components/search/CitationCard";
 import { AnswerProgress } from "@/components/search/AnswerProgress";
 import { SavedAnswerRecord } from "@/components/search/SavedAnswerRecord";
 import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
+import { AnswerText } from "@/components/search/AnswerText";
 import { useAuth } from "@/components/security/AuthProvider";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { isSubmitEnter } from "@/lib/keyboard";
@@ -208,15 +209,16 @@ function AssistantColumn({
           testId="chat-answer-progress"
         />
       ) : (
-        <p
-          className="whitespace-pre-wrap text-sm leading-relaxed text-fg"
-          aria-live="polite"
-        >
-          {answer}
-          {streaming ? (
-            <span className="ml-0.5 inline-block animate-pulse motion-reduce:animate-none">▍</span>
-          ) : null}
-        </p>
+        <AnswerText
+          text={answer}
+          streaming={streaming}
+          live
+          cursor={
+            streaming ? (
+              <span className="ml-0.5 inline-block animate-pulse motion-reduce:animate-none">▍</span>
+            ) : null
+          }
+        />
       )}
       {guardrailWarnings.length > 0 ? (
         <Banner severity="warning">

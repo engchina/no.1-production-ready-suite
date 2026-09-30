@@ -3,6 +3,13 @@ export type AnswerDiagnostics = {
   confidence: string;
   needsHumanReview: boolean | null;
   insufficientReason: string;
+  /** 判断理由（引用照合の件数など。#651）。 */
+  reasoningSummary: string;
+  /** 資料では決まらず業務システムの実データで確かめる値（#651）。 */
+  externalDataRequired: boolean;
+  externalDataItems: string[];
+  /** 問い合わせ型（回答モデルが付けた質問の種類の語。#651）。 */
+  questionType: string[];
   /** チャットで会話履歴から書き換えた質問(書き換えなしは空)。 */
   rewrittenQuestion: string;
   generatedQueries: string[];
@@ -57,6 +64,10 @@ export function parseAnswerDiagnostics(
         ? raw.needs_human_review
         : null,
     insufficientReason: String(raw.insufficient_reason ?? ""),
+    reasoningSummary: String(raw.reasoning_summary ?? ""),
+    externalDataRequired: raw.external_data_required === true,
+    externalDataItems: list(raw.external_data_items).map(String).filter(Boolean),
+    questionType: list(raw.question_type).map(String).filter(Boolean),
     rewrittenQuestion: String(raw.rewritten_question ?? ""),
     generatedQueries: list(raw.generated_queries).map(String).filter(Boolean),
     models: parseModels(raw.models),

@@ -6,6 +6,8 @@ import {
   PageHeader,
   Banner,
   Button,
+  FieldActionRow,
+  TextareaField,
   Card,
   CardContent,
   CardHeader,
@@ -54,6 +56,7 @@ import { isNullableString, isOneOf, useWorkspaceState } from "@/lib/workspace-st
 import { RunStopButton } from "@/components/RunStopButton";
 import { AnswerProgress } from "./AnswerProgress";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
+import { AnswerText } from "./AnswerText";
 import { QuerySuggestions } from "./QuerySuggestions";
 import { ApprovedFaqAnswer, ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
 import { ExtractionFieldFilters } from "./ExtractionFieldFilters";
@@ -394,29 +397,6 @@ export function SearchClient() {
                 }
               />
 
-              {/* 質問欄の Enter で検索する（実行中の Enter は submit が無視し、停止しない）。
-                  検索のボタンはフォームの最後（詳細条件の下）に置く（#413）。 */}
-              <TextField
-                id="search-query"
-                label={t("nav.search")}
-                labelHidden
-                value={query}
-                onValueChange={setQuery}
-                onKeyDown={(e) => {
-                  if (isSubmitEnter(e)) void submit();
-                }}
-                placeholder={t("search.placeholder")}
-                leadingIcon={SearchIcon}
-              />
-
-              <QuerySuggestions
-                businessViewId={businessViewId}
-                query={query}
-                filters={classificationSuggestionFilters(classification)}
-                disabled={isStreaming}
-                onSelect={setQuery}
-              />
-
               <div className="rounded-md border border-border bg-surface-sunken">
                 <button
                   type="button"
@@ -571,17 +551,50 @@ export function SearchClient() {
                 />
               </div>
 
-              {/* フォームの操作行（buttons.md §3.1 / §5.2.1）。検索と停止は同じボタンで、実行中は同じ位置で「停止」になる。 */}
-              <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center">
-                <RunStopButton
-                  running={isStreaming}
-                  onRun={() => void submit()}
-                  onStop={cancel}
-                  runLabel={t("search.button")}
-                  stopLabel={t("search.cancel")}
-                  runIcon={SearchIcon}
-                  className="w-full sm:w-auto sm:min-w-28"
-                  testId="search-run-stop"
+              {/* 質問と検索の行はフォームの最後（詳細条件・スイッチの下。#413）。チャットの入力欄と同じく
+                  複数行の入力欄（2 行）と lg のボタンを FieldActionRow に置く（ボタンは入力欄の下端にそろい、
+                  375px では下に全幅。#613）。検索と停止は同じボタンで、実行中は同じ位置で「停止」になる。
+                  Enter で検索、Shift+Enter で改行（IME の変換を確定する Enter では検索しない。#459）。
+                  実行中の Enter は submit が無視し、停止しない。 */}
+              <div className="space-y-2 border-t border-border pt-4">
+                <FieldActionRow
+                  actions={
+                    <RunStopButton
+                      running={isStreaming}
+                      onRun={() => void submit()}
+                      onStop={cancel}
+                      runLabel={t("search.button")}
+                      stopLabel={t("search.cancel")}
+                      runIcon={SearchIcon}
+                      size="lg"
+                      testId="search-run-stop"
+                    />
+                  }
+                >
+                  <TextareaField
+                    id="search-query"
+                    label={t("nav.search")}
+                    labelHidden
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (isSubmitEnter(event) && !event.shiftKey) {
+                        event.preventDefault();
+                        void submit();
+                      }
+                    }}
+                    rows={2}
+                    placeholder={t("search.placeholder")}
+                    // ラベルは読み上げだけ（sr-only）なので、欄の上に余白を空けない。
+                    className="space-y-0"
+                  />
+                </FieldActionRow>
+                <QuerySuggestions
+                  businessViewId={businessViewId}
+                  query={query}
+                  filters={classificationSuggestionFilters(classification)}
+                  disabled={isStreaming}
+                  onSelect={setQuery}
                 />
               </div>
             </CardContent>
@@ -645,12 +658,15 @@ export function SearchClient() {
                   ) : null}
                   <ActiveFilterChips filters={appliedFilters} />
                   {answerMode ? (
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">
-                      {answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
-                      {isStreaming ? (
-                        <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent-emphasis align-middle" />
-                      ) : null}
-                    </p>
+                    <AnswerText
+                      text={answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
+                      streaming={isStreaming}
+                      cursor={
+                        isStreaming ? (
+                          <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent-emphasis align-middle" />
+                        ) : null
+                      }
+                    />
                   ) : (
                     <>
                       {/* 回答を作らないとき、本文は検索できなかった理由（検索の準備が無いなど）だけが届く。 */}

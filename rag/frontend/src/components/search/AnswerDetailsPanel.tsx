@@ -1,4 +1,4 @@
-import { Disclosure, StatusBadge } from "@engchina/production-ready-ui";
+import { Banner, Disclosure, StatusBadge } from "@engchina/production-ready-ui";
 
 import { confidenceVariant, parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
 import { t } from "@/lib/i18n";
@@ -67,6 +67,13 @@ export function AnswerDetailsPanel({
             label={t("search.answerDetails.humanReview")}
           />
         ) : null}
+        {data.questionType.map((value) => (
+          <StatusBadge
+            key={value}
+            variant="neutral"
+            label={t("search.answerDetails.questionType", { value })}
+          />
+        ))}
       </div>
       {models.length ? (
         <div
@@ -95,6 +102,24 @@ export function AnswerDetailsPanel({
         <p className="text-xs leading-relaxed text-fg-muted">
           {t("search.answerDetails.insufficient", { reason: data.insufficientReason })}
         </p>
+      ) : null}
+      {data.reasoningSummary ? (
+        <p className="break-words text-xs leading-relaxed text-fg-muted">
+          {t("search.answerDetails.reasoning", { reason: data.reasoningSummary })}
+        </p>
+      ) : null}
+      {data.externalDataRequired || data.externalDataItems.length ? (
+        // 資料では決まらない値（rag_poc の「外部データ確認」。#651）。
+        <Banner severity="warning" title={t("search.answerDetails.externalData.title")}>
+          <p>{t("search.answerDetails.externalData.hint")}</p>
+          {data.externalDataItems.length ? (
+            <ul className="mt-1 list-disc pl-5">
+              {data.externalDataItems.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          ) : null}
+        </Banner>
       ) : null}
       <Disclosure variant="plain" summary={`${t("search.answerDetails.evidence")}（${data.tree.length}）`}>
         <ol className="space-y-2">

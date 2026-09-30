@@ -334,6 +334,16 @@ test("検索のボタンは詳細条件の下にあり、実行中は同じ位�
   const [buttonBox, advancedBox] = await Promise.all([button.boundingBox(), advanced.boundingBox()]);
   if (!buttonBox || !advancedBox) throw new Error("ボタンの位置を計測できません。");
   expect(buttonBox.y).toBeGreaterThan(advancedBox.y + advancedBox.height);
+  // 質問欄は検索のボタンと同じ行（詳細条件の下）で、チャットの入力欄と同じ 2 行の複数行入力（Shift+Enter で改行）。
+  const inputBox = await input.boundingBox();
+  if (!inputBox) throw new Error("質問欄の位置を計測できません。");
+  expect(inputBox.y).toBeGreaterThan(advancedBox.y + advancedBox.height);
+  await expect(input).toHaveJSProperty("tagName", "TEXTAREA");
+  await expect(input).toHaveAttribute("rows", "2");
+  await input.press("Shift+Enter");
+  await expect(input).toHaveValue("交通費の上限\n");
+  expect(calls).toBe(0);
+  await input.fill("交通費の上限");
   await expect(button).toHaveAccessibleName("検索");
   await expect(page.getByRole("button", { name: "停止" })).toHaveCount(0);
 

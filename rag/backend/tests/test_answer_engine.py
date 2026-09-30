@@ -184,6 +184,10 @@ async def test_answer_engine_answers_with_backend_search_and_evidence(
     assert outcome.citations[0].chunk_id == "doc-1:c1"
     assert "evidence_role" in outcome.citations[0].metadata
     diagnostics = outcome.diagnostics
+    # rag_poc の回答 viewer と同じく外部データの確認・問い合わせ型も診断に載せる(#651)。
+    assert diagnostics["external_data_items"] == []
+    assert diagnostics["question_type"] == []
+    assert "external_data_required" in diagnostics
     assert diagnostics["execution_steps"]
     assert diagnostics["evidence_tree"]
     assert diagnostics["evidence_tree"][0]["children"]

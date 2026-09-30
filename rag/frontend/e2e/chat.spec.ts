@@ -663,6 +663,10 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
     confidence: "high",
     needs_human_review: false,
     insufficient_reason: "",
+    reasoning_summary: "引用照合済みの説明 1 件、原文のみ提示 0 件、原文と一致せず除外 0 件。",
+    external_data_required: true,
+    external_data_items: ["申請者の役職"],
+    question_type: ["規則"],
     original_question: "それの上限は？",
     rewritten_question: "経費精算の上限額は？",
     generated_queries: [],
@@ -677,7 +681,7 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   };
   const streamBody = [
     sseStart,
-    `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "経費の上限は 10 万円です。" })}\n\n`,
+    `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "経費の上限は 10 万円です。\n\n確認できる内容\n\n・1 回の申請の上限は 10 万円です。\n根拠：経費規程.pdf p.2" })}\n\n`,
     `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
     `event: citations\ndata: ${JSON.stringify({ model_id: "m1", citations: [] })}\n\n`,
     `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
@@ -702,6 +706,15 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await expect(models).toContainText("VISION 1");
   await expect(models).toContainText("cohere.embed-v4.0");
   await expect(models).toContainText("cohere.rerank-v4.0-fast");
+  // rag_poc の回答 viewer と同じ情報（判断理由・外部データの確認・問い合わせ型）と本文の構成（#651）。
+  await expect(panel.getByText("問い合わせ型: 規則")).toBeVisible();
+  await expect(panel.getByText(/^判断理由: 引用照合済みの説明 1 件/)).toBeVisible();
+  const externalData = panel.getByRole("status").filter({ hasText: "業務システムで確かめる値" });
+  await expect(externalData).toContainText("申請者の役職");
+  const answerText = page.getByTestId("answer-text");
+  await expect(answerText.getByRole("heading", { name: "確認できる内容" })).toBeVisible();
+  await expect(answerText.getByRole("listitem")).toContainText("1 回の申請の上限は 10 万円です。");
+  await expect(answerText.getByText("根拠：経費規程.pdf p.2")).toBeVisible();
 });
 
 test("IME の変換を確定する Enter では送信しない（#459）", async ({ page }) => {

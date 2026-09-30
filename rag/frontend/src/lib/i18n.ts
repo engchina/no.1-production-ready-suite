@@ -1934,7 +1934,7 @@ export const ja = {
   "chat.error.retry": "もう一度送信",
 
   "search.error.failed": "検索に失敗しました。再度お試しください。",
-  "search.placeholder": "例：社内規程の申請フローは？",
+  "search.placeholder": "例：社内規程の申請フローは？（Enter で検索 / Shift+Enter で改行）",
   "search.button": "検索",
   "search.cancel": "停止",
   "search.cancelled": "検索ストリームを停止しました。",
@@ -2015,6 +2015,10 @@ export const ja = {
   "search.answerDetails.title": "回答の根拠と実行記録",
   "search.answerDetails.searchTitle": "検索の根拠の構成と実行記録",
   "search.answerDetails.models": "使用したモデル",
+  "search.answerDetails.questionType": "問い合わせ型: {value}",
+  "search.answerDetails.reasoning": "判断理由: {reason}",
+  "search.answerDetails.externalData.title": "業務システムで確かめる値",
+  "search.answerDetails.externalData.hint": "資料だけでは決まりません。実際のデータで確認してください。",
   "search.answerDetails.model.llm": "LLM",
   "search.answerDetails.model.vision": "Vision（画像を見て回答）",
   "search.answerDetails.model.embedding": "Embedding",
@@ -2352,7 +2356,8 @@ export const ja = {
   "search.noResults": "一致する根拠が見つかりませんでした。",
   "search.noResultsHint": "キーワードを変える、条件を緩めるなどして再度お試しください。",
   "search.initial": "索引済みドキュメントを自然言語で検索します。",
-  "search.initialHint": "質問を入力すると、関連する文書の箇所を検索します。「LLM で回答を生成する」をオンにすると、根拠付きの回答も作ります。",
+  // 「 の直後で改行しないよう、「 と英字の間を word joiner（U+2060）でつなぐ。
+  "search.initialHint": "質問を入力すると、関連する文書の箇所を検索します。「\u2060LLM で回答を生成する」をオンにすると、根拠付きの回答も作ります。",
   "search.businessViewRequired.title": "業務ビューを作成してください",
   "search.businessViewRequired.hint":
     "RAG 検索は業務ビュー単位で行います。ナレッジベースを束ねた業務ビューを作成すると検索できます。",

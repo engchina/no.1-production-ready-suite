@@ -1000,6 +1000,10 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "needs_human_review": result.needs_human_review,
         "insufficient_reason": result.insufficient_reason,
         "reasoning_summary": result.reasoning_summary,
+        # rag_poc の回答 viewer が出していた外部データの確認と問い合わせ型(#651)。
+        "external_data_required": result.external_data_required,
+        "external_data_items": list(result.external_data_items or ()),
+        "question_type": list(result.question_type or ()),
         "generated_queries": list(result.generated_queries),
         "text_search_tokens": list(result.text_search_tokens),
         "crag_attempt_count": len(result.crag_attempts or ()),
