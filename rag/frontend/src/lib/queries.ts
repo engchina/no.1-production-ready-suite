@@ -873,6 +873,8 @@ export function useKnowledgeBase(id: string | null) {
     queryKey: queryKeys.knowledgeBase(id ?? ""),
     queryFn: () => api.getKnowledgeBase(id as string),
     enabled: id != null,
+    // URL の対象が無い（404）ときは再試行せず、すぐ「対象が見つかりません」を出す（業務ビューと同じ。#555）。
+    retry: retryUnlessNotFound,
   });
 }
 
@@ -1034,8 +1036,7 @@ export function useBusinessView(id: string | null) {
     queryFn: () => api.getBusinessView(id as string),
     enabled: id != null,
     // URL の `?id=` の対象が無い（404）ときは再試行せず、すぐ「見つかりません」を出す。
-    retry: (failureCount, error) =>
-      !(error instanceof ApiError && error.status === 404) && failureCount < 3,
+    retry: retryUnlessNotFound,
   });
 }
 

@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  PREVIEW_DEFAULT_ASPECT,
   PREVIEW_DPI_STEPS,
   anchoredScroll,
   clampZoom,
   normalizeViewRotation,
   previewDpiFor,
+  previewHeightAspect,
   previewKeyAction,
   previewLayout,
   steppedZoom,
@@ -86,6 +88,26 @@ describe("previewLayout", () => {
     });
     expect(layout.frameWidth).toBeGreaterThan(0);
     expect(Number.isFinite(layout.frameHeight)).toBe(true);
+  });
+});
+
+describe("previewHeightAspect", () => {
+  it("最も縦長のページの縦横比を使い、横長のページは高さを決めない", () => {
+    expect(
+      previewHeightAspect([
+        { width: 792, height: 612 },
+        { width: 612, height: 792 },
+      ])
+    ).toBeCloseTo(612 / 792, 6);
+    expect(previewHeightAspect([{ width: 842, height: 595 }])).toBeCloseTo(842 / 595, 6);
+  });
+
+  it("寸法が分からない・0 のページは無視し、1 つも無ければ A4 縦を仮定する", () => {
+    expect(previewHeightAspect([])).toBe(PREVIEW_DEFAULT_ASPECT);
+    expect(previewHeightAspect([null, undefined, { width: 0, height: 100 }])).toBe(
+      PREVIEW_DEFAULT_ASPECT
+    );
+    expect(previewHeightAspect([null, { width: 600, height: 800 }])).toBeCloseTo(0.75, 6);
   });
 });
 
