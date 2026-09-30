@@ -18,6 +18,7 @@ from app.rag.chunking_strategy import DocragChunkingParams, normalize_chunking_s
 from app.rag.docrag_chunking import (
     CHUNK_STRATEGY_FALLBACK_REASON_KEY,
     CHUNK_STRATEGY_REQUESTED_KEY,
+    DOCRAG_FIRST_PAGE_CONTEXT_KEY,
     DOCRAG_SEARCH_TEXT_KEY,
     DocragLayoutMissingError,
     build_docrag_chunks,
@@ -105,6 +106,61 @@ def test_docrag_strategy_requires_docling_layout() -> None:
     assert not has_docrag_layout(plain)
     with pytest.raises(DocragLayoutMissingError):
         build_docrag_chunks(plain)
+
+
+def test_docrag_first_page_context_is_kept_once_without_picture_ocr_and_truncated() -> None:
+    """1 ページ目の本文だけを、Picture・OCR を除き上限 8000 文字で、先頭の chunk に 1 つだけ載せる。
+
+    chunk ごとの metadata(docrag_metadata_json)と検索の文には入れない(#557)。
+    """
+    cover = "受注管理規程 第3版 営業本部"
+    long_text = "規程の目的と適用範囲を定める。" * 600
+    records = [
+        _record(1, "Title", cover, [50, 40, 900, 90]),
+        {
+            **_record(2, "Picture", "OCR抽出テキスト:\n氏名\n住所", [50, 100, 900, 300]),
+            "raw_type": "picture_ocr_text",
+        },
+        _record(3, "Text", long_text, [50, 320, 900, 1300]),
+        {
+            **_record(4, "Section-header", "受注入力画面", [50, 40, 600, 90]),
+            "id": "docling-p2-4",
+            "page": 2,
+        },
+        {
+            **_record(5, "Text", "受注番号を入力し、登録ボタンを押します。", [50, 120, 900, 200]),
+            "id": "docling-p2-5",
+            "page": 2,
+        },
+    ]
+    extraction = StructuredExtraction(
+        raw_text=cover,
+        parser_artifacts={
+            "docrag_layout": {
+                "version": 1,
+                "pages": [{"page": page, "width": 1000, "height": 1400} for page in (1, 2)],
+                "records": records,
+            }
+        },
+    )
+
+    chunks = build_docrag_chunks(extraction, source_name="規程.pdf")
+
+    first_page = json.loads(str(chunks[0].metadata[DOCRAG_FIRST_PAGE_CONTEXT_KEY]))
+    assert first_page["page"] == 1
+    assert first_page["status"] == "available"
+    assert first_page["text"].startswith(cover)
+    assert "OCR抽出テキスト" not in first_page["text"]
+    assert "登録ボタン" not in first_page["text"]
+    assert len(first_page["text"]) == 8000
+    assert first_page["truncated"] is True
+    assert "docling-p1-2" not in first_page["record_ids"]
+    assert all(DOCRAG_FIRST_PAGE_CONTEXT_KEY not in chunk.metadata for chunk in chunks[1:])
+    for chunk in chunks:
+        document = json.loads(str(chunk.metadata["docrag_metadata_json"]))["document"]
+        assert "first_page_context" not in document
+    # 検索の文(Oracle Text・embedding の入力)は docrag の search_text のまま。
+    assert _chunk_search_text(chunks[0]) == chunks[0].metadata[DOCRAG_SEARCH_TEXT_KEY]
 
 
 def _long_extraction(sentences: int = 60) -> StructuredExtraction:

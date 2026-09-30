@@ -31,7 +31,7 @@ from app.rag.business_view_config import (
     parse_business_view_config,
 )
 from app.rag.chunking import Chunk
-from app.rag.docrag_chunking import docrag_search_text
+from app.rag.docrag_chunking import DOCRAG_FIRST_PAGE_CONTEXT_KEY, docrag_search_text
 from app.rag.graph_index import (
     GraphClaim,
     GraphCommunitySummary,
@@ -703,6 +703,40 @@ class OracleClient:
             if classification:
                 classifications[str(row["document_id"])] = classification
         return classifications
+
+    async def chunk_set_first_page_contexts(
+        self, chunk_set_ids: Sequence[str]
+    ) -> dict[str, dict[str, object]]:
+        """chunk set の文書の 1 ページ目の本文(first_page_context)を chunk_set_id ごとに返す。
+
+        回答の「文書の背景」に使う。ヒットした chunk set の分を IN で 1 回だけ読む。値の無い
+        chunk set は含めない(#557)。
+        """
+        ids = _unique_optional_sequence(list(chunk_set_ids))
+        if not ids:
+            return {}
+        in_sql, binds = _oracle_in_predicate("cs.chunk_set_id", "first_page_chunk_set", ids)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT cs.chunk_set_id, cs.first_page_context
+            FROM rag_chunk_sets cs
+            JOIN rag_documents d ON d.document_id = cs.document_id
+            WHERE {in_sql}
+              AND cs.first_page_context IS NOT NULL
+              AND {access_sql}
+            """,
+                in_sql=in_sql,
+                access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind(binds, alias="d"),
+        )
+        contexts: dict[str, dict[str, object]] = {}
+        for row in rows:
+            context = _json_loads(row.get("first_page_context"))
+            if context:
+                contexts[str(row["chunk_set_id"])] = context
+        return contexts
 
     async def context_dependency_chunks(
         self,
@@ -8497,7 +8531,12 @@ class OracleClient:
                         "chunk_index": chunk.index,
                         "start_offset": chunk.start_offset,
                         "end_offset": chunk.end_offset,
-                        **chunk.metadata,
+                        # 1 ページ目の本文は chunk の行に入れず chunk set に保存する(#557)。
+                        **{
+                            key: value
+                            for key, value in chunk.metadata.items()
+                            if key != DOCRAG_FIRST_PAGE_CONTEXT_KEY
+                        },
                     }
                 ),
                 "embedding": None if embedding is None else _to_vector_bind(embedding),
@@ -8539,7 +8578,23 @@ class OracleClient:
         chunk_set_id を渡すと chunk 置換を **その chunk_set に限定**(他 chunk_set の chunk は
         残す)し、挿入 chunk をその chunk_set でタグ付けする。None は文書の全 chunk を置換し
         未タグで保存する(現行挙動・後方互換)。
+
+        DocRAG の文書の 1 ページ目の本文(先頭の chunk の ``DOCRAG_FIRST_PAGE_CONTEXT_KEY``)は、
+        chunk set に 1 つだけ保存する(#557)。chunk set の行は chunk の保存の後に
+        ``upsert_chunk_set`` が作るため、無ければここで作る(状態などは後の upsert / mark が書く)。
         """
+        first_page_context = (
+            next(
+                (
+                    json.loads(str(chunk.metadata[DOCRAG_FIRST_PAGE_CONTEXT_KEY]))
+                    for chunk in chunks
+                    if chunk.metadata.get(DOCRAG_FIRST_PAGE_CONTEXT_KEY)
+                ),
+                None,
+            )
+            if chunk_set_id is not None
+            else None
+        )
 
         def operation(connection: OracleConnectionProtocol) -> list[RetrievedChunk]:
             document = _select_document_state(connection, document_id)
@@ -8612,6 +8667,29 @@ class OracleClient:
                     )
                     """,
                     rows,
+                )
+            if first_page_context is not None:
+                _execute(
+                    connection,
+                    """
+                    MERGE INTO rag_chunk_sets t
+                    USING (SELECT :chunk_set_id AS chunk_set_id FROM dual) s
+                    ON (t.chunk_set_id = s.chunk_set_id)
+                    WHEN MATCHED THEN UPDATE SET
+                        t.first_page_context = :first_page_context
+                    WHEN NOT MATCHED THEN INSERT
+                        (chunk_set_id, document_id, tenant_id_hash, first_page_context)
+                        VALUES (
+                            :chunk_set_id, :document_id, :tenant_id_hash, :first_page_context
+                        )
+                    """,
+                    {
+                        "chunk_set_id": chunk_set_id,
+                        "document_id": document_id,
+                        "tenant_id_hash": document.tenant_id_hash,
+                        "first_page_context": _json_bind(first_page_context),
+                    },
+                    input_sizes=_json_input_sizes("first_page_context"),
                 )
             return self._retrieved_chunks_from_insert_rows(document_id, document, rows)
 
@@ -13236,6 +13314,7 @@ CREATE TABLE rag_chunk_sets (
     is_serving      NUMBER(1) DEFAULT 1 NOT NULL,
     is_active       NUMBER(1) DEFAULT 0 NOT NULL,
     metrics_json    JSON,
+    first_page_context JSON,
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT rag_chunk_sets_document_fk

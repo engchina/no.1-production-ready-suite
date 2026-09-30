@@ -321,13 +321,19 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "query" not in jobs_migration.split("-- migration: ", 1)[0].lower()
     # 説明が空の DEFAULT の KB・業務ビューに既定の説明を補う（#521）。利用者の説明は上書きしない。
     descriptions_migration = sql.split("-- migration: 20260930_001_default_descriptions", 1)[1]
+    descriptions_migration = descriptions_migration.split("-- migration: ", 1)[0]
     assert "UPDATE rag_knowledge_bases" in descriptions_migration
     assert "UPDATE rag_business_views" in descriptions_migration
     assert f"'{DEFAULT_KNOWLEDGE_BASE_DESCRIPTION}'" in descriptions_migration
     assert f"'{DEFAULT_BUSINESS_VIEW_DESCRIPTION}'" in descriptions_migration
     assert descriptions_migration.count("AND TRIM(description) IS NULL") == 2
     assert "name =" not in descriptions_migration
-    assert len(statements) == 71
+    # 文書の 1 ページ目の本文を chunk set ごとに 1 つ持つ列（#557）。列が無ければ足す（冪等）。
+    first_page_marker = "-- migration: 20260930_002_chunk_sets_first_page_context"
+    first_page_migration = sql.split(first_page_marker, 1)[1]
+    assert "column_name = 'FIRST_PAGE_CONTEXT'" in first_page_migration
+    assert "'ALTER TABLE rag_chunk_sets ADD (first_page_context JSON)'" in first_page_migration
+    assert len(statements) == 72
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -392,6 +398,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260928_004_ingestion_jobs_lease",
         "20260928_005_evaluation_jobs",
         "20260930_001_default_descriptions",
+        "20260930_002_chunk_sets_first_page_context",
     ]
 
 
