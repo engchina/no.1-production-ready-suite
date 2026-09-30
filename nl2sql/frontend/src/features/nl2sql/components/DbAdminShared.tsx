@@ -15,7 +15,7 @@ import {
   usePagination,
   StatusBadge,
   Tabs,
-  TextField,
+  SearchField,
   ClearActionButton,
   ActionResultRegion,
   ContentActionBar,
@@ -42,7 +42,6 @@ import {
   Copy,
   Download,
   Play,
-  Search,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -1108,17 +1107,15 @@ export function ObjectListPanel({
 
   return (
     <div className="grid content-start gap-3">
-      <TextField
+      <SearchField
         id={searchId}
         label={t("dbAdmin.search.label")}
         value={query}
-        onValueChange={setQuery}
-        onClear={() => setQuery("")}
+        onSearch={setQuery}
         clearLabel={t("common.clearSearch")}
-        leadingIcon={Search}
         placeholder={t("dbAdmin.search.placeholder")}
       />
-      <p className="text-xs text-fg-muted">
+      <p className="text-xs text-fg-muted" aria-live="polite">
         {t("dbAdmin.search.resultCount", { filtered: filtered.length, total: items.length })}
       </p>
       {filtered.length === 0 ? (

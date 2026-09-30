@@ -97,7 +97,7 @@ test("data management refresh uses the paged read model and shared durable schem
   }
   assert.match(source, /previewRequestSequence = useRef\(0\)/u);
   assert.match(source, /sequence !== previewRequestSequence\.current/u);
-  assert.match(source, /const csvTablesQuery = useDbAdminObjects\(\s*debouncedCsvTableSearch,\s*"table",\s*"all"\s*\)/u);
+  assert.match(source, /const csvTablesQuery = useDbAdminObjects\(\s*csvTableSearch,\s*"table",\s*"all"\s*\)/u);
   assert.match(source, /onLoadMore=\{\(\) => void csvTablesQuery\.fetchNextPage\(\)\}/u);
   assert.doesNotMatch(source, /activeView !== "csv"[\s\S]{0,200}fetchNextPage/u);
 });

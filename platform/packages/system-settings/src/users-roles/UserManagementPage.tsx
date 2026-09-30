@@ -58,6 +58,7 @@ import {
   SecurityManagementPanelShell,
   SecurityPanelHeader,
   SecuritySearchField,
+  SecurityClearSearchAction,
   describeErrorMessageOnly,
   SecurityIdentityRowTitleButton,
   identitySecondaryName,
@@ -826,6 +827,7 @@ export function UserManagementPage({
                     value={search}
                     testId="security-users-search"
                     disabled={operationBusy}
+                    resultCountLabel={securityFilteredCount(filteredUsers.length, users.length)}
                     onChange={setSearch}
                   />
                 </div>
@@ -860,7 +862,7 @@ export function UserManagementPage({
                   scrollTestId="security-users-scroll-region"
                   stickyHeader
                   visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
-                  empty={<EmptyState title={search ? t("security.users.noResultsTitle") : t("security.common.empty")} hint={search ? t("security.users.noResultsHint") : undefined} />}
+                  empty={<EmptyState title={search ? t("security.users.noResultsTitle") : t("security.common.empty")} hint={search ? t("security.users.noResultsHint") : undefined} action={search ? <SecurityClearSearchAction onClear={() => setSearch("")} /> : undefined} />}
                   columns={userColumns}
                 />
               </section>

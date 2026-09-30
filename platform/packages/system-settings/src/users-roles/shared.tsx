@@ -1,11 +1,12 @@
 // ユーザー管理・ロール管理（と製品の権限管理など）で使う一覧＋詳細レイアウトの部品と補助関数。
 // NL2SQL の features/security/SecurityManagementShared.tsx などを移設した（#206）。
 import { Children, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Search, type LucideIcon } from "lucide-react";
+import { type LucideIcon } from "lucide-react";
 import {
+  ClearActionButton,
   FixedSplitPane,
   RowTitleButton,
-  TextField,
+  SearchField,
   cn,
   type FixedSplitWidePane,
   type RowTitleButtonProps,
@@ -274,33 +275,41 @@ export function SecuritySearchField({
   value,
   testId,
   disabled = false,
+  resultCountLabel,
   onChange,
 }: {
   label: string;
   placeholder: string;
+  /** 適用中の検索語。 */
   value: string;
   testId?: string;
   disabled?: boolean;
+  /** 絞り込んだ件数の文言（検索語があるときだけ読み上げる）。 */
+  resultCountLabel?: string;
+  /** 検索語が確定したとき（入力が止まって 300ms・Enter・消去。IME の変換中は呼ばない）。 */
   onChange: (value: string) => void;
 }) {
   const id = useId();
-  // 検索欄は共有の TextField（先頭アイコン・クリア）で作る（#384）。
+  // 一覧の絞り込みは共有の SearchField（debounce・IME 対応・消去・件数の読み上げ）で作る（#535）。
   return (
-    <TextField
+    <SearchField
       id={`security-search-${id}`}
       label={label}
-      type="search"
       value={value}
       data-testid={testId}
       disabled={disabled}
-      onValueChange={onChange}
-      onClear={() => onChange("")}
+      onSearch={onChange}
       clearLabel={t("security.common.clearSearch")}
-      leadingIcon={Search}
+      resultCountLabel={resultCountLabel}
       placeholder={placeholder}
       className="min-w-0"
     />
   );
+}
+
+/** 絞り込みの結果が 0 件のときの「検索語をクリア」（空の状態の action に置く。#535）。 */
+export function SecurityClearSearchAction({ onClear }: { onClear: () => void }) {
+  return <ClearActionButton label={t("security.common.clearSearch")} matchButtonHeight onClick={onClear} />;
 }
 
 export function SecurityDetailField({ label, children }: { label: string; children: ReactNode }) {

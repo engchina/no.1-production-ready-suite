@@ -84,6 +84,42 @@ usePagination<T>(items: T[], pageSize?: number)
 | **分析の一覧**（RAG のフィードバック） | 1 ページの件数を 25 / 50 / 100 から選べる。ページ番号で任意のページへ移れる。件数とページは URL に残す | 評価の傾向を期間・理由・対象で絞り込んで見渡す分析の画面で、1 度に見る件数を利用者が決める意味がある。URL を共有すると同じ範囲を見られる。表の中の縦スクロール（`stickyHeader` + `visibleRows`）は基準どおり。番号のページ送りは今は RAG だけが使うので製品に置く（他の製品が欲しがったら `packages/ui` に上げる） |
 | **LLM 判定の結果明細**（NL2SQL の SQL生成評価の結果明細の表） | 表の高さは `visibleRows` ではなく固定（30.5rem）。ページングは基準どおり（10 件/ページ） | 1 行に期待 SQL・生成 SQL のブロック（最大 8rem）が並ぶ。8 行ぶんの実測では 1 画面を超える |
 
+### 一覧の絞り込みの検索（#535）
+
+検索には 2 種類あり、操作を分ける（NN/g・Material 3・GOV.UK Design System・WCAG 2.2 に合わせる）。
+
+| 種類 | 例 | 操作 | 部品 |
+|---|---|---|---|
+| **一覧の絞り込み**（画面上の一覧・表を名前などで絞る。結果は同じ一覧の行） | ナレッジベース・業務ビュー・文書・フィードバック（RAG）、DB オブジェクト・プロファイル・履歴・学習候補・フィードバック履歴・スキーマ参照（NL2SQL）、メモリ（Agent）、ユーザー・ロール・権限の対象（system-settings） | **入力に合わせて絞り込む。検索ボタンを置かない。** 入力が止まって 300ms で反映し、Enter は debounce を待たずにすぐ反映する。値があるときは末尾に消去（×。Escape でも消す） | `SearchField` |
+| **重い検索・問い合わせ**（LLM・ベクトル検索・SQL の生成と実行を呼ぶもの。結果は回答・生成物） | RAG 検索・チャット・検索テスト・文書の検索比較（RAG）、SQL 生成・オントロジーの問い合わせ・分類器の予測（NL2SQL）、Run の目標（Agent） | **明示的に実行する。** ボタンと Enter（複数行は Ctrl/⌘+Enter）。入力中には実行しない | `TextField`（`type="search"` にしない）+ `Button`、Enter の判定は `isSubmitEnter` |
+
+一覧の絞り込みの規則:
+
+1. **入力に合わせて絞り込む**（debounce 300ms、Enter はすぐ）。検索ボタン・「絞り込み」ボタンを隣に置かない。同じ一覧のほかの条件（`SelectField`・`ToggleChip` の状態・種類）も、選んだらすぐ適用する。
+2. **日本語入力**: IME の変換中（`compositionstart`〜`compositionend`、`isComposing`、Safari の確定の Enter の `keyCode 229`）は、入力でも Enter でも絞り込まない。変換を確定した値で絞り込む。`SearchField` と `isImeComposing` / `isSubmitEnter` が判定する。製品で `event.key === "Enter"` だけで判定しない。
+3. **件数を伝える**: 結果の件数を `aria-live`（`SearchField` の `resultCountLabel`）で読み上げる。画面の件数の表示（`StatusBadge` 等）はそのままでよい。
+4. **0 件**: 空の状態に「検索に一致する〜がありません」と、「検索語をクリア」（`ClearActionButton`）を出す。データがそもそも無いときの空の状態と文言を分ける。
+5. **作業状態**: 検索語は作業状態として残す（[workspace-state.md](./workspace-state.md)）。`SearchField` の `value` には保存している**適用中**の検索語を渡し、入力中の文字は部品が持つ。検索語が変わったらページングを 1 ページ目へ戻し、選択を解除する（変わらない Enter・blur ではページと選択を失わない）。
+6. **サーバー側で絞り込む一覧**: 古い応答で新しい結果を上書きしない。TanStack Query は検索語を query key に入れ、`placeholderData: keepPreviousData` で前の一覧を出したまま取り直す。手で取得する一覧は、要求の連番か `AbortController` で最後の要求の応答だけを使う。読込中は一覧の領域で示す（操作したボタンが無いので、`ProcessingIndicator` / `TimedLoadingState` のスピナーを出す）。
+7. **親で遅延させない**: debounce は `SearchField` の 1 か所だけにする。親で `useDebouncedValue` などを重ねない（反映が遅れる）。
+
+レビューのチェックリスト（lint が見るのは 1 だけ）:
+
+- [ ] 一覧の絞り込みの検索欄が `SearchField`（adherence の lint が `type="search"` の `TextField` / `<input>` を検出する）
+- [ ] 検索欄の隣に「検索」「絞り込み」「適用」のボタンが無い
+- [ ] IME の変換中に問い合わせ・絞り込みをしない（e2e で `compositionstart` → `isComposing` の `input` → `compositionend` を確かめる）
+- [ ] 0 件の空の状態に「検索語をクリア」がある
+- [ ] 検索語が作業状態に残り、変えるとページが 1 ページ目に戻る
+- [ ] 重い検索は `type="search"` にせず、明示的に実行し、Enter の判定が `isSubmitEnter`
+
+例外（理由があって外す）:
+
+| 対象 | 例外 | 理由 |
+|---|---|---|
+| **監査ログの条件フォーム**（Agent の監査） | 複数の条件（Run ID・ツール・状態・エラーコード・警告・1 ページの件数）をまとめて「フィルター適用」で問い合わせる。テキストの条件の Enter は「フィルター適用」と同じ（`isSubmitEnter`） | Run ID・エラーコードは完全一致の条件で、入力途中の値で問い合わせても意味が無い。監査ログの問い合わせは条件を組み合わせてから 1 度だけ送る。適用前の条件は作業状態に別に残す |
+| **グラフの強調の検索**（NL2SQL のオントロジーのグラフのツールバー） | `SearchField` を使わず、ツールバーの枠の中に枠なしの入力欄を置く。入力のたびに一致した概念を強調し、前へ / 次へで移る（Escape の消去は IME の変換中は行わない） | 一覧の行を減らさない強調で、問い合わせもしない。ツールバーのほかの操作と同じ高さ・枠の複合部品として e2e で寸法を固定している |
+| **複数選択のコンボボックスの候補の絞り込み**（RAG の `MultiSelectCombobox`） | コンボボックスの中の入力欄で、候補の一覧（listbox）をすぐ絞る。Enter・矢印は候補の選択（IME の変換中は無視） | 一覧ではなく選択肢の listbox の型（APG の Combobox）。 |
+
 ### DataTable
 
 ```ts

@@ -12,7 +12,9 @@ import {
   type DataTableColumn,
   type EntityAction,
   FormStatus,
+  ClearActionButton,
   RowActionMenu,
+  SearchField,
   TableSkeleton,
   TextField,
   TimedLoadingState,
@@ -23,7 +25,7 @@ import {
   offsetForPage,
   offsetPagination,
 } from "@engchina/production-ready-ui";
-import { Database, Search } from "lucide-react";
+import { Database } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -36,7 +38,6 @@ import {
   type KnowledgeBaseStatus,
   type KnowledgeBaseSummary,
 } from "@/lib/api";
-import { isSubmitEnter } from "@/lib/keyboard";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
@@ -86,7 +87,6 @@ export function KnowledgeBaseManagementClient() {
   // 絞り込み・検索・ページは、ページを行き来しても再読込しても残す（workspace-state.md）。
   const [view, setView] = useWorkspaceState("knowledgeBases.view", INITIAL_VIEW, isKnowledgeBaseListView);
   const { filter, q, offset } = view;
-  const [search, setSearch] = useState(q);
   const setFilter = (next: KnowledgeBaseStatus | "ALL") => setView((current) => ({ ...current, filter: next }));
   const setQ = (next: string) => setView((current) => ({ ...current, q: next }));
   const setOffset = (next: number) => setView((current) => ({ ...current, offset: next }));
@@ -105,15 +105,9 @@ export function KnowledgeBaseManagementClient() {
     fn();
     setOffset(0);
   };
-  // 検索語が変わったときだけ先頭のページへ戻す（フォーカスが外れただけでページを戻さない）。
-  const applySearch = () => {
-    const next = search.trim();
+  // 検索語は入力に合わせて適用する（SearchField の debounce・IME 対応。#535）。変わったときだけ先頭のページへ戻す。
+  const applySearch = (next: string) => {
     if (next !== q) resetView(() => setQ(next));
-  };
-  // クリアは入力と適用中の検索語の両方を消す（blur を待たずに一覧を戻す）。
-  const clearSearch = () => {
-    setSearch("");
-    if (q !== "") resetView(() => setQ(""));
   };
 
   // アーカイブなどで件数が減り、保存したページが範囲外になったら最後のページへ戻す。
@@ -156,20 +150,17 @@ export function KnowledgeBaseManagementClient() {
               </ToggleChip>
             ))}
           </div>
-          <TextField
+          <SearchField
             id="knowledge-base-search"
             label={t("knowledgeBases.search.placeholder")}
             labelHidden
-            value={search}
-            onValueChange={setSearch}
-            onKeyDown={(event) => {
-              if (isSubmitEnter(event)) applySearch();
-            }}
-            onBlur={applySearch}
-            onClear={clearSearch}
+            value={q}
+            onSearch={applySearch}
             clearLabel={t("common.clearSearch")}
+            resultCountLabel={
+              page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
+            }
             placeholder={t("knowledgeBases.search.placeholder")}
-            leadingIcon={Search}
             className="w-full sm:w-64"
           />
         </div>
@@ -210,12 +201,26 @@ export function KnowledgeBaseManagementClient() {
           </div>
         ) : (
           <Card>
-            <EmptyState
-              title={t("knowledgeBases.empty.title")}
-              hint={
-                canManage ? t("knowledgeBases.empty.hint") : t("knowledgeBases.empty.restrictedHint")
-              }
-            />
+            {q ? (
+              <EmptyState
+                title={t("knowledgeBases.search.noResultsTitle")}
+                hint={t("knowledgeBases.search.noResultsHint")}
+                action={
+                  <ClearActionButton
+                    label={t("common.clearSearch")}
+                    matchButtonHeight
+                    onClick={() => applySearch("")}
+                  />
+                }
+              />
+            ) : (
+              <EmptyState
+                title={t("knowledgeBases.empty.title")}
+                hint={
+                  canManage ? t("knowledgeBases.empty.hint") : t("knowledgeBases.empty.restrictedHint")
+                }
+              />
+            )}
           </Card>
         )}
       </PageBody>
