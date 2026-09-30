@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { mockDatabaseReady, mockLocalAuth, openSidebarNav } from "./_helpers";
+import { mockDatabaseReady, mockLocalAuth, openSidebarNav, selectBusinessView } from "./_helpers";
 
 /**
  * #132: 編集画面の離脱ガードと、検索・チャット・一覧の作業状態の保持
@@ -173,12 +173,7 @@ test.describe("作業状態の保持", () => {
     });
 
     await page.goto("/search");
-    await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-    await page
-      .getByRole("listbox", { name: /対象の業務ビュー/ })
-      .getByRole("option", { name: /経理ビュー/ })
-      .click();
-    await page.keyboard.press("Escape");
+    await selectBusinessView(page, /経理ビュー/);
     await page.locator("#search-query").fill("交通費の上限");
     await page.getByText("詳細条件", { exact: true }).click();
     await page.getByRole("combobox", { name: "内容種別" }).click();
@@ -186,7 +181,7 @@ test.describe("作業状態の保持", () => {
 
     const expectRestored = async () => {
       await expect(page.locator("#search-query")).toHaveValue("交通費の上限");
-      await expect(page.getByText(/1 件の業務ビューを対象にしています/)).toBeVisible();
+      await expect(page.getByRole("button", { name: /対象の業務ビュー/ })).toContainText("経理ビュー");
       await expect(page.getByRole("combobox", { name: "内容種別" })).toContainText("表");
     };
 
@@ -239,14 +234,13 @@ test.describe("作業状態の保持", () => {
   );
 
     await page.goto("/chat");
-    await page.getByRole("combobox", { name: "業務ビュー" }).click();
-    await page.getByRole("option", { name: "経理ビュー" }).click();
+    await selectBusinessView(page, "経理ビュー");
     await page.getByRole("list", { name: "会話" }).getByRole("button").filter({ hasText: "経費の相談" }).click();
     const composer = page.locator("#chat-composer");
     await composer.fill("出張の日当は？");
 
     const expectRestored = async () => {
-      await expect(page.getByRole("combobox", { name: "業務ビュー" })).toContainText("経理ビュー");
+      await expect(page.getByRole("button", { name: /対象の業務ビュー/ })).toContainText("経理ビュー");
       await expect(page.locator("#chat-composer")).toHaveValue("出張の日当は？");
     };
 

@@ -7,8 +7,6 @@ import {
   Card,
   CardContent,
   FieldActionRow,
-  SelectField,
-  type SelectFieldOption,
   TextareaField,
   TextField,
   ToggleChip,
@@ -37,6 +35,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { ListPagination } from "@/components/ListPagination";
+import { BusinessViewSelect, BusinessViewSelectSkeleton } from "@/components/business-views/BusinessViewSelect";
 import { RunStopButton } from "@/components/RunStopButton";
 import { CitationCard } from "@/components/search/CitationCard";
 import { AnswerProgress } from "@/components/search/AnswerProgress";
@@ -724,10 +723,6 @@ export function ChatClient() {
 
   const businessViewLoading = businessViewsQuery.isLoading;
   const noBusinessViews = !businessViewLoading && businessViews.length === 0;
-  const businessViewOptions: SelectFieldOption[] = [
-    { value: "", label: t("chat.businessView.placeholder") },
-    ...businessViews.map((view) => ({ value: view.id, label: view.name })),
-  ];
   const liveColumns = liveTurn
     ? liveTurn.columns.map((column) => ({
         key: column.model_id || "default",
@@ -760,7 +755,7 @@ export function ChatClient() {
                 framed={false}
                 testId="chat-business-views-loading"
               >
-                <Skeleton className="h-[var(--button-height-md)] w-full max-w-md" />
+                <BusinessViewSelectSkeleton />
               </TimedLoadingState>
             ) : noBusinessViews ? (
               <EmptyState
@@ -772,21 +767,17 @@ export function ChatClient() {
                 }
               />
             ) : (
-              <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2 2xl:grid-cols-3">
-                <SelectField
+              <div className="space-y-4">
+                {/* RAG 検索と同じ部品・文言・幅（#635）。 */}
+                <BusinessViewSelect
                   id="chat-business-view"
-                  label={t("chat.businessView.label")}
-                  value={businessViewId ?? ""}
-                  options={businessViewOptions}
-                  onValueChange={(value) => setBusinessViewId(value || null)}
-                  required
-                  // 業務ビューの名前の長さの幅（画面の半分まで伸ばさない。#613）。
-                  width="lg"
+                  items={businessViews}
+                  value={businessViewId}
+                  onChange={setBusinessViewId}
                 />
                 {businessViewWithoutKnowledgeBases && businessViewId ? (
                   <Banner
                     severity="warning"
-                    className="lg:col-span-2 2xl:col-span-3"
                     action={
                       canOpenBusinessViews ? (
                         <Button

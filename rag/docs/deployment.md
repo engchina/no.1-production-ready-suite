@@ -172,6 +172,13 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
+## 既存環境の更新手順（#635 RAG 検索の業務ビューを 1 つにする）
+
+- **画面**: RAG 検索の「対象の業務ビュー」を 1 つだけ選ぶ欄にし、チャットの業務ビューの欄と同じ部品・文言・幅にした。以前の画面で複数を選んでいた作業状態（sessionStorage の `search.businessViewIds`）は読まず、再読込後は未選択から始まる。
+- **API**: `POST /api/search`・`POST /api/search/stream` は業務ビューを `business_view_id`（1 つ）だけで受ける。`business_view_ids` を送ると 422 を返す（読み捨てると業務ビューの外を検索するため）。検索の絞り込みの候補 `GET /api/search/extraction-fields` の query も `business_view_ids` から `business_view_id` に変えた。MCP の `rag_search` / `rag_chat_send_message` と検証 CLI（`app.rag.answer_verify_cli`）は元から 1 つで、入力は変わらない。
+- **データベース**: DDL・データの移行は要らない。回答の記録・質問の履歴は元から業務ビューを 1 つだけ保存している。以前に複数の業務ビューで検索した監査（`rag_search_audit` の `business_view_applied`）は `bv-1,bv-2` の文字列のまま残り、表示・集計は変わらない。
+- **手順**: コードを更新して backend と frontend を再起動する。`/api/search` を直接呼ぶ独自のスクリプトがあれば、`business_view_ids: [id]` を `business_view_id: id` に変える。
+
 ## 既存環境の更新手順（#599 rag_poc から移したときの名前の改名）
 
 #599 で、rag_poc から移したときの名前（`docrag`）を、コードの識別子・設定（環境変数）・API・DB の名前から外し、RAG の標準の名前にした。回答・分割の挙動は変わらない。旧名との互換は持たない（旧名の環境変数は読まず、保存値と表は migration で書き換える）。#599 の migration はデータを削除しないので、承認（`--allow-destructive`）は要らない（#621 の `20260930_007_retire_graph_claims_community` などデータを削除する migration が未適用なら、そちらの承認が要る。下の「既存環境の更新手順（#621）」と上の「共通の注意」）。

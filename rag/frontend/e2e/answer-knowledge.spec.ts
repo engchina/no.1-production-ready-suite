@@ -1,5 +1,5 @@
 import { expect, type Page, type Route, test } from "@playwright/test";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
 
 // rag_poc からの移植: 業務ビューの知識(ドメインキーワード / Approved FAQ / 用語・ルール)、
 // 検索前の類似問提示、回答の根拠パネル。
@@ -155,12 +155,7 @@ for (const viewport of [
 
 async function selectBusinessViewAndAsk(page: Page, question: string) {
   await page.goto("/search");
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-  await page
-    .getByRole("listbox", { name: /対象の業務ビュー/ })
-    .getByRole("option", { name: /受注サポート/ })
-    .click();
-  await page.keyboard.press("Escape");
+  await selectBusinessView(page, /受注サポート/);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill(question);
   await page.getByRole("button", { name: "検索", exact: true }).click();
 }
@@ -184,12 +179,7 @@ test("よく聞かれている質問を入力欄の下に出し、選ぶと質�
   });
 
   await page.goto("/search");
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-  await page
-    .getByRole("listbox", { name: /対象の業務ビュー/ })
-    .getByRole("option", { name: /受注サポート/ })
-    .click();
-  await page.keyboard.press("Escape");
+  await selectBusinessView(page, /受注サポート/);
   const input = page.getByRole("textbox", { name: "RAG 検索" });
   await input.fill("受注");
   const suggestions = page.getByRole("list", { name: "よく聞かれている質問" });

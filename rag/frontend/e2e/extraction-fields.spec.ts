@@ -1,6 +1,6 @@
 import { expect, type Page, type Route, test } from "@playwright/test";
 
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
 
 /**
  * ナレッジベースごとの項目抽出の定義（#548）と、抽出項目の値による検索の絞り込み（#549）。
@@ -178,9 +178,7 @@ async function mockSearchPage(page: Page) {
 
 async function openFieldFilters(page: Page) {
   await page.goto("/search");
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-  await page.getByRole("listbox", { name: /対象の業務ビュー/ }).getByRole("option", { name: /契約ビュー/ }).click();
-  await page.keyboard.press("Escape");
+  await selectBusinessView(page, /契約ビュー/);
   await page.getByRole("button", { name: /詳細条件/ }).click();
   await page.getByRole("button", { name: "抽出項目の値で絞り込む" }).click();
 }
