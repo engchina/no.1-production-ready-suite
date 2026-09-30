@@ -120,23 +120,23 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
         </CardContent>
       </Card>
 
-      {/* このナレッジ単体で検索の手応えを確認(業務ビュー不要)。文書追加→検証→構築設定 の流れ。 */}
-      <KnowledgeBaseSearchTestPanel
-        knowledgeBaseId={kb.id}
-        indexedDocumentCount={kb.indexed_document_count}
-        disabled={!isActive}
-      />
-
       {/* 関係情報(GraphRAG)の俯瞰。展開時のみ subgraph を取得。 */}
       <KnowledgeBaseGraphView knowledgeBaseId={kb.id} />
 
-      {/* 項目抽出で取り出す項目の定義(#548)。無ければ全体の既定を使う。処理の流れ（文書の追加 → 確認 →
-          構築設定）の構築設定として、構築フローの直前に置く(#555)。 */}
+      {/* 項目抽出で取り出す項目の定義(#548)。無ければ全体の既定を使う。構築設定として、構築フローの直前に置く(#555)。 */}
       <KnowledgeBaseExtractionFields knowledgeBaseId={kb.id} editable={isActive} />
 
       {/* 3 層モデル: 文書の処理レシピ(分割/parser)は文書側の責務。KB はスコープのみで、
           構築の既定パイプライン図だけ参考表示する(per-KB 取込上書き UI は撤去)。 */}
       <KnowledgeBasePipelineCanvas config={kb.effective_adapter_config ?? kb.adapter_config} />
+
+      {/* このナレッジ単体で検索の手応えを確認する(業務ビュー不要)。構築の設定(関係情報・抽出する項目・
+          パイプライン図)を見た後に、最後に検索で確かめる流れにするため、いちばん下に置く(#616)。 */}
+      <KnowledgeBaseSearchTestPanel
+        knowledgeBaseId={kb.id}
+        indexedDocumentCount={kb.indexed_document_count}
+        disabled={!isActive}
+      />
     </KnowledgeBaseEditor>
   );
 }
