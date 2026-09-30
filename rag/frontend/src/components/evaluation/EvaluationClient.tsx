@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
   DataTable,
+  FieldLabel,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   ProcessingIndicator,
@@ -1035,13 +1036,13 @@ function JsonField({
   placeholder: string;
   onChange: (value: string) => void;
 }) {
+  // どちらの JSON も空・不正のままでは実行できず、backend も cases / experiments を 1 件以上必須にする（#531）。
   return (
     <div className="space-y-1.5">
-      <label htmlFor={id} className="text-sm font-medium text-fg">
-        {label}
-      </label>
+      <FieldLabel htmlFor={id} label={label} required className="block" />
       <textarea
         id={id}
+        aria-required="true"
         value={value}
         rows={rows}
         placeholder={placeholder}

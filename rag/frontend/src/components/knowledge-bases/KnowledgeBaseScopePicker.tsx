@@ -4,7 +4,7 @@ import { Database } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 
 import { KnowledgeBasePickerGrid } from "@/components/knowledge-bases/KnowledgeBasePickerGrid";
-import { Banner, TimedLoadingState, Skeleton } from "@engchina/production-ready-ui";
+import { Banner, FieldLabel, TimedLoadingState, Skeleton } from "@engchina/production-ready-ui";
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import {
@@ -62,6 +62,8 @@ export function KnowledgeBaseScopePicker({
   className,
   knownKnowledgeBases,
   knownMissingIds,
+  required = false,
+  errorId,
 }: {
   selectedIds: string[];
   onChange: (ids: string[]) => void;
@@ -73,8 +75,12 @@ export function KnowledgeBaseScopePicker({
   /** 画面が既に持つ選択済みの参照（範囲外の KB の名前もチップに出すため）。 */
   knownKnowledgeBases?: readonly KnowledgeBaseRefLike[];
   knownMissingIds?: readonly string[];
+  /** 1 件以上の選択が必須（ラベルに「必須」、入力欄に aria-required。#531）。 */
+  required?: boolean;
+  /** 欄の下に出しているエラーの id。渡すと入力欄を aria-invalid にして結ぶ。 */
+  errorId?: string;
 }) {
-  const labelId = useId();
+  const inputId = useId();
   const [filter, setFilter] = useState("");
   const q = useDebouncedValue(filter.trim(), SEARCH_DEBOUNCE_MS);
   const search = useKnowledgeBaseSearch({ status: "ACTIVE", q: q || undefined });
@@ -94,10 +100,17 @@ export function KnowledgeBaseScopePicker({
   return (
     <div className={cn("space-y-2", className)}>
       <div>
-        <p id={labelId} className="flex items-center gap-1.5 text-xs font-medium text-fg">
-          <Database size={14} className="text-accent-fg" aria-hidden />
-          {label}
-        </p>
+        <FieldLabel
+          htmlFor={inputId}
+          label={
+            <>
+              <Database size={14} className="text-accent-fg" aria-hidden />
+              {label}
+            </>
+          }
+          required={required}
+          className="flex items-center gap-1.5 text-xs"
+        />
         <p className="mt-1 text-xs text-fg-muted">{helper}</p>
       </div>
 
@@ -131,6 +144,12 @@ export function KnowledgeBaseScopePicker({
             disabled={disabled}
             ariaLabel={label}
             selectedItems={selection.items}
+            field={{
+              inputId,
+              required,
+              invalid: Boolean(errorId),
+              describedBy: errorId,
+            }}
             remote={{
               onFilterChange: setFilter,
               total,

@@ -17,6 +17,7 @@ import {
   Skeleton,
   Switch,
   TextField,
+  FieldLabel,
   cn,
   toast,
   useConfirm,
@@ -750,7 +751,6 @@ export function ModelSettingsPage({
                 <NumberField
                   id="genai-embedding-dim"
                   label={t("settings.model.genai.embeddingDim")}
-                  badge={t("settings.model.fixed")}
                   value={draft.generative_ai.embedding_dim}
                   min={1536}
                   max={1536}
@@ -868,9 +868,8 @@ function ConnectionPanel({
           id={connectionFieldId(id, "endpoint")}
           label={t("settings.model.enterprise.endpoint")}
           required
-          requiredLabel={
-            primary ? t("settings.model.requiredInOci") : t("settings.model.required")
-          }
+          // 接続 1 は OCI を使うときだけ必須（条件付きの文言）。接続 2 は常に必須なので既定の「必須」（#531）。
+          requiredLabel={primary ? t("settings.model.requiredInOci") : undefined}
           value={connection.endpoint}
           placeholder={t("settings.model.placeholder.endpoint")}
           error={error}
@@ -996,13 +995,25 @@ function ModelCatalogEditor({
   displayNamePlaceholder: string;
 }) {
   return (
-    <div className="space-y-3">
+    <div
+      role="group"
+      aria-labelledby="enterprise-model-catalog-label"
+      className="space-y-3"
+    >
       <div className="flex min-h-8 flex-wrap items-center justify-between gap-2">
-        <FieldLabel
-          htmlFor="enterprise-model-catalog"
-          label={t("settings.model.enterprise.models")}
-          badge={t("settings.model.requiredInOci")}
-        />
+        {/* 登録モデルは複数の入力をまとめた一覧で、label で結べる 1 つの入力が無い。見出しの行に「追加」を並べるため
+            fieldset の legend にもできないので、共有の FieldLabel / FieldLegend で表せず、条件付きの必須のタグを
+            RequiredBadge で直接置く（#531）。group は aria-required を持てないので、タグは読み上げ対象に残す。 */}
+        <span
+          id="enterprise-model-catalog-label"
+          className="text-sm font-medium text-fg"
+        >
+          {t("settings.model.enterprise.models")}
+          <RequiredBadge
+            label={t("settings.model.requiredInOci")}
+            className="ml-2 align-middle"
+          />
+        </span>
         <Button
           type="button"
           variant="secondary"
@@ -1172,7 +1183,6 @@ function DefaultModelFields({
           id={DEFAULT_MODEL_FIELD_IDS.default_vision_model_id}
           label={t("settings.model.defaults.vision")}
           required
-          requiredLabel={t("settings.model.required")}
           value={enterprise.default_vision_model_id}
           options={visionModelOptions(enterprise.models)}
           placeholder={t("settings.model.defaults.visionPlaceholder")}
@@ -1228,7 +1238,6 @@ function TestableTextField({
   value,
   placeholder,
   helper,
-  badge,
   className,
   testResult,
   testing,
@@ -1240,7 +1249,6 @@ function TestableTextField({
   value: string;
   placeholder?: string;
   helper?: string;
-  badge?: string;
   className?: string;
   testResult?: ModelSettingsTestResult;
   testing: boolean;
@@ -1251,14 +1259,7 @@ function TestableTextField({
     <div className={cn("space-y-1.5", className)}>
       <InputActionField
         id={id}
-        label={
-          <>
-            {label}
-            {badge ? (
-              <RequiredBadge label={badge} className="ml-2 align-middle" />
-            ) : null}
-          </>
-        }
+        label={label}
         value={value}
         placeholder={placeholder}
         helper={helper}
@@ -1364,7 +1365,6 @@ function NumberField({
   max,
   step,
   helper,
-  badge,
   readOnly,
   onChange,
 }: {
@@ -1375,13 +1375,13 @@ function NumberField({
   max: number;
   step: number;
   helper?: string;
-  badge?: string;
   readOnly?: boolean;
   onChange: (value: number) => void;
 }) {
   return (
     <div className="space-y-1.5">
-      <FieldLabel htmlFor={id} label={label} badge={badge} />
+      {/* 読み取り専用の固定値。「固定」は必須と同じタグで出さず、補足（helper）で伝える（#531）。 */}
+      <FieldLabel htmlFor={id} label={label} className="block" />
       <input
         id={id}
         type="number"
@@ -1400,25 +1400,6 @@ function NumberField({
       {helper ? (
         <p className="text-xs leading-relaxed text-fg-muted">{helper}</p>
       ) : null}
-    </div>
-  );
-}
-
-function FieldLabel({
-  htmlFor,
-  label,
-  badge,
-}: {
-  htmlFor: string;
-  label: string;
-  badge?: string;
-}) {
-  return (
-    <div className="flex min-h-5 items-center gap-2">
-      <label htmlFor={htmlFor} className="text-sm font-medium text-fg">
-        {label}
-      </label>
-      {badge ? <RequiredBadge label={badge} /> : null}
     </div>
   );
 }

@@ -10,7 +10,8 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
-  RequiredBadge,
+  FieldError,
+  FieldLabel,
   SelectField,
   type SelectFieldOption,
   TextField,
@@ -1355,6 +1356,9 @@ function isClassificationFilterValues(value: unknown): value is ClassificationFi
 }
 
 
+const BUSINESS_VIEW_SCOPE_INPUT_ID = "search-business-view-scope";
+const BUSINESS_VIEW_SCOPE_ERROR_ID = "search-business-view-scope-error";
+
 /**
  * RAG 検索の対象業務ビュー(Business View)選択。複数選ぶと参照 KB 群を union し、
  * query 方針・persona は選択順の先頭を代表として適用する。
@@ -1374,11 +1378,13 @@ function BusinessViewScopePicker({
 }) {
   return (
     <div className="space-y-1.5 sm:col-span-4">
-      <p className="flex items-center gap-1.5 text-xs font-medium text-fg">
-        {t("businessViews.scope.label")}
-        {/* グリッド選択は aria-required を持てないので、バッジは読み上げ対象のままにする */}
-        <RequiredBadge label={t("common.required")} />
-      </p>
+      {/* 必須は入力欄（combobox）の aria-required で伝える。タグは FieldLabel が読み上げから外す */}
+      <FieldLabel
+        htmlFor={BUSINESS_VIEW_SCOPE_INPUT_ID}
+        label={t("businessViews.scope.label")}
+        required
+        className="block text-xs"
+      />
       <BusinessViewPickerGrid
         items={views}
         selectedIds={selectedIds}
@@ -1387,11 +1393,15 @@ function BusinessViewScopePicker({
         }}
         disabled={disabled}
         ariaLabel={t("businessViews.scope.label")}
+        field={{
+          inputId: BUSINESS_VIEW_SCOPE_INPUT_ID,
+          required: true,
+          invalid: Boolean(error),
+          describedBy: error ? BUSINESS_VIEW_SCOPE_ERROR_ID : undefined,
+        }}
       />
       {error ? (
-        <p className="text-xs text-danger-fg" role="alert">
-          {error}
-        </p>
+        <FieldError id={BUSINESS_VIEW_SCOPE_ERROR_ID} message={error} />
       ) : (
         <p className="text-xs text-fg-muted">
           {selectedIds.length > 0

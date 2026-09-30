@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   Button,
   EmptyState,
+  FieldLabel,
   FormStatus,
   ProcessingIndicator,
   RowActionMenu,
@@ -185,16 +186,17 @@ export function ApprovedFaqManager({
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             maxLength={1000}
+            required
           />
           <div>
-            <label
+            <FieldLabel
               htmlFor="approved-faq-answer"
-              className="text-sm font-medium text-fg"
-            >
-              {t("businessViews.faq.answer")}
-            </label>
+              label={t("businessViews.faq.answer")}
+              required
+            />
             <textarea
               id="approved-faq-answer"
+              aria-required="true"
               value={answer}
               onChange={(event) => setAnswer(event.target.value)}
               rows={4}
@@ -236,10 +238,18 @@ export function ApprovedFaqManager({
           <p className="text-xs leading-relaxed text-fg-muted">
             {t("businessViews.faq.importHelp")}
           </p>
+          {/* 取込はファイルを選ぶまで実行できない（取込モードは既定値があるので必須にしない） */}
+          <FieldLabel
+            htmlFor="approved-faq-import-file"
+            label={t("businessViews.faq.importFile")}
+            required
+            className="block"
+          />
           <input
+            id="approved-faq-import-file"
             type="file"
             accept=".xlsx,.xls"
-            aria-label={t("businessViews.faq.importFile")}
+            required
             onChange={(event) =>
               void selectFile(event.target.files?.[0] ?? null)
             }

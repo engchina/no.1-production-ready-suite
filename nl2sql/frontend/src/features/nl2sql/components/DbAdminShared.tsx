@@ -25,6 +25,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   Pagination,
   ExecutionConfirmationField,
+  FieldLabel,
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
@@ -852,6 +853,7 @@ export function StatementRunnerCard({
   onExecuted?: (result: DbAdminExecuteData) => void | Promise<void>;
 }) {
   const [sql, setSql] = useWorkspaceState(`runner-${policy}-${draftScope}-sql`, initialSql ?? "");
+  const sqlInputId = useId();
   const [confirmation, setConfirmation] = useState("");
   const [result, setResult] = useState<DbAdminExecuteData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -986,16 +988,19 @@ export function StatementRunnerCard({
     <>
       {executeOnly && header}
       {progressNode}
-      <label className="grid gap-1 text-sm font-medium text-fg">
-        <span>{t("dbAdmin.runner.sqlLabel")}</span>
+      {/* SQL が空のままでは実行できない（canRun）ので必須として示す（#531）。 */}
+      <div className="grid gap-1">
+        <FieldLabel htmlFor={sqlInputId} label={t("dbAdmin.runner.sqlLabel")} required />
         <textarea
+          id={sqlInputId}
+          aria-required="true"
           value={sql}
           onChange={(event) => setSql(event.currentTarget.value)}
           rows={9}
           placeholder={placeholder}
           className="min-h-52 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring"
         />
-      </label>
+      </div>
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <SqlFileInput
           resetSignal={sqlFileResetSignal}

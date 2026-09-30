@@ -5,7 +5,7 @@ RAG / NL2SQL / Agent の3製品に共通する「画面の振る舞い」の規�
 | 文書 | 内容 |
 |---|---|
 | [buttons.md](./buttons.md) | ボタンの役割・配置・命名、ページ / オブジェクト / 行 / 内容の操作の置き場所、一括選択、並べ替え列頭 |
-| [messaging.md](./messaging.md) | 通知の 6 チャネル（Toast / FieldError / FormStatus / Banner / ConfirmDialog / State views）と 4 トーン、処理中表示、i18n 文言、API problem 契約、失敗状態の情報設計 |
+| [messaging.md](./messaging.md) | 通知の 6 チャネル（Toast / FieldError / FormStatus / Banner / ConfirmDialog / State views）と 4 トーン、必須の欄の示し方と未入力のエラー（§3.2.1）、処理中表示、i18n 文言、API problem 契約、失敗状態の情報設計 |
 | [page-archetypes.md](./page-archetypes.md) | ページの型（4 種）と共有プリミティブの使い方、分割ペイン |
 | [workspace-state.md](./workspace-state.md) | ページ遷移・再読込のときの作業状態の保持、未保存変更の離脱ガード |
 | [cross-cutting.md](./cross-cutting.md) | 横断的な保守・セキュリティ契約（更新 API の所有範囲、認可の server-side 強制、i18n と E2E locator） |

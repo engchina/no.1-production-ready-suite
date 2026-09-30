@@ -320,9 +320,9 @@ export function DatabaseSettingsPage({
   ) {
     const nextErrors: DatabaseSettingsFormErrors = {};
     if (!form.user.trim())
-      nextErrors.user = t("settings.database.validation.required");
+      nextErrors.user = t("settings.database.validation.userRequired");
     if (!form.dsn.trim())
-      nextErrors.dsn = t("settings.database.validation.required");
+      nextErrors.dsn = t(dsnRequiredMessageKey(form.connectionSecurity, settings.available_services));
     if (
       requirePassword &&
       !settings.has_password &&
@@ -481,7 +481,6 @@ export function DatabaseSettingsPage({
                   id="oracle-user"
                   label={t("settings.database.field.dbUser")}
                   required
-                  requiredLabel={t("common.required")}
                   value={form.user}
                   ref={userRef}
                   onValueChange={(value) => updateForm({ user: value })}
@@ -493,7 +492,6 @@ export function DatabaseSettingsPage({
                   ref={passwordRef}
                   label={t("settings.database.field.dbPassword")}
                   required={!settings.has_password}
-                  requiredLabel={t("common.required")}
                   value={form.password}
                   onValueChange={(value) => updateForm({ password: value })}
                   visible={passwordVisible}
@@ -1153,13 +1151,12 @@ function WalletServiceField({
   if (serviceOptions.length > 0) {
     return (
       <SelectField
-        id="oracle-wallet-service"
+        id={WALLET_SERVICE_FIELD_ID}
         label={t("settings.database.field.serviceDsn")}
         value={value.trim()}
         options={serviceOptions}
         onValueChange={onChange}
         required
-        requiredLabel={t("settings.database.requiredMark")}
         error={error}
         placeholder={t("settings.database.placeholder.serviceDsn")}
         helper={t("settings.database.helper.dsnService")}
@@ -1169,14 +1166,13 @@ function WalletServiceField({
 
   return (
     <TextField
-      id="oracle-wallet-service"
+      id={WALLET_SERVICE_FIELD_ID}
       label={
         usesWalletMtlS
           ? t("settings.database.field.serviceDsn")
           : t("settings.database.field.directDsn")
       }
       required
-      requiredLabel={t("common.required")}
       value={value}
       onValueChange={onChange}
       placeholder={
@@ -1424,6 +1420,24 @@ function focusFirstInvalid(
   if (errors.user) refs.user.current?.focus();
   else if (errors.password) refs.password.current?.focus();
   else if (errors.walletPassword) refs.walletPassword.current?.focus();
+  // サービス名 / DSN は選択（SelectField）と入力（TextField）が入れ替わるので、共通の id で探す。
+  else if (errors.dsn) document.getElementById(WALLET_SERVICE_FIELD_ID)?.focus();
+}
+
+/** サービス名 / DSN の欄の id（WalletServiceField の SelectField / TextField で共通）。 */
+const WALLET_SERVICE_FIELD_ID = "oracle-wallet-service";
+
+/**
+ * サービス名 / DSN の未入力のエラー（#531）。WalletServiceField と同じ条件で、選択肢があれば「選択」、無ければ「入力」にする。
+ */
+function dsnRequiredMessageKey(
+  connectionSecurity: DatabaseConnectionSecurity,
+  services: string[],
+) {
+  if (connectionSecurity !== "wallet_mtls") return "settings.database.validation.directDsnRequired";
+  return services.length > 0
+    ? "settings.database.validation.serviceDsnSelectRequired"
+    : "settings.database.validation.serviceDsnRequired";
 }
 
 const dateTimeFormat = new Intl.DateTimeFormat("ja-JP", {

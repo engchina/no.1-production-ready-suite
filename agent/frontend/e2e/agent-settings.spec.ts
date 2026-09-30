@@ -378,7 +378,9 @@ test.describe("Agent Runtime settings", () => {
 
     // 追加
     await page.getByRole("button", { name: "スキルを追加" }).click();
-    await page.getByLabel("ID", { exact: true }).fill("e2e_custom");
+    // 必須の欄はラベルの後ろに「必須」のタグ（aria-hidden）が付き、getByLabel の exact はタグの文字も含めて比べるため、
+    // 支援技術と同じアクセシブルネームで探す（#531）。
+    await page.getByRole("textbox", { name: "ID", exact: true }).fill("e2e_custom");
     await page.getByLabel("名前").fill("E2E カスタム");
     await page
       .getByLabel("MCP 依存 (JSON)")

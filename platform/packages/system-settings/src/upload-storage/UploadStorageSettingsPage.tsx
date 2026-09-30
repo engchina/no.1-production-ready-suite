@@ -148,6 +148,7 @@ export function UploadStorageSettingsPage({
     if (Object.keys(validationErrors).length > 0) {
       setErrors(validationErrors);
       save.reset();
+      focusFirstUploadStorageError(validationErrors);
       return;
     }
 
@@ -411,6 +412,21 @@ function payloadFromForm(form: UploadStorageForm): UploadStorageSettingsUpdate {
 }
 
 /** 保存前の検証（backend の pr_system_settings と同じ規則）。 */
+/** 欄の id を画面の上から順に並べる。保存時は最初のエラーの欄へフォーカスする（#531）。 */
+const UPLOAD_STORAGE_FIELD_IDS_IN_ORDER = [
+  ["localStorageDir", "upload-storage-local-dir"],
+  ["objectStorageRegion", "upload-storage-object-storage-region"],
+  ["objectStorageNamespace", "upload-storage-object-storage-namespace"],
+  ["objectStorageBucket", "upload-storage-bucket"],
+] as const satisfies readonly (readonly [keyof FieldErrors, string])[];
+
+function focusFirstUploadStorageError(errors: FieldErrors) {
+  const first = UPLOAD_STORAGE_FIELD_IDS_IN_ORDER.find(([field]) => errors[field]);
+  if (!first) return;
+  // エラーの表示（aria-describedby）が描画された後に移す。
+  window.setTimeout(() => document.getElementById(first[1])?.focus(), 0);
+}
+
 export function validateUploadStorageForm(
   form: UploadStorageForm,
   m: UploadStorageMessages = UPLOAD_STORAGE_MESSAGES,
@@ -435,7 +451,7 @@ export function validateUploadStorageForm(
     errors.objectStorageNamespace = m.validationObjectStorageName;
   }
   if (!bucket) {
-    errors.objectStorageBucket = m.validationRequired;
+    errors.objectStorageBucket = m.validationObjectStorageBucket;
   } else if (!OBJECT_STORAGE_NAME_PATTERN.test(bucket)) {
     errors.objectStorageBucket = m.validationObjectStorageName;
   }

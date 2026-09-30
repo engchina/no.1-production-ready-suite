@@ -370,6 +370,8 @@ function NumberField({
       id={id}
       label={label}
       helper={helper}
+      // 空欄は未入力(NaN)として保存できない(valid が止める)ので必須(#531)。
+      required
       type="number"
       inputMode="decimal"
       value={Number.isFinite(value) ? value : ""}

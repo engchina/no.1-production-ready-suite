@@ -754,6 +754,7 @@ function RecipeComparison({
               id="recipe-compare-query"
               className="min-w-0 flex-1"
               label={t("documents.experiment.compare.queryLabel")}
+              required
               value={query}
               onValueChange={setQuery}
               placeholder={t("documents.experiment.compare.placeholder")}

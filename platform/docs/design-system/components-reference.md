@@ -926,7 +926,7 @@ export interface SecretFieldProps {
   helper?: ReactNode;
   error?: string;
   placeholder?: string;
-  /** aria-required と RequiredBadge。required のときは requiredLabel を必ず渡す。 */
+  /** aria-required と RequiredBadge。required だけで「必須」を出す（requiredLabel は条件付きの必須の文言だけ上書き。#531）。 */
   required?: boolean;
   requiredLabel?: string;
   disabled?: boolean;
@@ -1642,3 +1642,101 @@ export interface RowTitleButtonProps
 - 製品の置き換え（#421）: RAG（フィードバック・業務ビューの管理・業務ビューの用語 / ルール）、Agent（エージェント・承認・ツール・メモリ・MCP サーバー・Skill・Plugin・マーケットプレイス・Run）、NL2SQL（プロファイル・DB 管理のオブジェクト一覧・データ管理の対象の選択・フィードバック管理のエントリ）、system-settings（ユーザー・ロール・ロール権限。`SecurityIdentityRowTitleButton`）。
 - 置き換えないもの: 一覧から別ページへ移るリンク（RAG のナレッジベース・ファイル一覧）、カード全体が 1 つのボタンの履歴（NL2SQL のフィードバック履歴）、listbox の選択肢（NL2SQL の DeepSec の対象）、チェックボックスのラベル。
 - 単体テストは `packages/ui/tests/row-title-button.test.tsx`。実ブラウザは RAG `e2e/feedback.spec.ts`・Agent `e2e/entity-archetypes.spec.ts`・NL2SQL `tests/e2e/profile-archive-reset.spec.ts`（desktop / 375px、Tab・Enter・Space・`aria-current`・タッチ端末の当たり判定・切り詰めの Tooltip）。
+
+---
+
+## 必須の表示: RequiredBadge — 変更 / FieldLabel・FieldLegend・Fieldset — **新規**（#531）
+
+3 製品と system-settings のフォームで、必須の欄の見せ方と読み上げを 1 通りにします。仕様と判断の理由は README §4「必須の表示」、画面の振る舞い（未入力のエラー・フォーカス）は UX 契約 `messaging.md` §3.2.1。
+
+```tsx
+import { FieldLabel, FieldLegend, Fieldset, SelectField, TextField } from "@engchina/production-ready-ui";
+
+// 1 行の入力・選択・secret: required だけで「必須」のタグと aria-required が付く（requiredLabel の既定は「必須」）
+<TextField id="profile-name" label={t("profiles.field.name")} required value={name} onValueChange={setName}
+  error={nameError ?? undefined} />
+<SelectField id="region" label={t("settings.oci.region")} required value={region} options={regions} onValueChange={setRegion} />
+// 条件付きの必須だけ文言を上書きする（別の見た目を作らない）
+<TextField id="compartment" label={t("settings.model.compartment")} required requiredLabel={t("settings.model.requiredInOci")} />
+
+// textarea・ファイル選択・独自の入力: FieldLabel + 入力の aria-required（タグは読み上げない）
+<FieldLabel htmlFor="direct-sql" label={t("directSql.field.sql")} required />
+<textarea id="direct-sql" aria-required="true" aria-invalid={Boolean(sqlError)} aria-describedby={sqlError ? "direct-sql-error" : undefined} />
+<FieldError id="direct-sql-error" message={sqlError} />
+
+// aria-required を持てない独自の入力（グリッドの選択など）: タグを読み上げ対象に残す
+<FieldLabel htmlFor="scope-grid" label={t("search.scope")} required requiredAnnouncedByControl={false} />
+
+// チェックボックスの群・複数選択: Fieldset（role=group）。必須は legend の中のタグで伝える
+<Fieldset id="user-roles" legend={t("security.users.roles")} required helper={t("security.users.rolesHelper")}
+  error={rolesError}>
+  {roles.map((role) => <label key={role.code}><input type="checkbox" … /> {role.name}</label>)}
+</Fieldset>
+
+// ラジオ: role="radiogroup" で aria-required を群に付ける（タグは読み上げない）
+<Fieldset id="scope-mode" legend={t("deepsec.scope.mode")} role="radiogroup" required>…</Fieldset>
+
+// 選択肢のレイアウトを自分で組む fieldset は FieldLegend だけを使ってよい
+<fieldset><FieldLegend required>{t("deepsec.targets")}</FieldLegend>…</fieldset>
+```
+
+### props
+
+```ts
+/** 既定の文言「必須」。packages/ui が持ち、3 製品で同じ語にそろえる。 */
+export const DEFAULT_REQUIRED_LABEL = "必須";
+
+export function RequiredBadge(props: {
+  /** 既定「必須」。 */
+  label?: string;
+  className?: string;
+  /** 入力側の aria-required が必須を伝えるときは true（二重読み上げを避ける）。 */
+  "aria-hidden"?: boolean;
+}): JSX.Element;
+
+type RequiredProps = {
+  required?: boolean;
+  /** 既定「必須」。条件付きの必須（「OCI 運用時必須」）だけ上書きする。 */
+  requiredLabel?: string;
+  /** 入力・群が aria-required で伝えるなら true（タグは aria-hidden）。FieldLabel の既定 true、FieldLegend の既定 false。 */
+  requiredAnnouncedByControl?: boolean;
+};
+
+export function FieldLabel(props: {
+  id?: string;
+  htmlFor: string;
+  label: ReactNode;
+  className?: string;
+  /** タグの後ろに置く要素。 */
+  children?: ReactNode;
+} & RequiredProps): JSX.Element;
+
+export function FieldLegend(props: { id?: string; children: ReactNode; className?: string } & RequiredProps): JSX.Element;
+
+export type FieldsetProps = {
+  id?: string;
+  legend: ReactNode;
+  /** legend の直下の補足。fieldset の aria-describedby に結ぶ。 */
+  helper?: ReactNode;
+  /** 群の直下の FieldError（「〇〇を選択してください。」）。aria-describedby に結ぶ。 */
+  error?: string | null;
+  /** "radiogroup" のときだけ fieldset に aria-required / aria-invalid を付け、タグは読み上げない。 */
+  role?: "radiogroup";
+  className?: string;
+  legendClassName?: string;
+  children: ReactNode;
+  required?: boolean;
+  requiredLabel?: string;
+};
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| `requiredLabel` の既定を「必須」にし、`TextField` / `SelectField` / `SecretField` は `required` だけでタグを出す | 呼び出し側が毎回文言を渡す作りでは、渡し忘れた欄が見た目で必須と分からない（WCAG 3.3.2）。`packages/ui` は日本語の既定文言を持つ（「閉じる」「本文へスキップ」と同じ扱い） |
+| `FieldLabel` / `FieldLegend` を `packages/ui` に置く（NL2SQL と system-settings が同じ実装を別々に持っていた） | TextField 以外の入力（textarea・ファイル選択・チェックボックスの群・ラジオ・独自の入力）でも、タグの位置・余白・読み上げの扱いを 1 か所で決める |
+| `FieldLabel` のタグは既定で `aria-hidden`、`FieldLegend` のタグは既定で読み上げる | label に結ばれた入力は `aria-required` で「必須」と読まれるので、タグも読むと「必須、必須」になる。fieldset（role=group）は `aria-required` を持てない（WAI-ARIA 1.2）ので、legend の中の文字で伝える |
+| `Fieldset` の `role="radiogroup"` では fieldset に `aria-required` を付け、タグを読み上げない | radiogroup は `aria-required` を持てるロール。群に入ったときに 1 回だけ伝える |
+| 任意の欄には何も付けない。placeholder・ラベルの「(任意)」は lint で検出する | 必須だけを示せば、印の無い欄は任意と分かる（凡例が要らない）。placeholder は入力を始めると消える |
+
+- 製品で `RequiredBadge` を直接ラベルに並べない（adherence の lint が検出する）。ラベルでない所（カードの見出しに付ける条件付きの必須など）に置く必要があるときだけ、理由を添えて局所的に lint を外す。
+- 単体テストは `packages/ui/tests/required-field.test.tsx`（既定の文言・`aria-required`・タグの読み上げの扱い・任意の欄に何も付かないこと・`Fieldset` の `aria-describedby`）。lint の検出と許容の例は RAG `frontend/src/design-system-adherence.test.ts`。

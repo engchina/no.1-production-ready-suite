@@ -235,7 +235,7 @@ test("項目抽出の項目の定義を追加・検証・保存できる", async
   expect(patches).toEqual([]);
 
   await editor.getByLabel("項目名").nth(1).fill(" 合計金額 ");
-  await editor.getByLabel("説明（任意）").nth(1).fill("税込の合計");
+  await editor.getByLabel("説明", { exact: true }).nth(1).fill("税込の合計");
   await editor.getByRole("combobox", { name: "値の型" }).nth(1).click();
   await page.getByRole("option", { name: "数値" }).click();
   await editor.getByRole("button", { name: "項目の定義を保存" }).click();

@@ -16,7 +16,7 @@
 |---|---|---|
 | `ARCHITECTURE.md` | **3アプリがこの DS をどう使うかの契約書。3チーム全員が読む** | 最初にこれを読む |
 | `css/` | design system の**実ソース**（プレーン CSS） | `packages/ui/src/styles/` に**ほぼそのまま移植できます** |
-| `adherence.oxlintrc.json` + `design-system-plugin.mjs` | 生の hex / inline style の生の px / 書体 / 型・角丸の任意値 / 旧トークン名 / 内部パス import / loading 中のラベル差し替えを検出する lint ルール | 各製品の lint 設定から相対パス（`../../platform/…`）で参照する（`AGENTS.md`「lint」節） |
+| `adherence.oxlintrc.json` + `design-system-plugin.mjs` | 生の hex / inline style の生の px / 書体 / 型・角丸の任意値 / 旧トークン名 / 内部パス import / loading 中のラベル差し替え / 任意の表示（「(任意)」・placeholder の「任意」）/ 手書きの必須表示を検出する lint ルール | 各製品の lint 設定から相対パス（`../../platform/…`）で参照する（`AGENTS.md`「lint」節） |
 | `components-reference.md` | 新規・変更されたコンポーネントの**参照実装**（React + インラインスタイル） | **そのまま出荷しない。** `packages/ui` の既存 `.tsx` / Tailwind の書き方に合わせて書き直す |
 | `reference/` | **目視確認用の HTML** | ブラウザで開いて見た目を確認するだけ。製品コードではない |
 
@@ -424,28 +424,37 @@ import { Wrench } from "lucide-react";
 - **アイコンを必須化**（`icon` 既定 `true`）。success / danger の輝度がほぼ同じで色覚型によって見分けられないため、**形で冗長に符号化**します。強制カラーモードでも意味が残ります
 - `pending` バリアントは **非推奨**（旧実装で `warning` と**完全に同値**でした）。互換のため `VARIANTS.pending = VARIANTS.warning` を残していますが、呼び出し側は `warning` に置換してください
 
-### `TextField` / `SelectField` の必須表示（変更）— ★ 必須は「情報」であり「状態」ではない
+### 必須の表示（変更・#531）— ★ 必須の欄だけに「必須」。必須は「情報」であり「状態」ではない
 
-`required` + `requiredLabel` で出す必須表示を、**中立色のテキストタグ**に統一しました。単体の `RequiredBadge` も export します。
+必須の欄の見せ方を、3 製品と system-settings のすべてのフォームで次の 1 通りにします。`TextField` / `SelectField` / `SecretField` は `required` だけで出し（`requiredLabel` の既定が「必須」）、それ以外の入力は `FieldLabel` / `FieldLegend` / `Fieldset` で出します（components-reference「必須の表示」）。
 
 ```jsx
-<TextField id="user" label="ユーザー名" required requiredLabel="必須" />
-// TextField で表せない入力（ファイル選択・fieldset の legend・複合入力）
-<legend>対象の業務ビュー <RequiredBadge label="必須" /></legend>
+<TextField id="user" label="ユーザー名" required />
+// textarea・ファイル選択・独自の入力
+<FieldLabel htmlFor="sql" label="SQL" required />
+<textarea id="sql" aria-required="true" />
+// チェックボックスの群・複数選択（ラジオは role="radiogroup"）
+<Fieldset legend="ロール" required error={rolesError}>…</Fieldset>
+// 条件付きの必須だけ文言を上書きする
+<TextField id="region" label="リージョン" required requiredLabel="OCI 運用時必須" />
 ```
 
 | 決めたこと | 理由 |
 |---|---|
+| **必須の欄だけ**、ラベルの後ろに中立色のテキストタグ「必須」を付ける | 必須だけに印があれば、印の無い欄が任意だと分かります。ラベルの直後に置くのは、欄を読む順（ラベル → 必須 → 入力）で見落とさないためです |
+| **記号 `*` ではなくテキスト「必須」** | `*` は意味を伝える凡例文（「* は必須入力項目です」）が要ります。しかし利用者は凡例を読みません。小さな記号は弱視の利用者に見落とされ、色（赤）に頼ると色覚の違いで伝わりません（NN/g「Required Fields」、WCAG 1.4.1）。GOV.UK Design System はアスタリスクを使わず、デジタル庁デザインシステムも入力欄のラベルにテキストの「※必須」を付けます。日本語の業務 UI では「必須」の文字が期待されます |
+| **任意の欄には何も付けない。placeholder・ラベルに「(任意)」を書かない** | 印を 2 種類にすると、どちらが基準か迷わせます。placeholder は入力を始めると消え、コントラストも低く、ラベルの代わりになりません（WCAG 3.3.2 Labels or Instructions）。lint が placeholder の「任意」と「(任意)」「（任意）」を検出します |
 | **状態色（warning / danger）を使わない。** 文字 `--color-fg-muted`、輪郭 `--color-border-strong`（装飾）、地は塗らない | 状態色は**利用者の対応が要る状態**の信号です。必須は操作前から決まっている項目の属性なので、状態色で出すと、フォームを開いた瞬間に注意表示が並んでしまいます。そうなると、本物の警告やエラーが埋もれます。未入力で送信したときの `FieldError`（danger）だけが状態色を使います |
-| **記号 `*` ではなくテキスト（翻訳済みの「必須」）** | `*` は意味を伝える凡例文（「* は必須入力項目です」）が要ります。しかし利用者は凡例を読みません（NN/g）。GOV.UK はアスタリスクを使わず、デジタル庁デザインシステムもテキストの「※必須」を使います。テキストなら色にも記号の学習にも頼りません（WCAG 1.4.1 / 3.3.2） |
 | 文字コントラスト 4.5:1 以上 | 実測: light は surface 上 4.83:1、sunken 上 4.55:1。dark は surface 上 8.72:1、overlay 上 7.06:1。淡い灰色の必須表示は弱視の利用者が見落とします（NN/g） |
 | 形は pill（`--radius-pill`）、`ring-inset` の輪郭で行の高さを変えない | バッジの角丸トークンに合わせます。アイコンは付けません。`StatusBadge`（状態 = アイコン必須）と区別するためです |
-| 読み上げ: `TextField` / `SelectField` は `aria-required` で伝え、タグは `aria-hidden` | 「必須、必須」の二重読み上げを防ぎます。`RequiredBadge` を単体で使う場合、既定では読み上げます |
+| **支援技術には `aria-required="true"`（またはネイティブの `required`）で伝え、タグは二重に読み上げない** | 入力の名前・役割・状態をプログラムで伝えます（WCAG 4.1.2 Name, Role, Value）。`TextField` / `SelectField` / `SecretField` / `FieldLabel` のタグは `aria-hidden` です（「必須、必須」を防ぐ）。fieldset（role=group）は `aria-required` を持てないため、`FieldLegend` / `Fieldset` のタグは読み上げます（群の名前「ロール 必須」として 1 回だけ読まれる）。`role="radiogroup"` の `Fieldset` は群に `aria-required` を付け、タグを読みません |
 | 条件付きの必須も同じタグで、文言で区別する（例:「OCI 運用時必須」） | info 色のバッジで別扱いすると、必須表示が 2 種類になります |
+| **未入力のエラーは欄の直下に「〇〇を入力してください。」「〇〇を選択してください。」**。保存時は最初のエラーの欄へフォーカスする | 何が足りないかと直し方を、問題の欄のそばで伝えます（WCAG 3.3.1 / 3.3.3、GOV.UK「Error message」）。文言の型とフォーカスは UX 契約 `messaging.md` §3.2.1 |
 
-- **`required` のときは `requiredLabel` を必ず渡してください。** 渡さないと見た目で必須が分からず、WCAG 3.3.2 を満たしません（`packages/ui` は日本語を持たないため既定文言がありません）
-- 必須表示を**アプリで再実装しない**でください（赤い `*`・warning バッジ・info バッジが3アプリに混在していました）。`TextField` で表せない入力には `RequiredBadge` を置きます
-- ネイティブの `required` 検証は付けません。未入力の検出と `FieldError` の表示はアプリ側で行います（従来どおり）
+- **`requiredLabel` は渡さなくてよくなりました**（既定「必須」）。以前は呼び出し側が必ず渡す作りで、渡し忘れた欄は見た目で必須が分かりませんでした。条件付きの必須の文言だけ上書きします
+- ネイティブの `required` 検証は `TextField` / `SelectField` に付けません。未入力の検出と `FieldError` の表示はアプリ側で行います（従来どおり。`SecretField` と `ExecutionConfirmationField` はネイティブの `required` も付けます）
+- 必須の欄かどうかは、backend の検証（Pydantic の必須フィールド・`min_length`）か画面の送信ガード（未入力では保存できない）で決まっている欄だけです。表示のために必須を増やしたり減らしたりしません
+- 必須表示を**アプリで再実装しない**でください（赤い `*`・warning バッジ・info バッジが 3 アプリに混在していました）。製品で `RequiredBadge` を直接ラベルに並べることも、adherence の lint が検出します（「必須」の span / `StatusBadge` / `t("common.required")` の直接表示・手書きの `*` も）
 
 ### `TextField` の先頭アイコン・後置スロット（変更）— ★ 検索欄を手書きしない（#384）
 
@@ -737,7 +746,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**46点あります。**
+QA に事前共有してください。**47点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -787,6 +796,7 @@ QA に事前共有してください。**46点あります。**
 | 44 | **「アニメーションを減らす」設定でもスピナーが回る** | reduced-motion では `Spinner` の回転を止め、アークの濃さを 1 ↔ 0.5 で変えるだけだった（処理中なのに止まって見えた）→ 設定によらず等速（linear 1s）で回る。他の reduced-motion 対応（Skeleton の点滅・通知・ドロワー・Chevron の動き）は変えない | 処理中を伝える本質的な動きのため（§4「Spinner」、#440） |
 | 45 | **開いたメニュー・選択肢の一覧が通知の上に出る** | `--z-dropdown` は 100 で通知（`--z-toast` 800）の下だったため、375px で通知が 2 つ重なると PageHeader の「その他の操作」のメニュー項目が覆われて押せなかった → `--z-dropdown` を 850（通知の上・モーダルの暗幕の下）にした。モーダル・固定ヘッダーの中では従来どおりその層の 1 段上 | いま操作しているメニューを通知が塞がない（#431） |
 | 46 | **権限管理の「利用できる対象」の候補の行が名前と説明だけになり、高さがそろう** | 各行に名前・説明・内部の ID（等幅、32 桁の hash など）を並べ、行の高さが内容で変わった。高さに上限のあるスクロール領域の grid で行が `min-h-11` まで縮み、375px の 1 列では次の行の名前が前の行の ID・説明に重なった → ID は出さない。名前は 1 行・説明は 2 行で省略し（全文は `title`、チェックボックスの名前は全文）、説明を持つ候補がある対象ではすべての行が説明の 2 行分を取って高さがそろう。行は内容の高さ（`auto-rows-max`）で、縮めて重ねない。名前の行はバッジの高さを常に取る。ホバーで行の地が `surface-hover` になる。NL2SQL の業務プロファイル・Agent のエージェント / 業務ビューも同じ部品（説明を持たない対象は名前だけの行） | 利用者には ID が意味を持たず、何の対象かを名前と説明で見分ける。行の重なりを解消する（`RolePermissionTargetOption`、#521） |
+| 47 | **必須の欄に「必須」のタグがそろい、「(任意)」が消える** | 必須の欄でも `requiredLabel` を渡し忘れた欄・素の `<label>` の欄はタグが無く、一部の欄だけにタグがあった。任意の欄はラベル・placeholder に「(任意)」「（任意）」を書く画面があった（RAG・NL2SQL・Agent で 14 か所）→ backend の検証か送信ガードで必須の欄すべてにタグ「必須」と `aria-required`、任意の欄には何も付けない。チェックボックスの群・ラジオの必須は legend の後ろに同じタグ。NL2SQL / system-settings の独自の `FieldLabel` は共有部品になる（見た目は同じ） | 必須だけを 1 通りの印で示し、凡例なしで見分けられるようにする。placeholder をラベルの代わりにしない（§4「必須の表示」、WCAG 3.3.2 / 1.4.1 / 4.1.2、#531） |
 
 ### API の非互換
 
@@ -804,7 +814,8 @@ QA に事前共有してください。**46点あります。**
 | `AppShell`（#367） | `navDrawerLabels` プロップ新設（md 未満のドロワーの文言）。md 未満では `sidebar` をドロワーの中に描く。新規 export `useSidebarCollapsed`（サイドバーの `footer` の部品がドロワーの中で展開して描くためのフック）・`DEFAULT_NAV_DRAWER_LABELS`・`NAV_DRAWER_QUERY` |
 | `PagedDataTable`（#265） | **新規 export。** `PagedDataTable` / `PagedDataTableProps` / `PaginationLabels`。クライアント側で全件を持つ一覧の標準形（`stickyHeader` + `visibleRows` + 10 件/ページの `Pagination`）。文言は `paginationLabels` で渡す |
 | `@engchina/production-ready-system-settings`（#265） | `SECURITY_TABLE_VISIBLE_ROWS` / `SECURITY_TABLE_ROW_CLASS` / `SECURITY_LIST_SCROLL_CLASS` / `SECURITY_LIST_FOCUS_CLASS` の export を**削除。** 同じ値の `INFORMATION_TABLE_VISIBLE_ROWS` / `INFORMATION_TABLE_ROW_CLASS` / `INFORMATION_LIST_SCROLL_CLASS` / `INFORMATION_TABLE_FOCUS_CLASS`（`@engchina/production-ready-ui`）を使う |
-| `RequiredBadge` | **新規 export。** `TextField` / `SelectField` の必須表示と同じタグ。アプリ独自の必須表示（`*` など）はこれに置き換える |
+| `RequiredBadge` | **新規 export。** `TextField` / `SelectField` の必須表示と同じタグ。アプリ独自の必須表示（`*` など）はこれに置き換える。#531 で `label` を省略可（既定「必須」）にし、`DEFAULT_REQUIRED_LABEL` を export |
+| `FieldLabel` / `FieldLegend` / `Fieldset`（#531） | **新規 export**（`FieldsetProps` も）。TextField 以外の入力の必須表示。NL2SQL の `components/ui/required-field.tsx` と system-settings の `oci/required-field.tsx` は削除。`TextField` / `SelectField` / `SecretField` の `requiredLabel` は既定「必須」（省略可）になった |
 | `ExecutionConfirmationField` | **新規 export（#379）。** `ExecutionConfirmationField` / `ExecutionConfirmationFieldProps` / `ExecutionConfirmationLabels` / `ExecutionConfirmationStatus` / `executionConfirmationStatus` / `DEFAULT_EXECUTION_CONFIRMATION_LABELS`。NL2SQL の `DbAdminShared` の `ExecutionConfirmationField` は削除 |
 | `TextField`（#384） | `leadingIcon` / `trailing` / `onClear` / `clearLabel` / `labelHidden` / `size`（`"md" \| "lg"`）/ `touchTarget` プロップ新設。HTML の `size` 属性（文字数）は受け取らない。入力欄は `div.relative` に包まれる（label の直後の要素が input でなくなる。E2E で `label > svg` や `xpath=ancestor::label` を引いていたら、`getByRole` と入力欄の親で引く）。`type="search"` のブラウザ既定のクリアを出さない。`TextFieldProps` / `TextFieldSize` を export |
 | `--radius-control`（#384） | **新規トークン**（utility `rounded-control`）。`--button-radius` / `--input-radius` はその別名 |
@@ -901,6 +912,7 @@ TIER 2 のトークンを `@theme inline` に登録すると `bg-surface` / `tex
 - [ ] Windows ハイコントラストモードでボタン・入力・アクティブ nav が消えない
 - [ ] `StatusBadge` をグレースケールにしても状態が判別できる
 - [ ] 必須表示が状態色（warning / danger）を使わず、テキストで示されている（アプリ独自の `*` や色付きバッジが0件）
+- [ ] 必須の欄だけに「必須」のタグがあり、入力（または radiogroup）に `aria-required`、任意の欄と placeholder に「(任意)」が無い（adherence の lint の違反 0 件）
 - [ ] タブが ← → / Home / End で操作できる
 - [ ] タッチ端末（`pointer: coarse`）で `ToggleChip` / `Switch` の当たり判定が 44px 以上、見た目の大きさとマウス環境の当たり判定は変わらない
 - [ ] 375px でタブが入りきらないとき、スクロールできる方向の端だけがフェードし、キーボードで選んだタブがフェードに隠れない

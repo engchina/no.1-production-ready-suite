@@ -691,7 +691,7 @@ test("確認待ちレシピの分割を一時設定でプレビューする", as
   await expect(page.getByText("chunk はまだ作成されていません。")).toBeVisible();
   await preview.getByRole("combobox", { name: "分割方式" }).click();
   await page.getByRole("option", { name: "構造認識" }).click();
-  await preview.getByLabel("chunk サイズ(文字)", { exact: true }).fill("640");
+  await preview.getByRole("spinbutton", { name: "chunk サイズ(文字)", exact: true }).fill("640");
   await preview.getByRole("button", { name: "プレビュー実行" }).click();
 
   await expect(preview).toContainText("件数");
@@ -814,10 +814,10 @@ test("分割プレビューで DocRAG 親子階層の 5 項目を指定できる
   await page.getByRole("option", { name: "DocRAG 親子階層" }).click();
 
   // DocRAG は chunk サイズ等を使わず、rag_poc と同じ 5 項目だけを出す。
-  await expect(preview.getByLabel("chunk サイズ(文字)", { exact: true })).toHaveCount(0);
-  await expect(preview.getByLabel("子チャンク目標文字数", { exact: true })).toHaveValue("1000");
-  await expect(preview.getByLabel("親チャンク最大 child 数", { exact: true })).toHaveValue("12");
-  await preview.getByLabel("子チャンク目標文字数", { exact: true }).fill("600");
+  await expect(preview.getByRole("spinbutton", { name: "chunk サイズ(文字)", exact: true })).toHaveCount(0);
+  await expect(preview.getByRole("spinbutton", { name: "子チャンク目標文字数", exact: true })).toHaveValue("1000");
+  await expect(preview.getByRole("spinbutton", { name: "親チャンク最大 child 数", exact: true })).toHaveValue("12");
+  await preview.getByRole("spinbutton", { name: "子チャンク目標文字数", exact: true }).fill("600");
   await preview.getByRole("button", { name: "プレビュー実行" }).click();
 
   await expect(preview).toContainText("件数");

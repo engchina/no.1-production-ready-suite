@@ -601,6 +601,8 @@ function ExternalConnectionCard({
           label={t("settings.parserAdapters.connection.model")}
           value={modelSupported ? value.model : t("settings.parserAdapters.connection.nativeModel")}
           placeholder={modelSupported ? "model-id" : undefined}
+          // Endpoint を入力したときだけ Model が要る（validateConnections と同じ条件。#531）
+          required={modelSupported && Boolean(value.endpoint.trim())}
           error={modelError}
           disabled={saving || !modelSupported}
           onChange={(model) => onChange({ model })}
@@ -610,10 +612,9 @@ function ExternalConnectionCard({
           label={t("settings.parserAdapters.connection.apiKey")}
           type="password"
           value={value.api_key}
+          // 任意の欄は placeholder で「任意」と示さない（#531）。保存済みのときだけ保持の説明を出す。
           placeholder={
-            connection?.api_key_configured
-              ? t("settings.parserAdapters.connection.apiKeyRetained")
-              : t("settings.parserAdapters.connection.apiKeyOptional")
+            connection?.api_key_configured ? t("settings.parserAdapters.connection.apiKeyRetained") : undefined
           }
           disabled={saving || value.clear_api_key}
           onChange={(api_key) => onChange({ api_key, clear_api_key: false })}
@@ -686,6 +687,7 @@ function ConnectionTextField({
   value,
   type = "text",
   placeholder,
+  required = false,
   error,
   disabled,
   onChange,
@@ -695,6 +697,7 @@ function ConnectionTextField({
   value: string;
   type?: "text" | "url" | "password";
   placeholder?: string;
+  required?: boolean;
   error?: string;
   disabled: boolean;
   onChange: (value: string) => void;
@@ -707,6 +710,7 @@ function ConnectionTextField({
       type={type}
       value={value}
       placeholder={placeholder}
+      required={required}
       disabled={disabled}
       autoComplete="off"
       error={error}

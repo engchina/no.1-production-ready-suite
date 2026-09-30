@@ -10,6 +10,7 @@ import {
   ActionResultRegion,
   TimedLoadingState,
   DisclosureChevron,
+  FieldLabel,
 } from "@engchina/production-ready-ui";
 import {
   useCallback,
@@ -34,7 +35,6 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { PageNotice } from "@/components/page-notice";
 import { EmptyState } from "@/components/StateViews";
-import { FieldLabel } from "@/components/ui/required-field";
 import { useAuth } from "@/features/security/AuthProvider";
 import {
   CAPABILITY_PERMISSIONS,
@@ -1082,15 +1082,16 @@ function ExecutableNl2SqlWorkbench() {
 
               <div className="grid gap-4">
                 <div className="grid gap-1">
-                  <label
+                  {/* 生成・実行は Profile の選択が前提（profileSelectionReady）なので必須として示す（#531）。 */}
+                  <FieldLabel
                     htmlFor="nl2sql-profile-select"
-                    className="text-sm font-medium text-fg"
-                  >
-                    {t("nl2sql.profile.label")}
-                  </label>
+                    label={t("nl2sql.profile.label")}
+                    required
+                  />
                   <div className="flex flex-wrap items-stretch gap-2">
                     <select
                       id="nl2sql-profile-select"
+                      aria-required="true"
                       value={profileId}
                       onChange={(event) => {
                         setProfileId(event.currentTarget.value);

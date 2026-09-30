@@ -15,7 +15,6 @@ import {
   StatusBadge,
   PageHeader,
   PageBody,
-  RequiredBadge,
   BulkSelectionActions,
   ContentActionBar,
   ClearActionButton,
@@ -25,6 +24,8 @@ import {
   INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS,
   INFORMATION_TABLE_FIXED_VISIBLE_ROWS,
   ExecutionConfirmationField,
+  FieldLabel,
+  FieldLegend,
 } from "@engchina/production-ready-ui";
 
 import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
@@ -1878,18 +1879,18 @@ function CsvUploadWorkspace({
         dataTestId="data-csv-steps"
       />
 
-      <section
+      {/* アップロード先の選択は検索・一覧・選択を束ねた複合入力なので fieldset にし、legend の「必須」を群の名前として読み上げる（#531）。 */}
+      <fieldset
         className="grid min-w-0 gap-3"
-        aria-labelledby="data-csv-table-heading"
+        aria-describedby="data-csv-table-hint"
         data-testid="data-csv-table-section"
       >
-        <div>
-          <h3 id="data-csv-table-heading" className="text-sm font-semibold text-fg">
-            {t("dataMgmt.csv.table")}
-            <RequiredBadge label={t("common.required")} className="ml-2 align-middle" />
-          </h3>
-          <p className="mt-1 text-sm text-fg-muted">{t("dataMgmt.csv.tableHint")}</p>
-        </div>
+        <FieldLegend id="data-csv-table-heading" required>
+          {t("dataMgmt.csv.table")}
+        </FieldLegend>
+        <p id="data-csv-table-hint" className="mt-1 text-sm text-fg-muted">
+          {t("dataMgmt.csv.tableHint")}
+        </p>
         <DbObjectSelectionSummary label={t("objectSelector.selected")} value={table} />
         <DbObjectSelectorToolbar
           searchLabel={t("objectSelector.search")}
@@ -1937,7 +1938,7 @@ function CsvUploadWorkspace({
             />
           </>
         )}
-      </section>
+      </fieldset>
 
       {error && <ErrorState message={error} onRetry={onRetry} />}
 
@@ -2258,9 +2259,12 @@ function SyntheticWorkspace({
         ) : null}
 
         <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_10rem]">
-          <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
-            <span>{t("dataTools.syntheticData.profile")}</span>
+          {/* 生成とテーブル取得は DB Profile の選択が前提（canGenerateSyntheticData）なので必須として示す（#531）。 */}
+          <div className="grid min-w-0 gap-1">
+            <FieldLabel htmlFor="data-synthetic-profile" label={t("dataTools.syntheticData.profile")} required />
             <select
+              id="data-synthetic-profile"
+              aria-required="true"
               value={syntheticProfileName}
               onChange={(event) => onSyntheticProfileNameChange(event.currentTarget.value)}
               disabled={dbProfileRefreshRequired || dbProfileRefreshing}
@@ -2275,7 +2279,7 @@ function SyntheticWorkspace({
                 </option>
               ))}
             </select>
-          </label>
+          </div>
           <label className="grid gap-1 text-sm font-medium text-fg">
             <span>{t("dataTools.syntheticData.rowsPerTable")}</span>
             <input

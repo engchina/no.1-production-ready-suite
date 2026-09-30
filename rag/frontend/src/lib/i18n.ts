@@ -223,7 +223,6 @@ export const ja = {
   "settings.parserAdapters.connection.apiKey": "API key",
   "settings.parserAdapters.connection.nativeModel": "接続先の MinerU 設定を使用",
   "settings.parserAdapters.connection.apiKeyRetained": "設定済み（空欄なら保持）",
-  "settings.parserAdapters.connection.apiKeyOptional": "任意",
   "settings.parserAdapters.connection.clearApiKey": "保存済み API key を削除",
   "settings.parserAdapters.connection.configured": "設定済み",
   "settings.parserAdapters.connection.test": "接続を確認",
@@ -274,7 +273,7 @@ export const ja = {
   "settings.extractionFields.description":
     "項目抽出で取り出す項目です。項目名はモデルへの指示と抽出結果の名前に使います。全体で 1 つの定義で、次の取込から使います。",
   "settings.extractionFields.name": "項目名",
-  "settings.extractionFields.fieldDescription": "説明（任意）",
+  "settings.extractionFields.fieldDescription": "説明",
   "settings.extractionFields.valueType": "値の型",
   "settings.extractionFields.valueType.string": "文字列",
   "settings.extractionFields.valueType.number": "数値",
@@ -810,7 +809,7 @@ export const ja = {
   "settings.prompts.form.systemPrompt": "system prompt",
   "settings.prompts.form.systemPromptPlaceholder":
     "あなたは社内ナレッジ検索アシスタントです。検索根拠だけを使って…",
-  "settings.prompts.form.note": "メモ(任意)",
+  "settings.prompts.form.note": "メモ",
   "settings.prompts.form.notePlaceholder": "変更点や用途のメモ",
   "settings.prompts.form.activate": "作成時に有効化する",
   "settings.prompts.actions.create": "版を作成",
@@ -1020,12 +1019,12 @@ export const ja = {
     "HuggingFace 設定の保存に失敗しました。入力値とサーバー側 .env の書き込み権限を確認してください。",
   "settings.huggingface.cardTitle": "HuggingFace モデルダウンロード",
   "settings.huggingface.cardDescription":
-    "どちらも任意です。空欄なら公式 hub から token なし（匿名）でダウンロードします。",
-  "settings.huggingface.field.endpoint": "ミラー endpoint(任意)",
+    "どちらも空欄のままなら、公式 hub から token なし（匿名）でダウンロードします。",
+  "settings.huggingface.field.endpoint": "ミラー endpoint",
   "settings.huggingface.placeholder.endpoint": "https://hf-mirror.com",
   "settings.huggingface.helper.endpoint":
     "公式 huggingface.co へ到達しづらい環境ではミラーを指定します。空欄なら公式 hub を使います。",
-  "settings.huggingface.field.token": "ダウンロード token(任意)",
+  "settings.huggingface.field.token": "ダウンロード token",
   "settings.huggingface.placeholder.token": "hf_********************",
   "settings.huggingface.placeholder.tokenSaved": "保存済み(変更する場合だけ入力)",
   "settings.huggingface.helper.token":
@@ -2373,10 +2372,10 @@ export const ja = {
   "feedback.controls.answerHelpful": "この回答は役に立った",
   "feedback.controls.answerNotHelpful": "この回答は役に立たなかった",
   "feedback.controls.reasonLegend": "役に立たなかった理由を選択してください",
-  "feedback.controls.commentLabel": "コメント（任意）",
+  "feedback.controls.commentLabel": "コメント",
   "feedback.controls.commentPlaceholder": "どこが問題だったかを入力してください。",
   "feedback.controls.commentCount": "{count}/1000文字",
-  "feedback.controls.correctedAnswerLabel": "修正した回答（任意）",
+  "feedback.controls.correctedAnswerLabel": "修正した回答",
   "feedback.controls.correctedAnswerPlaceholder": "正しい回答が分かる場合は入力してください。",
   "feedback.controls.correctedAnswerHelp":
     "管理者がこの回答を Approved FAQ や品質評価のケースに登録するときに使います。",
