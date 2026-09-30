@@ -48,9 +48,10 @@ test("role API and security types carry allowed profile IDs", () => {
   assert.match(securityTypesSource, /allowed_profile_ids: string\[\]/u);
   assert.match(securityApiSource, /"permissions" \| "allowed_profile_ids"/u);
   assert.match(securityApiSource, /allowed_profile_ids: role\.allowed_profile_ids/u);
+  // 候補はサーバー側の検索とページング（q / limit / offset / ids。#608）。
   assert.match(
     securityApiSource,
-    /apiGet<ProfileAccessProfile\[\]>\("\/api\/security\/profile-access\/profiles"/u
+    /apiGet<ProfileAccessProfilePage>\(\s*`\/api\/security\/profile-access\/profiles\?\$\{rolePermissionTargetSearchParams\(query\)\.toString\(\)\}`/u
   );
 });
 
@@ -68,7 +69,7 @@ test("permissions are saved through the permission endpoint, role basics through
 });
 
 test("permission editor keeps the role list when the profile catalog fails", () => {
-  assert.match(nl2sqlPermissionsSource, /securityApi\.profileAccessProfiles\(\{ signal \}\)/u);
+  assert.match(nl2sqlPermissionsSource, /securityApi\.profileAccessProfiles\(query, \{ signal \}\)/u);
   assert.match(nl2sqlPermissionsSource, /loadWarning: t\("security\.roles\.profileAccessLoadWarning"\)/u);
   assert.match(permissionsPageSource, /\.catch\(\(cause: unknown\) => \{\s*if \(isAbortError\(cause\)\) throw cause;/u);
   assert.match(permissionsPageSource, /warning: formatMessage\(target\.messages\.loadWarning, \{ message \}\)/u);

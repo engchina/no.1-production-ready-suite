@@ -663,11 +663,18 @@ export interface BusinessViewAccessTarget {
   name: string;
 }
 
-export interface AccessTargetsData {
-  agents: AgentAccessTarget[];
-  business_views: BusinessViewAccessTarget[];
-  /** RAG の業務ビューを読めなかった理由（#240）。 */
-  business_view_warnings?: string[];
+/** 権限管理の対象の種類（`GET /api/security/access-targets/{kind}`。#608）。 */
+export type AccessTargetKind = "agents" | "business-views";
+
+/** 権限管理の対象の候補の 1 ページ（検索とページング。#608）。 */
+export interface AccessTargetPage<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_next: boolean;
+  /** RAG の業務ビューを読めなかった理由（業務ビューだけ。#240）。 */
+  warnings?: string[];
 }
 
 /** 権限管理画面の保存（`PUT /api/security/roles/{role_id}/access`）。 */

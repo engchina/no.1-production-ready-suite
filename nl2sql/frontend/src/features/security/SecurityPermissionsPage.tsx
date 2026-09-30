@@ -60,15 +60,17 @@ const PROFILE_ACCESS_TARGET: RolePermissionTargetSection<SecurityRole> = {
     grantsAllByPermission: t("security.roles.profileAccessManagedAll"),
     grantsAllSystemAdmin: t("security.roles.profileAccessSystemAdmin"),
   },
-  load: ({ signal }) =>
-    securityApi.profileAccessProfiles({ signal }).then((profiles) =>
-      profiles.map((profile) => ({
+  // 候補はサーバー側で検索し、50 件ずつ読む。選択済みの名前は ids で読む（#608）。
+  query: (query, { signal }) =>
+    securityApi.profileAccessProfiles(query, { signal }).then((page) => ({
+      items: page.items.map((profile) => ({
         id: profile.id,
         name: profile.name,
         secondary: profile.category,
         description: profile.description,
       })),
-    ),
+      total: page.total,
+    })),
   selectedIds: (role) => role.allowed_profile_ids ?? [],
   grantsAll: (effectivePermissions) => effectivePermissions.has(PROFILE_MANAGE_PERMISSION),
 };

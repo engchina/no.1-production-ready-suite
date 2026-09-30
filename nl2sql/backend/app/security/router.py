@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Query, Request, Response
-from pr_backend_core import ApiResponse
+from pr_backend_core import ApiResponse, Page
 from pr_system_settings.auth.domain import Principal as PlatformPrincipal
 from pr_system_settings.auth.domain import RoleRecord as PlatformRoleRecord
 from pr_system_settings.auth.router import build_auth_router
@@ -89,18 +89,47 @@ def update_role_permissions(
     return ApiResponse(data=RoleData.from_record(role))
 
 
+# 権限管理の「利用できる対象」の候補の 1 ページの上限（#608）。
+# 画面は 50 件ずつ読み、選択済みの名前は `ids` で読む。
+ACCESS_TARGET_PAGE_LIMIT_MAX = 100
+
+
+def _matches_profile_query(query: str, *values: str) -> bool:
+    """業務プロファイルの候補の検索（名前・カテゴリ・説明の部分一致。大文字と小文字を区別しない）。"""
+    needle = query.strip().casefold()
+    return not needle or any(needle in value.casefold() for value in values)
+
+
 @router.get(
     "/security/profile-access/profiles",
-    response_model=ApiResponse[list[ProfileAccessProfileData]],
+    response_model=ApiResponse[Page[ProfileAccessProfileData]],
 )
 def list_profile_access_profiles(
-    include_archived: bool = Query(default=False),
-) -> ApiResponse[list[ProfileAccessProfileData]]:
-    """権限管理画面向けに業務 profile の利用権限カタログを返す。"""
+    include_archived: Annotated[bool, Query()] = False,
+    q: Annotated[str, Query(max_length=200)] = "",
+    limit: Annotated[int, Query(ge=1, le=ACCESS_TARGET_PAGE_LIMIT_MAX)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    ids: Annotated[list[str] | None, Query(max_length=ACCESS_TARGET_PAGE_LIMIT_MAX)] = None,
+) -> ApiResponse[Page[ProfileAccessProfileData]]:
+    """権限管理画面向けに業務 profile の利用権限カタログを、検索とページングで返す（#608）。
+
+    - `q`: 名前・カテゴリ・説明の部分一致。
+    - `ids`: その ID だけ（ロールに選択済みの対象の名前の解決に使う。アーカイブ済みも返す）。
+    """
     from app.features.nl2sql.service import nl2sql_service
 
-    profiles = nl2sql_service.list_profiles(include_archived=include_archived)
-    profile_ids = {profile.id for profile in profiles}
+    selected = set(ids) if ids is not None else None
+    profiles = [
+        profile
+        for profile in nl2sql_service.list_profiles(
+            include_archived=include_archived or selected is not None
+        )
+        if (selected is None or profile.id in selected)
+        and _matches_profile_query(q, profile.name, profile.category, profile.description)
+    ]
+    total = len(profiles)
+    page_profiles = profiles[offset : offset + limit]
+    profile_ids = {profile.id for profile in page_profiles}
     roles = get_security_service().list_roles(include_archived=True)
     allowed_roles_by_profile: dict[str, list[str]] = {profile_id: [] for profile_id in profile_ids}
     for role in roles:
@@ -114,17 +143,23 @@ def list_profile_access_profiles(
             if profile_id in allowed_roles_by_profile:
                 allowed_roles_by_profile[profile_id].append(role.role_id)
     return ApiResponse(
-        data=[
-            ProfileAccessProfileData(
-                id=profile.id,
-                name=profile.name,
-                category=profile.category,
-                description=profile.description,
-                archived=profile.archived,
-                allowed_role_ids=sorted(allowed_roles_by_profile.get(profile.id, [])),
-            )
-            for profile in profiles
-        ]
+        data=Page(
+            items=[
+                ProfileAccessProfileData(
+                    id=profile.id,
+                    name=profile.name,
+                    category=profile.category,
+                    description=profile.description,
+                    archived=profile.archived,
+                    allowed_role_ids=sorted(allowed_roles_by_profile.get(profile.id, [])),
+                )
+                for profile in page_profiles
+            ],
+            total=total,
+            limit=limit,
+            offset=offset,
+            has_next=offset + limit < total,
+        )
     )
 
 

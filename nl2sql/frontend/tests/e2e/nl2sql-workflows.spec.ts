@@ -10753,7 +10753,7 @@ for (const pageId of ["comment-management", "annotation-management", "domain-man
     const fetchButton = page.getByRole("button", { name: "情報を取得", exact: true });
     await expectLargeActionButton(fetchButton);
     await expect(fetchButton).toBeDisabled();
-    await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+    await page.getByRole("option", { name: /INVOICES/ }).check();
     await expect(fetchButton).toBeEnabled();
     await fetchButton.focus();
     await expect(fetchButton).toBeFocused();
@@ -10790,7 +10790,7 @@ for (const pageId of ["comment-management", "annotation-management", "domain-man
     // 開発サーバー(StrictMode)で effect が二重実行されても、再活性化時の 1 回の応答で loading が解除される(#675)。
     await mockNl2SqlApi(page);
     await page.goto(`/${pageId}`);
-    await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+    await page.getByRole("option", { name: /INVOICES/ }).check();
     await page.getByRole("button", { name: "情報を取得", exact: true }).click();
     const inputPanel = page.locator(`#${pageId}-panel-input`);
     await expect(inputPanel.getByLabel("構造情報")).toHaveValue(/APP\.INVOICES/);
@@ -10828,10 +10828,11 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   await expect(commentTargetToolbar).toBeVisible();
   await expect(page.getByTestId("comment-management-target-footer")).toContainText("選択 0 件");
   await commentTargetToolbar.getByRole("searchbox", { name: "検索" }).fill("INVO");
-  await expect(page.getByRole("checkbox", { name: /INVOICES/ })).toBeVisible();
+  await expect(page.getByRole("option", { name: /INVOICES/ })).toBeVisible();
   await expect(page.getByTestId("comment-management-target-footer")).toContainText("1 / 1 件を表示");
-  const commentBulkActions = page.getByTestId("comment-management-target-selection-actions");
-  const commentTargetList = page.getByTestId("db-admin-object-list");
+  // 一括選択は ListPicker の選択の行（#608）。
+  const commentBulkActions = page.getByTestId("comment-management-target-bulk-actions");
+  const commentTargetList = page.getByTestId("comment-management-target-scroll-region");
   await expect
     .poll(async () => {
       const [actionsBox, listBox] = await Promise.all([
@@ -10839,18 +10840,18 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
         commentTargetList.boundingBox(),
       ]);
       if (!actionsBox || !listBox) return Number.POSITIVE_INFINITY;
-      return Math.abs(actionsBox.x - listBox.x);
+      return actionsBox.x - listBox.x;
     })
-    .toBeLessThanOrEqual(1);
+    .toBeGreaterThanOrEqual(0);
   await expect(commentBulkActions.getByRole("button", { name: "表示中をすべて選択" })).toBeEnabled();
-  await expect(commentBulkActions.getByRole("button", { name: "表示中の選択をすべて解除" })).toBeDisabled();
+  await expect(commentBulkActions.getByRole("button", { name: "選択をすべて解除" })).toBeDisabled();
   await commentBulkActions.getByRole("button", { name: "表示中をすべて選択" }).click();
   await expect(page.getByTestId("comment-management-target-footer")).toContainText("選択 1 件");
   await expect(commentBulkActions.getByRole("button", { name: "表示中をすべて選択" })).toBeDisabled();
-  await expect(commentBulkActions.getByRole("button", { name: "表示中の選択をすべて解除" })).toBeEnabled();
-  await commentBulkActions.getByRole("button", { name: "表示中の選択をすべて解除" }).click();
+  await expect(commentBulkActions.getByRole("button", { name: "選択をすべて解除" })).toBeEnabled();
+  await commentBulkActions.getByRole("button", { name: "選択をすべて解除" }).click();
   await expect(page.getByTestId("comment-management-target-footer")).toContainText("選択 0 件");
-  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("option", { name: /INVOICES/ }).check();
   await expect(page.getByTestId("comment-management-target-footer")).toContainText("選択 1 件");
   const commentFetchButton = page.getByRole("button", { name: "情報を取得", exact: true });
   await expectButtonBelowInput(page.getByTestId("comment-management-target-footer"), commentFetchButton);
@@ -10889,7 +10890,7 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   await expect(page.getByRole("region", { name: "通知" })).toContainText("SQL 生成が完了しました。");
 
   await page.goto("/annotation-management");
-  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("option", { name: /INVOICES/ }).check();
   const annotationFetchButton = page.getByRole("button", { name: "情報を取得", exact: true });
   await expectButtonBelowInput(page.getByTestId("annotation-management-target-footer"), annotationFetchButton);
   await annotationFetchButton.click();
@@ -11080,17 +11081,21 @@ test("metadata management target lists load more tables and views before SQL gen
   await page.goto("/comment-management");
   const commentFooter = page.getByTestId("comment-management-target-footer");
   await expect(commentFooter).toContainText("100 / 101 件を表示");
-  const commentBulkActions = page.getByTestId("comment-management-target-selection-actions");
+  const commentBulkActions = page.getByTestId("comment-management-target-bulk-actions");
   await commentBulkActions.getByRole("button", { name: "表示中をすべて選択" }).click();
   await expect(commentFooter).toContainText("選択 100 件");
   await commentFooter.getByRole("button", { name: "さらに読み込む" }).click();
   await expect(commentFooter).toContainText("101 / 101 件を表示");
-  await page.getByRole("checkbox", { name: /PAGE_101_TABLE/ }).click();
+  // 100 行を超えると見えている行だけを描く（ListPicker の仮想スクロール。#600）。末尾の行までスクロールする。
+  await page
+    .getByTestId("comment-management-target-scroll-region")
+    .evaluate((node) => node.scrollTo({ top: node.scrollHeight }));
+  await page.getByRole("option", { name: /PAGE_101_TABLE/ }).click();
   await expect(page.getByText("一度に選択できる対象は 100 件までです。")).toBeVisible();
-  await expect(page.getByRole("checkbox", { name: /PAGE_101_TABLE/ })).not.toBeChecked();
-  await commentBulkActions.getByRole("button", { name: "表示中の選択をすべて解除" }).click();
+  await expect(page.getByRole("option", { name: /PAGE_101_TABLE/ })).not.toBeChecked();
+  await commentBulkActions.getByRole("button", { name: "選択をすべて解除" }).click();
   await expect(commentFooter).toContainText("選択 0 件");
-  await page.getByRole("checkbox", { name: /PAGE_101_TABLE/ }).check();
+  await page.getByRole("option", { name: /PAGE_101_TABLE/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.PAGE_101_TABLE/);
   await page.getByRole("button", { name: "SQL 生成" }).click();
@@ -11117,7 +11122,7 @@ test("metadata management target lists load more tables and views before SQL gen
   await expect(annotationFooter).toContainText("100 / 101 件を表示");
   await annotationToolbar.getByRole("searchbox", { name: "検索" }).fill("V_PAGE_101_VIEW");
   await expect(annotationFooter).toContainText("1 / 1 件を表示");
-  await page.getByRole("checkbox", { name: /V_PAGE_101_VIEW/ }).check();
+  await page.getByRole("option", { name: /V_PAGE_101_VIEW/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.V_PAGE_101_VIEW/);
   await page.getByRole("button", { name: "SQL 生成" }).click();
@@ -11142,7 +11147,7 @@ test("metadata SQL regeneration resets the edited execution SQL", async ({ page 
   });
 
   await page.goto("/comment-management");
-  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("option", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   const inputPanel = page.locator("#comment-management-panel-input");
@@ -11169,7 +11174,7 @@ test("ドメイン管理は SQL 実行後に構造と既存ドメインを取り
     if (request.url().includes("/api/nl2sql/domains/inventory")) inventoryCount += 1;
   });
   await page.goto("/domain-management");
-  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("option", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const inputPanel = page.locator("#domain-management-panel-input");
   await expect(inputPanel.getByLabel("構造情報")).toHaveValue(/APP\.INVOICES/);
@@ -11190,7 +11195,7 @@ test("コメント管理は画面遷移後も生成 SQL と実行結果を保持
 
   await page.goto("/comment-management");
   await expect(page.getByRole("heading", { name: "コメント管理" })).toBeVisible();
-  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("option", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   const inputPanel = page.locator("#comment-management-panel-input");
@@ -11382,7 +11387,7 @@ for (const outcome of ["completed", "failed", "partial", "no_data", "unknown"] a
     await page.getByRole("tab", { name: "合成データ生成" }).click();
     const panel = page.locator("#data-management-panel-synthetic");
     await panel.getByRole("button", { name: "テーブル一覧を取得" }).click();
-    await panel.getByLabel("APP.INVOICES を選択").check();
+    await panel.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
     await panel.getByLabel("実行確認語").fill("APP.INVOICES");
     await panel.getByRole("button", { name: "生成開始" }).focus();
     await page.keyboard.press("Enter");
@@ -11447,7 +11452,7 @@ for (const uuidAvailable of [false, true]) {
     const panel = page.getByTestId("synthetic-run-panel");
     await expect(panel).toContainText("確認用データと履歴は生成終了から24時間保持します。");
     await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
-    await workspace.getByLabel("APP.INVOICES を選択").check();
+    await workspace.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
     await workspace.getByLabel("実行確認語").fill("APP.INVOICES");
     await workspace.getByRole("button", { name: "生成開始" }).focus();
     await page.keyboard.press("Enter");
@@ -11496,7 +11501,7 @@ test("synthetic waiting uses shared live timing beside the action and freezes du
   const panel = page.getByTestId("synthetic-run-panel");
   await expect(panel).toContainText("生成はまだ開始されていません。");
   await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
-  await workspace.getByLabel("APP.INVOICES を選択").check();
+  await workspace.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
   await workspace.getByLabel("実行確認語").fill("APP.INVOICES");
   const generate = workspace.getByRole("button", { name: "生成開始" });
   await generate.focus();
@@ -11579,7 +11584,7 @@ test("synthetic new submission replaces a history link and history keeps its own
   await expect(panel.getByRole("timer")).toHaveAccessibleName("処理時間 1:00:00");
   const workspace = page.locator("#data-management-panel-synthetic");
   await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
-  await workspace.getByLabel("APP.INVOICES を選択").check();
+  await workspace.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
   await workspace.getByLabel("実行確認語").fill("APP.INVOICES");
   await workspace.getByRole("button", { name: "生成開始" }).click();
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("受付済み・開始を待っています");
@@ -11649,7 +11654,7 @@ test("synthetic active runs allow independent same-table and other-table generat
   await expect(workspace.getByRole("cell", { name: "existing" })).toBeVisible();
   expect(readIds).toEqual(["run-001"]);
   await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
-  await workspace.getByLabel("APP.INVOICES を選択").check();
+  await workspace.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
   const prompt = workspace.getByRole("textbox", { name: "追加 prompt", exact: true });
   await expect(prompt).toBeEditable();
   await prompt.fill("部署名は日本語にしてください。");
@@ -11665,8 +11670,8 @@ test("synthetic active runs allow independent same-table and other-table generat
   expect(bodies[0].user_prompt).toBe("部署名は日本語にしてください。");
   expect(original.status).toBe("running");
   original.status = "unknown";
-  await workspace.getByLabel("APP.INVOICES を選択").uncheck();
-  await workspace.getByLabel("APP.PAYMENTS を選択").check();
+  await workspace.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).uncheck();
+  await workspace.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.PAYMENTS", exact: true }).check();
   await confirmation.fill("APP.PAYMENTS");
   await expect(generate).toBeEnabled();
   await generate.click();
@@ -11821,7 +11826,7 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await expectTopToBottomOrder(
     syntheticPanel.getByLabel("Profile"),
     refreshTablesActions,
-    syntheticPanel.getByTestId("data-synthetic-table-toolbar")
+    syntheticPanel.getByTestId("data-synthetic-table")
   );
 
   const tablesGate = createRequestGate();
@@ -11847,17 +11852,18 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   const refreshTablesButton = syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" });
   await expectLargeActionButton(refreshTablesButton);
   await refreshTablesButton.click();
-  const syntheticTablesSkeleton = page.getByTestId("data-synthetic-tables-list-skeleton");
+  // 読込中は ListPicker の読込中の表示（経過時間と行の形の Skeleton。#608）。スピナーは操作したボタンだけ。
+  const syntheticTablesSkeleton = page.getByTestId("data-synthetic-table-loading");
   await expect(syntheticTablesSkeleton).toBeVisible();
   await expect(refreshTablesButton.locator("svg.animate-spin")).toHaveCount(1);
   await expectLargeActionButton(refreshTablesButton);
-  await expect(syntheticTablesSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   await expect(syntheticPanel.getByText("対象テーブルが未取得です")).toHaveCount(0);
   tablesGate.release();
-  await expect(syntheticPanel.getByLabel("APP.INVOICES を選択")).toBeVisible();
+  await expect(syntheticPanel.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "通知" })).toContainText("対象テーブル一覧を取得しました。1 件を確認できます。");
-  const syntheticBulkActions = syntheticPanel.getByTestId("data-synthetic-table-selection-actions");
-  const syntheticTableList = syntheticPanel.getByTestId("data-synthetic-table-list");
+  // 一括選択は ListPicker の選択の行（左に「表示中をすべて選択」「選択をすべて解除」。#608）。
+  const syntheticBulkActions = syntheticPanel.getByTestId("data-synthetic-table-bulk-actions");
+  const syntheticTableList = syntheticPanel.getByTestId("data-synthetic-table-scroll-region");
   await expect
     .poll(async () => {
       const [actionsBox, listBox] = await Promise.all([
@@ -11865,18 +11871,18 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
         syntheticTableList.boundingBox(),
       ]);
       if (!actionsBox || !listBox) return Number.POSITIVE_INFINITY;
-      return Math.abs(actionsBox.x - listBox.x);
+      return actionsBox.x - listBox.x;
     })
-    .toBeLessThanOrEqual(1);
+    .toBeGreaterThanOrEqual(0);
   await expect(syntheticBulkActions.getByRole("button", { name: "表示中をすべて選択" })).toBeEnabled();
-  await expect(syntheticBulkActions.getByRole("button", { name: "表示中の選択をすべて解除" })).toBeDisabled();
+  await expect(syntheticBulkActions.getByRole("button", { name: "選択をすべて解除" })).toBeDisabled();
   await syntheticBulkActions.getByRole("button", { name: "表示中をすべて選択" }).click();
   await expect(syntheticPanel.getByText("選択 1 件", { exact: true })).toBeVisible();
   await expect(syntheticBulkActions.getByRole("button", { name: "表示中をすべて選択" })).toBeDisabled();
-  await expect(syntheticBulkActions.getByRole("button", { name: "表示中の選択をすべて解除" })).toBeEnabled();
-  await syntheticBulkActions.getByRole("button", { name: "表示中の選択をすべて解除" }).click();
+  await expect(syntheticBulkActions.getByRole("button", { name: "選択をすべて解除" })).toBeEnabled();
+  await syntheticBulkActions.getByRole("button", { name: "選択をすべて解除" }).click();
   await expect(syntheticPanel.getByText("選択 0 件", { exact: true })).toBeVisible();
-  await syntheticPanel.getByLabel("APP.INVOICES を選択").check();
+  await syntheticPanel.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
   await syntheticPanel.getByLabel("実行確認語").fill("APP.INVOICES");
   await syntheticPanel.getByRole("button", { name: "生成開始" }).click();
   await expect(syntheticPanel.getByTestId("synthetic-run-panel").getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
@@ -11965,8 +11971,8 @@ test("synthetic data reports preflight rejection beside the generate action", as
   await page.getByRole("tab", { name: "合成データ生成" }).click();
   const syntheticPanel = page.locator("#data-management-panel-synthetic");
   await syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" }).click();
-  await expect(syntheticPanel.getByLabel("APP.INVOICES を選択")).toBeVisible();
-  await syntheticPanel.getByLabel("APP.INVOICES を選択").check();
+  await expect(syntheticPanel.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true })).toBeVisible();
+  await syntheticPanel.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
   await syntheticPanel.getByLabel("実行確認語").fill("APP.INVOICES");
 
   await syntheticPanel.getByRole("button", { name: "生成開始" }).click();
@@ -12841,10 +12847,10 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(syntheticProfileSelect.locator("option")).toHaveCount(1);
   await expect(syntheticProfileSelect.locator("option", { hasText: "NL2SQL_MANUAL_AGENT_V2_PROFILE" })).toHaveCount(0);
   await syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" }).click();
-  await expect(syntheticPanel.getByLabel("APP.INVOICES を選択")).toBeVisible();
-  await expect(syntheticPanel.getByLabel("PAYMENTS を選択")).toHaveCount(0);
-  await expect(syntheticPanel.getByLabel("AUDIT_LOG を選択")).toHaveCount(0);
-  await syntheticPanel.getByLabel("APP.INVOICES を選択").check();
+  await expect(syntheticPanel.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true })).toBeVisible();
+  await expect(syntheticPanel.getByTestId("data-synthetic-table").getByRole("option", { name: "PAYMENTS", exact: true })).toHaveCount(0);
+  await expect(syntheticPanel.getByTestId("data-synthetic-table").getByRole("option", { name: "AUDIT_LOG", exact: true })).toHaveCount(0);
+  await syntheticPanel.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
   await expect(syntheticPanel.getByText("選択 1 件", { exact: true })).toBeVisible();
   await expect(syntheticGenerateButton).toBeDisabled();
   const syntheticConfirmationInput = syntheticPanel.getByLabel("実行確認語");
@@ -12856,11 +12862,11 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(syntheticClearButton).toBeEnabled();
   await expectButtonsSameHeight(syntheticGenerateButton, syntheticClearButton);
   await syntheticClearButton.click();
-  await expect(syntheticPanel.getByLabel("APP.INVOICES を選択")).not.toBeChecked();
+  await expect(syntheticPanel.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true })).not.toBeChecked();
   await expect(syntheticConfirmationInput).toHaveValue("");
   await expect(syntheticGenerateButton).toBeDisabled();
   await expect(syntheticClearButton).toBeDisabled();
-  await syntheticPanel.getByLabel("APP.INVOICES を選択").check();
+  await syntheticPanel.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
   await syntheticConfirmationInput.fill("APP.INVOICES");
   await expect(syntheticPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   await expect(syntheticGenerateButton).toBeEnabled();
@@ -12880,10 +12886,10 @@ test("sample data and data management run imported workflows", async ({ page }) 
   expect(api.syntheticDataPayload?.sample_rows).toBe(5);
   expect(api.syntheticDataPayload?.use_comments).toBe(true);
   // 生成条件のリセットは入力だけを戻し、表示中の結果は残す（結果は「表示件数・結果をリセット」で消す）。
-  await syntheticPanel.getByLabel("APP.INVOICES を選択").check();
+  await syntheticPanel.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
   await expect(syntheticClearButton).toBeEnabled();
   await syntheticClearButton.click();
-  await expect(syntheticPanel.getByLabel("APP.INVOICES を選択")).not.toBeChecked();
+  await expect(syntheticPanel.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true })).not.toBeChecked();
   await expect(syntheticConfirmationInput).toHaveValue("");
   await expect(syntheticPanel.getByRole("cell", { name: "synthetic-customer" })).toBeVisible();
   await syntheticPanel.getByRole("button", { name: "表示件数・結果をリセット", exact: true }).click();
@@ -14497,7 +14503,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await page.goto("/comment-management");
   await expect(page.getByRole("heading", { name: "コメント管理" })).toBeVisible();
   await expect(page.getByTestId("comment-management-steps")).toBeVisible();
-  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("option", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await page.getByLabel("サンプル件数").fill("10");
@@ -14522,7 +14528,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await page.goto("/annotation-management");
   await expect(page.getByRole("heading", { name: "アノテーション管理" })).toBeVisible();
   await expect(page.getByTestId("annotation-management-steps")).toBeVisible();
-  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("option", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   const inputPanel = page.locator("#annotation-management-panel-input");
@@ -14750,7 +14756,7 @@ test("annotation management explains ORA-11548 before Oracle execution", async (
   await page.setViewportSize({ width: 1280, height: 900 });
 
   await page.goto("/annotation-management");
-  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("option", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await page.getByRole("button", { name: "SQL 生成" }).click();
@@ -14886,7 +14892,7 @@ test("metadata sample limit zero omits samples and reports retrieval errors", as
   const api = await mockNl2SqlApi(page);
 
   await page.goto("/comment-management");
-  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("option", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await page.getByLabel("サンプル件数").fill("0");
   const commentInputPanel = page.locator("#comment-management-panel-input");
@@ -14904,7 +14910,7 @@ test("metadata sample limit zero omits samples and reports retrieval errors", as
     })
   );
   await page.goto("/annotation-management");
-  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("option", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   const annotationInputPanel = page.locator("#annotation-management-panel-input");
@@ -15347,7 +15353,7 @@ test("workspace: 管理 SQL の草稿を往復と再読込で復元し確認と�
 test("workspace: コメントの手編集を保持して対象の失効を再検証し自動実行しない", async ({ page }, testInfo) => {
   const api = await mockNl2SqlApi(page);
   await page.goto("/comment-management");
-  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("option", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/INVOICES/);
   await page.getByRole("button", { name: "SQL 生成", exact: true }).click();
@@ -15625,7 +15631,7 @@ test("synthetic polling restarts after submission from an idle list without relo
   await page.getByRole("tab", { name: "合成データ生成" }).click();
   const form = page.locator("#data-management-panel-synthetic");
   await form.getByRole("button", { name: "テーブル一覧を取得" }).click();
-  await form.getByLabel("APP.INVOICES を選択").check();
+  await form.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
   await form.getByLabel("実行確認語").fill("APP.INVOICES");
   await form.getByRole("button", { name: "生成開始" }).click();
   const panel = page.getByTestId("synthetic-run-panel");
@@ -16165,7 +16171,7 @@ for (const mode of ["comment", "annotation"] as const) {
     test(`${mode} SQL生成の${phase}待機中に入力が変われば旧応答を破棄する`, async ({ page }) => {
       await mockNl2SqlApi(page);
       await page.goto(`/${mode}-management`);
-      await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+      await page.getByRole("option", { name: /INVOICES/ }).check();
       await page.getByRole("button", { name: "情報を取得", exact: true }).click();
       await expect(page.getByLabel("構造情報")).toHaveValue(/INVOICES/);
       const gate = createRequestGate();
@@ -16179,7 +16185,7 @@ for (const mode of ["comment", "annotation"] as const) {
       await request;
       if (phase === "samples") {
         await page.getByRole("tab", { name: "対象選択", exact: true }).click();
-        await page.getByRole("checkbox", { name: /INVOICES/ }).uncheck();
+        await page.getByRole("option", { name: /INVOICES/ }).uncheck();
       } else {
         await page.getByRole("tab", { name: "入力確認・SQL生成", exact: true }).click();
         await page.getByLabel("追加入力").fill("入力を変更したので旧結果を採用しない");
@@ -17685,7 +17691,7 @@ for (const theme of ["light", "dark"] as const) {
         await page.goto(`/${path}`);
         await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
         await page.getByRole("tab", { name: "対象選択", exact: true }).click();
-        const checkbox = page.getByRole("checkbox", { name: /INVOICES/ });
+        const checkbox = page.getByRole("option", { name: /INVOICES/ });
         await checkbox.setChecked(false);
         const fetch = page.getByRole("button", { name: "情報を取得", exact: true });
         await expect(fetch).toBeDisabled();
@@ -17721,7 +17727,7 @@ for (const theme of ["light", "dark"] as const) {
       await expect(fetchTables).toHaveCSS("height", mobile ? "44px" : "40px");
       await expect(fetchTables.locator("svg")).toHaveCount(1);
       await fetchTables.click();
-      await expect(page.getByLabel("APP.INVOICES を選択")).toBeVisible();
+      await expect(page.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true })).toBeVisible();
       await fetchTables.scrollIntoViewIfNeeded();
       await expectNoHorizontalScroll(page);
       await page.screenshot({ path: testInfo.outputPath(`synthetic-${width}-${theme}-actions.png`) });

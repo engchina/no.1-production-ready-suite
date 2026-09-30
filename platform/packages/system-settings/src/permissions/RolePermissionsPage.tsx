@@ -62,7 +62,7 @@ import type {
   PermissionRole,
   RolePermissionCustomIdOptions,
   RolePermissionTargetItem,
-  RolePermissionTargetLoadResult,
+  RolePermissionTargetQuery,
   RolePermissionTargetSection,
   RolePermissionsApi,
   RolePermissionsDraft,
@@ -92,22 +92,61 @@ export function targetItemLabel(item: RolePermissionTargetItem) {
   return [item.name, item.secondary ? `(${item.secondary})` : ""].filter(Boolean).join(" ");
 }
 
+/** 候補の 1 ページの件数（#608。NL2SQL の追加読み込みと同じ 50 件ずつ）。 */
+export const TARGET_PAGE_SIZE = 50;
+/** `ids` の問い合わせ 1 回で読む ID の数（3 製品の backend の上限 100）。 */
+const TARGET_IDS_PER_REQUEST = 100;
+
+/**
+ * ロールに選択済みの対象の名前を、`ids` の問い合わせで読む（#608）。候補は全件を読まないので、
+ * 一覧の検索・詳細の名前・「選択中だけ表示」に要る分だけを 100 件ずつに分けて読む。
+ * 候補の一部だけ読めた理由（#240）は、最初の 1 つを `warning` に返す。
+ */
+export async function resolveTargetItems(
+  target: Pick<RolePermissionTargetSection, "query">,
+  ids: readonly string[],
+  signal: AbortSignal,
+): Promise<{ items: RolePermissionTargetItem[]; warning: string }> {
+  const unique = [...new Set(ids)];
+  const chunks: string[][] = [];
+  for (let index = 0; index < unique.length; index += TARGET_IDS_PER_REQUEST) {
+    chunks.push(unique.slice(index, index + TARGET_IDS_PER_REQUEST));
+  }
+  const pages = await Promise.all(
+    chunks.map((chunk) => target.query({ q: "", limit: chunk.length, offset: 0, ids: chunk }, { signal })),
+  );
+  return {
+    items: pages.flatMap((page) => page.items),
+    warning: pages.map((page) => page.warning?.trim() ?? "").find(Boolean) ?? "",
+  };
+}
+
+/**
+ * 候補の問い合わせのクエリ文字列（#608。3 製品の backend で同じ: `q` / `limit` / `offset` / 繰り返しの `ids`）。
+ * 製品の `query` はこれを対象の API の path に付けて呼ぶ。
+ */
+export function rolePermissionTargetSearchParams(query: RolePermissionTargetQuery): URLSearchParams {
+  const params = new URLSearchParams({ limit: String(query.limit), offset: String(query.offset) });
+  const q = query.q.trim();
+  if (q) params.set("q", q);
+  for (const id of query.ids ?? []) params.append("ids", id);
+  return params;
+}
+
+/** 読んだ候補を ID で重ねる（後から読んだ方で上書きし、順序は先に読んだ順）。 */
+function mergeTargetItems(
+  current: readonly RolePermissionTargetItem[],
+  next: readonly RolePermissionTargetItem[],
+): RolePermissionTargetItem[] {
+  const merged = new Map(current.map((item) => [item.id, item]));
+  for (const item of next) merged.set(item.id, item);
+  return [...merged.values()];
+}
+
 /**
  * 候補にない ID（直接入力した ID や、候補の取得元に現れなくなった保存済みの ID）を候補の末尾に足す。
  * 名前は ID のまま、`customStatus` があれば状態として添える（#215）。
  */
-/**
- * 対象の `load` の結果を、候補と警告にそろえる（#240）。配列は全件読めた結果、
- * `{ items, warning }` は一部だけ読めた結果（読めた候補を出し、警告を表示する）。
- */
-export function targetLoadRows(result: RolePermissionTargetItem[] | RolePermissionTargetLoadResult): {
-  rows: RolePermissionTargetItem[];
-  warning: string;
-} {
-  if (Array.isArray(result)) return { rows: result, warning: "" };
-  return { rows: result.items, warning: result.warning?.trim() ?? "" };
-}
-
 export function targetItemsWithCustomIds(
   items: readonly RolePermissionTargetItem[],
   ids: readonly string[],
@@ -364,27 +403,33 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
   const requestData = async (sequence: number, announce: boolean) => {
     try {
       await runScopedRequest(async (signal) => {
-        // 対象の候補の取得失敗は警告にとどめ、ロール一覧と機能権限は表示する。
-        const targetRequests = targets.map((target) =>
-          target
-            .load({ signal })
-            .then((result) => ({ key: target.key, ...targetLoadRows(result) }))
-            .catch((cause: unknown) => {
-              if (isAbortError(cause)) throw cause;
-              const message =
-                cause instanceof Error && cause.message.trim() ? cause.message : m.loadError;
-              return {
-                key: target.key,
-                rows: [] as RolePermissionTargetItem[],
-                warning: formatMessage(target.messages.loadWarning, { message }),
-              };
-            }),
-        );
-        const [roleRows, permissionRows, targetRows] = await Promise.all([
+        const [roleRows, permissionRows] = await Promise.all([
           api.roles(true, { signal }),
           api.permissions({ signal }),
-          Promise.all(targetRequests),
         ]);
+        if (signal.aborted || sequence !== loadSequence.current) return;
+        // 候補は全件を読まない（#608）。一覧の検索と詳細に要る「ロールに選択済みの対象」の名前だけを `ids` で読む。
+        // 取得の失敗は警告にとどめ、ロール一覧と機能権限は表示する（名前は ID のまま）。
+        const targetRows = await Promise.all(
+          targets.map((target) =>
+            resolveTargetItems(
+              target,
+              roleRows.flatMap((role) => target.selectedIds(normalizedRole(role))),
+              signal,
+            )
+              .then(({ items, warning }) => ({ key: target.key, rows: items, warning }))
+              .catch((cause: unknown) => {
+                if (isAbortError(cause)) throw cause;
+                const message =
+                  cause instanceof Error && cause.message.trim() ? cause.message : m.loadError;
+                return {
+                  key: target.key,
+                  rows: [] as RolePermissionTargetItem[],
+                  warning: formatMessage(target.messages.loadWarning, { message }),
+                };
+              }),
+          ),
+        );
         if (signal.aborted || sequence !== loadSequence.current) return;
         setRoles(roleRows.map(normalizedRole));
         setPermissions(permissionRows);
@@ -533,6 +578,14 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
       ...current,
       targets: { ...current.targets, [key]: update(current.targets[key] ?? []) },
     }));
+  // 編集画面で読んだ候補の名前を残す（保存後の一覧の検索・詳細で、新しく選んだ対象の名前を出す。#608）。
+  const rememberTargetItems = useCallback((key: string, items: readonly RolePermissionTargetItem[]) => {
+    if (items.length === 0) return;
+    setTargetItems((current) => ({ ...current, [key]: mergeTargetItems(current[key] ?? [], items) }));
+  }, []);
+  const reportTargetWarning = useCallback((key: string, warning: string) => {
+    setTargetLoadWarnings((current) => (current[key] === warning ? current : { ...current, [key]: warning }));
+  }, []);
 
   const roleColumns: Array<DataTableColumn<R>> = [
     {
@@ -846,7 +899,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                   <TargetFieldset
                     key={target.key}
                     target={target}
-                    items={targetItems[target.key] ?? []}
+                    knownItems={targetItems[target.key] ?? []}
                     selectedIds={draft.targets[target.key] ?? []}
                     search={targetSearch[target.key] ?? ""}
                     grantsAll={draftGrantsAll(target)}
@@ -855,6 +908,8 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                     messages={m}
                     onSearchChange={(value) => setTargetSearch((current) => ({ ...current, [target.key]: value }))}
                     onChange={(update) => setTargetIds(target.key, update)}
+                    onItemsLoaded={rememberTargetItems}
+                    onWarning={reportTargetWarning}
                   />
                 ))}
 
@@ -898,11 +953,11 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
 /**
  * 利用できる対象 1 種類分の選択欄。全件が対象（SYSTEM_ADMIN・管理権限）のときは説明だけを出す。
  * 候補の一覧は、大量の候補から選ぶ共通の `ListPicker`（#600）: 左に検索、選択の行（表示中の一括選択・解除・
- * 「選択中だけ表示」）、名前と説明の行の listbox。候補は全件を読んでいるので、検索は画面側で絞る。
+ * 「選択中だけ表示」）、名前と説明の行の listbox。候補はサーバー側で検索し、50 件ずつ「さらに読み込む」で足す（#608）。
  */
 function TargetFieldset<R extends PermissionRole>({
   target,
-  items,
+  knownItems,
   selectedIds,
   search,
   grantsAll,
@@ -911,9 +966,11 @@ function TargetFieldset<R extends PermissionRole>({
   messages: m,
   onSearchChange,
   onChange,
+  onItemsLoaded,
+  onWarning,
 }: {
   target: RolePermissionTargetSection<R>;
-  items: RolePermissionTargetItem[];
+  knownItems: RolePermissionTargetItem[];
   selectedIds: string[];
   search: string;
   grantsAll: boolean;
@@ -922,6 +979,8 @@ function TargetFieldset<R extends PermissionRole>({
   messages: RolePermissionsMessages;
   onSearchChange: (value: string) => void;
   onChange: (update: (ids: string[]) => string[]) => void;
+  onItemsLoaded: (key: string, items: readonly RolePermissionTargetItem[]) => void;
+  onWarning: (key: string, warning: string) => void;
 }) {
   const tm = target.messages;
   const idPrefix = `security-roles-${target.key}`;
@@ -929,42 +988,6 @@ function TargetFieldset<R extends PermissionRole>({
   const custom = target.allowCustomIds;
   // 直接入力で足した ID は、選択を外しても編集中は候補に残す（選び直せるように）。
   const [addedIds, setAddedIds] = useState<string[]>([]);
-  const displayItems = custom
-    ? targetItemsWithCustomIds(items, [...selectedIds, ...addedIds], custom.customStatus)
-    : items;
-  const q = search.trim().toLowerCase();
-  const filteredItems = q
-    ? displayItems.filter((item) =>
-        [item.id, item.name, item.secondary ?? "", item.description ?? ""].join(" ").toLowerCase().includes(q),
-      )
-    : displayItems;
-  const selectedSet = new Set(selectedIds);
-  const toPickerItem = (item: RolePermissionTargetItem): ListPickerItem => {
-    const label = targetItemLabel(item);
-    return {
-      key: item.id,
-      // 内部の ID は出さない（利用者には意味を持たない。#521）。名前が ID の候補（直接入力）は ID が名前になる。
-      label,
-      textValue: label,
-      description: item.description?.trim() || undefined,
-      meta: item.status ? <StatusBadge icon={false} variant="neutral" label={item.status} /> : undefined,
-    };
-  };
-  const pickerItems = filteredItems.map(toPickerItem);
-  const toggle = (id: string) => {
-    if (targetReadOnly) return;
-    onChange((ids) => (ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id]));
-  };
-  const selectVisible = () => {
-    if (targetReadOnly) return;
-    const visibleIds = filteredItems.map((item) => item.id);
-    onChange((ids) => [...new Set([...ids, ...visibleIds])]);
-  };
-  const clearVisible = () => {
-    if (targetReadOnly) return;
-    const visible = new Set(filteredItems.map((item) => item.id));
-    onChange((ids) => ids.filter((id) => !visible.has(id)));
-  };
 
   return (
     <fieldset className="grid gap-3" disabled={targetReadOnly}>
@@ -989,43 +1012,213 @@ function TargetFieldset<R extends PermissionRole>({
               }}
             />
           ) : null}
-          <ListPicker
-            id={idPrefix}
-            label={tm.title}
-            items={pickerItems}
-            selectedKeys={selectedSet}
-            selectedItems={displayItems.filter((item) => selectedSet.has(item.id)).map(toPickerItem)}
-            onToggle={(item) => toggle(item.key)}
-            onSelectMany={selectVisible}
-            onClearSelection={clearVisible}
-            total={filteredItems.length}
-            search={{
-              id: `${idPrefix}-search`,
-              label: tm.searchLabel,
-              placeholder: tm.searchPlaceholder,
-              value: search,
-              disabled: targetReadOnly,
-              onSearch: (value) => {
-                if (targetReadOnly) return;
-                onSearchChange(value);
-              },
-            }}
-            disabled={targetReadOnly}
-            labels={{
-              resultCount: ({ visible, selected }) =>
-                securityFilteredCountWithSelected(visible, displayItems.length, selected),
-              searchResultCount: (count) => securityFilteredCount(count, displayItems.length),
-              emptyTitle: tm.empty,
-              noResultsTitle: tm.noResults,
-              noResultsHint: undefined,
-              selectVisible: m.selectAll,
-              clearSelection: m.clearAll,
-            }}
-            testId={`${idPrefix}-list`}
+          <TargetPicker
+            target={target}
+            idPrefix={idPrefix}
+            knownItems={knownItems}
+            selectedIds={selectedIds}
+            addedIds={addedIds}
+            search={search}
+            targetReadOnly={targetReadOnly}
+            messages={m}
+            onSearchChange={onSearchChange}
+            onChange={onChange}
+            onItemsLoaded={onItemsLoaded}
+            onWarning={onWarning}
           />
         </>
       )}
     </fieldset>
+  );
+}
+
+interface TargetPickerResult {
+  items: RolePermissionTargetItem[];
+  total: number;
+  /** この結果の検索語（null はまだ 1 度も読めていない）。 */
+  query: string | null;
+}
+
+/**
+ * 候補の一覧（ListPicker）と、サーバー側の検索・追加読み込み（#608）。検索語が変わったら 1 ページ目から読み直し、
+ * 前の候補を出したまま更新する。古い応答は連番と AbortController で捨てる（UX 契約「一覧の絞り込みの検索」6）。
+ */
+function TargetPicker<R extends PermissionRole>({
+  target,
+  idPrefix,
+  knownItems,
+  selectedIds,
+  addedIds,
+  search,
+  targetReadOnly,
+  messages: m,
+  onSearchChange,
+  onChange,
+  onItemsLoaded,
+  onWarning,
+}: {
+  target: RolePermissionTargetSection<R>;
+  idPrefix: string;
+  knownItems: RolePermissionTargetItem[];
+  selectedIds: string[];
+  addedIds: string[];
+  search: string;
+  targetReadOnly: boolean;
+  messages: RolePermissionsMessages;
+  onSearchChange: (value: string) => void;
+  onChange: (update: (ids: string[]) => string[]) => void;
+  onItemsLoaded: (key: string, items: readonly RolePermissionTargetItem[]) => void;
+  onWarning: (key: string, warning: string) => void;
+}) {
+  const tm = target.messages;
+  const custom = target.allowCustomIds;
+  const [result, setResult] = useState<TargetPickerResult>({ items: [], total: 0, query: null });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState("");
+  const sequence = useRef(0);
+  const controller = useRef<AbortController | null>(null);
+
+  const request = async (q: string, offset: number) => {
+    controller.current?.abort();
+    const current = new AbortController();
+    controller.current = current;
+    sequence.current += 1;
+    const requestSequence = sequence.current;
+    const append = offset > 0;
+    if (append) {
+      setLoadingMore(true);
+      setLoadMoreError("");
+    } else {
+      setLoading(true);
+      setError("");
+      setLoadingMore(false);
+      setLoadMoreError("");
+    }
+    try {
+      const page = await target.query({ q, limit: TARGET_PAGE_SIZE, offset }, { signal: current.signal });
+      if (requestSequence !== sequence.current) return;
+      setResult((previous) => ({
+        items: append ? mergeTargetItems(previous.items, page.items) : page.items,
+        total: page.total,
+        query: q,
+      }));
+      onItemsLoaded(target.key, page.items);
+      const warning = page.warning?.trim();
+      if (warning) onWarning(target.key, warning);
+    } catch (cause) {
+      if (isAbortError(cause) || requestSequence !== sequence.current) return;
+      const message = cause instanceof Error && cause.message.trim() ? cause.message : m.loadError;
+      if (append) setLoadMoreError(message);
+      else setError(message);
+    } finally {
+      if (requestSequence === sequence.current) {
+        if (append) setLoadingMore(false);
+        else setLoading(false);
+      }
+    }
+  };
+
+  // 検索語が変わったら 1 ページ目から読み直す。最新の request を commit 時に ref へ入れて呼ぶ。
+  const requestRef = useRef(request);
+  useLayoutEffect(() => {
+    requestRef.current = request;
+  });
+  useEffect(() => {
+    void requestRef.current(search, 0);
+  }, [search]);
+  useEffect(
+    () => () => {
+      sequence.current += 1;
+      controller.current?.abort();
+    },
+    [],
+  );
+
+  const knownById = new Map<string, RolePermissionTargetItem>();
+  for (const item of [...knownItems, ...result.items]) knownById.set(item.id, item);
+  const itemFor = (id: string): RolePermissionTargetItem =>
+    knownById.get(id) ?? (custom?.customStatus ? { id, name: id, status: custom.customStatus } : { id, name: id });
+  // 直接入力で足した ID のうち、サーバーの候補に無いものを先頭に出す（検索語があれば画面側で絞る）。
+  const loadedIds = new Set(result.items.map((item) => item.id));
+  const q = search.trim().toLowerCase();
+  const extraItems = custom
+    ? addedIds
+        .filter((id) => !loadedIds.has(id))
+        .map(itemFor)
+        .filter((item) => !q || [item.id, item.name].join(" ").toLowerCase().includes(q))
+    : [];
+  const visibleItems = [...extraItems, ...result.items];
+  const selectedSet = new Set(selectedIds);
+  const toPickerItem = (item: RolePermissionTargetItem): ListPickerItem => {
+    const label = targetItemLabel(item);
+    return {
+      key: item.id,
+      // 内部の ID は出さない（利用者には意味を持たない。#521）。名前が ID の候補（直接入力）は ID が名前になる。
+      label,
+      textValue: label,
+      description: item.description?.trim() || undefined,
+      meta: item.status ? <StatusBadge icon={false} variant="neutral" label={item.status} /> : undefined,
+    };
+  };
+  const toggle = (id: string) => {
+    if (targetReadOnly) return;
+    onChange((ids) => (ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id]));
+  };
+  const selectVisible = () => {
+    if (targetReadOnly) return;
+    const visibleIds = visibleItems.map((item) => item.id);
+    onChange((ids) => [...new Set([...ids, ...visibleIds])]);
+  };
+  const clearVisible = () => {
+    if (targetReadOnly) return;
+    const visible = new Set(visibleItems.map((item) => item.id));
+    onChange((ids) => ids.filter((id) => !visible.has(id)));
+  };
+  const firstLoad = result.query === null;
+
+  return (
+    <ListPicker
+      id={idPrefix}
+      label={tm.title}
+      items={visibleItems.map(toPickerItem)}
+      selectedKeys={selectedSet}
+      selectedItems={selectedIds.map((id) => toPickerItem(itemFor(id)))}
+      onToggle={(item) => toggle(item.key)}
+      onSelectMany={selectVisible}
+      onClearSelection={clearVisible}
+      total={result.total + extraItems.length}
+      search={{
+        id: `${idPrefix}-search`,
+        label: tm.searchLabel,
+        placeholder: tm.searchPlaceholder,
+        value: search,
+        disabled: targetReadOnly,
+        onSearch: (value) => {
+          if (targetReadOnly) return;
+          onSearchChange(value);
+        },
+      }}
+      loading={loading && firstLoad}
+      refreshing={loading && !firstLoad}
+      error={error || undefined}
+      onRetry={() => void request(search, 0)}
+      hasMore={!firstLoad && result.items.length < result.total}
+      loadingMore={loadingMore}
+      loadMoreError={loadMoreError || undefined}
+      onLoadMore={() => void request(search, result.items.length)}
+      disabled={targetReadOnly}
+      labels={{
+        resultCount: ({ visible, total, selected }) => securityFilteredCountWithSelected(visible, total, selected),
+        emptyTitle: tm.empty,
+        noResultsTitle: tm.noResults,
+        noResultsHint: undefined,
+        selectVisible: m.selectAll,
+        clearSelection: m.clearAll,
+      }}
+      testId={`${idPrefix}-list`}
+    />
   );
 }
 

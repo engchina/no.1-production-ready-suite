@@ -109,10 +109,5 @@ class AccessTargetData(BaseModel):
     description: str | None = None
 
 
-class AccessTargetsData(BaseModel):
-    business_views: list[AccessTargetData]
-    knowledge_bases: list[AccessTargetData]
-
-
 def _sorted_or_none(values: frozenset[str] | None) -> list[str] | None:
     return None if values is None else sorted(values)

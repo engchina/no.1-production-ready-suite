@@ -74,8 +74,9 @@ test("NL2SQL の局所実行 CTA は対象内容の後ろに置く", () => {
   assert.match(metadataSqlSource, /testId=\{`\$\{pageId\}-target-actions`\}/u);
   assert.match(metadataSqlSource, /testId=\{`\$\{pageId\}-input-actions`\}/u);
   assert.ok(
+    // 情報の取得は対象の候補の一覧（ListPicker。Issue 608）の後ろ。
     metadataSqlSource.indexOf('t("metadataSql.action.fetchInfo")') >
-      metadataSqlSource.indexOf('dataTestId={`${pageId}-target-footer`}')
+      metadataSqlSource.indexOf('testId={`${pageId}-target`}')
   );
   assert.ok(
     metadataSqlSource.indexOf('t("metadataSql.action.generate")') >
@@ -92,7 +93,7 @@ test("NL2SQL の局所実行 CTA は対象内容の後ろに置く", () => {
   );
   assert.ok(
     dataManagementSource.indexOf('t("dataTools.syntheticData.refreshTables")') <
-      dataManagementSource.indexOf('dataTestId="data-synthetic-table-toolbar"')
+      dataManagementSource.indexOf('id="data-synthetic-table-picker"')
   );
   assert.ok(
     dataManagementSource.indexOf('t("dataTools.syntheticData.results")') >

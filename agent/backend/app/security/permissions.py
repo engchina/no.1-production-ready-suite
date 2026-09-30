@@ -457,7 +457,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/security/roles/{role_id}/restore"): _any(MENU_SECURITY_ROLES),
     # ---- Agent セキュリティ: 権限管理 ----
     ("GET", "/security/permissions"): _any(MENU_SECURITY_PERMISSIONS),
-    ("GET", "/security/access-targets"): _any(MENU_SECURITY_PERMISSIONS),
+    ("GET", "/security/access-targets/agents"): _any(MENU_SECURITY_PERMISSIONS),
+    ("GET", "/security/access-targets/business-views"): _any(MENU_SECURITY_PERMISSIONS),
     ("PUT", "/security/roles/{role_id}/access"): _any(MENU_SECURITY_PERMISSIONS),
 }
 

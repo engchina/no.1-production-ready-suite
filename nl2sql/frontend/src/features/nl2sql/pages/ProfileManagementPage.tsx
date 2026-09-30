@@ -1264,10 +1264,15 @@ export function ProfileManagementPage() {
   });
   // 利用可能ロールの一覧 API は権限管理（menu.security_permissions）の担当（#206）。
   const canViewProfileAccess = auth.hasPermission(MENU_PERMISSIONS.securityPermissions);
+  // 候補は全件を読まない（#608）。選択中の業務プロファイルだけを ids で読み、利用できるロールを出す。
   const profileAccessProfilesQuery = useQuery({
-    queryKey: ["security", "profile-access", "profiles"],
-    queryFn: () => securityApi.profileAccessProfiles(),
-    enabled: canViewProfileAccess,
+    queryKey: ["security", "profile-access", "profiles", selectedProfileId],
+    queryFn: ({ signal }) =>
+      securityApi.profileAccessProfiles(
+        { q: "", limit: 1, offset: 0, ids: [selectedProfileId] },
+        { signal }
+      ),
+    enabled: canViewProfileAccess && Boolean(selectedProfileId),
     staleTime: 10_000,
     retry: false,
   });
@@ -1293,8 +1298,8 @@ export function ProfileManagementPage() {
   const profilesLoaded = !profilesQuery.isPending;
   const selectedProfile = profileDetailQuery.data?.profile ?? null;
   // API 応答が想定外の形でも一覧画面全体を落とさない(配列以外は空扱い)。
-  const profileAccessProfiles = Array.isArray(profileAccessProfilesQuery.data)
-    ? profileAccessProfilesQuery.data
+  const profileAccessProfiles = Array.isArray(profileAccessProfilesQuery.data?.items)
+    ? profileAccessProfilesQuery.data.items
     : [];
   const selectedProfileAccessProfile =
     profileAccessProfiles.find((profile) => profile.id === selectedProfile?.id) ?? null;
