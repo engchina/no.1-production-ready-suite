@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
 
 import {
   ALL_PERMISSION_CODES,
@@ -87,7 +87,7 @@ const PERMISSION_CATALOG = [
   },
 ];
 
-const ACCESS_TARGETS = {
+const ACCESS_TARGETS: AccessTargetsFixture = {
   business_views: [
     { id: "bv-hr", name: "人事 FAQ", status: "ACTIVE", description: "人事規程の問い合わせ" },
     { id: "bv-old", name: "旧経理", status: "ARCHIVED", description: null },
@@ -98,9 +98,42 @@ const ACCESS_TARGETS = {
   ],
 };
 
+interface AccessTargetsFixture {
+  business_views: { id: string; name: string; status: string; description: string | null }[];
+  knowledge_bases: { id: string; name: string; status: string; description: string | null }[];
+}
+
+/**
+ * `GET /api/security/access-targets/{business-views,knowledge-bases}` を backend と同じ規則で返す（#608）:
+ * `q`（名前・説明の部分一致）・`ids`・`limit` / `offset` で絞り、Page（items / total）を返す。
+ */
+function fulfillAccessTargets(route: Route, fixture: AccessTargetsFixture) {
+  const url = new URL(route.request().url());
+  const kind = url.pathname.split("/").pop();
+  const all = kind === "knowledge-bases" ? fixture.knowledge_bases : fixture.business_views;
+  const q = (url.searchParams.get("q") ?? "").toLowerCase();
+  const ids = url.searchParams.getAll("ids");
+  const limit = Number(url.searchParams.get("limit") ?? "50");
+  const offset = Number(url.searchParams.get("offset") ?? "0");
+  const matched = all.filter(
+    (item) =>
+      (ids.length === 0 || ids.includes(item.id)) &&
+      (!q || `${item.name} ${item.description ?? ""}`.toLowerCase().includes(q))
+  );
+  return route.fulfill({
+    json: apiEnvelope({
+      items: matched.slice(offset, offset + limit),
+      total: matched.length,
+      limit,
+      offset,
+      has_next: offset + limit < matched.length,
+    }),
+  });
+}
+
 async function mockSecurityApi(page: Page) {
   const saved: Record<string, unknown>[] = [];
-  let accessTargetCalls = 0;
+  const accessTargetRequests: URL[] = [];
   let roleListCalls = 0;
   await page.route("**/api/**", (route) =>
     route.fulfill({ status: 404, json: { data: null, error_messages: ["not mocked"], warning_messages: [] } })
@@ -138,11 +171,11 @@ async function mockSecurityApi(page: Page) {
     await route.fulfill({ json: apiEnvelope([SYSTEM_ADMIN_ROLE, HR_ROLE]) });
   });
   await page.route("**/api/security/permissions", (route) => route.fulfill({ json: apiEnvelope(PERMISSION_CATALOG) }));
-  await page.route("**/api/security/access-targets", (route) => {
-    accessTargetCalls += 1;
-    return route.fulfill({ json: apiEnvelope(ACCESS_TARGETS) });
+  await page.route("**/api/security/access-targets/**", (route) => {
+    accessTargetRequests.push(new URL(route.request().url()));
+    return fulfillAccessTargets(route, ACCESS_TARGETS);
   });
-  return { saved, accessTargetCalls: () => accessTargetCalls, roleListCalls: () => roleListCalls };
+  return { saved, accessTargetRequests, roleListCalls: () => roleListCalls };
 }
 
 test("ユーザー管理とロール管理を開け、ロールの詳細から権限管理へ移れる", async ({ page }) => {
@@ -172,11 +205,20 @@ test("権限管理で業務ビューと KB を選んで保存し、KB 管理権�
 
   await page.goto("/settings/security/permissions?role=role-hr");
   await expect(page.getByRole("heading", { name: "権限管理", level: 1 })).toBeVisible();
-  // 業務ビューと KB の候補は 1 回の読み込みにつき 1 回の応答から作る（dev の StrictMode では読み込みが 2 回走る）。
-  await expect.poll(() => api.accessTargetCalls()).toBeGreaterThan(0);
-  expect(api.accessTargetCalls()).toBe(api.roleListCalls());
+  // 候補は全件を読まない（#608）。一覧では、ロールに選択済みの対象の名前だけを ids で読む（このロールは未選択）。
+  await expect(page.getByTestId("security-permissions-grid")).toContainText("人事利用者");
+  expect(api.accessTargetRequests).toEqual([]);
 
   await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
+  // 編集を開くと、対象ごとに 1 ページ目（50 件）を読む。
+  await expect
+    .poll(() => api.accessTargetRequests.map((url) => `${url.pathname}?${url.searchParams.toString()}`).sort())
+    .toEqual(
+      expect.arrayContaining([
+        "/api/security/access-targets/business-views?limit=50&offset=0",
+        "/api/security/access-targets/knowledge-bases?limit=50&offset=0",
+      ])
+    );
 
   // 機能の一覧は左のナビと同じグループ・並び順・名前（Issue 567）。backend のカタログが RAG 検索 → チャットの
   // 順でも、ナビの順（チャット → RAG 検索）に並べ、ナビに無い capability は後ろに置く。
@@ -233,7 +275,7 @@ const LONG_DESCRIPTION =
   "人事規程・就業規則・勤怠管理・福利厚生・評価制度・出張旅費・経費精算・情報セキュリティに関する社内の問い合わせにまとめて回答するための業務ビューです。" +
   "説明が長い場合は 2 行で省略し、全文は title で確かめられることを確かめます。";
 const hexId = (index: number) => index.toString(16).padStart(32, "0");
-const MANY_TARGETS = {
+const MANY_TARGETS: AccessTargetsFixture = {
   business_views: Array.from({ length: 8 }, (_, index) => ({
     id: hexId(index + 1),
     name:
@@ -267,9 +309,7 @@ for (const theme of ["light", "dark"] as const) {
   }) => {
     await setTheme(page, theme);
     await mockSecurityApi(page);
-    await page.route("**/api/security/access-targets", (route) =>
-      route.fulfill({ json: apiEnvelope(MANY_TARGETS) })
-    );
+    await page.route("**/api/security/access-targets/**", (route) => fulfillAccessTargets(route, MANY_TARGETS));
 
     await page.goto("/settings/security/permissions?role=role-hr");
     await expect
@@ -330,3 +370,64 @@ for (const theme of ["light", "dark"] as const) {
     await expectNoPageOverflow(page);
   });
 }
+
+// #608: 候補が大量（数千件）でも全件を読まない。検索はサーバーの q で絞り、続きは「さらに読み込む」で 50 件ずつ足す。
+// 保存済みの対象の名前は ids で読み、一覧の詳細と「選択中だけ表示」に出す。
+const LARGE_TARGETS: AccessTargetsFixture = {
+  business_views: [],
+  knowledge_bases: Array.from({ length: 3000 }, (_, index) => ({
+    id: `kb-${String(index + 1).padStart(4, "0")}`,
+    name: `ナレッジベース ${String(index + 1).padStart(4, "0")}`,
+    status: "ACTIVE",
+    description: index % 2 === 0 ? "規程集" : null,
+  })),
+};
+
+// desktop（1440px）と 375px は playwright.config の projects で確かめる。
+test("権限管理の対象が大量でもサーバー側で検索し、50 件ずつ読む", async ({ page }) => {
+  const api = await mockSecurityApi(page);
+  const requests: URL[] = [];
+  await page.route("**/api/security/roles**", (route) =>
+    route.request().method() === "GET"
+      ? route.fulfill({ json: apiEnvelope([SYSTEM_ADMIN_ROLE, { ...HR_ROLE, knowledge_base_ids: ["kb-2999"] }]) })
+      : route.fallback()
+  );
+  await page.route("**/api/security/access-targets/**", (route) => {
+    requests.push(new URL(route.request().url()));
+    return fulfillAccessTargets(route, LARGE_TARGETS);
+  });
+
+  await page.goto("/settings/security/permissions?role=role-hr");
+  // 一覧では選択済みの対象の名前だけを ids で読み、詳細に出す。
+  await expect(page.getByText("ナレッジベース 2999")).toBeVisible();
+  expect(requests.map((url) => url.searchParams.getAll("ids"))).toContainEqual(["kb-2999"]);
+  expect(requests.every((url) => url.searchParams.getAll("ids").length > 0)).toBe(true);
+
+  await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
+  const bases = page.getByTestId("security-roles-knowledge-base-access-list");
+  await expect(bases.getByRole("option")).toHaveCount(50);
+  await expect(bases).toContainText("50 / 3,000 件、選択 1 件");
+  await bases.getByRole("button", { name: "さらに読み込む" }).click();
+  await expect(bases).toContainText("100 / 3,000 件、選択 1 件");
+  expect(requests.at(-1)?.searchParams.get("offset")).toBe("50");
+
+  // 検索はサーバーの q で絞る（1 ページ目から読み直す）。
+  await bases.getByRole("searchbox").fill("2999");
+  await expect(bases.getByRole("option")).toHaveCount(1);
+  await expect(bases.getByRole("option", { name: /ナレッジベース 2999/ })).toHaveAttribute("aria-checked", "true");
+  const searched = requests.at(-1);
+  expect(searched?.searchParams.get("q")).toBe("2999");
+  expect(searched?.searchParams.get("offset")).toBe("0");
+
+  // 検索語を消すと 1 ページ目に戻り、保存済みの選択は「選択中だけ表示」で確かめられる（読み込んだ範囲の外でも）。
+  await bases.getByRole("button", { name: "検索語をクリア" }).first().click();
+  await expect(bases.getByRole("option")).toHaveCount(50);
+  await bases.getByRole("button", { name: /選択中だけ表示/ }).click();
+  await expect(bases.getByRole("option")).toHaveCount(1);
+  await expect(bases.getByRole("option", { name: /ナレッジベース 2999/ })).toBeVisible();
+
+  await page.getByRole("group", { name: "権限編集操作" }).getByRole("button", { name: "保存" }).click();
+  await expect.poll(() => api.saved.length).toBe(1);
+  expect(api.saved[0]).toMatchObject({ knowledge_base_ids: ["kb-2999"] });
+  await expectNoPageOverflow(page);
+});

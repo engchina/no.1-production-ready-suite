@@ -82,23 +82,28 @@ test("DeepSec Data Grant editor は preview と独立した固定高 workspace �
   assert.match(entitlementsPanel, /security\.deepsec\.entitlements\.emptyRulesHint/u);
 });
 
-test("DeepSec object picker は native select ではなく50/50共通検索 picker を使う", () => {
+test("DeepSec object picker は単一選択なので共通の検索できる選択欄を使う（Issue 608）", () => {
   assert.match(entitlementsPanel, /<DeepSecTargetObjectPicker/u);
-  assert.match(objectPicker, /role="listbox"/u);
-  assert.match(objectPicker, /security-deepsec-object-picker-load-more/u);
-  assert.match(objectPicker, /<DbObjectSearchOwnerFields/u);
-  assert.doesNotMatch(objectPicker, /minmax\(8rem,13rem\)/u);
-  assert.match(objectPicker, /dbAdmin\.search\.label/u);
-  assert.match(objectPicker, /dbAdmin\.owner\.label/u);
-  assert.equal(t("dbAdmin.search.placeholder"), "名前・コメントを入力");
-  assert.equal(t("dbAdmin.ownerPrefix.placeholder"), "所有者の先頭を入力（例：ADM）");
+  // 大量の候補（数千件）から 1 つを選ぶ: SearchableSelectField をサーバー側の検索（remote）で使う（#578）。
+  assert.match(objectPicker, /<SearchableSelectField/u);
+  assert.match(objectPicker, /remote=\{\{[\s\S]*hasMore,[\s\S]*loadingMore,[\s\S]*searching: loading,[\s\S]*onLoadMore,/u);
+  assert.match(objectPicker, /onQueryChange=\{onSearchChange\}/u);
+  assert.match(objectPicker, /required/u);
+  assert.match(objectPicker, /helper=\{t\("security\.deepsec\.entitlements\.oracleHelper"\)\}/u);
+  // 手書きの listbox・所有者の欄・「さらに読み込む」のボタンは持たない（選択欄の一覧の下端で続きを読む）。
+  assert.doesNotMatch(objectPicker, /role="listbox"/u);
+  assert.doesNotMatch(objectPicker, /DbObjectSearchOwnerFields/u);
+  assert.doesNotMatch(objectPicker, /security-deepsec-object-picker-load-more/u);
+  assert.equal(t("security.deepsec.entitlements.objectSearchPlaceholder"), "スキーマ名・名前・コメントで検索");
   assert.doesNotMatch(entitlementsPanel, /<select[\s\S]*security\.deepsec\.entitlements\.resource/u);
+  // 検索語は選択欄の SearchField が確定する（親で遅延させない。UX 契約「一覧の絞り込みの検索」7）。
+  assert.doesNotMatch(pageSource, /void loadTargetObjectsRef\.current\(\);\s*\}, 250\)/u);
 });
 
-test("DeepSec object picker footer は helper と load more を狭い幅で詰め込まない", () => {
+test("DeepSec object picker の読み込みの失敗は再試行付きで出す", () => {
   assert.match(
     objectPicker,
-    /className="grid min-w-0 gap-2"[\s\S]*security\.deepsec\.entitlements\.oracleHelper[\s\S]*className="flex min-w-0 justify-end"[\s\S]*className="w-full min-w-0 justify-center lg:w-auto"/u
+    /security\.deepsec\.entitlements\.objectLoadMoreError[\s\S]*security-deepsec-object-picker-retry-\$\{index\}[\s\S]*onClick=\{onRetry\}/u
   );
 });
 
@@ -165,8 +170,8 @@ test("DeepSec object picker は総件数未取得時に loaded 件数のみ表�
 test("DeepSec Data Grant editor は必須表示を共有の FieldLabel / FieldLegend で統一する (#531)", () => {
   assert.match(pageSource, /FieldLabel,\s*FieldLegend,\s*\} from "@engchina\/production-ready-ui"/u);
   assert.doesNotMatch(pageSource, /required-field"|<RequiredBadge\b/u);
-  // 対象 object は複合入力なので fieldset にし、legend の「必須」を群の名前として読み上げる。
-  assert.match(objectPicker, /<fieldset[\s\S]*<FieldLegend id=\{titleId\} required/u);
+  // 対象 object は検索できる選択欄（Issue 608）。「必須」は選択欄の required（ラベルの印と aria-required）で出す。
+  assert.match(objectPicker, /<SearchableSelectField[\s\S]*\brequired\b/u);
   assert.match(entitlementsPanel, /<FieldLabel[\s\S]*security\.deepsec\.entitlements\.scopeMode[\s\S]*required/u);
   assert.match(entitlementsPanel, /<FieldLegend[\s\S]*required[\s\S]*security\.deepsec\.entitlements\.columns/u);
   assert.match(entitlementsPanel, /<fieldset className="grid gap-2"/u);

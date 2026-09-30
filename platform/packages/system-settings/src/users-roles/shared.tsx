@@ -374,11 +374,18 @@ export function SecurityEmptySelection({ title, hint }: { title: string; hint: s
   );
 }
 
+/** 件数は桁区切りで出す（権限の対象は数千件になりうる。#608）。 */
+const formatCount = (value: number) => value.toLocaleString("ja-JP");
+
 export function securityFilteredCount(filtered: number, total: number) {
-  return t("security.common.filteredCount", { filtered, total });
+  return t("security.common.filteredCount", { filtered: formatCount(filtered), total: formatCount(total) });
 }
 
 /** 候補の一覧（ListPicker）のフッターの件数（表示中 / 全件と選択数。#600）。 */
 export function securityFilteredCountWithSelected(filtered: number, total: number, selected: number) {
-  return t("security.common.filteredCountWithSelected", { filtered, total, selected });
+  return t("security.common.filteredCountWithSelected", {
+    filtered: formatCount(filtered),
+    total: formatCount(total),
+    selected: formatCount(selected),
+  });
 }

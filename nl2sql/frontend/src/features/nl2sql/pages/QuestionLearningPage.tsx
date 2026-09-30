@@ -1426,6 +1426,9 @@ function TrainingCandidatesPanel({
             </div>
           </div>
 
+          {/* 学習候補の追加は、候補を選ぶ一覧（ListPicker）ではなく、行ごとに業務プロファイルを確定してから追加する
+              作業の一覧（行の中に入力と操作がある）なので、今の形のままにする（UX 契約 page-archetypes.md
+              「大量の候補から選ぶ」の画面ごとの判断。#608）。 */}
           <ul
             className="divide-y divide-border/70 rounded-md border border-border bg-surface"
             aria-label={t("qcm.candidates.listAria")}

@@ -678,6 +678,13 @@ def test_permission_catalog_lists_menus_and_capabilities(auth: ProductionAuth) -
     assert "menu.agents" in admin["implies"]
 
 
+def _target_items(headers: dict[str, str], kind: str, query: str = "") -> list[dict[str, Any]]:
+    response = client.get(f"/api/security/access-targets/{kind}{query}", headers=headers)
+    assert response.status_code == 200, response.text
+    items: list[dict[str, Any]] = response.json()["data"]["items"]
+    return items
+
+
 def test_access_targets_lists_agents_and_business_views(auth: ProductionAuth) -> None:
     role = auth.create_role([], business_view_ids=["bv-assigned"])
     del role
@@ -686,16 +693,13 @@ def test_access_targets_lists_agents_and_business_views(auth: ProductionAuth) ->
             RunCreateRequest(goal="bv を記録する", metadata={"business_view_id": "bv-from-run"})
         )
         headers = login_configured_admin()
-        response = client.get("/api/security/access-targets", headers=headers)
-        assert response.status_code == 200
-        data = response.json()["data"]
-        agents = {item["id"]: item for item in data["agents"]}
+        agents = {item["id"]: item for item in _target_items(headers, "agents")}
         assert agents["agent-target-215"]["name"] == "対象 Agent"
         assert agents["agent-target-215"]["status"] == "enabled"
         assert "default" in agents
-        view_ids = [item["id"] for item in data["business_views"]]
-        assert {"bv-assigned", "bv-from-run"} <= set(view_ids)
-        assert all(item["name"] == item["id"] for item in data["business_views"])
+        views = _target_items(headers, "business-views")
+        assert {"bv-assigned", "bv-from-run"} <= {item["id"] for item in views}
+        assert all(item["name"] == item["id"] for item in views)
 
         # 範囲が制限された利用者には範囲内だけを見せる。
         auth.user_with_permissions(
@@ -705,9 +709,40 @@ def test_access_targets_lists_agents_and_business_views(auth: ProductionAuth) ->
             business_view_ids=["bv-from-run"],
         )
         scoped = login("scoped-perm-admin")
-        data = client.get("/api/security/access-targets", headers=scoped).json()["data"]
-        assert [item["id"] for item in data["agents"]] == ["default"]
-        assert [item["id"] for item in data["business_views"]] == ["bv-from-run"]
+        assert [item["id"] for item in _target_items(scoped, "agents")] == ["default"]
+        assert [item["id"] for item in _target_items(scoped, "business-views")] == ["bv-from-run"]
+
+
+def test_access_targets_search_and_page_on_server(auth: ProductionAuth) -> None:
+    """権限管理の候補は `q` / `limit` / `offset` / `ids` でサーバー側で絞る（#608）。"""
+    auth.create_role([], business_view_ids=["bv608-a", "bv608-b", "bv608-c"])
+    with _agent("agent-search-608", "検索 Agent"):
+        headers = login_configured_admin()
+        assert [item["id"] for item in _target_items(headers, "agents", "?q=検索")] == [
+            "agent-search-608"
+        ]
+        assert [
+            item["id"] for item in _target_items(headers, "agents", "?ids=agent-search-608")
+        ] == ["agent-search-608"]
+        response = client.get(
+            "/api/security/access-targets/business-views?q=bv608-&limit=2&offset=0", headers=headers
+        )
+        page = response.json()["data"]
+        assert [item["id"] for item in page["items"]] == ["bv608-a", "bv608-b"]
+        assert page["total"] == 3
+        assert page["has_next"] is True
+        rest = client.get(
+            "/api/security/access-targets/business-views?q=bv608-&limit=2&offset=2", headers=headers
+        ).json()["data"]
+        assert [item["id"] for item in rest["items"]] == ["bv608-c"]
+        assert rest["has_next"] is False
+        assert [
+            item["id"] for item in _target_items(headers, "business-views", "?ids=bv608-c&ids=bv-x")
+        ] == ["bv608-c"]
+        assert (
+            client.get("/api/security/access-targets/agents?limit=101", headers=headers).status_code
+            == 422
+        )
 
 
 def _put_access(headers: dict[str, str], role_id: str, **body: Any) -> Any:

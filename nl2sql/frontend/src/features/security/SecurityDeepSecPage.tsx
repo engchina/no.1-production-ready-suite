@@ -20,13 +20,15 @@ import {
   ExecutionConfirmationField,
   ListSkeleton,
   TimedLoadingState,
+  SearchableSelectField,
+  type SearchableSelectOption,
   FieldLabel,
   FieldLegend,
 } from "@engchina/production-ready-ui";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDatabaseStatus } from "@/lib/queries";
-import { ListPlus,
+import {
   CheckCircle2,
   Clock3,
   Database,
@@ -42,7 +44,6 @@ import { ListPlus,
 
 
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
-import { DbObjectSearchOwnerFields } from "@/components/DbObjectFilterFields";
 import { ErrorState } from "@/components/StateViews";
 import { PageNotice } from "@/components/page-notice";
 import {
@@ -441,182 +442,114 @@ function entitlementSignature(rows: DataEntitlement[]) {
   })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))));
 }
 
+/**
+ * 対象 table/view の選択（#608）。1 つを選ぶので、検索できる選択欄（`SearchableSelectField`、#578）にする。
+ * 候補は数千件になりうるので、サーバー側で検索し（スキーマ名・`OWNER.OBJECT`・コメント）、続きは一覧の下端までの
+ * スクロールか最後の候補からの ↓ で 50 件ずつ読む。候補の一覧はすべての Data Grant の選択欄で共有する
+ * （開いている選択欄は 1 つだけで、閉じると検索語を消して全件に戻る）。
+ */
 function DeepSecTargetObjectPicker({
   index,
   value,
   selectedObject,
   objects,
   total,
-  nextCursor,
-  search,
-  ownerPrefix,
+  hasMore,
   loading,
   loadingMore,
   error,
   disabled,
   onSearchChange,
-  onOwnerPrefixChange,
   onSelect,
   onLoadMore,
+  onRetry,
 }: {
   index: number;
   value: string;
   selectedObject: DeepSecTargetObject | null;
   objects: DeepSecTargetObject[];
   total: number | null;
-  nextCursor: string | null;
-  search: string;
-  ownerPrefix: string;
+  hasMore: boolean;
   loading: boolean;
   loadingMore: boolean;
   error: string;
   disabled: boolean;
   onSearchChange: (value: string) => void;
-  onOwnerPrefixChange: (value: string) => void;
   onSelect: (value: string) => void;
   onLoadMore: () => void;
+  onRetry: () => void;
 }) {
-  const titleId = `deepsec-entitlement-resource-${index}`;
-  const loadedLabel =
-    typeof total === "number"
-      ? t("security.deepsec.entitlements.objectCount", {
-          loaded: objects.length,
-          total,
-        })
-      : t("security.deepsec.entitlements.objectLoadedCount", {
-          loaded: objects.length,
-        });
-  const hasObjectFilter = Boolean(search.trim() || ownerPrefix.trim());
-  const [selectedPrefix, selectedSuffix = ""] = t("security.deepsec.entitlements.objectSelected", {
-    object: "\u0000",
-  }).split("\u0000");
+  const options = objects.map(targetObjectOption);
   return (
-    // 対象 object は検索・一覧・選択を束ねた複合入力なので fieldset にし、legend の「必須」を群の名前として読み上げる（#531）。
-    <fieldset className="grid min-w-0 gap-1 text-xs font-medium" data-testid={`security-deepsec-object-picker-${index}`}>
-      <FieldLegend id={titleId} required className="mb-1 text-xs font-medium">
-        {t("security.deepsec.entitlements.resource")}
-      </FieldLegend>
-      <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-2">
-        <DbObjectSearchOwnerFields
-          searchLabel={t("dbAdmin.search.label")}
-          searchPlaceholder={t("dbAdmin.search.placeholder")}
-          searchValue={search}
-          onSearchChange={onSearchChange}
-          ownerLabel={t("dbAdmin.owner.label")}
-          ownerPlaceholder={t("dbAdmin.ownerPrefix.placeholder")}
-          ownerValue={ownerPrefix}
-          onOwnerChange={onOwnerPrefixChange}
-          disabled={disabled}
-        />
+    <div className="grid min-w-0 gap-2" data-testid={`security-deepsec-object-picker-${index}`}>
+      <SearchableSelectField
+        id={`deepsec-entitlement-resource-${index}`}
+        label={t("security.deepsec.entitlements.resource")}
+        required
+        value={value}
+        options={options}
+        selectedOption={
+          selectedObject ? targetObjectOption(selectedObject) : value ? { value, label: value } : null
+        }
+        onValueChange={onSelect}
+        onQueryChange={onSearchChange}
+        remote={{
+          total: total ?? objects.length,
+          hasMore,
+          loadingMore,
+          searching: loading,
+          onLoadMore,
+        }}
+        placeholder={t("security.deepsec.entitlements.objectPlaceholder")}
+        helper={t("security.deepsec.entitlements.oracleHelper")}
+        disabled={disabled}
+        labels={{
+          searchPlaceholder: t("security.deepsec.entitlements.objectSearchPlaceholder"),
+          clearSearch: t("common.clearSearch"),
+          // 件数を返さない問い合わせ（total が null）では、読み込んだ件数だけを出す。
+          count: (shown, matched) =>
+            typeof total === "number"
+              ? t("security.deepsec.entitlements.objectCount", { loaded: shown, total: matched })
+              : t("security.deepsec.entitlements.objectLoadedCount", { loaded: shown }),
+          noMatch: () => t("security.deepsec.entitlements.objectEmpty"),
+          empty: `${t("security.deepsec.entitlements.objectEmptyUnfiltered")}${t(
+            "security.deepsec.entitlements.objectEmptyHint"
+          )}`,
+          searching: t("security.deepsec.entitlements.objectsLoading"),
+          loadMore: t("security.deepsec.entitlements.objectLoadMore"),
+        }}
+      />
+      {error ? (
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-          <span className="min-w-0 text-xs text-fg-muted">
-            {selectedObject || value ? (
-              <>
-                {selectedPrefix}
-                <DbObjectName value={selectedObject ? targetQualifiedName(selectedObject) : value} size="xs" />
-                {selectedSuffix}
-              </>
-            ) : (
-              t("security.deepsec.entitlements.objectPlaceholder")
-            )}
-          </span>
-          <StatusBadge icon={false} variant="info" label={loadedLabel} />
-        </div>
-        {error ? (
           <FormStatus
             tone="danger"
-            message={t("security.deepsec.entitlements.objectLoadMoreError", {
-              message: error,
-            })}
+            message={t("security.deepsec.entitlements.objectLoadMoreError", { message: error })}
           />
-        ) : null}
-        <div
-          className="grid max-h-52 gap-1 overflow-auto rounded-md border border-border bg-surface p-1"
-          role="listbox"
-          aria-labelledby={titleId}
-          data-entitlement-scroll-container
-          data-testid={`security-deepsec-object-picker-list-${index}`}
-        >
-          {loading && objects.length === 0 ? (
-            // 文字だけにせず、経過時間と候補の行の形の Skeleton を出す（#265）。
-            <div className="grid gap-2 px-2 py-2">
-              <ProcessingIndicator
-                active
-                label={t("security.deepsec.entitlements.objectsLoading")}
-                placement="panel"
-                // 対象の候補の読込は PageHeader の「再読み込み」の loading がスピナーを出す。対象の行ごとに
-                // 同じ読込を出すので、ここでは回さない（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
-                activityIcon="none"
-                testId={`security-deepsec-object-picker-loading-${index}`}
-              />
-              <ListSkeleton rows={3} rowClassName="h-8" />
-            </div>
-          ) : null}
-          {!loading && objects.length === 0 ? (
-            <div className="grid gap-1 px-2 py-3 text-sm text-fg-muted">
-              <p>
-                {t(
-                  hasObjectFilter
-                    ? "security.deepsec.entitlements.objectEmpty"
-                    : "security.deepsec.entitlements.objectEmptyUnfiltered"
-                )}
-              </p>
-              {!hasObjectFilter ? (
-                <p className="text-xs leading-5">
-                  {t("security.deepsec.entitlements.objectEmptyHint")}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-          {objects.map((object) => {
-            const qualifiedName = targetQualifiedName(object);
-            const selected = qualifiedName === value;
-            return (
-              <button
-                key={qualifiedName}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                className={cn(
-                  "grid min-h-11 min-w-0 gap-1 rounded-md px-2 py-1.5 text-left transition hover:bg-surface-hover",
-                  selected && "bg-accent-subtle text-accent-fg"
-                )}
-                disabled={disabled}
-                onClick={() => onSelect(qualifiedName)}
-              >
-                <DbObjectName value={qualifiedName} size="xs" interactive />
-                <span className="text-xs text-fg-muted">
-                  {targetObjectTypeLabel(object.object_type)}
-                  {object.comment ? ` · ${object.comment}` : ""}
-                </span>
-              </button>
-            );
-          })}
+          <Button
+            icon={RefreshCw}
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={disabled}
+            data-testid={`security-deepsec-object-picker-retry-${index}`}
+            onClick={onRetry}
+          >
+            {t("common.retry")}
+          </Button>
         </div>
-        <div className="grid min-w-0 gap-2">
-          <p className="min-w-0 text-xs leading-5 text-fg-muted">
-            {t("security.deepsec.entitlements.oracleHelper")}
-          </p>
-          {nextCursor ? (
-            <div className="flex min-w-0 justify-end">
-              <Button icon={ListPlus}
-                type="button"
-                variant="secondary"
-                size="sm"
-                className="w-full min-w-0 justify-center lg:w-auto"
-                loading={loadingMore}
-                disabled={disabled || loadingMore}
-                data-testid={`security-deepsec-object-picker-load-more-${index}`}
-                onClick={onLoadMore}
-              >
-                {t("security.deepsec.entitlements.objectLoadMore")}
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </fieldset>
+      ) : null}
+    </div>
   );
+}
+
+/** 対象 object の選択肢（名前は SQL と同じ表記、下に種類とコメント）。 */
+function targetObjectOption(object: DeepSecTargetObject): SearchableSelectOption {
+  const qualifiedName = targetQualifiedName(object);
+  return {
+    value: qualifiedName,
+    label: qualifiedName,
+    description: [targetObjectTypeLabel(object.object_type), object.comment].filter(Boolean).join(" · "),
+  };
 }
 
 function DeepSecPlanSteps({
@@ -760,7 +693,6 @@ export function SecurityDeepSecPage() {
   const [entitlementSqlPreviewOpen, setEntitlementSqlPreviewOpen] = useState(false);
   const [entitlementSearch, setEntitlementSearch] = useState("");
   const [targetObjectSearch, setTargetObjectSearch] = useState("");
-  const [targetObjectOwnerPrefix, setTargetObjectOwnerPrefix] = useState("");
   const [targetObjects, setTargetObjects] = useState<DeepSecTargetObject[]>([]);
   const [targetObjectNextCursor, setTargetObjectNextCursor] = useState<string | null>(null);
   const [targetObjectTotal, setTargetObjectTotal] = useState<number | null>(null);
@@ -1112,7 +1044,6 @@ export function SecurityDeepSecPage() {
         const page = await securityApi.deepSecTargetObjects({
           signal,
           q: targetObjectSearch,
-          ownerPrefix: targetObjectOwnerPrefix,
           cursor,
           limit: TARGET_OBJECT_PAGE_SIZE,
         });
@@ -1226,11 +1157,10 @@ export function SecurityDeepSecPage() {
       targetObjectFilterMounted.current = true;
       return;
     }
-    const timeout = window.setTimeout(() => {
-      void loadTargetObjectsRef.current();
-    }, 250);
-    return () => window.clearTimeout(timeout);
-  }, [targetObjectSearch, targetObjectOwnerPrefix]);
+    // 検索語は選択欄の SearchField が確定した値（300ms・Enter・消去。IME の変換中は確定しない）なので、
+    // ここで遅延させずに問い合わせる（UX 契約「一覧の絞り込みの検索」7。#608）。
+    void loadTargetObjectsRef.current();
+  }, [targetObjectSearch]);
 
   // 選択中の role / version が変わったときだけ草稿を作り直す。他の値は最新を読むが、変化では実行しない。
   const syncEntitlementRole = () => {
@@ -2370,21 +2300,25 @@ export function SecurityDeepSecPage() {
                                         selectedObject={targetObjectMap.get(targetKey) ?? null}
                                         objects={visibleTargetObjects}
                                         total={targetObjectTotal}
-                                        nextCursor={targetObjectNextCursor}
-                                        search={targetObjectSearch}
-                                        ownerPrefix={targetObjectOwnerPrefix}
+                                        hasMore={Boolean(targetObjectNextCursor)}
                                         loading={targetObjectsLoading}
                                         loadingMore={targetObjectsLoadingMore}
                                         error={targetObjectLoadError}
                                         disabled={entitlementReadOnly}
                                         onSearchChange={setTargetObjectSearch}
-                                        onOwnerPrefixChange={setTargetObjectOwnerPrefix}
                                         onSelect={(value) => updateEntitlementTarget(index, value)}
                                         onLoadMore={() =>
                                           void loadTargetObjects({
                                             cursor: targetObjectNextCursor,
                                             append: true,
                                           })
+                                        }
+                                        onRetry={() =>
+                                          void loadTargetObjects(
+                                            targetObjectNextCursor && targetObjects.length > 0
+                                              ? { cursor: targetObjectNextCursor, append: true }
+                                              : {}
+                                          )
                                         }
                                       />
                                       <fieldset className="grid gap-2">

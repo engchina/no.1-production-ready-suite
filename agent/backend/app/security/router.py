@@ -2,16 +2,18 @@
 
 - `/auth/*`・`/security/users*`・`/security/roles*`: platform の `build_auth_router`
 - `GET /security/permissions`: 権限カタログ
-- `GET /security/access-targets`: 権限管理で選べるエージェントと業務ビュー
+- `GET /security/access-targets/{agents,business-views}`: 権限管理で選べるエージェントと業務ビュー
+  （検索とページング。#608）
 - `PUT /security/roles/{role_id}/access`: ロールの Agent 権限と対象範囲の保存
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, Request, Response
-from pr_backend_core import ApiResponse
+from fastapi import APIRouter, Query, Request, Response
+from pr_backend_core import ApiResponse, Page
 from pr_system_settings.auth.domain import Principal as PlatformPrincipal
 from pr_system_settings.auth.domain import RoleRecord as PlatformRoleRecord
 from pr_system_settings.auth.router import build_auth_router
@@ -32,9 +34,9 @@ from .dependencies import current_principal, local_debug_principal, request_cont
 from .domain import as_principal, as_role
 from .permissions import PERMISSION_CATALOG
 from .schemas import (
-    AccessTargetsData,
     AgentTargetData,
     BusinessViewTargetData,
+    BusinessViewTargetPage,
     CurrentUserData,
     PermissionData,
     RoleAccessUpdateRequest,
@@ -46,6 +48,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["security"])
 # 権限管理の候補に出す RAG の業務ビューの上限（MCP の rag_list_business_views の limit の上限）。
 _RAG_BUSINESS_VIEW_LIMIT = 200
+# 権限管理の「利用できる対象」の候補の 1 ページの上限（#608）。
+# 画面は 50 件ずつ読み、選択済みの名前は `ids` で読む。
+ACCESS_TARGET_PAGE_LIMIT_MAX = 100
 
 
 def _current_user_data(principal: PlatformPrincipal, debug_mode: bool) -> CurrentUserData:
@@ -114,14 +119,72 @@ def permission_catalog() -> ApiResponse[list[PermissionData]]:
     return ApiResponse(data=[PermissionData.from_definition(item) for item in PERMISSION_CATALOG])
 
 
-@router.get("/security/access-targets", response_model=ApiResponse[AccessTargetsData])
-async def list_access_targets(request: Request) -> ApiResponse[AccessTargetsData]:
-    """権限管理画面で選べるエージェントと業務ビュー。
+def _matches_target_query(query: str, *values: str | None) -> bool:
+    """権限管理の候補の検索（名前・ID・説明の部分一致。大文字と小文字を区別しない）。"""
+    needle = query.strip().casefold()
+    return not needle or any(needle in (value or "").casefold() for value in values)
 
-    - エージェント: Runtime repository の業務 Agent（無効を含む）。
-    - 業務ビュー: Agent にマスタがないため、Run の metadata に現れた ID とロールに割り当て済みの
-      ID と、RAG の MCP で読んだ業務ビュー（画面を開いた利用者が RAG で使えるもの。#233）の和集合。
+
+def _page[T](items: list[T], *, limit: int, offset: int) -> Page[T]:
+    total = len(items)
+    return Page(
+        items=items[offset : offset + limit],
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_next=offset + limit < total,
+    )
+
+
+@router.get("/security/access-targets/agents", response_model=ApiResponse[Page[AgentTargetData]])
+def list_agent_access_targets(
+    request: Request,
+    q: Annotated[str, Query(max_length=200)] = "",
+    limit: Annotated[int, Query(ge=1, le=ACCESS_TARGET_PAGE_LIMIT_MAX)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    ids: Annotated[list[str] | None, Query(max_length=ACCESS_TARGET_PAGE_LIMIT_MAX)] = None,
+) -> ApiResponse[Page[AgentTargetData]]:
+    """権限管理画面で選べるエージェント（Runtime repository の業務 Agent。無効を含む）。
+
+    検索とページング（#608）:
+    - `q`: 名前・ID・説明の部分一致。
+    - `ids`: その ID だけ（ロールに選択済みの対象の名前の解決に使う）。
+    - 一覧は利用者の対象範囲で絞る（SYSTEM_ADMIN と `agent.admin` を持つ利用者は全件）。
+    """
+    principal = as_principal(current_principal(request))
+    selected = set(ids) if ids is not None else None
+    agents = [
+        AgentTargetData(
+            id=agent.id,
+            name=agent.name,
+            description=agent.description or None,
+            status="enabled" if agent.enabled else "disabled",
+        )
+        for agent in runtime_repository.list_agents()
+        if principal.can_use_agent(agent.id)
+        and (selected is None or agent.id in selected)
+        and _matches_target_query(q, agent.name, agent.id, agent.description)
+    ]
+    return ApiResponse(data=_page(agents, limit=limit, offset=offset))
+
+
+@router.get(
+    "/security/access-targets/business-views",
+    response_model=ApiResponse[BusinessViewTargetPage],
+)
+async def list_business_view_access_targets(
+    request: Request,
+    q: Annotated[str, Query(max_length=200)] = "",
+    limit: Annotated[int, Query(ge=1, le=ACCESS_TARGET_PAGE_LIMIT_MAX)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    ids: Annotated[list[str] | None, Query(max_length=ACCESS_TARGET_PAGE_LIMIT_MAX)] = None,
+) -> ApiResponse[BusinessViewTargetPage]:
+    """権限管理画面で選べる業務ビュー（#608 で検索とページング）。
+
+    - Agent にマスタがないため、Run の metadata に現れた ID とロールに割り当て済みの ID と、
+      RAG の MCP で読んだ業務ビュー（画面を開いた利用者が RAG で使えるもの。#233）の和集合。
       名前は RAG から読めたものは RAG の名前、それ以外は ID と同じ。RAG を読めなければ警告を返す。
+    - `q`: 名前・ID の部分一致。`ids`: その ID だけ。
     - 一覧は利用者の対象範囲で絞る（SYSTEM_ADMIN と `agent.admin` を持つ利用者は全件）。
     """
     principal = as_principal(current_principal(request))
@@ -130,27 +193,20 @@ async def list_access_targets(request: Request) -> ApiResponse[AccessTargetsData
         _rag_business_view_names, principal.user_uuid
     )
     view_ids = _run_business_view_ids() | assigned_views | set(rag_view_names)
-    agents = [
-        agent for agent in runtime_repository.list_agents() if principal.can_use_agent(agent.id)
+    if ids is not None:
+        view_ids &= set(ids)
+    views = [
+        BusinessViewTargetData(id=view_id, name=rag_view_names.get(view_id, view_id))
+        for view_id in sorted(view_ids)
+        if principal.can_use_business_view(view_id)
     ]
+    page = _page(
+        [view for view in views if _matches_target_query(q, view.name, view.id)],
+        limit=limit,
+        offset=offset,
+    )
     return ApiResponse(
-        data=AccessTargetsData(
-            agents=[
-                AgentTargetData(
-                    id=agent.id,
-                    name=agent.name,
-                    description=agent.description or None,
-                    status="enabled" if agent.enabled else "disabled",
-                )
-                for agent in agents
-            ],
-            business_views=[
-                BusinessViewTargetData(id=view_id, name=rag_view_names.get(view_id, view_id))
-                for view_id in sorted(view_ids)
-                if principal.can_use_business_view(view_id)
-            ],
-            business_view_warnings=warnings,
-        ),
+        data=BusinessViewTargetPage(**page.model_dump(), warnings=warnings),
         warning_messages=warnings,
     )
 

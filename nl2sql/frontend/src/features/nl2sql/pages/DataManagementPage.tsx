@@ -15,13 +15,13 @@ import {
   StatusBadge,
   PageHeader,
   PageBody,
-  BulkSelectionActions,
   ContentActionBar,
   ClearActionButton,
   ProcessingIndicator,
   ObjectActionBar,
   type EntityAction,
-  INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS,
+  ListPicker,
+  type ListPickerItem,
   INFORMATION_TABLE_FIXED_VISIBLE_ROWS,
   ExecutionConfirmationField,
   FieldLabel,
@@ -2202,11 +2202,7 @@ function SyntheticWorkspace({
         tableName.toLowerCase().includes(normalizedSyntheticTableSearch)
       )
     : syntheticAvailableTables;
-  const selectedVisibleTableCount = filteredSyntheticTables.filter((tableName) =>
-    syntheticSelectedTables.includes(tableName)
-  ).length;
-  const allVisibleTablesSelected =
-    filteredSyntheticTables.length > 0 && selectedVisibleTableCount === filteredSyntheticTables.length;
+  const selectedSyntheticTableSet = new Set(syntheticSelectedTables);
   const visibleWarnings = (selectAiDbProfiles?.warnings ?? []).filter(
     (warning) => !isSelectAiDbProfileRefreshWarning(warning)
   );
@@ -2333,84 +2329,45 @@ function SyntheticWorkspace({
           </Button>
         </ContentActionBar>
 
-        <div className="grid min-w-0 gap-2">
-          <DbObjectSelectorToolbar
-            searchLabel={t("dataTools.syntheticData.tables")}
-            searchPlaceholder={t("dataTools.syntheticData.tableSearchPlaceholder")}
-            searchValue={syntheticTableSearch}
-            onSearchChange={setSyntheticTableSearch}
-            dataTestId="data-synthetic-table-toolbar"
-          />
-          {loading !== "tables" && filteredSyntheticTables.length > 0 ? (
-            <BulkSelectionActions
-              selectLabel={t("common.selection.selectVisible")}
-              clearLabel={t("common.selection.clearVisible")}
-              selectDisabled={allVisibleTablesSelected}
-              clearDisabled={selectedVisibleTableCount === 0}
-              dataTestId="data-synthetic-table-selection-actions"
-              onSelectAll={() => onSyntheticTablesBulkChange(filteredSyntheticTables, true)}
-              onClearAll={() => onSyntheticTablesBulkChange(filteredSyntheticTables, false)}
-            />
-          ) : null}
-          {loading === "tables" ? (
-            <DbManagementLoadingSkeleton
-              idPrefix="data-synthetic-tables"
-              ariaLabel={t("dataTools.syntheticData.tablesLoading")}
-              variant="list"
-              rows={4}
-              placement="result"
-            />
-          ) : filteredSyntheticTables.length > 0 ? (
-            <div
-              className={`${INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS} rounded-md border border-border bg-surface`}
-              role="group"
-              aria-label={t("dataTools.syntheticData.tables")}
-              data-testid="data-synthetic-table-list"
-            >
-              <div className="grid divide-y divide-border/70">
-                {filteredSyntheticTables.map((tableName) => {
-                  const selected = syntheticSelectedTables.includes(tableName);
-                  return (
-                    <label
-                      key={tableName}
-                      className="flex min-h-11 min-w-0 items-center gap-3 px-3 py-2 text-sm text-fg hover:bg-surface-hover"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        onChange={(event) => onSyntheticTableToggle(tableName, event.currentTarget.checked)}
-                        className="h-4 w-4 rounded border-border text-accent-fg"
-                        aria-label={t("dataTools.syntheticData.tableOption", { name: tableName })}
-                      />
-                      <DbObjectName value={tableName} size="xs" interactive className="min-w-0" />
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          ) : (
-            <EmptyState
-              title={
-                normalizedSyntheticTableSearch
-                  ? t("dataTools.syntheticData.noTableResultsTitle")
-                  : t("dataTools.syntheticData.noTablesTitle")
-              }
-              hint={
-                normalizedSyntheticTableSearch
-                  ? t("dataTools.syntheticData.noTableResultsHint")
-                  : t("dataTools.syntheticData.noTablesHint")
-              }
-            />
-          )}
-          {loading !== "tables" && (
-            <DbObjectSelectorFooter
-              visibleCount={filteredSyntheticTables.length}
-              totalCount={syntheticAvailableTables.length}
-              selectedCount={syntheticSelectedTables.length}
-              dataTestId="data-synthetic-table-footer"
-            />
-          )}
-        </div>
+        {/* 対象の表は業務プロファイルの許可する表（数百件になりうる）。複数を選ぶので、大量の候補から選ぶ共通の
+            ListPicker にする（#608）。候補はプロファイルから全件を読んでいるので、検索は画面側で絞る。 */}
+        <ListPicker
+          id="data-synthetic-table-picker"
+          label={t("dataTools.syntheticData.tables")}
+          items={filteredSyntheticTables.map(syntheticTablePickerItem)}
+          selectedKeys={selectedSyntheticTableSet}
+          selectedItems={syntheticSelectedTables.map(syntheticTablePickerItem)}
+          onToggle={(item, selected) => onSyntheticTableToggle(item.key, selected)}
+          onSelectMany={(visible) => onSyntheticTablesBulkChange(visible.map((item) => item.key), true)}
+          onClearSelection={() => onSyntheticTablesBulkChange(syntheticSelectedTables, false)}
+          total={filteredSyntheticTables.length}
+          search={{
+            id: "data-synthetic-table-search",
+            label: t("dataTools.syntheticData.tables"),
+            placeholder: t("dataTools.syntheticData.tableSearchPlaceholder"),
+            value: syntheticTableSearch,
+            onSearch: setSyntheticTableSearch,
+            clearLabel: t("common.clearSearch"),
+          }}
+          loading={loading === "tables"}
+          fixedHeight
+          labels={{
+            resultCount: ({ visible, selected }) =>
+              t("objectSelector.resultCountWithSelected", {
+                visible,
+                total: syntheticAvailableTables.length,
+                selected,
+              }),
+            loading: t("dataTools.syntheticData.tablesLoading"),
+            emptyTitle: t("dataTools.syntheticData.noTablesTitle"),
+            emptyHint: t("dataTools.syntheticData.noTablesHint"),
+            noResultsTitle: t("dataTools.syntheticData.noTableResultsTitle"),
+            noResultsHint: t("dataTools.syntheticData.noTableResultsHint"),
+            clearSearch: t("common.clearSearch"),
+            keyboardHint: t("objectSelector.keyboardHint"),
+          }}
+          testId="data-synthetic-table"
+        />
 
         <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
           <TextareaField
@@ -2581,6 +2538,15 @@ function SyntheticWorkspace({
       </section>
     </div>
   );
+}
+
+/** 合成データの対象の表の候補の 1 行（名前は SQL と同じ表記）。 */
+function syntheticTablePickerItem(tableName: string): ListPickerItem {
+  return {
+    key: tableName,
+    label: <DbObjectName value={tableName} size="xs" truncate className="block" />,
+    textValue: tableName,
+  };
 }
 
 function DbProfileRefreshNotice({

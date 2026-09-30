@@ -135,7 +135,8 @@ DeepSec のデータ接続（DATA USER 経由の SQL 実行）が使えないた
   （旧 client が `permissions` を送っても無視する）。権限の更新は
   `PUT /api/security/roles/{role_id}/permissions`（`version` / `permissions` / `allowed_profile_ids`）で、
   `menu.security_permissions` を要求する。`GET /api/security/permissions` と
-  `/api/security/profile-access/profiles` も `menu.security_permissions` を要求する。
+  `/api/security/profile-access/profiles`（`q` / `limit` / `offset` / `ids` で検索とページングした `Page`。#608）も
+  `menu.security_permissions` を要求する。
 - どちらの更新も `SecurityService.update_role` を通り、省略した項目は現在値を保つ。権限昇格の防止
   （追加する実効権限は actor 自身の実効権限の部分集合）と業務プロファイル変更の `SYSTEM_ADMIN` 限定は
   権限の更新に対して従来どおり適用する。

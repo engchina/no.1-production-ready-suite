@@ -97,7 +97,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 | ユーザー管理（`GET`・`POST /security/users`、`GET`・`PATCH`・`DELETE /security/users/{user_uuid}`、`POST /security/users/{user_uuid}/disable`・`enable`・`reset-password`・`unlock`） | `menu.security_users` | 共通の昇格防止 |
 | ロールの参照（`GET /security/roles`・`GET /security/roles/{role_id}`） | `menu.security_users` / `menu.security_roles` / `menu.security_permissions` | — |
 | ロールの変更（`POST /security/roles`、`PATCH`・`DELETE /security/roles/{role_id}`、`POST /security/roles/{role_id}/archive`・`restore`） | `menu.security_roles` | — |
-| `GET /security/permissions`・`/security/access-targets`、`PUT /security/roles/{id}/access` | `menu.security_permissions` | 昇格防止 |
+| `GET /security/permissions`・`/security/access-targets/{agents,business-views}`、`PUT /security/roles/{id}/access` | `menu.security_permissions` | 昇格防止 |
 
 ## 4. 対象範囲（エージェント・業務ビュー）
 
@@ -106,7 +106,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 - 業務ビューは Agent にマスタがありません（Run の `metadata.business_view_id` などの文字列）。権限管理で選べる業務ビューは、
   Run に現れた ID・ロールに割り当て済みの ID・RAG の業務ビューの和集合です。形式は `^[A-Za-z0-9._:-]{1,64}$`（合わない RAG の ID は候補にしない）。
   業務ビューを持たない Run は、エージェントの範囲だけで判定します（従来どおり）。
-- RAG の業務ビュー（#233）: 外部 RAG の MCP（`AGENT_EXTERNAL_RAG_MCP_URL`）が設定されていれば、`GET /security/access-targets` は
+- RAG の業務ビュー（#233）: 外部 RAG の MCP（`AGENT_EXTERNAL_RAG_MCP_URL`）が設定されていれば、`GET /security/access-targets/business-views` は
   RAG の `rag_list_business_views` を**画面を開いた管理者の `user_uuid`** のサービストークンで呼び、その管理者が RAG で使える ACTIVE な
   業務ビュー（最大 200 件）を名前付きで候補に足します。未設定・失敗のときは従来どおりの候補に、`warning_messages` で理由を返します
   （権限管理はそのまま使えます）。

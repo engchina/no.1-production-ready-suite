@@ -527,16 +527,24 @@ for (const [label, grants, showsAccess] of [
     await page.unroute("**/api/security/profile-access/profiles**");
     await page.route("**/api/security/profile-access/profiles**", (route) => {
       accessRequests += 1;
-      return fulfillJson(route, [
-        {
-          id: profiles[0].id,
-          name: profiles[0].name,
-          category: "",
-          description: "",
-          archived: false,
-          allowed_role_ids: ["ROLE_A"],
-        },
-      ]);
+      // 選択中の業務プロファイルだけを ids で読む（#608）。
+      expect(new URL(route.request().url()).searchParams.getAll("ids")).toEqual([profiles[0].id]);
+      return fulfillJson(route, {
+        items: [
+          {
+            id: profiles[0].id,
+            name: profiles[0].name,
+            category: "",
+            description: "",
+            archived: false,
+            allowed_role_ids: ["ROLE_A"],
+          },
+        ],
+        total: 1,
+        limit: 1,
+        offset: 0,
+        has_next: false,
+      });
     });
     await mockProfileApi(page);
 

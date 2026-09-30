@@ -3,12 +3,14 @@ import {
   permissionNavSections,
   type PermissionDefinition,
   type RolePermissionTargetItem,
+  type RolePermissionTargetPage,
+  type RolePermissionTargetQuery,
   type RolePermissionTargetSection,
   type RolePermissionsApi,
 } from "@engchina/production-ready-system-settings";
 
 import { NAV_SECTIONS } from "@/components/layout/nav-config";
-import type { AccessTarget, AccessTargetsData, SecurityRole } from "./api";
+import type { AccessTarget, AccessTargetKind, AccessTargetPage, SecurityRole } from "./api";
 import { t } from "./i18n";
 import { CAPABILITY_PERMISSIONS } from "./permissions";
 import { securityApi } from "./security-api";
@@ -56,25 +58,20 @@ function toTargetItem(item: AccessTarget): RolePermissionTargetItem {
   };
 }
 
-/**
- * 業務ビューと KB の候補は `/security/access-targets` の 1 回の応答から作る。共通画面は 1 回の読み込みで
- * 対象ごとに同じ signal を渡すため、signal ごとに応答を共有する（表示の更新では signal が変わり取り直す）。
- */
-export function accessTargetsLoader(fetchTargets: (signal: AbortSignal) => Promise<AccessTargetsData>) {
-  const inFlight = new WeakMap<AbortSignal, Promise<AccessTargetsData>>();
-  return (signal: AbortSignal) => {
-    const cached = inFlight.get(signal);
-    if (cached) return cached;
-    const request = fetchTargets(signal);
-    inFlight.set(signal, request);
-    return request;
-  };
+/** 候補を読む関数（`GET /api/security/access-targets/{kind}`。検索とページング。#608）。 */
+export type AccessTargetFetcher = (
+  kind: AccessTargetKind,
+  query: RolePermissionTargetQuery,
+  signal: AbortSignal,
+) => Promise<AccessTargetPage>;
+
+function targetQuery(fetchTargets: AccessTargetFetcher, kind: AccessTargetKind) {
+  return (query: RolePermissionTargetQuery, { signal }: { signal: AbortSignal }): Promise<RolePermissionTargetPage> =>
+    fetchTargets(kind, query, signal).then((page) => ({ items: page.items.map(toTargetItem), total: page.total }));
 }
 
-/** 業務ビュー / KB の対象範囲（RolePermissionsPage の targets）。 */
-export function ragPermissionTargets(
-  loadTargets: (signal: AbortSignal) => Promise<AccessTargetsData>,
-): RolePermissionTargetSection<SecurityRole>[] {
+/** 業務ビュー / KB の対象範囲（RolePermissionsPage の targets）。候補はサーバー側で検索し、50 件ずつ読む。 */
+export function ragPermissionTargets(fetchTargets: AccessTargetFetcher): RolePermissionTargetSection<SecurityRole>[] {
   return [
     {
       key: BUSINESS_VIEW_ACCESS_KEY,
@@ -90,7 +87,7 @@ export function ragPermissionTargets(
         grantsAllByPermission: t("security.permissions.businessViewsManagedAll"),
         grantsAllSystemAdmin: t("security.permissions.businessViewsSystemAdmin"),
       },
-      load: ({ signal }) => loadTargets(signal).then((data) => data.business_views.map(toTargetItem)),
+      query: targetQuery(fetchTargets, "business-views"),
       selectedIds: (role) => role.business_view_ids ?? [],
       grantsAll: (effective) => effective.has(CAPABILITY_PERMISSIONS.businessViewsManage),
     },
@@ -108,7 +105,7 @@ export function ragPermissionTargets(
         grantsAllByPermission: t("security.permissions.knowledgeBasesManagedAll"),
         grantsAllSystemAdmin: t("security.permissions.knowledgeBasesSystemAdmin"),
       },
-      load: ({ signal }) => loadTargets(signal).then((data) => data.knowledge_bases.map(toTargetItem)),
+      query: targetQuery(fetchTargets, "knowledge-bases"),
       selectedIds: (role) => role.knowledge_base_ids ?? [],
       grantsAll: (effective) => effective.has(CAPABILITY_PERMISSIONS.knowledgeBasesManage),
     },

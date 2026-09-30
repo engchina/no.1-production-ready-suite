@@ -213,8 +213,6 @@ const metadataScenarios = [
   },
 ] as const;
 
-const fixedTargetVisibleRows = 5;
-
 type MockAdminObjectItem = {
   name: string;
   owner: string;
@@ -1230,7 +1228,8 @@ for (const scenario of scenarios) {
 }
 
 for (const scenario of metadataScenarios) {
-  test(`${scenario.title}は対象名の下にコメントを表示し、種類・所有者が重ならない`, async ({ page }, testInfo) => {
+  // 対象の選択は大量の候補から選ぶ共通の ListPicker（#608）。行は名前・コメント（1 行で省略）・種類のバッジ。
+  test(`${scenario.title}は対象名の下にコメントを表示し、種類が重ならない`, async ({ page }, testInfo) => {
     const longComment = "長い日本語の対象コメントです。".repeat(10);
     await mockMetadataManagementApi(page, {
       empty: true,
@@ -1245,63 +1244,72 @@ for (const scenario of metadataScenarios) {
     });
     await page.goto(scenario.path);
 
-    const grid = page.getByTestId(`${scenario.idPrefix}-target-grid`);
-    await expect(grid.locator("tbody tr")).toHaveCount(4);
-    await expect(grid.getByRole("columnheader")).toHaveText([/対象名/, /種類/, /所有者/]);
-    for (const [name, comment] of [
-      ["DENPYO_ACTIVITY_LOG", "伝票の処理履歴"],
-      ["LONG_COMMENT_TABLE", longComment],
-      ["NO_COMMENT", "-"],
-      ["ORDER_SUMMARY_V", "受注サマリ"],
+    const picker = page.getByTestId(`${scenario.idPrefix}-target`);
+    await expect(picker.getByRole("option")).toHaveCount(4);
+    for (const [name, comment, kind] of [
+      ["DENPYO_ACTIVITY_LOG", "伝票の処理履歴", "テーブル"],
+      ["LONG_COMMENT_TABLE", longComment, "テーブル"],
+      ["NO_COMMENT", "", "テーブル"],
+      ["ORDER_SUMMARY_V", "受注サマリ", "ビュー"],
     ]) {
-      const checkbox = grid.getByRole("checkbox", { name: `ADMIN.${name} チェックで対象に含める`, exact: true });
-      await expect(checkbox).toHaveAccessibleDescription(comment);
-      const layout = await checkbox.evaluate((node) => {
-        const label = node.closest("label")!;
-        const nameNode = label.querySelector("[id$='-name']")!;
-        const commentNode = label.querySelector("[id$='-comment']")!;
-        const cellBox = node.closest("td")!.getBoundingClientRect();
-        const nameBox = nameNode.getBoundingClientRect();
-        const commentBox = commentNode.getBoundingClientRect();
-        const style = getComputedStyle(commentNode);
+      const option = picker.getByRole("option", { name: `ADMIN.${name}`, exact: true });
+      await expect(option).toHaveAccessibleDescription(comment ? `${comment} ${kind}` : kind);
+      const layout = await option.evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        const parts = Array.from(node.querySelectorAll(":scope > span")).map((part) => part.getBoundingClientRect());
+        const description = node.querySelector("[id$='-description']");
         return {
-          below: commentBox.top >= nameBox.bottom - 1,
-          contained: commentBox.right <= cellBox.right + 1,
-          clamp: style.webkitLineClamp,
-          height: commentBox.height,
-          lineHeight: parseFloat(style.lineHeight),
-          nameLines: new Set(Array.from((() => { const r = document.createRange(); r.selectNodeContents(nameNode); return r.getClientRects(); })()).filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top))).size,
+          partsInside: parts.every((part) => part.left >= box.left - 1 && part.right <= box.right + 1),
+          partsDoNotOverlap: parts.every((part, index) =>
+            parts.slice(index + 1).every((other) => other.left >= part.right - 1 || other.right <= part.left + 1)
+          ),
+          descriptionTruncated: description
+            ? getComputedStyle(description).textOverflow === "ellipsis" && getComputedStyle(description).whiteSpace === "nowrap"
+            : true,
         };
       });
-      expect(layout.below).toBe(true);
-      expect(layout.contained).toBe(true);
-      expect(layout.clamp).toBe("2");
-      expect(layout.height).toBeLessThanOrEqual(layout.lineHeight * 2 + 1);
-      if (testInfo.project.name === "desktop") expect(layout.nameLines).toBe(1);
+      expect(layout.partsInside).toBe(true);
+      expect(layout.partsDoNotOverlap).toBe(true);
+      expect(layout.descriptionTruncated).toBe(true);
     }
     for (const kind of ["テーブル", "ビュー"]) {
-      await expectNoStatusIcon(grid.locator("[data-status-variant]").filter({ hasText: kind }).first());
+      await expectNoStatusIcon(picker.locator("[data-status-variant]").filter({ hasText: kind }).first());
     }
-    await expectRowCellsDoNotOverlap(grid.locator("tbody tr"));
-    await grid.getByText("伝票の処理履歴", { exact: true }).click();
-    await expect(grid.getByRole("checkbox", { name: "ADMIN.DENPYO_ACTIVITY_LOG チェックで対象に含める", exact: true })).toBeChecked();
+    await picker.getByText("伝票の処理履歴", { exact: true }).click();
+    await expect(picker.getByRole("option", { name: "ADMIN.DENPYO_ACTIVITY_LOG", exact: true })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
     await page.getByRole("searchbox", { name: "検索" }).fill("受注サマリ");
-    await expect(grid.locator("tbody tr")).toHaveCount(1);
+    await expect(picker.getByRole("option")).toHaveCount(1);
     await page.getByRole("searchbox", { name: "検索" }).clear();
-    await expect(grid.locator("tbody tr")).toHaveCount(4);
-    await grid.screenshot({ path: testInfo.outputPath(`${scenario.idPrefix}-target-comments.png`) });
+    await expect(picker.getByRole("option")).toHaveCount(4);
+    await picker.screenshot({ path: testInfo.outputPath(`${scenario.idPrefix}-target-comments.png`) });
     await expectNoHorizontalScroll(page);
   });
 
-  test(`${scenario.title}は対象グリッドを5行の固定高さに収める`, async ({ page }) => {
+  test(`${scenario.title}は対象の一覧を 5 / 8 行の固定高さに収め、中をスクロールする`, async ({ page }) => {
     await mockMetadataManagementApi(page);
     await page.goto(scenario.path);
 
-    const list = page.getByTestId("db-admin-object-list");
-    await expect(page.getByTestId(`${scenario.idPrefix}-target-grid`).locator("tbody tr")).toHaveCount(30);
-    await expectCompactSortHeaders(list);
-
-    await expectObjectListRowLimit(list, "tbody tr", fixedTargetVisibleRows);
+    const scrollRegion = page.getByTestId(`${scenario.idPrefix}-target-scroll-region`);
+    await expect(page.getByTestId(`${scenario.idPrefix}-target`).getByRole("option")).toHaveCount(30);
+    const fit = await scrollRegion.evaluate((node) => {
+      const listBox = node.getBoundingClientRect();
+      const rows = Array.from(node.querySelectorAll('[role="option"]')).map((row) => row.getBoundingClientRect());
+      return {
+        listHeight: listBox.height,
+        visibleRows: rows.filter((row) => row.bottom <= listBox.bottom + 1 && row.top >= listBox.top - 1).length,
+        scrolls: node.scrollHeight > node.clientHeight,
+        overflowY: getComputedStyle(node).overflowY,
+      };
+    });
+    // md 未満は 5 行（17.5rem）、md 以上は 8 行（28rem）の固定の高さ（一覧の表示密度。#265 / #600）。
+    const expectedListHeight = page.viewportSize()!.width < 768 ? 247 : 394;
+    expect(Math.abs(fit.listHeight - expectedListHeight)).toBeLessThanOrEqual(4);
+    expect(fit.visibleRows).toBe(page.viewportSize()!.width < 768 ? 5 : 8);
+    expect(fit.scrolls).toBe(true);
+    expect(fit.overflowY).toBe("auto");
   });
 
   test(`${scenario.title}は検索・所有者・種類フィルタを共通配置する`, async ({ page }, testInfo) => {
@@ -1350,15 +1358,15 @@ for (const scenario of metadataScenarios) {
     await expect.poll(() => ownerPrefixRequests.includes("BIL")).toBe(true);
     await expect.poll(() => queryScopes.includes("name_comment")).toBe(true);
     expect(exactOwnerRequests).toEqual([]);
-    await expect(page.getByTestId(`${scenario.idPrefix}-target-grid`).getByText("BILLING.LEDGER_TABLE_01", { exact: true })).toBeVisible();
-    await expect(page.getByTestId(`${scenario.idPrefix}-target-grid`).getByText("APP.ORDERS_TABLE_01", { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId(`${scenario.idPrefix}-target`).getByText("BILLING.LEDGER_TABLE_01", { exact: true })).toBeVisible();
+    await expect(page.getByTestId(`${scenario.idPrefix}-target`).getByText("APP.ORDERS_TABLE_01", { exact: true })).toHaveCount(0);
     await ownerFilter.fill("ZZZ");
     await expect(page.getByText("条件に一致する対象がありません")).toBeVisible();
     await ownerFilter.fill("");
-    await expect(page.getByTestId(`${scenario.idPrefix}-target-grid`).getByText("APP.ORDERS_TABLE_01", { exact: true })).toBeVisible();
+    await expect(page.getByTestId(`${scenario.idPrefix}-target`).getByText("APP.ORDERS_TABLE_01", { exact: true })).toBeVisible();
     await typeFilter.selectOption("view");
-    await expect(page.getByTestId(`${scenario.idPrefix}-target-grid`).getByText("APP.ORDERS_VIEW_01", { exact: true })).toBeVisible();
-    await expect(page.getByTestId(`${scenario.idPrefix}-target-grid`).getByText("APP.ORDERS_TABLE_01", { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId(`${scenario.idPrefix}-target`).getByText("APP.ORDERS_VIEW_01", { exact: true })).toBeVisible();
+    await expect(page.getByTestId(`${scenario.idPrefix}-target`).getByText("APP.ORDERS_TABLE_01", { exact: true })).toHaveCount(0);
     await typeFilter.selectOption("all");
     await expectNoHorizontalScroll(page);
   });
@@ -1401,7 +1409,7 @@ for (const scenario of metadataScenarios) {
     });
     await page.goto(scenario.path);
 
-    const grid = page.getByTestId(`${scenario.idPrefix}-target-grid`);
+    const grid = page.getByTestId(`${scenario.idPrefix}-target`);
     await expect(grid.getByText("NL2SQL_APP.ORDERS", { exact: true })).toBeVisible();
     await expect(grid.getByText("APP.TD_NL2SQL_ORDERS", { exact: true })).toBeVisible();
     await expect(grid.getByText("APP.NL2SQL_SCHEMA_OBJECTS", { exact: true })).toHaveCount(0);
@@ -1409,7 +1417,7 @@ for (const scenario of metadataScenarios) {
 
     await page.getByRole("searchbox", { name: "検索" }).fill("NL2SQL_SCHEMA");
     await expect(grid.getByText("APP.NL2SQL_SCHEMA_OBJECTS", { exact: true })).toHaveCount(0);
-    await expect(grid.locator("tbody tr")).toHaveCount(0);
+    await expect(grid.getByRole("option")).toHaveCount(0);
   });
 }
 
@@ -1441,9 +1449,16 @@ test("合成データ生成は対象テーブル一覧を5行の固定高さに�
   const syntheticPanel = page.locator("#data-management-panel-synthetic");
   await syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" }).click();
 
-  const list = page.getByTestId("data-synthetic-table-list");
-  await expect(list.locator("label")).toHaveCount(syntheticTables.length);
-  await expectObjectListRowLimit(list, "label", fixedTargetVisibleRows, { expectedHeightRem: 14 });
+  // 対象の表は共通の ListPicker（#608）。md 未満は 5 行（17.5rem）、md 以上は 8 行（28rem）で中をスクロールする。
+  const list = page.getByTestId("data-synthetic-table-scroll-region");
+  await expect(list.getByRole("option")).toHaveCount(syntheticTables.length);
+  const fit = await list.evaluate((node) => ({
+    listHeight: node.getBoundingClientRect().height,
+    scrolls: node.scrollHeight > node.clientHeight,
+  }));
+  const narrow = page.viewportSize()!.width < 768;
+  expect(Math.abs(fit.listHeight - (narrow ? 247 : 394))).toBeLessThanOrEqual(4);
+  expect(fit.scrolls).toBe(true);
 });
 
 test("データ管理のテーブル・ビュー件数 badge は API 総数を表示する", async ({ page }) => {
@@ -1699,6 +1714,113 @@ test("データ管理の対象 picker は NL2SQL_ システム object を表示�
   await expect(csvList.getByText("APP.TD_NL2SQL_ORDERS", { exact: true })).toBeVisible();
   await expect(csvList.getByText("APP.NL2SQL_SCHEMA_OBJECTS", { exact: true })).toHaveCount(0);
 });
+
+/** 外観の選好（共有 UI の ui-store が保存する値）を読み込みの前に入れる。 */
+async function setUiTheme(page: Page, theme: "light" | "dark") {
+  await page.addInitScript((value) => {
+    localStorage.setItem(
+      "production-ready-nl2sql.ui",
+      JSON.stringify({ state: { sidebarCollapsed: false, collapsedSections: {}, theme: value }, version: 0 })
+    );
+  }, theme);
+}
+
+// #608: 大量の候補から複数を選ぶ画面は共通の ListPicker。151 件（100 件ずつの追加読み込み）で、
+// 選択の行・「選択中だけ表示」・キーボード操作・追加読み込みをライト / ダークで確かめる（desktop / 375px は projects）。
+for (const colorScheme of ["light", "dark"] as const) {
+  test(`コメント管理の対象は大量でも ListPicker で追加読み込みし、選択中だけ表示できる (${colorScheme})`, async ({
+    page,
+  }, testInfo) => {
+    await setUiTheme(page, colorScheme);
+    await mockPagedDbAdminObjectsApi(page);
+    await page.goto("/comment-management");
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+      .toBe(colorScheme === "dark");
+
+    const picker = page.getByTestId("comment-management-target");
+    const footer = page.getByTestId("comment-management-target-footer");
+    await expect(picker.getByRole("listbox")).toHaveAttribute("aria-multiselectable", "true");
+    await expect(footer).toContainText("100 / 151 件を表示、選択 0 件");
+
+    // キーボード: Tab で一覧に入り、↓ で移って Space で選ぶ。
+    const listbox = picker.getByRole("listbox");
+    await listbox.focus();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Space");
+    await expect(footer).toContainText("選択 1 件");
+    await expect(picker.getByRole("option", { name: "APP.PAGED_TABLE_002", exact: true })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
+
+    // 続きは「さらに読み込む」で足す（ページを移らないので、選んだ候補は残る）。
+    await footer.getByRole("button", { name: "さらに読み込む" }).click();
+    await expect(footer).toContainText("151 / 151 件を表示、選択 1 件");
+    await expect(footer.getByRole("button", { name: "さらに読み込む" })).toHaveCount(0);
+
+    // 検索で選んだ候補が見えなくなっても、「選択中だけ表示」で確かめられる。
+    await page.getByTestId("comment-management-target-toolbar").getByRole("searchbox", { name: "検索" }).fill("PAGED_VIEW");
+    await expect(picker.getByRole("option")).toHaveCount(2);
+    await picker.getByTestId("comment-management-target-show-selected").click();
+    await expect(picker.getByRole("option")).toHaveCount(1);
+    await expect(picker.getByRole("option", { name: "APP.PAGED_TABLE_002", exact: true })).toBeVisible();
+
+    const colors = await picker.evaluate((node) => {
+      const style = getComputedStyle(node);
+      return { background: style.backgroundColor, color: style.color };
+    });
+    expect(colors.background).not.toBe(colors.color);
+    await picker.screenshot({ path: testInfo.outputPath(`comment-target-picker-${colorScheme}.png`) });
+    await expectNoHorizontalScroll(page);
+  });
+
+  test(`合成データの対象の表は大量でも ListPicker で検索して選べる (${colorScheme})`, async ({ page }, testInfo) => {
+    await setUiTheme(page, colorScheme);
+    const syntheticTables = Array.from(
+      { length: 240 },
+      (_, index) => `APP.SYNTHETIC_TABLE_${String(index + 1).padStart(3, "0")}`
+    );
+    await mockDataManagementApi(page);
+    await page.unroute("**/api/nl2sql/select-ai/db-profiles**");
+    await page.route("**/api/nl2sql/select-ai/db-profiles**", (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname.endsWith("/NL2SQL_DEFAULT_PROFILE")) {
+        return fulfillJson(route, {
+          runtime: "deterministic",
+          profile: {
+            ...selectAiProfile,
+            object_list: syntheticTables,
+            attributes: { profile_attributes: { object_list: syntheticTables } },
+          },
+          warnings: [],
+        });
+      }
+      return fulfillJson(route, { runtime: "deterministic", profiles: [selectAiProfile], warnings: [] });
+    });
+
+    await page.goto("/data-management");
+    await page.getByRole("tab", { name: "合成データ生成" }).click();
+    const syntheticPanel = page.locator("#data-management-panel-synthetic");
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
+      .toBe(colorScheme === "dark");
+    await syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" }).click();
+
+    const picker = page.getByTestId("data-synthetic-table");
+    await expect(page.getByTestId("data-synthetic-table-footer")).toContainText("240 / 240 件を表示、選択 0 件");
+    // 100 行を超えると見えている行だけを描く（仮想スクロール）。
+    expect(await picker.getByRole("option").count()).toBeLessThan(60);
+    // 検索は ListPicker の左端の検索欄（入力に合わせて絞る。候補は全件を読んでいるので画面側で絞る）。
+    await picker.getByRole("searchbox").fill("TABLE_23");
+    await expect(picker.getByRole("option")).toHaveCount(10);
+    await picker.getByTestId("data-synthetic-table-bulk-actions").getByRole("button", { name: "表示中をすべて選択" }).click();
+    await expect(page.getByTestId("data-synthetic-table-footer")).toContainText("10 / 240 件を表示、選択 10 件");
+    await expect(syntheticPanel.getByText("選択 10 件", { exact: true })).toBeVisible();
+    await picker.screenshot({ path: testInfo.outputPath(`synthetic-table-picker-${colorScheme}.png`) });
+    await expectNoHorizontalScroll(page);
+  });
+}
 
 test("コメント管理の対象件数 badge は footer と同じ API 総数を表示する", async ({ page }) => {
   await mockPagedDbAdminObjectsApi(page);
@@ -2920,14 +3042,12 @@ for (const scenario of metadataScenarios) {
 
     await expect(page.getByTestId(`${scenario.idPrefix}-steps`)).toBeVisible();
 
-    const grid = page.getByTestId(`${scenario.idPrefix}-target-grid`);
-    await expect(grid.locator("tbody tr")).toHaveCount(30);
-    await expectSingleLine(grid.getByRole("columnheader", { name: /種類/ }).locator("span").first());
-    await expectSingleLine(grid.getByRole("columnheader", { name: /所有者/ }).locator("span").first());
+    const grid = page.getByTestId(`${scenario.idPrefix}-target`);
+    await expect(grid.getByRole("option")).toHaveCount(30);
     await expectSingleLine(grid.getByText("META_TABLE_01"));
     await expectSingleLine(page.getByRole("button", { name: "情報を取得", exact: true }).locator("span").first());
 
-    const scroll = await page.getByTestId("db-admin-object-list").evaluate((node) => ({
+    const scroll = await page.getByTestId(`${scenario.idPrefix}-target-scroll-region`).evaluate((node) => ({
       internalWidthStable: node.scrollWidth >= node.clientWidth,
       pageHorizontal:
         document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 ||

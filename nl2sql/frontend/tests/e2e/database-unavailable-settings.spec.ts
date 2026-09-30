@@ -40,7 +40,9 @@ async function clickPageHeaderAction(page: Page, testId: string, name: string) {
 
 async function mockAuthenticatedGate(page: Page, databaseUnavailable: () => boolean) {
   await page.route("**/api/auth/me", (route) => fulfill(route, systemAdminMe));
-  await page.route("**/api/security/profile-access/profiles**", (route) => fulfill(route, []));
+  await page.route("**/api/security/profile-access/profiles**", (route) =>
+    fulfill(route, { items: [], total: 0, limit: 50, offset: 0, has_next: false })
+  );
   await page.route("**/api/ready/database", (route) =>
     fulfill(route, {
       status: databaseUnavailable() ? "unreachable" : "ok",
@@ -177,7 +179,9 @@ const databaseDependentScenarios: Scenario[] = [
         return fulfill(route, []);
       });
       await page.route("**/api/security/permissions", (route) => fulfill(route, []));
-      await page.route("**/api/security/profile-access/profiles**", (route) => fulfill(route, []));
+      await page.route("**/api/security/profile-access/profiles**", (route) =>
+    fulfill(route, { items: [], total: 0, limit: 50, offset: 0, has_next: false })
+  );
     },
   },
   {

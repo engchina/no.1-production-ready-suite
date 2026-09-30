@@ -110,20 +110,73 @@ class ScopedFakeOracle:
     async def ensure_default_business_view(self) -> BusinessViewDetail:
         return self._view("bv-1")
 
-    async def list_business_views(self, **_: object) -> list[BusinessViewDetail]:
-        return [self._view(item) for item in self._visible_views()]
+    @staticmethod
+    def _matching(
+        ids: list[str],
+        *,
+        name: str,
+        query: object = None,
+        selected: object = None,
+    ) -> list[str]:
+        # Oracle の SQL と同じく、名前の部分一致（q）と ID の指定（ids）で絞る（#608）。
+        values = ids
+        if isinstance(selected, (list, tuple)):
+            values = [item for item in values if item in selected]
+        if isinstance(query, str) and query:
+            values = [item for item in values if query.lower() in f"{name} {item}".lower()]
+        return values
 
-    async def count_business_views(self, **_: object) -> int:
-        return len(self._visible_views())
+    @staticmethod
+    def _page(values: list[str], limit: object, offset: object) -> list[str]:
+        start = offset if isinstance(offset, int) else 0
+        return values[start : start + limit] if isinstance(limit, int) else values[start:]
+
+    async def list_business_views(self, **kwargs: object) -> list[BusinessViewDetail]:
+        values = self._matching(
+            self._visible_views(),
+            name="業務ビュー",
+            query=kwargs.get("query"),
+            selected=kwargs.get("business_view_ids"),
+        )
+        return [
+            self._view(item)
+            for item in self._page(values, kwargs.get("limit"), kwargs.get("offset"))
+        ]
+
+    async def count_business_views(self, **kwargs: object) -> int:
+        return len(
+            self._matching(
+                self._visible_views(),
+                name="業務ビュー",
+                query=kwargs.get("query"),
+                selected=kwargs.get("business_view_ids"),
+            )
+        )
 
     async def get_business_view(self, business_view_id: str) -> BusinessViewDetail | None:
         return self._view(business_view_id) if business_view_id in self._visible_views() else None
 
-    async def list_knowledge_bases(self, **_: object) -> list[KnowledgeBaseDetail]:
-        return [self._base(item) for item in self._visible_bases()]
+    async def list_knowledge_bases(self, **kwargs: object) -> list[KnowledgeBaseDetail]:
+        values = self._matching(
+            self._visible_bases(),
+            name="KB",
+            query=kwargs.get("query"),
+            selected=kwargs.get("knowledge_base_ids"),
+        )
+        return [
+            self._base(item)
+            for item in self._page(values, kwargs.get("limit"), kwargs.get("offset"))
+        ]
 
-    async def count_knowledge_bases(self, **_: object) -> int:
-        return len(self._visible_bases())
+    async def count_knowledge_bases(self, **kwargs: object) -> int:
+        return len(
+            self._matching(
+                self._visible_bases(),
+                name="KB",
+                query=kwargs.get("query"),
+                selected=kwargs.get("knowledge_base_ids"),
+            )
+        )
 
     async def get_knowledge_base(self, knowledge_base_id: str) -> KnowledgeBaseDetail | None:
         return self._base(knowledge_base_id) if knowledge_base_id in self._visible_bases() else None
@@ -565,6 +618,12 @@ def test_permission_catalog_requires_permission_management(auth: ProductionAuth)
     assert client.get("/api/security/permissions", headers=role_admin).status_code == 403
 
 
+def _access_target_ids(headers: dict[str, str], kind: str, query: str = "") -> list[str]:
+    response = client.get(f"/api/security/access-targets/{kind}{query}", headers=headers)
+    assert response.status_code == 200, response.text
+    return [item["id"] for item in response.json()["data"]["items"]]
+
+
 def test_access_targets_are_limited_to_actor_scope(
     auth: ProductionAuth, scoped_oracle: ScopedFakeOracle
 ) -> None:
@@ -577,27 +636,56 @@ def test_access_targets_are_limited_to_actor_scope(
     auth.user_with_permissions(
         "view-manager", ["menu.security_permissions", "rag.business_views.manage"]
     )
-    limited = client.get("/api/security/access-targets", headers=login(client, "limited"))
+    limited_headers = login(client, "limited")
+    limited = client.get("/api/security/access-targets/business-views", headers=limited_headers)
     assert limited.status_code == 200
     data = limited.json()["data"]
-    assert [item["id"] for item in data["business_views"]] == ["bv-1"]
-    assert [item["id"] for item in data["knowledge_bases"]] == ["kb-2", "kb-3"]
-    assert data["business_views"][0] == {
-        "id": "bv-1",
-        "name": "業務ビュー bv-1",
-        "status": "ACTIVE",
-        "description": None,
-    }
+    assert data["items"] == [
+        {"id": "bv-1", "name": "業務ビュー bv-1", "status": "ACTIVE", "description": None}
+    ]
+    assert data["total"] == 1
+    assert _access_target_ids(limited_headers, "knowledge-bases") == ["kb-2", "kb-3"]
 
-    manager = client.get("/api/security/access-targets", headers=login(client, "view-manager"))
-    data = manager.json()["data"]
-    assert [item["id"] for item in data["business_views"]] == ["bv-1", "bv-2", "bv-3"]
-    assert [item["id"] for item in data["knowledge_bases"]] == []
+    manager = login(client, "view-manager")
+    assert _access_target_ids(manager, "business-views") == ["bv-1", "bv-2", "bv-3"]
+    assert _access_target_ids(manager, "knowledge-bases") == []
 
-    admin = client.get("/api/security/access-targets", headers=login_configured_admin(client))
-    data = admin.json()["data"]
-    assert len(data["business_views"]) == 3
-    assert len(data["knowledge_bases"]) == 3
+    admin = login_configured_admin(client)
+    assert len(_access_target_ids(admin, "business-views")) == 3
+    assert len(_access_target_ids(admin, "knowledge-bases")) == 3
+
+
+def test_access_targets_search_and_page_on_server(
+    auth: ProductionAuth, scoped_oracle: ScopedFakeOracle
+) -> None:
+    """権限管理の候補は `q` / `limit` / `offset` / `ids` でサーバー側で絞る（#608）。"""
+    admin = login_configured_admin(client)
+    page = client.get(
+        "/api/security/access-targets/knowledge-bases?limit=2&offset=0", headers=admin
+    ).json()["data"]
+    assert [item["id"] for item in page["items"]] == ["kb-1", "kb-2"]
+    assert page["total"] == 3
+    assert page["has_next"] is True
+    rest = client.get(
+        "/api/security/access-targets/knowledge-bases?limit=2&offset=2", headers=admin
+    ).json()["data"]
+    assert [item["id"] for item in rest["items"]] == ["kb-3"]
+    assert rest["has_next"] is False
+    assert _access_target_ids(admin, "business-views", "?q=bv-2") == ["bv-2"]
+    assert _access_target_ids(admin, "business-views", "?ids=bv-3&ids=bv-1") == ["bv-1", "bv-3"]
+    # 範囲外の ID を指定しても、利用者の範囲の外の対象は返さない。
+    auth.user_with_permissions("limited", ["menu.security_permissions"], business_view_ids=["bv-1"])
+    limited = login(client, "limited")
+    assert _access_target_ids(limited, "business-views", "?ids=bv-1&ids=bv-2") == ["bv-1"]
+    too_many = "&".join(f"ids=bv-{index}" for index in range(101))
+    response = client.get(f"/api/security/access-targets/business-views?{too_many}", headers=admin)
+    assert response.status_code == 422
+    assert (
+        client.get(
+            "/api/security/access-targets/business-views?limit=101", headers=admin
+        ).status_code
+        == 422
+    )
 
 
 def _put_access(

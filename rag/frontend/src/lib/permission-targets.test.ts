@@ -1,24 +1,25 @@
-import { targetLoadRows } from "@engchina/production-ready-system-settings";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AccessTargetsData, SecurityRole } from "./api";
+import type { AccessTargetPage, SecurityRole } from "./api";
 import { CAPABILITY_PERMISSIONS } from "./permissions";
 import {
   BUSINESS_VIEW_ACCESS_KEY,
   KNOWLEDGE_BASE_ACCESS_KEY,
   PERMISSIONS_API,
-  accessTargetsLoader,
   ragPermissionTargets,
 } from "./permission-targets";
 import { canSubmitUpload, uploadKnowledgeBaseRequired } from "./upload-scope";
 import { ragIdentityKey } from "@/components/security/AuthProvider";
 
-const TARGETS: AccessTargetsData = {
-  business_views: [
+const VIEWS: AccessTargetPage = {
+  items: [
     { id: "bv-1", name: "人事 FAQ", status: "ACTIVE", description: "人事規程" },
     { id: "bv-2", name: "旧経理", status: "ARCHIVED", description: null },
   ],
-  knowledge_bases: [{ id: "kb-1", name: "規程集", status: "ACTIVE", description: null }],
+  total: 120,
+  limit: 50,
+  offset: 0,
+  has_next: true,
 };
 
 const ROLE: SecurityRole = {
@@ -39,28 +40,31 @@ afterEach(() => {
 });
 
 describe("権限管理の対象（業務ビュー・KB）", () => {
-  it("1 回の読み込みでは業務ビューと KB が同じ応答を共有し、signal が変われば取り直す", async () => {
-    const fetchTargets = vi.fn().mockResolvedValue(TARGETS);
-    const [views, bases] = ragPermissionTargets(accessTargetsLoader(fetchTargets));
-    const first = new AbortController().signal;
+  it("候補は対象ごとの API をサーバー側の検索とページングで読み、アーカイブ済みだけに状態を添える（Issue 608）", async () => {
+    const fetchTargets = vi.fn().mockResolvedValue(VIEWS);
+    const [views, bases] = ragPermissionTargets(fetchTargets);
+    const signal = new AbortController().signal;
+    const query = { q: "人事", limit: 50, offset: 0 };
 
-    const [viewItems, baseItems] = await Promise.all([
-      views.load({ signal: first }),
-      bases.load({ signal: first }),
-    ]);
-    expect(fetchTargets).toHaveBeenCalledTimes(1);
-    expect(viewItems).toEqual([
-      { id: "bv-1", name: "人事 FAQ", description: "人事規程", status: undefined },
-      { id: "bv-2", name: "旧経理", description: undefined, status: "アーカイブ済み" },
-    ]);
-    expect(targetLoadRows(baseItems).rows.map((item) => item.id)).toEqual(["kb-1"]);
-
-    await views.load({ signal: new AbortController().signal });
-    expect(fetchTargets).toHaveBeenCalledTimes(2);
+    const page = await views.query(query, { signal });
+    expect(fetchTargets).toHaveBeenCalledWith("business-views", query, signal);
+    expect(page).toEqual({
+      items: [
+        { id: "bv-1", name: "人事 FAQ", description: "人事規程", status: undefined },
+        { id: "bv-2", name: "旧経理", description: undefined, status: "アーカイブ済み" },
+      ],
+      total: 120,
+    });
+    await bases.query({ q: "", limit: 2, offset: 0, ids: ["kb-1", "kb-2"] }, { signal });
+    expect(fetchTargets).toHaveBeenLastCalledWith(
+      "knowledge-bases",
+      { q: "", limit: 2, offset: 0, ids: ["kb-1", "kb-2"] },
+      signal,
+    );
   });
 
   it("業務ビューは業務ビュー管理、KB はナレッジベース管理の権限で全件が対象", () => {
-    const [views, bases] = ragPermissionTargets(accessTargetsLoader(vi.fn()));
+    const [views, bases] = ragPermissionTargets(vi.fn());
     expect(views.key).toBe(BUSINESS_VIEW_ACCESS_KEY);
     expect(bases.key).toBe(KNOWLEDGE_BASE_ACCESS_KEY);
     const viewsManage = new Set([CAPABILITY_PERMISSIONS.businessViewsManage]);
