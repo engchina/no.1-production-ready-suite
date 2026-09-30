@@ -33,8 +33,8 @@ import {
   SearchField,
   TextField,
 } from "@engchina/production-ready-ui";
-import { Archive, ArrowLeft, FilePen, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Archive, ArrowLeft, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
+import { useMemo, useRef, useState, type FormEvent } from "react";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { ListPagination } from "@/components/ListPagination";
@@ -45,8 +45,13 @@ import {
 } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import {
   EditorBreadcrumbs,
-  MissingEditorTarget,
+  EditorDraftNotice,
+  EditorTargetState,
 } from "@/components/layout/EntityLayout";
+import {
+  readEditorDraft,
+  useEntityEditorDraft,
+} from "@/components/layout/use-entity-editor-draft";
 import { useAuth } from "@/components/security/AuthProvider";
 import { DocragUnusedNote } from "@/components/settings/DocragUnusedNote";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -73,7 +78,6 @@ import { docragUnusedNoteKey } from "@/lib/docrag-unused";
 import type { KnowledgeBaseSelectionHealth } from "@/lib/knowledge-base-refs";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { useCustomLeaveGuard } from "@/lib/leave-guard";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import {
   firstInvalidFieldId,
@@ -90,7 +94,7 @@ import {
 import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-import { readWorkspace, removeWorkspace, useWorkspaceState, writeWorkspace } from "@/lib/workspace-state";
+import { useWorkspaceState } from "@/lib/workspace-state";
 import { BusinessViewKnowledgePanel } from "./BusinessViewKnowledgePanel";
 
 const LIMIT = DEFAULT_PAGE_SIZE;
@@ -136,15 +140,6 @@ function isBusinessViewDraft(value: unknown): value is BusinessViewDraft {
     Array.isArray(draft.config.knowledge_base_ids) &&
     typeof draft.config.query === "object"
   );
-}
-
-function isDraftOrNull(value: unknown): value is BusinessViewDraft | null {
-  return value === null || isBusinessViewDraft(value);
-}
-
-/** 業務ビューごとの未保存の下書き（`?id=` の値で分ける。新規は `new`）。 */
-function readDraft(scope: string): BusinessViewDraft | null {
-  return readWorkspace<BusinessViewDraft | null>("businessViews.draft", null, isDraftOrNull, scope);
 }
 
 /** KB の並び順は意味を持たないため、集合として比べる。 */
@@ -397,7 +392,7 @@ function BusinessViewList({
     (item) => item.status !== "ARCHIVED" && knowledgeBaseIssueCount(item) > 0
   );
   // 新規作成の下書きはエディタを閉じても同じタブに残る。一覧から再開できるようにする。
-  const [newDraft] = useState(() => readDraft("new"));
+  const [newDraft] = useState(() => readEditorDraft("businessViews.draft", "new", isBusinessViewDraft));
 
   return (
     <div>
@@ -436,12 +431,7 @@ function BusinessViewList({
         ) : null}
 
         {newDraft && onCreate ? (
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-sunken p-3">
-            <FormStatus tone="info" message={t("businessViews.draftPending")} />
-            <Button size="sm" variant="secondary" icon={FilePen} onClick={onCreate}>
-              {t("businessViews.actions.openDraft")}
-            </Button>
-          </div>
+          <EditorDraftNotice message={t("businessViews.draftPending")} onOpen={onCreate} />
         ) : null}
 
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -514,6 +504,14 @@ function BusinessViewList({
                   onCreate
                     ? t("businessViews.empty.description")
                     : t("businessViews.empty.restrictedDescription")
+                }
+                // 空の一覧から次の行動へ進めるよう、作成の入口を空の状態にも置く（ヘッダーの「新規作成」と同じ。#555）。
+                action={
+                  onCreate ? (
+                    <Button variant="secondary" icon={Plus} onClick={onCreate}>
+                      {t("businessViews.actions.createFirst")}
+                    </Button>
+                  ) : undefined
                 }
               />
             )}
@@ -671,58 +669,19 @@ function BusinessViewEditRoute({
     );
   }
 
-  const notFound = detail.error instanceof ApiError && detail.error.status === 404;
   return (
-    <div>
-      <PageHeader
-        wide
-        title={t("nav.businessViews")}
-        breadcrumbs={
-          <EditorBreadcrumbs
-            listLabel={t("nav.businessViews")}
-            listHref={APP_ROUTES.businessViews}
-            current={id}
-          />
-        }
-        // 見つからないときは本文の「一覧へ戻る」だけにし、同じボタンを重ねない。
-        actions={
-          notFound
-            ? undefined
-            : [
-                {
-                  id: "back",
-                  kind: "secondary",
-                  label: t("common.backToList"),
-                  icon: ArrowLeft,
-                  onClick: onBack,
-                },
-              ]
-        }
-      />
-      <PageBody wide>
-        {detail.isPending ? (
-          <TimedLoadingState
-            label={t("businessViews.detail.loading")}
-            operationKey={`business-view-detail-${id}`}
-            placement="page"
-            testId="business-view-detail-loading"
-          >
-            <FormSkeleton fields={6} />
-          </TimedLoadingState>
-        ) : notFound ? (
-          <Card>
-            <MissingEditorTarget id={id} onBack={onBack} />
-          </Card>
-        ) : (
-          <ErrorState
-            message={
-              detail.error instanceof ApiError ? detail.error.message : t("businessViews.error.title")
-            }
-            onRetry={() => void detail.refetch()}
-          />
-        )}
-      </PageBody>
-    </div>
+    <EditorTargetState
+      id={id}
+      listLabel={t("nav.businessViews")}
+      listHref={APP_ROUTES.businessViews}
+      error={detail.error}
+      loadingLabel={t("businessViews.detail.loading")}
+      loadingTestId="business-view-detail-loading"
+      errorFallback={t("businessViews.error.title")}
+      skeleton={<FormSkeleton fields={6} />}
+      onBack={onBack}
+      onRetry={() => void detail.refetch()}
+    />
   );
 }
 
@@ -741,51 +700,41 @@ function BusinessViewEditor({
   const mode: "create" | "edit" = initial ? "edit" : "create";
   const create = useCreateBusinessView();
   const update = useUpdateBusinessView();
-  const confirm = useConfirm();
   const actionsFor = useBusinessViewActions(onArchived);
   const formRef = useRef<HTMLFormElement>(null);
-  // 未保存の下書きは同じタブの sessionStorage に `?id=` の値ごとに残し、再読込・ページ往復で再開できるようにする。
-  const draftScope = initial?.id ?? "new";
-  const [baseline, setBaseline] = useState<BusinessViewDraft>(() => ({
-    name: initial?.name ?? "",
-    description: initial?.description ?? "",
-    config: initial?.config ? normalizeBusinessViewConfig(initial.config) : emptyConfig(),
-  }));
-  const [restored] = useState(() => readDraft(draftScope));
-  const [name, setName] = useState(restored?.name ?? baseline.name);
-  const [description, setDescription] = useState(restored?.description ?? baseline.description);
-  const [config, setConfig] = useState<BusinessViewConfig>(restored?.config ?? baseline.config);
+  // 未保存の下書き（`?id=` の値ごと）と離脱の確認は、ナレッジベースのエディタと共有の部品で持つ（#555）。
+  const editor = useEntityEditorDraft<BusinessViewDraft>({
+    field: "businessViews.draft",
+    scope: initial?.id ?? "new",
+    initial: {
+      name: initial?.name ?? "",
+      description: initial?.description ?? "",
+      config: initial?.config ? normalizeBusinessViewConfig(initial.config) : emptyConfig(),
+    },
+    isDraft: isBusinessViewDraft,
+    signature: draftSignature,
+    leaveDescription: t("businessViews.leaveGuard.description"),
+  });
+  const { draft, setDraft, dirty } = editor;
+  const { name, description, config } = draft;
+  const setName = (value: string) => setDraft((current) => ({ ...current, name: value }));
+  const setDescription = (value: string) =>
+    setDraft((current) => ({ ...current, description: value }));
+  const setConfig = (next: BusinessViewConfig | ((current: BusinessViewConfig) => BusinessViewConfig)) =>
+    setDraft((current) => ({
+      ...current,
+      config: typeof next === "function" ? next(current.config) : next,
+    }));
   const [touched, setTouched] = useState(false);
   // 説明はフォーカスが外れたとき・送信したときから検証結果を出す（messaging.md §3.2。#521）。
   const [descriptionTouched, setDescriptionTouched] = useState(false);
-  const draft = useMemo(() => ({ name, description, config }), [name, description, config]);
-  const dirty = draftSignature(draft) !== draftSignature(baseline);
-
-  useEffect(() => {
-    if (dirty) writeWorkspace("businessViews.draft", draft, draftScope);
-    else removeWorkspace("businessViews.draft", draftScope);
-  }, [dirty, draft, draftScope]);
-
-  // 下書きはこのタブに残るため、確認では「破棄」ではなく未保存であることを伝える。
-  const confirmLeave = () =>
-    confirm({
-      title: t("businessViews.leaveGuard.title"),
-      description: t("businessViews.leaveGuard.description"),
-      confirmLabel: t("businessViews.leaveGuard.confirm"),
-      tone: "warning",
-      dismissOnOverlay: false,
-    });
-  useCustomLeaveGuard(dirty, confirmLeave);
 
   const back = async () => {
-    if (dirty && !(await confirmLeave())) return;
-    onBack();
+    if (await editor.confirmLeave()) onBack();
   };
 
   const discard = () => {
-    setName(baseline.name);
-    setDescription(baseline.description);
-    setConfig(baseline.config);
+    editor.discard();
     setTouched(false);
     setDescriptionTouched(false);
   };
@@ -800,6 +749,8 @@ function BusinessViewEditor({
   });
 
   const pending = create.isPending || update.isPending;
+  // アーカイブ済みは保存できないので、入力できないようにする（入力しても保存できない欄を出さない。#555）。
+  const locked = pending || isArchived;
   const nameError = touched && !isDefault ? validateBusinessViewName(name) : null;
   // 説明は必須（#521）。説明が空の既存の業務ビュー（DEFAULT を含む）は、保存するときに入力を求める。
   const descriptionError = descriptionTouched ? validateBusinessViewDescription(description) : null;
@@ -842,8 +793,7 @@ function BusinessViewEditor({
         {
           onSuccess: (detail) => {
             // 保存した値を基準にして dirty を判定し直す（下書きも消える）。
-            setBaseline(draft);
-            removeWorkspace("businessViews.draft", draftScope);
+            editor.markSaved(draft);
             toast.success(t("businessViews.toast.updated"));
             onSaved(detail.id);
           },
@@ -859,8 +809,7 @@ function BusinessViewEditor({
       { name: name.trim(), description: description.trim(), config },
       {
         onSuccess: (detail) => {
-          setBaseline(draft);
-          removeWorkspace("businessViews.draft", draftScope);
+          editor.markSaved(draft);
           toast.success(t("businessViews.toast.created"));
           // 作成した対象のエディタへ履歴を積まずに移る（戻るで空の新規フォームへ戻さない）。
           onSaved(detail.id);
@@ -878,7 +827,27 @@ function BusinessViewEditor({
       <PageHeader
         wide
         title={title}
+        status={
+          initial ? (
+            <StatusBadge
+              variant={initial.status === "ARCHIVED" ? "neutral" : "success"}
+              label={t(`businessViews.status.${initial.status}` as const)}
+            />
+          ) : undefined
+        }
         subtitle={initial ? initial.description || t("businessViews.subtitle") : t("businessViews.subtitle")}
+        meta={
+          initial ? (
+            <span className="tnum flex flex-wrap gap-x-3 gap-y-1" data-testid="business-view-meta">
+              <span>
+                {t("businessViews.meta.knowledgeBases", {
+                  count: formatNumber(initial.knowledge_base_count),
+                })}
+              </span>
+              <span>{t("editor.meta.updated", { date: formatDateTime(initial.updated_at) })}</span>
+            </span>
+          ) : undefined
+        }
         breadcrumbs={
           <EditorBreadcrumbs
             listLabel={t("nav.businessViews")}
@@ -932,36 +901,39 @@ function BusinessViewEditor({
           </CardHeader>
           <CardContent>
             <form ref={formRef} onSubmit={handleSubmit} className="space-y-5">
-              {restored && dirty ? (
-                <FormStatus tone="info" message={t("businessViews.draftRestored")} />
+              {editor.restored ? (
+                <FormStatus tone="info" message={t("editor.draftRestored")} />
               ) : null}
               <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
                 <TextField
                   id="business-view-name"
                   label={t("businessViews.field.name")}
-                  required={!isDefault}
+                  required={!isDefault && !isArchived}
                   value={name}
                   onValueChange={setName}
                   onBlur={() => setTouched(true)}
-                  readOnly={isDefault}
-                  aria-readonly={isDefault || undefined}
-                  placeholder={t("businessViews.field.namePlaceholder")}
+                  readOnly={isDefault || isArchived}
+                  aria-readonly={isDefault || isArchived || undefined}
+                  placeholder={isArchived ? undefined : t("businessViews.field.namePlaceholder")}
                   helper={isDefault ? t("businessViews.default.nameFixed") : undefined}
                   error={nameError || undefined}
                   maxLength={NAME_MAX_LENGTH}
-                  inputClassName={isDefault ? "cursor-default text-fg-muted" : undefined}
+                  inputClassName={isDefault || isArchived ? "cursor-default text-fg-muted" : undefined}
                 />
                 <TextField
                   id="business-view-description"
                   label={t("businessViews.field.description")}
-                  required
+                  required={!isArchived}
                   value={description}
                   onValueChange={setDescription}
                   onBlur={() => setDescriptionTouched(true)}
-                  placeholder={t("businessViews.field.descriptionPlaceholder")}
+                  readOnly={isArchived}
+                  aria-readonly={isArchived || undefined}
+                  placeholder={isArchived ? undefined : t("businessViews.field.descriptionPlaceholder")}
                   helper={t("businessViews.field.descriptionHelper")}
                   error={descriptionError || undefined}
                   maxLength={DESCRIPTION_MAX_LENGTH}
+                  inputClassName={isArchived ? "cursor-default text-fg-muted" : undefined}
                 />
               </div>
 
@@ -971,7 +943,7 @@ function BusinessViewEditor({
                   knownMissingIds={initial?.missing_knowledge_base_ids}
                   selectedIds={config.knowledge_base_ids}
                   onChange={(ids) => setConfig((current) => ({ ...current, knowledge_base_ids: ids }))}
-                  disabled={pending || isDefault}
+                  disabled={locked || isDefault}
                   label={t("businessViews.field.knowledgeBases")}
                   helper={
                     isDefault
@@ -998,7 +970,7 @@ function BusinessViewEditor({
                     value={config.query.retrieval_strategy as RetrievalModeName | null}
                     options={RETRIEVAL_OPTIONS}
                     defaultOnOverride="vector"
-                    disabled={pending}
+                    disabled={locked}
                     onChange={(value) => updateQuery({ retrieval_strategy: value })}
                   />
                   <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
@@ -1012,31 +984,31 @@ function BusinessViewEditor({
                       <QueryToggleRow
                         label={t("settings.retrieval.queryExpansion")}
                         value={config.query.retrieval_query_expansion}
-                        disabled={pending}
+                        disabled={locked}
                         onChange={(value) => updateQuery({ retrieval_query_expansion: value })}
                       />
                       <QueryToggleRow
                         label={t("settings.retrieval.toggle.queryExpansionLlm")}
                         value={config.query.retrieval_query_expansion_llm}
-                        disabled={pending}
+                        disabled={locked}
                         onChange={(value) => updateQuery({ retrieval_query_expansion_llm: value })}
                       />
                       <QueryToggleRow
                         label={t("settings.retrieval.gapStop")}
                         value={config.query.retrieval_gap_stop}
-                        disabled={pending}
+                        disabled={locked}
                         onChange={(value) => updateQuery({ retrieval_gap_stop: value })}
                       />
                       <QueryToggleRow
                         label={t("settings.retrieval.businessFit")}
                         value={config.query.retrieval_business_fit_weighting}
-                        disabled={pending}
+                        disabled={locked}
                         onChange={(value) => updateQuery({ retrieval_business_fit_weighting: value })}
                       />
                       <QueryToggleRow
                         label={t("settings.retrieval.corrective")}
                         value={config.query.retrieval_corrective}
-                        disabled={pending}
+                        disabled={locked}
                         onChange={(value) => updateQuery({ retrieval_corrective: value })}
                       />
                     </div>
@@ -1047,7 +1019,7 @@ function BusinessViewEditor({
                     value={config.query.text_search_tokenizer ?? null}
                     options={TOKENIZER_OPTIONS}
                     defaultOnOverride="sudachi"
-                    disabled={pending}
+                    disabled={locked}
                     onChange={(value) => updateQuery({ text_search_tokenizer: value })}
                   />
                   <QuerySelectRow
@@ -1057,7 +1029,7 @@ function BusinessViewEditor({
                     value={config.query.post_retrieval_pipeline}
                     options={GROUNDING_OPTIONS}
                     defaultOnOverride="verified_context"
-                    disabled={pending}
+                    disabled={locked}
                     onChange={(value) => updateQuery({ post_retrieval_pipeline: value })}
                   />
                   <QuerySelectRow
@@ -1066,7 +1038,7 @@ function BusinessViewEditor({
                     value={config.query.answer_engine ?? null}
                     options={ANSWER_ENGINE_OPTIONS}
                     defaultOnOverride="docrag"
-                    disabled={pending}
+                    disabled={locked}
                     onChange={(value) => updateQuery({ answer_engine: value })}
                   />
                   {config.query.answer_engine !== "standard" ? (
@@ -1078,7 +1050,7 @@ function BusinessViewEditor({
                         value={config.query.docrag_query_strategy ?? null}
                         options={DOCRAG_QUERY_STRATEGY_OPTIONS}
                         defaultOnOverride="simple_retrieval"
-                        disabled={pending}
+                        disabled={locked}
                         onChange={(value) => updateQuery({ docrag_query_strategy: value })}
                       />
                       <QuerySelectRow
@@ -1087,7 +1059,7 @@ function BusinessViewEditor({
                         value={config.query.docrag_answer_flow ?? null}
                         options={DOCRAG_ANSWER_FLOW_OPTIONS}
                         defaultOnOverride="standard_rag"
-                        disabled={pending}
+                        disabled={locked}
                         onChange={(value) => updateQuery({ docrag_answer_flow: value })}
                       />
                       <QuerySelectRow
@@ -1100,7 +1072,7 @@ function BusinessViewEditor({
                         }
                         options={DOCRAG_NEIGHBOR_OPTIONS}
                         defaultOnOverride="3"
-                        disabled={pending}
+                        disabled={locked}
                         onChange={(value) =>
                           updateQuery({
                             docrag_neighbor_child_count: value === null ? null : Number(value),
@@ -1115,7 +1087,7 @@ function BusinessViewEditor({
                           <QueryToggleRow
                             label={t("businessViews.field.docragRerank")}
                             value={config.query.docrag_rerank_enabled ?? null}
-                            disabled={pending}
+                            disabled={locked}
                             onChange={(value) => updateQuery({ docrag_rerank_enabled: value })}
                           />
                           <QueryToggleRow
@@ -1123,7 +1095,7 @@ function BusinessViewEditor({
                             description={t("businessViews.field.docragScreenLinkingHelper")}
                             descriptionId="business-view-docrag-screen-linking-helper"
                             value={config.query.docrag_screen_linking_enabled ?? null}
-                            disabled={pending}
+                            disabled={locked}
                             onChange={(value) =>
                               updateQuery({ docrag_screen_linking_enabled: value })
                             }
@@ -1139,7 +1111,7 @@ function BusinessViewEditor({
                     value={config.query.generation_profile}
                     options={GENERATION_OPTIONS}
                     defaultOnOverride="detailed_cited"
-                    disabled={pending}
+                    disabled={locked}
                     onChange={(value) => updateQuery({ generation_profile: value })}
                   />
                   <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
@@ -1173,7 +1145,7 @@ function BusinessViewEditor({
                             docragUnusedNote ? "business-view-prompt-docrag-note" : undefined
                           }
                           rows={3}
-                          disabled={pending}
+                          disabled={locked}
                           className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
                         />
                         <p className="mt-1 text-xs text-fg-muted">
@@ -1195,7 +1167,7 @@ function BusinessViewEditor({
                           aria-describedby={
                             docragUnusedNote ? "business-view-prompt-docrag-note" : undefined
                           }
-                          disabled={pending}
+                          disabled={locked}
                         />
                       </div>
                     </div>
@@ -1206,7 +1178,7 @@ function BusinessViewEditor({
                     value={config.query.guardrail_policy}
                     options={GUARDRAIL_OPTIONS}
                     defaultOnOverride="strict"
-                    disabled={pending}
+                    disabled={locked}
                     onChange={(value) => updateQuery({ guardrail_policy: value })}
                   />
                 </div>
@@ -1221,7 +1193,7 @@ function BusinessViewEditor({
                   onClick={discard}
                   disabled={!dirty || pending}
                 >
-                  {t("businessViews.actions.discard")}
+                  {t("editor.actions.discard")}
                 </Button>
                 <FormStatus
                   tone="danger"
@@ -1403,7 +1375,8 @@ function QueryToggleRow({
 }) {
   const describedBy = description ? descriptionId : undefined;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
+    // 広い画面でも選択肢を名前のすぐ右に並べる（右端へ離さない。1920px で名前と選択肢の対応が追えるように。#555）。
+    <div className="grid items-center gap-2 sm:grid-cols-[minmax(10rem,16rem)_auto] sm:justify-start">
       <span className="text-sm text-fg">{label}</span>
       <div
         className="flex flex-wrap gap-1"
@@ -1422,7 +1395,7 @@ function QueryToggleRow({
         </ToggleChip>
       </div>
       {description ? (
-        <p id={describedBy} className="basis-full text-xs text-fg-muted">
+        <p id={describedBy} className="text-xs text-fg-muted sm:col-span-2">
           {description}
         </p>
       ) : null}

@@ -9,6 +9,7 @@ import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
 import { useAuth } from "./AuthProvider";
 import { securityApi } from "./api";
 import { MENU_PERMISSIONS } from "./menu-permissions";
+import { arrangeNl2SqlPermissions } from "./permission-nav";
 import type { SecurityRole } from "./types";
 
 /** 業務プロファイル管理権限を持つロールは、すべての業務プロファイルを利用できる（個別の ID は保存しない）。 */
@@ -28,7 +29,8 @@ function normalizedRole(role: SecurityRole): SecurityRole {
 const PERMISSIONS_API: RolePermissionsApi<SecurityRole> = {
   roles: (includeArchived, options) =>
     securityApi.roles(includeArchived, options).then((rows) => rows.map(normalizedRole)),
-  permissions: (options) => securityApi.permissions(options),
+  // 機能の一覧は左のナビのグループ・並び順・名前にそろえる（#567）。
+  permissions: (options) => securityApi.permissions(options).then(arrangeNl2SqlPermissions),
   // 機能権限と業務プロファイル利用権限を NL2SQL の保存 API（PUT /permissions）へ送る。
   save: (role, draft) =>
     securityApi

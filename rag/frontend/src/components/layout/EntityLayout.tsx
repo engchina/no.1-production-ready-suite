@@ -1,15 +1,21 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, FilePen } from "lucide-react";
 
 import {
+  Banner,
   Breadcrumbs,
   Button,
+  Card,
   FixedSplitPane,
+  PageBody,
+  PageHeader,
+  TimedLoadingState,
   type FixedSplitWidePane,
 } from "@engchina/production-ready-ui";
 
-import { EmptyState } from "@/components/StateViews";
+import { EmptyState, ErrorState } from "@/components/StateViews";
+import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
 /** RAG の分割ペインの比率を保存する localStorage key の前置き（製品ごとに分ける）。 */
@@ -49,6 +55,105 @@ export function MissingEditorTarget({ id, onBack }: { id: string; onBack: () => 
         </Button>
       }
     />
+  );
+}
+
+/**
+ * A 型のエディタの対象（`?id=<id>` やパスの `:id`）を読み込んでいる間・見つからない・取得に失敗したときの画面。
+ * 業務ビューとナレッジベースで共有する（#555）。エディタと同じ PageHeader（パンくず・一覧へ戻る）を先に出し、
+ * 本文だけを読み込み中（`skeleton`）・「対象が見つかりません」・再試行に切り替える。見つからないときは
+ * 別の対象へ置き換えない。
+ */
+export function EditorTargetState({
+  id,
+  listLabel,
+  listHref,
+  error,
+  loadingLabel,
+  loadingTestId,
+  errorFallback,
+  skeleton,
+  onBack,
+  onRetry,
+}: {
+  id: string;
+  listLabel: string;
+  listHref: string;
+  /** 取得の失敗（読み込み中は null）。 */
+  error: unknown;
+  loadingLabel: string;
+  loadingTestId: string;
+  /** ApiError 以外の失敗のときの文言。 */
+  errorFallback: string;
+  /** 読み込み中に本文を覆う、内容の形をした Skeleton。 */
+  skeleton: ReactNode;
+  onBack: () => void;
+  onRetry: () => void;
+}) {
+  const notFound = error instanceof ApiError && error.status === 404;
+  return (
+    <div>
+      <PageHeader
+        wide
+        title={listLabel}
+        breadcrumbs={<EditorBreadcrumbs listLabel={listLabel} listHref={listHref} current={id} />}
+        // 見つからないときは本文の「一覧へ戻る」だけにし、同じボタンを重ねない。
+        actions={
+          notFound
+            ? undefined
+            : [
+                {
+                  id: "back",
+                  kind: "secondary",
+                  label: t("common.backToList"),
+                  icon: ArrowLeft,
+                  onClick: onBack,
+                },
+              ]
+        }
+        moreActionsLabel={t("common.objectActions.more")}
+      />
+      <PageBody wide>
+        {!error ? (
+          <TimedLoadingState
+            label={loadingLabel}
+            operationKey={`${loadingTestId}-${id}`}
+            placement="page"
+            testId={loadingTestId}
+          >
+            {skeleton}
+          </TimedLoadingState>
+        ) : notFound ? (
+          <Card>
+            <MissingEditorTarget id={id} onBack={onBack} />
+          </Card>
+        ) : (
+          <ErrorState
+            message={error instanceof ApiError ? error.message : errorFallback}
+            onRetry={onRetry}
+          />
+        )}
+      </PageBody>
+    </div>
+  );
+}
+
+/**
+ * 一覧の上に出す「作成中の下書きがあります」（業務ビューとナレッジベースで共有。#555）。
+ * 新規作成の下書きはエディタを閉じても同じタブに残るため、一覧から再開できるようにする。
+ */
+export function EditorDraftNotice({ message, onOpen }: { message: string; onOpen: () => void }) {
+  return (
+    <Banner
+      severity="info"
+      action={
+        <Button size="sm" variant="secondary" icon={FilePen} onClick={onOpen}>
+          {t("editor.actions.openDraft")}
+        </Button>
+      }
+    >
+      {message}
+    </Banner>
   );
 }
 
