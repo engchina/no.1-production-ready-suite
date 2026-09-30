@@ -235,9 +235,10 @@ async function mockReviewWorkspace(page: Page) {
         data: {
           document_id: DOC_ID,
           file_name: "policy.txt",
-          format: "markdown",
-          content_type: "text/markdown; charset=utf-8",
-          content: "# 経費申請\n\n交通費は1000円です。",
+          // 文書の詳細は抽出結果を JSON で 1 回だけ取得する（Markdown / HTML はコピー・ダウンロードのときだけ。#561）。
+          format: "json",
+          content_type: "application/json; charset=utf-8",
+          content: JSON.stringify(extraction, null, 2),
           payload: extraction,
           chunks: [],
           parser_backend: "local_partition",

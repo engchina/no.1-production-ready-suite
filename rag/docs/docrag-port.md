@@ -28,7 +28,7 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | 図・画像を AI で読み取る（Vision） | 文書レシピ | 文書のレシピ編集（解析エンジンに関係なく選べる）。全体の既定は `backend/.env` の `RAG_VISION_ENABLED`。文書解析の画面の「解析後の処理」から保存できる（#497 / #528） |
 | DocRAG 親子階層 | 文書レシピ | 検索・回答設定 > 文書分割「DocRAG 親子階層」（分割パラメータ 5 項目もここで設定）、または文書のレシピ編集 |
 | ドメインキーワード / Approved FAQ / 用語・ルール | 業務ビュー | 業務ビューを編集 >「業務ビューの知識」 |
-| 回答エンジン / 全文検索の分割方式 / DocRAG の回答設定（質問拡張戦略・回答生成フロー・近傍 child 数・Rerank） | 業務ビュー | 業務ビューを編集 > 検索・回答設定 |
+| 回答エンジン / 全文検索の分割方式 / DocRAG の回答設定（質問拡張戦略・回答生成フロー・近傍 child 数・Rerank・画面目録で操作画面を探す） | 業務ビュー | 業務ビューを編集 > 検索・回答設定 |
 
 | 文書の分類（大分類・中分類・小分類）と有効期間 | 文書のメタデータ | 文書詳細の「文書の分類と有効期間」（`PUT /api/documents/{id}/classification`） |
 | 質問履歴（記録するか・保存期間・最小回数・件数・除外する語） | global | 検索・回答設定 > 回答スタイル「質問履歴」（既定は無効） |
@@ -43,6 +43,8 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 
 分類フィルタと有効期間は rag_poc の `_classification_filter_sql` と同じ意味で絞り込む。分類は指定した項目だけを比べる。保存・検索の入力の両方で表記をそろえ（NFKC・前後の空白・連続する空白。`app/schemas/classification.py` の `normalize_category_value`）、比較は先頭の番号の接頭辞（`10_` など）を除いた名前で行う（docrag_core の `_category_label` と同じ。保存値の接頭辞は残す。#547）。文書詳細の分類の入力は、保存済みの分類の値（`GET /api/documents/classification-options`）を候補に出す。既存の文書の分類の表記は `uv run python -m app.rag.classification_normalization --dry-run` で件数を確かめ、Oracle のバックアップ後に `--apply` でそろえる。アップロードはファイル名だけを送り、フォルダの相対パスを持たないため、rag_poc のパスからの分類の推定は移していない。有効期間は基準日（未指定なら今日）で常に絞り、期間のない文書は除外しない。終了日は排他的（`effective_to` の当日は期間外）。分類と有効期間は文書単位で、レシピを切り替えても変わらない。
 
+DocRAG 回答の業務の絞り込み（#545 / #546 / #553）: 業務の範囲の正本は業務ビュー・ナレッジベース（検索範囲）で、その中で質問が大分類の名前を含むときだけ、さらにその業務の候補に絞る。大分類の語の一覧は、検索範囲（`filters` と同じ条件）の文書に保存済みの大分類の DISTINCT（`OracleClient.retrieval_large_categories`）で、1 回の回答で 1 回だけ読む。質問との比較は #547 の正規化（NFKC・空白・番号の接頭辞を外す `category_label`）と大文字・小文字の違いを無視して行い、長い名前から照合する（「業務A」の中の「業務」は拾わない）。一致した大分類は docrag の `AnswerDependencies.business_domains` で質問の理解（`inquiry_conditions.business_domains`）へ渡し、docrag の `_same_business_records`（一致する候補が無ければ絞らない）と business_match のチャネルが使う。名指しが無い、範囲外の大分類、一致する候補が無いときは絞らない。質問の業務名に domain profile の `business_patterns` は使わない（下の `DOCRAG_DOMAIN_PROFILE_FILE`）。
+
 ## 使い方（推奨の流れ）
 
 1. **解析**：文書解析を Docling にする。図や画面キャプチャが多い文書では、文書のレシピで Vision（図・画像を AI で読み取る）を有効にする（Docling 以外の解析エンジンでも使える）。有効にすると、画像 1 枚ごとに Vision モデルの呼び出しと時間がかかる。
@@ -53,7 +55,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
    - Vision の読み取り内容（画面名・ボタン・表の行・操作手順など）と切り出し画像
 4. **業務ビュー**：
    - 回答エンジンを「DocRAG（根拠照合・監査付き）」にする。
-   - 必要なら DocRAG の質問拡張戦略・回答生成フロー・近傍 child 数・Rerank を上書きする（既定は自動ルーティング / CRAG / 3 / ON）。
+   - 必要なら DocRAG の質問拡張戦略・回答生成フロー・近傍 child 数・Rerank・画面目録で操作画面を探すを上書きする（既定は自動ルーティング / CRAG / 3 / ON / OFF）。
    - 必要なら全文検索の分割方式を Sudachi にする。
    - 業務ビューの知識に、ドメインキーワード・Approved FAQ・用語・ルールを登録する。
 5. **検索**：
@@ -84,12 +86,13 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_DOCRAG_ANSWER_FLOW` | `crag` | DocRAG 回答の回答生成フロー。`standard_rag` は補正検索をしない。業務ビューで上書きできる |
 | `RAG_DOCRAG_NEIGHBOR_CHILD_COUNT` | `3` | DocRAG 回答で根拠の child の前後から context へ足す近傍 child 数（0〜20）。業務ビューで上書きできる |
 | `RAG_DOCRAG_RERANK_ENABLED` | `true` | DocRAG 回答で検索候補を rerank で並べ替える。業務ビューで上書きできる |
+| `RAG_DOCRAG_SCREEN_LINKING_ENABLED` | `false` | 画面目録で操作画面を探す（rag_poc の画面目録の連携、#554）。検索範囲の文書の番号付きの見出し（「（２）帳票印字設定」など）の目録から、質問を解決する画面を LLM で選び、その画面の child chunk（画面ごとに最大 10 件）と親を検索候補に加える。候補は足すだけで減らさず、順位は rerank が決める。回答ごとに LLM の呼び出しが 1 回増える。目録は検索範囲（`filters` と同じ条件）の全文書の `section_path` を DB で集計して作り（`OracleClient.retrieval_screen_sections`）、検索範囲と索引の状態（chunk の件数と chunk_id・文書名の hash。文書の追加・削除・再索引で変わる）ごとに process 内で cache する。選んだ画面の chunk も DB から読む（`retrieval_screen_chunks`）ので、検索で出なかった画面も候補に加わる。docrag の `AnswerDependencies.screen_catalog` / `screen_chunks` で注入する。業務ビューで上書きできる（業務ビューを編集 > 検索・回答設定 >「DocRAG のオプション」） |
 | `RAG_APPROVED_FAQ_SEMANTIC_ENABLED` | `true` | 類似問の照合に embedding の意味類似度を加える |
 | `RAG_DOCRAG_ANSWER_VISION_ENABLED` | `false` | DocRAG 回答で根拠の図を切り出して回答モデルへ添付する。回答モデルが画像入力に対応する場合だけ有効にする |
 | `RAG_DOCRAG_HISTORY_REWRITE_ENABLED` | `true` | チャットで DocRAG エンジンを使うとき、会話履歴から質問を書き換える |
 | `RAG_ANSWER_RECORD_RETENTION_DAYS` | `90` | DocRAG 回答記録の保存日数（`0` は無期限）。検索・回答設定 > 回答スタイルの「DocRAG 回答の保存期間」で変更できる |
-| `RAG_DOCRAG_PROFILE` | `legacy` | DocRAG の業務 profile。回答フローは docrag の `current_profile()`（runtime を渡さないときの既定 = `legacy`）で動くため、rag_poc と同じく日本語問い合わせ規則が有効で、業務分類・別名は下の `DOCRAG_DOMAIN_PROFILE_FILE` の JSON から読む。既定はこの実際の挙動に合わせて `legacy`（#300。以前の既定 `generic` は回答フローに届いていなかった）。`generic` は既存の `.env` との互換のため受け付けるが、回答フローには反映されない |
-| `DOCRAG_DOMAIN_PROFILE_FILE`（backend の process の環境変数） | 未指定 | `legacy` profile の業務データの JSON の場所（書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。docrag の `docrag.profiles` が process の環境変数（`os.environ`）を直接読み、未指定なら作業ディレクトリ（backend は `rag/backend/`）の `domain_profile.json` を読む。どちらのファイルもなければ分類・別名・判定語なしで動く。`backend/.env` / 共通 `.env` に書いても process の環境変数にはならないため効かない。指定するときは systemd の unit の `Environment=` か、起動する shell の `export` で渡す。読んだ内容は process 内で cache するため、変えたら backend を再起動する。docrag の設定（`build_docrag_settings`）には読み先を渡していない（#569）。JSON の項目の用途: `categories`（文書の大分類・中分類の候補と並び順）、`aliases`（質問の語の別名の展開）、`business_patterns`（質問の業務名の抽出。#553 で業務名の出どころから外す）、`file_data_terms` / `external_context_terms` / `requester_terms` / `operation_section_pattern`（問い合わせ条件・操作手順の判定語） |
+| `RAG_DOCRAG_PROFILE` | `legacy` | DocRAG の業務 profile。回答フローは docrag の `current_profile()`（runtime を渡さないときの既定 = `legacy`）で動くため、rag_poc と同じく日本語問い合わせ規則が有効で、業務分類・別名は `DOCRAG_DOMAIN_PROFILE_FILE` の JSON（未指定なら作業ディレクトリの `domain_profile.json`、なければ分類・別名なし）から読む（書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。既定はこの実際の挙動に合わせて `legacy`（#300。以前の既定 `generic` は回答フローに届いていなかった）。`generic` は既存の `.env` との互換のため受け付けるが、回答フローには反映されない |
+| `DOCRAG_DOMAIN_PROFILE_FILE`（backend の process の環境変数） | 未指定 | legacy profile の JSON（業務固有の語。書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。docrag の `docrag.profiles` が process の環境変数（`os.environ`）を直接読み、未指定なら作業ディレクトリ（backend は `rag/backend/`）の `domain_profile.json` を読む。どちらのファイルもなければ分類・別名・判定語なしで動く。`backend/.env` / 共通 `.env` に書いても process の環境変数にはならないため効かない。指定するときは systemd の unit の `Environment=` か、起動する shell の `export` で渡す。読んだ内容は process 内で cache するため、変えたら backend を再起動する。docrag の設定（`build_docrag_settings`）には読み先を渡していない（#569）。質問の業務名（`business_patterns`）には使わない（検索範囲の大分類の語の一覧から照合する。#553）。今も使う項目は、質問の検索語の別名（`aliases`）、ファイル・データの確認と外部連携の判定語（`file_data_terms` / `external_context_terms`）、操作手順の節ラベル（`operation_section_pattern`）、問い合わせ元の語（`requester_terms`）、大分類・中分類の候補（`categories`。business_match の番号付きの分類名の照合）と、取込時の chunk の `retrieval_profile.business_domains`（`business_patterns`。business_match の照合先の 1 つ）。画面からは管理できない |
 | `DOCRAG_RENDER_DPI`（docling サービス） | `300` | 解析時のページ画像の解像度。bbox はこの画像の px 座標になる |
 
 Vision は backend がモデル設定の既定の Vision モデル（OCI Enterprise AI）で呼ぶ。docling サービスは LLM を呼ばないため、OCI Enterprise AI の設定は渡さない（#497）。

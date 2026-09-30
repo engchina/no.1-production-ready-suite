@@ -409,6 +409,12 @@ describe("api.request envelope", () => {
     expect(fetchMock.mock.calls[2][0]).toBe(
       "/api/documents/doc-1/recipes/recipe-1/extraction-export?format=html"
     );
+    expect(api.documentRecipeExtractionExportUrl("doc 1", "recipe/1", "markdown")).toBe(
+      "/api/documents/doc%201/recipes/recipe%2F1/extraction-export?format=markdown&download=true"
+    );
+    expect(api.documentRecipeExtractionExportUrl("doc-1", "recipe-1", "chunks")).toBe(
+      "/api/documents/doc-1/recipes/recipe-1/extraction-export?format=chunks&download=true"
+    );
     expect(fetchMock.mock.calls[3][0]).toBe("/api/documents/doc-1/ingestion-jobs");
     expect(fetchMock.mock.calls[4][0]).toBe("/api/documents/doc-1/ingestion-segments");
     expect(fetchMock.mock.calls[5][0]).toBe(

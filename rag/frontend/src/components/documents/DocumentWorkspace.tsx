@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Braces,
   Check,
   Clock3,
   Download,
@@ -25,6 +24,10 @@ import { useSearchParams } from "react-router-dom";
 import { DocumentPreview } from "./DocumentPreview";
 import { DocumentRecipeManager } from "./DocumentRecipeManager";
 import { DocumentExtraction, DocumentRawText } from "./DocumentExtraction";
+import {
+  DocumentChunksJsonDownload,
+  DocumentExtractionExportPanel,
+} from "./DocumentExtractionExportPanel";
 import { ExtractedText, IndexBadge, InfoChip } from "./extraction-bits";
 import {
   type ChunkPreviewForm,
@@ -89,7 +92,6 @@ import {
   type DocumentChunkView,
   type DocumentClassification,
   type DocumentClassificationOptions,
-  type DocumentExtractionExportFormat,
   type DocumentRecipeStep,
   type DocumentRecipeStepStatus,
   type DocumentReviewEditsRequest,
@@ -332,13 +334,8 @@ export function DocumentWorkspace({
   // embedding は global 単一固定。診断の付帯情報のため、取得失敗時はチップを出さないだけにする。
   const modelSettingsQuery = useModelSettings();
   const embeddingSettings = modelSettingsQuery.data?.settings.generative_ai ?? null;
-  const [exportFormat, setExportFormat] =
-    useState<DocumentExtractionExportFormat>("markdown");
-  const extractionExportQuery = useDocumentRecipeExtractionExport(
-    documentId,
-    hasSelectedRecipeExtraction ? selectedRecipeId : null,
-    exportFormat
-  );
+  // 抽出結果は JSON で 1 回だけ取得し、構造化要素・parser の表示・抽出エクスポートの状態に使う。
+  // Markdown / HTML は、抽出エクスポートでコピー・ダウンロードするときだけ取得する（#561）。
   const extractionJsonQuery = useDocumentRecipeExtractionExport(
     documentId,
     hasSelectedRecipeExtraction ? selectedRecipeId : null,
@@ -595,7 +592,6 @@ export function DocumentWorkspace({
   const refetchDocumentJobs = documentJobsQuery.refetch;
   const refetchSegments = segmentsQuery.refetch;
   const refetchRecipes = recipesQuery.refetch;
-  const refetchExtractionExport = extractionExportQuery.refetch;
   const refetchExtractionJson = extractionJsonQuery.refetch;
   // 変換後の原本がないレシピでは、変換後のプレビューを選べないので原本に戻す（render 中に調整）。
   if (!selectedRecipe?.preprocess_artifact && previewVariant === "prepared") {
@@ -798,7 +794,6 @@ export function DocumentWorkspace({
       void refetchChunkSets();
       void refetchRecipes();
       if (selectedRecipe?.active_extraction_recipe_id) {
-        void refetchExtractionExport();
         void refetchExtractionJson();
       }
     }, DOCUMENT_WORKSPACE_REFETCH_INTERVAL_MS);
@@ -809,7 +804,6 @@ export function DocumentWorkspace({
     refetchChunks,
     refetchDocument,
     refetchDocumentJobs,
-    refetchExtractionExport,
     refetchExtractionJson,
     refetchRecipes,
     refetchSegments,
@@ -1040,10 +1034,10 @@ export function DocumentWorkspace({
     : t("upload.duplicate");
   const ingestionParser = resolveIngestionParserDisplay({
     segments: recipeSegments,
-    extractionBackend: extractionExportQuery.data?.parser_backend,
-    extractionProfile: extractionExportQuery.data?.parser_profile,
+    extractionBackend: extractionJsonQuery.data?.parser_backend,
+    extractionProfile: extractionJsonQuery.data?.parser_profile,
     loading:
-      segmentsQuery.isPending || (hasSelectedRecipeExtraction && extractionExportQuery.isPending),
+      segmentsQuery.isPending || (hasSelectedRecipeExtraction && extractionJsonQuery.isPending),
   });
   const hasExtraction = Boolean(selectedRecipe?.active_extraction_recipe_id);
   const hasChunkSet = Boolean(latestChunkSet);
@@ -1419,6 +1413,15 @@ export function DocumentWorkspace({
                 className="xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 <div className="space-y-3">
+                  {selectedRecipeId &&
+                  hasSelectedRecipeExtraction &&
+                  selectedRecipe?.active_chunk_set_id &&
+                  selectedRecipe.chunk_count > 0 ? (
+                    <DocumentChunksJsonDownload
+                      documentId={documentId}
+                      recipeId={selectedRecipeId}
+                    />
+                  ) : null}
                   {selectedRecipeId && (status === "REVIEW" || status === "CHUNKED") ? (
                     <ChunkPreviewControls
                       form={chunkPreviewSettings}
@@ -1479,14 +1482,11 @@ export function DocumentWorkspace({
                 className="xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 <DocumentExtractionExportPanel
-                  format={exportFormat}
-                  onFormatChange={setExportFormat}
-                  content={extractionExportQuery.data?.content ?? ""}
-                  loading={hasSelectedRecipeExtraction && extractionExportQuery.isPending}
-                  error={initialLoadError(extractionExportQuery) != null}
-                  pageCount={extractionExportQuery.data?.page_count ?? 0}
-                  elementCount={extractionExportQuery.data?.element_count ?? 0}
-                  chunkCount={extractionExportQuery.data?.chunks.length ?? 0}
+                  documentId={documentId}
+                  recipeId={selectedRecipeId}
+                  hasExtraction={hasSelectedRecipeExtraction}
+                  loading={hasSelectedRecipeExtraction && extractionJsonQuery.isPending}
+                  error={initialLoadError(extractionJsonQuery) != null}
                 />
               </div>
             ) : null}
@@ -2163,93 +2163,6 @@ function IngestionSegmentsPanel({
   );
 }
 
-function DocumentExtractionExportPanel({
-  format,
-  onFormatChange,
-  content,
-  loading,
-  error,
-  pageCount,
-  elementCount,
-  chunkCount,
-}: {
-  format: DocumentExtractionExportFormat;
-  onFormatChange: (format: DocumentExtractionExportFormat) => void;
-  content: string;
-  loading: boolean;
-  error: boolean;
-  pageCount: number;
-  elementCount: number;
-  chunkCount: number;
-}) {
-  const formats: DocumentExtractionExportFormat[] = ["markdown", "html", "json", "chunks"];
-  return (
-    // xl 以上は内容の表示をペインの下端（左の原本プレビューの下端）まで伸ばす（#436）。
-    <section className="mt-4 rounded-lg border border-border bg-surface-sunken p-4 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
-      <h4 className="flex items-center gap-2 text-sm font-semibold text-fg">
-        <Braces size={16} className="text-accent-fg" aria-hidden />
-        {t("flow.extractionExport.title")}
-      </h4>
-      <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
-        <ExportMetric label={t("flow.extraction.stats.pages")} value={pageCount} />
-        <ExportMetric label={t("flow.extraction.stats.elements")} value={elementCount} />
-        <ExportMetric label={t("flow.extractionExport.chunks")} value={chunkCount} />
-      </dl>
-      {/* 形式は同じ抽出結果の別の見方なので、共有の Tabs + TabPanel で切り替える(#396)。
-          件数は形式によらないため、タブの外(上)に置く。 */}
-      <Tabs
-        idPrefix="extraction-export"
-        ariaLabel={t("flow.extractionExport.format")}
-        className="mt-3"
-        value={format}
-        onChange={(value) => onFormatChange(value as DocumentExtractionExportFormat)}
-        items={formats.map((item) => ({ id: item, label: extractionExportFormatLabel(item) }))}
-      />
-      <TabPanel
-        id={format}
-        value={format}
-        idPrefix="extraction-export"
-        className="mt-3 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
-      >
-        {loading ? (
-          <TimedLoadingState
-            label={t("flow.extractionExport.loading")}
-            operationKey="document-extraction-export-load"
-            framed={false}
-            testId="document-extraction-export-loading"
-          >
-            <Skeleton className="h-36 w-full rounded-md" />
-          </TimedLoadingState>
-        ) : error ? (
-          <Banner severity="warning" title={t("flow.extractionExport.loadError")}>
-            {t("flow.extractionExport.loadErrorHint")}
-          </Banner>
-        ) : (
-          <pre className="max-h-72 overflow-auto rounded-md border border-border bg-surface p-3 text-xs leading-relaxed text-fg xl:max-h-none xl:min-h-40 xl:flex-1">
-            <code>{content || t("flow.extractionExport.empty")}</code>
-          </pre>
-        )}
-      </TabPanel>
-    </section>
-  );
-}
-
-function ExportMetric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-md border border-border bg-surface px-2.5 py-2">
-      <dt className="text-fg-muted">{label}</dt>
-      <dd className="tnum mt-1 font-semibold text-fg">{value}</dd>
-    </div>
-  );
-}
-
-function extractionExportFormatLabel(format: DocumentExtractionExportFormat): string {
-  if (format === "json") return t("flow.extractionExport.json");
-  if (format === "html") return t("flow.extractionExport.html");
-  if (format === "chunks") return t("flow.extractionExport.chunks");
-  return t("flow.extractionExport.markdown");
-}
-
 function jobStatusKey(status: IngestionJob["status"]): I18nKey {
   switch (status) {
     case "QUEUED":
@@ -2805,7 +2718,7 @@ function SourceDerivationPanel({
         <GitBranch size={16} className="text-accent-fg" aria-hidden />
         {t("provenance.title")}
       </h3>
-      {/* 原本 → 正規化原本 → 抽出 の系譜(溯源)。原本は保全され、変換物から追跡できる。 */}
+      {/* 原本 → 処理後ファイル → 抽出 の対応(画面では「変換の記録」)。原本は保全され、処理後ファイルから追跡できる。 */}
       <ol className="mt-3 space-y-2 text-sm">
         <li className="rounded-md border border-border bg-surface px-3 py-2">
           <div className="text-xs text-fg-muted">{t("provenance.original")}</div>
