@@ -61,7 +61,7 @@ Cookie のセッションの利用者からは `ActorPolicy(roles, business_view
 | 運用設定 | `menu.settings_connection` / `menu.settings_external_rag` / `menu.settings_external_nl2sql` / `menu.settings_external_mcp` / `menu.settings_runtime_snapshot` |
 | システム設定（3 製品共通） | `menu.settings_oci` / `menu.settings_upload_storage` / `menu.settings_model` / `menu.settings_database` / `menu.settings_appearance` |
 | ユーザーとロール（3 製品共通） | `menu.security_users` / `menu.security_roles` |
-| Agent セキュリティ | `menu.security_permissions` |
+| セキュリティ設定 | `menu.security_permissions` |
 
 画面の表示にはメニュー権限、実データの閲覧・操作には capability が必要です。たとえば Run 画面は `menu.runs` で開けますが、
 Run の一覧・詳細は `agent.runs.view`（または operate / decide / audit / admin）がないと 403 です。capability は関連メニューを

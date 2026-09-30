@@ -83,9 +83,9 @@ Oracle AI Database の業務データに、自然言語で SQL を生成・検�
 **ナビゲーション/画面構成**:
 - 折りたたみ可能な**サイドナビ**。構成の正本は `frontend/src/components/layout/nav-config.ts`:
   - **AI 活用** / **データ準備** / **改善・運用**: NL2SQL の業務機能。
-  - **NL2SQL セキュリティ**: 権限管理（ロールごとの機能権限・業務プロファイル利用権限）/ Deep Data Security（NL2SQL 固有。#206）。
-  - **運用設定**: システムテーブル管理（NL2SQL 固有の運用項目）。
+  - **セキュリティ設定**: 権限管理（ロールごとの機能権限・業務プロファイル利用権限）/ Deep Data Security（NL2SQL 固有。#206。セクション名は 3 製品で同じ。#658）。
   - **ユーザーとロール**: ユーザー管理 / ロール管理（3製品で共通。画面と API 契約は platform の共有パッケージ。#206）。
+  - **運用設定**: システムテーブル管理 / Select AI Credential（NL2SQL 固有の運用項目。Select AI Credential はデータベース設定から分けた。#658）。
   - **システム設定**: OCI 認証 / アップロード保存先 / モデル / データベース / 外観（3製品で共通。画面と API は platform の共有パッケージ）。
 - サイドナビのラベルは**日本語第一**とする。正式名が長い項目だけ短縮形(`sidebarLabelKey`)で表示し(例: `システムテーブル管理` → `システムテーブル`)、**ページタイトル/`aria-label` は正式名を維持**する(`nav.*` と `nav.*.sidebar` の二段管理)。
 - 画面の構成は共有の `AppShell` / `PageHeader` / `PageBody` を使う([../AGENTS.md](../AGENTS.md)「画面の構成」)。

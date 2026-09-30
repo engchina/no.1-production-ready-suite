@@ -27,7 +27,7 @@ Business Agent ───────────────→ Skill → MCP / 
 - Runtime service management: 第三者の Runtime イメージ（固定 digest）の profile・healthcheck・volume・静的操作 allowlist（`docker-compose.yml`）。
 - Snapshot v2: Runtime/Binding を含む Control Plane backup。v1 snapshot/manifest を移行。
 - ログインと権限: RAG / NL2SQL と同じ共通認証（`AGENT_AUTH_MODE=production`）。ロールごとの権限と、
-  エージェント・業務ビュー単位の対象範囲（「Agent セキュリティ > 権限管理」）。詳細は
+  エージェント・業務ビュー単位の対象範囲（「セキュリティ設定 > 権限管理」）。詳細は
   [docs/security-rbac.md](docs/security-rbac.md)。
 
 設計詳細は [docs/agent-control-plane-design.md](docs/agent-control-plane-design.md) を参照してください。

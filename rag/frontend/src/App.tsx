@@ -9,7 +9,7 @@ import {
   useParams,
 } from "react-router-dom";
 
-import { AppShell, PageHeader } from "@engchina/production-ready-ui";
+import { AppShell, PageBody, PageHeader } from "@engchina/production-ready-ui";
 import { RequireAuth, useForbiddenRedirect } from "@engchina/production-ready-system-settings";
 
 import { ForbiddenPage, LoginPage, PasswordChangePage } from "@/components/security/AuthPages";
@@ -39,6 +39,7 @@ import { ParserAdapterSettingsClient } from "@/components/settings/ParserAdapter
 import { ChunkingSettingsClient } from "@/components/settings/ChunkingSettingsClient";
 import { PreprocessSettingsClient } from "@/components/settings/PreprocessSettingsClient";
 import { ServicesManagementClient } from "@/components/settings/ServicesManagementClient";
+import { SystemTablesCard } from "@/components/settings/SystemTablesCard";
 import { RetrievalSettingsClient } from "@/components/settings/RetrievalSettingsClient";
 import { AnswerPromptSettingsClient } from "@/components/settings/AnswerPromptSettingsClient";
 import { GuardrailSettingsClient } from "@/components/settings/GuardrailSettingsClient";
@@ -137,6 +138,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsGraph} element={<SettingsGraphRoute />} />
         <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
+        <Route path={APP_ROUTES.settingsSystemTables} element={<SettingsSystemTablesRoute />} />
         <Route path={APP_ROUTES.settingsHuggingface} element={<SettingsHuggingfaceRoute />} />
         <Route path={APP_ROUTES.settingsServices} element={<SettingsServicesRoute />} />
         <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
@@ -517,6 +519,25 @@ function SettingsDatabaseRoute() {
     <div>
       <PageHeader wide title={t("nav.settingsDatabase")} subtitle={t("settings.database.subtitle")} />
       <DatabaseSettingsClient />
+    </div>
+  );
+}
+
+/** システムテーブル管理（運用設定。構成は NL2SQL と同じ。#658）。 */
+function SettingsSystemTablesRoute() {
+  return (
+    <div>
+      <PageHeader
+        wide
+        title={t("nav.settingsSystemTables")}
+        subtitle={t("settings.systemTables.subtitle")}
+      />
+      <PageBody wide>
+        {/* カードの描画例外はカードだけに閉じ込め、見出しとナビを残す（#67）。 */}
+        <CardErrorBoundary label={t("settings.database.systemTables.title")}>
+          <SystemTablesCard />
+        </CardErrorBoundary>
+      </PageBody>
     </div>
   );
 }

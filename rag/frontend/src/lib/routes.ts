@@ -30,6 +30,7 @@ export const APP_ROUTES = {
   settingsGraph: "/settings/graph",
   settingsModel: SYSTEM_SETTINGS_PATHS.model,
   settingsDatabase: SYSTEM_SETTINGS_PATHS.database,
+  settingsSystemTables: "/settings/system-tables",
   settingsHuggingface: "/settings/huggingface",
   settingsServices: "/settings/services",
   settingsPrompts: "/settings/prompts",

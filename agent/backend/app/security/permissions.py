@@ -14,7 +14,8 @@ router の `require_*`（capability から作ったロール）でも確認す�
 （implies）ため、capability だけを付けたロールでも画面を開ける。
 
 システム設定・ユーザーとロールの共通メニューは NL2SQL / RAG と同じコード・グループ名を使う
-（3 製品共通の画面。#206）。権限管理は「Agent セキュリティ」の製品固有メニュー。
+（3 製品共通の画面。#206）。権限管理は「セキュリティ設定」の製品固有メニュー
+（セクション名は 3 製品で同じ。#658）。
 """
 
 from __future__ import annotations
@@ -95,7 +96,7 @@ ROLE_CAPABILITIES: dict[str, str] = {role: code for code, role in CAPABILITY_ROL
 # サイドナビの表示名）と同じにする（#567 / #580。一致は
 # tests/test_permission_catalog_nav.py が確かめる）。ナビに無い capability は後ろに置く。
 _GROUP_CONTROL_PLANE = "Control Plane"
-_GROUP_SECURITY = "Agent セキュリティ"
+_GROUP_SECURITY = "セキュリティ設定"
 _GROUP_OPERATIONS = "運用設定"
 _GROUP_USERS_ROLES = "ユーザーとロール"
 _GROUP_SETTINGS = "システム設定"
@@ -136,6 +137,10 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_PLUGIN_MARKETPLACES, _GROUP_CONTROL_PLANE, "マーケットプレイス"),
     # 権限管理は Agent 固有。ユーザー管理・ロール管理は 3 製品共通の画面（#206）。
     _menu_permission(MENU_SECURITY_PERMISSIONS, _GROUP_SECURITY, "権限管理"),
+    # 並びはサイドナビと同じ
+    # （セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。#658）。
+    _menu_permission(MENU_SECURITY_USERS, _GROUP_USERS_ROLES, "ユーザー管理"),
+    _menu_permission(MENU_SECURITY_ROLES, _GROUP_USERS_ROLES, "ロール管理"),
     _menu_permission(MENU_SETTINGS_CONNECTION, _GROUP_OPERATIONS, "Agent 接続設定"),
     _menu_permission(MENU_SETTINGS_EXTERNAL_RAG, _GROUP_OPERATIONS, "外部 RAG"),
     _menu_permission(MENU_SETTINGS_EXTERNAL_NL2SQL, _GROUP_OPERATIONS, "外部 NL2SQL"),
@@ -143,8 +148,6 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(
         MENU_SETTINGS_RUNTIME_SNAPSHOT, _GROUP_OPERATIONS, "Control Plane バックアップ"
     ),
-    _menu_permission(MENU_SECURITY_USERS, _GROUP_USERS_ROLES, "ユーザー管理"),
-    _menu_permission(MENU_SECURITY_ROLES, _GROUP_USERS_ROLES, "ロール管理"),
     _menu_permission(MENU_SETTINGS_OCI, _GROUP_SETTINGS, "OCI 認証"),
     _menu_permission(MENU_SETTINGS_UPLOAD_STORAGE, _GROUP_SETTINGS, "アップロード保存先"),
     _menu_permission(MENU_SETTINGS_MODEL, _GROUP_SETTINGS, "モデル"),
@@ -455,7 +458,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("DELETE", "/security/roles/{role_id}"): _any(MENU_SECURITY_ROLES),
     ("POST", "/security/roles/{role_id}/archive"): _any(MENU_SECURITY_ROLES),
     ("POST", "/security/roles/{role_id}/restore"): _any(MENU_SECURITY_ROLES),
-    # ---- Agent セキュリティ: 権限管理 ----
+    # ---- セキュリティ設定: 権限管理 ----
     ("GET", "/security/permissions"): _any(MENU_SECURITY_PERMISSIONS),
     ("GET", "/security/access-targets/agents"): _any(MENU_SECURITY_PERMISSIONS),
     ("GET", "/security/access-targets/business-views"): _any(MENU_SECURITY_PERMISSIONS),

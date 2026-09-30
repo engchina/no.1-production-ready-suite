@@ -2,12 +2,14 @@ import { Skeleton, TimedLoadingState } from "@engchina/production-ready-ui";
 import { DatabaseSettingsPage } from "@engchina/production-ready-system-settings";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { SelectAiCredentialCard } from "@/components/settings/SelectAiCredentialCard";
 import { ApiError, api } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { queryKeys } from "@/lib/queries";
 
-/** データベース設定。画面の実体は platform の共有パッケージ（#108）。 */
+/**
+ * データベース設定。画面の実体は platform の共有パッケージ（#108）。
+ * Select AI Credential は運用設定の専用の画面（`/settings/select-ai-credential`。#658）。
+ */
 export function DatabaseSettingsClient() {
   const queryClient = useQueryClient();
   return (
@@ -31,8 +33,6 @@ export function DatabaseSettingsClient() {
           <Skeleton className="h-[460px] w-full rounded-lg" />
         </TimedLoadingState>
       }
-    >
-      <SelectAiCredentialCard />
-    </DatabaseSettingsPage>
+    />
   );
 }

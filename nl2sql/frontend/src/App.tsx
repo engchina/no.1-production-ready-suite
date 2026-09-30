@@ -168,6 +168,11 @@ const SystemTablesCard = lazy(() =>
     default: module.SystemTablesCard,
   }))
 );
+const SelectAiCredentialCard = lazy(() =>
+  import("@/components/settings/SelectAiCredentialCard").then((module) => ({
+    default: module.SelectAiCredentialCard,
+  }))
+);
 const AppearanceSettings = lazy(() =>
   import("@/components/settings/AppearanceSettings").then((module) => ({
     default: module.AppearanceSettings,
@@ -326,6 +331,10 @@ function AuthorizedApplication() {
             <Route
               path={APP_ROUTES.settingsSystemTables}
               element={<SettingsSystemTablesRoute />}
+            />
+            <Route
+              path={APP_ROUTES.settingsSelectAiCredential}
+              element={<SettingsSelectAiCredentialRoute />}
             />
             <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
             <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
@@ -521,6 +530,21 @@ function SettingsDatabaseRoute() {
     <>
       <PageHeader wide title={t("nav.settingsDatabase")} subtitle={t("settings.database.subtitle")} />
       <DatabaseSettingsClient />
+    </>
+  );
+}
+
+/** Select AI Credential（運用設定。構成はシステムテーブル管理と同じ。#658）。 */
+function SettingsSelectAiCredentialRoute() {
+  return (
+    <>
+      <PageHeader wide
+        title={t("nav.settingsSelectAiCredential")}
+        subtitle={t("settings.selectAiCredential.subtitle")}
+      />
+      <PageBody wide>
+        <SelectAiCredentialCard />
+      </PageBody>
     </>
   );
 }

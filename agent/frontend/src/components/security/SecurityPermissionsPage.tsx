@@ -10,7 +10,7 @@ import { securityApi } from "@/lib/security-api";
 import { useAuth } from "./AuthProvider";
 
 /**
- * 権限管理（「Agent セキュリティ」のメニュー。#215）。画面の実体は platform の共通 RolePermissionsPage（#220）。
+ * 権限管理（「セキュリティ設定」のメニュー。#215 / #658）。画面の実体は platform の共通 RolePermissionsPage（#220）。
  * ロールごとの機能権限と、利用できるエージェント・業務ビューを設定する。
  */
 export function SecurityPermissionsPage() {

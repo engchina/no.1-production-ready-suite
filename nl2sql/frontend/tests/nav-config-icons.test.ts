@@ -55,19 +55,20 @@ const EXPECTED_ICON_NAMES_BY_LABEL_KEY = new Map<string, string>([
   ["nav.glossaryRules", "BookA"],
   ["nav.globalRules", "ScrollText"],
   ["nav.sampleData", "Boxes"],
-  ["nav.profiles", "UserCog"],
+  ["nav.profiles", "BriefcaseBusiness"],
   ["nav.ontologyBuild", "Network"],
   ["nav.feedbackManagement", "ThumbsUp"],
   ["nav.questionClassifierModels", "BrainCircuit"],
   ["nav.evaluation", "FlaskConical"],
-  // NL2SQL セキュリティ（固有。#206）
+  // セキュリティ設定（固有。#206。セクション名は 3 製品で同じ。#658）
   ["nav.securityPermissions", "LockKeyhole"],
   ["nav.securityDeepSec", "ShieldCheck"],
-  // 運用設定（#81）
-  ["nav.settingsSystemTables", "TableProperties"],
   // ユーザーとロール（3製品共通。#206）
   ["nav.securityUsers", "Users"],
   ["nav.securityRoles", "Shield"],
+  // 運用設定（#81。Select AI Credential はデータベース設定から分けた。#658）
+  ["nav.settingsSystemTables", "TableProperties"],
+  ["nav.settingsSelectAiCredential", "FileKey"],
   // システム設定（3製品共通）
   ["nav.settingsOci", "KeyRound"],
   ["nav.settingsUploadStorage", "Cloud"],
@@ -136,6 +137,8 @@ test("既定入口は SQL 生成権限がなければ root に戻し、root が�
   const modelOnly = (permission: string) => permission === "menu.settings_model";
   const databaseOnly = (permission: string) => permission === "menu.settings_database";
   const systemTablesOnly = (permission: string) => permission === "menu.settings_system_tables";
+  const selectAiCredentialOnly = (permission: string) =>
+    permission === "menu.settings_select_ai_credential";
   const adminSqlOnly = (permission: string) => permission === "menu.admin_sql";
   const noPermissions = () => false;
 
@@ -145,6 +148,7 @@ test("既定入口は SQL 生成権限がなければ root に戻し、root が�
   assert.equal(firstAllowedRoute(modelOnly), "/settings/model");
   assert.equal(firstAllowedRoute(databaseOnly), "/settings/database");
   assert.equal(firstAllowedRoute(systemTablesOnly), "/settings/system-tables");
+  assert.equal(firstAllowedRoute(selectAiCredentialOnly), "/settings/select-ai-credential");
   assert.equal(firstAllowedRoute(appearanceOnly), "/settings/appearance");
   assert.equal(defaultEntryRoute(adminSqlOnly), "/");
   assert.equal(firstAllowedRoute(adminSqlOnly), "/admin-sql");

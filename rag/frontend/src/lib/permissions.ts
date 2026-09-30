@@ -25,6 +25,7 @@ export const MENU_PERMISSIONS = {
   settingsGuardrail: "menu.settings_guardrail",
   settingsEvaluation: "menu.settings_evaluation",
   settingsGraph: "menu.settings_graph",
+  settingsSystemTables: "menu.settings_system_tables",
   settingsHuggingface: "menu.settings_huggingface",
   settingsServices: "menu.settings_services",
   settingsOci: "menu.settings_oci",
