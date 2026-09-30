@@ -48,11 +48,26 @@ export interface RolePermissionCustomIdOptions {
 }
 
 /**
- * 候補の一部だけを読めたときの読み込み結果（#240）。読めた候補を表示したまま、
- * `warning`（利用者向けの文言そのまま）を画面上部の warning の Banner に出す。
+ * 候補の問い合わせ（#608）。候補は数千件になりうるので、サーバー側で検索とページングをする。
+ * 3 製品の backend は `q` / `limit` / `offset` / `ids`（繰り返しのクエリ）を受け、`Page`（items / total）を返す。
  */
-export interface RolePermissionTargetLoadResult {
+export interface RolePermissionTargetQuery {
+  /** 検索語（名前・説明などの部分一致。空なら全件）。 */
+  q: string;
+  limit: number;
+  offset: number;
+  /** その ID だけを読む（ロールに選択済みの対象の名前を解決する）。検索語は空で渡す。 */
+  ids?: string[];
+}
+
+/**
+ * 候補の 1 ページ。`warning` は候補の一部だけを読めたとき（#240）の理由（利用者向けの文言そのまま）で、
+ * 読めた候補を表示したまま画面上部の warning の Banner に出す。
+ */
+export interface RolePermissionTargetPage {
   items: RolePermissionTargetItem[];
+  /** 条件に一致する全件数。 */
+  total: number;
   warning?: string;
 }
 
@@ -64,10 +79,14 @@ export interface RolePermissionTargetSection<R extends PermissionRole = Permissi
   /** draft.targets の key。テスト ID と要素 ID の `security-roles-<key>-*` にも使う。 */
   key: string;
   messages: RolePermissionTargetMessages;
-  /** 候補を読み込む。失敗しても画面は警告を出してロール一覧を表示し続ける。 */
-  load: (
+  /**
+   * 候補を検索・ページングで読む（#608）。編集画面の候補は `q`（検索欄）・`limit` / `offset`（「さらに読み込む」）で、
+   * ロールに選択済みの対象の名前は `ids` で読む。失敗しても画面は警告を出してロール一覧を表示し続ける。
+   */
+  query: (
+    query: RolePermissionTargetQuery,
     options: RequestOptions & { signal: AbortSignal },
-  ) => Promise<RolePermissionTargetItem[] | RolePermissionTargetLoadResult>;
+  ) => Promise<RolePermissionTargetPage>;
   /** ロールに保存済みの対象 ID。 */
   selectedIds: (role: R) => string[];
   /**

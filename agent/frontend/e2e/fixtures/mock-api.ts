@@ -286,6 +286,25 @@ function findOr404<T extends Json>(items: T[], key: string, id: string, label: s
   return item;
 }
 
+function accessTargetPage(items: Json[], query: URLSearchParams) {
+  const q = (query.get("q") ?? "").toLowerCase();
+  const ids = query.getAll("ids");
+  const limit = Number(query.get("limit") ?? "50");
+  const offset = Number(query.get("offset") ?? "0");
+  const matched = items.filter(
+    (item) =>
+      (ids.length === 0 || ids.includes(item.id as string)) &&
+      (!q || [item.id, item.name, item.description ?? ""].join(" ").toLowerCase().includes(q)),
+  );
+  return {
+    items: matched.slice(offset, offset + limit),
+    total: matched.length,
+    limit,
+    offset,
+    has_next: offset + limit < matched.length,
+  };
+}
+
 /** 1 リクエストを state に対して処理する。未対応は undefined を返す。 */
 function handle(state: MockApiState, method: string, path: string, query: URLSearchParams, body: Json) {
   const segments = path.replace(/^\/api\/?/, "").split("/").map(decodeURIComponent);
@@ -324,7 +343,24 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return state.security.roles.filter((role) => includeArchived || !role.archived);
     }
     if (method === "GET" && at("security", "permissions")) return PERMISSION_CATALOG;
-    if (method === "GET" && at("security", "access-targets")) return state.security.accessTargets;
+    // 権限管理の対象の候補（#608）: backend と同じく q（名前・ID・説明）・ids・limit / offset で絞った Page を返す。
+    // 業務ビューは候補にロールへ割り当て済みの ID も含める（backend と同じ）。
+    if (method === "GET" && at("security", "access-targets", "agents")) {
+      return accessTargetPage(state.security.accessTargets.agents, query);
+    }
+    if (method === "GET" && at("security", "access-targets", "business-views")) {
+      const known = new Map(state.security.accessTargets.business_views.map((view) => [view.id as string, view]));
+      for (const role of state.security.roles) {
+        for (const id of (role.business_view_ids as string[] | undefined) ?? []) {
+          if (!known.has(id)) known.set(id, { id, name: id });
+        }
+      }
+      const views = [...known.values()].sort((left, right) => String(left.id).localeCompare(String(right.id)));
+      return {
+        ...accessTargetPage(views, query),
+        warnings: state.security.accessTargets.business_view_warnings ?? [],
+      };
+    }
     if (method === "PUT" && at("security", "roles", "*", "access")) {
       const role = findRole(state, third);
       if (body.version !== role.version) throw new HttpError(409, "ロールが更新されています。再読み込みしてください。");

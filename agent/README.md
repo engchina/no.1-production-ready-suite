@@ -215,7 +215,7 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 | `POST` | `/api/auth/login` / `/api/auth/logout` / `/api/auth/password/change` | ログイン・ログアウト・パスワード変更（共通認証） |
 | `GET` | `/api/auth/me` | ログイン中の利用者（実効権限・`allowed_agent_ids` / `allowed_business_view_ids`） |
 | `GET/POST/PATCH/DELETE` | `/api/security/users*` / `/api/security/roles*` | ユーザー管理・ロール管理（3製品共通） |
-| `GET` | `/api/security/permissions` / `/api/security/access-targets` | 権限カタログ・権限管理で選べるエージェントと業務ビュー |
+| `GET` | `/api/security/permissions` / `/api/security/access-targets/{agents,business-views}` | 権限カタログ・権限管理で選べるエージェントと業務ビュー（`q` / `limit` / `offset` / `ids` で検索とページング。#608） |
 | `PUT` | `/api/security/roles/{role_id}/access` | ロールの Agent 権限と対象範囲 |
 | `GET/POST/PATCH` | `/api/runtimes` | Runtime 定義 |
 | `GET` | `/api/runtimes/{id}/status` | capability/status probe |

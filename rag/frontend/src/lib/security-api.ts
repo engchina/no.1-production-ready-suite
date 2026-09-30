@@ -2,26 +2,29 @@
  * 認証・ユーザー管理・ロール管理・権限管理の API（#214）。
  *
  * - `/api/auth/*`・`/api/security/users*`・`/api/security/roles*` は platform の共通 router（3製品で同じ）。
- * - `/api/security/permissions`・`/api/security/access-targets`・`PUT /api/security/roles/{id}/access` は RAG 固有。
+ * - `/api/security/permissions`・`/api/security/access-targets/{kind}`・`PUT /api/security/roles/{id}/access` は RAG 固有。
  * 通信（Cookie セッション・CSRF・401 / 403 の通知・エラー形式）は `request`（lib/api.ts）が持つ。
  */
 
-import type {
-  AuthApi,
-  DescribeApiError,
-  PermissionDefinition,
-  RoleDraft,
-  RoleManagementApi,
-  SecurityUser,
-  UserDraft,
-  UserManagementApi,
-  UserWithTemporaryPassword,
+import {
+  rolePermissionTargetSearchParams,
+  type AuthApi,
+  type DescribeApiError,
+  type PermissionDefinition,
+  type RoleDraft,
+  type RoleManagementApi,
+  type RolePermissionTargetQuery,
+  type SecurityUser,
+  type UserDraft,
+  type UserManagementApi,
+  type UserWithTemporaryPassword,
 } from "@engchina/production-ready-system-settings";
 
 import {
   ApiError,
   request,
-  type AccessTargetsData,
+  type AccessTargetKind,
+  type AccessTargetPage,
   type CurrentUser,
   type RoleAccessUpdate,
   type SecurityRole,
@@ -140,8 +143,12 @@ export const securityApi = {
   // ---- 権限管理（RAG 固有） ----
   permissions: (options: RequestOptions = {}) =>
     request<PermissionDefinition[]>("/api/security/permissions", { signal: options.signal }),
-  accessTargets: (options: RequestOptions = {}) =>
-    request<AccessTargetsData>("/api/security/access-targets", { signal: options.signal }),
+  /** 権限管理で選べる業務ビュー / KB の候補（サーバー側の検索とページング。#608）。 */
+  accessTargets: (kind: AccessTargetKind, query: RolePermissionTargetQuery, options: RequestOptions = {}) =>
+    request<AccessTargetPage>(
+      `/api/security/access-targets/${kind}?${rolePermissionTargetSearchParams(query).toString()}`,
+      { signal: options.signal },
+    ),
   /** ロールの RAG 権限と対象範囲（業務ビュー・KB）だけを置き換える。 */
   updateRoleAccess: (update: RoleAccessUpdate) =>
     mutate<SecurityRole>(

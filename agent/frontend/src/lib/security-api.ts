@@ -2,26 +2,30 @@
  * 認証・ユーザー管理・ロール管理・権限管理の API（#215。RAG #214 と同じ形）。
  *
  * - `/api/auth/*`・`/api/security/users*`・`/api/security/roles*` は platform の共通 router（3製品で同じ）。
- * - `/api/security/permissions`・`/api/security/access-targets`・`PUT /api/security/roles/{id}/access` は Agent 固有。
+ * - `/api/security/permissions`・`/api/security/access-targets/{kind}`・`PUT /api/security/roles/{id}/access` は Agent 固有。
  * 通信（Cookie セッション・CSRF・401 / 403 の通知・エラー形式）は `request`（lib/api.ts）が持つ。
  */
 
-import type {
-  AuthApi,
-  DescribeApiError,
-  PermissionDefinition,
-  RoleDraft,
-  RoleManagementApi,
-  SecurityUser,
-  UserDraft,
-  UserManagementApi,
-  UserWithTemporaryPassword,
+import {
+  rolePermissionTargetSearchParams,
+  type AuthApi,
+  type DescribeApiError,
+  type PermissionDefinition,
+  type RoleDraft,
+  type RoleManagementApi,
+  type RolePermissionTargetQuery,
+  type SecurityUser,
+  type UserDraft,
+  type UserManagementApi,
+  type UserWithTemporaryPassword,
 } from "@engchina/production-ready-system-settings";
 
 import {
   ApiError,
   request,
-  type AccessTargetsData,
+  type AccessTargetPage,
+  type AgentAccessTarget,
+  type BusinessViewAccessTarget,
   type CurrentUser,
   type RoleAccessUpdate,
   type SecurityRole,
@@ -140,8 +144,17 @@ export const securityApi = {
   // ---- 権限管理（Agent 固有） ----
   permissions: (options: RequestOptions = {}) =>
     request<PermissionDefinition[]>("/api/security/permissions", { signal: options.signal }),
-  accessTargets: (options: RequestOptions = {}) =>
-    request<AccessTargetsData>("/api/security/access-targets", { signal: options.signal }),
+  /** 権限管理で選べるエージェント / 業務ビューの候補（サーバー側の検索とページング。#608）。 */
+  agentTargets: (query: RolePermissionTargetQuery, options: RequestOptions = {}) =>
+    request<AccessTargetPage<AgentAccessTarget>>(
+      `/api/security/access-targets/agents?${rolePermissionTargetSearchParams(query).toString()}`,
+      { signal: options.signal },
+    ),
+  businessViewTargets: (query: RolePermissionTargetQuery, options: RequestOptions = {}) =>
+    request<AccessTargetPage<BusinessViewAccessTarget>>(
+      `/api/security/access-targets/business-views?${rolePermissionTargetSearchParams(query).toString()}`,
+      { signal: options.signal },
+    ),
   /** ロールの Agent 権限と対象範囲（エージェント・業務ビュー）だけを置き換える。 */
   updateRoleAccess: (update: RoleAccessUpdate) =>
     mutate<SecurityRole>(

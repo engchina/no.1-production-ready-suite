@@ -13,36 +13,30 @@ import {
   Banner,
   EmptyState,
   toast,
-  DataTable,
   StatusBadge,
   PageHeader,
   PageBody,
-  BulkSelectionActions,
   ContentActionBar,
+  ListPicker,
+  type ListPickerItem,
   ProcessingIndicator,
-  INFORMATION_TABLE_FIXED_VISIBLE_ROWS,
   TextareaField,
 } from "@engchina/production-ready-ui";
 
 
 import { PageNotice } from "@/components/page-notice";
-import { ErrorState } from "@/components/StateViews";
-import { IdentifierText } from "@/components/IdentifierText";
 import { apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import {
-  DB_OBJECT_GRID_ROW_CLASS,
   DbManagementLoadingSkeleton,
   DbManagementSelectField,
   DbObjectManagementPanelShell,
   DbObjectManagementTabs,
-  DbObjectSelectorFooter,
   DbObjectSelectorToolbar,
   DbObjectPanelHeader,
-  DbObjectCommentText,
   DbObjectStepIndicator,
   type DbObjectTab,
   formatDbObjectName,
@@ -80,14 +74,6 @@ import type {
 type MetadataMode = "comment" | "annotation" | "domain";
 type MetadataPanel = "targets" | "input" | "execute";
 type TargetFilter = "all" | "table" | "view";
-type TargetSortKey = "name" | "object_type" | "owner";
-type TargetSortDirection = "asc" | "desc";
-
-interface TargetSortState {
-  key: TargetSortKey;
-  direction: TargetSortDirection;
-}
-
 interface MetadataTargetItem extends MetadataSqlTarget {
   key: string;
   qualifiedName: string;
@@ -235,7 +221,6 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const [targetSearch, setTargetSearch] = useWorkspaceState("targetSearch", "");
   const [targetOwnerPrefix, setTargetOwnerPrefix] = useWorkspaceState("targetOwnerPrefix", "");
   const [targetFilter, setTargetFilter] = useWorkspaceState<TargetFilter>("targetFilter", "all");
-  const [targetSort, setTargetSort] = useWorkspaceState<TargetSortState>("targetSort", { key: "name", direction: "asc" });
   // 検索語・所有者の接頭辞は SearchField が確定した値（入力が止まって 300ms・Enter・消去。IME の変換中は
   // 確定しない）なので、ここでは遅延させずにそのまま問い合わせに使う（#535）。
   const objectsQuery = useDbAdminObjects(
@@ -338,13 +323,9 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
           item.comment.toLowerCase().includes(q)
         );
       })
-      .sort((left, right) => {
-        const a = targetSortValue(left, targetSort.key);
-        const b = targetSortValue(right, targetSort.key);
-        const result = a < b ? -1 : a > b ? 1 : 0;
-        return targetSort.direction === "asc" ? result : -result;
-      });
-  }, [allTargets, targetFilter, targetOwnerPrefix, targetSearch, targetSort]);
+      // 候補の一覧（ListPicker）は名前の順に並べる（列の並べ替えは持たない。#608）。
+      .sort((left, right) => left.qualifiedName.localeCompare(right.qualifiedName));
+  }, [allTargets, targetFilter, targetOwnerPrefix, targetSearch]);
 
   // 応答の反映は then の callback で行う（effect から呼んでも同期の setState にしない）。
   // refetch は TanStack Query の observer に束縛された安定した参照なので、reloadObjects も作り直されない。
@@ -443,8 +424,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     setGenerated(null);
   };
 
-  const bulkSelectTargets = (targets: MetadataTargetItem[], selected: boolean) => {
-    const targetKeys = targets.map((target) => target.key);
+  const bulkSelectTargets = (targets: MetadataSqlTarget[], selected: boolean) => {
+    const targetKeys = targets.map((target) => targetKey(target));
     const targetKeySet = new Set(targetKeys);
     if (selected) {
       const currentSet = new Set(selectedKeys);
@@ -468,11 +449,14 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     setGenerated(null);
   };
 
-  const toggleSort = (key: TargetSortKey) => {
-    setTargetSort((current) => ({
-      key,
-      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
-    }));
+  const clearTargets = () => {
+    setSelectedKeys([]);
+    setMessage("");
+    setValidated(false);
+    setDetails([]);
+    setDomainInventory(null);
+    setRefreshedSampleText(null);
+    setGenerated(null);
   };
 
   const fetchDetails = async (preserveWork = false) => {
@@ -711,6 +695,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             totalCount={totalTargetCount}
             selectedKeys={selectedKeys}
             loading={objectsQuery.isPending && !objectsQuery.data}
+            refreshing={objectsQuery.isFetching && !objectsQuery.isFetchingNextPage && Boolean(objectsQuery.data)}
             error={
               objectsQuery.error && !objectsQuery.data
                 ? objectListErrorMessage(objectsQuery.error, "metadataSql.error.load")
@@ -719,7 +704,6 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             search={targetSearch}
             ownerPrefix={targetOwnerPrefix}
             filter={targetFilter}
-            sort={targetSort}
             hasNextPage={Boolean(objectsQuery.hasNextPage)}
             loadingNextPage={objectsQuery.isFetchingNextPage}
             loadMoreError={
@@ -730,9 +714,9 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             onSearchChange={setTargetSearch}
             onOwnerPrefixChange={setTargetOwnerPrefix}
             onFilterChange={setTargetFilter}
-            onSortChange={toggleSort}
             onToggle={toggleTarget}
             onBulkSelect={bulkSelectTargets}
+            onClearSelection={clearTargets}
             onRetry={() => void refreshObjects()}
             onLoadMore={() => void objectsQuery.fetchNextPage()}
             onRetryLoadMore={() => void objectsQuery.fetchNextPage()}
@@ -802,17 +786,23 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   );
 }
 
+/**
+ * 対象の表・ビューの選択（#608）。大量の候補から複数を選ぶ共通の `ListPicker` に、読み込んだ候補（カーソルの追加読み込み）を
+ * 渡す。検索・所有者・種類の絞り込みは DB オブジェクトの一覧で共通のツールバー（`DbObjectSelectorToolbar`）が持ち、
+ * 行の描画・仮想スクロール・キーボード操作・「選択中だけ表示」・追加読み込みのフッターは ListPicker が持つ
+ * （業務プロファイルの「許可する表・ビュー」と同じ型。#600）。
+ */
 function MetadataTargetGrid({
   pageId,
   items,
   totalCount,
   selectedKeys,
   loading,
+  refreshing,
   error,
   search,
   ownerPrefix,
   filter,
-  sort,
   hasNextPage,
   loadingNextPage,
   loadMoreError,
@@ -820,9 +810,9 @@ function MetadataTargetGrid({
   onSearchChange,
   onOwnerPrefixChange,
   onFilterChange,
-  onSortChange,
   onToggle,
   onBulkSelect,
+  onClearSelection,
   onRetry,
   onLoadMore,
   onRetryLoadMore,
@@ -833,11 +823,11 @@ function MetadataTargetGrid({
   totalCount: number;
   selectedKeys: string[];
   loading: boolean;
+  refreshing: boolean;
   error: string;
   search: string;
   ownerPrefix: string;
   filter: TargetFilter;
-  sort: TargetSortState;
   hasNextPage: boolean;
   loadingNextPage: boolean;
   loadMoreError: string;
@@ -845,9 +835,9 @@ function MetadataTargetGrid({
   onSearchChange: (value: string) => void;
   onOwnerPrefixChange: (value: string) => void;
   onFilterChange: (value: TargetFilter) => void;
-  onSortChange: (key: TargetSortKey) => void;
   onToggle: (target: MetadataSqlTarget) => void;
-  onBulkSelect: (targets: MetadataTargetItem[], selected: boolean) => void;
+  onBulkSelect: (targets: MetadataSqlTarget[], selected: boolean) => void;
+  onClearSelection: () => void;
   onRetry: () => void;
   onLoadMore: () => void;
   onRetryLoadMore: () => void;
@@ -855,8 +845,18 @@ function MetadataTargetGrid({
 }) {
   const hasActiveFilter = Boolean(search.trim()) || Boolean(ownerPrefix.trim()) || filter !== "all";
   const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
-  const selectedVisibleCount = items.filter((item) => selectedSet.has(item.key)).length;
-  const allVisibleSelected = items.length > 0 && selectedVisibleCount === items.length;
+  const pickerItems = useMemo(() => items.map(targetPickerItem), [items]);
+  // 読み込んだ範囲の外にある選択（検索語を変えた後など）も「選択中だけ表示」で確かめられるよう、key から作る。
+  const selectedPickerItems = useMemo(() => {
+    const loaded = new Map(items.map((item) => [item.key, item]));
+    return selectedKeys.flatMap((key) => {
+      const item = loaded.get(key);
+      if (item) return [targetPickerItem(item)];
+      const target = targetFromKey(key);
+      return target ? [targetPickerItem(targetItemFromTarget(target))] : [];
+    });
+  }, [items, selectedKeys]);
+  const targetOf = (key: string) => items.find((item) => item.key === key) ?? targetFromKey(key);
 
   return (
     <section className="grid min-w-0 content-start gap-3" aria-labelledby={`${pageId}-targets-heading`}>
@@ -882,11 +882,6 @@ function MetadataTargetGrid({
         searchPlaceholder={t("dbAdmin.search.placeholder")}
         searchValue={search}
         onSearchChange={onSearchChange}
-        resultLabel={t("objectSelector.resultCountWithSelected", {
-          visible: items.length,
-          total: totalCount,
-          selected: selectedKeys.length,
-        })}
         dataTestId={`${pageId}-target-toolbar`}
         ownerPrefixField={{
           label: t("dbAdmin.owner.label"),
@@ -908,111 +903,52 @@ function MetadataTargetGrid({
         />
       </DbObjectSelectorToolbar>
 
-      {!loading && items.length > 0 ? (
-        <BulkSelectionActions
-          selectLabel={t("common.selection.selectVisible")}
-          clearLabel={t("common.selection.clearVisible")}
-          selectDisabled={allVisibleSelected}
-          clearDisabled={selectedVisibleCount === 0}
-          dataTestId={`${pageId}-target-selection-actions`}
-          onSelectAll={() => onBulkSelect(items, true)}
-          onClearAll={() => onBulkSelect(items, false)}
-        />
-      ) : null}
-
-      {loading ? (
-        <DbManagementLoadingSkeleton
-          idPrefix={`${pageId}-target`}
-          ariaLabel={t("metadataSql.targets.loading")}
-          variant="list"
-        />
-      ) : error ? (
-        <ErrorState message={error} onRetry={onRetry} />
-      ) : items.length === 0 ? (
-        <EmptyState
-          title={hasActiveFilter ? t("metadataSql.targets.noResultsTitle") : t("metadataSql.targets.emptyTitle")}
-          hint={hasActiveFilter ? t("metadataSql.targets.noResultsHint") : t("metadataSql.targets.emptyHint")}
-        />
-      ) : (
-        // コメントは別列ではなく対象名の直下に置き（テーブル管理・ビュー管理・データ管理と同じ形式）、空いた幅を対象名に回す。
-        // 種類はバッジ「テーブル」＋セル余白が収まる幅にする。狭い幅では対象名が 1 行に収まる最小幅を保ち、
-        // 一覧内の横スクロールで種類・所有者を確認する（5 行の固定高さを維持）。
-        <DataTable
-          columns={[
-            {
-              key: "name",
-              header: t("metadataSql.targets.grid.objectName"),
-              sortable: true,
-              className: "py-1 align-top",
-              render: (item, index) => {
-                const rowId = `${pageId}-target-${index}`;
-                return (
-                  <label className="flex min-h-11 cursor-pointer items-start gap-3 text-fg">
-                    <input
-                      type="checkbox"
-                      checked={selectedSet.has(item.key)}
-                      aria-labelledby={`${rowId}-name ${rowId}-hint`}
-                      aria-describedby={`${rowId}-comment`}
-                      onChange={() => onToggle(item)}
-                      className="mt-1 h-4 w-4 shrink-0 rounded border-border text-accent-fg"
-                    />
-                    <span className="grid min-w-0">
-                      <span id={`${rowId}-name`} className="block">
-                        <DbObjectName value={item.qualifiedName} size="xs" interactive />
-                      </span>
-                      <DbObjectCommentText id={`${rowId}-comment`} comment={item.comment} />
-                      <span id={`${rowId}-hint`} className="sr-only">
-                        {t("metadataSql.targets.grid.toggleHint")}
-                      </span>
-                    </span>
-                  </label>
-                );
-              },
-            },
-            {
-              key: "object_type",
-              header: t("metadataSql.targets.grid.type"),
-              sortable: true,
-              headerClassName: "w-[7rem]",
-              className: "whitespace-nowrap py-1 align-top",
-              render: (item) => <StatusBadge icon={false} variant="neutral" label={targetTypeLabel(item.object_type)} />,
-            },
-            {
-              key: "owner",
-              header: t("metadataSql.targets.grid.owner"),
-              sortable: true,
-              headerClassName: "w-[8rem]",
-              className: "py-1 align-top font-mono text-fg-muted",
-              render: (item) => <IdentifierText value={item.owner || "-"} />,
-            },
-          ]}
-          rows={items}
-          getRowKey={(item) => item.key}
-          sort={sort}
-          onSortChange={(next) => onSortChange(next.key as TargetSortKey)}
-          isRowSelected={(item) => selectedSet.has(item.key)}
-          rowProps={() => ({ className: `${DB_OBJECT_GRID_ROW_CLASS} hover:bg-surface-hover` })}
-          testId={`${pageId}-target-grid`}
-          scrollTestId="db-admin-object-list"
-          tableClassName="w-full min-w-[28rem] table-fixed"
-          stickyHeader
-          visibleRows={INFORMATION_TABLE_FIXED_VISIBLE_ROWS}
-          fillVisibleRows
-        />
-      )}
-      {!loading && (
-        <DbObjectSelectorFooter
-          visibleCount={items.length}
-          totalCount={totalCount}
-          selectedCount={selectedKeys.length}
-          hasNextPage={hasNextPage}
-          loadingNextPage={loadingNextPage}
-          loadMoreError={loadMoreError}
-          dataTestId={`${pageId}-target-footer`}
-          onLoadMore={onLoadMore}
-          onRetryLoadMore={onRetryLoadMore}
-        />
-      )}
+      <ListPicker
+        id={`${pageId}-target-picker`}
+        label={t("metadataSql.targets.title")}
+        items={pickerItems}
+        selectedKeys={selectedSet}
+        selectedItems={selectedPickerItems}
+        onToggle={(item) => {
+          const target = targetOf(item.key);
+          if (target) onToggle(target);
+        }}
+        onSelectMany={(visible) =>
+          onBulkSelect(
+            visible.flatMap((item) => {
+              const target = targetOf(item.key);
+              return target ? [target] : [];
+            }),
+            true
+          )
+        }
+        onClearSelection={onClearSelection}
+        total={totalCount}
+        hasActiveFilter={hasActiveFilter}
+        loading={loading}
+        refreshing={refreshing}
+        error={error || undefined}
+        onRetry={onRetry}
+        hasMore={hasNextPage}
+        loadingMore={loadingNextPage}
+        loadMoreError={loadMoreError || undefined}
+        onLoadMore={loadMoreError ? onRetryLoadMore : onLoadMore}
+        fixedHeight
+        labels={{
+          resultCount: ({ visible, total, selected }) =>
+            t("objectSelector.resultCountWithSelected", { visible, total, selected }),
+          loading: t("metadataSql.targets.loading"),
+          loadMore: t("objectSelector.loadMore"),
+          retry: t("common.retry"),
+          emptyTitle: t("metadataSql.targets.emptyTitle"),
+          emptyHint: t("metadataSql.targets.emptyHint"),
+          noResultsTitle: t("metadataSql.targets.noResultsTitle"),
+          noResultsHint: t("metadataSql.targets.noResultsHint"),
+          clearSearch: t("common.clearSearch"),
+          keyboardHint: t("objectSelector.keyboardHint"),
+        }}
+        testId={`${pageId}-target`}
+      />
       {!loading && (
         <ContentActionBar
           ariaLabel={t("metadataSql.targets.actions")}
@@ -1040,6 +976,28 @@ function MetadataTargetGrid({
       )}
     </section>
   );
+}
+
+/** 候補の 1 行（名前は SQL と同じ表記、下にコメント、右端に種類）。 */
+function targetPickerItem(item: MetadataTargetItem): ListPickerItem {
+  return {
+    key: item.key,
+    label: <DbObjectName value={item.qualifiedName} size="xs" truncate className="block" />,
+    textValue: item.qualifiedName,
+    description: item.comment || undefined,
+    meta: <StatusBadge icon={false} variant="neutral" label={targetTypeLabel(item.object_type)} />,
+  };
+}
+
+/** 読み込んだ範囲の外にある選択（key だけ）を候補の形にする（コメントは読んでいないので出さない）。 */
+function targetItemFromTarget(target: MetadataSqlTarget): MetadataTargetItem {
+  return {
+    ...target,
+    key: targetKey(target),
+    qualifiedName: parseDbAdminObjectTarget(target.object_name, target.owner).qualifiedName,
+    owner: target.owner ?? "",
+    comment: "",
+  };
 }
 
 function MetadataInputPanel({
@@ -1282,12 +1240,6 @@ function targetItemsFromObjects(items: DbAdminObjectSummary[]) {
       comment: item.comment,
     };
   });
-}
-
-function targetSortValue(item: MetadataTargetItem, key: TargetSortKey) {
-  if (key === "object_type") return item.object_type;
-  if (key === "owner") return item.owner.toLowerCase();
-  return item.qualifiedName.toLowerCase();
 }
 
 function targetTypeLabel(objectType: MetadataSqlTarget["object_type"]) {

@@ -302,7 +302,9 @@ export {
   permissionInheritanceSources,
   targetItemLabel,
   targetItemsWithCustomIds,
-  targetLoadRows,
+  resolveTargetItems,
+  rolePermissionTargetSearchParams,
+  TARGET_PAGE_SIZE,
   type RolePermissionsPageProps,
 } from "./permissions/RolePermissionsPage";
 // 権限管理の機能の一覧を左のナビにそろえる（#567）
@@ -322,7 +324,8 @@ export type {
   PermissionRole,
   RolePermissionCustomIdOptions,
   RolePermissionTargetItem,
-  RolePermissionTargetLoadResult,
+  RolePermissionTargetPage,
+  RolePermissionTargetQuery,
   RolePermissionTargetSection,
   RolePermissionsApi,
   RolePermissionsDraft,

@@ -143,7 +143,9 @@ class _TargetObjectCursor:
             rows = [
                 row
                 for row in rows
-                if query in str(row[1] or "").upper() or query in str(row[4] or "").upper()
+                # SQL と同じく `OWNER.OBJECT` とコメントを照合する（#608）。
+                if query in f"{str(row[0] or '').upper()}.{str(row[1] or '').upper()}"
+                or query in str(row[4] or "").upper()
             ]
         cursor_owner = str(binds.get("cursor_owner") or "").upper()
         cursor_name = str(binds.get("cursor_name") or "").upper()
@@ -360,6 +362,16 @@ def test_target_objects_read_live_metadata_and_filter_owner_search() -> None:
     assert first_binds["fetch_limit"] == 11
     assert second_binds["owner_prefix"] == "SAL%"
     assert second_binds["object_query"] == "%SUMMARY%"
+
+    # 対象の選択は検索できる選択欄 1 つで探すので、スキーマ名・`OWNER.OBJECT` でも見つかる（#608）。
+    by_owner = cast(list[dict[str, object]], service.target_objects(limit=10, q="hr")["items"])
+    assert [item["qualified_name"] for item in by_owner] == ["HR.EMPLOYEES", "HR.V_EMPLOYEES"]
+    by_qualified = cast(
+        list[dict[str, object]], service.target_objects(limit=10, q="sales.ord")["items"]
+    )
+    assert [item["qualified_name"] for item in by_qualified] == ["SALES.ORDERS"]
+    third_sql, _third_binds = pool.executed[2]
+    assert "UPPER(o.owner || '.' || o.object_name) LIKE :object_query" in third_sql
 
 
 def test_target_objects_exclude_system_objects_and_allowlist_owners() -> None:

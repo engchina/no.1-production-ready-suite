@@ -1190,8 +1190,11 @@ class DeepSecService:
             )
         normalized_query = q.strip().upper()
         if normalized_query:
+            # 対象の選択は検索できる選択欄 1 つで探す（#608）。
+            # スキーマ名・`OWNER.OBJECT` でも見つかるよう、
+            # 所有者を付けた名前とコメントを照合する（オブジェクト名だけの部分一致も含む）。
             filters.append(
-                "(UPPER(o.object_name) LIKE :object_query ESCAPE '\\' "
+                "(UPPER(o.owner || '.' || o.object_name) LIKE :object_query ESCAPE '\\' "
                 "OR UPPER(NVL(tc.comments, '')) LIKE :object_query ESCAPE '\\')"
             )
             binds["object_query"] = _like_pattern(normalized_query, prefix="%", suffix="%")

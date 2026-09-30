@@ -261,7 +261,10 @@ export const SECURITY_USERS: Json[] = [
   },
 ];
 
-/** `GET /api/security/access-targets`（業務ビューは Run に現れた ID とロールに割り当て済みの ID）。 */
+/**
+ * 権限管理の対象の候補（`GET /api/security/access-targets/{agents,business-views}` の元データ。#608）。
+ * 業務ビューは Run に現れた ID（ロールに割り当て済みの ID はモックが足す）。
+ */
 export const ACCESS_TARGETS: Json = {
   agents: [
     { id: "default", name: "汎用業務 Agent", description: "既定 Agent", status: "enabled" },
