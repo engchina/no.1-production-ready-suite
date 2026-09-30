@@ -3364,7 +3364,7 @@ test("SQL 系の必須入力欄は共有の必須バッジと required 属性で
   const directExecuteButton = directSql.getByRole("button", { name: "SQL 実行" });
   await expect(directExecuteButton).toBeDisabled();
   await directSqlInput(directSql).fill("SELECT 1 FROM DUAL");
-  await expect(directSql.getByLabel("取得件数上限", { exact: true })).toHaveAttribute("aria-required", "true");
+  await expect(directSql.getByRole("spinbutton", { name: "取得件数上限", exact: true })).toHaveAttribute("aria-required", "true");
   await directSql.getByLabel("取得件数上限").fill("100");
   await expect(directExecuteButton).toBeEnabled();
 
