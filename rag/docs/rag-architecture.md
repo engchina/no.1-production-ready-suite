@@ -91,7 +91,7 @@
    - 検索 request ごとに Business Context Pack（検索範囲）を作る。tenant/user/role は raw 値を保存せず hash だけを持ち、document/category/knowledge base scope、`source_acl`、`document_version` を検索条件に固定する。
    - 回答フローの根拠確認（CRAG）は、検索結果の根拠を評価し、足りなければ質問を補正して再検索する（`RAG_DOCRAG_ANSWER_FLOW=crag`。`standard_rag` は補正検索をしない）。回答文の生成後にも根拠との整合を確かめ（監査）、根拠が足りないときは理由（`insufficient_reason`）と人手確認の要否を付ける。
    - GraphRAG-lite の構築深度は **GraphRAG アダプター(`rag_graph_profile`)** で手動選択する。`app/rag/graph_adapter.py` が取込側 profile を解決し、`off`(既定・KG 非構築=現行挙動)/ `entities`(entities+relationships のみ)/ `full`(claims + community summary まで)で `build_graph_index` の `build_claims` / `build_community_summaries` を切り替える(entities は軽量)。ingest の graph gate は `resolve_graph_adapter(...).enabled`、legacy `RAG_GRAPH_ENABLED=true` は起動時に `RAG_GRAPH_PROFILE=full` 相当へ読み替え(profile を明示していればそれを優先)、構築判定・文書の実効設定の表示・文書レシピの上書きの正本を `rag_graph_profile` 1 つにそろえる。graph の行の `knowledge_base_id` は取込時の所属のスナップショットなので、KB のグラフ表示は今もその KB に所属している文書の行だけを返す。回答の検索は graph を使わない（検索時の graph の検索は #595 で削除した）。設定 API `GET/PATCH /api/settings/graph` と専用設定画面で切替する。profile 変更は次回以降の取込に適用され、既存文書への反映には再取込が必要。外部グラフ DB は導入しない。
-   - Memory Router / Retrieval Plan・Resolver / Verifier・Context Builder・Agent Memory（`rag_agent_memories` への検索と writeback）は #595 で削除した。テーブルと監査の列の削除は #596 で行う。
+   - Memory Router / Retrieval Plan・Resolver / Verifier・Context Builder・Agent Memory（`rag_agent_memories` への検索と writeback）は #595 で削除し、テーブルは #596 で削除した。監査の列は既存の監査の行を変えないため残す。
 
 10. 回答生成
    - LLM は **OCI Enterprise AI**。回答フローが、small-to-big で復元した根拠の文脈を回答生成テンプレート（検索・回答設定 > 回答プロンプト。`rag_docrag_prompts`）で渡して回答を生成する。追加の LLM provider は導入しない。
@@ -171,30 +171,6 @@ CREATE INDEX rag_chunks_text_idx
 CREATE INDEX rag_chunks_tenant_document_idx
     ON rag_chunks (tenant_id_hash, document_id, chunk_index);
 
-CREATE TABLE rag_agent_memories (
-    memory_id        VARCHAR2(64) PRIMARY KEY,
-    tenant_id_hash   CHAR(64),
-    user_id_hash     CHAR(64),
-    role_id_hash     CHAR(64),
-    agent_id_hash    CHAR(64),
-    thread_id_hash   CHAR(64),
-    trace_id         VARCHAR2(64) NOT NULL,
-    memory_text      CLOB NOT NULL,
-    metadata_json    JSON,
-    embedding        VECTOR(1536, FLOAT32) NOT NULL,
-    usefulness_score NUMBER(8, 6) DEFAULT 0.5 NOT NULL,
-    eval_count       NUMBER(10) DEFAULT 0 NOT NULL,
-    created_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    updated_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-);
-
-CREATE VECTOR INDEX rag_agent_memories_embedding_hnsw_idx
-    ON rag_agent_memories (embedding)
-    ORGANIZATION INMEMORY NEIGHBOR GRAPH
-    DISTANCE COSINE
-    WITH TARGET ACCURACY 95;
--- rag_agent_memories は #595 で使わなくなった（Agent Memory を削除）。テーブルの削除は #596。
-
 CREATE TABLE rag_search_audit (
     audit_id              VARCHAR2(64) DEFAULT RAWTOHEX(SYS_GUID()) PRIMARY KEY,
     event_type            VARCHAR2(32) DEFAULT 'rag.search' NOT NULL,
@@ -222,7 +198,7 @@ CREATE TABLE rag_search_audit (
     context_compressed_count NUMBER(10) DEFAULT 0 NOT NULL,
     context_compression_saved_chars NUMBER(10) DEFAULT 0 NOT NULL,
     -- memory_plan_id・top_k・rerank_top_n・query_variant_count と、reranked_count から
-    -- context_window_chars までの内訳の列は、#595 以降は既定値を書く（列の削除は #596）。
+    -- context_window_chars までの内訳の列は、#595 以降は既定値を書く（既存の行を変えないため残す。#596）。
     agent_memory_retrieved_count NUMBER(10) DEFAULT 0 NOT NULL,
     agent_memory_writeback_count NUMBER(10) DEFAULT 0 NOT NULL,
     agent_memory_writeback_status VARCHAR2(32) DEFAULT 'skipped' NOT NULL,
@@ -267,7 +243,7 @@ CREATE TABLE rag_ingestion_audit (
 
 document / chunk table には `tenant_id_hash` を持たせる。production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` を使わず、tenant なし（単一 tenant）で動かす。利用者と業務ビュー / ナレッジベースの対象範囲はログイン中の利用者（MCP ではサービストークンの利用者）から決め、client の `X-RAG-Allowed-*` header も使わない（#214 / #225）。local（`RAG_AUTH_MODE=local`）だけは開発・検証のため、HTTP header `X-Tenant-ID` がある場合に raw tenant id を保存せず hash 化し、一覧・詳細・重複判定・retrieval を同一 tenant に閉じる（header がない場合は全体を参照できる）。同じく local では `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与すると、document id / category name scope を request context に保持し、document 一覧、詳細、chunk count、Oracle AI Vector Search、Oracle Text keyword search の SQL predicate に適用する。scope header が存在するが有効値がない場合は deny-all とする。
 
-監査 table は query 本文、OCR 原文、tenant/user id の raw 値を保存しない。検索は `query_hash` と `query_chars`、filter key、安全チェックの code、検索件数・citation 件数、引用した文書 ID、RAG 設定 fingerprint を保存する（旧 standard の検索・context の内訳の列は #595 以降は既定値。列の削除は #596）。回答フローの工程と根拠は回答の記録（`rag_answer_records`）に残す。tenant/user id は `tenant_id_hash` / `user_id_hash` として保存する。取込は `source_sha256` と `source_bytes` を保存し、trace id / request id でアプリログ・Langfuse・Prometheus と相関する。
+監査 table は query 本文、OCR 原文、tenant/user id の raw 値を保存しない。検索は `query_hash` と `query_chars`、filter key、安全チェックの code、検索件数・citation 件数、引用した文書 ID、RAG 設定 fingerprint を保存する（旧 standard の検索・context の内訳の列は #595 以降は既定値。既存の監査の行を変えないため列は残す。#596）。回答フローの工程と根拠は回答の記録（`rag_answer_records`）に残す。tenant/user id は `tenant_id_hash` / `user_id_hash` として保存する。取込は `source_sha256` と `source_bytes` を保存し、trace id / request id でアプリログ・Langfuse・Prometheus と相関する。
 
 ## Trace export
 

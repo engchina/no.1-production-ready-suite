@@ -154,7 +154,7 @@ DocRAG 親子階層の 5 項目は rag_poc の「チャンキング」tab と同
 
 - 削除した画面の URL（`/settings/grounding`・`/settings/generation`・`/settings/agentic`）は検索方法（`/settings/retrieval`）へ移す。
 - 削除した API は `GET/PATCH /api/settings/retrieval`・`/grounding`・`/generation`・`/agentic`、`GET/POST /api/settings/prompts`・`POST /api/settings/prompts/{version_id}/activate`。回答の設定は `/api/settings/answering`・`/answer-records`・`/query-history`・`/docrag-prompts` だけになった。
-- 保存済みのロールのメニュー権限 `menu.settings_grounding` / `menu.settings_generation` / `menu.settings_agentic` は読み捨てる（DB の行の削除は #596）。
+- 保存済みのロールのメニュー権限 `menu.settings_grounding` / `menu.settings_generation` / `menu.settings_agentic` は読み捨てる。DB の行は #596 のシステムテーブルの更新で削除した（[deployment.md の「既存環境の更新手順（#596）」](./deployment.md)）。
 
 安全チェックは質問と回答の両方に適用する。
 

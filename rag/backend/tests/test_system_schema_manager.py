@@ -418,6 +418,56 @@ def test_initialize_replaces_only_explicit_retired_index() -> None:
     assert ("RAG_INGESTION_SEGMENTS_RECIPE_STATUS_IDX", "INDEX") in database.objects
 
 
+_RETIRED_STANDARD_ENGINE_TABLES = (
+    "RAG_PROMPT_VERSIONS",
+    "RAG_GENERATION_SETTINGS",
+    "RAG_AGENT_MEMORIES",
+)
+_RETIRE_STANDARD_ENGINE_MIGRATION = "20260930_005_retire_standard_engine_objects"
+
+
+def test_update_retires_standard_engine_tables_and_runs_migration() -> None:
+    """旧 standard の回答エンジンの表が残る既存の DB は outdated になり、更新で消える（#596）。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    assert not any((name, "TABLE") in database.objects for name in _RETIRED_STANDARD_ENGINE_TABLES)
+    for name in _RETIRED_STANDARD_ENGINE_TABLES:
+        database.objects[(name, "TABLE")] = datetime.now(UTC)
+    database.migrations.pop(_RETIRE_STANDARD_ENGINE_MIGRATION)
+
+    status = manager.status()
+    assert status["status"] == "outdated"
+    assert _RETIRE_STANDARD_ENGINE_MIGRATION in status["pending_versions"]
+    assert {item["name"] for item in status["retired_objects"]} == set(
+        _RETIRED_STANDARD_ENGINE_TABLES
+    )
+
+    result = manager.initialize()
+
+    assert result["status"] == "ready"
+    assert _RETIRE_STANDARD_ENGINE_MIGRATION in database.migrations
+    assert any("MENU.SETTINGS_GROUNDING" in statement for statement in database.executed)
+    assert not any((name, "TABLE") in database.objects for name in _RETIRED_STANDARD_ENGINE_TABLES)
+    # 回答の記録（answer_engine の列）と知識グラフの表は残す。
+    assert ("RAG_ANSWER_RECORDS", "TABLE") in database.objects
+    assert ("RAG_GRAPH_ENTITIES", "TABLE") in database.objects
+
+
+def test_recreate_drops_retired_standard_engine_tables() -> None:
+    """全再作成は migration を記録だけするので、退役した表は退役一覧から消す（#596）。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    for name in _RETIRED_STANDARD_ENGINE_TABLES:
+        database.objects[(name, "TABLE")] = datetime.now(UTC)
+
+    result = manager.initialize(recreate=True, confirmation=RECREATE_CONFIRMATION)
+
+    assert result["status"] == "ready"
+    assert not any((name, "TABLE") in database.objects for name in _RETIRED_STANDARD_ENGINE_TABLES)
+
+
 def test_checksum_mismatch_reapplies_only_pending_migration() -> None:
     database = _FakeDatabase()
     manager = SystemSchemaManager(database.connection)
