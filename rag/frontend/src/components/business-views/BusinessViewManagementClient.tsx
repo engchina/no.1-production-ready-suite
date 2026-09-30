@@ -56,7 +56,6 @@ import {
   type AnswerEngineName,
   type DocragAnswerFlowName,
   type DocragQueryStrategyName,
-  type TextSearchTokenizerName,
   type BusinessViewConfig,
   type BusinessViewDetail,
   type BusinessViewStatus,
@@ -221,10 +220,6 @@ const GENERATION_OPTIONS: SelectFieldOption<GenerationProfileName>[] = [
   { value: "bilingual_ja_en", label: t("settings.generation.profile.bilingual_ja_en") },
   { value: "inline_cited", label: t("settings.generation.profile.inline_cited") },
   { value: "custom", label: t("settings.generation.profile.custom") },
-];
-const TOKENIZER_OPTIONS: SelectFieldOption<TextSearchTokenizerName>[] = [
-  { value: "builtin", label: t("businessViews.tokenizer.builtin") },
-  { value: "sudachi", label: t("businessViews.tokenizer.sudachi") },
 ];
 const ANSWER_ENGINE_OPTIONS: SelectFieldOption<AnswerEngineName>[] = [
   { value: "standard", label: t("businessViews.answerEngine.standard") },
@@ -1041,15 +1036,6 @@ function BusinessViewEditor({
                       />
                     </div>
                   </div>
-                  <QuerySelectRow
-                    id="business-view-tokenizer"
-                    label={t("businessViews.field.tokenizer")}
-                    value={config.query.text_search_tokenizer ?? null}
-                    options={TOKENIZER_OPTIONS}
-                    defaultOnOverride="sudachi"
-                    disabled={pending}
-                    onChange={(value) => updateQuery({ text_search_tokenizer: value })}
-                  />
                   <QuerySelectRow
                     id="business-view-grounding"
                     note={docragUnusedNote}

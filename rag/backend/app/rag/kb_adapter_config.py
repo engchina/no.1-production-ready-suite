@@ -103,7 +103,6 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     "generation_profile": "rag_generation_profile",
     "guardrail_policy": "rag_guardrail_policy",
     "answer_engine": "rag_answer_engine",
-    "text_search_tokenizer": "rag_text_search_tokenizer",
     "docrag_query_strategy": "rag_docrag_query_strategy",
     "docrag_answer_flow": "rag_docrag_answer_flow",
     "docrag_neighbor_child_count": "rag_docrag_neighbor_child_count",
@@ -275,8 +274,6 @@ class KnowledgeBaseQueryConfig(BaseModel):
 
     # 回答エンジン(standard / docrag)。None はグローバル継承。
     answer_engine: Literal["standard", "docrag"] | None = None
-    # 全文検索の分割方式(builtin / sudachi)。None はグローバル継承。
-    text_search_tokenizer: Literal["builtin", "sudachi"] | None = None
     # DocRAG 回答フローの設定(回答エンジンが docrag のときだけ効く)。None はグローバル継承。
     docrag_query_strategy: DocragQueryStrategy | None = None
     docrag_answer_flow: DocragAnswerFlow | None = None

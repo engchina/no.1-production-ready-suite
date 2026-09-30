@@ -28,7 +28,7 @@ from docrag.knowledge.domain_keyword_candidates import (
     suggest_domain_keyword_candidates,
     suggest_domain_keyword_candidates_from_latest_chunks,
 )
-from docrag.retrieval.text_search_tokenizer import TEXT_SEARCH_TOKENIZER_REGEX, TextSearchTokenizerConfig
+from docrag.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
 
 class DomainKeywordCandidateTests(unittest.TestCase):
@@ -41,7 +41,7 @@ class DomainKeywordCandidateTests(unittest.TestCase):
         candidates = suggest_domain_keyword_candidates(
             chunks,
             existing_keywords=["出庫伝票"],
-            tokenizer_config=TextSearchTokenizerConfig(mode=TEXT_SEARCH_TOKENIZER_REGEX),
+            tokenizer_config=TextSearchTokenizerConfig(),
             limit=10,
         )
         keywords = [candidate.keyword for candidate in candidates]
@@ -64,7 +64,7 @@ class DomainKeywordCandidateTests(unittest.TestCase):
 
         candidates = suggest_domain_keyword_candidates(
             sources,
-            tokenizer_config=TextSearchTokenizerConfig(mode=TEXT_SEARCH_TOKENIZER_REGEX),
+            tokenizer_config=TextSearchTokenizerConfig(),
             limit=50,
         )
         keywords = {candidate.keyword for candidate in candidates}
@@ -90,7 +90,7 @@ class DomainKeywordCandidateTests(unittest.TestCase):
 
         candidates = suggest_domain_keyword_candidates(
             sources,
-            tokenizer_config=TextSearchTokenizerConfig(mode=TEXT_SEARCH_TOKENIZER_REGEX),
+            tokenizer_config=TextSearchTokenizerConfig(),
             limit=10,
         )
         keywords = [candidate.keyword for candidate in candidates]
@@ -114,7 +114,7 @@ class DomainKeywordCandidateTests(unittest.TestCase):
             loaded = load_latest_corpus_chunk_runs(output_dir)
             candidates, chunk_count, chunk_run_count = suggest_domain_keyword_candidates_from_latest_chunks(
                 output_dir,
-                tokenizer_config=TextSearchTokenizerConfig(mode=TEXT_SEARCH_TOKENIZER_REGEX),
+                tokenizer_config=TextSearchTokenizerConfig(),
             )
 
         self.assertEqual([run.chunk_run_id for run in loaded], [result.chunk_run_id])
@@ -240,7 +240,7 @@ class DomainKeywordCandidateTests(unittest.TestCase):
 
             suggestion = suggest_domain_keyword_candidates_from_latest_chunks(
                 output_dir,
-                tokenizer_config=TextSearchTokenizerConfig(mode=TEXT_SEARCH_TOKENIZER_REGEX),
+                tokenizer_config=TextSearchTokenizerConfig(),
                 limit=10,
                 max_source_chunks=3,
             )

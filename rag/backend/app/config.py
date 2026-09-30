@@ -920,13 +920,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "受け付けるが、回答フローには反映されない。"
         ),
     )
-    rag_text_search_tokenizer: Literal["builtin", "sudachi"] = Field(
-        default="builtin",
-        description=(
-            "Oracle Text 全文検索クエリの分割方式。sudachi は rag_poc(DocRAG)の Sudachi 分割。"
-            "業務ビューにドメインキーワードがある場合は builtin でも DocRAG の分割で組み立てる。"
-        ),
-    )
     rag_runtime_knowledge: dict[str, object] = Field(
         default_factory=dict,
         description=(

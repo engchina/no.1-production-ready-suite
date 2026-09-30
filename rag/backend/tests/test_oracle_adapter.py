@@ -2873,26 +2873,23 @@ async def test_oci_retrieval_applies_multiple_knowledge_base_filters() -> None:
 
 
 def test_oracle_text_terms_extracts_safe_display_keywords() -> None:
-    """表示用 keyword terms は自然文から安全な短い語だけを返す。"""
+    """表示用 keyword terms は検索と同じ分割(#588)で、自然文から安全な語だけを返す。"""
     terms = oracle_text_terms("社内規程の申請フローは？")
 
-    assert terms == ["社内", "規程", "申請", "フロー"]
+    assert terms == ["社内規程", "社内", "規程", "申請フロー", "申請", "フロー"]
     assert "？" not in "".join(terms)
     assert not {"の申", "請フ", "ーは"} & set(terms)
-    assert len(terms) <= 12
+    assert len(terms) <= 24
 
 
 def test_oracle_text_terms_filters_japanese_particles_and_english_stopwords() -> None:
     """日本語助詞と英語 stopword は UI/Oracle Text query に出さない。"""
-    assert set(oracle_module.ORACLE_TEXT_STOP_WORDS) == oracle_module.JAPANESE_QUERY_STOP_TERMS
     assert oracle_text_terms("私の上司の興味はなんですか") == ["上司", "興味"]
     assert oracle_text_terms("申請へ承認") == ["申請", "承認"]
-    assert oracle_text_terms("what is the expense policy and who approves it") == [
-        "expense",
-        "policy",
-        "approves",
-    ]
-    assert oracle_text_terms("IT policy for HR") == ["it", "policy", "hr"]
+    english = oracle_text_terms("what is the expense policy and who approves it")
+    assert {"expense", "policy", "approves"} <= set(english)
+    assert not {"what", "is", "the", "and", "who"} & set(english)
+    assert {"it", "policy", "hr"} <= set(oracle_text_terms("IT policy for HR"))
 
 
 async def test_oci_keyword_search_normalizes_natural_language_query() -> None:
@@ -2909,7 +2906,7 @@ async def test_oci_keyword_search_normalizes_natural_language_query() -> None:
     assert isinstance(text_query, str)
     assert text_query != raw_query
     assert "？" not in text_query
-    assert "{社内規程}" not in text_query
+    assert "{社内規程}" in text_query
     assert "{社内}" in text_query
     assert "{規程}" in text_query
     assert "{フロー}" in text_query
@@ -2969,7 +2966,7 @@ async def test_oci_hybrid_search_uses_normalized_keyword_query() -> None:
     text_query = keyword_call.parameters["query"]
     assert isinstance(text_query, str)
     assert text_query != raw_query
-    assert "{社内規程}" not in text_query
+    assert "{社内規程}" in text_query
     assert "{社内}" in text_query
     assert "？" not in text_query
 
