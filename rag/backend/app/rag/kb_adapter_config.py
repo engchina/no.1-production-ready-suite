@@ -108,6 +108,7 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     "docrag_answer_flow": "rag_docrag_answer_flow",
     "docrag_neighbor_child_count": "rag_docrag_neighbor_child_count",
     "docrag_rerank_enabled": "rag_docrag_rerank_enabled",
+    "docrag_screen_linking_enabled": "rag_docrag_screen_linking_enabled",
 }
 
 # 外部 parser adapter backend -> その有効化 feature flag(Settings フィールド名)。
@@ -281,6 +282,8 @@ class KnowledgeBaseQueryConfig(BaseModel):
     docrag_answer_flow: DocragAnswerFlow | None = None
     docrag_neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
     docrag_rerank_enabled: bool | None = None
+    # 画面目録で操作画面を探す(#554)。LLM の呼び出しが 1 回増える。
+    docrag_screen_linking_enabled: bool | None = None
 
 
 class KnowledgeBaseAdapterConfig(BaseModel):

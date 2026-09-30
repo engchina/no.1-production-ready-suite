@@ -363,9 +363,9 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
     """質問文から問い合わせ profile、channel、制約語を抽出します。"""
     original = _clean_text(question)
     if not current_profile().japanese_inquiry_rules:
-        return InquiryConditionParse(original_question=original, business_domains=tuple(_match_patterns(original, current_profile().business_patterns)))
+        return InquiryConditionParse(original_question=original, business_domains=tuple(_question_business_domains(original)))
     comparable = _comparable(original)
-    business_domains = _match_patterns(original, current_profile().business_patterns)
+    business_domains = _question_business_domains(original)
     document_kinds = _match_patterns(original, _document_kind_patterns())
     screen_terms = _ordered_unique(
         term for term in _SCREEN_PATTERN.findall(original) if not _INTERROGATIVE_PATTERN.search(term)
@@ -432,6 +432,22 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
         active_profiles=tuple(active_profiles),
         metadata_filter=metadata_filter,
     )
+
+
+def _question_business_domains(question: str) -> list[str]:
+    """質問が名指しした業務名。
+
+    呼び出し元が業務名の照合（`AnswerDependencies.business_domains`）を注入していればそれだけを使い、
+    domain profile の `business_patterns` は使わない（本製品は検索範囲の文書の大分類の一覧から照合する）。
+    注入が無いとき（SDK・単体の呼び出し）は従来どおり `business_patterns` で推定する。
+    """
+    from docrag.dependencies import question_business_domains
+
+    injected = question_business_domains(question)
+    if injected is not None:
+        # 値は候補の大分類と完全一致で比べる（`_same_business_records`）ため、表記を変えずに重複だけ除く。
+        return list(dict.fromkeys(str(value) for value in injected if str(value).strip()))
+    return _match_patterns(question, current_profile().business_patterns)
 
 
 def inquiry_retrieval_queries(
