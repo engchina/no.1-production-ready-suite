@@ -1,7 +1,7 @@
 """検索（RAG）関連スキーマ。"""
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -11,6 +11,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     TypeAdapter,
     ValidationError,
     field_validator,
@@ -446,6 +447,19 @@ class SearchResponse(BaseModel):
     # 回答側ガードレールが本文をマスク/差し替えしたか。realtime stream 時に
     # マスク済み本文を再送(置換)するかの判定に使う内部フラグ。
     answer_replaced: bool = False
+    # 標準回答による評価の入力(回答の記録に保存するものと同じ。#591)。応答には出さず、
+    # 品質評価が同じプロセスの中で回答の根拠・引用・実行記録を受け取るためだけに使う。
+    _evaluation_input: dict[str, object] | None = PrivateAttr(default=None)
+
+    @property
+    def evaluation_input(self) -> dict[str, object] | None:
+        """標準回答による評価の入力(回答エンジンが作らなかったときは None)。"""
+        return self._evaluation_input
+
+    def with_evaluation_input(self, value: Mapping[str, object] | None) -> Self:
+        """標準回答による評価の入力を持たせて返す(同じ object を変更する)。"""
+        self._evaluation_input = dict(value) if value is not None else None
+        return self
 
     @field_validator("guardrail_warnings")
     @classmethod

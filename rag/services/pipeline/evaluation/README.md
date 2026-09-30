@@ -1,9 +1,9 @@
 # pipeline ステージ: evaluation
 
-評価スイート(request_only/retrieval_focused/balanced/strict_ci/ragas_like)→ CI gate 用閾値へ
-解決するステージマイクロサービス。解決ロジックは backend と **同一
-(`rag_pipeline_core.evaluation`)** で決定論・外部依存なし。実評価(決定論指標)は backend が担う。
-外部評価 SaaS / LLM-as-judge は導入しない。
+評価の基準(`standard`(標準)/ `strict`(厳格)。#591)→ CI gate 用閾値へ解決するステージ
+マイクロサービス。解決ロジックは backend と **同一(`rag_pipeline_core.evaluation`)** で決定論・
+外部依存なし。評価の実行(指標の計算と、標準回答があるケースの LLM による比較)は backend が担う。
+外部評価 SaaS は導入しない。
 
 | 項目 | 値 |
 |---|---|

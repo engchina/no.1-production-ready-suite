@@ -1747,7 +1747,7 @@ export function useUpdateAgenticSettings() {
   });
 }
 
-/** Evaluation アダプター(評価スイート/閾値)の runtime 設定。 */
+/** Evaluation アダプター(評価の基準 = 閾値のプリセット)の runtime 設定。 */
 export function useEvaluationSettings() {
   return useQuery<EvaluationSettingsData>({
     queryKey: queryKeys.evaluationSettings,

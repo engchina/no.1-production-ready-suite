@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from app.clients.http_retry import HttpRetryConfig, request_with_retry
 from app.schemas.evaluation import (
+    EVALUATION_METRIC_NAMES,
     EvaluationCompareRequest,
     EvaluationCompareResponse,
     EvaluationMetrics,
@@ -428,7 +429,6 @@ def _trend_payload(response_payload: Mapping[str, Any], gate: GateEvaluation) ->
             {
                 "rank": result.rank,
                 "id": result.experiment.id,
-                "mode": result.experiment.mode.value,
                 "ranking_score": result.ranking_score,
                 "passed": not _gate_failed(result.metrics),
                 "metrics": _metrics_trend(result.metrics),
@@ -439,26 +439,12 @@ def _trend_payload(response_payload: Mapping[str, Any], gate: GateEvaluation) ->
 
 
 def _metrics_trend(metrics: EvaluationMetrics) -> dict[str, Any]:
-    """評価 metrics から trend に必要な aggregate だけを残す。"""
+    """評価 metrics から trend に必要な aggregate だけを残す(指標は #591 の 9 つ)。"""
     return {
         "case_count": metrics.case_count,
         "error_count": metrics.error_count,
-        "evaluated_k": metrics.evaluated_k,
-        "precision_at_k": metrics.precision_at_k,
-        "recall_at_k": metrics.recall_at_k,
-        "mrr": metrics.mrr,
-        "answer_keyword_hit_rate": metrics.answer_keyword_hit_rate,
-        "groundedness_pass_rate": metrics.groundedness_pass_rate,
-        "faithfulness": metrics.faithfulness,
-        "context_precision": metrics.context_precision,
-        "context_recall": metrics.context_recall,
-        "response_relevancy": metrics.response_relevancy,
-        "noise_sensitivity": metrics.noise_sensitivity,
-        "citation_traceability_coverage": metrics.citation_traceability_coverage,
-        "bbox_citation_coverage": metrics.bbox_citation_coverage,
-        "element_lineage_coverage": metrics.element_lineage_coverage,
-        "content_kind_hit_rate": metrics.content_kind_hit_rate,
-        "section_coverage": metrics.section_coverage,
+        **{metric: getattr(metrics, metric) for metric in EVALUATION_METRIC_NAMES},
+        "metric_case_counts": dict(metrics.metric_case_counts),
         "threshold_failure_count": len(metrics.threshold_failures),
         "threshold_failures": [
             failure.model_dump(mode="json") for failure in metrics.threshold_failures
@@ -479,15 +465,10 @@ def _gate_summary(gate: GateEvaluation, *, passed: bool) -> str:
         prefix += f": best_experiment={gate.best_experiment_id}"
         if gate.ranking_metric is not None:
             prefix += f", ranking_metric={gate.ranking_metric}"
+    values = ", ".join(f"{metric}={getattr(metrics, metric)}" for metric in EVALUATION_METRIC_NAMES)
     return (
         f"{prefix}: "
-        f"cases={metrics.case_count}, errors={metrics.error_count}, "
-        f"precision_at_k={metrics.precision_at_k}, recall_at_k={metrics.recall_at_k}, "
-        f"mrr={metrics.mrr}, answer_keyword_hit_rate={metrics.answer_keyword_hit_rate}, "
-        f"groundedness_pass_rate={metrics.groundedness_pass_rate}, "
-        f"citation_traceability_coverage={metrics.citation_traceability_coverage}, "
-        f"content_kind_hit_rate={metrics.content_kind_hit_rate}, "
-        f"section_coverage={metrics.section_coverage}, "
+        f"cases={metrics.case_count}, errors={metrics.error_count}, {values}, "
         f"threshold_failures={len(metrics.threshold_failures)}"
     )
 
