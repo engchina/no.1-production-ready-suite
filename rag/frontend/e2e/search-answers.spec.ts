@@ -29,7 +29,7 @@ const summary = (index: number) => ({
   trace_id: `trace-${index}`,
   business_view_id: "bv-1",
   surface: "search",
-  answer_engine: "docrag",
+  answer_engine: "grounded",
   question: `質問 ${index} 番`,
   rewritten_question: null,
   confidence: null,
@@ -157,7 +157,7 @@ test("backend が参照 KB のない業務ビューを 409 で断ったら、そ
   await expect(page.getByText(NO_KB_MESSAGE)).toBeVisible();
 });
 
-test("RAG 検索画面には DocRAG の回答履歴の一覧を出さない（#444）", async ({ page }) => {
+test("RAG 検索画面には回答履歴の一覧を出さない（#444）", async ({ page }) => {
   await mockAnswerHistory(page, 4);
 
   await page.goto("/search");
@@ -245,7 +245,7 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
           surface: "chat",
           answer: "経費の上限は 10 万円です。",
           citations: [],
-          docrag: {},
+          answer_diagnostics: {},
         })
       );
       return;

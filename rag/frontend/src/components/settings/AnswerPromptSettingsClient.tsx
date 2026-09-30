@@ -2,9 +2,9 @@
 
 import { FormSkeleton, PageBody, TimedLoadingState } from "@engchina/production-ready-ui";
 
-import { useDocragPrompts } from "@/lib/queries";
+import { useAnswerPrompts } from "@/lib/queries";
 import { t } from "@/lib/i18n";
-import { DocragPromptCard } from "./DocragPromptEditor";
+import { AnswerPromptCard } from "./AnswerPromptEditor";
 
 /**
  * 回答プロンプトの画面。回答を作る指示のテンプレートと、回答の各工程（読み取り専用）を出す。
@@ -13,7 +13,7 @@ import { DocragPromptCard } from "./DocragPromptEditor";
 export function AnswerPromptSettingsClient() {
   // 初回の読み込みはページの先頭で経過時間と形の Skeleton を出す（カードの中の Skeleton だけにしない）。
   // 取得の結果はカードの編集欄が同じ query から読む。
-  const query = useDocragPrompts();
+  const query = useAnswerPrompts();
   if (query.isPending) {
     return (
       <PageBody wide>
@@ -30,7 +30,7 @@ export function AnswerPromptSettingsClient() {
   }
   return (
     <PageBody wide>
-      <DocragPromptCard promptKey="vlm_answer" showStages />
+      <AnswerPromptCard promptKey="vlm_answer" showStages />
     </PageBody>
   );
 }

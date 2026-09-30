@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.rag.variant_keys import (
     compute_chunk_set_id,
     compute_document_recipe_extraction_id,
@@ -256,12 +256,32 @@ def test_chunk_set_id_keeps_ids_after_parent_child_removal() -> None:
     assert compute_chunk_set_id(SRC, settings) == legacy_id
 
 
-def test_chunk_set_id_uses_docrag_params_only_for_docrag() -> None:
-    """DocRAG の 5 項目は DocRAG 親子階層のときだけ、既定から変えた値だけが ID に効く。"""
-    docrag = get_settings().model_copy(update={"rag_chunking_strategy": "docrag_small_to_big"})
-    tuned = docrag.model_copy(update={"rag_docrag_child_target_chars": 600})
-    assert compute_chunk_set_id(SRC, docrag) != compute_chunk_set_id(SRC, tuned)
+def test_chunk_set_id_is_unchanged_by_the_599_rename() -> None:
+    """分割方式の値と 5 項目の属性名の改名(#599)で、既存の chunk_set_id を変えない。
 
-    structure = docrag.model_copy(update={"rag_chunking_strategy": "structure_aware"})
-    structure_tuned = structure.model_copy(update={"rag_docrag_child_target_chars": 600})
+    期待値は改名の前のコード(値 docrag_small_to_big・属性 rag_docrag_*)で計算した ID。
+    変わると、すべての文書の Chunk と embedding を作り直すことになる。
+    """
+    base = Settings(_env_file=None)
+    small_to_big = base.model_copy(update={"rag_chunking_strategy": "small_to_big"})
+    tuned = small_to_big.model_copy(
+        update={"rag_chunk_child_target_chars": 600, "rag_chunk_parent_max_pages": 2}
+    )
+    structure = base.model_copy(update={"rag_chunking_strategy": "structure_aware"})
+
+    assert compute_chunk_set_id(SRC, small_to_big) == "cs_66a12a4a1dfba485"
+    assert compute_chunk_set_id(SRC, tuned) == "cs_33f6a678012c8097"
+    assert compute_chunk_set_id(SRC, structure) == "cs_f9450f25eacdd0a0"
+
+
+def test_chunk_set_id_uses_small_to_big_params_only_for_small_to_big() -> None:
+    """親子階層（small-to-big）の 5 項目は、その方式のときだけ、既定から変えた値だけが
+    ID に効く。
+    """
+    small_to_big = get_settings().model_copy(update={"rag_chunking_strategy": "small_to_big"})
+    tuned = small_to_big.model_copy(update={"rag_chunk_child_target_chars": 600})
+    assert compute_chunk_set_id(SRC, small_to_big) != compute_chunk_set_id(SRC, tuned)
+
+    structure = small_to_big.model_copy(update={"rag_chunking_strategy": "structure_aware"})
+    structure_tuned = structure.model_copy(update={"rag_chunk_child_target_chars": 600})
     assert compute_chunk_set_id(SRC, structure) == compute_chunk_set_id(SRC, structure_tuned)

@@ -1,26 +1,25 @@
-"""GraphRAG プロファイルの決定論解決(backend / サービス共有)。
+"""関係情報の構築プロファイルの決定論解決(backend / サービス共有)。
 
-profile(off/entities/full)→ KG 構築フラグを決定論で解決する。legacy `rag_graph_enabled=True`
-は off でも full 相当(後方互換)。Settings 非依存(素の値で受け渡す)。
+profile(off/entities)→ 構築フラグを決定論で解決する。entities は文書と章・節の見出しの
+つながり(entity + relationship)を作る。claims / community summary まで作る full は、読む経路が
+無かったため #621 で削除した。Settings 非依存(素の値で受け渡す)。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-GRAPH_PROFILES: tuple[str, ...] = ("off", "entities", "full")
+GRAPH_PROFILES: tuple[str, ...] = ("off", "entities")
 DEFAULT_GRAPH_PROFILE = "off"
 
 
 @dataclass(frozen=True)
 class GraphResolved:
-    """解決済み KG 構築フラグ。"""
+    """解決済みの関係情報の構築フラグ。"""
 
     profile: str
     build_entities: bool
     build_relationships: bool
-    build_claims: bool
-    build_community_summary: bool
 
 
 def normalize_graph_profile(value: object) -> str:
@@ -28,21 +27,12 @@ def normalize_graph_profile(value: object) -> str:
     return normalized if normalized in GRAPH_PROFILES else DEFAULT_GRAPH_PROFILE
 
 
-def resolve_graph_profile(
-    profile: object, *, legacy_enabled: bool = False
-) -> GraphResolved:
-    """profile + legacy フラグから KG 構築フラグを解決する。"""
+def resolve_graph_profile(profile: object) -> GraphResolved:
+    """profile から関係情報の構築フラグを解決する。"""
     name = normalize_graph_profile(profile)
-    if name == "off" and legacy_enabled:
-        name = "full"
-    build_entities = name in {"entities", "full"}
-    build_relationships = build_entities
-    build_claims = name == "full"
-    build_community_summary = name == "full"
+    build_entities = name == "entities"
     return GraphResolved(
         profile=name,
         build_entities=build_entities,
-        build_relationships=build_relationships,
-        build_claims=build_claims,
-        build_community_summary=build_community_summary,
+        build_relationships=build_entities,
     )

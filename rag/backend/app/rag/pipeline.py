@@ -1,6 +1,6 @@
-"""検索 RAG パイプライン: 安全チェック -> DocRAG の回答フロー -> 回答側の安全チェック。
+"""検索 RAG パイプライン: 安全チェック -> 回答フロー -> 回答側の安全チェック。
 
-回答は DocRAG の回答フロー(``DocragAnswerEngine``)だけで行う(#594)。旧 standard の回答エンジン
+回答は回答フロー(``AnswerEngine``)だけで行う(#594)。旧 standard の回答エンジン
 (検索モード・根拠確認・回答スタイル・高度な検索)は #595 で削除した。
 """
 
@@ -16,9 +16,9 @@ from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import Settings, get_settings
+from app.rag.answer_engine import ANSWER_ENGINE, AnswerEngine, answer_step_stage
 from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.docrag_answer import DOCRAG_ANSWER_ENGINE, DocragAnswerEngine, answer_step_stage
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
@@ -39,7 +39,7 @@ from app.schemas.search import (
 
 logger = logging.getLogger(__name__)
 
-DOCRAG_HISTORY_REWRITE_SYSTEM_PROMPT = (
+HISTORY_REWRITE_SYSTEM_PROMPT = (
     "あなたは検索用の質問を整える担当です。会話履歴(evidence_context)を踏まえ、最新の質問"
     "(question)を、履歴を読まなくても意味が通る 1 文の日本語の質問に書き換えてください。"
     "代名詞や省略された対象(それ、その手順、さっきの画面など)は"
@@ -114,10 +114,10 @@ def _escape_prompt_tag_text(text: str) -> str:
 
 
 class RagPipeline:
-    """DocRAG の回答フローで検索・回答する RAG パイプライン。
+    """回答フローで検索・回答する RAG パイプライン。
 
     検索の前後の安全チェック・回答記録・質問履歴・会話履歴による質問の書き換え・工程の計測を
-    ここで行い、検索と回答の生成は ``DocragAnswerEngine`` に任せる。
+    ここで行い、検索と回答の生成は ``AnswerEngine`` に任せる。
     """
 
     def __init__(
@@ -135,7 +135,7 @@ class RagPipeline:
         self._oracle = oracle or OracleClient(settings=self._settings)
         self._llm = llm or OciEnterpriseAiClient(settings=self._settings)
         self._guardrails = guardrails or GuardrailPolicy(self._settings)
-        # DocRAG の回答のモデル。チャットのモデル比較で ``llm`` と同じモデルを渡す(#593)。
+        # 回答フローの回答のモデル。チャットのモデル比較で ``llm`` と同じモデルを渡す(#593)。
         # None は既定のモデル。
         self._answer_model_id = answer_model_id or None
 
@@ -152,7 +152,7 @@ class RagPipeline:
         """RAG 検索を実行する。
 
         ``history`` を渡すと、会話履歴を踏まえて最新の質問を単独の質問へ書き換えてから
-        検索・回答する(``rag_docrag_history_rewrite_enabled``)。
+        検索・回答する(``rag_history_rewrite_enabled``)。
         """
         started_at = perf_counter()
         trace_id = trace_id or new_trace_id()
@@ -200,14 +200,14 @@ class RagPipeline:
             )
 
         if request.retrieval_only:
-            return await self._run_docrag_retrieval(
+            return await self._run_engine_retrieval(
                 request,
                 trace_id=trace_id,
                 started_at=started_at,
                 query_guardrail=query_guardrail,
                 progress_callback=progress_callback,
             )
-        return await self._run_docrag(
+        return await self._run_engine(
             request,
             trace_id=trace_id,
             started_at=started_at,
@@ -217,7 +217,7 @@ class RagPipeline:
             progress_callback=progress_callback,
         )
 
-    async def _run_docrag(
+    async def _run_engine(
         self,
         request: SearchRequest,
         *,
@@ -228,7 +228,7 @@ class RagPipeline:
         history: Sequence[ChatTurn] | None = None,
         progress_callback: SearchStageProgressCallback | None = None,
     ) -> SearchResponse:
-        """DocRAG(rag_poc)の根拠付き回答エンジンで回答する。回答側ガードレールは共通。
+        """rag_poc の根拠付き回答エンジンで回答する。回答側ガードレールは共通。
 
         rag_poc の回答フローは単発質問前提のため、会話履歴がある場合は最新の質問を
         履歴を踏まえた単独の質問へ書き換えてから実行する(失敗時は元の質問)。
@@ -239,16 +239,16 @@ class RagPipeline:
             request = request.model_copy(update={"query": query_guardrail.sanitized_text})
         original_query = request.query
         rewritten_query = ""
-        if history and self._settings.rag_docrag_history_rewrite_enabled:
+        if history and self._settings.rag_history_rewrite_enabled:
             rewritten_query = await _observe_stage(
                 trace_id,
-                "docrag_history_rewrite",
+                "history_rewrite",
                 self._safe_rewritten_query(original_query, history),
                 progress_callback=progress_callback,
             )
             if rewritten_query:
                 request = request.model_copy(update={"query": rewritten_query})
-        engine = DocragAnswerEngine(
+        engine = AnswerEngine(
             self._settings,
             oracle=self._oracle,
             genai=self._genai,
@@ -266,12 +266,12 @@ class RagPipeline:
                 attributes={},
             )
 
-        # DocRAG の回答エンジンは検索と回答の生成（LLM）を中で行う。
+        # 回答エンジンは検索と回答の生成（LLM）を中で行う。
         # 進捗には全体を 1 工程（#375）とし、その中の各工程（質問の理解・文書検索など）も
         # 入れ子の工程として出す（#593）。
         outcome = await _observe_stage(
             trace_id,
-            "docrag_answer",
+            "answer",
             engine.run(request, step_callback=emit_step if progress_callback is not None else None),
             progress_callback=progress_callback,
         )
@@ -289,11 +289,11 @@ class RagPipeline:
         diagnostics = build_search_diagnostics(
             request,
             settings=self._settings,
-            retrieval_strategy_adapter="docrag_grounded",
+            retrieval_strategy_adapter="grounded",
             guardrail_degraded=(
                 query_guardrail.backend_degraded or answer_guardrail.backend_degraded
             ),
-            docrag=cast(
+            answer=cast(
                 dict[str, JsonValue],
                 {
                     **outcome.diagnostics,
@@ -318,14 +318,14 @@ class RagPipeline:
             elapsed_ms=elapsed,
             diagnostics=diagnostics,
         )
-        await self._save_docrag_answer(
+        await self._save_answer_record(
             trace_id=trace_id,
             request=request,
             question=original_query,
             rewritten_question=rewritten_query,
             answer=final_answer,
             citations=outcome.citations,
-            diagnostics=diagnostics.docrag or {},
+            diagnostics=diagnostics.answer or {},
             surface="search" if history is None else "chat",
             evaluation_input=outcome.evaluation_input,
         )
@@ -344,7 +344,7 @@ class RagPipeline:
             # 品質評価が標準回答で比較するときに使う(応答には出さない。#591)。
         ).with_evaluation_input(outcome.evaluation_input)
 
-    async def _run_docrag_retrieval(
+    async def _run_engine_retrieval(
         self,
         request: SearchRequest,
         *,
@@ -353,14 +353,14 @@ class RagPipeline:
         query_guardrail: GuardrailResult,
         progress_callback: SearchStageProgressCallback | None = None,
     ) -> SearchResponse:
-        """DocRAG の検索だけを行い、回答を作らずに候補を引用として返す(#593)。
+        """回答フローの検索だけを行い、回答を作らずに候補を引用として返す(#593)。
 
         KB の検索テストとレシピの検索比較が使う(``SearchRequest.retrieval_only``)。LLM を呼ばず、
         回答記録・質問履歴も保存しない。回答側の安全チェックは回答が無いので行わない。
         """
         if request.query != query_guardrail.sanitized_text:
             request = request.model_copy(update={"query": query_guardrail.sanitized_text})
-        engine = DocragAnswerEngine(self._settings, oracle=self._oracle, genai=self._genai)
+        engine = AnswerEngine(self._settings, oracle=self._oracle, genai=self._genai)
         citations = await _observe_stage(
             trace_id,
             "retrieval",
@@ -371,7 +371,7 @@ class RagPipeline:
         diagnostics = build_search_diagnostics(
             request,
             settings=self._settings,
-            retrieval_strategy_adapter="docrag_retrieval_only",
+            retrieval_strategy_adapter="retrieval_only",
             guardrail_degraded=query_guardrail.backend_degraded,
         )
         elapsed = elapsed_ms(started_at)
@@ -413,7 +413,7 @@ class RagPipeline:
             filters=request.filters,
         )
 
-    async def _save_docrag_answer(
+    async def _save_answer_record(
         self,
         *,
         trace_id: str,
@@ -426,7 +426,7 @@ class RagPipeline:
         surface: str,
         evaluation_input: Mapping[str, object] | None = None,
     ) -> None:
-        """DocRAG 回答を保存する(rag_poc の answer JSON 保存に相当)。失敗しても回答は返す。"""
+        """回答を保存する(rag_poc の answer JSON 保存に相当)。失敗しても回答は返す。"""
         business_view_id = (
             request.business_view_ids[0] if request.business_view_ids else request.business_view_id
         )
@@ -436,7 +436,7 @@ class RagPipeline:
                     "trace_id": trace_id,
                     "business_view_id": business_view_id,
                     "surface": surface,
-                    "answer_engine": DOCRAG_ANSWER_ENGINE,
+                    "answer_engine": ANSWER_ENGINE,
                     "question": question,
                     "rewritten_question": rewritten_question,
                     "answer": answer,
@@ -451,7 +451,7 @@ class RagPipeline:
                 )
         except Exception as exc:  # 保存は補助。回答の返却を止めない。
             logger.warning(
-                "docrag answer record save failed",
+                "answer record save failed",
                 extra={"trace_id": trace_id, "error": str(exc)},
             )
 
@@ -467,7 +467,7 @@ class RagPipeline:
         checked = await asyncio.to_thread(self._guardrails.validate_query, rewritten)
         if not checked.allowed:
             logger.warning(
-                "docrag history rewrite rejected by guardrail",
+                "history rewrite rejected by guardrail",
                 extra={"codes": [finding.code for finding in checked.findings]},
             )
             return ""
@@ -487,10 +487,10 @@ class RagPipeline:
             return ""
         try:
             text = await self._llm.generate(
-                query, history_text, system_prompt=DOCRAG_HISTORY_REWRITE_SYSTEM_PROMPT
+                query, history_text, system_prompt=HISTORY_REWRITE_SYSTEM_PROMPT
             )
         except Exception as exc:  # 書き換えは補助。元の質問で回答を続ける。
-            logger.warning("docrag history rewrite failed", extra={"error": str(exc)})
+            logger.warning("history rewrite failed", extra={"error": str(exc)})
             return ""
         rewritten = text.strip().strip("「」\"'").strip()
         rewritten = rewritten.splitlines()[0].strip() if rewritten else ""

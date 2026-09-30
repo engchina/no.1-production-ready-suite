@@ -15,12 +15,12 @@ from pr_system_settings.auth.errors import SecurityApiError
 
 from app.clients.oracle import OracleClient
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
+from app.rag.answer_engine import evaluate_answer_record
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 from app.rag.audit import record_rag_search_audit
 from app.rag.business_view_config import resolve_business_view_settings
 from app.rag.business_view_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.docrag_answer import evaluate_answer_record
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
 from app.rag.observability import (
     SEARCH_METRIC_MODE,
@@ -68,7 +68,7 @@ async def search(
 ) -> ApiResponse[SearchResponse]:
     """自然言語クエリで RAG 検索を実行する。
 
-    回答は DocRAG の回答フロー(質問の理解 -> Oracle AI Vector Search の hybrid 検索 ->
+    回答は回答フロー(質問の理解 -> Oracle AI Vector Search の hybrid 検索 ->
     Cohere Rerank -> 根拠の評価・補正検索 -> 回答の生成と監査)で作る。
     """
     enforce_rate_limit("search", http_request)
@@ -148,7 +148,7 @@ async def _resolve_query_context(
                         domain_keywords.append(keyword)
             if domain_keywords:
                 settings = settings.model_copy(update={"rag_domain_keywords": domain_keywords})
-            # 用語・ルールは DocRAG 回答エンジンだけが使う(先頭の業務ビューのもの)。
+            # 用語・ルールは回答エンジンだけが使う(先頭の業務ビューのもの)。
             runtime_knowledge = await oracle.get_business_view_knowledge(
                 views[0].id, RUNTIME_KNOWLEDGE_KIND
             )
@@ -282,7 +282,7 @@ async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
     except AnswerTimeoutError as exc:
         elapsed = elapsed_ms(started_at)
         diagnostics = build_search_diagnostics(
-            request, settings=settings, retrieval_strategy_adapter="docrag_grounded"
+            request, settings=settings, retrieval_strategy_adapter="grounded"
         )
         if applied_kb is not None:
             diagnostics.kb_adapter_config_applied = applied_kb
@@ -352,7 +352,7 @@ async def _stream_search_events_with_timeout(
         except AnswerTimeoutError as exc:
             elapsed = elapsed_ms(started_at)
             diagnostics = build_search_diagnostics(
-                request, settings=settings, retrieval_strategy_adapter="docrag_grounded"
+                request, settings=settings, retrieval_strategy_adapter="grounded"
             )
             if applied_kb is not None:
                 diagnostics.kb_adapter_config_applied = applied_kb
@@ -496,13 +496,13 @@ ANSWER_TRACE_ID_FILTER_MAX = 100
 
 
 @router.get("/answers", response_model=ApiResponse[Page[AnswerRecordSummary]])
-async def list_docrag_answers(
+async def list_saved_answers(
     business_view_id: str | None = Query(default=None, max_length=128),
     limit: int = Query(default=10, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     trace_id: Annotated[list[str] | None, Query(max_length=ANSWER_TRACE_ID_FILTER_MAX)] = None,
 ) -> ApiResponse[Page[AnswerRecordSummary]]:
-    """保存済み DocRAG 回答を新しい順に返す(業務ビューで絞り込み可。総件数つき。#304)。
+    """保存された回答(回答の記録)を新しい順に返す(業務ビューで絞り込み可。総件数つき。#304)。
 
     持ち主の回答だけを返す（SYSTEM_ADMIN と `rag.feedback.manage` は全件）。`trace_id` を
     繰り返して渡すと、その回答だけにする（チャットが会話の回答の保存有無を引き当てる）。
@@ -541,8 +541,8 @@ def _normalize_trace_id_filter(values: list[str] | None) -> list[str] | None:
 
 
 @router.get("/answers/{trace_id}", response_model=ApiResponse[AnswerRecordDetail])
-async def get_docrag_answer(trace_id: str) -> ApiResponse[AnswerRecordDetail]:
-    """保存済み DocRAG 回答 1 件(回答・引用・根拠と実行記録)を返す。"""
+async def get_saved_answer(trace_id: str) -> ApiResponse[AnswerRecordDetail]:
+    """保存された回答 1 件(回答・引用・根拠と実行記録)を返す。"""
     row = await OracleClient().get_answer_record(trace_id)
     if row is None:
         raise HTTPException(status_code=404, detail="回答が見つかりません。")
@@ -554,7 +554,7 @@ def _answer_record_detail(row: dict[str, object]) -> AnswerRecordDetail:
         {
             **row,
             "citations": row.get("citations_json") or [],
-            "docrag": row.get("diagnostics_json") or {},
+            "answer_diagnostics": row.get("diagnostics_json") or {},
             "evaluation_available": bool(row.get("evaluation_input_json")),
             "evaluation": row.get("evaluation_json") or None,
         }
@@ -562,10 +562,10 @@ def _answer_record_detail(row: dict[str, object]) -> AnswerRecordDetail:
 
 
 @router.post("/answers/{trace_id}/evaluation", response_model=ApiResponse[AnswerRecordDetail])
-async def evaluate_docrag_answer(
+async def evaluate_saved_answer(
     http_request: Request, trace_id: str, body: AnswerEvaluationRequest
 ) -> ApiResponse[AnswerRecordDetail]:
-    """保存済み DocRAG 回答を標準回答で評価し(rag_poc の 4 軸評価)、結果を保存して返す。
+    """保存された回答を標準回答で評価し(4 軸の LLM 評価)、結果を保存して返す。
 
     評価は LLM を複数回呼ぶ。失敗しても例外にせず、status=error の評価として保存する
     (rag_poc と同じく部分評価は採用しない)。
@@ -602,8 +602,8 @@ async def evaluate_docrag_answer(
 
 
 @router.delete("/answers/{trace_id}", response_model=ApiResponse[AnswerRecordDeleteResult])
-async def delete_docrag_answer(trace_id: str) -> ApiResponse[AnswerRecordDeleteResult]:
-    """保存済み DocRAG 回答を 1 件削除する。"""
+async def delete_saved_answer(trace_id: str) -> ApiResponse[AnswerRecordDeleteResult]:
+    """保存された回答を 1 件削除する。"""
     if not await OracleClient().delete_answer_record(trace_id):
         raise HTTPException(status_code=404, detail="回答が見つかりません。")
     return ApiResponse(data=AnswerRecordDeleteResult(trace_id=trace_id))

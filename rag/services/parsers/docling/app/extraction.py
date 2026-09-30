@@ -1,10 +1,10 @@
-"""DocRAG 解析(Docling)を実行し、共通抽出 schema へ変換する。
+"""Docling の解析(Docling)を実行し、共通抽出 schema へ変換する。
 
 rag_poc の analyze_pdf から UI・run 保存・再開・Vision を除いた最小のオーケストレーション。
-LayoutRecord 全体(raw を含む)は parser_artifacts["docrag_layout"] に保持し、
+LayoutRecord 全体(raw を含む)は parser_artifacts["layout_records"] に保持し、
 Small-to-Big チャンク化(backend)が rag_poc と同じ入力で分割できるようにする。
 図・画像の Vision は解析エンジンに依存しない backend の共通の段(``app.rag.vision``)が
-docrag_layout の record を読み取って反映する(#497)。このサービスは LLM を呼ばない。
+layout_records の record を読み取って反映する(#497)。このサービスは LLM を呼ばない。
 """
 
 from __future__ import annotations
@@ -16,21 +16,21 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from docrag.adapters.parsers.base import AnalysisContext
-from docrag.adapters.parsers.docling_adapter import DoclingAdapter, _table_grid_rows
-from docrag.config import Settings, get_settings
-from docrag.models.layout import LayoutRecord, PageImage
-from docrag.parsing.layout_metadata import (
+from rag_engine.adapters.parsers.base import AnalysisContext
+from rag_engine.adapters.parsers.docling_adapter import DoclingAdapter, _table_grid_rows
+from rag_engine.config import Settings, get_settings
+from rag_engine.models.layout import LayoutRecord, PageImage
+from rag_engine.parsing.layout_metadata import (
     layout_record_element_metadata,
     layout_record_vision_summary,
 )
-from docrag.parsing.rendering import (
+from rag_engine.parsing.rendering import (
     SUPPORTED_SOURCE_FILE_TYPES,
     get_source_page_count,
     prepare_source_for_analysis,
     source_frame_warnings,
 )
-from docrag.parsing.visual_artifacts import persist_semantic_visual_crops
+from rag_engine.parsing.visual_artifacts import persist_semantic_visual_crops
 from rag_parser_core.extraction import (
     DocumentElement,
     ExtractionAsset,
@@ -43,8 +43,8 @@ from rag_parser_core.extraction import (
 
 logger = logging.getLogger(__name__)
 
-DOCRAG_LAYOUT_ARTIFACT = "docrag_layout"
-DOCRAG_LAYOUT_VERSION = 1
+LAYOUT_ARTIFACT = "layout_records"
+LAYOUT_RECORDS_VERSION = 1
 
 # rag_poc の正規化カテゴリ → 共通抽出 schema の element kind。
 CATEGORY_KINDS = {
@@ -69,8 +69,8 @@ def analyze_source(
     content_type: str,
     settings: Settings | None = None,
 ) -> StructuredExtraction:
-    """PDF / 画像を解析し、DocRAG の LayoutRecord を保持した StructuredExtraction を返す。"""
-    # env(DOCRAG_* / DOCLING_*)から解決する。.env は読まない。
+    """PDF / 画像を解析し、LayoutRecord を保持した StructuredExtraction を返す。"""
+    # env(RAG_ENGINE_* / DOCLING_*)から解決する。.env は読まない。
     settings = settings or get_settings(dotenv_path=None)
     suffix = _source_suffix(file_name, content_type)
     settings.output_dir.mkdir(parents=True, exist_ok=True)
@@ -122,7 +122,7 @@ def layout_to_extraction(
                 text=text,
                 order=order,
                 element_id=record.id,
-                source_parser="docling_docrag",
+                source_parser="docling_layout",
                 page_number=record.page,
                 bbox=[float(value) for value in record.bbox],
                 section_path=list(section_path),
@@ -154,12 +154,12 @@ def layout_to_extraction(
         assets=assets,
         parser_artifacts={
             "external_adapter": "docling",
-            "adapter_export": "docrag_layout_records",
+            "adapter_export": "layout_records",
             "source_page_count": source_page_count,
             "table_count": len(tables),
             "picture_count": len(assets),
-            DOCRAG_LAYOUT_ARTIFACT: {
-                "version": DOCRAG_LAYOUT_VERSION,
+            LAYOUT_ARTIFACT: {
+                "version": LAYOUT_RECORDS_VERSION,
                 "pages": [_page_payload(page) for page in pages],
                 "records": [_json_value(record.to_dict()) for record in records],
             },

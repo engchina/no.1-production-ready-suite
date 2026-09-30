@@ -50,31 +50,31 @@ describe("文書詳細の見出しの状態", () => {
 describe("分割プレビュー設定", () => {
   it("レシピ未指定時は現行の既定値を使う", () => {
     expect(chunkPreviewForm(null)).toEqual({
-      chunking_strategy: "docrag_small_to_big",
+      chunking_strategy: "small_to_big",
       chunk_size: 800,
       chunk_overlap: 120,
       chunk_min_chars: 120,
       chunk_delimiter: "\\n\\n",
       chunk_context_header_enabled: true,
-      docrag_child_target_chars: 1000,
-      docrag_table_child_target_chars: 3000,
-      docrag_parent_target_chars: 6000,
-      docrag_parent_max_pages: 3,
-      docrag_parent_max_children: 12,
+      chunk_child_target_chars: 1000,
+      chunk_table_child_target_chars: 3000,
+      chunk_parent_target_chars: 6000,
+      chunk_parent_max_pages: 3,
+      chunk_parent_max_children: 12,
     });
   });
 
-  it("DocRAG 親子階層は 5 項目の範囲だけを検証し、chunk サイズの制約は使わない", () => {
-    const docrag = { ...chunkPreviewForm(null), chunking_strategy: "docrag_small_to_big" as const };
-    expect(chunkPreviewValidationError({ ...docrag, chunk_overlap: 800 })).toBeNull();
-    expect(chunkPreviewValidationError({ ...docrag, docrag_child_target_chars: 299 })).toBe(
+  it("親子階層（small-to-big）は 5 項目の範囲だけを検証し、chunk サイズの制約は使わない", () => {
+    const smallToBig = { ...chunkPreviewForm(null), chunking_strategy: "small_to_big" as const };
+    expect(chunkPreviewValidationError({ ...smallToBig, chunk_overlap: 800 })).toBeNull();
+    expect(chunkPreviewValidationError({ ...smallToBig, chunk_child_target_chars: 299 })).toBe(
       "子チャンク目標文字数: 300〜1,600"
     );
-    expect(chunkPreviewValidationError({ ...docrag, docrag_parent_max_pages: 6 })).toBe(
+    expect(chunkPreviewValidationError({ ...smallToBig, chunk_parent_max_pages: 6 })).toBe(
       "親チャンク最大ページ数: 1〜5"
     );
     expect(
-      chunkPreviewValidationError({ ...docrag, docrag_parent_max_children: Number.NaN })
+      chunkPreviewValidationError({ ...smallToBig, chunk_parent_max_children: Number.NaN })
     ).toBe("親チャンク最大 child 数: 3〜20");
   });
 

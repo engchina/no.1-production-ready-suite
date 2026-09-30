@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from pr_system_settings.system_schema import (
+    DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
     RECREATE_CONFIRMATION_REQUIRED,
     ForeignKeySpec,
     SystemSchemaActiveJobsError,
@@ -35,6 +36,7 @@ from pr_system_settings.system_schema import (
     iso_timestamp,
     oracle_error_code,
     orphan_rows_sql,
+    require_destructive_migration_confirmation,
     require_recreate_confirmation,
     system_tables_status_error,
     validate_foreign_key_sql,
@@ -125,7 +127,11 @@ def test_small_helpers() -> None:
 def test_api_models_keep_the_contract() -> None:
     state = SystemTableOperationState.model_validate(idle_operation_state())
     assert state.schema_epoch == 0
-    assert SystemTablesInitializeRequest().model_dump() == {"recreate": False, "confirmation": None}
+    assert SystemTablesInitializeRequest().model_dump() == {
+        "recreate": False,
+        "confirmation": None,
+        "allow_destructive": False,
+    }
     with pytest.raises(ValueError):
         SystemTablesInitializeRequest(recreate=True, confirmation="X" * 129)
 
@@ -260,12 +266,15 @@ class _DemoManager(SystemSchemaManagerBase):
     recreate_confirmation = "RECREATE_DEMO_SYSTEM_TABLES"
     log_prefix = "demo"
     lock_timeout_guidance = "デモの job を止めてから、"
+    guards_destructive_migrations = True
 
     def __init__(self, database: _FakeDatabase, *, fail_with: str | None = None) -> None:
         super().__init__(database.connection, lease_seconds=1, ddl_lock_timeout_seconds=7)
         self.database = database
         self.fail_with = fail_with
         self.control_schema_calls = 0
+        # 製品が状態に出す、データを消す未適用の migration（#619）。
+        self.pending_destructive: list[dict[str, str]] = []
 
     def _ensure_control_schema(self) -> None:
         self.control_schema_calls += 1
@@ -285,6 +294,7 @@ class _DemoManager(SystemSchemaManagerBase):
             "existing_object_count": len(objects),
             "tables": self._load_table_metadata(connection, objects, owner="DEMO"),
             "operation_state": self._operation_payload(connection, objects),
+            "pending_destructive_migrations": list(self.pending_destructive),
         }
 
     def _table_identity_fields(self, name: str, owner: str) -> dict[str, Any]:
@@ -347,6 +357,57 @@ def test_recreate_checks_confirmation_before_touching_the_database() -> None:
     # 既に無い object の DROP は 0 件として読み飛ばす。
     with database.connection() as connection:
         assert manager._execute_drop(connection, "DROP TABLE DEMO_UNKNOWN") == 0
+
+
+def test_initialize_stops_on_pending_destructive_migrations_without_approval() -> None:
+    """データを消す未適用の migration は、承認が無ければ DB を変えずに 409 で止める（#619）。"""
+
+    database = _FakeDatabase()
+    manager = _DemoManager(database)
+    manager.initialize()
+    database.migrations.clear()
+    manager.pending_destructive = [{"name": "002_drop_items", "description": "items を消す"}]
+    epoch = database.operation["schema_epoch"]
+
+    with pytest.raises(SystemSchemaError) as error:
+        manager.initialize()
+    assert error.value.code == DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED
+    assert error.value.status_code == 409
+    assert "002_drop_items" in error.value.public_message
+    # lease を取らず、失敗としても記録しない（DB を変えていない）。
+    assert manager.control_schema_calls == 1
+    assert database.operation["status"] == "IDLE"
+    assert database.operation["last_error_code"] is None
+    assert database.operation["schema_epoch"] == epoch
+
+    migrated = manager.initialize(allow_destructive=True)
+    assert migrated["operation"] == "migrated"
+    assert migrated["operation_state"]["schema_epoch"] == epoch + 1
+
+
+def test_recreate_does_not_ask_for_destructive_approval() -> None:
+    """全再作成は確認語で承認済みのため、データを消す migration の承認を別に求めない（#619）。"""
+
+    database = _FakeDatabase()
+    manager = _DemoManager(database)
+    manager.initialize()
+    manager.pending_destructive = [{"name": "002_drop_items", "description": "items を消す"}]
+
+    recreated = manager.initialize(recreate=True, confirmation="RECREATE_DEMO_SYSTEM_TABLES")
+    assert recreated["operation"] == "recreated"
+
+
+def test_require_destructive_migration_confirmation_passes_without_pending_or_with_approval() -> (
+    None
+):
+    require_destructive_migration_confirmation([], allow_destructive=False)
+    require_destructive_migration_confirmation(
+        [{"name": "002", "description": "x"}], allow_destructive=True
+    )
+    with pytest.raises(SystemSchemaError):
+        require_destructive_migration_confirmation(
+            [{"name": "002", "description": "x"}], allow_destructive=False
+        )
 
 
 def test_lease_rejects_concurrent_operation_and_allows_expired_takeover() -> None:

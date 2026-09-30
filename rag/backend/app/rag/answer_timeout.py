@@ -13,7 +13,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 from app.config import Settings
-from app.rag.docrag_answer import ANSWER_STEP_STAGE_PREFIX
+from app.rag.answer_engine import ANSWER_STEP_STAGE_PREFIX
 from app.rag.pipeline import SearchStageProgress, SearchStageProgressCallback
 
 # 進捗の工程（SSE の `stage`）の利用者向けの名前。時間切れの文言（ERROR として保存する回答・
@@ -22,8 +22,8 @@ from app.rag.pipeline import SearchStageProgress, SearchStageProgressCallback
 ANSWER_STAGE_LABELS: dict[str, str] = {
     # 検索だけ(KB の検索テスト・レシピの検索比較。#593)
     "retrieval": "検索",
-    "docrag_history_rewrite": "会話を踏まえた質問の書き換え",
-    "docrag_answer": "根拠の検索と回答の生成",
+    "history_rewrite": "会話を踏まえた質問の書き換え",
+    "answer": "根拠の検索と回答の生成",
 }
 ANSWER_STAGE_BEFORE_START_LABEL = "検索の準備"
 ANSWER_STAGE_UNKNOWN_LABEL = "処理"

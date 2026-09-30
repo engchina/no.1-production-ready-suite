@@ -63,7 +63,7 @@ def test_rag_search_audit_redacts_query_text(caplog: LogCaptureFixture) -> None:
     assert event.filter_keys == ["file_name", "status"]
     assert event.guardrail_codes == ["sql_mutation_intent"]
     assert event.config_fingerprint == "fp-audit"
-    # 回答は DocRAG(hybrid + RRF)だけ。旧 standard の計測の列は既定値のまま(列の削除は #596)。
+    # 回答は回答フロー(hybrid + RRF)だけ。旧 standard の計測の列は既定値のまま(列の削除は #596)。
     assert event.mode == SearchMode.HYBRID
     assert event.memory_plan_id is None
     assert event.query_variant_count == 1

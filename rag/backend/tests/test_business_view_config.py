@@ -23,16 +23,14 @@ def test_query_overrides_apply() -> None:
     settings = get_settings()
     config = BusinessViewConfig(
         knowledge_base_ids=["kb-1", "kb-2"],
-        query=KnowledgeBaseQueryConfig(
-            docrag_query_strategy="rag_fusion", guardrail_policy="strict"
-        ),
+        query=KnowledgeBaseQueryConfig(query_strategy="rag_fusion", guardrail_policy="strict"),
     )
     merged, applied = resolve_business_view_settings(settings, config)
     assert applied is True
-    assert merged.rag_docrag_query_strategy == "rag_fusion"
+    assert merged.rag_query_strategy == "rag_fusion"
     assert merged.rag_guardrail_policy == "strict"
     # グローバルは破壊しない。
-    assert settings.rag_docrag_query_strategy == "auto_routing"
+    assert settings.rag_query_strategy == "auto_routing"
 
 
 def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
@@ -41,7 +39,7 @@ def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
     config = parse_business_view_config(
         {
             "query": {
-                "docrag_answer_flow": "standard_rag",
+                "answer_flow": "standard_rag",
                 "vector_index_profile": "accurate",
             }
         }
@@ -50,7 +48,7 @@ def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
     assert config.query.vector_index_profile == "accurate"
     merged, applied = resolve_business_view_settings(settings, config)
     assert applied is True
-    assert merged.rag_docrag_answer_flow == "standard_rag"
+    assert merged.rag_answer_flow == "standard_rag"
     assert merged.rag_vector_index_profile == settings.rag_vector_index_profile
     dumped_query = dump_business_view_config(config)["query"]
     assert isinstance(dumped_query, dict)
@@ -63,14 +61,14 @@ def test_saved_evaluation_suite_is_ignored_on_load_and_dropped_on_save() -> None
     config = parse_business_view_config(
         {
             "query": {
-                "docrag_rerank_enabled": False,
+                "rerank_enabled": False,
                 "evaluation_suite": "strict_ci",
             }
         }
     )
 
     # 他の上書きは生きたまま、評価スイートだけを捨てる(設定全体を空へ縮退させない)。
-    assert config.query.docrag_rerank_enabled is False
+    assert config.query.rerank_enabled is False
     assert "evaluation_suite" not in KnowledgeBaseQueryConfig.model_fields
     merged, applied = resolve_business_view_settings(settings, config)
     assert applied is True
@@ -78,7 +76,7 @@ def test_saved_evaluation_suite_is_ignored_on_load_and_dropped_on_save() -> None
     dumped_query = dump_business_view_config(config)["query"]
     assert isinstance(dumped_query, dict)
     assert "evaluation_suite" not in dumped_query
-    assert dumped_query["docrag_rerank_enabled"] is False
+    assert dumped_query["rerank_enabled"] is False
 
 
 def test_saved_standard_options_are_ignored_on_load_and_dropped_on_save() -> None:
@@ -102,16 +100,16 @@ def test_saved_standard_options_are_ignored_on_load_and_dropped_on_save() -> Non
                 "retrieval_business_fit_weighting": True,
                 "post_retrieval_pipeline": "lean",
                 "generation_profile": "structured_json",
-                "docrag_neighbor_child_count": 5,
+                "neighbor_child_count": 5,
             },
         }
     )
 
     assert config.normalized_knowledge_base_ids() == ["kb-1"]
-    assert config.query.docrag_neighbor_child_count == 5
+    assert config.query.neighbor_child_count == 5
     merged, applied = resolve_business_view_settings(settings, config)
     assert applied is True
-    assert merged.rag_docrag_neighbor_child_count == 5
+    assert merged.rag_neighbor_child_count == 5
     dumped = dump_business_view_config(config)
     assert "system_prompt" not in dumped
     assert "default_language" not in dumped
@@ -128,18 +126,18 @@ def test_saved_standard_options_are_ignored_on_load_and_dropped_on_save() -> Non
         "generation_profile",
     ):
         assert removed not in dumped_query
-    assert dumped_query["docrag_neighbor_child_count"] == 5
+    assert dumped_query["neighbor_child_count"] == 5
 
 
 def test_dump_parse_roundtrip() -> None:
     """dump -> parse で設定が保たれる。"""
     config = BusinessViewConfig(
         knowledge_base_ids=["kb-1", " kb-1 ", "kb-2"],
-        query=KnowledgeBaseQueryConfig(docrag_screen_linking_enabled=True),
+        query=KnowledgeBaseQueryConfig(screen_linking_enabled=True),
         serving_mode="fused",
     )
     restored = parse_business_view_config(dump_business_view_config(config))
-    assert restored.query.docrag_screen_linking_enabled is True
+    assert restored.query.screen_linking_enabled is True
     assert restored.serving_mode == "fused"
     # 正規化で重複・空白は取り除かれる。
     assert restored.normalized_knowledge_base_ids() == ["kb-1", "kb-2"]

@@ -16,28 +16,28 @@ import { t } from "./i18n";
 describe("answer-progress（Issue 375）", () => {
   it("今の工程は、終わっていない最後の工程（入れ子の内側が終われば外側）", () => {
     const events: AnswerStageEvent[] = [
-      { stage: "docrag_history_rewrite", outcome: "started" },
-      { stage: "docrag_history_rewrite", outcome: "success" },
-      { stage: "docrag_answer", outcome: "started" },
+      { stage: "history_rewrite", outcome: "started" },
+      { stage: "history_rewrite", outcome: "success" },
+      { stage: "answer", outcome: "started" },
     ];
     expect(currentAnswerStage([])).toBeNull();
-    expect(currentAnswerStage(events.slice(0, 1))).toBe("docrag_history_rewrite");
-    expect(currentAnswerStage(events)).toBe("docrag_answer");
+    expect(currentAnswerStage(events.slice(0, 1))).toBe("history_rewrite");
+    expect(currentAnswerStage(events)).toBe("answer");
     const nested: AnswerStageEvent[] = [
       ...events,
       { stage: "answer_step:文書検索", outcome: "started" },
       { stage: "answer_step:文書検索", outcome: "success" },
     ];
-    expect(currentAnswerStage(nested)).toBe("docrag_answer");
+    expect(currentAnswerStage(nested)).toBe("answer");
     // どれも実行中でなければ最後に通知された工程。
-    expect(currentAnswerStage([...nested, { stage: "docrag_answer", outcome: "success" }])).toBe(
-      "docrag_answer"
+    expect(currentAnswerStage([...nested, { stage: "answer", outcome: "success" }])).toBe(
+      "answer"
     );
   });
 
   it("処理中の文言に今の工程を入れる。未開始は検索の準備", () => {
     expect(answerProgressLabel([])).toBe("回答を生成しています（検索の準備）");
-    expect(answerProgressLabel([{ stage: "docrag_history_rewrite", outcome: "started" }])).toBe(
+    expect(answerProgressLabel([{ stage: "history_rewrite", outcome: "started" }])).toBe(
       "回答を生成しています（会話を踏まえた質問の書き換え）"
     );
     expect(answerProgressLabel([{ stage: "retrieval", outcome: "started" }])).toBe(
@@ -68,15 +68,15 @@ describe("answer-progress（Issue 375）", () => {
   });
 
   it("回答フローの各工程（Issue 593）は工程名をそのまま出し、入れ子の内側を今の工程にする", () => {
-    const docragSource = readFileSync(
-      resolve(__dirname, "../../../backend/app/rag/docrag_answer.py"),
+    const engineSource = readFileSync(
+      resolve(__dirname, "../../../backend/app/rag/answer_engine.py"),
       "utf-8"
     );
-    expect(docragSource).toContain(`ANSWER_STEP_STAGE_PREFIX = "${ANSWER_STEP_STAGE_PREFIX}"`);
+    expect(engineSource).toContain(`ANSWER_STEP_STAGE_PREFIX = "${ANSWER_STEP_STAGE_PREFIX}"`);
     expect(answerStageLabel("answer_step:文書検索（1回目）")).toBe("文書検索（1回目）");
     expect(answerStageLabel("answer_step:")).toBe(t("search.stage.processing"));
     const events: AnswerStageEvent[] = [
-      { stage: "docrag_answer", outcome: "started" },
+      { stage: "answer", outcome: "started" },
       { stage: "answer_step:質問の理解", outcome: "started" },
       { stage: "answer_step:質問の理解", outcome: "success" },
       { stage: "answer_step:文書検索", outcome: "started" },

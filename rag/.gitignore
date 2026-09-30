@@ -255,7 +255,7 @@ TOOLS.md
 USER.md
 
 
-# docrag の既定の出力先（DOCRAG_OUTPUT_DIR 未設定時。parser サービスを起動すると作られる）
+# rag_engine の既定の出力先（RAG_ENGINE_OUTPUT_DIR 未設定時。parser サービスを起動すると作られる）
 .runs/
 
 # サービス管理が起動/再起動の前に書くサービス実行用の env ファイル（secret を含む。#286）

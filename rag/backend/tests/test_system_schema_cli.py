@@ -8,7 +8,11 @@ from typing import Any
 import pytest
 
 from app.rag import system_schema_cli
-from app.rag.system_schema import SystemSchemaError, system_schema_manager
+from app.rag.system_schema import (
+    DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
+    SystemSchemaError,
+    system_schema_manager,
+)
 
 
 def test_delete_orphans_passes_confirmed_count(
@@ -69,3 +73,31 @@ def test_delete_orphans_reports_business_error(
         "error_code": "SCHEMA_ORPHAN_ROWS_CHANGED",
         "error_message": "件数が増えています。",
     }
+
+
+def test_initialize_passes_destructive_approval_only_when_given(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`initialize` は `--allow-destructive` があるときだけ承認を渡す（#619）。"""
+    calls: list[dict[str, Any]] = []
+
+    def initialize(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        if not kwargs.get("allow_destructive"):
+            raise SystemSchemaError(
+                DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
+                "データを削除する migration が未適用です（20260930_005）。",
+                status_code=409,
+            )
+        return {"operation": "migrated"}
+
+    monkeypatch.setattr(system_schema_manager, "initialize", initialize)
+
+    assert system_schema_cli.main(["initialize"]) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error_code"] == DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED
+    assert "--allow-destructive" in error["hint"]
+
+    assert system_schema_cli.main(["initialize", "--allow-destructive"]) == 0
+    assert json.loads(capsys.readouterr().out)["operation"] == "migrated"
+    assert calls == [{"allow_destructive": False}, {"allow_destructive": True}]

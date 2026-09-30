@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   CHUNK_SIZE_MAX_CHARS,
-  DEFAULT_DOCRAG_CHUNKING_PARAMS,
-  docragChunkingFellBack,
-  invalidDocragChunkingParam,
+  DEFAULT_SMALL_TO_BIG_PARAMS,
+  smallToBigFellBack,
+  invalidSmallToBigParam,
   chunkSizeLabelKey,
   chunkingStrategyPreset,
   isSemanticBoundaryStrategy,
@@ -42,56 +42,56 @@ describe("chunking strategy presentation", () => {
   });
 });
 
-describe("DocRAG 親子階層のパラメータ", () => {
+describe("親子階層（small-to-big）のパラメータ", () => {
   it("rag_poc と同じ既定値を持つ", () => {
-    expect(DEFAULT_DOCRAG_CHUNKING_PARAMS).toEqual({
-      docrag_child_target_chars: 1000,
-      docrag_table_child_target_chars: 3000,
-      docrag_parent_target_chars: 6000,
-      docrag_parent_max_pages: 3,
-      docrag_parent_max_children: 12,
+    expect(DEFAULT_SMALL_TO_BIG_PARAMS).toEqual({
+      chunk_child_target_chars: 1000,
+      chunk_table_child_target_chars: 3000,
+      chunk_parent_target_chars: 6000,
+      chunk_parent_max_pages: 3,
+      chunk_parent_max_children: 12,
     });
-    expect(invalidDocragChunkingParam(DEFAULT_DOCRAG_CHUNKING_PARAMS)).toBeNull();
+    expect(invalidSmallToBigParam(DEFAULT_SMALL_TO_BIG_PARAMS)).toBeNull();
   });
 
   it("範囲外・小数・未入力の項目を返す", () => {
     expect(
-      invalidDocragChunkingParam({
-        ...DEFAULT_DOCRAG_CHUNKING_PARAMS,
-        docrag_table_child_target_chars: 8001,
+      invalidSmallToBigParam({
+        ...DEFAULT_SMALL_TO_BIG_PARAMS,
+        chunk_table_child_target_chars: 8001,
       })?.field
-    ).toBe("docrag_table_child_target_chars");
+    ).toBe("chunk_table_child_target_chars");
     expect(
-      invalidDocragChunkingParam({ ...DEFAULT_DOCRAG_CHUNKING_PARAMS, docrag_parent_max_pages: 1.5 })
+      invalidSmallToBigParam({ ...DEFAULT_SMALL_TO_BIG_PARAMS, chunk_parent_max_pages: 1.5 })
         ?.field
-    ).toBe("docrag_parent_max_pages");
+    ).toBe("chunk_parent_max_pages");
     expect(
-      invalidDocragChunkingParam({ ...DEFAULT_DOCRAG_CHUNKING_PARAMS, docrag_child_target_chars: null })
+      invalidSmallToBigParam({ ...DEFAULT_SMALL_TO_BIG_PARAMS, chunk_child_target_chars: null })
         ?.field
-    ).toBe("docrag_child_target_chars");
+    ).toBe("chunk_child_target_chars");
   });
 });
 
-describe("docragChunkingFellBack", () => {
+describe("smallToBigFellBack", () => {
   it("backend が縮退の印を付けた chunk があれば真", () => {
     expect(
-      docragChunkingFellBack([
+      smallToBigFellBack([
         { metadata: { chunk_strategy: "structure_aware" } },
         {
           metadata: {
             chunk_strategy: "structure_aware",
-            chunk_strategy_requested: "docrag_small_to_big",
-            chunk_strategy_fallback_reason: "docrag_layout_missing",
+            chunk_strategy_requested: "small_to_big",
+            chunk_strategy_fallback_reason: "layout_missing",
           },
         },
       ])
     ).toBe(true);
   });
 
-  it("DocRAG 親子階層で分割した chunk や空の一覧では偽", () => {
-    expect(docragChunkingFellBack([{ metadata: { chunk_strategy: "docrag_small_to_big" } }])).toBe(
+  it("親子階層（small-to-big）で分割した chunk や空の一覧では偽", () => {
+    expect(smallToBigFellBack([{ metadata: { chunk_strategy: "small_to_big" } }])).toBe(
       false
     );
-    expect(docragChunkingFellBack([])).toBe(false);
+    expect(smallToBigFellBack([])).toBe(false);
   });
 });

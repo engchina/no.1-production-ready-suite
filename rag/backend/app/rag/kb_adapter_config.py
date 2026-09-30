@@ -27,27 +27,28 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import (
+    CHUNK_CHILD_TARGET_CHARS_MAX,
+    CHUNK_CHILD_TARGET_CHARS_MIN,
     CHUNK_OVERLAP_MAX_CHARS,
+    CHUNK_PARENT_MAX_CHILDREN_MAX,
+    CHUNK_PARENT_MAX_CHILDREN_MIN,
+    CHUNK_PARENT_MAX_PAGES_MAX,
+    CHUNK_PARENT_MAX_PAGES_MIN,
+    CHUNK_PARENT_TARGET_CHARS_MAX,
+    CHUNK_PARENT_TARGET_CHARS_MIN,
     CHUNK_SIZE_MAX_CHARS,
     CHUNK_SIZE_MIN_CHARS,
-    DOCRAG_CHILD_TARGET_CHARS_MAX,
-    DOCRAG_CHILD_TARGET_CHARS_MIN,
-    DOCRAG_PARENT_MAX_CHILDREN_MAX,
-    DOCRAG_PARENT_MAX_CHILDREN_MIN,
-    DOCRAG_PARENT_MAX_PAGES_MAX,
-    DOCRAG_PARENT_MAX_PAGES_MIN,
-    DOCRAG_PARENT_TARGET_CHARS_MAX,
-    DOCRAG_PARENT_TARGET_CHARS_MIN,
-    DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
-    DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
+    CHUNK_TABLE_CHILD_TARGET_CHARS_MAX,
+    CHUNK_TABLE_CHILD_TARGET_CHARS_MIN,
+    REMOVED_GRAPH_PROFILES,
     REMOVED_PARSER_ADAPTER_BACKENDS,
+    AnswerFlow,
     ChunkingStrategy,
-    DocragAnswerFlow,
-    DocragQueryStrategy,
     GraphProfile,
     GuardrailPolicyName,
     ParserAdapterBackend,
     PreprocessProfile,
+    QueryStrategy,
     Settings,
     VectorIndexProfile,
     normalize_legacy_chunking_strategy_value,
@@ -74,12 +75,12 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "chunk_size": "rag_chunk_size",
     "chunk_overlap": "rag_chunk_overlap",
     "chunk_min_chars": "rag_chunk_min_chars",
-    # DocRAG 親子階層の分割パラメータ(分割方式が docrag_small_to_big のときだけ効く)。
-    "docrag_child_target_chars": "rag_docrag_child_target_chars",
-    "docrag_table_child_target_chars": "rag_docrag_table_child_target_chars",
-    "docrag_parent_target_chars": "rag_docrag_parent_target_chars",
-    "docrag_parent_max_pages": "rag_docrag_parent_max_pages",
-    "docrag_parent_max_children": "rag_docrag_parent_max_children",
+    # 親子階層（small-to-big）の分割パラメータ(分割方式が small_to_big のときだけ効く)。
+    "chunk_child_target_chars": "rag_chunk_child_target_chars",
+    "chunk_table_child_target_chars": "rag_chunk_table_child_target_chars",
+    "chunk_parent_target_chars": "rag_chunk_parent_target_chars",
+    "chunk_parent_max_pages": "rag_chunk_parent_max_pages",
+    "chunk_parent_max_children": "rag_chunk_parent_max_children",
     # 取込側の高度軸(現状グローバルのみだった adapter を KB 上書き対象へ拡張)。
     # いずれも取込パイプラインが self._settings から読むため、KB 上書きが取込に効く。
     "graph_profile": "rag_graph_profile",
@@ -91,11 +92,11 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
 }
 _QUERY_FIELD_MAP: dict[str, str] = {
     "guardrail_policy": "rag_guardrail_policy",
-    "docrag_query_strategy": "rag_docrag_query_strategy",
-    "docrag_answer_flow": "rag_docrag_answer_flow",
-    "docrag_neighbor_child_count": "rag_docrag_neighbor_child_count",
-    "docrag_rerank_enabled": "rag_docrag_rerank_enabled",
-    "docrag_screen_linking_enabled": "rag_docrag_screen_linking_enabled",
+    "query_strategy": "rag_query_strategy",
+    "answer_flow": "rag_answer_flow",
+    "neighbor_child_count": "rag_neighbor_child_count",
+    "rerank_enabled": "rag_rerank_enabled",
+    "screen_linking_enabled": "rag_screen_linking_enabled",
 }
 
 # 外部 parser adapter backend -> その有効化 feature flag(Settings フィールド名)。
@@ -168,6 +169,16 @@ class KnowledgeBaseIngestionConfig(BaseModel):
             and backend.strip().casefold() in REMOVED_PARSER_ADAPTER_BACKENDS
         ):
             cleaned["parser_adapter_backend"] = None
+        # 関係情報の構築の full は #621 で削除した。保存値は migration
+        # `20260930_006_graph_profile_entities` が entities へ書き換えるが、同時に当てる
+        # データを削除する migration(20260930_007)に承認が要るため、適用前も backend は動く。
+        # その間に KB・文書・レシピ・取込ジョブの上書き全体を検証エラーで失わないよう、
+        # 同じ関係情報を作る entities として読む。
+        graph_profile = cleaned.get("graph_profile")
+        if isinstance(graph_profile, str) and graph_profile.strip().casefold() in (
+            REMOVED_GRAPH_PROFILES
+        ):
+            cleaned["graph_profile"] = "entities"
         return cleaned
 
     preprocess_profile: PreprocessProfile | None = None
@@ -185,22 +196,22 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     )
     chunk_overlap: int | None = Field(default=None, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
-    docrag_child_target_chars: int | None = Field(
-        default=None, ge=DOCRAG_CHILD_TARGET_CHARS_MIN, le=DOCRAG_CHILD_TARGET_CHARS_MAX
+    chunk_child_target_chars: int | None = Field(
+        default=None, ge=CHUNK_CHILD_TARGET_CHARS_MIN, le=CHUNK_CHILD_TARGET_CHARS_MAX
     )
-    docrag_table_child_target_chars: int | None = Field(
+    chunk_table_child_target_chars: int | None = Field(
         default=None,
-        ge=DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
-        le=DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
+        ge=CHUNK_TABLE_CHILD_TARGET_CHARS_MIN,
+        le=CHUNK_TABLE_CHILD_TARGET_CHARS_MAX,
     )
-    docrag_parent_target_chars: int | None = Field(
-        default=None, ge=DOCRAG_PARENT_TARGET_CHARS_MIN, le=DOCRAG_PARENT_TARGET_CHARS_MAX
+    chunk_parent_target_chars: int | None = Field(
+        default=None, ge=CHUNK_PARENT_TARGET_CHARS_MIN, le=CHUNK_PARENT_TARGET_CHARS_MAX
     )
-    docrag_parent_max_pages: int | None = Field(
-        default=None, ge=DOCRAG_PARENT_MAX_PAGES_MIN, le=DOCRAG_PARENT_MAX_PAGES_MAX
+    chunk_parent_max_pages: int | None = Field(
+        default=None, ge=CHUNK_PARENT_MAX_PAGES_MIN, le=CHUNK_PARENT_MAX_PAGES_MAX
     )
-    docrag_parent_max_children: int | None = Field(
-        default=None, ge=DOCRAG_PARENT_MAX_CHILDREN_MIN, le=DOCRAG_PARENT_MAX_CHILDREN_MAX
+    chunk_parent_max_children: int | None = Field(
+        default=None, ge=CHUNK_PARENT_MAX_CHILDREN_MIN, le=CHUNK_PARENT_MAX_CHILDREN_MAX
     )
     # 取込側の高度軸(KB 上書き対象へ拡張)。None はグローバル継承。
     graph_profile: GraphProfile | None = None
@@ -215,7 +226,7 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     def _normalize_removed_chunking_values(cls, data: object) -> object:
         """削除した分割方式の保存値を読み替える(文書レシピ・KB の保存済み JSON)。
 
-        親子階層(hierarchical_parent_child)は DocRAG 親子階層として扱い、その専用値
+        親子階層(hierarchical_parent_child)は親子階層（small-to-big）として扱い、その専用値
         ``chunk_child_size`` は捨てる。次に保存すると新しい値だけが残る(#271)。
         """
         if not isinstance(data, Mapping):
@@ -250,15 +261,15 @@ class KnowledgeBaseQueryConfig(BaseModel):
     # グローバル設定と request の suite だけで決まるため(#301)。保存済みの
     # ``evaluation_suite`` は ``extra=ignore`` で読み込み時に捨て、次回保存で消える。
 
-    # 回答エンジンの選択(``answer_engine``)は #594 で削除した(回答は DocRAG だけ)。保存済みの
+    # 回答エンジンの選択(``answer_engine``)は #594 で削除した(回答は回答フローだけ)。保存済みの
     # 値は ``extra=ignore`` で読み込み時に捨て、次回保存で消える。
-    # DocRAG 回答フローの設定。None はグローバル継承。
-    docrag_query_strategy: DocragQueryStrategy | None = None
-    docrag_answer_flow: DocragAnswerFlow | None = None
-    docrag_neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
-    docrag_rerank_enabled: bool | None = None
+    # 回答フローの設定。None はグローバル継承。
+    query_strategy: QueryStrategy | None = None
+    answer_flow: AnswerFlow | None = None
+    neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
+    rerank_enabled: bool | None = None
     # 画面目録で操作画面を探す(#554)。LLM の呼び出しが 1 回増える。
-    docrag_screen_linking_enabled: bool | None = None
+    screen_linking_enabled: bool | None = None
 
 
 class KnowledgeBaseAdapterConfig(BaseModel):

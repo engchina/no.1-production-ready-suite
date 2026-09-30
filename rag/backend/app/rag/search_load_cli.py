@@ -336,17 +336,17 @@ def _api_response_data(response_payload: Mapping[str, Any]) -> Mapping[str, Any]
 
 
 def _stage_timings(data: Mapping[str, Any]) -> dict[str, float]:
-    """回答フローの工程ごとの時間(ms)。``diagnostics.docrag.execution_steps`` から読む。
+    """回答フローの工程ごとの時間(ms)。``diagnostics.answer.execution_steps`` から読む。
 
     同じ名前の工程が複数回あれば合計する(補正検索の 2 回目など)。
     """
     diagnostics = data.get("diagnostics")
     if not isinstance(diagnostics, Mapping):
         return {}
-    docrag = diagnostics.get("docrag")
-    if not isinstance(docrag, Mapping):
+    answer = diagnostics.get("answer")
+    if not isinstance(answer, Mapping):
         return {}
-    steps = docrag.get("execution_steps")
+    steps = answer.get("execution_steps")
     if not isinstance(steps, Sequence) or isinstance(steps, str):
         return {}
     timings: dict[str, float] = {}

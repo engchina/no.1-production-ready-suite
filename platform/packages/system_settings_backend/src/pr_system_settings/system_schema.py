@@ -13,6 +13,8 @@ RAG と NL2SQL が別々に持っていた schema manager の共通部分を置�
 - 外部キーの差分（正本の `CREATE TABLE` にあるが既存の表に無い FK の検出・追加と、参照先の無い
   既存の行の件数。#505。削除規則の違い・無効化（DISABLED）の検出と修正、利用者の明示操作による
   参照先の無い行の削除と VALIDATE。#511）
+- データを消す（破壊的な）未適用の migration の確認。状態に出し、作成・更新は明示の承認
+  （`allow_destructive`）が無ければ DB に触る前に止める（#619）
 
 製品に残すもの（ここには置かない）:
 
@@ -55,6 +57,8 @@ MAX_DDL_LOCK_TIMEOUT_SECONDS = 120
 LOCK_RETRY_AFTER_SECONDS = 5
 
 RECREATE_CONFIRMATION_REQUIRED = "SCHEMA_RECREATE_CONFIRMATION_REQUIRED"
+# データを消す未適用の migration があるのに、作成・更新の承認（`allow_destructive`）が無い（#619）。
+DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED = "SCHEMA_DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED"
 SCHEMA_OPERATION_FAILED = "SCHEMA_OPERATION_FAILED"
 SCHEMA_STATUS_UNAVAILABLE = "SCHEMA_STATUS_UNAVAILABLE"
 ORA_RESOURCE_BUSY = "ORA-00054"
@@ -158,11 +162,26 @@ class SystemTableForeignKeyData(BaseModel):
     current_delete_rule: str | None = None
 
 
+class SystemTableDestructiveMigrationData(BaseModel):
+    """未適用の、データを消す（テーブルの DROP・行の DELETE を含む）migration の 1 件（#619）。
+
+    `description` は消えるデータと、適用の前にすること（書き出しなど）の説明。
+    """
+
+    name: str
+    description: str
+
+
 class SystemTablesInitializeRequest(BaseModel):
-    """作成・更新、または全再作成（`recreate` と確認語）の request。"""
+    """作成・更新、または全再作成（`recreate` と確認語）の request。
+
+    `allow_destructive` は、データを消す未適用の migration（状態の
+    `pending_destructive_migrations`）を当てることの承認（#619）。無ければ作成・更新を止める。
+    """
 
     recreate: bool = False
     confirmation: str | None = Field(default=None, max_length=128)
+    allow_destructive: bool = False
 
 
 class SystemTablesDeleteOrphansRequest(BaseModel):
@@ -217,6 +236,24 @@ def require_recreate_confirmation(
             "すべて再作成するには確認値を正確に入力してください。",
             status_code=422,
         )
+
+
+def require_destructive_migration_confirmation(
+    pending: Sequence[Mapping[str, Any]],
+    *,
+    allow_destructive: bool,
+) -> None:
+    """データを消す未適用の migration は、明示の承認があるときだけ通す（DB に触る前。#619）。"""
+
+    if not pending or allow_destructive:
+        return
+    names = ", ".join(str(item.get("name", "")) for item in pending)
+    raise SystemSchemaError(
+        DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
+        f"データを削除する migration が未適用です（{names}）。削除されるデータを確認し、"
+        "必要なデータを書き出してから、削除を承認して再実行してください。",
+        status_code=409,
+    )
 
 
 def classify_system_schema_status(
@@ -680,6 +717,9 @@ class SystemSchemaManagerBase(ABC):
     ignored_drop_codes: ClassVar[frozenset[str]] = IGNORED_DROP_CODES
     # 正本の外部キー（既存の表に無いものを状態に出し、更新で足す。#505）。空なら比べない。
     managed_foreign_keys: ClassVar[tuple[ForeignKeySpec, ...]] = ()
+    # 状態に `pending_destructive_migrations`（データを消す未適用の migration）を出す製品は True に
+    # する。作成・更新の前に状態を読み、承認が無ければ止める（#619）。False なら確かめない。
+    guards_destructive_migrations: ClassVar[bool] = False
     logger: ClassVar[logging.Logger] = logging.getLogger(__name__)
 
     def __init__(
@@ -741,14 +781,26 @@ class SystemSchemaManagerBase(ABC):
         *,
         recreate: bool = False,
         confirmation: str | None = None,
+        allow_destructive: bool = False,
     ) -> dict[str, Any]:
-        """作成・更新（不足分と未適用の migration）、または確認語付きの全再作成。"""
+        """作成・更新（不足分と未適用の migration）、または確認語付きの全再作成。
+
+        作成・更新は、データを消す未適用の migration（状態の `pending_destructive_migrations`。
+        製品が返す）があれば、`allow_destructive` が無い限り DB を変えずに 409 で止める（#619）。
+        全再作成は確認語で承認済みのため確かめない。
+        """
 
         require_recreate_confirmation(
             recreate=recreate,
             confirmation=confirmation,
             expected=self.recreate_confirmation,
         )
+        if self.guards_destructive_migrations and not recreate and not allow_destructive:
+            # 状態の読み取りだけ（DDL なし・lease なし）。止めても失敗として記録しない。
+            require_destructive_migration_confirmation(
+                self.status().get("pending_destructive_migrations") or [],
+                allow_destructive=False,
+            )
         owner = uuid.uuid4().hex
         kind = self._operation_kind(recreate)
         self._ensure_control_schema()
@@ -1382,6 +1434,7 @@ class SystemSchemaManagerBase(ABC):
 __all__ = [
     "CONTROL_KEY",
     "DEFAULT_LEASE_SECONDS",
+    "DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED",
     "FOREIGN_KEY_DELETE_RULES",
     "FOREIGN_KEY_NOT_FOUND",
     "FOREIGN_KEY_OUTDATED",
@@ -1415,6 +1468,7 @@ __all__ = [
     "SystemSchemaOrphanOperation",
     "SystemSchemaPreconditionError",
     "SystemSchemaStatus",
+    "SystemTableDestructiveMigrationData",
     "SystemTableForeignKeyData",
     "SystemTableOperationState",
     "SystemTablesDeleteOrphansRequest",
@@ -1435,6 +1489,7 @@ __all__ = [
     "load_foreign_keys",
     "oracle_error_code",
     "orphan_rows_sql",
+    "require_destructive_migration_confirmation",
     "require_recreate_confirmation",
     "system_tables_status_error",
     "validate_foreign_key_sql",

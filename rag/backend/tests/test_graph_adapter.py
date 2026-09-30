@@ -1,4 +1,4 @@
-"""GraphRAG アダプター(知識グラフ構築の深さプロファイル)のテスト。"""
+"""関係情報の構築アダプター(構築する / しない)のテスト。"""
 
 from dataclasses import fields
 
@@ -18,75 +18,64 @@ from app.rag.graph_adapter import (
 from app.rag.kb_adapter_config import (
     KnowledgeBaseAdapterConfig,
     KnowledgeBaseIngestionConfig,
-    resolve_effective_adapter_config,
+    parse_adapter_config,
     resolve_effective_settings,
 )
+from app.schemas.document import DocumentProcessingConfig
 
 
 def test_off_disables_graph_build() -> None:
-    """既定 off は KG を構築しない(現行挙動)。"""
+    """既定 off は関係情報を構築しない。"""
     params = resolve_graph_adapter(Settings(rag_graph_profile="off"))
-    assert params.profile == "off"
-    assert params.enabled is False
-    assert params.build_claims is False
-    assert params.build_community_summaries is False
+    assert params == GraphAdapterParams(profile="off", enabled=False)
 
 
-def test_entities_builds_lightweight_kg_without_claims() -> None:
-    """entities は entities + relationships のみで claims/community を抑制する。"""
+def test_entities_builds_graph() -> None:
+    """entities は文書と章・節の見出しのつながり(entity + relationship)を構築する。"""
     params = resolve_graph_adapter(Settings(rag_graph_profile="entities"))
-    assert params.enabled is True
-    assert params.build_claims is False
-    assert params.build_community_summaries is False
+    assert params == GraphAdapterParams(profile="entities", enabled=True)
 
 
-def test_full_builds_claims_and_community_summaries() -> None:
-    params = resolve_graph_adapter(Settings(rag_graph_profile="full"))
-    assert params.enabled is True
-    assert params.build_claims is True
-    assert params.build_community_summaries is True
+def test_profiles_are_only_off_and_entities() -> None:
+    """選択肢は「構築しない」「構築する」の 2 つ。claims / community summary は作らない(#621)。"""
+    assert GRAPH_PROFILE_ORDER == ("off", "entities")
+    for dataclass_type in (GraphResolved, GraphAdapterParams, GraphAdapterRuntimeSettings):
+        names = {field.name for field in fields(dataclass_type)}
+        assert not {name for name in names if "claim" in name or "communit" in name}
+    assert not {
+        name for name in GraphStageResponse.model_fields if "claim" in name or "communit" in name
+    }
 
 
-def test_legacy_rag_graph_enabled_maps_to_full() -> None:
-    """legacy `rag_graph_enabled=True` は profile off でも full 相当として後方互換を保つ。"""
-    params = resolve_graph_adapter(Settings(rag_graph_profile="off", rag_graph_enabled=True))
-    assert params.profile == "full"
-    assert params.enabled is True
-    assert params.build_claims is True
-    assert params.build_community_summaries is True
-
-
-def test_legacy_rag_graph_enabled_is_moved_to_profile_on_load() -> None:
-    """legacy フラグは起動時に profile へ移り、構築判定と表示の正本が 1 つになる(#274)。"""
-    settings = Settings(rag_graph_profile="off", rag_graph_enabled=True)
-
-    assert settings.rag_graph_profile == "full"
-    assert settings.rag_graph_enabled is False
-    # 明示の profile は legacy フラグで上書きしない。
-    entities = Settings(rag_graph_profile="entities", rag_graph_enabled=True)
-    assert entities.rag_graph_profile == "entities"
-    assert resolve_graph_adapter(entities).profile == "entities"
-
-
-def test_document_recipe_off_disables_graph_even_with_legacy_flag() -> None:
-    """legacy フラグの環境でも、文書レシピの「構築しない」は構築判定と表示の両方で off(#274)。"""
-    global_settings = Settings(rag_graph_profile="off", rag_graph_enabled=True)
+def test_document_recipe_off_overrides_global_entities() -> None:
+    """文書レシピの「構築しない」は、全体の既定が「構築する」でも構築しない。"""
+    global_settings = Settings(rag_graph_profile="entities")
     recipe = KnowledgeBaseAdapterConfig(ingestion=KnowledgeBaseIngestionConfig(graph_profile="off"))
 
     effective = resolve_effective_settings(global_settings, recipe, scope="ingestion")
-    inherited = resolve_effective_adapter_config(global_settings, KnowledgeBaseAdapterConfig())
 
     assert resolve_graph_adapter(effective).enabled is False
     assert effective.rag_graph_profile == "off"
-    # 上書きしない文書の実効値(表示)は、取込で実際に使う full と一致する。
-    assert inherited.ingestion.graph_profile == "full"
-    assert resolve_graph_adapter(global_settings).profile == "full"
+
+
+def test_stored_full_override_is_read_as_entities_until_migration() -> None:
+    """migration の適用前に残る保存値 full は、同じ関係情報を作る entities として読む(#621)。
+
+    KB・文書・レシピ・取込ジョブの上書き全体を検証エラーで失わないため。
+    """
+    kb_config = parse_adapter_config(
+        {"version": 2, "ingestion": {"graph_profile": "full", "chunk_size": 900}}
+    )
+    assert kb_config.ingestion.graph_profile == "entities"
+    assert kb_config.ingestion.chunk_size == 900
+    recipe = DocumentProcessingConfig.model_validate({"graph_profile": "FULL"})
+    assert recipe.graph_profile == "entities"
 
 
 def test_graph_temporal_setting_is_removed(monkeypatch: MonkeyPatch) -> None:
     """未実装だった Temporal GraphRAG の設定は持たず、旧 env も読まない(#301)。"""
     monkeypatch.setenv("RAG_GRAPH_TEMPORAL_ENABLED", "true")
-    settings = Settings(rag_graph_profile="full")
+    settings = Settings(rag_graph_profile="entities")
 
     assert "rag_graph_temporal_enabled" not in Settings.model_fields
     assert not hasattr(settings, "rag_graph_temporal_enabled")
@@ -94,9 +83,6 @@ def test_graph_temporal_setting_is_removed(monkeypatch: MonkeyPatch) -> None:
     for dataclass_type in (GraphResolved, GraphAdapterParams, GraphAdapterRuntimeSettings):
         assert "temporal" not in {field.name for field in fields(dataclass_type)}
     assert "temporal" not in GraphStageResponse.model_fields
-    params = resolve_graph_adapter(settings)
-    assert params.build_claims is True
-    assert params.build_community_summaries is True
 
 
 def test_runtime_settings_orders_and_marks_selected() -> None:
@@ -108,4 +94,6 @@ def test_runtime_settings_orders_and_marks_selected() -> None:
 
 def test_normalize_graph_profile_defaults() -> None:
     assert normalize_graph_profile("nope") == "off"
-    assert normalize_graph_profile("full") == "full"
+    assert normalize_graph_profile("ENTITIES") == "entities"
+    # 削除した full は未知の値として既定 off へ寄せる(保存値は migration で書き換える)。
+    assert normalize_graph_profile("full") == "off"

@@ -28,6 +28,7 @@ from typing import Protocol
 
 from app.clients.oracle import OracleClient
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
+from app.rag.answer_engine import evaluate_answer_record
 from app.rag.answer_timeout import (
     AnswerTimeoutError,
     answer_stage_label,
@@ -37,7 +38,6 @@ from app.rag.answer_timeout import (
 )
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.docrag_answer import evaluate_answer_record
 from app.rag.file_processing_evaluation import citation_traceability_coverage
 from app.rag.guardrails import evaluate_groundedness
 from app.rag.observability import (
@@ -505,10 +505,10 @@ def evaluation_settings(
     update: dict[str, object] = {}
     if overrides is not None:
         mapping = {
-            "query_strategy": "rag_docrag_query_strategy",
-            "answer_flow": "rag_docrag_answer_flow",
-            "neighbor_child_count": "rag_docrag_neighbor_child_count",
-            "rerank_enabled": "rag_docrag_rerank_enabled",
+            "query_strategy": "rag_query_strategy",
+            "answer_flow": "rag_answer_flow",
+            "neighbor_child_count": "rag_neighbor_child_count",
+            "rerank_enabled": "rag_rerank_enabled",
             "rrf_k": "rag_rrf_k",
             "context_group_max_chunks": "rag_context_group_max_chunks",
             "oracle_vector_target_accuracy": "oracle_vector_target_accuracy",
@@ -602,7 +602,7 @@ def is_abstained(response: SearchResponse) -> bool:
     """
     if not response.answer.strip() or not response.citations:
         return True
-    details = response.diagnostics.docrag or {}
+    details = response.diagnostics.answer or {}
     insufficient = str(details.get("insufficient_reason") or "").strip()
     if not insufficient:
         return False
@@ -610,7 +610,7 @@ def is_abstained(response: SearchResponse) -> bool:
 
 
 def _model_used(chunk: RetrievedChunk) -> bool:
-    return bool(chunk.metadata.get("docrag_model_used"))
+    return bool(chunk.metadata.get("evidence_model_used"))
 
 
 def _accumulate_case_metrics(aggregate: _Aggregate, result: EvaluationCaseResult) -> None:
@@ -766,7 +766,7 @@ def _record_case_error_audit(
     """評価 runner 側で捕捉した case 失敗を RAG 監査へ残す。"""
     record_rag_request(SEARCH_METRIC_MODE, "error", elapsed / 1000, 0)
     diagnostics = build_search_diagnostics(
-        request, settings=settings, retrieval_strategy_adapter="docrag_grounded"
+        request, settings=settings, retrieval_strategy_adapter="grounded"
     )
     record_rag_search_audit(
         trace_id=trace_id,

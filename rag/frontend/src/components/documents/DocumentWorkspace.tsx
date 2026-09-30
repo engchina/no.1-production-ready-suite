@@ -108,9 +108,9 @@ import {
   CHUNK_OVERLAP_MAX_CHARS,
   CHUNK_SIZE_MAX_CHARS,
   CHUNK_SIZE_MIN_CHARS,
-  DOCRAG_CHUNKING_PARAMS,
+  SMALL_TO_BIG_PARAMS,
   chunkSizeLabelKey,
-  docragChunkingFellBack,
+  smallToBigFellBack,
   chunkingStrategyPreset,
   isSemanticBoundaryStrategy,
   overlapLabelKey,
@@ -267,7 +267,7 @@ type UrlFallbackFocus = {
 const CHUNK_PREVIEW_STRATEGIES: SelectFieldOption<ChunkingStrategyName>[] = [
   "structure_aware",
   "recursive_character",
-  "docrag_small_to_big",
+  "small_to_big",
   "markdown_heading",
   "page_level",
   "fixed_size",
@@ -733,7 +733,7 @@ export function DocumentWorkspace({
     parsedExtraction.pages,
     urlFallbackFocus,
   ]);
-  // chunk の強調は、DocRAG の表示領域（根拠にした要素ごとの bbox）があれば要素ごとに重ねる（#349）。
+  // chunk の強調は、要素の表示領域（根拠にした要素ごとの bbox）があれば要素ごとに重ねる（#349）。
   const focusChunkRegions = useMemo(
     () =>
       previewFocusSource === "chunk" && selectedChunk
@@ -2413,9 +2413,9 @@ function ChunkPreviewControls({
             disabled={pending}
             onValueChange={(chunk_delimiter) => onChange({ chunk_delimiter })}
           />
-        ) : form.chunking_strategy === "docrag_small_to_big" ? (
-          // DocRAG 親子階層は chunk サイズ等を使わず、rag_poc と同じ 5 項目で分割する。
-          DOCRAG_CHUNKING_PARAMS.map((spec) => (
+        ) : form.chunking_strategy === "small_to_big" ? (
+          // 親子階層（small-to-big）は chunk サイズ等を使わず、子と親の大きさの 5 項目で分割する。
+          SMALL_TO_BIG_PARAMS.map((spec) => (
             <PreviewNumberField
               key={spec.field}
               label={t(spec.labelKey)}
@@ -2639,7 +2639,7 @@ function DocumentChunksPanel({
     );
   }
 
-  const docragFellBack = docragChunkingFellBack(chunks);
+  const fellBackToStructure = smallToBigFellBack(chunks);
   const list = (
     <ol
       ref={listRef}
@@ -2712,12 +2712,12 @@ function DocumentChunksPanel({
       })}
     </ol>
   );
-  if (!docragFellBack) return list;
-  // DocRAG 親子階層を選んだが Docling の解析結果がなく、構造認識で分割した(#300)。
+  if (!fellBackToStructure) return list;
+  // 親子階層（small-to-big）を選んだが Docling の解析結果がなく、構造認識で分割した(#300)。
   return (
     <div className="space-y-3">
-      <Banner severity="warning" title={t("flow.chunks.docragFallbackTitle")}>
-        {t("flow.chunks.docragFallback")}
+      <Banner severity="warning" title={t("flow.chunks.smallToBigFallbackTitle")}>
+        {t("flow.chunks.smallToBigFallback")}
       </Banner>
       {list}
     </div>

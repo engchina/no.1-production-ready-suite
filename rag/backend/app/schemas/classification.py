@@ -29,7 +29,7 @@ def normalize_category_value(value: object) -> str | None:
 def category_label(value: object) -> str:
     """比較用の分類の名前(正規化してから番号の接頭辞を外す)。
 
-    docrag_core の `_category_label`(`10_業務A` と `業務A` を同じ業務として比べる)と同じ規則。
+    rag_engine の `_category_label`(`10_業務A` と `業務A` を同じ業務として比べる)と同じ規則。
     検索の分類の絞り込み(`_classification_where`)は、この値と保存値の同じ変換を比べる。
     """
     return _CATEGORY_CODE_PREFIX.sub("", normalize_category_value(value) or "")

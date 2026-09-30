@@ -45,7 +45,7 @@ function toFlow(data: KnowledgeBaseGraphData): { nodes: Node[]; edges: Edge[] } 
 }
 
 /**
- * KB の関係情報(GraphRAG)を可視化する読み取り専用ビュー。
+ * KB の関係情報(文書と章・節の見出しのつながり)を可視化する読み取り専用ビュー。
  * 展開時のみ subgraph を取得し、@xyflow で entity(node)/relationship(edge) を円形配置で描画する。
  */
 export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: string }) {

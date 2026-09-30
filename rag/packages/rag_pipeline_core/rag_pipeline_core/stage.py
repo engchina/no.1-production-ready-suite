@@ -110,20 +110,17 @@ class VectorIndexStageResponse(BaseModel):
 
 
 class GraphStageRequest(BaseModel):
-    """``POST /run``(graphrag)の入力。profile + legacy enabled。"""
+    """``POST /run``(graphrag)の入力。profile のみ。"""
 
     profile: str = "off"
-    legacy_enabled: bool = False
 
 
 class GraphStageResponse(BaseModel):
-    """``POST /run``(graphrag)の出力(KG 構築フラグ)。"""
+    """``POST /run``(graphrag)の出力(関係情報の構築フラグ)。"""
 
     profile: str
     build_entities: bool
     build_relationships: bool
-    build_claims: bool
-    build_community_summary: bool
 
 
 class GuardrailStageRequest(BaseModel):

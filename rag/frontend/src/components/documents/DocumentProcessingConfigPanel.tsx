@@ -235,7 +235,7 @@ export function DocumentProcessingConfigPanel({
             value={form.chunking_strategy}
             effectiveValue={configs.effective.chunking_strategy}
             options={CHUNKING_OPTIONS}
-            defaultValue="docrag_small_to_big"
+            defaultValue="small_to_big"
             disabled={disabled}
             onChange={(value) => update({ chunking_strategy: value })}
           />

@@ -79,7 +79,7 @@ describe("評価 job の表示（Issue 390）", () => {
       evaluationCaseErrorSummary({
         status: "error",
         error_type: "TimeoutError",
-        error_stage: "docrag_answer",
+        error_stage: "answer",
         error_message: "評価ケースの回答生成が上限の 5 分以内に終わりませんでした",
       })
     ).toEqual({

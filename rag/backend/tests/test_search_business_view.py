@@ -53,7 +53,7 @@ class RecordingPipeline:
             trace_id=trace_id,
             elapsed_ms=1.0,
             diagnostics=build_search_diagnostics(
-                request, settings=settings, retrieval_strategy_adapter="docrag_grounded"
+                request, settings=settings, retrieval_strategy_adapter="grounded"
             ),
         )
 
@@ -106,8 +106,8 @@ def test_business_view_expands_kbs_and_applies_query_config(monkeypatch: MonkeyP
     config = BusinessViewConfig(
         knowledge_base_ids=["kb-1", "kb-2"],
         query=KnowledgeBaseQueryConfig(
-            docrag_query_strategy="rag_fusion",
-            docrag_answer_flow="standard_rag",
+            query_strategy="rag_fusion",
+            answer_flow="standard_rag",
         ),
     )
     _install(monkeypatch, {"bv-1": config})
@@ -120,8 +120,8 @@ def test_business_view_expands_kbs_and_applies_query_config(monkeypatch: MonkeyP
     assert response.status_code == 200
     diagnostics = response.json()["data"]["diagnostics"]
     assert RecordingPipeline.captured_settings is not None
-    assert RecordingPipeline.captured_settings.rag_docrag_query_strategy == "rag_fusion"
-    assert RecordingPipeline.captured_settings.rag_docrag_answer_flow == "standard_rag"
+    assert RecordingPipeline.captured_settings.rag_query_strategy == "rag_fusion"
+    assert RecordingPipeline.captured_settings.rag_answer_flow == "standard_rag"
     assert diagnostics["business_view_applied"] == "bv-1"
     # 参照 KB が検索対象へ展開されている。
     assert RecordingPipeline.captured_request is not None
@@ -135,11 +135,11 @@ def test_multiple_business_views_expand_union_and_use_first_config(
     """複数業務ビューでは参照 KB を union し、query 設定は先頭 View を代表にする。"""
     first = BusinessViewConfig(
         knowledge_base_ids=["kb-1", "kb-2"],
-        query=KnowledgeBaseQueryConfig(docrag_query_strategy="rag_fusion"),
+        query=KnowledgeBaseQueryConfig(query_strategy="rag_fusion"),
     )
     second = BusinessViewConfig(
         knowledge_base_ids=["kb-2", "kb-3"],
-        query=KnowledgeBaseQueryConfig(docrag_query_strategy="hyde"),
+        query=KnowledgeBaseQueryConfig(query_strategy="hyde"),
     )
     _install(monkeypatch, {"bv-1": first, "bv-2": second})
 
@@ -151,7 +151,7 @@ def test_multiple_business_views_expand_union_and_use_first_config(
     assert response.status_code == 200
     diagnostics = response.json()["data"]["diagnostics"]
     assert RecordingPipeline.captured_settings is not None
-    assert RecordingPipeline.captured_settings.rag_docrag_query_strategy == "rag_fusion"
+    assert RecordingPipeline.captured_settings.rag_query_strategy == "rag_fusion"
     assert diagnostics["business_view_applied"] == "bv-1,bv-2"
     assert RecordingPipeline.captured_request is not None
     assert RecordingPipeline.captured_request.knowledge_base_ids == ["kb-1", "kb-2", "kb-3"]
@@ -169,7 +169,7 @@ def test_saved_standard_options_of_business_view_are_ignored(monkeypatch: Monkey
                 "retrieval_strategy": "keyword",
                 "generation_profile": "structured_json",
                 "post_retrieval_pipeline": "lean",
-                "docrag_rerank_enabled": False,
+                "rerank_enabled": False,
             },
         }
     )
@@ -183,7 +183,7 @@ def test_saved_standard_options_of_business_view_are_ignored(monkeypatch: Monkey
     assert response.status_code == 200
     settings = RecordingPipeline.captured_settings
     assert settings is not None
-    assert settings.rag_docrag_rerank_enabled is False
+    assert settings.rag_rerank_enabled is False
     for removed in ("rag_generation_profile", "rag_generation_system_prompt_override"):
         assert not hasattr(settings, removed)
 
@@ -371,11 +371,11 @@ class FakeViewAndKbOracle:
 def test_business_view_ignores_single_kb_legacy_query(monkeypatch: MonkeyPatch) -> None:
     """Business View は単一 KB に解決しても KB legacy query を下層に重ねない。"""
     kb_config = KnowledgeBaseAdapterConfig.model_validate(
-        {"query": {"vector_index_profile": "fast", "docrag_neighbor_child_count": 9}}
+        {"query": {"vector_index_profile": "fast", "neighbor_child_count": 9}}
     )
     view_config = BusinessViewConfig(
         knowledge_base_ids=["kb-1"],
-        query=KnowledgeBaseQueryConfig(docrag_answer_flow="standard_rag"),
+        query=KnowledgeBaseQueryConfig(answer_flow="standard_rag"),
     )
     monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
     monkeypatch.setattr(
@@ -396,9 +396,9 @@ def test_business_view_ignores_single_kb_legacy_query(monkeypatch: MonkeyPatch) 
     settings = RecordingPipeline.captured_settings
     assert settings is not None
     # Business View が設定した回答の設定は Business View 値が効く。
-    assert settings.rag_docrag_answer_flow == "standard_rag"
+    assert settings.rag_answer_flow == "standard_rag"
     # Business View が触れていない項目は KB legacy 値ではなく global 既定。
-    assert settings.rag_docrag_neighbor_child_count == 3
+    assert settings.rag_neighbor_child_count == 3
     assert settings.rag_vector_index_profile == "accurate"
     diagnostics = response.json()["data"]["diagnostics"]
     assert diagnostics["business_view_applied"] == "bv-1"

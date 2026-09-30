@@ -8,19 +8,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
 
 from app.config import (
+    CHUNK_CHILD_TARGET_CHARS_MAX,
+    CHUNK_CHILD_TARGET_CHARS_MIN,
     CHUNK_OVERLAP_MAX_CHARS,
+    CHUNK_PARENT_MAX_CHILDREN_MAX,
+    CHUNK_PARENT_MAX_CHILDREN_MIN,
+    CHUNK_PARENT_MAX_PAGES_MAX,
+    CHUNK_PARENT_MAX_PAGES_MIN,
+    CHUNK_PARENT_TARGET_CHARS_MAX,
+    CHUNK_PARENT_TARGET_CHARS_MIN,
     CHUNK_SIZE_MAX_CHARS,
     CHUNK_SIZE_MIN_CHARS,
-    DOCRAG_CHILD_TARGET_CHARS_MAX,
-    DOCRAG_CHILD_TARGET_CHARS_MIN,
-    DOCRAG_PARENT_MAX_CHILDREN_MAX,
-    DOCRAG_PARENT_MAX_CHILDREN_MIN,
-    DOCRAG_PARENT_MAX_PAGES_MAX,
-    DOCRAG_PARENT_MAX_PAGES_MIN,
-    DOCRAG_PARENT_TARGET_CHARS_MAX,
-    DOCRAG_PARENT_TARGET_CHARS_MIN,
-    DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
-    DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
+    CHUNK_TABLE_CHILD_TARGET_CHARS_MAX,
+    CHUNK_TABLE_CHILD_TARGET_CHARS_MIN,
     ChunkingStrategy,
 )
 from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig
@@ -397,22 +397,22 @@ class DocumentChunkPreviewRequest(BaseModel):
     chunk_overlap: int | None = Field(default=None, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
     chunk_delimiter: str | None = Field(default=None, min_length=1, max_length=256)
-    docrag_child_target_chars: int | None = Field(
-        default=None, ge=DOCRAG_CHILD_TARGET_CHARS_MIN, le=DOCRAG_CHILD_TARGET_CHARS_MAX
+    chunk_child_target_chars: int | None = Field(
+        default=None, ge=CHUNK_CHILD_TARGET_CHARS_MIN, le=CHUNK_CHILD_TARGET_CHARS_MAX
     )
-    docrag_table_child_target_chars: int | None = Field(
+    chunk_table_child_target_chars: int | None = Field(
         default=None,
-        ge=DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
-        le=DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
+        ge=CHUNK_TABLE_CHILD_TARGET_CHARS_MIN,
+        le=CHUNK_TABLE_CHILD_TARGET_CHARS_MAX,
     )
-    docrag_parent_target_chars: int | None = Field(
-        default=None, ge=DOCRAG_PARENT_TARGET_CHARS_MIN, le=DOCRAG_PARENT_TARGET_CHARS_MAX
+    chunk_parent_target_chars: int | None = Field(
+        default=None, ge=CHUNK_PARENT_TARGET_CHARS_MIN, le=CHUNK_PARENT_TARGET_CHARS_MAX
     )
-    docrag_parent_max_pages: int | None = Field(
-        default=None, ge=DOCRAG_PARENT_MAX_PAGES_MIN, le=DOCRAG_PARENT_MAX_PAGES_MAX
+    chunk_parent_max_pages: int | None = Field(
+        default=None, ge=CHUNK_PARENT_MAX_PAGES_MIN, le=CHUNK_PARENT_MAX_PAGES_MAX
     )
-    docrag_parent_max_children: int | None = Field(
-        default=None, ge=DOCRAG_PARENT_MAX_CHILDREN_MIN, le=DOCRAG_PARENT_MAX_CHILDREN_MAX
+    chunk_parent_max_children: int | None = Field(
+        default=None, ge=CHUNK_PARENT_MAX_CHILDREN_MIN, le=CHUNK_PARENT_MAX_CHILDREN_MAX
     )
     chunk_context_header_enabled: bool | None = None
 
@@ -422,11 +422,11 @@ class DocumentChunkPreviewRequest(BaseModel):
         "chunk_overlap": "rag_chunk_overlap",
         "chunk_min_chars": "rag_chunk_min_chars",
         "chunk_delimiter": "rag_chunk_delimiter",
-        "docrag_child_target_chars": "rag_docrag_child_target_chars",
-        "docrag_table_child_target_chars": "rag_docrag_table_child_target_chars",
-        "docrag_parent_target_chars": "rag_docrag_parent_target_chars",
-        "docrag_parent_max_pages": "rag_docrag_parent_max_pages",
-        "docrag_parent_max_children": "rag_docrag_parent_max_children",
+        "chunk_child_target_chars": "rag_chunk_child_target_chars",
+        "chunk_table_child_target_chars": "rag_chunk_table_child_target_chars",
+        "chunk_parent_target_chars": "rag_chunk_parent_target_chars",
+        "chunk_parent_max_pages": "rag_chunk_parent_max_pages",
+        "chunk_parent_max_children": "rag_chunk_parent_max_children",
         "chunk_context_header_enabled": "rag_chunk_context_header_enabled",
     }
 

@@ -62,7 +62,7 @@ def _approval_response(
                     "page_start": 2,
                     "page_end": 2,
                     "element_ids": "el-approval",
-                    "docrag_model_used": True,
+                    "evidence_model_used": True,
                 },
             )
         ],
@@ -470,14 +470,14 @@ def test_is_abstained_uses_answer_record_insufficient_reason() -> None:
     refused = answered.model_copy(
         update={
             "citations": [
-                chunk.model_copy(update={"metadata": {"docrag_model_used": False}})
+                chunk.model_copy(update={"metadata": {"evidence_model_used": False}})
                 for chunk in answered.citations
             ],
-            "diagnostics": SearchDiagnostics(docrag={"insufficient_reason": "資料に記載がない"}),
+            "diagnostics": SearchDiagnostics(answer={"insufficient_reason": "資料に記載がない"}),
         }
     )
     partial = answered.model_copy(
-        update={"diagnostics": SearchDiagnostics(docrag={"insufficient_reason": "一部不足"})}
+        update={"diagnostics": SearchDiagnostics(answer={"insufficient_reason": "一部不足"})}
     )
 
     assert is_abstained(answered) is False
@@ -816,7 +816,7 @@ class SlowPipeline:
 
 
 class StagedSlowPipeline:
-    """「遅い」を含む質問だけ、回答フロー（docrag_answer）の工程で止まる pipeline。"""
+    """「遅い」を含む質問だけ、回答フロー（answer）の工程で止まる pipeline。"""
 
     def __init__(self, *, sleep_seconds: float) -> None:
         self._sleep_seconds = sleep_seconds
@@ -834,7 +834,7 @@ class StagedSlowPipeline:
                 await progress_callback(
                     SearchStageProgress(
                         trace_id=trace_id or "trace",
-                        stage="docrag_answer",
+                        stage="answer",
                         outcome="started",
                         elapsed_ms=0.0,
                         attributes={},
@@ -900,7 +900,7 @@ async def test_evaluation_case_is_limited_by_answer_timeout() -> None:
     assert slow.status == "error"
     assert slow.error_type == "TimeoutError"
     assert slow.failure_reasons == ["case_error"]
-    assert slow.error_stage == "docrag_answer"
+    assert slow.error_stage == "answer"
     assert slow.error_message is not None
     assert "上限の 1 秒以内に終わりませんでした" in slow.error_message
     assert "時間切れになった工程: 根拠の検索と回答の生成" in slow.error_message
@@ -1024,10 +1024,10 @@ async def test_compare_ranks_unmeasured_metric_last() -> None:
 def test_evaluation_settings_map_overrides() -> None:
     """評価は全体の既定のまま動かし、experiment の上書きだけを一時適用する。"""
     base = Settings(
-        rag_docrag_query_strategy="auto_routing",
-        rag_docrag_answer_flow="crag",
-        rag_docrag_neighbor_child_count=3,
-        rag_docrag_rerank_enabled=True,
+        rag_query_strategy="auto_routing",
+        rag_answer_flow="crag",
+        rag_neighbor_child_count=3,
+        rag_rerank_enabled=True,
         rag_rrf_k=60,
         rag_context_group_max_chunks=4,
         oracle_vector_target_accuracy=95,
@@ -1047,16 +1047,16 @@ def test_evaluation_settings_map_overrides() -> None:
         ),
     )
 
-    assert default.rag_docrag_query_strategy == "auto_routing"
-    assert overridden.rag_docrag_query_strategy == "rag_fusion"
-    assert overridden.rag_docrag_answer_flow == "standard_rag"
-    assert overridden.rag_docrag_neighbor_child_count == 1
-    assert overridden.rag_docrag_rerank_enabled is False
+    assert default.rag_query_strategy == "auto_routing"
+    assert overridden.rag_query_strategy == "rag_fusion"
+    assert overridden.rag_answer_flow == "standard_rag"
+    assert overridden.rag_neighbor_child_count == 1
+    assert overridden.rag_rerank_enabled is False
     assert overridden.rag_rrf_k == 30
     assert overridden.rag_context_group_max_chunks == 2
     assert overridden.oracle_vector_target_accuracy == 90
     # 元の Settings は変えない。
-    assert base.rag_docrag_query_strategy == "auto_routing"
+    assert base.rag_query_strategy == "auto_routing"
 
 
 async def test_evaluation_compare_applies_experiment_rag_overrides(
@@ -1096,7 +1096,7 @@ async def test_evaluation_compare_applies_experiment_rag_overrides(
     )
 
     assert [settings.rag_rrf_k for settings in observed_settings] == [60, 10]
-    assert observed_settings[1].rag_docrag_query_strategy == "rag_fusion"
+    assert observed_settings[1].rag_query_strategy == "rag_fusion"
 
 
 def test_evaluation_api_rejects_empty_cases() -> None:
@@ -1295,11 +1295,11 @@ def test_evaluation_api_limits_whole_run_by_time_budget(monkeypatch: MonkeyPatch
 @pytest.mark.usefixtures("oracle_db")
 def test_evaluation_api_runs_against_local_pipeline(monkeypatch: MonkeyPatch) -> None:
     """API 経由でも、回答エンジンの回答の記録から指標を返す(実 Oracle。LLM はスタブ)。"""
-    from app.rag.docrag_answer import DocragAnswerEngine, DocragAnswerOutcome
+    from app.rag.answer_engine import AnswerEngine, AnswerOutcome
 
-    async def refuse(self: DocragAnswerEngine, request: SearchRequest) -> DocragAnswerOutcome:
+    async def refuse(self: AnswerEngine, request: SearchRequest) -> AnswerOutcome:
         del self, request
-        return DocragAnswerOutcome(
+        return AnswerOutcome(
             answer="資料からは確認できませんでした。",
             citations=[],
             diagnostics={"insufficient_reason": "該当する資料がありません。"},
@@ -1307,7 +1307,7 @@ def test_evaluation_api_runs_against_local_pipeline(monkeypatch: MonkeyPatch) ->
             evaluation_input=None,
         )
 
-    monkeypatch.setattr(DocragAnswerEngine, "run", refuse)
+    monkeypatch.setattr(AnswerEngine, "run", refuse)
     response = client.post(
         "/api/evaluation/run",
         json={

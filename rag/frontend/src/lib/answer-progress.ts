@@ -1,8 +1,8 @@
 /**
  * 回答生成（RAG 検索・チャット）の進捗の工程の名前と、今の工程の判定（#375）。
  *
- * backend は SSE の `stage` で、会話を踏まえた質問の書き換え（`docrag_history_rewrite`）・根拠の検索と
- * 回答の生成（`docrag_answer`。中の各工程は `answer_step:` で入れ子に送る）・検索だけのとき（`retrieval`）を送る。
+ * backend は SSE の `stage` で、会話を踏まえた質問の書き換え（`history_rewrite`）・根拠の検索と
+ * 回答の生成（`answer`。中の各工程は `answer_step:` で入れ子に送る）・検索だけのとき（`retrieval`）を送る。
  * 工程の名前は backend の時間切れの文言（`app/rag/answer_timeout.py` の `ANSWER_STAGE_LABELS`）と揃える。
  */
 
@@ -15,13 +15,13 @@ export interface AnswerStageEvent {
 
 export const ANSWER_STAGE_LABEL: Record<string, I18nKey> = {
   retrieval: "search.stage.retrieval",
-  docrag_history_rewrite: "search.stage.historyRewrite",
-  docrag_answer: "search.stage.docragAnswer",
+  history_rewrite: "search.stage.historyRewrite",
+  answer: "search.stage.answer",
 };
 
 /**
  * 回答フローの中の各工程（質問の理解・文書検索など）の工程名の接頭辞（#593）。後ろは利用者向けの
- * 工程名（日本語）で、そのまま表示する。backend の `app/rag/docrag_answer.py` の
+ * 工程名（日本語）で、そのまま表示する。backend の `app/rag/answer_engine.py` の
  * `ANSWER_STEP_STAGE_PREFIX` と同じ。
  */
 export const ANSWER_STEP_STAGE_PREFIX = "answer_step:";

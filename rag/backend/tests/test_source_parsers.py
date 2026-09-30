@@ -3245,7 +3245,7 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 @pytest.mark.parametrize(
     ("backend", "file_name", "content_type", "expected"),
     [
-        # docling: PDF・画像だけ(parser サービスは DocRAG のレイアウト解析。#286)
+        # docling: PDF・画像だけ(parser サービスは Docling のレイアウト解析。#286)
         ("docling", "doc.pdf", "application/pdf", True),
         ("docling", "scan.png", "image/png", True),
         ("docling", "photo.jpg", "image/jpeg", True),

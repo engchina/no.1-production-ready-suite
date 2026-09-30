@@ -11,7 +11,9 @@ from typing import Any
 import pytest
 from pr_system_settings.system_schema import ForeignKeySpec, foreign_keys_from_create_table
 
+from app.rag.oracle_schema import oracle_schema_migration_sections, split_sql_statements
 from app.rag.system_schema import (
+    DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
     DOMAIN_TABLES,
     MANAGED_FOREIGN_KEYS,
     MANAGED_INDEXES,
@@ -416,6 +418,192 @@ def test_initialize_replaces_only_explicit_retired_index() -> None:
     assert retired_index not in database.objects
     assert unmanaged_index in database.objects
     assert ("RAG_INGESTION_SEGMENTS_RECIPE_STATUS_IDX", "INDEX") in database.objects
+
+
+_RETIRED_STANDARD_ENGINE_TABLES = (
+    "RAG_PROMPT_VERSIONS",
+    "RAG_GENERATION_SETTINGS",
+    "RAG_AGENT_MEMORIES",
+)
+_RETIRE_STANDARD_ENGINE_MIGRATION = "20260930_005_retire_standard_engine_objects"
+
+
+def test_update_retires_standard_engine_tables_and_runs_migration() -> None:
+    """旧 standard の回答エンジンの表が残る既存の DB は outdated になり、更新で消える（#596）。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    assert not any((name, "TABLE") in database.objects for name in _RETIRED_STANDARD_ENGINE_TABLES)
+    for name in _RETIRED_STANDARD_ENGINE_TABLES:
+        database.objects[(name, "TABLE")] = datetime.now(UTC)
+    database.migrations.pop(_RETIRE_STANDARD_ENGINE_MIGRATION)
+
+    status = manager.status()
+    assert status["status"] == "outdated"
+    assert _RETIRE_STANDARD_ENGINE_MIGRATION in status["pending_versions"]
+    assert {item["name"] for item in status["retired_objects"]} == set(
+        _RETIRED_STANDARD_ENGINE_TABLES
+    )
+
+    # データを消す migration なので、承認（allow_destructive）が要る（#619）。
+    result = manager.initialize(allow_destructive=True)
+
+    assert result["status"] == "ready"
+    assert _RETIRE_STANDARD_ENGINE_MIGRATION in database.migrations
+    assert any("MENU.SETTINGS_GROUNDING" in statement for statement in database.executed)
+    assert not any((name, "TABLE") in database.objects for name in _RETIRED_STANDARD_ENGINE_TABLES)
+    # 回答の記録（answer_engine の列）と知識グラフの表は残す。
+    assert ("RAG_ANSWER_RECORDS", "TABLE") in database.objects
+    assert ("RAG_GRAPH_ENTITIES", "TABLE") in database.objects
+
+
+_RETIRED_GRAPH_TABLES = ("RAG_GRAPH_CLAIMS", "RAG_GRAPH_COMMUNITY_SUMMARIES")
+_RETIRE_GRAPH_CLAIMS_MIGRATION = "20260930_007_retire_graph_claims_community"
+
+
+def test_update_retires_graph_claims_community_tables_with_approval() -> None:
+    """関係情報の claims / community summary の表が残る DB は、承認付きの更新で消える（#621）。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    assert not any((name, "TABLE") in database.objects for name in _RETIRED_GRAPH_TABLES)
+    for name in _RETIRED_GRAPH_TABLES:
+        database.objects[(name, "TABLE")] = datetime.now(UTC)
+    database.migrations.pop(_RETIRE_GRAPH_CLAIMS_MIGRATION)
+
+    status = manager.status()
+    assert status["status"] == "outdated"
+    assert [item["name"] for item in status["pending_destructive_migrations"]] == [
+        _RETIRE_GRAPH_CLAIMS_MIGRATION
+    ]
+    assert {item["name"] for item in status["retired_objects"]} == set(_RETIRED_GRAPH_TABLES)
+    with pytest.raises(SystemSchemaError) as error:
+        manager.initialize()
+    assert error.value.code == DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED
+    assert all((name, "TABLE") in database.objects for name in _RETIRED_GRAPH_TABLES)
+
+    result = manager.initialize(allow_destructive=True)
+
+    assert result["status"] == "ready"
+    assert _RETIRE_GRAPH_CLAIMS_MIGRATION in database.migrations
+    assert not any((name, "TABLE") in database.objects for name in _RETIRED_GRAPH_TABLES)
+    # 関係情報グラフが読む表は残す。
+    for name in ("RAG_GRAPH_ENTITIES", "RAG_GRAPH_RELATIONSHIPS", "RAG_GRAPH_ENTITY_CHUNKS"):
+        assert (name, "TABLE") in database.objects
+
+
+# データを消す SQL（テーブルの DROP・行の DELETE・TRUNCATE）。`ON DELETE CASCADE` は含めない。
+_DATA_LOSS_SQL = re.compile(r"\b(DROP\s+TABLE|DELETE\s+FROM|TRUNCATE\s+TABLE)\b", re.IGNORECASE)
+
+
+def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
+    """DROP TABLE・DELETE を含む migration は、すべて「破壊的」の印と説明を持つ（#619）。
+
+    新しい migration でデータを消すときに印を付け忘れると、テストの fixture や「作成・更新」が
+    確認なしに当ててしまうため、SQL から検出して照合する。
+    """
+    sections = oracle_schema_migration_sections()
+    marked = {section.name for section in sections if section.destructive}
+    dropping = {
+        section.name
+        for section in sections
+        if any(_DATA_LOSS_SQL.search(statement) for statement in split_sql_statements(section.sql))
+    }
+    assert marked == dropping
+    assert {
+        "20260629_002_drop_kb_chunk_set_bindings",
+        "20260928_001_retire_dashboard_permission",
+        _RETIRE_STANDARD_ENGINE_MIGRATION,
+        _RETIRE_GRAPH_CLAIMS_MIGRATION,
+    } == marked
+    assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)
+    # 印は checksum（SQL だけ）に影響しない（適用済みの DB を outdated にしない）。
+    for section, migration in zip(sections, MIGRATIONS, strict=True):
+        assert migration.destructive_note == section.destructive_note
+
+
+def test_initialize_stops_before_destructive_migration_without_approval() -> None:
+    """未適用の破壊的な migration は、承認が無ければ DB を変えずに止める（#619）。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    for name in _RETIRED_STANDARD_ENGINE_TABLES:
+        database.objects[(name, "TABLE")] = datetime.now(UTC)
+    database.migrations.pop(_RETIRE_STANDARD_ENGINE_MIGRATION)
+    claimed = list(database.claimed_operation_kinds)
+    executed = len(database.executed)
+
+    status = manager.status()
+    assert [item["name"] for item in status["pending_destructive_migrations"]] == [
+        _RETIRE_STANDARD_ENGINE_MIGRATION
+    ]
+    assert "rag_agent_memories" in status["pending_destructive_migrations"][0]["description"]
+
+    with pytest.raises(SystemSchemaError) as error:
+        manager.initialize()
+
+    assert error.value.code == DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED
+    assert error.value.status_code == 409
+    assert _RETIRE_STANDARD_ENGINE_MIGRATION in error.value.public_message
+    # lease を取らず、DDL も DELETE も実行しない。表と台帳はそのまま。
+    assert database.claimed_operation_kinds == claimed
+    assert all(
+        statement.lstrip().upper().startswith("SELECT")
+        for statement in database.executed[executed:]
+    )
+    assert all((name, "TABLE") in database.objects for name in _RETIRED_STANDARD_ENGINE_TABLES)
+    assert _RETIRE_STANDARD_ENGINE_MIGRATION not in database.migrations
+    assert database.operation is not None
+    assert database.operation["status"] == "IDLE"
+
+    result = manager.initialize(allow_destructive=True)
+    assert result["status"] == "ready"
+    assert result["pending_destructive_migrations"] == []
+    assert not any((name, "TABLE") in database.objects for name in _RETIRED_STANDARD_ENGINE_TABLES)
+
+
+def test_non_destructive_pending_migration_is_applied_without_approval() -> None:
+    """破壊的でない migration だけが未適用なら、今までどおり承認なしで当てる（#619）。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    non_destructive = next(migration for migration in MIGRATIONS if not migration.destructive)
+    database.migrations.pop(non_destructive.name)
+
+    assert manager.status()["pending_destructive_migrations"] == []
+    result = manager.initialize()
+
+    assert result["operation"] == "migrated"
+    assert database.migrations[non_destructive.name] == non_destructive.checksum
+
+
+def test_fresh_database_reports_no_destructive_migrations() -> None:
+    """未初期化の DB は migration を実行せずに記録するので、承認を求めない（#619）。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+
+    status = manager.status()
+    assert status["status"] == "missing"
+    assert status["pending_destructive_migrations"] == []
+    assert manager.initialize()["operation"] == "initialized"
+    # 適用済み（005 まで記録済み）の DB は何も変わらない。
+    no_op = manager.initialize()
+    assert no_op["operation"] == "no_op"
+    assert no_op["pending_destructive_migrations"] == []
+
+
+def test_recreate_drops_retired_standard_engine_tables() -> None:
+    """全再作成は migration を記録だけするので、退役した表は退役一覧から消す（#596）。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    for name in _RETIRED_STANDARD_ENGINE_TABLES:
+        database.objects[(name, "TABLE")] = datetime.now(UTC)
+
+    result = manager.initialize(recreate=True, confirmation=RECREATE_CONFIRMATION)
+
+    assert result["status"] == "ready"
+    assert not any((name, "TABLE") in database.objects for name in _RETIRED_STANDARD_ENGINE_TABLES)
 
 
 def test_checksum_mismatch_reapplies_only_pending_migration() -> None:

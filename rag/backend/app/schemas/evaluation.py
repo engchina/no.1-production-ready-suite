@@ -5,7 +5,7 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.config import DocragAnswerFlow, DocragQueryStrategy, EvaluationSuite
+from app.config import AnswerFlow, EvaluationSuite, QueryStrategy
 from app.schemas.search import (
     SearchDiagnostics,
     format_search_id_filter,
@@ -148,7 +148,7 @@ class EvaluationCaseResult(BaseModel):
     diagnostics: SearchDiagnostics = Field(default_factory=SearchDiagnostics)
     elapsed_ms: float
     error_type: str | None = None
-    # 時間切れになった工程（進捗の stage と同じ名前。例: docrag_answer）。
+    # 時間切れになった工程（進捗の stage と同じ名前。例: answer）。
     # 時間切れ以外は None（#383）。
     error_stage: str | None = None
     error_message: str | None = None
@@ -214,8 +214,8 @@ class EvaluationRagOverrides(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    query_strategy: DocragQueryStrategy | None = None
-    answer_flow: DocragAnswerFlow | None = None
+    query_strategy: QueryStrategy | None = None
+    answer_flow: AnswerFlow | None = None
     neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
     rerank_enabled: bool | None = None
     rrf_k: int | None = Field(default=None, ge=1, le=1000)

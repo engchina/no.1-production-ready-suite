@@ -8,6 +8,7 @@ import sys
 from collections.abc import Sequence
 
 from app.rag.system_schema import (
+    DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
     RECREATE_CONFIRMATION,
     SystemSchemaError,
     system_schema_manager,
@@ -18,7 +19,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="RAG Oracle system schema を管理します。")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status", help="DDL を実行せず現在状態を表示します。")
-    subparsers.add_parser("initialize", help="不足 object を作成・更新します。")
+    initialize = subparsers.add_parser("initialize", help="不足 object を作成・更新します。")
+    # データを消す未適用の migration（status の pending_destructive_migrations）は、
+    # これが無ければ適用せずに止める（#619）。先に書き出し・バックアップを確かめてから付ける。
+    initialize.add_argument(
+        "--allow-destructive",
+        action="store_true",
+        help=(
+            "データを削除する未適用の migration（status の pending_destructive_migrations）の"
+            "適用を承認します。削除したデータは元に戻せないため、先に書き出してください。"
+        ),
+    )
     recreate = subparsers.add_parser(
         "recreate",
         help="管理対象 RAG object を削除して再作成します。",
@@ -58,7 +69,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "status":
             result = system_schema_manager.status()
         elif args.command == "initialize":
-            result = system_schema_manager.initialize()
+            result = system_schema_manager.initialize(allow_destructive=args.allow_destructive)
         elif args.command == "delete-orphans":
             if args.expected_rows < 0:
                 raise SystemSchemaError(
@@ -76,14 +87,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 confirmation=args.confirmation,
             )
     except SystemSchemaError as exc:
-        print(
-            json.dumps(
-                {"error_code": exc.code, "error_message": exc.public_message},
-                ensure_ascii=False,
-                indent=2,
-            ),
-            file=sys.stderr,
-        )
+        error = {"error_code": exc.code, "error_message": exc.public_message}
+        if exc.code == DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED:
+            error["hint"] = (
+                "status の pending_destructive_migrations で削除されるデータを確認し、必要な"
+                "データを書き出してから、initialize --allow-destructive で再実行してください。"
+            )
+        print(json.dumps(error, ensure_ascii=False, indent=2), file=sys.stderr)
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

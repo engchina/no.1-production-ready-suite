@@ -1,11 +1,11 @@
-"""GraphRAG-lite index builder のテスト。"""
+"""関係情報(文書と章・節の見出しのつながり)の index builder のテスト。"""
 
 from app.rag.chunking import Chunk
 from app.rag.graph_index import build_graph_index
 from app.schemas.extraction import StructuredExtraction
 
 
-def test_build_graph_index_creates_entities_claims_and_summary() -> None:
+def test_build_graph_index_creates_entities_and_relationships() -> None:
     """構造化 chunk metadata から deterministic KG artifact を生成する。"""
     extraction = StructuredExtraction.model_validate(
         {
@@ -74,35 +74,13 @@ def test_build_graph_index_creates_entities_claims_and_summary() -> None:
     assert any(entity.entity_type == "table_section" for entity in graph.entities)
     assert len(graph.relationships) >= 2
     assert {relationship.relationship_type for relationship in graph.relationships} == {"contains"}
-    assert {claim.source_document_id for claim in graph.claims} == {"doc-1"}
-    assert any(claim.source_chunk_id == "doc-1:0" for claim in graph.claims)
     assert any(link.chunk_id == "doc-1:1" for link in graph.entity_chunk_links)
-    assert len(graph.community_summaries) == 1
-    summary = graph.community_summaries[0]
-    assert summary.title == "社内規程 の全体要約"
-    assert "全体" in summary.summary_text
-    assert "関係" in summary.summary_text
-    assert summary.source_document_ids == ["doc-1"]
-
-
-def test_build_graph_index_suppresses_claims_and_summaries_for_entities_profile() -> None:
-    """entities profile 相当の build flags は claims/community summary を抑制する(軽量)。"""
-    extraction = StructuredExtraction(raw_text="本文です。", document_type="メモ", confidence=0.8)
-    chunks = [Chunk(text="本文です。", index=0, start_offset=0, end_offset=5)]
-
-    graph = build_graph_index(
-        document_id="doc-light",
-        knowledge_base_ids=["kb-1"],
-        extraction=extraction,
-        chunks=chunks,
-        build_claims=False,
-        build_community_summaries=False,
-    )
-
-    # entities + relationships は残るが claims / community summary は構築しない。
-    assert len(graph.entities) >= 1
-    assert graph.claims == []
-    assert graph.community_summaries == []
+    # claims / community summary は読む経路が無かったため作らない(#621)。
+    assert {field for field in vars(graph)} == {
+        "entities",
+        "relationships",
+        "entity_chunk_links",
+    }
 
 
 def test_build_graph_index_uses_default_scope_without_knowledge_base() -> None:
@@ -119,4 +97,3 @@ def test_build_graph_index_uses_default_scope_without_knowledge_base() -> None:
 
     assert len(graph.entities) >= 1
     assert {entity.knowledge_base_id for entity in graph.entities} == {None}
-    assert graph.community_summaries[0].knowledge_base_id is None

@@ -184,7 +184,7 @@ def test_create_and_get_business_view(fake_oracle: FakeBusinessViewOracle) -> No
             "config": {
                 "knowledge_base_ids": ["kb-1", "kb-2"],
                 "query": {
-                    "docrag_query_strategy": "rag_fusion",
+                    "query_strategy": "rag_fusion",
                     "vector_index_profile": "accurate",
                     # 業務ビューは品質評価を上書きしない。送られても保存しない(#301)。
                     "evaluation_suite": "strict_ci",
@@ -202,7 +202,7 @@ def test_create_and_get_business_view(fake_oracle: FakeBusinessViewOracle) -> No
     data = resp.json()["data"]
     assert data["name"] == "経理アシスタント"
     assert data["knowledge_base_count"] == 2
-    assert data["config"]["query"]["docrag_query_strategy"] == "rag_fusion"
+    assert data["config"]["query"]["query_strategy"] == "rag_fusion"
     assert "vector_index_profile" not in data["config"]["query"]
     assert "evaluation_suite" not in data["config"]["query"]
     assert "generation_profile" not in data["config"]["query"]
@@ -400,14 +400,14 @@ def test_default_business_view_allows_settings_but_protects_identity_and_scope(
             "description": "全社共通の検索設定",
             "config": {
                 "knowledge_base_ids": ["kb-default"],
-                "query": {"docrag_answer_flow": "standard_rag"},
+                "query": {"answer_flow": "standard_rag"},
             },
         },
     )
     assert update.status_code == 200
     assert update.json()["data"]["description"] == "全社共通の検索設定"
     assert update.json()["data"]["config"]["knowledge_base_ids"] == ["kb-default"]
-    assert update.json()["data"]["config"]["query"]["docrag_answer_flow"] == "standard_rag"
+    assert update.json()["data"]["config"]["query"]["answer_flow"] == "standard_rag"
 
     # 画面の保存と同じ形（名前を送らず説明と設定を送る）で DEFAULT を保存できる（#521）。
     assert default["description"] == DEFAULT_BUSINESS_VIEW_DESCRIPTION

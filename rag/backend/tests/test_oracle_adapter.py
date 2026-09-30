@@ -20,18 +20,15 @@ from app.clients.oracle import (
     OracleWalletPasswordRequiredError,
     _datetime_value,
     _test_oracle_connection_sync,
-    oracle_agent_memory_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
     oracle_feedback_details_schema_sql,
     oracle_feedback_schema_sql,
-    oracle_generation_settings_schema_sql,
     oracle_ingestion_audit_schema_sql,
     oracle_ingestion_job_schema_sql,
     oracle_ingestion_segment_schema_sql,
     oracle_knowledge_base_schema_sql,
     oracle_knowledge_graph_schema_sql,
-    oracle_prompt_version_schema_sql,
     oracle_search_audit_schema_sql,
     oracle_text_terms,
     oracle_vector_schema_sql,
@@ -40,8 +37,6 @@ from app.config import Settings
 from app.rag.business_view_config import BusinessViewConfig, dump_business_view_config
 from app.rag.chunking import Chunk
 from app.rag.graph_index import (
-    GraphClaim,
-    GraphCommunitySummary,
     GraphEntity,
     GraphEntityChunkLink,
     GraphIndex,
@@ -127,18 +122,6 @@ async def test_vector_index_build_params_unknown_without_connection_settings(
     assert await client.get_vector_index_build_params() is None
 
 
-def test_generation_schema_has_singleton_revision_and_active_pointer() -> None:
-    prompt_sql = oracle_prompt_version_schema_sql()
-    settings_sql = oracle_generation_settings_schema_sql()
-
-    assert "CREATE TABLE rag_prompt_versions" in prompt_sql
-    assert "system_prompt    CLOB NOT NULL" in prompt_sql
-    assert "CREATE TABLE rag_generation_settings" in settings_sql
-    assert "CHECK (settings_key = 'GLOBAL')" in settings_sql
-    assert "active_prompt_version_id" in settings_sql
-    assert "revision >= 1" in settings_sql
-
-
 @pytest.mark.anyio
 async def test_ensure_default_business_view_preserves_settings_and_fixes_scope(
     monkeypatch: pytest.MonkeyPatch,
@@ -163,7 +146,7 @@ async def test_ensure_default_business_view_preserves_settings_and_fixes_scope(
         view_config=dump_business_view_config(
             BusinessViewConfig(
                 knowledge_base_ids=["kb-old"],
-                query={"docrag_query_strategy": "rag_fusion"},
+                query={"query_strategy": "rag_fusion"},
             )
         ),
         archived_at=now,
@@ -189,7 +172,7 @@ async def test_ensure_default_business_view_preserves_settings_and_fixes_scope(
     assert detail.status == BusinessViewStatus.ACTIVE
     assert detail.archived_at is None
     assert detail.config.knowledge_base_ids == ["kb-default"]
-    assert detail.config.query.docrag_query_strategy == "rag_fusion"
+    assert detail.config.query.query_strategy == "rag_fusion"
     # 説明が空の既存 DEFAULT には既定の説明を補う（#521）。
     assert detail.description == DEFAULT_BUSINESS_VIEW_DESCRIPTION
     assert len(connection.calls) == 1
@@ -1896,28 +1879,6 @@ async def test_oracle_replace_document_graph_index_replaces_document_scope() -> 
                 source_document_ids=["doc-1"],
             )
         ],
-        claims=[
-            GraphClaim(
-                claim_id="claim-1",
-                knowledge_base_id="kb-1",
-                entity_id="ent-section",
-                claim_text="12万円以上は部門長承認です。",
-                confidence=0.88,
-                source_document_id="doc-1",
-                source_chunk_id="doc-1:0",
-            )
-        ],
-        community_summaries=[
-            GraphCommunitySummary(
-                community_id="comm-1",
-                knowledge_base_id="kb-1",
-                level_no=0,
-                title="社内規程 の全体要約",
-                summary_text="承認条件の関係をまとめた要約です。",
-                entity_ids=["ent-doc", "ent-section"],
-                source_document_ids=["doc-1"],
-            )
-        ],
         entity_chunk_links=[
             GraphEntityChunkLink(
                 entity_id="ent-section",
@@ -1931,6 +1892,8 @@ async def test_oracle_replace_document_graph_index_replaces_document_scope() -> 
         execute_results=[
             [_oracle_document_row()],
             [{"entity_id": "ent-doc"}, {"entity_id": "ent-old"}, {"entity_id": "ent-stale"}],
+            # #621 で廃止した rag_graph_claims が、migration の適用前でまだ残っている。
+            [{"table_count": 1}],
         ]
     )
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
@@ -1947,19 +1910,25 @@ async def test_oracle_replace_document_graph_index_replaces_document_scope() -> 
     assert any("source_entity_id IN" in statement for statement in statements)
     assert any("target_entity_id IN" in statement for statement in statements)
     assert any("DELETE FROM rag_graph_entity_chunks" in statement for statement in statements)
-    assert any("DELETE FROM rag_graph_claims" in statement for statement in statements)
-    assert any(
-        "DELETE FROM rag_graph_community_summaries" in statement and "JSON_EXISTS" in statement
-        for statement in statements
+    # 残っている claims は、消す entity を FK で参照する行だけを entity より先に消す(#621)。
+    claim_delete = next(
+        index
+        for index, statement in enumerate(statements)
+        if "DELETE FROM rag_graph_claims" in statement
     )
-    assert any("DELETE FROM rag_graph_entities" in statement for statement in statements)
+    assert "entity_id IN" in statements[claim_delete]
+    entity_delete = next(
+        index
+        for index, statement in enumerate(statements)
+        if "DELETE FROM rag_graph_entities" in statement
+    )
+    assert claim_delete < entity_delete
+    assert not any("rag_graph_community_summaries" in statement for statement in statements)
     many_statements = [call.statement for call in pool.connection.many_calls]
     assert any("INSERT INTO rag_graph_entities" in statement for statement in many_statements)
     assert any("INSERT INTO rag_graph_relationships" in statement for statement in many_statements)
-    assert any("INSERT INTO rag_graph_claims" in statement for statement in many_statements)
-    assert any(
-        "INSERT INTO rag_graph_community_summaries" in statement for statement in many_statements
-    )
+    assert not any("rag_graph_claims" in statement for statement in many_statements)
+    assert not any("rag_graph_community_summaries" in statement for statement in many_statements)
     assert any("INSERT INTO rag_graph_entity_chunks" in statement for statement in many_statements)
     entity_insert = next(
         call
@@ -1967,12 +1936,25 @@ async def test_oracle_replace_document_graph_index_replaces_document_scope() -> 
         if "INSERT INTO rag_graph_entities" in call.statement
     )
     assert json.loads(str(entity_insert.rows[0]["source_document_ids"])) == ["doc-1"]
-    claim_insert = next(
-        call
-        for call in pool.connection.many_calls
-        if "INSERT INTO rag_graph_claims" in call.statement
+
+
+async def test_oracle_replace_document_graph_index_skips_retired_claims_table() -> None:
+    """rag_graph_claims を消す migration の適用後(表が無い)は、claims に触らない(#621)。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [_oracle_document_row()],
+            [{"entity_id": "ent-doc"}],
+            [{"table_count": 0}],
+        ]
     )
-    assert claim_insert.rows[0]["source_chunk_id"] == "doc-1:0"
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    await client.replace_document_graph_index("doc-1", GraphIndex())
+
+    statements = [call.statement for call in pool.connection.calls]
+    assert any("FROM user_tables" in statement for statement in statements)
+    assert not any("DELETE FROM rag_graph_claims" in statement for statement in statements)
+    assert any("DELETE FROM rag_graph_entities" in statement for statement in statements)
 
 
 async def test_oracle_save_evaluation_artifact_redacts_query_text() -> None:
@@ -2094,7 +2076,7 @@ async def test_oci_save_index_stores_first_page_context_once_per_chunk_set() -> 
     chunk set の行は chunk の保存の後に upsert_chunk_set が作るため、無ければ MERGE で作る。
     chunk set の無い保存(未タグ)では書かない。
     """
-    from app.rag.docrag_chunking import DOCRAG_FIRST_PAGE_CONTEXT_KEY
+    from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY
 
     first_page = {
         "page": 1,
@@ -2111,9 +2093,9 @@ async def test_oci_save_index_stores_first_page_context_once_per_chunk_set() -> 
             start_offset=0,
             end_offset=3,
             metadata={
-                "docrag_search_text": f"Child text: 本文{index}",
+                "engine_search_text": f"Child text: 本文{index}",
                 **(
-                    {DOCRAG_FIRST_PAGE_CONTEXT_KEY: json.dumps(first_page, ensure_ascii=False)}
+                    {FIRST_PAGE_CONTEXT_KEY: json.dumps(first_page, ensure_ascii=False)}
                     if index == 0
                     else {}
                 ),
@@ -2135,7 +2117,7 @@ async def test_oci_save_index_stores_first_page_context_once_per_chunk_set() -> 
         )
 
         rows = pool.connection.many_calls[0].rows
-        assert all(DOCRAG_FIRST_PAGE_CONTEXT_KEY not in str(row["metadata_json"]) for row in rows)
+        assert all(FIRST_PAGE_CONTEXT_KEY not in str(row["metadata_json"]) for row in rows)
         assert all("受注管理規程" not in str(row["search_text"]) for row in rows)
         merges = [
             call for call in pool.connection.calls if "MERGE INTO rag_chunk_sets" in call.statement
@@ -2314,8 +2296,9 @@ async def test_oci_delete_document_removes_chunks_and_document_with_access_scope
     assert "document_id IN (:access_document_id_0)" in statements[0]
     assert any("FROM rag_graph_entity_chunks" in statement for statement in statements)
     assert any("DELETE FROM rag_graph_entity_chunks" in statement for statement in statements)
-    assert any("DELETE FROM rag_graph_claims" in statement for statement in statements)
-    assert any("DELETE FROM rag_graph_community_summaries" in statement for statement in statements)
+    # 関係情報の entity が無い文書は、#621 で廃止した表を見に行かない。
+    assert not any("rag_graph_claims" in statement for statement in statements)
+    assert not any("rag_graph_community_summaries" in statement for statement in statements)
     duplicate_clear = next(
         call
         for call in pool.connection.calls
@@ -2658,29 +2641,6 @@ def test_oracle_search_audit_schema_redacts_query_body() -> None:
     assert " mode " not in normalized
 
 
-def test_oracle_agent_memory_schema_uses_vector_and_hashed_scope() -> None:
-    """Agent Memory は Oracle AI Database 内の vector table と hash scope で保持する。"""
-    ddl = oracle_agent_memory_schema_sql()
-    normalized = ddl.lower()
-
-    assert "create table rag_agent_memories" in normalized
-    assert "tenant_id_hash   char(64)" in normalized
-    assert "user_id_hash     char(64)" in normalized
-    assert "role_id_hash     char(64)" in normalized
-    assert "agent_id_hash    char(64)" in normalized
-    assert "thread_id_hash   char(64)" in normalized
-    assert "memory_text      clob not null" in normalized
-    assert "embedding        vector(1536, float32) not null" in normalized
-    assert "create vector index rag_agent_memories_embedding_hnsw_idx" in normalized
-    assert "organization inmemory neighbor graph" in normalized
-    assert "indextype is ctxsys.context" in normalized
-    assert "rag_agent_memories_scope_idx" in ddl
-    assert "raw_user_id" not in normalized
-    assert "thread_id " not in normalized
-    assert "qdrant" not in normalized
-    assert "pgvector" not in normalized
-
-
 def test_oracle_ingestion_audit_schema_redacts_ocr_body() -> None:
     """取込監査 DDL は原本 hash と件数を保存し、OCR 原文列を持たない。"""
     ddl = oracle_ingestion_audit_schema_sql()
@@ -2763,8 +2723,9 @@ def test_oracle_graph_feedback_and_eval_artifact_schema_use_oracle_tables() -> N
 
     assert "CREATE TABLE rag_graph_entities" in graph_ddl
     assert "CREATE TABLE rag_graph_relationships" in graph_ddl
-    assert "CREATE TABLE rag_graph_claims" in graph_ddl
-    assert "CREATE TABLE rag_graph_community_summaries" in graph_ddl
+    # claims / community summary は #621 で廃止した(読む経路が無かった)。
+    assert "rag_graph_claims" not in graph_ddl
+    assert "rag_graph_community_summaries" not in graph_ddl
     assert "CREATE TABLE rag_graph_entity_chunks" in graph_ddl
     assert "CREATE TABLE rag_citation_feedback" in feedback_ddl
     assert "target_type       VARCHAR2(16)" in feedback_ddl

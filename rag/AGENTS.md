@@ -7,6 +7,7 @@
 
 - 共通ルールは [../AGENTS.md](../AGENTS.md)「開発ワークフロー / GitHub 運用」に従う。Issue には `product:rag` label を付け、PR title の scope は `rag` にする。
 - ユーザー向け概念は `ナレッジ構築` / `業務ビュー` / `検索・回答設定` を使い、`pipeline` / `adapter` / `profile` などの工程語は code identifier を指す場合に限る。
+- 「DocRAG」は rag_poc から移したときの名前で、画面・API のメッセージ・docs の地の文（#598）にも、コードの識別子・設定（env）・API・DB の名前（#599）にも使わない。回答フロー・親子階層（small-to-big）・回答の記録・回答生成のプロンプト・質問の拡張・回答の生成方式（CRAG / 標準 RAG）など RAG の標準の用語・名前で呼ぶ（package は `rag_engine`、回答は `app/rag/answer_engine.py`、分割方式は `small_to_big`、回答の設定は `RAG_QUERY_STRATEGY` など）。旧名は migration（保存値・表の改名）と docs/deployment.md の更新手順にだけ残す。
 - 3 層モデル(文書レシピ / KB スコープ / Business View)に関わる Issue では、どの層の責務かを明記し、責務越境になっていないかを `修正方針` に記載する。
 - PR の `検証結果` は、backend は `uv run pytest` / `uv run ruff format --check .` / `uv run ruff check .` / `uv run mypy .`、frontend は `npm run lint` / `npm run build` / `npm run test` を基本とする。ローカルでは変更範囲だけを実行し、全件は CI（`RAG / Backend`・`RAG / Frontend`・`RAG / E2E smoke` 等）の job 結果を引用してよい（[../AGENTS.md](../AGENTS.md)「ローカルの検証の範囲」）。
 
@@ -135,7 +136,7 @@ Business View は **検索・回答に使う設定だけ**を持つ。
 | 回答プロンプト | 可 | 不可 | 不可 |
 | 品質評価 | 可 | 不可 | 不可 |
 
-GraphRAG の構築深度は文書レシピで選ぶ(回答の検索では使わない。検索時のグラフ拡張は #595 で削除した)。共有 Oracle 索引の設定は Business View へ保存しない。
+関係情報の構築(構築する / しない。文書と章・節の見出しのつながり)は文書レシピで選ぶ(ナレッジベースの関係情報グラフで見るためのもので、回答の検索では使わない。検索時のグラフ拡張は #595、claims / community summary の構築は #621 で削除した)。共有 Oracle 索引の設定は Business View へ保存しない。
 
 検索時の解決順は **request 明示 > Published Business View > global defaults**。KB の legacy query override は使わない。
 
@@ -157,7 +158,7 @@ backend/                  FastAPI アプリ
     api/routes/           health / documents / search / knowledge_bases /
                           business_views / evaluation / settings / services
     clients/              OCI / Oracle / Object Storage clients
-    rag/                  ingestion / parsing / chunking / 回答フロー(docrag_answer) /
+    rag/                  ingestion / parsing / chunking / 回答フロー(answer_engine) /
                           guardrail / evaluation / business view
     schemas/              common / search / knowledge_base / business_view / settings
   tests/                  pytest
@@ -194,6 +195,8 @@ npm run dev   # /api は BACKEND_URL を明示したときだけ proxy する（
 - 変更後は該当範囲の lint・型チェック・テストを実行し、完了報告に実行結果を明記する。
 - ローカルは変更範囲の検査にする（#339）。backend は関係するテストファイル（`uv run pytest tests/test_<対象>.py`）と `uv run pytest --lf -x`、frontend は `npm run lint` / `npm run build` と `npx vitest related <変更したファイル>`（または `npx vitest --changed`）、e2e は関係する spec だけ（`npx playwright test e2e/<対象>.spec.ts`）。backend の全テスト・`mypy .`・`pip-audit`、Playwright の smoke / 全件は CI と nightly に任せる。
 - UI/UX 変更は Playwright で desktop と mobile 幅を確認する。空/読込/エラー/ブロック状態も必要に応じて確認する。
+- **実 Oracle のテスト（`oracle_db` の fixture）は、共有の開発 DB ではなくテスト専用の schema（DB ユーザー）で流すことを推奨する（#619）。** fixture はテストの開始時に未適用の migration を当て、テストが作った行を消すため、共有の DB では並行作業のチェックアウトの migration が手元のデータに当たる。接続先は共通 `.env` の `PLATFORM_ORACLE_*` を読むので、テスト専用のユーザーを書いた別のファイルを `PLATFORM_ENV_FILE=<ファイル> uv run pytest` で渡す。データを削除する migration（テーブルの DROP・行の DELETE）が未適用なら、fixture は何も当てずに実 Oracle のテストを skip し、理由を出す（適用は書き出しの後に `system_schema_cli initialize --allow-destructive` で行う。docs/deployment.md の「既存環境の更新手順の共通の注意」）。
+- データを削除する migration を足すときは、`oracle_schema.py` の `OracleSchemaSection` に `destructive_note`（削除されるデータと、前にする書き出し）を書く。付け忘れは `tests/test_system_schema_manager.py` が SQL から検出する。
 
 ## コーディング規約・重要ルール
 

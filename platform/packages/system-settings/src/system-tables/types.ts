@@ -32,6 +32,13 @@ export interface SystemTableForeignKey {
   current_delete_rule?: string | null;
 }
 
+/** 未適用の、データを消す（テーブルの DROP・行の DELETE を含む）migration（RAG だけが返す。#619）。 */
+export interface SystemTableDestructiveMigration {
+  name: string;
+  /** 消えるデータと、適用の前にすること（書き出しなど）の説明。 */
+  description: string;
+}
+
 export interface SystemTableMetadata {
   name: string;
   /** 接続ユーザーの schema と所有者付きの名前（NL2SQL だけが返す。無ければ名前だけを出す）。 */
@@ -62,6 +69,8 @@ export interface SystemTablesStatusData {
   schema_head: string | number;
   applied_versions: Array<string | number>;
   pending_versions: Array<string | number>;
+  /** 未適用の、データを消す migration（「作成・更新」の前に承認が要る。RAG。#619）。 */
+  pending_destructive_migrations?: SystemTableDestructiveMigration[];
   expected_object_count: number;
   existing_object_count: number;
   expected_table_count: number;
@@ -86,6 +95,8 @@ export interface SystemTablesStatusData {
 export interface SystemTablesInitializeRequest {
   recreate: boolean;
   confirmation?: string;
+  /** データを消す未適用の migration の適用を承認する（確認ダイアログの後だけ true。#619）。 */
+  allow_destructive?: boolean;
 }
 
 export interface SystemTablesOperationData extends SystemTablesStatusData {

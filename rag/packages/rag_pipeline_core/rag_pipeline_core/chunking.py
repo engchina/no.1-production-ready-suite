@@ -108,7 +108,7 @@ BBOX_COORDINATE_MODE_KEYS = (
 )
 BBOX_UNIT_KEYS = ("bbox_unit", "coordinate_unit")
 # 表の中の画像を Vision で読み取った説明文(#502 / #513)。要素の metadata の key と、表の本文の
-# 後ろに足す補足の見出し。docrag_core の DocRAG 親子階層(chunking/records.py)と同じ書式にする。
+# 後ろに足す補足の見出し。rag_engine の親子階層（small-to-big）(chunking/records.py)と同じ書式にする。
 TABLE_VISION_TEXT_KEY = "table_vision_text"
 TABLE_VISION_SUPPLEMENT_LABEL = "表内画像の補足:"
 
@@ -775,7 +775,7 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
 def _pending_table_vision_supplement(element: DocumentElement) -> str:
     """表の要素の本文にまだ入っていない、表の中の画像の説明文の補足(#513)。
 
-    Docling は説明文を表の要素の metadata(``table_vision_text``)と docrag_layout の record に
+    Docling は説明文を表の要素の metadata(``table_vision_text``)と layout_records の record に
     だけ持ち、表の本文(HTML)は変えない。Docling 以外は Vision の段が表の本文へ補足を足して
     いるので、本文に説明文がある表は足さない(二重にしない)。
     """

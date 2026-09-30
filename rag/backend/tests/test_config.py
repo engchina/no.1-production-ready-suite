@@ -18,10 +18,13 @@ from app.config import (
 )
 
 
-def test_chunking_strategy_defaults_to_docrag_small_to_big() -> None:
-    """Chunking アダプターの既定戦略は DocRAG 親子階層(#594。回答が親子の文脈を前提にする)。"""
+def test_chunking_strategy_defaults_to_small_to_big() -> None:
+    """Chunking アダプターの既定戦略は親子階層（small-to-big）。
+
+    #594。回答が親子の文脈を前提にする。
+    """
     settings = Settings()
-    assert settings.rag_chunking_strategy == "docrag_small_to_big"
+    assert settings.rag_chunking_strategy == "small_to_big"
     assert settings.rag_chunk_min_chars == 120
     assert settings.rag_chunk_delimiter == "\\n\\n"
 
@@ -41,40 +44,42 @@ def test_chunk_min_chars_must_be_smaller_than_chunk_size() -> None:
     )
 
 
-def test_removed_parent_child_strategy_reads_as_docrag(monkeypatch: pytest.MonkeyPatch) -> None:
-    """削除した親子階層の保存値は DocRAG 親子階層として読む。子サイズの旧変数は読まない。"""
+def test_removed_parent_child_strategy_reads_as_small_to_big(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """削除した親子階層の保存値は親子階層（small-to-big）として読む。子サイズの旧変数は読まない。"""
     monkeypatch.setenv("RAG_CHUNKING_STRATEGY", "hierarchical_parent_child")
     monkeypatch.setenv("RAG_CHUNK_CHILD_SIZE", "900")
     settings = Settings()
-    assert settings.rag_chunking_strategy == "docrag_small_to_big"
+    assert settings.rag_chunking_strategy == "small_to_big"
     assert not hasattr(settings, "rag_chunk_child_size")
 
 
-def test_docrag_chunking_params_match_rag_poc_defaults_and_ranges() -> None:
-    """DocRAG 親子階層の既定値と範囲は docrag.chunking.constants(rag_poc)と一致する。"""
-    from docrag.chunking import constants as docrag_constants
+def test_chunking_small_to_big_params_match_rag_poc_defaults_and_ranges() -> None:
+    """親子階層（small-to-big）の既定値と範囲は rag_engine.chunking.constants と一致する。"""
+    from rag_engine.chunking import constants as engine_constants
 
     settings = Settings()
     pairs = {
-        "rag_docrag_child_target_chars": (
-            docrag_constants.DEFAULT_CHILD_TARGET_CHARS,
-            docrag_constants.CHILD_TARGET_CHARS_RANGE,
+        "rag_chunk_child_target_chars": (
+            engine_constants.DEFAULT_CHILD_TARGET_CHARS,
+            engine_constants.CHILD_TARGET_CHARS_RANGE,
         ),
-        "rag_docrag_table_child_target_chars": (
-            docrag_constants.DEFAULT_TABLE_CHILD_TARGET_CHARS,
-            docrag_constants.TABLE_CHILD_TARGET_CHARS_RANGE,
+        "rag_chunk_table_child_target_chars": (
+            engine_constants.DEFAULT_TABLE_CHILD_TARGET_CHARS,
+            engine_constants.TABLE_CHILD_TARGET_CHARS_RANGE,
         ),
-        "rag_docrag_parent_target_chars": (
-            docrag_constants.DEFAULT_PARENT_TARGET_CHARS,
-            docrag_constants.PARENT_TARGET_CHARS_RANGE,
+        "rag_chunk_parent_target_chars": (
+            engine_constants.DEFAULT_PARENT_TARGET_CHARS,
+            engine_constants.PARENT_TARGET_CHARS_RANGE,
         ),
-        "rag_docrag_parent_max_pages": (
-            docrag_constants.DEFAULT_PARENT_MAX_PAGES,
-            docrag_constants.PARENT_MAX_PAGES_RANGE,
+        "rag_chunk_parent_max_pages": (
+            engine_constants.DEFAULT_PARENT_MAX_PAGES,
+            engine_constants.PARENT_MAX_PAGES_RANGE,
         ),
-        "rag_docrag_parent_max_children": (
-            docrag_constants.DEFAULT_PARENT_MAX_CHILDREN,
-            docrag_constants.PARENT_MAX_CHILDREN_RANGE,
+        "rag_chunk_parent_max_children": (
+            engine_constants.DEFAULT_PARENT_MAX_CHILDREN,
+            engine_constants.PARENT_MAX_CHILDREN_RANGE,
         ),
     }
     for field, (default, (minimum, maximum, _step)) in pairs.items():
@@ -125,7 +130,7 @@ def test_unknown_evaluation_suite_is_rejected() -> None:
 
 
 def test_graph_profile_defaults_to_off() -> None:
-    """GraphRAG アダプターの既定 off は KG 非構築(現行挙動)と一致させる。"""
+    """関係情報の構築の既定は off(構築しない)。"""
     assert Settings().rag_graph_profile == "off"
 
 
@@ -139,6 +144,22 @@ def test_automatic_document_stage_progression_is_enabled_by_default() -> None:
 def test_unknown_graph_profile_is_rejected() -> None:
     with pytest.raises(ValidationError):
         Settings(rag_graph_profile="neo4j")
+
+
+def test_removed_full_graph_profile_stops_startup_with_guidance() -> None:
+    """削除した full(#621)は読み替えず、書き換え先を示して止める。"""
+    with pytest.raises(ValidationError) as error:
+        Settings(rag_graph_profile="full")
+    assert "RAG_GRAPH_PROFILE=full は廃止しました" in str(error.value)
+    assert "entities" in str(error.value)
+
+
+def test_legacy_graph_enabled_flag_is_not_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """legacy の RAG_GRAPH_ENABLED は #621 で廃止した(読まず、profile を変えない)。"""
+    monkeypatch.setenv("RAG_GRAPH_ENABLED", "true")
+    settings = Settings()
+    assert "rag_graph_enabled" not in Settings.model_fields
+    assert settings.rag_graph_profile == "off"
 
 
 def test_oracle_defaults_to_thin_mode(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -774,7 +795,7 @@ def test_genai_cache_defaults_and_bounds() -> None:
 
 
 def test_context_group_max_chunks_is_bounded() -> None:
-    """回答の根拠の group から足す sibling 数(DocRAG の small-to-big)を制限する。"""
+    """回答の根拠の group から足す sibling 数(親子階層の small-to-big)を制限する。"""
     settings = Settings()
 
     assert settings.rag_context_group_max_chunks == 4
@@ -837,7 +858,7 @@ def test_get_settings_picks_up_env_changes_saved_by_another_process() -> None:
     env_file = app_config.BACKEND_ENV_FILE
     settings = app_config.get_settings()
     # このプロセスの中で変えた値（.env にない値）は、再読込で既定値へ戻さない。
-    settings.rag_docrag_rerank_enabled = False
+    settings.rag_rerank_enabled = False
 
     env_file.write_text("RAG_ANSWER_RECORD_RETENTION_DAYS=30\n", encoding="utf-8")
     assert app_config.get_settings().rag_answer_record_retention_days == 30
@@ -850,7 +871,7 @@ def test_get_settings_picks_up_env_changes_saved_by_another_process() -> None:
 
     assert reloaded is settings
     assert reloaded.rag_answer_record_retention_days == 45
-    assert reloaded.rag_docrag_rerank_enabled is False
+    assert reloaded.rag_rerank_enabled is False
 
 
 def test_get_settings_keeps_running_when_the_reloaded_env_is_invalid() -> None:

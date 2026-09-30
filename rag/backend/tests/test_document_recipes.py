@@ -23,7 +23,7 @@ from app.clients.oracle import (
     oracle_ingestion_job_schema_sql,
 )
 from app.config import Settings, get_settings
-from app.rag.docrag_chunking import DOCRAG_CHUNKING_STRATEGY
+from app.rag.chunking_small_to_big import SMALL_TO_BIG_STRATEGY
 from app.rag.extraction_field_adapter import (
     FIELD_SCHEMA_FILE_ENV,
     FieldDefinition,
@@ -32,7 +32,7 @@ from app.rag.extraction_field_adapter import (
 from app.rag.ingestion import IngestionCancelledError
 from app.rag.layer_fingerprint import (
     FIELD_SCHEMA_HASH_ARTIFACT_KEY,
-    docrag_chunk_contract_hash,
+    chunk_metadata_contract_hash,
     field_schema_hash,
 )
 from app.rag.variant_keys import (
@@ -1535,27 +1535,27 @@ async def test_layer_without_fingerprint_is_unknown_and_not_flagged(
         assert status.rebuild_inputs == []
 
 
-async def test_docrag_chunk_contract_is_part_of_metadata_fingerprint(
+async def test_chunk_metadata_contract_is_part_of_metadata_fingerprint(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
-    """DocRAG の分割では chunk metadata の契約を指紋に入れ、契約が上がると作り直しを出す。"""
+    """親子階層の分割では chunk metadata の契約を指紋に入れ、契約が上がると作り直しを出す。"""
     settings = _layer_settings(enabled=True).model_copy(
-        update={"rag_chunking_strategy": DOCRAG_CHUNKING_STRATEGY}
+        update={"rag_chunking_strategy": SMALL_TO_BIG_STRATEGY}
     )
     fake = await _record_fingerprinted_layers(monkeypatch, tmp_path, settings)
     metadata_id = compute_metadata_layer_id("chunk-set-pending", settings)
     recorded = fake.layers[metadata_id]["input_fingerprint"]
     assert isinstance(recorded, dict)
-    assert recorded["docrag_chunk_contract"] == docrag_chunk_contract_hash()
+    assert recorded["chunk_metadata_contract"] == chunk_metadata_contract_hash()
 
     fake.layers[metadata_id]["input_fingerprint"] = {
         **recorded,
-        "docrag_chunk_contract": "older-contract",
+        "chunk_metadata_contract": "older-contract",
     }
     statuses = await _layer_statuses()
 
     assert statuses.metadata.rebuild_required is True
-    assert statuses.metadata.rebuild_inputs == ["docrag_chunk_contract"]
+    assert statuses.metadata.rebuild_inputs == ["chunk_metadata_contract"]
 
 
 class _ListFingerprintOracle:

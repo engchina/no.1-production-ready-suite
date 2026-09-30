@@ -9,19 +9,19 @@ import pytest
 
 from app.config import Settings
 from app.rag import extraction_field_adapter as fields_mod
-from app.rag.docrag_chunking import DOCRAG_CHUNKING_STRATEGY
+from app.rag.chunking_small_to_big import SMALL_TO_BIG_STRATEGY
 from app.rag.extraction_field_adapter import FieldDefinition, save_field_schema
 from app.rag.ingestion import IngestionPipeline
 from app.rag.layer_fingerprint import (
-    DOCRAG_CHUNK_CONTRACT_INPUT,
+    CHUNK_METADATA_CONTRACT_INPUT,
     FIELD_SCHEMA_HASH_ARTIFACT_KEY,
     FIELD_SCHEMA_INPUT,
     NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY,
     NAVIGATION_SUMMARY_MAX_NODES_INPUT,
     changed_layer_inputs,
+    chunk_metadata_contract_hash,
     current_field_definitions,
     current_layer_inputs,
-    docrag_chunk_contract_hash,
     field_schema_hash,
     recorded_layer_fingerprint,
 )
@@ -72,12 +72,12 @@ def test_recorded_fingerprint_uses_values_stamped_at_extraction() -> None:
     assert recorded_layer_fingerprint("graph", extraction, settings) is None
 
 
-def test_recorded_fingerprint_adds_docrag_contract_only_for_docrag_chunking() -> None:
-    docrag = Settings(rag_chunking_strategy=DOCRAG_CHUNKING_STRATEGY)
+def test_recorded_fingerprint_adds_chunk_contract_only_for_small_to_big() -> None:
+    small_to_big = Settings(rag_chunking_strategy=SMALL_TO_BIG_STRATEGY)
     other = Settings(rag_chunking_strategy="structure_aware")
 
-    assert recorded_layer_fingerprint("metadata", None, docrag) == {
-        DOCRAG_CHUNK_CONTRACT_INPUT: docrag_chunk_contract_hash()
+    assert recorded_layer_fingerprint("metadata", None, small_to_big) == {
+        CHUNK_METADATA_CONTRACT_INPUT: chunk_metadata_contract_hash()
     }
     # 刻みの無い抽出結果(この変更より前の抽出)からは指紋を作らない(不明)。
     assert recorded_layer_fingerprint("metadata", {"parser_artifacts": {}}, other) is None

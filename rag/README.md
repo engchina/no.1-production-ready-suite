@@ -70,7 +70,7 @@ Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 
 - `POST /api/documents/upload`: 原本を Object Storage 境界へ保存し、SHA-256 / サイズ / 重複元を記録してドキュメント行を作成。
 - `POST /api/documents/{id}/ingestion-jobs`（文書の既定レシピ）/ `POST /api/documents/{id}/recipes/{recipe_id}/ingestion-jobs`（レシピ単位）: 取込 job を投入し、worker がファイル準備 → OCI Enterprise AI 境界での OCR/構造化要素抽出 → ページ・章節・表・リスト感知 chunking → embedding → Oracle AI Database 境界への索引を工程ごとに実行する。確認待ちの工程は `POST /api/documents/{id}/recipes/{recipe_id}/approve` で次へ進め、抽出の修正は `PATCH /api/documents/{id}/recipes/{recipe_id}/review-edits` で保存する。
-- `POST /api/search`: 質問の安全チェックと検索範囲（Business Context Pack）の確定の後、回答フロー（質問の理解・質問拡張戦略・Oracle AI Vector Search と Oracle Text の hybrid 検索（RRF）・Cohere Rerank・根拠の評価と補正検索（CRAG）・small-to-big・回答の生成と監査）で citation-grounded 回答を作り、回答側の安全チェック・trace ID・guardrail warning・回答フローの実行記録を返却。
+- `POST /api/search`: 質問の安全チェックと検索範囲（Business Context Pack）の確定の後、回答フロー（質問の理解・質問の拡張・Oracle AI Vector Search と Oracle Text の hybrid 検索（RRF）・Cohere Rerank・根拠の評価と補正検索（CRAG）・small-to-big・回答の生成と監査）で citation-grounded 回答を作り、回答側の安全チェック・trace ID・guardrail warning・回答フローの実行記録を返却。
 - `POST /api/evaluation/run`: golden set による precision@k、recall@k、MRR、回答キーワード命中率、groundedness pass rate、case 単位の失敗理由分布を算出。
 - `POST /api/evaluation/compare`: 同じ golden set で複数の検索設定を比較し、ranking metric に基づく best experiment を返却。
 - `/metrics`: Prometheus metrics を公開。
@@ -116,7 +116,7 @@ CI(`secret-scan` ジョブ)でも同じ `.gitleaks.toml` で full history を走
 
 ## CI
 
-monorepo root の `.github/workflows/ci.yml`(統合 CI)で secret-scan(gitleaks)と RAG の job(`RAG / Backend`・`RAG / DocRAG core`・`RAG / Frontend`・`RAG / E2E smoke`・`RAG / Compute init script`)を実行する。Pull Request と `main` への push で、gitleaks による full history シークレット走査、backend の format・lint・type check・test・security audit(依存が変わったときは dependency audit)、frontend の unit test・build、Playwright の smoke、配備スクリプト(`init_script.sh`・`scripts/rag-systemd.sh`・`scripts/rag-services.sh`)のテストを実行する。Docker Compose の検証は自前の compose を削除したため無い(#356)。
+monorepo root の `.github/workflows/ci.yml`(統合 CI)で secret-scan(gitleaks)と RAG の job(`RAG / Backend`・`RAG / Engine`・`RAG / Frontend`・`RAG / E2E smoke`・`RAG / Compute init script`)を実行する。Pull Request と `main` への push で、gitleaks による full history シークレット走査、backend の format・lint・type check・test・security audit(依存が変わったときは dependency audit)、frontend の unit test・build、Playwright の smoke、配備スクリプト(`init_script.sh`・`scripts/rag-systemd.sh`・`scripts/rag-services.sh`)のテストを実行する。Docker Compose の検証は自前の compose を削除したため無い(#356)。
 
 frontend の lint(`npm run lint`)と dependency audit(`npm audit`)は CI では実行せず、ローカル検証と PR review で確認する。Playwright は PR では smoke だけを実行し、全件は `e2e-nightly.yml` が毎晩実行する(#184)。型検査は `npm run build` の `tsc --noEmit` が CI 上で兼ねる。
 

@@ -1,6 +1,6 @@
 """業務ビュー単位の知識(ドメインキーワード等)を Oracle の JSON payload で管理する。
 
-payload 形式と正規化・候補生成は rag_poc(DocRAG)の ``docrag.knowledge`` をそのまま使う。
+payload 形式と正規化・候補生成は rag_poc の ``rag_engine.knowledge`` をそのまま使う。
 保存先はファイルではなく ``rag_business_view_knowledge``(業務ビュー × 種別)。
 """
 
@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
-from docrag.knowledge.approved_faq import (
+from rag_engine.knowledge.approved_faq import (
     APPROVED_FAQ_IMPORT_MODES,
     DEFAULT_APPROVED_FAQ_DIRECT_MATCH_MIN_SCORE,
     DEFAULT_APPROVED_FAQ_SUGGESTION_LIMIT,
@@ -37,22 +37,25 @@ from docrag.knowledge.approved_faq import (
     load_approved_faq_semantic_index,
     suggest_approved_faq_questions,
 )
-from docrag.knowledge.domain_keyword_candidates import (
+from rag_engine.knowledge.domain_keyword_candidates import (
     DomainKeywordCandidate,
     DomainKeywordSourceText,
     suggest_domain_keyword_candidates,
 )
-from docrag.knowledge.domain_keywords import (
+from rag_engine.knowledge.domain_keywords import (
     DOMAIN_KEYWORDS_SCHEMA_VERSION,
     MAX_DOMAIN_KEYWORDS,
     normalize_domain_keywords,
 )
-from docrag.knowledge.runtime_knowledge import (
+from rag_engine.knowledge.runtime_knowledge import (
     RuntimeKnowledgeContext,
     build_runtime_knowledge_context,
 )
-from docrag.knowledge.runtime_knowledge_management import edit_knowledge, load_knowledge_snapshot
-from docrag.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
+from rag_engine.knowledge.runtime_knowledge_management import (
+    edit_knowledge,
+    load_knowledge_snapshot,
+)
+from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
 logger = logging.getLogger(__name__)
 

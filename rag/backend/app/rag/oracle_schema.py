@@ -15,27 +15,24 @@ from typing import Any
 
 from app.clients.oracle import (
     ORACLE_TEXT_LEXER,
-    oracle_agent_memory_schema_sql,
+    oracle_answer_prompt_schema_sql,
     oracle_answer_record_schema_sql,
     oracle_business_view_knowledge_schema_sql,
     oracle_business_view_schema_sql,
     oracle_chunk_set_schema_sql,
     oracle_conversation_schema_sql,
-    oracle_docrag_prompt_schema_sql,
     oracle_document_recipe_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
     oracle_evaluation_job_schema_sql,
     oracle_feedback_details_schema_sql,
     oracle_feedback_schema_sql,
-    oracle_generation_settings_schema_sql,
     oracle_ingestion_audit_schema_sql,
     oracle_ingestion_job_schema_sql,
     oracle_ingestion_segment_schema_sql,
     oracle_knowledge_base_schema_sql,
     oracle_knowledge_graph_schema_sql,
     oracle_message_schema_sql,
-    oracle_prompt_version_schema_sql,
     oracle_query_history_schema_sql,
     oracle_role_access_schema_sql,
     oracle_search_audit_schema_sql,
@@ -73,7 +70,7 @@ def vector_index_reindex_sql(
     backend は実行時に DDL を実行しないため、ここでは適用用の SQL を生成するだけにする
     (DBA がレビュー済み artifact として適用する)。引数は ``resolve_vector_index_adapter``
     で解決済みの値を呼び出し側が渡す。
-    ponytail: 主検索索引 rag_chunks のみ。agent memory 索引(同形状)は必要時に追従。
+    対象は主検索索引 rag_chunks だけ。
     """
     return (
         f"DROP INDEX {index};\n"
@@ -92,11 +89,22 @@ def vector_index_reindex_sql(
 
 @dataclass(frozen=True)
 class OracleSchemaSection:
-    """Oracle schema artifact の論理セクション。"""
+    """Oracle schema artifact の論理セクション。
+
+    `destructive_note` は、データを消す（テーブルの DROP・行の DELETE を含む）migration の印と、
+    消えるデータ・適用の前にすることの説明（#619）。空でない migration が未適用なら、
+    「作成・更新」（画面・`system_schema_cli initialize`）は明示の承認が無ければ止まり、
+    実 Oracle のテストの fixture は当てない。checksum（SQL だけから作る）には含めない。
+    """
 
     name: str
     table_name: str
     sql: str
+    destructive_note: str = ""
+
+    @property
+    def destructive(self) -> bool:
+        return bool(self.destructive_note)
 
 
 def oracle_system_schema_control_sql() -> str:
@@ -178,9 +186,9 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             sql=oracle_answer_record_schema_sql(),
         ),
         OracleSchemaSection(
-            name="docrag_prompts",
-            table_name="rag_docrag_prompts",
-            sql=oracle_docrag_prompt_schema_sql(),
+            name="answer_prompts",
+            table_name="rag_answer_prompts",
+            sql=oracle_answer_prompt_schema_sql(),
         ),
         OracleSchemaSection(
             name="query_history",
@@ -191,16 +199,6 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="business_view_knowledge",
             table_name="rag_business_view_knowledge",
             sql=oracle_business_view_knowledge_schema_sql(),
-        ),
-        OracleSchemaSection(
-            name="prompt_versions",
-            table_name="rag_prompt_versions",
-            sql=oracle_prompt_version_schema_sql(),
-        ),
-        OracleSchemaSection(
-            name="generation_settings",
-            table_name="rag_generation_settings",
-            sql=oracle_generation_settings_schema_sql(),
         ),
         OracleSchemaSection(
             name="conversations",
@@ -246,11 +244,6 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="knowledge_graph",
             table_name="rag_graph_entities",
             sql=oracle_knowledge_graph_schema_sql(),
-        ),
-        OracleSchemaSection(
-            name="agent_memory",
-            table_name="rag_agent_memories",
-            sql=oracle_agent_memory_schema_sql(),
         ),
         OracleSchemaSection(
             name="citation_feedback",
@@ -400,6 +393,10 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260629_002_drop_kb_chunk_set_bindings",
             table_name="rag_kb_chunk_set_bindings",
             sql=_drop_kb_chunk_set_bindings_migration_sql(),
+            destructive_note=(
+                "使わなくなったテーブル rag_kb_chunk_set_bindings（ナレッジベースと chunk set の"
+                "旧い対応）を削除します。"
+            ),
         ),
         OracleSchemaSection(
             name="20260629_003_ingestion_jobs_settings_overrides",
@@ -479,7 +476,7 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
         OracleSchemaSection(
             name="20260926_004_docrag_prompts",
             table_name="rag_docrag_prompts",
-            sql=_docrag_prompts_migration_sql(),
+            sql=_prompts_table_20260926_migration_sql(),
         ),
         OracleSchemaSection(
             name="20260926_005_query_history",
@@ -495,6 +492,9 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260928_001_retire_dashboard_permission",
             table_name="rag_role_permissions",
             sql=_retire_dashboard_permission_migration_sql(),
+            destructive_note=(
+                "ロールに付いた、廃止済みのメニュー権限 menu.dashboard の行を削除します。"
+            ),
         ),
         OracleSchemaSection(
             name="20260928_002_answer_record_owner",
@@ -535,6 +535,47 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260930_004_knowledge_base_extraction_fields",
             table_name="rag_knowledge_bases",
             sql=_knowledge_base_extraction_fields_migration_sql(),
+        ),
+        # 旧 standard の回答エンジンだけが使っていたテーブルとメニュー権限を片付ける（#596）。
+        OracleSchemaSection(
+            name="20260930_005_retire_standard_engine_objects",
+            table_name="rag_agent_memories",
+            sql=_retire_standard_engine_objects_migration_sql(),
+            destructive_note=(
+                "旧い標準の回答フローのテーブル rag_agent_memories・rag_prompt_versions・"
+                "rag_generation_settings を削除し（PURGE のため復元できません）、ロールに付いた"
+                "廃止済みのメニュー権限の行を削除します。残す行は先に app.rag.legacy_export で"
+                "書き出してください。"
+            ),
+        ),
+        # 関係情報の構築の保存値 full を entities へ書き換える（#621。full は削除した）。
+        OracleSchemaSection(
+            name="20260930_006_graph_profile_entities",
+            table_name="rag_document_recipes",
+            sql=_graph_profile_entities_migration_sql(),
+        ),
+        # 読む経路の無かった関係情報の claims / community summary の表を片付ける（#621）。
+        OracleSchemaSection(
+            name="20260930_007_retire_graph_claims_community",
+            table_name="rag_graph_entities",
+            sql=_retire_graph_claims_community_migration_sql(),
+            destructive_note=(
+                "関係情報の追加の表 rag_graph_claims・rag_graph_community_summaries を削除します"
+                "（PURGE のため復元できません）。どの画面・API・検索も読んでいなかった、文書から"
+                "作り直せる派生データです。関係情報グラフの表（rag_graph_entities など）は"
+                "残ります。"
+            ),
+        ),
+        # rag_poc から移したときの名前を、RAG の標準の名前にする（#599）。行は消さない。
+        OracleSchemaSection(
+            name="20260930_008_answer_prompts_table",
+            table_name="rag_answer_prompts",
+            sql=_answer_prompts_table_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260930_009_stored_engine_names",
+            table_name="rag_chunks",
+            sql=_stored_engine_names_migration_sql(),
         ),
     ]
 
@@ -594,6 +635,8 @@ def oracle_schema_migration_manifest(
                 "table_name": section.table_name,
                 "sha256": _sha256(section.sql),
                 "statement_count": len(split_sql_statements(section.sql)),
+                # データを消す migration（#619）。SQLcl などで直接当てる前に書き出しを確かめる。
+                "destructive": section.destructive,
             }
             for section in resolved_sections
         ],
@@ -1314,8 +1357,308 @@ END;
 """.strip()
 
 
-def _docrag_prompts_migration_sql() -> str:
-    """編集した DocRAG プロンプトの保存表を追加する(冪等)。"""
+def _retire_standard_engine_objects_migration_sql() -> str:
+    """旧 standard の回答エンジンだけが使っていたオブジェクトを片付ける(冪等。#596)。
+
+    - ロールに保存済みのメニュー権限 `menu.settings_grounding` / `menu.settings_generation` /
+      `menu.settings_agentic` の行を消す（#595 で画面とカタログから削除済み。platform の
+      権限昇格の判定が生のコードで読むため残さない）。
+    - `rag_generation_settings`（`rag_prompt_versions` を参照する）・`rag_prompt_versions`・
+      `rag_agent_memories` を DROP する。index・制約は表と一緒に消える（sequence は持たない）。
+      `rag_agent_memories` は削除の前に `app.rag.legacy_export` で書き出す
+      （rag/docs/deployment.md の「既存環境の更新手順（#596）」）。
+
+    表が無い環境では何もしない。`rag_answer_records.answer_engine` と知識グラフの表は残す。
+    """
+    return """
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_ROLE_PERMISSIONS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'DELETE FROM rag_role_permissions WHERE permission_code IN ('
+            || '''menu.settings_grounding'', ''menu.settings_generation'', '
+            || '''menu.settings_agentic'')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_GENERATION_SETTINGS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE rag_generation_settings CASCADE CONSTRAINTS PURGE';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_PROMPT_VERSIONS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE rag_prompt_versions CASCADE CONSTRAINTS PURGE';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_AGENT_MEMORIES';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE rag_agent_memories CASCADE CONSTRAINTS PURGE';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _graph_profile_entities_migration_sql() -> str:
+    """関係情報の構築の保存値 full を entities へ書き換える(冪等。#621)。
+
+    full(claims / community summary まで作る)は削除した。entities が作る関係情報
+    (文書と章・節の見出しのつながり)は full と同じなので、上書きの意味を保ったまま
+    entities にする。`REPLACE` は値があるときだけ置き換える(継承の欄に値を足さない)。
+
+    - 文書・文書レシピの上書き(`processing_config.graph_profile`)
+    - ナレッジベースの構築設定(`retrieval_config.ingestion.graph_profile`)
+    - 取込ジョブの上書き(`settings_overrides.processing_config.graph_profile`)
+    - chunk_set に刻んだレシピ(`recipe_subset` の `processing_config` と
+      `effective_processing_config`)。残すと、今の設定との差(再処理の案内)に出るため。
+    """
+    targets = (
+        ("rag_documents", "processing_config", "$.graph_profile"),
+        ("rag_document_recipes", "processing_config", "$.graph_profile"),
+        ("rag_knowledge_bases", "retrieval_config", "$.ingestion.graph_profile"),
+        ("rag_ingestion_jobs", "settings_overrides", "$.processing_config.graph_profile"),
+        ("rag_chunk_sets", "recipe_subset", "$.processing_config.graph_profile"),
+        ("rag_chunk_sets", "recipe_subset", "$.effective_processing_config.graph_profile"),
+    )
+    statements = [
+        f"UPDATE {table}\n"
+        f"SET {column} = JSON_TRANSFORM({column}, REPLACE '{path}' = 'entities')\n"
+        f"WHERE JSON_VALUE({column}, '{path}') = 'full';"
+        for table, column, path in targets
+    ]
+    return "\n\n".join([*statements, "COMMIT;"])
+
+
+def _retire_graph_claims_community_migration_sql() -> str:
+    """関係情報の claims / community summary の表を片付ける(冪等。#621)。
+
+    どちらも旧 full の構築だけが書き、読む画面・API・検索が無かった(削除のために読むだけ)。
+    `rag_graph_claims` は `rag_graph_entities` を参照するが、参照する側なので先に消す必要は
+    無い。index・制約は表と一緒に消える。表が無い環境では何もしない。関係情報グラフが読む
+    `rag_graph_entities`・`rag_graph_relationships`・`rag_graph_entity_chunks` は残す。
+    """
+    return """
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_GRAPH_CLAIMS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE rag_graph_claims CASCADE CONSTRAINTS PURGE';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_tables
+    WHERE table_name = 'RAG_GRAPH_COMMUNITY_SUMMARIES';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE rag_graph_community_summaries CASCADE CONSTRAINTS PURGE';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _answer_prompts_table_migration_sql() -> str:
+    """回答生成のプロンプトの保存表を ``rag_answer_prompts`` へ改名する(冪等。#599)。
+
+    - 旧表 ``rag_docrag_prompts`` だけがある(SQL の artifact を直接当てたとき)は、
+      ``ALTER TABLE ... RENAME TO`` で改名する。主キーの制約と index はシステムの名前
+      (``SYS_C...``)なので、改名するものは無い。
+    - 新しい表もある(システムテーブルの更新は、migration の前に新しい表を作る)は、旧表の行を
+      新しい表へ写す(同じ key は新しい表の値を残す)。旧表は、写した後に退役したオブジェクトとして
+      消える(``system_schema.RETIRED_MANAGED_OBJECTS``)。行は消さないので、破壊的の印は付けない。
+    - 旧表が無ければ何もしない。
+    """
+    return """
+DECLARE
+    v_old_count NUMBER;
+    v_new_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_old_count FROM user_tables WHERE table_name = 'RAG_DOCRAG_PROMPTS';
+    SELECT COUNT(*) INTO v_new_count FROM user_tables WHERE table_name = 'RAG_ANSWER_PROMPTS';
+    IF v_old_count > 0 AND v_new_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_docrag_prompts RENAME TO rag_answer_prompts';
+    ELSIF v_old_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'MERGE INTO rag_answer_prompts target '
+            || 'USING (SELECT prompt_key, content, updated_at FROM rag_docrag_prompts) source '
+            || 'ON (target.prompt_key = source.prompt_key) '
+            || 'WHEN NOT MATCHED THEN INSERT (prompt_key, content, updated_at) '
+            || 'VALUES (source.prompt_key, source.content, source.updated_at)';
+        COMMIT;
+    END IF;
+END;
+/
+""".strip()
+
+
+# #599 で改名した、保存値の中の名前(旧, 新)。JSON を文字列にしてこの順に置き換える
+# (長い名前を先にし、短い名前が長い名前の一部を置き換えないようにする)。
+# JSON_SERIALIZE は空白を入れないので、`"key":"value"` の形で key と値の組を書ける。
+STORED_NAME_RENAMES_599: tuple[tuple[str, str], ...] = (
+    # 分割方式の値
+    ("docrag_small_to_big", "small_to_big"),
+    # Settings の属性名(取込ジョブの上書き・chunk set の recipe の記録)
+    ("rag_docrag_table_child_target_chars", "rag_chunk_table_child_target_chars"),
+    ("rag_docrag_child_target_chars", "rag_chunk_child_target_chars"),
+    ("rag_docrag_parent_target_chars", "rag_chunk_parent_target_chars"),
+    ("rag_docrag_parent_max_children", "rag_chunk_parent_max_children"),
+    ("rag_docrag_parent_max_pages", "rag_chunk_parent_max_pages"),
+    ("rag_docrag_answer_vision_enabled", "rag_answer_vision_enabled"),
+    ("rag_docrag_history_rewrite_enabled", "rag_history_rewrite_enabled"),
+    ("rag_docrag_screen_linking_enabled", "rag_screen_linking_enabled"),
+    ("rag_docrag_neighbor_child_count", "rag_neighbor_child_count"),
+    ("rag_docrag_query_strategy", "rag_query_strategy"),
+    ("rag_docrag_rerank_enabled", "rag_rerank_enabled"),
+    ("rag_docrag_answer_flow", "rag_answer_flow"),
+    ("rag_docrag_profile", "rag_answer_profile"),
+    # 文書・レシピの処理設定、KB の構築設定、業務ビューの検索・回答設定の key
+    ("docrag_table_child_target_chars", "chunk_table_child_target_chars"),
+    ("docrag_child_target_chars", "chunk_child_target_chars"),
+    ("docrag_parent_target_chars", "chunk_parent_target_chars"),
+    ("docrag_parent_max_children", "chunk_parent_max_children"),
+    ("docrag_parent_max_pages", "chunk_parent_max_pages"),
+    ("docrag_screen_linking_enabled", "screen_linking_enabled"),
+    ("docrag_neighbor_child_count", "neighbor_child_count"),
+    ("docrag_query_strategy", "query_strategy"),
+    ("docrag_rerank_enabled", "rerank_enabled"),
+    ("docrag_answer_flow", "answer_flow"),
+    # 親子階層の chunk の metadata
+    ("docrag_first_page_context_json", "first_page_context_json"),
+    ("docrag_source_record_refs_json", "source_record_refs_json"),
+    ("docrag_source_seq_ranges_json", "source_seq_ranges_json"),
+    ("docrag_metadata_json", "engine_metadata_json"),
+    ("docrag_search_text", "engine_search_text"),
+    ("docrag_parent_text", "parent_text"),
+    ("docrag_chunk_seq", "engine_chunk_seq"),
+    ("docrag_chunk_id", "engine_chunk_id"),
+    ("docrag_model_used", "evidence_model_used"),
+    ("docrag_role", "evidence_role"),
+    ("docrag_parent", "small_to_big_parent"),
+    ("docling_docrag", "docling_layout"),
+    ("docrag_instruction_callout", "instruction_callout"),
+    # Docling の解析結果(parser_artifacts)と、縮退の理由
+    ("docrag_layout_records", "layout_records"),
+    ("docrag_layout_missing", "layout_missing"),
+    ("docrag_layout", "layout_records"),
+    # 派生情報レイヤーの指紋の入力
+    ("docrag_chunk_contract", "chunk_metadata_contract"),
+    # 回答の経路・段の名前・診断(品質評価の結果・回答の記録)
+    ('"docrag_retrieval_only"', '"retrieval_only"'),
+    ('"docrag_grounded"', '"grounded"'),
+    ('"docrag_history_rewrite"', '"history_rewrite"'),
+    ('"docrag_answer"', '"answer"'),
+    ('"retrieval_strategy":"docrag"', '"retrieval_strategy":"hybrid"'),
+    ('"answer_engine":"docrag"', '"answer_engine":"grounded"'),
+    ('"docrag":', '"answer":'),
+)
+
+# 保存値に #599 の前の名前を持ちうる JSON の列(表, 列)。
+STORED_NAME_COLUMNS_599: tuple[tuple[str, str], ...] = (
+    ("RAG_DOCUMENTS", "PROCESSING_CONFIG"),
+    ("RAG_DOCUMENTS", "EXTRACTION"),
+    ("RAG_DOCUMENT_RECIPES", "PROCESSING_CONFIG"),
+    ("RAG_KNOWLEDGE_BASES", "RETRIEVAL_CONFIG"),
+    ("RAG_BUSINESS_VIEWS", "VIEW_CONFIG"),
+    ("RAG_INGESTION_JOBS", "SETTINGS_OVERRIDES"),
+    ("RAG_INGESTION_JOBS", "QUALITY_WARNINGS"),
+    ("RAG_CHUNK_SETS", "RECIPE_SUBSET"),
+    ("RAG_CHUNK_SETS", "METRICS_JSON"),
+    ("RAG_CHUNK_SETS", "FIRST_PAGE_CONTEXT"),
+    ("RAG_DOCUMENT_EXTRACTIONS", "RECIPE_SUBSET"),
+    ("RAG_DOCUMENT_EXTRACTIONS", "EXTRACTION_JSON"),
+    ("RAG_DOCUMENT_EXTRACTIONS", "METRICS_JSON"),
+    ("RAG_ARTIFACT_LAYERS", "INPUT_FINGERPRINT"),
+    ("RAG_ARTIFACT_LAYERS", "METRICS_JSON"),
+    ("RAG_CHUNKS", "METADATA_JSON"),
+    ("RAG_ANSWER_RECORDS", "CITATIONS_JSON"),
+    ("RAG_ANSWER_RECORDS", "DIAGNOSTICS_JSON"),
+    ("RAG_ANSWER_RECORDS", "EVALUATION_INPUT_JSON"),
+    ("RAG_ANSWER_RECORDS", "EVALUATION_JSON"),
+    ("RAG_MESSAGES", "CITATIONS_JSON"),
+    ("RAG_FEEDBACK_DETAILS", "CITATIONS_JSON"),
+    ("RAG_EVALUATION_RUNS", "REQUEST_JSON"),
+    ("RAG_EVALUATION_RUNS", "RESULT_JSON"),
+    ("RAG_EVALUATION_JOBS", "RESULT_JSON"),
+)
+
+
+def apply_stored_name_renames_599(text: str) -> str:
+    """``STORED_NAME_RENAMES_599`` を migration の SQL と同じ順に当てる(テストで照合する)。"""
+    for old, new in STORED_NAME_RENAMES_599:
+        text = text.replace(old, new)
+    return text
+
+
+def _stored_engine_names_migration_sql() -> str:
+    """保存値の中の #599 の前の名前を書き換える(冪等。データは消さない)。
+
+    JSON の列は文字列にして ``STORED_NAME_RENAMES_599`` の順に置き換え、JSON に戻す。旧名を含む行
+    (``LIKE '%docrag%'``)だけを更新し、書き換えた後は旧名が残らないので、2 回目は何も変えない。
+    表・列が無い環境(古い版の DB)は飛ばす。JSON 型でない列(古い版の CLOB)は文字列のまま置き換える。
+    回答の記録の回答の方式(``answer_engine``)と、検索の監査の失敗した段(``error_stage``)も書き換える。
+    chunk の件数が多い環境では時間がかかる(rag/docs/deployment.md の「既存環境の更新手順(#599)」)。
+    """
+    targets = ", ".join(f"'{table}.{column}'" for table, column in STORED_NAME_COLUMNS_599)
+    replaces = "\n".join(
+        f"            v_expr := 'REPLACE(' || v_expr || ', ''{old}'', ''{new}'')';"
+        for old, new in STORED_NAME_RENAMES_599
+    )
+    return f"""
+DECLARE
+    TYPE t_names IS TABLE OF VARCHAR2(261);
+    v_targets t_names := t_names({targets});
+    v_table   VARCHAR2(128);
+    v_column  VARCHAR2(128);
+    v_type    VARCHAR2(128);
+    v_text    VARCHAR2(512);
+    v_expr    VARCHAR2(32767);
+    v_count   NUMBER;
+BEGIN
+    FOR i IN 1 .. v_targets.COUNT LOOP
+        v_table := SUBSTR(v_targets(i), 1, INSTR(v_targets(i), '.') - 1);
+        v_column := SUBSTR(v_targets(i), INSTR(v_targets(i), '.') + 1);
+        SELECT MAX(data_type) INTO v_type
+        FROM user_tab_columns
+        WHERE table_name = v_table AND column_name = v_column;
+        IF v_type IS NOT NULL THEN
+            IF v_type = 'JSON' THEN
+                v_text := 'JSON_SERIALIZE(' || v_column || ' RETURNING CLOB)';
+            ELSE
+                v_text := v_column;
+            END IF;
+            v_expr := v_text;
+{replaces}
+            IF v_type = 'JSON' THEN
+                v_expr := 'JSON(' || v_expr || ')';
+            END IF;
+            EXECUTE IMMEDIATE
+                'UPDATE ' || v_table || ' SET ' || v_column || ' = ' || v_expr
+                || ' WHERE ' || v_text || ' LIKE ''%docrag%''';
+            COMMIT;
+        END IF;
+    END LOOP;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_ANSWER_RECORDS';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'UPDATE rag_answer_records SET answer_engine = ''grounded'' '
+            || 'WHERE answer_engine = ''docrag''';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_SEARCH_AUDIT';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'UPDATE rag_search_audit SET error_stage = SUBSTR(error_stage, 8) '
+            || 'WHERE error_stage IN (''docrag_answer'', ''docrag_history_rewrite'')';
+    END IF;
+    COMMIT;
+END;
+/
+""".strip()
+
+
+def _prompts_table_20260926_migration_sql() -> str:
+    """編集した回答生成のプロンプトの保存表を追加する(冪等)。
+
+    #599 の前の表の名前で作る。適用済みの DB の checksum を変えないため、SQL は当時のまま残す
+    (表の改名は ``20260930_008_answer_prompts_table``)。
+    """
     return """
 DECLARE
     v_table_count NUMBER;
@@ -2205,7 +2548,7 @@ END;
 
 
 def _answer_records_migration_sql() -> str:
-    """DocRAG 回答の保存表と業務ビュー別の新しい順 index を追加する。"""
+    """回答の保存表と業務ビュー別の新しい順 index を追加する。"""
 
     return """
 DECLARE

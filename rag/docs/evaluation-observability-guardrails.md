@@ -119,22 +119,22 @@ real-world staging policy と backend/source-kind matrix も集合内容を比�
 
 staging 用の実データ manifest は任意で `staging_dataset_policy` を持てる。`required_for_promotion=true` の場合、`fixture_kind=real_world` の case 数、required source kinds、required scenarios、`data_sensitivity=non_sensitive`、`reviewed_for_public_ci=true`、既定 `staging/` 配下の fixture 参照を manifest validation で確認する。これにより synthetic fixture をコピーしただけの “real-world gate” や、レビューされていない顧客文書を nightly artifact に流す運用を防ぐ。policy の validation は case id / source kind / scenario / fixture path prefix / status code だけを扱い、OCR 原文や chunk 本文を artifact に出さない。staging promotion では policy が設定されているのに `required_for_promotion=false` の場合を `staging_dataset_policy_not_required`、必須 policy の coverage / review / fixture 隔離が未達の場合を `staging_dataset_policy_failed` として明示的に止める。さらに staging CLI は manifest 上の合規 case だけでなく、本実行の `case_results` に real-world case が含まれ、required source kinds / scenarios を実測したかも `executed_*` evidence として検査する。`rag-file-processing-staging --require-real-world-policy` と nightly workflow の `require_real_world_file_processing_manifest=true` は policy 未設定の synthetic-only manifest を preflight で止めるため、production promotion では宣言なしの staging を通せない。manifest に real-world case を書いただけで実行 plan から漏れた場合も `staging_dataset_policy_failed` になる。promotion blocker には件数と不足 source kind / scenario だけを残し、real-world case id や fixture path を含めない。
 
-### DocRAG の検証 CLI
+### 回答品質の検証 CLI
 
-`python -m app.rag.docrag_verify_cli` は、rag_poc の検証スクリプトを移植した手動の検証ツール。`answers` / `regression` は、実行中の backend の API を呼ぶ（`--api-base-url`、既定 `http://localhost:8000`。`--tenant-id` / `--user-id` は `evaluation_cli` と同じ）。1 件ずつ `<out>/<id>.json` に保存し、既にあれば飛ばすので、中断しても同じコマンドで残りを実行できる。最後に `<out>/summary.md` を書く。結果には質問と回答の本文が入るため、`--out` は Git 管理外（`.runs/` 配下）にする。
+`python -m app.rag.answer_verify_cli` は、rag_poc の検証スクリプトを移植した手動の検証ツール。`answers` / `regression` は、実行中の backend の API を呼ぶ（`--api-base-url`、既定 `http://localhost:8000`。`--tenant-id` / `--user-id` は `evaluation_cli` と同じ）。1 件ずつ `<out>/<id>.json` に保存し、既にあれば飛ばすので、中断しても同じコマンドで残りを実行できる。最後に `<out>/summary.md` を書く。結果には質問と回答の本文が入るため、`--out` は Git 管理外（`.runs/` 配下）にする。
 
 ```bash
-# QA（id / question / standard_answer）を DocRAG の業務ビューで回答し、標準回答で 4 軸評価する（rag_poc の run_answer_eval.py）
-uv run python -m app.rag.docrag_verify_cli answers --qa qa.json --business-view <業務ビュー ID> --out .runs/answers/<label>
+# QA（id / question / standard_answer）を業務ビューで回答し、標準回答で 4 軸評価する（rag_poc の run_answer_eval.py）
+uv run python -m app.rag.answer_verify_cli answers --qa qa.json --business-view <業務ビュー ID> --out .runs/answers/<label>
 # rag_poc の cases.json（id / question / expect）で回答を文字列の規則で判定する（rag_poc の run_regression.py）
-uv run python -m app.rag.docrag_verify_cli regression --cases cases.json --business-view <業務ビュー ID> --out .runs/regression/<label> --repeat 2
+uv run python -m app.rag.answer_verify_cli regression --cases cases.json --business-view <業務ビュー ID> --out .runs/regression/<label> --repeat 2
 # CRAG goldset をオフラインで評価する（--llm-judge で backend のモデル設定の LLM に判定させる）
-uv run python -m app.rag.docrag_verify_cli crag-goldset crag_goldset.json
+uv run python -m app.rag.answer_verify_cli crag-goldset crag_goldset.json
 ```
 
 - `answers` は回答の記録がある回答だけ評価できる（安全ポリシーで止めた質問など、回答フローを通らなかった件はエラーとして記録する。#594 で回答はすべて同じ回答フローになった）。
 - `regression` の判定は rag_poc と同じ規則（`applied_all` / `applied_excludes` / `gap_contains`）で、LLM を使わない。`cases.json` の `run_id` / `pdf` は読み捨てる（業務ビューの KB が検索範囲になる）。
-- `crag-goldset` の終了コードも rag_poc と同じ（CRAG が通常 RAG より劣れば 1）。
+- `crag-goldset` の終了コードも rag_poc と同じ（CRAG が標準 RAG より劣れば 1）。
 - rag_poc の `evaluate_crag_grader.py` は、rag_poc 独自の ADB の保存先から候補を組み立てる設計のため移植していない。
 
 ## 観測性
@@ -157,7 +157,7 @@ Prometheus metrics は `/metrics` で公開する。
 - `rag_guardrail_findings_total`
 - `rag_rate_limit_decisions_total`
 
-`rag_search_stage_duration_seconds` は `mode`、`stage`、`outcome` label を持つ。`stage` は `docrag_history_rewrite`、`docrag_answer`、`retrieval`（検索だけの経路）、`outcome` は `success`、`error`、`cancelled` を使う。回答フローの中のどの工程（検索・Rerank・根拠確認・回答の生成など）が遅いかは、`diagnostics.docrag.execution_steps`（負荷試験 CLI `search_load_cli` が工程ごとの p95 を集計する）で切り分ける。
+`rag_search_stage_duration_seconds` は `mode`、`stage`、`outcome` label を持つ。`stage` は `history_rewrite`、`answer`、`retrieval`（検索だけの経路）、`outcome` は `success`、`error`、`cancelled` を使う。回答フローの中のどの工程（検索・Rerank・根拠確認・回答の生成など）が遅いかは、`diagnostics.answer.execution_steps`（負荷試験 CLI `search_load_cli` が工程ごとの p95 を集計する）で切り分ける。
 
 `rag_ingestion_stage_duration_seconds` は `stage`、`outcome` label を持つ。`stage` は `vlm_extraction`、`chunking`、`embedding`、`indexing`、`outcome` は `success`、`error`、`cancelled` を使い、OCI Enterprise AI の OCR/構造化、chunking、OCI Generative AI embedding、Oracle AI Database indexing のどこで遅延・失敗しているかを切り分ける。
 
@@ -167,11 +167,11 @@ Prometheus metrics は `/metrics` で公開する。
 
 `rag_rate_limit_decisions_total{scope,outcome}` は高コスト API の rate limit 判定を数える。`scope` は `search` / `evaluation` / `upload` / `ingest`、`outcome` は `allowed` / `blocked` に固定し、tenant/user id、IP、query 本文は label に入れない。429 応答には `Retry-After`、`X-RateLimit-Limit`、`X-RateLimit-Remaining`、`X-RateLimit-Reset-After` を返す。
 
-RAG 検索レスポンスには `trace_id` を含める。OCI Enterprise AI、OpenTelemetry、Langfuse を接続する場合は、この `trace_id` を親 ID として OCR、取込の各工程と、回答の `docrag_history_rewrite`・`docrag_answer`・`retrieval` の各 span に渡す。
+RAG 検索レスポンスには `trace_id` を含める。OCI Enterprise AI、OpenTelemetry、Langfuse を接続する場合は、この `trace_id` を親 ID として OCR、取込の各工程と、回答の `history_rewrite`・`answer`・`retrieval` の各 span に渡す。
 
-検索・取込 pipeline は `app.trace` logger へ `rag_trace_span` イベントも出す。payload は `trace_event` に入り、`trace_id`、`span_name`、`outcome`、`duration_ms`、低 cardinality の attributes、`error_type` だけを含む。検索 stage は `docrag_history_rewrite`（チャットの会話履歴による質問の書き換え）、`docrag_answer`（回答フロー）、検索だけの経路の `retrieval`、取込 stage は `vlm_extraction`、`chunking`、`embedding`、`indexing` を使う。回答フローの中の工程（質問の理解・文書検索・Rerank・根拠確認など）の時間は、span ではなく `diagnostics.docrag.execution_steps` と回答の記録に残る（旧 standard の `embedding`・`rerank`・`context_*`・`generation` などの stage は #595 で削除した）。query 本文、context 本文、OCR 原文、prompt、例外 message、tenant/user id の raw 値は含めない。この構造化ログは OpenTelemetry span や Langfuse trace へ橋渡しするための境界であり、Prometheus の aggregate metrics では追えない単一 request の遅延・失敗箇所を調査するために使う。`RAG_TRACE_EXPORT_HTTP_ENDPOINT` を設定すると、同じ脱機密化済み event を非同期 HTTP JSON で collector / gateway へ送信する。queue が満杯または送信失敗しても request は失敗させず、`rag_trace_export_dropped` / `rag_trace_export_failed` を `app.trace` logger に残す。
+検索・取込 pipeline は `app.trace` logger へ `rag_trace_span` イベントも出す。payload は `trace_event` に入り、`trace_id`、`span_name`、`outcome`、`duration_ms`、低 cardinality の attributes、`error_type` だけを含む。検索 stage は `history_rewrite`（チャットの会話履歴による質問の書き換え）、`answer`（回答フロー）、検索だけの経路の `retrieval`、取込 stage は `vlm_extraction`、`chunking`、`embedding`、`indexing` を使う。回答フローの中の工程（質問の理解・文書検索・Rerank・根拠確認など）の時間は、span ではなく `diagnostics.answer.execution_steps` と回答の記録に残る（旧 standard の `embedding`・`rerank`・`context_*`・`generation` などの stage は #595 で削除した）。query 本文、context 本文、OCR 原文、prompt、例外 message、tenant/user id の raw 値は含めない。この構造化ログは OpenTelemetry span や Langfuse trace へ橋渡しするための境界であり、Prometheus の aggregate metrics では追えない単一 request の遅延・失敗箇所を調査するために使う。`RAG_TRACE_EXPORT_HTTP_ENDPOINT` を設定すると、同じ脱機密化済み event を非同期 HTTP JSON で collector / gateway へ送信する。queue が満杯または送信失敗しても request は失敗させず、`rag_trace_export_dropped` / `rag_trace_export_failed` を `app.trace` logger に残す。
 
-検索レスポンスと評価ケース結果には `diagnostics` も含める。これは `retrieval_strategy`（常に `docrag`）、`retrieval_strategy_adapter`（`docrag_grounded` / `docrag_retrieval_only` / `blocked`）、`docrag`（回答フローの診断。工程ごとの実行記録 `execution_steps`・根拠の構成・信頼度など）、安全チェックの policy / backend / 縮退、filter key、ナレッジベースの件数、適用した KB / 業務ビューの設定、RAG 設定 fingerprint だけで構成し、query 本文や secret は含めない。低召回や設定変更による品質回帰を trace id と合わせて調査するために使う。旧 standard の診断（`top_k`・`rerank_top_n`・query variant 件数・検索 / rerank / 去重 / context の加工の件数・context window・`stream_stage_timings` など）と、検索 UI の「適応展開」「依存昇格」の件数の表示は #595 で削除した。
+検索レスポンスと評価ケース結果には `diagnostics` も含める。これは `retrieval_strategy`（常に `hybrid`）、`retrieval_strategy_adapter`（`grounded` / `retrieval_only` / `blocked`）、`answer`（回答フローの診断。工程ごとの実行記録 `execution_steps`・根拠の構成・信頼度など）、安全チェックの policy / backend / 縮退、filter key、ナレッジベースの件数、適用した KB / 業務ビューの設定、RAG 設定 fingerprint だけで構成し、query 本文や secret は含めない。低召回や設定変更による品質回帰を trace id と合わせて調査するために使う。旧 standard の診断（`top_k`・`rerank_top_n`・query variant 件数・検索 / rerank / 去重 / context の加工の件数・context window・`stream_stage_timings` など）と、検索 UI の「適応展開」「依存昇格」の件数の表示は #595 で削除した。
 
 citation の `metadata` には `section_title`、`section_path`、`section_level`、`content_kind`、`chunk_group_id`、`chunk_group_kind`、`chunk_part_index`、`chunk_part_count`、`text_sha256`、`text_chars` と、`retrieval_mode`、`vector_rank`、`keyword_rank`、`vector_score`、`keyword_score`、`rrf_score` を入れられる場合だけ含める。query 本文や OCR 原文は含めず、hybrid 検索で vector 側の召回漏れか keyword 側の語彙不一致か、また複雑文書のどの章節・親要素が根拠を拾ったかを per-case に確認する。
 
@@ -179,7 +179,7 @@ citation の `metadata` には `section_title`、`section_path`、`section_level
 
 ### 監査ログ
 
-RAG 検索ごとに `app.audit` logger へ `rag_search_audit` イベントを出す。payload は `audit_event` に入り、`trace_id`、`request_id`、`outcome`、filter key、guardrail code、検索件数・citation 件数、設定 fingerprint、引用 document id、経過時間を含む（検索モードは常に `hybrid`。旧 standard の検索・context の内訳の列は #595 以降は既定値で、列の削除は #596）。`X-Tenant-ID` / `X-User-ID` がある場合は raw 値ではなく `tenant_id_hash` / `user_id_hash` として保存する。`RAG_AUDIT_CONTEXT_HASH_SALT` は production で `.env` から注入する。
+RAG 検索ごとに `app.audit` logger へ `rag_search_audit` イベントを出す。payload は `audit_event` に入り、`trace_id`、`request_id`、`outcome`、filter key、guardrail code、検索件数・citation 件数、設定 fingerprint、引用 document id、経過時間を含む（検索モードは常に `hybrid`。旧 standard の検索・context の内訳の列は #595 以降は既定値で、既存の監査の行を変えないため列は残す。#596）。`X-Tenant-ID` / `X-User-ID` がある場合は raw 値ではなく `tenant_id_hash` / `user_id_hash` として保存する。`RAG_AUDIT_CONTEXT_HASH_SALT` は production で `.env` から注入する。
 
 `outcome` は `success`、`blocked`、`error` を使う（`no_results` は旧 standard で citation が 0 件のとき LLM 生成をスキップしたことを示していた。#595 以降は記録しないが、列の値として残る）。回答フロー（検索・rerank・生成を含む）と answer guardrail の例外は `error` として記録し、API timeout は `error_stage=timeout` として記録する。監査ログには `error_stage` と `error_type` だけを残す。例外 message は query や回答本文を含む可能性があるため検索監査ログへ出さない。
 

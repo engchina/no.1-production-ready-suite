@@ -188,7 +188,7 @@ describe("recipeLayerRebuildSummary", () => {
           status: "materialized",
           reason: null,
           rebuild_required: true,
-          rebuild_inputs: ["field_schema_hash", "docrag_chunk_contract"],
+          rebuild_inputs: ["field_schema_hash", "chunk_metadata_contract"],
         },
         navigation: {
           layer_id: "nv-1",
@@ -209,7 +209,7 @@ describe("recipeLayerRebuildSummary", () => {
     ]);
     expect(recipeLayerRebuildSummary(statuses)).toEqual({
       layers: ["metadata", "navigation"],
-      inputs: ["field_schema_hash", "docrag_chunk_contract"],
+      inputs: ["field_schema_hash", "chunk_metadata_contract"],
     });
   });
 

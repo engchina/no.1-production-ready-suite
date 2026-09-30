@@ -1158,13 +1158,13 @@ async def test_ingestion_pipeline_cancel_before_review_does_not_write_review(
 
 
 async def test_ingestion_pipeline_writes_graph_index_when_enabled() -> None:
-    """RAG_GRAPH_ENABLED 時は取込結果から GraphRAG-lite index を保存する。"""
+    """関係情報を構築する設定(entities)のときは、取込結果から関係情報を保存する。"""
     oracle = FakeOracle()
     settings = Settings.model_construct(
         rag_parser_adapter_backend="local",
         rag_review_gate_enabled=False,
         rag_auto_parse_after_preprocess_enabled=True,
-        rag_graph_enabled=True,
+        rag_graph_profile="entities",
         rag_chunk_size=800,
         rag_chunk_overlap=120,
         oci_genai_embedding_model="cohere.embed-v4.0",
@@ -1193,8 +1193,6 @@ async def test_ingestion_pipeline_writes_graph_index_when_enabled() -> None:
     assert oracle.saved_graph_index is not None
     assert {entity.knowledge_base_id for entity in oracle.saved_graph_index.entities} == {"kb-1"}
     assert oracle.saved_graph_index.relationships
-    assert oracle.saved_graph_index.claims
-    assert oracle.saved_graph_index.community_summaries
     assert oracle.saved_graph_index.entity_chunk_links
 
 

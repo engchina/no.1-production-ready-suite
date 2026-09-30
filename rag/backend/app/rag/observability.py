@@ -226,7 +226,7 @@ RATE_LIMIT_DECISIONS = Counter(
     "高コスト API の rate limit 判定数",
     ["scope", "outcome"],
 )
-# 検索のメトリクスの mode ラベル。回答は DocRAG(hybrid + RRF)だけで、利用者が選ぶ検索モードは
+# 検索のメトリクスの mode ラベル。回答は回答フロー(hybrid + RRF)だけで、利用者が選ぶ検索モードは
 # #595 で削除したため固定値にする(既存のダッシュボードの系列を保つため値は hybrid のまま)。
 SEARCH_METRIC_MODE = "hybrid"
 

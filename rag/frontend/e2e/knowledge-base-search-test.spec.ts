@@ -198,7 +198,7 @@ for (const viewport of [
   }
 }
 
-// #349: 回答の引用のプレビューでも、DocRAG の表示領域（要素ごとの bbox）を強調し、1 画面分の高さで表示する。
+// #349: 回答の引用のプレビューでも、要素の表示領域（要素ごとの bbox）を強調し、1 画面分の高さで表示する。
 test("引用プレビューは PDF のページ画像に根拠の要素を強調し、1 画面分の高さで表示する", async ({
   page,
 }) => {
@@ -223,7 +223,7 @@ test("引用プレビューは PDF のページ画像に根拠の要素を強調
       page_height: 1584,
       bbox: "[122.4, 158.4, 1101.6, 792]",
       bbox_unit: "absolute",
-      docrag_metadata_json: JSON.stringify({
+      engine_metadata_json: JSON.stringify({
         layout: {
           display_regions: [
             {

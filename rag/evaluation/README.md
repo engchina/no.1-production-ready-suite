@@ -83,7 +83,7 @@ uv run python -m app.rag.evaluation_cli \
   --output ../evaluation/evaluation-compare-result.json
 ```
 
-検索 latency / p95 gate には `search-load.example.json` を使います。`cases`、`repeat`、`concurrency`、`thresholds` を定義し、`/api/search` の client/server p50/p95、error rate、回答フローの工程ごとの p95（`diagnostics.docrag.execution_steps` の工程名と時間。例: `質問の理解`・`文書検索（1回目）`）を artifact 化します。`thresholds.stage_p95_ms` の key は工程名です。case の `rerank_top_n`・`mode`・`strategy` は #595 で削除した旧 standard の指定で、書いてあっても読み捨てます。結果 JSON と trend JSON には query / answer / context 原文を残しません。
+検索 latency / p95 gate には `search-load.example.json` を使います。`cases`、`repeat`、`concurrency`、`thresholds` を定義し、`/api/search` の client/server p50/p95、error rate、回答フローの工程ごとの p95（`diagnostics.answer.execution_steps` の工程名と時間。例: `質問の理解`・`文書検索（1回目）`）を artifact 化します。`thresholds.stage_p95_ms` の key は工程名です。case の `rerank_top_n`・`mode`・`strategy` は #595 で削除した旧 standard の指定で、書いてあっても読み捨てます。結果 JSON と trend JSON には query / answer / context 原文を残しません。
 
 ```bash
 cd backend

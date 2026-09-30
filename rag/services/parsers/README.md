@@ -5,7 +5,7 @@
 
 | サービス | 実行 | 既定で配備 | 備考 |
 |---|---|---|---|
-| `docling` | CPU | ✅ | 既定の解析エンジン。**PDF と画像だけ**(DocRAG のレイアウト解析) |
+| `docling` | CPU | ✅ | 既定の解析エンジン。**PDF と画像だけ**(親子階層（small-to-big）の分割に使うレイアウト解析) |
 | `unstructured` | CPU | — | 多形式 partition(テキスト・HTML・Office・メール など)。stack の `rag_enable_parser_unstructured` / `rag-services.sh --unstructured` |
 | `asr` | **GPU** | — | 開発環境だけ(`rag-services.sh --gpu`)。音声/動画の文字起こし(faster-whisper)。OCI AI Speech の fallback |
 

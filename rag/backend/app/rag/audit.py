@@ -32,7 +32,7 @@ class RagSearchAuditEvent(BaseModel):
     tenant_id_hash: str | None = None
     user_id_hash: str | None = None
     outcome: AuditOutcome
-    # 検索の種類。回答は DocRAG(hybrid + RRF)だけなので常に hybrid(列の CHECK 制約が
+    # 検索の種類。回答は回答フロー(hybrid + RRF)だけなので常に hybrid(列の CHECK 制約が
     # hybrid / vector / keyword のため値はそのまま)。
     mode: SearchMode = SearchMode.HYBRID
     query_hash: str
@@ -49,7 +49,7 @@ class RagSearchAuditEvent(BaseModel):
     error_stage: str | None = None
     error_type: str | None = None
     # 旧 standard の回答エンジンの計測(検索計画・rerank・context の加工・Agent Memory など)。
-    # 回答は DocRAG だけになり(#595)、既定値のまま保存する。列の削除は #596。
+    # 回答は回答フローだけになり(#595)、既定値のまま保存する。列の削除は #596。
     memory_plan_id: str | None = None
     top_k: int | None = None
     rerank_top_n: int | None = None

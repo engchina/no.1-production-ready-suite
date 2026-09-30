@@ -17,6 +17,7 @@ from typing import Any
 from pr_system_settings.auth.migrations import apply_platform_auth_schema
 from pr_system_settings.auth.store import PLATFORM_AUTH_TABLES, OracleAuthStore
 from pr_system_settings.system_schema import (
+    DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
     ForeignKeySpec,
     SystemSchemaBusyError,
     SystemSchemaError,
@@ -70,14 +71,25 @@ class MigrationArtifact:
     name: str
     table_name: str
     sql: str
+    # データを消す migration の説明（空なら破壊的でない。checksum には含めない。#619）。
+    destructive_note: str = ""
 
     @property
     def checksum(self) -> str:
         return hashlib.sha256(self.sql.encode("utf-8")).hexdigest()
 
+    @property
+    def destructive(self) -> bool:
+        return bool(self.destructive_note)
+
 
 MIGRATIONS: tuple[MigrationArtifact, ...] = tuple(
-    MigrationArtifact(section.name, section.table_name.upper(), section.sql)
+    MigrationArtifact(
+        section.name,
+        section.table_name.upper(),
+        section.sql,
+        destructive_note=section.destructive_note,
+    )
     for section in oracle_schema_migration_sections()
 )
 
@@ -92,11 +104,9 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_DOCUMENT_KNOWLEDGE_BASES",
     "RAG_BUSINESS_VIEWS",
     "RAG_ANSWER_RECORDS",
-    "RAG_DOCRAG_PROMPTS",
+    "RAG_ANSWER_PROMPTS",
     "RAG_QUERY_HISTORY",
     "RAG_BUSINESS_VIEW_KNOWLEDGE",
-    "RAG_PROMPT_VERSIONS",
-    "RAG_GENERATION_SETTINGS",
     "RAG_CONVERSATIONS",
     "RAG_MESSAGES",
     "RAG_INGESTION_JOBS",
@@ -109,10 +119,7 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_INGESTION_AUDIT",
     "RAG_GRAPH_ENTITIES",
     "RAG_GRAPH_RELATIONSHIPS",
-    "RAG_GRAPH_CLAIMS",
-    "RAG_GRAPH_COMMUNITY_SUMMARIES",
     "RAG_GRAPH_ENTITY_CHUNKS",
-    "RAG_AGENT_MEMORIES",
     "RAG_CITATION_FEEDBACK",
     "RAG_FEEDBACK_DETAILS",
     "RAG_EVALUATION_RUNS",
@@ -142,7 +149,6 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "RAG_DOCUMENT_KNOWLEDGE_BASES_TENANT_KB_IDX",
     "RAG_BUSINESS_VIEWS_TENANT_NAME_UIDX",
     "RAG_BUSINESS_VIEWS_TENANT_STATUS_IDX",
-    "RAG_PROMPT_VERSIONS_CREATED_IDX",
     "RAG_CONVERSATIONS_BUSINESS_VIEW_IDX",
     "RAG_CONVERSATIONS_TENANT_VIEW_UPDATED_IDX",
     "RAG_MESSAGES_CONVERSATION_CREATED_IDX",
@@ -181,15 +187,8 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "RAG_GRAPH_ENTITIES_TENANT_NAME_IDX",
     "RAG_GRAPH_REL_SOURCE_IDX",
     "RAG_GRAPH_REL_TARGET_IDX",
-    "RAG_GRAPH_CLAIM_ENTITY_IDX",
-    "RAG_GRAPH_COMMUNITY_TENANT_IDX",
-    "RAG_GRAPH_COMMUNITY_CHUNK_SET_IDX",
     "RAG_GRAPH_ENTITY_CHUNKS_CHUNK_IDX",
     "RAG_GRAPH_ENTITY_CHUNKS_CHUNK_SET_IDX",
-    "RAG_AGENT_MEMORIES_EMBEDDING_HNSW_IDX",
-    "RAG_AGENT_MEMORIES_TEXT_IDX",
-    "RAG_AGENT_MEMORIES_SCOPE_IDX",
-    "RAG_AGENT_MEMORIES_TRACE_IDX",
     "RAG_CITATION_FEEDBACK_TRACE_IDX",
     "RAG_CITATION_FEEDBACK_TENANT_CREATED_IDX",
     "RAG_FEEDBACK_BUSINESS_CREATED_IDX",
@@ -225,6 +224,20 @@ RETIRED_MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     # 2026-06 の schema が同じ列式を旧名で作成していた。Oracle は同一列リストの
     # 別名 index 作成を ORA-01408 で拒否するため、現行名の作成前にだけ明示削除する。
     ("RAG_INGESTION_SEGMENTS_RECIPE_IDX", "INDEX"),
+    # 旧 standard の回答エンジンだけが使っていた表（#596）。更新では migration
+    # `20260930_005_retire_standard_engine_objects` が消す。全再作成は migration を実行せず
+    # 記録だけするため、ここにも載せて残さない（index・制約は表と一緒に消える）。
+    ("RAG_PROMPT_VERSIONS", "TABLE"),
+    ("RAG_GENERATION_SETTINGS", "TABLE"),
+    ("RAG_AGENT_MEMORIES", "TABLE"),
+    # 関係情報の claims / community summary の表（#621。読む経路が無かった）。更新では migration
+    # `20260930_007_retire_graph_claims_community` が消す。全再作成のためにここにも載せる。
+    ("RAG_GRAPH_CLAIMS", "TABLE"),
+    ("RAG_GRAPH_COMMUNITY_SUMMARIES", "TABLE"),
+    # 回答生成のプロンプトの表の旧名（#599）。更新では migration
+    # `20260930_008_answer_prompts_table` が改名するか、行を `RAG_ANSWER_PROMPTS` へ写してから、
+    # ここで消す（行は消えない）。
+    ("RAG_DOCRAG_PROMPTS", "TABLE"),
 )
 
 DOMAIN_TABLES = frozenset(MANAGED_TABLES) - {CONTROL_TABLE, MIGRATION_TABLE}
@@ -297,6 +310,26 @@ def classify_system_schema_status(
     )
 
 
+def pending_destructive_migrations(
+    status: str,
+    pending_versions: Sequence[str],
+) -> list[dict[str, str]]:
+    """未適用の、データを消す migration（#619）。
+
+    未初期化（`missing`）の DB は migration を実行せずに記録だけするので、消えるデータは無い。
+    それ以外で未適用・checksum 不一致のものを、作成・更新の前に承認させる。
+    """
+
+    if status == "missing":
+        return []
+    pending = set(pending_versions)
+    return [
+        {"name": migration.name, "description": migration.destructive_note}
+        for migration in MIGRATIONS
+        if migration.destructive and migration.name in pending
+    ]
+
+
 class SystemSchemaManager(SystemSchemaManagerBase):
     """RAG の manifest・DDL 正本・Oracle Text object を、platform の骨格（lease・台帳）に渡す。"""
 
@@ -305,6 +338,8 @@ class SystemSchemaManager(SystemSchemaManagerBase):
     migration_key_column = "MIGRATION_NAME"
     managed_tables = MANAGED_TABLES
     managed_foreign_keys = MANAGED_FOREIGN_KEYS
+    # データを消す未適用の migration は、承認が無ければ作成・更新で当てない（#619）。
+    guards_destructive_migrations = True
     recreate_confirmation = RECREATE_CONFIRMATION
     log_prefix = "rag"
     lock_timeout_guidance = "取込処理を停止してから、"
@@ -427,16 +462,18 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             if applied.get(migration.name) != migration.checksum
         ]
         foreign_keys = self._foreign_key_drift(connection)
+        status = classify_system_schema_status(
+            set(objects),
+            applied,
+            foreign_keys_current=foreign_keys.current,
+        )
         return {
-            "status": classify_system_schema_status(
-                set(objects),
-                applied,
-                foreign_keys_current=foreign_keys.current,
-            ),
+            "status": status,
             "schema_version": SCHEMA_VERSION,
             "schema_head": MIGRATIONS[-1].name if MIGRATIONS else SCHEMA_VERSION,
             "applied_versions": matching,
             "pending_versions": pending,
+            "pending_destructive_migrations": pending_destructive_migrations(status, pending),
             "expected_object_count": len(expected),
             "existing_object_count": len(existing),
             "expected_table_count": len(MANAGED_TABLES),
@@ -627,6 +664,7 @@ system_schema_manager = SystemSchemaManager()
 
 __all__ = [
     "CONTROL_TABLE",
+    "DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED",
     "DOMAIN_TABLES",
     "MANAGED_FOREIGN_KEYS",
     "MANAGED_INDEXES",
@@ -647,5 +685,6 @@ __all__ = [
     "managed_foreign_keys_from_schema",
     "managed_manifest_from_schema",
     "oracle_error_code",
+    "pending_destructive_migrations",
     "system_schema_manager",
 ]

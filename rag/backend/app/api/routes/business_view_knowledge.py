@@ -1,14 +1,14 @@
 """業務ビュー単位の知識 API(ドメインキーワード)。
 
-rag_poc(DocRAG)の「ドメインキーワード管理」を業務ビュー層へ移植したもの。
+rag_poc の「ドメインキーワード管理」を業務ビュー層へ移植したもの。
 KB・文書レシピには持たせず、検索時は業務ビューのキーワードだけを使う。
 """
 
 import asyncio
 from typing import Annotated
 
-from docrag.knowledge.approved_faq import ApprovedFaqImportRow, ApprovedFaqRecord
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from rag_engine.knowledge.approved_faq import ApprovedFaqImportRow, ApprovedFaqRecord
 
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient

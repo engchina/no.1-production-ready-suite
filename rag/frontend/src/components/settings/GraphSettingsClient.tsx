@@ -23,9 +23,14 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { useGraphSettings, useUpdateGraphSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
-const PROFILE_ORDER: GraphProfileName[] = ["off", "entities", "full"];
+const PROFILE_ORDER: GraphProfileName[] = ["off", "entities"];
+// 全体の既定(backend の Settings.rag_graph_profile の既定)。選択肢に「既定」と文字で添える。
+const DEFAULT_PROFILE: GraphProfileName = "off";
 
-/** 関係情報構築の現在設定を管理する設定画面。 */
+/**
+ * 関係情報(文書と章・節の見出しのつながり)を取込のときに構築するかを選ぶ設定画面(#621)。
+ * 構築した関係情報はナレッジベースの「関係情報グラフ」で見るだけで、回答の検索には使わない。
+ */
 export function GraphSettingsClient() {
   const query = useGraphSettings();
   const save = useUpdateGraphSettings();
@@ -112,7 +117,7 @@ export function GraphSettingsClient() {
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
               <Share2 size={20} aria-hidden />
             </div>
-            <div>
+            <div className="min-w-0">
               <CardTitle>{t("settings.graph.overview.title")}</CardTitle>
               <CardDescription>{t("settings.graph.overview.description")}</CardDescription>
             </div>
@@ -120,13 +125,13 @@ export function GraphSettingsClient() {
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="space-y-2">
-            <div className="text-sm font-medium text-fg">
+            <div className="text-sm font-medium text-fg" id="settings-graph-profile-label">
               {t("settings.graph.profile")}
             </div>
             <div
               role="radiogroup"
-              aria-label={t("settings.graph.profile")}
-              className="grid grid-cols-1 gap-2 md:grid-cols-3"
+              aria-labelledby="settings-graph-profile-label"
+              className="grid grid-cols-1 gap-2 md:grid-cols-2"
             >
               {profiles.map((item) => {
                 const selected = profile === item.name;
@@ -145,14 +150,21 @@ export function GraphSettingsClient() {
                     <label
                       htmlFor={`settings-graph-profile-${item.name}`}
                       className={cn(
-                        "block h-full cursor-pointer min-h-[8rem] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+                        "block h-full cursor-pointer rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
                         selected
                           ? "border-accent-emphasis bg-accent-subtle text-fg"
                           : "border-border bg-surface text-fg peer-hover:bg-surface-hover"
                       )}
                     >
                       <span className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold">{profileLabel(item.name)}</span>
+                        <span className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold">{profileLabel(item.name)}</span>
+                          {item.name === DEFAULT_PROFILE ? (
+                            <span className="inline-flex min-h-5 items-center rounded border border-border px-1.5 text-xs text-fg-muted">
+                              {t("settings.graph.defaultTag")}
+                            </span>
+                          ) : null}
+                        </span>
                         {selected ? (
                           <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
                         ) : null}
@@ -160,31 +172,12 @@ export function GraphSettingsClient() {
                       <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
                         {profileDescription(item.name)}
                       </span>
-                      <ProfileChips profile={item} />
                     </label>
                   </div>
                 );
               })}
             </div>
           </div>
-          <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <RuntimeFact
-              label={t("settings.graph.enabled")}
-              value={settings.enabled ? t("settings.graph.on") : t("settings.graph.off")}
-            />
-            <RuntimeFact
-              label={t("settings.graph.claims")}
-              value={settings.build_claims ? t("settings.graph.on") : t("settings.graph.off")}
-            />
-            <RuntimeFact
-              label={t("settings.graph.community")}
-              value={
-                settings.build_community_summaries
-                  ? t("settings.graph.on")
-                  : t("settings.graph.off")
-              }
-            />
-          </dl>
           <FormStatus tone="info" message={t("settings.graph.rebuildHint")} />
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
             <div className="min-h-6">
@@ -216,34 +209,6 @@ export function GraphSettingsClient() {
         </CardContent>
       </Card>
     </PageBody>
-  );
-}
-
-function ProfileChips({ profile }: { profile: GraphProfileStatusData }) {
-  return (
-    <span className="mt-2 flex flex-wrap gap-1">
-      <span className="inline-flex min-h-5 items-center rounded bg-info-subtle px-1.5 text-xs font-medium text-info-fg">
-        {t("settings.graph.enabled")}{" "}
-        {profile.enabled ? t("settings.graph.on") : t("settings.graph.off")}
-      </span>
-      <span className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
-        {t("settings.graph.claims")}{" "}
-        {profile.build_claims ? t("settings.graph.on") : t("settings.graph.off")}
-      </span>
-      <span className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
-        {t("settings.graph.community")}{" "}
-        {profile.build_community_summaries ? t("settings.graph.on") : t("settings.graph.off")}
-      </span>
-    </span>
-  );
-}
-
-function RuntimeFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border border-border bg-surface-hover p-3">
-      <dt className="text-xs font-medium text-fg-muted">{label}</dt>
-      <dd className="mt-1 break-words text-sm font-semibold text-fg">{value}</dd>
-    </div>
   );
 }
 

@@ -788,7 +788,7 @@ def test_stream_search_returns_sse_events() -> None:
     assert "event: citations" in body
     assert "event: done" in body
     assert body.index("event: stage") < body.index("event: metadata")
-    assert '"stage": "docrag_answer"' in body
+    assert '"stage": "answer"' in body
     assert '"outcome": "started"' in body
     assert document_id in body
 

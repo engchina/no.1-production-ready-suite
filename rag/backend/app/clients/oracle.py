@@ -30,15 +30,13 @@ from app.rag.business_view_config import (
     parse_business_view_config,
 )
 from app.rag.chunking import Chunk
-from app.rag.docrag_chunking import DOCRAG_FIRST_PAGE_CONTEXT_KEY, docrag_search_text
+from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY, engine_search_text
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
     FieldSchemaStore,
     field_schema_from_json,
 )
 from app.rag.graph_index import (
-    GraphClaim,
-    GraphCommunitySummary,
     GraphEntity,
     GraphEntityChunkLink,
     GraphIndex,
@@ -2288,7 +2286,7 @@ class OracleClient:
         )
 
     async def save_answer_record(self, record: Mapping[str, object]) -> None:
-        """DocRAG 回答を保存する(同じ trace_id は上書き)。"""
+        """回答を保存する(同じ trace_id は上書き)。"""
         binds = {
             "trace_id": record["trace_id"],
             "business_view_id": record.get("business_view_id"),
@@ -2348,7 +2346,7 @@ class OracleClient:
         offset: int = 0,
         trace_ids: Sequence[str] | None = None,
     ) -> list[dict[str, object]]:
-        """保存済み DocRAG 回答を新しい順に返す(本文・JSON は含めない一覧用)。
+        """保存済み回答を新しい順に返す(本文・JSON は含めない一覧用)。
 
         利用できる業務ビューが制限されているときは、その業務ビューの回答だけを返す（#214）。
         持ち主の回答だけを返す（SYSTEM_ADMIN と `rag.feedback.manage` は全件。#304）。
@@ -2389,7 +2387,7 @@ class OracleClient:
         return _row_count_value(row)
 
     async def get_answer_record(self, trace_id: str) -> dict[str, object] | None:
-        """保存済み DocRAG 回答を 1 件返す（利用できる業務ビューの回答だけ。#214）。"""
+        """保存済み回答を 1 件返す（利用できる業務ビューの回答だけ。#214）。"""
         row = await self._fetch_one(
             _render_sql(
                 """
@@ -2482,10 +2480,10 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
-    async def list_docrag_prompts(self) -> dict[str, dict[str, object]]:
-        """編集した DocRAG プロンプトを {key: {content, updated_at}} で返す(未編集は含めない)。"""
+    async def list_answer_prompts(self) -> dict[str, dict[str, object]]:
+        """編集した回答生成のプロンプトを {key: {content, updated_at}} で返す(未編集は含めない)。"""
         rows = await self._fetch_all(
-            "SELECT prompt_key, content, updated_at FROM rag_docrag_prompts", {}
+            "SELECT prompt_key, content, updated_at FROM rag_answer_prompts", {}
         )
         return {
             str(row["prompt_key"]): {
@@ -2495,14 +2493,14 @@ class OracleClient:
             for row in rows
         }
 
-    async def save_docrag_prompt(self, key: str, content: str) -> None:
-        """DocRAG プロンプトを保存する(同じ key は上書き)。"""
+    async def save_answer_prompt(self, key: str, content: str) -> None:
+        """回答生成のプロンプトを保存する(同じ key は上書き)。"""
 
         def operation(connection: OracleConnectionProtocol) -> None:
             _execute(
                 connection,
                 """
-                MERGE INTO rag_docrag_prompts target
+                MERGE INTO rag_answer_prompts target
                 USING (SELECT :prompt_key AS prompt_key FROM dual) source
                 ON (target.prompt_key = source.prompt_key)
                 WHEN MATCHED THEN UPDATE SET
@@ -2516,26 +2514,26 @@ class OracleClient:
 
         await self._run_transaction(operation)
 
-    async def delete_docrag_prompt(self, key: str) -> bool:
-        """保存した DocRAG プロンプトを消して既定値へ戻す。消した場合 True。"""
+    async def delete_answer_prompt(self, key: str) -> bool:
+        """保存した回答生成のプロンプトを消して既定値へ戻す。消した場合 True。"""
 
         def operation(connection: OracleConnectionProtocol) -> int:
             return _execute_count(
                 connection,
-                "DELETE FROM rag_docrag_prompts WHERE prompt_key = :prompt_key",
+                "DELETE FROM rag_answer_prompts WHERE prompt_key = :prompt_key",
                 {"prompt_key": key},
             )
 
         return await self._run_transaction(operation) > 0
 
-    async def docrag_prompt_overrides(self) -> dict[str, str]:
-        """回答・解析へ渡す DocRAG プロンプトの上書き({key: content})。"""
+    async def answer_prompt_overrides(self) -> dict[str, str]:
+        """回答・解析へ渡す回答生成のプロンプトの上書き({key: content})。"""
         return {
-            key: str(value["content"]) for key, value in (await self.list_docrag_prompts()).items()
+            key: str(value["content"]) for key, value in (await self.list_answer_prompts()).items()
         }
 
     async def save_answer_evaluation(self, trace_id: str, evaluation: Mapping[str, object]) -> bool:
-        """保存済み DocRAG 回答へ標準回答による評価結果を保存する(再評価は上書き)。"""
+        """保存済み 回答へ標準回答による評価結果を保存する(再評価は上書き)。"""
 
         def operation(connection: OracleConnectionProtocol) -> bool:
             if not _fetch_all(
@@ -2563,7 +2561,7 @@ class OracleClient:
         return await self._run_transaction(operation)
 
     async def delete_answer_record(self, trace_id: str) -> bool:
-        """保存済み DocRAG 回答を 1 件削除する。削除した場合 True。"""
+        """保存済み回答を 1 件削除する。削除した場合 True。"""
 
         def operation(connection: OracleConnectionProtocol) -> int:
             return _execute_count(
@@ -2578,7 +2576,7 @@ class OracleClient:
         return await self._run_transaction(operation) > 0
 
     async def purge_answer_records(self, retention_days: int) -> int:
-        """保持期間を過ぎた DocRAG 回答を削除し、削除件数を返す。"""
+        """保持期間を過ぎた回答を削除し、削除件数を返す。"""
 
         # ponytail: created_at 単独 index なしの全走査。記録が大量になったら index を足す。
         def operation(connection: OracleConnectionProtocol) -> int:
@@ -8030,7 +8028,7 @@ class OracleClient:
                         **{
                             key: value
                             for key, value in chunk.metadata.items()
-                            if key != DOCRAG_FIRST_PAGE_CONTEXT_KEY
+                            if key != FIRST_PAGE_CONTEXT_KEY
                         },
                     }
                 ),
@@ -8074,16 +8072,16 @@ class OracleClient:
         残す)し、挿入 chunk をその chunk_set でタグ付けする。None は文書の全 chunk を置換し
         未タグで保存する(現行挙動・後方互換)。
 
-        DocRAG の文書の 1 ページ目の本文(先頭の chunk の ``DOCRAG_FIRST_PAGE_CONTEXT_KEY``)は、
+        親子階層で分割した文書の 1 ページ目の本文(先頭の chunk の ``FIRST_PAGE_CONTEXT_KEY``)は、
         chunk set に 1 つだけ保存する(#557)。chunk set の行は chunk の保存の後に
         ``upsert_chunk_set`` が作るため、無ければここで作る(状態などは後の upsert / mark が書く)。
         """
         first_page_context = (
             next(
                 (
-                    json.loads(str(chunk.metadata[DOCRAG_FIRST_PAGE_CONTEXT_KEY]))
+                    json.loads(str(chunk.metadata[FIRST_PAGE_CONTEXT_KEY]))
                     for chunk in chunks
-                    if chunk.metadata.get(DOCRAG_FIRST_PAGE_CONTEXT_KEY)
+                    if chunk.metadata.get(FIRST_PAGE_CONTEXT_KEY)
                 ),
                 None,
             )
@@ -8197,7 +8195,7 @@ class OracleClient:
         *,
         chunk_set_id: str | None = None,
     ) -> None:
-        """Oracle GraphRAG-lite tables の chunk_set scope を置換する。"""
+        """関係情報の表の chunk_set scope を置換する。"""
 
         def operation(connection: OracleConnectionProtocol) -> None:
             if _select_document_state(connection, document_id) is None:
@@ -8288,71 +8286,6 @@ class OracleClient:
                             "chunk_set_id": chunk_set_id,
                         }
                         for relationship in graph_index.relationships
-                    ],
-                )
-            if graph_index.claims:
-                _executemany(
-                    connection,
-                    """
-                    INSERT INTO rag_graph_claims (
-                        claim_id,
-                        chunk_set_id,
-                        tenant_id_hash,
-                        knowledge_base_id,
-                        entity_id,
-                        claim_text,
-                        confidence,
-                        source_document_id,
-                        source_chunk_id
-                    ) VALUES (
-                        :claim_id,
-                        :chunk_set_id,
-                        :tenant_id_hash,
-                        :knowledge_base_id,
-                        :entity_id,
-                        :claim_text,
-                        :confidence,
-                        :source_document_id,
-                        :source_chunk_id
-                    )
-                    """,
-                    [
-                        {**_graph_claim_binds(claim), "chunk_set_id": chunk_set_id}
-                        for claim in graph_index.claims
-                    ],
-                )
-            if graph_index.community_summaries:
-                _executemany(
-                    connection,
-                    """
-                    INSERT INTO rag_graph_community_summaries (
-                        community_id,
-                        chunk_set_id,
-                        tenant_id_hash,
-                        knowledge_base_id,
-                        level_no,
-                        title,
-                        summary_text,
-                        entity_ids,
-                        source_document_ids
-                    ) VALUES (
-                        :community_id,
-                        :chunk_set_id,
-                        :tenant_id_hash,
-                        :knowledge_base_id,
-                        :level_no,
-                        :title,
-                        :summary_text,
-                        :entity_ids,
-                        :source_document_ids
-                    )
-                    """,
-                    [
-                        {
-                            **_graph_community_summary_binds(summary),
-                            "chunk_set_id": chunk_set_id,
-                        }
-                        for summary in graph_index.community_summaries
                     ],
                 )
             if graph_index.entity_chunk_links:
@@ -8709,11 +8642,6 @@ def _select_graph_entity_ids_for_document(
               AND {graph_access_sql}
             UNION
             SELECT entity_id
-            FROM rag_graph_claims
-            WHERE source_document_id = :document_id
-              AND {graph_access_sql}
-            UNION
-            SELECT entity_id
             FROM rag_graph_entities
             WHERE JSON_EXISTS(
                       source_document_ids,
@@ -8730,19 +8658,59 @@ def _select_graph_entity_ids_for_document(
     return [str(row["entity_id"]) for row in rows if row.get("entity_id")]
 
 
+def _delete_retired_graph_claims(
+    connection: OracleConnectionProtocol,
+    *,
+    entity_ids: Sequence[str],
+) -> None:
+    """#621 で廃止した rag_graph_claims が残っていれば、消す entity を参照する行を先に消す。
+
+    rag_graph_claims は rag_graph_entities を FK(ON DELETE CASCADE なし)で参照する。表を消す
+    migration(`20260930_007_retire_graph_claims_community`)はデータを削除するため承認が要り、
+    適用前も backend は動く。その間に旧 full で構築した文書を再取込・削除すると、entity の
+    DELETE が FK で失敗するので、表があるときだけ参照する行を消す。migration の適用後
+    (表が無い)は何もしない。rag_graph_community_summaries は FK を持たないので触らない。
+    """
+    unique_entity_ids = _unique_optional_sequence(entity_ids)
+    if not unique_entity_ids:
+        return
+    row = _fetch_one(
+        connection,
+        "SELECT COUNT(*) AS table_count FROM user_tables WHERE table_name = 'RAG_GRAPH_CLAIMS'",
+        {},
+    )
+    if not row or not int(cast(int, row.get("table_count") or 0)):
+        return
+    entity_sql, entity_binds = _oracle_in_predicate(
+        "entity_id",
+        "graph_entity_id",
+        unique_entity_ids,
+    )
+    _execute(
+        connection,
+        _render_sql(
+            """
+            DELETE FROM rag_graph_claims
+            WHERE {entity_sql}
+            """,
+            entity_sql=entity_sql,
+        ),
+        entity_binds,
+    )
+
+
 def _delete_graph_rows_for_chunk_set(
     connection: OracleConnectionProtocol,
     *,
     chunk_set_id: str,
     entity_ids: Sequence[str],
 ) -> None:
-    """指定 chunk_set の GraphRAG 行だけを FK 順に削除する。"""
+    """指定 chunk_set の関係情報の行だけを FK 順に削除する。"""
     binds = _with_tenant_bind({"chunk_set_id": chunk_set_id})
+    _delete_retired_graph_claims(connection, entity_ids=entity_ids)
     for table in (
         "rag_graph_relationships",
         "rag_graph_entity_chunks",
-        "rag_graph_claims",
-        "rag_graph_community_summaries",
     ):
         _execute(
             connection,
@@ -8786,8 +8754,9 @@ def _delete_graph_rows_for_document(
     document_id: str,
     entity_ids: Sequence[str],
 ) -> None:
-    """指定 document の GraphRAG-lite rows を FK 順に削除する。"""
+    """指定 document の関係情報の行を FK 順に削除する。"""
     unique_entity_ids = _unique_optional_sequence(entity_ids)
+    _delete_retired_graph_claims(connection, entity_ids=unique_entity_ids)
     if unique_entity_ids:
         source_sql, source_binds = _oracle_in_predicate(
             "source_entity_id",
@@ -8819,34 +8788,6 @@ def _delete_graph_rows_for_document(
             """
         DELETE FROM rag_graph_entity_chunks
         WHERE document_id = :document_id
-          AND {graph_access_sql}
-        """,
-            graph_access_sql=_oracle_tenant_predicate(),
-        ),
-        _with_tenant_bind({"document_id": document_id}),
-    )
-    _execute(
-        connection,
-        _render_sql(
-            """
-        DELETE FROM rag_graph_claims
-        WHERE source_document_id = :document_id
-          AND {graph_access_sql}
-        """,
-            graph_access_sql=_oracle_tenant_predicate(),
-        ),
-        _with_tenant_bind({"document_id": document_id}),
-    )
-    _execute(
-        connection,
-        _render_sql(
-            """
-        DELETE FROM rag_graph_community_summaries
-        WHERE JSON_EXISTS(
-                  source_document_ids,
-                  '$[*]?(@ == $document_id)'
-                  PASSING :document_id AS "document_id"
-              )
           AND {graph_access_sql}
         """,
             graph_access_sql=_oracle_tenant_predicate(),
@@ -9160,32 +9101,6 @@ def _graph_relationship_binds(relationship: GraphRelationship) -> dict[str, obje
         "description": relationship.description,
         "confidence": relationship.confidence,
         "source_document_ids": _audit_json(relationship.source_document_ids),
-    }
-
-
-def _graph_claim_binds(claim: GraphClaim) -> dict[str, object]:
-    return {
-        "claim_id": claim.claim_id,
-        "tenant_id_hash": _current_tenant_id_hash(),
-        "knowledge_base_id": claim.knowledge_base_id,
-        "entity_id": claim.entity_id,
-        "claim_text": claim.claim_text,
-        "confidence": claim.confidence,
-        "source_document_id": claim.source_document_id,
-        "source_chunk_id": claim.source_chunk_id,
-    }
-
-
-def _graph_community_summary_binds(summary: GraphCommunitySummary) -> dict[str, object]:
-    return {
-        "community_id": summary.community_id,
-        "tenant_id_hash": _current_tenant_id_hash(),
-        "knowledge_base_id": summary.knowledge_base_id,
-        "level_no": summary.level_no,
-        "title": summary.title,
-        "summary_text": summary.summary_text,
-        "entity_ids": _audit_json(summary.entity_ids),
-        "source_document_ids": _audit_json(summary.source_document_ids),
     }
 
 
@@ -10460,7 +10375,7 @@ def _classification_where(filters: Mapping[str, str]) -> tuple[list[str], dict[s
     """文書の分類と有効期間の述語(rag_poc の _classification_filter_sql と同じ意味)。
 
     - 分類は指定した項目だけを、番号の接頭辞を除いた名前の一致で絞る(`10_業務A` と `業務A` を
-      同じ分類として扱う。docrag_core の `_category_label` と同じ規則。#547)。表記(NFKC・空白)は
+      同じ分類として扱う。rag_engine の `_category_label` と同じ規則。#547)。表記(NFKC・空白)は
       保存時と検索の入力で同じ正規化を通すので、SQL では接頭辞だけを外す。
     - 有効期間は基準日(未指定なら今日)で常に絞る。期間のない文書は除外しない。終了日は排他的。
       ISO 日付の文字列比較は時系列順と一致する。
@@ -11210,8 +11125,9 @@ def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
 
 def _chunk_search_text(chunk: Chunk) -> str:
     """Oracle Text には文脈ヘッダを含め、表示本文は chunk.text のまま保つ。"""
-    if search_text := docrag_search_text(chunk.metadata):
-        # DocRAG は文書・節・親要約・表/図文脈を前置した rag_poc の search_text を索引する。
+    if search_text := engine_search_text(chunk.metadata):
+        # 親子階層の chunk は、文書・節・親要約・表/図文脈を前置した rag_poc の search_text を
+        # 索引する。
         return search_text
     header = str(chunk.metadata.get("context_header") or "").strip()
     return f"{header}\n{chunk.text}" if header else chunk.text
@@ -11791,7 +11707,7 @@ def oracle_business_view_knowledge_schema_sql(
 ) -> str:
     """業務ビュー単位の知識(ドメインキーワード / Approved FAQ / 用語・ルール)の DDL。
 
-    rag_poc(DocRAG)の JSON payload 形式をそのまま 1 行 1 種別で保持する。
+    rag_poc の JSON payload 形式をそのまま 1 行 1 種別で保持する。
     """
 
     return f"""
@@ -11812,7 +11728,7 @@ CREATE TABLE {table_name} (
 def oracle_answer_record_schema_sql(
     table_name: str = "rag_answer_records",
 ) -> str:
-    """DocRAG 回答の保存 table DDL(rag_poc の answer JSON 保存に相当)。
+    """回答の保存 table DDL(rag_poc の answer JSON 保存に相当)。
 
     `user_id_hash` は回答を生成した利用者（持ち主。#304）。一覧・詳細・評価・削除を持ち主へ絞る。
     """
@@ -11861,68 +11777,14 @@ CREATE INDEX {table_name}_view_idx
 """.strip()
 
 
-def oracle_docrag_prompt_schema_sql(table_name: str = "rag_docrag_prompts") -> str:
-    """編集した DocRAG プロンプトの保存 table DDL(rag_poc の prompts/<key>.txt に相当)。"""
+def oracle_answer_prompt_schema_sql(table_name: str = "rag_answer_prompts") -> str:
+    """編集した回答生成のプロンプトの保存 table DDL(rag_poc の prompts/<key>.txt に相当)。"""
     return f"""
 CREATE TABLE {table_name} (
     prompt_key  VARCHAR2(64) PRIMARY KEY,
     content     CLOB NOT NULL,
     updated_at  TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
 )
-""".strip()
-
-
-def oracle_prompt_version_schema_sql(
-    table_name: str = "rag_prompt_versions",
-) -> str:
-    """回答生成 custom system prompt の版管理 table DDL。"""
-
-    return f"""
-CREATE TABLE {table_name} (
-    version_id       VARCHAR2(64) PRIMARY KEY,
-    name             VARCHAR2(120) NOT NULL,
-    system_prompt    CLOB NOT NULL,
-    note             VARCHAR2(2000),
-    created_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    created_by_hash  CHAR(64)
-);
-
-CREATE INDEX {table_name}_created_idx
-    ON {table_name} (created_at DESC, version_id DESC);
-""".strip()
-
-
-def oracle_generation_settings_schema_sql(
-    table_name: str = "rag_generation_settings",
-    prompt_table: str = "rag_prompt_versions",
-) -> str:
-    """deploy-wide 回答生成設定の単例 table DDL。"""
-
-    return f"""
-CREATE TABLE {table_name} (
-    settings_key              VARCHAR2(32) PRIMARY KEY,
-    generation_profile        VARCHAR2(64) NOT NULL,
-    active_prompt_version_id  VARCHAR2(64),
-    revision                  NUMBER(19) DEFAULT 1 NOT NULL,
-    updated_at                TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    updated_by_hash           CHAR(64),
-    CONSTRAINT {table_name}_singleton_ck CHECK (settings_key = 'GLOBAL'),
-    CONSTRAINT {table_name}_profile_ck CHECK (
-        generation_profile IN (
-            'grounded_concise',
-            'detailed_cited',
-            'strict_extractive',
-            'structured_json',
-            'bilingual_ja_en',
-            'inline_cited',
-            'custom'
-        )
-    ),
-    CONSTRAINT {table_name}_revision_ck CHECK (revision >= 1),
-    CONSTRAINT {table_name}_active_prompt_fk
-        FOREIGN KEY (active_prompt_version_id)
-        REFERENCES {prompt_table} (version_id)
-);
 """.strip()
 
 
@@ -12669,7 +12531,7 @@ CREATE INDEX {table_name}_source_sha256_idx
 
 
 def oracle_knowledge_graph_schema_sql() -> str:
-    """GraphRAG-lite 用の軽量 KG / community summary table DDL を返す。"""
+    """関係情報(文書と章・節の見出しのつながり)の table DDL を返す。"""
     return """
 CREATE TABLE rag_graph_entities (
     entity_id          VARCHAR2(64) PRIMARY KEY,
@@ -12715,44 +12577,6 @@ CREATE INDEX rag_graph_rel_source_idx
 CREATE INDEX rag_graph_rel_target_idx
     ON rag_graph_relationships (tenant_id_hash, target_entity_id);
 
-CREATE TABLE rag_graph_claims (
-    claim_id           VARCHAR2(64) PRIMARY KEY,
-    chunk_set_id       VARCHAR2(64),
-    tenant_id_hash     CHAR(64),
-    knowledge_base_id  VARCHAR2(64),
-    entity_id          VARCHAR2(64),
-    claim_text         CLOB NOT NULL,
-    confidence         NUMBER(6, 5),
-    source_document_id VARCHAR2(64),
-    source_chunk_id    VARCHAR2(128),
-    created_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    CONSTRAINT rag_graph_claim_entity_fk
-        FOREIGN KEY (entity_id) REFERENCES rag_graph_entities (entity_id)
-);
-
-CREATE INDEX rag_graph_claim_entity_idx
-    ON rag_graph_claims (tenant_id_hash, entity_id);
-
-CREATE TABLE rag_graph_community_summaries (
-    community_id       VARCHAR2(64) PRIMARY KEY,
-    chunk_set_id       VARCHAR2(64),
-    tenant_id_hash     CHAR(64),
-    knowledge_base_id  VARCHAR2(64),
-    level_no           NUMBER(5) DEFAULT 0 NOT NULL,
-    title              VARCHAR2(512),
-    summary_text       CLOB NOT NULL,
-    entity_ids         JSON,
-    source_document_ids JSON,
-    created_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    updated_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-);
-
-CREATE INDEX rag_graph_community_tenant_idx
-    ON rag_graph_community_summaries (tenant_id_hash, knowledge_base_id, level_no);
-
-CREATE INDEX rag_graph_community_chunk_set_idx
-    ON rag_graph_community_summaries (chunk_set_id);
-
 CREATE TABLE rag_graph_entity_chunks (
     entity_id          VARCHAR2(64) NOT NULL,
     chunk_id           VARCHAR2(128) NOT NULL,
@@ -12771,60 +12595,6 @@ CREATE INDEX rag_graph_entity_chunks_chunk_idx
 
 CREATE INDEX rag_graph_entity_chunks_chunk_set_idx
     ON rag_graph_entity_chunks (chunk_set_id);
-""".strip()
-
-
-def oracle_agent_memory_schema_sql(table_name: str = "rag_agent_memories") -> str:
-    """Agent Memory を Oracle AI Database VECTOR と hash scope で保存する DDL を返す。"""
-    return f"""
-CREATE TABLE {table_name} (
-    memory_id        VARCHAR2(64) PRIMARY KEY,
-    tenant_id_hash   CHAR(64),
-    user_id_hash     CHAR(64),
-    role_id_hash     CHAR(64),
-    agent_id_hash    CHAR(64),
-    thread_id_hash   CHAR(64),
-    trace_id         VARCHAR2(64) NOT NULL,
-    memory_text      CLOB NOT NULL,
-    metadata_json    JSON,
-    embedding        VECTOR(1536, FLOAT32) NOT NULL,
-    usefulness_score NUMBER(8, 6) DEFAULT 0.5 NOT NULL,
-    eval_count       NUMBER(10) DEFAULT 0 NOT NULL,
-    created_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    updated_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    CONSTRAINT {table_name}_usefulness_ck
-        CHECK (usefulness_score >= 0 AND usefulness_score <= 1),
-    CONSTRAINT {table_name}_eval_count_ck
-        CHECK (eval_count >= 0)
-);
-
-CREATE VECTOR INDEX {table_name}_embedding_hnsw_idx
-    ON {table_name} (embedding)
-    ORGANIZATION INMEMORY NEIGHBOR GRAPH
-    DISTANCE COSINE
-    WITH TARGET ACCURACY 95
-    PARAMETERS (
-        TYPE HNSW,
-        NEIGHBORS 32,
-        EFCONSTRUCTION 500
-    );
-
-CREATE INDEX {table_name}_text_idx
-    ON {table_name} (memory_text)
-    INDEXTYPE IS CTXSYS.CONTEXT;
-
-CREATE INDEX {table_name}_scope_idx
-    ON {table_name} (
-        tenant_id_hash,
-        user_id_hash,
-        role_id_hash,
-        agent_id_hash,
-        thread_id_hash,
-        updated_at DESC
-    );
-
-CREATE INDEX {table_name}_trace_idx
-    ON {table_name} (trace_id);
 """.strip()
 
 
@@ -13241,7 +13011,7 @@ def _tokens(text: str) -> list[str]:
 
 def oracle_text_terms(query: str, *, settings: Settings | None = None) -> list[str]:
     """全文検索（Oracle Text）の語。検索と同じ分割で、診断に出す（#588）。"""
-    from docrag.retrieval.text_search_tokenizer import tokenize_text_search_query
+    from rag_engine.retrieval.text_search_tokenizer import tokenize_text_search_query
 
     return tokenize_text_search_query(query, domain_keywords=_text_search_domain_keywords(settings))
 
@@ -13249,12 +13019,12 @@ def oracle_text_terms(query: str, *, settings: Settings | None = None) -> list[s
 def _oracle_text_query(query: str, *, settings: Settings | None = None) -> str | None:
     """質問文から Oracle Text の CONTAINS の query を作る（#588）。
 
-    分割は docrag の 1 つの方式（Sudachi の C / A を主に、文字種の区切り・漢字の部分語・
+    分割は rag_engine の 1 つの方式（Sudachi の C / A を主に、文字種の区切り・漢字の部分語・
     送り仮名を除いた形を補う。Sudachi が無ければ文字種の区切りだけ）。業務ビューの
     ドメインキーワードは 1 語として優先する。語は重み付きの ``ACCUM`` で結ぶ。
     索引の側（WORLD_LEXER）は変えない。
     """
-    from docrag.retrieval.text_search_tokenizer import oracle_text_query_for_question
+    from rag_engine.retrieval.text_search_tokenizer import oracle_text_query_for_question
 
     return (
         oracle_text_query_for_question(
