@@ -2001,7 +2001,8 @@ test("ユーザー作成の problem field error は入力直下だけに表示�
   const conflictMessage = "このログインユーザーIDは既に使用されています。別のIDを入力してください。";
   await expect(page.getByText(conflictMessage, { exact: true })).toHaveCount(1);
   await expect(loginInput).toHaveAttribute("aria-invalid", "true");
-  await expect(loginInput).toHaveAttribute("aria-describedby", "security-user-login-user-id-error");
+  // エラーは共有の TextField が欄の下に出し、aria-describedby で結び付ける（id は useId を含む。#631）。
+  await expect(loginInput).toHaveAccessibleDescription(/このログインユーザーIDは既に使用されています。/);
   await expect(loginInput).toBeFocused();
   await expect(page.getByTestId("security-users-save-error").getByText(conflictMessage, { exact: true })).toHaveCount(0);
 
@@ -3044,7 +3045,8 @@ test("ロールコード競合はコード欄へ結び付き、403 は安全な�
     "SYSTEM_ADMIN は組み込みロール専用のコードです。別のロールコードを入力してください。";
   await expect(page.getByText(reservedMessage, { exact: true })).toHaveCount(1);
   await expect(roleCode).toHaveAttribute("aria-invalid", "true");
-  await expect(roleCode).toHaveAttribute("aria-describedby", "security-role-code-error");
+  // エラーは共有の TextField が欄の下に出し、aria-describedby で結び付ける（id は useId を含む。#631）。
+  await expect(roleCode).toHaveAccessibleDescription(/SYSTEM_ADMIN は組み込みロール専用のコードです。/);
   await expect(roleCode).toBeFocused();
   expect(submitCount).toBe(0);
 
@@ -3056,7 +3058,7 @@ test("ロールコード競合はコード欄へ結び付き、403 は安全な�
   const conflictMessage = "このロールコードは既に使用されています。別のコードを入力してください。";
   await expect(page.getByText(conflictMessage, { exact: true })).toHaveCount(1);
   await expect(roleCode).toHaveAttribute("aria-invalid", "true");
-  await expect(roleCode).toHaveAttribute("aria-describedby", "security-role-code-error");
+  await expect(roleCode).toHaveAccessibleDescription(/このロールコードは既に使用されています。/);
   await expect(roleCode).toBeFocused();
   await expect(saveError.getByText(conflictMessage, { exact: true })).toHaveCount(0);
 
