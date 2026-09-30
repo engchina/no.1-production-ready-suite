@@ -328,6 +328,17 @@ def _named_screen_first(
     return matched + [record for record in records if not named(record)]
 
 
+def _rerank_skip_reason(records: Sequence[AnswerRecord], settings: Settings | None, *, enabled: bool) -> str:
+    """rerank を実行しない理由。実行するなら空文字。"""
+    if not enabled:
+        return "無効の設定"
+    if settings is None or not _rerank_configured(settings):
+        return "モデルまたはコンパートメントが未設定"
+    if not records:
+        return "対象の根拠なし"
+    return ""
+
+
 def _rerank_records(
     question: str,
     records: Sequence[AnswerRecord],
@@ -337,10 +348,15 @@ def _rerank_records(
     enabled: bool,
     candidate_limit: int | None,
 ) -> list[AnswerRecord]:
-    """rerank 本体。無効・未設定・失敗時は取得順を保持する。"""
-    if not enabled or settings is None or not records or not _rerank_configured(settings):
-        step.status = "未実行"
-        step.add("設定が無効・未設定、または対象の根拠がないため、取得順を保持します。")
+    """rerank 本体。無効・未設定・失敗時は取得順を保持する。
+
+    実行しなかったときは、実行記録の状態に理由を付ける（「未実行: 無効の設定」など）。画面は状態をそのまま出すため、
+    実行した（complete）と実行しなかった理由を見分けられる。
+    """
+    skip_reason = _rerank_skip_reason(records, settings, enabled=enabled)
+    if skip_reason:
+        step.status = f"未実行: {skip_reason}"
+        step.add(f"rerank を実行せず、取得順を保持します（{skip_reason}）。")
         return list(records)
 
     candidate_count = len(records) if candidate_limit is None else min(len(records), max(1, int(candidate_limit)))
@@ -348,7 +364,7 @@ def _rerank_records(
     remainder = list(records[candidate_count:])
     protected_candidates, rerankable_candidates, rerankable_indices = _split_text_rerank_candidates(candidates)
     if not rerankable_candidates:
-        step.status = "未実行"
+        step.status = "未実行: 並べ替える本文なし"
         step.add("並べ替え対象のテキストがありません。")
         return [protected_candidates[index] for index in sorted(protected_candidates)] + remainder
     step.add(f"関連度で並べ替える根拠: {len(rerankable_candidates)} 件")
