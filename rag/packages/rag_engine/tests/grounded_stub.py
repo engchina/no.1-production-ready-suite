@@ -41,7 +41,7 @@ def stub_generation(testcase, target: str = "rag_engine.generation.answering.syn
         if mode == "vision_attachments":
             output = answering.parse_multimodal_response(
                 grounded.GENERATE_SYSTEM_PROMPT, prompt, [i["prompt_path"] for i in images if i.get("prompt_path")], settings,
-                AnswerOutput, provider_id=provider)
+                AnswerOutput, provider_id=settings.default_vision_llm)  # 画像の回は既定の Vision モデル（#649）
         else:
             output = answering.parse_text_response(grounded.GENERATE_SYSTEM_PROMPT, prompt, settings, AnswerOutput, provider_id=provider)
         response = answering._normalize_answer_response(answering.AnswerResponse(

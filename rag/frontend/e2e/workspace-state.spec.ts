@@ -176,13 +176,18 @@ test.describe("作業状態の保持", () => {
     await selectBusinessView(page, /経理ビュー/);
     await page.locator("#search-query").fill("交通費の上限");
     await page.getByText("詳細条件", { exact: true }).click();
-    await page.getByRole("combobox", { name: "内容種別" }).click();
-    await page.getByRole("option", { name: "表", exact: true }).click();
+    await page.getByRole("combobox", { name: "候補取得数" }).click();
+    await page.getByRole("option", { name: "50", exact: true }).click();
+    await page.getByRole("switch", { name: "LLM で回答を生成する" }).click();
 
     const expectRestored = async () => {
       await expect(page.locator("#search-query")).toHaveValue("交通費の上限");
       await expect(page.getByRole("button", { name: /対象の業務ビュー/ })).toContainText("経理ビュー");
-      await expect(page.getByRole("combobox", { name: "内容種別" })).toContainText("表");
+      await expect(page.getByRole("combobox", { name: "候補取得数" })).toContainText("50");
+      await expect(page.getByRole("switch", { name: "LLM で回答を生成する" })).toHaveAttribute(
+        "aria-checked",
+        "true"
+      );
     };
 
     await openFromSidebar(page, "チャット");

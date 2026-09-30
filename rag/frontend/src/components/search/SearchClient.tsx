@@ -12,6 +12,7 @@ import {
   CardTitle,
   SelectField,
   type SelectFieldOption,
+  Switch,
   TextField,
   TimedLoadingState,
   Skeleton,
@@ -77,6 +78,8 @@ interface Meta {
 }
 
 interface SearchRun {
+  /** この実行で回答を生成したか（実行後にスイッチを変えても表示は実行時のまま）。 */
+  generateAnswer: boolean;
   startedAtMs: number;
   startedAtIso: string;
   endedAtMs: number | null;
@@ -84,48 +87,18 @@ interface SearchRun {
   stages: SearchStageEvent[];
 }
 
-const CONTENT_KIND_OPTIONS = [
-  "",
-  "text",
-  "list",
-  "table",
-  "figure",
-  "equation",
-  "code",
-  "email",
-  "slide",
-  "sheet",
-  "field",
-  "section_summary",
-] as const;
-type ContentKindFilter = (typeof CONTENT_KIND_OPTIONS)[number];
 const TOP_K_OPTIONS = ["5", "10", "20", "50"] as const;
 const DEFAULT_TOP_K = "20";
 type TopKOption = (typeof TOP_K_OPTIONS)[number];
-const CONTENT_KIND_LABEL: Record<ContentKindFilter, Parameters<typeof t>[0]> = {
-  "": "search.filters.contentKind.all",
-  text: "search.filters.contentKind.text",
-  list: "search.filters.contentKind.list",
-  table: "search.filters.contentKind.table",
-  figure: "search.filters.contentKind.figure",
-  equation: "search.filters.contentKind.equation",
-  code: "search.filters.contentKind.code",
-  email: "search.filters.contentKind.email",
-  slide: "search.filters.contentKind.slide",
-  sheet: "search.filters.contentKind.sheet",
-  field: "search.filters.contentKind.field",
-  section_summary: "search.filters.contentKind.section_summary",
-};
-const CONTENT_KIND_SELECT_OPTIONS = CONTENT_KIND_OPTIONS.map((option) => ({
-  value: option,
-  label: t(CONTENT_KIND_LABEL[option]),
-})) satisfies SelectFieldOption<ContentKindFilter>[];
 const TOP_K_SELECT_OPTIONS = TOP_K_OPTIONS.map((option) => ({
   value: option,
   label: option,
 })) satisfies SelectFieldOption<TopKOption>[];
 
-/** RAG 検索画面。回答を SSE でストリーミング表示する。 */
+/**
+ * RAG 検索画面。チャットと同じ工程（質問の理解・拡張・検索・rerank）で検索し、既定は検索結果までを表示する。
+ * 「LLM で回答を生成する」をオンにしたときだけ、チャットと同じく回答（CRAG を含む）まで行う（#649）。
+ */
 export function SearchClient() {
   // 入力中の質問・業務ビュー・詳細条件は、ページを行き来しても再読込しても残す（workspace-state.md）。
   // 回答・引用などの結果は保存せず、戻っただけで検索を送り直さない。
@@ -136,13 +109,6 @@ export function SearchClient() {
   const [citations, setCitations] = useState<RetrievedChunk[]>([]);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [errorText, setErrorText] = useState("");
-  const [contentKind, setContentKind] = useWorkspaceState<ContentKindFilter>(
-    "search.contentKind",
-    "",
-    isOneOf(CONTENT_KIND_OPTIONS)
-  );
-  const [sectionTitle, setSectionTitle] = useWorkspaceState("search.sectionTitle", "");
-  const [sectionPath, setSectionPath] = useWorkspaceState("search.sectionPath", "");
   const [classification, setClassification] = useWorkspaceState<ClassificationFilterValues>(
     "search.classification",
     EMPTY_CLASSIFICATION_FILTERS,
@@ -158,7 +124,8 @@ export function SearchClient() {
   const [extractionOpen, setExtractionOpen] = useState(false);
   const [topK, setTopK] = useWorkspaceState<TopKOption>("search.topK", DEFAULT_TOP_K, isOneOf(TOP_K_OPTIONS));
   const [advancedOpen, setAdvancedOpen] = useWorkspaceState("search.advancedOpen", false);
-  const [sectionFiltersOpen, setSectionFiltersOpen] = useState(false);
+  // 回答の生成は既定でオフ（検索結果までを表示する。#649）。選んだ値は作業状態に残す。
+  const [generateAnswer, setGenerateAnswer] = useWorkspaceState("search.generateAnswer", false);
   const [appliedFilters, setAppliedFilters] = useState<Record<string, string>>({});
   // 対象の業務ビューは 1 つ（#635）。チャットと同じく ID を 1 つだけ作業状態に残す。
   const [businessViewId, setBusinessViewId] = useWorkspaceState<string | null>(
@@ -194,7 +161,6 @@ export function SearchClient() {
   useEffect(() => {
     if (businessViewMissing) setBusinessViewId(null);
   }, [businessViewMissing, setBusinessViewId]);
-  const hasSectionFilters = Boolean(sectionTitle.trim()) || Boolean(sectionPath.trim());
   const hasClassificationFilters = Object.values(classification).some((value) => value.trim());
   const hasExtractionFieldFilters = extractionRows.some(isActiveExtractionFieldFilterRow);
   const extractionFieldsQuery = useSearchExtractionFields(
@@ -205,13 +171,11 @@ export function SearchClient() {
     extractionRows,
     extractionFieldsQuery.data?.fields
   );
-  const hasFilters =
-    Boolean(contentKind) || hasSectionFilters || hasClassificationFilters || hasExtractionFieldFilters;
+  const hasFilters = hasClassificationFilters || hasExtractionFieldFilters;
   // 開閉は利用者の操作だけで決める。閉じていても条件は効くので、見出しに「設定中」を出す（#461）。
   const classificationVisible = classificationOpen;
   const hasSearchTuning = topK !== DEFAULT_TOP_K;
   const hasAdvancedSettings = hasFilters || hasSearchTuning;
-  const sectionFiltersVisible = sectionFiltersOpen;
 
   const runSubmit = async (skipFaq: boolean) => {
     const trimmed = query.trim();
@@ -259,6 +223,7 @@ export function SearchClient() {
     setErrorText("");
     setAnswerBusinessViewId(businessViewId);
     setRun({
+      generateAnswer,
       startedAtMs,
       startedAtIso: new Date(startedAtMs).toISOString(),
       endedAtMs: null,
@@ -268,9 +233,6 @@ export function SearchClient() {
 
     try {
       const filters = buildSearchFilters({
-        contentKind,
-        sectionTitle,
-        sectionPath,
         classification,
         extractionFields: extractionFieldFilterValue(fieldFilter.conditions),
       });
@@ -280,6 +242,7 @@ export function SearchClient() {
           query: trimmed,
           top_k: Number(topK),
           business_view_id: businessViewId,
+          generate_answer: generateAnswer,
           ...(Object.keys(filters).length ? { filters } : {}),
         },
         {
@@ -360,19 +323,16 @@ export function SearchClient() {
     );
   };
   const clearFilters = () => {
-    setContentKind("");
-    setSectionTitle("");
-    setSectionPath("");
     setClassification(EMPTY_CLASSIFICATION_FILTERS);
     setClassificationOpen(false);
     setExtractionRows([]);
     setExtractionOpen(false);
     setTopK(DEFAULT_TOP_K);
     setAdvancedOpen(false);
-    setSectionFiltersOpen(false);
   };
 
   const noResults = phase === "done" && citations.length === 0;
+  const answerMode = run?.generateAnswer ?? false;
   const isStreaming = phase === "streaming";
   const feedbackSnapshot = buildFeedbackContentSnapshot(submittedQuery, answer, citations);
 
@@ -492,60 +452,6 @@ export function SearchClient() {
                     />
                   </div>
 
-                  <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
-                    <SelectField
-                      id="search-content-kind"
-                      label={t("search.filters.contentKind")}
-                      value={contentKind}
-                      options={CONTENT_KIND_SELECT_OPTIONS}
-                      onValueChange={setContentKind}
-                      className="[&_label]:text-xs"
-                      buttonClassName="bg-surface"
-                    />
-
-                    <div className="rounded-md border border-border bg-surface">
-                      <button
-                        type="button"
-                        aria-expanded={sectionFiltersVisible}
-                        aria-controls="search-section-filters"
-                        onClick={() => setSectionFiltersOpen((open) => !open)}
-                        className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                      >
-                        <span>{t("search.filters.sectionGroup")}</span>
-                        <span className="flex items-center gap-2">
-                          {!sectionFiltersVisible && hasSectionFilters ? (
-                            <StatusBadge variant="info" label={t("search.filters.active")} />
-                          ) : null}
-                          <DisclosureChevron expanded={sectionFiltersVisible} size={14} className="text-fg-muted" />
-                        </span>
-                      </button>
-                      {sectionFiltersVisible ? (
-                        <div id="search-section-filters" className="space-y-3 border-t border-border p-3">
-                          <p className="text-xs leading-relaxed text-fg-muted">
-                            {t("search.filters.sectionHelper")}
-                          </p>
-                          <div className="grid gap-3 md:grid-cols-2">
-                            <TextField
-                              id="search-section-title"
-                              label={t("search.filters.sectionTitle")}
-                              value={sectionTitle}
-                              onValueChange={setSectionTitle}
-                              placeholder={t("search.filters.sectionTitlePlaceholder")}
-                            />
-
-                            <TextField
-                              id="search-section-path"
-                              label={t("search.filters.sectionPath")}
-                              value={sectionPath}
-                              onValueChange={setSectionPath}
-                              placeholder={t("search.filters.sectionPathPlaceholder")}
-                            />
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-
                   <div className="rounded-md border border-border bg-surface">
                     <button
                       type="button"
@@ -646,6 +552,25 @@ export function SearchClient() {
                 ) : null}
               </div>
 
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p id="search-generate-answer-label" className="text-sm font-medium text-fg">
+                    {t("search.generateAnswer.label")}
+                  </p>
+                  <p id="search-generate-answer-help" className="mt-0.5 text-xs leading-relaxed text-fg-muted">
+                    {t("search.generateAnswer.help")}
+                  </p>
+                </div>
+                <Switch
+                  checked={generateAnswer}
+                  onCheckedChange={setGenerateAnswer}
+                  disabled={isStreaming}
+                  aria-labelledby="search-generate-answer-label"
+                  aria-describedby="search-generate-answer-help"
+                  data-testid="search-generate-answer"
+                />
+              </div>
+
               {/* フォームの操作行（buttons.md §3.1 / §5.2.1）。検索と停止は同じボタンで、実行中は同じ位置で「停止」になる。 */}
               <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center">
                 <RunStopButton
@@ -698,12 +623,16 @@ export function SearchClient() {
                 </div>
               ) : null}
 
-              {/* 回答 */}
+              {/* 回答、または検索の実行（工程・使ったモデル・根拠の構成）。回答はスイッチがオンのときだけ（#649）。 */}
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    <Sparkles size={16} className="text-accent-fg" aria-hidden />
-                    {t("search.answer")}
+                    {answerMode ? (
+                      <Sparkles size={16} className="text-accent-fg" aria-hidden />
+                    ) : (
+                      <SearchIcon size={16} className="text-accent-fg" aria-hidden />
+                    )}
+                    {answerMode ? t("search.answer") : t("search.run.card")}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -715,13 +644,23 @@ export function SearchClient() {
                     />
                   ) : null}
                   <ActiveFilterChips filters={appliedFilters} />
-                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">
-                    {answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
-                    {isStreaming ? (
-                      <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent-emphasis align-middle" />
-                    ) : null}
-                  </p>
-                  {meta && phase === "done" ? (
+                  {answerMode ? (
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">
+                      {answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
+                      {isStreaming ? (
+                        <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent-emphasis align-middle" />
+                      ) : null}
+                    </p>
+                  ) : (
+                    <>
+                      {/* 回答を作らないとき、本文は検索できなかった理由（検索の準備が無いなど）だけが届く。 */}
+                      {answer ? <Banner severity="warning">{answer}</Banner> : null}
+                      {phase === "cancelled" ? (
+                        <p className="text-sm text-fg-muted">{t("search.cancelledHint")}</p>
+                      ) : null}
+                    </>
+                  )}
+                  {answerMode && meta && phase === "done" ? (
                     <FeedbackControls
                       traceId={meta.trace_id}
                       businessViewId={answerBusinessViewId}
@@ -734,7 +673,14 @@ export function SearchClient() {
                     <SearchExecutionMeta meta={meta} />
                   ) : null}
                   {meta && phase === "done" && meta.diagnostics?.answer ? (
-                    <AnswerDetailsPanel diagnostics={meta.diagnostics.answer} traceId={meta.trace_id} />
+                    answerMode ? (
+                      <AnswerDetailsPanel diagnostics={meta.diagnostics.answer} traceId={meta.trace_id} />
+                    ) : (
+                      <AnswerDetailsPanel
+                        diagnostics={meta.diagnostics.answer}
+                        title={t("search.answerDetails.searchTitle")}
+                      />
+                    )
                   ) : null}
                 </CardContent>
               </Card>
@@ -748,9 +694,12 @@ export function SearchClient() {
                 </Card>
               ) : citations.length > 0 ? (
                 <section>
-                  <h2 className="mb-3 text-sm font-semibold text-fg">
-                    {t("search.citations")}（{citations.length}）
+                  <h2 className={answerMode ? "mb-3 text-sm font-semibold text-fg" : "mb-1 text-sm font-semibold text-fg"}>
+                    {answerMode ? t("search.citations") : t("search.results")}（{citations.length}）
                   </h2>
+                  {answerMode ? null : (
+                    <p className="mb-3 text-xs leading-relaxed text-fg-muted">{t("search.results.hint")}</p>
+                  )}
                   <ul className="bounded-scroll-area-lg space-y-2 pr-1">
                     {citations.map((chunk, i) => (
                       <CitationCard
@@ -805,7 +754,8 @@ function SearchRunPanel({
         stages={run.stages}
         startedAtMs={run.startedAtMs}
         finishedAtMs={run.endedAtMs}
-        finalLabel={runFinishedLabel(phase)}
+        finalLabel={runFinishedLabel(phase, run.generateAnswer)}
+        generateAnswer={run.generateAnswer}
         testId="search-run-progress"
       />
       <dl className="grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
@@ -852,10 +802,14 @@ function SearchRunMetric({
   );
 }
 
-function runFinishedLabel(phase: Phase): string {
-  if (phase === "cancelled") return t("search.run.finished.cancelled");
-  if (phase === "error") return t("search.run.finished.error");
-  return t("search.run.finished.done");
+function runFinishedLabel(phase: Phase, generateAnswer: boolean): string {
+  if (phase === "cancelled") {
+    return t(generateAnswer ? "search.run.finished.cancelled" : "search.run.finished.searchCancelled");
+  }
+  if (phase === "error") {
+    return t(generateAnswer ? "search.run.finished.error" : "search.run.finished.searchError");
+  }
+  return t(generateAnswer ? "search.run.finished.done" : "search.run.finished.searchDone");
 }
 
 function stageLabel(stage: string): string {
@@ -942,26 +896,6 @@ function ActiveFilterChips({ filters }: { filters: Record<string, string> }) {
 
 function activeFilterChips(filters: Record<string, string>) {
   return [
-    filters.content_kind
-      ? {
-          key: "content_kind",
-          label: t("search.filters.appliedContentKind", {
-            value: contentKindFilterLabel(filters.content_kind),
-          }),
-        }
-      : null,
-    filters.section_title
-      ? {
-          key: "section_title",
-          label: t("search.filters.appliedSectionTitle", { value: filters.section_title }),
-        }
-      : null,
-    filters.section_path
-      ? {
-          key: "section_path",
-          label: t("search.filters.appliedSectionPath", { value: filters.section_path }),
-        }
-      : null,
     ...CLASSIFICATION_FILTER_KEYS.map((key) =>
       filters[key]
         ? {
@@ -990,12 +924,6 @@ function extractionFieldConditionLabel(condition: ExtractionFieldCondition): str
   return t(`search.filters.fields.applied.${condition.op}`, { name: condition.name, value });
 }
 
-function contentKindFilterLabel(value: string): string {
-  return CONTENT_KIND_OPTIONS.includes(value as ContentKindFilter)
-    ? t(CONTENT_KIND_LABEL[value as ContentKindFilter])
-    : value;
-}
-
 /** 実行の記録（経過時間と trace）。検索の内訳は回答エンジンの記録（AnswerDetailsPanel）が出す。 */
 function SearchExecutionMeta({ meta }: { meta: Meta }) {
   return (
@@ -1013,22 +941,13 @@ function SearchExecutionMeta({ meta }: { meta: Meta }) {
 }
 
 function buildSearchFilters({
-  contentKind,
-  sectionTitle,
-  sectionPath,
   classification,
   extractionFields,
 }: {
-  contentKind: ContentKindFilter;
-  sectionTitle: string;
-  sectionPath: string;
   classification: ClassificationFilterValues;
   extractionFields: string;
 }): Record<string, string> {
   const filters: Record<string, string> = {};
-  if (contentKind) filters.content_kind = contentKind;
-  if (sectionTitle.trim()) filters.section_title = sectionTitle.trim();
-  if (sectionPath.trim()) filters.section_path = sectionPath.trim();
   for (const key of CLASSIFICATION_FILTER_KEYS) {
     if (classification[key].trim()) filters[key] = classification[key].trim();
   }

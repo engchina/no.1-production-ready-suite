@@ -1,6 +1,12 @@
 import { expect, type Page, type Route, test } from "@playwright/test";
 
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
+import {
+  enableSearchAnswer,
+  expectNoPageOverflow,
+  mockDatabaseReady,
+  mockLocalAuth,
+  selectBusinessView,
+} from "./_helpers";
 
 /**
  * RAG 検索のレビューで直した不具合の回帰テスト（#285）。
@@ -75,6 +81,7 @@ async function fulfillStream(route: Route, body: string) {
 }
 
 async function search(page: Page, query: string) {
+  await enableSearchAnswer(page);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill(query);
   await page.getByRole("button", { name: "検索", exact: true }).click();
 }
@@ -247,7 +254,7 @@ test("類似 FAQ を使わずに生成した検索の再試行は FAQ を出し�
   await page.goto("/search");
   await selectBusinessView(page, /経理ビュー/);
   await search(page, "交通費の上限");
-  await page.getByRole("button", { name: "類似問を使用しない（通常の回答生成）" }).click();
+  await page.getByRole("button", { name: "類似問を使用しない" }).click();
 
   const alert = page.getByRole("alert").filter({ hasText: "リクエスト数が上限を超えました" });
   await expect(alert).toBeVisible();
@@ -284,20 +291,20 @@ test("詳細条件は条件を設定したままでも閉じられ、閉じる�
 
   await advanced.click();
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
-  await page.getByRole("combobox", { name: "内容種別" }).click();
-  await page.getByRole("option", { name: "表", exact: true }).click();
+  await page.getByRole("combobox", { name: "候補取得数" }).click();
+  await page.getByRole("option", { name: "50", exact: true }).click();
 
   // 条件があっても閉じられる。閉じている間は「設定中」で条件が効いていることを示す。
   await advanced.click();
   await expect(advanced).toHaveAttribute("aria-expanded", "false");
-  await expect(page.getByRole("combobox", { name: "内容種別" })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "候補取得数" })).toHaveCount(0);
   await expect(advanced).toContainText("設定中");
 
   // キーボード（Space / Enter）でも開閉できる。
   await advanced.focus();
   await page.keyboard.press("Space");
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByRole("combobox", { name: "内容種別" })).toContainText("表");
+  await expect(page.getByRole("combobox", { name: "候補取得数" })).toContainText("50");
   await expect(advanced).not.toContainText("設定中");
   await page.keyboard.press("Enter");
   await expect(advanced).toHaveAttribute("aria-expanded", "false");

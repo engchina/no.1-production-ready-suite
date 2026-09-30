@@ -12,21 +12,48 @@ export function AnswerDetailsPanel({
   diagnostics,
   traceId,
   evaluation,
+  title = t("search.answerDetails.title"),
 }: {
   diagnostics: unknown;
   traceId?: string | null;
   evaluation?: unknown;
+  /** 回答を作らない RAG 検索では「検索の〜」にする（#649）。 */
+  title?: string;
 }) {
   const data = parseAnswerDiagnostics(diagnostics);
   if (!data) return null;
+  const models = [
+    data.models.llm
+      ? {
+          key: "llm",
+          label: t("search.answerDetails.model.llm"),
+          value: data.models.llm.label,
+          title: data.models.llm.modelId,
+        }
+      : null,
+    data.models.vision
+      ? {
+          key: "vision",
+          label: t("search.answerDetails.model.vision"),
+          value: data.models.vision.label,
+          title: data.models.vision.modelId,
+        }
+      : null,
+    data.models.embedding
+      ? { key: "embedding", label: t("search.answerDetails.model.embedding"), value: data.models.embedding }
+      : null,
+    data.models.rerank
+      ? { key: "rerank", label: t("search.answerDetails.model.rerank"), value: data.models.rerank }
+      : null,
+  ].flatMap((item) => (item ? [item] : []));
   return (
     <section
       className="space-y-3 border-t border-border pt-3"
-      aria-label={t("search.answerDetails.title")}
+      aria-label={title}
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-semibold text-fg">
-          {t("search.answerDetails.title")}
+          {title}
         </span>
         {data.confidence ? (
           <StatusBadge
@@ -41,6 +68,24 @@ export function AnswerDetailsPanel({
           />
         ) : null}
       </div>
+      {models.length ? (
+        <div
+          className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs"
+          data-testid="answer-models"
+        >
+          <span className="font-medium text-fg-muted">{t("search.answerDetails.models")}</span>
+          <dl className="contents">
+            {models.map((model) => (
+              <div key={model.key} className="flex min-w-0 items-center gap-1.5">
+                <dt className="text-fg-muted">{model.label}</dt>
+                <dd className="break-all font-medium text-fg" title={model.title}>
+                  {model.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      ) : null}
       {data.rewrittenQuestion ? (
         <p className="break-words text-xs leading-relaxed text-fg-muted">
           {t("search.answerDetails.rewritten", { question: data.rewrittenQuestion })}

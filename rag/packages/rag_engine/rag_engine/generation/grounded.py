@@ -2201,7 +2201,8 @@ def _audit_function_context(span: dict) -> str:
 def run_round(question: str, spans: Sequence[dict], settings: Any, *, prompt: str,
               image_paths: Sequence[str], provider_id: str | None,
               parse_text: Callable[..., Any], parse_images: Callable[..., Any],
-              previous: Sequence[CheckedItem] = (), known_gaps: Sequence[str] = ()) -> Round:
+              previous: Sequence[CheckedItem] = (), known_gaps: Sequence[str] = (),
+              image_provider_id: str | None = None) -> Round:
     """生成1回と監査1回。根拠があれば、監査する言い換えがない草稿（gap だけ・全 item が降格）も監査する。
 
     引用した回答の正しさだけでなく「引用せずに拒答した判断」も独立に検査するため、items が空でも監査を呼び、
@@ -2209,10 +2210,11 @@ def run_round(question: str, spans: Sequence[dict], settings: Any, *, prompt: st
     item がない round の summary は、監査が支持しても公開しない（items の裏付けがない）。
     LLM 呼出は呼出元から受け取る。注入境界と既存テストの差し替え位置を1か所に保つ。
     known_gaps は監査入力にも渡し、既知の欠落だけを理由に off_target と判定させない (#986)。
+    画像を添付する生成は ``image_provider_id``（既定の Vision モデル）、それ以外は ``provider_id`` で呼ぶ (#649)。
     """
     if image_paths:
         draft = parse_images(GENERATE_SYSTEM_PROMPT, prompt, list(image_paths), settings, GroundedDraft,
-                             provider_id=provider_id)
+                             provider_id=image_provider_id or provider_id)
     else:
         draft = parse_text(GENERATE_SYSTEM_PROMPT, prompt, settings, GroundedDraft, provider_id=provider_id)
     checked, dropped = verify(question, draft, spans)

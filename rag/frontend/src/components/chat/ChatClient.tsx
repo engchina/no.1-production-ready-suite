@@ -142,7 +142,6 @@ function AssistantColumn({
   savedAnswer = false,
   progress = null,
   onRetry,
-  showLabel,
   className,
 }: {
   label: string | null;
@@ -161,7 +160,6 @@ function AssistantColumn({
   progress?: { stages: AnswerStageEvent[]; startedAtMs: number } | null;
   /** 失敗した回答をもう一度送信する（最新の質問だけ）。 */
   onRetry?: () => void;
-  showLabel: boolean;
   className?: string;
 }) {
   const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
@@ -173,12 +171,13 @@ function AssistantColumn({
         className
       )}
     >
-      {showLabel && label ? (
+      {label ? (
+        // 1 列（既定のモデル）でも、どのモデルの回答かを出す（#649）。
         <h3
           className="truncate border-b border-border pb-2 text-sm font-semibold text-fg"
           title={label}
         >
-          {label}
+          {t("chat.column.model", { name: label })}
         </h3>
       ) : null}
       {errorMessage ? (
@@ -335,7 +334,6 @@ function MessageTurn({
             savedAnswer={column.savedAnswer}
             progress={column.progress}
             onRetry={column.errorMessage ? onRetry : undefined}
-            showLabel={compare}
             className={
               compare && columns.length % 2 === 1 && index === columns.length - 1
                 ? "col-span-full"
@@ -442,6 +440,7 @@ export function ChatClient() {
   const confirm = useConfirm();
   const compareModelsQuery = useCompareModels();
   const compareModels = compareModelsQuery.data ?? [];
+  const modelLabels = new Map(compareModels.map((model) => [model.model_id, model.display_name]));
 
   const [composer, setComposer] = useWorkspaceState("chat.composer", "");
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
@@ -1027,7 +1026,8 @@ export function ChatClient() {
                       }
                       columns={turn.replies.map((reply) => ({
                         key: reply.message_id,
-                        label: reply.model,
+                        // 保存した回答は model_id を持つ。生成中と同じ表示名に引き直す（#649）。
+                        label: reply.model ? (modelLabels.get(reply.model) ?? reply.model) : null,
                         answer: reply.content,
                         citations: reply.citations,
                         traceId: reply.trace_id,
@@ -1066,6 +1066,12 @@ export function ChatClient() {
                       {model.display_name}
                     </ToggleChip>
                   ))}
+                  {/* 未選択のときにどのモデルで答えるかを示す（backend は一覧の先頭＝既定のモデルで答える）。 */}
+                  {selectedModelIds.length === 0 ? (
+                    <span className="text-xs text-fg-muted" data-testid="chat-default-model">
+                      {t("chat.compare.default", { name: compareModels[0].display_name })}
+                    </span>
+                  ) : null}
                 </div>
               ) : null}
               {/* 入力欄と送信の行。送信は入力欄の下端にそろえ、375px では下に全幅で置く（#613）。 */}

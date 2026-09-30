@@ -991,6 +991,8 @@ export interface SearchRequestBody {
   business_view_id?: string | null;
   /** 回答を作らずに検索だけを行う(LLM を呼ばない。#593)。 */
   retrieval_only?: boolean;
+  /** false なら回答を生成しない（RAG 検索の画面。CRAG と回答の LLM を使わない。#649）。 */
+  generate_answer?: boolean;
 }
 
 export interface RetrievedChunk {

@@ -55,10 +55,16 @@ export function currentAnswerStage(events: readonly AnswerStageEvent[]): string 
   return active.length ? active[active.length - 1] : last;
 }
 
-/** 回答生成中の表示の文言（「回答を生成しています（今の工程）」）。 */
-export function answerProgressLabel(events: readonly AnswerStageEvent[]): string {
+/**
+ * 回答生成中の表示の文言（「回答を生成しています（今の工程）」）。回答を作らない RAG 検索は
+ * 「検索しています（今の工程）」（#649）。
+ */
+export function answerProgressLabel(
+  events: readonly AnswerStageEvent[],
+  { generateAnswer = true }: { generateAnswer?: boolean } = {}
+): string {
   const stage = currentAnswerStage(events);
-  return t("answer.progress.label", {
+  return t(generateAnswer ? "answer.progress.label" : "answer.progress.searchLabel", {
     stage: stage ? answerStageLabel(stage) : t("answer.progress.preparing"),
   });
 }

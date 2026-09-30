@@ -668,6 +668,12 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
     generated_queries: [],
     execution_steps: [{ name: "質問の理解", status: "complete", elapsed_seconds: 0.2, llm_calls: 0 }],
     evidence_tree: [],
+    models: {
+      llm: { model_id: "m1", label: "MODEL 1" },
+      vision: { model_id: "vlm-1", label: "VISION 1" },
+      embedding: "cohere.embed-v4.0",
+      rerank: "cohere.rerank-v4.0-fast",
+    },
   };
   const streamBody = [
     sseStart,
@@ -688,6 +694,14 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await expect(panel).toBeVisible();
   await expect(panel.getByText("会話の流れから補った質問: 経費精算の上限額は？")).toBeVisible();
   await expect(panel.getByText("信頼度: high")).toBeVisible();
+  // 1 列（既定のモデル）でも、どのモデルの回答か・使ったモデルを出す（#649）。
+  await expect(page.getByRole("heading", { name: "回答モデル: MODEL 1" })).toBeVisible();
+  const models = panel.getByTestId("answer-models");
+  await expect(models).toContainText("使用したモデル");
+  await expect(models).toContainText("MODEL 1");
+  await expect(models).toContainText("VISION 1");
+  await expect(models).toContainText("cohere.embed-v4.0");
+  await expect(models).toContainText("cohere.rerank-v4.0-fast");
 });
 
 test("IME の変換を確定する Enter では送信しない（#459）", async ({ page }) => {

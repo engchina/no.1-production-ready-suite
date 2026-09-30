@@ -232,6 +232,25 @@ class AnswerExecutionTests(unittest.TestCase):
         self.assertNotIn("回答文の生成（", result.question_display)
         self.parse.assert_not_called()
 
+    def test_retrieval_without_answer_skips_crag_and_generation(self):
+        # CRAG を指定していても、検索だけのときは評価も回答の生成もしない（LLM を呼ばない）。
+        result = self.run_answer(answer_flow=generation.CRAG_ANSWER_FLOW_LABEL, generate_answer=False)
+        self.search.assert_called_once()
+        self.parse.assert_not_called()
+        self.assertEqual(result.answer_text, "")
+        self.assertEqual(result.answer_flow, generation.STANDARD_ANSWER_FLOW)
+        self.assertEqual(len(result.evidence_items), 1)
+        self.assertRegex(result.question_display, heading("文書検索"))
+        self.assertNotRegex(result.question_display, heading("回答生成フロー"))
+        self.assertNotRegex(result.question_display, heading("根拠確認（1回目）"))
+
+    def test_retrieval_without_answer_reports_search_unavailable(self):
+        self.search.side_effect = generation.AdbHybridSearchUnavailable("search unavailable")
+        result = self.run_answer(generate_answer=False)
+        self.assertIn("search unavailable", result.answer_text)
+        self.assertEqual(result.evidence_items, ())
+        self.parse.assert_not_called()
+
     def test_adb_preflight_failure_does_not_run_expansion(self):
         with patch.object(generation, "check_adb_hybrid_search_ready",
                           side_effect=generation.AdbHybridSearchUnavailable("not ready")):

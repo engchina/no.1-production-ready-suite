@@ -223,6 +223,13 @@ class SearchRequest(BaseModel):
             "使う(#593)。"
         ),
     )
+    generate_answer: bool = Field(
+        default=True,
+        description=(
+            "False なら回答を生成しない(RAG 検索の画面。#649)。質問の理解・拡張・検索・rerank"
+            "まではチャットと同じ工程で行い、CRAG と回答の生成(LLM)はしない。"
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod

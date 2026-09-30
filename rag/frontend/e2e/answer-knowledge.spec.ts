@@ -1,5 +1,11 @@
 import { expect, type Page, type Route, test } from "@playwright/test";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
+import {
+  enableSearchAnswer,
+  expectNoPageOverflow,
+  mockDatabaseReady,
+  mockLocalAuth,
+  selectBusinessView,
+} from "./_helpers";
 
 // rag_poc からの移植: 業務ビューの知識(ドメインキーワード / Approved FAQ / 用語・ルール)、
 // 検索前の類似問提示、回答の根拠パネル。
@@ -163,6 +169,7 @@ for (const viewport of [
 async function selectBusinessViewAndAsk(page: Page, question: string) {
   await page.goto("/search");
   await selectBusinessView(page, /受注サポート/);
+  await enableSearchAnswer(page);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill(question);
   await page.getByRole("button", { name: "検索", exact: true }).click();
 }
@@ -224,7 +231,7 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   await mockAnswerStream(page);
 
   await selectBusinessViewAndAsk(page, "受注を取り消すには？");
-  await page.getByRole("button", { name: "類似問を使用しない（通常の回答生成）" }).click();
+  await page.getByRole("button", { name: "類似問を使用しない" }).click();
 
   const panel = page.getByRole("region", { name: "回答の根拠と実行記録" });
   await expect(panel).toBeVisible();
