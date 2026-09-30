@@ -60,8 +60,9 @@ test("対象画面の検索・所有者・種類フィルタを共通化する",
   assert.match(dbObjectFilterFieldsSource, /export function DbManagementSelectField/u);
   assert.match(dbObjectFilterFieldsSource, /export function DbObjectSearchOwnerFields/u);
   assert.match(dbObjectFilterFieldsSource, /md:grid-cols-2/u);
-  // 種類の select は共有の fieldControlClassName で SearchField と同じ高さ・見た目にする（#613）。
-  assert.match(dbObjectFilterFieldsSource, /fieldControlClassName\(/u);
+  // 種類の選択は共有の SelectField で SearchField と同じ高さ（md）・見た目にする（#613 / #631）。
+  assert.match(dbObjectFilterFieldsSource, /<SelectField<T>/u);
+  assert.doesNotMatch(dbObjectFilterFieldsSource, /<select\b/u);
   assert.doesNotMatch(dbObjectFilterFieldsSource, /min-h-\[44px\]|touchTarget/u);
   // フォーカスの表示は outline に一本化（ring を使わない。#355）
   assert.doesNotMatch(dbObjectFilterFieldsSource, /focus(?:-visible)?:ring-/u);
@@ -77,8 +78,9 @@ test("対象画面の検索・所有者・種類フィルタを共通化する",
     dbObjectSharedSource,
     /md:grid-cols-2 xl:grid-cols-\[minmax\(0,1fr\)_minmax\(0,1fr\)_auto\] xl:items-end/u
   );
-  assert.match(dataManagementSource, /<DbManagementSelectField[\s\S]{0,450}className="sm:w-48"/u);
-  assert.match(metadataSqlManagementSource, /<DbManagementSelectField[\s\S]{0,450}className="sm:w-48"/u);
+  // 検索・所有者と並べる種類の選択欄は短い列挙の幅（width="sm"。#613）。
+  assert.match(dataManagementSource, /<DbManagementSelectField[\s\S]{0,450}width="sm"/u);
+  assert.match(metadataSqlManagementSource, /<DbManagementSelectField[\s\S]{0,450}width="sm"/u);
   assert.doesNotMatch(dbObjectSharedSource, /md:grid-cols-\[minmax\(0,1fr\)_13rem\]/u);
 });
 

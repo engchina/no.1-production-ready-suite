@@ -22,7 +22,6 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   Pagination,
   TextareaField,
-  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
@@ -45,7 +44,6 @@ import { Save,
   Trash2,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
-
 
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { PageNotice } from "@/components/page-notice";
@@ -92,9 +90,6 @@ type ClassifierPredictionSnapshot = ClassifierPredictionData & {
   finishedAt: string;
 };
 
-const fieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-fg";
-// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
-const controlClass = fieldControlClassName({ className: "py-2" });
 const linkButtonClass =
   "inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium text-fg hover:bg-surface-hover";
 const TRAINING_DATA_PAGE_SIZE = DEFAULT_PAGE_SIZE;
@@ -921,16 +916,16 @@ function TrainingDataTable({
             className: "break-words align-top font-semibold",
             render: (example) =>
               editingExampleId === example.id ? (
-                <select
-                  aria-label={t("qcm.training.editProfile")}
+                <SelectField
+                  id={`qcm-training-edit-profile-${example.id}`}
+                  label={t("qcm.training.editProfile")}
+                  labelHidden
                   value={editingProfileId}
-                  onChange={(event) => onEditProfileChange(event.currentTarget.value)}
-                  className={controlClass}
-                >
-                  {profiles.filter((profile) => !profile.archived).map((profile) => (
-                    <option key={profile.id} value={profile.id}>{profileDisplayLabel(profile)}</option>
-                  ))}
-                </select>
+                  options={profiles
+                    .filter((profile) => !profile.archived)
+                    .map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) }))}
+                  onValueChange={onEditProfileChange}
+                />
               ) : (
                 <span className="block">{profileRecordDisplayLabel(example)}</span>
               ),
@@ -1102,12 +1097,16 @@ function ModelTrainPanel({
         <CompactFact label={t("learning.classifier.model")} value={status?.embedding_model || "cohere.embed-v4.0"} />
         <CompactFact label={t("learning.classifier.dimension")} value={formatNumber(status?.vector_dimension ?? 1536)} />
       </div>
-      <label className={fieldClass}>
-        <span>{t("learning.classifier.model")}</span>
-        <select value={status?.embedding_model || "cohere.embed-v4.0"} disabled className={`${controlClass} disabled:bg-surface-hover disabled:text-fg-disabled`}>
-          <option value={status?.embedding_model || "cohere.embed-v4.0"}>{status?.embedding_model || "cohere.embed-v4.0"}</option>
-        </select>
-      </label>
+      {/* 埋め込みモデルは固定（表示だけ）。選べないことを無効の選択欄で示す。モデル名が入る幅（#613）。 */}
+      <SelectField
+        id="qcm-train-embedding-model"
+        label={t("learning.classifier.model")}
+        value={status?.embedding_model || "cohere.embed-v4.0"}
+        options={[{ value: status?.embedding_model || "cohere.embed-v4.0", label: status?.embedding_model || "cohere.embed-v4.0" }]}
+        onValueChange={() => undefined}
+        disabled
+        width="lg"
+      />
       <section className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
         <div className="flex flex-wrap gap-2">
           <StatusBadge variant={status?.ready ? "success" : "warning"} label={status?.ready ? t("learning.classifier.ready") : t("learning.classifier.notReady")} />

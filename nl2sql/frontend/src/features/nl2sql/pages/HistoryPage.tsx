@@ -1,5 +1,5 @@
 import { useWorkspaceState } from "@/components/WorkspaceState";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { ListPlus,
   ArrowDown,
@@ -31,7 +31,7 @@ import {
   Skeleton,
   TimedLoadingState,
   INFORMATION_LIST_SCROLL_CLASS,
-  fieldControlClassName,
+  SelectField,
 } from "@engchina/production-ready-ui";
 import { useAuth } from "@/features/security/AuthProvider";
 
@@ -424,19 +424,16 @@ function HistoryFilterSelect({
   options: Array<[string, string]>;
   onChange: (value: string) => void;
 }) {
+  const id = useId();
   return (
-    <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
-      <span>{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.currentTarget.value)}
-        className={fieldControlClassName({ className: "min-w-0 py-2" })}
-      >
-        {options.map(([optionValue, optionLabel]) => (
-          <option key={optionValue} value={optionValue}>{optionLabel}</option>
-        ))}
-      </select>
-    </label>
+    <SelectField
+      id={`history-filter-${id}`}
+      label={label}
+      value={value}
+      options={options.map(([optionValue, optionLabel]) => ({ value: optionValue, label: optionLabel }))}
+      onValueChange={onChange}
+      className="min-w-0"
+    />
   );
 }
 

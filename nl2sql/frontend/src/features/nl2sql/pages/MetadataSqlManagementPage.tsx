@@ -21,9 +21,8 @@ import {
   type ListPickerItem,
   ProcessingIndicator,
   TextareaField,
-  fieldControlClassName,
+  TextField,
 } from "@engchina/production-ready-ui";
-
 
 import { PageNotice } from "@/components/page-notice";
 import { apiGet, apiPost, isTimeoutError } from "@/lib/api";
@@ -899,7 +898,7 @@ function MetadataTargetGrid({
             { value: "table", label: t("metadataSql.targets.typeFilterTables") },
             { value: "view", label: t("metadataSql.targets.typeFilterViews") },
           ]}
-          className="sm:w-48"
+          width="sm"
           onChange={onFilterChange}
         />
       </DbObjectSelectorToolbar>
@@ -1068,24 +1067,24 @@ function MetadataInputPanel({
                     { value: "rebuild", label: t("metadataSql.domain.operation.rebuild") },
                     { value: "delete", label: t("metadataSql.domain.operation.delete") },
                   ]}
-                  className="sm:w-72"
+                  width="md"
                   onChange={domain.onOperationChange}
                 />
               ) : null}
-              <label className="grid min-w-0 gap-1 text-sm font-medium text-fg sm:w-44">
-                <span>{t("metadataSql.input.sampleLimit")}</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={sampleLimit}
-                  onChange={(event) => {
-                    const value = Number(event.currentTarget.value);
-                    onSampleLimitChange(Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0);
-                  }}
-                  className={fieldControlClassName({ className: "py-2" })}
-                />
-              </label>
+              <TextField
+                id={`${pageId}-sample-limit`}
+                label={t("metadataSql.input.sampleLimit")}
+                type="number"
+                min={0}
+                max={100}
+                value={sampleLimit}
+                onChange={(event) => {
+                  const value = Number(event.currentTarget.value);
+                  onSampleLimitChange(Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0);
+                }}
+                width="xs"
+                className="min-w-0"
+              />
               <StatusBadge icon={false} variant={detailsReady ? "info" : "neutral"} label={t("metadataSql.targets.selected", { count: selectedCount })} />
             </div>
           </div>

@@ -13,9 +13,8 @@ import {
   ProcessingIndicator,
   TimedLoadingState,
   FixedSplitPane,
-  FieldLabel,
   TextareaField,
-  fieldControlClassName,
+  SelectField,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -401,26 +400,19 @@ export function SqlToQuestionPage() {
 
               {/* 業務プロファイルは空にできない選択欄（読み込み後に先頭を選ぶ）で、API で省略したときも backend が
                   既定の業務プロファイルを使うので、「必須」は付けない（UX 契約 messaging.md §3.2.1。#540）。 */}
-              <div className="grid gap-1">
-                <FieldLabel htmlFor="sql-to-question-profile" label={t("sqlToQuestion.profile.label")} />
-                <select
-                  id="sql-to-question-profile"
-                  value={selectedProfileId}
-                  onChange={(event) => {
-                    setSelectedProfileId(event.currentTarget.value);
-                    setActionError("");
-                    setActivePanel("input");
-                  }}
-                  className={fieldControlClassName({ className: "min-w-0 py-2" })}
-                  disabled={loading || actionBusy || profiles.length === 0}
-                >
-                  {profiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profileDisplayLabel(profile)}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <SelectField
+                id="sql-to-question-profile"
+                label={t("sqlToQuestion.profile.label")}
+                value={selectedProfileId}
+                options={profiles.map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) }))}
+                onValueChange={(nextProfileId) => {
+                  setSelectedProfileId(nextProfileId);
+                  setActionError("");
+                  setActivePanel("input");
+                }}
+                disabled={loading || actionBusy || profiles.length === 0}
+                className="min-w-0"
+              />
 
               <TextareaField
                 id="sql-to-question-sql-input"

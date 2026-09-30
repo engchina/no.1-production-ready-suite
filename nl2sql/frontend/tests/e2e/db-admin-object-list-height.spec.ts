@@ -4,6 +4,7 @@ import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { measuredVisibleRowsHeight } from "./_helpers/data-table";
 import { expectCompactSortHeaders } from "./_helpers/sort-header";
+import { chooseSelectFieldOption } from "./_helpers/select-field";
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseGateReady(page);
@@ -1337,7 +1338,7 @@ for (const scenario of metadataScenarios) {
     await expect(ownerFilter).toHaveAttribute("placeholder", "所有者の先頭を入力（例：ADM）");
     await expectEqualFilterWidths(search, ownerFilter);
     await expect(toolbar.getByRole("combobox", { name: "所有者" })).toHaveCount(0);
-    const typeFilter = toolbar.getByLabel("種類フィルタ");
+    const typeFilter = toolbar.getByRole("combobox", { name: "種類フィルタ", exact: true });
     await expect(typeFilter).toBeVisible();
     await expectThreeFieldFilterLayout(
       search,
@@ -1351,7 +1352,8 @@ for (const scenario of metadataScenarios) {
     expect(await ownerFilter.evaluate((node) => getComputedStyle(node).boxShadow)).not.toBe("none");
     await page.keyboard.press("Tab");
     await expect(typeFilter).toBeFocused();
-    expect(await typeFilter.evaluate((node) => getComputedStyle(node).boxShadow)).not.toBe("none");
+    // 種類は共有の SelectField（#631）。フォーカスの表示は共有の :focus-visible（#355）。
+    expect(await typeFilter.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
     await search.fill("BILLING");
     await expect(page.getByText("条件に一致する対象がありません")).toBeVisible();
     await search.clear();
@@ -1366,10 +1368,10 @@ for (const scenario of metadataScenarios) {
     await expect(page.getByText("条件に一致する対象がありません")).toBeVisible();
     await ownerFilter.fill("");
     await expect(page.getByTestId(`${scenario.idPrefix}-target`).getByText("APP.ORDERS_TABLE_01", { exact: true })).toBeVisible();
-    await typeFilter.selectOption("view");
+    await chooseSelectFieldOption(typeFilter, "view");
     await expect(page.getByTestId(`${scenario.idPrefix}-target`).getByText("APP.ORDERS_VIEW_01", { exact: true })).toBeVisible();
     await expect(page.getByTestId(`${scenario.idPrefix}-target`).getByText("APP.ORDERS_TABLE_01", { exact: true })).toHaveCount(0);
-    await typeFilter.selectOption("all");
+    await chooseSelectFieldOption(typeFilter, "all");
     await expectNoHorizontalScroll(page);
   });
 
@@ -1482,7 +1484,7 @@ test("データプレビューは検索・所有者・種別フィルタを共�
   const toolbar = page.getByTestId("data-preview-object-toolbar");
   const search = toolbar.getByRole("searchbox", { name: "検索" });
   const ownerFilter = toolbar.getByRole("searchbox", { name: "所有者" });
-  const kindFilter = toolbar.getByLabel("種別フィルタ");
+  const kindFilter = toolbar.getByRole("combobox", { name: "種別フィルタ", exact: true });
   await expectThreeFieldFilterLayout(
     search,
     ownerFilter,
@@ -1503,10 +1505,10 @@ test("データプレビューは検索・所有者・種別フィルタを共�
   const previewList = page.getByTestId("data-preview-object-list");
   await expect(previewList.getByText("操作", { exact: true })).toHaveCount(0);
   await expect(previewList.getByRole("button", { name: /^操作: / })).toHaveCount(0);
-  await kindFilter.selectOption("view");
+  await chooseSelectFieldOption(kindFilter, "view");
   await expect(previewList.getByText("APP.VIEW_01", { exact: true })).toBeVisible();
   await expect(previewList.getByText("APP.TABLE_01", { exact: true })).toHaveCount(0);
-  await kindFilter.selectOption("all");
+  await chooseSelectFieldOption(kindFilter, "all");
   await page.getByRole("button", { name: "APP.TABLE_01 を選択" }).click();
   const previewShowButton = page.getByRole("button", { name: "データを表示", exact: true });
   const previewClearButton = page.getByRole("button", { name: "表示件数・結果をリセット", exact: true });
@@ -2837,7 +2839,7 @@ test("Excel/CSV 取込フォームは取込方法を表示せずファイル選�
   await expect(importPanel.getByTestId("table-import-file-field-input")).toHaveAttribute("aria-required", "true");
   await expect(importPanel.getByTestId("table-import-mode-field")).toHaveCount(0);
   await expect(importPanel.getByText("取込方法", { exact: true })).toHaveCount(0);
-  await expect(importPanel.locator("select")).toHaveCount(0);
+  await expect(importPanel.getByRole("combobox")).toHaveCount(0);
 
   const fileFieldBox = await fileField.boundingBox();
   const filePickerBox = await fileField.getByTestId("table-import-file-field-dropzone").boundingBox();

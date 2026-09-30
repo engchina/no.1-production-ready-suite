@@ -24,15 +24,14 @@ import {
   type ListPickerItem,
   INFORMATION_TABLE_FIXED_VISIBLE_ROWS,
   ExecutionConfirmationField,
-  FieldLabel,
   FieldLegend,
+  SelectField,
   TextareaField,
-  fieldControlClassName,
+  TextField,
 } from "@engchina/production-ready-ui";
 
 import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
 import { SyntheticReview } from "../SyntheticReview";
-
 
 import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
@@ -1496,7 +1495,7 @@ function PreviewControlsPanel({
                 { value: "table", label: t("dataMgmt.preview.kindFilterTable") },
                 { value: "view", label: t("dataMgmt.preview.kindFilterView") },
               ]}
-              className="sm:w-48"
+              width="sm"
               onChange={onPreviewObjectKindFilterChange}
             />
           </DbObjectSelectorToolbar>
@@ -1586,7 +1585,6 @@ function objectListLoadMoreErrorMessage(error: unknown) {
 function isSyntheticDataExecuted(result: SyntheticDataOperationData) {
   return result.executed === true || (result.status ?? "").toLowerCase() === "executed";
 }
-
 
 function schemaJobRequiresFull(job: SchemaRefreshJob | null) {
   if (!job) return false;
@@ -1960,20 +1958,18 @@ function CsvUploadWorkspace({
         onClear={onFileClear}
       />
 
-      <label
-        className="grid min-w-0 gap-1 text-sm font-medium leading-5 text-fg"
-        data-testid="data-csv-mode-field"
-      >
-        <span>{t("dataMgmt.csv.mode")}</span>
-        <select
+      <div className="min-w-0" data-testid="data-csv-mode-field">
+        <SelectField<CsvMode>
+          id="data-csv-mode"
+          label={t("dataMgmt.csv.mode")}
           value={mode}
-          onChange={(event) => onModeChange(event.currentTarget.value as CsvMode)}
-          className={fieldControlClassName()}
-        >
-          <option value="insert">{t("dataMgmt.csv.mode.insert")}</option>
-          <option value="truncate_insert">{t("dataMgmt.csv.mode.truncateInsert")}</option>
-        </select>
-      </label>
+          options={[
+            { value: "insert", label: t("dataMgmt.csv.mode.insert") },
+            { value: "truncate_insert", label: t("dataMgmt.csv.mode.truncateInsert") },
+          ]}
+          onValueChange={onModeChange}
+        />
+      </div>
       </div>
 
       <fieldset
@@ -2254,37 +2250,27 @@ function SyntheticWorkspace({
 
         <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_10rem]">
           {/* 生成とテーブル取得は DB Profile の選択が前提（canGenerateSyntheticData）なので必須として示す（#531）。 */}
-          <div className="grid min-w-0 gap-1">
-            <FieldLabel htmlFor="data-synthetic-profile" label={t("dataTools.syntheticData.profile")} required />
-            <select
-              id="data-synthetic-profile"
-              aria-required="true"
-              value={syntheticProfileName}
-              onChange={(event) => onSyntheticProfileNameChange(event.currentTarget.value)}
-              disabled={dbProfileRefreshRequired || dbProfileRefreshing}
-              className={fieldControlClassName({ className: "min-w-0" })}
-            >
-              {(selectAiDbProfiles?.profiles ?? []).length === 0 && (
-                <option value="">{t("dataTools.syntheticData.noProfiles")}</option>
-              )}
-              {(selectAiDbProfiles?.profiles ?? []).map((profile) => (
-                <option key={profile.name} value={profile.name}>
-                  {profile.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <label className="grid gap-1 text-sm font-medium text-fg">
-            <span>{t("dataTools.syntheticData.rowsPerTable")}</span>
-            <input
-              type="number"
-              min={1}
-              max={100}
-              value={syntheticRows}
-              onChange={(event) => onSyntheticRowsChange(Number(event.currentTarget.value) || 1)}
-              className={fieldControlClassName()}
-            />
-          </label>
+          <SelectField
+            id="data-synthetic-profile"
+            label={t("dataTools.syntheticData.profile")}
+            required
+            value={syntheticProfileName}
+            placeholder={(selectAiDbProfiles?.profiles ?? []).length === 0 ? t("dataTools.syntheticData.noProfiles") : ""}
+            options={(selectAiDbProfiles?.profiles ?? []).map((profile) => ({ value: profile.name, label: profile.name }))}
+            onValueChange={onSyntheticProfileNameChange}
+            disabled={dbProfileRefreshRequired || dbProfileRefreshing}
+            className="min-w-0"
+          />
+          <TextField
+            id="data-synthetic-rows-per-table"
+            label={t("dataTools.syntheticData.rowsPerTable")}
+            type="number"
+            min={1}
+            max={100}
+            value={syntheticRows}
+            onChange={(event) => onSyntheticRowsChange(Number(event.currentTarget.value) || 1)}
+            className="min-w-0"
+          />
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -2381,17 +2367,15 @@ function SyntheticWorkspace({
           />
           <fieldset className="grid content-start gap-3 rounded-md border border-border bg-surface p-3">
             <legend className="px-1 text-sm font-semibold text-fg">{t("dataTools.syntheticData.options")}</legend>
-            <label className="grid gap-1 text-sm font-medium text-fg">
-              <span>{t("dataTools.syntheticData.sampleRows")}</span>
-              <input
-                type="number"
-                min={0}
-                max={100}
-                value={syntheticSampleRows}
-                onChange={(event) => onSyntheticSampleRowsChange(Number(event.currentTarget.value) || 0)}
-                className={fieldControlClassName()}
-              />
-            </label>
+            <TextField
+              id="data-synthetic-sample-rows"
+              label={t("dataTools.syntheticData.sampleRows")}
+              type="number"
+              min={0}
+              max={100}
+              value={syntheticSampleRows}
+              onChange={(event) => onSyntheticSampleRowsChange(Number(event.currentTarget.value) || 0)}
+            />
             <label className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm font-medium text-fg">
               <input
                 type="checkbox"
@@ -2457,23 +2441,17 @@ function SyntheticWorkspace({
 
         {/* 結果テーブル（長い名前）と取得件数上限を 2:1 で同じ行に置き、ボタン行はその下の全幅。 */}
         <div className="grid gap-3 border-t border-border pt-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start lg:gap-x-6">
-          <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
-            <span>{t("dataTools.syntheticData.resultTable")}</span>
-            <select
-              data-testid="synthetic-result-table-select"
-              value={hasValidResultTable ? syntheticResultTable : ""}
-              onChange={(event) => onSyntheticResultTableChange(event.currentTarget.value)}
-              disabled={loading === "results"}
-              className={fieldControlClassName({ className: "min-w-0" })}
-            >
-              {resultTableOptions.length === 0 && <option value="">{t("dataTools.syntheticData.noResultTables")}</option>}
-              {resultTableOptions.map((tableName) => (
-                <option key={tableName} value={tableName}>
-                  {tableName}
-                </option>
-              ))}
-            </select>
-          </label>
+          <SelectField
+            id="data-synthetic-result-table"
+            label={t("dataTools.syntheticData.resultTable")}
+            data-testid="synthetic-result-table-select"
+            value={hasValidResultTable ? syntheticResultTable : ""}
+            placeholder={resultTableOptions.length === 0 ? t("dataTools.syntheticData.noResultTables") : ""}
+            options={resultTableOptions.map((tableName) => ({ value: tableName, label: tableName }))}
+            onValueChange={onSyntheticResultTableChange}
+            disabled={loading === "results"}
+            className="min-w-0"
+          />
           <RowLimitField
             value={syntheticResultLimitInput}
             onChange={onSyntheticResultLimitChange}

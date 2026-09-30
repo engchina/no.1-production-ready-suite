@@ -2,6 +2,7 @@ import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
+import { chooseSelectFieldOption } from "./_helpers/select-field";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -344,14 +345,6 @@ async function expectNoHorizontalScroll(page: Page) {
   expect(size.scrollWidth).toBeLessThanOrEqual(size.width + 1);
 }
 
-function hasVisibleBoxShadow(value: string) {
-  if (value === "none") return false;
-  return value
-    .replace(/rgba\(0, 0, 0, 0\) 0px 0px 0px 0px/g, "")
-    .replace(/,\s*/g, "")
-    .trim().length > 0;
-}
-
 async function openGraphIfCollapsed(page: Page, playground: Locator) {
   await expect(playground.getByTestId("ontology-playground-question")).toBeVisible();
   const viewportWidth = page.viewportSize()?.width ?? 0;
@@ -398,6 +391,14 @@ async function expectQuestionActionLayoutWithClear(page: Page, playground: Locat
   expect(Math.abs(clearBox!.x - inputBox!.x)).toBeLessThanOrEqual(1);
   expect(runBox!.width).toBeGreaterThanOrEqual(inputBox!.width - 1);
   expect(clearBox!.width).toBeGreaterThanOrEqual(inputBox!.width - 1);
+}
+
+function hasVisibleBoxShadow(value: string) {
+  if (value === "none") return false;
+  return value
+    .replace(/rgba\(0, 0, 0, 0\) 0px 0px 0px 0px/g, "")
+    .replace(/,\s*/g, "")
+    .trim().length > 0;
 }
 
 async function expectGraphSearchFieldLayout(page: Page, playground: Locator) {
@@ -1575,12 +1576,12 @@ test("公開済み Profile から未公開 Profile へ切り替えると graph �
   await page.getByTestId("ontology-view-fetch").click();
   const panel = page.locator("#ontology-query-playground-panel");
   await panel.getByTestId("ontology-playground-question").fill("公開版の顧客");
-  await page.getByTestId("ontology-build-profile-select").selectOption("unpublished");
+  await chooseSelectFieldOption(page.getByTestId("ontology-build-profile-select"), "unpublished");
   await page.getByTestId("ontology-view-fetch").click();
   await expect(panel.getByText("公開済みオントロジーがまだありません", {exact:true})).toBeVisible();
   await expect(panel.locator(".react-flow")).toHaveCount(0);
   await expect(panel.getByTestId("ontology-playground-question")).toHaveCount(0);
-  await page.getByTestId("ontology-build-profile-select").selectOption("default");
+  await chooseSelectFieldOption(page.getByTestId("ontology-build-profile-select"), "default");
   await page.getByTestId("ontology-view-fetch").click();
   await expect(panel.getByTestId("ontology-playground-question")).toHaveValue("");
 });

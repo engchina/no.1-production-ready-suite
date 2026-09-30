@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
+import { expectSelectFieldValue } from "./_helpers/select-field";
 
 const basePath = "/api/nl2sql/quality-evaluations";
 
@@ -488,7 +489,7 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   const profileField = page.getByTestId("quality-evaluation-profile-field");
   const fileField = page.getByTestId("quality-evaluation-file");
   const engineFieldset = page.getByTestId("quality-evaluation-engine-fieldset");
-  const repeatLabel = page.getByTestId("quality-evaluation-repeat-label");
+  const repeatLabel = page.getByTestId("quality-evaluation-repeat-field").locator("label");
   const repeatInput = page.getByLabel("繰り返し回数");
   const estimateSummary = page.getByTestId("quality-evaluation-estimate-summary");
   const estimateLabel = page.getByTestId("quality-evaluation-estimate-label");
@@ -541,10 +542,8 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   expect(estimateSurface.borderLeftWidth).toBe("0px");
   expect(footerBox.y).toBeGreaterThanOrEqual(estimateBox.y + estimateBox.height - 1);
   const profileSelect = page.locator("#quality-evaluation-profile");
-  await expect(profileSelect).toHaveValue("default");
-  await expect(
-    profileSelect.locator("option", { hasText: "標準プロファイル（SQL生成評価）" })
-  ).toHaveCount(1);
+  await expectSelectFieldValue(profileSelect, "default");
+  await expect(profileSelect).toContainText("標準プロファイル（SQL生成評価）");
   await expect(
     page.getByText("標準プロファイル（SQL生成評価）").filter({ visible: true }).first()
   ).toBeVisible();

@@ -2128,11 +2128,7 @@ test("Select AI 設定は requested order で並び狭い幅でも重ならな�
     await expect(page.locator(`label[for="${fieldId}"] span[aria-hidden="true"]`)).toHaveText("必須");
     await expect(page.locator(`#${fieldId}`)).toHaveAttribute("aria-required", "true");
   }
-  // 名称・カテゴリは独自の 2 列レイアウト（FieldLabel + input）のままで、ネイティブ required も持つ。
-  // Select AI の入力は共有 TextField（ネイティブ検証は使わず、保存時にアプリ側で検証する）。
-  for (const fieldId of ["profile-name", "profile-category"]) {
-    await expect(page.locator(`#${fieldId}`)).toHaveAttribute("required", "");
-  }
+  // 名称・カテゴリも共有の TextField（#631）。ネイティブ検証は使わず、保存時にアプリ側で検証する。
   const region = page.getByRole("combobox", { name: "Region" });
   const model = page.getByLabel("LLM Model");
   const maxTokens = page.getByLabel("Max Tokens");
@@ -2287,7 +2283,8 @@ test("業務プロファイル重複名称は名称欄のエラーとして表�
     .getByRole("alert")
     .filter({ hasText: "同じ名称の業務プロファイルが既に存在します。" });
   await expect(duplicateError).toBeVisible();
-  await expect(page.locator("#profile-name-error")).toContainText(
+  // 名称の欄は共有の TextField（#631）。エラーは欄の外枠（input → 枠の div → 外枠）の中の alert。
+  await expect(page.locator("#profile-name").locator("xpath=../..").getByRole("alert")).toContainText(
     "同じ名称の業務プロファイルが既に存在します。"
   );
   await expect(page.getByLabel("名称")).toHaveAttribute("aria-invalid", "true");

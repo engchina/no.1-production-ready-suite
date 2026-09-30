@@ -10,7 +10,7 @@ import {
   ProcessingIndicator,
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
-  fieldControlClassName,
+  SelectField,
 } from "@engchina/production-ready-ui";
 import { apiGet } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -168,12 +168,16 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
       {run.finished_at && <p className="text-sm text-fg-muted">{t("syntheticRun.finishedAt", { time: formatDateTime(run.finished_at) })}</p>}
     </>}
     {runs.some((item) => !runFinished(item)) && <p className="text-sm text-fg-muted">{t("syntheticRun.independentRuns")}</p>}
-    {history.length > 0 && <label className="grid gap-1 text-sm">{t("syntheticRun.history")}
-      <select disabled={submitting} value={run?.run_id ?? ""} onChange={(e) => onSelect(e.target.value)} className={fieldControlClassName({ className: "min-w-0" })}>
-        {!run && <option value="" disabled>{t("syntheticRun.selectHistory")}</option>}
-        {history.map((r) => <option key={r.run_id} value={r.run_id}>{formatDateTime(r.created_at)} · {runLabel(r)} · {r.targets.map((target) => target.table_name).join(", ")} · {r.run_id.slice(0, 8)}</option>)}
-      </select>
-    </label>}
+    {history.length > 0 && <SelectField
+      id="synthetic-run-history"
+      label={t("syntheticRun.history")}
+      disabled={submitting}
+      value={run?.run_id ?? ""}
+      placeholder={t("syntheticRun.selectHistory")}
+      options={history.map((r) => ({ value: r.run_id, label: `${formatDateTime(r.created_at)} · ${runLabel(r)} · ${r.targets.map((target) => target.table_name).join(", ")} · ${r.run_id.slice(0, 8)}` }))}
+      onValueChange={onSelect}
+      className="min-w-0"
+    />}
     <p className="text-xs text-fg-muted">{t(!run || run.preview ? "syntheticPreview.retention" : "syntheticRun.retention")}</p>
     <div className="flex flex-wrap gap-2">
       <Button type="button" variant="secondary" size="sm" loading={feedback?.pending} icon={RefreshCw} onClick={() => void refreshStatus()}>{t("syntheticRun.refresh")}</Button>
