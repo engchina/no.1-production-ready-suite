@@ -2,7 +2,9 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type AnchorHTMLAttributes,
   type ButtonHTMLAttributes,
+  type MouseEvent,
   type ReactNode,
   type Ref,
 } from "react";
@@ -24,6 +26,20 @@ export function rowTitleTooltipText(text: string, maxChars = ROW_TITLE_TOOLTIP_M
   const chars = Array.from(text.trim());
   return chars.length > maxChars ? `${chars.slice(0, maxChars).join("")}…` : chars.join("");
 }
+
+/** リンクの形（`href`）のときに `<a>` へ渡さない、ボタンだけの属性。`onClick` は画面内で開くときに呼ぶ。 */
+const BUTTON_ONLY_PROPS = new Set([
+  "onClick",
+  "disabled",
+  "form",
+  "formAction",
+  "formEncType",
+  "formMethod",
+  "formNoValidate",
+  "formTarget",
+  "name",
+  "value",
+]);
 
 const LINE_CLAMP_CLASS: Record<RowTitleButtonMaxLines, string> = {
   1: "line-clamp-1",
@@ -50,12 +66,37 @@ export interface RowTitleButtonProps
   maxLines?: RowTitleButtonMaxLines;
   /** 切り詰めたときの Tooltip の全文。`title` が文字列なら省略できる。 */
   fullTitle?: string;
-  ref?: Ref<HTMLButtonElement>;
+  /**
+   * 開く先の URL（#583。例: `/business-views?id=bv-1`）。渡すと `<a href>` のリンクになり、
+   * Ctrl / ⌘ / Shift + クリック・中クリック・コンテキストメニューで新しいタブ・ウィンドウに開ける。
+   * 修飾キーの無いクリック（Enter を含む）は既定の遷移を止めて `onClick` を呼ぶ（画面内で開く。
+   * 作業中の状態を保つため、ページを読み直さない）。`onClick` が無ければ通常のリンクとして移る。
+   * `disabled` のときはリンクにしない（押せないボタンのまま）。
+   */
+  href?: string;
+  ref?: Ref<HTMLButtonElement | HTMLAnchorElement>;
 }
 
 function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
   if (typeof ref === "function") ref(value);
   else if (ref && typeof ref === "object") (ref as { current: T | null }).current = value;
+}
+
+/**
+ * リンクのクリックを画面内で開くか（修飾キーの無い左クリックだけ）。Ctrl / ⌘ / Shift / Alt との組み合わせ・
+ * 左以外のボタンはブラウザの既定（新しいタブ・ウィンドウ・ダウンロード）に任せる。
+ */
+export function isPlainLeftClick(
+  event: Pick<globalThis.MouseEvent, "button" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey" | "defaultPrevented">
+) {
+  return (
+    !event.defaultPrevented &&
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  );
 }
 
 /** 行数で切り詰めた要素が、実際に切り詰められているか（1px の丸め誤差は無視する）。 */
@@ -74,6 +115,8 @@ export function isClampedOverflow(element: Pick<HTMLElement, "scrollHeight" | "c
  *   開閉する領域を持たないので `aria-expanded` でもない。`DataTable` の行の `aria-current` と同じ意味）。
  * - フォーカスはグローバルの `:focus-visible`（outline 2px）。タッチ端末では当たり判定を 44px 以上にする
  *   （`pr-touch-target`、#364。見た目の大きさは変えない）。
+ * - URL で開く対象（`?id=` のエディタ・詳細）は `href` を渡してリンクにする（#583。新しいタブで開ける）。
+ *   見た目はボタンの形と同じ。行のクリック（`onRowClick`）はリンクのクリックを重ねて扱わない（`DataTable`）。
  */
 export function RowTitleButton({
   title,
@@ -81,6 +124,7 @@ export function RowTitleButton({
   current = false,
   maxLines,
   fullTitle,
+  href,
   className,
   ref,
   ...props
@@ -105,22 +149,19 @@ export function RowTitleButton({
     return () => observer.disconnect();
   }, [tooltipText, maxLines]);
 
-  const button = (
-    <button
-      {...props}
-      ref={(node) => assignRef(ref, node)}
-      type="button"
-      aria-current={current ? "true" : undefined}
-      data-row-title-button=""
-      className={cn(
-        "group/row-title pr-touch-target relative block min-w-0 max-w-full cursor-pointer rounded-sm text-left text-fg disabled:cursor-not-allowed disabled:text-fg-disabled",
-        className
-      )}
-    >
+  const asLink = href !== undefined && !props.disabled;
+  const rootClass = cn(
+    "group/row-title pr-touch-target relative block min-w-0 max-w-full cursor-pointer rounded-sm text-left text-fg disabled:cursor-not-allowed disabled:text-fg-disabled",
+    className
+  );
+  const content = (
+    <>
       <span
         ref={titleRef}
         className={cn(
-          "block break-words text-sm font-medium leading-5 underline-offset-2 [overflow-wrap:anywhere] group-enabled/row-title:group-hover/row-title:underline",
+          "block break-words text-sm font-medium leading-5 underline-offset-2 [overflow-wrap:anywhere]",
+          // リンクは :enabled を持たないので、ホバーの下線はリンクなら常に、ボタンなら押せるときだけ付ける。
+          asLink ? "group-hover/row-title:underline" : "group-enabled/row-title:group-hover/row-title:underline",
           maxLines && LINE_CLAMP_CLASS[maxLines]
         )}
       >
@@ -131,8 +172,48 @@ export function RowTitleButton({
           {subtitle}
         </span>
       ) : null}
-    </button>
+    </>
   );
+
+  let button;
+  if (asLink) {
+    // ボタンだけの属性（form・value 等）はリンクに渡さない。読み上げ名・data-*・id・ほかのイベントは渡す。
+    const { onClick } = props;
+    const linkProps = Object.fromEntries(
+      Object.entries(props).filter(([key]) => !BUTTON_ONLY_PROPS.has(key))
+    ) as AnchorHTMLAttributes<HTMLAnchorElement>;
+    button = (
+      <a
+        {...linkProps}
+        ref={(node) => assignRef(ref, node)}
+        href={href}
+        aria-current={current ? "true" : undefined}
+        data-row-title-button=""
+        className={rootClass}
+        onClick={(event) => {
+          if (!onClick || !isPlainLeftClick(event)) return;
+          // 修飾キーの無いクリック（Enter も click になる）は画面内で開く。ページを読み直さない。
+          event.preventDefault();
+          onClick(event as unknown as MouseEvent<HTMLButtonElement>);
+        }}
+      >
+        {content}
+      </a>
+    );
+  } else {
+    button = (
+      <button
+        {...props}
+        ref={(node) => assignRef(ref, node)}
+        type="button"
+        aria-current={current ? "true" : undefined}
+        data-row-title-button=""
+        className={rootClass}
+      >
+        {content}
+      </button>
+    );
+  }
 
   if (!tooltipText) return button;
   // 読み上げ名には全文が入っているので、吹き出しは説明として結び付けない（二重に読み上げない）。

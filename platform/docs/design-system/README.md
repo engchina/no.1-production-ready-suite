@@ -559,6 +559,7 @@ import { SearchField } from "@engchina/production-ready-ui";
 - 製品は `current`・`aria-label`（「〜の詳細を表示」など、行の中で何が起きるかを含める）・`onClick` を渡すだけにする。`<button>` で題名を手書きしない。
 - 題名に識別子の表示部品（NL2SQL の `IdentifierText` / `DbObjectName`、system-settings の ID）を渡してよい。色は部品の既定（`--color-fg`）にそろえ、題名の中でアクセント色を付けない。
 - 一覧から別のページへ移る（ナレッジベース・文書の一覧など）ときはリンク（`<Link>`）のままにする（役割が違う）。
+- **URL で開く対象（A 型のエディタの `?id=`・NL2SQL の `?profile=` など）は `href` を渡してリンクの形にする（#583）。** `<a href>` になり、Ctrl / ⌘ / Shift + クリック・中クリック・コンテキストメニューで新しいタブ・ウィンドウに開ける。修飾キーの無いクリック（Enter を含む）は既定の遷移を止めて `onClick` を呼ぶ（画面内で開き、ページを読み直さない。離脱の確認など画面の処理をそのまま通す）。見た目・当たり判定・`current` はボタンの形と同じで、`disabled` のときはボタンのまま。行のクリック（`onRowClick`）はリンクのクリックを重ねて扱わない。選択して詳細を切り替えるだけ（B 型の分割ペイン）はボタンのまま（URL を持たない・新しいタブで開く意味が無い）。
 - 分割ペイン（`FixedSplitPane`）は既に共有部品で、製品の `RagSplitPane` / `AgentSplitPane` は保存 key の接頭辞と文言を渡す薄いラッパーなので、`packages/ui` には上げない。
 
 ### 読み込み中と一覧の表示密度（新設、#265）— ★ 3 製品で NL2SQL の基準にそろえる
@@ -865,6 +866,7 @@ QA に事前共有してください。**47点あります。**
 | `Toaster`（#411） | `placement` プロップ（`"bottom-left" \| "bottom-right"`）を**削除。** 置き場所は `Toaster` が決める（md 以上は `PageHeader` に重ねてページの操作の左、md 未満は上端のバー）。`PageHeader` の `<header>` に `data-page-header`、ページの操作の並びに `data-page-header-actions` を付ける（`Toaster` が位置を読む）。通知の領域に `data-toast-placement`（`page-header` / `below-page-header` / `top-right` / `top-bar`） |
 | `RowTitleButton`（#421） | **新規 export。** `RowTitleButton` / `RowTitleButtonProps` / `RowTitleButtonMaxLines`。RAG・Agent の `EntityLayout` の `RowTitleButton` は削除（RAG の `ariaLabel` / `dataAttributes` は、標準の `aria-label` / `data-*` をそのまま渡す）。行の中の要素として `data-row-title-button` を持つ |
 | `Tooltip`（#421） | `describe?: boolean` を追加（既定 true）。false で説明として結び付けず、吹き出しを `aria-hidden` にする |
+| `RowTitleButton`（#583） | `href?: string` を追加（渡すと `<a href>` のリンクの形。修飾キーの無いクリックは `onClick`、修飾キー付き・中クリックはブラウザの既定）。`ref` の型は `Ref<HTMLButtonElement \| HTMLAnchorElement>`。E2E で題名を `getByRole("button")` で探している一覧は、`href` を渡すと `getByRole("link")` になる |
 | `@engchina/production-ready-system-settings`（#421） | **新規 export** `SecurityIdentityRowTitleButton`（ID と表示名の 2 段表示を `RowTitleButton` に載せたもの） |
 | `PageHeader` / `ObjectActionBar` / `FormActionBar`（#582） | 「その他の操作」のボタンとメニューの読み上げ名が「その他の操作（<操作のグループの名前>）」になる（見た目の文言は同じ）。`getByRole("button", { name: "その他の操作", exact: true })` の E2E は一致しなくなるので、`exact` を外すか `data-testid`（`page-actions-more` / `<testId>-more` / `form-actions-more`）で探す。`PageHeader` の lg 未満は、メニューに入るのが 1 つだけなら畳まない |
 

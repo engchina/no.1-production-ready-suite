@@ -221,7 +221,7 @@ for (const viewport of [
     await page.keyboard.press("Escape");
     await expect(row.getByRole("button", { name: "DEFAULT の操作" })).toBeFocused();
     // キーボードは先頭セルの名前のボタンで全画面エディタを開く（page-archetypes.md §0-7）。
-    await row.getByRole("button", { name: "DEFAULT を編集" }).focus();
+    await row.getByRole("link", { name: "DEFAULT を編集" }).focus();
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/business-views\?id=bv-default$/);
     await expect(page.getByRole("heading", { name: "DEFAULT", level: 1 })).toBeVisible();
@@ -537,7 +537,7 @@ test("業務ビューのエディタは未保存の変更があるとパンく�
   await expect(page).toHaveURL(/\/business-views$/);
 
   // 同じ対象を開き直すと下書きを復元する。新規（?id=new）には持ち込まない。
-  await page.getByRole("button", { name: "経理ビュー を編集" }).click();
+  await page.getByRole("link", { name: "経理ビュー を編集" }).click();
   await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveValue("経費と出張の相談");
   await expect(page.getByText("保存していない下書きを復元しました。")).toBeVisible();
   await page.getByRole("button", { name: "変更を元に戻す" }).click();
@@ -567,7 +567,7 @@ test("エディタからアーカイブすると確認のうえ一覧へ置き�
     archived = true;
   });
   await page.goto("/business-views");
-  await page.getByRole("button", { name: "経理ビュー を編集" }).click();
+  await page.getByRole("link", { name: "経理ビュー を編集" }).click();
   await expect(page).toHaveURL(/\?id=bv-1$/);
 
   await page

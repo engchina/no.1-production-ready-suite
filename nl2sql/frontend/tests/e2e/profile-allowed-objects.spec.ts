@@ -2328,7 +2328,7 @@ test("業務プロファイルはcatalogが空のときDB管理用の現在schem
     profileItems: [{ ...profiles[0], allowed_tables: [], allowed_views: [] }],
   });
   await page.goto("/profiles");
-  await page.getByRole("button", { name: /^既定プロファイル/ }).click();
+  await page.getByRole("link", { name: /^既定プロファイル/ }).click();
 
   const tableList = page.getByTestId("profile-allowed-table-list");
   const viewList = page.getByTestId("profile-allowed-view-list");
@@ -2349,7 +2349,7 @@ test("業務プロファイルの対象オブジェクト空状態はExcelプレ
   });
 
   await page.goto("/profiles");
-  await page.getByRole("button", { name: /^既定プロファイル/ }).click();
+  await page.getByRole("link", { name: /^既定プロファイル/ }).click();
 
   const tableList = page.getByTestId("profile-allowed-table-list");
   const viewList = page.getByTestId("profile-allowed-view-list");

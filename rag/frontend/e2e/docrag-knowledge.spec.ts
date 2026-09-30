@@ -124,7 +124,7 @@ for (const viewport of [
     await mockBusinessViewApi(page);
 
     await page.goto("/business-views");
-    await page.getByRole("button", { name: "受注サポート を編集" }).click();
+    await page.getByRole("link", { name: "受注サポート を編集" }).click();
     await expect(page).toHaveURL(/\/business-views\?id=bv-1$/);
 
     const panel = page.getByRole("heading", { name: "業務ビューの知識" });

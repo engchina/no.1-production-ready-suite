@@ -639,6 +639,7 @@ export function AgentsPage() {
                 bindings={bindingList}
                 bindingsLoading={bindings.isLoading}
                 onOpen={(agent) => editor.openItem(agent.id)}
+                hrefFor={(agent) => editor.itemHref(agent.id)}
                 actionsFor={agentActions}
               />
             </QueryState>
@@ -691,6 +692,7 @@ function AgentTable({
   bindings,
   bindingsLoading,
   onOpen,
+  hrefFor,
   actionsFor,
 }: {
   agents: AgentProfile[];
@@ -698,6 +700,8 @@ function AgentTable({
   /** 実行先を取得中は「未設定」と誤って出さず、セルの形の Skeleton にする。 */
   bindingsLoading: boolean;
   onOpen: (agent: AgentProfile) => void;
+  /** 名前のリンクの URL（新しいタブで開ける。#583）。 */
+  hrefFor: (agent: AgentProfile) => string;
   actionsFor: (agent: AgentProfile) => EntityAction[];
 }) {
   const columns: DataTableColumn<AgentProfile>[] = [
@@ -705,7 +709,9 @@ function AgentTable({
       key: "name",
       header: t("agent.name"),
       rowHeader: true,
-      render: (agent) => <RowTitleButton title={agent.name} subtitle={agent.id} onClick={() => onOpen(agent)} />,
+      render: (agent) => (
+        <RowTitleButton title={agent.name} subtitle={agent.id} href={hrefFor(agent)} onClick={() => onOpen(agent)} />
+      ),
     },
     {
       key: "description",
@@ -2785,6 +2791,7 @@ export function McpServersPage() {
               <McpServerTable
                 servers={list}
                 onOpen={(server) => editor.openItem(server.server_id)}
+                hrefFor={(server) => editor.itemHref(server.server_id)}
                 actionsFor={serverActions}
               />
             </QueryState>
@@ -3092,10 +3099,13 @@ function McpServerEditor({
 function McpServerTable({
   servers,
   onOpen,
+  hrefFor,
   actionsFor,
 }: {
   servers: ExternalMcpServerSettings[];
   onOpen: (server: ExternalMcpServerSettings) => void;
+  /** 名前のリンクの URL（新しいタブで開ける。#583）。 */
+  hrefFor: (server: ExternalMcpServerSettings) => string;
   actionsFor: (server: ExternalMcpServerSettings) => EntityAction[];
 }) {
   const columns: DataTableColumn<ExternalMcpServerSettings>[] = [
@@ -3105,7 +3115,7 @@ function McpServerTable({
       rowHeader: true,
       render: (server) => (
         <div className="flex flex-wrap items-center gap-2">
-          <RowTitleButton title={server.server_id} onClick={() => onOpen(server)} />
+          <RowTitleButton title={server.server_id} href={hrefFor(server)} onClick={() => onOpen(server)} />
           {server.is_default ? (
             <StatusBadge variant="info" label={t("settings.mcpServers.default")} icon={false} />
           ) : null}
@@ -3310,6 +3320,7 @@ export function SkillsPage() {
               <SkillTable
                 skills={list}
                 onOpen={(skill) => editor.openItem(skill.id)}
+                hrefFor={(skill) => editor.itemHref(skill.id)}
                 actionsFor={skillActions}
               />
             </QueryState>
@@ -3637,10 +3648,13 @@ function SkillEditor({
 function SkillTable({
   skills,
   onOpen,
+  hrefFor,
   actionsFor,
 }: {
   skills: AgentSkill[];
   onOpen: (skill: AgentSkill) => void;
+  /** 名前のリンクの URL（新しいタブで開ける。#583）。 */
+  hrefFor: (skill: AgentSkill) => string;
   actionsFor: (skill: AgentSkill) => EntityAction[];
 }) {
   const columns: DataTableColumn<AgentSkill>[] = [
@@ -3648,7 +3662,9 @@ function SkillTable({
       key: "name",
       header: t("skills.skill"),
       rowHeader: true,
-      render: (skill) => <RowTitleButton title={skill.name} subtitle={skill.id} onClick={() => onOpen(skill)} />,
+      render: (skill) => (
+        <RowTitleButton title={skill.name} subtitle={skill.id} href={hrefFor(skill)} onClick={() => onOpen(skill)} />
+      ),
     },
     {
       key: "source",
@@ -3834,6 +3850,7 @@ export function PluginsPage() {
               <PluginTable
                 plugins={list}
                 onOpen={(plugin) => editor.openItem(plugin.id)}
+                hrefFor={(plugin) => editor.itemHref(plugin.id)}
                 actionsFor={pluginActions}
               />
             </QueryState>
@@ -4084,10 +4101,13 @@ function PluginBundle({ plugin }: { plugin: PluginSummary }) {
 function PluginTable({
   plugins,
   onOpen,
+  hrefFor,
   actionsFor,
 }: {
   plugins: PluginSummary[];
   onOpen: (plugin: PluginSummary) => void;
+  /** 名前のリンクの URL（新しいタブで開ける。#583）。 */
+  hrefFor: (plugin: PluginSummary) => string;
   actionsFor: (plugin: PluginSummary) => EntityAction[];
 }) {
   const columns: DataTableColumn<PluginSummary>[] = [
@@ -4096,7 +4116,12 @@ function PluginTable({
       header: t("plugins.title"),
       rowHeader: true,
       render: (plugin) => (
-        <RowTitleButton title={plugin.name} subtitle={`${plugin.id} · v${plugin.version}`} onClick={() => onOpen(plugin)} />
+        <RowTitleButton
+          title={plugin.name}
+          subtitle={`${plugin.id} · v${plugin.version}`}
+          href={hrefFor(plugin)}
+          onClick={() => onOpen(plugin)}
+        />
       ),
     },
     {
@@ -4249,6 +4274,7 @@ export function PluginMarketplacesPage() {
               <MarketplaceTable
                 sources={list}
                 onOpen={(source) => editor.openItem(source.id)}
+                hrefFor={(source) => editor.itemHref(source.id)}
                 actionsFor={marketplaceActions}
               />
             </QueryState>
@@ -4410,10 +4436,13 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
 function MarketplaceTable({
   sources,
   onOpen,
+  hrefFor,
   actionsFor,
 }: {
   sources: MarketplaceSource[];
   onOpen: (source: MarketplaceSource) => void;
+  /** 名前のリンクの URL（新しいタブで開ける。#583）。 */
+  hrefFor: (source: MarketplaceSource) => string;
   actionsFor: (source: MarketplaceSource) => EntityAction[];
 }) {
   const columns: DataTableColumn<MarketplaceSource>[] = [
@@ -4422,7 +4451,7 @@ function MarketplaceTable({
       header: t("marketplaces.name"),
       rowHeader: true,
       render: (source) => (
-        <RowTitleButton title={source.name || source.id} subtitle={source.id} onClick={() => onOpen(source)} />
+        <RowTitleButton title={source.name || source.id} subtitle={source.id} href={hrefFor(source)} onClick={() => onOpen(source)} />
       ),
     },
     {

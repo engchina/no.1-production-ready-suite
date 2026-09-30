@@ -349,6 +349,7 @@ function ProfileList({
   onSearchChange,
   onSortChange,
   onSelect,
+  profileHref,
   hasNextPage,
   loadingNextPage,
   loadMoreError,
@@ -366,6 +367,8 @@ function ProfileList({
   onSearchChange: (value: string) => void;
   onSortChange: (key: ProfileListSortKey) => void;
   onSelect: (profile: ProfileSummary) => void;
+  /** プロファイルの編集画面の URL（名前のリンク。新しいタブで開ける。#583）。 */
+  profileHref: (profile: ProfileSummary) => string;
   hasNextPage: boolean;
   loadingNextPage: boolean;
   loadMoreError: string;
@@ -427,6 +430,7 @@ function ProfileList({
                   subtitle={<span className="line-clamp-2">{profile.category || "-"}</span>}
                   current={profile.id === selectedProfileId}
                   aria-label={t("profiles.action.selectProfile", { name: profile.name })}
+                  href={profileHref(profile)}
                   onClick={() => onSelect(profile)}
                 />
               ),
@@ -2194,6 +2198,7 @@ export function ProfileManagementPage() {
                 onSearchChange={setProfileSearch}
                 onSortChange={toggleSort}
                 onSelect={selectProfile}
+                profileHref={(profile) => `${location.pathname}?${new URLSearchParams({ profile: profile.id })}`}
                 hasNextPage={Boolean(profilesQuery.hasNextPage)}
                 loadingNextPage={profilesQuery.isFetchingNextPage}
                 loadMoreError={profileLoadMoreError}
