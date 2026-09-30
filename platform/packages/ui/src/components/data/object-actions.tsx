@@ -14,7 +14,7 @@ import { restoreMenuTriggerFocus } from "../../lib/menu-focus";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { DisclosureChevron } from "../ui/disclosure-chevron";
-import { FloatingActionMenu } from "../ui/floating-menu";
+import { contextualMenuLabel, FloatingActionMenu } from "../ui/floating-menu";
 import { splitObjectActions, visibleEntityActions, type EntityAction } from "./object-actions-core";
 
 export {
@@ -255,6 +255,8 @@ export function ObjectActionBar({
             aria-expanded={open}
             aria-controls={menuId}
             aria-haspopup="menu"
+            // 読み上げ名に対象（ariaLabel）を足し、ページの「その他の操作」と区別する（#582）。
+            aria-label={contextualMenuLabel(moreLabel, ariaLabel)}
             data-testid={testId ? `${testId}-more` : undefined}
             onClick={() => setOpen((current) => !current)}
           >
@@ -267,6 +269,7 @@ export function ObjectActionBar({
               open={open}
               triggerRef={triggerRef}
               menuRef={menuRef}
+              ariaLabel={contextualMenuLabel(moreLabel, ariaLabel)}
               className="min-w-52"
               onKeyDown={handleMenuKeyDown}
             >

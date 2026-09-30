@@ -61,8 +61,9 @@ for (const viewport of [
     const notes = settings.getByTestId("docrag-unused-note");
     await expect(notes).toHaveCount(5);
     await expect(notes.first()).toHaveText("回答エンジンが DocRAG のときは、この設定は使われません。");
+    // 説明は欄の補足と DocRAG の注記をまとめたもの（#584）。
     await expect(page.getByLabel("回答の役割・口調")).toHaveAccessibleDescription(
-      "回答エンジンが DocRAG のときは、この設定は使われません。"
+      /回答エンジンが DocRAG のときは、この設定は使われません。/
     );
     await expectNoPageOverflow(page);
   });
@@ -223,7 +224,7 @@ for (const viewport of [
     await page.keyboard.press("Escape");
     await expect(row.getByRole("button", { name: "DEFAULT の操作" })).toBeFocused();
     // キーボードは先頭セルの名前のボタンで全画面エディタを開く（page-archetypes.md §0-7）。
-    await row.getByRole("button", { name: "DEFAULT を編集" }).focus();
+    await row.getByRole("link", { name: "DEFAULT を編集" }).focus();
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/\/business-views\?id=bv-default$/);
     await expect(page.getByRole("heading", { name: "DEFAULT", level: 1 })).toBeVisible();
@@ -539,7 +540,7 @@ test("業務ビューのエディタは未保存の変更があるとパンく�
   await expect(page).toHaveURL(/\/business-views$/);
 
   // 同じ対象を開き直すと下書きを復元する。新規（?id=new）には持ち込まない。
-  await page.getByRole("button", { name: "経理ビュー を編集" }).click();
+  await page.getByRole("link", { name: "経理ビュー を編集" }).click();
   await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveValue("経費と出張の相談");
   await expect(page.getByText("保存していない下書きを復元しました。")).toBeVisible();
   await page.getByRole("button", { name: "変更を元に戻す" }).click();
@@ -569,7 +570,7 @@ test("エディタからアーカイブすると確認のうえ一覧へ置き�
     archived = true;
   });
   await page.goto("/business-views");
-  await page.getByRole("button", { name: "経理ビュー を編集" }).click();
+  await page.getByRole("link", { name: "経理ビュー を編集" }).click();
   await expect(page).toHaveURL(/\?id=bv-1$/);
 
   await page
@@ -617,16 +618,14 @@ test("業務ビューが無いときは、空の状態から作成エディタ�
   await expect(page).toHaveURL(/\/business-views\?id=new$/);
 });
 
-/** エディタの「一覧へ戻る」。375px ではページ操作の「その他の操作」に入る（主操作 1 つ + その他）。 */
+/**
+ * エディタの「一覧へ戻る」。375px でも「その他の操作」に畳まず、1 タップで押せる
+ * （ページ操作は「一覧へ戻る」と主操作の 2 つだけ。#582）。
+ */
 async function clickBackToList(page: Page) {
   const actions = page.getByRole("group", { name: "ページ操作" });
-  const direct = actions.getByRole("button", { name: "一覧へ戻る" });
-  if (await direct.isVisible()) {
-    await direct.click();
-    return;
-  }
-  await actions.getByRole("button", { name: "その他の操作" }).click();
-  await page.getByRole("menuitem", { name: "一覧へ戻る" }).click();
+  await expect(actions.getByRole("button", { name: /^その他の操作/ })).toHaveCount(0);
+  await actions.getByRole("button", { name: "一覧へ戻る" }).click();
 }
 
 interface BusinessViewSummaryFixture {

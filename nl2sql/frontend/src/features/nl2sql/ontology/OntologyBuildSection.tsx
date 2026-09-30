@@ -13,6 +13,7 @@ import {
   ContentActionBar,
   TimedLoadingState,
   ListSkeleton,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 import {
   useCallback,
@@ -96,10 +97,6 @@ const ONTOLOGY_SOURCE_FILE_FORMATS: TabularFileFormatConfig = {
 // backend の ONTOLOGY_SOURCE_FILE_MAX_COUNT と同じ。上限は Q/A ファイルを含む総数で判定する。
 const ONTOLOGY_SOURCE_FILE_MAX_COUNT = 5;
 const ONTOLOGY_QA_FILE_FORMATS = tabularFileFormatConfig([".xlsm"]);
-const textareaClass =
-  "min-h-24 w-full resize-y rounded-md border border-border bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring";
-const markdownTextareaClass =
-  "min-h-[22rem] w-full resize-y rounded-md border border-border-control bg-surface p-3 font-mono text-xs leading-6 text-fg transition-colors placeholder:text-fg-muted focus:border-focus-ring disabled:cursor-not-allowed disabled:opacity-70";
 type MarkdownTab = "draft" | "published";
 type MarkdownStateApplyReason = "profile-load" | "background" | "build" | "save" | "publish";
 
@@ -1516,16 +1513,15 @@ export function OntologyBuildSection({
           description={t("profiles.ontologyBuild.setupHint")}
         />
         <Banner severity="info">{t("profiles.ontologyBuild.longRunningHint")}</Banner>
-        <label className="grid grid-rows-[auto_1fr] gap-1 text-sm font-medium text-fg">
-          <span>{t("profiles.ontologyBuild.businessText")}</span>
-          <textarea
-            className={textareaClass}
-            value={businessText}
-            rows={4}
-            placeholder={t("profiles.ontologyBuild.businessTextPlaceholder")}
-            onChange={(event) => setBusinessText(event.currentTarget.value)}
-          />
-        </label>
+        <TextareaField
+          id="ontology-build-business-text"
+          label={t("profiles.ontologyBuild.businessText")}
+          textareaClassName="min-h-24"
+          value={businessText}
+          rows={4}
+          placeholder={t("profiles.ontologyBuild.businessTextPlaceholder")}
+          onChange={(event) => setBusinessText(event.currentTarget.value)}
+        />
         <div className="grid min-w-0 content-start gap-3">
           <div
             className="grid min-w-0 gap-2"
@@ -1919,13 +1915,13 @@ export function OntologyBuildSection({
               </div>
             ) : (
               <>
-                <label className="sr-only" htmlFor="ontology-markdown-draft-editor">
-                  {t("profiles.ontologyBuild.markdownTabAria.draft")}
-                </label>
-                <textarea data-surface="code"
+                <TextareaField
                   id="ontology-markdown-draft-editor"
+                  label={t("profiles.ontologyBuild.markdownTabAria.draft")}
+                  labelHidden
+                  surface="code"
                   data-testid="ontology-markdown-draft-editor"
-                  className={markdownTextareaClass}
+                  textareaClassName="min-h-[22rem]"
                   value={draftMarkdown}
                   rows={18}
                   spellCheck={false}

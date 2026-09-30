@@ -867,7 +867,7 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
   await expect(createButton).toHaveClass(/\bbg-accent-emphasis\b/);
 
   if (isCompactHeader) {
-    const moreButton = actions.getByRole("button", { name: "その他の操作", exact: true });
+    const moreButton = actions.getByRole("button", { name: "その他の操作" });
     await expect(actions.getByRole("button")).toHaveText(["その他の操作", "新規作成"]);
     await expect(moreButton).toHaveAttribute("aria-haspopup", "menu");
     await expect(moreButton).toHaveAttribute("aria-expanded", "false");
@@ -1044,7 +1044,7 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   if (await refreshButton.isVisible()) {
     await expect(refreshButton).toBeVisible();
   } else {
-    const moreButton = actions.getByRole("button", { name: "その他の操作", exact: true });
+    const moreButton = actions.getByRole("button", { name: "その他の操作" });
     await moreButton.click();
     await expect(page.getByRole("menuitem", { name: "表示を更新", exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
@@ -2328,7 +2328,7 @@ test("業務プロファイルはcatalogが空のときDB管理用の現在schem
     profileItems: [{ ...profiles[0], allowed_tables: [], allowed_views: [] }],
   });
   await page.goto("/profiles");
-  await page.getByRole("button", { name: /^既定プロファイル/ }).click();
+  await page.getByRole("link", { name: /^既定プロファイル/ }).click();
 
   const tableList = page.getByTestId("profile-allowed-table-list");
   const viewList = page.getByTestId("profile-allowed-view-list");
@@ -2349,7 +2349,7 @@ test("業務プロファイルの対象オブジェクト空状態はExcelプレ
   });
 
   await page.goto("/profiles");
-  await page.getByRole("button", { name: /^既定プロファイル/ }).click();
+  await page.getByRole("link", { name: /^既定プロファイル/ }).click();
 
   const tableList = page.getByTestId("profile-allowed-table-list");
   const viewList = page.getByTestId("profile-allowed-view-list");

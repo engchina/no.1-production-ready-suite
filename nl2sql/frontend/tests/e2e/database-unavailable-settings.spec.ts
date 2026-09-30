@@ -34,7 +34,7 @@ async function clickPageHeaderAction(page: Page, testId: string, name: string) {
     await visibleButton.click();
     return;
   }
-  await actions.getByRole("button", { name: "その他の操作", exact: true }).click();
+  await actions.getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name, exact: true }).click();
 }
 

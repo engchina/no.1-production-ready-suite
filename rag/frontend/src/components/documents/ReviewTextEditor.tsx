@@ -125,6 +125,7 @@ export function ReviewTextEditor({
                       </span>
                     ) : null}
                   </label>
+                  {/* eslint-disable-next-line no-restricted-syntax -- 元の文書の要素を再現して編集するエディタ。ラベルに要素の種別・ページ・章節のバッジを並べるため、文字列のラベルだけを持つ TextareaField では表せない（#584）。 */}
                   <textarea
                     id={fieldId}
                     value={
@@ -175,6 +176,7 @@ export function ReviewTextEditor({
                                       col: cell.col + 1,
                                     })}
                                   </label>
+                                  {/* eslint-disable-next-line no-restricted-syntax -- 元の文書の表のセルを再現して編集するグリッド（DataTable の例外 #129 と同じ）。セルは見出しと枠を表が持ち、欄ごとのラベル・余白を持たないため TextareaField を使わない（#584）。 */}
                                   <textarea
                                     id={fieldId}
                                     value={

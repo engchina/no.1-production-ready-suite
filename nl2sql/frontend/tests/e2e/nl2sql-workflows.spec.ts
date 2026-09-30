@@ -65,7 +65,7 @@ async function clickPageHeaderAction(page: Page, testId: string, name: string) {
     await visibleButton.click();
     return;
   }
-  await actions.getByRole("button", { name: "その他の操作", exact: true }).click();
+  await actions.getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name, exact: true }).click();
 }
 
@@ -84,7 +84,7 @@ async function clickObjectDetailAction(page: Page, testId: string, name: string)
     await visibleButton.click();
     return;
   }
-  await actions.getByRole("button", { name: "その他の操作", exact: true }).click();
+  await actions.getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name, exact: true }).click();
 }
 
@@ -324,10 +324,11 @@ async function expectRequiredTextarea(scope: Page | Locator, id: string, label: 
   const field = scope.locator(`#${id}`);
   const fieldLabel = scope.locator(`label[for="${id}"]`);
   await expect(fieldLabel).toContainText(label);
-  // 必須は共有 RequiredBadge（中立色の「必須」）。入力側の required / aria-required で伝えるのでバッジは読み上げない。
+  // 必須は共有 RequiredBadge（中立色の「必須」）。入力側の aria-required で伝えるのでバッジは読み上げない。
   await expect(fieldLabel.locator('[aria-hidden="true"]')).toHaveText("必須");
   await expect(field).toHaveAccessibleName(label);
-  await expect(field).toHaveAttribute("required", "");
+  // 共有 TextareaField はネイティブの required 検証を使わず、実行時にアプリ側で検証する（TextField と同じ。#584）。
+  await expect(field).not.toHaveAttribute("required");
   await expect(field).toHaveAttribute("aria-required", "true");
 }
 
@@ -4039,7 +4040,7 @@ for (const statusCode of [404, 410, 501, 503]) {
     if (await refreshButton.isVisible()) {
       await refreshButton.click();
     } else {
-      await page.getByRole("button", { name: "その他の操作", exact: true }).click();
+      await page.getByRole("button", { name: "その他の操作" }).click();
       await page.getByRole("menuitem", { name: "DB 構造を再取得", exact: true }).click();
     }
 
@@ -12480,6 +12481,8 @@ test("同名の既存オブジェクトと衝突するサンプルは警告し�
 });
 
 test("sample data and data management run imported workflows", async ({ page }) => {
+  // 1 回に 21〜28 秒かかり、既定の 30 秒に近い。並列で負荷が高いと時間切れになるため延ばす。
+  test.slow();
   const api = await mockNl2SqlApi(page);
   const currentPreviewDataPayload = () => api.previewDataPayload;
   const dbAdminObjectOwnerPrefixRequests: string[] = [];
@@ -13179,7 +13182,7 @@ test("DB 構造再取得は旧30秒上限を超えても三つの管理画面で
     if (await directAction.isVisible()) {
       await directAction.click();
     } else {
-      await header.getByRole("button", { name: "その他の操作", exact: true }).click();
+      await header.getByRole("button", { name: "その他の操作" }).click();
       await page.getByRole("menuitem", { name: "DB 構造を再取得", exact: true }).click();
     }
     await expect.poll(() => submitted).toBe(index + 1);
@@ -13201,7 +13204,7 @@ test("DB 構造再取得は旧30秒上限を超えても三つの管理画面で
     if (await directAction.isVisible()) {
       await expect(directAction).toBeDisabled();
     } else {
-      await header.getByRole("button", { name: "その他の操作", exact: true }).click();
+      await header.getByRole("button", { name: "その他の操作" }).click();
       await expect(
         page.getByRole("menuitem", { name: "DB 構造を再取得", exact: true }),
       ).toBeDisabled();
@@ -13324,7 +13327,7 @@ test("実行中 DB 構造再取得を全10ルートと再読込後に復元し�
       if (await directAction.isVisible()) {
         await expect(directAction).toBeDisabled();
       } else {
-        await header.getByRole("button", { name: "その他の操作", exact: true }).click();
+        await header.getByRole("button", { name: "その他の操作" }).click();
         await expect(
           page.getByRole("menuitem", { name: "DB 構造を再取得", exact: true }),
         ).toBeDisabled();

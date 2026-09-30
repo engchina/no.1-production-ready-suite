@@ -10,6 +10,7 @@ const LOADING_ICON = "loading を渡す Button には icon を渡す";
 const FOCUS_RING = "フォーカスの表示を ring";
 const HANDWRITTEN_SEARCH = "アイコン付きの入力欄（検索欄）を手書きしない";
 const HANDWRITTEN_DISCLOSURE = "開閉できる領域は <details> / <summary> を手書きせず";
+const HANDWRITTEN_TEXTAREA = "複数行の入力欄は <textarea> を手書きせず";
 const LIST_SEARCH = "一覧の絞り込みの検索欄は SearchField";
 const OPTIONAL_MARKER = "任意の欄を「(任意)」や placeholder で示さない";
 const HANDWRITTEN_REQUIRED = "必須の表示を手書きしない";
@@ -108,6 +109,18 @@ const d = <button aria-expanded={open}>詳細<DisclosureChevron expanded={open} 
 const e = <div data-details="x">詳細</div>;
 `);
     expect(linesWith(messages, HANDWRITTEN_DISCLOSURE)).toEqual([2, 3]);
+  });
+});
+
+describe("adherence: 手書きの複数行の入力欄（#584）", () => {
+  it("<textarea> を検出し、TextareaField・textarea 以外は許す", async () => {
+    const messages = await lint(`
+const a = <textarea id="p" value={v} onChange={onChange} />;
+const b = <textarea id="p" rows={3} className="w-full rounded-md border">{v}</textarea>;
+const c = <TextareaField id="p" label="プロンプト" value={v} onValueChange={setV} />;
+const d = <div data-textarea="x">本文</div>;
+`);
+    expect(linesWith(messages, HANDWRITTEN_TEXTAREA)).toEqual([2, 3]);
   });
 });
 

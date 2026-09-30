@@ -4,13 +4,13 @@ import { useState } from "react";
 import {
   Button,
   EmptyState,
-  FieldError,
   FieldLabel,
   FormStatus,
   ProcessingIndicator,
   RowActionMenu,
   SelectField,
   TableSkeleton,
+  TextareaField,
   TextField,
   TimedLoadingState,
   toast,
@@ -195,30 +195,19 @@ export function ApprovedFaqManager({
             error={addErrors.question ?? undefined}
             required
           />
-          <div>
-            <FieldLabel
-              htmlFor="approved-faq-answer"
-              label={t("businessViews.faq.answer")}
-              required
-            />
-            <textarea
-              id="approved-faq-answer"
-              aria-required="true"
-              aria-invalid={addErrors.answer ? true : undefined}
-              aria-describedby={addErrors.answer ? "approved-faq-answer-error" : undefined}
-              value={answer}
-              onChange={(event) => {
-                setAnswer(event.target.value);
-                setAddErrors((current) => ({ ...current, answer: null }));
-              }}
-              rows={4}
-              maxLength={20000}
-              className={`mt-1 w-full rounded-md border bg-surface-sunken px-3 py-2 text-sm focus-visible:border-focus-ring ${
-                addErrors.answer ? "border-danger-fg" : "border-border-control"
-              }`}
-            />
-            <FieldError id="approved-faq-answer-error" message={addErrors.answer} className="mt-1" />
-          </div>
+          <TextareaField
+            id="approved-faq-answer"
+            label={t("businessViews.faq.answer")}
+            required
+            error={addErrors.answer ?? undefined}
+            value={answer}
+            onChange={(event) => {
+              setAnswer(event.target.value);
+              setAddErrors((current) => ({ ...current, answer: null }));
+            }}
+            rows={4}
+            maxLength={20000}
+          />
           {/* 追加のボタンは押せる状態のまま、未入力は押したときに欄の直下へ出す（#541）。文言は backend と同じ。 */}
           <Button
             size="sm"

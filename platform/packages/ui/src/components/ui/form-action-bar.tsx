@@ -22,7 +22,7 @@ import { restoreMenuTriggerFocus } from "../../lib/menu-focus";
 import { cn } from "../../lib/utils";
 import { Button, buttonVariants } from "./button";
 import { DisclosureChevron } from "./disclosure-chevron";
-import { FloatingActionMenu } from "./floating-menu";
+import { contextualMenuLabel, FloatingActionMenu } from "./floating-menu";
 
 
 export interface FormActionDescriptor {
@@ -199,10 +199,14 @@ function DangerMenuItem({
 function DangerActionsMenu({
   actions,
   moreLabel,
+  context,
 }: {
   actions: readonly FormActionDescriptor[];
   moreLabel: string;
+  /** 操作のグループの読み上げ名。メニューのボタンの読み上げ名に足す（#582）。 */
+  context: string;
 }) {
+  const accessibleName = contextualMenuLabel(moreLabel, context);
   const [open, setOpen] = useState(false);
   const menuId = useId();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -275,6 +279,7 @@ function DangerActionsMenu({
         aria-expanded={open}
         aria-controls={menuId}
         aria-haspopup="menu"
+        aria-label={accessibleName}
         data-testid="form-actions-more"
         onClick={() => setOpen((current) => !current)}
       >
@@ -287,6 +292,7 @@ function DangerActionsMenu({
           open={open}
           triggerRef={triggerRef}
           menuRef={menuRef}
+          ariaLabel={accessibleName}
           className="min-w-56 max-w-[calc(100vw-1rem)]"
           onKeyDown={handleMenuKeyDown}
         >
@@ -330,7 +336,7 @@ export function FormActionBar({
           <VisibleAction key={action.id} action={action} variant="secondary" />
         ))}
         {status ? <div className="min-w-0 sm:flex-1">{status}</div> : null}
-        <DangerActionsMenu actions={dangerActions} moreLabel={moreLabel} />
+        <DangerActionsMenu actions={dangerActions} moreLabel={moreLabel} context={ariaLabel} />
       </div>
     </div>
   );

@@ -8,6 +8,7 @@ import {
   CardContent,
   SelectField,
   type SelectFieldOption,
+  TextareaField,
   TextField,
   ToggleChip,
   TimedLoadingState,
@@ -1076,12 +1077,11 @@ export function ChatClient() {
                 </div>
               ) : null}
               <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                <label htmlFor="chat-composer" className="sr-only">
-                  {t("chat.composer.placeholder")}
-                </label>
-                <textarea
+                <TextareaField
                   ref={composerRef}
                   id="chat-composer"
+                  label={t("chat.composer.placeholder")}
+                  labelHidden
                   value={composer}
                   onChange={(event) => setComposer(event.target.value)}
                   onKeyDown={(event) => {
@@ -1098,7 +1098,9 @@ export function ChatClient() {
                   // 生成中も入力できる（次の質問を書ける）。生成中の Enter は send が無視し、停止しない（#413）。
                   // 生成中に disabled にすると、Enter で送った直後にフォーカスが body へ外れる。
                   disabled={!activeId}
-                  className="min-h-11 min-w-0 flex-1 resize-y rounded-md border border-border-control bg-surface-sunken p-2 text-sm text-fg disabled:opacity-60"
+                  // ラベルは読み上げだけ（sr-only）なので、欄の上に余白を空けず送信ボタンと下端をそろえる。
+                  className="min-w-0 flex-1 space-y-0"
+                  textareaClassName="min-h-11"
                 />
                 {/* 送信と停止は同じボタン。生成中は同じ位置で「停止」になる（buttons.md §3.1、#413）。 */}
                 <RunStopButton

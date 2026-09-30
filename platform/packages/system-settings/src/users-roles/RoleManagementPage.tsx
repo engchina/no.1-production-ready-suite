@@ -43,6 +43,7 @@ import {
   entityActionToFormAction,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  TextareaField,
 } from "@engchina/production-ready-ui";
 
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
@@ -785,18 +786,17 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                     <FieldError id="security-role-name-error" message={fieldErrors.displayName} />
                   </div>
                 </div>
-                <label className="grid gap-1.5 text-sm font-medium">
-                  <span>{t("security.roles.description")}</span>
-                  <textarea
-                    disabled={inputReadOnly}
-                    className="min-h-24 w-full rounded-md border border-border-control bg-surface px-3 py-2 text-sm focus:border-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
-                    value={draft.description}
-                    onChange={(event) => {
-                      if (inputReadOnly) return;
-                      setDraft((current) => ({ ...current, description: event.target.value }));
-                    }}
-                  />
-                </label>
+                <TextareaField
+                  id="security-role-description"
+                  label={t("security.roles.description")}
+                  disabled={inputReadOnly}
+                  textareaClassName="min-h-24"
+                  value={draft.description}
+                  onValueChange={(value) => {
+                    if (inputReadOnly) return;
+                    setDraft((current) => ({ ...current, description: value }));
+                  }}
+                />
 
                 <FormActionBar
                   ariaLabel={t("security.roles.editActions")}
