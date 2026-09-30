@@ -350,10 +350,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     oci_enterprise_ai_endpoint: str = Field(default="")
     oci_enterprise_ai_project_ocid: str = Field(default="")
     oci_enterprise_ai_api_key: str = Field(default="")
-    # 接続 1 の表示名と接続 2（#533）。モデルを呼ぶ接続は
+    # OCI Enterprise AI のセカンダリ接続（#533）。モデルを呼ぶ接続は
     # enterprise_ai_connection_for_model で引く。
-    oci_enterprise_ai_connection_name: str = Field(default="")
-    oci_enterprise_ai_secondary_connection_name: str = Field(default="")
     oci_enterprise_ai_secondary_endpoint: str = Field(default="")
     oci_enterprise_ai_secondary_project_ocid: str = Field(default="")
     oci_enterprise_ai_secondary_api_key: str = Field(default="")

@@ -163,27 +163,34 @@ import { AppShell, Sidebar } from "@engchina/production-ready-ui";
 4. 3 製品の backend と worker を起動する。RAG は、解析サービス（parser）に渡す実行用の env（`RAG_SERVICE_RUNTIME_ENV_FILE`）を
    backend が書き直すので、RAG の「サービス管理」画面から OCI の parser を再起動する（`systemctl restart` だけでは古い env のまま）。
 
-## OCI Enterprise AI の接続を 2 件にする（#533）
+## OCI Enterprise AI のプライマリ接続・セカンダリ接続（#533 / #542）
 
-「システム設定 › モデル」の OCI Enterprise AI は、接続（Endpoint URL・Project OCID・API key）を最大 2 件持ち、登録モデルごとに
-使う接続を選ぶ（未指定のモデルは接続 1）。上限は `pr_system_settings.model.MAX_ENTERPRISE_AI_CONNECTIONS`（2）。
+「システム設定 › モデル」の OCI Enterprise AI は、接続（Endpoint URL・Project OCID・API key）を「プライマリ接続」と「セカンダリ接続」の
+2 つまで持ち、登録モデルごとに使う接続を選ぶ（未指定のモデルはプライマリ接続）。画面はカードの中の共有の `Tabs` で 2 つの接続を
+切り替え、登録モデルの「接続」の選択肢もタブと同じ名前を出す（設定していないセカンダリ接続は出さない）。内部の ID は `primary` /
+`secondary`、上限は `pr_system_settings.model.MAX_ENTERPRISE_AI_CONNECTIONS`（2）。
 
-- **既存環境の更新は要らない。** 接続 1 は今までの属性・変数名（`PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT` / `_PROJECT_OCID` / `_API_KEY`）の
-  ままで、保存済みの `model-settings.json`（接続 1 組の形）は、読み込むときに接続 1 として扱う。画面で保存し直すと、
+- **既存環境の更新は要らない。** プライマリ接続は今までの属性・変数名（`PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT` / `_PROJECT_OCID` /
+  `_API_KEY`）のままで、保存済みの `model-settings.json`（接続 1 組の形）は、読み込むときにプライマリ接続として扱う。画面で保存し直すと、
   `enterprise_ai.connections`（secret なし）と、登録モデルの `connection_id` を書く。
-- 接続 2 の変数（共通 `.env`。`PLATFORM_SETTING_FIELDS` に登録済み）。Endpoint URL があるときだけ接続 2 が有効になる。
+- **接続の表示名は廃止した（#542）。** #533 で入れた `PLATFORM_OCI_ENTERPRISE_AI_CONNECTION_NAME` /
+  `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_CONNECTION_NAME` は読まない（旧名との互換は持たない。`.env` に残っていても無視されるので、
+  消してよい）。API の接続の `display_name` もない。表示名が残った `model-settings.json`・payload は、その項目を無視して読み込む
+  （次に保存すると消える）。
+- 必須の欄: プライマリ接続の 3 つの欄は OCI で運用するときだけ必須（画面は「OCI 運用時必須」。保存は止めない）。セカンダリ接続は、
+  設定したら Endpoint URL・Project OCID・API key がすべて必須（backend も 422 で止める。API key は保存後の値で確かめ、空欄は
+  保存済みの key を保持する）。セカンダリ接続の API key だけを消す指定はなく、消すときはセカンダリ接続ごと削除する。
+- セカンダリ接続の変数（共通 `.env`。`PLATFORM_SETTING_FIELDS` に登録済み）。Endpoint URL があるときだけセカンダリ接続が有効になる。
 
   | 変数 | 内容 |
   |---|---|
-  | `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_ENDPOINT` | 接続 2 の Endpoint URL |
-  | `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_PROJECT_OCID` | 接続 2 の Project OCID |
-  | `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY` | 接続 2 の API key（`platform/.env` だけに保存。JSON・API の応答には含めない） |
-  | `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_CONNECTION_NAME` | 接続 2 の表示名（任意。空なら「接続 2」） |
-  | `PLATFORM_OCI_ENTERPRISE_AI_CONNECTION_NAME` | 接続 1 の表示名（任意。空なら「接続 1」） |
+  | `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_ENDPOINT` | セカンダリ接続の Endpoint URL |
+  | `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_PROJECT_OCID` | セカンダリ接続の Project OCID |
+  | `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY` | セカンダリ接続の API key（`platform/.env` だけに保存。JSON・API の応答には含めない） |
 
 - `.env` だけで設定する場合は、登録モデル（`PLATFORM_OCI_ENTERPRISE_AI_MODELS`）に `"connection_id": "secondary"` を書く。
 - 実行時は、モデルを呼ぶたびに `enterprise_ai_connection_for_model(settings, model_id)` でそのモデルの接続を引く（3 製品の呼び出し・
-  接続テスト・RAG の readiness / NL2SQL の診断）。接続を持たない ID（登録モデルにない ID、消えた接続を指すモデル）は接続 1 を使う。
+  接続テスト・RAG の readiness / NL2SQL の診断）。接続を持たない ID（登録モデルにない ID、消えた接続を指すモデル）はプライマリ接続を使う。
 - env だけを受け取る部品は、使うモデルの接続を渡す。
   - RAG の OCI の parser（`service_runtime_env`）: VLM 抽出だけなので **既定の Vision モデルの接続** を `PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT`
     / `_API_KEY` / `_PROJECT_OCID` に書く（接続を変えたら「サービス管理」から parser を再起動する）。

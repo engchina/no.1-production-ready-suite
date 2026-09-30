@@ -12,7 +12,6 @@ const baseline: ModelSettingsPayload = {
     connections: [
       {
         connection_id: "primary",
-        display_name: "",
         endpoint: "https://saved.example",
         project_ocid: "ocid1.generativeaiproject.oc1..saved",
         api_key: "",
@@ -90,12 +89,11 @@ describe("buildSectionSavePayload", () => {
   });
 });
 
-describe("buildSectionSavePayload（接続。#533）", () => {
+describe("buildSectionSavePayload（接続。#533 / #542）", () => {
   const secondary = {
     connection_id: "secondary" as const,
-    display_name: "シカゴ",
     endpoint: "https://secondary.example",
-    project_ocid: "",
+    project_ocid: "ocid1.generativeaiproject.oc1..secondary",
     api_key: "",
     has_api_key: true,
     clear_api_key: false,
@@ -111,7 +109,7 @@ describe("buildSectionSavePayload（接続。#533）", () => {
     },
   };
 
-  it("接続の節は接続の一覧を送り、削除した接続を使う保存済みのモデルは接続 1 に移す", () => {
+  it("接続の節は接続の一覧を送り、削除した接続を使う保存済みのモデルはプライマリ接続に移す", () => {
     const draft: ModelSettingsPayload = {
       ...twoConnections,
       enterprise_ai: {

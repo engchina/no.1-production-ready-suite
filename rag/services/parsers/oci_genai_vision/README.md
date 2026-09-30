@@ -24,7 +24,7 @@ OCI Generative AI (Vision) を呼ぶ parser マイクロサービス(OCI クラ�
 `PLATFORM_OCI_ENTERPRISE_AI_TIMEOUT_SECONDS` / `_MAX_RETRIES`。
 
 接続(`PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT` / `_API_KEY` / `_PROJECT_OCID`)には、backend が **既定の Vision モデルの接続**
-(モデル設定で接続 2 を選んだ Vision モデルなら接続 2)を書く(#533。`app.services.control.service_runtime_env`)。
+(モデル設定でセカンダリ接続を選んだ Vision モデルならセカンダリ接続)を書く(#533。`app.services.control.service_runtime_env`)。
 
 ## ローカル実行
 

@@ -13315,9 +13315,7 @@ class Nl2SqlService:
         text_connection = enterprise_ai_connection_for_model(
             settings, self._enterprise_ai_client.model_id()
         )
-        text_connection_label = connection_label(
-            text_connection.connection_id, text_connection.display_name
-        )
+        text_connection_label = connection_label(text_connection.connection_id)
         uses_oracle_runtime = self._use_oracle_runtime()
         with self._lock:
             select_ai_asset_meta = self._asset_meta.get(Nl2SqlEngine.SELECT_AI)
@@ -13343,7 +13341,8 @@ class Nl2SqlService:
             check_present("PLATFORM_ORACLE_ADB_OCID", "ADB OCID"),
             check_present("PLATFORM_OCI_REGION", "OCI region"),
             check_present("PLATFORM_OCI_COMPARTMENT_ID", "OCI compartment"),
-            # テキストモデルの接続（#533。接続 2 なら PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_*）。
+            # テキストモデルの接続（#533）。セカンダリ接続なら
+            # PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_*。
             DiagnosticCheck(
                 name="PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT",
                 status="ok" if text_connection.endpoint else "warning",

@@ -4,31 +4,37 @@
  */
 export const MODEL_MESSAGES = {
   "common.delete": "削除",
-  "settings.model.connection.add": "接続を追加",
-  "settings.model.connection.addHelp":
-    "別のリージョンや Project にあるモデルを使うときに追加します（{max} 件まで）。",
-  "settings.model.connection.displayName": "表示名",
-  "settings.model.connection.displayNameHelp":
-    "登録モデルの「接続」の選択肢に表示します。空のときは「{name}」と表示します。",
+  "settings.model.connection.add": "セカンダリ接続を設定",
+  "settings.model.connection.error.apiKeyRequired": "API key を入力してください。",
   "settings.model.connection.error.endpointRequired":
-    "{connection} の Endpoint URL を入力してください。使わない場合は接続を削除してください。",
+    "Endpoint URL を入力してください。",
+  "settings.model.connection.error.projectRequired":
+    "Project OCID を入力してください。",
   "settings.model.connection.error.missing":
     "「{model}」の接続がありません。登録されている接続から選び直してください。",
   "settings.model.connection.error.unsaved":
     "{connection} はまだ保存されていません。上の「OCI Enterprise AI」で接続を保存してから、登録モデルを保存してください。",
-  "settings.model.connection.name": "接続 {number}",
+  "settings.model.connection.primary": "プライマリ接続",
   "settings.model.connection.primaryDescription":
-    "登録モデルで接続を選ばなければ、この接続を使います。",
-  "settings.model.connection.primaryTitle": "接続 1（既定）",
-  "settings.model.connection.remove": "接続を削除",
+    "登録モデルで接続を選ばなければ、プライマリ接続を使います。",
+  "settings.model.connection.remove": "セカンダリ接続を削除",
   "settings.model.connection.removeConfirm.description":
-    "{connection} の入力内容を削除します。保存するまで確定しません。",
+    "セカンダリ接続の入力内容を削除します。保存するまで確定しません。",
   "settings.model.connection.removeConfirm.descriptionInUse":
-    "{connection} を使っている登録モデルがあります（{models}）。削除すると、これらのモデルは接続 1 を使います。保存するまで確定しません。",
-  "settings.model.connection.removeConfirm.moveAndRemove": "接続 1 に移して削除",
-  "settings.model.connection.removeConfirm.title": "{connection} を削除しますか？",
+    "セカンダリ接続を使っている登録モデルがあります（{models}）。削除すると、これらのモデルはプライマリ接続を使います。保存するまで確定しません。",
+  "settings.model.connection.removeConfirm.moveAndRemove":
+    "プライマリ接続に移して削除",
+  "settings.model.connection.removeConfirm.title":
+    "セカンダリ接続を削除しますか？",
+  "settings.model.connection.secondary": "セカンダリ接続",
   "settings.model.connection.secondaryDescription":
-    "この接続を選んだ登録モデルは、この接続で呼び出します。",
+    "登録モデルの「接続」でセカンダリ接続を選んだモデルは、この接続で呼び出します。",
+  "settings.model.connection.secondaryEmpty.hint":
+    "別のリージョンや Project にあるモデルを使うときに設定します。設定すると、Endpoint URL・Project OCID・API key はすべて必須です。",
+  "settings.model.connection.secondaryEmpty.title":
+    "セカンダリ接続は設定されていません。",
+  "settings.model.connection.tabs": "OCI Enterprise AI の接続",
+  "settings.model.connection.unsaved": "未保存",
   "settings.model.defaults.description":
     "処理の種類ごとに使うモデルを登録モデルから選びます。",
   "settings.model.defaults.error.noVisionModel":
@@ -40,7 +46,7 @@ export const MODEL_MESSAGES = {
   "settings.model.defaults.error.visionRemoved":
     "「{model}」は登録モデルにありません。登録モデルから選び直してください。",
   "settings.model.defaults.error.visionRequired":
-    "既定の Vision モデルを選んでください。",
+    "既定の Vision モデルを選択してください。",
   "settings.model.defaults.text": "既定のテキストモデル",
   "settings.model.defaults.textHelp":
     "画像を扱わない処理（回答生成・要約・SQL 生成など）で使います。未設定のときは既定の Vision モデルを使います。",
@@ -63,7 +69,7 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.connection": "接続",
   "settings.model.enterprise.connectionOfModel": "モデル {number} の接続",
   "settings.model.enterprise.description":
-    "回答生成と Vision/OCR 解析に使う Enterprise AI の接続情報を設定します。接続は 2 件まで設定でき、登録モデルごとに使う接続を選べます。",
+    "回答生成と Vision/OCR 解析に使う Enterprise AI の接続情報を設定します。プライマリ接続に加えてセカンダリ接続を設定でき、登録モデルごとに使う接続を選べます。",
   "settings.model.enterprise.displayName": "表示名",
   "settings.model.enterprise.endpoint": "Endpoint URL",
   "settings.model.enterprise.endpointDocs":

@@ -53,7 +53,7 @@ function adbInfoFixture(overrides: Record<string, unknown> = {}) {
 
 const WALLET_PENDING_MESSAGE = "OCI から Wallet を取得し、サーバーへ安全に設定しています…";
 
-/** モデル設定の payload の接続 1（#533。接続は一覧で持つ）。 */
+/** モデル設定の payload のプライマリ接続（#533。接続は一覧で持つ）。 */
 function primaryConnection(enterprise: unknown): Record<string, unknown> {
   return ((enterprise as Record<string, unknown>).connections as Array<Record<string, unknown>>)[0];
 }
@@ -61,7 +61,6 @@ function primaryConnection(enterprise: unknown): Record<string, unknown> {
 function primaryConnectionFixture(overrides: Record<string, unknown> = {}) {
   return {
     connection_id: "primary",
-    display_name: "",
     endpoint: "https://enterprise-ai.example.com",
     project_ocid: "ocid1.generativeaiproject.oc1.ap-osaka-1.example",
     api_key: "",
@@ -1851,7 +1850,8 @@ test("モデル API Key を .env に新規保存して削除でき、プレビ�
   });
 
   await page.goto("/settings/model");
-  await page.getByLabel("API key", { exact: true }).fill("new-key-fixture");
+  // ラベルには「OCI 運用時必須」のタグも入るので、欄は id で引く（#542）。
+  await page.locator("#enterprise-api-key").fill("new-key-fixture");
   await expectModelPreviewPanelsAbsent(page);
   await expect(page.locator("body")).not.toContainText("new-key-fixture");
   await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
@@ -1867,18 +1867,19 @@ test("モデル API Key を .env に新規保存して削除でき、プレビ�
   await expectNoHorizontalOverflow(page);
 });
 
-test("モデル設定は接続 2 と登録モデルの接続を表示し、接続を選んで保存する (#533)", async ({
+test("モデル設定はプライマリ接続とセカンダリ接続をタブで切り替え、登録モデルの接続を選んで保存する (#542)", async ({
   page,
 }) => {
   await page.unroute("**/api/settings/model");
   const base = modelSettingsFixture();
+  // #533 の表示名（display_name）が残った応答も読める（#542 で廃止。画面は ID から名前を出す）。
   const persisted = modelSettingsFixture({
     settings: {
       ...base.settings,
       enterprise_ai: {
         ...base.settings.enterprise_ai,
         connections: [
-          primaryConnectionFixture(),
+          primaryConnectionFixture({ display_name: "大阪" }),
           primaryConnectionFixture({
             connection_id: "secondary",
             display_name: "シカゴ",
@@ -1900,21 +1901,31 @@ test("モデル設定は接続 2 と登録モデルの接続を表示し、接�
   });
 
   await page.goto("/settings/model");
-  await expect(page.getByRole("heading", { name: "接続 1（既定）" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "接続 2", exact: true })).toBeVisible();
+  const tablist = page.getByRole("tablist", { name: "OCI Enterprise AI の接続" });
+  await expect(tablist.getByRole("tab", { name: "プライマリ接続" })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  );
+  await expect(page.getByText("シカゴ")).toHaveCount(0);
+  await tablist.getByRole("tab", { name: "セカンダリ接続" }).click();
   await expect(page.locator("#enterprise-secondary-endpoint")).toHaveValue(
     "https://secondary.example.com"
   );
   const modelConnection = page.getByRole("combobox", { name: "モデル 2 の接続" });
-  await expect(modelConnection).toContainText("接続 1");
+  await expect(modelConnection).toContainText("プライマリ接続");
   await modelConnection.click();
-  await page.getByRole("listbox", { name: "モデル 2 の接続" }).getByRole("option", { name: /シカゴ/ }).click();
+  const options = page.getByRole("listbox", { name: "モデル 2 の接続" }).getByRole("option");
+  await expect(options).toHaveText(["プライマリ接続", "セカンダリ接続"]);
+  await options.filter({ hasText: "セカンダリ接続" }).click();
   await page.getByRole("button", { name: "登録モデル: 保存" }).click();
   await expect(page.getByText("登録モデルを保存しました。")).toBeVisible();
-  const models = (requests[0].enterprise_ai as Record<string, unknown>).models as Array<
-    Record<string, unknown>
-  >;
+  const enterprise = requests[0].enterprise_ai as Record<string, unknown>;
+  const models = enterprise.models as Array<Record<string, unknown>>;
   expect(models.map((model) => model.connection_id)).toEqual(["primary", "secondary"]);
+  // 保存する payload に表示名を含めない。
+  for (const connection of enterprise.connections as Array<Record<string, unknown>>) {
+    expect(connection).not.toHaveProperty("display_name");
+  }
   await expectNoHorizontalOverflow(page);
 });
 
