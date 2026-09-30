@@ -1,9 +1,7 @@
 import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 
 import {
-  Breadcrumbs,
   Button,
   EmptyState,
   FixedSplitPane,
@@ -14,28 +12,6 @@ import { t } from "@/lib/i18n";
 
 /** Agent の分割ペインの比率を保存する localStorage key の前置き（製品ごとに分ける）。 */
 export const AGENT_SPLIT_STORAGE_PREFIX = "production-ready-agent.fixedSplitPane";
-
-/**
- * A 型のエディタのパンくず（一覧 › 対象名）。一覧へのリンクは内部リンクなので、
- * 未保存の編集があれば共有の離脱ガードが破棄を確認する。
- */
-export function EditorBreadcrumbs({
-  listLabel,
-  listHref,
-  current,
-}: {
-  listLabel: string;
-  listHref: string;
-  current: string;
-}) {
-  return (
-    <Breadcrumbs
-      ariaLabel={t("common.breadcrumbs")}
-      linkComponent={Link}
-      items={[{ label: listLabel, href: listHref }, { label: current }]}
-    />
-  );
-}
 
 /** URL の `?id=` が一覧に無いときの説明。黙って別の対象に置き換えず、一覧へ戻る導線を出す。 */
 export function MissingEditorTarget({ id, onBack }: { id: string; onBack: () => void }) {

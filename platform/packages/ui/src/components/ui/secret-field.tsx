@@ -8,7 +8,7 @@ import { Button } from "./button";
 import { FieldError } from "./field-error";
 import { FormStatus } from "./form-status";
 import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
-import { fieldControlClass } from "./text-field";
+import { CONTROL_MIN_HEIGHT_CLASS, type ControlSize, type FieldWidth, fieldControlClass, fieldWidthClass } from "./control-size";
 
 /** 保存済みの値を削除する指定（保存済みの値があるときだけ表示する）。 */
 export interface SecretFieldClearOption {
@@ -58,6 +58,10 @@ export interface SecretFieldProps {
   /** 保存済みの値を削除する指定。hasSavedSecret のときだけ入力欄の下に出し、指定中は入力欄を無効にする。 */
   clearOption?: SecretFieldClearOption;
   autoComplete?: string;
+  /** 高さ（既定 md = 36px）。同じ行の Button と同じ size にする（#613）。 */
+  size?: ControlSize;
+  /** 幅（既定は親の幅いっぱい）。sm（640px）未満は全幅（#613）。 */
+  width?: FieldWidth;
   className?: string;
   ref?: Ref<HTMLInputElement>;
 }
@@ -93,6 +97,8 @@ export function SecretField({
   disabled = false,
   clearOption,
   autoComplete = "off",
+  size = "md",
+  width,
   className,
   ref,
 }: SecretFieldProps) {
@@ -122,7 +128,7 @@ export function SecretField({
   }
 
   return (
-    <div className={cn("min-w-0 space-y-1.5", className)}>
+    <div className={cn("min-w-0 space-y-1.5", fieldWidthClass(width), className)}>
       {/* 隣の TextField とラベル行の高さ（20px）をそろえ、2 列の入力欄の上端を一致させる。 */}
       <div className="flex min-h-5 flex-wrap items-center justify-between gap-2">
         <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
@@ -150,7 +156,7 @@ export function SecretField({
           spellCheck={false}
           placeholder={placeholder}
           onChange={(event) => onValueChange(event.target.value)}
-          className={cn(fieldControlClass, "pr-11", error ? "border-danger-fg" : "border-border-control")}
+          className={cn(fieldControlClass, CONTROL_MIN_HEIGHT_CLASS[size], "pr-11", error ? "border-danger-fg" : "border-border-control")}
         />
         {/* 入力欄の直後に置く（`#id + button` で引ける）。高さは入力欄に合わせる。
             無効時の地と枠は入力欄が示すので、ボタン側では重ねない（loading 中の aria-disabled も同じ）。 */}

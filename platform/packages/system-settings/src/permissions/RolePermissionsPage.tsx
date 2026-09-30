@@ -8,7 +8,7 @@ import {
   type FormEvent,
 } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, LockKeyhole, Pencil, Plus, RefreshCw, ShieldCheck } from "lucide-react";
+import { LockKeyhole, Pencil, Plus, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import {
   Banner,
   BulkSelectionActions,
@@ -18,7 +18,6 @@ import {
   DataTable,
   EmptyState,
   FieldError,
-  FormStatus,
   ObjectActionBar,
   PageBody,
   PageHeader,
@@ -31,7 +30,7 @@ import {
   type DataTableColumn,
   type DataTableSort,
   type EntityAction,
-  FormActionBar,
+  SaveErrorBanner,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@engchina/production-ready-ui";
@@ -302,6 +301,8 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
   const editingRole = roles.find((role) => role.role_id === editingId) ?? null;
   const readOnly = Boolean(!canManage || (editingRole && !permissionsEditable(editingRole)));
   const operationBusy = busy || loading;
+  // 保存を試みた回数（保存の失敗の Banner を、同じ文言の失敗でも入れ直す。#585）。
+  const [submitAttempt, setSubmitAttempt] = useState(0);
   const inputReadOnly = readOnly || operationBusy;
   const isDirty = activeView !== "list" && canonicalDraft(draft) !== canonicalDraft(baseline);
   const confirmLeave = async () =>
@@ -507,6 +508,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (inputReadOnly || !editingRole) return;
+    setSubmitAttempt((current) => current + 1);
     setBusy(true);
     setFormError("");
     try {
@@ -660,7 +662,26 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                   loading,
                 },
               ]
-            : []
+            : !readOnly
+              ? [
+                  {
+                    id: "save",
+                    kind: "primary" as const,
+                    label: m.save,
+                    icon: Save,
+                    loading: busy,
+                    disabled: operationBusy,
+                    testId: "security-permissions-submit",
+                    onClick: () => formRef.current?.requestSubmit(),
+                  },
+                ]
+              : []
+        }
+        // 詳細・作成・編集の画面の「一覧へ戻る」は左上、保存は右端の primary（#618）。
+        back={
+          activeView === "list"
+            ? undefined
+            : { label: m.backToList, onClick: () => void returnToList(), disabled: operationBusy, testId: "security-permissions-back" }
         }
         actionsLabel={m.actionsLabel}
         actionsTestId="security-permissions-actions"
@@ -766,18 +787,8 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
           </SecurityManagementPanelShell>
         ) : (
           <>
-            <div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={operationBusy}
-                onClick={returnToList}
-                icon={ArrowLeft}
-              >
-                <span>{m.backToList}</span>
-              </Button>
-            </div>
+            {/* 保存の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
+            <SaveErrorBanner message={formError} attemptKey={submitAttempt} testId="security-permissions-save-error" />
             <SecurityManagementPanelShell
               id="security-permissions-panel-edit"
               idPrefix="security-permissions"
@@ -913,34 +924,6 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                   />
                 ))}
 
-                <FormActionBar
-                  ariaLabel={m.editActions}
-                  testId="security-permissions-form-actions"
-                  primaryActions={
-                    !readOnly
-                      ? [
-                          {
-                            id: "save",
-                            label: m.save,
-                            loading: busy,
-                            disabled: operationBusy,
-                            onClick: () => {
-                              formRef.current?.requestSubmit();
-                            },
-                          },
-                        ]
-                      : []
-                  }
-                  secondaryActions={[
-                    {
-                      id: "cancel",
-                      label: m.cancel,
-                      disabled: operationBusy,
-                      onClick: returnToList,
-                    },
-                  ]}
-                  status={<FormStatus tone="danger" message={formError} />}
-                />
               </form>
             </SecurityManagementPanelShell>
           </>

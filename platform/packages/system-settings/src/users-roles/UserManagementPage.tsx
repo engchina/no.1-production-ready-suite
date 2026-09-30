@@ -19,10 +19,10 @@ import {
   ObjectActionBar,
   cn,
   type EntityAction,
-  FormActionBar,
-  entityActionToFormAction,
+  SaveErrorBanner,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import {
   useCallback,
@@ -34,12 +34,12 @@ import {
   type FormEvent,
 } from "react";
 import {
-  ArrowLeft,
   Copy,
   KeyRound,
   Pencil,
   Plus,
   RefreshCw,
+  Save,
   Trash2,
   UserCheck,
   UserRound,
@@ -124,8 +124,8 @@ const EMPTY_DRAFT: UserDraftState = {
   temporaryPassword: "",
 };
 
-const INPUT_CLASS =
-  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm focus:border-focus-ring read-only:cursor-default read-only:bg-surface-hover read-only:text-fg-muted disabled:bg-surface-hover disabled:text-fg-disabled";
+// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
+const INPUT_CLASS = fieldControlClassName();
 
 function compareText(left: string, right: string, direction: DataTableSort["direction"]) {
   const result = left.localeCompare(right, "ja");
@@ -197,6 +197,8 @@ export function UserManagementPage({
   const accountActionBusy =
     resettingUserId !== null || statusChangingUserId !== null || deletingUserId !== null || unlockingUserId !== null;
   const operationBusy = busy || accountActionBusy || loading;
+  // 保存を試みた回数（保存の失敗の Banner を、同じ文言の失敗でも入れ直す。#585）。
+  const [submitAttempt, setSubmitAttempt] = useState(0);
   const inputReadOnly = userFormReadOnly || operationBusy;
   const isDirty = activeView !== "list" && (
     draft.loginUserId !== baseline.loginUserId || draft.displayName !== baseline.displayName ||
@@ -438,6 +440,7 @@ export function UserManagementPage({
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (operationBusy || !canSubmitUserForm) return;
+    setSubmitAttempt((current) => current + 1);
     setFormError("");
     setFieldErrors({});
     setActionError("");
@@ -703,15 +706,14 @@ export function UserManagementPage({
         ]
       : [];
 
-  const formUserActions = (...actionIds: string[]) => {
+  /**
+   * 編集フォームの対象への操作（パスワードのリセット・有効化・無効化・削除）。フォームのパネルの見出しの右の
+   * ObjectActionBar 1 か所に置く（#618）。保存はページの右上（PageHeader）の primary。
+   */
+  const editObjectActions = (): EntityAction[] => {
     if (!editingUser || !canManage) return [];
-    const actions = userActions(editingUser);
-    return actionIds.flatMap((actionId) => {
-      const action = actions.find(
-        (candidate) => candidate.id === actionId && candidate.visible !== false
-      );
-      return action ? [entityActionToFormAction(action)] : [];
-    });
+    const ids = new Set(["reset-password", "enable", "disable", "delete"]);
+    return userActions(editingUser).filter((action) => ids.has(action.id));
   };
 
   const selectRole = (roleId: string) => {
@@ -790,7 +792,26 @@ export function UserManagementPage({
                   loading,
                 },
               ]
-            : []
+            : canSubmitUserForm
+              ? [
+                  {
+                    id: activeView === "edit" ? "save" : "create",
+                    kind: "primary" as const,
+                    label: activeView === "edit" ? t("security.common.save") : t("security.common.create"),
+                    icon: activeView === "edit" ? Save : Plus,
+                    loading: busy,
+                    disabled: operationBusy,
+                    testId: "security-users-submit",
+                    onClick: () => formRef.current?.requestSubmit(),
+                  },
+                ]
+              : []
+        }
+        // 詳細・作成・編集の画面の「一覧へ戻る」は左上、保存・作成は右端の primary（#618）。
+        back={
+          activeView === "list"
+            ? undefined
+            : { label: t("security.common.backToList"), onClick: returnToList, disabled: operationBusy, testId: "security-users-back" }
         }
         actionsLabel={t("security.users.actionsLabel")}
         actionsTestId="security-users-actions"
@@ -881,11 +902,12 @@ export function UserManagementPage({
             </SecurityManagementPanelShell>
         ) : (
           <>
-            <div>
-              <Button type="button" variant="ghost" size="sm" disabled={operationBusy} onClick={returnToList} icon={ArrowLeft}>
-                <span>{t("security.common.backToList")}</span>
-              </Button>
-            </div>
+            {/* 保存の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
+            <SaveErrorBanner
+              message={formError || (activeView === "edit" ? actionError : "")}
+              attemptKey={submitAttempt}
+              testId="security-users-save-error"
+            />
             <SecurityManagementPanelShell
               id={`security-users-panel-${activeView}`}
               idPrefix="security-users"
@@ -896,6 +918,15 @@ export function UserManagementPage({
                 title={activeView === "edit" ? t("security.users.form.edit") : t("security.users.form.create")}
                 description={t("security.users.formHint")}
                 headingId="security-users-form-heading"
+                action={
+                  activeView === "edit" ? (
+                    <ObjectActionBar
+                      actions={editObjectActions()}
+                      ariaLabel={t("security.users.editActions")}
+                      testId="security-users-object-actions"
+                    />
+                  ) : undefined
+                }
               />
               <form
                 ref={formRef}
@@ -1067,52 +1098,6 @@ export function UserManagementPage({
                   )}
                   <FieldError id="security-users-role-error" message={fieldErrors.selectedRoleId} />
                     </fieldset>
-                    <FormActionBar
-                      ariaLabel={t(
-                        activeView === "edit"
-                          ? "security.users.editActions"
-                          : "security.users.createActions"
-                      )}
-                      testId="security-users-form-actions"
-                      primaryActions={
-                        canSubmitUserForm
-                          ? [
-                              {
-                                id: activeView === "edit" ? "save" : "create",
-                                label:
-                                  activeView === "edit"
-                                    ? t("security.common.save")
-                                    : t("security.common.create"),
-                                loading: busy,
-                                disabled: operationBusy,
-                                onClick: () => formRef.current?.requestSubmit(),
-                              },
-                            ]
-                          : []
-                      }
-                      secondaryActions={[
-                        ...(activeView === "edit"
-                          ? formUserActions("reset-password", "enable")
-                          : []),
-                        {
-                          id: "cancel",
-                          label: t("security.common.cancel"),
-                          disabled: operationBusy,
-                          onClick: returnToList,
-                        },
-                      ]}
-                      dangerActions={
-                        activeView === "edit"
-                          ? formUserActions("disable", "delete")
-                          : []
-                      }
-                      status={
-                        <FormStatus
-                          tone="danger"
-                          message={formError || (activeView === "edit" ? actionError : "")}
-                        />
-                      }
-                    />
               </form>
             </SecurityManagementPanelShell>
           </>

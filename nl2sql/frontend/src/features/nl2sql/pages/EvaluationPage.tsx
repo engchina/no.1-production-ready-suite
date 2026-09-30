@@ -21,6 +21,7 @@ import {
   TimedLoadingState,
   FieldLabel,
   FieldLegend,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import { useEffect, useMemo, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -79,8 +80,8 @@ const TERMINAL_STATUSES = new Set<QualityEvaluationStatus>([
 ]);
 const ACTIVE_STATUSES = new Set<QualityEvaluationStatus>(["pending", "running"]);
 const sectionClass = "grid min-w-0 gap-5 rounded-lg border border-border bg-surface p-4 shadow-sm lg:p-5";
-const controlClass =
-  "min-h-11 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm text-fg transition focus:border-focus-ring disabled:cursor-not-allowed disabled:opacity-60";
+// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
+const controlClass = fieldControlClassName({ className: "py-2" });
 
 type FormErrors = Partial<Record<"profile" | "file" | "engines" | "repeat", string>>;
 

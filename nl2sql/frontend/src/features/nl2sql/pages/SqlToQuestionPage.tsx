@@ -15,6 +15,7 @@ import {
   FixedSplitPane,
   FieldLabel,
   TextareaField,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -410,7 +411,7 @@ export function SqlToQuestionPage() {
                     setActionError("");
                     setActivePanel("input");
                   }}
-                  className="min-h-11 min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
+                  className={fieldControlClassName({ className: "min-w-0 py-2" })}
                   disabled={loading || actionBusy || profiles.length === 0}
                 >
                   {profiles.map((profile) => (

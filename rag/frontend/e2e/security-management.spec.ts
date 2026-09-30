@@ -239,7 +239,7 @@ test("権限管理で業務ビューと KB を選んで保存し、KB 管理権�
   await bases.getByRole("option", { name: /人事規程/ }).check();
   await page.getByRole("checkbox", { name: /^チャット/ }).uncheck();
   await expectNoPageOverflow(page);
-  await page.getByRole("group", { name: "権限編集操作" }).getByRole("button", { name: "保存" }).click();
+  await page.getByTestId("security-permissions-submit").click();
 
   await expect.poll(() => api.saved.length).toBe(1);
   expect(api.saved[0]).toEqual({
@@ -255,7 +255,7 @@ test("権限管理で業務ビューと KB を選んで保存し、KB 管理権�
   await page.getByRole("checkbox", { name: /^ナレッジベース管理/ }).check();
   await expect(page.getByText("ナレッジベース管理の権限により、すべてのナレッジベースを利用できます。")).toBeVisible();
   await expect(page.getByTestId("security-roles-knowledge-base-access-list")).toHaveCount(0);
-  await page.getByRole("group", { name: "権限編集操作" }).getByRole("button", { name: "保存" }).click();
+  await page.getByTestId("security-permissions-submit").click();
 
   await expect.poll(() => api.saved.length).toBe(2);
   expect(api.saved[1]).toMatchObject({
@@ -426,7 +426,7 @@ test("権限管理の対象が大量でもサーバー側で検索し、50 件�
   await expect(bases.getByRole("option")).toHaveCount(1);
   await expect(bases.getByRole("option", { name: /ナレッジベース 2999/ })).toBeVisible();
 
-  await page.getByRole("group", { name: "権限編集操作" }).getByRole("button", { name: "保存" }).click();
+  await page.getByTestId("security-permissions-submit").click();
   await expect.poll(() => api.saved.length).toBe(1);
   expect(api.saved[0]).toMatchObject({ knowledge_base_ids: ["kb-2999"] });
   await expectNoPageOverflow(page);

@@ -309,7 +309,7 @@ export function SecuritySearchField({
 
 /** 絞り込みの結果が 0 件のときの「検索語をクリア」（空の状態の action に置く。#535）。 */
 export function SecurityClearSearchAction({ onClear }: { onClear: () => void }) {
-  return <ClearActionButton label={t("security.common.clearSearch")} matchButtonHeight onClick={onClear} />;
+  return <ClearActionButton label={t("security.common.clearSearch")} onClick={onClear} />;
 }
 
 export function SecurityDetailField({ label, children }: { label: string; children: ReactNode }) {

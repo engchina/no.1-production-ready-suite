@@ -329,7 +329,12 @@ import type { LucideIcon } from "lucide-react";
 export interface PageHeaderProps {
   title: string; subtitle?: string; status?: React.ReactNode;
   breadcrumbs?: { label: string; href?: string }[];
-  /** 並びは danger → utility → secondary → primary（右端が primary）。 */
+  /**
+   * 詳細・作成・編集の画面の「一覧へ戻る」（#618）。タイトルの上の左端に ghost の sm ボタン（ArrowLeft）で出す。
+   * actions に id: "back" の操作を入れない。2 階層のパンくずの代わり（3 階層以上だけ breadcrumbs）。
+   */
+  back?: { label: string; onClick: () => void; ariaLabel?: string; disabled?: boolean; testId?: string };
+  /** 並びは danger → utility → secondary → primary（右端が primary）。詳細・作成・編集の画面は 変更を破棄（secondary）→ 保存（primary）。 */
   actions?: { id: string; kind: "primary" | "secondary" | "utility" | "danger"; label?: string; ariaLabel?: string; icon?: LucideIcon; onClick?: () => void; loading?: boolean; disabled?: boolean }[];
   /** <Tabs> を渡すとヘッダー下端に吸い付く。ビュー切替の唯一の置き場所。 */
   tabs?: React.ReactNode;
@@ -457,6 +462,7 @@ export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & Button
   /** ホバーとキーボードのフォーカスで出す説明。iconOnly の既定は aria-label、false で出さない。出すときは title を無視する。 */
   tooltip?: string | false;
   tooltipPlacement?: "top" | "bottom";
+  /** マウス環境でも 44px にする。製品では使わない（adherence の lint が検出する。#613）。packages/ui の閉じる・メニューのボタンだけ。 */
   touchTarget?: boolean;
   /** true で先頭アイコンがスピナーに置き換わる。ラベルは変えない。aria-disabled でフォーカスを保つ。 */
   loading?: boolean;
@@ -1295,7 +1301,7 @@ export interface PaginationLabels {
 | 見出しの行に「入力条件: `{phrase}`」と状態のバッジ（未入力 / 不一致 / 確認済み）。バッジは `aria-live="polite"` | 状態を色だけで示さない。入力の結果を読み上げで知らせる |
 | 確認語は等幅・太字で、`.` / `_` / `$` / `#` の直後で折り返す（`<wbr>`） | 識別子（`ADMIN_EXECUTE`・`OWNER.OBJECT`）を読み違えない。375px でも横にはみ出さない |
 | 一致しない語を入れたときだけ `aria-invalid="true"`、説明文とバッジを danger 色にする | 空白だけの入力は未入力として扱う |
-| 入力欄は 44px、`required` / `aria-required`、説明を `aria-describedby`。自動補完・自動修正・スペルチェックをしない。フォーカス中は枠線を `--color-danger-fg` にする（ring は重ねない） | タッチ端末で押しやすい高さ。確認語は手で入力させる |
+| 入力欄は下の操作行（実行・取消）と同じ lg（`--control-height-lg` の 40px、タッチ端末は 44px。#613 で 44px 固定から変更）、`required` / `aria-required`、説明を `aria-describedby`。自動補完・自動修正・スペルチェックをしない。フォーカス中は枠線を `--color-danger-fg` にする（ring は重ねない） | 操作行と同じ高さの段にそろえる（README §4「操作部品の高さと幅」）。確認語は手で入力させる |
 | 実行 / キャンセル等の操作は `actions` で渡し、区切り線（`border-t`）の下に置く。640px 未満は縦に並べる | 確認語と実行を 1 つの区画にまとめる（README §4「カード内の操作行」） |
 | **一致の判定は呼び出し側**（`confirmed`）。前後の空白を許すかどうか・確認語の値は製品が決める | backend の確認と同じ規則で判定するため。`packages/ui` は業務の語を知らない |
 | 文言は `labels` で差し替える。未指定の項目は既定（`DEFAULT_EXECUTION_CONFIRMATION_LABELS`：実行確認語 / 必須 / 入力条件: {phrase} / 未入力 / 不一致 / 確認済み） | 3 製品で同じ語をそろえる。製品固有の見出し（Agent の「確認入力」）や system-settings の上書き可能な文言は `labels` で渡す |
@@ -1313,7 +1319,7 @@ export interface PaginationLabels {
       <Button variant="danger" size="lg" className="w-full sm:w-auto" icon={Play} loading={running} disabled={!confirmed}>
         実行
       </Button>
-      <ClearActionButton label="入力をリセット" matchButtonHeight size="lg" className="w-full sm:w-auto" onClick={clear} />
+      <ClearActionButton label="入力をリセット" size="lg" className="w-full sm:w-auto" onClick={clear} />
     </>
   }
 />
@@ -1395,15 +1401,15 @@ import { Search } from "lucide-react";
 ### TextField の props（追加分）
 
 ```ts
-export type TextFieldSize = "md" | "lg";
+export type TextFieldSize = ControlSize; // "sm" | "md" | "lg"（#613）
 
 export type TextFieldProps = {
   /** label を sr-only にする（検索欄だけ。フォームの入力欄では使わない）。 */
   labelHidden?: boolean;
-  /** 高さ。md = --field-height（36px、既定）、lg = --button-height-lg（40px、タッチ端末は 44px）。 */
+  /** 高さ。sm 32px / md 36px（既定）/ lg 40px（--control-height-*）。タッチ端末は 44px。同じ行の Button と同じ size にする。 */
   size?: TextFieldSize;
-  /** 44px（--control-height-touch）。44px の Button・select と同じ行に並べるとき。size より優先。 */
-  touchTarget?: boolean;
+  /** 幅（xs / sm / md / lg / full。既定は親の幅いっぱい）。sm 未満は全幅（#613）。 */
+  width?: FieldWidth;
   /** 先頭の 16px のアイコン（lucide-react）。aria-hidden・pointer-events: none。 */
   leadingIcon?: LucideIcon;
   /** 末尾の任意の要素（単位・件数・ボタン）。実際の幅だけ文字の右の余白を空ける。 */
@@ -1858,13 +1864,13 @@ const query = useBusinessViews({ q: view.q || undefined, limit, offset: view.off
   <EmptyState
     title={t("businessViews.search.noResultsTitle")}
     hint={t("businessViews.search.noResultsHint")}
-    action={<ClearActionButton label={t("common.clearSearch")} matchButtonHeight onClick={() => applySearch("")} />}
+    action={<ClearActionButton label={t("common.clearSearch")} onClick={() => applySearch("")} />}
   />
 ) : null}
 
 // 所有者名のように、入力中も大文字で見せ、確定した値も大文字にする（NL2SQL の DbOwnerPrefixFilterField）
 <SearchField id="owner" label="所有者" value={owner} onSearch={setOwner} clearLabel="入力をクリア"
-  formatInput={(v) => v.toUpperCase()} normalize={(v) => v.trim().toUpperCase()} touchTarget />
+  formatInput={(v) => v.toUpperCase()} normalize={(v) => v.trim().toUpperCase()} />
 ```
 
 ### SearchField の props
@@ -2050,3 +2056,59 @@ import { ListPicker, ListToolbar, SearchField, FormActionBar } from "@engchina/p
 - 単体テストは `packages/ui/tests/list-picker.test.tsx`（読み上げの属性・↑↓ / Home / End / Space / Enter・IME の確定の Enter・グループ間の移動・3,000 件の仮想スクロール・検索欄の IME と件数の読み上げ・0 件・追加読み込みと再試行・一括選択と「選択中だけ表示」・無効・`list-window` の計算）。
 - 実ブラウザは RAG `e2e/knowledge-bases.spec.ts`（モックで 3,000 件から検索して複数を追加、desktop / 375px、ライト / ダーク、キーボード。所属文書の検索とページング）と NL2SQL `tests/e2e/profile-allowed-objects.spec.ts`（許可する表・ビュー）。
 - 製品の置き換え: RAG（ナレッジベースの「文書を追加」、所属文書・ナレッジベース・業務ビュー・文書の一覧のツールバー）、NL2SQL（業務プロファイルの許可する表・ビュー、`DbObjectSelectorFooter`）、system-settings（権限管理の「利用できる対象」。`RolePermissionTargetOption` は削除）。
+
+## 操作部品の高さと幅: `size` / `width` / `FieldActionRow` / `fieldControlClassName` — **新規**（#613）
+
+入力欄・選択欄・ボタンの高さと、入力欄・選択欄の幅を部品の prop で決めます（規則は README §4「操作部品の高さと幅」）。製品は `h-*` / `min-h-*` / `w-*` を書かず、`touchTarget` を使いません（adherence の lint が検出する）。
+
+```tsx
+import { FieldActionRow, SelectField, TextField, TextareaField, fieldControlClassName } from "@engchina/production-ready-ui";
+
+// 高さ: 同じ行の部品に同じ size（既定 md）。幅: 値の長さで選ぶ（grid のセルに置く欄は指定しない）
+<SelectField id="retention" label="保存期間" value={v} options={o} onValueChange={set} size="lg" width="md" />
+<Button size="lg" icon={Save}>保存期間を保存</Button>
+
+// 入力欄と、その値への操作（送信・実行・取得）の行。操作は入力欄の下端にそろい、375px では下に全幅
+<FieldActionRow actions={<RunStopButton size="lg" … />}>
+  <TextareaField id="chat-composer" label="メッセージ" labelHidden rows={2} … />
+</FieldActionRow>
+
+// ネイティブの select / input を残す画面（<optgroup> など）は、同じ見た目・高さ・幅のクラスを使う
+<select className={fieldControlClassName({ size: "lg", width: "sm" })}>…</select>
+```
+
+```ts
+export type ControlSize = "sm" | "md" | "lg";                 // 32 / 36 / 40px。タッチ端末は 44px
+export type FieldWidth = "xs" | "sm" | "md" | "lg" | "full";  // 8 / 12 / 20 / 28rem / 100%。sm 未満は全幅
+
+// TextField / SearchField / SecretField / SelectField / SearchableSelectField に追加
+size?: ControlSize;   // 既定 md（SearchableSelectField は最小の高さ。長い名前は折り返して高くなる）
+width?: FieldWidth;   // 既定なし（親の幅いっぱい）。欄の外枠（ラベル・補足・エラーを含む）に付く
+
+export function FieldActionRow(props: {
+  children: ReactNode;   // 入力欄 1 つ（行の残りを埋める）
+  actions: ReactNode;    // 操作（入力欄と同じ size の Button）
+  footer?: ReactNode;    // 補足・エラー（欄の helper / error の代わり）
+  className?: string;
+  "data-testid"?: string;
+}): JSX.Element;
+
+export function fieldControlClassName(options?: { size?: ControlSize; width?: FieldWidth; className?: string }): string;
+export const CONTROL_HEIGHT_CLASS: Record<ControlSize, string>;      // h-[var(--control-height-*)]
+export const CONTROL_MIN_HEIGHT_CLASS: Record<ControlSize, string>;  // min-h-[var(--control-height-*)]
+export const FIELD_WIDTH_CLASS: Record<FieldWidth, string>;          // w-full sm:w-[var(--field-width-*)] sm:max-w-full
+export function fieldWidthClass(width?: FieldWidth): string | undefined;
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 高さのトークンを `--control-height-sm` / `md` / `lg`（32 / 36 / 40px）に一本化し、`--button-height-*` と `--field-height` はその別名にした | ボタンと入力欄が同じ値を参照するので、同じ `size` なら必ず同じ高さになる |
+| タッチ端末（`pointer: coarse`）では 3 段とも 44px。**入力欄・選択欄も 44px**（以前は Button だけ） | タッチ端末で入力欄 36px・ボタン 44px とずれていた。Apple HIG 44pt / WCAG 2.5.5。画面幅ではなく入力方式で決める（マウスで狭いウィンドウを使うときは密度を保つ） |
+| `touchTarget`（マウス環境でも 44px）は製品で使わない。`TextField` の `touchTarget` は削除 | 「入力欄の横の操作は 44px」の規則で、同じ画面の入力欄 36px と 44px が混ざっていた |
+| 幅は欄の外枠に付け、sm 未満は `w-full`、sm 以上は段の幅と `max-w-full` | 補足・エラーの文も欄の幅で折り返す。狭い親の中で親より広くならない。375px では全幅（片手で押しやすい） |
+| `FieldActionRow` は `items-end`。欄の helper / error は `footer` に出す | 上に見えるラベルがある欄でも、複数行の入力欄でも、ボタンの下端が入力欄の下端に合う。欄の下に文があると下端でそろえた操作が文の下端に合ってしまう |
+| `ClearActionButton` の `matchButtonHeight` を削除。既定は `sm`（空の状態の「検索語をクリア」）で、行に置くときは行と同じ `size` を渡す | 以前はマウス環境でも 44px が既定で、`matchButtonHeight` を付け忘れた行がずれた |
+| `fieldControlClassName` は TextField と同じ見た目（枠線 `--color-border-control`・`--radius-control`・地・フォーカス・disabled・read-only）に、高さ・幅・`aria-invalid` の枠線を足す | ネイティブの `<select>` / `<input>` を残す画面も、手書きの `h-10` / `h-11` / `min-h-[44px]`（35 / 38.5 / 44px）をやめて同じ段にする |
+
+- 単体テストは `packages/ui/tests/control-size.test.tsx`（段のクラス・各部品の `size` / `width`・`fieldControlClassName`・`FieldActionRow`）と `tokens-css.test.ts`（トークンと `pointer: coarse` の 44px）。
+- 実ブラウザの高さは、e2e の helper `expectedControlHeight(page, size)`（RAG `e2e/_helpers.ts`、NL2SQL `tests/e2e/_helpers/control-height.ts`）で入力方式から期待値を出して確かめる（タッチ端末 44px、それ以外は 32 / 36 / 40px）。

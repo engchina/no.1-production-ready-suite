@@ -4,7 +4,7 @@ import { cn } from "../../lib/utils";
 
 import { FieldError } from "./field-error";
 import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
-import { fieldControlClass } from "./text-field";
+import { fieldControlClass } from "./control-size";
 
 /** 文字数の既定の表示。上限があれば「12 / 1,000」、無ければ「12 文字」。 */
 export function defaultTextareaCount(count: number, maxLength?: number) {

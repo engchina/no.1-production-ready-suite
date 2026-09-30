@@ -187,10 +187,12 @@ export function GraphSettingsClient() {
               {successMessage ? <FormStatus tone="success" message={successMessage} /> : null}
               {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
             </div>
+            {/* カードの末尾の操作行: 保存は右端の primary、変更を破棄はその左（#618）。フォームの末尾なので lg（#613）。 */}
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
                 variant="secondary"
+                size="lg"
                 onClick={resetForm}
                 disabled={!dirty || save.isPending}
                 aria-label={t("settings.graph.actions.reset")} icon={RotateCcw}>
@@ -198,6 +200,7 @@ export function GraphSettingsClient() {
               </Button>
               <Button
                 type="button"
+                size="lg"
                 loading={save.isPending}
                 disabled={!dirty}
                 onClick={submit}

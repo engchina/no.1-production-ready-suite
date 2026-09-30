@@ -1779,7 +1779,7 @@ test("管理者がユーザーを作成して単一ロールを割り当て、�
   await expect(page.getByTestId("security-users-role-selection-actions")).toHaveCount(0);
   await expect(page.getByRole("radio", { name: /システム管理者/ })).toBeDisabled();
   await expect(page.getByText("SYSTEM_ADMIN は初期システム管理者にのみ割り当てできます。", { exact: true })).toBeVisible();
-  const createButton = page.locator("#security-users-panel-create").getByRole("button", { name: "新規作成", exact: true });
+  const createButton = page.getByTestId("security-users-submit");
   await createButton.click();
   await expect(page.getByText("ロールを選択してください。", { exact: true })).toBeVisible();
   expect(createRequestCount).toBe(0);
@@ -1815,15 +1815,15 @@ test("管理者がユーザーを作成して単一ロールを割り当て、�
   await expect(page.getByTestId("security-users-one-time-password")).toHaveCount(0);
   await expect(loginInput).toHaveValue("001");
   await expect(loginInput).toBeDisabled();
-  await expect(loginInput).toHaveClass(/disabled:bg-surface-hover/u);
+  await expect(loginInput).toHaveClass(/disabled:bg-surface-disabled/u);
   await expect(displayNameInput).toHaveValue("短いログインユーザーIDユーザー");
   await expect(temporaryPasswordInput).toHaveValue(generatedPasswords[0]);
   await expect(temporaryPasswordInput).toHaveAttribute("readonly", "");
-  await expect(temporaryPasswordInput).toHaveClass(/read-only:bg-surface-hover/u);
+  await expect(temporaryPasswordInput).toHaveClass(/read-only:bg-surface-sunken/u);
   await expect(viewerRadio).toBeChecked();
   await expect(runnerRadio).not.toBeChecked();
-  await expect(createButton).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "保存", exact: true })).toBeVisible();
+  // 作成後は同じ PageHeader の右端のボタンが「保存」になる（#618）。
+  await expect(createButton).toHaveText("保存");
   await expect(page.getByText("変更を保存しました。", { exact: true }).last()).toBeVisible();
 
   await copyButton.click();
@@ -1853,7 +1853,7 @@ test("管理者がユーザーを作成して単一ロールを割り当て、�
       globalThis as typeof globalThis & { __copyOneTimePasswordShouldFail?: boolean }
     ).__copyOneTimePasswordShouldFail = false;
   });
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await page.getByTestId("security-users-actions").getByRole("button", { name: "新規作成" }).click();
   await loginInput.fill("002");
   await displayNameInput.fill("連続作成ユーザー");
@@ -1864,14 +1864,14 @@ test("管理者がユーザーを作成して単一ロールを割り当て、�
   await expect(displayNameInput).toHaveValue("連続作成ユーザー");
   await expect(temporaryPasswordInput).toHaveValue(generatedPasswords[1]);
 
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await page.getByTestId("security-users-actions").getByRole("button", { name: "新規作成" }).click();
   await loginInput.fill("003");
   await displayNameInput.fill("再試行ユーザー");
   await viewerRadio.check();
   failNextCreate = true;
   await createButton.click();
-  await expect(page.getByTestId("security-users-form-actions")).toContainText(
+  await expect(page.getByTestId("security-users-save-error")).toContainText(
     "ユーザーを作成できません。時間をおいて再試行してください。"
   );
   await expect(page.getByTestId("security-users-one-time-password")).toHaveCount(0);
@@ -1977,7 +1977,7 @@ test("ユーザー作成の problem field error は入力直下だけに表示�
   await loginInput.fill("duplicate.user");
   await displayNameInput.fill("重複ユーザー");
   await page.getByRole("radio", { name: /検索閲覧/ }).check();
-  const submit = page.locator("#security-users-panel-create").getByRole("button", { name: "新規作成", exact: true });
+  const submit = page.getByTestId("security-users-submit");
   await submit.click();
 
   const conflictMessage = "このログインユーザーIDは既に使用されています。別のIDを入力してください。";
@@ -1985,7 +1985,7 @@ test("ユーザー作成の problem field error は入力直下だけに表示�
   await expect(loginInput).toHaveAttribute("aria-invalid", "true");
   await expect(loginInput).toHaveAttribute("aria-describedby", "security-user-login-user-id-error");
   await expect(loginInput).toBeFocused();
-  await expect(page.getByTestId("security-users-form-actions").getByText(conflictMessage, { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("security-users-save-error").getByText(conflictMessage, { exact: true })).toHaveCount(0);
 
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
@@ -2005,10 +2005,10 @@ test("ユーザー作成の problem field error は入力直下だけに表示�
   await expect(page.getByText("IDを確認してください。", { exact: true })).toHaveCount(0);
 
   await submit.click();
-  await expect(page.getByTestId("security-users-form-actions")).toContainText(
+  await expect(page.getByTestId("security-users-save-error")).toContainText(
     "ユーザーを作成できません。時間をおいて再試行してください。"
   );
-  await expect(page.getByTestId("security-users-form-actions")).toContainText(
+  await expect(page.getByTestId("security-users-save-error")).toContainText(
     "リクエストID: user-service-request"
   );
   expect(submitCount).toBe(3);
@@ -2111,7 +2111,7 @@ test("ユーザー一覧と詳細のパスワードリセット結果を編集�
   );
   await expect(page.getByTestId("security-users-one-time-password")).toHaveCount(0);
 
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await salesRow.locator("td").first().click();
   await expect(salesDetailActions.getByRole("button", { name: "編集" })).toBeVisible();
   await expect(salesDetailActions.getByRole("button", { name: "パスワードをリセット" })).toBeVisible();
@@ -2245,12 +2245,12 @@ test("ユーザー編集はパスワードリセットと無効化・有効化�
   });
   const assignedRole = page.getByLabel("検索閲覧");
   await expect(editPanel).toBeVisible();
-  await expect(editActions.getByRole("button", { name: "保存", exact: true })).toBeVisible();
+  await expect(page.getByTestId("security-users-submit")).toHaveText("保存");
   await expect(editActions.getByRole("button", { name: "パスワードをリセット" })).toBeVisible();
   await expect(editActions.getByRole("button", { name: "その他の操作" })).toBeVisible();
   await expect(temporaryPassword).toHaveValue("");
   await expect(temporaryPassword).toHaveAttribute("readonly", "");
-  await expect(temporaryPassword).toHaveClass(/read-only:bg-surface-hover/u);
+  await expect(temporaryPassword).toHaveClass(/read-only:bg-surface-sunken/u);
   await expect(copyTemporaryPassword).toBeDisabled();
   await displayName.fill("未保存の営業ユーザー");
 
@@ -2302,7 +2302,7 @@ test("ユーザー編集はパスワードリセットと無効化・有効化�
   await page.keyboard.press("Enter");
   const disableItem = page.getByRole("menuitem", { name: "無効化" });
   await expect(disableItem).toBeFocused();
-  await expect(disableItem).toHaveAttribute("data-form-action-tone", "danger");
+  await expect(disableItem).toHaveAttribute("data-entity-action-tone", "danger");
   await page.keyboard.press("Escape");
   await expect(moreButton).toBeFocused();
 
@@ -2321,7 +2321,7 @@ test("ユーザー編集はパスワードリセットと無効化・有効化�
     .getByRole("button", { name: "実行" })
     .click();
   await expect(editActions.getByRole("button", { name: "有効化" })).toBeVisible();
-  await expect(editActions.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("security-users-submit")).toHaveCount(0);
   await expect(
     editActions.getByRole("button", { name: "パスワードをリセット" })
   ).toHaveCount(0);
@@ -2333,7 +2333,7 @@ test("ユーザー編集はパスワードリセットと無効化・有効化�
   await expect(assignedRole).toBeChecked();
   await expect(assignedRole).toBeDisabled();
   await expect(editActions.getByRole("button", { name: "その他の操作" })).toBeVisible();
-  await page.getByRole("button", { name: "一覧に戻る" }).focus();
+  await page.getByRole("button", { name: "一覧へ戻る" }).focus();
   await page.keyboard.press("Tab");
   await expect(editActions.getByRole("button", { name: "有効化" })).toBeFocused();
   await editPanel.locator("form").evaluate((form) =>
@@ -2351,7 +2351,7 @@ test("ユーザー編集はパスワードリセットと無効化・有効化�
   await editActions.getByRole("button", { name: "有効化" }).click();
   await expect(editActions.getByRole("button", { name: "その他の操作" })).toBeVisible();
   await expect(editActions.getByRole("button", { name: "有効化" })).toHaveCount(0);
-  await expect(editActions.getByRole("button", { name: "保存", exact: true })).toBeVisible();
+  await expect(page.getByTestId("security-users-submit")).toHaveText("保存");
   await expect(
     editActions.getByRole("button", { name: "パスワードをリセット" })
   ).toBeVisible();
@@ -2372,12 +2372,13 @@ test("ユーザー編集はパスワードリセットと無効化・有効化�
     .getByRole("alertdialog", { name: "無効化" })
     .getByRole("button", { name: "実行" })
     .click();
-  await expect(editActions).toContainText("最後のシステム管理者は無効化または権限解除できません。");
+  // 操作の失敗もヘッダーの直下の Banner の 1 か所（#585 / #618）。
+  await expect(page.getByTestId("security-users-save-error")).toContainText("最後のシステム管理者は無効化または権限解除できません。");
   await expect(displayName).toHaveValue("未保存の営業ユーザー");
   expect(disableVersions).toEqual([1, 3]);
 
   await page.setViewportSize({ width: 375, height: 812 });
-  await expect(editActions.getByRole("button", { name: "保存", exact: true })).toBeVisible();
+  await expect(page.getByTestId("security-users-submit")).toHaveText("保存");
   await expect(editActions.getByRole("button", { name: "パスワードをリセット" })).toBeVisible();
   await expectNoPageHorizontalScroll(page);
 });
@@ -2641,9 +2642,7 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await page.keyboard.press("Escape");
   await salesUserDetailActions.getByRole("button", { name: "編集" }).click();
   const disabledUserEditActions = page.getByRole("group", { name: "ユーザー編集操作" });
-  await expect(
-    disabledUserEditActions.getByRole("button", { name: "保存", exact: true })
-  ).toHaveCount(0);
+  await expect(page.getByTestId("security-users-submit")).toHaveCount(0);
   await expect(
     disabledUserEditActions.getByRole("button", { name: "パスワードをリセット" })
   ).toHaveCount(0);
@@ -2657,7 +2656,7 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await expect(page.getByLabel("検索閲覧")).toBeDisabled();
   await expect(page.getByLabel("システム管理者")).toBeDisabled();
   await expect(page.getByText("SYSTEM_ADMIN は初期システム管理者にのみ割り当てできます。", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await page.getByTestId("security-users-search").fill("sales");
   await expect(page.getByTestId("security-users-grid").getByText("営業ユーザー")).toBeVisible();
   await expect(page.getByTestId("security-users-grid").getByText("システム管理者")).toHaveCount(0);
@@ -2665,14 +2664,14 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
 
   await page.getByTestId("security-users-actions").getByRole("button", { name: "新規作成" }).click();
   expect(await topLevelPanelStyle(page, "create", "security-users")).toEqual(listStyle);
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.locator("#security-users-panel-list")).toBeVisible();
 
   await adminUserRow.locator("td").first().click();
   await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集" }).click();
   expect(await topLevelPanelStyle(page, "edit", "security-users")).toEqual(listStyle);
   await expect(page.getByLabel("システム管理者")).toBeEnabled();
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.locator("#security-users-panel-list")).toBeVisible();
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
@@ -2871,13 +2870,14 @@ test("ロール管理はテーブル一覧と詳細で表示し、権限の選�
   await expect(viewerRoleRow).toHaveAttribute("data-selected", "true");
   await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
   const customRoleEditActions = page.getByRole("group", { name: "ロール編集操作" });
-  await expect(customRoleEditActions.getByRole("button", { name: "保存" })).toBeVisible();
-  await expect(customRoleEditActions.getByRole("button", { name: "キャンセル" })).toBeVisible();
+  // 保存は PageHeader の右端、キャンセルは左上の「一覧へ戻る」に置き換えた（#618）。
+  await expect(page.getByTestId("security-roles-submit")).toHaveText("保存");
+  await expect(customRoleEditActions.getByRole("button", { name: "キャンセル" })).toHaveCount(0);
   await expect(customRoleEditActions.getByRole("button", { name: "アーカイブ" })).toHaveCount(0);
   await customRoleEditActions.getByRole("button", { name: "その他の操作" }).click();
-  await expect(page.getByRole("menuitem", { name: "アーカイブ" })).toHaveAttribute("data-form-action-tone", "danger");
+  await expect(page.getByRole("menuitem", { name: "アーカイブ" })).toHaveAttribute("data-entity-action-tone", "danger");
   await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await page.getByTestId("security-roles-search").fill("閲覧");
   await expect(grid.getByText("アプリ閲覧")).toBeVisible();
   await expect(grid.getByText("システム管理者")).toHaveCount(0);
@@ -2888,7 +2888,7 @@ test("ロール管理はテーブル一覧と詳細で表示し、権限の選�
   expect(await topLevelPanelStyle(page, "create", "security-roles")).toEqual(listStyle);
   await expect(page.getByLabel("ロールコード")).toBeVisible();
   await expect(page.getByRole("checkbox")).toHaveCount(0);
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.locator("#security-roles-panel-list")).toBeVisible();
 
   // 権限管理: ロールごとの機能権限を一括選択できる。
@@ -2934,7 +2934,7 @@ test("ロール管理はテーブル一覧と詳細で表示し、権限の選�
   await securityGroupBulkActions.getByRole("button", { name: "ユーザーとロール の選択をすべて解除" }).click();
   await expect(page.getByRole("checkbox", { name: /ユーザー管理/ })).not.toBeChecked();
   await expect(page.getByRole("checkbox", { name: /^ロール管理/ })).not.toBeChecked();
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "破棄して移動" }).click();
   await expect(page.locator("#security-permissions-panel-list")).toBeVisible();
   // 組み込みロールの権限は変更できないため、編集操作を出さない。
@@ -2948,11 +2948,11 @@ test("ロール管理はテーブル一覧と詳細で表示し、権限の選�
   await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
   expect(await topLevelPanelStyle(page, "edit", "security-roles")).toEqual(listStyle);
   const roleEditActions = page.getByRole("group", { name: "ロール編集操作" });
-  await expect(roleEditActions.getByRole("button", { name: "保存" })).toHaveCount(0);
-  await expect(roleEditActions.getByRole("button", { name: "キャンセル" })).toBeVisible();
+  await expect(page.getByTestId("security-roles-submit")).toHaveCount(0);
+  await expect(page.getByTestId("security-roles-back")).toBeVisible();
   await expect(roleEditActions.getByRole("button", { name: "アーカイブ" })).toHaveCount(0);
   await expect(roleEditActions.getByRole("button", { name: "その他の操作" })).toHaveCount(0);
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.locator("#security-roles-panel-list")).toBeVisible();
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoPageHorizontalScroll(page);
@@ -3015,10 +3015,12 @@ test("ロールコード競合はコード欄へ結び付き、403 は安全な�
   await page.goto("/settings/security/roles");
   await page.getByTestId("security-roles-actions").getByRole("button", { name: "新規作成" }).click();
   const roleCode = page.getByLabel("ロールコード");
-  const actionBar = page.getByRole("group", { name: "ロール編集操作" });
+  // 作成は PageHeader の右端、保存の失敗はヘッダーの直下の SaveErrorBanner（#585 / #618）。
+  const submitRole = page.getByTestId("security-roles-submit");
+  const saveError = page.getByTestId("security-roles-save-error");
   await roleCode.fill("system_admin");
   await page.getByLabel("ロール名").fill("予約コードロール");
-  await actionBar.getByRole("button", { name: "新規作成" }).click();
+  await submitRole.click();
 
   const reservedMessage =
     "SYSTEM_ADMIN は組み込みロール専用のコードです。別のロールコードを入力してください。";
@@ -3031,24 +3033,24 @@ test("ロールコード競合はコード欄へ結び付き、403 は安全な�
   await roleCode.fill("DUPLICATE_ROLE");
   await expect(page.getByText(reservedMessage, { exact: true })).toHaveCount(0);
   await page.getByLabel("ロール名").fill("重複ロール");
-  await actionBar.getByRole("button", { name: "新規作成" }).click();
+  await submitRole.click();
 
   const conflictMessage = "このロールコードは既に使用されています。別のコードを入力してください。";
   await expect(page.getByText(conflictMessage, { exact: true })).toHaveCount(1);
   await expect(roleCode).toHaveAttribute("aria-invalid", "true");
   await expect(roleCode).toHaveAttribute("aria-describedby", "security-role-code-error");
   await expect(roleCode).toBeFocused();
-  await expect(actionBar.getByText(conflictMessage, { exact: true })).toHaveCount(0);
+  await expect(saveError.getByText(conflictMessage, { exact: true })).toHaveCount(0);
 
   await roleCode.fill("AVAILABLE_ROLE");
   await expect(roleCode).not.toHaveAttribute("aria-invalid", "true");
   await expect(page.getByText(conflictMessage, { exact: true })).toHaveCount(0);
-  await actionBar.getByRole("button", { name: "新規作成" }).click();
-  await expect(actionBar).toContainText("サーバー内部でエラーが発生しました。時間をおいて再試行してください。");
-  await expect(actionBar).toContainText("リクエストID: role-internal-request");
-  await expect(actionBar).not.toContainText("ORA-");
+  await submitRole.click();
+  await expect(saveError).toContainText("サーバー内部でエラーが発生しました。時間をおいて再試行してください。");
+  await expect(saveError).toContainText("リクエストID: role-internal-request");
+  await expect(saveError).not.toContainText("ORA-");
   await page.getByLabel("ロール名").fill("再試行ロール");
-  await actionBar.getByRole("button", { name: "新規作成" }).click();
+  await submitRole.click();
   await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
   await expect(page.getByRole("status")).toContainText("必要なロールが付与されているか、システム管理者に確認してください。");
   await expect(page.getByRole("status")).toContainText("リクエストID: role-forbidden-request");
@@ -3237,7 +3239,7 @@ test("SYSTEM_ADMIN は権限管理で業務プロファイル利用権限を設�
       return Math.abs(actionsBox.x - listBox.x);
     })
     .toBeLessThanOrEqual(1);
-  await page.getByRole("group", { name: "権限編集操作" }).getByRole("button", { name: "保存" }).click();
+  await page.getByTestId("security-permissions-submit").click();
 
   await expect
     .poll(() => (savedPayload?.allowed_profile_ids as string[] | undefined)?.sort())
@@ -3336,7 +3338,7 @@ test("業務プロファイル管理権限のロールは全業務プロファ�
     )
   ).toBeVisible();
   await expect(page.getByTestId("security-roles-profile-access-list")).toHaveCount(0);
-  await page.getByRole("group", { name: "権限編集操作" }).getByRole("button", { name: "保存" }).click();
+  await page.getByTestId("security-permissions-submit").click();
   await expect.poll(() => savedPayload?.allowed_profile_ids).toEqual([]);
   await expectNoPageHorizontalScroll(page);
 });
@@ -3436,7 +3438,7 @@ test("権限管理は詳細で権限名を伏せ、編集では SQL 生成由来
   await expectNoPageHorizontalScroll(page);
 });
 
-test("ロール編集の下端メニューは viewport 下端では上方向に開く", async ({ page }) => {
+test("ロール編集のその他の操作のメニューは画面の下端でも画面の中に開く", async ({ page }) => {
   await mockDatabaseGateReady(page);
   // ロール管理のフォームは基本情報だけなので、短い viewport で操作バーを下端に置く（#206）。
   await page.setViewportSize({ width: 1365, height: 480 });
@@ -3476,27 +3478,21 @@ test("ロール編集の下端メニューは viewport 下端では上方向に�
   await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
 
   const editActions = page.getByRole("group", { name: "ロール編集操作" });
-  await expect(editActions.getByRole("button", { name: "保存" })).toBeVisible();
-  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2
-      )
-    )
-    .toBeTruthy();
-
-  const trigger = editActions.getByRole("button", { name: "その他の操作" });
+  await expect(page.getByTestId("security-roles-submit")).toHaveText("保存");
+  // 対象への操作はフォームのパネルの見出しの右（#618）。画面の下端に寄せても、メニューは画面の中に開く。
+  const trigger = editActions.getByRole("button", { name: /^その他の操作/ });
+  await trigger.evaluate((element) => element.scrollIntoView({ block: "end" }));
   const triggerBox = await trigger.boundingBox();
   expect(triggerBox).not.toBeNull();
   await trigger.click();
 
   const menu = page.getByRole("menu");
-  await expect(menu).toHaveAttribute("data-floating-menu-placement", "top");
   await expectFloatingMenuInsideViewport(page, menu);
   const menuBox = await menu.boundingBox();
   expect(menuBox).not.toBeNull();
-  expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(triggerBox!.y + 1);
+  if ((await menu.getAttribute("data-floating-menu-placement")) === "top") {
+    expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(triggerBox!.y + 1);
+  }
 });
 
 test("ロール管理の compact header は操作が 2 つなら畳まず、短い viewport でも横にはみ出さない", async ({ page }) => {
@@ -3640,14 +3636,14 @@ test("アーカイブ済みロールは権限が無効であることを明示�
   await expect(roleName).toBeDisabled();
   await expect(roleDescription).toBeDisabled();
   await expect(page.getByRole("checkbox")).toHaveCount(0);
-  await page.getByRole("button", { name: "一覧に戻る" }).focus();
+  await page.getByRole("button", { name: "一覧へ戻る" }).focus();
   await page.keyboard.press("Tab");
   await expect(archivedEditActions.getByRole("button", { name: "復元" })).toBeFocused();
   await archivedEditPanel.locator("form").evaluate((form) =>
     (form as HTMLFormElement).requestSubmit()
   );
   expect(updateRoleRequestCount).toBe(0);
-  await expect(archivedEditActions.getByRole("button", { name: "保存" })).toHaveCount(0);
+  await expect(page.getByTestId("security-roles-submit")).toHaveCount(0);
   await expect(archivedEditActions.getByRole("button", { name: "復元" })).toBeVisible();
   await archivedEditActions.getByRole("button", { name: "復元" }).click();
   const restoreDialog = page.getByRole("alertdialog");
@@ -3673,8 +3669,8 @@ test("アーカイブ済みロールは権限が無効であることを明示�
   await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
   await expect(roleName).toBeEnabled();
   await expect(roleDescription).toBeEnabled();
-  await expect(page.getByRole("group", { name: "ロール編集操作" }).getByRole("button", { name: "保存" })).toBeVisible();
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await expect(page.getByTestId("security-roles-submit")).toHaveText("保存");
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expectNoPageHorizontalScroll(page);
 
   const activeRow = grid.locator("tbody tr").filter({ hasText: "データユーザー" });
@@ -5998,12 +5994,12 @@ test("ユーザー管理レビュー: リセット待機中は編集対象と入
   await page.getByRole("button", { name: "パスワードをリセット", exact: true }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "実行", exact: true }).click();
   await expect.poll(() => Boolean(pending)).toBe(true);
-  await expect(page.getByRole("button", { name: "一覧に戻る" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "一覧へ戻る" })).toBeDisabled();
   await expect(page.getByLabel("表示名", { exact: false })).toBeDisabled();
   await fulfill(pending!, { user, temporary_password: "SyntheticOnly!123" });
   await expect(page.getByLabel("一時パスワード", { exact: true })).toHaveValue("SyntheticOnly!123");
   await expect(page.getByLabel("ログインユーザーID")).toHaveValue("review.user");
-  await expect(page.getByRole("button", { name: "一覧に戻る" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "一覧へ戻る" })).toBeEnabled();
 });
 
 test("ユーザー管理レビュー: ロック解除の重複送信を抑止し失敗後に再試行する", async ({ page }) => {
@@ -6033,7 +6029,7 @@ test("ユーザー管理レビュー: 未保存入力は戻ると内部リンク
   await page.goto("/settings/security/users");
   await page.getByRole("button", { name: "新規作成", exact: true }).click();
   await page.getByLabel("表示名", { exact: false }).fill("未保存の利用者");
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
   await expect(page.getByLabel("表示名", { exact: false })).toHaveValue("未保存の利用者");
@@ -6049,7 +6045,7 @@ test("ユーザー管理レビュー: 未保存入力は戻ると内部リンク
   await expect(page).toHaveURL(/security\/users/);
   const protectedReload = await page.evaluate(() => !window.dispatchEvent(new Event("beforeunload", { cancelable: true })));
   expect(protectedReload).toBe(true);
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "破棄して移動" }).click();
   await expect(page.getByTestId("security-users-grid")).toBeVisible();
 });
@@ -6105,13 +6101,13 @@ test("ロール管理レビュー: 未保存変更を保護し保存中は入力
   await page.goto("/settings/security/roles");
   const edit = () => page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集", exact: true }).click();
   await edit();
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.getByTestId("security-roles-grid")).toBeVisible();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
   await edit();
   const name = page.getByLabel("ロール名", { exact: false });
   await name.fill("未保存ロール");
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
   await expect(name).toHaveValue("未保存ロール");
   await page.getByRole("button", { name: "保存", exact: true }).click();
@@ -6123,10 +6119,10 @@ test("ロール管理レビュー: 未保存変更を保護し保存中は入力
     description: role.description,
   });
   await expect(name).toBeDisabled();
-  await expect(page.getByRole("button", { name: "一覧に戻る" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "一覧へ戻る" })).toBeDisabled();
   await fulfill(pending!, { ...role, display_name: "未保存ロール", version: role.version + 1 });
   await expect(name).toBeEnabled();
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.getByTestId("security-roles-grid")).toBeVisible();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });
@@ -6141,12 +6137,12 @@ test("権限管理レビュー: 選択順を除いて未保存変更を保護し
   const query = page.getByRole("checkbox", { name: /SQL 生成/ });
   await query.uncheck();
   await query.check();
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.getByTestId("security-permissions-grid")).toBeVisible();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
   await edit();
   await query.uncheck();
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
   await expect(query).not.toBeChecked();
   await page.getByRole("button", { name: "保存", exact: true }).click();
@@ -6158,10 +6154,10 @@ test("権限管理レビュー: 選択順を除いて未保存変更を保護し
     allowed_profile_ids: [],
   });
   await expect(query).toBeDisabled();
-  await expect(page.getByRole("button", { name: "一覧に戻る" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "一覧へ戻る" })).toBeDisabled();
   await fulfill(pending!, { ...role, permissions: ["menu.history"], version: role.version + 1 });
   await expect(query).toBeEnabled();
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.getByTestId("security-permissions-grid")).toBeVisible();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });

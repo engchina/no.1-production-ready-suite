@@ -24,6 +24,7 @@ import {
   cn,
   toast,
   useConfirm,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -1137,9 +1138,9 @@ function ModelCatalogEditor({
                 // 広い画面では表頭が見出しになるので、欄のラベルは読み上げだけにする。狭い画面の
                 // ラベルは同じ行の他の欄（CompactTextInput）と同じ小さい文字にそろえる。
                 className="min-w-0 max-lg:[&>label]:text-xs max-lg:[&>label]:text-fg-muted lg:[&>label]:sr-only"
-                buttonClassName="h-10"
               />
-              <div className="flex min-h-10 items-center justify-between gap-3 text-sm text-fg lg:justify-start">
+              {/* 同じ行の入力欄・選択欄（md）と同じ高さの最小（#613）。 */}
+              <div className="flex min-h-[var(--control-height-md)] items-center justify-between gap-3 text-sm text-fg lg:justify-start">
                 <span className="lg:sr-only">
                   {t("settings.model.enterprise.vision")}
                 </span>
@@ -1151,7 +1152,7 @@ function ModelCatalogEditor({
                   }
                 />
               </div>
-              <div className="flex min-h-10 items-center">
+              <div className="flex min-h-[var(--control-height-md)] items-center">
                 <span className="mr-2 text-xs font-medium text-fg-muted lg:sr-only">
                   {t("settings.model.test.action")}
                 </span>
@@ -1280,7 +1281,7 @@ function CompactTextInput({
         placeholder={placeholder}
         aria-label={label}
         onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
+        className={fieldControlClassName()}
       />
     </label>
   );
@@ -1446,10 +1447,8 @@ function NumberField({
         step={step}
         readOnly={readOnly}
         onChange={(event) => onChange(Number(event.target.value))}
-        className={cn(
-          "tnum h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors focus-visible:border-focus-ring",
-          readOnly && "bg-surface-sunken text-fg-muted",
-        )}
+        // 見た目・高さは TextField と同じ（read-only は地が沈む。#613）。
+        className={fieldControlClassName({ className: cn("tnum", readOnly && "text-fg-muted") })}
       />
       {helper ? (
         <p className="text-xs leading-relaxed text-fg-muted">{helper}</p>

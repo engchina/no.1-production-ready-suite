@@ -14,6 +14,11 @@ const HANDWRITTEN_TEXTAREA = "複数行の入力欄は <textarea> を手書き�
 const LIST_SEARCH = "一覧の絞り込みの検索欄は SearchField";
 const OPTIONAL_MARKER = "任意の欄を「(任意)」や placeholder で示さない";
 const HANDWRITTEN_REQUIRED = "必須の表示を手書きしない";
+const TOUCH_TARGET = "製品で touchTarget を使わない";
+const CONTROL_HEIGHT = "共有の操作部品（Button / TextField";
+const FIELD_WIDTH = "入力欄・選択欄の幅を w-* / max-w-* で書かない";
+const NATIVE_HEIGHT = "ネイティブの <input> / <select> の高さを";
+const BACK_IN_ACTIONS = "「一覧へ戻る」を PageHeader の actions";
 
 async function lint(code: string) {
   const eslint = new ESLint({
@@ -192,5 +197,49 @@ const i = { scope_code: "*" };
 const j = <Route path="*" element={<Home />} />;
 `);
     expect(linesWith(messages, HANDWRITTEN_REQUIRED)).toEqual([]);
+  });
+});
+
+describe("adherence: 操作部品の高さと幅（#613）", () => {
+  it("touchTarget・共有部品の h-* / min-h-*・欄の w-* / max-w-*・ネイティブの欄の高さを検出する", async () => {
+    const messages = await lint(`
+const a = <Button touchTarget icon={Save}>保存</Button>;
+const b = <Button size="sm" className="h-11 sm:h-8" icon={Plus}>新規</Button>;
+const c = <SelectField id="s" label="状態" value="" options={[]} onValueChange={f} buttonClassName="min-h-11" />;
+const d = <TextField id="t" label="名前" inputClassName="h-[44px]" />;
+const e = <SelectField id="s" label="状態" value="" options={[]} onValueChange={f} className="w-full @md:w-48" />;
+const g = <SearchableSelectField id="k" label="KB" value="" options={[]} onValueChange={f} className={cn("md:w-[22rem]", x)} />;
+const h = <select className="h-10 w-full rounded-md border">x</select>;
+const i = <input className={\`min-h-11 \${x}\`} />;
+`);
+    expect(linesWith(messages, TOUCH_TARGET)).toEqual([2]);
+    expect(linesWith(messages, CONTROL_HEIGHT)).toEqual([3, 4, 5]);
+    expect(linesWith(messages, FIELD_WIDTH)).toEqual([6, 7]);
+    expect(linesWith(messages, NATIVE_HEIGHT)).toEqual([8, 9]);
+  });
+
+  it("size / width・min-w-0・w-full・ボタンの幅・チェックボックスの寸法・fieldControlClassName は許す", async () => {
+    const messages = await lint(`
+const a = <Button size="lg" className="w-full sm:w-auto" icon={Save}>保存</Button>;
+const b = <SelectField id="s" label="状態" value="" options={[]} onValueChange={f} size="lg" width="md" className="min-w-0" />;
+const c = <TextField id="t" label="名前" width="full" className="w-full max-w-full" />;
+const d = <input type="checkbox" className="h-4 w-4" />;
+const e = <input type={multi ? "checkbox" : "radio"} className="mt-1 h-4 w-4" />;
+const g = <select className={fieldControlClassName({ size: "lg", width: "xs" })}>x</select>;
+const h = <div className="min-h-11 w-48">x</div>;
+const i = <TextareaField id="q" label="質問" rows={2} />;
+`);
+    expect(messages).toEqual([]);
+  });
+});
+
+describe("adherence: 一覧へ戻るは PageHeader の back（#618）", () => {
+  it("actions の id: back を検出し、back・ほかの操作は許す", async () => {
+    const messages = await lint(`
+const a = <PageHeader title="x" actions={[{ id: "back", kind: "secondary", label: "一覧へ戻る", onClick: f }]} />;
+const b = <PageHeader title="x" back={{ label: "一覧へ戻る", onClick: f }} actions={[{ id: "save", kind: "primary", label: "保存", onClick: g }]} />;
+const c = <Other actions={[{ id: "back" }]} />;
+`);
+    expect(linesWith(messages, BACK_IN_ACTIONS)).toEqual([2]);
   });
 });

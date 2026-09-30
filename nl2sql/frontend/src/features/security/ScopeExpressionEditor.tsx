@@ -5,6 +5,7 @@ import {
   Button,
   ProcessingIndicator,
   useConfirm,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import {
@@ -43,8 +44,8 @@ import type {
 } from "./types";
 
 const text = (key: string) => t(`security.deepsec.entitlements.${key}`);
-const inputClass =
-  "min-h-[44px] w-full min-w-0 rounded-md border border-border bg-surface-sunken px-3 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring disabled:opacity-60";
+// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
+const inputClass = fieldControlClassName({ className: "min-w-0" });
 function Labeled({ label, children }: { label: string; children: ReactNode }) {
   const generatedId = useId();
   const child = children as ReactElement<{ id?: string }>;

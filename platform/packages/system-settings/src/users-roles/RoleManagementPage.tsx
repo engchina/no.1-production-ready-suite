@@ -11,10 +11,10 @@ import {
 import {
   Archive,
   ArchiveRestore,
-  ArrowLeft,
   Pencil,
   Plus,
   RefreshCw,
+  Save,
   Shield,
   ShieldCheck,
   Trash2,
@@ -23,12 +23,10 @@ import {
 import {
   Banner,
   EmptyState,
-  FormStatus,
   toast,
   DataTable,
   type DataTableColumn,
   type DataTableSort,
-  Button,
   StatusBadge,
   PageHeader,
   FieldError,
@@ -39,11 +37,11 @@ import {
   ObjectActionBar,
   cn,
   type EntityAction,
-  FormActionBar,
-  entityActionToFormAction,
+  SaveErrorBanner,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   TextareaField,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
@@ -94,8 +92,8 @@ const ROLE_POINTER_TO_FIELD = {
 
 const EMPTY_DRAFT: RoleDraftState = { roleCode: "", displayName: "", description: "" };
 
-const INPUT_CLASS =
-  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm focus:border-focus-ring disabled:bg-surface-hover disabled:text-fg-disabled";
+// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
+const INPUT_CLASS = fieldControlClassName();
 
 function compareText(left: string, right: string, direction: DataTableSort["direction"]) {
   const result = left.localeCompare(right, "ja");
@@ -164,6 +162,8 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
   const readOnly = Boolean(!canManage || editingRole?.is_built_in || editingRole?.archived);
   const mutationBusy = busy || deletingRoleId !== null || changingRoleId !== null;
   const operationBusy = mutationBusy || loading;
+  // 保存を試みた回数（保存の失敗の Banner を、同じ文言の失敗でも入れ直す。#585）。
+  const [submitAttempt, setSubmitAttempt] = useState(0);
   const inputReadOnly = readOnly || operationBusy;
   const isDirty =
     activeView !== "list" &&
@@ -326,6 +326,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (inputReadOnly) return;
+    setSubmitAttempt((current) => current + 1);
     const normalizedRoleCode = draft.roleCode.trim().toUpperCase();
     // 未入力は送信前に欄の下へ出し、最初のエラーの欄へフォーカスする（noValidate。#531）。
     const requiredErrors: RoleFieldErrors = {};
@@ -518,15 +519,14 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
         ]
       : [];
 
-  const formRoleActions = (...actionIds: string[]) => {
+  /**
+   * 編集フォームの対象への操作（復元・アーカイブ・削除）。フォームのパネルの見出しの右の ObjectActionBar
+   * 1 か所に置く（#618）。保存はページの右上（PageHeader）の primary。
+   */
+  const editObjectActions = (): EntityAction[] => {
     if (!editingRole) return [];
-    const actions = roleActions(editingRole);
-    return actionIds.flatMap((actionId) => {
-      const action = actions.find(
-        (candidate) => candidate.id === actionId && candidate.visible !== false
-      );
-      return action ? [entityActionToFormAction(action)] : [];
-    });
+    const ids = new Set(["restore", "archive", "delete"]);
+    return roleActions(editingRole).filter((action) => ids.has(action.id));
   };
 
   const roleColumns: Array<DataTableColumn<R>> = [
@@ -602,7 +602,26 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                   loading,
                 },
               ]
-            : []
+            : !readOnly
+              ? [
+                  {
+                    id: activeView === "edit" ? "save" : "create",
+                    kind: "primary" as const,
+                    label: activeView === "edit" ? t("security.common.save") : t("security.common.create"),
+                    icon: activeView === "edit" ? Save : Plus,
+                    loading: busy,
+                    disabled: operationBusy,
+                    testId: "security-roles-submit",
+                    onClick: () => formRef.current?.requestSubmit(),
+                  },
+                ]
+              : []
+        }
+        // 詳細・作成・編集の画面の「一覧へ戻る」は左上、保存・作成は右端の primary（#618）。
+        back={
+          activeView === "list"
+            ? undefined
+            : { label: t("security.common.backToList"), onClick: () => void returnToList(), disabled: operationBusy, testId: "security-roles-back" }
         }
         actionsLabel={t("security.roles.actionsLabel")}
         actionsTestId="security-roles-actions"
@@ -704,18 +723,12 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
           </SecurityManagementPanelShell>
         ) : (
           <>
-            <div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={operationBusy}
-                onClick={returnToList}
-                icon={ArrowLeft}
-              >
-                <span>{t("security.common.backToList")}</span>
-              </Button>
-            </div>
+            {/* 保存の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
+            <SaveErrorBanner
+              message={formError || (activeView === "edit" ? actionError : "")}
+              attemptKey={submitAttempt}
+              testId="security-roles-save-error"
+            />
             <SecurityManagementPanelShell
               id={`security-roles-panel-${activeView}`}
               idPrefix="security-roles"
@@ -730,6 +743,15 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                 }
                 description={t("security.roles.formHint")}
                 headingId="security-roles-form-heading"
+                action={
+                  activeView === "edit" ? (
+                    <ObjectActionBar
+                      actions={editObjectActions()}
+                      ariaLabel={t("security.roles.editActions")}
+                      testId="security-roles-object-actions"
+                    />
+                  ) : undefined
+                }
               />
               <form
                 ref={formRef}
@@ -796,44 +818,6 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                     if (inputReadOnly) return;
                     setDraft((current) => ({ ...current, description: value }));
                   }}
-                />
-
-                <FormActionBar
-                  ariaLabel={t("security.roles.editActions")}
-                  primaryActions={
-                    !readOnly
-                      ? [
-                          {
-                            id: "save",
-                            label:
-                              activeView === "edit"
-                                ? t("security.common.save")
-                                : t("security.common.create"),
-                            loading: busy,
-                            disabled: operationBusy,
-                            onClick: () => {
-                              formRef.current?.requestSubmit();
-                            },
-                          },
-                        ]
-                      : []
-                  }
-                  secondaryActions={[
-                    ...formRoleActions("restore"),
-                    {
-                      id: "cancel",
-                      label: t("security.common.cancel"),
-                      disabled: operationBusy,
-                      onClick: returnToList,
-                    },
-                  ]}
-                  dangerActions={editingRole ? formRoleActions("archive", "delete") : []}
-                  status={
-                    <FormStatus
-                      tone="danger"
-                      message={formError || (activeView === "edit" ? actionError : "")}
-                    />
-                  }
                 />
               </form>
             </SecurityManagementPanelShell>

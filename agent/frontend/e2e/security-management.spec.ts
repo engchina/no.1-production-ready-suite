@@ -30,8 +30,9 @@ async function expectNoPageOverflow(page: Page) {
     .toBeLessThanOrEqual(0);
 }
 
+/** 編集の画面の保存は PageHeader の右端（#618）。 */
 function editActions(page: Page) {
-  return page.getByRole("group", { name: "権限編集操作" });
+  return page.locator("[data-page-header-actions]");
 }
 
 for (const viewport of VIEWPORTS) {

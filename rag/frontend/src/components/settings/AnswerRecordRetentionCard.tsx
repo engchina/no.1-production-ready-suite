@@ -57,19 +57,20 @@ export function AnswerRecordRetentionCard() {
         ) : null}
         {value !== null ? (
           <div className="flex flex-col gap-3 md:flex-row md:items-end">
-            <div className="w-full max-w-md">
-              <SelectField
-                id="answer-record-retention"
-                label={t("settings.answerRecords.field")}
-                value={value}
-                options={options}
-                onValueChange={(next) => {
-                  if (!next) return;
-                  save.reset();
-                  setDraft(next);
-                }}
-              />
-            </div>
+            {/* 保存のボタン（lg）と同じ行なので、選択欄も lg。幅は保持期間の値の長さ（#613）。 */}
+            <SelectField
+              id="answer-record-retention"
+              label={t("settings.answerRecords.field")}
+              value={value}
+              options={options}
+              onValueChange={(next) => {
+                if (!next) return;
+                save.reset();
+                setDraft(next);
+              }}
+              size="lg"
+              width="md"
+            />
             <Button
               type="button"
               size="lg"

@@ -43,6 +43,7 @@ import {
   FieldError,
   FieldLabel,
   TextareaField,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 
 import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
@@ -775,8 +776,9 @@ export function FeedbackManagementPage() {
                   <Button
                     type="button"
                     variant="secondary"
-                    size="lg"
-                    touchTarget className="w-full whitespace-nowrap sm:w-auto"
+                    // 隣の業務プロファイルの選択（md）と同じ高さ（#613）。
+                    size="md"
+                    className="w-full whitespace-nowrap sm:w-auto"
                     loading={loading === "feedback"}
                     disabled={!profileName.trim()}
                     onClick={() => void refreshSelectAiFeedback()} icon={RefreshCw}>
@@ -994,7 +996,7 @@ export function FeedbackManagementPage() {
                       const rating = event.currentTarget.value as AppFeedbackFilter;
                       void refreshAppFeedback("", "reset", { rating });
                     }}
-                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
+                    className={fieldControlClassName({ className: "min-w-0 py-2" })}
                   >
                     <option value="all">{t("feedbackManagement.appFeedback.filterAll")}</option>
                     <option value="good">{t("nl2sql.feedback.good")}</option>
@@ -1011,7 +1013,7 @@ export function FeedbackManagementPage() {
                       const profileId = event.currentTarget.value;
                       void refreshAppFeedback("", "reset", { profileId });
                     }}
-                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
+                    className={fieldControlClassName({ className: "min-w-0 py-2" })}
                   >
                     <option value="">{t("feedbackManagement.appFeedback.profileAll")}</option>
                     {appProfiles.filter((profile) => !profile.archived).map((profile) => (
@@ -1087,7 +1089,6 @@ export function FeedbackManagementPage() {
                     options={feedbackHistoryOptions}
                     onValueChange={(id) => void selectReview(id)}
                     className="min-w-0"
-                    buttonClassName="h-11"
                   />
                   <section className="rounded-md border border-border bg-surface p-3">
                     <p className="text-xs font-medium text-fg-muted">{t("feedbackManagement.appFeedback.history")}</p>
@@ -1164,7 +1165,7 @@ export function FeedbackManagementPage() {
                         setAdminFeedbackRating(event.currentTarget.value as FeedbackRating);
                         setReviewErrors((current) => ({ ...current, adminContent: undefined }));
                       }}
-                      className="min-h-11 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
+                      className={fieldControlClassName({ className: "min-w-0 py-2" })}
                     >
                       <option value="good">{t("nl2sql.feedback.good")}</option>
                       <option value="bad">{t("nl2sql.feedback.bad")}</option>
@@ -1381,7 +1382,7 @@ function ProfileSelect({
         value={value}
         disabled={disabled || profiles.length === 0}
         onChange={(event) => onChange(event.currentTarget.value)}
-        className="min-h-[44px] w-full min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 text-sm focus:border-focus-ring"
+        className={fieldControlClassName({ className: "min-w-0 py-2" })}
       >
         {profiles.map((profile) => (
           <option key={profile.name} value={profile.name}>
@@ -1744,7 +1745,7 @@ function SimilarityConfigField({
           const nextValue = Number(event.currentTarget.value);
           if (!Number.isNaN(nextValue)) onChange(nextValue);
         }}
-        className="min-h-11 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring"
+        className={fieldControlClassName({ className: "py-2" })}
       />
       <span id={hintId} className="text-xs font-normal leading-5 text-fg-muted">
         {hint}
@@ -1789,7 +1790,7 @@ function SliderNumberField({
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.currentTarget.value))}
-        className="min-h-11 rounded-md border border-border-control bg-surface px-3 py-2 text-sm focus:border-focus-ring"
+        className={fieldControlClassName({ className: "py-2" })}
       />
     </fieldset>
   );

@@ -167,22 +167,6 @@ describe("TextField の候補（suggestions、#547）", () => {
   });
 });
 
-describe("TextField の高さ（size）", () => {
-  it("既定は --field-height、lg は lg の Button と同じ --button-height-lg（同じ行に並べる検索欄）", () => {
-    expect(classesOf(input(render()))).toContain("min-h-[var(--field-height)]");
-    const lg = classesOf(input(render({ size: "lg" })));
-    expect(lg).toContain("min-h-[var(--button-height-lg)]");
-    expect(lg).not.toContain("min-h-[var(--field-height)]");
-  });
-
-  it("touchTarget は Button と同じ --control-height-touch（44px の操作と同じ行に並べる入力欄）", () => {
-    const touch = classesOf(input(render({ touchTarget: true, size: "lg" })));
-    expect(touch).toContain("min-h-[var(--control-height-touch)]");
-    expect(touch).not.toContain("min-h-[var(--button-height-lg)]");
-    expect(touch).not.toContain("min-h-[var(--field-height)]");
-  });
-});
-
 describe("操作部品の角丸（--radius-control）", () => {
   const read = (path: string) => readFileSync(new URL(`../src/styles/${path}`, import.meta.url), "utf8");
 

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ListPlus,
-  ArrowLeft,
   FileJson,
   Plus,
   RefreshCw,
@@ -41,6 +40,7 @@ import {
   type ListPickerGroup,
   type ListPickerItem,
   TextareaField,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
@@ -165,8 +165,8 @@ function emptyProfileForm(): ProfileFormState {
   };
 }
 
-const inputClass =
-  "min-h-11 min-w-0 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm focus:border-focus-ring";
+// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
+const inputClass = fieldControlClassName({ className: "min-w-0 py-2" });
 
 function mergeAdditionalInstructions(instructions: string, rules: string[]) {
   const base = instructions.trim();
@@ -535,7 +535,6 @@ function SelectAiConfigFields({
             if (requiredErrors.region) onRequiredErrorClear("region");
           }}
           className="min-w-0"
-          buttonClassName="h-11"
         />
         <TextField
           id="profile-select-ai-model"
@@ -548,7 +547,6 @@ function SelectAiConfigFields({
             if (requiredErrors.model) onRequiredErrorClear("model");
           }}
           className="min-w-0"
-          inputClassName="h-11"
         />
         <TextField
           id="profile-select-ai-max-tokens"
@@ -570,7 +568,6 @@ function SelectAiConfigFields({
             })
           }
           className="min-w-0"
-          inputClassName="h-11"
         />
         <TextField
           id="profile-select-ai-embedding-model"
@@ -585,7 +582,6 @@ function SelectAiConfigFields({
             if (requiredErrors.embeddingModel) onRequiredErrorClear("embeddingModel");
           }}
           className="min-w-0"
-          inputClassName="h-11"
         />
       </div>
       <div className="grid gap-2 md:grid-cols-4">
@@ -1109,7 +1105,6 @@ function ProfileEditor({
             </Button>
             <ClearActionButton
               label={t("profiles.oracle.actions.clear")}
-              matchButtonHeight
               size="lg"
               className="w-full sm:w-auto"
               disabled={!canClearOracleExecution || saving}
@@ -2060,6 +2055,18 @@ export function ProfileManagementPage() {
             : []
         }
         actionsTestId="profile-management-actions"
+        // 編集の画面の「一覧へ戻る」はページの左上（#618）。保存は Oracle への反映を伴うため、確認語欄の操作行に置く
+        // （確認語が要る保存の例外。design-system README §4「詳細・作成・編集の画面の操作」）。
+        back={
+          activeView === "list"
+            ? undefined
+            : {
+                label: t("profiles.action.backToList"),
+                onClick: () => void backToList(),
+                disabled: mutationBusy,
+                testId: "profile-management-back",
+              }
+        }
       />
 
       <PageBody wide className="grid gap-4">
@@ -2097,11 +2104,6 @@ export function ProfileManagementPage() {
             </DbObjectManagementPanelShell>
         ) : (
           <>
-            <div>
-              <Button type="button" variant="ghost" size="sm" disabled={mutationBusy} onClick={() => void backToList()} icon={ArrowLeft}>
-                <span>{t("profiles.action.backToList")}</span>
-              </Button>
-            </div>
             <DbObjectManagementPanelShell
               id="profile-management-panel-editor"
               role="region"

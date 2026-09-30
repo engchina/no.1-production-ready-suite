@@ -31,16 +31,28 @@
   --tab-height: 2.75rem;             /* ページタブ。ナビ行と同じ高さに揃える */  /* h-9 */
   --tab-fade-width: 2rem;            /* タブが横にスクロールするときの端のフェードの幅（#364） */
 
-  /* PROPOSED — root-independent control heights (NL2SQL button spec) */
-  --button-height-sm: 32px;
-  --button-height-md: 36px;
-  --button-height-lg: 40px;
+  /* 操作部品の高さ（ルート非依存の px。#613）。入力欄・選択欄・ボタンで同じ 3 段を使い、同じ行は同じ段にする。
+     sm = 表・密な行、md = 既定、lg = 工程を進める主操作の行・主な問い合わせの入力の行。
+     --button-height-* / --field-height は同じ値の別名（既存の参照のため残す）。 */
+  --control-height-sm: 32px;
+  --control-height-md: 36px;
+  --control-height-lg: 40px;
   --control-height-touch: 44px;
+  --button-height-sm: var(--control-height-sm);
+  --button-height-md: var(--control-height-md);
+  --button-height-lg: var(--control-height-lg);
+  --field-height: var(--control-height-md);
   --button-padding-sm: 12px;
   --button-padding-md: 16px;
   --button-padding-lg: 20px;
   --button-gap: 8px;
-  --field-height: 36px;
+
+  /* 入力欄・選択欄の幅（#613）。入る値の長さで選ぶ。sm（640px）未満は全幅。
+     xs = 数値・短いコード、sm = 短い列挙、md = 名前、lg = 長めの名前。URL・文章・検索欄は全幅。 */
+  --field-width-xs: 8rem;
+  --field-width-sm: 12rem;
+  --field-width-md: 20rem;
+  --field-width-lg: 28rem;
 
   /* アイコン寸法。13/15/16/18/22/24 の 6 値混在を 4 段に統合。
      Lucide は 2px ストロークなので偶数 px 以外はサブピクセルでボケます。 */
@@ -53,15 +65,15 @@
   --content-max-width: 1440px;
 }
 
-/* タッチ端末（coarse pointer）ではボタン高さを 44px にする（WCAG 2.2 SC 2.5.5 / Apple HIG 44pt）。
+/* タッチ端末（coarse pointer）では操作部品の高さを 3 段とも 44px にする（WCAG 2.2 SC 2.5.5 / Apple HIG 44pt）。
+   ボタンだけでなく入力欄・選択欄も 44px にする（#613。以前は入力欄が 36px のままで、同じ行のボタンとずれた）。
    画面幅ではなく入力方式で判定する（マウスで狭いウィンドウを使う場合は密度を保つ）。
-   変数で切り替えるため、呼び出し側の h-* / min-h-* 上書きはそのまま効く。
    ToggleChip / Switch は見た目の大きさを変えず、同じ --control-height-touch で当たり判定だけを広げる
    （structure/touch-target.css、#364）。 */
 @media (pointer: coarse) {
   :root {
-    --button-height-sm: var(--control-height-touch);
-    --button-height-md: var(--control-height-touch);
-    --button-height-lg: var(--control-height-touch);
+    --control-height-sm: var(--control-height-touch);
+    --control-height-md: var(--control-height-touch);
+    --control-height-lg: var(--control-height-touch);
   }
 }

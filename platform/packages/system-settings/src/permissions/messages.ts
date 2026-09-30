@@ -45,7 +45,7 @@ export const ROLE_PERMISSIONS_MESSAGES = {
   discardTitle: "変更を破棄しますか",
   discardDescription: "保存されていない変更があります。移動すると編集内容は破棄されます。",
   discardConfirm: "破棄して移動",
-  backToList: "一覧に戻る",
+  backToList: "一覧へ戻る",
   save: "保存",
   cancel: "キャンセル",
   actions: "操作",

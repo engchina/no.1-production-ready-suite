@@ -22,6 +22,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   Pagination,
   TextareaField,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
@@ -92,8 +93,8 @@ type ClassifierPredictionSnapshot = ClassifierPredictionData & {
 };
 
 const fieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-fg";
-const controlClass =
-  "min-h-11 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-fg focus:border-focus-ring";
+// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
+const controlClass = fieldControlClassName({ className: "py-2" });
 const linkButtonClass =
   "inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium text-fg hover:bg-surface-hover";
 const TRAINING_DATA_PAGE_SIZE = DEFAULT_PAGE_SIZE;
@@ -1365,7 +1366,6 @@ function TrainingCandidatesPanel({
             label: t(`qcm.candidates.status.${value}`),
           }))}
           onValueChange={onStatusChange}
-          buttonClassName="h-11"
         />
         <SelectField
           id="qcm-candidate-profile-filter"
@@ -1376,7 +1376,6 @@ function TrainingCandidatesPanel({
             ...profileOptions,
           ]}
           onValueChange={onProfileFilterChange}
-          buttonClassName="h-11"
         />
       </div>
 
@@ -1534,7 +1533,6 @@ function TrainingCandidatesPanel({
                       onValueChange={(value) => onProfileOverrideChange(item.history_id, value)}
                       placeholder={t("qcm.candidates.selectProfile")}
                       className="min-w-0"
-                      buttonClassName="h-11"
                     />
                   )}
                   {item.status !== "pending" && item.status !== "profile_missing" && (

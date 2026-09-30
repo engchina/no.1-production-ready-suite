@@ -1,5 +1,6 @@
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
+import { expectedControlHeight } from "./_helpers/control-height";
 import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
@@ -1475,7 +1476,8 @@ test("OCI 秘密鍵と Wallet ZIP をドラッグ＆ドロップで即時アッ�
 
   await page.goto("/settings/oci");
   const keyDropzone = page.getByTestId("oci-key-file-upload-dropzone");
-  await expect(keyDropzone).toHaveCSS("height", "44px");
+  // ファイルの選択は入力欄と同じ md（タッチ端末は 44px。#613）。
+  await expect(keyDropzone).toHaveCSS("height", `${await expectedControlHeight(page)}px`);
   await dropFiles(page, keyDropzone, [
     {
       name: "private.pem",

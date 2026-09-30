@@ -10,6 +10,7 @@ import {
   ProcessingIndicator,
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import { apiGet } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -168,7 +169,7 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
     </>}
     {runs.some((item) => !runFinished(item)) && <p className="text-sm text-fg-muted">{t("syntheticRun.independentRuns")}</p>}
     {history.length > 0 && <label className="grid gap-1 text-sm">{t("syntheticRun.history")}
-      <select disabled={submitting} value={run?.run_id ?? ""} onChange={(e) => onSelect(e.target.value)} className="h-11 min-w-0 rounded-md border border-border-control bg-surface px-3">
+      <select disabled={submitting} value={run?.run_id ?? ""} onChange={(e) => onSelect(e.target.value)} className={fieldControlClassName({ className: "min-w-0" })}>
         {!run && <option value="" disabled>{t("syntheticRun.selectHistory")}</option>}
         {history.map((r) => <option key={r.run_id} value={r.run_id}>{formatDateTime(r.created_at)} · {runLabel(r)} · {r.targets.map((target) => target.table_name).join(", ")} · {r.run_id.slice(0, 8)}</option>)}
       </select>

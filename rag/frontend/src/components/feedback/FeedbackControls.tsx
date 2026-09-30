@@ -147,7 +147,6 @@ export function FeedbackControls({
             size="sm"
             className={cn(
               "min-w-8 px-2",
-              compact && "min-h-[var(--control-height-touch)] min-w-[var(--control-height-touch)] sm:min-h-9 sm:min-w-8",
               current?.rating === "helpful" && "text-success-fg"
             )}
             aria-label={helpfulLabel}
@@ -163,7 +162,6 @@ export function FeedbackControls({
             size="sm"
             className={cn(
               "min-w-8 px-2",
-              compact && "min-h-[var(--control-height-touch)] min-w-[var(--control-height-touch)] sm:min-h-9 sm:min-w-8",
               current?.rating === "not_helpful" && "text-danger-fg"
             )}
             aria-label={notHelpfulLabel}

@@ -100,7 +100,7 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
     });
 
-    test("編集対象は URL で開き、再読込・戻る / 進む・パンくずで行き来できる", async ({ page }) => {
+    test("編集対象は URL で開き、再読込・戻る / 進む・左上の一覧へ戻るで行き来できる", async ({ page }) => {
       await page.goto("/skills");
       await expect(page.getByRole("heading", { name: "スキル", level: 1 })).toBeVisible();
       await expect(breadcrumbs(page)).toHaveCount(0);
@@ -111,8 +111,10 @@ for (const viewport of VIEWPORTS) {
       await skillLink.click();
       await expect(page).toHaveURL(/\/skills\?id=business_rag_research$/);
       await expect(page.getByRole("heading", { name: "業務 RAG 調査", level: 1 })).toBeVisible();
-      await expect(breadcrumbs(page).getByRole("link", { name: "スキル" })).toBeVisible();
-      await expect(breadcrumbs(page).locator('[aria-current="page"]')).toHaveText("業務 RAG 調査");
+      // 2 階層のパンくずは出さず、タイトルの上の左端に「一覧へ戻る」（#618）。
+      await expect(breadcrumbs(page)).toHaveCount(0);
+      await expect(page.getByTestId("editor-back")).toHaveText("一覧へ戻る");
+      await expect(page.getByTestId("editor-back")).toHaveAccessibleName("スキルの一覧へ戻る");
       await expectNoHorizontalOverflow(page);
 
       await page.reload();
@@ -125,7 +127,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page).toHaveURL(/\/skills\?id=business_rag_research$/);
       await expect(page.getByRole("heading", { name: "業務 RAG 調査", level: 1 })).toBeVisible();
 
-      await breadcrumbs(page).getByRole("link", { name: "スキル" }).click();
+      await page.getByTestId("editor-back").click();
       await expect(page).toHaveURL(/\/skills$/);
 
       // 行の操作以外の領域（状態のセル）をクリックしても開く。
@@ -135,7 +137,7 @@ for (const viewport of VIEWPORTS) {
       // ?id=new は新規作成のエディタ。
       await page.goto("/skills?id=new");
       await expect(page.getByRole("heading", { name: "スキルを追加", level: 1 })).toBeVisible();
-      await expect(breadcrumbs(page).locator('[aria-current="page"]')).toHaveText("スキルを追加");
+      await expect(page.getByTestId("editor-back")).toBeVisible();
       await expect(page.locator("#skill-id")).toBeEditable();
     });
 

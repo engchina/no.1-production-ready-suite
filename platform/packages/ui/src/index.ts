@@ -21,6 +21,17 @@ export { Button, buttonVariants, type ButtonProps, type ButtonVariantToneProps }
 export { Tooltip, type TooltipProps, type TooltipPlacement } from "./components/ui/tooltip";
 export { DEFAULT_TAB_INVALID_LABEL, Tabs, TabPanel, type TabItem, type TabsProps } from "./components/ui/tabs";
 export { TextField, type TextFieldProps, type TextFieldSize } from "./components/ui/text-field";
+export {
+  CONTROL_HEIGHT_CLASS,
+  CONTROL_MIN_HEIGHT_CLASS,
+  FIELD_WIDTH_CLASS,
+  fieldControlClassName,
+  fieldWidthClass,
+  type ControlSize,
+  type FieldControlClassNameOptions,
+  type FieldWidth,
+} from "./components/ui/control-size";
+export { FieldActionRow, type FieldActionRowProps } from "./components/ui/field-action-row";
 export { TextareaField, defaultTextareaCount, type TextareaFieldProps } from "./components/ui/textarea-field";
 export {
   SearchField,
@@ -237,7 +248,7 @@ export {
   type NavDrawerLabels,
 } from "./components/app-shell/nav-drawer";
 export { Sidebar, SidebarAccountFooter, type SidebarFooterAction, type SidebarProps } from "./components/app-shell/Sidebar";
-export { PageHeader, type PageHeaderAction } from "./components/app-shell/PageHeader";
+export { PageHeader, type PageHeaderAction, type PageHeaderBack } from "./components/app-shell/PageHeader";
 export { PageBody, Section } from "./components/app-shell/PageBody";
 export {
   FixedSplitPane,

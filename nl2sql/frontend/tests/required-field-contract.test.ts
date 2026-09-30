@@ -14,7 +14,6 @@ test("required labels use the shared FieldLabel / FieldLegend instead of an app-
   );
   for (const path of [
     "../src/components/ui/file-dropzone.tsx",
-    "../src/components/ui/input-action-field.tsx",
     "../src/features/nl2sql/pages/DataManagementPage.tsx",
     "../src/features/security/SecurityDeepSecPage.tsx",
   ]) {

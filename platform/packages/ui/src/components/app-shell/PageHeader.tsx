@@ -1,4 +1,4 @@
-import { ChevronDown, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ChevronDown, type LucideIcon } from "lucide-react";
 import {
   Fragment,
   isValidElement,
@@ -29,6 +29,21 @@ export interface PageHeaderAction {
   loading?: boolean;
   disabled?: boolean;
   /** ボタンの data-testid。 */
+  testId?: string;
+}
+
+/**
+ * 詳細・作成・編集の画面の「一覧へ戻る」（#618）。ページの左上（タイトルの上）に、左向きの矢印付きの
+ * テキストのボタンで出す。右の操作の列（保存など）には置かない。文言は 3 製品で「一覧へ戻る」にそろえる。
+ */
+export interface PageHeaderBack {
+  /** 翻訳済みの文言（「一覧へ戻る」）。 */
+  label: string;
+  /** 戻る操作（未保存の変更の確認は呼び出し側の離脱ガードが行う。#586）。 */
+  onClick: () => void;
+  /** 読み上げ名（戻り先を足すとき。例:「業務ビューの一覧へ戻る」）。省略すると label。 */
+  ariaLabel?: string;
+  disabled?: boolean;
   testId?: string;
 }
 
@@ -237,6 +252,7 @@ export function PageHeader({
   meta,
   status,
   breadcrumbs,
+  back,
   actions,
   actionsLabel = "ページ操作",
   actionsTestId,
@@ -251,8 +267,13 @@ export function PageHeader({
   meta?: ReactNode;
   /** タイトル横の状態表示（StatusBadge 等）。 */
   status?: ReactNode;
-  /** タイトル上のパンくず（`<Breadcrumbs>`）。 */
+  /** タイトル上のパンくず（`<Breadcrumbs>`）。3 階層以上の深い導線だけに使う（2 階層の「一覧 › 対象」は `back`）。 */
   breadcrumbs?: ReactNode;
+  /**
+   * 詳細・作成・編集の画面の「一覧へ戻る」（#618）。タイトルの上の左端に出す（Tab の順の先頭）。
+   * `actions` に戻る操作を入れない。
+   */
+  back?: PageHeaderBack;
   /**
    * 配列で渡すと danger → utility → secondary → primary の順に並べ替えて描画する（推奨）。
    * ReactNode（ボタン等）も後方互換で受けるが、並び順は呼び出し側の責任になる。
@@ -309,6 +330,26 @@ export function PageHeader({
     >
       <div className={cn(measureClass(wide), "flex flex-wrap items-start justify-between gap-4")}>
         <div className="min-w-0 flex-auto">
+          {back ? (
+            <div className="mb-1.5">
+              {/* 左の余白をボタンの内側の余白の分だけ戻し、矢印の左端をタイトルの左端にそろえる。 */}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                icon={ArrowLeft}
+                onClick={back.onClick}
+                disabled={back.disabled}
+                aria-label={back.ariaLabel}
+                tooltip={false}
+                data-testid={back.testId}
+                data-page-header-back=""
+                className="-ml-[var(--button-padding-sm)] text-fg-muted hover:enabled:text-fg"
+              >
+                <span>{back.label}</span>
+              </Button>
+            </div>
+          ) : null}
           {breadcrumbs ? <div className="mb-1.5">{breadcrumbs}</div> : null}
           <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="text-xl font-bold text-fg">{title}</h1>

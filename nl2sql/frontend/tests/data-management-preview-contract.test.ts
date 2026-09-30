@@ -60,9 +60,9 @@ test("対象画面の検索・所有者・種類フィルタを共通化する",
   assert.match(dbObjectFilterFieldsSource, /export function DbManagementSelectField/u);
   assert.match(dbObjectFilterFieldsSource, /export function DbObjectSearchOwnerFields/u);
   assert.match(dbObjectFilterFieldsSource, /md:grid-cols-2/u);
-  assert.match(dbObjectFilterFieldsSource, /min-h-\[44px\]/u);
-  assert.match(dbObjectFilterFieldsSource, /disabled:cursor-not-allowed/u);
-  assert.match(dbObjectFilterFieldsSource, /focus:border-focus-ring/u);
+  // 種類の select は共有の fieldControlClassName で SearchField と同じ高さ・見た目にする（#613）。
+  assert.match(dbObjectFilterFieldsSource, /fieldControlClassName\(/u);
+  assert.doesNotMatch(dbObjectFilterFieldsSource, /min-h-\[44px\]|touchTarget/u);
   // フォーカスの表示は outline に一本化（ring を使わない。#355）
   assert.doesNotMatch(dbObjectFilterFieldsSource, /focus(?:-visible)?:ring-/u);
   // 検索・所有者の接頭辞は共有の SearchField（debounce・IME 対応）。接頭辞は確定した値を大文字にする（#535）。

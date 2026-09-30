@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { expectNoPageOverflow, SYSTEM_TABLES_STATUS_OK, LOCAL_AUTH_ME } from "./_helpers";
+import { expectedControlHeight, expectNoPageOverflow, SYSTEM_TABLES_STATUS_OK, LOCAL_AUTH_ME } from "./_helpers";
 
 interface DatabaseSettingsData {
   user: string;
@@ -255,7 +255,8 @@ for (const viewport of [
       scrollHeight: element.scrollHeight,
       scrollWidth: element.scrollWidth,
     }));
-    expect(metrics.offsetHeight).toBeGreaterThanOrEqual(44);
+    // ファイルの選択は入力欄と同じ md（タッチ端末は 44px。#613）。
+    expect(metrics.offsetHeight).toBeGreaterThanOrEqual(await expectedControlHeight(page));
     expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
     expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.clientHeight + 1);
   });

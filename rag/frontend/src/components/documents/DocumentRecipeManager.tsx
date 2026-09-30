@@ -288,7 +288,6 @@ export function DocumentRecipeManager({
             label: `${recipeName(recipe)} · ${t(recipeStatus(recipe).label)}`,
           }))}
           onValueChange={onSelect}
-          buttonClassName="min-h-11"
         />
       </div>
 

@@ -97,6 +97,26 @@
           {
             "selector": ":matches(JSXText[value=/^\\s*[*＊※]\\s*$/], JSXText[value=/\\S\\s*[*＊]\\s*$/], JSXElement > JSXExpressionContainer > Literal[value=/^\\s*[*＊※]\\s*$/], JSXText[value=/^\\s*※?必須\\s*$/], JSXElement > JSXExpressionContainer > Literal[value=/^\\s*※?必須\\s*$/], JSXOpeningElement[name.name!='RequiredBadge'] > JSXAttribute[name.name!='requiredLabel'] Literal[value=/^\\s*※?必須\\s*$/], JSXOpeningElement[name.name='RequiredBadge'], JSXElement > JSXExpressionContainer > CallExpression[callee.name='t'][arguments.0.value=/^common\\.required$|\\.required(?:Mark|Badge|Tag)$/], JSXOpeningElement[name.name!='RequiredBadge'] > JSXAttribute[name.name!='requiredLabel'] > JSXExpressionContainer > CallExpression[callee.name='t'][arguments.0.value=/^common\\.required$|\\.required(?:Mark|Badge|Tag)$/])",
             "message": "必須の表示を手書きしない（「*」・「必須」の span / Badge / RequiredBadge を直接ラベルに並べない）。TextField / SelectField / SecretField の required、それ以外の入力は FieldLabel / FieldLegend / Fieldset の required を使う（docs/design-system/README.md §4「必須の表示」、#531）。"
+          },
+          {
+            "selector": "JSXAttribute[name.name='touchTarget']",
+            "message": "製品で touchTarget を使わない。タッチ端末（pointer: coarse）では入力欄・選択欄・ボタンが sm / md / lg とも 44px になる。マウス環境の高さは、同じ行の部品に同じ size（既定 md）を渡してそろえる（docs/design-system/README.md §4「操作部品の高さと幅」、#613）。"
+          },
+          {
+            "selector": "JSXOpeningElement[name.name=/^(?:Button|TextField|SearchField|SecretField|SelectField|SearchableSelectField|ClearActionButton|RunStopButton)$/] > JSXAttribute[name.name=/^(?:className|inputClassName|buttonClassName)$/] :matches(Literal[value=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*(?:h|min-h)-(?!0(?![\\w.]))/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*(?:h|min-h)-(?!0(?![\\w.]))/])",
+            "message": "共有の操作部品（Button / TextField / SearchField / SecretField / SelectField / SearchableSelectField）の高さを h-* / min-h-* で上書きしない。size（sm 32px / md 36px / lg 40px、タッチ端末は 44px）を渡し、同じ行の部品は同じ size にする（docs/design-system/README.md §4「操作部品の高さと幅」、#613）。"
+          },
+          {
+            "selector": "JSXOpeningElement[name.name=/^(?:TextField|SearchField|SecretField|SelectField|SearchableSelectField)$/] > JSXAttribute[name.name=/^(?:className|inputClassName|buttonClassName)$/] :matches(Literal[value=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*(?:w|max-w)-(?!full(?![\\w-])|0(?![\\w.]))/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*(?:w|max-w)-(?!full(?![\\w-])|0(?![\\w.]))/])",
+            "message": "入力欄・選択欄の幅を w-* / max-w-* で書かない。値の長さで width（xs 8rem / sm 12rem / md 20rem / lg 28rem / full）を選ぶ。sm 未満は全幅になる。フォームの grid のセルに置く欄は width を渡さない（docs/design-system/README.md §4「操作部品の高さと幅」、#613）。"
+          },
+          {
+            "selector": "JSXOpeningElement[name.name=/^(?:input|select)$/]:not(:has(> JSXAttribute[name.name='type'][value.value=/^(?:checkbox|radio|file|range|color|hidden)$/])) > JSXAttribute[name.name='className'] :matches(Literal[value=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*(?:h|min-h)-(?:8|9|10|11|12|14|\\[)/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*(?:h|min-h)-(?:8|9|10|11|12|14|\\[)/])",
+            "message": "ネイティブの <input> / <select> の高さを h-* / min-h-* で書かない。TextField / SelectField を使うか、ネイティブの要素を残すときは fieldControlClassName({ size, width })（@engchina/production-ready-ui）で同じ見た目・高さ・幅にする（docs/design-system/README.md §4「操作部品の高さと幅」、#613）。"
+          },
+          {
+            "selector": "JSXOpeningElement[name.name='PageHeader'] > JSXAttribute[name.name='actions'] Property[key.name='id'][value.value='back']",
+            "message": "「一覧へ戻る」を PageHeader の actions（右の操作の列）に入れない。PageHeader の back（タイトルの上の左端）で渡す。保存は右端の primary、変更を破棄はその左（docs/design-system/README.md §4「詳細・作成・編集の画面の操作」、#618）。"
           }
         ]
       }

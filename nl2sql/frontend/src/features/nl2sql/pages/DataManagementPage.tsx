@@ -27,6 +27,7 @@ import {
   FieldLabel,
   FieldLegend,
   TextareaField,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 
 import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
@@ -1726,14 +1727,13 @@ function PreviewResultsPanel({
           />
         }
       />
-      {/* 取得件数上限は lg 以上で 50% 幅。操作ボタンはヘルパーテキストの下の行に置く。 */}
+      {/* 取得件数上限は短い数値の幅（xs。#613）。操作ボタンはヘルパーテキストの下の行に置く。 */}
       <div className="grid grid-cols-1 gap-3 border-t border-border pt-3">
         <RowLimitField
           value={rowLimitInput}
           onChange={onRowLimitChange}
           disabled={loading}
           error={rowLimitError}
-          className="lg:w-1/2"
         />
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <Button
@@ -1968,7 +1968,7 @@ function CsvUploadWorkspace({
         <select
           value={mode}
           onChange={(event) => onModeChange(event.currentTarget.value as CsvMode)}
-          className="h-11 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring"
+          className={fieldControlClassName()}
         >
           <option value="insert">{t("dataMgmt.csv.mode.insert")}</option>
           <option value="truncate_insert">{t("dataMgmt.csv.mode.truncateInsert")}</option>
@@ -2007,7 +2007,6 @@ function CsvUploadWorkspace({
               </Button>
               <ClearActionButton size="lg"
                 label={t("dbAdmin.import.actions.clear")}
-                matchButtonHeight
                 className="w-full sm:w-auto"
                 disabled={!canClearUpload || loading}
                 onClick={onClearUpload}
@@ -2263,7 +2262,7 @@ function SyntheticWorkspace({
               value={syntheticProfileName}
               onChange={(event) => onSyntheticProfileNameChange(event.currentTarget.value)}
               disabled={dbProfileRefreshRequired || dbProfileRefreshing}
-              className="h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring"
+              className={fieldControlClassName({ className: "min-w-0" })}
             >
               {(selectAiDbProfiles?.profiles ?? []).length === 0 && (
                 <option value="">{t("dataTools.syntheticData.noProfiles")}</option>
@@ -2283,7 +2282,7 @@ function SyntheticWorkspace({
               max={100}
               value={syntheticRows}
               onChange={(event) => onSyntheticRowsChange(Number(event.currentTarget.value) || 1)}
-              className="h-11 rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring"
+              className={fieldControlClassName()}
             />
           </label>
         </div>
@@ -2390,7 +2389,7 @@ function SyntheticWorkspace({
                 max={100}
                 value={syntheticSampleRows}
                 onChange={(event) => onSyntheticSampleRowsChange(Number(event.currentTarget.value) || 0)}
-                className="h-11 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring"
+                className={fieldControlClassName()}
               />
             </label>
             <label className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm font-medium text-fg">
@@ -2430,7 +2429,6 @@ function SyntheticWorkspace({
                 </Button>
                 <ClearActionButton size="lg"
                   label={t("dataTools.syntheticData.actions.clear")}
-                  matchButtonHeight
                   className="w-full sm:w-auto"
                   disabled={
                     !canClearSyntheticGeneration ||
@@ -2466,7 +2464,7 @@ function SyntheticWorkspace({
               value={hasValidResultTable ? syntheticResultTable : ""}
               onChange={(event) => onSyntheticResultTableChange(event.currentTarget.value)}
               disabled={loading === "results"}
-              className="h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring"
+              className={fieldControlClassName({ className: "min-w-0" })}
             >
               {resultTableOptions.length === 0 && <option value="">{t("dataTools.syntheticData.noResultTables")}</option>}
               {resultTableOptions.map((tableName) => (

@@ -370,7 +370,7 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByText("既定サーバーを変更しました")).toBeVisible();
 
     // tool 探索（一覧に戻って crm の mock gateway を引く）
-    await page.getByRole("button", { name: "一覧に戻る" }).click();
+    await page.getByTestId("editor-back").click();
     await expect(page.getByRole("heading", { name: "MCP tools/list" })).toBeVisible();
     await page.locator("#mcp-discovery-server-id").fill("crm");
     await page.locator("#mcp-discovery-trace-id").fill("trace-ui-mcp-list");
@@ -400,7 +400,7 @@ test.describe("Agent Runtime settings", () => {
     await page.getByRole("link", { name: /業務 RAG 調査/ }).click();
     await expect(page.getByText("このスキルは読み取り専用です", { exact: false })).toBeVisible();
     await expect(page.getByRole("button", { name: "保存" })).toHaveCount(0);
-    await page.getByRole("button", { name: "一覧に戻る" }).click();
+    await page.getByTestId("editor-back").click();
     await expectNoHorizontalOverflow(page);
 
     // 追加
@@ -427,7 +427,7 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByText("スキルを更新しました")).toBeVisible();
 
     // 宣言の再読込（一覧のページ操作）
-    await page.getByRole("button", { name: "一覧に戻る" }).click();
+    await page.getByTestId("editor-back").click();
     await page.getByRole("button", { name: "宣言を再読込" }).click();
     await expect(page.getByText("宣言スキルを再読込しました")).toBeVisible();
 

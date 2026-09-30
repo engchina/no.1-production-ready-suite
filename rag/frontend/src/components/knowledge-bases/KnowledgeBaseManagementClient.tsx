@@ -269,7 +269,6 @@ function KnowledgeBaseList({
                 action={
                   <ClearActionButton
                     label={t("common.clearSearch")}
-                    matchButtonHeight
                     onClick={() => applySearch("")}
                   />
                 }

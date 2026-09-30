@@ -299,8 +299,9 @@ function GlobalMaterialPanel({
         <Button
           type="button"
           variant="secondary"
-          size="sm"
-          touchTarget className="md:self-end"
+          // 隣のファイルの選択（md）と同じ高さ（#613）。
+          size="md"
+          className="md:self-end"
           loading={busyAction === "export"}
           disabled={disabled}
           onClick={onExport} icon={Download}>

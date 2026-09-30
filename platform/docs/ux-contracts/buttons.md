@@ -37,7 +37,7 @@
 - 工程を進める操作（対象の取得、生成、保存、実行など、入力を確定して次へ進む操作）は主操作（`primary/lg`）。
 - ページ全体の表示更新・外部データの再取得は `PageHeader` の `utility`。通常表示は `secondary/md`。
 - コピー、ダウンロード、状態の再確認、追加読込は局所ツール（`secondary/sm`）。追加読込は `ListPlus`、更新は `RefreshCw`。
-- 入力欄に並ぶ取得 / 接続テストは入力と同じ 44px。`touchTarget` と `icon` を渡す。
+- 入力欄に並ぶ取得 / 接続テストは入力欄と同じ高さの段（既定 `md`。lg の入力欄の横は `lg`）にし、`icon` を渡す。`touchTarget` は使わない（タッチ端末では入力欄もボタンも 44px になる。design-system README §4「操作部品の高さと幅」、#613）。
 - 同じ操作行は主操作・補助操作とも同じ size。非同期操作は必ず `icon` prop を使い、loading 中もラベルと幅を保つ。
 - `danger`（赤塗り）は実際の破壊的確定に使う。選択・未選択の変化で variant やアイコンを切り替えず、`disabled` だけを変える。
 - 確定の前の起点（確認ダイアログを開くボタン）と、取り消せる停止・拒否（処理中のジョブのキャンセル、承認の拒否、Run のキャンセル）は赤塗りにしない。`secondary` / `ghost` + `tone="danger"`（赤文字）にするか、「その他の操作」メニューに入れる。確定は `ConfirmDialog` の `danger` ボタンで行う（#355）。
@@ -74,7 +74,9 @@
 ## 4. 配置
 
 工程 / フォームの主操作は入力内容の末尾に置く。補助操作を同じ高さで並べ、破壊的操作は離す。
-ページ操作は共通 `PageHeader`、局所ツールは `ContentActionBar`、対象オブジェクトの操作は `ObjectActionBar`、フォームの確定・取消・破壊的操作は `FormActionBar` に置く。
+ページ操作は共通 `PageHeader`、局所ツールは `ContentActionBar`、対象オブジェクトの操作は `ObjectActionBar`、設定のカードのフォームの確定・取消は `FormActionBar` に置く。
+
+**詳細・作成・編集の画面（1 ページ = 1 つの対象。#618）**: 「一覧へ戻る」は `PageHeader` の `back`（左上・タイトルの上。右の操作の列に入れない）、保存・作成は `PageHeader` の右端の primary、「変更を破棄」はその左の secondary。対象への操作（アーカイブ・削除・復元・パスワードのリセット・無効化など）は最初のカードの見出しの右の `ObjectActionBar` 1 か所。保存の失敗はヘッダーの直下の `SaveErrorBanner`（messaging.md §3.3.1）。文言は「一覧へ戻る」「保存」「作成」「変更を破棄」（「一覧に戻る」「保存する」「作成する」「変更を元に戻す」は使わない）。例外は確認語が要る保存（確認語欄の操作行）。詳細は [design-system README §4「詳細・作成・編集の画面の操作」](../design-system/README.md)。
 
 ---
 
@@ -145,7 +147,7 @@
 
 ## 5.2.1 フォームの操作行
 
-編集フォーム・作成フォームの末尾の操作は `FormActionBar`（`packages/ui`。#226）にまとめる。手書きのボタン列を組まない。
+設定の画面のカード（1 ページに保存の対象が複数ある画面）のフォームの末尾の操作は `FormActionBar`（`packages/ui`。#226）にまとめる。手書きのボタン列を組まない。詳細・作成・編集の画面（1 ページ = 1 つの対象）の保存は `PageHeader` の右端に置き、`FormActionBar` を使わない（§4、#618）。
 
 - **並び**：`primaryActions`（保存・作成など）→ `secondaryActions`（キャンセルなど）の順に直置きし、`status`（`FormStatus` など）はその右に置く。
 - **破壊的操作**：`dangerActions`（削除など）は赤いボタンとして直置きせず、右端の「その他の操作」メニューへまとめる（`moreLabel` で製品の i18n から差し替える。既定は日本語）。メニューは WAI-ARIA の Menu Button（`aria-haspopup="menu"`、`Escape` / 矢印 / `Home` / `End`、閉じたら起点へフォーカスを戻す）。
@@ -221,7 +223,7 @@
 ## 9. アクセシビリティ チェックリスト（必須）
 
 - [ ] Icon-only に `aria-label`。見える名前は共通 `Button` の Tooltip（`iconOnly` の既定で `aria-label` と同じ文言）が出す。HTML の `title` 属性で説明しない（キーボード・タッチで出ない）。文言を変えるときは `tooltip`（[デザインシステム README §4「`Tooltip`」](../design-system/README.md)）。
-- [ ] 操作領域：desktop 32/36/40px、icon-only 36px、mobile / coarse pointer は 44px。
+- [ ] 操作領域：desktop 32/36/40px、icon-only 36px、coarse pointer は入力欄・選択欄も含めて 44px。同じ行の入力欄・選択欄・ボタンは同じ段（#613）。
 - [ ] `cursor-pointer` / `focus-visible` のリング（共通 `Button` 済み）。フォーカスの表示は outline 1 つ。`focus:ring-*` / `focus-visible:ring-*` を足したり、`focus(-visible):outline-none` で消したりしない（[デザインシステム README §4「フォーカスの表示」](../design-system/README.md)、adherence の lint が検出する）。
 - [ ] disabled は `disabled` 属性 + disabled の意味の色（共通 `Button` 済み）。見た目だけの無効化をしない。
 - [ ] `loading` 中は `aria-disabled="true"` + `aria-busy="true"`（共通 `Button` 済み）。Enter → loading → 完了でフォーカスがボタンに残り、`loading` 中の Enter / Space / クリック / 入力欄の Enter で二重に送信しない。

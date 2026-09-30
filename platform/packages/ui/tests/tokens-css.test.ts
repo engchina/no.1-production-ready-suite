@@ -54,9 +54,22 @@ describe("tokens CSS", () => {
     expect(toast).toContain("z-[var(--z-toast)]");
   });
 
-  it("タッチ端末ではボタン高さを 44px にする", () => {
+  it("タッチ端末では操作部品（ボタン・入力欄・選択欄）の高さを 3 段とも 44px にする（#613）", () => {
+    const spacing = read("tokens/spacing.css");
+    expect(spacing).toMatch(
+      /@media \(pointer: coarse\) \{\s*:root \{\s*--control-height-sm: var\(--control-height-touch\);\s*--control-height-md: var\(--control-height-touch\);\s*--control-height-lg: var\(--control-height-touch\);/
+    );
+    // ボタンと入力欄の高さは同じ段の別名（タッチ端末でも同じ行の高さがそろう）。
+    expect(spacing).toMatch(/--button-height-sm: var\(--control-height-sm\);/);
+    expect(spacing).toMatch(/--button-height-md: var\(--control-height-md\);/);
+    expect(spacing).toMatch(/--button-height-lg: var\(--control-height-lg\);/);
+    expect(spacing).toMatch(/--field-height: var\(--control-height-md\);/);
+    expect(spacing).toMatch(/--control-height-sm: 32px;\s*--control-height-md: 36px;\s*--control-height-lg: 40px;\s*--control-height-touch: 44px;/);
+  });
+
+  it("入力欄・選択欄の幅は 4 段（xs 8rem / sm 12rem / md 20rem / lg 28rem、#613）", () => {
     expect(read("tokens/spacing.css")).toMatch(
-      /@media \(pointer: coarse\) \{\s*:root \{\s*--button-height-sm: var\(--control-height-touch\);\s*--button-height-md: var\(--control-height-touch\);\s*--button-height-lg: var\(--control-height-touch\);/
+      /--field-width-xs: 8rem;\s*--field-width-sm: 12rem;\s*--field-width-md: 20rem;\s*--field-width-lg: 28rem;/
     );
   });
 

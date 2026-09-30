@@ -10,7 +10,7 @@
 - コメント/アノテーションの対象情報取得、合成データの対象表取得、SQL生成、保存、実行は工程を進める主操作（`primary/lg`）。
 - ページ全体の表示更新・DB構造再取得は `PageHeader` の `utility`。通常表示は `secondary/md`。
 - コピー、ダウンロード、状態の再確認、追加読込は局所ツール（`secondary/sm`）。追加読込は `ListPlus`、更新は `RefreshCw`。
-- 入力欄に並ぶ取得/接続テストは入力と同じ44px。`touchTarget` と `icon` を渡す。
+- 入力欄に並ぶ取得/接続テストは入力欄と同じ高さの段（既定 md 36px、タッチ端末は 44px）にし、`icon` を渡す。`touchTarget` は使わない（design-system README §4「操作部品の高さと幅」、#613）。
 - 同じ操作行は主操作・補助操作とも同じsize。非同期操作は必ず `icon` propを使い、loading時もラベルと幅を保つ。
 - `danger` は実際の破壊的確定に使う。選択・未選択の変化でvariantやアイコンを切り替えず、`disabled`だけを変更する。
 
@@ -23,7 +23,7 @@ Issue #435 のユーザー指定により、`OntologyGraphCanvas` の操作部�
 - **モード選択**: `aria-pressed` 付き専用 `<button>` を使用する。外枠は border / card 背景 / 軽い shadow、desktop 40px・mobile 44px。項目は desktop 32px・mobile 36px、`text-xs`、13px icon、選択中は `bg-primary text-primary-foreground` とする。
 - **凡例フィルタ**: `aria-pressed` 付き専用 `<button>` で 10px の小字と色見本を表示する。表示中は透明背景、非表示は opacity 40% + 打消し線。一般 Button の選択枠や高さを適用しない。
 - **拡大・縮小・フィット・配置リセット・検索前後移動**: 共通 `<Button variant="ghost" size="sm" data-button-layout="graph-tool">` を使用する。旧版 `sm` の高さ 2rem・左右 padding 0.75rem・15px icon を専用 named layout で維持する。`aria-label`、native disabled、focus-visible は維持する。
-- **検索の前後移動バー**: 検索欄・モード外枠と同じ desktop 40px・mobile 44px に揃える。
+- **検索の前後移動バー**: 検索欄・モード外枠と同じ lg（40px、タッチ端末は 44px。画面幅ではなく入力方式で決める。#613）に揃える。
 - SQL 結果の入れ子など、グラフ自体が狭い場合はモードと検索ツールを折り返す。モード外枠は 40/44px を最小高さとして内容に合わせて伸ばし、親の `overflow-hidden` によるボタンの裁切を防ぐ。
 - これらは旧版のコンパクトな外観を復元する明示的な寸法例外である。キーボード操作、選択状態の読み上げ、375px の折り返しを Playwright で確認する。取得・生成・実行などの一般アクションには適用しない。
 

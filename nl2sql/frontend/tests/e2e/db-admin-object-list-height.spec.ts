@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
+import { expectedControlHeight } from "./_helpers/control-height";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { measuredVisibleRowsHeight } from "./_helpers/data-table";
@@ -114,7 +115,8 @@ async function expectThreeFieldFilterLayout(
 
   expect(Math.abs(searchBox.height - ownerBox.height)).toBeLessThanOrEqual(2);
   expect(Math.abs(searchBox.height - kindBox.height)).toBeLessThanOrEqual(2);
-  expect(searchBox.height).toBeGreaterThanOrEqual(44);
+  // 検索・所有者・種類は同じ md の高さ（タッチ端末は 44px。#613）。
+  expect(searchBox.height).toBeGreaterThanOrEqual(await expectedControlHeight(search.page()));
 
   if (layout === "desktop") {
     expect(Math.abs(searchBox.y - ownerBox.y)).toBeLessThanOrEqual(2);
@@ -2852,8 +2854,10 @@ test("Excel/CSV 取込フォームは取込方法を表示せずファイル選�
   expect(filePickerBox).not.toBeNull();
   expect(clearButtonBox).not.toBeNull();
   expect(fillsAvailableWidth).toBe(true);
-  expect(filePickerBox!.height).toBeGreaterThanOrEqual(44);
-  expect(clearButtonBox!.height).toBeGreaterThanOrEqual(44);
+  // ファイルの選択と、その横のクリアは同じ md の高さ（タッチ端末は 44px。#613）。
+  const expectedHeight = await expectedControlHeight(page);
+  expect(filePickerBox!.height).toBeGreaterThanOrEqual(expectedHeight);
+  expect(clearButtonBox!.height).toBeGreaterThanOrEqual(expectedHeight);
   if ((page.viewportSize()?.width ?? 0) < 640) {
     expect(clearButtonBox!.y).toBeGreaterThanOrEqual(filePickerBox!.y + filePickerBox!.height + 8);
     expect(filePickerBox!.width).toBeGreaterThanOrEqual(fileFieldBox!.width - 1);
@@ -2888,7 +2892,7 @@ test("テーブル管理は一覧と作成・取込パネルを同じ外枠で�
         document.body.scrollWidth > document.body.clientWidth + 1
     );
     expect(hasPageHorizontalScroll).toBe(false);
-    await page.getByRole("button", { name: "一覧に戻る" }).click();
+    await page.getByRole("button", { name: "一覧へ戻る" }).click();
   }
 });
 
@@ -2925,7 +2929,7 @@ test("テーブル作成フォームの見出し・実行ボタン・ステッ�
   const createButtonStyle = await compactVisualStyle(createButton);
   const createStepStyle = await compactVisualStyle(createSteps.locator("li").first());
 
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await clickPageHeaderAction(
     page,
     "table-management-actions",
@@ -2970,7 +2974,7 @@ test("テーブル管理はアクションボタンで作成・取込を開閉�
   await actions.getByRole("button", { name: "テーブル作成" }).click();
   await expect(page.locator("#table-management-panel-create")).toBeVisible();
   await expect(page.locator("#table-management-panel-list")).toHaveCount(0);
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.locator("#table-management-panel-list")).toBeVisible();
 
   await clickPageHeaderAction(
@@ -2979,7 +2983,7 @@ test("テーブル管理はアクションボタンで作成・取込を開閉�
     "Excel/CSV 取込(新規テーブル)"
   );
   await expect(page.locator("#table-management-panel-import")).toBeVisible();
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.locator("#table-management-panel-list")).toBeVisible();
 });
 
@@ -3158,7 +3162,7 @@ test("ビュー管理は一覧と作成・JOIN/WHERE パネルを同じ外枠で
     const panel = page.locator(`#view-management-panel-${target.id}`);
     await expect(panel).toBeVisible();
     expect(await topLevelPanelStyle(page, target.id, "view-management")).toEqual(listStyle);
-    await page.getByRole("button", { name: "一覧に戻る" }).click();
+    await page.getByRole("button", { name: "一覧へ戻る" }).click();
   }
 
   const grid = page.getByTestId("view-management-grid");
@@ -3183,12 +3187,12 @@ test("ビュー管理はアクションボタンで作成・JOIN/WHERE を開閉
   await actions.getByRole("button", { name: "ビュー作成" }).click();
   await expect(page.locator("#view-management-panel-create")).toBeVisible();
   await expect(page.locator("#view-management-panel-list")).toHaveCount(0);
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.locator("#view-management-panel-list")).toBeVisible();
 
   await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
   await expect(page.locator("#view-management-panel-joinWhere")).toBeVisible();
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.locator("#view-management-panel-list")).toBeVisible();
 });
 

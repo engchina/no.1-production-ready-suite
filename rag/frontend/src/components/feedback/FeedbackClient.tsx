@@ -306,6 +306,8 @@ export function FeedbackClient() {
                     label: t("feedback.pager.pageSizeValue", { count: size }),
                   }))}
                   onValueChange={(value) => setParam("size", value)}
+                  // 値（「25件」）とラベル（「1ページの表示件数」）が 1 行に収まる幅（#613）。
+                  width="sm"
                 />
               </div>
 

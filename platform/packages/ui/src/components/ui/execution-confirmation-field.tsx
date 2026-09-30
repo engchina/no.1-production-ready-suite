@@ -148,7 +148,8 @@ export function ExecutionConfirmationField({
         id={id}
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
-        className="h-[44px] w-full rounded-md border border-border-control bg-surface px-3 py-2 text-sm outline-none transition-colors placeholder:text-fg-muted focus:border-danger-fg disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
+        // 下の操作行（実行・取消）は lg なので、入力欄も lg（40px、タッチ端末は 44px。#613）。
+        className="h-[var(--control-height-lg)] w-full rounded-control border border-border-control bg-surface px-3 py-2 text-sm outline-none transition-colors placeholder:text-fg-muted focus:border-danger-fg disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
         placeholder={placeholder ?? expectedLabel}
         disabled={disabled}
         required

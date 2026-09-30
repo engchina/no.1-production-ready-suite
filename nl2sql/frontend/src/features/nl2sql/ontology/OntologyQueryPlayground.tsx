@@ -28,6 +28,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   FieldLabel,
   isImeComposing,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 
@@ -948,6 +949,7 @@ export function OntologyQueryPlayground({
               label={t("ontologyPlayground.questionLabel")}
               required
             />
+            {/* 主な問い合わせの行なので、質問欄と操作をすべて lg（40px、タッチ端末は 44px）にそろえる（#613）。 */}
             <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
               <input
                 id="ontology-playground-question"
@@ -961,13 +963,13 @@ export function OntologyQueryPlayground({
                 }}
                 placeholder={t("ontologyPlayground.questionPlaceholder")}
                 data-testid="ontology-playground-question"
-                className="h-11 min-h-[44px] w-full min-w-0 rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring"
+                className={fieldControlClassName({ size: "lg", className: "min-w-0" })}
               />
               <Button
                 type="submit"
                 variant="primary"
                 size="lg"
-                touchTarget className="w-full whitespace-nowrap sm:w-auto"
+                className="w-full whitespace-nowrap sm:w-auto"
                 disabled={!question.trim()}
                 data-testid="ontology-playground-run" icon={Search}>
                 <span>{t("ontologyPlayground.run")}</span>
@@ -976,7 +978,7 @@ export function OntologyQueryPlayground({
                 type="button"
                 variant="secondary"
                 size="lg"
-                touchTarget className="w-full whitespace-nowrap sm:w-auto"
+                className="w-full whitespace-nowrap sm:w-auto"
                 disabled={!canServerSearch || serverSearch.status === "loading"}
                 loading={serverSearch.status === "loading"}
                 onClick={() => void runServerSearch()}
@@ -985,6 +987,7 @@ export function OntologyQueryPlayground({
                 <span>{t("ontologyPlayground.serverSearch.run")}</span>
               </Button>
               <ClearActionButton
+                size="lg"
                 className="w-full sm:w-auto"
                 disabled={!hasResettableGroundingState}
                 ariaLabel={t("ontologyPlayground.clearAriaLabel")}

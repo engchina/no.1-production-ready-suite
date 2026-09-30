@@ -489,14 +489,13 @@ export function AdminSqlPage() {
               actions={actionButtons}
             />
           ) : (
-            // 取得件数上限は lg 以上で 50% 幅。操作ボタンはヘルパーテキストの下の行に置く。
+            // 取得件数上限は短い数値の幅（xs。#613）。操作ボタンはヘルパーテキストの下の行に置く。
             <div className="grid grid-cols-1 gap-3 border-t border-border pt-4">
               <RowLimitField
                 value={rowLimitInput}
                 onChange={setRowLimitInput}
                 disabled={loading}
                 error={rowLimitError}
-                className="lg:w-1/2"
               />
               <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                 {actionButtons}

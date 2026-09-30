@@ -168,7 +168,7 @@ const nl2sqlJa = {
   "security.common.filteredCount": "{filtered} / {total} 件",
   "security.common.listScrollLabel":
     "{list}。必要に応じて縦方向または横方向にスクロールできます。",
-  "security.common.backToList": "一覧に戻る",
+  "security.common.backToList": "一覧へ戻る",
   "security.common.version": "バージョン",
   "security.common.yes": "はい",
   "security.common.no": "いいえ",
@@ -1429,9 +1429,9 @@ const nl2sqlJa = {
   "profiles.action.dbProfileRefresh": "DB Profile 一覧を再取得",
   "profiles.action.select": "編集",
   "profiles.action.selectProfile": "{name} を編集",
-  "profiles.action.backToList": "一覧に戻る",
+  "profiles.action.backToList": "一覧へ戻る",
   "profiles.discard.confirm.title": "変更を破棄しますか",
-  "profiles.discard.confirm.description": "保存されていない変更があります。一覧に戻ると破棄されます。",
+  "profiles.discard.confirm.description": "保存されていない変更があります。一覧へ戻ると破棄されます。",
   "profiles.discard.confirm.confirm": "破棄して戻る",
   "profiles.status.label": "業務プロファイル状態",
   "profiles.metric.objects": "許可オブジェクト",
@@ -3019,7 +3019,7 @@ const nl2sqlJa = {
 
   "tableMgmt.subtitle": "テーブルの一覧・詳細・作成・Excel/CSV 取込・削除を管理します。",
   "tableMgmt.action.refresh": "表示を更新",
-  "tableMgmt.action.backToList": "一覧に戻る",
+  "tableMgmt.action.backToList": "一覧へ戻る",
   "tableMgmt.action.schemaRefresh": "DB 構造を再取得",
   "tableMgmt.metric.tables": "テーブル数",
   "tableMgmt.metric.runtime": "取得元",
@@ -3107,7 +3107,7 @@ const nl2sqlJa = {
 
   "viewMgmt.subtitle": "ビューの一覧・詳細・作成・削除と JOIN/WHERE 条件抽出を管理します。",
   "viewMgmt.action.refresh": "表示を更新",
-  "viewMgmt.action.backToList": "一覧に戻る",
+  "viewMgmt.action.backToList": "一覧へ戻る",
   "viewMgmt.action.schemaRefresh": "DB 構造を再取得",
   "viewMgmt.metric.views": "ビュー数",
   "viewMgmt.list.title": "ビュー一覧と詳細",

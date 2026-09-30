@@ -12,6 +12,7 @@ import { createPortal } from "react-dom";
 
 import { cn } from "../../lib/utils";
 
+import { CONTROL_HEIGHT_CLASS, type ControlSize, type FieldWidth, fieldWidthClass } from "./control-size";
 import { FieldError } from "./field-error";
 import { useFloatingMenuPosition } from "./floating-menu";
 import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
@@ -35,6 +36,13 @@ interface SelectFieldProps<T extends string> {
   /** 必須バッジの文言。既定「必須」。条件付きの必須だけ上書きする。 */
   requiredLabel?: string;
   placeholder?: string;
+  /** 高さ（既定 md = 36px）。同じ行に並べる Button・入力欄と同じ size にする（#613）。 */
+  size?: ControlSize;
+  /**
+   * 幅（選択肢のラベルの長さで選ぶ。既定は親の幅いっぱい）。sm（640px）未満は全幅。
+   * フォームの grid のセルに置くときは指定しない。grid の外に単独で置く選択欄は必ず指定する（#613）。
+   */
+  width?: FieldWidth;
   className?: string;
   buttonClassName?: string;
 }
@@ -140,6 +148,8 @@ export function SelectField<T extends string>({
   required,
   requiredLabel = DEFAULT_REQUIRED_LABEL,
   placeholder = "",
+  size = "md",
+  width,
   className,
   buttonClassName,
 }: SelectFieldProps<T>) {
@@ -422,7 +432,7 @@ export function SelectField<T extends string>({
       : null;
 
   return (
-    <div ref={rootRef} className={cn("space-y-1.5", className)}>
+    <div ref={rootRef} className={cn("space-y-1.5", fieldWidthClass(width), className)}>
       <label id={labelId} htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
         {label}
         {required && requiredLabel ? (
@@ -446,7 +456,8 @@ export function SelectField<T extends string>({
           onClick={() => (open ? closeList() : openList())}
           onKeyDown={handleKeyDown}
           className={cn(
-            "flex h-[var(--field-height)] w-full cursor-pointer items-center justify-between gap-3 rounded-control border bg-surface px-3 text-left text-sm text-fg outline-none transition-colors",
+            CONTROL_HEIGHT_CLASS[size],
+            "flex w-full cursor-pointer items-center justify-between gap-3 rounded-control border bg-surface px-3 text-left text-sm text-fg outline-none transition-colors",
             "hover:bg-surface-hover forced-colors:border-[CanvasText] focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
             error ? "border-danger-fg" : "border-border-control",
             buttonClassName

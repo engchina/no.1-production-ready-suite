@@ -26,7 +26,7 @@ test("ユーザーとロールの削除 API は現在 version を strong If-Matc
   );
 });
 
-test("削除は状態条件付き EntityAction と不可逆確認を一覧・詳細・フォームで共有する", () => {
+test("削除は状態条件付き EntityAction と不可逆確認を一覧・詳細・編集の画面で共有する", () => {
   assert.match(
     usersPageSource,
     /user\.status === "DISABLED"[\s\S]*!user\.is_bootstrap_admin/u
@@ -35,6 +35,8 @@ test("削除は状態条件付き EntityAction と不可逆確認を一覧・詳
   for (const source of [usersPageSource, rolesPageSource]) {
     assert.match(source, /id: "delete"[\s\S]*tone: "danger"/u);
     assert.match(source, /dismissOnOverlay: false/u);
-    assert.match(source, /entityActionToFormAction/u);
+    // 編集の画面の対象への操作は、同じ EntityAction をパネルの見出しの ObjectActionBar に渡す（#618）。
+    assert.match(source, /const editObjectActions = \(\): EntityAction\[\]/u);
+    assert.match(source, /<ObjectActionBar\s+actions=\{editObjectActions\(\)\}/u);
   }
 });

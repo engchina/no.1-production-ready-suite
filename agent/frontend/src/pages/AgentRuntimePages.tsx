@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft,
   Brain,
   Check,
   Download,
@@ -73,6 +72,7 @@ import {
   isSubmitEnter,
   SearchField,
   TextareaField,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -106,7 +106,6 @@ import {
 } from "@/lib/api";
 import {
   AgentSplitPane,
-  EditorBreadcrumbs,
   MissingEditorTarget,
 } from "@/components/EntityLayout";
 import { agentPaginationLabels, listScrollLabel, PagedDataTable, QueryState } from "@/components/ListViews";
@@ -122,7 +121,6 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { securityApi } from "@/lib/security-api";
 import { useValuesChanged } from "@/lib/render-sync";
-import { APP_ROUTES } from "@/lib/routes";
 import { sameDraft, useDirtySources, useEditorLeaveGuard, useSettingsLeaveGuard } from "@/lib/leave-guard";
 import {
   isNullableString,
@@ -658,9 +656,6 @@ export function AgentsPage() {
         <PageHeader
           wide
           title={t("nav.agents")}
-          breadcrumbs={
-            <EditorBreadcrumbs listLabel={t("nav.agents")} listHref={APP_ROUTES.agents} current={target.id} />
-          }
         />
         <PageBody wide>
           <QueryState query={agents} loadingLabel={t("loading.agents")} skeleton={<FormSkeleton fields={3} />}>
@@ -1201,7 +1196,7 @@ export function RunsPage() {
                         id="run-agent"
                         value={selectedAgentId}
                         onChange={(event) => onAgentChange(event.target.value)}
-                        className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        className={fieldControlClassName()}
                       >
                         {runnableAgents.map((agent) => (
                           <option key={agent.id} value={agent.id}>
@@ -1239,7 +1234,7 @@ export function RunsPage() {
                           setBindingId(event.target.value);
                           setBindingError(null);
                         }}
-                        className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        className={fieldControlClassName()}
                       >
                         <option value="">
                           {defaultBinding
@@ -1642,7 +1637,7 @@ export function AuditPage() {
                   onKeyDown={(event) => {
                     if (isSubmitEnter(event)) applyFilters();
                   }}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className={fieldControlClassName()}
                 />
               </Field>
               <Field label={t("audit.toolName")} htmlFor="audit-tool-name">
@@ -1650,7 +1645,7 @@ export function AuditPage() {
                   id="audit-tool-name"
                   value={toolName}
                   onChange={(event) => setFilter("toolName", event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className={fieldControlClassName()}
                 >
                   <option value="">{t("common.all")}</option>
                   {(tools.data?.tools ?? []).map((tool) => (
@@ -1665,7 +1660,7 @@ export function AuditPage() {
                   id="audit-step-status"
                   value={stepStatus}
                   onChange={(event) => setFilter("stepStatus", event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className={fieldControlClassName()}
                 >
                   <option value="">{t("common.all")}</option>
                   {["pending", "running", "waiting_approval", "completed", "failed", "cancelled"].map((status) => (
@@ -1680,7 +1675,7 @@ export function AuditPage() {
                   id="audit-approval-status"
                   value={approvalStatus}
                   onChange={(event) => setFilter("approvalStatus", event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className={fieldControlClassName()}
                 >
                   <option value="">{t("common.all")}</option>
                   {["pending", "approved", "rejected", "cancelled"].map((status) => (
@@ -1699,7 +1694,7 @@ export function AuditPage() {
                   onKeyDown={(event) => {
                     if (isSubmitEnter(event)) applyFilters();
                   }}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className={fieldControlClassName()}
                 />
               </Field>
               <Field label={t("audit.guardrailWarnings")} htmlFor="audit-warning-filter">
@@ -1707,7 +1702,7 @@ export function AuditPage() {
                   id="audit-warning-filter"
                   value={warnings}
                   onChange={(event) => setFilter("warnings", event.target.value as AuditWarningsFilter)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className={fieldControlClassName()}
                 >
                   <option value="any">{t("common.all")}</option>
                   <option value="true">{t("audit.hasWarnings")}</option>
@@ -1722,7 +1717,7 @@ export function AuditPage() {
                   max="1000"
                   value={limit}
                   onChange={(event) => setFilter("limit", event.target.value)}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className={fieldControlClassName()}
                 />
               </Field>
             </div>
@@ -2094,7 +2089,7 @@ export function MemoryPage() {
                       id="memory-kind"
                       value={kind}
                       onChange={(event) => setKind(event.target.value as MemoryKind)}
-                      className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      className={fieldControlClassName()}
                     >
                       <option value="user_preference">{t("memory.kind.userPreference")}</option>
                       <option value="tool_learning">{t("memory.kind.toolLearning")}</option>
@@ -2483,7 +2478,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
               id="mcp-discovery-server-id"
               value={serverId}
               onChange={(event) => setServerId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className={fieldControlClassName()}
             />
           </Field>
           <Field label={t("settings.mcpDiscovery.traceId")} htmlFor="mcp-discovery-trace-id">
@@ -2491,7 +2486,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
               id="mcp-discovery-trace-id"
               value={traceId}
               onChange={(event) => setTraceId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className={fieldControlClassName()}
             />
           </Field>
           <Button
@@ -2500,7 +2495,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
             disabled={!configured}
             aria-describedby={!configured ? "mcp-discovery-configure-hint" : undefined}
             loading={tools.isFetching}
-            className="min-h-10" icon={RefreshCw}>
+            icon={RefreshCw}>
             {t("settings.mcpDiscovery.refresh")}
           </Button>
         </div>
@@ -2630,8 +2625,8 @@ function schemaSummary(schema?: Record<string, unknown> | null): string {
   return type;
 }
 
-const INPUT_CLASS =
-  "h-10 w-full rounded-md border border-border bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
+// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
+const INPUT_CLASS = fieldControlClassName();
 function mcpAuthLabel(mode?: string | null): string {
   if (mode === "oauth_client_credentials") {
     return t("settings.mcpServers.authOauth");
@@ -2804,9 +2799,6 @@ export function McpServersPage() {
         <PageHeader
           wide
           title={listTitle}
-          breadcrumbs={
-            <EditorBreadcrumbs listLabel={listTitle} listHref={APP_ROUTES.settingsExternalMcp} current={target.id} />
-          }
         />
         <PageBody wide>
           <QueryState query={servers} loadingLabel={t("loading.mcpServers")} skeleton={<FormSkeleton fields={4} />}>
@@ -2921,11 +2913,9 @@ function McpServerEditor({
         wide
         title={title}
         subtitle={server ? server.server_id : t("page.settings.mcp.subtitle")}
-        breadcrumbs={
-          <EditorBreadcrumbs listLabel={listTitle} listHref={APP_ROUTES.settingsExternalMcp} current={title} />
-        }
+        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: listTitle }), onClick: () => void back(), testId: "editor-back" }}
         actions={[
-          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
           ...(readOnly
             ? []
             : [
@@ -3336,7 +3326,6 @@ export function SkillsPage() {
         <PageHeader
           wide
           title={t("skills.title")}
-          breadcrumbs={<EditorBreadcrumbs listLabel={t("skills.title")} listHref={APP_ROUTES.skills} current={target.id} />}
         />
         <PageBody wide>
           <QueryState query={skills} loadingLabel={t("loading.skills")} skeleton={<FormSkeleton fields={4} />}>
@@ -3459,9 +3448,7 @@ function SkillEditor({
   }
 
   const title = skill ? skill.name : t("skills.addTitle");
-  const headerActions: PageHeaderAction[] = [
-    { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
-  ];
+  const headerActions: PageHeaderAction[] = [];
   if (editable) {
     headerActions.push({
       id: "save",
@@ -3479,7 +3466,8 @@ function SkillEditor({
         wide
         title={title}
         subtitle={skill ? skill.id : t("page.skills.subtitle")}
-        breadcrumbs={<EditorBreadcrumbs listLabel={t("skills.title")} listHref={APP_ROUTES.skills} current={title} />}
+        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("skills.title") }), onClick: () => void back(), testId: "editor-back" }}
         actions={headerActions}
         moreActionsLabel={t("common.moreActions")}
       />
@@ -3860,7 +3848,6 @@ export function PluginsPage() {
         <PageHeader
           wide
           title={t("plugins.title")}
-          breadcrumbs={<EditorBreadcrumbs listLabel={t("plugins.title")} listHref={APP_ROUTES.plugins} current={target.id} />}
         />
         <PageBody wide>
           <QueryState query={plugins} loadingLabel={t("loading.plugins")} skeleton={<FormSkeleton fields={3} />}>
@@ -3920,9 +3907,9 @@ function PluginInstallEditor({
         wide
         title={title}
         subtitle={t("page.plugins.subtitle")}
-        breadcrumbs={<EditorBreadcrumbs listLabel={t("plugins.title")} listHref={APP_ROUTES.plugins} current={title} />}
+        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("plugins.title") }), onClick: () => void back(), testId: "editor-back" }}
         actions={[
-          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
           {
             id: "install",
             kind: "primary",
@@ -4000,9 +3987,9 @@ function PluginDetail({
         wide
         title={plugin.name}
         subtitle={`${plugin.id} · v${plugin.version}`}
-        breadcrumbs={<EditorBreadcrumbs listLabel={t("plugins.title")} listHref={APP_ROUTES.plugins} current={plugin.name} />}
+        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("plugins.title") }), onClick: onBack, testId: "editor-back" }}
         actions={[
-          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: onBack },
         ]}
       />
       <PageBody wide className="space-y-6">
@@ -4287,9 +4274,6 @@ export function PluginMarketplacesPage() {
         <PageHeader
           wide
           title={t("marketplaces.title")}
-          breadcrumbs={
-            <EditorBreadcrumbs listLabel={t("marketplaces.title")} listHref={APP_ROUTES.pluginMarketplaces} current={target.id} />
-          }
         />
         <PageBody wide>
           <QueryState query={markets} loadingLabel={t("loading.marketplaces")} skeleton={<FormSkeleton fields={3} />}>
@@ -4357,11 +4341,9 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
         wide
         title={title}
         subtitle={t("page.pluginMarketplaces.subtitle")}
-        breadcrumbs={
-          <EditorBreadcrumbs listLabel={t("marketplaces.title")} listHref={APP_ROUTES.pluginMarketplaces} current={title} />
-        }
+        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("marketplaces.title") }), onClick: () => void back(), testId: "editor-back" }}
         actions={[
-          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
           {
             id: "create",
             kind: "primary",
@@ -4593,11 +4575,9 @@ function MarketplaceDetail({
         wide
         title={title}
         subtitle={source.id}
-        breadcrumbs={
-          <EditorBreadcrumbs listLabel={t("marketplaces.title")} listHref={APP_ROUTES.pluginMarketplaces} current={title} />
-        }
+        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("marketplaces.title") }), onClick: onBack, testId: "editor-back" }}
         actions={[
-          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: onBack },
         ]}
       />
       <PageBody wide className="space-y-6">
@@ -4871,7 +4851,7 @@ export function CommandPolicySettingsPage() {
                       setWorkspaceRoot(event.target.value);
                       clearFieldError("workspaceRoot");
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
                 <Field
@@ -4891,7 +4871,7 @@ export function CommandPolicySettingsPage() {
                       setOutputLimit(event.target.value);
                       clearFieldError("outputLimit");
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
                 <Field
@@ -4912,7 +4892,7 @@ export function CommandPolicySettingsPage() {
                       setDefaultTimeout(event.target.value);
                       clearFieldError("defaultTimeout");
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
                 <Field
@@ -4935,7 +4915,7 @@ export function CommandPolicySettingsPage() {
                       // 大小の関係のエラーは既定タイムアウト秒の欄に出すので、最大を直したときも消す。
                       clearFieldError("defaultTimeout");
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
               </div>
@@ -4957,7 +4937,7 @@ export function CommandPolicySettingsPage() {
                     id="command-policy-artifact-storage"
                     value={artifactStorageBackend}
                     onChange={(event) => setArtifactStorageBackend(event.target.value as "inline" | "filesystem")}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   >
                     <option value="inline">{t("settings.commandPolicy.inline")}</option>
                     <option value="filesystem">{t("settings.commandPolicy.filesystem")}</option>
@@ -4979,7 +4959,7 @@ export function CommandPolicySettingsPage() {
                       setArtifactStoragePath(event.target.value);
                       clearFieldError("artifactStoragePath");
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
               </div>
@@ -5101,7 +5081,7 @@ export function ToolPolicySettingsPage() {
                   id="tool-policy-default-mode"
                   value={defaultMode}
                   onChange={(event) => setDefaultMode(event.target.value as "approval" | "deny")}
-                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:max-w-xs"
+                  className={fieldControlClassName({ width: "md" })}
                 >
                   <option value="approval">{t("settings.toolPolicy.defaultModeApproval")}</option>
                   <option value="deny">{t("settings.toolPolicy.defaultModeDeny")}</option>
@@ -5149,7 +5129,7 @@ export function ToolPolicySettingsPage() {
                             id={`tool-policy-${tool.name}`}
                             value={policy}
                             onChange={(event) => setPolicy(tool.name, event.target.value as ToolPolicyChoice)}
-                            className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                            className={fieldControlClassName()}
                           >
                             <option value="default">{t("settings.toolPolicy.default")}</option>
                             <option value="allow">{t("settings.toolPolicy.allow")}</option>
@@ -5282,7 +5262,7 @@ export function RuntimeSafetySettingsPage() {
                       setMaxToolCalls(event.target.value);
                       setFieldErrors((current) => ({ ...current, maxToolCalls: null }));
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
                 <Field
@@ -5307,7 +5287,7 @@ export function RuntimeSafetySettingsPage() {
                       setMaxPendingApprovals(event.target.value);
                       setFieldErrors((current) => ({ ...current, maxPendingApprovals: null }));
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
               </div>
@@ -5519,7 +5499,7 @@ export function RuntimeSnapshotSettingsPage() {
                 id="runtime-snapshot-reason"
                 value={reason}
                 onChange={(event) => setReason(event.target.value)}
-                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className={fieldControlClassName()}
               />
             </Field>
             <div className="flex flex-wrap gap-2">
@@ -5820,9 +5800,9 @@ function AgentEditorView({
         wide
         title={title}
         subtitle={agent ? agent.id : t("page.agents.subtitle")}
-        breadcrumbs={<EditorBreadcrumbs listLabel={t("nav.agents")} listHref={APP_ROUTES.agents} current={title} />}
+        // 一覧へ戻るは左上、保存は右端の primary（#618）。
+        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("nav.agents") }), onClick: () => void back(), testId: "editor-back" }}
         actions={[
-          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
           ...(readOnly
             ? []
             : [
@@ -5882,7 +5862,7 @@ function AgentEditorView({
                       setName(event.target.value);
                       setNameError(null);
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
                 <Field label={t("agent.description")} htmlFor={`${fieldId}-agent-description`}>
@@ -5890,7 +5870,7 @@ function AgentEditorView({
                     id={`${fieldId}-agent-description`}
                     value={agentDescription}
                     onChange={(event) => setAgentDescription(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className={fieldControlClassName()}
                   />
                 </Field>
                 <TextareaField
@@ -6210,7 +6190,7 @@ function RuntimeBindingsPanel({
                       setRuntimeId(event.target.value);
                       setRuntimeError(null);
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm"
+                    className={fieldControlClassName()}
                   >
                     {candidates.map((runtime) => (
                       <option key={runtime.id} value={runtime.id}>
@@ -6237,7 +6217,7 @@ function RuntimeBindingsPanel({
                       setNativeAgentRef(event.target.value);
                       setNativeAgentRefError(null);
                     }}
-                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken aria-[invalid=true]:border-danger-fg px-3 text-sm"
+                    className={fieldControlClassName()}
                   />
                 </Field>
               </div>

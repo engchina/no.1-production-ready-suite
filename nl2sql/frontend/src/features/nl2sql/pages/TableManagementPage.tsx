@@ -1,7 +1,7 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
-import { ArrowLeft, Code2, RefreshCw, Table2, Upload } from "lucide-react";
+import { Code2, RefreshCw, Table2, Upload } from "lucide-react";
 
 import {
   Button,
@@ -14,6 +14,7 @@ import {
   ProcessingIndicator,
   ExecutionConfirmationField,
   FieldLabel,
+  fieldControlClassName,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -70,8 +71,8 @@ type ActiveView = "list" | "create" | "import";
 type ImportStep = "file" | "execute";
 
 const importFieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-fg";
-const importControlClass =
-  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm text-fg focus:border-focus-ring";
+// 入力欄・選択欄の見た目・高さは共有の fieldControlClassName（TextField と同じ。#613）。
+const importControlClass = fieldControlClassName();
 
 function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
   return (
@@ -269,7 +270,6 @@ function ImportWizard({
               </Button>
               <ClearActionButton size="lg"
                 label={t("dbAdmin.import.actions.clear")}
-                matchButtonHeight
                 className="w-full sm:w-auto"
                 disabled={!canClear || loading}
                 onClick={onClear}
@@ -895,6 +895,12 @@ export function TableManagementPage() {
             : undefined
         }
         status={<SchemaRefreshHeaderStatus testId="table-schema-refresh-status" />}
+        // 作業（作成・取込）の画面の「一覧へ戻る」はページの左上（#618）。
+        back={
+          activeView === "list"
+            ? undefined
+            : { label: t("tableMgmt.action.backToList"), onClick: returnToList, testId: "table-management-back" }
+        }
         actionsLabel={t("tableMgmt.tabs.label")}
         actionsTestId="table-management-actions"
         actions={
@@ -1078,11 +1084,6 @@ export function TableManagementPage() {
           </>
         ) : (
           <>
-            <div>
-              <Button type="button" variant="ghost" size="sm" onClick={returnToList} icon={ArrowLeft}>
-                <span>{t("tableMgmt.action.backToList")}</span>
-              </Button>
-            </div>
             <DbObjectManagementPanelShell
               id={`table-management-panel-${activeView}`}
               role="region"
