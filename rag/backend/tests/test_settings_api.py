@@ -29,6 +29,7 @@ from app.api.routes import settings as settings_routes
 from app.clients.external_parser import ExternalParserClient
 from app.clients.oracle import (
     GenerationSettingsRevisionConflictError,
+    OracleClient,
     OracleConnectionTimeoutError,
     OracleWalletPasswordRequiredError,
     StoredGenerationSettings,
@@ -1501,9 +1502,7 @@ def _stub_vector_index_build(monkeypatch: MonkeyPatch, actual: tuple[int, int] |
     async def fake_build_params(_self: object) -> tuple[int, int] | None:
         return actual
 
-    monkeypatch.setattr(
-        settings_routes.OracleClient, "get_vector_index_build_params", fake_build_params
-    )
+    monkeypatch.setattr(OracleClient, "get_vector_index_build_params", fake_build_params)
 
 
 def test_vector_index_settings_reports_runtime_profile(
