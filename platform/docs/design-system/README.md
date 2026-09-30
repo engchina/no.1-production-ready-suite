@@ -250,7 +250,7 @@ readme が規定していた「左右ガター 2rem / セクション間 1.5rem�
 | **例外**: 確認語が要る保存（NL2SQL の業務プロファイルの Oracle への反映）は、確認語欄（`ExecutionConfirmationField`）の操作行に置く。作業の画面（NL2SQL のテーブル・ビューの作成・取込）は、実行を確認語欄の操作行に置き、戻るだけを左上にする | 確認語と確定を 1 つの区画にまとめる（README §4「確認語欄」、#379） |
 | 設定の画面（OCI・データベース・モデルなど、1 ページに複数のカードのフォームがある画面）は、今までどおりカードの末尾の `FormActionBar` | 1 ページに保存の対象が複数あるので、ページのヘッダーに 1 つの保存を置けない |
 
-- 部品: `PageHeader` の `back`（`{ label, onClick, ariaLabel?, disabled?, testId? }`。`data-page-header-back`）。`actions` に `id: "back"` の操作を入れない。
+- 部品: `PageHeader` の `back`（`{ label, onClick, ariaLabel?, disabled?, testId? }`。`data-page-header-back`）。`actions` に `id: "back"` の操作を入れない。（adherence の lint が `PageHeader` の `actions` の `id: "back"` を検出する）
 - 置き換えた画面: RAG のナレッジベース・業務ビューのエディタ・文書の詳細・対象の読み込み中 / 失敗の画面、Agent のエージェント・Skill・外部 MCP サーバー・プラグイン・マーケットプレイスのエディタと詳細、NL2SQL の業務プロファイル・テーブル・ビューの作業の画面、system-settings のユーザー・ロール・権限管理の編集。RAG・Agent の `EditorBreadcrumbs` は削除。
 
 ### `Button`（変更）— ★ アイコンと loading の統一基準

@@ -321,9 +321,9 @@ test("一覧の編集ボタンでエディタを開き、一覧に戻るで戻�
   await expect(page.getByRole("button", { name: "保存", exact: true })).toBeVisible();
 
   const editorPanel = page.locator("#profile-management-panel-editor");
-  const backButton = page.getByRole("button", { name: "一覧に戻る", exact: true });
+  const backButton = page.getByRole("button", { name: "一覧へ戻る", exact: true });
   await expect(editorPanel).toHaveAttribute("data-management-id", "profile-management");
-  await expect(editorPanel.getByRole("button", { name: "一覧に戻る", exact: true })).toHaveCount(0);
+  await expect(editorPanel.getByRole("button", { name: "一覧へ戻る", exact: true })).toHaveCount(0);
   const [backButtonBox, editorPanelBox] = await Promise.all([
     backButton.boundingBox(),
     editorPanel.boundingBox(),
@@ -378,7 +378,7 @@ test("プロファイル名のリンク（共有 RowTitleButton の href）は T
   await expect(page).toHaveURL(/\/profiles\?profile=sales$/);
   await expect(page.getByRole("heading", { name: "プロファイル編集: 営業プロファイル" })).toBeVisible();
 
-  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
   const financeLink = page.getByRole("link", { name: /^経理プロファイル を編集/ });
   // 修飾キー付きのクリックはブラウザの既定（新しいタブ）に任せ、この画面では開かない。
   const [popup] = await Promise.all([
@@ -410,7 +410,7 @@ test("URL 深リンクでエディタを直接開ける", async ({ page }) => {
   await page.goto("/profiles?profile=missing");
   await expect(page.getByText("指定された profile が見つかりません。", { exact: true })).toBeVisible();
   await expect(page).toHaveURL(/profile=missing/);
-  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
   await expect(page.locator("#profile-management-panel-list")).toBeVisible();
   await expect(page).not.toHaveURL(/profile=/);
 });
@@ -420,7 +420,7 @@ test("未保存の変更があるときは一覧に戻る前に確認する", as
   await page.goto("/profiles?profile=sales");
   await expect(page.getByLabel("名称")).toHaveValue("営業プロファイル");
 
-  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
   await expect(page.locator("#profile-management-panel-list")).toBeVisible();
 
@@ -431,13 +431,13 @@ test("未保存の変更があるときは一覧に戻る前に確認する", as
     .nth(0)
     .click();
   await page.getByLabel("名称").fill("営業プロファイル改");
-  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
   const dialog = page.getByRole("alertdialog", { name: "変更を破棄しますか" });
-  await expect(dialog.getByText("保存されていない変更があります。一覧に戻ると破棄されます。")).toBeVisible();
+  await expect(dialog.getByText("保存されていない変更があります。一覧へ戻ると破棄されます。")).toBeVisible();
   await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
   await expect(page.getByLabel("名称")).toHaveValue("営業プロファイル改");
 
-  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
   await page
     .getByRole("alertdialog", { name: "変更を破棄しますか" })
     .getByRole("button", { name: "破棄して戻る", exact: true })

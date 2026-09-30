@@ -2892,7 +2892,7 @@ test("テーブル管理は一覧と作成・取込パネルを同じ外枠で�
         document.body.scrollWidth > document.body.clientWidth + 1
     );
     expect(hasPageHorizontalScroll).toBe(false);
-    await page.getByRole("button", { name: "一覧に戻る" }).click();
+    await page.getByRole("button", { name: "一覧へ戻る" }).click();
   }
 });
 
@@ -2929,7 +2929,7 @@ test("テーブル作成フォームの見出し・実行ボタン・ステッ�
   const createButtonStyle = await compactVisualStyle(createButton);
   const createStepStyle = await compactVisualStyle(createSteps.locator("li").first());
 
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await clickPageHeaderAction(
     page,
     "table-management-actions",
@@ -2974,7 +2974,7 @@ test("テーブル管理はアクションボタンで作成・取込を開閉�
   await actions.getByRole("button", { name: "テーブル作成" }).click();
   await expect(page.locator("#table-management-panel-create")).toBeVisible();
   await expect(page.locator("#table-management-panel-list")).toHaveCount(0);
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.locator("#table-management-panel-list")).toBeVisible();
 
   await clickPageHeaderAction(
@@ -2983,7 +2983,7 @@ test("テーブル管理はアクションボタンで作成・取込を開閉�
     "Excel/CSV 取込(新規テーブル)"
   );
   await expect(page.locator("#table-management-panel-import")).toBeVisible();
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.locator("#table-management-panel-list")).toBeVisible();
 });
 
@@ -3162,7 +3162,7 @@ test("ビュー管理は一覧と作成・JOIN/WHERE パネルを同じ外枠で
     const panel = page.locator(`#view-management-panel-${target.id}`);
     await expect(panel).toBeVisible();
     expect(await topLevelPanelStyle(page, target.id, "view-management")).toEqual(listStyle);
-    await page.getByRole("button", { name: "一覧に戻る" }).click();
+    await page.getByRole("button", { name: "一覧へ戻る" }).click();
   }
 
   const grid = page.getByTestId("view-management-grid");
@@ -3187,12 +3187,12 @@ test("ビュー管理はアクションボタンで作成・JOIN/WHERE を開閉
   await actions.getByRole("button", { name: "ビュー作成" }).click();
   await expect(page.locator("#view-management-panel-create")).toBeVisible();
   await expect(page.locator("#view-management-panel-list")).toHaveCount(0);
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.locator("#view-management-panel-list")).toBeVisible();
 
   await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
   await expect(page.locator("#view-management-panel-joinWhere")).toBeVisible();
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.locator("#view-management-panel-list")).toBeVisible();
 });
 

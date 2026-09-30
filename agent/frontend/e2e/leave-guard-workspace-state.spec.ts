@@ -80,10 +80,11 @@ for (const viewport of VIEWPORTS) {
       // 375px ではサイドナビのドロワーが開いたまま（確認をキャンセルしたため）。閉じてから本文を操作する。
       await closeSidebarNav(page);
 
-      // パンくずの一覧リンクも同じ離脱ガードで止まる。
-      await page.getByRole("navigation", { name: "パンくず" }).getByRole("link", { name: "業務 Agent" }).click();
-      await expect(dialog.getByText("変更を破棄しますか")).toBeVisible();
-      await dialog.getByRole("button", { name: "キャンセル" }).click();
+      // 左上の「一覧へ戻る」も破棄を確認する（#618）。
+      await page.getByTestId("editor-back").click();
+      const leaveDialog = page.getByRole("alertdialog");
+      await expect(leaveDialog).toBeVisible();
+      await leaveDialog.getByRole("button", { name: "キャンセル" }).click();
       await expect(page).toHaveURL(/\/agents\?id=new$/);
 
       await (await sidebarLink(page, "/runs")).click();
@@ -137,15 +138,13 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByText("変更を破棄しますか")).toHaveCount(0);
     });
 
-    test("Skill のエディタは画面内の「一覧に戻る」でも破棄を確認する", async ({ page }) => {
+    test("Skill のエディタは左上の「一覧へ戻る」でも破棄を確認する", async ({ page }) => {
       await page.goto("/skills");
       await page.getByRole("button", { name: "スキルを追加" }).click();
       await page.locator("#skill-id").fill("draft_skill");
 
-      // 狭い幅では PageHeader の補助操作が「その他の操作」に入る。
-      const more = page.getByTestId("page-actions-more");
-      if (await more.isVisible()) await more.click();
-      await page.getByRole("button", { name: "一覧に戻る" }).or(page.getByRole("menuitem", { name: "一覧に戻る" })).click();
+      // 「一覧へ戻る」はタイトルの上の左端（375px でもメニューに畳まない。#618）。
+      await page.getByTestId("editor-back").click();
       const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
       await expect(dialog.getByText("閉じると編集内容は破棄されます")).toBeVisible();
       await dialog.getByRole("button", { name: "破棄して閉じる" }).click();
@@ -215,7 +214,7 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/skills?id=deleted_skill");
       await expect(page.getByText("対象が見つかりません")).toBeVisible();
       await expect(page.getByText("「deleted_skill」は削除されたか、存在しません", { exact: false })).toBeVisible();
-      await page.getByRole("button", { name: "一覧に戻る" }).last().click();
+      await page.getByRole("button", { name: "一覧へ戻る" }).last().click();
       await expect(page).toHaveURL(/\/skills$/);
       await expectNoHorizontalOverflow(page);
     });

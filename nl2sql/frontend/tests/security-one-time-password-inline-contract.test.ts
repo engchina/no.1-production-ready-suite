@@ -46,7 +46,8 @@ test("無効ユーザーは保存とパスワードリセットを表示・実�
     usersPage,
     /visible: user\.status === "ACTIVE" && !user\.is_bootstrap_admin/u
   );
-  assert.match(usersPage, /primaryActions=\{\s*canSubmitUserForm\s*\?/u);
+  // 保存・作成は PageHeader の右端で、保存できないときは出さない（#618）。
+  assert.match(usersPage, /: canSubmitUserForm\s*\?\s*\[\s*\{\s*id: activeView === "edit" \? "save" : "create"/u);
 });
 
 test("無効ユーザーの編集内容は選択状態を表示したまま読み取り専用になる", () => {
@@ -72,7 +73,7 @@ test("無効ユーザーの編集内容は選択状態を表示したまま読�
 
 test("一覧・詳細のパスワードリセットも編集フォームへ結果を集約する", () => {
   const listActionsStart = usersPage.indexOf("const userActions");
-  const formActionsStart = usersPage.indexOf("const formUserActions");
+  const formActionsStart = usersPage.indexOf("const editObjectActions");
   const formActionsEnd = usersPage.indexOf("const selectRole", formActionsStart);
 
   assert.notEqual(listActionsStart, -1);
@@ -82,7 +83,7 @@ test("一覧・詳細のパスワードリセットも編集フォームへ結�
   const listActions = usersPage.slice(listActionsStart, formActionsStart);
   const formActions = usersPage.slice(formActionsStart, formActionsEnd);
   assert.match(listActions, /resetPasswordAction\(user\)/u);
-  assert.match(formActions, /const actions = userActions\(editingUser\)/u);
+  assert.match(formActions, /return userActions\(editingUser\)\.filter/u);
   assert.match(usersPage, /startEdit\(result\.user, result\.temporary_password\)/u);
   assert.match(usersPage, /security-users-reset-password-error/u);
 });

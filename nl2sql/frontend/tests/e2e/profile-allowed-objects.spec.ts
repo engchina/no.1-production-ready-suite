@@ -1065,7 +1065,7 @@ test("業務プロファイルは表とビューを固定高リストで管理�
   await expect(page.getByRole("heading", { name: "新規プロファイル" })).toBeVisible();
   await expect(page.getByText("Oracle Profile 反映結果", { exact: true })).toHaveCount(0);
   await expect(page.getByTestId("profile-oracle-result")).toHaveCount(0);
-  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
   const profileRow = page.getByRole("row").filter({ hasText: "既定プロファイル" });
   await profileRow.locator("td").nth(1).click();
   await expect(
@@ -1591,7 +1591,7 @@ test("Credential が Osaka でも新規 Region は Chicago で未編集の破棄
   await page.goto("/profiles?profile=new");
 
   await expect(page.locator("#profile-select-ai-region")).toContainText("us-chicago-1");
-  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
 
   await expect(page.getByRole("alertdialog", { name: "変更を破棄しますか" })).toHaveCount(0);
   await expect(page.locator("#profile-management-panel-list")).toBeVisible();
@@ -1610,7 +1610,7 @@ test("保存済み Region は Osaka を保持しキーボードで変更でき�
   await page.keyboard.press("Home");
   await page.keyboard.press("Enter");
   await expect(region).toContainText("us-chicago-1");
-  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
   await expect(page.getByRole("alertdialog", { name: "変更を破棄しますか" })).toBeVisible();
 });
 
@@ -2947,7 +2947,7 @@ test("チェックを付け外しして元に戻したら未保存確認を出�
   await table01.check();
   await expect(table01).toBeChecked();
 
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
   await expect(page.getByTestId("profile-management-list")).toBeVisible();
 });
@@ -2997,7 +2997,7 @@ test("保存中はプロファイル編集と競合操作を固定し失敗後�
   try {
     await expect(name).toBeDisabled();
     await expect(page.getByLabel("実行確認語")).toBeDisabled();
-    await expect(page.getByRole("button", { name: "一覧に戻る", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "一覧へ戻る", exact: true })).toBeDisabled();
     await expect(page.getByTestId("profile-allowed-table-list").getByRole("option").first()).toBeDisabled();
   } finally { release?.(); }
   // 保存の失敗は保存ボタンの直下の FormStatus の 1 か所だけに出し、Toast に重ねない（messaging.md §3.3.1。#585）。
@@ -3025,7 +3025,7 @@ test("スキーマ一括選択中は保存と対象切替を固定する", async
   await list.getByRole("button", { name: "APP をすべて選択", exact: true }).click();
   try {
     await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
-    await expect(page.getByRole("button", { name: "一覧に戻る", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "一覧へ戻る", exact: true })).toBeDisabled();
     await expect(list.getByLabel("APP.TABLE_01")).toBeDisabled();
   } finally { release?.(); }
   await expect(list.getByLabel("APP.TABLE_01")).toBeChecked();

@@ -18,6 +18,7 @@ const TOUCH_TARGET = "製品で touchTarget を使わない";
 const CONTROL_HEIGHT = "共有の操作部品（Button / TextField";
 const FIELD_WIDTH = "入力欄・選択欄の幅を w-* / max-w-* で書かない";
 const NATIVE_HEIGHT = "ネイティブの <input> / <select> の高さを";
+const BACK_IN_ACTIONS = "「一覧へ戻る」を PageHeader の actions";
 
 async function lint(code: string) {
   const eslint = new ESLint({
@@ -229,5 +230,16 @@ const h = <div className="min-h-11 w-48">x</div>;
 const i = <TextareaField id="q" label="質問" rows={2} />;
 `);
     expect(messages).toEqual([]);
+  });
+});
+
+describe("adherence: 一覧へ戻るは PageHeader の back（#618）", () => {
+  it("actions の id: back を検出し、back・ほかの操作は許す", async () => {
+    const messages = await lint(`
+const a = <PageHeader title="x" actions={[{ id: "back", kind: "secondary", label: "一覧へ戻る", onClick: f }]} />;
+const b = <PageHeader title="x" back={{ label: "一覧へ戻る", onClick: f }} actions={[{ id: "save", kind: "primary", label: "保存", onClick: g }]} />;
+const c = <Other actions={[{ id: "back" }]} />;
+`);
+    expect(linesWith(messages, BACK_IN_ACTIONS)).toEqual([2]);
   });
 });

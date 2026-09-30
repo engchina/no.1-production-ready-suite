@@ -14299,7 +14299,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByTestId("table-management-grid")).toBeVisible();
   await clickPageHeaderAction(page, "table-management-actions", "テーブル作成");
   await expect(page.getByTestId("table-management-grid")).toHaveCount(0);
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.getByTestId("table-management-grid")).toBeVisible();
   await expect(page.getByText("テーブル数", { exact: true })).toHaveCount(0);
   await expect(page.getByText("取得元", { exact: true })).toHaveCount(0);
@@ -14408,7 +14408,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect.poll(() => api.statementsPayload?.policy).toBe("table_ddl");
   expect(api.statementsPayload?.confirmation).toBe("ADMIN_EXECUTE");
 
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await clickPageHeaderAction(
     page,
     "table-management-actions",
@@ -14500,7 +14500,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   expect(api.importTabularPayload?.mode).toBe("create");
   expect(api.importTabularPayload?.confirmation).toBe("ADMIN_EXECUTE");
 
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.getByTestId("table-management-grid")).toBeVisible();
   await expect(page.getByText('CREATE TABLE "INVOICES"')).toHaveCount(0);
   await page.getByRole("tab", { name: "DDL" }).click();
@@ -14599,7 +14599,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await page.getByText("SQL構造解析結果").click();
   await expect(page.getByText("## SQL構造分析")).toBeVisible();
 
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await expect(page.getByTestId("view-management-grid").getByRole("button", { name: /^操作: / })).toHaveCount(0);
   await clickObjectDetailAction(page, "view-management-detail-actions", "削除");
   const dropViewDialog = page.getByRole("dialog", { name: "DROP VIEW の確認" });
@@ -16118,7 +16118,7 @@ test("ビュー抽出の旧応答は選択変更後に表示せず再抽出失�
   await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
   await page.getByRole("button", { name: "AI で抽出", exact: true }).click();
   await expect.poll(() => calls).toBe(1);
-  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
   await page.getByRole("button", { name: "APP.V_OTHER を表示", exact: true }).click();
   await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
   const response = page.waitForResponse("**/api/nl2sql/db-admin/extract-join-where");
