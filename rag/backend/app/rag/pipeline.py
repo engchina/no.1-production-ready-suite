@@ -403,11 +403,7 @@ class RagPipeline:
         await record_query_history(
             self._oracle,
             self._settings,
-            business_view_id=(
-                request.business_view_ids[0]
-                if request.business_view_ids
-                else request.business_view_id
-            ),
+            business_view_id=request.business_view_id,
             question=question,
             surface="chat" if chat else "search",
             filters=request.filters,
@@ -427,9 +423,7 @@ class RagPipeline:
         evaluation_input: Mapping[str, object] | None = None,
     ) -> None:
         """回答を保存する(rag_poc の answer JSON 保存に相当)。失敗しても回答は返す。"""
-        business_view_id = (
-            request.business_view_ids[0] if request.business_view_ids else request.business_view_id
-        )
+        business_view_id = request.business_view_id
         try:
             await self._oracle.save_answer_record(
                 {

@@ -466,7 +466,7 @@ def test_search_intersects_business_view_kbs_with_allowed_kbs(monkeypatch: Monke
     headers = login(client, "searcher")
 
     response = client.post(
-        "/api/search", json={"query": "規程", "business_view_ids": ["bv-1"]}, headers=headers
+        "/api/search", json={"query": "規程", "business_view_id": "bv-1"}, headers=headers
     )
     assert response.status_code == 200, response.text
     assert _captured_knowledge_base_ids() == ["kb-1"]
@@ -475,7 +475,7 @@ def test_search_intersects_business_view_kbs_with_allowed_kbs(monkeypatch: Monke
     RecordingPipeline.captured_request = None
     override = client.post(
         "/api/search",
-        json={"query": "規程", "business_view_ids": ["bv-1"], "knowledge_base_ids": ["kb-3"]},
+        json={"query": "規程", "business_view_id": "bv-1", "knowledge_base_ids": ["kb-3"]},
         headers=headers,
     )
     assert override.status_code == 403
@@ -493,14 +493,14 @@ def test_search_intersects_business_view_kbs_with_allowed_kbs(monkeypatch: Monke
 
     # 範囲外の業務ビューは存在しないものとして 404。
     missing = client.post(
-        "/api/search", json={"query": "規程", "business_view_ids": ["bv-2"]}, headers=headers
+        "/api/search", json={"query": "規程", "business_view_id": "bv-2"}, headers=headers
     )
     assert missing.status_code == 404
 
     # KB の範囲が無制限（rag.knowledge_bases.manage）なら業務ビューの KB をそのまま使う。
     manager = login(client, "kb-manager")
     response = client.post(
-        "/api/search", json={"query": "規程", "business_view_ids": ["bv-1"]}, headers=manager
+        "/api/search", json={"query": "規程", "business_view_id": "bv-1"}, headers=manager
     )
     assert response.status_code == 200
     assert _captured_knowledge_base_ids() == ["kb-1", "kb-2"]
@@ -522,7 +522,7 @@ def test_business_view_without_permitted_kbs_is_forbidden_not_empty(
     message = [search_route.BUSINESS_VIEW_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE]
     for path in ("/api/search", "/api/search/stream"):
         denied = client.post(
-            path, json={"query": "規程", "business_view_ids": ["bv-3"]}, headers=headers
+            path, json={"query": "規程", "business_view_id": "bv-3"}, headers=headers
         )
         assert denied.status_code == 403, path
         assert denied.json()["error_messages"] == message
@@ -530,17 +530,8 @@ def test_business_view_without_permitted_kbs_is_forbidden_not_empty(
         assert denied.json()["error_code"] == SCOPE_FORBIDDEN_CODE, path
     assert RecordingPipeline.captured_request is None
 
-    # 複数の業務ビューで一部だけ許可されていれば、その積集合で検索を続ける。
-    partial = client.post(
-        "/api/search",
-        json={"query": "規程", "business_view_ids": ["bv-3", "bv-1"]},
-        headers=headers,
-    )
-    assert partial.status_code == 200, partial.text
-    assert _captured_knowledge_base_ids() == ["kb-1"]
-    RecordingPipeline.captured_request = None
     stream = client.post(
-        "/api/search/stream", json={"query": "規程", "business_view_ids": ["bv-1"]}, headers=headers
+        "/api/search/stream", json={"query": "規程", "business_view_id": "bv-1"}, headers=headers
     )
     assert stream.status_code == 200
     assert "event: done" in stream.text

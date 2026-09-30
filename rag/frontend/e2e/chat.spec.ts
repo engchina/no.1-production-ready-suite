@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
 
 const businessView = {
   id: "bv-1",
@@ -281,8 +281,7 @@ async function openPersistedConversation(page: Page, width: number, messages: ob
   await page.setViewportSize({ width, height: width <= 375 ? 812 : 1000 });
   await mockChat(page, "ready", messages);
   await page.goto("/chat");
-  await page.getByRole("combobox", { name: "業務ビュー" }).click();
-  await page.getByRole("option", { name: "経理アシスタント" }).click();
+  await selectBusinessView(page, "経理アシスタント");
   await page
     .getByRole("list", { name: "会話" })
     .getByRole("button")
@@ -310,8 +309,7 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "チャット" })).toBeVisible();
 
     // 業務ビューを選ぶとチャットを始められる。
-    await page.getByRole("combobox", { name: "業務ビュー" }).click();
-    await page.getByRole("option", { name: "経理アシスタント" }).click();
+    await selectBusinessView(page, "経理アシスタント");
 
     await page.getByRole("button", { name: "新しい会話" }).click();
 
@@ -363,8 +361,7 @@ for (const viewport of [
     ]);
 
     await page.goto("/chat");
-    await page.getByRole("combobox", { name: "業務ビュー" }).click();
-    await page.getByRole("option", { name: "経理アシスタント" }).click();
+    await selectBusinessView(page, "経理アシスタント");
     await page.getByRole("button", { name: /^経費の上限は？ 2件/ }).click();
 
     await expect(page.getByText(/機微情報をマスクしました/)).toBeVisible();
@@ -378,8 +375,7 @@ test("送信開始後に永続化された質問を重複表示しない", async
   await mockChat(page, "ready", [], { streamBody: sseStart });
 
   await page.goto("/chat");
-  await page.getByRole("combobox", { name: "業務ビュー" }).click();
-  await page.getByRole("option", { name: "経理アシスタント" }).click();
+  await selectBusinessView(page, "経理アシスタント");
   await page.getByRole("button", { name: "新しい会話" }).click();
 
   const detailRefreshed = page.waitForResponse((response) => {
@@ -518,8 +514,7 @@ test("会話一覧の読み込み中状態をカード内に表示する", async
   const releaseConversationList = await mockChat(page, "loading");
 
   await page.goto("/chat");
-  await page.getByRole("combobox", { name: "業務ビュー" }).click();
-  await page.getByRole("option", { name: "経理アシスタント" }).click();
+  await selectBusinessView(page, "経理アシスタント");
 
   // 読み込み中は文言と経過時間（TimedLoadingState）と行の形の Skeleton を出す（#265）。
   const loading = page.getByTestId("chat-conversations-loading");
@@ -538,8 +533,7 @@ test("会話一覧の読み込み失敗時に再試行可能なエラーを表�
   await mockChat(page, "error");
 
   await page.goto("/chat");
-  await page.getByRole("combobox", { name: "業務ビュー" }).click();
-  await page.getByRole("option", { name: "経理アシスタント" }).click();
+  await selectBusinessView(page, "経理アシスタント");
 
   const error = page.getByRole("alert").filter({ hasText: "会話一覧を読み込めませんでした。" });
   await expect(error).toBeVisible({ timeout: 10_000 });
@@ -555,8 +549,7 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     await mockChat(page, "ready", [userMessage, assistantMessage]);
     await page.goto("/chat");
-    await page.getByRole("combobox", { name: "業務ビュー" }).click();
-    await page.getByRole("option", { name: "経理アシスタント" }).click();
+    await selectBusinessView(page, "経理アシスタント");
 
     const sessions = page.getByRole("complementary", { name: "会話" });
     const rename = sessions.getByRole("button", { name: "「経費の上限は？」の名前を変更" });
@@ -586,8 +579,7 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     await mockChat(page, "ready", [userMessage, assistantMessage]);
     await page.goto("/chat");
-    await page.getByRole("combobox", { name: "業務ビュー" }).click();
-    await page.getByRole("option", { name: "経理アシスタント" }).click();
+    await selectBusinessView(page, "経理アシスタント");
 
     const sessions = page.getByRole("complementary", { name: "会話" });
     const remove = sessions.getByRole("button", { name: "「経費の上限は？」を削除" });
@@ -613,8 +605,7 @@ test("会話名変更の失敗を入力欄直下へ表示する", async ({ page 
   await page.setViewportSize({ width: 1280, height: 800 });
   await mockChat(page, "ready", [userMessage, assistantMessage], { renameFails: true });
   await page.goto("/chat");
-  await page.getByRole("combobox", { name: "業務ビュー" }).click();
-  await page.getByRole("option", { name: "経理アシスタント" }).click();
+  await selectBusinessView(page, "経理アシスタント");
 
   const sessions = page.getByRole("complementary", { name: "会話" });
   await sessions.getByRole("listitem").hover();
@@ -641,8 +632,7 @@ test("未送信の会話があれば新しい会話を増やさず再利用す�
   });
   await mockChat(page);
   await page.goto("/chat");
-  await page.getByRole("combobox", { name: "業務ビュー" }).click();
-  await page.getByRole("option", { name: "経理アシスタント" }).click();
+  await selectBusinessView(page, "経理アシスタント");
 
   const newConversation = page.getByRole("button", { name: "新しい会話", exact: true });
   await newConversation.click();
@@ -663,8 +653,7 @@ test("長い日本語の会話名でも一覧が横へはみ出さない", async
     initialTitle: "経費精算と国内外出張に関する承認ルールおよび例外申請の確認".repeat(2),
   });
   await page.goto("/chat");
-  await page.getByRole("combobox", { name: "業務ビュー" }).click();
-  await page.getByRole("option", { name: "経理アシスタント" }).click();
+  await selectBusinessView(page, "経理アシスタント");
   await expectNoPageOverflow(page);
 });
 
@@ -690,8 +679,7 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await mockChat(page, "ready", [], { streamBody });
 
   await page.goto("/chat");
-  await page.getByRole("combobox", { name: "業務ビュー" }).click();
-  await page.getByRole("option", { name: "経理アシスタント" }).click();
+  await selectBusinessView(page, "経理アシスタント");
   await page.getByRole("button", { name: "新しい会話" }).click();
   await page.getByRole("textbox").fill(userMessage.content);
   await page.getByRole("button", { name: "送信" }).click();
@@ -711,8 +699,7 @@ test("IME の変換を確定する Enter では送信しない（#459）", async
   });
 
   await page.goto("/chat");
-  await page.getByRole("combobox", { name: "業務ビュー" }).click();
-  await page.getByRole("option", { name: "経理アシスタント" }).click();
+  await selectBusinessView(page, "経理アシスタント");
   await page.getByRole("button", { name: "新しい会話" }).click();
 
   const composer = page.getByRole("textbox", { name: "メッセージを入力…（Enter で送信 / Shift+Enter で改行）" });
@@ -741,8 +728,7 @@ test("送信と停止は同じボタンで、生成中の Enter では停止し�
   });
 
   await page.goto("/chat");
-  await page.getByRole("combobox", { name: "業務ビュー" }).click();
-  await page.getByRole("option", { name: "経理アシスタント" }).click();
+  await selectBusinessView(page, "経理アシスタント");
   await page.getByRole("button", { name: "新しい会話" }).click();
 
   const composer = page.getByRole("textbox", { name: "メッセージを入力…（Enter で送信 / Shift+Enter で改行）" });

@@ -5,6 +5,7 @@ import {
   WORKSPACE_TTL_MS,
   bindWorkspaceOwner,
   clearWorkspace,
+  isNullableString,
   isOneOf,
   readWorkspace,
   removeWorkspace,
@@ -75,8 +76,8 @@ describe("workspace-state", () => {
     expect(readWorkspace("search.topK", "20", isOneOf(["5", "10", "20"] as const))).toBe("20");
     storage.setItem(`${WORKSPACE_NAMESPACE}search.query`, "{broken");
     expect(readWorkspace("search.query", "fallback")).toBe("fallback");
-    writeWorkspace("search.businessViewIds", [1, 2]);
-    expect(readWorkspace<string[]>("search.businessViewIds", [])).toEqual([]);
+    writeWorkspace("search.businessViewId", ["bv-1", "bv-2"]);
+    expect(readWorkspace("search.businessViewId", null, isNullableString)).toBeNull();
   });
 
   it("上限を超える値は保存せず false を返す", () => {

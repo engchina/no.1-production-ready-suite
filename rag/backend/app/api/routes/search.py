@@ -39,7 +39,6 @@ from app.schemas.search import (
     AnswerRecordSummary,
     SearchRequest,
     SearchResponse,
-    parse_search_id_filter,
 )
 from app.schemas.settings import FieldDefinitionData, SearchExtractionFieldsData
 from app.security.permissions import SCOPE_FORBIDDEN_CODE
@@ -108,54 +107,44 @@ async def _resolve_query_context(
     """
     oracle = OracleClient()
     settings = global_settings
-    if request.business_view_ids:
-        views = []
-        for business_view_id in request.business_view_ids:
-            view = await oracle.get_business_view(business_view_id)
-            if view is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"指定した業務ビューが見つかりません: {business_view_id}",
-                )
-            status = getattr(view, "status", None)
-            if getattr(status, "value", status) == "ARCHIVED":
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"アーカイブ済みの業務ビューは検索に使用できません: {business_view_id}",
-                )
-            views.append(view)
-        if views:
-            effective_request = request
-            kb_ids = _merge_business_view_knowledge_base_ids(
-                view.config.normalized_knowledge_base_ids() for view in views
+    if request.business_view_id:
+        business_view_id = request.business_view_id
+        view = await oracle.get_business_view(business_view_id)
+        if view is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"指定した業務ビューが見つかりません: {business_view_id}",
             )
-            # 参照 KB が 0 件の業務ビューで利用者の全 KB を検索しない（#304）。
-            if not request.knowledge_base_ids:
-                ensure_business_view_has_knowledge_bases(kb_ids)
+        status = getattr(view, "status", None)
+        if getattr(status, "value", status) == "ARCHIVED":
+            raise HTTPException(
+                status_code=409,
+                detail=f"アーカイブ済みの業務ビューは検索に使用できません: {business_view_id}",
+            )
+        effective_request = request
+        kb_ids = view.config.normalized_knowledge_base_ids()
+        # 参照 KB が 0 件の業務ビューで利用者の全 KB を検索しない（#304）。
+        if not request.knowledge_base_ids:
+            ensure_business_view_has_knowledge_bases(kb_ids)
             # request 明示の KB があればそちらを優先し、無ければ参照 KB 群を展開する。
-            if not request.knowledge_base_ids:
-                effective_request = _with_knowledge_base_ids(request, kb_ids)
-            # 利用者の KB 範囲との積集合にする（request で範囲外の KB を読めないようにする）。
-            effective_request = _scope_request_knowledge_bases(
-                effective_request, from_business_view=not request.knowledge_base_ids
-            )
-            settings, applied = resolve_business_view_settings(settings, views[0].config)
-            # 業務ビューのドメインキーワードは全文検索で 1 語として優先する(複数ビューは和集合)。
-            domain_keywords: list[str] = []
-            for view in views:
-                for keyword in await load_domain_keywords(oracle, view.id):
-                    if keyword not in domain_keywords:
-                        domain_keywords.append(keyword)
-            if domain_keywords:
-                settings = settings.model_copy(update={"rag_domain_keywords": domain_keywords})
-            # 用語・ルールは回答エンジンだけが使う(先頭の業務ビューのもの)。
-            runtime_knowledge = await oracle.get_business_view_knowledge(
-                views[0].id, RUNTIME_KNOWLEDGE_KIND
-            )
-            if runtime_knowledge:
-                settings = settings.model_copy(update={"rag_runtime_knowledge": runtime_knowledge})
-            applied_view = ",".join(view.id for view in views) if (applied or kb_ids) else None
-            return effective_request, settings, None, applied_view
+            effective_request = _with_knowledge_base_ids(request, kb_ids)
+        # 利用者の KB 範囲との積集合にする（request で範囲外の KB を読めないようにする）。
+        effective_request = _scope_request_knowledge_bases(
+            effective_request, from_business_view=not request.knowledge_base_ids
+        )
+        settings, applied = resolve_business_view_settings(settings, view.config)
+        # 業務ビューのドメインキーワードは全文検索で 1 語として優先する。
+        domain_keywords = await load_domain_keywords(oracle, view.id)
+        if domain_keywords:
+            settings = settings.model_copy(update={"rag_domain_keywords": domain_keywords})
+        # 用語・ルールは回答エンジンだけが使う。
+        runtime_knowledge = await oracle.get_business_view_knowledge(
+            view.id, RUNTIME_KNOWLEDGE_KIND
+        )
+        if runtime_knowledge:
+            settings = settings.model_copy(update={"rag_runtime_knowledge": runtime_knowledge})
+        applied_view = view.id if (applied or kb_ids) else None
+        return effective_request, settings, None, applied_view
 
     request = _scope_request_knowledge_bases(request)
     return request, settings, None, None
@@ -226,21 +215,6 @@ def _scope_request_knowledge_bases(
             code=SCOPE_FORBIDDEN_CODE,
         )
     return _with_knowledge_base_ids(request, permitted)
-
-
-def _merge_business_view_knowledge_base_ids(
-    knowledge_base_id_sets: Iterable[Iterable[str]],
-) -> list[str]:
-    """複数業務ビューの参照 KB ID を選択順で重複排除する。"""
-    seen: set[str] = set()
-    merged: list[str] = []
-    for knowledge_base_ids in knowledge_base_id_sets:
-        for knowledge_base_id in knowledge_base_ids:
-            if knowledge_base_id in seen:
-                continue
-            seen.add(knowledge_base_id)
-            merged.append(knowledge_base_id)
-    return merged
 
 
 def _with_knowledge_base_ids(
@@ -462,7 +436,7 @@ def _sse_event(event: str, data: object) -> str:
 
 @router.get("/extraction-fields", response_model=ApiResponse[SearchExtractionFieldsData])
 async def list_search_extraction_fields(
-    business_view_ids: Annotated[str, Query(min_length=1, max_length=4000)],
+    business_view_id: Annotated[str, Query(min_length=1, max_length=128)],
 ) -> ApiResponse[SearchExtractionFieldsData]:
     """検索の絞り込みに使える項目を返す(#549)。
 
@@ -470,18 +444,15 @@ async def list_search_extraction_fields(
     和集合。同じ項目名は先の KB(作成の古い順)の定義を使う。存在しない業務ビューは 404。
     """
     oracle = OracleClient()
-    knowledge_base_id_sets: list[list[str]] = []
-    for business_view_id in parse_search_id_filter(business_view_ids):
-        view = await oracle.get_business_view(business_view_id)
-        if view is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"指定した業務ビューが見つかりません: {business_view_id}",
-            )
-        knowledge_base_id_sets.append(view.config.normalized_knowledge_base_ids())
+    view = await oracle.get_business_view(business_view_id)
+    if view is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"指定した業務ビューが見つかりません: {business_view_id}",
+        )
     # 利用者が使えない KB とアーカイブ済みの KB は Oracle の条件で除く。
     field_sets = await oracle.list_knowledge_base_extraction_field_sets(
-        _merge_business_view_knowledge_base_ids(knowledge_base_id_sets)
+        view.config.normalized_knowledge_base_ids()
     )
     fields = resolve_field_definitions(field_sets, load_field_schema().fields) if field_sets else []
     return ApiResponse(

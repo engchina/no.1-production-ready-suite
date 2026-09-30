@@ -151,8 +151,8 @@ export const queryKeys = {
   knowledgeBaseGraph: (id: string) => ["knowledge-bases", id, "graph"] as const,
   knowledgeBaseExtractionFields: (id: string) =>
     ["knowledge-bases", id, "extraction-fields"] as const,
-  searchExtractionFields: (businessViewIds: string[]) =>
-    ["search", "extraction-fields", businessViewIds] as const,
+  searchExtractionFields: (businessViewId: string) =>
+    ["search", "extraction-fields", businessViewId] as const,
   businessViews: (params: {
     status?: BusinessViewStatus;
     q?: string;
@@ -876,11 +876,11 @@ function useKnowledgeBaseExtractionFieldsSaved(id: string) {
 }
 
 /** 検索の絞り込みに使える項目（選んだ業務ビューの KB の定義の和集合。#549）。 */
-export function useSearchExtractionFields(businessViewIds: string[], enabled = true) {
+export function useSearchExtractionFields(businessViewId: string | null, enabled = true) {
   return useQuery<SearchExtractionFieldsData>({
-    queryKey: queryKeys.searchExtractionFields(businessViewIds),
-    queryFn: () => api.getSearchExtractionFields(businessViewIds),
-    enabled: enabled && businessViewIds.length > 0,
+    queryKey: queryKeys.searchExtractionFields(businessViewId ?? ""),
+    queryFn: () => api.getSearchExtractionFields(businessViewId ?? ""),
+    enabled: enabled && Boolean(businessViewId),
     retry: false,
   });
 }

@@ -4,6 +4,7 @@ import {
   expectNoPageOverflow,
   mockDatabaseReady,
   mockLocalAuth,
+  selectBusinessView,
 } from "./_helpers";
 
 // 1x1 透明 PNG。`<img>` で実際に描画できる有効な data URI。
@@ -227,11 +228,7 @@ test("RAG 検索は文書の分類と基準日を filters に入れて送る", a
   });
 
   await page.goto("/search");
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-  await page
-    .getByRole("listbox", { name: /対象の業務ビュー/ })
-    .getByRole("option", { name: /経理ビュー/ })
-    .click();
+  await selectBusinessView(page, /経理ビュー/);
   await page.getByRole("button", { name: "詳細条件" }).press("Enter");
   await page.getByRole("button", { name: "文書の分類で絞り込む" }).press("Enter");
   await page.getByLabel("大分類").fill("経理");
@@ -284,11 +281,7 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   });
 
   await page.goto("/search");
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-  await page
-    .getByRole("listbox", { name: /対象の業務ビュー/ })
-    .getByRole("option", { name: /経理ビュー/ })
-    .click();
+  await selectBusinessView(page, /経理ビュー/);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("料金表を確認");
   await page.getByRole("button", { name: "検索", exact: true }).click();
 
