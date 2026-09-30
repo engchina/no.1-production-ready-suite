@@ -1930,24 +1930,18 @@ export interface EvaluationSettingsUpdate {
   suite: EvaluationSuiteName;
 }
 
-// --- 設定: GraphRAG アダプター ---
-export type GraphProfileName = "off" | "entities" | "full";
+// --- 設定: 関係情報の構築 ---
+/** off = 構築しない(既定)、entities = 文書と章・節の見出しのつながりを構築する(#621)。 */
+export type GraphProfileName = "off" | "entities";
 
 export interface GraphProfileStatusData {
   name: GraphProfileName;
-  origin: string;
-  recommended_for: string[];
   selected: boolean;
-  enabled: boolean;
-  build_claims: boolean;
-  build_community_summaries: boolean;
 }
 
 export interface GraphSettingsData {
   profile: GraphProfileName;
   enabled: boolean;
-  build_claims: boolean;
-  build_community_summaries: boolean;
   profiles: GraphProfileStatusData[];
   config_source: "runtime";
 }
@@ -3095,7 +3089,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  // 設定: GraphRAG アダプター
+  // 設定: 関係情報の構築
   getGraphSettings: () => request<GraphSettingsData>("/api/settings/graph"),
   updateGraphSettings: (body: GraphSettingsUpdate) =>
     request<GraphSettingsData>("/api/settings/graph", {

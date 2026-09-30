@@ -91,16 +91,9 @@ def test_vector_index_service_matches_local_core() -> None:
 
 
 def test_graph_service_matches_local_core() -> None:
-    request = GraphStageRequest(profile="full", legacy_enabled=False)
+    request = GraphStageRequest(profile="entities")
     remote = _run(create_graph_app(), request, GraphStageResponse)
-    local_resolved = resolve_graph_profile(request.profile, legacy_enabled=request.legacy_enabled)
-    local = GraphStageResponse(
-        profile=local_resolved.profile,
-        build_entities=local_resolved.build_entities,
-        build_relationships=local_resolved.build_relationships,
-        build_claims=local_resolved.build_claims,
-        build_community_summary=local_resolved.build_community_summary,
-    )
+    local = GraphStageResponse(**resolve_graph_profile(request.profile).__dict__)
     assert remote == local
 
 

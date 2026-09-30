@@ -37,8 +37,6 @@ from app.rag.extraction_field_adapter import (
     field_schema_from_json,
 )
 from app.rag.graph_index import (
-    GraphClaim,
-    GraphCommunitySummary,
     GraphEntity,
     GraphEntityChunkLink,
     GraphIndex,
@@ -8197,7 +8195,7 @@ class OracleClient:
         *,
         chunk_set_id: str | None = None,
     ) -> None:
-        """Oracle GraphRAG-lite tables の chunk_set scope を置換する。"""
+        """関係情報の表の chunk_set scope を置換する。"""
 
         def operation(connection: OracleConnectionProtocol) -> None:
             if _select_document_state(connection, document_id) is None:
@@ -8288,71 +8286,6 @@ class OracleClient:
                             "chunk_set_id": chunk_set_id,
                         }
                         for relationship in graph_index.relationships
-                    ],
-                )
-            if graph_index.claims:
-                _executemany(
-                    connection,
-                    """
-                    INSERT INTO rag_graph_claims (
-                        claim_id,
-                        chunk_set_id,
-                        tenant_id_hash,
-                        knowledge_base_id,
-                        entity_id,
-                        claim_text,
-                        confidence,
-                        source_document_id,
-                        source_chunk_id
-                    ) VALUES (
-                        :claim_id,
-                        :chunk_set_id,
-                        :tenant_id_hash,
-                        :knowledge_base_id,
-                        :entity_id,
-                        :claim_text,
-                        :confidence,
-                        :source_document_id,
-                        :source_chunk_id
-                    )
-                    """,
-                    [
-                        {**_graph_claim_binds(claim), "chunk_set_id": chunk_set_id}
-                        for claim in graph_index.claims
-                    ],
-                )
-            if graph_index.community_summaries:
-                _executemany(
-                    connection,
-                    """
-                    INSERT INTO rag_graph_community_summaries (
-                        community_id,
-                        chunk_set_id,
-                        tenant_id_hash,
-                        knowledge_base_id,
-                        level_no,
-                        title,
-                        summary_text,
-                        entity_ids,
-                        source_document_ids
-                    ) VALUES (
-                        :community_id,
-                        :chunk_set_id,
-                        :tenant_id_hash,
-                        :knowledge_base_id,
-                        :level_no,
-                        :title,
-                        :summary_text,
-                        :entity_ids,
-                        :source_document_ids
-                    )
-                    """,
-                    [
-                        {
-                            **_graph_community_summary_binds(summary),
-                            "chunk_set_id": chunk_set_id,
-                        }
-                        for summary in graph_index.community_summaries
                     ],
                 )
             if graph_index.entity_chunk_links:
@@ -8709,11 +8642,6 @@ def _select_graph_entity_ids_for_document(
               AND {graph_access_sql}
             UNION
             SELECT entity_id
-            FROM rag_graph_claims
-            WHERE source_document_id = :document_id
-              AND {graph_access_sql}
-            UNION
-            SELECT entity_id
             FROM rag_graph_entities
             WHERE JSON_EXISTS(
                       source_document_ids,
@@ -8730,19 +8658,59 @@ def _select_graph_entity_ids_for_document(
     return [str(row["entity_id"]) for row in rows if row.get("entity_id")]
 
 
+def _delete_retired_graph_claims(
+    connection: OracleConnectionProtocol,
+    *,
+    entity_ids: Sequence[str],
+) -> None:
+    """#621 で廃止した rag_graph_claims が残っていれば、消す entity を参照する行を先に消す。
+
+    rag_graph_claims は rag_graph_entities を FK(ON DELETE CASCADE なし)で参照する。表を消す
+    migration(`20260930_007_retire_graph_claims_community`)はデータを削除するため承認が要り、
+    適用前も backend は動く。その間に旧 full で構築した文書を再取込・削除すると、entity の
+    DELETE が FK で失敗するので、表があるときだけ参照する行を消す。migration の適用後
+    (表が無い)は何もしない。rag_graph_community_summaries は FK を持たないので触らない。
+    """
+    unique_entity_ids = _unique_optional_sequence(entity_ids)
+    if not unique_entity_ids:
+        return
+    row = _fetch_one(
+        connection,
+        "SELECT COUNT(*) AS table_count FROM user_tables WHERE table_name = 'RAG_GRAPH_CLAIMS'",
+        {},
+    )
+    if not row or not int(cast(int, row.get("table_count") or 0)):
+        return
+    entity_sql, entity_binds = _oracle_in_predicate(
+        "entity_id",
+        "graph_entity_id",
+        unique_entity_ids,
+    )
+    _execute(
+        connection,
+        _render_sql(
+            """
+            DELETE FROM rag_graph_claims
+            WHERE {entity_sql}
+            """,
+            entity_sql=entity_sql,
+        ),
+        entity_binds,
+    )
+
+
 def _delete_graph_rows_for_chunk_set(
     connection: OracleConnectionProtocol,
     *,
     chunk_set_id: str,
     entity_ids: Sequence[str],
 ) -> None:
-    """指定 chunk_set の GraphRAG 行だけを FK 順に削除する。"""
+    """指定 chunk_set の関係情報の行だけを FK 順に削除する。"""
     binds = _with_tenant_bind({"chunk_set_id": chunk_set_id})
+    _delete_retired_graph_claims(connection, entity_ids=entity_ids)
     for table in (
         "rag_graph_relationships",
         "rag_graph_entity_chunks",
-        "rag_graph_claims",
-        "rag_graph_community_summaries",
     ):
         _execute(
             connection,
@@ -8786,8 +8754,9 @@ def _delete_graph_rows_for_document(
     document_id: str,
     entity_ids: Sequence[str],
 ) -> None:
-    """指定 document の GraphRAG-lite rows を FK 順に削除する。"""
+    """指定 document の関係情報の行を FK 順に削除する。"""
     unique_entity_ids = _unique_optional_sequence(entity_ids)
+    _delete_retired_graph_claims(connection, entity_ids=unique_entity_ids)
     if unique_entity_ids:
         source_sql, source_binds = _oracle_in_predicate(
             "source_entity_id",
@@ -8819,34 +8788,6 @@ def _delete_graph_rows_for_document(
             """
         DELETE FROM rag_graph_entity_chunks
         WHERE document_id = :document_id
-          AND {graph_access_sql}
-        """,
-            graph_access_sql=_oracle_tenant_predicate(),
-        ),
-        _with_tenant_bind({"document_id": document_id}),
-    )
-    _execute(
-        connection,
-        _render_sql(
-            """
-        DELETE FROM rag_graph_claims
-        WHERE source_document_id = :document_id
-          AND {graph_access_sql}
-        """,
-            graph_access_sql=_oracle_tenant_predicate(),
-        ),
-        _with_tenant_bind({"document_id": document_id}),
-    )
-    _execute(
-        connection,
-        _render_sql(
-            """
-        DELETE FROM rag_graph_community_summaries
-        WHERE JSON_EXISTS(
-                  source_document_ids,
-                  '$[*]?(@ == $document_id)'
-                  PASSING :document_id AS "document_id"
-              )
           AND {graph_access_sql}
         """,
             graph_access_sql=_oracle_tenant_predicate(),
@@ -9160,32 +9101,6 @@ def _graph_relationship_binds(relationship: GraphRelationship) -> dict[str, obje
         "description": relationship.description,
         "confidence": relationship.confidence,
         "source_document_ids": _audit_json(relationship.source_document_ids),
-    }
-
-
-def _graph_claim_binds(claim: GraphClaim) -> dict[str, object]:
-    return {
-        "claim_id": claim.claim_id,
-        "tenant_id_hash": _current_tenant_id_hash(),
-        "knowledge_base_id": claim.knowledge_base_id,
-        "entity_id": claim.entity_id,
-        "claim_text": claim.claim_text,
-        "confidence": claim.confidence,
-        "source_document_id": claim.source_document_id,
-        "source_chunk_id": claim.source_chunk_id,
-    }
-
-
-def _graph_community_summary_binds(summary: GraphCommunitySummary) -> dict[str, object]:
-    return {
-        "community_id": summary.community_id,
-        "tenant_id_hash": _current_tenant_id_hash(),
-        "knowledge_base_id": summary.knowledge_base_id,
-        "level_no": summary.level_no,
-        "title": summary.title,
-        "summary_text": summary.summary_text,
-        "entity_ids": _audit_json(summary.entity_ids),
-        "source_document_ids": _audit_json(summary.source_document_ids),
     }
 
 
@@ -12615,7 +12530,7 @@ CREATE INDEX {table_name}_source_sha256_idx
 
 
 def oracle_knowledge_graph_schema_sql() -> str:
-    """GraphRAG-lite 用の軽量 KG / community summary table DDL を返す。"""
+    """関係情報(文書と章・節の見出しのつながり)の table DDL を返す。"""
     return """
 CREATE TABLE rag_graph_entities (
     entity_id          VARCHAR2(64) PRIMARY KEY,
@@ -12660,44 +12575,6 @@ CREATE INDEX rag_graph_rel_source_idx
 
 CREATE INDEX rag_graph_rel_target_idx
     ON rag_graph_relationships (tenant_id_hash, target_entity_id);
-
-CREATE TABLE rag_graph_claims (
-    claim_id           VARCHAR2(64) PRIMARY KEY,
-    chunk_set_id       VARCHAR2(64),
-    tenant_id_hash     CHAR(64),
-    knowledge_base_id  VARCHAR2(64),
-    entity_id          VARCHAR2(64),
-    claim_text         CLOB NOT NULL,
-    confidence         NUMBER(6, 5),
-    source_document_id VARCHAR2(64),
-    source_chunk_id    VARCHAR2(128),
-    created_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    CONSTRAINT rag_graph_claim_entity_fk
-        FOREIGN KEY (entity_id) REFERENCES rag_graph_entities (entity_id)
-);
-
-CREATE INDEX rag_graph_claim_entity_idx
-    ON rag_graph_claims (tenant_id_hash, entity_id);
-
-CREATE TABLE rag_graph_community_summaries (
-    community_id       VARCHAR2(64) PRIMARY KEY,
-    chunk_set_id       VARCHAR2(64),
-    tenant_id_hash     CHAR(64),
-    knowledge_base_id  VARCHAR2(64),
-    level_no           NUMBER(5) DEFAULT 0 NOT NULL,
-    title              VARCHAR2(512),
-    summary_text       CLOB NOT NULL,
-    entity_ids         JSON,
-    source_document_ids JSON,
-    created_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    updated_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-);
-
-CREATE INDEX rag_graph_community_tenant_idx
-    ON rag_graph_community_summaries (tenant_id_hash, knowledge_base_id, level_no);
-
-CREATE INDEX rag_graph_community_chunk_set_idx
-    ON rag_graph_community_summaries (chunk_set_id);
 
 CREATE TABLE rag_graph_entity_chunks (
     entity_id          VARCHAR2(64) NOT NULL,

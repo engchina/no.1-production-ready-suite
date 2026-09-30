@@ -457,6 +457,41 @@ def test_update_retires_standard_engine_tables_and_runs_migration() -> None:
     assert ("RAG_GRAPH_ENTITIES", "TABLE") in database.objects
 
 
+_RETIRED_GRAPH_TABLES = ("RAG_GRAPH_CLAIMS", "RAG_GRAPH_COMMUNITY_SUMMARIES")
+_RETIRE_GRAPH_CLAIMS_MIGRATION = "20260930_007_retire_graph_claims_community"
+
+
+def test_update_retires_graph_claims_community_tables_with_approval() -> None:
+    """関係情報の claims / community summary の表が残る DB は、承認付きの更新で消える（#621）。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    assert not any((name, "TABLE") in database.objects for name in _RETIRED_GRAPH_TABLES)
+    for name in _RETIRED_GRAPH_TABLES:
+        database.objects[(name, "TABLE")] = datetime.now(UTC)
+    database.migrations.pop(_RETIRE_GRAPH_CLAIMS_MIGRATION)
+
+    status = manager.status()
+    assert status["status"] == "outdated"
+    assert [item["name"] for item in status["pending_destructive_migrations"]] == [
+        _RETIRE_GRAPH_CLAIMS_MIGRATION
+    ]
+    assert {item["name"] for item in status["retired_objects"]} == set(_RETIRED_GRAPH_TABLES)
+    with pytest.raises(SystemSchemaError) as error:
+        manager.initialize()
+    assert error.value.code == DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED
+    assert all((name, "TABLE") in database.objects for name in _RETIRED_GRAPH_TABLES)
+
+    result = manager.initialize(allow_destructive=True)
+
+    assert result["status"] == "ready"
+    assert _RETIRE_GRAPH_CLAIMS_MIGRATION in database.migrations
+    assert not any((name, "TABLE") in database.objects for name in _RETIRED_GRAPH_TABLES)
+    # 関係情報グラフが読む表は残す。
+    for name in ("RAG_GRAPH_ENTITIES", "RAG_GRAPH_RELATIONSHIPS", "RAG_GRAPH_ENTITY_CHUNKS"):
+        assert (name, "TABLE") in database.objects
+
+
 # データを消す SQL（テーブルの DROP・行の DELETE・TRUNCATE）。`ON DELETE CASCADE` は含めない。
 _DATA_LOSS_SQL = re.compile(r"\b(DROP\s+TABLE|DELETE\s+FROM|TRUNCATE\s+TABLE)\b", re.IGNORECASE)
 
@@ -479,6 +514,7 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
         "20260629_002_drop_kb_chunk_set_bindings",
         "20260928_001_retire_dashboard_permission",
         _RETIRE_STANDARD_ENGINE_MIGRATION,
+        _RETIRE_GRAPH_CLAIMS_MIGRATION,
     } == marked
     assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)
     # 印は checksum（SQL だけ）に影響しない（適用済みの DB を outdated にしない）。

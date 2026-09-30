@@ -40,6 +40,7 @@ from app.config import (
     DOCRAG_PARENT_TARGET_CHARS_MIN,
     DOCRAG_TABLE_CHILD_TARGET_CHARS_MAX,
     DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
+    REMOVED_GRAPH_PROFILES,
     REMOVED_PARSER_ADAPTER_BACKENDS,
     ChunkingStrategy,
     DocragAnswerFlow,
@@ -168,6 +169,16 @@ class KnowledgeBaseIngestionConfig(BaseModel):
             and backend.strip().casefold() in REMOVED_PARSER_ADAPTER_BACKENDS
         ):
             cleaned["parser_adapter_backend"] = None
+        # 関係情報の構築の full は #621 で削除した。保存値は migration
+        # `20260930_006_graph_profile_entities` が entities へ書き換えるが、同時に当てる
+        # データを削除する migration(20260930_007)に承認が要るため、適用前も backend は動く。
+        # その間に KB・文書・レシピ・取込ジョブの上書き全体を検証エラーで失わないよう、
+        # 同じ関係情報を作る entities として読む。
+        graph_profile = cleaned.get("graph_profile")
+        if isinstance(graph_profile, str) and graph_profile.strip().casefold() in (
+            REMOVED_GRAPH_PROFILES
+        ):
+            cleaned["graph_profile"] = "entities"
         return cleaned
 
     preprocess_profile: PreprocessProfile | None = None

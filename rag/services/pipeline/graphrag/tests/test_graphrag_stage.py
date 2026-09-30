@@ -1,4 +1,4 @@
-"""GraphRAG ステージサービスの契約テスト。"""
+"""関係情報の構築ステージサービスの契約テスト。"""
 
 from __future__ import annotations
 
@@ -22,34 +22,20 @@ def test_off_builds_nothing() -> None:
         "/run", content=GraphStageRequest(profile="off").model_dump_json(), headers=_JSON
     )
     body = resp.json()
-    assert body["profile"] == "off"
-    assert body["build_entities"] is False
-    assert body["build_community_summary"] is False
+    assert body == {"profile": "off", "build_entities": False, "build_relationships": False}
 
 
-def test_entities_builds_relationships_only() -> None:
+def test_entities_builds_entities_and_relationships() -> None:
     resp = client.post(
         "/run", content=GraphStageRequest(profile="entities").model_dump_json(), headers=_JSON
     )
     body = resp.json()
-    assert body["build_entities"] is True
-    assert body["build_relationships"] is True
-    assert body["build_claims"] is False
+    assert body == {"profile": "entities", "build_entities": True, "build_relationships": True}
 
 
-def test_full_builds_all() -> None:
+def test_removed_full_profile_resolves_to_off() -> None:
+    """削除した full(#621)は未知の値として既定 off へ寄せる。"""
     resp = client.post(
         "/run", content=GraphStageRequest(profile="full").model_dump_json(), headers=_JSON
     )
-    body = resp.json()
-    assert body["build_claims"] is True
-    assert body["build_community_summary"] is True
-
-
-def test_legacy_enabled_off_maps_to_full() -> None:
-    resp = client.post(
-        "/run",
-        content=GraphStageRequest(profile="off", legacy_enabled=True).model_dump_json(),
-        headers=_JSON,
-    )
-    assert resp.json()["profile"] == "full"
+    assert resp.json()["profile"] == "off"

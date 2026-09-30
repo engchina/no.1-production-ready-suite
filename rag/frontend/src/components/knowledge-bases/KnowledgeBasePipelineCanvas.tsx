@@ -104,13 +104,13 @@ function buildGraph(config: KnowledgeBaseAdapterConfig): { nodes: Node[]; edges:
     { id: "e3", source: "chunking", target: "index" },
   ];
 
-  // 索引から派生する任意レイヤ(有効時のみ)。
+  // 索引から派生する任意レイヤ(有効時のみ)。関係情報は「構築する」の 1 通りなので、
+  // ほかの任意レイヤと同じく値を出さない(保存値 entities を画面に出さない。#621)。
   const optional: { id: string; key: I18nKey; on: boolean; value?: string }[] = [
     {
       id: "graph",
       key: "settings.pipelineCanvas.stage.graph",
       on: Boolean(ing.graph_profile && ing.graph_profile !== "off"),
-      value: ing.graph_profile ?? undefined,
     },
     { id: "field", key: "settings.pipelineCanvas.stage.field", on: Boolean(ing.field_extraction_enabled) },
     { id: "vision", key: "settings.pipelineCanvas.stage.vision", on: Boolean(ing.vision_enabled) },

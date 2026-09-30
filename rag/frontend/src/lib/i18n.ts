@@ -710,30 +710,24 @@ export const ja = {
   "settings.evaluation.loadError": "品質評価設定を取得できませんでした。",
   "settings.evaluation.saveError": "品質評価設定を保存できませんでした。",
   "settings.graph.subtitle":
-    "取込時に文書内の関係情報をどこまで構築するかを選択します。検索側の関係検索は検索方法で制御します。",
-  "settings.graph.overview.title": "関係情報の構築",
+    "文書を取り込むときに、文書と章・節の見出しのつながり（関係情報）を作るかどうかを選びます。",
+  "settings.graph.overview.title": "ナレッジベースの関係情報グラフ",
   "settings.graph.overview.description":
-    "Oracle AI Database 内に entities / relationships / claims / community summary をどこまで構築するかを選びます。既定は構築なしで現行挙動と一致します。",
-  "settings.graph.profile": "構築方式",
-  "settings.graph.claims": "claims 抽出",
-  "settings.graph.community": "community summary",
-  "settings.graph.enabled": "知識グラフ構築",
-  "settings.graph.on": "あり",
-  "settings.graph.off": "なし",
+    "文書全体と、その中の章・節の見出し（表・図を含む）をつないだ図を作ります。作った図はナレッジベースの「関係情報グラフ」で見られます。回答の検索には使いません。文書ごとに処理レシピで上書きできます。",
+  "settings.graph.profile": "取込のときに作るか",
+  "settings.graph.defaultTag": "既定",
   "settings.graph.profile.off": "構築しない",
-  "settings.graph.profile.off.description": "知識グラフを構築しない(既定・現行挙動)",
-  "settings.graph.profile.entities": "軽量(エンティティ)",
+  "settings.graph.profile.off.description":
+    "関係情報を作りません。ナレッジベースの関係情報グラフには何も表示されません。",
+  "settings.graph.profile.entities": "構築する",
   "settings.graph.profile.entities.description":
-    "entities + relationships のみ。claims / community summary なし",
-  "settings.graph.profile.full": "フル(コミュニティ要約)",
-  "settings.graph.profile.full.description":
-    "entities + relationships + claims + community summary",
+    "抽出した見出しから作ります。LLM は使わないので、取込の時間とコストはほとんど増えません。",
   "settings.graph.actions.save": "保存",
   "settings.graph.actions.saved": "関係情報の構築設定を保存しました。",
   "settings.graph.actions.reset": "変更を破棄",
   "settings.graph.actions.unsaved": "未保存の変更があります。",
   "settings.graph.rebuildHint":
-    "構築方式の変更は次回以降の取込に適用されます。既存文書へ反映するには再取込が必要です。",
+    "変更は次の取込から使われます。取込済みの文書に反映するには、文書を再取込してください。",
   "settings.graph.loadError": "関係情報の構築設定を取得できませんでした。",
   "settings.graph.saveError": "関係情報の構築設定を保存できませんでした。",
   "settings.uploadStorage.subtitle":
@@ -1271,10 +1265,10 @@ export const ja = {
   "knowledgeBases.graph.title": "関係情報グラフ",
   "knowledgeBases.graph.loading": "グラフを読み込んでいます",
   "knowledgeBases.graph.hint":
-    "このナレッジベースの関係情報(GraphRAG)を、エンティティ(ノード)と関係(エッジ)で俯瞰します。",
+    "このナレッジベースの文書と、その章・節の見出しのつながりを図で見られます。",
   "knowledgeBases.graph.empty": "関係情報がまだありません。",
   "knowledgeBases.graph.emptyHint":
-    "関係情報の構築(GraphRAG)を有効にして再取込すると、ここにグラフが表示されます。",
+    "設定の「関係情報の構築」で「構築する」を選んで文書を再取込すると、ここにグラフが表示されます。",
   "knowledgeBases.graph.error": "関係情報の取得に失敗しました。再試行してください。",
   "knowledgeBases.graph.truncated": "ノードが多いため一部のみ表示しています。",
 

@@ -847,15 +847,10 @@ GraphProfileName = GraphProfile
 
 
 class GraphProfileStatusData(BaseModel):
-    """知識グラフ構築の 1 プロファイルの選択状態と構築深度。"""
+    """関係情報の構築の 1 プロファイル(off = 構築しない / entities = 構築する)の選択状態。"""
 
     name: GraphProfileName
-    origin: str
-    recommended_for: list[str] = Field(default_factory=list)
     selected: bool
-    enabled: bool
-    build_claims: bool
-    build_community_summaries: bool
 
 
 class GraphSettingsData(BaseModel):
@@ -863,8 +858,6 @@ class GraphSettingsData(BaseModel):
 
     profile: GraphProfileName
     enabled: bool
-    build_claims: bool
-    build_community_summaries: bool
     profiles: list[GraphProfileStatusData] = Field(default_factory=list)
     config_source: Literal["runtime"]
 

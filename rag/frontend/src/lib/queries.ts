@@ -1719,7 +1719,7 @@ export function useExternalParserStatus(
   });
 }
 
-/** GraphRAG アダプター(知識グラフ構築)の runtime 設定。 */
+/** 関係情報の構築(構築する / しない)の runtime 設定。 */
 export function useGraphSettings() {
   return useQuery<GraphSettingsData>({
     queryKey: queryKeys.graphSettings,
@@ -1728,7 +1728,7 @@ export function useGraphSettings() {
   });
 }
 
-/** GraphRAG アダプター設定をランタイム保存。 */
+/** 関係情報の構築の設定をランタイム保存。 */
 export function useUpdateGraphSettings() {
   const qc = useQueryClient();
   return useMutation({
