@@ -442,6 +442,8 @@ export function SampleDataPage() {
             value={dataset}
             options={SAMPLE_DATASETS.map((item) => ({ value: item, label: t(`dataTools.sample.dataset.${item}`) }))}
             disabled={Boolean(loading) || schemaRefreshing}
+            // 右に出す種類の説明を読み上げる（#647）。
+            describedBy="sample-data-dataset-description"
             onValueChange={(nextDataset) => {
               setSampleInfo(null);
               setSampleResult(null);
@@ -455,7 +457,7 @@ export function SampleDataPage() {
             className="min-w-0"
           />
           <div className="grid min-w-0 gap-1 lg:min-h-11 lg:content-center">
-            <p className="text-sm text-fg-muted">{t(`dataTools.sample.dataset.${dataset}.description`)}</p>
+            <p id="sample-data-dataset-description" className="text-sm text-fg-muted">{t(`dataTools.sample.dataset.${dataset}.description`)}</p>
             <p className="text-sm text-fg-muted">{t(`dataTools.sample.dataset.${dataset}.example`)}</p>
           </div>
         </section>

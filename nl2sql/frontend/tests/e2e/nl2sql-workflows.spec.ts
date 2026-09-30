@@ -12406,6 +12406,8 @@ for (const sample of domainSamples) {
     await page.goto("/sample-data");
     const selector = page.getByRole("combobox", { name: "サンプルデータの種類" });
     await expectSelectFieldValue(selector, "hr");
+    // 右に出す種類の説明を aria-describedby で読み上げる（#647）。
+    await expect(selector).toHaveAccessibleDescription("部署・社員・プロジェクトと、それらを結び付けたビューを作成します。");
     await expect(await openSelectFieldOptions(selector)).toHaveText(["人事サンプルデータ", "売上サンプルデータ", "問い合わせサンプルデータ"]);
     await closeSelectFieldOptions(selector);
     const confirmation = page.getByLabel("実行確認語");
@@ -12414,6 +12416,8 @@ for (const sample of domainSamples) {
     await execute.click();
     await expect(page.getByTestId("sample-data-imported-count")).toHaveText("5");
     await chooseSelectFieldOption(selector, sample.dataset);
+    // 種類を切り替えると、読み上げる説明も切り替えた種類のものになる。
+    await expect(selector).toHaveAccessibleDescription(/^(顧客・商品・受注|顧客・問い合わせ分類)/);
     await expect(page.getByTestId("sample-data-imported-count")).toHaveText("0");
     await expect(confirmation).toHaveValue("");
     await expect(confirmation).toHaveAttribute("placeholder", "ADMIN_EXECUTE");

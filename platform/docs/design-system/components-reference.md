@@ -1116,6 +1116,39 @@ export declare function BlockedPageNotice(props: BlockedPageNoticeProps): JSX.El
 - e2e は combobox を押して一覧の選択肢を選びます（NL2SQL `tests/e2e/_helpers/select-field.ts`・Agent `e2e/fixtures/select-field.ts` の `chooseSelectFieldOption(combobox, "値" | { label })` / `expectSelectFieldValue`）。
 - 単体テストは `packages/ui/tests/select-field-disabled.test.tsx`。
 
+### SelectField — `emptyOptionLabel` / `describedBy`（#647）
+
+任意の選択欄を未選択へ戻す選択肢と、欄の外の説明への `aria-describedby` を足しました（既存の props・id・aria は変えていません）。
+
+```tsx
+<SelectField
+  id="scope-filter-column"
+  label={t("scopeFilterColumn")}
+  value={columnName}                         // 未選択は ""（値の型が "" を含むときだけ emptyOptionLabel を渡せる）
+  placeholder={t("scopeFilterColumnPlaceholder")}   // 未選択のときのボタンの文言（例:「列を選択」）
+  emptyOptionLabel={t("unselected")}         // 一覧の先頭の「未選択」。選ぶと onValueChange("")
+  options={columnOptions}
+  onValueChange={setColumnName}
+/>
+
+<SelectField id="dataset" label={t("dataset")} value={dataset} options={datasets}
+  describedBy="dataset-description"          // 右に置いた説明の id（helper・error の id の後ろに足す）
+  onValueChange={setDataset} />
+<p id="dataset-description">{t(`dataset.${dataset}.description`)}</p>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 未選択へ戻す手段は、消去のボタンではなく**一覧の先頭の空の値の選択肢**（`emptyOptionLabel`） | W3C APG の select-only combobox は、ボタンの中に別の操作（消去のボタン）を入れない（Tab の止まり・読み上げ名が増える）。ネイティブの select の `<option value="">` と同じ操作で、↑↓・Home / End・typeahead・Enter・読み上げがそのまま効く。`SearchableSelectField` には消去の手段が無く、そろえる既存の形は無かった。値の選択肢と区別できるよう文字は `--color-fg-muted`（選択中・強調中は他と同じ） |
+| 未選択のあいだ、ボタンは `placeholder`（無ければ `emptyOptionLabel`）を控えめの色で出す。`data-value` は `""` | 「列を選択」のように何を選ぶ欄かを見せ続ける。e2e は `chooseSelectFieldOption(combobox, "")` で未選択を選べる |
+| `required` の欄と、`options` に空の値が既にある欄（「すべて」「既定の Binding」など、空の値が意味を持つ選択肢）には出さない | 必須の欄を未選択へ戻しても送信の検証で止まるだけ（誤りは別の値を選び直す）。空の値を 2 つ並べない |
+| 値の選択肢が 0 件のあいだは開かない（「未選択」だけの一覧を出さない） | 候補の取得中に開いて空の一覧に見えるのを防ぐ（既存の動きのまま） |
+| `emptyOptionLabel` の型は `"" extends T ? string : never` | 空の値を取れない列挙（`SelectField<"hr" \| "sales">` など）に渡すと型エラーにし、`onValueChange` に想定外の `""` が届かないようにする |
+| `describedBy` は `helper`・`error` の id の後ろに足して `aria-describedby` に渡す（`SearchableSelectField` も同じ） | `TextField` の `aria-describedby` と同じ順。欄の横・下に置いた説明（NL2SQL のサンプルデータの種類の説明）を読み上げる |
+
+- 使っている所: NL2SQL の Deep Data Security（`ScopeExpressionEditor` の「列」・関連テーブル条件の「候補を選ぶ Profile」「関連テーブル」「対象テーブルの列」「関連テーブルの列」）、`describedBy` は NL2SQL のサンプルデータの種類。Agent の Run の「実行先 Binding」は既定が無いとき必須なので出さない。
+- 単体テストは `packages/ui/tests/select-field-empty-option.test.tsx`。
+
 ---
 
 ## PageHeader の「その他の操作」メニュー — 変更（#363）

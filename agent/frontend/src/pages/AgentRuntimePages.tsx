@@ -1212,6 +1212,7 @@ export function RunsPage() {
                     />
                     {/* 既定の Binding がない Agent だけ、実行先の選択が必須（submitRun の送信ガード）。 */}
                     {/* 空の値は「既定の Binding を使う」（既定があれば選べる選択肢、なければ未選択の表示）。 */}
+                    {/* 既定が無いときは必須なので、未選択へ戻す選択肢（emptyOptionLabel）は出さない（誤りは別の Binding を選び直す。#647）。 */}
                     <SelectField
                       id="run-binding"
                       label={t("run.form.binding")}

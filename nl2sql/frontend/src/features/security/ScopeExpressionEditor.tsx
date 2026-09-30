@@ -84,6 +84,8 @@ function ConditionEditor({
           className="min-w-0"
           value={filter.column_name}
           placeholder={text("scopeFilterColumnPlaceholder")}
+          // 任意の欄。誤って選んだ列を未選択に戻せるよう、一覧の先頭に「未選択」を出す（#647）。
+          emptyOptionLabel={text("expression.unselected")}
           options={columns
             .filter((c) => columnValueType(c.data_type))
             .map((c) => ({
@@ -558,6 +560,7 @@ function RelatedEditor({
         className="min-w-0"
         value={node.profile_id}
         placeholder={text("expression.select")}
+        emptyOptionLabel={text("expression.unselected")}
         options={[
           ...eligible.map((p) => ({ value: p.id, label: p.name })),
           // 保存済みの Profile が候補から外れても値を残し、利用できないことを示す。
@@ -596,6 +599,7 @@ function RelatedEditor({
         disabled={!catalog.data || catalog.isError}
         value={selectedTarget}
         placeholder={text("expression.select")}
+        emptyOptionLabel={text("expression.unselected")}
         options={[
           ...(catalog.data?.objects.map((name) => ({ value: name, label: name })) ?? []),
           ...(selectedTarget && !catalog.data?.objects.includes(selectedTarget)
@@ -674,6 +678,7 @@ function RelatedEditor({
                 disabled={node.relation_source !== "MANUAL"}
                 value={key.source_column}
                 placeholder={text("expression.select")}
+                emptyOptionLabel={text("expression.unselected")}
                 options={columns
                   .filter((c) => columnValueType(c.data_type))
                   .map((c) => ({ value: c.column_name, label: c.column_name }))}
@@ -695,6 +700,7 @@ function RelatedEditor({
                 disabled={node.relation_source !== "MANUAL"}
                 value={key.target_column}
                 placeholder={text("expression.select")}
+                emptyOptionLabel={text("expression.unselected")}
                 options={relatedColumns
                   .filter((c) => columnValueType(c.data_type))
                   .map((c) => ({ value: c.column_name, label: c.column_name }))}
