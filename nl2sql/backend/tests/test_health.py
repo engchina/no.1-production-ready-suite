@@ -3371,7 +3371,7 @@ def test_oracle_adapter_fetch_catalog_includes_constraints_row_counts_and_sample
     ]
     fake_db.sample_values = {
         ("INVOICES", "INVOICE_ID"): ["INV-001", "INV-002"],
-        ("INVOICES", "CUSTOMER_NAME"): ["青山商事", "東京製作所"],
+        ("INVOICES", "CUSTOMER_NAME"): ["架空商事", "見本製作所"],
     }
     adapter = _FakeRuntimeOracleAdapter(fake_db)
 
@@ -3387,7 +3387,7 @@ def test_oracle_adapter_fetch_catalog_includes_constraints_row_counts_and_sample
     assert table.columns[0].logical_name == "請求ID"
     assert table.columns[0].nullable is False
     assert table.columns[0].sample_values == ["INV-001", "INV-002"]
-    assert table.columns[1].sample_values == ["青山商事", "東京製作所"]
+    assert table.columns[1].sample_values == ["架空商事", "見本製作所"]
     assert any("FROM all_tab_columns" in sql for sql in fake_db.executed)
     assert any("FROM all_constraints uc" in sql for sql in fake_db.executed)
     assert any('SELECT DISTINCT "INVOICE_ID"' in sql for sql in fake_db.executed)
@@ -4612,7 +4612,7 @@ async def test_schema_import_csv_route_was_removed() -> None:
             "/api/schema/import-csv",
             json={
                 "table_name": "sample invoices",
-                "csv_text": "ID,NAME\n1,青山商事\n",
+                "csv_text": "ID,NAME\n1,架空商事\n",
                 "execute": False,
             },
         )

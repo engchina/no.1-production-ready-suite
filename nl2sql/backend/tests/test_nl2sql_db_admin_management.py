@@ -3828,7 +3828,7 @@ def test_table_export_xlsx_contains_column_information_only() -> None:
                         data_type="VARCHAR2(120)",
                         nullable=False,
                         comment="取引先名",
-                        sample_values=["青山商事"],
+                        sample_values=["架空商事"],
                     ),
                     SchemaColumn(
                         column_name="TOTAL_AMOUNT",
@@ -3865,7 +3865,7 @@ def test_table_export_xlsx_contains_column_information_only() -> None:
         "取引先名",
         "VARCHAR2(120)",
         "NO",
-        "青山商事",
+        "架空商事",
     ]
 
 
@@ -4189,7 +4189,7 @@ def test_upload_csv_accepts_cr_newlines_and_preserves_quoted_cr() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     import base64
 
-    csv_text = 'ORDER_ID,ORDER_NAME,NOTE\r1,青山商事,"第1行\r第2行"\r2,北海物産,通常行\r'
+    csv_text = 'ORDER_ID,ORDER_NAME,NOTE\r1,架空商事,"第1行\r第2行"\r2,見本物産,通常行\r'
     result = service.upload_db_admin_csv(
         DbAdminCsvUploadRequest(
             table_name="ORDERS",
@@ -4199,9 +4199,9 @@ def test_upload_csv_accepts_cr_newlines_and_preserves_quoted_cr() -> None:
     )
 
     assert result.row_count == 2
-    assert result.sample_rows[0]["ORDER_NAME"] == "青山商事"
+    assert result.sample_rows[0]["ORDER_NAME"] == "架空商事"
     assert result.sample_rows[0]["NOTE"] == "第1行\r第2行"
-    assert result.sample_rows[1]["ORDER_NAME"] == "北海物産"
+    assert result.sample_rows[1]["ORDER_NAME"] == "見本物産"
 
 
 def test_upload_csv_decodes_cp932_and_reports_encoding_warning() -> None:
@@ -4399,7 +4399,7 @@ def test_import_tabular_execute_requires_admin_execute_confirmation() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     import base64
 
-    content_base64 = base64.b64encode("ORDER_ID,ORDER_NAME\n1,青山商事\n".encode()).decode()
+    content_base64 = base64.b64encode("ORDER_ID,ORDER_NAME\n1,架空商事\n".encode()).decode()
     table_confirmation = service.import_db_admin_tabular(
         DbAdminImportTabularRequest(
             table_name="IMPORTED_ORDERS",
@@ -4448,7 +4448,7 @@ def test_import_tabular_create_submits_targeted_schema_job(
 
     monkeypatch.setattr(service, "_submit_schema_refresh_after_admin_mutation", submit)
 
-    content_base64 = base64.b64encode("ORDER_ID,ORDER_NAME\n1,青山商事\n".encode()).decode()
+    content_base64 = base64.b64encode("ORDER_ID,ORDER_NAME\n1,架空商事\n".encode()).decode()
     result = service.import_db_admin_tabular(
         DbAdminImportTabularRequest(
             table_name="IMPORTED_ORDERS",
@@ -4470,13 +4470,13 @@ def test_import_tabular_infers_explicit_char_semantics_for_japanese() -> None:
 
     columns, rows, warnings = service._parse_csv_sample(
         table_name="TEST_TABLE",
-        csv_text="ID,NAME\n1,株式会社青山\n",
+        csv_text="ID,NAME\n1,株式会社架空\n",
         max_rows=100,
         max_columns=10,
     )
 
     assert warnings == []
-    assert rows == [{"ID": "1", "NAME": "株式会社青山"}]
+    assert rows == [{"ID": "1", "NAME": "株式会社架空"}]
     assert [column.data_type for column in columns] == ["NUMBER", "VARCHAR2(6 CHAR)"]
     assert service._csv_import_ddl("TEST_TABLE", columns) == (
         'CREATE TABLE "TEST_TABLE" ("ID" NUMBER, "NAME" VARCHAR2(6 CHAR))'
@@ -4577,7 +4577,7 @@ def test_import_tabular_rejects_oversized_existing_byte_column_before_mutation(
         adapter.import_tabular_table(
             table_name="TEST_TABLE",
             columns=import_columns,
-            rows=[{"ID": "1", "NAME": "株式会社青山"}],
+            rows=[{"ID": "1", "NAME": "株式会社架空"}],
             mode="append",
         )
 
@@ -4671,14 +4671,14 @@ def test_import_tabular_truncate_mode_uses_transactional_delete(
                 nullable=False,
             ),
         ],
-        rows=[{"ID": "1", "NAME": "株式会社青山"}],
+        rows=[{"ID": "1", "NAME": "株式会社架空"}],
         mode="truncate",
     )
 
     assert result["row_count"] == 1
     assert any('DELETE FROM "TEST_TABLE"' in sql for sql in cursor.executed)
     assert not any("TRUNCATE TABLE" in sql for sql in cursor.executed)
-    assert cursor.batch_rows == [{"c0": 1, "c1": "株式会社青山"}]
+    assert cursor.batch_rows == [{"c0": 1, "c1": "株式会社架空"}]
     assert connection.committed is True
 
 
@@ -4755,7 +4755,7 @@ def test_import_tabular_create_drops_new_table_when_insert_batch_fails(
                     nullable=False,
                 )
             ],
-            rows=[{"NAME": "株式会社青山"}],
+            rows=[{"NAME": "株式会社架空"}],
             mode="create",
         )
 
