@@ -10,9 +10,10 @@ import {
   type DataTableColumn,
   type EntityAction,
   RowActionMenu,
+  SearchableSelectField,
+  type SearchableSelectOption,
   SelectField,
   type SelectFieldOption,
-  ToggleChip,
   TableSkeleton,
   ClearActionButton,
   SearchField,
@@ -47,8 +48,13 @@ import {
   useDeleteDocument,
   useDocuments,
   useEnqueueDocumentIngestionJob,
-  useAllKnowledgeBases,
+  useKnowledgeBaseChoices,
+  useKnowledgeBasesByIds,
 } from "@/lib/queries";
+import {
+  knowledgeBaseOptions,
+  knowledgeBaseSelectLabels,
+} from "@/components/knowledge-bases/KnowledgeBaseMultiSelect";
 import { useSelection } from "@/lib/useSelection";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
@@ -116,13 +122,25 @@ export function FileListClient() {
     },
     { graceActive }
   );
-  // 絞り込みの選択肢は有効な KB をすべて取る（先頭の 100 件で打ち切らない。#302）。
-  const knowledgeBases = useAllKnowledgeBases({ status: "ACTIVE" });
+  // 絞り込みの選択肢: 200 件以下は全件を手元で絞り込み、超えるとサーバー側で検索する（全件を読まない。#578）。
+  const [knowledgeBaseQuery, setKnowledgeBaseQuery] = useState("");
+  const knowledgeBases = useKnowledgeBaseChoices({ status: "ACTIVE", q: knowledgeBaseQuery });
+  // 選んでいる KB は ID で引く（候補のページに無くても名前を出し、削除・アーカイブを判定する）。
+  const selectedKnowledgeBaseLookup = useKnowledgeBasesByIds(
+    knowledgeBaseId === "ALL" ? [] : [knowledgeBaseId]
+  );
+  const selectedKnowledgeBase =
+    knowledgeBaseId === "ALL"
+      ? null
+      : (selectedKnowledgeBaseLookup.data?.items.find((item) => item.id === knowledgeBaseId) ?? null);
   // 復元した KB 絞り込みが削除・アーカイブ済みなら、その条件だけ「すべて」に戻す。
+  // 別の ID の結果を出している間・DB の縮退応答（warning 付きの空一覧）では判定しない。
   const knowledgeBaseFilterMissing =
     knowledgeBaseId !== "ALL" &&
-    Boolean(knowledgeBases.data) &&
-    !knowledgeBases.data?.some((knowledgeBase) => knowledgeBase.id === knowledgeBaseId);
+    selectedKnowledgeBaseLookup.isSuccess &&
+    !selectedKnowledgeBaseLookup.isPlaceholderData &&
+    (selectedKnowledgeBaseLookup.data.warning_messages?.length ?? 0) === 0 &&
+    selectedKnowledgeBase?.status !== "ACTIVE";
   useEffect(() => {
     if (knowledgeBaseFilterMissing) {
       setView((current) => ({ ...current, knowledgeBaseId: "ALL", offset: 0 }));
@@ -154,18 +172,28 @@ export function FileListClient() {
   }, [correctedOffset, setView]);
   const ingestibleSelected = selectedDocuments.filter((d) => INGESTIBLE.has(d.status));
   const bulkBusy = bulkIngest !== null || bulkDelete !== null || deleteImpactPending;
-  const knowledgeBaseOptions = useMemo<SelectFieldOption<string>[]>(
+  const allKnowledgeBasesOption = useMemo<SearchableSelectOption>(
+    () => ({ value: "ALL", label: t("fileList.knowledgeBaseFilter.all") }),
+    []
+  );
+  const knowledgeBaseFilterOptions = useMemo<SearchableSelectOption[]>(
     () => [
-      { value: "ALL", label: t("fileList.knowledgeBaseFilter.all") },
-      ...((knowledgeBases.data ?? []).map((knowledgeBase) => ({
-        value: knowledgeBase.id,
-        label: knowledgeBase.name,
-        description: t("knowledgeBaseScope.documentCount", {
-          count: knowledgeBase.document_count,
-        }),
-      })) satisfies SelectFieldOption<string>[]),
+      // サーバー側の検索では「すべて」は検索語に一致しないため、検索語が無いときだけ先頭に置く。
+      ...(knowledgeBases.remote && knowledgeBaseQuery ? [] : [allKnowledgeBasesOption]),
+      ...knowledgeBaseOptions(knowledgeBases.items, { local: !knowledgeBases.remote }).map(
+        // 絞り込みでは「最多」を付けない（文書数は右端に出す）。
+        (option) => ({ ...option, badge: undefined })
+      ),
     ],
-    [knowledgeBases.data]
+    [allKnowledgeBasesOption, knowledgeBaseQuery, knowledgeBases.items, knowledgeBases.remote]
+  );
+  const statusOptions = useMemo<SelectFieldOption<FileStatus | "ALL">[]>(
+    () =>
+      FILTERS.map((value) => ({
+        value,
+        label: value === "ALL" ? t("fileList.filterAll") : t(`status.${value}`),
+      })),
+    []
   );
 
   const resetView = (fn: () => void) => {
@@ -342,44 +370,66 @@ export function FileListClient() {
           isRetrying={query.isFetching}
         />
 
-        {/* フィルタ + 検索 */}
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-1" role="group" aria-label={t("fileList.filterAll")}>
-            {FILTERS.map((f) => (
-              <ToggleChip
-                key={f}
-                selected={filter === f}
-                onClick={() => resetView(() => setFilter(f))}
-              >
-                {f === "ALL" ? t("fileList.filterAll") : t(`status.${f}`)}
-              </ToggleChip>
-            ))}
-          </div>
-          <div className="flex flex-wrap items-end gap-3">
-            <SelectField
-              id="file-list-knowledge-base"
-              label={t("fileList.knowledgeBaseFilter.label")}
-              value={knowledgeBaseId}
-              options={knowledgeBaseOptions}
-              onValueChange={(value) => resetView(() => setKnowledgeBaseId(value))}
-              className="w-60 [&_label]:text-xs"
-              buttonClassName="bg-surface"
-            />
-            <SearchField
-              id="file-list-search"
-              label={t("fileList.searchPlaceholder")}
-              labelHidden
-              value={q}
-              onSearch={applySearch}
-              clearLabel={t("common.clearSearch")}
-              resultCountLabel={
-                page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
-              }
-              maxLength={FILE_LIST_QUERY_MAX_LENGTH}
-              placeholder={t("fileList.searchPlaceholder")}
-              className="w-56"
-            />
-          </div>
+        {/* 絞り込み（状態・ナレッジベース）+ 検索。状態は 11 種あり ToggleChip では 2 行以上に折り返すため、
+            ナレッジベースと同じ選択の欄にして 1 行にそろえる（#578）。 */}
+        <div className="flex flex-wrap items-end gap-3">
+          <SelectField
+            id="file-list-status"
+            label={t("fileList.statusFilter.label")}
+            value={filter}
+            options={statusOptions}
+            onValueChange={(value) => resetView(() => setFilter(value))}
+            className="w-full sm:w-48 [&_label]:text-xs"
+            buttonClassName="bg-surface"
+          />
+          <SearchableSelectField
+            id="file-list-knowledge-base"
+            label={t("fileList.knowledgeBaseFilter.label")}
+            value={knowledgeBaseId}
+            options={knowledgeBaseFilterOptions}
+            selectedOption={
+              knowledgeBaseId === "ALL"
+                ? allKnowledgeBasesOption
+                : selectedKnowledgeBase
+                  ? { value: selectedKnowledgeBase.id, label: selectedKnowledgeBase.name }
+                  : null
+            }
+            onValueChange={(value) => resetView(() => setKnowledgeBaseId(value))}
+            onQueryChange={setKnowledgeBaseQuery}
+            remote={
+              knowledgeBases.remote
+                ? {
+                    total: knowledgeBases.matchedTotal,
+                    hasMore: knowledgeBases.hasMore,
+                    loadingMore: knowledgeBases.loadingMore,
+                    searching: knowledgeBases.searching,
+                    onLoadMore: knowledgeBases.loadMore,
+                  }
+                : undefined
+            }
+            labels={{
+              ...knowledgeBaseSelectLabels(),
+              // 絞り込みは選ぶだけ（「追加」ではない）。
+              searchPlaceholder: t("knowledgeBasePicker.searchPlaceholder"),
+            }}
+            // 「利用できるすべてのナレッジベース」が 1 行に収まる幅。長い名前は切らずに折り返す。
+            className="w-full sm:w-[22rem] [&_label]:text-xs"
+            buttonClassName="bg-surface"
+          />
+          <SearchField
+            id="file-list-search"
+            label={t("fileList.searchPlaceholder")}
+            labelHidden
+            value={q}
+            onSearch={applySearch}
+            clearLabel={t("common.clearSearch")}
+            resultCountLabel={
+              page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
+            }
+            maxLength={FILE_LIST_QUERY_MAX_LENGTH}
+            placeholder={t("fileList.searchPlaceholder")}
+            className="w-full sm:ml-auto sm:w-64"
+          />
         </div>
 
         {knowledgeBases.isError ? (

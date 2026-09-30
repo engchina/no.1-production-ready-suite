@@ -1,72 +1,83 @@
 "use client";
 
+import { SearchableMultiSelect, type SearchableSelectOption } from "@engchina/production-ready-ui";
 import { useMemo } from "react";
 
-import {
-  MultiSelectCombobox,
-  type MultiSelectComboboxFieldProps,
-} from "@/components/ui/multi-select-combobox";
 import { DEFAULT_BUSINESS_VIEW_NAME, type BusinessViewSummary } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
-/** 業務ビューの複数選択コンボボックス。 */
+/**
+ * 業務ビューの複数選択（検索 ＋ 候補の一覧 ＋ 選択済みの chip。共有の SearchableMultiSelect。#578）。
+ * 業務ビューは件数が少ない前提で、全件を画面側で絞り込む。
+ */
 export function BusinessViewPickerGrid({
+  id,
+  labelledBy,
   items,
   selectedIds,
   onChange,
   disabled = false,
   ariaLabel,
-  field,
+  required = false,
+  invalid = false,
+  describedBy,
 }: {
+  /** 検索欄の id（外の FieldLabel の htmlFor と結ぶ）。 */
+  id: string;
+  /** 外に出している見出し（FieldLabel）の id。 */
+  labelledBy?: string;
   items: BusinessViewSummary[];
   selectedIds: string[];
   onChange: (ids: string[]) => void;
   disabled?: boolean;
   ariaLabel: string;
-  /** 入力欄の id・必須・エラー（外の FieldLabel と結ぶとき。#531）。 */
-  field?: MultiSelectComboboxFieldProps;
+  required?: boolean;
+  invalid?: boolean;
+  describedBy?: string;
 }) {
   const primaryId = selectedIds[0] ?? null;
-  const sortedItems = useMemo(() => sortBusinessViews(items), [items]);
+  const options = useMemo<SearchableSelectOption[]>(
+    () =>
+      sortBusinessViews(items).map((view) => ({
+        value: view.id,
+        label: view.name,
+        searchText: `${view.name} ${view.description ?? ""}`,
+        meta: t("businessViewPicker.knowledgeBaseCount", { count: view.knowledge_base_count }),
+        badge: view.id === primaryId ? t("businessViewPicker.primary") : undefined,
+        hideable: view.knowledge_base_count === 0,
+      })),
+    [items, primaryId]
+  );
 
   return (
-    <MultiSelectCombobox
-      items={sortedItems}
-      selectedIds={selectedIds}
-      onChange={onChange}
+    <SearchableMultiSelect
+      id={id}
+      label={ariaLabel}
+      labelHidden
+      labelledBy={labelledBy}
+      required={required}
+      invalid={invalid}
+      describedBy={describedBy}
+      options={options}
+      value={selectedIds}
+      onValueChange={onChange}
       disabled={disabled}
-      ariaLabel={ariaLabel}
-      getId={(view) => view.id}
-      getName={(view) => view.name}
-      getSearchText={(view) => `${view.name} ${view.description ?? ""}`}
-      getMetaText={(view) =>
-        t("businessViewPicker.knowledgeBaseCount", {
-          count: view.knowledge_base_count,
-        })
-      }
-      isEmptyItem={(view) => view.knowledge_base_count === 0}
-      getChipBadge={(view) =>
-        view.id === primaryId ? t("businessViewPicker.primary") : null
-      }
-      getOptionBadge={(view) =>
-        view.id === primaryId ? t("businessViewPicker.primary") : null
-      }
-      strings={{
-        addPlaceholder: t("businessViewPicker.addPlaceholder"),
-        toggleListAria: t("businessViewPicker.toggleListAria"),
+      labels={{
+        searchPlaceholder: t("businessViewPicker.addPlaceholder"),
+        clearSearch: t("common.clearSearch"),
+        toggleList: t("businessViewPicker.toggleListAria"),
         removeChip: (name) => t("businessViewPicker.removeChip", { name }),
+        selectedList: () => t("businessViewPicker.selectedList"),
         count: (shown, total) => t("businessViewPicker.count", { shown, total }),
         noMatch: (query) => t("businessViewPicker.noMatch", { query }),
-        emptyList: t("businessViewPicker.emptyList"),
+        empty: t("businessViewPicker.emptyList"),
         selectedCount: (count) => t("businessViewPicker.selectedCount", { count }),
         selectAllVisible: t("businessViewPicker.selectAllVisible"),
         clear: t("businessViewPicker.clear"),
         done: t("businessViewPicker.done"),
-        hideEmpty: t("businessViewPicker.hideEmpty"),
-        hiddenEmptyCount: (count) => t("businessViewPicker.hiddenEmptyCount", { count }),
+        hideHideable: t("businessViewPicker.hideEmpty"),
+        hiddenCount: (count) => t("businessViewPicker.hiddenEmptyCount", { count }),
       }}
-      triggerClassName="bg-surface-sunken focus-within:bg-surface-hover"
-      {...field}
     />
   );
 }
