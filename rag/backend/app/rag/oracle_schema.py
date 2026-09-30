@@ -89,11 +89,22 @@ def vector_index_reindex_sql(
 
 @dataclass(frozen=True)
 class OracleSchemaSection:
-    """Oracle schema artifact の論理セクション。"""
+    """Oracle schema artifact の論理セクション。
+
+    `destructive_note` は、データを消す（テーブルの DROP・行の DELETE を含む）migration の印と、
+    消えるデータ・適用の前にすることの説明（#619）。空でない migration が未適用なら、
+    「作成・更新」（画面・`system_schema_cli initialize`）は明示の承認が無ければ止まり、
+    実 Oracle のテストの fixture は当てない。checksum（SQL だけから作る）には含めない。
+    """
 
     name: str
     table_name: str
     sql: str
+    destructive_note: str = ""
+
+    @property
+    def destructive(self) -> bool:
+        return bool(self.destructive_note)
 
 
 def oracle_system_schema_control_sql() -> str:
@@ -382,6 +393,10 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260629_002_drop_kb_chunk_set_bindings",
             table_name="rag_kb_chunk_set_bindings",
             sql=_drop_kb_chunk_set_bindings_migration_sql(),
+            destructive_note=(
+                "使わなくなったテーブル rag_kb_chunk_set_bindings（ナレッジベースと chunk set の"
+                "旧い対応）を削除します。"
+            ),
         ),
         OracleSchemaSection(
             name="20260629_003_ingestion_jobs_settings_overrides",
@@ -477,6 +492,9 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260928_001_retire_dashboard_permission",
             table_name="rag_role_permissions",
             sql=_retire_dashboard_permission_migration_sql(),
+            destructive_note=(
+                "ロールに付いた、廃止済みのメニュー権限 menu.dashboard の行を削除します。"
+            ),
         ),
         OracleSchemaSection(
             name="20260928_002_answer_record_owner",
@@ -523,6 +541,12 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260930_005_retire_standard_engine_objects",
             table_name="rag_agent_memories",
             sql=_retire_standard_engine_objects_migration_sql(),
+            destructive_note=(
+                "旧い標準の回答フローのテーブル rag_agent_memories・rag_prompt_versions・"
+                "rag_generation_settings を削除し（PURGE のため復元できません）、ロールに付いた"
+                "廃止済みのメニュー権限の行を削除します。残す行は先に app.rag.legacy_export で"
+                "書き出してください。"
+            ),
         ),
     ]
 
@@ -582,6 +606,8 @@ def oracle_schema_migration_manifest(
                 "table_name": section.table_name,
                 "sha256": _sha256(section.sql),
                 "statement_count": len(split_sql_statements(section.sql)),
+                # データを消す migration（#619）。SQLcl などで直接当てる前に書き出しを確かめる。
+                "destructive": section.destructive,
             }
             for section in resolved_sections
         ],

@@ -655,6 +655,8 @@ initialize_database_schema() {
   log "WARNING: RAG system schema initialization failed. Check ADB reachability and ${PLATFORM_ENV_FILE}."
   log "Recovery: cd ${BACKEND_DIR} && sudo -u ${SERVICE_USER} HOME=${SERVICE_HOME} .venv/bin/python -m app.rag.system_schema_cli initialize"
   log "Recovery: or open System settings > Database > RAG system tables in the application."
+  # データを削除する未適用の migration は承認が無ければ適用しない（#619。docs/deployment.md）。
+  log "If status shows pending_destructive_migrations, export the data first (docs/deployment.md), then run initialize --allow-destructive."
   return 0
 }
 

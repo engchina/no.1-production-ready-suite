@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from pytest import MonkeyPatch
@@ -122,7 +124,7 @@ def test_initialize_system_tables_returns_typed_operation(monkeypatch: MonkeyPat
 
     assert response.status_code == 200
     assert response.json()["data"]["operation"] == "initialized"
-    assert captured == {"recreate": False, "confirmation": None}
+    assert captured == {"recreate": False, "confirmation": None, "allow_destructive": False}
 
 
 def test_initialize_system_tables_preserves_retryable_error(monkeypatch: MonkeyPatch) -> None:
@@ -295,3 +297,87 @@ def test_delete_orphaned_rows_validates_body_and_maps_business_errors(
     assert conflict.status_code == 409
     assert conflict.json()["error_code"] == "SCHEMA_ORPHAN_ROWS_CHANGED"
     assert "retry-after" not in conflict.headers
+
+
+_DESTRUCTIVE_MIGRATION = {
+    "name": "20260930_005_retire_standard_engine_objects",
+    "description": "rag_agent_memories などを削除します。",
+}
+
+
+def test_system_tables_status_returns_pending_destructive_migrations(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """データを消す未適用の migration を状態に出す（#619）。旧い形の応答では空の一覧。"""
+    monkeypatch.setattr(
+        system_schema_manager,
+        "status",
+        lambda: {
+            **_status_payload(),
+            "status": "outdated",
+            "pending_versions": [_DESTRUCTIVE_MIGRATION["name"]],
+            "pending_destructive_migrations": [_DESTRUCTIVE_MIGRATION],
+        },
+    )
+    monkeypatch.setattr(asyncio, "to_thread", _run_inline)
+
+    response = client.get("/api/settings/database/system-tables")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["pending_destructive_migrations"] == [_DESTRUCTIVE_MIGRATION]
+
+    monkeypatch.setattr(system_schema_manager, "status", _status_payload)
+    response = client.get("/api/settings/database/system-tables")
+    assert response.json()["data"]["pending_destructive_migrations"] == []
+
+
+@contextmanager
+def _null_connection() -> Iterator[None]:
+    yield None
+
+
+def test_initialize_system_tables_requires_destructive_approval(monkeypatch: MonkeyPatch) -> None:
+    """承認（allow_destructive）の無い作成・更新は 409 で止まり、承認があれば進む（#619）。"""
+    calls: list[dict[str, Any]] = []
+    status = {
+        **_status_payload(),
+        "status": "outdated",
+        "pending_versions": [_DESTRUCTIVE_MIGRATION["name"]],
+        "pending_destructive_migrations": [_DESTRUCTIVE_MIGRATION],
+    }
+    monkeypatch.setattr(system_schema_manager, "status", lambda: status)
+
+    def initialize_on(_connection: Any, _owner: str, *, recreate: bool) -> dict[str, Any]:
+        calls.append({"recreate": recreate})
+        return {
+            **_status_payload(),
+            "operation": "migrated",
+            "dropped_object_count": 3,
+            "created_object_count": 0,
+        }
+
+    # lease・DB 接続は fake にし、manager の承認の判定だけを実物で通す。
+    monkeypatch.setattr(system_schema_manager, "_ensure_control_schema", lambda: None)
+    monkeypatch.setattr(system_schema_manager, "_claim_lease", lambda *_args: None)
+    monkeypatch.setattr(system_schema_manager, "_initialize_on", initialize_on)
+    monkeypatch.setattr(system_schema_manager, "_connection_factory", _null_connection)
+    monkeypatch.setattr(asyncio, "to_thread", _run_inline)
+
+    refused = client.post(
+        "/api/settings/database/system-tables/initialize",
+        json={"recreate": False},
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["error_code"] == "SCHEMA_DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED"
+    assert _DESTRUCTIVE_MIGRATION["name"] in refused.json()["error_messages"][0]
+    assert calls == []
+
+    approved = client.post(
+        "/api/settings/database/system-tables/initialize",
+        json={"recreate": False, "allow_destructive": True},
+    )
+
+    assert approved.status_code == 200
+    assert approved.json()["data"]["operation"] == "migrated"
+    assert calls == [{"recreate": False}]

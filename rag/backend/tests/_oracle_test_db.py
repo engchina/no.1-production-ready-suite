@@ -79,12 +79,53 @@ def _schema_connection() -> Iterator[Any]:
         connection.close()
 
 
+def destructive_migration_skip_reason(status: dict[str, Any]) -> str | None:
+    """データを消す未適用の migration があれば、実 Oracle のテストを skip する理由を返す（#619）。
+
+    テストの開始時に、共有の開発 DB のデータを書き出しの前に消さないため、fixture は
+    破壊的な migration を当てない。適用は利用者が書き出しを済ませてから明示的に行う。
+    """
+
+    pending = status.get("pending_destructive_migrations") or []
+    if not pending:
+        return None
+    names = ", ".join(str(item["name"]) for item in pending)
+    return (
+        f"データを削除する migration（{names}）が未適用のため、実 Oracle のテストを skip します"
+        "（テストの fixture は破壊的な migration を当てません。#619）。テスト専用の schema で"
+        "流すか、必要なデータを書き出してから `uv run python -m app.rag.system_schema_cli "
+        "initialize --allow-destructive` で適用してください。"
+    )
+
+
+# 実 Oracle のテストを skip する理由（`ensure_schema` が決める。None なら実行してよい）。
+_schema_skip_reason: str | None = None
+
+
+def schema_skip_reason() -> str | None:
+    """`ensure_schema` が実 Oracle のテストを止めた理由（止めていなければ None）。"""
+    return _schema_skip_reason
+
+
 @lru_cache(maxsize=1)
-def ensure_schema() -> None:
-    """RAG スキーマ（rag_documents / rag_chunks など）を冪等に作成する。"""
-    result = SystemSchemaManager(_schema_connection).initialize()
+def ensure_schema() -> str | None:
+    """RAG スキーマ（rag_documents / rag_chunks など）を冪等に作成する。
+
+    データを消す未適用の migration があるときは何も当てず、skip の理由を返す（#619）。
+    非破壊の migration は今までどおり当てる。
+    """
+    global _schema_skip_reason
+    manager = SystemSchemaManager(_schema_connection)
+    reason = destructive_migration_skip_reason(manager.status())
+    if reason is not None:
+        _schema_skip_reason = reason
+        return reason
+    # allow_destructive は渡さない（状態の確認と実行の間に増えても、manager が止める）。
+    result = manager.initialize()
     if result["status"] != "ready":
         raise RuntimeError("RAG system schema の初期化後 status が ready ではありません。")
+    _schema_skip_reason = None
+    return None
 
 
 def capture_baseline() -> None:

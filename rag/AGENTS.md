@@ -195,6 +195,8 @@ npm run dev   # /api は BACKEND_URL を明示したときだけ proxy する（
 - 変更後は該当範囲の lint・型チェック・テストを実行し、完了報告に実行結果を明記する。
 - ローカルは変更範囲の検査にする（#339）。backend は関係するテストファイル（`uv run pytest tests/test_<対象>.py`）と `uv run pytest --lf -x`、frontend は `npm run lint` / `npm run build` と `npx vitest related <変更したファイル>`（または `npx vitest --changed`）、e2e は関係する spec だけ（`npx playwright test e2e/<対象>.spec.ts`）。backend の全テスト・`mypy .`・`pip-audit`、Playwright の smoke / 全件は CI と nightly に任せる。
 - UI/UX 変更は Playwright で desktop と mobile 幅を確認する。空/読込/エラー/ブロック状態も必要に応じて確認する。
+- **実 Oracle のテスト（`oracle_db` の fixture）は、共有の開発 DB ではなくテスト専用の schema（DB ユーザー）で流すことを推奨する（#619）。** fixture はテストの開始時に未適用の migration を当て、テストが作った行を消すため、共有の DB では並行作業のチェックアウトの migration が手元のデータに当たる。接続先は共通 `.env` の `PLATFORM_ORACLE_*` を読むので、テスト専用のユーザーを書いた別のファイルを `PLATFORM_ENV_FILE=<ファイル> uv run pytest` で渡す。データを削除する migration（テーブルの DROP・行の DELETE）が未適用なら、fixture は何も当てずに実 Oracle のテストを skip し、理由を出す（適用は書き出しの後に `system_schema_cli initialize --allow-destructive` で行う。docs/deployment.md の「既存環境の更新手順の共通の注意」）。
+- データを削除する migration を足すときは、`oracle_schema.py` の `OracleSchemaSection` に `destructive_note`（削除されるデータと、前にする書き出し）を書く。付け忘れは `tests/test_system_schema_manager.py` が SQL から検出する。
 
 ## コーディング規約・重要ルール
 

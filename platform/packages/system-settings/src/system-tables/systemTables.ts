@@ -47,6 +47,7 @@ export function isSystemTablesStatusData(value: unknown): value is SystemTablesS
     (data.orphaned_foreign_keys === undefined || Array.isArray(data.orphaned_foreign_keys)) &&
     (data.mismatched_foreign_keys === undefined || Array.isArray(data.mismatched_foreign_keys)) &&
     (data.disabled_foreign_keys === undefined || Array.isArray(data.disabled_foreign_keys)) &&
+    (data.pending_destructive_migrations === undefined || Array.isArray(data.pending_destructive_migrations)) &&
     Array.isArray(data.tables)
   );
 }

@@ -43,6 +43,7 @@ import {
 } from "./systemTables";
 import type {
   SystemObjectMetadata,
+  SystemTableDestructiveMigration,
   SystemTableForeignKey,
   SystemTableSchemaStatus,
   SystemTablesApi,
@@ -112,6 +113,12 @@ export interface SystemTablesCardProps {
    * 破壊的な操作のため、これと API（`deleteSystemTableOrphanedRows`）の両方があるときだけ削除の操作を出す。
    */
   confirmDeleteOrphans?: (request: SystemTablesConfirmRequest) => Promise<boolean>;
+  /**
+   * データを消す未適用の migration（状態の `pending_destructive_migrations`。#619）があるときに、
+   * 「作成・更新」の前に出す確認ダイアログ。承認したときだけ `allow_destructive` を送る。
+   * 無ければ承認を送らず、backend が 409 で止める（その文言を出す）。
+   */
+  confirmDestructiveMigrations?: (request: SystemTablesConfirmRequest) => Promise<boolean>;
 }
 
 /**
@@ -130,6 +137,7 @@ export function SystemTablesCard({
   confirmRecreate,
   renderObjectName,
   confirmDeleteOrphans,
+  confirmDestructiveMigrations,
 }: SystemTablesCardProps) {
   const m: SystemTablesMessages = { ...SYSTEM_TABLES_MESSAGES, ...messages };
   const text = (key: SystemTablesMessageKey, params?: Record<string, string | number>) =>
@@ -153,6 +161,8 @@ export function SystemTablesCard({
   // 削除規則の違い・無効化（#511。RAG だけが返す）。
   const mismatchedForeignKeys = data?.mismatched_foreign_keys ?? [];
   const disabledForeignKeys = data?.disabled_foreign_keys ?? [];
+  // データを消す未適用の migration（#619。RAG だけが返す）。
+  const destructiveMigrations = data?.pending_destructive_migrations ?? [];
   // 参照先のない行の削除は、権限・API・確認ダイアログがそろったときだけ出す（#511）。
   const canDeleteOrphans =
     canManage && Boolean(api.deleteSystemTableOrphanedRows) && Boolean(confirmDeleteOrphans);
@@ -177,12 +187,16 @@ export function SystemTablesCard({
     describeOperationError?.(cause) ??
     `${text("settings.database.systemTables.error.operation")} ${text("settings.database.systemTables.error.recovery")}`;
 
-  const execute = (recreate: boolean) => {
+  const execute = (recreate: boolean, allowDestructive = false) => {
     if (busy || !canManage || (recreate && !recreateConfirmed)) return;
     setRecreateInput("");
     setOperationError("");
     operation.mutate(
-      { recreate, confirmation: recreate ? phrase : undefined },
+      {
+        recreate,
+        confirmation: recreate ? phrase : undefined,
+        ...(allowDestructive ? { allow_destructive: true } : {}),
+      },
       {
         onSuccess: (result) => {
           toast.success(text(`settings.database.systemTables.operation.${result.operation}`));
@@ -190,6 +204,25 @@ export function SystemTablesCard({
         onError: (cause) => setOperationError(describeError(cause)),
       },
     );
+  };
+
+  // データを消す未適用の migration があれば、確認ダイアログで承認させてから送る（#619）。
+  const requestInitialize = async () => {
+    if (busy || !canManage) return;
+    if (destructiveMigrations.length === 0 || !confirmDestructiveMigrations) {
+      execute(false);
+      return;
+    }
+    const params = {
+      count: formatNumber(destructiveMigrations.length),
+      names: destructiveMigrations.map((migration) => migration.name).join(", "),
+    };
+    const confirmed = await confirmDestructiveMigrations({
+      title: text("settings.database.systemTables.destructive.confirmTitle", params),
+      description: text("settings.database.systemTables.destructive.confirmDescription", params),
+      confirmLabel: text("settings.database.systemTables.destructive.confirmLabel"),
+    });
+    if (confirmed) execute(false, true);
   };
 
   const requestDeleteOrphans = async (foreignKey: SystemTableForeignKey) => {
@@ -316,9 +349,11 @@ export function SystemTablesCard({
 
             {data.status !== "ready" ? (
               <Banner severity={data.status === "missing" ? "info" : "warning"} title={statusLabel(data.status)}>
-                {text(`settings.database.systemTables.statusHint.${data.status}`, {
-                  count: data.missing_objects.length,
-                })}
+                {data.status === "outdated" && destructiveMigrations.length > 0
+                  ? text("settings.database.systemTables.statusHint.outdatedDestructive")
+                  : text(`settings.database.systemTables.statusHint.${data.status}`, {
+                      count: data.missing_objects.length,
+                    })}
                 {missingForeignKeys.length > 0 ? (
                   <div className="mt-2" data-testid="system-tables-missing-foreign-keys">
                     <p>
@@ -349,6 +384,18 @@ export function SystemTablesCard({
                     <ForeignKeyList foreignKeys={disabledForeignKeys} text={text} />
                   </div>
                 ) : null}
+              </Banner>
+            ) : null}
+
+            {destructiveMigrations.length > 0 ? (
+              <Banner severity="warning" title={text("settings.database.systemTables.destructive.title")}>
+                <div data-testid="system-tables-destructive-migrations">
+                  <p>{text("settings.database.systemTables.destructive.description")}</p>
+                  <DestructiveMigrationList migrations={destructiveMigrations} />
+                  {canManage && confirmDestructiveMigrations ? (
+                    <p className="mt-1.5">{text("settings.database.systemTables.destructive.approvalHint")}</p>
+                  ) : null}
+                </div>
               </Banner>
             ) : null}
 
@@ -424,7 +471,7 @@ export function SystemTablesCard({
                 <Button
                   type="button"
                   size="md"
-                  onClick={() => execute(false)}
+                  onClick={() => void requestInitialize()}
                   loading={operation.isPending && operation.variables?.recreate === false}
                   disabled={busy}
                   icon={DatabaseZap}
@@ -563,6 +610,23 @@ function ForeignKeyList({
           </li>
         );
       })}
+    </ul>
+  );
+}
+
+/**
+ * データを消す未適用の migration の一覧（名前は等幅、説明は Banner の本文色のまま。#619）。
+ * 説明は backend が返す（消えるデータと、適用の前にすること）。
+ */
+function DestructiveMigrationList({ migrations }: { migrations: SystemTableDestructiveMigration[] }) {
+  return (
+    <ul className="mt-1.5 space-y-1.5">
+      {migrations.map((migration) => (
+        <li key={migration.name} className="min-w-0">
+          <span className="block font-mono text-xs font-medium [overflow-wrap:anywhere]">{migration.name}</span>
+          <span className="block text-xs leading-relaxed">{migration.description}</span>
+        </li>
+      ))}
     </ul>
   );
 }

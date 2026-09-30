@@ -49,6 +49,9 @@ from pr_system_settings.system_schema import (
     SystemSchemaOrphanOperation,
     SystemSchemaStatus,
 )
+from pr_system_settings.system_schema import (
+    SystemTableDestructiveMigrationData as SystemTableDestructiveMigrationData,
+)
 from pr_system_settings.system_schema import SystemTableForeignKeyData as SystemTableForeignKeyData
 from pr_system_settings.system_schema import SystemTableOperationState as SystemTableOperationState
 from pr_system_settings.system_schema import (
@@ -172,6 +175,10 @@ class SystemTablesStatusData(BaseModel):
     schema_head: str
     applied_versions: list[str]
     pending_versions: list[str]
+    # 未適用の、データを消す migration（「作成・更新」の前に承認が要る。#619）。
+    pending_destructive_migrations: list[SystemTableDestructiveMigrationData] = Field(
+        default_factory=list
+    )
     expected_object_count: int
     existing_object_count: int
     expected_table_count: int

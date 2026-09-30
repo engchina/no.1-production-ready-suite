@@ -143,6 +143,35 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `RAG_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順の共通の注意（データを削除する migration。#619）
+
+システムテーブルの migration には、テーブルの DROP や行の DELETE で**データを削除するもの**がある（例: #596 の `20260930_005_retire_standard_engine_objects`）。削除したデータは元に戻せないため、次のようにしている。
+
+- **更新は承認が無ければ止まる。** 未適用の migration にデータを削除するものがあると、`system_schema_cli initialize`・画面の「システム設定 > データベース > RAG システムテーブル」の「作成・更新」・`init_script.sh` の再実行は、DB を何も変えずに止まる（error code `SCHEMA_DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED`）。一覧と、削除されるデータ・前にすることの説明は `system_schema_cli status` の `pending_destructive_migrations` と、画面の警告に出る。削除しない migration だけが未適用のときは、今までどおり承認なしで更新する。未初期化の DB の初期作成（migration を実行せずに記録だけする）と、確認語で承認する全再作成も対象外。
+- **テストは当てない。** 実 Oracle のテスト（`tests/conftest.py` の `oracle_db`）は、テストの開始時に未適用の migration を当てるが、データを削除する migration が未適用なら何も当てずに実 Oracle のテストを skip し、理由を出す。実 Oracle のテストは、共有の開発 DB ではなくテスト専用の schema で流すことを推奨する（`rag/AGENTS.md` の「テスト/検証方針」）。
+
+データを削除する migration を当てる手順:
+
+1. `system_schema_cli status` の `pending_destructive_migrations` で、削除されるデータを確かめる。
+2. 残すデータを書き出す（各更新手順の書き出し。例: #596 は `app.rag.legacy_export`）。ADB の自動バックアップが有効で、保持期間の中にあることも確かめる（OCI コンソールの Autonomous AI Database の「バックアップ」）。手元の Oracle（コンテナなど）はバックアップが無いので、必要なら先に Data Pump などで書き出す。
+3. 承認して更新する。CLI は `--allow-destructive` を付ける。画面は「作成・更新」の確認ダイアログで「削除して更新」を押す。
+
+   ```bash
+   cd /u01/aipoc/no.1-production-ready-suite/rag/backend
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize --allow-destructive
+   ```
+
+`init_script.sh` は承認を付けずに `initialize` を実行する。データを削除する migration が未適用なら、WARNING を出して配備を続ける（backend は起動する）ので、上の手順で書き出してから適用する。
+
+### 書き出す前に消えたデータを、DB のバックアップから取り出す
+
+削除した表は `PURGE` のため recyclebin にも無く、`FLASHBACK TABLE` では戻せない。ADB（Oracle Autonomous AI Database）なら、自動バックアップから過去の時点の**別の DB（クローン）**を作り、そこから必要な表だけを取り出す。元の DB をその時点へ戻す復元（in-place のリストア）は、3 製品が共有する schema 全体とその後の更新を巻き戻すので使わない。
+
+1. 消えた時刻を確かめる。migration の適用時刻は `SELECT migration_name, applied_at FROM rag_schema_migrations WHERE migration_name = '<migration の名前>'` で分かる。
+2. OCI コンソールで対象の Autonomous AI Database を開き、「クローンの作成」で「バックアップからのクローン」→「特定の時点」を選び、1. の時刻の少し前を指定する（自動バックアップの保持期間の中の時点だけ選べる）。クローンは別の料金がかかる。
+3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
+4. 取り出しが終わったらクローンを終了（削除）する。
+
 ## 既存環境の更新手順（#286: Docker Compose からネイティブ配備への移行）
 
 #286 で、RAG の backend・ingestion-worker・前処理・parser を Docker Compose から、サービスごとの uv の venv と
@@ -254,7 +283,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 
 ### 手順
 
-**システムテーブルを更新すると、3 つのテーブルの行は戻せない。** `rag_agent_memories` は更新の前に書き出す。`init_script.sh` の再実行と画面の「システム設定 > データベース > RAG システムテーブル」の更新も、システムテーブルを更新する（`init_script.sh` は `system_schema_cli initialize` を実行する）ので、書き出してから行う。
+**システムテーブルを更新すると、3 つのテーブルの行は戻せない。** `rag_agent_memories` は更新の前に書き出す。`init_script.sh` の再実行と画面の「システム設定 > データベース > RAG システムテーブル」の更新も、システムテーブルを更新する（`init_script.sh` は `system_schema_cli initialize` を実行する）ので、書き出してから行う。この migration はデータを削除するので、#619 から更新は承認（CLI の `--allow-destructive`・画面の確認ダイアログ）が無ければ止まる（上の「既存環境の更新手順の共通の注意」）。
 
 1. #596 の版のコードを取得する（`git pull` など）。まだ backend の再起動・`init_script.sh` の再実行・システムテーブルの更新はしない。
 2. `rag_agent_memories` を書き出す。書き出しの CLI（`app.rag.legacy_export`）は標準ライブラリと既存の Oracle 接続だけを使うので、取得したコードを今の venv で実行できる（import のエラーになる場合は、先に backend の venv を `uv sync --locked --no-dev` で更新する。Compute ではリポジトリの所有者 `ubuntu` で実行する）。テーブルが無い環境では何も書かずに `"status": "table_missing"` を出して終わる。`rag_prompt_versions`・`rag_generation_settings` も残したい場合は、`--table` を変えて同じように書き出す。
@@ -273,11 +302,11 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 
    出力は 1 行 1 レコードの JSON Lines（列名は小文字、日時は ISO 8601、CLOB は文字列、JSON の列は object、`embedding` は数値の配列）。書き終えてから出力先に置くので、途中で失敗したときは出力先にファイルを残さない。記憶の本文など利用者の入力を含むので、ファイルは所有者だけが読める権限（600）で作る。保管と削除は運用の規則に従う。標準出力の `row_count` が DB の件数（`SELECT COUNT(*) FROM rag_agent_memories`）と合うことを確かめる。
 3. backend と frontend を再起動する（`init_script.sh` を再実行する場合は、手順 4 もあわせて行われる）。削除するテーブルはもう使わないので、システムテーブルを更新する前でも動く。
-4. システムテーブルを更新する。画面の「システム設定 > データベース > RAG システムテーブル」からでもよい。
+4. システムテーブルを更新する。データを削除する migration なので承認を付ける（#619）。画面の「システム設定 > データベース > RAG システムテーブル」からでもよい（「作成・更新」の確認ダイアログで「削除して更新」を押す）。
 
    ```bash
    cd /u01/aipoc/no.1-production-ready-suite/rag/backend
-   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize --allow-destructive
    ```
 
 5. `system_schema_cli status` が `ready` で、`retired_objects` と `pending_versions` が空であることを確かめる。
