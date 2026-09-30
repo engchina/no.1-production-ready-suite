@@ -2127,6 +2127,8 @@ export type GuardrailBackend = "local" | "oci_guardrails";
 
 // --- 設定: Vector Index アダプター ---
 export type VectorIndexProfileName = "balanced" | "accurate" | "fast";
+/** 実際の索引と推奨ビルドの比較結果(backend の判定。#562)。unknown = 実際の値を確認できない。 */
+export type VectorIndexBuildStatus = "match" | "reprovision" | "unknown";
 
 export interface VectorIndexProfileStatusData {
   name: VectorIndexProfileName;
@@ -2137,6 +2139,7 @@ export interface VectorIndexProfileStatusData {
   neighbors: number;
   efconstruction: number;
   distance: string;
+  index_status: VectorIndexBuildStatus;
 }
 
 export interface VectorIndexSettingsData {
@@ -2146,6 +2149,10 @@ export interface VectorIndexSettingsData {
   efconstruction: number;
   distance: string;
   requires_reprovision: boolean;
+  index_status: VectorIndexBuildStatus;
+  /** 実際の索引の値。確認できないときは null。 */
+  actual_neighbors: number | null;
+  actual_efconstruction: number | null;
   profiles: VectorIndexProfileStatusData[];
   reindex_sql: string;
   config_source: "runtime";

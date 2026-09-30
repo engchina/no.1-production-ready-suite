@@ -94,6 +94,8 @@ ORACLE_TEXT_LEXER_PREFERENCE = "RAG_TEXT_WORLD_LEXER"
 ORACLE_TEXT_STOPLIST = "RAG_TEXT_STOPLIST"
 ORACLE_TEXT_LEXER = "WORLD_LEXER"
 CONVERSATION_TITLE_MAX_CHARS = 80
+# 主検索の HNSW 索引(schema DDL・oracle_schema.vector_index_reindex_sql と同じ名前)。
+RAG_CHUNKS_VECTOR_INDEX_NAME = "RAG_CHUNKS_EMBEDDING_HNSW_IDX"
 ORACLE_TEXT_STOP_WORDS = (
     "の",
     "は",
@@ -4572,6 +4574,39 @@ class OracleClient:
     def is_connection_configured(self) -> bool:
         """実 DB に接続する設定（または明示の pool）があるかを返す。"""
         return _oracle_connection_configured(self)
+
+    async def get_vector_index_build_params(self) -> tuple[int, int] | None:
+        """主検索索引の実際の (NEIGHBORS, EFCONSTRUCTION) を返す(#562)。
+
+        ``v$vector_graph_index`` を読む。接続設定がない・V$ を読む権限がない・索引がない
+        (メモリ上のグラフがない)場合は None(確認できない)を返し、例外にしない。
+        """
+        if not _oracle_connection_configured(self):
+            return None
+        try:
+            row = await self._db_call_runner(
+                lambda: self._run_with_connection(
+                    lambda connection: _fetch_one(
+                        connection,
+                        """
+                        SELECT num_neighbors, ef_construction
+                          FROM v$vector_graph_index
+                         WHERE owner = SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')
+                           AND index_name = :index_name
+                         FETCH FIRST 1 ROWS ONLY
+                        """,
+                        {"index_name": RAG_CHUNKS_VECTOR_INDEX_NAME},
+                    )
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "vector_index_build_params_unavailable", extra=oracle_error_log_fields(exc)
+            )
+            return None
+        if row is None or row.get("num_neighbors") is None or row.get("ef_construction") is None:
+            return None
+        return int(cast(int, row["num_neighbors"])), int(cast(int, row["ef_construction"]))
 
     async def create_evaluation_job(self, job: Mapping[str, object]) -> None:
         """品質評価の job を RUNNING で作る（#390）。heartbeat の時刻は DB の時計にする。"""

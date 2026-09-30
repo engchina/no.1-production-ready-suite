@@ -92,6 +92,48 @@ def test_datetime_value_attaches_utc_to_naive_database_values() -> None:
     assert value.isoformat() == "2026-06-23T00:34:00+00:00"
 
 
+async def test_vector_index_build_params_reads_actual_index() -> None:
+    """実際の索引の NEIGHBORS / EFCONSTRUCTION を v$vector_graph_index から読む(#562)。"""
+    pool = FakeOraclePool(execute_results=[[{"num_neighbors": 48, "ef_construction": 800}]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    assert await client.get_vector_index_build_params() == (48, 800)
+    call = pool.connection.calls[0]
+    assert "FROM v$vector_graph_index" in call.statement
+    assert call.parameters == {"index_name": "RAG_CHUNKS_EMBEDDING_HNSW_IDX"}
+
+
+@pytest.mark.parametrize(
+    ("rows", "errors"),
+    [
+        ([[]], []),
+        ([[]], [RuntimeError("ORA-00942: table or view does not exist")]),
+    ],
+    ids=["no_index", "no_privilege"],
+)
+async def test_vector_index_build_params_unknown_when_unreadable(
+    rows: list[list[dict[str, object]]], errors: list[Exception]
+) -> None:
+    """索引がない・V$ を読めないときは None(確認できない)で、例外にしない。"""
+    pool = FakeOraclePool(execute_results=rows, fetch_errors=errors)
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    assert await client.get_vector_index_build_params() is None
+
+
+async def test_vector_index_build_params_unknown_without_connection_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """接続設定がなければ DB に接続せず None を返す。"""
+    monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL", None)
+    client = OracleClient(
+        settings=Settings.model_construct(oracle_user="", oracle_dsn=""),
+        db_call_runner=_run_inline,
+    )
+
+    assert await client.get_vector_index_build_params() is None
+
+
 @pytest.mark.anyio
 async def test_independent_oracle_clients_read_same_generation_settings() -> None:
     """process-local cache を介さず、2 client が同じ GLOBAL 行を読む。"""
