@@ -71,7 +71,7 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 - ナビゲーションは折りたたみ可能なサイドナビを正とし、主要セクションは以下とする。
   - **ナレッジ構築**: 文書アップロード、文書インデックス、ナレッジベース。
   - **業務ビュー**: RAG 検索、業務ビュー、品質評価。
-  - **検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、検索方法、根拠確認、回答スタイル、回答プロンプト、安全チェック、品質評価、関係情報の構築、エージェント計画。
+  - **検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、検索方法、回答プロンプト、安全チェック、品質評価、関係情報の構築。
   - **運用設定**: HuggingFace 設定、サービス管理（RAG 固有の運用項目）。
   - **RAG セキュリティ**: 権限管理（ロールごとのメニュー権限・業務ビュー・ナレッジベース。RAG 固有。#214）。
   - **ユーザーとロール**: ユーザー管理、ロール管理（3製品で共通。画面と API は platform の共有パッケージ）。
@@ -115,15 +115,14 @@ KB は **どの文書を検索対象にするか(membership)だけ**を持つ純
 - 名称 / 説明 / スコープ。
 - 例外として、項目抽出の項目の定義(何を取り出すか)は KB ごとに持てる(#548。無ければ全体の既定、複数 KB に属する文書は和集合。docs/knowledge-base-management.md の 8.4.1a)。項目抽出を行うかどうかは今までどおり文書レシピ / global が決める。
 
-文書の KB 出し入れは `rag_document_knowledge_bases` の行 add/delete **のみ**で、chunk へ波及しない(再プラン/materialize/GC を起こさない)。KB UI から preprocess/parser/chunking・検索方法・根拠確認・回答スタイル・安全チェック・品質評価を出さない。KB の legacy adapter/query config は読み取りのみ許容し、runtime では使わず、次回保存で再保存しない。
+文書の KB 出し入れは `rag_document_knowledge_bases` の行 add/delete **のみ**で、chunk へ波及しない(再プラン/materialize/GC を起こさない)。KB UI から preprocess/parser/chunking・検索方法・安全チェック・品質評価を出さない。KB の legacy adapter/query config は読み取りのみ許容し、runtime では使わず、次回保存で再保存しない。
 
 ### Business View
 
 Business View は **検索・回答に使う設定だけ**を持つ。
 
 - 参照 KB scope。
-- 回答プロンプト(system prompt / default language)。
-- 検索方法、根拠確認、回答スタイル、安全チェック。
+- 検索方法(回答の検索と生成)、安全チェック。
 - feedback 集計。
 
 設定責務は次の通りとし、業務ビューには Sidebar 全項目を複製しない。
@@ -132,10 +131,11 @@ Business View は **検索・回答に使う設定だけ**を持つ。
 |---|---|---|---|
 | ファイル準備 / 文書解析 / 文書分割 / GraphRAG | 可 | 可 | 不可 |
 | 検索インデックス | 可 | 不可 | 不可 |
-| 検索方法 / 根拠確認 / 回答スタイル / 回答プロンプト / 安全チェック | 可 | 不可 | 可 |
-| 品質評価 / エージェント計画 | 可 | 不可 | 不可 |
+| 検索方法 / 安全チェック | 可 | 不可 | 可 |
+| 回答プロンプト | 可 | 不可 | 不可 |
+| 品質評価 | 可 | 不可 | 不可 |
 
-GraphRAG の構築深度は文書レシピ、検索時の利用は Business View の「検索方法」にあるグラフ拡張で選ぶ。共有 Oracle 索引の設定は Business View へ保存しない。
+GraphRAG の構築深度は文書レシピで選ぶ(回答の検索では使わない。検索時のグラフ拡張は #595 で削除した)。共有 Oracle 索引の設定は Business View へ保存しない。
 
 検索時の解決順は **request 明示 > Published Business View > global defaults**。KB の legacy query override は使わない。
 
@@ -157,15 +157,15 @@ backend/                  FastAPI アプリ
     api/routes/           health / documents / search / knowledge_bases /
                           business_views / evaluation / settings / services
     clients/              OCI / Oracle / Object Storage clients
-    rag/                  ingestion / parsing / chunking / retrieval / grounding /
-                          generation / guardrail / evaluation / business view
+    rag/                  ingestion / parsing / chunking / 回答フロー(docrag_answer) /
+                          guardrail / evaluation / business view
     schemas/              common / search / knowledge_base / business_view / settings
   tests/                  pytest
 frontend/                 Vite + React Router + TypeScript
   src/App.tsx             React Router ルート定義
   src/components/         layout / search / knowledge-bases / business-views / settings
   src/lib/                api / queries / routes / i18n / utils
-services/                 parser / preprocess / retrieval / generation などのローカル実行単位
+services/                 parser / preprocess / pipeline(chunking / graphrag / vector_index / guardrail / evaluation)などのローカル実行単位
 ```
 
 ## 開発コマンド
