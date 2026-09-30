@@ -247,7 +247,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 900 },
 ]) {
-  test(`回答を標準回答で評価し、4 軸の点と合否を表示する (${viewport.name})`, async ({
+  test(`回答を標準回答で評価し、評価の基準の指標と合否を表示する (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -273,19 +273,17 @@ for (const viewport of [
           evaluation_available: true,
           evaluation: {
             status: "completed",
-            message: "回答品質を4軸で評価しています。",
-            total_score: 17,
-            max_score: 20,
-            pass_threshold: 16,
-            passed: true,
+            message: "",
+            passed: false,
+            suite: "standard",
+            metrics: [
+              { name: "faithfulness", value: 0.6, threshold: 0.7, passed: false, reference: true },
+              { name: "claim_support_rate", value: 1, threshold: 0.9, passed: true },
+              { name: "requirement_coverage", value: 0.5, threshold: 0.8, passed: false },
+              { name: "refusal_accuracy", value: 1, threshold: 0.9, passed: true },
+            ],
             standard_answer: "受注一覧で対象を選び、取消を押します。",
             evaluated_at: "2026-09-26T01:01:00Z",
-            scores: {
-              accuracy: { score: 5, reason: "標準回答と一致します。" },
-              coverage: { score: 4, reason: "対象の選択が抜けています。" },
-              evidence_consistency: { score: 4, reason: "根拠で確認できます。" },
-              generation_quality: { score: 4, reason: "簡潔です。" },
-            },
             standard_answer_scope: {
               requirements: [{ requirement: "受注一覧で対象を選ぶ" }, { requirement: "取消を押す" }],
             },
@@ -313,10 +311,16 @@ for (const viewport of [
     await expect.poll(() => evaluationBody).toEqual({
       standard_answer: "受注一覧で対象を選び、取消を押します。",
     });
-    await expect(evaluation.getByText("合格", { exact: true })).toBeVisible();
-    await expect(evaluation.getByText("合計 17 / 20 点（合格は 16 点以上）")).toBeVisible();
-    const accuracy = evaluation.getByRole("row", { name: /正確性/ });
-    await expect(accuracy).toContainText("5 / 5");
+    // 指標ごとに値・基準・判定を出し、1 つでも閾値未満なら不合格（#680）。
+    await expect(evaluation.getByText("不合格", { exact: true })).toBeVisible();
+    await expect(evaluation.getByText("評価の基準: 標準")).toBeVisible();
+    const coverage = evaluation.getByRole("row", { name: /標準回答の網羅/ });
+    await expect(coverage).toContainText("50%");
+    await expect(coverage).toContainText("80%");
+    await expect(coverage).toContainText("閾値未満");
+    await expect(evaluation.getByRole("row", { name: /主張の裏付け/ })).toContainText("閾値以上");
+    // 根拠への忠実さ（語句の一致の近似）は参考値で、合否に使わない。
+    await expect(evaluation.getByRole("row", { name: /根拠への忠実さ/ })).toContainText("参考");
     await evaluation.getByText("標準回答の項目への対応（2）").click();
     await expect(evaluation.getByText("未対応")).toBeVisible();
     await expect(evaluation.getByText("受注一覧で対象を選ぶ")).toBeVisible();

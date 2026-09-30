@@ -40,6 +40,8 @@ RULES_SECTION_TITLE = "確認できる内容"
 GAPS_SECTION_TITLE = "資料からは確認できない点"
 # 監査で summary を支持できない（または監査していない）ときに使う、断定のない前置き。
 NEUTRAL_SUMMARY = "資料で確認できた内容を以下に示します。"
+# 適用が未確認の説明の末尾に付ける注記。評価の主張の監査では主張として扱わない(#680)。
+UNVERIFIED_NOTE = "（今回の対象への適用は未確認）"
 CITATION_PREFIX = "根拠："
 # 監査が目的不一致とした round を拒答に回すときに本文へ出す不足 (#950)。
 OFF_GOAL_GAP = "取得した資料の手順が質問の対象・変更項目に適用できるとは確認できませんでした。"
@@ -1846,7 +1848,7 @@ def render(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[st
             if not entry.quote_only and item.applies == "conditional" and item.condition:
                 text = f"（{_condition_phrase(item.condition)}）{text}"
             elif not entry.quote_only and item.applies == "unverified":
-                text += "（今回の対象への適用は未確認）"
+                text += UNVERIFIED_NOTE
             out.append((f"{number}. " if numbered else "・") + text)
             following = entries[number] if number < len(entries) else None
             # 同じ出典・頁が続く間は出典行を繰り返さない。

@@ -923,20 +923,11 @@ def _fake_evaluation_llm(
         )
     if schema is AnswerEvaluationOutput:
         passage = re.search(r'"id": "(P[0-9]+)"', prompt)
-        axis = {"score": 5, "reason": "標準回答と一致"}
         return AnswerEvaluationOutput.model_validate(
             {
-                "external_data_required": False,
-                "external_data_items": [],
-                "evaluated_content": ["登録の手順"],
                 "coverage_checks": [
                     {"requirement_index": 1, "status": "addressed", "answer_quote": body}
                 ],
-                "accuracy": axis,
-                "coverage": axis,
-                "evidence_consistency": axis,
-                "generation_quality": axis,
-                "goal_alignment": "aligned",
                 "claim_checks": [
                     {
                         "answer_quote": body,
@@ -971,18 +962,20 @@ async def test_saved_answer_is_evaluated_with_standard_answer(
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_evaluation_llm)
     evaluation = evaluate_answer_record(
-        outcome.evaluation_input, "受注番号を入力し、登録ボタンを押します。", Settings()
+        outcome.evaluation_input,
+        "受注番号を入力し、登録ボタンを押します。",
+        Settings(),
+        citations=outcome.citations,
     )
 
     assert evaluation["status"] == "completed", evaluation
-    assert evaluation["total_score"] == 20
-    assert evaluation["max_score"] == 20
-    assert set(evaluation["scores"]) == {
-        "accuracy",
-        "coverage",
-        "evidence_consistency",
-        "generation_quality",
-    }
+    assert evaluation["requirement_coverage"] == 1.0
+    # 評価の基準の指標(1 件の回答で測れるもの)と閾値で合否を付ける(#680)。
+    assert evaluation["suite"] == "standard"
+    metrics = {metric["name"]: metric for metric in evaluation["metrics"]}
+    assert {"claim_support_rate", "requirement_coverage", "refusal_accuracy"} <= set(metrics)
+    assert not {"context_recall", "mrr", "answer_keyword_hit_rate"} & set(metrics)
+    assert evaluation["passed"] is all(metric["passed"] for metric in metrics.values())
 
 
 def test_evaluation_without_standard_answer_does_not_call_llm(
@@ -997,7 +990,9 @@ def test_evaluation_without_standard_answer_does_not_call_llm(
 
     monkeypatch.setattr(engine_oci, "parse_text_response", fail)
 
-    evaluation = evaluate_answer_record({"question": "q", "answer_text": "a"}, " ", Settings())
+    evaluation = evaluate_answer_record(
+        {"question": "q", "answer_text": "a"}, " ", Settings(), citations=[]
+    )
 
     assert evaluation["status"] == "no_standard_answer"
 

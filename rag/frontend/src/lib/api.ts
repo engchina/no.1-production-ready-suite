@@ -1275,13 +1275,11 @@ export interface EvaluationRunRequestBody {
 export interface EvaluationAnswerJudgement {
   /** completed / error / input_too_large / timeout / unavailable */
   status: string;
-  total_score: number | null;
-  max_score: number;
+  /** 評価の基準の指標がすべて閾値以上か（#680）。 */
   passed: boolean | null;
   claims_supported: boolean | null;
   requirement_coverage: number | null;
   missing_content: boolean | null;
-  goal_alignment: string | null;
   message: string | null;
 }
 

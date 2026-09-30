@@ -105,21 +105,18 @@ class EvaluationCase(BaseModel):
 
 
 class EvaluationAnswerJudgement(BaseModel):
-    """標準回答による LLM の評価(4 軸の採点・主張の監査・必要な項目の網羅)の要約。
+    """標準回答による評価(評価の基準の指標と閾値による合否・主張の監査・必要な項目の網羅)の要約。
 
-    詳細(軸ごとの理由・主張ごとの判定)は trace_id の回答の記録に保存する。`status` は
+    詳細(指標ごとの値・主張ごとの判定)は trace_id の回答の記録に保存する(#680)。`status` は
     completed / error / input_too_large / timeout / unavailable(評価の記録が無いなど)。
     """
 
     status: str
-    total_score: float | None = None
-    max_score: float = 20.0
     passed: bool | None = None
     claims_supported: bool | None = None
     requirement_coverage: float | None = None
     # 原質問に必要な項目のうち、説明の無い項目があったか(rag_poc の「必要内容欠落」)。
     missing_content: bool | None = None
-    goal_alignment: str | None = None
     message: str | None = None
 
 

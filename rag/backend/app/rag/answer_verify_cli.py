@@ -142,14 +142,28 @@ def run_answers(
         path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
         evaluation = record.get("evaluation") or {}
         log(
-            f"     {evaluation.get('status', 'error')} {evaluation.get('total_score', '')} "
+            f"     {evaluation.get('status', 'error')} {_verdict(evaluation)} "
             f"{record.get('error', '')}".rstrip()
         )
 
 
+def _verdict(evaluation: Mapping[str, Any]) -> str:
+    passed = evaluation.get("passed")
+    return "—" if passed is None else ("合格" if passed else "不合格")
+
+
+def _failed_metrics(evaluation: Mapping[str, Any]) -> str:
+    """閾値に届かなかった評価の基準の指標(#680)。"""
+    names = [
+        str(metric.get("name"))
+        for metric in evaluation.get("metrics") or []
+        if isinstance(metric, Mapping) and metric.get("passed") is False
+    ]
+    return ", ".join(names) or "—"
+
+
 def summarize_answers(items: Sequence[Mapping[str, Any]], out: Path) -> str:
-    rows = ["| id | 状態 | 合計点 | 合否 |", "|---|---|---|---|"]
-    scores: list[float] = []
+    rows = ["| id | 状態 | 合否 | 閾値に届かない指標 |", "|---|---|---|---|"]
     passed = completed = 0
     for item in items:
         path = out / f"{item['id']}.json"
@@ -159,23 +173,14 @@ def summarize_answers(items: Sequence[Mapping[str, Any]], out: Path) -> str:
         record = json.loads(path.read_text(encoding="utf-8"))
         evaluation = record.get("evaluation") or {}
         status = "エラー" if record.get("error") else str(evaluation.get("status") or "—")
-        score = evaluation.get("total_score")
-        if evaluation.get("status") == "completed" and isinstance(score, int | float):
+        if evaluation.get("status") == "completed":
             completed += 1
-            scores.append(float(score))
             passed += bool(evaluation.get("passed"))
-        passed_value = evaluation.get("passed")
-        verdict = "—" if passed_value is None else ("合格" if passed_value else "不合格")
         rows.append(
-            f"| {item['id']} | {status} | {score if score is not None else '—'} | {verdict} |"
+            f"| {item['id']} | {status} | {_verdict(evaluation)} | {_failed_metrics(evaluation)} |"
         )
-    average = f"{sum(scores) / len(scores):.2f}" if scores else "—"
     rate = f"{passed / completed:.0%}" if completed else "—"
-    text = (
-        f"評価完了 {completed} / {len(items)} 件、合格率 {rate}、平均点 {average}\n\n"
-        + "\n".join(rows)
-        + "\n"
-    )
+    text = f"評価完了 {completed} / {len(items)} 件、合格率 {rate}\n\n" + "\n".join(rows) + "\n"
     out.mkdir(parents=True, exist_ok=True)
     (out / "summary.md").write_text(text, encoding="utf-8")
     return text

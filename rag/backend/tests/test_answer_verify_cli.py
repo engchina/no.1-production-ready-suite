@@ -52,14 +52,21 @@ class FakeApi:
                 }
             )
         if request.url.path.endswith("/evaluation"):
-            score = 18 if "承認" in body["standard_answer"] else 10
+            passed = "承認" in body["standard_answer"]
             return _envelope(
                 {
                     "trace_id": request.url.path.split("/")[-2],
                     "evaluation": {
                         "status": "completed",
-                        "total_score": score,
-                        "passed": score >= 16,
+                        "passed": passed,
+                        "metrics": [
+                            {
+                                "name": "requirement_coverage",
+                                "value": 1.0 if passed else 0.5,
+                                "threshold": 0.8,
+                                "passed": passed,
+                            }
+                        ],
                     },
                 }
             )
@@ -120,10 +127,11 @@ def test_answers_evaluates_resumes_and_summarizes(
     )
     assert headers["x-tenant-id"] == "tenant-a"
     a1 = json.loads((out / "a1.json").read_text(encoding="utf-8"))
-    assert a1["evaluation"]["total_score"] == 18
+    assert a1["evaluation"]["passed"] is True
     assert "検索が一時的に利用できません" in json.loads((out / "a3.json").read_text())["error"]
     summary = (out / "summary.md").read_text(encoding="utf-8")
-    assert summary.startswith("評価完了 2 / 3 件、合格率 50%、平均点 14.00")
+    assert summary.startswith("評価完了 2 / 3 件、合格率 50%")
+    assert "| 不合格 | requirement_coverage |" in summary
     assert "| a3 | エラー | — | — |" in summary
     assert "合格率 50%" in capsys.readouterr().out
 
