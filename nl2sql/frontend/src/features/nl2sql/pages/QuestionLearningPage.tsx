@@ -21,6 +21,7 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   Pagination,
+  FieldLabel,
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
@@ -1169,16 +1170,19 @@ function ModelTestPanel({
             testId="qcm-predict-processing"
           />
         ) : null}
-        <label className={fieldClass}>
-          <span>{t("qcm.test.text")}</span>
+        {/* 分類テストは質問が空では実行できない（backend: ClassifierPredictRequest.question min_length=1）。 */}
+        <div className={fieldClass}>
+          <FieldLabel htmlFor="qcm-test-question" label={t("qcm.test.text")} required />
           <textarea
+            id="qcm-test-question"
+            aria-required="true"
             value={question}
             disabled={loading}
             onChange={(event) => onQuestionChange(event.currentTarget.value)}
             rows={6}
             className={`${controlClass} min-h-36 leading-6`}
           />
-        </label>
+        </div>
       </section>
       <section className="grid content-start gap-3 rounded-md border border-border bg-surface-sunken p-4">
         <h3 className="text-sm font-semibold text-fg">{t("qcm.test.result")}</h3>

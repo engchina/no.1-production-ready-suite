@@ -11,7 +11,7 @@ import {
   CardHeader,
   CardTitle,
   FieldError,
-  RequiredBadge,
+  FieldLabel,
   Skeleton,
   Spinner,
   TimedLoadingState,
@@ -617,6 +617,7 @@ function jobStatusKey(status: IngestionJob["status"]): I18nKey {
 }
 
 const UPLOAD_KNOWLEDGE_BASE_PICKER_ID = "upload-knowledge-base-picker";
+const UPLOAD_KNOWLEDGE_BASE_INPUT_ID = "upload-knowledge-base-input";
 
 function UploadKnowledgeBasePicker({
   selectedIds,
@@ -644,9 +645,14 @@ function UploadKnowledgeBasePicker({
   return (
     <Card id={UPLOAD_KNOWLEDGE_BASE_PICKER_ID} data-testid="upload-knowledge-base-picker">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          {t("upload.knowledgeBases.title")}
-          {required ? <RequiredBadge label={t("common.required")} /> : null}
+        <CardTitle>
+          {/* 必須は入力欄（combobox）の aria-required で伝える。タグは FieldLabel が読み上げから外す */}
+          <FieldLabel
+            htmlFor={UPLOAD_KNOWLEDGE_BASE_INPUT_ID}
+            label={t("upload.knowledgeBases.title")}
+            required={required}
+            className="font-semibold"
+          />
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -680,15 +686,19 @@ function UploadKnowledgeBasePicker({
             </div>
           </Banner>
         ) : items.length > 0 ? (
-          <div aria-describedby={missing ? errorId : undefined}>
-            <KnowledgeBasePickerGrid
-              items={items}
-              selectedIds={selectedIds}
-              onChange={onChange}
-              disabled={disabled}
-              ariaLabel={t("upload.knowledgeBases.aria")}
-            />
-          </div>
+          <KnowledgeBasePickerGrid
+            items={items}
+            selectedIds={selectedIds}
+            onChange={onChange}
+            disabled={disabled}
+            ariaLabel={t("upload.knowledgeBases.aria")}
+            field={{
+              inputId: UPLOAD_KNOWLEDGE_BASE_INPUT_ID,
+              required,
+              invalid: missing,
+              describedBy: missing ? errorId : undefined,
+            }}
+          />
         ) : required ? (
           <p className="rounded-md border border-border bg-surface-sunken p-4 text-sm text-fg-muted">
             {t("upload.knowledgeBases.emptyRestrictedHint")}

@@ -304,6 +304,7 @@ export function RuntimeKnowledgeManager({
             value={form.name}
             maxLength={160}
             onChange={(event) => update({ name: event.target.value })}
+            required
           />
           {form.kind === "rules" ? (
             <TextField
@@ -400,6 +401,7 @@ export function RuntimeKnowledgeManager({
             value={question}
             maxLength={2000}
             onChange={(event) => setQuestion(event.target.value)}
+            required
           />
           <Button
             size="sm"

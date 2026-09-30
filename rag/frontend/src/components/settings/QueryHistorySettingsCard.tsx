@@ -101,6 +101,7 @@ function QueryHistoryForm({ saved }: { saved: QueryHistorySettingsData }) {
           max={1000}
           label={t("settings.queryHistory.minCount")}
           helper={t("settings.queryHistory.minCountHint")}
+          required
           value={String(form.min_count)}
           onValueChange={(value) => setForm((current) => ({ ...current, min_count: Number(value) }))}
         />
@@ -110,6 +111,7 @@ function QueryHistoryForm({ saved }: { saved: QueryHistorySettingsData }) {
           min={1}
           max={20}
           label={t("settings.queryHistory.limit")}
+          required
           value={String(form.suggestion_limit)}
           onValueChange={(value) =>
             setForm((current) => ({ ...current, suggestion_limit: Number(value) }))

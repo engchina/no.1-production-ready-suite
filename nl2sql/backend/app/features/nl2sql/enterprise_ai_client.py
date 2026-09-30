@@ -16,7 +16,13 @@ from typing import Any, Protocol, cast
 
 import httpx
 
-from app.settings import Settings, enterprise_ai_default_model_id, enterprise_ai_vision_model_id
+from app.settings import (
+    EnterpriseAiConnection,
+    Settings,
+    enterprise_ai_connection_for_model,
+    enterprise_ai_default_model_id,
+    enterprise_ai_vision_model_id,
+)
 
 from .structured_outputs import validate_json_output
 
@@ -59,17 +65,21 @@ class EnterpriseAiDirectClient(Protocol):
 
 
 class OciEnterpriseAiDirectClient:
-    """Small synchronous HTTP client for OCI Enterprise AI LLM endpoint."""
+    """Small synchronous HTTP client for OCI Enterprise AI LLM endpoint.
+
+    接続（endpoint / API key / project）は、呼ぶモデルの接続を使う（#533）。
+    """
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
     def is_configured(self) -> bool:
-        return bool(
-            self.settings.oci_enterprise_ai_endpoint.strip()
-            and self.settings.oci_enterprise_ai_api_key.strip()
-            and self.model_id()
-        )
+        model_id = self.model_id()
+        return bool(model_id and self.connection(model_id).is_configured())
+
+    def connection(self, model_id: str) -> EnterpriseAiConnection:
+        """モデルを呼ぶときの接続。"""
+        return enterprise_ai_connection_for_model(self.settings, model_id)
 
     def model_id(self) -> str:
         """画像を扱わない呼び出しのモデル（既定のテキストモデル、なければ Vision）。"""
@@ -99,6 +109,7 @@ class OciEnterpriseAiDirectClient:
         )
         response = self._post_json(
             payload,
+            connection=self.connection(self.model_id()),
             path=self.settings.oci_enterprise_ai_llm_path,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
@@ -120,11 +131,12 @@ class OciEnterpriseAiDirectClient:
         mime_type: str = "image/jpeg",
         response_format: Mapping[str, Any] | None = None,
     ) -> str:
-        if not self.is_configured():
-            raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")
         model_id = self.vision_model_id()
         if not model_id:
             raise EnterpriseAiDirectError("OCI Enterprise AI Vision model が未設定です。")
+        connection = self.connection(model_id)
+        if not connection.is_configured():
+            raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")
         payload = _build_image_payload(
             settings=self.settings,
             model_id=model_id,
@@ -135,6 +147,7 @@ class OciEnterpriseAiDirectClient:
         )
         response = self._post_json(
             payload,
+            connection=connection,
             path=getattr(self.settings, "oci_enterprise_ai_vlm_path", "")
             or self.settings.oci_enterprise_ai_llm_path,
         )
@@ -148,20 +161,18 @@ class OciEnterpriseAiDirectClient:
         self,
         payload: Mapping[str, Any],
         *,
+        connection: EnterpriseAiConnection,
         path: str,
         timeout_seconds: float | None = None,
         max_retries: int | None = None,
     ) -> Mapping[str, Any]:
-        url = _join_endpoint_path(
-            self.settings.oci_enterprise_ai_endpoint,
-            path,
-        )
+        url = _join_endpoint_path(connection.endpoint, path)
         headers = {
             "accept": "application/json",
             "content-type": "application/json",
-            "authorization": f"Bearer {self.settings.oci_enterprise_ai_api_key.strip()}",
+            "authorization": f"Bearer {connection.api_key}",
         }
-        if project := self.settings.oci_enterprise_ai_project_ocid.strip():
+        if project := connection.project_ocid:
             headers["OpenAI-Project"] = project
         timeout = float(
             timeout_seconds

@@ -162,9 +162,11 @@ test("DeepSec object picker は総件数未取得時に loaded 件数のみ表�
   );
 });
 
-test("DeepSec Data Grant editor は必須表示を共有 RequiredBadge で統一する", () => {
-  assert.match(pageSource, /import \{ FieldLabel, FieldLegend \} from "@\/components\/ui\/required-field"/u);
-  assert.match(objectPicker, /<RequiredBadge label=\{t\("common\.required"\)\}/u);
+test("DeepSec Data Grant editor は必須表示を共有の FieldLabel / FieldLegend で統一する (#531)", () => {
+  assert.match(pageSource, /FieldLabel,\s*FieldLegend,\s*\} from "@engchina\/production-ready-ui"/u);
+  assert.doesNotMatch(pageSource, /required-field"|<RequiredBadge\b/u);
+  // 対象 object は複合入力なので fieldset にし、legend の「必須」を群の名前として読み上げる。
+  assert.match(objectPicker, /<fieldset[\s\S]*<FieldLegend id=\{titleId\} required/u);
   assert.match(entitlementsPanel, /<FieldLabel[\s\S]*security\.deepsec\.entitlements\.scopeMode[\s\S]*required/u);
   assert.match(entitlementsPanel, /<FieldLegend[\s\S]*required[\s\S]*security\.deepsec\.entitlements\.columns/u);
   assert.match(entitlementsPanel, /<fieldset className="grid gap-2"/u);

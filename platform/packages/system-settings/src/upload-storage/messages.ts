@@ -28,10 +28,10 @@ export const UPLOAD_STORAGE_MESSAGES = {
   saved: "保存しました",
   openOciSettings: "OCI 認証設定を開く",
   ociSettingsIncomplete: "OCI Object Storage を使うには、リージョンとネームスペースの設定が必要です。",
-  validationRequired: "値を入力してください。",
   validationLocalStorageDir: "ローカル保存ディレクトリを入力してください。",
   validationObjectStorageRegion: "OCI 認証設定で Object Storage リージョンを選択してください。",
   validationObjectStorageNamespace: "OCI 認証設定で Object Storage ネームスペースを設定してください。",
+  validationObjectStorageBucket: "Object Storage バケットを入力してください。",
   validationObjectStorageName: "英数字、ハイフン、アンダースコア、ドットで入力してください。",
 };
 

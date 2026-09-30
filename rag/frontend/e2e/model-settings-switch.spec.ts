@@ -1,25 +1,44 @@
 import { expect, test, type Page } from "@playwright/test";
 import { expectMainScrollEndsAtContent, expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
-function createModelSettings() {
+const SECONDARY_CONNECTION = {
+  connection_id: "secondary",
+  display_name: "シカゴ",
+  endpoint: "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1",
+  project_ocid: "ocid1.generativeaiproject.oc1.us-chicago-1.secondary",
+  api_key: "",
+  has_api_key: true,
+  clear_api_key: false,
+};
+
+function createModelSettings({ secondary = false }: { secondary?: boolean } = {}) {
   return {
     settings: {
       enterprise_ai: {
-        endpoint: "",
-        project_ocid: "ocid1.generativeaiproject.oc1.us-chicago-1.example",
-        api_key: "",
-        has_api_key: true,
-        clear_api_key: false,
+        connections: [
+          {
+            connection_id: "primary",
+            display_name: "",
+            endpoint: "",
+            project_ocid: "ocid1.generativeaiproject.oc1.us-chicago-1.example",
+            api_key: "",
+            has_api_key: true,
+            clear_api_key: false,
+          },
+          ...(secondary ? [SECONDARY_CONNECTION] : []),
+        ],
         models: [
           {
             model_id: "enterprise-llm",
             display_name: "標準 LLM",
             vision_enabled: false,
+            connection_id: "primary",
           },
           {
             model_id: "enterprise-vision",
             display_name: "Vision LLM",
             vision_enabled: true,
+            connection_id: secondary ? "secondary" : "primary",
           },
         ],
         default_text_model_id: "enterprise-llm",
@@ -140,7 +159,7 @@ for (const viewport of [
       enterpriseTestButton,
       embeddingTestButton,
       rerankTestButton,
-      page.getByRole("button", { name: "追加" }),
+      page.getByRole("button", { name: "追加", exact: true }),
       page.getByRole("button", { name: "モデルを削除 1" }),
     ]) {
       await expectControlContentToBeVerticallyCentered(button, "svg");
@@ -167,7 +186,7 @@ test("モデル設定は節ごとに保存し、画面にない項目は保存�
   expect(savedPayload).toMatchObject({
     enterprise_ai: {
       // 別の節（Enterprise AI 接続）の未保存の入力は送らない。
-      endpoint: "",
+      connections: [{ connection_id: "primary", endpoint: "" }],
       api_path: "/responses",
       vlm_input_mode: "files_api",
       text_payload_template: '{"input":{"messages":"${messages}","params":"${parameters}"}}',
@@ -261,6 +280,128 @@ test("既定の Vision モデルに選んだモデルを一覧から削除する
   expect(patches).toHaveLength(0);
 });
 
+for (const scheme of ["light", "dark"] as const) {
+  // desktop（1440px）と mobile（375px）は playwright.config の project で回す。
+  test(`接続を 2 件にし、登録モデルごとに接続を選んで保存する (${scheme})`, async ({
+    page,
+  }, testInfo) => {
+    const viewportWidth = page.viewportSize()?.width ?? 1440;
+    await page.addInitScript(
+      ({ theme, collapsed }) => {
+        window.localStorage.setItem(
+          "production-ready-rag.ui",
+          JSON.stringify({ state: { theme, sidebarCollapsed: collapsed }, version: 0 })
+        );
+      },
+      { theme: scheme, collapsed: viewportWidth < 768 }
+    );
+    const patches: Array<{ enterprise_ai: Record<string, unknown> }> = [];
+    await mockModelSettings(page, (payload) =>
+      patches.push(payload as { enterprise_ai: Record<string, unknown> })
+    );
+    await page.goto("/settings/model");
+
+    await expect(page.getByRole("heading", { name: "接続 1（既定）" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "接続 2" })).toHaveCount(0);
+    const modelConnection1 = page.getByRole("combobox", { name: "モデル 1 の接続" });
+    await expect(modelConnection1).toContainText("接続 1");
+
+    // 接続 2 を追加する。Endpoint URL が空のまま保存すると、欄のエラーで止める。
+    await page.getByRole("button", { name: "接続を追加" }).click();
+    const secondary = page.getByTestId("enterprise-connection-secondary");
+    await expect(secondary.getByRole("heading", { name: "接続 2" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "接続を追加" })).toHaveCount(0);
+    await expect(secondary.getByLabel("表示名")).toBeFocused();
+    const secondaryEndpoint = page.locator("#enterprise-secondary-endpoint");
+    await expect(secondaryEndpoint).toHaveAttribute("aria-required", "true");
+    await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
+    await expect(secondaryEndpoint).toBeFocused();
+    await expect(secondaryEndpoint).toHaveAttribute("aria-invalid", "true");
+    expect(patches).toHaveLength(0);
+
+    await secondary.getByLabel("表示名").fill("シカゴ");
+    await secondaryEndpoint.fill("https://secondary.example/openai/v1");
+    await page.locator("#enterprise-secondary-api-key").fill("sk-secondary-input");
+
+    // 保存前の接続を選んだモデルは、登録モデルの保存を止めて先に接続の保存を案内する。
+    await modelConnection1.click();
+    await page.getByRole("listbox", { name: "モデル 1 の接続" }).getByRole("option", { name: /シカゴ/ }).click();
+    await expect(modelConnection1).toContainText("シカゴ");
+    await expect(modelConnection1).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByText("シカゴ はまだ保存されていません。", { exact: false })).toBeVisible();
+    await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+    await expect(modelConnection1).toBeFocused();
+    expect(patches).toHaveLength(0);
+
+    await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
+    await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。").first()).toBeVisible();
+    expect(patches[0]?.enterprise_ai.connections).toMatchObject([
+      { connection_id: "primary" },
+      {
+        connection_id: "secondary",
+        display_name: "シカゴ",
+        endpoint: "https://secondary.example/openai/v1",
+        api_key: "sk-secondary-input",
+      },
+    ]);
+    await expect(modelConnection1).toHaveAttribute("aria-invalid", "false");
+
+    await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+    await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
+    expect(patches[1]?.enterprise_ai.models).toMatchObject([
+      { model_id: "enterprise-llm", connection_id: "secondary" },
+      { model_id: "enterprise-vision", connection_id: "primary" },
+    ]);
+
+    await expectNoPageOverflow(page);
+    await page.getByRole("heading", { name: "接続 1（既定）" }).scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: testInfo.outputPath(`connections-${scheme}-${testInfo.project.name}.png`),
+    });
+    await page.getByTestId("enterprise-connection-secondary").screenshot({
+      path: testInfo.outputPath(`connection-2-${scheme}-${testInfo.project.name}.png`),
+    });
+    await page.locator("#enterprise-model-catalog").screenshot({
+      path: testInfo.outputPath(`model-catalog-${scheme}-${testInfo.project.name}.png`),
+    });
+  });
+}
+
+test("接続 2 を使うモデルがあるとき、削除は確認して接続 1 に移す", async ({ page }) => {
+  const patches: Array<{ enterprise_ai: Record<string, unknown> }> = [];
+  await mockModelSettings(
+    page,
+    (payload) => patches.push(payload as { enterprise_ai: Record<string, unknown> }),
+    { secondary: true }
+  );
+  await page.goto("/settings/model");
+
+  const modelConnection2 = page.getByRole("combobox", { name: "モデル 2 の接続" });
+  await expect(modelConnection2).toContainText("シカゴ");
+  const remove = page.getByRole("button", { name: "接続 2: 接続を削除" });
+
+  // やめると何も変わらない。
+  await remove.click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("シカゴ を使っている登録モデルがあります（Vision LLM）");
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page.getByTestId("enterprise-connection-secondary")).toBeVisible();
+
+  await remove.click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "接続 1 に移して削除" }).click();
+  await expect(page.getByTestId("enterprise-connection-secondary")).toHaveCount(0);
+  await expect(modelConnection2).toContainText("接続 1");
+  await expect(page.getByRole("button", { name: "接続を追加" })).toBeVisible();
+
+  await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
+  await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。").first()).toBeVisible();
+  expect(patches[0]?.enterprise_ai.connections).toHaveLength(1);
+  expect(patches[0]?.enterprise_ai.models).toMatchObject([
+    { connection_id: "primary" },
+    { connection_id: "primary" },
+  ]);
+});
+
 test("モデル設定はモデルごとのテスト成功と失敗を行内に表示する", async ({ page }) => {
   await mockModelSettings(page);
   await page.goto("/settings/model");
@@ -284,15 +425,21 @@ test("モデル設定はモデルごとのテスト成功と失敗を行内に�
   await expect(page.getByText("401 Unauthorized: invalid model")).toHaveCount(0);
 });
 
-async function mockModelSettings(page: Page, onPatch?: (payload: unknown) => void) {
+async function mockModelSettings(
+  page: Page,
+  onPatch?: (payload: unknown) => void,
+  { secondary = false }: { secondary?: boolean } = {}
+) {
+  // 保存した内容を次の取得で返す（接続の保存の後に登録モデルを保存する流れ。#533）。
+  let current = createModelSettings({ secondary });
   await page.route("**/api/settings/model", async (route) => {
     const request = route.request();
-    let data = createModelSettings();
     if (request.method() === "PATCH") {
       const payload = request.postDataJSON();
       onPatch?.(payload);
-      data = { ...data, settings: payload };
+      current = { ...current, settings: payload };
     }
+    const data = current;
     await route.fulfill({
       json: {
         data,

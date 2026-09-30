@@ -283,7 +283,6 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
               id="knowledge-base-name"
               label={t("knowledgeBases.field.name")}
               required
-              requiredLabel={t("common.required")}
               value={name}
               onValueChange={setName}
               onBlur={() => setTouched((current) => ({ ...current, name: true }))}
@@ -294,7 +293,6 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
               id="knowledge-base-description"
               label={t("knowledgeBases.field.description")}
               required
-              requiredLabel={t("common.required")}
               value={description}
               onValueChange={setDescription}
               onBlur={() => setTouched((current) => ({ ...current, description: true }))}

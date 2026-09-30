@@ -32,7 +32,8 @@ export {
   type SecretFieldProps,
   type SecretFieldClearOption,
 } from "./components/ui/secret-field";
-export { RequiredBadge } from "./components/ui/required-badge";
+export { RequiredBadge, DEFAULT_REQUIRED_LABEL } from "./components/ui/required-badge";
+export { FieldLabel, FieldLegend, Fieldset, type FieldsetProps } from "./components/ui/field-label";
 export {
   ExecutionConfirmationField,
   executionConfirmationStatus,

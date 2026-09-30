@@ -260,7 +260,6 @@ function KnowledgeBaseEditForm({
             id="knowledge-base-edit-name"
             label={t("knowledgeBases.field.name")}
             required={!isDefault}
-            requiredLabel={t("common.required")}
             value={name}
             onValueChange={setName}
             onBlur={() => setTouched((current) => ({ ...current, name: true }))}
@@ -276,7 +275,6 @@ function KnowledgeBaseEditForm({
           id="knowledge-base-edit-description"
           label={t("knowledgeBases.field.description")}
           required
-          requiredLabel={t("common.required")}
           value={description}
           onValueChange={setDescription}
           onBlur={() => setTouched((current) => ({ ...current, description: true }))}

@@ -79,8 +79,9 @@ def test_reverse_retry_uses_typed_http_errors(monkeypatch: pytest.MonkeyPatch) -
             lambda transport=transport, **kwargs: real_client(transport=transport, **kwargs),
         )
         with pytest.raises(module.EnterpriseAiDirectError) as error:
-            module.OciEnterpriseAiDirectClient(settings)._post_json(
-                {}, path="/responses", max_retries=0
+            client = module.OciEnterpriseAiDirectClient(settings)
+            client._post_json(
+                {}, connection=client.connection(""), path="/responses", max_retries=0
             )
         assert error.value.code == code
         assert error.value.retryable is retryable

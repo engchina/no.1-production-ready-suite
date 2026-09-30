@@ -17,6 +17,7 @@ import {
   Skeleton,
   Switch,
   TextField,
+  FieldLabel,
   cn,
   toast,
   useConfirm,
@@ -43,6 +44,24 @@ import {
   toSettingsTestResultDetails,
 } from "../oci/SettingsTestResultPanel";
 import {
+  PRIMARY_CONNECTION_ID,
+  connectionFieldId,
+  connectionLabel,
+  connectionOptions,
+  emptyConnection,
+  modelConnectionFieldId,
+  modelConnectionId,
+  modelsUsingConnection,
+  moveModelsToAvailableConnections,
+  nextConnectionId,
+  normalizeModelSettings,
+  removeConnection,
+  validateConnections,
+  validateModelConnections,
+  type ConnectionErrors,
+  type ModelConnectionErrors,
+} from "./connections";
+import {
   DEFAULT_MODEL_FIELD_IDS,
   DEFAULT_MODEL_FIELD_ORDER,
   followModelChange,
@@ -54,8 +73,11 @@ import {
 } from "./defaultModels";
 import { t } from "./messages";
 import {
+  MAX_ENTERPRISE_AI_CONNECTIONS,
   MODEL_SETTINGS_QUERY_KEY,
   type EnterpriseAiConfiguredModel,
+  type EnterpriseAiConnectionId,
+  type EnterpriseAiConnectionSettings,
   type EnterpriseAiModelSettings,
   type GenerativeAiModelSettings,
   type ModelSettingsApi,
@@ -86,6 +108,8 @@ export interface ModelSettingsPageProps {
  *
  * - 3節（Enterprise AI 接続 / 登録モデル / Generative AI）をそれぞれ保存する。
  *   画面にない項目（API path・VLM 入力方式・timeout など）は保存済みの値をそのまま送る
+ * - Enterprise AI の接続は 2 件まで（#533）。接続ごとのカードで入力し、登録モデルの行で使う接続を選ぶ。
+ *   接続 2 の削除は、使っているモデルがあれば接続 1 に移すか確認する
  * - 登録モデルの節の下で、既定の Vision モデル（必須）と既定のテキストモデル（任意）を選ぶ（#499）。
  *   選んだモデルの削除・Vision 対応のオフ・保存の操作で、保存前にフィールドのエラーを出す
  * - 保存中・テスト中は入力を止め、未保存のまま離れようとすると確認する
@@ -128,7 +152,14 @@ export function ModelSettingsPage({
   >({});
   const [activeSaveSection, setActiveSaveSection] =
     useState<ModelSaveSection | null>(null);
-  const [apiKeyVisible, setApiKeyVisible] = useState(false);
+  const [apiKeyVisible, setApiKeyVisible] = useState<
+    Partial<Record<EnterpriseAiConnectionId, boolean>>
+  >({});
+  // 接続の入力のエラー（接続 2 の Endpoint URL の未入力）は、保存の操作の後から出す。
+  const [showConnectionErrors, setShowConnectionErrors] = useState(false);
+  // 登録モデルの「接続」のエラーは、接続を選んだ・削除した・保存の操作の後から出す（#533）。
+  const [showModelConnectionErrors, setShowModelConnectionErrors] =
+    useState(false);
   // 既定のモデルのエラーは、関係する操作（選択・Vision 対応の切替・削除・保存）の後から出す。
   // モデル ID の入力中（キー入力ごと）には出さない（messaging.md §3.2）。
   const [showDefaultErrors, setShowDefaultErrors] = useState(false);
@@ -144,6 +175,15 @@ export function ModelSettingsPage({
     // 保存済みの状態が不正（旧設定で Vision 対応のモデルがない等）なら、開いた時点で案内する。
     setShowDefaultErrors(
       Object.keys(validateDefaultModels(loaded.enterprise_ai)).length > 0,
+    );
+    setShowModelConnectionErrors(
+      Object.keys(
+        validateModelConnections(
+          loaded.enterprise_ai.models,
+          loaded.enterprise_ai.connections,
+          savedConnectionIds(loaded),
+        ),
+      ).length > 0,
     );
     setBaselineData(query.data);
     setCheckData(query.data);
@@ -209,15 +249,26 @@ export function ModelSettingsPage({
     clearSaveError("generative_ai");
   };
 
-  const updateApiKeyClear = (clear: boolean) => {
+  const updateConnection = (
+    connectionId: EnterpriseAiConnectionId,
+    patch: Partial<Omit<EnterpriseAiConnectionSettings, "connection_id">>,
+  ) => {
     setDraft((current) =>
       current
         ? {
             ...current,
             enterprise_ai: {
               ...current.enterprise_ai,
-              clear_api_key: clear,
-              api_key: clear ? "" : current.enterprise_ai.api_key,
+              connections: current.enterprise_ai.connections.map((connection) =>
+                connection.connection_id === connectionId
+                  ? {
+                      ...connection,
+                      ...patch,
+                      // 削除の指定と新しい key の入力は両立しない。
+                      ...(patch.clear_api_key ? { api_key: "" } : {}),
+                    }
+                  : connection,
+              ),
             },
           }
         : current,
@@ -225,6 +276,83 @@ export function ModelSettingsPage({
     setCheckData(baselineData);
     setTestResults({});
     clearSaveError("enterprise_connection");
+  };
+
+  const addConnection = () => {
+    const connectionId = draft ? nextConnectionId(draft.enterprise_ai.connections) : null;
+    if (!connectionId) return;
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            enterprise_ai: {
+              ...current.enterprise_ai,
+              connections: [
+                ...current.enterprise_ai.connections,
+                emptyConnection(connectionId),
+              ],
+            },
+          }
+        : current,
+    );
+    setCheckData(baselineData);
+    setTestResults({});
+    clearSaveError("enterprise_connection");
+    // 追加した接続の最初の欄へフォーカスする（描画の後）。
+    requestAnimationFrame(() =>
+      document.getElementById(connectionFieldId(connectionId, "display-name"))?.focus(),
+    );
+  };
+
+  const removeConnectionWithConfirm = async (
+    connection: EnterpriseAiConnectionSettings,
+  ) => {
+    if (!draft) return;
+    const label = connectionLabel(connection);
+    const inUse = modelsUsingConnection(
+      draft.enterprise_ai.models,
+      connection.connection_id,
+    );
+    const ok = await confirm({
+      title: t("settings.model.connection.removeConfirm.title", {
+        connection: label,
+      }),
+      description: inUse.length
+        ? t("settings.model.connection.removeConfirm.descriptionInUse", {
+            connection: label,
+            models: inUse
+              .map((model) => model.display_name.trim() || model.model_id.trim())
+              .join("、"),
+          })
+        : t("settings.model.connection.removeConfirm.description", {
+            connection: label,
+          }),
+      confirmLabel: inUse.length
+        ? t("settings.model.connection.removeConfirm.moveAndRemove")
+        : t("common.delete"),
+      tone: "danger",
+    });
+    if (!ok) return;
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            enterprise_ai: removeConnection(
+              current.enterprise_ai,
+              connection.connection_id,
+            ),
+          }
+        : current,
+    );
+    setApiKeyVisible((current) => ({
+      ...current,
+      [connection.connection_id]: false,
+    }));
+    setShowModelConnectionErrors(true);
+    setCheckData(baselineData);
+    setTestResults({});
+    clearSaveError("enterprise_connection");
+    clearSaveError("enterprise_models");
   };
 
   const updateEnterpriseModel = (
@@ -250,6 +378,7 @@ export function ModelSettingsPage({
       };
     });
     if (patch.vision_enabled !== undefined) setShowDefaultErrors(true);
+    if (patch.connection_id !== undefined) setShowModelConnectionErrors(true);
     setCheckData(baselineData);
     setTestResults((current) => ({
       ...current,
@@ -267,7 +396,12 @@ export function ModelSettingsPage({
               ...current.enterprise_ai,
               models: [
                 ...current.enterprise_ai.models,
-                { model_id: "", display_name: "", vision_enabled: false },
+                {
+                  model_id: "",
+                  display_name: "",
+                  vision_enabled: false,
+                  connection_id: PRIMARY_CONNECTION_ID,
+                },
               ],
             },
           }
@@ -347,15 +481,43 @@ export function ModelSettingsPage({
     event.preventDefault();
     if (!draft || !baselineData || operationBusy) return;
     clearSaveError(section);
+    // 送信を止めるときは、最初の不正な欄へフォーカスする（messaging.md §3.2）。
+    if (section === "enterprise_connection") {
+      const errors = validateConnections(draft.enterprise_ai.connections);
+      const firstInvalid = draft.enterprise_ai.connections.find(
+        (connection) => errors[connection.connection_id],
+      );
+      if (firstInvalid) {
+        setShowConnectionErrors(true);
+        document
+          .getElementById(connectionFieldId(firstInvalid.connection_id, "endpoint"))
+          ?.focus();
+        return;
+      }
+    }
     if (section === "enterprise_models") {
+      const connectionErrors = validateModelConnections(
+        draft.enterprise_ai.models,
+        draft.enterprise_ai.connections,
+        savedConnectionIds(baselineData.settings),
+      );
+      const invalidRow = draft.enterprise_ai.models.findIndex(
+        (_, index) => connectionErrors[index],
+      );
       const errors = validateDefaultModels(draft.enterprise_ai);
       const firstInvalid = DEFAULT_MODEL_FIELD_ORDER.find(
         (field) => errors[field],
       );
-      if (firstInvalid) {
-        // 送信を止め、最初の不正な欄へフォーカスする（messaging.md §3.2）。
+      if (invalidRow >= 0 || firstInvalid) {
+        setShowModelConnectionErrors(true);
         setShowDefaultErrors(true);
-        document.getElementById(DEFAULT_MODEL_FIELD_IDS[firstInvalid])?.focus();
+        document
+          .getElementById(
+            invalidRow >= 0
+              ? modelConnectionFieldId(invalidRow)
+              : DEFAULT_MODEL_FIELD_IDS[firstInvalid!],
+          )
+          ?.focus();
         return;
       }
     }
@@ -387,6 +549,18 @@ export function ModelSettingsPage({
   const defaultModelErrors = draft
     ? validateDefaultModels(draft.enterprise_ai)
     : {};
+  const connectionErrors: ConnectionErrors =
+    draft && showConnectionErrors
+      ? validateConnections(draft.enterprise_ai.connections)
+      : {};
+  const modelConnectionErrors: ModelConnectionErrors =
+    draft && baselineData && showModelConnectionErrors
+      ? validateModelConnections(
+          draft.enterprise_ai.models,
+          draft.enterprise_ai.connections,
+          savedConnectionIds(baselineData.settings),
+        )
+      : {};
 
   if (query.isError) {
     return (
@@ -448,68 +622,47 @@ export function ModelSettingsPage({
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              {/* Endpoint URL は長い値なので全幅。Project OCID と API キーは広い画面（2xl）で同じ行に置く。 */}
-              <div className="grid gap-x-6 gap-y-5 md:grid-cols-2">
-                <TextField
-                  id="enterprise-endpoint"
-                  label={t("settings.model.enterprise.endpoint")}
-                  required
-                  requiredLabel={t("settings.model.requiredInOci")}
-                  value={draft.enterprise_ai.endpoint}
-                  placeholder={t("settings.model.placeholder.endpoint")}
-                  helper={
-                    <>
-                      <span className="block">
-                        {t("settings.model.enterprise.endpointHelp")}
-                      </span>
-                      <a
-                        href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/openai-compatible-api.htm"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex min-h-11 items-center rounded-sm text-accent-fg underline underline-offset-4 hover:text-accent-fg"
-                      >
-                        {t("settings.model.enterprise.endpointDocs")}
-                      </a>
-                    </>
+              {draft.enterprise_ai.connections.map((connection) => (
+                <ConnectionPanel
+                  key={connection.connection_id}
+                  connection={connection}
+                  error={connectionErrors[connection.connection_id]}
+                  apiKeyVisible={Boolean(apiKeyVisible[connection.connection_id])}
+                  onApiKeyVisibleChange={(visible) =>
+                    setApiKeyVisible((current) => ({
+                      ...current,
+                      [connection.connection_id]: visible,
+                    }))
                   }
-                  onValueChange={(value) => updateEnterprise("endpoint", value)}
-                  className="md:col-span-2"
-                />
-                <TextField
-                  id="enterprise-project-ocid"
-                  label={t("settings.model.enterprise.project")}
-                  required
-                  requiredLabel={t("settings.model.requiredInOci")}
-                  value={draft.enterprise_ai.project_ocid}
-                  placeholder={t("settings.model.placeholder.project")}
-                  helper={t("settings.model.enterprise.projectHelp")}
-                  onValueChange={(value) =>
-                    updateEnterprise("project_ocid", value)
+                  onChange={(patch) =>
+                    updateConnection(connection.connection_id, patch)
                   }
-                  className="md:col-span-2 2xl:col-span-1"
+                  onRemove={
+                    connection.connection_id === PRIMARY_CONNECTION_ID
+                      ? undefined
+                      : () => void removeConnectionWithConfirm(connection)
+                  }
                 />
-                <SecretField
-                  id="enterprise-api-key"
-                  label={t("settings.model.enterprise.apiKey")}
-                  value={draft.enterprise_ai.api_key}
-                  onValueChange={(value) => updateEnterprise("api_key", value)}
-                  visible={apiKeyVisible}
-                  onVisibleChange={setApiKeyVisible}
-                  hasSavedSecret={draft.enterprise_ai.has_api_key}
-                  savedLabel={t("settings.model.enterprise.apiKeySaved")}
-                  notSetLabel={t("settings.model.enterprise.apiKeyNotSet")}
-                  showLabel={t("settings.model.enterprise.apiKeyShow")}
-                  hideLabel={t("settings.model.enterprise.apiKeyHide")}
-                  placeholder={t("settings.model.placeholder.apiKey")}
-                  helper={t("settings.model.enterprise.apiKeyHelp")}
-                  clearOption={{
-                    label: t("settings.model.enterprise.clearApiKey"),
-                    checked: draft.enterprise_ai.clear_api_key,
-                    onCheckedChange: updateApiKeyClear,
-                  }}
-                  className="md:col-span-2 2xl:col-span-1"
-                />
-              </div>
+              ))}
+              {nextConnectionId(draft.enterprise_ai.connections) ? (
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={Plus}
+                    onClick={addConnection}
+                    className="w-full sm:w-auto"
+                  >
+                    {t("settings.model.connection.add")}
+                  </Button>
+                  <p className="text-xs leading-relaxed text-fg-muted">
+                    {t("settings.model.connection.addHelp", {
+                      max: MAX_ENTERPRISE_AI_CONNECTIONS,
+                    })}
+                  </p>
+                </div>
+              ) : null}
               <ModelFormActions
                 sectionLabel={t("settings.model.enterprise.title")}
                 canSubmit={canSubmit}
@@ -537,6 +690,8 @@ export function ModelSettingsPage({
             <CardContent className="space-y-5">
               <ModelCatalogEditor
                 models={draft.enterprise_ai.models}
+                connections={draft.enterprise_ai.connections}
+                connectionErrors={modelConnectionErrors}
                 testingKey={testingKey}
                 testResults={testResults}
                 onModelChange={updateEnterpriseModel}
@@ -596,7 +751,6 @@ export function ModelSettingsPage({
                 <NumberField
                   id="genai-embedding-dim"
                   label={t("settings.model.genai.embeddingDim")}
-                  badge={t("settings.model.fixed")}
                   value={draft.generative_ai.embedding_dim}
                   min={1536}
                   max={1536}
@@ -635,6 +789,142 @@ export function ModelSettingsPage({
         </form>
       </fieldset>
     </PageBody>
+  );
+}
+
+/**
+ * 接続 1 件のカード（#533）。接続 1 は #533 より前の入力欄そのまま（id も同じ）。
+ * 接続 2 は削除でき、Endpoint URL は必須。削除は同じカードの見出しの行の右端に置く
+ * （主操作の保存と隣に並べない。README「カード内の操作行」）。
+ */
+function ConnectionPanel({
+  connection,
+  error,
+  apiKeyVisible,
+  onApiKeyVisibleChange,
+  onChange,
+  onRemove,
+}: {
+  connection: EnterpriseAiConnectionSettings;
+  error?: string;
+  apiKeyVisible: boolean;
+  onApiKeyVisibleChange: (visible: boolean) => void;
+  onChange: (
+    patch: Partial<Omit<EnterpriseAiConnectionSettings, "connection_id">>,
+  ) => void;
+  onRemove?: () => void;
+}) {
+  const id = connection.connection_id;
+  const primary = id === PRIMARY_CONNECTION_ID;
+  const headingId = `enterprise-connection-${id}-title`;
+  const defaultName = connectionLabel({ connection_id: id, display_name: "" });
+  const title = primary ? t("settings.model.connection.primaryTitle") : defaultName;
+  return (
+    <section
+      aria-labelledby={headingId}
+      data-testid={`enterprise-connection-${id}`}
+      className="space-y-4 rounded-md border border-border bg-surface-sunken p-4"
+    >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 space-y-1">
+          <h3 id={headingId} className="text-sm font-semibold text-fg">
+            {title}
+          </h3>
+          <p className="text-xs leading-relaxed text-fg-muted">
+            {primary
+              ? t("settings.model.connection.primaryDescription")
+              : t("settings.model.connection.secondaryDescription")}
+          </p>
+        </div>
+        {onRemove ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            tone="danger"
+            icon={Trash2}
+            aria-label={`${title}: ${t("settings.model.connection.remove")}`}
+            onClick={onRemove}
+            className="w-full sm:ml-auto sm:w-auto"
+          >
+            {t("settings.model.connection.remove")}
+          </Button>
+        ) : null}
+      </div>
+      {/* 表示名と Endpoint URL は広い画面（xl）で同じ行。Project OCID と API キーは 2xl で同じ行に置く。 */}
+      <div className="grid gap-x-6 gap-y-5 md:grid-cols-2">
+        <TextField
+          id={connectionFieldId(id, "display-name")}
+          label={t("settings.model.connection.displayName")}
+          value={connection.display_name}
+          placeholder={defaultName}
+          helper={t("settings.model.connection.displayNameHelp", {
+            name: defaultName,
+          })}
+          onValueChange={(value) => onChange({ display_name: value })}
+          className="md:col-span-2 xl:col-span-1"
+        />
+        <TextField
+          id={connectionFieldId(id, "endpoint")}
+          label={t("settings.model.enterprise.endpoint")}
+          required
+          // 接続 1 は OCI を使うときだけ必須（条件付きの文言）。接続 2 は常に必須なので既定の「必須」（#531）。
+          requiredLabel={primary ? t("settings.model.requiredInOci") : undefined}
+          value={connection.endpoint}
+          placeholder={t("settings.model.placeholder.endpoint")}
+          error={error}
+          helper={
+            <>
+              <span className="block">
+                {t("settings.model.enterprise.endpointHelp")}
+              </span>
+              <a
+                href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/openai-compatible-api.htm"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex min-h-11 items-center rounded-sm text-accent-fg underline underline-offset-4 hover:text-accent-fg"
+              >
+                {t("settings.model.enterprise.endpointDocs")}
+              </a>
+            </>
+          }
+          onValueChange={(value) => onChange({ endpoint: value })}
+          className="md:col-span-2 xl:col-span-1"
+        />
+        <TextField
+          id={connectionFieldId(id, "project-ocid")}
+          label={t("settings.model.enterprise.project")}
+          required
+          requiredLabel={t("settings.model.requiredInOci")}
+          value={connection.project_ocid}
+          placeholder={t("settings.model.placeholder.project")}
+          helper={t("settings.model.enterprise.projectHelp")}
+          onValueChange={(value) => onChange({ project_ocid: value })}
+          className="md:col-span-2 2xl:col-span-1"
+        />
+        <SecretField
+          id={connectionFieldId(id, "api-key")}
+          label={t("settings.model.enterprise.apiKey")}
+          value={connection.api_key}
+          onValueChange={(value) => onChange({ api_key: value })}
+          visible={apiKeyVisible}
+          onVisibleChange={onApiKeyVisibleChange}
+          hasSavedSecret={connection.has_api_key}
+          savedLabel={t("settings.model.enterprise.apiKeySaved")}
+          notSetLabel={t("settings.model.enterprise.apiKeyNotSet")}
+          showLabel={t("settings.model.enterprise.apiKeyShow")}
+          hideLabel={t("settings.model.enterprise.apiKeyHide")}
+          placeholder={t("settings.model.placeholder.apiKey")}
+          helper={t("settings.model.enterprise.apiKeyHelp")}
+          clearOption={{
+            label: t("settings.model.enterprise.clearApiKey"),
+            checked: connection.clear_api_key,
+            onCheckedChange: (clear) => onChange({ clear_api_key: clear }),
+          }}
+          className="md:col-span-2 2xl:col-span-1"
+        />
+      </div>
+    </section>
   );
 }
 
@@ -677,6 +967,8 @@ function ModelFormActions({
 
 function ModelCatalogEditor({
   models,
+  connections,
+  connectionErrors,
   testingKey,
   testResults,
   onModelChange,
@@ -686,6 +978,8 @@ function ModelCatalogEditor({
   displayNamePlaceholder,
 }: {
   models: EnterpriseAiConfiguredModel[];
+  connections: EnterpriseAiConnectionSettings[];
+  connectionErrors: ModelConnectionErrors;
   testingKey: ModelTestKey | null;
   testResults: Partial<Record<ModelTestKey, ModelSettingsTestResult>>;
   onModelChange: (
@@ -701,13 +995,25 @@ function ModelCatalogEditor({
   displayNamePlaceholder: string;
 }) {
   return (
-    <div className="space-y-3 md:col-span-2">
+    <div
+      role="group"
+      aria-labelledby="enterprise-model-catalog-label"
+      className="space-y-3"
+    >
       <div className="flex min-h-8 flex-wrap items-center justify-between gap-2">
-        <FieldLabel
-          htmlFor="enterprise-model-catalog"
-          label={t("settings.model.enterprise.models")}
-          badge={t("settings.model.requiredInOci")}
-        />
+        {/* 登録モデルは複数の入力をまとめた一覧で、label で結べる 1 つの入力が無い。見出しの行に「追加」を並べるため
+            fieldset の legend にもできないので、共有の FieldLabel / FieldLegend で表せず、条件付きの必須のタグを
+            RequiredBadge で直接置く（#531）。group は aria-required を持てないので、タグは読み上げ対象に残す。 */}
+        <span
+          id="enterprise-model-catalog-label"
+          className="text-sm font-medium text-fg"
+        >
+          {t("settings.model.enterprise.models")}
+          <RequiredBadge
+            label={t("settings.model.requiredInOci")}
+            className="ml-2 align-middle"
+          />
+        </span>
         <Button
           type="button"
           variant="secondary"
@@ -725,12 +1031,13 @@ function ModelCatalogEditor({
       >
         <div
           className={cn(
-            "hidden border-b border-border bg-surface px-3 py-2 text-xs font-medium text-fg-muted md:grid md:gap-3",
+            "hidden border-b border-border bg-surface px-3 py-2 text-xs font-medium text-fg-muted lg:grid lg:gap-3",
             CATALOG_COLUMNS,
           )}
         >
           <span>{t("settings.model.enterprise.modelId")}</span>
           <span>{t("settings.model.enterprise.displayName")}</span>
+          <span>{t("settings.model.enterprise.connection")}</span>
           <span>{t("settings.model.enterprise.vision")}</span>
           <span>{t("settings.model.test.action")}</span>
           <span aria-hidden />
@@ -746,7 +1053,7 @@ function ModelCatalogEditor({
             <div
               key={index}
               className={cn(
-                "grid gap-3 border-b border-border p-3 last:border-b-0 md:items-start",
+                "grid gap-3 border-b border-border p-3 last:border-b-0 lg:items-start",
                 CATALOG_COLUMNS,
               )}
             >
@@ -764,8 +1071,25 @@ function ModelCatalogEditor({
                   onModelChange(index, { display_name: value })
                 }
               />
-              <div className="flex min-h-10 items-center justify-between gap-3 text-sm text-fg md:justify-start">
-                <span className="md:sr-only">
+              <SelectField
+                id={modelConnectionFieldId(index)}
+                // 「接続 1」は接続の名前と紛らわしいので、行の番号は「モデル N の接続」と読ませる。
+                label={t("settings.model.enterprise.connectionOfModel", {
+                  number: modelNumber,
+                })}
+                value={modelConnectionId(model)}
+                options={connectionOptions(connections)}
+                error={connectionErrors[index]}
+                onValueChange={(value) =>
+                  onModelChange(index, { connection_id: value })
+                }
+                // 広い画面では表頭が見出しになるので、欄のラベルは読み上げだけにする。狭い画面の
+                // ラベルは同じ行の他の欄（CompactTextInput）と同じ小さい文字にそろえる。
+                className="min-w-0 max-lg:[&>label]:text-xs max-lg:[&>label]:text-fg-muted lg:[&>label]:sr-only"
+                buttonClassName="h-10"
+              />
+              <div className="flex min-h-10 items-center justify-between gap-3 text-sm text-fg lg:justify-start">
+                <span className="lg:sr-only">
                   {t("settings.model.enterprise.vision")}
                 </span>
                 <Switch
@@ -777,7 +1101,7 @@ function ModelCatalogEditor({
                 />
               </div>
               <div className="flex min-h-10 items-center">
-                <span className="mr-2 text-xs font-medium text-fg-muted md:sr-only">
+                <span className="mr-2 text-xs font-medium text-fg-muted lg:sr-only">
                   {t("settings.model.test.action")}
                 </span>
                 <TestButton
@@ -808,7 +1132,7 @@ function ModelCatalogEditor({
                 result={testResults[testKey]}
                 testing={testingKey === testKey}
                 model={trimmedModelId || `${t("settings.model.enterprise.modelId")} ${modelNumber}`}
-                className="md:col-span-5"
+                className="lg:col-span-6"
               />
             </div>
           );
@@ -818,9 +1142,12 @@ function ModelCatalogEditor({
   );
 }
 
-/** 登録モデルの一覧の列（モデル ID / 表示名 / 画像入力（Vision）に対応 / テスト / 削除）。 */
+/**
+ * 登録モデルの一覧の列（モデル ID / 表示名 / 接続 / 画像入力（Vision）に対応 / テスト / 削除）。
+ * 6 列はサイドバーを引いた md の本文幅では窮屈なため、lg から表の形にする（#533）。
+ */
 const CATALOG_COLUMNS =
-  "md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_8rem_7rem_3.25rem]";
+  "lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.9fr)_8rem_7rem_3.25rem]";
 
 /**
  * 既定のモデル（#499）。登録モデルの一覧の下に置き、登録モデルの節と一緒に保存する。
@@ -856,7 +1183,6 @@ function DefaultModelFields({
           id={DEFAULT_MODEL_FIELD_IDS.default_vision_model_id}
           label={t("settings.model.defaults.vision")}
           required
-          requiredLabel={t("settings.model.required")}
           value={enterprise.default_vision_model_id}
           options={visionModelOptions(enterprise.models)}
           placeholder={t("settings.model.defaults.visionPlaceholder")}
@@ -891,7 +1217,7 @@ function CompactTextInput({
 }) {
   return (
     <label className="space-y-1.5">
-      <span className="block text-xs font-medium text-fg-muted md:sr-only">
+      <span className="block text-xs font-medium text-fg-muted lg:sr-only">
         {label}
       </span>
       <input
@@ -912,7 +1238,6 @@ function TestableTextField({
   value,
   placeholder,
   helper,
-  badge,
   className,
   testResult,
   testing,
@@ -924,7 +1249,6 @@ function TestableTextField({
   value: string;
   placeholder?: string;
   helper?: string;
-  badge?: string;
   className?: string;
   testResult?: ModelSettingsTestResult;
   testing: boolean;
@@ -935,14 +1259,7 @@ function TestableTextField({
     <div className={cn("space-y-1.5", className)}>
       <InputActionField
         id={id}
-        label={
-          <>
-            {label}
-            {badge ? (
-              <RequiredBadge label={badge} className="ml-2 align-middle" />
-            ) : null}
-          </>
-        }
+        label={label}
         value={value}
         placeholder={placeholder}
         helper={helper}
@@ -986,7 +1303,7 @@ function TestButton({
       type="button"
       variant="secondary"
       size="md"
-      className="w-full whitespace-nowrap md:w-auto"
+      className="w-full whitespace-nowrap lg:w-auto"
       aria-label={t("settings.model.test.aria", {
         model: modelId || fallbackLabel,
       })}
@@ -1048,7 +1365,6 @@ function NumberField({
   max,
   step,
   helper,
-  badge,
   readOnly,
   onChange,
 }: {
@@ -1059,13 +1375,13 @@ function NumberField({
   max: number;
   step: number;
   helper?: string;
-  badge?: string;
   readOnly?: boolean;
   onChange: (value: number) => void;
 }) {
   return (
     <div className="space-y-1.5">
-      <FieldLabel htmlFor={id} label={label} badge={badge} />
+      {/* 読み取り専用の固定値。「固定」は必須と同じタグで出さず、補足（helper）で伝える（#531）。 */}
+      <FieldLabel htmlFor={id} label={label} className="block" />
       <input
         id={id}
         type="number"
@@ -1084,25 +1400,6 @@ function NumberField({
       {helper ? (
         <p className="text-xs leading-relaxed text-fg-muted">{helper}</p>
       ) : null}
-    </div>
-  );
-}
-
-function FieldLabel({
-  htmlFor,
-  label,
-  badge,
-}: {
-  htmlFor: string;
-  label: string;
-  badge?: string;
-}) {
-  return (
-    <div className="flex min-h-5 items-center gap-2">
-      <label htmlFor={htmlFor} className="text-sm font-medium text-fg">
-        {label}
-      </label>
-      {badge ? <RequiredBadge label={badge} /> : null}
     </div>
   );
 }
@@ -1126,14 +1423,19 @@ function buildClientSideTestFailure(
 }
 
 function cloneSettings(settings: ModelSettingsPayload): ModelSettingsPayload {
-  return {
-    enterprise_ai: {
-      ...settings.enterprise_ai,
-      vlm_input_mode: settings.enterprise_ai.vlm_input_mode ?? "auto",
-      models: settings.enterprise_ai.models.map((model) => ({ ...model })),
-    },
-    generative_ai: { ...settings.generative_ai },
-  };
+  return normalizeModelSettings(settings);
+}
+
+function savedConnectionIds(settings: ModelSettingsPayload): string[] {
+  return normalizeModelSettings(settings).enterprise_ai.connections.map(
+    (connection) => connection.connection_id,
+  );
+}
+
+function cloneConnections(
+  connections: readonly EnterpriseAiConnectionSettings[],
+): EnterpriseAiConnectionSettings[] {
+  return connections.map((connection) => ({ ...connection }));
 }
 
 const MODEL_SAVE_SUCCESS_KEYS = {
@@ -1149,11 +1451,13 @@ export function buildSectionSavePayload(
 ): ModelSettingsPayload {
   const payload = cloneSettings(baseline);
   if (section === "enterprise_connection") {
-    payload.enterprise_ai.endpoint = draft.enterprise_ai.endpoint;
-    payload.enterprise_ai.project_ocid = draft.enterprise_ai.project_ocid;
-    payload.enterprise_ai.api_key = draft.enterprise_ai.api_key;
-    payload.enterprise_ai.has_api_key = draft.enterprise_ai.has_api_key;
-    payload.enterprise_ai.clear_api_key = draft.enterprise_ai.clear_api_key;
+    const connections = cloneConnections(draft.enterprise_ai.connections);
+    payload.enterprise_ai.connections = connections;
+    // 削除した接続を使っていた保存済みのモデルは、削除の確認のとおり接続 1 に移して送る。
+    payload.enterprise_ai.models = moveModelsToAvailableConnections(
+      payload.enterprise_ai.models,
+      connections.map((connection) => connection.connection_id),
+    );
   } else if (section === "enterprise_models") {
     payload.enterprise_ai.models = draft.enterprise_ai.models.map((model) => ({
       ...model,
@@ -1177,6 +1481,8 @@ function mergeSavedSectionIntoDraft(
     return {
       enterprise_ai: {
         ...saved.enterprise_ai,
+        // 入力中の新しい key は保存で消える（応答は空）。削除の指定も戻す。
+        connections: cloneConnections(saved.enterprise_ai.connections),
         models: draft.enterprise_ai.models.map((model) => ({ ...model })),
         default_text_model_id: draft.enterprise_ai.default_text_model_id,
         default_vision_model_id: draft.enterprise_ai.default_vision_model_id,
@@ -1188,11 +1494,7 @@ function mergeSavedSectionIntoDraft(
     return {
       enterprise_ai: {
         ...saved.enterprise_ai,
-        endpoint: draft.enterprise_ai.endpoint,
-        project_ocid: draft.enterprise_ai.project_ocid,
-        api_key: draft.enterprise_ai.api_key,
-        has_api_key: draft.enterprise_ai.has_api_key,
-        clear_api_key: draft.enterprise_ai.clear_api_key,
+        connections: cloneConnections(draft.enterprise_ai.connections),
       },
       generative_ai: { ...draft.generative_ai },
     };
@@ -1200,6 +1502,7 @@ function mergeSavedSectionIntoDraft(
   return {
     enterprise_ai: {
       ...draft.enterprise_ai,
+      connections: cloneConnections(draft.enterprise_ai.connections),
       models: draft.enterprise_ai.models.map((model) => ({ ...model })),
     },
     generative_ai: { ...saved.generative_ai },

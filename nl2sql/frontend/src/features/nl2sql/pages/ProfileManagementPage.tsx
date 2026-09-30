@@ -37,13 +37,13 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   RowTitleButton,
+  FieldLabel,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
 
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { PageNotice } from "@/components/page-notice";
-import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
@@ -530,7 +530,6 @@ function SelectAiConfigFields({
           value={form.selectAiConfig.region}
           options={SELECT_AI_REGION_OPTIONS}
           required
-          requiredLabel={t("common.required")}
           error={requiredErrors.region ? t("profiles.error.regionRequired") : undefined}
           onValueChange={(value) => {
             updateSelectAiConfig(setForm, { region: value });
@@ -543,7 +542,6 @@ function SelectAiConfigFields({
           id="profile-select-ai-model"
           label={t("profiles.field.model")}
           required
-          requiredLabel={t("common.required")}
           value={form.selectAiConfig.model}
           error={requiredErrors.model ? t("profiles.error.modelRequired") : undefined}
           onValueChange={(value) => {
@@ -557,7 +555,6 @@ function SelectAiConfigFields({
           id="profile-select-ai-max-tokens"
           label={t("profiles.field.maxTokens")}
           required
-          requiredLabel={t("common.required")}
           type="number"
           min={SELECT_AI_MAX_TOKENS_MIN}
           max={SELECT_AI_MAX_TOKENS_MAX}
@@ -580,7 +577,6 @@ function SelectAiConfigFields({
           id="profile-select-ai-embedding-model"
           label={t("profiles.field.embeddingModel")}
           required
-          requiredLabel={t("common.required")}
           value={form.selectAiConfig.embedding_model}
           error={
             requiredErrors.embeddingModel ? t("profiles.error.embeddingModelRequired") : undefined

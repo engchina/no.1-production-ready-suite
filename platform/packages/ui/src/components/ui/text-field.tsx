@@ -15,7 +15,7 @@ import { cn } from "../../lib/utils";
 
 import { Button } from "./button";
 import { FieldError } from "./field-error";
-import { RequiredBadge } from "./required-badge";
+import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
 
 /**
  * 入力欄の見た目（枠線は secondary ボタンと同じ --color-border-control、角丸は Button・SelectField と同じ --radius-control）。
@@ -97,9 +97,9 @@ export type TextFieldProps = {
   helper?: ReactNode;
   /** 翻訳済みのエラー（任意）。指定時は aria-invalid と枠線の色が変わる。 */
   error?: string;
-  /** 必須であることを aria-required と中立色の RequiredBadge で伝える。ネイティブの required 検証は行わない（検証はアプリ側）。 */
+  /** 必須であることを aria-required と中立色の RequiredBadge「必須」で伝える。ネイティブの required 検証は行わない（検証はアプリ側）。 */
   required?: boolean;
-  /** 必須バッジの文言（例:「必須」）。required のときは必ず渡す（無いと見た目で必須が分からない）。 */
+  /** 必須バッジの文言。既定「必須」。条件付きの必須（例:「OCI 運用時必須」）だけ上書きする。 */
   requiredLabel?: string;
   className?: string;
   inputClassName?: string;
@@ -141,7 +141,7 @@ export function TextField({
   helper,
   error,
   required,
-  requiredLabel,
+  requiredLabel = DEFAULT_REQUIRED_LABEL,
   className,
   inputClassName,
   size = "md",

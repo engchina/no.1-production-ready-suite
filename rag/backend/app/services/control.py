@@ -23,6 +23,7 @@ from uuid import uuid4
 
 from app.config import (
     Settings,
+    enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
     enterprise_ai_vision_model_id,
 )
@@ -152,12 +153,15 @@ def service_runtime_env(settings: Settings) -> dict[str, str]:
     読むため、backend が解決済みの実効値(model-settings.json 由来を含む)を渡す。これで
     「モデル画面で設定 → parser 再起動 → 稼働中」が成立する(parser は起動時に 1 回だけ env を
     読むため再起動が必要)。
+    OCI parser は VLM 抽出だけを行うので、接続(endpoint / API key / project)は既定の Vision
+    モデルの接続を渡す(#533。接続 2 を選んだ Vision モデルでも parser が同じ接続で呼ぶ)。
     """
-    endpoint = settings.oci_enterprise_ai_endpoint
-    api_key = settings.oci_enterprise_ai_api_key
-    project = settings.oci_enterprise_ai_project_ocid
     vlm_model = enterprise_ai_vision_model_id(settings)
     default_model = enterprise_ai_default_model_id(settings)
+    connection = enterprise_ai_connection_for_model(settings, vlm_model)
+    endpoint = connection.endpoint
+    api_key = connection.api_key
+    project = connection.project_ocid
     return {
         "HF_TOKEN": settings.huggingface_token,
         # 空の HF_ENDPOINT は huggingface_hub が scheme 無しの endpoint として扱い DL が

@@ -50,6 +50,18 @@ export interface MultiSelectComboboxRemote {
   searchingLabel: string;
 }
 
+/** 入力欄をフォームの欄として扱うときの設定（外の FieldLabel と結ぶ・必須・エラー。#531）。 */
+export interface MultiSelectComboboxFieldProps {
+  /** 入力欄の id。外の FieldLabel（htmlFor）と結ぶときに渡す。 */
+  inputId?: string;
+  /** 1 件以上の選択が必須。入力欄（role=combobox）の aria-required で伝える。 */
+  required?: boolean;
+  /** 未選択などのエラー中。入力欄の aria-invalid で伝える。 */
+  invalid?: boolean;
+  /** 入力欄の aria-describedby（エラー・補足の id）。 */
+  describedBy?: string;
+}
+
 export function MultiSelectCombobox<T>({
   items,
   selectedIds,
@@ -68,6 +80,10 @@ export function MultiSelectCombobox<T>({
   triggerClassName,
   remote,
   selectedItems,
+  inputId,
+  required = false,
+  invalid = false,
+  describedBy,
 }: {
   items: T[];
   selectedIds: string[];
@@ -87,7 +103,7 @@ export function MultiSelectCombobox<T>({
   remote?: MultiSelectComboboxRemote;
   /** チップに出す選択済みの項目。`items`（検索結果のページ）に無い選択済みも名前で出すために渡す。 */
   selectedItems?: T[];
-}) {
+} & MultiSelectComboboxFieldProps) {
   const listId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -324,8 +340,12 @@ export function MultiSelectCombobox<T>({
         })}
         <input
           ref={inputRef}
+          id={inputId}
           type="text"
           role="combobox"
+          aria-required={required || undefined}
+          aria-invalid={invalid || undefined}
+          aria-describedby={describedBy}
           aria-expanded={open}
           aria-controls={listId}
           aria-haspopup="listbox"

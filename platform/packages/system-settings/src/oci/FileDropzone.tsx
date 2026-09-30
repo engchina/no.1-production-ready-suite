@@ -16,9 +16,9 @@ import { validateFileDropzoneSelection, type FileDropzoneRejectReason } from "./
 import { cn, ClearActionButton } from "@engchina/production-ready-ui";
 import {
   FieldError,
+  FieldLabel,
   Spinner,
 } from "@engchina/production-ready-ui";
-import { FieldLabel } from "./required-field";
 
 export type FileDropzoneIcon = "file" | "spreadsheet" | "upload";
 

@@ -18,11 +18,15 @@ from pr_backend_core.config import (
     product_settings_config,
 )
 from pr_system_settings.model import EnterpriseAiConfiguredModel as EnterpriseAiConfiguredModel
+from pr_system_settings.model import EnterpriseAiConnection as EnterpriseAiConnection
 from pr_system_settings.model import (
     ModelSecretStateMixin,
     ModelSettingsSection,
     ModelSettingsStore,
     SectionSecret,
+)
+from pr_system_settings.model import (
+    enterprise_ai_connection_for_model as enterprise_ai_connection_for_model,
 )
 from pr_system_settings.model import (
     enterprise_ai_default_model_id as enterprise_ai_default_model_id,
@@ -346,6 +350,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     oci_enterprise_ai_endpoint: str = Field(default="")
     oci_enterprise_ai_project_ocid: str = Field(default="")
     oci_enterprise_ai_api_key: str = Field(default="")
+    # 接続 1 の表示名と接続 2（#533）。モデルを呼ぶ接続は
+    # enterprise_ai_connection_for_model で引く。
+    oci_enterprise_ai_connection_name: str = Field(default="")
+    oci_enterprise_ai_secondary_connection_name: str = Field(default="")
+    oci_enterprise_ai_secondary_endpoint: str = Field(default="")
+    oci_enterprise_ai_secondary_project_ocid: str = Field(default="")
+    oci_enterprise_ai_secondary_api_key: str = Field(default="")
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     # 既定のテキストモデル（任意）と既定の Vision モデル（#499）。呼び出しに使う ID は
     # enterprise_ai_default_model_id / enterprise_ai_vision_model_id で解決する。
@@ -758,10 +769,11 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         description="navigation node 要約を生成する node 数の上限（LLM 呼び出し回数の bound）。",
     )
     rag_field_extraction_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "取込時に field schema 定義に従い OCI Enterprise AI structured output で named "
-            "field/entity を抽出する（PoweRAG/LangExtract 由来。既定 OFF）。"
+            "field/entity を抽出する（PoweRAG/LangExtract 由来。既定 ON。項目の定義が 0 件の"
+            "ときは何もしない。#537）。"
         ),
     )
     rag_context_compression_enabled: bool = Field(
@@ -1271,12 +1283,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_vision_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "文書解析の後に図・画像を OCI Enterprise AI の VLM で読み取り、図の要素の本文を"
             "説明文にする(全ての解析エンジン。Docling は解析サービスの中で読み取る)。"
             "全体の既定は backend/.env で決め(文書解析の画面の「解析後の処理」から"
-            "保存できる。#528)、文書のレシピで上書きする。画像 1 枚ごとに VLM を呼ぶ。"
+            "保存できる。#528)、文書のレシピで上書きする。既定 ON(#537)。"
+            "画像 1 枚ごとに VLM を呼ぶ。"
         ),
     )
     rag_parser_unstructured_enabled: bool = Field(

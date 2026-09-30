@@ -72,8 +72,12 @@ export {
 export { ModelSettingsPage, type ModelSettingsPageProps } from "./model/ModelSettingsPage";
 export { MODEL_MESSAGES, type ModelMessageKey } from "./model/messages";
 export {
+  ENTERPRISE_AI_CONNECTION_IDS,
+  MAX_ENTERPRISE_AI_CONNECTIONS,
   MODEL_SETTINGS_QUERY_KEY,
   type EnterpriseAiConfiguredModel,
+  type EnterpriseAiConnectionId,
+  type EnterpriseAiConnectionSettings,
   type EnterpriseAiModelSettings,
   type EnterpriseAiVlmInputMode,
   type GenerativeAiModelSettings,

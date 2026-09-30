@@ -85,6 +85,14 @@
           {
             "selector": "JSXOpeningElement[name.name='details']",
             "message": "開閉できる領域は <details> / <summary> を手書きせず Disclosure（@engchina/production-ready-ui）を使う。手書きすると開閉の Chevron・見出し全体の押せる領域・フォーカスの表示が漏れる（#397）。Disclosure で表せない所（展開できる表の行など）だけ理由を添えて局所的に除外し、状態は DisclosureChevron で示す。"
+          },
+          {
+            "selector": ":matches(JSXAttribute[name.name='placeholder'] Literal[value=/任意/], JSXAttribute[name.name='placeholder'] TemplateElement[value.raw=/任意/], Property[key.value=/[Pp]laceholder/] > Literal[value=/任意/], Property[key.name=/[Pp]laceholder/] > Literal[value=/任意/], Literal[value=/[(（]\\s*任意\\s*[)）・、,，]/], TemplateElement[value.raw=/[(（]\\s*任意\\s*[)）・、,，]/], JSXText[value=/[(（]\\s*任意\\s*[)）・、,，]/])",
+            "message": "任意の欄を「(任意)」や placeholder で示さない。任意の欄には何も付けず、必須の欄だけに required で「必須」のタグを出す（placeholder は入力を始めると消え、ラベルの代わりにならない。WCAG 3.3.2。docs/design-system/README.md §4「必須の表示」、#531）。"
+          },
+          {
+            "selector": ":matches(JSXText[value=/^\\s*[*＊※]\\s*$/], JSXText[value=/\\S\\s*[*＊]\\s*$/], JSXElement > JSXExpressionContainer > Literal[value=/^\\s*[*＊※]\\s*$/], JSXText[value=/^\\s*※?必須\\s*$/], JSXElement > JSXExpressionContainer > Literal[value=/^\\s*※?必須\\s*$/], JSXOpeningElement[name.name!='RequiredBadge'] > JSXAttribute[name.name!='requiredLabel'] Literal[value=/^\\s*※?必須\\s*$/], JSXOpeningElement[name.name='RequiredBadge'], JSXElement > JSXExpressionContainer > CallExpression[callee.name='t'][arguments.0.value=/^common\\.required$|\\.required(?:Mark|Badge|Tag)$/], JSXOpeningElement[name.name!='RequiredBadge'] > JSXAttribute[name.name!='requiredLabel'] > JSXExpressionContainer > CallExpression[callee.name='t'][arguments.0.value=/^common\\.required$|\\.required(?:Mark|Badge|Tag)$/])",
+            "message": "必須の表示を手書きしない（「*」・「必須」の span / Badge / RequiredBadge を直接ラベルに並べない）。TextField / SelectField / SecretField の required、それ以外の入力は FieldLabel / FieldLegend / Fieldset の required を使う（docs/design-system/README.md §4「必須の表示」、#531）。"
           }
         ]
       }

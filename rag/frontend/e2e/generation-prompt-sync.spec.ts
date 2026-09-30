@@ -144,7 +144,7 @@ test("DocRAG の回答生成テンプレートは編集中の内容を背景の�
   );
 
   await page.goto("/settings/prompts");
-  const editor = page.getByLabel("テンプレート", { exact: true });
+  const editor = page.getByRole("textbox", { name: "テンプレート", exact: true });
   await expect(editor).toHaveValue(content);
 
   // 未編集なら保存値の変更へ追従する。

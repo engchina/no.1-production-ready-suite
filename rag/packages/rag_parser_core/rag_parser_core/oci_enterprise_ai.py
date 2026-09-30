@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import dataclasses
 import json
 import os
 import re
@@ -38,11 +39,18 @@ class OciEnterpriseAiConfig:
 
     モデル ID は呼び出し側(backend は model catalog 解決、microservice は env)で解決済みの
     値を `vision_model_id` / `default_model_id` として渡す。
+
+    接続(endpoint / API key / project)はモデルごとに選ぶ(#533)。`oci_enterprise_ai_*` は
+    `default_model_id`(テキスト)の接続で、Vision の呼び出しは `vision_oci_enterprise_ai_*` が
+    None でなければそれを使う(`for_vision()`)。None は「テキストと同じ接続」。
     """
 
     oci_enterprise_ai_endpoint: str = ""
     oci_enterprise_ai_api_key: str = ""
     oci_enterprise_ai_project_ocid: str = ""
+    vision_oci_enterprise_ai_endpoint: str | None = None
+    vision_oci_enterprise_ai_api_key: str | None = None
+    vision_oci_enterprise_ai_project_ocid: str | None = None
     oci_compartment_id: str = ""
     vision_model_id: str = ""
     default_model_id: str = ""
@@ -58,6 +66,20 @@ class OciEnterpriseAiConfig:
     oci_enterprise_ai_llm_max_output_tokens: int = 1200
     oci_enterprise_ai_vlm_max_output_tokens: int = 65536
 
+    def for_vision(self) -> OciEnterpriseAiConfig:
+        """Vision の呼び出しに使う config(既定の Vision モデルの接続。#533)。"""
+        if self.vision_oci_enterprise_ai_endpoint is None:
+            return self
+        return dataclasses.replace(
+            self,
+            oci_enterprise_ai_endpoint=self.vision_oci_enterprise_ai_endpoint,
+            oci_enterprise_ai_api_key=self.vision_oci_enterprise_ai_api_key or "",
+            oci_enterprise_ai_project_ocid=self.vision_oci_enterprise_ai_project_ocid or "",
+            vision_oci_enterprise_ai_endpoint=None,
+            vision_oci_enterprise_ai_api_key=None,
+            vision_oci_enterprise_ai_project_ocid=None,
+        )
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> OciEnterpriseAiConfig:
         """環境変数(backend と同じ共通設定の PLATFORM_OCI_ENTERPRISE_AI_* キー。#211)から構築する。
@@ -66,6 +88,9 @@ class OciEnterpriseAiConfig:
         `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL`、default_model_id は
         `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL`(無ければ既定の Vision モデル)で
         解決する(#499。backend と同じ規則)。
+        接続(`PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT` / `_API_KEY` / `_PROJECT_OCID`)は、backend が
+        サービス実行用の env に「既定の Vision モデルの接続」を書く(#533。
+        `app.services.control.service_runtime_env`)。
         """
         src = os.environ if env is None else env
 
@@ -344,6 +369,13 @@ class OciEnterpriseAiClient:
     ) -> None:
         self._config = config
         self._http_transport = http_transport or _DefaultEnterpriseAiTransport(self._config)
+        # Vision の呼び出しは既定の Vision モデルの接続を使う(#533)。
+        self._vision_config = config.for_vision()
+        self._vision_http_transport = (
+            self._http_transport
+            if http_transport is not None or self._vision_config is config
+            else _DefaultEnterpriseAiTransport(self._vision_config)
+        )
 
     async def extract_with_vlm(
         self,
@@ -528,26 +560,28 @@ class OciEnterpriseAiClient:
         # 設定画面の接続確認や asset 要約は小さな画像を直接渡す軽量 probe。
         # Files API 設定時でも画像は NL2SQL direct client と同じ inline data URL を使い、
         # file_id 入力非対応の provider/gateway で不要な 500 を避ける。
+        config = self._vision_config
         if _normalized_mime_type(mime_type) not in IMAGE_MIME_TYPES and _should_upload_vlm_input(
-            self._config, mime_type=mime_type
+            config, mime_type=mime_type
         ):
             uploaded_file_id = await self._upload_vlm_input_file(image_bytes, mime_type=mime_type)
         try:
             payload = await asyncio.to_thread(
                 _build_vision_text_payload,
-                self._config,
+                config,
                 image_bytes,
                 prompt,
                 mime_type=mime_type,
                 file_id=uploaded_file_id,
             )
             response = await self._post_enterprise_ai(
-                self._config.oci_enterprise_ai_vlm_path,
+                config.oci_enterprise_ai_vlm_path,
                 payload,
+                vision=True,
             )
             return _parse_generated_text(
                 response,
-                response_path=self._config.oci_enterprise_ai_vlm_response_path,
+                response_path=config.oci_enterprise_ai_vlm_response_path,
             )
         finally:
             if uploaded_file_id:
@@ -568,8 +602,9 @@ class OciEnterpriseAiClient:
         解析後の図・画像の読み取り(Vision。#497)に使う。画像は inline data URL で渡す。
         ``response_schema`` を渡すと、対応する model では Responses の JSON Schema 出力を使う。
         """
+        config = self._vision_config
         payload = _build_images_text_payload(
-            self._config,
+            config,
             images,
             prompt,
             system_prompt=system_prompt,
@@ -578,12 +613,13 @@ class OciEnterpriseAiClient:
             mime_type=mime_type,
         )
         response = await self._post_enterprise_ai(
-            self._config.oci_enterprise_ai_vlm_path,
+            config.oci_enterprise_ai_vlm_path,
             payload,
+            vision=True,
         )
         return _parse_generated_text(
             response,
-            response_path=self._config.oci_enterprise_ai_vlm_response_path,
+            response_path=config.oci_enterprise_ai_vlm_response_path,
         )
 
     def preview_llm_request(self, prompt: str, context: str) -> EnterpriseAiRequestPreview:
@@ -606,23 +642,22 @@ class OciEnterpriseAiClient:
         mime_type: str = DEFAULT_MIME_TYPE,
     ) -> EnterpriseAiRequestPreview:
         """VLM endpoint request の非機密プレビューを返す。"""
-        file_id = (
-            "file_preview" if _should_upload_vlm_input(self._config, mime_type=mime_type) else ""
-        )
+        config = self._vision_config
+        file_id = "file_preview" if _should_upload_vlm_input(config, mime_type=mime_type) else ""
         payload = _build_vlm_payload(
-            self._config,
+            config,
             image_bytes,
             prompt,
             mime_type=mime_type,
             file_id=file_id,
         )
         return _request_preview(
-            self._config,
+            config,
             surface="vlm",
-            path=self._config.oci_enterprise_ai_vlm_path,
+            path=config.oci_enterprise_ai_vlm_path,
             payload=payload,
-            template_used=bool(self._config.oci_enterprise_ai_vlm_payload_template.strip()),
-            response_path_set=bool(self._config.oci_enterprise_ai_vlm_response_path.strip()),
+            template_used=bool(config.oci_enterprise_ai_vlm_payload_template.strip()),
+            response_path_set=bool(config.oci_enterprise_ai_vlm_response_path.strip()),
         )
 
     async def _extract_with_enterprise_ai(
@@ -635,8 +670,9 @@ class OciEnterpriseAiClient:
     ) -> dict[str, object]:
         """OCI Enterprise AI VLM endpoint を呼び出し、構造化抽出を検証する。"""
         uploaded_file_id = ""
+        config = self._vision_config
         normalized_mime_type = _normalized_mime_type(mime_type)
-        if _vlm_input_mode(self._config) == "inline_image" and (
+        if _vlm_input_mode(config) == "inline_image" and (
             normalized_mime_type not in IMAGE_MIME_TYPES
         ):
             raise EnterpriseAiUnsupportedInputError(
@@ -645,12 +681,12 @@ class OciEnterpriseAiClient:
                 "PDF や Office fallback を読む場合は、モデル設定の VLM 入力方式を Files API"
                 " に変更してください。"
             )
-        if _should_upload_vlm_input(self._config, mime_type=mime_type):
+        if _should_upload_vlm_input(config, mime_type=mime_type):
             uploaded_file_id = await self._upload_vlm_input_file(image_bytes, mime_type=mime_type)
         try:
             payload = await asyncio.to_thread(
                 _build_vlm_payload,
-                self._config,
+                config,
                 image_bytes,
                 prompt,
                 mime_type=mime_type,
@@ -659,12 +695,12 @@ class OciEnterpriseAiClient:
             )
             try:
                 extraction = await self._post_enterprise_ai_with_schema_retry(
-                    self._config.oci_enterprise_ai_vlm_path,
+                    config.oci_enterprise_ai_vlm_path,
                     payload,
-                    response_path=self._config.oci_enterprise_ai_vlm_response_path,
+                    response_path=config.oci_enterprise_ai_vlm_response_path,
                 )
             except httpx.HTTPStatusError as exc:
-                _raise_for_unsupported_file_input(exc, model_id=self._config.vision_model_id)
+                _raise_for_unsupported_file_input(exc, model_id=config.vision_model_id)
                 raise
             return extraction.to_document_payload()
         finally:
@@ -678,20 +714,21 @@ class OciEnterpriseAiClient:
         mime_type: str,
     ) -> str:
         """OCI Files API へ VLM 入力をアップロードし、Responses 用 file_id を返す。"""
+        config = self._vision_config
         endpoint = _require_value(
-            self._config.oci_enterprise_ai_endpoint,
+            config.oci_enterprise_ai_endpoint,
             "OCI Enterprise AI endpoint",
         )
         normalized_mime_type = _normalized_mime_type(mime_type)
-        timeout = self._config.oci_enterprise_ai_timeout_seconds
+        timeout = config.oci_enterprise_ai_timeout_seconds
         try:
-            response = await self._http_transport.upload_file(
+            response = await self._vision_http_transport.upload_file(
                 _join_endpoint_path(endpoint, "/files"),
                 _uploaded_file_name(normalized_mime_type),
                 image_bytes,
                 mime_type=normalized_mime_type,
                 purpose=_upload_file_purpose(normalized_mime_type),
-                headers=_enterprise_ai_headers(self._config, json_content_type=False),
+                headers=_enterprise_ai_headers(config, json_content_type=False),
                 timeout=timeout,
             )
         except httpx.TimeoutException as exc:
@@ -700,15 +737,16 @@ class OciEnterpriseAiClient:
 
     async def _delete_uploaded_file(self, file_id: str) -> None:
         """OCI Files API の一時ファイルを best-effort で削除する。"""
+        config = self._vision_config
         endpoint = _require_value(
-            self._config.oci_enterprise_ai_endpoint,
+            config.oci_enterprise_ai_endpoint,
             "OCI Enterprise AI endpoint",
         )
         try:
-            await self._http_transport.delete(
+            await self._vision_http_transport.delete(
                 _join_endpoint_path(endpoint, f"/files/{file_id}"),
-                headers=_enterprise_ai_headers(self._config, json_content_type=False),
-                timeout=self._config.oci_enterprise_ai_timeout_seconds,
+                headers=_enterprise_ai_headers(config, json_content_type=False),
+                timeout=config.oci_enterprise_ai_timeout_seconds,
             )
         except Exception:
             return
@@ -744,19 +782,23 @@ class OciEnterpriseAiClient:
         self,
         path: str,
         payload: Mapping[str, Any],
+        *,
+        vision: bool = False,
     ) -> Mapping[str, Any]:
-        """Enterprise AI endpoint へ JSON POST する。"""
+        """Enterprise AI endpoint へ JSON POST する(`vision` は Vision モデルの接続で送る)。"""
+        config = self._vision_config if vision else self._config
+        transport = self._vision_http_transport if vision else self._http_transport
         endpoint = _require_value(
-            self._config.oci_enterprise_ai_endpoint,
+            config.oci_enterprise_ai_endpoint,
             "OCI Enterprise AI endpoint",
         )
         url = _join_endpoint_path(endpoint, path)
-        timeout = self._config.oci_enterprise_ai_timeout_seconds
+        timeout = config.oci_enterprise_ai_timeout_seconds
         try:
-            return await self._http_transport.post_json(
+            return await transport.post_json(
                 url,
                 payload,
-                headers=_enterprise_ai_headers(self._config),
+                headers=_enterprise_ai_headers(config),
                 timeout=timeout,
             )
         except httpx.TimeoutException as exc:
@@ -770,10 +812,10 @@ class OciEnterpriseAiClient:
         response_path: str,
     ) -> StructuredExtraction:
         """VLM 応答の schema 不整合は短い指数 backoff で再取得する。"""
-        attempts = self._config.oci_enterprise_ai_max_retries + 1
+        attempts = self._vision_config.oci_enterprise_ai_max_retries + 1
         last_error: EnterpriseAiValidationError | None = None
         for attempt in range(attempts):
-            response = await self._post_enterprise_ai(path, payload)
+            response = await self._post_enterprise_ai(path, payload, vision=True)
             try:
                 return _parse_structured_extraction(response, response_path=response_path)
             except EnterpriseAiValidationError as exc:

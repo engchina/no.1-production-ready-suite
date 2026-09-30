@@ -4,6 +4,7 @@ import { useMemo } from "react";
 
 import {
   MultiSelectCombobox,
+  type MultiSelectComboboxFieldProps,
   type MultiSelectComboboxRemote,
 } from "@/components/ui/multi-select-combobox";
 import { DEFAULT_KNOWLEDGE_BASE_NAME, type KnowledgeBaseSummary } from "@/lib/api";
@@ -32,6 +33,7 @@ export function KnowledgeBasePickerGrid({
   ariaLabel,
   remote,
   selectedItems,
+  field,
 }: {
   items: KnowledgeBasePickerItem[];
   selectedIds: string[];
@@ -41,6 +43,8 @@ export function KnowledgeBasePickerGrid({
   /** サーバー側で検索・ページングするとき（#302）。「最多」の目印と空の KB の抑制は出さない。 */
   remote?: MultiSelectComboboxRemote;
   selectedItems?: KnowledgeBasePickerItem[];
+  /** 入力欄の id・必須・エラー（外の FieldLabel と結ぶとき。#531）。 */
+  field?: MultiSelectComboboxFieldProps;
 }) {
   const topId = useMemo(() => {
     // 全件を持たないとき（サーバー側の検索）は「最多」を決められない。
@@ -72,6 +76,7 @@ export function KnowledgeBasePickerGrid({
       getChipBadge={knowledgeBaseChipBadge}
       remote={remote}
       selectedItems={selectedItems}
+      {...field}
       strings={{
         addPlaceholder: t("knowledgeBasePicker.addPlaceholder"),
         toggleListAria: t("knowledgeBasePicker.toggleListAria"),

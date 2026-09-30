@@ -3,6 +3,7 @@ import {
   DataTable,
   type DataTableColumn,
   Disclosure,
+  FieldLabel,
   FormStatus,
   ProcessingIndicator,
   StatusBadge,
@@ -55,11 +56,10 @@ export function DocragAnswerEvaluation({
         </p>
       </div>
       <div>
-        <label htmlFor={inputId} className="text-sm font-medium text-fg">
-          {t("search.evaluation.standardAnswer")}
-        </label>
+        <FieldLabel htmlFor={inputId} label={t("search.evaluation.standardAnswer")} required />
         <textarea
           id={inputId}
+          aria-required="true"
           value={standardAnswer}
           onChange={(event) => setStandardAnswer(event.target.value)}
           rows={3}

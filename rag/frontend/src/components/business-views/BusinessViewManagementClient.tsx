@@ -940,7 +940,6 @@ function BusinessViewEditor({
                   id="business-view-name"
                   label={t("businessViews.field.name")}
                   required={!isDefault}
-                  requiredLabel={t("common.required")}
                   value={name}
                   onValueChange={setName}
                   onBlur={() => setTouched(true)}
@@ -956,7 +955,6 @@ function BusinessViewEditor({
                   id="business-view-description"
                   label={t("businessViews.field.description")}
                   required
-                  requiredLabel={t("common.required")}
                   value={description}
                   onValueChange={setDescription}
                   onBlur={() => setDescriptionTouched(true)}
@@ -981,6 +979,8 @@ function BusinessViewEditor({
                       : t("businessViews.field.knowledgeBasesHelper")
                   }
                   emptySelectionText={t("businessViews.knowledgeBasesRequired")}
+                  required={!isDefault}
+                  errorId={scopeError ? SCOPE_ERROR_ID : undefined}
                 />
                 <FieldError id={SCOPE_ERROR_ID} message={scopeError} className="mt-1" />
               </div>

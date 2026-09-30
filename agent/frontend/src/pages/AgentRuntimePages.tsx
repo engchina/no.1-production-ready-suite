@@ -37,6 +37,8 @@ import {
   ExecutionConfirmationField,
   DEFAULT_PAGE_SIZE,
   EmptyState,
+  FieldError,
+  FieldLabel,
   FormSkeleton,
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
@@ -1026,7 +1028,7 @@ export function RunsPage() {
   const [goal, setGoal, goalSaved] = useWorkspaceState("runs", "goal", DEFAULT_RUN_GOAL, isString);
   const [agentId, setAgentId] = useState("default");
   const [bindingId, setBindingId] = useState("");
-  const [formError, setFormError] = useState<string | null>(null);
+  const [bindingError, setBindingError] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useWorkspaceState(
     "runs",
     "selectedRunId",
@@ -1080,13 +1082,14 @@ export function RunsPage() {
   function onAgentChange(value: string) {
     setAgentId(value);
     setBindingId("");
-    setFormError(null);
+    setBindingError(null);
   }
 
   function submitRun() {
-    setFormError(null);
+    setBindingError(null);
     if (!resolvedBindingId) {
-      setFormError(t("run.bindingRequired"));
+      setBindingError(t("run.bindingRequired"));
+      focusField("run-binding");
       return;
     }
     createRun.mutate({
@@ -1194,11 +1197,23 @@ export function RunsPage() {
                         className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                       />
                     </Field>
-                    <Field label={t("run.form.binding")} htmlFor="run-binding">
+                    {/* 既定の Binding がない Agent だけ、実行先の選択が必須（submitRun の送信ガード）。 */}
+                    <Field
+                      label={t("run.form.binding")}
+                      htmlFor="run-binding"
+                      required={!defaultBinding}
+                      error={bindingError}
+                    >
                       <select
                         id="run-binding"
                         value={bindingId}
-                        onChange={(event) => setBindingId(event.target.value)}
+                        aria-required={!defaultBinding || undefined}
+                        aria-invalid={bindingError ? true : undefined}
+                        aria-describedby={bindingError ? fieldErrorId("run-binding") : undefined}
+                        onChange={(event) => {
+                          setBindingId(event.target.value);
+                          setBindingError(null);
+                        }}
                         className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                       >
                         <option value="">
@@ -1217,7 +1232,6 @@ export function RunsPage() {
                     {!agents.isLoading && !bindings.isLoading && !agentBindings.length ? (
                       <Banner severity="warning">{t("run.unbound")}</Banner>
                     ) : null}
-                    {formError ? <Banner severity="danger">{formError}</Banner> : null}
                     {!goalSaved ? <Banner severity="warning">{t("workspace.draftNotSaved")}</Banner> : null}
                     {createRun.error ? <Banner severity="danger">{createRun.error.message}</Banner> : null}
                     <Button onClick={submitRun} loading={createRun.isPending} className="w-full" icon={PlayCircle}>
@@ -1974,6 +1988,7 @@ export function MemoryPage() {
   const [content, setContent] = useState("");
   const [metadataText, setMetadataText] = useState("{}");
   const [formError, setFormError] = useState<string | null>(null);
+  const [contentError, setContentError] = useState<string | null>(null);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const memory = useQuery({
     queryKey: ["memory", query],
@@ -1996,8 +2011,10 @@ export function MemoryPage() {
 
   function submitMemory() {
     setFormError(null);
+    setContentError(null);
     if (!content.trim()) {
-      setFormError(t("memory.contentRequired"));
+      setContentError(t("memory.contentRequired"));
+      focusField("memory-content");
       return;
     }
     try {
@@ -2055,11 +2072,17 @@ export function MemoryPage() {
                       <option value="run_summary">{t("memory.kind.runSummary")}</option>
                     </select>
                   </Field>
-                  <Field label={t("memory.content")} htmlFor="memory-content">
+                  <Field label={t("memory.content")} htmlFor="memory-content" required error={contentError}>
                     <textarea
                       id="memory-content"
                       value={content}
-                      onChange={(event) => setContent(event.target.value)}
+                      aria-required="true"
+                      aria-invalid={contentError ? true : undefined}
+                      aria-describedby={contentError ? fieldErrorId("memory-content") : undefined}
+                      onChange={(event) => {
+                        setContent(event.target.value);
+                        setContentError(null);
+                      }}
                       className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     />
                   </Field>
@@ -2251,21 +2274,24 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
                     {t("settings.productMcp.urlHint")}
                   </p>
                 </Field>
-                <Field label={t("settings.timeout")} htmlFor={`${kind}-timeout`}>
+                {/* 空欄は 0 として送られ、backend（ProductMcpSettingsPatch の gt=0）が拒否するため必須。 */}
+                <Field label={t("settings.timeout")} htmlFor={`${kind}-timeout`} required>
                   <input
                     id={`${kind}-timeout`}
                     type="number"
                     min="1"
+                    aria-required="true"
                     value={timeoutSeconds}
                     onChange={(event) => setTimeoutSeconds(event.target.value)}
                     className={INPUT_CLASS}
                   />
                 </Field>
                 {isNl2Sql ? (
-                  <Field label={t("settings.defaultLimit")} htmlFor="nl2sql-default-limit">
+                  <Field label={t("settings.defaultLimit")} htmlFor="nl2sql-default-limit" required>
                     <input
                       id="nl2sql-default-limit"
                       type="number"
+                      aria-required="true"
                       min="1"
                       max="1000"
                       value={defaultLimit}
@@ -2754,6 +2780,7 @@ function McpServerEditor({
 }) {
   const [form, setForm] = useState<McpServerFormState>(() => mcpFormOf(server));
   const [formBaseline, setFormBaseline] = useState<McpServerFormState>(() => mcpFormOf(server));
+  const [serverIdError, setServerIdError] = useState<string | null>(null);
   const editingId = server?.server_id ?? null;
 
   // 送る内容は mutate の引数で渡す（クリック直前の入力を closure の古い state で送らない）。
@@ -2793,8 +2820,10 @@ function McpServerEditor({
   }
 
   function save() {
+    setServerIdError(null);
     if (!editingId && !form.serverId.trim()) {
-      toast.error(t("settings.mcpServers.idRequired"));
+      setServerIdError(t("settings.mcpServers.idRequired"));
+      focusField("mcp-server-id");
       return;
     }
     saveMutation.mutate(form);
@@ -2861,15 +2890,31 @@ function McpServerEditor({
           <Section title={t("mcpServers.connection")} description={t("settings.apiKeyManaged")}>
             <Card className="min-w-0">
               <CardContent className="space-y-4 pt-5">
-                <Field label={t("settings.mcpServers.serverId")} htmlFor="mcp-server-id">
+                {/* Server ID は作成時だけ入力でき、必須（backend の create_external_mcp_server と送信ガード）。 */}
+                <Field
+                  label={t("settings.mcpServers.serverId")}
+                  htmlFor="mcp-server-id"
+                  required={!editingId}
+                  error={serverIdError}
+                >
                   <input
                     id="mcp-server-id"
                     value={form.serverId}
                     disabled={Boolean(editingId)}
-                    onChange={(event) => setForm({ ...form, serverId: event.target.value })}
+                    aria-required={!editingId || undefined}
+                    aria-invalid={serverIdError ? true : undefined}
+                    aria-describedby={
+                      serverIdError ? `mcp-server-id-hint ${fieldErrorId("mcp-server-id")}` : "mcp-server-id-hint"
+                    }
+                    onChange={(event) => {
+                      setForm({ ...form, serverId: event.target.value });
+                      setServerIdError(null);
+                    }}
                     className={editingId ? `${INPUT_CLASS} opacity-60` : INPUT_CLASS}
                   />
-                  <p className="mt-1 text-xs leading-5 text-fg-muted">{t("settings.mcpServers.serverIdHint")}</p>
+                  <p id="mcp-server-id-hint" className="mt-1 text-xs leading-5 text-fg-muted">
+                    {t("settings.mcpServers.serverIdHint")}
+                  </p>
                 </Field>
                 <Field label={t("settings.mcpServers.label")} htmlFor="mcp-server-label">
                   <input
@@ -3240,6 +3285,7 @@ function SkillEditor({
   const [form, setForm] = useState<SkillFormState>(() => skillFormOf(skill));
   const [formBaseline, setFormBaseline] = useState<SkillFormState>(() => skillFormOf(skill));
   const [formError, setFormError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<{ id?: string; name?: string }>({});
   const editingId = skill?.id ?? null;
   const editable = !readOnly && (!skill || skill.source === "runtime");
 
@@ -3280,12 +3326,17 @@ function SkillEditor({
 
   function save() {
     setFormError(null);
+    // 未入力は欄の下に出し、画面の並び順で最初のエラーの欄へフォーカスする（#531）。
+    const errors: { id?: string; name?: string } = {};
     if (!editingId && !form.id.trim()) {
-      setFormError(t("skills.idRequired"));
-      return;
+      errors.id = t("skills.idRequired");
     }
     if (!form.name.trim()) {
-      setFormError(t("skills.nameRequired"));
+      errors.name = t("skills.nameRequired");
+    }
+    setFieldErrors(errors);
+    if (errors.id || errors.name) {
+      focusField(errors.id ? "skill-id" : "skill-name");
       return;
     }
     for (const json of [form.mcpRequirementsJson, form.resourceIdsJson]) {
@@ -3362,20 +3413,33 @@ function SkillEditor({
             <Section title={t("skills.basic")}>
               <Card className="min-w-0">
                 <CardContent className="space-y-4 pt-5">
-                  <Field label={t("skills.id")} htmlFor="skill-id">
+                  {/* ID は作成時だけ入力でき、必須（backend の create_agent_skill と送信ガード）。 */}
+                  <Field label={t("skills.id")} htmlFor="skill-id" required={!editingId} error={fieldErrors.id}>
                     <input
                       id="skill-id"
                       value={form.id}
                       disabled={Boolean(editingId)}
-                      onChange={(event) => setForm({ ...form, id: event.target.value })}
+                      aria-required={!editingId || undefined}
+                      aria-invalid={fieldErrors.id ? true : undefined}
+                      aria-describedby={fieldErrors.id ? fieldErrorId("skill-id") : undefined}
+                      onChange={(event) => {
+                        setForm({ ...form, id: event.target.value });
+                        setFieldErrors((current) => ({ ...current, id: undefined }));
+                      }}
                       className={editingId ? `${INPUT_CLASS} opacity-60` : INPUT_CLASS}
                     />
                   </Field>
-                  <Field label={t("skills.name")} htmlFor="skill-name">
+                  <Field label={t("skills.name")} htmlFor="skill-name" required error={fieldErrors.name}>
                     <input
                       id="skill-name"
                       value={form.name}
-                      onChange={(event) => setForm({ ...form, name: event.target.value })}
+                      aria-required="true"
+                      aria-invalid={fieldErrors.name ? true : undefined}
+                      aria-describedby={fieldErrors.name ? fieldErrorId("skill-name") : undefined}
+                      onChange={(event) => {
+                        setForm({ ...form, name: event.target.value });
+                        setFieldErrors((current) => ({ ...current, name: undefined }));
+                      }}
                       className={INPUT_CLASS}
                     />
                   </Field>
@@ -3702,6 +3766,7 @@ function PluginInstallEditor({
 }) {
   const [manifestJson, setManifestJson] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [manifestError, setManifestError] = useState<string | null>(null);
   const installMutation = useMutation({
     mutationFn: (manifest: PluginManifest) => agentApi.installPlugin({ manifest }),
     onSuccess: async (record) => {
@@ -3718,6 +3783,12 @@ function PluginInstallEditor({
 
   function install() {
     setFormError(null);
+    setManifestError(null);
+    if (!manifestJson.trim()) {
+      setManifestError(t("plugins.manifestRequired"));
+      focusField("plugin-manifest");
+      return;
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(manifestJson);
@@ -3771,13 +3842,19 @@ function PluginInstallEditor({
         <Section title={t("plugins.manifest")} description={t("plugins.manifestHint")}>
           <Card className="min-w-0">
             <CardContent className="pt-5">
-              <Field label={t("plugins.manifest")} htmlFor="plugin-manifest">
+              <Field label={t("plugins.manifest")} htmlFor="plugin-manifest" required error={manifestError}>
                 <textarea
                   id="plugin-manifest"
                   value={manifestJson}
                   rows={16}
                   spellCheck={false}
-                  onChange={(event) => setManifestJson(event.target.value)}
+                  aria-required="true"
+                  aria-invalid={manifestError ? true : undefined}
+                  aria-describedby={manifestError ? fieldErrorId("plugin-manifest") : undefined}
+                  onChange={(event) => {
+                    setManifestJson(event.target.value);
+                    setManifestError(null);
+                  }}
                   className={`${TEXTAREA_CLASS} font-mono`}
                 />
               </Field>
@@ -4122,6 +4199,7 @@ export function PluginMarketplacesPage() {
 /** マーケットプレイスを追加する全画面エディタ（`?id=new`）。 */
 function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded: (id: string) => Promise<void> }) {
   const [form, setForm] = useState(EMPTY_MARKETPLACE_FORM);
+  const [idError, setIdError] = useState<string | null>(null);
   const addMutation = useMutation({
     mutationFn: (current: typeof EMPTY_MARKETPLACE_FORM) =>
       agentApi.addPluginMarketplace({
@@ -4142,8 +4220,10 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
   }
 
   function add() {
+    setIdError(null);
     if (!form.id.trim()) {
-      toast.error(t("marketplaces.idRequired"));
+      setIdError(t("marketplaces.idRequired"));
+      focusField("mkt-id");
       return;
     }
     addMutation.mutate(form);
@@ -4177,11 +4257,17 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
         <Section title={t("marketplaces.overview")}>
           <Card className="min-w-0">
             <CardContent className="space-y-4 pt-5">
-              <Field label={t("marketplaces.id")} htmlFor="mkt-id">
+              <Field label={t("marketplaces.id")} htmlFor="mkt-id" required error={idError}>
                 <input
                   id="mkt-id"
                   value={form.id}
-                  onChange={(event) => setForm({ ...form, id: event.target.value })}
+                  aria-required="true"
+                  aria-invalid={idError ? true : undefined}
+                  aria-describedby={idError ? fieldErrorId("mkt-id") : undefined}
+                  onChange={(event) => {
+                    setForm({ ...form, id: event.target.value });
+                    setIdError(null);
+                  }}
                   className={INPUT_CLASS}
                 />
               </Field>
@@ -4600,17 +4686,19 @@ export function CommandPolicySettingsPage() {
               </label>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <Field label={t("settings.commandPolicy.workspaceRoot")} htmlFor="command-policy-workspace-root">
+                <Field label={t("settings.commandPolicy.workspaceRoot")} htmlFor="command-policy-workspace-root" required>
                   <input
                     id="command-policy-workspace-root"
+                    aria-required="true"
                     value={workspaceRoot}
                     onChange={(event) => setWorkspaceRoot(event.target.value)}
                     className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
-                <Field label={t("settings.commandPolicy.outputLimit")} htmlFor="command-policy-output-limit">
+                <Field label={t("settings.commandPolicy.outputLimit")} htmlFor="command-policy-output-limit" required>
                   <input
                     id="command-policy-output-limit"
+                    aria-required="true"
                     type="number"
                     min="1"
                     value={outputLimit}
@@ -4618,9 +4706,10 @@ export function CommandPolicySettingsPage() {
                     className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
-                <Field label={t("settings.commandPolicy.defaultTimeout")} htmlFor="command-policy-default-timeout">
+                <Field label={t("settings.commandPolicy.defaultTimeout")} htmlFor="command-policy-default-timeout" required>
                   <input
                     id="command-policy-default-timeout"
+                    aria-required="true"
                     type="number"
                     min="0.1"
                     step="0.1"
@@ -4629,9 +4718,10 @@ export function CommandPolicySettingsPage() {
                     className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
-                <Field label={t("settings.commandPolicy.maxTimeout")} htmlFor="command-policy-max-timeout">
+                <Field label={t("settings.commandPolicy.maxTimeout")} htmlFor="command-policy-max-timeout" required>
                   <input
                     id="command-policy-max-timeout"
+                    aria-required="true"
                     type="number"
                     min="0.1"
                     step="0.1"
@@ -4666,9 +4756,10 @@ export function CommandPolicySettingsPage() {
                   </select>
                   <p className="mt-1 text-xs leading-5 text-fg-muted">{t("settings.commandPolicy.storageHint")}</p>
                 </Field>
-                <Field label={t("settings.commandPolicy.artifactPath")} htmlFor="command-policy-artifact-path">
+                <Field label={t("settings.commandPolicy.artifactPath")} htmlFor="command-policy-artifact-path" required>
                   <input
                     id="command-policy-artifact-path"
+                    aria-required="true"
                     value={artifactStoragePath}
                     onChange={(event) => setArtifactStoragePath(event.target.value)}
                     className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
@@ -5014,6 +5105,7 @@ export function RuntimeSnapshotSettingsPage() {
   const [reason, setReason] = useState("");
   const [confirmText, setConfirmText] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const [validationResult, setValidationResult] = useState<RuntimeSnapshotImportResult | null>(null);
   // インポート JSON と理由は未保存の下書き。確認語は保存も復元もしない（離脱で state ごと消える）。#87
   useSettingsLeaveGuard(importText.trim() !== "" || reason.trim() !== "", importSnapshot.isPending);
@@ -5026,6 +5118,12 @@ export function RuntimeSnapshotSettingsPage() {
 
   function parseImportSnapshot(): RuntimeSnapshot | null {
     setFormError(null);
+    setImportError(null);
+    if (!importText.trim()) {
+      setImportError(t("settings.snapshot.importJsonRequired"));
+      focusField("runtime-snapshot-import");
+      return null;
+    }
     try {
       const parsed = JSON.parse(importText) as RuntimeSnapshot;
       return parsed;
@@ -5039,6 +5137,7 @@ export function RuntimeSnapshotSettingsPage() {
     setImportText(exportText);
     setValidationResult(null);
     setFormError(null);
+    setImportError(null);
   }
 
   function downloadSnapshot() {
@@ -5151,13 +5250,22 @@ export function RuntimeSnapshotSettingsPage() {
             <CardDescription>{t("page.settings.runtimeSnapshot.subtitle")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <Field label={t("settings.snapshot.importJson")} htmlFor="runtime-snapshot-import">
+            <Field
+              label={t("settings.snapshot.importJson")}
+              htmlFor="runtime-snapshot-import"
+              required
+              error={importError}
+            >
               <textarea
                 id="runtime-snapshot-import"
                 value={importText}
+                aria-required="true"
+                aria-invalid={importError ? true : undefined}
+                aria-describedby={importError ? fieldErrorId("runtime-snapshot-import") : undefined}
                 onChange={(event) => {
                   setImportText(event.target.value);
                   setValidationResult(null);
+                  setImportError(null);
                 }}
                 className="min-h-80 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 spellCheck={false}
@@ -5370,7 +5478,7 @@ function AgentEditorView({
   const [newEnabled, setNewEnabled] = useState(true);
   const [skillIds, setSkillIds] = useState<string[]>(saved.skill_ids);
   const [baseline, setBaseline] = useState<AgentDraft>(saved);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
 
   const createAgent = useMutation({
     mutationFn: agentApi.createAgent,
@@ -5409,7 +5517,7 @@ function AgentEditorView({
     setInstructions(next.instructions);
     setSkillIds(next.skill_ids);
     setBaseline(next);
-    setFormError(null);
+    setNameError(null);
   }
 
   const draft: AgentDraft = {
@@ -5437,9 +5545,10 @@ function AgentEditorView({
   }
 
   function saveAgent() {
-    setFormError(null);
+    setNameError(null);
     if (!name.trim()) {
-      setFormError(t("agent.nameRequired"));
+      setNameError(t("agent.nameRequired"));
+      focusField(`${fieldId}-agent-name`);
       return;
     }
     const payload = {
@@ -5509,17 +5618,22 @@ function AgentEditorView({
             {agent.migration_required ? <Banner severity="warning">{t("agent.migrationRequired")}</Banner> : null}
           </Section>
         ) : null}
-        {formError ? <Banner severity="danger">{formError}</Banner> : null}
         {error ? <Banner severity="danger">{error.message}</Banner> : null}
         <fieldset disabled={readOnly} className="min-w-0 space-y-6">
           <Section title={t("agent.basic")}>
             <Card className="min-w-0">
               <CardContent className="space-y-4 pt-5">
-                <Field label={t("agent.name")} htmlFor={`${fieldId}-agent-name`}>
+                <Field label={t("agent.name")} htmlFor={`${fieldId}-agent-name`} required error={nameError}>
                   <input
                     id={`${fieldId}-agent-name`}
                     value={name}
-                    onChange={(event) => setName(event.target.value)}
+                    aria-required="true"
+                    aria-invalid={nameError ? true : undefined}
+                    aria-describedby={nameError ? fieldErrorId(`${fieldId}-agent-name`) : undefined}
+                    onChange={(event) => {
+                      setName(event.target.value);
+                      setNameError(null);
+                    }}
                     className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
@@ -5799,10 +5913,12 @@ function RuntimeBindingsPanel({
           {readOnly ? null : (
             <>
               <div className="grid gap-3 md:grid-cols-2">
-                <Field label={t("binding.runtime")} htmlFor={`${agent.id}-binding-runtime`}>
+                {/* Runtime と Runtime 内 Agent ID は RuntimeBinding の必須項目（未入力では追加ボタンを押せない）。 */}
+                <Field label={t("binding.runtime")} htmlFor={`${agent.id}-binding-runtime`} required>
                   <select
                     id={`${agent.id}-binding-runtime`}
                     value={runtimeId}
+                    aria-required="true"
                     onChange={(event) => setRuntimeId(event.target.value)}
                     className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm"
                   >
@@ -5813,10 +5929,11 @@ function RuntimeBindingsPanel({
                     ))}
                   </select>
                 </Field>
-                <Field label={t("binding.nativeAgentRef")} htmlFor={`${agent.id}-binding-native-ref`}>
+                <Field label={t("binding.nativeAgentRef")} htmlFor={`${agent.id}-binding-native-ref`} required>
                   <input
                     id={`${agent.id}-binding-native-ref`}
                     value={nativeAgentRef}
+                    aria-required="true"
                     onChange={(event) => setNativeAgentRef(event.target.value)}
                     className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm"
                   />
@@ -6890,25 +7007,45 @@ function StructuredResultTable({ result }: { result: StructuredResult }) {
   );
 }
 
+/** 未入力などの欄のエラーの id。入力の aria-describedby と FieldError の id をそろえる（#531）。 */
+function fieldErrorId(htmlFor: string): string {
+  return `${htmlFor}-error`;
+}
+
+/**
+ * 素の input / select / textarea のラベル・必須の表示・欄のエラー（#531）。
+ * `required` の欄は入力側に `aria-required="true"` を付ける（タグは FieldLabel が二重に読ませない）。
+ * `error` を渡す欄は、入力側に `aria-invalid` と `aria-describedby={fieldErrorId(htmlFor)}` を付ける。
+ */
 function Field({
   label,
   htmlFor,
+  required = false,
+  error,
   className,
   children,
 }: {
   label: string;
   htmlFor: string;
+  /** backend の検証か画面の送信ガードで必須の欄だけ true にする。 */
+  required?: boolean;
+  /** 欄の直下に出すエラー（例:「名前を入力してください。」）。 */
+  error?: string | null;
   className?: string;
   children: ReactNode;
 }) {
   return (
     <div className={className ? `space-y-1.5 ${className}` : "space-y-1.5"}>
-      <label htmlFor={htmlFor} className="text-sm font-medium text-fg">
-        {label}
-      </label>
+      <FieldLabel htmlFor={htmlFor} label={label} required={required} />
       {children}
+      <FieldError id={fieldErrorId(htmlFor)} message={error} />
     </div>
   );
+}
+
+/** 送信に失敗したとき、最初のエラーの欄へフォーカスを移す（UX 契約 messaging.md §3.2.1）。 */
+function focusField(id: string): void {
+  document.getElementById(id)?.focus();
 }
 
 function JsonPanel({ title, value }: { title: string; value: unknown }) {

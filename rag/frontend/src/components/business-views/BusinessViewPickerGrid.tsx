@@ -2,7 +2,10 @@
 
 import { useMemo } from "react";
 
-import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
+import {
+  MultiSelectCombobox,
+  type MultiSelectComboboxFieldProps,
+} from "@/components/ui/multi-select-combobox";
 import { DEFAULT_BUSINESS_VIEW_NAME, type BusinessViewSummary } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
@@ -13,12 +16,15 @@ export function BusinessViewPickerGrid({
   onChange,
   disabled = false,
   ariaLabel,
+  field,
 }: {
   items: BusinessViewSummary[];
   selectedIds: string[];
   onChange: (ids: string[]) => void;
   disabled?: boolean;
   ariaLabel: string;
+  /** 入力欄の id・必須・エラー（外の FieldLabel と結ぶとき。#531）。 */
+  field?: MultiSelectComboboxFieldProps;
 }) {
   const primaryId = selectedIds[0] ?? null;
   const sortedItems = useMemo(() => sortBusinessViews(items), [items]);
@@ -60,6 +66,7 @@ export function BusinessViewPickerGrid({
         hiddenEmptyCount: (count) => t("businessViewPicker.hiddenEmptyCount", { count }),
       }}
       triggerClassName="bg-surface-sunken focus-within:bg-surface-hover"
+      {...field}
     />
   );
 }

@@ -7,7 +7,7 @@ import { cn } from "../../lib/utils";
 import { Button } from "./button";
 import { FieldError } from "./field-error";
 import { FormStatus } from "./form-status";
-import { RequiredBadge } from "./required-badge";
+import { DEFAULT_REQUIRED_LABEL, RequiredBadge } from "./required-badge";
 import { fieldControlClass } from "./text-field";
 
 /** 保存済みの値を削除する指定（保存済みの値があるときだけ表示する）。 */
@@ -52,7 +52,7 @@ export interface SecretFieldProps {
   placeholder?: string;
   /** 必須であることを aria-required と RequiredBadge で伝える（ネイティブの required 検証も付ける）。 */
   required?: boolean;
-  /** 必須バッジの文言。required のときは必ず渡す。 */
+  /** 必須バッジの文言。既定「必須」。条件付きの必須だけ上書きする。 */
   requiredLabel?: string;
   disabled?: boolean;
   /** 保存済みの値を削除する指定。hasSavedSecret のときだけ入力欄の下に出し、指定中は入力欄を無効にする。 */
@@ -89,7 +89,7 @@ export function SecretField({
   error,
   placeholder,
   required = false,
-  requiredLabel,
+  requiredLabel = DEFAULT_REQUIRED_LABEL,
   disabled = false,
   clearOption,
   autoComplete = "off",

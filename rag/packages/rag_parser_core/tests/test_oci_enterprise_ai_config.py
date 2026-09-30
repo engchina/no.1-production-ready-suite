@@ -52,3 +52,30 @@ def test_config_from_env_ignores_legacy_names() -> None:
 
     assert config.oci_enterprise_ai_endpoint == ""
     assert config.oci_enterprise_ai_api_key == ""
+
+
+def test_for_vision_uses_vision_connection_only_when_set() -> None:
+    """Vision の接続(#533)。None なら text と同じ接続(同じ config)を使う。"""
+    config = OciEnterpriseAiConfig(
+        oci_enterprise_ai_endpoint="https://primary.example",
+        oci_enterprise_ai_api_key="sk-primary",
+        oci_enterprise_ai_project_ocid="ocid1.primary",
+        vision_model_id="vendor.vision",
+    )
+    assert config.for_vision() is config
+
+    separate = OciEnterpriseAiConfig(
+        oci_enterprise_ai_endpoint="https://primary.example",
+        oci_enterprise_ai_api_key="sk-primary",
+        oci_enterprise_ai_project_ocid="ocid1.primary",
+        vision_oci_enterprise_ai_endpoint="https://secondary.example",
+        vision_oci_enterprise_ai_api_key="sk-secondary",
+        vision_oci_enterprise_ai_project_ocid="",
+        vision_model_id="vendor.vision",
+    )
+    vision = separate.for_vision()
+    assert vision.oci_enterprise_ai_endpoint == "https://secondary.example"
+    assert vision.oci_enterprise_ai_api_key == "sk-secondary"
+    assert vision.oci_enterprise_ai_project_ocid == ""
+    assert vision.vision_model_id == "vendor.vision"
+    assert vision.for_vision() is vision

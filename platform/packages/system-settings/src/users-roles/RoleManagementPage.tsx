@@ -32,6 +32,7 @@ import {
   StatusBadge,
   PageHeader,
   FieldError,
+  FieldLabel,
   PageBody,
   useConfirm,
   ProcessingIndicator,
@@ -45,7 +46,6 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { useUnsavedChangesGuard } from "../guards/useUnsavedChangesGuard";
-import { FieldLabel } from "../oci/required-field";
 import { useRequestScope } from "../oci/useRequestScope";
 import { t } from "./messages";
 import {
@@ -325,6 +325,20 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
     event.preventDefault();
     if (inputReadOnly) return;
     const normalizedRoleCode = draft.roleCode.trim().toUpperCase();
+    // 未入力は送信前に欄の下へ出し、最初のエラーの欄へフォーカスする（noValidate。#531）。
+    const requiredErrors: RoleFieldErrors = {};
+    if (activeView === "create" && !normalizedRoleCode) {
+      requiredErrors.roleCode = t("security.roles.codeRequired");
+    }
+    if (!draft.displayName.trim()) {
+      requiredErrors.displayName = t("security.roles.nameRequired");
+    }
+    if (Object.keys(requiredErrors).length > 0) {
+      setFormError("");
+      setFieldErrors(requiredErrors);
+      focusFirstFieldError(requiredErrors);
+      return;
+    }
     if (activeView === "create" && normalizedRoleCode === SYSTEM_ADMIN_ROLE_CODE) {
       const nextErrors = { roleCode: t("security.roles.codeReserved") };
       setFormError("");
@@ -718,6 +732,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                 className="grid gap-6"
                 onSubmit={handleSubmit}
                 aria-labelledby="security-roles-form-heading"
+                noValidate
               >
                 {editingRole?.role_code === SYSTEM_ADMIN_ROLE_CODE ? (
                   <Banner severity="info">{t("security.roles.systemAdminNotice")}</Banner>

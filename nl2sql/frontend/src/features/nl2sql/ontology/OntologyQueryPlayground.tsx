@@ -26,6 +26,7 @@ import {
   INFORMATION_TABLE_FOCUS_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  FieldLabel,
   isImeComposing,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
@@ -941,16 +942,17 @@ export function OntologyQueryPlayground({
               runQuestion();
             }}
           >
-            <label
+            {/* 質問が空では実行できない（disabled={!question.trim()}）ので必須として示す（#531）。 */}
+            <FieldLabel
               htmlFor="ontology-playground-question"
-              className="text-sm font-medium text-fg"
-            >
-              {t("ontologyPlayground.questionLabel")}
-            </label>
+              label={t("ontologyPlayground.questionLabel")}
+              required
+            />
             <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
               <input
                 id="ontology-playground-question"
                 type="text"
+                aria-required="true"
                 value={question}
                 onChange={(event) => handleQuestionChange(event.currentTarget.value)}
                 onKeyDown={(event) => {

@@ -13,10 +13,10 @@ import {
   ProcessingIndicator,
   TimedLoadingState,
   FixedSplitPane,
+  FieldLabel,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
-import { FieldLabel } from "@/components/ui/required-field";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
@@ -382,9 +382,12 @@ export function SqlToQuestionPage() {
                 description={t("sqlToQuestion.input.hint")}
               />
 
-              <label className="grid gap-1 text-sm font-medium text-fg">
-                <span>{t("sqlToQuestion.profile.label")}</span>
+              {/* 変換・生成は業務プロファイルの選択が前提（!selectedProfile で無効）なので必須として示す（#531）。 */}
+              <div className="grid gap-1">
+                <FieldLabel htmlFor="sql-to-question-profile" label={t("sqlToQuestion.profile.label")} required />
                 <select
+                  id="sql-to-question-profile"
+                  aria-required="true"
                   value={selectedProfileId}
                   onChange={(event) => {
                     setSelectedProfileId(event.currentTarget.value);
@@ -400,7 +403,7 @@ export function SqlToQuestionPage() {
                     </option>
                   ))}
                 </select>
-              </label>
+              </div>
 
               <div className="grid gap-1">
                 <FieldLabel

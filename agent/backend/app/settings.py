@@ -72,6 +72,13 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oci_enterprise_ai_endpoint: str = ""
     oci_enterprise_ai_project_ocid: str = ""
     oci_enterprise_ai_api_key: str = ""
+    # 接続 1 の表示名と接続 2（#533）。モデルを呼ぶ接続は
+    # enterprise_ai_connection_for_model で引く。
+    oci_enterprise_ai_connection_name: str = ""
+    oci_enterprise_ai_secondary_connection_name: str = ""
+    oci_enterprise_ai_secondary_endpoint: str = ""
+    oci_enterprise_ai_secondary_project_ocid: str = ""
+    oci_enterprise_ai_secondary_api_key: str = ""
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     oci_enterprise_ai_default_text_model: str = ""
     oci_enterprise_ai_default_vision_model: str = ""

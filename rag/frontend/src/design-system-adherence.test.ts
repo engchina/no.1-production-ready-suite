@@ -11,6 +11,8 @@ const FOCUS_RING = "フォーカスの表示を ring";
 const HANDWRITTEN_SEARCH = "アイコン付きの入力欄（検索欄）を手書きしない";
 const HANDWRITTEN_DISCLOSURE = "開閉できる領域は <details> / <summary> を手書きせず";
 const LIST_SEARCH = "一覧の絞り込みの検索欄は SearchField";
+const OPTIONAL_MARKER = "任意の欄を「(任意)」や placeholder で示さない";
+const HANDWRITTEN_REQUIRED = "必須の表示を手書きしない";
 
 async function lint(code: string) {
   const eslint = new ESLint({
@@ -119,5 +121,63 @@ const d = <TextField id="ask" label="質問" value={q} leadingIcon={Search} onKe
 const e = <input type="text" value={q} onChange={onChange} />;
 `);
     expect(linesWith(messages, LIST_SEARCH)).toEqual([2, 3]);
+  });
+});
+
+describe("adherence: 任意の表示（#531）", () => {
+  it("placeholder の「任意」と、ラベル・文言の「(任意)」「（任意）」を検出する", async () => {
+    const messages = await lint(`
+const a = <TextField id="m" label="メモ" placeholder="メモ(任意)" />;
+const b = <textarea placeholder={\`説明（任意）\`} />;
+const c = { "businessViews.field.descriptionPlaceholder": "この業務ビューの用途(任意)" };
+const d = { descriptionPlaceholder: "任意で入力します" };
+const e = { "feedback.controls.commentLabel": "コメント（任意）" };
+const f = <label htmlFor="x">許可表(任意・カンマ区切り)</label>;
+const g = { "settings.huggingface.field.token": "ダウンロード token( 任意 )" };
+`);
+    expect(linesWith(messages, OPTIONAL_MARKER)).toEqual([2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  it("任意の意味の説明文・データの値・任意の欄の placeholder の例は許す", async () => {
+    const messages = await lint(`
+const a = { "settings.prompts.list.description": "任意の版を有効化(rollback)できます。" };
+const b = { "ontologyResults.field.optional": "任意（Optional）" };
+const c = <TextField id="m" label="メモ" placeholder="例: 月次の締め処理" />;
+const d = { "evaluation.analyze.description": "任意の SQL を確認します。" };
+`);
+    expect(linesWith(messages, OPTIONAL_MARKER)).toEqual([]);
+  });
+});
+
+describe("adherence: 手書きの必須表示（#531）", () => {
+  it("「*」・「必須」の手書きと RequiredBadge の直接の使用を検出する", async () => {
+    const messages = await lint(`
+const a = <label htmlFor="n">名前 <span className="text-danger-fg">*</span></label>;
+const b = <label htmlFor="n">名前 *</label>;
+const c = <label htmlFor="n">名前{" *"}</label>;
+const d = <span className="rounded-full">必須</span>;
+const e = <StatusBadge variant="warning" label="必須" />;
+const f = <label htmlFor="n">名前<RequiredBadge label={t("common.required")} /></label>;
+const g = <span className="text-xs">{t("common.required")}</span>;
+const h = <Badge label={t("settings.database.requiredMark")} />;
+const i = <label htmlFor="n">名前{"※必須"}</label>;
+`);
+    expect(linesWith(messages, HANDWRITTEN_REQUIRED)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  });
+
+  it("共有部品の required・requiredLabel の上書き・エラー文言・SQL の * は許す", async () => {
+    const messages = await lint(`
+const a = <TextField id="n" label="名前" required />;
+const b = <TextField id="r" label="リージョン" required requiredLabel="OCI 運用時必須" />;
+const c = <SelectField id="s" label="種別" required requiredLabel={t("common.required")} />;
+const d = <FieldLabel htmlFor="sql" label="SQL" required />;
+const e = <Fieldset legend="ロール" required>…</Fieldset>;
+const f = <FieldError id="e" message={t("profiles.error.nameRequired")} />;
+const g = <p>{t("businessViews.scope.required")}</p>;
+const h = <code>SELECT * FROM t</code>;
+const i = { scope_code: "*" };
+const j = <Route path="*" element={<Home />} />;
+`);
+    expect(linesWith(messages, HANDWRITTEN_REQUIRED)).toEqual([]);
   });
 });

@@ -1,20 +1,35 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 function source(path: string): string {
   return readFileSync(new URL(path, import.meta.url), "utf8");
 }
 
-test("required labels use the shared neutral RequiredBadge instead of an app-specific asterisk", () => {
-  const component = source("../src/components/ui/required-field.tsx");
+test("required labels use the shared FieldLabel / FieldLegend instead of an app-specific component (#531)", () => {
+  // 必須の表示は platform の共有部品（FieldLabel / FieldLegend / Fieldset）に一本化し、NL2SQL に独自の部品を置かない。
+  assert.equal(
+    existsSync(new URL("../src/components/ui/required-field.tsx", import.meta.url)),
+    false
+  );
+  for (const path of [
+    "../src/components/ui/file-dropzone.tsx",
+    "../src/components/ui/input-action-field.tsx",
+    "../src/features/nl2sql/pages/DataManagementPage.tsx",
+    "../src/features/security/SecurityDeepSecPage.tsx",
+  ]) {
+    const page = source(path);
+    assert.doesNotMatch(page, /required-field"/u, path);
+    assert.match(page, /\b(?:FieldLabel|FieldLegend),[\s\S]*from "@engchina\/production-ready-ui"/u, path);
+    // RequiredBadge を直接ラベルに並べず、共有部品の required で出す。
+    assert.doesNotMatch(page, /<RequiredBadge\b|t\("common\.required"\)/u, path);
+  }
+});
 
-  assert.match(component, /import \{ RequiredBadge \} from "@engchina\/production-ready-ui"/u);
-  assert.match(component, /requiredLabel = t\("common\.required"\)/u);
-  // label は入力側の required / aria-required で伝えるのでバッジを読み上げない。legend は読み上げる。
-  assert.match(component, /<RequiredBadge label=\{requiredLabel\} aria-hidden/u);
-  assert.match(component, /<RequiredBadge label=\{requiredLabel\} className/u);
-  assert.doesNotMatch(component, /RequiredIndicator|RequiredFieldsNote|requiredFieldsNote|text-danger-fg|>\s*\*\s*</u);
+test("NL2SQL の文言は任意の欄に「(任意)」を付けない (#531)", () => {
+  for (const path of ["../src/lib/i18n.ts", "../src/lib/nl2sql-base-i18n.ts"]) {
+    assert.doesNotMatch(source(path), /[(（]\s*任意\s*[)）・、,，]/u, path);
+  }
 });
 
 test("app source has no legacy asterisk required indicator or legend note", () => {

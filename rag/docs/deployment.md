@@ -353,6 +353,18 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 2. migration の前でも画面は動く。レシピ行の無い文書は、一覧・詳細でレシピ1を仮の行として返し、最初の書き込み
    （設定の保存・処理の開始など）で行を作る。
 
+## 既存環境の更新手順（#537 Vision と項目抽出を既定で有効にする）
+
+「図・画像を AI で読み取る（Vision）」（`RAG_VISION_ENABLED`）と「メタデータ/項目抽出」（`RAG_FIELD_EXTRACTION_ENABLED`）の
+既定を有効（`true`）にした。
+
+- `backend/.env` で値を明示していない環境は、更新後に両方が有効になる。
+  - Vision は、画像 1 枚ごとにモデル設定の既定の Vision モデルを呼ぶ。そのため、取込の時間と呼び出しが増える。
+  - 項目抽出は、項目の定義（「検索・回答設定 › 文書解析」の「解析後の処理」）が 0 件なら何もしない。
+- 無効のままにしたい環境は、`backend/.env` に `RAG_VISION_ENABLED=false` / `RAG_FIELD_EXTRACTION_ENABLED=false` を書くか、
+  文書解析の画面の「解析後の処理」で無効にして保存する。文書のレシピの上書きは、今までどおり優先される。
+- データの移行（migration）は不要。既存の文書は、再解析したときに新しい既定で処理される。
+
 ## 既存環境の更新手順（#497 図・画像の読み取り（Vision）の統合）
 
 「図・画像を AI で読み取る（Vision）」を解析エンジンに依存しない設定にし、「図表 VLM 要約」を削除した。
@@ -593,6 +605,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `RAG_OCI_GUARDRAILS_TIMEOUT_SECONDS`: OCI Guardrails 検査の timeout。既定 5 秒。障害時は `regulated` が fail-closed、その他はローカル検査へ縮退し、非機密 warning と metrics / audit code を残す。
 - `RAG_ORACLE_VECTOR_TARGET_ACCURACY`: Oracle AI Vector Search の問い合わせ側 `FETCH APPROX ... WITH TARGET ACCURACY`。既定は 95。staging / golden set で召回率とレイテンシを見ながら調整する。
 - `PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT` / `PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH`: OCI Enterprise AI の OpenAI-compatible gateway endpoint と LLM/VLM path。Enterprise AI は `PLATFORM_OCI_ENTERPRISE_AI_API_KEY` による Bearer 認証で呼び出し、staging smoke で VLM/LLM 契約を確認する。Enterprise AI の model deployment / gateway response は `prediction(s)`、`output(s)`、`inference_response`、OpenAI 風 `choices`、JSON 文字列 envelope を正規化してから Pydantic schema / text 抽出へ進める。
+- `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_ENDPOINT` / `_SECONDARY_PROJECT_OCID` / `_SECONDARY_API_KEY`: OCI Enterprise AI の接続 2（#533。任意）。登録モデルごとに接続を選び、回答はテキストのモデルの接続、VLM 抽出・図の読み取り・OCI parser は既定の Vision モデルの接続で呼ぶ。詳細は `platform/README.md` の「OCI Enterprise AI の接続を 2 件にする」。
 - `PLATFORM_OCI_ENTERPRISE_AI_VLM_INPUT_MODE`: Enterprise AI VLM への入力搬送方式。`auto` は画像を inline data URL、PDF など非画像を `/files` 経由にする。`files_api` は画像も含めて VLM 入力を明示的に `/files` へアップロードし、`file_id` を `/responses` payload へ渡す。`inline_image` は画像だけ inline で送り、PDF/Office fallback など非画像は設定変更を促して停止する。`API パス` は通常 `/responses` のままにし、`/files` は endpoint から自動生成する。
 - `PLATFORM_OCI_ENTERPRISE_AI_LLM_MAX_OUTPUT_TOKENS` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_MAX_OUTPUT_TOKENS`: OpenAI-compatible Responses payload の `max_output_tokens`。既定値は LLM 1200、VLM/OCR 65536。`status=incomplete` / `reason=max_output_tokens` は取込エラーとして利用者に返す。
 - `RAG_PDF_SEGMENTATION_ENABLED` / `RAG_PDF_MAX_PAGES_PER_SEGMENT` / `RAG_PDF_MAX_SEGMENTS`: PDF 取込時に元 PDF を page segment へ分けて VLM へ送る。既定は有効、10 ページ/segment、最大 300 segment。segment が `max_output_tokens` で途切れた場合は単ページに分割して再試行する。

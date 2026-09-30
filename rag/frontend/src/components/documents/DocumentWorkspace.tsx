@@ -2472,6 +2472,7 @@ function ChunkPreviewControls({
             label={t("settings.chunking.params.delimiter")}
             value={form.chunk_delimiter}
             maxLength={256}
+            required
             disabled={pending}
             onValueChange={(chunk_delimiter) => onChange({ chunk_delimiter })}
           />
@@ -2585,10 +2586,12 @@ function PreviewNumberField({
   onChange: (value: number) => void;
 }) {
   const id = useId();
+  // 数値の欄は空では試せない（chunkPreviewValidationError が止める）ので必須（#531）。
   return (
     <TextField
       id={id}
       label={label}
+      required
       type="number"
       inputMode="numeric"
       value={Number.isFinite(value) ? value : ""}
@@ -2986,6 +2989,8 @@ function DocumentKnowledgeBaseEditor({
         disabled={replace.isPending || membership.isPending}
         label={t("documents.knowledgeBases.pickerLabel")}
         helper={t("documents.knowledgeBases.helper")}
+        // 所属先を 0 件にはできない（保存ボタンが止め、backend も 1 件以上を必須にする）。
+        required
         emptySelectionText={t("documents.knowledgeBases.noneSelected")}
       />
 
