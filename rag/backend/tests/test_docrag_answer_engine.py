@@ -1386,3 +1386,243 @@ async def test_oracle_retrieval_large_categories_uses_search_scope(
     assert "JSON_VALUE(d.classification, '$.large_category')" in statement
     assert "d.status = 'INDEXED'" in statement
     assert "kb-1" in binds.values()
+
+
+# --- 画面目録の連携(#554) ---
+
+_SCREEN_FILE = "setting.pdf"
+_SCREEN_HEADING = "（２）帳票印字設定"
+
+
+def _screen_chunk(chunk_id: str, text: str, section_path: list[str]) -> RetrievedChunk:
+    chunk = _chunk(chunk_id, text, 1)
+    metadata = json.loads(str(chunk.metadata["docrag_metadata_json"]))
+    metadata["section_path"] = section_path
+    return chunk.model_copy(
+        update={
+            "document_id": "doc-setting",
+            "file_name": _SCREEN_FILE,
+            "metadata": {
+                **chunk.metadata,
+                "chunk_group_id": "setting-p1",
+                "docrag_parent_text": text,
+                "docrag_search_text": f"Source file: {_SCREEN_FILE}\nChild text: {text}",
+                "section_path": " > ".join(section_path),
+                "docrag_metadata_json": json.dumps(metadata, ensure_ascii=False),
+            },
+        }
+    )
+
+
+class ScreenOracle(FakeOracle):
+    """検索では出ない設定画面を、検索範囲の目録と画面の chunk として返すスタブ(#554)。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.state = "1:100"
+        self.state_calls: list[dict[str, str]] = []
+        self.section_calls: list[dict[str, str]] = []
+        self.screen_calls: list[tuple[str, str]] = []
+        self.screen_rows = [
+            _screen_chunk(
+                "setting:c1",
+                "帳票の印字の有無は帳票印字設定で切り替えます。",
+                ["設定", _SCREEN_HEADING],
+            ),
+            # 見出しの部分一致だけの chunk(別の画面)は加えない。
+            _screen_chunk("setting:c2", "別画面の説明です。", ["設定", f"{_SCREEN_HEADING}の履歴"]),
+        ]
+
+    async def retrieval_scope_state(self, filters: dict[str, str]) -> str:
+        self.state_calls.append(dict(filters))
+        return self.state
+
+    async def retrieval_screen_sections(
+        self, filters: dict[str, str]
+    ) -> list[tuple[str, str, int]]:
+        self.section_calls.append(dict(filters))
+        return [
+            (_SCREEN_FILE, f"設定 > {_SCREEN_HEADING}", 3),
+            ("manual.pdf", "受注入力画面", 2),
+        ]
+
+    async def retrieval_screen_chunks(
+        self, filters: dict[str, str], *, file_name: str, heading: str, limit: int
+    ) -> list[RetrievedChunk]:
+        self.screen_calls.append((file_name, heading))
+        return list(self.screen_rows)
+
+
+def _screen_llm(calls: list[str]) -> Any:
+    from docrag.retrieval.screen_catalog import LinkedScreen, ScreenLinks
+
+    def parse(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+        calls.append(schema.__name__)
+        if schema is ScreenLinks:
+            assert _SCREEN_HEADING in prompt  # 目録に検索結果に無い画面が載る
+            return ScreenLinks(
+                candidates=[LinkedScreen(document=_SCREEN_FILE, screen=_SCREEN_HEADING)]
+            )
+        return _fake_llm(system, prompt, settings, schema, **options)
+
+    return parse
+
+
+async def _answer_with_screens(
+    monkeypatch: pytest.MonkeyPatch, oracle: ScreenOracle, *, enabled: bool
+) -> tuple[Any, list[str]]:
+    import docrag.adapters.oci as docrag_oci
+    from docrag.generation import answering
+
+    from app.rag import docrag_answer
+
+    calls: list[str] = []
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _screen_llm(calls))
+    monkeypatch.setattr(docrag_answer, "_SCREEN_CATALOG_CACHE", {})
+    answering._SCREEN_LINK_CACHE.clear()
+    engine = DocragAnswerEngine(
+        Settings(
+            rag_docrag_query_strategy="simple_retrieval",
+            rag_docrag_answer_flow="standard_rag",
+            rag_docrag_rerank_enabled=False,
+            rag_docrag_screen_linking_enabled=enabled,
+        ),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+    outcome = await engine.run(
+        SearchRequest(query="帳票が印字されない", top_k=10, filters={"knowledge_base_id": "kb-1"})
+    )
+    return outcome, calls
+
+
+def _evidence_ids(outcome: Any) -> set[str]:
+    return {
+        child["chunk_id"]
+        for parent in outcome.diagnostics["evidence_tree"]
+        for child in parent["children"]
+    }
+
+
+async def test_screen_linking_disabled_does_not_call_llm_or_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """画面目録の連携が無効(既定)なら、画面の選択の LLM も目録の SQL も呼ばない(#554)。"""
+    oracle = ScreenOracle()
+
+    outcome, calls = await _answer_with_screens(monkeypatch, oracle, enabled=False)
+
+    assert "ScreenLinks" not in calls
+    assert oracle.state_calls == [] and oracle.section_calls == [] and oracle.screen_calls == []
+    assert "setting:c1" not in _evidence_ids(outcome)
+    assert all(step["name"] != "画面の選択" for step in outcome.diagnostics["execution_steps"])
+
+
+async def test_screen_linking_adds_screen_missing_from_search_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """有効なら、検索で出なかった画面が範囲の目録に載り、その画面の chunk が候補に加わる(#554)。"""
+    oracle = ScreenOracle()
+
+    outcome, calls = await _answer_with_screens(monkeypatch, oracle, enabled=True)
+
+    assert calls.count("ScreenLinks") == 1
+    # 目録と画面の chunk は検索と同じ範囲(filters)で読む。
+    assert oracle.section_calls == [{"knowledge_base_id": "kb-1"}]
+    assert oracle.screen_calls == [(_SCREEN_FILE, _SCREEN_HEADING)]
+    evidence = _evidence_ids(outcome)
+    assert "setting:c1" in evidence
+    assert "setting:c2" not in evidence
+    assert any(step["name"] == "画面の選択" for step in outcome.diagnostics["execution_steps"])
+
+
+async def test_screen_catalog_is_cached_by_scope_and_index_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """目録は(検索条件、索引の状態)ごとに cache し、再索引などで状態が変わったら作り直す(#554)。"""
+    from app.rag.docrag_answer import _SearchState
+
+    monkeypatch.setattr("app.rag.docrag_answer._SCREEN_CATALOG_CACHE", {})
+    oracle = ScreenOracle()
+    engine = DocragAnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
+    request = SearchRequest(query="q", filters={"knowledge_base_id": "kb-1"})
+
+    first = await engine._screen_catalog(request, _SearchState())
+    state = _SearchState()
+    await engine._screen_catalog(request, state)
+    await engine._screen_catalog(request, state)  # 同じ回答の 2 回目は状態も読まない
+    oracle.state = "2:200"
+    await engine._screen_catalog(request, _SearchState())
+
+    assert first == {_SCREEN_FILE: [_SCREEN_HEADING]}
+    assert len(oracle.state_calls) == 3
+    assert len(oracle.section_calls) == 2
+
+
+def test_build_docrag_settings_passes_screen_linking(tmp_path: Any) -> None:
+    """検索・回答設定の画面目録の連携を docrag の設定へ渡す(#554)。"""
+    from app.rag.docrag_answer import build_docrag_settings
+
+    disabled = build_docrag_settings(Settings(), output_dir=tmp_path)
+    enabled = build_docrag_settings(
+        Settings(rag_docrag_screen_linking_enabled=True), output_dir=tmp_path
+    )
+
+    assert disabled.screen_linking_enabled is False
+    assert enabled.screen_linking_enabled is True
+
+
+def test_business_view_overrides_screen_linking() -> None:
+    """業務ビューで画面目録の連携を上書きできる(#554)。"""
+    from app.rag.business_view_config import BusinessViewConfig, resolve_business_view_settings
+    from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
+
+    config = BusinessViewConfig(
+        knowledge_base_ids=["kb-1"],
+        query=KnowledgeBaseQueryConfig(docrag_screen_linking_enabled=True),
+    )
+
+    settings, _ = resolve_business_view_settings(Settings(), config)
+
+    assert settings.rag_docrag_screen_linking_enabled is True
+    assert Settings().rag_docrag_screen_linking_enabled is False
+
+
+async def test_oracle_screen_catalog_queries_use_search_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """目録・状態・画面の chunk の SQL は、検索と同じ条件(KB など)で読む(#554)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_fetch_all(
+        statement: str, binds: dict[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        calls.append((statement, dict(binds or {})))
+        if "GROUP BY" in statement:
+            return [{"file_name": "a.pdf", "section_path": "設定 > （１）画面", "chunk_count": 2}]
+        if "chunk_count" in statement:
+            return [{"chunk_count": 5, "chunk_hash": 123}]
+        return []
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+    filters = {"knowledge_base_id": "kb-1"}
+
+    assert await client.retrieval_scope_state(filters) == "5:123"
+    assert await client.retrieval_screen_sections(filters) == [("a.pdf", "設定 > （１）画面", 2)]
+    assert (
+        await client.retrieval_screen_chunks(
+            filters, file_name="a.pdf", heading="（１）画面", limit=7
+        )
+        == []
+    )
+    assert len(calls) == 3
+    for _statement, binds in calls:
+        assert "kb-1" in binds.values()
+    assert "GROUP BY d.file_name" in calls[1][0]
+    screen_sql, screen_binds = calls[2]
+    assert "d.file_name = :screen_file_name" in screen_sql
+    assert screen_binds["screen_heading"] == "（１）画面"
+    assert screen_binds["screen_limit"] == 7

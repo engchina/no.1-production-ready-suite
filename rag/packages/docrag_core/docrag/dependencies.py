@@ -18,6 +18,11 @@ class AnswerDependencies:
     rerank は質問・候補・settings と top_n を受け取り RerankTextRank を返す。
     business_domains は質問文を受け取り、質問が名指しした業務名（文書の大分類の値）を返す。省略時は
     domain profile の `business_patterns` で推定する。呼び出し元が検索範囲の業務名の一覧を持つときに渡す。
+    screen_catalog / screen_chunks は画面目録の連携（#1108）の入力。検索結果が検索範囲の全 chunk を含まない
+    呼び出し元が、目録と選んだ画面の chunk を検索範囲から読むときに渡す。省略時は検索結果の chunk から作る。
+    screen_catalog は settings を受け取り {文書名: 番号付きの見出し} を返す。screen_chunks は links（選んだ
+    （文書名、見出し）の列）・existing（候補にある chunk_uid）・settings を受け取り、その画面の child と親の
+    StoredChunk を返す。
     """
     search: Callable[..., Any]
     check_ready: Callable[..., Any]
@@ -25,6 +30,8 @@ class AnswerDependencies:
     parse_images: Callable[..., Any]
     rerank: Callable[..., Any]
     business_domains: Callable[[str], Sequence[str]] | None = None
+    screen_catalog: Callable[..., dict[str, list[str]]] | None = None
+    screen_chunks: Callable[..., Sequence[Any]] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("docrag_answer_dependencies", default=None)
@@ -62,6 +69,22 @@ def question_business_domains(question: str) -> list[str] | None:
     if current is None or current.business_domains is None:
         return None
     return list(current.business_domains(question))
+
+
+def injected_screen_catalog(**kwargs) -> dict[str, list[str]] | None:
+    """注入された画面目録を返す。注入が無ければ None（検索結果の chunk から作る）。"""
+    current = _active.get()
+    if current is None or current.screen_catalog is None:
+        return None
+    return current.screen_catalog(**kwargs)
+
+
+def injected_screen_chunks(**kwargs) -> list[Any] | None:
+    """注入された読み込みで、選んだ画面の chunk を返す。注入が無ければ None（検索結果の chunk から選ぶ）。"""
+    current = _active.get()
+    if current is None or current.screen_chunks is None:
+        return None
+    return list(current.screen_chunks(**kwargs))
 
 
 def search_adb_hybrid_chunks(**kwargs):

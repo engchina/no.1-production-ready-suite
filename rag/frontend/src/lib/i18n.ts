@@ -1174,6 +1174,9 @@ export const ja = {
   "businessViews.field.docragNeighborChildCount": "DocRAG の前後の近傍 child 数",
   "businessViews.field.docragOptions": "DocRAG のオプション",
   "businessViews.field.docragRerank": "Rerank で検索候補を並べ替える",
+  "businessViews.field.docragScreenLinking": "画面目録で操作画面を探す",
+  "businessViews.field.docragScreenLinkingHelper":
+    "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。全体の既定は無効です。",
   "businessViews.docrag.helper": "回答エンジンが DocRAG のときだけ使います。",
   "businessViews.docragUnused.docrag": "回答エンジンが DocRAG のため、この設定は使われません。",
   "businessViews.docragUnused.inherit": "回答エンジンが DocRAG のときは、この設定は使われません。",

@@ -11,6 +11,9 @@ rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子�
   metadata(``document.classification``)に載せ、業務の候補の絞り込みに使う(#545)。
   質問が名指しした業務(``business_domains``)は、検索範囲の文書の大分類の語の一覧から
   照合して docrag へ注入する(domain profile の ``business_patterns`` は使わない。#553)。
+- 画面目録の連携(``RAG_DOCRAG_SCREEN_LINKING_ENABLED``。#554): 目録は検索範囲の全文書の
+  ``section_path`` から DB で作り(範囲と索引の状態ごとに cache)、選ばれた画面の chunk も DB から
+  読んで docrag へ注入する(検索結果に出なかった画面も候補に加える)。
 - rerank: backend の Cohere rerank。
 - LLM: openai SDK(OCI_ENTERPRISE_AI_*)。docrag 内部の Responses API 経路を使う。
 回答フローは同期関数のため worker thread で動かし、非同期 I/O はイベントループへ戻して実行する。
@@ -56,6 +59,11 @@ _IO_TIMEOUT_SECONDS = 600.0
 _MAX_QUESTION_FILE_TERMS = 3
 # 質問の業務名として照合する大分類の名前の最短の文字数(1 文字の名前は質問の別の語に偶然含まれる)。
 _MIN_BUSINESS_NAME_CHARS = 2
+# 画面目録の cache((検索条件, 索引の状態) → 目録)。索引の状態は文書の追加・再索引で変わる(#554)。
+_SCREEN_CATALOG_CACHE: dict[tuple[str, str], dict[str, list[str]]] = {}
+_SCREEN_CATALOG_CACHE_SIZE = 32
+# section_path の見出しの区切り(docrag_chunking が「 > 」でつないで保存する)。
+_SECTION_PATH_SEPARATOR = " > "
 
 
 @dataclass(frozen=True)
@@ -99,6 +107,8 @@ class _SearchState:
     # 文書の分類(rag_documents.classification)を document_id ごとに保持する(#545)。
     classifications: dict[str, dict[str, object]] = field(default_factory=dict)
     loaded_classification_ids: set[str] = field(default_factory=set)
+    # 画面目録(#554)。CRAG の各回で同じなので、1 回の回答で 1 回だけ作る。
+    screen_catalog: dict[str, list[str]] | None = None
 
 
 def build_docrag_settings(
@@ -139,6 +149,8 @@ def build_docrag_settings(
         "DOCRAG_ANSWER_LLM_SUPPORTS_VISION": (
             "1" if settings.rag_docrag_answer_vision_enabled else "0"
         ),
+        # 画面目録で操作画面を探す(#554)。docrag は明示した environ だけを読む。
+        "DOCRAG_SCREEN_LINKING": "1" if settings.rag_docrag_screen_linking_enabled else "0",
     }
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
@@ -235,6 +247,11 @@ class DocragAnswerEngine:
                 lambda: self._rerank(query, list(documents), top_n)
             ),
             business_domains=lambda question: question_business_domains(question, business_names),
+            # 画面目録の連携(#554)。docrag は設定が有効なときだけ呼ぶ。
+            screen_catalog=lambda **kwargs: run_async(lambda: self._screen_catalog(request, state)),
+            screen_chunks=lambda *, links, existing, **kwargs: run_async(
+                lambda: self._screen_chunks(request, state, links, existing)
+            ),
         )
         with bind_dependencies(dependencies), prompt_overrides(overrides or {}):
             return answer_question_result(
@@ -387,6 +404,92 @@ class DocragAnswerEngine:
             candidate["page_number_max"] = str(max(pages))
         return candidate
 
+    async def _screen_catalog(
+        self, request: SearchRequest, state: _SearchState
+    ) -> dict[str, list[str]]:
+        """検索範囲の全文書の見出しから画面目録を作る(範囲と索引の状態ごとに cache。#554)。
+
+        1 回の回答では最初の 1 回だけ作る。読めないときは空(docrag は LLM を呼ばず画面を足さない)。
+        """
+        if state.screen_catalog is None:
+            state.screen_catalog = await self._load_screen_catalog(request)
+        return state.screen_catalog
+
+    async def _load_screen_catalog(self, request: SearchRequest) -> dict[str, list[str]]:
+        from docrag.retrieval.screen_catalog import catalog_from_section_paths
+
+        filters = dict(request.filters)
+        try:
+            index_state = await self._oracle.retrieval_scope_state(filters)
+            key = (json.dumps(filters, ensure_ascii=False, sort_keys=True), index_state)
+            cached = _SCREEN_CATALOG_CACHE.get(key)
+            if cached is not None:
+                return cached
+            sections = await self._oracle.retrieval_screen_sections(filters)
+        except Exception:  # noqa: BLE001 - 画面目録は補助。画面を足さずに回答を続ける。
+            logger.warning("docrag screen catalog load failed", exc_info=True)
+            return {}
+        catalog = catalog_from_section_paths(
+            (file_name, _section_headings(section_path), count)
+            for file_name, section_path, count in sections
+        )
+        if len(_SCREEN_CATALOG_CACHE) >= _SCREEN_CATALOG_CACHE_SIZE:
+            _SCREEN_CATALOG_CACHE.clear()
+        _SCREEN_CATALOG_CACHE[key] = catalog
+        return catalog
+
+    async def _screen_chunks(
+        self,
+        request: SearchRequest,
+        state: _SearchState,
+        links: Sequence[tuple[str, str]],
+        existing: set[str],
+    ) -> list[Any]:
+        """選ばれた画面の child(画面ごとに上限まで)と、その親を検索範囲から読む(#554)。
+
+        検索結果に無かった chunk も引用に戻せるよう ``state.chunks`` に入れる。分類・根拠画像は
+        検索の候補と同じく付ける。読めない画面は足さない(回答は続ける)。
+        """
+        from docrag.retrieval.screen_catalog import MAX_CHILDREN_PER_SCREEN
+
+        filters = dict(request.filters)
+        added: dict[str, RetrievedChunk] = {}
+        for file_name, heading in links:
+            try:
+                rows = await self._oracle.retrieval_screen_chunks(
+                    filters,
+                    file_name=file_name,
+                    heading=heading,
+                    limit=MAX_CHILDREN_PER_SCREEN * 4 + len(existing),
+                )
+            except Exception:  # noqa: BLE001 - 画面の根拠は補助。この画面を足さずに続ける。
+                logger.warning("docrag screen chunks load failed", exc_info=True)
+                continue
+            matched = [
+                chunk
+                for chunk in rows
+                if chunk.chunk_id not in existing
+                and chunk.chunk_id not in added
+                and heading in _chunk_headings(chunk)
+            ]
+            for chunk in matched[:MAX_CHILDREN_PER_SCREEN]:
+                added[chunk.chunk_id] = state.chunks.setdefault(chunk.chunk_id, chunk)
+        if not added:
+            return []
+        chunks = list(added.values())
+        await self._load_classifications(chunks, state)
+        if self._settings.rag_docrag_answer_vision_enabled:
+            for chunk in chunks:
+                await self._materialize_image_evidence(chunk, state)
+            chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
+        children = [
+            _stored_child(
+                chunk, rrf_score=0.0, classification=state.classifications.get(chunk.document_id)
+            )
+            for chunk in chunks
+        ]
+        return [*children, *_stored_parents(children, state)]
+
     async def _load_classifications(
         self, chunks: Sequence[RetrievedChunk], state: _SearchState
     ) -> None:
@@ -535,6 +638,18 @@ def _document_run_id(document_id: str) -> str:
 
 def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", value)[:120]
+
+
+def _section_headings(section_path: str) -> list[str]:
+    return [part.strip() for part in section_path.split(_SECTION_PATH_SEPARATOR) if part.strip()]
+
+
+def _chunk_headings(chunk: RetrievedChunk) -> list[str]:
+    """chunk の見出しの列(docrag の metadata の section_path。無ければ保存した文字列を分ける)。"""
+    path = _docrag_metadata(chunk).get("section_path")
+    if isinstance(path, list):
+        return [str(part).strip() for part in path]
+    return _section_headings(str(chunk.metadata.get("section_path") or ""))
 
 
 def _int(value: object, default: int = 0) -> int:

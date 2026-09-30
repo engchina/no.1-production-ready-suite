@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import unicodedata
@@ -618,8 +619,10 @@ def build_adb_hybrid_answer_context(
 
     linked_screens: list[tuple[str, str]] = []
     if getattr(settings, "screen_linking_enabled", False):
-        added, linked_screens = _linked_screen_children(question, search_result.all_chunks, ranked_children, settings)
+        added, linked_screens, expansion = _linked_screen_children(question, search_result.all_chunks, ranked_children, settings)
         ranked_children = [*ranked_children, *added]
+        known = {record.chunk_uid for record in active_records}
+        active_records.extend(record for record in expansion if record.chunk_uid not in known)
     ranked_children = rerank_records(
         question, ranked_children, settings, enabled=rerank_enabled,
         business_domains=inquiry_conditions.business_domains if inquiry_conditions is not None else None,
@@ -1757,23 +1760,35 @@ def _record_question_understanding(step: _ExecutionStep, question: str, plan: Qu
 
 
 # 画面目録と画面の選択の cache。目録は chunk 集合ごと、選択は（質問、chunk 集合）ごと。CRAG の各回は同じ質問で
-# 検索し直すので、選択の LLM 呼び出しを 1 質問 1 回にする。
+# 検索し直すので、選択の LLM 呼び出しを 1 質問 1 回にする。目録を注入したときは、選択を（質問、目録の内容）ごとにする。
 _SCREEN_CATALOG_CACHE: dict[tuple[int, int], dict[str, list[str]]] = {}
-_SCREEN_LINK_CACHE: dict[tuple[str, int, int], list[tuple[str, str]]] = {}
+_SCREEN_LINK_CACHE: dict[tuple[object, ...], list[tuple[str, str]]] = {}
 
 
-def _linked_screen_children(question: str, pool: Sequence[Any], ranked_children: Sequence[AnswerRecord],
-                            settings: Settings) -> tuple[list[AnswerRecord], list[tuple[str, str]]]:
-    """画面目録で選んだ画面の child chunk のうちまだ候補に無いものと、選んだ（文書、見出し）を返す (#1108)。"""
+def _linked_screen_children(
+    question: str, pool: Sequence[Any], ranked_children: Sequence[AnswerRecord], settings: Settings,
+) -> tuple[list[AnswerRecord], list[tuple[str, str]], list[AnswerRecord]]:
+    """画面目録で選んだ画面の child chunk のうちまだ候補に無いもの、選んだ（文書、見出し）、context の展開に足す record を返す (#1108)。
+
+    目録と画面の chunk は、検索範囲の全 chunk（`pool`）から作る。呼び出し元が `AnswerDependencies.screen_catalog` /
+    `screen_chunks` を注入したときは、検索結果に無い画面も載せるため、そちらから読む。そのときは読んだ child と親を
+    context の展開（親・兄弟）に使えるよう 3 つ目で返す（`pool` から作るときは `pool` に含まれるので空）。
+    """
+    from docrag.dependencies import injected_screen_catalog, injected_screen_chunks
     from docrag.retrieval.screen_catalog import build_screen_catalog, link_screens, screen_candidates
     with _execution_step("画面の選択", "画面目録から質問を解決する画面を選び、その画面の根拠を検索候補に加えます。") as step:
-        pool_key = (id(pool), len(pool))
-        catalog = _SCREEN_CATALOG_CACHE.get(pool_key)
-        if catalog is None:
-            if len(_SCREEN_CATALOG_CACHE) >= 4:
-                _SCREEN_CATALOG_CACHE.clear()
-            catalog = _SCREEN_CATALOG_CACHE[pool_key] = build_screen_catalog(pool)
-        link_key = (question, *pool_key)
+        catalog = injected_screen_catalog(settings=settings)
+        if catalog is not None:
+            digest = hashlib.sha256(json.dumps(catalog, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+            link_key: tuple[object, ...] = (question, "catalog", digest)
+        else:
+            pool_key = (id(pool), len(pool))
+            catalog = _SCREEN_CATALOG_CACHE.get(pool_key)
+            if catalog is None:
+                if len(_SCREEN_CATALOG_CACHE) >= 4:
+                    _SCREEN_CATALOG_CACHE.clear()
+                catalog = _SCREEN_CATALOG_CACHE[pool_key] = build_screen_catalog(pool)
+            link_key = (question, *pool_key)
         links = _SCREEN_LINK_CACHE.get(link_key)
         if links is None:
             if len(_SCREEN_LINK_CACHE) >= 256:
@@ -1782,11 +1797,19 @@ def _linked_screen_children(question: str, pool: Sequence[Any], ranked_children:
         if not links:
             step.status = "該当なし"
             step.add(f"画面目録（{len(catalog)} 文書）から該当する画面を選べませんでした。")
-            return [], []
-        added = screen_candidates(pool, links, {r.chunk_uid for r in ranked_children if r.chunk_uid})
+            return [], [], []
+        existing = {r.chunk_uid for r in ranked_children if r.chunk_uid}
+        loaded = injected_screen_chunks(links=links, existing=existing, settings=settings)
+        if loaded is not None:
+            # 注入された読み込みは child と親を返す。候補に加えるのは画面ごとの上限までの child だけ。
+            added = screen_candidates(loaded, links, existing)
+            expansion = [_stored_chunk_answer_record(chunk) for chunk in loaded]
+        else:
+            added = screen_candidates(pool, links, existing)
+            expansion = []
         step.add("選んだ画面: " + " / ".join(f"{source} {heading}" for source, heading in links))
         step.add(f"候補に加えた根拠: {len(added)} 件")
-        return [_stored_chunk_answer_record(chunk) for chunk in added], links
+        return [_stored_chunk_answer_record(chunk) for chunk in added], links, expansion
 
 
 def _target_text_queries(question: str, settings: Settings) -> list[str]:

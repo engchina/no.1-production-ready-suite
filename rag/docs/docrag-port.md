@@ -28,7 +28,7 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | 図・画像を AI で読み取る（Vision） | 文書レシピ | 文書のレシピ編集（解析エンジンに関係なく選べる）。全体の既定は `backend/.env` の `RAG_VISION_ENABLED`。文書解析の画面の「解析後の処理」から保存できる（#497 / #528） |
 | DocRAG 親子階層 | 文書レシピ | 検索・回答設定 > 文書分割「DocRAG 親子階層」（分割パラメータ 5 項目もここで設定）、または文書のレシピ編集 |
 | ドメインキーワード / Approved FAQ / 用語・ルール | 業務ビュー | 業務ビューを編集 >「業務ビューの知識」 |
-| 回答エンジン / 全文検索の分割方式 / DocRAG の回答設定（質問拡張戦略・回答生成フロー・近傍 child 数・Rerank） | 業務ビュー | 業務ビューを編集 > 検索・回答設定 |
+| 回答エンジン / 全文検索の分割方式 / DocRAG の回答設定（質問拡張戦略・回答生成フロー・近傍 child 数・Rerank・画面目録で操作画面を探す） | 業務ビュー | 業務ビューを編集 > 検索・回答設定 |
 
 | 文書の分類（大分類・中分類・小分類）と有効期間 | 文書のメタデータ | 文書詳細の「文書の分類と有効期間」（`PUT /api/documents/{id}/classification`） |
 | 質問履歴（記録するか・保存期間・最小回数・件数・除外する語） | global | 検索・回答設定 > 回答スタイル「質問履歴」（既定は無効） |
@@ -55,7 +55,7 @@ DocRAG 回答の業務の絞り込み（#545 / #546 / #553）: 業務の範囲�
    - Vision の読み取り内容（画面名・ボタン・表の行・操作手順など）と切り出し画像
 4. **業務ビュー**：
    - 回答エンジンを「DocRAG（根拠照合・監査付き）」にする。
-   - 必要なら DocRAG の質問拡張戦略・回答生成フロー・近傍 child 数・Rerank を上書きする（既定は自動ルーティング / CRAG / 3 / ON）。
+   - 必要なら DocRAG の質問拡張戦略・回答生成フロー・近傍 child 数・Rerank・画面目録で操作画面を探すを上書きする（既定は自動ルーティング / CRAG / 3 / ON / OFF）。
    - 必要なら全文検索の分割方式を Sudachi にする。
    - 業務ビューの知識に、ドメインキーワード・Approved FAQ・用語・ルールを登録する。
 5. **検索**：
@@ -86,6 +86,7 @@ DocRAG 回答の業務の絞り込み（#545 / #546 / #553）: 業務の範囲�
 | `RAG_DOCRAG_ANSWER_FLOW` | `crag` | DocRAG 回答の回答生成フロー。`standard_rag` は補正検索をしない。業務ビューで上書きできる |
 | `RAG_DOCRAG_NEIGHBOR_CHILD_COUNT` | `3` | DocRAG 回答で根拠の child の前後から context へ足す近傍 child 数（0〜20）。業務ビューで上書きできる |
 | `RAG_DOCRAG_RERANK_ENABLED` | `true` | DocRAG 回答で検索候補を rerank で並べ替える。業務ビューで上書きできる |
+| `RAG_DOCRAG_SCREEN_LINKING_ENABLED` | `false` | 画面目録で操作画面を探す（rag_poc の画面目録の連携、#554）。検索範囲の文書の番号付きの見出し（「（２）帳票印字設定」など）の目録から、質問を解決する画面を LLM で選び、その画面の child chunk（画面ごとに最大 10 件）と親を検索候補に加える。候補は足すだけで減らさず、順位は rerank が決める。回答ごとに LLM の呼び出しが 1 回増える。目録は検索範囲（`filters` と同じ条件）の全文書の `section_path` を DB で集計して作り（`OracleClient.retrieval_screen_sections`）、検索範囲と索引の状態（chunk の件数と chunk_id・文書名の hash。文書の追加・削除・再索引で変わる）ごとに process 内で cache する。選んだ画面の chunk も DB から読む（`retrieval_screen_chunks`）ので、検索で出なかった画面も候補に加わる。docrag の `AnswerDependencies.screen_catalog` / `screen_chunks` で注入する。業務ビューで上書きできる（業務ビューを編集 > 検索・回答設定 >「DocRAG のオプション」） |
 | `RAG_APPROVED_FAQ_SEMANTIC_ENABLED` | `true` | 類似問の照合に embedding の意味類似度を加える |
 | `RAG_DOCRAG_ANSWER_VISION_ENABLED` | `false` | DocRAG 回答で根拠の図を切り出して回答モデルへ添付する。回答モデルが画像入力に対応する場合だけ有効にする |
 | `RAG_DOCRAG_HISTORY_REWRITE_ENABLED` | `true` | チャットで DocRAG エンジンを使うとき、会話履歴から質問を書き換える |
