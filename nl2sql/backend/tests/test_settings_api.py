@@ -1711,7 +1711,7 @@ def test_update_model_settings_persists_v2_json_and_env_secret(
     )
 
     assert resp.status_code == 200
-    assert resp.json()["data"]["settings"]["enterprise_ai"]["api_key"] == ""
+    assert resp.json()["data"]["settings"]["enterprise_ai"]["connections"][0]["api_key"] == ""
     models = resp.json()["data"]["settings"]["enterprise_ai"]["models"]
     assert [model["model_id"] for model in models] == [
         "cohere.command-r-plus",

@@ -1,8 +1,11 @@
 """モデル設定の API（3製品共通。NL2SQL の実装を基準に移設。#103）。
 
 - OCI Enterprise AI（回答生成 / Vision）と OCI Generative AI（埋め込み / リランク）の設定
-- API key は共通 `.env`（`platform/.env`）の `PLATFORM_OCI_ENTERPRISE_AI_API_KEY` だけに
-  保存し、JSON には書かない
+- OCI Enterprise AI の接続（Endpoint URL・Project OCID・API key）は最大 2 件（#533）。
+  登録モデルごとに `connection_id` で使う接続を選ぶ（未指定なら 1 件目）。実行時は
+  `enterprise_ai_connection_for_model` でモデルから接続を引く
+- API key は共通 `.env`（`platform/.env`）の `PLATFORM_OCI_ENTERPRISE_AI_API_KEY`（接続 1）と
+  `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY`（接続 2）だけに保存し、JSON には書かない
 - それ以外は `model-settings.json`（`version: 3`）へ保存し、起動時と mtime の変化時に読み込む
 - 製品固有の節（RAG の `parser_adapters`）は `ModelSettingsSection` で読み書きする
 - モデル単位の接続テスト。実際の呼び出しは製品が `run_model_test` で渡す
@@ -22,24 +25,35 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Final, Literal
 from uuid import uuid4
 
 from dotenv import dotenv_values
 from fastapi import APIRouter, HTTPException, params
 from pr_backend_core.schemas import ApiResponse
-from pydantic import BaseModel, Field, PrivateAttr, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
 from .env_file import write_env_values
 
 logger = logging.getLogger(__name__)
 
 ENTERPRISE_AI_API_KEY_ENV = "PLATFORM_OCI_ENTERPRISE_AI_API_KEY"
+ENTERPRISE_AI_SECONDARY_API_KEY_ENV = "PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY"
+# OCI Enterprise AI の接続（#533）。1 件目が既定。接続ごとに Settings の属性（env 名）が決まって
+# いるので、ID は枠の名前にする。接続 1 は #533 より前からの属性・env 名をそのまま使う。
+ENTERPRISE_AI_PRIMARY_CONNECTION_ID: Final = "primary"
+ENTERPRISE_AI_SECONDARY_CONNECTION_ID: Final = "secondary"
+ENTERPRISE_AI_CONNECTION_IDS = (
+    ENTERPRISE_AI_PRIMARY_CONNECTION_ID,
+    ENTERPRISE_AI_SECONDARY_CONNECTION_ID,
+)
+MAX_ENTERPRISE_AI_CONNECTIONS = len(ENTERPRISE_AI_CONNECTION_IDS)
 MODEL_SETTINGS_DOCUMENT_VERSION = 3
 MODEL_SETTINGS_FILE_MODE = 0o600
 MODEL_SETTINGS_DIRECTORY_MODE = 0o700
 
 EnterpriseAiVlmInputMode = Literal["auto", "files_api", "inline_image"]
+EnterpriseAiConnectionId = Literal["primary", "secondary"]
 ModelSettingsSecretSource = Literal["environment", "legacy_json", "missing"]
 ModelSettingsTestStatus = Literal["success", "failed"]
 ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "embedding", "rerank"]
@@ -55,6 +69,9 @@ class EnterpriseAiConfiguredModel(BaseModel):
     model_id: str = Field(default="", max_length=256)
     display_name: str = Field(default="", max_length=256)
     vision_enabled: bool = False
+    # 呼び出しに使う接続（#533）。未指定（#533 より前の設定）は 1 件目の接続。
+    # 存在しない接続を指す値は、保存時に欄のエラーにする（`validate_enterprise_ai_connections`）。
+    connection_id: str = Field(default=ENTERPRISE_AI_PRIMARY_CONNECTION_ID, max_length=64)
 
     @field_validator("model_id", "display_name")
     @classmethod
@@ -62,19 +79,53 @@ class EnterpriseAiConfiguredModel(BaseModel):
         """前後空白を設定値へ混入させない。"""
         return value.strip()
 
+    @field_validator("connection_id", mode="before")
+    @classmethod
+    def default_connection(cls, value: object) -> object:
+        """空・未指定は 1 件目の接続にする。"""
+        if value is None:
+            return ENTERPRISE_AI_PRIMARY_CONNECTION_ID
+        if isinstance(value, str):
+            return value.strip() or ENTERPRISE_AI_PRIMARY_CONNECTION_ID
+        return value
+
 
 # API schema 上の名前（NL2SQL / RAG の既存名）。中身は同じ。
 EnterpriseAiModelEntrySettings = EnterpriseAiConfiguredModel
 
 
-class EnterpriseAiModelSettings(BaseModel):
-    """OCI Enterprise AI モデル provider 設定。"""
+class EnterpriseAiConnectionSettings(BaseModel):
+    """OCI Enterprise AI の接続 1 件（#533）。`api_key` は書き込み専用で、応答では空にする。"""
 
+    connection_id: EnterpriseAiConnectionId = ENTERPRISE_AI_PRIMARY_CONNECTION_ID
+    # 空なら画面は「接続 1」「接続 2」と表示する。
+    display_name: str = Field(default="", max_length=128)
     endpoint: str = Field(default="", max_length=2048)
     project_ocid: str = Field(default="", max_length=512)
     api_key: str = Field(default="", max_length=4096)
     has_api_key: bool = False
     clear_api_key: bool = False
+
+    @field_validator("display_name", "endpoint", "project_ocid", "api_key")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        """前後空白を設定値へ混入させない。"""
+        return value.strip()
+
+
+# #533 より前の payload の接続の key（接続 1 組を top-level に持つ形）。
+_LEGACY_CONNECTION_KEYS = ("endpoint", "project_ocid", "api_key", "has_api_key", "clear_api_key")
+
+
+class EnterpriseAiModelSettings(BaseModel):
+    """OCI Enterprise AI モデル provider 設定。"""
+
+    # 1 件目（接続 1）が既定。2 件目は任意（#533）。
+    connections: list[EnterpriseAiConnectionSettings] = Field(
+        default_factory=lambda: [EnterpriseAiConnectionSettings()],
+        min_length=1,
+        max_length=MAX_ENTERPRISE_AI_CONNECTIONS,
+    )
     models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list, max_length=20)
     # 画像を扱わない処理の既定。空なら既定の Vision モデルを使う（#499）。
     default_text_model_id: str = Field(default="", max_length=256)
@@ -91,10 +142,33 @@ class EnterpriseAiModelSettings(BaseModel):
     llm_max_output_tokens: int = Field(default=1200, ge=1, le=65536)
     vlm_max_output_tokens: int = Field(default=65536, ge=1, le=65536)
 
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_single_connection(cls, value: object) -> object:
+        """#533 より前の payload（接続情報を top-level に 1 組）は、接続 1 として受け取る。"""
+        if not isinstance(value, Mapping) or "connections" in value:
+            return value
+        legacy = {key: value[key] for key in _LEGACY_CONNECTION_KEYS if key in value}
+        if not legacy:
+            return value
+        converted = {key: item for key, item in value.items() if key not in legacy}
+        converted["connections"] = [
+            {"connection_id": ENTERPRISE_AI_PRIMARY_CONNECTION_ID, **legacy}
+        ]
+        return converted
+
+    @field_validator("connections")
+    @classmethod
+    def validate_connection_order(
+        cls, value: list[EnterpriseAiConnectionSettings]
+    ) -> list[EnterpriseAiConnectionSettings]:
+        """接続は「接続 1 → 接続 2」の順に、重複なく並べる。"""
+        ids = [connection.connection_id for connection in value]
+        if ids != list(ENTERPRISE_AI_CONNECTION_IDS[: len(ids)]):
+            raise ValueError("接続は接続 1（primary）、接続 2（secondary）の順に指定してください。")
+        return value
+
     @field_validator(
-        "endpoint",
-        "project_ocid",
-        "api_key",
         "default_text_model_id",
         "default_vision_model_id",
         "api_path",
@@ -107,6 +181,17 @@ class EnterpriseAiModelSettings(BaseModel):
     def strip_text(cls, value: str) -> str:
         """前後空白を設定値へ混入させない。"""
         return value.strip()
+
+    def connection(self, connection_id: str) -> EnterpriseAiConnectionSettings | None:
+        """指定した接続。なければ None。"""
+        return next(
+            (item for item in self.connections if item.connection_id == connection_id), None
+        )
+
+    @property
+    def primary_connection(self) -> EnterpriseAiConnectionSettings:
+        """接続 1（既定）。"""
+        return self.connections[0]
 
     @field_validator("text_payload_template", "vision_payload_template")
     @classmethod
@@ -204,16 +289,18 @@ class ModelSecretStateMixin(BaseModel):
     """製品の Settings に混ぜる、Enterprise AI API key の取得元の状態。
 
     `class Settings(ModelSecretStateMixin, BaseSettings)` のように先頭に置く。
+    接続 2 の API key（#533）は `.env` / 環境変数だけから読む（旧 JSON の互換はない）。
     """
 
     _environment_enterprise_ai_api_key: str = PrivateAttr(default="")
+    _environment_enterprise_ai_secondary_api_key: str = PrivateAttr(default="")
     _model_secret_source: ModelSettingsSecretSource = PrivateAttr(default="missing")
     _legacy_model_secret_detected: bool = PrivateAttr(default=False)
     _model_secret_state_initialized: bool = PrivateAttr(default=False)
 
     @property
     def model_secret_source(self) -> ModelSettingsSecretSource:
-        """Enterprise AI API key の実効的な取得元。"""
+        """Enterprise AI API key（接続 1）の実効的な取得元。"""
         return self._model_secret_source
 
     @property
@@ -221,24 +308,38 @@ class ModelSecretStateMixin(BaseModel):
         """model-settings.json に旧 secret field が残っているか。"""
         return self._legacy_model_secret_detected
 
-    def prepare_model_secret_state(self, environment_api_key: str | None = None) -> None:
+    def prepare_model_secret_state(
+        self,
+        environment_api_key: str | None = None,
+        environment_secondary_api_key: str | None = None,
+    ) -> None:
         """JSON 再読込前に環境由来 secret を基準値へ戻す。
 
-        `environment_api_key` を渡すと新しい基準値にする（別 worker が `.env` を更新した場合）。
+        値を渡すと新しい基準値にする（別 worker が `.env` を更新した場合）。
         """
         if not self._model_secret_state_initialized:
             self._environment_enterprise_ai_api_key = _api_key_of(self).strip()
+            self._environment_enterprise_ai_secondary_api_key = _setting_text(
+                self, _SECONDARY_FIELDS.api_key
+            )
             self._model_secret_state_initialized = True
         if environment_api_key is not None:
             self._environment_enterprise_ai_api_key = environment_api_key.strip()
+        if environment_secondary_api_key is not None:
+            self._environment_enterprise_ai_secondary_api_key = (
+                environment_secondary_api_key.strip()
+            )
         self._set_api_key(self._environment_enterprise_ai_api_key)
+        _set_if_field(
+            self, _SECONDARY_FIELDS.api_key, self._environment_enterprise_ai_secondary_api_key
+        )
         self._model_secret_source = (
             "environment" if self._environment_enterprise_ai_api_key else "missing"
         )
         self._legacy_model_secret_detected = False
 
     def set_runtime_enterprise_ai_api_key(self, api_key: str) -> None:
-        """`.env` 更新後の secret 状態を現在プロセスへ反映する。"""
+        """`.env` 更新後の secret 状態（接続 1）を現在プロセスへ反映する。"""
         normalized = api_key.strip()
         self._environment_enterprise_ai_api_key = normalized
         self._model_secret_state_initialized = True
@@ -265,6 +366,111 @@ class ModelSecretStateMixin(BaseModel):
 
 def _api_key_of(settings: Any) -> str:
     return str(getattr(settings, "oci_enterprise_ai_api_key", "") or "")
+
+
+# --------------------------------------------------------------------------- connections
+
+
+@dataclass(frozen=True)
+class _ConnectionFields:
+    """接続ごとの Settings の属性名と、API key の env 名。"""
+
+    display_name: str
+    endpoint: str
+    project_ocid: str
+    api_key: str
+    api_key_env: str
+
+
+# 接続 1 は #533 より前からの属性・env 名（既存環境の更新は要らない）。接続 2 は
+# `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_*`（`PLATFORM_SETTING_FIELDS` に登録）。
+_PRIMARY_FIELDS = _ConnectionFields(
+    display_name="oci_enterprise_ai_connection_name",
+    endpoint="oci_enterprise_ai_endpoint",
+    project_ocid="oci_enterprise_ai_project_ocid",
+    api_key="oci_enterprise_ai_api_key",
+    api_key_env=ENTERPRISE_AI_API_KEY_ENV,
+)
+_SECONDARY_FIELDS = _ConnectionFields(
+    display_name="oci_enterprise_ai_secondary_connection_name",
+    endpoint="oci_enterprise_ai_secondary_endpoint",
+    project_ocid="oci_enterprise_ai_secondary_project_ocid",
+    api_key="oci_enterprise_ai_secondary_api_key",
+    api_key_env=ENTERPRISE_AI_SECONDARY_API_KEY_ENV,
+)
+_CONNECTION_FIELDS: dict[str, _ConnectionFields] = {
+    ENTERPRISE_AI_PRIMARY_CONNECTION_ID: _PRIMARY_FIELDS,
+    ENTERPRISE_AI_SECONDARY_CONNECTION_ID: _SECONDARY_FIELDS,
+}
+
+
+@dataclass(frozen=True)
+class EnterpriseAiConnection:
+    """モデルの呼び出しに使う OCI Enterprise AI の接続（#533）。
+
+    API key を含むので、API の応答やログに出さない。
+    """
+
+    connection_id: str
+    display_name: str
+    endpoint: str
+    project_ocid: str
+    api_key: str = field(repr=False)
+
+    def is_configured(self) -> bool:
+        """Endpoint と API key がそろっているか（Project OCID は任意）。"""
+        return bool(self.endpoint and self.api_key)
+
+
+def _connection_from_settings(settings: Any, connection_id: str) -> EnterpriseAiConnection:
+    fields = _CONNECTION_FIELDS[connection_id]
+    return EnterpriseAiConnection(
+        connection_id=connection_id,
+        display_name=_setting_text(settings, fields.display_name),
+        endpoint=_setting_text(settings, fields.endpoint),
+        project_ocid=_setting_text(settings, fields.project_ocid),
+        api_key=_setting_text(settings, fields.api_key),
+    )
+
+
+def enterprise_ai_connections(settings: Any) -> list[EnterpriseAiConnection]:
+    """設定済みの接続の一覧。接続 1 は常にあり、接続 2 は Endpoint URL があるときだけある。"""
+    connections = [_connection_from_settings(settings, ENTERPRISE_AI_PRIMARY_CONNECTION_ID)]
+    secondary = _connection_from_settings(settings, ENTERPRISE_AI_SECONDARY_CONNECTION_ID)
+    if secondary.endpoint:
+        connections.append(secondary)
+    return connections
+
+
+def enterprise_ai_connection(settings: Any, connection_id: str) -> EnterpriseAiConnection:
+    """指定した接続。ない接続（保存後に env から消した場合など）は接続 1 を使う。"""
+    connections = enterprise_ai_connections(settings)
+    for connection in connections:
+        if connection.connection_id == connection_id:
+            return connection
+    if connection_id != ENTERPRISE_AI_PRIMARY_CONNECTION_ID:
+        logger.warning(
+            "enterprise_ai_connection_missing",
+            extra={"warning_code": "ENTERPRISE_AI_CONNECTION_MISSING", "connection": connection_id},
+        )
+    return connections[0]
+
+
+def enterprise_ai_connection_for_model(settings: Any, model_id: str) -> EnterpriseAiConnection:
+    """モデルを呼ぶときに使う接続（#533）。3 製品の呼び出し・接続テストはすべてこれで引く。
+
+    登録モデルにない ID（env だけで設定した場合など）は接続 1 を使う。
+    """
+    normalized = model_id.strip()
+    connection_id = next(
+        (
+            model.connection_id
+            for model in enterprise_ai_model_catalog(settings)
+            if model.model_id == normalized
+        ),
+        ENTERPRISE_AI_PRIMARY_CONNECTION_ID,
+    )
+    return enterprise_ai_connection(settings, connection_id)
 
 
 # --------------------------------------------------------------------------- catalog
@@ -356,10 +562,58 @@ def _vision_model_id(models: Sequence[EnterpriseAiConfiguredModel], default_mode
 
 @dataclass(frozen=True)
 class ModelFieldError:
-    """保存前の検証で見つかった入力欄ごとのエラー（`field` は payload の key）。"""
+    """保存前の検証で見つかった入力欄ごとのエラー。
 
-    field: Literal["default_text_model_id", "default_vision_model_id"]
+    `field` は payload の key。一覧の中の欄は `connections.1.endpoint` /
+    `models.0.connection_id` のように添字を付ける。
+    """
+
+    field: str
     message: str
+
+
+def connection_label(connection_id: str, display_name: str = "") -> str:
+    """利用者に見せる接続の名前（表示名が空なら「接続 1」「接続 2」）。"""
+    if display_name:
+        return display_name
+    index = (
+        ENTERPRISE_AI_CONNECTION_IDS.index(connection_id)
+        if connection_id in ENTERPRISE_AI_CONNECTION_IDS
+        else 0
+    )
+    return f"接続 {index + 1}"
+
+
+def validate_enterprise_ai_connections(
+    enterprise: EnterpriseAiModelSettings,
+) -> list[ModelFieldError]:
+    """接続と、登録モデルが指す接続を確かめる（#533）。
+
+    - 接続 2 を追加したら Endpoint URL は必須（接続 1 は OCI で運用するときだけ必須のまま）
+    - 登録モデルは、存在する接続を指す
+    """
+    errors: list[ModelFieldError] = []
+    for index, connection in enumerate(enterprise.connections):
+        if index > 0 and not connection.endpoint:
+            label = connection_label(connection.connection_id, connection.display_name)
+            errors.append(
+                ModelFieldError(
+                    f"connections.{index}.endpoint",
+                    f"{label} の Endpoint URL を入力してください。"
+                    "使わない場合は接続を削除してください。",
+                )
+            )
+    available = {connection.connection_id for connection in enterprise.connections}
+    for index, model in enumerate(enterprise.models):
+        if model.model_id and model.connection_id not in available:
+            errors.append(
+                ModelFieldError(
+                    f"models.{index}.connection_id",
+                    f"「{model.display_name or model.model_id}」の接続がありません。"
+                    "登録されている接続から選び直してください。",
+                )
+            )
+    return errors
 
 
 def validate_default_models(enterprise: EnterpriseAiModelSettings) -> list[ModelFieldError]:
@@ -424,10 +678,17 @@ def model_payload(settings: Any) -> ModelSettingsPayload:
     api_path = settings.oci_enterprise_ai_llm_path or settings.oci_enterprise_ai_vlm_path
     return ModelSettingsPayload(
         enterprise_ai=EnterpriseAiModelSettings(
-            endpoint=settings.oci_enterprise_ai_endpoint,
-            project_ocid=settings.oci_enterprise_ai_project_ocid,
-            api_key="",
-            has_api_key=bool(_api_key_of(settings).strip()),
+            connections=[
+                EnterpriseAiConnectionSettings(
+                    connection_id=connection.connection_id,
+                    display_name=connection.display_name,
+                    endpoint=connection.endpoint,
+                    project_ocid=connection.project_ocid,
+                    api_key="",
+                    has_api_key=bool(connection.api_key),
+                )
+                for connection in enterprise_ai_connections(settings)
+            ],
             models=models,
             default_text_model_id=_setting_text(settings, "oci_enterprise_ai_default_text_model"),
             default_vision_model_id=enterprise_ai_vision_model_id(settings),
@@ -455,8 +716,12 @@ def apply_model_settings(settings: Any, payload: ModelSettingsPayload) -> None:
     enterprise = payload.enterprise_ai
     generative = payload.generative_ai
     models = [model.model_copy() for model in enterprise.models if model.model_id]
-    settings.oci_enterprise_ai_endpoint = enterprise.endpoint
-    settings.oci_enterprise_ai_project_ocid = enterprise.project_ocid
+    for connection_id, fields in _CONNECTION_FIELDS.items():
+        # payload にない接続（接続 2 を削除した場合）は空にする。
+        connection = enterprise.connection(connection_id) or EnterpriseAiConnectionSettings()
+        _set_if_field(settings, fields.display_name, connection.display_name)
+        _set_if_field(settings, fields.endpoint, connection.endpoint)
+        _set_if_field(settings, fields.project_ocid, connection.project_ocid)
     settings.oci_enterprise_ai_models = models
     settings.oci_enterprise_ai_default_text_model = enterprise.default_text_model_id
     settings.oci_enterprise_ai_default_vision_model = enterprise.default_vision_model_id
@@ -493,14 +758,29 @@ def _secret_value(*, current: str, update: str | None, clear: bool) -> str:
     return current
 
 
+def resolve_api_keys(settings: Any, payload: ModelSettingsPayload) -> dict[str, str]:
+    """保存後の接続ごとの API key（空欄は現在値を保持、`clear_api_key` は削除）。
+
+    payload にない接続（削除した接続 2）の key は空にする。
+    """
+    keys: dict[str, str] = {}
+    for connection_id, fields in _CONNECTION_FIELDS.items():
+        connection = payload.enterprise_ai.connection(connection_id)
+        keys[connection_id] = (
+            _secret_value(
+                current=_setting_text(settings, fields.api_key),
+                update=connection.api_key,
+                clear=connection.clear_api_key,
+            )
+            if connection is not None
+            else ""
+        )
+    return keys
+
+
 def resolve_api_key(settings: Any, payload: ModelSettingsPayload) -> str:
-    """保存後の API key（空欄は現在値を保持、`clear_api_key` は削除）。"""
-    enterprise = payload.enterprise_ai
-    return _secret_value(
-        current=_api_key_of(settings),
-        update=enterprise.api_key,
-        clear=enterprise.clear_api_key,
-    )
+    """保存後の接続 1 の API key。"""
+    return resolve_api_keys(settings, payload)[ENTERPRISE_AI_PRIMARY_CONNECTION_ID]
 
 
 def model_settings_data(settings: Any) -> ModelSettingsData:
@@ -517,7 +797,22 @@ def model_settings_data(settings: Any) -> ModelSettingsData:
 # --------------------------------------------------------------------------- persistence
 
 
+class _PersistedConnection(BaseModel):
+    connection_id: str = ""
+    display_name: str = ""
+    endpoint: str = ""
+    project_ocid: str = ""
+
+    @field_validator("connection_id", "display_name", "endpoint", "project_ocid", mode="before")
+    @classmethod
+    def strip_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
 class _PersistedEnterpriseAiSettings(BaseModel):
+    # #533 からの接続の一覧（secret は書かない）。None は #533 より前の JSON（接続 1 組を
+    # top-level の `endpoint` / `project_ocid` に持つ形）で、接続 1 として読む。
+    connections: list[_PersistedConnection] | None = None
     endpoint: str = ""
     project_ocid: str = ""
     # v1 / v2（RAG・Agent）の読込互換専用。v3 の writer は secret を JSON へ出力しない。
@@ -568,6 +863,45 @@ class _PersistedEnterpriseAiSettings(BaseModel):
         if not any(model.model_id == vision and model.vision_enabled for model in models):
             vision = _vision_model_id(models, text)
         return text, vision
+
+    def connection_settings(self, settings: Any) -> list[EnterpriseAiConnectionSettings]:
+        """保存済みの接続。読み込みは失敗させない（知らない ID・重複は捨てる）。
+
+        #533 より前の JSON は top-level の接続を接続 1 にし、接続 2 は今の Settings（env）のまま。
+        """
+        if self.connections is None:
+            primary = EnterpriseAiConnectionSettings(
+                connection_id=ENTERPRISE_AI_PRIMARY_CONNECTION_ID,
+                display_name=_setting_text(settings, _PRIMARY_FIELDS.display_name),
+                endpoint=self.endpoint,
+                project_ocid=self.project_ocid,
+            )
+            return [primary] + [
+                EnterpriseAiConnectionSettings(
+                    connection_id=ENTERPRISE_AI_SECONDARY_CONNECTION_ID,
+                    display_name=item.display_name,
+                    endpoint=item.endpoint,
+                    project_ocid=item.project_ocid,
+                )
+                for item in enterprise_ai_connections(settings)[1:]
+            ]
+        saved = {item.connection_id: item for item in reversed(self.connections)}
+        connections: list[EnterpriseAiConnectionSettings] = []
+        for connection_id in ENTERPRISE_AI_CONNECTION_IDS:
+            item = saved.get(connection_id)
+            if item is None:
+                if connection_id == ENTERPRISE_AI_PRIMARY_CONNECTION_ID:
+                    connections.append(EnterpriseAiConnectionSettings())
+                continue
+            connections.append(
+                EnterpriseAiConnectionSettings(
+                    connection_id=connection_id,
+                    display_name=item.display_name[:128],
+                    endpoint=item.endpoint,
+                    project_ocid=item.project_ocid,
+                )
+            )
+        return connections
 
 
 class _PersistedModelSettings(BaseModel):
@@ -646,7 +980,10 @@ class ModelSettingsStore:
         ときは、`.env` から key が消えていれば未設定にする。
         """
         settings.prepare_model_secret_state(
-            self._environment_api_key(settings, refresh=refresh_secret)
+            self._environment_api_key(settings, refresh=refresh_secret),
+            self._environment_api_key(
+                settings, refresh=refresh_secret, name=ENTERPRISE_AI_SECONDARY_API_KEY_ENV
+            ),
         )
         path = self.path(settings)
         if not path.is_file():
@@ -710,18 +1047,38 @@ class ModelSettingsStore:
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
-    def save(self, settings: Any, payload: ModelSettingsPayload, *, api_key: str) -> None:
+    def save(
+        self,
+        settings: Any,
+        payload: ModelSettingsPayload,
+        *,
+        api_key: str,
+        secondary_api_key: str | None = None,
+    ) -> None:
         """`.env` の API key → JSON の順に保存する。JSON に失敗したら `.env` を元に戻す。
 
         `.env` を先に書くのは、JSON の mtime を見て再読込する別 worker が新しい key を読めるように
         するため。`lock()` の中で呼ぶ。失敗時は OSError を送出する。
+        `secondary_api_key`（接続 2）を省くと今の値のまま。payload に接続 2 がなければ消す。
         """
+        if payload.enterprise_ai.connection(ENTERPRISE_AI_SECONDARY_CONNECTION_ID) is None:
+            secondary_api_key = ""
+        elif secondary_api_key is None:
+            secondary_api_key = _setting_text(settings, _SECONDARY_FIELDS.api_key)
         section_values: dict[str, str | None] = {
             secret.env: str(getattr(settings, secret.attr, "") or "").strip() or None
             for section in self._sections
             for secret in section.secrets
         }
-        targets = [(self.env_file(settings), {ENTERPRISE_AI_API_KEY_ENV: api_key.strip() or None})]
+        targets = [
+            (
+                self.env_file(settings),
+                {
+                    ENTERPRISE_AI_API_KEY_ENV: api_key.strip() or None,
+                    ENTERPRISE_AI_SECONDARY_API_KEY_ENV: secondary_api_key.strip() or None,
+                },
+            )
+        ]
         if section_values:
             targets.append((self.section_env_file(settings), section_values))
         written: list[tuple[Path, dict[str, str | None]]] = []
@@ -771,18 +1128,20 @@ class ModelSettingsStore:
         finally:
             tmp_path.unlink(missing_ok=True)
 
-    def _environment_api_key(self, settings: Any, *, refresh: bool) -> str | None:
+    def _environment_api_key(
+        self, settings: Any, *, refresh: bool, name: str = ENTERPRISE_AI_API_KEY_ENV
+    ) -> str | None:
         """実効の API key。None は「分からないので現在の基準値を使う」。
 
         画面で保存した値（`.env` にある key）を、プロセスの環境変数より優先する。
         `.env` に key がなければ環境変数を使う（画面で削除した場合も環境変数へ戻る）。
         """
         env_file = self.env_file(settings)
-        value = _dotenv_value(env_file)
+        value = _dotenv_values(env_file).get(name)
         if value is not None:
             return value
-        if ENTERPRISE_AI_API_KEY_ENV in os.environ:
-            return os.environ[ENTERPRISE_AI_API_KEY_ENV]
+        if name in os.environ:
+            return os.environ[name]
         return "" if refresh and env_file.is_file() else None
 
     @staticmethod
@@ -822,6 +1181,9 @@ class ModelSettingsStore:
                 enterprise_ai=EnterpriseAiModelSettings.model_construct(
                     **enterprise.model_dump(
                         exclude={
+                            "connections",
+                            "endpoint",
+                            "project_ocid",
                             "api_key",
                             "models",
                             "default_model_id",
@@ -829,6 +1191,7 @@ class ModelSettingsStore:
                             "default_vision_model_id",
                         }
                     ),
+                    connections=enterprise.connection_settings(settings),
                     models=models,
                     default_text_model_id=text_model,
                     default_vision_model_id=vision_model,
@@ -849,10 +1212,16 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, Any]:
     return {
         "version": MODEL_SETTINGS_DOCUMENT_VERSION,
         "enterprise_ai": {
-            "endpoint": enterprise.endpoint,
-            "project_ocid": enterprise.project_ocid,
+            "connections": [
+                connection.model_dump(
+                    include={"connection_id", "display_name", "endpoint", "project_ocid"}
+                )
+                for connection in enterprise.connections
+            ],
             "models": [
-                model.model_dump(include={"model_id", "display_name", "vision_enabled"})
+                model.model_dump(
+                    include={"model_id", "display_name", "vision_enabled", "connection_id"}
+                )
                 for model in enterprise.models
                 if model.model_id
             ],
@@ -888,10 +1257,6 @@ def _dotenv_values(env_file: Path) -> dict[str, str | None]:
     return dict(dotenv_values(env_file)) if env_file.is_file() else {}
 
 
-def _dotenv_value(env_file: Path) -> str | None:
-    return _dotenv_values(env_file).get(ENTERPRISE_AI_API_KEY_ENV)
-
-
 def _write_env_secrets(env_file: Path, values: Mapping[str, str | None]) -> None:
     write_env_values(env_file, values, section_comment="# モデル設定の secret（画面から保存）")
 
@@ -910,7 +1275,10 @@ def model_test_candidate(settings: Any, request: ModelSettingsTestRequest) -> An
     """保存前 payload を、対象モデルだけを呼ぶ一時 Settings へ変換する。"""
     candidate = settings.model_copy(deep=True)
     apply_model_settings(candidate, request.settings)
-    candidate.oci_enterprise_ai_api_key = resolve_api_key(settings, request.settings)
+    # 接続ごとの key（#533）。製品は `enterprise_ai_connection_for_model` で対象モデルの接続を引く。
+    keys = resolve_api_keys(settings, request.settings)
+    for connection_id, fields in _CONNECTION_FIELDS.items():
+        _set_if_field(candidate, fields.api_key, keys[connection_id])
     model_id = request.model_id
     if request.target_type in {"enterprise_text", "enterprise_vision"}:
         candidate.oci_enterprise_ai_default_text_model = model_id
@@ -1037,7 +1405,10 @@ async def run_model_settings_test(
             raise ValueError("テストするモデル ID を入力してください。")
         details = await run_model_test(candidate, request)
     except Exception as exc:  # noqa: BLE001 - 外部 SDK/API の多様な例外を表示用に握る
-        raw_error = sanitize_model_test_error(str(exc), [_api_key_of(candidate)])
+        raw_error = sanitize_model_test_error(
+            str(exc),
+            [_setting_text(candidate, fields.api_key) for fields in _CONNECTION_FIELDS.values()],
+        )
         return ModelSettingsTestResult(
             status="failed",
             target_type=request.target_type,
@@ -1076,17 +1447,25 @@ def save_model_settings(
 
     登録モデルか既定のモデルを変える保存では既定のモデルを検証する（不正なら HTTPException(422)）。
     変えない保存（接続情報・Generative AI の節だけの保存）は、保存済みの状態が不正でも止めない。
+    接続と、登録モデルが指す接続は毎回検証する（#533）。
     永続化の失敗は HTTPException(500)。
     """
+    # 接続（#533）は毎回確かめる。直す欄は同じ画面にあるので、保存済みの状態が不正でも止める。
+    errors = validate_enterprise_ai_connections(payload.enterprise_ai)
     if _default_models_changed(settings, payload.enterprise_ai):
-        errors = validate_default_models(payload.enterprise_ai)
-        if errors:
-            raise HTTPException(status_code=422, detail=" ".join(error.message for error in errors))
+        errors += validate_default_models(payload.enterprise_ai)
+    if errors:
+        raise HTTPException(status_code=422, detail=" ".join(error.message for error in errors))
     try:
         with store.lock(settings):
             store.reload_if_changed(settings)
-            api_key = resolve_api_key(settings, payload)
-            store.save(settings, payload, api_key=api_key)
+            keys = resolve_api_keys(settings, payload)
+            store.save(
+                settings,
+                payload,
+                api_key=keys[ENTERPRISE_AI_PRIMARY_CONNECTION_ID],
+                secondary_api_key=keys[ENTERPRISE_AI_SECONDARY_CONNECTION_ID],
+            )
     except OSError as exc:
         raise HTTPException(
             status_code=500, detail="モデル設定を永続化ファイルへ保存できませんでした。"

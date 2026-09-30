@@ -292,6 +292,10 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
     api_key = env.get("OCI_ENTERPRISE_AI_API_KEY", "").strip()
     answer_model = env.get("OCI_ENTERPRISE_AI_DEFAULT_MODEL", "").strip()
     vision_model = env.get("OCI_ENTERPRISE_AI_VLM_MODEL", "").strip() or answer_model
+    # Vision のモデルが別の接続のとき(#533)は OCI_ENTERPRISE_AI_VLM_* を使う。無ければ回答と同じ。
+    vision_endpoint = env.get("OCI_ENTERPRISE_AI_VLM_ENDPOINT", "").strip() or endpoint
+    vision_project = env.get("OCI_ENTERPRISE_AI_VLM_PROJECT_OCID", "").strip() or project
+    vision_api_key = env.get("OCI_ENTERPRISE_AI_VLM_API_KEY", "").strip() or api_key
     llm_providers = {
         ENTERPRISE_AI_LLM_PROVIDER: LlmProviderSettings(
             provider_id=ENTERPRISE_AI_LLM_PROVIDER,
@@ -308,11 +312,11 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             provider_id=ENTERPRISE_AI_VISION_LLM_PROVIDER,
             label=llm_provider_label("Enterprise AI Vision", vision_model),
             region="",
-            project_id=project,
-            api_key=api_key,
+            project_id=vision_project,
+            api_key=vision_api_key,
             model=vision_model,
             supports_vision=True,
-            endpoint=endpoint,
+            endpoint=vision_endpoint,
         ),
     }
     default_vision_llm = normalize_llm_provider_id(
