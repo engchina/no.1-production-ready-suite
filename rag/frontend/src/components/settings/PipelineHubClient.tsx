@@ -3,10 +3,10 @@
 import { PageBody } from "@engchina/production-ready-ui";
 import { Link } from "react-router-dom";
 
-import { visibleNavSections, type NavItem } from "@/components/layout/nav-config";
+import { settingsSubtitleKey, visibleNavSections, type NavItem } from "@/components/layout/nav-config";
 import { useAuth } from "@/components/security/AuthProvider";
 import { APP_ROUTES } from "@/lib/routes";
-import { ja, t, type I18nKey } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 
 import { PipelineRecipeDefaultsSection } from "./PipelineRecipeDefaultsSection";
 
@@ -19,16 +19,9 @@ const INGESTION_HREFS = new Set<string>([
   APP_ROUTES.settingsGraph,
 ]);
 
-/** nav ラベルキー(nav.settingsX)から説明キー(settings.x.subtitle)を導く。 */
-function subtitleKeyOf(labelKey: string): I18nKey {
-  const raw = labelKey.replace(/^nav\.settings/, "");
-  const camel = raw.charAt(0).toLowerCase() + raw.slice(1);
-  return `settings.${camel}.subtitle` as I18nKey;
-}
-
 function stageDescription(item: NavItem): string {
-  const key = subtitleKeyOf(item.labelKey);
-  return key in ja ? t(key) : "";
+  const key = settingsSubtitleKey(item);
+  return key ? t(key) : "";
 }
 
 /**
