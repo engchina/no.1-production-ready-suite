@@ -510,6 +510,13 @@ export interface DocumentClassification {
   effective_to: string | null;
 }
 
+/** 分類の入力の候補（保存済みの文書の分類の値。番号の接頭辞付きの表記を優先する。#547）。 */
+export interface DocumentClassificationOptions {
+  large_categories: string[];
+  middle_categories: string[];
+  small_categories: string[];
+}
+
 export interface DocumentDeleteResult {
   id: string;
   file_name: string;
@@ -2623,6 +2630,8 @@ export const api = {
     for (const id of ids) search.append("document_id", id);
     return request<DocumentDeleteImpact[]>(`/api/documents/delete-impact?${search.toString()}`);
   },
+  getDocumentClassificationOptions: () =>
+    request<DocumentClassificationOptions>("/api/documents/classification-options"),
   saveDocumentClassification: (id: string, body: DocumentClassification) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/classification`, {
       method: "PUT",

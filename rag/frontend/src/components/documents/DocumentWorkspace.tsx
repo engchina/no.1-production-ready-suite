@@ -87,6 +87,7 @@ import {
   type DocumentChunkPreviewResponse,
   type DocumentChunkView,
   type DocumentClassification,
+  type DocumentClassificationOptions,
   type DocumentExtractionExportFormat,
   type DocumentRecipeStep,
   type DocumentRecipeStepStatus,
@@ -130,6 +131,7 @@ import {
   usePreviewDocumentRecipeChunks,
   useReplaceDocumentKnowledgeBases,
   useRetryFailedDocumentIngestionSegments,
+  useDocumentClassificationOptions,
   useSaveDocumentClassification,
   useSaveDocumentRecipeReviewEdits,
 } from "@/lib/queries";
@@ -3028,6 +3030,14 @@ const EMPTY_CLASSIFICATION: DocumentClassification = {
   effective_to: null,
 };
 const CLASSIFICATION_TEXT_FIELDS = ["large_category", "middle_category", "small_category"] as const;
+const CLASSIFICATION_OPTION_KEYS = {
+  large_category: "large_categories",
+  middle_category: "middle_categories",
+  small_category: "small_categories",
+} as const satisfies Record<
+  (typeof CLASSIFICATION_TEXT_FIELDS)[number],
+  keyof DocumentClassificationOptions
+>;
 const CLASSIFICATION_DATE_FIELDS = ["effective_from", "effective_to"] as const;
 
 /** 文書の分類と有効期間（rag_poc の「ファイル分類」）。検索の分類フィルタと基準日の絞り込みに使う。 */
@@ -3039,6 +3049,11 @@ function DocumentClassificationEditor({
   classification: DocumentClassification | null;
 }) {
   const save = useSaveDocumentClassification();
+  // 保存済みの分類の値を候補に出し、表記の揺れを防ぐ（取得できなくても自由入力はできる。#547）。
+  const options = useDocumentClassificationOptions().data;
+  const hasSuggestions = CLASSIFICATION_TEXT_FIELDS.some(
+    (key) => (options?.[CLASSIFICATION_OPTION_KEYS[key]].length ?? 0) > 0,
+  );
   const saved = { ...EMPTY_CLASSIFICATION, ...classification };
   const savedKey = JSON.stringify(saved);
   const [form, setForm] = useState(saved);
@@ -3059,6 +3074,11 @@ function DocumentClassificationEditor({
       <div>
         <h3 className="text-sm font-semibold text-fg">{t("documents.classification.title")}</h3>
         <p className="mt-1 text-xs text-fg-muted">{t("documents.classification.description")}</p>
+        {hasSuggestions ? (
+          <p className="mt-1 text-xs text-fg-muted">
+            {t("documents.classification.suggestionsHelper")}
+          </p>
+        ) : null}
       </div>
       <div className="grid gap-3 md:grid-cols-3">
         {CLASSIFICATION_TEXT_FIELDS.map((key) => (
@@ -3067,6 +3087,7 @@ function DocumentClassificationEditor({
             id={`document-classification-${key}`}
             label={t(`documents.classification.${key}`)}
             value={form[key] ?? ""}
+            suggestions={options?.[CLASSIFICATION_OPTION_KEYS[key]]}
             maxLength={200}
             disabled={save.isPending}
             onValueChange={(value) => update(key, value)}
