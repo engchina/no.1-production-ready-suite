@@ -102,6 +102,36 @@ class _SlowAnswerPipeline:
         return SearchResponse(answer="遅い回答", trace_id=trace_id or "trace", elapsed_ms=100.0)
 
 
+def test_search_uses_selected_answer_model_only_from_choices(monkeypatch: MonkeyPatch) -> None:
+    """RAG 検索の model_id は既定のテキスト / Vision モデルのときだけ回答のモデルにする(#675)。"""
+    answer_models: list[object] = []
+
+    class CapturingPipeline:
+        def __init__(self, **kwargs: object) -> None:
+            answer_models.append(kwargs.get("answer_model_id"))
+
+        async def run(
+            self, request: SearchRequest, trace_id: str | None = None, **_kwargs: object
+        ) -> SearchResponse:
+            return SearchResponse(answer="回答", trace_id=trace_id or "trace", elapsed_ms=1.0)
+
+    monkeypatch.setattr(search_route, "RagPipeline", CapturingPipeline)
+    monkeypatch.setattr(search_route, "enterprise_ai_model_catalog", lambda _s: [])
+    monkeypatch.setattr(search_route, "enterprise_ai_default_model_id", lambda _s: "text-m")
+    monkeypatch.setattr(search_route, "enterprise_ai_vision_model_id", lambda _s: "vision-m")
+
+    for model_id in ("vision-m", "other-m", None):
+        response = client.post("/api/search", json={"query": "承認条件", "model_id": model_id})
+        assert response.status_code == 200
+    assert answer_models == ["vision-m", None, None]
+
+    models = client.get("/api/search/models").json()["data"]
+    assert [(m["model_id"], m["kind"]) for m in models] == [
+        ("text-m", "text"),
+        ("vision-m", "vision"),
+    ]
+
+
 def test_search_api_accepts_and_ignores_removed_standard_options(
     monkeypatch: MonkeyPatch,
 ) -> None:
