@@ -18,6 +18,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PRODUCTS = ("rag", "nl2sql", "agent")
+# Compute と ADB をサポートするリージョン（#660。us-chicago-1 はサポートしない）。
+SUPPORTED_REGIONS = ("ap-tokyo-1", "ap-osaka-1")
 PRIVATE_ACCESS = "プライベート・エンドポイント・アクセスのみ"
 ALLOWED_ACCESS = "許可されたIPおよびVCN限定のセキュア・アクセス"
 EVERYWHERE_ACCESS = "すべての場所からのセキュア・アクセス"
@@ -71,6 +73,8 @@ PRODUCT_GROUPS = {
 # 製品を選ばないとフォームから消えるため、Resource Manager では任意入力にして Terraform の precondition で必須にする。
 ADMIN_PASSWORD_VARIABLE = "app_admin_login_user_password"
 ADMIN_PASSWORD_PRODUCTS = ("rag", "nl2sql", "agent")
+# Compute と ADB をサポートするリージョン（#660。us-chicago-1 はサポートしない）。
+SUPPORTED_REGIONS = ("ap-tokyo-1", "ap-osaka-1")
 # 廃止した入力（Agent の Nginx Basic 認証。#215）。stack と init_script.sh に残さない。
 REMOVED_AGENT_BASIC_AUTH = (
     "agent_app_basic_auth_user",
@@ -563,8 +567,14 @@ def _verify_schema(schema: str, variables: str) -> None:
         ["type: oci:core:ssh:publickey", "required: true", "visible: true", 'title: "SSHキーの追加"'],
         context="SSH public key schema",
     )
-    if "us-chicago-1" in _schema_variable(schema, "instance_image_source_id"):
-        raise AssertionError("Resource Manager Compute image options must not include Chicago")
+    # Compute は ap-tokyo-1 / ap-osaka-1 だけをサポートする（#660）。image の選択肢もこの 2 つのリージョンだけにする。
+    image_regions = set(
+        re.findall(r"ocid1\.image\.oc1\.([a-z0-9-]+)\.", _schema_variable(schema, "instance_image_source_id"))
+    )
+    if image_regions != set(SUPPORTED_REGIONS):
+        raise AssertionError(
+            f"Resource Manager Compute image regions must be {sorted(SUPPORTED_REGIONS)}: {sorted(image_regions)}"
+        )
 
     outputs = _schema_section(schema, "outputs")
     for product in PRODUCTS:
@@ -580,6 +590,11 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
         context="adb_workload",
     )
     _require_all(_terraform_variable(variables, "adb_db_version"), ['default     = "26ai"'], context="adb_db_version")
+    _require_all(
+        _terraform_variable(variables, "region"),
+        ["contains([" + ", ".join(f'"{region}"' for region in SUPPORTED_REGIONS) + "], var.region)"],
+        context="region validation",
+    )
     for name in SECRET_VARIABLES:
         _require_all(_terraform_variable(variables, name), ["sensitive   = true"], context=f"{name} sensitive flag")
     # DB の接続情報は全製品の backend/.env に入り、RAG の env_file は single quote で囲むため、全製品で single quote を許さない。

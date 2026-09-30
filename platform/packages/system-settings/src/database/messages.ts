@@ -11,6 +11,8 @@ export const DATABASE_MESSAGES = {
     "OCI Autonomous Database の情報取得・起動・停止を行います。リージョンと ADB OCID を指定してください。",
   "settings.adb.field.ocid": "ADB OCID",
   "settings.adb.field.region": "リージョン",
+  "settings.adb.helper.regionUnsupported":
+    "保存済みのリージョン {region} はサポートしていません。ap-tokyo-1 または ap-osaka-1 を選んで保存してください。",
   "settings.adb.helper.ocidReadonly":
     "ADB OCID は platform/.env(PLATFORM_ORACLE_ADB_OCID)を正本とする読み取り専用項目です。",
   "settings.adb.lifecycle.AVAILABLE": "起動済み",

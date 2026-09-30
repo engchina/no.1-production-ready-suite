@@ -21,6 +21,12 @@
   systemd + Nginx         systemd + Nginx            systemd + Nginx
 ```
 
+## 対応リージョン
+
+- **stack は `ap-tokyo-1`（東京）と `ap-osaka-1`（大阪）だけをサポートします（#660）。** Compute の image（`instance_image_source_id`）は、この 2 つのリージョンの Ubuntu image だけを選択肢にしています。
+  `us-chicago-1` など他のリージョンで stack を作ると、`region` の validation で plan が失敗します。
+- 共通 `.env` の `PLATFORM_ORACLE_ADB_REGION` には stack のリージョンが入ります。システム設定 > データベース の「Autonomous Database 管理」のリージョンの選択肢も同じ 2 つです。
+
 ## 配備する製品の選択
 
 Resource Manager の「配備する製品」で、`deploy_rag` / `deploy_nl2sql` / `deploy_agent` を選びます（複数選択可、既定はすべて）。
