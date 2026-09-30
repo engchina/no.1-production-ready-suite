@@ -65,7 +65,7 @@ async function clickPageHeaderAction(page: Page, testId: string, name: string) {
     await visibleButton.click();
     return;
   }
-  await actions.getByRole("button", { name: "その他の操作", exact: true }).click();
+  await actions.getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name, exact: true }).click();
 }
 
@@ -84,7 +84,7 @@ async function clickObjectDetailAction(page: Page, testId: string, name: string)
     await visibleButton.click();
     return;
   }
-  await actions.getByRole("button", { name: "その他の操作", exact: true }).click();
+  await actions.getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name, exact: true }).click();
 }
 
@@ -4039,7 +4039,7 @@ for (const statusCode of [404, 410, 501, 503]) {
     if (await refreshButton.isVisible()) {
       await refreshButton.click();
     } else {
-      await page.getByRole("button", { name: "その他の操作", exact: true }).click();
+      await page.getByRole("button", { name: "その他の操作" }).click();
       await page.getByRole("menuitem", { name: "DB 構造を再取得", exact: true }).click();
     }
 
@@ -13179,7 +13179,7 @@ test("DB 構造再取得は旧30秒上限を超えても三つの管理画面で
     if (await directAction.isVisible()) {
       await directAction.click();
     } else {
-      await header.getByRole("button", { name: "その他の操作", exact: true }).click();
+      await header.getByRole("button", { name: "その他の操作" }).click();
       await page.getByRole("menuitem", { name: "DB 構造を再取得", exact: true }).click();
     }
     await expect.poll(() => submitted).toBe(index + 1);
@@ -13201,7 +13201,7 @@ test("DB 構造再取得は旧30秒上限を超えても三つの管理画面で
     if (await directAction.isVisible()) {
       await expect(directAction).toBeDisabled();
     } else {
-      await header.getByRole("button", { name: "その他の操作", exact: true }).click();
+      await header.getByRole("button", { name: "その他の操作" }).click();
       await expect(
         page.getByRole("menuitem", { name: "DB 構造を再取得", exact: true }),
       ).toBeDisabled();
@@ -13324,7 +13324,7 @@ test("実行中 DB 構造再取得を全10ルートと再読込後に復元し�
       if (await directAction.isVisible()) {
         await expect(directAction).toBeDisabled();
       } else {
-        await header.getByRole("button", { name: "その他の操作", exact: true }).click();
+        await header.getByRole("button", { name: "その他の操作" }).click();
         await expect(
           page.getByRole("menuitem", { name: "DB 構造を再取得", exact: true }),
         ).toBeDisabled();

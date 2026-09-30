@@ -584,16 +584,14 @@ test("エディタからアーカイブすると確認のうえ一覧へ置き�
   await expect(page).toHaveURL(/\/business-views$/);
 });
 
-/** エディタの「一覧へ戻る」。375px ではページ操作の「その他の操作」に入る（主操作 1 つ + その他）。 */
+/**
+ * エディタの「一覧へ戻る」。375px でも「その他の操作」に畳まず、1 タップで押せる
+ * （ページ操作は「一覧へ戻る」と主操作の 2 つだけ。#582）。
+ */
 async function clickBackToList(page: Page) {
   const actions = page.getByRole("group", { name: "ページ操作" });
-  const direct = actions.getByRole("button", { name: "一覧へ戻る" });
-  if (await direct.isVisible()) {
-    await direct.click();
-    return;
-  }
-  await actions.getByRole("button", { name: "その他の操作" }).click();
-  await page.getByRole("menuitem", { name: "一覧へ戻る" }).click();
+  await expect(actions.getByRole("button", { name: /^その他の操作/ })).toHaveCount(0);
+  await actions.getByRole("button", { name: "一覧へ戻る" }).click();
 }
 
 interface BusinessViewSummaryFixture {

@@ -567,7 +567,7 @@ test("標準プロファイルも一覧と編集画面から確認付きで削�
   ).toBeVisible();
   await expect(editor.getByRole("button", { name: "保存", exact: true })).toBeVisible();
   const editorActions = editor.getByTestId("profile-editor-actions");
-  const deleteMenuButton = editorActions.getByRole("button", { name: "その他の操作", exact: true });
+  const deleteMenuButton = editorActions.getByRole("button", { name: "その他の操作" });
   const deleteMenuChevron = deleteMenuButton.locator('svg[data-state]');
   await expect(deleteMenuButton).toBeVisible();
   await expect(deleteMenuChevron).toHaveAttribute("data-state", "collapsed");
@@ -616,7 +616,7 @@ test("編集画面からプロファイルを確認付きで削除できる", as
   await expect(
     page.getByRole("heading", { name: "プロファイル編集: 営業プロファイル" })
   ).toBeVisible();
-  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作", exact: true }).click();
+  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   const dialog = page.getByRole("alertdialog", { name: "プロファイルを削除しますか" });
   await expectUnifiedConfirmDialogSurface(dialog);
@@ -630,7 +630,7 @@ test("編集画面からプロファイルを確認付きで削除できる", as
   expect(api.deleteRequests()).toBe(0);
   await expect(page.getByLabel("名称")).toHaveValue("営業プロファイル");
 
-  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作", exact: true }).click();
+  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   await page
     .getByRole("alertdialog", { name: "プロファイルを削除しますか" })
@@ -645,7 +645,7 @@ test("編集画面からプロファイルを確認付きで削除できる", as
   await expect(
     page.getByRole("heading", { name: "プロファイル編集: 経理プロファイル" })
   ).toBeVisible();
-  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作", exact: true }).click();
+  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   await page
     .getByRole("alertdialog", { name: "プロファイルを削除しますか" })
@@ -675,7 +675,7 @@ test("プロファイル削除時に Oracle 資産 cleanup の警告を表示す
   await expect(
     page.getByRole("heading", { name: "プロファイル編集: 営業プロファイル" })
   ).toBeVisible();
-  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作", exact: true }).click();
+  await page.getByTestId("profile-editor-actions").getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "削除", exact: true }).click();
   await page
     .getByRole("alertdialog", { name: "プロファイルを削除しますか" })

@@ -144,16 +144,29 @@ describe("PageHeader", () => {
     }
   });
 
-  it("狭い画面では主操作 1 つだけを見せ、danger は常にメニューに入れる", () => {
+  it("狭い画面では主操作 1 つだけを見せ、danger はメニューに入れる", () => {
     const a = (id: string, kind: "primary" | "secondary" | "utility" | "danger") => ({ id, kind, label: id });
     const ids = (r: ReturnType<typeof splitCompactActions>) => [r.visible.map((x) => x.id), r.overflow.map((x) => x.id)];
     expect(ids(splitCompactActions([a("del", "danger"), a("new", "primary"), a("reload", "utility"), a("import", "secondary")]))).toEqual([
       ["new"],
       ["import", "reload", "del"],
     ]);
-    expect(ids(splitCompactActions([a("reload", "utility"), a("import", "secondary")]))).toEqual([["import"], ["reload"]]);
     expect(ids(splitCompactActions([a("del", "danger"), a("del2", "danger")]))).toEqual([[], ["del", "del2"]]);
     expect(ids(splitCompactActions([a("del", "danger")]))).toEqual([["del"], []]);
+  });
+
+  it("メニューに入るのが 1 つだけなら畳まず、広い画面と同じ並びで全部出す（#582）", () => {
+    const a = (id: string, kind: "primary" | "secondary" | "utility" | "danger") => ({ id, kind, label: id });
+    const ids = (r: ReturnType<typeof splitCompactActions>) => [r.visible.map((x) => x.id), r.overflow.map((x) => x.id)];
+    // 「一覧へ戻る」+ 保存: 戻るだけのメニューを作らない。
+    expect(ids(splitCompactActions([a("back", "secondary"), a("save", "primary")]))).toEqual([["back", "save"], []]);
+    expect(ids(splitCompactActions([a("reload", "utility"), a("import", "secondary")]))).toEqual([["reload", "import"], []]);
+    expect(ids(splitCompactActions([a("save", "primary"), a("del", "danger")]))).toEqual([["del", "save"], []]);
+    // 2 つ以上メニューに入るときは従来どおり畳む。
+    expect(ids(splitCompactActions([a("back", "secondary"), a("reload", "utility"), a("save", "primary")]))).toEqual([
+      ["save"],
+      ["back", "reload"],
+    ]);
   });
 
   it("メニューは ↓ ↑ で循環し、Home / End で端へ移動する", () => {
