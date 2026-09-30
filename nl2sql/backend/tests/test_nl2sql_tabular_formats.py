@@ -44,7 +44,7 @@ def _xlsx_fixture() -> bytes:
     sheet = workbook.active
     sheet.title = "ImportData"
     sheet.append(["ID", "NAME"])
-    sheet.append([1, "青山商事"])
+    sheet.append([1, "架空商事"])
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
@@ -57,7 +57,7 @@ def test_real_xls_reader_preserves_sheets_and_scalar_types_case_insensitively() 
     assert sheets[0].active is True
     assert sheets[0].rows[1][:4] == [
         1,
-        "青山商事",
+        "架空商事",
         True,
         datetime(2026, 7, 30, 9, 15),
     ]
@@ -168,7 +168,7 @@ def test_real_xls_flows_cover_table_upload_learning_material_and_ontology() -> N
     )
     assert imported.sheet_name == "ImportData"
     assert imported.row_count == 2
-    assert imported.sample_rows[0]["NAME"] == "青山商事"
+    assert imported.sample_rows[0]["NAME"] == "架空商事"
     assert imported.sample_rows[0]["CREATED_AT"] == "2026-07-30 09:15:00"
 
     uploaded = service.upload_db_admin_csv(
@@ -179,7 +179,7 @@ def test_real_xls_flows_cover_table_upload_learning_material_and_ontology() -> N
         )
     )
     assert uploaded.row_count == 2
-    assert uploaded.sample_rows[1]["NAME"] == "北海物産"
+    assert uploaded.sample_rows[1]["NAME"] == "見本物産"
 
     classifier_warnings: list[str] = []
     classifier_rows, classifier_skipped = service._parse_classifier_training_file(

@@ -142,7 +142,7 @@ class FakeDbAdminSelectAdapter:
         self.select_calls.append((sql, row_limit))
         return QueryResults(
             columns=["CUSTOMER_NAME"],
-            rows=[{"CUSTOMER_NAME": "青山商事"}],
+            rows=[{"CUSTOMER_NAME": "架空商事"}],
             total=1,
         )
 
