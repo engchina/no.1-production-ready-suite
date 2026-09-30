@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, openChatHistory } from "./_helpers";
 
 // Issue 265: 読み込み中・一覧の縦スクロール・ページングを NL2SQL の基準にそろえる。
 // - 読み込み中は TimedLoadingState（文言と経過時間）+ 表の形の Skeleton で領域を予約する
@@ -70,6 +70,8 @@ test("チャットの会話一覧: 読み込み中は経過時間と行の Skele
   const { release, requests } = await mockConversations(page, 25);
 
   await page.goto("/chat?business_view_id=bv-1");
+  // 会話の履歴は既定で閉じている。lg 以上はパネル、lg 未満はシートで開く（#664）。
+  const history = await openChatHistory(page);
   const loading = page.getByTestId("chat-conversations-loading");
   await expect(loading).toBeVisible();
   await expect(loading).toContainText("会話を読み込んでいます");
@@ -83,22 +85,18 @@ test("チャットの会話一覧: 読み込み中は経過時間と行の Skele
   // 50 件で打ち切らず、1 ページ 10 件を offset / limit で取得する。
   expect(requests.at(-1)).toEqual({ limit: PAGE_SIZE, offset: 0 });
 
-  // lg 未満は md 未満 5 行・md 以上 8 行の高さで中をスクロールし、lg 以上は会話エリアの高さに合わせる。
-  const width = page.viewportSize()?.width ?? 1440;
-  const metrics = await list.evaluate((element) => ({
-    maxHeight: getComputedStyle(element).maxHeight,
-    rem: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
-    scrollable: element.scrollHeight > element.clientHeight + 1,
-  }));
-  if (width < 1024) {
-    const expectedRem = width < 768 ? 17.5 : 28;
-    expect(Math.abs(Number.parseFloat(metrics.maxHeight) - expectedRem * metrics.rem)).toBeLessThanOrEqual(1);
-    expect(metrics.scrollable).toBe(true);
-  } else {
-    expect(metrics.maxHeight).toBe("none");
-  }
-
+  // 一覧はパネル・シートの高さまで伸ばし、超えた行は一覧の中でスクロールする。ページ送りは下に常に見える（#664）。
   const pagination = page.getByTestId("chat-conversations-pagination");
+  const [listBox, paginationBox, historyBox] = await Promise.all([
+    list.boundingBox(),
+    pagination.boundingBox(),
+    history.boundingBox(),
+  ]);
+  if (!listBox || !paginationBox || !historyBox) throw new Error("会話の履歴を計測できません。");
+  expect(await list.evaluate((element) => getComputedStyle(element).maxHeight)).toBe("none");
+  expect(paginationBox.y).toBeGreaterThanOrEqual(listBox.y + listBox.height - 1);
+  expect(paginationBox.y + paginationBox.height).toBeLessThanOrEqual(historyBox.y + historyBox.height + 1);
+
   await expect(pagination).toContainText("1 - 10 / 25 件");
   await expect(pagination).toContainText("1 / 3 ページ");
   await pagination.getByRole("button", { name: "次へ" }).click();
@@ -109,6 +107,7 @@ test("チャットの会話一覧: 読み込み中は経過時間と行の Skele
 
   // ページ番号は作業状態として残す（workspace-state.md）。
   await page.reload();
+  await openChatHistory(page);
   await expect(page.getByTestId("chat-conversations-pagination")).toContainText("11 - 20 / 25 件");
 });
 

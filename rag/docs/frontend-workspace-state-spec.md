@@ -30,7 +30,7 @@
 | 画面 | 保存する内容 | 保存方法 |
 |---|---|---|
 | RAG 検索 | 質問、対象の業務ビュー、検索方式、詳細条件（文書の分類と基準日・抽出項目の値の条件（#549）・候補取得数・Rerank 採用数・開閉）、「LLM で回答を生成する」のオン / オフ（#649） | sessionStorage |
-| チャット | 選択中の業務ビュー、選択中の会話、入力中のメッセージ | sessionStorage（URL の `business_view_id` / `conversation_id` を優先） |
+| チャット | 選択中の業務ビュー、選択中の会話、入力中のメッセージ、会話の一覧のページ、lg 以上の会話の履歴のパネルの開閉（`chat.historyOpen`、既定は閉じる。#664） | sessionStorage（URL の `business_view_id` / `conversation_id` を優先）。lg 未満の会話の履歴のシート（モーダル）の開閉は保存しない（戻ったとき・再読込で画面を塞がない） |
 | 業務ビュー | 絞り込み・検索・ページ | sessionStorage |
 | 業務ビュー | 編集対象 | URL の `?id=`（なし / `new` / `<id>`。[frontend-page-archetypes-spec.md §1.1](./frontend-page-archetypes-spec.md)）。#132 の `businessViews.view.editingId` は使わず、保存値に残っていても読み捨てる |
 | 業務ビュー | 作成 / 編集の未保存の下書き | sessionStorage の `businessViews.draft:<?id= の値>`（`new` または業務ビューの ID）。同じ対象のエディタを開き直すと復元する。新規の下書きは一覧の「下書きを開く」から再開する。`変更を元に戻す`・保存の成功で消す |

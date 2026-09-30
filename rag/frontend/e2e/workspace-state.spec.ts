@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { mockDatabaseReady, mockLocalAuth, openSidebarNav, selectBusinessView } from "./_helpers";
+import { mockDatabaseReady, mockLocalAuth, openChatHistory, openSidebarNav, selectBusinessView } from "./_helpers";
 
 /**
  * #132: 編集画面の離脱ガードと、検索・チャット・一覧の作業状態の保持
@@ -240,7 +240,8 @@ test.describe("作業状態の保持", () => {
 
     await page.goto("/chat");
     await selectBusinessView(page, "経理ビュー");
-    await page.getByRole("list", { name: "会話" }).getByRole("button").filter({ hasText: "経費の相談" }).click();
+    const history = await openChatHistory(page);
+    await history.getByRole("list", { name: "会話の履歴" }).getByRole("button").filter({ hasText: "経費の相談" }).click();
     const composer = page.locator("#chat-composer");
     await composer.fill("出張の日当は？");
 

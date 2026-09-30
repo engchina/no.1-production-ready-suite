@@ -1101,8 +1101,6 @@ export const ja = {
   "businessViews.confirm.archive.description":
     "「{name}」をアーカイブします。参照先のナレッジベース・文書は削除されません。",
   "businessViews.scope.label": "対象の業務ビュー",
-  "businessViews.scope.helper":
-    "選んだ業務ビューが参照するナレッジベースを検索し、その業務ビューの検索・回答設定で回答します。",
   "businessViews.scope.required": "対象の業務ビューを選択してください。",
   "businessViews.scope.noKnowledgeBases":
     "この業務ビューには参照するナレッジベースがありません。業務ビューの設定でナレッジベースを追加してください。",
@@ -1902,7 +1900,8 @@ export const ja = {
   "chat.businessView.noKnowledgeBases":
     "この業務ビューには参照するナレッジベースがありません。業務ビューの設定でナレッジベースを追加すると、チャットできます。",
   "chat.businessView.openSettings": "業務ビューの設定を開く",
-  "chat.sessions.title": "会話",
+  "chat.sessions.title": "会話の履歴",
+  "chat.sessions.close": "会話の履歴を閉じる",
   "chat.sessions.loading": "会話を読み込んでいます",
   "chat.businessView.loading": "業務ビューを読み込んでいます",
   "chat.messages.loading": "会話の内容を読み込んでいます",
@@ -1929,7 +1928,6 @@ export const ja = {
   "chat.composer.placeholder": "メッセージを入力…（Enter で送信 / Shift+Enter で改行）",
   "chat.composer.send": "送信",
   "chat.composer.stop": "停止",
-  "chat.composer.selectConversation": "会話を選択するか、新しい会話を始めてください。",
   "chat.compare.label": "回答するモデル",
   "chat.citations.summary": "根拠（引用） {count} 件",
   "chat.error.send": "メッセージの送信に失敗しました。",

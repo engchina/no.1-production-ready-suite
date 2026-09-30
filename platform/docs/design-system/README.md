@@ -684,6 +684,21 @@ import { SearchField } from "@engchina/production-ready-ui";
   - md 以上は従来どおり（サイドバーを本文の左に置き、折りたたみの状態を ui-store に保持する）。md 未満でドロワーを開閉しても ui-store の `sidebarCollapsed` は変えない
   - 文言は `navDrawerLabels`（既定 `{ menu: "メニュー", close: "メニューを閉じる" }`）で上書きできる。サイドバーの `footer` に置く部品は、`collapsed` を `useSidebarCollapsed(collapsed)` に通して使う（ドロワーの中で `false` になる。共通の `SidebarAccountFooter` / `SidebarAccountSection` は対応済み）
 
+### `SideSheet`（新規）— ★ 画面の中の補助的な一覧を、狭い画面で本文の上に重ねる（#664）
+
+画面の中の補助的なパネル（RAG のチャットの会話の履歴など、多くの利用者は使わないが、切り替えに要る一覧）は、**既定で閉じ、開閉ボタンで開く**（ChatGPT・Claude・Gemini・Microsoft Copilot の会話の履歴と同じ型）。広い画面（製品が決める。RAG のチャットは lg 以上）では製品が本文の横にインラインで置き（Material 3 の standard side sheet）、狭い画面ではこの `SideSheet` で本文の上に重ねる（modal side sheet）。製品でドロワー・シートを手書きしない。
+
+| 決めたこと | 理由 |
+|---|---|
+| ナビのドロワー（§4 `AppShell`、#367）と同じ型: 画面の端（既定は左、`side="right"` も可）から滑り出し、scrim（`--scrim`、`--z-scrim`）・`role="dialog"` + `aria-modal`（`--z-dialog`）、幅 22rem・画面幅 − 3.5rem まで。見出しの行（`title` + 閉じるボタン `X`）と、中でスクロールする本文 | 開いたときの見た目・閉じ方をナビのドロワーとそろえる。scrim の外側に本文が少し見え、重ねていることが分かる |
+| 閉じ方は「閉じるボタン・Escape・scrim のタップ」。製品は中の項目を選んだとき（会話の選択など）にも閉じる。閉じたら開く前にフォーカスがあった要素（`returnFocusRef` があればそこ）へ戻す | WAI-ARIA APG の Dialog（Modal）パターン。狭い画面では選んだら本文に戻る |
+| 開いたら閉じるボタンへフォーカスし、Tab / Shift+Tab を中で回す。中の部品が処理した Escape（`preventDefault` 済み。名前の編集の取消など）では閉じない | 開閉ボタンから入ってすぐ閉じられる。入れ子の Escape を 1 回で文脈ごと閉じない |
+| 閉じている間も描いたまま（`inert`・`visibility: hidden`）にし、開閉を transform（200ms、ease-out）で動かす。`prefers-reduced-motion` では動かさない | 開閉ボタンの `aria-controls` の先が常にある。動きで重なりの方向を示す |
+| body へ Portal で描く。中の `SelectField` の一覧・Tooltip はシート（`aria-modal`）の中に描かれる。確認ダイアログはシートの上に出る | 親の overflow に切られない。モーダルの外の要素として読まれない |
+| 開閉の状態は保持しない（再読込・画面の行き来で開いたまま戻さない）。インラインのパネルの開閉は製品が作業状態に残してよい | 戻ったときにモーダルが画面を塞がない（UX 契約 workspace-state.md の「確認ダイアログは戻るときに解除する」と同じ扱い） |
+
+- 文言（`title` / `closeLabel`）は翻訳済みを渡す。開閉ボタンは製品の画面に置き、`aria-expanded`・`aria-controls`（`id` に渡した値）を付ける。Playwright では `data-testid`（シート）と `<testId>-scrim`、または role（`dialog` の名前）で操作する。
+
 ### `Toaster`（変更）— ★ 置き場所は上端の見出しの面（#411）
 
 通知（Toast）は**主操作を覆わない位置**に出します。置き場所は `Toaster` が決め、製品では変えません（`placement` プロップは削除）。規則の正本は UX 契約 [messaging.md §3.1](../ux-contracts/messaging.md#31-toast)。考え方は「画面の上端の見出しの面（`PageHeader` / 上端のバー）に重ね、その面の操作は覆わない」です。
@@ -944,6 +959,7 @@ QA に事前共有してください。**47点あります。**
 | 57 | **RAG 検索とチャットの「対象の業務ビュー」が同じ単一選択の欄になる**（#635） | RAG 検索: 検索欄＋候補の一覧＋選択済みの chip の複数選択（`SearchableMultiSelect`。先頭に「代表方針」）。チャット: 検索のない `SelectField`（ラベル「業務ビュー」、`width="lg"`、説明文なし） | 両画面とも `SearchableSelectField`（先頭に検索のアイコン `leadingIcon`、「業務ビューを検索して選択…」、候補の右端に「参照 KB N 件」、ラベル「対象の業務ビュー」＋必須＋説明文、カードの幅いっぱい） |
 | 58 | **製品のネイティブの選択欄・入力欄が共有の部品になり、選択欄に無効の見た目が付く**（#631） | NL2SQL・Agent・system-settings のフォームのネイティブの `<select>`（開くと OS / ブラウザの一覧。ダークテーマでも明るい面・typeahead や矢印の動きがブラウザごと）→ `SelectField`（トークンの面の一覧・チェックの印・typeahead・画面の下端で上に反転）。ネイティブの `<input>`（手書きのラベル・エラー）→ `TextField` / `SecretField` / `SearchField`（ラベル・必須・補足・エラーの位置と結び付きが共有）。`SelectField` の無効は、ネイティブの select の無効（ブラウザの灰色）→ `--color-surface-disabled` の地・`--color-fg-disabled` の文字とシェブロン・`not-allowed` のカーソル（`TextField` の無効と同じ）。NL2SQL のオントロジーの「概念の種類」（`<optgroup>` と選べない選択肢）など部品で表せない所だけネイティブのまま | 開いた一覧の見た目と操作、ラベル・エラーの関連付けを 3 製品で 1 つにする。無効な欄が押せそうに見えない |
 | 59 | **任意の選択欄の一覧の先頭に「未選択」が付く**（#647） | #631 でネイティブの `<select>` を `SelectField` にした後、未選択を表す空の選択肢はボタンの placeholder だけになり、一度選ぶと未選択に戻せなかった（NL2SQL の Deep Data Security の「列を選択」・関連テーブル条件の Profile / 関連テーブル / 関連キーの列） | `SelectField` の `emptyOptionLabel`: 一覧の先頭に「未選択」（文字は `--color-fg-muted`。選択中・強調中は他の選択肢と同じ）。選ぶと空の値に戻り、ボタンは placeholder（控えめの色）。必須の欄には出さない | ネイティブの select の `<option value="">` と同じく、任意の欄を未選択へ戻せる。キー操作・typeahead・読み上げは他の選択肢と同じ |
+| 60 | **RAG のチャットの会話の履歴が既定で閉じ、チャットが全幅になる。業務ビューの欄の説明文が無くなる**（#664） | チャット: 左に会話の一覧のパネル（280px、見出し「会話」・「新しい会話」・一覧・ページ送り）を常に表示し、lg 未満では業務ビューとチャットの間に縦に積んでいた。会話を選ぶまで入力欄は無効。RAG 検索・チャットの「対象の業務ビュー」の欄の下に説明文（「選んだ業務ビューが参照するナレッジベースを検索し、…」）→ 会話の履歴は既定で閉じ、チャットの上端の行に開閉ボタン（`PanelLeftOpen` / `PanelLeftClose`、「会話の履歴」）・今の会話の名前・「新しい会話」を置く。lg 以上は開くと左に 280px のパネル（開閉は作業状態に残る）、lg 未満は左からの `SideSheet`（会話を選ぶ・Esc・外側で閉じる）。一覧はパネル・シートの高さまで伸ばして中でスクロールし、ページ送りは下に常に見える。会話を選ばなくても入力でき、最初の送信で会話を作る。業務ビューの欄の説明文は出さない | 多くの利用者は会話の履歴を使わないので、チャットに面積を渡す（ChatGPT・Claude・Gemini・Microsoft Copilot と同じ型。§4「`SideSheet`」）。説明文は毎回読む情報ではなく、縦の面積を取っていた |
 
 ### API の非互換
 
@@ -960,6 +976,7 @@ QA に事前共有してください。**47点あります。**
 | `AppShell` | スキップリンクと `<main id="pr-main">` を出力 |
 | `Button`（#372） | `tooltip`（`string \| false`）/ `tooltipPlacement` プロップ新設。`iconOnly` は既定で `aria-label` と同じ文言の Tooltip を出す。Tooltip を出すときは `title` を無視する |
 | `Tooltip` | **新規 export。** `Tooltip` / `TooltipProps` / `TooltipPlacement` |
+| `SideSheet`（#664） | **新規 export。** `SideSheet` / `SideSheetProps`。既存の部品の props は変えない |
 | `AppShell`（#367） | `navDrawerLabels` プロップ新設（md 未満のドロワーの文言）。md 未満では `sidebar` をドロワーの中に描く。新規 export `useSidebarCollapsed`（サイドバーの `footer` の部品がドロワーの中で展開して描くためのフック）・`DEFAULT_NAV_DRAWER_LABELS`・`NAV_DRAWER_QUERY` |
 | `PagedDataTable`（#265） | **新規 export。** `PagedDataTable` / `PagedDataTableProps` / `PaginationLabels`。クライアント側で全件を持つ一覧の標準形（`stickyHeader` + `visibleRows` + 10 件/ページの `Pagination`）。文言は `paginationLabels` で渡す |
 | `@engchina/production-ready-system-settings`（#265） | `SECURITY_TABLE_VISIBLE_ROWS` / `SECURITY_TABLE_ROW_CLASS` / `SECURITY_LIST_SCROLL_CLASS` / `SECURITY_LIST_FOCUS_CLASS` の export を**削除。** 同じ値の `INFORMATION_TABLE_VISIBLE_ROWS` / `INFORMATION_TABLE_ROW_CLASS` / `INFORMATION_LIST_SCROLL_CLASS` / `INFORMATION_TABLE_FOCUS_CLASS`（`@engchina/production-ready-ui`）を使う |

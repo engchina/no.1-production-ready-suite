@@ -1,6 +1,12 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
+import {
+  expectNoPageOverflow,
+  mockDatabaseReady,
+  mockLocalAuth,
+  openChatHistory,
+  selectBusinessView,
+} from "./_helpers";
 
 /**
  * RAG 検索・回答の不足の回帰テスト（#304）。
@@ -86,7 +92,8 @@ test("対象の業務ビューは 1 つを選ぶ欄で、検索・参照 KB の�
   const trigger = page.getByRole("button", { name: /対象の業務ビュー/ });
   await expect(trigger).toContainText("業務ビューを検索して選択…");
   await expect(trigger).toHaveAttribute("aria-required", "true");
-  await expect(page.getByText("選んだ業務ビューが参照するナレッジベースを検索し")).toBeVisible();
+  // 欄の下に説明文（helper）は出さない（#664）。
+  await expect(page.getByText("選んだ業務ビューが参照するナレッジベースを検索し")).toHaveCount(0);
 
   await trigger.click();
   const search = page.getByRole("combobox", { name: "対象の業務ビューを検索" });
@@ -220,7 +227,8 @@ test("チャットは参照 KB が 0 件の業務ビューで理由を示し、�
   const banner = page.getByRole("status").filter({ hasText: "参照するナレッジベースがありません" });
   await expect(banner).toBeVisible();
   await expect(banner.getByRole("button", { name: "業務ビューの設定を開く" })).toBeVisible();
-  await page.getByRole("list", { name: "会話" }).getByRole("button").first().click();
+  const conversations = await openChatHistory(page);
+  await conversations.getByRole("list", { name: "会話の履歴" }).getByRole("button").first().click();
   await page.getByRole("textbox", { name: /メッセージ/ }).fill("経費の上限は？");
   await expect(page.getByRole("button", { name: "送信" })).toBeDisabled();
   await expectNoPageOverflow(page);
@@ -268,7 +276,8 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
 
   await page.goto("/chat");
   await selectBusinessView(page, "経理ビュー");
-  await page.getByRole("list", { name: "会話" }).getByRole("button").first().click();
+  const conversations = await openChatHistory(page);
+  await conversations.getByRole("list", { name: "会話の履歴" }).getByRole("button").first().click();
   await expect(page.getByText("この回答の根拠と実行記録", { exact: true })).toBeVisible();
   expect(requested).toContainEqual(["trace-chat"]);
 
@@ -303,9 +312,9 @@ for (const viewport of [
       await expect(trigger).toBeVisible();
       await expect(trigger).toContainText("業務ビューを検索して選択…");
       await expect(trigger).toHaveAttribute("aria-required", "true");
-      await expect(page.getByText("選んだ業務ビューが参照するナレッジベースを検索し")).toBeVisible();
+      await expect(page.getByText("選んだ業務ビューが参照するナレッジベースを検索し")).toHaveCount(0);
       return trigger.evaluate((button) => {
-        // 欄（ラベル・ボタン・説明文）を置いた親の、内側の幅いっぱいに置く。
+        // 欄（ラベル・ボタン）を置いた親の、内側の幅いっぱいに置く。
         const container = button.parentElement!.parentElement!;
         const style = getComputedStyle(container);
         const inner =
