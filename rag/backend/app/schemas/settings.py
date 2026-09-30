@@ -877,6 +877,28 @@ class ExtractionFieldsSettingsUpdate(BaseModel):
     fields: list[FieldDefinitionData] = Field(default_factory=list, max_length=50)
 
 
+class KnowledgeBaseExtractionFieldsData(BaseModel):
+    """ナレッジベースの項目抽出の定義(#548)。
+
+    `inherits_default` が真なら KB の定義は無く、`fields` は全体の既定(文書解析の設定)。
+    """
+
+    inherits_default: bool
+    fields: list[FieldDefinitionData] = Field(default_factory=list)
+
+
+class KnowledgeBaseExtractionFieldsUpdate(BaseModel):
+    """ナレッジベースの項目抽出の定義の更新 payload。`fields` が null なら全体の既定に戻す。"""
+
+    fields: list[FieldDefinitionData] | None = Field(default=None, max_length=50)
+
+
+class SearchExtractionFieldsData(BaseModel):
+    """検索の絞り込みに使える項目(検索対象の KB の定義の和集合。#549)。"""
+
+    fields: list[FieldDefinitionData] = Field(default_factory=list)
+
+
 class PipelineSettingsData(BaseModel):
     """設定の概要: 工程の自動進行と、レシピ 11 項目の全体の既定（#528）。
 

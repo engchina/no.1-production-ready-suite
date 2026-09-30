@@ -359,6 +359,16 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 2. migration の前でも画面は動く。レシピ行の無い文書は、一覧・詳細でレシピ1を仮の行として返し、最初の書き込み
    （設定の保存・処理の開始など）で行を作る。
 
+## 既存環境の更新手順（#548 ナレッジベースごとの項目抽出の定義）
+
+項目抽出の項目の定義をナレッジベースごとに持てるようにした（KB の詳細の「抽出する項目」）。
+
+1. システムテーブルを更新する（migration `20260930_004_knowledge_base_extraction_fields`。`rag_knowledge_bases` に
+   `extraction_fields JSON` 列を追加するだけで、既存の行は NULL のまま）。NULL の KB は全体の既定の定義
+   （`extraction-fields.json`）を使うため、既存環境の抽出の挙動は変わらない。
+2. 更新するまで取込 worker は「システムテーブルの作成・更新が必要」のログを出して待ち、KB の「抽出する項目」の
+   読み書きは列が無いためエラーになる。backend を更新したら、システムテーブルを更新する。
+
 ## 既存環境の更新手順（#537 Vision と項目抽出を既定で有効にする）
 
 「図・画像を AI で読み取る（Vision）」（`RAG_VISION_ENABLED`）と「メタデータ/項目抽出」（`RAG_FIELD_EXTRACTION_ENABLED`）の

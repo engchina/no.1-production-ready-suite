@@ -105,6 +105,10 @@ class FakeOracle:
         extraction_recipe_id = str(kwargs["extraction_recipe_id"])
         self.extraction_artifacts[extraction_recipe_id] = dict(kwargs)
 
+    async def list_document_extraction_field_sets(self, document_id: str) -> list[object]:
+        _ = document_id
+        return []
+
     async def get_document_extraction_artifact(
         self,
         *,

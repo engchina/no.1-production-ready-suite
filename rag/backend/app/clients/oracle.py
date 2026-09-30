@@ -32,6 +32,11 @@ from app.rag.business_view_config import (
 )
 from app.rag.chunking import Chunk
 from app.rag.docrag_chunking import DOCRAG_FIRST_PAGE_CONTEXT_KEY, docrag_search_text
+from app.rag.extraction_field_adapter import (
+    FieldDefinition,
+    FieldSchemaStore,
+    field_schema_from_json,
+)
 from app.rag.graph_index import (
     GraphClaim,
     GraphCommunitySummary,
@@ -81,7 +86,12 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseStatus,
     KnowledgeBaseSummary,
 )
-from app.schemas.search import RetrievedChunk, SearchMode
+from app.schemas.search import (
+    EXTRACTION_FIELD_FILTER_KEY,
+    RetrievedChunk,
+    SearchMode,
+    parse_extraction_field_filter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1014,6 +1024,127 @@ class OracleClient:
     async def list_document_knowledge_bases(self, document_id: str) -> list[KnowledgeBaseRef]:
         """文書の所属ナレッジベース一覧を返す。"""
         return await self._list_document_knowledge_bases_with_oracle(document_id)
+
+    async def get_knowledge_base_extraction_fields(
+        self, knowledge_base_id: str
+    ) -> list[FieldDefinition] | None:
+        """KB の項目抽出の定義を返す。未設定(全体の既定に従う)と KB が無いときは None(#548)。"""
+        row = await self._fetch_one(
+            """
+            SELECT kb.extraction_fields
+            FROM rag_knowledge_bases kb
+            WHERE kb.knowledge_base_id = :knowledge_base_id
+              AND {knowledge_base_access_sql}
+            """.format(
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
+            ),
+            _with_tenant_bind({"knowledge_base_id": knowledge_base_id}),
+        )
+        return _knowledge_base_extraction_fields(row)
+
+    async def update_knowledge_base_extraction_fields(
+        self,
+        knowledge_base_id: str,
+        fields: list[FieldDefinition] | None,
+    ) -> None:
+        """KB の項目抽出の定義を保存する。None は未設定に戻す(全体の既定に従う。#548)。"""
+        value = None if fields is None else FieldSchemaStore(fields=fields).model_dump()
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                    UPDATE rag_knowledge_bases
+                    SET extraction_fields = :extraction_fields,
+                        updated_at = SYSTIMESTAMP
+                    WHERE knowledge_base_id = :knowledge_base_id
+                      AND {knowledge_base_access_sql}
+                    """,
+                    knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(),
+                ),
+                _with_tenant_bind(
+                    {
+                        "knowledge_base_id": knowledge_base_id,
+                        "extraction_fields": _json_bind(value),
+                    }
+                ),
+                input_sizes=_json_input_sizes("extraction_fields"),
+            )
+
+        await self._run_transaction(operation)
+
+    async def list_document_extraction_field_sets(
+        self, document_id: str
+    ) -> list[list[FieldDefinition] | None]:
+        """文書が属する有効な KB ごとの項目抽出の定義(None は既定に従う)を作成の古い順に返す。"""
+        field_sets = await self.list_documents_extraction_field_sets([document_id])
+        return field_sets.get(document_id, [])
+
+    async def list_documents_extraction_field_sets(
+        self, document_ids: Sequence[str]
+    ) -> dict[str, list[list[FieldDefinition] | None]]:
+        """複数の文書について、属する有効な KB ごとの項目抽出の定義を 1 回の問い合わせで返す。
+
+        文書 ID ごとに、KB の作成の古い順の定義(None は既定に従う)を並べる。有効な KB に属さない
+        文書は結果に含めない(呼び出し側で全体の既定を使う。#548 / #550)。
+        """
+        if not document_ids:
+            return {}
+        in_sql, in_binds = _oracle_in_predicate(
+            "dkb.document_id", "extraction_document_id", list(document_ids)
+        )
+        rows = await self._fetch_all(
+            """
+            SELECT dkb.document_id, kb.extraction_fields
+            FROM rag_document_knowledge_bases dkb
+            JOIN rag_knowledge_bases kb
+                ON kb.knowledge_base_id = dkb.knowledge_base_id
+            JOIN rag_documents d
+                ON d.document_id = dkb.document_id
+            WHERE {in_sql}
+              AND kb.status = 'ACTIVE'
+              AND {document_access_sql}
+              AND {knowledge_base_access_sql}
+            ORDER BY dkb.document_id ASC, kb.created_at ASC, kb.knowledge_base_id ASC
+            """.format(
+                in_sql=in_sql,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
+            ),
+            _with_tenant_bind(in_binds),
+        )
+        field_sets: dict[str, list[list[FieldDefinition] | None]] = {}
+        for row in rows:
+            field_sets.setdefault(str(row["document_id"]), []).append(
+                _knowledge_base_extraction_fields(row)
+            )
+        return field_sets
+
+    async def list_knowledge_base_extraction_field_sets(
+        self, knowledge_base_ids: Sequence[str]
+    ) -> list[list[FieldDefinition] | None]:
+        """指定した有効な KB ごとの項目抽出の定義を作成の古い順に返す(検索の絞り込みの候補)。"""
+        if not knowledge_base_ids:
+            return []
+        in_sql, in_binds = _oracle_in_predicate(
+            "kb.knowledge_base_id", "extraction_kb_id", list(knowledge_base_ids)
+        )
+        rows = await self._fetch_all(
+            """
+            SELECT kb.extraction_fields
+            FROM rag_knowledge_bases kb
+            WHERE {in_sql}
+              AND kb.status = 'ACTIVE'
+              AND {knowledge_base_access_sql}
+            ORDER BY kb.created_at ASC, kb.knowledge_base_id ASC
+            """.format(
+                in_sql=in_sql,
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
+            ),
+            _with_tenant_bind(in_binds),
+        )
+        return [_knowledge_base_extraction_fields(row) for row in rows]
 
     # ------------------------------------------------------------------
     # variant materialization: chunk_set / KB binding 永続層
@@ -11347,6 +11478,10 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
                 binds.update(kind_binds)
         elif key in _CLASSIFICATION_FILTER_KEYS or key == "as_of":
             continue  # 分類と有効期間は _classification_where でまとめて付ける。
+        elif key == EXTRACTION_FIELD_FILTER_KEY:
+            field_clauses, field_binds = _extraction_field_where(cleaned)
+            clauses.extend(field_clauses)
+            binds.update(field_binds)
         else:
             raise ValueError(f"未対応の検索フィルターです: {key}")
     classification_clauses, classification_binds = _classification_where(filters)
@@ -11361,6 +11496,68 @@ _CLASSIFICATION_FILTER_KEYS = CLASSIFICATION_CATEGORY_KEYS
 def _category_label_sql(expression: str) -> str:
     """`category_label` の番号の接頭辞の除去を SQL で行う(後ろに 1 文字以上あるときだけ外す)。"""
     return f"REGEXP_REPLACE({expression}, '^[0-9]+_(.)', '\\1')"
+
+
+# 項目の条件の演算子と、型ごとの比べる列(#549)。SQL に埋めるのはこの許可リストの値だけで、
+# 項目名と値は bind で渡す。
+_EXTRACTION_FIELD_SQL_OPERATORS = {"eq": "=", "gte": ">=", "lte": "<="}
+_EXTRACTION_FIELD_SQL_COLUMNS = {
+    "string": "{alias}.field_text",
+    "bool": "LOWER({alias}.field_text)",
+    "number": "{alias}.field_number",
+    "date": "{alias}.field_date",
+}
+
+
+def _extraction_field_where(value: str) -> tuple[list[str], dict[str, object]]:
+    """項目抽出の値の条件を、文書単位の EXISTS にする(#549)。
+
+    文書の採用中の抽出(active な chunk_set が参照する `rag_document_extractions` の行)の
+    `extraction_json.fields` を JSON_TABLE で行にし、項目名と値を比べる。number / date に
+    変換できない値と、項目の無い文書は一致しない(除かれる)。条件どうしは AND。
+    """
+    clauses: list[str] = []
+    binds: dict[str, object] = {}
+    for index, condition in enumerate(parse_extraction_field_filter(value)):
+        alias = f"fx_f{index}"
+        column = _EXTRACTION_FIELD_SQL_COLUMNS[condition.value_type].format(alias=alias)
+        operator = _EXTRACTION_FIELD_SQL_OPERATORS[condition.op]
+        typed_value: object = condition.value
+        if condition.value_type == "number":
+            typed_value = Decimal(condition.value)
+        elif condition.value_type == "date":
+            typed_value = date.fromisoformat(condition.value)
+        binds[f"filter_field_{index}_name"] = condition.name
+        binds[f"filter_field_{index}_value"] = typed_value
+        clauses.append(
+            f"""
+            EXISTS (
+                SELECT 1
+                FROM rag_document_extractions fx{index},
+                     JSON_TABLE(
+                         fx{index}.extraction_json, '$.fields[*]'
+                         COLUMNS (
+                             field_name VARCHAR2(120) PATH '$.name',
+                             field_text VARCHAR2(4000) PATH '$.value',
+                             field_number NUMBER PATH '$.value' NULL ON ERROR,
+                             field_date DATE PATH '$.value' NULL ON ERROR
+                         )
+                     ) {alias}
+                WHERE fx{index}.document_id = d.document_id
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_chunk_sets fx_cs{index}
+                      WHERE fx_cs{index}.document_id = fx{index}.document_id
+                        AND fx_cs{index}.extraction_recipe_id = fx{index}.extraction_recipe_id
+                        AND fx_cs{index}.is_active = 1
+                        AND fx_cs{index}.status = 'INDEXED'
+                  )
+                  AND {alias}.field_name = :filter_field_{index}_name
+                  AND {column} {operator} :filter_field_{index}_value
+            )
+            """
+        )
+    return clauses, binds
 
 
 def _classification_where(filters: Mapping[str, str]) -> tuple[list[str], dict[str, object]]:
@@ -12451,6 +12648,13 @@ def _json_bind(value: object | None) -> object | None:
     return decoded
 
 
+def _knowledge_base_extraction_fields(
+    row: Mapping[str, object] | None,
+) -> list[FieldDefinition] | None:
+    """`rag_knowledge_bases.extraction_fields` の値を読む(NULL と行なしは None。#548)。"""
+    return field_schema_from_json(row.get("extraction_fields") if row is not None else None)
+
+
 def _json_input_sizes(*names: str) -> dict[str, object]:
     oracledb = importlib.import_module("oracledb")
     return {name: oracledb.DB_TYPE_JSON for name in names}
@@ -13052,6 +13256,7 @@ CREATE TABLE {knowledge_base_table} (
     status                VARCHAR2(32) DEFAULT 'ACTIVE' NOT NULL,
     default_search_mode   VARCHAR2(16) DEFAULT 'hybrid' NOT NULL,
     retrieval_config      JSON,
+    extraction_fields     JSON,
     created_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     archived_at           TIMESTAMP WITH TIME ZONE,

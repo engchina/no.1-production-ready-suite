@@ -49,6 +49,7 @@ import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 import { useWorkspaceState } from "@/lib/workspace-state";
+import { KnowledgeBaseExtractionFields } from "./KnowledgeBaseExtractionFields";
 import { KnowledgeBaseGraphView } from "./KnowledgeBaseGraphView";
 import { KnowledgeBasePipelineCanvas } from "./KnowledgeBasePipelineCanvas";
 import { KnowledgeBaseSearchTestPanel } from "./KnowledgeBaseSearchTestPanel";
@@ -156,6 +157,9 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
           <KnowledgeBaseDocuments knowledgeBase={kb} />
         </CardContent>
       </Card>
+
+      {/* 項目抽出で取り出す項目の定義(#548)。無ければ全体の既定を使う。 */}
+      <KnowledgeBaseExtractionFields knowledgeBaseId={kb.id} editable={isActive} />
 
       {/* このナレッジ単体で検索の手応えを確認(業務ビュー不要)。文書追加→検証→構築設定 の流れ。 */}
       <KnowledgeBaseSearchTestPanel

@@ -1,6 +1,7 @@
 """ナレッジベース API のテスト。"""
 
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -9,6 +10,8 @@ from app.api.routes import documents as documents_route
 from app.api.routes import knowledge_bases as knowledge_bases_route
 from app.clients.oracle import KnowledgeBaseNameConflictError
 from app.main import app
+from app.rag import extraction_field_adapter as fields_mod
+from app.rag.extraction_field_adapter import FieldDefinition
 from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig, parse_adapter_config
 from app.schemas.document import DocumentDetail, DocumentSummary, FileStatus
 from app.schemas.knowledge_base import (
@@ -38,6 +41,7 @@ class FakeKnowledgeBaseOracle:
         }
         self.memberships: set[tuple[str, str]] = set()
         self.subgraphs: dict[str, tuple[list[dict[str, object]], list[dict[str, object]]]] = {}
+        self.extraction_fields: dict[str, list[FieldDefinition]] = {}
 
     async def create_knowledge_base(
         self,
@@ -112,6 +116,19 @@ class FakeKnowledgeBaseOracle:
 
     async def get_knowledge_base(self, knowledge_base_id: str) -> KnowledgeBaseDetail | None:
         return self.knowledge_bases.get(knowledge_base_id)
+
+    async def get_knowledge_base_extraction_fields(
+        self, knowledge_base_id: str
+    ) -> list[FieldDefinition] | None:
+        return self.extraction_fields.get(knowledge_base_id)
+
+    async def update_knowledge_base_extraction_fields(
+        self, knowledge_base_id: str, fields: list[FieldDefinition] | None
+    ) -> None:
+        if fields is None:
+            self.extraction_fields.pop(knowledge_base_id, None)
+        else:
+            self.extraction_fields[knowledge_base_id] = fields
 
     async def fetch_knowledge_base_subgraph(
         self, knowledge_base_id: str, *, limit: int
@@ -776,3 +793,78 @@ def test_effective_adapter_config_ignores_legacy_knowledge_base_overrides(
     settings = get_settings()
     assert effective["ingestion"]["chunking_strategy"] == settings.rag_chunking_strategy
     assert effective["ingestion"]["chunk_size"] == settings.rag_chunk_size
+
+
+# ---- ナレッジベースごとの項目抽出の定義（#548）----
+
+
+@pytest.fixture
+def _field_schema_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(fields_mod.FIELD_SCHEMA_FILE_ENV, str(tmp_path / "extraction-fields.json"))
+    fields_mod.save_field_schema([FieldDefinition(name="請求書番号")])
+
+
+def _new_knowledge_base(name: str = "契約書") -> str:
+    response = client.post("/api/knowledge-bases", json={"name": name, "description": "説明"})
+    return str(response.json()["data"]["id"])
+
+
+@pytest.mark.usefixtures("_field_schema_file")
+def test_knowledge_base_extraction_fields_default_then_own_then_reset(
+    fake_oracle: FakeKnowledgeBaseOracle,
+) -> None:
+    """KB に定義が無ければ全体の既定を返し、保存後は KB の定義、null で既定に戻す。"""
+    kb_id = _new_knowledge_base()
+    url = f"/api/knowledge-bases/{kb_id}/extraction-fields"
+
+    inherited = client.get(url).json()["data"]
+    assert inherited["inherits_default"] is True
+    assert [field["name"] for field in inherited["fields"]] == ["請求書番号"]
+
+    fields = [
+        {"name": " 契約日 ", "description": "締結日", "value_type": "date"},
+        {"name": "金額", "description": "", "value_type": "number"},
+    ]
+    saved = client.put(url, json={"fields": fields})
+    assert saved.status_code == 200
+    assert saved.json()["data"]["inherits_default"] is False
+    assert [field["name"] for field in saved.json()["data"]["fields"]] == ["契約日", "金額"]
+    assert [field.name for field in fake_oracle.extraction_fields[kb_id]] == ["契約日", "金額"]
+    assert client.get(url).json()["data"]["fields"][0]["value_type"] == "date"
+
+    # 空の定義は「この KB では抽出しない」で、既定には戻さない。
+    empty = client.put(url, json={"fields": []}).json()["data"]
+    assert empty == {"inherits_default": False, "fields": []}
+
+    reset = client.put(url, json={"fields": None}).json()["data"]
+    assert reset["inherits_default"] is True
+    assert kb_id not in fake_oracle.extraction_fields
+
+
+@pytest.mark.usefixtures("_field_schema_file")
+def test_knowledge_base_extraction_fields_reject_duplicates_and_over_limit(
+    fake_oracle: FakeKnowledgeBaseOracle,
+) -> None:
+    kb_id = _new_knowledge_base()
+    url = f"/api/knowledge-bases/{kb_id}/extraction-fields"
+
+    duplicate = client.put(url, json={"fields": [{"name": "契約日"}, {"name": "契約日 "}]})
+    assert duplicate.status_code == 422
+    assert "重複" in duplicate.json()["error_messages"][0]
+    too_many = client.put(url, json={"fields": [{"name": f"項目{i}"} for i in range(51)]})
+    assert too_many.status_code == 422
+    assert kb_id not in fake_oracle.extraction_fields
+
+
+@pytest.mark.usefixtures("_field_schema_file")
+def test_knowledge_base_extraction_fields_missing_and_archived(
+    fake_oracle: FakeKnowledgeBaseOracle,
+) -> None:
+    assert client.get("/api/knowledge-bases/kb-missing/extraction-fields").status_code == 404
+    missing = client.put("/api/knowledge-bases/kb-missing/extraction-fields", json={"fields": []})
+    assert missing.status_code == 404
+
+    kb_id = _new_knowledge_base()
+    client.post(f"/api/knowledge-bases/{kb_id}/archive")
+    archived = client.put(f"/api/knowledge-bases/{kb_id}/extraction-fields", json={"fields": []})
+    assert archived.status_code == 409
