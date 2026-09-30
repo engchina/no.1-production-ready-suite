@@ -2805,7 +2805,7 @@ function SourceDerivationPanel({
         <GitBranch size={16} className="text-accent-fg" aria-hidden />
         {t("provenance.title")}
       </h3>
-      {/* 原本 → 正規化原本 → 抽出 の系譜(溯源)。原本は保全され、変換物から追跡できる。 */}
+      {/* 原本 → 処理後ファイル → 抽出 の対応(画面では「変換の記録」)。原本は保全され、処理後ファイルから追跡できる。 */}
       <ol className="mt-3 space-y-2 text-sm">
         <li className="rounded-md border border-border bg-surface px-3 py-2">
           <div className="text-xs text-fg-muted">{t("provenance.original")}</div>
