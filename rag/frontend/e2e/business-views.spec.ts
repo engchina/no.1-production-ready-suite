@@ -575,6 +575,37 @@ test("エディタからアーカイブすると確認のうえ一覧へ置き�
   await expect(page).toHaveURL(/\/business-views$/);
 });
 
+// #555: エディタの PageHeader に状態と件数・更新日時を出し、アーカイブ済みは入力できないようにする。
+test("エディタの見出しに状態と参照 KB の件数を出し、アーカイブ済みは読み取り専用で保存できない", async ({
+  page,
+}) => {
+  await mockBusinessViews(page, [
+    accountingView,
+    { ...accountingView, id: "bv-old", name: "旧ビュー", status: "ARCHIVED" },
+  ]);
+  await page.goto("/business-views?id=bv-1");
+  const header = page.locator("header[data-page-header]");
+  await expect(header.getByText("有効")).toBeVisible();
+  await expect(page.getByTestId("business-view-meta")).toContainText("参照 KB 1 件");
+
+  await page.goto("/business-views?id=bv-old");
+  await expect(header.getByText("アーカイブ済み")).toBeVisible();
+  await expect(page.getByText("アーカイブ済みの業務ビューは編集・保存できません。")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveAttribute("readonly", "");
+  await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveAttribute("readonly", "");
+  await expect(page.getByRole("button", { name: "保存する" })).toBeDisabled();
+  await expect(page.getByLabel("回答の役割・口調")).toBeDisabled();
+  await expectNoPageOverflow(page);
+});
+
+test("業務ビューが無いときは、空の状態から作成エディタへ進める", async ({ page }) => {
+  await mockBusinessViews(page, []);
+  await page.goto("/business-views");
+  await expect(page.getByText("業務ビューがありません")).toBeVisible();
+  await page.getByRole("button", { name: "最初の業務ビューを作成" }).click();
+  await expect(page).toHaveURL(/\/business-views\?id=new$/);
+});
+
 /** エディタの「一覧へ戻る」。375px ではページ操作の「その他の操作」に入る（主操作 1 つ + その他）。 */
 async function clickBackToList(page: Page) {
   const actions = page.getByRole("group", { name: "ページ操作" });
