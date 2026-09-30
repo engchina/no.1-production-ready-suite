@@ -24,11 +24,49 @@ job 全体の時間の上限は `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（既定 36
 同時に実行できる評価の job は 2 件までです。以前の同期の `POST /api/evaluation/run`・`/compare` は、外部から直接呼ぶ
 利用のために残していますが、評価全体を 600 秒で打ち切ります（#383）。
 
-CI / staging gate では `thresholds` を必ず設定し、レスポンスの `passed=false`、`error_count>0`、または `threshold_failures` 非空を失敗条件にします。`groundedness_pass_rate` は回答が citation context に支えられている case の割合で、検索命中だけでなく根拠付き回答の品質も gate できます。`failure_reason_counts` は case 単位の失敗理由分布で、`retrieval_miss`、`partial_recall`、`answer_keyword_miss`、`low_groundedness` などから次に調整すべき RAG stage を切り分けます。
+## 評価の指標（#591）
 
-単発の `/run` でも任意の `rag_overrides` を指定でき、RRF 定数、context window、Oracle vector target accuracy などの非 secret RAG 設定を一時的に上書きできます。標準値を固める前の staging smoke では、`golden-set.example.json` のように明示した値で gate を固定しておくと、環境変数差分による評価ぶれを追いやすくなります。
+各ケースは、回答エンジン（根拠付き回答。全体の既定の設定）で回答し、回答の記録（引用・根拠・実行記録）から
+指標を求めます。評価は業務ビューを受け取りません（#301）。指標は「検索」「根拠」「回答」の 3 つの観点に整理した
+9 つです。各指標は、その指標を測れるケースだけの平均で、対象の件数は `metric_case_counts` に返します。対象の
+ケースが無い指標は `null` です（0 と区別します）。失敗したケースは `error_count` で数え、指標の平均には入れません。
 
-複数設定の比較には `POST /api/evaluation/jobs/compare` を使います（進捗の件数は experiment × ケース）。`compare.example.json` のように `experiments` に `mode`、`top_k`、`rerank_top_n`、`filters`、必要に応じて `rag_overrides` の候補を並べると、同じ golden set で評価し、`ranking_metric` に基づく `best_experiment_id` と順位付き結果を返します。`rag_overrides` では RRF 定数、query expansion、context window、context diversity、隣接 context、context compression、Oracle vector target accuracy を一時的に上書きできます。AutoRAG 的な調整では、まず `recall_at_k` で retrieval 候補を絞り、次に `mrr` / `groundedness_pass_rate` で context 構成・rerank・prompt の候補を比較します。
+| 観点 | 指標 | 意味 | 対象のケース |
+|---|---|---|---|
+| 検索 | `context_recall` | 正解の文書のうち、回答の根拠に取れた割合 | `relevant_document_ids` のあるケース |
+| 検索 | `mrr` | 最初の正解の文書が何番目の根拠に出たか（逆数の平均） | 同上 |
+| 根拠 | `faithfulness` | 回答の語句のうち、根拠の本文に含まれる割合（決定論の近似） | 拒答していないケース |
+| 根拠 | `citation_traceability_coverage` | 引用を文書・ページ・要素までたどれる割合 | 引用のあるケース |
+| 根拠 | `claim_support_rate` | 根拠のない主張・根拠と矛盾する主張が無いケースの割合（主張ごとの監査） | `standard_answer` のあるケース |
+| 回答 | `answer_keyword_hit_rate` | 期待する語をすべて含む回答の割合 | `expected_answer_keywords` のあるケース |
+| 回答 | `refusal_accuracy` | 答えるべき質問に答え、答えるべきでない質問に答えなかった割合 | すべてのケース |
+| 回答 | `requirement_coverage` | 標準回答の必要な項目に、回答が対応した割合 | `standard_answer` のあるケース |
+| 回答 | `answer_pass_rate` | 4 軸（正確性・網羅性・根拠との整合性・生成品質）で 16 / 20 点以上、かつ監査を終えた割合 | `standard_answer` のあるケース |
+
+- `answerable: false` のケース（資料に答えが無い質問）は、拒答の正しさだけを測ります。`answerable` を省略したときは、
+  `relevant_document_ids`・`expected_answer_keywords`・`standard_answer` のどれも無いケースを答えるべきでない質問と
+  みなします。
+- `standard_answer` のあるケースは、回答を標準回答と LLM で比較します（LLM を複数回呼ぶため時間がかかります）。
+  軸ごとの理由・主張ごとの判定は、`trace_id` の回答の記録に保存します。比較できなかったケース（時間切れ・入力の
+  上限など）は指標に入れず、`answer_evaluation_error` として数え、評価を合格にしません。
+- 削除した指標（`precision_at_k`・`recall_at_k`・`groundedness_pass_rate`・`context_precision`・`response_relevancy`・
+  `noise_sensitivity`・`bbox_citation_coverage`・`element_lineage_coverage`・`content_kind_hit_rate`・`section_coverage`）
+  の `thresholds` は受け付けません（422）。ケースの `expected_content_kind`・`expected_section_paths` と、評価の
+  `mode`・`rerank_top_n` は、以前の評価ファイルを読めるように無視します（比較の experiment では受け付けません）。
+  保存済みの評価の結果に残る古い指標は、読み込み時に捨てます（画面は削除した指標・基準の名前を原文のまま出します）。
+
+CI / staging gate では `thresholds` か評価の基準（`suite`。`standard`＝標準（既定）/ `strict`＝厳格）を使い、
+レスポンスの `passed=false`、`error_count>0`、または `threshold_failures` 非空を失敗条件にします。閾値は、測れた
+指標だけに適用します（標準回答の無い golden set では、標準回答が必要な指標を判定しません）。`failure_reason_counts`
+は case 単位の失敗理由分布で、`retrieval_miss`・`partial_recall`・`unexpected_refusal`・`unexpected_answer`・
+`answer_keyword_miss`・`low_groundedness`・`unsupported_claim`・`missing_content`・`answer_failed` などから、
+次に調整すべき工程（検索・根拠・回答）を切り分けます。
+
+単発の `/run` でも任意の `rag_overrides` を指定でき、回答エンジンの設定（`query_strategy`・`answer_flow`・
+`neighbor_child_count`・`rerank_enabled`）と、RRF 定数（`rrf_k`）・同じ group から足す child の上限
+（`context_group_max_chunks`）・Oracle vector target accuracy を一時的に上書きできます。
+
+複数設定の比較には `POST /api/evaluation/jobs/compare` を使います（進捗の件数は experiment × ケース）。`compare.example.json` のように `experiments` に `top_k`、`filters`、必要に応じて `rag_overrides` の候補を並べると、同じ golden set で評価し、`ranking_metric`（既定 `context_recall`）に基づく `best_experiment_id` と順位付き結果を返します。調整では、まず `context_recall` / `mrr` で質問拡張戦略・rerank・近傍 child 数の候補を絞り、次に `refusal_accuracy` と、標準回答のある golden set の `answer_pass_rate` / `claim_support_rate` で回答生成フローを比較します。nightly（`rag-evaluation-nightly.yml`）は `compare.example.json` を使い、標準回答による比較（LLM）は行いません。
 
 CI / nightly では CLI を使うと、評価結果 JSON を artifact として保存しつつ終了コードで gate できます。CLI は評価の job を投入し、終わるまで状態を取得して（`--poll-interval`、既定 5 秒）、結果を `{"data": 結果, "job": job の状態}` として保存します。入力 JSON に `experiments` があれば compare request として検証し、未指定時の送信先も `/api/evaluation/jobs/compare` に切り替えます。compare の gate 判定は rank 1 の best experiment の metrics を使います。
 
@@ -87,7 +125,7 @@ uv run python -m app.rag.file_processing_golden_cli \
   --trend-output ../evaluation/file-processing-trend.json
 ```
 
-出力の `staging_requirements` は、OCI Enterprise AI / Object Storage / Oracle 26ai / UI preview が必要な pending check を case 単位で列挙します。`--trend-output` は `file-processing-trend.json` として、parser fallback rate、表 QA、page hit、bbox / preview addressability、source/backend coverage、real-world staging dataset policy summary、threshold status、result hash だけを含む非機密 trend snapshot を保存します。case detail、fixture path、OCR 原文、chunk 本文、検索 query / answer は含めません。nightly workflow はこの gate を先に実行し、`file-processing-report.json` と `file-processing-trend.json` を artifact に保存します。前回の非機密 trend を baseline として保持している場合は、trend regression gate で table QA / page hit / bbox / fallback rate / real-world policy / ingestion p95 などの退化を CI で止められます。
+出力の `staging_requirements` は、OCI Enterprise AI / Object Storage / Oracle AI Database / UI preview が必要な pending check を case 単位で列挙します。`--trend-output` は `file-processing-trend.json` として、parser fallback rate、表 QA、page hit、bbox / preview addressability、source/backend coverage、real-world staging dataset policy summary、threshold status、result hash だけを含む非機密 trend snapshot を保存します。case detail、fixture path、OCR 原文、chunk 本文、検索 query / answer は含めません。nightly workflow はこの gate を先に実行し、`file-processing-report.json` と `file-processing-trend.json` を artifact に保存します。前回の非機密 trend を baseline として保持している場合は、trend regression gate で table QA / page hit / bbox / fallback rate / real-world policy / ingestion p95 などの退化を CI で止められます。
 
 ```bash
 cd backend

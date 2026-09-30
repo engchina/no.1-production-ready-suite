@@ -1,5 +1,5 @@
 title: "Deploy Production Ready Suite on Oracle Cloud Infrastructure"
-stackDescription: "Deploy the selected Production Ready products (RAG / NL2SQL / Agent Control Plane) on OCI. One Oracle Autonomous AI Database 26ai (new or existing) is shared by every product, and each selected product gets its own Compute instance. Configure AI runtime settings after startup from each application's System Settings."
+stackDescription: "Deploy the selected Production Ready products (RAG / NL2SQL / Agent Control Plane) on OCI. One Oracle Autonomous AI Database (new or existing) is shared by every product, and each selected product gets its own Compute instance. Configure AI runtime settings after startup from each application's System Settings."
 schemaVersion: 1.1.0
 version: "20260927.1"
 locale: "en"

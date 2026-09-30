@@ -97,6 +97,8 @@ from app.config import (
     DOCRAG_TABLE_CHILD_TARGET_CHARS_MIN,
     AgenticProfile,
     ChunkingStrategy,
+    DocragAnswerFlow,
+    DocragQueryStrategy,
     EvaluationSuite,
     GenerationProfile,
     GraphProfile,
@@ -609,8 +611,6 @@ class RetrievalSettingsData(BaseModel):
     gap_stop: bool
     corrective_retrieval: bool
     business_fit_weighting: bool
-    # 全文検索(Oracle Text)の分割方式。業務ビューの query.text_search_tokenizer が優先する。
-    text_search_tokenizer: Literal["builtin", "sudachi"] = "builtin"
     modes: list[RetrievalStrategyStatusData] = Field(default_factory=list)
     config_source: Literal["runtime"]
 
@@ -627,7 +627,6 @@ class RetrievalSettingsUpdate(BaseModel):
     gap_stop: bool | None = None
     corrective_retrieval: bool | None = None
     business_fit_weighting: bool | None = None
-    text_search_tokenizer: Literal["builtin", "sudachi"] | None = None
 
     @model_validator(mode="after")
     def validate_any_field(self) -> "RetrievalSettingsUpdate":
@@ -641,7 +640,6 @@ class RetrievalSettingsUpdate(BaseModel):
                 self.gap_stop,
                 self.corrective_retrieval,
                 self.business_fit_weighting,
-                self.text_search_tokenizer,
             )
         ):
             raise ValueError("更新する検索方法設定を 1 つ以上指定してください。")
@@ -794,6 +792,30 @@ class DocragPromptsData(BaseModel):
 
 class DocragPromptUpdate(BaseModel):
     content: str = Field(min_length=1, max_length=50_000)
+
+
+class AnsweringSettingsData(BaseModel):
+    """回答の検索と生成の全体既定(docrag 回答エンジン。#593)。
+
+    業務ビューの「検索・回答設定」で上書きできる。値は backend/.env の RAG_DOCRAG_* に保存する。
+    """
+
+    query_strategy: DocragQueryStrategy
+    answer_flow: DocragAnswerFlow
+    neighbor_child_count: int = Field(ge=0, le=20)
+    rerank_enabled: bool
+    screen_linking_enabled: bool
+    config_source: Literal["runtime"] = "runtime"
+
+
+class AnsweringSettingsUpdate(BaseModel):
+    """回答の検索と生成の全体既定の更新 payload(送った項目だけを変える)。"""
+
+    query_strategy: DocragQueryStrategy | None = None
+    answer_flow: DocragAnswerFlow | None = None
+    neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
+    rerank_enabled: bool | None = None
+    screen_linking_enabled: bool | None = None
 
 
 class AnswerRecordSettingsUpdate(BaseModel):

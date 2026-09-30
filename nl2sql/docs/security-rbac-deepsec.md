@@ -412,7 +412,7 @@ SELECT e.ROLE_ID, e.ENTITLEMENT_ID, e.TARGET_OWNER, e.TARGET_OBJECT,
 Oracle のドキュメント（`DBMS_CLOUD_AI` の profile 属性 `object_list`）は `{"owner": "SH", "name": "customers"}` の
 形式だけを示し、大文字小文字や二重引用符の扱いを規定していない。そこで実 Oracle で次を確認した。
 
-- 環境: Autonomous Database（Oracle AI Database 26ai Enterprise Edition Release 23.26.3.3.0）、2026-09-14 実施。
+- 環境: Oracle Autonomous AI Database（Oracle AI Database Enterprise Edition Release 23.26.3.3.0）、2026-09-14 実施。
 - 同じ owner に `ZZ_CLAUDE_QV_<時刻>`（列 `ID` / `UPPER_ONLY_COL`）と `"Zz_Claude_Qv_<時刻>"`（列 `"Id"` /
   `"Quoted_Only_Col"`）を作り、`object_list` の表記ごとに Select AI profile を作成して `showprompt` / `showsql` と
   `GENERATE_SYNTHETIC_DATA`（1 行）を実行した。検証用の表・profile は確認後にすべて削除した。

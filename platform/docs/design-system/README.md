@@ -490,7 +490,7 @@ import { Search } from "lucide-react";
 | `labelHidden` は label を `sr-only` にする。**検索欄でだけ使う**（フォームの入力欄では使わない） | 見出しの無い toolbar の検索欄。プレースホルダをラベルの代わりにしない |
 
 - **adherence の lint が、アイコンの分の左の余白（`pl-7`〜`pl-12` / `ps-*` / `pl-[…]`、variant 付きを含む）を持つ `<input>` を検出します。** 検索欄は `TextField` で作ってください。
-- 対象外（手書きのまま）: 枠の中に枠なしの入力欄を置く**複合部品**（NL2SQL のオントロジーのグラフのツールバーの検索欄、RAG の `MultiSelectCombobox`）。外枠に `focus-within:outline-*` を付ける型（§4「フォーカスの表示」）で、`pl-*` を使いません。
+- 対象外（手書きのまま）: 枠の中に枠なしの入力欄を置く**複合部品**（NL2SQL のオントロジーのグラフのツールバーの検索欄）。外枠に `focus-within:outline-*` を付ける型（§4「フォーカスの表示」）で、`pl-*` を使いません。
 
 ### `SearchField`（新規）— ★ 一覧の絞り込みは入力に合わせて、検索ボタンを置かない（#535）
 
@@ -831,6 +831,7 @@ QA に事前共有してください。**47点あります。**
 | 47 | **必須の欄に「必須」のタグがそろい、「(任意)」が消える** | 必須の欄でも `requiredLabel` を渡し忘れた欄・素の `<label>` の欄はタグが無く、一部の欄だけにタグがあった。任意の欄はラベル・placeholder に「(任意)」「（任意）」を書く画面があった（RAG・NL2SQL・Agent で 14 か所）→ backend の検証か送信ガードで必須の欄すべてにタグ「必須」と `aria-required`、任意の欄には何も付けない。チェックボックスの群・ラジオの必須は legend の後ろに同じタグ。NL2SQL / system-settings の独自の `FieldLabel` は共有部品になる（見た目は同じ） | 必須だけを 1 通りの印で示し、凡例なしで見分けられるようにする。placeholder をラベルの代わりにしない（§4「必須の表示」、WCAG 3.3.2 / 1.4.1 / 4.1.2、#531） |
 | 48 | **一覧の絞り込みの検索ボタンが無くなり、入力に合わせて絞り込む**（#535） | RAG の業務ビューの一覧: 検索欄（固定 `w-56`・先頭アイコンなし）+「名前・説明で検索」のボタン → ナレッジベースの一覧と同じ `SearchField`（先頭アイコン・消去、`w-64`、375px は全幅）でボタンなし。NL2SQL の学習候補・アプリ内フィードバック: 条件の行の右端の「絞り込み」（44px）→ ボタンなしで、条件を変えるとすぐ読み込む（読込中は一覧の上に経過時間とスピナー）。アプリ内フィードバックの検索欄は手書きの入力欄 → `SearchField`（44px、虫眼鏡・消去付き）。Agent のメモリの検索欄は手書きの入力欄（40px、地が `surface-sunken`）→ `SearchField`（36px、地は `surface`）。0 件の空の状態に「検索語をクリア」（RAG のナレッジベース・業務ビュー・文書、ユーザー・ロール・権限管理） | 同じ種類の画面（一覧の絞り込み）の操作を 3 製品でそろえる。押し忘れ・押し直しを無くす。0 件から 1 操作で戻れる（UX 契約 page-archetypes.md「一覧の絞り込みの検索」） |
 | 49 | **モデル設定の OCI Enterprise AI の接続がタブになり、エラーのあるタブに印が付く** | 「接続 1（既定）」「接続 2」の枠（`border` + `bg-surface-sunken`）を縦に並べ、各接続に自由入力の「表示名」があった → カードの中の共有の `Tabs`（「プライマリ接続」「セカンダリ接続」）で切り替え、表示名の欄は無い。未設定のセカンダリ接続は `EmptyState` と「セカンダリ接続を設定」、設定済みは入力欄と「セカンダリ接続を削除」（説明の行の右端、ghost の danger）。エラーのあるタブはラベルの後ろに danger 色の `CircleAlert`、未保存の入力があるタブは「未保存」のバッジ。Endpoint URL・Project OCID・API key の必須のタグは、プライマリ接続が 3 つとも「OCI 運用時必須」、セカンダリ接続が 3 つとも「必須」 | 同じ設定の別の枠はタブで切り替える（§4「`Tabs`」）。名前を画面・選択肢・保存値でそろえ、別のタブのエラーを見落とさない（#542） |
+| 50 | **数百件から選ぶ選択が「検索 ＋ 候補の一覧 ＋ 選択済みの chip」になる**（#578） | RAG の文書インデックスの「ナレッジベース」の絞り込みは `SelectField`（検索できず、選んだ長い名前は「利用できるすべてのナ…」と省略）→ `SearchableSelectField`（ボタンは名前を折り返して全体を出す。押すと検索欄と候補の一覧を重ねて開き、右端に文書数、下に「51 / 300 件」）。同じ画面の状態の絞り込みは 11 個の `ToggleChip`（desktop でも 2 行、375px では 5 行に折り返した）→ 「状態」の `SelectField`（状態・ナレッジベース・検索欄が 1 行）。KB と業務ビューの複数選択（RAG 固有の `MultiSelectCombobox`: 枠の中に chip と枠なしの入力欄・先頭に塗りの虫眼鏡のタイル）→ `SearchableMultiSelect`（上に `SearchField` の検索欄と開閉の iconOnly、開いている間だけ下に候補の一覧、その下に選択済みの chip。chip の名前は省略せず折り返す。「表示中をすべて選択」「クリア」は文字のリンク → ghost の `Button`）。KB の選択の見出しの先頭のデータベースのアイコンは無くなり、「空の KB を隠す」のチェックも無くなる（作ったばかりの空の KB へ登録するため） | 数百件でも検索して選べ、全件を読まない（201 件以上はサーバー側の検索）。選んだ名前を切らない。キーボード・IME・読み上げを 3 製品で共通の部品にそろえる |
 
 ### API の非互換
 
@@ -863,6 +864,7 @@ QA に事前共有してください。**47点あります。**
 | `RowTitleButton`（#421） | **新規 export。** `RowTitleButton` / `RowTitleButtonProps` / `RowTitleButtonMaxLines`。RAG・Agent の `EntityLayout` の `RowTitleButton` は削除（RAG の `ariaLabel` / `dataAttributes` は、標準の `aria-label` / `data-*` をそのまま渡す）。行の中の要素として `data-row-title-button` を持つ |
 | `Tooltip`（#421） | `describe?: boolean` を追加（既定 true）。false で説明として結び付けず、吹き出しを `aria-hidden` にする |
 | `@engchina/production-ready-system-settings`（#421） | **新規 export** `SecurityIdentityRowTitleButton`（ID と表示名の 2 段表示を `RowTitleButton` に載せたもの） |
+| `SearchableSelectField` / `SearchableMultiSelect`（#578） | **新規 export。** `SearchableSelectField` / `SearchableSelectFieldProps` / `SearchableMultiSelect` / `SearchableMultiSelectProps` / `SearchableSelectOption` / `SearchableSelectRemote` / `SearchableSelectLabels` / `SearchableMultiSelectLabels` / `DEFAULT_SEARCHABLE_SELECT_LABELS` / `filterSearchableOptions`。既存の部品の props は変えない |
 
 ---
 

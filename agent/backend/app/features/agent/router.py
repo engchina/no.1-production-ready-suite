@@ -980,7 +980,7 @@ async def _test_oracle_connection(settings: SimpleNamespace) -> None:
             await anyio_to_thread.run_sync(_test_oracle_connection_sync, settings)
     except TimeoutError as exc:
         raise OracleConnectionTimeoutError(
-            f"Oracle 26ai 接続テストが {timeout_seconds:g} 秒でタイムアウトしました。"
+            f"Oracle AI Database の接続テストが {timeout_seconds:g} 秒でタイムアウトしました。"
             "データベースの起動状態、Wallet サービス名、ネットワーク到達性を確認してください。"
         ) from exc
 

@@ -66,12 +66,10 @@ def owner() -> Iterator[AuditRequestContext]:
 def _metrics_json(case_count: int = 1) -> dict[str, Any]:
     return {
         "case_count": case_count,
-        "evaluated_k": 1,
-        "precision_at_k": 1.0,
-        "recall_at_k": 1.0,
+        "context_recall": 1.0,
         "mrr": 1.0,
         "answer_keyword_hit_rate": 1.0,
-        "groundedness_pass_rate": 1.0,
+        "refusal_accuracy": 1.0,
     }
 
 
@@ -340,11 +338,6 @@ class SlowPipeline:
         )
 
 
-class EmptyQualitySource:
-    async def list_document_extractions(self) -> list[dict[str, object]]:
-        return []
-
-
 async def test_job_records_timed_out_case_with_stage_and_continues(
     service: EvaluationJobService,
     owner: AuditRequestContext,
@@ -353,9 +346,7 @@ async def test_job_records_timed_out_case_with_stage_and_continues(
     """時間切れのケースは工程付きの失敗として結果に残り、次のケースへ進む（#383 と同じ）。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_answer_timeout_seconds", 0.05)
-    runner = EvaluationRunner(
-        pipeline=SlowPipeline(), quality_source=EmptyQualitySource(), settings=settings
-    )
+    runner = EvaluationRunner(pipeline=SlowPipeline(), settings=settings)
     cases = [
         EvaluationCase(id="slow", query="承認は?", relevant_document_ids=[]),
         EvaluationCase(id="fast", query="承認は?", relevant_document_ids=[]),
@@ -373,9 +364,7 @@ async def test_job_records_timed_out_case_with_stage_and_continues(
                 current_experiment_id=current_experiment_id,
             )
 
-        metrics = await runner.run(
-            cases=cases, top_k=3, rerank_top_n=1, time_budget_seconds=3600, progress=spy
-        )
+        metrics = await runner.run(cases=cases, top_k=3, time_budget_seconds=3600, progress=spy)
         return EvaluationJobOutcome(result=metrics.model_dump(mode="json"))
 
     submitted = await service.submit(
@@ -399,9 +388,7 @@ async def test_compare_progress_counts_across_experiments() -> None:
     """比較の進捗は experiment × ケースの通しの件数と、今の experiment を渡す。"""
     from app.schemas.evaluation import EvaluationExperiment
 
-    runner = EvaluationRunner(
-        pipeline=SlowPipeline(), quality_source=EmptyQualitySource(), settings=get_settings()
-    )
+    runner = EvaluationRunner(pipeline=SlowPipeline(), settings=get_settings())
     runner._pipeline.calls = 1  # type: ignore[union-attr]  # noqa: SLF001 - 遅い 1 件目を飛ばす
     seen: list[tuple[int, str | None, str | None]] = []
 
@@ -445,7 +432,6 @@ def _run_body() -> dict[str, Any]:
             {"id": "c2", "query": "申請期限は?", "relevant_document_ids": []},
         ],
         "top_k": 5,
-        "rerank_top_n": 3,
     }
 
 
@@ -495,7 +481,7 @@ async def test_run_job_api_submits_and_returns_result(
     assert done["status"] == "SUCCEEDED"
     assert done["completed_cases"] == 2
     assert done["run_result"]["case_count"] == 2
-    assert done["run_result"]["evaluation_suite"] == "request_only"
+    assert done["run_result"]["evaluation_suite"] == "standard"
     # job の上限は設定の値。同期の API の 600 秒ではない。
     assert observed == {"time_budget_seconds": 900, "artifact_kind": "run"}
 

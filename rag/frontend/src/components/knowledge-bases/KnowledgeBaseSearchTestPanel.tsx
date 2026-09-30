@@ -78,7 +78,14 @@ export function KnowledgeBaseSearchTestPanel({
 
     try {
       await streamSearch(
-        { query: trimmed, mode, top_k: TEST_TOP_K, knowledge_base_ids: [knowledgeBaseId] },
+        {
+          query: trimmed,
+          mode,
+          top_k: TEST_TOP_K,
+          knowledge_base_ids: [knowledgeBaseId],
+          // 引用の候補を確かめるので、回答は作らずに検索だけを行う（LLM を呼ばない。#593）。
+          retrieval_only: true,
+        },
         {
           onStage: (stage) => setStages((current) => [...current, stage]),
           onMetadata: (m) => setMeta({ trace_id: m.trace_id, elapsed_ms: m.elapsed_ms }),
@@ -112,6 +119,14 @@ export function KnowledgeBaseSearchTestPanel({
   };
 
   const noResults = phase === "done" && citations.length === 0;
+  const resultMeta =
+    meta && phase === "done"
+      ? t("knowledgeBases.searchTest.resultMeta", {
+          mode: t(MODE_LABEL[mode]),
+          count: citations.length,
+          ms: Math.round(meta.elapsed_ms),
+        })
+      : "";
   const inputId = `kb-search-test-${knowledgeBaseId}`;
 
   return (
@@ -200,16 +215,18 @@ export function KnowledgeBaseSearchTestPanel({
                         <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent-emphasis align-middle motion-reduce:animate-none" />
                       ) : null}
                     </p>
-                    {meta && phase === "done" ? (
+                    {answer && resultMeta ? (
                       <p className="tnum mt-3 border-t border-border pt-2 text-xs text-fg-muted">
-                        {t("knowledgeBases.searchTest.resultMeta", {
-                          mode: t(MODE_LABEL[mode]),
-                          count: citations.length,
-                          ms: Math.round(meta.elapsed_ms),
-                        })}
+                        {resultMeta}
                       </p>
                     ) : null}
                   </div>
+                ) : null}
+                {/* 検索だけのとき（回答が無い）は、件数と時間を引用の上に出す（#593）。 */}
+                {!answer && resultMeta ? (
+                  <p className="tnum text-xs text-fg-muted" data-testid="kb-search-test-meta">
+                    {resultMeta}
+                  </p>
                 ) : null}
 
                 {noResults ? (

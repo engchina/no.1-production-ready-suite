@@ -188,10 +188,10 @@ def build_retrieval_plan(
         purpose=purpose,
         memory_sequence=memory_sequence,
         memory_backends={
-            "evidence": "Oracle 26ai Hybrid Vector Search + Oracle Text",
-            "similar": "Oracle 26ai AI Vector Search + OCI Cohere Rerank",
+            "evidence": "Oracle AI Vector Search (hybrid) + Oracle Text",
+            "similar": "Oracle AI Vector Search + OCI Cohere Rerank",
             "structure": "GraphRAG-lite relationship boundary",
-            "history": "Oracle 26ai rag_agent_memories Agent Memory Search",
+            "history": "Oracle AI Database rag_agent_memories Agent Memory Search",
         },
         query_shape=query_shape,
         scope_keys=scope_keys,

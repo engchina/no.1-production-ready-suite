@@ -15,16 +15,14 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   ProcessingIndicator,
   SelectField,
-  StatusBadge as UiStatusBadge,
+  StatusBadge,
   useConfirm,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 import {
-  AlertTriangle,
   BarChart3,
   CheckCircle2,
   ClipboardCheck,
-  FileSearch,
   FlaskConical,
   GitCompare,
   Settings2,
@@ -38,6 +36,7 @@ import { EmptyState } from "@/components/StateViews";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import {
   ApiError,
+  type EvaluationAnswerJudgement,
   type EvaluationJob,
   type EvaluationJobKind,
   type EvaluationJobStatus,
@@ -51,7 +50,7 @@ import {
   type EvaluationSuiteName,
   type EvaluationSuiteStatusData,
 } from "@/lib/api";
-import { t, type I18nKey } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 import { isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import {
   useCancelEvaluationJob,
@@ -61,15 +60,29 @@ import {
   useSubmitRunEvaluationJob,
 } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
-import { qualityCodeLabel } from "@/lib/source-profile-labels";
 import { toast } from "@/lib/toast";
-import { cn } from "@/lib/utils";
 
 import {
   evaluationCaseErrorSummary,
   isEvaluationJobActive,
   isEvaluationJobId,
 } from "./evaluation-job";
+import {
+  EVALUATION_METRIC_NAMES,
+  EVALUATION_PERSPECTIVES,
+  EVALUATION_SUITE_NAMES,
+  STANDARD_ANSWER_METRICS,
+  failureReasonLabel,
+  formatMetricValue,
+  metricCaseCount,
+  metricDescription,
+  metricLabel,
+  metricValue,
+  orderedThresholdEntries,
+  perspectiveDescription,
+  perspectiveLabel,
+  suiteLabel,
+} from "./evaluation-metrics";
 import {
   EvaluationJobError,
   EvaluationJobLoading,
@@ -83,14 +96,10 @@ const REQUEST_JSON_ID = "evaluation-request-json";
 const EXPERIMENTS_JSON_ID = "evaluation-experiments-json";
 type SuiteSelection = EvaluationSuiteName | typeof DEFAULT_SUITE_VALUE;
 
-const SUITE_ORDER: EvaluationSuiteName[] = [
-  "request_only",
-  "retrieval_focused",
-  "balanced",
-  "strict_ci",
-  "ragas_like",
-];
-
+/**
+ * サンプルは、答えるべき質問（正解の文書・期待する語・標準回答）と答えるべきでない質問を含む。
+ * 検索の方式（mode）と rerank の件数は回答エンジンが使わないため書かない（#591）。
+ */
 const SAMPLE_REQUEST = JSON.stringify(
   {
     cases: [
@@ -99,13 +108,16 @@ const SAMPLE_REQUEST = JSON.stringify(
         query: "経費申請の承認フローを教えてください。",
         relevant_document_ids: ["doc-expense-policy"],
         expected_answer_keywords: ["部門長", "承認"],
-        expected_content_kind: "text",
-        expected_section_paths: ["経費申請 > 承認フロー"],
+        standard_answer:
+          "経費申請は申請者が申請書を提出し、部門長が内容を確認して承認します。",
+      },
+      {
+        id: "out-of-scope-refusal",
+        query: "社員食堂の来月の献立を教えてください。",
+        answerable: false,
       },
     ],
-    top_k: 10,
-    rerank_top_n: 5,
-    mode: "hybrid",
+    top_k: 20,
     filters: { status: "INDEXED" },
   },
   null,
@@ -115,42 +127,22 @@ const SAMPLE_REQUEST = JSON.stringify(
 const SAMPLE_EXPERIMENTS = JSON.stringify(
   [
     {
-      id: "hybrid-k10",
-      top_k: 10,
-      rerank_top_n: 5,
-      mode: "hybrid",
+      id: "default",
+      top_k: 20,
       filters: { status: "INDEXED" },
     },
     {
-      id: "keyword-k10",
-      top_k: 10,
-      rerank_top_n: 5,
-      mode: "keyword",
+      id: "rag-fusion",
+      top_k: 20,
       filters: { status: "INDEXED" },
+      rag_overrides: { query_strategy: "rag_fusion" },
     },
   ],
   null,
   2
 );
 
-const RANKING_METRICS: EvaluationMetricName[] = [
-  "mrr",
-  "recall_at_k",
-  "precision_at_k",
-  "answer_keyword_hit_rate",
-  "groundedness_pass_rate",
-  "citation_traceability_coverage",
-  "bbox_citation_coverage",
-  "element_lineage_coverage",
-  "content_kind_hit_rate",
-  "section_coverage",
-  "faithfulness",
-  "context_precision",
-  "context_recall",
-  "response_relevancy",
-  "noise_sensitivity",
-];
-const RANKING_METRIC_OPTIONS = RANKING_METRICS.map((metric) => ({
+const RANKING_METRIC_OPTIONS = EVALUATION_METRIC_NAMES.map((metric) => ({
   value: metric,
   label: metricLabel(metric),
 })) satisfies SelectFieldOption<EvaluationMetricName>[];
@@ -164,7 +156,7 @@ export function EvaluationClient() {
   // （進捗・結果）を確かめる（workspace-state.md）。戻っただけで評価を送り直さない。
   const runJob = useEvaluationJobState("run");
   const compareJob = useEvaluationJobState("compare");
-  // 評価の入力（JSON・指標・KB スコープ・スイート）は、ページを行き来しても再読込しても残す
+  // 評価の入力（JSON・指標・KB スコープ・基準）は、ページを行き来しても再読込しても残す
   // （workspace-state.md）。評価結果は保存せず、戻っただけで評価を送り直さない。
   const [requestJson, setRequestJson] = useWorkspaceState("evaluation.requestJson", SAMPLE_REQUEST);
   const [experimentsJson, setExperimentsJson] = useWorkspaceState(
@@ -173,8 +165,8 @@ export function EvaluationClient() {
   );
   const [rankingMetric, setRankingMetric] = useWorkspaceState<EvaluationMetricName>(
     "evaluation.rankingMetric",
-    "mrr",
-    isOneOf(RANKING_METRICS)
+    "context_recall",
+    isOneOf(EVALUATION_METRIC_NAMES)
   );
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useWorkspaceState<string[]>(
     "evaluation.knowledgeBaseIds",
@@ -183,7 +175,7 @@ export function EvaluationClient() {
   const [suite, setSuite] = useWorkspaceState<SuiteSelection>(
     "evaluation.suite",
     DEFAULT_SUITE_VALUE,
-    isOneOf<SuiteSelection>([DEFAULT_SUITE_VALUE, ...SUITE_ORDER])
+    isOneOf<SuiteSelection>([DEFAULT_SUITE_VALUE, ...EVALUATION_SUITE_NAMES])
   );
   const [runError, setRunError] = useState("");
   const [compareError, setCompareError] = useState("");
@@ -200,7 +192,11 @@ export function EvaluationClient() {
   const suiteStatuses = settingsQuery.data?.suites ?? [];
   const effectiveSuiteName: EvaluationSuiteName | null =
     suite === DEFAULT_SUITE_VALUE ? globalSuite : suite;
-  const requestHasThresholds = parsedRequest.ok && hasThresholds(parsedRequest.value.thresholds);
+  // thresholds を書いた（空の {} を含む）ときは、backend が基準より優先して使う。
+  const requestThresholds =
+    parsedRequest.ok && isRecord(parsedRequest.value.thresholds)
+      ? parsedRequest.value.thresholds
+      : null;
 
   const runEvaluation = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -251,7 +247,6 @@ export function EvaluationClient() {
     }
   };
 
-
   return (
     <div>
       <PageHeader wide title={t("nav.evaluation")} subtitle={t("evaluation.subtitle")} />
@@ -273,8 +268,7 @@ export function EvaluationClient() {
           globalSuite={globalSuite}
           effectiveSuiteName={effectiveSuiteName}
           suiteStatuses={suiteStatuses}
-          requestHasThresholds={requestHasThresholds}
-          requestThresholds={parsedRequest.ok ? (parsedRequest.value.thresholds ?? null) : null}
+          requestThresholds={requestThresholds}
         />
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
@@ -531,7 +525,6 @@ function SuiteSelector({
   globalSuite,
   effectiveSuiteName,
   suiteStatuses,
-  requestHasThresholds,
   requestThresholds,
 }: {
   suite: SuiteSelection;
@@ -539,26 +532,26 @@ function SuiteSelector({
   globalSuite: EvaluationSuiteName | null;
   effectiveSuiteName: EvaluationSuiteName | null;
   suiteStatuses: EvaluationSuiteStatusData[];
-  requestHasThresholds: boolean;
-  requestThresholds: EvaluationRunRequestBody["thresholds"];
+  requestThresholds: Record<string, unknown> | null;
 }) {
   const defaultLabel = globalSuite
     ? t("evaluation.suite.followDefaultWith", { suite: suiteLabel(globalSuite) })
     : t("evaluation.suite.followDefault");
   const options: SelectFieldOption<SuiteSelection>[] = [
     { value: DEFAULT_SUITE_VALUE, label: defaultLabel },
-    ...SUITE_ORDER.map((name) => ({ value: name, label: suiteLabel(name) })),
+    ...EVALUATION_SUITE_NAMES.map((name) => ({ value: name, label: suiteLabel(name) })),
   ];
   const effectiveStatus = effectiveSuiteName
     ? (suiteStatuses.find((item) => item.name === effectiveSuiteName) ?? null)
     : null;
-  // request JSON に thresholds があるときは backend が request 側を優先するため、
-  // プレビューも実際に適用される request の値を表示する(スイート既定値ではなく)。
-  const thresholdEntries = requestHasThresholds
-    ? Object.entries(requestThresholds ?? {}).filter(
-        (entry): entry is [string, number] => typeof entry[1] === "number"
-      )
-    : Object.entries(effectiveStatus?.thresholds ?? {});
+  // Golden set JSON に thresholds があるときは backend が基準より優先するため、
+  // プレビューも実際に適用される JSON の値を表示する（基準の値ではなく）。
+  const requestHasThresholds = requestThresholds !== null;
+  const thresholdEntries = orderedThresholdEntries(
+    requestHasThresholds
+      ? (requestThresholds as Partial<Record<string, number | null>>)
+      : effectiveStatus?.thresholds
+  );
 
   return (
     <Card className="min-w-0">
@@ -584,17 +577,19 @@ function SuiteSelector({
               : t("evaluation.suite.thresholdsPreview")}
           </p>
           {thresholdEntries.length ? (
-            <div className="mt-2 flex flex-wrap gap-1.5">
+            <ul className="mt-2 flex flex-wrap gap-1.5" data-testid="evaluation-suite-thresholds">
               {thresholdEntries.map(([metric, value]) => (
-                <span
+                <li
                   key={metric}
                   className="inline-flex min-h-6 items-center rounded-md bg-surface px-2 text-xs font-medium text-fg ring-1 ring-border"
                 >
-                  {metricLabel(metric as EvaluationMetricName)}
-                  <span className="tnum ml-1 font-semibold text-accent-fg">{value}</span>
-                </span>
+                  {metricLabel(metric)}
+                  <span className="tnum ml-1 font-semibold text-accent-fg">
+                    {formatMetricValue(value)}
+                  </span>
+                </li>
               ))}
-            </div>
+            </ul>
           ) : (
             <p className="mt-2 text-sm text-fg">{t("evaluation.suite.noThresholds")}</p>
           )}
@@ -615,6 +610,10 @@ function SuiteSelector({
 }
 
 function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
+  const failedMetrics = new Set(metrics.threshold_failures.map((failure) => failure.metric));
+  const failureReasons = Object.entries(metrics.failure_reason_counts).filter(
+    (entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0
+  );
   return (
     <section className="min-w-0 space-y-4" aria-labelledby="evaluation-result-title">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -628,38 +627,54 @@ function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
               {t("evaluation.suite.applied")}: {suiteLabel(metrics.evaluation_suite)}
             </span>
           ) : null}
-          <StatusBadge passed={metrics.passed} />
+          {metrics.error_count > 0 ? (
+            <StatusBadge
+              variant="danger"
+              label={t("evaluation.errors", {
+                count: metrics.error_count,
+                total: metrics.case_count,
+              })}
+            />
+          ) : null}
+          <PassedBadge passed={metrics.passed} />
         </div>
       </div>
-      <MetricGrid metrics={metrics} />
-      <IngestionQualityPanel metrics={metrics} />
+
+      {EVALUATION_PERSPECTIVES.map((perspective) => (
+        <MetricGroup
+          key={perspective.id}
+          perspective={perspective}
+          metrics={metrics}
+          failedMetrics={failedMetrics}
+        />
+      ))}
 
       {metrics.threshold_failures.length ? (
         <Banner severity="warning" title={t("evaluation.thresholdFailures")}>
           <ul className="space-y-1">
             {metrics.threshold_failures.map((failure) => (
               <li key={failure.metric}>
-                {metricLabel(failure.metric)}: {formatPercent(failure.actual)} /{" "}
-                {formatPercent(failure.threshold)}
+                {metricLabel(failure.metric)}: {formatMetricValue(failure.actual)} /{" "}
+                {formatMetricValue(failure.threshold)}
               </li>
             ))}
           </ul>
         </Banner>
       ) : null}
 
-      {Object.keys(metrics.failure_reason_counts).length ? (
+      {failureReasons.length ? (
         <div className="rounded-md border border-border bg-surface p-4 text-sm">
           <p className="font-medium text-fg">{t("evaluation.failureReasons")}</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {Object.entries(metrics.failure_reason_counts).map(([reason, count]) => (
-              <span
+          <ul className="mt-3 flex flex-wrap gap-2" data-testid="evaluation-failure-reasons">
+            {failureReasons.map(([reason, count]) => (
+              <li
                 key={reason}
                 className="rounded-full border border-border bg-surface-sunken px-2.5 py-1 text-xs text-fg-muted"
               >
-                {reason}: {count}
-              </span>
+                {failureReasonLabel(reason)}: <span className="tnum">{count}</span>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       ) : null}
 
@@ -668,206 +683,57 @@ function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
   );
 }
 
-function IngestionQualityPanel({ metrics }: { metrics: EvaluationMetrics }) {
-  const quality = metrics.ingestion_quality;
-  const warningEntries = Object.entries(quality.warning_counts);
-  const parserEntries = Object.entries(quality.parser_profile_counts);
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <FileSearch size={16} className="text-accent-fg" aria-hidden />
-          {t("evaluation.ingestionQuality.title")}
-        </CardTitle>
-        <CardDescription>{t("evaluation.ingestionQuality.description")}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <QualityStat
-            label={t("evaluation.ingestionQuality.documents")}
-            value={quality.document_count}
-          />
-          <QualityStat
-            label={t("evaluation.ingestionQuality.tables")}
-            value={quality.table_document_count}
-          />
-          <QualityStat
-            label={t("evaluation.ingestionQuality.figures")}
-            value={quality.figure_document_count}
-          />
-          <QualityStat
-            label={t("evaluation.ingestionQuality.longDocuments")}
-            value={quality.long_document_count}
-          />
-          <QualityStat
-            label={t("evaluation.ingestionQuality.formulas")}
-            value={quality.formula_document_count ?? 0}
-          />
-          <QualityStat
-            label={t("evaluation.ingestionQuality.lowConfidence")}
-            value={quality.low_confidence_document_count ?? 0}
-          />
-          <QualityStat
-            label={t("evaluation.ingestionQuality.fallbacks")}
-            value={quality.fallback_document_count ?? 0}
-          />
-          <QualityStat
-            label={t("evaluation.ingestionQuality.failedSegments")}
-            value={quality.failed_segment_document_count ?? 0}
-          />
-          <QualityStat
-            label={t("evaluation.ingestionQuality.segmentArtifactMisses")}
-            value={quality.segment_artifact_cache_miss_document_count ?? 0}
-          />
-          <QualityStat
-            label={t("evaluation.ingestionQuality.pageCoverage")}
-            value={`${formatPercent(quality.average_page_coverage ?? 0)}`}
-          />
-        </div>
-
-        {quality.risk_counts.high || quality.risk_counts.medium ? (
-          <Banner severity="warning" title={t("evaluation.ingestionQuality.riskTitle")}>
-            <p>
-              {t("evaluation.ingestionQuality.riskSummary", {
-                high: quality.risk_counts.high ?? 0,
-                medium: quality.risk_counts.medium ?? 0,
-              })}
-            </p>
-          </Banner>
-        ) : null}
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          <QualityChipGroup
-            title={t("evaluation.ingestionQuality.warnings")}
-            emptyText={t("evaluation.ingestionQuality.noWarnings")}
-            entries={warningEntries}
-            icon="warning"
-          />
-          <QualityChipGroup
-            title={t("evaluation.ingestionQuality.parserProfiles")}
-            emptyText={t("evaluation.ingestionQuality.noParserProfiles")}
-            entries={parserEntries}
-          />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function QualityStat({ label, value }: { label: string; value: number | string }) {
-  return (
-    <div className="rounded-md border border-border bg-surface-sunken p-3">
-      <p className="text-xs text-fg-muted">{label}</p>
-      <p className="tnum mt-1 text-xl font-semibold text-fg">{value}</p>
-    </div>
-  );
-}
-
-function QualityChipGroup({
-  title,
-  emptyText,
-  entries,
-  icon,
+/** 1 つの観点（検索・根拠・回答）の指標。測れなかった指標は「—」と「対象のケースなし」。 */
+function MetricGroup({
+  perspective,
+  metrics,
+  failedMetrics,
 }: {
-  title: string;
-  emptyText: string;
-  entries: [string, number][];
-  icon?: "warning";
+  perspective: (typeof EVALUATION_PERSPECTIVES)[number];
+  metrics: EvaluationMetrics;
+  failedMetrics: ReadonlySet<string>;
 }) {
+  const titleId = `evaluation-perspective-${perspective.id}`;
   return (
-    <div className="rounded-md border border-border bg-surface-sunken p-3">
-      <p className="text-sm font-medium text-fg">{title}</p>
-      {entries.length ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {entries.map(([name, count]) => (
-            <span
-              key={name}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-fg-muted"
-            >
-              {icon === "warning" ? <AlertTriangle size={14} aria-hidden /> : null}
-              {qualityLabel(name)}: {count}
-            </span>
-          ))}
-        </div>
-      ) : (
-        <p className="mt-2 text-sm text-fg-muted">{emptyText}</p>
-      )}
-    </div>
+    <section aria-labelledby={titleId} className="space-y-2" data-testid={titleId}>
+      <div>
+        <h3 id={titleId} className="text-sm font-semibold text-fg">
+          {perspectiveLabel(perspective.id)}
+        </h3>
+        <p className="text-xs text-fg-muted">{perspectiveDescription(perspective.id)}</p>
+      </div>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {perspective.metrics.map((metric) => {
+          const value = metricValue(metrics, metric);
+          const count = metricCaseCount(metrics, metric);
+          return (
+            <Card key={metric} data-testid={`evaluation-metric-${metric}`}>
+              <CardContent className="space-y-1.5 pt-5">
+                <p className="text-xs font-medium text-fg-muted" title={metricDescription(metric)}>
+                  {metricLabel(metric)}
+                </p>
+                <p className="tnum text-2xl font-semibold text-fg">{formatMetricValue(value)}</p>
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
+                  {value === null ? (
+                    <span>
+                      {STANDARD_ANSWER_METRICS.has(metric)
+                        ? t("evaluation.metric.needsStandardAnswer")
+                        : t("evaluation.metric.notMeasured")}
+                    </span>
+                  ) : count !== null ? (
+                    <span className="tnum">{t("evaluation.metric.caseCount", { count })}</span>
+                  ) : null}
+                  {failedMetrics.has(metric) ? (
+                    <StatusBadge variant="warning" label={t("evaluation.metric.belowThreshold")} />
+                  ) : null}
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+    </section>
   );
-}
-
-function MetricGrid({ metrics }: { metrics: EvaluationMetrics }) {
-  const items = [
-    { label: t("evaluation.metric.precision"), value: formatPercent(metrics.precision_at_k) },
-    { label: t("evaluation.metric.recall"), value: formatPercent(metrics.recall_at_k) },
-    { label: t("evaluation.metric.mrr"), value: formatPercent(metrics.mrr) },
-    {
-      label: t("evaluation.metric.answerHit"),
-      value: formatPercent(metrics.answer_keyword_hit_rate),
-    },
-    {
-      label: t("evaluation.metric.groundedness"),
-      value: formatPercent(metrics.groundedness_pass_rate),
-    },
-    {
-      label: t("evaluation.metric.citationTraceability"),
-      value: formatPercent(metrics.citation_traceability_coverage),
-    },
-    {
-      label: t("evaluation.metric.bboxCitation"),
-      value: formatPercent(metrics.bbox_citation_coverage),
-    },
-    {
-      label: t("evaluation.metric.elementLineage"),
-      value: formatPercent(metrics.element_lineage_coverage),
-    },
-    {
-      label: t("evaluation.metric.contentKindHit"),
-      value: formatPercent(metrics.content_kind_hit_rate),
-    },
-    {
-      label: t("evaluation.metric.sectionCoverage"),
-      value: formatPercent(metrics.section_coverage),
-    },
-    { label: t("evaluation.metric.faithfulness"), value: formatPercent(metrics.faithfulness) },
-    {
-      label: t("evaluation.metric.contextPrecision"),
-      value: formatPercent(metrics.context_precision),
-    },
-    {
-      label: t("evaluation.metric.contextRecall"),
-      value: formatPercent(metrics.context_recall),
-    },
-    {
-      label: t("evaluation.metric.responseRelevancy"),
-      value: formatPercent(metrics.response_relevancy),
-    },
-    {
-      label: t("evaluation.metric.noiseSensitivity"),
-      value: formatPercent(metrics.noise_sensitivity),
-    },
-    {
-      label: t("evaluation.metric.errors"),
-      value: `${metrics.error_count} / ${metrics.case_count}`,
-    },
-  ];
-
-  return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {items.map((item) => (
-        <Card key={item.label}>
-          <CardContent className="pt-5">
-            <p className="text-xs text-fg-muted">{item.label}</p>
-            <p className="tnum mt-2 text-2xl font-semibold text-fg">{item.value}</p>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
-}
-
-function qualityLabel(value: string) {
-  return qualityCodeLabel(value);
 }
 
 function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
@@ -886,31 +752,36 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
             render: (result) => <CaseIdCell result={result} />,
           },
           {
-            key: "precision",
-            header: t("evaluation.metric.precision"),
-            headerClassName: "hidden sm:table-cell",
-            className: "tnum hidden whitespace-nowrap sm:table-cell",
-            render: (result) => formatPercent(result.precision_at_k),
-          },
-          {
-            key: "recall",
-            header: t("evaluation.metric.recall"),
-            headerClassName: "hidden sm:table-cell",
-            className: "tnum hidden whitespace-nowrap sm:table-cell",
-            render: (result) => formatPercent(result.recall_at_k),
+            key: "context_recall",
+            header: metricLabel("context_recall"),
+            headerClassName: "hidden md:table-cell",
+            className: "tnum hidden whitespace-nowrap md:table-cell",
+            render: (result) => formatMetricValue(result.context_recall),
           },
           {
             key: "mrr",
-            header: t("evaluation.metric.mrr"),
-            className: "tnum whitespace-nowrap",
-            render: (result) => formatPercent(result.reciprocal_rank),
+            header: metricLabel("mrr"),
+            headerClassName: "hidden md:table-cell",
+            className: "tnum hidden whitespace-nowrap md:table-cell",
+            render: (result) => formatMetricValue(result.reciprocal_rank),
           },
           {
-            key: "hit",
-            header: t("evaluation.case.hit"),
-            render: (result) => (
-              <BooleanIcon value={result.answer_keyword_hit && result.groundedness_passed} />
-            ),
+            key: "faithfulness",
+            header: metricLabel("faithfulness"),
+            headerClassName: "hidden lg:table-cell",
+            className: "tnum hidden whitespace-nowrap lg:table-cell",
+            render: (result) => formatMetricValue(result.faithfulness),
+          },
+          {
+            key: "answer",
+            header: t("evaluation.case.answer"),
+            className: "whitespace-nowrap",
+            render: (result) => <AnswerCell result={result} />,
+          },
+          {
+            key: "judgement",
+            header: t("evaluation.case.judgement"),
+            render: (result) => <JudgementCell judgement={result.answer_evaluation ?? null} />,
           },
           {
             key: "failures",
@@ -918,13 +789,15 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
             headerClassName: "hidden md:table-cell",
             className: "hidden break-words text-xs text-fg-muted md:table-cell",
             render: (result) =>
-              result.failure_reasons.length ? result.failure_reasons.join(", ") : "-",
+              result.failure_reasons.length
+                ? result.failure_reasons.map(failureReasonLabel).join("、")
+                : "-",
           },
           {
             key: "trace",
             header: t("evaluation.case.trace"),
-            headerClassName: "hidden lg:table-cell",
-            className: "tnum hidden whitespace-nowrap text-xs text-fg-muted lg:table-cell",
+            headerClassName: "hidden xl:table-cell",
+            className: "tnum hidden whitespace-nowrap text-xs text-fg-muted xl:table-cell",
             render: (result) => result.trace_id.slice(0, 12),
           },
         ]}
@@ -934,7 +807,7 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
         scrollAriaLabel={t("evaluation.case.scrollLabel")}
         scrollTestId="evaluation-case-scroll-region"
         paginationTestId="evaluation-case-pagination"
-        tableClassName="w-full min-w-[48.57rem] text-sm"
+        tableClassName="w-full min-w-[22.86rem] text-sm md:min-w-[48.57rem]"
       />
     </section>
   );
@@ -951,7 +824,7 @@ function CaseIdCell({ result }: { result: EvaluationCaseResult }) {
     <div className="grid min-w-0 gap-1.5" data-testid="evaluation-case-error">
       <span>{result.case_id}</span>
       <div className="flex flex-wrap items-center gap-1.5">
-        <UiStatusBadge variant="danger" label={t("evaluation.case.error")} />
+        <StatusBadge variant="danger" label={t("evaluation.case.error")} />
         {error.stageLabel ? (
           <span className="inline-flex items-center rounded-md bg-surface-sunken px-2 py-0.5 text-xs font-medium text-fg-muted ring-1 ring-border">
             {t("evaluation.case.errorStage", { stage: error.stageLabel })}
@@ -960,6 +833,55 @@ function CaseIdCell({ result }: { result: EvaluationCaseResult }) {
       </div>
       <p className="break-words text-xs font-normal text-fg-muted">{error.message}</p>
     </div>
+  );
+}
+
+/** 回答したか拒答したかと、それが期待どおりか（アイコンと読み上げの文言で示す）。 */
+function AnswerCell({ result }: { result: EvaluationCaseResult }) {
+  if (result.abstained === null || result.abstained === undefined) return <>—</>;
+  const expected = result.refusal_correct === true;
+  const label = t(result.abstained ? "evaluation.case.refused" : "evaluation.case.answered");
+  const verdict = t(expected ? "evaluation.case.expected" : "evaluation.case.unexpected");
+  return (
+    <span className="inline-flex items-center gap-1.5" data-testid="evaluation-case-answer">
+      {expected ? (
+        <CheckCircle2 size={16} className="shrink-0 text-success-fg" aria-hidden />
+      ) : (
+        <XCircle size={16} className="shrink-0 text-danger-fg" aria-hidden />
+      )}
+      <span>{label}</span>
+      <span className="sr-only">（{verdict}）</span>
+    </span>
+  );
+}
+
+/** 標準回答による評価の結果（合格・不合格と点数、評価できなかったとき）。 */
+function JudgementCell({ judgement }: { judgement: EvaluationAnswerJudgement | null }) {
+  if (!judgement) return <span className="text-fg-muted">—</span>;
+  if (judgement.status !== "completed") {
+    return (
+      <span className="inline-grid gap-1" data-testid="evaluation-case-judgement">
+        <StatusBadge variant="warning" label={t("evaluation.case.judgement.incomplete")} />
+        {judgement.message ? (
+          <span className="text-xs text-fg-muted">{judgement.message}</span>
+        ) : null}
+      </span>
+    );
+  }
+  const params = {
+    score: judgement.total_score ?? "—",
+    max: judgement.max_score,
+  };
+  return (
+    <span data-testid="evaluation-case-judgement">
+      <StatusBadge
+        variant={judgement.passed ? "success" : "danger"}
+        label={t(
+          judgement.passed ? "evaluation.case.judgement.passed" : "evaluation.case.judgement.failed",
+          params
+        )}
+      />
+    </span>
   );
 }
 
@@ -996,35 +918,37 @@ function CompareResult({ comparison }: { comparison: EvaluationCompareResponse }
           },
           {
             key: "score",
-            header: t("evaluation.compare.score"),
+            header: metricLabel(comparison.ranking_metric),
             className: "tnum whitespace-nowrap",
-            render: (result) => formatPercent(result.ranking_score),
+            render: (result) => formatMetricValue(result.ranking_score),
           },
           {
-            key: "precision",
-            header: t("evaluation.metric.precision"),
+            key: "context_recall",
+            header: metricLabel("context_recall"),
             headerClassName: "hidden md:table-cell",
             className: "tnum hidden whitespace-nowrap md:table-cell",
-            render: (result) => formatPercent(result.metrics.precision_at_k),
+            render: (result) => formatMetricValue(metricValue(result.metrics, "context_recall")),
           },
           {
-            key: "recall",
-            header: t("evaluation.metric.recall"),
+            key: "refusal_accuracy",
+            header: metricLabel("refusal_accuracy"),
             headerClassName: "hidden md:table-cell",
             className: "tnum hidden whitespace-nowrap md:table-cell",
-            render: (result) => formatPercent(result.metrics.recall_at_k),
+            render: (result) =>
+              formatMetricValue(metricValue(result.metrics, "refusal_accuracy")),
           },
           {
-            key: "mrr",
-            header: t("evaluation.metric.mrr"),
-            headerClassName: "hidden md:table-cell",
-            className: "tnum hidden whitespace-nowrap md:table-cell",
-            render: (result) => formatPercent(result.metrics.mrr),
+            key: "answer_pass_rate",
+            header: metricLabel("answer_pass_rate"),
+            headerClassName: "hidden lg:table-cell",
+            className: "tnum hidden whitespace-nowrap lg:table-cell",
+            render: (result) =>
+              formatMetricValue(metricValue(result.metrics, "answer_pass_rate")),
           },
           {
             key: "passed",
-            header: <span className="sr-only">{t("evaluation.status.passed")}</span>,
-            render: (result) => <StatusBadge passed={result.metrics.passed} compact />,
+            header: t("evaluation.compare.passed"),
+            render: (result) => <PassedBadge passed={result.metrics.passed} />,
           },
         ]}
         rows={comparison.results}
@@ -1118,37 +1042,13 @@ function stripKnowledgeBaseFilter(
   return Object.keys(next).length ? next : undefined;
 }
 
-function StatusBadge({ passed, compact = false }: { passed: boolean; compact?: boolean }) {
+/** 評価全体の合否（共有の StatusBadge。色だけでなくアイコンと文言でも示す）。 */
+function PassedBadge({ passed }: { passed: boolean }) {
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium",
-        passed ? "bg-success-subtle text-success-fg" : "bg-danger-subtle text-danger-fg"
-      )}
-    >
-      {passed ? (
-        <CheckCircle2 size={14} aria-hidden />
-      ) : (
-        <XCircle size={14} aria-hidden />
-      )}
-      {compact ? (
-        <span className="sr-only">
-          {passed ? t("evaluation.status.passed") : t("evaluation.status.failed")}
-        </span>
-      ) : passed ? (
-        t("evaluation.status.passed")
-      ) : (
-        t("evaluation.status.failed")
-      )}
-    </span>
-  );
-}
-
-function BooleanIcon({ value }: { value: boolean }) {
-  return value ? (
-    <CheckCircle2 size={16} className="text-success-fg" aria-label={t("evaluation.status.passed")} />
-  ) : (
-    <XCircle size={16} className="text-danger-fg" aria-label={t("evaluation.status.failed")} />
+    <StatusBadge
+      variant={passed ? "success" : "danger"}
+      label={passed ? t("evaluation.status.passed") : t("evaluation.status.failed")}
+    />
   );
 }
 
@@ -1185,54 +1085,6 @@ function parseJson(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function formatPercent(value: number) {
-  return `${Math.round(value * 1000) / 10}%`;
-}
-
-function metricLabel(metric: EvaluationMetricName) {
-  switch (metric) {
-    case "precision_at_k":
-      return t("evaluation.metric.precision");
-    case "recall_at_k":
-      return t("evaluation.metric.recall");
-    case "mrr":
-      return t("evaluation.metric.mrr");
-    case "answer_keyword_hit_rate":
-      return t("evaluation.metric.answerHit");
-    case "groundedness_pass_rate":
-      return t("evaluation.metric.groundedness");
-    case "citation_traceability_coverage":
-      return t("evaluation.metric.citationTraceability");
-    case "bbox_citation_coverage":
-      return t("evaluation.metric.bboxCitation");
-    case "element_lineage_coverage":
-      return t("evaluation.metric.elementLineage");
-    case "content_kind_hit_rate":
-      return t("evaluation.metric.contentKindHit");
-    case "section_coverage":
-      return t("evaluation.metric.sectionCoverage");
-    case "faithfulness":
-      return t("evaluation.metric.faithfulness");
-    case "context_precision":
-      return t("evaluation.metric.contextPrecision");
-    case "context_recall":
-      return t("evaluation.metric.contextRecall");
-    case "response_relevancy":
-      return t("evaluation.metric.responseRelevancy");
-    case "noise_sensitivity":
-      return t("evaluation.metric.noiseSensitivity");
-  }
-}
-
-function suiteLabel(name: EvaluationSuiteName) {
-  return t(`settings.evaluation.suite.${name}` as I18nKey);
-}
-
-function hasThresholds(thresholds: EvaluationRunRequestBody["thresholds"]): boolean {
-  if (!thresholds) return false;
-  return Object.values(thresholds).some((value) => value !== null && value !== undefined);
 }
 
 type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };

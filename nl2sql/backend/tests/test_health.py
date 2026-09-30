@@ -4027,7 +4027,7 @@ def test_service_similar_history_uses_oracle_vector_search(
     assert similar.items
     assert similar.items[0].history_id == "hist-vector-001"
     assert similar.items[0].score == 0.92
-    assert "Oracle 26ai vector search" in similar.items[0].reason
+    assert "Oracle AI Vector Search" in similar.items[0].reason
     assert "hist-deterministic-001" in [item.history_id for item in similar.items]
     assert any("VECTOR_DISTANCE" in sql for sql in fake_db.executed)
     vector_queries = [sql for sql in fake_db.executed if "VECTOR_DISTANCE" in sql]

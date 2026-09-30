@@ -121,6 +121,8 @@ from app.schemas.settings import (
     AgenticProfileStatusData,
     AgenticSettingsData,
     AgenticSettingsUpdate,
+    AnsweringSettingsData,
+    AnsweringSettingsUpdate,
     AnswerRecordSettingsData,
     AnswerRecordSettingsUpdate,
     ChunkingSettingsData,
@@ -619,6 +621,63 @@ def _prompt_versions_data(
     )
 
 
+@router.get("/answering", response_model=ApiResponse[AnsweringSettingsData])
+async def get_answering_settings() -> ApiResponse[AnsweringSettingsData]:
+    """回答の検索と生成の全体既定(質問の拡張・回答の生成方式など。#593)を返す。"""
+    return ApiResponse(data=_answering_settings_data(get_settings()))
+
+
+@router.patch("/answering", response_model=ApiResponse[AnsweringSettingsData])
+async def update_answering_settings(
+    payload: AnsweringSettingsUpdate,
+) -> ApiResponse[AnsweringSettingsData]:
+    """回答の検索と生成の全体既定を backend/.env と現在プロセスへ反映する(#593)。
+
+    送った項目だけを変える。業務ビューの上書きはそのまま優先する。
+    """
+    settings = get_settings()
+    updates = {
+        field: value
+        for field, value in (
+            ("rag_docrag_query_strategy", payload.query_strategy),
+            ("rag_docrag_answer_flow", payload.answer_flow),
+            ("rag_docrag_neighbor_child_count", payload.neighbor_child_count),
+            ("rag_docrag_rerank_enabled", payload.rerank_enabled),
+            ("rag_docrag_screen_linking_enabled", payload.screen_linking_enabled),
+        )
+        if value is not None
+    }
+    if updates:
+        candidate = settings.model_copy(update=updates)
+        _write_env_values(
+            BACKEND_ENV_FILE,
+            {
+                "RAG_DOCRAG_QUERY_STRATEGY": candidate.rag_docrag_query_strategy,
+                "RAG_DOCRAG_ANSWER_FLOW": candidate.rag_docrag_answer_flow,
+                "RAG_DOCRAG_NEIGHBOR_CHILD_COUNT": str(candidate.rag_docrag_neighbor_child_count),
+                "RAG_DOCRAG_RERANK_ENABLED": _format_env_bool(candidate.rag_docrag_rerank_enabled),
+                "RAG_DOCRAG_SCREEN_LINKING_ENABLED": _format_env_bool(
+                    candidate.rag_docrag_screen_linking_enabled
+                ),
+            },
+            section_comment="# 回答の検索と生成",
+            error_detail="回答の検索と生成の設定を backend/.env へ保存できませんでした。",
+        )
+        for field, value in updates.items():
+            setattr(settings, field, value)
+    return ApiResponse(data=_answering_settings_data(settings))
+
+
+def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
+    return AnsweringSettingsData(
+        query_strategy=settings.rag_docrag_query_strategy,
+        answer_flow=settings.rag_docrag_answer_flow,
+        neighbor_child_count=settings.rag_docrag_neighbor_child_count,
+        rerank_enabled=settings.rag_docrag_rerank_enabled,
+        screen_linking_enabled=settings.rag_docrag_screen_linking_enabled,
+    )
+
+
 @router.get("/answer-records", response_model=ApiResponse[AnswerRecordSettingsData])
 async def get_answer_record_settings() -> ApiResponse[AnswerRecordSettingsData]:
     """DocRAG 回答記録の保持日数を返す。"""
@@ -638,7 +697,7 @@ async def update_answer_record_settings(
     _write_env_values(
         BACKEND_ENV_FILE,
         {"RAG_ANSWER_RECORD_RETENTION_DAYS": str(payload.retention_days)},
-        section_comment="# DocRAG 回答記録",
+        section_comment="# 回答の記録",
         error_detail="回答記録の保持設定を backend/.env へ保存できませんでした。",
     )
     settings.rag_answer_record_retention_days = payload.retention_days
@@ -1604,7 +1663,6 @@ def _retrieval_settings_data(settings: Settings) -> RetrievalSettingsData:
         gap_stop=runtime.gap_stop,
         corrective_retrieval=runtime.corrective_retrieval,
         business_fit_weighting=runtime.business_fit_weighting,
-        text_search_tokenizer=settings.rag_text_search_tokenizer,
         modes=_retrieval_status_data(runtime.modes),
         config_source="runtime",
     )
@@ -1642,8 +1700,6 @@ def _retrieval_settings_updates(
         updates["rag_retrieval_corrective_enabled"] = payload.corrective_retrieval
     if payload.business_fit_weighting is not None:
         updates["rag_retrieval_business_fit_weighting_enabled"] = payload.business_fit_weighting
-    if payload.text_search_tokenizer is not None:
-        updates["rag_text_search_tokenizer"] = payload.text_search_tokenizer
     return updates
 
 
@@ -1657,7 +1713,6 @@ def _apply_retrieval_settings(target: Settings, source: Settings) -> None:
     target.rag_retrieval_business_fit_weighting_enabled = (
         source.rag_retrieval_business_fit_weighting_enabled
     )
-    target.rag_text_search_tokenizer = source.rag_text_search_tokenizer
 
 
 def _persist_retrieval_settings(settings: Settings) -> None:
@@ -1679,7 +1734,6 @@ def _persist_retrieval_settings(settings: Settings) -> None:
             "RAG_RETRIEVAL_BUSINESS_FIT_WEIGHTING_ENABLED": _format_env_bool(
                 settings.rag_retrieval_business_fit_weighting_enabled
             ),
-            "RAG_TEXT_SEARCH_TOKENIZER": settings.rag_text_search_tokenizer,
         },
         section_comment="# Retrieval アダプター",
         error_detail="検索方法設定を backend/.env へ保存できませんでした。",

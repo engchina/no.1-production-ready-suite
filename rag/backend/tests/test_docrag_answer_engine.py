@@ -212,7 +212,17 @@ async def test_pipeline_delegates_to_docrag_engine(monkeypatch: pytest.MonkeyPat
 
     assert "登録ボタン" in response.answer
     # DocRAG の回答エンジン（検索と LLM の回答生成）も進捗の工程として通知する（#375）。
-    assert observed == [("docrag_answer", "started"), ("docrag_answer", "success")]
+    assert observed[0] == ("docrag_answer", "started")
+    assert observed[-1] == ("docrag_answer", "success")
+    # 回答フローの中の各工程は、入れ子の工程として開始と終了を通知する（#593）。
+    inner = observed[1:-1]
+    assert inner
+    assert all(stage.startswith("answer_step:") for stage, _ in inner)
+    assert ("answer_step:質問の理解", "started") in inner
+    assert ("answer_step:質問の理解", "success") in inner
+    started = [stage for stage, outcome in inner if outcome == "started"]
+    finished = [stage for stage, outcome in inner if outcome != "started"]
+    assert sorted(started) == sorted(finished)
     assert response.citations[0].chunk_id == "doc-1:c1"
     assert response.diagnostics.retrieval_strategy == "docrag"
     assert response.diagnostics.docrag is not None
@@ -243,18 +253,18 @@ async def test_docrag_pipeline_records_search_audit(monkeypatch: pytest.MonkeyPa
     assert audits[0]["diagnostics"].docrag is not None
 
 
-def test_business_view_overrides_text_search_tokenizer() -> None:
+def test_business_view_ignores_removed_text_search_tokenizer_override() -> None:
+    """全文検索の分割方式の上書きは #588 で削除した。保存済みの値は読み捨てる。"""
     from app.rag.business_view_config import BusinessViewConfig, resolve_business_view_settings
     from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
 
-    config = BusinessViewConfig(
-        knowledge_base_ids=["kb-1"],
-        query=KnowledgeBaseQueryConfig(text_search_tokenizer="sudachi"),
-    )
+    query = KnowledgeBaseQueryConfig.model_validate({"text_search_tokenizer": "sudachi"})
+    config = BusinessViewConfig(knowledge_base_ids=["kb-1"], query=query)
 
     settings, _ = resolve_business_view_settings(Settings(), config)
 
-    assert settings.rag_text_search_tokenizer == "sudachi"
+    assert "text_search_tokenizer" not in query.model_dump()
+    assert not hasattr(settings, "rag_text_search_tokenizer")
 
 
 def test_business_view_overrides_docrag_answer_options() -> None:
@@ -1818,3 +1828,110 @@ async def test_oracle_screen_catalog_queries_use_search_scope(
     assert "d.file_name = :screen_file_name" in screen_sql
     assert screen_binds["screen_heading"] == "（１）画面"
     assert screen_binds["screen_limit"] == 7
+
+
+def test_build_docrag_settings_uses_answer_model_id(tmp_path: Any) -> None:
+    """回答のモデルを渡すと、docrag の回答のモデルがそのモデルになる(モデル比較。#593)。"""
+    from docrag.config import ENTERPRISE_AI_LLM_PROVIDER
+
+    from app.config import enterprise_ai_default_model_id
+    from app.rag.docrag_answer import build_docrag_settings
+
+    settings = Settings()
+    default = build_docrag_settings(settings, output_dir=tmp_path)
+    chosen = build_docrag_settings(settings, output_dir=tmp_path, answer_model_id="model-b")
+
+    assert default.llm_providers[ENTERPRISE_AI_LLM_PROVIDER].model == (
+        enterprise_ai_default_model_id(settings)
+    )
+    assert chosen.llm_providers[ENTERPRISE_AI_LLM_PROVIDER].model == "model-b"
+
+
+async def test_pipeline_passes_answer_model_id_to_docrag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """チャットの比較の列のモデルが、DocRAG の回答の設定まで届く(#593)。"""
+    import docrag.adapters.oci as docrag_oci
+
+    import app.rag.docrag_answer as docrag_answer
+    from app.rag.pipeline import RagPipeline
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    seen: list[str | None] = []
+    original = docrag_answer.build_docrag_settings
+
+    def capture(settings: Settings, **kwargs: Any) -> Any:
+        seen.append(kwargs.get("answer_model_id"))
+        return original(settings, **kwargs)
+
+    monkeypatch.setattr(docrag_answer, "build_docrag_settings", capture)
+    for model_id in ("model-a", None):
+        pipeline = RagPipeline(
+            settings=Settings(rag_answer_engine="docrag"),
+            oracle=FakeOracle(),  # type: ignore[arg-type]
+            genai=FakeGenAi(),  # type: ignore[arg-type]
+            answer_model_id=model_id,
+        )
+        response = await pipeline.run(SearchRequest(query="受注の登録方法は？"))
+        assert "登録ボタン" in response.answer
+
+    assert seen == ["model-a", None]
+
+
+class NoRerankGenAi(FakeGenAi):
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        raise AssertionError("検索だけの経路は rerank を呼ばない")
+
+
+def _no_llm(*args: Any, **kwargs: Any) -> Any:
+    raise AssertionError("検索だけの経路は LLM を呼ばない")
+
+
+async def test_docrag_retrieval_only_returns_candidates_without_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """retrieval_only は DocRAG の検索だけを行い、LLM・rerank・回答の保存を使わない(#593)。"""
+    import docrag.adapters.oci as docrag_oci
+
+    import app.rag.pipeline as pipeline_module
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _no_llm)
+    audits: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        pipeline_module, "record_rag_search_audit", lambda **kwargs: audits.append(kwargs)
+    )
+    oracle = SavingOracle()
+    llm = RewriteLlm(AssertionError("検索だけの経路は LLM を呼ばない"))
+    pipeline = pipeline_module.RagPipeline(
+        settings=Settings(rag_answer_engine="docrag"),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=NoRerankGenAi(),  # type: ignore[arg-type]
+        llm=llm,  # type: ignore[arg-type]
+    )
+    observed: list[tuple[str, str]] = []
+
+    async def capture(progress: Any) -> None:
+        observed.append((progress.stage, progress.outcome))
+
+    response = await pipeline.run(
+        SearchRequest(
+            query="受注の登録方法は？",
+            top_k=5,
+            retrieval_only=True,
+            filters={"document_id": "doc-1", "chunk_set_id": "cs-1"},
+        ),
+        progress_callback=capture,
+    )
+
+    assert response.answer == ""
+    assert [chunk.chunk_id for chunk in response.citations] == ["doc-1:c1"]
+    assert observed == [("retrieval", "started"), ("retrieval", "success")]
+    assert response.diagnostics.retrieval_strategy_adapter == "docrag_retrieval_only"
+    # 画面で指定した chunk set(レシピ)の条件は、そのまま Oracle の検索条件に渡る。
+    assert oracle.filters
+    assert all(
+        item.get("chunk_set_id") == "cs-1" and item.get("document_id") == "doc-1"
+        for item in oracle.filters
+    )
+    assert oracle.saved == []
+    assert llm.calls == []
+    assert len(audits) == 1
+    assert audits[0]["outcome"] == "success"

@@ -44,6 +44,7 @@ from rag_pipeline_core.chunking import (
 from rag_pipeline_core.chunking import (
     CHUNK_SIZE_MIN_CHARS as CHUNK_SIZE_MIN_CHARS,
 )
+from rag_pipeline_core.evaluation import LEGACY_EVALUATION_SUITES
 
 AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
@@ -230,12 +231,10 @@ VectorIndexProfile = Literal[
     "accurate",
     "fast",
 ]
+# 評価の基準(閾値のプリセット。#591)。
 EvaluationSuite = Literal[
-    "request_only",
-    "retrieval_focused",
-    "balanced",
-    "strict_ci",
-    "ragas_like",
+    "standard",
+    "strict",
 ]
 GraphProfile = Literal[
     "off",
@@ -415,7 +414,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     )
     oci_genai_rerank_model: str = Field(default="cohere.rerank-v4.0-fast")
 
-    # --- Oracle 26ai ---
+    # --- Oracle AI Database ---
     oracle_user: str = Field(default="")
     oracle_password: str = Field(default="")
     oracle_dsn: str = Field(default="")
@@ -920,13 +919,6 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "受け付けるが、回答フローには反映されない。"
         ),
     )
-    rag_text_search_tokenizer: Literal["builtin", "sudachi"] = Field(
-        default="builtin",
-        description=(
-            "Oracle Text 全文検索クエリの分割方式。sudachi は rag_poc(DocRAG)の Sudachi 分割。"
-            "業務ビューにドメインキーワードがある場合は builtin でも DocRAG の分割で組み立てる。"
-        ),
-    )
     rag_runtime_knowledge: dict[str, object] = Field(
         default_factory=dict,
         description=(
@@ -1012,14 +1004,14 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_agent_memory_search_enabled: bool = Field(
         default=True,
         description=(
-            "Oracle 26ai に保存した Agent Memory を履歴 memory として retrieval に加える。"
+            "Oracle AI Database に保存した Agent Memory を履歴 memory として retrieval に加える。"
             "user/thread/agent scope がない request では安全側で無効化する。"
         ),
     )
     rag_agent_memory_writeback_enabled: bool = Field(
         default=True,
         description=(
-            "根拠付き回答の要約を Oracle 26ai Agent Memory へ writeback する。"
+            "根拠付き回答の要約を Oracle AI Database の Agent Memory へ writeback する。"
             "user/thread/agent scope がない request では保存しない。"
         ),
     )
@@ -1173,11 +1165,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_evaluation_suite: EvaluationSuite = Field(
-        default="request_only",
+        default="standard",
         description=(
-            "評価の Evaluation アダプター。request_only(既定)はプリセット閾値なしで現行どおり"
-            "request の thresholds を使う。retrieval_focused/balanced/strict_ci/ragas_like は"
-            "CI gate 用の名前付き閾値スイートを既定として補う(request の thresholds が最優先)。"
+            "品質評価の基準(閾値のプリセット。#591)。standard(標準。既定)/ strict(厳格)。"
+            "request の thresholds が最優先。閾値は、そのケースの集合で測れた指標だけに適用する。"
         ),
     )
     rag_graph_profile: GraphProfile = Field(
@@ -1508,7 +1499,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "retrieval の strategy 解決(検索挙動フラグ)の remote 委譲を許可する。"
             "サービス未起動・未到達時は backend in-process の同一実装へ縮退する。"
             "OFF は常に in-process。"
-            "実 retrieval(Oracle 26ai 経路)は backend が実行する。"
+            "実 retrieval(Oracle AI Database 経路)は backend が実行する。"
         ),
     )
     rag_retrieval_service_url: str = Field(
@@ -1827,6 +1818,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     def normalize_legacy_chunking_strategy(cls, value: object) -> object:
         """削除した分割方式(sentence_window / hierarchical_parent_child)を後継へ寄せる。"""
         return normalize_legacy_chunking_strategy_value(value)
+
+    @field_validator("rag_evaluation_suite", mode="before")
+    @classmethod
+    def normalize_legacy_evaluation_suite(cls, value: object) -> object:
+        """削除した評価の基準(#591)を後継へ寄せる(起動互換。未知の値は拒否する)。"""
+        normalized = str(value).strip().casefold()
+        return LEGACY_EVALUATION_SUITES.get(normalized, value)
 
     @field_validator("oci_enterprise_ai_vlm_input_mode", mode="before")
     @classmethod

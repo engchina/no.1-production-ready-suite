@@ -2,6 +2,7 @@
 import json
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -39,9 +40,11 @@ def test_explicit_definition_targets(question,expected):
         assert all(t['id'].startswith('Q1.D') for t in contract['definition_targets'])
 
 
-@pytest.mark.parametrize('mode',['regex','sudachi'])
-def test_query_keeps_explicit_single_character_items_without_wildcard(mode):
-    tokens=tokenize_text_search_query(QUESTION,config=TextSearchTokenizerConfig(mode=mode))
+@pytest.mark.parametrize('sudachi',[False,True],ids=['script-only','sudachi'])
+def test_query_keeps_explicit_single_character_items_without_wildcard(sudachi):
+    # Sudachi が無い環境（文字種の区切りだけ）でも、明示された 1 字の列名を失わない (#588)。
+    with patch('docrag.retrieval.text_search_tokenizer._sudachi_available',return_value=sudachi):
+        tokens=tokenize_text_search_query(QUESTION,config=TextSearchTokenizerConfig())
     assert '休' in tokens and '限' in tokens
     assert '*' not in tokens and '＊' not in tokens
     assert not label_mentioned('休止しました','休')

@@ -207,6 +207,8 @@ def test_evaluation_case_uses_corrected_answer_terms(monkeypatch: pytest.MonkeyP
     assert case["relevant_document_ids"] == []
     assert "部長" in "".join(case["expected_answer_keywords"])
     assert "課長" not in "".join(case["expected_answer_keywords"])
+    # 修正した回答を標準回答にする(品質評価で LLM による比較に使う。#591)。
+    assert "部長" in case["standard_answer"]
 
 
 def test_evaluation_case_for_helpful_feedback_uses_cited_documents(
@@ -280,7 +282,7 @@ class FakePromotionClient:
 
 @pytest.mark.usefixtures("oracle_db")
 async def test_new_reason_and_corrected_answer_round_trip_on_real_oracle() -> None:
-    """実 Oracle 26ai で、追加した理由(CHECK 制約)と修正した回答の列を保存・取得できる。"""
+    """実 Oracle AI Database で、追加した理由(CHECK 制約)と修正した回答の列を保存・取得できる。"""
     from app.clients.oracle import OracleClient, _execute_count
     from app.rag.request_context import (
         AuditRequestContext,

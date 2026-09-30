@@ -56,6 +56,11 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
     assert "検索の準備" in answer_timeout_message(None, 30)
     assert "（時間切れになった工程: 処理）" in answer_timeout_message("unknown_stage", 30)
     assert "時間内に終わりませんでした" in answer_timeout_message("generation", None)
+    # 回答フローの各工程（#593）は工程名をそのまま出す。
+    assert "（時間切れになった工程: 文書検索（1回目））" in answer_timeout_message(
+        "answer_step:文書検索（1回目）", 30
+    )
+    assert "（時間切れになった工程: 処理）" in answer_timeout_message("answer_step:", 30)
 
 
 def test_stage_labels_cover_llm_stages() -> None:

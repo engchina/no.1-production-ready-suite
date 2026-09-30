@@ -1146,29 +1146,26 @@ def test_update_retrieval_settings_persists_llm_expansion_opt_in(
     assert "RAG_QUERY_EXPANSION_LLM_ENABLED=true" in env_file.read_text(encoding="utf-8")
 
 
-def test_update_retrieval_settings_persists_text_search_tokenizer(
+def test_retrieval_settings_no_longer_expose_text_search_tokenizer(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """全文検索の分割方式(builtin / sudachi)を全体既定として .env へ永続化する。"""
+    """全文検索の分割方式の選択は #588 で削除した(応答に出さず、.env にも書かない)。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_retrieval_strategy", "hybrid_rrf")
-    monkeypatch.setattr(settings, "rag_text_search_tokenizer", "builtin")
     _patch_retrieval_toggle_fields(monkeypatch, settings)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
-    assert (
-        client.get("/api/settings/retrieval").json()["data"]["text_search_tokenizer"] == "builtin"
+    assert "text_search_tokenizer" not in client.get("/api/settings/retrieval").json()["data"]
+
+    only_removed = client.patch(
+        "/api/settings/retrieval", json={"text_search_tokenizer": "sudachi"}
     )
+    assert only_removed.status_code == 422  # 更新する項目が無い
 
-    resp = client.patch("/api/settings/retrieval", json={"text_search_tokenizer": "sudachi"})
-
+    resp = client.patch("/api/settings/retrieval", json={"gap_stop": True})
     assert resp.status_code == 200
-    assert resp.json()["data"]["text_search_tokenizer"] == "sudachi"
-    assert settings.rag_text_search_tokenizer == "sudachi"
-    assert "RAG_TEXT_SEARCH_TOKENIZER=sudachi" in env_file.read_text(encoding="utf-8")
-    invalid = client.patch("/api/settings/retrieval", json={"text_search_tokenizer": "mecab"})
-    assert invalid.status_code == 422
+    assert "RAG_TEXT_SEARCH_TOKENIZER" not in env_file.read_text(encoding="utf-8")
 
 
 def test_update_retrieval_settings_rejects_unknown_mode() -> None:
@@ -1596,31 +1593,32 @@ def test_update_vector_index_settings_rejects_unknown_profile() -> None:
 
 def test_evaluation_settings_reports_runtime_suite(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_evaluation_suite", "balanced")
+    monkeypatch.setattr(settings, "rag_evaluation_suite", "strict")
 
     resp = client.get("/api/settings/evaluation-suite")
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["suite"] == "balanced"
-    assert body["thresholds"]["groundedness_pass_rate"] == 0.9
+    assert body["suite"] == "strict"
+    assert body["thresholds"]["claim_support_rate"] == 1.0
     names = [item["name"] for item in body["suites"]]
-    assert names[0] == "request_only"
+    assert names == ["standard", "strict"]
     selected = [item["name"] for item in body["suites"] if item["selected"]]
-    assert selected == ["balanced"]
+    assert selected == ["strict"]
 
 
-def test_evaluation_settings_request_only_has_no_thresholds(
+def test_evaluation_settings_every_suite_has_thresholds(
     monkeypatch: MonkeyPatch,
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_evaluation_suite", "request_only")
+    monkeypatch.setattr(settings, "rag_evaluation_suite", "standard")
 
     resp = client.get("/api/settings/evaluation-suite")
 
     body = resp.json()["data"]
-    assert body["suite"] == "request_only"
-    assert body["thresholds"] == {}
+    assert body["suite"] == "standard"
+    assert body["thresholds"]["context_recall"] == 0.8
+    assert all(len(item["thresholds"]) == 9 for item in body["suites"])
 
 
 def test_update_evaluation_settings_persists_env_and_mutates_runtime(
@@ -1628,19 +1626,22 @@ def test_update_evaluation_settings_persists_env_and_mutates_runtime(
     tmp_path: Path,
 ) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_evaluation_suite", "request_only")
+    monkeypatch.setattr(settings, "rag_evaluation_suite", "standard")
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
-    resp = client.patch("/api/settings/evaluation-suite", json={"suite": "strict_ci"})
+    resp = client.patch("/api/settings/evaluation-suite", json={"suite": "strict"})
 
     assert resp.status_code == 200
-    assert resp.json()["data"]["suite"] == "strict_ci"
-    assert settings.rag_evaluation_suite == "strict_ci"
-    assert "RAG_EVALUATION_SUITE=strict_ci" in env_file.read_text(encoding="utf-8")
+    assert resp.json()["data"]["suite"] == "strict"
+    assert settings.rag_evaluation_suite == "strict"
+    assert "RAG_EVALUATION_SUITE=strict" in env_file.read_text(encoding="utf-8")
 
 
 def test_update_evaluation_settings_rejects_unknown_suite() -> None:
     resp = client.patch("/api/settings/evaluation-suite", json={"suite": "autorag_tuner"})
+    assert resp.status_code == 422
+    # 削除した基準の名前は API では受け付けない(.env の旧値は起動時に後継へ寄せる)。
+    resp = client.patch("/api/settings/evaluation-suite", json={"suite": "strict_ci"})
     assert resp.status_code == 422
 
 
@@ -3172,7 +3173,9 @@ def test_database_connection_test_returns_timeout_guidance(
     monkeypatch.setattr(settings, "oracle_wallet_password", "")
 
     async def fake_test_oracle_connection(candidate: Settings) -> None:
-        raise OracleConnectionTimeoutError("Oracle 26ai 接続テストが 15 秒でタイムアウトしました。")
+        raise OracleConnectionTimeoutError(
+            "Oracle AI Database の接続テストが 15 秒でタイムアウトしました。"
+        )
 
     _write_thick_wallet(Path(settings.resolved_oracle_wallet_dir))
     monkeypatch.setattr(settings_routes, "test_oracle_connection", fake_test_oracle_connection)
@@ -4011,3 +4014,55 @@ def test_legacy_parser_api_key_in_json_moves_to_env_on_parser_save() -> None:
     assert _saved_env_value(settings, "RAG_PARSER_MINERU_API_KEY") == "legacy-parser-secret"
     assert settings.rag_parser_mineru_api_key == "legacy-parser-secret"
     assert settings.legacy_model_secret_detected is False
+
+
+def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    """回答の検索と生成の全体既定を .env と現在プロセスへ保存する(送った項目だけを変える。#593)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_docrag_query_strategy", "auto_routing")
+    monkeypatch.setattr(settings, "rag_docrag_answer_flow", "crag")
+    monkeypatch.setattr(settings, "rag_docrag_neighbor_child_count", 3)
+    monkeypatch.setattr(settings, "rag_docrag_rerank_enabled", True)
+    monkeypatch.setattr(settings, "rag_docrag_screen_linking_enabled", False)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    assert client.get("/api/settings/answering").json()["data"] == {
+        "query_strategy": "auto_routing",
+        "answer_flow": "crag",
+        "neighbor_child_count": 3,
+        "rerank_enabled": True,
+        "screen_linking_enabled": False,
+        "config_source": "runtime",
+    }
+
+    resp = client.patch(
+        "/api/settings/answering",
+        json={"query_strategy": "rag_fusion", "neighbor_child_count": 5, "rerank_enabled": False},
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["query_strategy"] == "rag_fusion"
+    assert data["answer_flow"] == "crag"
+    assert data["neighbor_child_count"] == 5
+    assert data["rerank_enabled"] is False
+    assert settings.rag_docrag_query_strategy == "rag_fusion"
+    assert settings.rag_docrag_neighbor_child_count == 5
+    assert settings.rag_docrag_rerank_enabled is False
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "RAG_DOCRAG_QUERY_STRATEGY=rag_fusion" in env_text
+    assert "RAG_DOCRAG_ANSWER_FLOW=crag" in env_text
+    assert "RAG_DOCRAG_NEIGHBOR_CHILD_COUNT=5" in env_text
+    assert "RAG_DOCRAG_RERANK_ENABLED=false" in env_text
+    assert "RAG_DOCRAG_SCREEN_LINKING_ENABLED=false" in env_text
+
+
+def test_answering_settings_rejects_invalid_values() -> None:
+    """選択肢に無い値・範囲外の近傍数は 422(#593)。"""
+    assert (
+        client.patch("/api/settings/answering", json={"query_strategy": "unknown"}).status_code
+        == 422
+    )
+    assert (
+        client.patch("/api/settings/answering", json={"neighbor_child_count": 21}).status_code
+        == 422
+    )

@@ -21,7 +21,7 @@ from docrag.retrieval.text_search_tokenizer import TextSearchTokenizerConfig, to
 
 class DomainKeywordImpactTests(unittest.TestCase):
     def settings(self, **kwargs):
-        return replace(get_settings(), text_search_tokenizer="regex", **kwargs)
+        return replace(get_settings(), **kwargs)
 
     def test_registered_keywords_are_never_added_by_partial_match(self):
         # 質問の語と部分的に重なるだけの登録キーワードは検索文に加えない。この機能と設定は廃止した (#557)。
@@ -36,7 +36,7 @@ class DomainKeywordImpactTests(unittest.TestCase):
     def test_matched_keywords_report_retained_and_truncated(self):
         result = tokenize_text_search_query_with_trace(
             "契約区分 出庫伝票", domain_keywords=["契約区分", "出庫伝票", "未出現"],
-            config=TextSearchTokenizerConfig(mode="regex"), max_tokens=1,
+            config=TextSearchTokenizerConfig(), max_tokens=1,
         )
         self.assertEqual(result.matched_domain_keywords, ("出庫伝票", "契約区分"))
         self.assertEqual(result.selected_domain_keywords, ("出庫伝票",))

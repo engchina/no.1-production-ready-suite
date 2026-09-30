@@ -1,7 +1,7 @@
 """検索（RAG）関連スキーマ。"""
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -11,6 +11,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     TypeAdapter,
     ValidationError,
     field_validator,
@@ -21,7 +22,7 @@ from app.config import GenerationProfile
 from app.schemas.classification import normalize_category_value
 from app.schemas.common import JsonValue
 
-# PoweRAG 由来の scalar / 日付 / カテゴリ pre-filter。Oracle 26ai の JSON_VALUE 数値述語・
+# PoweRAG 由来の scalar / 日付 / カテゴリ pre-filter。Oracle AI Database の JSON_VALUE 数値述語・
 # TIMESTAMP 範囲・IN 述語へ再マップし、ベクトル/hybrid 検索の候補集合を事前に絞り込む。
 SUPPORTED_SEARCH_NUMERIC_RANGE_FILTERS = {
     "page_number_min",
@@ -180,7 +181,7 @@ def _normalize_extraction_field_filter(value: str) -> str:
 
 
 class SearchMode(StrEnum):
-    """検索モード。Oracle 26ai 側ではベクトル・キーワード・ハイブリッドへ対応する。"""
+    """検索モード。Oracle AI Database 側ではベクトル・キーワード・ハイブリッドへ対応する。"""
 
     HYBRID = "hybrid"
     VECTOR = "vector"
@@ -225,6 +226,13 @@ class SearchRequest(BaseModel):
     generation_profile: GenerationProfile | None = Field(
         default=None,
         description="API 呼び出し単位の回答スタイル上書き。業務ビューと GLOBAL より優先する。",
+    )
+    retrieval_only: bool = Field(
+        default=False,
+        description=(
+            "回答を作らずに検索だけを行う(LLM を呼ばない)。KB の検索テストとレシピの検索比較が"
+            "使う。回答エンジンが docrag のときだけ効き、standard は従来どおり回答する(#593)。"
+        ),
     )
 
     @field_validator("business_view_id")
@@ -439,6 +447,19 @@ class SearchResponse(BaseModel):
     # 回答側ガードレールが本文をマスク/差し替えしたか。realtime stream 時に
     # マスク済み本文を再送(置換)するかの判定に使う内部フラグ。
     answer_replaced: bool = False
+    # 標準回答による評価の入力(回答の記録に保存するものと同じ。#591)。応答には出さず、
+    # 品質評価が同じプロセスの中で回答の根拠・引用・実行記録を受け取るためだけに使う。
+    _evaluation_input: dict[str, object] | None = PrivateAttr(default=None)
+
+    @property
+    def evaluation_input(self) -> dict[str, object] | None:
+        """標準回答による評価の入力(回答エンジンが作らなかったときは None)。"""
+        return self._evaluation_input
+
+    def with_evaluation_input(self, value: Mapping[str, object] | None) -> Self:
+        """標準回答による評価の入力を持たせて返す(同じ object を変更する)。"""
+        self._evaluation_input = dict(value) if value is not None else None
+        return self
 
     @field_validator("guardrail_warnings")
     @classmethod

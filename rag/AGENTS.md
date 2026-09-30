@@ -37,9 +37,9 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 
 ### データ層
 
-- **Oracle Autonomous Database / Oracle 26ai AI Vector Search** — チャンク、引用、文書構造、評価結果、監査ログ、ベクトル検索の正本。
+- **Oracle Autonomous AI Database / Oracle AI Vector Search** — チャンク、引用、文書構造、評価結果、監査ログ、ベクトル検索の正本。
 - **OCI Object Storage** — 原本、変換済み artifact、レビュー済み文書、評価 artifact の保管。
-- **外部ベクトル DB は導入しない**。必要な意味検索は Oracle 26ai AI Vector Search に集約する。
+- **外部ベクトル DB は導入しない**。必要な意味検索は Oracle AI Vector Search に集約する。
 
 ### バックエンド
 
@@ -197,7 +197,7 @@ npm run dev   # /api は BACKEND_URL を明示したときだけ proxy する（
 
 ## コーディング規約・重要ルール
 
-1. RAG の検索・回答は Oracle 26ai Vector Search、OCI Enterprise AI、OCI GenAI embedding/rerank を中心に構成する。
+1. RAG の検索・回答は Oracle AI Vector Search、OCI Enterprise AI、OCI GenAI embedding/rerank を中心に構成する。
 2. 外部ベクトル DB、別 LLM provider、別 RAG SaaS を導入しない。逸脱が必要な場合は理由を添えてユーザ確認する。
 3. シークレット(OCI 認証・DB 接続・ADB wallet 等)は `.env` 経由。ハードコード禁止、コミットしない。
 4. LLM 出力は Pydantic スキーマで検証してから保存・利用する。

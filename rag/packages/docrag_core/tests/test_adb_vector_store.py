@@ -3,6 +3,7 @@
 import hashlib
 import json
 from datetime import date
+import re
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -31,7 +32,7 @@ from docrag.chunking import CHILD_CHUNK_LEVEL, CHUNK_METADATA_SCHEMA_VERSION, PA
 from docrag.knowledge.classification import classification_filter_from_values
 from docrag.retrieval.inquiry_conditions import FILE_DATA_PROFILE, InquiryMetadataFilter, parse_inquiry_conditions
 from docrag.config import get_settings
-from docrag.retrieval.text_search_tokenizer import TEXT_SEARCH_TOKENIZER_REGEX, TextSearchTokenizerConfig
+from docrag.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
 
 class AdbVectorStoreTests(unittest.TestCase):
@@ -153,11 +154,16 @@ class AdbVectorStoreTests(unittest.TestCase):
     def test_oracle_text_query_sanitizes_reserved_words_and_symbols(self):
         query = oracle_text_query(
             "AND 契約区分 (登録) foo*bar\x00 OR 生年月日",
-            tokenizer_config=TextSearchTokenizerConfig(mode=TEXT_SEARCH_TOKENIZER_REGEX),
+            tokenizer_config=TextSearchTokenizerConfig(),
         )
 
-        self.assertEqual(query, "{契約区分} OR {登録} OR {foo} OR {bar} OR {生年月日}")
-        self.assertNotIn("*", query)
+        # 語は ACCUM で結び、補う語（文字種の区切り・漢字の部分語）は軽くする (#588)。
+        self.assertEqual(
+            query,
+            "{契約} ACCUM {区分} ACCUM {登録} ACCUM {foo} ACCUM {bar} ACCUM {生年月日} ACCUM {年月日}"
+            " ACCUM {契約区分}*0.5 ACCUM {生年}*0.5 ACCUM {月日}*0.5",
+        )
+        self.assertNotIn("*", re.sub(r"\}\*[0-9.]+", "}", query))  # 重み以外に * が残らない
         self.assertNotIn("\x00", query)
         self.assertLessEqual(len(query), adb_vector_store.MAX_ORACLE_TEXT_QUERY_CHARS)
 
@@ -165,10 +171,12 @@ class AdbVectorStoreTests(unittest.TestCase):
         query = oracle_text_query(
             "登録 出庫伝票 契約区分",
             domain_keywords=["契約区分"],
-            tokenizer_config=TextSearchTokenizerConfig(mode=TEXT_SEARCH_TOKENIZER_REGEX),
+            tokenizer_config=TextSearchTokenizerConfig(),
         )
 
-        self.assertEqual(query, "{契約区分} OR {登録} OR {出庫伝票}")
+        self.assertEqual(
+            query, "{契約区分}*2 ACCUM {契約} ACCUM {区分} ACCUM {登録} ACCUM {出庫伝票} ACCUM {出庫} ACCUM {伝票}"
+        )
 
     def test_combine_hybrid_scores_uses_rrf_and_text_vector_tiebreakers(self):
         scores = _combine_hybrid_scores(
@@ -220,7 +228,6 @@ class AdbVectorStoreTests(unittest.TestCase):
             get_settings(),
             embedding_output_dimensions=1536,
             image_embedding_enabled=False,
-            text_search_tokenizer=TEXT_SEARCH_TOKENIZER_REGEX,
             text_search_tokenizer_latin_stemmer="none",
             text_search_query_variant_limit=2,
         )
@@ -264,8 +271,12 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertEqual(vector_search.call_count, 2)
         load_keywords.assert_called_once_with(settings.output_dir)
         self.assertEqual(text_search.call_count, 2)
-        self.assertEqual(text_search.call_args_list[0].args[2], "{question} OR {original}")
-        self.assertEqual(text_search.call_args_list[1].args[2], "{expanded} OR {synonym}")
+        self.assertEqual(
+            text_search.call_args_list[0].args[2], "{question}*2 ACCUM {クエスチョン} ACCUM {オリジナル} ACCUM {original}"
+        )
+        self.assertEqual(
+            text_search.call_args_list[1].args[2], "{エキスパンデッド} ACCUM {expanded} ACCUM {シノニム} ACCUM {synonym}"
+        )
         self.assertEqual([chunk.chunk_id for chunk in result.child_chunks], ["chunk-original", "chunk-expanded"])
         self.assertIn("keyword:oracle_text:q2", result.child_chunks[1].metadata["adb_hybrid"]["retrieval_channels"])
 
@@ -275,7 +286,6 @@ class AdbVectorStoreTests(unittest.TestCase):
             get_settings(),
             embedding_output_dimensions=1536,
             image_embedding_enabled=False,
-            text_search_tokenizer=TEXT_SEARCH_TOKENIZER_REGEX,
             text_search_tokenizer_latin_stemmer="none",
         )
         connection = object()
@@ -311,7 +321,6 @@ class AdbVectorStoreTests(unittest.TestCase):
             embedding_output_dimensions=1536,
             image_embedding_enabled=True,
             image_embedding_rrf_weight=0.5,
-            text_search_tokenizer=TEXT_SEARCH_TOKENIZER_REGEX,
             text_search_tokenizer_latin_stemmer="none",
         )
         connection = object()

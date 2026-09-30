@@ -1,6 +1,6 @@
 """項目抽出の値による検索の絞り込み(#549)の実 Oracle 統合テスト。
 
-`_extraction_field_where` が作る文書単位の EXISTS(JSON_TABLE と型変換・bind)が実 Oracle 26ai で
+`_extraction_field_where` が作る文書単位の EXISTS(JSON_TABLE と型変換・bind)が実 Oracle で
 期待どおりに文書を絞ることを確かめる。未到達なら oracle_db fixture が skip し、作成行は
 cleanup_to_baseline で後始末する。
 """
