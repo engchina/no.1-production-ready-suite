@@ -35,7 +35,7 @@ export interface ListPickerItem {
   textValue: string;
   /** 名前の下の補足（1 行で省略表示。例: 論理名・種類・更新日）。 */
   description?: ReactNode;
-  /** 行の右端の補足（md 以上だけ表示。例: 状態の StatusBadge）。 */
+  /** 行の右端の補足（例: 状態の StatusBadge）。読み上げでは選択肢の説明になる。 */
   meta?: ReactNode;
   /** 選べない候補（例: すでに追加済み）。フォーカスは移れるが、選択は切り替わらない。 */
   disabled?: boolean;
@@ -866,7 +866,12 @@ function PickerOption({
   const labelId = `${id}-label`;
   const descriptionId = `${id}-description`;
   const reasonId = `${id}-reason`;
-  const describedBy = [item.description ? descriptionId : "", item.disabled && item.disabledReason ? reasonId : ""]
+  const metaId = `${id}-meta`;
+  const describedBy = [
+    item.description ? descriptionId : "",
+    item.meta ? metaId : "",
+    item.disabled && item.disabledReason ? reasonId : "",
+  ]
     .filter(Boolean)
     .join(" ");
   return (
@@ -915,12 +920,20 @@ function PickerOption({
           {item.label}
         </span>
         {item.description ? (
-          <span id={descriptionId} className="block truncate text-xs leading-4 text-fg-muted">
+          <span
+            id={descriptionId}
+            className="block truncate text-xs leading-4 text-fg-muted"
+            title={typeof item.description === "string" ? item.description : undefined}
+          >
             {item.description}
           </span>
         ) : null}
       </span>
-      {item.meta ? <span className="hidden shrink-0 items-center gap-2 md:flex">{item.meta}</span> : null}
+      {item.meta ? (
+        <span id={metaId} className="flex shrink-0 items-center gap-2">
+          {item.meta}
+        </span>
+      ) : null}
       {item.disabled && item.disabledReason ? (
         <span id={reasonId} className="shrink-0 text-xs text-fg-muted">
           {item.disabledReason}

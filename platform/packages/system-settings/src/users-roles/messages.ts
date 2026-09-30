@@ -25,6 +25,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.common.edit": "編集",
   "security.common.empty": "対象データはありません。",
   "security.common.filteredCount": "{filtered} / {total} 件",
+  "security.common.filteredCountWithSelected": "{filtered} / {total} 件、選択 {selected} 件",
   "security.common.listScrollLabel":
     "{list}。必要に応じて縦方向または横方向にスクロールできます。",
   "security.common.loadError":

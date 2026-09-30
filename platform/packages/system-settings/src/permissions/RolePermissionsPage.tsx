@@ -13,6 +13,8 @@ import {
   Banner,
   BulkSelectionActions,
   Button,
+  ListPicker,
+  type ListPickerItem,
   DataTable,
   EmptyState,
   FieldError,
@@ -30,8 +32,6 @@ import {
   type DataTableSort,
   type EntityAction,
   FormActionBar,
-  INFORMATION_LIST_SCROLL_CLASS,
-  INFORMATION_TABLE_FOCUS_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@engchina/production-ready-ui";
@@ -51,6 +51,7 @@ import {
   identitySecondaryName,
   isAbortError,
   securityFilteredCount,
+  securityFilteredCountWithSelected,
   selectedVisibleKey,
   useValuesChanged,
 } from "../users-roles/shared";
@@ -896,7 +897,8 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
 
 /**
  * 利用できる対象 1 種類分の選択欄。全件が対象（SYSTEM_ADMIN・管理権限）のときは説明だけを出す。
- * 候補は検索でき、表示中の候補を一括で選択・解除できる。
+ * 候補の一覧は、大量の候補から選ぶ共通の `ListPicker`（#600）: 左に検索、選択の行（表示中の一括選択・解除・
+ * 「選択中だけ表示」）、名前と説明の行の listbox。候補は全件を読んでいるので、検索は画面側で絞る。
  */
 function TargetFieldset<R extends PermissionRole>({
   target,
@@ -936,22 +938,31 @@ function TargetFieldset<R extends PermissionRole>({
         [item.id, item.name, item.secondary ?? "", item.description ?? ""].join(" ").toLowerCase().includes(q),
       )
     : displayItems;
-  const visibleIds = filteredItems.map((item) => item.id);
-  // 説明を持つ候補が 1 件でもあれば、すべての行で説明の 2 行分を取って高さをそろえる。
-  // 説明を持たない対象（例: Agent の業務ビュー）は、名前だけの低い行にする。
-  const reserveDescription = displayItems.some((item) => Boolean(item.description?.trim()));
-  const selectedVisibleCount = visibleIds.filter((id) => selectedIds.includes(id)).length;
+  const selectedSet = new Set(selectedIds);
+  const toPickerItem = (item: RolePermissionTargetItem): ListPickerItem => {
+    const label = targetItemLabel(item);
+    return {
+      key: item.id,
+      // 内部の ID は出さない（利用者には意味を持たない。#521）。名前が ID の候補（直接入力）は ID が名前になる。
+      label,
+      textValue: label,
+      description: item.description?.trim() || undefined,
+      meta: item.status ? <StatusBadge icon={false} variant="neutral" label={item.status} /> : undefined,
+    };
+  };
+  const pickerItems = filteredItems.map(toPickerItem);
   const toggle = (id: string) => {
     if (targetReadOnly) return;
     onChange((ids) => (ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id]));
   };
   const selectVisible = () => {
     if (targetReadOnly) return;
+    const visibleIds = filteredItems.map((item) => item.id);
     onChange((ids) => [...new Set([...ids, ...visibleIds])]);
   };
   const clearVisible = () => {
     if (targetReadOnly) return;
-    const visible = new Set(visibleIds);
+    const visible = new Set(filteredItems.map((item) => item.id));
     onChange((ids) => ids.filter((id) => !visible.has(id)));
   };
 
@@ -965,20 +976,6 @@ function TargetFieldset<R extends PermissionRole>({
         <Banner severity="info">{systemAdmin ? tm.grantsAllSystemAdmin : tm.grantsAllByPermission}</Banner>
       ) : (
         <>
-          <div className="rounded-md border border-border bg-surface-sunken p-3">
-            <SecuritySearchField
-              label={tm.searchLabel}
-              placeholder={tm.searchPlaceholder}
-              value={search}
-              testId={`${idPrefix}-search`}
-              resultCountLabel={securityFilteredCount(filteredItems.length, displayItems.length)}
-              disabled={targetReadOnly}
-              onChange={(value) => {
-                if (targetReadOnly) return;
-                onSearchChange(value);
-              }}
-            />
-          </div>
           {custom ? (
             <CustomTargetIdField
               idPrefix={idPrefix}
@@ -992,112 +989,43 @@ function TargetFieldset<R extends PermissionRole>({
               }}
             />
           ) : null}
-          {displayItems.length > 0 ? (
-            <BulkSelectionActions
-              selectLabel={m.selectAll}
-              clearLabel={m.clearAll}
-              selectDisabled={
-                targetReadOnly || visibleIds.length === 0 || selectedVisibleCount === visibleIds.length
-              }
-              clearDisabled={targetReadOnly || selectedVisibleCount === 0}
-              dataTestId={`${idPrefix}-selection-actions`}
-              onSelectAll={selectVisible}
-              onClearAll={clearVisible}
-            />
-          ) : null}
-          {displayItems.length === 0 ? (
-            <p className="rounded-md border border-dashed border-border p-4 text-sm text-fg-muted">{tm.empty}</p>
-          ) : filteredItems.length === 0 ? (
-            <p className="rounded-md border border-dashed border-border p-4 text-sm text-fg-muted">{tm.noResults}</p>
-          ) : (
-            <div
-              role="region"
-              aria-labelledby={`${idPrefix}-label`}
-              tabIndex={0}
-              data-testid={`${idPrefix}-list`}
-              // 行の高さは内容（max-content）で決める。高さに上限のあるスクロール領域の grid は、
-              // 行を min-height まで縮めて次の行と重ねるため（#521）。
-              className={`grid min-w-0 auto-rows-max content-start gap-1 overflow-x-hidden rounded-md border border-border bg-surface-sunken p-2 pr-3 lg:grid-cols-2 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
-            >
-              {filteredItems.map((item) => (
-                <RolePermissionTargetOption
-                  key={item.id}
-                  item={item}
-                  checked={selectedIds.includes(item.id)}
-                  disabled={targetReadOnly}
-                  reserveDescription={reserveDescription}
-                  testId={`${idPrefix}-option`}
-                  onToggle={() => toggle(item.id)}
-                />
-              ))}
-            </div>
-          )}
+          <ListPicker
+            id={idPrefix}
+            label={tm.title}
+            items={pickerItems}
+            selectedKeys={selectedSet}
+            selectedItems={displayItems.filter((item) => selectedSet.has(item.id)).map(toPickerItem)}
+            onToggle={(item) => toggle(item.key)}
+            onSelectMany={selectVisible}
+            onClearSelection={clearVisible}
+            total={filteredItems.length}
+            search={{
+              id: `${idPrefix}-search`,
+              label: tm.searchLabel,
+              placeholder: tm.searchPlaceholder,
+              value: search,
+              disabled: targetReadOnly,
+              onSearch: (value) => {
+                if (targetReadOnly) return;
+                onSearchChange(value);
+              },
+            }}
+            disabled={targetReadOnly}
+            labels={{
+              resultCount: ({ visible, selected }) =>
+                securityFilteredCountWithSelected(visible, displayItems.length, selected),
+              searchResultCount: (count) => securityFilteredCount(count, displayItems.length),
+              emptyTitle: tm.empty,
+              noResultsTitle: tm.noResults,
+              noResultsHint: undefined,
+              selectVisible: m.selectAll,
+              clearSelection: m.clearAll,
+            }}
+            testId={`${idPrefix}-list`}
+          />
         </>
       )}
     </fieldset>
-  );
-}
-
-/**
- * 利用できる対象の候補 1 行（#521）。名前と説明を出し、内部の ID は出さない（利用者には意味を持たない）。
- * 名前は 1 行、説明は 2 行で省略する。`reserveDescription` のときは説明の 2 行分の高さを常に取り、
- * 説明の有無・長さによらず行の高さをそろえる。
- * 省略した全文は `title` で確かめられ、チェックボックスの名前（読み上げ）は全文のまま。
- */
-export function RolePermissionTargetOption({
-  item,
-  checked,
-  disabled,
-  reserveDescription = true,
-  testId,
-  onToggle,
-}: {
-  item: RolePermissionTargetItem;
-  checked: boolean;
-  disabled: boolean;
-  reserveDescription?: boolean;
-  testId?: string;
-  onToggle: () => void;
-}) {
-  const label = targetItemLabel(item);
-  const description = item.description?.trim() ?? "";
-  return (
-    <label
-      data-testid={testId}
-      className={`flex min-w-0 items-start gap-2 rounded-md px-2 py-1.5 text-sm ${
-        disabled ? "cursor-not-allowed opacity-80" : "cursor-pointer hover:bg-surface-hover"
-      }`}
-    >
-      <input
-        className="mt-0.5 h-4 w-4 shrink-0 accent-accent-emphasis disabled:cursor-not-allowed"
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={onToggle}
-      />
-      <span className="grid min-w-0 flex-1 gap-0.5">
-        {/* 名前の行は状態のバッジの高さ（1.5rem）を常に取り、バッジの有無で行の高さを変えない。 */}
-        <span className="flex min-h-6 min-w-0 items-center gap-1.5 font-medium">
-          <span className="min-w-0 truncate" title={label}>
-            {label}
-          </span>
-          {item.status ? (
-            <span className="shrink-0">
-              <StatusBadge icon={false} variant="neutral" label={item.status} />
-            </span>
-          ) : null}
-        </span>
-        {description || reserveDescription ? (
-          <span
-            className="line-clamp-2 min-h-[2lh] text-xs leading-5 text-fg-muted"
-            title={description || undefined}
-            aria-hidden={description ? undefined : true}
-          >
-            {description}
-          </span>
-        ) : null}
-      </span>
-    </label>
   );
 }
 

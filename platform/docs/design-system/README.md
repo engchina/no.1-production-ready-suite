@@ -559,6 +559,20 @@ import { SearchField } from "@engchina/production-ready-ui";
 - 一覧から別のページへ移る（ナレッジベース・文書の一覧など）ときはリンク（`<Link>`）のままにする（役割が違う）。
 - 分割ペイン（`FixedSplitPane`）は既に共有部品で、製品の `RagSplitPane` / `AgentSplitPane` は保存 key の接頭辞と文言を渡す薄いラッパーなので、`packages/ui` には上げない。
 
+### `ListToolbar` / `ListPicker` / `LoadMoreFooter`（新規）— ★ 検索欄は左、大量の候補は一覧で選ぶ（#600）
+
+一覧の上の検索欄の位置が製品ごとに違いました（RAG は右端に固定幅、NL2SQL は左に 2:1、platform・Agent は全幅）。数千〜数万件の候補から選ぶ画面は、RAG の「文書を追加」が検索欄 + 選択欄 +「追加」で 1 件ずつ、NL2SQL の「許可する表・ビュー」は手書きのチェックボックスの一覧と仮想スクロールでした。規則は UX 契約 [page-archetypes.md「一覧のツールバー」「大量の候補から選ぶ」](../ux-contracts/page-archetypes.md)。
+
+| 決めたこと | 理由 |
+|---|---|
+| `ListToolbar`: 左（2）に検索欄（先頭・残りを埋める）→ 絞り込み、右（1）に件数 → 一覧への操作（主操作は右端）。2:1 にするかはツールバー自身の幅（container query、48rem）で決め、狭いと縦に積んで検索欄を先頭に全幅 | 読む順と Tab の順の先頭に「見る範囲を決める」操作を置く（Atlassian・GitHub・Polaris と同じ向き）。横に並べたパネルの中でも同じ規則で崩れない。§4「wide 画面の 100% 充填」の比率配分 |
+| `ListPicker`: ツールバー（検索）→ 選択の行（一括選択・「選択中だけ表示（K）」）→ 候補の一覧 → フッター（件数・さらに読み込む）→ 確定の操作行（任意） | NL2SQL の型を共通にした。選んだ候補は検索語を変えても残り、確かめられる |
+| 候補の一覧は選択肢の listbox（`aria-multiselectable`・`aria-checked`・`aria-posinset` / `aria-setsize`、フォーカスは listbox に 1 つで `aria-activedescendant`）。グループは見出し（件数・一括選択のボタン）と listbox を分ける | Tab 1 回で一覧を抜けられる（候補の数だけ Tab を押させない）。listbox の中にボタンを置かない（ARIA の子の制約） |
+| 行は 3.5rem、一覧は 5 / 8 行（md 未満 / 以上）。100 行を超えたら見えている行だけを描く | 数千件を読み込んでも重くならない。少ないときはページ内検索・読み上げで全部に届く |
+| チェックの印は `--color-accent-emphasis` の塗り + `Check`（14px）、選んだ行は `--color-accent-subtle`。キーボードの位置は、キーボードで操作しているときだけ行の内側に outline（`--color-focus-ring`） | 選択の状態を色と形の両方で示す。マウスで選んだときに枠を出さない |
+| 選べない候補（例: 追加済み）は `aria-disabled` と右端の理由の文言。一覧全体の `disabled`・囲む `<fieldset disabled>` の間は切り替えない | 色だけに頼らない。保存中に選択が変わらない |
+| `LoadMoreFooter`: 左に件数、右に「さらに読み込む」、失敗は再試行付きの `Banner`（スピナーは 1 つ） | NL2SQL の `DbObjectSelectorFooter` を共通にした（NL2SQL は包むだけ） |
+
 ### 読み込み中と一覧の表示密度（新設、#265）— ★ 3 製品で NL2SQL の基準にそろえる
 
 - 一覧の表示行数・行の高さは `packages/ui` の定数を使う（`INFORMATION_TABLE_VISIBLE_ROWS` = md 未満 5 行・md 以上 8 行、`INFORMATION_TABLE_ROW_CLASS` = 3.5rem など）。製品で数値を書かない
@@ -832,6 +846,7 @@ QA に事前共有してください。**47点あります。**
 | 48 | **一覧の絞り込みの検索ボタンが無くなり、入力に合わせて絞り込む**（#535） | RAG の業務ビューの一覧: 検索欄（固定 `w-56`・先頭アイコンなし）+「名前・説明で検索」のボタン → ナレッジベースの一覧と同じ `SearchField`（先頭アイコン・消去、`w-64`、375px は全幅）でボタンなし。NL2SQL の学習候補・アプリ内フィードバック: 条件の行の右端の「絞り込み」（44px）→ ボタンなしで、条件を変えるとすぐ読み込む（読込中は一覧の上に経過時間とスピナー）。アプリ内フィードバックの検索欄は手書きの入力欄 → `SearchField`（44px、虫眼鏡・消去付き）。Agent のメモリの検索欄は手書きの入力欄（40px、地が `surface-sunken`）→ `SearchField`（36px、地は `surface`）。0 件の空の状態に「検索語をクリア」（RAG のナレッジベース・業務ビュー・文書、ユーザー・ロール・権限管理） | 同じ種類の画面（一覧の絞り込み）の操作を 3 製品でそろえる。押し忘れ・押し直しを無くす。0 件から 1 操作で戻れる（UX 契約 page-archetypes.md「一覧の絞り込みの検索」） |
 | 49 | **モデル設定の OCI Enterprise AI の接続がタブになり、エラーのあるタブに印が付く** | 「接続 1（既定）」「接続 2」の枠（`border` + `bg-surface-sunken`）を縦に並べ、各接続に自由入力の「表示名」があった → カードの中の共有の `Tabs`（「プライマリ接続」「セカンダリ接続」）で切り替え、表示名の欄は無い。未設定のセカンダリ接続は `EmptyState` と「セカンダリ接続を設定」、設定済みは入力欄と「セカンダリ接続を削除」（説明の行の右端、ghost の danger）。エラーのあるタブはラベルの後ろに danger 色の `CircleAlert`、未保存の入力があるタブは「未保存」のバッジ。Endpoint URL・Project OCID・API key の必須のタグは、プライマリ接続が 3 つとも「OCI 運用時必須」、セカンダリ接続が 3 つとも「必須」 | 同じ設定の別の枠はタブで切り替える（§4「`Tabs`」）。名前を画面・選択肢・保存値でそろえ、別のタブのエラーを見落とさない（#542） |
 | 50 | **数百件から選ぶ選択が「検索 ＋ 候補の一覧 ＋ 選択済みの chip」になる**（#578） | RAG の文書インデックスの「ナレッジベース」の絞り込みは `SelectField`（検索できず、選んだ長い名前は「利用できるすべてのナ…」と省略）→ `SearchableSelectField`（ボタンは名前を折り返して全体を出す。押すと検索欄と候補の一覧を重ねて開き、右端に文書数、下に「51 / 300 件」）。同じ画面の状態の絞り込みは 11 個の `ToggleChip`（desktop でも 2 行、375px では 5 行に折り返した）→ 「状態」の `SelectField`（状態・ナレッジベース・検索欄が 1 行）。KB と業務ビューの複数選択（RAG 固有の `MultiSelectCombobox`: 枠の中に chip と枠なしの入力欄・先頭に塗りの虫眼鏡のタイル）→ `SearchableMultiSelect`（上に `SearchField` の検索欄と開閉の iconOnly、開いている間だけ下に候補の一覧、その下に選択済みの chip。chip の名前は省略せず折り返す。「表示中をすべて選択」「クリア」は文字のリンク → ghost の `Button`）。KB の選択の見出しの先頭のデータベースのアイコンは無くなり、「空の KB を隠す」のチェックも無くなる（作ったばかりの空の KB へ登録するため） | 数百件でも検索して選べ、全件を読まない（201 件以上はサーバー側の検索）。選んだ名前を切らない。キーボード・IME・読み上げを 3 製品で共通の部品にそろえる |
+| 51 | **一覧の検索欄が左（先頭）に移り、大量の候補から選ぶ一覧が 1 つの見た目になる**（#600） | RAG のナレッジベース・業務ビューの一覧: 左に状態のチップ、右端に検索欄（`sm:w-64`）、間が空く → `ListToolbar` で左に検索欄（残りを埋める）、その右に状態のチップ。文書の一覧: 右端の検索欄（`sm:ml-auto sm:w-64`）→ 左端に検索欄、その右に状態・ナレッジベース。ナレッジベースの「所属文書」: 検索なし、上に「追加する文書を検索」+ 選択欄 +「追加」（1 件ずつ・候補 100 件まで）→ 左に「所属文書を検索」、右に「文書を追加」。押すと下に `ListPicker`（候補は 100 件ずつ「さらに読み込む」、チェックで複数を選び「選択した N 件を追加」、追加済みは灰色で「追加済み」）。NL2SQL の業務プロファイルの許可する表・ビュー: 枠 392px 固定の中に手書きのチェックボックスの行（44px）と、スキーマごとの枠 → `ListPicker`（見出し・一覧・フッターの 3 段、一覧は 28rem / 375px では 17.5rem、行 3.5rem、スキーマの見出しは面の地、チェックは塗りの四角）。権限管理の「利用できる対象」: 2 列のチェックボックスの行（名前 + 説明 2 行）→ `ListPicker` の 1 列の行（名前 + 説明 1 行で省略、全文は title、状態のバッジは右端）。フッターの「さらに読み込む」は失敗中は出さず、Banner の「再試行」だけにする | 検索欄の位置を 3 製品でそろえる（UX 契約 page-archetypes.md「一覧のツールバー」）。数千〜数万件から検索して複数をまとめて選べる。キーボード（Tab 1 回で一覧に入り、矢印と Space）・読み上げを共通の部品にそろえる |
 
 ### API の非互換
 
@@ -864,6 +879,7 @@ QA に事前共有してください。**47点あります。**
 | `RowTitleButton`（#421） | **新規 export。** `RowTitleButton` / `RowTitleButtonProps` / `RowTitleButtonMaxLines`。RAG・Agent の `EntityLayout` の `RowTitleButton` は削除（RAG の `ariaLabel` / `dataAttributes` は、標準の `aria-label` / `data-*` をそのまま渡す）。行の中の要素として `data-row-title-button` を持つ |
 | `Tooltip`（#421） | `describe?: boolean` を追加（既定 true）。false で説明として結び付けず、吹き出しを `aria-hidden` にする |
 | `@engchina/production-ready-system-settings`（#421） | **新規 export** `SecurityIdentityRowTitleButton`（ID と表示名の 2 段表示を `RowTitleButton` に載せたもの） |
+| `ListToolbar` / `ListPicker` / `LoadMoreFooter`（#600） | **新規 export。** `ListToolbar` / `ListToolbarProps` / `ListPicker` / `ListPickerProps` / `ListPickerItem` / `ListPickerGroup` / `ListPickerLabels` / `ListPickerSearch` / `DEFAULT_LIST_PICKER_LABELS` / `LoadMoreFooter` / `LoadMoreFooterProps`。NL2SQL の `profileVirtualList.ts`（仮想スクロールの計算）は削除し、`packages/ui` の `lib/list-window.ts` に移した。`DbObjectSelectorFooter` の props は変えない（中身は `LoadMoreFooter`） |
 | `SearchableSelectField` / `SearchableMultiSelect`（#578） | **新規 export。** `SearchableSelectField` / `SearchableSelectFieldProps` / `SearchableMultiSelect` / `SearchableMultiSelectProps` / `SearchableSelectOption` / `SearchableSelectRemote` / `SearchableSelectLabels` / `SearchableMultiSelectLabels` / `DEFAULT_SEARCHABLE_SELECT_LABELS` / `filterSearchableOptions`。既存の部品の props は変えない |
 
 ---

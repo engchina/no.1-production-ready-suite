@@ -51,7 +51,7 @@ export function LoadMoreFooter({
   const retry = onRetry ?? onLoadMore;
   return (
     <div className={cn("grid min-w-0 gap-2", className)} data-testid={testId}>
-      <div className="flex min-h-[var(--button-height-sm)] flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-2 sm:min-h-[var(--button-height-sm)] sm:flex-row sm:items-center sm:justify-between">
         {refreshing && refreshingLabel ? (
           <p className="flex items-center gap-2 text-xs text-fg-muted" role="status">
             <Spinner size={14} className="text-accent-fg" />
