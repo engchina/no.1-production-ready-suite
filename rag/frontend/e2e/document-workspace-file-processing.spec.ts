@@ -892,6 +892,7 @@ test("プレビューの回転・拡大の後も強調が同じ位置に重な�
 for (const viewportCase of [
   { name: "1280 light", width: 1280, height: 800, theme: "light" },
   { name: "1920 dark", width: 1920, height: 1080, theme: "dark" },
+  { name: "1920 light", width: 1920, height: 1080, theme: "light" },
   { name: "375 dark", width: 375, height: 812, theme: "dark" },
   { name: "375 light", width: 375, height: 812, theme: "light" },
 ] as const) {
@@ -941,6 +942,15 @@ for (const viewportCase of [
       // xl 以上: 右ペインは左と同じ高さ。下限は今までの 1 画面分（上下 1rem ずつの余白を除く）。
       expect((await inspectorPane.boundingBox())!.height).toBeCloseTo(paneBox.height, 0);
       expect(paneBox.height).toBeGreaterThanOrEqual(screenHeight - 28 - 1);
+      const inspectorWidth = (await inspectorPane.boundingBox())!.width;
+      if (viewportCase.width >= 1536) {
+        // 2xl 以上はプレビュー 2 : 右 1 で、右は 35rem（14px ルートで 490px）を下限にする（#579）。
+        expect(inspectorWidth).toBeGreaterThanOrEqual(490 - 1);
+        expect(paneBox.width / inspectorWidth).toBeCloseTo(2, 1);
+      } else {
+        // xl（1280px〜1535px）は今までどおりほぼ半分ずつ。
+        expect(paneBox.width / inspectorWidth).toBeCloseTo(1.05, 1);
+      }
     } else {
       // xl 未満の縦積み: 1 画面分の枠に小さなページが浮かないよう、ページの形の高さに詰める。
       expect(paneBox.height).toBeLessThan(screenHeight - 28);

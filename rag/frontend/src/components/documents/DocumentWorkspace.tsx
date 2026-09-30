@@ -1189,7 +1189,12 @@ export function DocumentWorkspace({
           classification={doc.classification ?? null}
         />
 
-        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
+        {/* 左右の幅（#579）。ページの大きさは左ペインの幅で決まる（高さは幅とページの縦横比から。#559）。
+            - xl（1280px〜）: 今までどおりほぼ半分ずつ。右ペインの幅（約 450px）をこれ以上削ると、右のタブが入り切らない。
+            - 2xl（1536px〜）: プレビュー 2 : 右 1 にし、右は 35rem（右のタブ 4 つが 1 行に入る幅）を下限にする。
+              1920px で左は約 800 → 1040px、ペインの高さは A4 縦で約 1.55 倍（1052 → 1628px）になる。
+              右ペインの幅（本文・構造化要素・Chunk・抽出エクスポートの作業）を残すため、2 : 1 より広くはしない。 */}
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] 2xl:grid-cols-[minmax(0,2fr)_minmax(35rem,1fr)]">
           {/* 左ペイン: 原本プレビュー。高さは 1 画面分の固定ではなく、幅と文書のページの縦横比から決め、
               幅に合わせたときに 1 ページ全体（とツールバー・強調の状態の行）が縦スクロールなしで入る(#559)。
               - 決め方は DocumentPreview の sizing="page"（ページ画像は最も縦長のページ、寸法が分かるまでは A4 縦）。
