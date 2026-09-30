@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ANSWER_STAGE_LABEL,
+  ANSWER_STEP_STAGE_PREFIX,
   answerProgressLabel,
   answerStageLabel,
   currentAnswerStage,
@@ -64,5 +65,25 @@ describe("answer-progress（Issue 375）", () => {
     }
     const preparing = /ANSWER_STAGE_BEFORE_START_LABEL = "([^"]+)"/.exec(source)?.[1];
     expect(t("answer.progress.preparing")).toBe(preparing);
+  });
+
+  it("回答フローの各工程（Issue 593）は工程名をそのまま出し、入れ子の内側を今の工程にする", () => {
+    const docragSource = readFileSync(
+      resolve(__dirname, "../../../backend/app/rag/docrag_answer.py"),
+      "utf-8"
+    );
+    expect(docragSource).toContain(`ANSWER_STEP_STAGE_PREFIX = "${ANSWER_STEP_STAGE_PREFIX}"`);
+    expect(answerStageLabel("answer_step:文書検索（1回目）")).toBe("文書検索（1回目）");
+    expect(answerStageLabel("answer_step:")).toBe(t("search.stage.processing"));
+    const events: AnswerStageEvent[] = [
+      { stage: "docrag_answer", outcome: "started" },
+      { stage: "answer_step:質問の理解", outcome: "started" },
+      { stage: "answer_step:質問の理解", outcome: "success" },
+      { stage: "answer_step:文書検索", outcome: "started" },
+    ];
+    expect(answerProgressLabel(events)).toBe("回答を生成しています（文書検索）");
+    expect(answerProgressLabel(events.slice(0, 3))).toBe(
+      "回答を生成しています（根拠の検索と回答の生成）"
+    );
   });
 });

@@ -617,7 +617,7 @@ export const ja = {
   "settings.services.item.pipelineRetrieval": "検索方法",
   "settings.services.loadError": "サービス一覧を取得できませんでした。",
   "settings.retrieval.subtitle":
-    "業務ビューの検索で使う検索モードとオプションを選択します。",
+    "業務ビューの検索で使う検索モードとオプション、回答の検索と生成の既定、回答の記録と質問履歴を設定します。",
   "settings.retrieval.overview.title": "検索方法",
   "settings.retrieval.overview.description":
     "検索モード(意味/全文/融合/グラフ)と、任意のモードに合成できる検索オプション(クエリ拡張・gap-stop・業務適合加重・補正再検索)を選択します。ここで選ぶのはグローバル既定で、公開済みの業務ビューが上書きします。",
@@ -757,7 +757,7 @@ export const ja = {
     "検索根拠だけを使う回答スタイルを OCI Enterprise AI へ決定論で再マップし、手動選択できます。",
   "settings.generation.profile": "回答スタイル",
   "settings.generation.docragUnused":
-    "回答エンジンが DocRAG の業務ビューでは使われません。DocRAG は「回答プロンプト」画面の「DocRAG の回答生成テンプレート」で回答します（下の「DocRAG 回答の保存期間」は使われます）。",
+    "回答エンジンが DocRAG の業務ビューでは使われません。DocRAG は「回答プロンプト」画面の「DocRAG の回答生成テンプレート」で回答します。",
   "settings.generation.source": "設定元",
   "settings.generation.source.oracle": "Oracle グローバル設定",
   "settings.generation.structuredOutput": "構造化出力",
@@ -2421,9 +2421,32 @@ export const ja = {
   "settings.queryHistory.loadError": "質問履歴の設定を読み込めませんでした。",
   "search.querySuggestions.title": "よく聞かれている質問",
   "search.querySuggestions.count": "{count} 回聞かれています",
-  "settings.answerRecords.title": "DocRAG 回答の保存期間",
+  "settings.answerRecords.title": "回答の記録の保存期間",
   "settings.answerRecords.description":
-    "DocRAG で回答した質問・回答・根拠・実行記録を保存する期間です。期限を過ぎた回答は、次の回答の保存時とこの設定の保存時に削除します。",
+    "根拠照合・監査付きの回答エンジンで回答した質問・回答・根拠・実行記録を保存する期間です。期限を過ぎた回答は、次の回答の保存時とこの設定の保存時に削除します。",
+  "settings.answering.title": "回答の検索と生成",
+  "settings.answering.description":
+    "根拠照合・監査付きの回答エンジンで使う全体の既定です。公開済みの業務ビューの「検索・回答設定」で上書きできます。回答エンジンが「標準」の業務ビューでは使われません。",
+  "settings.answering.queryStrategy": "質問の拡張",
+  "settings.answering.queryStrategyHint":
+    "質問の言い回しでは届きにくい資料の表現を補う検索文の作り方です。自動ルーティングは質問ごとに AI が選びます。",
+  "settings.answering.answerFlow": "回答の生成方式",
+  "settings.answering.answerFlowHint":
+    "CRAG は検索結果を AI が評価し、根拠が足りなければ検索文を書き換えて探し直します（最大 3 回）。",
+  "settings.answering.neighborChildCount": "根拠の前後から加える数",
+  "settings.answering.neighborChildCountHint":
+    "根拠のチャンクの前後から文脈に加えるチャンクの数です。0 は加えません。",
+  "settings.answering.options": "回答の検索のオプション",
+  "settings.answering.rerank": "Rerank で検索候補を並べ替える",
+  "settings.answering.rerankHint":
+    "OCI Generative AI の Rerank で、検索候補を質問との関連の強さの順に並べ替えます。",
+  "settings.answering.screenLinking": "画面目録で操作画面を探す",
+  "settings.answering.screenLinkingHint":
+    "検索範囲の文書の画面見出しから、質問を解決する設定画面などを AI が選び、その説明を根拠の候補に加えます。「印字されない」のような症状の質問に向きます。回答ごとに AI の呼び出しが 1 回増えます。",
+  "settings.answering.save": "回答の設定を保存",
+  "settings.answering.saved": "回答の検索と生成の設定を保存しました。",
+  "settings.answering.saveError": "回答の検索と生成の設定を保存できませんでした。",
+  "settings.answering.loadError": "回答の検索と生成の設定を読み込めませんでした。",
   "settings.answerRecords.field": "保存期間",
   "settings.answerRecords.days": "{days} 日",
   "settings.answerRecords.unlimited": "無期限（手動で削除）",

@@ -19,7 +19,7 @@ from app.config import Settings, enterprise_ai_default_model_id, get_settings
 from app.rag.agentic_adapter import resolve_agentic_adapter
 from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.docrag_answer import DOCRAG_ANSWER_ENGINE, DocragAnswerEngine
+from app.rag.docrag_answer import DOCRAG_ANSWER_ENGINE, DocragAnswerEngine, answer_step_stage
 from app.rag.generation_adapter import (
     generation_repair_enabled,
     resolve_generation_adapter,
@@ -246,12 +246,17 @@ class RagPipeline:
         llm: OciEnterpriseAiClient | None = None,
         guardrails: GuardrailPolicy | None = None,
         settings: Settings | None = None,
+        *,
+        answer_model_id: str | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._genai = genai or OciGenAiClient(settings=self._settings)
         self._oracle = oracle or OracleClient(settings=self._settings)
         self._llm = llm or OciEnterpriseAiClient(settings=self._settings)
         self._guardrails = guardrails or GuardrailPolicy(self._settings)
+        # DocRAG の回答のモデル。チャットのモデル比較で ``llm`` と同じモデルを渡す(#593)。
+        # standard は ``llm`` で回答するため使わない。None は既定のモデル。
+        self._answer_model_id = answer_model_id or None
 
     async def run(
         self,
@@ -318,6 +323,14 @@ class RagPipeline:
             )
 
         if self._settings.rag_answer_engine == DOCRAG_ANSWER_ENGINE:
+            if request.retrieval_only:
+                return await self._run_docrag_retrieval(
+                    request,
+                    trace_id=trace_id,
+                    started_at=started_at,
+                    query_guardrail=query_guardrail,
+                    progress_callback=progress_callback,
+                )
             return await self._run_docrag(
                 request,
                 trace_id=trace_id,
@@ -1671,14 +1684,27 @@ class RagPipeline:
             oracle=self._oracle,
             genai=self._genai,
             runtime_knowledge_payload=self._settings.rag_runtime_knowledge or None,
+            answer_model_id=self._answer_model_id,
         )
+
+        async def emit_step(name: str, outcome: str, elapsed: float) -> None:
+            await _emit_stage_progress(
+                progress_callback,
+                trace_id=trace_id,
+                stage=answer_step_stage(name),
+                outcome=outcome,
+                elapsed=elapsed,
+                attributes={},
+            )
+
         # DocRAG の回答エンジンは検索と回答の生成（LLM）を中で行う。
-        # 進捗には 1 工程として出す（#375）。
+        # 進捗には全体を 1 工程（#375）とし、その中の各工程（質問の理解・文書検索など）も
+        # 入れ子の工程として出す（#593）。
         outcome = await _observe_stage(
             trace_id,
             request.mode.value,
             "docrag_answer",
-            engine.run(request),
+            engine.run(request, step_callback=emit_step if progress_callback is not None else None),
             progress_callback=progress_callback,
         )
         answer_guardrail = await asyncio.to_thread(
@@ -1750,6 +1776,60 @@ class RagPipeline:
             answer_replaced=final_answer != outcome.answer,
             # 品質評価が標準回答で比較するときに使う(応答には出さない。#591)。
         ).with_evaluation_input(outcome.evaluation_input)
+
+    async def _run_docrag_retrieval(
+        self,
+        request: SearchRequest,
+        *,
+        trace_id: str,
+        started_at: float,
+        query_guardrail: GuardrailResult,
+        progress_callback: SearchStageProgressCallback | None = None,
+    ) -> SearchResponse:
+        """DocRAG の検索だけを行い、回答を作らずに候補を引用として返す(#593)。
+
+        KB の検索テストとレシピの検索比較が使う(``SearchRequest.retrieval_only``)。LLM を呼ばず、
+        回答記録・質問履歴も保存しない。回答側の安全チェックは回答が無いので行わない。
+        """
+        if request.query != query_guardrail.sanitized_text:
+            request = request.model_copy(update={"query": query_guardrail.sanitized_text})
+        engine = DocragAnswerEngine(self._settings, oracle=self._oracle, genai=self._genai)
+        citations = await _observe_stage(
+            trace_id,
+            request.mode.value,
+            "retrieval",
+            engine.retrieve(request),
+            result_attributes=lambda chunks: {"retrieved_count": len(chunks)},
+            progress_callback=progress_callback,
+        )
+        diagnostics = SearchDiagnostics(
+            mode=request.mode.value,
+            retrieval_strategy="docrag",
+            retrieval_strategy_adapter="docrag_retrieval_only",
+            guardrail_degraded=query_guardrail.backend_degraded,
+        )
+        elapsed = elapsed_ms(started_at)
+        record_rag_request(request.mode.value, "success", elapsed / 1000, len(citations))
+        record_rag_search_audit(
+            trace_id=trace_id,
+            outcome="success",
+            mode=request.mode,
+            sanitized_query=query_guardrail.sanitized_text,
+            filters=request.filters,
+            findings=list(query_guardrail.findings),
+            retrieved_count=len(citations),
+            citations=citations,
+            elapsed_ms=elapsed,
+            diagnostics=diagnostics,
+        )
+        return SearchResponse(
+            answer="",
+            citations=citations,
+            trace_id=trace_id,
+            guardrail_warnings=query_guardrail.warnings,
+            elapsed_ms=elapsed,
+            diagnostics=diagnostics,
+        )
 
     async def _record_query_history(
         self, request: SearchRequest, question: str, *, chat: bool

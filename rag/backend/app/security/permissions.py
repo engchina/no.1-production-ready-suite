@@ -448,10 +448,13 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/settings/generation"): _any(MENU_SETTINGS_GENERATION),
     ("PATCH", "/settings/generation"): _any(MENU_SETTINGS_GENERATION),
     # 回答履歴の保存設定は、検索・チャットの回答履歴表示も読む。
-    ("GET", "/settings/answer-records"): _any(MENU_SETTINGS_GENERATION, MENU_SEARCH, MENU_CHAT),
-    ("PATCH", "/settings/answer-records"): _any(MENU_SETTINGS_GENERATION),
-    ("GET", "/settings/query-history"): _any(MENU_SETTINGS_GENERATION),
-    ("PATCH", "/settings/query-history"): _any(MENU_SETTINGS_GENERATION),
+    # 回答の検索と生成の全体既定・回答の記録の保存期間・質問履歴は「検索方法」の画面にある(#593)。
+    ("GET", "/settings/answering"): _any(MENU_SETTINGS_RETRIEVAL),
+    ("PATCH", "/settings/answering"): _any(MENU_SETTINGS_RETRIEVAL),
+    ("GET", "/settings/answer-records"): _any(MENU_SETTINGS_RETRIEVAL, MENU_SEARCH, MENU_CHAT),
+    ("PATCH", "/settings/answer-records"): _any(MENU_SETTINGS_RETRIEVAL),
+    ("GET", "/settings/query-history"): _any(MENU_SETTINGS_RETRIEVAL),
+    ("PATCH", "/settings/query-history"): _any(MENU_SETTINGS_RETRIEVAL),
     # DocRAG プロンプトは回答プロンプトと文書解析（抽出プロンプト）の両画面で編集する。
     ("GET", "/settings/docrag-prompts"): _any(MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS),
     ("PUT", "/settings/docrag-prompts/{key}"): _any(

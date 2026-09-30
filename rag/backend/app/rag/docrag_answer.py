@@ -65,6 +65,20 @@ _SCREEN_CATALOG_CACHE: dict[tuple[str, str], dict[str, list[str]]] = {}
 _SCREEN_CATALOG_CACHE_SIZE = 32
 # section_path の見出しの区切り(docrag_chunking が「 > 」でつないで保存する)。
 _SECTION_PATH_SEPARATOR = " > "
+# 回答フローの工程の通知(進捗)1 件を待つ上限(秒)。通知は補助なので、超えたら待たずに続ける。
+_STEP_NOTIFY_TIMEOUT_SECONDS = 5.0
+
+# 回答フローの工程の通知: (工程名, "started" / "success" / "error", 経過秒)。
+type StepCallback = Callable[[str, str, float], Awaitable[None]]
+# 回答フローの各工程を進捗(SSE の stage)へ出すときの名前の接頭辞。後ろに工程名
+# (「質問の理解」「文書検索（1回目）」など、利用者向けの日本語)を付け、
+# 画面と時間切れの文言はその工程名を出す(#593)。
+ANSWER_STEP_STAGE_PREFIX = "answer_step:"
+
+
+def answer_step_stage(name: str) -> str:
+    """回答フローの工程名を、進捗の工程の名前にする。"""
+    return f"{ANSWER_STEP_STAGE_PREFIX}{name}"
 
 
 @dataclass(frozen=True)
@@ -120,8 +134,13 @@ def build_docrag_settings(
     *,
     output_dir: Path,
     runtime_knowledge_path: Path | None = None,
+    answer_model_id: str | None = None,
 ) -> Any:
     """backend Settings から docrag Settings を作る(env や .env は読まない)。
+
+    ``answer_model_id`` を渡すと、回答のモデル(とその接続)をそのモデルにする。チャットの
+    モデル比較で、列ごとのモデルで答えるために使う(#593)。省略時は既定のモデル。Vision の
+    モデルは比較の対象ではないので、常に既定の Vision モデルを使う。
 
     業務 profile の JSON はここでは決まらない。`docrag.profiles` が process の環境変数
     `DOCRAG_DOMAIN_PROFILE_FILE`(未指定なら作業ディレクトリの `domain_profile.json`)を
@@ -130,7 +149,7 @@ def build_docrag_settings(
     from docrag.config import get_settings as docrag_get_settings
 
     # 回答のモデルと Vision のモデルは、それぞれのモデルの接続で呼ぶ(#533)。
-    answer_model = enterprise_ai_default_model_id(settings)
+    answer_model = answer_model_id or enterprise_ai_default_model_id(settings)
     vision_model = enterprise_ai_vision_model_id(settings)
     answer = enterprise_ai_connection_for_model(settings, answer_model)
     vision = enterprise_ai_connection_for_model(settings, vision_model)
@@ -175,13 +194,19 @@ class DocragAnswerEngine:
         oracle: OracleClient,
         genai: OciGenAiClient,
         runtime_knowledge_payload: Mapping[str, object] | None = None,
+        answer_model_id: str | None = None,
     ) -> None:
         self._settings = settings
         self._oracle = oracle
         self._genai = genai
         self._runtime_knowledge_payload = runtime_knowledge_payload
+        # 回答のモデル(チャットのモデル比較の列のモデル。#593)。None は既定のモデル。
+        self._answer_model_id = answer_model_id or None
 
-    async def run(self, request: SearchRequest) -> DocragAnswerOutcome:
+    async def run(
+        self, request: SearchRequest, *, step_callback: StepCallback | None = None
+    ) -> DocragAnswerOutcome:
+        """回答する。``step_callback`` は回答フローの各工程の開始・終了を受け取る(進捗。#593)。"""
         loop = asyncio.get_running_loop()
         state = _SearchState()
         try:
@@ -201,7 +226,10 @@ class DocragAnswerEngine:
                     encoding="utf-8",
                 )
             docrag_settings = build_docrag_settings(
-                self._settings, output_dir=work_dir, runtime_knowledge_path=runtime_path
+                self._settings,
+                output_dir=work_dir,
+                runtime_knowledge_path=runtime_path,
+                answer_model_id=self._answer_model_id,
             )
             result = await asyncio.to_thread(
                 self._answer_sync,
@@ -211,8 +239,29 @@ class DocragAnswerEngine:
                 state,
                 overrides,
                 business_names,
+                step_callback,
             )
         return _outcome_from_result(result, state)
+
+    async def retrieve(self, request: SearchRequest) -> list[RetrievedChunk]:
+        """回答を作らずに検索だけを行い、候補の chunk を順位順に返す(#593)。
+
+        回答の検索(``_search``)を原質問 1 本で呼ぶ。質問の理解・質問の拡張・rerank・CRAG・回答の
+        生成は行わず、LLM を呼ばない(embedding と Oracle の検索だけ)。KB の検索テストとレシピの
+        検索比較で、引用の候補を確かめるために使う。件数は ``request.top_k``。
+        """
+        state = _SearchState()
+        result = await self._search(
+            request,
+            state,
+            retrieval_queries=[request.query],
+            candidate_limit=max(1, int(request.top_k)),
+        )
+        return [
+            state.chunks[child.chunk_uid]
+            for child in result.child_chunks
+            if child.chunk_uid in state.chunks
+        ]
 
     async def _business_names(self, request: SearchRequest) -> list[str]:
         """検索範囲(``request.filters``)の文書の大分類の語の一覧を、1 回の回答で 1 回読む(#553)。
@@ -233,10 +282,12 @@ class DocragAnswerEngine:
         state: _SearchState,
         overrides: Mapping[str, str] | None = None,
         business_names: Sequence[str] = (),
+        step_callback: StepCallback | None = None,
     ) -> Any:
         from docrag.adapters.oci import parse_multimodal_response, parse_text_response
         from docrag.dependencies import AnswerDependencies, bind_dependencies
         from docrag.generation.answering import answer_question_result
+        from docrag.generation.execution_record import bind_step_listener
         from docrag.knowledge.classification import classification_filter_from_values
         from docrag.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
 
@@ -260,7 +311,19 @@ class DocragAnswerEngine:
                 lambda: self._screen_chunks(request, state, links, existing)
             ),
         )
-        with bind_dependencies(dependencies), prompt_overrides(overrides or {}):
+
+        def notify_step(name: str, outcome: str, elapsed: float) -> None:
+            # 工程の順序を保つため、イベントループで通知し終わるのを待つ(短い上限付き)。
+            if step_callback is not None:
+                asyncio.run_coroutine_threadsafe(
+                    _call(lambda: step_callback(name, outcome, elapsed)), loop
+                ).result(_STEP_NOTIFY_TIMEOUT_SECONDS)
+
+        with (
+            bind_dependencies(dependencies),
+            prompt_overrides(overrides or {}),
+            bind_step_listener(notify_step if step_callback is not None else None),
+        ):
             return answer_question_result(
                 request.query,
                 DOCRAG_SOURCE_RUN_ID,
