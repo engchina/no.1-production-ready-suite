@@ -212,6 +212,7 @@ function AssistantColumn({
         <AnswerText
           text={answer}
           streaming={streaming}
+          citations={citations}
           live
           cursor={
             streaming ? (

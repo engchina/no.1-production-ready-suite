@@ -687,7 +687,21 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
     sseStart,
     `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "経費の上限は 10 万円です。\n\n確認できる内容\n\n・1 回の申請の上限は 10 万円です。\n根拠：経費規程.pdf p.2" })}\n\n`,
     `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
-    `event: citations\ndata: ${JSON.stringify({ model_id: "m1", citations: [] })}\n\n`,
+    `event: citations\ndata: ${JSON.stringify({
+      model_id: "m1",
+      citations: [
+        {
+          document_id: "doc-1",
+          chunk_id: "doc-1:c2",
+          text: "1 回の申請の上限は 10 万円です。",
+          score: 0.5,
+          rerank_score: 0.9,
+          file_name: "経費規程.pdf",
+          category_name: null,
+          metadata: { page_start: 2 },
+        },
+      ],
+    })}\n\n`,
     `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
   ].join("");
   await mockChat(page, "ready", [], { streamBody });
@@ -721,6 +735,15 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await expect(answerText.getByRole("heading", { name: "確認できる内容" })).toBeVisible();
   await expect(answerText.getByRole("listitem")).toContainText("1 回の申請の上限は 10 万円です。");
   await expect(answerText.getByText("根拠：経費規程.pdf p.2")).toBeVisible();
+  // 根拠の行から、当たる引用の原文のプレビューを開ける（#657）。Esc で閉じるとフォーカスは根拠の行へ戻る。
+  const citationButton = answerText.getByRole("button", { name: "根拠：経費規程.pdf p.2 の原文を開く" });
+  await citationButton.focus();
+  await page.keyboard.press("Enter");
+  const preview = page.getByRole("dialog", { name: /経費規程\.pdf/ });
+  await expect(preview).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(preview).toBeHidden();
+  await expect(citationButton).toBeFocused();
 });
 
 test("IME の変換を確定する Enter では送信しない（#459）", async ({ page }) => {

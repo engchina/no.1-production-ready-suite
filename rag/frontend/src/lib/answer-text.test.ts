@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { parseAnswerText } from "./answer-text";
+import type { RetrievedChunk } from "./api";
+import { matchCitation, parseAnswerText, parseCitationLine } from "./answer-text";
 
 describe("parseAnswerText", () => {
   it("回答エンジンの本文を要約・節・説明・根拠に分ける", () => {
@@ -62,5 +63,56 @@ describe("parseAnswerText", () => {
     expect(parseAnswerText("検索された資料に回答を裏付ける十分な根拠がないため、回答できません。")).toBeNull();
     // 本文中に同じ語があっても、行全体が見出しでなければ節にしない。
     expect(parseAnswerText("確認できる内容は次のとおりです。")).toBeNull();
+  });
+});
+
+function chunk(fileName: string, pageStart?: number, pageEnd?: number): RetrievedChunk {
+  const metadata: RetrievedChunk["metadata"] = {};
+  if (pageStart != null) metadata.page_start = pageStart;
+  if (pageEnd != null) metadata.page_end = pageEnd;
+  return {
+    document_id: fileName,
+    chunk_id: `${fileName}:${pageStart}`,
+    text: "",
+    score: 0,
+    rerank_score: null,
+    file_name: fileName,
+    category_name: null,
+    metadata,
+  };
+}
+
+describe("parseCitationLine", () => {
+  it("根拠の行のファイル名と頁を読む", () => {
+    expect(parseCitationLine("根拠：受注 マニュアル.pdf p.12")).toEqual({ fileName: "受注 マニュアル.pdf", page: 12 });
+    // 頁の無い行（頁が空）も、ファイル名だけで当てる。
+    expect(parseCitationLine("根拠：規程.docx p.")).toEqual({ fileName: "規程.docx", page: null });
+    expect(parseCitationLine("根拠です")).toBeNull();
+  });
+});
+
+describe("matchCitation", () => {
+  const citations = [
+    chunk("manual.pdf", 2),
+    chunk("Manual.pdf", 5, 7),
+    chunk("manual.pdf", 6),
+    chunk("other.pdf", 6),
+  ];
+
+  it("同じファイル（大小文字・全角半角を区別しない）で頁の範囲に入る引用を順位の順に選ぶ", () => {
+    expect(matchCitation({ fileName: "ＭＡＮＵＡＬ.pdf", page: 6 }, citations)).toBe(1);
+    expect(matchCitation({ fileName: "manual.pdf", page: 2 }, citations)).toBe(0);
+  });
+
+  it("頁の範囲に入る引用が無ければ頁の近い引用、頁が無ければ同じファイルの先頭", () => {
+    expect(matchCitation({ fileName: "manual.pdf", page: 4 }, citations)).toBe(1);
+    expect(matchCitation({ fileName: "manual.pdf", page: null }, citations)).toBe(0);
+    // 頁の無い引用は 1 頁目として扱う（backend の _stored_child と同じ）。
+    expect(matchCitation({ fileName: "a.pdf", page: 1 }, [chunk("a.pdf")])).toBe(0);
+  });
+
+  it("同じファイルの引用が無ければ -1", () => {
+    expect(matchCitation({ fileName: "missing.pdf", page: 1 }, citations)).toBe(-1);
+    expect(matchCitation({ fileName: "manual.pdf", page: 1 }, [])).toBe(-1);
   });
 });
