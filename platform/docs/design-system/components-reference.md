@@ -1086,6 +1086,36 @@ export declare function BlockedPageNotice(props: BlockedPageNoticeProps): JSX.El
 - 一覧は `position: fixed` です。`transform` / `filter` / `contain` を持つ要素（固定の containing block）をモーダルの外枠にすると位置がずれるため、モーダルの中央寄せは flex で行います（`ConfirmDialog` と同じ）。
 - 純粋関数 `computeFloatingMenuLayout`（位置と反転）・`floatingLayerZIndex`（重なり順）・`selectPortalContainer`（描く先）・`findTypeaheadIndex` / `typeaheadStartIndex`（typeahead）・`nearestScrollTop`（強調中の選択肢のスクロール）・`isInsideAny`（外側クリック）は `packages/ui/tests/select-field.test.tsx` が確かめます（操作メニューの左右の反転は `packages/ui/tests/floating-menu.test.ts`）。パッケージのルートからは export しません。
 
+### SelectField — `disabled` / `labelHidden` / `data-testid`（#631）
+
+製品のネイティブの `<select>` を置き換えるために、次の props を足しました（既存の props・id・aria は変えていません）。
+
+```tsx
+<SelectField
+  id="relation-source-key"
+  label={t("expression.sourceKey")}
+  value={key}
+  options={columnOptions}
+  onValueChange={setKey}
+  disabled={relationSource !== "MANUAL"}   // 無効
+  labelHidden                              // 表の行などで、ラベルを読み上げだけにする
+  data-testid="relation-source-key"        // ボタン（role=combobox）に付く
+  size="sm"
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| `disabled` はボタンのネイティブの `disabled`（`aria-disabled` ではない）。押しても・矢印キー・Enter / Space・typeahead でも開かない。開いているときに無効になったら一覧を閉じる | 無効な選択欄は操作できないので Tab で止めない（ネイティブの select と同じ）。`Button` の `loading` と違い、フォーカス中に無効になる流れ（押した直後の処理中）が無い |
+| 無効の地・文字は `--color-surface-disabled` / `--color-fg-disabled`、シェブロンも `--color-fg-disabled`、カーソルは `not-allowed`。ホバーの地は有効なときだけ（`enabled:hover:`）。枠線は残す | `TextField` の無効と同じ見た目にし、押せそうに見せない。欄の形は残して、並んだ欄と位置がそろう |
+| `labelHidden` はラベルを `sr-only` にし、`aria-labelledby` で読み上げ名は残す | 表の行・一覧のツールバーのように周りで目的が分かる所だけに使う（`TextField` の `labelHidden` と同じ）。フォームの欄では使わない |
+| ボタンと選択肢（`role=option`）に値の `data-value` を出す | e2e が値で選び（`selectOption` の代わり）、選択中の値を確かめられる（`toHaveValue` の代わり）。表示には使わない |
+| `SearchableSelectField` の無効も同じ見た目・動き（ホバーは有効なときだけ、シェブロンと文字の色、開いているときに無効になったら閉じる）にそろえた | 2 つの選択欄で無効の見え方が違わないように |
+
+- ネイティブの `<select>` は adherence の lint が検出します。`<optgroup>` や選べない選択肢（`<option disabled>`）が要るなど `SelectField` で表せない所だけ、理由を添えて局所的に除外し、`fieldControlClassName({ size, width })` で見た目をそろえます。
+- e2e は combobox を押して一覧の選択肢を選びます（NL2SQL `tests/e2e/_helpers/select-field.ts`・Agent `e2e/fixtures/select-field.ts` の `chooseSelectFieldOption(combobox, "値" | { label })` / `expectSelectFieldValue`）。
+- 単体テストは `packages/ui/tests/select-field-disabled.test.tsx`。
+
 ---
 
 ## PageHeader の「その他の操作」メニュー — 変更（#363）
@@ -2073,7 +2103,7 @@ import { FieldActionRow, SelectField, TextField, TextareaField, fieldControlClas
   <TextareaField id="chat-composer" label="メッセージ" labelHidden rows={2} … />
 </FieldActionRow>
 
-// ネイティブの select / input を残す画面（<optgroup> など）は、同じ見た目・高さ・幅のクラスを使う
+// ネイティブの select / input を例外として残す画面（<optgroup> など。#631 で理由付きの lint の除外が要る）は、同じ見た目・高さ・幅のクラスを使う
 <select className={fieldControlClassName({ size: "lg", width: "sm" })}>…</select>
 ```
 
@@ -2087,7 +2117,7 @@ width?: FieldWidth;   // 既定なし（親の幅いっぱい）。欄の外枠�
 
 export function FieldActionRow(props: {
   children: ReactNode;   // 入力欄 1 つ（行の残りを埋める）
-  actions: ReactNode;    // 操作（入力欄と同じ size の Button）
+  actions: ReactNode;    // 操作（入力欄と同じ size の Button）。null / false なら操作の列を描かない（#631）
   footer?: ReactNode;    // 補足・エラー（欄の helper / error の代わり）
   className?: string;
   "data-testid"?: string;

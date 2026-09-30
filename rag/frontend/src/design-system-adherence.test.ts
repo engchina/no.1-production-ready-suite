@@ -11,6 +11,7 @@ const FOCUS_RING = "フォーカスの表示を ring";
 const HANDWRITTEN_SEARCH = "アイコン付きの入力欄（検索欄）を手書きしない";
 const HANDWRITTEN_DISCLOSURE = "開閉できる領域は <details> / <summary> を手書きせず";
 const HANDWRITTEN_TEXTAREA = "複数行の入力欄は <textarea> を手書きせず";
+const NATIVE_SELECT = "選択欄はネイティブの <select> を手書きせず";
 const LIST_SEARCH = "一覧の絞り込みの検索欄は SearchField";
 const OPTIONAL_MARKER = "任意の欄を「(任意)」や placeholder で示さない";
 const HANDWRITTEN_REQUIRED = "必須の表示を手書きしない";
@@ -129,6 +130,19 @@ const d = <div data-textarea="x">本文</div>;
   });
 });
 
+describe("adherence: ネイティブの選択欄（#631）", () => {
+  it("<select> を検出し、SelectField・SearchableSelectField・option だけの要素は許す", async () => {
+    const messages = await lint(`
+const a = <select value={v} onChange={onChange}><option value="a">A</option></select>;
+const b = <select className={fieldControlClassName({ width: "sm" })} disabled value={v} onChange={onChange} />;
+const c = <SelectField id="r" label="リージョン" value={v} options={options} onValueChange={setV} disabled />;
+const d = <SearchableSelectField id="kb" label="ナレッジベース" value={v} options={options} onValueChange={setV} />;
+const e = <div data-select="x"><option value="a">A</option></div>;
+`);
+    expect(linesWith(messages, NATIVE_SELECT)).toEqual([2, 3]);
+  });
+});
+
 describe("adherence: 一覧の絞り込みの検索欄は SearchField（#535）", () => {
   it("type=search の TextField と input を検出し、SearchField・重い検索の TextField は許す", async () => {
     const messages = await lint(`
@@ -225,7 +239,7 @@ const b = <SelectField id="s" label="状態" value="" options={[]} onValueChange
 const c = <TextField id="t" label="名前" width="full" className="w-full max-w-full" />;
 const d = <input type="checkbox" className="h-4 w-4" />;
 const e = <input type={multi ? "checkbox" : "radio"} className="mt-1 h-4 w-4" />;
-const g = <select className={fieldControlClassName({ size: "lg", width: "xs" })}>x</select>;
+const g = <input type="number" className={fieldControlClassName({ size: "lg", width: "xs" })} />;
 const h = <div className="min-h-11 w-48">x</div>;
 const i = <TextareaField id="q" label="質問" rows={2} />;
 `);

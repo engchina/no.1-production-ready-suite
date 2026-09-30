@@ -87,6 +87,10 @@
             "message": "複数行の入力欄は <textarea> を手書きせず TextareaField（@engchina/production-ready-ui）を使う。ラベル・必須・エラー・補足・文字数・枠線・フォーカスの表示を TextField と同じ 1 つの実装にそろえる（#584）。元の文書の表を再現して編集するグリッドのセルなど TextareaField で表せない所だけ、理由を添えて局所的に除外する。"
           },
           {
+            "selector": "JSXOpeningElement[name.name='select']",
+            "message": "選択欄はネイティブの <select> を手書きせず SelectField（@engchina/production-ready-ui。候補が数十件を超えるなら SearchableSelectField）を使う。開いた一覧の見た目・キーボード操作・typeahead・ダークテーマの一覧の面・ラベル・補足・エラーの関連付け・無効（disabled）を 1 つの実装にそろえる（#631）。<optgroup> や選べない選択肢（<option disabled>）が要るなど SelectField で表せない所だけ、理由を添えて局所的に除外し、fieldControlClassName({ size, width }) で見た目をそろえる。"
+          },
+          {
             "selector": "JSXOpeningElement[name.name='details']",
             "message": "開閉できる領域は <details> / <summary> を手書きせず Disclosure（@engchina/production-ready-ui）を使う。手書きすると開閉の Chevron・見出し全体の押せる領域・フォーカスの表示が漏れる（#397）。Disclosure で表せない所（展開できる表の行など）だけ理由を添えて局所的に除外し、状態は DisclosureChevron で示す。"
           },
