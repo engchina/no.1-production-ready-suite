@@ -502,6 +502,7 @@ test("業務ビューのエディタは未保存の変更があるとブラウ�
   await page.goForward();
   await expect(page).toHaveURL(/\?id=bv-1$/);
   await page.getByRole("button", { name: "変更を破棄" }).click();
+  await page.getByRole("tab", { name: "ドメインキーワード" }).click();
   await page.locator("#domain-keywords-editor").fill("経費精算");
   await page.goBack();
   const discardDialog = page.getByRole("alertdialog", { name: "変更を破棄しますか" });

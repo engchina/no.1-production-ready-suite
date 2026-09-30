@@ -38,7 +38,8 @@ export function BusinessViewKnowledgePanel({
 }: {
   businessViewId: string;
 }) {
-  const [tab, setTab] = useState<KnowledgeTab>("domainKeywords");
+  // よく使う Approved FAQ を先頭・既定のタブにする(#636)。
+  const [tab, setTab] = useState<KnowledgeTab>("approvedFaq");
   return (
     <Card>
       <CardHeader>
@@ -54,11 +55,11 @@ export function BusinessViewKnowledgePanel({
           value={tab}
           onChange={(value) => setTab(value as KnowledgeTab)}
           items={[
+            { id: "approvedFaq", label: t("businessViews.faq.title") },
             {
               id: "domainKeywords",
               label: t("businessViews.domainKeywords.title"),
             },
-            { id: "approvedFaq", label: t("businessViews.faq.title") },
             { id: "runtimeKnowledge", label: t("businessViews.runtime.title") },
           ]}
         />
