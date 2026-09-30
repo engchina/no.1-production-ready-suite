@@ -32,7 +32,6 @@ import {
   RowTitleButton,
   ClearActionButton,
   SearchField,
-  TextareaField,
   TextField,
   ListToolbar,
 } from "@engchina/production-ready-ui";
@@ -56,7 +55,6 @@ import {
   useEntityEditorDraft,
 } from "@/components/layout/use-entity-editor-draft";
 import { useAuth } from "@/components/security/AuthProvider";
-import { DocragUnusedNote } from "@/components/settings/DocragUnusedNote";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
@@ -67,12 +65,8 @@ import {
   type BusinessViewDetail,
   type BusinessViewStatus,
   type BusinessViewSummary,
-  type GenerationProfileName,
   type GuardrailPolicyName,
   type KnowledgeBaseQueryConfig,
-  type PostRetrievalPipelineName,
-  type RetrievalModeName,
-  type RetrievalStrategyName,
 } from "@/lib/api";
 import { useEditorRoute } from "@/lib/editor-route";
 import type { KnowledgeBaseSelectionHealth } from "@/lib/knowledge-base-refs";
@@ -161,62 +155,6 @@ const SCOPE_ERROR_ID = "business-view-scope-error";
 const NAME_MAX_LENGTH = 256;
 const DESCRIPTION_MAX_LENGTH = 2000;
 
-const RETRIEVAL_OPTIONS: SelectFieldOption<RetrievalModeName>[] = [
-  { value: "hybrid_rrf", label: t("settings.retrieval.strategy.hybrid_rrf") },
-  { value: "vector", label: t("settings.retrieval.strategy.vector") },
-  { value: "keyword", label: t("settings.retrieval.strategy.keyword") },
-  { value: "graph_augmented", label: t("settings.retrieval.strategy.graph_augmented") },
-  {
-    value: "reasoning_tree_search",
-    label: t("settings.retrieval.strategy.reasoning_tree_search"),
-  },
-];
-
-// legacy 複合戦略 -> 検索モード + 明示トグルの読み替え(backend の decompose と同義)。
-// 編集フォームへ読み込む時点で正規化するため、保存は常に新形式になる。
-const LEGACY_RETRIEVAL_MAP: Partial<
-  Record<
-    RetrievalStrategyName,
-    { mode: RetrievalModeName; toggles: Partial<KnowledgeBaseQueryConfig> }
-  >
-> = {
-  business_context_strict: {
-    mode: "hybrid_rrf",
-    toggles: { retrieval_gap_stop: true, retrieval_business_fit_weighting: true },
-  },
-  corrective_multi_query: {
-    mode: "hybrid_rrf",
-    toggles: { retrieval_query_expansion: true, retrieval_corrective: true },
-  },
-};
-
-function normalizeBusinessViewConfig(config: BusinessViewConfig): BusinessViewConfig {
-  // 旧保存 JSON に無いトグルは null(継承)で補完してから legacy を読み替える。
-  const query = { ...emptyQueryConfig(), ...config.query };
-  const legacy = query.retrieval_strategy ? LEGACY_RETRIEVAL_MAP[query.retrieval_strategy] : undefined;
-  if (!legacy) return { ...config, query };
-  return {
-    ...config,
-    query: { ...query, retrieval_strategy: legacy.mode, ...legacy.toggles },
-  };
-}
-const GROUNDING_OPTIONS: SelectFieldOption<PostRetrievalPipelineName>[] = [
-  { value: "custom", label: t("settings.grounding.pipeline.custom") },
-  { value: "lean", label: t("settings.grounding.pipeline.lean") },
-  { value: "verified_context", label: t("settings.grounding.pipeline.verified_context") },
-  { value: "context_enrich", label: t("settings.grounding.pipeline.context_enrich") },
-  { value: "compact", label: t("settings.grounding.pipeline.compact") },
-  { value: "full_governed", label: t("settings.grounding.pipeline.full_governed") },
-];
-const GENERATION_OPTIONS: SelectFieldOption<GenerationProfileName>[] = [
-  { value: "grounded_concise", label: t("settings.generation.profile.grounded_concise") },
-  { value: "detailed_cited", label: t("settings.generation.profile.detailed_cited") },
-  { value: "strict_extractive", label: t("settings.generation.profile.strict_extractive") },
-  { value: "structured_json", label: t("settings.generation.profile.structured_json") },
-  { value: "bilingual_ja_en", label: t("settings.generation.profile.bilingual_ja_en") },
-  { value: "inline_cited", label: t("settings.generation.profile.inline_cited") },
-  { value: "custom", label: t("settings.generation.profile.custom") },
-];
 const DOCRAG_QUERY_STRATEGY_OPTIONS: SelectFieldOption<DocragQueryStrategyName>[] = (
   [
     "auto_routing",
@@ -243,17 +181,12 @@ const GUARDRAIL_OPTIONS: SelectFieldOption<GuardrailPolicyName>[] = [
   { value: "regulated", label: t("settings.guardrail.policy.regulated") },
 ];
 function emptyQueryConfig(): KnowledgeBaseQueryConfig {
-  return {
-    retrieval_strategy: null,
-    retrieval_query_expansion: null,
-    retrieval_query_expansion_llm: null,
-    retrieval_gap_stop: null,
-    retrieval_corrective: null,
-    retrieval_business_fit_weighting: null,
-    post_retrieval_pipeline: null,
-    generation_profile: null,
-    guardrail_policy: null,
-  };
+  return { guardrail_policy: null };
+}
+
+/** 旧保存 JSON に無い項目は null(継承)で補う。 */
+function normalizeBusinessViewConfig(config: BusinessViewConfig): BusinessViewConfig {
+  return { ...config, query: { ...emptyQueryConfig(), ...config.query } };
 }
 
 function emptyConfig(): BusinessViewConfig {
@@ -261,15 +194,13 @@ function emptyConfig(): BusinessViewConfig {
     version: 1,
     knowledge_base_ids: [],
     query: emptyQueryConfig(),
-    system_prompt: null,
-    default_language: null,
     serving_mode: "fused",
   };
 }
 
 
 /**
- * 業務ビュー(Business View)管理。複数 KB を業務視点で束ね、検索・回答方針と persona を設定する。
+ * 業務ビュー(Business View)管理。複数 KB を業務視点で束ね、回答の設定と安全チェックを上書きする。
  * A 型（一覧 → 全画面エディタ）。編集対象は URL の `?id=`（なし = 一覧 / `new` = 新規 / `<id>` = 編集）。
  */
 export function BusinessViewManagementClient() {
@@ -770,9 +701,6 @@ function BusinessViewEditor({
       ? t("businessViews.knowledgeBasesRequired")
       : null;
 
-  // 回答(DocRAG の回答フロー。#594)が読まない欄に付ける補足(#300)。欄は #595 で削除する。
-  const docragUnusedNote = t("businessViews.answerUnused");
-
   const updateQuery = (patch: Partial<KnowledgeBaseQueryConfig>) =>
     setConfig((current) => ({ ...current, query: { ...current.query, ...patch } }));
 
@@ -973,67 +901,6 @@ function BusinessViewEditor({
                 <p className="text-xs text-fg-muted">{t("businessViews.query.helper")}</p>
                 <div className="space-y-3">
                   <QuerySelectRow
-                    id="business-view-retrieval"
-                    note={docragUnusedNote}
-                    label={t("businessViews.field.retrieval")}
-                    value={config.query.retrieval_strategy as RetrievalModeName | null}
-                    options={RETRIEVAL_OPTIONS}
-                    defaultOnOverride="vector"
-                    disabled={locked}
-                    onChange={(value) => updateQuery({ retrieval_strategy: value })}
-                  />
-                  <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
-                    <h3 className="text-sm font-medium text-fg">
-                      {t("settings.retrieval.toggles")}
-                    </h3>
-                    <div className="min-w-0 space-y-2">
-                      {docragUnusedNote ? (
-                        <DocragUnusedNote>{docragUnusedNote}</DocragUnusedNote>
-                      ) : null}
-                      <QueryToggleRow
-                        label={t("settings.retrieval.queryExpansion")}
-                        value={config.query.retrieval_query_expansion}
-                        disabled={locked}
-                        onChange={(value) => updateQuery({ retrieval_query_expansion: value })}
-                      />
-                      <QueryToggleRow
-                        label={t("settings.retrieval.toggle.queryExpansionLlm")}
-                        value={config.query.retrieval_query_expansion_llm}
-                        disabled={locked}
-                        onChange={(value) => updateQuery({ retrieval_query_expansion_llm: value })}
-                      />
-                      <QueryToggleRow
-                        label={t("settings.retrieval.gapStop")}
-                        value={config.query.retrieval_gap_stop}
-                        disabled={locked}
-                        onChange={(value) => updateQuery({ retrieval_gap_stop: value })}
-                      />
-                      <QueryToggleRow
-                        label={t("settings.retrieval.businessFit")}
-                        value={config.query.retrieval_business_fit_weighting}
-                        disabled={locked}
-                        onChange={(value) => updateQuery({ retrieval_business_fit_weighting: value })}
-                      />
-                      <QueryToggleRow
-                        label={t("settings.retrieval.corrective")}
-                        value={config.query.retrieval_corrective}
-                        disabled={locked}
-                        onChange={(value) => updateQuery({ retrieval_corrective: value })}
-                      />
-                    </div>
-                  </div>
-                  <QuerySelectRow
-                    id="business-view-grounding"
-                    note={docragUnusedNote}
-                    label={t("businessViews.field.grounding")}
-                    value={config.query.post_retrieval_pipeline}
-                    options={GROUNDING_OPTIONS}
-                    defaultOnOverride="verified_context"
-                    disabled={locked}
-                    onChange={(value) => updateQuery({ post_retrieval_pipeline: value })}
-                  />
-                  <p className="text-xs text-fg-muted">{t("businessViews.docrag.helper")}</p>
-                  <QuerySelectRow
                     id="business-view-docrag-query-strategy"
                     label={t("businessViews.field.docragQueryStrategy")}
                     value={config.query.docrag_query_strategy ?? null}
@@ -1089,64 +956,6 @@ function BusinessViewEditor({
                           updateQuery({ docrag_screen_linking_enabled: value })
                         }
                       />
-                    </div>
-                  </div>
-                  <QuerySelectRow
-                    id="business-view-generation"
-                    note={docragUnusedNote}
-                    label={t("businessViews.field.generation")}
-                    value={config.query.generation_profile}
-                    options={GENERATION_OPTIONS}
-                    defaultOnOverride="detailed_cited"
-                    disabled={locked}
-                    onChange={(value) => updateQuery({ generation_profile: value })}
-                  />
-                  <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
-                    <h3 className="text-sm font-medium text-fg">
-                      {t("businessViews.field.prompt")}
-                    </h3>
-                    <div className="min-w-0 space-y-3">
-                      {docragUnusedNote ? (
-                        <DocragUnusedNote id="business-view-prompt-docrag-note">
-                          {docragUnusedNote}
-                        </DocragUnusedNote>
-                      ) : null}
-                      <TextareaField
-                        id="business-view-system-prompt"
-                        label={t("businessViews.field.systemPrompt")}
-                        helper={t("businessViews.field.systemPromptHelper")}
-                        value={config.system_prompt ?? ""}
-                        onChange={(event) =>
-                          setConfig((current) => ({
-                            ...current,
-                            system_prompt: event.target.value || null,
-                          }))
-                        }
-                        placeholder={t("businessViews.field.systemPromptPlaceholder")}
-                        aria-describedby={
-                          docragUnusedNote ? "business-view-prompt-docrag-note" : undefined
-                        }
-                        rows={3}
-                        disabled={locked}
-                      />
-                      <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
-                        <TextField
-                          id="business-view-language"
-                          label={t("businessViews.field.defaultLanguage")}
-                          value={config.default_language ?? ""}
-                          onValueChange={(value) =>
-                            setConfig((current) => ({
-                              ...current,
-                              default_language: value || null,
-                            }))
-                          }
-                          placeholder={t("businessViews.field.defaultLanguagePlaceholder")}
-                          aria-describedby={
-                            docragUnusedNote ? "business-view-prompt-docrag-note" : undefined
-                          }
-                          disabled={locked}
-                        />
-                      </div>
                     </div>
                   </div>
                   <QuerySelectRow
@@ -1265,7 +1074,6 @@ function QuerySelectRow<T extends string>({
   options,
   defaultOnOverride,
   disabled = false,
-  note = null,
   onChange,
 }: {
   id: string;
@@ -1274,23 +1082,14 @@ function QuerySelectRow<T extends string>({
   options: readonly SelectFieldOption<T>[];
   defaultOnOverride: T;
   disabled?: boolean;
-  /** 欄の補足(例: 現在の回答では使われない)。入力は残す。 */
-  note?: string | null;
   onChange: (value: T | null) => void;
 }) {
   const overriding = value !== null;
-  const noteId = note ? `${id}-note` : undefined;
   return (
     <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
       <h3 className="text-sm font-medium text-fg">{label}</h3>
       <div className="min-w-0 space-y-2">
-        {note ? <DocragUnusedNote id={noteId}>{note}</DocragUnusedNote> : null}
-        <div
-          className="flex flex-wrap gap-1"
-          role="group"
-          aria-label={label}
-          aria-describedby={noteId}
-        >
+        <div className="flex flex-wrap gap-1" role="group" aria-label={label}>
           <ToggleChip selected={!overriding} disabled={disabled} onClick={() => onChange(null)}>
             {t("businessViews.inherit")}
           </ToggleChip>

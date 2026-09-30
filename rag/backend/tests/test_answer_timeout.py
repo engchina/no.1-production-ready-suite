@@ -46,16 +46,16 @@ def test_answer_timeout_env_example_documents_setting() -> None:
 
 
 def test_answer_timeout_message_names_stage_and_retry() -> None:
-    message = answer_timeout_message("agentic_multi_hop", 300)
+    message = answer_timeout_message("docrag_history_rewrite", 300)
     assert "5 分" in message
-    assert "追加の検索の計画" in message
+    assert "会話を踏まえた質問の書き換え" in message
     assert "もう一度送信してください" in message
-    assert "90 秒" in answer_timeout_message("generation", 90)
-    assert "回答の生成" in answer_timeout_message("generation", 90)
+    assert "90 秒" in answer_timeout_message("docrag_answer", 90)
+    assert "根拠の検索と回答の生成" in answer_timeout_message("docrag_answer", 90)
     # 開始前・未知の工程・工程の中の時間切れ（上限の秒数は出さない）。
     assert "検索の準備" in answer_timeout_message(None, 30)
     assert "（時間切れになった工程: 処理）" in answer_timeout_message("unknown_stage", 30)
-    assert "時間内に終わりませんでした" in answer_timeout_message("generation", None)
+    assert "時間内に終わりませんでした" in answer_timeout_message("docrag_answer", None)
     # 回答フローの各工程（#593）は工程名をそのまま出す。
     assert "（時間切れになった工程: 文書検索（1回目））" in answer_timeout_message(
         "answer_step:文書検索（1回目）", 30
@@ -63,20 +63,9 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
     assert "（時間切れになった工程: 処理）" in answer_timeout_message("answer_step:", 30)
 
 
-def test_stage_labels_cover_llm_stages() -> None:
-    for stage in (
-        "agentic_planning",
-        "agentic_multi_hop",
-        "agentic_multi_hop_retrieval",
-        "crag_rewrite",
-        "crag_retrieval",
-        "corrective_retrieval",
-        "query_expansion",
-        "docrag_history_rewrite",
-        "docrag_answer",
-        "generation",
-    ):
-        assert stage in ANSWER_STAGE_LABELS
+def test_stage_labels_cover_answer_stages() -> None:
+    """進捗の工程は回答の工程 2 つと検索だけの工程(旧 standard の工程は #595 で削除)。"""
+    assert set(ANSWER_STAGE_LABELS) == {"retrieval", "docrag_history_rewrite", "docrag_answer"}
 
 
 async def test_stage_tracker_follows_nested_stages() -> None:
@@ -87,16 +76,16 @@ async def test_stage_tracker_follows_nested_stages() -> None:
 
     tracker = StageTracker(inner)
     assert tracker.current_stage is None
-    await tracker(_progress("crag_retrieval", "started"))
-    await tracker(_progress("context_expansion", "started"))
-    assert tracker.current_stage == "context_expansion"
-    await tracker(_progress("context_expansion", "success"))
+    await tracker(_progress("docrag_answer", "started"))
+    await tracker(_progress("answer_step:文書検索（1回目）", "started"))
+    assert tracker.current_stage == "answer_step:文書検索（1回目）"
+    await tracker(_progress("answer_step:文書検索（1回目）", "success"))
     # 入れ子の内側が終わったら外側の工程に戻る。
-    assert tracker.current_stage == "crag_retrieval"
-    await tracker(_progress("crag_retrieval", "success"))
+    assert tracker.current_stage == "docrag_answer"
+    await tracker(_progress("docrag_answer", "success"))
     # 実行中の工程がなければ、最後に通知された工程。
-    assert tracker.current_stage == "crag_retrieval"
-    assert forwarded[0] == "crag_retrieval:started"
+    assert tracker.current_stage == "docrag_answer"
+    assert forwarded[0] == "docrag_answer:started"
     assert len(forwarded) == 4
 
 
@@ -104,16 +93,16 @@ async def test_run_answer_with_timeout_reports_last_stage() -> None:
     settings = Settings(rag_answer_timeout_seconds=0.05)
 
     async def slow(tracker: StageTracker) -> str:
-        await tracker(_progress("agentic_planning", "started"))
+        await tracker(_progress("docrag_history_rewrite", "started"))
         await asyncio.sleep(1)
         return "done"
 
     with pytest.raises(AnswerTimeoutError) as caught:
         await run_answer_with_timeout(slow, settings)
 
-    assert caught.value.stage == "agentic_planning"
+    assert caught.value.stage == "docrag_history_rewrite"
     assert caught.value.timeout_seconds == 0.05
-    assert "検索の計画" in caught.value.user_message
+    assert "会話を踏まえた質問の書き換え" in caught.value.user_message
     assert isinstance(caught.value, TimeoutError)
     assert isinstance(caught.value.original_error, TimeoutError)
 
@@ -123,13 +112,13 @@ async def test_run_answer_with_timeout_wraps_inner_timeout_without_limit() -> No
     settings = Settings(rag_answer_timeout_seconds=60)
 
     async def inner_timeout(tracker: StageTracker) -> str:
-        await tracker(_progress("generation", "started"))
+        await tracker(_progress("docrag_answer", "started"))
         raise TimeoutError
 
     with pytest.raises(AnswerTimeoutError) as caught:
         await run_answer_with_timeout(inner_timeout, settings)
 
-    assert caught.value.stage == "generation"
+    assert caught.value.stage == "docrag_answer"
     assert caught.value.timeout_seconds is None
     assert "時間内に終わりませんでした" in caught.value.user_message
 

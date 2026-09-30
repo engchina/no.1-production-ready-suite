@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pr_system_settings.auth.errors import SecurityApiError
 
-from app.clients.oracle import CustomPromptNotConfiguredError, OracleClient
+from app.clients.oracle import OracleClient
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 from app.rag.audit import record_rag_search_audit
@@ -22,13 +22,12 @@ from app.rag.business_view_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.docrag_answer import evaluate_answer_record
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
-from app.rag.generation_config import (
-    apply_generation_profile,
-    resolve_oracle_generation_settings,
-    validate_effective_generation_settings,
+from app.rag.observability import (
+    SEARCH_METRIC_MODE,
+    elapsed_ms,
+    new_trace_id,
+    record_rag_request,
 )
-from app.rag.generation_contract import GenerationContractError
-from app.rag.observability import elapsed_ms, new_trace_id, record_rag_request
 from app.rag.pipeline import RagPipeline, SearchStageProgress
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
@@ -69,7 +68,8 @@ async def search(
 ) -> ApiResponse[SearchResponse]:
     """自然言語クエリで RAG 検索を実行する。
 
-    フロー: 埋め込み -> Oracle AI Vector Search -> Cohere Rerank v4 fast -> LLM 回答生成。
+    回答は DocRAG の回答フロー(質問の理解 -> Oracle AI Vector Search の hybrid 検索 ->
+    Cohere Rerank -> 根拠の評価・補正検索 -> 回答の生成と監査)で作る。
     """
     enforce_rate_limit("search", http_request)
     result = await _run_search_with_timeout(request)
@@ -101,16 +101,13 @@ async def _resolve_query_context(
 ) -> tuple[SearchRequest, Settings, str | None, str | None]:
     """検索の有効 request / Settings と適用済みの Business View id を返す。
 
-    解決順は request 明示 > Business View > グローバル既定。
-    業務ビュー指定時は参照 KB 群を検索対象へ展開し、その query 設定・persona を適用する。
+    解決順は Business View > グローバル既定。
+    業務ビュー指定時は参照 KB 群を検索対象へ展開し、その回答の設定を適用する。
     KB はナレッジ構築設定だけを持つため、KB query legacy 値は検索 runtime へ反映しない。
     戻り値は (有効 request, 有効 Settings, 適用 KB id, 適用 Business View id)。
     """
     oracle = OracleClient()
-    settings = await resolve_oracle_generation_settings(
-        global_settings,
-        client=oracle,
-    )
+    settings = global_settings
     if request.business_view_ids:
         views = []
         for business_view_id in request.business_view_ids:
@@ -143,22 +140,6 @@ async def _resolve_query_context(
                 effective_request, from_business_view=not request.knowledge_base_ids
             )
             settings, applied = resolve_business_view_settings(settings, views[0].config)
-            try:
-                if views[0].config.query.generation_profile is not None:
-                    settings = apply_generation_profile(
-                        settings,
-                        views[0].config.query.generation_profile,
-                        source="business_view",
-                    )
-                if request.generation_profile is not None:
-                    settings = apply_generation_profile(
-                        settings,
-                        request.generation_profile,
-                        source="request",
-                    )
-                settings = validate_effective_generation_settings(settings)
-            except CustomPromptNotConfiguredError as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
             # 業務ビューのドメインキーワードは全文検索で 1 語として優先する(複数ビューは和集合)。
             domain_keywords: list[str] = []
             for view in views:
@@ -177,16 +158,6 @@ async def _resolve_query_context(
             return effective_request, settings, None, applied_view
 
     request = _scope_request_knowledge_bases(request)
-    try:
-        if request.generation_profile is not None:
-            settings = apply_generation_profile(
-                settings,
-                request.generation_profile,
-                source="request",
-            )
-        settings = validate_effective_generation_settings(settings)
-    except CustomPromptNotConfiguredError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return request, settings, None, None
 
 
@@ -310,16 +281,17 @@ async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
         return result
     except AnswerTimeoutError as exc:
         elapsed = elapsed_ms(started_at)
-        diagnostics = build_search_diagnostics(request, settings=settings)
+        diagnostics = build_search_diagnostics(
+            request, settings=settings, retrieval_strategy_adapter="docrag_grounded"
+        )
         if applied_kb is not None:
             diagnostics.kb_adapter_config_applied = applied_kb
         if applied_view is not None:
             diagnostics.business_view_applied = applied_view
-        record_rag_request(request.mode.value, "error", elapsed / 1000, 0)
+        record_rag_request(SEARCH_METRIC_MODE, "error", elapsed / 1000, 0)
         record_rag_search_audit(
             trace_id=trace_id,
             outcome="error",
-            mode=request.mode,
             sanitized_query=request.query,
             filters=request.filters,
             findings=[],
@@ -332,8 +304,6 @@ async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
             error_stage="timeout",
         )
         raise HTTPException(status_code=504, detail=exc.user_message) from exc
-    except GenerationContractError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 async def _stream_search_events_with_timeout(
@@ -347,11 +317,8 @@ async def _stream_search_events_with_timeout(
     started_at = perf_counter()
     trace_id = new_trace_id()
     queue: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
-    stage_timings: dict[str, float] = {}
 
     async def emit_progress(progress: SearchStageProgress) -> None:
-        if progress.outcome != "started":
-            stage_timings[progress.stage] = progress.elapsed_ms
         await queue.put(
             (
                 "stage",
@@ -385,19 +352,16 @@ async def _stream_search_events_with_timeout(
         except AnswerTimeoutError as exc:
             elapsed = elapsed_ms(started_at)
             diagnostics = build_search_diagnostics(
-                request,
-                settings=settings,
-                stream_stage_timings=stage_timings,
+                request, settings=settings, retrieval_strategy_adapter="docrag_grounded"
             )
             if applied_kb is not None:
                 diagnostics.kb_adapter_config_applied = applied_kb
             if applied_view is not None:
                 diagnostics.business_view_applied = applied_view
-            record_rag_request(request.mode.value, "error", elapsed / 1000, 0)
+            record_rag_request(SEARCH_METRIC_MODE, "error", elapsed / 1000, 0)
             record_rag_search_audit(
                 trace_id=trace_id,
                 outcome="error",
-                mode=request.mode,
                 sanitized_query=request.query,
                 filters=request.filters,
                 findings=[],
@@ -418,18 +382,6 @@ async def _stream_search_events_with_timeout(
                         # （`AnswerTimeoutError` は TimeoutError の派生）。
                         "error_type": "TimeoutError",
                         "stage": exc.stage,
-                    },
-                )
-            )
-        except GenerationContractError as exc:
-            await queue.put(
-                (
-                    "error",
-                    {
-                        "trace_id": trace_id,
-                        "message": str(exc),
-                        "error_type": type(exc).__name__,
-                        "validation_codes": list(exc.codes),
                     },
                 )
             )
@@ -477,12 +429,6 @@ async def _search_events(
 ) -> AsyncIterator[str]:
     """検証済み SearchResponse を SSE イベント列へ変換する。"""
     diagnostics = result.diagnostics.model_dump(mode="json")
-    for payload, candidate in zip(
-        diagnostics["retrieval_candidates"],
-        result.diagnostics.retrieval_candidates,
-        strict=True,
-    ):
-        payload["text"] = candidate.text
     yield _sse_event(
         "metadata",
         {

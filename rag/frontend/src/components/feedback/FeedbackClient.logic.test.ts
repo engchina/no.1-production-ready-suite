@@ -54,7 +54,7 @@ describe("appendEvaluationCase", () => {
   it("未編集なら新しい要求を作る", () => {
     const result = appendEvaluationCase(null, evaluationCase);
 
-    expect(result.ok && JSON.parse(result.json)).toMatchObject({ cases: [evaluationCase], mode: "hybrid" });
+    expect(result.ok && JSON.parse(result.json)).toEqual({ cases: [evaluationCase], top_k: 10 });
   });
 
   it("既存の要求へ追記し、同じ id のケースは置き換える", () => {

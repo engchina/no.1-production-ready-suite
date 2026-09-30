@@ -84,7 +84,6 @@ def test_evaluation_rate_limit_protects_golden_set_runs(monkeypatch: MonkeyPatch
             }
         ],
         "top_k": 1,
-        "rerank_top_n": 1,
     }
 
     first = client.post("/api/evaluation/run", json=payload)

@@ -33,7 +33,6 @@ from app.config import (
 )
 from app.db_degradation import load_or_degrade
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
-from app.rag.generation_contract import GenerationContractError
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import new_trace_id
 from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgress
@@ -365,7 +364,6 @@ async def _prepare_chat_turn(
     """業務ビューの設定を解決し、発話を検査して USER メッセージを保存する。"""
     base_request = SearchRequest(
         query=request.content,
-        mode=request.mode,
         top_k=request.top_k,
         business_view_ids=[business_view_id],
     )
@@ -411,8 +409,6 @@ def _chat_error_message(exc: Exception) -> str:
     """回答生成の失敗を利用者向けの文言にする(ERROR メッセージと SSE の error event)。"""
     if isinstance(exc, AnswerTimeoutError):
         return exc.user_message
-    if isinstance(exc, GenerationContractError):
-        return str(exc)
     return STREAM_ERROR_MESSAGE
 
 
@@ -432,7 +428,8 @@ async def _generate_chat_answer(
     trace_id = new_trace_id()
     try:
         llm = OciEnterpriseAiClient(settings=turn.settings, model_id=model_id or None)
-        # DocRAG は llm を使わず自分でモデルを呼ぶので、列のモデルを別に渡す(#593)。
+        # llm は会話履歴による質問の書き換えに使う。回答は DocRAG が自分でモデルを呼ぶので、
+        # 列のモデルを別に渡す(#593)。
         pipeline = RagPipeline(
             settings=turn.settings,
             llm=llm,
@@ -493,7 +490,7 @@ async def send_chat_message(
     """ストリーミングせずに 1 往復を送る(MCP の `rag_chat_send_message`。#232)。
 
     既定のモデル(`model_ids` 指定時はその先頭)1 系統で回答し、USER / ASSISTANT を保存する。
-    生成のタイムアウトは 504、生成契約の違反は 502 にする(失敗も ERROR として保存済み)。
+    生成のタイムアウトは 504 にする(失敗も ERROR として保存済み)。
     rate limit とチャットの有効判定は呼び出し側で行う。
     """
     oracle = OracleClient()
@@ -506,8 +503,6 @@ async def send_chat_message(
         assistant, result = await _generate_chat_answer(oracle, turn, model_id)
     except AnswerTimeoutError as exc:
         raise HTTPException(status_code=504, detail=exc.user_message) from exc
-    except GenerationContractError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
     return conversation, assistant, result
 
 

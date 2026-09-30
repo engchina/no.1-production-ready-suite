@@ -9,7 +9,7 @@
 
 | 画面 | 欄に結び付く失敗 | 欄に結び付かない失敗 |
 |---|---|---|
-| 業務ビューのエディタ（`?id=`） | 名前・説明・参照 KB の未入力（欄の直下） | `PageBody` の先頭の `SaveErrorBanner`（`business-view-save-error`）。409（カスタム回答スタイルの前提・アーカイブ済みなど）もここ |
+| 業務ビューのエディタ（`?id=`） | 名前・説明・参照 KB の未入力（欄の直下） | `PageBody` の先頭の `SaveErrorBanner`（`business-view-save-error`）。409（アーカイブ済みなど）もここ |
 | ナレッジベースの作成・詳細 | 名前・説明の未入力、同じ名前の 409（名前の欄の直下 + フォーカス） | `SaveErrorBanner`（`knowledge-base-save-error`） |
 
 - 保存の失敗の `toast.error` と、フォームの下の `FormStatus` は出さない（成功だけ `toast.success`）。

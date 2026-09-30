@@ -32,17 +32,28 @@ class RagSearchAuditEvent(BaseModel):
     tenant_id_hash: str | None = None
     user_id_hash: str | None = None
     outcome: AuditOutcome
-    mode: SearchMode
+    # 検索の種類。回答は DocRAG(hybrid + RRF)だけなので常に hybrid(列の CHECK 制約が
+    # hybrid / vector / keyword のため値はそのまま)。
+    mode: SearchMode = SearchMode.HYBRID
     query_hash: str
     query_chars: int
     filter_keys: list[str] = Field(default_factory=list)
+    guardrail_codes: list[str] = Field(default_factory=list)
+    guardrail_severities: list[str] = Field(default_factory=list)
+    retrieved_count: int = 0
+    citation_count: int = 0
+    document_ids: list[str] = Field(default_factory=list)
+    knowledge_base_ids: list[str] = Field(default_factory=list)
+    config_fingerprint: str | None = None
+    elapsed_ms: float
+    error_stage: str | None = None
+    error_type: str | None = None
+    # 旧 standard の回答エンジンの計測(検索計画・rerank・context の加工・Agent Memory など)。
+    # 回答は DocRAG だけになり(#595)、既定値のまま保存する。列の削除は #596。
     memory_plan_id: str | None = None
     top_k: int | None = None
     rerank_top_n: int | None = None
     query_variant_count: int = 1
-    guardrail_codes: list[str] = Field(default_factory=list)
-    guardrail_severities: list[str] = Field(default_factory=list)
-    retrieved_count: int = 0
     reranked_count: int = 0
     deduplicated_count: int = 0
     context_diversified_count: int = 0
@@ -61,15 +72,8 @@ class RagSearchAuditEvent(BaseModel):
     history_count: int = 0
     resolver_rejected_count: int = 0
     insufficient_context_count: int = 0
-    citation_count: int = 0
     context_chars: int = 0
     context_window_chars: int | None = None
-    document_ids: list[str] = Field(default_factory=list)
-    knowledge_base_ids: list[str] = Field(default_factory=list)
-    config_fingerprint: str | None = None
-    elapsed_ms: float
-    error_stage: str | None = None
-    error_type: str | None = None
 
 
 class RagIngestionAuditEvent(BaseModel):
@@ -102,7 +106,6 @@ def record_rag_search_audit(
     *,
     trace_id: str,
     outcome: AuditOutcome,
-    mode: SearchMode,
     sanitized_query: str,
     filters: dict[str, str],
     findings: list[GuardrailFinding],
@@ -121,64 +124,13 @@ def record_rag_search_audit(
         tenant_id_hash=request_context.tenant_id_hash,
         user_id_hash=request_context.user_id_hash,
         outcome=outcome,
-        mode=mode,
         query_hash=_query_hash(sanitized_query),
         query_chars=len(sanitized_query),
         filter_keys=sorted(filters),
-        memory_plan_id=diagnostics.memory_plan_id if diagnostics is not None else None,
-        top_k=diagnostics.top_k if diagnostics is not None else None,
-        rerank_top_n=diagnostics.rerank_top_n if diagnostics is not None else None,
-        query_variant_count=diagnostics.query_variant_count if diagnostics is not None else 1,
         guardrail_codes=[finding.code for finding in findings],
         guardrail_severities=[finding.severity for finding in findings],
         retrieved_count=retrieved_count,
-        reranked_count=diagnostics.reranked_count if diagnostics is not None else 0,
-        deduplicated_count=diagnostics.deduplicated_count if diagnostics is not None else 0,
-        context_diversified_count=(
-            diagnostics.context_diversified_count if diagnostics is not None else 0
-        ),
-        context_group_expanded_count=(
-            diagnostics.context_group_expanded_count if diagnostics is not None else 0
-        ),
-        context_expanded_count=(
-            diagnostics.context_expanded_count if diagnostics is not None else 0
-        ),
-        context_adaptive_expanded_count=(
-            diagnostics.context_adaptive_expanded_count if diagnostics is not None else 0
-        ),
-        context_dependency_promoted_count=(
-            diagnostics.context_dependency_promoted_count if diagnostics is not None else 0
-        ),
-        context_compressed_count=(
-            diagnostics.context_compressed_count if diagnostics is not None else 0
-        ),
-        context_compression_saved_chars=(
-            diagnostics.context_compression_saved_chars if diagnostics is not None else 0
-        ),
-        agent_memory_retrieved_count=(
-            diagnostics.agent_memory_retrieved_count if diagnostics is not None else 0
-        ),
-        agent_memory_writeback_count=(
-            diagnostics.agent_memory_writeback_count if diagnostics is not None else 0
-        ),
-        agent_memory_writeback_status=(
-            diagnostics.agent_memory_writeback_status if diagnostics is not None else "skipped"
-        ),
-        evidence_count=diagnostics.evidence_count if diagnostics is not None else 0,
-        support_count=diagnostics.support_count if diagnostics is not None else 0,
-        structure_count=diagnostics.structure_count if diagnostics is not None else 0,
-        history_count=diagnostics.history_count if diagnostics is not None else 0,
-        resolver_rejected_count=(
-            diagnostics.resolver_rejected_count if diagnostics is not None else 0
-        ),
-        insufficient_context_count=(
-            diagnostics.insufficient_context_count if diagnostics is not None else 0
-        ),
         citation_count=len(citations),
-        context_chars=diagnostics.context_chars if diagnostics is not None else 0,
-        context_window_chars=(
-            diagnostics.context_window_chars if diagnostics is not None else None
-        ),
         document_ids=_unique_document_ids(citations),
         knowledge_base_ids=parse_search_id_filter(filters.get("knowledge_base_id")),
         config_fingerprint=(diagnostics.config_fingerprint if diagnostics is not None else None),

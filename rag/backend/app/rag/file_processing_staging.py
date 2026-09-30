@@ -29,7 +29,6 @@ from app.rag.file_processing_evaluation import (
     quality_report_metadata_violation,
     run_file_processing_contract_checks,
 )
-from app.rag.generation_config import resolve_oracle_generation_settings
 from app.rag.guardrails import GroundednessEvaluation, evaluate_groundedness
 from app.rag.ingestion import IngestionPipeline
 from app.rag.parser_adapter_routing import normalize_source_kind
@@ -363,10 +362,6 @@ async def run_file_processing_staging_checks_with_real_clients(
     """実 OCI / Oracle client を使って staging checks を実行する。"""
     resolved_settings = settings or get_settings()
     oracle = OracleClient(settings=resolved_settings)
-    resolved_settings = await resolve_oracle_generation_settings(
-        resolved_settings,
-        client=oracle,
-    )
     storage = ObjectStorageClient(settings=resolved_settings)
     try:
         return await run_file_processing_staging_checks(
@@ -603,8 +598,6 @@ async def _run_duplicate_staging_case(
         SearchRequest(
             query=_staging_query(case),
             top_k=5,
-            rerank_top_n=3,
-            mode=SearchMode.HYBRID,
             filters={"knowledge_base_id": knowledge_base_id},
             knowledge_base_ids=[knowledge_base_id],
         )
@@ -807,8 +800,6 @@ async def _collect_search_evidence(
         SearchRequest(
             query=_staging_query(case),
             top_k=5,
-            rerank_top_n=3,
-            mode=SearchMode.HYBRID,
             filters=filters,
             knowledge_base_ids=[knowledge_base_id],
         )

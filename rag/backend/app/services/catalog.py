@@ -26,13 +26,9 @@ ServiceCategory = Literal[
     # pipeline 各ステージのプラグイン(マイクロサービス)化。順次追加する。
     "chunking",
     "vector_index",
-    "retrieval",
-    "grounding",
-    "generation",
     "guardrail",
     "evaluation",
     "graphrag",
-    "agentic",
 ]
 # cpu/gpu はローカル ML 依存の重さで分ける。oci は OCI クラウドサービスを呼ぶ薄い
 # プロキシ microservice(GPU 不要・OCI 認証はメイン設定を継承)。
@@ -241,19 +237,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         deployable=False,
     ),
     ServiceCatalogEntry(
-        service_id="pipeline-generation",
-        category="generation",
-        profile="cpu",
-        url_field="rag_generation_service_url",
-        label_key="settings.services.item.pipelineGeneration",
-        working_dir="services/pipeline/generation",
-        port=18033,
-        execution_policy="in_process_when_disabled",
-        # 処理は backend 内の実装と同じで、起動・停止は処理の場所を変えるだけ。他のステージと同じく
-        # 操作を出さず、配備もしない（#278）。
-        deployable=False,
-    ),
-    ServiceCatalogEntry(
         service_id="pipeline-guardrail",
         category="guardrail",
         profile="cpu",
@@ -261,28 +244,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.pipelineGuardrail",
         working_dir="services/pipeline/guardrail",
         port=18034,
-        execution_policy="in_process_when_disabled",
-        deployable=False,
-    ),
-    ServiceCatalogEntry(
-        service_id="pipeline-agentic",
-        category="agentic",
-        profile="cpu",
-        url_field="rag_agentic_service_url",
-        label_key="settings.services.item.pipelineAgentic",
-        working_dir="services/pipeline/agentic",
-        port=18035,
-        execution_policy="in_process_when_disabled",
-        deployable=False,
-    ),
-    ServiceCatalogEntry(
-        service_id="pipeline-grounding",
-        category="grounding",
-        profile="cpu",
-        url_field="rag_grounding_service_url",
-        label_key="settings.services.item.pipelineGrounding",
-        working_dir="services/pipeline/grounding",
-        port=18036,
         execution_policy="in_process_when_disabled",
         deployable=False,
     ),
@@ -295,19 +256,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/evaluation",
         port=18037,
         execution_policy="in_process_when_disabled",
-        deployable=False,
-    ),
-    ServiceCatalogEntry(
-        service_id="pipeline-retrieval",
-        category="retrieval",
-        profile="cpu",
-        url_field="rag_retrieval_service_url",
-        label_key="settings.services.item.pipelineRetrieval",
-        working_dir="services/pipeline/retrieval",
-        port=18038,
-        execution_policy="in_process_when_disabled",
-        # 処理は backend 内の実装と同じで、起動・停止は処理の場所を変えるだけ。他のステージと同じく
-        # 操作を出さず、配備もしない（#278）。
         deployable=False,
     ),
 )

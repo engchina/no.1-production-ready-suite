@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import stat
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from uuid import uuid4
 
@@ -21,7 +21,6 @@ from pr_system_settings.upload_storage import (
     build_upload_storage_router,
 )
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
-from rag_pipeline_core.retrieval import decompose_retrieval_strategy
 
 from app import config as app_config
 from app.api.routes.documents import global_document_processing_config
@@ -35,11 +34,7 @@ from app.clients.oci_document_understanding import OciDocumentUnderstandingClien
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import (
-    CustomPromptNotConfiguredError,
-    GenerationSettingsRevisionConflictError,
     OracleClient,
-    StoredGenerationSettings,
-    StoredPromptVersion,
     close_oracle_pool,
     test_oracle_connection,
 )
@@ -50,10 +45,6 @@ from app.config import (
     enterprise_ai_connection_for_model,
     enterprise_ai_vision_model_id,
     get_settings,
-)
-from app.rag.agentic_adapter import (
-    agentic_adapter_runtime_settings,
-    normalize_agentic_profile,
 )
 from app.rag.chunking_strategy import (
     chunking_runtime_settings,
@@ -77,17 +68,9 @@ from app.rag.extraction_field_adapter import (
     save_field_schema,
     standard_field_definitions,
 )
-from app.rag.generation_adapter import (
-    generation_adapter_runtime_settings,
-    normalize_generation_profile,
-)
 from app.rag.graph_adapter import (
     graph_adapter_runtime_settings,
     normalize_graph_profile,
-)
-from app.rag.grounding_adapter import (
-    grounding_adapter_runtime_settings,
-    normalize_post_retrieval_pipeline,
 )
 from app.rag.guardrail_adapter import (
     guardrail_adapter_runtime_settings,
@@ -104,10 +87,6 @@ from app.rag.preprocess_strategy import (
     normalize_preprocess_profile,
     preprocess_runtime_settings,
 )
-from app.rag.retrieval_adapter import (
-    RetrievalStrategyStatus,
-    retrieval_adapter_runtime_settings,
-)
 from app.rag.system_schema import SystemSchemaError, system_schema_manager
 from app.rag.system_schema_runtime import system_schema_runtime
 from app.rag.vector_index_adapter import (
@@ -118,9 +97,6 @@ from app.schemas.common import ApiResponse
 from app.schemas.evaluation import EvaluationThresholds
 from app.schemas.settings import (
     POST_PARSE_SETTING_FIELDS,
-    AgenticProfileStatusData,
-    AgenticSettingsData,
-    AgenticSettingsUpdate,
     AnsweringSettingsData,
     AnsweringSettingsUpdate,
     AnswerRecordSettingsData,
@@ -139,15 +115,9 @@ from app.schemas.settings import (
     ExtractionFieldsSettingsData,
     ExtractionFieldsSettingsUpdate,
     FieldDefinitionData,
-    GenerationProfileStatusData,
-    GenerationSettingsData,
-    GenerationSettingsUpdate,
     GraphProfileStatusData,
     GraphSettingsData,
     GraphSettingsUpdate,
-    GroundingPipelineStatusData,
-    GroundingSettingsData,
-    GroundingSettingsUpdate,
     GuardrailPolicyStatusData,
     GuardrailSettingsData,
     GuardrailSettingsUpdate,
@@ -169,14 +139,8 @@ from app.schemas.settings import (
     PreprocessProfileStatusData,
     PreprocessSettingsData,
     PreprocessSettingsUpdate,
-    PromptVersionCreate,
-    PromptVersionData,
-    PromptVersionsData,
     QueryHistorySettingsData,
     QueryHistorySettingsUpdate,
-    RetrievalSettingsData,
-    RetrievalSettingsUpdate,
-    RetrievalStrategyStatusData,
     SystemTablesDeleteOrphansRequest,
     SystemTablesInitializeRequest,
     SystemTablesOperationData,
@@ -510,117 +474,6 @@ async def update_chunking_settings(
     return ApiResponse(data=_chunking_settings_data(settings))
 
 
-@router.get("/retrieval", response_model=ApiResponse[RetrievalSettingsData])
-async def get_retrieval_settings() -> ApiResponse[RetrievalSettingsData]:
-    """Retrieval アダプター(検索戦略)の選択と解決内容を返す。"""
-    return ApiResponse(data=_retrieval_settings_data(get_settings()))
-
-
-@router.patch("/retrieval", response_model=ApiResponse[RetrievalSettingsData])
-async def update_retrieval_settings(
-    payload: RetrievalSettingsUpdate,
-) -> ApiResponse[RetrievalSettingsData]:
-    """検索方法設定を backend/.env と現在プロセスへ反映する。
-
-    保存は常に新形式(検索モード + トグル)。.env に残る legacy 複合値は、
-    この保存を通るときモード + トグルへ正規化される。
-    """
-    settings = get_settings()
-    candidate = settings.model_copy(update=_retrieval_settings_updates(settings, payload))
-    _persist_retrieval_settings(candidate)
-    _apply_retrieval_settings(settings, candidate)
-    return ApiResponse(data=_retrieval_settings_data(settings))
-
-
-@router.get("/grounding", response_model=ApiResponse[GroundingSettingsData])
-async def get_grounding_settings() -> ApiResponse[GroundingSettingsData]:
-    """Grounding アダプター(検索後処理)の選択と解決内容を返す。"""
-    return ApiResponse(data=_grounding_settings_data(get_settings()))
-
-
-@router.patch("/grounding", response_model=ApiResponse[GroundingSettingsData])
-async def update_grounding_settings(
-    payload: GroundingSettingsUpdate,
-) -> ApiResponse[GroundingSettingsData]:
-    """根拠確認設定(処理方式 + CRAG 閾値)を backend/.env と現在プロセスへ反映する。"""
-    settings = get_settings()
-    updates: dict[str, object] = {}
-    if payload.pipeline is not None:
-        updates["rag_post_retrieval_pipeline"] = normalize_post_retrieval_pipeline(payload.pipeline)
-    if payload.crag_low_confidence_threshold is not None:
-        updates["rag_grounding_crag_confidence_threshold"] = payload.crag_low_confidence_threshold
-    if payload.crag_high_confidence_threshold is not None:
-        updates["rag_crag_high_confidence_threshold"] = payload.crag_high_confidence_threshold
-    if payload.crag_max_hops is not None:
-        updates["rag_crag_max_hops"] = payload.crag_max_hops
-    if payload.crag_low_evidence_abstain is not None:
-        updates["rag_crag_low_evidence_abstain_enabled"] = payload.crag_low_evidence_abstain
-    candidate = settings.model_copy(update=updates)
-    # payload の検証は両閾値を同時に送ったときの逆転しか見られない。片方だけの部分更新でも
-    # 保存済みの他方と逆転しないよう、合成後の値で検証してから .env へ書く(#275)。
-    if (
-        candidate.rag_crag_high_confidence_threshold
-        < candidate.rag_grounding_crag_confidence_threshold
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "CRAG の高しきい値は低しきい値以上にしてください"
-                f"(低しきい値 {candidate.rag_grounding_crag_confidence_threshold}、"
-                f"高しきい値 {candidate.rag_crag_high_confidence_threshold})。"
-            ),
-        )
-    _persist_grounding_settings(candidate)
-    _apply_grounding_settings(settings, candidate)
-    return ApiResponse(data=_grounding_settings_data(settings))
-
-
-@router.get("/generation", response_model=ApiResponse[GenerationSettingsData])
-async def get_generation_settings() -> ApiResponse[GenerationSettingsData]:
-    """Generation アダプター(回答生成プロファイル)の選択と解決内容を返す。"""
-    stored = await OracleClient().get_generation_settings()
-    return ApiResponse(data=_generation_settings_data(get_settings(), stored))
-
-
-@router.patch("/generation", response_model=ApiResponse[GenerationSettingsData])
-async def update_generation_settings(
-    payload: GenerationSettingsUpdate,
-) -> ApiResponse[GenerationSettingsData]:
-    """回答スタイル設定を Oracle GLOBAL 行へ revision 付きで保存する。"""
-    client = OracleClient()
-    try:
-        stored = await client.update_generation_settings(
-            profile=normalize_generation_profile(payload.profile),
-            expected_revision=payload.expected_revision,
-        )
-    except (GenerationSettingsRevisionConflictError, CustomPromptNotConfiguredError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return ApiResponse(data=_generation_settings_data(get_settings(), stored))
-
-
-def _prompt_versions_data(
-    settings: StoredGenerationSettings,
-    versions: list[StoredPromptVersion],
-) -> PromptVersionsData:
-    """Oracle prompt 版 store を互換 API 形へ変換する。"""
-    return PromptVersionsData(
-        active_version_id=settings.active_prompt_version_id,
-        settings_revision=settings.revision,
-        versions=[
-            PromptVersionData(
-                version_id=version.version_id,
-                name=version.name,
-                system_prompt=version.system_prompt,
-                note=version.note,
-                created_at=version.created_at,
-                created_by=version.created_by_hash or "",
-                active=version.version_id == settings.active_prompt_version_id,
-            )
-            for version in versions
-        ],
-    )
-
-
 @router.get("/answering", response_model=ApiResponse[AnsweringSettingsData])
 async def get_answering_settings() -> ApiResponse[AnsweringSettingsData]:
     """回答の検索と生成の全体既定(質問の拡張・回答の生成方式など。#593)を返す。"""
@@ -810,39 +663,6 @@ def _docrag_prompts_data(saved: dict[str, dict[str, object]]) -> DocragPromptsDa
     )
 
 
-@router.get("/prompts", response_model=ApiResponse[PromptVersionsData])
-async def get_prompt_versions() -> ApiResponse[PromptVersionsData]:
-    """回答生成 system prompt の版一覧と有効版を返す(custom profile が使用)。"""
-    settings, versions = await OracleClient().list_prompt_versions()
-    return ApiResponse(data=_prompt_versions_data(settings, versions))
-
-
-@router.post("/prompts", response_model=ApiResponse[PromptVersionsData])
-async def create_prompt_version_endpoint(
-    payload: PromptVersionCreate,
-) -> ApiResponse[PromptVersionsData]:
-    """新しい prompt 版を作成する(activate=true で即時有効化)。"""
-    settings, versions = await OracleClient().create_prompt_version(
-        name=payload.name,
-        system_prompt=payload.system_prompt,
-        note=payload.note,
-        activate=payload.activate,
-    )
-    return ApiResponse(data=_prompt_versions_data(settings, versions))
-
-
-@router.post("/prompts/{version_id}/activate", response_model=ApiResponse[PromptVersionsData])
-async def activate_prompt_version_endpoint(
-    version_id: str,
-) -> ApiResponse[PromptVersionsData]:
-    """指定 prompt 版を有効化する(rollback = 旧版を再有効化)。"""
-    try:
-        settings, versions = await OracleClient().activate_prompt_version(version_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="指定の prompt 版が見つかりません。") from exc
-    return ApiResponse(data=_prompt_versions_data(settings, versions))
-
-
 def _extraction_fields_data() -> ExtractionFieldsSettingsData:
     """field schema 定義を非機密 API 形へ変換する。未保存なら標準の項目(#556)。"""
     saved = load_saved_field_schema()
@@ -998,30 +818,6 @@ async def update_graph_settings(
     settings.rag_graph_profile = candidate.rag_graph_profile
     settings.rag_graph_enabled = candidate.rag_graph_enabled
     return ApiResponse(data=_graph_settings_data(settings))
-
-
-@router.get("/agentic", response_model=ApiResponse[AgenticSettingsData])
-async def get_agentic_settings() -> ApiResponse[AgenticSettingsData]:
-    """Agentic アダプター(クエリ計画)の選択と解決内容を返す。"""
-    return ApiResponse(data=_agentic_settings_data(get_settings()))
-
-
-@router.patch("/agentic", response_model=ApiResponse[AgenticSettingsData])
-async def update_agentic_settings(
-    payload: AgenticSettingsUpdate,
-) -> ApiResponse[AgenticSettingsData]:
-    """高度な検索設定を backend/.env と現在プロセスへ反映する。"""
-    settings = get_settings()
-    candidate = settings.model_copy(
-        update={
-            "rag_agentic_profile": normalize_agentic_profile(payload.profile),
-            "rag_agentic_max_subqueries": payload.max_subqueries,
-        }
-    )
-    _persist_agentic_settings(candidate)
-    settings.rag_agentic_profile = candidate.rag_agentic_profile
-    settings.rag_agentic_max_subqueries = candidate.rag_agentic_max_subqueries
-    return ApiResponse(data=_agentic_settings_data(settings))
 
 
 async def _run_model_settings_test(
@@ -1400,47 +1196,6 @@ def _persist_graph_settings(settings: Settings) -> None:
     )
 
 
-def _agentic_settings_data(settings: Settings) -> AgenticSettingsData:
-    """Settings から高度な検索設定の表示用データを作る。"""
-    runtime = agentic_adapter_runtime_settings(settings)
-    return AgenticSettingsData(
-        profile=runtime.profile,
-        enabled=runtime.enabled,
-        rewrite=runtime.rewrite,
-        decompose=runtime.decompose,
-        multi_hop=runtime.multi_hop,
-        max_subqueries=runtime.max_subqueries,
-        profiles=[
-            AgenticProfileStatusData(
-                name=status.name,
-                origin=status.origin,
-                recommended_for=list(status.recommended_for),
-                selected=status.selected,
-                enabled=status.enabled,
-                rewrite=status.rewrite,
-                decompose=status.decompose,
-                multi_hop=status.multi_hop,
-                hyde=status.hyde,
-            )
-            for status in runtime.profiles
-        ],
-        config_source="runtime",
-    )
-
-
-def _persist_agentic_settings(settings: Settings) -> None:
-    """高度な検索設定を backend/.env へ永続化する。"""
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {
-            "RAG_AGENTIC_PROFILE": settings.rag_agentic_profile,
-            "RAG_AGENTIC_MAX_SUBQUERIES": str(settings.rag_agentic_max_subqueries),
-        },
-        section_comment="# Agentic アダプター",
-        error_detail="高度な検索設定を backend/.env へ保存できませんでした。",
-    )
-
-
 def _evaluation_settings_data(settings: Settings) -> EvaluationSettingsData:
     """Settings から品質評価設定の表示用データを作る。"""
     runtime = evaluation_adapter_runtime_settings(settings)
@@ -1527,37 +1282,6 @@ def _persist_vector_index_settings(settings: Settings) -> None:
     )
 
 
-def _generation_settings_data(
-    settings: Settings,
-    stored: StoredGenerationSettings,
-) -> GenerationSettingsData:
-    """Oracle GLOBAL 行から回答スタイル設定の表示用データを作る。"""
-    runtime = generation_adapter_runtime_settings(
-        settings.model_copy(update={"rag_generation_profile": stored.profile})
-    )
-    return GenerationSettingsData(
-        profile=runtime.profile,
-        structured_output=runtime.structured_output,
-        profiles=[
-            GenerationProfileStatusData(
-                name=status.name,
-                origin=status.origin,
-                recommended_for=list(status.recommended_for),
-                selected=status.selected,
-                structured_output=status.structured_output,
-                contract_mode=status.contract_mode,
-                repair_enabled=status.repair_enabled,
-            )
-            for status in runtime.profiles
-        ],
-        config_source="oracle",
-        revision=stored.revision,
-        updated_at=stored.updated_at,
-        active_prompt_version_id=stored.active_prompt_version_id,
-        custom_prompt_configured=stored.active_prompt_version_id is not None,
-    )
-
-
 def _guardrail_settings_data(settings: Settings) -> GuardrailSettingsData:
     """Settings から安全チェック設定の表示用データを作る。"""
     runtime = guardrail_adapter_runtime_settings(settings)
@@ -1632,171 +1356,6 @@ def _persist_guardrail_settings(settings: Settings) -> None:
         },
         section_comment="# Guardrail アダプター",
         error_detail="安全チェック設定を backend/.env へ保存できませんでした。",
-    )
-
-
-def _retrieval_status_data(
-    statuses: Iterable[RetrievalStrategyStatus],
-) -> list[RetrievalStrategyStatusData]:
-    return [
-        RetrievalStrategyStatusData(
-            name=status.name,
-            origin=status.origin,
-            recommended_for=list(status.recommended_for),
-            selected=status.selected,
-            gap_stop=status.gap_stop,
-            corrective_retrieval=status.corrective_retrieval,
-            business_fit_weighting=status.business_fit_weighting,
-        )
-        for status in statuses
-    ]
-
-
-def _retrieval_settings_data(settings: Settings) -> RetrievalSettingsData:
-    """Settings から検索方法設定の表示用データを作る。"""
-    runtime = retrieval_adapter_runtime_settings(settings)
-    return RetrievalSettingsData(
-        mode=runtime.mode,
-        legacy_strategy=runtime.legacy_strategy,
-        query_expansion=runtime.query_expansion,
-        query_expansion_llm=settings.rag_query_expansion_llm_enabled,
-        gap_stop=runtime.gap_stop,
-        corrective_retrieval=runtime.corrective_retrieval,
-        business_fit_weighting=runtime.business_fit_weighting,
-        modes=_retrieval_status_data(runtime.modes),
-        config_source="runtime",
-    )
-
-
-def _retrieval_settings_updates(
-    settings: Settings, payload: RetrievalSettingsUpdate
-) -> dict[str, object]:
-    """更新 payload(新形式)から Settings 更新 dict を作る。
-
-    .env に legacy 複合値が残っている場合も、この保存を通るとモードへ正規化される
-    (legacy の強制トグルは明示 ON へ引き継ぎ、現在の有効トグルは
-    _persist_retrieval_settings が書き出す)。
-    """
-    updates: dict[str, object] = {}
-    current = decompose_retrieval_strategy(settings.rag_retrieval_strategy)
-    updates["rag_retrieval_strategy"] = current.mode
-    if current.forced_query_expansion:
-        updates["rag_query_expansion_enabled"] = True
-    if current.forced_gap_stop:
-        updates["rag_retrieval_gap_stop_enabled"] = True
-    if current.forced_corrective_retrieval:
-        updates["rag_retrieval_corrective_enabled"] = True
-    if current.forced_business_fit_weighting:
-        updates["rag_retrieval_business_fit_weighting_enabled"] = True
-    if payload.mode is not None:
-        updates["rag_retrieval_strategy"] = payload.mode
-    if payload.query_expansion is not None:
-        updates["rag_query_expansion_enabled"] = payload.query_expansion
-    if payload.query_expansion_llm is not None:
-        updates["rag_query_expansion_llm_enabled"] = payload.query_expansion_llm
-    if payload.gap_stop is not None:
-        updates["rag_retrieval_gap_stop_enabled"] = payload.gap_stop
-    if payload.corrective_retrieval is not None:
-        updates["rag_retrieval_corrective_enabled"] = payload.corrective_retrieval
-    if payload.business_fit_weighting is not None:
-        updates["rag_retrieval_business_fit_weighting_enabled"] = payload.business_fit_weighting
-    return updates
-
-
-def _apply_retrieval_settings(target: Settings, source: Settings) -> None:
-    """保存済み検索方法設定を現在プロセスへ反映する。"""
-    target.rag_retrieval_strategy = source.rag_retrieval_strategy
-    target.rag_query_expansion_enabled = source.rag_query_expansion_enabled
-    target.rag_query_expansion_llm_enabled = source.rag_query_expansion_llm_enabled
-    target.rag_retrieval_gap_stop_enabled = source.rag_retrieval_gap_stop_enabled
-    target.rag_retrieval_corrective_enabled = source.rag_retrieval_corrective_enabled
-    target.rag_retrieval_business_fit_weighting_enabled = (
-        source.rag_retrieval_business_fit_weighting_enabled
-    )
-
-
-def _persist_retrieval_settings(settings: Settings) -> None:
-    """検索方法設定(モード + トグル)を backend/.env へ永続化する。"""
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {
-            "RAG_RETRIEVAL_STRATEGY": settings.rag_retrieval_strategy,
-            "RAG_QUERY_EXPANSION_ENABLED": _format_env_bool(settings.rag_query_expansion_enabled),
-            "RAG_QUERY_EXPANSION_LLM_ENABLED": _format_env_bool(
-                settings.rag_query_expansion_llm_enabled
-            ),
-            "RAG_RETRIEVAL_GAP_STOP_ENABLED": _format_env_bool(
-                settings.rag_retrieval_gap_stop_enabled
-            ),
-            "RAG_RETRIEVAL_CORRECTIVE_ENABLED": _format_env_bool(
-                settings.rag_retrieval_corrective_enabled
-            ),
-            "RAG_RETRIEVAL_BUSINESS_FIT_WEIGHTING_ENABLED": _format_env_bool(
-                settings.rag_retrieval_business_fit_weighting_enabled
-            ),
-        },
-        section_comment="# Retrieval アダプター",
-        error_detail="検索方法設定を backend/.env へ保存できませんでした。",
-    )
-
-
-def _grounding_settings_data(settings: Settings) -> GroundingSettingsData:
-    """Settings から根拠確認設定の表示用データを作る。"""
-    runtime = grounding_adapter_runtime_settings(settings)
-    return GroundingSettingsData(
-        pipeline=runtime.pipeline,
-        dependency_promotion_enabled=runtime.dependency_promotion_enabled,
-        diversity_enabled=runtime.diversity_enabled,
-        expansion_mode=runtime.expansion_mode,
-        compression_enabled=runtime.compression_enabled,
-        crag_low_confidence_threshold=settings.rag_grounding_crag_confidence_threshold,
-        crag_high_confidence_threshold=settings.rag_crag_high_confidence_threshold,
-        crag_max_hops=settings.rag_crag_max_hops,
-        crag_low_evidence_abstain=settings.rag_crag_low_evidence_abstain_enabled,
-        pipelines=[
-            GroundingPipelineStatusData(
-                name=status.name,
-                origin=status.origin,
-                recommended_for=list(status.recommended_for),
-                selected=status.selected,
-                dependency_promotion=status.dependency_promotion,
-                diversity=status.diversity,
-                expansion_mode=status.expansion_mode,
-                compression=status.compression,
-                corrective=status.corrective,
-            )
-            for status in runtime.pipelines
-        ],
-        config_source="runtime",
-    )
-
-
-def _apply_grounding_settings(target: Settings, source: Settings) -> None:
-    """保存済み根拠確認設定を現在プロセスへ反映する。"""
-    target.rag_post_retrieval_pipeline = source.rag_post_retrieval_pipeline
-    target.rag_grounding_crag_confidence_threshold = source.rag_grounding_crag_confidence_threshold
-    target.rag_crag_high_confidence_threshold = source.rag_crag_high_confidence_threshold
-    target.rag_crag_max_hops = source.rag_crag_max_hops
-    target.rag_crag_low_evidence_abstain_enabled = source.rag_crag_low_evidence_abstain_enabled
-
-
-def _persist_grounding_settings(settings: Settings) -> None:
-    """根拠確認設定(処理方式 + CRAG 閾値)を backend/.env へ永続化する。"""
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {
-            "RAG_POST_RETRIEVAL_PIPELINE": settings.rag_post_retrieval_pipeline,
-            "RAG_GROUNDING_CRAG_CONFIDENCE_THRESHOLD": str(
-                settings.rag_grounding_crag_confidence_threshold
-            ),
-            "RAG_CRAG_HIGH_CONFIDENCE_THRESHOLD": str(settings.rag_crag_high_confidence_threshold),
-            "RAG_CRAG_MAX_HOPS": str(settings.rag_crag_max_hops),
-            "RAG_CRAG_LOW_EVIDENCE_ABSTAIN_ENABLED": _format_env_bool(
-                settings.rag_crag_low_evidence_abstain_enabled
-            ),
-        },
-        section_comment="# Grounding アダプター",
-        error_detail="根拠確認設定を backend/.env へ保存できませんでした。",
     )
 
 

@@ -12,22 +12,15 @@ import {
   CardHeader,
   CardTitle,
   TextField,
-  ToggleChip,
 } from "@engchina/production-ready-ui";
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { ApiError, type RetrievedChunk, type SearchMode } from "@/lib/api";
+import { ApiError, type RetrievedChunk } from "@/lib/api";
 import { streamSearch, type SearchStageEvent } from "@/lib/search-stream";
 import { isSubmitEnter } from "@/lib/keyboard";
-import { t, type I18nKey } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 
 type Phase = "idle" | "streaming" | "done" | "cancelled" | "error";
 
-const MODES: SearchMode[] = ["hybrid", "vector", "keyword"];
-const MODE_LABEL: Record<SearchMode, I18nKey> = {
-  hybrid: "search.mode.hybrid",
-  vector: "search.mode.vector",
-  keyword: "search.mode.keyword",
-};
 const TEST_TOP_K = 10;
 
 /**
@@ -45,7 +38,6 @@ export function KnowledgeBaseSearchTestPanel({
   disabled?: boolean;
 }) {
   const [query, setQuery] = useState("");
-  const [mode, setMode] = useState<SearchMode>("hybrid");
   const [phase, setPhase] = useState<Phase>("idle");
   const [answer, setAnswer] = useState("");
   const [citations, setCitations] = useState<RetrievedChunk[]>([]);
@@ -80,7 +72,6 @@ export function KnowledgeBaseSearchTestPanel({
       await streamSearch(
         {
           query: trimmed,
-          mode,
           top_k: TEST_TOP_K,
           knowledge_base_ids: [knowledgeBaseId],
           // 引用の候補を確かめるので、回答は作らずに検索だけを行う（LLM を呼ばない。#593）。
@@ -122,7 +113,6 @@ export function KnowledgeBaseSearchTestPanel({
   const resultMeta =
     meta && phase === "done"
       ? t("knowledgeBases.searchTest.resultMeta", {
-          mode: t(MODE_LABEL[mode]),
           count: citations.length,
           ms: Math.round(meta.elapsed_ms),
         })
@@ -174,18 +164,6 @@ export function KnowledgeBaseSearchTestPanel({
                 className="sm:min-w-28"
                 testId="kb-search-test-run-stop"
               />
-            </div>
-
-            <div
-              className="flex flex-wrap items-center gap-1"
-              role="group"
-              aria-label={t("search.pipeline")}
-            >
-              {MODES.map((m) => (
-                <ToggleChip key={m} selected={mode === m} onClick={() => setMode(m)}>
-                  {t(MODE_LABEL[m])}
-                </ToggleChip>
-              ))}
             </div>
 
             {phase === "idle" ? (

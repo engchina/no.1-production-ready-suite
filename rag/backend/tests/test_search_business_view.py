@@ -1,6 +1,6 @@
 """検索 API の Business View 解決テスト。
 
-Business View 指定時に参照 KB 群を検索対象へ展開し、その query 設定・persona を
+Business View 指定時に参照 KB 群を検索対象へ展開し、その回答の設定を
 検索 runtime / diagnostics へ反映することを検証する。
 """
 
@@ -53,9 +53,7 @@ class RecordingPipeline:
             trace_id=trace_id,
             elapsed_ms=1.0,
             diagnostics=build_search_diagnostics(
-                request,
-                settings=settings,
-                generation_profile=(settings.rag_generation_profile if settings else None),
+                request, settings=settings, retrieval_strategy_adapter="docrag_grounded"
             ),
         )
 
@@ -98,21 +96,9 @@ def _install(monkeypatch: MonkeyPatch, views: dict[str, BusinessViewConfig]) -> 
     monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
     monkeypatch.setattr(
         search_route,
-        "resolve_oracle_generation_settings",
-        _keep_global_generation_settings,
-    )
-    monkeypatch.setattr(
-        search_route,
         "OracleClient",
         lambda *_args, **_kwargs: FakeViewOracle(views),
     )
-
-
-async def _keep_global_generation_settings(
-    settings: Settings,
-    **_kwargs: object,
-) -> Settings:
-    return settings
 
 
 def test_business_view_expands_kbs_and_applies_query_config(monkeypatch: MonkeyPatch) -> None:
@@ -120,8 +106,8 @@ def test_business_view_expands_kbs_and_applies_query_config(monkeypatch: MonkeyP
     config = BusinessViewConfig(
         knowledge_base_ids=["kb-1", "kb-2"],
         query=KnowledgeBaseQueryConfig(
-            generation_profile="detailed_cited",
-            post_retrieval_pipeline="verified_context",
+            docrag_query_strategy="rag_fusion",
+            docrag_answer_flow="standard_rag",
         ),
     )
     _install(monkeypatch, {"bv-1": config})
@@ -133,9 +119,9 @@ def test_business_view_expands_kbs_and_applies_query_config(monkeypatch: MonkeyP
 
     assert response.status_code == 200
     diagnostics = response.json()["data"]["diagnostics"]
-    assert diagnostics["generation_profile"] == "detailed_cited"
     assert RecordingPipeline.captured_settings is not None
-    assert RecordingPipeline.captured_settings.rag_post_retrieval_pipeline == "verified_context"
+    assert RecordingPipeline.captured_settings.rag_docrag_query_strategy == "rag_fusion"
+    assert RecordingPipeline.captured_settings.rag_docrag_answer_flow == "standard_rag"
     assert diagnostics["business_view_applied"] == "bv-1"
     # 参照 KB が検索対象へ展開されている。
     assert RecordingPipeline.captured_request is not None
@@ -149,11 +135,11 @@ def test_multiple_business_views_expand_union_and_use_first_config(
     """複数業務ビューでは参照 KB を union し、query 設定は先頭 View を代表にする。"""
     first = BusinessViewConfig(
         knowledge_base_ids=["kb-1", "kb-2"],
-        query=KnowledgeBaseQueryConfig(generation_profile="detailed_cited"),
+        query=KnowledgeBaseQueryConfig(docrag_query_strategy="rag_fusion"),
     )
     second = BusinessViewConfig(
         knowledge_base_ids=["kb-2", "kb-3"],
-        query=KnowledgeBaseQueryConfig(generation_profile="grounded_concise"),
+        query=KnowledgeBaseQueryConfig(docrag_query_strategy="hyde"),
     )
     _install(monkeypatch, {"bv-1": first, "bv-2": second})
 
@@ -164,42 +150,28 @@ def test_multiple_business_views_expand_union_and_use_first_config(
 
     assert response.status_code == 200
     diagnostics = response.json()["data"]["diagnostics"]
-    assert diagnostics["generation_profile"] == "detailed_cited"
+    assert RecordingPipeline.captured_settings is not None
+    assert RecordingPipeline.captured_settings.rag_docrag_query_strategy == "rag_fusion"
     assert diagnostics["business_view_applied"] == "bv-1,bv-2"
     assert RecordingPipeline.captured_request is not None
     assert RecordingPipeline.captured_request.knowledge_base_ids == ["kb-1", "kb-2", "kb-3"]
     assert RecordingPipeline.captured_request.filters["knowledge_base_id"] == "kb-1,kb-2,kb-3"
 
 
-def test_request_generation_profile_takes_precedence_over_business_view(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    config = BusinessViewConfig(
-        knowledge_base_ids=["kb-1"],
-        query=KnowledgeBaseQueryConfig(generation_profile="detailed_cited"),
-    )
-    _install(monkeypatch, {"bv-1": config})
-
-    response = client.post(
-        "/api/search",
-        json={
-            "query": "上限額",
-            "business_view_id": "bv-1",
-            "generation_profile": "strict_extractive",
-        },
-    )
-
-    assert response.status_code == 200
-    diagnostics = response.json()["data"]["diagnostics"]
-    assert diagnostics["generation_profile"] == "strict_extractive"
-    assert diagnostics["generation_config_source"] == "request"
-
-
-def test_business_view_persona_overrides_system_prompt(monkeypatch: MonkeyPatch) -> None:
-    """persona は generation system prompt 上書きとして pipeline settings へ渡る。"""
-    config = BusinessViewConfig(
-        knowledge_base_ids=["kb-1"],
-        system_prompt="あなたは経理規程アシスタントです。",
+def test_saved_standard_options_of_business_view_are_ignored(monkeypatch: MonkeyPatch) -> None:
+    """保存済みの旧 standard の値(回答スタイル・persona など。#595 で削除)は読み捨てて検索する。"""
+    config = BusinessViewConfig.model_validate(
+        {
+            "knowledge_base_ids": ["kb-1"],
+            "system_prompt": "あなたは経理規程アシスタントです。",
+            "default_language": "en",
+            "query": {
+                "retrieval_strategy": "keyword",
+                "generation_profile": "structured_json",
+                "post_retrieval_pipeline": "lean",
+                "docrag_rerank_enabled": False,
+            },
+        }
     )
     _install(monkeypatch, {"bv-1": config})
 
@@ -211,8 +183,9 @@ def test_business_view_persona_overrides_system_prompt(monkeypatch: MonkeyPatch)
     assert response.status_code == 200
     settings = RecordingPipeline.captured_settings
     assert settings is not None
-    assert settings.rag_generation_system_prompt_override is not None
-    assert "経理規程アシスタント" in settings.rag_generation_system_prompt_override
+    assert settings.rag_docrag_rerank_enabled is False
+    for removed in ("rag_generation_profile", "rag_generation_system_prompt_override"):
+        assert not hasattr(settings, removed)
 
 
 def test_business_view_guardrail_policy_reaches_pipeline_settings(
@@ -319,11 +292,6 @@ def test_archived_business_view_is_rejected(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
     monkeypatch.setattr(
         search_route,
-        "resolve_oracle_generation_settings",
-        _keep_global_generation_settings,
-    )
-    monkeypatch.setattr(
-        search_route,
         "OracleClient",
         lambda *_args, **_kwargs: ArchivedOracle({"bv-1": BusinessViewConfig()}),
     )
@@ -340,7 +308,7 @@ def test_archived_business_view_is_rejected(monkeypatch: MonkeyPatch) -> None:
 def test_business_view_serving_mode_flows_to_settings_and_diagnostics(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """業務ビューの serving_mode=fused が pipeline settings と diagnostics へ流れる。"""
+    """業務ビューの serving_mode=fused が pipeline settings へ流れる。"""
     config = BusinessViewConfig(knowledge_base_ids=["kb-1"], serving_mode="fused")
     _install(monkeypatch, {"bv-1": config})
 
@@ -354,7 +322,6 @@ def test_business_view_serving_mode_flows_to_settings_and_diagnostics(
     assert settings is not None
     assert settings.rag_serving_mode == "fused"
     diagnostics = response.json()["data"]["diagnostics"]
-    assert diagnostics["serving_mode"] == "fused"
     assert diagnostics["business_view_applied"] == "bv-1"
 
 
@@ -404,21 +371,13 @@ class FakeViewAndKbOracle:
 def test_business_view_ignores_single_kb_legacy_query(monkeypatch: MonkeyPatch) -> None:
     """Business View は単一 KB に解決しても KB legacy query を下層に重ねない。"""
     kb_config = KnowledgeBaseAdapterConfig.model_validate(
-        {"query": {"vector_index_profile": "fast", "post_retrieval_pipeline": "lean"}}
+        {"query": {"vector_index_profile": "fast", "docrag_neighbor_child_count": 9}}
     )
     view_config = BusinessViewConfig(
         knowledge_base_ids=["kb-1"],
-        query=KnowledgeBaseQueryConfig(
-            generation_profile="detailed_cited",
-            post_retrieval_pipeline="compact",
-        ),
+        query=KnowledgeBaseQueryConfig(docrag_answer_flow="standard_rag"),
     )
     monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
-    monkeypatch.setattr(
-        search_route,
-        "resolve_oracle_generation_settings",
-        _keep_global_generation_settings,
-    )
     monkeypatch.setattr(
         search_route,
         "OracleClient",
@@ -436,10 +395,10 @@ def test_business_view_ignores_single_kb_legacy_query(monkeypatch: MonkeyPatch) 
     assert response.status_code == 200
     settings = RecordingPipeline.captured_settings
     assert settings is not None
-    # Business View が設定した generation は Business View 値が効く。
-    assert settings.rag_generation_profile == "detailed_cited"
-    assert settings.rag_post_retrieval_pipeline == "compact"
-    # Business View が触れていない vector_index は KB legacy 値ではなく global 既定。
+    # Business View が設定した回答の設定は Business View 値が効く。
+    assert settings.rag_docrag_answer_flow == "standard_rag"
+    # Business View が触れていない項目は KB legacy 値ではなく global 既定。
+    assert settings.rag_docrag_neighbor_child_count == 3
     assert settings.rag_vector_index_profile == "accurate"
     diagnostics = response.json()["data"]["diagnostics"]
     assert diagnostics["business_view_applied"] == "bv-1"

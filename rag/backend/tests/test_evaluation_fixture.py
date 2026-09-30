@@ -62,4 +62,5 @@ def test_search_load_example_matches_load_schema() -> None:
     assert scenario.repeat > 0
     assert scenario.concurrency > 0
     assert scenario.thresholds.server_p95_ms is not None
-    assert all(case.rerank_top_n <= case.top_k for case in scenario.cases)
+    assert all(case.top_k > 0 for case in scenario.cases)
+    assert all(value > 0 for value in scenario.thresholds.stage_p95_ms.values())

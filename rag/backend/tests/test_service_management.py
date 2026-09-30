@@ -100,8 +100,7 @@ def test_catalog_covers_preprocess_and_parser_with_gpu() -> None:
 def test_catalog_execution_policies_mark_fallback_boundaries() -> None:
     by_id = {entry.service_id: entry for entry in SERVICE_CATALOG}
     assert by_id["pipeline-chunking"].execution_policy == "in_process_when_disabled"
-    assert by_id["pipeline-retrieval"].execution_policy == "in_process_when_disabled"
-    assert by_id["pipeline-generation"].execution_policy == "in_process_when_disabled"
+    assert by_id["pipeline-guardrail"].execution_policy == "in_process_when_disabled"
     assert by_id["parser-docling"].execution_policy == "selected_adapter"
     assert by_id["preprocess-office-to-pdf"].execution_policy == "selected_adapter"
 
@@ -111,19 +110,22 @@ _DEMOTED_STAGE_IDS = {
     "pipeline-chunking",
     "pipeline-vector-index",
     "pipeline-graphrag",
-    "pipeline-grounding",
     "pipeline-guardrail",
     "pipeline-evaluation",
-    "pipeline-agentic",
-    # 検索方法・回答スタイルも backend 内処理にそろえ、操作・配備の対象から外した（#278）。
-    "pipeline-retrieval",
-    "pipeline-generation",
 }
+
+
+def test_catalog_has_no_removed_standard_engine_stages() -> None:
+    """旧 standard の回答エンジンだけのステージは #595 で削除した(サービスの実装も無い)。"""
+    ids = {entry.service_id for entry in SERVICE_CATALOG}
+    for stage in ("retrieval", "grounding", "agentic", "generation"):
+        assert f"pipeline-{stage}" not in ids
+        assert not (RAG_ROOT / "services" / "pipeline" / stage).exists()
 
 
 def test_catalog_deployable_marks_future_service_stages() -> None:
     by_id = {entry.service_id: entry for entry in SERVICE_CATALOG}
-    # 格下げ 9 段は deployable=False かつ backend 内処理(in_process_when_disabled)。
+    # 格下げ 5 段は deployable=False かつ backend 内処理(in_process_when_disabled)。
     for sid in _DEMOTED_STAGE_IDS:
         assert by_id[sid].deployable is False, sid
         assert by_id[sid].execution_policy == "in_process_when_disabled", sid

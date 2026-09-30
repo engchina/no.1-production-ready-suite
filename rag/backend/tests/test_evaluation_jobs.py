@@ -321,7 +321,7 @@ class SlowPipeline:
                 await progress_callback(
                     SearchStageProgress(
                         trace_id=trace_id or "trace",
-                        stage="agentic_planning",
+                        stage="docrag_answer",
                         outcome="started",
                         elapsed_ms=0.0,
                         attributes={},
@@ -334,7 +334,7 @@ class SlowPipeline:
             trace_id=trace_id or "trace",
             guardrail_warnings=[],
             elapsed_ms=1.0,
-            diagnostics=SearchDiagnostics(mode=request.mode.value),
+            diagnostics=SearchDiagnostics(),
         )
 
 
@@ -379,8 +379,8 @@ async def test_job_records_timed_out_case_with_stage_and_continues(
     slow, fast = done.run_result.case_results
     assert slow.status == "error"
     assert slow.error_type == "TimeoutError"
-    assert slow.error_stage == "agentic_planning"
-    assert slow.error_message is not None and "検索の計画" in slow.error_message
+    assert slow.error_stage == "docrag_answer"
+    assert slow.error_message is not None and "根拠の検索と回答の生成" in slow.error_message
     assert fast.status == "success"
 
 

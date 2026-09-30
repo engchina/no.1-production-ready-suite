@@ -600,30 +600,6 @@ async def test_oci_generate_posts_rag_generation_payload() -> None:
     assert "[policy.txt#doc-1:0]" in input_items[0]["content"]
 
 
-async def test_oci_generate_stream_posts_stream_payload_and_parses_deltas() -> None:
-    """OCI LLM adapter は Enterprise AI stream を回答 delta として読める。"""
-    transport = FakeEnterpriseAiTransport(
-        {},
-        stream_lines=[
-            "event: response.output_text.delta",
-            'data: {"type":"response.output_text.delta","delta":"根拠に"}',
-            'data: {"choices":[{"delta":{"content":"基づく回答"}}]}',
-            "data: [DONE]",
-        ],
-    )
-    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
-
-    chunks = [chunk async for chunk in client.generate_stream("承認条件は？", "根拠")]
-
-    assert chunks == ["根拠に", "基づく回答"]
-    assert transport.stream_calls[0]["url"] == "https://enterprise-ai.example/llm/generate"
-    payload = transport.stream_calls[0]["payload"]
-    assert payload["model"] == "enterprise-llm"
-    assert payload["stream"] is True
-    assert payload["instructions"]
-    assert "承認条件は？" in str(payload["input"])
-
-
 async def test_oci_generate_uses_configured_default_model() -> None:
     """複数 LLM 登録時は既定モデルを回答生成に使う。"""
     settings = _oci_settings()
@@ -1191,45 +1167,3 @@ def _oci_settings() -> Settings:
         oci_enterprise_ai_timeout_seconds=12.0,
         oci_enterprise_ai_max_retries=0,
     )
-
-
-class _PromptCapturingEnterpriseAiClient(OciEnterpriseAiClient):
-    """plan_query が generate へ渡す system prompt と context を記録する client。"""
-
-    def __init__(self) -> None:
-        super().__init__(settings=Settings.model_construct())
-        self.calls: list[tuple[str, str, str | None]] = []
-
-    async def generate(  # type: ignore[override]
-        self, prompt: str, context: str, *, system_prompt: str | None = None
-    ) -> str:
-        self.calls.append((prompt, context, system_prompt))
-        return '["不足している情報 1", "不足している情報 2"]'
-
-
-async def test_plan_query_uses_followup_prompt_with_previous_evidence() -> None:
-    """multi-hop の追加分解は前の検索結果を evidence として渡し、別の指示で分解する(#274)。"""
-    client = _PromptCapturingEnterpriseAiClient()
-
-    first = await client.plan_query("承認条件", mode="decompose", max_subqueries=3)
-    followup = await client.plan_query(
-        "承認条件", mode="decompose", max_subqueries=3, context="[1] 承認は部長が行う。"
-    )
-
-    assert first == followup == ["不足している情報 1", "不足している情報 2"]
-    (_, first_context, first_prompt), (_, followup_context, followup_prompt) = client.calls
-    assert first_context == ""
-    assert followup_context == "[1] 承認は部長が行う。"
-    assert first_prompt is not None and followup_prompt is not None
-    assert first_prompt != followup_prompt
-    assert "evidence_context" in followup_prompt
-
-
-async def test_plan_query_ignores_context_for_rewrite_modes() -> None:
-    """書き換え系(1 件)の mode は context を使わない。"""
-    client = _PromptCapturingEnterpriseAiClient()
-
-    planned = await client.plan_query("承認条件", mode="query_rewrite", context="[1] 抜粋")
-
-    assert planned == ["不足している情報 1"]
-    assert client.calls[0][1] == ""

@@ -293,11 +293,8 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await page.getByRole("button", { name: "検索", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: /引用/ })).toBeVisible();
-  // 詳細メトリクス(適応展開/依存昇格)は「診断」ディスクロージャ内にあるため展開する。
-  await page.getByRole("button", { name: "診断" }).click();
-  const executionMetrics = page.getByLabel("検索実行");
-  await expect(executionMetrics.locator("div").filter({ hasText: "適応展開" })).toContainText("2");
-  await expect(executionMetrics.locator("div").filter({ hasText: "依存昇格" })).toContainText("1");
+  // 以前の検索の内訳（診断の詳細メトリクス）は出さない（#595）。
+  await expect(page.getByRole("button", { name: "診断" })).toHaveCount(0);
   const citation = page.locator("li").filter({ hasText: "料金表の交通費は 1000 円です。" });
   await expect(page.getByText("p.2-3")).toBeVisible();
   await expect(citation.locator("dl").getByText("表", { exact: true })).toBeVisible();
@@ -846,14 +843,11 @@ function searchStreamBody(): string {
       elapsed_ms: 12,
       guardrail_warnings: [],
       diagnostics: {
-        retrieved_count: citations.length,
-        reranked_count: citations.length,
-        citation_count: citations.length,
-        context_adaptive_expanded_count: 2,
-        context_dependency_promoted_count: 1,
-        context_group_expanded_count: 0,
-        context_expanded_count: 0,
-        context_compressed_count: 0,
+        retrieval_strategy: "docrag",
+        retrieval_strategy_adapter: "docrag_grounded",
+        filter_keys: [],
+        knowledge_base_count: 1,
+        config_fingerprint: "fp-1",
       },
     })}\n\n`,
     `event: delta\ndata: ${JSON.stringify({ text: "料金表を確認しました。" })}\n\n`,

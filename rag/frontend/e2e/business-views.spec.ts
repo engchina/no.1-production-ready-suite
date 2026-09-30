@@ -33,17 +33,12 @@ for (const viewport of [
     await page.getByRole("combobox", { name: "参照するナレッジベース" }).click();
     await expect(page.getByRole("option", { name: /社内規程/ })).toBeVisible();
     const settings = page.locator("fieldset").filter({ hasText: "検索・回答設定" });
+    // 検索方法・検索オプション・根拠確認・回答スタイル・回答プロンプト（system prompt・既定言語）は削除した(#595)。
     await expect(settings.getByRole("heading", { level: 3 })).toHaveText([
-      "検索方法",
-      "検索オプション",
-      "根拠確認",
-      // 回答エンジンの選択は削除し、回答の項目は常に出す(#594)。
       "質問の拡張",
       "回答の生成方式",
       "根拠の前後から加える数",
       "回答の検索のオプション",
-      "回答スタイル",
-      "回答プロンプト",
       "安全チェック",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
@@ -54,36 +49,16 @@ for (const viewport of [
     await expect(settings.getByRole("combobox", { name: "全文検索の分割方式" })).toHaveCount(0);
     // 回答エンジンの選択は削除した(#594)。
     await expect(settings.getByRole("combobox", { name: "回答エンジン" })).toHaveCount(0);
-    // 継承 chip: セレクト7行(回答の 3 行を含む)
-    // + 三値トグル7行(検索オプション5行 + 回答の Rerank・画面目録)。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(14);
-    await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(7);
-    await expect(page.getByLabel("回答の役割・口調")).toBeVisible();
-    // 現在の回答が読まない欄に説明を出す。入力は残す(#300 / #594)。
-    const notes = settings.getByTestId("docrag-unused-note");
-    await expect(notes).toHaveCount(5);
-    await expect(notes.first()).toHaveText("現在の回答では、この設定は使われません。");
-    // 説明は欄の補足と、現在の回答では使われない注記をまとめたもの（#584 / #594）。
-    await expect(page.getByLabel("回答の役割・口調")).toHaveAccessibleDescription(
-      /現在の回答では、この設定は使われません。/
-    );
+    // 継承 chip: セレクト4行(回答の 3 行 + 安全チェック) + 三値トグル2行(回答の Rerank・画面目録)。
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(6);
+    await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(4);
+    await expect(page.getByLabel("回答の役割・口調")).toHaveCount(0);
+    await expect(page.getByLabel("既定の回答言語")).toHaveCount(0);
+    await expect(settings.getByTestId("docrag-unused-note")).toHaveCount(0);
+    await expect(settings).not.toContainText("DocRAG");
     await expectNoPageOverflow(page);
   });
 }
-
-test("業務ビューの回答スタイルは逐句引用とカスタムを選べる", async ({ page }) => {
-  await mockBusinessViews(page, []);
-  await page.goto("/business-views?id=new");
-  const generationSetting = page
-    .getByRole("heading", { name: "回答スタイル", level: 3 })
-    .locator("..");
-  await generationSetting.getByRole("button", { name: "業務ビューで上書き" }).click();
-  const select = page.locator("#business-view-generation");
-  await expect(select).toBeVisible();
-  await select.click();
-  await expect(page.getByRole("option", { name: "逐句出典付与" })).toBeVisible();
-  await expect(page.getByRole("option", { name: "カスタム" })).toBeVisible();
-});
 
 test("業務ビューを作成すると参照 KB と方針を含めて POST し、作成した業務ビューのエディタへ置き換えて移る", async ({
   page,
@@ -102,13 +77,12 @@ test("業務ビューを作成すると参照 KB と方針を含めて POST し�
   await page.getByRole("combobox", { name: "参照するナレッジベース" }).press("Escape");
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("経理ビュー");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("経理規程の問い合わせに回答します");
-  const retrievalSetting = page.getByRole("heading", { name: "検索方法", level: 3 }).locator("..");
-  const override = retrievalSetting.getByRole("button", { name: "業務ビューで上書き" });
+  const guardrailSetting = page.getByRole("heading", { name: "安全チェック", level: 3 }).locator("..");
+  const override = guardrailSetting.getByRole("button", { name: "業務ビューで上書き" });
   await override.click();
   await expect(override).toHaveAttribute("aria-pressed", "true");
-  await retrievalSetting.getByRole("combobox", { name: "検索方法" }).click();
-  await page.getByRole("option", { name: "キーワード" }).click();
-  await page.getByLabel("回答の役割・口調").fill("あなたは経理規程に詳しい回答担当です。");
+  await guardrailSetting.getByRole("combobox", { name: "安全チェック" }).click();
+  await page.getByRole("option", { name: "規制対応" }).click();
   await page.getByRole("button", { name: "作成する" }).click();
 
   await expect
@@ -116,12 +90,16 @@ test("業務ビューを作成すると参照 KB と方針を含めて POST し�
     .toEqual(["kb-1"]);
   expect(createBody?.name).toBe("経理ビュー");
   expect(createBody?.description).toBe("経理規程の問い合わせに回答します");
-  expect((createBody?.config as { system_prompt?: string })?.system_prompt).toContain(
-    "経理規程"
-  );
   expect(
-    (createBody?.config as { query?: { retrieval_strategy?: string } })?.query?.retrieval_strategy
-  ).toBe("keyword");
+    (createBody?.config as { query?: { guardrail_policy?: string } })?.query?.guardrail_policy
+  ).toBe("regulated");
+  // 削除した項目（#595）は送らない。
+  const config = (createBody?.config ?? {}) as Record<string, unknown>;
+  expect("system_prompt" in config).toBe(false);
+  expect("default_language" in config).toBe(false);
+  for (const removed of ["retrieval_strategy", "post_retrieval_pipeline", "generation_profile"]) {
+    expect(removed in ((config.query as Record<string, unknown>) ?? {})).toBe(false);
+  }
   expect(
     "vector_index_profile" in
       ((createBody?.config as { query?: Record<string, unknown> })?.query ?? {})
@@ -151,14 +129,6 @@ test("回答の設定は常に表示し、上書きした値を POST する（�
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("手順ビュー");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("操作手順に回答する業務ビュー");
 
-  // 検索方法・検索オプション・根拠確認・回答スタイル・回答プロンプトは現在の回答では使われない。
-  // 説明を出し、入力は残す(#300 / #594)。
-  const notes = page.getByTestId("docrag-unused-note");
-  await expect(notes).toHaveCount(5);
-  await expect(page.getByRole("group", { name: "回答スタイル" })).toHaveAccessibleDescription(
-    "現在の回答では、この設定は使われません。"
-  );
-  await expect(page.getByLabel("回答の役割・口調")).toBeEditable();
   const strategy = page.getByRole("heading", { name: "質問の拡張", level: 3 }).locator("..");
   await strategy.getByRole("button", { name: "業務ビューで上書き" }).click();
   await strategy.getByRole("combobox", { name: "質問の拡張" }).click();
@@ -233,7 +203,8 @@ for (const viewport of [
     // 説明は必須（#521）。説明が空の既存の業務ビューは、保存するときに入力を求めて送らない。
     const description = page.getByRole("textbox", { name: "説明", exact: true });
     await expect(description).toHaveAttribute("aria-required", "true");
-    await page.getByLabel("回答の役割・口調").fill("全社共通の回答担当です。");
+    const guardrail = page.getByRole("heading", { name: "安全チェック", level: 3 }).locator("..");
+    await guardrail.getByRole("button", { name: "業務ビューで上書き" }).click();
     await page.getByRole("button", { name: "保存する" }).click();
     await expect(page.getByText("説明を入力してください。")).toBeVisible();
     await expect(description).toHaveAttribute("aria-invalid", "true");
@@ -247,7 +218,9 @@ for (const viewport of [
     await expect
       .poll(() => (updateBody?.config as { knowledge_base_ids?: string[] })?.knowledge_base_ids)
       .toEqual(["kb-default"]);
-    expect((updateBody?.config as { system_prompt?: string })?.system_prompt).toContain("全社共通");
+    expect(
+      (updateBody?.config as { query?: { guardrail_policy?: string } })?.query?.guardrail_policy
+    ).toBe("strict");
     expect(updateBody?.description).toBe("全社共通の検索設定");
     await expectNoPageOverflow(page);
   });
@@ -341,37 +314,6 @@ test("RAG 検索は複数業務ビューを選ぶと business_view_ids を送る
 
   await expect.poll(() => searchPayload?.business_view_ids).toEqual(["bv-1", "bv-2"]);
   await expect.poll(() => searchPayload?.knowledge_base_ids).toBeUndefined();
-});
-
-test("構造化 JSON 回答は等幅コード領域に表示する", async ({ page }) => {
-  await mockBusinessViews(page, [
-    {
-      id: "bv-1",
-      name: "連携ビュー",
-      description: null,
-      status: "ACTIVE",
-      knowledge_base_count: 1,
-      created_at: "2026-06-19T00:00:00Z",
-      updated_at: "2026-06-19T00:00:00Z",
-      archived_at: null,
-    },
-  ]);
-  await page.route("**/api/search/stream", async (route) => {
-    await route.fulfill({
-      status: 200,
-      headers: { "content-type": "text/event-stream" },
-      body: searchStreamBody("structured_json", '{"answer":"確認しました"}'),
-    });
-  });
-  await page.goto("/search");
-  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
-  await page.getByRole("option", { name: /連携ビュー/ }).click();
-  await page.getByRole("textbox", { name: "RAG 検索" }).fill("確認");
-  await page.getByRole("button", { name: "検索", exact: true }).click();
-
-  const jsonAnswer = page.locator("pre").filter({ hasText: '"answer":"確認しました"' });
-  await expect(jsonAnswer).toBeVisible();
-  await expect(jsonAnswer).toHaveClass(/font-mono/);
 });
 
 for (const viewport of [
@@ -597,7 +539,7 @@ test("業務ビューのエディタは未保存の変更があるとブラウ�
 test("業務ビューの保存に失敗すると、理由をヘッダーの直下だけに出し、下までスクロールしていても見える", async ({
   page,
 }) => {
-  const message = "カスタム回答スタイルを使う前に Prompt 版を作成して有効化してください。";
+  const message = "アーカイブ済みのナレッジベースは参照できません。";
   await mockBusinessViews(page, [accountingView]);
   let attempts = 0;
   await page.route("**/api/business-views/bv-1", async (route) => {
@@ -689,7 +631,9 @@ test("エディタの見出しに状態と参照 KB の件数を出し、アー�
   await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveAttribute("readonly", "");
   await expect(page.getByRole("textbox", { name: "説明", exact: true })).toHaveAttribute("readonly", "");
   await expect(page.getByRole("button", { name: "保存する" })).toBeDisabled();
-  await expect(page.getByLabel("回答の役割・口調")).toBeDisabled();
+  await expect(
+    page.getByRole("group", { name: "安全チェック" }).getByRole("button", { name: "業務ビューで上書き" })
+  ).toBeDisabled();
   await expectNoPageOverflow(page);
 });
 
@@ -737,13 +681,8 @@ async function mockBusinessViews(
           version: 1,
           knowledge_base_ids: ["kb-1"],
           query: {
-            retrieval_strategy: null,
-            post_retrieval_pipeline: null,
-            generation_profile: null,
             guardrail_policy: null,
           },
-          system_prompt: null,
-          default_language: null,
           serving_mode: "fused",
         },
         knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
@@ -875,13 +814,8 @@ async function mockDefaultBusinessView(
     version: 1,
     knowledge_base_ids: ["kb-default"],
     query: {
-      retrieval_strategy: null,
-      post_retrieval_pipeline: null,
-      generation_profile: null,
       guardrail_policy: null,
     },
-    system_prompt: null,
-    default_language: null,
     serving_mode: "single",
   };
 
@@ -924,18 +858,19 @@ async function mockDefaultBusinessView(
   });
 }
 
-function searchStreamBody(
-  generationProfile = "grounded_concise",
-  answer = "上限額を確認しました。"
-): string {
+function searchStreamBody(answer = "上限額を確認しました。"): string {
   return [
     `event: metadata\ndata: ${JSON.stringify({
       trace_id: "trace-bv",
       elapsed_ms: 10,
       guardrail_warnings: [],
       diagnostics: {
+        retrieval_strategy: "docrag",
+        retrieval_strategy_adapter: "docrag_grounded",
+        filter_keys: [],
+        knowledge_base_count: 1,
         business_view_applied: "bv-1",
-        generation_profile: generationProfile,
+        config_fingerprint: "fp-bv",
       },
     })}\n\n`,
     `event: delta\ndata: ${JSON.stringify({ text: answer })}\n\n`,

@@ -1,395 +1,41 @@
 "use client";
 
-import {
-  PageBody,
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-  Button,
-  FormStatus,
-  Switch,
-  TimedLoadingState,
-  FormSkeleton,
-} from "@engchina/production-ready-ui";
-import { useState } from "react";
-import { CheckCircle2, RotateCcw, Save, Search } from "lucide-react";
+import { PageBody, TimedLoadingState } from "@engchina/production-ready-ui";
 
-import { ErrorState } from "@/components/StateViews";
 import { AnswerRecordRetentionCard } from "@/components/settings/AnswerRecordRetentionCard";
 import { AnsweringSettingsCard } from "@/components/settings/AnsweringSettingsCard";
-import { DocragUnusedNote } from "@/components/settings/DocragUnusedNote";
 import { QueryHistorySettingsCard } from "@/components/settings/QueryHistorySettingsCard";
+import { t } from "@/lib/i18n";
 import {
-  ApiError,
-  type RetrievalModeName,
-  type RetrievalSettingsData,
-  type RetrievalStrategyName,
-  type RetrievalStrategyStatusData,
-} from "@/lib/api";
-import { useLeaveGuard } from "@/lib/leave-guard";
-import { t, type I18nKey } from "@/lib/i18n";
-import { useRetrievalSettings, useUpdateRetrievalSettings } from "@/lib/queries";
-import { cn } from "@/lib/utils";
+  useAnswerRecordSettings,
+  useAnsweringSettings,
+  useQueryHistorySettings,
+} from "@/lib/queries";
 
-const MODE_ORDER: RetrievalModeName[] = [
-  "hybrid_rrf",
-  "vector",
-  "keyword",
-  "graph_augmented",
-  "reasoning_tree_search",
-];
-
-/** 画面ローカルの編集フォーム状態(検索モード + 合成トグル)。 */
-interface RetrievalForm {
-  mode: RetrievalModeName;
-  query_expansion: boolean;
-  query_expansion_llm: boolean;
-  gap_stop: boolean;
-  corrective_retrieval: boolean;
-  business_fit_weighting: boolean;
-}
-
-function formFromSettings(settings: RetrievalSettingsData): RetrievalForm {
-  return {
-    mode: settings.mode,
-    query_expansion: settings.query_expansion,
-    query_expansion_llm: settings.query_expansion_llm,
-    gap_stop: settings.gap_stop,
-    corrective_retrieval: settings.corrective_retrieval,
-    business_fit_weighting: settings.business_fit_weighting,
-  };
-}
-
-function isDirty(form: RetrievalForm, settings: RetrievalSettingsData): boolean {
-  // legacy 読み替え中は保存で新形式へ移行するため、同値でも保存可能にする。
-  if (settings.legacy_strategy) return true;
-  return formChanged(form, settings);
-}
-
-/** 利用者が選択を変えたか（離脱ガード用。legacy の移行保存だけでは確認しない）。 */
-function formChanged(form: RetrievalForm, settings: RetrievalSettingsData): boolean {
-  const base = formFromSettings(settings);
-  return (Object.keys(base) as (keyof RetrievalForm)[]).some((key) => form[key] !== base[key]);
-}
-
-/** 検索方法(検索モード + 検索オプション)の設定画面。 */
+/**
+ * 検索方法の画面。回答の検索と生成の全体既定（業務ビューで上書きできる）と、回答の記録・質問履歴を設定する。
+ * 以前の検索モード・検索オプションは、回答エンジンを 1 つにしたときに削除した（#595）。
+ */
 export function RetrievalSettingsClient() {
-  const query = useRetrievalSettings();
-  const save = useUpdateRetrievalSettings();
-  const [form, setForm] = useState<RetrievalForm | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-
-  // server 値が変わったレンダーで、フォームを server 値に合わせる。ただし利用者が前の server 値から
-  // 変えた選択(未保存の編集)は上書きしない。保存に失敗したときも編集を残し、再試行できるようにする(#275)。
-  const [syncedFrom, setSyncedFrom] = useState<RetrievalSettingsData | null>(null);
-  if (query.data && query.data !== syncedFrom) {
-    if (!form || !syncedFrom || !formChanged(form, syncedFrom)) {
-      setForm(formFromSettings(query.data));
-    }
-    setSyncedFrom(query.data);
-  }
-
-  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
-  useLeaveGuard(Boolean(query.data && form && formChanged(form, query.data)));
-
-  if (query.isPending) {
-    return (
-      <PageBody wide>
+  // 3 つのカードの初回の読み込みの経過時間は、ページの先頭の 1 か所だけに出す。カードは読み込み中も
+  // 形の Skeleton で寸法を保ち、読めたものから順に出す（1 つの取得の失敗・再試行でほかのカードを待たせない）。
+  const answering = useAnsweringSettings();
+  const answerRecords = useAnswerRecordSettings();
+  const queryHistory = useQueryHistorySettings();
+  const loading = answering.isPending || answerRecords.isPending || queryHistory.isPending;
+  return (
+    <PageBody wide>
+      {loading ? (
         <TimedLoadingState
           label={t("settings.loading")}
           operationKey="settings-retrieval-load"
           placement="page"
           testId="settings-retrieval-loading"
-        >
-          <FormSkeleton />
-        </TimedLoadingState>
-      </PageBody>
-    );
-  }
-
-  if (query.isError) {
-    return (
-      <PageBody wide>
-        <ErrorState
-          message={
-            query.error instanceof ApiError ? query.error.message : t("settings.retrieval.loadError")
-          }
-          onRetry={() => void query.refetch()}
         />
-      </PageBody>
-    );
-  }
-
-  const settings = query.data;
-  if (!settings || !form) return null;
-
-  const dirty = isDirty(form, settings);
-  const saveError =
-    save.error instanceof ApiError ? save.error.message : t("settings.retrieval.saveError");
-  const modes = orderedModes(settings.modes);
-
-  function updateForm(patch: Partial<RetrievalForm>) {
-    save.reset();
-    setSuccessMessage(null);
-    setForm((current) => (current ? { ...current, ...patch } : current));
-  }
-
-  function resetForm() {
-    save.reset();
-    setSuccessMessage(null);
-    if (settings) setForm(formFromSettings(settings));
-  }
-
-  function submit() {
-    if (!form) return;
-    save.mutate(
-      { ...form },
-      {
-        onSuccess: (data) => {
-          setForm(formFromSettings(data));
-          setSuccessMessage(t("settings.retrieval.actions.saved"));
-        },
-        onError: () => setSuccessMessage(null),
-      }
-    );
-  }
-
-  return (
-    <PageBody wide>
-      <Card>
-        <CardHeader>
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
-              <Search size={20} aria-hidden />
-            </div>
-            <div>
-              <CardTitle>{t("settings.retrieval.overview.title")}</CardTitle>
-              <CardDescription>{t("settings.retrieval.overview.description")}</CardDescription>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-5">
-          {settings.legacy_strategy ? (
-            <FormStatus tone="info" message={t("settings.retrieval.legacyNotice")} />
-          ) : null}
-          <div className="space-y-2">
-            <div>
-              <div className="text-sm font-medium text-fg">
-                {t("settings.retrieval.mode")}
-              </div>
-              <DocragUnusedNote id="retrieval-mode-docrag-note">
-                {t("settings.retrieval.docragUnused.mode")}
-              </DocragUnusedNote>
-            </div>
-            <div
-              role="radiogroup"
-              aria-label={t("settings.retrieval.mode")}
-              aria-describedby="retrieval-mode-docrag-note"
-              className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-4"
-            >
-              {modes.map((item) => {
-                const selected = form.mode === item.name;
-                return (
-                  <div key={item.name} className="relative min-w-0">
-                    <input
-                      id={`settings-retrieval-mode-${item.name}`}
-                      className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
-                      type="radio"
-                      name="settings-retrieval-mode"
-                      value={item.name}
-                      checked={selected}
-                      disabled={save.isPending}
-                      onChange={() => updateForm({ mode: item.name as RetrievalModeName })}
-                    />
-                    <label
-                      htmlFor={`settings-retrieval-mode-${item.name}`}
-                      className={cn(
-                        "block h-full cursor-pointer min-h-[6.86rem] rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
-                        selected
-                          ? "border-accent-emphasis bg-accent-subtle text-fg"
-                          : "border-border bg-surface text-fg peer-hover:bg-surface-hover"
-                      )}
-                    >
-                      <span className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold">{strategyLabel(item.name)}</span>
-                        {selected ? (
-                          <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
-                        ) : null}
-                      </span>
-                      <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
-                        {strategyDescription(item.name)}
-                      </span>
-                      <span className="mt-2 flex flex-wrap gap-1">
-                        {item.recommended_for.slice(0, 2).map((token) => (
-                          <span
-                            key={token}
-                            className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted"
-                          >
-                            {purposeLabel(token)}
-                          </span>
-                        ))}
-                      </span>
-                    </label>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          <div className="space-y-2">
-            <div>
-              <div className="text-sm font-medium text-fg">
-                {t("settings.retrieval.toggles")}
-              </div>
-              <p className="text-xs text-fg-muted">{t("settings.retrieval.toggles.description")}</p>
-              <DocragUnusedNote id="retrieval-toggles-docrag-note">
-                {t("settings.retrieval.docragUnused.toggles")}
-              </DocragUnusedNote>
-            </div>
-            <div
-              role="group"
-              aria-label={t("settings.retrieval.toggles")}
-              aria-describedby="retrieval-toggles-docrag-note"
-              className="divide-y divide-border rounded-md border border-border"
-            >
-              <ToggleRow
-                label={t("settings.retrieval.queryExpansion")}
-                description={t("settings.retrieval.toggle.queryExpansion.description")}
-                checked={form.query_expansion}
-                disabled={save.isPending}
-                onChange={(checked) =>
-                  updateForm(
-                    checked
-                      ? { query_expansion: true }
-                      : { query_expansion: false, query_expansion_llm: false }
-                  )
-                }
-              />
-              <ToggleRow
-                nested
-                label={t("settings.retrieval.toggle.queryExpansionLlm")}
-                description={t("settings.retrieval.toggle.queryExpansionLlm.description")}
-                checked={form.query_expansion_llm}
-                disabled={save.isPending || !form.query_expansion}
-                onChange={(checked) => updateForm({ query_expansion_llm: checked })}
-              />
-              <ToggleRow
-                label={t("settings.retrieval.gapStop")}
-                description={t("settings.retrieval.toggle.gapStop.description")}
-                checked={form.gap_stop}
-                disabled={save.isPending}
-                onChange={(checked) => updateForm({ gap_stop: checked })}
-              />
-              <ToggleRow
-                label={t("settings.retrieval.businessFit")}
-                description={t("settings.retrieval.toggle.businessFit.description")}
-                checked={form.business_fit_weighting}
-                disabled={save.isPending}
-                onChange={(checked) => updateForm({ business_fit_weighting: checked })}
-              />
-              <ToggleRow
-                label={t("settings.retrieval.corrective")}
-                description={t("settings.retrieval.toggle.corrective.description")}
-                checked={form.corrective_retrieval}
-                disabled={save.isPending}
-                onChange={(checked) => updateForm({ corrective_retrieval: checked })}
-              />
-            </div>
-          </div>
-          <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
-            <div className="min-h-6">
-              {dirty ? (
-                <FormStatus tone="warning" message={t("settings.retrieval.actions.unsaved")} />
-              ) : null}
-              {successMessage ? <FormStatus tone="success" message={successMessage} /> : null}
-              {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={resetForm}
-                disabled={!dirty || save.isPending}
-                aria-label={t("settings.retrieval.actions.reset")} icon={RotateCcw}>
-                {t("settings.retrieval.actions.reset")}
-              </Button>
-              <Button
-                type="button"
-                loading={save.isPending}
-                disabled={!dirty}
-                onClick={submit}
-                aria-label={t("settings.retrieval.actions.save")} icon={Save}>
-                {t("settings.retrieval.actions.save")}
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      {/* 回答の検索と生成の全体既定と、回答の記録・質問履歴（#593。回答スタイルの画面から移した）。 */}
+      ) : null}
       <AnsweringSettingsCard />
       <AnswerRecordRetentionCard />
       <QueryHistorySettingsCard />
     </PageBody>
   );
-}
-
-function ToggleRow({
-  label,
-  description,
-  checked,
-  disabled,
-  onChange,
-  nested = false,
-}: {
-  label: string;
-  description: string;
-  checked: boolean;
-  disabled: boolean;
-  onChange: (checked: boolean) => void;
-  nested?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        "flex items-start justify-between gap-4 px-3 py-3",
-        nested && "pl-8",
-        disabled && "opacity-60"
-      )}
-    >
-      <div className="min-w-0">
-        <div className="text-sm font-medium text-fg">{label}</div>
-        <p className="mt-0.5 text-xs leading-relaxed text-fg-muted">{description}</p>
-      </div>
-      <Switch
-        checked={checked}
-        disabled={disabled}
-        aria-label={label}
-        onCheckedChange={onChange}
-        className="mt-0.5 shrink-0"
-      />
-    </div>
-  );
-}
-
-function orderedModes(modes: RetrievalStrategyStatusData[]): RetrievalStrategyStatusData[] {
-  const byName = new Map(modes.map((item) => [item.name, item]));
-  const ordered = MODE_ORDER.map((name) => byName.get(name)).filter(
-    (item): item is RetrievalStrategyStatusData => Boolean(item)
-  );
-  return ordered.length ? ordered : modes;
-}
-
-function strategyLabel(name: RetrievalStrategyName) {
-  // 欠損キー(env 手編集の未配線戦略など)では undefined を返すため生名へ縮退する。
-  return t(`settings.retrieval.strategy.${name}` as I18nKey) || name;
-}
-
-/** 推奨用途トークンを i18n ラベルへ。未定義トークンは生のまま安全縮退する。 */
-function purposeLabel(token: string) {
-  return t(`settings.retrieval.useCase.${token}` as I18nKey) || token;
-}
-
-function strategyDescription(name: RetrievalStrategyName) {
-  return t(`settings.retrieval.strategy.${name}.description` as I18nKey);
 }

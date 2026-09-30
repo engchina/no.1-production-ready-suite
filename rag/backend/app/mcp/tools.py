@@ -38,8 +38,6 @@ from app.security.permissions import MENU_CHAT, MENU_SEARCH, ROUTE_PERMISSIONS
 
 MCP_SERVER_NAME = "production-ready-rag"
 CITATION_TEXT_MAX_CHARS = 1000
-# 検索の rerank 件数の既定（`SearchRequest.rerank_top_n`）。top_k が小さいときは top_k に合わせる。
-DEFAULT_RERANK_TOP_N = 5
 
 BUSINESS_VIEW_READ_PERMISSIONS = ROUTE_PERMISSIONS[("GET", "/business-views")]
 SEARCH_PERMISSIONS = frozenset({MENU_SEARCH})
@@ -202,7 +200,6 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
         payload["business_view_ids"] = [arguments.business_view_id]
     if arguments.top_k is not None:
         payload["top_k"] = arguments.top_k
-        payload["rerank_top_n"] = min(DEFAULT_RERANK_TOP_N, arguments.top_k)
     try:
         return SearchRequest.model_validate(payload)
     except ValidationError as exc:

@@ -23,7 +23,6 @@ def test_rag_search_audit_redacts_query_text(caplog: LogCaptureFixture) -> None:
         event = record_rag_search_audit(
             trace_id="trace-1",
             outcome="success",
-            mode=SearchMode.HYBRID,
             sanitized_query=query,
             filters={"status": "INDEXED", "file_name": "policy"},
             findings=[
@@ -55,58 +54,28 @@ def test_rag_search_audit_redacts_query_text(caplog: LogCaptureFixture) -> None:
                 ),
             ],
             elapsed_ms=12.3,
-            diagnostics=SearchDiagnostics(
-                memory_plan_id="mp-audit",
-                query_variant_count=2,
-                context_diversified_count=1,
-                context_group_expanded_count=3,
-                context_expanded_count=2,
-                context_adaptive_expanded_count=4,
-                context_dependency_promoted_count=5,
-                context_compressed_count=1,
-                context_compression_saved_chars=120,
-                agent_memory_retrieved_count=1,
-                agent_memory_writeback_count=1,
-                agent_memory_writeback_status="saved",
-                evidence_count=1,
-                support_count=1,
-                history_count=1,
-                resolver_rejected_count=1,
-                insufficient_context_count=1,
-            ),
+            diagnostics=SearchDiagnostics(config_fingerprint="fp-audit"),
         )
 
     assert event.query_chars == len(query)
     assert event.query_hash
     assert event.query_hash != query
     assert event.filter_keys == ["file_name", "status"]
-    assert event.memory_plan_id == "mp-audit"
-    assert event.query_variant_count == 2
     assert event.guardrail_codes == ["sql_mutation_intent"]
-    assert event.context_diversified_count == 1
-    assert event.context_group_expanded_count == 3
-    assert event.context_expanded_count == 2
-    assert event.context_adaptive_expanded_count == 4
-    assert event.context_dependency_promoted_count == 5
-    assert event.context_compressed_count == 1
-    assert event.context_compression_saved_chars == 120
-    assert event.agent_memory_retrieved_count == 1
-    assert event.agent_memory_writeback_count == 1
-    assert event.agent_memory_writeback_status == "saved"
-    assert event.evidence_count == 1
-    assert event.support_count == 1
-    assert event.history_count == 1
-    assert event.resolver_rejected_count == 1
-    assert event.insufficient_context_count == 1
+    assert event.config_fingerprint == "fp-audit"
+    # 回答は DocRAG(hybrid + RRF)だけ。旧 standard の計測の列は既定値のまま(列の削除は #596)。
+    assert event.mode == SearchMode.HYBRID
+    assert event.memory_plan_id is None
+    assert event.query_variant_count == 1
+    assert event.context_expanded_count == 0
+    assert event.agent_memory_writeback_status == "skipped"
     assert event.document_ids == ["doc-a", "doc-b"]
 
     record = next(item for item in caplog.records if item.message == "rag_search_audit")
     logged = cast(Any, record).audit_event
     assert logged["query_hash"] == event.query_hash
-    assert logged["memory_plan_id"] == "mp-audit"
-    assert logged["context_adaptive_expanded_count"] == 4
-    assert logged["context_dependency_promoted_count"] == 5
-    assert logged["agent_memory_writeback_status"] == "saved"
+    assert logged["config_fingerprint"] == "fp-audit"
+    assert logged["mode"] == "hybrid"
     assert "INV-001" not in str(logged)
     assert query not in str(logged)
 
@@ -121,7 +90,6 @@ def test_rag_search_audit_records_error_type_without_error_message(
         event = record_rag_search_audit(
             trace_id="trace-error",
             outcome="error",
-            mode=SearchMode.HYBRID,
             sanitized_query=query,
             filters={},
             findings=[],
@@ -160,7 +128,6 @@ def test_rag_search_audit_includes_hashed_request_context(
             event = record_rag_search_audit(
                 trace_id="trace-context",
                 outcome="no_results",
-                mode=SearchMode.HYBRID,
                 sanitized_query="社内規程",
                 filters={},
                 findings=[],

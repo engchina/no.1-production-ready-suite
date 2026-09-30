@@ -119,10 +119,9 @@ def _oracle_db_session(_hermetic_settings: None, tmp_path_factory: pytest.TempPa
 
 @pytest.fixture(autouse=True)
 def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """各テストで保存先とテスト補助 store を分離する。"""
+    """各テストで保存先と runtime の状態を分離する。"""
     from app import config as app_config
     from app.api.routes import settings as settings_routes
-    from app.clients.oracle import reset_local_store
     from app.config import get_settings
     from app.rag.guardrail_adapter import reset_guardrail_static_cache
     from app.rag.rate_limit import reset_rate_limiter
@@ -137,7 +136,6 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(settings_routes, "BACKEND_ENV_FILE", tmp_path / ".env")
     monkeypatch.delenv("PLATFORM_OCI_ENTERPRISE_AI_API_KEY", raising=False)
     monkeypatch.delenv("PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY", raising=False)
-    reset_local_store()
     set_security_service(None)
     reset_rate_limiter()
     reset_guardrail_static_cache()
@@ -262,17 +260,11 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.oci_genai_embedding_model = "cohere.embed-v4.0"
     settings.oci_genai_embedding_dim = 1536
     settings.oci_genai_rerank_model = "cohere.rerank-v4.0-fast"
-    settings.rag_agentic_profile = "off"
-    settings.rag_agentic_max_subqueries = 3
     settings.rag_chunking_service_enabled = False
     settings.rag_vector_index_service_enabled = False
     settings.rag_graph_service_enabled = False
-    settings.rag_generation_service_enabled = False
     settings.rag_guardrail_service_enabled = False
-    settings.rag_agentic_service_enabled = False
-    settings.rag_grounding_service_enabled = False
     settings.rag_evaluation_service_enabled = False
-    settings.rag_retrieval_service_enabled = False
     settings.rag_pdf_segmentation_enabled = True
     settings.rag_pdf_max_pages_per_segment = 10
     settings.rag_pdf_max_segments = 300

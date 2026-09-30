@@ -1,26 +1,28 @@
 # 検索・回答フロー高度戦略の実装計画(段階導入)
 
-> 本ドキュメントは、処理フローの内部基盤(`rag_pipeline_core` + `services/pipeline/*`)の上に
-> 追加する **実行配線が重い高度な検索・回答方式** の設計と段階導入計画をまとめる。いずれも確定スタック
+> 本ドキュメントは、回答フロー(`app/rag/docrag_answer.py`・`packages/docrag_core`)に追加しうる
+> **実行配線が重い高度な検索・回答方式** の設計メモをまとめる。いずれも確定スタック
 > (OCI Enterprise AI / OCI Generative AI Cohere / Oracle AI Database)を不変とし、外部ベクトル DB・別
 > LLM provider は導入しない。GPU / 版管理 schema DDL / 実 Oracle を要するものは **本リポジトリの
-> CI(GPU・実 DB なし)では検証不能** のため、scaffold(safe-degrade)→ 実環境配線 → 検証の順で導入する。
+> CI(GPU・実 DB なし)では検証不能** のため、決定論部分の実装 → 実環境配線 → 検証の順で導入する。
+>
+> #595 で旧 standard の回答エンジンを削除し、この計画の土台だった検索モードの選択
+> (`rag_retrieval_strategy`・`app/rag/retrieval_strategy.py`・`retrieval_adapter.py`)、PageIndex-lite の
+> ツリー検索(`app/rag/reasoning_tree.py`)、検索・根拠確認・回答生成の stage サービス
+> (`services/pipeline/{retrieval,grounding,agentic,generation}`)も削除した。以下の戦略を取り入れる場合は、
+> 回答フローの検索(`DocragAnswerEngine._search`。原質問主軸の重み付き RRF)に経路を足す形で設計し直す。
 
-最終更新: 2026-06-20
+最終更新: 2026-09-30
 
-## 現在の状態(scaffold 済 / 未配線)
+## 現在の状態
 
-| 戦略 | 種別 | 現状 | 既定挙動 |
-|---|---|---|---|
-| `reasoning_tree_search` | 検索方式(PageIndex 型) | 戦略として**選択可能**(`rag_retrieval_strategy`)。`pending_execution=True` | `strategy_bias=None` のため **hybrid 検索へ安全縮退** |
-| `colpali_visual_retrieval` | 検索方式(ColPali 型) | 同上 | 同上(hybrid 縮退) |
-| `self_reflective`(Self-RAG) | 回答スタイル | 未着手 | — |
-| Temporal GraphRAG | 関係情報の構築/検索 | 未着手(未実装だった設定 `RAG_GRAPH_TEMPORAL_ENABLED` は #301 で削除) | — |
-| RAPTOR 検索時昇格 | 検索/根拠確認 | 取込側で summary node を索引済 | 通常検索が summary node にヒット |
-
-未配線時の安全縮退は `app/rag/retrieval_strategy.py::resolve_retrieval_strategy` が未対応 strategy を
-`SearchStrategy.HYBRID` へ落とす既存挙動を利用する。高度な診断では `retrieval_strategy_adapter` と
-`runtime_retrieval_strategy=hybrid` の差分で「縮退中」を判別できる。
+| 戦略 | 種別 | 現状 |
+|---|---|---|
+| `reasoning_tree_search`(PageIndex 型) | 検索方式 | PageIndex-lite の実装(navigation 要約から LLM が section を選ぶ)と検索モードの選択は #595 で削除した。回答フローでは、画面目録で操作画面を探す(`RAG_DOCRAG_SCREEN_LINKING_ENABLED`。番号付きの見出しの目録から LLM が画面を選ぶ)が近い役割を持つ |
+| `colpali_visual_retrieval`(ColPali 型) | 検索方式 | 戦略の登録ごと #595 で削除した。未着手 |
+| `self_reflective`(Self-RAG) | 回答生成 | 未着手。回答フローの回答文の生成後の根拠確認(監査)が近い役割を持つ |
+| Temporal GraphRAG | 関係情報の構築/検索 | 未着手(未実装だった設定 `RAG_GRAPH_TEMPORAL_ENABLED` は #301 で削除) |
+| RAPTOR 検索時昇格 | 検索 | 取込側で summary node を索引済。通常の検索が summary node にヒットする |
 
 ---
 
@@ -30,30 +32,16 @@
 cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 section を選ぶ。専門文書(金融・
 法律・技術マニュアル)で、検索経路が監査可能(どの section を展開/スキップ/命中したか)になる。
 
-### 設計
+### 設計メモ
 - **tree 構築(取込時 or 検索時キャッシュ)**: 既存の `DocumentElement.section_path` /
   `parent_id` 階層から、文書ごとに `section tree`(node = {title, summary, page_range,
   child_ids})を構築。要約は OCI Enterprise AI(RAPTOR と共用可)。
-  Oracle AI Database に `rag_document_nav_tree`(または既存 `navigation` JSON、`app/rag/navigation.py`)を
-  再利用して node を永続化。
+  既存 `navigation` JSON(`app/rag/navigation.py`)を再利用して node を永続化する。
 - **検索時 navigation**: OCI Enterprise AI に「query + 現在 node の title/summary 群」を渡し、各 node
-  で yes/no(展開/スキップ)を JSON で判断 → 命中 leaf の chunk を Oracle から取得。`SearchDiagnostics`
-  に `tree_search_path`(踏破 node 列)を追加して監査可能にする。
-- **融合**: 既存 hybrid_rrf と RRF 融合可能(tree hit を 1 経路として)。
-- **opt-in / コスト**: query ごとに複数 LLM 呼び出し。`rag_retrieval_reasoning_tree_*`(深さ・幅
-  上限)を設け、失敗/未設定時は hybrid へ縮退。
-
-### 段階
-1. (済)戦略登録 + hybrid 縮退。
-2. (済)`app/rag/reasoning_tree.py`: navigation 要約チャンク(content_kind=section_summary)を
-   候補に LLM が section を選択(`select_relevant_sections`)、配下 chunk を section_path フィルタで
-   検索。`_retrieve_with_strategy` に経路追加(PageIndex-lite。DDL なし・要約未構築/LLM 失敗時は
-   hybrid へ縮退し fallback_reason を診断へ)。
-3. (済)`SearchDiagnostics.tree_search_path`(候補/選択の踏破記録)+
-   `RAG_REASONING_TREE_MAX_SECTIONS`(1-8, 既定3)+ 専用テスト(LLM stub)。検索モードとして
-   設定 UI / 業務ビュー上書きへ露出。
-4. 実 Oracle/OCI 結合検証(staging)。深い tree の多段 navigation(node 単位 yes/no)は
-   必要になったら拡張。
+  で yes/no(展開/スキップ)を JSON で判断 → 命中 leaf の chunk を Oracle から取得。踏破 node 列は
+  回答フローの実行記録(`diagnostics.docrag.execution_steps`)に残して監査可能にする。
+- **融合**: 回答フローの検索の RRF に 1 チャネルとして加える(画面目録の候補と同じく、足すだけで減らさない)。
+- **opt-in / コスト**: query ごとに複数 LLM 呼び出し。深さ・幅の上限を設け、失敗/未設定時は通常の検索だけで回答する。
 
 ---
 
@@ -63,22 +51,16 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
 ページ画像から **OCR を介さず直接検索**。複雑レイアウト(表・図・多欄)・スキャン PDF の検索精度を
 上げる。視覚特徴(multi-vector / late interaction)で query とページをマッチング。
 
-### 設計(要 GPU + 版管理 schema DDL)
-- **取込時**: 既存 `pdf_to_page_images` 前処理でページ画像化 → **GPU サービス** `services/parsers`
-  または新 `services/pipeline/colpali`(ColQwen/ColPali を transformers でロード)で **multi-vector
-  embedding** を生成。OCI Enterprise AI VLM 経路でも近似可能だが multi-vector が要点。
+### 設計メモ(要 GPU + 版管理 schema DDL)
+- **取込時**: 既存 `pdf_to_page_images` 前処理でページ画像化 → **GPU サービス**(ColQwen/ColPali を
+  transformers でロード)で **multi-vector embedding** を生成。OCI Enterprise AI VLM 経路でも近似可能だが
+  multi-vector が要点。
 - **索引(schema 変更)**: Oracle AI Database に視覚 embedding 列/表(`rag_page_visual_vectors`、
   `VECTOR` 複数 or per-patch 行)を追加。**版管理された schema DDL artifact の変更が必要**
   (`requires_reprovision`、自動変更しない)。
 - **検索時**: query を同モデルで embedding 化し、**late interaction(MaxSim)** スコアで page を
-  ランク。text hybrid と RRF 融合(visual score + text score)。
-- **opt-in / コスト**: GPU 常時必要。`rag_retrieval_colpali_*` で有効化、未配線/未設定は hybrid 縮退。
-
-### 段階
-1. (済)戦略登録 + hybrid 縮退。
-2. `services/pipeline/colpali`(GPU、`--profile gpu`)= multi-vector embedding サービス + 契約。
-3. schema DDL artifact に視覚ベクトル表を追加(版管理・reprovision 手順込み)。
-4. `_retrieve_with_strategy` に late-interaction 経路 + RRF 融合。GPU host で結合検証。
+  ランク。回答フローの検索の RRF にチャネルとして加える。
+- **opt-in / コスト**: GPU 常時必要。未配線/未設定なら通常の検索だけで回答する。
 
 ### 注意
 - `ExtractionMetadataValue`(scalar)/ 確定スタックは不変。multi-vector は別表で持つ。
@@ -88,15 +70,16 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
 
 ## 3. 残りの高度戦略(設計メモ)
 
-- **self_reflective(Self-RAG)**: generation profile。OCI Enterprise AI が
-  `{"answer":..., "confidence":0-1, "grounded_in_context":bool}` を出力。`confidence<閾値` or
-  `grounded_in_context==false` で grounding と連携し **1 回だけ再検索**(CRAG と同じ corrective
-  machinery を再利用)。generation_adapter に profile 追加 + pipeline で reflection パース。
+- **self_reflective(Self-RAG)**: OCI Enterprise AI が
+  `{"answer":..., "confidence":0-1, "grounded_in_context":bool}` を出力し、`confidence<閾値` or
+  `grounded_in_context==false` で **1 回だけ再検索**する。回答フローの CRAG(根拠の評価と補正検索)と
+  回答文の生成後の根拠確認が同じ役割を持つため、足すならその中で扱う。
 - **Temporal GraphRAG**: 取込時に entity / relationship へ timestamp(`valid_from/valid_to`)を付与し、
   検索時に query の時間文脈(「最新の」「2024 年時点」)を抽出して Oracle の条件でフィルタする。
-  `graph_augmented` 経路に時間条件を足す。設定は実装と同時に追加する(未実装の設定は置かない。#301)。
-- **RAPTOR 検索時昇格**: 既に summary node を索引済。`grounding` の dependency promotion と同様に、
-  leaf hit 時に対応する summary node を citation context へ昇格する経路を追加(opt-in)。
+  回答の検索で graph を使う経路は #595 で削除したため、検索時の利用から設計し直す。設定は実装と同時に
+  追加する(未実装の設定は置かない。#301)。
+- **RAPTOR 検索時昇格**: 既に summary node を索引済。leaf hit 時に対応する summary node を回答の文脈へ
+  昇格する経路を、回答フローの small-to-big(親本文・前後の child)と合わせて追加する(opt-in)。
 
 ---
 
@@ -107,4 +90,4 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
 - LLM/VLM/GPU/Oracle を要する実行は **staging(実 OCI/Oracle/GPU host)** で結合検証し、
   file-processing / retrieval staging gate(`docs/evaluation`)に指標(retrieval recall / table QA /
   page hit / tree path coverage)を合流させる。
-- すべて opt-in・未配線時は hybrid/既存挙動へ安全縮退し、既定の挙動・レイテンシを変えない。
+- すべて opt-in・未配線時は既存の回答フローの挙動のままにし、既定の挙動・レイテンシを変えない。

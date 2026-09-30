@@ -27,13 +27,9 @@ describe("api 業務ビュー(Business View)", () => {
             version: 1,
             knowledge_base_ids: ["kb-1", "kb-2"],
             query: {
-              retrieval_strategy: null,
-              post_retrieval_pipeline: null,
-              generation_profile: "detailed_cited",
               guardrail_policy: null,
+              docrag_query_strategy: "rag_fusion",
             },
-            system_prompt: "あなたは経理規程アシスタントです。",
-            default_language: "日本語",
           },
           knowledge_bases: [
             { id: "kb-1", name: "社内規程" },
@@ -55,18 +51,9 @@ describe("api 業務ビュー(Business View)", () => {
         version: 1,
         knowledge_base_ids: ["kb-1", "kb-2"],
         query: {
-          retrieval_strategy: null,
-          retrieval_query_expansion: null,
-          retrieval_query_expansion_llm: null,
-          retrieval_gap_stop: null,
-          retrieval_corrective: null,
-          retrieval_business_fit_weighting: null,
-          post_retrieval_pipeline: null,
-          generation_profile: "detailed_cited",
           guardrail_policy: null,
+          docrag_query_strategy: "rag_fusion",
         },
-        system_prompt: "あなたは経理規程アシスタントです。",
-        default_language: "日本語",
         serving_mode: "fused",
       },
     });
@@ -78,7 +65,7 @@ describe("api 業務ビュー(Business View)", () => {
     expect(path).toBe("/api/business-views");
     expect(init?.method).toBe("POST");
     const body = JSON.parse(String(init?.body));
-    expect(body.config.query.generation_profile).toBe("detailed_cited");
+    expect(body.config.query.docrag_query_strategy).toBe("rag_fusion");
   });
 
   it("listBusinessViews は warning_messages 付きで縮退できる", async () => {
@@ -111,13 +98,8 @@ describe("api 業務ビュー(Business View)", () => {
             version: 1,
             knowledge_base_ids: [],
             query: {
-              retrieval_strategy: null,
-              post_retrieval_pipeline: null,
-              generation_profile: null,
               guardrail_policy: null,
             },
-            system_prompt: null,
-            default_language: null,
           },
           knowledge_bases: [],
           created_at: "2026-06-19T00:00:00Z",

@@ -155,9 +155,6 @@ function emptyAdapterConfig() {
       navigation_summary_enabled: null,
     },
     query: {
-      retrieval_strategy: null,
-      post_retrieval_pipeline: null,
-      generation_profile: null,
       guardrail_policy: null,
     },
   };

@@ -17,13 +17,9 @@ interface ServiceRow {
     | "parser"
     | "chunking"
     | "vector_index"
-    | "retrieval"
-    | "grounding"
-    | "generation"
     | "guardrail"
     | "evaluation"
-    | "graphrag"
-    | "agentic";
+    | "graphrag";
   profile: "cpu" | "gpu" | "oci";
   label_key: string;
   execution_policy:
@@ -91,10 +87,10 @@ function defaultServices(): ServiceRow[] {
       configured: true,
     },
     {
-      service_id: "pipeline-retrieval",
-      category: "retrieval",
+      service_id: "pipeline-guardrail",
+      category: "guardrail",
       profile: "cpu",
-      label_key: "settings.services.item.pipelineRetrieval",
+      label_key: "settings.services.item.pipelineGuardrail",
       execution_policy: "in_process_when_disabled",
       status: "stopped",
       configured: true,
@@ -261,7 +257,7 @@ for (const viewport of [
       page.getByText("取込/解析設定でこのサービスを選択した場合のみ", { exact: false }).first()
     ).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "検索方法", exact: true })
+      page.getByRole("heading", { name: "安全チェック", exact: true })
     ).toBeVisible();
     // 稼働状態バッジ。
     await expect(page.getByText("稼働中").first()).toBeVisible();
@@ -483,7 +479,7 @@ for (const viewport of [
       "parser-oci-document-understanding": "起動",
       // backend 内処理の段は操作を出さない。
       "pipeline-chunking": null,
-      "pipeline-retrieval": null,
+      "pipeline-guardrail": null,
     };
     for (const [serviceId, primary] of Object.entries(expected)) {
       const row = page.getByTestId(`service-row-${serviceId}`);

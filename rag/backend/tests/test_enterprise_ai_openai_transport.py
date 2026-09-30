@@ -95,30 +95,6 @@ async def test_timeout_maps_to_enterprise_ai_timeout(monkeypatch: pytest.MonkeyP
         await _client(monkeypatch, handler).generate("q", "c")
 
 
-async def test_generate_stream_yields_sse_deltas(monkeypatch: pytest.MonkeyPatch) -> None:
-    events = [
-        {"type": "response.output_text.delta", "delta": "こん"},
-        {"type": "response.output_text.delta", "delta": "にちは"},
-    ]
-    body = (
-        "".join(
-            f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-            for event in events
-        )
-        + "data: [DONE]\n\n"
-    )
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert json.loads(request.content)["stream"] is True
-        return httpx.Response(
-            200, content=body.encode(), headers={"content-type": "text/event-stream"}
-        )
-
-    chunks = [chunk async for chunk in _client(monkeypatch, handler).generate_stream("q", "c")]
-
-    assert "".join(chunks) == "こんにちは"
-
-
 async def test_upload_file_sends_multipart(monkeypatch: pytest.MonkeyPatch) -> None:
     requests: list[httpx.Request] = []
 

@@ -119,8 +119,11 @@ function integer(value: string | null, fallback: number): number {
   return Number.isInteger(parsed) ? parsed : fallback;
 }
 
-/** 品質評価の要求（EvaluationClient の `evaluation.requestJson`）の既定。 */
-const EMPTY_EVALUATION_REQUEST = { cases: [], top_k: 10, rerank_top_n: 5, mode: "hybrid" };
+/**
+ * 品質評価の要求（EvaluationClient の `evaluation.requestJson`）の既定。検索の方式（mode）と rerank の件数は
+ * 回答エンジンが使わないため書かない（EvaluationClient のサンプルと同じ。#591 / #595）。
+ */
+const EMPTY_EVALUATION_REQUEST = { cases: [], top_k: 10 };
 
 /**
  * 品質評価の要求 JSON へ評価ケースを追記する（同じ id のケースは置き換える）。
