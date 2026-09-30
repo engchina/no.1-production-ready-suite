@@ -231,7 +231,7 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
    sudo systemctl stop 'production-ready-rag-*'
    ```
 
-2. `backend/.env` の旧名の行を改名する（バックアップを取ってから編集する）。Compute では、`init_script.sh` が Resource Manager の入力（`/u01/aipoc/props/backend.env`）から `backend/.env` を作り直すので、両方を直す。
+2. `backend/.env` の旧名の行を改名し、値の旧名（`RAG_CHUNKING_STRATEGY=docrag_small_to_big`）も書き換える（バックアップを取ってから編集する。値が旧名のままだと backend が起動時の検証で止まる。#624）。Compute では、`init_script.sh` が Resource Manager の入力（`/u01/aipoc/props/backend.env`）から `backend/.env` を作り直すので、両方を直す。
 
    ```bash
    for env_file in /u01/aipoc/no.1-production-ready-suite/rag/backend/.env /u01/aipoc/props/backend.env; do
@@ -241,8 +241,9 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
        -e 's/^RAG_DOCRAG_(CHILD_TARGET_CHARS|TABLE_CHILD_TARGET_CHARS|PARENT_TARGET_CHARS|PARENT_MAX_PAGES|PARENT_MAX_CHILDREN)=/RAG_CHUNK_\1=/' \
        -e 's/^RAG_DOCRAG_PROFILE=/RAG_ANSWER_PROFILE=/' \
        -e 's/^RAG_DOCRAG_(QUERY_STRATEGY|ANSWER_FLOW|NEIGHBOR_CHILD_COUNT|RERANK_ENABLED|SCREEN_LINKING_ENABLED|ANSWER_VISION_ENABLED|HISTORY_REWRITE_ENABLED)=/RAG_\1=/' \
+       -e 's/^RAG_CHUNKING_STRATEGY=docrag_small_to_big$/RAG_CHUNKING_STRATEGY=small_to_big/' \
        "${env_file}"
-     sudo grep -nE '^(RAG_DOCRAG_|DOCRAG_)' "${env_file}" || echo "OK: ${env_file}"
+     sudo grep -ni 'docrag' "${env_file}" || echo "OK: ${env_file}"
    done
    ```
 
