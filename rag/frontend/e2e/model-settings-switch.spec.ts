@@ -522,6 +522,9 @@ test("モデル設定はモデルごとのテスト成功と失敗を行内に�
   await expect(
     page.getByText("Enterprise AI の回答生成モデル「enterprise-llm」から応答を取得しました。")
   ).toBeVisible();
+  // 成功の技術的な詳細（API の key/value）は「詳細」に畳む（messaging.md §10。#705）。
+  await expect(page.getByText("surface")).toBeHidden();
+  await page.getByText("詳細", { exact: true }).first().click();
   await expect(page.getByText("surface")).toBeVisible();
   await expect(page.getByText("llm", { exact: true })).toBeVisible();
 

@@ -768,7 +768,6 @@ export function ModelSettingsPage({
                   onChange={(value) =>
                     updateGenerative("embedding_model", value)
                   }
-                  testResult={testResults.embedding}
                   testing={testingKey === "embedding"}
                   onTest={() =>
                     void handleTestModel("embedding", {
@@ -796,7 +795,6 @@ export function ModelSettingsPage({
                   placeholder={t("settings.model.placeholder.rerankModel")}
                   onChange={(value) => updateGenerative("rerank_model", value)}
                   className="md:col-span-2 2xl:col-span-1"
-                  testResult={testResults.rerank}
                   testing={testingKey === "rerank"}
                   onTest={() =>
                     void handleTestModel("rerank", {
@@ -807,6 +805,23 @@ export function ModelSettingsPage({
                   }
                 />
               </div>
+              {/* テストの結果は操作した欄の列の中ではなく、カードの全幅で出す（messaging.md §10。#705）。 */}
+              <ModelTestResultPanel
+                result={testResults.embedding}
+                testing={testingKey === "embedding"}
+                model={
+                  draft.generative_ai.embedding_model.trim() ||
+                  t("settings.model.genai.embeddingModel")
+                }
+              />
+              <ModelTestResultPanel
+                result={testResults.rerank}
+                testing={testingKey === "rerank"}
+                model={
+                  draft.generative_ai.rerank_model.trim() ||
+                  t("settings.model.genai.rerankModel")
+                }
+              />
               <ModelFormActions
                 sectionLabel={t("settings.model.genai.title")}
                 canSubmit={canSubmit}
@@ -1293,7 +1308,6 @@ function TestableTextField({
   placeholder,
   helper,
   className,
-  testResult,
   testing,
   onChange,
   onTest,
@@ -1304,11 +1318,11 @@ function TestableTextField({
   placeholder?: string;
   helper?: string;
   className?: string;
-  testResult?: ModelSettingsTestResult;
   testing: boolean;
   onChange: (value: string) => void;
   onTest: () => void;
 }) {
+  // 結果はこの欄（grid の 1 列）の中ではなく、grid の下に全幅で出す（messaging.md §10。#705）。
   return (
     <div className={cn("space-y-1.5", className)}>
       <InputActionField
@@ -1328,11 +1342,6 @@ function TestableTextField({
           disabled: !value.trim(),
           onClick: onTest,
         }}
-      />
-      <ModelTestResultPanel
-        result={testResult}
-        testing={testing}
-        model={value.trim() || label}
       />
     </div>
   );

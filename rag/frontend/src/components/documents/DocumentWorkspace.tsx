@@ -56,6 +56,7 @@ import {
   normalizeIngestionErrorMessage,
   resolveDocumentFailureView,
   resolveIngestionErrorDisplayPlan,
+  splitErrorCode,
 } from "./ingestion-error-display";
 import { ReviewTextEditor } from "./ReviewTextEditor";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
@@ -1149,7 +1150,7 @@ export function DocumentWorkspace({
                 : undefined
             }
           >
-            {documentFailure.primaryMessage ?? t("flow.error.fallback")}
+            <FailureMessage message={documentFailure.primaryMessage ?? t("flow.error.fallback")} />
           </Banner>
         ) : statusMessageSlot?.kind === "processing" ? (
           <Banner severity="info">{t(phaseRunningMessageKey(currentProcessingPhase))}</Banner>
@@ -3094,4 +3095,22 @@ function idSetKey(ids: string[]) {
 function isSameIdSet(left: string[], right: string[]) {
   if (left.length !== right.length) return false;
   return idSetKey(left) === idSetKey(right);
+}
+
+/**
+ * 処理の失敗の本文（messaging.md §10。#705）。原因と対処を本文に出し、エラーコードなどの技術的な詳細は
+ * 「詳細」に分ける（失敗なので開いて出す）。
+ */
+function FailureMessage({ message }: { message: string }) {
+  const { message: text, code } = splitErrorCode(message);
+  return (
+    <div className="space-y-2">
+      <p>{text}</p>
+      {code ? (
+        <Disclosure variant="plain" size="sm" summary={t("flow.error.details")} defaultOpen>
+          <p className="text-xs text-fg-muted">{t("flow.segments.errorCode", { code })}</p>
+        </Disclosure>
+      ) : null}
+    </div>
+  );
 }

@@ -1275,15 +1275,20 @@ test("同じ取込エラー原因は上部の原因バナーに 1 本化する",
 
   await page.goto("/documents/doc-1");
 
+  const summary = "選択した文書解析サービス（Dots.OCR）で解析処理が失敗しました。";
   // 原因は画面全体で 1 回だけ表示する（§9 P2）。
-  await expect(page.getByText(message)).toHaveCount(1);
-  // 上部の原因バナー(role=alert)に昇格する。
-  await expect(page.getByRole("alert").filter({ hasText: message })).toBeVisible();
+  await expect(page.getByText(summary, { exact: true })).toHaveCount(1);
+  // 上部の原因バナー(role=alert)に昇格する。エラーコードは本文から分け、「詳細」に出す（失敗なので開く。§10。#705）。
+  const banner = page.getByRole("alert").filter({ hasText: summary });
+  await expect(banner).toBeVisible();
+  await expect(banner.getByText("エラーコード: dots_ocr_adapter_failed")).toBeVisible();
+  await expect(banner.getByText(message)).toHaveCount(0);
   // job パネルでは再掲しない。
   const jobPanel = page
     .getByRole("heading", { name: "工程ごとの実行状況" })
     .locator("xpath=ancestor::section[1]");
   await expect(jobPanel.getByText(message)).toHaveCount(0);
+  await expect(jobPanel.getByText(summary)).toHaveCount(0);
   // segment の code と復旧導線は残す。
   const segmentPanel = page
     .getByRole("heading", { name: "抽出セグメント" })

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import {
   Banner,
+  Disclosure,
   MessageText,
   StatusBadge,
 } from "@engchina/production-ready-ui";
@@ -31,7 +32,12 @@ export interface SettingsTestResultPanelProps {
   children?: ReactNode;
 }
 
-/** システム設定の接続・モデルテスト結果を同じ情報階層で表示する。 */
+/**
+ * システム設定の接続・モデルテスト結果を同じ情報階層で表示する（UX 契約 messaging.md §10。#705）。
+ *
+ * 要約（何が起きたか）と所要時間・確認ポイントは常に出し、技術的な詳細（key/value・エラー種別）は
+ * 「詳細」に畳む。失敗のときだけ開いて出す。
+ */
 export function SettingsTestResultPanel({
   tone,
   message,
@@ -72,17 +78,6 @@ export function SettingsTestResultPanel({
 
           {children}
 
-          {details.length > 0 ? (
-            <dl className="grid min-w-0 gap-x-4 gap-y-1 text-xs text-fg-muted sm:grid-cols-2">
-              {details.map((detail) => (
-                <div key={detail.label} className="min-w-0">
-                  <dt className="break-words font-medium text-fg">{detail.label}</dt>
-                  <dd className="break-words tnum">{String(detail.value)}</dd>
-                </div>
-              ))}
-            </dl>
-          ) : null}
-
           {tone !== "success" && troubleshooting.length > 0 ? (
             <div className="space-y-1">
               <p className="text-xs font-semibold text-fg">
@@ -98,13 +93,34 @@ export function SettingsTestResultPanel({
             </div>
           ) : null}
 
-          {tone === "danger" && errorType ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold text-fg">
-                {t("settings.testResult.errorType")}
-              </span>
-              <StatusBadge variant="danger" label={errorType} />
-            </div>
+          {details.length > 0 || (tone === "danger" && errorType) ? (
+            <Disclosure
+              variant="plain"
+              size="sm"
+              summary={t("settings.testResult.details")}
+              defaultOpen={tone === "danger"}
+            >
+              <div className="space-y-2">
+                {details.length > 0 ? (
+                  <dl className="grid min-w-0 gap-x-4 gap-y-1 text-xs text-fg-muted sm:grid-cols-2">
+                    {details.map((detail) => (
+                      <div key={detail.label} className="min-w-0">
+                        <dt className="break-words font-medium text-fg">{detail.label}</dt>
+                        <dd className="break-words tnum">{String(detail.value)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : null}
+                {tone === "danger" && errorType ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-semibold text-fg">
+                      {t("settings.testResult.errorType")}
+                    </span>
+                    <StatusBadge variant="danger" label={errorType} />
+                  </div>
+                ) : null}
+              </div>
+            </Disclosure>
           ) : null}
         </div>
       </Banner>

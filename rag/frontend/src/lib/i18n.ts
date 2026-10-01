@@ -1521,6 +1521,7 @@ export const ja = {
   "flow.segments.loadError": "抽出セグメントを取得できません",
   "flow.segments.loadErrorHint": "時間をおいて再読み込みしてください。",
   "flow.segments.errorCode": "エラーコード: {code}",
+  "flow.error.details": "詳細",
   "flow.segments.errorReason": "原因",
   "flow.segments.errorRecovery":
     "一時的な応答不整合の可能性があります。再試行すると失敗 segment のみ再処理します。",
