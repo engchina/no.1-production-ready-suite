@@ -569,7 +569,10 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
   await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
   await expect(card.getByText("53 / 53", { exact: true })).toBeVisible();
   await card.getByText(/管理オブジェクトの詳細を表示/).click();
-  await expect(card.getByText(/適用済み version: 0, 1, 2, 3, 5, 6, 7, 8, 9, 15, 17/)).toBeVisible();
+  // 適用済みの migration は件数だけを出す（#658）。
+  await expect(card.getByTestId("system-tables-versions")).toHaveText(
+    `適用済みの migration ${APPLIED_VERSIONS.length} 件 / 未適用・不一致 0 件`
+  );
   await expect(
     page
       .getByRole("region", { name: "通知" })
