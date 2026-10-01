@@ -13,8 +13,9 @@ import {
   ProcessingIndicator,
   RowActionMenu,
   Skeleton,
-  Spinner,
+  StatusBadge,
   type EntityAction,
+  type StatusVariant,
   TimedLoadingState,
   ListSkeleton,
 } from "@engchina/production-ready-ui";
@@ -819,37 +820,35 @@ export function ServiceProfileBadge({ profile }: { profile: ServiceProfile }) {
   );
 }
 
-const STATUS_META: Record<
+/**
+ * 稼働状態 → 共有の StatusBadge の variant / アイコンの対応表（messaging.md §10.2。#723）。
+ * 状態の取得中は回るアイコンを使わない（状態の polling は静かに行い、スピナーは押したボタンだけ。§3.7）。
+ */
+export const SERVICE_STATUS_BADGE: Record<
   DisplayRuntimeStatus,
-  { className: string; icon: LucideIcon; spin?: boolean }
+  { variant: StatusVariant; icon: LucideIcon }
 > = {
-  running: { className: "bg-success-subtle text-success-fg", icon: CheckCircle2 },
-  degraded: { className: "bg-warning-subtle text-warning-fg", icon: AlertTriangle },
-  starting: { className: "bg-info-subtle text-info-fg", icon: Hourglass },
-  failed: { className: "bg-danger-subtle text-danger-fg", icon: CircleX },
-  stopped: { className: "bg-surface-hover text-fg-muted", icon: CircleSlash },
-  not_installed: { className: "bg-surface-hover text-fg-muted", icon: CircleDashed },
-  unconfigured: { className: "bg-surface-hover text-fg-muted", icon: MinusCircle },
-  in_process: { className: "bg-info-subtle text-info-fg", icon: Cpu },
-  loading: { className: "bg-surface-hover text-fg-muted", icon: RefreshCw, spin: true },
-  error: { className: "bg-danger-subtle text-danger-fg", icon: AlertTriangle },
+  running: { variant: "success", icon: CheckCircle2 },
+  degraded: { variant: "warning", icon: AlertTriangle },
+  starting: { variant: "info", icon: Hourglass },
+  failed: { variant: "danger", icon: CircleX },
+  stopped: { variant: "neutral", icon: CircleSlash },
+  not_installed: { variant: "neutral", icon: CircleDashed },
+  unconfigured: { variant: "neutral", icon: MinusCircle },
+  in_process: { variant: "info", icon: Cpu },
+  loading: { variant: "neutral", icon: Hourglass },
+  error: { variant: "danger", icon: AlertTriangle },
 };
 
-/** 稼働状態バッジ(色だけに頼らずアイコン+日本語ラベル併記)。 */
+/** 稼働状態バッジ（共有の StatusBadge。色だけに頼らずアイコン + 日本語ラベル）。 */
 export function ServiceStatusBadge({ status }: { status: DisplayRuntimeStatus }) {
-  const meta = STATUS_META[status];
-  const Icon = meta.icon;
+  const { variant, icon } = SERVICE_STATUS_BADGE[status];
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
-        meta.className
-      )}
-    >
-      {/* 回すアイコンは共有の Spinner（全周トラック・reduced-motion 対応。#395） */}
-      {meta.spin ? <Spinner size={14} /> : <Icon size={14} aria-hidden />}
-      {t(`settings.services.status.${status}` as I18nKey)}
-    </span>
+    <StatusBadge
+      variant={variant}
+      icon={icon}
+      label={t(`settings.services.status.${status}` as I18nKey)}
+    />
   );
 }
 

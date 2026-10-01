@@ -246,6 +246,11 @@ test("複数ファイルをまとめてアップロードし結果を確認で�
   await expect(page.getByTitle("policy-b.txt").first()).toBeVisible();
   await expect(page.getByText("一部のファイルをアップロードできませんでした")).toBeVisible();
   await expect(page.getByText("policy-c.txt")).toBeVisible();
+  // HTTP の状態コードは「詳細」に畳む（一部失敗の warning では閉じる。messaging.md §10.3。#723）。
+  const failedItem = page.locator("li").filter({ hasText: "HTTP 415" });
+  await expect(failedItem.getByText("HTTP 415")).toBeHidden();
+  await failedItem.getByText("詳細", { exact: true }).click();
+  await expect(failedItem.getByText("HTTP 415")).toBeVisible();
   await expect(page.getByText("汎用解析")).toBeVisible();
   await expect(page.getByText("未対応")).toBeVisible();
   await expect(page.getByText("原本種別を判定できませんでした。")).toBeVisible();

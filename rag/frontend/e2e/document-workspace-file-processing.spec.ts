@@ -1326,7 +1326,10 @@ test("同じ取込エラー原因は上部の原因バナーに 1 本化する",
   const segmentPanel = page
     .getByRole("heading", { name: "抽出セグメント" })
     .locator("xpath=ancestor::section[1]");
-  await expect(segmentPanel.getByText("enterprise_ai_response_validation_error")).toBeVisible();
+  // segment のエラーコードは手書きのチップではなく「詳細」に出す（失敗なので開く。§10。#723）。
+  await expect(
+    segmentPanel.getByText("エラーコード: enterprise_ai_response_validation_error")
+  ).toBeVisible();
   await expect(segmentPanel.getByRole("button", { name: "失敗 segment を再試行" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
