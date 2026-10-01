@@ -134,11 +134,6 @@ export const queryKeys = {
     ["documents", id, "ingestion-segments"] as const,
   documentKnowledgeBases: (id: string) =>
     ["documents", id, "knowledge-bases"] as const,
-  ingestionJobs: (params: {
-    status?: IngestionJobStatus;
-    limit?: number;
-    offset?: number;
-  }) => ["documents", "ingestion-jobs", params] as const,
   knowledgeBases: (params: {
     status?: KnowledgeBaseStatus;
     q?: string;
@@ -786,21 +781,6 @@ export function uploadErrorMessage(error: unknown): string {
     return error.message;
   }
   return t("upload.error.failed");
-}
-
-/** 取込 job 一覧。 */
-export function useIngestionJobs(
-  params: {
-    status?: IngestionJobStatus;
-    limit?: number;
-    offset?: number;
-  } = {},
-) {
-  return useQuery({
-    queryKey: queryKeys.ingestionJobs(params),
-    queryFn: () => api.listIngestionJobs(params),
-    refetchInterval: 3000,
-  });
 }
 
 /** 取込 job 詳細。 */
@@ -1569,55 +1549,6 @@ export function useEnqueueDocumentIngestionJob() {
         });
       }
       invalidateDocumentProcessingQueries(qc, job.document_id);
-    },
-  });
-}
-
-/** 永続化済み QUEUED job を再実行する。 */
-export function useDrainIngestionJobs() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ limit = 50 }: { limit?: number } = {}) =>
-      api.drainIngestionJobs(limit),
-    onSuccess: (jobs) => {
-      qc.invalidateQueries({ queryKey: ["documents"] });
-      qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
-      for (const job of jobs) {
-        qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
-      }
-    },
-  });
-}
-
-/** 失敗・完了済み job を新規 job として再投入する。 */
-export function useRetryIngestionJob() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, force }: { id: string; force?: boolean }) =>
-      api.retryIngestionJob(id, force),
-    onSuccess: (job) => {
-      qc.invalidateQueries({ queryKey: ["documents"] });
-      qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
-      qc.invalidateQueries({
-        queryKey: queryKeys.documentIngestionJobs(job.document_id),
-      });
-      qc.invalidateQueries({
-        queryKey: queryKeys.documentIngestionSegments(job.document_id),
-      });
-      qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
-    },
-  });
-}
-
-/** 待機中・実行中の取込 job をキャンセルする。 */
-export function useCancelIngestionJob() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id }: { id: string }) => api.cancelIngestionJob(id),
-    onSuccess: (job) => {
-      qc.invalidateQueries({ queryKey: ["documents"] });
-      qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
-      qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
     },
   });
 }

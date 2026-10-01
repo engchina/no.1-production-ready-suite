@@ -87,6 +87,7 @@ test("KB が制限された利用者は、KB を選ばずにアップロード�
   await expect(picker.getByText("登録先のナレッジベースを 1 件以上選択してください。")).toBeVisible();
 
   await page.locator('input[type="file"]').setInputFiles(uploadFile());
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
   await expect(
     picker.getByRole("alert").filter({ hasText: "所属させるナレッジベースを 1 件以上選択してください。" })
   ).toBeVisible();
@@ -100,7 +101,8 @@ test("KB が制限された利用者は、KB を選ばずにアップロード�
   await expect(picker.getByRole("alert")).toHaveCount(0);
   await expect(picker.getByText("1 件のナレッジベースへ登録します。")).toBeVisible();
 
-  await page.locator('input[type="file"]').setInputFiles(uploadFile());
+  // 選んだファイルは送るまで一覧に残るので、選び直さずに開始できる（#701）。
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
   await expect.poll(() => uploads.length).toBe(1);
   expect(uploads[0].body).toMatch(/name="knowledge_base_ids"\r\n\r\nkb-1\r\n/);
   expect(uploads[0].csrf).toBe("csrf-upload");
@@ -116,6 +118,7 @@ test("ローカル DEBUG（範囲の制限なし）は KB の選択を必須に�
   await expect(picker.getByText("必須")).toHaveCount(0);
 
   await page.locator('input[type="file"]').setInputFiles(uploadFile());
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
   await expect.poll(() => uploads.length).toBe(1);
   expect(uploads[0].body).not.toContain('name="knowledge_base_ids"');
 });

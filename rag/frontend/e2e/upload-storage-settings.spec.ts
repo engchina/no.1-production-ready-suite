@@ -145,6 +145,7 @@ test("アップロード時に選択したナレッジベースへ所属でき�
     mimeType: "text/plain",
     buffer: Buffer.from("本文"),
   });
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   await expect(page.getByRole("heading", { name: "upload.txt" })).toBeVisible();
   expect(uploadBody).toContain('name="knowledge_base_ids"');
@@ -164,6 +165,7 @@ test("アップロード画面で原本の処理情報を確認できる", async
     mimeType: "text/plain",
     buffer: Buffer.from("本文"),
   });
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   await expect(page.getByText("取込ジョブの状態を更新しています")).toHaveCount(0);
   // 原本情報は「処理の詳細(診断)」を展開して確認する(既定は折りたたみ)。
@@ -186,6 +188,7 @@ test("未対応 audio は保存時に処理情報として表示する", async (
     mimeType: "audio/mpeg",
     buffer: Buffer.from("ID3"),
   });
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   await expect(page.getByRole("heading", { name: "voice.mp3" })).toBeVisible();
   // 原本情報(音声未対応)は「処理の詳細(診断)」を展開して確認する。
@@ -193,40 +196,6 @@ test("未対応 audio は保存時に処理情報として表示する", async (
   await expect(page.getByText("音声未対応", { exact: true })).toBeVisible();
   await expect(page.getByText("音声ファイルは現在の取込対象外です。").first()).toBeVisible();
   await expect(page.getByText("取込ジョブの状態を更新しています")).toHaveCount(0);
-});
-
-test("アップロード画面から取込ジョブを再開・再試行できる", async ({ page }) => {
-  let drained = false;
-  let retriedJobId = "";
-  await mockUploadStorageSettings(page, () => localStorageSettings);
-  await mockKnowledgeBases(page);
-  await mockIngestionJobs(
-    page,
-    [
-      ingestionJob("job-queued", "doc-queued", "QUEUED"),
-      {
-        ...ingestionJob("job-failed", "doc-failed", "FAILED"),
-        error_message: "前回の取込に失敗しました。",
-      },
-    ],
-    {
-      onDrain: () => {
-        drained = true;
-      },
-      onRetry: (jobId) => {
-        retriedJobId = jobId;
-      },
-    }
-  );
-
-  await page.goto("/upload");
-
-  await expect(page.getByRole("heading", { name: "文書処理状況" })).toBeVisible();
-  await expect(page.getByText("前回の取込に失敗しました。")).toBeVisible();
-  await page.getByRole("button", { name: "待機ジョブを再開" }).click();
-  await expect.poll(() => drained).toBe(true);
-  await page.getByRole("button", { name: "再試行" }).click();
-  await expect.poll(() => retriedJobId).toBe("job-failed");
 });
 
 test("複数ファイルをまとめてアップロードし結果を確認できる", async ({ page }) => {
@@ -252,17 +221,27 @@ test("複数ファイルをまとめてアップロードし結果を確認で�
       buffer: Buffer.from("B 本文"),
     },
     {
+      name: "policy-c.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("C 本文"),
+    },
+    {
       name: "policy.exe",
       mimeType: "application/x-msdownload",
       buffer: Buffer.from("MZ"),
     },
   ]);
+  // 対応していない形式は送る前に理由を示し、送らない（#701）。
+  await expect(
+    page.getByTestId("upload-selection").getByRole("listitem").filter({ hasText: "policy.exe" })
+  ).toContainText("対応していない形式");
+  await page.getByRole("button", { name: "アップロードを開始（3 件）" }).click();
 
   await expect(page.getByRole("heading", { name: "アップロード結果" })).toBeVisible();
   await expect(page.getByTitle("policy-a.txt").first()).toBeVisible();
   await expect(page.getByTitle("policy-b.txt").first()).toBeVisible();
   await expect(page.getByText("一部のファイルをアップロードできませんでした")).toBeVisible();
-  await expect(page.getByText("policy.exe")).toBeVisible();
+  await expect(page.getByText("policy-c.txt")).toBeVisible();
   await expect(page.getByText("汎用解析")).toBeVisible();
   await expect(page.getByText("未対応")).toBeVisible();
   await expect(page.getByText("原本種別を判定できませんでした。")).toBeVisible();
@@ -272,9 +251,16 @@ test("複数ファイルをまとめてアップロードし結果を確認で�
   expect(uploadBody).toContain('name="files"');
   expect(uploadBody).toContain("policy-a.txt");
   expect(uploadBody).toContain("policy-b.txt");
-  expect(uploadBody).toContain("policy.exe");
+  expect(uploadBody).not.toContain("policy.exe");
   // 取込開始方針（ingestion_mode）は廃止した。アップロードは取込 job を作らない（#306）。
   expect(uploadBody).not.toContain('name="ingestion_mode"');
+
+  // 失敗したファイルだけを選択の一覧に戻し、選び直さずに送り直せる（#701）。
+  await page.getByRole("button", { name: "失敗した 1 件を選び直す" }).click();
+  const selection = page.getByTestId("upload-selection");
+  await expect(selection.getByRole("listitem")).toHaveCount(1);
+  await expect(selection).toContainText("policy-c.txt");
+  await expect(page.getByRole("button", { name: "アップロードを開始（1 件）" })).toBeEnabled();
 });
 
 async function mockUploadStorageSettings(
@@ -381,9 +367,9 @@ async function mockBatchDocumentUpload(page: Page, onUpload: (body: string) => v
           ],
           failed_items: [
             {
-              file_name: "policy.exe",
+              file_name: "policy-c.txt",
               status_code: 415,
-              message: "対応していないファイル形式です。",
+              message: "原本種別を判定できないため保存しませんでした。",
               source_profile: failedUploadSourceProfile(),
             },
           ],
