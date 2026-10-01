@@ -767,6 +767,39 @@ function expectBoxClose(
   expect(actual.height).toBeCloseTo(expected.height, 2);
 }
 
+test("章節ナビゲーションの章節を押すと、プレビューをその章節の開始ページへ移す", async ({ page }) => {
+  await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true });
+  await page.route("**/api/documents/doc-1/sections**", async (route) => {
+    const section = (id: string, title: string, start: number, end: number) => ({
+      id, title, level: 1, page_start: start, page_end: end, origin: "extraction", source_section_id: id, edited: false,
+    });
+    await route.fulfill({
+      json: {
+        data: {
+          document_id: "doc-1",
+          source: "extraction",
+          sections: [section("nav-1", "総則", 1, 1), section("nav-2", "料金表", 2, 2)],
+          extraction_section_count: 2,
+          page_count: 2,
+          revision: null,
+          updated_at: null,
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+
+  await page.goto("/documents/doc-1");
+  await page.getByRole("tab", { name: "構造化要素" }).click();
+  await expect(page.getByTestId("preview-page-status")).toHaveText("1 / 2");
+  await page
+    .getByTestId("extraction-navigation")
+    .getByRole("button", { name: "料金表（p.2）をプレビューで開く" })
+    .click();
+  await expect(page.getByTestId("preview-page-status")).toHaveText("2 / 2");
+});
+
 test("PDF はページ画像で表示し、要素の表示領域を要素ごとに強調する", async ({ page }) => {
   await mockDocumentWorkspace(page, { pdfPreview: true, pdfPages: true, layoutRegions: true });
 

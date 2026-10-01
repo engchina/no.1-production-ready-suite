@@ -3,6 +3,7 @@
 from collections.abc import Iterable
 from datetime import date, datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
@@ -628,3 +629,57 @@ class DocumentDeleteImpact(BaseModel):
     document_id: str
     duplicate_count: int = 0
     knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list)
+
+
+SectionOrigin = Literal["extraction", "manual"]
+# 1 文書の章節の上限(画面で扱える量。抽出の章節は通常これより少ない)。
+MAX_DOCUMENT_SECTIONS = 500
+
+
+class DocumentSection(BaseModel):
+    """文書の章節 1 件(#713)。並び順 + 階層(1〜6)で木を表す(親は並びから決まる)。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=64)
+    title: str = Field(max_length=200)
+    level: int = Field(ge=1, le=6)
+    page_start: int | None = Field(default=None, ge=1)
+    page_end: int | None = Field(default=None, ge=1)
+    origin: SectionOrigin = "manual"
+    # 抽出の章節から来たものは、その章節の id。
+    source_section_id: str | None = Field(default=None, max_length=64)
+    # 抽出の章節の名前・ページを人が変えたか。変えていなければ抽出のやり直しに合わせる。
+    edited: bool = False
+
+    @field_validator("title")
+    @classmethod
+    def _require_title(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("章節の名前を入力してください。")
+        return cleaned
+
+
+class DocumentSectionsData(BaseModel):
+    """文書の章節。人の修正があればそれを、無ければ抽出結果の章節を返す(#713)。"""
+
+    document_id: str
+    source: SectionOrigin
+    sections: list[DocumentSection] = Field(default_factory=list)
+    extraction_section_count: int = 0
+    page_count: int | None = None
+    # 人の修正の版(未保存は None)。保存のときに base_revision として返す。
+    revision: int | None = None
+    updated_at: datetime | None = None
+
+
+class DocumentSectionsSaveRequest(BaseModel):
+    """人が修正した章節の保存(#713)。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sections: list[DocumentSection] = Field(max_length=MAX_DOCUMENT_SECTIONS)
+    base_revision: int | None = None
+    # ページの上限の確認に使う抽出結果のレシピ(省略は既定のレシピ)。
+    recipe_id: str | None = Field(default=None, max_length=128)

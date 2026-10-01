@@ -23,6 +23,7 @@ from app.clients.oracle import (
     oracle_conversation_schema_sql,
     oracle_document_recipe_schema_sql,
     oracle_document_schema_sql,
+    oracle_document_sections_schema_sql,
     oracle_evaluation_artifact_schema_sql,
     oracle_evaluation_job_schema_sql,
     oracle_feedback_details_schema_sql,
@@ -199,6 +200,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="business_view_knowledge",
             table_name="rag_business_view_knowledge",
             sql=oracle_business_view_knowledge_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="document_sections",
+            table_name="rag_document_sections",
+            sql=oracle_document_sections_schema_sql(),
         ),
         OracleSchemaSection(
             name="conversations",
@@ -576,6 +582,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260930_009_stored_engine_names",
             table_name="rag_chunks",
             sql=_stored_engine_names_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20261001_001_document_sections",
+            table_name="rag_document_sections",
+            sql=_document_sections_migration_sql(),
         ),
     ]
 
@@ -2611,6 +2622,33 @@ BEGIN
             || 'CONSTRAINT rag_business_view_knowledge_pk PRIMARY KEY (business_view_id, kind),'
             || 'CONSTRAINT rag_business_view_knowledge_kind_ck CHECK ('
             || 'kind IN (''domain_keywords'', ''approved_faq'', ''runtime_knowledge'')))';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _document_sections_migration_sql() -> str:
+    """人が修正した文書の章節の表を追加する(#713)。"""
+
+    return """
+DECLARE
+    v_table_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables
+    WHERE table_name = 'RAG_DOCUMENT_SECTIONS';
+
+    IF v_table_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_document_sections ('
+            || 'document_id VARCHAR2(64) NOT NULL,'
+            || 'sections_json JSON NOT NULL,'
+            || 'revision NUMBER(19) DEFAULT 1 NOT NULL,'
+            || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'CONSTRAINT rag_document_sections_pk PRIMARY KEY (document_id),'
+            || 'CONSTRAINT rag_document_sections_document_fk FOREIGN KEY (document_id) '
+            || 'REFERENCES rag_documents (document_id) ON DELETE CASCADE)';
     END IF;
 END;
 /

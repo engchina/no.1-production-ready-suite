@@ -353,6 +353,131 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await expectNoHorizontalOverflow(page);
 });
 
+// ── 章節ナビゲーション（#713） ──────────────────────────────────────────────
+
+type SectionRow = {
+  id: string;
+  title: string;
+  level: number;
+  page_start: number | null;
+  page_end: number | null;
+  origin: "extraction" | "manual";
+  source_section_id: string | null;
+  edited: boolean;
+};
+
+function extractedSections(): SectionRow[] {
+  return [
+    { id: "nav-1", title: "第1章 総則", level: 1, page_start: 1, page_end: 2, origin: "extraction", source_section_id: "nav-1", edited: false },
+    { id: "nav-2", title: "第1条 目的", level: 2, page_start: 2, page_end: 2, origin: "extraction", source_section_id: "nav-2", edited: false },
+    { id: "nav-3", title: "第2章 申請", level: 1, page_start: 3, page_end: 3, origin: "extraction", source_section_id: "nav-3", edited: false },
+  ];
+}
+
+async function mockDocumentSections(page: Page) {
+  const state: { sections: SectionRow[]; revision: number | null; saved: unknown[] } = {
+    sections: extractedSections(),
+    revision: null,
+    saved: [],
+  };
+  const envelope = () => ({
+    data: {
+      document_id: "doc-1",
+      source: state.revision === null ? "extraction" : "manual",
+      sections: state.sections,
+      extraction_section_count: 3,
+      page_count: 3,
+      revision: state.revision,
+      updated_at: null,
+    },
+    error_messages: [],
+    warning_messages: [],
+  });
+  await page.route("**/api/documents/doc-1/sections**", async (route) => {
+    const method = route.request().method();
+    if (method === "PUT") {
+      const body = route.request().postDataJSON() as { sections: SectionRow[]; base_revision: number | null };
+      state.saved.push(body);
+      state.sections = body.sections;
+      state.revision = (state.revision ?? 0) + 1;
+    } else if (method === "DELETE") {
+      state.sections = extractedSections();
+      state.revision = null;
+    }
+    await route.fulfill({ json: envelope() });
+  });
+  return state;
+}
+
+async function openSections(page: Page) {
+  await page.goto("/documents/doc-1");
+  await page.getByRole("tab", { name: "構造化要素" }).click();
+  return page.getByTestId("extraction-navigation");
+}
+
+test("章節ナビゲーションは各章節のページ範囲を出す", async ({ page }) => {
+  await mockDocumentDetail(page);
+  await mockDocumentSections(page);
+  const panel = await openSections(page);
+
+  await expect(panel.getByRole("button", { name: "第1章 総則（p.1–2）をプレビューで開く" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "第2章 申請（p.3）をプレビューで開く" })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("章節を直し・追加・削除して保存し、抽出結果に戻せる", async ({ page }) => {
+  await mockDocumentDetail(page);
+  const state = await mockDocumentSections(page);
+  const panel = await openSections(page);
+
+  await panel.getByRole("button", { name: "編集" }).click();
+  const editor = panel.getByTestId("sections-editor");
+  await editor.getByRole("textbox", { name: "章節の名前（階層 1）" }).first().fill("第1章 総則と目的");
+  await editor.getByRole("spinbutton", { name: "第1章 総則と目的 の終了ページ" }).fill("1");
+
+  // 行のメニューで、第2章の子として章節を追加する。
+  await page.getByTestId("section-actions-2").click();
+  await page.getByRole("menuitem", { name: "子の章節を追加" }).click();
+  await editor.getByRole("textbox", { name: "章節の名前（階層 2）" }).last().fill("第3条 期限");
+  await editor.getByRole("spinbutton", { name: "第3条 期限 の開始ページ" }).fill("4");
+
+  // 保存の前に、ページ数（3）を超えたページを欄の下で知らせる。
+  await panel.getByRole("button", { name: "保存" }).click();
+  await expect(editor.getByText("1〜3 のページを入力してください。")).toBeVisible();
+  expect(state.saved).toHaveLength(0);
+  await editor.getByRole("spinbutton", { name: "第3条 期限 の開始ページ" }).fill("3");
+
+  // 第1条（子の無い行）を削除する。
+  await page.getByTestId("section-actions-1").click();
+  await page.getByRole("menuitem", { name: "削除" }).click();
+
+  await panel.getByRole("button", { name: "保存" }).click();
+  await expect(page.getByText("章節を保存しました。").first()).toBeVisible();
+  expect(state.saved).toHaveLength(1);
+  const saved = state.saved[0] as { sections: SectionRow[]; base_revision: number | null };
+  expect(saved.base_revision).toBeNull();
+  expect(saved.sections.map((section) => [section.title, section.level, section.page_start, section.page_end])).toEqual([
+    ["第1章 総則と目的", 1, 1, 1],
+    ["第2章 申請", 1, 3, 3],
+    ["第3条 期限", 2, 3, null],
+  ]);
+  expect(saved.sections[0].edited).toBe(true);
+  expect(saved.sections[2].origin).toBe("manual");
+  await expect(panel.getByText("手動で修正済み")).toBeVisible();
+  await expect(panel.getByRole("button", { name: "第3条 期限（p.3）をプレビューで開く" })).toBeVisible();
+
+  // 抽出結果に戻す（確認してから）。
+  await panel.getByRole("button", { name: "編集" }).click();
+  // 修正を捨てる操作は「その他の操作」に置く（FormActionBar の危険な操作）。
+  await panel.getByRole("button", { name: /その他の操作/ }).click();
+  await page.getByRole("menuitem", { name: "抽出結果に戻す" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "抽出結果に戻す" }).click();
+  await expect(page.getByText("抽出結果の章節に戻しました。").first()).toBeVisible();
+  await expect(panel.getByText("手動で修正済み")).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "第1条 目的（p.2）をプレビューで開く" })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
 async function mockDocumentDetail(
   page: Page,
   overrides?: { extraction?: Record<string, unknown>; chunks?: unknown[] }

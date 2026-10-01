@@ -46,6 +46,7 @@ import {
   type FileStatus,
   type FeedbackListParams,
   type FeedbackRequestBody,
+  type DocumentSectionsSaveRequest,
   type IngestionJobPhase,
   type IngestionJobStatus,
   type KnowledgeBaseCreateRequest,
@@ -134,6 +135,8 @@ export const queryKeys = {
     ["documents", id, "ingestion-segments"] as const,
   documentKnowledgeBases: (id: string) =>
     ["documents", id, "knowledge-bases"] as const,
+  documentSections: (id: string, recipeId: string | null) =>
+    ["documents", id, "sections", recipeId] as const,
   knowledgeBases: (params: {
     status?: KnowledgeBaseStatus;
     q?: string;
@@ -427,6 +430,32 @@ export function useDocumentKnowledgeBases(id: string | null) {
     queryKey: queryKeys.documentKnowledgeBases(id ?? ""),
     queryFn: () => api.listDocumentKnowledgeBases(id as string),
     enabled: id != null,
+  });
+}
+
+/** 文書の章節（章節ナビゲーション。#713）。人の修正が無ければ抽出結果の章節。 */
+export function useDocumentSections(id: string | null, recipeId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.documentSections(id ?? "", recipeId),
+    queryFn: () => api.getDocumentSections(id as string, recipeId),
+    enabled: id != null,
+  });
+}
+
+/** 人が修正した章節の保存と、抽出結果への戻し（#713）。章節はすべての処理レシピで共有する。 */
+export function useSaveDocumentSections(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: DocumentSectionsSaveRequest) => api.saveDocumentSections(id, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["documents", id, "sections"] }),
+  });
+}
+
+export function useResetDocumentSections(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (recipeId: string | null) => api.resetDocumentSections(id, recipeId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["documents", id, "sections"] }),
   });
 }
 
