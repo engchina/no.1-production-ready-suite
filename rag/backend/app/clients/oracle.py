@@ -2413,10 +2413,6 @@ class OracleClient:
             value = row.get(key)
             if isinstance(value, str):
                 row[key] = json.loads(value)
-            elif value is not None:
-                # Oracle の JSON 列は数値を Decimal で返す。評価の入力は json.dumps へ渡すので
-                # int / float に戻す（#678）。
-                row[key] = json.loads(_json_dumps(value))
         return row
 
     async def append_query_history(self, record: Mapping[str, object]) -> None:
@@ -9949,6 +9945,20 @@ def _read_db_value(value: object) -> object:
     read = getattr(value, "read", None)
     if callable(read):
         return read()
+    if isinstance(value, dict | list):
+        # Oracle の JSON 列は数値を Decimal で返す。json.dumps に渡せるよう int / float に
+        # 戻す（#695）。
+        return _json_numbers(value)
+    return value
+
+
+def _json_numbers(value: object) -> object:
+    if isinstance(value, dict):
+        return {key: _json_numbers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_numbers(item) for item in value]
+    if isinstance(value, Decimal):
+        return _json_default(value)
     return value
 
 
