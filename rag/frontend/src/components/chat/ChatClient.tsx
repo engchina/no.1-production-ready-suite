@@ -470,12 +470,13 @@ export function ChatClient() {
   const modelLabels = new Map(compareModels.map((model) => [model.model_id, model.display_name]));
 
   const [composer, setComposer] = useWorkspaceState("chat.composer", "");
-  // 回答の前に選ぶ類似の承認済み FAQ（選ぶまで送らない。#684）。
-  const [faqChoice, setFaqChoice] = useState<{
-    content: string;
-    retryContent?: string;
-    suggestions: ApprovedFaqSuggestionData[];
-  } | null>(null);
+  // 回答の前に選ぶ類似の承認済み FAQ（選ぶまで送らない。#684）。選ぶ前に画面を離れても、戻ったとき・
+  // 再読込で同じ質問と候補を出す（作業状態。#702）。業務ビューを変えたら消す。
+  const [faqChoice, setFaqChoice] = useWorkspaceState<FaqChoice | null>(
+    "chat.faqChoice",
+    null,
+    isFaqChoice
+  );
   // 会話の履歴は既定で閉じる（ChatGPT・Claude・Gemini・Copilot と同じ。多くの利用者は履歴を使わないので、
   // チャットに面積を渡す。#664）。lg 以上のインラインのパネルの開閉は作業状態に残す。
   // lg 未満のモーダルの side sheet は残さない（戻ったとき・再読込で画面を塞がない。workspace-state.md）。
@@ -515,7 +516,7 @@ export function ChatClient() {
     setErrorText("");
     setEditingId(null);
     setTitleError("");
-  }, [businessViewId, setActiveId]);
+  }, [businessViewId, setActiveId, setFaqChoice]);
 
   // メッセージが増えたら末尾までスクロールする。
   useEffect(() => {
@@ -1311,5 +1312,32 @@ export function ChatClient() {
         )}
       </PageBody>
     </div>
+  );
+}
+
+interface FaqChoice {
+  content: string;
+  retryContent?: string;
+  suggestions: ApprovedFaqSuggestionData[];
+}
+
+/** 保存した類似問の選択待ちが今の形か（古い版・壊れた値は捨てる。#702）。 */
+function isFaqChoice(value: unknown): value is FaqChoice | null {
+  if (value === null) return true;
+  if (typeof value !== "object") return false;
+  const choice = value as Partial<FaqChoice>;
+  return (
+    typeof choice.content === "string" &&
+    (choice.retryContent === undefined || typeof choice.retryContent === "string") &&
+    Array.isArray(choice.suggestions) &&
+    choice.suggestions.every(
+      (item) =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof item.id === "string" &&
+        typeof item.question === "string" &&
+        typeof item.answer === "string" &&
+        typeof item.score === "number"
+    )
   );
 }

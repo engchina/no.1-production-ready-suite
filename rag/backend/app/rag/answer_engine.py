@@ -224,13 +224,16 @@ class AnswerEngine:
         self._answer_model_id = answer_model_id or None
         # 質問から読み取った抽出項目の条件(#652)。手の条件の項目には足さない。
         self._auto_field_conditions = list(auto_field_conditions)
-        # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答)。質問と一緒に LLM へ渡す(#684)。
+        # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答)。選んだときは検索せず、質問と FAQ
+        # だけから回答する(#684 / #702)。
         self._approved_faq = approved_faq
 
     async def run(
         self, request: SearchRequest, *, step_callback: StepCallback | None = None
     ) -> AnswerOutcome:
         """回答する。``step_callback`` は回答フローの各工程の開始・終了を受け取る(進捗。#593)。"""
+        if self._approved_faq is not None:
+            return await self._answer_from_approved_faq(request)
         loop = asyncio.get_running_loop()
         state = _SearchState()
         try:
@@ -275,6 +278,34 @@ class AnswerEngine:
                 "relaxed": state.auto_field_relaxed,
             }
         return outcome
+
+    async def _answer_from_approved_faq(self, request: SearchRequest) -> AnswerOutcome:
+        """利用者が選んだ類似問の承認済み FAQ だけから回答する(検索しない。#702)。"""
+        from rag_engine.generation.faq_answer import answer_from_approved_faq
+
+        assert self._approved_faq is not None
+        faq_question, faq_answer = self._approved_faq
+        with tempfile.TemporaryDirectory(prefix="rag-engine-faq-") as work:
+            engine_settings = build_engine_settings(
+                self._settings,
+                output_dir=Path(work),
+                runtime_knowledge_path=None,
+                answer_model_id=self._answer_model_id,
+            )
+            answer = await asyncio.to_thread(
+                answer_from_approved_faq, request.query, faq_question, faq_answer, engine_settings
+            )
+        return AnswerOutcome(
+            answer=f"{answer}\n\n（出典: 承認済み FAQ「{faq_question}」）",
+            citations=[],
+            diagnostics={
+                "answer_source": "approved_faq",
+                "approved_faq_question": faq_question,
+                "models": self._models_used(),
+            },
+            # 回答の安全チェックが照合する根拠は、選んだ FAQ だけ。
+            context_text=f"類似問: {faq_question}\n承認済みの回答: {faq_answer}",
+        )
 
     def _models_used(self, *, vision: bool = False) -> dict[str, Any]:
         """回答フローで使ったモデル(画面に出す。#649)。
@@ -401,7 +432,6 @@ class AnswerEngine:
                     small_category=request.filters.get("small_category", ""),
                     as_of=request.filters.get("as_of", ""),
                 ),
-                approved_faq=self._approved_faq,
             )
 
     async def _search(
