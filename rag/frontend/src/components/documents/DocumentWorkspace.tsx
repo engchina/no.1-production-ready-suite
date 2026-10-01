@@ -2675,10 +2675,12 @@ function DocumentChunksPanel({
                 ) : null}
                 {chunk.page_start ? (
                   <span className="tnum rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg">
-                    {t("flow.chunks.pageRange", {
-                      start: chunk.page_start,
-                      end: chunk.page_end ?? chunk.page_start,
-                    })}
+                    {progressRangeLabel(
+                      "flow.segments.pageSingle",
+                      "flow.segments.pageRange",
+                      chunk.page_start,
+                      chunk.page_end ?? chunk.page_start
+                    )}
                   </span>
                 ) : null}
                 {chunk.bbox ? (
