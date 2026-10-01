@@ -157,17 +157,17 @@ test("評価のランキング指標も同じドロップダウン UI で選択�
   await expect(listbox.getByRole("option")).toHaveText([
     "正解文書の再現率",
     "正解文書の順位(MRR)",
-    "根拠への忠実さ",
+    "Faithfulness（根拠への忠実性）",
     "引用の追跡可能性",
-    "主張の裏付け",
+    "根拠との語句の一致率（参考）",
     "期待する語の一致",
     "拒答の正しさ",
     "標準回答の網羅",
     "標準回答での合格",
   ]);
 
-  await listbox.getByRole("option", { name: "根拠への忠実さ" }).click();
-  await expect(rankingMetric).toContainText("根拠への忠実さ");
+  await listbox.getByRole("option", { name: "Faithfulness（根拠への忠実性）" }).click();
+  await expect(rankingMetric).toContainText("Faithfulness（根拠への忠実性）");
 });
 
 // ── #352: Portal・反転・typeahead・選択肢のスクロール ──────────────────────────
@@ -254,8 +254,8 @@ test("画面の下端では一覧を上に開き、画面の外にはみ出さ�
   expect(Math.abs(list!.x - button!.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(list!.width - button!.width)).toBeLessThanOrEqual(1);
 
-  await listbox.getByRole("option", { name: "根拠への忠実さ" }).click();
-  await expect(rankingMetric).toContainText("根拠への忠実さ");
+  await listbox.getByRole("option", { name: "Faithfulness（根拠への忠実性）" }).click();
+  await expect(rankingMetric).toContainText("Faithfulness（根拠への忠実性）");
 });
 
 test("7 件以上の一覧でも、キーボードで強調した選択肢を表示範囲に入れる", async ({ page }) => {
@@ -272,7 +272,7 @@ test("7 件以上の一覧でも、キーボードで強調した選択肢を表
   await page.keyboard.press("Home");
   await expectActiveOptionInView(rankingMetric, listbox, "正解文書の再現率");
   for (let index = 0; index < 4; index += 1) await page.keyboard.press("ArrowDown");
-  await expectActiveOptionInView(rankingMetric, listbox, "主張の裏付け");
+  await expectActiveOptionInView(rankingMetric, listbox, "根拠との語句の一致率（参考）");
   // PageDown / PageUp は 10 件ずつ動き、端で止まる。
   await page.keyboard.press("PageDown");
   await expectActiveOptionInView(rankingMetric, listbox, "標準回答での合格");

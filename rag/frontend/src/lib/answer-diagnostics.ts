@@ -166,7 +166,7 @@ export type AnswerEvaluationView = {
   suite: string;
   standardAnswer: string;
   evaluatedAt: string;
-  /** reference の指標は表示だけで合否に使わない（1 件の回答の根拠への忠実さ。#680）。 */
+  /** reference の指標は表示だけで合否に使わない（1 件の回答の根拠との語句の一致率。#680 / #711）。 */
   metrics: {
     name: string;
     value: number | null;

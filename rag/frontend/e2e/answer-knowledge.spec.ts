@@ -326,9 +326,9 @@ for (const viewport of [
     await expect(coverage).toContainText("50%");
     await expect(coverage).toContainText("80%");
     await expect(coverage).toContainText("閾値未満");
-    await expect(evaluation.getByRole("row", { name: /主張の裏付け/ })).toContainText("閾値以上");
-    // 根拠への忠実さ（語句の一致の近似）は参考値で、合否に使わない。
-    await expect(evaluation.getByRole("row", { name: /根拠への忠実さ/ })).toContainText("参考");
+    await expect(evaluation.getByRole("row", { name: /Faithfulness/ })).toContainText("閾値以上");
+    // 根拠との語句の一致率は参考値で、合否に使わない（#711）。
+    await expect(evaluation.getByRole("row", { name: /根拠との語句の一致率/ })).toContainText("参考");
     await evaluation.getByText("標準回答の項目への対応（2）").click();
     await expect(evaluation.getByText("未対応")).toBeVisible();
     await expect(evaluation.getByText("受注一覧で対象を選ぶ")).toBeVisible();

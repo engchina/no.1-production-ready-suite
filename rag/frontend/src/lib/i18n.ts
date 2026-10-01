@@ -2065,7 +2065,7 @@ export const ja = {
   "search.answerDetails.humanReview": "人手確認が必要",
   "search.evaluation.title": "標準回答による評価",
   "search.evaluation.description":
-    "期待する回答（標準回答）を入れると、評価の基準（検索・回答設定）の指標のうち 1 件の回答で測れるものを、選んでいる基準の閾値で判定します。すべての指標が閾値以上なら合格です（根拠への忠実さは語句の一致による近似のため参考値）。LLM を複数回呼ぶため、時間がかかります。",
+    "期待する回答（標準回答）を入れると、評価の基準（検索・回答設定）の指標のうち 1 件の回答で測れるものを、選んでいる基準の閾値で判定します。すべての指標が閾値以上なら合格です（根拠との語句の一致率は参考値）。LLM を複数回呼ぶため、時間がかかります。",
   "search.evaluation.standardAnswer": "標準回答",
   "search.evaluation.standardAnswerPlaceholder": "例：受注入力画面で受注番号を入力し、登録ボタンを押します。",
   "search.evaluation.run": "標準回答で評価",
@@ -2537,12 +2537,14 @@ export const ja = {
   "evaluation.metric.context_recall.description": "正解の文書のうち、回答の根拠に取れた割合(Context Recall)。",
   "evaluation.metric.mrr": "正解文書の順位(MRR)",
   "evaluation.metric.mrr.description": "最初の正解の文書が何番目の根拠に出たか(1 番目で 100%)。",
-  "evaluation.metric.faithfulness": "根拠への忠実さ",
-  "evaluation.metric.faithfulness.description": "回答の語句のうち、根拠の本文に含まれる割合(Faithfulness の決定論の近似)。",
+  "evaluation.metric.faithfulness": "根拠との語句の一致率（参考）",
+  "evaluation.metric.faithfulness.description":
+    "回答の語句のうち、根拠の本文に含まれる割合。言い換えるだけで下がるため参考値にし、合否には使いません。",
   "evaluation.metric.citation_traceability_coverage": "引用の追跡可能性",
   "evaluation.metric.citation_traceability_coverage.description": "引用を文書・ページ・要素までたどれる割合。",
-  "evaluation.metric.claim_support_rate": "主張の裏付け",
-  "evaluation.metric.claim_support_rate.description": "根拠のない主張・根拠と矛盾する主張が無いケースの割合(主張ごとの監査)。",
+  "evaluation.metric.claim_support_rate": "Faithfulness（根拠への忠実性）",
+  "evaluation.metric.claim_support_rate.description":
+    "LLM が回答を主張に分け、各主張が根拠で支持されるかを判定します。根拠のない主張・根拠と矛盾する主張が無い回答の割合です。",
   "evaluation.metric.answer_keyword_hit_rate": "期待する語の一致",
   "evaluation.metric.answer_keyword_hit_rate.description": "期待する語をすべて含む回答の割合。",
   "evaluation.metric.refusal_accuracy": "拒答の正しさ",
@@ -2551,7 +2553,7 @@ export const ja = {
   "evaluation.metric.requirement_coverage.description": "標準回答の必要な項目に、回答が対応した割合。",
   "evaluation.metric.answer_pass_rate": "標準回答での合格",
   "evaluation.metric.answer_pass_rate.description":
-    "正確性・網羅性・根拠との整合性・生成品質の 4 軸で 16 / 20 点以上、かつ監査を終えた回答の割合。",
+    "標準回答による評価で、1 件の回答で測れる指標（Faithfulness・標準回答の網羅・拒答の正しさ・引用の追跡可能性）がすべて閾値以上だった回答の割合。",
   "evaluation.metric.needsStandardAnswer": "標準回答が必要",
   "evaluation.metric.notMeasured": "対象のケースなし",
   "evaluation.metric.caseCount": "対象 {count} 件",

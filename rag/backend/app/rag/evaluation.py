@@ -4,9 +4,10 @@ golden set の各ケースを回答エンジン(根拠付き回答。全体の�
 (引用・根拠・実行記録)から指標を求める(#591)。指標は 3 つの観点に整理した 9 つ。
 
 - 検索: context_recall(正解の文書を取れたか)/ mrr(正解の文書が何番目に出たか)
-- 根拠: faithfulness(回答の語が根拠に含まれる割合)/ citation_traceability_coverage(引用を
-  原文の位置へたどれる割合)/ claim_support_rate(標準回答による評価で、根拠のない主張・根拠と
-  矛盾する主張が無いケースの割合)
+- 根拠: claim_support_rate(画面の名前は Faithfulness。標準回答による評価で LLM が回答を主張に
+  分け、根拠のない主張・根拠と矛盾する主張が無いケースの割合)/ citation_traceability_coverage
+  (引用を原文の位置へたどれる割合)/ faithfulness(画面の名前は「根拠との語句の一致率」。回答の語が
+  根拠に含まれる割合。言い換えで下がるため参考値にし、閾値の判定と失敗理由に使わない。#711)
 - 回答: answer_keyword_hit_rate(期待する語をすべて含むケースの割合)/ refusal_accuracy(答える
   べきケースで答え、答えるべきでないケースで答えなかった割合)/ requirement_coverage(標準回答の
   必要な項目への対応率)/ answer_pass_rate(標準回答による評価の合格の割合)
@@ -29,7 +30,12 @@ from typing import Protocol
 from app.clients.oracle import OracleClient
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
 from app.rag.answer_engine import evaluate_answer_record
-from app.rag.answer_metrics import claims_supported, grounding_text, is_abstained_answer
+from app.rag.answer_metrics import (
+    REFERENCE_ONLY_METRICS,
+    claims_supported,
+    grounding_text,
+    is_abstained_answer,
+)
 from app.rag.answer_timeout import (
     AnswerTimeoutError,
     answer_stage_label,
@@ -542,7 +548,6 @@ def _case_result(
         reciprocal_rank = _reciprocal_rank(retrieved_ids, relevant)
 
     faithfulness: float | None = None
-    grounded = True
     overlap_count = 0
     feature_count = 0
     if not abstained and response.answer.strip():
@@ -550,7 +555,6 @@ def _case_result(
             grounding_text(response.answer), "\n".join(chunk.text for chunk in response.citations)
         )
         faithfulness = groundedness.score
-        grounded = groundedness.grounded
         overlap_count = groundedness.overlap_count
         feature_count = groundedness.answer_feature_count
 
@@ -569,7 +573,6 @@ def _case_result(
         hit_count=len(set(hits)),
         abstained=abstained,
         keyword_hit=keyword_hit,
-        grounded=grounded,
         guardrail_warnings=response.guardrail_warnings,
         judgement=judgement,
     )
@@ -794,7 +797,6 @@ def _case_failure_reasons(
     hit_count: int,
     abstained: bool,
     keyword_hit: bool | None,
-    grounded: bool,
     guardrail_warnings: list[str],
     judgement: EvaluationAnswerJudgement | None,
 ) -> list[EvaluationFailureReason]:
@@ -811,8 +813,6 @@ def _case_failure_reasons(
         reasons.append("unexpected_answer")
     if keyword_hit is False:
         reasons.append("answer_keyword_miss")
-    if not grounded:
-        reasons.append("low_groundedness")
     if judgement is not None:
         if judgement.status != "completed":
             reasons.append("answer_evaluation_error")
@@ -849,6 +849,9 @@ def _threshold_failures(
 
     failures: list[EvaluationThresholdFailure] = []
     for metric, threshold in thresholds.model_dump(exclude_none=True).items():
+        # 語句の一致率(faithfulness)は参考値。閾値は目安として表示し、合否に使わない(#711)。
+        if metric in REFERENCE_ONLY_METRICS:
+            continue
         actual = aggregate_values.get(metric)
         if actual is not None and actual < threshold:
             failures.append(

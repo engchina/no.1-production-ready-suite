@@ -17,7 +17,9 @@ export const EVALUATION_PERSPECTIVES: ReadonlyArray<{
   { id: "retrieval", metrics: ["context_recall", "mrr"] },
   {
     id: "grounding",
-    metrics: ["faithfulness", "citation_traceability_coverage", "claim_support_rate"],
+    // Faithfulness（claim_support_rate。LLM の主張の判定）を先に、語句の一致率（faithfulness。参考値）を
+    // 最後に置く（#711）。保存値の key は変えない。
+    metrics: ["claim_support_rate", "citation_traceability_coverage", "faithfulness"],
   },
   {
     id: "answer",

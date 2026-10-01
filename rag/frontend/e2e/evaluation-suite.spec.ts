@@ -168,9 +168,9 @@ test("基準を選ぶと閾値プレビューを更新し suite を送る", asyn
     .getByRole("option", { name: "厳格", exact: true })
     .click();
 
-  // 厳格の閾値(主張の裏付け 100%)がプレビューに出る。
+  // 厳格の閾値(Faithfulness 100%)がプレビューに出る。
   const preview = page.getByTestId("evaluation-suite-thresholds");
-  await expect(preview.getByRole("listitem").filter({ hasText: "主張の裏付け" })).toContainText(
+  await expect(preview.getByRole("listitem").filter({ hasText: "Faithfulness（根拠への忠実性）" })).toContainText(
     "100%"
   );
 

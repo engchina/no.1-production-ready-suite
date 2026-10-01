@@ -340,13 +340,11 @@ async def test_evaluation_case_result_exposes_miss_diagnostics() -> None:
     assert result.failure_reasons == [
         "retrieval_miss",
         "answer_keyword_miss",
-        "low_groundedness",
         "guardrail_warning",
     ]
     assert metrics.failure_reason_counts == {
         "retrieval_miss": 1,
         "answer_keyword_miss": 1,
-        "low_groundedness": 1,
         "guardrail_warning": 1,
     }
     assert result.elapsed_ms == 12.5
@@ -376,10 +374,11 @@ async def test_evaluation_runner_reports_threshold_failures() -> None:
     ] == [
         ("context_recall", 0.0, 0.8),
         ("mrr", 0.0, 0.6),
-        ("faithfulness", 0.0, 0.7),
         ("citation_traceability_coverage", 0.0, 0.9),
         ("answer_keyword_hit_rate", 0.0, 0.8),
     ]
+    # 語句の一致率(faithfulness)は参考値。閾値を下回っても合否に使わない(#711)。
+    assert metrics.faithfulness == 0.0
 
 
 NO_RESULTS_ANSWER = "資料の中に、この質問に答えられる根拠が見つかりませんでした。"
