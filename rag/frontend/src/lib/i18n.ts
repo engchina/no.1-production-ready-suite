@@ -2058,7 +2058,7 @@ export const ja = {
   "answerModel.text": "{name}（テキスト）",
   "answerModel.vision": "{name}（画像対応）",
   "search.answerModel.label": "回答するモデル",
-  "search.answerModel.help": "既定はテキストモデルで、根拠の図や画像を読むときだけ画像対応モデルを使います。画像対応モデルを選ぶと、回答全体をそのモデルで作ります。",
+  "search.answerModel.help": "未選択ならテキストモデルで回答し、根拠の図や画像を読むときだけ画像対応モデルを使います。画像対応モデルを選ぶと、回答全体をそのモデルで作ります。",
   "chat.column.model": "回答モデル: {name}",
   "search.answerDetails.confidence": "信頼度: {value}",
   "search.answerDetails.humanReview": "人手確認が必要",

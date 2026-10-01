@@ -15,6 +15,7 @@ import {
   SelectField,
   type SelectFieldOption,
   Switch,
+  ToggleChip,
   TextField,
   TimedLoadingState,
   Skeleton,
@@ -568,23 +569,6 @@ export function SearchClient() {
                 />
               </div>
 
-              {/* 候補が 2 つ（テキストと Vision）あるときだけ選ばせる。1 つならテキストで答えるだけ。 */}
-              {generateAnswer && answerModels.length > 1 ? (
-                <SelectField
-                  id="search-answer-model"
-                  label={t("search.answerModel.label")}
-                  value={answerModelId || answerModels[0].model_id}
-                  options={answerModels.map((model) => ({
-                    value: model.model_id,
-                    label: t(`answerModel.${model.kind}`, { name: model.display_name }),
-                  }))}
-                  helper={t("search.answerModel.help")}
-                  onValueChange={setAnswerModelId}
-                  disabled={isStreaming}
-                  width="md"
-                  data-testid="search-answer-model"
-                />
-              ) : null}
 
               {/* 質問と検索の行はフォームの最後（詳細条件・スイッチの下。#413）。チャットの入力欄と同じく
                   複数行の入力欄（2 行）と lg のボタンを FieldActionRow に置く（ボタンは入力欄の下端にそろい、
@@ -592,6 +576,36 @@ export function SearchClient() {
                   Enter で検索、Shift+Enter で改行（IME の変換を確定する Enter では検索しない。#459）。
                   実行中の Enter は submit が無視し、停止しない。 */}
               <div className="space-y-2 border-t border-border pt-4">
+                {/* 回答するモデル。チャットと同じく入力欄のすぐ上のチップの行（#686）。比較はしないので
+                    1 つだけ選べ、もう一度押すと未選択（既定のテキストモデル）に戻る。 */}
+                {generateAnswer && answerModels.length > 0 ? (
+                  <div className="flex flex-wrap items-center gap-2" data-testid="search-answer-model">
+                    <span className="text-xs font-medium text-fg-muted">
+                      {t("search.answerModel.label")}
+                    </span>
+                    {answerModels.map((model) => (
+                      <ToggleChip
+                        key={model.model_id}
+                        selected={answerModelId === model.model_id}
+                        disabled={isStreaming}
+                        onClick={() =>
+                          setAnswerModelId(answerModelId === model.model_id ? "" : model.model_id)
+                        }
+                      >
+                        {t(`answerModel.${model.kind}`, { name: model.display_name })}
+                      </ToggleChip>
+                    ))}
+                    {answerModelId ? null : (
+                      <span className="text-xs text-fg-muted">
+                        {t(
+                          answerModels.length > 1
+                            ? "search.answerModel.help"
+                            : "chat.compare.defaultTextOnly"
+                        )}
+                      </span>
+                    )}
+                  </div>
+                ) : null}
                 <FieldActionRow
                   actions={
                     <RunStopButton

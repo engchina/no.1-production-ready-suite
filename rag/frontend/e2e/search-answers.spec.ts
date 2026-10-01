@@ -356,15 +356,22 @@ test("回答のモデルは既定のテキストモデルと画像対応モデ�
 
   await page.goto("/search");
   await selectBusinessView(page, /経理ビュー/);
-  // 回答を生成しないときはモデルを選ばせない。
-  const modelSelect = page.getByRole("combobox", { name: "回答するモデル" });
-  await expect(modelSelect).toHaveCount(0);
+  // 回答を生成しないときはモデルを選ばせない。チャットと同じく入力欄の上のチップの行（#686）。
+  const modelRow = page.getByTestId("search-answer-model");
+  await expect(modelRow).toHaveCount(0);
   await enableSearchAnswer(page);
-  await expect(modelSelect).toContainText("gpt-oss-120b（テキスト）");
-  await expect(page.getByText("根拠の図や画像を読むときだけ画像対応モデルを使います")).toBeVisible();
-  await modelSelect.click();
-  await expect(page.getByRole("option")).toHaveText(["gpt-oss-120b（テキスト）", "grok-4.3（画像対応）"]);
-  await page.getByRole("option", { name: "grok-4.3（画像対応）" }).click();
+  await expect(modelRow.getByRole("button")).toHaveText(["gpt-oss-120b（テキスト）", "grok-4.3（画像対応）"]);
+  await expect(modelRow).toContainText("根拠の図や画像を読むときだけ画像対応モデルを使います");
+  const vision = modelRow.getByRole("button", { name: "grok-4.3（画像対応）" });
+  await vision.click();
+  await expect(vision).toHaveAttribute("aria-pressed", "true");
+  // 比較はしないので 1 つだけ。テキストを選ぶと画像対応は外れ、もう一度押すと未選択に戻る。
+  const text = modelRow.getByRole("button", { name: "gpt-oss-120b（テキスト）" });
+  await text.click();
+  await expect(vision).toHaveAttribute("aria-pressed", "false");
+  await text.click();
+  await expect(text).toHaveAttribute("aria-pressed", "false");
+  await vision.click();
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("図の数値は？");
   await page.getByRole("button", { name: "検索", exact: true }).click();
   await expect.poll(() => bodies.length).toBe(1);
