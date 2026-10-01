@@ -317,6 +317,14 @@ async def suggest_business_view_approved_faq(
         embedding_model=settings.oci_genai_embedding_model,
         embedding_dimensions=settings.oci_genai_embedding_dim,
     )
+    if request.purpose == "chat" and suggestions:
+        # 1 位とほぼ同じくらい近い候補だけを出す(#709)。
+        top = max(item.score for item in suggestions)
+        suggestions = [
+            item
+            for item in suggestions
+            if item.score >= top - settings.rag_approved_faq_chat_max_gap
+        ]
     return ApiResponse(
         data=ApprovedFaqSuggestionsData(
             suggestions=[
