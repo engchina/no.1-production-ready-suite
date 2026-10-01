@@ -424,6 +424,11 @@ test("章節ナビゲーションは各章節のページ範囲を出す", async
 
   await expect(panel.getByRole("button", { name: "第1章 総則（p.1–2）をプレビューで開く" })).toBeVisible();
   await expect(panel.getByRole("button", { name: "第2章 申請（p.3）をプレビューで開く" })).toBeVisible();
+  // 章節は要素の一覧（「構造化要素」の見出し）より上に出す（#735）。
+  const elementsHeading = page.getByRole("heading", { level: 4, name: /^構造化要素/ });
+  const panelBox = await panel.boundingBox();
+  const headingBox = await elementsHeading.boundingBox();
+  expect(panelBox!.y).toBeLessThan(headingBox!.y);
   await expectNoHorizontalOverflow(page);
 });
 
