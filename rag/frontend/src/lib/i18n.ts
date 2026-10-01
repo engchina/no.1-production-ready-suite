@@ -1374,6 +1374,8 @@ export const ja = {
   "upload.batch.duplicates": "重複の可能性",
   "upload.batch.failed": "失敗",
   "upload.batch.failedTitle": "一部のファイルをアップロードできませんでした",
+  "upload.batch.failedDetails": "詳細",
+  "upload.batch.failedStatusCode": "HTTP {status}",
   "upload.batch.open": "{name} の文書詳細を開く",
   "upload.batch.openShort": "文書詳細を開く",
   "upload.result.nextHint":
