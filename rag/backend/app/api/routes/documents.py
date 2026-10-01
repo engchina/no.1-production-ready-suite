@@ -474,16 +474,8 @@ async def _raise_if_parser_source_blocked(
 
 
 async def _default_recipe_settings(oracle: OracleClient, document_id: str) -> Settings:
-    """文書単位の取込(既定レシピ)で使う実効設定。レシピを読めなければ global 既定。"""
-    config = DocumentProcessingConfig()
-    ensure_recipe = getattr(oracle, "ensure_default_document_recipe", None)
-    get_recipe = getattr(oracle, "get_document_recipe", None)
-    if callable(ensure_recipe) and callable(get_recipe):
-        recipe = await ensure_recipe(document_id)
-        row = await get_recipe(document_id, str(recipe["recipe_id"]))
-        if row is not None:
-            config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-    settings, _ = _merge_document_processing_config(config)
+    """文書単位の取込(既定レシピ)で使う実効設定。"""
+    settings, _ = await _resolve_ingestion_settings(oracle, document_id)
     return settings
 
 
@@ -1649,7 +1641,7 @@ async def _materialize_experiment_candidate(
         candidate_config = DocumentProcessingConfig.model_validate(raw_config)
     else:
         _base_settings, candidate_config = await _resolve_ingestion_settings(
-            oracle, job.document_id
+            oracle, job.document_id, recipe_id
         )
     candidate_settings, effective_candidate_config = _merge_document_processing_config(
         candidate_config
@@ -3521,9 +3513,24 @@ async def _reconcile_document_chunk_sets_chunked(
 async def _resolve_ingestion_settings(
     oracle: OracleClient,
     document_id: str,
+    recipe_id: str | None = None,
 ) -> tuple[Settings, DocumentProcessingConfig]:
-    """文書上書き > global 既定で有効な処理設定を解決する。KB は参照しない。"""
-    config = await oracle.get_document_processing_config(document_id)
+    """レシピ > global 既定で有効な処理設定を解決する。KB は参照しない。
+
+    レシピは ``recipe_id``、無ければ文書の既定レシピ。処理設定はレシピに保存するので、文書行の
+    設定はレシピを読めないときだけ使う(#697)。
+    """
+    config: DocumentProcessingConfig | None = None
+    ensure_recipe = getattr(oracle, "ensure_default_document_recipe", None)
+    get_recipe = getattr(oracle, "get_document_recipe", None)
+    if recipe_id is None and callable(ensure_recipe):
+        recipe_id = str((await ensure_recipe(document_id))["recipe_id"])
+    if recipe_id is not None and callable(get_recipe):
+        row = await get_recipe(document_id, recipe_id)
+        if row is not None:
+            config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
+    if config is None:
+        config = await oracle.get_document_processing_config(document_id)
     effective, _resolved = _merge_document_processing_config(config)
     return effective, config
 
