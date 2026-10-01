@@ -1022,6 +1022,47 @@ for (const viewport of [
 }
 
 
+// #737: 承認済み FAQ から回答したときは、根拠に FAQ の原文（回答した時点）を出典として出す。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`承認済み FAQ の回答では、FAQ の質問と承認済みの回答の原文を出典に出す (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const answerDiagnostics = {
+      answer_source: "approved_faq",
+      approved_faq_question: "経費精算の上限はいくらですか？",
+      approved_faq_answer: "1 回の申請の上限は 10 万円です。\n超える場合は部長の承認が必要です。",
+      models: { llm: { model_id: "m1", label: "MODEL 1" }, vision: null, embedding: "", rerank: "" },
+    };
+    const streamBody = [
+      sseStart,
+      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "上限は 10 万円です。\n\n（出典: 承認済み FAQ「経費精算の上限はいくらですか？」）" })}\n\n`,
+      `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
+      `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+    ].join("");
+    await mockChat(page, "ready", [], { streamBody });
+
+    await page.goto("/chat");
+    await selectBusinessView(page, "経理アシスタント");
+    await page.getByRole("button", { name: "新しい会話" }).click();
+    await page.getByRole("textbox").fill(userMessage.content);
+    await page.getByRole("button", { name: "送信" }).click();
+
+    const panel = page.getByRole("region", { name: "回答の根拠と実行記録" });
+    await expect(panel.getByText("承認済み FAQ から回答")).toBeVisible();
+    const source = panel.getByRole("region", { name: "回答の出典: 承認済み FAQ" });
+    await expect(source).toContainText("経費精算の上限はいくらですか？");
+    // 原文は言い換えず、改行も保って出す。
+    await expect(source.getByText(/1 回の申請の上限は 10 万円です。\s+超える場合は部長の承認が必要です。/)).toBeVisible();
+    // 文書を検索していないので、空の「根拠の構成」は出さない。
+    await expect(panel.getByText(/^根拠の構成/)).toHaveCount(0);
+    await expectNoPageOverflow(page);
+  });
+}
+
 // #717: 類似問の後に、業務ビューのルールの確認の質問を出し、選んだ答えを送る。
 const clarificationSuggestion = {
   rule_id: "R01",

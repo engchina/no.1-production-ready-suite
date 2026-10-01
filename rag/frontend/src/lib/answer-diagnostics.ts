@@ -17,6 +17,11 @@ export type AnswerDiagnostics = {
    * 外して検索し直したか。読み取っていなければ null。
    */
   autoFieldFilter: { conditions: ExtractionFieldCondition[]; relaxed: boolean } | null;
+  /**
+   * 利用者が選んだ承認済み FAQ だけから回答したときの出典（回答した時点の原文。#737）。
+   * answer は変更前に保存した回答では空。FAQ から回答していなければ null。
+   */
+  approvedFaq: { question: string; answer: string } | null;
   /** チャットで会話履歴から書き換えた質問(書き換えなしは空)。 */
   rewrittenQuestion: string;
   generatedQueries: string[];
@@ -76,6 +81,13 @@ export function parseAnswerDiagnostics(
     externalDataItems: list(raw.external_data_items).map(String).filter(Boolean),
     questionType: list(raw.question_type).map(String).filter(Boolean),
     autoFieldFilter: parseAutoFieldFilter(raw.auto_field_filter),
+    approvedFaq:
+      raw.answer_source === "approved_faq"
+        ? {
+            question: String(raw.approved_faq_question ?? ""),
+            answer: String(raw.approved_faq_answer ?? ""),
+          }
+        : null,
     rewrittenQuestion: String(raw.rewritten_question ?? ""),
     generatedQueries: list(raw.generated_queries).map(String).filter(Boolean),
     models: parseModels(raw.models),

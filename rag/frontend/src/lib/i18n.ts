@@ -2208,6 +2208,13 @@ export const ja = {
   "chat.column.model": "回答モデル: {name}",
   "search.answerDetails.confidence": "信頼度: {value}",
   "search.answerDetails.humanReview": "人手確認が必要",
+  "search.answerDetails.faqSource.badge": "承認済み FAQ から回答",
+  "search.answerDetails.faqSource.title": "回答の出典: 承認済み FAQ",
+  "search.answerDetails.faqSource.question": "FAQ の質問",
+  "search.answerDetails.faqSource.answer": "承認済みの回答（原文）",
+  "search.answerDetails.faqSource.answerMissing": "この回答の記録には、承認済みの回答の原文が残っていません。",
+  "search.answerDetails.faqSource.note":
+    "回答は、この承認済みの回答だけをもとに作成しました。表示は回答した時点の内容です。",
   "search.evaluation.title": "標準回答による評価",
   "search.evaluation.description":
     "期待する回答（標準回答）を入れると、評価の基準（検索・回答設定）の指標のうち 1 件の回答で測れるものを、選んでいる基準の閾値で判定します。すべての指標が閾値以上なら合格です（根拠との語句の一致率は参考値）。LLM を複数回呼ぶため、時間がかかります。",

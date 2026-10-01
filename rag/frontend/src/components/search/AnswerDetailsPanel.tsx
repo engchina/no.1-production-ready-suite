@@ -1,4 +1,5 @@
 import { Banner, Disclosure, StatusBadge } from "@engchina/production-ready-ui";
+import { BookCheck } from "lucide-react";
 
 import { confidenceVariant, parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
 import { t } from "@/lib/i18n";
@@ -65,6 +66,9 @@ export function AnswerDetailsPanel({
             label={t("search.answerDetails.confidence", { value: data.confidence })}
           />
         ) : null}
+        {data.approvedFaq ? (
+          <StatusBadge variant="info" label={t("search.answerDetails.faqSource.badge")} />
+        ) : null}
         {data.needsHumanReview ? (
           <StatusBadge
             variant="warning"
@@ -79,6 +83,39 @@ export function AnswerDetailsPanel({
           />
         ))}
       </div>
+      {data.approvedFaq ? (
+        // 承認済み FAQ から回答したときの出典。生成した回答と照らし合わせられるよう、回答した時点の
+        // 原文を言い換えずに出す（#737）。
+        <section
+          className="space-y-2 rounded-md border border-border bg-surface p-3"
+          aria-label={t("search.answerDetails.faqSource.title")}
+          data-testid="answer-approved-faq-source"
+        >
+          <p className="flex items-center gap-1.5 text-xs font-medium text-fg-muted">
+            <BookCheck size={14} className="text-accent-fg" aria-hidden />
+            {t("search.answerDetails.faqSource.title")}
+          </p>
+          <dl className="space-y-2 text-sm">
+            <div>
+              <dt className="text-xs text-fg-muted">{t("search.answerDetails.faqSource.question")}</dt>
+              <dd className="break-words font-medium text-fg">{data.approvedFaq.question}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-fg-muted">{t("search.answerDetails.faqSource.answer")}</dt>
+              <dd className="whitespace-pre-wrap break-words leading-relaxed text-fg">
+                {data.approvedFaq.answer || (
+                  <span className="text-xs text-fg-muted">
+                    {t("search.answerDetails.faqSource.answerMissing")}
+                  </span>
+                )}
+              </dd>
+            </div>
+          </dl>
+          <p className="text-xs leading-relaxed text-fg-muted">
+            {t("search.answerDetails.faqSource.note")}
+          </p>
+        </section>
+      ) : null}
       {models.length ? (
         <div
           className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs"
@@ -137,40 +174,43 @@ export function AnswerDetailsPanel({
           ) : null}
         </Banner>
       ) : null}
-      <Disclosure variant="plain" summary={`${t("search.answerDetails.evidence")}（${data.tree.length}）`}>
-        <ol className="space-y-2">
-          {data.tree.map((parent) => (
-            <li
-              key={parent.parentId}
-              className="rounded-md border border-border bg-surface-sunken p-2"
-            >
-              <p className="break-words text-xs font-medium text-fg">
-                {parent.source || parent.parentId}
-                {parent.page != null
-                  ? ` / ${t("flow.extraction.page", { page: parent.page })}`
-                  : ""}
-              </p>
-              <ul className="mt-1 space-y-1">
-                {parent.children.map((child) => (
-                  <li
-                    key={child.chunkId}
-                    className="flex flex-wrap items-center gap-2 text-xs text-fg-muted"
-                  >
-                    <span className="break-all">{child.chunkId}</span>
-                    <span>{roleLabel(child.role)}</span>
-                    {child.modelUsed ? (
-                      <StatusBadge
-                        variant="info"
-                        label={t("search.answerDetails.modelUsed")}
-                      />
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            </li>
-          ))}
-        </ol>
-      </Disclosure>
+      {/* FAQ から回答したときは文書を検索しないため、根拠の構成は上の出典だけ。 */}
+      {data.approvedFaq ? null : (
+        <Disclosure variant="plain" summary={`${t("search.answerDetails.evidence")}（${data.tree.length}）`}>
+          <ol className="space-y-2">
+            {data.tree.map((parent) => (
+              <li
+                key={parent.parentId}
+                className="rounded-md border border-border bg-surface-sunken p-2"
+              >
+                <p className="break-words text-xs font-medium text-fg">
+                  {parent.source || parent.parentId}
+                  {parent.page != null
+                    ? ` / ${t("flow.extraction.page", { page: parent.page })}`
+                    : ""}
+                </p>
+                <ul className="mt-1 space-y-1">
+                  {parent.children.map((child) => (
+                    <li
+                      key={child.chunkId}
+                      className="flex flex-wrap items-center gap-2 text-xs text-fg-muted"
+                    >
+                      <span className="break-all">{child.chunkId}</span>
+                      <span>{roleLabel(child.role)}</span>
+                      {child.modelUsed ? (
+                        <StatusBadge
+                          variant="info"
+                          label={t("search.answerDetails.modelUsed")}
+                        />
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ol>
+        </Disclosure>
+      )}
       <Disclosure variant="plain" summary={`${t("search.answerDetails.steps")}（${data.steps.length}）`}>
         <ol className="space-y-1 text-xs text-fg-muted">
           {data.steps.map((step, index) => (
