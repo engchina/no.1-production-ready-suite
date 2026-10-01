@@ -791,7 +791,7 @@ export const ja = {
   "settings.database.systemTables.operation.migrated": "RAG システムテーブルを更新しました。",
   "settings.database.systemTables.operation.recreated": "RAG システムテーブルをすべて再作成しました。",
   "settings.database.systemTables.previousFailureLockDetail":
-    "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした (ORA-00054)。取込処理を停止してから、状態を再取得して再試行してください。",
+    "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。取込処理を停止してから、状態を再取得して再試行してください。",
   "settings.database.systemTables.error.recovery":
     "状態を再取得し、取込ジョブや Oracle のロック状態を確認して再試行してください。",
   "settings.database.systemTables.recreate.sectionDescription":
@@ -1609,6 +1609,7 @@ export const ja = {
   "sections.error.saveFailed": "章節を保存できませんでした。時間をおいて、もう一度お試しください。",
   "sections.error.fix": "入力に問題がある章節があります。欄の下のメッセージを確認してください。",
   "sections.badge.manual": "手動で修正済み",
+  "sections.badge.added": "新しく抽出",
   "sections.empty": "章節がありません。「編集」から追加できます。",
   "sections.hint.view": "押すと、プレビューをその章節の開始ページへ移します。",
   "sections.hint.edit":
@@ -2160,6 +2161,7 @@ export const ja = {
   "chat.clarify.other": "その他（自由入力）",
   "chat.clarify.answer": "この条件で回答する",
   "chat.clarify.skip": "選ばずに回答する",
+  "chat.clarify.askUnscoped": "範囲を指定せずに質問し直す",
   "chat.faq.title": "近い承認済み FAQ（類似問）があります",
   "chat.faq.description":
     "質問と同じ趣旨の類似問を選ぶと、資料を検索せずに、その承認済みの回答をもとに回答します。当てはまるものが無ければ「どれでもない」を選ぶと、資料を検索して回答します。",

@@ -3284,6 +3284,8 @@ export interface DocumentSection {
   origin: DocumentSectionOrigin;
   source_section_id: string | null;
   edited: boolean;
+  /** 人の修正の後に新しく抽出され、自動で足した章節（保存すると外れる。#721）。 */
+  added_from_extraction?: boolean;
 }
 
 export interface DocumentSectionsData {

@@ -74,7 +74,10 @@ function api(data: unknown) {
   return JSON.stringify({ data, error_messages: [], warning_messages: [] });
 }
 
-async function installControlPlaneApi(page: Page, options?: { unbound?: boolean }) {
+async function installControlPlaneApi(
+  page: Page,
+  options?: { unbound?: boolean; auditRecords?: Record<string, unknown>[] }
+) {
   let runs: Record<string, unknown>[] = [];
   await page.route("**/api/**", async (route: Route) => {
     const url = new URL(route.request().url());
@@ -137,7 +140,9 @@ async function installControlPlaneApi(page: Page, options?: { unbound?: boolean 
       return respond(run);
     }
     if (path === "/api/runs") return respond({ runs });
-    if (path.includes("/audit")) return respond({ run_id: "run-control-plane-e2e", goal: "", status: "running", records: [] });
+    if (path.includes("/audit")) {
+      return respond({ run_id: "run-control-plane-e2e", goal: "", status: "running", records: options?.auditRecords ?? [] });
+    }
     if (path.includes("/artifacts")) return respond({ artifacts: [] });
     return respond({});
   });
@@ -204,16 +209,18 @@ test.describe("AI Agent Control Plane", () => {
     await expect(progress.getByRole("timer")).toHaveAccessibleName(/^経過時間 /);
   });
 
-  test("Runtime の degraded 状態、capability、管理操作を表示する", async ({ page }) => {
+  test("Runtime の状態（日本語）、capability、管理操作と状態確認の結果を表示する", async ({ page }) => {
     await installControlPlaneApi(page);
     await page.goto("/runtimes");
 
     await expect(page.getByRole("heading", { name: "Runtime", level: 1 })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Hermes" })).toBeVisible();
-    await expect(page.getByText("degraded")).toBeVisible();
+    // 状態は英字の生の値（degraded）ではなく日本語で出す（messaging.md §10。#725）。
+    await expect(page.getByText("一部異常")).toBeVisible();
+    await expect(page.getByText("degraded")).toHaveCount(0);
     await expect(page.getByText("cancel: off")).toBeVisible();
     // 状態（Runtime の status、capability の対応有無）のバッジだけがアイコンを持つ
-    await expect(page.locator("[data-status-variant]", { hasText: "degraded" }).locator("svg")).toHaveCount(1);
+    await expect(page.locator("[data-status-variant]", { hasText: "一部異常" }).locator("svg")).toHaveCount(1);
     await expect(page.locator("[data-status-variant]", { hasText: "cancel: off" }).locator("svg")).toHaveCount(1);
     await expect(page.locator("[data-status-variant]", { hasText: "mcp_sync: on" }).locator("svg")).toHaveCount(1);
     await expect(page.getByRole("button", { name: "状態確認" })).toBeVisible();
@@ -223,9 +230,65 @@ test.describe("AI Agent Control Plane", () => {
     await expect(page.getByRole("button", { name: "再起動" })).toBeVisible();
     await expect(page.getByRole("button", { name: "削除" })).toBeVisible();
 
+    // 状態確認の結果は、その Runtime のカードの操作の直下に出す（messaging.md §10.1。#725）。
     await page.getByRole("button", { name: "状態確認" }).click();
+    const result = page.getByTestId("runtime-result-hermes-default");
+    await expect(result.getByRole("status")).toHaveText("Hermes の状態を確認しました（稼働中）。");
     await page.setViewportSize({ width: 375, height: 812 });
     await expect(page.getByRole("heading", { name: "Hermes" })).toBeVisible();
+    await expect(result).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test("Runtime のサービス操作の失敗は、ページ先頭ではなくそのカードの操作の直下に出す", async ({ page }) => {
+    await installControlPlaneApi(page);
+    await page.route("**/api/runtimes/services/runtime-hermes/start", (route) =>
+      route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ data: null, error_messages: ["サービス操作は無効です。"], warning_messages: [] }),
+      })
+    );
+    await page.goto("/runtimes");
+    await page.getByRole("button", { name: "起動", exact: true }).click();
+
+    const result = page.getByTestId("runtime-result-hermes-default");
+    await expect(result.getByRole("alert")).toHaveText("Hermes を起動できませんでした。サービス操作は無効です。");
+    // 結果はカードの中（操作の直下）だけに出し、ページ先頭の Banner には出さない。
+    await expect(page.getByRole("alert")).toHaveCount(1);
+
+    // 次の操作を始めたら前の結果を消し、成功の結果に置き換える（messaging.md §10.4）。
+    await page.getByRole("button", { name: "再起動" }).click();
+    await expect(result.getByRole("status")).toHaveText("Hermes を再起動しました。");
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+
+  test("監査のエラーは要約を title に、エラーコードを開いた「詳細」に出す", async ({ page }) => {
+    await installControlPlaneApi(page, {
+      auditRecords: [
+        {
+          step_id: "step-1",
+          tool_name: "external_rag_search",
+          status: "failed",
+          error: "外部 RAG に接続できませんでした。",
+          error_code: "external_mcp.unavailable",
+          guardrail_warnings: [],
+          artifact_ids: [],
+          audit_metadata: {},
+        },
+      ],
+    });
+    await page.goto("/runs");
+    await page.getByLabel("ゴール").fill("契約情報を確認する");
+    await page.getByRole("button", { name: "実行を作成" }).click();
+
+    const alert = page.getByRole("alert").filter({ hasText: "ツールの実行でエラーが発生しました" });
+    await expect(alert).toContainText("外部 RAG に接続できませんでした。");
+    const details = alert.locator("details");
+    await expect(details).toHaveAttribute("open", "");
+    await expect(details).toContainText("エラーコード: external_mcp.unavailable");
+    await page.setViewportSize({ width: 375, height: 812 });
+    await expect(alert).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
 

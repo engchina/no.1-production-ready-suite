@@ -36,6 +36,14 @@ export const DATABASE_MESSAGES = {
   "settings.adb.notify.infoFailed":
     "ADB 情報を取得できませんでした。OCI 認証、リージョン、ADB OCID を確認して再試行してください。",
   "settings.adb.operationResult.title": "操作履歴",
+  "settings.adb.operationStatus.accepted": "受付済み",
+  "settings.adb.operationStatus.already_available": "起動済み",
+  "settings.adb.operationStatus.already_stopped": "停止済み",
+  "settings.adb.operationStatus.cannot_start": "起動できません",
+  "settings.adb.operationStatus.cannot_stop": "停止できません",
+  "settings.adb.operationStatus.error": "失敗",
+  "settings.adb.operationStatus.not_configured": "未設定",
+  "settings.adb.operationStatus.success": "成功",
   "settings.adb.operational.lifecycle": "OCI ADB",
   "settings.adb.placeholder.ocidEmpty":
     "ADB OCID が設定されていません（platform/.env で設定）",

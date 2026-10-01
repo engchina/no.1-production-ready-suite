@@ -883,6 +883,13 @@ def test_stream_message_resolves_the_clarification_answer_into_scope_and_page_ra
         return {"rules": [{"id": "R01", "clarification": CLARIFICATION}]}
 
     monkeypatch.setattr(chat_route, "load_runtime_knowledge_payload", payload)
+    read_documents: list[str] = []
+
+    async def sections(_oracle: object, document_id: str, _recipe_id: None) -> None:
+        # 文書が無いときは、確認を保存したときのページで絞る(#721)。
+        read_documents.append(document_id)
+
+    monkeypatch.setattr(chat_route, "document_sections", sections)
     url = "/api/chat/conversations/conv-x/messages/stream"
 
     resp = client.post(
@@ -896,6 +903,7 @@ def test_stream_message_resolves_the_clarification_answer_into_scope_and_page_ra
     scope = _FakePipeline.scopes[0]
     assert getattr(scope, "label", "") == "「出張旅費規程.pdf」の「第6条 申請と精算」（p.2–3）"
     assert '"document_id":"doc-travel"' in _FakePipeline.filters[0]["page_ranges"]
+    assert read_documents == ["doc-travel"]
 
     # ルールに無い選択肢は、発話を保存する前に 422 で断る。
     saved = len(fake.messages["conv-x"])

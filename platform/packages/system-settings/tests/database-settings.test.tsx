@@ -92,6 +92,8 @@ describe("DatabaseSettingsPage", () => {
     expect(html).not.toContain("保存中");
     // サポートするリージョンの保存値では案内を出さない（#660）。
     expect(html).not.toContain("はサポートしていません");
+    // Wallet の状態は色の文字ではなく StatusBadge（アイコン付き）で出す（#722）。
+    expect(html).toMatch(/Wallet状態:<\/span><span data-status-variant="success"[^>]*><svg[\s\S]*?<\/svg>設定済み<\/span>/);
   });
 
   it("ADB のリージョンの保存値が候補に無い us-chicago-1 のときは、値をそのまま出して選び直しを案内する（#660）", () => {
@@ -120,6 +122,12 @@ describe("DatabaseSettingsPage", () => {
     expect(html).toMatch(/<button\b[^>]*id="adb-region"[^>]*>[\s\S]*?us-chicago-1/);
     expect(html).toContain(
       "保存済みのリージョン us-chicago-1 はサポートしていません。ap-tokyo-1 または ap-osaka-1 を選んで保存してください。",
+    );
+    // Wallet が未設定のときは warning の StatusBadge（#722）。
+    const missingWallet = new QueryClient();
+    missingWallet.setQueryData(DATABASE_SETTINGS_QUERY_KEY, { ...settings, wallet_uploaded: false });
+    expect(render(<DatabaseSettingsPage api={api} />, missingWallet)).toMatch(
+      /Wallet状態:<\/span><span data-status-variant="warning"[^>]*>[\s\S]*?未設定<\/span>/,
     );
   });
 });

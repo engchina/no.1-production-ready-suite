@@ -48,6 +48,7 @@ import {
   updateSection,
 } from "@/lib/document-sections";
 import { t } from "@/lib/i18n";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import {
   useDocumentSections,
   useResetDocumentSections,
@@ -104,6 +105,8 @@ export function DocumentSectionsPanel({
   const sections = draft ?? data?.sections ?? [];
   const pageCount = data?.page_count ?? null;
   const errors = sectionErrors(sections, pageCount);
+  // 編集を始めた後に変えた章節があるときだけ離脱を確認する（#721）。
+  useLeaveGuard(draft !== null && draft !== data?.sections, save.isPending);
 
   const startEdit = () => {
     setDraft(data?.sections ?? []);
@@ -240,6 +243,13 @@ export function DocumentSectionsPanel({
                     >
                       <span className="min-w-0">
                         <span className="block break-words text-sm text-fg">{section.title}</span>
+                        {section.added_from_extraction ? (
+                          <StatusBadge
+                            variant="info"
+                            label={t("sections.badge.added")}
+                            className="mt-1"
+                          />
+                        ) : null}
                         {summary ? (
                           <span className="mt-0.5 block text-xs text-fg-muted">{summary}</span>
                         ) : null}

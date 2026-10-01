@@ -470,11 +470,28 @@ export function SystemTablesCard({
               </div>
             ) : data.operation_state.status === "failed" ? (
               <Banner severity="danger" title={text("settings.database.systemTables.previousFailure")}>
-                {data.operation_state.last_error_code === "ORA-00054"
-                  ? text("settings.database.systemTables.previousFailureLockDetail")
-                  : text("settings.database.systemTables.previousFailureDetail", {
-                      code: data.operation_state.last_error_code ?? "-",
-                    })}
+                {/* 本文は原因と対処だけにし、エラーコードは「詳細」に分ける（失敗なので開いて出す。messaging.md §10.3。#722）。 */}
+                <div className="space-y-2">
+                  <p>
+                    {data.operation_state.last_error_code === "ORA-00054"
+                      ? text("settings.database.systemTables.previousFailureLockDetail")
+                      : text("settings.database.systemTables.previousFailureDetail")}
+                  </p>
+                  {data.operation_state.last_error_code ? (
+                    <Disclosure
+                      variant="plain"
+                      size="sm"
+                      summary={text("settings.database.systemTables.previousFailureDetails")}
+                      defaultOpen
+                    >
+                      <p className="text-xs text-fg-muted">
+                        {text("settings.database.systemTables.previousFailureErrorCode", {
+                          code: data.operation_state.last_error_code,
+                        })}
+                      </p>
+                    </Disclosure>
+                  ) : null}
+                </div>
               </Banner>
             ) : null}
 
