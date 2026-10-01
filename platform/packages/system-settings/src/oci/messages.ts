@@ -85,6 +85,7 @@ export const OCI_MESSAGES = {
   "settings.oci.validation.required": "{field}を入力してください。",
   "settings.oci.validation.requiredSelect": "{field}を選択してください。",
   "settings.testResult.checkedAt": "確認時刻",
+  "settings.testResult.details": "詳細",
   "settings.testResult.elapsed": "所要時間",
   "settings.testResult.errorType": "エラー種別",
   "settings.testResult.troubleshooting": "確認ポイント",

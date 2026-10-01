@@ -120,3 +120,13 @@ export function normalizeIngestionErrorMessage(message?: string | null): string 
   const normalized = message?.trim();
   return normalized ? normalized : null;
 }
+
+/**
+ * backend が利用者向けの本文の末尾に付けた「エラーコード: <code>」を本文から分ける（messaging.md §10。#705）。
+ * 本文は原因と対処だけにし、エラーコードは「詳細」に出す。
+ */
+export function splitErrorCode(message: string): { message: string; code: string | null } {
+  const match = /\s*エラーコード:\s*([\w.-]+)\s*$/.exec(message);
+  if (!match) return { message, code: null };
+  return { message: message.slice(0, match.index), code: match[1] };
+}

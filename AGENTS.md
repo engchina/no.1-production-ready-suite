@@ -231,6 +231,14 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - **例外**: 選択と連動する一覧（RAG の chunk）・カーソル型の API の「さらに読み込む」（NL2SQL）・分析の一覧の件数の切り替え（RAG のフィードバック）は、理由付きで基準から外している。一覧は UX 契約 `page-archetypes.md` の「一覧の型と、基準から外す例外」。新しく例外を足すときは、そこに理由を書く（#403）。
 - 新しい一覧・読み込み中の表示を作るときは NL2SQL の同種の画面を見本にし、Playwright で読み込み中（応答を遅らせる）・行数が多いとき（縦スクロール）・2 ページ以上（ページング）を desktop と 375px で確認する。
 
+### 操作の結果・状態のメッセージ（3 製品で統一。#705）
+
+- 正本は UX 契約 [`messaging.md` §10](./platform/docs/ux-contracts/messaging.md#10-操作の結果状態の出し方位置幅形出す情報705)。新しい画面・部品は最初から従い、既存の画面は触るときに直す。
+- **位置と幅**: 結果は起点の操作（操作の行・表の行・入力欄の行）の**直下**に、**カード・表の全幅**で出す。grid の 1 列の中に描かない（grid の中なら `col-span-full`）。ページ先頭や別のカードへ送らない。Toast と面を重ねない。
+- **部品**: テスト・接続確認の結果は結果パネル（`SettingsTestResultPanel`）、保存の結果は成功 Toast・失敗は操作の行の `FormStatus`、処理・ジョブの失敗は danger の `Banner`、対象・リソースの状態（起動済み・作成済み・稼働中）は見出しの `StatusBadge`。状態を常設の success の面や手書きのバッジで出さない。
+- **出す情報**: 1 文目に利用者の言葉で何が起きたか、次に所要時間と（失敗なら）原因・対処。技術的な詳細（API の key/value・エラーコード・エラー種別・request ID）は「詳細」（`Disclosure`）に畳み、失敗のときだけ開いて出す。
+- **消す時期**: 次の実行まで、または関係する入力を変えるまで残す。自動で数秒後に消さない。
+
 ### lint
 
 - 遵守ルールの正本は `platform/docs/design-system/adherence.oxlintrc.json`（と JS プラグイン `design-system-plugin.mjs`）。各製品は **コピーせず相対パスで参照する**（oxlint は `extends`、ESLint は JSON を import して `no-restricted-syntax` / `no-restricted-imports` に渡す）。書き方は [platform/AGENTS.md](./platform/AGENTS.md) の「lint」を参照。

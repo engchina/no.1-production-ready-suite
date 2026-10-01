@@ -13,14 +13,13 @@ import {
   SecretField,
   SelectField,
   Skeleton,
+  StatusBadge,
   TextField,
   cn,
   toast,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 import {
-  AlertCircle,
-  CheckCircle2,
   CloudDownload,
   Database,
   PlugZap,
@@ -29,7 +28,6 @@ import {
   RefreshCw,
   Save,
   Server,
-  XCircle,
 } from "lucide-react";
 import {
   useCallback,
@@ -911,9 +909,16 @@ function AdbManagementCard({
         {/* 見出しの行の右端に、カード全体を対象にする「情報を再取得」を置く。 */}
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 space-y-1">
-            <CardTitle className="flex items-center gap-2">
+            <CardTitle className="flex flex-wrap items-center gap-2">
               <Server size={16} className="text-accent-fg" aria-hidden />
               {t("settings.adb.title")}
+              {/* ADB の稼働状態は見出しの StatusBadge で出す。常設の success の面にしない（messaging.md §10。#705）。 */}
+              {showInfoPanel && info?.lifecycle_state ? (
+                <StatusBadge
+                  variant={ADB_LIFECYCLE_VARIANT[adbLifecycleTone(info.lifecycle_state)]}
+                  label={`${t("settings.adb.operational.lifecycle")}: ${adbLifecycleLabel(info.lifecycle_state)}`}
+                />
+              ) : null}
             </CardTitle>
             <CardDescription>{t("settings.adb.description")}</CardDescription>
           </div>
@@ -1035,9 +1040,6 @@ function AdbInfoPanel({ info }: { info: AdbInfoData }) {
   // 自己完結したステータスバーを余分なパネルで囲まない。
   return (
     <div className="space-y-2">
-      {info.lifecycle_state ? (
-        <AdbLifecycleBadge state={info.lifecycle_state} />
-      ) : null}
       {!known ? (
         <FormStatus
           tone={messageTone}
@@ -1045,31 +1047,6 @@ function AdbInfoPanel({ info }: { info: AdbInfoData }) {
           message={info.message}
         />
       ) : null}
-    </div>
-  );
-}
-
-function AdbLifecycleBadge({ state }: { state: string | null }) {
-  const tone = adbLifecycleTone(state);
-  const Icon =
-    tone === "ok" ? CheckCircle2 : tone === "danger" ? XCircle : AlertCircle;
-  return (
-    <div
-      className={cn(
-        "flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium",
-        tone === "ok" &&
-          "border-success-border bg-success-subtle text-success-fg",
-        tone === "danger" &&
-          "border-danger-border bg-danger-subtle text-danger-fg",
-        tone === "warning" &&
-          "border-warning-border bg-warning-subtle text-warning-fg",
-        tone === "muted" && "border-border bg-surface text-fg-muted",
-      )}
-    >
-      <Icon size={16} aria-hidden />
-      <span>
-        {t("settings.adb.operational.lifecycle")}: {adbLifecycleLabel(state)}
-      </span>
     </div>
   );
 }
@@ -1108,6 +1085,13 @@ function adbLifecycleLabel(state: string | null): string {
   const key = ADB_LIFECYCLE_LABEL_KEYS[state];
   return key ? t(key) : state;
 }
+
+const ADB_LIFECYCLE_VARIANT = {
+  ok: "success",
+  danger: "danger",
+  warning: "warning",
+  muted: "neutral",
+} as const;
 
 function adbLifecycleTone(
   state: string | null,
