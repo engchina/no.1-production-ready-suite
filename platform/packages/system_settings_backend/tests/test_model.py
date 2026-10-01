@@ -339,7 +339,7 @@ def test_resolution_uses_text_model_and_falls_back_to_vision_model() -> None:
 
     settings.oci_enterprise_ai_default_text_model = ""
     # 画面・API では必須だが（#566）、未設定の既存環境では画像を扱わない呼び出しも
-    # 既定の Vision モデルを使う（安全策）。
+    # 既定の画像対応モデルを使う（安全策）。
     assert shared_model.enterprise_ai_default_model_id(settings) == "vlm-b"
     assert shared_model.enterprise_ai_vision_model_id(settings) == "vlm-b"
 
@@ -357,14 +357,14 @@ def test_vision_model_is_derived_when_not_set_explicitly() -> None:
         (
             {"models": [{"model_id": "llm-a", "vision_enabled": False}]},
             "default_vision_model_id",
-            "画像入力（Vision）に対応したモデルがありません",
+            "画像入力に対応したモデルがありません",
         ),
         ({"default_vision_model_id": ""}, "default_vision_model_id", "選択してください"),
         ({"default_vision_model_id": "gone"}, "default_vision_model_id", "登録モデルにありません"),
         (
             {"default_vision_model_id": "llm-a"},
             "default_vision_model_id",
-            "画像入力（Vision）に対応していません",
+            "画像入力に対応していません",
         ),
         ({"default_text_model_id": ""}, "default_text_model_id", "既定のテキストモデルを選択"),
         ({"default_text_model_id": "gone"}, "default_text_model_id", "登録モデルにありません"),

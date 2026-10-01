@@ -133,7 +133,7 @@ class OciEnterpriseAiDirectClient:
     ) -> str:
         model_id = self.vision_model_id()
         if not model_id:
-            raise EnterpriseAiDirectError("OCI Enterprise AI Vision model が未設定です。")
+            raise EnterpriseAiDirectError("OCI Enterprise AI の既定の画像対応モデルが未設定です。")
         connection = self.connection(model_id)
         if not connection.is_configured():
             raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")

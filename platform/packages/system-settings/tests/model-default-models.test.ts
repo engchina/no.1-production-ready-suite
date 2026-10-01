@@ -72,14 +72,14 @@ describe("validateDefaultModels（#499。backend の validate_default_models と
         default_text_model_id: "",
         default_vision_model_id: "",
       }).default_vision_model_id,
-    ).toContain("画像入力（Vision）に対応したモデルがありません");
+    ).toContain("画像入力に対応したモデルがありません");
     expect(
       validateDefaultModels({
         models,
         default_text_model_id: "",
         default_vision_model_id: "",
       }).default_vision_model_id,
-    ).toBe("既定の Vision モデルを選択してください。");
+    ).toBe("既定の画像対応モデルを選択してください。");
     expect(
       validateDefaultModels({
         models,
@@ -93,7 +93,7 @@ describe("validateDefaultModels（#499。backend の validate_default_models と
         default_text_model_id: "",
         default_vision_model_id: "llm-a",
       }).default_vision_model_id,
-    ).toContain("「llm-a」は画像入力（Vision）に対応していません");
+    ).toContain("「llm-a」は画像入力に対応していません");
   });
 });
 
@@ -119,7 +119,7 @@ describe("followModelChange", () => {
     );
   });
 
-  it("Vision 対応をオンにしたとき、既定の Vision モデルが未選択ならそのモデルを選ぶ", () => {
+  it("Vision 対応をオンにしたとき、既定の画像対応モデルが未選択ならそのモデルを選ぶ", () => {
     const empty = { default_text_model_id: "", default_vision_model_id: "" };
     expect(
       followModelChange(empty, models[0], { ...models[0]!, vision_enabled: true }),

@@ -3056,9 +3056,9 @@ test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・
   await page.getByRole("button", { name: "追加", exact: true }).click();
   await page.getByRole("textbox", { name: "モデル ID 3", exact: true }).fill("review-model");
   await page.getByRole("textbox", { name: "表示名 3", exact: true }).fill("レビュー用");
-  await page.getByRole("switch", { name: "画像入力（Vision）に対応 3", exact: true }).click();
-  // 既定の Vision モデル（Vision 対応のモデルだけ）と既定のテキストモデルを別々に選ぶ（#499）。
-  const visionDefault = page.getByRole("combobox", { name: "既定の Vision モデル" });
+  await page.getByRole("switch", { name: "画像入力に対応 3", exact: true }).click();
+  // 既定の画像対応モデル（Vision 対応のモデルだけ）と既定のテキストモデルを別々に選ぶ（#499）。
+  const visionDefault = page.getByRole("combobox", { name: "既定の画像対応モデル" });
   const textDefault = page.getByRole("combobox", { name: "既定のテキストモデル" });
   // 並びはテキスト → Vision（desktop の 2 列でも 375px の縦積みでも同じ順）で、2 つとも必須（#566）。
   const textBox = await textDefault.boundingBox();
@@ -3070,7 +3070,7 @@ test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・
   await expect(textDefault).toHaveAttribute("aria-required", "true");
   await expect(visionDefault).toHaveAttribute("aria-required", "true");
   await visionDefault.click();
-  await page.getByRole("listbox", { name: "既定の Vision モデル" }).getByRole("option", { name: /レビュー用/ }).click();
+  await page.getByRole("listbox", { name: "既定の画像対応モデル" }).getByRole("option", { name: /レビュー用/ }).click();
   await textDefault.click();
   await page.getByRole("listbox", { name: "既定のテキストモデル" }).getByRole("option", { name: /レビュー用/ }).click();
   await page.getByRole("button", { name: "登録モデル: 保存", exact: true }).click();
@@ -3099,11 +3099,11 @@ test("レビュー補完: モデル追加・既定のモデル 2 つ・Vision・
   await expect(textDefault).toBeFocused();
   expect(writes).toHaveLength(1);
   await visionDefault.click();
-  await page.getByRole("listbox", { name: "既定の Vision モデル" }).getByRole("option", { name: /OCR \/ Vision/ }).click();
+  await page.getByRole("listbox", { name: "既定の画像対応モデル" }).getByRole("option", { name: /OCR \/ Vision/ }).click();
   await textDefault.click();
-  // テキストに未選択へ戻す選択肢（「既定の Vision モデルを使う」）はない（#566）。
+  // テキストに未選択へ戻す選択肢（「既定の画像対応モデルを使う」）はない（#566）。
   const textListbox = page.getByRole("listbox", { name: "既定のテキストモデル" });
-  await expect(textListbox.getByRole("option", { name: "既定の Vision モデルを使う" })).toHaveCount(0);
+  await expect(textListbox.getByRole("option", { name: "既定の画像対応モデルを使う" })).toHaveCount(0);
   await textListbox.getByRole("option", { name: /業務 NL2SQL 標準/ }).click();
   await expect(visionDefault).toHaveAttribute("aria-invalid", "false");
   await expect(textDefault).toHaveAttribute("aria-invalid", "false");

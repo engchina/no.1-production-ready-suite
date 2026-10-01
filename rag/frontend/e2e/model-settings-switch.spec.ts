@@ -105,17 +105,17 @@ for (const viewport of [
     await expect(page.getByLabel("モデル ID 2")).toHaveValue("enterprise-vision");
     // 登録モデルの一覧は登録と画像入力（Vision）対応の指定だけ。既定の選択は一覧の下（#499）。
     await expect(page.getByRole("radio", { name: /既定/ })).toHaveCount(0);
-    await expect(page.getByRole("switch", { name: "画像入力（Vision）に対応 1" })).toHaveAttribute(
+    await expect(page.getByRole("switch", { name: "画像入力に対応 1" })).toHaveAttribute(
       "aria-checked",
       "false"
     );
-    await expect(page.getByRole("switch", { name: "画像入力（Vision）に対応 2" })).toHaveAttribute(
+    await expect(page.getByRole("switch", { name: "画像入力に対応 2" })).toHaveAttribute(
       "aria-checked",
       "true"
     );
     await expect(page.getByRole("heading", { name: "既定のモデル" })).toBeVisible();
     const textDefault = page.getByRole("combobox", { name: "既定のテキストモデル" });
-    const visionDefault = page.getByRole("combobox", { name: "既定の Vision モデル" });
+    const visionDefault = page.getByRole("combobox", { name: "既定の画像対応モデル" });
     await expect(visionDefault).toContainText("Vision LLM");
     await expect(textDefault).toContainText("標準 LLM");
     // 並びはテキスト → Vision（desktop の 2 列でも 375px の縦積みでも同じ順）で、2 つとも必須（#566）。
@@ -142,7 +142,7 @@ for (const viewport of [
     await expect(page.getByPlaceholder("業務 RAG 標準").first()).toBeVisible();
 
     await expectControlContentToBeVerticallyCentered(
-      page.getByRole("switch", { name: "画像入力（Vision）に対応 2" }),
+      page.getByRole("switch", { name: "画像入力に対応 2" }),
       "span[aria-hidden='true']"
     );
     const enterpriseSave = page.getByRole("button", { name: "OCI Enterprise AI: 保存" });
@@ -231,29 +231,29 @@ for (const scheme of ["light", "dark"] as const) {
       .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
       .toBe(scheme === "dark");
 
-    const vision = page.getByRole("combobox", { name: "既定の Vision モデル" });
+    const vision = page.getByRole("combobox", { name: "既定の画像対応モデル" });
     const text = page.getByRole("combobox", { name: "既定のテキストモデル" });
     await expect(vision).toContainText("Vision LLM");
 
     // 選択肢: Vision は Vision 対応のモデルだけ、テキストは全モデル（未選択に戻す選択肢はない。#566）。
     await vision.click();
-    const visionOptions = page.getByRole("listbox", { name: "既定の Vision モデル" }).getByRole("option");
+    const visionOptions = page.getByRole("listbox", { name: "既定の画像対応モデル" }).getByRole("option");
     await expect(visionOptions).toHaveCount(1);
     await expect(visionOptions.first()).toContainText("Vision LLM");
     await page.keyboard.press("Escape");
     await text.click();
     const textListbox = page.getByRole("listbox", { name: "既定のテキストモデル" });
     await expect(textListbox.getByRole("option")).toHaveCount(2);
-    await expect(textListbox.getByRole("option", { name: "既定の Vision モデルを使う" })).toHaveCount(0);
+    await expect(textListbox.getByRole("option", { name: "既定の画像対応モデルを使う" })).toHaveCount(0);
     // テキストに Vision 対応のモデルを選んでもよい。
     await textListbox.getByRole("option", { name: /Vision LLM/ }).click();
     await expect(text).toContainText("Vision LLM");
 
     // 選んでいたモデルの Vision 対応を外すと、保存前にフィールドのエラーを出す。
-    await page.getByRole("switch", { name: "画像入力（Vision）に対応 2" }).click();
+    await page.getByRole("switch", { name: "画像入力に対応 2" }).click();
     await expect(vision).toHaveAttribute("aria-invalid", "true");
     await expect(
-      page.getByText("画像入力（Vision）に対応したモデルがありません。", { exact: false })
+      page.getByText("画像入力に対応したモデルがありません。", { exact: false })
     ).toBeVisible();
 
     // 保存は送信せず、最初の不正な欄へフォーカスする。
@@ -262,7 +262,7 @@ for (const scheme of ["light", "dark"] as const) {
     expect(patches).toHaveLength(0);
 
     // Vision 対応を戻して保存すると、既定のモデル 2 つを送る。
-    await page.getByRole("switch", { name: "画像入力（Vision）に対応 2" }).click();
+    await page.getByRole("switch", { name: "画像入力に対応 2" }).click();
     await expect(vision).toHaveAttribute("aria-invalid", "false");
     await page.getByRole("button", { name: "登録モデル: 保存" }).click();
     await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
@@ -288,7 +288,7 @@ for (const scheme of ["light", "dark"] as const) {
       );
     }, scheme);
     const patches: unknown[] = [];
-    // 以前の画面で「既定の Vision モデルを使う」のまま保存した既存環境。
+    // 以前の画面で「既定の画像対応モデルを使う」のまま保存した既存環境。
     await mockModelSettings(page, (payload) => patches.push(payload), { textModel: "" });
     await page.goto("/settings/model");
     await expect
@@ -324,7 +324,7 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
-test("既定の Vision モデルに選んだモデルを一覧から削除すると、選び直しを案内する", async ({ page }) => {
+test("既定の画像対応モデルに選んだモデルを一覧から削除すると、選び直しを案内する", async ({ page }) => {
   const patches: unknown[] = [];
   await mockModelSettings(page, (payload) => patches.push(payload));
   await page.goto("/settings/model");
@@ -332,11 +332,11 @@ test("既定の Vision モデルに選んだモデルを一覧から削除する
   await page.getByRole("button", { name: "モデルを削除 2" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "削除" }).click();
 
-  const vision = page.getByRole("combobox", { name: "既定の Vision モデル" });
+  const vision = page.getByRole("combobox", { name: "既定の画像対応モデル" });
   await expect(vision).toContainText("enterprise-vision");
   await expect(vision).toHaveAttribute("aria-invalid", "true");
   await expect(
-    page.getByText("画像入力（Vision）に対応したモデルがありません。", { exact: false })
+    page.getByText("画像入力に対応したモデルがありません。", { exact: false })
   ).toBeVisible();
   await page.getByRole("button", { name: "登録モデル: 保存" }).click();
   await expect(vision).toBeFocused();

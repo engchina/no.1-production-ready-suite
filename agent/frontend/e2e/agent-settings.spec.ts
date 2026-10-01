@@ -273,7 +273,7 @@ test.describe("Agent Runtime settings", () => {
       },
     });
     const textDefault = page.getByRole("combobox", { name: "既定のテキストモデル" });
-    const visionDefault = page.getByRole("combobox", { name: "既定の Vision モデル" });
+    const visionDefault = page.getByRole("combobox", { name: "既定の画像対応モデル" });
     await expect(visionDefault).toContainText("業務 RAG 標準");
     await expect(textDefault).toContainText("業務 RAG 標準");
     // 並びはテキスト → Vision で、2 つとも必須（#566）。
@@ -307,7 +307,7 @@ test.describe("Agent Runtime settings", () => {
         // 375px の縦積みでもテキスト → Vision の順（#566）。
         await expectTextBeforeVision(
           page.getByRole("combobox", { name: "既定のテキストモデル" }),
-          page.getByRole("combobox", { name: "既定の Vision モデル" })
+          page.getByRole("combobox", { name: "既定の画像対応モデル" })
         );
       }
     }
