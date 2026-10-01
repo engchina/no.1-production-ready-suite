@@ -1116,3 +1116,47 @@ for (const viewport of [
     expect(streamBodies[1]).not.toHaveProperty("clarification");
   });
 }
+
+test("範囲を絞った回答の下から、範囲を指定せずに同じ質問を送り直せる（#721）", async ({ page }) => {
+  await mockChat(page);
+  await page.route("**/api/business-views/*/approved-faq/suggest", (route) =>
+    route.fulfill({ json: { data: { suggestions: [] }, error_messages: [], warning_messages: [] } })
+  );
+  const clarifyQueries: unknown[] = [];
+  await page.route("**/api/business-views/*/clarifications/suggest", async (route) => {
+    clarifyQueries.push(route.request().postDataJSON());
+    await route.fulfill({ json: { data: { suggestion: null }, error_messages: [], warning_messages: [] } });
+  });
+  // 保存された回答は、確認で絞った範囲を末尾に持つ。
+  const scoped = { ...assistantMessage, content: "期限は 1 か月です。（対象: 「出張旅費規程.pdf」の「第6条 申請と精算」）" };
+  await page.route(
+    (url) => url.pathname === "/api/chat/conversations/conv-1",
+    (route) =>
+      route.fulfill({
+        json: { data: conversationDetail([userMessage, scoped]), error_messages: [], warning_messages: [] },
+      })
+  );
+  const streamBodies: Record<string, unknown>[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/messages/stream")) {
+      streamBodies.push(request.postDataJSON() as Record<string, unknown>);
+    }
+  });
+
+  await page.goto("/chat");
+  await selectBusinessView(page, "経理アシスタント");
+  await page.getByRole("textbox", { name: /メッセージを入力/ }).fill("経費の上限は？");
+  await page.getByRole("button", { name: "送信" }).click();
+  await expect.poll(() => streamBodies.length).toBe(1);
+
+  const askAgain = page.getByRole("button", { name: "範囲を指定せずに質問し直す" });
+  await expect(askAgain).toBeVisible();
+  const suggestCalls = clarifyQueries.length;
+  await askAgain.click();
+  await expect.poll(() => streamBodies.length).toBe(2);
+  // 類似問・確認の質問を出さずに、同じ質問をそのまま送る。
+  expect(streamBodies[1]).toMatchObject({ content: "経費の上限は？" });
+  expect(streamBodies[1]).not.toHaveProperty("clarification");
+  expect(streamBodies[1]).not.toHaveProperty("approved_faq_id");
+  expect(clarifyQueries).toHaveLength(suggestCalls);
+});

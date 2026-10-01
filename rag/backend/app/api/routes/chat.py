@@ -35,10 +35,12 @@ from app.db_degradation import load_or_degrade
 from app.rag.answer_engine import AnswerScope
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 from app.rag.business_view_knowledge import (
+    clarification_document_ids,
     find_approved_faq,
     load_runtime_knowledge_payload,
     resolve_clarification,
 )
+from app.rag.document_sections_service import document_sections
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import new_trace_id
 from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgress
@@ -358,6 +360,20 @@ class PreparedChatTurn:
     scope: AnswerScope | None = None
 
 
+async def _current_section_pages(
+    oracle: OracleClient, document_ids: set[str]
+) -> dict[tuple[str, str], tuple[int | None, int | None]]:
+    """文書の今の章節のページ。確認を保存した後に章節のページが変わっても追う(#721)。"""
+    pages: dict[tuple[str, str], tuple[int | None, int | None]] = {}
+    for document_id in sorted(document_ids):
+        resolved = await document_sections(oracle, document_id, None)
+        if resolved is None:
+            continue
+        for section in resolved[0].sections:
+            pages[(document_id, section.id)] = (section.page_start, section.page_end)
+    return pages
+
+
 async def _prepare_chat_turn(
     oracle: OracleClient,
     conversation_id: str,
@@ -379,7 +395,13 @@ async def _prepare_chat_turn(
     filters: dict[str, str] = {}
     if request.clarification is not None:
         payload = await load_runtime_knowledge_payload(oracle, business_view_id)
-        resolved = resolve_clarification(payload, request.clarification)
+        resolved = resolve_clarification(
+            payload,
+            request.clarification,
+            await _current_section_pages(
+                oracle, clarification_document_ids(payload, request.clarification)
+            ),
+        )
         if resolved is None:
             raise HTTPException(
                 status_code=422,

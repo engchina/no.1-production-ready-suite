@@ -4,6 +4,7 @@ import {
   expectNoPageOverflow,
   mockDatabaseReady,
   mockLocalAuth,
+  openSidebarNav,
   selectBusinessView,
 } from "./_helpers";
 
@@ -364,6 +365,7 @@ type SectionRow = {
   origin: "extraction" | "manual";
   source_section_id: string | null;
   edited: boolean;
+  added_from_extraction?: boolean;
 };
 
 function extractedSections(): SectionRow[] {
@@ -423,6 +425,35 @@ test("章節ナビゲーションは各章節のページ範囲を出す", async
   await expect(panel.getByRole("button", { name: "第1章 総則（p.1–2）をプレビューで開く" })).toBeVisible();
   await expect(panel.getByRole("button", { name: "第2章 申請（p.3）をプレビューで開く" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
+});
+
+test("修正の後に新しく抽出された章節に印を出し、編集の途中の離脱を確認する（#721）", async ({ page }) => {
+  await mockDocumentDetail(page);
+  const state = await mockDocumentSections(page);
+  state.revision = 1;
+  state.sections = [
+    ...extractedSections().slice(0, 2),
+    { ...extractedSections()[2], added_from_extraction: true },
+  ];
+  const panel = await openSections(page);
+
+  const added = panel.getByRole("button", { name: "第2章 申請（p.3）をプレビューで開く" });
+  await expect(added.getByText("新しく抽出")).toBeVisible();
+  await expect(panel.getByText("新しく抽出")).toHaveCount(1);
+
+  // 編集を始めただけなら確認しない。変えた後の離脱は確認し、キャンセルで留まる。
+  await panel.getByRole("button", { name: "編集" }).click();
+  await panel
+    .getByTestId("sections-editor")
+    .getByRole("textbox", { name: "章節の名前（階層 1）" })
+    .first()
+    .fill("第1章 総則と目的");
+  await (await openSidebarNav(page)).getByRole("link", { name: "文書インデックス" }).click();
+  const dialog = page.getByRole("alertdialog", { name: "変更を破棄しますか" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page).toHaveURL(/\/documents\/doc-1/);
+  await expect(panel.getByTestId("sections-editor")).toBeVisible();
 });
 
 test("章節を直し・追加・削除して保存し、抽出結果に戻せる", async ({ page }) => {
