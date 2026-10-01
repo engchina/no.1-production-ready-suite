@@ -8,7 +8,7 @@ import mimetypes
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from html import escape
 from pathlib import PurePath
 from typing import Annotated, Literal
@@ -881,7 +881,17 @@ _RECIPE_STEP_MATRIX: dict[FileStatus, tuple[DocumentRecipeStepStatus, ...]] = {
 }
 
 
-def _recipe_steps(row: Mapping[str, object], jobs: list[IngestionJob]) -> list[DocumentRecipeStep]:
+# 抽出の job が SUCCEEDED になってから、自動進行の CHUNK の job を投入するまでの猶予(#733)。
+# 固定の猶予。投入が猶予より遅れるなら、SUCCEEDED と投入を 1 トランザクションにする。
+_AUTO_ADVANCE_HANDOFF_GRACE = timedelta(seconds=30)
+
+
+def _recipe_steps(
+    row: Mapping[str, object],
+    jobs: list[IngestionJob],
+    *,
+    auto_chunk_after_extract: bool = False,
+) -> list[DocumentRecipeStep]:
     recipe_status = FileStatus(str(row.get("status") or FileStatus.UPLOADED.value))
     raw_failed_phase = row.get("failed_phase")
     failed_phase = IngestionJobPhase(str(raw_failed_phase)) if raw_failed_phase else None
@@ -907,6 +917,20 @@ def _recipe_steps(row: Mapping[str, object], jobs: list[IngestionJob]) -> list[D
     else:
         statuses = _RECIPE_STEP_MATRIX.get(recipe_status, (_STEP_PENDING,) * len(_RECIPE_PHASES))
     newest = jobs[0] if jobs else None
+    # 抽出の job を SUCCEEDED にしてから CHUNK の job を投入するまでの間は、レシピが REVIEW で
+    # QUEUED の job も無い。ここで Chunk 作成を QUEUED にし、画面のポーリングを止めない(#733)。
+    # 投入に失敗した場合は猶予を過ぎると「確認待ち」に戻り、手動で続行できる。
+    handoff_phase: IngestionJobPhase | None = None
+    if (
+        auto_chunk_after_extract
+        and recipe_status == FileStatus.REVIEW
+        and newest is not None
+        and newest.status == IngestionJobStatus.SUCCEEDED
+        and newest.phase in {IngestionJobPhase.PREPROCESS, IngestionJobPhase.EXTRACT}
+        and newest.finished_at is not None
+        and datetime.now(UTC) - newest.finished_at < _AUTO_ADVANCE_HANDOFF_GRACE
+    ):
+        handoff_phase = IngestionJobPhase.CHUNK
     result: list[DocumentRecipeStep] = []
     for phase, status in zip(_RECIPE_PHASES, statuses, strict=True):
         latest_job = latest_by_phase.get(phase)
@@ -916,6 +940,8 @@ def _recipe_steps(row: Mapping[str, object], jobs: list[IngestionJob]) -> list[D
             and newest.phase == phase
         ):
             # enqueue→claim 間はレシピ status がまだ前値のため、最新ジョブでだけ補正する。
+            status = DocumentRecipeStepStatus.QUEUED
+        elif phase == handoff_phase:
             status = DocumentRecipeStepStatus.QUEUED
         error_message: str | None = None
         if status == DocumentRecipeStepStatus.FAILED:
@@ -943,7 +969,7 @@ async def _document_recipe_view(
     document_jobs: Sequence[IngestionJob] | None = None,
 ) -> DocumentRecipeView:
     config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-    _, effective = _merge_document_processing_config(config)
+    recipe_settings, effective = _merge_document_processing_config(config)
     recipe_id = str(row["recipe_id"])
     all_jobs = (
         document_jobs
@@ -994,7 +1020,9 @@ async def _document_recipe_view(
             materialized_revision is not None and config_revision != materialized_revision
         ),
         error_message=(str(row["error_message"]) if row.get("error_message") else None),
-        steps=_recipe_steps(row, jobs),
+        steps=_recipe_steps(
+            row, jobs, auto_chunk_after_extract=recipe_settings.rag_auto_chunk_after_extract_enabled
+        ),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         started_at=row.get("started_at"),
