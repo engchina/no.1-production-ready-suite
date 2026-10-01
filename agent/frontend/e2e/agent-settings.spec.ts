@@ -594,6 +594,34 @@ test.describe("Agent Runtime settings", () => {
     await expectNoHorizontalOverflow(page);
   });
 
+  // 保存の失敗は保存ボタンの上の Banner ではなく、操作の行の FormStatus に出す（messaging.md §10.2。#725）。
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "mobile", width: 375, height: 812 },
+  ]) {
+    test(`設定の保存の失敗は操作の行に出す (${viewport.name})`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto("/settings/external-rag");
+      await expect(page.getByRole("heading", { name: "外部 RAG", level: 1 })).toBeVisible();
+      await page.route("**/api/settings/external-rag", (route) =>
+        route.request().method() === "PATCH"
+          ? route.fulfill({
+              status: 500,
+              contentType: "application/json",
+              body: JSON.stringify({ data: null, error_messages: ["設定ファイルに書き込めません。"], warning_messages: [] }),
+            })
+          : route.fallback()
+      );
+      await page.getByLabel("MCP の URL").fill("http://rag-host/api/mcp");
+      await page.getByRole("button", { name: "保存", exact: true }).click();
+
+      const actions = page.getByRole("group", { name: "外部 RAG の保存" });
+      await expect(actions.getByRole("alert")).toHaveText("保存できませんでした。設定ファイルに書き込めません。");
+      await expect(page.getByRole("alert")).toHaveCount(1);
+      await expectNoHorizontalOverflow(page);
+    });
+  }
+
   // #411: 通知は主操作を覆わない。以前は画面の右下に出ていたため、ページの末尾（スクロールしきると画面の下端）の
   // 保存ボタンを覆い、ポインタが通知に乗ると自動の消去が止まって（#351）押せなくなっていた。
   for (const viewport of [

@@ -35,7 +35,10 @@ import {
   DataTable,
   ExecutionConfirmationField,
   DEFAULT_PAGE_SIZE,
+  Disclosure,
   EmptyState,
+  FormActionBar,
+  FormStatus,
   FormSkeleton,
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
@@ -781,24 +784,53 @@ export function RuntimesPage() {
   const { admin: canManage } = useCapabilities();
   const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: agentApi.listRuntimes });
   const [logs, setLogs] = useState<Record<string, string>>({});
+  // Runtime ごとの直近の操作の結果。カードの操作の直下に出し、次の操作まで残す（messaging.md §10。#725）。
+  const [results, setResults] = useState<Record<string, RuntimeOperationResult>>({});
+  const setResult = (runtimeId: string, result: RuntimeOperationResult | null) =>
+    setResults((current) => {
+      const next = { ...current };
+      if (result) next[runtimeId] = result;
+      else delete next[runtimeId];
+      return next;
+    });
+  const failure = (runtime: RuntimeDefinition, key: I18nKey, error: Error): RuntimeOperationResult => ({
+    tone: "danger",
+    message: t(key, { runtime: runtime.name, reason: error.message }),
+  });
   const patchRuntime = useMutation({
     mutationFn: ({ runtime, enabled }: { runtime: RuntimeDefinition; enabled: boolean }) =>
       agentApi.patchRuntime(runtime.id, { enabled }),
+    onMutate: ({ runtime }) => setResult(runtime.id, null),
+    // 切り替えた結果はスイッチ自体が示すので、成功は出さない。
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["runtimes"] }),
+    onError: (error, { runtime }) => setResult(runtime.id, failure(runtime, "runtime.failed.enabled", error)),
   });
   const probe = useMutation({
-    mutationFn: agentApi.probeRuntime,
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["runtimes"] }),
+    mutationFn: (runtime: RuntimeDefinition) => agentApi.probeRuntime(runtime.id),
+    onMutate: (runtime) => setResult(runtime.id, null),
+    onSuccess: (probed, runtime) => {
+      setResult(runtime.id, {
+        tone: RUNTIME_STATUS_VARIANT[probed.status] === "success" ? "success" : "warning",
+        message: t("runtime.result.probe", { runtime: runtime.name, status: runtimeStatusLabel(probed.status) }),
+      });
+      void queryClient.invalidateQueries({ queryKey: ["runtimes"] });
+    },
+    onError: (error, runtime) => setResult(runtime.id, failure(runtime, "runtime.failed.probe", error)),
   });
   const serviceAction = useMutation({
     mutationFn: ({
-      serviceId,
+      runtime,
       action,
     }: {
-      serviceId: string;
-      action: "pull" | "start" | "stop" | "restart" | "remove";
-    }) => agentApi.runtimeServiceAction(serviceId, action),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["runtimes"] }),
+      runtime: RuntimeDefinition;
+      action: RuntimeServiceAction;
+    }) => agentApi.runtimeServiceAction(runtime.managed_service_id as string, action),
+    onMutate: ({ runtime }) => setResult(runtime.id, null),
+    onSuccess: (_data, { runtime, action }) => {
+      setResult(runtime.id, { tone: "success", message: t(`runtime.result.${action}`, { runtime: runtime.name }) });
+      void queryClient.invalidateQueries({ queryKey: ["runtimes"] });
+    },
+    onError: (error, { runtime, action }) => setResult(runtime.id, failure(runtime, `runtime.failed.${action}`, error)),
   });
 
   async function loadLogs(runtime: RuntimeDefinition) {
@@ -814,16 +846,11 @@ export function RuntimesPage() {
     }
   }
 
-  const error = patchRuntime.error ?? probe.error ?? serviceAction.error;
   // Runtime ごとに、いま実行中の操作（状態確認・サービス操作）を 1 つだけ求める。
   // サービスの pull / 起動はイメージの取得やコンテナの起動待ちで数十秒以上かかる。
   function runtimeOperation(runtime: RuntimeDefinition): RuntimeOperation | null {
-    if (probe.isPending && probe.variables === runtime.id) return "probe";
-    if (
-      serviceAction.isPending &&
-      runtime.managed_service_id &&
-      serviceAction.variables?.serviceId === runtime.managed_service_id
-    ) {
+    if (probe.isPending && probe.variables?.id === runtime.id) return "probe";
+    if (serviceAction.isPending && serviceAction.variables?.runtime.id === runtime.id) {
       return serviceAction.variables.action;
     }
     return null;
@@ -841,7 +868,6 @@ export function RuntimesPage() {
         }
       />
       <PageBody wide>
-        {error ? <Banner severity="danger">{error.message}</Banner> : null}
         <QueryState query={runtimes} loadingLabel={t("loading.runtimes")} skeleton={<RuntimeCardsSkeleton />}>
           <div className="grid gap-4 xl:grid-cols-2">
             {(runtimes.data?.runtimes ?? []).map((runtime) => {
@@ -859,16 +885,8 @@ export function RuntimesPage() {
                     </CardDescription>
                   </div>
                   <StatusBadge
-                    variant={
-                      runtime.status === "running"
-                        ? "success"
-                        : runtime.status === "degraded"
-                          ? "warning"
-                          : runtime.status === "stopped"
-                            ? "danger"
-                            : "neutral"
-                    }
-                    label={runtime.status}
+                    variant={RUNTIME_STATUS_VARIANT[runtime.status]}
+                    label={runtimeStatusLabel(runtime.status)}
                   />
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -898,7 +916,7 @@ export function RuntimesPage() {
                           variant="secondary"
                           loading={operation === "probe"}
                           disabled={operation !== null && operation !== "probe"}
-                          onClick={() => probe.mutate(runtime.id)} icon={RefreshCw}>
+                          onClick={() => probe.mutate(runtime)} icon={RefreshCw}>
                           {t("runtime.probe")}
                         </Button>
                       </div>
@@ -913,12 +931,7 @@ export function RuntimesPage() {
                                 icon={RUNTIME_SERVICE_ACTION_ICONS[action]}
                                 loading={operation === action}
                                 disabled={operation !== null && operation !== action}
-                                onClick={() =>
-                                  serviceAction.mutate({
-                                    serviceId: runtime.managed_service_id as string,
-                                    action,
-                                  })
-                                }
+                                onClick={() => serviceAction.mutate({ runtime, action })}
                               >
                                 {t(`runtime.action.${action}` as Parameters<typeof t>[0])}
                               </Button>
@@ -940,6 +953,11 @@ export function RuntimesPage() {
                           className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                           testId={`runtime-processing-${runtime.id}`}
                         />
+                      ) : results[runtime.id] ? (
+                        // 操作の結果は起点の操作の直下に、カードの全幅で 1 つだけ出す（messaging.md §10.1）。
+                        <div data-testid={`runtime-result-${runtime.id}`}>
+                          <FormStatus tone={results[runtime.id].tone} message={results[runtime.id].message} />
+                        </div>
                       ) : null}
                     </>
                   ) : null}
@@ -959,7 +977,27 @@ export function RuntimesPage() {
   );
 }
 
-type RuntimeOperation = "probe" | "pull" | "start" | "stop" | "restart" | "remove";
+type RuntimeServiceAction = "pull" | "start" | "stop" | "restart" | "remove";
+type RuntimeOperation = "probe" | RuntimeServiceAction;
+
+interface RuntimeOperationResult {
+  tone: "success" | "warning" | "danger";
+  message: string;
+}
+
+// Runtime の状態（backend の RuntimeStatus）→ StatusBadge の variant と日本語の label。
+const RUNTIME_STATUS_VARIANT: Record<RuntimeDefinition["status"], StatusVariant> = {
+  unknown: "neutral",
+  running: "success",
+  degraded: "warning",
+  stopped: "danger",
+  disabled: "neutral",
+  legacy: "neutral",
+};
+
+function runtimeStatusLabel(status: RuntimeDefinition["status"]): string {
+  return t(`runtime.status.${status}`);
+}
 
 // loading 中は先頭のアイコンがスピナーに置き換わるため、サービス操作のボタンにもアイコンを付ける（README §4 Button）。
 const RUNTIME_SERVICE_ACTION_ICONS = {
@@ -968,7 +1006,7 @@ const RUNTIME_SERVICE_ACTION_ICONS = {
   stop: PowerOff,
   restart: RotateCw,
   remove: Trash2,
-} as const satisfies Record<Exclude<RuntimeOperation, "probe">, LucideIcon>;
+} as const satisfies Record<RuntimeServiceAction, LucideIcon>;
 
 const RUNTIME_OPERATION_LABEL_KEYS = {
   probe: "runtime.processing.probe",
@@ -2317,11 +2355,8 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
                 ) : null}
               </fieldset>
               {settings.data ? <ProductMcpAuthStatus settings={settings.data} /> : null}
-              {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
               {canManage ? (
-                <Button onClick={save} loading={mutation.isPending} icon={Save}>
-                  {t("common.save")}
-                </Button>
+                <SettingsSaveBar section={title} onSave={save} saving={mutation.isPending} error={mutation.error} />
               ) : null}
             </CardContent>
           </Card>
@@ -2329,6 +2364,30 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
       </div>
 </PageBody>
     </>
+  );
+}
+
+/**
+ * 運用設定のカードの保存の行（UX 契約 buttons §5.2.1 の FormActionBar）。
+ * 保存の成功は Toast、失敗は操作の行の FormStatus に出す（messaging.md §10.2。#725）。
+ */
+function SettingsSaveBar({
+  section,
+  onSave,
+  saving,
+  error,
+}: {
+  section: string;
+  onSave: () => void;
+  saving: boolean;
+  error: Error | null;
+}) {
+  return (
+    <FormActionBar
+      ariaLabel={t("settings.saveActions", { section })}
+      primaryActions={[{ id: "save", label: t("common.save"), icon: Save, loading: saving, onClick: onSave }]}
+      status={error ? <FormStatus tone="danger" message={t("settings.saveFailed", { reason: error.message })} /> : null}
+    />
   );
 }
 
@@ -4823,10 +4882,12 @@ export function CommandPolicySettingsPage() {
                 />
               </div>
 
-              {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
-              <Button onClick={save} loading={mutation.isPending} icon={Save}>
-                {t("common.save")}
-              </Button>
+              <SettingsSaveBar
+                section={t("nav.settingsCommandPolicy")}
+                onSave={save}
+                saving={mutation.isPending}
+                error={mutation.error}
+              />
             </CardContent>
           </Card>
         </QueryState>
@@ -5006,10 +5067,12 @@ export function ToolPolicySettingsPage() {
                 <EmptyState title={t("common.empty.title")} />
               )}
 
-              {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
-              <Button onClick={save} loading={mutation.isPending} icon={Save}>
-                {t("common.save")}
-              </Button>
+              <SettingsSaveBar
+                section={t("nav.settingsToolPolicy")}
+                onSave={save}
+                saving={mutation.isPending}
+                error={mutation.error}
+              />
             </CardContent>
           </Card>
         </QueryState>
@@ -5130,10 +5193,12 @@ export function RuntimeSafetySettingsPage() {
                   }}
                 />
               </div>
-              {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
-              <Button onClick={save} loading={mutation.isPending} icon={Save}>
-                {t("common.save")}
-              </Button>
+              <SettingsSaveBar
+                section={t("nav.settingsRuntimeSafety")}
+                onSave={save}
+                saving={mutation.isPending}
+                error={mutation.error}
+              />
             </CardContent>
           </Card>
         </QueryState>
@@ -6871,8 +6936,16 @@ function AuditRecordItem({ audit, record }: { audit: RunAuditData; record: ToolA
         </Banner>
       ) : null}
       {record.error ? (
-        <Banner severity="danger" title={record.error_code ?? t("common.error")}>
-          {record.error}
+        // title は利用者向けの要約、エラーコードは「詳細」に畳む。失敗なので開いて出す（messaging.md §10.3。#725）。
+        <Banner severity="danger" title={t("run.auditErrorTitle")}>
+          <div className="min-w-0 space-y-2">
+            <p className="break-words [overflow-wrap:anywhere]">{record.error}</p>
+            {record.error_code ? (
+              <Disclosure variant="plain" size="sm" summary={t("run.auditErrorDetails")} defaultOpen>
+                <p className="break-all text-xs text-fg-muted">{`${t("audit.errorCode")}: ${record.error_code}`}</p>
+              </Disclosure>
+            ) : null}
+          </div>
         </Banner>
       ) : null}
       <div className="mt-3">
