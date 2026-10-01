@@ -820,6 +820,7 @@ export const ja = {
   "fileList.knowledgeBaseFilter.label": "ナレッジベース",
   "fileList.knowledgeBaseFilter.all": "利用できるすべてのナレッジベース",
   "fileList.selected": "{count} 件選択中",
+  "fileList.selectionHint": "行を選ぶと、まとめて取込・削除できます。",
   "fileList.bulkQueue": "一括投入",
   "fileList.bulkDelete": "一括削除",
   "fileList.clearSelection": "選択解除",
@@ -846,6 +847,8 @@ export const ja = {
   "fileList.delete.impact.loadFailed": "削除の影響を確認できませんでした。",
   "fileList.delete.impact.loadFailedHint": "接続を確認してから、もう一度削除を実行してください。",
   "fileList.bulkDelete.toast.deleted": "{count} 件のドキュメントを削除しました。",
+  "fileList.bulkDelete.toast.deletedWithWarning":
+    "{count} 件を削除しましたが、{warned} 件は保存先のファイルの後始末に一部失敗しました。",
   "fileList.bulkDelete.toast.partial":
     "{deleted}/{total} 件を削除しました。削除できなかったドキュメントがあります。",
   "fileList.bulkDelete.toast.failed": "一括削除に失敗しました。",

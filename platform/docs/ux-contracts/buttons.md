@@ -127,6 +127,8 @@
 - **危険操作**：無効化・アーカイブ・削除などは、一覧行 / 詳細ではメニュー項目として扱い、確定は `ConfirmDialog` または専用の確認ダイアログの `danger` ボタンで行う。
 - **危険操作の確認面**：確認ダイアログ / 確認語の入力領域は中立の背景にする。danger は左のアクセント・文言の色・状態 badge・確定ボタンに限り、ヘッダー / 本文 / 対象欄を広い danger の背景で塗らない（[messaging.md §3.5](./messaging.md#35-confirmdialog)）。
 - **一括操作**：複数選択を入れる場合は一括操作のバーを使い、一括モードの間は行内の `RowActionMenu` を disabled または非表示にする。
+  - バーは一覧の直上に**常に表示**し、行の選択で出し入れしない。選択が 0 件のときは一括操作と選択解除を disabled にし、左側に「行を選ぶと、まとめて〜できます」のように何ができるかを示す。選択の有無で表の位置を動かさず（レイアウトの移動を出さない）、一括操作があることを選ぶ前から見せるため（#699）。
+  - 見た目は中性の面（`border-border bg-surface-sunken`）で、選択の件数・進み具合を左、操作を右に置く。件数は操作のラベルに `（n）` で添える。
 - **アクセシビリティ**：メニューの trigger は `aria-haspopup="menu"` / `aria-expanded` / `aria-controls`、メニューは `role="menu"`、項目は `role="menuitem"`。Esc で閉じ、ArrowUp/Down/Home/End で移動し、Esc の後は trigger にフォーカスを戻す。
 - **配置**：行内の trigger は右寄せの icon-only ghost、詳細の操作バーはヘッダーの右側で `secondary` + overflow。danger の項目はメニュー内で区切り線を置く。メニューの面は scroll container の中に absolute で置かず、viewport 基準の fixed / portal で表示する。
 - **メニューの表示方向**：方向は trigger に最も近い実スクロール祖先を優先して判定し、なければ viewport を使う。下の空きが足りなければ上へ反転する。上下どちらも足りなければ、空きが大きい側を選び `max-height` + 内部スクロールにする。件数が少なく container が実際にはスクロールしていない場合は、メニューを container に閉じ込めず viewport 内に表示する。左右は trigger の端にそろえる（既定は右端）。そろえた端で viewport（左右 8px の余白の内側）に入らず、反対の端なら入るときは反対の端にそろえる（375px で左端に来た trigger は左端揃え）。どちらの端でも入らなければ viewport の内側にずらす（#363）。

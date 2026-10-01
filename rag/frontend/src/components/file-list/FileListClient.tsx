@@ -71,7 +71,9 @@ import {
   INITIAL_FILE_LIST_VIEW as INITIAL_VIEW,
   isFileListView,
   outOfRangeOffset,
+  summarizeDeleteOutcomes,
   summarizeEnqueueOutcomes,
+  type DeleteOutcome,
   type EnqueueOutcome,
 } from "./FileListClient.logic";
 import { deleteConfirmDescription } from "./document-delete-impact";
@@ -288,21 +290,22 @@ export function FileListClient() {
     if (!confirmed) return;
 
     setBulkDelete({ done: 0, total: targets.length });
-    let deleted = 0;
-    let failed = 0;
-    let firstError: string | null = null;
+    const outcomes: DeleteOutcome[] = [];
     for (const [index, id] of targets.entries()) {
       try {
-        await api.deleteDocument(id);
-        deleted += 1;
+        const result = await api.deleteDocument(id);
+        outcomes.push({ kind: "deleted", warnings: result.warning_messages ?? [] });
       } catch (error) {
-        failed += 1;
-        firstError =
-          firstError ??
-          (error instanceof ApiError ? error.message : t("fileList.bulkDelete.toast.failedHint"));
+        outcomes.push({
+          kind: "failed",
+          message:
+            error instanceof ApiError ? error.message : t("fileList.bulkDelete.toast.failedHint"),
+        });
       }
       setBulkDelete({ done: index + 1, total: targets.length });
     }
+    const { deleted, warned, failed, firstWarning, firstError } =
+      summarizeDeleteOutcomes(outcomes);
     setBulkDelete(null);
     selection.clear();
     qc.invalidateQueries({ queryKey: ["documents"] });
@@ -310,8 +313,12 @@ export function FileListClient() {
     qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
     qc.invalidateQueries({ queryKey: ["documents", "stats"] });
 
-    if (failed === 0) {
+    if (failed === 0 && warned === 0) {
       toast.success(t("fileList.bulkDelete.toast.deleted", { count: deleted }));
+    } else if (failed === 0) {
+      toast.warning(t("fileList.bulkDelete.toast.deletedWithWarning", { count: deleted, warned }), {
+        description: firstWarning ?? undefined,
+      });
     } else if (deleted > 0) {
       toast.warning(t("fileList.bulkDelete.toast.partial", { deleted, total: targets.length }), {
         description: firstError ?? t("fileList.bulkDelete.toast.failedHint"),
@@ -452,11 +459,18 @@ export function FileListClient() {
           </Banner>
         ) : null}
 
-        {/* 一括操作バー */}
-        {selectedCount > 0 || bulkBusy ? (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-accent-emphasis bg-info-subtle px-4 py-2.5">
+        {/* 一括操作バー。選択で出し入れせず常に出し、選択が無いときは操作を無効にする（表の位置を
+            動かさず、一括操作があることを先に見せる。buttons.md §5.1・#699）。 */}
+        {items.length > 0 || bulkBusy ? (
+          <div
+            className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface-sunken px-4 py-2.5"
+            data-testid="file-list-bulk-actions"
+          >
             {/* 進み具合はボタンのラベルではなくここに出す（loading 中にラベルを差し替えない）。 */}
-            <span className="text-sm font-medium text-fg" role="status">
+            <span
+              className={`text-sm ${selectedCount > 0 || bulkBusy ? "font-medium text-fg" : "text-fg-muted"}`}
+              role="status"
+            >
               {bulkIngest
                 ? t("fileList.bulkQueueRunning", { done: bulkIngest.done, total: bulkIngest.total })
                 : bulkDelete
@@ -464,7 +478,9 @@ export function FileListClient() {
                       done: bulkDelete.done,
                       total: bulkDelete.total,
                     })
-                  : t("fileList.selected", { count: selectedCount })}
+                  : selectedCount > 0
+                    ? t("fileList.selected", { count: selectedCount })
+                    : t("fileList.selectionHint")}
             </span>
             <div className="flex flex-wrap items-center gap-2">
               <Button
@@ -484,7 +500,13 @@ export function FileListClient() {
                 disabled={bulkBusy || selectedDocuments.length === 0} icon={Trash2}>
                 {`${t("fileList.bulkDelete")} (${selectedDocuments.length})`}
               </Button>
-              <Button variant="ghost" size="sm" onClick={selection.clear} disabled={bulkBusy} icon={X}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={selection.clear}
+                disabled={bulkBusy || selectedCount === 0}
+                icon={X}
+              >
                 {t("fileList.clearSelection")}
               </Button>
             </div>
