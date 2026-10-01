@@ -67,6 +67,7 @@ const effectiveBase: DocumentProcessingConfig = {
   field_extraction_enabled: false,
   vision_enabled: false,
   navigation_summary_enabled: false,
+  section_rules_mode: "parser",
   auto_parse_after_preprocess_enabled: true,
   auto_chunk_after_extract_enabled: true,
   auto_index_after_chunk_enabled: true,
@@ -336,6 +337,7 @@ const PROCESSING_ORDER = [
   "vision_enabled",
   "field_extraction_enabled",
   "navigation_summary_enabled",
+  "section_rules_mode",
   "auto_chunk_after_extract_enabled",
   "chunking_strategy",
   "chunk_context_header_enabled",
@@ -415,7 +417,7 @@ test("グローバル設定に従う行に、全体の既定を変える画面�
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
   const editor = panel.getByTestId("document-processing-config-editor-items");
   const links = editor.getByRole("link", { name: / のグローバル設定を開く$/ });
-  // すべて継承のときは 11 行すべてにリンクがある。
+  // すべて継承のときは 12 行すべてにリンクがある。
   await expect(links).toHaveCount(PROCESSING_ORDER.length);
   await expect(
     editor.getByRole("link", { name: "図・画像を AI で読み取る のグローバル設定を開く" })
@@ -643,10 +645,35 @@ test("派生レイヤー状態チップ・項目の定義が 0 件の警告・�
   await expect(layerChips.getByTestId("recipe-layer-navigation")).toContainText("構築済み");
   await expect(layerChips.getByTestId("recipe-layer-metadata")).toHaveCount(0);
 
-  // 構造化要素タブに章節ナビ・図表要約・抽出項目の折りたたみセクション。
+  // 構造化要素タブに章節ナビ・図表要約・抽出項目の折りたたみセクション。章節は章節の API から
+  // 読み、抽出の章節の要約を添える（#713）。
+  await page.route("**/api/documents/doc-1/sections**", (route) =>
+    route.fulfill({
+      json: ok({
+        document_id: "doc-1",
+        source: "extraction",
+        rules_mode: "parser",
+        sections: [
+          {
+            id: "sec-1",
+            title: "第1章 総則",
+            level: 1,
+            page_start: 1,
+            page_end: null,
+            origin: "extraction",
+            source_section_id: "sec-1",
+            edited: false,
+          },
+        ],
+        extraction_section_count: 1,
+        page_count: 1,
+        revision: null,
+        updated_at: null,
+      }),
+    })
+  );
   await page.getByRole("tab", { name: "構造化要素" }).click();
   const navigationSection = page.getByTestId("extraction-navigation");
-  await navigationSection.getByText("章節ナビゲーション").click();
   await expect(navigationSection).toContainText("第1章 総則");
   await expect(navigationSection).toContainText("章の要約テキスト");
   const assetSection = page.getByTestId("extraction-asset-summaries");

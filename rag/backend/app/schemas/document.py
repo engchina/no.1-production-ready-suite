@@ -458,11 +458,17 @@ class DocumentChunkPreviewResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+# 章節の抽出規則の方式(#715。app/rag/section_rules.py)。
+SectionRulesMode = Literal["parser", "legal", "official", "numbered", "custom"]
+
+
 class DocumentProcessingConfig(KnowledgeBaseIngestionConfig):
     """文書単位の処理レシピ上書き。None は global 既定を継承する。"""
 
     model_config = ConfigDict(extra="forbid")
     chunk_context_header_enabled: bool | None = None
+    # 章節の抽出規則の方式(#715)。取込の結果は変えず、章節ナビゲーションの章節だけに当てる。
+    section_rules_mode: SectionRulesMode | None = None
 
 
 class DocumentRecipeStepStatus(StrEnum):
@@ -666,6 +672,8 @@ class DocumentSectionsData(BaseModel):
 
     document_id: str
     source: SectionOrigin
+    # 抽出結果の章節を作った方式(#715)。
+    rules_mode: SectionRulesMode = "parser"
     sections: list[DocumentSection] = Field(default_factory=list)
     extraction_section_count: int = 0
     page_count: int | None = None

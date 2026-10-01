@@ -87,6 +87,13 @@ from app.rag.preprocess_strategy import (
     normalize_preprocess_profile,
     preprocess_runtime_settings,
 )
+from app.rag.section_rules import (
+    SectionRulesSettingsData,
+    SectionRulesStore,
+    reset_section_rules,
+    save_section_rules,
+    section_rules_settings,
+)
 from app.rag.system_schema import SystemSchemaError, system_schema_manager
 from app.rag.system_schema_runtime import system_schema_runtime
 from app.rag.vector_index_adapter import (
@@ -729,6 +736,40 @@ async def reset_extraction_fields_settings() -> ApiResponse[ExtractionFieldsSett
     except OSError as exc:
         raise HTTPException(status_code=500, detail="標準の項目に戻せませんでした。") from exc
     return ApiResponse(data=_extraction_fields_data())
+
+
+@router.get("/section-rules", response_model=ApiResponse[SectionRulesSettingsData])
+async def get_section_rules_settings() -> ApiResponse[SectionRulesSettingsData]:
+    """章節の抽出規則の全体の既定(方式・独自の規則)とプリセットの中身(#715)。"""
+    return ApiResponse(data=section_rules_settings())
+
+
+@router.patch("/section-rules", response_model=ApiResponse[SectionRulesSettingsData])
+async def update_section_rules_settings(
+    payload: SectionRulesStore,
+) -> ApiResponse[SectionRulesSettingsData]:
+    """章節の抽出規則の全体の既定を保存する(文書解析の「解析後の処理」で編集する。#715)。
+
+    正規表現として読めない規則は 422。保存先は section-rules.json で、章節を取得するたびに読む
+    ため、取込をやり直さずに次の表示から効く。
+    """
+    try:
+        store = save_section_rules(payload)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500, detail="章節の抽出規則を保存できませんでした。"
+        ) from exc
+    return ApiResponse(data=section_rules_settings(store))
+
+
+@router.delete("/section-rules", response_model=ApiResponse[SectionRulesSettingsData])
+async def reset_section_rules_settings() -> ApiResponse[SectionRulesSettingsData]:
+    """保存した全体の既定を消し、「解析エンジンの見出し」に戻す(#715)。"""
+    try:
+        reset_section_rules()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="章節の抽出規則を戻せませんでした。") from exc
+    return ApiResponse(data=section_rules_settings())
 
 
 @router.get("/guardrail", response_model=ApiResponse[GuardrailSettingsData])

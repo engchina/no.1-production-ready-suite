@@ -136,7 +136,7 @@ test("サイドバーの検索・回答設定の名前と順番は設定の概�
   expect(sidebarNames).toEqual(cardNames);
 });
 
-// #528: レシピ 11 項目を、選択中レシピの設定と同じ処理順で出す。
+// #528: レシピ 12 項目を、選択中レシピの設定と同じ処理順で出す。
 const PROCESSING_ORDER = [
   "preprocess_profile",
   "auto_parse_after_preprocess_enabled",
@@ -144,6 +144,7 @@ const PROCESSING_ORDER = [
   "vision_enabled",
   "field_extraction_enabled",
   "navigation_summary_enabled",
+  "section_rules_mode",
   "auto_chunk_after_extract_enabled",
   "chunking_strategy",
   "chunk_context_header_enabled",
@@ -152,7 +153,7 @@ const PROCESSING_ORDER = [
 ];
 
 for (const scheme of ["light", "dark"] as const) {
-  test(`取込の流れは 11 項目の全体の既定を処理順に出し、工程の間のスイッチで自動進行を保存する (${scheme})`, async ({
+  test(`取込の流れは 12 項目の全体の既定を処理順に出し、工程の間のスイッチで自動進行を保存する (${scheme})`, async ({
     page,
   }, testInfo) => {
     await page.addInitScript((theme) => {
@@ -198,7 +199,7 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(
       items.getByRole("link", { name: "文脈ヘッダを検索対象へ追加 を設定する画面を開く" })
     ).toHaveAttribute("href", "/settings/chunking");
-    await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(8);
+    await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(9);
 
     // 工程の間の 3 つのスイッチ。
     const parseGate = items.getByRole("switch", { name: "ファイル準備後に抽出へ進む" });

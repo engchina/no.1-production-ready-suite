@@ -47,6 +47,9 @@ import {
   type FeedbackListParams,
   type FeedbackRequestBody,
   type DocumentSectionsSaveRequest,
+  type SectionRule,
+  type SectionRulesMode,
+  type SectionRulesPreviewRequest,
   type IngestionJobPhase,
   type IngestionJobStatus,
   type KnowledgeBaseCreateRequest,
@@ -456,6 +459,46 @@ export function useResetDocumentSections(id: string) {
   return useMutation({
     mutationFn: (recipeId: string | null) => api.resetDocumentSections(id, recipeId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["documents", id, "sections"] }),
+  });
+}
+
+/** 章節の抽出規則の全体の既定（#715）。 */
+export function useSectionRulesSettings() {
+  return useQuery({
+    queryKey: ["settings", "section-rules"] as const,
+    queryFn: () => api.getSectionRulesSettings(),
+  });
+}
+
+/** 章節の抽出規則の保存・既定に戻す（#715）。章節ナビゲーションは取得のたびに規則を当てるので読み直す。 */
+export function useSaveSectionRulesSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { mode: SectionRulesMode; rules: SectionRule[] }) =>
+      api.saveSectionRulesSettings(body),
+    onSuccess: (data) => {
+      qc.setQueryData(["settings", "section-rules"], data);
+      void qc.invalidateQueries({ queryKey: ["documents"] });
+    },
+  });
+}
+
+export function useResetSectionRulesSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.resetSectionRulesSettings(),
+    onSuccess: (data) => {
+      qc.setQueryData(["settings", "section-rules"], data);
+      void qc.invalidateQueries({ queryKey: ["documents"] });
+    },
+  });
+}
+
+/** 見本の文書に規則を当てた章節（保存しない。#715）。 */
+export function usePreviewSectionRules() {
+  return useMutation({
+    mutationFn: ({ documentId, ...body }: SectionRulesPreviewRequest & { documentId: string }) =>
+      api.previewDocumentSectionRules(documentId, body),
   });
 }
 

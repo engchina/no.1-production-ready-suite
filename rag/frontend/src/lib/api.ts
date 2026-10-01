@@ -924,6 +924,30 @@ export interface DocumentProcessingConfigData {
 
 export interface DocumentProcessingConfig extends KnowledgeBaseIngestionConfig {
   chunk_context_header_enabled: boolean | null;
+  /** 章節の抽出規則の方式（#715）。null は全体の既定に従う。 */
+  section_rules_mode?: SectionRulesMode | null;
+}
+
+/** 章節の抽出規則（#715）。parser は解析エンジンの見出し、custom は独自の規則。 */
+export type SectionRulesMode = "parser" | "legal" | "official" | "numbered" | "custom";
+
+export interface SectionRule {
+  name: string;
+  pattern: string;
+  level: number;
+  enabled: boolean;
+}
+
+export interface SectionRulesSettingsData {
+  mode: SectionRulesMode;
+  rules: SectionRule[];
+  presets: Partial<Record<SectionRulesMode, SectionRule[]>>;
+}
+
+export interface SectionRulesPreviewRequest {
+  mode: SectionRulesMode;
+  rules: SectionRule[];
+  recipe_id?: string | null;
 }
 
 export type DocumentRecipeStepStatus =
@@ -2391,6 +2415,21 @@ export const api = {
       }`,
       { method: "DELETE" },
     ),
+  previewDocumentSectionRules: (id: string, body: SectionRulesPreviewRequest) =>
+    request<DocumentSectionsData>(`/api/documents/${encodeURIComponent(id)}/sections/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  getSectionRulesSettings: () => request<SectionRulesSettingsData>("/api/settings/section-rules"),
+  saveSectionRulesSettings: (body: { mode: SectionRulesMode; rules: SectionRule[] }) =>
+    request<SectionRulesSettingsData>("/api/settings/section-rules", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  resetSectionRulesSettings: () =>
+    request<SectionRulesSettingsData>("/api/settings/section-rules", { method: "DELETE" }),
   getDocumentClassificationOptions: () =>
     request<DocumentClassificationOptions>("/api/documents/classification-options"),
   saveDocumentClassification: (id: string, body: DocumentClassification) =>
@@ -3201,6 +3240,8 @@ export interface DocumentSectionsData {
   document_id: string;
   /** 人の修正（manual）か、抽出結果（extraction）か。 */
   source: DocumentSectionOrigin;
+  /** 抽出結果の章節を作った方式（#715）。 */
+  rules_mode: SectionRulesMode;
   sections: DocumentSection[];
   extraction_section_count: number;
   page_count: number | null;

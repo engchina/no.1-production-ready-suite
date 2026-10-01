@@ -63,7 +63,6 @@ from app.rag.document_crop import (
 from app.rag.document_sections import (
     refresh_from_extraction,
     section_errors,
-    sections_from_navigation,
     stored_sections,
 )
 from app.rag.extraction_field_adapter import load_field_schema
@@ -92,6 +91,12 @@ from app.rag.navigation import build_navigation_tree
 from app.rag.parser_source_guard import check_parser_source
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
+from app.rag.section_rules import (
+    SectionRulesPreviewRequest,
+    SectionRulesStore,
+    extraction_sections,
+    load_section_rules,
+)
 from app.rag.source_profile import build_source_profile
 from app.rag.variant_keys import (
     compute_chunk_set_id,
@@ -145,6 +150,7 @@ from app.schemas.document import (
     IngestionJobStatus,
     IngestionSegment,
     ParserSourceNotice,
+    SectionRulesMode,
     SourceProfile,
     UploadResult,
 )
@@ -1396,20 +1402,25 @@ async def document_recipe_preview_page_image(
 
 async def _sections_extraction(
     oracle: OracleClient, document_id: str, recipe_id: str | None
-) -> StructuredExtraction | None:
-    """章節の元にする抽出結果(``recipe_id``、無ければ既定のレシピの今の抽出)。無ければ None。"""
+) -> tuple[StructuredExtraction | None, SectionRulesMode]:
+    """章節の元にする抽出結果(``recipe_id``、無ければ既定のレシピの今の抽出。無ければ None)と、
+    そのレシピの章節の抽出規則の方式(#715)。"""
     if recipe_id is None:
         recipe_id = str((await oracle.ensure_default_document_recipe(document_id))["recipe_id"])
     row = await oracle.get_document_recipe(document_id, recipe_id)
+    config = DocumentProcessingConfig.model_validate(
+        (row.get("processing_config") if row is not None else None) or {}
+    )
+    mode = config.section_rules_mode or load_section_rules().mode
     extraction_recipe_id = row.get("active_extraction_recipe_id") if row is not None else None
     if not extraction_recipe_id:
-        return None
+        return None, mode
     artifact = await oracle.get_document_extraction_artifact(
         document_id=document_id, extraction_recipe_id=str(extraction_recipe_id)
     )
     if artifact is None or not artifact.get("extraction_json"):
-        return None
-    return StructuredExtraction.model_validate(artifact["extraction_json"])
+        return None, mode
+    return StructuredExtraction.model_validate(artifact["extraction_json"]), mode
 
 
 async def _document_sections(
@@ -1418,14 +1429,15 @@ async def _document_sections(
     """人の修正があればそれを、無ければ抽出結果の章節を返す(#713)。"""
     if not await oracle.document_exists(document_id):
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    extraction = await _sections_extraction(oracle, document_id, recipe_id)
-    extracted = sections_from_navigation(extraction.navigation) if extraction else []
+    extraction, rules_mode = await _sections_extraction(oracle, document_id, recipe_id)
+    extracted = extraction_sections(extraction, rules_mode)
     page_count = (len(extraction.pages) or None) if extraction else None
     stored = await oracle.get_document_sections(document_id)
     if stored is None:
         return DocumentSectionsData(
             document_id=document_id,
             source="extraction",
+            rules_mode=rules_mode,
             sections=extracted,
             extraction_section_count=len(extracted),
             page_count=page_count,
@@ -1433,6 +1445,7 @@ async def _document_sections(
     return DocumentSectionsData(
         document_id=document_id,
         source="manual",
+        rules_mode=rules_mode,
         sections=refresh_from_extraction(stored_sections(stored["sections"]), extracted),
         extraction_section_count=len(extracted),
         page_count=page_count,
@@ -1472,6 +1485,35 @@ async def save_document_sections(
             detail="読み込んだ後に、ほかの操作で章節が保存されました。読み込み直してから直してください。",
         ) from exc
     return ApiResponse(data=await _document_sections(oracle, document_id, request.recipe_id))
+
+
+@router.post("/{document_id}/sections/preview", response_model=ApiResponse[DocumentSectionsData])
+async def preview_document_section_rules(
+    document_id: str, request: SectionRulesPreviewRequest
+) -> ApiResponse[DocumentSectionsData]:
+    """見本の文書に章節の抽出規則を当てた章節を返す(保存しない。#715)。
+
+    人が修正した章節は見ず、抽出結果に規則を当てた結果だけを返す。
+    """
+    oracle = OracleClient()
+    if not await oracle.document_exists(document_id):
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    extraction, _mode = await _sections_extraction(oracle, document_id, request.recipe_id)
+    sections = extraction_sections(
+        extraction,
+        request.mode,
+        SectionRulesStore(mode=request.mode, rules=request.rules),
+    )
+    return ApiResponse(
+        data=DocumentSectionsData(
+            document_id=document_id,
+            source="extraction",
+            rules_mode=request.mode,
+            sections=sections,
+            extraction_section_count=len(sections),
+            page_count=(len(extraction.pages) or None) if extraction else None,
+        )
+    )
 
 
 @router.delete("/{document_id}/sections", response_model=ApiResponse[DocumentSectionsData])
@@ -2242,6 +2284,8 @@ def _merge_document_processing_config(
         {
             **effective.model_dump(),
             "chunk_context_header_enabled": (effective_settings.rag_chunk_context_header_enabled),
+            # 章節の抽出規則の方式は Settings ではなく全体の既定のファイルが持つ(#715)。
+            "section_rules_mode": config.section_rules_mode or load_section_rules().mode,
         }
     )
 

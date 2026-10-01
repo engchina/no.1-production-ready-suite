@@ -49,6 +49,7 @@ import {
 import {
   CHUNKING_OPTIONS,
   GRAPH_OPTIONS,
+  SECTION_RULES_OPTIONS,
   PARSER_OPTIONS,
   PARSER_VALUES,
   PREPROCESS_OPTIONS,
@@ -72,6 +73,7 @@ function emptyConfig(): DocumentProcessingConfig {
     chunk_min_chars: null,
     chunk_context_header_enabled: null,
     graph_profile: null,
+    section_rules_mode: null,
     field_extraction_enabled: null,
     navigation_summary_enabled: null,
     auto_parse_after_preprocess_enabled: null,
@@ -97,6 +99,7 @@ const EDITOR_ID_SUFFIX: Record<RecipeConfigField, string> = {
   chunk_context_header_enabled: "context-header",
   auto_index_after_chunk_enabled: "auto-index",
   graph_profile: "graph",
+  section_rules_mode: "section-rules",
 };
 
 const CONFIG_GROUPS = recipeConfigGroups();
@@ -135,7 +138,7 @@ export function DocumentProcessingConfigPanel({
   const dirty = configs ? JSON.stringify(form) !== JSON.stringify(configs.processing) : false;
   // レシピの未保存の上書き設定があるときだけ離脱を確認する。
   useLeaveGuard(dirty);
-  const overrideCount = RECIPE_CONFIG_FIELDS.filter((field) => form[field] !== null).length;
+  const overrideCount = RECIPE_CONFIG_FIELDS.filter((field) => form[field] != null).length;
 
   // 項目抽出が実効 ON のときだけ全体の既定の定義を引き、標準の項目で動くことを案内し（#556）、
   // 0 件で保存されていれば無言 no-op を警告する。
@@ -256,6 +259,22 @@ export function DocumentProcessingConfigPanel({
             onChange={(value) => update({ graph_profile: value })}
           />
         );
+      case "section_rules_mode":
+        return (
+          <SelectRow
+            key={item.field}
+            field={item.field}
+            id={id}
+            label={label}
+            globalHref={globalHref}
+            value={form.section_rules_mode ?? null}
+            effectiveValue={configs.effective.section_rules_mode ?? null}
+            options={SECTION_RULES_OPTIONS}
+            defaultValue="parser"
+            disabled={disabled}
+            onChange={(value) => update({ section_rules_mode: value })}
+          />
+        );
       default: {
         const field = item.field;
         return (
@@ -350,7 +369,7 @@ export function DocumentProcessingConfigPanel({
               <PhaseGroup key={group.phase} group={group} idPrefix={`summary-${documentId}`}>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
                   {group.items.map((item) => {
-                    const overridden = form[item.field] !== null;
+                    const overridden = form[item.field] != null;
                     return (
                       <div
                         key={item.field}

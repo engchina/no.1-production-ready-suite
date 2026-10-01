@@ -306,6 +306,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_D}/sections"): _DOCUMENT_WORKSPACE,
     ("PUT", f"{_D}/sections"): _DOCUMENT_WORKSPACE,
     ("DELETE", f"{_D}/sections"): _DOCUMENT_WORKSPACE,
+    # 章節の抽出規則のプレビューは、文書解析の設定の画面と文書の詳細が使う(#715)。
+    ("POST", f"{_D}/sections/preview"): _any(
+        MENU_SETTINGS_PARSER_ADAPTERS, MENU_UPLOAD, MENU_FILE_LIST
+    ),
     ("GET", f"{_D}/ingestion-segments"): _DOCUMENT_WORKSPACE,
     ("GET", _D): _DOCUMENT_VIEW,
     ("DELETE", _D): _any(MENU_FILE_LIST),
@@ -472,6 +476,11 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/extraction-fields"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
     # 「標準の項目に戻す」（#556）。
     ("DELETE", "/settings/extraction-fields"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
+    ("GET", "/settings/section-rules"): _any(
+        MENU_SETTINGS_PARSER_ADAPTERS, MENU_UPLOAD, MENU_FILE_LIST
+    ),
+    ("PATCH", "/settings/section-rules"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
+    ("DELETE", "/settings/section-rules"): _any(MENU_SETTINGS_PARSER_ADAPTERS),
     ("GET", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
     ("PATCH", "/settings/guardrail"): _any(MENU_SETTINGS_GUARDRAIL),
     ("GET", "/settings/vector-index"): _any(MENU_SETTINGS_VECTOR_INDEX),
