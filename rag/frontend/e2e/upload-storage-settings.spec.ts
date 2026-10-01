@@ -147,7 +147,7 @@ test("アップロード時に選択したナレッジベースへ所属でき�
   });
   await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
-  await expect(page.getByRole("heading", { name: "upload.txt" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "upload.txt の文書詳細を開く" })).toBeVisible();
   expect(uploadBody).toContain('name="knowledge_base_ids"');
   expect(uploadBody).toContain("kb-1");
 });
@@ -167,12 +167,17 @@ test("アップロード画面で原本の処理情報を確認できる", async
   });
   await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
-  await expect(page.getByText("取込ジョブの状態を更新しています")).toHaveCount(0);
-  // 原本情報は「処理の詳細(診断)」を展開して確認する(既定は折りたたみ)。
-  await page.getByText("処理の詳細(診断)").click();
-  await expect(page.getByRole("heading", { name: "原本情報" })).toBeVisible();
-  await expect(page.getByText("テキスト構造化", { exact: true })).toBeVisible();
-  await expect(page.getByText("text/plain")).toBeVisible();
+  // 結果の行に原本の解析方式を出し、文書詳細は埋め込まない（#707）。
+  await expect(page.getByRole("heading", { name: "アップロード結果" })).toBeVisible();
+  await expect(page.getByText("原本判定: テキスト構造化")).toBeVisible();
+  await expect(page.getByText("処理の詳細(診断)")).toHaveCount(0);
+  await expect(
+    page.getByText("取込（ファイル準備・文書解析・文書分割・索引）は、文書インデックスか各文書の詳細から始めます。")
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "upload.txt の文書詳細を開く" })).toHaveAttribute(
+    "href",
+    "/documents/doc-upload"
+  );
 });
 
 test("未対応 audio は保存時に処理情報として表示する", async ({ page }) => {
@@ -190,12 +195,9 @@ test("未対応 audio は保存時に処理情報として表示する", async (
   });
   await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
-  await expect(page.getByRole("heading", { name: "voice.mp3" })).toBeVisible();
-  // 原本情報(音声未対応)は「処理の詳細(診断)」を展開して確認する。
-  await page.getByText("処理の詳細(診断)").click();
-  await expect(page.getByText("音声未対応", { exact: true })).toBeVisible();
-  await expect(page.getByText("音声ファイルは現在の取込対象外です。").first()).toBeVisible();
-  await expect(page.getByText("取込ジョブの状態を更新しています")).toHaveCount(0);
+  // 結果の行に原本の解析方式（音声未対応）を出す（#707）。
+  await expect(page.getByRole("link", { name: "voice.mp3 の文書詳細を開く" })).toBeVisible();
+  await expect(page.getByText("原本判定: 音声未対応")).toBeVisible();
 });
 
 test("複数ファイルをまとめてアップロードし結果を確認できる", async ({ page }) => {
@@ -246,8 +248,7 @@ test("複数ファイルをまとめてアップロードし結果を確認で�
   await expect(page.getByText("未対応")).toBeVisible();
   await expect(page.getByText("原本種別を判定できませんでした。")).toBeVisible();
   await expect(page.getByText("待機中")).toHaveCount(0);
-  await page.getByRole("button", { name: "policy-b.txt を表示" }).click();
-  await expect(page.getByRole("heading", { name: "policy-b.txt" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "policy-b.txt の文書詳細を開く" })).toBeVisible();
   expect(uploadBody).toContain('name="files"');
   expect(uploadBody).toContain("policy-a.txt");
   expect(uploadBody).toContain("policy-b.txt");
