@@ -2372,6 +2372,25 @@ export const api = {
     for (const id of ids) search.append("document_id", id);
     return request<DocumentDeleteImpact[]>(`/api/documents/delete-impact?${search.toString()}`);
   },
+  getDocumentSections: (id: string, recipeId?: string | null) =>
+    request<DocumentSectionsData>(
+      `/api/documents/${encodeURIComponent(id)}/sections${
+        recipeId ? `?recipe_id=${encodeURIComponent(recipeId)}` : ""
+      }`,
+    ),
+  saveDocumentSections: (id: string, body: DocumentSectionsSaveRequest) =>
+    request<DocumentSectionsData>(`/api/documents/${encodeURIComponent(id)}/sections`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  resetDocumentSections: (id: string, recipeId?: string | null) =>
+    request<DocumentSectionsData>(
+      `/api/documents/${encodeURIComponent(id)}/sections${
+        recipeId ? `?recipe_id=${encodeURIComponent(recipeId)}` : ""
+      }`,
+      { method: "DELETE" },
+    ),
   getDocumentClassificationOptions: () =>
     request<DocumentClassificationOptions>("/api/documents/classification-options"),
   saveDocumentClassification: (id: string, body: DocumentClassification) =>
@@ -3162,6 +3181,37 @@ export interface ApprovedFaqMutationData extends ApprovedFaqListData {
 export interface ApprovedFaqImportPreviewData {
   total: number;
   rows: { question: string; answer: string; row: number }[];
+}
+
+/** 文書の章節（章節ナビゲーション。#713）。並び順 + 階層（1〜6）で木を表す。 */
+export type DocumentSectionOrigin = "extraction" | "manual";
+
+export interface DocumentSection {
+  id: string;
+  title: string;
+  level: number;
+  page_start: number | null;
+  page_end: number | null;
+  origin: DocumentSectionOrigin;
+  source_section_id: string | null;
+  edited: boolean;
+}
+
+export interface DocumentSectionsData {
+  document_id: string;
+  /** 人の修正（manual）か、抽出結果（extraction）か。 */
+  source: DocumentSectionOrigin;
+  sections: DocumentSection[];
+  extraction_section_count: number;
+  page_count: number | null;
+  revision: number | null;
+  updated_at: string | null;
+}
+
+export interface DocumentSectionsSaveRequest {
+  sections: DocumentSection[];
+  base_revision: number | null;
+  recipe_id?: string | null;
 }
 
 export interface ApprovedFaqSuggestionData {

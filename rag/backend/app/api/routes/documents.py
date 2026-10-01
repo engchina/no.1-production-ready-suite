@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from html import escape
 from pathlib import PurePath
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -32,6 +32,7 @@ from app.clients.object_storage import ObjectStorageClient
 from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS
 from app.clients.oracle import (
     DocumentDeleteBlockedByRunningIngestionError,
+    DocumentSectionsConflictError,
     OracleClient,
     is_transient_oracle_error,
     oracle_error_log_fields,
@@ -58,6 +59,12 @@ from app.rag.document_crop import (
     load_parsed_source,
     page_sizes,
     render_page_png,
+)
+from app.rag.document_sections import (
+    refresh_from_extraction,
+    section_errors,
+    sections_from_navigation,
+    stored_sections,
 )
 from app.rag.extraction_field_adapter import load_field_schema
 from app.rag.ingestion import (
@@ -126,6 +133,8 @@ from app.schemas.document import (
     DocumentRecipeStepStatus,
     DocumentRecipeView,
     DocumentReviewEditsRequest,
+    DocumentSectionsData,
+    DocumentSectionsSaveRequest,
     DocumentSummary,
     DocumentTableCellTextEdit,
     DuplicateDocumentRef,
@@ -1383,6 +1392,99 @@ async def document_recipe_preview_page_image(
     return await _document_preview_page_image_response(
         detail, page_number=page_number, variant=variant, dpi=dpi, preprocess_artifact=artifact
     )
+
+
+async def _sections_extraction(
+    oracle: OracleClient, document_id: str, recipe_id: str | None
+) -> StructuredExtraction | None:
+    """章節の元にする抽出結果(``recipe_id``、無ければ既定のレシピの今の抽出)。無ければ None。"""
+    if recipe_id is None:
+        recipe_id = str((await oracle.ensure_default_document_recipe(document_id))["recipe_id"])
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    extraction_recipe_id = row.get("active_extraction_recipe_id") if row is not None else None
+    if not extraction_recipe_id:
+        return None
+    artifact = await oracle.get_document_extraction_artifact(
+        document_id=document_id, extraction_recipe_id=str(extraction_recipe_id)
+    )
+    if artifact is None or not artifact.get("extraction_json"):
+        return None
+    return StructuredExtraction.model_validate(artifact["extraction_json"])
+
+
+async def _document_sections(
+    oracle: OracleClient, document_id: str, recipe_id: str | None
+) -> DocumentSectionsData:
+    """人の修正があればそれを、無ければ抽出結果の章節を返す(#713)。"""
+    if not await oracle.document_exists(document_id):
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    extraction = await _sections_extraction(oracle, document_id, recipe_id)
+    extracted = sections_from_navigation(extraction.navigation) if extraction else []
+    page_count = (len(extraction.pages) or None) if extraction else None
+    stored = await oracle.get_document_sections(document_id)
+    if stored is None:
+        return DocumentSectionsData(
+            document_id=document_id,
+            source="extraction",
+            sections=extracted,
+            extraction_section_count=len(extracted),
+            page_count=page_count,
+        )
+    return DocumentSectionsData(
+        document_id=document_id,
+        source="manual",
+        sections=refresh_from_extraction(stored_sections(stored["sections"]), extracted),
+        extraction_section_count=len(extracted),
+        page_count=page_count,
+        revision=cast(int, stored["revision"]),
+        updated_at=cast(datetime | None, stored.get("updated_at")),
+    )
+
+
+@router.get("/{document_id}/sections", response_model=ApiResponse[DocumentSectionsData])
+async def get_document_sections(
+    document_id: str,
+    recipe_id: Annotated[str | None, Query(max_length=128)] = None,
+) -> ApiResponse[DocumentSectionsData]:
+    """文書の章節(章節ナビゲーション。#713)。"""
+    return ApiResponse(data=await _document_sections(OracleClient(), document_id, recipe_id))
+
+
+@router.put("/{document_id}/sections", response_model=ApiResponse[DocumentSectionsData])
+async def save_document_sections(
+    document_id: str, request: DocumentSectionsSaveRequest
+) -> ApiResponse[DocumentSectionsData]:
+    """人が修正した章節を保存する(すべての処理レシピで共有。#713)。"""
+    oracle = OracleClient()
+    current = await _document_sections(oracle, document_id, request.recipe_id)
+    errors = section_errors(request.sections, current.page_count)
+    if errors:
+        raise HTTPException(status_code=422, detail=" ".join(errors[:5]))
+    try:
+        await oracle.save_document_sections(
+            document_id,
+            [section.model_dump() for section in request.sections],
+            base_revision=request.base_revision,
+        )
+    except DocumentSectionsConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="読み込んだ後に、ほかの操作で章節が保存されました。読み込み直してから直してください。",
+        ) from exc
+    return ApiResponse(data=await _document_sections(oracle, document_id, request.recipe_id))
+
+
+@router.delete("/{document_id}/sections", response_model=ApiResponse[DocumentSectionsData])
+async def reset_document_sections(
+    document_id: str,
+    recipe_id: Annotated[str | None, Query(max_length=128)] = None,
+) -> ApiResponse[DocumentSectionsData]:
+    """人の修正を捨て、抽出結果の章節に戻す(#713)。"""
+    oracle = OracleClient()
+    if not await oracle.document_exists(document_id):
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    await oracle.delete_document_sections(document_id)
+    return ApiResponse(data=await _document_sections(oracle, document_id, recipe_id))
 
 
 @router.get(

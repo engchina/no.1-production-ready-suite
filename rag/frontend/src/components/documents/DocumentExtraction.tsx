@@ -41,6 +41,7 @@ import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { tableCellKey, tableCellRef } from "@/lib/table-cell-focus";
 
+import { DocumentSectionsPanel } from "./DocumentSectionsPanel";
 import { ExtractedText, InfoChip } from "./extraction-bits";
 
 const KIND_LABELS: Record<string, Parameters<typeof t>[0]> = {
@@ -89,8 +90,14 @@ export function DocumentExtraction({
   onElementSelect,
   onTableCellSelect,
   documentId = null,
+  recipeId = null,
+  onPageSelect,
 }: {
   extraction: Record<string, unknown>;
+  /** 章節ナビゲーションの元にする処理レシピ（#713）。 */
+  recipeId?: string | null;
+  /** 章節を押したとき、プレビューをそのページへ移す（#713）。 */
+  onPageSelect?: (page: number) => void;
   /** 指定時は図・表の Vision 詳細に切り出し画像(crop API)を表示する。 */
   documentId?: string | null;
   selectedElementId?: string | null;
@@ -220,7 +227,23 @@ export function DocumentExtraction({
         />
       ) : null}
 
-      {parsed.navigation.length > 0 ? <NavigationTreePanel nodes={parsed.navigation} /> : null}
+      {/* 文書の詳細では章節を修正・追加・削除できる（#713）。文書の無い表示は抽出結果の章節だけを出す。 */}
+      {documentId ? (
+        <DocumentSectionsPanel
+          documentId={documentId}
+          recipeId={recipeId}
+          summaries={
+            new Map(
+              parsed.navigation.flatMap((node) =>
+                node.summary ? [[node.section_id, node.summary] as const] : []
+              )
+            )
+          }
+          onPageSelect={onPageSelect}
+        />
+      ) : parsed.navigation.length > 0 ? (
+        <NavigationTreePanel nodes={parsed.navigation} />
+      ) : null}
       {summarizedAssets.length > 0 ? <AssetSummariesPanel assets={summarizedAssets} /> : null}
       {parsed.fields.length > 0 ? <ExtractionFieldsPanel fields={parsed.fields} /> : null}
     </div>

@@ -363,9 +363,11 @@ export function DocumentWorkspace({
   const [selectedTableCellKey, setSelectedTableCellKey] = useState<string | null>(null);
   const [previewVariant, setPreviewVariant] = useState<"original" | "prepared">("original");
   const [previewFocusSource, setPreviewFocusSource] =
-    useState<"chunk" | "element" | "table_cell">("chunk");
+    // page は章節ナビゲーションから開いたページ（#713）。強調の枠は出さない。
+    useState<"chunk" | "element" | "table_cell" | "page">("chunk");
   const [focusRequest, setFocusRequest] = useState<WorkspaceFocusRequest | null>(null);
   const [urlFallbackFocus, setUrlFallbackFocus] = useState<UrlFallbackFocus | null>(null);
+  const pageFocusSerialRef = useRef(0);
   // 適用済みの URL フォーカス要求（同じ要求で選択を上書きし直さないため）。
   const [appliedFocusRequest, setAppliedFocusRequest] = useState<string | null>(null);
   const requestedChunkId = searchParams.get("chunk_id");
@@ -646,7 +648,9 @@ export function DocumentWorkspace({
     [parsedExtraction.tables, selectedTableCellKey]
   );
   const focusPage =
-    previewFocusSource === "table_cell"
+    previewFocusSource === "page"
+      ? null
+      : previewFocusSource === "table_cell"
       ? selectedTableCell?.cell.page_number ??
         selectedTableCell?.table.page_number ??
         selectedElement?.page_number ??
@@ -662,7 +666,9 @@ export function DocumentWorkspace({
   const selectedTableCellBbox =
     selectedTableCell?.cell.bbox ?? bboxFromMetadata(selectedTableCell?.cell.metadata);
   const focusBbox =
-    previewFocusSource === "table_cell"
+    previewFocusSource === "page"
+      ? null
+      : previewFocusSource === "table_cell"
       ? selectedTableCellBbox ?? selectedElementBbox ?? selectedChunkBbox ?? null
       : previewFocusSource === "element"
         ? selectedElementBbox ?? selectedChunkBbox ?? null
@@ -775,6 +781,21 @@ export function DocumentWorkspace({
     setSelectedTableCellKey(null);
     setSelectedChunkId(linkedChunk?.chunk_id ?? null);
     setPreviewFocusSource("element");
+  }
+
+  /** 章節を押したとき、プレビューをそのページへ移す（#713）。chunk・要素の選択は残す。 */
+  function selectPage(page: number) {
+    // 同じページを続けて押しても、プレビューを移し直す。
+    pageFocusSerialRef.current += 1;
+    setPreviewFocusSource("page");
+    setUrlFallbackFocus({
+      key: `section-page-${page}-${pageFocusSerialRef.current}`,
+      page,
+      bbox: null,
+      bboxMode: null,
+      bboxUnit: null,
+      pageSize: null,
+    });
   }
 
   function selectTableCell(table: ExtractionTable, cell: ExtractionTableCell) {
@@ -1421,6 +1442,8 @@ export function DocumentWorkspace({
                     focusSelectedTableCell={focusRequest?.target === "table_cell"}
                     onElementSelect={selectElement}
                     onTableCellSelect={selectTableCell}
+                    recipeId={selectedRecipeId}
+                    onPageSelect={selectPage}
                   />
                 )}
               </div>

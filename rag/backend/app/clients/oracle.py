@@ -310,6 +310,10 @@ DEFAULT_ONLY_MEMBERSHIP_REMOVE_MESSAGE = (
 )
 
 
+class DocumentSectionsConflictError(ValueError):
+    """文書の章節を、読み込んだ後にほかの人が保存していた(#713)。"""
+
+
 class KnowledgeBaseNameConflictError(ValueError):
     """同じ tenant に同じ名前（大文字小文字を区別しない）のナレッジベースがある。
 
@@ -2645,6 +2649,93 @@ class OracleClient:
                 """,
                 binds,
                 input_sizes=_json_input_sizes("payload_json"),
+            )
+
+        await self._run_transaction(operation)
+
+    async def get_document_sections(self, document_id: str) -> dict[str, object] | None:
+        """人が修正した文書の章節(#713)。未保存は None。"""
+        row = await self._fetch_one(
+            """
+            SELECT sections_json, revision, updated_at
+            FROM rag_document_sections
+            WHERE document_id = :document_id
+            """,
+            {"document_id": document_id},
+        )
+        if row is None:
+            return None
+        sections = row.get("sections_json")
+        if isinstance(sections, str):
+            sections = json.loads(sections)
+        return {
+            "sections": sections if isinstance(sections, list) else [],
+            "revision": int(cast(int, row.get("revision") or 1)),
+            "updated_at": row.get("updated_at"),
+        }
+
+    async def save_document_sections(
+        self,
+        document_id: str,
+        sections: Sequence[Mapping[str, object]],
+        *,
+        base_revision: int | None,
+    ) -> int:
+        """人が修正した章節を保存し、新しい revision を返す(#713)。
+
+        ``base_revision`` は読み込んだときの revision(未保存なら None)。保存済みの revision と
+        違えば ``DocumentSectionsConflictError``(読み込んだ後にほかの人が保存した)。
+        """
+        binds = {"document_id": document_id, "sections_json": _json_bind(list(sections))}
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            row = _fetch_one(
+                connection,
+                """
+                SELECT revision FROM rag_document_sections
+                WHERE document_id = :document_id
+                FOR UPDATE
+                """,
+                {"document_id": document_id},
+            )
+            current = int(cast(int, row["revision"])) if row is not None else None
+            if current != base_revision:
+                raise DocumentSectionsConflictError(document_id)
+            if current is None:
+                _execute(
+                    connection,
+                    """
+                    INSERT INTO rag_document_sections (document_id, sections_json)
+                    VALUES (:document_id, :sections_json)
+                    """,
+                    binds,
+                    input_sizes=_json_input_sizes("sections_json"),
+                )
+                return 1
+            _execute(
+                connection,
+                """
+                UPDATE rag_document_sections
+                SET sections_json = :sections_json,
+                    revision = revision + 1,
+                    updated_at = SYSTIMESTAMP
+                WHERE document_id = :document_id
+                """,
+                binds,
+                input_sizes=_json_input_sizes("sections_json"),
+            )
+            return current + 1
+
+        return await self._run_transaction(operation)
+
+    async def delete_document_sections(self, document_id: str) -> None:
+        """人が修正した章節を消し、抽出結果の章節に戻す(#713)。"""
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                "DELETE FROM rag_document_sections WHERE document_id = :document_id",
+                {"document_id": document_id},
             )
 
         await self._run_transaction(operation)
@@ -11693,6 +11784,28 @@ CREATE TABLE {table_name} (
     CONSTRAINT {table_name}_kind_ck CHECK (
         kind IN ('domain_keywords', 'approved_faq', 'runtime_knowledge')
     )
+);
+""".strip()
+
+
+def oracle_document_sections_schema_sql(
+    table_name: str = "rag_document_sections",
+) -> str:
+    """人が修正した文書の章節の DDL(#713)。
+
+    文書ごとに 1 行。章節は「順序 + 階層」の平らな一覧の JSON で、すべての処理レシピで共有する。
+    文書を消したら一緒に消す。
+    """
+
+    return f"""
+CREATE TABLE {table_name} (
+    document_id    VARCHAR2(64) NOT NULL,
+    sections_json  JSON NOT NULL,
+    revision       NUMBER(19) DEFAULT 1 NOT NULL,
+    updated_at     TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {table_name}_pk PRIMARY KEY (document_id),
+    CONSTRAINT {table_name}_document_fk FOREIGN KEY (document_id)
+        REFERENCES rag_documents (document_id) ON DELETE CASCADE
 );
 """.strip()
 
