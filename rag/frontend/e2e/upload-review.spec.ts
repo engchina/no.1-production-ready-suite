@@ -528,14 +528,11 @@ test("Docling で解析できない形式は、アップロードの結果で案
   await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   await expect(page.getByRole("heading", { name: "アップロード結果" })).toBeVisible();
-  // 一覧の行に短い案内、選択中の文書に理由と対処を出す。
+  // 案内のある文書の行にだけ短い案内を出す。文書詳細は埋め込まず、行から開く（#707）。
   await expect(
     page.getByText("既定の Docling では解析できない形式です（処理レシピで Unstructured を選択）")
   ).toHaveCount(1);
-  await expect(page.getByText("このままでは取込を開始できません")).toBeVisible();
-  await expect(page.getByTestId("upload-parser-notice")).toHaveText(message);
+  await expect(page.getByText(message)).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "memo.txt の文書詳細を開く" })).toBeVisible();
   await expectNoPageOverflow(page);
-  // 案内の無い文書を選ぶと消える。
-  await page.getByRole("button", { name: "policy.txt を表示" }).click();
-  await expect(page.getByTestId("upload-parser-notice")).toHaveCount(0);
 });
