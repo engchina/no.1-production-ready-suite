@@ -132,6 +132,7 @@ class RagPipeline:
         settings: Settings | None = None,
         *,
         answer_model_id: str | None = None,
+        approved_faq: tuple[str, str] | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._genai = genai or OciGenAiClient(settings=self._settings)
@@ -141,6 +142,8 @@ class RagPipeline:
         # 回答フローの回答のモデル。チャットのモデル比較で ``llm`` と同じモデルを渡す(#593)。
         # None は既定のモデル。
         self._answer_model_id = answer_model_id or None
+        # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答。チャット。#684)。
+        self._approved_faq = approved_faq
 
     async def run(
         self,
@@ -268,6 +271,7 @@ class RagPipeline:
             runtime_knowledge_payload=self._settings.rag_runtime_knowledge or None,
             answer_model_id=self._answer_model_id,
             auto_field_conditions=auto_field_conditions,
+            approved_faq=self._approved_faq,
         )
 
         async def emit_step(name: str, outcome: str, elapsed: float) -> None:

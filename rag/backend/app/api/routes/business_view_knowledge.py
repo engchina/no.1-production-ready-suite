@@ -22,10 +22,12 @@ from app.rag.business_view_knowledge import (
     import_approved_faq,
     is_direct_faq_match,
     load_approved_faq,
+    load_approved_faq_enabled,
     load_domain_keywords,
     load_runtime_knowledge_payload,
     preview_runtime_knowledge,
     read_approved_faq_excel,
+    save_approved_faq_enabled,
     save_domain_keywords,
     suggest_approved_faq,
     suggest_domain_keywords,
@@ -40,6 +42,7 @@ from app.schemas.business_view_knowledge import (
     ApprovedFaqListData,
     ApprovedFaqMutationData,
     ApprovedFaqRecordData,
+    ApprovedFaqSettingsRequest,
     ApprovedFaqSuggestionData,
     ApprovedFaqSuggestionsData,
     ApprovedFaqSuggestRequest,
@@ -55,6 +58,9 @@ from app.schemas.business_view_knowledge import (
     RuntimeKnowledgePreviewRequest,
 )
 from app.schemas.common import ApiResponse
+
+# チャットで提示する類似問の上限(rag_poc の候補の上限は 5。チャットは 3 ＋「どれでもない」。#684)。
+CHAT_APPROVED_FAQ_LIMIT = 3
 
 router = APIRouter()
 MAX_FAQ_EXCEL_BYTES = 10 * 1024 * 1024
@@ -172,8 +178,23 @@ async def get_approved_faq(business_view_id: str) -> ApiResponse[ApprovedFaqList
         data=ApprovedFaqListData(
             business_view_id=business_view_id,
             records=[_faq_record_data(record) for record in records],
+            enabled=await load_approved_faq_enabled(oracle, business_view_id),
         )
     )
+
+
+@router.put(
+    "/{business_view_id}/approved-faq/settings",
+    response_model=ApiResponse[ApprovedFaqListData],
+)
+async def put_approved_faq_settings(
+    business_view_id: str, request: ApprovedFaqSettingsRequest
+) -> ApiResponse[ApprovedFaqListData]:
+    """回答の前に類似問を提示するかを保存する(業務ビューごと。#684)。"""
+    oracle = OracleClient()
+    await _require_business_view(oracle, business_view_id)
+    await save_approved_faq_enabled(oracle, business_view_id, request.enabled)
+    return await get_approved_faq(business_view_id)
 
 
 @router.post(
@@ -283,7 +304,11 @@ async def suggest_business_view_approved_faq(
         oracle,
         business_view_id,
         request.query,
-        limit=request.limit,
+        # チャットは最大 3 件 ＋「どれでもない」を出し、どれかを選ぶまで回答しない(#684)。
+        limit=min(request.limit, CHAT_APPROVED_FAQ_LIMIT)
+        if request.purpose == "chat"
+        else request.limit,
+        min_score=settings.rag_approved_faq_chat_min_score if request.purpose == "chat" else None,
         embed=(
             (lambda texts, input_type: genai.embed(texts, input_type=input_type))
             if genai is not None

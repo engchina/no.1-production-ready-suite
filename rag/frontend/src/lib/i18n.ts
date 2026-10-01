@@ -917,6 +917,10 @@ export const ja = {
   "businessViews.answerFlow.crag": "CRAG（検索結果を評価し、必要なら補正検索）",
   "businessViews.answerFlow.standard_rag": "標準 RAG（検索して回答を生成・補正なし）",
   "businessViews.faq.title": "Approved FAQ（類似問）",
+  "businessViews.faq.enabled.label": "回答の前に類似問を提示する",
+  "businessViews.faq.enabled.help":
+    "チャットでは、質問に近い承認済み FAQ を最大 3 件と「どれでもない」を出し、選んでから回答します。選んだ類似問は質問と一緒に LLM に渡します。RAG 検索でも候補を出します。",
+  "businessViews.faq.enabled.error": "類似問の提示の設定を保存できませんでした。",
   "businessViews.faq.question": "質問（QUESTION）",
   "businessViews.faq.answer": "回答（ANSWER）",
   "businessViews.faq.error.questionRequired": "質問を入力してください。",
@@ -2014,6 +2018,12 @@ export const ja = {
     "登録済みの類似問が見つかりました。FAQ の回答を使うか、類似問を使わずに検索を続けるかを選んでください。",
   "search.faq.score": "一致度 {value}%",
   "search.faq.use": "この FAQ の回答を使う",
+  "chat.faq.title": "近い承認済み FAQ（類似問）があります",
+  "chat.faq.description":
+    "質問と同じ趣旨の類似問を選ぶと、類似問と承認済みの回答を質問と一緒に使って回答します。当てはまるものが無ければ「どれでもない」を選んでください。",
+  "chat.faq.score": "一致度 {value}%",
+  "chat.faq.use": "この類似問で回答する",
+  "chat.faq.skip": "どれでもない（類似問を使わずに回答する）",
   "search.faq.skip": "類似問を使用しない",
   "search.faq.answerTitle": "承認済み FAQ の回答",
   "search.faq.answerDescription": "LLM を使わず、業務ビューに登録された承認済みの回答を表示しています。",

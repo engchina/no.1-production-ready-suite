@@ -48,6 +48,12 @@ class ApprovedFaqRecordData(BaseModel):
 class ApprovedFaqListData(BaseModel):
     business_view_id: str
     records: list[ApprovedFaqRecordData] = Field(default_factory=list)
+    # 回答の前に類似問を提示するか(業務ビューごと。未設定はオン。#684)。
+    enabled: bool = True
+
+
+class ApprovedFaqSettingsRequest(BaseModel):
+    enabled: bool
 
 
 class ApprovedFaqAddRequest(BaseModel):
@@ -90,6 +96,8 @@ class ApprovedFaqImportPreviewData(BaseModel):
 class ApprovedFaqSuggestRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     limit: int = Field(default=5, ge=1, le=20)
+    # chat はチャットの提示(一致度の下限 RAG_APPROVED_FAQ_CHAT_MIN_SCORE。#684)。
+    purpose: Literal["search", "chat"] = "search"
 
 
 class ApprovedFaqSuggestionData(BaseModel):
