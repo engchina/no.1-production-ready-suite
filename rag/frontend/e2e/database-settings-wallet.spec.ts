@@ -91,6 +91,8 @@ test("データベース設定から Wallet ZIP をアップロードできる",
   // 「未設定」は secret の入力欄のバッジ（SecretField。#296）にも出るので、Wallet 状態の行に絞る。
   const walletStatus = main.locator("p").filter({ hasText: "Wallet状態:" });
   await expect(walletStatus).toContainText("未設定");
+  // 色の文字だけにせず、アイコン付きの StatusBadge で出す（#722）。
+  await expect(walletStatus.locator('[data-status-variant="warning"]')).toHaveText("未設定");
   await expect(main.getByText("/u01/aipoc/instantclient_23_26/network/admin")).toBeVisible();
   await expect(page.getByRole("heading", { name: ".env プレビュー" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "運用メモ" })).toHaveCount(0);

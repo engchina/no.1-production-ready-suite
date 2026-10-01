@@ -229,7 +229,7 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 
 - migration `20260930_008_answer_prompts_table`: 回答生成のプロンプトの表を `rag_docrag_prompts` から `rag_answer_prompts` へ移す。新しい表が無ければ `ALTER TABLE ... RENAME TO` で改名し、ある（システムテーブルの更新は migration の前に新しい表を作る）ときは旧表の行を新しい表へ写す。写した後、旧表は退役したオブジェクトとして消える（行は新しい表に残る）。主キーの制約と index はシステムの名前（`SYS_C...`）なので改名しない。
 - migration `20260930_009_stored_engine_names`: 上の表の保存値を書き換える。対象は、文書・レシピの処理設定と解析結果、KB の構築設定、業務ビューの設定、取込ジョブの上書き、chunk set・抽出・派生情報レイヤーの記録、chunk の metadata、回答の記録、会話・フィードバックの引用、品質評価の入力と結果の JSON の列と、回答の記録の `answer_engine`・検索の監査の `error_stage`。旧名を含む行だけを更新し（冪等）、行は消さない。chunk が多い環境（`rag_chunks` の親子階層の chunk はすべて更新する）では時間がかかり、undo を使う。
-- migration `20261001_001_document_sections`: 人が修正した文書の章節（章節ナビゲーション）の表 `rag_document_sections` を足す（#713）。文書ごとに 1 行で、文書を消すと一緒に消える。表を足すだけで既存の行は変えない。
+- migration `20261001_001_document_sections`: 人が修正した文書の章節（章節ナビゲーション）の表 `rag_document_sections` を足す（#713）。文書ごとに 1 行で、文書を消すと一緒に消える。表を足すだけで既存の行は変えない。修正の後に新しく抽出された章節は表示のときに自動で足し（「新しく抽出」の印。保存すると外れる）、人が消した抽出の章節は `sections_json` の `removed_source_ids` に覚えて足し直さない（#721。保存の形は `{"sections": [...], "removed_source_ids": [...]}`、以前の配列の形もそのまま読む）。チャットの確認で選んだ章節は、回答のときに章節 ID で今のページを読み直す。
 - 章節の抽出規則（#715）: 全体の既定は `backend/section-rules.json`（`RAG_SECTION_RULES_FILE` で場所を変えられる。抽出項目の定義と同じ形）。ファイルが無ければ「解析エンジンの見出し」（これまでどおり）。規則は章節を表示するたびに保存済みの抽出結果へ当てるので、取込のやり直しも migration も要らない。処理レシピの「章節の抽出規則」で文書ごとに方式を上書きできる。
 
 ### 手順

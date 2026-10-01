@@ -15,7 +15,6 @@ import {
   Skeleton,
   StatusBadge,
   TextField,
-  cn,
   toast,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
@@ -1064,20 +1063,51 @@ function AdbOperationLog({ entries }: { entries: AdbOperationLogEntry[] }) {
             className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-surface px-3 py-2 text-xs"
           >
             <span className="text-fg-muted">{entry.timestamp}</span>
-            <span
-              className={cn(
-                "rounded-full px-2 py-0.5 font-medium",
-                adbStatusBadgeClass(entry.status),
-              )}
-            >
-              {entry.status}
-            </span>
+            {/* 操作の結果の状態は StatusBadge（アイコン + 日本語の状態）で出す。API の enum を画面に出さない（messaging.md §10。#722）。 */}
+            <StatusBadge
+              variant={ADB_OPERATION_STATUS_VARIANT[entry.status] ?? "warning"}
+              label={adbOperationStatusLabel(entry.status)}
+            />
             <span className="text-fg">{entry.message}</span>
           </li>
         ))}
       </ul>
     </div>
   );
+}
+
+const ADB_OPERATION_STATUS_VARIANT: Record<
+  AdbInfoData["status"],
+  "success" | "info" | "warning" | "danger"
+> = {
+  success: "success",
+  accepted: "success",
+  already_available: "info",
+  already_stopped: "info",
+  not_configured: "warning",
+  cannot_start: "warning",
+  cannot_stop: "warning",
+  error: "danger",
+};
+
+const ADB_OPERATION_STATUS_LABEL_KEYS: Record<
+  AdbInfoData["status"],
+  DatabaseMessageKey
+> = {
+  success: "settings.adb.operationStatus.success",
+  accepted: "settings.adb.operationStatus.accepted",
+  already_available: "settings.adb.operationStatus.already_available",
+  already_stopped: "settings.adb.operationStatus.already_stopped",
+  not_configured: "settings.adb.operationStatus.not_configured",
+  cannot_start: "settings.adb.operationStatus.cannot_start",
+  cannot_stop: "settings.adb.operationStatus.cannot_stop",
+  error: "settings.adb.operationStatus.error",
+};
+
+/** 想定外の値（API の追加など）は値をそのまま出す。 */
+function adbOperationStatusLabel(status: AdbInfoData["status"]): string {
+  const key = ADB_OPERATION_STATUS_LABEL_KEYS[status];
+  return key ? t(key) : status;
 }
 
 function adbLifecycleLabel(state: string | null): string {
@@ -1103,21 +1133,6 @@ function adbLifecycleTone(
     return "muted";
   if (!state) return "muted";
   return "warning";
-}
-
-function adbStatusBadgeClass(status: AdbInfoData["status"]): string {
-  switch (status) {
-    case "success":
-    case "accepted":
-      return "bg-success-subtle text-success-fg";
-    case "already_available":
-    case "already_stopped":
-      return "bg-info-subtle text-info-fg";
-    case "error":
-      return "bg-danger-subtle text-danger-fg";
-    default:
-      return "bg-warning-subtle text-warning-fg";
-  }
 }
 
 function WalletServiceField({
@@ -1269,15 +1284,18 @@ function WalletUploadField({
       ) : null}
 
       <div className="space-y-1 text-xs leading-relaxed text-fg-muted">
-        <StatusLine
-          label={t("settings.database.wallet.status")}
-          value={
-            settings.wallet_uploaded
-              ? t("settings.database.wallet.statusConfigured")
-              : t("settings.database.wallet.statusNotConfigured")
-          }
-          ok={settings.wallet_uploaded}
-        />
+        {/* Wallet の状態は色だけで表さず、StatusBadge（アイコン + 文言）で出す（messaging.md §10。#722）。 */}
+        <p className="flex flex-wrap items-center gap-2">
+          <span>{t("settings.database.wallet.status")}:</span>
+          <StatusBadge
+            variant={settings.wallet_uploaded ? "success" : "warning"}
+            label={
+              settings.wallet_uploaded
+                ? t("settings.database.wallet.statusConfigured")
+                : t("settings.database.wallet.statusNotConfigured")
+            }
+          />
+        </p>
         <p>
           <span>{t("settings.database.wallet.location")}:</span>{" "}
           <span className="break-all text-fg">
@@ -1286,29 +1304,6 @@ function WalletUploadField({
         </p>
       </div>
     </div>
-  );
-}
-
-function StatusLine({
-  label,
-  value,
-  ok,
-}: {
-  label: string;
-  value: string;
-  ok: boolean;
-}) {
-  return (
-    <p>
-      <span>{label}:</span>{" "}
-      <span
-        className={
-          ok ? "font-medium text-success-fg" : "font-medium text-warning-fg"
-        }
-      >
-        {value}
-      </span>
-    </p>
   );
 }
 

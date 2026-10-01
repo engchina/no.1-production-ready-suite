@@ -328,13 +328,21 @@ describe("SystemTablesCard の状態ごとの表示", () => {
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*?作成・更新/s);
   });
 
-  it("前回の失敗はエラーコードを、ロック待ちの失敗は対処を出す", () => {
-    const failed = (code: string) =>
+  it("前回の失敗は本文に対処を出し、エラーコードは開いた「詳細」に分ける（messaging.md §10.3。#722）", () => {
+    const failed = (code: string | null) =>
       statusData("partial", {
         operation_state: { ...statusData("partial").operation_state, status: "failed", last_error_code: code },
       });
-    expect(renderCard(clientWith(failed("ORA-00600")))).toContain("エラーコード: ORA-00600");
-    expect(renderCard(clientWith(failed("ORA-00054")))).toContain("待機時間内に解放されませんでした (ORA-00054)");
+    const generic = renderCard(clientWith(failed("ORA-00600")));
+    expect(generic).toContain("<p>状態を再取得し、「作成・更新」で再試行してください。</p>");
+    expect(generic).toMatch(/<details[^>]*open=""[^>]*>[\s\S]*?詳細[\s\S]*?エラーコード: ORA-00600/);
+    const lock = renderCard(clientWith(failed("ORA-00054")));
+    expect(lock).toContain("<p>Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。");
+    expect(lock).toContain("エラーコード: ORA-00054");
+    // コードが無いときは「詳細」を出さない。
+    const unknown = renderCard(clientWith(failed(null)));
+    expect(unknown).toContain("前回の操作が完了していません");
+    expect(unknown).not.toContain("エラーコード");
   });
 
   it("状態を取得できないときは DB の案内（banner）と再試行を出し、操作を出さない", () => {

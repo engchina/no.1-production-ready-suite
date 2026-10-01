@@ -125,6 +125,16 @@ def test_resolve_clarification_builds_the_scope_and_page_ranges() -> None:
     assert "前提: 利用者は出張旅費規程について質問している" in scope.context
     assert "その他（利用者の入力）: 海外出張" in scope.context
 
+    # 確認を保存した後に章節のページが変わったら、今のページで絞る(#721)。
+    moved = resolve_clarification(
+        _payload(),
+        ClarificationAnswer(rule_id="R01", option_ids=["travel"]),
+        {("doc-travel", "sec-6"): (4, 5), ("doc-travel", "other"): (9, 9)},
+    )
+    assert moved is not None
+    assert json.loads(moved[1]) == [{"document_id": "doc-travel", "page_start": 4, "page_end": 5}]
+    assert moved[0].label.endswith("（p.4–5）")
+
     # 章節の無い選択肢は範囲を絞らない。
     expense = resolve_clarification(
         _payload(), ClarificationAnswer(rule_id="R01", option_ids=["expense"])

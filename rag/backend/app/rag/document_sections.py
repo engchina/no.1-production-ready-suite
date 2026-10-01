@@ -87,3 +87,64 @@ def stored_sections(raw: object) -> list[DocumentSection]:
             except ValueError:
                 continue
     return sections
+
+
+def stored_sections_payload(raw: object) -> tuple[list[DocumentSection], set[str]]:
+    """保存済みの章節と、人が消した抽出の章節の id(#721)。古い形(一覧だけ)も読む。"""
+    if isinstance(raw, Mapping):
+        removed = raw.get("removed_source_ids")
+        return stored_sections(raw.get("sections")), (
+            {str(item) for item in removed if item} if isinstance(removed, list) else set()
+        )
+    return stored_sections(raw), set()
+
+
+def add_new_extraction(
+    sections: Sequence[DocumentSection],
+    extracted: Sequence[DocumentSection],
+    removed: set[str],
+) -> list[DocumentSection]:
+    """修正済みの一覧に無く、人が消してもいない抽出の章節を足す(#721)。
+
+    抽出の並びで直前にある章節(とその子)の後ろに入れ、「新しく抽出」の印を付ける。
+    """
+    result = list(sections)
+    present = {section.source_section_id for section in result if section.source_section_id}
+    insert_after = -1
+    for item in extracted:
+        source_id = item.source_section_id
+        if source_id in present:
+            insert_after = next(
+                index
+                for index, section in enumerate(result)
+                if section.source_section_id == source_id
+            )
+            continue
+        if not source_id or source_id in removed:
+            continue
+        position = insert_after + 1
+        if insert_after >= 0:
+            anchor_level = result[insert_after].level
+            while position < len(result) and result[position].level > anchor_level:
+                position += 1
+        previous_level = result[position - 1].level if position > 0 else 0
+        result.insert(
+            position,
+            item.model_copy(
+                update={"level": min(item.level, previous_level + 1), "added_from_extraction": True}
+            ),
+        )
+        present.add(source_id)
+        insert_after = position
+    return result
+
+
+def removed_source_ids(
+    previous: set[str],
+    extracted: Sequence[DocumentSection],
+    submitted: Sequence[DocumentSection],
+) -> list[str]:
+    """保存する一覧に無い抽出の章節の id(人が消したもの)。前に消したものも残す(#721)。"""
+    kept = {section.source_section_id for section in submitted if section.source_section_id}
+    current = {section.source_section_id for section in extracted if section.source_section_id}
+    return sorted((previous | current) - kept)

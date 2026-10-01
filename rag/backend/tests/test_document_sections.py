@@ -64,7 +64,7 @@ class FakeSectionsOracle:
         return self.stored
 
     async def save_document_sections(
-        self, document_id: str, sections: list[dict[str, Any]], *, base_revision: int | None
+        self, document_id: str, sections: dict[str, Any], *, base_revision: int | None
     ) -> int:
         current = self.stored["revision"] if self.stored else None
         if current != base_revision:
@@ -119,6 +119,39 @@ def test_saved_sections_are_shared_and_refresh_unedited_pages(
     assert (refreshed[0]["page_start"], refreshed[0]["page_end"]) == (1, 4)
     assert (refreshed[1]["page_start"], refreshed[1]["page_end"]) == (2, 3)
     assert refreshed[3]["origin"] == "manual"
+
+
+def test_new_extraction_is_added_but_removed_sections_stay_removed(
+    oracle: FakeSectionsOracle,
+) -> None:
+    """人の修正の後に新しく抽出された章節は足し、人が消した章節は足し直さない(#721)。"""
+    sections = client.get(URL).json()["data"]["sections"]
+    # 第1条を消して保存する。
+    kept = [s for s in sections if s["id"] != "nav-2"]
+    assert client.put(URL, json={"sections": kept, "base_revision": None}).status_code == 200
+
+    oracle.navigation.insert(
+        1,
+        DocumentNavigationNode(
+            section_id="nav-new", title="第2条 定義", depth=2, page_start=4, page_end=4
+        ),
+    )
+    data = client.get(URL).json()["data"]
+    assert [(s["id"], s["level"], s["added_from_extraction"]) for s in data["sections"]] == [
+        ("nav-1", 1, False),
+        ("nav-new", 2, True),
+        ("nav-3", 1, False),
+    ]
+
+    # 保存すると印は外れ、消した章節は消したままになる。
+    saved = client.put(URL, json={"sections": data["sections"], "base_revision": 1}).json()["data"]
+    assert [(s["id"], s["added_from_extraction"]) for s in saved["sections"]] == [
+        ("nav-1", False),
+        ("nav-new", False),
+        ("nav-3", False),
+    ]
+    assert oracle.stored is not None
+    assert oracle.stored["sections"]["removed_source_ids"] == ["nav-2"]
 
 
 def test_save_rejects_conflicts_and_invalid_sections(oracle: FakeSectionsOracle) -> None:

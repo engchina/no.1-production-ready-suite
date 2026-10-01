@@ -252,6 +252,9 @@ const agentJa = {
   "run.auditArtifacts": "Artifact",
   "run.auditWarnings": "警告",
   "run.auditMetadata": "監査メタデータ",
+  // 監査のエラーの要約。エラーコードは「詳細」に畳む（messaging.md §10.3。#725）。
+  "run.auditErrorTitle": "ツールの実行でエラーが発生しました",
+  "run.auditErrorDetails": "詳細",
   "run.ragAnswer": "回答",
   "run.citations": "引用",
   "run.contexts": "検索コンテキスト",
@@ -346,6 +349,27 @@ const agentJa = {
   "runtime.processing.stop": "{runtime} を停止しています",
   "runtime.processing.restart": "{runtime} を再起動しています",
   "runtime.processing.remove": "{runtime} を削除しています",
+  // Runtime の状態（backend の RuntimeStatus）。バッジに英字の生の値を出さない（messaging.md §10。#725）。
+  "runtime.status.unknown": "未確認",
+  "runtime.status.running": "稼働中",
+  "runtime.status.degraded": "一部異常",
+  "runtime.status.stopped": "停止中",
+  "runtime.status.disabled": "無効",
+  "runtime.status.legacy": "旧 Run 履歴",
+  // 操作の結果は、その Runtime のカードの操作の直下に出す（messaging.md §10.1。#725）。
+  "runtime.result.probe": "{runtime} の状態を確認しました（{status}）。",
+  "runtime.result.pull": "{runtime} のイメージを取得しました。",
+  "runtime.result.start": "{runtime} を起動しました。",
+  "runtime.result.stop": "{runtime} を停止しました。",
+  "runtime.result.restart": "{runtime} を再起動しました。",
+  "runtime.result.remove": "{runtime} を削除しました。",
+  "runtime.failed.probe": "{runtime} の状態を確認できませんでした。{reason}",
+  "runtime.failed.pull": "{runtime} のイメージを取得できませんでした。{reason}",
+  "runtime.failed.start": "{runtime} を起動できませんでした。{reason}",
+  "runtime.failed.stop": "{runtime} を停止できませんでした。{reason}",
+  "runtime.failed.restart": "{runtime} を再起動できませんでした。{reason}",
+  "runtime.failed.remove": "{runtime} を削除できませんでした。{reason}",
+  "runtime.failed.enabled": "{runtime} の有効・無効を切り替えられませんでした。{reason}",
 
   "audit.filters": "監査フィルター",
   "audit.records": "監査レコード",
@@ -380,6 +404,8 @@ const agentJa = {
 
 
   "settings.baseUrl": "Base URL",
+  "settings.saveActions": "{section} の保存",
+  "settings.saveFailed": "保存できませんでした。{reason}",
   "settings.productMcp.description":
     "Run を作った利用者として、接続先の MCP（POST /api/mcp）を呼びます。認証は呼び出しごとの短命のトークンで、署名鍵とサービス利用者は .env で管理します。",
   "settings.productMcp.url": "MCP の URL",

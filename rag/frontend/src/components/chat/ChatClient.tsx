@@ -28,6 +28,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  Search,
   SendHorizontal,
   Trash2,
   X,
@@ -304,11 +305,14 @@ function MessageTurn({
   columns,
   businessViewId,
   onRetry,
+  onAskUnscoped,
 }: {
   user: ChatMessage;
   businessViewId: string;
   /** 失敗した回答があるときに同じ質問をもう一度送る（最新のターンだけ渡す）。 */
   onRetry?: () => void;
+  /** 確認で範囲を絞った回答のとき、範囲を指定せずに同じ質問を送る（最新のターンだけ渡す。#721）。 */
+  onAskUnscoped?: () => void;
   columns: {
     key: string;
     label: string | null;
@@ -325,6 +329,12 @@ function MessageTurn({
   }[];
 }) {
   const compare = columns.length > 1;
+  // 範囲を絞った回答は末尾に「（対象: …）」が付く（#717）。
+  const scoped =
+    onAskUnscoped !== undefined &&
+    columns.some(
+      (column) => !column.streaming && !column.errorMessage && column.answer.includes("（対象:")
+    );
   return (
     <div className="space-y-2">
       <div className="flex justify-end">
@@ -372,6 +382,13 @@ function MessageTurn({
           />
         ))}
       </div>
+      {scoped ? (
+        <div className="flex justify-end">
+          <Button type="button" variant="secondary" size="sm" icon={Search} onClick={onAskUnscoped}>
+            {t("chat.clarify.askUnscoped")}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -749,6 +766,13 @@ export function ChatClient() {
     setClarifyChoice(null);
     setSending(true);
     void deliver(content, retryContent, undefined, answer);
+  }
+
+  /** 範囲を指定せずに同じ質問を送る（類似問・確認の質問は出さない。#721）。 */
+  function askUnscoped(content: string) {
+    setSending(true);
+    setErrorText("");
+    void deliver(content, content);
   }
 
   async function deliver(
@@ -1237,6 +1261,11 @@ export function ChatClient() {
                         !liveTurn &&
                         !sending
                           ? () => void send(turn.user.content)
+                          : undefined
+                      }
+                      onAskUnscoped={
+                        turn.user.message_id === lastTurnId && !liveTurn && !sending && !pendingChoice
+                          ? () => askUnscoped(turn.user.content)
                           : undefined
                       }
                       columns={turn.replies.map((reply) => ({
