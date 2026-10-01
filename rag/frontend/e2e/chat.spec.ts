@@ -997,6 +997,12 @@ for (const viewport of [
     expect(streamBodies).toEqual([]);
     await expectNoPageOverflow(page);
 
+    // 選ぶ前に画面を離れて戻っても（再読込を含む）、同じ質問と候補が残る（作業状態。#702）。
+    await page.reload();
+    await expect(choice).toContainText("経費の上限は？");
+    await expect(choice.getByRole("button", { name: "この類似問で回答する" })).toHaveCount(3);
+    expect(suggestQueries).toHaveLength(1);
+
     // 選んだ類似問の id を質問と一緒に送る。
     await choice.getByRole("listitem").nth(1).getByRole("button").click();
     await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
