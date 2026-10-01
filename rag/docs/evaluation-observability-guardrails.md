@@ -43,9 +43,9 @@ API: `POST /api/evaluation/jobs/run`・`POST /api/evaluation/jobs/compare`（job
 |---|---|---|---|---|
 | 検索 | `context_recall` | 正解の文書のうち、回答の根拠に取れた割合 | `relevant_document_ids` のあるケース | 旧 `recall_at_k` と `context_recall`（同じ計算）をまとめた。Ragas ID-based context recall |
 | 検索 | `mrr` | 最初の正解の文書の順位の逆数 | 同上 | 残す（rag_poc の検索評価も使う） |
-| 根拠 | `faithfulness` | 回答の語句のうち、根拠の本文に含まれる割合（決定論の近似） | 拒答していないケース | 旧 `groundedness_pass_rate`（同じ判定の合否）と `faithfulness`（同じ判定の点）をまとめた。RAG triad の groundedness |
+| 根拠 | `faithfulness`（画面の名前は「根拠との語句の一致率（参考）」） | 回答の語句のうち、根拠の本文に含まれる割合（決定論の近似） | 拒答していないケース | **参考値**。言い換えるだけで下がるため、閾値の判定・ケースの失敗理由・1 件の回答の合否に使わない（#711）。閾値は目安として表示する |
 | 根拠 | `citation_traceability_coverage` | 引用を文書・ページ・要素までたどれる割合 | 引用のあるケース | 旧 `bbox_citation_coverage`・`element_lineage_coverage` をまとめた（bbox・要素の細部は file-processing の golden gate が見る） |
-| 根拠 | `claim_support_rate` | 根拠のない主張・根拠と矛盾する主張が無いケースの割合 | `standard_answer` のあるケース | rag_poc の「未裏付け主張」。主張ごとの監査（Ragas faithfulness の LLM 版） |
+| 根拠 | `claim_support_rate`（画面の名前は「Faithfulness（根拠への忠実性）」） | LLM が回答を主張に分け、根拠のない主張・根拠と矛盾する主張が無いケースの割合 | `standard_answer` のあるケース | 業界の faithfulness（RAGAS・DeepEval・Azure・Google の groundedness）と同じ考え方。保存値の key は変えない（#711） |
 | 回答 | `answer_keyword_hit_rate` | 期待する語をすべて含む回答の割合 | `expected_answer_keywords` のあるケース | 残す（標準回答の無い golden set の決定論の近似） |
 | 回答 | `refusal_accuracy` | 答えるべき質問に答え、答えるべきでない質問に答えなかった割合 | すべてのケース | rag_poc の「拒答」。RGB の negative rejection。否定 case の特別扱い（#301）もこれにまとめた |
 | 回答 | `requirement_coverage` | 標準回答の必要な項目に、回答が対応した割合 | `standard_answer` のあるケース | rag_poc の「必要内容欠落」（網羅性の軸の対応率） |

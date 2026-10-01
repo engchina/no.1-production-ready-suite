@@ -4,8 +4,10 @@
 指標は「検索」「根拠」「回答」の 3 つの観点に整理した 9 つだけを持つ。
 
 - 検索: context_recall(正解の文書を取れたか)/ mrr(正解の文書の順位)
-- 根拠: faithfulness(回答が根拠の語に沿うか)/ citation_traceability_coverage(引用を原文の位置へ
-  たどれるか)/ claim_support_rate(標準回答による評価で、根拠のない主張が無いか)
+- 根拠: claim_support_rate(画面の名前は Faithfulness。標準回答による評価で、LLM の主張の判定で
+  根拠のない主張が無いか)/ citation_traceability_coverage(引用を原文の位置へたどれるか)/
+  faithfulness(画面の名前は「根拠との語句の一致率」。参考値で、閾値は目安として表示するだけで
+  合否に使わない。#711)
 - 回答: answer_keyword_hit_rate(期待する語を含むか)/ refusal_accuracy(答えるべきでないときに
   答えず、答えるべきときに答えたか)/ requirement_coverage(標準回答の必要な項目を網羅したか)/
   answer_pass_rate(標準回答による評価の合格)
