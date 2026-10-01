@@ -221,18 +221,27 @@ test("複数ファイルをまとめてアップロードし結果を確認で�
       buffer: Buffer.from("B 本文"),
     },
     {
+      name: "policy-c.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("C 本文"),
+    },
+    {
       name: "policy.exe",
       mimeType: "application/x-msdownload",
       buffer: Buffer.from("MZ"),
     },
   ]);
-  await page.getByRole("button", { name: /アップロードを開始/ }).click();
+  // 対応していない形式は送る前に理由を示し、送らない（#701）。
+  await expect(
+    page.getByTestId("upload-selection").getByRole("listitem").filter({ hasText: "policy.exe" })
+  ).toContainText("対応していない形式");
+  await page.getByRole("button", { name: "アップロードを開始（3 件）" }).click();
 
   await expect(page.getByRole("heading", { name: "アップロード結果" })).toBeVisible();
   await expect(page.getByTitle("policy-a.txt").first()).toBeVisible();
   await expect(page.getByTitle("policy-b.txt").first()).toBeVisible();
   await expect(page.getByText("一部のファイルをアップロードできませんでした")).toBeVisible();
-  await expect(page.getByText("policy.exe")).toBeVisible();
+  await expect(page.getByText("policy-c.txt")).toBeVisible();
   await expect(page.getByText("汎用解析")).toBeVisible();
   await expect(page.getByText("未対応")).toBeVisible();
   await expect(page.getByText("原本種別を判定できませんでした。")).toBeVisible();
@@ -242,9 +251,16 @@ test("複数ファイルをまとめてアップロードし結果を確認で�
   expect(uploadBody).toContain('name="files"');
   expect(uploadBody).toContain("policy-a.txt");
   expect(uploadBody).toContain("policy-b.txt");
-  expect(uploadBody).toContain("policy.exe");
+  expect(uploadBody).not.toContain("policy.exe");
   // 取込開始方針（ingestion_mode）は廃止した。アップロードは取込 job を作らない（#306）。
   expect(uploadBody).not.toContain('name="ingestion_mode"');
+
+  // 失敗したファイルだけを選択の一覧に戻し、選び直さずに送り直せる（#701）。
+  await page.getByRole("button", { name: "失敗した 1 件を選び直す" }).click();
+  const selection = page.getByTestId("upload-selection");
+  await expect(selection.getByRole("listitem")).toHaveCount(1);
+  await expect(selection).toContainText("policy-c.txt");
+  await expect(page.getByRole("button", { name: "アップロードを開始（1 件）" })).toBeEnabled();
 });
 
 async function mockUploadStorageSettings(
@@ -351,9 +367,9 @@ async function mockBatchDocumentUpload(page: Page, onUpload: (body: string) => v
           ],
           failed_items: [
             {
-              file_name: "policy.exe",
+              file_name: "policy-c.txt",
               status_code: 415,
-              message: "対応していないファイル形式です。",
+              message: "原本種別を判定できないため保存しませんでした。",
               source_profile: failedUploadSourceProfile(),
             },
           ],

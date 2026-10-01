@@ -181,24 +181,29 @@ test("一括アップロードは上限以内に分けて送り、上限を超�
     textFile("huge.txt", 11),
     textFile("c.txt", 6),
   ]);
-  await page.getByRole("button", { name: /アップロードを開始/ }).click();
+  // 選ぶだけでは送らない。上限を超えるファイルは送る前に理由を示し、送る件数に数えない（#701）。
+  const selection = page.getByTestId("upload-selection");
+  await expect(selection.getByRole("listitem").filter({ hasText: "huge.txt" })).toContainText(
+    "上限を超えるサイズ"
+  );
+  expect(requests).toEqual([]);
+  await expectNoPageOverflow(page);
+  await page.getByRole("button", { name: "アップロードを開始（3 件）" }).click();
 
   const summary = page.getByRole("heading", { name: "アップロード結果" });
   await expect(summary).toBeVisible();
   // 合計が 10 B 以内のまとまりごとに送り、11 B のファイルは送らない。
   expect(requests).toEqual([["a.txt", "b.txt"], ["c.txt"]]);
-  await expect(page.getByText("ファイルサイズが上限（10 B / ファイル）を超えるため、送信しませんでした。")).toBeVisible();
-  await expect(page.getByText("huge.txt")).toBeVisible();
   // 取込ジョブを作らないため「処理待ち / スキップ」ではなく、保存済みと重複の可能性を示す。
   const metrics = page.locator(".tnum");
   await expect(page.getByText("選択したファイル")).toBeVisible();
   await expect(page.getByText("保存済み")).toBeVisible();
   await expect(page.getByText("重複の可能性")).toBeVisible();
   await expect(page.getByText("処理待ち")).toHaveCount(0);
-  await expect(metrics.nth(0)).toHaveText("4");
+  await expect(metrics.nth(0)).toHaveText("3");
   await expect(metrics.nth(1)).toHaveText("3");
   await expect(metrics.nth(2)).toHaveText("1");
-  await expect(metrics.nth(3)).toHaveText("1");
+  await expect(metrics.nth(3)).toHaveText("0");
   await expectNoPageOverflow(page);
 });
 
@@ -347,9 +352,33 @@ test("200 件を超えるナレッジベースは、サーバー側で検索し�
   ).toBeVisible();
 });
 
+/**
+ * page.route で応答を差し替えると Chromium は送信の progress event を出さないため、送った XHR を捕まえ、
+ * テストから送信済みのバイト数（`xhr.upload` の progress event）を出せるようにする。
+ */
+async function captureUploadXhr(page: Page) {
+  await page.addInitScript(() => {
+    const send = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function (body) {
+      (window as unknown as { __uploadXhr?: XMLHttpRequest }).__uploadXhr = this;
+      return send.call(this, body);
+    };
+  });
+}
+
+async function emitUploadProgress(page: Page, loaded: number, total: number) {
+  await page.evaluate(
+    ([sent, all]) => {
+      const xhr = (window as unknown as { __uploadXhr?: XMLHttpRequest }).__uploadXhr;
+      xhr?.upload.dispatchEvent(
+        new ProgressEvent("progress", { lengthComputable: true, loaded: sent, total: all })
+      );
+    },
+    [loaded, total]
+  );
+}
+
 // 文書アップロードの改善（#306）。
-// - 取込ジョブの一覧は文書 ID ではなくファイル名を出す
-// - 取込ジョブのパネルの読み込み中は TimedLoadingState + Skeleton、空・取得失敗も同じ枠の中で示す
 // - 送信中は件数と経過時間に加えて、送信済み / 合計のバイト数と割合を示す
 
 test("送信中は送信済み / 合計のバイト数と割合を示し、送り終えたら保存を待っていることを示す", async ({ page }) => {

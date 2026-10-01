@@ -101,7 +101,7 @@ test("KB が制限された利用者は、KB を選ばずにアップロード�
   await expect(picker.getByRole("alert")).toHaveCount(0);
   await expect(picker.getByText("1 件のナレッジベースへ登録します。")).toBeVisible();
 
-  await page.locator('input[type="file"]').setInputFiles(uploadFile());
+  // 選んだファイルは送るまで一覧に残るので、選び直さずに開始できる（#701）。
   await page.getByRole("button", { name: /アップロードを開始/ }).click();
   await expect.poll(() => uploads.length).toBe(1);
   expect(uploads[0].body).toMatch(/name="knowledge_base_ids"\r\n\r\nkb-1\r\n/);

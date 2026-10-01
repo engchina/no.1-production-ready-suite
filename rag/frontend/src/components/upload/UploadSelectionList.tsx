@@ -13,19 +13,18 @@ const PROBLEM_LABEL: Record<UploadFileProblem, I18nKey> = {
 
 /**
  * 送る前に選んだファイルの一覧（#701）。選ぶだけでは送らず、ここで見直してから「アップロードを開始」する。
- * 送れないファイル（形式・サイズ・空）は理由を示し、送る件数に数えない。
+ * 送れないファイル（形式・サイズ・空）は理由を示し、送る件数に数えない。送信中は出さない（送信中の表示が
+ * ファイルごとの進み具合を出す。失敗したら選択を残したまま戻る）。
  */
 export function UploadSelectionList({
   files,
   maxUploadBytes,
-  busy,
   onRemove,
   onClear,
   onStart,
 }: {
   files: readonly File[];
   maxUploadBytes: number;
-  busy: boolean;
   onRemove: (file: File) => void;
   onClear: () => void;
   onStart: (sendable: File[]) => void;
@@ -53,7 +52,7 @@ export function UploadSelectionList({
             {blocked > 0 ? ` ${t("upload.selection.blocked", { count: blocked })}` : ""}
           </p>
         </div>
-        <ClearActionButton label={t("upload.selection.clear")} onClick={onClear} disabled={busy} />
+        <ClearActionButton label={t("upload.selection.clear")} onClick={onClear} />
       </div>
       <ul className="bounded-scroll-area divide-y divide-border rounded-md border border-border bg-surface-sunken">
         {rows.map(({ file, problem }, index) => (
@@ -62,16 +61,23 @@ export function UploadSelectionList({
             key={`${index}-${file.name}`}
             className="flex items-center justify-between gap-3 px-3 py-2"
           >
-            <div className="flex min-w-0 items-center gap-2">
-              <FileText size={16} className="shrink-0 text-accent-fg" aria-hidden />
-              <span className="truncate text-sm text-fg" title={file.name}>
-                {file.name}
-              </span>
+            <div className="flex min-w-0 items-start gap-2">
+              <FileText size={16} className="mt-0.5 shrink-0 text-accent-fg" aria-hidden />
+              <div className="min-w-0">
+                <p className="truncate text-sm text-fg" title={file.name}>
+                  {file.name}
+                </p>
+                {/* 理由は名前の下に置き、375px でも名前を読める幅を残す。 */}
+                {problem ? (
+                  <StatusBadge
+                    variant="warning"
+                    label={t(PROBLEM_LABEL[problem])}
+                    className="mt-1"
+                  />
+                ) : null}
+              </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {problem ? (
-                <StatusBadge variant="warning" label={t(PROBLEM_LABEL[problem])} />
-              ) : null}
               <span className="tnum text-xs text-fg-muted">{formatByteSize(file.size)}</span>
               <Button
                 type="button"
@@ -80,7 +86,6 @@ export function UploadSelectionList({
                 iconOnly
                 icon={X}
                 aria-label={t("upload.selection.remove", { name: file.name })}
-                disabled={busy}
                 onClick={() => onRemove(file)}
               />
             </div>
@@ -92,8 +97,7 @@ export function UploadSelectionList({
           type="button"
           size="lg"
           icon={Upload}
-          loading={busy}
-          disabled={busy || sendable.length === 0}
+          disabled={sendable.length === 0}
           onClick={() => onStart(sendable)}
           className="w-full sm:w-auto"
         >

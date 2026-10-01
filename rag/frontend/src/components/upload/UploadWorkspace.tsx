@@ -183,14 +183,17 @@ export function UploadWorkspace() {
               disabled={isBusy}
               maxUploadBytes={maxUploadBytes}
             />
-            <UploadSelectionList
-              files={selectedFiles}
-              maxUploadBytes={maxUploadBytes}
-              busy={isBusy}
-              onRemove={(file) => setSelectedFiles((current) => current.filter((item) => item !== file))}
-              onClear={() => setSelectedFiles([])}
-              onStart={handleFiles}
-            />
+            {isBusy ? null : (
+              <UploadSelectionList
+                files={selectedFiles}
+                maxUploadBytes={maxUploadBytes}
+                onRemove={(file) =>
+                  setSelectedFiles((current) => current.filter((item) => item !== file))
+                }
+                onClear={() => setSelectedFiles([])}
+                onStart={handleFiles}
+              />
+            )}
             {isBusy ? (
               <UploadSendingState
                 fileCount={sendingCount}

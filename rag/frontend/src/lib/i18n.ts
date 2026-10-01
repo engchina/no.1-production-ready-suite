@@ -1360,7 +1360,7 @@ export const ja = {
   "upload.openFileList": "文書インデックスを開く",
   "upload.reselectFailed": "失敗した {count} 件を選び直す",
   "upload.selection.title": "選んだファイル（{count} 件）",
-  "upload.selection.summary": "送る {sendable} 件・合計 {size}",
+  "upload.selection.summary": "送る {sendable} 件・合計 {size}。",
   "upload.selection.blocked": "送れない {count} 件は送りません。",
   "upload.selection.clear": "すべて外す",
   "upload.selection.remove": "{name} を外す",

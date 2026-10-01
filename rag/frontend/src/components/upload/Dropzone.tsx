@@ -49,7 +49,7 @@ export function Dropzone({
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
       className={cn(
-        "flex h-52 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed bg-surface text-center transition-colors",
+        "flex min-h-52 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed bg-surface px-4 py-6 text-center transition-colors",
         dragOver ? "border-accent-emphasis bg-info-subtle" : "border-border hover:border-accent-emphasis",
         disabled && "cursor-not-allowed opacity-60"
       )}
@@ -57,7 +57,7 @@ export function Dropzone({
       <UploadCloud size={28} className="text-accent-fg" aria-hidden />
       <p className="text-sm font-medium text-fg">{t("upload.dropzone")}</p>
       <p className="text-xs text-fg-muted">{t("upload.dropzoneHint", { size: formatByteSize(maxUploadBytes) })}</p>
-      <p className="max-w-2xl px-4 text-xs text-fg-muted">
+      <p className="max-w-2xl text-xs text-fg-muted">
         {t("upload.dropzoneFormats", { formats: ACCEPTED_UPLOAD_EXTENSION_LABELS.join(", ") })}
       </p>
       <input
