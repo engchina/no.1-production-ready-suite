@@ -1020,3 +1020,99 @@ for (const viewport of [
     expect(streamBodies[1]).not.toHaveProperty("approved_faq_id");
   });
 }
+
+
+// #717: 類似問の後に、業務ビューのルールの確認の質問を出し、選んだ答えを送る。
+const clarificationSuggestion = {
+  rule_id: "R01",
+  rule_title: "期限の確認",
+  clarification: {
+    question: "どの規程についてのご質問ですか？",
+    multiple: true,
+    allow_other: true,
+    options: [
+      {
+        id: "travel",
+        label: "出張旅費",
+        description: "出張旅費規程",
+        search_terms: ["出張"],
+        premise: "",
+        sections: [
+          {
+            document_id: "doc-travel",
+            document_name: "出張旅費規程.pdf",
+            section_id: "sec-6",
+            title: "第6条 申請と精算",
+            page_start: 2,
+            page_end: 3,
+          },
+        ],
+      },
+      { id: "expense", label: "経費精算", description: "", search_terms: [], premise: "", sections: [] },
+    ],
+  },
+};
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`ルールの確認の質問に答えてから回答し、選ばずに回答もできる（#717） (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockChat(page);
+    await page.route("**/api/business-views/*/approved-faq/suggest", (route) =>
+      route.fulfill({ json: { data: { suggestions: [] }, error_messages: [], warning_messages: [] } })
+    );
+    const clarifyQueries: Record<string, unknown>[] = [];
+    await page.route("**/api/business-views/*/clarifications/suggest", async (route) => {
+      clarifyQueries.push(route.request().postDataJSON() as Record<string, unknown>);
+      await route.fulfill({
+        json: { data: { suggestion: clarificationSuggestion }, error_messages: [], warning_messages: [] },
+      });
+    });
+    const streamBodies: Record<string, unknown>[] = [];
+    page.on("request", (request) => {
+      if (request.url().endsWith("/messages/stream")) {
+        streamBodies.push(request.postDataJSON() as Record<string, unknown>);
+      }
+    });
+
+    await page.goto("/chat");
+    await selectBusinessView(page, "経理アシスタント");
+    const composer = page.getByRole("textbox", { name: /メッセージを入力/ });
+    await composer.fill("申請の期限は？");
+    await page.getByRole("button", { name: "送信" }).click();
+
+    const choice = page.getByTestId("chat-clarification-choice");
+    await expect(choice).toContainText("どの規程についてのご質問ですか？");
+    await expect(choice).toContainText("対象: 「出張旅費規程.pdf」第6条 申請と精算 p.2–3");
+    await expect(choice.getByRole("button", { name: "この条件で回答する" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "送信" })).toBeDisabled();
+    expect(clarifyQueries).toEqual([{ query: "申請の期限は？" }]);
+    expect(streamBodies).toEqual([]);
+    await expectNoPageOverflow(page);
+
+    // 選ぶ前に再読込しても残る（作業状態）。
+    await page.reload();
+    await expect(choice).toContainText("どの規程についてのご質問ですか？");
+
+    await choice.getByRole("checkbox", { name: /出張旅費/ }).check();
+    await choice.getByRole("textbox", { name: "その他（自由入力）" }).fill("海外出張");
+    await choice.getByRole("button", { name: "この条件で回答する" }).click();
+    await expect.poll(() => streamBodies.length).toBe(1);
+    expect(streamBodies[0]).toMatchObject({
+      content: "申請の期限は？",
+      clarification: { rule_id: "R01", option_ids: ["travel"], other_text: "海外出張" },
+    });
+    await expect(choice).toHaveCount(0);
+
+    // 「選ばずに回答する」は確認を使わずに送る。
+    await composer.fill("交通費の期限は？");
+    await page.getByRole("button", { name: "送信" }).click();
+    await page.getByRole("button", { name: "選ばずに回答する" }).click();
+    await expect.poll(() => streamBodies.length).toBe(2);
+    expect(streamBodies[1]).not.toHaveProperty("clarification");
+  });
+}

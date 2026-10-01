@@ -429,3 +429,103 @@ test("業務ビューごとに類似問の提示をオン / オフできる（�
   expect(saved).toEqual([{ enabled: false }]);
   await expectNoPageOverflow(page);
 });
+
+
+// #717: 回答ルールに確認の質問と、選択肢が指す章節を設定する。
+test("回答ルールに確認の質問と章節を設定して保存できる", async ({ page }) => {
+  await mockCommon(page);
+  await mockBusinessViewApi(page);
+  await page.route("**/api/business-views/bv-1/runtime-knowledge", (route) =>
+    route.fulfill({
+      json: envelope({
+        business_view_id: "bv-1",
+        terms: [],
+        rules: [
+          { id: "R01", title: "期限の確認", triggers: ["期限"], content: "規程ごとに違う", status: "approved" },
+        ],
+      }),
+    })
+  );
+  const puts: unknown[] = [];
+  await page.route("**/api/business-views/bv-1/runtime-knowledge/rules/R01/clarification", async (route) => {
+    puts.push(route.request().postDataJSON());
+    await route.fulfill({ json: envelope({ business_view_id: "bv-1", terms: [], rules: [] }) });
+  });
+  await page.route("**/api/documents?**", (route) =>
+    route.fulfill({
+      json: envelope({
+        items: [{ id: "doc-travel", file_name: "出張旅費規程.pdf" }],
+        total: 1,
+        limit: 50,
+        offset: 0,
+        has_next: false,
+      }),
+    })
+  );
+  await page.route("**/api/documents/doc-travel/sections**", (route) =>
+    route.fulfill({
+      json: envelope({
+        document_id: "doc-travel",
+        source: "extraction",
+        rules_mode: "parser",
+        sections: [
+          { id: "sec-1", title: "第1章 総則", level: 1, page_start: 1, page_end: 1, origin: "extraction", source_section_id: "sec-1", edited: false },
+          { id: "sec-6", title: "第6条 申請と精算", level: 2, page_start: 2, page_end: 3, origin: "extraction", source_section_id: "sec-6", edited: false },
+        ],
+        extraction_section_count: 2,
+        page_count: 3,
+        revision: null,
+        updated_at: null,
+      }),
+    })
+  );
+
+  await page.goto("/business-views?id=bv-1");
+  await page.getByRole("tab", { name: "回答ルール" }).click();
+  await page.getByRole("button", { name: /期限の確認/ }).first().click();
+  const editor = page.getByTestId("rule-clarification-editor");
+  await editor.getByRole("button", { name: "確認の質問を設定する" }).click();
+
+  // 未入力は保存の前に欄の下で知らせる。
+  await editor.getByRole("button", { name: "確認の質問を保存" }).click();
+  await expect(editor.getByText("確認の質問を入力してください。")).toBeVisible();
+  expect(puts).toHaveLength(0);
+
+  await editor.getByRole("textbox", { name: /確認の質問/ }).fill("どの規程についてのご質問ですか？");
+  await editor.getByRole("textbox", { name: /表示名/ }).nth(0).fill("出張旅費");
+  await editor.getByRole("textbox", { name: /表示名/ }).nth(1).fill("経費精算");
+  await editor.getByRole("textbox", { name: "検索に足す語" }).nth(0).fill("出張、日当");
+  await editor.getByRole("button", { name: /^章節を選ぶ文書/ }).first().click();
+  await page.getByRole("option", { name: "出張旅費規程.pdf" }).click();
+  await editor.getByRole("checkbox", { name: /第6条 申請と精算/ }).check();
+  await expect(editor.getByRole("list", { name: "選んだ章節" })).toContainText("第6条 申請と精算 p.2–3");
+
+  await editor.getByRole("button", { name: "確認の質問を保存" }).click();
+  await expect(page.getByText("確認の質問を保存しました。").first()).toBeVisible();
+  expect(puts).toHaveLength(1);
+  expect(puts[0]).toMatchObject({
+    clarification: {
+      question: "どの規程についてのご質問ですか？",
+      multiple: true,
+      allow_other: true,
+      options: [
+        {
+          label: "出張旅費",
+          search_terms: ["出張", "日当"],
+          sections: [
+            {
+              document_id: "doc-travel",
+              document_name: "出張旅費規程.pdf",
+              section_id: "sec-6",
+              title: "第6条 申請と精算",
+              page_start: 2,
+              page_end: 3,
+            },
+          ],
+        },
+        { label: "経費精算", sections: [] },
+      ],
+    },
+  });
+  await expectNoPageOverflow(page);
+});

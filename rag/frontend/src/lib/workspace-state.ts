@@ -30,6 +30,7 @@ export type WorkspaceField =
   | "chat.conversationsPage"
   | "chat.historyOpen"
   | "chat.faqChoice"
+  | "chat.clarifyChoice"
   | "fileList.view"
   | "knowledgeBases.view"
   | "knowledgeBases.documentsPage"
