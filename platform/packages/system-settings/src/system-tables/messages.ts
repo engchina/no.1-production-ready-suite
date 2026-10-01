@@ -69,9 +69,11 @@ export const SYSTEM_TABLES_MESSAGES = {
     "状態は参照できます。作成・更新するにはシステムテーブル管理権限が必要です。",
   "settings.database.systemTables.previousFailure": "前回の操作が完了していません",
   "settings.database.systemTables.previousFailureDetail":
-    "エラーコード: {code}。状態を再取得し、「作成・更新」で再試行してください。",
+    "状態を再取得し、「作成・更新」で再試行してください。",
   "settings.database.systemTables.previousFailureLockDetail":
-    "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした (ORA-00054)。実行中の処理を完了または停止してから、状態を再取得して再試行してください。",
+    "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。実行中の処理を完了または停止してから、状態を再取得して再試行してください。",
+  "settings.database.systemTables.previousFailureDetails": "詳細",
+  "settings.database.systemTables.previousFailureErrorCode": "エラーコード: {code}",
   "settings.database.systemTables.error.operationTitle": "システムテーブル操作に失敗しました",
   "settings.database.systemTables.error.operation": "システムテーブル操作に失敗しました。",
   "settings.database.systemTables.error.recovery":

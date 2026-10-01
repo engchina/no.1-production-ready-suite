@@ -2664,7 +2664,7 @@ const nl2sqlJa = {
   "settings.database.systemTables.summary.objectsHint":
     "テーブル・索引・シーケンス・パッケージの合計",
   "settings.database.systemTables.previousFailureLockDetail":
-    "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした (ORA-00054)。実行中の schema refresh、オントロジー、SQL生成評価 job を完了または停止してから、状態を再取得して再試行してください。",
+    "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。実行中の schema refresh、オントロジー、SQL生成評価 job を完了または停止してから、状態を再取得して再試行してください。",
   "settings.database.systemTables.recreate.sectionDescription":
     "NL2SQL の中核データを削除して migration を最初から適用します。削除したデータは復元できません。",
   "dbGate.setupRequired.message":
