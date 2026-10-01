@@ -1647,7 +1647,6 @@ export const ja = {
     "親子階層（small-to-big）を選んでいますが、この文書の解析結果は Docling ではないため、構造認識で分割しました。親子で分割するには、文書解析を Docling にして再解析し、Chunk を作り直してください。",
   "flow.chunks.loadError": "chunk を取得できません",
   "flow.chunks.loadErrorHint": "索引状態を確認して再読み込みしてください。",
-  "flow.chunks.pageRange": "p.{start}-{end}",
   "flow.chunks.noElements": "element 未紐付け",
   "flow.chunkPreview.title": "分割プレビュー",
   "flow.chunkPreview.description":

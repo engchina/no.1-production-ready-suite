@@ -344,6 +344,8 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
     .getByRole("tabpanel")
     .getByRole("button", { name: /料金表の交通費/ });
   await expect(linkedChunkButton).toHaveAttribute("aria-pressed", "true");
+  // 1 ページだけのチャンクは範囲（p.2-2）にせず p.2 と出す。
+  await expect(linkedChunkButton.getByText("p.2", { exact: true })).toBeVisible();
   await expect(page.getByText(/位置: p\.2 \/ bbox x=0\.0% y=0\.0% w=50\.0% h=20\.0%/)).toBeVisible();
   const bboxOverlay = page.getByTestId("bbox-preview-overlay");
   await expect(bboxOverlay).toBeVisible();
