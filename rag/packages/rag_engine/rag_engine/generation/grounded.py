@@ -38,6 +38,9 @@ CONTEXT_NOTE_BEGIN, CONTEXT_NOTE_END = "<補助情報（quote 不可）>", "</�
 QUOTE_ONLY_LABEL = "資料の記載（今回への適用は未確認）"
 RULES_SECTION_TITLE = "確認できる内容"
 GAPS_SECTION_TITLE = "資料からは確認できない点"
+# 回答の確定に必要な実データ・別の資料の確認（#688）。
+CONFIRMATIONS_SECTION_TITLE = "回答を確定するために確認すること"
+CONFIRMATION_ONLY_SUMMARY = "資料だけでは回答を確定できません。次を確認してください。"
 # 監査で summary を支持できない（または監査していない）ときに使う、断定のない前置き。
 NEUTRAL_SUMMARY = "資料で確認できた内容を以下に示します。"
 # 適用が未確認の説明の末尾に付ける注記。評価の主張の監査では主張として扱わない(#680)。
@@ -61,8 +64,9 @@ _GENERATED = re.compile(r"■ 要点|回答用本文:|視覚種別:|画面/メ�
 GENERATE_SYSTEM_PROMPT = (
     "1. 役割と目的\n"
     "- あなたはドキュメント解析結果を根拠に回答する問い合わせ RAG アシスタント。提示された機能別の根拠だけを使い、根拠がない内容は推測せず不足として伝える。\n"
-    "- 文書に関連根拠があれば、その手順・条件・確認方法を先に答える。個別判断に未提供の外部データが必要なら、文書で分かる内容と未確定の結論を分けて確認対象を示す"
+    "- 文書に関連根拠があれば、その手順・条件・確認方法を先に答える。個別判断に未提供の外部データや別の資料が必要なら、文書で分かる内容と未確定の結論を分けて確認対象を示す"
     "（取得・確認済みと偽らず、文書で十分な質問に不要な外部確認を付けない）。\n"
+    "- 分からないことを推測で埋めた誤答も、確認すれば答えられる質問の一律の拒答もしない。資料で分かる部分は答え、残りは何をどこで確かめれば確定できるかを案内する。資料に無いことは無いと正直に書く。\n"
     "- 主張と原文引用の対（items）で回答を構成し、応答 schema どおりの JSON だけを返す。本文・節・見出しは書かない（システムが items から組み立てる）。\n"
     "\n"
     "2. 入力\n"
@@ -118,10 +122,13 @@ GENERATE_SYSTEM_PROMPT = (
     "- 集計値（count）・構成明細（members）・算定根拠（calculation_basis）は別要求として照合し、候補集合と最終集計対象の一致を推測しない。「のみ」の出力制限・条件・基準年月を保持する。\n"
     "- 定義・項目の意味を尋ねる質問は各項目の意味と表示条件を直接答え、確認手順を自動追加しない。複数項目の一方だけで完了せず、記号がない場合の意味を逆推論しない。\n"
     "- 文書で直接答えられる規則・可否は簡潔に答え、不要な操作や外部確認を追加しない。\n"
-    "4.5 未確認事項と実データ\n"
-    "- 実値の未確認と文書根拠の不足を分ける。操作自体の根拠がなければその範囲を示し、手順・設定値・計算規則を推測しない。\n"
-    "- 閲覧する実データ（対象レコード・設定値・ログ等）と資料（名称・版・参照箇所）は照合目的とともに示し、名称・所在・URL・内容を創作しない。"
-    "「資料を追加してください」を既定の案内にせず、未検索の資料を存在しないとも閲覧済みとも書かない。\n"
+    "4.5 未確認事項・実データ・別の資料\n"
+    "- 3 つを分ける: 資料に記載が無い点（gap）、回答の確定に必要な実データ（external_data_items）、回答の確定に必要な別の資料（reference_materials）。\n"
+    "- 実データは個案でしか決まらない値（対象レコード・設定値・CSV の値・ログ・現在の状態・件数など）。何を、どの目的で照合するかを書く（例: 「対象の取引先の支払区分の設定値（どの手順に当たるかを決める）」）。\n"
+    "- 別の資料は、根拠の原文が参照を指示している資料（「別紙」「〜を参照」「コード表」「規程」など）や、質問が尋ねる定義・規則が載っているはずの資料。閲覧の目的とともに書く。\n"
+    "- 資料名は根拠の原文か質問に出た名前だけを「」で囲んで書く。無ければ資料の種類で書き（例: 料金表、コード定義表）、名称・版・所在・URL・内容を創作しない。\n"
+    "- 資料で分かる一般の規則・手順はそのまま items で答え、個案の値や別の資料が要る部分だけを未確定として案内する。操作自体の根拠がなければその範囲を gap に示し、手順・設定値・計算規則を推測しない。\n"
+    "- 「資料を追加してください」を既定の案内にせず、未検索の資料を存在しないとも閲覧済みとも書かない。文書で答えられる質問に不要な確認を付けない。\n"
     "4.6 信頼度（confidence）\n"
     "- high: 主要な説明と適用条件に直接の根拠がある。medium: 説明・適用性の一部に不確実性がある。low: 案内自体に根拠が乏しい。\n"
     "- 個案判断に必要な実値や別資料が未閲覧という理由だけで low にしない。案内の適用業務・画面・版が未確定なら high にしない。high は個案の最終解決や操作の実行済みを意味しない。\n"
@@ -133,9 +140,10 @@ GENERATE_SYSTEM_PROMPT = (
     "\n"
     "5. 出力\n"
     "5.1 方針と items の対応\n"
-    "- 未確認事項、資料からは確認できない点、閲覧する資料・データとその目的 → kind=gap の item。操作や規則の text に混ぜず、summary にも書かない。\n"
+    "- 資料からは確認できない点（資料に記載が無い、質問の語と原文の対応が未確認）→ kind=gap の item。操作や規則の text に混ぜず、summary にも書かない。\n"
+    "- 回答の確定に必要な実データとその照合の目的 → external_data_items。別の資料とその閲覧の目的 → reference_materials。同じ内容を gap に重ねない。\n"
     "- 原文に明記された適用条件・限定 → その item の applies=conditional と condition。\n"
-    "- 未確認の実値・履歴に依存する結論と確認対象 → external_data_required と external_data_items。\n"
+    "- 未確認の実値・履歴に依存する結論が残る → external_data_required=true。\n"
     "- 機能・前提ごとに分ける手順 → 機能ごとに item を分ける。見出しは書かない。\n"
     "5.2 出力形式と上限\n"
     "- 各項目の意味は応答 schema の説明に従う。まず request_coverage に要求単位ごとに使う根拠の evidence_id を挙げ、その後に items を書く。\n"
@@ -147,7 +155,7 @@ GENERATE_SYSTEM_PROMPT = (
     "- 通常は applies=matched。原文に適用条件・限定（〜の場合、〜のみ、対象外）が明記され、質問からその成立を確認できない時だけ applies=conditional とし、condition に原文の語句をそのまま写す。applies=unverified は監査の結果からシステムが付ける値で、あなたは出力しない。\n"
     "- request_units の各 id に対して、答えられる item を request_id 付きで出す。根拠がない要求は kind=gap にする。kind=context の要求単位は経緯・背景で、item も gap も作らない。\n"
     "5.4 根拠が無い場合\n"
-    "- 引用できる根拠が1つも無い場合は、items を kind=gap だけにして summary を空文字にする（根拠不足の案内文はシステムが表示する。不足する範囲と次の確認は gap の text に書く）。\n"
+    "- 引用できる根拠が1つも無い場合は、items を kind=gap だけにして summary を空文字にする（根拠不足の案内文はシステムが表示する）。不足する範囲は gap に、確認すれば確定できる実データ・別の資料は external_data_items / reference_materials に書く。\n"
     "- 質問の語（画面名・メッセージ文・帳票名）が原文になくても、同じ対象の条件・操作を述べた原文があれば kind=rule / operation の item にし、質問の語との対応が未確認なことは gap に書く（全面拒答にしない）。\n"
     "- user message の「検索評価で未確認の観点」は、根拠があれば答え、無ければその観点の gap を書く。\n"
     "5.5 summary と言語\n"
@@ -1833,11 +1841,33 @@ def missing_request_line(entry: dict, requests: Sequence[dict]) -> str:
     return f"『{text}』については、取得した資料で確認できませんでした。"
 
 
-def render(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[str] = ()) -> str:
+def _compact_text(text: str) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
+
+
+def confirmation_lines(draft: GroundedDraft, question: str, spans: Sequence[dict]) -> list[str]:
+    """回答の確定に必要な実データ・別の資料の確認を、本文の行にする (#688)。
+
+    資料名の創作を防ぐため、「」で囲んだ資料名が根拠の原文にも質問にも無い資料の行は出さない。
+    """
+    corpus = _compact_text(question + "\n" + "\n".join(str(span.get("text") or "") for span in spans))
+
+    def named_in_corpus(text: str) -> bool:
+        return all(_compact_text(name) in corpus for name in re.findall(r"「([^」]+)」", text))
+
+    lines = [f"実データ: {item.strip()}" for item in draft.external_data_items if item.strip()]
+    lines += [f"資料: {item.strip()}" for item in draft.reference_materials
+              if item.strip() and named_in_corpus(item)]
+    return list(dict.fromkeys(lines))
+
+
+def render(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[str] = (),
+           confirmations: Sequence[str] = ()) -> str:
     """kind と検査結果から本文を決定的に組み立てる。プレーンテキスト、出典は説明直後の独立行。
 
     unanswered は監査が missing とした要求の説明。回答本文に出さないと、質問の一部が
     黙って落ちる（insufficient_reason には残っていたが本文には出ていなかった）(#622)。
+    confirmations は回答の確定に必要な実データ・別の資料の確認（`confirmation_lines`）。最後の節に出す (#688)。
     """
     def lines(entries: Sequence[CheckedItem], numbered: bool) -> list[str]:
         out: list[str] = []
@@ -1898,6 +1928,8 @@ def render(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[st
                                        if not any(text in entry.item.text for entry in gaps)]
     if gap_lines:
         sections.append((GAPS_SECTION_TITLE, gap_lines))
+    if confirmations:
+        sections.append((CONFIRMATIONS_SECTION_TITLE, [f"・{line}" for line in confirmations]))
     body = "\n\n".join(title + "\n\n" + "\n".join(content) for title, content in sections)
     return "\n\n".join(part for part in (summary.strip(), body) if part)
 
