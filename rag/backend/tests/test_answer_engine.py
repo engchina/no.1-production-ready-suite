@@ -2300,3 +2300,51 @@ async def test_pipeline_reads_field_conditions_only_when_enabled(
     )
     assert llm.calls == []
     assert "auto_field_filter" not in (response.diagnostics.answer or {})
+
+
+async def test_answer_engine_answers_only_from_selected_approved_faq(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """類似問を選んだら検索せず、質問・類似問・承認済みの回答だけを LLM に渡す(#702)。"""
+    import json
+
+    import rag_engine.adapters.oci as engine_oci
+    import rag_engine.generation.answering as answering
+    from rag_engine.generation.faq_answer import FaqAnswerDraft
+
+    prompts: list[dict[str, Any]] = []
+
+    def fake_llm(system: str, prompt: str, settings: Any, schema: type, **_: Any) -> Any:
+        assert schema is FaqAnswerDraft
+        prompts.append(json.loads(prompt))
+        return FaqAnswerDraft(answer="宿泊出張の日当は 1 泊 2,000 円です。")
+
+    def no_search(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("類似問を選んだときは検索しない")
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", fake_llm)
+    monkeypatch.setattr(answering, "answer_question_result", no_search)
+    oracle = FakeOracle()
+    engine = AnswerEngine(
+        Settings(),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        approved_faq=("出張の日当はいくらですか？", "一般は 1 泊 2,000 円です。"),
+    )
+
+    outcome = await engine.run(SearchRequest(query="出張したら日当は何円？"))
+
+    assert prompts == [
+        {
+            "question": "出張したら日当は何円？",
+            "approved_faq": {
+                "question": "出張の日当はいくらですか？",
+                "answer": "一般は 1 泊 2,000 円です。",
+            },
+        }
+    ]
+    assert outcome.answer.startswith("宿泊出張の日当は 1 泊 2,000 円です。")
+    assert "承認済み FAQ「出張の日当はいくらですか？」" in outcome.answer
+    assert outcome.citations == []
+    assert outcome.diagnostics["answer_source"] == "approved_faq"
+    assert not oracle.filters

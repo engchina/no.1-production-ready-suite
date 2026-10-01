@@ -29,6 +29,7 @@ export type WorkspaceField =
   | "chat.composer"
   | "chat.conversationsPage"
   | "chat.historyOpen"
+  | "chat.faqChoice"
   | "fileList.view"
   | "knowledgeBases.view"
   | "knowledgeBases.documentsPage"
