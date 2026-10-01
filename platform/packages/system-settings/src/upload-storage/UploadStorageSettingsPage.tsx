@@ -1,4 +1,5 @@
 import {
+  Banner,
   Button,
   Card,
   CardContent,
@@ -302,20 +303,25 @@ export function UploadStorageSettingsPage({
                     />
                   </div>
                   {ociSettingsMissing ? (
-                    <div className="flex flex-wrap items-center gap-3 rounded-md border border-warning-border bg-warning-subtle p-3">
-                      <FormStatus tone="warning" message={m.ociSettingsIncomplete} />
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="lg"
-                        onClick={async () => {
-                          if (await confirmLeave()) onOpenOciSettings();
-                        }}
-                        icon={Settings2}
-                      >
-                        {m.openOciSettings}
-                      </Button>
-                    </div>
+                    // 状況の警告は Banner 1 枚にし、対処の操作は Banner の action に置く（面を二重にしない。messaging.md §10。#722）。
+                    <Banner
+                      severity="warning"
+                      action={
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={async () => {
+                            if (await confirmLeave()) onOpenOciSettings();
+                          }}
+                          icon={Settings2}
+                        >
+                          {m.openOciSettings}
+                        </Button>
+                      }
+                    >
+                      {m.ociSettingsIncomplete}
+                    </Banner>
                   ) : null}
                 </div>
               )}

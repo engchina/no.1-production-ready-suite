@@ -139,6 +139,11 @@ test("ADB 管理パネルが情報を表示し起動操作できる", async ({ p
 
   await expect(page.getByText("OCI ADB: 起動中")).toBeVisible();
   await expect(page.getByText("操作履歴")).toBeVisible();
+  // 操作履歴の状態は API の enum ではなく、日本語の StatusBadge で出す（#722）。
+  await expect(
+    page.locator('[data-status-variant="success"]').filter({ hasText: "受付済み" })
+  ).toBeVisible();
+  await expect(page.getByText("accepted", { exact: true })).toHaveCount(0);
   await expect(
     page.getByText("データベース 'RAG ADB' の起動を開始しました。")
   ).toBeVisible();
