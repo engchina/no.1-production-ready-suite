@@ -13,29 +13,26 @@ import {
   FieldError,
   FieldLabel,
   Skeleton,
-  Spinner,
   TimedLoadingState,
 } from "@engchina/production-ready-ui";
 import {
   AlertTriangle,
-  Ban,
-  CheckCircle2,
   Cloud,
-  Clock3,
   Database,
   FileText,
   HardDrive,
+  List,
   ListChecks,
-  PlayCircle,
   RefreshCw,
   RotateCcw,
   Settings,
-  XCircle,
+  Upload,
 } from "lucide-react";
 import { useId, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Dropzone } from "./Dropzone";
+import { UploadSelectionList } from "./UploadSelectionList";
 import { UploadSendingState } from "./UploadProgress";
 import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
 import { KnowledgeBaseMultiSelect } from "@/components/knowledge-bases/KnowledgeBaseMultiSelect";
@@ -43,9 +40,7 @@ import { useKnowledgeBaseSelectionHealth } from "@/components/knowledge-bases/Kn
 import { useAuth } from "@/components/security/AuthProvider";
 import { ErrorState } from "@/components/StateViews";
 import {
-  ApiError,
   type BatchUploadFailedItem,
-  type IngestionJob,
   type ParserSourceNotice,
   type UploadResult,
   type UploadStorageSettingsData,
@@ -54,14 +49,10 @@ import {
   uploadErrorMessage,
   useKnowledgeBaseChoices,
   useBatchUploadDocuments,
-  useCancelIngestionJob,
-  useDrainIngestionJobs,
-  useIngestionJobs,
-  useRetryIngestionJob,
   useUploadDocument,
   useUploadStorageSettings,
 } from "@/lib/queries";
-import { t, type I18nKey } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
 import {
   DEFAULT_MAX_UPLOAD_BYTES,
@@ -69,6 +60,7 @@ import {
   type UploadProgress,
 } from "@/lib/upload-requests";
 import { canSubmitUpload, uploadKnowledgeBaseRequired } from "@/lib/upload-scope";
+import { mergeUploadSelection } from "@/lib/upload-selection";
 import { APP_ROUTES } from "@/lib/routes";
 import {
   parserProfileKey,
@@ -84,6 +76,9 @@ export function UploadWorkspace() {
   const [batchItems, setBatchItems] = useState<UploadResult[]>([]);
   const [batchFailedItems, setBatchFailedItems] = useState<BatchUploadFailedItem[]>([]);
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
+  // 送る前に選んだファイル（#701）。送り終えるまで残し、失敗したファイルは選び直せる。
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [sentFiles, setSentFiles] = useState<File[]>([]);
   const { user, hasPermission } = useAuth();
   // KB が制限された利用者は、登録先の KB を選ばないとアップロードできない（#214）。
   const knowledgeBaseRequired = uploadKnowledgeBaseRequired(user);
@@ -101,6 +96,7 @@ export function UploadWorkspace() {
   const mutationError = upload.error ?? batchUpload.error;
 
   const reset = () => {
+    setSelectedFiles([]);
     setUploaded(null);
     setBatchItems([]);
     setBatchFailedItems([]);
@@ -125,6 +121,7 @@ export function UploadWorkspace() {
       return;
     }
     setKnowledgeBaseMissing(false);
+    setSentFiles(files);
     setUploaded(null);
     setBatchItems([]);
     setBatchFailedItems([]);
@@ -142,6 +139,7 @@ export function UploadWorkspace() {
         { file: files[0], knowledgeBaseIds, onProgress: setSendProgress },
         {
           onSuccess: (result) => {
+            setSelectedFiles([]);
             setBatchItems([result]);
             setBatchFailedItems([]);
             setUploaded(result);
@@ -154,6 +152,7 @@ export function UploadWorkspace() {
       { files, knowledgeBaseIds, maxUploadBytes, onProgress: setSendProgress },
       {
         onSuccess: (result) => {
+          setSelectedFiles([]);
           setBatchItems(result.items);
           setBatchFailedItems(result.failed_items);
           setUploaded(result.items[0] ?? null);
@@ -179,7 +178,19 @@ export function UploadWorkspace() {
               missing={knowledgeBaseMissing}
               canManageKnowledgeBases={hasPermission(MENU_PERMISSIONS.knowledgeBases)}
             />
-            <Dropzone onFiles={handleFiles} disabled={isBusy} maxUploadBytes={maxUploadBytes} />
+            <Dropzone
+              onFiles={(files) => setSelectedFiles((current) => mergeUploadSelection(current, files))}
+              disabled={isBusy}
+              maxUploadBytes={maxUploadBytes}
+            />
+            <UploadSelectionList
+              files={selectedFiles}
+              maxUploadBytes={maxUploadBytes}
+              busy={isBusy}
+              onRemove={(file) => setSelectedFiles((current) => current.filter((item) => item !== file))}
+              onClear={() => setSelectedFiles([])}
+              onStart={handleFiles}
+            />
             {isBusy ? (
               <UploadSendingState
                 fileCount={sendingCount}
@@ -191,7 +202,6 @@ export function UploadWorkspace() {
             {batchFailedItems.length > 0 ? (
               <BatchUploadFailureList failedItems={batchFailedItems} />
             ) : null}
-            <RecentIngestionJobsPanel />
           </>
         ) : (
           <>
@@ -210,9 +220,29 @@ export function UploadWorkspace() {
               watchProcessing={uploaded.ingestion_started}
               initialSourceProfile={uploaded.source_profile}
             />
-            <Button variant="ghost" onClick={reset}>
-              {t("upload.uploadAnother")}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              {batchFailedItems.length > 0 ? (
+                <Button
+                  variant="secondary"
+                  icon={RotateCcw}
+                  onClick={() => {
+                    const failedNames = new Set(batchFailedItems.map((item) => item.file_name));
+                    const failedFiles = sentFiles.filter((file) => failedNames.has(file.name));
+                    reset();
+                    setSelectedFiles(failedFiles);
+                  }}
+                >
+                  {t("upload.reselectFailed", { count: batchFailedItems.length })}
+                </Button>
+              ) : null}
+              <Button variant="secondary" icon={Upload} onClick={reset}>
+                {t("upload.uploadAnother")}
+              </Button>
+              <Link to={APP_ROUTES.fileList} className={buttonVariants({ variant: "ghost" })}>
+                <List size={16} aria-hidden />
+                {t("upload.openFileList")}
+              </Link>
+            </div>
           </>
         )}
       </PageBody>
@@ -366,258 +396,6 @@ function BatchMetric({ label, value }: { label: string; value: number }) {
       <p className="tnum mt-1 text-lg font-semibold text-fg">{value}</p>
     </div>
   );
-}
-
-function RecentIngestionJobsPanel() {
-  const query = useIngestionJobs({ limit: 5, offset: 0 });
-  const drain = useDrainIngestionJobs();
-  const retry = useRetryIngestionJob();
-  const cancel = useCancelIngestionJob();
-  const [manualRefreshing, setManualRefreshing] = useState(false);
-  const jobs = query.data?.items ?? [];
-  const warnings = query.data?.warning_messages ?? [];
-  // 定期更新（3 秒ごと）の失敗では、取得済みの一覧を残す（静かな polling でエラーを出さない）。
-  const loadFailed = query.isError && !query.data;
-
-  const refreshJobs = async () => {
-    setManualRefreshing(true);
-    try {
-      await query.refetch();
-    } finally {
-      setManualRefreshing(false);
-    }
-  };
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <CardTitle className="flex items-center gap-2">
-            <Clock3 size={20} className="text-accent-fg" aria-hidden />
-            {t("upload.jobs.title")}
-          </CardTitle>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => void refreshJobs()}
-              disabled={query.isPending}
-              loading={manualRefreshing} icon={RefreshCw}>
-              {t("upload.jobs.refresh")}
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => drain.mutate({ limit: 50 })}
-              disabled={query.isPending}
-              loading={drain.isPending} icon={PlayCircle}>
-              {t("upload.jobs.drain")}
-            </Button>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {drain.isError ? (
-          <Banner severity="danger">
-            {drain.error instanceof ApiError
-              ? drain.error.message
-              : t("upload.jobs.drainFailed")}
-          </Banner>
-        ) : null}
-        {retry.isError ? (
-          <Banner severity="danger">
-            {retry.error instanceof ApiError
-              ? retry.error.message
-              : t("upload.jobs.retryFailed")}
-          </Banner>
-        ) : null}
-        {cancel.isError ? (
-          <Banner severity="danger">
-            {cancel.error instanceof ApiError
-              ? cancel.error.message
-              : t("upload.jobs.cancelFailed")}
-          </Banner>
-        ) : null}
-        {query.isPending ? (
-          <TimedLoadingState
-            label={t("upload.jobs.loading")}
-            placement="panel"
-            testId="upload-jobs-loading"
-          >
-            <UploadJobsSkeleton />
-          </TimedLoadingState>
-        ) : loadFailed ? (
-          <ErrorState
-            message={t("upload.jobs.loadError")}
-            onRetry={() => void query.refetch()}
-          />
-        ) : warnings.length > 0 && jobs.length === 0 ? (
-          <Banner severity="warning">{warnings[0]}</Banner>
-        ) : jobs.length === 0 ? (
-          <p
-            className="rounded-md border border-border bg-surface-sunken p-4 text-sm text-fg-muted"
-            data-testid="upload-jobs-empty"
-          >
-            {t("upload.jobs.empty")}
-          </p>
-        ) : (
-          <div className="divide-y divide-border rounded-md border border-border bg-surface-sunken">
-            {jobs.map((job) => (
-              <div
-                key={job.id}
-                className="flex flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div className="min-w-0">
-                  {/* 文書 ID ではなくファイル名を出す。名前がない応答（旧 backend）では ID に戻す（#306）。 */}
-                  <p
-                    className="truncate text-sm font-medium text-fg"
-                    title={job.document_file_name || job.document_id}
-                    data-testid="upload-job-file-name"
-                  >
-                    {job.document_file_name || t("upload.jobs.documentId", { id: job.document_id })}
-                  </p>
-                  <p className="mt-1 text-xs text-fg-muted">
-                    {t("sourceProfile.parser")}: {t(parserProfileKey(job.parser_profile))}
-                  </p>
-                  {job.error_message ? (
-                    <p className="mt-1 text-xs text-danger-fg">{job.error_message}</p>
-                  ) : null}
-                </div>
-                <div className="flex shrink-0 flex-wrap items-center gap-2">
-                  {/* 「中止」の要求中は、そのボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。#416）。 */}
-                  <IngestionJobBadge
-                    job={job}
-                    spin={!(cancel.isPending && cancel.variables?.id === job.id)}
-                  />
-                  {job.status === "QUEUED" || job.status === "RUNNING" ? (
-                    // 処理中のジョブを止める操作。データを消す確定ではないため赤塗り（danger）にせず、
-                    // secondary + tone="danger" で控えめに示す（buttons.md §3、README §4 カード内の操作行）。
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      tone="danger"
-                      size="sm"
-                      onClick={() => cancel.mutate({ id: job.id })}
-                      loading={cancel.isPending && cancel.variables?.id === job.id}
-                      icon={Ban}
-                    >
-                      {t("upload.jobs.cancel")}
-                    </Button>
-                  ) : null}
-                  {job.status === "FAILED" ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => retry.mutate({ id: job.id })}
-                      loading={retry.isPending && retry.variables?.id === job.id}
-                      icon={RotateCcw}
-                    >
-                      {t("upload.jobs.retry")}
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-/** 取込ジョブの一覧の形をした読み込み中の表示（行の寸法を予約する）。 */
-function UploadJobsSkeleton() {
-  return (
-    <div className="divide-y divide-border overflow-hidden rounded-md border border-border bg-surface-sunken">
-      {Array.from({ length: 3 }, (_, index) => (
-        <div
-          key={index}
-          className="flex flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
-        >
-          <div className="grid min-w-0 flex-1 gap-1.5">
-            <Skeleton className="h-5 w-64 max-w-full" />
-            <Skeleton className="h-4 w-40 max-w-full" />
-          </div>
-          <Skeleton className="h-7 w-20 rounded-full" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function IngestionJobBadge({ job, spin = true }: { job: IngestionJob; spin?: boolean }) {
-  const status = job.status;
-  return (
-    <span
-      className={cn(
-        "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium",
-        jobBadgeClass(status)
-      )}
-    >
-      <JobStatusIcon status={status} spin={spin} />
-      {t(jobStatusKey(status))}
-    </span>
-  );
-}
-
-/** ジョブ状態のアイコン（実行中だけ回す）。アイコンの選択を render 中のコンポーネント生成にしない。 */
-function JobStatusIcon({ status, spin }: { status: IngestionJob["status"]; spin: boolean }) {
-  switch (status) {
-    case "RUNNING":
-      // 回さないときは、止まった円弧（進捗の円に見える）ではなく実行中を示す静止アイコンにする。
-      return spin ? <Spinner size={14} /> : <PlayCircle size={14} aria-hidden />;
-    case "SUCCEEDED":
-      return <CheckCircle2 size={14} aria-hidden className="" />;
-    case "FAILED":
-      return <XCircle size={14} aria-hidden className="" />;
-    case "SKIPPED":
-      return <AlertTriangle size={14} aria-hidden className="" />;
-    case "CANCELLED":
-      return <Ban size={14} aria-hidden className="" />;
-    case "QUEUED":
-    default:
-      return <Clock3 size={14} aria-hidden className="" />;
-  }
-}
-
-function jobBadgeClass(status: IngestionJob["status"]) {
-  switch (status) {
-    case "QUEUED":
-    case "RUNNING":
-      return "border-info-border bg-info-subtle text-info-fg";
-    case "SUCCEEDED":
-      return "border-success-border bg-success-subtle text-success-fg";
-    case "FAILED":
-      return "border-danger-border bg-danger-subtle text-danger-fg";
-    case "SKIPPED":
-      return "border-warning-border bg-warning-subtle text-warning-fg";
-    case "CANCELLED":
-      return "border-border bg-surface text-fg-muted";
-    default:
-      return "border-border bg-surface text-fg";
-  }
-}
-
-function jobStatusKey(status: IngestionJob["status"]): I18nKey {
-  switch (status) {
-    case "QUEUED":
-      return "upload.job.status.QUEUED";
-    case "RUNNING":
-      return "upload.job.status.RUNNING";
-    case "SUCCEEDED":
-      return "upload.job.status.SUCCEEDED";
-    case "FAILED":
-      return "upload.job.status.FAILED";
-    case "SKIPPED":
-      return "upload.job.status.SKIPPED";
-    case "CANCELLED":
-      return "upload.job.status.CANCELLED";
-    default:
-      return "upload.job.status.QUEUED";
-  }
 }
 
 const UPLOAD_KNOWLEDGE_BASE_PICKER_ID = "upload-knowledge-base-picker";

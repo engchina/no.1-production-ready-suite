@@ -145,6 +145,7 @@ test("アップロード時に選択したナレッジベースへ所属でき�
     mimeType: "text/plain",
     buffer: Buffer.from("本文"),
   });
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   await expect(page.getByRole("heading", { name: "upload.txt" })).toBeVisible();
   expect(uploadBody).toContain('name="knowledge_base_ids"');
@@ -164,6 +165,7 @@ test("アップロード画面で原本の処理情報を確認できる", async
     mimeType: "text/plain",
     buffer: Buffer.from("本文"),
   });
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   await expect(page.getByText("取込ジョブの状態を更新しています")).toHaveCount(0);
   // 原本情報は「処理の詳細(診断)」を展開して確認する(既定は折りたたみ)。
@@ -186,6 +188,7 @@ test("未対応 audio は保存時に処理情報として表示する", async (
     mimeType: "audio/mpeg",
     buffer: Buffer.from("ID3"),
   });
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   await expect(page.getByRole("heading", { name: "voice.mp3" })).toBeVisible();
   // 原本情報(音声未対応)は「処理の詳細(診断)」を展開して確認する。
@@ -193,40 +196,6 @@ test("未対応 audio は保存時に処理情報として表示する", async (
   await expect(page.getByText("音声未対応", { exact: true })).toBeVisible();
   await expect(page.getByText("音声ファイルは現在の取込対象外です。").first()).toBeVisible();
   await expect(page.getByText("取込ジョブの状態を更新しています")).toHaveCount(0);
-});
-
-test("アップロード画面から取込ジョブを再開・再試行できる", async ({ page }) => {
-  let drained = false;
-  let retriedJobId = "";
-  await mockUploadStorageSettings(page, () => localStorageSettings);
-  await mockKnowledgeBases(page);
-  await mockIngestionJobs(
-    page,
-    [
-      ingestionJob("job-queued", "doc-queued", "QUEUED"),
-      {
-        ...ingestionJob("job-failed", "doc-failed", "FAILED"),
-        error_message: "前回の取込に失敗しました。",
-      },
-    ],
-    {
-      onDrain: () => {
-        drained = true;
-      },
-      onRetry: (jobId) => {
-        retriedJobId = jobId;
-      },
-    }
-  );
-
-  await page.goto("/upload");
-
-  await expect(page.getByRole("heading", { name: "文書処理状況" })).toBeVisible();
-  await expect(page.getByText("前回の取込に失敗しました。")).toBeVisible();
-  await page.getByRole("button", { name: "待機ジョブを再開" }).click();
-  await expect.poll(() => drained).toBe(true);
-  await page.getByRole("button", { name: "再試行" }).click();
-  await expect.poll(() => retriedJobId).toBe("job-failed");
 });
 
 test("複数ファイルをまとめてアップロードし結果を確認できる", async ({ page }) => {
@@ -257,6 +226,7 @@ test("複数ファイルをまとめてアップロードし結果を確認で�
       buffer: Buffer.from("MZ"),
     },
   ]);
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   await expect(page.getByRole("heading", { name: "アップロード結果" })).toBeVisible();
   await expect(page.getByTitle("policy-a.txt").first()).toBeVisible();

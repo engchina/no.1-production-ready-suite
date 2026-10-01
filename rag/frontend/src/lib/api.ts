@@ -2474,44 +2474,9 @@ export const api = {
       )}/review-edits`,
       { ...jsonBody(payload), method: "PATCH" },
     ),
-  listIngestionJobs: (
-    params: {
-      status?: IngestionJobStatus;
-      limit?: number;
-      offset?: number;
-    } = {},
-  ) => {
-    const search = new URLSearchParams();
-    if (params.status) search.set("status", params.status);
-    if (params.limit != null) search.set("limit", String(params.limit));
-    if (params.offset != null) search.set("offset", String(params.offset));
-    const qs = search.toString();
-    return requestDegradable<Page<IngestionJob>>(
-      `/api/documents/ingestion-jobs${qs ? `?${qs}` : ""}`,
-    );
-  },
   getIngestionJob: (id: string) =>
     request<IngestionJob>(
       `/api/documents/ingestion-jobs/${encodeURIComponent(id)}`,
-    ),
-  drainIngestionJobs: (limit = 50) =>
-    request<IngestionJob[]>(
-      `/api/documents/ingestion-jobs/drain?limit=${limit}`,
-      {
-        method: "POST",
-      },
-    ),
-  retryIngestionJob: (id: string, force = false) =>
-    request<IngestionJob>(
-      `/api/documents/ingestion-jobs/${encodeURIComponent(id)}/retry${force ? "?force=true" : ""}`,
-      { method: "POST" },
-    ),
-  cancelIngestionJob: (id: string) =>
-    request<IngestionJob>(
-      `/api/documents/ingestion-jobs/${encodeURIComponent(id)}/cancel`,
-      {
-        method: "POST",
-      },
     ),
   /** 原本/処理後ファイルの配信 URL（プレビュー/ダウンロード用）。 */
   documentContentUrl: (

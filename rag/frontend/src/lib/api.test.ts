@@ -352,18 +352,6 @@ describe("api.request envelope", () => {
     await api.enqueueDocumentIngestionJob("doc-1", true);
     await api.enqueueDocumentIngestionJob("doc-2");
     await api.getIngestionJob("job-1");
-    await api.retryIngestionJob("job-1");
-    await api.drainIngestionJobs(25);
-    await api.cancelIngestionJob("job-1");
-
-    fetchMock.mockResolvedValueOnce(
-      jsonResponse({
-        data: { items: [], total: 0, limit: 10, offset: 0, has_next: false },
-        error_messages: [],
-        warning_messages: [],
-      })
-    );
-    await api.listIngestionJobs({ status: "FAILED", limit: 10, offset: 20 });
 
     expect(fetchMock.mock.calls[0][0]).toBe(
       "/api/documents/doc-1/ingestion-jobs?force=true&phase=PREPROCESS"
@@ -374,15 +362,6 @@ describe("api.request envelope", () => {
     );
     expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: "POST" });
     expect(fetchMock.mock.calls[2][0]).toBe("/api/documents/ingestion-jobs/job-1");
-    expect(fetchMock.mock.calls[3][0]).toBe("/api/documents/ingestion-jobs/job-1/retry");
-    expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: "POST" });
-    expect(fetchMock.mock.calls[4][0]).toBe("/api/documents/ingestion-jobs/drain?limit=25");
-    expect(fetchMock.mock.calls[4][1]).toMatchObject({ method: "POST" });
-    expect(fetchMock.mock.calls[5][0]).toBe("/api/documents/ingestion-jobs/job-1/cancel");
-    expect(fetchMock.mock.calls[5][1]).toMatchObject({ method: "POST" });
-    expect(fetchMock.mock.calls[6][0]).toContain("status=FAILED");
-    expect(fetchMock.mock.calls[6][0]).toContain("limit=10");
-    expect(fetchMock.mock.calls[6][0]).toContain("offset=20");
   });
 
   it("document workspace API はレシピの chunk / export と segment endpoint を呼ぶ", async () => {

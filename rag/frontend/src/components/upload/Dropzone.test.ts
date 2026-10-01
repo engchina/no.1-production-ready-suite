@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ACCEPTED_UPLOAD_TYPES } from "./Dropzone";
+import { ACCEPTED_UPLOAD_TYPES } from "@/lib/upload-selection";
 
 describe("Dropzone accepted upload types", () => {
   const accepted = ACCEPTED_UPLOAD_TYPES.split(",");

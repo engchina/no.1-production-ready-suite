@@ -181,6 +181,7 @@ test("一括アップロードは上限以内に分けて送り、上限を超�
     textFile("huge.txt", 11),
     textFile("c.txt", 6),
   ]);
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   const summary = page.getByRole("heading", { name: "アップロード結果" });
   await expect(summary).toBeVisible();
@@ -225,6 +226,7 @@ test("途中のまとまりが失敗しても、保存できたファイルの�
 
   await page.goto("/upload");
   await page.locator('input[type="file"]').setInputFiles([textFile("a.txt", 8), textFile("b.txt", 8)]);
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   await expect(page.getByRole("heading", { name: "アップロード結果" })).toBeVisible();
   await expect(page.getByTitle("a.txt").first()).toBeVisible();
@@ -268,6 +270,7 @@ test("送信中は経過時間を示し、KB 一覧の読み込み中は Skeleto
   await expect(page.getByRole("combobox", { name: "所属させるナレッジベース" })).toBeVisible();
 
   await page.locator('input[type="file"]').setInputFiles(textFile("policy.txt", 6));
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
   const processing = page.getByTestId("upload-processing");
   await expect(processing).toBeVisible();
   await expect(processing.getByText("1 件のファイルをアップロードしています").first()).toBeVisible();
@@ -302,6 +305,7 @@ test("KB 一覧を取得できないときは、その場で再読み込みで�
   await expect(picker.getByText("ナレッジベース一覧を取得できませんでした。")).toBeVisible({ timeout: 15_000 });
   // 必須の利用者がファイルを選んでも黙って何も起きないのではなく、案内を出す。
   await page.locator('input[type="file"]').setInputFiles(textFile("policy.txt", 6));
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
   await expect(
     picker.getByRole("alert").filter({ hasText: "所属させるナレッジベースを 1 件以上選択してください。" })
   ).toBeVisible();
@@ -348,105 +352,6 @@ test("200 件を超えるナレッジベースは、サーバー側で検索し�
 // - 取込ジョブのパネルの読み込み中は TimedLoadingState + Skeleton、空・取得失敗も同じ枠の中で示す
 // - 送信中は件数と経過時間に加えて、送信済み / 合計のバイト数と割合を示す
 
-test("取込ジョブの一覧は、読み込み中は Skeleton で領域を確保し、ファイル名を出す", async ({ page }) => {
-  await mockLocalAuth(page);
-  let releaseJobs: () => void = () => undefined;
-  const jobsReleased = new Promise<void>((resolve) => {
-    releaseJobs = resolve;
-  });
-  await mockUploadPage(page, {
-    ingestionJobs: async (route) => {
-      await jobsReleased;
-      await route.fulfill({
-        json: apiEnvelope({
-          items: [
-            ingestionJob("job-1", "経費精算規程_2026年度版.pdf", "RUNNING"),
-            // ファイル名を返さない応答（旧 backend）では文書 ID に戻す。
-            ingestionJob("job-2", null, "FAILED"),
-          ],
-          total: 2,
-          limit: 5,
-          offset: 0,
-          has_next: false,
-        }),
-      });
-    },
-  });
-
-  await page.goto("/upload");
-  const loading = page.getByTestId("upload-jobs-loading");
-  await expect(loading).toBeVisible();
-  await expect(loading.getByText("文書処理状況を読み込んでいます").first()).toBeVisible();
-  await expect(loading.getByRole("timer")).toBeVisible();
-  await expectNoPageOverflow(page);
-  releaseJobs();
-  await expect(loading).toHaveCount(0);
-
-  const names = page.getByTestId("upload-job-file-name");
-  await expect(names).toHaveText(["経費精算規程_2026年度版.pdf", "文書 ID: doc-job-2"]);
-  await expect(names.first()).toHaveAttribute("title", "経費精算規程_2026年度版.pdf");
-  // ファイル名がある行は文書 ID を出さない。
-  await expect(page.getByText(/doc-job-1/)).toHaveCount(0);
-  await expectNoPageOverflow(page);
-});
-
-test("取込ジョブがないときは空の案内を出し、取得に失敗したときは再試行できる", async ({ page }) => {
-  await mockLocalAuth(page);
-  let failing = true;
-  await mockUploadPage(page, {
-    ingestionJobs: async (route) => {
-      if (failing) {
-        await route.fulfill({
-          status: 500,
-          json: { data: null, error_messages: ["一時的なエラー"], warning_messages: [] },
-        });
-        return;
-      }
-      await route.fulfill({
-        json: apiEnvelope({ items: [], total: 0, limit: 5, offset: 0, has_next: false }),
-      });
-    },
-  });
-
-  await page.goto("/upload");
-  // TanStack Query の既定の再試行（3 回）を終えてから失敗を表示する。
-  await expect(page.getByText("文書処理状況を取得できませんでした。", { exact: false })).toBeVisible({
-    timeout: 15_000,
-  });
-  failing = false;
-  await page.getByRole("button", { name: "再試行" }).click();
-  await expect(page.getByTestId("upload-jobs-empty")).toHaveText(
-    "まだ文書処理はありません。文書を開いて取込を始めると、ここに直近の状況が表示されます。"
-  );
-  await expectNoPageOverflow(page);
-});
-
-/**
- * page.route で応答を差し替えると Chromium は送信の progress event を出さないため、送った XHR を捕まえ、
- * テストから送信済みのバイト数（`xhr.upload` の progress event）を出せるようにする。
- */
-async function captureUploadXhr(page: Page) {
-  await page.addInitScript(() => {
-    const send = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.send = function (body) {
-      (window as unknown as { __uploadXhr?: XMLHttpRequest }).__uploadXhr = this;
-      return send.call(this, body);
-    };
-  });
-}
-
-async function emitUploadProgress(page: Page, loaded: number, total: number) {
-  await page.evaluate(
-    ([sent, all]) => {
-      const xhr = (window as unknown as { __uploadXhr?: XMLHttpRequest }).__uploadXhr;
-      xhr?.upload.dispatchEvent(
-        new ProgressEvent("progress", { lengthComputable: true, loaded: sent, total: all })
-      );
-    },
-    [loaded, total]
-  );
-}
-
 test("送信中は送信済み / 合計のバイト数と割合を示し、送り終えたら保存を待っていることを示す", async ({ page }) => {
   await mockLocalAuth(page);
   await mockUploadPage(page);
@@ -468,6 +373,7 @@ test("送信中は送信済み / 合計のバイト数と割合を示し、送�
   await page.goto("/upload");
   const fileBytes = 20 * 1024 * 1024;
   await page.locator('input[type="file"]').setInputFiles(textFile("large.txt", fileBytes));
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   const sending = page.getByTestId("upload-sending");
   await expect(sending.getByText("1 件のファイルをアップロードしています").first()).toBeVisible();
@@ -525,6 +431,7 @@ test("複数のファイルを送るときは、ファイルごとの送信済�
   await page
     .locator('input[type="file"]')
     .setInputFiles([textFile(longName, 6 * MB), textFile("b.txt", 2 * MB), textFile("c.txt", 4 * MB)]);
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   const list = page.getByRole("list", { name: "ファイルごとの送信状況" });
   const items = list.getByTestId("upload-file-progress-item");
@@ -589,6 +496,7 @@ test("Docling で解析できない形式は、アップロードの結果で案
 
   await page.goto("/upload");
   await page.locator('input[type="file"]').setInputFiles([textFile("memo.txt", 6), textFile("policy.txt", 6)]);
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
 
   await expect(page.getByRole("heading", { name: "アップロード結果" })).toBeVisible();
   // 一覧の行に短い案内、選択中の文書に理由と対処を出す。
