@@ -1294,8 +1294,10 @@ def test_evaluation_api_runs_against_local_pipeline(monkeypatch: MonkeyPatch) ->
     """API 経由でも、回答エンジンの回答の記録から指標を返す(実 Oracle。LLM はスタブ)。"""
     from app.rag.answer_engine import AnswerEngine, AnswerOutcome
 
-    async def refuse(self: AnswerEngine, request: SearchRequest) -> AnswerOutcome:
-        del self, request
+    async def refuse(
+        self: AnswerEngine, request: SearchRequest, *, step_callback: object = None
+    ) -> AnswerOutcome:
+        del self, request, step_callback
         return AnswerOutcome(
             answer="資料からは確認できませんでした。",
             citations=[],
