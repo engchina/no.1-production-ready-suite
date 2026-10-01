@@ -696,12 +696,21 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         ),
     )
     rag_approved_faq_chat_min_score: float = Field(
-        default=0.6,
+        default=0.75,
         ge=0.0,
         le=1.0,
         description=(
-            "チャットで類似問を提示する一致度の下限(0〜1。#684)。低いと弱い候補が毎回出て、"
+            "チャットで類似問を提示する一致度の下限(0〜1。#684 / #709)。低いと弱い候補が毎回出て、"
             "利用者に毎回「どれでもない」を選ばせることになる。"
+        ),
+    )
+    rag_approved_faq_chat_max_gap: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "チャットで類似問を提示するとき、1 位の一致度からこの差より離れた候補を出さない(#709)。"
+            "1 位とほぼ同じくらい近い候補だけを並べ、遠い 2・3 位で迷わせない。"
         ),
     )
     # 回答は rag_poc の根拠付き回答(質問ルーティング / CRAG / 生成 + 監査ラウンド)だけ
