@@ -28,9 +28,9 @@ import {
 } from "@/lib/queries";
 
 import { ApprovedFaqManager } from "./ApprovedFaqManager";
-import { RuntimeKnowledgeManager } from "./RuntimeKnowledgeManager";
+import { RuntimeKnowledgeManager, runtimeKindLabel } from "./RuntimeKnowledgeManager";
 
-type KnowledgeTab = "domainKeywords" | "approvedFaq" | "runtimeKnowledge";
+type KnowledgeTab = "approvedFaq" | "terms" | "domainKeywords" | "rules";
 
 /** 業務ビュー単位の知識(ドメインキーワード等)。編集中の業務ビューにだけ表示する。 */
 export function BusinessViewKnowledgePanel({
@@ -54,13 +54,16 @@ export function BusinessViewKnowledgePanel({
           ariaLabel={t("businessViews.knowledge.title")}
           value={tab}
           onChange={(value) => setTab(value as KnowledgeTab)}
+          // 回答フローで使う順に並べる（#682）: 類似問の提示 → 用語・同義語で質問を広げる →
+          // ドメインキーワードでキーワード検索の語を切り出す → 回答ルールを回答の生成に渡す。
           items={[
             { id: "approvedFaq", label: t("businessViews.faq.title") },
+            { id: "terms", label: runtimeKindLabel("terms") },
             {
               id: "domainKeywords",
               label: t("businessViews.domainKeywords.title"),
             },
-            { id: "runtimeKnowledge", label: t("businessViews.runtime.title") },
+            { id: "rules", label: runtimeKindLabel("rules") },
           ]}
         />
         <div
@@ -73,7 +76,8 @@ export function BusinessViewKnowledgePanel({
           ) : tab === "approvedFaq" ? (
             <ApprovedFaqManager businessViewId={businessViewId} />
           ) : (
-            <RuntimeKnowledgeManager businessViewId={businessViewId} />
+            // 種類ごとに編集中の入力を持つので、タブを切り替えたら作り直す。
+            <RuntimeKnowledgeManager key={tab} businessViewId={businessViewId} kind={tab} />
           )}
         </div>
       </CardContent>

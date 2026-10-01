@@ -21,7 +21,7 @@
 - `src/lib/editor-route.ts` の `useEditorRoute` が `?id=` を読む。なし = 一覧 / `new` = 新規 / `<id>` = その業務ビューの編集。ほかの検索パラメータは残す。
 - 一覧は `DataTable`。行の操作以外の領域のクリックと、先頭セルの名前のボタン（`{name} を編集`）でエディタを開く。アーカイブ済みの行は開かない。「新規作成」は `PageHeader` の primary。
 - 開く・一覧へ戻るは履歴に積む（再読込・ブラウザの戻る / 進むで同じ対象が開く）。作成に成功したら作成した業務ビューの `?id=` へ、エディタからアーカイブしたら一覧へ、どちらも `replace` で移る（戻るで空の新規フォームや消えた対象へ戻さない）。
-- エディタの上部は パンくず（`業務ビュー › 名前`、共有 `Breadcrumbs`）+ `一覧へ戻る`（secondary）+ `保存する` / `作成する`（primary）。375px では共有 `PageHeader` の規則で `一覧へ戻る` が「その他の操作」に入る。対象の操作（アーカイブ）は「基本情報と検索・回答設定」の見出しの `ObjectActionBar`、知識パネル（キーワード / FAQ / 用語・ルール）はその下に積む。
+- エディタの上部は パンくず（`業務ビュー › 名前`、共有 `Breadcrumbs`）+ `一覧へ戻る`（secondary）+ `保存する` / `作成する`（primary）。375px では共有 `PageHeader` の規則で `一覧へ戻る` が「その他の操作」に入る。対象の操作（アーカイブ）は「基本情報と検索・回答設定」の見出しの `ObjectActionBar`、知識パネル（Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルールのタブ。回答フローで使う順。#682）はその下に積む。
 - `?id=` の業務ビューが無い（404）ときは「対象が見つかりません」と `一覧へ戻る` を出し、別の対象へ置き換えない。取得の失敗（404 以外）は再試行を出す。直接 URL で開いたアーカイブ済みの業務ビューは警告を出し、保存を無効にする。
 - 共通の部品（`EditorBreadcrumbs` / `RowTitleButton` / `MissingEditorTarget` / `EditorTargetState` / `EditorDraftNotice` / `RagSplitPane`）は `src/components/layout/EntityLayout.tsx`、下書きと離脱の確認は `src/components/layout/use-entity-editor-draft.ts` の `useEntityEditorDraft`（ナレッジベースと共有。#555）。
 - エディタの `PageHeader` は、編集のときに状態（`StatusBadge`）と件数・更新日時（`meta`）を出す。アーカイブ済みは警告を出し、保存を無効にしたうえで入力欄も読み取り専用・無効にする（入力しても保存できない欄を出さない。#555）。
@@ -57,7 +57,7 @@
 | ナレッジベース詳細 | 所属文書 | 外す（確認は warning。所属の行だけを消し、chunk へ波及しない） | — | `KnowledgeBaseDetailClient.tsx` |
 | 業務ビュー | 業務ビュー | アーカイブ（danger。DEFAULT は理由付きで無効） | エディタの「基本情報と検索・回答設定」の見出しに同じ定義 | `BusinessViewManagementClient.tsx` の `useBusinessViewActions` |
 | 業務ビュー（知識パネル） | 承認済み FAQ | 削除（danger。確認ダイアログを通す） | — | `ApprovedFaqManager.tsx` |
-| 業務ビュー（用語・ルール） | 用語 / ルール | —（行は選択専用。名前のボタンと行のクリックで編集フォームへ読み込む） | フォームの 保存 / 削除（danger。確認ダイアログを通す） | `RuntimeKnowledgeManager.tsx` |
+| 業務ビュー（用語・同義語 / 回答ルール。タブごと。#682） | 用語・同義語 / 回答ルール | —（行は選択専用。名前のボタンと行のクリックで編集フォームへ読み込む） | フォームの 保存 / 削除（danger。確認ダイアログを通す） | `RuntimeKnowledgeManager.tsx` |
 | フィードバック | 回答のフィードバック | —（行は選択専用） | Approved FAQ に登録（確認ダイアログを通す。同じ質問の FAQ は置き換える）、品質評価のケースに追加（品質評価の要求 JSON に追記して品質評価へ移る）。詳細の見出しの下の行に置く。引用のフィードバックには出さない | `FeedbackClient.tsx` の `FeedbackPromotionActions` |
 | RAG 検索 / チャット | 保存された回答 | — | この回答を削除（danger。確認ダイアログを通す。危険な操作だけなので「その他の操作」に入る） | `AnswerRecordHistory.tsx` の `SavedAnswerRecord` |
 | サービス管理 | サービス（`deployable` の行） | ログを表示 / 閉じる、起動（一部異常のときだけ）、ビルド、削除（danger。確認ダイアログを通す）。行には別に状態に応じた起動 / 停止を 1 つだけ出す（§3.1） | — | `ServicesManagementClient.tsx` の `ServiceRow`（`servicePrimaryAction`） |
@@ -99,4 +99,4 @@
 
 ## 5. 検証
 
-- Playwright：`e2e/document-delete.spec.ts`（行のメニューの Enter で開く / Esc で閉じてトリガーへフォーカスを戻す、矢印キー、削除の確認のキャンセルと確定、一括選択中の disabled）、`e2e/knowledge-bases.spec.ts`（「新規作成」→ `?id=new` の作成 → 詳細への `replace`、行のクリック、詳細の `PageHeader`（パンくず・状態・件数・一覧へ戻る・保存する）と 1920 / 1280 / 375px の左端、`?id=<id>` の置き換え・存在しない詳細、作成と詳細の未保存の確認と下書き、空の状態の作成の入口、アーカイブ済みの読み取り専用、行のメニューからのアーカイブ・所属から外す、詳細の `ObjectActionBar` の「その他の操作」とフォーカスの戻り・アーカイブ後の一覧への `replace`、DEFAULT の無効理由）、`e2e/knowledge-base-ops.spec.ts`（名前・説明の編集と同名の理由、DEFAULT・説明が空の KB の保存）、`e2e/business-views.spec.ts`（行のクリック / 名前のボタンで `?id=` のエディタを開く、再読込・戻る / 進む、パンくず、未保存の変更の確認と対象ごとの下書き、存在しない `?id=`、作成と アーカイブ の `replace`、DEFAULT の無効理由）、`e2e/feedback.spec.ts`（行のクリック / 名前のボタンでの選択と `aria-current`、分割ペインの divider と保存 key、375px の縦積み・カードの選択・詳細へのフォーカス、URL からの復元）、`e2e/answer-knowledge.spec.ts`（用語・ルールの行の選択と削除の確認、保存された回答の `ObjectActionBar` からの削除の確認のキャンセルと確定）、`e2e/services-management.spec.ts`（各行が状態に応じた主操作 1 つ + メニューのトリガー 1 つだけ、起動 / 停止で主操作が切り替わる、メニューからのログ・ビルド・削除の確認、制御無効時の無効、Esc でトリガーへフォーカスが戻る、375px で横スクロールなし）。いずれも desktop / mobile-375 の両 project で動く。
+- Playwright：`e2e/document-delete.spec.ts`（行のメニューの Enter で開く / Esc で閉じてトリガーへフォーカスを戻す、矢印キー、削除の確認のキャンセルと確定、一括選択中の disabled）、`e2e/knowledge-bases.spec.ts`（「新規作成」→ `?id=new` の作成 → 詳細への `replace`、行のクリック、詳細の `PageHeader`（パンくず・状態・件数・一覧へ戻る・保存する）と 1920 / 1280 / 375px の左端、`?id=<id>` の置き換え・存在しない詳細、作成と詳細の未保存の確認と下書き、空の状態の作成の入口、アーカイブ済みの読み取り専用、行のメニューからのアーカイブ・所属から外す、詳細の `ObjectActionBar` の「その他の操作」とフォーカスの戻り・アーカイブ後の一覧への `replace`、DEFAULT の無効理由）、`e2e/knowledge-base-ops.spec.ts`（名前・説明の編集と同名の理由、DEFAULT・説明が空の KB の保存）、`e2e/business-views.spec.ts`（行のクリック / 名前のボタンで `?id=` のエディタを開く、再読込・戻る / 進む、パンくず、未保存の変更の確認と対象ごとの下書き、存在しない `?id=`、作成と アーカイブ の `replace`、DEFAULT の無効理由）、`e2e/feedback.spec.ts`（行のクリック / 名前のボタンでの選択と `aria-current`、分割ペインの divider と保存 key、375px の縦積み・カードの選択・詳細へのフォーカス、URL からの復元）、`e2e/answer-knowledge.spec.ts`（用語・同義語の行の選択と削除の確認、保存された回答の `ObjectActionBar` からの削除の確認のキャンセルと確定）、`e2e/services-management.spec.ts`（各行が状態に応じた主操作 1 つ + メニューのトリガー 1 つだけ、起動 / 停止で主操作が切り替わる、メニューからのログ・ビルド・削除の確認、制御無効時の無効、Esc でトリガーへフォーカスが戻る、375px で横スクロールなし）。いずれも desktop / mobile-375 の両 project で動く。

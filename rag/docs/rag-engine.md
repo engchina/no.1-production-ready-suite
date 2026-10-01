@@ -17,7 +17,7 @@ sibling repo `../rag_poc` の、解析から回答生成までの実装を本リ
 | `backend/app/rag/vision.py` | 解析後の図・画像の読み取り（Vision）。Docling を含む全ての解析エンジンで、rag_engine の `describe_layout_pictures`（対象と周辺文脈の 2 枚の画像・装飾画像の skip・表内画像の検出・prompt の metadata）を既定の Vision モデルで実行する。Docling は結果を `layout_records` の record にも書き戻す（#497） |
 | `backend/app/rag/chunking_small_to_big.py` | チャンク戦略 `small_to_big`（画面の表示名は「親子階層（small-to-big）」。rag_poc の Small-to-Big 親子分割） |
 | `backend/app/rag/answer_engine.py` | 回答フロー（rag_poc の回答フローを backend の検索・rerank で駆動。#594 から回答はこれだけ） |
-| `backend/app/rag/business_view_knowledge.py` | 業務ビュー単位の知識（ドメインキーワード / Approved FAQ / 用語・ルール） |
+| `backend/app/rag/business_view_knowledge.py` | 業務ビュー単位の知識（Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール） |
 | `backend/app/rag/document_crop.py` | 解析に使ったファイルからの bbox の切り出し（プレビューと回答画像で共用） |
 
 LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の Responses API）だけを使う。接続先はモデル設定（`OCI_ENTERPRISE_AI_*`）。embedding と rerank は Cohere（OCI SDK）のままである。
@@ -29,7 +29,7 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | Docling 解析 | 文書レシピ | 検索・回答設定 > 文書解析、または文書のレシピ編集 |
 | 図・画像を AI で読み取る（Vision） | 文書レシピ | 文書のレシピ編集（解析エンジンに関係なく選べる）。全体の既定は `backend/.env` の `RAG_VISION_ENABLED`。文書解析の画面の「解析後の処理」から保存できる（#497 / #528） |
 | 親子階層（small-to-big） | 文書レシピ | 検索・回答設定 > 文書分割「親子階層（small-to-big）」（分割パラメータ 5 項目もここで設定）、または文書のレシピ編集 |
-| ドメインキーワード / Approved FAQ / 用語・ルール | 業務ビュー | 業務ビューを編集 >「業務ビューの知識」 |
+| Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール | 業務ビュー | 業務ビューを編集 >「業務ビューの知識」 |
 | 回答の設定（質問の拡張・回答の生成方式・根拠の前後から加える数・Rerank・画面目録で操作画面を探す） | 業務ビュー | 業務ビューを編集 > 検索・回答設定（#594 で回答エンジンの選択を削除し、常に表示する） |
 | 回答の検索と生成の全体既定（質問の拡張・回答の生成方式・根拠の前後から加える数・Rerank・画面目録で操作画面を探す） | global | 検索・回答設定 > 検索方法「回答の検索と生成」（`GET` / `PATCH /api/settings/answering`。`backend/.env` の `RAG_*` に保存する。#593）。業務ビューで上書きできる |
 
@@ -58,7 +58,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
    - Vision の読み取り内容（画面名・ボタン・表の行・操作手順など）と切り出し画像
 4. **業務ビュー**：
    - 必要なら質問の拡張・回答の生成方式・根拠の前後から加える数・Rerank・画面目録で操作画面を探すを上書きする（既定は自動ルーティング / CRAG / 3 / ON / OFF。回答エンジンの選択は #594 で削除した）。
-   - 業務ビューの知識に、ドメインキーワード・Approved FAQ・用語・ルールを登録する。
+   - 業務ビューの知識に、Approved FAQ・用語・同義語・ドメインキーワード・回答ルールを登録する。タブは回答フローで使う順に並ぶ（類似問の提示 → 用語・同義語で質問を広げる → ドメインキーワードでキーワード検索の語を切り出す → 回答ルールを回答の生成に渡す。#682）。
 5. **検索**：
    - 業務ビューを選んで検索すると、先に類似する承認済み FAQ を照会する。候補があれば「この FAQ の回答を使う（LLM を使わない）」か「類似問を使用しない」を選ぶ。
    - 回答には「回答の根拠と実行記録」パネル（信頼度、人手確認、根拠の構成、実行記録）が付く。
@@ -170,7 +170,7 @@ standard の回答エンジンを消す（#592）前に、standard だけが持�
 - **検索だけの経路**: `SearchRequest.retrieval_only`（既定 `false`）が `true` のとき、`AnswerEngine.retrieve` が回答の検索（`_search`）を原質問 1 本で呼び、候補を引用として返す（回答は空）。質問の理解・質問の拡張・rerank・CRAG・回答の生成は行わず、LLM を呼ばない。回答の記録・質問履歴も保存しない（検索の監査は残す）。進捗は `retrieval` の 1 工程。KB の検索テストとレシピの検索比較が使う。レシピの比較の `filters.chunk_set_id` は Oracle の検索条件（`_oracle_retrieval_where`）でそのまま効く。回答エンジンが standard のときは今までどおり回答していた（`retrieval_only` を無視する。#594 で standard は呼ばれなくなった）。
 - **全体既定の画面**: 質問の拡張・回答の生成方式・根拠の前後から加える数・Rerank・画面目録で操作画面を探すの全体既定を、検索・回答設定 > 検索方法「回答の検索と生成」で変えられる（`GET` / `PATCH /api/settings/answering`。権限は `menu.settings_retrieval`）。回答の記録の保存期間と質問履歴のカードも同じ画面へ移した（API の権限も `menu.settings_retrieval` に変えた）。
 - **回答フローの進捗**: 回答フローの各工程（`rag_engine.generation.execution_record._execution_step`。質問の理解・文書検索（1回目）など）の開始と終了を、`answer` の中の入れ子の工程として進捗（SSE の `stage`）へ流す。工程の名前は `answer_step:<工程名>` で、画面の進捗と時間切れの文言は工程名をそのまま出す（`ANSWER_STEP_STAGE_PREFIX`。frontend の `answer-progress.ts` と同じ）。
-- **固定の同義語 14 組**（`query_transform.SYNONYM_GROUPS`）は既定の別名（aliases）へ移さない。会計・文書管理の一般語と英訳の組で、業務ごとの別名（業務ビューの用語・ルール、domain profile の `aliases`）と重なり、移すと回答の検索語が今の挙動から変わるため。#595 で `query_transform.py` ごと削除した。
+- **固定の同義語 14 組**（`query_transform.SYNONYM_GROUPS`）は既定の別名（aliases）へ移さない。会計・文書管理の一般語と英訳の組で、業務ごとの別名（業務ビューの用語・同義語、domain profile の `aliases`）と重なり、移すと回答の検索語が今の挙動から変わるため。#595 で `query_transform.py` ごと削除した。
 
 ## 親子階層（`hierarchical_parent_child`）の削除（#271）
 

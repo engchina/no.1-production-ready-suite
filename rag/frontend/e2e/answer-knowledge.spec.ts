@@ -7,7 +7,7 @@ import {
   selectBusinessView,
 } from "./_helpers";
 
-// rag_poc からの移植: 業務ビューの知識(ドメインキーワード / Approved FAQ / 用語・ルール)、
+// rag_poc からの移植: 業務ビューの知識(Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール)、
 // 検索前の類似問提示、回答の根拠パネル。
 
 const envelope = (data: unknown) => ({ data, error_messages: [], warning_messages: [] });
@@ -130,9 +130,14 @@ for (const viewport of [
 
     const panel = page.getByRole("heading", { name: "業務ビューの知識" });
     await expect(panel).toBeVisible();
-    // 先頭・既定のタブは Approved FAQ（#636）。
+    // 先頭・既定のタブは Approved FAQ（#636）。以降は回答フローで使う順（#682）。
     const tabs = page.getByRole("tablist", { name: "業務ビューの知識" }).getByRole("tab");
-    await expect(tabs).toHaveText(["Approved FAQ（類似問）", "ドメインキーワード", "用語・ルール"]);
+    await expect(tabs).toHaveText([
+      "Approved FAQ（類似問）",
+      "用語・同義語",
+      "ドメインキーワード",
+      "回答ルール",
+    ]);
     await expect(page.getByRole("tab", { name: "Approved FAQ（類似問）" })).toHaveAttribute(
       "aria-selected",
       "true"
@@ -146,19 +151,22 @@ for (const viewport of [
     await page.getByRole("button", { name: "伝票区分" }).click();
     await expect(page.getByLabel("登録キーワード（1 行に 1 語）")).toHaveValue("受注番号\n伝票区分");
 
-    await page.getByRole("tab", { name: "用語・ルール" }).click();
+    await page.getByRole("tab", { name: "用語・同義語" }).click();
     await expect(page.getByRole("rowheader", { name: "受注" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "照合テスト" })).toBeVisible();
-    // 用語・ルールは行のクリック（キーボードは名前のボタン）でフォームへ読み込み、選んだ行を aria-current で示す（#147）。
+    // 種類の選択欄は無く、タブの種類だけを扱う（#682）。
+    await expect(page.getByRole("heading", { name: "用語・同義語を追加" })).toBeVisible();
+    await expect(page.locator("#runtime-knowledge-kind")).toHaveCount(0);
+    // 用語・同義語は行のクリック（キーボードは名前のボタン）でフォームへ読み込み、選んだ行を aria-current で示す（#147）。
     const termRow = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: "受注" }) });
     await termRow.getByText("オーダー").click();
     await expect(termRow).toHaveAttribute("aria-current", "true");
     await expect(page.getByRole("heading", { name: "編集中: 受注" })).toBeVisible();
-    await expect(page.getByLabel("別名（1 行に 1 つ）")).toHaveValue("オーダー");
+    await expect(page.getByLabel("同義語（1 行に 1 つ）")).toHaveValue("オーダー");
     await expect(page.getByRole("button", { name: "受注 を編集" })).toBeVisible();
     // 削除は確認ダイアログを通す（キャンセルでは送らない）。
     await page.getByRole("button", { name: "削除", exact: true }).click();
-    const deleteDialog = page.getByRole("alertdialog", { name: "この用語・ルールを削除しますか？" });
+    const deleteDialog = page.getByRole("alertdialog", { name: "この用語・同義語を削除しますか？" });
     await expect(deleteDialog).toBeVisible();
     await deleteDialog.getByRole("button", { name: "キャンセル" }).click();
     await expect(deleteDialog).toHaveCount(0);
@@ -363,9 +371,9 @@ async function mockAnswerStream(page: Page) {
   );
 }
 
-// #540 / #541: FAQ の追加と用語・ルールの保存は、押せる状態のまま未入力を欄の直下に出す。
+// #540 / #541: FAQ の追加と回答ルールの保存は、押せる状態のまま未入力を欄の直下に出す。
 // ルールは backend と同じく「ルール ID」「ルール名」「ルール内容」が必須。
-test("FAQ の追加と用語・ルールの保存は、未入力を欄の下に出す", async ({ page }) => {
+test("FAQ の追加と回答ルールの保存は、未入力を欄の下に出す", async ({ page }) => {
   await mockCommon(page);
   await mockBusinessViewApi(page);
   const writes: string[] = [];
@@ -384,14 +392,13 @@ test("FAQ の追加と用語・ルールの保存は、未入力を欄の下に�
   await expect(page.locator("#approved-faq-answer")).toHaveAccessibleDescription(/回答を入力してください。/);
   await expect(page.locator("#approved-faq-question")).toBeFocused();
 
-  await page.getByRole("tab", { name: "用語・ルール" }).click();
-  await page.locator("#runtime-knowledge-kind").click();
-  await page.getByRole("option", { name: "ルール" }).click();
+  await page.getByRole("tab", { name: "回答ルール" }).click();
+  await expect(page.getByRole("heading", { name: "回答ルールを追加" })).toBeVisible();
   await expect(page.locator('label[for="runtime-knowledge-title"]')).toContainText("必須");
   await expect(page.locator('label[for="runtime-knowledge-content"]')).toContainText("必須");
-  // ヘッダーの「保存」（業務ビューの設定。#618）と区別し、用語・ルールのタブの中の保存を押す。
+  // ヘッダーの「保存」（業務ビューの設定。#618）と区別し、回答ルールのタブの中の保存を押す。
   await page
-    .getByRole("tabpanel", { name: "用語・ルール" })
+    .getByRole("tabpanel", { name: "回答ルール" })
     .getByRole("button", { name: "保存", exact: true })
     .click();
   await expect(page.locator("#runtime-knowledge-name")).toHaveAccessibleDescription(/ルール ID を入力してください。/);
