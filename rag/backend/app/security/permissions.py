@@ -341,6 +341,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", f"{_BV}/approved-faq/import"): _any(MENU_BUSINESS_VIEWS),
     # 回答前に類似の承認済み FAQ を提示する（読み取り）。
     ("POST", f"{_BV}/approved-faq/suggest"): _any(MENU_SEARCH, MENU_CHAT, MENU_BUSINESS_VIEWS),
+    # 類似問の提示のオン / オフ（#684）。
+    ("PUT", f"{_BV}/approved-faq/settings"): _any(MENU_BUSINESS_VIEWS),
     ("GET", f"{_BV}/runtime-knowledge"): _any(MENU_BUSINESS_VIEWS),
     ("POST", f"{_BV}/runtime-knowledge/edit"): _any(MENU_BUSINESS_VIEWS),
     ("POST", f"{_BV}/runtime-knowledge/preview"): _any(MENU_BUSINESS_VIEWS),

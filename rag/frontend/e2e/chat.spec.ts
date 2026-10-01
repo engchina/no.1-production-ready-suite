@@ -396,7 +396,10 @@ test("送信開始後に永続化された質問を重複表示しない", async
   await detailRefreshed;
 
   const chat = page.getByRole("region", { name: "チャット" });
-  await expect(chat.getByText(userMessage.content, { exact: true })).toHaveCount(1);
+  // 会話名の見出し（最初の質問。#664）は数えず、メッセージだけを数える。
+  await expect(
+    chat.getByText(userMessage.content, { exact: true }).and(chat.locator(":not(h2)"))
+  ).toHaveCount(1);
 });
 
 const longJapaneseAnswer =
@@ -943,3 +946,71 @@ test("会話を選ばずに送信すると会話を作って回答する（#664�
   await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
   await expect(page.getByTestId("chat-conversation-title")).toHaveText("経費の上限は？");
 });
+
+const faqSuggestions = [1, 2, 3].map((index) => ({
+  id: `faq-${index}`,
+  question: `経費の上限について ${index}`,
+  matched_question: `経費の上限について ${index}`,
+  answer: `承認済みの回答 ${index}`,
+  score: 0.8 - index / 100,
+  direct: false,
+}));
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`近い承認済み FAQ があれば、類似問か「どれでもない」を選んでから回答する（#684） (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockChat(page);
+    const suggestQueries: Record<string, unknown>[] = [];
+    await page.route("**/api/business-views/*/approved-faq/suggest", async (route) => {
+      suggestQueries.push(route.request().postDataJSON() as Record<string, unknown>);
+      await route.fulfill({
+        json: { data: { suggestions: faqSuggestions }, error_messages: [], warning_messages: [] },
+      });
+    });
+    const streamBodies: Record<string, unknown>[] = [];
+    page.on("request", (request) => {
+      if (request.url().endsWith("/messages/stream")) {
+        streamBodies.push(request.postDataJSON() as Record<string, unknown>);
+      }
+    });
+
+    await page.goto("/chat");
+    await selectBusinessView(page, "経理アシスタント");
+    const composer = page.getByRole("textbox", { name: /メッセージを入力/ });
+    await composer.fill("経費の上限は？");
+    await page.getByRole("button", { name: "送信" }).click();
+
+    // 回答を作る前に、最大 3 件の類似問と「どれでもない」を出す。選ぶまで送らない（飛ばす操作は無い）。
+    const choice = page.getByTestId("chat-approved-faq-choice");
+    await expect(choice).toContainText("経費の上限は？");
+    await expect(choice.getByRole("button", { name: "この類似問で回答する" })).toHaveCount(3);
+    await expect(
+      choice.getByRole("button", { name: "どれでもない（類似問を使わずに回答する）" })
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "送信" })).toBeDisabled();
+    expect(suggestQueries).toEqual([{ query: "経費の上限は？", purpose: "chat" }]);
+    expect(streamBodies).toEqual([]);
+    await expectNoPageOverflow(page);
+
+    // 選んだ類似問の id を質問と一緒に送る。
+    await choice.getByRole("listitem").nth(1).getByRole("button").click();
+    await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
+    await expect(choice).toHaveCount(0);
+    expect(streamBodies[0]).toMatchObject({ content: "経費の上限は？", approved_faq_id: "faq-2" });
+
+    // 「どれでもない」は類似問を使わずに送る。
+    await composer.fill("交通費は？");
+    await page.getByRole("button", { name: "送信" }).click();
+    await page
+      .getByRole("button", { name: "どれでもない（類似問を使わずに回答する）" })
+      .click();
+    await expect.poll(() => streamBodies.length).toBe(2);
+    expect(streamBodies[1]).toMatchObject({ content: "交通費は？" });
+    expect(streamBodies[1]).not.toHaveProperty("approved_faq_id");
+  });
+}

@@ -33,6 +33,7 @@ from app.config import (
 )
 from app.db_degradation import load_or_degrade
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
+from app.rag.business_view_knowledge import find_approved_faq
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import new_trace_id
 from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgress
@@ -346,6 +347,8 @@ class PreparedChatTurn:
     query_guardrail: GuardrailResult
     history: list[ChatTurn]
     user_message: StoredMessage
+    # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答。#684)。
+    approved_faq: tuple[str, str] | None = None
 
 
 async def _prepare_chat_turn(
@@ -356,6 +359,15 @@ async def _prepare_chat_turn(
     settings: Settings,
 ) -> PreparedChatTurn:
     """業務ビューの設定を解決し、発話を検査して USER メッセージを保存する。"""
+    approved_faq: tuple[str, str] | None = None
+    if request.approved_faq_id:
+        record = await find_approved_faq(oracle, business_view_id, request.approved_faq_id)
+        if record is None:
+            raise HTTPException(
+                status_code=422,
+                detail="選んだ類似問が見つかりません。もう一度送信して選び直してください。",
+            )
+        approved_faq = (record.question, record.approved_answer)
     base_request = SearchRequest(
         query=request.content,
         top_k=request.top_k,
@@ -396,6 +408,7 @@ async def _prepare_chat_turn(
         query_guardrail=query_guardrail,
         history=history,
         user_message=user_message,
+        approved_faq=approved_faq,
     )
 
 
@@ -429,6 +442,7 @@ async def _generate_chat_answer(
             llm=llm,
             guardrails=turn.guardrails,
             answer_model_id=model_id or None,
+            approved_faq=turn.approved_faq,
         )
         result = await run_answer_with_timeout(
             lambda tracker: pipeline.run(

@@ -17,8 +17,10 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from rag_engine.knowledge.approved_faq import (
+    APPROVED_FAQ_APPROVED_STATUS,
     APPROVED_FAQ_IMPORT_MODES,
     DEFAULT_APPROVED_FAQ_DIRECT_MATCH_MIN_SCORE,
+    DEFAULT_APPROVED_FAQ_MIN_SCORE,
     DEFAULT_APPROVED_FAQ_SUGGESTION_LIMIT,
     ApprovedFaqImportRow,
     ApprovedFaqMutationResult,
@@ -157,6 +159,14 @@ class ApprovedFaqMutation:
     deleted_count: int
 
 
+FAQ_ENABLED_KEY = "enabled"
+
+
+def approved_faq_enabled(payload: Mapping[str, object] | None) -> bool:
+    """回答の前に類似問を提示するか(業務ビューごと。未設定はオン。#684)。"""
+    return (payload or {}).get(FAQ_ENABLED_KEY) is not False
+
+
 async def load_approved_faq(
     store: BusinessViewKnowledgeStore, business_view_id: str
 ) -> list[ApprovedFaqRecord]:
@@ -166,6 +176,45 @@ async def load_approved_faq(
         return []
     with _faq_file(payload) as path:
         return load_approved_faq_records(path)
+
+
+async def load_approved_faq_enabled(
+    store: BusinessViewKnowledgeStore, business_view_id: str
+) -> bool:
+    payload = await store.get_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND)
+    return approved_faq_enabled(payload)
+
+
+async def save_approved_faq_enabled(
+    store: BusinessViewKnowledgeStore, business_view_id: str, enabled: bool
+) -> None:
+    """類似問の提示のオン / オフを保存する(FAQ の登録内容は変えない)。"""
+    payload = await store.get_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND)
+    with _faq_file(payload) as path:
+        # 未登録なら FAQ の標準形式(空)に設定だけを持たせる。
+        base = load_approved_faq_payload(path)
+    await store.save_business_view_knowledge(
+        business_view_id, APPROVED_FAQ_KIND, {**base, FAQ_ENABLED_KEY: enabled}
+    )
+
+
+async def find_approved_faq(
+    store: BusinessViewKnowledgeStore, business_view_id: str, faq_id: str
+) -> ApprovedFaqRecord | None:
+    """利用者が選んだ類似問を、業務ビューの承認済み FAQ から引き直す(提示がオンのときだけ)。"""
+    payload = await store.get_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND)
+    if payload is None or not approved_faq_enabled(payload):
+        return None
+    with _faq_file(payload) as path:
+        records = load_approved_faq_records(path)
+    return next(
+        (
+            record
+            for record in records
+            if record.id == faq_id and record.status == APPROVED_FAQ_APPROVED_STATUS
+        ),
+        None,
+    )
 
 
 async def mutate_approved_faq(
@@ -182,6 +231,9 @@ async def mutate_approved_faq(
         result = operation(path)
         updated = load_approved_faq_payload(path)
         records = load_approved_faq_records(path)
+    if payload is not None and FAQ_ENABLED_KEY in payload:
+        # FAQ の更新関数は設定を知らないので、類似問の提示のオン / オフを引き継ぐ。
+        updated = {**updated, FAQ_ENABLED_KEY: payload[FAQ_ENABLED_KEY]}
     await store.save_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND, updated)
     return ApprovedFaqMutation(
         records=records,
@@ -241,6 +293,7 @@ async def suggest_approved_faq(
     question: str,
     *,
     limit: int = DEFAULT_APPROVED_FAQ_SUGGESTION_LIMIT,
+    min_score: float | None = None,
     embed: FaqEmbedder | None = None,
     embedding_model: str = "",
     embedding_dimensions: int = 1536,
@@ -252,7 +305,7 @@ async def suggest_approved_faq(
     embedding に失敗しても文字列照合で続ける。
     """
     payload = await store.get_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND)
-    if payload is None or not question.strip():
+    if payload is None or not question.strip() or not approved_faq_enabled(payload):
         return []
     with _faq_file(payload) as path:
         records = load_approved_faq_records(path)
@@ -281,6 +334,7 @@ async def suggest_approved_faq(
         semantic_index=semantic_index,
         semantic_query_embedding=query_embedding,
         limit=limit,
+        min_score=DEFAULT_APPROVED_FAQ_MIN_SCORE if min_score is None else min_score,
     )
 
 

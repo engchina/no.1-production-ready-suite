@@ -695,6 +695,15 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "Approved FAQ(類似問)の照合に embedding の意味類似度を加える(rag_poc と同じ既定 ON)。"
         ),
     )
+    rag_approved_faq_chat_min_score: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "チャットで類似問を提示する一致度の下限(0〜1。#684)。低いと弱い候補が毎回出て、"
+            "利用者に毎回「どれでもない」を選ばせることになる。"
+        ),
+    )
     # 回答は rag_poc の根拠付き回答(質問ルーティング / CRAG / 生成 + 監査ラウンド)だけ
     # にした(#594)。回答エンジンの選択(旧 RAG_ANSWER_ENGINE)は読まない。
     rag_answer_vision_enabled: bool = Field(
