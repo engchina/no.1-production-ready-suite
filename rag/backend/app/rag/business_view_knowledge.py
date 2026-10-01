@@ -61,7 +61,11 @@ from rag_engine.knowledge.runtime_knowledge_management import (
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
 from app.rag.answer_engine import AnswerScope
-from app.schemas.business_view_knowledge import ClarificationAnswer, RuleClarification
+from app.schemas.business_view_knowledge import (
+    ClarificationAnswer,
+    ClarificationSection,
+    RuleClarification,
+)
 from app.schemas.search import PageRange, format_page_ranges
 
 logger = logging.getLogger(__name__)
@@ -525,18 +529,45 @@ def suggest_clarification(
     return None
 
 
-def resolve_clarification(
+SectionPages = Mapping[tuple[str, str], tuple[int | None, int | None]]
+
+
+def _answer_clarification(
     payload: Mapping[str, object], answer: ClarificationAnswer
+) -> RuleClarification | None:
+    rule = next(
+        (item for item in _rules(payload) if str(item.get("id", "")) == answer.rule_id), None
+    )
+    return rule_clarification(rule) if rule is not None else None
+
+
+def clarification_document_ids(
+    payload: Mapping[str, object], answer: ClarificationAnswer
+) -> set[str]:
+    """利用者が選んだ選択肢の章節がある文書(今のページを読み直す対象。#721)。"""
+    clarification = _answer_clarification(payload, answer)
+    if clarification is None:
+        return set()
+    return {
+        section.document_id
+        for option in clarification.options
+        if option.id in answer.option_ids
+        for section in option.sections
+    }
+
+
+def resolve_clarification(
+    payload: Mapping[str, object],
+    answer: ClarificationAnswer,
+    current_pages: SectionPages | None = None,
 ) -> tuple[AnswerScope, str] | None:
     """利用者の確認の回答を、回答の前提(AnswerScope)と page_ranges の値にする。
 
     ルール・選択肢は保存済みの payload から引き直す(画面が送った範囲をそのまま信じない)。
-    ルール・選択肢が見つからなければ None。
+    章節のページは ``current_pages``((文書 ID, 章節 ID) → 今のページ)を使い、章節が今は無い
+    ときだけ確認を保存したときのページを使う(#721)。ルール・選択肢が見つからなければ None。
     """
-    rule = next(
-        (item for item in _rules(payload) if str(item.get("id", "")) == answer.rule_id), None
-    )
-    clarification = rule_clarification(rule) if rule is not None else None
+    clarification = _answer_clarification(payload, answer)
     if clarification is None:
         return None
     options = [option for option in clarification.options if option.id in answer.option_ids]
@@ -547,7 +578,15 @@ def resolve_clarification(
     other = answer.other_text.strip() if clarification.allow_other else ""
     if not options and not other:
         return None
-    sections = [section for option in options for section in option.sections]
+    pages = current_pages or {}
+
+    def current(section: ClarificationSection) -> ClarificationSection:
+        found = pages.get((section.document_id, section.section_id))
+        if found is None:
+            return section
+        return section.model_copy(update={"page_start": found[0], "page_end": found[1]})
+
+    sections = [current(section) for option in options for section in option.sections]
     labels = [
         f"「{section.document_name or section.document_id}」の「{section.title}」"
         + (_pages_label(section.page_start, section.page_end))

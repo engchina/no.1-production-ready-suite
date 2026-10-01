@@ -2671,7 +2671,8 @@ class OracleClient:
         if isinstance(sections, str):
             sections = json.loads(sections)
         return {
-            "sections": sections if isinstance(sections, list) else [],
+            # 章節の一覧(古い形)か、{sections, removed_source_ids}(#721)。
+            "sections": sections if isinstance(sections, list | dict) else [],
             "revision": int(cast(int, row.get("revision") or 1)),
             "updated_at": row.get("updated_at"),
         }
@@ -2679,7 +2680,7 @@ class OracleClient:
     async def save_document_sections(
         self,
         document_id: str,
-        sections: Sequence[Mapping[str, object]],
+        sections: Mapping[str, object],
         *,
         base_revision: int | None,
     ) -> int:
@@ -2688,7 +2689,7 @@ class OracleClient:
         ``base_revision`` は読み込んだときの revision(未保存なら None)。保存済みの revision と
         違えば ``DocumentSectionsConflictError``(読み込んだ後にほかの人が保存した)。
         """
-        binds = {"document_id": document_id, "sections_json": _json_bind(list(sections))}
+        binds = {"document_id": document_id, "sections_json": _json_bind(dict(sections))}
 
         def operation(connection: OracleConnectionProtocol) -> int:
             row = _fetch_one(

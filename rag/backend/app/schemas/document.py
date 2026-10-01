@@ -657,6 +657,8 @@ class DocumentSection(BaseModel):
     source_section_id: str | None = Field(default=None, max_length=64)
     # 抽出の章節の名前・ページを人が変えたか。変えていなければ抽出のやり直しに合わせる。
     edited: bool = False
+    # 人が修正した後の抽出のやり直しで、新しく足した章節(保存すると外れる。#721)。
+    added_from_extraction: bool = False
 
     @field_validator("title")
     @classmethod
