@@ -10,7 +10,7 @@ import {
   StatusBadge,
   Switch,
 } from "@engchina/production-ready-ui";
-import { ListChecks, RotateCcw, Save, Sparkles } from "lucide-react";
+import { ListChecks, ListTree, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
@@ -25,6 +25,7 @@ import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
 
 import { AnswerPromptPanel } from "./AnswerPromptEditor";
 import { ExtractionFieldsEditor } from "./ExtractionFieldsEditor";
+import { SectionRulesEditor } from "./SectionRulesEditor";
 
 type PostParseField = "vision_enabled" | "field_extraction_enabled" | "navigation_summary_enabled";
 type PostParseForm = Record<PostParseField, boolean>;
@@ -147,7 +148,14 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
         </Disclosure>
       </>
     ),
-    navigation_summary_enabled: null,
+    // 章節の抽出規則（#715）。章節ナビゲーションの章節を作る規則で、要約の有無とは別に設定する。
+    navigation_summary_enabled: (
+      <div id={SETTINGS_ANCHORS.sectionRules} className="scroll-mt-4">
+        <Disclosure summary={t("sectionRules.title")} icon={ListTree} surface="sunken">
+          <SectionRulesEditor />
+        </Disclosure>
+      </div>
+    ),
   };
 
   return (

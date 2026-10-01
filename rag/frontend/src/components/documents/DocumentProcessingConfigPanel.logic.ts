@@ -27,7 +27,8 @@ type SelectConfigField =
   | "preprocess_profile"
   | "parser_adapter_backend"
   | "chunking_strategy"
-  | "graph_profile";
+  | "graph_profile"
+  | "section_rules_mode";
 
 type BooleanConfigField =
   | "auto_parse_after_preprocess_enabled"
@@ -107,6 +108,17 @@ export const RECIPE_CONFIG_ITEMS = [
     globalSettings: {
       route: APP_ROUTES.settingsParserAdapters,
       anchor: SETTINGS_ANCHORS.navigationSummary,
+    },
+  },
+  // 章節の抽出規則（#715）。取込の結果は変えず、章節ナビゲーションの章節だけに当てる。
+  {
+    field: "section_rules_mode",
+    kind: "select",
+    label: "documents.processingConfig.sectionRules",
+    phase: "EXTRACT",
+    globalSettings: {
+      route: APP_ROUTES.settingsParserAdapters,
+      anchor: SETTINGS_ANCHORS.sectionRules,
     },
   },
   {

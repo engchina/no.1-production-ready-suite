@@ -18,6 +18,7 @@ describe("選択中レシピの設定の項目と並び順", () => {
       "図・画像を AI で読み取る",
       "メタデータ/項目抽出",
       "ナビゲーション要約(章節木)",
+      "章節の抽出規則",
       "抽出後に Chunk 作成へ進む",
       "文書分割",
       "文脈ヘッダを検索対象へ追加",
@@ -61,7 +62,7 @@ describe("選択中レシピの設定の項目と並び順", () => {
 
 // #528: 「グローバル設定に従う」の各行から、その全体の既定を変える画面へ移動する。
 describe("グローバル設定を開くリンク", () => {
-  it("11 項目それぞれに、全体の既定を変える画面がある", () => {
+  it("12 項目それぞれに、全体の既定を変える画面がある", () => {
     expect(
       Object.fromEntries(RECIPE_CONFIG_ITEMS.map((item) => [item.field, globalSettingsHref(item)]))
     ).toEqual({
@@ -71,6 +72,7 @@ describe("グローバル設定を開くリンク", () => {
       vision_enabled: "/settings/parser-adapters#post-parse-vision",
       field_extraction_enabled: "/settings/parser-adapters#post-parse-field-extraction",
       navigation_summary_enabled: "/settings/parser-adapters#post-parse-navigation-summary",
+      section_rules_mode: "/settings/parser-adapters#post-parse-section-rules",
       auto_chunk_after_extract_enabled: "/settings/pipeline#pipeline-gate-auto-chunk",
       chunking_strategy: "/settings/chunking",
       chunk_context_header_enabled: "/settings/chunking",

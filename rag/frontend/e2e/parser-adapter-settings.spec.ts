@@ -376,6 +376,128 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
+// #715: 章節の抽出規則（方式・独自の規則・プレビュー）。
+async function mockSectionRules(page: Page) {
+  const state: { mode: string; rules: unknown[]; patches: unknown[]; previews: unknown[] } = {
+    mode: "parser",
+    rules: [],
+    patches: [],
+    previews: [],
+  };
+  const presets = {
+    legal: [{ name: "章", pattern: "^第[0-9]+章", level: 2, enabled: true }],
+    official: [{ name: "第1", pattern: "^第[0-9]+(\\s|$)", level: 1, enabled: true }],
+    numbered: [{ name: "1.", pattern: "^[0-9]+\\.\\s", level: 1, enabled: true }],
+  };
+  const envelope = () => ({
+    data: { mode: state.mode, rules: state.rules, presets },
+    error_messages: [],
+    warning_messages: [],
+  });
+  await page.route("**/api/settings/section-rules", async (route) => {
+    if (route.request().method() === "PATCH") {
+      const body = route.request().postDataJSON() as { mode: string; rules: unknown[] };
+      state.patches.push(body);
+      state.mode = body.mode;
+      state.rules = body.rules;
+    }
+    await route.fulfill({ json: envelope() });
+  });
+  await page.route("**/api/documents?**", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          items: [{ id: "doc-1", file_name: "経費規程.pdf" }],
+          total: 1,
+          limit: 50,
+          offset: 0,
+          has_next: false,
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    })
+  );
+  await page.route("**/api/documents/doc-1/sections/preview", async (route) => {
+    state.previews.push(route.request().postDataJSON());
+    await route.fulfill({
+      json: {
+        data: {
+          document_id: "doc-1",
+          source: "extraction",
+          rules_mode: "custom",
+          sections: [
+            { id: "r1", title: "第1章 総則", level: 1, page_start: 1, page_end: 2, origin: "extraction", source_section_id: "r1", edited: false },
+            { id: "r2", title: "第1条 目的", level: 2, page_start: 2, page_end: 2, origin: "extraction", source_section_id: "r2", edited: false },
+          ],
+          extraction_section_count: 2,
+          page_count: 3,
+          revision: null,
+          updated_at: null,
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  return state;
+}
+
+test("章節の抽出規則を独自の規則にして保存し、見本の文書でプレビューできる", async ({ page }) => {
+  await mockParserAdaptersWithPostParse(page, {
+    vision_enabled: false,
+    field_extraction_enabled: false,
+    navigation_summary_enabled: false,
+  });
+  await mockExtractionFields(page);
+  const state = await mockSectionRules(page);
+
+  await page.goto("/settings/parser-adapters#post-parse-section-rules");
+  await expect(page.locator("#post-parse-section-rules")).toBeInViewport();
+  await page.getByText("章節の抽出規則", { exact: true }).click();
+  const editor = page.getByTestId("section-rules-editor");
+  await expect(editor).toContainText("解析エンジンが見出しと判定した行から章節を作ります");
+
+  // プリセット（法令）を独自の規則として編集する。
+  await editor.getByRole("combobox", { name: "方式" }).click();
+  await page.getByRole("option", { name: "法令（編・章・節・款・目・条）" }).click();
+  await expect(editor).toContainText("^第[0-9]+章");
+  await editor.getByRole("button", { name: "このプリセットを独自の規則として編集" }).click();
+  await expect(editor.getByRole("textbox", { name: "正規表現" })).toHaveValue("^第[0-9]+章");
+
+  // 規則を追加し、読めない正規表現は保存の前に欄の下で知らせる。
+  await editor.getByRole("button", { name: "規則を追加" }).click();
+  await editor.getByRole("textbox", { name: "名前" }).nth(1).fill("条");
+  await editor.getByRole("textbox", { name: "正規表現" }).nth(1).fill("^第[0-9]+条(");
+  await editor.getByRole("button", { name: "保存" }).click();
+  await expect(editor.getByText("正規表現として読めません。括弧の対応などを確認してください。")).toBeVisible();
+  expect(state.patches).toHaveLength(0);
+  await editor.getByRole("textbox", { name: "正規表現" }).nth(1).fill("^第[0-9]+条");
+
+  // 見本の文書でプレビューする（保存しない）。
+  await editor.getByRole("button", { name: /^見本の文書/ }).click();
+  await page.getByRole("option", { name: "経費規程.pdf" }).click();
+  await editor.getByRole("button", { name: "プレビュー" }).click();
+  const preview = editor.getByTestId("section-rules-preview");
+  await expect(preview).toContainText("第1章 総則");
+  await expect(preview).toContainText("p.1–2");
+  expect(state.previews[0]).toMatchObject({ mode: "custom", rules: [{ name: "章" }, { name: "条" }] });
+  expect(state.patches).toHaveLength(0);
+
+  await editor.getByRole("button", { name: "保存" }).click();
+  await expect(page.getByText("章節の抽出規則を保存しました。").first()).toBeVisible();
+  expect(state.patches).toEqual([
+    {
+      mode: "custom",
+      rules: [
+        { name: "章", pattern: "^第[0-9]+章", level: 2, enabled: true },
+        { name: "条", pattern: "^第[0-9]+条", level: 1, enabled: true },
+      ],
+    },
+  ]);
+  await expectNoHorizontalOverflow(page);
+});
+
 test("図・画像の読み取りプロンプトは Vision の項目の中で編集できる", async ({ page }) => {
   // 読み取りの指示は全体で 1 つ。Vision の全体の既定を無効にしていても編集できる(#497 / #528)。
   await mockParserAdaptersWithPostParse(page, {

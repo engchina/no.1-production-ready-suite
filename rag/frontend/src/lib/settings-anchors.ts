@@ -7,6 +7,7 @@ export const SETTINGS_ANCHORS = {
   vision: "post-parse-vision",
   fieldExtraction: "post-parse-field-extraction",
   navigationSummary: "post-parse-navigation-summary",
+  sectionRules: "post-parse-section-rules",
   /** 設定の概要 >「取込の流れと全体の既定」 */
   pipelineFlow: "pipeline-recipe-defaults",
   /** 設定の概要 > 工程の間の自動進行のスイッチ */

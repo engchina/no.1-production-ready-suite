@@ -25,6 +25,7 @@ describe("設定の概要の取込の流れ", () => {
           "図・画像を AI で読み取る",
           "メタデータ/項目抽出",
           "ナビゲーション要約(章節木)",
+          "章節の抽出規則",
         ],
         gate: "抽出後に Chunk 作成へ進む",
       },
@@ -37,7 +38,7 @@ describe("設定の概要の取込の流れ", () => {
     ]);
   });
 
-  it("つなげると 11 項目の処理順に戻り、ゲートは 3 つ", () => {
+  it("つなげると 12 項目の処理順に戻り、ゲートは 3 つ", () => {
     const groups = recipeConfigGroups();
     const flattened = groups.flatMap((group) => {
       const { items, gate } = splitGateItems(group.items);
@@ -46,7 +47,7 @@ describe("設定の概要の取込の流れ", () => {
     expect(flattened.map((item) => item.field)).toEqual(
       groups.flatMap((group) => group.items.map((item) => item.field))
     );
-    expect(flattened).toHaveLength(11);
+    expect(flattened).toHaveLength(12);
     expect(flattened.filter(isAutoAdvanceItem).map((item) => item.field)).toEqual([
       "auto_parse_after_preprocess_enabled",
       "auto_chunk_after_extract_enabled",

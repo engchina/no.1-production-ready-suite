@@ -6,6 +6,7 @@ import type {
   GraphProfileName,
   ParserAdapterBackend,
   PreprocessProfileName,
+  SectionRulesMode,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import { parserBackendLabel } from "@/lib/source-profile-labels";
@@ -67,6 +68,11 @@ export const GRAPH_OPTIONS: SelectFieldOption<GraphProfileName>[] = GRAPH_VALUES
   (value) => ({ value, label: t(`settings.graph.profile.${value}` as I18nKey) })
 );
 
+export const SECTION_RULES_VALUES = ["parser", "legal", "official", "numbered", "custom"] as const;
+export const SECTION_RULES_OPTIONS: SelectFieldOption<SectionRulesMode>[] = SECTION_RULES_VALUES.map(
+  (value) => ({ value, label: t(`sectionRules.mode.${value}` as I18nKey) })
+);
+
 export function boolLabel(value: boolean | null) {
   if (value === null) return "—";
   return t(value ? "knowledgeBases.adapter.bool.enabled" : "knowledgeBases.adapter.bool.disabled");
@@ -96,6 +102,8 @@ export function recipeConfigValueLabel(item: RecipeConfigItem, effective: Docume
       return optionLabel(effective.chunking_strategy, CHUNKING_OPTIONS);
     case "graph_profile":
       return optionLabel(effective.graph_profile, GRAPH_OPTIONS);
+    case "section_rules_mode":
+      return optionLabel(effective.section_rules_mode ?? null, SECTION_RULES_OPTIONS);
     default:
       return boolLabel(effective[item.field] ?? null);
   }

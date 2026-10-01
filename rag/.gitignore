@@ -170,6 +170,7 @@ backend/prompt-versions.json
 
 # Field extraction schema saved by the backend (schema-driven field extraction)
 backend/extraction-fields.json
+backend/section-rules.json
 
 # Spyder project settings
 .spyderproject
