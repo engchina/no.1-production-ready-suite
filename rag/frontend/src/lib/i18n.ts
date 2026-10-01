@@ -210,10 +210,10 @@ export const ja = {
   "settings.parserAdapters.backend.dots_ocr.description": "外部 Dots.OCR API を使用",
   "settings.parserAdapters.backend.oci_genai_vision": "OCI Generative AI (Vision)",
   "settings.parserAdapters.backend.oci_genai_vision.description":
-    "OCI Generative AI の Chat/Responses + Files API を Vision モデルで呼び文書ページを解析",
+    "OCI Generative AI の Chat/Responses + Files API を画像対応モデルで呼び文書ページを解析",
   // 後方互換エイリアス(旧称)。表示は oci_genai_vision に統一。
   "settings.parserAdapters.backend.enterprise_ai_vlm.description":
-    "OCI Generative AI の Chat/Responses + Files API を Vision モデルで呼び文書ページを解析",
+    "OCI Generative AI の Chat/Responses + Files API を画像対応モデルで呼び文書ページを解析",
   "settings.parserAdapters.backend.oci_document_understanding": "OCI Document Understanding",
   "settings.parserAdapters.backend.oci_document_understanding.description":
     "OCI Document Understanding の非同期 job で日本語 OCR/表抽出",
@@ -263,8 +263,8 @@ export const ja = {
     "文書解析の後に、次の順で処理します。ここで選ぶのは全体の既定です。文書のレシピで上書きしていない文書に、次の取込から使います。",
   "settings.parserAdapters.postParse.step": "{index}. {name}",
   "settings.parserAdapters.postParse.vision.hint":
-    "解析エンジンに関係なく、解析の後に図や画像を含む表を既定の Vision モデルで説明し、検索できる本文にします。画像 1 枚ごとに Vision モデルの呼び出しと時間がかかります。",
-  "settings.parserAdapters.postParse.vision.model": "既定の Vision モデルは、モデル設定で選びます。",
+    "解析エンジンに関係なく、解析の後に図や画像を含む表を既定の画像対応モデルで説明し、検索できる本文にします。画像 1 枚ごとに画像対応モデルの呼び出しと時間がかかります。",
+  "settings.parserAdapters.postParse.vision.model": "既定の画像対応モデルは、モデル設定で選びます。",
   "settings.parserAdapters.postParse.vision.openModel": "モデル設定を開く",
   "settings.parserAdapters.postParse.vision.prompt": "図・画像の読み取りプロンプト",
   "settings.parserAdapters.postParse.fieldExtraction.hint":
@@ -517,7 +517,7 @@ export const ja = {
   "settings.services.gpuNote":
     "GPU 構成(本番の配備には含めません。開発環境で rag/scripts/rag-services.sh install --gpu で登録します)。",
   "settings.services.ociNote":
-    "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。「縮退」は OCI 設定不足が原因です — Vision は「システム設定 › モデル」、Document Understanding は「OCI 認証」+「Object Storage」で設定すると稼働中になります。",
+    "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。「縮退」は OCI 設定不足が原因です — 画像対応モデルは「システム設定 › モデル」、Document Understanding は「OCI 認証」+「Object Storage」で設定すると稼働中になります。",
   "settings.services.status.running": "稼働中",
   "settings.services.status.degraded": "縮退",
   "settings.services.status.starting":
@@ -1272,9 +1272,9 @@ export const ja = {
   "knowledgeBases.adapter.field.chunkingStrategy": "文書分割",
   "knowledgeBases.adapter.field.graphProfile": "関係情報の構築",
   "knowledgeBases.adapter.field.fieldExtraction": "メタデータ/項目抽出",
-  "knowledgeBases.adapter.field.vision": "図・画像を AI で読み取る（Vision）",
+  "knowledgeBases.adapter.field.vision": "図・画像を AI で読み取る",
   "knowledgeBases.adapter.field.vision.hint":
-    "解析の後に、図や画像を含む表を既定の Vision モデルで説明し、検索できる本文にします。どの解析エンジンでも使えます。画像 1 枚ごとに Vision モデルの呼び出しと時間がかかります。",
+    "解析の後に、図や画像を含む表を既定の画像対応モデルで説明し、検索できる本文にします。どの解析エンジンでも使えます。画像 1 枚ごとに画像対応モデルの呼び出しと時間がかかります。",
   "knowledgeBases.adapter.field.navigationSummary": "ナビゲーション要約(章節木)",
   "knowledgeBases.adapter.field.autoParseAfterPreprocess": "ファイル準備後に抽出へ進む",
   "knowledgeBases.adapter.field.autoChunkAfterExtract": "抽出後に Chunk 作成へ進む",
@@ -1551,7 +1551,7 @@ export const ja = {
   "flow.extraction.navigation.title": "章節ナビゲーション",
   "flow.extraction.assets.title": "図表の要約",
   "flow.extraction.fields.title": "抽出項目",
-  "flow.extraction.vision.details": "Vision の読み取り内容",
+  "flow.extraction.vision.details": "画像の読み取り内容",
   "flow.extraction.vision.cropAlt": "解析に使ったファイルから切り出した図・表の画像",
   "flow.extraction.vision.excludedReason": "装飾として検索対象外: {reason}",
   "flow.extraction.vision.field.visual_kind": "図の種類",
@@ -1573,7 +1573,7 @@ export const ja = {
   "flow.extraction.vision.field.condition_result_pairs": "条件と結果",
   "flow.extraction.vision.field.exception_or_cautions": "注意・例外",
   "flow.extraction.vision.field.correction_notes": "補正メモ",
-  "flow.extraction.vision.status": "Vision: {status}",
+  "flow.extraction.vision.status": "画像の読み取り: {status}",
   "flow.extraction.vision.succeeded": "説明済み",
   "flow.extraction.vision.failed": "失敗",
   "flow.extraction.vision.skipped": "対象外",
@@ -2042,7 +2042,7 @@ export const ja = {
   "search.answerDetails.externalData.title": "業務システムで確かめる値",
   "search.answerDetails.externalData.hint": "資料だけでは決まりません。実際のデータで確認してください。",
   "search.answerDetails.model.llm": "LLM",
-  "search.answerDetails.model.vision": "Vision（画像を見て回答）",
+  "search.answerDetails.model.vision": "画像対応モデル（画像を見て回答）",
   "search.answerDetails.model.embedding": "Embedding",
   "search.answerDetails.model.rerank": "Rerank",
   "search.run.card": "検索の工程と使ったモデル",
@@ -2114,7 +2114,7 @@ export const ja = {
   "settings.answerPrompts.vlm_answer.field": "テンプレート",
   "settings.answerPrompts.image_retrieval.title": "図・画像の読み取りプロンプト",
   "settings.answerPrompts.image_retrieval.description":
-    "「図・画像を AI で読み取る（Vision）」を使うとき（全体の既定か文書のレシピで有効にしたとき）、解析エンジンに関係なく画像ごとに Vision モデルへ渡す指示です。保存した内容は次に解析する文書から使い、解析済みの文書には再解析するまで反映しません。",
+    "「図・画像を AI で読み取る」を使うとき（全体の既定か文書のレシピで有効にしたとき）、解析エンジンに関係なく画像ごとに画像対応モデルへ渡す指示です。保存した内容は次に解析する文書から使い、解析済みの文書には再解析するまで反映しません。",
   "settings.answerPrompts.image_retrieval.field": "プロンプト",
   "settings.answerPrompts.default": "既定値",
   "settings.answerPrompts.customized": "編集済み（{value}）",

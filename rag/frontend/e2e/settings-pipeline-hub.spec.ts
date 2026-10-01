@@ -193,7 +193,7 @@ for (const scheme of ["light", "dark"] as const) {
 
     // 各項目から、その全体の既定を変える画面へ移動できる。
     await expect(
-      items.getByRole("link", { name: "図・画像を AI で読み取る（Vision） を設定する画面を開く" })
+      items.getByRole("link", { name: "図・画像を AI で読み取る を設定する画面を開く" })
     ).toHaveAttribute("href", "/settings/parser-adapters#post-parse-vision");
     await expect(
       items.getByRole("link", { name: "文脈ヘッダを検索対象へ追加 を設定する画面を開く" })

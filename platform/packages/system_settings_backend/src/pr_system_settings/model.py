@@ -670,19 +670,19 @@ def validate_default_models(enterprise: EnterpriseAiModelSettings) -> list[Model
         errors.append(
             ModelFieldError(
                 "default_vision_model_id",
-                "画像入力（Vision）に対応したモデルがありません。"
-                "登録モデルの 1 つ以上で「画像入力（Vision）に対応」をオンにしてください。",
+                "画像入力に対応したモデルがありません。"
+                "登録モデルの 1 つ以上で「画像入力に対応」をオンにしてください。",
             )
         )
     elif models and not vision:
         errors.append(
-            ModelFieldError("default_vision_model_id", "既定の Vision モデルを選択してください。")
+            ModelFieldError("default_vision_model_id", "既定の画像対応モデルを選択してください。")
         )
     elif vision and vision not in registered:
         errors.append(
             ModelFieldError(
                 "default_vision_model_id",
-                f"既定の Vision モデル「{vision}」は登録モデルにありません。"
+                f"既定の画像対応モデル「{vision}」は登録モデルにありません。"
                 "登録モデルから選び直してください。",
             )
         )
@@ -690,7 +690,7 @@ def validate_default_models(enterprise: EnterpriseAiModelSettings) -> list[Model
         errors.append(
             ModelFieldError(
                 "default_vision_model_id",
-                f"「{vision}」は画像入力（Vision）に対応していません。"
+                f"「{vision}」は画像入力に対応していません。"
                 "対応をオンにするか、別のモデルを選んでください。",
             )
         )
@@ -1329,7 +1329,7 @@ def _model_test_success_message(target_type: ModelSettingsTestTargetType, model_
         return f"Enterprise AI の回答生成モデル「{model_id}」から応答を取得しました。"
     if target_type == "enterprise_vision":
         return (
-            f"Enterprise AI の Vision モデル「{model_id}」から構造化抽出レスポンスを取得しました。"
+            f"Enterprise AI の画像対応モデル「{model_id}」から構造化抽出レスポンスを取得しました。"
         )
     if target_type == "embedding":
         return f"Embedding モデル「{model_id}」で 1536 次元ベクトルを取得しました。"

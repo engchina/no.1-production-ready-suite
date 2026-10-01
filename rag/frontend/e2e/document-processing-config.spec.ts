@@ -310,7 +310,7 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   await expect(panel.getByText("図表 VLM 要約")).toHaveCount(0);
   // 概要(読み取り専用)にも同じ見出しがあるので、編集欄(説明付き)に絞る。
   const visionRow = panel
-    .getByText("図・画像を AI で読み取る（Vision）", { exact: true })
+    .getByText("図・画像を AI で読み取る", { exact: true })
     .locator("../..")
     .filter({ hasText: "どの解析エンジンでも使えます" });
   await expect(visionRow).toBeVisible();
@@ -418,7 +418,7 @@ test("グローバル設定に従う行に、全体の既定を変える画面�
   // すべて継承のときは 11 行すべてにリンクがある。
   await expect(links).toHaveCount(PROCESSING_ORDER.length);
   await expect(
-    editor.getByRole("link", { name: "図・画像を AI で読み取る（Vision） のグローバル設定を開く" })
+    editor.getByRole("link", { name: "図・画像を AI で読み取る のグローバル設定を開く" })
   ).toHaveAttribute("href", "/settings/parser-adapters#post-parse-vision");
   await expect(
     editor.getByRole("link", { name: "関係情報の構築 のグローバル設定を開く" })

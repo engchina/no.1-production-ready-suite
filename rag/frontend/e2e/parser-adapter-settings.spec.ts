@@ -201,15 +201,15 @@ for (const scheme of ["light", "dark"] as const) {
 
     const card = page.getByRole("heading", { name: "解析後の処理", exact: true }).locator("xpath=ancestor::*[.//ol][1]");
     await expect(card.getByRole("heading", { level: 3 })).toHaveText([
-      "1. 図・画像を AI で読み取る（Vision）",
+      "1. 図・画像を AI で読み取る",
       "2. メタデータ/項目抽出",
       "3. ナビゲーション要約(章節木)",
     ]);
     await expect(card).toContainText("解析エンジンに関係なく");
-    await expect(card).toContainText("既定の Vision モデル");
+    await expect(card).toContainText("既定の画像対応モデル");
     await expect(card.getByRole("link", { name: "モデル設定を開く" })).toHaveAttribute("href", "/settings/model");
 
-    const vision = page.getByRole("switch", { name: "図・画像を AI で読み取る（Vision）" });
+    const vision = page.getByRole("switch", { name: "図・画像を AI で読み取る" });
     const fieldExtraction = page.getByRole("switch", { name: "メタデータ/項目抽出" });
     const navigation = page.getByRole("switch", { name: "ナビゲーション要約(章節木)" });
     await expect(vision).toHaveAttribute("aria-checked", "false");

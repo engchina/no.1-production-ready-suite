@@ -38,23 +38,23 @@ export const MODEL_MESSAGES = {
   "settings.model.defaults.description":
     "処理の種類ごとに使うモデルを登録モデルから選びます。",
   "settings.model.defaults.error.noVisionModel":
-    "画像入力（Vision）に対応したモデルがありません。登録モデルの 1 つ以上で「画像入力（Vision）に対応」をオンにしてください。",
+    "画像入力に対応したモデルがありません。登録モデルの 1 つ以上で「画像入力に対応」をオンにしてください。",
   "settings.model.defaults.error.textRemoved":
     "「{model}」は登録モデルにありません。登録モデルから選び直してください。",
   "settings.model.defaults.error.textRequired":
     "既定のテキストモデルを選択してください。",
   "settings.model.defaults.error.visionNotCapable":
-    "「{model}」は画像入力（Vision）に対応していません。対応をオンにするか、別のモデルを選んでください。",
+    "「{model}」は画像入力に対応していません。対応をオンにするか、別のモデルを選んでください。",
   "settings.model.defaults.error.visionRemoved":
     "「{model}」は登録モデルにありません。登録モデルから選び直してください。",
   "settings.model.defaults.error.visionRequired":
-    "既定の Vision モデルを選択してください。",
+    "既定の画像対応モデルを選択してください。",
   "settings.model.defaults.placeholder": "モデルを選んでください",
   "settings.model.defaults.text": "既定のテキストモデル",
   "settings.model.defaults.textHelp":
     "画像を扱わない処理（回答生成・要約・SQL 生成など）で使います。",
   "settings.model.defaults.title": "既定のモデル",
-  "settings.model.defaults.vision": "既定の Vision モデル",
+  "settings.model.defaults.vision": "既定の画像対応モデル",
   "settings.model.defaults.visionHelp":
     "画像を読み取る処理（文書解析の図・画像の読み取りなど）で使います。画像入力に対応したモデルだけを選べます。",
   "settings.model.actions.label": "{section} の操作",
@@ -70,7 +70,7 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.connection": "接続",
   "settings.model.enterprise.connectionOfModel": "モデル {number} の接続",
   "settings.model.enterprise.description":
-    "回答生成と Vision/OCR 解析に使う Enterprise AI の接続情報を設定します。プライマリ接続に加えてセカンダリ接続を設定でき、登録モデルごとに使う接続を選べます。",
+    "回答生成と画像・OCR の解析に使う Enterprise AI の接続情報を設定します。プライマリ接続に加えてセカンダリ接続を設定でき、登録モデルごとに使う接続を選べます。",
   "settings.model.enterprise.displayName": "表示名",
   "settings.model.enterprise.endpoint": "Endpoint URL",
   "settings.model.enterprise.endpointDocs":
@@ -80,7 +80,7 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.modelId": "モデル ID",
   "settings.model.enterprise.models": "登録モデル",
   "settings.model.enterprise.modelsDescription":
-    "回答生成と画像の読み取り（Vision）に使うモデルを登録し、画像入力に対応するかを指定します。",
+    "回答生成と画像の読み取りに使うモデルを登録し、画像入力に対応するかを指定します。画像入力に対応したモデルを、画面では「画像対応モデル」（Vision 対応のモデル）と呼びます。",
   "settings.model.enterprise.modelsSaved": "登録モデルを保存しました。",
   "settings.model.enterprise.project": "Project OCID",
   "settings.model.enterprise.projectHelp":
@@ -94,7 +94,7 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.saved":
     "OCI Enterprise AI 接続設定を保存しました。",
   "settings.model.enterprise.title": "OCI Enterprise AI",
-  "settings.model.enterprise.vision": "画像入力（Vision）に対応",
+  "settings.model.enterprise.vision": "画像入力に対応",
   "settings.model.genai.description":
     "埋め込みとリランクのみ Generative AI の Cohere モデルを使います。",
   "settings.model.genai.embeddingDim": "Embedding 次元",
