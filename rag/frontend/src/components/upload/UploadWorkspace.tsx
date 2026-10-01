@@ -34,14 +34,12 @@ import { Link } from "react-router-dom";
 import { Dropzone } from "./Dropzone";
 import { UploadSelectionList } from "./UploadSelectionList";
 import { UploadSendingState } from "./UploadProgress";
-import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
 import { KnowledgeBaseMultiSelect } from "@/components/knowledge-bases/KnowledgeBaseMultiSelect";
 import { useKnowledgeBaseSelectionHealth } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import { useAuth } from "@/components/security/AuthProvider";
 import { ErrorState } from "@/components/StateViews";
 import {
   type BatchUploadFailedItem,
-  type ParserSourceNotice,
   type UploadResult,
   type UploadStorageSettingsData,
 } from "@/lib/api";
@@ -68,7 +66,6 @@ import {
   sourcePreviewKey,
   sourceWarningKey,
 } from "@/lib/source-profile-labels";
-import { cn } from "@/lib/utils";
 
 /** アップロード → 取込 → RAG 索引化を1画面で進めるワークスペース。 */
 export function UploadWorkspace() {
@@ -208,21 +205,10 @@ export function UploadWorkspace() {
           </>
         ) : (
           <>
-            {/* 1 件だけ保存できて残りが失敗したときも、失敗したファイルを示す（#280）。 */}
-            {batchItems.length > 1 || batchFailedItems.length > 0 ? (
-              <BatchUploadSummary
-                items={batchItems}
-                failedItems={batchFailedItems}
-                selectedId={uploaded.id}
-                onSelect={setUploaded}
-              />
-            ) : null}
-            <UploadParserNotice notice={uploaded.parser_notice} />
-            <DocumentWorkspace
-              documentId={uploaded.id}
-              watchProcessing={uploaded.ingestion_started}
-              initialSourceProfile={uploaded.source_profile}
-            />
+            {/* アップロードの画面はアップロードだけを扱い、文書詳細を埋め込まない（#707）。取込は文書
+                インデックスか各文書の詳細から始める。 */}
+            <BatchUploadSummary items={batchItems} failedItems={batchFailedItems} />
+            <p className="text-sm text-fg-muted">{t("upload.result.nextHint")}</p>
             <div className="flex flex-wrap items-center gap-2">
               {batchFailedItems.length > 0 ? (
                 <Button
@@ -241,7 +227,7 @@ export function UploadWorkspace() {
               <Button variant="secondary" icon={Upload} onClick={reset}>
                 {t("upload.uploadAnother")}
               </Button>
-              <Link to={APP_ROUTES.fileList} className={buttonVariants({ variant: "ghost" })}>
+              <Link to={APP_ROUTES.fileList} className={buttonVariants({ variant: "secondary" })}>
                 <List size={16} aria-hidden />
                 {t("upload.openFileList")}
               </Link>
@@ -253,31 +239,12 @@ export function UploadWorkspace() {
   );
 }
 
-/**
- * 既定の文書解析エンジン（Docling）で扱えない形式の案内（#286）。取込は始めていないので warning で、
- * 対処（処理レシピで Unstructured を選ぶ・サービスを起動する）を backend の文言のまま出す。
- */
-function UploadParserNotice({ notice }: { notice: ParserSourceNotice | null | undefined }) {
-  if (!notice) return null;
-  return (
-    <Banner severity="warning" title={t("upload.parserNotice.title")}>
-      <p className="text-sm" data-testid="upload-parser-notice">
-        {notice.message}
-      </p>
-    </Banner>
-  );
-}
-
 function BatchUploadSummary({
   items,
   failedItems,
-  selectedId,
-  onSelect,
 }: {
   items: UploadResult[];
   failedItems: BatchUploadFailedItem[];
-  selectedId: string;
-  onSelect: (item: UploadResult) => void;
 }) {
   // アップロードは取込ジョブを作らない（取込は文書ごとに明示して始める）。
   // そのため「処理待ち」「スキップ」ではなく、保存できた件数と重複の可能性を示す（#280）。
@@ -299,14 +266,10 @@ function BatchUploadSummary({
         </div>
         <div className="bounded-scroll-area divide-y divide-border rounded-md border border-border bg-surface-sunken">
           {items.map((item) => {
-            const selected = item.id === selectedId;
             return (
               <div
                 key={item.id}
-                className={cn(
-                  "flex flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center sm:justify-between",
-                  selected && "bg-info-subtle"
-                )}
+                className="flex flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="flex min-w-0 items-start gap-2">
                   <FileText size={16} className="mt-0.5 shrink-0 text-accent-fg" aria-hidden />
@@ -326,15 +289,14 @@ function BatchUploadSummary({
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    variant={selected ? "secondary" : "ghost"}
-                    size="sm"
-                    onClick={() => onSelect(item)}
+                  <Link
+                    to={`${APP_ROUTES.documents}/${encodeURIComponent(item.id)}`}
+                    className={buttonVariants({ variant: "secondary", size: "sm" })}
                     aria-label={t("upload.batch.open", { name: item.file_name })}
                   >
-                    {selected ? t("upload.batch.current") : t("upload.batch.openShort")}
-                  </Button>
+                    <FileText size={14} aria-hidden />
+                    {t("upload.batch.openShort")}
+                  </Link>
                 </div>
               </div>
             );
