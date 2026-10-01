@@ -1,3 +1,4 @@
+import { WarningsBanner } from "@/components/WarningsBanner";
 import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
 import {
   Button,
@@ -1212,11 +1213,7 @@ export function ObjectDetailPanel({
         {actions}
       </div>
       {detail.comment && <p className="text-sm text-fg">{detail.comment}</p>}
-      {detail.warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
-          {warning}
-        </p>
-      ))}
+      <WarningsBanner warnings={detail.warnings} />
       <div>
         <p className="mb-1 text-sm font-semibold text-fg">{t("dbAdmin.detail.columns")}</p>
         <DbObjectColumnsTable

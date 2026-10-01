@@ -14,7 +14,6 @@ import {
   Route,
   Save,
   Send,
-  TriangleAlert,
   Wrench,
   X,
 } from "lucide-react";
@@ -1893,10 +1892,9 @@ function PhaseJobRow({
           <span className="text-xs text-fg-muted">{t("flow.jobs.inlineExecution")}</span>
         </div>
         {stepErrorMessage ? (
-          <div className="mt-2 rounded-md border border-danger-border bg-danger-subtle px-2.5 py-2 text-xs text-danger-fg">
-            <p className="font-medium text-danger-fg">{t("flow.jobs.errorReason")}</p>
-            <p className="mt-1 break-words text-danger-fg">{stepErrorMessage}</p>
-          </div>
+          <Banner severity="danger" title={t("flow.jobs.errorReason")} className="mt-2">
+            <FailureMessage message={stepErrorMessage} />
+          </Banner>
         ) : null}
       </li>
     );
@@ -1977,10 +1975,9 @@ function PhaseJobRow({
       ) : null}
       {progressSummary ? <IngestionProgressSummaryView summary={progressSummary} /> : null}
       {errorMessageText ? (
-        <div className="mt-2 rounded-md border border-danger-border bg-danger-subtle px-2.5 py-2 text-xs text-danger-fg">
-          <p className="font-medium text-danger-fg">{t("flow.jobs.errorReason")}</p>
-          <p className="mt-1 break-words text-danger-fg">{errorMessageText}</p>
-        </div>
+        <Banner severity="danger" title={t("flow.jobs.errorReason")} className="mt-2">
+          <FailureMessage message={errorMessageText} />
+        </Banner>
       ) : null}
     </li>
   );
@@ -2172,15 +2169,6 @@ function IngestionSegmentsPanel({
                 <span className="tnum text-xs text-fg-muted">
                   {segmentProgressLabel(segment)}
                 </span>
-                {segment.error_code ? (
-                  <span
-                    className="inline-flex items-center gap-1 rounded-full bg-warning-subtle px-2 py-0.5 text-xs text-warning-fg"
-                    title={t("flow.segments.errorCode", { code: segment.error_code })}
-                  >
-                    <TriangleAlert size={14} aria-hidden />
-                    {segment.error_code}
-                  </span>
-                ) : null}
               </div>
               <p className="mt-2 break-all text-xs text-fg-muted">
                 {parserBackendLabel(segment.parser_backend)}
@@ -2188,16 +2176,24 @@ function IngestionSegmentsPanel({
                   ? ` / ${segment.parser_profile}`
                   : ""}
               </p>
+              {/* 失敗は danger の Banner、エラーコードは「詳細」に畳む（失敗のときだけ開く。messaging.md §10）。 */}
               {segmentErrorMessage ? (
-                <div className="mt-2 space-y-1 rounded-md border border-danger-border bg-danger-subtle px-2.5 py-2 text-xs text-danger-fg">
-                  <p className="font-medium text-danger-fg">{t("flow.segments.errorReason")}</p>
-                  <p className="break-words text-danger-fg">{segmentErrorMessage}</p>
-                </div>
+                <Banner severity="danger" title={t("flow.segments.errorReason")} className="mt-2">
+                  <FailureMessage message={segmentErrorMessage} code={segment.error_code} />
+                </Banner>
               ) : null}
               {segment.status === "FAILED" ? (
                 <p className="mt-2 text-xs leading-relaxed text-fg-muted">
                   {t("flow.segments.errorRecovery")}
                 </p>
+              ) : null}
+              {/* 原因を上部の Banner に出した segment も、エラーコードは対処の後の「詳細」に残す。 */}
+              {!segmentErrorMessage && segment.error_code ? (
+                <ErrorCodeDetails
+                  code={segment.error_code}
+                  open={segment.status === "FAILED"}
+                  className="mt-1"
+                />
               ) : null}
             </li>
           );
@@ -3124,16 +3120,40 @@ function isSameIdSet(left: string[], right: string[]) {
  * 処理の失敗の本文（messaging.md §10。#705）。原因と対処を本文に出し、エラーコードなどの技術的な詳細は
  * 「詳細」に分ける（失敗なので開いて出す）。
  */
-function FailureMessage({ message }: { message: string }) {
-  const { message: text, code } = splitErrorCode(message);
+/**
+ * 失敗の本文（原因 + 対処）。本文の末尾の「エラーコード: …」と、別に渡したエラーコードは本文から分け、
+ * 「詳細」に出す（失敗なので開く。messaging.md §10.3）。
+ */
+function FailureMessage({ message, code: explicitCode }: { message: string; code?: string | null }) {
+  const { message: text, code: embeddedCode } = splitErrorCode(message);
+  const code = explicitCode || embeddedCode;
   return (
     <div className="space-y-2">
-      <p>{text}</p>
-      {code ? (
-        <Disclosure variant="plain" size="sm" summary={t("flow.error.details")} defaultOpen>
-          <p className="text-xs text-fg-muted">{t("flow.segments.errorCode", { code })}</p>
-        </Disclosure>
-      ) : null}
+      <p className="break-words">{text}</p>
+      {code ? <ErrorCodeDetails code={code} open /> : null}
     </div>
+  );
+}
+
+/** エラーコードを「詳細」（Disclosure）に畳んで出す。開くのは失敗のときだけ。 */
+function ErrorCodeDetails({
+  code,
+  open,
+  className,
+}: {
+  code: string;
+  open: boolean;
+  className?: string;
+}) {
+  return (
+    <Disclosure
+      variant="plain"
+      size="sm"
+      summary={t("flow.error.details")}
+      defaultOpen={open}
+      className={className}
+    >
+      <p className="break-all text-xs text-fg-muted">{t("flow.segments.errorCode", { code })}</p>
+    </Disclosure>
   );
 }

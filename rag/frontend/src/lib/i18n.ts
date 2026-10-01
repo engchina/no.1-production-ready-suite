@@ -791,7 +791,7 @@ export const ja = {
   "settings.database.systemTables.operation.migrated": "RAG システムテーブルを更新しました。",
   "settings.database.systemTables.operation.recreated": "RAG システムテーブルをすべて再作成しました。",
   "settings.database.systemTables.previousFailureLockDetail":
-    "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした (ORA-00054)。取込処理を停止してから、状態を再取得して再試行してください。",
+    "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。取込処理を停止してから、状態を再取得して再試行してください。",
   "settings.database.systemTables.error.recovery":
     "状態を再取得し、取込ジョブや Oracle のロック状態を確認して再試行してください。",
   "settings.database.systemTables.recreate.sectionDescription":
@@ -1374,6 +1374,8 @@ export const ja = {
   "upload.batch.duplicates": "重複の可能性",
   "upload.batch.failed": "失敗",
   "upload.batch.failedTitle": "一部のファイルをアップロードできませんでした",
+  "upload.batch.failedDetails": "詳細",
+  "upload.batch.failedStatusCode": "HTTP {status}",
   "upload.batch.open": "{name} の文書詳細を開く",
   "upload.batch.openShort": "文書詳細を開く",
   "upload.result.nextHint":

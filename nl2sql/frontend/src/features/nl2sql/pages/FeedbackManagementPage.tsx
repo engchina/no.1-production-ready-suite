@@ -43,6 +43,8 @@ import {
   RowTitleButton,
   FieldError,
   FieldLabel,
+  FormStatus,
+  type FeedbackTone,
   TextareaField,
   TextField,
 } from "@engchina/production-ready-ui";
@@ -102,6 +104,21 @@ type AppFeedbackFilters = {
   query?: string;
 };
 type AppFeedbackRefreshDirection = "reset" | "next" | "prev" | "current";
+/**
+ * 操作の結果（失敗・未実行・警告）を出す位置。起点の操作の直下に出し、ページ先頭へ送らない
+ * （messaging.md §10.1、#724）。ページ先頭の PageNotice は画面全体の読み込みの失敗だけにする。
+ * entries = Select AI feedback の「再読み込み」の下、entryDetail = 選んだ SQL の操作の下、
+ * vectorIndex / appFeedback / similarityIndex = 各タブの操作の行（FormActionBar の status）、
+ * appFeedbackList = 履歴の絞り込みの下。
+ */
+type ActionResultOrigin =
+  | "entries"
+  | "entryDetail"
+  | "vectorIndex"
+  | "appFeedbackList"
+  | "appFeedback"
+  | "similarityIndex";
+type ActionResult = { origin: ActionResultOrigin; tone: FeedbackTone; message: string } | null;
 
 const APP_FEEDBACK_PAGE_SIZE = 20;
 const DEFAULT_FEEDBACK_MANAGEMENT_VIEW: FeedbackManagementView = "appFeedback";
@@ -189,6 +206,11 @@ export function FeedbackManagementPage() {
   // 初回の読込は mount 時の effect で始まるため、最初から読込中にしておく。
   const [loading, setLoading] = useState("load");
   const [message, setMessage] = useState("");
+  const [actionResult, setActionResult] = useState<ActionResult>(null);
+  const showActionError = (origin: ActionResultOrigin, err: unknown, fallback: string) =>
+    setActionResult({ origin, tone: "danger", message: err instanceof Error ? err.message : fallback });
+  const actionResultFor = (origin: ActionResultOrigin) =>
+    actionResult?.origin === origin ? actionResult : null;
   const loadSequence = useRef(0);
   // 初回の読み込みを始めたか（render では ref の連番ではなく state を見る）。
   // 編集欄へ反映済みのフィードバック ID。render 中に比べるため state で持つ。
@@ -295,6 +317,7 @@ export function FeedbackManagementPage() {
     loadSequence.current = sequence;
     setLoading("load");
     setMessage("");
+    setActionResult(null);
     await requestData(sequence, announce);
   };
 
@@ -367,13 +390,13 @@ export function FeedbackManagementPage() {
     const trimmed = name.trim();
     if (!trimmed) return;
     setLoading("feedback");
-    setMessage("");
+    setActionResult(null);
     try {
       setFeedback(await fetchSelectAiFeedback(trimmed));
       setSelectedIndex(0);
       if (announce) toast.success(t("common.action.refreshed"));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.load"));
+      showActionError("entries", err, t("feedbackManagement.error.load"));
     } finally {
       setLoading("");
     }
@@ -388,7 +411,7 @@ export function FeedbackManagementPage() {
     // 条件を続けて変えたとき、遅れて返った古い条件の応答で新しい条件の一覧を上書きしない（#535）。
     const sequence = ++appFeedbackLoadSequence.current;
     setLoading("app-feedback-load");
-    setMessage("");
+    setActionResult(null);
     try {
       const data = await fetchAppFeedback(cursor, undefined, filters);
       if (sequence !== appFeedbackLoadSequence.current) return;
@@ -416,7 +439,7 @@ export function FeedbackManagementPage() {
       }
     } catch (err) {
       if (sequence !== appFeedbackLoadSequence.current) return;
-      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.load"));
+      showActionError("appFeedbackList", err, t("feedbackManagement.error.load"));
     } finally {
       if (sequence === appFeedbackLoadSequence.current) setLoading("");
     }
@@ -452,7 +475,7 @@ export function FeedbackManagementPage() {
     });
     if (!ok) return;
     setLoading("delete");
-    setMessage("");
+    setActionResult(null);
     try {
       const data = await apiPost<SelectAiFeedbackMutationData>("/api/nl2sql/select-ai/feedback/delete", {
         profile_name: profileName,
@@ -460,11 +483,11 @@ export function FeedbackManagementPage() {
       });
       const resultMessage = data.warnings.join(" ") || t("feedbackManagement.deleted");
       if (data.executed) toast.success(resultMessage);
-      else setMessage(resultMessage);
+      else setActionResult({ origin: "entryDetail", tone: "danger", message: resultMessage });
       setFeedback(await fetchSelectAiFeedback(profileName));
       setSelectedIndex(0);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.delete"));
+      showActionError("entryDetail", err, t("feedbackManagement.error.delete"));
     } finally {
       setLoading("");
     }
@@ -474,7 +497,7 @@ export function FeedbackManagementPage() {
     if (loading) return;
     if (!profileName.trim()) return;
     setLoading("vector-index");
-    setMessage("");
+    setActionResult(null);
     try {
       const data = await apiPost<SelectAiFeedbackMutationData>("/api/nl2sql/select-ai/feedback/vector-index", {
         profile_name: profileName,
@@ -483,11 +506,11 @@ export function FeedbackManagementPage() {
       });
       const resultMessage = data.warnings.join(" ") || t("feedbackManagement.index.updated");
       if (data.executed) toast.success(resultMessage);
-      else setMessage(resultMessage);
+      else setActionResult({ origin: "vectorIndex", tone: "danger", message: resultMessage });
       setFeedback(await fetchSelectAiFeedback(profileName));
       setSelectedIndex(0);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.update"));
+      showActionError("vectorIndex", err, t("feedbackManagement.error.update"));
     } finally {
       setLoading("");
     }
@@ -510,7 +533,7 @@ export function FeedbackManagementPage() {
     };
     setReviewErrors(nextErrors);
     if (nextErrors.adminContent || nextErrors.selectAiResponse) {
-      setMessage("");
+      setActionResult(null);
       const target = nextErrors.adminContent
         ? adminFeedbackContentRef.current
         : document.getElementById("app-feedback-select-ai-response");
@@ -518,7 +541,7 @@ export function FeedbackManagementPage() {
       return;
     }
     setLoading("app-feedback");
-    setMessage("");
+    setActionResult(null);
     try {
       const data = await apiPost<AdminFeedbackReviewData>("/api/nl2sql/feedback/admin-review", {
         history_id: selectedAppFeedback.id,
@@ -533,7 +556,8 @@ export function FeedbackManagementPage() {
       await refreshAppFeedback(feedbackCursor, "current");
       const publishWarnings = data.similar_history_publish?.warnings ?? [];
       if (publishWarnings.length > 0) {
-        setMessage(publishWarnings.join(" "));
+        // 保存は済んでいるので、類似履歴への公開の警告は warning で操作の行に出す。
+        setActionResult({ origin: "appFeedback", tone: "warning", message: publishWarnings.join(" ") });
       }
       const publishStatus = data.similar_history_publish?.status ?? "published";
       const publishedToSimilarHistory =
@@ -544,7 +568,11 @@ export function FeedbackManagementPage() {
           toast.success(t("feedbackManagement.appFeedback.adminSavedAndRegistered"));
           await refreshSelectAiFeedback(profileName);
         } else {
-          setMessage(selectAiMessage || t("feedbackManagement.appFeedback.selectAiRegistrationFailed"));
+          setActionResult({
+            origin: "appFeedback",
+            tone: "danger",
+            message: selectAiMessage || t("feedbackManagement.appFeedback.selectAiRegistrationFailed"),
+          });
         }
       } else {
         toast.success(
@@ -554,7 +582,7 @@ export function FeedbackManagementPage() {
         );
       }
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.appFeedback"));
+      showActionError("appFeedback", err, t("feedbackManagement.error.appFeedback"));
     } finally {
       setLoading("");
     }
@@ -571,7 +599,7 @@ export function FeedbackManagementPage() {
     });
     if (!ok) return;
     setLoading("app-feedback-clear");
-    setMessage("");
+    setActionResult(null);
     try {
       await apiDelete<FeedbackClearData>(`/api/nl2sql/feedback/${selectedAppFeedback.id}`);
       setSyncedAppFeedbackId(null);
@@ -580,7 +608,7 @@ export function FeedbackManagementPage() {
       await refreshAppFeedback(feedbackCursor, "current");
       toast.success(t("feedbackManagement.appFeedback.cleared"));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.appFeedback"));
+      showActionError("appFeedback", err, t("feedbackManagement.error.appFeedback"));
     } finally {
       setLoading("");
     }
@@ -590,14 +618,14 @@ export function FeedbackManagementPage() {
     if (loading) return;
     if (!feedbackConfig) return;
     setLoading("feedback-config");
-    setMessage("");
+    setActionResult(null);
     try {
       const nextConfig = await apiPatch<FeedbackSearchConfigData>("/api/nl2sql/feedback-config", feedbackConfig);
       setFeedbackConfig(nextConfig);
       setSavedFeedbackConfig(nextConfig);
       toast.success(t("feedbackManagement.similarityIndex.configSaved"));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.feedbackConfig"));
+      showActionError("similarityIndex", err, t("feedbackManagement.error.feedbackConfig"));
     } finally {
       setLoading("");
     }
@@ -824,6 +852,7 @@ export function FeedbackManagementPage() {
                 </dl>
               </section>
 
+              <ActionResultBanner result={actionResultFor("entries")} />
               <FeedbackWarnings warnings={feedback?.warnings ?? dbProfiles?.warnings ?? []} />
               {loading === "feedback" ? (
                 <ProcessingIndicator
@@ -862,6 +891,7 @@ export function FeedbackManagementPage() {
                       entry={selectedSelectAiFeedback}
                       profileName={feedback?.profile_name || profileName}
                       deleting={loading === "delete"}
+                      result={actionResultFor("entryDetail")}
                       onDelete={() => void deleteSelectedFeedback()}
                     />
                   )
@@ -922,6 +952,7 @@ export function FeedbackManagementPage() {
             <FormActionBar
               ariaLabel={t("feedbackManagement.index.actions")}
               testId="feedback-vector-index-actions"
+              status={<ActionResultStatus result={actionResultFor("vectorIndex")} />}
               primaryActions={[
                 {
                   id: "update",
@@ -1025,6 +1056,7 @@ export function FeedbackManagementPage() {
                   testId="app-feedback-load-processing"
                 />
               ) : null}
+              <ActionResultBanner result={actionResultFor("appFeedbackList")} />
               <div className="grid min-w-0 gap-2" aria-busy={loading === "app-feedback-load"}>
                 {appFeedbackItems.length > 0 ? (
                   appFeedbackItems.map((item) => (
@@ -1233,6 +1265,7 @@ export function FeedbackManagementPage() {
                   <FormActionBar
                     ariaLabel={t("feedbackManagement.appFeedback.actions")}
                     testId="feedback-app-actions"
+                    status={<ActionResultStatus result={actionResultFor("appFeedback")} />}
                     primaryActions={[
                       {
                         id: "save",
@@ -1325,7 +1358,9 @@ export function FeedbackManagementPage() {
               ariaLabel={t("feedbackManagement.similarityIndex.configActions")}
               testId="feedback-similarity-index-actions"
               status={
-                feedbackConfigDirty ? (
+                actionResultFor("similarityIndex") ? (
+                  <ActionResultStatus result={actionResultFor("similarityIndex")} />
+                ) : feedbackConfigDirty ? (
                   <p className="text-sm text-fg-muted">
                     {t("feedbackManagement.similarityIndex.configDirty")}
                   </p>
@@ -1377,6 +1412,18 @@ function ProfileSelect({
       className="min-w-0"
     />
   );
+}
+
+/** 一覧・詳細の操作の結果（失敗）。起点の操作の直下に Banner で出す（messaging.md §10.1 / §10.2）。 */
+function ActionResultBanner({ result }: { result: ActionResult }) {
+  if (!result) return null;
+  return <Banner severity={result.tone}>{result.message}</Banner>;
+}
+
+/** フォームの操作の行（FormActionBar の status）に出す操作の結果（messaging.md §3.3 / §10.2）。 */
+function ActionResultStatus({ result }: { result: ActionResult }) {
+  if (!result) return null;
+  return <FormStatus tone={result.tone} message={result.message} />;
 }
 
 function FeedbackWarnings({ warnings }: { warnings: string[] }) {
@@ -1489,11 +1536,13 @@ function FeedbackEntryDetail({
   entry,
   profileName,
   deleting,
+  result,
   onDelete,
 }: {
   entry: SelectAiFeedbackEntry | null;
   profileName: string;
   deleting: boolean;
+  result: ActionResult;
   onDelete: () => void;
 }) {
   const actions: EntityAction[] = entry
@@ -1530,6 +1579,7 @@ function FeedbackEntryDetail({
           ) : undefined
         }
       />
+      <ActionResultBanner result={result} />
 
       {entry ? (
         <>

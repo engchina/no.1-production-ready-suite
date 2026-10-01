@@ -442,13 +442,9 @@ export function GeneratedSqlSummary({
         <code>{displayedSql}</code>
       </pre>
       {result.fallback_reason && (
-        <div
-          className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm leading-6 text-warning-fg"
-          role="status"
-        >
-          <p className="font-medium">{t("nl2sql.result.fallbackTitle")}</p>
-          <p className="mt-1 [overflow-wrap:anywhere]">{result.fallback_reason}</p>
-        </div>
+        <Banner severity="warning" title={t("nl2sql.result.fallbackTitle")}>
+          <span className="[overflow-wrap:anywhere]">{result.fallback_reason}</span>
+        </Banner>
       )}
       <p className="text-sm leading-6 text-fg">{result.explanation}</p>
       <InterpretationArtifactPanel artifact={result.interpretation} profileId={profileId} />

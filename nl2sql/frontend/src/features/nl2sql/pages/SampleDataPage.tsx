@@ -4,6 +4,7 @@ import { useValuesChanged } from "@/lib/render-sync";
 import { Database, FileSpreadsheet, RefreshCw, Trash2 } from "lucide-react";
 
 import {
+  Banner,
   Button,
   toast,
   StatusBadge,
@@ -161,6 +162,8 @@ export function SampleDataPage() {
   const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
+  // 取込・削除の実行の失敗は実行のボタンの直下に出す（ページ先頭へ送らない。messaging.md §10.1、#724）。
+  const [executeError, setExecuteError] = useState("");
   const loadSequence = useRef(0);
   // dataset の切り替えで始めた読み込みの回数。取得は effect で行う。
   const [datasetLoadRequest, setDatasetLoadRequest] = useState(0);
@@ -331,7 +334,7 @@ export function SampleDataPage() {
     if (loading || !confirmationMatched || !sampleInfo) return;
     setSampleResult(null);
     setLoading("sample-import");
-    setMessage("");
+    setExecuteError("");
     try {
       const result = await apiPost<SampleDataMutationData>("/api/nl2sql/sample-data/import", {
         dataset,
@@ -343,7 +346,7 @@ export function SampleDataPage() {
       if (result.executed) await reloadSampleState();
       trackSchemaRefreshResult(result);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("dataTools.error.sample"));
+      setExecuteError(err instanceof Error ? err.message : t("dataTools.error.sample"));
     } finally {
       setLoading("");
     }
@@ -353,7 +356,7 @@ export function SampleDataPage() {
     if (loading || !confirmationMatched || !sampleInfo) return;
     setSampleResult(null);
     setLoading("sample-delete");
-    setMessage("");
+    setExecuteError("");
     try {
       const result = await apiPost<SampleDataMutationData>("/api/nl2sql/sample-data/delete", {
         dataset,
@@ -365,7 +368,7 @@ export function SampleDataPage() {
       if (result.executed) await reloadSampleState();
       trackSchemaRefreshResult(result);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("dataTools.error.sample"));
+      setExecuteError(err instanceof Error ? err.message : t("dataTools.error.sample"));
     } finally {
       setLoading("");
     }
@@ -449,6 +452,7 @@ export function SampleDataPage() {
               setSampleResult(null);
               setSampleConfirmation("");
               setMessage("");
+              setExecuteError("");
               setSchemaRefreshError("");
               setSchemaRefreshNeedsFull(false);
               setSchemaRefreshJobId("");
@@ -474,6 +478,7 @@ export function SampleDataPage() {
           onViewChange={(view) => {
             setActiveAction(view);
             setSampleResult(null);
+            setExecuteError("");
           }}
         />
 
@@ -554,6 +559,7 @@ export function SampleDataPage() {
                   testId="sample-data-processing"
                 />
               ) : null}
+              {executeError ? <Banner severity="danger">{executeError}</Banner> : null}
             </section>
           )}
 

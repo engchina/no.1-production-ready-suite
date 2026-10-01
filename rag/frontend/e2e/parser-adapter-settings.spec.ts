@@ -730,6 +730,11 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
 
   await card.getByRole("button", { name: "接続を確認" }).click();
   await expect(card.getByText("接続できました。")).toBeVisible();
+  // 結果はシステム設定と同じ結果パネル（所要時間・「詳細」）。成功なら「詳細」は閉じる（messaging.md §10。#723）。
+  const result = card.getByTestId("external-parser-test-result-dots_ocr");
+  await expect(result).toHaveAttribute("data-tone", "success");
+  await expect(result.getByText(/所要時間: \d+ ms/)).toBeVisible();
+  await expect(result.locator("details")).not.toHaveAttribute("open", "");
 
   await endpoint.fill("ftp://invalid.example.com");
   await page.getByRole("button", { name: "保存", exact: true }).click();
@@ -758,6 +763,10 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   await expect(
     page.getByText("設定した Model が接続先にありません。Model 名を確認してください。")
   ).toBeVisible();
+  // 失敗では「詳細」を開き、警告コードなどの技術的な値をそこに出す。
+  await expect(result).toHaveAttribute("data-tone", "danger");
+  await expect(result.locator("details")).toHaveAttribute("open", "");
+  await expect(result.getByText("external_parser_model_missing")).toBeVisible();
 
   await card.getByLabel("保存済み API key を削除").check();
   await page.getByRole("button", { name: "保存", exact: true }).click();

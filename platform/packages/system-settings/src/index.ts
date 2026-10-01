@@ -72,6 +72,16 @@ export {
   type OciValidationResult,
 } from "./oci/ociSettings";
 
+// テスト・接続確認の結果パネル（UX 契約 messaging.md §10。製品の接続テストも同じ部品で出す。#705）
+export {
+  SettingsTestResultPanel,
+  toSettingsTestResultDetails,
+  type SettingsTestResultDetail,
+  type SettingsTestResultPanelProps,
+  type SettingsTestResultTone,
+  type SettingsTestResultValue,
+} from "./oci/SettingsTestResultPanel";
+
 // モデル設定（#103）
 export { ModelSettingsPage, type ModelSettingsPageProps } from "./model/ModelSettingsPage";
 export { MODEL_MESSAGES, type ModelMessageKey } from "./model/messages";

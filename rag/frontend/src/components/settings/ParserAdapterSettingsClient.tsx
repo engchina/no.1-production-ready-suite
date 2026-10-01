@@ -12,12 +12,16 @@ import {
   ProcessingIndicator,
   TimedLoadingState,
   FormSkeleton,
+  StatusBadge,
   TextField,
 } from "@engchina/production-ready-ui";
+import {
+  SettingsTestResultPanel,
+  toSettingsTestResultDetails,
+  type SettingsTestResultTone,
+} from "@engchina/production-ready-system-settings";
 import { useMemo, useState } from "react";
 import {
-  AlertTriangle,
-  CheckCircle2,
   Plug,
   RotateCcw,
   Save,
@@ -35,6 +39,7 @@ import {
   type ExternalParserBackendName,
   type ExternalParserConnectionData,
   type ExternalParserConnectionStatus,
+  type ExternalParserConnectionStatusData,
   type ParserAdapterBackend,
   type ParserAdapterBackendName,
   type ParserAdapterSettingsData,
@@ -43,6 +48,7 @@ import {
   type ParserServiceBackendName,
   type ServiceProfile,
 } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -423,29 +429,10 @@ function OverviewCard({
                         <span className="mt-2 flex flex-wrap items-center gap-1.5">
                           {runtimeStatus ? <ServiceStatusBadge status={runtimeStatus} /> : null}
                           {service && !service.configured ? (
-                            <span className="inline-flex items-center gap-1 rounded-sm bg-warning-subtle px-1.5 py-0.5 text-xs font-medium text-warning-fg whitespace-nowrap">
-                              <AlertTriangle size={14} aria-hidden />
-                              {t("settings.parserAdapters.serviceBackend.unconfigured")}
-                            </span>
+                            <ConnectionConfiguredBadge configured={false} />
                           ) : null}
                           {externalConnection ? (
-                            <span
-                              className={cn(
-                                "inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs font-medium whitespace-nowrap",
-                                externalConnection.configured
-                                  ? "bg-success-subtle text-success-fg"
-                                  : "bg-warning-subtle text-warning-fg"
-                              )}
-                            >
-                              {externalConnection.configured ? (
-                                <CheckCircle2 size={14} aria-hidden />
-                              ) : (
-                                <AlertTriangle size={14} aria-hidden />
-                              )}
-                              {externalConnection.configured
-                                ? t("settings.parserAdapters.connection.configured")
-                                : t("settings.parserAdapters.serviceBackend.unconfigured")}
-                            </span>
+                            <ConnectionConfiguredBadge configured={externalConnection.configured} />
                           ) : null}
                         </span>
                       </label>
@@ -549,6 +536,13 @@ function ExternalConnectionCard({
   onChange: (update: Partial<ExternalParserConnectionForm>) => void;
 }) {
   const statusQuery = useExternalParserStatus(backend);
+  // 接続確認の所要時間（API は返さないため、押してから結果が返るまでを画面で測る。messaging.md §10.3）。
+  const [elapsedMs, setElapsedMs] = useState<number | undefined>(undefined);
+  const runConnectionTest = async () => {
+    const startedAt = Date.now();
+    await statusQuery.refetch();
+    setElapsedMs(Date.now() - startedAt);
+  };
   const modelSupported = backend !== "mineru";
   const dirty =
     value.endpoint.trim() !== (connection?.endpoint ?? "") ||
@@ -571,18 +565,7 @@ function ExternalConnectionCard({
             {connectionProtocolLabel(connection?.protocol ?? externalProtocol(backend))}
           </p>
         </div>
-        <span
-          className={cn(
-            "inline-flex min-h-6 items-center rounded-md px-2 text-xs font-medium",
-            connection?.configured
-              ? "bg-success-subtle text-success-fg"
-              : "bg-warning-subtle text-warning-fg"
-          )}
-        >
-          {connection?.configured
-            ? t("settings.parserAdapters.connection.configured")
-            : t("settings.parserAdapters.serviceBackend.unconfigured")}
-        </span>
+        <ConnectionConfiguredBadge configured={Boolean(connection?.configured)} />
       </div>
 
       <div className="mt-4 space-y-3">
@@ -644,7 +627,7 @@ function ExternalConnectionCard({
           className="w-full sm:w-auto"
           loading={statusQuery.isFetching}
           disabled={saving || dirty || !connection?.configured}
-          onClick={() => void statusQuery.refetch()} icon={Plug}>
+          onClick={() => void runConnectionTest()} icon={Plug}>
           {t("settings.parserAdapters.connection.test")}
         </Button>
         {statusQuery.isFetching ? (
@@ -663,16 +646,15 @@ function ExternalConnectionCard({
             {t("settings.parserAdapters.connection.saveBeforeTest")}
           </p>
         ) : null}
-        {!dirty && statusQuery.data ? (
-          <ConnectionTestStatus status={statusQuery.data.status} />
-        ) : null}
-        {!dirty && statusQuery.isError ? (
-          <FormStatus
-            tone="danger"
-            message={
-              statusQuery.error instanceof ApiError
-                ? statusQuery.error.message
-                : t("settings.parserAdapters.connection.testFailed")
+        {/* 結果は「接続を確認」の直下にカードの全幅で出し、入力を変えたら消す（messaging.md §10）。 */}
+        {!dirty && !statusQuery.isFetching && (statusQuery.data || statusQuery.isError) ? (
+          <ConnectionTestResult
+            backend={backend}
+            data={statusQuery.isError ? undefined : statusQuery.data}
+            error={statusQuery.isError ? statusQuery.error : null}
+            elapsedMs={elapsedMs}
+            checkedAt={
+              statusQuery.isError ? statusQuery.errorUpdatedAt : statusQuery.dataUpdatedAt
             }
           />
         ) : null}
@@ -719,12 +701,78 @@ function ConnectionTextField({
   );
 }
 
-function ConnectionTestStatus({ status }: { status: ExternalParserConnectionStatus }) {
-  const success = status === "available";
+/** 接続設定の有無（リソースの状態）。共有の StatusBadge で出す（messaging.md §10.2）。 */
+function ConnectionConfiguredBadge({ configured }: { configured: boolean }) {
   return (
-    <FormStatus
-      tone={success ? "success" : status === "unconfigured" ? "warning" : "danger"}
-      message={t(`settings.parserAdapters.connection.status.${status}` as I18nKey)}
+    <StatusBadge
+      variant={configured ? "success" : "warning"}
+      label={
+        configured
+          ? t("settings.parserAdapters.connection.configured")
+          : t("settings.parserAdapters.serviceBackend.unconfigured")
+      }
+    />
+  );
+}
+
+const CONNECTION_TEST_TONE: Record<ExternalParserConnectionStatus, SettingsTestResultTone> = {
+  available: "success",
+  unconfigured: "warning",
+  unreachable: "danger",
+  model_missing: "danger",
+  invalid_response: "danger",
+};
+
+/**
+ * 接続確認の結果パネル（システム設定の接続テストと同じ部品。messaging.md §10）。
+ * 1 文目に何が起きたか、次に所要時間。backend・状態・version・警告コードは「詳細」に畳む。
+ */
+function ConnectionTestResult({
+  backend,
+  data,
+  error,
+  elapsedMs,
+  checkedAt,
+}: {
+  backend: ExternalParserBackendName;
+  data: ExternalParserConnectionStatusData | undefined;
+  error: unknown;
+  elapsedMs: number | undefined;
+  checkedAt: number;
+}) {
+  const checkedAtText = checkedAt ? formatDateTime(new Date(checkedAt).toISOString()) : undefined;
+  const testId = `external-parser-test-result-${backend}`;
+  if (error || !data) {
+    const apiError = error instanceof ApiError ? error : null;
+    return (
+      <SettingsTestResultPanel
+        tone="danger"
+        message={apiError?.message ?? t("settings.parserAdapters.connection.testFailed")}
+        elapsedMs={elapsedMs}
+        checkedAt={checkedAtText}
+        details={toSettingsTestResultDetails({
+          backend,
+          status_code: apiError?.status,
+          error_code: apiError?.errorCode,
+          request_id: apiError?.requestId,
+        })}
+        testId={testId}
+      />
+    );
+  }
+  return (
+    <SettingsTestResultPanel
+      tone={CONNECTION_TEST_TONE[data.status]}
+      message={t(`settings.parserAdapters.connection.status.${data.status}` as I18nKey)}
+      elapsedMs={elapsedMs}
+      checkedAt={checkedAtText}
+      details={toSettingsTestResultDetails({
+        backend: data.backend,
+        status: data.status,
+        version: data.version,
+        warning_code: data.warning_code,
+      })}
+      testId={testId}
     />
   );
 }

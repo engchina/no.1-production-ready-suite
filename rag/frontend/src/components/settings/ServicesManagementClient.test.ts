@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { t } from "@/lib/i18n";
 
 import {
+  SERVICE_STATUS_BADGE,
   serviceCanRestart,
   serviceExecutionPolicyLabelKey,
   servicePrimaryAction,
@@ -86,5 +87,18 @@ describe("ServicesManagementClient service policy helpers", () => {
     }
     // 既定の解析エンジンは Docling（#286）。
     expect(t("settings.services.cpuNote")).toContain("Docling は既定の解析エンジン");
+  });
+
+  // 稼働状態は共有の StatusBadge の variant で出す（messaging.md §10.2。#723）。
+  it("maps runtime statuses to shared StatusBadge variants", () => {
+    expect(SERVICE_STATUS_BADGE.running.variant).toBe("success");
+    expect(SERVICE_STATUS_BADGE.degraded.variant).toBe("warning");
+    expect(SERVICE_STATUS_BADGE.failed.variant).toBe("danger");
+    expect(SERVICE_STATUS_BADGE.error.variant).toBe("danger");
+    expect(SERVICE_STATUS_BADGE.stopped.variant).toBe("neutral");
+    // 非推奨の pending（warning の別名）は使わない。
+    for (const meta of Object.values(SERVICE_STATUS_BADGE)) {
+      expect(meta.variant).not.toBe("pending");
+    }
   });
 });

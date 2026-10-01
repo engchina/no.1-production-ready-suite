@@ -2288,8 +2288,7 @@ const nl2sqlJa = {
   "learning.classifier.predict": "分類を試す",
   "learning.classifier.model": "Embedding model",
   "learning.classifier.exportXlsx": "Training XLSX 出力",
-  "learning.classifier.imported": "{count} 件の training data を取り込みました。",
-  "learning.classifier.importSummary": "{count} 件取込 / 合計 {total} 件",
+  "learning.classifier.imported": "{count} 件の training data を取り込みました（合計 {total} 件）。",
   "learning.classifier.trained": "LogisticRegression classifier を学習しました。",
   "learning.classifier.confidence": "信頼度 {confidence}%",
   "learning.error.recommend": "プロファイル推薦に失敗しました。",
@@ -2664,7 +2663,7 @@ const nl2sqlJa = {
   "settings.database.systemTables.summary.objectsHint":
     "テーブル・索引・シーケンス・パッケージの合計",
   "settings.database.systemTables.previousFailureLockDetail":
-    "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした (ORA-00054)。実行中の schema refresh、オントロジー、SQL生成評価 job を完了または停止してから、状態を再取得して再試行してください。",
+    "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。実行中の schema refresh、オントロジー、SQL生成評価 job を完了または停止してから、状態を再取得して再試行してください。",
   "settings.database.systemTables.recreate.sectionDescription":
     "NL2SQL の中核データを削除して migration を最初から適用します。削除したデータは復元できません。",
   "dbGate.setupRequired.message":

@@ -1,3 +1,4 @@
+import { WarningsBanner } from "@/components/WarningsBanner";
 import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceActivation } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Database,
@@ -1102,11 +1103,7 @@ function MetadataInputPanel({
               />
             ) : null}
           </div>
-          {domain?.inventory?.warnings.map((warning) => (
-            <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
-              {warning}
-            </p>
-          ))}
+          <WarningsBanner warnings={domain?.inventory?.warnings} />
 
           <TextareaField
             id={`${pageId}-extra-text`}
@@ -1192,11 +1189,7 @@ function MetadataExecutePanel({
             <EmptyState title={t("metadataSql.execute.emptyTitle")} hint={t("metadataSql.execute.emptyHint")} />
           )}
 
-          {generated?.warnings.map((warning) => (
-            <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
-              {warning}
-            </p>
-          ))}
+          <WarningsBanner warnings={generated?.warnings} />
 
           <StatementRunnerCard
             policy={policy}

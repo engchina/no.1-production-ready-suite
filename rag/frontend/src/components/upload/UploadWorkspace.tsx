@@ -10,6 +10,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  Disclosure,
   FieldError,
   FieldLabel,
   Skeleton,
@@ -321,7 +322,6 @@ function BatchUploadFailureList({
           <li key={`${index}-${item.file_name}`} className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span className="font-medium">{item.file_name}</span>
-              <span className="tnum text-fg-muted">{item.status_code}</span>
               <span>{item.message}</span>
             </div>
             {item.source_profile ? (
@@ -347,6 +347,17 @@ function BatchUploadFailureList({
                 ))}
               </div>
             ) : null}
+            {/* HTTP の状態コードは技術的な詳細なので「詳細」に畳む（一部失敗の warning では閉じる。messaging.md §10.3）。 */}
+            <Disclosure
+              variant="plain"
+              size="sm"
+              summary={t("upload.batch.failedDetails")}
+              className="mt-1"
+            >
+              <p className="tnum text-xs text-fg-muted">
+                {t("upload.batch.failedStatusCode", { status: item.status_code })}
+              </p>
+            </Disclosure>
           </li>
         ))}
       </ul>
