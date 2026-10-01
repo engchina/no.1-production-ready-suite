@@ -118,6 +118,7 @@ def _recipe_job(
     *,
     job_id: str = "job-1",
     queued_at: datetime | None = None,
+    finished_at: datetime | None = None,
     error_message: str | None = None,
 ) -> IngestionJob:
     return IngestionJob(
@@ -129,6 +130,7 @@ def _recipe_job(
         phase=phase,
         parser_profile="docling",
         queued_at=queued_at or datetime.now(UTC),
+        finished_at=finished_at,
         error_message=error_message,
     )
 
@@ -166,6 +168,29 @@ def test_recipe_steps_show_single_running_step_during_full_run() -> None:
     running = _recipe_job(IngestionJobPhase.PREPROCESS, IngestionJobStatus.RUNNING)
     steps = _recipe_steps({"status": FileStatus.INGESTING.value}, [running])
     assert [step.status for step in steps] == [_S, _R, _P, _P]
+
+
+@pytest.mark.parametrize(
+    ("auto_chunk", "finished_ago", "expected"),
+    [
+        (True, timedelta(seconds=1), [_S, _NR, DocumentRecipeStepStatus.QUEUED, _P]),
+        (False, timedelta(seconds=1), [_S, _NR, _P, _P]),
+        (True, timedelta(minutes=5), [_S, _NR, _P, _P]),
+    ],
+)
+def test_recipe_steps_queue_chunk_during_auto_advance_handoff(
+    auto_chunk: bool, finished_ago: timedelta, expected: list[DocumentRecipeStepStatus]
+) -> None:
+    """抽出の job の SUCCEEDED から CHUNK の job の投入までも Chunk 作成を QUEUED にする(#733)。"""
+    finished = _recipe_job(
+        IngestionJobPhase.PREPROCESS,
+        IngestionJobStatus.SUCCEEDED,
+        finished_at=datetime.now(UTC) - finished_ago,
+    )
+    steps = _recipe_steps(
+        {"status": FileStatus.REVIEW.value}, [finished], auto_chunk_after_extract=auto_chunk
+    )
+    assert [step.status for step in steps] == expected
 
 
 def test_recipe_steps_attribute_full_run_failure_to_failed_phase() -> None:
