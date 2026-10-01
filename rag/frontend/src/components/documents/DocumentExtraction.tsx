@@ -165,69 +165,34 @@ export function DocumentExtraction({
       ) : null}
 
       {parsed.elements.length > 0 ? (
-        <>
-          <div
-            className="grid grid-cols-2 gap-3 lg:grid-cols-4"
-            aria-label={t("flow.extraction.structureStats")}
-          >
-            <StatTile
-              icon={Layers3}
-              label={t("flow.extraction.stats.elements")}
-              value={formatNumber(stats.elementCount)}
-            />
-            <StatTile
-              icon={BookOpen}
-              label={t("flow.extraction.stats.pages")}
-              value={formatNumber(stats.pageCount)}
-            />
-            <StatTile
-              icon={Table2}
-              label={t("flow.extraction.stats.tables")}
-              value={formatNumber(stats.tableCount)}
-            />
-            <StatTile
-              icon={ListChecks}
-              label={t("flow.extraction.stats.lists")}
-              value={formatNumber(stats.listCount)}
-            />
-          </div>
-
-          <section>
-            <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold text-fg">
-              {t("flow.extraction.elements")}
-              <span className="tnum text-xs font-normal text-fg-muted">
-                {formatNumber(stats.elementCount)}
-              </span>
-            </h4>
-            <ol className="space-y-3 pr-1">
-              {parsed.elements.map((element) => (
-                <ElementItem
-                  key={elementKey(element)}
-                  element={element}
-                  selected={elementKey(element) === selectedElementId}
-                  buttonRef={
-                    elementKey(element) === selectedElementId ? selectedElementRef : undefined
-                  }
-                  onSelect={onElementSelect}
-                  visionDetails={layoutVisionDetails(extraction, elementKey(element))}
-                  cropUrl={documentId ? elementCropUrl(documentId, element) : null}
-                />
-              ))}
-            </ol>
-          </section>
-        </>
+        <div
+          className="grid grid-cols-2 gap-3 lg:grid-cols-4"
+          aria-label={t("flow.extraction.structureStats")}
+        >
+          <StatTile
+            icon={Layers3}
+            label={t("flow.extraction.stats.elements")}
+            value={formatNumber(stats.elementCount)}
+          />
+          <StatTile
+            icon={BookOpen}
+            label={t("flow.extraction.stats.pages")}
+            value={formatNumber(stats.pageCount)}
+          />
+          <StatTile
+            icon={Table2}
+            label={t("flow.extraction.stats.tables")}
+            value={formatNumber(stats.tableCount)}
+          />
+          <StatTile
+            icon={ListChecks}
+            label={t("flow.extraction.stats.lists")}
+            value={formatNumber(stats.listCount)}
+          />
+        </div>
       ) : null}
 
-      {parsed.tables.some((table) => table.cells.length > 0) ? (
-        <TableCellsPanel
-          tables={parsed.tables}
-          selectedTableCellKey={selectedTableCellKey}
-          selectedTableCellRef={selectedTableCellRef}
-          onTableCellSelect={onTableCellSelect}
-        />
-      ) : null}
-
-      {/* 文書の詳細では章節を修正・追加・削除できる（#713）。文書の無い表示は抽出結果の章節だけを出す。 */}
+      {/* 章節は要素の一覧より先に出す（#735）。文書の詳細では章節を修正・追加・削除できる（#713）。文書の無い表示は抽出結果の章節だけを出す。 */}
       {documentId ? (
         <DocumentSectionsPanel
           documentId={documentId}
@@ -244,6 +209,42 @@ export function DocumentExtraction({
       ) : parsed.navigation.length > 0 ? (
         <NavigationTreePanel nodes={parsed.navigation} />
       ) : null}
+
+      {parsed.elements.length > 0 ? (
+        <section>
+          <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold text-fg">
+            {t("flow.extraction.elements")}
+            <span className="tnum text-xs font-normal text-fg-muted">
+              {formatNumber(stats.elementCount)}
+            </span>
+          </h4>
+          <ol className="space-y-3 pr-1">
+            {parsed.elements.map((element) => (
+              <ElementItem
+                key={elementKey(element)}
+                element={element}
+                selected={elementKey(element) === selectedElementId}
+                buttonRef={
+                  elementKey(element) === selectedElementId ? selectedElementRef : undefined
+                }
+                onSelect={onElementSelect}
+                visionDetails={layoutVisionDetails(extraction, elementKey(element))}
+                cropUrl={documentId ? elementCropUrl(documentId, element) : null}
+              />
+            ))}
+          </ol>
+        </section>
+      ) : null}
+
+      {parsed.tables.some((table) => table.cells.length > 0) ? (
+        <TableCellsPanel
+          tables={parsed.tables}
+          selectedTableCellKey={selectedTableCellKey}
+          selectedTableCellRef={selectedTableCellRef}
+          onTableCellSelect={onTableCellSelect}
+        />
+      ) : null}
+
       {summarizedAssets.length > 0 ? <AssetSummariesPanel assets={summarizedAssets} /> : null}
       {parsed.fields.length > 0 ? <ExtractionFieldsPanel fields={parsed.fields} /> : null}
     </div>
