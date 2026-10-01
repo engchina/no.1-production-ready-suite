@@ -1,9 +1,11 @@
+import { WarningsBanner } from "@/components/WarningsBanner";
 import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
 import {
+  Banner,
   Button,
   Disclosure,
   EmptyState,
@@ -77,6 +79,7 @@ function ViewJoinWherePanel({
   loading,
   ddlLoading,
   ddlError,
+  extractError,
   onExtract,
   onRetryDdl,
 }: {
@@ -85,6 +88,8 @@ function ViewJoinWherePanel({
   loading: boolean;
   ddlLoading: boolean;
   ddlError: string;
+  /** 抽出の失敗。抽出のボタンの直下に出す（messaging.md §10.1、#724）。 */
+  extractError: string;
   onExtract: () => void;
   onRetryDdl: () => void;
 }) {
@@ -210,6 +215,7 @@ function ViewJoinWherePanel({
         </Button>
       </ContentActionBar>
 
+      {!loading && extractError ? <Banner severity="danger">{extractError}</Banner> : null}
       {loading ? (
         <DbManagementLoadingSkeleton
           idPrefix="view-join-where-result"
@@ -227,11 +233,7 @@ function ViewJoinWherePanel({
               label={joinWherePromptProfileLabel()}
             />
           </div>
-          {result.warnings.map((warning) => (
-            <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-warning-fg">
-              {warning}
-            </p>
-          ))}
+          <WarningsBanner warnings={result.warnings} />
           <div className="grid gap-3 lg:grid-cols-2">
             <TextareaField
               id="view-join-where-join-result"
@@ -327,6 +329,7 @@ export function ViewManagementPage() {
   const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
+  const [joinWhereError, setJoinWhereError] = useState("");
   // 報告済みの schema refresh の終端（`<job_id>:<status>`）。
   const [reportedSchemaRefresh, setReportedSchemaRefresh] = useState("");
   const autoJoinWhereDdlName = useRef("");
@@ -374,6 +377,8 @@ export function ViewManagementPage() {
     autoJoinWhereDdlName.current = "";
     setDetailTab("columns");
     setJoinWhere(null);
+    // 別のビューを選んだら、前のビューの抽出の失敗を消す（messaging.md §10.4）。
+    setJoinWhereError("");
     await detailRequest.load(name);
   };
 
@@ -624,7 +629,7 @@ export function ViewManagementPage() {
     if (!detail?.ddl || loading === "join-where") return;
     const sequence = ++joinWhereRequest.current;
     setLoading("join-where");
-    setMessage("");
+    setJoinWhereError("");
     setJoinWhere(null);
     try {
       const result = await apiPost<DbAdminJoinWhereData>("/api/nl2sql/db-admin/extract-join-where", {
@@ -634,7 +639,7 @@ export function ViewManagementPage() {
       if (sequence === joinWhereRequest.current) setJoinWhere(result);
     } catch (err) {
       if (sequence === joinWhereRequest.current) {
-        setMessage(err instanceof Error ? err.message : t("viewMgmt.error.extract"));
+        setJoinWhereError(err instanceof Error ? err.message : t("viewMgmt.error.extract"));
       }
     } finally {
       if (sequence === joinWhereRequest.current) setLoading("");
@@ -673,6 +678,7 @@ export function ViewManagementPage() {
         loading={loading === "join-where"}
         ddlLoading={detailRequest.ddlLoading}
         ddlError={detailRequest.ddlError}
+        extractError={joinWhereError}
         onExtract={() => void extractJoinWhere()}
         onRetryDdl={() => {
           if (detail) {

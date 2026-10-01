@@ -1,3 +1,4 @@
+import { WarningsBanner } from "@/components/WarningsBanner";
 import { useWorkspaceActive, useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
 import { syntheticRunPollingInterval } from "../syntheticRunPolling";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -1773,11 +1774,7 @@ function PreviewResultsPanel({
             <StatusBadge icon={false} variant="info" label={t("tableMgmt.importWizard.rows", { count: preview.results.total })} />
             <span className="break-all font-mono text-xs text-fg-muted">{preview.sql}</span>
           </div>
-          {preview.warnings.map((warning) => (
-            <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
-              {warning}
-            </p>
-          ))}
+          <WarningsBanner warnings={preview.warnings} />
           <QueryResultsTable results={preview.results} rowLimit={executedRowLimit} />
         </div>
       ) : (
@@ -2040,11 +2037,7 @@ function CsvUploadWorkspace({
               </>
             )}
           </div>
-          {result.warnings.map((warning) => (
-            <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-warning-fg">
-              {warning}
-            </p>
-          ))}
+          <WarningsBanner warnings={result.warnings} />
           <p className="text-fg">
             {t("dataMgmt.csv.matched")}: <span className="font-mono text-xs">{result.matched_columns.join(", ") || "-"}</span>
           </p>
@@ -2281,15 +2274,8 @@ function SyntheticWorkspace({
           />
           {selectedSyntheticProfile?.owner && <StatusBadge icon={false} variant="neutral" label={selectedSyntheticProfile.owner} />}
           {selectedSyntheticProfile?.status && <StatusBadge icon={false} variant="neutral" label={selectedSyntheticProfile.status} />}
-          {visibleWarnings.map((warning) => (
-            <span
-              key={warning}
-              className="rounded-md border border-warning-border bg-warning-subtle px-2 py-1 text-xs text-warning-fg"
-            >
-              {warning}
-            </span>
-          ))}
         </div>
+        <WarningsBanner warnings={visibleWarnings} />
 
         <ContentActionBar
           ariaLabel={t("dataTools.syntheticData.refreshTablesActions")}
@@ -2501,11 +2487,7 @@ function SyntheticWorkspace({
               <DbObjectName value={syntheticDataResults.table_name} size="sm" />
               <StatusBadge icon={false} variant="neutral" label={syntheticDataResults.runtime} />
             </div>
-            {syntheticDataResults.warnings.map((warning) => (
-              <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
-                {warning}
-              </p>
-            ))}
+            <WarningsBanner warnings={syntheticDataResults.warnings} />
             <QueryResultsTable results={syntheticDataResults.results} rowLimit={executedSyntheticResultLimit} />
           </div>
         ) : (

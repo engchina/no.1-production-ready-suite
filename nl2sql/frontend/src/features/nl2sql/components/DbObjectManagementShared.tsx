@@ -38,6 +38,7 @@ import {
   LoadMoreFooter,
 } from "@engchina/production-ready-ui";
 
+import { WarningsBanner } from "@/components/WarningsBanner";
 import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
 import {
   DbManagementSearchField,
@@ -1274,11 +1275,7 @@ export function DbObjectDetailPanel({
         />
       ) : null}
 
-      {detail.warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
-          {warning}
-        </p>
-      ))}
+      <WarningsBanner warnings={detail.warnings} />
 
       <Tabs
         idPrefix={`${idPrefix}-detail`}

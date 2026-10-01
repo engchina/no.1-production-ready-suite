@@ -38,7 +38,6 @@ import {
 import { useSearchParams } from "react-router-dom";
 
 import { ErrorState, LoadingState } from "@/components/StateViews";
-import { usePageNotice, PageNotice } from "@/components/page-notice";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
 import { downloadBlob, downloadFilename } from "@/lib/download";
@@ -99,7 +98,8 @@ export function EvaluationPage() {
   const confirm = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
   const currentJobId = searchParams.get("job") ?? "";
-  const { notice, showNotice, clearNotice } = usePageNotice();
+  // ダウンロードの失敗は押したボタンの直下に出す（template = テンプレート、results = 結果。messaging.md §10.1、#724）。
+  const [downloadError, setDownloadError] = useState<{ origin: "template" | "results"; message: string } | null>(null);
   const [profileId, setProfileId] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [engines, setEngines] = useState<QualityEvaluationEngine[]>([]);
@@ -301,7 +301,7 @@ export function EvaluationPage() {
 
   const startEvaluation = () => {
     if (conditionsLocked) return;
-    clearNotice();
+    setDownloadError(null);
     setStartError("");
     if (validate()) startMutation.mutate();
   };
@@ -354,8 +354,9 @@ export function EvaluationPage() {
     cancelJobMutation.mutate(job);
   };
 
-  const downloadFile = async (path: string, fallbackName: string) => {
+  const downloadFile = async (path: string, fallbackName: string, origin: "template" | "results") => {
     setDownloading(true);
+    setDownloadError(null);
     try {
       const response = await apiFetch(path);
       if (!response.ok) throw new Error(t("qualityEvaluation.error.download"));
@@ -364,10 +365,10 @@ export function EvaluationPage() {
       downloadBlob(filename, blob);
       toast.success(t("qualityEvaluation.notice.downloaded"));
     } catch (cause) {
-      showNotice(
-        "danger",
-        cause instanceof Error ? cause.message : t("qualityEvaluation.error.download")
-      );
+      setDownloadError({
+        origin,
+        message: cause instanceof Error ? cause.message : t("qualityEvaluation.error.download"),
+      });
     } finally {
       setDownloading(false);
     }
@@ -377,7 +378,6 @@ export function EvaluationPage() {
     <>
       <PageHeader wide title={t("nav.evaluation")} subtitle={t("qualityEvaluation.subtitle")} />
       <PageBody wide className="grid min-w-0 gap-4 lg:gap-6">
-        <PageNotice notice={notice} onDismiss={clearNotice} />
         {pageError ? (
           <ErrorState
             message={t("qualityEvaluation.error.load")}
@@ -478,11 +478,15 @@ export function EvaluationPage() {
                       onClick={() =>
                         void downloadFile(
                           "/api/nl2sql/quality-evaluations/template.xlsx",
-                          "nl2sql_quality_evaluation_template.xlsx"
+                          "nl2sql_quality_evaluation_template.xlsx",
+                          "template"
                         )
                       } icon={Download}>
                       {t("qualityEvaluation.template.download")}
                     </Button>
+                    {downloadError?.origin === "template" ? (
+                      <FormStatus tone="danger" message={downloadError.message} className="mt-2" />
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -712,7 +716,8 @@ export function EvaluationPage() {
                         `/api/nl2sql/quality-evaluations/${encodeURIComponent(
                           currentJob.job_id
                         )}/results.xlsx`,
-                        "nl2sql_quality_evaluation.xlsx"
+                        "nl2sql_quality_evaluation.xlsx",
+                        "results"
                       )
                     } icon={Download}>
                     {t("qualityEvaluation.action.download")}
@@ -730,6 +735,9 @@ export function EvaluationPage() {
                 activityIcon="none"
                 testId="quality-evaluation-download-processing"
               />
+            ) : null}
+            {downloadError?.origin === "results" ? (
+              <Banner severity="danger">{downloadError.message}</Banner>
             ) : null}
             <div>
               {!currentJob || !TERMINAL_STATUSES.has(currentJob.status) ? (

@@ -9755,7 +9755,7 @@ test("question classifier training data follows the CATEGORY/TEXT contract", asy
       content: "mock xlsx",
     },
   ]);
-  await expect(page.getByText("1 件の training data を取り込みました。")).toBeVisible();
+  await expect(page.getByText("1 件の training data を取り込みました（合計 13 件）。")).toBeVisible();
   expect(api.classifierTrainingImportBody).toContain('name="file"');
   expect(api.classifierTrainingImportBody).toContain('name="replace"');
   expect(api.classifierTrainingImportBody).not.toContain('name="profile_id"');
@@ -9770,7 +9770,7 @@ test("question classifier training data follows the CATEGORY/TEXT contract", asy
   await clearFilename.press("Enter");
   await expect(trainingWorkspace.getByText("選択中: training_data.xlsx")).toHaveCount(0);
   await expect(clearFilename).toBeDisabled();
-  await expect(page.getByText("1 件の training data を取り込みました。")).toBeVisible();
+  await expect(page.getByText("1 件の training data を取り込みました（合計 13 件）。")).toBeVisible();
   await expect(trainingWorkspace.getByText("ページング対象 01: 請求金額が大きい取引先を見たい")).toBeVisible();
   expect(mutationsAfterImport).toEqual([]);
   await expectNoHorizontalScroll(page);
@@ -9940,7 +9940,7 @@ test("question classifier model management page trains classifier and finds lear
   await expectNoHorizontalScroll(page);
 });
 
-test("question classifier model management shows a failure toast when training is rejected", async ({
+test("question classifier model management shows the training failure under the train button", async ({
   page,
 }) => {
   await mockNl2SqlApi(page);
@@ -9961,10 +9961,36 @@ test("question classifier model management shows a failure toast when training i
   await page.getByRole("tab", { name: "モデル学習" }).click();
   await page.getByRole("button", { name: "Classifier 学習" }).click();
 
-  await expect(page.locator("main").getByRole("alert")).toContainText(trainingError);
+  // 失敗は学習のボタンの直下（モデル学習のタブの中）に 1 か所だけ出し、ページ先頭・Toast に重ねない（messaging.md §10.1、#724）。
+  const trainPanel = page.getByRole("tabpanel", { name: "モデル学習" });
+  await expect(trainPanel.getByRole("alert")).toContainText(trainingError);
+  await expect(page.locator("main").getByRole("alert")).toHaveCount(1);
   await expect(
     page.getByRole("region", { name: "通知" }).getByRole("alert").filter({ hasText: trainingError })
-  ).toBeVisible();
+  ).toHaveCount(0);
+  const trainButtonBox = await trainPanel.getByRole("button", { name: "Classifier 学習" }).boundingBox();
+  const alertBox = await trainPanel.getByRole("alert").boundingBox();
+  expect(trainButtonBox && alertBox && alertBox.y > trainButtonBox.y).toBeTruthy();
+  await expectNoHorizontalScroll(page);
+});
+
+test("feedback management shows the similarity config save failure in its action row", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  const saveError = "Feedback 類似検索設定を保存できません。";
+  await page.route("**/api/nl2sql/feedback-config", (route) =>
+    route.request().method() === "PATCH"
+      ? route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: saveError }) })
+      : route.fallback()
+  );
+
+  await page.goto("/feedback-management?tab=similarityIndex");
+  await page.getByLabel("最低スコア", { exact: true }).fill("0.85");
+  await page.getByRole("button", { name: "設定保存" }).click();
+
+  // 保存の失敗は操作の行（FormActionBar の status）に出し、ページ先頭の通知には出さない（messaging.md §10.1、#724）。
+  const actions = page.getByTestId("feedback-similarity-index-actions");
+  await expect(actions.getByRole("alert")).toContainText(saveError);
+  await expect(page.locator("main").getByRole("alert")).toHaveCount(1);
   await expectNoHorizontalScroll(page);
 });
 

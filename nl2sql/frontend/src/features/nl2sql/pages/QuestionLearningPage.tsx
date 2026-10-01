@@ -1,3 +1,4 @@
+import { WarningsBanner } from "@/components/WarningsBanner";
 import { ErrorState } from "@/components/StateViews";
 import {
   Button,
@@ -84,6 +85,13 @@ import type {
 } from "../types";
 
 type ActiveView = "trainingData" | "train" | "test" | "candidates";
+/**
+ * 操作の失敗を出す位置（起点の操作の直下。messaging.md §10.1、#724）。
+ * import = 取込のファイル欄の下、trainingData = 学習データの一覧（再読み込み・行の編集・削除）の上、
+ * train = 学習のボタンの下、predict = 分類テストのボタンの下。ページの読み込みの失敗だけページ先頭に出す。
+ */
+type ActionErrorOrigin = "import" | "trainingData" | "train" | "predict";
+type ActionError = { origin: ActionErrorOrigin; message: string } | null;
 type ClassifierPredictionSnapshot = ClassifierPredictionData & {
   inputQuestion: string;
   modelVersion: string;
@@ -136,7 +144,6 @@ export function QuestionClassifierModelsPage() {
   const [candidateActionError, setCandidateActionError] = useState("");
   const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
   const [candidateProfileOverrides, setCandidateProfileOverrides] = useState<Record<string, string>>({});
-  const [classifierImport, setClassifierImport] = useState<ClassifierImportData | null>(null);
   const [classifierPrediction, setClassifierPrediction] = useState<ClassifierPredictionSnapshot | null>(null);
   const [classifierReplace, setClassifierReplace] = useState(false);
   const [trainingSearch, setTrainingSearch] = useState("");
@@ -147,6 +154,11 @@ export function QuestionClassifierModelsPage() {
   // 初回の読み込み（mount 時の effect）の間は "load" から始める。
   const [loading, setLoading] = useState("load");
   const [message, setMessage] = useState("");
+  const [actionError, setActionError] = useState<ActionError>(null);
+  const showActionError = (origin: ActionErrorOrigin, err: unknown, fallback: string) =>
+    setActionError({ origin, message: err instanceof Error ? err.message : fallback });
+  const actionErrorFor = (origin: ActionErrorOrigin) =>
+    actionError?.origin === origin ? actionError.message : "";
   const [editingBaseline, setEditingBaseline] = useState("");
   const editingDirty = Boolean(editingExampleId &&
     JSON.stringify([editingText, editingProfileId]) !== editingBaseline);
@@ -231,6 +243,7 @@ export function QuestionClassifierModelsPage() {
     if (loading) return;
     setLoading("load");
     setMessage("");
+    setActionError(null);
     setCandidateError("");
     await fetchAll(announce);
   };
@@ -250,12 +263,12 @@ export function QuestionClassifierModelsPage() {
   const refreshTrainingData = async (announce = false) => {
     if (loading) return;
     setLoading("training-load");
-    setMessage("");
+    setActionError(null);
     try {
       setClassifierTrainingData(await apiGet<ClassifierTrainingDataData>("/api/nl2sql/classifier/training-data"));
       if (announce) toast.success(t("common.action.refreshed"));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("qcm.error.trainingData"));
+      showActionError("trainingData", err, t("qcm.error.trainingData"));
     } finally {
       setLoading("");
     }
@@ -382,16 +395,16 @@ export function QuestionClassifierModelsPage() {
       }
     }
     setLoading("classifier-import");
-    setMessage("");
+    setActionError(null);
     try {
       const data = await uploadClassifierTrainingFile(file, classifierReplace);
-      setClassifierImport(data);
       setEditingExampleId("");
       setClassifierStatus(await apiGet<ClassifierStatusData>("/api/nl2sql/classifier"));
       setClassifierTrainingData(await apiGet<ClassifierTrainingDataData>("/api/nl2sql/classifier/training-data"));
-      toast.success(t("learning.classifier.imported", { count: data.imported_count }));
+      // 取込の成功は Toast だけで知らせる（同じ起点の結果を面と二重に出さない。messaging.md §10.1 / §10.2）。
+      toast.success(t("learning.classifier.imported", { count: data.imported_count, total: data.total_examples }));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("learning.error.classifier"));
+      showActionError("import", err, t("learning.error.classifier"));
     } finally {
       setLoading("");
     }
@@ -400,7 +413,7 @@ export function QuestionClassifierModelsPage() {
   const trainClassifier = async () => {
     if (loading) return;
     setLoading("classifier-train");
-    setMessage("");
+    setActionError(null);
     const previousVersion = classifierStatus?.classifier_version ?? "";
     try {
       const data = await apiPost<ClassifierStatusData>("/api/nl2sql/classifier/train", {
@@ -413,12 +426,11 @@ export function QuestionClassifierModelsPage() {
       if (data.ready && data.warnings.length === 0 && versionChanged) {
         toast.success(t("learning.classifier.trained"));
       } else {
-        setMessage(data.warnings.join(" ") || t("learning.error.classifier"));
+        setActionError({ origin: "train", message: data.warnings.join(" ") || t("learning.error.classifier") });
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : t("learning.error.classifier");
-      setMessage(message);
-      toast.error(message);
+      // 失敗は学習のボタンの直下だけに出す（Toast と面を重ねない。messaging.md §10.1）。
+      showActionError("train", err, t("learning.error.classifier"));
     } finally {
       setLoading("");
     }
@@ -428,7 +440,7 @@ export function QuestionClassifierModelsPage() {
     const text = question.trim();
     if (!text || loading) return;
     setLoading("classifier-predict");
-    setMessage("");
+    setActionError(null);
     setClassifierPrediction(null);
     try {
       const prediction = await apiPost<ClassifierPredictionData>("/api/nl2sql/classifier/predict", {
@@ -442,7 +454,7 @@ export function QuestionClassifierModelsPage() {
         finishedAt: new Date().toISOString(),
       });
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("learning.error.classifier"));
+      showActionError("predict", err, t("learning.error.classifier"));
     } finally {
       setLoading("");
     }
@@ -460,7 +472,7 @@ export function QuestionClassifierModelsPage() {
     if (loading) return;
     if (!editingExampleId || !editingText.trim() || !editingProfileId) return;
     setLoading(`training-save-${editingExampleId}`);
-    setMessage("");
+    setActionError(null);
     try {
       await apiPatch(`/api/nl2sql/classifier/training-data/${editingExampleId}`, {
         text: editingText.trim(),
@@ -475,7 +487,7 @@ export function QuestionClassifierModelsPage() {
       setEditingExampleId("");
       toast.success(t("qcm.training.updated"));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("qcm.training.error.update"));
+      showActionError("trainingData", err, t("qcm.training.error.update"));
     } finally {
       setLoading("");
     }
@@ -491,7 +503,7 @@ export function QuestionClassifierModelsPage() {
     });
     if (!ok) return;
     setLoading(`training-delete-${example.id}`);
-    setMessage("");
+    setActionError(null);
     try {
       const trainingData = await apiDelete<ClassifierTrainingDataData>(
         `/api/nl2sql/classifier/training-data/${example.id}`
@@ -500,7 +512,7 @@ export function QuestionClassifierModelsPage() {
       setClassifierStatus(await apiGet<ClassifierStatusData>("/api/nl2sql/classifier"));
       toast.success(t("qcm.training.deleted"));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("qcm.training.error.delete"));
+      showActionError("trainingData", err, t("qcm.training.error.delete"));
     } finally {
       setLoading("");
     }
@@ -602,7 +614,8 @@ export function QuestionClassifierModelsPage() {
               filename={trainingFilename}
               replace={classifierReplace}
               loading={loading}
-              importSummary={classifierImport}
+              importError={actionErrorFor("import")}
+              listError={actionErrorFor("trainingData")}
               onSearchChange={setTrainingSearch}
               onReplaceChange={setClassifierReplace}
               onRefresh={() => void refreshTrainingData(true)}
@@ -633,6 +646,7 @@ export function QuestionClassifierModelsPage() {
               status={classifierStatus}
               trainingData={classifierTrainingData}
               loading={loading === "classifier-train"}
+              error={actionErrorFor("train")}
               onTrain={() => void trainClassifier()}
             />
           </DbObjectManagementPanelShell>
@@ -650,6 +664,7 @@ export function QuestionClassifierModelsPage() {
               prediction={classifierPrediction}
               modelVersion={classifierStatus?.classifier_version ?? ""}
               loading={loading === "classifier-predict"}
+              error={actionErrorFor("predict")}
               ready={Boolean(classifierStatus?.ready)}
               onQuestionChange={setQuestion}
               onPredict={() => void predictClassifier()}
@@ -719,7 +734,8 @@ function TrainingDataPanel({
   filename,
   replace,
   loading,
-  importSummary,
+  importError,
+  listError,
   onSearchChange,
   onReplaceChange,
   onRefresh,
@@ -744,7 +760,8 @@ function TrainingDataPanel({
   filename: string;
   replace: boolean;
   loading: string;
-  importSummary: ClassifierImportData | null;
+  importError: string;
+  listError: string;
   onSearchChange: (value: string) => void;
   onReplaceChange: (value: boolean) => void;
   onRefresh: () => void;
@@ -808,20 +825,14 @@ function TrainingDataPanel({
         </label>
       </div>
 
-      {importSummary && (
-        <div className="rounded-md border border-success-border bg-success-subtle px-3 py-2 text-sm text-success-fg">
-          {t("learning.classifier.importSummary", {
-            count: importSummary.imported_count,
-            total: importSummary.total_examples,
-          })}
-        </div>
-      )}
+      {/* 取込の失敗は取込の欄の直下に出す（messaging.md §10.1）。成功は Toast だけ。 */}
+      {importError ? (
+        <Banner severity="danger">
+          {importError}
+        </Banner>
+      ) : null}
 
-      {warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
-          {warning}
-        </p>
-      ))}
+      <WarningsBanner warnings={warnings} />
 
       <div className="grid gap-3">
         {/* 一覧の toolbar: 検索欄（2）と一覧全体の操作（XLSX 出力, 1）を同じ行に置く。 */}
@@ -839,6 +850,8 @@ function TrainingDataPanel({
             </a>
           </div>
         </div>
+        {/* 一覧の再読み込み・行の編集・削除の失敗は一覧の直上に出す（messaging.md §10.1）。 */}
+        {listError ? <Banner severity="danger">{listError}</Banner> : null}
         <TrainingDataTable
           examples={examples}
           hasFilter={Boolean(search.trim())}
@@ -1055,11 +1068,13 @@ function ModelTrainPanel({
   status,
   trainingData,
   loading,
+  error,
   onTrain,
 }: {
   status: ClassifierStatusData | null;
   trainingData: ClassifierTrainingDataData | null;
   loading: boolean;
+  error: string;
   onTrain: () => void;
 }) {
   const canTrain = (trainingData?.total_examples ?? status?.example_count ?? 0) > 0;
@@ -1086,6 +1101,8 @@ function ModelTrainPanel({
           testId="qcm-train-processing"
         />
       ) : null}
+      {/* 学習の失敗・未完了は学習のボタンの直下に出す（messaging.md §10.1）。 */}
+      {error ? <Banner severity="danger">{error}</Banner> : null}
       <DbObjectStepIndicator
         steps={[t("qcm.train.stepData"), t("qcm.train.stepEmbedding"), t("qcm.train.stepFit")]}
         activeIndex={status?.ready ? 3 : canTrain ? 1 : 0}
@@ -1115,11 +1132,7 @@ function ModelTrainPanel({
           <StatusBadge icon={false} variant="neutral" label={status?.recommendation_source ?? "deterministic"} />
           {status?.classifier_version && <StatusBadge icon={false} variant="info" label={status.classifier_version} />}
         </div>
-        {(status?.warnings ?? []).map((warning) => (
-          <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
-            {warning}
-          </p>
-        ))}
+        <WarningsBanner warnings={status?.warnings} />
         {status?.metrics && Object.keys(status.metrics).length > 0 && (
           <dl className="grid gap-2 md:grid-cols-3">
             {Object.entries(status.metrics).map(([key, value]) => (
@@ -1137,6 +1150,7 @@ function ModelTestPanel({
   prediction,
   modelVersion,
   loading,
+  error,
   ready,
   onQuestionChange,
   onPredict,
@@ -1145,6 +1159,7 @@ function ModelTestPanel({
   prediction: ClassifierPredictionSnapshot | null;
   modelVersion: string;
   loading: boolean;
+  error: string;
   ready: boolean;
   onQuestionChange: (value: string) => void;
   onPredict: () => void;
@@ -1172,6 +1187,8 @@ function ModelTestPanel({
             testId="qcm-predict-processing"
           />
         ) : null}
+        {/* 分類テストの失敗は実行のボタンの直下に出す（messaging.md §10.1）。 */}
+        {error ? <Banner severity="danger">{error}</Banner> : null}
         {/* 分類テストは質問が空では実行できない（backend: ClassifierPredictRequest.question min_length=1）。 */}
         <TextareaField
           id="qcm-test-question"
@@ -1233,11 +1250,7 @@ function ModelTestPanel({
                 visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
               />
             )}
-            {prediction.warnings.map((warning) => (
-              <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
-                {warning}
-              </p>
-            ))}
+            <WarningsBanner warnings={prediction.warnings} />
           </>
         ) : (
           <EmptyState title={t("qcm.test.emptyTitle")} hint={t("qcm.test.emptyHint")} />

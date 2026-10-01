@@ -1,3 +1,4 @@
+import { WarningsBanner } from "@/components/WarningsBanner";
 import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -86,11 +87,7 @@ function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
         <StatusBadge icon={false} variant="info" label={t("tableMgmt.importWizard.rows", { count: result.row_count })} />
         <StatusBadge icon={false} variant="neutral" label={result.mode} />
       </div>
-      {result.warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-warning-fg">
-          {warning}
-        </p>
-      ))}
+      <WarningsBanner warnings={result.warnings} />
       <pre className="overflow-auto rounded-md border border-border bg-surface p-3 font-mono text-sm leading-6 text-fg">
         <code>{`${result.ddl}\n\n${result.insert_sql}`}</code>
       </pre>
