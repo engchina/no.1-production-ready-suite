@@ -2348,3 +2348,43 @@ async def test_answer_engine_answers_only_from_selected_approved_faq(
     assert outcome.citations == []
     assert outcome.diagnostics["answer_source"] == "approved_faq"
     assert not oracle.filters
+
+
+async def test_answer_engine_passes_the_clarification_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """確認で選んだ条件は回答の前提に渡し、回答の末尾と診断に対象の範囲を示す(#717)。"""
+    import rag_engine.adapters.oci as engine_oci
+    import rag_engine.generation.answering as answering
+
+    from app.rag.answer_engine import AnswerScope
+
+    captured: dict[str, Any] = {}
+    original = answering.answer_question_result
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    monkeypatch.setattr(answering, "answer_question_result", spy)
+    engine = AnswerEngine(
+        Settings(rag_domain_keywords=["受注番号"]),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        scope=AnswerScope(
+            context="選んだ答え: 受注",
+            search_terms=("受注登録",),
+            label="「受注手順」の「登録」（p.2）",
+        ),
+    )
+    request = SearchRequest(
+        query="受注の登録方法は？",
+        filters={"page_ranges": '[{"document_id":"doc-1","page_start":2,"page_end":2}]'},
+    )
+
+    outcome = await engine.run(request)
+
+    assert captured["scope"] == ("選んだ答え: 受注", ("受注登録",))
+    assert outcome.answer.endswith("（対象: 「受注手順」の「登録」（p.2））")
+    assert outcome.diagnostics["scope"]["label"] == "「受注手順」の「登録」（p.2）"

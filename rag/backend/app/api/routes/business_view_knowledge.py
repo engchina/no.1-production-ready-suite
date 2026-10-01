@@ -29,7 +29,9 @@ from app.rag.business_view_knowledge import (
     read_approved_faq_excel,
     save_approved_faq_enabled,
     save_domain_keywords,
+    save_rule_clarification,
     suggest_approved_faq,
+    suggest_clarification,
     suggest_domain_keywords,
 )
 from app.rag.query_history import query_history_suggestions
@@ -46,12 +48,16 @@ from app.schemas.business_view_knowledge import (
     ApprovedFaqSuggestionData,
     ApprovedFaqSuggestionsData,
     ApprovedFaqSuggestRequest,
+    ClarificationSuggestionData,
+    ClarificationSuggestionsData,
+    ClarificationSuggestRequest,
     DomainKeywordCandidateData,
     DomainKeywordsData,
     DomainKeywordSuggestionData,
     DomainKeywordsUpdate,
     QuerySuggestion,
     QuerySuggestionsData,
+    RuleClarificationRequest,
     RuntimeKnowledgeData,
     RuntimeKnowledgeEditRequest,
     RuntimeKnowledgePreviewData,
@@ -457,5 +463,50 @@ async def get_query_suggestions(
             suggestions=[
                 QuerySuggestion(question=item.question, count=item.count) for item in suggestions
             ],
+        )
+    )
+
+
+@router.put(
+    "/{business_view_id}/runtime-knowledge/rules/{rule_id}/clarification",
+    response_model=ApiResponse[RuntimeKnowledgeData],
+)
+async def put_rule_clarification(
+    business_view_id: str, rule_id: str, request: RuleClarificationRequest
+) -> ApiResponse[RuntimeKnowledgeData]:
+    """ルールの確認の質問と選択肢を保存する(None は外す。#717)。"""
+    oracle = OracleClient()
+    await _require_business_view(oracle, business_view_id)
+    try:
+        payload = await save_rule_clarification(
+            oracle, business_view_id, rule_id, request.clarification
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="ルールが見つかりません。") from exc
+    return ApiResponse(data=_runtime_knowledge_data(business_view_id, payload))
+
+
+@router.post(
+    "/{business_view_id}/clarifications/suggest",
+    response_model=ApiResponse[ClarificationSuggestionsData],
+)
+async def post_clarification_suggest(
+    business_view_id: str, request: ClarificationSuggestRequest
+) -> ApiResponse[ClarificationSuggestionsData]:
+    """質問に出す確認(一致したルールのうち確認を持つ最初の 1 件。#717)。"""
+    oracle = OracleClient()
+    await _require_business_view(oracle, business_view_id)
+    payload = await load_runtime_knowledge_payload(oracle, business_view_id)
+    found = await asyncio.to_thread(suggest_clarification, payload, request.query)
+    if found is None:
+        return ApiResponse(data=ClarificationSuggestionsData())
+    rule, clarification = found
+    return ApiResponse(
+        data=ClarificationSuggestionsData(
+            suggestion=ClarificationSuggestionData(
+                rule_id=str(rule.get("id", "")),
+                rule_title=str(rule.get("title", "") or rule.get("id", "")),
+                clarification=clarification,
+            )
         )
     )

@@ -73,8 +73,9 @@ def test_normalize_rejects_unknown_content_kind_in_list() -> None:
 
 def test_retrieval_where_builds_numeric_range_predicates() -> None:
     sql, binds = _oracle_retrieval_where({"page_number_min": "2", "page_number_max": "5"})
-    assert "$.page_number' RETURNING NUMBER) >= :filter_page_number_min" in sql
-    assert "$.page_number' RETURNING NUMBER) <= :filter_page_number_max" in sql
+    # ページの重なり(chunk の page_start〜page_end、無ければ page_number)で判定する(#717)。
+    assert "$.page_number' RETURNING NUMBER)) >= :filter_page_number_min" in sql
+    assert "$.page_number' RETURNING NUMBER)) <= :filter_page_number_max" in sql
     assert binds["filter_page_number_min"] == 2
     assert binds["filter_page_number_max"] == 5
 
@@ -280,3 +281,48 @@ def test_retrieval_where_chunk_set_filter_for_document_scope_experiment() -> Non
     assert "c.chunk_set_id = :filter_chunk_set_id" in sql
     assert binds["filter_chunk_set_id"] == "cs_y"
     assert binds["filter_document_id"] == "doc-1"
+
+
+def test_page_ranges_filter_is_normalized_and_becomes_an_or_of_page_overlaps() -> None:
+    """章節のページ範囲(#717)。どれかの範囲に重なる chunk に絞る(OR)。"""
+    from app.clients.oracle import _oracle_retrieval_where
+
+    normalized = normalize_search_filters(
+        {
+            "page_ranges": '[{"document_id":"doc-a","page_start":3,"page_end":5},'
+            '{"document_id":"doc-b"}]'
+        }
+    )
+    assert normalized["page_ranges"] == (
+        '[{"document_id":"doc-a","page_start":3,"page_end":5},'
+        '{"document_id":"doc-b","page_start":null,"page_end":null}]'
+    )
+    sql, binds = _oracle_retrieval_where(normalized)
+    assert "d.document_id = :filter_pr_doc_0" in sql
+    assert " OR (d.document_id = :filter_pr_doc_1)" in sql
+    assert binds["filter_pr_doc_0"] == "doc-a"
+    assert binds["filter_pr_end_0"] == 5
+    assert binds["filter_pr_start_0"] == 3
+    # ページの重なりは page_start〜page_end(無ければ page_number)で見る。
+    assert "'$.page_start' RETURNING NUMBER" in sql
+    assert "'$.page_end' RETURNING NUMBER" in sql
+
+
+def test_page_number_filters_use_chunk_page_ranges() -> None:
+    """page_number を持たない分割の chunk も、page_start / page_end で絞れる(#717)。"""
+    from app.clients.oracle import _oracle_retrieval_where
+
+    sql, binds = _oracle_retrieval_where({"page_number_min": "2", "page_number_max": "4"})
+    assert "'$.page_end' RETURNING NUMBER" in sql
+    assert "COALESCE(JSON_VALUE(c.metadata_json, '$.page_start' RETURNING NUMBER)" in sql
+    assert binds["filter_page_number_min"] == 2
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["{}", "[1]", '[{"document_id":"a","page_start":5,"page_end":2}]', "not json"],
+    ids=["object", "not-range", "reversed", "invalid-json"],
+)
+def test_invalid_page_ranges_are_rejected(value: str) -> None:
+    with pytest.raises(ValueError):
+        normalize_search_filters({"page_ranges": value})

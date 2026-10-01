@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -121,11 +121,22 @@ class RuntimeKnowledgeContext:
     registered_count: int = 0
     active_count: int = 0
     expansion_decisions: tuple[dict[str, Any], ...] = ()
+    # 利用者が確認の質問で選んだ条件と対象範囲(チャットの確認。#717)。
+    scope_context: str = ""
+
+    def with_scope(self, context: str, search_terms: Sequence[str] = ()) -> "RuntimeKnowledgeContext":
+        """利用者が選んだ条件を足す。検索に足す語は補助の検索文に加える。"""
+        context = str(context or "").strip()
+        terms = [term.strip() for term in search_terms if term and term.strip()]
+        if not context and not terms:
+            return self
+        expanded = self.expanded_question + ("\n" + " ".join(terms) if terms else "")
+        return replace(self, expanded_question=expanded, scope_context=context)
 
     @property
     def has_matches(self) -> bool:
         """質問に一致した用語またはルールがあるかを返します。"""
-        return bool(self.matched_terms or self.matched_rules)
+        return bool(self.matched_terms or self.matched_rules or self.scope_context)
 
     @property
     def is_active(self) -> bool:
@@ -143,7 +154,7 @@ class RuntimeKnowledgeContext:
         """LLM prompt に追加する補助 context 文字列を返します。"""
         if not self.has_matches:
             return ""
-        lines = ["[Runtime Glossary / Rules]"]
+        lines = [] if not (self.matched_terms or self.matched_rules) else ["[Runtime Glossary / Rules]"]
         if self.matched_terms:
             lines.append("Glossary:")
             for term in self.matched_terms:
@@ -160,6 +171,13 @@ class RuntimeKnowledgeContext:
                 triggers = f" (triggers: {', '.join(rule.triggers)})" if rule.triggers else ""
                 source = f" [{rule.source}]" if rule.source else ""
                 lines.append(f"- {label}{triggers}: {rule.content}{source}")
+        if self.scope_context:
+            lines.extend([
+                "[利用者が確認の質問で選んだ条件]",
+                self.scope_context,
+                "回答はこの条件に沿って作る。対象範囲が示されていれば、その範囲の資料だけを根拠にし、"
+                "範囲の資料に記載が無ければ、その範囲には記載が見つからないと答える（範囲の外から補わない）。",
+            ])
         return "\n".join(lines)
 
     def to_payload(self) -> dict[str, Any]:
@@ -175,6 +193,7 @@ class RuntimeKnowledgeContext:
             "registered_count": self.registered_count,
             "active_count": self.active_count,
             "expansion_decisions": list(self.expansion_decisions),
+            "scope_context": self.scope_context,
         }
 
 

@@ -53,8 +53,14 @@ SUPPORTED_SCALAR_SEARCH_FILTER_KEYS = (
 EXTRACTION_FIELD_FILTER_KEY = "extraction_fields"
 MAX_EXTRACTION_FIELD_CONDITIONS = 10
 
+# 文書のページ範囲(章節)の条件(#717)。値は {document_id, page_start, page_end} の JSON 配列の
+# 文字列で、どれかの範囲に重なる chunk に絞る(OR)。
+PAGE_RANGES_FILTER_KEY = "page_ranges"
+MAX_PAGE_RANGES = 20
+
 SUPPORTED_SEARCH_FILTER_KEYS = {
     EXTRACTION_FIELD_FILTER_KEY,
+    PAGE_RANGES_FILTER_KEY,
     "document_id",
     "knowledge_base_id",
     "chunk_set_id",
@@ -406,6 +412,9 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
         elif key == EXTRACTION_FIELD_FILTER_KEY:
             if formatted_conditions := _normalize_extraction_field_filter(cleaned):
                 normalized[key] = formatted_conditions
+        elif key == PAGE_RANGES_FILTER_KEY:
+            if formatted_ranges := format_page_ranges(parse_page_ranges(cleaned)):
+                normalized[key] = formatted_ranges
         elif key in SUPPORTED_SEARCH_CLASSIFICATION_FILTERS:
             # 保存時と同じ表記の正規化(NFKC・空白)。番号の接頭辞は残し、比較の側で外す(#547)。
             if category := normalize_category_value(cleaned):
@@ -421,6 +430,46 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
         raise ValueError(f"未対応の内容種別フィルターです: {content_kind}")
     _validate_filter_range_consistency(normalized)
     return normalized
+
+
+class PageRange(BaseModel):
+    """文書のページ範囲 1 件(章節。#717)。ページの無い範囲は文書全体。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str = Field(min_length=1, max_length=64)
+    page_start: int | None = Field(default=None, ge=1)
+    page_end: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "PageRange":
+        if (
+            self.page_start is not None
+            and self.page_end is not None
+            and self.page_start > self.page_end
+        ):
+            raise ValueError("ページ範囲の開始が終了より後ろです。")
+        return self
+
+
+def parse_page_ranges(value: str) -> list[PageRange]:
+    """``page_ranges`` の値(JSON 配列の文字列)を読む。形式が違えば ValueError。"""
+    try:
+        raw = json.loads(value)
+    except ValueError as exc:
+        raise ValueError("page_ranges は JSON の配列で指定してください。") from exc
+    if not isinstance(raw, list):
+        raise ValueError("page_ranges は JSON の配列で指定してください。")
+    if len(raw) > MAX_PAGE_RANGES:
+        raise ValueError(f"page_ranges は {MAX_PAGE_RANGES} 件までです。")
+    return [PageRange.model_validate(item) for item in raw]
+
+
+def format_page_ranges(ranges: list[PageRange]) -> str:
+    if not ranges:
+        return ""
+    items = [item.model_dump() for item in ranges]
+    return json.dumps(items, ensure_ascii=False, separators=(",", ":"))
 
 
 def _normalize_as_of(value: str) -> str:

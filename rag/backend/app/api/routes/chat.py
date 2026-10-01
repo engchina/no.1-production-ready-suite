@@ -32,8 +32,13 @@ from app.config import (
     get_settings,
 )
 from app.db_degradation import load_or_degrade
+from app.rag.answer_engine import AnswerScope
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
-from app.rag.business_view_knowledge import find_approved_faq
+from app.rag.business_view_knowledge import (
+    find_approved_faq,
+    load_runtime_knowledge_payload,
+    resolve_clarification,
+)
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import new_trace_id
 from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgress
@@ -349,6 +354,8 @@ class PreparedChatTurn:
     user_message: StoredMessage
     # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答。#684)。
     approved_faq: tuple[str, str] | None = None
+    # 利用者が確認の質問で選んだ条件と対象範囲(#717)。
+    scope: AnswerScope | None = None
 
 
 async def _prepare_chat_turn(
@@ -368,10 +375,27 @@ async def _prepare_chat_turn(
                 detail="選んだ類似問が見つかりません。もう一度送信して選び直してください。",
             )
         approved_faq = (record.question, record.approved_answer)
+    scope: AnswerScope | None = None
+    filters: dict[str, str] = {}
+    if request.clarification is not None:
+        payload = await load_runtime_knowledge_payload(oracle, business_view_id)
+        resolved = resolve_clarification(payload, request.clarification)
+        if resolved is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "選んだ確認の答えが見つかりません。業務ビューのルールが変わった可能性が"
+                    "あります。もう一度送信して選び直してください。"
+                ),
+            )
+        scope, page_ranges = resolved
+        if page_ranges:
+            filters["page_ranges"] = page_ranges
     base_request = SearchRequest(
         query=request.content,
         top_k=request.top_k,
         business_view_id=business_view_id,
+        filters=filters,
     )
     (
         effective_request,
@@ -409,6 +433,7 @@ async def _prepare_chat_turn(
         history=history,
         user_message=user_message,
         approved_faq=approved_faq,
+        scope=scope,
     )
 
 
@@ -443,6 +468,7 @@ async def _generate_chat_answer(
             guardrails=turn.guardrails,
             answer_model_id=model_id or None,
             approved_faq=turn.approved_faq,
+            scope=turn.scope,
         )
         result = await run_answer_with_timeout(
             lambda tracker: pipeline.run(

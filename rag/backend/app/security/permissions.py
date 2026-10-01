@@ -353,6 +353,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_BV}/runtime-knowledge"): _any(MENU_BUSINESS_VIEWS),
     ("POST", f"{_BV}/runtime-knowledge/edit"): _any(MENU_BUSINESS_VIEWS),
     ("POST", f"{_BV}/runtime-knowledge/preview"): _any(MENU_BUSINESS_VIEWS),
+    # ルールの確認の質問(#717)。確認の判定はチャットが送信のたびに使う。
+    ("PUT", f"{_BV}/runtime-knowledge/rules/{{rule_id}}/clarification"): _any(MENU_BUSINESS_VIEWS),
+    ("POST", f"{_BV}/clarifications/suggest"): _any(MENU_CHAT, MENU_BUSINESS_VIEWS),
     ("GET", f"{_BV}/query-suggestions"): _ANSWER_USE,
     # ---- 業務ビュー: チャット ----
     ("GET", "/chat/models"): _any(MENU_CHAT),

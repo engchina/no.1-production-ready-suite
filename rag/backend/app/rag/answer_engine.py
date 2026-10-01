@@ -202,6 +202,18 @@ def build_engine_settings(
     return replace(engine_settings, domain_keywords_override=tuple(settings.rag_domain_keywords))
 
 
+@dataclass(frozen=True)
+class AnswerScope:
+    """利用者が確認の質問で選んだ条件と対象範囲(#717)。"""
+
+    # 回答のプロンプトの前置きに入れる説明(質問・選んだ選択肢・前提・その他・対象範囲)。
+    context: str
+    # 補助の検索文に足す語。
+    search_terms: tuple[str, ...] = ()
+    # 回答の末尾に出す対象の範囲(例: 「出張旅費規程」の「第6条」(p.2))。
+    label: str = ""
+
+
 class AnswerEngine:
     """rag_poc 回答フローを backend の I/O で駆動する。"""
 
@@ -215,6 +227,7 @@ class AnswerEngine:
         answer_model_id: str | None = None,
         auto_field_conditions: Sequence[ExtractionFieldCondition] = (),
         approved_faq: tuple[str, str] | None = None,
+        scope: AnswerScope | None = None,
     ) -> None:
         self._settings = settings
         self._oracle = oracle
@@ -227,6 +240,9 @@ class AnswerEngine:
         # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答)。選んだときは検索せず、質問と FAQ
         # だけから回答する(#684 / #702)。
         self._approved_faq = approved_faq
+        # 利用者が確認の質問で選んだ条件と対象範囲(#717)。範囲での絞り込みは request.filters の
+        # page_ranges が行い、ここでは回答の前提・検索に足す語・回答の末尾の表示に使う。
+        self._scope = scope
 
     async def run(
         self, request: SearchRequest, *, step_callback: StepCallback | None = None
@@ -269,6 +285,16 @@ class AnswerEngine:
                 step_callback,
             )
         outcome = _outcome_from_result(result, state)
+        if self._scope is not None:
+            outcome.diagnostics["scope"] = {
+                "label": self._scope.label,
+                "context": self._scope.context,
+                "page_ranges": request.filters.get("page_ranges", ""),
+            }
+            if self._scope.label and outcome.answer.strip():
+                outcome = replace(
+                    outcome, answer=f"{outcome.answer}\n\n（対象: {self._scope.label}）"
+                )
         outcome.diagnostics["models"] = self._models_used(
             vision=getattr(result, "image_prompt_mode", "") == "vision_attachments"
         )
@@ -432,6 +458,11 @@ class AnswerEngine:
                     small_category=request.filters.get("small_category", ""),
                     as_of=request.filters.get("as_of", ""),
                 ),
+                scope=(
+                    (self._scope.context, self._scope.search_terms)
+                    if self._scope is not None
+                    else None
+                ),
             )
 
     async def _search(
@@ -560,7 +591,10 @@ class AnswerEngine:
             for term in getattr(metadata_filter, "source_file_terms", ())
             if isinstance(term, str) and term.strip()
         ]
-        if not terms or any(filters.get(key, "").strip() for key in ("file_name", "document_id")):
+        # 確認で章節の範囲(page_ranges)を選んだときも、そちらを優先して足さない(#717)。
+        if not terms or any(
+            filters.get(key, "").strip() for key in ("file_name", "document_id", "page_ranges")
+        ):
             return filters
         for term in terms[:_MAX_QUESTION_FILE_TERMS]:
             candidate = {**filters, "file_name": term}
