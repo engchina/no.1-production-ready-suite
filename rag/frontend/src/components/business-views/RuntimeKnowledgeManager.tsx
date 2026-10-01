@@ -6,7 +6,6 @@ import {
   EmptyState,
   FormStatus,
   RowTitleButton,
-  SelectField,
   StatusBadge,
   Switch,
   TableSkeleton,
@@ -15,7 +14,6 @@ import {
   TimedLoadingState,
   toast,
   useConfirm,
-  type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -43,20 +41,14 @@ type FormState = {
   enabled: boolean;
 };
 
-const EMPTY_FORM: FormState = {
-  kind: "terms",
-  selected: null,
-  name: "",
-  title: "",
-  labels: "",
-  content: "",
-  enabled: true,
-};
+function emptyForm(kind: RuntimeKnowledgeKind): FormState {
+  return { kind, selected: null, name: "", title: "", labels: "", content: "", enabled: true };
+}
 
-const KIND_OPTIONS: SelectFieldOption<RuntimeKnowledgeKind>[] = [
-  { value: "terms", label: t("businessViews.runtime.kind.terms") },
-  { value: "rules", label: t("businessViews.runtime.kind.rules") },
-];
+/** 種類の表示名（タブ・通知の文言に使う。#682）。 */
+export function runtimeKindLabel(kind: RuntimeKnowledgeKind): string {
+  return t(kind === "terms" ? "businessViews.runtime.kind.terms" : "businessViews.runtime.kind.rules");
+}
 
 const ACTIVE_STATUSES = new Set(["", "approved", "stale_review_needed"]);
 
@@ -70,7 +62,7 @@ function list(value: JsonValue | undefined): string[] {
     : [];
 }
 
-/** 種類の切替だけでは dirty にしない（入力値と編集対象を比べる）。 */
+/** 入力値と編集対象を比べて dirty を判定する。 */
 function editableSnapshot({ selected, name, title, labels, content, enabled }: FormState) {
   return JSON.stringify([selected, name, title, labels, content, enabled]);
 }
@@ -124,18 +116,24 @@ function errorMessage(error: unknown, fallback: string) {
   return error instanceof ApiError ? error.message : fallback;
 }
 
-/** 業務ビューの用語(別名・説明)とルール(照合キーワード・内容)。回答フローで使う。 */
+/**
+ * 業務ビューの用語・同義語（同義語・説明）または回答ルール（照合キーワード・内容）。回答フローで使う。
+ * 種類ごとにタブを分け、表・追加 / 編集のフォーム・照合テストはその種類だけを扱う（#682）。
+ */
 export function RuntimeKnowledgeManager({
   businessViewId,
+  kind,
 }: {
   businessViewId: string;
+  kind: RuntimeKnowledgeKind;
 }) {
   const query = useRuntimeKnowledge(businessViewId);
   const save = useEditRuntimeKnowledge(businessViewId);
   const confirm = useConfirm();
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [form, setForm] = useState<FormState>(() => emptyForm(kind));
   // 読み込んだ行（または空の新規）を基準に、未保存の入力だけを離脱ガードの対象にする。
-  const [baseline, setBaseline] = useState<FormState>(EMPTY_FORM);
+  const [baseline, setBaseline] = useState<FormState>(() => emptyForm(kind));
+  const kindLabel = runtimeKindLabel(kind);
   const load = (next: FormState) => {
     setForm(next);
     setBaseline(next);
@@ -150,11 +148,9 @@ export function RuntimeKnowledgeManager({
   const [errors, setErrors] = useState<RequiredErrors>({});
   const update = (patch: Partial<FormState>) => {
     setForm((current) => ({ ...current, ...patch }));
-    // 直した欄のエラーだけを消す。種類を切り替えたときは必須の欄が変わるので全部消す。
+    // 直した欄のエラーだけを消す。
     setErrors((current) =>
-      "kind" in patch
-        ? {}
-        : Object.fromEntries(Object.entries(current).filter(([field]) => !(field in patch))),
+      Object.fromEntries(Object.entries(current).filter(([field]) => !(field in patch))),
     );
   };
 
@@ -170,7 +166,7 @@ export function RuntimeKnowledgeManager({
   const submit = (remove = false) =>
     save.mutate(
       {
-        kind: form.kind,
+        kind,
         selected: form.selected,
         name: form.name.trim(),
         title: form.title.trim(),
@@ -181,25 +177,23 @@ export function RuntimeKnowledgeManager({
       },
       {
         onSuccess: () => {
-          load({ ...EMPTY_FORM, kind: form.kind });
+          load(emptyForm(kind));
           toast.success(
-            t(
-              remove
-                ? "businessViews.runtime.deleted"
-                : "businessViews.runtime.saved",
-            ),
+            t(remove ? "businessViews.runtime.deleted" : "businessViews.runtime.saved", {
+              kind: kindLabel,
+            }),
           );
         },
         onError: (error) =>
           toast.error(
-            errorMessage(error, t("businessViews.runtime.saveError")),
+            errorMessage(error, t("businessViews.runtime.saveError", { kind: kindLabel })),
           ),
       },
     );
 
   const confirmDelete = async () => {
     const ok = await confirm({
-      title: t("businessViews.runtime.deleteConfirm.title"),
+      title: t("businessViews.runtime.deleteConfirm.title", { kind: kindLabel }),
       description: t("businessViews.runtime.deleteConfirm.description", {
         name: form.selected ?? "",
       }),
@@ -223,21 +217,16 @@ export function RuntimeKnowledgeManager({
     }
   };
 
-  const tableFor = (kind: RuntimeKnowledgeKind, rows: Row[]) =>
-    query.isPending ? (
-      // 用語と規則は同じ 1 回の取得。経過時間は用語の表の位置だけに出し、規則は形だけにする（messaging.md §3.7）。
-      kind === "terms" ? (
-        <TimedLoadingState
-          label={t("businessViews.runtime.loading")}
-          operationKey={`runtime-knowledge-${businessViewId}`}
-          testId="runtime-knowledge-loading"
-        >
-          <TableSkeleton columns={3} rows={{ base: 3, md: 5 }} />
-        </TimedLoadingState>
-      ) : (
-        <TableSkeleton columns={3} rows={{ base: 3, md: 5 }} />
-      )
-    ) : (
+  const rows = (kind === "terms" ? query.data?.terms : query.data?.rules) ?? [];
+  const table = query.isPending ? (
+    <TimedLoadingState
+      label={t("businessViews.runtime.loading")}
+      operationKey={`runtime-knowledge-${businessViewId}`}
+      testId="runtime-knowledge-loading"
+    >
+      <TableSkeleton columns={3} rows={{ base: 3, md: 5 }} />
+    </TimedLoadingState>
+  ) : (
     <PagedDataTable<Row>
       columns={[
         {
@@ -252,7 +241,7 @@ export function RuntimeKnowledgeManager({
           render: (row) => (
             <RowTitleButton
               title={rowName(kind, row)}
-              current={form.kind === kind && form.selected === rowKey(kind, row)}
+              current={form.selected === rowKey(kind, row)}
               aria-label={t("businessViews.runtime.editNamed", {
                 name: rowName(kind, row),
               })}
@@ -293,7 +282,7 @@ export function RuntimeKnowledgeManager({
       rows={rows}
       getRowKey={(row) => rowKey(kind, row)}
       onRowClick={(row) => load(formFromRow(kind, row))}
-      selectedRowKey={form.kind === kind ? form.selected : null}
+      selectedRowKey={form.selected}
       resetKey={businessViewId}
       dense
       empty={<EmptyState title={t("businessViews.runtime.empty")} />}
@@ -309,40 +298,22 @@ export function RuntimeKnowledgeManager({
 
   return (
     <div className="space-y-5">
-      <section className="space-y-2">
-        <h4 className="text-sm font-semibold text-fg">
-          {t("businessViews.runtime.kind.terms")}
-        </h4>
-        {tableFor("terms", query.data?.terms ?? [])}
-      </section>
-      <section className="space-y-2">
-        <h4 className="text-sm font-semibold text-fg">
-          {t("businessViews.runtime.kind.rules")}
-        </h4>
-        {tableFor("rules", query.data?.rules ?? [])}
-      </section>
+      <p className="text-xs leading-relaxed text-fg-muted">
+        {t(kind === "terms" ? "businessViews.runtime.terms.hint" : "businessViews.runtime.rules.hint")}
+      </p>
+      {table}
 
       <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
         <section className="min-w-0 space-y-3 rounded-md border border-border p-3">
           <h4 className="text-sm font-semibold text-fg">
             {form.selected
               ? t("businessViews.runtime.editTitle", { name: form.selected })
-              : t("businessViews.runtime.addTitle")}
+              : t("businessViews.runtime.addTitle", { kind: kindLabel })}
           </h4>
-          <SelectField
-            id="runtime-knowledge-kind"
-            label={t("businessViews.runtime.kindLabel")}
-            value={form.kind}
-            options={KIND_OPTIONS}
-            onValueChange={(value) =>
-              value && update({ kind: value, selected: null })
-            }
-            width="sm"
-          />
           <TextField
             id="runtime-knowledge-name"
             label={t(
-              form.kind === "terms"
+              kind === "terms"
                 ? "businessViews.runtime.term"
                 : "businessViews.runtime.ruleId",
             )}
@@ -352,7 +323,7 @@ export function RuntimeKnowledgeManager({
             error={errors.name ?? undefined}
             required
           />
-          {form.kind === "rules" ? (
+          {kind === "rules" ? (
             <TextField
               id="runtime-knowledge-title"
               label={t("businessViews.runtime.ruleTitle")}
@@ -365,7 +336,7 @@ export function RuntimeKnowledgeManager({
           ) : null}
           {(["labels", "content"] as const).map((field) => {
             // ルール内容だけが必須（用語の説明・別名・照合キーワードは任意。backend と同じ）。
-            const required = field === "content" && form.kind === "rules";
+            const required = field === "content" && kind === "rules";
             const error = field === "content" ? errors.content : null;
             return (
               <TextareaField
@@ -374,10 +345,10 @@ export function RuntimeKnowledgeManager({
                 required={required}
                 label={t(
                   field === "labels"
-                    ? form.kind === "terms"
+                    ? kind === "terms"
                       ? "businessViews.runtime.aliasesInput"
                       : "businessViews.runtime.triggersInput"
-                    : form.kind === "terms"
+                    : kind === "terms"
                       ? "businessViews.runtime.description"
                       : "businessViews.runtime.content",
                 )}
@@ -413,7 +384,7 @@ export function RuntimeKnowledgeManager({
                   size="sm"
                   variant="ghost"
                   icon={X}
-                  onClick={() => load({ ...EMPTY_FORM, kind: form.kind })}
+                  onClick={() => load(emptyForm(kind))}
                 >
                   {t("businessViews.runtime.cancel")}
                 </Button>
@@ -440,7 +411,7 @@ export function RuntimeKnowledgeManager({
             {t("businessViews.runtime.previewTitle")}
           </h4>
           <p className="text-xs leading-relaxed text-fg-muted">
-            {t("businessViews.runtime.previewHelp")}
+            {t(kind === "terms" ? "businessViews.runtime.previewHelp.terms" : "businessViews.runtime.previewHelp.rules")}
           </p>
           <TextField
             id="runtime-knowledge-question"
@@ -464,18 +435,15 @@ export function RuntimeKnowledgeManager({
             <dl className="space-y-1 text-xs">
               <div>
                 <dt className="font-medium text-fg">
-                  {t("businessViews.runtime.matchedTerms")}
+                  {t(
+                    kind === "terms"
+                      ? "businessViews.runtime.matchedTerms"
+                      : "businessViews.runtime.matchedRules",
+                  )}
                 </dt>
                 <dd className="break-words text-fg-muted">
-                  {preview.matched_terms.join("、") || "—"}
-                </dd>
-              </div>
-              <div>
-                <dt className="font-medium text-fg">
-                  {t("businessViews.runtime.matchedRules")}
-                </dt>
-                <dd className="break-words text-fg-muted">
-                  {preview.matched_rules.join("、") || "—"}
+                  {(kind === "terms" ? preview.matched_terms : preview.matched_rules).join("、") ||
+                    "—"}
                 </dd>
               </div>
               <div>
