@@ -8,6 +8,7 @@ import {
   INITIAL_FILE_LIST_VIEW,
   isFileListView,
   outOfRangeOffset,
+  summarizeDeleteOutcomes,
   summarizeEnqueueOutcomes,
 } from "./FileListClient.logic";
 
@@ -86,6 +87,25 @@ describe("classifyEnqueuedJob / summarizeEnqueueOutcomes", () => {
       failed: 2,
       firstSkipReason: "duplicate_content",
       firstError: "このドキュメントは取込待ちまたは取込中です。",
+    });
+  });
+});
+
+describe("summarizeDeleteOutcomes", () => {
+  it("後始末の警告のあった削除を、成功と分けて数える", () => {
+    expect(
+      summarizeDeleteOutcomes([
+        { kind: "deleted", warnings: [] },
+        { kind: "deleted", warnings: ["原本を削除できませんでした。", "再試行してください。"] },
+        { kind: "deleted", warnings: ["artifact を削除できませんでした。"] },
+        { kind: "failed", message: "実行中です。" },
+      ])
+    ).toEqual({
+      deleted: 3,
+      warned: 2,
+      failed: 1,
+      firstWarning: "原本を削除できませんでした。 再試行してください。",
+      firstError: "実行中です。",
     });
   });
 });

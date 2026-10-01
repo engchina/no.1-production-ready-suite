@@ -112,3 +112,40 @@ export function summarizeEnqueueOutcomes(outcomes: readonly EnqueueOutcome[]): E
   }
   return summary;
 }
+
+export type DeleteOutcome =
+  | { kind: "deleted"; warnings: readonly string[] }
+  | { kind: "failed"; message: string };
+
+export interface DeleteSummary {
+  deleted: number;
+  /** 削除できたが、保存先のファイルの後始末の警告があった件数（#699）。 */
+  warned: number;
+  failed: number;
+  firstWarning: string | null;
+  firstError: string | null;
+}
+
+/** 一括削除の結果をまとめる。後始末の警告を、1 件の削除と同じく成功として黙らせない（#281 / #699）。 */
+export function summarizeDeleteOutcomes(outcomes: readonly DeleteOutcome[]): DeleteSummary {
+  const summary: DeleteSummary = {
+    deleted: 0,
+    warned: 0,
+    failed: 0,
+    firstWarning: null,
+    firstError: null,
+  };
+  for (const outcome of outcomes) {
+    if (outcome.kind === "failed") {
+      summary.failed += 1;
+      summary.firstError = summary.firstError ?? outcome.message;
+      continue;
+    }
+    summary.deleted += 1;
+    if (outcome.warnings.length > 0) {
+      summary.warned += 1;
+      summary.firstWarning = summary.firstWarning ?? outcome.warnings.join(" ");
+    }
+  }
+  return summary;
+}

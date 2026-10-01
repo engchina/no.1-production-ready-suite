@@ -148,13 +148,25 @@ test("選択したドキュメントを一括削除できる", async ({ page }) 
     deletedIds.push(id);
     const index = documents.findIndex((document) => document.id === id);
     if (index >= 0) documents.splice(index, 1);
+    return id === "doc-2" ? ["原本ファイルを削除できませんでした。"] : [];
   });
 
   await page.goto("/file-list");
 
+  // 一括操作のバーは選択の前から出し、選択が無いときは操作を無効にする（#699）。
+  const bulkActions = page.getByTestId("file-list-bulk-actions");
+  await expect(bulkActions).toContainText("行を選ぶと、まとめて取込・削除できます。");
+  await expect(bulkActions.getByRole("button", { name: "一括削除 (0)" })).toBeDisabled();
+  await expect(bulkActions.getByRole("button", { name: "一括投入 (0)" })).toBeDisabled();
+  await expect(bulkActions.getByRole("button", { name: "選択解除" })).toBeDisabled();
+  const tableTop = async () => (await page.locator("table").first().boundingBox())?.y;
+  const topBefore = await tableTop();
+
   await page.locator("tbody tr").filter({ hasText: "policy.txt" }).getByRole("checkbox").check();
   await page.locator("tbody tr").filter({ hasText: "guide.txt" }).getByRole("checkbox").check();
   await expect(page.getByText("2 件選択中")).toBeVisible();
+  // 選んでも表の位置は動かない。
+  expect(await tableTop()).toBe(topBefore);
   await page.getByRole("button", { name: "一括削除 (2)" }).click();
 
   const dialog = page.getByRole("alertdialog", { name: "選択した 2 件を削除しますか？" });
@@ -162,7 +174,12 @@ test("選択したドキュメントを一括削除できる", async ({ page }) 
   await expect(dialog).toContainText("投入ジョブと segment");
   await dialog.getByRole("button", { name: "一括削除" }).click();
 
-  await expect(page.getByText("2 件のドキュメントを削除しました。").first()).toBeVisible();
+  // 後始末の警告は、1 件の削除と同じく成功として黙らせない（#699）。
+  await expect(
+    page
+      .getByText("2 件を削除しましたが、1 件は保存先のファイルの後始末に一部失敗しました。")
+      .first()
+  ).toBeVisible();
   await expect(page.getByRole("link", { name: "policy.txt" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "guide.txt" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "notes.txt" })).toBeVisible();
@@ -253,7 +270,8 @@ test("削除の影響を確認できないときは削除せず、原因を通�
 async function mockDocumentIndexApi(
   page: Page,
   documents: DocumentSummary[],
-  onDelete: (id: string) => void,
+  // 戻り値は削除の応答の警告（保存先のファイルの後始末の失敗。#699）。
+  onDelete: (id: string) => string[] | void,
   impacts: Record<string, DeleteImpact> | "error" = {}
 ) {
   await page.route("**/api/knowledge-bases**", async (route) => {
@@ -335,7 +353,7 @@ async function mockDocumentIndexApi(
         });
         return;
       }
-      onDelete(id);
+      const deleteWarnings = onDelete(id) ?? [];
       await route.fulfill({
         json: {
           data: {
@@ -347,7 +365,7 @@ async function mockDocumentIndexApi(
             artifact_delete_failed_count: 0,
           },
           error_messages: [],
-          warning_messages: [],
+          warning_messages: deleteWarnings,
         },
       });
       return;
