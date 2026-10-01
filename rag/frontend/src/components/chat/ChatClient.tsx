@@ -49,12 +49,15 @@ import { EmptyState, ErrorState } from "@/components/StateViews";
 import { isSubmitEnter } from "@/lib/keyboard";
 import type {
   ApprovedFaqSuggestionData,
+  ClarificationAnswer,
+  ClarificationSuggestionData,
   ChatMessage,
   ConversationSummary,
   RetrievedChunk,
 } from "@/lib/api";
 import { api, ApiError } from "@/lib/api";
 import { ApprovedFaqSuggestions } from "@/components/search/ApprovedFaqSuggestions";
+import { ClarificationChoice } from "./ClarificationChoice";
 import type { AnswerStageEvent } from "@/lib/answer-progress";
 import { streamChatMessage, type ChatColumn } from "@/lib/chat-stream";
 import { formatDateTime } from "@/lib/format";
@@ -477,6 +480,13 @@ export function ChatClient() {
     null,
     isFaqChoice
   );
+  // 回答の前に答える確認の質問（業務ビューのルール。#717）。類似問の提示の後に出し、作業状態に残す。
+  const [clarifyChoice, setClarifyChoice] = useWorkspaceState<ClarifyChoice | null>(
+    "chat.clarifyChoice",
+    null,
+    isClarifyChoice
+  );
+  const pendingChoice = faqChoice !== null || clarifyChoice !== null;
   // 会話の履歴は既定で閉じる（ChatGPT・Claude・Gemini・Copilot と同じ。多くの利用者は履歴を使わないので、
   // チャットに面積を渡す。#664）。lg 以上のインラインのパネルの開閉は作業状態に残す。
   // lg 未満のモーダルの side sheet は残さない（戻ったとき・再読込で画面を塞がない。workspace-state.md）。
@@ -513,15 +523,16 @@ export function ChatClient() {
     setActiveId(null);
     setLiveTurn(null);
     setFaqChoice(null);
+    setClarifyChoice(null);
     setErrorText("");
     setEditingId(null);
     setTitleError("");
-  }, [businessViewId, setActiveId, setFaqChoice]);
+  }, [businessViewId, setActiveId, setFaqChoice, setClarifyChoice]);
 
   // メッセージが増えたら末尾までスクロールする。
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [persistedMessages.length, liveTurn, faqChoice]);
+  }, [persistedMessages.length, liveTurn, faqChoice, clarifyChoice]);
 
   useEffect(() => {
     const targetId = location.hash.slice(1);
@@ -680,7 +691,7 @@ export function ChatClient() {
    */
   async function send(retryContent?: string) {
     const content = (retryContent ?? composer).trim();
-    if (!content || !businessViewId || sending || faqChoice || businessViewWithoutKnowledgeBases) {
+    if (!content || !businessViewId || sending || pendingChoice || businessViewWithoutKnowledgeBases) {
       return;
     }
     setSending(true);
@@ -697,7 +708,7 @@ export function ChatClient() {
       setSending(false);
       return;
     }
-    await deliver(content, retryContent);
+    await clarifyOrDeliver(content, retryContent);
   }
 
   /** 類似問の選択を確定して送る（`faqId` が無ければ「どれでもない」）。 */
@@ -706,10 +717,46 @@ export function ChatClient() {
     const { content, retryContent } = faqChoice;
     setFaqChoice(null);
     setSending(true);
-    void deliver(content, retryContent, faqId);
+    // 類似問を選ぶと資料を検索しないので、確認の質問は「どれでもない」のときだけ出す（#717）。
+    void (faqId ? deliver(content, retryContent, faqId) : clarifyOrDeliver(content, retryContent));
   }
 
-  async function deliver(content: string, retryContent?: string, approvedFaqId?: string) {
+  /**
+   * 質問が業務ビューのルールの確認に当たれば、回答の前に確認の質問を出す（#717）。1 つの質問で聞き返すのは
+   * 1 回だけ。照会に失敗したときは確認を使わずに送る。
+   */
+  async function clarifyOrDeliver(content: string, retryContent?: string) {
+    if (!businessViewId) return;
+    let suggestion: ClarificationSuggestionData | null = null;
+    try {
+      suggestion = (await api.suggestClarification(businessViewId, content)).suggestion ?? null;
+    } catch {
+      // 確認は補助。照会できなくても回答は作る。
+    }
+    if (suggestion) {
+      if (retryContent === undefined) setComposer("");
+      setClarifyChoice({ content, retryContent, suggestion });
+      setSending(false);
+      return;
+    }
+    await deliver(content, retryContent);
+  }
+
+  /** 確認の答えを確定して送る（`answer` が無ければ「選ばずに回答する」）。 */
+  function chooseClarification(answer?: ClarificationAnswer) {
+    if (!clarifyChoice) return;
+    const { content, retryContent } = clarifyChoice;
+    setClarifyChoice(null);
+    setSending(true);
+    void deliver(content, retryContent, undefined, answer);
+  }
+
+  async function deliver(
+    content: string,
+    retryContent?: string,
+    approvedFaqId?: string,
+    clarification?: ClarificationAnswer
+  ) {
     if (!businessViewId) return;
     if (retryContent === undefined) setComposer("");
     const controller = new AbortController();
@@ -733,6 +780,7 @@ export function ChatClient() {
           content,
           model_ids: selectedModelIds,
           ...(approvedFaqId ? { approved_faq_id: approvedFaqId } : {}),
+          ...(clarification ? { clarification } : {}),
         },
         {
           onStart: ({ user_message, columns }) => {
@@ -1173,7 +1221,7 @@ export function ChatClient() {
                   message={t("chat.messages.error")}
                   onRetry={() => void conversationQuery.refetch()}
                 />
-              ) : turns.length === 0 && !liveTurn && !faqChoice ? (
+              ) : turns.length === 0 && !liveTurn && !pendingChoice ? (
                 <EmptyState title={t("chat.messages.empty")} />
               ) : (
                 <>
@@ -1231,6 +1279,21 @@ export function ChatClient() {
                       />
                     </div>
                   ) : null}
+                  {/* 類似問の後に出す確認の質問（#717）。 */}
+                  {clarifyChoice ? (
+                    <div className="space-y-2">
+                      <div className="flex justify-end">
+                        <div className="max-w-[85%] whitespace-pre-wrap rounded-md bg-accent-subtle px-3 py-2 text-sm text-fg">
+                          {clarifyChoice.content}
+                        </div>
+                      </div>
+                      <ClarificationChoice
+                        suggestion={clarifyChoice.suggestion}
+                        onAnswer={(answer) => chooseClarification(answer)}
+                        onSkip={() => chooseClarification()}
+                      />
+                    </div>
+                  ) : null}
                 </>
               )}
             </div>
@@ -1272,7 +1335,7 @@ export function ChatClient() {
                     runDisabled={
                       composer.trim().length === 0 ||
                       businessViewWithoutKnowledgeBases ||
-                      faqChoice !== null
+                      pendingChoice
                     }
                     size="lg"
                     testId="chat-run-stop"
@@ -1339,5 +1402,29 @@ function isFaqChoice(value: unknown): value is FaqChoice | null {
         typeof item.answer === "string" &&
         typeof item.score === "number"
     )
+  );
+}
+
+interface ClarifyChoice {
+  content: string;
+  retryContent?: string;
+  suggestion: ClarificationSuggestionData;
+}
+
+/** 保存した確認の選択待ちが今の形か（古い版・壊れた値は捨てる。#717）。 */
+function isClarifyChoice(value: unknown): value is ClarifyChoice | null {
+  if (value === null) return true;
+  if (typeof value !== "object") return false;
+  const choice = value as Partial<ClarifyChoice>;
+  const suggestion = choice.suggestion as Partial<ClarificationSuggestionData> | undefined;
+  return (
+    typeof choice.content === "string" &&
+    (choice.retryContent === undefined || typeof choice.retryContent === "string") &&
+    typeof suggestion === "object" &&
+    suggestion !== null &&
+    typeof suggestion.rule_id === "string" &&
+    typeof suggestion.clarification === "object" &&
+    suggestion.clarification !== null &&
+    Array.isArray(suggestion.clarification.options)
   );
 }

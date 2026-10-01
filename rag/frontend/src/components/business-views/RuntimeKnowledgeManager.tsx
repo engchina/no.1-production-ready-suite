@@ -1,4 +1,5 @@
 import { Save, Search, Trash2, X } from "lucide-react";
+import { RuleClarificationEditor, storedClarification } from "./RuleClarificationEditor";
 import { useState } from "react";
 
 import {
@@ -467,6 +468,17 @@ export function RuntimeKnowledgeManager({
           ) : null}
         </section>
       </div>
+      {/* 既存のルールには確認の質問を設定できる（チャットの確認。#717）。ルールの保存とは別に保存する。 */}
+      {kind === "rules" && form.selected ? (
+        <RuleClarificationEditor
+          key={form.selected}
+          businessViewId={businessViewId}
+          ruleId={form.selected}
+          stored={storedClarification(
+            rows.find((row) => rowKey(kind, row) === form.selected)?.clarification
+          )}
+        />
+      ) : null}
     </div>
   );
 }

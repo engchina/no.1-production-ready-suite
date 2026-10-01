@@ -1084,6 +1084,46 @@ export interface ChatMessageRequestBody {
   top_k?: number;
   /** 利用者が選んだ類似の承認済み FAQ の id。質問と一緒に LLM へ渡す（#684）。 */
   approved_faq_id?: string;
+  /** 利用者が確認の質問に答えた内容（#717）。backend がルールから引き直す。 */
+  clarification?: ClarificationAnswer;
+}
+
+/** ルールの確認の質問（チャットの確認。#717）。 */
+export interface ClarificationSection {
+  document_id: string;
+  document_name: string;
+  section_id: string;
+  title: string;
+  page_start: number | null;
+  page_end: number | null;
+}
+
+export interface ClarificationOption {
+  id: string;
+  label: string;
+  description: string;
+  search_terms: string[];
+  premise: string;
+  sections: ClarificationSection[];
+}
+
+export interface RuleClarification {
+  question: string;
+  multiple: boolean;
+  allow_other: boolean;
+  options: ClarificationOption[];
+}
+
+export interface ClarificationSuggestionData {
+  rule_id: string;
+  rule_title: string;
+  clarification: RuleClarification;
+}
+
+export interface ClarificationAnswer {
+  rule_id: string;
+  option_ids: string[];
+  other_text: string;
 }
 
 /** 回答に選べるモデル（既定のテキストモデルと既定の Vision モデルだけ。先頭が既定。#675）。 */
@@ -2765,6 +2805,16 @@ export const api = {
     request<ApprovedFaqSuggestionsData>(
       `/api/business-views/${encodeURIComponent(id)}/approved-faq/suggest`,
       jsonBody({ query, purpose }),
+    ),
+  suggestClarification: (id: string, query: string) =>
+    request<{ suggestion: ClarificationSuggestionData | null }>(
+      `/api/business-views/${encodeURIComponent(id)}/clarifications/suggest`,
+      jsonBody({ query }),
+    ),
+  saveRuleClarification: (id: string, ruleId: string, clarification: RuleClarification | null) =>
+    request<RuntimeKnowledgeData>(
+      `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge/rules/${encodeURIComponent(ruleId)}/clarification`,
+      { ...jsonBody({ clarification }), method: "PUT" },
     ),
   setApprovedFaqEnabled: (id: string, enabled: boolean) =>
     request<ApprovedFaqListData>(
