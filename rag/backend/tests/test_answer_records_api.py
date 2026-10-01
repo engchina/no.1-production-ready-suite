@@ -287,31 +287,24 @@ async def test_answer_evaluation_round_trip_on_real_oracle() -> None:
         await oracle.delete_answer_record(trace_id)
 
 
-@pytest.mark.anyio
-async def test_get_answer_record_turns_oracle_json_decimals_into_numbers() -> None:
-    """Oracle の JSON 列の Decimal を int / float に戻す。評価の入力は json.dumps へ渡す(#678)。"""
+def test_oracle_rows_turn_json_decimals_into_numbers() -> None:
+    """Oracle の JSON 列の Decimal を int / float に戻す(#678 / #695)。"""
     from decimal import Decimal
 
-    from app.clients.oracle import OracleClient
+    from app.clients.oracle import _row_to_dict
 
-    oracle = OracleClient.__new__(OracleClient)
-
-    async def fetch_one(*_args: object, **_kwargs: object) -> dict[str, object]:
-        return {
-            "trace_id": "t",
-            "evaluation_input_json": {
-                "evidence_items": [{"score": Decimal("0.5"), "rank": Decimal(2)}]
-            },
-            "evaluation_json": '{"status": "completed"}',
-            "citations_json": None,
-            "diagnostics_json": None,
-        }
-
-    oracle._fetch_one = fetch_one  # type: ignore[method-assign]
-    row = await oracle.get_answer_record("t")
-    assert row is not None
-    item = row["evaluation_input_json"]["evidence_items"][0]  # type: ignore[index]
+    row = _row_to_dict(
+        (
+            {"evidence_items": [{"score": Decimal("0.5"), "rank": Decimal(2)}]},
+            [Decimal(3)],
+            Decimal("1.5"),
+        ),
+        [("payload_json",), ("items_json",), ("score",)],
+    )
+    item = row["payload_json"]["evidence_items"][0]  # type: ignore[index]
     assert item == {"score": 0.5, "rank": 2}
     assert type(item["rank"]) is int
-    assert row["evaluation_json"] == {"status": "completed"}
-    json.dumps(row["evaluation_input_json"])
+    assert row["items_json"] == [3]
+    # NUMBER 列の値はそのまま。
+    assert row["score"] == Decimal("1.5")
+    json.dumps([row["payload_json"], row["items_json"]])
