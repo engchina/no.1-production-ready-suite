@@ -214,6 +214,7 @@ class AnswerEngine:
         runtime_knowledge_payload: Mapping[str, object] | None = None,
         answer_model_id: str | None = None,
         auto_field_conditions: Sequence[ExtractionFieldCondition] = (),
+        approved_faq: tuple[str, str] | None = None,
     ) -> None:
         self._settings = settings
         self._oracle = oracle
@@ -223,6 +224,8 @@ class AnswerEngine:
         self._answer_model_id = answer_model_id or None
         # 質問から読み取った抽出項目の条件(#652)。手の条件の項目には足さない。
         self._auto_field_conditions = list(auto_field_conditions)
+        # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答)。質問と一緒に LLM へ渡す(#684)。
+        self._approved_faq = approved_faq
 
     async def run(
         self, request: SearchRequest, *, step_callback: StepCallback | None = None
@@ -398,6 +401,7 @@ class AnswerEngine:
                     small_category=request.filters.get("small_category", ""),
                     as_of=request.filters.get("as_of", ""),
                 ),
+                approved_faq=self._approved_faq,
             )
 
     async def _search(

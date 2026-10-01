@@ -410,9 +410,13 @@ class _FakePipeline:
     # 作られた pipeline の回答のモデル(回答フローへ渡す列のモデル。#593)。
     answer_model_ids: list[object] = []
 
+    # 作られた pipeline に渡した類似の承認済み FAQ(#684)。
+    approved_faqs: list[object] = []
+
     def __init__(self, *args: object, **kwargs: object) -> None:
         self._llm = kwargs.get("llm")
         _FakePipeline.answer_model_ids.append(kwargs.get("answer_model_id"))
+        _FakePipeline.approved_faqs.append(kwargs.get("approved_faq"))
 
     async def run(  # type: ignore[no-untyped-def]
         self,
@@ -805,3 +809,46 @@ def test_stream_returns_prepare_errors_before_starting_the_stream(
     assert response.status_code == 409
     assert response.json()["error_messages"] == ["回答プロンプトが無効です。"]
     assert fake_oracle.messages[created["id"]] == []
+
+
+def test_stream_message_passes_selected_approved_faq_from_the_business_view(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """選んだ類似問は業務ビューの FAQ から引き直して回答の pipeline へ渡す(#684)。"""
+    from rag_engine.knowledge.approved_faq import ApprovedFaqRecord
+
+    fake = FakeChatOracle()
+    fake.conversations["conv-x"] = StoredConversation(
+        id="conv-x",
+        business_view_id="bv-1",
+        status="ACTIVE",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    fake.messages["conv-x"] = []
+    _stub_stream(monkeypatch, fake, ["m1"])
+    monkeypatch.setattr(_FakePipeline, "approved_faqs", [])
+    record = ApprovedFaqRecord(
+        id="faq-1", question="住宅ローンの特典は？", approved_answer="QUO カード", status="approved"
+    )
+    looked_up: list[tuple[str, str]] = []
+
+    async def find(_store: object, business_view_id: str, faq_id: str) -> object:
+        looked_up.append((business_view_id, faq_id))
+        return record if faq_id == "faq-1" else None
+
+    monkeypatch.setattr(chat_route, "find_approved_faq", find)
+    url = "/api/chat/conversations/conv-x/messages/stream"
+
+    resp = client.post(url, json={"content": "特典は?", "approved_faq_id": "faq-1"})
+    assert resp.status_code == 200
+    assert looked_up == [("bv-1", "faq-1")]
+    assert _FakePipeline.approved_faqs == [("住宅ローンの特典は？", "QUO カード")]
+    # 選ばなかったときは渡さない。
+    client.post(url, json={"content": "特典は?"})
+    assert _FakePipeline.approved_faqs[-1] is None
+    # 業務ビューに無い(またはオフ)の FAQ は、発話を保存する前に 422 で断る。
+    saved = len(fake.messages["conv-x"])
+    missing = client.post(url, json={"content": "特典は?", "approved_faq_id": "other"})
+    assert missing.status_code == 422
+    assert len(fake.messages["conv-x"]) == saved

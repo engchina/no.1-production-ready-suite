@@ -81,6 +81,7 @@ import {
   type EvaluationSettingsUpdate,
   type GraphSettingsData,
   type GraphSettingsUpdate,
+  type ApprovedFaqListData,
   type ApprovedFaqMutationData,
   type RuntimeKnowledgeEditRequest,
 } from "./api";
@@ -1125,9 +1126,9 @@ export function useApprovedFaq(businessViewId: string) {
 }
 
 /** FAQ の追加・削除・取込。成功時は一覧 cache を結果で置き換える。 */
-export function useApprovedFaqMutation<TArgs>(
+export function useApprovedFaqMutation<TArgs, TData extends ApprovedFaqListData = ApprovedFaqMutationData>(
   businessViewId: string,
-  mutationFn: (args: TArgs) => Promise<ApprovedFaqMutationData>,
+  mutationFn: (args: TArgs) => Promise<TData>,
 ) {
   const qc = useQueryClient();
   return useMutation({

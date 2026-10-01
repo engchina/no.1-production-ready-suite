@@ -13,24 +13,32 @@ import {
 import type { ApprovedFaqSuggestionData } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
-/** 回答前に提示する類似の承認済み FAQ。選ぶと LLM を使わず FAQ の回答を表示する。 */
+/**
+ * 回答前に提示する類似の承認済み FAQ。
+ * RAG 検索（search）は選ぶと LLM を使わず FAQ の回答を表示する。チャット（chat）は選んだ類似問を質問と
+ * 一緒に LLM へ渡して回答する（#684）。どちらも「類似問を使わない」以外に飛ばす操作は無い。
+ */
 export function ApprovedFaqSuggestions({
   suggestions,
   onUse,
   onSkip,
+  mode = "search",
+  disabled = false,
 }: {
   suggestions: ApprovedFaqSuggestionData[];
   onUse: (suggestion: ApprovedFaqSuggestionData) => void;
   onSkip: () => void;
+  mode?: "search" | "chat";
+  disabled?: boolean;
 }) {
   return (
-    <Card>
+    <Card data-testid={`${mode}-approved-faq-suggestions`}>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <BookCheck size={16} className="text-accent-fg" aria-hidden />
-          {t("search.faq.title")}
+          {t(`${mode}.faq.title`)}
         </CardTitle>
-        <CardDescription>{t("search.faq.description")}</CardDescription>
+        <CardDescription>{t(`${mode}.faq.description`)}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <ul className="space-y-2">
@@ -48,7 +56,7 @@ export function ApprovedFaqSuggestions({
                 </p>
                 <StatusBadge
                   variant={suggestion.direct ? "success" : "neutral"}
-                  label={t("search.faq.score", {
+                  label={t(`${mode}.faq.score`, {
                     value: Math.round(suggestion.score * 100),
                   })}
                 />
@@ -57,9 +65,10 @@ export function ApprovedFaqSuggestions({
                 size="sm"
                 variant={suggestion.direct ? "primary" : "secondary"}
                 className="shrink-0"
+                disabled={disabled}
                 onClick={() => onUse(suggestion)}
               >
-                {t("search.faq.use")}
+                {t(`${mode}.faq.use`)}
               </Button>
             </li>
           ))}
@@ -68,9 +77,10 @@ export function ApprovedFaqSuggestions({
           size="sm"
           variant="ghost"
           icon={MessageSquareText}
+          disabled={disabled}
           onClick={onSkip}
         >
-          {t("search.faq.skip")}
+          {t(`${mode}.faq.skip`)}
         </Button>
       </CardContent>
     </Card>

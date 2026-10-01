@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -121,11 +121,26 @@ class RuntimeKnowledgeContext:
     registered_count: int = 0
     active_count: int = 0
     expansion_decisions: tuple[dict[str, Any], ...] = ()
+    # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答。チャットの類似問の提示。#684)。
+    approved_faq_question: str = ""
+    approved_faq_answer: str = ""
 
     @property
     def has_matches(self) -> bool:
-        """質問に一致した用語またはルールがあるかを返します。"""
-        return bool(self.matched_terms or self.matched_rules)
+        """質問に一致した用語・ルール、または利用者が選んだ類似問があるかを返します。"""
+        return bool(self.matched_terms or self.matched_rules or self.approved_faq_question)
+
+    def with_approved_faq(self, question: str, answer: str) -> "RuntimeKnowledgeContext":
+        """利用者が選んだ類似問を足す。類似問は検索文にも足し、同じ資料を探せるようにする。"""
+        question, answer = str(question or "").strip(), str(answer or "").strip()
+        if not question:
+            return self
+        return replace(
+            self,
+            expanded_question=f"{self.expanded_question}\n{question}",
+            approved_faq_question=question,
+            approved_faq_answer=answer,
+        )
 
     @property
     def is_active(self) -> bool:
@@ -143,7 +158,7 @@ class RuntimeKnowledgeContext:
         """LLM prompt に追加する補助 context 文字列を返します。"""
         if not self.has_matches:
             return ""
-        lines = ["[Runtime Glossary / Rules]"]
+        lines = [] if not (self.matched_terms or self.matched_rules) else ["[Runtime Glossary / Rules]"]
         if self.matched_terms:
             lines.append("Glossary:")
             for term in self.matched_terms:
@@ -160,6 +175,16 @@ class RuntimeKnowledgeContext:
                 triggers = f" (triggers: {', '.join(rule.triggers)})" if rule.triggers else ""
                 source = f" [{rule.source}]" if rule.source else ""
                 lines.append(f"- {label}{triggers}: {rule.content}{source}")
+        if self.approved_faq_question:
+            lines.extend([
+                "[利用者が選んだ類似の承認済み FAQ]",
+                "利用者が自分の質問と同じ趣旨だとして選んだ、担当者が承認済みの FAQ。質問の意図の手がかりにする。",
+                "回答は根拠文書で確かめた内容で作る。FAQ の回答にだけあり根拠文書で確認できない内容は、"
+                "gap に「承認済み FAQ では『…』と回答しています（資料では確認できません）」のように出典を明示して書く。",
+                "FAQ の回答と根拠文書が食い違うときは根拠文書を優先し、食い違いを gap に書く。",
+                f"- 類似問: {self.approved_faq_question}",
+                f"- 承認済みの回答: {self.approved_faq_answer}",
+            ])
         return "\n".join(lines)
 
     def to_payload(self) -> dict[str, Any]:
@@ -175,6 +200,7 @@ class RuntimeKnowledgeContext:
             "registered_count": self.registered_count,
             "active_count": self.active_count,
             "expansion_decisions": list(self.expansion_decisions),
+            "approved_faq_question": self.approved_faq_question,
         }
 
 

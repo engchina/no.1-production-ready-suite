@@ -1058,6 +1058,8 @@ export interface ChatMessageRequestBody {
   content: string;
   model_ids?: string[];
   top_k?: number;
+  /** 利用者が選んだ類似の承認済み FAQ の id。質問と一緒に LLM へ渡す（#684）。 */
+  approved_faq_id?: string;
 }
 
 /** 回答に選べるモデル（既定のテキストモデルと既定の Vision モデルだけ。先頭が既定。#675）。 */
@@ -2735,10 +2737,16 @@ export const api = {
       { method: "POST", body: form },
     );
   },
-  suggestApprovedFaq: (id: string, query: string) =>
+  /** purpose="chat" はチャットの提示（一致度の下限が高く、最大 3 件。#684）。 */
+  suggestApprovedFaq: (id: string, query: string, purpose: "search" | "chat" = "search") =>
     request<ApprovedFaqSuggestionsData>(
       `/api/business-views/${encodeURIComponent(id)}/approved-faq/suggest`,
-      jsonBody({ query }),
+      jsonBody({ query, purpose }),
+    ),
+  setApprovedFaqEnabled: (id: string, enabled: boolean) =>
+    request<ApprovedFaqListData>(
+      `/api/business-views/${encodeURIComponent(id)}/approved-faq/settings`,
+      { ...jsonBody({ enabled }), method: "PUT" },
     ),
   listAnswerRecords: (params: {
     businessViewId: string;
@@ -3177,6 +3185,8 @@ export interface ApprovedFaqRecordData {
 export interface ApprovedFaqListData {
   business_view_id: string;
   records: ApprovedFaqRecordData[];
+  /** 回答の前に類似問を提示するか（業務ビューごと。未設定はオン。#684）。 */
+  enabled: boolean;
 }
 
 export interface ApprovedFaqMutationData extends ApprovedFaqListData {

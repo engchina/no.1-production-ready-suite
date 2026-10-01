@@ -119,6 +119,9 @@ class ChatMessageRequest(BaseModel):
     model_ids: list[str] = Field(default_factory=list, max_length=5)
     # 旧 standard の検索モード(``mode``)は #595 で削除した。送られても読み捨てる。
     top_k: int = Field(default=20, ge=1, le=100)
+    # 利用者が選んだ類似の承認済み FAQ の id(#684)。backend が業務ビューの FAQ から引き直し、
+    # 質問と一緒に回答の LLM へ渡す。利用者の送った文を FAQ として扱わない。
+    approved_faq_id: str | None = Field(default=None, min_length=1, max_length=200)
 
     @field_validator("content")
     @classmethod

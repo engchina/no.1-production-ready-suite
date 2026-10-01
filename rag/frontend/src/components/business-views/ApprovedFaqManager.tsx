@@ -12,6 +12,7 @@ import {
   TableSkeleton,
   TextareaField,
   TextField,
+  Switch,
   TimedLoadingState,
   toast,
   useConfirm,
@@ -58,6 +59,9 @@ export function ApprovedFaqManager({
   );
   const remove = useApprovedFaqMutation(businessViewId, (ids: string[]) =>
     api.deleteApprovedFaq(businessViewId, ids),
+  );
+  const setEnabled = useApprovedFaqMutation(businessViewId, (enabled: boolean) =>
+    api.setApprovedFaqEnabled(businessViewId, enabled),
   );
   const importFaq = useApprovedFaqMutation(
     businessViewId,
@@ -110,6 +114,30 @@ export function ApprovedFaqManager({
 
   return (
     <div className="space-y-5">
+      {/* 類似問の提示のオン / オフ（業務ビューごと。既定はオン。#684）。 */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p id="approved-faq-enabled-label" className="text-sm font-medium text-fg">
+            {t("businessViews.faq.enabled.label")}
+          </p>
+          <p id="approved-faq-enabled-help" className="mt-0.5 text-xs leading-relaxed text-fg-muted">
+            {t("businessViews.faq.enabled.help")}
+          </p>
+        </div>
+        <Switch
+          checked={query.data?.enabled ?? true}
+          disabled={query.isPending || setEnabled.isPending}
+          onCheckedChange={(checked) =>
+            setEnabled.mutate(checked, {
+              onError: (error) =>
+                toast.error(errorMessage(error, t("businessViews.faq.enabled.error"))),
+            })
+          }
+          aria-labelledby="approved-faq-enabled-label"
+          aria-describedby="approved-faq-enabled-help"
+          data-testid="approved-faq-enabled"
+        />
+      </div>
       {query.isPending ? (
         <TimedLoadingState
           label={t("businessViews.faq.loading")}

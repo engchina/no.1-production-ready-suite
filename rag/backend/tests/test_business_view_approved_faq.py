@@ -102,3 +102,47 @@ def test_add_rejects_blank_fields_like_the_screen(
     response = client.post(BASE, json=payload)
     assert response.status_code == 422
     assert response.json()["error_messages"] == [message]
+
+
+def test_suggestion_toggle_is_kept_across_faq_edits_and_stops_suggestions(
+    fake_oracle: FakeKnowledgeOracle,
+) -> None:
+    """類似問の提示は業務ビューごとにオン / オフでき、未設定はオン(#684)。"""
+    assert client.get(BASE).json()["data"]["enabled"] is True
+    client.post(BASE, json={"question": "受注を取り消すには？", "answer": "取消を押します。"})
+
+    off = client.put(f"{BASE}/settings", json={"enabled": False})
+    assert off.status_code == 200
+    assert off.json()["data"]["enabled"] is False
+    # FAQ を追加・削除しても設定は消えない。
+    client.post(BASE, json={"question": "受注を登録するには？", "answer": "登録を押します。"})
+    assert client.get(BASE).json()["data"]["enabled"] is False
+    suggested = client.post(f"{BASE}/suggest", json={"query": "受注を取り消すには？"})
+    assert suggested.json()["data"]["suggestions"] == []
+
+    client.put(f"{BASE}/settings", json={"enabled": True})
+    suggested = client.post(f"{BASE}/suggest", json={"query": "受注を取り消すには？"})
+    assert suggested.json()["data"]["suggestions"]
+
+
+def test_chat_suggestions_use_the_chat_min_score_and_at_most_three(
+    fake_oracle: FakeKnowledgeOracle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """チャットは一致度の下限(RAG_APPROVED_FAQ_CHAT_MIN_SCORE)以上を最大 3 件だけ出す(#684)。"""
+    for index in range(5):
+        client.post(
+            BASE, json={"question": f"受注 {index} を取り消すには？", "answer": f"回答 {index}"}
+        )
+    search = client.post(f"{BASE}/suggest", json={"query": "受注を取り消すには？", "limit": 5})
+    assert len(search.json()["data"]["suggestions"]) == 5
+    chat = client.post(
+        f"{BASE}/suggest", json={"query": "受注を取り消すには？", "limit": 5, "purpose": "chat"}
+    )
+    assert 0 < len(chat.json()["data"]["suggestions"]) <= 3
+
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "rag_approved_faq_chat_min_score", 1.0)
+    # 下限を上げると、検索では出る近い候補もチャットでは出さない。
+    weak = client.post(f"{BASE}/suggest", json={"query": "受注を取り消すには？", "purpose": "chat"})
+    assert weak.json()["data"]["suggestions"] == []

@@ -1912,8 +1912,12 @@ def answer_question_result(
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
     generate_answer: bool = True,
+    approved_faq: tuple[str, str] | None = None,
 ) -> AnswerQuestionResult:
     """検索・LLM の結果と実行記録を返す。
+
+    ``approved_faq`` は利用者が選んだ類似の承認済み FAQ（質問・承認済みの回答。#684）。用語・ルールと同じく
+    検索文の拡張と回答のプロンプトに渡す（FAQ の回答をそのまま返さない）。
 
     ``generate_answer=False`` は検索だけ（RAG 検索の画面）。質問の理解・拡張・検索文の確定までは回答と同じ工程で、
     その後は CRAG を使わず文書検索（rerank・親子の展開を含む）を 1 回行い、回答を生成せずに根拠を返す（本文は空）。
@@ -1955,6 +1959,10 @@ def answer_question_result(
             step.result(runtime_knowledge_status(runtime_knowledge))
             if runtime_knowledge.has_matches:
                 step.impact("一致した用語の別名を補助の検索文に加え、一致したルールを回答時の参考情報として渡します。")
+        if approved_faq is not None:
+            runtime_knowledge = runtime_knowledge.with_approved_faq(*approved_faq)
+            step.add(f"利用者が選んだ類似問: {runtime_knowledge.approved_faq_question}")
+            step.impact("類似問を補助の検索文に加え、類似問と承認済みの回答を回答時の参考情報として渡します。")
 
     base_expansion = _base_query_expansion(normalized_question, query_strategy_value)
     # 検索語は質問拡張後に確定する。準備不足で中止した場合は検索していないため記録しない。

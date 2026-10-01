@@ -47,8 +47,14 @@ import { AnswerText } from "@/components/search/AnswerText";
 import { useAuth } from "@/components/security/AuthProvider";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { isSubmitEnter } from "@/lib/keyboard";
-import type { ChatMessage, ConversationSummary, RetrievedChunk } from "@/lib/api";
-import { ApiError } from "@/lib/api";
+import type {
+  ApprovedFaqSuggestionData,
+  ChatMessage,
+  ConversationSummary,
+  RetrievedChunk,
+} from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
+import { ApprovedFaqSuggestions } from "@/components/search/ApprovedFaqSuggestions";
 import type { AnswerStageEvent } from "@/lib/answer-progress";
 import { streamChatMessage, type ChatColumn } from "@/lib/chat-stream";
 import { formatDateTime } from "@/lib/format";
@@ -464,6 +470,12 @@ export function ChatClient() {
   const modelLabels = new Map(compareModels.map((model) => [model.model_id, model.display_name]));
 
   const [composer, setComposer] = useWorkspaceState("chat.composer", "");
+  // 回答の前に選ぶ類似の承認済み FAQ（選ぶまで送らない。#684）。
+  const [faqChoice, setFaqChoice] = useState<{
+    content: string;
+    retryContent?: string;
+    suggestions: ApprovedFaqSuggestionData[];
+  } | null>(null);
   // 会話の履歴は既定で閉じる（ChatGPT・Claude・Gemini・Copilot と同じ。多くの利用者は履歴を使わないので、
   // チャットに面積を渡す。#664）。lg 以上のインラインのパネルの開閉は作業状態に残す。
   // lg 未満のモーダルの side sheet は残さない（戻ったとき・再読込で画面を塞がない。workspace-state.md）。
@@ -499,6 +511,7 @@ export function ChatClient() {
     abortRef.current?.abort();
     setActiveId(null);
     setLiveTurn(null);
+    setFaqChoice(null);
     setErrorText("");
     setEditingId(null);
     setTitleError("");
@@ -507,7 +520,7 @@ export function ChatClient() {
   // メッセージが増えたら末尾までスクロールする。
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [persistedMessages.length, liveTurn]);
+  }, [persistedMessages.length, liveTurn, faqChoice]);
 
   useEffect(() => {
     const targetId = location.hash.slice(1);
@@ -659,12 +672,44 @@ export function ChatClient() {
     });
   }
 
-  /** 送信する。`retryContent` を渡すと、入力欄ではなくその質問（失敗した回答の質問）を送り直す。 */
+  /**
+   * 送信する。`retryContent` を渡すと、入力欄ではなくその質問（失敗した回答の質問）を送り直す。
+   * 業務ビューの類似問の提示がオンで近い承認済み FAQ があれば、回答を作る前に最大 3 件と「どれでもない」を
+   * 出し、どれかを選ぶまで送らない（#684）。照会に失敗したときは類似問を使わずに送る。
+   */
   async function send(retryContent?: string) {
     const content = (retryContent ?? composer).trim();
-    if (!content || !businessViewId || sending || businessViewWithoutKnowledgeBases) return;
+    if (!content || !businessViewId || sending || faqChoice || businessViewWithoutKnowledgeBases) {
+      return;
+    }
     setSending(true);
     setErrorText("");
+    let suggestions: ApprovedFaqSuggestionData[] = [];
+    try {
+      suggestions = (await api.suggestApprovedFaq(businessViewId, content, "chat")).suggestions ?? [];
+    } catch {
+      // 類似問は補助。照会できなくても回答は作る。
+    }
+    if (suggestions.length > 0) {
+      if (retryContent === undefined) setComposer("");
+      setFaqChoice({ content, retryContent, suggestions });
+      setSending(false);
+      return;
+    }
+    await deliver(content, retryContent);
+  }
+
+  /** 類似問の選択を確定して送る（`faqId` が無ければ「どれでもない」）。 */
+  function chooseFaq(faqId?: string) {
+    if (!faqChoice) return;
+    const { content, retryContent } = faqChoice;
+    setFaqChoice(null);
+    setSending(true);
+    void deliver(content, retryContent, faqId);
+  }
+
+  async function deliver(content: string, retryContent?: string, approvedFaqId?: string) {
+    if (!businessViewId) return;
     if (retryContent === undefined) setComposer("");
     const controller = new AbortController();
     abortRef.current = controller;
@@ -683,7 +728,11 @@ export function ChatClient() {
       }
       await streamChatMessage(
         conversationId,
-        { content, model_ids: selectedModelIds },
+        {
+          content,
+          model_ids: selectedModelIds,
+          ...(approvedFaqId ? { approved_faq_id: approvedFaqId } : {}),
+        },
         {
           onStart: ({ user_message, columns }) => {
             started = true;
@@ -1123,7 +1172,7 @@ export function ChatClient() {
                   message={t("chat.messages.error")}
                   onRetry={() => void conversationQuery.refetch()}
                 />
-              ) : turns.length === 0 && !liveTurn ? (
+              ) : turns.length === 0 && !liveTurn && !faqChoice ? (
                 <EmptyState title={t("chat.messages.empty")} />
               ) : (
                 <>
@@ -1165,6 +1214,22 @@ export function ChatClient() {
                       businessViewId={businessViewId}
                     />
                   ) : null}
+                  {/* 送る前の質問と、選んでから回答する類似問（#684）。質問の吹き出しは送信後と同じ形。 */}
+                  {faqChoice ? (
+                    <div className="space-y-2" data-testid="chat-approved-faq-choice">
+                      <div className="flex justify-end">
+                        <div className="max-w-[85%] whitespace-pre-wrap rounded-md bg-accent-subtle px-3 py-2 text-sm text-fg">
+                          {faqChoice.content}
+                        </div>
+                      </div>
+                      <ApprovedFaqSuggestions
+                        mode="chat"
+                        suggestions={faqChoice.suggestions}
+                        onUse={(suggestion) => chooseFaq(suggestion.id)}
+                        onSkip={() => chooseFaq()}
+                      />
+                    </div>
+                  ) : null}
                 </>
               )}
             </div>
@@ -1203,7 +1268,11 @@ export function ChatClient() {
                     runLabel={t("chat.composer.send")}
                     stopLabel={t("chat.composer.stop")}
                     runIcon={SendHorizontal}
-                    runDisabled={composer.trim().length === 0 || businessViewWithoutKnowledgeBases}
+                    runDisabled={
+                      composer.trim().length === 0 ||
+                      businessViewWithoutKnowledgeBases ||
+                      faqChoice !== null
+                    }
                     size="lg"
                     testId="chat-run-stop"
                   />

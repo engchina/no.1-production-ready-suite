@@ -408,3 +408,24 @@ test("FAQ の追加と回答ルールの保存は、未入力を欄の下に出�
   expect(writes).toHaveLength(0);
   await expectNoPageOverflow(page);
 });
+
+test("業務ビューごとに類似問の提示をオン / オフできる（既定はオン。#684）", async ({ page }) => {
+  await mockCommon(page);
+  await mockBusinessViewApi(page);
+  const saved: unknown[] = [];
+  await page.route("**/api/business-views/bv-1/approved-faq/settings", async (route) => {
+    const body = route.request().postDataJSON() as { enabled: boolean };
+    saved.push(body);
+    await route.fulfill({
+      json: envelope({ business_view_id: "bv-1", records: [faqSuggestion], enabled: body.enabled }),
+    });
+  });
+
+  await page.goto("/business-views?id=bv-1");
+  const toggle = page.getByRole("switch", { name: "回答の前に類似問を提示する" });
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  expect(saved).toEqual([{ enabled: false }]);
+  await expectNoPageOverflow(page);
+});
