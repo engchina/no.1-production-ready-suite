@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -353,3 +353,34 @@ def test_document_ingestion_job_for_docling_unsupported_format_is_rejected(
 
 async def _async_value(value: str) -> str:
     return value
+
+
+class _RecipeOnlyOracle(_RecipeOracle):
+    """処理設定はレシピだけにある(文書行の設定は読まない)。"""
+
+    def __init__(self, processing_config: dict[str, Any]) -> None:
+        super().__init__("memo.md", "text/markdown", processing_config)
+        self.recipe_ids: list[str] = []
+
+    async def get_document_recipe(self, document_id: str, recipe_id: str) -> dict[str, Any]:
+        self.recipe_ids.append(recipe_id)
+        return await super().get_document_recipe(document_id, recipe_id)
+
+    async def get_document_processing_config(self, document_id: str) -> Any:
+        raise AssertionError("レシピを読めるときは文書行の設定を読まない")
+
+
+def test_ingestion_settings_come_from_recipe() -> None:
+    """取込の実行・表示の設定は、取込の開始前の検査と同じくレシピから読む(#697)。"""
+    config = {"parser_adapter_backend": "unstructured", "parser_unstructured_enabled": True}
+
+    oracle = _RecipeOnlyOracle(config)
+    settings, _config = asyncio.run(
+        documents_route._resolve_ingestion_settings(cast(Any, oracle), "doc-1")
+    )
+    assert settings.rag_parser_adapter_backend == "unstructured"
+    assert oracle.recipe_ids == ["recipe-1"]
+
+    oracle = _RecipeOnlyOracle(config)
+    asyncio.run(documents_route._resolve_ingestion_settings(cast(Any, oracle), "doc-1", "recipe-2"))
+    assert oracle.recipe_ids == ["recipe-2"]
