@@ -1919,8 +1919,12 @@ def answer_question_result(
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
     generate_answer: bool = True,
+    scope: tuple[str, Sequence[str]] | None = None,
 ) -> AnswerQuestionResult:
     """検索・LLM の結果と実行記録を返す。
+
+    ``scope`` は利用者が確認の質問で選んだ条件と対象範囲の説明・検索に足す語（チャットの確認。#717）。
+    回答のプロンプトの前置きに入れ、語は補助の検索文に足す。範囲での絞り込みは呼び出し側の検索が行う。
 
     ``generate_answer=False`` は検索だけ（RAG 検索の画面）。質問の理解・拡張・検索文の確定までは回答と同じ工程で、
     その後は CRAG を使わず文書検索（rerank・親子の展開を含む）を 1 回行い、回答を生成せずに根拠を返す（本文は空）。
@@ -1962,6 +1966,10 @@ def answer_question_result(
             step.result(runtime_knowledge_status(runtime_knowledge))
             if runtime_knowledge.has_matches:
                 step.impact("一致した用語の別名を補助の検索文に加え、一致したルールを回答時の参考情報として渡します。")
+        if scope is not None:
+            runtime_knowledge = runtime_knowledge.with_scope(*scope)
+            step.add(f"確認で選んだ条件: {runtime_knowledge.scope_context}")
+            step.impact("選んだ条件を回答時の前提として渡し、対象範囲の資料だけを根拠にします。")
 
     base_expansion = _base_query_expansion(normalized_question, query_strategy_value)
     # 検索語は質問拡張後に確定する。準備不足で中止した場合は検索していないため記録しない。

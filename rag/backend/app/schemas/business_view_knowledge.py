@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from app.schemas.common import JsonValue
 
@@ -162,3 +162,112 @@ class QuerySuggestionsData(BaseModel):
     business_view_id: str
     enabled: bool
     suggestions: list[QuerySuggestion] = Field(default_factory=list)
+
+
+# --- ルールの確認の質問(チャットの確認。#717)-------------------------------------------
+
+
+class ClarificationSection(BaseModel):
+    """確認の選択肢が指す文書の章節。ページは保存したときの章節のページ範囲。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str = Field(min_length=1, max_length=64)
+    document_name: str = Field(default="", max_length=512)
+    section_id: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=200)
+    page_start: int | None = Field(default=None, ge=1)
+    page_end: int | None = Field(default=None, ge=1)
+
+
+class ClarificationOption(BaseModel):
+    """確認の選択肢 1 件。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=64)
+    label: str = Field(max_length=80)
+    description: str = Field(default="", max_length=200)
+    # 選んだとき補助の検索文に足す語。
+    search_terms: list[str] = Field(default_factory=list, max_length=10)
+    # 選んだとき回答に渡す前提(例: 「利用者は経費精算画面について質問している」)。
+    premise: str = Field(default="", max_length=300)
+    # 選んだとき検索を絞る章節(複数可)。
+    sections: list[ClarificationSection] = Field(default_factory=list, max_length=20)
+
+    @field_validator("label")
+    @classmethod
+    def _require_label(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("選択肢の表示名を入力してください。")
+        return cleaned
+
+    @field_validator("search_terms")
+    @classmethod
+    def _clean_terms(cls, values: list[str]) -> list[str]:
+        return [value.strip()[:50] for value in values if value.strip()]
+
+
+class RuleClarification(BaseModel):
+    """ルールの確認の質問と選択肢(2〜8 件)。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(max_length=200)
+    multiple: bool = True
+    allow_other: bool = True
+    options: list[ClarificationOption] = Field(min_length=2, max_length=8)
+
+    @field_validator("question")
+    @classmethod
+    def _require_question(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("確認の質問を入力してください。")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _unique_options(self) -> "RuleClarification":
+        ids = [option.id for option in self.options]
+        if len(ids) != len(set(ids)):
+            raise ValueError("選択肢の id が重複しています。")
+        return self
+
+
+class RuleClarificationRequest(BaseModel):
+    """ルールの確認の保存。None は確認を外す。"""
+
+    clarification: RuleClarification | None = None
+
+
+class ClarificationSuggestRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+
+
+class ClarificationSuggestionData(BaseModel):
+    rule_id: str
+    rule_title: str
+    clarification: RuleClarification
+
+
+class ClarificationSuggestionsData(BaseModel):
+    """質問に出す確認(無ければ None)。1 つの質問で聞き返すのは 1 回だけ。"""
+
+    suggestion: ClarificationSuggestionData | None = None
+
+
+class ClarificationAnswer(BaseModel):
+    """チャットで利用者が確認に答えた内容。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rule_id: str = Field(min_length=1, max_length=128)
+    option_ids: list[str] = Field(default_factory=list, max_length=8)
+    other_text: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def _require_choice(self) -> "ClarificationAnswer":
+        if not self.option_ids and not self.other_text.strip():
+            raise ValueError("選択肢を選ぶか、その他を入力してください。")
+        return self

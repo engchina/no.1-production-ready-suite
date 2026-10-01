@@ -412,11 +412,15 @@ class _FakePipeline:
 
     # 作られた pipeline に渡した類似の承認済み FAQ(#684)。
     approved_faqs: list[object] = []
+    # 作られた pipeline に渡した確認の条件と、検索の絞り込み(#717)。
+    scopes: list[object] = []
+    filters: list[dict[str, str]] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         self._llm = kwargs.get("llm")
         _FakePipeline.answer_model_ids.append(kwargs.get("answer_model_id"))
         _FakePipeline.approved_faqs.append(kwargs.get("approved_faq"))
+        _FakePipeline.scopes.append(kwargs.get("scope"))
 
     async def run(  # type: ignore[no-untyped-def]
         self,
@@ -429,6 +433,7 @@ class _FakePipeline:
         query_guardrail_result=None,
     ):
         assert token_callback is None
+        _FakePipeline.filters.append(dict(request.filters))
         return SearchResponse(
             answer="回答",
             citations=[RetrievedChunk(document_id="d1", chunk_id="ch1", text="根拠", score=0.9)],
@@ -851,4 +856,52 @@ def test_stream_message_passes_selected_approved_faq_from_the_business_view(
     saved = len(fake.messages["conv-x"])
     missing = client.post(url, json={"content": "特典は?", "approved_faq_id": "other"})
     assert missing.status_code == 422
+    assert len(fake.messages["conv-x"]) == saved
+
+
+def test_stream_message_resolves_the_clarification_answer_into_scope_and_page_ranges(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """確認の答えは業務ビューのルールから引き直し、章節の範囲と回答の前提にする(#717)。"""
+    from tests.test_business_view_clarification import CLARIFICATION
+
+    fake = FakeChatOracle()
+    fake.conversations["conv-x"] = StoredConversation(
+        id="conv-x",
+        business_view_id="bv-1",
+        status="ACTIVE",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    fake.messages["conv-x"] = []
+    _stub_stream(monkeypatch, fake, ["m1"])
+    monkeypatch.setattr(_FakePipeline, "scopes", [])
+    monkeypatch.setattr(_FakePipeline, "filters", [])
+
+    async def payload(_store: object, business_view_id: str) -> dict[str, object]:
+        assert business_view_id == "bv-1"
+        return {"rules": [{"id": "R01", "clarification": CLARIFICATION}]}
+
+    monkeypatch.setattr(chat_route, "load_runtime_knowledge_payload", payload)
+    url = "/api/chat/conversations/conv-x/messages/stream"
+
+    resp = client.post(
+        url,
+        json={
+            "content": "申請の期限は?",
+            "clarification": {"rule_id": "R01", "option_ids": ["travel"]},
+        },
+    )
+    assert resp.status_code == 200
+    scope = _FakePipeline.scopes[0]
+    assert getattr(scope, "label", "") == "「出張旅費規程.pdf」の「第6条 申請と精算」（p.2–3）"
+    assert '"document_id":"doc-travel"' in _FakePipeline.filters[0]["page_ranges"]
+
+    # ルールに無い選択肢は、発話を保存する前に 422 で断る。
+    saved = len(fake.messages["conv-x"])
+    bad = client.post(
+        url,
+        json={"content": "期限は?", "clarification": {"rule_id": "R01", "option_ids": ["x"]}},
+    )
+    assert bad.status_code == 422
     assert len(fake.messages["conv-x"]) == saved

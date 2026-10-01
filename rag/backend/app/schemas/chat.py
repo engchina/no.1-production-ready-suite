@@ -9,6 +9,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.business_view_knowledge import ClarificationAnswer
 from app.schemas.search import RetrievedChunk
 
 
@@ -122,6 +123,9 @@ class ChatMessageRequest(BaseModel):
     # 利用者が選んだ類似の承認済み FAQ の id(#684)。backend が業務ビューの FAQ から引き直し、
     # 質問と一緒に回答の LLM へ渡す。利用者の送った文を FAQ として扱わない。
     approved_faq_id: str | None = Field(default=None, min_length=1, max_length=200)
+    # 利用者が確認の質問に答えた内容(#717)。backend が業務ビューのルールから引き直し、選んだ
+    # 章節のページに絞って検索し、選んだ条件を回答の前提にする。
+    clarification: ClarificationAnswer | None = None
 
     @field_validator("content")
     @classmethod

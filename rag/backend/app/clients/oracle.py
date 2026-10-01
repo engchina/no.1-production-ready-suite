@@ -85,9 +85,11 @@ from app.schemas.knowledge_base import (
 )
 from app.schemas.search import (
     EXTRACTION_FIELD_FILTER_KEY,
+    PAGE_RANGES_FILTER_KEY,
     RetrievedChunk,
     SearchMode,
     parse_extraction_field_filter,
+    parse_page_ranges,
 )
 
 logger = logging.getLogger(__name__)
@@ -10198,6 +10200,17 @@ def _oracle_business_view_where(
     return " AND ".join(clauses), binds
 
 
+_CHUNK_PAGE_START_SQL = (
+    "COALESCE(JSON_VALUE(c.metadata_json, '$.page_start' RETURNING NUMBER), "
+    "JSON_VALUE(c.metadata_json, '$.page_number' RETURNING NUMBER))"
+)
+_CHUNK_PAGE_END_SQL = (
+    "COALESCE(JSON_VALUE(c.metadata_json, '$.page_end' RETURNING NUMBER), "
+    "JSON_VALUE(c.metadata_json, '$.page_start' RETURNING NUMBER), "
+    "JSON_VALUE(c.metadata_json, '$.page_number' RETURNING NUMBER))"
+)
+
+
 def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
     clauses = ["d.status = 'INDEXED'", *_oracle_access_predicates(alias="d")]
     binds = _with_tenant_bind({}, alias="d")
@@ -10316,18 +10329,29 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
                 "= :filter_document_version"
             )
             binds["filter_document_version"] = cleaned.casefold()
+        # ページは chunk の page_start〜page_end(無ければ page_number)との重なりで判定する。
+        # small_to_big 以外の分割は page_number を持たないため、page_number だけで見ると
+        # その chunk がすべて外れる(#717)。
         elif key == "page_number_min":
-            clauses.append(
-                "JSON_VALUE(c.metadata_json, '$.page_number' RETURNING NUMBER) "
-                ">= :filter_page_number_min"
-            )
+            clauses.append(f"{_CHUNK_PAGE_END_SQL} >= :filter_page_number_min")
             binds["filter_page_number_min"] = int(cleaned)
         elif key == "page_number_max":
-            clauses.append(
-                "JSON_VALUE(c.metadata_json, '$.page_number' RETURNING NUMBER) "
-                "<= :filter_page_number_max"
-            )
+            clauses.append(f"{_CHUNK_PAGE_START_SQL} <= :filter_page_number_max")
             binds["filter_page_number_max"] = int(cleaned)
+        elif key == PAGE_RANGES_FILTER_KEY:
+            range_clauses: list[str] = []
+            for index, page_range in enumerate(parse_page_ranges(cleaned)):
+                parts = [f"d.document_id = :filter_pr_doc_{index}"]
+                binds[f"filter_pr_doc_{index}"] = page_range.document_id
+                if page_range.page_end is not None:
+                    parts.append(f"{_CHUNK_PAGE_START_SQL} <= :filter_pr_end_{index}")
+                    binds[f"filter_pr_end_{index}"] = page_range.page_end
+                if page_range.page_start is not None:
+                    parts.append(f"{_CHUNK_PAGE_END_SQL} >= :filter_pr_start_{index}")
+                    binds[f"filter_pr_start_{index}"] = page_range.page_start
+                range_clauses.append("(" + " AND ".join(parts) + ")")
+            if range_clauses:
+                clauses.append("(" + " OR ".join(range_clauses) + ")")
         elif key == "uploaded_from":
             clauses.append("d.uploaded_at >= :filter_uploaded_from")
             binds["filter_uploaded_from"] = _parse_filter_datetime(cleaned, end_of_day=False)

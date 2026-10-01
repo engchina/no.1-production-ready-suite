@@ -16,7 +16,7 @@ from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import Settings, get_settings
-from app.rag.answer_engine import ANSWER_ENGINE, AnswerEngine, answer_step_stage
+from app.rag.answer_engine import ANSWER_ENGINE, AnswerEngine, AnswerScope, answer_step_stage
 from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
@@ -133,6 +133,7 @@ class RagPipeline:
         *,
         answer_model_id: str | None = None,
         approved_faq: tuple[str, str] | None = None,
+        scope: AnswerScope | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._genai = genai or OciGenAiClient(settings=self._settings)
@@ -144,6 +145,8 @@ class RagPipeline:
         self._answer_model_id = answer_model_id or None
         # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答。チャット。#684)。
         self._approved_faq = approved_faq
+        # 利用者が確認の質問で選んだ条件と対象範囲(#717)。
+        self._scope = scope
 
     async def run(
         self,
@@ -272,6 +275,7 @@ class RagPipeline:
             answer_model_id=self._answer_model_id,
             auto_field_conditions=auto_field_conditions,
             approved_faq=self._approved_faq,
+            scope=self._scope,
         )
 
         async def emit_step(name: str, outcome: str, elapsed: float) -> None:
