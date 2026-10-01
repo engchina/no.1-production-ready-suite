@@ -85,11 +85,27 @@ describe("parseAnswerDiagnostics", () => {
     });
   });
 
+  // #737
+  it("承認済み FAQ から回答したときは、FAQ の原文を出典として読む", () => {
+    expect(
+      parseAnswerDiagnostics({
+        answer_source: "approved_faq",
+        approved_faq_question: "出張の日当はいくらですか？",
+        approved_faq_answer: "一般は 1 泊 2,000 円です。",
+      })?.approvedFaq,
+    ).toEqual({ question: "出張の日当はいくらですか？", answer: "一般は 1 泊 2,000 円です。" });
+    // 変更前に保存した回答は本文を持たない。
+    expect(
+      parseAnswerDiagnostics({ answer_source: "approved_faq", approved_faq_question: "Q" })?.approvedFaq,
+    ).toEqual({ question: "Q", answer: "" });
+  });
+
   it("回答フローの診断が無ければ null、信頼度を variant に写す", () => {
     expect(parseAnswerDiagnostics(null)).toBeNull();
     // モデルを持たない古い回答の記録でも壊れない。
     expect(parseAnswerDiagnostics({})?.autoFieldFilter).toBeNull();
     expect(parseAnswerDiagnostics({})?.models).toEqual({ llm: null, vision: null, embedding: "", rerank: "" });
+    expect(parseAnswerDiagnostics({})?.approvedFaq).toBeNull();
     expect(confidenceVariant("high")).toBe("success");
     expect(confidenceVariant("low")).toBe("danger");
     expect(confidenceVariant("")).toBe("neutral");

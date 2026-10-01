@@ -327,6 +327,8 @@ class AnswerEngine:
             diagnostics={
                 "answer_source": "approved_faq",
                 "approved_faq_question": faq_question,
+                # 回答した時点の承認済みの回答。FAQ が変わっても根拠の原文を出せる(#737)。
+                "approved_faq_answer": faq_answer,
                 "models": self._models_used(),
             },
             # 回答の安全チェックが照合する根拠は、選んだ FAQ だけ。
