@@ -107,7 +107,12 @@ const agentJa = {
   "apiKeys.column.agents": "呼べる業務 Agent",
   "apiKeys.column.expires": "有効期限",
   "apiKeys.column.lastUsed": "最後に使った日時",
-  "apiKeys.column.owner": "作った利用者",
+  "apiKeys.column.owner": "実行する利用者",
+  "apiKeys.column.createdBy": "作った利用者",
+  "apiKeys.create.runAs": "実行する利用者",
+  "apiKeys.create.runAsSelf": "自分（{name}）",
+  "apiKeys.create.runAsHelper":
+    "キーはこの利用者の権限で動きます。連携用の専用の利用者をユーザー管理で作り、必要なロールだけを付けて選ぶことをおすすめします。選べるのは、有効で初回のパスワード変更が済んだ利用者です。",
   "apiKeys.allAgents": "すべて",
   "apiKeys.noExpiry": "無期限",
   "apiKeys.expired": "期限切れ",

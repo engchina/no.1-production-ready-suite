@@ -53,6 +53,7 @@ for (const viewport of VIEWPORTS) {
         name: "基幹システムの問い合わせ連携",
         agent_ids: ["default"],
         expires_in_days: 90,
+        run_as_user_uuid: null,
       });
       const table = page.getByRole("table", { name: "API キーの一覧" });
       const row = table.getByRole("row", { name: /基幹システムの問い合わせ連携/ });
@@ -92,6 +93,7 @@ test("すべての業務 Agent・無期限のキーを作れ、保存先が無�
     name: "社内ポータル",
     agent_ids: null,
     expires_in_days: null,
+    run_as_user_uuid: null,
   });
   const row = page.getByRole("table", { name: "API キーの一覧" }).getByRole("row", { name: /社内ポータル/ });
   await expect(row).toContainText("すべて");
@@ -104,6 +106,8 @@ test("Agent 管理の権限が無い利用者は一覧だけを見る", async ({
     name: "既存のキー",
     owner_user_uuid: "u-1",
     owner_display_name: "山田 太郎",
+    created_by_user_uuid: "u-admin",
+    created_by_display_name: "管理 太郎",
     agent_ids: ["default"],
     token_prefix: "prak_00000000000000aa_abcd",
     created_at: MOCK_NOW,
@@ -118,4 +122,27 @@ test("Agent 管理の権限が無い利用者は一覧だけを見る", async ({
   await expect(row).toContainText("山田 太郎");
   await expect(page.getByRole("heading", { name: "API キーの作成" })).toHaveCount(0);
   await expect(page.getByTestId("api-key-row-actions-00000000000000aa")).toHaveCount(0);
+});
+
+test("システム管理者は、キーを連携用の専用の利用者として動かせる", async ({ page, mockApi }) => {
+  await page.goto("/settings/api-keys");
+  await page.getByLabel("名前").fill("基幹システム");
+  await page.getByRole("radio", { name: "使えるすべての業務 Agent" }).check();
+  await page.locator("#api-key-run-as").click();
+  await page.getByRole("option", { name: /実行 花子/ }).click();
+  await page.getByTestId("api-key-create").click();
+  await expect(page.getByTestId("api-key-token")).toBeVisible();
+  expect(
+    (mockApi.lastRequest("POST", "/api/settings/api-keys")?.body as { run_as_user_uuid: string }).run_as_user_uuid
+  ).toBe("u-operator");
+  const row = page.getByRole("table", { name: "API キーの一覧" }).getByRole("row", { name: /基幹システム/ });
+  await expect(row).toContainText("実行 花子");
+  await expect(row).toContainText("ローカル利用者");
+});
+
+test("システム管理者でなければ、実行する利用者は選べない（自分として動く）", async ({ page, mockApi }) => {
+  mockApi.setCurrentUser(dbUser({ permissions: ["menu.settings_api_keys", "agent.admin"] }));
+  await page.goto("/settings/api-keys");
+  await expect(page.getByRole("heading", { name: "API キーの作成" })).toBeVisible();
+  await expect(page.locator("#api-key-run-as")).toHaveCount(0);
 });

@@ -1,8 +1,9 @@
 """外部のクライアント（業務システム・MCP クライアント）向けの API キー（#778）。
 
 - 形式は `prak_<id>_<秘密>`。秘密は作成時に 1 回だけ返し、保存するのは全体の SHA-256 だけ。
-- キーは作った利用者として動き、キーに付けた業務 Agent に絞る（`agent_ids` が None なら、
-  その利用者が使える業務 Agent すべて）。権限は利用者の現在のロールから毎回計算し直す。
+- キーは「実行する利用者」（既定は作った利用者。システム管理者は連携用の専用の利用者を選べる）
+  として動き、キーに付けた業務 Agent に絞る（`agent_ids` が None なら、その利用者が使える業務
+  Agent すべて）。権限は利用者の現在のロールから毎回計算し直す。
 - 保存先は Control Plane の定義と同じ `AGENT_CONTROL_PLANE_ITEMS`（kind `api_key`。#764）。
 - 最後に使った日時は、保存の負荷を抑えるため 10 分に 1 回だけ保存する。
 """
@@ -43,8 +44,11 @@ class ApiKeyRecord(BaseModel):
 
     id: str
     name: str
+    # 実行する利用者（キーはこの利用者として動く）。
     owner_user_uuid: str
-    # None は「作った利用者が使える業務 Agent すべて」。
+    # 作った利用者（#778 の当初のキーは無い = 実行する利用者と同じ）。
+    created_by_user_uuid: str | None = None
+    # None は「実行する利用者が使える業務 Agent すべて」。
     agent_ids: list[str] | None = None
     # 一覧で見分けるための先頭（`prak_<id>_` + 秘密の先頭 4 文字）。
     token_prefix: str
@@ -64,6 +68,8 @@ class ApiKeyView(BaseModel):
     name: str
     owner_user_uuid: str
     owner_display_name: str = ""
+    created_by_user_uuid: str
+    created_by_display_name: str = ""
     agent_ids: list[str] | None
     token_prefix: str
     created_at: datetime
@@ -84,6 +90,8 @@ class ApiKeyCreateRequest(BaseModel):
     agent_ids: list[str] | None = Field(default=None, max_length=200)
     # 省く・null は無期限。
     expires_in_days: ApiKeyExpiryDays | None = 90
+    # 実行する利用者。省く・null は作った利用者（ほかの利用者はシステム管理者だけが選べる）。
+    run_as_user_uuid: str | None = Field(default=None, max_length=64)
 
     @field_validator("name")
     @classmethod
@@ -117,7 +125,7 @@ class ApiKeyRegistry:
         self._persisted_last_used: dict[str, datetime] = {}
 
     def create(
-        self, request: ApiKeyCreateRequest, *, owner_user_uuid: str
+        self, request: ApiKeyCreateRequest, *, owner_user_uuid: str, created_by_user_uuid: str
     ) -> tuple[ApiKeyRecord, str]:
         key_id = uuid4().hex[:16]
         secret = secrets.token_urlsafe(32)
@@ -127,6 +135,7 @@ class ApiKeyRegistry:
             id=key_id,
             name=request.name,
             owner_user_uuid=owner_user_uuid,
+            created_by_user_uuid=created_by_user_uuid,
             agent_ids=request.agent_ids,
             token_prefix=f"{API_KEY_PREFIX}{key_id}_{secret[:4]}",
             token_hash=hash_api_key(token),
@@ -204,12 +213,16 @@ def narrow_agent_ids(
     return keyed if allowed is None else allowed & keyed
 
 
-def key_view(record: ApiKeyRecord, *, owner_display_name: str = "") -> ApiKeyView:
+def key_view(record: ApiKeyRecord, names: dict[str, str] | None = None) -> ApiKeyView:
+    names = names or {}
+    created_by = record.created_by_user_uuid or record.owner_user_uuid
     return ApiKeyView(
         id=record.id,
         name=record.name,
         owner_user_uuid=record.owner_user_uuid,
-        owner_display_name=owner_display_name,
+        owner_display_name=names.get(record.owner_user_uuid, ""),
+        created_by_user_uuid=created_by,
+        created_by_display_name=names.get(created_by, ""),
         agent_ids=record.agent_ids,
         token_prefix=record.token_prefix,
         created_at=record.created_at,

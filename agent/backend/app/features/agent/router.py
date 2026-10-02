@@ -1924,15 +1924,13 @@ async def mcp_endpoint(request: Request) -> Response:
 async def list_api_keys() -> ApiResponse[ApiKeysListData]:
     """API キー（#778。秘密と hash は返さない）。"""
     records = api_key_registry.list()
-    names = await run_in_threadpool(
-        user_display_names, sorted({record.owner_user_uuid for record in records})
-    )
+    people = {record.owner_user_uuid for record in records} | {
+        record.created_by_user_uuid for record in records if record.created_by_user_uuid
+    }
+    names = await run_in_threadpool(user_display_names, sorted(people))
     return ApiResponse(
         data=ApiKeysListData(
-            keys=[
-                key_view(record, owner_display_name=names.get(record.owner_user_uuid, ""))
-                for record in records
-            ],
+            keys=[key_view(record, names) for record in records],
             persistent=get_control_plane_store().persistent,
         )
     )
@@ -1944,27 +1942,58 @@ async def create_api_key(
     request: Request,
     _: None = Depends(require_admin),
 ) -> ApiResponse[ApiKeyCreated]:
-    """API キーを作る。キーは作った利用者として動く。秘密（`token`）はこの応答で 1 回だけ返す。"""
-    owner = _run_creator_user_uuid(request)
-    if owner is None:
+    """API キーを作る。秘密（`token`）はこの応答で 1 回だけ返す。
+
+    キーは実行する利用者（既定は作った利用者）として動く。ほかの利用者（連携用の専用の利用者など）を
+    選べるのはシステム管理者だけ（利用者を管理できる人だけが、ほかの利用者の権限を使うキーを作れる）。
+    """
+    creator = _request_principal(request)
+    if creator is None:
         raise HTTPException(status_code=401, detail="ログインしてください。")
+    owner = payload.run_as_user_uuid or creator.user_uuid
+    if owner != creator.user_uuid:
+        if not creator.is_system_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="ほかの利用者として動くキーは、システム管理者だけが作れます。",
+            )
+        await run_in_threadpool(_require_key_owner_usable, owner)
     known_agents = {agent.id for agent in runtime_repository.list_agents()}
     unknown = sorted(set(payload.agent_ids or []) - known_agents)
     if unknown:
         raise HTTPException(
             status_code=422, detail=f"業務 Agent が見つかりません: {', '.join(unknown)}"
         )
-    record, token = api_key_registry.create(payload, owner_user_uuid=owner)
+    record, token = api_key_registry.create(
+        payload, owner_user_uuid=owner, created_by_user_uuid=creator.user_uuid
+    )
     try:
         _persist(lambda: save_api_key(record))
     except HTTPException:
         api_key_registry.delete(record.id)
         raise
-    principal = _request_principal(request)
-    display = principal.display_name if principal is not None else ""
-    return ApiResponse(
-        data=ApiKeyCreated(key=key_view(record, owner_display_name=display), token=token)
-    )
+    names = await run_in_threadpool(user_display_names, sorted({owner, creator.user_uuid}))
+    return ApiResponse(data=ApiKeyCreated(key=key_view(record, names), token=token))
+
+
+def _require_key_owner_usable(user_uuid: str) -> None:
+    """キーで動ける利用者か（有効で、初回のパスワード変更が済んでいる）。"""
+    try:
+        user = get_security_service().store.get_user(user_uuid)
+    except Exception as exc:  # noqa: BLE001 - 利用者を確かめられなければ作らない
+        raise HTTPException(status_code=503, detail="利用者を確認できません。") from exc
+    if user is None:
+        raise HTTPException(status_code=422, detail="実行する利用者が見つかりません。")
+    if user.status != "ACTIVE":
+        raise HTTPException(status_code=422, detail="実行する利用者が無効になっています。")
+    if user.force_password_change:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "実行する利用者の初回のパスワード変更が済んでいないため、キーで動けません。"
+                "一度ログインしてパスワードを変更してください。"
+            ),
+        )
 
 
 @router.delete("/settings/api-keys/{key_id}", response_model=ApiResponse[None])

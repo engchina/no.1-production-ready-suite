@@ -251,3 +251,50 @@ def test_service_token_uses_the_subject_permissions(auth: ProductionAuth, agents
     assert _rpc("tools/list", headers=_bearer(wrong_audience)).status_code == 401
     # Cookie も Bearer も無ければ 401。
     assert _rpc("tools/list").status_code == 401
+
+
+def test_system_admin_can_bind_a_key_to_a_dedicated_service_user(
+    auth: ProductionAuth, agents: None
+) -> None:
+    """キーの実行する利用者（連携用の専用の利用者）を選べるのはシステム管理者だけ（#778）。"""
+    del agents
+    service = auth.user_with_permissions("svc-erp-778", [RUNS_OPERATE], agent_ids=[OTHER_AGENT_ID])
+    auth.user_with_permissions("agent-admin-778", [ADMIN])
+    body = {"name": "基幹システム", "run_as_user_uuid": service.user_uuid}
+    # Agent 管理だけの利用者は、ほかの利用者として動くキーを作れない。
+    denied = client.post("/api/settings/api-keys", json=body, headers=login("agent-admin-778"))
+    assert denied.status_code == 403
+
+    auth.create_user("sysadmin-778", system_admin=True)
+    sysadmin = login("sysadmin-778")
+    created = _create_key(sysadmin, run_as_user_uuid=service.user_uuid)
+    key = created["key"]
+    assert (key["owner_display_name"], key["created_by_display_name"]) == (
+        "svc-erp-778",
+        "sysadmin-778",
+    )
+    # キーは実行する利用者の権限と対象範囲で動く（作ったシステム管理者の権限ではない）。
+    listed = _call("agent_list_agents", {}, _bearer(created["token"]))["structuredContent"]
+    assert [item["id"] for item in listed["agents"]] == [OTHER_AGENT_ID]
+    asked = _call(
+        "agent_ask",
+        {"agent_id": OTHER_AGENT_ID, "question": "q", "wait_seconds": 0},
+        _bearer(created["token"]),
+    )["structuredContent"]
+    assert runtime_repository.get_run(asked["run_id"]).created_by_user_uuid == service.user_uuid
+
+    # 実行する利用者は、有効で初回のパスワード変更が済んでいること。
+    unknown = client.post(
+        "/api/settings/api-keys",
+        json={"name": "x", "run_as_user_uuid": "00000000-0000-0000-0000-00000000ffff"},
+        headers=sysadmin,
+    )
+    assert unknown.status_code == 422
+    fresh = auth.create_user("svc-fresh-778", force_password_change=True)
+    pending = client.post(
+        "/api/settings/api-keys",
+        json={"name": "x", "run_as_user_uuid": fresh.user_uuid},
+        headers=sysadmin,
+    )
+    assert pending.status_code == 422
+    assert "初回のパスワード変更" in pending.text

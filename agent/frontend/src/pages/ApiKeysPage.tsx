@@ -18,6 +18,7 @@ import {
   PageHeader,
   RowActionMenu,
   SearchableMultiSelect,
+  SearchableSelectField,
   SelectField,
   StatusBadge,
   TableSkeleton,
@@ -33,6 +34,8 @@ import { agentApi, type ApiKey, type ApiKeyCreated, type ApiKeyExpiryDays } from
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
+import { securityApi } from "@/lib/security-api";
+import { useAuth } from "@/components/security/AuthProvider";
 
 // API キー（#778）。業務システムや MCP クライアントが、業務 Agent を MCP（`POST /api/mcp`）で呼ぶための
 // キー。キーは作った利用者として動き、選んだ業務 Agent だけを呼べる。秘密は作成の直後に 1 回だけ出す。
@@ -68,6 +71,20 @@ export function ApiKeysPage() {
   const [expiry, setExpiry] = useState<ExpiryOption>("90");
   const [submitted, setSubmitted] = useState(false);
   const [created, setCreated] = useState<ApiKeyCreated | null>(null);
+  // 実行する利用者（"" は自分）。ほかの利用者を選べるのはシステム管理者だけ（#778）。
+  const { user } = useAuth();
+  const canChooseRunAs = Boolean(user?.is_system_admin) && canManage;
+  const [runAs, setRunAs] = useState("");
+  const users = useQuery({ queryKey: ["security-users"], queryFn: () => securityApi.users(), enabled: canChooseRunAs });
+  const runAsOptions = useMemo(
+    () => [
+      { value: "", label: t("apiKeys.create.runAsSelf", { name: user?.display_name ?? "" }) },
+      ...(users.data ?? [])
+        .filter((item) => item.user_uuid !== user?.user_uuid && item.status === "ACTIVE" && !item.force_password_change)
+        .map((item) => ({ value: item.user_uuid, label: item.display_name, description: item.login_user_id })),
+    ],
+    [users.data, user]
+  );
 
   const nameError = submitted && !name.trim() ? t("apiKeys.create.nameRequired") : undefined;
   const agentsError =
@@ -79,11 +96,13 @@ export function ApiKeysPage() {
         name: name.trim(),
         agent_ids: scope === "all" ? null : agentIds,
         expires_in_days: expiry === "none" ? null : (Number(expiry) as ApiKeyExpiryDays),
+        run_as_user_uuid: runAs || null,
       }),
     onSuccess: (result) => {
       setCreated(result);
       setName("");
       setAgentIds([]);
+      setRunAs("");
       setSubmitted(false);
       void queryClient.invalidateQueries({ queryKey: ["api-keys"] });
     },
@@ -175,6 +194,18 @@ export function ApiKeysPage() {
                   onValueChange={setExpiry}
                 />
               </div>
+              {canChooseRunAs ? (
+                <SearchableSelectField
+                  id="api-key-run-as"
+                  label={t("apiKeys.create.runAs")}
+                  helper={t("apiKeys.create.runAsHelper")}
+                  width="md"
+                  value={runAs}
+                  options={runAsOptions}
+                  onValueChange={setRunAs}
+                  disabled={users.isLoading}
+                />
+              ) : null}
               <Fieldset
                 legend={t("apiKeys.create.scope")}
                 role="radiogroup"
@@ -337,9 +368,15 @@ function KeysTable({
       key: "owner",
       header: t("apiKeys.column.owner"),
       className: "text-xs text-fg",
+      render: (key) => key.owner_display_name || key.owner_user_uuid,
+    },
+    {
+      key: "createdBy",
+      header: t("apiKeys.column.createdBy"),
+      className: "text-xs text-fg",
       render: (key) => (
         <>
-          <span className="block">{key.owner_display_name || key.owner_user_uuid}</span>
+          <span className="block">{key.created_by_display_name || key.created_by_user_uuid}</span>
           <span className="block tabular-nums text-fg-muted">{formatDateTime(key.created_at)}</span>
         </>
       ),

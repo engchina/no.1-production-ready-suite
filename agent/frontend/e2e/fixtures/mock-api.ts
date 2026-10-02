@@ -692,8 +692,15 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       const key: Json = {
         id,
         name: body.name,
-        owner_user_uuid: "local",
-        owner_display_name: "ローカル利用者",
+        owner_user_uuid: (body.run_as_user_uuid as string | null) ?? "local",
+        owner_display_name: body.run_as_user_uuid
+          ? String(
+              (state.security.users as Json[]).find((user) => user.user_uuid === body.run_as_user_uuid)
+                ?.display_name ?? body.run_as_user_uuid
+            )
+          : "ローカル利用者",
+        created_by_user_uuid: "local",
+        created_by_display_name: "ローカル利用者",
         agent_ids: body.agent_ids ?? null,
         token_prefix: `prak_${id}_xxxx`,
         created_at: MOCK_NOW,

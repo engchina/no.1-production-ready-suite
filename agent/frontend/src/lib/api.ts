@@ -193,9 +193,12 @@ export interface RunState {
 export interface ApiKey {
   id: string;
   name: string;
+  /** 実行する利用者（キーはこの利用者として動く）。 */
   owner_user_uuid: string;
   owner_display_name: string;
-  /** null は「作った利用者が使える業務 Agent すべて」。 */
+  created_by_user_uuid: string;
+  created_by_display_name: string;
+  /** null は「実行する利用者が使える業務 Agent すべて」。 */
   agent_ids: string[] | null;
   token_prefix: string;
   created_at: string;
@@ -216,6 +219,8 @@ export interface CreateApiKeyPayload {
   name: string;
   agent_ids: string[] | null;
   expires_in_days: ApiKeyExpiryDays | null;
+  /** 実行する利用者。null は作った利用者（ほかの利用者はシステム管理者だけ）。 */
+  run_as_user_uuid: string | null;
 }
 
 export interface ApiKeyCreated {
