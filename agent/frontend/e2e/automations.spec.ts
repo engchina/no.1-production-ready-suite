@@ -107,7 +107,7 @@ test("Webhook の自動実行は保存後に URL を出し、秘密を 1 回だ�
   await expect(page.getByTestId("automation-webhook-url")).toHaveText(/\/api\/hooks\/auto-1$/);
   await expect(page.getByText("秘密はまだ発行していません。")).toBeVisible();
   await page.getByTestId("automation-issue-token").click();
-  await expect(page.getByTestId("automation-webhook-token")).toContainText("prwh_");
+  await expect(page.getByTestId("automation-webhook-secret")).toHaveValue(/^prwh_/);
   await page.getByRole("button", { name: "保管しました" }).click();
   await expect(page.getByTestId("automation-webhook-token")).toHaveCount(0);
 
@@ -178,4 +178,43 @@ test("保存先が無いときは知らせ、読み込み中は経過時間を�
   await page.goto("/automations");
   await expect(page.getByTestId("automations-loading")).toContainText("自動実行を読み込んでいます");
   await expect(page.getByText("作成した自動実行はバックエンドの再起動で消えます", { exact: false })).toBeVisible();
+});
+
+test("Webhook の秘密のコピーに失敗しても秘密を Toast に出さず、欄を選択する (#790)", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: () => Promise.reject(new DOMException("denied", "NotAllowedError")) },
+    });
+  });
+  await page.goto("/automations?id=new");
+  await page.getByLabel("名前").fill("受注の通知");
+  await page.locator("#automation-goal").fill("受け取った受注を確認してください。");
+  await page.getByRole("radio", { name: "Webhook" }).check();
+  await page.getByRole("button", { name: "作成", exact: true }).first().click();
+  await expect(page.getByTestId("automation-webhook-url")).toBeVisible();
+
+  await page.getByRole("button", { name: "URL をコピー" }).click();
+  await expect(page.getByText("コピーできませんでした。表示中の URL を選択してコピーしてください。")).toBeVisible();
+
+  await page.getByTestId("automation-issue-token").click();
+  const secretField = page.getByTestId("automation-webhook-secret");
+  await expect(secretField).toHaveValue(/^prwh_/);
+  const secret = await secretField.inputValue();
+  // 発行の結果は起点の「秘密を発行」の直下に出す（messaging.md §10.1）。
+  const issueBox = await page.getByTestId("automation-issue-token").boundingBox();
+  const panelBox = await page.getByTestId("automation-webhook-token").boundingBox();
+  expect(panelBox?.y ?? 0).toBeGreaterThan((issueBox?.y ?? 0) + (issueBox?.height ?? 0) - 1);
+
+  const panel = page.getByTestId("automation-webhook-token");
+  await panel.getByRole("button", { name: "秘密をコピー" }).click();
+  await expect(panel.getByText("コピーできませんでした。表示中の秘密を選択してコピーしてください。")).toBeVisible();
+  await expect(secretField).toBeFocused();
+  const selection = await secretField.evaluate((input: HTMLInputElement) =>
+    input.value.slice(input.selectionStart ?? 0, input.selectionEnd ?? 0)
+  );
+  expect(selection).toBe(secret);
+  await expect(page.locator("[data-toast-placement]")).toContainText("コピーできませんでした");
+  await expect(page.locator("[data-toast-placement]")).not.toContainText(secret);
+  await expect(page.getByText(secret)).toHaveCount(0);
 });
