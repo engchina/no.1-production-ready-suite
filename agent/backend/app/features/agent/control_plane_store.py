@@ -29,13 +29,15 @@ from app.settings import get_settings
 logger = logging.getLogger(__name__)
 
 JsonObject = dict[str, Any]
-ItemKind = Literal["skill", "plugin", "marketplace", "mcp_connection", "tool_policy"]
+ItemKind = Literal["skill", "plugin", "marketplace", "mcp_connection", "tool_policy", "automation"]
 ITEM_KINDS: tuple[ItemKind, ...] = (
     "mcp_connection",
     "tool_policy",
     "skill",
     "marketplace",
     "plugin",
+    # 業務 Agent の自動実行（#784。Webhook の秘密は hash だけ）。
+    "automation",
 )
 ITEMS_TABLE = "AGENT_CONTROL_PLANE_ITEMS"
 _SECRET_FIELDS = ("api_key", "oauth_client_secret")
@@ -320,6 +322,14 @@ def save_tool_policy(policy: Any) -> None:
     )
 
 
+def save_automation(automation_id: str, document: JsonObject) -> None:
+    _put("automation", automation_id, document)
+
+
+def delete_automation(automation_id: str) -> None:
+    _delete("automation", automation_id)
+
+
 # ---- 復元（起動時） ---------------------------------------------------------------
 
 
@@ -372,6 +382,10 @@ def _restore_item(kind: ItemKind, document: JsonObject) -> None:
             MarketplaceSource.model_validate(document.get("source") or {}),
             MarketplaceListing.model_validate(listing_raw) if listing_raw else None,
         )
+    elif kind == "automation":
+        from app.features.agent.automations import Automation, automation_store
+
+        automation_store.restore(Automation.model_validate(document))
     elif kind == "plugin":
         manifest = PluginManifest.model_validate(document.get("manifest") or {})
         record = plugin_registry.install(

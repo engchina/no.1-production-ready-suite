@@ -174,6 +174,8 @@ def test_api_changes_are_saved_and_restored(file_store: Path) -> None:
         "skill": 1,
         "marketplace": 1,
         "plugin": 1,
+        # 自動実行（#784）は tests/test_automations.py で確かめる。
+        "automation": 0,
     }
     skill = skill_registry.get("cp764_skill")
     assert skill is not None and skill.instructions == "手順"

@@ -189,6 +189,60 @@ export interface RunState {
   updated_at: string;
 }
 
+/** 業務 Agent の自動実行（スケジュール・Webhook。#784）。 */
+export type ScheduleFrequency = "daily" | "weekdays" | "weekly" | "hourly";
+export type AutomationTrigger = "schedule" | "webhook";
+
+export interface AutomationSchedule {
+  frequency: ScheduleFrequency;
+  /** HH:MM（毎日・平日・毎週）。 */
+  time: string;
+  /** 0 = 月曜 … 6 = 日曜（毎週）。 */
+  weekdays: number[];
+  /** 毎時の分。 */
+  minute: number;
+  timezone: string;
+}
+
+export interface AutomationInput {
+  agent_id: string;
+  name: string;
+  goal: string;
+  enabled: boolean;
+  trigger: AutomationTrigger;
+  schedule: AutomationSchedule | null;
+}
+
+export interface Automation extends AutomationInput {
+  id: string;
+  run_as_user_uuid: string;
+  created_by_user_uuid: string;
+  webhook_token_prefix: string | null;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_run_id: string | null;
+  last_trigger: string | null;
+  /** Run の作成（created）・前回の Run が終わっていないため飛ばした（skipped）・作れなかった（failed_to_start）。 */
+  last_result: "created" | "skipped" | "failed_to_start" | null;
+  last_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AutomationRun {
+  run_id: string;
+  status: RunState["status"];
+  trigger: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AutomationFired {
+  run_id: string | null;
+  result: "created" | "skipped" | "failed_to_start";
+  message: string;
+}
+
 export interface ToolAuditRecord {
   step_id: string;
   tool_name: string;
@@ -757,6 +811,26 @@ export const agentApi = {
   getRun: (runId: string) => request<RunState>(`/api/runs/${runId}`),
   getRunAudit: (runId: string) =>
     request<RunAuditData>(`/api/runs/${runId}/audit`),
+  /** 自動実行（#784）。 */
+  listAutomations: () => request<{ automations: Automation[]; persistent: boolean }>("/api/automations"),
+  getAutomation: (automationId: string) =>
+    request<{ automation: Automation; runs: AutomationRun[] }>(`/api/automations/${encodeURIComponent(automationId)}`),
+  createAutomation: (payload: AutomationInput) =>
+    request<Automation>("/api/automations", { method: "POST", body: JSON.stringify(payload) }),
+  updateAutomation: (automationId: string, payload: AutomationInput) =>
+    request<Automation>(`/api/automations/${encodeURIComponent(automationId)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteAutomation: (automationId: string) =>
+    request<null>(`/api/automations/${encodeURIComponent(automationId)}`, { method: "DELETE" }),
+  runAutomation: (automationId: string) =>
+    request<AutomationFired>(`/api/automations/${encodeURIComponent(automationId)}/run`, { method: "POST" }),
+  issueAutomationWebhookToken: (automationId: string) =>
+    request<{ automation: Automation; token: string }>(
+      `/api/automations/${encodeURIComponent(automationId)}/webhook-token`,
+      { method: "POST" }
+    ),
   listToolCallAudit: (filters: ToolCallAuditFilters) =>
     request<ToolCallAuditData>(`/api/audit/tool-calls${auditQuery(filters)}`),
   /** 監査 CSV。Cookie セッションで取得し、401 / 403 は他の API と同じく通知する（#215）。 */

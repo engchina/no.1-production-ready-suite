@@ -158,3 +158,10 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 - 範囲が制限された利用者の `GET /observability/events` は、件数上限（limit）を適用した後に範囲で絞ります。
 - local の Run は Run の利用者が `00000000-0000-0000-0000-000000000000`（ローカル利用者）です。production の RAG / NL2SQL を呼ぶと、
   その利用者は呼び先に存在しないため拒否されます（local 同士で使う）。
+
+## 自動実行（スケジュール・Webhook。#784）
+
+- メニュー権限 `menu.automations`（Control Plane /「自動実行」）。作成・変更・削除・今すぐ実行・Webhook の秘密の発行は `agent.admin`。
+- 自動実行は作った利用者として Run を作る（実行のたびに利用者の現在の権限と対象範囲を確かめ、実行できなければ「開始できず」）。前回の Run が終わっていなければ、その回は飛ばす。
+- Webhook（`POST /api/hooks/{automation_id}`）は公開 path で、Cookie・CSRF を使わず自動実行の秘密（`Authorization: Bearer prwh_…`）で認証する。秘密は発行時に 1 回だけ返し、`AGENT_CONTROL_PLANE_ITEMS`（kind `automation`）には SHA-256 の hash だけを保存する。自動実行が無い・秘密が違う・Webhook でないは区別せず 401。
+
