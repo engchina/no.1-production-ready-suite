@@ -199,6 +199,18 @@ export interface RunState {
   updated_at: string;
 }
 
+/** 業種テンプレート（#780）。業務 Agent の新規作成のフォームに入れる出発点。 */
+export interface AgentTemplate {
+  id: string;
+  category: string;
+  name: string;
+  description: string;
+  instructions: string;
+  skill_ids: string[];
+  sample_questions: string[];
+  evaluation_cases: { question: string; expected: string }[];
+}
+
 /** 品質評価のケース（#776）。`id` を省くと `case-<番号>`。 */
 export interface EvaluationCase {
   id?: string;
@@ -1169,6 +1181,7 @@ export const agentApi = {
   getRun: (runId: string) => request<RunState>(`/api/runs/${runId}`),
   getRunAudit: (runId: string) =>
     request<RunAuditData>(`/api/runs/${runId}/audit`),
+  listAgentTemplates: () => request<{ templates: AgentTemplate[] }>("/api/agent-templates"),
   /** 自動実行（#784）。 */
   listAutomations: () => request<{ automations: Automation[]; persistent: boolean }>("/api/automations"),
   getAutomation: (automationId: string) =>

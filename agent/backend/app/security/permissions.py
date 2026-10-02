@@ -334,6 +334,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/agents"): _ADMIN_ONLY,
     ("PATCH", "/agents/{agent_id}"): _ADMIN_ONLY,
     ("DELETE", "/agents/{agent_id}"): _ADMIN_ONLY,
+    # 業種テンプレート（#780。業務 Agent の新規作成の画面が読む）。
+    ("GET", "/agent-templates"): _any(MENU_AGENTS),
     # 業務 Agent の公開・前の版に戻す（#770）。
     ("POST", "/agents/{agent_id}/publish"): _ADMIN_ONLY,
     ("POST", "/agents/{agent_id}/versions/{version}/restore"): _ADMIN_ONLY,
