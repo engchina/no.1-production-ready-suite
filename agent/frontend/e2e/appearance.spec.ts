@@ -86,6 +86,10 @@ for (const viewport of [
       await expect(sidebar.getByText(title, { exact: true })).toBeVisible();
     }
     await expect(sidebar.getByText(/Control Plane/)).toHaveCount(0);
+    // 見出しは CSS で大文字にしない（innerText は text-transform を反映する。#801）。
+    expect(await sidebar.getByText("Agent 構築", { exact: true }).evaluate((element) => (element as HTMLElement).innerText)).toBe(
+      "Agent 構築"
+    );
     // AI 活用は一般の利用者の画面（チャット → 実行履歴 → 承認）。チャットが既定の入口（#768 / #791）。
     const linkHrefs = (section: string) =>
       sidebar
