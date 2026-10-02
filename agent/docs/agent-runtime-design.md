@@ -3,5 +3,5 @@
 本プロジェクトは Runtime から Control Plane へ再定義されました。正本は
 [agent-control-plane-design.md](./agent-control-plane-design.md) です。
 
-旧 in-process Runtime は `X-Agent-API-Version: 1` の移行互換と `legacy-native` 履歴参照にのみ
-残り、新規 v2 Run の実行先にはなりません。
+旧 in-process Runtime（v1 の Run・planner・Memory）は #756 で削除しました。Run はすべて組み込み Runtime
+（OpenAI Agents SDK + OCI Enterprise AI。#754）で実行します。

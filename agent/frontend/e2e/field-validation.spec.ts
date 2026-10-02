@@ -51,55 +51,6 @@ for (const viewport of [
       await expectNoHorizontalOverflow(page);
     });
 
-    test("Runtime Safety は空を 0 として保存せず、欄の下に理由を出す", async ({ page, mockApi }) => {
-      await page.goto("/settings/runtime-safety");
-      await page.getByLabel("Run あたり最大ツール呼び出し").fill("");
-      await page.getByLabel("Run あたり最大承認待ち").fill("-1");
-      await page.getByRole("button", { name: "保存" }).click();
-
-      await expectFieldError(page, "runtime-safety-max-tool-calls", "Run あたり最大ツール呼び出しを入力してください。");
-      await expectFieldError(
-        page,
-        "runtime-safety-max-pending-approvals",
-        "Run あたり最大承認待ちは 0 以上の整数を入力してください。"
-      );
-      await expect(page.locator("#runtime-safety-max-tool-calls")).toBeFocused();
-      expect(patchCount(mockApi, "/settings/runtime-safety")).toBe(0);
-
-      // 0 は「許可しない」という正当な値として保存できる。
-      await page.getByLabel("Run あたり最大ツール呼び出し").fill("0");
-      await expect(page.locator("#runtime-safety-max-tool-calls")).not.toHaveAttribute("aria-invalid", "true");
-      await page.getByLabel("Run あたり最大承認待ち").fill("0");
-      await page.getByRole("button", { name: "保存" }).click();
-      await expect(page.getByText("設定を保存しました")).toBeVisible();
-      expect(patchCount(mockApi, "/settings/runtime-safety")).toBe(1);
-      await expectNoHorizontalOverflow(page);
-    });
-
-    test("Command Policy は欄ごとにエラーを出し、最初のエラーの欄へフォーカスする", async ({ page, mockApi }) => {
-      await page.goto("/settings/command-policy");
-      await page.getByLabel("Workspace root").fill("");
-      await page.getByLabel("既定タイムアウト秒").fill("10");
-      await page.getByLabel("最大タイムアウト秒").fill("5");
-      await page.getByLabel("出力上限 bytes").fill("");
-      await page.getByLabel("Artifact storage path").fill(" ");
-      await page.getByRole("button", { name: "保存", exact: true }).click();
-
-      await expectFieldError(page, "command-policy-workspace-root", "Workspace root を入力してください。");
-      await expectFieldError(page, "command-policy-output-limit", "出力上限 bytes を入力してください。");
-      await expectFieldError(
-        page,
-        "command-policy-default-timeout",
-        "既定タイムアウト秒は最大タイムアウト秒以下の数値を入力してください。"
-      );
-      await expectFieldError(page, "command-policy-artifact-path", "Artifact storage path を入力してください。");
-      await expect(page.locator("#command-policy-workspace-root")).toBeFocused();
-      // 欄のエラーを Banner に重ねて出さない。
-      await expect(page.getByRole("alert").filter({ hasText: "正の数値" })).toHaveCount(0);
-      expect(patchCount(mockApi, "/settings/command-policy")).toBe(0);
-      await expectNoHorizontalOverflow(page);
-    });
-
     test("外部 MCP のタイムアウトは必須で、空を 0 として保存しない", async ({ page, mockApi }) => {
       await page.goto("/settings/external-mcp?id=new");
       await page.locator("#mcp-server-id").fill("crm");

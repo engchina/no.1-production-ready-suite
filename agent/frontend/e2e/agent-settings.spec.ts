@@ -321,7 +321,7 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByText("external_rag_search")).toBeVisible();
     await expect(page.getByText("external_nl2sql_query")).toBeVisible();
     await expect(page.getByText("external_mcp_call")).toBeVisible();
-    await expect(page.getByText("sandbox_command_run")).toBeVisible();
+    await expect(page.getByText("sandbox_command_run")).toHaveCount(0);
     // 権限レベルと side_effects は tool の分類（状態ではない）なので、StatusBadge のアイコンを付けない
     const badges = page.locator("main [data-status-variant]");
     await expect(badges.filter({ hasText: /^(read|write|sensitive|side_effects)$/ }).first()).toBeVisible();
@@ -528,21 +528,6 @@ test.describe("Agent Runtime settings", () => {
     await expectNoHorizontalOverflow(page);
   });
 
-  test("Runtime Safety をモバイル幅でも操作できる", async ({ page }) => {
-    await page.setViewportSize({ width: 375, height: 812 });
-    await page.goto("/settings/runtime-safety");
-
-    await expect(page.getByRole("heading", { name: "Runtime Safety", level: 1 })).toBeVisible();
-    await expect(page.getByText("上限を超えた Run は安全に停止し")).toBeVisible();
-    await expectNoHorizontalOverflow(page);
-
-    await page.getByLabel("Run あたり最大ツール呼び出し").fill("20");
-    await page.getByLabel("Run あたり最大承認待ち").fill("5");
-    await page.getByRole("button", { name: "保存" }).click();
-    await expect(page.getByText("設定を保存しました")).toBeVisible();
-    await expectNoHorizontalOverflow(page);
-  });
-
   test("外部 RAG / NL2SQL は MCP の URL を保存し、サービス間認証の状態を表示する", async ({ page, mockApi }) => {
     await page.goto("/settings/external-rag");
 
@@ -630,12 +615,13 @@ test.describe("Agent Runtime settings", () => {
   ]) {
     test(`通知を出したまま、ページの末尾の保存を押せる (${viewport.name})`, async ({ page, mockApi }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
-      await page.goto("/settings/command-policy");
-      await expect(page.getByRole("heading", { name: "Command Policy", level: 1 })).toBeVisible();
+      await page.goto("/settings/tool-policy");
+      await expect(page.getByRole("heading", { name: "ツール権限", level: 1 })).toBeVisible();
       const saves = () =>
-        mockApi.requests.filter((request) => request.method === "PATCH" && request.path.endsWith("/settings/command-policy")).length;
+        mockApi.requests.filter((request) => request.method === "PATCH" && request.path.endsWith("/settings/tool-policy")).length;
+      const defaultMode = page.locator("#tool-policy-default-mode");
 
-      await page.getByLabel("既定タイムアウト秒").fill("4");
+      await chooseSelectFieldOption(defaultMode, "deny");
       const save = page.getByRole("button", { name: "保存", exact: true });
       await save.click();
       const notice = page.getByRole("region", { name: "通知" }).getByRole("status").filter({ hasText: "設定を保存しました" });
@@ -643,7 +629,7 @@ test.describe("Agent Runtime settings", () => {
       await expect.poll(saves).toBe(1);
 
       // ページの末尾までスクロールすると、保存ボタンは画面の下端に来る（以前の通知の位置）。
-      await page.getByLabel("既定タイムアウト秒").fill("5");
+      await chooseSelectFieldOption(defaultMode, "approval");
       await page.locator("main").evaluate((main) => {
         main.scrollTop = main.scrollHeight;
       });
@@ -665,33 +651,6 @@ test.describe("Agent Runtime settings", () => {
       await expectNoHorizontalOverflow(page);
     });
   }
-
-  test("Command Policy を保存してモバイル幅でも確認できる", async ({ page }) => {
-    await page.goto("/settings/command-policy");
-
-    await expect(page.getByRole("heading", { name: "Command Policy", level: 1 })).toBeVisible();
-    await expect(page.locator("header").getByText("sandbox command の実行許可")).toBeVisible();
-    await expectNoHorizontalOverflow(page);
-
-    await page.getByLabel("sandbox command を有効化").check();
-    await page.getByLabel("Workspace root").fill(".");
-    await page.getByLabel("Global allowed prefixes").fill("echo\npwd");
-    await page.getByLabel("既定タイムアウト秒").fill("4");
-    await page.getByLabel("最大タイムアウト秒").fill("6");
-    await page.getByLabel("出力上限 bytes").fill("2048");
-    await chooseSelectFieldOption(page.getByRole("combobox", { name: "Artifact storage", exact: true }), {
-      label: "Filesystem",
-    });
-    await page.getByLabel("Artifact storage path").fill(".agent-artifacts-ui");
-    await page.getByRole("button", { name: "保存" }).click();
-    await expect(page.getByText("設定を保存しました")).toBeVisible();
-    await expect(page.getByLabel("Global allowed prefixes")).toHaveValue("echo\npwd");
-    await expectNoHorizontalOverflow(page);
-
-    await page.setViewportSize({ width: 375, height: 812 });
-    await expect(page.getByLabel("Global allowed prefixes")).toBeVisible();
-    await expectNoHorizontalOverflow(page);
-  });
 
   test("業務 Agent は Skill だけを選択して保存できる", async ({ page }) => {
     await page.goto("/agents");

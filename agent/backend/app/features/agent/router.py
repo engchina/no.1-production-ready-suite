@@ -95,10 +95,6 @@ from app.features.agent.runtime import (
     ApprovalDecisionRequest,
     Artifact,
     ArtifactsData,
-    MemoryData,
-    MemoryEntry,
-    MemoryKind,
-    MemorySearchRequest,
     RunCreateRequest,
     RunEvent,
     RunsData,
@@ -111,10 +107,7 @@ from app.features.agent.runtime import (
 from app.features.agent.skills import (
     AgentSkillDefinition,
     AgentSkillListOutput,
-    AgentSkillPlanOutput,
-    AgentSkillRunInput,
     SkillMcpRequirement,
-    SkillToolCallTemplate,
     reload_declared_skills,
     skill_registry,
 )
@@ -127,7 +120,6 @@ from app.features.agent.tools import (
     ToolInvocationContext,
     ToolPolicy,
     ToolResult,
-    ToolsData,
     list_external_mcp_tools,
     tool_registry,
 )
@@ -291,7 +283,6 @@ class AgentSkillCreate(BaseModel):
     instructions: str = ""
     mcp_requirements: list[SkillMcpRequirement] = Field(default_factory=list)
     resource_ids: list[str] = Field(default_factory=list)
-    tool_calls: list[SkillToolCallTemplate] = Field(default_factory=list)
     enabled: bool = True
     tags: list[str] = Field(default_factory=list)
 
@@ -302,7 +293,6 @@ class AgentSkillPatch(BaseModel):
     instructions: str | None = None
     mcp_requirements: list[SkillMcpRequirement] | None = None
     resource_ids: list[str] | None = None
-    tool_calls: list[SkillToolCallTemplate] | None = None
     enabled: bool | None = None
     tags: list[str] | None = None
 
@@ -336,71 +326,6 @@ class ToolPolicySettingsPatch(BaseModel):
     allow: list[str] | None = None
     ask: list[str] | None = None
     deny: list[str] | None = None
-
-
-class RuntimeSafetySettings(BaseModel):
-    max_tool_calls_per_run: int
-    max_pending_approvals_per_run: int
-
-
-class RuntimeSafetySettingsPatch(BaseModel):
-    max_tool_calls_per_run: int | None = None
-    max_pending_approvals_per_run: int | None = None
-
-
-class CommandPolicySettings(BaseModel):
-    enabled: bool
-    workspace_root: str
-    allowed_prefixes: list[str]
-    default_timeout_seconds: float
-    max_timeout_seconds: float
-    output_limit_bytes: int
-    artifact_storage_backend: str
-    artifact_storage_path: str
-
-
-class CommandPolicySettingsPatch(BaseModel):
-    enabled: bool | None = None
-    workspace_root: str | None = None
-    allowed_prefixes: list[str] | None = None
-    default_timeout_seconds: float | None = None
-    max_timeout_seconds: float | None = None
-    output_limit_bytes: int | None = None
-    artifact_storage_backend: str | None = None
-    artifact_storage_path: str | None = None
-
-
-class PlannerSettings(BaseModel):
-    provider: str
-    oci_responses_base_url: str | None = None
-    oci_responses_base_url_configured: bool
-    oci_responses_api_key_configured: bool
-    oci_responses_model: str | None = None
-    oci_responses_model_configured: bool
-    oci_responses_project: str | None = None
-    oci_responses_project_configured: bool
-    oci_agent_endpoint: str | None = None
-    oci_agent_endpoint_configured: bool
-    oci_agent_api_key_configured: bool
-    timeout_seconds: float
-    max_retries: int
-    fallback_to_heuristic: bool
-    allowed_tool_names: list[str]
-    allow_command_generation: bool
-
-
-class PlannerSettingsPatch(BaseModel):
-    provider: str | None = None
-    oci_responses_base_url: str | None = None
-    oci_responses_model: str | None = None
-    oci_responses_project: str | None = None
-    oci_agent_endpoint: str | None = None
-    enterprise_ai_endpoint: str | None = None
-    timeout_seconds: float | None = None
-    max_retries: int | None = None
-    fallback_to_heuristic: bool | None = None
-    allowed_tool_names: list[str] | None = None
-    allow_command_generation: bool | None = None
 
 
 class ToolAuditRecord(BaseModel):
@@ -1152,19 +1077,6 @@ async def list_agent_skills(
     return ApiResponse(data=AgentSkillListOutput(skills=skills, metadata={"count": len(skills)}))
 
 
-@router.post("/skills/plan", response_model=ApiResponse[AgentSkillPlanOutput])
-async def plan_agent_skill(
-    request: AgentSkillRunInput,
-    _: None = Depends(require_viewer),
-) -> ApiResponse[AgentSkillPlanOutput]:
-    try:
-        return ApiResponse(data=skill_registry.plan(request))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="skill not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
 @router.post("/skills/reload", response_model=ApiResponse[AgentSkillListOutput])
 async def reload_agent_skills(
     _: None = Depends(require_admin),
@@ -1184,7 +1096,7 @@ async def get_agent_skill(
     skill_id: str,
     _: None = Depends(require_viewer),
 ) -> ApiResponse[AgentSkillDefinition]:
-    """単一 skill の詳細(instructions / tool_calls)を返す(progressive disclosure)。"""
+    """単一 skill の詳細(instructions / mcp_requirements)を返す(progressive disclosure)。"""
     skill = skill_registry.get(skill_id)
     if skill is None:
         raise HTTPException(status_code=404, detail="skill not found")
@@ -1208,7 +1120,6 @@ async def create_agent_skill(
         instructions=payload.instructions,
         mcp_requirements=payload.mcp_requirements,
         resource_ids=payload.resource_ids,
-        tool_calls=payload.tool_calls,
         enabled=payload.enabled,
         tags=payload.tags,
         source="runtime",
@@ -1250,7 +1161,6 @@ async def patch_agent_skill(
             "resource_ids": (
                 current.resource_ids if patch.resource_ids is None else patch.resource_ids
             ),
-            "tool_calls": (current.tool_calls if patch.tool_calls is None else patch.tool_calls),
             "enabled": current.enabled if patch.enabled is None else patch.enabled,
             "tags": current.tags if patch.tags is None else patch.tags,
         }
@@ -1444,12 +1354,6 @@ async def uninstall_plugin(
     return ApiResponse(data=_plugin_list_response())
 
 
-@router.get("/agent/tools", response_model=ApiResponse[ToolsData])
-async def list_tool_names_compat() -> ApiResponse[ToolsData]:
-    """旧 UI/テスト互換の names-only ツール一覧を返す。"""
-    return ApiResponse(data=ToolsData(tools=tool_registry.names()))
-
-
 @router.get("/tools/external-mcp", response_model=ApiResponse[ExternalMcpToolsData])
 async def list_external_mcp_tool_definitions(
     server_id: str | None = None,
@@ -1468,7 +1372,6 @@ async def list_external_mcp_tool_definitions(
 
 
 @router.post("/tools/invoke", response_model=ApiResponse[ToolResult])
-@router.post("/agent/tools/invoke", response_model=ApiResponse[ToolResult])
 async def invoke_tool(
     call: ToolCall,
     request: Request,
@@ -1567,17 +1470,7 @@ async def create_run(
 ) -> ApiResponse[RunState]:
     try:
         _require_agent_access(request, run_request.agent_id)
-        if request.headers.get("x-agent-api-version") == "1":
-            response.headers["Deprecation"] = "true"
-            response.headers["Sunset"] = "Wed, 30 Sep 2026 00:00:00 GMT"
-            response.headers["Warning"] = (
-                '299 - "Agent Runtime v1 is deprecated; migrate to Skill + Runtime Binding"'
-            )
-            return ApiResponse(
-                data=runtime_repository.create_run(
-                    run_request, created_by_user_uuid=_run_creator_user_uuid(request)
-                )
-            )
+        # 旧エンジンの v1 の Run（`X-Agent-API-Version: 1`）は #756 で削除した。
         agent = _control_plane_agent(run_request.agent_id)
         if agent.migration_required:
             raise HTTPException(
@@ -1585,14 +1478,6 @@ async def create_run(
                 detail={
                     "code": "agent_migration_required",
                     "message": "Skill を選択して Agent の移行を完了してください。",
-                },
-            )
-        if run_request.tool_calls:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "code": "legacy_tool_calls_not_supported",
-                    "message": "tool_calls は廃止されました。Agent に Skill を割り当ててください。",
                 },
             )
         if not agent.enabled:
@@ -1609,8 +1494,7 @@ async def create_run(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="agent not found") from exc
     except ValueError as exc:
-        status_code = 400 if request.headers.get("x-agent-api-version") == "1" else 409
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}", response_model=ApiResponse[RunState])
@@ -1854,20 +1738,18 @@ async def resume_run(
     try:
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
-        if run.runtime_id == BUILTIN_RUNTIME_ID:
-            # 組み込み Runtime は承認がすべて決まると自動で再開する。
-            # 止まっている Run だけ再開を起動し直す。
-            if not builtin_resume_pending(run):
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "run_not_resumable",
-                        "message": "承認待ちが残っているか、再開できる状態ではありません。",
-                    },
-                )
-            _schedule_builtin_run(run)
-            return ApiResponse(data=run)
-        return ApiResponse(data=runtime_repository.resume_run(run_id))
+        # 組み込み Runtime は承認がすべて決まると自動で再開する。止まっている Run だけ再開を
+        # 起動し直す。旧エンジンの Run（#756 で削除）は読み取りだけ。
+        if not builtin_resume_pending(run):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "run_not_resumable",
+                    "message": "承認待ちが残っているか、再開できる状態ではありません。",
+                },
+            )
+        _schedule_builtin_run(run)
+        return ApiResponse(data=run)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
 
@@ -1881,26 +1763,21 @@ async def replay_run(
     try:
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
-        if run.runtime_id == BUILTIN_RUNTIME_ID:
-            # 同じ Agent・ゴールの新しい Run として実行する（再実行を指示した利用者として）。
-            replayed = runtime_repository.create_builtin_run(
-                RunCreateRequest(
-                    goal=run.goal,
-                    agent_id=run.agent_id,
-                    metadata={
-                        **{k: v for k, v in run.metadata.items() if not k.startswith("_")},
-                        "replayed_from_run_id": run.id,
-                    },
-                ),
-                created_by_user_uuid=_run_creator_user_uuid(request),
-            )
-            _schedule_builtin_run(replayed)
-            return ApiResponse(data=replayed)
-        return ApiResponse(
-            data=runtime_repository.replay_run(
-                run_id, created_by_user_uuid=_run_creator_user_uuid(request)
-            )
+        # 同じ Agent・ゴールの新しい Run として組み込み Runtime で実行する
+        # （再実行を指示した利用者として。旧エンジンの Run も同じ）。
+        replayed = runtime_repository.create_builtin_run(
+            RunCreateRequest(
+                goal=run.goal,
+                agent_id=run.agent_id,
+                metadata={
+                    **{k: v for k, v in run.metadata.items() if not k.startswith("_")},
+                    "replayed_from_run_id": run.id,
+                },
+            ),
+            created_by_user_uuid=_run_creator_user_uuid(request),
         )
+        _schedule_builtin_run(replayed)
+        return ApiResponse(data=replayed)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
 
@@ -1978,36 +1855,6 @@ async def delete_agent(
     except Exception:
         logger.warning("agent_role_assignment_cleanup_failed", extra={"agent_id": agent_id})
     return ApiResponse(data=AgentsData(agents=runtime_repository.list_agents()))
-
-
-@router.get("/memory/search", response_model=ApiResponse[MemoryData])
-async def search_memory_get(
-    q: str = Query(default=""),
-    limit: int = Query(default=20, ge=1, le=100),
-    kind: MemoryKind | None = None,
-) -> ApiResponse[MemoryData]:
-    entries = runtime_repository.search_memory(MemorySearchRequest(query=q, limit=limit, kind=kind))
-    return ApiResponse(data=MemoryData(entries=entries))
-
-
-@router.post("/memory/search", response_model=ApiResponse[MemoryData])
-async def search_memory_post(request: MemorySearchRequest) -> ApiResponse[MemoryData]:
-    return ApiResponse(data=MemoryData(entries=runtime_repository.search_memory(request)))
-
-
-@router.post("/memory", response_model=ApiResponse[MemoryEntry])
-async def add_memory(
-    entry: MemoryEntry,
-    _: None = Depends(require_operator),
-) -> ApiResponse[MemoryEntry]:
-    del entry
-    raise HTTPException(
-        status_code=410,
-        detail={
-            "code": "legacy_memory_read_only",
-            "message": "Memory は legacy export の読取専用です。",
-        },
-    )
 
 
 def _product_mcp_settings(
@@ -2244,86 +2091,6 @@ async def patch_tool_policy_settings(
     return ApiResponse(data=_tool_policy_settings_response())
 
 
-@router.get("/settings/runtime-safety", response_model=ApiResponse[RuntimeSafetySettings])
-async def get_runtime_safety_settings() -> ApiResponse[RuntimeSafetySettings]:
-    return ApiResponse(data=_runtime_safety_settings_response())
-
-
-@router.patch("/settings/runtime-safety", response_model=ApiResponse[RuntimeSafetySettings])
-async def patch_runtime_safety_settings(
-    patch: RuntimeSafetySettingsPatch,
-    _: None = Depends(require_admin),
-) -> ApiResponse[RuntimeSafetySettings]:
-    try:
-        _validate_runtime_safety_patch(patch)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    runtime_config_store.patch_runtime_safety(
-        max_tool_calls_per_run=patch.max_tool_calls_per_run,
-        max_pending_approvals_per_run=patch.max_pending_approvals_per_run,
-    )
-    return ApiResponse(data=_runtime_safety_settings_response())
-
-
-@router.get("/settings/planner", response_model=ApiResponse[PlannerSettings])
-async def get_planner_settings() -> ApiResponse[PlannerSettings]:
-    return ApiResponse(data=_planner_settings_response())
-
-
-@router.patch("/settings/planner", response_model=ApiResponse[PlannerSettings])
-async def patch_planner_settings(
-    patch: PlannerSettingsPatch,
-    _: None = Depends(require_admin),
-) -> ApiResponse[PlannerSettings]:
-    try:
-        _validate_planner_patch(patch)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    runtime_config_store.patch_planner(
-        provider=patch.provider,
-        oci_responses_base_url=patch.oci_responses_base_url,
-        oci_responses_model=patch.oci_responses_model,
-        oci_responses_project=patch.oci_responses_project,
-        oci_agent_endpoint=patch.oci_agent_endpoint,
-        enterprise_ai_endpoint=(
-            patch.enterprise_ai_endpoint if patch.oci_responses_base_url is None else None
-        ),
-        timeout_seconds=patch.timeout_seconds,
-        max_retries=patch.max_retries,
-        fallback_to_heuristic=patch.fallback_to_heuristic,
-        allowed_tool_names=patch.allowed_tool_names,
-        allow_command_generation=patch.allow_command_generation,
-    )
-    return ApiResponse(data=_planner_settings_response())
-
-
-@router.get("/settings/command-policy", response_model=ApiResponse[CommandPolicySettings])
-async def get_command_policy_settings() -> ApiResponse[CommandPolicySettings]:
-    return ApiResponse(data=_command_policy_settings_response())
-
-
-@router.patch("/settings/command-policy", response_model=ApiResponse[CommandPolicySettings])
-async def patch_command_policy_settings(
-    patch: CommandPolicySettingsPatch,
-    _: None = Depends(require_admin),
-) -> ApiResponse[CommandPolicySettings]:
-    try:
-        _validate_command_policy_patch(patch)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    runtime_config_store.patch_command_policy(
-        enabled=patch.enabled,
-        workspace_root=patch.workspace_root,
-        allowed_prefixes=patch.allowed_prefixes,
-        default_timeout_seconds=patch.default_timeout_seconds,
-        max_timeout_seconds=patch.max_timeout_seconds,
-        output_limit_bytes=patch.output_limit_bytes,
-        artifact_storage_backend=patch.artifact_storage_backend,
-        artifact_storage_path=patch.artifact_storage_path,
-    )
-    return ApiResponse(data=_command_policy_settings_response())
-
-
 def _sse_events(events: Iterable[RunEvent | None]) -> Iterable[str]:
     for event in events:
         if event is None:
@@ -2455,7 +2222,10 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             )
             return
         try:
-            runtime_repository.resume_run(run_id)
+            # 組み込み Runtime は、承認の決定の後に止まっている Run だけを再開する（#756）。
+            resumable = runtime_repository.get_run(run_id)
+            if builtin_resume_pending(resumable):
+                _schedule_builtin_run(resumable)
         except KeyError:
             await websocket.send_json(
                 _websocket_error_payload(
@@ -2779,132 +2549,12 @@ def _validate_tool_policy_patch(patch: ToolPolicySettingsPatch) -> None:
         raise ValueError(f"unknown tool: {', '.join(unknown_tools)}")
 
 
-def _runtime_safety_settings_response() -> RuntimeSafetySettings:
-    config = runtime_config_store.get_runtime_safety()
-    return RuntimeSafetySettings(
-        max_tool_calls_per_run=config.max_tool_calls_per_run,
-        max_pending_approvals_per_run=config.max_pending_approvals_per_run,
-    )
-
-
-def _validate_runtime_safety_patch(patch: RuntimeSafetySettingsPatch) -> None:
-    # 文言は画面の欄のラベルと同じ（#541）。0 は「許可しない」という正当な値（空は画面で必須）。
-    if patch.max_tool_calls_per_run is not None and patch.max_tool_calls_per_run < 0:
-        raise ValueError("Run あたり最大ツール呼び出しは 0 以上の整数を入力してください。")
-    if patch.max_pending_approvals_per_run is not None and patch.max_pending_approvals_per_run < 0:
-        raise ValueError("Run あたり最大承認待ちは 0 以上の整数を入力してください。")
-
-
-def _planner_settings_response() -> PlannerSettings:
-    config = runtime_config_store.get_planner()
-    return PlannerSettings(
-        provider=config.provider,
-        oci_responses_base_url=config.oci_responses_base_url,
-        oci_responses_base_url_configured=bool(config.oci_responses_base_url),
-        oci_responses_api_key_configured=bool(config.oci_responses_api_key),
-        oci_responses_model=config.oci_responses_model,
-        oci_responses_model_configured=bool(config.oci_responses_model),
-        oci_responses_project=config.oci_responses_project,
-        oci_responses_project_configured=bool(config.oci_responses_project),
-        oci_agent_endpoint=config.oci_agent_endpoint,
-        oci_agent_endpoint_configured=bool(config.oci_agent_endpoint),
-        oci_agent_api_key_configured=bool(config.oci_agent_api_key),
-        timeout_seconds=config.timeout_seconds,
-        max_retries=config.max_retries,
-        fallback_to_heuristic=config.fallback_to_heuristic,
-        allowed_tool_names=list(config.allowed_tool_names),
-        allow_command_generation=config.allow_command_generation,
-    )
-
-
-def _validate_planner_patch(patch: PlannerSettingsPatch) -> None:
-    if patch.provider is not None:
-        provider = patch.provider.strip().lower()
-        if provider in {"enterprise_ai", "enterprise-ai"}:
-            provider = "oci_responses"
-        if provider not in {"heuristic", "oci_responses", "oci_agent"}:
-            raise ValueError("provider must be heuristic, oci_responses, or oci_agent")
-        patch.provider = provider
-    if (
-        patch.oci_responses_base_url is not None
-        and patch.oci_responses_base_url
-        and not patch.oci_responses_base_url.startswith(("http://", "https://"))
-    ):
-        raise ValueError("oci_responses_base_url must be an http or https URL")
-    if (
-        patch.oci_agent_endpoint is not None
-        and patch.oci_agent_endpoint
-        and not patch.oci_agent_endpoint.startswith(("http://", "https://"))
-    ):
-        raise ValueError("oci_agent_endpoint must be an http or https URL")
-    if (
-        patch.enterprise_ai_endpoint is not None
-        and patch.enterprise_ai_endpoint
-        and not patch.enterprise_ai_endpoint.startswith(("http://", "https://"))
-    ):
-        raise ValueError("enterprise_ai_endpoint must be an http or https URL")
-    if patch.timeout_seconds is not None and patch.timeout_seconds <= 0:
-        raise ValueError("timeout_seconds must be greater than 0")
-    if patch.max_retries is not None and patch.max_retries < 0:
-        raise ValueError("max_retries must be greater than or equal to 0")
-    if patch.allowed_tool_names is not None:
-        normalized = _normalized_tool_names(patch.allowed_tool_names)
-        registered = set(tool_registry.names())
-        unknown = sorted({name for name in normalized if name not in registered})
-        if unknown:
-            raise ValueError(f"unknown tool: {', '.join(unknown)}")
-        patch.allowed_tool_names = normalized
-
-
-def _command_policy_settings_response() -> CommandPolicySettings:
-    config = runtime_config_store.get_command_policy()
-    return CommandPolicySettings(
-        enabled=config.enabled,
-        workspace_root=config.workspace_root,
-        allowed_prefixes=list(config.allowed_prefixes),
-        default_timeout_seconds=config.default_timeout_seconds,
-        max_timeout_seconds=config.max_timeout_seconds,
-        output_limit_bytes=config.output_limit_bytes,
-        artifact_storage_backend=config.artifact_storage_backend,
-        artifact_storage_path=config.artifact_storage_path,
-    )
-
-
 def _mcp_oauth_configured(config: object) -> bool:
     return bool(
         getattr(config, "oauth_token_url", None)
         and getattr(config, "oauth_client_id", None)
         and getattr(config, "oauth_client_secret", None)
     )
-
-
-def _validate_command_policy_patch(patch: CommandPolicySettingsPatch) -> None:
-    # 文言は画面の欄のラベルと同じ（「〇〇を入力してください。」など。#541）。
-    if patch.workspace_root is not None and not patch.workspace_root.strip():
-        raise ValueError("Workspace root を入力してください。")
-    if patch.allowed_prefixes is not None:
-        patch.allowed_prefixes = _normalized_command_prefixes(patch.allowed_prefixes)
-    if patch.default_timeout_seconds is not None and patch.default_timeout_seconds <= 0:
-        raise ValueError("既定タイムアウト秒は 0 より大きい数値を入力してください。")
-    if patch.max_timeout_seconds is not None and patch.max_timeout_seconds <= 0:
-        raise ValueError("最大タイムアウト秒は 0 より大きい数値を入力してください。")
-    current = runtime_config_store.get_command_policy()
-    default_timeout = patch.default_timeout_seconds or current.default_timeout_seconds
-    max_timeout = patch.max_timeout_seconds or current.max_timeout_seconds
-    if default_timeout > max_timeout:
-        raise ValueError("既定タイムアウト秒は最大タイムアウト秒以下の数値を入力してください。")
-    if patch.output_limit_bytes is not None and patch.output_limit_bytes <= 0:
-        raise ValueError("出力上限 bytes は 1 以上の整数を入力してください。")
-    if patch.artifact_storage_backend is not None:
-        backend = patch.artifact_storage_backend.strip().lower()
-        if backend not in {"inline", "filesystem"}:
-            raise ValueError(
-                "Artifact storage（artifact_storage_backend）は"
-                " inline か filesystem を選択してください。"
-            )
-        patch.artifact_storage_backend = backend
-    if patch.artifact_storage_path is not None and not patch.artifact_storage_path.strip():
-        raise ValueError("Artifact storage path を入力してください。")
 
 
 def _normalized_command_prefixes(prefixes: list[str]) -> list[str]:

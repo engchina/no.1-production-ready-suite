@@ -19,13 +19,9 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, string>> = routePermissi
 const HIDDEN_ROUTE_PERMISSIONS: Readonly<Record<string, readonly string[]>> = {
   // プラグインはマーケットプレイスの画面から開く（同じメニュー権限）。
   [APP_ROUTES.plugins]: [MENU_PERMISSIONS.pluginMarketplaces],
-  // legacy Memory（読取専用の export）は監査の閲覧と管理者だけ（backend の `/memory/search` と同じ）。
-  [APP_ROUTES.memory]: [CAPABILITY_PERMISSIONS.auditView, CAPABILITY_PERMISSIONS.admin],
-  // ツール一覧・ツール権限・Command Policy・Runtime Safety はナビに出さない管理者だけの画面。
+  // ツール一覧・ツール権限はナビに出さない管理者だけの画面。
   [APP_ROUTES.tools]: [CAPABILITY_PERMISSIONS.admin],
   [APP_ROUTES.settingsToolPolicy]: [CAPABILITY_PERMISSIONS.admin],
-  [APP_ROUTES.settingsCommandPolicy]: [CAPABILITY_PERMISSIONS.admin],
-  [APP_ROUTES.settingsRuntimeSafety]: [CAPABILITY_PERMISSIONS.admin],
 };
 
 /**

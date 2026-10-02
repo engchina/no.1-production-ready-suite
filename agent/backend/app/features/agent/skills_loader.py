@@ -1,7 +1,7 @@
 """Skill 外部定義のローダ。
 
 Claude / Codex の skill 規約(ディレクトリ + `SKILL.md`(YAML frontmatter + 本文)、
-progressive disclosure)を、本プロダクトの決定論的 `tool_calls` テンプレートへ中立に
+progressive disclosure)を、本プロダクトの Skill（instructions + MCP ツールの許可リスト）へ中立に
 再マッピングする。`.claude` / `.codex` のような vendor 固有名は使わず、中立な
 `AGENT_SKILLS_DIR`(既定 `skills/<id>/SKILL.md`)と `AGENT_SKILLS_DEFINITIONS_JSON`
 を読む。不正定義は warning でスキップし、安全側へ縮退する。
@@ -61,7 +61,7 @@ def _skill_from_mapping(
         "name": str(data.get("name") or skill_id),
         "description": str(data.get("description") or ""),
         "instructions": instructions,
-        "tool_calls": data.get("tool_calls") or [],
+        "mcp_requirements": data.get("mcp_requirements") or [],
         "enabled": bool(data.get("enabled", True)),
         "tags": list(data.get("tags") or []),
         "source": source,

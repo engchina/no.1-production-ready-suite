@@ -1,7 +1,7 @@
 import { expect, test } from "./fixtures/mock-api";
 
 // #355: 共有 Button は loading 中もフォーカスを保ち（ネイティブの disabled ではなく aria-disabled）、
-// Enter / Space の連打で二重に保存しない。Agent の代表として Runtime Safety の保存で確かめる。
+// Enter / Space の連打で二重に保存しない。Agent の代表としてツール権限の保存で確かめる。
 for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile-375", width: 375, height: 812 },
@@ -14,7 +14,7 @@ for (const viewport of [
       release = resolve;
     });
     // mock-api より後に登録した route が先に呼ばれる。PATCH を止めてから mock-api に渡す。
-    await page.route("**/api/settings/runtime-safety", async (route) => {
+    await page.route("**/api/settings/tool-policy", async (route) => {
       if (route.request().method() === "PATCH") {
         patches += 1;
         await released;
@@ -22,9 +22,8 @@ for (const viewport of [
       await route.fallback();
     });
 
-    await page.goto("/settings/runtime-safety");
-    await expect(page.getByRole("heading", { name: "Runtime Safety", level: 1 })).toBeVisible();
-    await page.getByLabel("Run あたり最大ツール呼び出し").fill("20");
+    await page.goto("/settings/tool-policy");
+    await expect(page.getByRole("heading", { name: "ツール権限", level: 1 })).toBeVisible();
 
     const save = page.getByRole("button", { name: "保存" });
     await save.focus();

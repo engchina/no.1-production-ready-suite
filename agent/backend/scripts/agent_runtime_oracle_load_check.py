@@ -15,7 +15,7 @@ from time import perf_counter
 from uuid import uuid4
 
 from app.features.agent.runtime import AgentRuntimeOracleNormalizedRepository, RunCreateRequest
-from app.features.agent.tools import ToolCall
+from app.features.agent.tools import ToolCall, tool_registry
 
 
 def main() -> int:
@@ -70,19 +70,23 @@ def main() -> int:
     write_latencies_ms: list[int] = []
     for index in range(args.runs):
         run_started = perf_counter()
-        repository.create_run(
+        # 組み込み Runtime が echo を呼んで回答したときと同じ書き込み（#756）。
+        run = repository.create_builtin_run(
             RunCreateRequest(
                 goal=f"Oracle load validation {marker} #{index}",
                 metadata={"business_view_id": marker, "load_marker": marker},
-                tool_calls=[
-                    ToolCall(
-                        name="echo",
-                        arguments={"load_marker": marker, "index": index},
-                        trace_id=f"{marker}-{index}",
-                    )
-                ],
             )
         )
+        repository.begin_builtin_run(run.id)
+        call = ToolCall(
+            name="echo",
+            arguments={"load_marker": marker, "index": index},
+            trace_id=f"{marker}-{index}",
+        )
+        step_id, context = repository.start_builtin_tool_step(run.id, call)
+        result = tool_registry.invoke(call, context=context, force=True)
+        repository.finish_builtin_tool_step(run.id, step_id, result)
+        repository.complete_builtin_run(run.id, "load validation")
         write_latencies_ms.append(round((perf_counter() - run_started) * 1000))
     write_duration_ms = round((perf_counter() - started) * 1000)
 

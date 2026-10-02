@@ -270,7 +270,6 @@ export interface AgentProfile {
   model_id?: string;
   migration_required: boolean;
   tool_names?: string[];
-  command_allowed_prefixes?: string[];
   enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -293,23 +292,6 @@ export interface AgentProfilePatchPayload {
   skill_ids?: string[];
   model_id?: string;
   enabled?: boolean;
-}
-
-export type MemoryKind =
-  "run_summary" | "user_preference" | "tool_learning" | "note";
-
-export interface MemoryEntry {
-  id: string;
-  kind: MemoryKind;
-  content: string;
-  metadata: Record<string, unknown>;
-  created_at: string;
-}
-
-export interface MemoryCreatePayload {
-  kind: MemoryKind;
-  content: string;
-  metadata?: Record<string, unknown>;
 }
 
 export interface ExternalServiceSettings {
@@ -383,12 +365,6 @@ export interface ExternalMcpServerWritePayload {
   oauth_scope?: string | null;
 }
 
-export interface AgentSkillToolCall {
-  name: string;
-  arguments?: Record<string, unknown>;
-  trace_id?: string | null;
-}
-
 export interface AgentSkill {
   id: string;
   name: string;
@@ -396,7 +372,6 @@ export interface AgentSkill {
   instructions: string;
   mcp_requirements: { server_id: string; tool_names: string[] }[];
   resource_ids: string[];
-  tool_calls: AgentSkillToolCall[];
   enabled: boolean;
   tags: string[];
   source: string;
@@ -416,7 +391,6 @@ export interface AgentSkillWritePayload {
   instructions?: string;
   mcp_requirements?: { server_id: string; tool_names: string[] }[];
   resource_ids?: string[];
-  tool_calls?: AgentSkillToolCall[];
   enabled?: boolean;
   tags?: string[];
 }
@@ -501,11 +475,6 @@ export interface TracePolicySettings {
   trace_sample_rate: number;
 }
 
-export interface RuntimeSafetySettings {
-  max_tool_calls_per_run: number;
-  max_pending_approvals_per_run: number;
-}
-
 export interface ToolPolicySettings {
   default_mode: "approval" | "deny";
   allow: string[];
@@ -513,30 +482,17 @@ export interface ToolPolicySettings {
   deny: string[];
 }
 
-export interface CommandPolicySettings {
-  enabled: boolean;
-  workspace_root: string;
-  allowed_prefixes: string[];
-  default_timeout_seconds: number;
-  max_timeout_seconds: number;
-  output_limit_bytes: number;
-  artifact_storage_backend: "inline" | "filesystem";
-  artifact_storage_path: string;
-}
-
 export interface RuntimeSnapshot {
   version: string;
   exported_at: string;
   runs: RunState[];
   agents: AgentProfile[];
-  memory: MemoryEntry[];
   control_plane_state: Record<string, unknown>;
 }
 
 export interface RuntimeSnapshotSummary {
   runs: number;
   agents: number;
-  memory: number;
   events: number;
   steps: number;
   approvals: number;
@@ -868,13 +824,6 @@ export const agentApi = {
         method: "POST",
       },
     ),
-  getRuntimeSafetySettings: () =>
-    request<RuntimeSafetySettings>("/api/settings/runtime-safety"),
-  patchRuntimeSafetySettings: (payload: Partial<RuntimeSafetySettings>) =>
-    request<RuntimeSafetySettings>("/api/settings/runtime-safety", {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-    }),
   exportRuntimeSnapshot: () =>
     request<RuntimeSnapshot>("/api/runtime/snapshot"),
   importRuntimeSnapshot: (payload: RuntimeSnapshotImportPayload) =>
@@ -887,23 +836,6 @@ export const agentApi = {
   patchToolPolicySettings: (payload: Partial<ToolPolicySettings>) =>
     request<ToolPolicySettings>("/api/settings/tool-policy", {
       method: "PATCH",
-      body: JSON.stringify(payload),
-    }),
-  getCommandPolicySettings: () =>
-    request<CommandPolicySettings>("/api/settings/command-policy"),
-  patchCommandPolicySettings: (payload: Partial<CommandPolicySettings>) =>
-    request<CommandPolicySettings>("/api/settings/command-policy", {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-    }),
-  searchMemory: (query: string, limit = 20) =>
-    request<{ entries: MemoryEntry[] }>("/api/memory/search", {
-      method: "POST",
-      body: JSON.stringify({ query, limit }),
-    }),
-  addMemory: (payload: MemoryCreatePayload) =>
-    request<MemoryEntry>("/api/memory", {
-      method: "POST",
       body: JSON.stringify(payload),
     }),
   getExternalRagSettings: () =>

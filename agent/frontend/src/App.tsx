@@ -27,14 +27,11 @@ import {
   AgentsPage,
   ApprovalsPage,
   AuditPage,
-  CommandPolicySettingsPage,
   ExternalSettingsPage,
   McpServersPage,
-  MemoryPage,
   PluginMarketplacesPage,
   PluginsPage,
   RuntimeSnapshotSettingsPage,
-  RuntimeSafetySettingsPage,
   RuntimesPage,
   RunsPage,
   SkillsPage,
@@ -126,7 +123,6 @@ export function App() {
             </Capability>
           }
         />
-        <Route path={APP_ROUTES.memory} element={<MemoryPage />} />
         <Route path={APP_ROUTES.settingsSystemTables} element={<SettingsSystemTablesRoute />} />
         <Route
           path={APP_ROUTES.settingsConnection}
@@ -140,8 +136,6 @@ export function App() {
         <Route path={APP_ROUTES.settingsExternalNl2Sql} element={<ExternalSettingsPage key="nl2sql" kind="nl2sql" />} />
         <Route path={APP_ROUTES.settingsExternalMcp} element={<McpServersPage />} />
         <Route path={APP_ROUTES.settingsToolPolicy} element={<ToolPolicySettingsPage />} />
-        <Route path={APP_ROUTES.settingsCommandPolicy} element={<CommandPolicySettingsPage />} />
-        <Route path={APP_ROUTES.settingsRuntimeSafety} element={<RuntimeSafetySettingsPage />} />
         <Route
           path={APP_ROUTES.settingsRuntimeSnapshot}
           element={

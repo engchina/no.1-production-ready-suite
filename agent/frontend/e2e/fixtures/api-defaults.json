@@ -18,10 +18,10 @@
         "mcp_tool_call",
         "rag_then_structured_data"
       ],
+      "model_id": "",
       "migration_required": false,
       "tool_names": [
         "agent_skill_list",
-        "agent_skill_run",
         "echo",
         "external_mcp_call",
         "external_mcp_list_tools",
@@ -29,10 +29,8 @@
         "external_nl2sql_query",
         "external_rag_chat",
         "external_rag_list_business_views",
-        "external_rag_search",
-        "sandbox_command_run"
+        "external_rag_search"
       ],
-      "command_allowed_prefixes": [],
       "enabled": true,
       "source": "builtin",
       "created_at": "2026-06-28T00:00:00Z",
@@ -55,19 +53,6 @@
         }
       ],
       "resource_ids": [],
-      "tool_calls": [
-        {
-          "name": "external_rag_search",
-          "arguments": {
-            "query": "${goal}",
-            "business_view_id": "${arguments.business_view_id}",
-            "knowledge_base_ids": "${arguments.knowledge_base_ids}",
-            "filters": "${arguments.filters}",
-            "top_k": "${arguments.top_k}"
-          },
-          "trace_id": null
-        }
-      ],
       "enabled": true,
       "tags": [
         "rag",
@@ -92,17 +77,6 @@
         }
       ],
       "resource_ids": [],
-      "tool_calls": [
-        {
-          "name": "external_mcp_call",
-          "arguments": {
-            "tool_name": "${arguments.tool_name}",
-            "arguments": "${arguments.arguments}",
-            "server_id": "${arguments.server_id}"
-          },
-          "trace_id": null
-        }
-      ],
       "enabled": true,
       "tags": [
         "mcp",
@@ -126,15 +100,6 @@
         }
       ],
       "resource_ids": [],
-      "tool_calls": [
-        {
-          "name": "external_mcp_list_tools",
-          "arguments": {
-            "server_id": "${arguments.server_id}"
-          },
-          "trace_id": null
-        }
-      ],
       "enabled": true,
       "tags": [
         "mcp",
@@ -160,28 +125,6 @@
         }
       ],
       "resource_ids": [],
-      "tool_calls": [
-        {
-          "name": "external_rag_search",
-          "arguments": {
-            "query": "${goal}",
-            "business_view_id": "${arguments.business_view_id}",
-            "knowledge_base_ids": "${arguments.knowledge_base_ids}",
-            "filters": "${arguments.filters}",
-            "top_k": "${arguments.top_k}"
-          },
-          "trace_id": null
-        },
-        {
-          "name": "external_nl2sql_query",
-          "arguments": {
-            "question": "${goal}",
-            "profile_id": "${arguments.profile_id}",
-            "row_limit": "${arguments.row_limit}"
-          },
-          "trace_id": null
-        }
-      ],
       "enabled": true,
       "tags": [
         "rag",
@@ -207,58 +150,11 @@
         }
       ],
       "resource_ids": [],
-      "tool_calls": [
-        {
-          "name": "external_nl2sql_query",
-          "arguments": {
-            "question": "${goal}",
-            "profile_id": "${arguments.profile_id}",
-            "row_limit": "${arguments.row_limit}"
-          },
-          "trace_id": null
-        }
-      ],
       "enabled": true,
       "tags": [
         "nl2sql",
         "structured-data",
         "audit-sql"
-      ],
-      "source": "builtin",
-      "created_at": "2026-06-28T00:00:00Z",
-      "updated_at": "2026-06-28T00:00:00Z"
-    },
-    {
-      "id": "workspace_command",
-      "name": "ワークスペースコマンド",
-      "description": "許可済み prefix のコマンドを sandbox command tool として計画する。",
-      "instructions": "コード調査・テスト・生成物確認のために、許可されたコマンドだけを使う。",
-      "mcp_requirements": [
-        {
-          "server_id": "control-plane",
-          "tool_names": [
-            "sandbox_command_run"
-          ]
-        }
-      ],
-      "resource_ids": [],
-      "tool_calls": [
-        {
-          "name": "sandbox_command_run",
-          "arguments": {
-            "command": "${arguments.command}",
-            "cwd": "${arguments.cwd}",
-            "timeout_seconds": "${arguments.timeout_seconds}",
-            "output_limit_bytes": "${arguments.output_limit_bytes}"
-          },
-          "trace_id": null
-        }
-      ],
-      "enabled": true,
-      "tags": [
-        "command",
-        "workspace",
-        "sandbox"
       ],
       "source": "builtin",
       "created_at": "2026-06-28T00:00:00Z",
@@ -307,13 +203,6 @@
                   "type": "string"
                 },
                 "title": "Resource Ids",
-                "type": "array"
-              },
-              "tool_calls": {
-                "items": {
-                  "$ref": "#/$defs/SkillToolCallTemplate"
-                },
-                "title": "Tool Calls",
                 "type": "array"
               },
               "enabled": {
@@ -371,36 +260,6 @@
             ],
             "title": "SkillMcpRequirement",
             "type": "object"
-          },
-          "SkillToolCallTemplate": {
-            "properties": {
-              "name": {
-                "title": "Name",
-                "type": "string"
-              },
-              "arguments": {
-                "additionalProperties": true,
-                "title": "Arguments",
-                "type": "object"
-              },
-              "trace_id": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Trace Id"
-              }
-            },
-            "required": [
-              "name"
-            ],
-            "title": "SkillToolCallTemplate",
-            "type": "object"
           }
         },
         "properties": {
@@ -431,126 +290,6 @@
         "agent",
         "skill",
         "discovery"
-      ]
-    },
-    {
-      "name": "agent_skill_run",
-      "description": "指定 Skill を標準 ToolCall 計画へ展開する。実行は Runtime の通常ステップで行う。",
-      "input_schema": {
-        "properties": {
-          "skill_id": {
-            "title": "Skill Id",
-            "type": "string"
-          },
-          "goal": {
-            "title": "Goal",
-            "type": "string"
-          },
-          "arguments": {
-            "additionalProperties": true,
-            "title": "Arguments",
-            "type": "object"
-          },
-          "trace_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Trace Id"
-          }
-        },
-        "required": [
-          "skill_id",
-          "goal"
-        ],
-        "title": "AgentSkillRunInput",
-        "type": "object"
-      },
-      "output_schema": {
-        "$defs": {
-          "SkillToolCallTemplate": {
-            "properties": {
-              "name": {
-                "title": "Name",
-                "type": "string"
-              },
-              "arguments": {
-                "additionalProperties": true,
-                "title": "Arguments",
-                "type": "object"
-              },
-              "trace_id": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Trace Id"
-              }
-            },
-            "required": [
-              "name"
-            ],
-            "title": "SkillToolCallTemplate",
-            "type": "object"
-          }
-        },
-        "properties": {
-          "skill_id": {
-            "title": "Skill Id",
-            "type": "string"
-          },
-          "skill_name": {
-            "title": "Skill Name",
-            "type": "string"
-          },
-          "goal": {
-            "title": "Goal",
-            "type": "string"
-          },
-          "instructions": {
-            "default": "",
-            "title": "Instructions",
-            "type": "string"
-          },
-          "tool_calls": {
-            "items": {
-              "$ref": "#/$defs/SkillToolCallTemplate"
-            },
-            "title": "Tool Calls",
-            "type": "array"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "title": "Metadata",
-            "type": "object"
-          }
-        },
-        "required": [
-          "skill_id",
-          "skill_name",
-          "goal"
-        ],
-        "title": "AgentSkillPlanOutput",
-        "type": "object"
-      },
-      "permission_level": "read",
-      "side_effects": false,
-      "timeout_seconds": 1.0,
-      "max_retries": 0,
-      "audit_tags": [
-        "agent",
-        "skill",
-        "planner"
       ]
     },
     {
@@ -1689,152 +1428,6 @@
         "business-data",
         "mcp"
       ]
-    },
-    {
-      "name": "sandbox_command_run",
-      "description": "許可済み prefix のコマンドを workspace 内で shell なしに実行する。",
-      "input_schema": {
-        "properties": {
-          "command": {
-            "items": {
-              "type": "string"
-            },
-            "maxItems": 32,
-            "minItems": 1,
-            "title": "Command",
-            "type": "array"
-          },
-          "cwd": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Cwd"
-          },
-          "timeout_seconds": {
-            "anyOf": [
-              {
-                "maximum": 300,
-                "minimum": 0.1,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Timeout Seconds"
-          },
-          "output_limit_bytes": {
-            "anyOf": [
-              {
-                "maximum": 200000,
-                "minimum": 100,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Output Limit Bytes"
-          },
-          "trace_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Trace Id"
-          }
-        },
-        "required": [
-          "command"
-        ],
-        "title": "SandboxCommandInput",
-        "type": "object"
-      },
-      "output_schema": {
-        "properties": {
-          "command": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Command",
-            "type": "array"
-          },
-          "cwd": {
-            "title": "Cwd",
-            "type": "string"
-          },
-          "exit_code": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Exit Code"
-          },
-          "stdout": {
-            "title": "Stdout",
-            "type": "string"
-          },
-          "stderr": {
-            "title": "Stderr",
-            "type": "string"
-          },
-          "duration_ms": {
-            "title": "Duration Ms",
-            "type": "integer"
-          },
-          "timed_out": {
-            "default": false,
-            "title": "Timed Out",
-            "type": "boolean"
-          },
-          "truncated": {
-            "default": false,
-            "title": "Truncated",
-            "type": "boolean"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "title": "Metadata",
-            "type": "object"
-          }
-        },
-        "required": [
-          "command",
-          "cwd",
-          "exit_code",
-          "stdout",
-          "stderr",
-          "duration_ms"
-        ],
-        "title": "SandboxCommandOutput",
-        "type": "object"
-      },
-      "permission_level": "sensitive",
-      "side_effects": true,
-      "timeout_seconds": 10.0,
-      "max_retries": 0,
-      "audit_tags": [
-        "command",
-        "sandbox",
-        "side-effect"
-      ]
     }
   ],
   "tracePolicy": {
@@ -1843,25 +1436,11 @@
     "trace_events_retention_seconds": 86400,
     "trace_sample_rate": 1.0
   },
-  "runtimeSafety": {
-    "max_tool_calls_per_run": 20,
-    "max_pending_approvals_per_run": 5
-  },
   "toolPolicy": {
     "default_mode": "approval",
     "allow": [],
     "ask": [],
     "deny": []
-  },
-  "commandPolicy": {
-    "enabled": false,
-    "workspace_root": ".",
-    "allowed_prefixes": [],
-    "default_timeout_seconds": 10.0,
-    "max_timeout_seconds": 30.0,
-    "output_limit_bytes": 20000,
-    "artifact_storage_backend": "inline",
-    "artifact_storage_path": ".agent-artifacts"
   },
   "externalRag": {
     "mcp_url": null,

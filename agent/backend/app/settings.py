@@ -139,23 +139,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_runtime_dispatch_mode: str = "in_process"
     agent_runtime_dispatch_poll_seconds: float = 1.0
     agent_runtime_dispatch_lease_seconds: int = 120
-    agent_planner_provider: str = "heuristic"
-    agent_planner_oci_responses_base_url: str | None = None
-    agent_planner_oci_responses_api_key: str | None = None
-    agent_planner_oci_responses_model: str | None = None
-    agent_planner_oci_responses_project: str | None = None
-    agent_planner_oci_agent_endpoint: str | None = None
-    agent_planner_oci_agent_api_key: str | None = None
-    # Deprecated compatibility aliases. Prefer AGENT_PLANNER_OCI_RESPONSES_*.
-    agent_planner_enterprise_ai_endpoint: str | None = None
-    agent_planner_enterprise_ai_api_key: str | None = None
-    agent_planner_timeout_seconds: float = 8.0
-    agent_planner_max_retries: int = 3
-    agent_planner_fallback_to_heuristic: bool = True
-    agent_planner_allowed_tool_names: str = "agent_skill_run"
-    agent_planner_allow_command_generation: bool = False
     agent_permission_default_mode: str = "approval"
-    agent_memory_enabled: bool = True
     agent_runtime_repository_backend: str = "memory"
     agent_runtime_snapshot_path: str | None = None
     agent_runtime_oracle_dsn: str | None = None
@@ -172,7 +156,6 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_runtime_oracle_projection_retention_days: int = 0
     agent_runtime_oracle_projection_write_mode: str = "replace"
     agent_max_tool_calls_per_run: int = 20
-    agent_max_pending_approvals_per_run: int = 5
     agent_metrics_enabled: bool = True
     agent_trace_events_enabled: bool = True
     agent_trace_events_buffer_size: int = 500
@@ -192,23 +175,6 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_langfuse_public_key: str | None = None
     agent_langfuse_secret_key: str | None = None
     agent_opentelemetry_endpoint: str | None = None
-    agent_command_tools_enabled: bool = False
-    agent_command_workspace_root: str = "."
-    agent_command_allowed_prefixes: str = ""
-    agent_command_default_timeout_seconds: float = 10.0
-    agent_command_max_timeout_seconds: float = 30.0
-    agent_command_output_limit_bytes: int = 20_000
-    agent_command_sanitized_env_enabled: bool = True
-    agent_command_env_allowlist: str = "PATH,HOME,LANG,LC_ALL,LC_CTYPE,TERM"
-    agent_command_max_memory_mb: int = 512
-    agent_command_max_open_files: int = 64
-    agent_command_start_new_session: bool = True
-    agent_command_isolation_mode: str = "process"
-    agent_command_container_image: str | None = None
-    agent_command_container_network: str = "none"
-    agent_command_container_security_opts: str = "no-new-privileges:true"
-    agent_command_container_userns: str | None = None
-    agent_command_container_user: str | None = None
     agent_artifact_storage_backend: str = "inline"
     agent_artifact_storage_path: str = ".agent-artifacts"
 

@@ -22,7 +22,7 @@ Marketplace → Plugin（配布 package）→ Skill Registry
   承認が必要なツールで止まり、承認・却下の後に再開する。SDK の tracing は外部へ送らない。
 - Common Run: 状態、Event、cancel、Artifact（回答・ツールの結果）、Approval、Audit。
 - Dispatcher: 開発は in-process、本番は Oracle row lock + claim/lease worker。
-- Snapshot v2: 業務 Agent・Run・Memory の Control Plane backup。
+- Snapshot v2: 業務 Agent・Run の Control Plane backup。
 - ログインと権限: RAG / NL2SQL と同じ共通認証（`AGENT_AUTH_MODE=production`）。ロールごとの権限と、
   エージェント単位の対象範囲（「セキュリティ設定 > 権限管理」）。local でもユーザー・ロールは共通 DB。詳細は
   [docs/security-rbac.md](docs/security-rbac.md)。
@@ -174,8 +174,8 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 | `GET` | `/api/runs/{id}/artifacts` | normalized Artifact |
 | `GET/POST` | `/api/runtime/snapshot` | Snapshot v2 export/import |
 
-`POST /api/runs` は `agent_id` と `goal` を受け取り、組み込み Runtime で実行します。旧 `tool_calls` は `422` です。移行期間の旧テスト/API は
-`X-Agent-API-Version: 1` を明示した場合だけ動作し、deprecation/sunset header を返します。
+`POST /api/runs` は `agent_id` と `goal` を受け取り、組み込み Runtime で実行します。旧エンジンの v1 の Run（`tool_calls`・
+`X-Agent-API-Version: 1`）・planner・Memory は #756 で削除しました。
 
 ## セキュリティ境界
 

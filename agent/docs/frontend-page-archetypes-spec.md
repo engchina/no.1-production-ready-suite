@@ -10,9 +10,9 @@
 | 型 | ページ（ルート） | 補足 |
 |---|---|---|
 | A. 一覧 → 全画面エディタ | 業務 Agent（`/agents`）/ Skill（`/skills`）/ 外部 MCP（`/settings/external-mcp`）/ 連携機能（`/plugins`）/ マーケットプレイス（`/plugins/marketplaces`） | `?id=` を唯一の情報源にする（§1.1）。 |
-| B. マスタ詳細の閲覧 | Run（`/runs`）/ 承認（`/approvals`）/ メモリ（`/memory`）/ ツール（`/tools`） | 一覧と詳細を `FixedSplitPane` で並べる（§1.2）。 |
+| B. マスタ詳細の閲覧 | Run（`/runs`）/ 承認（`/approvals`）/ ツール（`/tools`） | 一覧と詳細を `FixedSplitPane` で並べる（§1.2）。 |
 | C. ツール / ワークフロー | 監査（`/audit`）/ Control Plane バックアップ（`/settings/runtime-snapshot`） | 監査は 絞り込み → 適用 → 結果の `DataTable`。バックアップは 入力 → 検証 → 置換。 |
-| D. ダッシュボード / 状態 | Runtime（`/runtimes`）/ Agent 接続設定（`/settings/connection`）/ 外部 RAG（`/settings/external-rag`）/ 外部 NL2SQL（`/settings/external-nl2sql`）/ ツール権限（`/settings/tool-policy`）/ Command Policy（`/settings/command-policy`）/ Runtime Safety（`/settings/runtime-safety`） | 運用設定の単一フォームは「状態 + 最小の編集」として D 型に置く。ダッシュボード（`/`）は廃止した（#262）。 |
+| D. ダッシュボード / 状態 | Runtime（`/runtimes`）/ Agent 接続設定（`/settings/connection`）/ 外部 RAG（`/settings/external-rag`）/ 外部 NL2SQL（`/settings/external-nl2sql`）/ ツール権限（`/settings/tool-policy`） | 運用設定の単一フォームは「状態 + 最小の編集」として D 型に置く。ダッシュボード（`/`）は廃止した（#262）。 |
 
 `/` は画面を持たない入口で、NL2SQL と同じく次のように振り分ける（`frontend/src/lib/route-permissions.ts`）。
 
@@ -53,7 +53,6 @@
 |---|---|---|---|---|
 | Run | `runs-list` | 実行の作成フォーム + 実行履歴 | 実行詳細 | 再開・再実行・キャンセル（確認あり） |
 | 承認 | `approvals-list` | 承認一覧 | 引数と Run | 承認・拒否（確認あり。保留中だけ） |
-| メモリ | `memory-list` | 検索 + メモリ一覧（登録フォームは分割ペインの上） | 内容とメタデータ | なし |
 | ツール | `tools-list` | ツール一覧 | schema と監査タグ | なし |
 
 - 行の操作以外の領域のクリックで選び、選択は行の背景と `aria-current` で示す。行の操作は `RowActionMenu`、詳細は同じ定義を `ObjectActionBar` に渡す。
@@ -67,8 +66,7 @@
 | 業務 Agent | `useEditorLeaveGuard` + `useDirtySources` | エディタのフォーム（Skill は集合として比較）と、実行先の追加フォーム。画面内の「一覧に戻る」とパンくずでも破棄を確認する |
 | Skill / 外部 MCP | `useEditorLeaveGuard` | 全画面エディタのフォーム（開いた時点の内容と比較）。画面内の「一覧に戻る」とパンくずでも破棄を確認する |
 | 連携機能 / マーケットプレイス | `useEditorLeaveGuard` | `?id=new` の manifest の入力 / 追加フォームの入力 |
-| メモリ | `useEditorLeaveGuard` | 登録フォームの内容とメタデータ |
-| 外部 RAG / 外部 NL2SQL / ツール権限 / Command Policy / Runtime Safety | `useSettingsLeaveGuard` | 取得した設定との差分（prefix は集合、ツール権限の「既定」は未指定として比較） |
+| 外部 RAG / 外部 NL2SQL / ツール権限 | `useSettingsLeaveGuard` | 取得した設定との差分（ツール権限の「既定」は未指定として比較） |
 | Control Plane バックアップ | `useSettingsLeaveGuard` | インポート JSON と理由。確認語（`REPLACE`）は対象外で、離脱で解除される |
 
 ブラウザの戻る / 進む（`popstate`）も、data router の root（`main.tsx`）に 1 つだけ置いた共有の `UnsavedChangesBlocker` で確認する（#138 / #586）。A 型のエディタで未保存の編集があるときも、戻る / 進むで `?id=` が変わる前に破棄を確認する。
@@ -81,8 +79,7 @@
 |---|---|---|
 | Run | 目標の下書き（`runs.goal`）、選択中の Run（`runs.selectedRunId`）、イベント購読方式（`runs.streamMode`） | 選択中の Run が一覧に無ければ説明を出し、最新の Run を表示する。Agent は実行条件なので保存しない |
 | 監査 | 入力中の絞り込み（`audit.filterForm`）、適用済みの絞り込み（`audit.appliedForm`）、ページ（`audit.page`） | 適用済みの条件とページ（API の offset）で一覧を取り直す。範囲外になったページは最後のページに寄せる。条件を適用し直すと 1 ページ目へ戻す |
-| メモリ | 検索語（`memory.query`） | 検索し直す |
-| 一覧のページ（#265） | `lists.agents` / `runs` / `approvals` / `tools` / `memory` / `mcpServers` / `skills` / `plugins` / `marketplaces` | 一覧 → エディタ → 一覧の移動と再読込で同じページに戻る。行が減って範囲外なら表示だけ末尾のページに寄せる。定期的な再取得ではページを戻さない。メモリは検索語を変えたときだけ 1 ページ目へ戻す |
+| 一覧のページ（#265） | `lists.agents` / `runs` / `approvals` / `tools` / `mcpServers` / `skills` / `plugins` / `marketplaces` | 一覧 → エディタ → 一覧の移動と再読込で同じページに戻る。行が減って範囲外なら表示だけ末尾のページに寄せる。定期的な再取得ではページを戻さない |
 
 - A 型の編集対象は URL の `?id=` が唯一の情報源なので `sessionStorage` に置かない（#87 で置いた `skills.detailId` / `marketplaces.browseId` は #137 で URL へ移した）。サイドナビから開くと一覧に戻る。
 - 秘密情報（MCP の OAuth client secret / session ID 等）、確認語、サーバー応答全体、未保存の編集フォームは保存しない。編集フォームは §2 の離脱ガードで守る。

@@ -27,7 +27,6 @@ const skill = {
     { server_id: "control-plane", tool_names: ["external_rag_search"] },
   ],
   resource_ids: [],
-  tool_calls: [],
   enabled: true,
   tags: ["rag"],
   source: "builtin",

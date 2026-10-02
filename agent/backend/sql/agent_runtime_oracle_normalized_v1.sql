@@ -58,14 +58,6 @@ CREATE TABLE AGENT_RUNTIME_ARTIFACTS (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
 
-CREATE TABLE AGENT_RUNTIME_MEMORY (
-    memory_id VARCHAR2(128) PRIMARY KEY,
-    kind VARCHAR2(64) NOT NULL,
-    content CLOB NOT NULL,
-    metadata_json CLOB,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL
-);
-
 CREATE INDEX AGENT_RUNTIME_RUNS_STATUS_CREATED_IX
     ON AGENT_RUNTIME_RUNS (status, created_at);
 
@@ -86,13 +78,10 @@ CREATE INDEX AGENT_RUNTIME_APPROVALS_RUN_STATUS_IX
 CREATE INDEX AGENT_RUNTIME_ARTIFACTS_RUN_KIND_IX
     ON AGENT_RUNTIME_ARTIFACTS (run_id, kind, created_at);
 
-CREATE INDEX AGENT_RUNTIME_MEMORY_KIND_CREATED_IX
-    ON AGENT_RUNTIME_MEMORY (kind, created_at);
-
 -- Optional production partitioning template:
 -- Use interval range partitioning on created_at for append-heavy tables:
 --   AGENT_RUNTIME_EVENTS(created_at), AGENT_RUNTIME_APPROVALS(created_at),
---   AGENT_RUNTIME_ARTIFACTS(created_at), AGENT_RUNTIME_MEMORY(created_at).
+--   AGENT_RUNTIME_ARTIFACTS(created_at).
 -- Use completed_at for AGENT_RUNTIME_STEPS when most audit queries are terminal
 -- tool calls; keep AGENT_RUNTIME_RUNS unpartitioned unless run volume demands it.
 --

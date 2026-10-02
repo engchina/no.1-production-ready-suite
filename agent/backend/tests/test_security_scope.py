@@ -25,7 +25,6 @@ from security_support import (
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from app.features.agent.planner import PlannerMode
 from app.features.agent.runtime import (
     AgentProfile,
     RunCreateRequest,
@@ -52,18 +51,21 @@ class ScopeData:
 
 def _create_run(agent_id: str, business_view_id: str | None, *, approval: bool) -> RunState:
     metadata = {"business_view_id": business_view_id} if business_view_id else {}
-    return runtime_repository.create_run(
+    run = runtime_repository.create_builtin_run(
         RunCreateRequest(
             goal=f"scope {agent_id} {business_view_id}",
             agent_id=agent_id,
             metadata=metadata,
-            planner_mode=PlannerMode.OFF,
-            tool_calls=(
-                [ToolCall(name=APPROVAL_TOOL, arguments={"question": "範囲を確認する"})]
-                if approval
-                else []
-            ),
         )
+    )
+    if not approval:
+        return run
+    # 組み込み Runtime がツールの承認で中断したときと同じ状態にする（モデルは呼ばない）。
+    assert runtime_repository.begin_builtin_run(run.id) is not None
+    return runtime_repository.request_builtin_approvals(
+        run.id,
+        [ToolCall(name=APPROVAL_TOOL, arguments={"question": "範囲を確認する"}, trace_id="call-1")],
+        state="{}",
     )
 
 
@@ -193,7 +195,7 @@ def test_approval_is_scoped_and_decided_by_principal(
 
 def test_operator_run_creation_is_scoped(auth: ProductionAuth, scope_data: ScopeData) -> None:
     _scoped_user(auth, "scoped-operator", ["agent.runs.operate"])
-    headers = {**login("scoped-operator"), "X-Agent-API-Version": "1"}
+    headers = login("scoped-operator")
     denied_agent = client.post(
         "/api/runs",
         json={"goal": "範囲外", "agent_id": AGENT_B, "metadata": {"business_view_id": "bv-a"}},
@@ -206,7 +208,6 @@ def test_operator_run_creation_is_scoped(auth: ProductionAuth, scope_data: Scope
             "goal": "範囲内",
             "agent_id": AGENT_A,
             "metadata": {"business_view_id": "bv-a"},
-            "planner_mode": "off",
         },
         headers=headers,
     )

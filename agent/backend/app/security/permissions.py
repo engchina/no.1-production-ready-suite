@@ -296,10 +296,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/trace-policy"): _ADMIN_ONLY,
     # ツール定義は監査・ツール一覧・ツール権限（管理者だけの非表示画面）が読む。
     ("GET", "/tools"): _TOOL_READ,
-    ("GET", "/agent/tools"): _TOOL_READ,
     ("GET", "/tools/external-mcp"): _EXTERNAL_SETTINGS_READ,
     ("POST", "/tools/invoke"): _OPERATE,
-    ("POST", "/agent/tools/invoke"): _OPERATE,
     # ---- Control Plane: 業務 Agent ----
     ("GET", "/agents"): _AGENT_READ,
     ("POST", "/agents"): _ADMIN_ONLY,
@@ -308,7 +306,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- Control Plane: スキル ----
     ("GET", "/skills"): _any(MENU_SKILLS, MENU_AGENTS),
     ("GET", "/skills/{skill_id}"): _any(MENU_SKILLS, MENU_AGENTS),
-    ("POST", "/skills/plan"): _any(MENU_SKILLS),
     ("POST", "/skills"): _ADMIN_ONLY,
     ("POST", "/skills/reload"): _ADMIN_ONLY,
     ("PATCH", "/skills/{skill_id}"): _ADMIN_ONLY,
@@ -330,10 +327,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/approvals/{approval_id}/decision"): _DECIDE,
     ("GET", "/audit/tool-calls"): _any(MENU_AUDIT),
     ("GET", "/audit/tool-calls.csv"): _any(MENU_AUDIT),
-    # legacy Memory（読取専用の export）は監査の閲覧と管理者だけ。
-    ("GET", "/memory/search"): _any(AUDIT_VIEW, ADMIN),
-    ("POST", "/memory/search"): _any(AUDIT_VIEW, ADMIN),
-    ("POST", "/memory"): _OPERATE,
     # ---- Control Plane: プラグインとマーケットプレイス ----
     ("GET", "/plugins"): _PLUGIN_READ,
     ("GET", "/plugins/{plugin_id}"): _PLUGIN_READ,
@@ -363,15 +356,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/settings/external-mcp-servers/{server_id}/default"): _ADMIN_ONLY,
     ("GET", "/runtime/snapshot"): _ADMIN_ONLY,
     ("POST", "/runtime/snapshot/import"): _ADMIN_ONLY,
-    # ナビに出さない設定（ツール権限・Command Policy・Runtime Safety・Planner）は管理者だけ。
+    # ナビに出さない設定（ツール権限）は管理者だけ。
     ("GET", "/settings/tool-policy"): _ADMIN_ONLY,
     ("PATCH", "/settings/tool-policy"): _ADMIN_ONLY,
-    ("GET", "/settings/command-policy"): _ADMIN_ONLY,
-    ("PATCH", "/settings/command-policy"): _ADMIN_ONLY,
-    ("GET", "/settings/runtime-safety"): _ADMIN_ONLY,
-    ("PATCH", "/settings/runtime-safety"): _ADMIN_ONLY,
-    ("GET", "/settings/planner"): _ADMIN_ONLY,
-    ("PATCH", "/settings/planner"): _ADMIN_ONLY,
     # ---- システム設定（3 製品共通。RAG / NL2SQL と同じくメニュー権限で保存・操作できる） ----
     ("GET", "/settings/upload-storage"): _any(MENU_SETTINGS_UPLOAD_STORAGE, MENU_SETTINGS_OCI),
     ("PATCH", "/settings/upload-storage"): _any(MENU_SETTINGS_UPLOAD_STORAGE),

@@ -1,13 +1,12 @@
 """Agent Runtime の Skill registry。
 
-Skill は外部能力を直接実行せず、標準 ToolCall の計画へ展開する。
-実行・承認・監査・artifact 化は Runtime の通常ステップに委ねる。
+Skill は Agent に割り当てる業務手順（instructions）と、使ってよい MCP ツールの許可リスト
+（mcp_requirements）を持つ。組み込み Runtime が instructions を Agent の指示へ合成し、
+許可リストのツールだけを LLM へ渡す。
 """
 
 from __future__ import annotations
 
-import re
-from collections.abc import Mapping
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Any
@@ -15,17 +14,10 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 JsonObject = dict[str, Any]
-_PLACEHOLDER_PATTERN = re.compile(r"\$\{([^}]+)\}")
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
-
-
-class SkillToolCallTemplate(BaseModel):
-    name: str
-    arguments: JsonObject = Field(default_factory=dict)
-    trace_id: str | None = None
 
 
 class SkillMcpRequirement(BaseModel):
@@ -42,8 +34,6 @@ class AgentSkillDefinition(BaseModel):
     instructions: str = ""
     mcp_requirements: list[SkillMcpRequirement] = Field(default_factory=list)
     resource_ids: list[str] = Field(default_factory=list)
-    # 1 release の後方互換。新規 Runtime は mcp_requirements を使用する。
-    tool_calls: list[SkillToolCallTemplate] = Field(default_factory=list)
     enabled: bool = True
     tags: list[str] = Field(default_factory=list)
     # 由来層: builtin(code) / project(SKILL.md) / env(JSON 宣言) / runtime(UI/API)。
@@ -55,22 +45,6 @@ class AgentSkillDefinition(BaseModel):
 
 class AgentSkillListOutput(BaseModel):
     skills: list[AgentSkillDefinition]
-    metadata: JsonObject = Field(default_factory=dict)
-
-
-class AgentSkillRunInput(BaseModel):
-    skill_id: str
-    goal: str
-    arguments: JsonObject = Field(default_factory=dict)
-    trace_id: str | None = None
-
-
-class AgentSkillPlanOutput(BaseModel):
-    skill_id: str
-    skill_name: str
-    goal: str
-    instructions: str = ""
-    tool_calls: list[SkillToolCallTemplate] = Field(default_factory=list)
     metadata: JsonObject = Field(default_factory=dict)
 
 
@@ -140,101 +114,6 @@ class SkillRegistry:
             skill = self._skills.get(skill_id)
             return skill.model_copy(deep=True) if skill is not None else None
 
-    def plan(self, request: AgentSkillRunInput) -> AgentSkillPlanOutput:
-        skill = self.get(request.skill_id)
-        if skill is None:
-            raise KeyError(request.skill_id)
-        if not skill.enabled:
-            raise ValueError("skill disabled")
-        render_context: JsonObject = {
-            "goal": request.goal,
-            "arguments": request.arguments,
-            "trace_id": request.trace_id,
-            "skill_id": skill.id,
-        }
-        planned: list[SkillToolCallTemplate] = []
-        for index, template in enumerate(skill.tool_calls, start=1):
-            trace_id = _render_optional_string(template.trace_id, render_context)
-            if trace_id is None and request.trace_id:
-                trace_id = f"{request.trace_id}:skill:{skill.id}:{index}"
-            planned.append(
-                SkillToolCallTemplate(
-                    name=template.name,
-                    arguments=_render_object(template.arguments, render_context),
-                    trace_id=trace_id,
-                )
-            )
-        return AgentSkillPlanOutput(
-            skill_id=skill.id,
-            skill_name=skill.name,
-            goal=request.goal,
-            instructions=skill.instructions,
-            tool_calls=planned,
-            metadata={
-                "skill_tags": list(skill.tags),
-                "tool_call_count": len(planned),
-            },
-        )
-
-
-def _render_object(value: JsonObject, context: JsonObject) -> JsonObject:
-    rendered = _render_value(value, context)
-    return rendered if isinstance(rendered, dict) else {}
-
-
-def _render_value(value: Any, context: JsonObject) -> Any:
-    if isinstance(value, dict):
-        rendered: JsonObject = {}
-        for key, item in value.items():
-            rendered_item = _render_value(item, context)
-            if rendered_item is not None:
-                rendered[key] = rendered_item
-        return rendered
-    if isinstance(value, list):
-        return [
-            rendered_item
-            for item in value
-            if (rendered_item := _render_value(item, context)) is not None
-        ]
-    if isinstance(value, str):
-        return _render_string(value, context)
-    return value
-
-
-def _render_optional_string(value: str | None, context: JsonObject) -> str | None:
-    if value is None:
-        return None
-    rendered = _render_string(value, context)
-    return rendered if isinstance(rendered, str) and rendered else None
-
-
-def _render_string(value: str, context: JsonObject) -> Any:
-    exact = _exact_placeholder(value)
-    if exact is not None:
-        return _resolve_placeholder(exact, context)
-
-    def replace(match: re.Match[str]) -> str:
-        resolved = _resolve_placeholder(match.group(1), context)
-        return "" if resolved is None else str(resolved)
-
-    return _PLACEHOLDER_PATTERN.sub(replace, value)
-
-
-def _exact_placeholder(value: str) -> str | None:
-    match = _PLACEHOLDER_PATTERN.fullmatch(value.strip())
-    return match.group(1) if match else None
-
-
-def _resolve_placeholder(path: str, context: JsonObject) -> Any:
-    parts = [part for part in path.split(".") if part]
-    current: Any = context
-    for part in parts:
-        if isinstance(current, Mapping):
-            current = current.get(part)
-            continue
-        return None
-    return current
-
 
 skill_registry = SkillRegistry()
 
@@ -251,18 +130,6 @@ skill_registry.register(
             )
         ],
         tags=["rag", "research", "business-data"],
-        tool_calls=[
-            SkillToolCallTemplate(
-                name="external_rag_search",
-                arguments={
-                    "query": "${goal}",
-                    "business_view_id": "${arguments.business_view_id}",
-                    "knowledge_base_ids": "${arguments.knowledge_base_ids}",
-                    "filters": "${arguments.filters}",
-                    "top_k": "${arguments.top_k}",
-                },
-            )
-        ],
     )
 )
 skill_registry.register(
@@ -281,16 +148,6 @@ skill_registry.register(
             )
         ],
         tags=["nl2sql", "structured-data", "audit-sql"],
-        tool_calls=[
-            SkillToolCallTemplate(
-                name="external_nl2sql_query",
-                arguments={
-                    "question": "${goal}",
-                    "profile_id": "${arguments.profile_id}",
-                    "row_limit": "${arguments.row_limit}",
-                },
-            )
-        ],
     )
 )
 skill_registry.register(
@@ -303,14 +160,6 @@ skill_registry.register(
             SkillMcpRequirement(server_id="control-plane", tool_names=["external_mcp_list_tools"])
         ],
         tags=["mcp", "tool-discovery"],
-        tool_calls=[
-            SkillToolCallTemplate(
-                name="external_mcp_list_tools",
-                arguments={
-                    "server_id": "${arguments.server_id}",
-                },
-            )
-        ],
     )
 )
 skill_registry.register(
@@ -323,16 +172,6 @@ skill_registry.register(
             SkillMcpRequirement(server_id="control-plane", tool_names=["external_mcp_call"])
         ],
         tags=["mcp", "tool-call"],
-        tool_calls=[
-            SkillToolCallTemplate(
-                name="external_mcp_call",
-                arguments={
-                    "tool_name": "${arguments.tool_name}",
-                    "arguments": "${arguments.arguments}",
-                    "server_id": "${arguments.server_id}",
-                },
-            )
-        ],
     )
 )
 skill_registry.register(
@@ -352,49 +191,6 @@ skill_registry.register(
             )
         ],
         tags=["rag", "nl2sql", "business-data"],
-        tool_calls=[
-            SkillToolCallTemplate(
-                name="external_rag_search",
-                arguments={
-                    "query": "${goal}",
-                    "business_view_id": "${arguments.business_view_id}",
-                    "knowledge_base_ids": "${arguments.knowledge_base_ids}",
-                    "filters": "${arguments.filters}",
-                    "top_k": "${arguments.top_k}",
-                },
-            ),
-            SkillToolCallTemplate(
-                name="external_nl2sql_query",
-                arguments={
-                    "question": "${goal}",
-                    "profile_id": "${arguments.profile_id}",
-                    "row_limit": "${arguments.row_limit}",
-                },
-            ),
-        ],
-    )
-)
-skill_registry.register(
-    AgentSkillDefinition(
-        id="workspace_command",
-        name="ワークスペースコマンド",
-        description="許可済み prefix のコマンドを sandbox command tool として計画する。",
-        instructions="コード調査・テスト・生成物確認のために、許可されたコマンドだけを使う。",
-        mcp_requirements=[
-            SkillMcpRequirement(server_id="control-plane", tool_names=["sandbox_command_run"])
-        ],
-        tags=["command", "workspace", "sandbox"],
-        tool_calls=[
-            SkillToolCallTemplate(
-                name="sandbox_command_run",
-                arguments={
-                    "command": "${arguments.command}",
-                    "cwd": "${arguments.cwd}",
-                    "timeout_seconds": "${arguments.timeout_seconds}",
-                    "output_limit_bytes": "${arguments.output_limit_bytes}",
-                },
-            )
-        ],
     )
 )
 

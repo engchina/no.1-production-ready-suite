@@ -33,7 +33,7 @@ from app.features.agent.tools import (
     ToolResult,
     tool_registry,
 )
-from app.security.permissions import APPROVALS_DECIDE, MENU_APPROVALS, MENU_RUNS, RUNS_OPERATE
+from app.security.permissions import MENU_RUNS, RUNS_OPERATE
 from app.security.service import set_security_service
 from app.settings import get_settings
 
@@ -374,51 +374,6 @@ def test_rag_chat_sends_message(monkeypatch: MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 # Run の利用者（production）
 # ---------------------------------------------------------------------------
-
-
-def _run_with_nl2sql(headers: dict[str, str]) -> dict[str, Any]:
-    created = client.post(
-        "/api/runs",
-        json={
-            "goal": "部門別の売上を確認する",
-            "planner_mode": "off",
-            "tool_calls": [{"name": "external_nl2sql_query", "arguments": {"question": "売上"}}],
-        },
-        headers={**headers, "X-Agent-API-Version": "1"},
-    )
-    assert created.status_code == 200, created.text
-    data: dict[str, Any] = created.json()["data"]
-    return data
-
-
-def test_approved_tool_runs_as_run_creator_not_approver(
-    monkeypatch: MonkeyPatch, auth: ProductionAuth
-) -> None:
-    mcp = fake_product_mcp(monkeypatch)
-    creator = auth.user_with_permissions(
-        "run-creator", [MENU_RUNS, RUNS_OPERATE], agent_ids=["default"]
-    )
-    approver = auth.user_with_permissions(
-        "run-approver", [MENU_APPROVALS, APPROVALS_DECIDE], agent_ids=["default"]
-    )
-
-    run = _run_with_nl2sql(login("run-creator"))
-    assert run["status"] == "waiting_approval"
-    assert run["created_by_user_uuid"] == creator.user_uuid
-    assert mcp.tool_calls == []
-
-    decided = client.post(
-        f"/api/approvals/{run['approvals'][0]['id']}/decision",
-        json={"approved": True},
-        headers=login("run-approver"),
-    )
-
-    assert decided.status_code == 200, decided.text
-    assert decided.json()["data"]["status"] == "completed"
-    [call] = mcp.calls_of("nl2sql_query")
-    assert call["claims"]["sub"] == creator.user_uuid != approver.user_uuid
-    assert call["claims"]["run_id"] == run["id"]
-    assert call["claims"]["agent_id"] == "default"
 
 
 def test_direct_tool_invoke_uses_logged_in_user(
