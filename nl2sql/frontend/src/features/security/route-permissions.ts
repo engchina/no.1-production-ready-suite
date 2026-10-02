@@ -11,6 +11,12 @@ const NAV_ITEMS = NAV_SECTIONS.flatMap((section) => section.items);
 
 export const ROUTE_PERMISSIONS: Record<string, string> = routePermissionMap(NAV_ITEMS);
 
+/** 利用者がその画面を開けるか（ナビの権限が無い画面は開ける。`RequireAuth` の判定と同じ）。 */
+export function canOpenRoute(pathname: string, hasPermission: (permission: string) => boolean): boolean {
+  const permission = ROUTE_PERMISSIONS[pathname];
+  return !permission || hasPermission(permission);
+}
+
 export function firstAllowedRoute(hasPermission: (permission: string) => boolean): string {
   return sharedFirstAllowedRoute(NAV_ITEMS, hasPermission, APP_ROUTES.forbidden);
 }

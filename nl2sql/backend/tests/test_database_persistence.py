@@ -408,6 +408,58 @@ async def test_database_ready_distinguishes_pending_migration_from_connection_se
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected_status"),
+    [
+        (RuntimeError("DPY-4005: timed out waiting for the connection pool"), "unreachable"),
+        (RuntimeError("ORA-03113: end-of-file on communication channel"), "unreachable"),
+        (RuntimeError("ORA-00942: table or view does not exist"), "setup_required"),
+    ],
+    ids=["pool_timeout", "connection_lost", "dictionary"],
+)
+async def test_database_ready_classifies_incremental_store_check_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    expected_status: str,
+) -> None:
+    """migration の確認の失敗は、接続の失敗なら unreachable、それ以外は setup_required（#820）。"""
+
+    async def probe(_settings: Any) -> None:
+        return None
+
+    def check_incremental_store() -> tuple[bool, str]:
+        raise error
+
+    monkeypatch.setattr(
+        health_routes,
+        "get_settings",
+        lambda: _settings(
+            nl2sql_runtime_mode="oracle",
+            nl2sql_persistence_mode="oracle",
+            oracle_user="APP",
+            oracle_password="secret",
+            oracle_dsn=WALLETLESS_DSN,
+            oracle_connection_security="walletless_tls",
+        ),
+    )
+    monkeypatch.setattr(health_routes, "test_oracle_connection", probe)
+    monkeypatch.setattr(
+        health_routes,
+        "nl2sql_service",
+        SimpleNamespace(
+            uses_incremental_store=True,
+            check_incremental_store=check_incremental_store,
+        ),
+    )
+
+    response = await _get_database_status()
+
+    data = response.json()["data"]
+    assert data["status"] == expected_status
+    assert data["check"] == "migration_check_failed"
+
+
 def test_startup_load_failure_never_writes_default_snapshot() -> None:
     store = _ControllableStore()
     store.fail_load = True

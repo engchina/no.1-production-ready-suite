@@ -14,28 +14,15 @@ export const ja = {
   "common.action.schemaRefreshed": "DB 構造を再取得しました。",
   "common.action.downloaded": "ファイルをダウンロードしました。",
   "common.action.downloadFailed": "ファイルをダウンロードできませんでした。ブラウザのダウンロード設定を確認して再試行してください。",
-  "dbGate.checking": "データベースの状態を確認しています…",
-  "dbGate.notConfigured.title": "データベースの接続情報が未設定です",
+  // DB ゲート（3製品共通の部品。#325）。既定の文言は platform が持ち、製品名の入る文言だけを上書きする（#820）。
   "dbGate.notConfigured.message":
     "NL2SQL の各機能（SQL 生成・データ準備・改善・運用）を利用するには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
-  "dbGate.setupRequired.title": "データベース接続済み・初期化が必要です",
-  "dbGate.unreachable.title": "データベースを起動してください",
-  "dbGate.unreachable.message":
-    "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
-  "dbGate.openDatabaseSettings": "データベース設定を開く",
-  "dbGate.openSystemTables": "システムテーブルを開く",
-  "dbGate.settingsHint":
-    "OCI 認証・アップロード保存先・モデル・データベース・外観の各設定ページは引き続き利用できます。",
   "dbGate.setupRequired.settingsHint":
     "OCI 認証・アップロード保存先・モデル・データベース・システムテーブル・外観の各設定ページは引き続き利用できます。",
-  "dbGate.checkFailed.title": "データベースの状態を確認できません",
-  "dbGate.checkFailed.message":
-    "バックエンドの起動状態を確認して再試行してください。",
   "dbGate.recovering": "保存済みの業務データを復元しています…",
   "dbGate.persistenceFailed.title": "保存済みの業務データを復元できません",
   "dbGate.persistenceFailed.message":
     "データベース接続は正常ですが、NL2SQL の保存領域を利用できません。再試行しても解消しない場合は、システムテーブルとバックエンドログを確認してください。",
-  "dbGate.reasonCode": "診断コード: {code}",
   "dbGate.check.invalid_configuration":
     "Oracle Deep Data Security は python-oracledb の Thin mode でだけ使えます。NL2SQL_ORACLE_DEEPSEC_ENABLED=true の場合は PLATFORM_ORACLE_DRIVER_MODE=thin にしてください。",
   "persistence.memoryWarning.title": "非永続モードで実行中です",

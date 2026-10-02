@@ -64,14 +64,17 @@ FastAPI の API ドキュメント（Swagger UI `/docs`・ReDoc `/redoc`・`/ope
 
 画面の DB ゲートが使う DB の状態は、3製品とも `pr_system_settings.database_status.build_database_status_router` で提供する（製品が独自に実装しない）。ログイン不要の公開 path にする（各製品の `PUBLIC_API_PATHS`）。
 
-- 応答: `{status: ok|not_configured|unreachable|setup_required, check, detail, context_id, schema_status, adb_lifecycle_state}`。常に HTTP 200。
+- 応答: `{status: ok|not_configured|unreachable|setup_required, check, detail, context_id, schema_status, adb_lifecycle_state}`。常に HTTP 200。`adb_lifecycle_state` は `unreachable` のときだけ入る（#820）。
 - 判定の順: `short_circuit`（DB を使わない構成）→ システム設定画面と同じ `database_readiness`（`ok` 以外は `not_configured`。接続は試さない）→ 製品の `test_connection`（bounded。失敗は `unreachable`）→ 製品の `schema_probe`（準備状態の確認）→ `ok`。
+- `schema_probe` の例外は、接続・pool のエラー（`pr_backend_core.oracle_errors.is_oracle_connection_error`。`DPY-4005`・`DPY-6xxx`・`DPY-4011`・`ORA-125xx` / `12170`・`ORA-03113` / `03114`・`ORA-01017` など。`raise ... from` の原因の連鎖も見る）なら `unreachable`、それ以外（辞書・DDL・権限など）だけを `setup_required`（`check=schema_check_failed`）にする（#820）。接続確認の後に pool が接続を返さないとき、「初期化が必要」と案内しない。製品の `schema_probe` が自分で例外を正規化するとき（NL2SQL の `migration_check_failed`）も同じ関数で分ける。
+- `unreachable` のときは、ADB OCID（`PLATFORM_ORACLE_ADB_OCID`）があれば OCI の API で ADB のライフサイクル状態を取り（上限 5 秒、`adb_lifecycle`。失敗しても判定は変えない）、`adb_lifecycle_state` に入れる（#820）。画面は停止中・起動中・利用できない状態・起動済み（ネットワーク・接続情報の問題）を分けて案内する。
 - `detail` は接続先・資格情報・Wallet の path を返さない（ORA / DPY / DPI のコードだけ）。`context_id` は接続先の値の SHA-256 で、生値は返さない。
 - 製品が注入するもの: `test_connection`（接続 pool と接続処理は製品が持つ）、`extra_readiness`（システム設定画面の `build_database_router` と同じもの）、`schema_probe`（RAG の system schema、NL2SQL の incremental store）、`short_circuit`（NL2SQL の memory モード、Agent のローカル認証）、`context_fields`（NL2SQL は実行モード・保存モードも含める）。
 - `ok` の結果だけを、接続先と資格情報の指紋（hash。生値は持たない）ごとに 30 秒サーバー側で cache する（`ok_cache_seconds`。#793）。設定の判定は毎回行い、`unreachable` / `setup_required` は cache しない。DB 設定の保存（`build_database_router`）とシステムテーブルの操作（`SystemSchemaManagerBase.initialize` / `delete_orphaned_rows`）で `clear_database_status_cache` が捨てる。テストは autouse の fixture で捨てる。
+- 接続 pool の回復（#820）: DB の停止中に作った python-oracledb の pool は、DB の起動後も接続を作らず `DPY-4005`（pool の待ちの timeout）を返し続けることがある（プロセスを再起動するまで直らなかった）。`SharedOraclePool.acquire` は、判定 `recover_pool_error(pool, exc)` に従い、`DPY-4005` で貸し出し中の接続が上限に達していない（本当の枯渇ではない）なら pool を捨てて新しい pool で 1 回だけやり直し、やり直しも失敗したらその例外（本当の接続エラー）を返す。接続できない（`DPY-6005` など）ときは同じ要求の中ではやり直さず、pool だけを捨てて例外を返す（次の要求は新しい pool から）。本当の枯渇と SQL のエラーでは pool を捨てない。RAG の共有 pool（`app.clients.oracle` の `acquire_connection`。`getmode` を `TIMEDWAIT`・30 秒にした）も同じ判定を使う。NL2SQL の DeepSec の pool（`OraclePoolManager`）は未対応。
 - Wallet / mTLS の ADB では 1 回の接続に handshake と認証の往復がかかるため、要求ごとに新しい接続を張らないようにする。Agent の接続確認・準備状態の確認は `pr_backend_core.oracle_pool.SharedOraclePool` の pool から借りる（#793）。RAG / NL2SQL の `test_connection` は単発の接続（Wallet の retry を外した DSN）のままで、上の cache で回数を減らす。システム設定の「接続テスト」は保存前の候補を試すため、3 製品とも単発の接続のまま。
 - 各製品の `/api/ready` の `oracle` check も同じ `database_readiness` を使う。
-- 画面側は `@engchina/production-ready-system-settings` の `DatabaseGate` / `useDatabaseStatus` / `DatabaseUnavailableNotice` を使う（製品は API・導線・製品名の入る文言だけを渡す）。ゲートを通さない画面は3製品ともシステム設定の 5 画面（OCI 認証・アップロード保存先・モデル・データベース・外観）だけ。NL2SQL の保存領域の確認のような製品固有の確認は `secondaryGate` で差し込む。
+- 画面側は `@engchina/production-ready-system-settings` の `DatabaseGate` / `useDatabaseStatus` / `DatabaseUnavailableNotice` を使う（製品は API・導線・製品名の入る文言と、利用者がデータベース設定・システムテーブルを開けるか（`canManageDatabase` / `canManageSystemTables`。#820）だけを渡す。状態ごとの案内は UX 契約 messaging §3.4.1）。ゲートを通さない画面は3製品ともシステム設定の 5 画面（OCI 認証・アップロード保存先・モデル・データベース・外観）だけ。NL2SQL の保存領域の確認のような製品固有の確認は `secondaryGate` で差し込む。
 
 ### システムテーブルの管理（`/api/settings/database/system-tables`、#325）
 

@@ -214,14 +214,14 @@ async function expectNoHorizontalOverflow(page: Page) {
 }
 
 const DATABASE_UNAVAILABLE_MESSAGE =
-  "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。";
+  "データベースが停止しているか、ネットワーク経由で到達できません。データベース設定で起動状態と接続情報を確認してから、再試行してください。";
 const DATABASE_SETTINGS_HINT =
   "OCI 認証・アップロード保存先・モデル・データベース・外観の各設定ページは引き続き利用できます。";
 
 async function expectDatabaseGate(
   page: Page,
   {
-    title = "データベースを起動してください",
+    title = "データベースに接続できません",
     message = DATABASE_UNAVAILABLE_MESSAGE,
     actionName = "データベース設定を開く",
     actionHref = "/settings/database#adb-management",
@@ -298,12 +298,14 @@ test("未設定でも共通の起動案内から設定ページを Gate 外で�
     title: "データベースの接続情報が未設定です",
     message:
       "NL2SQL の各機能（SQL 生成・データ準備・改善・運用）を利用するには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
+    actionHref: "/settings/database",
   });
   await expect(page.getByText(/RAG 機能/)).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 
+  // 未設定は接続情報の入力（ページの先頭）へ案内する（#820）。
   await settingsLink.click();
-  await expect(page).toHaveURL(/\/settings\/database#adb-management$/);
+  await expect(page).toHaveURL(/\/settings\/database$/);
   await expect(page.locator("#adb-management")).toBeVisible();
 });
 
@@ -332,9 +334,9 @@ test("migration 未適用では通常機能を止め、システムテーブル�
   await page.goto("/profiles");
 
   const systemTablesLink = await expectDatabaseGate(page, {
-    title: "データベース接続済み・初期化が必要です",
+    title: "システムテーブルの作成・更新が必要です",
     message:
-      "データベースへの接続は確認できましたが、NL2SQL のシステムテーブルが初期化されていません。運用設定の「システムテーブル」から作成・更新してください。",
+      "データベースには接続できています。NL2SQL のシステムテーブルが作成されていないか、未適用の更新（migration）があります。運用設定の「システムテーブル」で作成・更新してから、再試行してください。",
     actionName: "システムテーブルを開く",
     actionHref: "/settings/system-tables",
     settingsHint:
@@ -550,6 +552,7 @@ test("接続設定の不備は診断コードと補足を示し、ok の診断�
     title: "データベースの接続情報が未設定です",
     message:
       "NL2SQL の各機能（SQL 生成・データ準備・改善・運用）を利用するには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
+    actionHref: "/settings/database",
   });
   await expect(page.getByText("診断コード: walletless_tls_dsn_required", { exact: true })).toBeVisible();
   await expect(
@@ -568,13 +571,13 @@ test("接続設定の不備は診断コードと補足を示し、ok の診断�
   // 設定は揃っていて接続できないだけのとき（check=ok）は、診断コードも ORA コードも出さない。
   check = "ok";
   await page.getByRole("button", { name: "再試行" }).click();
-  await expect(page.getByRole("heading", { name: "データベースを起動してください" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "データベースに接続できません" })).toBeVisible();
   await expect(page.getByText(/診断コード/)).toHaveCount(0);
   await expect(page.getByText(/ORA-12514/)).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });
 
-test("バックエンドの状態確認失敗でも設定入口と再試行を残す", async ({ page }) => {
+test("バックエンドの状態確認失敗では再試行だけを出す（設定を直しても解消しないため）", async ({ page }) => {
   await page.route("**/api/ready/database", (route) =>
     route.fulfill({
       status: 503,
@@ -589,10 +592,13 @@ test("バックエンドの状態確認失敗でも設定入口と再試行を�
 
   await page.goto("/profiles");
 
-  await expectDatabaseGate(page, {
-    title: "データベースの状態を確認できません",
-    message: "バックエンドの起動状態を確認して再試行してください。",
-  });
+  const card = page.locator('section[aria-labelledby="database-unavailable-title"]');
+  await expect(card.getByRole("heading", { name: "データベースの状態を確認できません" })).toBeVisible();
+  await expect(
+    card.getByText("バックエンドの起動状態を確認して再試行してください。", { exact: true })
+  ).toBeVisible();
+  await expect(card.getByRole("button", { name: "再試行" })).toBeVisible();
+  await expect(card.getByRole("link")).toHaveCount(0);
 });
 
 test("保存済みデータの復元失敗も共通の起動案内へ統一する", async ({ page }) => {
@@ -661,4 +667,45 @@ test("Profile 保存が 503 のとき成功通知を出さず失敗を通知す�
 test.afterEach(async ({ page }, testInfo) => {
   if (testInfo.status === "skipped") return;
   await expectLocalUiFonts(page);
+});
+
+test("設定を開けない利用者には導線を出さず、システム管理者への連絡を案内する（#820）", async ({ page }) => {
+  await page.route("**/api/auth/me", (route) =>
+    fulfill(route, {
+      user_uuid: "viewer",
+      login_user_id: "viewer",
+      display_name: "閲覧 次郎",
+      status: "ACTIVE",
+      force_password_change: false,
+      role_codes: ["NL2SQL_USER"],
+      is_system_admin: false,
+      permissions: ["menu.profiles"],
+      data_entitlements: [],
+      debug_mode: false,
+      password_change_allowed: true,
+    })
+  );
+  let status: { status: string; check: string; detail: string | null; adb_lifecycle_state: string | null } = {
+    status: "unreachable",
+    check: "ok",
+    detail: "ORA-12514",
+    adb_lifecycle_state: "STOPPED",
+  };
+  await page.route("**/api/ready/database", (route) => fulfill(route, status));
+
+  await page.goto("/profiles");
+
+  const card = page.locator('section[aria-labelledby="database-unavailable-title"]');
+  await expect(card.getByRole("heading", { name: "Autonomous Database が停止しています" })).toBeVisible();
+  await expect(card.getByText(/^システム管理者に連絡して、Autonomous Database の起動を依頼してください。/)).toBeVisible();
+  await expect(card.getByText("Autonomous Database: 停止済み", { exact: true })).toBeVisible();
+  await expect(card.getByRole("link")).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "再試行" })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  status = { status: "setup_required", check: "migration_required", detail: null, adb_lifecycle_state: null };
+  await card.getByRole("button", { name: "再試行" }).click();
+  await expect(card.getByRole("heading", { name: "システムテーブルの作成・更新が必要です" })).toBeVisible();
+  await expect(card.getByText(/システム管理者に連絡して、システムテーブルの作成・更新を依頼してください。$/)).toBeVisible();
+  await expect(card.getByRole("link")).toHaveCount(0);
 });

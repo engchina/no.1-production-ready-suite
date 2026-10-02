@@ -9,6 +9,9 @@ python-oracledb に直接依存しない（`oracledb` は使うときに import 
 - 借りた接続は、例外のときは rollback してから返す。返すと python-oracledb が未コミットの変更を
   rollback する（呼び出し側は今までどおり自分で commit する）
 - 終了時と DB の設定の保存時に `close()` で閉じる
+- DB の停止中に作った pool が DB の起動後も接続を返さない（`DPY-4005` が続く）ときは、その pool を
+  捨てて新しい pool で 1 回だけやり直す。接続できない（`DPY-6005`・`ORA-125xx` など）ときは pool を
+  捨てて（次の要求は新しい pool から始める）その例外を返す（#820。`recover_pool_error`）
 
 接続のたびに Wallet / mTLS の handshake と認証をやり直さないためのもの。DB が未設定かどうかの判定は
 呼び出し側（製品）が持ち、未設定なら pool を作らない。
@@ -24,8 +27,13 @@ import threading
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
+from .oracle_errors import (
+    is_oracle_connection_error,
+    is_oracle_pool_wait_timeout,
+    oracle_error_codes,
+)
 from .oracle_session import init_oracle_session
 
 logger = logging.getLogger(__name__)
@@ -148,8 +156,30 @@ class SharedOraclePool:
             _release(connection)
 
     def acquire(self, connect_kwargs: Mapping[str, object]) -> Any:
-        """pool から接続を借りる（返すのは呼び出し側。`connection.close()` で pool に戻る）。"""
-        return self._pool_for(connect_kwargs).acquire()
+        """pool から接続を借りる（返すのは呼び出し側。`connection.close()` で pool に戻る）。
+
+        pool が壊れている（DB の停止中に作られ、DB の起動後も接続を返さない）ときは、新しい pool で
+        1 回だけやり直す（#820）。やり直しも失敗したら、新しい pool の例外（本当の接続エラー）を
+        返す。
+        """
+        pool = self._pool_for(connect_kwargs)
+        try:
+            return pool.acquire()
+        except Exception as exc:
+            action = recover_pool_error(pool, exc)
+            if action == "raise":
+                raise
+            self._discard(pool, reason=action, exc=exc)
+            if action == "discard":
+                raise
+        fresh = self._pool_for(connect_kwargs)
+        try:
+            return fresh.acquire()
+        except Exception as exc:
+            if recover_pool_error(fresh, exc) != "raise":
+                # 次の要求は、また新しい pool から始める（壊れた pool を使い続けない）。
+                self._discard(fresh, reason="retry_failed", exc=exc)
+            raise
 
     def close(self) -> None:
         """pool を閉じる（終了時・DB の設定の保存時）。次に借りるときに作り直す。"""
@@ -161,6 +191,22 @@ class SharedOraclePool:
         for pool in pools:
             with suppress(Exception):
                 pool.close(force=True)
+
+    def _discard(self, pool: Any, *, reason: str, exc: BaseException) -> None:
+        """今の pool が `pool` なら捨てる（別のスレッドが作り直していれば何もしない）。"""
+        with self._lock:
+            if self._pool is not pool:
+                return
+            self._retire_current_locked()
+        logger.warning(
+            "oracle_pool_discarded",
+            extra={
+                "pool": self.name,
+                "reason": reason,
+                "exception_type": type(exc).__name__,
+                "error_codes": ",".join(oracle_error_codes(exc)) or None,
+            },
+        )
 
     def _pool_for(self, connect_kwargs: Mapping[str, object]) -> Any:
         fingerprint = connect_kwargs_fingerprint(connect_kwargs)
@@ -216,6 +262,35 @@ class SharedOraclePool:
         self._retired = remaining
 
 
+PoolRecovery = Literal["retry", "discard", "raise"]
+
+
+def pool_exhausted(pool: Any) -> bool:
+    """貸し出し中の接続が上限に達しているか（本当の枯渇。分からなければ False）。"""
+    try:
+        busy = int(pool.busy)
+        maximum = int(pool.max)
+    except Exception:  # noqa: BLE001 - fake の pool や閉じた pool は「分からない」
+        return False
+    return maximum > 0 and busy >= maximum
+
+
+def recover_pool_error(pool: Any, exc: BaseException) -> PoolRecovery:
+    """`pool.acquire()` の失敗をどう扱うか（#820）。
+
+    - `retry`：pool の待ちの timeout（`DPY-4005`）で、貸し出し中の接続は上限に達していない。pool が
+      接続を作れない状態のまま止まっているので、捨てて新しい pool でやり直す
+    - `discard`：接続できない（停止中・起動中・ネットワーク・資格情報）。python-oracledb が新しい
+      接続を試した結果なので、同じ要求の中ではやり直さず、pool だけを捨てて例外を返す
+    - `raise`：それ以外（本当の枯渇・SQL のエラーなど）。pool はそのまま使う
+    """
+    if is_oracle_pool_wait_timeout(exc):
+        return "raise" if pool_exhausted(pool) else "retry"
+    if is_oracle_connection_error(exc):
+        return "discard"
+    return "raise"
+
+
 def _release(connection: Any) -> None:
     """pool に返す（切れた接続は python-oracledb が捨てる）。"""
     with suppress(Exception):
@@ -226,6 +301,9 @@ __all__ = [
     "DEFAULT_POOL_MAX",
     "DEFAULT_POOL_MIN",
     "OraclePoolSize",
+    "PoolRecovery",
     "SharedOraclePool",
     "connect_kwargs_fingerprint",
+    "pool_exhausted",
+    "recover_pool_error",
 ]

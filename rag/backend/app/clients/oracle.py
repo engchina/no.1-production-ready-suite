@@ -10,6 +10,7 @@ import importlib
 import json
 import logging
 import re
+import threading
 from array import array
 from collections.abc import Awaitable, Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import Any, Protocol, TypeVar, cast
 from uuid import uuid4
 
+from pr_backend_core.oracle_pool import DEFAULT_WAIT_TIMEOUT_MS, recover_pool_error
 from pr_backend_core.oracle_session import init_oracle_session
 
 from app.config import Settings, get_settings
@@ -282,6 +284,10 @@ class StoredMessage:
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
+# 共有 pool の作成・入れ替え（#820）。捨てた pool のうち貸し出し中で閉じられなかったものは、
+# 終了時（`close_oracle_pool`）に閉じる。
+_SHARED_ORACLE_POOL_LOCK = threading.Lock()
+_RETIRED_ORACLE_POOLS: list[OraclePoolProtocol] = []
 _ORACLE_CLIENT_INITIALIZED_LIB_DIR: str | None = None
 _DB_TEST_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="oracle_db_test_")
 
@@ -8504,7 +8510,34 @@ class OracleClient:
 
     def _acquire_connection(self) -> OracleConnectionProtocol:
         """pool から connection を取得する。"""
-        return self._pool().acquire()
+        return self.acquire_connection()
+
+    def acquire_connection(self) -> OracleConnectionProtocol:
+        """共有 pool から connection を借りる（返すのは呼び出し側の `close()`）。
+
+        DB の停止中に作った pool が起動後も接続を返さない（`DPY-4005`）ときは、その pool を捨てて
+        新しい pool で 1 回だけやり直す。接続できないときは pool を捨てて例外を返す（次の要求は
+        新しい pool から始める）。判定は 3 製品共通の `recover_pool_error`（#820）。
+        """
+        pool = self._pool()
+        try:
+            return pool.acquire()
+        except Exception as exc:
+            if self._pool_instance is not None:
+                raise  # 明示の pool（テスト・呼び出し側の管理）は作り直さない
+            action = recover_pool_error(pool, exc)
+            if action == "raise":
+                raise
+            _discard_shared_pool(pool, reason=action, exc=exc)
+            if action == "discard":
+                raise
+        fresh = self._pool()
+        try:
+            return fresh.acquire()
+        except Exception as exc:
+            if recover_pool_error(fresh, exc) != "raise":
+                _discard_shared_pool(fresh, reason="retry_failed", exc=exc)
+            raise
 
     def connection_pool(self) -> OraclePoolProtocol:
         """共有 connection pool を返す。"""
@@ -8515,23 +8548,27 @@ class OracleClient:
         if self._pool_instance is not None:
             return self._pool_instance
         global _SHARED_ORACLE_POOL
-        if _SHARED_ORACLE_POOL is not None:
-            return _SHARED_ORACLE_POOL
+        with _SHARED_ORACLE_POOL_LOCK:
+            if _SHARED_ORACLE_POOL is not None:
+                return _SHARED_ORACLE_POOL
 
-        oracledb = importlib.import_module("oracledb")
-        _init_oracle_client(oracledb, self._settings)
-        pool_kwargs = _oracle_connect_kwargs(
-            self._settings,
-            extra={
-                "min": 1,
-                "max": 4,
-                "increment": 1,
-                # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
-                "session_callback": init_oracle_session,
-            },
-        )
-        _SHARED_ORACLE_POOL = oracledb.create_pool(**pool_kwargs)
-        return _SHARED_ORACLE_POOL
+            oracledb = importlib.import_module("oracledb")
+            _init_oracle_client(oracledb, self._settings)
+            pool_kwargs = _oracle_connect_kwargs(
+                self._settings,
+                extra={
+                    "min": 1,
+                    "max": 4,
+                    "increment": 1,
+                    # 接続を返せないときに無期限に待たない（壊れた pool を作り直すため。#820）。
+                    "getmode": oracledb.POOL_GETMODE_TIMEDWAIT,
+                    "wait_timeout": DEFAULT_WAIT_TIMEOUT_MS,
+                    # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
+                    "session_callback": init_oracle_session,
+                },
+            )
+            _SHARED_ORACLE_POOL = oracledb.create_pool(**pool_kwargs)
+            return _SHARED_ORACLE_POOL
 
     def _validate_embedding_width(self, embedding: list[float], label: str) -> None:
         """Oracle VECTOR(1536, FLOAT32) に保存/検索できる幅か検証する。"""
@@ -11586,13 +11623,38 @@ def _bounded_int_literal(value: int, *, name: str, minimum: int, maximum: int) -
 
 
 def close_oracle_pool() -> None:
-    """共有 Oracle pool を閉じる。アプリ終了時に呼び出す。"""
+    """共有 Oracle pool を閉じる。アプリ終了時・DB 設定の保存時に呼び出す。"""
     global _SHARED_ORACLE_POOL
-    pool = _SHARED_ORACLE_POOL
-    if pool is None:
-        return
-    _SHARED_ORACLE_POOL = None
-    pool.close(force=True)
+    with _SHARED_ORACLE_POOL_LOCK:
+        pools = [*_RETIRED_ORACLE_POOLS]
+        _RETIRED_ORACLE_POOLS.clear()
+        pool = _SHARED_ORACLE_POOL
+        _SHARED_ORACLE_POOL = None
+    for retired in pools:
+        with suppress(Exception):
+            retired.close(force=True)
+    if pool is not None:
+        pool.close(force=True)
+
+
+def _discard_shared_pool(pool: OraclePoolProtocol, *, reason: str, exc: BaseException) -> None:
+    """壊れた共有 pool を捨てる（次に借りるときに作り直す。#820）。
+
+    貸し出し中の接続があって閉じられなければ、その接続を使っている処理は止めずに後で閉じる。
+    """
+    global _SHARED_ORACLE_POOL
+    with _SHARED_ORACLE_POOL_LOCK:
+        if _SHARED_ORACLE_POOL is not pool:
+            return  # 別のスレッドが入れ替え済み
+        _SHARED_ORACLE_POOL = None
+        try:
+            pool.close()
+        except Exception:  # noqa: BLE001 - 貸し出し中。終了時に閉じる
+            _RETIRED_ORACLE_POOLS.append(pool)
+    logger.warning(
+        "oracle_pool_discarded",
+        extra={"pool": "rag", "reason": reason, **oracle_error_log_fields(exc)},
+    )
 
 
 async def test_oracle_connection(

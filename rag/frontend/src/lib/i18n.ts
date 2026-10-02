@@ -16,27 +16,13 @@ export const ja = {
   // 一覧の絞り込みの件数の読み上げ（SearchField の resultCountLabel。#535）。
   "common.searchResultCount": "{count} 件が一致しました",
   "common.degraded.title": "データベースに接続できません",
-  // DB ゲート（3製品共通の部品。#325）。製品名の入る文言だけ RAG の値にし、他は NL2SQL と同じ文言にそろえる。
-  "dbGate.checking": "データベースの状態を確認しています…",
-  "dbGate.notConfigured.title": "データベースの接続情報が未設定です",
+  // DB ゲート（3製品共通の部品。#325）。既定の文言は platform が持ち、製品名の入る文言だけを上書きする（#820）。
   "dbGate.notConfigured.message":
     "RAG 機能(取込・検索・索引)を使うには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
-  "dbGate.unreachable.title": "データベースを起動してください",
-  "dbGate.unreachable.message":
-    "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
-  "dbGate.setupRequired.title": "RAG システムテーブルの準備が必要です",
   "dbGate.setupRequired.message":
-    "データベースには接続できましたが、RAG に必要なテーブルまたは索引が不足しています。運用設定の「システムテーブル」で「作成・更新」を実行してください。",
-  "dbGate.openDatabaseSettings": "データベース設定を開く",
-  "dbGate.openSystemTables": "システムテーブルを開く",
-  "dbGate.settingsHint":
-    "OCI 認証・アップロード保存先・モデル・データベース・外観の各設定ページは引き続き利用できます。",
+    "データベースには接続できています。RAG に必要なテーブル・索引が不足しているか、未適用の更新があります。運用設定の「システムテーブル」で「作成・更新」を実行してから、再試行してください。",
   "dbGate.setupRequired.settingsHint":
     "OCI 認証・アップロード保存先・モデル・データベース・システムテーブル・外観の各設定ページは引き続き利用できます。",
-  "dbGate.checkFailed.title": "データベースの状態を確認できません",
-  "dbGate.checkFailed.message":
-    "バックエンドの起動状態を確認して再試行してください。",
-  "dbGate.reasonCode": "診断コード: {code}",
   "common.delete": "削除",
   "common.retry": "再試行",
   "common.skipToMain": "本文へスキップ",

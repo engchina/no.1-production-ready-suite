@@ -1062,14 +1062,14 @@ export declare const toast: {
 
 ```tsx
 <BlockedPageNotice
-  title="データベースを起動してください"
+  title="データベースに接続できません"
   titleId="database-unavailable-title"
-  icon={Database}
-  message="データベースを起動してから再試行してください。"
+  icon={Unplug}
+  message="データベースが停止しているか、ネットワーク経由で到達できません。データベース設定で起動状態と接続情報を確認してから、再試行してください。"
   details={<p role="status">診断コード: wallet_not_found</p>}
   actions={
     <>
-      <Link to="/settings/database#adb-management" className={buttonVariants({ variant: "primary" })}>…</Link>
+      <ButtonLink to="/settings/database#adb-management" linkComponent={Link} variant="primary" icon={Settings} trailingIcon={ArrowRight}>データベース設定を開く</ButtonLink>
       <Button variant="secondary" icon={RefreshCw} onClick={retry}>再試行</Button>
     </>
   }

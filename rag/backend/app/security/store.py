@@ -186,7 +186,7 @@ def _pooled_connection() -> Iterator[Any]:
     """RAG の Oracle 接続 pool から、未コミットの変更を持たない接続を借りる。"""
     from app.clients.oracle import OracleClient
 
-    connection = OracleClient().connection_pool().acquire()
+    connection = OracleClient().acquire_connection()
     try:
         yield connection
     except BaseException:

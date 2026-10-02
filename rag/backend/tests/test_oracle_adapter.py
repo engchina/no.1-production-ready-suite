@@ -72,6 +72,73 @@ def test_close_oracle_pool_force_closes_busy_shared_pool(monkeypatch: pytest.Mon
     assert oracle_module._SHARED_ORACLE_POOL is None
 
 
+class _RecoveringDb:
+    """停止中に作った pool が起動後も接続を返さない状態を再現する fake の oracledb（#820）。"""
+
+    POOL_GETMODE_TIMEDWAIT = 3
+
+    def __init__(self) -> None:
+        self.up = False
+        self.pools: list[_RecoveringPool] = []
+        self.kwargs: list[dict[str, object]] = []
+
+    def create_pool(self, **kwargs: object) -> "_RecoveringPool":
+        self.kwargs.append(kwargs)
+        pool = _RecoveringPool(self, broken=not self.up)
+        self.pools.append(pool)
+        return pool
+
+
+class _RecoveringPool:
+    def __init__(self, db: _RecoveringDb, *, broken: bool) -> None:
+        self._db = db
+        self.broken = broken
+        self.busy = 0
+        self.max = 4
+        self.closed = 0
+
+    def acquire(self) -> object:
+        if self.broken:
+            raise RuntimeError("DPY-4005: timed out waiting for the connection pool")
+        if not self._db.up:
+            raise RuntimeError("DPY-6005: cannot connect to database")
+        return SimpleNamespace(close=lambda: None)
+
+    def close(self, force: bool = False) -> None:
+        self.closed += 1
+
+
+def test_shared_pool_created_while_db_down_recovers_after_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DB の停止中に作った共有 pool を、起動後はプロセスを再起動せずに作り直して使う（#820）。"""
+    db = _RecoveringDb()
+    monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL", None)
+    monkeypatch.setattr("app.clients.oracle.importlib.import_module", lambda name: db)
+    settings = Settings.model_construct(
+        oracle_user="rag_app",
+        oracle_password="db-secret",
+        oracle_dsn="ragdb_high",
+        oracle_client_lib_dir="",
+        oracle_wallet_dir="",
+        oracle_wallet_password="",
+    )
+    client = OracleClient(settings=settings)
+    client.connection_pool()  # 停止中に作られた pool
+
+    db.up = True
+    connection = client.acquire_connection()
+
+    assert connection is not None
+    assert len(db.pools) == 2
+    assert db.pools[0].closed == 1
+    # 無期限に待たない（壊れた pool を作り直せるように）。
+    assert db.kwargs[0]["getmode"] == db.POOL_GETMODE_TIMEDWAIT
+    assert db.kwargs[0]["wait_timeout"] == 30_000
+
+    oracle_module.close_oracle_pool()
+
+
 def test_datetime_value_attaches_utc_to_naive_database_values() -> None:
     """Oracle driver が naive datetime を返しても API JSON の基準時刻を失わない。"""
     value = _datetime_value(datetime(2026, 6, 23, 0, 34, 0))
@@ -418,6 +485,7 @@ def test_oracle_pool_initializes_instant_client_when_configured(
         lambda name: SimpleNamespace(
             create_pool=fake_create_pool,
             init_oracle_client=fake_init_oracle_client,
+            POOL_GETMODE_TIMEDWAIT=3,
         ),
     )
     settings = Settings.model_construct(

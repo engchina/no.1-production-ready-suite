@@ -768,10 +768,10 @@ test("接続・操作失敗を操作領域で通知し、復旧方法を提示�
 
   await page.goto("/settings/system-tables");
   const card = page.locator("#system-tables");
-  await expect(card.getByText("データベースを起動してください", { exact: true })).toBeVisible();
+  await expect(card.getByText("データベースに接続できません", { exact: true })).toBeVisible();
   await expect(
     card.getByText(
-      "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
+      "データベースが停止しているか、ネットワーク経由で到達できません。データベース設定で起動状態と接続情報を確認してから、再試行してください。",
       { exact: true }
     )
   ).toHaveCount(0);
