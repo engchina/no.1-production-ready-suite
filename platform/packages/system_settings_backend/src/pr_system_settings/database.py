@@ -1283,6 +1283,14 @@ def build_database_router(
     write = list(write_dependencies)
     action = list(action_dependencies)
 
+    def saved(settings: Any) -> None:
+        """製品の `on_saved` の前に、DB の状態の cache も捨てる（#793）。"""
+        # database_status は本 module を import するため、循環を避けて呼び出し時に読む。
+        from .database_status import clear_database_status_cache
+
+        clear_database_status_cache()
+        on_saved(settings)
+
     def data(settings: Any) -> DatabaseSettingsData:
         return database_settings_data(settings, extra_readiness)
 
@@ -1301,7 +1309,7 @@ def build_database_router(
         )
         _persist_database_settings(candidate, env_file())
         _apply_database_settings(settings, candidate)
-        on_saved(settings)
+        saved(settings)
         return ApiResponse(data=data(settings))
 
     if password_reveal_enabled:
@@ -1341,7 +1349,7 @@ def build_database_router(
                 settings,
                 content,
                 file.filename,
-                on_saved=on_saved,
+                on_saved=saved,
                 extra_readiness=extra_readiness,
             )
         )
@@ -1393,7 +1401,7 @@ def build_database_router(
                 wallet_zip,
                 password,
                 env_file=env_file(),
-                on_saved=on_saved,
+                on_saved=saved,
                 extra_readiness=extra_readiness,
             )
         except DatabaseWalletOperationError:

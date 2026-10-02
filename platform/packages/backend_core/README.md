@@ -20,6 +20,8 @@ No.1 Production Ready 製品群（**RAG / NL2SQL / Agent**）の backend が共�
 | `api.health` | `create_health_router(version_getter, readiness_checks_getter)` |
 | `observability` | `MetricsMiddleware`（request-id 付与 + Prometheus）/ `record_http_request` / `metrics_asgi_app` |
 | `security.cors` | `configure_cors` |
+| `oracle_session.init_oracle_session` | Oracle の接続ごとの初期化（result cache を使わない。#333） |
+| `oracle_pool.SharedOraclePool` | 接続引数ごとに 1 つの python-oracledb の pool を遅延作成して共有する（スレッド安全。引数が変わると作り直し、`close()` で閉じる。新しい接続に `init_oracle_session`。#793）。`oracledb` は使うときに import する |
 
 ## 新サービスの最小構成
 

@@ -321,6 +321,14 @@ export type EvaluationJobItem = Pick<
   "id" | "agent_id" | "agent_name" | "set_id" | "set_name" | "status" | "summary" | "created_at" | "finished_at"
 >;
 
+export interface EvaluationJobsPage {
+  jobs: EvaluationJobItem[];
+  /** 対象の評価の件数（ページングの総数）。 */
+  total: number;
+  offset: number;
+  limit: number;
+}
+
 /** 外部のクライアント向けの API キー（#778。秘密は作成時の応答にだけ入る）。 */
 export interface ApiKey {
   id: string;
@@ -435,10 +443,17 @@ export interface UsageTotals {
   total_tokens: number;
 }
 
-export type UsagePeriodDays = 7 | 30 | 90;
+/** 集計の期間（日。90 日を超える期間は保存した Run の履歴で集計する。#794）。 */
+export type ReportPeriodDays = 7 | 30 | 90 | 180 | 365;
+export const REPORT_PERIOD_DAYS: readonly ReportPeriodDays[] = [7, 30, 90, 180, 365];
+/** 集計元。history = 保存した Run の履歴（Oracle）、memory = バックエンドのメモリの Run（#794）。 */
+export type ReportSource = "history" | "memory";
+
+export type UsagePeriodDays = ReportPeriodDays;
 
 export interface UsageReport {
   days: UsagePeriodDays;
+  source: ReportSource;
   timezone: string;
   since: string;
   until: string;
@@ -832,7 +847,7 @@ export interface RunFeedbackPayload {
   comment?: string;
 }
 
-export type FeedbackPeriodDays = 7 | 30 | 90;
+export type FeedbackPeriodDays = ReportPeriodDays;
 
 export interface FeedbackSummary {
   total: number;
@@ -866,15 +881,18 @@ export interface FeedbackItem {
 
 export interface FeedbackReport {
   days: FeedbackPeriodDays;
+  source: ReportSource;
   since: string;
   until: string;
   summary: FeedbackSummary;
   /** 直前の同じ長さの期間。 */
   previous: FeedbackSummary;
-  /** 絞り込みに合う評価（新しい順。上限 500 件）。 */
+  /** 絞り込みに合う評価の `offset` から `limit` 件（新しい順。サーバー側のページング。#794）。 */
   items: FeedbackItem[];
-  /** 絞り込みに合う評価の件数。 */
+  /** 絞り込みに合う評価の件数（ページングの総数）。 */
   matched: number;
+  offset: number;
+  limit: number;
 }
 
 export interface FeedbackFilters {
@@ -882,6 +900,8 @@ export interface FeedbackFilters {
   agentId?: string;
   rating?: FeedbackRating;
   reason?: FeedbackReason;
+  offset?: number;
+  limit?: number;
 }
 
 export interface ThreadSummary {
@@ -1169,6 +1189,8 @@ export const agentApi = {
     if (filters.agentId) query.set("agent_id", filters.agentId);
     if (filters.rating) query.set("rating", filters.rating);
     if (filters.reason) query.set("reason", filters.reason);
+    if (filters.offset) query.set("offset", String(filters.offset));
+    if (filters.limit) query.set("limit", String(filters.limit));
     return request<FeedbackReport>(`/api/feedback?${query.toString()}`);
   },
   getThread: (threadId: string) =>
@@ -1228,7 +1250,11 @@ export const agentApi = {
     requestBlob(`/api/evaluation-sets/${encodeURIComponent(setId)}/cases.xlsx`),
   createEvaluation: (payload: { set_id: string }) =>
     request<EvaluationJob>("/api/evaluations", { method: "POST", body: JSON.stringify(payload) }),
-  listEvaluations: () => request<{ jobs: EvaluationJobItem[] }>("/api/evaluations"),
+  /** 評価の履歴（新しい順のページ。終わった評価は 365 日残る。#794）。 */
+  listEvaluations: (page: { offset: number; limit: number }) =>
+    request<EvaluationJobsPage>(
+      `/api/evaluations?${new URLSearchParams({ offset: String(page.offset), limit: String(page.limit) }).toString()}`
+    ),
   getEvaluation: (jobId: string) => request<EvaluationJob>(`/api/evaluations/${encodeURIComponent(jobId)}`),
   cancelEvaluation: (jobId: string) =>
     request<EvaluationJob>(`/api/evaluations/${encodeURIComponent(jobId)}/cancel`, { method: "POST" }),

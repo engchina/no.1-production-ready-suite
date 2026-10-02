@@ -9,9 +9,13 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  DataTable,
   EmptyState,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
   ListSkeleton,
   MessageText,
+  offsetForPage,
   PageBody,
   PageHeader,
   ProcessingIndicator,
@@ -30,7 +34,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { MissingEditorTarget } from "@/components/EntityLayout";
-import { PagedDataTable } from "@/components/ListViews";
+import { listScrollLabel, PagedDataTable, ServerPagination, usePersistedPage } from "@/components/ListViews";
 import { EvaluationSetEditor, downloadBlob } from "@/components/evaluation/EvaluationSetEditor";
 import {
   agentApi,
@@ -52,6 +56,8 @@ import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-s
 // SQL生成評価にそろえる（評価セット → 実行状況 → 評価概要（前回との比較）→ ケース別結果 → 最近の評価）。
 
 const POLL_INTERVAL_MS = 1500;
+// 最近の評価の 1 ページ（サーバー側のページング。終わった評価は 365 日残る。#794）。
+const JOBS_PAGE_SIZE = 10;
 const ACTIVE: ReadonlySet<EvaluationJobStatus> = new Set(["queued", "running"]);
 
 export function EvaluationPage() {
@@ -180,9 +186,21 @@ function EvaluationOverview({
     queryFn: () => agentApi.listEvaluationSets(agentId),
     enabled: Boolean(agentId),
   });
-  const jobs = useQuery({ queryKey: ["evaluations"], queryFn: agentApi.listEvaluations });
+  const [jobsPage, setJobsPage] = usePersistedPage("evaluationJobs");
+  // 最新の評価（1 ページ目）。表示する評価の既定と、実行中の評価の有無に使う。
+  // 一覧が 1 ページ目のときは同じ query key なので 1 回だけ取得する。
+  const latest = useQuery({
+    queryKey: ["evaluations", 1],
+    queryFn: () => agentApi.listEvaluations({ offset: 0, limit: JOBS_PAGE_SIZE }),
+  });
+  const jobs = useQuery({
+    queryKey: ["evaluations", jobsPage],
+    queryFn: () => agentApi.listEvaluations({ offset: offsetForPage(jobsPage, JOBS_PAGE_SIZE), limit: JOBS_PAGE_SIZE }),
+    // ページを送っている間は今のページを出したまま取り直す。
+    placeholderData: keepPreviousData,
+  });
   // 表示する評価は、選んだ評価か、無ければ最新の評価。
-  const shownJobId = jobId ?? jobs.data?.jobs[0]?.id ?? null;
+  const shownJobId = jobId ?? latest.data?.jobs[0]?.id ?? null;
   const job = useQuery({
     queryKey: ["evaluation", shownJobId],
     queryFn: () => agentApi.getEvaluation(shownJobId ?? ""),
@@ -202,7 +220,7 @@ function EvaluationOverview({
       void queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
     }
   }, [shownStatus, queryClient]);
-  const running = (jobs.data?.jobs ?? []).some((item) => ACTIVE.has(item.status)) || (job.data ? ACTIVE.has(job.data.status) : false);
+  const running = (latest.data?.jobs ?? []).some((item) => ACTIVE.has(item.status)) || (job.data ? ACTIVE.has(job.data.status) : false);
 
   const cancel = useMutation({
     mutationFn: (id: string) => agentApi.cancelEvaluation(id),
@@ -348,15 +366,27 @@ function EvaluationOverview({
               <TimedLoadingState label={t("loading.evaluations")} testId="evaluations-loading">
                 <ListSkeleton rows={3} />
               </TimedLoadingState>
-            ) : (jobs.data?.jobs ?? []).length === 0 ? (
+            ) : !jobs.data || jobs.data.total === 0 ? (
               <EmptyState title={t("evaluation.jobs.empty")} hint={t("evaluation.jobs.emptyHint")} />
             ) : (
-              <JobsTable
-                jobs={jobs.data?.jobs ?? []}
-                shownJobId={shownJobId}
-                onShow={(item) => onJobChange(item.id)}
-                onDelete={(item) => void confirmDeleteJob(item)}
-              />
+              <div className="grid min-w-0 gap-2">
+                <JobsTable
+                  jobs={jobs.data.jobs}
+                  shownJobId={shownJobId}
+                  onShow={(item) => onJobChange(item.id)}
+                  onDelete={(item) => void confirmDeleteJob(item)}
+                />
+                <ServerPagination
+                  offset={jobs.data.offset}
+                  limit={jobs.data.limit}
+                  total={jobs.data.total}
+                  count={jobs.data.jobs.length}
+                  page={jobsPage}
+                  onPageChange={setJobsPage}
+                  ariaLabel={t("evaluation.jobs.pagerLabel")}
+                  testId="evaluation-jobs-pagination"
+                />
+              </div>
             )}
           </CardContent>
         </Card>
@@ -848,13 +878,16 @@ function JobsTable({
     },
   ];
   return (
-    <PagedDataTable<EvaluationJobItem>
-      pageKey="evaluationJobs"
+    <DataTable<EvaluationJobItem>
       rows={jobs}
       columns={columns}
       getRowKey={(item) => item.id}
+      rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
       ariaLabel={t("evaluation.jobs.label")}
+      scrollAriaLabel={listScrollLabel(t("evaluation.jobs.label"))}
       tableClassName="w-full min-w-[720px]"
+      stickyHeader
+      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
     />
   );
 }

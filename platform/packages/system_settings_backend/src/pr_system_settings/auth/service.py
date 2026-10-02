@@ -501,6 +501,14 @@ class AuthService:
             self._raise_security_migration_if_needed(exc)
             raise
 
+    def get_roles(self, role_ids: Sequence[str]) -> Sequence[RoleRecord]:
+        """指定したロールを指定の順に一括で読む（無いものは除く。#793）。"""
+        try:
+            return list(self.store.get_roles(role_ids))
+        except Exception as exc:
+            self._raise_security_migration_if_needed(exc)
+            raise
+
     def list_roles_for_actor(
         self, actor: Principal, *, include_archived: bool = False
     ) -> list[RoleRecord]:
@@ -760,8 +768,9 @@ class AuthService:
         return principal, claims
 
     def _principal_for(self, user: UserRecord, session: SessionRecord) -> Principal:
-        roles = [self.get_role(role_id) for role_id in user.role_ids]
-        active_roles = [role for role in roles if role is not None and not role.archived]
+        # 要求ごとに通る経路のため、ロールの数によらず一括で読む（#793）。
+        roles = self.get_roles(user.role_ids)
+        active_roles = [role for role in roles if not role.archived]
         return self._build_principal(user, session, active_roles)
 
     # ---- configured system admin ----
