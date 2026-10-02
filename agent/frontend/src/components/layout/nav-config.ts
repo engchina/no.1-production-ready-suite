@@ -3,14 +3,19 @@ import {
   Blocks,
   Bot,
   ChartColumn,
+  CalendarClock,
   ClipboardList,
   Container,
   DatabaseBackup,
+  FlaskConical,
+  KeySquare,
   LockKeyhole,
+  MessagesSquare,
   PlayCircle,
   PlugZap,
   Store,
   TableProperties,
+  ThumbsUp,
   type LucideIcon,
 } from "lucide-react";
 
@@ -59,12 +64,14 @@ const USER_ROLE_MENU_PERMISSIONS = {
 /**
  * Agent コンソールのサイドナビ構成（共有 Sidebar が消費する）。並び方は NL2SQL / RAG と同じ
  * （製品のセクション → 改善・運用 → セキュリティ設定 → 共通のユーザーとロール → 運用設定 →
- * 共通のシステム設定。#658 / #772）。
+ * 共通のシステム設定。#658 / #774 / #776）。
  */
 export const NAV_SECTIONS: NavSection[] = [
   {
     titleKey: "nav.section.controlPlane",
     items: [
+      // 業務利用者の入口（#768。RAG のチャットと同じアイコン）。
+      { href: APP_ROUTES.chat, labelKey: "nav.chat", icon: MessagesSquare, permission: MENU_PERMISSIONS.chat },
       { href: APP_ROUTES.agents, labelKey: "nav.agents", icon: Bot, permission: MENU_PERMISSIONS.agents },
       {
         href: APP_ROUTES.skills,
@@ -75,6 +82,13 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       { href: APP_ROUTES.runtimes, labelKey: "nav.runtimes", icon: Container, permission: MENU_PERMISSIONS.runtimes },
       { href: APP_ROUTES.runs, labelKey: "nav.runs", icon: PlayCircle, permission: MENU_PERMISSIONS.runs },
+      // 業務 Agent の自動実行（スケジュール・Webhook。#784）。
+      {
+        href: APP_ROUTES.automations,
+        labelKey: "nav.automations",
+        icon: CalendarClock,
+        permission: MENU_PERMISSIONS.automations,
+      },
       { href: APP_ROUTES.approvals, labelKey: "nav.approvals", icon: BadgeCheck, permission: MENU_PERMISSIONS.approvals },
       { href: APP_ROUTES.audit, labelKey: "nav.audit", icon: ClipboardList, permission: MENU_PERMISSIONS.audit },
       {
@@ -86,10 +100,21 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    // 業務 Agent の使われ方を確かめて直す画面。RAG / NL2SQL の「改善・運用」（nav.section.improve）と
-    // 同じ名前・同じ位置にする（#658 / #772）。
+    // 業務 Agent の回答と品質を確かめて直す画面。RAG / NL2SQL の「改善・運用」（nav.section.improve）と
+    // 同じ名前・同じ位置・同じ並び・同じアイコン（品質評価は FlaskConical、フィードバックは ThumbsUp）にする
+    // （#658 / #772 / #774 / #776）。
     titleKey: "nav.section.improve",
-    items: [{ href: APP_ROUTES.usage, labelKey: "nav.usage", icon: ChartColumn, permission: MENU_PERMISSIONS.usage }],
+    items: [
+      {
+        href: APP_ROUTES.evaluation,
+        labelKey: "nav.evaluation",
+        icon: FlaskConical,
+        permission: MENU_PERMISSIONS.evaluation,
+      },
+      { href: APP_ROUTES.feedback, labelKey: "nav.feedback", icon: ThumbsUp, permission: MENU_PERMISSIONS.feedback },
+      // 利用状況（#772）。RAG / NL2SQL に無い項目なので、共通の 2 項目の後ろに置く。
+      { href: APP_ROUTES.usage, labelKey: "nav.usage", icon: ChartColumn, permission: MENU_PERMISSIONS.usage },
+    ],
   },
   {
     // Agent 固有のセキュリティ（ロールへの機能権限とエージェント / 業務ビューの対象範囲の付与。#215）。
@@ -131,6 +156,14 @@ export const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.settingsMcpConnections",
         icon: PlugZap,
         permission: MENU_PERMISSIONS.settingsExternalMcp,
+      },
+      {
+        // 業務 Agent を MCP（`POST /api/mcp`）で呼ぶ外部のクライアント向け（#778）。
+        // KeyRound は共通の OCI 認証が使うため、別のアイコンにする（#658）。
+        href: APP_ROUTES.settingsApiKeys,
+        labelKey: "nav.settingsApiKeys",
+        icon: KeySquare,
+        permission: MENU_PERMISSIONS.settingsApiKeys,
       },
       {
         href: APP_ROUTES.settingsRuntimeSnapshot,

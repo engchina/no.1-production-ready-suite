@@ -22,7 +22,9 @@ def test_settings_env_names_split_platform_and_agent() -> None:
     assert names["cors_origins"] == "AGENT_CORS_ORIGINS"
     assert names["max_upload_bytes"] == "AGENT_MAX_UPLOAD_BYTES"
     # 既に AGENT_ で始まる属性は接頭辞を重ねない。
-    assert names["agent_runtime_oracle_dsn"] == "AGENT_RUNTIME_ORACLE_DSN"
+    assert names["agent_runtime_repository_backend"] == "AGENT_RUNTIME_REPOSITORY_BACKEND"
+    # Run の保存先は共通の PLATFORM_ORACLE_* で接続する（旧 AGENT_RUNTIME_ORACLE_* は無い。#764）。
+    assert not [name for name in names.values() if name.startswith("AGENT_RUNTIME_ORACLE_")]
     assert all(name.startswith(("PLATFORM_", "AGENT_")) for name in names.values())
 
 

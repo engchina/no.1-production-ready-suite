@@ -133,19 +133,11 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_permission_default_mode: str = "approval"
     agent_runtime_repository_backend: str = "memory"
     agent_runtime_snapshot_path: str | None = None
-    agent_runtime_oracle_dsn: str | None = None
-    agent_runtime_oracle_user: str | None = None
-    agent_runtime_oracle_password: str | None = None
-    # ADB の Wallet(mTLS) で接続する場合の Wallet 展開先と Wallet password（Thin mode）。
-    # 未設定なら従来どおり user/password/dsn だけで接続する。
-    agent_runtime_oracle_wallet_dir: str | None = None
-    agent_runtime_oracle_wallet_password: str | None = None
-    agent_runtime_oracle_table: str = "AGENT_RUNTIME_CHECKPOINTS"
-    agent_runtime_oracle_checkpoint_key: str = "default"
-    agent_runtime_oracle_create_schema: bool = True
-    agent_runtime_oracle_projection_prefix: str = "AGENT_RUNTIME"
-    agent_runtime_oracle_projection_retention_days: int = 0
-    agent_runtime_oracle_projection_write_mode: str = "replace"
+    # Run・業務 Agent の保存先（memory / file / oracle_checkpoint / oracle_normalized）。Oracle は
+    # 共通の PLATFORM_ORACLE_* で接続し、テーブルはシステムテーブルが作る（#764）。
+    # oracle_normalized は監査用の projection（AGENT_RUNTIME_RUNS など）も書く。
+    agent_runtime_projection_retention_days: int = 0
+    agent_runtime_projection_write_mode: str = "replace"
     agent_max_tool_calls_per_run: int = 20
     agent_metrics_enabled: bool = True
     agent_trace_events_enabled: bool = True

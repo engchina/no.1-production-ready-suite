@@ -50,6 +50,14 @@ exec sleep 60
         binaries / "curl",
         """
 echo "health:$*" >> "$TEST_EVENTS"
+# 環境変数のプロキシを使うと、ローカルの backend へ届かず失敗する（502。#781）。
+direct=0
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = --noproxy ] && [ "$arg" = "*" ]; then direct=1; fi
+  previous="$arg"
+done
+if [ -n "${http_proxy:-}${HTTP_PROXY:-}" ] && [ "$direct" = 0 ]; then exit 22; fi
 # DB readiness は失敗しても、アプリの health が成功すれば画面は起動できる。
 [[ "$*" = *"/api/health" ]] || exit 1
 [ "${TEST_NOT_READY:-0}" = 0 ] && [ -f "$TEST_DIR/serving" ]
@@ -95,6 +103,19 @@ def test_slow_dependency_preparation_does_not_consume_health_timeout(
     assert events.count("sync-start") == 1
     assert events.index("server") < events.index("frontend")
     assert all("/api/ready" not in event for event in events)
+
+
+def test_readiness_does_not_use_the_proxy_from_the_environment(
+    startup: tuple[Path, dict[str, str]],
+) -> None:
+    """NO_PROXY に 127.0.0.1 が無いプロキシの環境でも、ローカルの backend を確かめる（#781）。"""
+    _, env = startup
+    for key in ("no_proxy", "NO_PROXY"):
+        env.pop(key, None)
+    env.update(http_proxy="http://proxy.invalid:80", HTTP_PROXY="http://proxy.invalid:80")
+    result = _run(startup)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "backend ready を確認しました" in result.stdout
 
 
 @pytest.mark.parametrize("failure", ["TEST_SYNC_FAIL", "TEST_SERVER_FAIL", "TEST_NOT_READY"])

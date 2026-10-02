@@ -5,6 +5,7 @@ import { AppShell, PageBody, PageHeader } from "@engchina/production-ready-ui";
 import { RequireAuth, useForbiddenRedirect } from "@engchina/production-ready-system-settings";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
+import { ChatPage } from "@/pages/ChatPage";
 import { ForbiddenPage, LoginPage, PasswordChangePage } from "@/components/security/AuthPages";
 import { agentIdentityKey, useAuth } from "@/components/security/AuthProvider";
 import { CapabilityGate } from "@/components/security/CapabilityGate";
@@ -21,6 +22,10 @@ import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { canOpenRoute, defaultEntryRoute, firstAllowedRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
+import { FeedbackPage } from "@/pages/FeedbackPage";
+import { AutomationsPage } from "@/pages/AutomationsPage";
+import { EvaluationPage } from "@/pages/EvaluationPage";
+import { ApiKeysPage } from "@/pages/ApiKeysPage";
 import { UsagePage } from "@/pages/UsagePage";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
@@ -74,6 +79,14 @@ export function App() {
           }
         />
         <Route
+          path={APP_ROUTES.chat}
+          element={
+            <Capability need="operateRuns" titleKey="nav.chat">
+              <ChatPage />
+            </Capability>
+          }
+        />
+        <Route
           path={APP_ROUTES.runs}
           element={
             <Capability need="viewRuns" titleKey="nav.runs">
@@ -122,6 +135,9 @@ export function App() {
             </Capability>
           }
         />
+        <Route path={APP_ROUTES.feedback} element={<FeedbackPage />} />
+        <Route path={APP_ROUTES.automations} element={<AutomationsPage />} />
+        <Route path={APP_ROUTES.evaluation} element={<EvaluationPage />} />
         <Route path={APP_ROUTES.usage} element={<UsagePage />} />
         <Route path={APP_ROUTES.settingsSystemTables} element={<SettingsSystemTablesRoute />} />
         <Route path={APP_ROUTES.settingsOci} element={<SettingsOciRoute />} />
@@ -129,6 +145,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
         <Route path={APP_ROUTES.settingsMcpConnections} element={<McpConnectionsPage />} />
+        <Route path={APP_ROUTES.settingsApiKeys} element={<ApiKeysPage />} />
         <Route path={APP_ROUTES.settingsToolPolicy} element={<ToolPolicySettingsPage />} />
         <Route
           path={APP_ROUTES.settingsRuntimeSnapshot}

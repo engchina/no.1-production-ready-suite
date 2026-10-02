@@ -184,10 +184,10 @@ for (const viewport of VIEWPORTS) {
     });
 
     test("ローカル（AGENT_AUTH_MODE=local）はログインせずに全画面を使え、アカウント欄にログイン省略を示す（#307）", async ({ page }) => {
-      // fixture の既定はローカルの全権限の利用者。`/` はナビの最初の画面（業務 Agent）へ移す（#262）。
+      // fixture の既定はローカルの全権限の利用者。`/` はナビの最初の画面（チャット。#768）へ移す（#262）。
       await page.goto("/");
-      await expect(page).toHaveURL(/\/agents$/);
-      await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
+      await expect(page).toHaveURL(/\/chat$/);
+      await expect(page.getByRole("heading", { name: "チャット", level: 1 })).toBeVisible();
       await expandSidebarOnMobile(page);
       // NL2SQL と同じく、利用者名とログイン省略の表示を出し、パスワード変更・ログアウトは出さない。
       await expect(sidebar(page).getByText("ローカル利用者")).toBeVisible();

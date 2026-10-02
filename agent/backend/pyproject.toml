@@ -21,6 +21,8 @@ dependencies = [
   "production-ready-backend-core",
   "production-ready-system-settings-backend",
   "openai-agents==0.22.3",
+  # 品質評価の評価セットの Excel の取り込み・書き出し（NL2SQL と同じ。#776）。
+  "openpyxl>=3.1",
 ]
 
 [dependency-groups]

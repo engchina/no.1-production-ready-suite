@@ -1,8 +1,9 @@
 """アプリとしての Oracle AI Database 接続（共通 `.env` の `PLATFORM_ORACLE_*`。Thin mode。#215）。
 
-- システム設定 > データベース の接続テスト（`features/agent/router.py`）と、共通認証の store
-  （`security/store.py`）・システムテーブル（`system_schema.py`）が使う。
-- Runtime repository（`AGENT_RUNTIME_ORACLE_*`）の接続とは独立している。
+- システム設定 > データベース の接続テスト（`features/agent/router.py`）・共通認証の store
+  （`security/store.py`）・システムテーブル（`system_schema.py`）・Run の repository
+  （`features/agent/runtime.py`）・定義の保存（`features/agent/control_plane_store.py`）が使う。
+  Run の repository の別の接続設定（旧 `AGENT_RUNTIME_ORACLE_*`）は #764 で削除した。
 """
 
 from __future__ import annotations
@@ -75,3 +76,15 @@ def platform_oracle_connection() -> Iterator[Any]:
         raise
     else:
         connection.close()
+
+
+def connect_platform_oracle() -> Any:
+    """`PLATFORM_ORACLE_*` の接続を開く（呼び出し側が `with` で閉じ、commit する）。"""
+    from pr_backend_core.oracle_session import init_oracle_session
+
+    from app.settings import get_settings
+
+    oracledb = import_module("oracledb")
+    connection = oracledb.connect(**platform_oracle_connect_kwargs(get_settings()))
+    init_oracle_session(connection)
+    return connection

@@ -35,6 +35,10 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
   - 承認がすべて決まったら状態を復元して再開する。却下したツールは実行しない。
 - Run は Agent を選ぶだけで作れる（Binding の選択は無い）。開発は API のプロセスで実行（`in_process`）し、
   本番は Oracle checkpoint の row lock と Run lease を使う runtime-dispatcher（`python -m app.features.agent.runtime_dispatcher`）。
+- 保存先（#764）: Run・業務 Agent と、画面・API で変えた定義（Skill・プラグイン・マーケットプレイス・MCP 接続・ツール権限）は
+  `AGENT_RUNTIME_REPOSITORY_BACKEND` に従い、Oracle では共通の `PLATFORM_ORACLE_*` で `AGENT_RUNTIME_*` /
+  `AGENT_CONTROL_PLANE_ITEMS` に保存する（テーブルはシステムテーブルが作る。アプリは DDL を実行しない）。
+  MCP 接続の秘密は `app.secret_box` で暗号化する。`.env` の宣言は保存しない。
 - Plugin は Marketplace の**原子的な配布パッケージ**であり実行概念ではない。正式契約は `skills[] / mcp_servers[] / resources[]`。
 - Prompt / Workflow / Template は非実行・版管理 resource。独立 Workflow engine を作らない。
 
@@ -64,7 +68,9 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
 
 - UI、エラー、通知、LLM 指示の第一言語は日本語。文言は i18n 経由。
 - 日本語フォントは `"Noto Sans JP", "Roboto", system-ui, sans-serif`、本文 14px。
-- ナビは「業務 Agent / Skill / Runtime / Run / 承認・監査 / Marketplace」を主要導線とする。
+- ナビは「チャット / 業務 Agent / Skill / Runtime / Run / 承認・監査 / Marketplace」を主要導線とする。
+  チャット（#768）は業務利用者の入口で、1 往復が 1 Run。同じ会話（`thread_id`）の前の質問と回答を組み込み Runtime が
+  モデルへ渡す（直近 10 往復）。会話は作った利用者だけが読み、続けられる（同じ Agent に限る）。
   Plugin、Tools を独立ナビに戻さない（旧エンジンの Planner・Memory は #756 で削除した）。
 - 設定は2セクションに分ける。**運用設定**：システムテーブル（先頭。RAG / NL2SQL と同じ。#751）/ Agent 接続設定 / MCP 接続（#757）/
   Control Plane バックアップ（Agent 固有）。**システム設定**：OCI 認証 / アップロード保存先 / モデル /
@@ -120,7 +126,7 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
 ## 開発・検証
 
 - 機能変更と同時に pytest / Playwright を追加・更新する。
-- 完了前に `scripts/check-all.sh`（backend の ruff format/ruff check/mypy/pytest・検証 evidence の dry-run・release chain の rehearsal・bandit、
+- 完了前に `scripts/check-all.sh`（backend の ruff format/ruff check/mypy/pytest・bandit、
   frontend の lint/build）を実行する。
   - `check-all.sh` のローカルの既定は Playwright e2e と pip-audit を省く（#339）。関係する spec だけ
     `SKIP_E2E=0 E2E_ARGS="e2e/<対象>.spec.ts" scripts/check-all.sh` で実行する。全部を実行するときは `FULL=1`。

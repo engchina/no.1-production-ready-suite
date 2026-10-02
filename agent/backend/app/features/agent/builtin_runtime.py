@@ -429,6 +429,25 @@ def build_sdk_agent(
     )
 
 
+# 会話の続きでモデルに渡す前の往復の数（#768。古いものから落とす）。
+THREAD_HISTORY_TURNS = 10
+
+
+def conversation_input(run_id: str, goal: str) -> str | list[Any]:
+    """同じ会話の前の質問と回答を付けた入力（会話が無ければ質問の文字列だけ。#768）。"""
+    from app.features.agent.runtime import runtime_repository
+
+    history = runtime_repository.thread_history(run_id, limit=THREAD_HISTORY_TURNS)
+    if not history:
+        return goal
+    items: list[Any] = []
+    for question, answer in history:
+        items.append({"role": "user", "content": question})
+        items.append({"role": "assistant", "content": answer})
+    items.append({"role": "user", "content": goal})
+    return items
+
+
 async def execute_run(run_id: str) -> None:
     """Run を最初から実行する（作成直後・dispatcher から呼ぶ）。"""
     from app.features.agent.runtime import runtime_repository
@@ -448,7 +467,10 @@ async def execute_run(run_id: str) -> None:
             agent_id=agent.id,
             user_uuid=run.created_by_user_uuid,
         )
-        result = await Runner.run(sdk_agent, run.goal, max_turns=_max_turns())
+        result = await Runner.run(
+            sdk_agent, conversation_input(run_id, run.goal), max_turns=_max_turns()
+        )
+        result = await _dry_run_approvals(run, sdk_agent, result)
         _record_usage(run_id, result, agent.model_id)
         await _finish(run_id, result)
     except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
@@ -483,11 +505,48 @@ async def resume_run(run_id: str) -> None:
             else:
                 state.reject(item)
         result = await Runner.run(sdk_agent, state, max_turns=_max_turns())
+        result = await _dry_run_approvals(run, sdk_agent, result)
         _record_usage(run_id, result, agent.model_id)
         await _finish(run_id, result)
     except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
         _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
         _record_failure(run_id, exc)
+
+
+async def _dry_run_approvals(run: Any, sdk_agent: Agent[Any], result: Any) -> Any:
+    """品質評価の Run（#776）は、承認が要るツールを実行せずに続ける（dry-run）。
+
+    呼ぼうとしたツールは step に残し（ツールの選択の判定に使う）、モデルへは「評価中のため実行して
+    いない」と返して回答を完成させる。評価以外の Run はそのまま返す（承認待ちにする）。
+    """
+    from app.features.agent.runtime import (
+        EVALUATION_DRY_RUN_KEY,
+        EVALUATION_DRY_RUN_MESSAGE,
+        runtime_repository,
+    )
+
+    if not run.metadata.get(EVALUATION_DRY_RUN_KEY):
+        return result
+    for _ in range(_max_turns()):
+        interruptions = list(getattr(result, "interruptions", []) or [])
+        if not interruptions:
+            return result
+        runtime_repository.record_builtin_dry_run_steps(
+            run.id,
+            [
+                ToolCall(
+                    name=str(getattr(item, "tool_name", "") or getattr(item, "name", "") or "tool"),
+                    arguments=_arguments(getattr(item, "arguments", None)),
+                    trace_id=str(getattr(item, "call_id", "") or ""),
+                )
+                for item in interruptions
+            ],
+        )
+        state = result.to_state()
+        for item in interruptions:
+            state.reject(item, rejection_message=EVALUATION_DRY_RUN_MESSAGE)
+        result = await Runner.run(sdk_agent, state, max_turns=_max_turns())
+    return result
 
 
 async def _finish(run_id: str, result: Any) -> None:
