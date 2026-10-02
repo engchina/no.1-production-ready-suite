@@ -2,12 +2,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
-  Brain,
   Check,
   Download,
   FileText,
   GitBranch,
-  ListChecks,
   PlayCircle,
   Plus,
   Power,
@@ -71,7 +69,6 @@ import {
   PageBody,
   RowTitleButton,
   isSubmitEnter,
-  SearchField,
   SelectField,
   TextareaField,
   TextField,
@@ -92,8 +89,6 @@ import {
   type MarketplaceSource,
   type PluginManifest,
   type PluginSummary,
-  type MemoryEntry,
-  type MemoryKind,
   type RuntimeSnapshot,
   type RuntimeSnapshotImportResult,
   type RuntimeSnapshotSummary,
@@ -116,7 +111,6 @@ import {
   focusFirstInvalidField,
   numberFieldError,
   parseJsonField,
-  requiredTextError,
 } from "@/lib/field-validation";
 import { t } from "@/lib/i18n";
 import { MENU_PERMISSIONS, useCapabilities, type AgentCapabilities } from "@/lib/permissions";
@@ -498,8 +492,6 @@ function useRunEventWebSocket(
 
 const RUN_EVENT_TYPES = [
   "run.status_changed",
-  "planner.completed",
-  "skill.planned",
   "step.started",
   "tool.approval_required",
   "approval.decided",
@@ -512,7 +504,6 @@ const RUN_EVENT_TYPES = [
   "runtime.dispatch_claimed",
   "runtime.submitted",
   "runtime.failed",
-  "memory.written",
 ];
 
 /**
@@ -881,12 +872,10 @@ export function RunsPage() {
       toast.success(t("run.createdToast"));
       setSelectedRunId(run.id);
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
-      void queryClient.invalidateQueries({ queryKey: ["memory"] });
     },
   });
   const refreshRunQueries = () => {
     void queryClient.invalidateQueries({ queryKey: ["runs"] });
-    void queryClient.invalidateQueries({ queryKey: ["memory"] });
   };
   const cancelRun = useMutation({
     mutationFn: agentApi.cancelRun,
@@ -943,7 +932,6 @@ export function RunsPage() {
 
   const refreshRuntimeEvents = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["runs"] });
-    void queryClient.invalidateQueries({ queryKey: ["memory"] });
   }, [queryClient]);
   const websocketState = useRunEventWebSocket(
     selectedRun,
@@ -1151,7 +1139,6 @@ export function ApprovalsPage() {
       agentApi.decideApproval(approval.id, { approved }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
-      void queryClient.invalidateQueries({ queryKey: ["memory"] });
     },
     onError: (error) => toast.error(error.message),
   });
@@ -1788,203 +1775,6 @@ export function ToolsPage() {
             }
           />
         </QueryState>
-      </PageBody>
-    </>
-  );
-}
-
-/** メモリの検索で取得する件数（backend の上限）。一覧は 10 件/ページで送る（#265。以前は 20 件で打ち切っていた）。 */
-const MEMORY_SEARCH_LIMIT = 100;
-
-export function MemoryPage() {
-  const queryClient = useQueryClient();
-  // メモリの登録は Run の実行・操作の権限（operator）が必要（backend の `POST /memory` と同じ。#215）。
-  const { operateRuns: canAdd } = useCapabilities();
-  // 検索語は作業状態として残し、登録フォームの未保存の入力は離脱ガードで守る（#87）。
-  const [query, setQuery] = useWorkspaceState("memory", "query", "", isString);
-  const [kind, setKind] = useState<MemoryKind>("user_preference");
-  const [content, setContent] = useState("");
-  const [metadataText, setMetadataText] = useState("{}");
-  const [metadataError, setMetadataError] = useState<string | null>(null);
-  const [contentError, setContentError] = useState<string | null>(null);
-  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
-  const memory = useQuery({
-    queryKey: ["memory", query],
-    queryFn: () => agentApi.searchMemory(query, MEMORY_SEARCH_LIMIT),
-    // 検索語を変えている間は前の結果を出したまま取り直す（入力のたびに一覧を Skeleton に戻さない）。
-    placeholderData: keepPreviousData,
-  });
-  const addMemory = useMutation({
-    mutationFn: agentApi.addMemory,
-    onSuccess: () => {
-      toast.success(t("memory.added"));
-      setContent("");
-      setMetadataText("{}");
-      setMetadataError(null);
-      void queryClient.invalidateQueries({ queryKey: ["memory"] });
-    },
-  });
-
-  useEditorLeaveGuard(content.trim() !== "" || metadataText.trim() !== "{}", addMemory.isPending);
-
-  function submitMemory() {
-    const nextContentError = content.trim() ? null : t("memory.contentRequired");
-    // メタデータは任意（空は {}）。形式のエラーは欄の直下に出す（#541）。
-    const metadata = parseJsonField<Record<string, unknown>>(metadataText, t("memory.metadata"), {
-      expect: "object",
-    });
-    const nextMetadataError = metadata.ok ? null : metadata.error;
-    setContentError(nextContentError);
-    setMetadataError(nextMetadataError);
-    if (
-      focusFirstInvalidField([
-        ["memory-content", nextContentError],
-        ["memory-metadata", nextMetadataError],
-      ]) ||
-      !metadata.ok
-    ) {
-      return;
-    }
-    addMemory.mutate({ kind, content, metadata: metadata.value ?? {} });
-  }
-
-  const entries = memory.data?.entries ?? [];
-  const selectedEntry = entries.find((entry) => entry.id === selectedEntryId) ?? entries[0];
-  const memoryColumns: DataTableColumn<MemoryEntry>[] = [
-    {
-      key: "content",
-      header: t("memory.content"),
-      rowHeader: true,
-      render: (entry) => (
-        <RowTitleButton
-          // 長い記憶は 2 行で切り詰め、全文はホバー・フォーカスの Tooltip と右の詳細で見せる（#421）。
-          title={entry.content}
-          maxLines={2}
-          subtitle={formatDate(entry.created_at)}
-          current={entry.id === selectedEntry?.id}
-          onClick={() => setSelectedEntryId(entry.id)}
-        />
-      ),
-    },
-    {
-      key: "kind",
-      header: t("memory.kind"),
-      render: (entry) => <StatusBadge variant="info" label={entry.kind} icon={false} />,
-    },
-  ];
-
-  return (
-    <>
-      <PageHeader wide title={t("nav.memory")} subtitle={t("page.memory.subtitle")} />
-      <PageBody wide className="space-y-6">
-        {canAdd ? (
-          <Section title={t("memory.create")} description={t("page.memory.subtitle")}>
-            <Card className="min-w-0">
-              <CardContent className="grid min-w-0 gap-4 pt-5 lg:grid-cols-2">
-                <div className="min-w-0 space-y-4">
-                  <SelectField<MemoryKind>
-                    id="memory-kind"
-                    label={t("memory.kind")}
-                    value={kind}
-                    options={[
-                      { value: "user_preference", label: t("memory.kind.userPreference") },
-                      { value: "tool_learning", label: t("memory.kind.toolLearning") },
-                      { value: "note", label: t("memory.kind.note") },
-                      { value: "run_summary", label: t("memory.kind.runSummary") },
-                    ]}
-                    onValueChange={setKind}
-                  />
-                  <TextareaField
-                    id="memory-content"
-                    label={t("memory.content")}
-                    required
-                    error={contentError ?? undefined}
-                    value={content}
-                    onValueChange={(value) => {
-                      setContent(value);
-                      setContentError(null);
-                    }}
-                    textareaClassName="min-h-28"
-                  />
-                </div>
-                <div className="min-w-0 space-y-4">
-                  <TextareaField
-                    id="memory-metadata"
-                    label={t("memory.metadata")}
-                    error={metadataError ?? undefined}
-                    value={metadataText}
-                    onValueChange={(value) => {
-                      setMetadataText(value);
-                      setMetadataError(null);
-                    }}
-                    monospace
-                    spellCheck={false}
-                    textareaClassName="min-h-28"
-                  />
-                  {addMemory.error ? <Banner severity="danger">{addMemory.error.message}</Banner> : null}
-                  <Button onClick={submitMemory} loading={addMemory.isPending} icon={Save}>
-                    {t("memory.create")}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          </Section>
-        ) : null}
-        <AgentSplitPane
-          splitId="memory-list"
-          left={
-            <Section title={t("memory.list")}>
-              {/* 一覧の絞り込みは共有の SearchField（入力に合わせて適用・debounce・IME 対応・消去。#535）。 */}
-              <SearchField
-                id="memory-search"
-                label={t("common.search")}
-                value={query}
-                onSearch={setQuery}
-                clearLabel={t("common.clearSearch")}
-                resultCountLabel={
-                  memory.data ? t("common.searchResultCount", { count: memory.data.entries.length }) : ""
-                }
-                placeholder={t("memory.searchPlaceholder")}
-              />
-              <p className="text-xs leading-5 text-fg-muted">{t("memory.limitHint", { limit: MEMORY_SEARCH_LIMIT })}</p>
-              <QueryState query={memory} loadingLabel={t("loading.memory")} skeleton={<TableSkeleton columns={2} />}>
-                <PagedDataTable
-                  pageKey="memory"
-                  // 検索語を変えたら 1 ページ目へ戻す。
-                  resetKey={query}
-                  rows={entries}
-                  columns={memoryColumns}
-                  getRowKey={(entry) => entry.id}
-                  selectedRowKey={selectedEntry?.id ?? null}
-                  onRowClick={(entry) => setSelectedEntryId(entry.id)}
-                  rowProps={() => ({ className: "align-top" })}
-                  ariaLabel={t("memory.list")}
-                  empty={<EmptyState title={t("common.empty.title")} />}
-                />
-              </QueryState>
-            </Section>
-          }
-          right={
-            selectedEntry ? (
-              <Section title={t("memory.detail")} aria-label={t("memory.detail")}>
-                <Card className="min-w-0">
-                  <CardContent className="min-w-0 space-y-3 pt-5">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <StatusBadge variant="info" label={selectedEntry.kind} icon={false} />
-                      <span className="text-xs text-fg-muted">{formatDate(selectedEntry.created_at)}</span>
-                    </div>
-                    <p className="whitespace-pre-wrap break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">
-                      {selectedEntry.content}
-                    </p>
-                    <JsonPanel title={t("memory.metadata")} value={selectedEntry.metadata} />
-                  </CardContent>
-                </Card>
-              </Section>
-            ) : (
-              <EmptyState title={t("common.empty.title")} hint={t("memory.selectHint")} />
-            )
-          }
-        />
       </PageBody>
     </>
   );
@@ -3165,7 +2955,6 @@ function SkillEditor({
         enabled: current.enabled,
         mcp_requirements: JSON.parse(current.mcpRequirementsJson) as { server_id: string; tool_names: string[] }[],
         resource_ids: JSON.parse(current.resourceIdsJson) as string[],
-        tool_calls: [],
       };
       if (editingId) {
         return agentApi.updateSkill(editingId, payload);
@@ -4391,305 +4180,6 @@ function MarketplaceDetail({
   );
 }
 
-function parseCommandPrefixes(value: string): string[] {
-  return Array.from(
-    new Set(
-      value
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-    )
-  );
-}
-
-interface CommandPolicyDraft {
-  enabled: boolean;
-  workspaceRoot: string;
-  allowedPrefixes: string[];
-  defaultTimeout: string;
-  maxTimeout: string;
-  outputLimit: string;
-  artifactStorageBackend: "inline" | "filesystem";
-  artifactStoragePath: string;
-}
-
-type CommandPolicyField = "workspaceRoot" | "outputLimit" | "defaultTimeout" | "maxTimeout" | "artifactStoragePath";
-type CommandPolicyFieldErrors = Partial<Record<CommandPolicyField, string | null>>;
-
-/** 画面の並び順（送信に失敗したら最初のエラーの欄へフォーカスする）。 */
-const COMMAND_POLICY_FIELD_ORDER: readonly CommandPolicyField[] = [
-  "workspaceRoot",
-  "outputLimit",
-  "defaultTimeout",
-  "maxTimeout",
-  "artifactStoragePath",
-];
-const COMMAND_POLICY_FIELD_IDS: Record<CommandPolicyField, string> = {
-  workspaceRoot: "command-policy-workspace-root",
-  outputLimit: "command-policy-output-limit",
-  defaultTimeout: "command-policy-default-timeout",
-  maxTimeout: "command-policy-max-timeout",
-  artifactStoragePath: "command-policy-artifact-path",
-};
-
-export function CommandPolicySettingsPage() {
-  const queryClient = useQueryClient();
-  const settings = useQuery({
-    queryKey: ["settings", "command-policy"],
-    queryFn: agentApi.getCommandPolicySettings,
-  });
-  const mutation = useMutation({
-    mutationFn: agentApi.patchCommandPolicySettings,
-    onSuccess: () => {
-      toast.success(t("common.saved"));
-      void queryClient.invalidateQueries({ queryKey: ["settings", "command-policy"] });
-    },
-  });
-  const [enabled, setEnabled] = useState(false);
-  const [workspaceRoot, setWorkspaceRoot] = useState(".");
-  const [allowedPrefixes, setAllowedPrefixes] = useState("");
-  const [defaultTimeout, setDefaultTimeout] = useState("10");
-  const [maxTimeout, setMaxTimeout] = useState("30");
-  const [outputLimit, setOutputLimit] = useState("20000");
-  const [artifactStorageBackend, setArtifactStorageBackend] = useState<"inline" | "filesystem">("inline");
-  const [artifactStoragePath, setArtifactStoragePath] = useState(".agent-artifacts");
-  const [fieldErrors, setFieldErrors] = useState<CommandPolicyFieldErrors>({});
-  const [baseline, setBaseline] = useState<CommandPolicyDraft | null>(null);
-  const clearFieldError = (field: CommandPolicyField) =>
-    setFieldErrors((current) => (current[field] ? { ...current, [field]: null } : current));
-
-  // server 値が変わったレンダーで、フォームと比較の基準を server 値に戻す（effect で setState しない）。
-  const serverChanged = useValuesChanged([settings.data]);
-  if (serverChanged && settings.data) {
-    const current = settings.data;
-    setEnabled(current.enabled);
-    setWorkspaceRoot(current.workspace_root);
-    setAllowedPrefixes(current.allowed_prefixes.join("\n"));
-    setDefaultTimeout(String(current.default_timeout_seconds));
-    setMaxTimeout(String(current.max_timeout_seconds));
-    setOutputLimit(String(current.output_limit_bytes));
-    setArtifactStorageBackend(current.artifact_storage_backend);
-    setArtifactStoragePath(current.artifact_storage_path);
-    setBaseline({
-      enabled: current.enabled,
-      workspaceRoot: current.workspace_root,
-      allowedPrefixes: parseCommandPrefixes(current.allowed_prefixes.join("\n")).sort(),
-      defaultTimeout: String(current.default_timeout_seconds),
-      maxTimeout: String(current.max_timeout_seconds),
-      outputLimit: String(current.output_limit_bytes),
-      artifactStorageBackend: current.artifact_storage_backend,
-      artifactStoragePath: current.artifact_storage_path,
-    });
-    setFieldErrors({});
-  }
-
-  // prefix は集合として比べる（順序・重複・空行の違いは変更に数えない）。#87
-  const draft: CommandPolicyDraft = {
-    enabled,
-    workspaceRoot,
-    allowedPrefixes: parseCommandPrefixes(allowedPrefixes).sort(),
-    defaultTimeout,
-    maxTimeout,
-    outputLimit,
-    artifactStorageBackend,
-    artifactStoragePath,
-  };
-  useSettingsLeaveGuard(baseline !== null && !sameDraft(draft, baseline), mutation.isPending);
-
-  function save() {
-    // 欄ごとに検証し、エラーは欄の直下に出す（#541）。規則と文言は backend（_validate_command_policy_patch）と同じ。
-    const nextErrors: CommandPolicyFieldErrors = {
-      workspaceRoot: requiredTextError(workspaceRoot, t("settings.commandPolicy.workspaceRoot")),
-      outputLimit: numberFieldError(outputLimit, {
-        label: t("settings.commandPolicy.outputLimit"),
-        integer: true,
-        min: 1,
-      }),
-      defaultTimeout: numberFieldError(defaultTimeout, {
-        label: t("settings.commandPolicy.defaultTimeout"),
-        min: 0,
-        exclusiveMin: true,
-      }),
-      maxTimeout: numberFieldError(maxTimeout, {
-        label: t("settings.commandPolicy.maxTimeout"),
-        min: 0,
-        exclusiveMin: true,
-      }),
-      artifactStoragePath: requiredTextError(artifactStoragePath, t("settings.commandPolicy.artifactPath")),
-    };
-    if (!nextErrors.defaultTimeout && !nextErrors.maxTimeout && Number(defaultTimeout) > Number(maxTimeout)) {
-      nextErrors.defaultTimeout = t("settings.commandPolicy.timeoutOrderInvalid");
-    }
-    setFieldErrors(nextErrors);
-    if (
-      focusFirstInvalidField(
-        COMMAND_POLICY_FIELD_ORDER.map((field) => [COMMAND_POLICY_FIELD_IDS[field], nextErrors[field]] as const)
-      )
-    ) {
-      return;
-    }
-    const parsedDefaultTimeout = Number(defaultTimeout);
-    const parsedMaxTimeout = Number(maxTimeout);
-    const parsedOutputLimit = Number(outputLimit);
-    const submitted = draft;
-    mutation.mutate(
-      {
-        enabled,
-        workspace_root: workspaceRoot,
-        allowed_prefixes: parseCommandPrefixes(allowedPrefixes),
-        default_timeout_seconds: parsedDefaultTimeout,
-        max_timeout_seconds: parsedMaxTimeout,
-        output_limit_bytes: parsedOutputLimit,
-        artifact_storage_backend: artifactStorageBackend,
-        artifact_storage_path: artifactStoragePath,
-      },
-      { onSuccess: () => setBaseline(submitted) }
-    );
-  }
-
-  return (
-    <>
-      <PageHeader wide title={t("nav.settingsCommandPolicy")} subtitle={t("page.settings.commandPolicy.subtitle")} />
-      <PageBody wide>
-<div className="space-y-5">
-        <QueryState query={settings} loadingLabel={t("loading.settings")} skeleton={<FormSkeleton fields={6} />}>
-          <Banner severity="info">{t("settings.commandPolicy.enabledHint")}</Banner>
-          <Card className="min-w-0">
-            <CardHeader>
-              <div className="flex flex-wrap items-center gap-2">
-                <CardTitle>{t("nav.settingsCommandPolicy")}</CardTitle>
-                <StatusBadge variant={enabled ? "success" : "neutral"} label={enabled ? t("agent.enabled") : t("agent.disabled")} />
-                <StatusBadge
-                  variant={artifactStorageBackend === "filesystem" ? "info" : "neutral"}
-                  label={
-                    artifactStorageBackend === "filesystem"
-                      ? t("settings.commandPolicy.filesystem")
-                      : t("settings.commandPolicy.inline")
-                  }
-                  icon={false}
-                />
-              </div>
-              <CardDescription>{t("page.settings.commandPolicy.subtitle")}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-md border border-border px-3 py-2 text-sm text-fg">
-                <input
-                  type="checkbox"
-                  checked={enabled}
-                  onChange={(event) => setEnabled(event.target.checked)}
-                  className="size-4 rounded border-border text-accent-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-                <span>{t("settings.commandPolicy.enabled")}</span>
-              </label>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <TextField
-                  id="command-policy-workspace-root"
-                  label={t("settings.commandPolicy.workspaceRoot")}
-                  required
-                  error={fieldErrors.workspaceRoot ?? undefined}
-                  value={workspaceRoot}
-                  onValueChange={(value) => {
-                    setWorkspaceRoot(value);
-                    clearFieldError("workspaceRoot");
-                  }}
-                />
-                <TextField
-                  id="command-policy-output-limit"
-                  label={t("settings.commandPolicy.outputLimit")}
-                  required
-                  error={fieldErrors.outputLimit ?? undefined}
-                  type="number"
-                  min="1"
-                  value={outputLimit}
-                  onValueChange={(value) => {
-                    setOutputLimit(value);
-                    clearFieldError("outputLimit");
-                  }}
-                />
-                <TextField
-                  id="command-policy-default-timeout"
-                  label={t("settings.commandPolicy.defaultTimeout")}
-                  required
-                  error={fieldErrors.defaultTimeout ?? undefined}
-                  type="number"
-                  min="0.1"
-                  step="0.1"
-                  value={defaultTimeout}
-                  onValueChange={(value) => {
-                    setDefaultTimeout(value);
-                    clearFieldError("defaultTimeout");
-                  }}
-                />
-                <TextField
-                  id="command-policy-max-timeout"
-                  label={t("settings.commandPolicy.maxTimeout")}
-                  required
-                  error={fieldErrors.maxTimeout ?? undefined}
-                  type="number"
-                  min="0.1"
-                  step="0.1"
-                  value={maxTimeout}
-                  onValueChange={(value) => {
-                    setMaxTimeout(value);
-                    clearFieldError("maxTimeout");
-                    // 大小の関係のエラーは既定タイムアウト秒の欄に出すので、最大を直したときも消す。
-                    clearFieldError("defaultTimeout");
-                  }}
-                />
-              </div>
-
-              <TextareaField
-                id="command-policy-allowed-prefixes"
-                label={t("settings.commandPolicy.allowedPrefixes")}
-                helper={t("settings.commandPolicy.allowedPrefixesHint")}
-                value={allowedPrefixes}
-                onValueChange={setAllowedPrefixes}
-                rows={5}
-                monospace
-                textareaClassName="min-h-32"
-              />
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <SelectField<"inline" | "filesystem">
-                  id="command-policy-artifact-storage"
-                  label={t("settings.commandPolicy.artifactStorage")}
-                  helper={t("settings.commandPolicy.storageHint")}
-                  value={artifactStorageBackend}
-                  options={[
-                    { value: "inline", label: t("settings.commandPolicy.inline") },
-                    { value: "filesystem", label: t("settings.commandPolicy.filesystem") },
-                  ]}
-                  onValueChange={setArtifactStorageBackend}
-                />
-                <TextField
-                  id="command-policy-artifact-path"
-                  label={t("settings.commandPolicy.artifactPath")}
-                  required
-                  error={fieldErrors.artifactStoragePath ?? undefined}
-                  value={artifactStoragePath}
-                  onValueChange={(value) => {
-                    setArtifactStoragePath(value);
-                    clearFieldError("artifactStoragePath");
-                  }}
-                />
-              </div>
-
-              <SettingsSaveBar
-                section={t("nav.settingsCommandPolicy")}
-                onSave={save}
-                saving={mutation.isPending}
-                error={mutation.error}
-              />
-            </CardContent>
-          </Card>
-        </QueryState>
-      </div>
-</PageBody>
-    </>
-  );
-}
-
 interface ToolPolicyDraft {
   defaultMode: "approval" | "deny";
   policies: Array<[string, ToolPolicyChoice]>;
@@ -4862,132 +4352,6 @@ export function ToolPolicySettingsPage() {
 
               <SettingsSaveBar
                 section={t("nav.settingsToolPolicy")}
-                onSave={save}
-                saving={mutation.isPending}
-                error={mutation.error}
-              />
-            </CardContent>
-          </Card>
-        </QueryState>
-      </div>
-</PageBody>
-    </>
-  );
-}
-
-export function RuntimeSafetySettingsPage() {
-  const queryClient = useQueryClient();
-  const settings = useQuery({
-    queryKey: ["settings", "runtime-safety"],
-    queryFn: agentApi.getRuntimeSafetySettings,
-  });
-  const mutation = useMutation({
-    mutationFn: agentApi.patchRuntimeSafetySettings,
-    onSuccess: () => {
-      toast.success(t("common.saved"));
-      void queryClient.invalidateQueries({ queryKey: ["settings", "runtime-safety"] });
-    },
-  });
-  const [maxToolCalls, setMaxToolCalls] = useState("20");
-  const [maxPendingApprovals, setMaxPendingApprovals] = useState("5");
-  const [fieldErrors, setFieldErrors] = useState<{
-    maxToolCalls?: string | null;
-    maxPendingApprovals?: string | null;
-  }>({});
-  const [baseline, setBaseline] = useState<{ maxToolCalls: string; maxPendingApprovals: string } | null>(null);
-
-  // server 値が変わったレンダーで、フォームと比較の基準を server 値に戻す（effect で setState しない）。
-  const serverChanged = useValuesChanged([settings.data]);
-  if (serverChanged && settings.data) {
-    const current = settings.data;
-    setMaxToolCalls(String(current.max_tool_calls_per_run));
-    setMaxPendingApprovals(String(current.max_pending_approvals_per_run));
-    setBaseline({
-      maxToolCalls: String(current.max_tool_calls_per_run),
-      maxPendingApprovals: String(current.max_pending_approvals_per_run),
-    });
-    setFieldErrors({});
-  }
-
-  const draft = { maxToolCalls, maxPendingApprovals };
-  useSettingsLeaveGuard(baseline !== null && !sameDraft(draft, baseline), mutation.isPending);
-
-  function save() {
-    // 0 は「許可しない」という正当な値なので、空を 0 として保存しない（空は未入力のエラー。#540）。
-    const nextErrors = {
-      maxToolCalls: numberFieldError(maxToolCalls, {
-        label: t("settings.runtimeSafety.maxToolCalls"),
-        integer: true,
-        min: 0,
-      }),
-      maxPendingApprovals: numberFieldError(maxPendingApprovals, {
-        label: t("settings.runtimeSafety.maxPendingApprovals"),
-        integer: true,
-        min: 0,
-      }),
-    };
-    setFieldErrors(nextErrors);
-    if (
-      focusFirstInvalidField([
-        ["runtime-safety-max-tool-calls", nextErrors.maxToolCalls],
-        ["runtime-safety-max-pending-approvals", nextErrors.maxPendingApprovals],
-      ])
-    ) {
-      return;
-    }
-    const submitted = draft;
-    mutation.mutate(
-      {
-        max_tool_calls_per_run: Number(maxToolCalls),
-        max_pending_approvals_per_run: Number(maxPendingApprovals),
-      },
-      { onSuccess: () => setBaseline(submitted) }
-    );
-  }
-
-  return (
-    <>
-      <PageHeader wide title={t("nav.settingsRuntimeSafety")} subtitle={t("page.settings.runtimeSafety.subtitle")} />
-      <PageBody wide>
-<div className="space-y-5">
-        <QueryState query={settings} loadingLabel={t("loading.settings")} skeleton={<FormSkeleton fields={4} />}>
-          <Banner severity="info">{t("settings.runtimeSafety.guardrail")}</Banner>
-          <Card className="min-w-0">
-            <CardHeader>
-              <CardTitle>{t("nav.settingsRuntimeSafety")}</CardTitle>
-              <CardDescription>{t("page.settings.runtimeSafety.subtitle")}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
-                <TextField
-                  id="runtime-safety-max-tool-calls"
-                  label={t("settings.runtimeSafety.maxToolCalls")}
-                  required
-                  error={fieldErrors.maxToolCalls ?? undefined}
-                  type="number"
-                  min="0"
-                  value={maxToolCalls}
-                  onValueChange={(value) => {
-                    setMaxToolCalls(value);
-                    setFieldErrors((current) => ({ ...current, maxToolCalls: null }));
-                  }}
-                />
-                <TextField
-                  id="runtime-safety-max-pending-approvals"
-                  label={t("settings.runtimeSafety.maxPendingApprovals")}
-                  required
-                  error={fieldErrors.maxPendingApprovals ?? undefined}
-                  type="number"
-                  min="0"
-                  value={maxPendingApprovals}
-                  onValueChange={(value) => {
-                    setMaxPendingApprovals(value);
-                    setFieldErrors((current) => ({ ...current, maxPendingApprovals: null }));
-                  }}
-                />
-              </div>
-              <SettingsSaveBar
-                section={t("nav.settingsRuntimeSafety")}
                 onSave={save}
                 saving={mutation.isPending}
                 error={mutation.error}
@@ -5253,7 +4617,6 @@ function SnapshotSummaryGrid({ summary }: { summary: RuntimeSnapshotSummary }) {
   const items = [
     ["runs", summary.runs],
     ["agents", summary.agents],
-    ["memory", summary.memory],
     ["events", summary.events],
     ["steps", summary.steps],
     ["approvals", summary.approvals],
@@ -5315,7 +4678,6 @@ function summarizeSnapshot(snapshot: RuntimeSnapshot): RuntimeSnapshotSummary {
   return {
     runs: snapshot.runs.length,
     agents: snapshot.agents.length,
-    memory: snapshot.memory.length,
     events: snapshot.runs.reduce((sum, run) => sum + run.events.length, 0),
     steps: snapshot.runs.reduce((sum, run) => sum + run.steps.length, 0),
     approvals: snapshot.runs.reduce((sum, run) => sum + run.approvals.length, 0),
@@ -5696,6 +5058,8 @@ function RunHistoryList({
       render: (run) => (
         <RowTitleButton
           title={run.goal}
+          // 長いゴールは 2 行で切り詰め、全文は Tooltip と右の詳細で読む。
+          maxLines={2}
           subtitle={`${run.agent_id} / ${formatDate(run.created_at)}`}
           current={run.id === selectedRunId}
           onClick={() => onSelect(run.id)}
@@ -6006,12 +5370,6 @@ function TimelineFact({ label, value }: { label: string; value: string }) {
 }
 
 function timelineEventView(event: RunEvent): TimelineEventView {
-  if (event.type === "planner.completed") {
-    return plannerTimelineView(event);
-  }
-  if (event.type === "skill.planned") {
-    return skillTimelineView(event);
-  }
   if (event.type.startsWith("runtime.")) {
     return {
       title: t("run.runtime"),
@@ -6079,17 +5437,6 @@ function timelineEventView(event: RunEvent): TimelineEventView {
       warnings: [],
     };
   }
-  if (event.type.startsWith("memory.")) {
-    return {
-      title: t("nav.memory"),
-      subtitle: event.message,
-      icon: <ListChecks size={16} aria-hidden />,
-      badgeLabel: event.type.replace("memory.", ""),
-      badgeVariant: "neutral",
-      details: compactTimelineDetails([[t("memory.kind"), payloadString(event.payload, "kind")]]),
-      warnings: [],
-    };
-  }
   return {
     title: event.message,
     subtitle: `${event.type} / ${formatDate(event.created_at)}`,
@@ -6101,105 +5448,10 @@ function timelineEventView(event: RunEvent): TimelineEventView {
   };
 }
 
-function plannerTimelineView(event: RunEvent): TimelineEventView {
-  const provider = payloadString(event.payload, "provider") ?? "-";
-  const planned = event.payload.planned === true;
-  const warnings = payloadStringArray(event.payload, "warnings");
-  const metadata = payloadRecord(event.payload.metadata);
-  const phase = payloadString(metadata, "planner_phase") ?? "-";
-  const selectedSkill = payloadString(event.payload, "selected_skill_id");
-  const confidence = payloadNumberText(event.payload, "confidence");
-  const duplicateSuppressed = warnings.some((warning) =>
-    warning.includes("planner.duplicate_tool_call_suppressed")
-  );
-  const fallbackUsed =
-    provider.includes("fallback") ||
-    warnings.some((warning) => warning.includes("planner.oci_responses_failed"));
-  const badgeLabel = duplicateSuppressed
-    ? t("run.timeline.duplicateSuppressed")
-    : fallbackUsed
-      ? t("run.timeline.fallback")
-      : planned
-        ? t("run.timeline.planned")
-        : t("run.timeline.noop");
-  const title = duplicateSuppressed
-    ? t("run.timeline.plannerDuplicate")
-    : fallbackUsed
-      ? t("run.timeline.plannerFallback")
-      : phase === "continue"
-        ? planned
-          ? t("run.timeline.plannerContinue")
-          : t("run.timeline.plannerStop")
-        : planned
-          ? t("run.timeline.plannerInitial")
-          : t("run.timeline.plannerNoPlan");
-
-  return {
-    title,
-    subtitle: payloadString(event.payload, "reason") ?? event.message,
-    icon: <Brain size={16} aria-hidden />,
-    badgeLabel,
-    badgeVariant: duplicateSuppressed || fallbackUsed ? "warning" : planned ? "success" : "neutral",
-    details: compactTimelineDetails([
-      [t("run.timeline.provider"), provider],
-      [t("run.timeline.phase"), phase],
-      [t("run.timeline.skill"), selectedSkill],
-      [t("run.timeline.confidence"), confidence],
-      [t("run.timeline.toolCalls"), plannerToolCallNames(event.payload)],
-    ]),
-    warnings,
-  };
-}
-
-function skillTimelineView(event: RunEvent): TimelineEventView {
-  const skillId = payloadString(event.payload, "skill_id");
-  const skillName = payloadString(event.payload, "skill_name");
-  const plannedCount = payloadNumberText(event.payload, "planned_tool_call_count");
-  return {
-    title: t("run.timeline.skillPlanned"),
-    subtitle: skillName ?? skillId ?? event.message,
-    icon: <ListChecks size={16} aria-hidden />,
-    badgeLabel: plannedCount ? `${plannedCount} ${t("run.timeline.tools")}` : t("run.timeline.planned"),
-    badgeVariant: "info",
-    details: compactTimelineDetails([
-      [t("run.timeline.skill"), skillId],
-      [t("run.timeline.toolCalls"), plannedToolCallNames(event.payload)],
-      [t("run.timeline.step"), payloadString(event.payload, "step_id")],
-    ]),
-    warnings: [],
-  };
-}
-
-function plannedToolCallNames(payload: Record<string, unknown>): string | null {
-  const calls = payload.planned_tool_calls;
-  if (!Array.isArray(calls)) {
-    return null;
-  }
-  const names = calls
-    .map((call) => (payloadRecord(call)?.name ? String(payloadRecord(call)?.name) : null))
-    .filter((name): name is string => Boolean(name));
-  return names.length ? names.join(" -> ") : null;
-}
-
-function plannerToolCallNames(payload: Record<string, unknown>): string | null {
-  const calls = payload.tool_calls;
-  if (!Array.isArray(calls)) {
-    return null;
-  }
-  const names = calls
-    .map((call) => (payloadRecord(call)?.name ? String(payloadRecord(call)?.name) : null))
-    .filter((name): name is string => Boolean(name));
-  return names.length ? names.join(" -> ") : null;
-}
-
 function compactTimelineDetails(items: Array<[string, string | null]>): Array<{ label: string; value: string }> {
   return items
     .filter((item): item is [string, string] => Boolean(item[1]))
     .map(([label, value]) => ({ label, value }));
-}
-
-function payloadRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
 function payloadString(payload: Record<string, unknown> | null, key: string): string | null {

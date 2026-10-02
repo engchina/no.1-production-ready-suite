@@ -83,7 +83,7 @@ const MOCK_MARKETPLACE_LISTING = {
         {
           id: "fixture_plugin_skill",
           name: "Fixture Skill",
-          tool_calls: [{ name: "agent_skill_list" }],
+          instructions: "Skill の一覧を確かめる。",
         },
       ],
       mcp_servers: [{ server_id: "fixture_plugin_mcp", base_url: "http://mcp.example.test/jsonrpc" }],
@@ -189,15 +189,12 @@ function createState() {
     agents: d.agents as unknown as Json[],
     skills: d.skills as unknown as Json[],
     tools: d.tools as unknown as Json[],
-    memory: [] as Json[],
     // 監査の記録（`GET /api/audit/tool-calls`）。offset / limit で切り出して返す（#265）。
     auditRecords: [] as Json[],
     plugins: [] as Json[],
     marketplaces: [] as Json[],
     tracePolicy: d.tracePolicy as Json,
-    runtimeSafety: d.runtimeSafety as Json,
     toolPolicy: d.toolPolicy as Json,
-    commandPolicy: d.commandPolicy as Json,
     externalRag: d.externalRag as Json,
     externalNl2Sql: d.externalNl2Sql as Json,
     externalMcp: d.externalMcp as Json,
@@ -291,7 +288,6 @@ function skillFromPayload(payload: Json, source: string, current?: Json): Json {
     instructions: "",
     mcp_requirements: [],
     resource_ids: [],
-    tool_calls: [],
     enabled: true,
     tags: [],
     created_at: MOCK_NOW,
@@ -325,7 +321,6 @@ function validateSnapshot(snapshot: Json) {
   const warnings: string[] = [];
   const agents = (snapshot.agents as Json[] | undefined) ?? [];
   const runs = (snapshot.runs as Json[] | undefined) ?? [];
-  const memory = (snapshot.memory as Json[] | undefined) ?? [];
   if (
     !["agent-runtime.snapshot.v1", "agent-control-plane.snapshot.v2"].includes(
       String(snapshot.version)
@@ -344,7 +339,6 @@ function validateSnapshot(snapshot: Json) {
   };
   duplicates("run", runs.map((run) => run.id));
   duplicates("agent", agents.map((agent) => agent.id));
-  duplicates("memory", memory.map((entry) => entry.id));
   if (!agents.some((agent) => agent.id === "default")) {
     warnings.push("default agent is missing and will be recreated");
   }
@@ -355,7 +349,6 @@ function validateSnapshot(snapshot: Json) {
     summary: {
       runs: runs.length,
       agents: agents.length,
-      memory: memory.length,
       events: 0,
       steps: 0,
       approvals: 0,
@@ -494,16 +487,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     throw new HttpError(404, `approval not found: ${second}`);
   }
-  if (method === "POST" && at("memory")) {
-    const entry = {
-      id: `memory-${state.memory.length + 1}`,
-      metadata: {},
-      created_at: MOCK_NOW,
-      ...body,
-    };
-    state.memory.unshift(entry);
-    return entry;
-  }
   if (method === "GET" && at("audit", "tool-calls")) {
     const offset = Number(query.get("offset") ?? 0);
     const limit = Number(query.get("limit") ?? 100);
@@ -516,7 +499,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     };
   }
   if (method === "GET" && at("tools")) return { tools: state.tools };
-  if (method === "POST" && at("memory", "search")) return { entries: state.memory };
 
   // --- 業務 Agent ---
   if (head === "agents") {
@@ -532,7 +514,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         instructions: "",
         migration_required: false,
         tool_names: [],
-        command_allowed_prefixes: [],
         source: "runtime",
         created_at: MOCK_NOW,
         updated_at: MOCK_NOW,
@@ -658,7 +639,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       exported_at: MOCK_NOW,
       runs: state.runs,
       agents: state.agents,
-      memory: state.memory,
       control_plane_state: {},
     };
   }
@@ -674,9 +654,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   if (head === "settings") {
     const patchable: Record<string, keyof MockApiState> = {
       "trace-policy": "tracePolicy",
-      "runtime-safety": "runtimeSafety",
       "tool-policy": "toolPolicy",
-      "command-policy": "commandPolicy",
     };
     if (at("settings", "*") && second in patchable) {
       const key = patchable[second];

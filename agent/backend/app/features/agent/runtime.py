@@ -1,4 +1,4 @@
-"""Agent Runtime の in-memory 実装。
+"""業務 Agent の Run・Event・Artifact・Approval の保存と、組み込み Runtime の実行の記録。
 
 永続 DB 導入前でも API / 権限 / 承認 / SSE を検証できるよう、
 append-only event log をプロセス内 repository として実装する。
@@ -20,10 +20,9 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from pr_backend_core.oracle_session import init_oracle_session
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.features.agent.config import runtime_config_store
-from app.features.agent.planner import PlannerDecision, PlannerMode, plan_next_step, plan_run_goal
 from app.features.agent.tools import (
     ToolCall,
     ToolInvocationContext,
@@ -31,7 +30,7 @@ from app.features.agent.tools import (
     ToolResult,
     tool_registry,
 )
-from app.observability import observe_memory_entries, record_runtime_event
+from app.observability import record_runtime_event
 from app.settings import get_settings
 
 JsonObject = dict[str, Any]
@@ -85,12 +84,13 @@ class RunEventType(StrEnum):
     ARTIFACT_CREATED = "artifact.created"
     RUN_COMPLETED = "run.completed"
     RUN_CANCELLED = "run.cancelled"
-    MEMORY_WRITTEN = "memory.written"
-    PLANNER_COMPLETED = "planner.completed"
     RUNTIME_SUBMITTED = "runtime.submitted"
     RUNTIME_EVENT = "runtime.event"
     RUNTIME_FAILED = "runtime.failed"
     RUNTIME_DISPATCH_CLAIMED = "runtime.dispatch_claimed"
+    # 旧エンジン（#756 で削除）が記録したイベント。保存済みの Run を読み込むためだけに残す。
+    MEMORY_WRITTEN = "memory.written"
+    PLANNER_COMPLETED = "planner.completed"
 
 
 class ArtifactContentRef(BaseModel):
@@ -155,7 +155,6 @@ class AgentProfile(BaseModel):
     migration_required: bool = False
     # Deprecated read compatibility。新規 UI/API は skill_ids だけを書き込む。
     tool_names: list[str] = Field(default_factory=list)
-    command_allowed_prefixes: list[str] = Field(default_factory=list)
     enabled: bool = True
     # 由来層: builtin(default)/ runtime(UI/API)/ plugin:<id>(plugin install)。
     source: str = "runtime"
@@ -170,37 +169,13 @@ class AgentProfilePatch(BaseModel):
     skill_ids: list[str] | None = None
     model_id: str | None = None
     tool_names: list[str] | None = None
-    command_allowed_prefixes: list[str] | None = None
     enabled: bool | None = None
-
-
-class MemoryKind(StrEnum):
-    RUN_SUMMARY = "run_summary"
-    USER_PREFERENCE = "user_preference"
-    TOOL_LEARNING = "tool_learning"
-    NOTE = "note"
-
-
-class MemoryEntry(BaseModel):
-    id: str = Field(default_factory=lambda: f"memory_{uuid4().hex}")
-    kind: MemoryKind = MemoryKind.NOTE
-    content: str
-    metadata: JsonObject = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=_now)
-
-
-class MemorySearchRequest(BaseModel):
-    query: str = ""
-    limit: int = Field(default=20, ge=1, le=100)
-    kind: MemoryKind | None = None
 
 
 class RunCreateRequest(BaseModel):
     goal: str
     agent_id: str = "default"
-    tool_calls: list[ToolCall] = Field(default_factory=list)
     metadata: JsonObject = Field(default_factory=dict)
-    planner_mode: PlannerMode = PlannerMode.AUTO
 
     @field_validator("goal")
     @classmethod
@@ -249,16 +224,13 @@ class ArtifactsData(BaseModel):
     artifacts: list[Artifact]
 
 
-class MemoryData(BaseModel):
-    entries: list[MemoryEntry]
-
-
 class AgentRuntimeSnapshot(BaseModel):
     version: str = "agent-control-plane.snapshot.v2"
     exported_at: datetime = Field(default_factory=_now)
     runs: list[RunState] = Field(default_factory=list)
     agents: list[AgentProfile] = Field(default_factory=list)
-    memory: list[MemoryEntry] = Field(default_factory=list)
+    # 旧 Memory（#756 で削除）。読み込んでも使わない。
+    memory: list[JsonObject] = Field(default_factory=list)
     # 旧版（#754 より前）の外部 Runtime と Binding。読み込んでも使わない。
     control_plane_state: JsonObject = Field(default_factory=dict)
 
@@ -266,7 +238,6 @@ class AgentRuntimeSnapshot(BaseModel):
 class AgentRuntimeSnapshotSummary(BaseModel):
     runs: int = 0
     agents: int = 0
-    memory: int = 0
     events: int = 0
     steps: int = 0
     approvals: int = 0
@@ -316,9 +287,6 @@ class RuntimeToolCallAuditData(BaseModel):
 
 
 class AgentRuntimeRepositoryContract(Protocol):
-    def create_run(
-        self, request: RunCreateRequest, *, created_by_user_uuid: str | None = None
-    ) -> RunState: ...
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None: ...
     def persist_control_plane_state(self) -> None: ...
     def create_builtin_run(
@@ -337,7 +305,6 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> RunState: ...
     def complete_builtin_run(self, run_id: str, answer: str) -> RunState: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
-    def replay_run(self, run_id: str, *, created_by_user_uuid: str | None = None) -> RunState: ...
     def list_runs(self) -> list[RunState]: ...
     def get_run(self, run_id: str) -> RunState: ...
     def list_artifacts(self, run_id: str) -> list[Artifact]: ...
@@ -351,7 +318,6 @@ class AgentRuntimeRepositoryContract(Protocol):
         idle_timeout_seconds: float = 15.0,
     ) -> Iterator[RunEvent | None]: ...
     def cancel_run(self, run_id: str) -> RunState: ...
-    def resume_run(self, run_id: str) -> RunState: ...
     def decide_approval(self, approval_id: str, request: ApprovalDecisionRequest) -> RunState: ...
     def list_agents(self) -> list[AgentProfile]: ...
     def create_agent(self, agent: AgentProfile) -> AgentProfile: ...
@@ -359,8 +325,6 @@ class AgentRuntimeRepositoryContract(Protocol):
     def delete_agent(self, agent_id: str) -> None: ...
     def set_plugin_agents(self, source: str, agents: list[AgentProfile]) -> None: ...
     def remove_agents_by_source(self, source: str) -> None: ...
-    def add_memory(self, entry: MemoryEntry) -> MemoryEntry: ...
-    def search_memory(self, request: MemorySearchRequest) -> list[MemoryEntry]: ...
     def export_snapshot(self) -> AgentRuntimeSnapshot: ...
     def validate_snapshot(
         self, snapshot: AgentRuntimeSnapshot
@@ -376,73 +340,9 @@ class AgentRuntimeRepository:
         self._approvals: dict[str, ApprovalRequest] = {}
         default_agent = _default_agent()
         self._agents: dict[str, AgentProfile] = {default_agent.id: default_agent}
-        self._memory: dict[str, MemoryEntry] = {}
         self._snapshot_path = Path(snapshot_path) if snapshot_path else None
         if self._snapshot_path is not None and self._snapshot_path.exists():
             self._load_snapshot_from_disk()
-
-    def create_run(
-        self, request: RunCreateRequest, *, created_by_user_uuid: str | None = None
-    ) -> RunState:
-        with self._lock:
-            planned_request, planner_decision = self._prepare_run_request_locked(request)
-            self._validate_run_agent(planned_request)
-            run = RunState(
-                id=f"run_{uuid4().hex}",
-                goal=planned_request.goal,
-                agent_id=planned_request.agent_id,
-                created_by_user_uuid=created_by_user_uuid,
-                status=RunStatus.QUEUED,
-                pending_tool_calls=list(planned_request.tool_calls),
-                metadata={
-                    **planned_request.metadata,
-                    "_planner_mode": planned_request.planner_mode.value,
-                },
-            )
-            self._runs[run.id] = run
-            self._append_event(
-                run,
-                RunEventType.RUN_CREATED,
-                "実行を作成しました。",
-                {
-                    "goal": planned_request.goal,
-                    "agent_id": planned_request.agent_id,
-                    "planner_mode": planned_request.planner_mode.value,
-                },
-            )
-            self._append_planner_event_locked(run, planner_decision)
-            self._persist_locked()
-
-        self._start_run(run.id)
-        return self.get_run(run.id)
-
-    def replay_run(self, run_id: str, *, created_by_user_uuid: str | None = None) -> RunState:
-        with self._lock:
-            source = self._require_run(run_id)
-            tool_calls = [
-                step.tool_call.model_copy(deep=True)
-                for step in source.steps
-                if step.tool_call is not None
-            ]
-            tool_calls.extend(call.model_copy(deep=True) for call in source.pending_tool_calls)
-            metadata = {**source.metadata, "replayed_from_run_id": source.id}
-            self._append_event(
-                source,
-                RunEventType.RUN_REPLAYED,
-                "実行を再実行キューへ投入しました。",
-            )
-            self._persist_locked()
-
-        # 再実行の Run は、再実行を指示した利用者として動く（元の Run の利用者を引き継がない）。
-        return self.create_run(
-            RunCreateRequest(
-                goal=source.goal,
-                agent_id=source.agent_id,
-                tool_calls=tool_calls,
-                metadata=metadata,
-            ),
-            created_by_user_uuid=created_by_user_uuid,
-        )
 
     def list_runs(self) -> list[RunState]:
         with self._lock:
@@ -529,7 +429,6 @@ class AgentRuntimeRepository:
             raise ValueError("; ".join(validation.errors))
         with self._condition:
             self._replace_state_locked(snapshot)
-            observe_memory_entries(len(self._memory))
             self._persist_locked()
             self._condition.notify_all()
             return self._export_snapshot_locked()
@@ -594,29 +493,6 @@ class AgentRuntimeRepository:
             self._persist_locked()
             return run.model_copy(deep=True)
 
-    def resume_run(self, run_id: str) -> RunState:
-        with self._lock:
-            run = self._require_run(run_id)
-            pending = [
-                approval for approval in run.approvals if approval.status == ApprovalStatus.PENDING
-            ]
-            if pending:
-                self._append_event(
-                    run,
-                    RunEventType.RUN_STATUS_CHANGED,
-                    "承認待ちのため再開できません。",
-                    {"pending_approval_ids": [approval.id for approval in pending]},
-                )
-                self._persist_locked()
-                return run.model_copy(deep=True)
-            if run.status not in {RunStatus.COMPLETED, RunStatus.CANCELLED}:
-                run.status = RunStatus.COMPLETED
-                run.updated_at = _now()
-                self._append_event(run, RunEventType.RUN_COMPLETED, "実行を完了しました。")
-                self._write_run_memory(run)
-                self._persist_locked()
-            return run.model_copy(deep=True)
-
     def decide_approval(self, approval_id: str, request: ApprovalDecisionRequest) -> RunState:
         with self._lock:
             approval = self._approvals.get(approval_id)
@@ -676,30 +552,11 @@ class AgentRuntimeRepository:
                     run.updated_at = _now()
                 self._persist_locked()
                 return run.model_copy(deep=True)
+            # 旧エンジンの Run（#756 で実行を削除）は再開しない。決定だけを記録し、step を閉じる。
+            step.status = StepStatus.CANCELLED
+            step.completed_at = _now()
             self._persist_locked()
-
-        if request.approved:
-            self._execute_approved_step(
-                run_id=approval.run_id,
-                step_id=approval.step_id,
-                approval_id=approval.id,
-            )
-        else:
-            with self._lock:
-                run = self._require_run(approval.run_id)
-                step = self._require_step(run, approval.step_id)
-                step.status = StepStatus.CANCELLED
-                step.completed_at = _now()
-                run.status = RunStatus.COMPLETED
-                run.updated_at = _now()
-                self._append_event(
-                    run,
-                    RunEventType.RUN_COMPLETED,
-                    "承認拒否により実行を終了しました。",
-                )
-                self._write_run_memory(run)
-                self._persist_locked()
-        return self.get_run(approval.run_id)
+            return run.model_copy(deep=True)
 
     # ---- 組み込み Runtime（#754。実行は builtin_runtime、記録はここ） ----
 
@@ -1021,42 +878,16 @@ class AgentRuntimeRepository:
                 del self._agents[agent_id]
             self._persist_locked()
 
-    def add_memory(self, entry: MemoryEntry) -> MemoryEntry:
-        with self._lock:
-            self._memory[entry.id] = entry
-            observe_memory_entries(len(self._memory))
-            self._persist_locked()
-            return entry.model_copy(deep=True)
-
-    def search_memory(self, request: MemorySearchRequest) -> list[MemoryEntry]:
-        query = request.query.lower().strip()
-        with self._lock:
-            entries = list(self._memory.values())
-        if request.kind is not None:
-            entries = [entry for entry in entries if entry.kind == request.kind]
-        if query:
-            entries = [
-                entry
-                for entry in entries
-                if query in entry.content.lower()
-                or any(query in str(value).lower() for value in entry.metadata.values())
-            ]
-        return sorted(entries, key=lambda entry: entry.created_at, reverse=True)[: request.limit]
-
     def _sorted_runs_locked(self) -> list[RunState]:
         return sorted(self._runs.values(), key=lambda run: run.created_at, reverse=True)
 
     def _sorted_agents_locked(self) -> list[AgentProfile]:
         return sorted(self._agents.values(), key=lambda agent: agent.created_at)
 
-    def _sorted_memory_locked(self) -> list[MemoryEntry]:
-        return sorted(self._memory.values(), key=lambda entry: entry.created_at, reverse=True)
-
     def _export_snapshot_locked(self) -> AgentRuntimeSnapshot:
         return AgentRuntimeSnapshot(
             runs=[run.model_copy(deep=True) for run in self._sorted_runs_locked()],
             agents=[agent.model_copy(deep=True) for agent in self._sorted_agents_locked()],
-            memory=[entry.model_copy(deep=True) for entry in self._sorted_memory_locked()],
         )
 
     def _replace_state_locked(self, snapshot: AgentRuntimeSnapshot) -> None:
@@ -1064,7 +895,6 @@ class AgentRuntimeRepository:
         self._agents = {agent.id: _migrate_legacy_agent(agent) for agent in snapshot.agents}
         if "default" not in self._agents:
             self._agents["default"] = _default_agent()
-        self._memory = {entry.id: entry.model_copy(deep=True) for entry in snapshot.memory}
         self._approvals = {
             approval.id: approval for run in self._runs.values() for approval in run.approvals
         }
@@ -1080,7 +910,6 @@ class AgentRuntimeRepository:
             raise RuntimeError(f"agent runtime snapshot is invalid: {self._snapshot_path}") from exc
         with self._lock:
             self._replace_state_locked(snapshot)
-            observe_memory_entries(len(self._memory))
 
     def _persist_locked(self) -> None:
         if self._snapshot_path is None:
@@ -1093,303 +922,6 @@ class AgentRuntimeRepository:
         )
         os.replace(temp_path, self._snapshot_path)
 
-    def _start_run(self, run_id: str) -> None:
-        with self._lock:
-            run = self._require_run(run_id)
-            run.status = RunStatus.RUNNING
-            run.updated_at = _now()
-            self._append_event(run, RunEventType.RUN_STATUS_CHANGED, "実行を開始しました。")
-            self._persist_locked()
-
-        self._continue_run(run_id)
-
-    def _continue_run(self, run_id: str) -> None:
-        with self._lock:
-            run = self._require_run(run_id)
-            if not run.pending_tool_calls:
-                if run.status == RunStatus.RUNNING:
-                    run.status = RunStatus.COMPLETED
-                    run.updated_at = _now()
-                    message = (
-                        "ツール呼び出しなしで実行を完了しました。"
-                        if not run.steps
-                        else "実行を完了しました。"
-                    )
-                    self._append_event(run, RunEventType.RUN_COMPLETED, message)
-                    self._write_run_memory(run)
-                    self._persist_locked()
-                return
-
-        while True:
-            with self._lock:
-                run = self._require_run(run_id)
-                if run.status in {
-                    RunStatus.WAITING_APPROVAL,
-                    RunStatus.FAILED,
-                    RunStatus.CANCELLED,
-                }:
-                    return
-                if not run.pending_tool_calls:
-                    if run.status == RunStatus.RUNNING:
-                        run.status = RunStatus.COMPLETED
-                        run.updated_at = _now()
-                        self._append_event(run, RunEventType.RUN_COMPLETED, "実行を完了しました。")
-                        self._write_run_memory(run)
-                        self._persist_locked()
-                    return
-                call = run.pending_tool_calls.pop(0)
-
-            state = self._execute_tool_step(run_id, call)
-            if state.status in {RunStatus.WAITING_APPROVAL, RunStatus.FAILED, RunStatus.CANCELLED}:
-                return
-
-    def _execute_tool_step(self, run_id: str, call: ToolCall) -> RunState:
-        with self._lock:
-            run = self._require_run(run_id)
-            step = RunStep(
-                run_id=run_id,
-                status=StepStatus.RUNNING,
-                tool_call=call,
-                started_at=_now(),
-            )
-            run.steps.append(step)
-            self._append_event(
-                run,
-                RunEventType.STEP_STARTED,
-                f"ツール {call.name} を開始しました。",
-                {"step_id": step.id, "tool_name": call.name},
-            )
-            context = self._tool_invocation_context_locked(run, call)
-
-        result = tool_registry.invoke(
-            call,
-            policy=_active_tool_policy(),
-            context=context,
-        )
-
-        with self._lock:
-            run = self._require_run(run_id)
-            step = self._require_step(run, step.id)
-            if result.approval_required:
-                safety = runtime_config_store.get_runtime_safety()
-                pending_count = _pending_approval_count(run)
-                if pending_count >= safety.max_pending_approvals_per_run:
-                    failure = ToolResult(
-                        name=call.name,
-                        success=False,
-                        error="pending approval limit exceeded",
-                        error_code="runtime.pending_approval_limit_exceeded",
-                        policy_decision=result.policy_decision,
-                        guardrail_warnings=["runtime.pending_approval_limit_exceeded"],
-                        audit_metadata={
-                            **result.audit_metadata,
-                            "pending_approvals": pending_count,
-                            "max_pending_approvals_per_run": (safety.max_pending_approvals_per_run),
-                        },
-                    )
-                    step.tool_result = failure
-                    step.status = StepStatus.FAILED
-                    step.completed_at = _now()
-                    run.status = RunStatus.FAILED
-                    run.updated_at = _now()
-                    self._append_event(
-                        run,
-                        RunEventType.TOOL_FAILED,
-                        f"ツール {call.name} は承認待ち上限により停止しました。",
-                        {
-                            "step_id": step.id,
-                            "tool_name": call.name,
-                            "error": failure.error,
-                            "error_code": failure.error_code,
-                            "duration_ms": failure.duration_ms,
-                            "audit_metadata": failure.audit_metadata,
-                        },
-                    )
-                    self._write_tool_learning(run, step, failure)
-                    self._write_run_memory(run)
-                    self._persist_locked()
-                    return run.model_copy(deep=True)
-                approval = ApprovalRequest(
-                    run_id=run_id,
-                    step_id=step.id,
-                    tool_call=call,
-                    reason=f"{call.name} は承認が必要です。",
-                )
-                step.tool_result = result
-                step.status = StepStatus.WAITING_APPROVAL
-                step.approval_id = approval.id
-                run.approvals.append(approval)
-                self._approvals[approval.id] = approval
-                run.status = RunStatus.WAITING_APPROVAL
-                run.updated_at = _now()
-                self._append_event(
-                    run,
-                    RunEventType.TOOL_APPROVAL_REQUIRED,
-                    f"ツール {call.name} は承認待ちです。",
-                    {
-                        "approval_id": approval.id,
-                        "step_id": step.id,
-                        "tool_name": call.name,
-                        "policy_decision": result.policy_decision,
-                        "duration_ms": result.duration_ms,
-                        "audit_metadata": result.audit_metadata,
-                    },
-                )
-                self._persist_locked()
-                return run.model_copy(deep=True)
-
-            step.tool_result = result
-            step.completed_at = _now()
-            if result.success:
-                expansion_failure = self._skill_plan_expansion_failure_locked(
-                    run,
-                    step,
-                    result,
-                )
-                if expansion_failure is not None:
-                    self._fail_tool_step_locked(
-                        run,
-                        step,
-                        expansion_failure,
-                        f"Skill {call.name} の計画展開に失敗しました。",
-                    )
-                    self._persist_locked()
-                    return run.model_copy(deep=True)
-                step.status = StepStatus.COMPLETED
-                self._record_tool_success_artifacts(run, step, result)
-                self._append_event(
-                    run,
-                    RunEventType.TOOL_COMPLETED,
-                    f"ツール {call.name} が完了しました。",
-                    {
-                        "step_id": step.id,
-                        "tool_name": call.name,
-                        "output": result.output,
-                        "duration_ms": result.duration_ms,
-                        "guardrail_warnings": result.guardrail_warnings,
-                        "audit_metadata": result.audit_metadata,
-                    },
-                )
-                self._append_guardrail_events(run, step, result)
-                self._maybe_enqueue_planner_continuation_locked(run, step, result)
-            else:
-                step.status = StepStatus.FAILED
-                run.status = RunStatus.FAILED
-                self._append_event(
-                    run,
-                    RunEventType.TOOL_FAILED,
-                    f"ツール {call.name} が失敗しました。",
-                    {
-                        "step_id": step.id,
-                        "tool_name": call.name,
-                        "error": result.error,
-                        "error_code": result.error_code,
-                        "error_details": result.error_details,
-                        "duration_ms": result.duration_ms,
-                        "audit_metadata": result.audit_metadata,
-                    },
-                )
-                self._write_tool_learning(run, step, result)
-                self._write_run_memory(run)
-            run.updated_at = _now()
-            self._persist_locked()
-            return run.model_copy(deep=True)
-
-    def _execute_approved_step(self, *, run_id: str, step_id: str, approval_id: str) -> None:
-        with self._lock:
-            run = self._require_run(run_id)
-            step = self._require_step(run, step_id)
-            if step.tool_call is None:
-                raise RuntimeError("approved step does not have a tool call")
-            call = step.tool_call
-            step.status = StepStatus.RUNNING
-            run.status = RunStatus.RUNNING
-            run.updated_at = _now()
-            self._append_event(
-                run,
-                RunEventType.STEP_STARTED,
-                f"承認済みツール {call.name} を実行します。",
-                {"step_id": step.id, "approval_id": approval_id, "tool_name": call.name},
-            )
-            context = self._tool_invocation_context_locked(
-                run,
-                call,
-                approval_id=approval_id,
-            )
-            self._persist_locked()
-
-        result = tool_registry.invoke(
-            call,
-            policy=_active_tool_policy(),
-            context=context,
-            force=True,
-        )
-
-        with self._lock:
-            run = self._require_run(run_id)
-            step = self._require_step(run, step_id)
-            step.tool_result = result
-            step.completed_at = _now()
-            if result.success:
-                expansion_failure = self._skill_plan_expansion_failure_locked(
-                    run,
-                    step,
-                    result,
-                )
-                if expansion_failure is not None:
-                    self._fail_tool_step_locked(
-                        run,
-                        step,
-                        expansion_failure,
-                        f"Skill {call.name} の計画展開に失敗しました。",
-                    )
-                    self._persist_locked()
-                    return
-                step.status = StepStatus.COMPLETED
-                self._record_tool_success_artifacts(run, step, result)
-                self._append_event(
-                    run,
-                    RunEventType.TOOL_COMPLETED,
-                    f"ツール {call.name} が完了しました。",
-                    {
-                        "step_id": step.id,
-                        "approval_id": approval_id,
-                        "tool_name": call.name,
-                        "output": result.output,
-                        "duration_ms": result.duration_ms,
-                        "guardrail_warnings": result.guardrail_warnings,
-                        "audit_metadata": result.audit_metadata,
-                    },
-                )
-                self._append_guardrail_events(run, step, result)
-                self._maybe_enqueue_planner_continuation_locked(run, step, result)
-            else:
-                step.status = StepStatus.FAILED
-                run.status = RunStatus.FAILED
-                self._append_event(
-                    run,
-                    RunEventType.TOOL_FAILED,
-                    f"ツール {call.name} が失敗しました。",
-                    {
-                        "step_id": step.id,
-                        "approval_id": approval_id,
-                        "tool_name": call.name,
-                        "error": result.error,
-                        "error_code": result.error_code,
-                        "error_details": result.error_details,
-                        "duration_ms": result.duration_ms,
-                        "audit_metadata": result.audit_metadata,
-                    },
-                )
-                self._write_tool_learning(run, step, result)
-                self._write_run_memory(run)
-                self._persist_locked()
-                return
-            run.updated_at = _now()
-            self._persist_locked()
-
-        self._continue_run(run_id)
-
     def _record_tool_success_artifacts(
         self,
         run: RunState,
@@ -1399,12 +931,10 @@ class AgentRuntimeRepository:
         if step.tool_call is None or result.output is None:
             return
         artifact_kind_by_tool = {
-            "agent_skill_run": "skill_plan",
             "external_rag_search": "rag_evidence",
             "external_rag_chat": "rag_evidence",
             "external_nl2sql_query": "structured_table",
             "external_nl2sql_get_job": "structured_table",
-            "sandbox_command_run": "command_output",
         }
         kind = artifact_kind_by_tool.get(step.tool_call.name)
         if kind is None:
@@ -1425,237 +955,6 @@ class AgentRuntimeRepository:
             {"artifact_id": artifact.id, "kind": artifact.kind, "step_id": step.id},
         )
 
-    def _skill_plan_expansion_failure_locked(
-        self,
-        run: RunState,
-        step: RunStep,
-        result: ToolResult,
-    ) -> ToolResult | None:
-        if step.tool_call is None or step.tool_call.name != "agent_skill_run":
-            return None
-        try:
-            planned_calls = self._planned_tool_calls_from_skill_result_locked(
-                run,
-                step,
-                result,
-            )
-        except ValueError as exc:
-            failure = result.model_copy(deep=True)
-            failure.success = False
-            failure.error = str(exc)
-            failure.error_code = "agent_skill.plan_expansion_failed"
-            failure.guardrail_warnings = [
-                *failure.guardrail_warnings,
-                "agent_skill.plan_expansion_failed",
-            ]
-            failure.audit_metadata = {
-                **failure.audit_metadata,
-                "success": False,
-                "error_code": failure.error_code,
-            }
-            return failure
-        if planned_calls:
-            run.pending_tool_calls = [*planned_calls, *run.pending_tool_calls]
-            self._append_event(
-                run,
-                RunEventType.SKILL_PLANNED,
-                "Skill を ToolCall 計画へ展開しました。",
-                {
-                    "step_id": step.id,
-                    "skill_id": result.output.get("skill_id") if result.output else None,
-                    "skill_name": result.output.get("skill_name") if result.output else None,
-                    "planned_tool_calls": [call.model_dump(mode="json") for call in planned_calls],
-                    "planned_tool_call_count": len(planned_calls),
-                },
-            )
-        return None
-
-    def _planned_tool_calls_from_skill_result_locked(
-        self,
-        run: RunState,
-        step: RunStep,
-        result: ToolResult,
-    ) -> list[ToolCall]:
-        output = result.output
-        if output is None:
-            raise ValueError("skill result is missing output")
-        raw_calls = output.get("tool_calls")
-        if not isinstance(raw_calls, list):
-            raise ValueError("skill result must include tool_calls[]")
-        planned_calls: list[ToolCall] = []
-        for raw_call in raw_calls:
-            if not isinstance(raw_call, dict):
-                raise ValueError("skill planned tool call must be an object")
-            try:
-                call = ToolCall.model_validate(raw_call)
-            except ValidationError as exc:
-                raise ValueError("skill planned tool call schema is invalid") from exc
-            if call.name == "agent_skill_run":
-                raise ValueError("nested agent_skill_run is not allowed")
-            if tool_registry.get(call.name) is None:
-                raise ValueError(f"skill planned unknown tool: {call.name}")
-            planned_calls.append(call)
-        self._validate_planned_tool_calls_locked(run, planned_calls)
-        safety = runtime_config_store.get_runtime_safety()
-        total_planned_for_run = len(run.steps) + len(run.pending_tool_calls) + len(planned_calls)
-        if total_planned_for_run > safety.max_tool_calls_per_run:
-            raise ValueError(
-                "skill planned tool call limit exceeded: "
-                f"max_tool_calls_per_run={safety.max_tool_calls_per_run}"
-            )
-        return planned_calls
-
-    def _validate_planned_tool_calls_locked(
-        self,
-        run: RunState,
-        planned_calls: Sequence[ToolCall],
-    ) -> None:
-        agent = self._agents.get(run.agent_id)
-        if agent is None:
-            raise ValueError("agent not found")
-        allowed_tools = set(agent.tool_names)
-        denied_tools = sorted(
-            {call.name for call in planned_calls if call.name not in allowed_tools}
-        )
-        if denied_tools:
-            raise ValueError(f"skill planned tool not allowed for agent: {', '.join(denied_tools)}")
-
-    def _fail_tool_step_locked(
-        self,
-        run: RunState,
-        step: RunStep,
-        failure: ToolResult,
-        message: str,
-    ) -> None:
-        step.tool_result = failure
-        step.status = StepStatus.FAILED
-        step.completed_at = _now()
-        run.status = RunStatus.FAILED
-        run.updated_at = _now()
-        self._append_event(
-            run,
-            RunEventType.TOOL_FAILED,
-            message,
-            {
-                "step_id": step.id,
-                "tool_name": step.tool_call.name if step.tool_call else step.kind,
-                "error": failure.error,
-                "error_code": failure.error_code,
-                "error_details": failure.error_details,
-                "duration_ms": failure.duration_ms,
-                "audit_metadata": failure.audit_metadata,
-            },
-        )
-        self._write_tool_learning(run, step, failure)
-        self._write_run_memory(run)
-
-    def _maybe_enqueue_planner_continuation_locked(
-        self,
-        run: RunState,
-        step: RunStep,
-        result: ToolResult,
-    ) -> None:
-        if run.pending_tool_calls or step.tool_call is None:
-            return
-        if run.metadata.get("_planner_mode") == PlannerMode.OFF.value:
-            return
-        if step.tool_call.name == "agent_skill_run":
-            return
-        planner_metadata = {
-            **run.metadata,
-            "planner_context": self._planner_context_locked(run, step, result),
-        }
-        try:
-            decision = plan_next_step(run.goal, planner_metadata)
-        except Exception as exc:  # noqa: BLE001 - planner 境界では継続不能を event 化する
-            decision = PlannerDecision(
-                planned=False,
-                reason=str(exc),
-                warnings=["planner.continuation_failed"],
-                metadata={"planner_phase": "continue"},
-            )
-            self._append_planner_event_locked(run, decision)
-            return
-
-        if not decision.tool_calls:
-            self._append_planner_event_locked(run, decision)
-            return
-        planned_calls = self._dedupe_planner_tool_calls_locked(run, decision.tool_calls)
-        if len(planned_calls) != len(decision.tool_calls):
-            decision.warnings.append("planner.duplicate_tool_call_suppressed")
-        if not planned_calls:
-            decision.planned = False
-            decision.tool_calls = []
-            self._append_planner_event_locked(run, decision)
-            return
-        try:
-            self._validate_planned_tool_calls_locked(run, planned_calls)
-            safety = runtime_config_store.get_runtime_safety()
-            total_planned_for_run = (
-                len(run.steps) + len(run.pending_tool_calls) + len(planned_calls)
-            )
-            if total_planned_for_run > safety.max_tool_calls_per_run:
-                raise ValueError(
-                    "planner continuation tool call limit exceeded: "
-                    f"max_tool_calls_per_run={safety.max_tool_calls_per_run}"
-                )
-        except ValueError as exc:
-            decision.planned = False
-            decision.tool_calls = []
-            decision.reason = str(exc)
-            decision.warnings.append("planner.continuation_rejected")
-            self._append_planner_event_locked(run, decision)
-            return
-        run.pending_tool_calls = [*planned_calls, *run.pending_tool_calls]
-        decision.planned = True
-        decision.tool_calls = planned_calls
-        self._append_planner_event_locked(run, decision)
-
-    def _planner_context_locked(
-        self,
-        run: RunState,
-        step: RunStep,
-        result: ToolResult,
-    ) -> JsonObject:
-        completed_tool_names = [
-            current.tool_call.name
-            for current in run.steps
-            if current.tool_call is not None and current.status == StepStatus.COMPLETED
-        ]
-        artifact_kinds = [
-            event.payload.get("kind")
-            for event in run.events
-            if event.type == RunEventType.ARTIFACT_CREATED and event.payload.get("kind") is not None
-        ]
-        return {
-            "phase": "continue",
-            "trigger_step_id": step.id,
-            "last_tool_name": step.tool_call.name if step.tool_call else step.kind,
-            "last_tool_success": result.success,
-            "completed_tool_names": completed_tool_names,
-            "tool_call_count": len(run.steps) + len(run.pending_tool_calls),
-            "artifact_kinds": artifact_kinds,
-            "guardrail_warnings": list(result.guardrail_warnings),
-        }
-
-    def _dedupe_planner_tool_calls_locked(
-        self,
-        run: RunState,
-        tool_calls: Sequence[ToolCall],
-    ) -> list[ToolCall]:
-        existing = {
-            _tool_call_signature(step.tool_call) for step in run.steps if step.tool_call is not None
-        }
-        existing.update(_tool_call_signature(call) for call in run.pending_tool_calls)
-        deduped: list[ToolCall] = []
-        for call in tool_calls:
-            signature = _tool_call_signature(call)
-            if signature in existing:
-                continue
-            existing.add(signature)
-            deduped.append(call)
-        return deduped
-
     def _tool_invocation_context_locked(
         self,
         run: RunState,
@@ -1663,7 +962,6 @@ class AgentRuntimeRepository:
         *,
         approval_id: str | None = None,
     ) -> ToolInvocationContext:
-        agent = self._agents.get(run.agent_id)
         # 承認後の再実行もこの context を使うため、承認者ではなく Run の利用者として呼ぶ（#233）。
         return ToolInvocationContext(
             approval_id=approval_id,
@@ -1671,9 +969,6 @@ class AgentRuntimeRepository:
             agent_id=run.agent_id,
             run_id=run.id,
             user_uuid=run.created_by_user_uuid,
-            command_allowed_prefixes=(
-                list(agent.command_allowed_prefixes) if agent is not None else []
-            ),
         )
 
     def _append_guardrail_events(
@@ -1694,7 +989,6 @@ class AgentRuntimeRepository:
                 "warnings": result.guardrail_warnings,
             },
         )
-        self._write_tool_learning(run, step, result)
 
     def _append_event(
         self,
@@ -1713,122 +1007,11 @@ class AgentRuntimeRepository:
         record_runtime_event(event.type.value, {"run_id": run.id, **event.payload})
         self._condition.notify_all()
 
-    def _write_run_memory(self, run: RunState) -> None:
-        if not get_settings().agent_memory_enabled:
-            return
-        if any(
-            entry.kind == MemoryKind.RUN_SUMMARY and entry.metadata.get("run_id") == run.id
-            for entry in self._memory.values()
-        ):
-            return
-        succeeded = sum(1 for step in run.steps if step.status == StepStatus.COMPLETED)
-        failed = sum(1 for step in run.steps if step.status == StepStatus.FAILED)
-        entry = MemoryEntry(
-            kind=MemoryKind.RUN_SUMMARY,
-            content=(
-                f"{run.goal} / status={run.status} / "
-                f"tool_success={succeeded} / tool_failed={failed}"
-            ),
-            metadata={"run_id": run.id, "agent_id": run.agent_id, "status": run.status},
-        )
-        self._memory[entry.id] = entry
-        observe_memory_entries(len(self._memory))
-        self._append_event(
-            run,
-            RunEventType.MEMORY_WRITTEN,
-            "実行サマリーを Agent 内部メモリへ保存しました。",
-            {"memory_id": entry.id, "kind": entry.kind.value},
-        )
-
-    def _write_tool_learning(self, run: RunState, step: RunStep, result: ToolResult) -> None:
-        if not get_settings().agent_memory_enabled or step.tool_call is None:
-            return
-        if any(
-            entry.kind == MemoryKind.TOOL_LEARNING and entry.metadata.get("step_id") == step.id
-            for entry in self._memory.values()
-        ):
-            return
-        status = "success" if result.success else "failed"
-        warnings = ", ".join(result.guardrail_warnings)
-        reason = warnings if warnings else result.error_code or result.error or status
-        entry = MemoryEntry(
-            kind=MemoryKind.TOOL_LEARNING,
-            content=f"{step.tool_call.name} / {status} / {reason}",
-            metadata={
-                "run_id": run.id,
-                "step_id": step.id,
-                "tool_name": step.tool_call.name,
-                "status": status,
-                "guardrail_warnings": result.guardrail_warnings,
-                "error_code": result.error_code,
-                "error": result.error,
-            },
-        )
-        self._memory[entry.id] = entry
-        observe_memory_entries(len(self._memory))
-        self._append_event(
-            run,
-            RunEventType.MEMORY_WRITTEN,
-            "ツール経験を Agent 内部メモリへ保存しました。",
-            {"memory_id": entry.id, "kind": entry.kind.value, "step_id": step.id},
-        )
-
     def _require_run(self, run_id: str) -> RunState:
         run = self._runs.get(run_id)
         if run is None:
             raise KeyError(run_id)
         return run
-
-    def _validate_run_agent(self, request: RunCreateRequest) -> None:
-        agent = self._agents.get(request.agent_id)
-        if agent is None:
-            raise KeyError(request.agent_id)
-        if not agent.enabled:
-            raise ValueError("agent disabled")
-        safety = runtime_config_store.get_runtime_safety()
-        if len(request.tool_calls) > safety.max_tool_calls_per_run:
-            raise ValueError(
-                f"tool call limit exceeded: max_tool_calls_per_run={safety.max_tool_calls_per_run}"
-            )
-        allowed_tools = set(agent.tool_names)
-        denied_tools = sorted(
-            {call.name for call in request.tool_calls if call.name not in allowed_tools}
-        )
-        if denied_tools:
-            raise ValueError(f"tool not allowed for agent: {', '.join(denied_tools)}")
-
-    def _prepare_run_request_locked(
-        self,
-        request: RunCreateRequest,
-    ) -> tuple[RunCreateRequest, PlannerDecision | None]:
-        if request.tool_calls or request.planner_mode == PlannerMode.OFF:
-            return request, None
-        decision = plan_run_goal(request.goal, request.metadata)
-        if not decision.tool_calls:
-            return request, decision
-        planned_request = request.model_copy(update={"tool_calls": decision.tool_calls})
-        return planned_request, decision
-
-    def _append_planner_event_locked(
-        self,
-        run: RunState,
-        decision: PlannerDecision | None,
-    ) -> None:
-        if decision is None:
-            return
-        if not decision.planned and not decision.warnings:
-            return
-        message = (
-            "Agent planner が ToolCall を生成しました。"
-            if decision.planned
-            else "Agent planner は実行可能な ToolCall を生成しませんでした。"
-        )
-        self._append_event(
-            run,
-            RunEventType.PLANNER_COMPLETED,
-            message,
-            decision.model_dump(mode="json"),
-        )
 
     @staticmethod
     def _validate_agent_tools(tool_names: list[str]) -> None:
@@ -1951,7 +1134,6 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
             )
         with self._lock:
             self._replace_state_locked(snapshot)
-            observe_memory_entries(len(self._memory))
 
     def _persist_locked(self) -> None:
         snapshot_json = self._export_snapshot_locked().model_dump_json()
@@ -2291,15 +1473,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
                 created_at TIMESTAMP WITH TIME ZONE NOT NULL
             )
             """,
-            f"""
-            CREATE TABLE {tables["memory"]} (
-                memory_id VARCHAR2(128) PRIMARY KEY,
-                kind VARCHAR2(64) NOT NULL,
-                content CLOB NOT NULL,
-                metadata_json CLOB,
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL
-            )
-            """,
         ]
 
     def _oracle_projection_index_ddls(self) -> list[str]:
@@ -2332,10 +1505,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
             CREATE INDEX {prefix}_ARTIFACTS_RUN_KIND_IX
             ON {tables["artifacts"]} (run_id, kind, created_at)
             """,
-            f"""
-            CREATE INDEX {prefix}_MEMORY_KIND_CREATED_IX
-            ON {tables["memory"]} (kind, created_at)
-            """,
         ]
 
     def _replace_projection_cursor(
@@ -2346,7 +1515,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
         for table in reversed(list(self._oracle_projection_tables.values())):
             cursor.execute(f"DELETE FROM {table}")
         self._insert_runs(cursor, snapshot.runs)
-        self._insert_memory(cursor, snapshot.memory)
 
     def _upsert_projection_cursor(
         self,
@@ -2354,7 +1522,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
         snapshot: AgentRuntimeSnapshot,
     ) -> None:
         self._upsert_runs(cursor, snapshot.runs)
-        self._upsert_memory(cursor, snapshot.memory)
 
     def _apply_projection_retention_cursor(self, cursor: Any) -> None:
         if self._oracle_projection_retention_days <= 0:
@@ -2367,7 +1534,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
             (tables["events"], "created_at"),
             (tables["approvals"], "created_at"),
             (tables["steps"], "completed_at"),
-            (tables["memory"], "created_at"),
             (tables["runs"], "created_at"),
         ):
             cursor.execute(
@@ -2558,32 +1724,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
                 created_at=artifact.created_at,
             )
 
-    def _insert_memory(self, cursor: Any, memory: list[MemoryEntry]) -> None:
-        table = self._oracle_projection_tables["memory"]
-        for entry in memory:
-            cursor.execute(
-                f"""
-                INSERT INTO {table} (
-                    memory_id,
-                    kind,
-                    content,
-                    metadata_json,
-                    created_at
-                ) VALUES (
-                    :memory_id,
-                    :kind,
-                    :content,
-                    :metadata_json,
-                    :created_at
-                )
-                """,
-                memory_id=entry.id,
-                kind=entry.kind.value,
-                content=entry.content,
-                metadata_json=_json_dump(entry.metadata),
-                created_at=entry.created_at,
-            )
-
     def _upsert_runs(self, cursor: Any, runs: list[RunState]) -> None:
         tables = self._oracle_projection_tables
         for run in runs:
@@ -2682,22 +1822,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
                     "kind": artifact.kind,
                     "content_json": _json_dump(artifact.content),
                     "created_at": artifact.created_at,
-                },
-            )
-
-    def _upsert_memory(self, cursor: Any, memory: list[MemoryEntry]) -> None:
-        table = self._oracle_projection_tables["memory"]
-        for entry in memory:
-            _merge_projection_row(
-                cursor,
-                table=table,
-                key_column="memory_id",
-                values={
-                    "memory_id": entry.id,
-                    "kind": entry.kind.value,
-                    "content": entry.content,
-                    "metadata_json": _json_dump(entry.metadata),
-                    "created_at": entry.created_at,
                 },
             )
 
@@ -2822,7 +1946,6 @@ def _oracle_projection_tables(prefix: str) -> dict[str, str]:
         "steps": "STEPS",
         "approvals": "APPROVALS",
         "artifacts": "ARTIFACTS",
-        "memory": "MEMORY",
     }
     return {
         key: _validate_oracle_identifier(f"{prefix}_{suffix}") for key, suffix in suffixes.items()
@@ -2908,8 +2031,7 @@ def _json_dump(value: JsonObject | list[JsonObject]) -> str:
 
 
 def _maybe_externalize_artifact_content(run_id: str, artifact: Artifact) -> Artifact:
-    command_policy = runtime_config_store.get_command_policy()
-    backend = command_policy.artifact_storage_backend.strip().lower()
+    backend = get_settings().agent_artifact_storage_backend.strip().lower()
     if backend in {"", "inline"}:
         return artifact
     if artifact.kind != "command_output":
@@ -2996,8 +2118,7 @@ def _read_filesystem_artifact_content(content_ref: ArtifactContentRef) -> JsonOb
 
 
 def _artifact_storage_root() -> Path:
-    command_policy = runtime_config_store.get_command_policy()
-    return Path(command_policy.artifact_storage_path).expanduser().resolve()
+    return Path(get_settings().agent_artifact_storage_path).expanduser().resolve()
 
 
 def _artifact_summary_content(content: JsonObject, content_ref: ArtifactContentRef) -> JsonObject:
@@ -3208,7 +2329,6 @@ def _validate_snapshot(snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshotVa
     summary = AgentRuntimeSnapshotSummary(
         runs=len(snapshot.runs),
         agents=len(snapshot.agents),
-        memory=len(snapshot.memory),
         events=sum(len(run.events) for run in snapshot.runs),
         steps=sum(len(run.steps) for run in snapshot.runs),
         approvals=sum(len(run.approvals) for run in snapshot.runs),
@@ -3226,7 +2346,6 @@ def _validate_snapshot(snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshotVa
 
     _append_duplicate_errors("run", [run.id for run in snapshot.runs], errors)
     _append_duplicate_errors("agent", [agent.id for agent in snapshot.agents], errors)
-    _append_duplicate_errors("memory", [entry.id for entry in snapshot.memory], errors)
     event_ids = [event.id for run in snapshot.runs for event in run.events]
     artifact_ids = [artifact.id for run in snapshot.runs for artifact in run.artifacts]
     _append_duplicate_errors("event", event_ids, errors)
@@ -3364,7 +2483,6 @@ _LEGACY_TOOL_SKILLS: dict[str, str] = {
     "external_nl2sql_query": "structured_data_query",
     "external_mcp_list_tools": "mcp_tool_discovery",
     "external_mcp_call": "mcp_tool_call",
-    "sandbox_command_run": "workspace_command",
 }
 
 

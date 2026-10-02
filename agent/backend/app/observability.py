@@ -23,7 +23,6 @@ import httpx
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     Counter,
-    Gauge,
     Histogram,
     generate_latest,
 )
@@ -80,15 +79,6 @@ ARTIFACTS_TOTAL = Counter(
     "agent_artifacts_total",
     "Agent artifact count.",
     ("kind",),
-)
-MEMORY_WRITES_TOTAL = Counter(
-    "agent_memory_writes_total",
-    "Agent memory write count.",
-    ("kind",),
-)
-MEMORY_ENTRIES_CURRENT = Gauge(
-    "agent_memory_entries_current",
-    "Current in-process Agent memory entries.",
 )
 
 
@@ -214,8 +204,6 @@ def record_runtime_event(event_type: str, payload: JsonObject) -> None:
             GUARDRAIL_WARNINGS_TOTAL.labels(code=warning).inc()
     elif event_type == "artifact.created":
         ARTIFACTS_TOTAL.labels(kind=_payload_text(payload, "kind")).inc()
-    elif event_type == "memory.written":
-        MEMORY_WRITES_TOTAL.labels(kind=_payload_text(payload, "kind")).inc()
     _append_trace_event(event_type, payload)
 
 
@@ -352,10 +340,6 @@ def trace_exporter_status() -> TraceExporterStatus:
     status.retry_worker_running = trace_export_retry_worker_running()
     status.retry_worker_interval_seconds = _trace_retry_worker_interval_seconds()
     return status
-
-
-def observe_memory_entries(count: int) -> None:
-    MEMORY_ENTRIES_CURRENT.set(count)
 
 
 def observe_request_start() -> float:

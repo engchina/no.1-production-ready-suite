@@ -8,15 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import resource
-import shlex
-import subprocess  # nosec B404
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
-from pathlib import Path
 from time import monotonic, perf_counter
 from typing import Any, Literal
 from uuid import uuid4
@@ -26,11 +21,9 @@ from pr_system_settings.auth.errors import SecurityApiError
 from pr_system_settings.auth.service_token import issue_service_token
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.features.agent.config import CommandPolicyRuntimeConfig, runtime_config_store
+from app.features.agent.config import runtime_config_store
 from app.features.agent.skills import (
     AgentSkillListOutput,
-    AgentSkillPlanOutput,
-    AgentSkillRunInput,
     skill_registry,
 )
 from app.settings import get_settings
@@ -238,26 +231,6 @@ class JsonRpcResponse(BaseModel):
     error: JsonObject | None = None
 
 
-class SandboxCommandInput(BaseModel):
-    command: list[str] = Field(min_length=1, max_length=32)
-    cwd: str | None = None
-    timeout_seconds: float | None = Field(default=None, ge=0.1, le=300)
-    output_limit_bytes: int | None = Field(default=None, ge=100, le=200_000)
-    trace_id: str | None = None
-
-
-class SandboxCommandOutput(BaseModel):
-    command: list[str]
-    cwd: str
-    exit_code: int | None
-    stdout: str
-    stderr: str
-    duration_ms: int
-    timed_out: bool = False
-    truncated: bool = False
-    metadata: JsonObject = Field(default_factory=dict)
-
-
 class ToolInvocationContext(BaseModel):
     approval_id: str | None = None
     trace_id: str | None = None
@@ -267,7 +240,6 @@ class ToolInvocationContext(BaseModel):
     # サービス利用者で呼ぶ。
     run_id: str | None = None
     user_uuid: str | None = None
-    command_allowed_prefixes: list[str] = Field(default_factory=list)
 
 
 ToolHandler = Callable[[JsonObject, ToolInvocationContext], JsonObject]
@@ -1077,33 +1049,6 @@ def _agent_skill_list(_arguments: JsonObject, _context: ToolInvocationContext) -
     ).model_dump()
 
 
-def _agent_skill_run(arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
-    try:
-        request = AgentSkillRunInput.model_validate(arguments)
-    except ValidationError as exc:
-        raise ExternalToolError(
-            "agent_skill.invalid_request",
-            "Agent skill request schema is invalid",
-            {"errors": _validation_errors(exc)},
-        ) from exc
-    if request.trace_id is None:
-        request.trace_id = context.trace_id
-    try:
-        return skill_registry.plan(request).model_dump()
-    except KeyError as exc:
-        raise ExternalToolError(
-            "agent_skill.not_found",
-            "Agent skill was not found",
-            {"skill_id": request.skill_id},
-        ) from exc
-    except ValueError as exc:
-        raise ExternalToolError(
-            "agent_skill.disabled",
-            str(exc),
-            {"skill_id": request.skill_id},
-        ) from exc
-
-
 _SENSITIVE_KEY_PATTERN = re.compile(
     r"(password|passwd|secret|token|api[_-]?key|credential|authorization|access[_-]?key)",
     re.IGNORECASE,
@@ -1545,270 +1490,6 @@ def _external_mcp_client(server_id: str | None = None) -> ExternalMcpClient:
     )
 
 
-def _sandbox_command_run(arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
-    command_policy = runtime_config_store.get_command_policy()
-    if not command_policy.enabled:
-        raise ExternalToolError(
-            "sandbox_command.disabled",
-            "sandbox command tool is disabled",
-        )
-    try:
-        request = SandboxCommandInput.model_validate(arguments)
-    except ValidationError as exc:
-        raise ExternalToolError(
-            "sandbox_command.invalid_request",
-            "sandbox command request schema is invalid",
-            {"errors": _validation_errors(exc)},
-        ) from exc
-    if request.trace_id is None:
-        request.trace_id = context.trace_id
-    root = Path(command_policy.workspace_root).resolve()
-    cwd = _resolve_command_cwd(root, request.cwd)
-    raw_allowed_prefixes = (
-        ",".join(context.command_allowed_prefixes)
-        if context.command_allowed_prefixes
-        else ",".join(command_policy.allowed_prefixes)
-    )
-    command_policy_source = "agent" if context.command_allowed_prefixes else "global"
-    allowed_prefixes = _command_allowed_prefixes(raw_allowed_prefixes)
-    if not _command_matches_allowed_prefix(request.command, allowed_prefixes):
-        raise ExternalToolError(
-            "sandbox_command.prefix_not_allowed",
-            "command prefix is not allowed",
-            {
-                "command": request.command,
-                "allowed_prefixes": allowed_prefixes,
-                "command_policy_source": command_policy_source,
-                "agent_id": context.agent_id,
-                "trace_id": request.trace_id,
-            },
-        )
-    timeout_seconds = min(
-        request.timeout_seconds or command_policy.default_timeout_seconds,
-        command_policy.max_timeout_seconds,
-    )
-    output_limit = min(
-        request.output_limit_bytes or command_policy.output_limit_bytes,
-        command_policy.output_limit_bytes,
-    )
-    execution_command = _sandbox_execution_command(request.command, root, cwd, command_policy)
-    execution_cwd = root if command_policy.isolation_mode == "container" else cwd
-    started = perf_counter()
-    try:
-        completed = subprocess.run(  # nosec B603
-            execution_command,
-            cwd=str(execution_cwd),
-            env=_sandbox_command_env(command_policy),
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            shell=False,
-            check=False,
-            start_new_session=command_policy.start_new_session,
-            preexec_fn=_sandbox_command_preexec(command_policy, timeout_seconds),
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout, stdout_truncated = _truncate_output(exc.stdout or "", output_limit)
-        stderr, stderr_truncated = _truncate_output(exc.stderr or "", output_limit)
-        return SandboxCommandOutput(
-            command=request.command,
-            cwd=str(cwd),
-            exit_code=None,
-            stdout=stdout,
-            stderr=stderr,
-            duration_ms=max(0, round((perf_counter() - started) * 1000)),
-            timed_out=True,
-            truncated=stdout_truncated or stderr_truncated,
-            metadata={
-                "trace_id": request.trace_id,
-                "timeout_seconds": timeout_seconds,
-                "workspace_root": str(root),
-                "agent_id": context.agent_id,
-                "command_policy_source": command_policy_source,
-                "sanitized_env_enabled": command_policy.sanitized_env_enabled,
-                "resource_limits": _sandbox_command_resource_limits(command_policy),
-                "isolation_mode": command_policy.isolation_mode,
-            },
-        ).model_dump()
-    stdout, stdout_truncated = _truncate_output(completed.stdout, output_limit)
-    stderr, stderr_truncated = _truncate_output(completed.stderr, output_limit)
-    return SandboxCommandOutput(
-        command=request.command,
-        cwd=str(cwd),
-        exit_code=completed.returncode,
-        stdout=stdout,
-        stderr=stderr,
-        duration_ms=max(0, round((perf_counter() - started) * 1000)),
-        timed_out=False,
-        truncated=stdout_truncated or stderr_truncated,
-        metadata={
-            "trace_id": request.trace_id,
-            "timeout_seconds": timeout_seconds,
-            "workspace_root": str(root),
-            "agent_id": context.agent_id,
-            "command_policy_source": command_policy_source,
-            "sanitized_env_enabled": command_policy.sanitized_env_enabled,
-            "resource_limits": _sandbox_command_resource_limits(command_policy),
-            "isolation_mode": command_policy.isolation_mode,
-        },
-    ).model_dump()
-
-
-def _sandbox_execution_command(
-    command: list[str],
-    root: Path,
-    cwd: Path,
-    command_policy: CommandPolicyRuntimeConfig,
-) -> list[str]:
-    isolation_mode = command_policy.isolation_mode.strip().lower()
-    if isolation_mode == "process":
-        return command
-    if isolation_mode != "container":
-        raise ExternalToolError(
-            "sandbox_command.invalid_isolation_mode",
-            "sandbox command isolation mode must be process or container",
-            {"isolation_mode": command_policy.isolation_mode},
-        )
-    if not command_policy.container_image:
-        raise ExternalToolError(
-            "sandbox_command.container_image_required",
-            "container isolation requires a container image",
-        )
-    relative_cwd = cwd.relative_to(root)
-    container_cwd = "/workspace"
-    if str(relative_cwd) != ".":
-        container_cwd = f"/workspace/{relative_cwd.as_posix()}"
-    docker_command = [
-        "docker",
-        "run",
-        "--rm",
-        "--network",
-        command_policy.container_network or "none",
-    ]
-    for security_opt in command_policy.container_security_opts:
-        docker_command.extend(["--security-opt", security_opt])
-    if command_policy.container_userns:
-        docker_command.extend(["--userns", command_policy.container_userns])
-    if command_policy.container_user:
-        docker_command.extend(["--user", command_policy.container_user])
-    docker_command.extend(
-        [
-            "-v",
-            f"{root}:/workspace:rw",
-            "-w",
-            container_cwd,
-            command_policy.container_image,
-            *command,
-        ]
-    )
-    return docker_command
-
-
-def _sandbox_command_env(command_policy: CommandPolicyRuntimeConfig) -> dict[str, str] | None:
-    if not command_policy.sanitized_env_enabled:
-        return None
-    sanitized = {
-        name: os.environ[name]
-        for name in command_policy.env_allowlist
-        if name in os.environ and name
-    }
-    sanitized.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
-    return sanitized
-
-
-def _sandbox_command_preexec(
-    command_policy: CommandPolicyRuntimeConfig,
-    timeout_seconds: float,
-) -> Callable[[], None]:
-    def apply_limits() -> None:
-        cpu_seconds = max(1, int(timeout_seconds) + 1)
-        _set_resource_limit(resource.RLIMIT_CPU, cpu_seconds)
-        if command_policy.max_memory_mb > 0:
-            _set_resource_limit(
-                resource.RLIMIT_AS,
-                command_policy.max_memory_mb * 1024 * 1024,
-            )
-        if command_policy.max_open_files > 0:
-            _set_resource_limit(resource.RLIMIT_NOFILE, command_policy.max_open_files)
-
-    return apply_limits
-
-
-def _set_resource_limit(resource_kind: int, soft_limit: int) -> None:
-    try:
-        _current_soft, hard_limit = resource.getrlimit(resource_kind)
-        effective_soft_limit = soft_limit
-        if hard_limit != resource.RLIM_INFINITY:
-            effective_soft_limit = min(effective_soft_limit, hard_limit)
-        resource.setrlimit(resource_kind, (effective_soft_limit, hard_limit))
-    except (OSError, ValueError):
-        return
-
-
-def _sandbox_command_resource_limits(
-    command_policy: CommandPolicyRuntimeConfig,
-) -> JsonObject:
-    return {
-        "max_memory_mb": command_policy.max_memory_mb,
-        "max_open_files": command_policy.max_open_files,
-        "start_new_session": command_policy.start_new_session,
-    }
-
-
-def _resolve_command_cwd(root: Path, cwd: str | None) -> Path:
-    if cwd is None:
-        resolved = root
-    elif Path(cwd).is_absolute():
-        resolved = Path(cwd).resolve()
-    else:
-        resolved = (root / cwd).resolve()
-    if not _path_is_within(resolved, root):
-        raise ExternalToolError(
-            "sandbox_command.cwd_outside_workspace",
-            "command cwd must stay within workspace root",
-            {"cwd": str(resolved), "workspace_root": str(root)},
-        )
-    return resolved
-
-
-def _path_is_within(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    return True
-
-
-def _command_allowed_prefixes(raw_prefixes: str) -> list[list[str]]:
-    prefixes: list[list[str]] = []
-    for raw_prefix in raw_prefixes.split(","):
-        stripped = raw_prefix.strip()
-        if not stripped:
-            continue
-        tokens = shlex.split(stripped)
-        if tokens:
-            prefixes.append(tokens)
-    return prefixes
-
-
-def _command_matches_allowed_prefix(command: list[str], prefixes: list[list[str]]) -> bool:
-    if not prefixes:
-        return False
-    for prefix in prefixes:
-        if len(command) >= len(prefix) and command[: len(prefix)] == prefix:
-            return True
-    return False
-
-
-def _truncate_output(value: object, limit: int) -> tuple[str, bool]:
-    text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else str(value)
-    encoded = text.encode("utf-8")
-    if len(encoded) <= limit:
-        return text, False
-    truncated = encoded[:limit].decode("utf-8", errors="ignore")
-    return f"{truncated}\n...[truncated]", True
-
-
 class ToolsData(BaseModel):
     tools: list[str]
 
@@ -1855,22 +1536,6 @@ tool_registry.register(
         audit_tags=["agent", "skill", "discovery"],
     ),
     _agent_skill_list,
-)
-tool_registry.register(
-    ToolDefinition(
-        name="agent_skill_run",
-        description=(
-            "指定 Skill を標準 ToolCall 計画へ展開する。実行は Runtime の通常ステップで行う。"
-        ),
-        input_schema=_schema(AgentSkillRunInput),
-        output_schema=_schema(AgentSkillPlanOutput),
-        permission_level=ToolPermissionLevel.READ,
-        side_effects=False,
-        timeout_seconds=1.0,
-        max_retries=0,
-        audit_tags=["agent", "skill", "planner"],
-    ),
-    _agent_skill_run,
 )
 # RAG / NL2SQL の MCP のツール（#233）。LLM を使うツールは 502 / 504・timeout で再試行しない
 # （`McpSession` の idempotent=False）。max_retries は 429 / 503・接続失敗の再試行回数。
@@ -1984,18 +1649,4 @@ tool_registry.register(
         audit_tags=["external", "mcp", "tool-discovery"],
     ),
     _external_mcp_list_tools,
-)
-tool_registry.register(
-    ToolDefinition(
-        name="sandbox_command_run",
-        description="許可済み prefix のコマンドを workspace 内で shell なしに実行する。",
-        input_schema=_schema(SandboxCommandInput),
-        output_schema=_schema(SandboxCommandOutput),
-        permission_level=ToolPermissionLevel.SENSITIVE,
-        side_effects=True,
-        timeout_seconds=get_settings().agent_command_default_timeout_seconds,
-        max_retries=0,
-        audit_tags=["command", "sandbox", "side-effect"],
-    ),
-    _sandbox_command_run,
 )

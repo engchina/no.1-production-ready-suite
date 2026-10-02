@@ -60,11 +60,12 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
 - UI、エラー、通知、LLM 指示の第一言語は日本語。文言は i18n 経由。
 - 日本語フォントは `"Noto Sans JP", "Roboto", system-ui, sans-serif`、本文 14px。
 - ナビは「業務 Agent / Skill / Runtime / Run / 承認・監査 / Marketplace」を主要導線とする。
-  Plugin、Tools、Planner、Memory を独立ナビに戻さない。
+  Plugin、Tools を独立ナビに戻さない（旧エンジンの Planner・Memory は #756 で削除した）。
 - 設定は2セクションに分ける。**運用設定**：システムテーブル（先頭。RAG / NL2SQL と同じ。#751）/ Agent 接続設定 / 外部 RAG / 外部 NL2SQL / 外部 MCP /
   Control Plane バックアップ（Agent 固有）。**システム設定**：OCI 認証 / アップロード保存先 / モデル /
   データベース / 外観（3製品で共通。画面と API は platform の共有パッケージ）。
-  ツール権限 / Command Policy / Runtime Safety はナビに出さない（Control Plane 化で外した方針を維持）。
+  ツール権限はナビに出さない（Control Plane 化で外した方針を維持）。Command Policy・Runtime Safety の画面と
+  コマンド実行ツール（`sandbox_command_run`）は #756 で削除した。
 - ログインと権限（#215）: 共通認証（`AGENT_AUTH_MODE=production`）。製品固有の権限管理は「セキュリティ設定」
   （権限管理）。並びは 3 製品で同じ「セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定」（#658）。
   メニュー権限は `menu.*`、実データの閲覧・操作は capability（`agent.runs.view` / `agent.runs.operate` /
@@ -92,9 +93,10 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
 
 - Snapshot 正式版は `agent-control-plane.snapshot.v2`。
 - v1 `tool_names` は Skill を安全に推定する。変換不能 Agent は `migration_required=true`、無効。
-- v2 `POST /api/runs` の `tool_calls` は `422`。Run は組み込み Runtime で実行する（Binding は無い。#754）。
-- 移行リリース中だけ `X-Agent-API-Version: 1` を明示した旧 Run に deprecation/sunset header を
-  返す。新 UI と新規テストで v1 を使わない。
+- `POST /api/runs` は `agent_id` と `goal` だけを受け取り、組み込み Runtime で実行する（Binding は無い。#754）。
+  旧エンジン（v1 の Run・`tool_calls`・planner・Memory・`X-Agent-API-Version: 1`）は #756 で削除した。
+- Skill は instructions と MCP ツールの許可リスト（`mcp_requirements`）だけを持つ。ToolCall のテンプレート
+  （`tool_calls`）と `POST /api/skills/plan`・`agent_skill_run` は #756 で削除した。
 
 ## セキュリティ
 

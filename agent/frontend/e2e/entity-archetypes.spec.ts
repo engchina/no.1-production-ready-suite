@@ -197,7 +197,6 @@ for (const viewport of VIEWPORTS) {
         instructions: "",
         mcp_requirements: [],
         resource_ids: [],
-        tool_calls: [],
         enabled: true,
         tags: [],
         source: "runtime",
@@ -227,21 +226,12 @@ for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
     });
 
-    test("Run / 承認 / メモリ / ツールは FixedSplitPane で一覧と詳細を並べる", async ({ page, mockApi }) => {
+    test("Run / 承認 / ツールは FixedSplitPane で一覧と詳細を並べる", async ({ page, mockApi }) => {
       seedRun(mockApi, "run-e2e-1", "一つ目の目標");
       seedRun(mockApi, "run-e2e-2", "二つ目の目標", [approval("approval-e2e-1", "external_rag_search", "run-e2e-2")]);
-      mockApi.state.memory.push({
-        id: "memory-e2e-1",
-        kind: "note",
-        content: "学習メモの内容",
-        metadata: { source: "e2e" },
-        created_at: MOCK_NOW,
-      });
-
       for (const [path, splitId] of [
         ["/runs", "runs-list"],
         ["/approvals", "approvals-list"],
-        ["/memory", "memory-list"],
         ["/tools", "tools-list"],
       ] as const) {
         await page.goto(path);
@@ -312,38 +302,32 @@ for (const viewport of VIEWPORTS) {
       await expect(first).toHaveAttribute("aria-current", "true");
       await expect(page.getByTestId("run-row-run-e2e-1")).toHaveAttribute("aria-current", "true");
 
-      // 長いメモリは 2 行で切り詰め（旧: 80 文字で「…」）、キーボードのフォーカスで Tooltip を出す
+      // 長い目標は 2 行で切り詰め、キーボードのフォーカスで Tooltip を出す
       // （Tooltip は短い文の部品なので先頭 120 文字まで。全文は右の詳細）。
-      const longContent = `長い学習メモ${"の本文".repeat(60)}`;
-      mockApi.state.memory.push({
-        id: "memory-e2e-long",
-        kind: "note",
-        content: longContent,
-        metadata: {},
-        created_at: MOCK_NOW,
-      });
-      await page.goto("/memory");
-      const memoryButton = page.locator("button[data-row-title-button]").filter({ hasText: "長い学習メモ" });
-      await expect(memoryButton).toBeVisible();
-      const clamp = await memoryButton.locator("span").first().evaluate((node) => ({
+      const longContent = `長い目標${"の本文".repeat(60)}`;
+      seedRun(mockApi, "run-e2e-long", longContent);
+      await page.goto("/runs");
+      const longTitleButton = page.locator("button[data-row-title-button]").filter({ hasText: "長い目標" });
+      await expect(longTitleButton).toBeVisible();
+      const clamp = await longTitleButton.locator("span").first().evaluate((node) => ({
         clamp: getComputedStyle(node).webkitLineClamp,
         clamped: node.scrollHeight - node.clientHeight > 1,
       }));
       expect(clamp).toEqual({ clamp: "2", clamped: true });
       // キーボードのフォーカス（:focus-visible）で出すため、Tab で題名へ移る。
-      await memoryButton.focus();
+      await longTitleButton.focus();
       await page.keyboard.press("Shift+Tab");
       await page.keyboard.press("Tab");
-      await expect(memoryButton).toBeFocused();
+      await expect(longTitleButton).toBeFocused();
       const tooltip = page.locator('[role="tooltip"]:not([hidden])');
       await expect(tooltip).toBeVisible();
       await expect(tooltip).toHaveText(`${Array.from(longContent).slice(0, 120).join("")}…`);
       await expect(tooltip).toHaveAttribute("aria-hidden", "true");
-      await expect(memoryButton).not.toHaveAttribute("aria-describedby", /.*/);
+      await expect(longTitleButton).not.toHaveAttribute("aria-describedby", /.*/);
       await page.keyboard.press("Escape");
       await expect(tooltip).toBeHidden();
       await expectNoHorizontalOverflow(page);
-      await page.screenshot({ path: testInfo.outputPath(`memory-row-title-${viewport.name}.png`), fullPage: true });
+      await page.screenshot({ path: testInfo.outputPath(`run-row-title-${viewport.name}.png`), fullPage: true });
     });
 
     test("承認は行メニューから確認して判断し、詳細に引数を出す", async ({ page, mockApi }) => {

@@ -115,17 +115,17 @@ for (const viewport of VIEWPORTS) {
     });
 
     test("設定を保存すると基準が更新され、確認なしで移動できる", async ({ page }) => {
-      await page.goto("/settings/runtime-safety");
-      await expect(page.getByRole("heading", { name: "Runtime Safety", level: 1 })).toBeVisible();
-      await page.locator("#runtime-safety-max-tool-calls").fill("7");
+      await page.goto("/settings/tool-policy");
+      await expect(page.getByRole("heading", { name: "ツール権限", level: 1 })).toBeVisible();
+      await chooseSelectFieldOption(page.locator("#tool-policy-default-mode"), "deny");
       await expect.poll(() => beforeUnloadBlocks(page)).toBe(true);
 
       await page.getByRole("button", { name: "保存", exact: true }).click();
       await expect(page.getByText("設定を保存しました")).toBeVisible();
       await expect.poll(() => beforeUnloadBlocks(page)).toBe(false);
 
-      await (await sidebarLink(page, "/settings/external-nl2sql")).click();
-      await expect(page).toHaveURL(/\/settings\/external-nl2sql$/);
+      await (await sidebarLink(page, "/runs")).click();
+      await expect(page).toHaveURL(/\/runs$/);
       await expect(page.getByText("変更を破棄しますか")).toHaveCount(0);
     });
 
@@ -220,19 +220,14 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
     });
 
-    test("Run の目標とメモリの検索語は残り、確認語は移動で解除される", async ({ page }) => {
+    test("Run の目標は残り、確認語は移動で解除される", async ({ page }) => {
       await page.goto("/runs");
       await page.locator("#run-goal").fill("下書きの目標");
-      await page.goto("/memory");
-      await page.locator("#memory-search").fill("学習メモ");
-      // 検索語は入力が止まってから（Enter ならすぐ）確定して作業状態に残す（SearchField。#535）。
-      await page.locator("#memory-search").press("Enter");
+      await page.goto("/skills");
       await (await sidebarLink(page, "/runs")).click();
       await expect(page.locator("#run-goal")).toHaveValue("下書きの目標");
       await page.reload();
       await expect(page.locator("#run-goal")).toHaveValue("下書きの目標");
-      await page.goto("/memory");
-      await expect(page.locator("#memory-search")).toHaveValue("学習メモ");
 
       // 置換の確認語は保存も復元もしない。
       await page.goto("/settings/runtime-snapshot");
@@ -252,7 +247,6 @@ for (const viewport of VIEWPORTS) {
       );
       // owner は作業状態の持ち主（ログイン中の利用者）。利用者が変わったら作業状態を消すために使う（#215）。
       expect(stored.sort()).toEqual([
-        "production-ready-agent.workspace.v1:memory.query",
         "production-ready-agent.workspace.v1:owner",
         "production-ready-agent.workspace.v1:runs.goal",
       ]);

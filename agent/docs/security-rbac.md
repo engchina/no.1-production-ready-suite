@@ -90,8 +90,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 | 設定の GET（外部 RAG / NL2SQL / MCP、システム設定） | 各メニュー | — |
 | `GET /tools` | `menu.audit` / `agent.admin` | — |
 | `GET /observability/status`・`GET /settings/trace-policy` | `menu.audit`（画面からは使わない。運用スクリプトの確認用） | — |
-| ナビに出さない設定（ツール権限・Command Policy・Runtime Safety・Planner） | `agent.admin` | — |
-| legacy Memory の検索 | `agent.audit.view` / `agent.admin` | — |
+| ナビに出さない設定（ツール権限） | `agent.admin` | — |
 | ユーザー管理（`GET`・`POST /security/users`、`GET`・`PATCH`・`DELETE /security/users/{user_uuid}`、`POST /security/users/{user_uuid}/disable`・`enable`・`reset-password`・`unlock`） | `menu.security_users` | 共通の昇格防止 |
 | ロールの参照（`GET /security/roles`・`GET /security/roles/{role_id}`） | `menu.security_users` / `menu.security_roles` / `menu.security_permissions` | — |
 | ロールの変更（`POST /security/roles`、`PATCH`・`DELETE /security/roles/{role_id}`、`POST /security/roles/{role_id}/archive`・`restore`） | `menu.security_roles` | — |

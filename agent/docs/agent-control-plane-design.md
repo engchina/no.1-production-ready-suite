@@ -26,9 +26,9 @@ flowchart TD
 
 ### Business Agent
 
-`AgentProfile` の正式な編集対象は `name / description / instructions / skill_ids / enabled`。
-Plugin、MCP、Tool、Runtime、command policy を Agent に埋め込まない。`tool_names` と
-`command_allowed_prefixes` は移行リリースの読取互換だけである。
+`AgentProfile` の正式な編集対象は `name / description / instructions / skill_ids / model_id / enabled`。
+Plugin、MCP、Tool、Runtime を Agent に埋め込まない。`tool_names` は移行リリースの読取互換だけである
+（`command_allowed_prefixes` は #756 で削除した）。
 
 ### Skill
 
@@ -138,13 +138,12 @@ memory backend は process 間共有されないため production dispatcher に
 
 ## 7. Snapshot migration
 
-Snapshot v2 は runs/agents/legacy memory を持つ（旧版の `control_plane_state.runtimes/bindings` は読み込んでも使わない。#754）。
+Snapshot v2 は runs/agents を持つ（旧版の `control_plane_state.runtimes/bindings`（#754）と `memory`（#756）は読み込んでも使わない）。
 
 - v1 tool を一意に対応できる Skill へ推定。
 - 変換不能 tool があれば `migration_required=true`, `enabled=false`。
 - 既存 Run は model default により `runtime_id=legacy-native`。
-- Memory は export/search だけを維持し、手動新規書込は `410`。
-- v1 Run は `X-Agent-API-Version: 1` 明示時のみ。deprecation/sunset header を返す。
+- 旧エンジンの Memory・v1 Run（`X-Agent-API-Version: 1`）・planner は #756 で削除した。
 
 ## 8. UI information architecture
 

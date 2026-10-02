@@ -18,7 +18,6 @@ export const APP_ROUTES = {
   skills: "/skills",
   plugins: "/plugins",
   pluginMarketplaces: "/plugins/marketplaces",
-  memory: "/memory",
   settingsSystemTables: "/settings/system-tables",
   settingsConnection: "/settings/connection",
   settingsOci: "/settings/oci",
@@ -29,8 +28,6 @@ export const APP_ROUTES = {
   settingsExternalNl2Sql: "/settings/external-nl2sql",
   settingsExternalMcp: "/settings/external-mcp",
   settingsToolPolicy: "/settings/tool-policy",
-  settingsCommandPolicy: "/settings/command-policy",
-  settingsRuntimeSafety: "/settings/runtime-safety",
   settingsRuntimeSnapshot: "/settings/runtime-snapshot",
   // 共通のユーザー管理・ロール管理（#206）と、Agent 固有の権限管理（#215）。
   securityUsers: USER_ROLE_PATHS.users,

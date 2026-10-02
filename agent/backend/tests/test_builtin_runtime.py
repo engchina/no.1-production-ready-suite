@@ -215,6 +215,10 @@ def test_tool_requiring_approval_waits_and_resumes(monkeypatch: MonkeyPatch, cal
     run = runtime_repository.get_run(run_id)
     assert run.status == RunStatus.COMPLETED
     assert [name for name, _, _ in calls.items] == [WRITE]
+    # 承認後のツールも承認者ではなく Run の利用者として呼ぶ（MCP のサービストークンの sub。#233）。
+    [(_, _, context)] = calls.items
+    assert context.user_uuid == USER_UUID
+    assert context.approval_id == approval.id
     # 承認済みの step を実行して完了にする（step を重複して作らない）。
     assert [step.status for step in run.steps] == ["completed"]
     assert run.steps[0].approval_id == approval.id
