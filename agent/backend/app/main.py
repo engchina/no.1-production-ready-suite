@@ -1,6 +1,7 @@
 """FastAPI エントリポイント。共通 app factory で薄く構成する。"""
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -42,9 +43,16 @@ def _restore_control_plane() -> None:
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await asyncio.to_thread(_restore_control_plane)
     await start_trace_export_retry_worker()
+    # 業務 Agent の自動実行のスケジューラ（#784。gunicorn は 1 worker のため 1 つだけ動く）。
+    from app.features.agent.automations import run_scheduler
+
+    scheduler = asyncio.create_task(run_scheduler())
     try:
         yield
     finally:
+        scheduler.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await scheduler
         await stop_trace_export_retry_worker()
 
 

@@ -9,10 +9,10 @@
 
 | 型 | ページ（ルート） | 補足 |
 |---|---|---|
-| A. 一覧 → 全画面エディタ | 業務 Agent（`/agents`）/ Skill（`/skills`）/ MCP 接続（`/settings/mcp-connections`）/ 連携機能（`/plugins`）/ マーケットプレイス（`/plugins/marketplaces`） | `?id=` を唯一の情報源にする（§1.1）。 |
+| A. 一覧 → 全画面エディタ | 自動実行（`/automations`。#784）/ 業務 Agent（`/agents`）/ Skill（`/skills`）/ MCP 接続（`/settings/mcp-connections`）/ 連携機能（`/plugins`）/ マーケットプレイス（`/plugins/marketplaces`） | `?id=` を唯一の情報源にする（§1.1）。 |
 | B. マスタ詳細の閲覧 | Run（`/runs`）/ 承認（`/approvals`）/ ツール（`/tools`） | 一覧と詳細を `FixedSplitPane` で並べる（§1.2）。 |
-| C. ツール / ワークフロー | 監査（`/audit`）/ Control Plane バックアップ（`/settings/runtime-snapshot`） | 監査は 絞り込み → 適用 → 結果の `DataTable`。バックアップは 入力 → 検証 → 置換。 |
-| D. ダッシュボード / 状態 | Runtime（`/runtimes`）/ ツール権限（`/settings/tool-policy`） | 運用設定の単一フォームは「状態 + 最小の編集」として D 型に置く。ダッシュボード（`/`）は廃止した（#262）。 |
+| C. ツール / ワークフロー | 監査（`/audit`）/ フィードバック（`/feedback`。絞り込み → 集計と一覧 → 詳細の side sheet）/ 品質評価（`/evaluation`。評価セットの一覧 → 実行状況 → 評価概要（前回との比較）→ ケース別結果 → 最近の評価。評価セットは A 型の `?id=` の全画面エディタで、評価ケースを 1 件ずつ編集し Excel で取り込み・書き出しする）/ Control Plane バックアップ（`/settings/runtime-snapshot`） | 監査は 絞り込み → 適用 → 結果の `DataTable`。バックアップは 入力 → 検証 → 置換。 |
+| D. ダッシュボード / 状態 | Runtime（`/runtimes`）/ 利用状況（`/usage`）/ ツール権限（`/settings/tool-policy`） | 運用設定の単一フォームは「状態 + 最小の編集」として D 型に置く。ダッシュボード（`/`）は廃止した（#262）。 |
 
 `/` は画面を持たない入口で、NL2SQL と同じく次のように振り分ける（`frontend/src/lib/route-permissions.ts`）。
 
@@ -92,3 +92,7 @@
 - `frontend/e2e/leave-guard-workspace-state.spec.ts`：desktop / 375px のサイドナビ・パンくずの移動の確認、保存後の解除、未変更時の自由な移動、`beforeunload`、画面内の「一覧に戻る」、監査の絞り込み / Run の目標 / メモリの検索語の往復と再読込、URL の対象の再読込と一覧に無い ID の説明、確認語の解除。
 - `frontend/e2e/entity-archetypes.spec.ts`：desktop / 375px の A 型（URL で開く・再読込・戻る / 進む・パンくず・`?id=new`、行のボタンは対象名とメニューだけ、行メニューの Enter / 矢印 / Esc とフォーカスの戻り、破壊的な操作の確認とキャンセル、`ObjectActionBar` からの削除と一覧への復帰）と B 型（4 画面の `FixedSplitPane`、desktop は分割 / 375px は縦積み、divider のキー操作と保存 key、行の選択と詳細の更新、行メニューと詳細の操作の一致、承認の確認）。
 - `frontend/e2e/agent-settings.spec.ts` / `agent-runtime-flow.spec.ts`：各 A 型画面の作成・編集・削除の主な導線。
+
+## 業種テンプレート（#780）
+
+業務 Agent の新規作成（`/agents?id=new`）の先頭に「テンプレートから始める」を置く。テンプレート（`GET /api/agent-templates`。backend の `app/features/agent/templates.py`）を選ぶと、名前・説明・指示・Skill をフォームに入れる（入力済みなら確認してから置き換える）。テンプレートは業務 Agent を直接作らず、保存はいつもの「作成」で行う。使えない（登録されていない）Skill は外して知らせる。既存の業務 Agent の編集には出さない。
