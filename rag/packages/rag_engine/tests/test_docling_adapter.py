@@ -11,6 +11,7 @@ from rag_engine.adapters.parsers.base import AnalysisContext
 from rag_engine.adapters.parsers.docling_adapter import (
     DoclingAdapter,
     _build_docling_converter,
+    _docling_artifacts_path,
     _table_data_to_html,
     _table_html_by_ref,
 )
@@ -26,6 +27,29 @@ class DoclingAdapterTests(unittest.TestCase):
         converter = _build_docling_converter(settings)
 
         self.assertIsNotNone(converter)
+
+    def test_uses_downloaded_models_as_artifacts_path(self):
+        """取得済みのモデルがあれば HuggingFace Hub へ問い合わせずにそれを使う(#829)。"""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DOCLING_ARTIFACTS_PATH", None)
+            cache_dir = Path(tmp)
+            # 未取得(models が無い・空)は None: 今までどおり初回の解析で取得する。
+            self.assertIsNone(_docling_artifacts_path(cache_dir))
+            (cache_dir / "models").mkdir()
+            self.assertIsNone(_docling_artifacts_path(cache_dir))
+            (cache_dir / "models" / "docling-project--docling-layout-heron").mkdir()
+            self.assertEqual(_docling_artifacts_path(cache_dir), cache_dir / "models")
+
+    def test_explicit_artifacts_path_env_is_left_to_docling(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            (cache_dir / "models" / "x").mkdir(parents=True)
+            with patch.dict(os.environ, {"DOCLING_ARTIFACTS_PATH": "/opt/docling-models"}):
+                self.assertIsNone(_docling_artifacts_path(cache_dir))
 
     def test_reads_picture_child_text_debug_setting(self):
         with patch.dict(os.environ, {"DOCLING_KEEP_PICTURE_CHILD_TEXT": "true"}):
