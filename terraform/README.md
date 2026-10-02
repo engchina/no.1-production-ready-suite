@@ -125,11 +125,10 @@ sudo systemctl restart production-ready-rag-backend.service
 
 - ログイン: 共通認証（`AGENT_AUTH_MODE=production`。#215）。最初は構成管理者 `system_admin`（`app_admin_login_user_password`。RAG / NL2SQL と共通）で
   ログインし、「ユーザーとロール」でユーザーとロールを作り、「セキュリティ設定 > 権限管理」でロールごとのメニュー・実行 / 承認 / 監査 / 管理の権限・
-  エージェント・業務ビューを設定します。`init_script.sh` が `python -m app.cli.agent_security_migrate` で認証・権限のテーブルを作ります。
+  エージェントを設定します（業務ビューは RAG の権限管理）。`init_script.sh` が `python -m app.cli.agent_security_migrate` で認証・権限のテーブルを作ります。
   Nginx の Basic 認証は廃止しました。Binding MCP（`/api/mcp/`）は従来どおり Binding 固有 token で認証し、ログインは不要です。
   `agent_app_auth_cookie_secure`（非表示の入力。既定 `false` → `PLATFORM_AUTH_COOKIE_SECURE`）は HTTPS の終端を前に置いたら `true` にします。
-  画面を使わない外部連携で header / JWT の RBAC を使う場合は、instance の `backend/.env` で `AGENT_RBAC_ENABLED=true` と信頼できる identity を設定します
-  （[agent/docs/security-rbac.md](../agent/docs/security-rbac.md)）。
+  Cookie のないリクエストは 401 です（header / JWT の認可は #750 で削除。[agent/docs/security-rbac.md](../agent/docs/security-rbac.md)）。
 - Runtime 連携（任意）: `agent_control_plane_public_base_url`（空なら `http://<Compute の private IP>[:port]/api`）、
   `agent_control_plane_mcp_token_secret`（32 文字以上。空なら Binding MCP は fail closed）。
 - RAG / NL2SQL との連携（#233）: 同じ stack で RAG / NL2SQL も配備すると、Agent の `backend/.env` に

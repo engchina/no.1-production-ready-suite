@@ -58,19 +58,17 @@ const agentJa = {
   "capability.decideApprovals": "承認の判断の権限",
   "capability.viewAudit": "監査の閲覧の権限",
   "capability.admin": "Agent 管理の権限",
-  "security.roles.permissionSummary":
-    "付与している機能権限: {count} 件 / エージェント: {agents} 件 / 業務ビュー: {businessViews} 件",
-  "security.roles.permissionSummarySystemAdmin":
-    "SYSTEM_ADMIN はすべての機能権限を持ち、すべてのエージェント・業務ビューを利用できます。",
+  "security.roles.permissionSummary": "付与している機能権限: {count} 件",
+  "security.roles.permissionSummarySystemAdmin": "SYSTEM_ADMIN はすべての機能権限を持ちます。",
   "security.roles.openPermissions": "権限管理で設定",
   "security.permissions.subtitle":
-    "ロールごとに、使える画面（機能権限）と利用できるエージェント・業務ビューを設定します。ロールの作成・名称変更・アーカイブはロール管理で行います。",
+    "ロールごとに、使える画面（機能権限）と利用できるエージェントを設定します。ロールの作成・名称変更・アーカイブはロール管理で行います。",
   "security.permissions.listHint":
-    "ロールを選ぶと、付与している機能権限の件数と利用できるエージェント・業務ビューを確認できます。",
+    "ロールを選ぶと、付与している機能権限の件数と利用できるエージェントを確認できます。",
   "security.permissions.searchPlaceholder":
-    "ロールコード・ロール名・機能権限・エージェント・業務ビューで絞り込み",
+    "ロールコード・ロール名・機能権限・エージェントで絞り込み",
   "security.permissions.formHint":
-    "機能権限と、利用できるエージェント・業務ビューを設定します。保存すると、このロールのユーザーへ次回リクエストから反映されます。",
+    "機能権限と、利用できるエージェントを設定します。保存すると、このロールのユーザーへ次回リクエストから反映されます。",
   "security.permissions.permissionsHint":
     "メニュー権限は画面表示を許可します。Run の閲覧・実行・承認・監査・Agent 管理の権限は、関連する画面のメニュー権限を自動的に付与します。",
   "security.permissions.agents": "利用できるエージェント",
@@ -88,29 +86,6 @@ const agentJa = {
   "security.permissions.agentsSystemAdmin":
     "SYSTEM_ADMIN はすべてのエージェントを自動的に利用できます。個別設定は不要です。",
   "security.permissions.agentDisabled": "無効",
-  "security.permissions.businessViews": "利用できる業務ビュー",
-  "security.permissions.businessViewsHint":
-    "このロールの利用者が扱える Run の業務ビューを選択します。何も選ばない場合、このロールでは業務ビューを持つ Run を利用できません。",
-  "security.permissions.businessViewsAll": "すべての業務ビュー",
-  "security.permissions.businessViewsSearch": "業務ビューを検索",
-  "security.permissions.businessViewsSearchPlaceholder": "業務ビュー ID で絞り込み",
-  "security.permissions.businessViewsEmpty":
-    "Run に現れた業務ビューはまだありません。上の欄に業務ビュー ID を入力して追加できます。",
-  "security.permissions.businessViewsNoResults": "条件に一致する業務ビューがありません。",
-  "security.permissions.businessViewsLoadWarning":
-    "業務ビューの候補を読み込めませんでした。ロール一覧は表示できます。詳細: {message}",
-  "security.permissions.businessViewsManagedAll":
-    "Agent 管理の権限により、すべての業務ビューを利用できます。個別選択は不要です。",
-  "security.permissions.businessViewsSystemAdmin":
-    "SYSTEM_ADMIN はすべての業務ビューを自動的に利用できます。個別設定は不要です。",
-  "security.permissions.businessViewsCustomLabel": "業務ビュー ID を追加",
-  "security.permissions.businessViewsCustomPlaceholder": "例: sales-east",
-  "security.permissions.businessViewsCustomHint":
-    "一覧は Run に現れた業務ビューと割り当て済みの業務ビューです。一覧にない業務ビューは ID を入力して追加します（英数字と . _ : - の 64 文字まで）。",
-  "security.permissions.businessViewsCustomAdd": "追加",
-  "security.permissions.businessViewsCustomInvalid":
-    "業務ビュー ID は英数字と . _ : - の 1～64 文字で入力してください。",
-  "security.permissions.businessViewsCustomStatus": "直接入力",
 
   // 未保存変更の離脱ガードと作業状態の保持（#87）
   "guard.discardTitle": "変更を破棄しますか",

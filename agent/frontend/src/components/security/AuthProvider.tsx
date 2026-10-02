@@ -10,7 +10,7 @@ import { securityApi } from "@/lib/security-api";
 import { bindWorkspaceOwner, clearWorkspaceState } from "@/lib/workspace-state";
 
 /**
- * 利用者と認可が変わったと判断する key（#215）。権限に加えて、利用できるエージェントと業務ビューも含める。
+ * 利用者と認可が変わったと判断する key（#215）。権限に加えて、利用できるエージェントも含める。
  * どれかが変わったら共通の AuthProvider が React Query の cache を破棄し、一覧を取り直させる。
  */
 export function agentIdentityKey(user: CurrentUser): string {
@@ -19,7 +19,6 @@ export function agentIdentityKey(user: CurrentUser): string {
     user.user_uuid,
     [...user.permissions].sort(),
     sorted(user.allowed_agent_ids),
-    sorted(user.allowed_business_view_ids),
   ]);
 }
 

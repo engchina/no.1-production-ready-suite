@@ -138,13 +138,13 @@ masking・監査を通す。契約は各製品のツール（#230〜#232）を�
 |---|---|---|---|
 | `external_rag_search` | `rag_search` | READ | 回答生成に LLM を使う |
 | `external_rag_chat` | `rag_chat_send_message` | WRITE（side effects あり） | RAG に会話を作成・追記する。既定の policy で承認が必要 |
-| `external_rag_list_business_views` | `rag_list_business_views` | READ | 権限管理の業務ビューの候補にも使う |
+| `external_rag_list_business_views` | `rag_list_business_views` | READ | 利用者が RAG で使える業務ビューの一覧 |
 | `external_nl2sql_query` | `nl2sql_query` | SENSITIVE | 業務 DB へ SQL を実行する。既定の policy で承認が必要。`row_limit` を省略すると `AGENT_EXTERNAL_NL2SQL_DEFAULT_LIMIT`（1〜1000 に丸める） |
 | `external_nl2sql_get_job` | `nl2sql_get_job` | READ | 待ち時間内に終わらなかったジョブの続き（本人のジョブだけ） |
 
 - **利用者**: Run の作成時に、ログイン中の利用者（Cookie のセッション。local mode ではローカル利用者）の
   `user_uuid` を `RunState.created_by_user_uuid` に記録する（checkpoint の JSON に入る。項目がない既存の Run は
-  None）。外部連携（header / JWT / 外部 policy の RBAC）で作った Run は None。Run からのツール呼び出し
+  None）。Run からのツール呼び出し
   （承認後の再実行を含む）は `ToolInvocationContext.user_uuid` / `run_id` にこの値を入れるため、承認者ではなく
   Run を作った利用者として呼ぶ。再実行（replay）の Run は、再実行を指示した利用者になる。単発の
   `POST /tools/invoke` は呼び出したログイン中の利用者として呼ぶ。
@@ -216,10 +216,11 @@ Runtime 画面は status、capabilities、enable、probe、管理可能な servi
 ## 9. Authentication and RBAC
 
 画面は RAG / NL2SQL と同じ共通認証（`PLATFORM_*` のユーザー・ロール・セッション）でログインする。ロールに付ける
-Agent の権限（`AGENT_ROLE_PERMISSIONS`）と対象範囲（`AGENT_ROLE_AGENTS` / `AGENT_ROLE_BUSINESS_VIEWS`）は
+Agent の権限（`AGENT_ROLE_PERMISSIONS`）と対象範囲（`AGENT_ROLE_AGENTS`）は
 `app.cli.agent_security_migrate` が作る。capability は従来の viewer / operator / approver / auditor / admin に対応し、
-Cookie の利用者から `ActorPolicy` を作って Run・監査・承認・成果物・SSE・WebSocket・`GET /agents` の既存の絞り込みに流す。
-Cookie のないリクエストは `AGENT_RBAC_ENABLED=true` のときだけ header / JWT / 外部 policy（外部連携）で判定する。
+利用者（Cookie のセッション、local はローカル利用者）から `ActorPolicy` を作って Run・監査・承認・成果物・SSE・WebSocket・
+`GET /agents` の絞り込みに流す。Cookie のないリクエストは 401（#750 で header / JWT / 外部 policy の認可を削除した）。
+業務ビューの判定は RAG が Run の利用者のサービストークンで行うため、Agent は業務ビューの対象範囲を持たない（#750）。
 詳細は [security-rbac.md](security-rbac.md)。
 
 ## 10. Non-goals

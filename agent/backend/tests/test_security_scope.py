@@ -19,10 +19,8 @@ from security_support import (
     ProductionAuth,
     client,
     enable_production_auth,
-    enable_signed_identity,
     login,
     login_configured_admin,
-    signed_identity_headers,
 )
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -47,7 +45,8 @@ APPROVAL_TOOL = "external_nl2sql_query"
 @dataclass
 class ScopeData:
     run_a1: RunState  # agent A / bv-a（承認待ち）
-    run_a2: RunState  # agent A / bv-b
+    # agent A / bv-b。業務ビューは Agent の対象範囲ではない（RAG が判定する。#750）ため見える。
+    run_a2: RunState
     run_b: RunState  # agent B / bv-a
     run_a_no_view: RunState  # agent A / 業務ビューなし
 
@@ -95,9 +94,7 @@ def auth(monkeypatch: MonkeyPatch) -> Iterator[ProductionAuth]:
 
 
 def _scoped_user(auth: ProductionAuth, login_user_id: str, permissions: list[str]) -> None:
-    auth.user_with_permissions(
-        login_user_id, permissions, agent_ids=[AGENT_A], business_view_ids=["bv-a"]
-    )
+    auth.user_with_permissions(login_user_id, permissions, agent_ids=[AGENT_A])
 
 
 def _run_ids(headers: dict[str, str]) -> set[str]:
@@ -110,7 +107,7 @@ def test_run_list_and_detail_are_scoped_by_principal(
     auth: ProductionAuth, scope_data: ScopeData
 ) -> None:
     _scoped_user(auth, "scoped-viewer", ["agent.runs.view"])
-    # header の RBAC 情報（全ロール・全業務ビュー）は Cookie のセッションでは使わない。
+    # header の自己申告（全ロール・全業務ビュー）は使わない（header の RBAC は無い。#750）。
     headers = {
         **login("scoped-viewer"),
         "X-Agent-Roles": "admin",
@@ -119,11 +116,11 @@ def test_run_list_and_detail_are_scoped_by_principal(
     ids = _run_ids(headers)
     assert scope_data.run_a1.id in ids
     assert scope_data.run_a_no_view.id in ids
-    assert scope_data.run_a2.id not in ids
+    assert scope_data.run_a2.id in ids
     assert scope_data.run_b.id not in ids
 
     assert client.get(f"/api/runs/{scope_data.run_a1.id}", headers=headers).status_code == 200
-    for run in (scope_data.run_a2, scope_data.run_b):
+    for run in (scope_data.run_b,):
         assert client.get(f"/api/runs/{run.id}", headers=headers).status_code == 403
         artifacts = client.get(f"/api/runs/{run.id}/artifacts", headers=headers)
         assert artifacts.status_code == 403
@@ -163,7 +160,7 @@ def test_audit_is_scoped_by_principal(auth: ProductionAuth, scope_data: ScopeDat
     assert records.status_code == 200
     run_ids = {item["run_id"] for item in records.json()["data"]["records"]}
     assert scope_data.run_a1.id in run_ids
-    assert not run_ids & {scope_data.run_a2.id, scope_data.run_b.id}
+    assert scope_data.run_b.id not in run_ids
     csv = client.get("/api/audit/tool-calls.csv?limit=5000", headers=headers)
     assert csv.status_code == 200
     assert scope_data.run_b.id not in csv.text
@@ -204,12 +201,6 @@ def test_operator_run_creation_is_scoped(auth: ProductionAuth, scope_data: Scope
         headers=headers,
     )
     assert denied_agent.status_code == 403
-    denied_view = client.post(
-        "/api/runs",
-        json={"goal": "範囲外", "agent_id": AGENT_A, "metadata": {"business_view_id": "bv-b"}},
-        headers=headers,
-    )
-    assert denied_view.status_code == 403
     created = client.post(
         "/api/runs",
         json={
@@ -272,7 +263,7 @@ def _session_cookie(headers: dict[str, str]) -> str:
     return headers["cookie"].split(";")[0]
 
 
-def test_websocket_requires_cookie_when_external_rbac_disabled(
+def test_websocket_requires_cookie_in_production(
     auth: ProductionAuth, scope_data: ScopeData
 ) -> None:
     with TestClient(app) as test_client:
@@ -322,10 +313,7 @@ def test_websocket_streams_in_scope_run_and_closes_out_of_scope(
             assert first["type"] != "error"
             assert first["event"]["run_id"] == scope_data.run_a1.id
 
-        for run, error_code in (
-            (scope_data.run_b, "rbac.agent_forbidden"),
-            (scope_data.run_a2, "rbac.business_view_forbidden"),
-        ):
+        for run, error_code in ((scope_data.run_b, "rbac.agent_forbidden"),):
             with test_client.websocket_connect(_ws_path(run), headers=headers) as websocket:
                 message = websocket.receive_json()
                 assert message["type"] == "error"
@@ -380,40 +368,6 @@ def test_websocket_commands_use_principal(auth: ProductionAuth, scope_data: Scop
     run = runtime_repository.get_run(scope_data.run_a1.id)
     approval = next(item for item in run.approvals if item.id == approval_id)
     assert approval.decided_by == "ws-approver"
-
-
-def test_websocket_without_cookie_requires_trusted_identity(
-    monkeypatch: MonkeyPatch, scope_data: ScopeData
-) -> None:
-    """production で Cookie がなければ、信頼できる identity があるときだけ外部連携の判定。"""
-    enable_production_auth(monkeypatch, rbac_enabled=True)
-    try:
-        with TestClient(app) as test_client:
-            # 信頼できる identity がなければ、自己申告の header は accept 前に close 1008。
-            with (
-                pytest.raises(WebSocketDisconnect) as closed,
-                test_client.websocket_connect(
-                    _ws_path(scope_data.run_a1),
-                    headers={"X-Agent-Roles": "admin", "X-Agent-Business-Views": "*"},
-                ) as websocket,
-            ):
-                websocket.receive_json()
-            assert closed.value.code == 1008
-
-            enable_signed_identity(monkeypatch)
-            with test_client.websocket_connect(
-                _ws_path(scope_data.run_a1), headers={"X-Agent-Roles": "admin"}
-            ) as websocket:
-                assert websocket.receive_json()["error_code"] == "rbac.forbidden"
-            headers = signed_identity_headers(
-                roles=["viewer"], business_view_ids=["bv-a"], agent_ids=[AGENT_A]
-            )
-            with test_client.websocket_connect(
-                _ws_path(scope_data.run_a1), headers=headers
-            ) as websocket:
-                assert websocket.receive_json()["type"] != "error"
-    finally:
-        set_security_service(None)
 
 
 def test_trace_events_are_scoped_for_restricted_principal(

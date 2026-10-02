@@ -6,7 +6,6 @@ Agent の権限と対象範囲を、ログイン中の利用者に実効の権�
 
 from __future__ import annotations
 
-from pr_backend_core import Page
 from pr_system_settings.users_roles import RoleData as SharedRoleData
 from pydantic import BaseModel, Field
 
@@ -29,7 +28,6 @@ class CurrentUserData(BaseModel):
     permissions: list[str]
     # None（null）は制限なし。
     allowed_agent_ids: list[str] | None = None
-    allowed_business_view_ids: list[str] | None = None
     debug_mode: bool = False
     password_change_allowed: bool
 
@@ -45,7 +43,6 @@ class CurrentUserData(BaseModel):
             is_system_admin=principal.is_system_admin,
             permissions=sorted(principal.permissions),
             allowed_agent_ids=_sorted_or_none(principal.allowed_agent_ids),
-            allowed_business_view_ids=_sorted_or_none(principal.allowed_business_view_ids),
             debug_mode=debug_mode,
             password_change_allowed=principal.password_change_allowed and not debug_mode,
         )
@@ -56,7 +53,6 @@ class RoleData(SharedRoleData):
 
     permissions: list[str]
     agent_ids: list[str]
-    business_view_ids: list[str]
 
     @classmethod
     def from_record(cls, role: RoleRecord) -> RoleData:
@@ -70,7 +66,6 @@ class RoleData(SharedRoleData):
             version=role.version,
             permissions=sorted(normalize_permission_codes(role.permissions)),
             agent_ids=sorted(role.agent_ids),
-            business_view_ids=sorted(role.business_view_ids),
         )
 
 
@@ -80,7 +75,6 @@ class RoleAccessUpdateRequest(BaseModel):
     version: int = Field(ge=1)
     permissions: list[str] = Field(default_factory=list, max_length=200)
     agent_ids: list[str] = Field(default_factory=list, max_length=MAX_ACCESS_TARGETS)
-    business_view_ids: list[str] = Field(default_factory=list, max_length=MAX_ACCESS_TARGETS)
 
 
 class PermissionData(BaseModel):
@@ -109,23 +103,6 @@ class AgentTargetData(BaseModel):
     description: str | None = None
     # enabled / disabled
     status: str
-
-
-class BusinessViewTargetData(BaseModel):
-    """権限管理画面で選べる業務ビュー。
-
-    Agent にマスタはない。名前は RAG から読めたときだけ RAG の名前、それ以外は ID と同じ。
-    """
-
-    id: str
-    name: str
-
-
-class BusinessViewTargetPage(Page[BusinessViewTargetData]):
-    """権限管理の業務ビューの候補の 1 ページ（#608）。"""
-
-    # RAG の業務ビューを読めなかった理由（#240。画面は候補を出したまま警告を表示する）。
-    warnings: list[str] = Field(default_factory=list)
 
 
 def _sorted_or_none(values: frozenset[str] | None) -> list[str] | None:

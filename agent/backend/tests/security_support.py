@@ -5,10 +5,6 @@ InMemory の store で共通認証の service を差し替え、DB ユーザー�
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import json
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -56,6 +52,9 @@ class AsgiTestClient:
     def patch(self, url: str, **kwargs: Any) -> httpx.Response:
         return self.request("PATCH", url, **kwargs)
 
+    def delete(self, url: str, **kwargs: Any) -> httpx.Response:
+        return self.request("DELETE", url, **kwargs)
+
 
 client = AsgiTestClient()
 
@@ -73,7 +72,6 @@ class ProductionAuth:
         permissions: Iterable[str] = (),
         *,
         agent_ids: Iterable[str] = (),
-        business_view_ids: Iterable[str] = (),
         role_code: str | None = None,
     ) -> RoleRecord:
         self._counter += 1
@@ -87,7 +85,6 @@ class ProductionAuth:
             version=1,
             permissions=set(permissions),
             agent_ids=set(agent_ids),
-            business_view_ids=set(business_view_ids),
         )
         return self.store.create_role(role)
 
@@ -123,21 +120,15 @@ class ProductionAuth:
         permissions: Iterable[str],
         *,
         agent_ids: Iterable[str] = (),
-        business_view_ids: Iterable[str] = (),
     ) -> UserRecord:
-        role = self.create_role(
-            permissions, agent_ids=agent_ids, business_view_ids=business_view_ids
-        )
+        role = self.create_role(permissions, agent_ids=agent_ids)
         return self.create_user(login_user_id, [role])
 
 
-def enable_production_auth(
-    monkeypatch: MonkeyPatch, *, rbac_enabled: bool = False
-) -> ProductionAuth:
+def enable_production_auth(monkeypatch: MonkeyPatch) -> ProductionAuth:
     """AGENT_AUTH_MODE=production と InMemory の共通認証 service にする。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "auth_mode", "production")
-    monkeypatch.setattr(settings, "agent_rbac_enabled", rbac_enabled)
     monkeypatch.setattr(settings, "app_admin_login_user_id", "system_admin")
     monkeypatch.setattr(settings, "app_admin_login_user_password", CONFIGURED_ADMIN_PASSWORD)
     monkeypatch.setattr(settings, "app_auth_cookie_secure", False)
@@ -170,22 +161,3 @@ def login(login_user_id: str, password: str = USER_PASSWORD) -> dict[str, str]:
 
 def login_configured_admin() -> dict[str, str]:
     return login("system_admin", CONFIGURED_ADMIN_PASSWORD)
-
-
-IDENTITY_HMAC_SECRET = "identity-hmac-secret-for-tests"  # nosec B105 - テスト用
-
-
-def enable_signed_identity(monkeypatch: MonkeyPatch) -> None:
-    """外部連携の信頼できる identity（HMAC 署名 header）を設定する。"""
-    monkeypatch.setattr(get_settings(), "agent_rbac_identity_hmac_secret", IDENTITY_HMAC_SECRET)
-
-
-def signed_identity_headers(**claims: Any) -> dict[str, str]:
-    """`x-agent-identity` の HMAC 署名 header（router の署名 header の検証と同じ形）。"""
-    payload = (
-        base64.urlsafe_b64encode(json.dumps(claims).encode("utf-8")).decode("ascii").rstrip("=")
-    )
-    signature = hmac.new(
-        IDENTITY_HMAC_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
-    ).hexdigest()
-    return {"x-agent-identity": f"{payload}.{signature}"}

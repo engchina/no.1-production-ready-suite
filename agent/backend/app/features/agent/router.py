@@ -6,10 +6,10 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import stat
@@ -165,20 +165,19 @@ from app.security.dependencies import (
     actor_roles_for_principal,
     authenticate_websocket,
     permission_route_path,
-    session_principal,
 )
 from app.security.domain import Principal
 from app.security.permissions import UNCLASSIFIED_PERMISSION, permission_for_route
+from app.security.service import get_security_service
 from app.settings import MODEL_SETTINGS_STORE, get_settings
 
 router = APIRouter(tags=["agent-runtime"])
+logger = logging.getLogger(__name__)
 
 PASSPHRASE_CONFIG_KEYS = frozenset({"pass_phrase", "passphrase", "key_password"})
 _WEBSOCKET_COMMAND_DEDUPE_TTL_SECONDS = 300.0
 _WEBSOCKET_COMMAND_DEDUPE_MAX_ENTRIES = 2000
 _websocket_command_dedupe: dict[tuple[str, str], tuple[str, float]] = {}
-_rbac_policy_cache: dict[str, tuple[ActorPolicy, float]] = {}
-_jwt_jwks_cache: dict[str, tuple[dict[str, object], float]] = {}
 
 
 _MCP_TIMEOUT_MAX_SECONDS = 600
@@ -480,7 +479,6 @@ class RuntimeSnapshotImportResult(BaseModel):
 
 class ActorPolicy(BaseModel):
     roles: set[str] = Field(default_factory=set)
-    business_view_ids: set[str] | None = None
     agent_ids: set[str] | None = None
 
 
@@ -507,13 +505,12 @@ async def require_admin(request: Request) -> None:
 async def require_system_settings_write(request: Request) -> None:
     """共通のシステム設定の保存・操作（OCI 認証・アップロード保存先・モデル・データベース。#215）。
 
-    Cookie のセッションでは RAG / NL2SQL と同じくメニュー権限（manifest の同じ判定）で許可する。
-    header / JWT / 外部 policy の経路と local は従来どおり admin だけ。
+    RAG / NL2SQL と同じくメニュー権限（manifest の同じ判定）で許可する。local のローカル利用者は
+    全権限を持つ。
     """
-    principal = session_principal(request)
+    principal = _request_principal(request)
     if principal is None:
-        _require_actor_roles(request, {"admin"})
-        return
+        raise HTTPException(status_code=401, detail="ログインしてください。")
     permissions = permission_for_route(request.method, permission_route_path(request))
     if (
         permissions is None
@@ -1138,10 +1135,7 @@ async def get_observability_events(
         tool_name=tool_name,
         limit=limit,
     )
-    session_policy = _session_actor_policy(request)
-    if session_policy is not None and (
-        session_policy.agent_ids is not None or session_policy.business_view_ids is not None
-    ):
+    if _request_agent_ids(request) is not None:
         # 対象範囲が制限された利用者には、範囲内の Run の event だけを返す（#215）。
         allowed_run_ids = {
             run.id for run in _filter_runs_for_actor(request, runtime_repository.list_runs())
@@ -1938,7 +1932,6 @@ async def create_run(
 ) -> ApiResponse[RunState]:
     try:
         _require_agent_access(request, run_request.agent_id)
-        _require_business_view_access(request, _run_create_business_view_id(run_request))
         if request.headers.get("x-agent-api-version") == "1":
             response.headers["Deprecation"] = "true"
             response.headers["Sunset"] = "Wed, 30 Sep 2026 00:00:00 GMT"
@@ -2039,7 +2032,6 @@ async def get_run(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
     _require_agent_access(request, run.agent_id)
-    _require_business_view_access(request, _run_business_view_id(run))
     return ApiResponse(data=run)
 
 
@@ -2054,7 +2046,6 @@ async def get_run_audit(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
     _require_agent_access(request, run.agent_id)
-    _require_business_view_access(request, _run_business_view_id(run))
     return ApiResponse(data=_run_audit_data(run))
 
 
@@ -2129,7 +2120,6 @@ async def list_run_artifacts(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
     _require_agent_access(request, run.agent_id)
-    _require_business_view_access(request, _run_business_view_id(run))
     return ApiResponse(data=ArtifactsData(artifacts=artifacts))
 
 
@@ -2143,7 +2133,6 @@ async def get_run_artifact(
     try:
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
-        _require_business_view_access(request, _run_business_view_id(run))
         return ApiResponse(data=runtime_repository.get_artifact(run_id, artifact_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="artifact not found") from exc
@@ -2160,7 +2149,6 @@ async def stream_run_events(
     try:
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
-        _require_business_view_access(request, _run_business_view_id(run))
         events = runtime_repository.iter_events(
             run_id,
             after_event_id=after_event_id,
@@ -2182,7 +2170,7 @@ async def stream_run_events_websocket(
     max_events_per_tick: int = 50,
 ) -> None:
     # production の Cookie セッション（Origin 必須）は accept 前に確認する（#215）。
-    # local と、production で Cookie がなく外部連携の RBAC が有効なときは従来の header 判定。
+    # local はローカル利用者（全権限）を state.principal に入れる（#750）。
     try:
         await authenticate_websocket(websocket, "/runs/{run_id}/events/ws")
     except WebSocketAuthRejected:
@@ -2217,16 +2205,6 @@ async def stream_run_events_websocket(
                 "type": "error",
                 "error_code": "rbac.agent_forbidden",
                 "message": "agent access denied",
-            }
-        )
-        await websocket.close(code=1008)
-        return
-    if not _websocket_has_business_view_access(websocket, _run_business_view_id(run)):
-        await websocket.send_json(
-            {
-                "type": "error",
-                "error_code": "rbac.business_view_forbidden",
-                "message": "business view access denied",
             }
         )
         await websocket.close(code=1008)
@@ -2270,7 +2248,6 @@ async def cancel_run(
     try:
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
-        _require_business_view_access(request, _run_business_view_id(run))
         if run.binding_id is not None:
             if run.status == "cancelled":
                 return ApiResponse(data=run)
@@ -2313,7 +2290,6 @@ async def resume_run(
     try:
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
-        _require_business_view_access(request, _run_business_view_id(run))
         if run.binding_id is not None:
             raise HTTPException(
                 status_code=409,
@@ -2337,7 +2313,6 @@ async def replay_run(
     try:
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
-        _require_business_view_access(request, _run_business_view_id(run))
         if run.binding_id is not None:
             raise HTTPException(
                 status_code=409,
@@ -2366,8 +2341,7 @@ async def decide_approval(
     try:
         run = _run_for_approval(approval_id)
         _require_agent_access(http_request, run.agent_id)
-        _require_business_view_access(http_request, _run_business_view_id(run))
-        principal = session_principal(http_request)
+        principal = _request_principal(http_request)
         if principal is not None:
             # 決定者はログイン中の利用者（body の decided_by は使わない。なりすまし防止。#215）。
             request = request.model_copy(update={"decided_by": principal.login_user_id})
@@ -2421,6 +2395,12 @@ async def delete_agent(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="agent not found") from exc
+    # 削除したエージェントをロールの対象範囲（AGENT_ROLE_AGENTS）から外す（#750）。
+    # 失敗しても削除は成功のまま（権限管理の保存は、削除済みのエージェントを黙って外す）。
+    try:
+        await run_in_threadpool(get_security_service().remove_agent_assignments, agent_id)
+    except Exception:
+        logger.warning("agent_role_assignment_cleanup_failed", extra={"agent_id": agent_id})
     return ApiResponse(data=AgentsData(agents=runtime_repository.list_agents()))
 
 
@@ -2992,7 +2972,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             )
             return
         decided_by = message.get("decided_by")
-        principal = session_principal(websocket)
+        principal = _request_principal(websocket)
         if principal is not None:
             # 決定者はログイン中の利用者（message の decided_by は使わない。#215）。
             decided_by = principal.login_user_id
@@ -3095,68 +3075,50 @@ def _configured_tool_policy() -> ToolPolicy:
     )
 
 
-def _session_actor_policy(connection: object) -> ActorPolicy | None:
-    """Cookie のセッションの利用者から作る ActorPolicy（#215）。
+def _request_principal(connection: object) -> Principal | None:
+    """認証済みの利用者（Cookie のセッション、または local のローカル利用者）。
 
-    capability → 従来のロール、対象範囲は利用者の許可（None は制限なし）。
-    利用者がいなければ None で、呼出し側は従来の header / JWT / 外部 policy の判定を使う。
+    `/api` の HTTP は `app.security.dependencies.authorize_api_request`、WebSocket は
+    `authenticate_websocket` が `state.principal` に入れる。無ければ未認証。
     """
-    principal = session_principal(connection)
+    state = getattr(connection, "state", None)
+    principal = getattr(state, "principal", None) if state is not None else None
+    return principal if isinstance(principal, Principal) else None
+
+
+def _actor_policy(connection: object) -> ActorPolicy:
+    """利用者から作る ActorPolicy（#215 / #750）。
+
+    capability → 従来のロール、対象範囲は利用者の許可（None は制限なし）。RAG / NL2SQL と同じく
+    共通認証の利用者だけで判定し、利用者がいなければ何も許可しない。
+    """
+    principal = _request_principal(connection)
     if principal is None:
-        return None
+        return ActorPolicy(roles=set(), agent_ids=set())
     return ActorPolicy(
         roles=actor_roles_for_principal(principal),
-        business_view_ids=(
-            None
-            if principal.allowed_business_view_ids is None
-            else set(principal.allowed_business_view_ids)
-        ),
         agent_ids=None if principal.allowed_agent_ids is None else set(principal.allowed_agent_ids),
     )
 
 
 def _policy_allows_agent(policy: ActorPolicy, agent_id: str) -> bool:
     allowed = policy.agent_ids
-    return allowed is None or "*" in allowed or agent_id in allowed
+    return allowed is None or agent_id in allowed
 
 
-def _policy_allows_business_view(policy: ActorPolicy, business_view_id: str | None) -> bool:
-    if business_view_id is None:
-        return True
-    allowed = policy.business_view_ids
-    return allowed is None or "*" in allowed or business_view_id in allowed
+def _policy_has_roles(policy: ActorPolicy, allowed_roles: set[str]) -> bool:
+    return "admin" in policy.roles or bool(policy.roles.intersection(allowed_roles))
 
 
-def _rbac_active(connection: object) -> bool:
-    """RBAC で絞り込むか（Cookie のセッションの利用者がいる、または AGENT_RBAC_ENABLED）。"""
-    return _session_actor_policy(connection) is not None or bool(get_settings().agent_rbac_enabled)
-
-
-def _actor_display_name(connection: Request | WebSocket) -> str:
-    principal = session_principal(connection)
-    if principal is not None:
-        return principal.login_user_id
-    return _actor_name_from_headers(connection.headers)
-
-
-def external_actor_roles(request: Request) -> set[str]:
-    """外部連携（header / JWT / 外部 policy）のロール。
-
-    Cookie のないリクエストの manifest 判定（`app.security.dependencies`）が使う。
-    """
-    return _request_roles(request)
+def _actor_display_name(connection: object) -> str:
+    principal = _request_principal(connection)
+    return principal.login_user_id if principal is not None else "anonymous"
 
 
 def _require_actor_roles(request: Request, allowed_roles: set[str]) -> None:
-    session_policy = _session_actor_policy(request)
-    if session_policy is not None:
-        roles = session_policy.roles
-    else:
-        settings = get_settings()
-        if not settings.agent_rbac_enabled:
-            return
-        roles = _request_roles(request)
-    if "admin" in roles or roles.intersection(allowed_roles):
+    if _request_principal(request) is None:
+        raise HTTPException(status_code=401, detail="ログインしてください。")
+    if _policy_has_roles(_actor_policy(request), allowed_roles):
         return
     actor = _actor_display_name(request)
     required = ", ".join(sorted(allowed_roles | {"admin"}))
@@ -3166,45 +3128,17 @@ def _require_actor_roles(request: Request, allowed_roles: set[str]) -> None:
     )
 
 
-def _request_roles(request: Request) -> set[str]:
-    settings = get_settings()
-    actor_policy = _actor_policy_from_headers(request.headers)
-    if actor_policy is not None:
-        return actor_policy.roles
-    if _trusted_policy_required(settings):
-        return set()
-    return _roles_from_headers(request.headers, roles_header=settings.agent_rbac_roles_header)
-
-
 def _run_creator_user_uuid(request: Request) -> str | None:
-    """Run を作る利用者（#233）。
-
-    Cookie のセッションの利用者と、local のローカル利用者（`request.state.principal`）。
-    外部連携（header / JWT / 外部 policy の RBAC）の request には利用者がいないので None。
-    """
-    principal = getattr(request.state, "principal", None)
-    return principal.user_uuid if isinstance(principal, Principal) else None
+    """Run を作る利用者（#233）。Cookie のセッションの利用者か、local のローカル利用者。"""
+    principal = _request_principal(request)
+    return principal.user_uuid if principal is not None else None
 
 
 def _filter_runs_for_actor(request: Request, runs: list[RunState]) -> list[RunState]:
-    if not _rbac_active(request):
+    policy = _actor_policy(request)
+    if policy.agent_ids is None:
         return runs
-    return [
-        run
-        for run in runs
-        if _agent_allowed(request, run.agent_id)
-        and _business_view_allowed(request, _run_business_view_id(run))
-    ]
-
-
-def _require_business_view_access(request: Request, business_view_id: str | None) -> None:
-    if _business_view_allowed(request, business_view_id):
-        return
-    actor = _actor_display_name(request)
-    raise HTTPException(
-        status_code=403,
-        detail=f"actor {actor} cannot access business_view_id={business_view_id}",
-    )
+    return [run for run in runs if _policy_allows_agent(policy, run.agent_id)]
 
 
 def _require_agent_access(request: Request, agent_id: str) -> None:
@@ -3218,569 +3152,20 @@ def _require_agent_access(request: Request, agent_id: str) -> None:
 
 
 def _agent_allowed(request: Request, agent_id: str) -> bool:
-    session_policy = _session_actor_policy(request)
-    if session_policy is not None:
-        return _policy_allows_agent(session_policy, agent_id)
-    settings = get_settings()
-    if not settings.agent_rbac_enabled:
-        return True
-    allowed = _actor_agent_ids(request.headers)
-    return allowed is None or "*" in allowed or agent_id in allowed
-
-
-def _business_view_allowed(request: Request, business_view_id: str | None) -> bool:
-    session_policy = _session_actor_policy(request)
-    if session_policy is not None:
-        return _policy_allows_business_view(session_policy, business_view_id)
-    settings = get_settings()
-    if not settings.agent_rbac_enabled or business_view_id is None:
-        return True
-    actor_policy = _actor_policy_from_headers(request.headers)
-    if actor_policy is not None:
-        allowed_policy_views = actor_policy.business_view_ids
-        return (
-            allowed_policy_views is None
-            or "*" in allowed_policy_views
-            or business_view_id in allowed_policy_views
-        )
-    if _trusted_policy_required(settings):
-        return False
-    allowed = _business_views_from_headers(
-        request.headers,
-        business_views_header=settings.agent_rbac_business_views_header,
-    )
-    return "*" in allowed or business_view_id in allowed
+    return _policy_allows_agent(_actor_policy(request), agent_id)
 
 
 def _websocket_has_roles(websocket: WebSocket, allowed_roles: set[str]) -> bool:
-    session_policy = _session_actor_policy(websocket)
-    if session_policy is not None:
-        roles = session_policy.roles
-        return "admin" in roles or bool(roles.intersection(allowed_roles))
-    settings = get_settings()
-    if not settings.agent_rbac_enabled:
-        return True
-    actor_policy = _actor_policy_from_headers(websocket.headers)
-    if actor_policy is not None:
-        roles = actor_policy.roles
-    elif _trusted_policy_required(settings):
-        roles = set()
-    else:
-        roles = _roles_from_headers(
-            websocket.headers,
-            roles_header=settings.agent_rbac_roles_header,
-        )
-    return "admin" in roles or bool(roles.intersection(allowed_roles))
-
-
-def _websocket_has_business_view_access(
-    websocket: WebSocket,
-    business_view_id: str | None,
-) -> bool:
-    session_policy = _session_actor_policy(websocket)
-    if session_policy is not None:
-        return _policy_allows_business_view(session_policy, business_view_id)
-    settings = get_settings()
-    if not settings.agent_rbac_enabled or business_view_id is None:
-        return True
-    actor_policy = _actor_policy_from_headers(websocket.headers)
-    if actor_policy is not None:
-        allowed_policy_views = actor_policy.business_view_ids
-        return (
-            allowed_policy_views is None
-            or "*" in allowed_policy_views
-            or business_view_id in allowed_policy_views
-        )
-    if _trusted_policy_required(settings):
-        return False
-    allowed = _business_views_from_headers(
-        websocket.headers,
-        business_views_header=settings.agent_rbac_business_views_header,
-    )
-    return "*" in allowed or business_view_id in allowed
+    return _policy_has_roles(_actor_policy(websocket), allowed_roles)
 
 
 def _websocket_has_agent_access(websocket: WebSocket, agent_id: str) -> bool:
-    session_policy = _session_actor_policy(websocket)
-    if session_policy is not None:
-        return _policy_allows_agent(session_policy, agent_id)
-    settings = get_settings()
-    if not settings.agent_rbac_enabled:
-        return True
-    actor_policy = _actor_policy_from_headers(websocket.headers)
-    if actor_policy is None:
-        return not _trusted_policy_required(settings)
-    allowed = actor_policy.agent_ids
-    return allowed is None or "*" in allowed or agent_id in allowed
-
-
-def _roles_from_headers(headers: Mapping[str, str], *, roles_header: str) -> set[str]:
-    raw_roles = headers.get(roles_header, "")
-    return {role.strip().lower() for role in raw_roles.replace(";", ",").split(",") if role.strip()}
-
-
-def _business_views_from_headers(
-    headers: Mapping[str, str],
-    *,
-    business_views_header: str,
-) -> set[str]:
-    raw_views = headers.get(business_views_header, "")
-    return {view.strip() for view in raw_views.replace(";", ",").split(",") if view.strip()}
-
-
-def _signed_identity_required(settings: object | None = None) -> bool:
-    active_settings = settings if settings is not None else get_settings()
-    secret = getattr(active_settings, "agent_rbac_identity_hmac_secret", None)
-    return bool(secret)
-
-
-def _external_rbac_policy_required(settings: object | None = None) -> bool:
-    active_settings = settings if settings is not None else get_settings()
-    return bool(getattr(active_settings, "agent_rbac_policy_url", None))
-
-
-def _jwt_identity_required(settings: object | None = None) -> bool:
-    active_settings = settings if settings is not None else get_settings()
-    return bool(getattr(active_settings, "agent_rbac_jwt_bearer_enabled", False))
-
-
-def _trusted_policy_required(settings: object | None = None) -> bool:
-    active_settings = settings if settings is not None else get_settings()
-    return (
-        _signed_identity_required(active_settings)
-        or _jwt_identity_required(active_settings)
-        or _external_rbac_policy_required(active_settings)
-    )
-
-
-def _trusted_identity_claims_from_headers(headers: Mapping[str, str]) -> dict[str, object] | None:
-    return _signed_identity_claims_from_headers(headers) or _jwt_claims_from_headers(headers)
-
-
-def _signed_identity_policy_from_headers(headers: Mapping[str, str]) -> ActorPolicy | None:
-    claims = _signed_identity_claims_from_headers(headers)
-    if claims is None:
-        return None
-    return _actor_policy_from_mapping(claims)
-
-
-def _jwt_policy_from_headers(headers: Mapping[str, str]) -> ActorPolicy | None:
-    claims = _jwt_claims_from_headers(headers)
-    if claims is None:
-        return None
-    return _jwt_policy_from_claims(claims)
-
-
-def _actor_name_from_headers(headers: Mapping[str, str]) -> str:
-    settings = get_settings()
-    claims = _trusted_identity_claims_from_headers(headers)
-    if claims is not None:
-        actor = claims.get("actor") or claims.get("sub")
-        if isinstance(actor, str) and actor:
-            return actor
-    return headers.get(settings.agent_rbac_actor_header, "anonymous")
-
-
-def _signed_identity_claims_from_headers(headers: Mapping[str, str]) -> dict[str, object] | None:
-    settings = get_settings()
-    secret = settings.agent_rbac_identity_hmac_secret
-    if not secret:
-        return None
-    raw_identity = headers.get(settings.agent_rbac_identity_header, "")
-    if "." not in raw_identity:
-        return None
-    payload_part, signature = raw_identity.rsplit(".", 1)
-    expected_signature = hmac.new(
-        secret.encode("utf-8"),
-        payload_part.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    if not hmac.compare_digest(expected_signature, signature):
-        return None
-    try:
-        payload = base64.urlsafe_b64decode(_base64url_padded(payload_part)).decode("utf-8")
-        loaded = json.loads(payload)
-    except (ValueError, json.JSONDecodeError):
-        return None
-    if not isinstance(loaded, dict):
-        return None
-    claims = {str(key): value for key, value in loaded.items() if isinstance(key, str)}
-    if _signed_identity_time_invalid(claims):
-        return None
-    return claims
-
-
-def _jwt_claims_from_headers(headers: Mapping[str, str]) -> dict[str, object] | None:
-    settings = get_settings()
-    if not settings.agent_rbac_jwt_bearer_enabled:
-        return None
-    raw_authorization = headers.get("authorization", "") or headers.get("Authorization", "")
-    scheme, _, token = raw_authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        return None
-    parts = token.split(".")
-    if len(parts) != 3:
-        return None
-    header_part, payload_part, signature_part = parts
-    try:
-        header = json.loads(base64.urlsafe_b64decode(_base64url_padded(header_part)))
-        payload = json.loads(base64.urlsafe_b64decode(_base64url_padded(payload_part)))
-    except (ValueError, json.JSONDecodeError):
-        return None
-    if not isinstance(header, dict) or not isinstance(payload, dict):
-        return None
-    signing_input = f"{header_part}.{payload_part}".encode()
-    signature = base64.urlsafe_b64decode(_base64url_padded(signature_part))
-    algorithm = header.get("alg")
-    if algorithm == "HS256":
-        if not settings.agent_rbac_jwt_hs256_secret:
-            return None
-        if not _jwt_hs256_signature_valid(signing_input, signature_part):
-            return None
-    elif algorithm == "RS256":
-        if not _jwt_rs256_signature_valid(header, signing_input, signature):
-            return None
-    else:
-        return None
-    claims = {str(key): value for key, value in payload.items() if isinstance(key, str)}
-    if _signed_identity_time_invalid(claims):
-        return None
-    if settings.agent_rbac_jwt_issuer and claims.get("iss") != settings.agent_rbac_jwt_issuer:
-        return None
-    if settings.agent_rbac_jwt_audience and not _jwt_audience_matches(
-        claims.get("aud"),
-        settings.agent_rbac_jwt_audience,
-    ):
-        return None
-    return claims
-
-
-def _jwt_hs256_signature_valid(signing_input: bytes, signature_part: str) -> bool:
-    settings = get_settings()
-    if not settings.agent_rbac_jwt_hs256_secret:
-        return False
-    expected_signature = hmac.new(
-        settings.agent_rbac_jwt_hs256_secret.encode("utf-8"),
-        signing_input,
-        hashlib.sha256,
-    ).digest()
-    expected_part = base64.urlsafe_b64encode(expected_signature).decode("ascii").rstrip("=")
-    return hmac.compare_digest(expected_part, signature_part)
-
-
-def _jwt_rs256_signature_valid(
-    header: Mapping[str, object],
-    signing_input: bytes,
-    signature: bytes,
-) -> bool:
-    jwk = _jwt_jwk_for_header(header)
-    if jwk is None:
-        return False
-    try:
-        padding_module = cast(
-            Any,
-            import_module("cryptography.hazmat.primitives.asymmetric.padding"),
-        )
-        rsa_module = cast(Any, import_module("cryptography.hazmat.primitives.asymmetric.rsa"))
-        hashes_module = cast(Any, import_module("cryptography.hazmat.primitives.hashes"))
-    except ImportError:
-        return False
-    modulus = jwk.get("n")
-    exponent = jwk.get("e")
-    if not isinstance(modulus, str) or not isinstance(exponent, str):
-        return False
-    try:
-        public_numbers = rsa_module.RSAPublicNumbers(
-            e=int.from_bytes(base64.urlsafe_b64decode(_base64url_padded(exponent)), "big"),
-            n=int.from_bytes(base64.urlsafe_b64decode(_base64url_padded(modulus)), "big"),
-        )
-        public_key = public_numbers.public_key()
-        public_key.verify(
-            signature,
-            signing_input,
-            padding_module.PKCS1v15(),
-            hashes_module.SHA256(),
-        )
-    except Exception:
-        return False
-    return True
-
-
-def _jwt_jwk_for_header(header: Mapping[str, object]) -> dict[str, object] | None:
-    settings = get_settings()
-    if not settings.agent_rbac_jwt_jwks_url:
-        return None
-    key_id = header.get("kid")
-    if not isinstance(key_id, str) or not key_id:
-        return None
-    jwks = _jwt_jwks(settings.agent_rbac_jwt_jwks_url)
-    keys = jwks.get("keys")
-    if not isinstance(keys, list):
-        return None
-    for key in keys:
-        if isinstance(key, dict) and key.get("kid") == key_id and key.get("kty") == "RSA":
-            return {str(item_key): item_value for item_key, item_value in key.items()}
-    return None
-
-
-def _jwt_jwks(url: str) -> dict[str, object]:
-    settings = get_settings()
-    cached = _jwt_jwks_cache.get(url)
-    now = monotonic()
-    if cached is not None:
-        payload, expires_at = cached
-        if now < expires_at:
-            return payload
-    try:
-        with httpx.Client(timeout=settings.agent_rbac_policy_timeout_seconds) as client:
-            response = client.get(url)
-            response.raise_for_status()
-            payload = response.json()
-    except (httpx.HTTPError, ValueError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    ttl = max(0, settings.agent_rbac_jwt_jwks_cache_seconds)
-    if ttl > 0:
-        _jwt_jwks_cache[url] = (
-            {str(key): value for key, value in payload.items() if isinstance(key, str)},
-            now + ttl,
-        )
-    return {str(key): value for key, value in payload.items() if isinstance(key, str)}
-
-
-def _jwt_audience_matches(value: object, expected: str) -> bool:
-    if isinstance(value, str):
-        return value == expected
-    if isinstance(value, list):
-        return any(item == expected for item in value if isinstance(item, str))
-    return False
-
-
-def _base64url_padded(value: str) -> bytes:
-    padding = "=" * (-len(value) % 4)
-    return f"{value}{padding}".encode("ascii")
-
-
-def _signed_identity_time_invalid(claims: Mapping[str, object]) -> bool:
-    now = datetime.now(UTC).timestamp()
-    exp = claims.get("exp")
-    if isinstance(exp, int | float) and now > float(exp):
-        return True
-    nbf = claims.get("nbf")
-    return isinstance(nbf, int | float) and now < float(nbf)
-
-
-def _actor_policy_from_headers(headers: Mapping[str, str]) -> ActorPolicy | None:
-    settings = get_settings()
-    external_policy = _external_actor_policy_from_headers(headers)
-    if external_policy is not None:
-        return external_policy
-    if _external_rbac_policy_required(settings):
-        return None
-    signed_policy = _signed_identity_policy_from_headers(headers)
-    if signed_policy is not None:
-        return signed_policy
-    jwt_policy = _jwt_policy_from_headers(headers)
-    if jwt_policy is not None:
-        return jwt_policy
-    if _signed_identity_required(settings) or _jwt_identity_required(settings):
-        return None
-    if not settings.agent_rbac_actor_policies_json:
-        return None
-    actor = headers.get(settings.agent_rbac_actor_header, "")
-    policies = _actor_policies_from_json(settings.agent_rbac_actor_policies_json)
-    return policies.get(actor)
-
-
-def _external_actor_policy_from_headers(headers: Mapping[str, str]) -> ActorPolicy | None:
-    settings = get_settings()
-    if not settings.agent_rbac_policy_url:
-        return None
-    claims = _trusted_identity_claims_from_headers(headers)
-    if (_signed_identity_required(settings) or _jwt_identity_required(settings)) and claims is None:
-        return None
-    actor = _actor_from_claims(claims) or headers.get(settings.agent_rbac_actor_header, "")
-    if not actor:
-        return None
-    cache_key = _external_rbac_policy_cache_key(actor, claims)
-    cached_policy = _external_rbac_policy_from_cache(cache_key)
-    if cached_policy is not None:
-        return cached_policy
-    try:
-        with httpx.Client(timeout=settings.agent_rbac_policy_timeout_seconds) as client:
-            response = client.post(
-                settings.agent_rbac_policy_url,
-                json={"actor": actor, "claims": claims or {}},
-                headers=_external_rbac_policy_headers(settings.agent_rbac_policy_api_key),
-            )
-            response.raise_for_status()
-            payload = response.json()
-    except (httpx.HTTPError, ValueError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    policy_payload = payload.get("policy", payload)
-    if not isinstance(policy_payload, dict):
-        return None
-    policy = _actor_policy_from_mapping(policy_payload)
-    if policy is None:
-        return None
-    _cache_external_rbac_policy(cache_key, policy)
-    return policy
-
-
-def _actor_from_claims(claims: Mapping[str, object] | None) -> str | None:
-    if claims is None:
-        return None
-    actor = claims.get("actor") or claims.get("sub")
-    return actor if isinstance(actor, str) and actor else None
-
-
-def _external_rbac_policy_headers(api_key: str | None) -> dict[str, str]:
-    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
-
-
-def _external_rbac_policy_cache_key(
-    actor: str,
-    claims: Mapping[str, object] | None,
-) -> str:
-    claims_json = json.dumps(claims or {}, ensure_ascii=False, sort_keys=True, default=str)
-    digest = hashlib.sha256(claims_json.encode("utf-8")).hexdigest()
-    return f"{actor}:{digest}"
-
-
-def _external_rbac_policy_from_cache(cache_key: str) -> ActorPolicy | None:
-    settings = get_settings()
-    if settings.agent_rbac_policy_cache_seconds <= 0:
-        return None
-    cached = _rbac_policy_cache.get(cache_key)
-    if cached is None:
-        return None
-    policy, expires_at = cached
-    if monotonic() >= expires_at:
-        _rbac_policy_cache.pop(cache_key, None)
-        return None
-    return policy
-
-
-def _cache_external_rbac_policy(cache_key: str, policy: ActorPolicy) -> None:
-    settings = get_settings()
-    ttl = settings.agent_rbac_policy_cache_seconds
-    if ttl <= 0:
-        return
-    if len(_rbac_policy_cache) > 1000:
-        now = monotonic()
-        expired = [
-            key for key, (_policy, expires_at) in _rbac_policy_cache.items() if now >= expires_at
-        ]
-        for key in expired:
-            _rbac_policy_cache.pop(key, None)
-    _rbac_policy_cache[cache_key] = (policy, monotonic() + ttl)
-
-
-def _actor_policies_from_json(raw: str) -> dict[str, ActorPolicy]:
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
-    policies: dict[str, ActorPolicy] = {}
-    for actor, policy_value in parsed.items():
-        if not isinstance(actor, str) or not isinstance(policy_value, dict):
-            continue
-        policy = _actor_policy_from_mapping(policy_value)
-        if policy is not None:
-            policies[actor] = policy
-    return policies
-
-
-def _actor_policy_from_mapping(value: Mapping[str, object]) -> ActorPolicy | None:
-    roles = _string_set_from_policy(value.get("roles"))
-    if not roles:
-        return None
-    return ActorPolicy(
-        roles={role.lower() for role in roles},
-        business_view_ids=_optional_string_set_from_policy(value.get("business_view_ids")),
-        agent_ids=_optional_string_set_from_policy(value.get("agent_ids")),
-    )
-
-
-def _jwt_policy_from_claims(claims: Mapping[str, object]) -> ActorPolicy | None:
-    settings = get_settings()
-    policy_payload = {
-        "roles": claims.get(settings.agent_rbac_jwt_roles_claim),
-        "business_view_ids": claims.get(settings.agent_rbac_jwt_business_views_claim),
-        "agent_ids": claims.get(settings.agent_rbac_jwt_agent_ids_claim),
-    }
-    return _actor_policy_from_mapping(policy_payload)
+    return _policy_allows_agent(_actor_policy(websocket), agent_id)
 
 
 def _request_agent_ids(request: Request) -> set[str] | None:
-    """利用者が使えるエージェント（None は制限なし）。Cookie のセッションを header より優先する。"""
-    session_policy = _session_actor_policy(request)
-    if session_policy is not None:
-        agent_ids = session_policy.agent_ids
-        return None if agent_ids is None or "*" in agent_ids else agent_ids
-    return _actor_agent_ids(request.headers)
-
-
-def _actor_agent_ids(headers: Mapping[str, str]) -> set[str] | None:
-    settings = get_settings()
-    actor_policy = _actor_policy_from_headers(headers)
-    if actor_policy is None:
-        if _trusted_policy_required(settings):
-            return set()
-        return None
-    return actor_policy.agent_ids
-
-
-def _string_set_from_policy(value: object) -> set[str]:
-    if isinstance(value, str):
-        return {item.strip() for item in value.replace(";", ",").split(",") if item.strip()}
-    if isinstance(value, list):
-        return {item.strip() for item in value if isinstance(item, str) and item.strip()}
-    return set()
-
-
-def _optional_string_set_from_policy(value: object) -> set[str] | None:
-    if value is None:
-        return None
-    return _string_set_from_policy(value)
-
-
-def _run_create_business_view_id(request: RunCreateRequest) -> str | None:
-    metadata_view = request.metadata.get("business_view_id")
-    if isinstance(metadata_view, str) and metadata_view:
-        return metadata_view
-    for call in request.tool_calls:
-        view = call.arguments.get("business_view_id")
-        if isinstance(view, str) and view:
-            return view
-    return None
-
-
-def run_business_view_id(run: RunState) -> str | None:
-    """Run の業務ビュー ID（権限管理の対象一覧も使う）。"""
-    return _run_business_view_id(run)
-
-
-def _run_business_view_id(run: RunState) -> str | None:
-    metadata_view = run.metadata.get("business_view_id")
-    if isinstance(metadata_view, str) and metadata_view:
-        return metadata_view
-    for call in run.pending_tool_calls:
-        view = call.arguments.get("business_view_id")
-        if isinstance(view, str) and view:
-            return view
-    for step in run.steps:
-        if step.tool_call is None:
-            continue
-        view = step.tool_call.arguments.get("business_view_id")
-        if isinstance(view, str) and view:
-            return view
-    return None
+    """利用者が使えるエージェント（None は制限なし）。"""
+    return _actor_policy(request).agent_ids
 
 
 def _run_for_approval(approval_id: str) -> RunState:
@@ -4039,7 +3424,6 @@ def _tool_call_audit_data(
                 approval_status=approval_status,
                 error_code=error_code,
                 has_guardrail_warnings=has_guardrail_warnings,
-                business_view_ids=_projection_business_view_allowlist(request),
                 offset=offset,
                 limit=limit,
             )
@@ -4089,31 +3473,6 @@ def _tool_call_audit_data(
         filters=filters,
         records=records[offset : offset + limit],
     )
-
-
-def _projection_business_view_allowlist(request: Request) -> set[str] | None:
-    session_policy = _session_actor_policy(request)
-    if session_policy is not None:
-        views = session_policy.business_view_ids
-        return None if views is None or "*" in views else views
-    settings = get_settings()
-    if not settings.agent_rbac_enabled:
-        return None
-    actor_policy = _actor_policy_from_headers(request.headers)
-    if actor_policy is not None:
-        allowed_policy_views = actor_policy.business_view_ids
-        if allowed_policy_views is None or "*" in allowed_policy_views:
-            return None
-        return allowed_policy_views
-    if _trusted_policy_required(settings):
-        return set()
-    allowed = _business_views_from_headers(
-        request.headers,
-        business_views_header=settings.agent_rbac_business_views_header,
-    )
-    if "*" in allowed:
-        return None
-    return allowed
 
 
 def _audit_filters(

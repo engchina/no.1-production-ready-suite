@@ -33,11 +33,10 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
 
     service_name: str = "production-ready-agent"
     # --- 認証（#215）---
-    # local: 画面は全権限のローカル利用者（ログイン不要。DB セッションを作らない）。API の RBAC は
-    #   従来どおり AGENT_RBAC_ENABLED の header / JWT / 外部 policy に従う（開発・CI 用）。
-    # production: 画面は共通認証（PLATFORM_* のユーザー・ロール）のログインを必須にする。Cookie の
-    #   ないリクエストは AGENT_RBAC_ENABLED=true のときだけ header / JWT / 外部 policy で判定する
-    #   （外部連携用）。どちらもなければ 401。
+    # RAG / NL2SQL と同じ共通認証（#750）。ユーザー・ロールはどちらも Oracle の PLATFORM_*。
+    # local: ログインを省略し、全権限のローカル利用者として使う（開発用）。
+    # production: 共通認証（PLATFORM_* のユーザー・ロール）のログインを必須にする。Cookie の
+    #   ないリクエストは 401（Runtime からの呼出しは Binding token の /api/mcp/{binding_id}）。
     auth_mode: Literal["local", "production"] = "local"
     # 構成管理者と認証ポリシーは共通 `.env` の PLATFORM_ADMIN_* / PLATFORM_AUTH_*（#211）、
     # Cookie 名は製品ごとの AGENT_APP_AUTH_*。構成管理者 token の署名鍵に service_name を使う。
@@ -178,26 +177,6 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_runtime_oracle_projection_prefix: str = "AGENT_RUNTIME"
     agent_runtime_oracle_projection_retention_days: int = 0
     agent_runtime_oracle_projection_write_mode: str = "replace"
-    agent_rbac_enabled: bool = False
-    agent_rbac_actor_header: str = "x-agent-actor"
-    agent_rbac_roles_header: str = "x-agent-roles"
-    agent_rbac_business_views_header: str = "x-agent-business-views"
-    agent_rbac_actor_policies_json: str | None = None
-    agent_rbac_identity_header: str = "x-agent-identity"
-    agent_rbac_identity_hmac_secret: str | None = None
-    agent_rbac_policy_url: str | None = None
-    agent_rbac_policy_api_key: str | None = None
-    agent_rbac_policy_timeout_seconds: float = 2.0
-    agent_rbac_policy_cache_seconds: int = 60
-    agent_rbac_jwt_bearer_enabled: bool = False
-    agent_rbac_jwt_hs256_secret: str | None = None
-    agent_rbac_jwt_jwks_url: str | None = None
-    agent_rbac_jwt_jwks_cache_seconds: int = 300
-    agent_rbac_jwt_issuer: str | None = None
-    agent_rbac_jwt_audience: str | None = None
-    agent_rbac_jwt_roles_claim: str = "roles"
-    agent_rbac_jwt_business_views_claim: str = "business_view_ids"
-    agent_rbac_jwt_agent_ids_claim: str = "agent_ids"
     agent_max_tool_calls_per_run: int = 20
     agent_max_pending_approvals_per_run: int = 5
     agent_metrics_enabled: bool = True

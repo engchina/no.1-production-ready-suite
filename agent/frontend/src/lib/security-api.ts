@@ -25,7 +25,6 @@ import {
   request,
   type AccessTargetPage,
   type AgentAccessTarget,
-  type BusinessViewAccessTarget,
   type CurrentUser,
   type RoleAccessUpdate,
   type SecurityRole,
@@ -144,18 +143,13 @@ export const securityApi = {
   // ---- 権限管理（Agent 固有） ----
   permissions: (options: RequestOptions = {}) =>
     request<PermissionDefinition[]>("/api/security/permissions", { signal: options.signal }),
-  /** 権限管理で選べるエージェント / 業務ビューの候補（サーバー側の検索とページング。#608）。 */
+  /** 権限管理で選べるエージェントの候補（サーバー側の検索とページング。#608）。 */
   agentTargets: (query: RolePermissionTargetQuery, options: RequestOptions = {}) =>
     request<AccessTargetPage<AgentAccessTarget>>(
       `/api/security/access-targets/agents?${rolePermissionTargetSearchParams(query).toString()}`,
       { signal: options.signal },
     ),
-  businessViewTargets: (query: RolePermissionTargetQuery, options: RequestOptions = {}) =>
-    request<AccessTargetPage<BusinessViewAccessTarget>>(
-      `/api/security/access-targets/business-views?${rolePermissionTargetSearchParams(query).toString()}`,
-      { signal: options.signal },
-    ),
-  /** ロールの Agent 権限と対象範囲（エージェント・業務ビュー）だけを置き換える。 */
+  /** ロールの Agent 権限と対象範囲（エージェント）だけを置き換える。 */
   updateRoleAccess: (update: RoleAccessUpdate) =>
     mutate<SecurityRole>(
       `/api/security/roles/${encodeURIComponent(update.role_id)}/access`,
@@ -163,7 +157,6 @@ export const securityApi = {
         version: update.version,
         permissions: update.permissions,
         agent_ids: update.agent_ids,
-        business_view_ids: update.business_view_ids,
       }),
     ).then(normalizeRole),
 } satisfies AuthApi<CurrentUser> &
@@ -177,7 +170,6 @@ export function normalizeRole(role: SecurityRole): SecurityRole {
     ...role,
     permissions: role.permissions ?? [],
     agent_ids: role.agent_ids ?? [],
-    business_view_ids: role.business_view_ids ?? [],
   };
 }
 

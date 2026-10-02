@@ -21,7 +21,6 @@ const ADMIN_USER = dbUser({
   role_codes: ["AGENT_ADMIN"],
   permissions: ALL_PERMISSION_CODES,
   allowed_agent_ids: null,
-  allowed_business_view_ids: null,
 });
 
 const FIRST_USER = dbUser({
