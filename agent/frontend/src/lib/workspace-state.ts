@@ -18,6 +18,8 @@ const MAX_VALUE_CHARS = 20_000;
  * A 型（一覧 → 全画面エディタ）の編集対象は URL の `?id=` が唯一の情報源なので、ここには置かない（#137）。
  */
 export const WORKSPACE_FIELDS = {
+  // チャット（#768）: 選んだ Agent・会話と、送る前の下書き。
+  chat: ["agentId", "threadId", "draft"],
   runs: ["selectedRunId", "streamMode", "goal"],
   audit: ["filterForm", "appliedForm", "page"],
   // 品質評価の業務 Agent・表示している評価（#776）。評価ケースは評価セットとして保存する。

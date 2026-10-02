@@ -588,6 +588,58 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
 
   // --- Run / 承認 / 監査 ---
   if (method === "GET" && at("runs")) return { runs: state.runs };
+  // チャット（#768）。mock の Run はすぐ完了し、質問を引いた回答の成果物を持つ（実行中・承認待ちは spec が state を書き換える）。
+  if (method === "POST" && at("runs")) {
+    const threadId = typeof body.thread_id === "string" ? body.thread_id : null;
+    if (threadId && !state.runs.some((run) => run.thread_id === threadId)) {
+      throw new HttpError(404, "会話が見つかりません。");
+    }
+    const id = `run-chat-${state.runs.length + 1}`;
+    const run: Json = {
+      id,
+      goal: String(body.goal ?? ""),
+      agent_id: String(body.agent_id ?? "default"),
+      runtime_id: "builtin",
+      status: "completed",
+      steps: [],
+      events: [],
+      approvals: [],
+      artifacts: [{ id: `${id}-answer`, name: "回答", kind: "answer", content: { text: `「${String(body.goal ?? "")}」への回答です。` } }],
+      pending_tool_calls: [],
+      metadata: {},
+      created_by_user_uuid: "local",
+      thread_id: threadId ?? `thread_${String(state.runs.length + 1).padStart(32, "0")}`,
+      created_at: MOCK_NOW,
+      updated_at: MOCK_NOW,
+    };
+    state.runs.push(run);
+    return run;
+  }
+  if (method === "GET" && at("threads")) {
+    const agentId = query.get("agent_id");
+    const grouped = new Map<string, Json[]>();
+    for (const run of state.runs) {
+      if (typeof run.thread_id !== "string") continue;
+      if (agentId && run.agent_id !== agentId) continue;
+      grouped.set(run.thread_id, [...(grouped.get(run.thread_id) ?? []), run]);
+    }
+    return {
+      threads: [...grouped.entries()].map(([threadId, runs]) => ({
+        thread_id: threadId,
+        agent_id: runs[0].agent_id,
+        title: String(runs[0].goal).split("\n")[0],
+        run_count: runs.length,
+        last_status: runs[runs.length - 1].status,
+        created_at: runs[0].created_at,
+        updated_at: runs[runs.length - 1].updated_at,
+      })).reverse(),
+    };
+  }
+  if (method === "GET" && at("threads", "*")) {
+    const runs = state.runs.filter((run) => run.thread_id === second);
+    if (runs.length === 0) throw new HttpError(404, "会話が見つかりません。");
+    return { thread_id: second, agent_id: runs[0].agent_id, runs };
+  }
   if (head === "runs" && second) {
     const run = findOr404(state.runs, "id", second, "run");
     if (method === "GET" && at("runs", "*", "audit")) {

@@ -429,6 +429,25 @@ def build_sdk_agent(
     )
 
 
+# 会話の続きでモデルに渡す前の往復の数（#768。古いものから落とす）。
+THREAD_HISTORY_TURNS = 10
+
+
+def conversation_input(run_id: str, goal: str) -> str | list[Any]:
+    """同じ会話の前の質問と回答を付けた入力（会話が無ければ質問の文字列だけ。#768）。"""
+    from app.features.agent.runtime import runtime_repository
+
+    history = runtime_repository.thread_history(run_id, limit=THREAD_HISTORY_TURNS)
+    if not history:
+        return goal
+    items: list[Any] = []
+    for question, answer in history:
+        items.append({"role": "user", "content": question})
+        items.append({"role": "assistant", "content": answer})
+    items.append({"role": "user", "content": goal})
+    return items
+
+
 async def execute_run(run_id: str) -> None:
     """Run を最初から実行する（作成直後・dispatcher から呼ぶ）。"""
     from app.features.agent.runtime import runtime_repository
@@ -448,7 +467,9 @@ async def execute_run(run_id: str) -> None:
             agent_id=agent.id,
             user_uuid=run.created_by_user_uuid,
         )
-        result = await Runner.run(sdk_agent, run.goal, max_turns=_max_turns())
+        result = await Runner.run(
+            sdk_agent, conversation_input(run_id, run.goal), max_turns=_max_turns()
+        )
         result = await _dry_run_approvals(run, sdk_agent, result)
         await _finish(run_id, result)
     except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する

@@ -5,6 +5,7 @@ import { AppShell, PageBody, PageHeader } from "@engchina/production-ready-ui";
 import { RequireAuth, useForbiddenRedirect } from "@engchina/production-ready-system-settings";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
+import { ChatPage } from "@/pages/ChatPage";
 import { ForbiddenPage, LoginPage, PasswordChangePage } from "@/components/security/AuthPages";
 import { agentIdentityKey, useAuth } from "@/components/security/AuthProvider";
 import { CapabilityGate } from "@/components/security/CapabilityGate";
@@ -72,6 +73,14 @@ export function App() {
           element={
             <Capability need="viewRuns" titleKey="nav.runtimes">
               <RuntimesPage />
+            </Capability>
+          }
+        />
+        <Route
+          path={APP_ROUTES.chat}
+          element={
+            <Capability need="operateRuns" titleKey="nav.chat">
+              <ChatPage />
             </Capability>
           }
         />
