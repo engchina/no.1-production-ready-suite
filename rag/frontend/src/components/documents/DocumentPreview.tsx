@@ -392,7 +392,7 @@ function BboxPreviewOverlay({
         data-bbox-mode={overlayRect.coordinateMode}
         data-bbox-unit={overlayRect.unit}
         data-testid="bbox-preview-overlay"
-        className="pointer-events-none absolute rounded-sm border-2 border-accent-emphasis bg-accent-muted shadow-[0_0_0_1px_rgba(255,255,255,0.9)]"
+        className="pointer-events-none absolute rounded-sm border-2 border-accent-emphasis bg-accent-muted ring-1 ring-surface/90"
         style={bboxOverlayStyle(overlayRect)}
       />
     </div>

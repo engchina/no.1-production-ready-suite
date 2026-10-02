@@ -339,6 +339,19 @@ def test_initialize_then_no_op_increments_epoch_only_on_change() -> None:
     assert no_op["operation_state"]["schema_epoch"] == 1
 
 
+def test_initialize_clears_the_database_status_cache() -> None:
+    """システムテーブルの操作の後は、DB ゲートの `ok` の cache を使わない（#793）。"""
+    from pr_system_settings.database_status import DatabaseStatusCache, DatabaseStatusData
+
+    cache = DatabaseStatusCache(30)
+    cache.put("key", DatabaseStatusData(status="ok", check="ok"))
+    manager = _DemoManager(_FakeDatabase())
+
+    manager.initialize()
+
+    assert cache.get("key") is None
+
+
 def test_recreate_checks_confirmation_before_touching_the_database() -> None:
     database = _FakeDatabase()
     manager = _DemoManager(database)

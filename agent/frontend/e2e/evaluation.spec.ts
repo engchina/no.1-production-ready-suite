@@ -207,6 +207,30 @@ for (const viewport of VIEWPORTS) {
   }
 }
 
+for (const viewport of VIEWPORTS) {
+  test(`最近の評価は 365 日残し、サーバー側でページングする (${viewport.name})`, async ({ page, mockApi }) => {
+    // #794: 評価の履歴は件数（旧 50 件）ではなく期間で残し、一覧は offset / limit で取得する。
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    seedFinishedJobs(mockApi);
+    const [latest] = mockApi.state.evaluations;
+    for (let index = 0; index < 12; index += 1) {
+      mockApi.state.evaluations.push({ ...latest, id: `eval-old-${index}`, previous_job_id: null, previous_summary: null });
+    }
+    await page.goto("/evaluation");
+
+    await expect(page.getByText("新しい順。終わった評価は 365 日残します。")).toBeVisible();
+    const pager = page.getByTestId("evaluation-jobs-pagination");
+    await expect(pager).toContainText("1 - 10 / 14 件");
+    await pager.getByRole("button", { name: "次へ" }).click();
+    await expect(pager).toContainText("11 - 14 / 14 件");
+    const request = mockApi.lastRequest("GET", "/api/evaluations");
+    expect([request?.searchParams.get("offset"), request?.searchParams.get("limit")]).toEqual(["10", "10"]);
+    // 表示している評価は最新の評価のまま（2 ページ目を見ても変わらない）。
+    await expect(page.getByTestId("evaluation-summary")).toContainText("67%");
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
 test("Excel から評価ケースを取り込み（確認して置き換え）、テンプレートと書き出しを取得できる", async ({ page, mockApi }, testInfo) => {
   seedSet(mockApi);
   await page.goto("/evaluation?id=evset-seeded");

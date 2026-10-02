@@ -54,7 +54,7 @@ export function Dropzone({
         disabled && "cursor-not-allowed opacity-60"
       )}
     >
-      <UploadCloud size={28} className="text-accent-fg" aria-hidden />
+      <UploadCloud size={24} className="text-accent-fg" aria-hidden />
       <p className="text-sm font-medium text-fg">{t("upload.dropzone")}</p>
       <p className="text-xs text-fg-muted">{t("upload.dropzoneHint", { size: formatByteSize(maxUploadBytes) })}</p>
       <p className="max-w-2xl text-xs text-fg-muted">

@@ -956,7 +956,6 @@ function TrainingDataTable({
                   value={editingText}
                   onChange={(event) => onEditTextChange(event.currentTarget.value)}
                   rows={3}
-                  textareaClassName="min-h-24"
                 />
               ) : (
                 example.text
@@ -1199,7 +1198,6 @@ function ModelTestPanel({
           disabled={loading}
           onChange={(event) => onQuestionChange(event.currentTarget.value)}
           rows={6}
-          textareaClassName="min-h-36"
         />
       </section>
       <section className="grid content-start gap-3 rounded-md border border-border bg-surface-sunken p-4">

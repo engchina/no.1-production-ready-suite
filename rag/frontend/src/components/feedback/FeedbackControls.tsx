@@ -1,16 +1,7 @@
-import { CheckCircle2, Save, ThumbsDown, ThumbsUp } from "lucide-react";
-import { useState } from "react";
-
-import {
-  Button,
-  FieldLegend,
-  TextareaField,
-  ToggleChip,
-} from "@engchina/production-ready-ui";
+import { FeedbackControls as SharedFeedbackControls } from "@engchina/production-ready-ui";
 import {
   ApiError,
   type CitationFeedbackReason,
-  type CitationFeedbackRating,
   type FeedbackContentSnapshot,
   type FeedbackRequestBody,
   type FeedbackSourceSurface,
@@ -20,7 +11,6 @@ import {
 import { t } from "@/lib/i18n";
 import { useCurrentFeedback, useSubmitFeedback } from "@/lib/queries";
 import { toast } from "@/lib/toast";
-import { cn } from "@/lib/utils";
 import {
   FEEDBACK_ANSWER_REASONS,
   FEEDBACK_CITATION_REASONS,
@@ -40,6 +30,10 @@ interface FeedbackControlsProps {
   compact?: boolean;
 }
 
+/**
+ * 回答・引用への評価。見た目と操作は共有の `FeedbackControls`（#805）で、ここは RAG の API（trace・業務ビュー・
+ * 回答 / 引用・回答の記録）と文言をつなぐだけ。
+ */
 export function FeedbackControls({
   traceId,
   businessViewId,
@@ -53,219 +47,77 @@ export function FeedbackControls({
 }: FeedbackControlsProps) {
   const currentQuery = useCurrentFeedback(traceId ?? null);
   const mutation = useSubmitFeedback();
-  const [showReasons, setShowReasons] = useState(false);
-  const [selectedReason, setSelectedReason] = useState<CitationFeedbackReason | null>(null);
-  const [comment, setComment] = useState("");
-  const [correctedAnswer, setCorrectedAnswer] = useState("");
-  const [error, setError] = useState("");
-  const [retryPayload, setRetryPayload] = useState<FeedbackRequestBody | null>(null);
   const current = currentQuery.data?.find(
     (item) =>
       item.target_type === targetType &&
       (item.document_id ?? null) === documentId &&
       (item.chunk_id ?? null) === chunkId
   );
-  const disabled = !traceId || !businessViewId || currentQuery.isLoading || mutation.isPending;
-  const reasons = targetType === "answer" ? FEEDBACK_ANSWER_REASONS : FEEDBACK_CITATION_REASONS;
-  const label =
-    targetType === "answer"
-      ? t("feedback.controls.answerQuestion")
-      : t("feedback.controls.citationQuestion");
-  const helpfulLabel =
-    targetType === "answer"
-      ? t("feedback.controls.answerHelpful")
-      : t("search.citation.feedback.helpful");
-  const notHelpfulLabel =
-    targetType === "answer"
-      ? t("feedback.controls.answerNotHelpful")
-      : t("search.citation.feedback.notHelpful");
+  const answer = targetType === "answer";
+  const reasons = answer ? FEEDBACK_ANSWER_REASONS : FEEDBACK_CITATION_REASONS;
 
   if (!traceId || !businessViewId) return null;
 
-  function handleOpenReasons() {
-    setError("");
-    setSelectedReason(current?.reason ?? null);
-    setComment(current?.comment ?? "");
-    setCorrectedAnswer(current?.corrected_answer ?? "");
-    setShowReasons((open) => !open);
-  }
-
-  async function submit(
-    rating: CitationFeedbackRating,
-    reason: CitationFeedbackReason | null,
-    submittedComment: string | null,
-    submittedCorrectedAnswer: string | null = null
-  ) {
-    if (!traceId || !businessViewId) return;
-    const normalizedComment = submittedComment?.trim() || null;
-    const normalizedCorrectedAnswer = submittedCorrectedAnswer?.trim() || null;
-    if (
-      current?.rating === rating &&
-      (current.reason ?? null) === reason &&
-      (current.comment ?? null) === normalizedComment &&
-      (current.corrected_answer ?? null) === normalizedCorrectedAnswer
-    ) {
-      setShowReasons(false);
-      return;
-    }
-    const payload = buildFeedbackPayload({
-      trace_id: traceId,
-      business_view_id: businessViewId,
-      target_type: targetType,
-      source_surface: sourceSurface,
-      document_id: targetType === "citation" ? documentId : null,
-      chunk_id: targetType === "citation" ? chunkId : null,
-      message_id: messageId,
-      content_snapshot: messageId ? null : contentSnapshot,
-      rating,
-      reason,
-      comment: rating === "not_helpful" ? normalizedComment : null,
-      corrected_answer:
-        rating === "not_helpful" && targetType === "answer" ? normalizedCorrectedAnswer : null,
-    });
-    setError("");
-    setRetryPayload(payload);
-    try {
-      await mutation.mutateAsync(payload);
-      setShowReasons(false);
-      toast.success(t("feedback.controls.savedToast"));
-    } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("feedback.controls.saveError"));
-    }
-  }
-
   return (
-    <div className={cn("min-w-0", !compact && "mt-4 border-t border-border pt-3")}>
-      <div className={cn("flex gap-2", compact ? "items-center justify-end" : "flex-wrap items-center")}>
-        <span className={compact ? "sr-only" : "mr-1 text-sm font-medium text-fg"}>
-          {label}
-        </span>
-        <div className="flex gap-1" role="group" aria-label={label}>
-          <Button
-            type="button"
-            variant={current?.rating === "helpful" ? "secondary" : "ghost"}
-            size="sm"
-            className={cn(
-              "min-w-8 px-2",
-              current?.rating === "helpful" && "text-success-fg"
-            )}
-            aria-label={helpfulLabel}
-            tooltip={helpfulLabel}
-            aria-pressed={current?.rating === "helpful"}
-            disabled={disabled}
-            loading={mutation.isPending && retryPayload?.rating === "helpful"}
-            onClick={() => void submit("helpful", null, null)} icon={ThumbsUp}>
-            </Button>
-          <Button
-            type="button"
-            variant={current?.rating === "not_helpful" ? "secondary" : "ghost"}
-            size="sm"
-            className={cn(
-              "min-w-8 px-2",
-              current?.rating === "not_helpful" && "text-danger-fg"
-            )}
-            aria-label={notHelpfulLabel}
-            tooltip={notHelpfulLabel}
-            aria-pressed={current?.rating === "not_helpful"}
-            aria-expanded={showReasons}
-            disabled={disabled}
-            onClick={handleOpenReasons} icon={ThumbsDown}>
-            </Button>
-        </div>
-        {current && !compact ? (
-          <span className="inline-flex items-center gap-1 text-xs text-fg-muted" role="status">
-            <CheckCircle2 size={14} className="text-success-fg" aria-hidden />
-            {t("feedback.controls.savedInline")}
-          </span>
-        ) : null}
-      </div>
-
-      {showReasons ? (
-        <fieldset className="mt-3 rounded-md border border-border bg-surface-sunken p-3">
-          {/* 役に立たなかった理由は必須（未選択では保存できず、backend も reason を必須にする）。
-              コメントと修正した回答は任意なので何も付けない（#531）。 */}
-          <FieldLegend required className="px-1 text-xs font-medium">
-            {t("feedback.controls.reasonLegend")}
-          </FieldLegend>
-          <div className="flex flex-wrap gap-1" role="group" aria-label={t("feedback.controls.reasonLegend")}>
-            {reasons.map((reason) => (
-              <ToggleChip
-                key={reason}
-                selected={selectedReason === reason}
-                disabled={mutation.isPending}
-                onClick={() => setSelectedReason(reason)}
-              >
-                {t(FEEDBACK_REASON_LABEL_KEYS[reason])}
-              </ToggleChip>
-            ))}
-          </div>
-          <TextareaField
-            id={`feedback-comment-${targetType}-${chunkId ?? "answer"}`}
-            label={t("feedback.controls.commentLabel")}
-            className="mt-3"
-            value={comment}
-            maxLength={1000}
-            rows={3}
-            disabled={mutation.isPending}
-            placeholder={t("feedback.controls.commentPlaceholder")}
-            showCount={(count) => t("feedback.controls.commentCount", { count })}
-            onChange={(event) => setComment(event.target.value)}
-          />
-          {targetType === "answer" ? (
-            <TextareaField
-              id={`feedback-corrected-${chunkId ?? "answer"}`}
-              label={t("feedback.controls.correctedAnswerLabel")}
-              className="mt-3"
-              value={correctedAnswer}
-              maxLength={20000}
-              rows={3}
-              disabled={mutation.isPending}
-              placeholder={t("feedback.controls.correctedAnswerPlaceholder")}
-              helper={t("feedback.controls.correctedAnswerHelp")}
-              onChange={(event) => setCorrectedAnswer(event.target.value)}
-            />
-          ) : null}
-          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
-            <Button
-              type="button"
-              size="md"
-              icon={Save}
-              loading={mutation.isPending && retryPayload?.rating === "not_helpful"}
-              disabled={!selectedReason}
-              onClick={() => void submit("not_helpful", selectedReason, comment, correctedAnswer)}
-            >
-              {t("feedback.controls.save")}
-            </Button>
-            <Button type="button" variant="ghost" size="md" onClick={() => setShowReasons(false)}>
-              {t("common.cancel")}
-            </Button>
-          </div>
-        </fieldset>
-      ) : null}
-
-      {error ? (
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-danger-fg" role="alert">
-          <span>{error}</span>
-          {retryPayload ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={() =>
-                void submit(
-                  retryPayload.rating,
-                  retryPayload.reason ?? null,
-                  retryPayload.comment ?? null,
-                  retryPayload.corrected_answer ?? null
-                )
-              }
-            >
-              {t("common.retry")}
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
+    <SharedFeedbackControls<CitationFeedbackReason>
+      className={compact ? undefined : "mt-4"}
+      compact={compact}
+      disabled={currentQuery.isLoading}
+      value={
+        current
+          ? {
+              rating: current.rating,
+              reason: current.reason ?? null,
+              comment: current.comment ?? null,
+              correctedAnswer: current.corrected_answer ?? null,
+            }
+          : null
+      }
+      reasons={reasons.map((reason) => ({ value: reason, label: t(FEEDBACK_REASON_LABEL_KEYS[reason]) }))}
+      correctedAnswer={answer}
+      commentId={`feedback-comment-${targetType}-${chunkId ?? "answer"}`}
+      correctedAnswerId={`feedback-corrected-${chunkId ?? "answer"}`}
+      labels={{
+        question: answer ? t("feedback.controls.answerQuestion") : t("feedback.controls.citationQuestion"),
+        helpful: answer ? t("feedback.controls.answerHelpful") : t("search.citation.feedback.helpful"),
+        notHelpful: answer
+          ? t("feedback.controls.answerNotHelpful")
+          : t("search.citation.feedback.notHelpful"),
+        savedInline: t("feedback.controls.savedInline"),
+        reasonLegend: t("feedback.controls.reasonLegend"),
+        commentLabel: t("feedback.controls.commentLabel"),
+        commentPlaceholder: t("feedback.controls.commentPlaceholder"),
+        commentCount: (count) => t("feedback.controls.commentCount", { count }),
+        correctedAnswerLabel: t("feedback.controls.correctedAnswerLabel"),
+        correctedAnswerPlaceholder: t("feedback.controls.correctedAnswerPlaceholder"),
+        correctedAnswerHelp: t("feedback.controls.correctedAnswerHelp"),
+        save: t("feedback.controls.save"),
+        cancel: t("common.cancel"),
+        retry: t("common.retry"),
+        saveError: t("feedback.controls.saveError"),
+      }}
+      getErrorMessage={(error) => (error instanceof ApiError ? error.message : null)}
+      onSubmit={async (submission) => {
+        await mutation.mutateAsync(
+          buildFeedbackPayload({
+            trace_id: traceId,
+            business_view_id: businessViewId,
+            target_type: targetType,
+            source_surface: sourceSurface,
+            document_id: answer ? null : documentId,
+            chunk_id: answer ? null : chunkId,
+            message_id: messageId,
+            content_snapshot: messageId ? null : contentSnapshot,
+            rating: submission.rating,
+            reason: submission.reason,
+            comment: submission.rating === "not_helpful" ? submission.comment : null,
+            corrected_answer:
+              submission.rating === "not_helpful" && answer ? submission.correctedAnswer : null,
+          })
+        );
+        toast.success(t("feedback.controls.savedToast"));
+      }}
+    />
   );
 }
 

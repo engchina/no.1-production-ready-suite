@@ -1,8 +1,13 @@
 """チャットの回答へのフィードバックの集計と一覧（#774）。
 
 Run に保存した評価（`RunFeedback`）を、期間（評価の更新日時）・業務 Agent で絞って集計し、
-評価・理由でさらに絞った一覧を新しい順に返す。対象の Run（利用できる業務 Agent の Run だけ）は
-呼び出し側が渡す。集計は RAG の「フィードバック集計」と同じく、前の同じ長さの期間と比べる。
+評価・理由でさらに絞った一覧を新しい順にページで返す。集計は RAG の「フィードバック集計」と同じく、
+前の同じ長さの期間と比べる。
+
+- Oracle の構成は、保存した Run の事実（`AGENT_RUN_FACTS`）を SQL で集計し、一覧も SQL で
+  ページングする（`run_facts_store.OracleRunFactsStore`。#794）。
+- memory / file の構成は、メモリの Run から作った事実（`RunFact`）をここで集計する。
+  対象の Run（利用できる業務 Agent の Run だけ）は呼び出し側が渡す。
 """
 
 from __future__ import annotations
@@ -12,18 +17,15 @@ from datetime import datetime, timedelta
 
 from pydantic import BaseModel, Field
 
-from app.features.agent.runtime import (
-    FeedbackRating,
-    FeedbackReason,
-    RunFeedback,
-    RunState,
-    run_answer_text,
-)
+from app.features.agent.run_facts import REPORT_PERIOD_DAYS, RunFact
+from app.features.agent.runtime import FeedbackRating, FeedbackReason, RunFeedback
+from app.features.agent.usage import ReportSource
 
 # 画面で選べる期間（日）。
-FEEDBACK_PERIOD_DAYS: tuple[int, ...] = (7, 30, 90)
-# 一覧に返す上限（新しい順）。集計はすべての評価で数える。
-FEEDBACK_ITEMS_LIMIT = 500
+FEEDBACK_PERIOD_DAYS: tuple[int, ...] = REPORT_PERIOD_DAYS
+# 一覧の 1 ページの既定と上限（画面の `Pagination` は 10 件/ページ）。
+FEEDBACK_PAGE_SIZE = 10
+FEEDBACK_PAGE_SIZE_MAX = 100
 
 
 class ReasonCount(BaseModel):
@@ -65,33 +67,32 @@ class FeedbackItem(BaseModel):
 
 class FeedbackReport(BaseModel):
     days: int
+    source: ReportSource = "memory"
     since: datetime
     until: datetime
     summary: FeedbackSummary
     # 直前の同じ長さの期間（増減の比較に使う）。
     previous: FeedbackSummary
+    # 絞り込みに合う評価のうち、`offset` から `limit` 件（新しい順）。
     items: list[FeedbackItem] = Field(default_factory=list)
-    # 絞り込みに合う評価の件数（`items` は上限までの新しい順）。
+    # 絞り込みに合う評価の件数（ページングの総数）。
     matched: int = 0
+    offset: int = 0
+    limit: int = FEEDBACK_PAGE_SIZE
 
 
-def _rated_at(run: RunState) -> datetime | None:
-    times = [item.updated_at for item in (run.feedback, run.admin_review) if item is not None]
-    return max(times) if times else None
-
-
-def _matches(run: RunState, rating: FeedbackRating | None, reason: FeedbackReason | None) -> bool:
+def _matches(fact: RunFact, rating: FeedbackRating | None, reason: FeedbackReason | None) -> bool:
     """評価・理由の絞り込み（本人の評価か管理者の評価のどちらかが合えばよい）。"""
     return any(
         item is not None
         and (rating is None or item.rating == rating)
         and (reason is None or item.reason == reason)
-        for item in (run.feedback, run.admin_review)
+        for item in (fact.feedback, fact.admin_review)
     )
 
 
 def build_feedback_report(
-    runs: Iterable[RunState],
+    facts: Iterable[RunFact],
     *,
     days: int,
     now: datetime,
@@ -100,50 +101,50 @@ def build_feedback_report(
     reason: FeedbackReason | None,
     agent_names: Mapping[str, str],
     user_names: Callable[[list[str]], Mapping[str, str]],
+    offset: int = 0,
+    limit: int = FEEDBACK_PAGE_SIZE,
+    source: ReportSource = "memory",
 ) -> FeedbackReport:
     since = now - timedelta(days=days)
     previous_since = since - timedelta(days=days)
-    current: list[RunState] = []
-    previous: list[RunState] = []
-    for run in runs:
-        rated_at = _rated_at(run)
-        if rated_at is None or (agent_id and run.agent_id != agent_id):
+    current: list[RunFact] = []
+    previous: list[RunFact] = []
+    for fact in facts:
+        rated_at = fact.rated_at
+        if rated_at is None or (agent_id and fact.agent_id != agent_id):
             continue
         if since <= rated_at <= now:
-            current.append(run)
+            current.append(fact)
         elif previous_since <= rated_at < since:
-            previous.append(run)
+            previous.append(fact)
 
-    matched = [run for run in current if _matches(run, rating, reason)]
-    matched.sort(key=lambda run: _rated_at(run) or now, reverse=True)
-    listed = matched[:FEEDBACK_ITEMS_LIMIT]
-    people = {run.created_by_user_uuid for run in listed if run.created_by_user_uuid} | {
-        run.admin_review.user_uuid
-        for run in listed
-        if run.admin_review is not None and run.admin_review.user_uuid
-    }
-    names = user_names(sorted(people))
+    matched = [fact for fact in current if _matches(fact, rating, reason)]
+    # 新しい順（同じ日時は Run の ID の降順。SQL の ORDER BY と同じ）。
+    matched.sort(key=lambda fact: (fact.rated_at or now, fact.run_id), reverse=True)
     return FeedbackReport(
         days=days,
+        source=source,
         since=since,
         until=now,
-        summary=_summarize(current),
-        previous=_summarize(previous),
-        items=[_item(run, agent_names, names, now) for run in listed],
+        summary=summarize_feedback(current),
+        previous=summarize_feedback(previous),
+        items=feedback_items(matched[offset : offset + limit], agent_names, user_names, now),
         matched=len(matched),
+        offset=offset,
+        limit=limit,
     )
 
 
-def _summarize(runs: list[RunState]) -> FeedbackSummary:
-    summary = FeedbackSummary()
+def summarize_feedback(facts: list[RunFact]) -> FeedbackSummary:
     reasons: dict[FeedbackReason, int] = {}
-    for run in runs:
-        review = run.admin_review
+    summary = FeedbackSummary()
+    for fact in facts:
+        review = fact.admin_review
         if review is not None:
             summary.admin_reviewed += 1
             if review.rating == FeedbackRating.NOT_HELPFUL:
                 summary.admin_not_helpful += 1
-        feedback = run.feedback
+        feedback = fact.feedback
         if feedback is None:
             continue
         summary.total += 1
@@ -153,35 +154,53 @@ def _summarize(runs: list[RunState]) -> FeedbackSummary:
             summary.not_helpful += 1
             if feedback.reason is not None:
                 reasons[feedback.reason] = reasons.get(feedback.reason, 0) + 1
+    return finish_summary(summary, reasons)
+
+
+def finish_summary(
+    summary: FeedbackSummary, reasons: Mapping[FeedbackReason, int]
+) -> FeedbackSummary:
+    """役に立った割合と、理由の件数の多い順（同じなら理由の定義順）を入れる（SQL の集計と共通）。"""
     if summary.total:
         summary.helpful_rate = summary.helpful / summary.total
-    # 件数の多い順（同じなら理由の定義順）。
     order = list(FeedbackReason)
     ranked = sorted(reasons.items(), key=lambda pair: (-pair[1], order.index(pair[0])))
     summary.reason_counts = [ReasonCount(reason=item, count=count) for item, count in ranked]
     return summary
 
 
-def _item(
-    run: RunState,
+def feedback_items(
+    facts: list[RunFact],
     agent_names: Mapping[str, str],
-    names: Mapping[str, str],
+    user_names: Callable[[list[str]], Mapping[str, str]],
     now: datetime,
-) -> FeedbackItem:
-    owner = run.created_by_user_uuid
-    review = run.admin_review
-    reviewer = review.user_uuid if review is not None else None
-    return FeedbackItem(
-        run_id=run.id,
-        thread_id=run.thread_id,
-        agent_id=run.agent_id,
-        agent_name=agent_names.get(run.agent_id, ""),
-        user_uuid=owner,
-        display_name=names.get(owner, "") if owner else "",
-        question=run.goal,
-        answer=run_answer_text(run) or "",
-        feedback=run.feedback,
-        admin_review=review,
-        reviewer_display_name=names.get(reviewer, "") if reviewer else "",
-        updated_at=_rated_at(run) or now,
-    )
+) -> list[FeedbackItem]:
+    """一覧の行（会話の本人と管理者の表示名を入れる）。"""
+    people = {fact.user_uuid for fact in facts if fact.user_uuid} | {
+        fact.admin_review.user_uuid
+        for fact in facts
+        if fact.admin_review is not None and fact.admin_review.user_uuid
+    }
+    names = user_names(sorted(people)) if people else {}
+    items: list[FeedbackItem] = []
+    for fact in facts:
+        owner = fact.user_uuid
+        review = fact.admin_review
+        reviewer = review.user_uuid if review is not None else None
+        items.append(
+            FeedbackItem(
+                run_id=fact.run_id,
+                thread_id=fact.thread_id,
+                agent_id=fact.agent_id,
+                agent_name=agent_names.get(fact.agent_id) or fact.agent_name,
+                user_uuid=owner,
+                display_name=names.get(owner, "") if owner else "",
+                question=fact.question,
+                answer=fact.answer or "",
+                feedback=fact.feedback,
+                admin_review=review,
+                reviewer_display_name=names.get(reviewer, "") if reviewer else "",
+                updated_at=fact.rated_at or now,
+            )
+        )
+    return items

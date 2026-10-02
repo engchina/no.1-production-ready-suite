@@ -36,16 +36,8 @@
         "react-hooks-compiler/set-state-in-render": "error",
         "react-hooks-compiler/unsupported-syntax": "warn",
         "react-hooks-compiler/config": "error",
-        "react-hooks-compiler/gating": "error",
-        // 表は共有 DataTable を使う（#530）。固定表頭・表示行数・行の選択状態・aria-sort は DataTable が持つ。
-        // RAG / Agent の置き換え後に platform の adherence へ移す。
-        "nl2sql-design-system/restricted-syntax": [
-          "error",
-          {
-            "selector": "JSXOpeningElement[name.name=/^(table|thead|tbody|tfoot|tr|th|td|colgroup)$/]",
-            "message": "<table> を手書きしない。@engchina/production-ready-ui の DataTable（stickyHeader / visibleRows / selectedRowKey 等）を使う。"
-          }
-        ]
+        "react-hooks-compiler/gating": "error"
+        // 手書きの <table> の禁止（#530）は、3 製品で同じ規則として platform の adherence へ移した（#800）。
       }
     }
   ],

@@ -521,7 +521,6 @@ export function GuidedClarificationPanel({
               }}
               disabled={Boolean(busyAction)}
               rows={2}
-              textareaClassName="min-h-20"
               placeholder={t("nl2sql.clarification.otherPlaceholder")}
             />
           ) : null}
@@ -609,7 +608,6 @@ export function GuidedClarificationPanel({
                     value={value.freeText}
                     disabled={Boolean(busyAction)}
                     onChange={(event) => updateManualAnswer(question, { freeText: event.currentTarget.value })}
-                    textareaClassName="min-h-20"
                   />
                 ) : null}
               </fieldset>

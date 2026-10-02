@@ -15,9 +15,9 @@ const NODE_STYLE = {
   background: "var(--color-surface)",
   color: "var(--color-fg)",
   border: "1px solid var(--color-border)",
-  borderRadius: 8,
-  fontSize: 12,
-  padding: 6,
+  borderRadius: "var(--radius-lg)",
+  fontSize: "var(--font-size-xs)",
+  padding: "var(--space-1-5)",
   maxWidth: 160,
   textAlign: "center" as const,
 };
@@ -39,7 +39,7 @@ function toFlow(data: KnowledgeBaseGraphData): { nodes: Node[]; edges: Edge[] } 
     source: edge.source,
     target: edge.target,
     label: edge.type ?? undefined,
-    labelStyle: { fill: "var(--color-fg-muted)", fontSize: 10 },
+    labelStyle: { fill: "var(--color-fg-muted)", fontSize: "var(--font-size-xs)" },
   }));
   return { nodes, edges };
 }

@@ -674,7 +674,7 @@ export function PreviewViewer({
                     data-bbox-unit={item.rect.unit}
                     title={item.label ?? undefined}
                     className={cn(
-                      "pointer-events-none absolute rounded-sm border-2 shadow-[0_0_0_1px_rgba(255,255,255,0.85)]",
+                      "pointer-events-none absolute rounded-sm border-2 ring-1 ring-surface/85",
                       item.tone === "primary"
                         ? "border-accent-emphasis bg-accent-emphasis/15"
                         : "border-dashed border-accent-emphasis/70 bg-accent-emphasis/5"

@@ -218,6 +218,7 @@ export {
   RoleManagementPage,
   RoleStatusBadges,
   type RoleManagementPageProps,
+  type RolePermissionSummary,
 } from "./users-roles/RoleManagementPage";
 export { USERS_ROLES_MESSAGES, type UsersRolesMessageKey } from "./users-roles/messages";
 export {

@@ -531,7 +531,7 @@ function StepIcon({ step }: { step: DocumentRecipeStep | undefined }) {
   if (step?.status === "FAILED") return <AlertCircle size={14} aria-hidden />;
   if (step?.status === "NEEDS_REVIEW") return <Eye size={14} aria-hidden />;
   if (step?.status === "SUCCEEDED") return <Check size={14} aria-hidden />;
-  return <Circle size={10} aria-hidden />;
+  return <Circle size={14} aria-hidden />;
 }
 
 function RecipeStatusBadge({ recipe, spin = true }: { recipe: DocumentRecipeView; spin?: boolean }) {

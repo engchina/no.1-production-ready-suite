@@ -157,7 +157,6 @@ function ExecutableDirectSqlPage() {
             disabled={loading}
             rows={12}
             monospace
-            textareaClassName="min-h-64"
             placeholder={t("nl2sql.sqlRunner.placeholder")}
           />
           <SqlFileInput

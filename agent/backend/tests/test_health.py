@@ -663,7 +663,7 @@ def test_database_status_not_configured_skips_connection(monkeypatch: MonkeyPatc
         called.append(candidate)
 
     monkeypatch.setattr(agent_router, "get_settings", lambda: _database_status_settings())
-    monkeypatch.setattr(agent_router, "_test_database_connection", must_not_connect)
+    monkeypatch.setattr(agent_router, "_test_database_status_connection", must_not_connect)
 
     resp = client.get("/api/ready/database")
 
@@ -697,7 +697,7 @@ def test_database_status_ok_after_connection(monkeypatch: MonkeyPatch, tmp_path:
         called.append(candidate)
 
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
-    monkeypatch.setattr(agent_router, "_test_database_connection", connect)
+    monkeypatch.setattr(agent_router, "_test_database_status_connection", connect)
     monkeypatch.setattr(agent_router, "system_schema_manager", _SchemaStatus("ready"))
 
     data = client.get("/api/ready/database").json()["data"]
@@ -706,6 +706,71 @@ def test_database_status_ok_after_connection(monkeypatch: MonkeyPatch, tmp_path:
     assert data["check"] == "ok"
     assert len(data["context_id"]) == 64
     assert called == [settings]
+
+
+def test_database_status_connection_uses_the_pool(monkeypatch: MonkeyPatch) -> None:
+    """DB ゲートの接続確認は保存済みの設定で pool から借り、毎回は接続しない（#793）。"""
+    from app import oracle_connection
+
+    created: list[dict[str, object]] = []
+    executed: list[str] = []
+
+    class _Cursor:
+        def __enter__(self) -> "_Cursor":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def execute(self, statement: str) -> None:
+            executed.append(statement)
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    class _Connection:
+        def cursor(self) -> _Cursor:
+            return _Cursor()
+
+        def rollback(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class _Pool:
+        def acquire(self) -> _Connection:
+            return _Connection()
+
+        def close(self, force: bool = False) -> None:
+            return None
+
+    class _FakeOracledb:
+        POOL_GETMODE_TIMEDWAIT = 3
+
+        @staticmethod
+        def create_pool(**kwargs: object) -> _Pool:
+            created.append(kwargs)
+            return _Pool()
+
+    pool = oracle_connection._PLATFORM_POOL
+    pool.close()
+    monkeypatch.setattr(pool, "_oracledb_loader", lambda: _FakeOracledb)
+    settings = Settings(
+        _env_file=None,
+        oracle_user="ADMIN",
+        oracle_password="secret",
+        oracle_dsn="agentdb_high",
+        oracle_client_lib_dir="",
+    )
+    try:
+        for _ in range(3):
+            agent_router._ping_platform_oracle_sync(settings)
+    finally:
+        oracle_connection.close_platform_oracle_pool()
+
+    assert len(created) == 1
+    assert executed == ["SELECT 1 FROM DUAL"] * 3
 
 
 def test_database_status_unreachable_does_not_leak_connection_details(
@@ -721,7 +786,7 @@ def test_database_status_unreachable_does_not_leak_connection_details(
         )
 
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
-    monkeypatch.setattr(agent_router, "_test_database_connection", fail)
+    monkeypatch.setattr(agent_router, "_test_database_status_connection", fail)
 
     body = client.get("/api/ready/database").json()
 
@@ -740,7 +805,7 @@ def test_database_status_requires_system_tables(monkeypatch: MonkeyPatch, tmp_pa
         return None
 
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
-    monkeypatch.setattr(agent_router, "_test_database_connection", connect)
+    monkeypatch.setattr(agent_router, "_test_database_status_connection", connect)
     for schema, expected in (
         (_SchemaStatus("missing"), "missing"),
         (_SchemaStatus("outdated"), "outdated"),

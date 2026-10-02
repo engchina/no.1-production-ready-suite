@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
+import { useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
 import {
   Navigate,
   Outlet,
@@ -57,7 +57,6 @@ import {
   settingsEntryRoute,
 } from "@/lib/route-permissions";
 import { t } from "@/lib/i18n";
-import { useUiStore } from "@/lib/ui-store";
 
 /** 認証画面とルートの保護が使う URL（共通の RequireAuth へ渡す。#214）。 */
 const AUTH_ROUTES = {
@@ -206,8 +205,6 @@ function AppLayout() {
   useLayoutEffect(() => {
     mainRef.current = document.getElementById("pr-main");
   });
-  const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
-  useCollapseSidebarOnNarrowViewport(setSidebarCollapsed);
   useMainScrollRestoration(mainRef, location, navigationType);
 
   return (
@@ -232,18 +229,6 @@ function AppLayout() {
 
 type RouterLocation = ReturnType<typeof useLocation>;
 type RouterNavigationType = ReturnType<typeof useNavigationType>;
-
-function useCollapseSidebarOnNarrowViewport(setSidebarCollapsed: (collapsed: boolean) => void) {
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 640px)");
-    const collapseIfNarrow = () => {
-      if (media.matches) setSidebarCollapsed(true);
-    };
-    collapseIfNarrow();
-    media.addEventListener("change", collapseIfNarrow);
-    return () => media.removeEventListener("change", collapseIfNarrow);
-  }, [setSidebarCollapsed]);
-}
 
 const mainScrollPositions = new Map<string, number>();
 

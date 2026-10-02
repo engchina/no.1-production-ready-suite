@@ -1003,9 +1003,14 @@ def test_oracle_store_reads_role_permissions_and_scope() -> None:
     connection = _RecordingConnection(
         {
             "SELECT ROLE_ID, ROLE_CODE": [("role-1", "READER", "閲覧者", "-", 0, 0, 3)],
-            "SELECT PERMISSION_CODE FROM RAG_ROLE_PERMISSIONS": [("menu.search",)],
-            "SELECT BUSINESS_VIEW_ID FROM RAG_ROLE_BUSINESS_VIEWS": [("bv-1",), ("bv-2",)],
-            "SELECT KNOWLEDGE_BASE_ID FROM RAG_ROLE_KNOWLEDGE_BASES": [("kb-1",)],
+            "SELECT ROLE_ID, PERMISSION_CODE FROM RAG_ROLE_PERMISSIONS": [
+                ("role-1", "menu.search")
+            ],
+            "SELECT ROLE_ID, BUSINESS_VIEW_ID FROM RAG_ROLE_BUSINESS_VIEWS": [
+                ("role-1", "bv-1"),
+                ("role-1", "bv-2"),
+            ],
+            "SELECT ROLE_ID, KNOWLEDGE_BASE_ID FROM RAG_ROLE_KNOWLEDGE_BASES": [("role-1", "kb-1")],
         }
     )
     role = _oracle_store(connection).get_role("role-1")
@@ -1014,6 +1019,33 @@ def test_oracle_store_reads_role_permissions_and_scope() -> None:
     assert role.business_view_ids == {"bv-1", "bv-2"}
     assert role.knowledge_base_ids == {"kb-1"}
     assert role.description == ""
+
+
+def test_oracle_store_lists_roles_without_a_query_per_role() -> None:
+    """ロールの一覧は、ロールの数によらず PLATFORM_ROLES と RAG の 3 表を 1 回ずつ読む（#793）。"""
+    connection = _RecordingConnection(
+        {
+            "SELECT ROLE_ID, ROLE_CODE": [
+                (f"role-{index}", f"R{index:02d}", f"R{index}", None, 0, 0, 1)
+                for index in range(30)
+            ],
+            "SELECT ROLE_ID, PERMISSION_CODE FROM RAG_ROLE_PERMISSIONS": [
+                ("role-2", "menu.search"),
+                ("role-2", "menu.chat"),
+            ],
+            "SELECT ROLE_ID, BUSINESS_VIEW_ID FROM RAG_ROLE_BUSINESS_VIEWS": [("role-5", "bv-1")],
+            "SELECT ROLE_ID, KNOWLEDGE_BASE_ID FROM RAG_ROLE_KNOWLEDGE_BASES": [("role-9", "kb-1")],
+        }
+    )
+
+    roles = {role.role_id: role for role in _oracle_store(connection).list_roles()}
+
+    assert len(roles) == 30
+    assert len(connection.statements) == 4
+    assert roles["role-2"].permissions == {"menu.search", "menu.chat"}
+    assert roles["role-5"].business_view_ids == {"bv-1"}
+    assert roles["role-9"].knowledge_base_ids == {"kb-1"}
+    assert roles["role-0"].permissions == set()
 
 
 def test_oracle_store_replaces_role_access_in_same_transaction() -> None:

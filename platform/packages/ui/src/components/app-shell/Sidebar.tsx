@@ -160,7 +160,7 @@ export function Sidebar({
               {collapsible ? (
                 <button
                   type="button"
-                  className="sidebar-reveal flex w-full items-center justify-between gap-2 rounded-md px-3 py-1 text-xs font-semibold uppercase tracking-wide transition-colors hover:bg-surface-hover [--sidebar-reveal-opacity:0.6]"
+                  className="sidebar-reveal flex w-full items-center justify-between gap-2 rounded-md px-3 py-1 text-xs font-semibold tracking-wide transition-colors hover:bg-surface-hover [--sidebar-reveal-opacity:0.6]"
                   aria-expanded={sectionExpanded}
                   aria-controls={regionId}
                   aria-label={
@@ -187,7 +187,7 @@ export function Sidebar({
               ) : (
                 <div
                   className={cn(
-                    "sidebar-reveal px-3 py-1 text-xs font-semibold uppercase tracking-wide [--sidebar-reveal-opacity:0.6]",
+                    "sidebar-reveal px-3 py-1 text-xs font-semibold tracking-wide [--sidebar-reveal-opacity:0.6]",
                     collapsed && "sr-only"
                   )}
                 >
