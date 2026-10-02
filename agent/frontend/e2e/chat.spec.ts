@@ -136,7 +136,7 @@ test("回答の出典と使ったツールを畳んで出し、承認待ちは�
     ],
   });
   await page.goto("/chat");
-  await page.getByTestId("chat-history").getByRole("button", { name: /契約の更新条件は？/ }).click();
+  await openSeedThread(page);
 
   const turn = page.getByTestId("chat-turn-run-chat-seed");
   await expect(turn.getByText("ツールの実行に承認が必要です")).toBeVisible();
@@ -302,3 +302,14 @@ test("公開していない業務 Agent はチャットで選べない（#792）
   await page.reload();
   await expect(page.getByText("業務 Agent の公開と権限の付与を管理者に依頼してください。", { exact: false })).toBeVisible();
 });
+
+/** 会話の履歴から種の会話を開く（desktop は左の一覧、375px（mobile-375 の project）は side sheet。#823）。 */
+async function openSeedThread(page: Page) {
+  const viewport = page.viewportSize();
+  if (viewport && viewport.width >= 1024) {
+    await page.getByTestId("chat-history").getByRole("button", { name: /契約の更新条件は？/ }).click();
+    return;
+  }
+  await page.getByRole("button", { name: "会話の履歴" }).click();
+  await page.getByRole("dialog", { name: "会話の履歴" }).getByText("契約の更新条件は？").click();
+}

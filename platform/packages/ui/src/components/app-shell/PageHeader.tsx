@@ -1,7 +1,6 @@
 import { ArrowLeft, ChevronDown, type LucideIcon } from "lucide-react";
 import {
   Fragment,
-  isValidElement,
   useEffect,
   useId,
   useRef,
@@ -275,10 +274,10 @@ export function PageHeader({
    */
   back?: PageHeaderBack;
   /**
-   * 配列で渡すと danger → utility → secondary → primary の順に並べ替えて描画する（推奨）。
-   * ReactNode（ボタン等）も後方互換で受けるが、並び順は呼び出し側の責任になる。
+   * danger → utility → secondary → primary の順に並べ替えて描画する（buttons.md §5）。
+   * JSX（`<Button>` 等）は受けない（3 製品の移行が済んだので後方互換の ReactNode を外した。#823）。
    */
-  actions?: PageHeaderAction[] | ReactNode;
+  actions?: PageHeaderAction[];
   /** アクション群の aria-label（翻訳済み）。 */
   actionsLabel?: string;
   /** アクション群の data-testid。 */
@@ -294,9 +293,9 @@ export function PageHeader({
   className?: string;
 }) {
   const compact = useCompact();
-  let actionNodes: ReactNode = actions as ReactNode;
-  if (Array.isArray(actions) && !actions.some(isValidElement)) {
-    const list = actions as PageHeaderAction[];
+  let actionNodes: ReactNode = null;
+  if (actions && actions.length > 0) {
+    const list = actions;
     // 狭い画面では主操作 1 つ +「その他の操作」にまとめ、sticky ヘッダーが本文を覆わない高さに保つ。
     const { visible, overflow } = compact ? splitCompactActions(list) : { visible: orderActions(list), overflow: [] };
     const boundaries = groupBoundaries(visible);

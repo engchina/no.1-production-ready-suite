@@ -39,10 +39,25 @@ export default defineConfig({
       BACKEND_URL: "http://127.0.0.1:9",
     },
   },
+  // RAG / NL2SQL と同じく desktop と mobile-375 の 2 project（#823。名前は NL2SQL にそろえる）。
+  // mobile-375 はタッチ端末（Pixel 5、375×812、isMobile）で、操作部品が 44px になる。
   projects: [
     {
-      name: "chromium",
+      name: "desktop",
       use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "mobile-375",
+      use: {
+        ...devices["Pixel 5"],
+        viewport: { width: 375, height: 812 },
+        isMobile: true,
+      },
+      // 画面幅に関係しない spec（vite の設定・フォントの読み込み・権限カタログの一致）は desktop だけで実行する。
+      testIgnore: ["**/vite-config.spec.ts", "**/self-hosted-fonts.spec.ts", "**/permission-catalog.spec.ts"],
+      // spec の中で viewport を回しているテスト（題名に「(desktop」「（mobile）」「mobile-375: 」や「1920px」を含む）は、
+      // その中で 375px を確かめているので二重に実行しない。
+      grepInvert: /[(（](desktop|mobile)|(desktop|mobile-375): |\d{4}px/,
     },
   ],
 });
