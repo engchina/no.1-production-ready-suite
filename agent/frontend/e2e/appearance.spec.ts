@@ -77,7 +77,7 @@ for (const viewport of [
       "nav-section-nav-section-settings",
     ]);
 
-    // セキュリティ設定は権限管理、運用設定はシステムテーブル（先頭。#751）と Agent 固有の3項目（MCP 接続は #757）、
+    // セキュリティ設定は権限管理、運用設定はシステムテーブル（先頭。#751）と Agent 固有の2項目（MCP 接続・バックアップ。#757 / #762）、
     // ユーザーとロール・システム設定は3製品共通。
     const security = sidebar.locator("#nav-section-nav-section-security");
     const operations = sidebar.locator("#nav-section-nav-section-operations");
@@ -85,14 +85,13 @@ for (const viewport of [
     const settings = sidebar.locator("#nav-section-nav-section-settings");
     await expect(security.getByRole("link")).toHaveCount(1);
     await expect(security.locator('a[href="/settings/security/permissions"]')).toHaveCount(1);
-    await expect(operations.getByRole("link")).toHaveCount(4);
+    await expect(operations.getByRole("link")).toHaveCount(3);
     // 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ）。
     await expect(operations.getByRole("link").first()).toHaveAttribute("href", "/settings/system-tables");
     await expect(userRoles.getByRole("link")).toHaveCount(2);
     await expect(settings.getByRole("link")).toHaveCount(5);
     for (const href of [
       "/settings/system-tables",
-      "/settings/connection",
       "/settings/mcp-connections",
       "/settings/runtime-snapshot",
     ]) {

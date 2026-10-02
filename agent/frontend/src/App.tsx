@@ -22,7 +22,6 @@ import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { canOpenRoute, defaultEntryRoute, firstAllowedRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { t, type I18nKey } from "@/lib/i18n";
-import { PlaceholderPage } from "@/pages/PlaceholderPage";
 import {
   AgentsPage,
   ApprovalsPage,
@@ -123,10 +122,6 @@ export function App() {
           }
         />
         <Route path={APP_ROUTES.settingsSystemTables} element={<SettingsSystemTablesRoute />} />
-        <Route
-          path={APP_ROUTES.settingsConnection}
-          element={<PlaceholderPage title={t("nav.settingsConnection")} subtitle={t("page.settings.subtitle")} />}
-        />
         <Route path={APP_ROUTES.settingsOci} element={<SettingsOciRoute />} />
         <Route path={APP_ROUTES.settingsUploadStorage} element={<SettingsUploadStorageRoute />} />
         <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
