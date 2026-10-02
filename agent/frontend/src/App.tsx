@@ -171,7 +171,7 @@ function HomeRedirect() {
   return <Navigate to={firstAllowedRoute(hasPermission)} replace />;
 }
 
-/** 未知の URL は既定入口（Run を開ければ Run、開けなければ `/` 経由で最初に開ける画面。#215 / #262）。 */
+/** 未知の URL は既定入口（チャットを開ければチャット、開けなければ `/` 経由で最初に開ける画面。#215 / #262 / #791）。 */
 function EntryRedirect() {
   const { hasPermission } = useAuth();
   return <Navigate to={defaultEntryRoute(hasPermission)} replace />;
