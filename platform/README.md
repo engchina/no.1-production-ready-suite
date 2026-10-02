@@ -175,12 +175,13 @@ API は 422 で「既定のテキストモデルを選択してください。�
 4. 3 製品の backend と worker を起動する。RAG は、解析サービス（parser）に渡す実行用の env（`RAG_SERVICE_RUNTIME_ENV_FILE`）を
    backend が書き直すので、RAG の「サービス管理」画面から OCI の parser を再起動する（`systemctl restart` だけでは古い env のまま）。
 
-## OCI Enterprise AI のプライマリ接続・セカンダリ接続（#533 / #542）
+## OCI Enterprise AI のプライマリ接続・セカンダリ接続・ターシャリ接続（#533 / #542 / #786）
 
-「システム設定 › モデル」の OCI Enterprise AI は、接続（Endpoint URL・Project OCID・API key）を「プライマリ接続」と「セカンダリ接続」の
-2 つまで持ち、登録モデルごとに使う接続を選ぶ（未指定のモデルはプライマリ接続）。画面はカードの中の共有の `Tabs` で 2 つの接続を
-切り替え、登録モデルの「接続」の選択肢もタブと同じ名前を出す（設定していないセカンダリ接続は出さない）。内部の ID は `primary` /
-`secondary`、上限は `pr_system_settings.model.MAX_ENTERPRISE_AI_CONNECTIONS`（2）。
+「システム設定 › モデル」の OCI Enterprise AI は、接続（Endpoint URL・Project OCID・API key）を「プライマリ接続」「セカンダリ接続」
+「ターシャリ接続」の 3 つまで持ち、登録モデルごとに使う接続を選ぶ（未指定のモデルはプライマリ接続）。画面はカードの中の共有の `Tabs` で
+プライマリ接続 → セカンダリ接続 → ターシャリ接続の順に切り替え、登録モデルの「接続」の選択肢もタブと同じ名前を出す（設定していない
+接続は出さない）。内部の ID は `primary` / `secondary` / `tertiary`、上限は `pr_system_settings.model.MAX_ENTERPRISE_AI_CONNECTIONS`（3）。
+接続はプライマリ接続を先頭にこの順で並べ、セカンダリ接続を置かずにターシャリ接続だけを置いてもよい（並びが違う・重複する payload は 422）。
 
 - **既存環境の更新は要らない。** プライマリ接続は今までの属性・変数名（`PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT` / `_PROJECT_OCID` /
   `_API_KEY`）のままで、保存済みの `model-settings.json`（接続 1 組の形）は、読み込むときにプライマリ接続として扱う。画面で保存し直すと、
@@ -192,15 +193,23 @@ API は 422 で「既定のテキストモデルを選択してください。�
 - 必須の欄: プライマリ接続の 3 つの欄は OCI で運用するときだけ必須（画面は「OCI 運用時必須」。保存は止めない）。セカンダリ接続は、
   設定したら Endpoint URL・Project OCID・API key がすべて必須（backend も 422 で止める。API key は保存後の値で確かめ、空欄は
   保存済みの key を保持する）。セカンダリ接続の API key だけを消す指定はなく、消すときはセカンダリ接続ごと削除する。
-- セカンダリ接続の変数（共通 `.env`。`PLATFORM_SETTING_FIELDS` に登録済み）。Endpoint URL があるときだけセカンダリ接続が有効になる。
+- **ターシャリ接続（#786）は OpenAI / OpenAI 互換 API 向け**（OCI Enterprise AI にも使える）。設定したら Endpoint URL と API key が
+  必須で、Project OCID は任意（OCI Enterprise AI に使うときだけ入れる。入れたときだけ `OpenAI-Project` ヘッダーを送る）。
+  呼び出しはほかの接続と同じ Responses API（`{Endpoint URL}/responses`）で、Chat Completions は使わない。画面の Endpoint URL の例は
+  `https://api.openai.com/v1`。API key だけを消す指定はなく、消すときはターシャリ接続ごと削除する（使っていた登録モデルはプライマリ接続へ移す）。
+- セカンダリ接続・ターシャリ接続の変数（共通 `.env`。`PLATFORM_SETTING_FIELDS` に登録済み）。Endpoint URL があるときだけその接続が
+  有効になる。
 
   | 変数 | 内容 |
   |---|---|
   | `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_ENDPOINT` | セカンダリ接続の Endpoint URL |
   | `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_PROJECT_OCID` | セカンダリ接続の Project OCID |
   | `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY` | セカンダリ接続の API key（`platform/.env` だけに保存。JSON・API の応答には含めない） |
+  | `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_ENDPOINT` | ターシャリ接続の Endpoint URL（例: `https://api.openai.com/v1`） |
+  | `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_PROJECT_OCID` | ターシャリ接続の Project OCID（任意。OCI Enterprise AI に使うときだけ） |
+  | `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_API_KEY` | ターシャリ接続の API key（`platform/.env` だけに保存。JSON・API の応答には含めない） |
 
-- `.env` だけで設定する場合は、登録モデル（`PLATFORM_OCI_ENTERPRISE_AI_MODELS`）に `"connection_id": "secondary"` を書く。
+- `.env` だけで設定する場合は、登録モデル（`PLATFORM_OCI_ENTERPRISE_AI_MODELS`）に `"connection_id": "secondary"`（ターシャリ接続は `"tertiary"`）を書く。
 - 実行時は、モデルを呼ぶたびに `enterprise_ai_connection_for_model(settings, model_id)` でそのモデルの接続を引く（3 製品の呼び出し・
   接続テスト・RAG の readiness / NL2SQL の診断）。接続を持たない ID（登録モデルにない ID、消えた接続を指すモデル）はプライマリ接続を使う。
 - env だけを受け取る部品は、使うモデルの接続を渡す。

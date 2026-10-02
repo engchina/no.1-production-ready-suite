@@ -34,6 +34,7 @@ import {
   type ThreadData,
   type ThreadSummary,
 } from "@/lib/api";
+import { isRunnableAgent } from "@/lib/agent-availability";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
@@ -81,7 +82,7 @@ export function ChatPage() {
 
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const usableAgents = useMemo(
-    () => (agents.data?.agents ?? []).filter((agent) => agent.enabled && !agent.migration_required),
+    () => (agents.data?.agents ?? []).filter(isRunnableAgent),
     [agents.data]
   );
   // 選んだ Agent が使えなくなっていたら、先頭の Agent にする。

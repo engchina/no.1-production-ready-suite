@@ -48,13 +48,14 @@ import {
 } from "../oci/SettingsTestResultPanel";
 import {
   PRIMARY_CONNECTION_ID,
-  SECONDARY_CONNECTION_ID,
+  TERTIARY_CONNECTION_ID,
+  addConnection,
   connectionFieldId,
   connectionLabel,
   connectionOptions,
-  emptyConnection,
   firstConnectionError,
   hasConnection,
+  isProjectOcidOptional,
   modelConnectionFieldId,
   modelConnectionId,
   modelsUsingConnection,
@@ -166,7 +167,7 @@ export function ModelSettingsPage({
   // 表示中の接続のタブ（#542）。保存で止めたときは、最初のエラーがあるタブへ切り替える。
   const [connectionTab, setConnectionTab] =
     useState<EnterpriseAiConnectionId>(PRIMARY_CONNECTION_ID);
-  // 接続の入力のエラー（セカンダリ接続の必須の欄の未入力）は、保存の操作の後から出す。
+  // 接続の入力のエラー（セカンダリ接続・ターシャリ接続の必須の欄の未入力）は、保存の操作の後から出す。
   const [showConnectionErrors, setShowConnectionErrors] = useState(false);
   // 登録モデルの「接続」のエラーは、接続を選んだ・削除した・保存の操作の後から出す（#533）。
   const [showModelConnectionErrors, setShowModelConnectionErrors] =
@@ -291,8 +292,9 @@ export function ModelSettingsPage({
     clearSaveError("enterprise_connection");
   };
 
-  const addSecondaryConnection = () => {
-    if (!draft || hasConnection(draft.enterprise_ai.connections, SECONDARY_CONNECTION_ID)) {
+  // セカンダリ接続・ターシャリ接続を「設定」する（#542 / #786）。接続はタブの順に並べる。
+  const addOptionalConnection = (connectionId: EnterpriseAiConnectionId) => {
+    if (!draft || hasConnection(draft.enterprise_ai.connections, connectionId)) {
       return;
     }
     setDraft((current) =>
@@ -301,10 +303,10 @@ export function ModelSettingsPage({
             ...current,
             enterprise_ai: {
               ...current.enterprise_ai,
-              connections: [
-                ...current.enterprise_ai.connections,
-                emptyConnection(SECONDARY_CONNECTION_ID),
-              ],
+              connections: addConnection(
+                current.enterprise_ai.connections,
+                connectionId,
+              ),
             },
           }
         : current,
@@ -312,29 +314,30 @@ export function ModelSettingsPage({
     setCheckData(baselineData);
     setTestResults({});
     clearSaveError("enterprise_connection");
-    // 設定したセカンダリ接続の最初の欄へフォーカスする。
+    // 設定した接続の最初の欄へフォーカスする。
     scheduleFocus(() =>
       document
-        .getElementById(connectionFieldId(SECONDARY_CONNECTION_ID, "endpoint"))
+        .getElementById(connectionFieldId(connectionId, "endpoint"))
         ?.focus(),
     );
   };
 
-  const removeSecondaryConnectionWithConfirm = async () => {
+  const removeOptionalConnectionWithConfirm = async (
+    connectionId: EnterpriseAiConnectionId,
+  ) => {
     if (!draft) return;
-    const inUse = modelsUsingConnection(
-      draft.enterprise_ai.models,
-      SECONDARY_CONNECTION_ID,
-    );
+    const connection = connectionLabel(connectionId);
+    const inUse = modelsUsingConnection(draft.enterprise_ai.models, connectionId);
     const ok = await confirm({
-      title: t("settings.model.connection.removeConfirm.title"),
+      title: t("settings.model.connection.removeConfirm.title", { connection }),
       description: inUse.length
         ? t("settings.model.connection.removeConfirm.descriptionInUse", {
+            connection,
             models: inUse
               .map((model) => model.display_name.trim() || model.model_id.trim())
               .join("、"),
           })
-        : t("settings.model.connection.removeConfirm.description"),
+        : t("settings.model.connection.removeConfirm.description", { connection }),
       confirmLabel: inUse.length
         ? t("settings.model.connection.removeConfirm.moveAndRemove")
         : t("common.delete"),
@@ -345,25 +348,22 @@ export function ModelSettingsPage({
       current
         ? {
             ...current,
-            enterprise_ai: removeConnection(
-              current.enterprise_ai,
-              SECONDARY_CONNECTION_ID,
-            ),
+            enterprise_ai: removeConnection(current.enterprise_ai, connectionId),
           }
         : current,
     );
     setApiKeyVisible((current) => ({
       ...current,
-      [SECONDARY_CONNECTION_ID]: false,
+      [connectionId]: false,
     }));
     setShowModelConnectionErrors(true);
     setCheckData(baselineData);
     setTestResults({});
     clearSaveError("enterprise_connection");
     clearSaveError("enterprise_models");
-    // 削除したボタンは消えるので、同じタブに出る「セカンダリ接続を設定」へフォーカスを移す。
+    // 削除したボタンは消えるので、同じタブに出る「◯◯接続を設定」へフォーカスを移す。
     scheduleFocus(() =>
-      document.getElementById(SECONDARY_CONNECTION_ADD_ID)?.focus(),
+      document.getElementById(connectionAddId(connectionId))?.focus(),
     );
   };
 
@@ -651,8 +651,9 @@ export function ModelSettingsPage({
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              {/* プライマリ接続とセカンダリ接続は同じ設定（接続）の別の枠なので、共有の Tabs で切り替える
-                  （#542。README §4「Tabs」）。エラーのあるタブは invalid、保存していない入力は「未保存」で示す。 */}
+              {/* プライマリ接続・セカンダリ接続・ターシャリ接続は同じ設定（接続）の別の枠なので、共有の Tabs で
+                  この順に切り替える（#542 / #786。README §4「Tabs」）。エラーのあるタブは invalid、保存していない
+                  入力は「未保存」で示す。 */}
               <Tabs
                 idPrefix={CONNECTION_TABS_ID_PREFIX}
                 ariaLabel={t("settings.model.connection.tabs")}
@@ -689,8 +690,10 @@ export function ModelSettingsPage({
                     }))
                   }
                   onChange={(patch) => updateConnection(connectionTab, patch)}
-                  onAdd={addSecondaryConnection}
-                  onRemove={() => void removeSecondaryConnectionWithConfirm()}
+                  onAdd={() => addOptionalConnection(connectionTab)}
+                  onRemove={() =>
+                    void removeOptionalConnectionWithConfirm(connectionTab)
+                  }
                 />
               </TabPanel>
               <ModelFormActions
@@ -839,16 +842,34 @@ export function ModelSettingsPage({
 
 /** 接続のタブの id の接頭辞（同じ画面のほかの Tabs と分ける）。 */
 const CONNECTION_TABS_ID_PREFIX = "enterprise-connection";
-/** 「セカンダリ接続を設定」の id（削除の後にフォーカスを戻す）。 */
-const SECONDARY_CONNECTION_ADD_ID = "enterprise-secondary-add";
+/** 「◯◯接続を設定」の id（削除の後にフォーカスを戻す。セカンダリ接続は enterprise-secondary-add）。 */
+function connectionAddId(connectionId: EnterpriseAiConnectionId): string {
+  return `enterprise-${connectionId}-add`;
+}
+
+/** 接続ごとの文言（説明・空の状態）。プライマリ接続は空の状態を持たない。 */
+const OPTIONAL_CONNECTION_MESSAGES = {
+  secondary: {
+    description: "settings.model.connection.secondaryDescription",
+    emptyTitle: "settings.model.connection.secondaryEmpty.title",
+    emptyHint: "settings.model.connection.secondaryEmpty.hint",
+  },
+  tertiary: {
+    description: "settings.model.connection.tertiaryDescription",
+    emptyTitle: "settings.model.connection.tertiaryEmpty.title",
+    emptyHint: "settings.model.connection.tertiaryEmpty.hint",
+  },
+} as const;
 
 /**
- * 接続のタブの中身（#542）。
+ * 接続のタブの中身（#542 / #786）。
  * - プライマリ接続: 入力欄。OCI で運用するときだけ必須なので、3 つの欄とも「OCI 運用時必須」（保存は止めない）
- * - セカンダリ接続（未設定）: 空の状態と「セカンダリ接続を設定」
+ * - セカンダリ接続・ターシャリ接続（未設定）: 空の状態と「◯◯接続を設定」
  * - セカンダリ接続（設定済み）: 入力欄（3 つとも「必須」）と「セカンダリ接続を削除」。削除は説明の行の右端に置く
  *   （主操作の保存と隣に並べない。README「カード内の操作行」）。API key だけを消す指定は出さない
- *   （必須の欄を空にするため。消すときはセカンダリ接続ごと削除する）
+ *   （必須の欄を空にするため。消すときは接続ごと削除する）
+ * - ターシャリ接続（設定済み）: OpenAI / OpenAI 互換 API 向け。Endpoint URL と API key は「必須」、
+ *   Project OCID は任意（OCI Enterprise AI を使うときだけ入れる）。Endpoint URL の例は OpenAI の base URL
  */
 function ConnectionTabContent({
   connectionId,
@@ -872,28 +893,33 @@ function ConnectionTabContent({
   onRemove: () => void;
 }) {
   const primary = connectionId === PRIMARY_CONNECTION_ID;
+  const tertiary = connectionId === TERTIARY_CONNECTION_ID;
+  const label = connectionLabel(connectionId);
+  const messages =
+    connectionId === "primary" ? null : OPTIONAL_CONNECTION_MESSAGES[connectionId];
   if (!connection) {
     return (
       <div data-testid={`enterprise-connection-${connectionId}-empty`}>
         <EmptyState
-          title={t("settings.model.connection.secondaryEmpty.title")}
-          hint={t("settings.model.connection.secondaryEmpty.hint")}
+          title={messages ? t(messages.emptyTitle) : label}
+          hint={messages ? t(messages.emptyHint) : undefined}
           action={
             <Button
-              id={SECONDARY_CONNECTION_ADD_ID}
+              id={connectionAddId(connectionId)}
               type="button"
               variant="secondary"
               icon={Plus}
               onClick={onAdd}
             >
-              {t("settings.model.connection.add")}
+              {t("settings.model.connection.add", { connection: label })}
             </Button>
           }
         />
       </div>
     );
   }
-  // プライマリ接続は条件付きの必須（文言で区別。README §4「必須の表示」）。セカンダリ接続は既定の「必須」。
+  // プライマリ接続は条件付きの必須（文言で区別。README §4「必須の表示」）。セカンダリ接続・ターシャリ接続は
+  // 既定の「必須」。ターシャリ接続の Project OCID は任意なので印を出さない（#786）。
   const requiredLabel = primary ? t("settings.model.requiredInOci") : undefined;
   return (
     <div
@@ -902,9 +928,9 @@ function ConnectionTabContent({
     >
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <p className="min-w-0 text-xs leading-relaxed text-fg-muted">
-          {primary
-            ? t("settings.model.connection.primaryDescription")
-            : t("settings.model.connection.secondaryDescription")}
+          {messages
+            ? t(messages.description)
+            : t("settings.model.connection.primaryDescription")}
         </p>
         {primary ? null : (
           <Button
@@ -916,7 +942,7 @@ function ConnectionTabContent({
             onClick={onRemove}
             className="w-full shrink-0 sm:ml-auto sm:w-auto"
           >
-            {t("settings.model.connection.remove")}
+            {t("settings.model.connection.remove", { connection: label })}
           </Button>
         )}
       </div>
@@ -928,22 +954,30 @@ function ConnectionTabContent({
           required
           requiredLabel={requiredLabel}
           value={connection.endpoint}
-          placeholder={t("settings.model.placeholder.endpoint")}
+          placeholder={
+            tertiary
+              ? t("settings.model.placeholder.endpointTertiary")
+              : t("settings.model.placeholder.endpoint")
+          }
           error={errors?.endpoint}
           helper={
-            <>
-              <span className="block">
-                {t("settings.model.enterprise.endpointHelp")}
-              </span>
-              <a
-                href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/openai-compatible-api.htm"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex min-h-11 items-center rounded-sm text-accent-fg underline underline-offset-4 hover:text-accent-fg"
-              >
-                {t("settings.model.enterprise.endpointDocs")}
-              </a>
-            </>
+            tertiary ? (
+              t("settings.model.enterprise.endpointHelpTertiary")
+            ) : (
+              <>
+                <span className="block">
+                  {t("settings.model.enterprise.endpointHelp")}
+                </span>
+                <a
+                  href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/openai-compatible-api.htm"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex min-h-11 items-center rounded-sm text-accent-fg underline underline-offset-4 hover:text-accent-fg"
+                >
+                  {t("settings.model.enterprise.endpointDocs")}
+                </a>
+              </>
+            )
           }
           onValueChange={(value) => onChange({ endpoint: value })}
           className="md:col-span-2"
@@ -951,11 +985,15 @@ function ConnectionTabContent({
         <TextField
           id={connectionFieldId(connectionId, "project_ocid")}
           label={t("settings.model.enterprise.project")}
-          required
+          required={!isProjectOcidOptional(connectionId)}
           requiredLabel={requiredLabel}
           value={connection.project_ocid}
           placeholder={t("settings.model.placeholder.project")}
-          helper={t("settings.model.enterprise.projectHelp")}
+          helper={
+            tertiary
+              ? t("settings.model.enterprise.projectHelpTertiary")
+              : t("settings.model.enterprise.projectHelp")
+          }
           error={errors?.project_ocid}
           onValueChange={(value) => onChange({ project_ocid: value })}
           className="md:col-span-2 2xl:col-span-1"

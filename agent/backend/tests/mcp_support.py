@@ -46,13 +46,6 @@ class RagSearchIn(_ContractInput):
     filters: dict[str, str] | None = None
 
 
-class RagChatIn(_ContractInput):
-    content: str = Field(min_length=1, max_length=8000)
-    conversation_id: str | None = None
-    business_view_id: str | None = None
-    title: str | None = None
-
-
 class RagListBusinessViewsIn(_ContractInput):
     query: str | None = None
     limit: int = Field(default=50, ge=1, le=200)
@@ -105,14 +98,6 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "guardrail_warnings": [],
         "citations": [_CITATION],
     },
-    "rag_chat_send_message": {
-        "conversation_id": "conversation-1",
-        "message_id": "message-1",
-        "answer": "会話の回答",
-        "trace_id": "rag-trace-2",
-        "guardrail_warnings": [],
-        "citations": [_CITATION],
-    },
     "rag_list_business_views": {
         "business_views": [
             {
@@ -156,7 +141,6 @@ class FakeProductMcp:
                 version="test",
                 tools=[
                     self._tool("rag_search", RagSearchIn),
-                    self._tool("rag_chat_send_message", RagChatIn, read_only=False),
                     self._tool("rag_list_business_views", RagListBusinessViewsIn),
                 ],
             ),

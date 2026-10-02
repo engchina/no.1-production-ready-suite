@@ -39,6 +39,7 @@ from app.features.agent.runtime import (
     RunCreateRequest,
     RunState,
     RunStatus,
+    agent_unavailable_reason,
 )
 from app.settings import get_settings
 
@@ -442,9 +443,9 @@ def fire(
         logger.warning("agent_automation_owner_rejected", extra={"automation_id": item.id})
         return record("failed_to_start", problem)
     agents = {agent.id: agent for agent in runtime_repository.list_agents()}
-    agent = agents.get(item.agent_id)
-    if agent is None or not agent.enabled or agent.migration_required:
-        return record("failed_to_start", "業務 Agent が見つからないか、実行できない状態です。")
+    reason = agent_unavailable_reason(agents.get(item.agent_id))
+    if reason is not None:
+        return record("failed_to_start", reason)
     run = runtime_repository.create_builtin_run(
         RunCreateRequest(
             goal=_goal(item, payload),

@@ -4,7 +4,7 @@
  */
 export const MODEL_MESSAGES = {
   "common.delete": "削除",
-  "settings.model.connection.add": "セカンダリ接続を設定",
+  "settings.model.connection.add": "{connection}を設定",
   "settings.model.connection.error.apiKeyRequired": "API key を入力してください。",
   "settings.model.connection.error.endpointRequired":
     "Endpoint URL を入力してください。",
@@ -17,15 +17,15 @@ export const MODEL_MESSAGES = {
   "settings.model.connection.primary": "プライマリ接続",
   "settings.model.connection.primaryDescription":
     "登録モデルで接続を選ばなければ、プライマリ接続を使います。",
-  "settings.model.connection.remove": "セカンダリ接続を削除",
+  "settings.model.connection.remove": "{connection}を削除",
   "settings.model.connection.removeConfirm.description":
-    "セカンダリ接続の入力内容を削除します。保存するまで確定しません。",
+    "{connection}の入力内容を削除します。保存するまで確定しません。",
   "settings.model.connection.removeConfirm.descriptionInUse":
-    "セカンダリ接続を使っている登録モデルがあります（{models}）。削除すると、これらのモデルはプライマリ接続を使います。保存するまで確定しません。",
+    "{connection}を使っている登録モデルがあります（{models}）。削除すると、これらのモデルはプライマリ接続を使います。保存するまで確定しません。",
   "settings.model.connection.removeConfirm.moveAndRemove":
     "プライマリ接続に移して削除",
   "settings.model.connection.removeConfirm.title":
-    "セカンダリ接続を削除しますか？",
+    "{connection}を削除しますか？",
   "settings.model.connection.secondary": "セカンダリ接続",
   "settings.model.connection.secondaryDescription":
     "登録モデルの「接続」でセカンダリ接続を選んだモデルは、この接続で呼び出します。",
@@ -34,6 +34,13 @@ export const MODEL_MESSAGES = {
   "settings.model.connection.secondaryEmpty.title":
     "セカンダリ接続は設定されていません。",
   "settings.model.connection.tabs": "OCI Enterprise AI の接続",
+  "settings.model.connection.tertiary": "ターシャリ接続",
+  "settings.model.connection.tertiaryDescription":
+    "登録モデルの「接続」でターシャリ接続を選んだモデルは、この接続で呼び出します。OpenAI や OpenAI 互換 API のモデルにも使えます。",
+  "settings.model.connection.tertiaryEmpty.hint":
+    "OpenAI や OpenAI 互換 API（OCI Enterprise AI も可）のモデルを使うときに設定します。設定すると、Endpoint URL と API key は必須です。Project OCID は OCI Enterprise AI を使うときだけ入力します。",
+  "settings.model.connection.tertiaryEmpty.title":
+    "ターシャリ接続は設定されていません。",
   "settings.model.connection.unsaved": "未保存",
   "settings.model.defaults.description":
     "処理の種類ごとに使うモデルを登録モデルから選びます。",
@@ -70,13 +77,15 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.connection": "接続",
   "settings.model.enterprise.connectionOfModel": "モデル {number} の接続",
   "settings.model.enterprise.description":
-    "回答生成と画像・OCR の解析に使う Enterprise AI の接続情報を設定します。プライマリ接続に加えてセカンダリ接続を設定でき、登録モデルごとに使う接続を選べます。",
+    "回答生成と画像・OCR の解析に使う Enterprise AI の接続情報を設定します。プライマリ接続に加えてセカンダリ接続と、OpenAI や OpenAI 互換 API にも使えるターシャリ接続を設定でき、登録モデルごとに使う接続を選べます。",
   "settings.model.enterprise.displayName": "表示名",
   "settings.model.enterprise.endpoint": "Endpoint URL",
   "settings.model.enterprise.endpointDocs":
     "公式ドキュメント（新しいタブで開く）",
   "settings.model.enterprise.endpointHelp":
     "公式 docs の OpenAI-compatible base URL を指定します。Responses API path は /responses です。",
+  "settings.model.enterprise.endpointHelpTertiary":
+    "OpenAI は https://api.openai.com/v1、OpenAI 互換 API や OCI Enterprise AI はその base URL を指定します。Responses API（/responses）で呼び出します。",
   "settings.model.enterprise.modelId": "モデル ID",
   "settings.model.enterprise.models": "登録モデル",
   "settings.model.enterprise.modelsDescription":
@@ -85,6 +94,8 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.project": "Project OCID",
   "settings.model.enterprise.projectHelp":
     "OCI OpenAI-compatible API 呼び出しに必要な Generative AI project OCID。",
+  "settings.model.enterprise.projectHelpTertiary":
+    "OCI Enterprise AI を使うときだけ、Generative AI project OCID を入力します（入力したときだけ OpenAI-Project ヘッダーで送ります）。OpenAI や OpenAI 互換 API では空のままにします。",
   "settings.model.enterprise.removeConfirm.description":
     "モデル「{model}」を一覧から削除します。保存するまで確定しません。",
   "settings.model.enterprise.removeConfirm.descriptionUnnamed":
@@ -115,6 +126,7 @@ export const MODEL_MESSAGES = {
   "settings.model.placeholder.embeddingModel": "cohere.embed-v4.0",
   "settings.model.placeholder.endpoint":
     "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1",
+  "settings.model.placeholder.endpointTertiary": "https://api.openai.com/v1",
   "settings.model.placeholder.modelId": "enterprise-llm",
   "settings.model.placeholder.project":
     "ocid1.generativeaiproject.oc1.us-chicago-1.xxxxxxxx",

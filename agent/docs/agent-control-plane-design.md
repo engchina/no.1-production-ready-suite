@@ -35,6 +35,8 @@ flowchart TD
 `POST /agents/{id}/versions/{version}/restore` はその版を公開し直し、下書きもその内容にする（ロールバック）。
 画面・API で作る Agent は下書きから始め、#770 より前の Agent（`versioned=false`）は読み込み時に現在の内容を
 v1 として公開する。
+利用者の Run を作る入口（チャットの選択肢・MCP の `agent_list_agents` / `agent_ask`・自動実行の作成と実行）は、
+公開した版の無い Agent を出さず・選ばせない（`runtime.agent_unavailable_reason`。#792）。品質評価は下書きでも評価できる。
 Plugin、MCP、Tool、Runtime を Agent に埋め込まない。`tool_names` は移行リリースの読取互換だけである
 （`command_allowed_prefixes` は #756 で削除した）。
 
@@ -109,10 +111,11 @@ aud は製品名。削除できない）。外部の MCP は画面・`AGENT_EXTE
 
 | ツール（モデルに渡す名前） | readOnlyHint | 既定の policy |
 |---|---|---|
-| `rag__rag_search` / `rag__rag_list_business_views` / `rag__rag_chat_get_conversation` | true | 承認なし（回答生成に LLM を使う） |
-| `rag__rag_chat_send_message` | false | 承認が必要（RAG に会話を作成・追記する） |
+| `rag__rag_search` / `rag__rag_list_business_views` | true | 承認なし（回答生成に LLM を使う） |
 | `nl2sql__nl2sql_list_profiles` / `nl2sql__nl2sql_recommend_profile` / `nl2sql__nl2sql_get_job` | true | 承認なし |
 | `nl2sql__nl2sql_query` | false | 承認が必要（業務 DB へ SQL を実行する） |
+
+RAG のチャットは MCP で提供しない（#787）。RAG の MCP は検索（`rag_search`）と業務ビューの一覧だけを持つ。
 
 ツール権限（`/settings/tool-policy`）は `<接続>__<ツール>` の名前で allow / ask / deny を上書きできる。
 NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_returned_as_audit_only` の警告を残す（実行はしない）。

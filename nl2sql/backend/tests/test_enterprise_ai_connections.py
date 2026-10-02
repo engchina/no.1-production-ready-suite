@@ -1,4 +1,4 @@
-"""OCI Enterprise AI の接続をモデルごとに選ぶ（#533）。呼び出しが対象モデルの接続を使うこと。
+"""OCI Enterprise AI の接続をモデルごとに選ぶ（#533 / #786）。呼び出しが対象モデルの接続を使うこと。
 
 HTTP は httpx.MockTransport（決定論）で受け、URL・API key・Project のヘッダーを確かめる。
 """
@@ -18,8 +18,12 @@ from app.settings import EnterpriseAiConfiguredModel, Settings
 
 PRIMARY = "https://primary.example/openai/v1"
 SECONDARY = "https://secondary.example/openai/v1"
+# ターシャリ接続（#786）は OpenAI / OpenAI 互換 API 向けで、Project OCID を入れない。
+TERTIARY = "https://api.openai.example/v1"
 PRIMARY_CONNECTION = (PRIMARY, "Bearer sk-primary", "ocid1.project.primary")
 SECONDARY_CONNECTION = (SECONDARY, "Bearer sk-secondary", "ocid1.project.secondary")
+# Project OCID がないので OpenAI-Project ヘッダーは送らない。
+TERTIARY_CONNECTION = (TERTIARY, "Bearer sk-tertiary", "")
 
 
 def _settings(**overrides: Any) -> Settings:
@@ -30,11 +34,14 @@ def _settings(**overrides: Any) -> Settings:
         "oci_enterprise_ai_secondary_endpoint": SECONDARY,
         "oci_enterprise_ai_secondary_project_ocid": "ocid1.project.secondary",
         "oci_enterprise_ai_secondary_api_key": "sk-secondary",
+        "oci_enterprise_ai_tertiary_endpoint": TERTIARY,
+        "oci_enterprise_ai_tertiary_api_key": "sk-tertiary",
         "oci_enterprise_ai_models": [
             EnterpriseAiConfiguredModel(model_id="text-a"),
             EnterpriseAiConfiguredModel(
                 model_id="vision-b", vision_enabled=True, connection_id="secondary"
             ),
+            EnterpriseAiConfiguredModel(model_id="gpt-c", connection_id="tertiary"),
         ],
         "oci_enterprise_ai_default_text_model": "text-a",
         "oci_enterprise_ai_default_vision_model": "vision-b",
@@ -51,7 +58,8 @@ def recorded(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, str]]:
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
-        base = PRIMARY if url.startswith(PRIMARY) else SECONDARY
+        base = next(item for item in (PRIMARY, SECONDARY, TERTIARY) if url.startswith(item))
+        assert url == f"{base}/responses"
         calls.append(
             (base, request.headers["authorization"], request.headers.get("OpenAI-Project", ""))
         )
@@ -86,6 +94,19 @@ def test_text_model_on_secondary_uses_secondary(recorded: list[tuple[str, str, s
     assert recorded == [SECONDARY_CONNECTION]
 
 
+def test_text_model_on_tertiary_uses_tertiary_without_project(
+    recorded: list[tuple[str, str, str]],
+) -> None:
+    """ターシャリ接続（Project OCID なし）は Responses API を OpenAI-Project ヘッダーなしで呼ぶ。"""
+    settings = _settings(oci_enterprise_ai_default_text_model="gpt-c")
+    client = OciEnterpriseAiDirectClient(settings)
+
+    assert client.is_configured() is True
+    client.generate(prompt="質問", context="", system_prompt="日本語で答える")
+
+    assert recorded == [TERTIARY_CONNECTION]
+
+
 def test_is_configured_checks_text_model_connection() -> None:
     assert OciEnterpriseAiDirectClient(_settings()).is_configured() is True
     assert (
@@ -114,8 +135,9 @@ def _post(path: str, body: dict[str, Any]) -> httpx.Response:
     [
         ("enterprise_text", "text-a", PRIMARY_CONNECTION),
         ("enterprise_vision", "vision-b", SECONDARY_CONNECTION),
+        ("enterprise_text", "gpt-c", TERTIARY_CONNECTION),
     ],
-    ids=["text-primary", "vision-secondary"],
+    ids=["text-primary", "vision-secondary", "text-tertiary"],
 )
 def test_model_settings_test_calls_connection_of_tested_model(
     recorded: list[tuple[str, str, str]],
@@ -144,6 +166,12 @@ def test_model_settings_test_calls_connection_of_tested_model(
                             "project_ocid": "ocid1.project.secondary",
                             "api_key": "sk-secondary",
                         },
+                        {
+                            "connection_id": "tertiary",
+                            "endpoint": TERTIARY,
+                            "project_ocid": "",
+                            "api_key": "sk-tertiary",
+                        },
                     ],
                     "models": [
                         {"model_id": "text-a"},
@@ -152,6 +180,7 @@ def test_model_settings_test_calls_connection_of_tested_model(
                             "vision_enabled": True,
                             "connection_id": "secondary",
                         },
+                        {"model_id": "gpt-c", "connection_id": "tertiary"},
                     ],
                     "default_text_model_id": "text-a",
                     "default_vision_model_id": "vision-b",
@@ -170,3 +199,4 @@ def test_model_settings_test_calls_connection_of_tested_model(
     assert response.json()["data"]["status"] == "success", response.text
     assert recorded == [expected]
     assert "sk-primary" not in response.text and "sk-secondary" not in response.text
+    assert "sk-tertiary" not in response.text

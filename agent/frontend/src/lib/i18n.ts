@@ -427,7 +427,7 @@ const agentJa = {
   "chat.subtitle": "業務 Agent に質問し、出典と使ったツールを確かめながら会話を続ける",
   "chat.agent.label": "業務 Agent",
   "chat.agent.loading": "業務 Agent を読み込んでいます",
-  "chat.agent.empty": "使える業務 Agent がありません。管理者に権限の付与を依頼してください。",
+  "chat.agent.empty": "使える業務 Agent がありません。業務 Agent の公開と権限の付与を管理者に依頼してください。",
   "chat.threads.title": "会話の履歴",
   "chat.threads.open": "会話の履歴",
   "chat.threads.close": "会話の履歴を閉じる",

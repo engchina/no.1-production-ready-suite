@@ -1,4 +1,7 @@
-"""OCI Enterprise AI の接続（プライマリ / セカンダリ）を持ち、モデルごとに選ぶ（#533 / #542）。"""
+"""OCI Enterprise AI の接続（プライマリ / セカンダリ / ターシャリ）を持ち、モデルごとに選ぶ。
+
+#533 / #542 / #786。
+"""
 
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ from pr_system_settings import model as shared_model
 from pr_system_settings.model import (
     ENTERPRISE_AI_API_KEY_ENV,
     ENTERPRISE_AI_SECONDARY_API_KEY_ENV,
+    ENTERPRISE_AI_TERTIARY_API_KEY_ENV,
     MAX_ENTERPRISE_AI_CONNECTIONS,
     EnterpriseAiConfiguredModel,
     EnterpriseAiModelSettings,
@@ -26,12 +30,14 @@ from pr_system_settings.model import (
 
 PRIMARY_ENDPOINT = "https://primary.invalid/openai/v1"
 SECONDARY_ENDPOINT = "https://secondary.invalid/openai/v1"
+TERTIARY_ENDPOINT = "https://api.openai.com/v1"
 
 
 @pytest.fixture(autouse=True)
 def _no_process_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ENTERPRISE_AI_API_KEY_ENV, raising=False)
     monkeypatch.delenv(ENTERPRISE_AI_SECONDARY_API_KEY_ENV, raising=False)
+    monkeypatch.delenv(ENTERPRISE_AI_TERTIARY_API_KEY_ENV, raising=False)
 
 
 def two_connection_payload(**secondary: Any) -> dict[str, Any]:
@@ -68,21 +74,46 @@ def two_connection_payload(**secondary: Any) -> dict[str, Any]:
     }
 
 
-def test_max_connections_is_two() -> None:
-    assert MAX_ENTERPRISE_AI_CONNECTIONS == 2
+def test_max_connections_is_three() -> None:
+    assert MAX_ENTERPRISE_AI_CONNECTIONS == 3
     with pytest.raises(ValueError):
         EnterpriseAiModelSettings.model_validate(
-            {"connections": [{"connection_id": "primary"}] * 3}
+            {"connections": [{"connection_id": "primary"}] * 4}
         )
 
 
 def test_connections_must_start_with_primary_without_duplicates() -> None:
     for connections in (
         [{"connection_id": "secondary"}],
+        [{"connection_id": "tertiary"}],
         [{"connection_id": "primary"}, {"connection_id": "primary"}],
+        [
+            {"connection_id": "primary"},
+            {"connection_id": "tertiary"},
+            {"connection_id": "secondary"},
+        ],
+        [{"connection_id": "primary"}, {"connection_id": "quaternary"}],
     ):
         with pytest.raises(ValueError):
             EnterpriseAiModelSettings.model_validate({"connections": connections})
+
+
+@pytest.mark.parametrize(
+    "ids",
+    [
+        ["primary"],
+        ["primary", "secondary"],
+        ["primary", "tertiary"],
+        ["primary", "secondary", "tertiary"],
+    ],
+    ids=["primary", "primary-secondary", "primary-tertiary", "all"],
+)
+def test_connections_allow_any_subset_with_primary_in_order(ids: list[str]) -> None:
+    """セカンダリ接続を置かずにターシャリ接続だけを置いてもよい（#786）。"""
+    settings = EnterpriseAiModelSettings.model_validate(
+        {"connections": [{"connection_id": connection_id} for connection_id in ids]}
+    )
+    assert [c.connection_id for c in settings.connections] == ids
 
 
 def test_legacy_payload_is_read_as_primary_connection() -> None:
@@ -237,7 +268,7 @@ def test_saved_json_with_unknown_connections_is_read_leniently(tmp_path: Path) -
         "version": 3,
         "enterprise_ai": {
             "connections": [
-                {"connection_id": "tertiary", "endpoint": "https://x.invalid"},
+                {"connection_id": "quaternary", "endpoint": "https://x.invalid"},
                 {"connection_id": "secondary", "endpoint": SECONDARY_ENDPOINT},
             ],
             "models": [],
@@ -272,6 +303,7 @@ def test_connection_labels_are_tab_names() -> None:
     """画面のタブ・登録モデルの選択肢・メッセージの名前（#542）。"""
     assert connection_label("primary") == "プライマリ接続"
     assert connection_label("secondary") == "セカンダリ接続"
+    assert connection_label("tertiary") == "ターシャリ接続"
     assert connection_label("unknown") == "プライマリ接続"
 
 
@@ -448,3 +480,179 @@ def test_model_payload_hides_keys_of_both_connections() -> None:
     )
     dumped = shared_model.model_payload(settings).model_dump_json()
     assert "sk-primary" not in dumped and "sk-secondary" not in dumped
+
+
+# --------------------------------------------------------------------------- ターシャリ接続（#786）
+
+
+def three_connection_payload(**tertiary: Any) -> dict[str, Any]:
+    """ターシャリ接続（OpenAI 向け。Project OCID なし）を足した payload。"""
+    payload = two_connection_payload()
+    payload["enterprise_ai"]["connections"].append(
+        {
+            "connection_id": "tertiary",
+            "endpoint": TERTIARY_ENDPOINT,
+            "project_ocid": "",
+            "api_key": "sk-tertiary",
+            **tertiary,
+        }
+    )
+    payload["enterprise_ai"]["models"].append(
+        {"model_id": "gpt-c", "display_name": "C", "connection_id": "tertiary"}
+    )
+    return payload
+
+
+def test_tertiary_connection_does_not_require_project_ocid() -> None:
+    """ターシャリ接続は Endpoint URL と API key が必須で、Project OCID は任意（#786）。"""
+    enterprise = EnterpriseAiModelSettings.model_validate(
+        three_connection_payload()["enterprise_ai"]
+    )
+    keys = {"primary": "sk-primary", "secondary": "sk-secondary", "tertiary": "sk-tertiary"}
+    assert validate_enterprise_ai_connections(enterprise, api_keys=keys) == []
+
+    blank = EnterpriseAiModelSettings.model_validate(
+        three_connection_payload(endpoint="")["enterprise_ai"]
+    )
+    errors = validate_enterprise_ai_connections(blank, api_keys={**keys, "tertiary": ""})
+    assert [(e.field, e.message) for e in errors] == [
+        ("connections.2.endpoint", "ターシャリ接続の Endpoint URL を入力してください。"),
+        ("connections.2.api_key", "ターシャリ接続の API key を入力してください。"),
+    ]
+
+
+def test_save_and_load_tertiary_connection(tmp_path: Path) -> None:
+    """ターシャリ接続は JSON（Endpoint・Project OCID）と `.env`（API key）に分けて保存する。"""
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+
+    response = make_client(settings, store).patch(
+        "/api/settings/model", json=three_connection_payload()
+    )
+
+    assert response.status_code == 200, response.text
+    enterprise = response.json()["data"]["settings"]["enterprise_ai"]
+    assert [c["connection_id"] for c in enterprise["connections"]] == [
+        "primary",
+        "secondary",
+        "tertiary",
+    ]
+    assert enterprise["connections"][2]["has_api_key"] is True
+    assert enterprise["connections"][2]["project_ocid"] == ""
+    assert [m["connection_id"] for m in enterprise["models"]] == [
+        "primary",
+        "secondary",
+        "tertiary",
+    ]
+    assert "sk-tertiary" not in response.text
+    raw = (tmp_path / "model-settings.json").read_text(encoding="utf-8")
+    assert "sk-tertiary" not in raw
+    assert json.loads(raw)["enterprise_ai"]["connections"][2] == {
+        "connection_id": "tertiary",
+        "endpoint": TERTIARY_ENDPOINT,
+        "project_ocid": "",
+    }
+    assert dotenv_values(tmp_path / ".env")[ENTERPRISE_AI_TERTIARY_API_KEY_ENV] == "sk-tertiary"
+
+    # 別 worker（JSON と `.env` から読む）も同じ接続で呼ぶ。
+    worker_b = FakeSettings()
+    make_store(tmp_path).load(worker_b)
+    connection = enterprise_ai_connection_for_model(worker_b, "gpt-c")
+    assert (
+        connection.connection_id,
+        connection.endpoint,
+        connection.api_key,
+        connection.project_ocid,
+    ) == ("tertiary", TERTIARY_ENDPOINT, "sk-tertiary", "")
+    assert connection.is_configured()
+
+
+def test_tertiary_connection_without_secondary(tmp_path: Path) -> None:
+    """セカンダリ接続を置かずに、プライマリ接続とターシャリ接続だけで保存できる（#786）。"""
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    payload = three_connection_payload()
+    del payload["enterprise_ai"]["connections"][1]
+    payload["enterprise_ai"]["models"][1]["connection_id"] = "primary"
+
+    response = make_client(settings, store).patch("/api/settings/model", json=payload)
+
+    assert response.status_code == 200, response.text
+    assert [c.connection_id for c in enterprise_ai_connections(settings)] == [
+        "primary",
+        "tertiary",
+    ]
+    env = dotenv_values(tmp_path / ".env")
+    assert ENTERPRISE_AI_SECONDARY_API_KEY_ENV not in env
+    assert env[ENTERPRISE_AI_TERTIARY_API_KEY_ENV] == "sk-tertiary"
+
+
+def test_tertiary_connection_from_environment_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """env（`PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_*`）だけで設定したターシャリ接続も使える。"""
+    monkeypatch.setenv(ENTERPRISE_AI_TERTIARY_API_KEY_ENV, "sk-env-tertiary")
+    settings = FakeSettings(
+        oci_enterprise_ai_tertiary_endpoint=TERTIARY_ENDPOINT,
+        oci_enterprise_ai_tertiary_api_key="sk-env-tertiary",
+        oci_enterprise_ai_models=[
+            EnterpriseAiConfiguredModel(model_id="gpt-c", connection_id="tertiary")
+        ],
+    )
+    make_store(tmp_path).load(settings)
+    assert [c.connection_id for c in enterprise_ai_connections(settings)] == [
+        "primary",
+        "tertiary",
+    ]
+    connection = enterprise_ai_connection_for_model(settings, "gpt-c")
+    assert (connection.endpoint, connection.api_key) == (TERTIARY_ENDPOINT, "sk-env-tertiary")
+
+
+def test_old_json_keeps_tertiary_connection_from_environment(tmp_path: Path) -> None:
+    """#533 より前の JSON（接続 1 組）でも、env のターシャリ接続はそのまま使う。"""
+    old = {"version": 3, "enterprise_ai": {"endpoint": PRIMARY_ENDPOINT, "models": []}}
+    (tmp_path / "model-settings.json").write_text(json.dumps(old), encoding="utf-8")
+    settings = FakeSettings(
+        oci_enterprise_ai_tertiary_endpoint=TERTIARY_ENDPOINT,
+        oci_enterprise_ai_tertiary_api_key="sk-tertiary",
+    )
+    make_store(tmp_path).load(settings)
+    assert [c.connection_id for c in enterprise_ai_connections(settings)] == [
+        "primary",
+        "tertiary",
+    ]
+
+
+def test_removing_tertiary_clears_its_settings_and_key(tmp_path: Path) -> None:
+    """ターシャリ接続を削除すると、Endpoint などと `.env` の key を消す（モデルはプライマリへ）。"""
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    client = make_client(settings, store)
+    assert client.patch("/api/settings/model", json=three_connection_payload()).status_code == 200
+
+    payload = three_connection_payload()
+    payload["enterprise_ai"]["connections"].pop()
+    payload["enterprise_ai"]["models"][2]["connection_id"] = "primary"
+    response = client.patch("/api/settings/model", json=payload)
+
+    assert response.status_code == 200, response.text
+    env = dotenv_values(tmp_path / ".env")
+    assert ENTERPRISE_AI_TERTIARY_API_KEY_ENV not in env
+    assert env[ENTERPRISE_AI_SECONDARY_API_KEY_ENV] == "sk-secondary"
+    assert settings.oci_enterprise_ai_tertiary_endpoint == ""
+    assert settings.oci_enterprise_ai_tertiary_api_key == ""
+    assert enterprise_ai_connection_for_model(settings, "gpt-c").connection_id == "primary"
+
+
+def test_tertiary_connection_requires_api_key(tmp_path: Path) -> None:
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    response = make_client(settings, store).patch(
+        "/api/settings/model", json=three_connection_payload(api_key="")
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "ターシャリ接続の API key を入力してください。"
