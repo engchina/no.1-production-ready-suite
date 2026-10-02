@@ -227,8 +227,28 @@ function normalizedSet(body: Json): Json {
       question: item.question,
       expected: item.expected,
       expected_tools: item.expected_tools ?? [],
+      source_run_id: item.source_run_id ?? null,
     })),
   };
+}
+
+/** 同じ質問かを比べる形（backend の `normalize_question` と同じ。#810）。 */
+function normalizedQuestion(question: unknown): string {
+  return String(question ?? "").trim().split(/\s+/).join(" ");
+}
+
+/** 評価の版（#810）。省略時は公開していない変更があれば下書き、なければ公開中の版。 */
+function evaluationVersion(state: MockApiState, agentId: unknown, target: unknown): number | "draft" {
+  const agent = state.agents.find((item) => item.id === agentId);
+  const published = (agent?.published_version as number | null | undefined) ?? null;
+  const chosen = target ?? (agent?.unpublished_changes || published === null ? "draft" : "published");
+  if (chosen === "published") {
+    if (published === null) {
+      throw new HttpError(409, "公開した版がありません。下書きで評価するか、公開してから評価してください。");
+    }
+    return published;
+  }
+  return "draft";
 }
 
 /** 評価の概要（backend の `summarize` と同じ数え方）。 */
@@ -831,6 +851,31 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return { run_id: run.id, goal: run.goal, status: run.status, records: [] };
     }
     if (method === "GET" && at("runs", "*", "artifacts")) return { artifacts: [] };
+    // Run から評価ケースの下書きを作る（#810）。
+    if (method === "GET" && at("runs", "*", "evaluation-case")) {
+      const agent = state.agents.find((item) => item.id === run.agent_id);
+      const review = run.admin_review as Json | null | undefined;
+      const tools = ((run.steps as Json[] | undefined) ?? [])
+        .map((step) => (step.tool_call as Json | null | undefined)?.name)
+        .filter((name): name is string => typeof name === "string");
+      return {
+        agent_id: run.agent_id,
+        agent_name: agent?.name ?? run.agent_id,
+        source_run_id: run.id,
+        question: String(run.goal ?? "").trim(),
+        expected: String(review?.comment ?? "").trim(),
+        expected_tools: [...new Set(tools)],
+        existing_set_ids: state.evaluationSets
+          .filter(
+            (item) =>
+              item.agent_id === run.agent_id &&
+              (item.cases as Json[]).some(
+                (candidate) => normalizedQuestion(candidate.question) === normalizedQuestion(run.goal)
+              )
+          )
+          .map((item) => item.id),
+      };
+    }
     if (method === "POST" && at("runs", "*", "cancel")) {
       run.status = "cancelled";
       return run;
@@ -906,6 +951,28 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     };
   }
   if (method === "POST" && at("evaluation-sets", "parse-xlsx")) return { cases: state.parsedCases };
+  // 業種テンプレートの評価ケースで評価セットを作る（#810）。
+  if (method === "POST" && at("evaluation-sets", "from-template")) {
+    const agent = findOr404(state.agents, "id", String(body.agent_id), "agent");
+    const template = state.agentTemplates.find((item) => item.id === agent.template_id);
+    if (!template) {
+      throw new HttpError(409, "この業務 Agent はテンプレートから作っていないため、評価ケースがありません。");
+    }
+    const item: Json = {
+      ...normalizedSet({
+        agent_id: agent.id,
+        name: `${String(template.name)}（テンプレート）`,
+        description: "業種テンプレートの評価ケースから作りました。",
+        cases: template.evaluation_cases,
+      }),
+      id: `evset-${state.evaluationSets.length + 1}`,
+      created_by_user_uuid: "local",
+      created_at: MOCK_NOW,
+      updated_at: MOCK_NOW,
+    };
+    state.evaluationSets.unshift(item);
+    return item;
+  }
   if (method === "POST" && at("evaluation-sets")) {
     const item: Json = {
       ...normalizedSet(body),
@@ -920,6 +987,28 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   if (head === "evaluation-sets" && second) {
     const item = findOr404(state.evaluationSets, "id", second, "evaluation set");
     if (method === "GET" && at("evaluation-sets", "*")) return item;
+    // ケースを 1 件足す（同じ質問・50 件の上限は 409。#810）。
+    if (method === "POST" && at("evaluation-sets", "*", "cases")) {
+      const cases = item.cases as Json[];
+      if (cases.some((candidate) => normalizedQuestion(candidate.question) === normalizedQuestion(body.question))) {
+        throw new HttpError(409, "同じ質問の評価ケースが、この評価セットに既にあります。");
+      }
+      if (cases.length >= 50) {
+        throw new HttpError(409, "評価セットのケースは 50 件までです。別の評価セットに追加してください。");
+      }
+      const used = new Set(cases.map((candidate) => candidate.id));
+      let number = cases.length + 1;
+      while (used.has(`case-${number}`)) number += 1;
+      cases.push({
+        id: `case-${number}`,
+        question: String(body.question).trim(),
+        expected: String(body.expected).trim(),
+        expected_tools: body.expected_tools ?? [],
+        source_run_id: body.source_run_id ?? null,
+      });
+      item.updated_at = MOCK_NOW;
+      return item;
+    }
     if (method === "PUT" && at("evaluation-sets", "*")) {
       Object.assign(item, normalizedSet(body), { updated_at: MOCK_NOW });
       return item;
@@ -942,6 +1031,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       agent_name: evaluationSet.agent_id === "default" ? "汎用業務 Agent" : String(evaluationSet.agent_id),
       set_id: evaluationSet.id,
       set_name: evaluationSet.name,
+      agent_version: evaluationVersion(state, evaluationSet.agent_id, body.agent_version),
       status: "running",
       created_by_user_uuid: "local",
       results: cases.map((item) => ({
@@ -962,6 +1052,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       finished_at: null,
       previous_job_id: null,
       previous_summary: null,
+      previous_agent_version: null,
+      previous_created_at: null,
       _polls: 0,
     };
     job.summary = evaluationSummary(job.results as Json[]);
@@ -969,6 +1061,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (previous) {
       job.previous_job_id = previous.id;
       job.previous_summary = previous.summary;
+      job.previous_agent_version = previous.agent_version ?? null;
+      job.previous_created_at = previous.created_at;
     }
     state.evaluations.unshift(job);
     return publicJob(job);
@@ -986,6 +1080,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         agent_name: job.agent_name,
         set_id: job.set_id ?? "",
         set_name: job.set_name ?? "",
+        agent_version: job.agent_version ?? null,
         status: job.status,
         summary: job.summary,
         created_at: job.created_at,

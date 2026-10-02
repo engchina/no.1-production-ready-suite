@@ -15,6 +15,9 @@
   実行するのを待つ（二重に実行しない）。
 - 評価セットと job は Control Plane の定義と同じ保存先（`AGENT_CONTROL_PLANE_ITEMS`。#764）に置く。
   再起動の時点で実行中だった job は「中断」にする。
+- 評価する版（公開中の版 / 下書き）を選び、job に残す。前回との比較は同じ評価ケースの job と
+  だけ行う。フィードバック・Run の詳細からケースを足し（出どころの `source_run_id` を残す）、
+  業種テンプレートの評価ケースで評価セットを作れる（#810）。
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from agents import Agent, ModelSettings, Runner
@@ -81,6 +84,8 @@ class EvaluationCase(BaseModel):
     expected: str = Field(min_length=1, max_length=EVALUATION_EXPECTED_MAX_CHARS)
     # 呼ぶべきツール（任意）。`rag_search` のように MCP 接続の名前を省いてもよい。
     expected_tools: list[str] = Field(default_factory=list)
+    # ケースの出どころ（フィードバック・Run の詳細から追加したときの Run の ID。#810）。
+    source_run_id: str | None = Field(default=None, max_length=100)
 
     @field_validator("question", "expected")
     @classmethod
@@ -96,6 +101,20 @@ class EvaluationCase(BaseModel):
         if len(cleaned) > EVALUATION_EXPECTED_TOOLS_MAX:
             raise ValueError(f"期待するツールは {EVALUATION_EXPECTED_TOOLS_MAX} 個までです。")
         return cleaned
+
+
+def normalize_question(question: str) -> str:
+    """同じ質問かを比べるための形（前後と連続した空白を 1 つにする。#810）。"""
+    return " ".join(question.split())
+
+
+def next_case_id(cases: list[EvaluationCase]) -> str:
+    """まだ使っていない `case-<番号>`（ケースの数 + 1 から探す）。"""
+    used = {case.id for case in cases}
+    number = len(cases) + 1
+    while f"case-{number}" in used:
+        number += 1
+    return f"case-{number}"
 
 
 def number_cases(cases: list[EvaluationCase]) -> list[EvaluationCase]:
@@ -152,6 +171,27 @@ class EvaluationSetItem(BaseModel):
 
 class EvaluationSetsData(BaseModel):
     sets: list[EvaluationSetItem] = Field(default_factory=list)
+
+
+class EvaluationCaseDraft(BaseModel):
+    """Run（フィードバック・Run の詳細）から作る評価ケースの下書き（保存しない。#810）。"""
+
+    agent_id: str
+    agent_name: str
+    source_run_id: str
+    question: str
+    # 管理者の評価のコメント（無ければ空。画面で必須の入力にする）。
+    expected: str = ""
+    # Run が呼んだ（呼ぼうとした）ツール。
+    expected_tools: list[str] = Field(default_factory=list)
+    # 同じ質問のケースを既に持つ評価セットの ID（重複して足さないため）。
+    existing_set_ids: list[str] = Field(default_factory=list)
+
+
+class EvaluationSetFromTemplateRequest(BaseModel):
+    """業務 Agent の作成に使った業種テンプレートの評価ケースで評価セットを作る（#810）。"""
+
+    agent_id: str = Field(min_length=1, max_length=200)
 
 
 class EvaluationCasesData(BaseModel):
@@ -292,8 +332,16 @@ def summarize(results: list[EvaluationCaseResult]) -> EvaluationSummary:
     return summary
 
 
+# 評価する版（#810）。published = 公開中の版、draft = 下書き。
+EvaluationTarget = Literal["published", "draft"]
+# job に残す版（版の番号か "draft"。#810 より前の job は None）。
+AgentVersionRef = int | str | None
+
+
 class EvaluationRequest(BaseModel):
     set_id: str = Field(min_length=1, max_length=100)
+    # 省略すると、公開していない変更があれば下書き、なければ公開中の版（#810）。
+    agent_version: EvaluationTarget | None = None
 
 
 class EvaluationJob(BaseModel):
@@ -302,6 +350,8 @@ class EvaluationJob(BaseModel):
     agent_name: str = ""
     set_id: str = ""
     set_name: str = ""
+    # 評価した版（版の番号か "draft"。Run の `metadata.agent_version` と同じ値。#810）。
+    agent_version: AgentVersionRef = None
     status: JobStatus = JobStatus.QUEUED
     created_by_user_uuid: str | None = None
     results: list[EvaluationCaseResult] = Field(default_factory=list)
@@ -310,9 +360,12 @@ class EvaluationJob(BaseModel):
     created_at: datetime = Field(default_factory=_now)
     started_at: datetime | None = None
     finished_at: datetime | None = None
-    # 同じ評価セットの前回（完了した job）の概要。比較に使う（応答のときに入れる）。
+    # 同じ評価セット・同じ評価ケースの前回（完了した job）の概要。比較に使う（応答のときに入れる）。
+    # ケースを変えた後の結果とは比べない。どの版どうしの比較かを画面に出す（#810）。
     previous_job_id: str | None = None
     previous_summary: EvaluationSummary | None = None
+    previous_agent_version: AgentVersionRef = None
+    previous_created_at: datetime | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -328,6 +381,7 @@ class EvaluationJobItem(BaseModel):
     agent_name: str
     set_id: str
     set_name: str
+    agent_version: AgentVersionRef = None
     status: JobStatus
     summary: EvaluationSummary
     created_at: datetime
@@ -352,6 +406,14 @@ class EvaluationJobActiveError(RuntimeError):
 
 class EvaluationSetInUseError(RuntimeError):
     """実行中の評価が使っている評価セットは削除できない。"""
+
+
+class EvaluationCaseDuplicateError(ValueError):
+    """同じ質問のケースが評価セットに既にある（#810）。"""
+
+
+class EvaluationSetFullError(ValueError):
+    """評価セットのケースが上限（`EVALUATION_MAX_CASES`）に達している（#810）。"""
 
 
 # ---- 保存（Control Plane の保存先。#764） -------------------------------------------------
@@ -414,7 +476,7 @@ class EvaluationSetStore:
                 update={
                     "name": data.name,
                     "description": data.description,
-                    "cases": data.cases,
+                    "cases": _keep_sources(current.cases, data.cases),
                     "updated_at": _now(),
                 }
             )
@@ -422,6 +484,42 @@ class EvaluationSetStore:
         with self._lock:
             self._sets[set_id] = updated
         return updated.model_copy(deep=True)
+
+    def append_case(self, set_id: str, case: EvaluationCase) -> EvaluationSet:
+        """ケースを 1 件足す（同じ質問は断り、件数の上限を守る。#810）。"""
+        with self._lock:
+            current = self._sets.get(set_id)
+            if current is None:
+                raise KeyError(set_id)
+            question = normalize_question(case.question)
+            if any(normalize_question(item.question) == question for item in current.cases):
+                raise EvaluationCaseDuplicateError(set_id)
+            if len(current.cases) >= EVALUATION_MAX_CASES:
+                raise EvaluationSetFullError(set_id)
+            case_id = case.id.strip()
+            if not case_id or any(item.id == case_id for item in current.cases):
+                case_id = next_case_id(current.cases)
+            updated = current.model_copy(
+                update={
+                    "cases": [*current.cases, case.model_copy(update={"id": case_id})],
+                    "updated_at": _now(),
+                }
+            )
+        _save("evaluation_set", set_id, updated.model_dump(mode="json"))
+        with self._lock:
+            self._sets[set_id] = updated
+        return updated.model_copy(deep=True)
+
+    def sets_with_question(self, agent_id: str, question: str) -> tuple[str, ...]:
+        """同じ質問のケースを持つ、業務 Agent の評価セットの ID。"""
+        normalized = normalize_question(question)
+        with self._lock:
+            return tuple(
+                item.id
+                for item in self._sets.values()
+                if item.agent_id == agent_id
+                and any(normalize_question(case.question) == normalized for case in item.cases)
+            )
 
     def delete(self, set_id: str) -> None:
         with self._lock:
@@ -438,6 +536,42 @@ class EvaluationSetStore:
     def clear(self) -> None:
         with self._lock:
             self._sets.clear()
+
+
+def _keep_sources(
+    current: list[EvaluationCase], incoming: list[EvaluationCase]
+) -> list[EvaluationCase]:
+    """保存（PUT）で出どころ（`source_run_id`）が落ちたケースは、同じ ID・同じ質問なら元の値を保つ。
+
+    Excel の取り込みなど、出どころの列を持たない経路で編集しても、フィードバックからの追加の記録を
+    失わない（#810）。
+    """
+    sources = {
+        (case.id, normalize_question(case.question)): case.source_run_id
+        for case in current
+        if case.source_run_id
+    }
+    return [
+        case
+        if case.source_run_id
+        or (source := sources.get((case.id, normalize_question(case.question)))) is None
+        else case.model_copy(update={"source_run_id": source})
+        for case in incoming
+    ]
+
+
+def cases_fingerprint(job: EvaluationJob) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    """job が評価したケース（質問・期待・期待するツール）。同じなら前回と比べられる（#810）。"""
+    return tuple(
+        sorted(
+            (
+                normalize_question(result.case.question),
+                result.case.expected.strip(),
+                tuple(sorted(result.case.expected_tools)),
+            )
+            for result in job.results
+        )
+    )
 
 
 class EvaluationStore:
@@ -511,7 +645,12 @@ class EvaluationStore:
         return EvaluationJobsData(jobs=items, total=len(matched), offset=offset, limit=limit)
 
     def with_previous(self, job: EvaluationJob) -> EvaluationJob:
-        """同じ評価セットの前回（この job より前に完了した job）の概要を入れる。"""
+        """前回（同じ評価セット・同じ評価ケースで、この job より前に完了した job）の概要を入れる。
+
+        評価ケースを変えた後の結果と比べても差に意味が無いため、ケースが同じ job だけを比べる。
+        比べた版（`previous_agent_version`）も返す（#810）。
+        """
+        fingerprint = cases_fingerprint(job)
         with self._lock:
             previous = next(
                 (
@@ -522,13 +661,19 @@ class EvaluationStore:
                     and item.id != job.id
                     and item.status == JobStatus.COMPLETED
                     and item.created_at < job.created_at
+                    and cases_fingerprint(item) == fingerprint
                 ),
                 None,
             )
             if previous is None:
                 return job
             return job.model_copy(
-                update={"previous_job_id": previous.id, "previous_summary": previous.summary}
+                update={
+                    "previous_job_id": previous.id,
+                    "previous_summary": previous.summary,
+                    "previous_agent_version": previous.agent_version,
+                    "previous_created_at": previous.created_at,
+                }
             )
 
     def latest_for_set(self, set_id: str) -> EvaluationJob | None:
@@ -663,6 +808,7 @@ def job_item(job: EvaluationJob) -> EvaluationJobItem:
         agent_name=job.agent_name,
         set_id=job.set_id,
         set_name=job.set_name,
+        agent_version=job.agent_version,
         status=job.status,
         summary=job.summary,
         created_at=job.created_at,
@@ -826,10 +972,15 @@ async def _run_case(
             **changes,
         )
 
+    # 評価する版（#810）。下書きは "draft"、公開中の版は始めたときの版に固定する（評価の途中で
+    # 公開し直しても、ケースごとに版が変わらない）。#810 より前の job（None）は公開中の版。
+    draft = job.agent_version == "draft"
+    pinned = job.agent_version if isinstance(job.agent_version, int) else None
     run = repository.create_builtin_run(
         RunCreateRequest(
             goal=case.question,
             agent_id=job.agent_id,
+            draft=draft,
             metadata={
                 "evaluation_job_id": job.id,
                 "evaluation_case_id": case.id,
@@ -837,6 +988,7 @@ async def _run_case(
             },
         ),
         created_by_user_uuid=job.created_by_user_uuid,
+        agent_version=pinned,
     )
     store.update_result(job.id, index, run_id=run.id)
     try:

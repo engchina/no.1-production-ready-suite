@@ -297,3 +297,201 @@ test("Agent 管理の権限が無い利用者には管理者の評価の操作�
   await expect(detail.getByTestId("feedback-detail-admin")).toContainText("まだ評価していません。");
   await expect(detail.getByTestId("admin-review-run-admin-774")).toHaveCount(0);
 });
+
+// ---- #810: 役に立たなかった回答を評価ケースに追加する -------------------------------------------------
+
+const DISLIKED_QUESTION = "先月の契約件数は？";
+
+function seedDislikedRun(mockApi: MockApi, { comment = "件数は 15 件が正しい" }: { comment?: string } = {}) {
+  mockApi.state.runs.push({
+    id: "run-dislike-810",
+    goal: DISLIKED_QUESTION,
+    agent_id: "default",
+    runtime_id: "builtin",
+    status: "completed",
+    steps: [
+      { id: "step-1", run_id: "run-dislike-810", kind: "tool", status: "completed", tool_call: { name: "nl2sql__nl2sql_query", arguments: {} } },
+      { id: "step-2", run_id: "run-dislike-810", kind: "tool", status: "completed", tool_call: { name: "rag__rag_search", arguments: {} } },
+    ],
+    events: [],
+    approvals: [],
+    artifacts: [
+      { id: "answer-810", name: "回答", kind: "answer", content: { text: "先月は 12 件です。" }, created_at: MOCK_NOW },
+    ],
+    pending_tool_calls: [],
+    metadata: {},
+    created_by_user_uuid: "u-2",
+    feedback: rating("not_helpful", "incorrect", "件数が違う"),
+    admin_review: comment ? rating("not_helpful", "incorrect", comment) : null,
+    created_at: MOCK_NOW,
+    updated_at: MOCK_NOW,
+  });
+}
+
+function seedEvaluationSets(mockApi: MockApi) {
+  const base = { agent_id: "default", description: "", created_by_user_uuid: "local", created_at: MOCK_NOW, updated_at: MOCK_NOW };
+  mockApi.state.evaluationSets.push(
+    {
+      ...base,
+      id: "evset-dup",
+      name: "契約の評価",
+      cases: [{ id: "case-1", question: DISLIKED_QUESTION, expected: "15 件", expected_tools: [], source_run_id: null }],
+    },
+    {
+      ...base,
+      id: "evset-open",
+      name: "月次の評価",
+      cases: [{ id: "case-1", question: "今月の売上は？", expected: "300 万円", expected_tools: [], source_run_id: null }],
+    }
+  );
+}
+
+async function openDislikedDetail(page: Page) {
+  await page.goto("/feedback");
+  await page
+    .getByRole("table", { name: "フィードバックの一覧" })
+    .getByRole("button", { name: new RegExp(DISLIKED_QUESTION) })
+    .click();
+  return page.getByRole("dialog", { name: "フィードバックの詳細" });
+}
+
+for (const viewport of VIEWPORTS) {
+  for (const theme of ["light", "dark"] as const) {
+    test(`役に立たなかった回答を既存の評価セットに追加する (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await useTheme(page, theme);
+      seedDislikedRun(mockApi);
+      seedEvaluationSets(mockApi);
+      const detail = await openDislikedDetail(page);
+
+      await detail.getByTestId("feedback-add-case-toggle").click();
+      const form = detail.getByTestId("feedback-add-case-form");
+      // 質問・管理者のコメント・呼んだツールが入り、同じ質問を持たない評価セットが既定の追加先。
+      await expect(form.getByLabel("質問")).toHaveValue(DISLIKED_QUESTION);
+      await expect(form.getByLabel("期待する回答の要点")).toHaveValue("件数は 15 件が正しい");
+      await expect(form.getByLabel("期待するツール")).toHaveValue("nl2sql__nl2sql_query, rag__rag_search");
+      const set = form.getByTestId("feedback-add-case-set");
+      await expect(set).toContainText("月次の評価（1 件）");
+
+      // 同じ質問を持つ評価セットを選ぶと、その場で知らせて追加しない。
+      await set.click();
+      await page.getByRole("option", { name: "契約の評価（1 件）" }).click();
+      await expect(form.getByText("同じ質問のケースが既にあります")).toBeVisible();
+      await form.getByRole("button", { name: "評価ケースに追加" }).click();
+      expect(mockApi.lastRequest("POST", "/api/evaluation-sets/evset-dup/cases")).toBeUndefined();
+
+      await form.getByLabel("期待するツール").fill("nl2sql_query");
+      await set.click();
+      await page.getByRole("option", { name: "月次の評価（1 件）" }).click();
+      await expect(set).toHaveAttribute("aria-invalid", "false");
+      await expect(form.getByText("同じ質問のケースが既にあります")).toHaveCount(0);
+      await expect(detail).toBeInViewport({ ratio: 1 });
+      await expectNoHorizontalOverflow(page);
+      await page.screenshot({ path: testInfo.outputPath(`feedback-add-case-${viewport.name}-${theme}.png`) });
+      await form.getByRole("button", { name: "評価ケースに追加" }).click();
+
+      await expect(page.getByText("「月次の評価」に評価ケースを追加しました")).toBeVisible();
+      expect(mockApi.lastRequest("POST", "/api/evaluation-sets/evset-open/cases")?.body).toEqual({
+        question: DISLIKED_QUESTION,
+        expected: "件数は 15 件が正しい",
+        expected_tools: ["nl2sql_query"],
+        source_run_id: "run-dislike-810",
+      });
+      // 追加したら閉じる。
+      await expect(detail.getByTestId("feedback-add-case-form")).toHaveCount(0);
+    });
+  }
+}
+
+test("評価セットが無ければ新しい評価セットを作り、期待する回答の要点は必須にする", async ({ page, mockApi }) => {
+  seedDislikedRun(mockApi, { comment: "" });
+  const detail = await openDislikedDetail(page);
+  await detail.getByTestId("feedback-add-case-toggle").click();
+  const form = detail.getByTestId("feedback-add-case-form");
+  await expect(form.getByTestId("feedback-add-case-set")).toContainText("新しい評価セットを作る");
+  await expect(form.getByLabel("新しい評価セットの名前")).toHaveValue("汎用業務 Agent のフィードバック");
+  await expect(form.getByLabel("期待する回答の要点")).toHaveValue("");
+
+  await form.getByRole("button", { name: "評価ケースに追加" }).click();
+  await expect(form.getByText("期待する回答の要点を入力してください。")).toBeVisible();
+  await expect(form.getByLabel("期待する回答の要点")).toBeFocused();
+  expect(mockApi.lastRequest("POST", "/api/evaluation-sets")).toBeUndefined();
+
+  await form.getByLabel("期待する回答の要点").fill("15 件");
+  await form.getByRole("button", { name: "評価ケースに追加" }).click();
+  await expect(page.getByText("「汎用業務 Agent のフィードバック」に評価ケースを追加しました")).toBeVisible();
+  expect(mockApi.lastRequest("POST", "/api/evaluation-sets")?.body).toEqual({
+    agent_id: "default",
+    name: "汎用業務 Agent のフィードバック",
+    description: "",
+    cases: [
+      {
+        question: DISLIKED_QUESTION,
+        expected: "15 件",
+        expected_tools: ["nl2sql__nl2sql_query", "rag__rag_search"],
+        source_run_id: "run-dislike-810",
+      },
+    ],
+  });
+});
+
+test("評価ケースの下書きの読み込み中と失敗を出し、再試行できる", async ({ page, mockApi }) => {
+  seedDislikedRun(mockApi);
+  let failures = 1;
+  await page.route("**/api/runs/run-dislike-810/evaluation-case", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    if (failures > 0) {
+      failures -= 1;
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ data: null, error_messages: ["一時的に下書きを作れませんでした。"], warning_messages: [] }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.setViewportSize({ width: 375, height: 812 });
+  const detail = await openDislikedDetail(page);
+  await detail.getByTestId("feedback-add-case-toggle").click();
+  await expect(detail.getByTestId("feedback-add-case-loading")).toContainText("評価ケースの下書きを作っています");
+  await expect(detail.getByText("一時的に下書きを作れませんでした。")).toBeVisible();
+  await detail.getByRole("button", { name: "再試行" }).click();
+  await expect(detail.getByTestId("feedback-add-case-form").getByLabel("質問")).toHaveValue(DISLIKED_QUESTION);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("品質評価の権限が無い利用者と、役に立った回答には評価ケースへの追加を出さない", async ({ page, mockApi }) => {
+  seedDislikedRun(mockApi);
+  seedRatedRun(mockApi);
+  mockApi.setCurrentUser(dbUser({ permissions: ["menu.feedback"] }));
+  const detail = await openDislikedDetail(page);
+  await expect(detail.getByTestId("feedback-detail-owner")).toContainText("役に立たなかった");
+  await expect(detail.getByTestId("feedback-add-case-toggle")).toHaveCount(0);
+});
+
+test("役に立った回答の詳細には評価ケースへの追加を出さない", async ({ page, mockApi }) => {
+  seedRatedRun(mockApi);
+  await page.goto("/feedback");
+  await page
+    .getByRole("table", { name: "フィードバックの一覧" })
+    .getByRole("button", { name: /今月の契約件数は？/ })
+    .click();
+  const detail = page.getByRole("dialog", { name: "フィードバックの詳細" });
+  await expect(detail.getByTestId("feedback-detail-owner")).toContainText("役に立った");
+  await expect(detail.getByTestId("feedback-add-case-toggle")).toHaveCount(0);
+});
+
+test("Run の詳細の管理者の評価の下から評価ケースに追加できる", async ({ page, mockApi }) => {
+  seedDislikedRun(mockApi);
+  seedEvaluationSets(mockApi);
+  await page.goto("/runs");
+  await page.getByTestId("run-add-case-toggle").click();
+  const form = page.getByTestId("run-add-case-form");
+  await expect(form.getByLabel("質問")).toHaveValue(DISLIKED_QUESTION);
+  await form.getByRole("button", { name: "評価ケースに追加" }).click();
+  await expect(page.getByText("「月次の評価」に評価ケースを追加しました")).toBeVisible();
+  expect(mockApi.lastRequest("POST", "/api/evaluation-sets/evset-open/cases")?.body).toMatchObject({
+    source_run_id: "run-dislike-810",
+  });
+});

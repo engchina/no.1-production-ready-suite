@@ -127,8 +127,11 @@ export function SideSheet({
           "duration-200 ease-out motion-reduce:transition-none",
           // 開くときは visibility を即座に visible にする（遷移させると開いた瞬間にフォーカスを移せない）。
           // 閉じるときは slide が終わってから hidden にする。
+          // 開いている間は translate を none にする（`translate-x-0` の `translate: 0 0` でも fixed の子の
+          // 基準がシートになり、シートの中の SelectField の一覧・Tooltip がシートの左端の分だけずれて
+          // 画面の外に出ていた。#810）。
           open
-            ? "visible translate-x-0 transition-transform"
+            ? "visible translate-none transition-transform"
             : cn("invisible transition-[transform,visibility]", left ? "-translate-x-full" : "translate-x-full"),
           className
         )}

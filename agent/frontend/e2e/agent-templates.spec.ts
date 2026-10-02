@@ -42,6 +42,8 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByRole("option", { name: /^構造化データ照会/ })).toBeChecked();
       await expect(page.getByRole("option", { name: /^業務 RAG 調査/ })).not.toBeChecked();
       await expect(page.getByTestId("agent-template-samples")).toContainText("今月の地域別の売上を教えてください。");
+      // テンプレートの評価ケースで評価セットを作る（既定はオン。#810）。
+      await expect(page.getByRole("checkbox", { name: /テンプレートの評価ケース（1 件）で評価セットを作る/ })).toBeChecked();
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`agent-templates-${viewport.name}-${theme}.png`), fullPage: true });
 
@@ -51,6 +53,20 @@ for (const viewport of VIEWPORTS) {
       expect(body.name).toBe("営業分析");
       expect(body.skill_ids).toEqual(["structured_data_query"]);
       expect(String(body.instructions)).toContain("あなたは営業企画の分析担当です。");
+      expect(body.template_id).toBe("sales-analytics");
+      await expect(page.getByText("評価セット「営業分析（テンプレート）」を作りました")).toBeVisible();
+      expect(mockApi.lastRequest("POST", "/api/evaluation-sets/from-template")?.body).toEqual({
+        agent_id: String(body.id ?? "agent-2"),
+      });
+      expect(mockApi.state.evaluationSets[0].cases).toEqual([
+        {
+          id: "case-1",
+          question: "今月の地域別の売上は？",
+          expected: "地域ごとの金額",
+          expected_tools: [],
+          source_run_id: null,
+        },
+      ]);
     });
   }
 }
@@ -80,4 +96,17 @@ test("使えない Skill は外して知らせ、既存の業務 Agent の編集
   await page.goto("/agents?id=default");
   await expect(page.getByRole("heading", { name: "汎用業務 Agent", level: 1 })).toBeVisible();
   await expect(page.getByRole("heading", { name: "テンプレートから始める" })).toHaveCount(0);
+});
+
+test("テンプレートの評価ケースで評価セットを作らないこともできる（#810）", async ({ page, mockApi }) => {
+  await page.goto("/agents?id=new");
+  await page.getByTestId("agent-template-internal-policy-helpdesk").click();
+  const checkbox = page.getByRole("checkbox", { name: /テンプレートの評価ケース（1 件）で評価セットを作る/ });
+  await checkbox.uncheck();
+  await page.getByRole("button", { name: "作成", exact: true }).first().click();
+  await expect(page.getByText("Agent を作成しました")).toBeVisible();
+  expect((mockApi.lastRequest("POST", "/api/agents")?.body as Record<string, unknown>).template_id).toBe(
+    "internal-policy-helpdesk"
+  );
+  expect(mockApi.lastRequest("POST", "/api/evaluation-sets/from-template")).toBeUndefined();
 });

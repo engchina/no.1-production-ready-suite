@@ -40,6 +40,7 @@ import {
   type RunState,
 } from "@/lib/api";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
+import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
 import { ReportSourceNote } from "@/components/ReportSourceNote";
 import { useCapabilities } from "@/lib/permissions";
 import { formatDateTime, formatNumber } from "@/lib/format";
@@ -203,6 +204,8 @@ export function FeedbackPage() {
               onReviewed={(run) => {
                 setSelected((current) => (current ? { ...current, admin_review: run.admin_review ?? null } : current));
                 void queryClient.invalidateQueries({ queryKey: ["feedback"] });
+                // 評価ケースの下書きは管理者のコメントを使う（#810）。
+                void queryClient.invalidateQueries({ queryKey: ["evaluation-case-draft", run.id] });
               }}
             />
           ) : null}
@@ -441,8 +444,14 @@ function RatingBadge({ rating }: { rating: FeedbackRating }) {
   );
 }
 
+/** 役に立たなかった回答（本人の 👎 か管理者の評価）。評価ケースに追加できる（#810）。 */
+function notHelpful(item: FeedbackItem): boolean {
+  return item.feedback?.rating === "not_helpful" || item.admin_review?.rating === "not_helpful";
+}
+
 function FeedbackDetail({ item, onReviewed }: { item: FeedbackItem; onReviewed: (run: RunState) => void }) {
   const capabilities = useCapabilities();
+  const canAddCase = useCanEditEvaluationSets();
   return (
     <div className="space-y-4 text-sm">
       <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
@@ -475,6 +484,10 @@ function FeedbackDetail({ item, onReviewed }: { item: FeedbackItem; onReviewed: 
       {/* 管理者の評価は Agent 管理の権限だけ（本人の評価とは別に残す。#774）。 */}
       {capabilities.admin ? (
         <AnswerFeedback runId={item.run_id} current={item.admin_review} mode="admin" onSaved={onReviewed} />
+      ) : null}
+      {/* 役に立たなかった回答を品質評価の評価ケースにする（品質評価の権限。#810）。 */}
+      {canAddCase && notHelpful(item) ? (
+        <AddToEvaluationCase key={item.run_id} runId={item.run_id} testId="feedback-add-case" />
       ) : null}
     </div>
   );

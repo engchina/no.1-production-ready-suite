@@ -244,3 +244,8 @@ AGENT_TEMPLATES: tuple[AgentTemplate, ...] = (
         ],
     ),
 )
+
+
+def find_template(template_id: str) -> AgentTemplate | None:
+    """ID の業種テンプレート（無ければ None）。"""
+    return next((template for template in AGENT_TEMPLATES if template.id == template_id), None)
