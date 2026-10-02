@@ -407,7 +407,7 @@ const agentJa = {
   "settings.mcpConnections.url": "MCP の URL",
   "settings.mcpConnections.urlHint": "接続先の MCP（streamable HTTP）の URL を http:// または https:// から入力します。",
   "settings.mcpConnections.urlHintBuiltin":
-    "製品の /api/mcp です。初期値は配備の .env（AGENT_EXTERNAL_RAG_MCP_URL / AGENT_EXTERNAL_NL2SQL_MCP_URL）で、画面の変更は再起動で戻ります。",
+    "製品の /api/mcp です。初期値は配備の .env（AGENT_EXTERNAL_RAG_MCP_URL / AGENT_EXTERNAL_NL2SQL_MCP_URL）で、画面で保存した値が優先します。",
   "settings.mcpConnections.source": "由来",
   "settings.mcpConnections.sourceBuiltin": "組み込み",
   "settings.mcpConnections.sourceEnv": ".env の宣言",

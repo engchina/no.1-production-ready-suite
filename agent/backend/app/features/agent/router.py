@@ -12,7 +12,7 @@ import logging
 import re
 import stat
 from asyncio import sleep, wait_for
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from csv import DictWriter
 from datetime import UTC, datetime
 from importlib import import_module
@@ -71,8 +71,9 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 import app.settings as app_settings
-from app.features.agent import builtin_runtime
+from app.features.agent import builtin_runtime, control_plane_store
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
+from app.features.agent.control_plane_store import ControlPlaneStoreError
 from app.features.agent.plugins import (
     MarketplaceListing,
     MarketplaceSource,
@@ -1104,9 +1105,11 @@ async def create_agent_skill(
         source="runtime",
     )
     try:
-        return ApiResponse(data=skill_registry.upsert_custom(skill))
+        saved = skill_registry.upsert_custom(skill)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _persist(lambda: control_plane_store.save_skill(saved))
+    return ApiResponse(data=saved)
 
 
 @router.patch("/skills/{skill_id}", response_model=ApiResponse[AgentSkillDefinition])
@@ -1145,9 +1148,11 @@ async def patch_agent_skill(
         }
     )
     try:
-        return ApiResponse(data=skill_registry.upsert_custom(updated))
+        saved = skill_registry.upsert_custom(updated)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _persist(lambda: control_plane_store.save_skill(saved))
+    return ApiResponse(data=saved)
 
 
 @router.delete("/skills/{skill_id}", response_model=ApiResponse[AgentSkillListOutput])
@@ -1161,6 +1166,7 @@ async def delete_agent_skill(
         raise HTTPException(status_code=404, detail="skill not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _persist(lambda: control_plane_store.delete_skill(skill_id))
     skills = skill_registry.list()
     return ApiResponse(data=AgentSkillListOutput(skills=skills, metadata={"count": len(skills)}))
 
@@ -1217,6 +1223,7 @@ async def install_plugin(
         record = plugin_registry.install(manifest, marketplace_id=payload.marketplace_id)
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _persist(lambda: control_plane_store.save_plugin(record))
     return ApiResponse(data=record)
 
 
@@ -1240,9 +1247,11 @@ async def add_plugin_marketplace(
 ) -> ApiResponse[MarketplaceSource]:
     try:
         source = MarketplaceSource(id=payload.id, name=payload.name or payload.id, url=payload.url)
-        return ApiResponse(data=marketplace_registry.add(source, payload.listing))
+        added = marketplace_registry.add(source, payload.listing)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _persist(lambda: control_plane_store.save_marketplace(added, payload.listing))
+    return ApiResponse(data=added)
 
 
 @router.post(
@@ -1286,6 +1295,7 @@ async def delete_plugin_marketplace(
         marketplace_registry.remove(marketplace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="marketplace not found") from exc
+    _persist(lambda: control_plane_store.delete_marketplace(marketplace_id))
     return ApiResponse(data=MarketplaceSourcesOutput(marketplaces=marketplace_registry.list()))
 
 
@@ -1312,11 +1322,13 @@ async def patch_plugin(
             raise HTTPException(status_code=404, detail="plugin not found")
         return ApiResponse(data=record)
     try:
-        return ApiResponse(data=plugin_registry.set_enabled(plugin_id, patch.enabled))
+        record = plugin_registry.set_enabled(plugin_id, patch.enabled)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="plugin not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _persist(lambda: control_plane_store.save_plugin(record))
+    return ApiResponse(data=record)
 
 
 @router.delete("/plugins/{plugin_id}", response_model=ApiResponse[PluginListOutput])
@@ -1330,6 +1342,7 @@ async def uninstall_plugin(
         raise HTTPException(status_code=404, detail="plugin not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _persist(lambda: control_plane_store.delete_plugin(plugin_id))
     return ApiResponse(data=_plugin_list_response())
 
 
@@ -1857,7 +1870,7 @@ def _mcp_connections_response() -> McpConnectionsData:
 
 
 def _upsert_mcp_connection(server_id: str, payload: McpConnectionPatch) -> McpConnectionConfig:
-    return runtime_config_store.upsert_mcp_server(
+    config = runtime_config_store.upsert_mcp_server(
         server_id,
         label=payload.label,
         base_url=payload.base_url,
@@ -1871,6 +1884,8 @@ def _upsert_mcp_connection(server_id: str, payload: McpConnectionPatch) -> McpCo
         oauth_scope=payload.oauth_scope,
         service_audience=payload.service_audience,
     )
+    _persist(lambda: control_plane_store.save_mcp_connection(config))
+    return config
 
 
 @router.get("/settings/mcp-connections", response_model=ApiResponse[McpConnectionsData])
@@ -1923,6 +1938,7 @@ async def delete_mcp_connection(
             status_code=400,
             detail="RAG / NL2SQL・宣言・連携機能の MCP 接続は削除できません。",
         ) from exc
+    _persist(lambda: control_plane_store.delete_mcp_connection(server_id))
     return ApiResponse(data=_mcp_connections_response())
 
 
@@ -1963,12 +1979,13 @@ async def patch_tool_policy_settings(
         _validate_tool_policy_patch(patch)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    runtime_config_store.patch_tool_policy(
+    policy = runtime_config_store.patch_tool_policy(
         default_mode=patch.default_mode,
         allow=patch.allow,
         ask=patch.ask,
         deny=patch.deny,
     )
+    _persist(lambda: control_plane_store.save_tool_policy(policy))
     return ApiResponse(data=_tool_policy_settings_response())
 
 
@@ -2429,6 +2446,15 @@ def _validate_tool_policy_patch(patch: ToolPolicySettingsPatch) -> None:
     )
     if unknown_tools:
         raise ValueError(f"unknown tool: {', '.join(unknown_tools)}")
+
+
+def _persist(action: Callable[[], None]) -> None:
+    """変更を保存する（#764）。保存できなければ 503（変更は再起動で失われる）。"""
+    try:
+        action()
+    except ControlPlaneStoreError as exc:
+        logger.warning("agent_control_plane_persist_failed", extra={"reason": str(exc)})
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 def _is_mcp_function_name(name: str, connections: set[str]) -> bool:

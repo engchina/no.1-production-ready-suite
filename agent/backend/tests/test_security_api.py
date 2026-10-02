@@ -900,7 +900,6 @@ def test_platform_oracle_connection_uses_platform_settings() -> None:
         oracle_dsn="suiteadb_high",
         oracle_client_lib_dir="/opt/instantclient",
         oracle_wallet_password="wallet-secret",  # nosec B106 - テスト用
-        agent_runtime_oracle_dsn="runtime_high",
     )
     kwargs = platform_oracle_connect_kwargs(settings)
     assert kwargs["user"] == "ADMIN"
