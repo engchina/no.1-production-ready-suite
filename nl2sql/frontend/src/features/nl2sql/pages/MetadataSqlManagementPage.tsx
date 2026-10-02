@@ -761,9 +761,9 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             inputTexts={inputTexts}
             detailsReady={validated && details.length > 0}
             detailsLoading={loading === "details"}
-            // 「情報を取得」は押すと入力のタブへ移り、ボタンが見えなくなるため、領域の表示がスピナーを出す。
-            // 画面の上の「再取得」は見えたまま回るため、領域はスピナーを出さない（#819）。
-            detailsButtonSpinning={detailsOrigin === "banner"}
+            // 押したボタン（「情報を取得」「最新情報を取得」）が回るときは、領域はスピナーを出さない（同じ処理の
+            // スピナーは 1 つ。SQL 生成と同じ）。実行の後・画面へ戻ったときの取り直しは領域が出す（#819）。
+            detailsButtonSpinning={detailsOrigin !== "auto"}
             selectedCount={selectedTargets.length}
             sampleLimit={sampleLimit}
             sampleText={refreshedSampleText ?? inputTexts.sampleText}
@@ -1046,7 +1046,7 @@ function MetadataInputPanel({
   inputTexts: ReturnType<typeof buildMetadataInputTexts>;
   detailsReady: boolean;
   detailsLoading: boolean;
-  /** 情報の取得を始めた、見えているボタン（画面の上の「再取得」）が回っているか。 */
+  /** 情報の取得を始めたボタン（「情報を取得」「最新情報を取得」）が回っているか。 */
   detailsButtonSpinning: boolean;
   selectedCount: number;
   sampleLimit: number;
