@@ -74,5 +74,6 @@ def test_local_mcp_is_not_sent_through_the_environment_proxy(
             timeout_seconds=2.0,
             max_retries=0,
         )
-    assert exc.value.code == "rag.request_error"
+    # 接続できない（送信前の失敗）は `unreachable`（#854）。
+    assert exc.value.code == "rag.unreachable"
     assert proxy_received == []

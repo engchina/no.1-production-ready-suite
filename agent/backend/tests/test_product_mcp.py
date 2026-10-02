@@ -302,32 +302,146 @@ def test_invalid_arguments_are_rejected_by_the_connection(monkeypatch: MonkeyPat
     assert result.error_details["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
 
 
-@pytest.mark.parametrize("status", [502, 504, "timeout"])
-def test_tool_calls_do_not_retry_gateway_errors(
+@pytest.fixture
+def sleeps(monkeypatch: MonkeyPatch) -> list[float]:
+    """再試行の待ち（#854）を記録する（待たない）。"""
+    recorded: list[float] = []
+    monkeypatch.setattr(tools_module, "_retry_sleep", recorded.append)
+    return recorded
+
+
+@pytest.mark.parametrize("status", [500, 502, 504, "timeout"])
+def test_write_tool_calls_are_not_retried_after_reaching_the_server(
     monkeypatch: MonkeyPatch, status: int | Literal["timeout"]
 ) -> None:
+    """書き込みのツールは、送った後の失敗で再送しない（SQL の実行・LLM の呼び出しの重複を防ぐ）。"""
     mcp = fake_product_mcp(monkeypatch)
     mcp.tool_call_statuses.extend([status, status])
 
-    rag = _invoke("rag", "rag_search", {"query": "a"})
-    mcp.tool_call_statuses[:] = [status, status]
-    nl2sql = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
+    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
 
     expected = "timeout" if status == "timeout" else "http_error"
-    assert rag.error_code == f"mcp.{expected}"
-    assert nl2sql.error_code == f"mcp.{expected}"
-    # LLM を使う呼び出しは 1 回だけ（読み取り専用の rag_search も、再試行で重複させない）。
-    assert [call["name"] for call in mcp.tool_calls] == ["rag_search", "nl2sql_query"]
+    assert result.error_code == f"mcp.{expected}"
+    assert result.error_details["attempts"] == 1
+    assert result.error_details["retryable"] is False
+    assert [call["name"] for call in mcp.tool_calls] == ["nl2sql_query"]
+
+
+@pytest.mark.parametrize("status", [500, "timeout"])
+def test_read_only_tool_calls_are_not_retried_on_timeout_or_500(
+    monkeypatch: MonkeyPatch, status: int | Literal["timeout"]
+) -> None:
+    """読み取り専用でも、読み取りの timeout（呼び先で LLM が動いている）と 500 は再送しない。"""
+    mcp = fake_product_mcp(monkeypatch)
+    mcp.tool_call_statuses.extend([status, status])
+
+    result = _invoke("rag", "rag_search", {"query": "a"})
+
+    assert result.success is False
+    assert [call["name"] for call in mcp.tool_calls] == ["rag_search"]
+
+
+def test_read_only_tool_calls_retry_gateway_errors(
+    monkeypatch: MonkeyPatch, sleeps: list[float]
+) -> None:
+    """読み取り専用（readOnlyHint）のツールは、MCP の意味どおり 502 / 504 を再試行してよい。"""
+    mcp = fake_product_mcp(monkeypatch)
+    mcp.tool_call_statuses.extend([502, 504])
+
+    result = _invoke("rag", "rag_search", {"query": "a"})
+
+    assert result.success is True, result.error
+    assert [call["name"] for call in mcp.tool_calls] == ["rag_search"] * 3
+    # 0.5 秒から 2 倍ずつ（後半を jitter）。
+    assert len(sleeps) == 2
+    assert 0.25 <= sleeps[0] <= 0.5
+    assert 0.5 <= sleeps[1] <= 1.0
 
 
 def test_tool_calls_retry_503(monkeypatch: MonkeyPatch) -> None:
     mcp = fake_product_mcp(monkeypatch)
     mcp.tool_call_statuses.append(503)
 
-    result = _invoke("rag", "rag_search", {"query": "a"})
+    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
 
     assert result.success is True, result.error
-    assert [call["name"] for call in mcp.tool_calls] == ["rag_search", "rag_search"]
+    assert [call["name"] for call in mcp.tool_calls] == ["nl2sql_query", "nl2sql_query"]
+
+
+def test_retry_after_is_honored(monkeypatch: MonkeyPatch, sleeps: list[float]) -> None:
+    mcp = fake_product_mcp(monkeypatch)
+    mcp.tool_call_statuses.append((429, {"Retry-After": "3"}))
+
+    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
+
+    assert result.success is True, result.error
+    assert sleeps == [3.0]
+
+
+def test_retry_that_does_not_fit_the_connection_timeout_is_not_attempted(
+    monkeypatch: MonkeyPatch, sleeps: list[float]
+) -> None:
+    """待つと接続の timeout（呼び出し全体の期限）を超えるときは、再試行せずに失敗を返す。"""
+    mcp = fake_product_mcp(monkeypatch, rag_timeout_seconds=10)
+    mcp.tool_call_statuses.append((503, {"Retry-After": "30"}))
+
+    result = _invoke("rag", "rag_search", {"query": "a"})
+
+    assert result.error_code == "mcp.http_error"
+    assert result.error_details["status_code"] == 503
+    assert result.error_details["retryable"] is False
+    assert "時間をおいて再実行してください" in (result.error or "")
+    assert sleeps == []
+    assert len(mcp.tool_calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["connect", "connect_timeout"])
+def test_write_tool_calls_retry_when_the_request_did_not_reach_the_server(
+    monkeypatch: MonkeyPatch, failure: Literal["connect", "connect_timeout"]
+) -> None:
+    """送信前の失敗（接続できない・接続の timeout）は、書き込みのツールでも再試行してよい。"""
+    mcp = fake_product_mcp(monkeypatch)
+    mcp.method_failures["tools/call"] = [failure, failure]
+
+    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
+
+    assert result.success is True, result.error
+    assert [call["name"] for call in mcp.tool_calls] == ["nl2sql_query"]
+
+
+def test_unreachable_service_returns_a_clear_tool_error(
+    monkeypatch: MonkeyPatch, sleeps: list[float]
+) -> None:
+    """呼び先が起動していないと、上限まで待って再試行し、直し方の分かる失敗をモデルへ返す。"""
+    mcp = fake_product_mcp(monkeypatch)
+    mcp.method_failures["initialize"] = ["connect"] * 10
+
+    result = _invoke("rag", "rag_search", {"query": "a"})
+
+    assert result.success is False
+    assert result.error_code == "mcp.unreachable"
+    assert result.error == (
+        "MCP 接続「RAG」に接続できません（RAG のサービスが起動しているか、"
+        "接続の URL が正しいかを確認してください）。"
+    )
+    max_retries = get_settings().agent_external_mcp_max_retries
+    assert result.error_details["attempts"] == max_retries + 1
+    assert len(sleeps) == max_retries
+    assert mcp.tool_calls == []
+
+
+def test_session_initialization_and_tools_list_retry(
+    monkeypatch: MonkeyPatch, sleeps: list[float]
+) -> None:
+    """initialize → tools/list（状態を変えない手順）は 500 / 502 / 読み取りの timeout も再試行。"""
+    mcp = fake_product_mcp(monkeypatch)
+    mcp.method_failures["initialize"] = [500, "timeout"]
+    mcp.method_failures["tools/list"] = [502]
+
+    listed = list_mcp_connection_tools("rag", context=ToolInvocationContext(user_uuid=USER_UUID))
+
+    assert {tool.name for tool in listed.tools} >= {"rag_search"}
+    assert len(sleeps) == 3
 
 
 # ---------------------------------------------------------------------------

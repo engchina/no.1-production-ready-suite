@@ -117,6 +117,10 @@ Product = Literal["rag", "nl2sql"]
 ToolOutput = dict[str, Any] | Exception | Callable[[BaseModel], dict[str, Any]]
 
 
+# 失敗の指定（HTTP status・読み取りの timeout・接続できない・status と header）。
+Failure = int | Literal["timeout", "connect", "connect_timeout"] | tuple[int, dict[str, str]]
+
+
 @dataclass
 class FakeProductMcp:
     """契約どおりの RAG / NL2SQL の MCP サーバー（HTTP の記録つき）。"""
@@ -126,9 +130,12 @@ class FakeProductMcp:
     requests: list[dict[str, Any]] = field(default_factory=list)
     # tools/call だけ（product / name / arguments / claims / timeout）。
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
-    # 次の tools/call に返す HTTP status（再試行の確認用。先頭から使う）。
-    # "timeout" は読み取りの timeout。
-    tool_call_statuses: list[int | Literal["timeout"]] = field(default_factory=list)
+    # 次の tools/call に返す HTTP status（再試行の確認用。先頭から使う。呼び先に届いた後の失敗）。
+    # "timeout" は読み取りの timeout、(status, headers) は応答の header 付き（Retry-After など）。
+    tool_call_statuses: list[Failure] = field(default_factory=list)
+    # メソッドごとの失敗（先頭から使う。#854）。呼び先に届く前に判定し、request を記録しない。
+    # "connect" / "connect_timeout" は接続できない（送信前の失敗）。
+    method_failures: dict[str, list[Failure]] = field(default_factory=dict)
     # MCP 以外の URL（外部 MCP など）への応答と、その request（url / json / timeout）。
     other_responses: dict[str, dict[str, Any]] = field(default_factory=dict)
     other_calls: list[dict[str, Any]] = field(default_factory=list)
@@ -207,6 +214,9 @@ class FakeProductMcp:
         )
         if claims is None:
             return httpx.Response(401, json={"detail": "invalid token"})
+        failures = self.method_failures.get(str(method), [])
+        if failures:
+            return _failure_response(failures.pop(0), request)
         if method == "tools/call":
             params = body.get("params") or {}
             self.tool_calls.append(
@@ -219,10 +229,7 @@ class FakeProductMcp:
                 }
             )
             if self.tool_call_statuses:
-                status = self.tool_call_statuses.pop(0)
-                if status == "timeout":
-                    raise httpx.ReadTimeout("read timeout", request=request)
-                return httpx.Response(status, text="upstream error")
+                return _failure_response(self.tool_call_statuses.pop(0), request)
         response = _run_async(
             self.servers[product].handle(body, has_any_permission=lambda _codes: True)
         )
@@ -233,6 +240,19 @@ class FakeProductMcp:
             self._session_counter += 1
             headers["Mcp-Session-Id"] = f"session-{product}-{self._session_counter}"
         return httpx.Response(200, json=response, headers=headers)
+
+
+def _failure_response(failure: Failure, request: httpx.Request) -> httpx.Response:
+    if failure == "timeout":
+        raise httpx.ReadTimeout("read timeout", request=request)
+    if failure == "connect":
+        raise httpx.ConnectError("connection refused", request=request)
+    if failure == "connect_timeout":
+        raise httpx.ConnectTimeout("connect timeout", request=request)
+    if isinstance(failure, tuple):
+        status, headers = failure
+        return httpx.Response(status, text="upstream error", headers=headers)
+    return httpx.Response(failure, text="upstream error")
 
 
 def _run_async(coroutine: Any) -> Any:

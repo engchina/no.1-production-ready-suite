@@ -579,6 +579,38 @@ def test_unavailable_mcp_connection_is_skipped_with_a_warning(
     assert warning.payload == {"severity": "warning"}
 
 
+def test_unreachable_mcp_service_is_a_tool_error_and_the_run_continues(
+    monkeypatch: MonkeyPatch, mcp_agent: Any
+) -> None:
+    """RAG が止まっても Run は例外で落ちず、ツールの失敗をモデルへ返して回答まで進む（#854）。"""
+    _script(
+        monkeypatch,
+        [function_call("rag__rag_search", {"query": "契約の更新条件"}, call_id="call-rag")],
+        [assistant_message("RAG に接続できないため、いまは調べられません。")],
+    )
+    run_id = _create_mcp_run("契約の更新条件を調べて")
+    # ツールの一覧の取得の後に RAG が止まった（tools/call の前の initialize から接続できない）。
+    real_list = builtin_runtime.discover_mcp_tools
+
+    def discover_then_stop(*args: Any, **kwargs: Any) -> Any:
+        found = real_list(*args, **kwargs)
+        mcp_agent.method_failures["initialize"] = ["connect"] * 20
+        return found
+
+    monkeypatch.setattr(builtin_runtime, "discover_mcp_tools", discover_then_stop)
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    [step] = run.steps
+    assert step.status == "failed"
+    assert step.tool_result is not None
+    assert step.tool_result.error_code == "mcp.unreachable"
+    assert "RAG のサービスが起動しているか" in (step.tool_result.error or "")
+    assert mcp_agent.calls_of("rag_search") == []
+
+
 # ---------------------------------------------------------------------------
 # 会話（スレッド。#768）
 # ---------------------------------------------------------------------------

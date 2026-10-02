@@ -63,7 +63,9 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
   外部 API key・token を snapshot、API、ログ、Artifact に出さない。
 - サービストークンは呼び出しごとの `issue_service_token`（`sub` = Run の利用者 `RunState.created_by_user_uuid`、なければ
   `AGENT_MCP_SERVICE_USER_LOGIN_ID` のサービス利用者。`aud` = 接続の audience）。承認後の実行も承認者ではなく Run の利用者で呼ぶ。
-  `tools/call` は 502 / 504・timeout で再試行しない（LLM を使うツールがある）。詳細は docs/agent-control-plane-design.md §4.1。
+  再試行（#854）は、送信前の失敗と 429 / 503 は全メッセージ、502 / 504 は手順と読み取り専用（`readOnlyHint`）のツールだけで、
+  書き込みのツールは呼び先に届いた後の失敗では再送しない。待ちは backoff + jitter（`Retry-After` に従う）、呼び出し全体は
+  接続の timeout に収める。詳細は docs/agent-control-plane-design.md §4.1。
 
 ## 技術スタック
 
