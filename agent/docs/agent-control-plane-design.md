@@ -167,6 +167,13 @@ memory backend は process 間共有されないため production dispatcher に
 
 ### 5.1 保存先（#764）
 
+保存先は `AGENT_RUNTIME_REPOSITORY_BACKEND`（既定 `memory`）。今の保存先は `GET /api/runtime/storage`（`backend`・
+`persistent`・`database_configured`・`reason`。接続先は返さない。#839）で分かり、「運用設定 > 実行環境」の「保存先」の
+カードが `StatusBadge` と直し方を出す。保存していない（`persistent=false`）ときは、業務 Agent・スキル・プラグイン・
+マーケットプレイス・実行履歴・自動実行・品質評価・MCP 接続・API キー・ツール権限・バックアップと復元・システムテーブルの
+画面の先頭に warning の Banner（`NonPersistentStorageNotice`）を出し、実行環境へ案内する。理由は、DB の設定がそろって
+いれば `memory_backend`（保存先の設定を直す）、そろっていなければ `database_not_configured`（DB の設定から直す）。
+
 | 対象 | memory | file | oracle_checkpoint / oracle_normalized |
 |---|---|---|---|
 | Run・業務 Agent | プロセス内 | `AGENT_RUNTIME_SNAPSHOT_PATH` の JSON | `AGENT_RUNTIME_CHECKPOINTS`（snapshot の CLOB）。normalized は監査用の `AGENT_RUNTIME_RUNS/EVENTS/STEPS/APPROVALS/ARTIFACTS` も書く |

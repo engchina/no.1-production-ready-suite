@@ -325,6 +325,23 @@ _RUN_DETAIL = _any(MENU_RUNS, MENU_APPROVALS, MENU_AUDIT)
 _AGENT_READ = _any(MENU_AGENTS, MENU_RUNS, MENU_CHAT, MENU_SETTINGS_RUNTIME_SNAPSHOT)
 _TOOL_READ = _any(MENU_AUDIT, ADMIN)
 _PLUGIN_READ = _any(MENU_PLUGIN_MARKETPLACES)
+# 保存先の状態（#839）を出す画面のメニュー（業務 Agent・スキル・プラグイン・実行・自動実行・
+# 品質評価・実行環境・MCP 接続・API キー・バックアップと復元・システムテーブル）と、
+# ツール権限（Agent 管理）。
+_RUNTIME_STORAGE_READ = _any(
+    MENU_AGENTS,
+    MENU_SKILLS,
+    MENU_PLUGIN_MARKETPLACES,
+    MENU_RUNS,
+    MENU_AUTOMATIONS,
+    MENU_EVALUATION,
+    MENU_RUNTIMES,
+    MENU_SETTINGS_EXTERNAL_MCP,
+    MENU_SETTINGS_API_KEYS,
+    MENU_SETTINGS_RUNTIME_SNAPSHOT,
+    MENU_SETTINGS_SYSTEM_TABLES,
+    ADMIN,
+)
 _SECURITY_ROLE_READ = _any(MENU_SECURITY_USERS, MENU_SECURITY_ROLES, MENU_SECURITY_PERMISSIONS)
 
 _RUN = "/runs/{run_id}"
@@ -361,6 +378,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- Control Plane: Run・承認・監査 ----
     # 組み込み Runtime の状態（#754）。
     ("GET", "/runtime/status"): _any(MENU_RUNTIMES, MENU_AGENTS),
+    # 保存先の状態（#839）。再起動で消えることを、定義・実行を作る画面と運用設定の画面が出す。
+    ("GET", "/runtime/storage"): _RUNTIME_STORAGE_READ,
     ("GET", "/runs"): _RUN_LIST,
     ("POST", "/runs"): _OPERATE,
     # チャットの会話（#768）。会話は作った利用者だけが読む（handler が利用者で絞る）。

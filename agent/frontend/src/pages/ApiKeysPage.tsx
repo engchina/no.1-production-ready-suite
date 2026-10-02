@@ -2,7 +2,6 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, KeySquare, Trash2 } from "lucide-react";
 import {
-  Banner,
   Button,
   Card,
   CardContent,
@@ -39,6 +38,7 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { securityApi } from "@/lib/security-api";
 import { useAuth } from "@/components/security/AuthProvider";
+import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 // API キー（#778）。業務システムや MCP クライアントが、業務 Agent を MCP（`POST /api/mcp`）で呼ぶための
 // キー。キーは作った利用者として動き、選んだ業務 Agent だけを呼べる。秘密は作成の直後に 1 回だけ出す。
@@ -144,9 +144,7 @@ export function ApiKeysPage() {
     <>
       <PageHeader wide title={t("nav.settingsApiKeys")} subtitle={t("page.apiKeys.subtitle")} />
       <PageBody wide>
-        {keys.data && !keys.data.persistent ? (
-          <Banner severity="warning">{t("apiKeys.notPersistent")}</Banner>
-        ) : null}
+        <NonPersistentStorageNotice />
 
         <Card>
           <CardHeader>

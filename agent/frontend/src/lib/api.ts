@@ -986,6 +986,17 @@ export interface BuiltinRuntimeStatus {
 }
 
 /**
+ * 業務 Agent・スキル・MCP 接続・実行などの保存先（#839）。`persistent` が false なら再起動で消える。
+ * `reason`: `memory_backend` は DB は設定済みで保存先の設定がメモリ、`database_not_configured` は DB も未設定。
+ */
+export interface RuntimeStorageStatus {
+  backend: "memory" | "file" | "oracle_checkpoint" | "oracle_normalized";
+  persistent: boolean;
+  database_configured: boolean;
+  reason: "memory_backend" | "database_not_configured" | null;
+}
+
+/**
  * 承認の判断。決定者（`decided_by`）はログイン中の利用者から server が決めるため送らない（#215）。
  */
 export interface ApprovalDecisionPayload {
@@ -1194,6 +1205,7 @@ function auditQuery(filters: ToolCallAuditFilters): string {
 export const agentApi = {
   // 組み込み Runtime の状態（SDK の版・既定のモデル・選べるモデル。#754）。
   getRuntimeStatus: () => request<BuiltinRuntimeStatus>("/api/runtime/status"),
+  getRuntimeStorage: () => request<RuntimeStorageStatus>("/api/runtime/storage"),
   listRuns: () => request<{ runs: RunState[] }>("/api/runs"),
   publishAgent: (agentId: string, note = "") =>
     request<AgentProfile>(`/api/agents/${encodeURIComponent(agentId)}/publish`, {

@@ -97,6 +97,10 @@ async function installControlPlaneApi(
       return respond(agent);
     }
     if (path === "/api/skills") return respond({ skills: [skill], metadata: {} });
+    // 保存先（#839）。この spec は保存している構成。
+    if (path === "/api/runtime/storage") {
+      return respond({ backend: "oracle_checkpoint", persistent: true, database_configured: true, reason: null });
+    }
     if (path === "/api/runtime/status") {
       return respond(
         options?.notReady

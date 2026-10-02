@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-import { MOCK_NOW, expect, test } from "./fixtures/mock-api";
+import { MOCK_NOW, RUNTIME_STORAGE_MEMORY, expect, test } from "./fixtures/mock-api";
 import { dbUser } from "./fixtures/auth";
 
 // #778: 業務 Agent を MCP で呼ぶ外部のクライアント向けの API キー。
@@ -118,8 +118,13 @@ test("キーのコピーに失敗しても秘密を Toast に出さず、欄を�
 
 test("すべての業務 Agent・無期限のキーを作れ、保存先が無いときは知らせる", async ({ page, mockApi }) => {
   mockApi.state.apiKeysPersistent = false;
+  mockApi.state.runtimeStorage = { ...RUNTIME_STORAGE_MEMORY };
   await page.goto("/settings/api-keys");
-  await expect(page.getByText("作成したキーはバックエンドの再起動で消えます", { exact: false })).toBeVisible();
+  // 保存先の案内は共通の Banner（#839）。DB は設定済みなので、DB の設定へは案内しない。
+  const notice = page.getByTestId("storage-not-persistent-notice");
+  await expect(notice).toContainText("作成・変更した内容は、バックエンドの再起動で消えます");
+  await expect(notice).toContainText("保存先がメモリ");
+  await expect(notice).not.toContainText("データベースを設定してください");
 
   await page.getByLabel("名前").fill("社内ポータル");
   await page.getByRole("radio", { name: "使えるすべての業務 Agent" }).check();

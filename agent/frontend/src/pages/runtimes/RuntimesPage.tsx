@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { RefreshCw, Server, SlidersHorizontal } from "lucide-react";
+import { Database, HardDrive, RefreshCw, Server, SlidersHorizontal } from "lucide-react";
 import {
   Banner,
+  ButtonLink,
   buttonVariants,
   Card,
   CardContent,
@@ -15,12 +16,17 @@ import {
   PageBody,
   useActionPending,
 } from "@engchina/production-ready-ui";
-import { agentApi } from "@/lib/api";
+import { agentApi, type RuntimeStorageStatus } from "@/lib/api";
 import { QueryState } from "@/components/ListViews";
+import { storageReasonKey, useRuntimeStorage } from "@/components/system/StorageNotice";
 import { t } from "@/lib/i18n";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
+import { canOpenRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { useAuth } from "@/components/security/AuthProvider";
+
+/** 保存先をデータベースにする設定（agent/backend/.env。#764 / #839）。 */
+const PERSISTENT_STORAGE_SETTING = "AGENT_RUNTIME_REPOSITORY_BACKEND=oracle_checkpoint";
 
 /**
  * Runtime（組み込み Runtime の状態。#754）。業務 Agent は Control Plane の中の OpenAI Agents SDK で実行し、
@@ -29,6 +35,7 @@ import { useAuth } from "@/components/security/AuthProvider";
 export function RuntimesPage() {
   const { hasPermission } = useAuth();
   const status = useQuery({ queryKey: ["runtime-status"], queryFn: agentApi.getRuntimeStatus });
+  const storage = useRuntimeStorage();
   // 「表示を更新」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
   const manualRefresh = useActionPending();
   const data = status.data;
@@ -46,7 +53,7 @@ export function RuntimesPage() {
             label: t("runtime.refresh"),
             icon: RefreshCw,
             loading: manualRefresh.pending,
-            onClick: () => void manualRefresh.track(() => status.refetch()),
+            onClick: () => void manualRefresh.track(() => Promise.all([status.refetch(), storage.refetch()])),
           },
         ]}
       />
@@ -108,8 +115,91 @@ export function RuntimesPage() {
             </Card>
           ) : null}
         </QueryState>
+        <QueryState query={storage} loadingLabel={t("loading.runtimeStorage")} skeleton={<StorageCardSkeleton />}>
+          {storage.data ? <StorageCard status={storage.data} /> : null}
+        </QueryState>
       </PageBody>
     </>
+  );
+}
+
+/**
+ * 保存先（#839）。業務 Agent・スキル・MCP 接続・実行などが再起動の後も残るかを StatusBadge で出し
+ * （messaging.md §10.2）、残らないときは理由と直し方を warning の Banner で出す（§3.4）。
+ * 他の画面の案内（`NonPersistentStorageNotice`）はここへ案内する。
+ */
+function StorageCard({ status }: { status: RuntimeStorageStatus }) {
+  const { hasPermission } = useAuth();
+  const canOpenDatabase = canOpenRoute(APP_ROUTES.settingsDatabase, hasPermission);
+  return (
+    <Card className="min-w-0" data-testid="runtime-storage-card">
+      <CardHeader className="flex-row items-start justify-between gap-4">
+        <div className="min-w-0">
+          <CardTitle className="flex items-center gap-2">
+            <HardDrive size={20} aria-hidden />
+            {t("storage.card.title")}
+          </CardTitle>
+          <CardDescription>{t("storage.card.description")}</CardDescription>
+        </div>
+        <StatusBadge
+          variant={status.persistent ? "success" : "warning"}
+          label={status.persistent ? t("storage.card.persistent") : t("storage.card.notPersistent")}
+        />
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[max-content_1fr]">
+          <dt className="text-fg-muted">{t("storage.card.backend")}</dt>
+          <dd data-testid="runtime-storage-backend">{t(`storage.backend.${status.backend}`)}</dd>
+          <dt className="text-fg-muted">{t("storage.card.database")}</dt>
+          <dd>
+            {status.database_configured
+              ? t("storage.card.databaseConfigured")
+              : t("storage.card.databaseNotConfigured")}
+          </dd>
+        </dl>
+        {!status.persistent ? (
+          <Banner
+            severity="warning"
+            title={t("storage.notice.title")}
+            action={
+              status.reason === "database_not_configured" && canOpenDatabase ? (
+                <ButtonLink
+                  to={APP_ROUTES.settingsDatabase}
+                  linkComponent={Link}
+                  size="sm"
+                  icon={Database}
+                  testId="runtime-storage-open-database-settings"
+                >
+                  {t("storage.fix.openDatabaseSettings")}
+                </ButtonLink>
+              ) : undefined
+            }
+          >
+            <div className="space-y-2" data-testid="runtime-storage-fix">
+              <p>{t(storageReasonKey(status))}</p>
+              <p>
+                {status.reason === "database_not_configured"
+                  ? t("storage.fix.databaseNotConfigured")
+                  : t("storage.fix.memoryBackend")}
+              </p>
+              <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <span>{t("storage.fix.setting")}</span>
+                <code className="break-all font-mono">{PERSISTENT_STORAGE_SETTING}</code>
+              </p>
+            </div>
+          </Banner>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** 保存先のカードの形。 */
+function StorageCardSkeleton() {
+  return (
+    <div aria-hidden="true">
+      <Skeleton className="h-40" />
+    </div>
   );
 }
 

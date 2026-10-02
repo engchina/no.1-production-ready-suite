@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { dbUser } from "./fixtures/auth";
-import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
+import { MOCK_NOW, RUNTIME_STORAGE_MEMORY, expect, test, type MockApi } from "./fixtures/mock-api";
 import { chooseSelectFieldOption } from "./fixtures/select-field";
 
 // #784: 業務 Agent の自動実行（スケジュール・Webhook）。
@@ -171,13 +171,16 @@ test("Agent 管理の権限が無い利用者は閲覧だけ", async ({ page, mo
 
 test("保存先が無いときは知らせ、読み込み中は経過時間を出す", async ({ page, mockApi }) => {
   mockApi.state.automationsPersistent = false;
+  mockApi.state.runtimeStorage = { ...RUNTIME_STORAGE_MEMORY };
   await page.route("**/api/automations", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     await route.fallback();
   });
   await page.goto("/automations");
   await expect(page.getByTestId("automations-loading")).toContainText("自動実行を読み込んでいます");
-  await expect(page.getByText("作成した自動実行はバックエンドの再起動で消えます", { exact: false })).toBeVisible();
+  await expect(page.getByTestId("storage-not-persistent-notice")).toContainText(
+    "作成・変更した内容は、バックエンドの再起動で消えます"
+  );
 });
 
 test("Webhook の秘密のコピーに失敗しても秘密を Toast に出さず、欄を選択する (#790)", async ({ page }) => {

@@ -65,6 +65,7 @@ import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 import { formatDate } from "@/pages/shared/page-helpers";
+import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 /** 外部 MCP のタイムアウト秒の上限（backend の `_MCP_TIMEOUT_MAX_SECONDS` と同じ）。 */
 const MCP_TIMEOUT_MAX_SECONDS = 600;
@@ -537,6 +538,7 @@ export function McpConnectionsPage() {
           }
         />
         <PageBody wide className="space-y-6">
+          <NonPersistentStorageNotice />
           <Section title={t("settings.mcpConnections.title")} description={t("settings.mcpConnections.description")}>
             <ListToolbar
               search={

@@ -44,6 +44,7 @@ import { useCapabilities } from "@/lib/permissions";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 import { JsonPanel } from "@/pages/shared/page-helpers";
 import { skillSourceLabel, skillSourceVariant } from "@/pages/skills/skill-labels";
+import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 interface SkillFormState {
   id: string;
@@ -175,6 +176,7 @@ export function SkillsPage() {
           moreActionsLabel={t("common.moreActions")}
         />
         <PageBody wide>
+          <NonPersistentStorageNotice />
           <Section title={t("skills.list")} description={t("skills.description")}>
             <ListToolbar
               search={

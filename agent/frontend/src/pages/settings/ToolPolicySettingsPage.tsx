@@ -28,6 +28,7 @@ import { t } from "@/lib/i18n";
 import { useValuesChanged } from "@/lib/render-sync";
 import { permissionView } from "@/lib/status-labels";
 import { sameDraft, useSettingsLeaveGuard } from "@/lib/leave-guard";
+import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 type ToolPolicyChoice = "default" | "allow" | "ask" | "deny";
 
@@ -195,6 +196,7 @@ export function ToolPolicySettingsPage() {
     <>
       <PageHeader wide title={t("nav.settingsToolPolicy")} subtitle={t("page.settings.toolPolicy.subtitle")} />
       <PageBody wide>
+        <NonPersistentStorageNotice />
         <div className="space-y-5">
         <QueryState query={settings} loadingLabel={t("loading.settings")} skeleton={<FormSkeleton fields={4} />}>
           <Card className="min-w-0">

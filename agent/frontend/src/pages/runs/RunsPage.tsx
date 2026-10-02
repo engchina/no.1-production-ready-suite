@@ -60,6 +60,7 @@ import {
   useRunEventWebSocket,
 } from "@/pages/runs/run-event-stream";
 import { focusField, formatDate } from "@/pages/shared/page-helpers";
+import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 const DEFAULT_RUN_GOAL = t("run.form.goalDefault");
 
@@ -374,6 +375,7 @@ export function RunsPage() {
         ]}
       />
       <PageBody wide>
+        <NonPersistentStorageNotice />
         <AgentSplitPane
           splitId="runs-list"
           left={

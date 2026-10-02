@@ -42,6 +42,7 @@ import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { useEditorLeaveGuard } from "@/lib/leave-guard";
 import { JsonPanel, focusField } from "@/pages/shared/page-helpers";
+import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 export function PluginsPage() {
   const queryClient = useQueryClient();
@@ -155,6 +156,7 @@ export function PluginsPage() {
           moreActionsLabel={t("common.moreActions")}
         />
         <PageBody wide>
+          <NonPersistentStorageNotice />
           <Section title={t("plugins.list")} description={t("plugins.description")}>
             <ListToolbar
               search={
