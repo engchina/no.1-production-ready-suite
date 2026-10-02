@@ -988,7 +988,8 @@ export interface BuiltinRuntimeStatus {
 /**
  * 業務 Agent・スキル・MCP 接続・実行などの保存先（#839）。`persistent` が false なら再起動で消える。
  * `reason`: `memory_backend` は DB は設定済みで保存先にメモリを明示、`restart_required` は既定（auto）で DB も
- * 設定済みだが起動時は使えなかった（再起動で DB になる）、`database_not_configured` は DB が未設定。
+ * 設定済みだが起動時は使えなかった（再起動で DB になる）、`database_not_configured` は DB が未設定、
+ * `checkpoint_invalid` は既定（auto）で保存済みの checkpoint 全体を読めず、上書きしないようメモリにした（#853）。
  */
 export interface RuntimeStorageStatus {
   backend: "memory" | "file" | "oracle_checkpoint" | "oracle_normalized";
@@ -996,7 +997,12 @@ export interface RuntimeStorageStatus {
   configured_backend: string;
   persistent: boolean;
   database_configured: boolean;
-  reason: "memory_backend" | "restart_required" | "database_not_configured" | null;
+  reason: "memory_backend" | "restart_required" | "database_not_configured" | "checkpoint_invalid" | null;
+  /** 起動時の読み込みで整合しない状態を直した実行の数（#853）。 */
+  repaired_runs?: number;
+  /** 直せずに読み込まず、保存先に元の JSON のまま残している実行・業務 Agent の数（#853）。 */
+  skipped_runs?: number;
+  skipped_agents?: number;
 }
 
 /**

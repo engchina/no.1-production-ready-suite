@@ -11,7 +11,10 @@ import json
 import logging
 import os
 import re
+import secrets
+import time
 from collections.abc import Callable, Iterator, Sequence
+from contextlib import suppress
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -21,8 +24,15 @@ from threading import Condition, Lock
 from typing import Any, Protocol
 from uuid import uuid4
 
-from pr_backend_core.oracle_errors import is_oracle_connection_error
-from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+from pr_backend_core.oracle_errors import is_oracle_connection_error, oracle_error_codes
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from app.features.agent import storage_backend
 from app.features.agent.config import runtime_config_store
@@ -433,15 +443,69 @@ class ArtifactsData(BaseModel):
     artifacts: list[Artifact]
 
 
+class QuarantinedSnapshotRecord(BaseModel):
+    """保存先の読み込みで直せず、読み込まなかった Run・業務 Agent（#853）。
+
+    元の JSON（`raw`）をそのまま持ち、次の保存でも snapshot に残す（黙って消さない）。
+    バックアップと復元の書き出し（`quarantined`）で中身を確かめられる。
+    """
+
+    kind: str
+    id: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+    quarantined_at: datetime = Field(default_factory=_now)
+    raw: Any = None
+
+
 class AgentRuntimeSnapshot(BaseModel):
     version: str = "agent-control-plane.snapshot.v2"
     exported_at: datetime = Field(default_factory=_now)
     runs: list[RunState] = Field(default_factory=list)
     agents: list[AgentProfile] = Field(default_factory=list)
+    # 読み込みで直せず退避した Run・業務 Agent の元の JSON（#853）。
+    quarantined: list[QuarantinedSnapshotRecord] = Field(default_factory=list)
     # 旧 Memory（#756 で削除）。読み込んでも使わない。
     memory: list[JsonObject] = Field(default_factory=list)
     # 旧版（#754 より前）の外部 Runtime と Binding。読み込んでも使わない。
     control_plane_state: JsonObject = Field(default_factory=dict)
+
+
+SUPPORTED_SNAPSHOT_VERSIONS = frozenset(
+    {"agent-runtime.snapshot.v1", "agent-control-plane.snapshot.v2"}
+)
+
+
+class AgentRuntimeSnapshotCorruptError(RuntimeError):
+    """snapshot 全体が読めない（JSON として壊れている・未対応の版。#853）。
+
+    1 件の Run の不整合ではこの例外にしない（Run 単位で直すか退避する）。
+    """
+
+
+class RepairedRun(BaseModel):
+    run_id: str
+    repairs: list[str]
+
+
+class SnapshotLoadReport(BaseModel):
+    """保存先の読み込みで直した Run と、退避した Run・業務 Agent（#853）。"""
+
+    repaired: list[RepairedRun] = Field(default_factory=list)
+    quarantined: list[QuarantinedSnapshotRecord] = Field(default_factory=list)
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.repaired or self.quarantined)
+
+
+class RuntimeStorageHealth(BaseModel):
+    """起動時の読み込みの結果（`GET /api/runtime/storage`。#853）。"""
+
+    # 起動時の読み込みで整合しない状態を直した Run の数。
+    repaired_runs: int = 0
+    # 直せずに読み込まず、保存先に元の JSON のまま残している Run・業務 Agent の数。
+    skipped_runs: int = 0
+    skipped_agents: int = 0
 
 
 class AgentRuntimeSnapshotSummary(BaseModel):
@@ -560,6 +624,7 @@ class AgentRuntimeRepositoryContract(Protocol):
         self, snapshot: AgentRuntimeSnapshot
     ) -> AgentRuntimeSnapshotValidation: ...
     def replace_snapshot(self, snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshot: ...
+    def storage_health(self) -> RuntimeStorageHealth: ...
 
 
 class AgentRuntimeRepository:
@@ -570,6 +635,9 @@ class AgentRuntimeRepository:
         self._approvals: dict[str, ApprovalRequest] = {}
         default_agent = _ensure_versioned(_default_agent())
         self._agents: dict[str, AgentProfile] = {default_agent.id: default_agent}
+        # 読み込みで直せず退避した Run・業務 Agent（保存のたびに snapshot に残す。#853）。
+        self._quarantined: list[QuarantinedSnapshotRecord] = []
+        self._load_report = SnapshotLoadReport()
         self._snapshot_path = Path(snapshot_path) if snapshot_path else None
         if self._snapshot_path is not None and self._snapshot_path.exists():
             self._load_snapshot_from_disk()
@@ -652,6 +720,14 @@ class AgentRuntimeRepository:
 
     def validate_snapshot(self, snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshotValidation:
         return _validate_snapshot(snapshot)
+
+    def storage_health(self) -> RuntimeStorageHealth:
+        with self._lock:
+            return RuntimeStorageHealth(
+                repaired_runs=len(self._load_report.repaired),
+                skipped_runs=sum(1 for record in self._quarantined if record.kind == "run"),
+                skipped_agents=sum(1 for record in self._quarantined if record.kind == "agent"),
+            )
 
     def replace_snapshot(self, snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshot:
         validation = _validate_snapshot(snapshot)
@@ -1358,6 +1434,7 @@ class AgentRuntimeRepository:
         return AgentRuntimeSnapshot(
             runs=[run.model_copy(deep=True) for run in self._sorted_runs_locked()],
             agents=[agent.model_copy(deep=True) for agent in self._sorted_agents_locked()],
+            quarantined=[record.model_copy(deep=True) for record in self._quarantined],
         )
 
     def _replace_state_locked(self, snapshot: AgentRuntimeSnapshot) -> None:
@@ -1370,18 +1447,44 @@ class AgentRuntimeRepository:
         self._approvals = {
             approval.id: approval for run in self._runs.values() for approval in run.approvals
         }
+        self._quarantined = [record.model_copy(deep=True) for record in snapshot.quarantined]
+
+    def _apply_loaded_snapshot(self, snapshot_json: str | bytes, *, source: str) -> None:
+        """保存先の snapshot を Run 単位で読み込む（#853）。
+
+        1 件の Run の不整合で起動を止めない。直せるものは直し、直せないものは退避して、
+        変わったら読み込みの直後に保存する（保存の失敗では起動を止めない。次の変更で保存する）。
+        snapshot 全体が読めないときだけ `AgentRuntimeSnapshotCorruptError`。
+        """
+        snapshot, report = load_snapshot_tolerant(snapshot_json, source=source)
+        with self._lock:
+            self._replace_state_locked(snapshot)
+            self._load_report = report
+            if not report.changed:
+                return
+            try:
+                self._persist_locked()
+            except Exception:  # noqa: BLE001 - 直した結果の保存の失敗で起動を止めない
+                logger.warning(
+                    "agent_runtime_snapshot_repair_not_saved",
+                    extra={"source": source},
+                    exc_info=True,
+                )
 
     def _load_snapshot_from_disk(self) -> None:
         if self._snapshot_path is None:
             return
         try:
-            snapshot = AgentRuntimeSnapshot.model_validate_json(
-                self._snapshot_path.read_text(encoding="utf-8")
+            self._apply_loaded_snapshot(
+                self._snapshot_path.read_text(encoding="utf-8"), source="file"
             )
-        except ValueError as exc:
-            raise RuntimeError(f"agent runtime snapshot is invalid: {self._snapshot_path}") from exc
-        with self._lock:
-            self._replace_state_locked(snapshot)
+        except AgentRuntimeSnapshotCorruptError as exc:
+            raise RuntimeError(
+                f"Agent の保存先の snapshot（{self._snapshot_path}）を読み込めません（{exc}）。"
+                "データを守るため起動を止めました。ファイルを退避してから削除するか、"
+                "バックアップと復元で書き出した snapshot に置き換えて、"
+                "backend を再起動してください。"
+            ) from exc
 
     def _persist_locked(self) -> None:
         if self._snapshot_path is None:
@@ -1510,6 +1613,10 @@ class AgentRuntimeRepository:
         raise KeyError(step_id)
 
 
+class AgentRuntimeCheckpointCorruptError(AgentRuntimeSnapshotCorruptError):
+    """Oracle の checkpoint 全体が読めない（直し方を含むメッセージ。#853）。"""
+
+
 class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
     """Oracle に Runtime snapshot checkpoint を保存する repository。
 
@@ -1557,16 +1664,16 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         if snapshot_json is None:
             return
         try:
-            snapshot = AgentRuntimeSnapshot.model_validate_json(snapshot_json)
-        except ValueError as exc:
-            raise RuntimeError("agent runtime Oracle checkpoint is invalid") from exc
-        validation = _validate_snapshot(snapshot)
-        if not validation.valid:
-            raise RuntimeError(
-                "agent runtime Oracle checkpoint validation failed: " + "; ".join(validation.errors)
-            )
-        with self._lock:
-            self._replace_state_locked(snapshot)
+            self._apply_loaded_snapshot(snapshot_json, source="oracle")
+        except AgentRuntimeSnapshotCorruptError as exc:
+            raise AgentRuntimeCheckpointCorruptError(
+                f"Agent の保存先の checkpoint（{self._oracle_table_name} の "
+                f"CHECKPOINT_KEY='{self._oracle_checkpoint_key}'）を読み込めません（{exc}）。"
+                "データを守るため上書きせずに止めました。行の SNAPSHOT_JSON を退避してから"
+                "行を削除するか、バックアップと復元で書き出した snapshot を戻して、"
+                "backend を再起動してください（AGENT_RUNTIME_REPOSITORY_BACKEND=auto なら、"
+                "保存しない状態で起動して画面で案内します）。"
+            ) from exc
 
     def _persist_locked(self) -> None:
         snapshot_json = self._export_snapshot_locked().model_dump_json()
@@ -1586,7 +1693,10 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
             if row is None:
                 connection.commit()
                 return None
-            snapshot = AgentRuntimeSnapshot.model_validate_json(_oracle_lob_to_text(row[0]))
+            # 1 件の Run の不整合で dispatcher を止めない（読み込みと同じく Run 単位。#853）。
+            snapshot, _report = load_snapshot_tolerant(
+                _oracle_lob_to_text(row[0]), source="oracle_claim"
+            )
             with self._lock:
                 self._replace_state_locked(snapshot)
                 run = self._claim_control_plane_run_locked(worker_id, lease_seconds=lease_seconds)
@@ -2678,6 +2788,224 @@ def _validate_snapshot(snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshotVa
     )
 
 
+def load_snapshot_tolerant(
+    snapshot_json: str | bytes, *, source: str = "snapshot"
+) -> tuple[AgentRuntimeSnapshot, SnapshotLoadReport]:
+    """保存先の snapshot を Run・業務 Agent の 1 件ずつ読み込む（#853）。
+
+    - snapshot 全体が読めない（JSON でない・object でない・未対応の版・runs / agents が配列でない）
+      ときだけ `AgentRuntimeSnapshotCorruptError`。
+    - schema に合わない・id が空 / 重複・直しても整合しない Run・業務 Agent は読み込まず、
+      元の JSON と理由を `quarantined` に退避する（保存のたびに残す）。
+    - 安全に直せる不整合（`_repair_run`）は直し、Run の Event に残す。
+
+    利用者が明示的に行う復元（`replace_snapshot`）はこの関数を使わず、今までどおり厳密に検証する。
+    """
+    try:
+        data = json.loads(snapshot_json)
+    except (TypeError, ValueError) as exc:
+        raise AgentRuntimeSnapshotCorruptError("snapshot が JSON として読めません") from exc
+    if not isinstance(data, dict):
+        raise AgentRuntimeSnapshotCorruptError("snapshot が JSON の object ではありません")
+    version = data.get("version", AgentRuntimeSnapshot.model_fields["version"].default)
+    if version not in SUPPORTED_SNAPSHOT_VERSIONS:
+        raise AgentRuntimeSnapshotCorruptError(f"未対応の snapshot の版です: {version!r}")
+    raw_runs = data.get("runs") or []
+    raw_agents = data.get("agents") or []
+    if not isinstance(raw_runs, list) or not isinstance(raw_agents, list):
+        raise AgentRuntimeSnapshotCorruptError("snapshot の runs / agents が配列ではありません")
+
+    report = SnapshotLoadReport()
+    quarantined = _previous_quarantine(data.get("quarantined"))
+
+    def quarantine(kind: str, raw: object, reasons: list[str]) -> None:
+        record_id = raw.get("id") if isinstance(raw, dict) else None
+        record = QuarantinedSnapshotRecord(
+            kind=kind,
+            id=record_id if isinstance(record_id, str) else None,
+            reasons=reasons,
+            raw=raw,
+        )
+        quarantined.append(record)
+        report.quarantined.append(record)
+        logger.warning(
+            "agent_runtime_snapshot_record_quarantined",
+            extra={"source": source, "kind": kind, "record_id": record.id, "reasons": reasons},
+        )
+
+    agents: list[AgentProfile] = []
+    agent_ids: set[str] = set()
+    for raw in raw_agents:
+        try:
+            agent = AgentProfile.model_validate(raw)
+        except ValidationError as exc:
+            quarantine("agent", raw, _validation_reasons(exc))
+            continue
+        if not agent.id or agent.id in agent_ids:
+            quarantine("agent", raw, ["agent id が空か、ほかの業務 Agent と重複しています"])
+            continue
+        agent_ids.add(agent.id)
+        agents.append(agent)
+
+    runs: list[RunState] = []
+    run_ids: set[str] = set()
+    event_ids: set[str] = set()
+    artifact_ids: set[str] = set()
+    for raw in raw_runs:
+        try:
+            run = RunState.model_validate(raw)
+        except ValidationError as exc:
+            quarantine("run", raw, _validation_reasons(exc))
+            continue
+        if not run.id or run.id in run_ids:
+            quarantine("run", raw, ["run id が空か、ほかの Run と重複しています"])
+            continue
+        repairs = _repair_run(run)
+        errors: list[str] = []
+        _validate_run_snapshot(run, errors, [])
+        own_events = [event.id for event in run.events]
+        own_artifacts = [artifact.id for artifact in run.artifacts]
+        if event_ids.intersection(own_events):
+            errors.append("Event の id がほかの Run と重複しています")
+        if artifact_ids.intersection(own_artifacts):
+            errors.append("成果物の id がほかの Run と重複しています")
+        if errors:
+            quarantine("run", raw, errors)
+            continue
+        run_ids.add(run.id)
+        event_ids.update(own_events)
+        artifact_ids.update(own_artifacts)
+        runs.append(run)
+        if repairs:
+            report.repaired.append(RepairedRun(run_id=run.id, repairs=repairs))
+            logger.warning(
+                "agent_runtime_snapshot_run_repaired",
+                extra={"source": source, "run_id": run.id, "repairs": repairs},
+            )
+
+    exported_at = data.get("exported_at")
+    snapshot = AgentRuntimeSnapshot(
+        version=version,
+        runs=runs,
+        agents=agents,
+        quarantined=quarantined,
+    )
+    if isinstance(exported_at, str):
+        with suppress(ValueError):
+            snapshot.exported_at = datetime.fromisoformat(exported_at)
+    return snapshot, report
+
+
+def _previous_quarantine(value: object) -> list[QuarantinedSnapshotRecord]:
+    """前の読み込みで退避した記録（形が崩れていても元の値ごと残す）。"""
+    if not isinstance(value, list):
+        return []
+    records: list[QuarantinedSnapshotRecord] = []
+    for item in value:
+        try:
+            records.append(QuarantinedSnapshotRecord.model_validate(item))
+        except ValidationError:
+            records.append(
+                QuarantinedSnapshotRecord(
+                    kind="unknown", reasons=["退避した記録の形が読めません"], raw=item
+                )
+            )
+    return records
+
+
+def _validation_reasons(exc: ValidationError) -> list[str]:
+    """Pydantic の検証の失敗の要約（値は出さない。項目の場所と種類だけ）。"""
+    reasons = [
+        f"{'.'.join(str(part) for part in error.get('loc', ())) or '(root)'}: {error.get('type')}"
+        for error in exc.errors()[:5]
+    ]
+    if exc.error_count() > 5:
+        reasons.append(f"ほか {exc.error_count() - 5} 件")
+    return reasons
+
+
+# 読み込みで直した内容（Run の Event・ログ・画面の件数に出す。#853）。
+REPAIR_RUN_ID_MISMATCH = "run_id_mismatch_fixed"
+REPAIR_MISSING_APPROVAL_REFERENCE = "missing_approval_reference_cleared"
+REPAIR_TERMINAL_PENDING_APPROVALS = "terminal_run_pending_approvals_cancelled"
+REPAIR_WAITING_WITHOUT_APPROVALS = "waiting_approval_without_pending_failed"
+_REPAIR_ACTOR = "system:storage-repair"
+
+
+def _repair_run(run: RunState) -> list[str]:
+    """1 件の Run の、安全に直せる不整合を直す（直した内容の code の一覧を返す。#853）。
+
+    実行を進める方向には直さない（承認を「承認」にしない・再開しない）。待ちを終わらせる方向
+    （承認の取消・Run の失敗）だけにする。
+    """
+    repairs: list[str] = []
+    now = _now()
+    # Event / step / 承認の run_id のずれ（入っている Run が正しい）。
+    items: list[RunEvent | RunStep | ApprovalRequest] = [*run.events, *run.steps, *run.approvals]
+    mismatched = [item for item in items if item.run_id != run.id]
+    for item in mismatched:
+        item.run_id = run.id
+    if mismatched:
+        repairs.append(REPAIR_RUN_ID_MISMATCH)
+    # 無い承認を指す step（承認待ちの step は取り消す）。
+    approval_ids = {approval.id for approval in run.approvals}
+    dangling = [
+        step
+        for step in run.steps
+        if step.approval_id is not None and step.approval_id not in approval_ids
+    ]
+    for step in dangling:
+        step.approval_id = None
+        if step.status == StepStatus.WAITING_APPROVAL:
+            step.status = StepStatus.CANCELLED
+            step.completed_at = step.completed_at or now
+    if dangling:
+        repairs.append(REPAIR_MISSING_APPROVAL_REFERENCE)
+    # 終わった Run に残った pending の承認（もう決められない）は取り消す。
+    pending = [approval for approval in run.approvals if approval.status == ApprovalStatus.PENDING]
+    if _is_terminal(run.status) and pending:
+        pending_ids = {approval.id for approval in pending}
+        for approval in pending:
+            approval.status = ApprovalStatus.CANCELLED
+            approval.decided_by = _REPAIR_ACTOR
+            approval.decided_at = now
+        for step in run.steps:
+            if step.approval_id in pending_ids and step.status in {
+                StepStatus.PENDING,
+                StepStatus.WAITING_APPROVAL,
+            }:
+                step.status = StepStatus.CANCELLED
+                step.completed_at = step.completed_at or now
+        run.metadata.pop(_BUILTIN_STATE_KEY, None)
+        repairs.append(REPAIR_TERMINAL_PENDING_APPROVALS)
+    # 承認待ちなのに pending の承認が無い Run は、再開せずに失敗にする。
+    if run.status == RunStatus.WAITING_APPROVAL and not any(
+        approval.status == ApprovalStatus.PENDING for approval in run.approvals
+    ):
+        run.status = RunStatus.FAILED
+        run.metadata.pop(_BUILTIN_STATE_KEY, None)
+        run.events.append(
+            RunEvent(
+                run_id=run.id,
+                type=RunEventType.RUNTIME_FAILED,
+                message="承認待ちの承認が見つからないため、実行を失敗にしました。",
+                payload={"error_code": "runtime.inconsistent_state", "source": "storage_repair"},
+            )
+        )
+        repairs.append(REPAIR_WAITING_WITHOUT_APPROVALS)
+    if repairs:
+        run.updated_at = now
+        run.events.append(
+            RunEvent(
+                run_id=run.id,
+                type=RunEventType.RUNTIME_EVENT,
+                message="保存先の読み込みで、整合しない実行の状態を直しました。",
+                payload={"source": "storage_repair", "repairs": list(repairs)},
+            )
+        )
+    return repairs
+
+
 def _append_duplicate_errors(label: str, values: list[str], errors: list[str]) -> None:
     seen: set[str] = set()
     duplicates: set[str] = set()
@@ -2856,25 +3184,90 @@ def _active_tool_policy() -> ToolPolicy:
     )
 
 
+# 起動時の保存先の DB の接続の再試行の待ち（テストは待たない関数に差し替える。#853）。
+_retry_sleep: Callable[[float], None] = time.sleep
+# 再試行の待ちの上限（秒）。
+_STORAGE_CONNECT_RETRY_MAX_DELAY_SECONDS = 30.0
+_jitter = secrets.SystemRandom()
+
+
+def _storage_connect_delay(base_seconds: float, attempt: int) -> float:
+    """指数 backoff（base × 2^(attempt-1)、上限 30 秒）の後半をランダムにする（equal jitter）。"""
+    delay = min(base_seconds * (2.0 ** (attempt - 1)), _STORAGE_CONNECT_RETRY_MAX_DELAY_SECONDS)
+    return delay / 2 + _jitter.uniform(0, delay / 2)
+
+
+def _build_oracle_repository_with_retries(
+    factory: Callable[[], AgentRuntimeRepositoryContract],
+) -> AgentRuntimeRepositoryContract:
+    """保存先の DB の接続のエラーだけを、上限付きで待って再試行する（#853）。
+
+    1 回の接続は `PLATFORM_ORACLE_TCP_CONNECT_TIMEOUT_SECONDS` で区切られる。回数と待ちは
+    `AGENT_RUNTIME_STORAGE_CONNECT_RETRIES` / `AGENT_RUNTIME_STORAGE_CONNECT_RETRY_DELAY_SECONDS`。
+    接続以外のエラー（SQL・権限・snapshot の破損）は再試行しない。
+    """
+    settings = get_settings()
+    retries = max(0, int(settings.agent_runtime_storage_connect_retries))
+    base_delay = max(0.0, float(settings.agent_runtime_storage_connect_retry_delay_seconds))
+    attempt = 0
+    while True:
+        try:
+            return factory()
+        except Exception as exc:
+            if attempt >= retries or not is_oracle_connection_error(exc):
+                raise
+            attempt += 1
+            delay = _storage_connect_delay(base_delay, attempt)
+            logger.warning(
+                "agent_runtime_repository_connect_retry",
+                extra={
+                    "attempt": attempt,
+                    "max_retries": retries,
+                    "delay_seconds": round(delay, 2),
+                    "error_codes": oracle_error_codes(exc),
+                },
+            )
+            _retry_sleep(delay)
+
+
 def build_runtime_repository() -> AgentRuntimeRepositoryContract:
     settings = get_settings()
     # `auto`（既定）は DB の設定がそろっていれば oracle_checkpoint、無ければ memory（#839）。
     backend = storage_backend.resolved_backend()
     if backend in storage_backend.ORACLE_BACKENDS:
         # 共通の PLATFORM_ORACLE_* で接続する（#764。旧 AGENT_RUNTIME_ORACLE_* は読まない）。
-        try:
+        def factory() -> AgentRuntimeRepositoryContract:
             if backend == "oracle_normalized":
                 return AgentRuntimeOracleNormalizedRepository(
                     projection_retention_days=settings.agent_runtime_projection_retention_days,
                     projection_write_mode=settings.agent_runtime_projection_write_mode,
                 )
             return AgentRuntimeOracleCheckpointRepository()
+
+        try:
+            return _build_oracle_repository_with_retries(factory)
+        except AgentRuntimeSnapshotCorruptError:
+            # checkpoint 全体が読めない。明示した Oracle はデータを守って止める（直し方は
+            # 例外のメッセージ）。`auto` は checkpoint を上書きしないよう memory で起動し、
+            # 画面（保存先のカード）で案内する（再起動の繰り返しにしない。#853）。
+            if not storage_backend.is_auto():
+                raise
+            logger.error("agent_runtime_checkpoint_corrupt_use_memory", exc_info=True)
+            storage_backend.fall_back_to_memory(reason=storage_backend.FALLBACK_CHECKPOINT_INVALID)
+            backend = "memory"
         except Exception as exc:
             # `auto` で選んだ Oracle に起動時に接続できない（ADB の停止中など）ときは、起動を
             # 止めずに memory にする（画面は DB ゲートと保存先の案内で再起動を促す）。
-            # 明示した Oracle は止める。
-            if not storage_backend.is_auto() or not is_oracle_connection_error(exc):
+            # 明示した Oracle は止める。接続以外のエラーも止める。
+            if not is_oracle_connection_error(exc):
                 raise
+            if not storage_backend.is_auto():
+                raise RuntimeError(
+                    f"Agent の保存先（AGENT_RUNTIME_REPOSITORY_BACKEND={backend}）のデータベースに"
+                    f"接続できません（{_oracle_error_summary(exc)}）。データベースが起動しているか、"
+                    "共通 .env の PLATFORM_ORACLE_* を確認して backend を再起動してください"
+                    "（AGENT_RUNTIME_REPOSITORY_BACKEND=auto なら、保存しない状態で起動します）。"
+                ) from exc
             logger.warning("agent_runtime_repository_oracle_unavailable_use_memory", exc_info=True)
             storage_backend.fall_back_to_memory()
             backend = "memory"
@@ -2886,6 +3279,12 @@ def build_runtime_repository() -> AgentRuntimeRepositoryContract:
         )
         return AgentRuntimeRepository(snapshot_path=snapshot_path)
     raise RuntimeError(f"unsupported Agent Runtime repository backend: {backend}")
+
+
+def _oracle_error_summary(exc: BaseException) -> str:
+    """ORA / DPY のコードだけ（接続先・資格情報は出さない）。"""
+    codes = oracle_error_codes(exc)
+    return ", ".join(codes) if codes else type(exc).__name__
 
 
 runtime_repository: AgentRuntimeRepositoryContract = build_runtime_repository()
