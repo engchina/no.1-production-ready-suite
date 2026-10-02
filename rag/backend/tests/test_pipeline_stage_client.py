@@ -241,3 +241,155 @@ def test_vector_index_adapter_falls_back_when_service_unreachable(
         )
     )
     assert params.profile == "accurate" and params.target_accuracy == 98
+
+
+class _CountingVectorIndexClient:
+    """vector_index の POST を数える fake(#828)。``fail`` で接続失敗・HTTP error を返す。"""
+
+    calls = 0
+    fail: str | None = None
+    timeouts: list[Any] = []
+
+    def __init__(self, *a: Any, **k: Any) -> None:
+        type(self).timeouts.append(k.get("timeout"))
+
+    def __enter__(self) -> _CountingVectorIndexClient:
+        return self
+
+    def __exit__(self, *a: Any) -> None:
+        return None
+
+    def request(self, method: str, url: str, *a: Any, **k: Any) -> Any:
+        type(self).calls += 1
+        if type(self).fail == "connect":
+            raise httpx.ConnectError("timed out")
+        if type(self).fail == "http":
+            request = httpx.Request(method, url)
+            raise httpx.HTTPStatusError(
+                "boom", request=request, response=httpx.Response(500, request=request)
+            )
+
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, Any]:
+                return {
+                    "profile": "accurate",
+                    "target_accuracy": 98,
+                    "neighbors": 48,
+                    "efconstruction": 800,
+                    "distance": "COSINE",
+                    "requires_reprovision": True,
+                }
+
+        return _Resp()
+
+
+@pytest.fixture
+def counting_vector_index_client(monkeypatch: MonkeyPatch) -> type[_CountingVectorIndexClient]:
+    _CountingVectorIndexClient.calls = 0
+    _CountingVectorIndexClient.fail = None
+    _CountingVectorIndexClient.timeouts = []
+    monkeypatch.setattr(httpx, "Client", _CountingVectorIndexClient)
+    return _CountingVectorIndexClient
+
+
+def _vector_index_service_settings(**overrides: Any) -> Settings:
+    values: dict[str, Any] = {
+        "rag_vector_index_profile": "accurate",
+        "rag_vector_index_service_enabled": True,
+        "rag_vector_index_service_url": "http://svc",
+    }
+    values.update(overrides)
+    return Settings(**values)
+
+
+def test_vector_index_adapter_memoizes_remote_resolution(
+    counting_vector_index_client: type[_CountingVectorIndexClient],
+) -> None:
+    """検索のたびにサービスへ HTTP を送らない(#828)。"""
+    from app.rag.vector_index_adapter import resolve_vector_index_adapter
+
+    settings = _vector_index_service_settings()
+    first = resolve_vector_index_adapter(settings)
+    second = resolve_vector_index_adapter(settings)
+    assert first == second
+    assert first.target_accuracy == 98
+    assert counting_vector_index_client.calls == 1
+
+
+def test_vector_index_adapter_memoizes_fallback_when_service_unreachable(
+    counting_vector_index_client: type[_CountingVectorIndexClient],
+) -> None:
+    """応答しないサービスを検索のたびに待たない。縮退の結果もキャッシュする(#828)。"""
+    from app.rag.vector_index_adapter import (
+        reset_vector_index_static_cache,
+        resolve_vector_index_adapter,
+    )
+
+    counting_vector_index_client.fail = "connect"
+    settings = _vector_index_service_settings()
+    assert resolve_vector_index_adapter(settings).target_accuracy == 98
+    assert resolve_vector_index_adapter(settings).target_accuracy == 98
+    assert counting_vector_index_client.calls == 1
+
+    reset_vector_index_static_cache()
+    resolve_vector_index_adapter(settings)
+    assert counting_vector_index_client.calls == 2
+
+
+def test_vector_index_adapter_cache_is_keyed_by_profile_and_accuracy(
+    counting_vector_index_client: type[_CountingVectorIndexClient],
+) -> None:
+    from app.rag.vector_index_adapter import resolve_vector_index_adapter
+
+    counting_vector_index_client.fail = "connect"
+    resolve_vector_index_adapter(_vector_index_service_settings())
+    balanced = resolve_vector_index_adapter(
+        _vector_index_service_settings(
+            rag_vector_index_profile="balanced", oracle_vector_target_accuracy=90
+        )
+    )
+    assert balanced.profile == "balanced" and balanced.target_accuracy == 90
+    assert counting_vector_index_client.calls == 2
+
+
+def test_vector_index_adapter_does_not_cache_remote_errors(
+    counting_vector_index_client: type[_CountingVectorIndexClient],
+) -> None:
+    """応答済み remote の HTTP error は止めたまま、キャッシュしない。"""
+    from app.rag.vector_index_adapter import resolve_vector_index_adapter
+
+    counting_vector_index_client.fail = "http"
+    settings = _vector_index_service_settings()
+    for _ in range(2):
+        with pytest.raises(PipelineStageServiceError):
+            resolve_vector_index_adapter(settings)
+    assert counting_vector_index_client.calls == 2
+
+
+def test_pipeline_stage_client_uses_short_connect_timeout(
+    counting_vector_index_client: type[_CountingVectorIndexClient],
+) -> None:
+    """接続の確立は短い上限、応答の待ちは stage の timeout(#828)。"""
+    from rag_pipeline_core.stage import VectorIndexStageRequest
+
+    from app.clients.pipeline_stage import PIPELINE_STAGE_CONNECT_TIMEOUT_SECONDS
+
+    client = PipelineStageClient(
+        _vector_index_service_settings(rag_pipeline_stage_timeout_seconds=120.0)
+    )
+    client.run_vector_index(VectorIndexStageRequest(profile="accurate"))
+    timeout = counting_vector_index_client.timeouts[-1]
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.connect == PIPELINE_STAGE_CONNECT_TIMEOUT_SECONDS
+    assert timeout.read == 120.0
+
+    short = PipelineStageClient(
+        _vector_index_service_settings(rag_pipeline_stage_timeout_seconds=2.0)
+    )
+    short.run_vector_index(VectorIndexStageRequest(profile="accurate"))
+    assert counting_vector_index_client.timeouts[-1].connect == 2.0

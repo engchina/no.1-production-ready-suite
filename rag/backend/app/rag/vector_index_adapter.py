@@ -5,6 +5,9 @@ backend と vector_index マイクロサービスが同一結果を返す。`rag
 真のとき profile 解決を pipeline-vector-index サービスへ委譲する。無効時は in-process(同一
 ロジック)、サービス未起動・未到達時も in-process へ縮退する。応答済み remote の HTTP error /
 不正応答は処理停止する。外部ベクトル DB は導入しない。
+
+解決結果は (プロファイル, 設定の target accuracy) ごとにプロセス内でメモ化する(#828)。解決は決定論で
+remote と in-process が同じ値を返すため、検索のたびにサービスへ HTTP を送らない。
 """
 
 from __future__ import annotations
@@ -94,28 +97,46 @@ def _settings_target_accuracy(settings: Settings) -> int:
     return int(getattr(settings, "oracle_vector_target_accuracy", 95))
 
 
+# profile→パラメータの解決はプロセス内で不変(決定論。remote も in-process も同じ値)。検索のたびの
+# サービスへの HTTP と、応答しないサービスを待つことを避けるため、解決結果を (プロファイル, 設定の
+# target accuracy) ごとにメモ化する(guardrail の静的解決と同じ。#828)。応答済み remote の HTTP
+# error / 不正応答は例外のまま返し、キャッシュしない。
+_STATIC_CACHE: dict[tuple[str, int], VectorIndexParams] = {}
+
+
+def reset_vector_index_static_cache() -> None:
+    """解決結果のメモ化をクリアする(テスト isolation 用)。"""
+    _STATIC_CACHE.clear()
+
+
 def resolve_vector_index_adapter(settings: Settings) -> VectorIndexParams:
     """Settings から Vector Index アダプターの解決済みパラメータを作る。
 
     `rag_vector_index_service_enabled` のときは pipeline-vector-index サービスへ委譲する。
     無効時と remote 未到達時は in-process(同一 rag_pipeline_core ロジック)へ縮退する。
+    結果は (プロファイル, 設定の target accuracy) ごとにメモ化する(#828)。
     """
     profile = normalize_vector_index_profile(
         getattr(settings, "rag_vector_index_profile", DEFAULT_VECTOR_INDEX_PROFILE)
     )
     settings_accuracy = _settings_target_accuracy(settings)
-    remote = _resolve_remote(settings, profile, settings_accuracy)
-    if remote is not None:
-        return remote
-    resolved = resolve_vector_index(profile, settings_accuracy)
-    return VectorIndexParams(
-        profile=resolved.profile,  # type: ignore[arg-type]
-        target_accuracy=resolved.target_accuracy,
-        neighbors=resolved.neighbors,
-        efconstruction=resolved.efconstruction,
-        distance=resolved.distance,
-        requires_reprovision=resolved.requires_reprovision,
-    )
+    key = (profile, settings_accuracy)
+    cached = _STATIC_CACHE.get(key)
+    if cached is not None:
+        return cached
+    params = _resolve_remote(settings, profile, settings_accuracy)
+    if params is None:
+        resolved = resolve_vector_index(profile, settings_accuracy)
+        params = VectorIndexParams(
+            profile=resolved.profile,  # type: ignore[arg-type]
+            target_accuracy=resolved.target_accuracy,
+            neighbors=resolved.neighbors,
+            efconstruction=resolved.efconstruction,
+            distance=resolved.distance,
+            requires_reprovision=resolved.requires_reprovision,
+        )
+    _STATIC_CACHE[key] = params
+    return params
 
 
 def _resolve_remote(

@@ -12,6 +12,7 @@ import { mockDatabaseGateReady, profileAccessPage, systemAdminMe } from "./_help
 import { expectSplitPaneReservedTrack } from "./_helpers/fixed-split-pane";
 import { expectSingleSpinner, visibleSpinners } from "./_helpers/single-spinner";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
+import { remToPx, SUBPIXEL_TOLERANCE } from "./_helpers/spacing";
 
 function envelope(data: unknown) {
   return { data, error_messages: [], warning_messages: [] };
@@ -4103,6 +4104,8 @@ test("DeepSec 実行計画の取得失敗は標準 ErrorState で余白と再試
     "アプリケーション認証/RBAC の schema migration が未適用です。"
   );
   await expect(errorState).toContainText("リクエストID: deepsec-plan-error-request");
+  // 見出しとエラーの間は区画の gap-4（1rem。14px ルートで 14px）。px で書かず rem から求める（#800）。
+  const sectionGap = (await remToPx(page, 1)) - SUBPIXEL_TOLERANCE;
   await expect
     .poll(async () => {
       const [titleBox, errorBox] = await Promise.all([
@@ -4112,7 +4115,7 @@ test("DeepSec 実行計画の取得失敗は標準 ErrorState で余白と再試
       if (!titleBox || !errorBox) return -1;
       return errorBox.y - (titleBox.y + titleBox.height);
     })
-    .toBeGreaterThanOrEqual(15);
+    .toBeGreaterThanOrEqual(sectionGap);
   const errorStateLayout = await errorState.evaluate((node) => {
     const style = window.getComputedStyle(node);
     return {

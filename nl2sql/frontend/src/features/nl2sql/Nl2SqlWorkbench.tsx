@@ -119,6 +119,9 @@ type PageError = { source: PageErrorSource; message: string; code?: string } | n
 const PROFILE_RECOMMENDATION_APPLY_THRESHOLD = 0.3;
 // URL で受け取るクエリ画面の初期値（一度だけ適用して URL から消す）。
 const QUERY_PREFILL_KEYS = ["question", "engine", "profile_id"];
+/** 「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。押したボタンだけを回す。#821）。 */
+const WORKBENCH_SCHEMA_REFRESH_HEADER = "workbench-header";
+const WORKBENCH_SCHEMA_REFRESH_PANEL = "workbench-schema-panel";
 
 function messageFromError(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -323,8 +326,10 @@ function ExecutableNl2SqlWorkbench() {
     };
   }, [schemaDetails, schemaHeadQuery.data, schemaObjects]);
   const loadingCatalog = schemaObjectsQuery.isPending && !schemaObjectsQuery.data;
-  // SchemaReferencePanel が空のスキーマの「スキーマを更新」ボタンを出す条件（同じ条件で出す）。
-  const schemaPanelRefreshShown = !loadingCatalog && catalog.tables.length === 0 && canRefreshSchema;
+  // 押した「スキーマを更新」だけを送信の間 loading にする。job の間はどちらも無効にするだけで、スピナーは
+  // スキーマ参照の進行の表示が出す（durable job の規則。messaging §3.7、#821）。
+  const headerSchemaRefreshStarting = schemaRefresh.startingOrigin === WORKBENCH_SCHEMA_REFRESH_HEADER;
+  const panelSchemaRefreshStarting = schemaRefresh.startingOrigin === WORKBENCH_SCHEMA_REFRESH_PANEL;
   const schemaCatalogHasObjects =
     catalog.tables.length > 0 || (schemaHeadQuery.data?.object_count ?? 0) > 0;
   const currentScopedSchemaEmpty =
@@ -339,10 +344,10 @@ function ExecutableNl2SqlWorkbench() {
   // 画面 entry は summary/object page だけを独立取得する。refresh は persistent job を投入し、
   // 前 catalog を表示したまま job 完了時にこの画面で必要な read model だけを取り直す。
   const loadCatalog = useCallback(
-    async (refresh = false, announce = false) => {
+    async (refresh = false, announce = false, refreshOrigin = "") => {
       try {
         if (refresh) {
-          await schemaRefresh.start();
+          await schemaRefresh.start(refreshOrigin);
           return;
         }
         const results = await Promise.allSettled([
@@ -1011,10 +1016,11 @@ function ExecutableNl2SqlWorkbench() {
                   kind: "utility" as const,
                   label: t("common.action.schemaRefresh"),
                   icon: RefreshCw,
-                  onClick: () => loadCatalog(true),
-                  // スキーマが空で、スキーマ参照に同じ操作のボタンが出ているときは、そちらだけを回す（#416）。
-                  loading: schemaRefresh.isRefreshing && !schemaPanelRefreshShown,
-                  disabled: active || schemaRefresh.isRefreshing,
+                  onClick: () => loadCatalog(true, false, WORKBENCH_SCHEMA_REFRESH_HEADER),
+                  // 押したときの送信の間だけ回す。job の間・スキーマ参照のボタンで始めた更新では無効にするだけ。
+                  // 送信中の押したボタンはネイティブの disabled にせず、フォーカスを保つ（#355 / #821）。
+                  loading: headerSchemaRefreshStarting,
+                  disabled: active || (schemaRefresh.isRefreshing && !headerSchemaRefreshStarting),
                 },
               ]
             : []),
@@ -1390,9 +1396,12 @@ function ExecutableNl2SqlWorkbench() {
                         allowedTableNames={profileAllowedTableNames}
                         listMaxHeightClass="max-h-[30rem]"
                         onRefreshSchema={
-                          canRefreshSchema ? () => void loadCatalog(true) : undefined
+                          canRefreshSchema
+                            ? () => void loadCatalog(true, false, WORKBENCH_SCHEMA_REFRESH_PANEL)
+                            : undefined
                         }
                         refreshing={schemaRefresh.isRefreshing}
+                        refreshStarting={panelSchemaRefreshStarting}
                         searchQuery={schemaSearch}
                         onSearchQueryChange={(value) => {
                           setSchemaSearch(value);

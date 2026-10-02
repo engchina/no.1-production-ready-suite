@@ -556,7 +556,7 @@ export interface OntologyBuildSectionProps {
   onMarkdownStateChange?: (state: OntologyMarkdownState | null) => void;
   markdownRefreshVersion?: number;
   onRefreshSchema?: () => void | Promise<void>;
-  /** この部品の「スキーマを更新」が始めた更新の間だけ true（スピナーは押したボタンだけが出す。#819）。 */
+  /** この部品の「スキーマを更新」で始めた更新の送信（job の投入）の間だけ true。job の間は回さない（#819 / #821）。 */
   refreshingSchema?: boolean;
   /** 別の場所で始めた更新を含め、スキーマの更新中は true（ボタンを無効にするだけ。#819）。 */
   schemaRefreshDisabled?: boolean;

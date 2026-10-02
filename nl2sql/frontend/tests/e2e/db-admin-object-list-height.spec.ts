@@ -5,6 +5,7 @@ import { expectSingleSpinner } from "./_helpers/single-spinner";
 import { measuredVisibleRowsHeight } from "./_helpers/data-table";
 import { expectCompactSortHeaders } from "./_helpers/sort-header";
 import { chooseSelectFieldOption } from "./_helpers/select-field";
+import { remToPx, SUBPIXEL_TOLERANCE } from "./_helpers/spacing";
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseGateReady(page);
@@ -2867,11 +2868,13 @@ test("Excel/CSV 取込フォームは取込方法を表示せずファイル選�
   const expectedHeight = await expectedControlHeight(page);
   expect(filePickerBox!.height).toBeGreaterThanOrEqual(expectedHeight);
   expect(clearButtonBox!.height).toBeGreaterThanOrEqual(expectedHeight);
+  // ファイルの選択とクリアの間は gap-2（0.5rem。14px ルートで 7px）。px で書かず rem から求める（#800）。
+  const controlGap = (await remToPx(page, 0.5)) - SUBPIXEL_TOLERANCE;
   if ((page.viewportSize()?.width ?? 0) < 640) {
-    expect(clearButtonBox!.y).toBeGreaterThanOrEqual(filePickerBox!.y + filePickerBox!.height + 8);
+    expect(clearButtonBox!.y).toBeGreaterThanOrEqual(filePickerBox!.y + filePickerBox!.height + controlGap);
     expect(filePickerBox!.width).toBeGreaterThanOrEqual(fileFieldBox!.width - 1);
   } else {
-    expect(clearButtonBox!.x).toBeGreaterThanOrEqual(filePickerBox!.x + filePickerBox!.width + 8);
+    expect(clearButtonBox!.x).toBeGreaterThanOrEqual(filePickerBox!.x + filePickerBox!.width + controlGap);
   }
   await expectNoHorizontalScroll(page);
 });
