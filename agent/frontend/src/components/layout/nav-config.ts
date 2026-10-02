@@ -2,6 +2,7 @@ import {
   BadgeCheck,
   Blocks,
   Bot,
+  CalendarClock,
   ClipboardList,
   Container,
   DatabaseBackup,
@@ -76,6 +77,13 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       { href: APP_ROUTES.runtimes, labelKey: "nav.runtimes", icon: Container, permission: MENU_PERMISSIONS.runtimes },
       { href: APP_ROUTES.runs, labelKey: "nav.runs", icon: PlayCircle, permission: MENU_PERMISSIONS.runs },
+      // 業務 Agent の自動実行（スケジュール・Webhook。#784）。
+      {
+        href: APP_ROUTES.automations,
+        labelKey: "nav.automations",
+        icon: CalendarClock,
+        permission: MENU_PERMISSIONS.automations,
+      },
       { href: APP_ROUTES.approvals, labelKey: "nav.approvals", icon: BadgeCheck, permission: MENU_PERMISSIONS.approvals },
       { href: APP_ROUTES.audit, labelKey: "nav.audit", icon: ClipboardList, permission: MENU_PERMISSIONS.audit },
       {

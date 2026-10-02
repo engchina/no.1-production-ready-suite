@@ -248,6 +248,21 @@ function finishEvaluation(job: Json) {
   job.summary = evaluationSummary(job.results as Json[]);
 }
 
+/** 自動実行の入力を保存する形にする（次回は MOCK_NOW の翌日。Webhook・無効は無し）。 */
+function automationFields(body: Json): Json {
+  const schedule = body.trigger === "schedule" ? (body.schedule ?? null) : null;
+  return {
+    agent_id: body.agent_id,
+    name: body.name,
+    goal: body.goal,
+    enabled: body.enabled ?? true,
+    trigger: body.trigger ?? "schedule",
+    schedule,
+    next_run_at:
+      schedule && (body.enabled ?? true) ? new Date(Date.parse(MOCK_NOW) + 86_400_000).toISOString() : null,
+  };
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -264,6 +279,10 @@ function createState() {
     tools: d.tools as unknown as Json[],
     // 監査の記録（`GET /api/audit/tool-calls`）。offset / limit で切り出して返す（#265）。
     auditRecords: [] as Json[],
+    // 自動実行（#784）。`automationRuns` は自動実行ごとの実行履歴。
+    automations: [] as Json[],
+    automationsPersistent: true,
+    automationRuns: {} as Record<string, Json[]>,
     // 品質評価（#776）。新しい順。作成直後は実行中で、`pollsUntilDone` 回の取得の後に完了する。
     evaluations: [] as Json[],
     evaluationPollsUntilDone: 1,
@@ -724,6 +743,61 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (job.status === "running") throw new HttpError(409, "実行中の評価は削除できません。");
       state.evaluations = state.evaluations.filter((item) => item !== job);
       return null;
+    }
+  }
+  // --- 自動実行（#784） ---
+  if (method === "GET" && at("automations")) {
+    return { automations: state.automations, persistent: state.automationsPersistent };
+  }
+  if (method === "POST" && at("automations")) {
+    const item: Json = {
+      ...automationFields(body),
+      id: `auto-${state.automations.length + 1}`,
+      run_as_user_uuid: "local",
+      created_by_user_uuid: "local",
+      webhook_token_prefix: null,
+      last_run_at: null,
+      last_run_id: null,
+      last_trigger: null,
+      last_result: null,
+      last_message: null,
+      created_at: MOCK_NOW,
+      updated_at: MOCK_NOW,
+    };
+    state.automations.unshift(item);
+    return item;
+  }
+  if (head === "automations" && second) {
+    const item = findOr404(state.automations, "id", second, "automation");
+    if (method === "GET" && at("automations", "*")) {
+      return { automation: item, runs: state.automationRuns[String(item.id)] ?? [] };
+    }
+    if (method === "PUT" && at("automations", "*")) {
+      Object.assign(item, automationFields(body), { updated_at: MOCK_NOW });
+      return item;
+    }
+    if (method === "DELETE" && at("automations", "*")) {
+      state.automations = state.automations.filter((candidate) => candidate !== item);
+      return null;
+    }
+    if (method === "POST" && at("automations", "*", "run")) {
+      const runs = (state.automationRuns[String(item.id)] ??= []);
+      const runId = `run-auto-${runs.length + 1}`;
+      runs.unshift({ run_id: runId, status: "queued", trigger: "manual", created_at: MOCK_NOW, updated_at: MOCK_NOW });
+      Object.assign(item, {
+        last_run_at: MOCK_NOW,
+        last_run_id: runId,
+        last_trigger: "manual",
+        last_result: "created",
+        last_message: "Run を作りました。",
+      });
+      return { run_id: runId, result: "created", message: "Run を作りました。" };
+    }
+    if (method === "POST" && at("automations", "*", "webhook-token")) {
+      if (item.trigger !== "webhook") throw new HttpError(409, "Webhook のトリガーではありません。");
+      const token = `prwh_${"t".repeat(43)}`;
+      item.webhook_token_prefix = token.slice(0, 9);
+      return { automation: item, token };
     }
   }
   if (method === "GET" && at("audit", "tool-calls")) {

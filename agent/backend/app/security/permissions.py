@@ -57,6 +57,7 @@ MENU_AGENTS = "menu.agents"
 MENU_SKILLS = "menu.skills"
 MENU_RUNTIMES = "menu.runtimes"
 MENU_RUNS = "menu.runs"
+MENU_AUTOMATIONS = "menu.automations"
 MENU_APPROVALS = "menu.approvals"
 MENU_AUDIT = "menu.audit"
 MENU_PLUGIN_MARKETPLACES = "menu.plugin_marketplaces"
@@ -116,6 +117,7 @@ _ADMIN_MENUS = (
     MENU_SKILLS,
     MENU_RUNTIMES,
     MENU_RUNS,
+    MENU_AUTOMATIONS,
     MENU_APPROVALS,
     MENU_AUDIT,
     MENU_PLUGIN_MARKETPLACES,
@@ -133,6 +135,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SKILLS, _GROUP_CONTROL_PLANE, "スキル (Skills)"),
     _menu_permission(MENU_RUNTIMES, _GROUP_CONTROL_PLANE, "Runtime"),
     _menu_permission(MENU_RUNS, _GROUP_CONTROL_PLANE, "Run"),
+    # 業務 Agent の自動実行（スケジュール・Webhook。#784）。
+    _menu_permission(MENU_AUTOMATIONS, _GROUP_CONTROL_PLANE, "自動実行"),
     _menu_permission(MENU_APPROVALS, _GROUP_CONTROL_PLANE, "承認・監査"),
     _menu_permission(MENU_AUDIT, _GROUP_CONTROL_PLANE, "監査"),
     _menu_permission(MENU_PLUGIN_MARKETPLACES, _GROUP_CONTROL_PLANE, "マーケットプレイス"),
@@ -257,7 +261,10 @@ def roles_for_permissions(codes: Iterable[str]) -> set[str]:
 
 # 公開 path。`/ready/database` は画面の DB ゲートがログイン前に使う（接続先・資格情報は返さない。
 # #325）。外部 Runtime の Binding の MCP（`/mcp/{binding_id}`）は #754 で削除した。
-PUBLIC_API_PATHS = frozenset({"/health", "/ready", "/ready/database", "/auth/login"})
+# `/hooks/{automation_id}` は自動実行の Webhook（#784。route が自動実行の秘密で認証する）。
+PUBLIC_API_PATHS = frozenset(
+    {"/health", "/ready", "/ready/database", "/auth/login", "/hooks/{automation_id}"}
+)
 AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth/password/change"})
 # 権限なしで通す操作（method × path）。公開・ログインだけ・MCP の path でも、ここにない method は
 # 通常の認証と権限の判定にする（共通認証の `open_operations` にも渡す。#490）。
@@ -270,6 +277,7 @@ OPEN_API_OPERATIONS = frozenset(
         ("GET", "/auth/me"),
         ("POST", "/auth/logout"),
         ("POST", "/auth/password/change"),
+        ("POST", "/hooks/{automation_id}"),
         # MCP（#778）。サービストークンか API キーで認証し、ツールごとに利用者の権限で判定する。
         ("POST", "/mcp"),
     }
@@ -338,6 +346,14 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/approvals/{approval_id}/decision"): _DECIDE,
     ("GET", "/audit/tool-calls"): _any(MENU_AUDIT),
     ("GET", "/audit/tool-calls.csv"): _any(MENU_AUDIT),
+    # 自動実行（#784）。作成・変更・削除・今すぐ実行・Webhook の秘密の発行は Agent 管理。
+    ("GET", "/automations"): _any(MENU_AUTOMATIONS),
+    ("POST", "/automations"): _ADMIN_ONLY,
+    ("GET", "/automations/{automation_id}"): _any(MENU_AUTOMATIONS),
+    ("PUT", "/automations/{automation_id}"): _ADMIN_ONLY,
+    ("DELETE", "/automations/{automation_id}"): _ADMIN_ONLY,
+    ("POST", "/automations/{automation_id}/run"): _ADMIN_ONLY,
+    ("POST", "/automations/{automation_id}/webhook-token"): _ADMIN_ONLY,
     # ---- 改善・運用 ----
     # 品質評価（#776。評価の Run は始めた利用者の Run。router が業務 Agent の対象範囲を確かめる）。
     ("GET", "/evaluation-sets"): _any(MENU_EVALUATION),

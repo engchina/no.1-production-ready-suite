@@ -174,6 +174,8 @@ def test_api_changes_are_saved_and_restored(file_store: Path) -> None:
         "skill": 1,
         "marketplace": 1,
         "plugin": 1,
+        # 自動実行（#784）は tests/test_automations.py で確かめる。
+        "automation": 0,
         # 品質評価（#776）は tests/test_evaluation.py で確かめる。
         "evaluation_set": 0,
         "evaluation_job": 0,

@@ -38,6 +38,7 @@ ItemKind = Literal[
     "evaluation_set",
     "evaluation_job",
     "api_key",
+    "automation",
 ]
 ITEM_KINDS: tuple[ItemKind, ...] = (
     "mcp_connection",
@@ -45,6 +46,8 @@ ITEM_KINDS: tuple[ItemKind, ...] = (
     "skill",
     "marketplace",
     "plugin",
+    # 業務 Agent の自動実行（#784。Webhook の秘密は hash だけ）。
+    "automation",
     # 品質評価の評価セットと評価の job（#776）。
     "evaluation_set",
     "evaluation_job",
@@ -335,6 +338,14 @@ def save_tool_policy(policy: Any) -> None:
     )
 
 
+def save_automation(automation_id: str, document: JsonObject) -> None:
+    _put("automation", automation_id, document)
+
+
+def delete_automation(automation_id: str) -> None:
+    _delete("automation", automation_id)
+
+
 def save_evaluation_item(kind: str, item_id: str, document: JsonObject) -> None:
     """品質評価の評価セット・job を保存する（#776）。"""
     if kind not in _EVALUATION_KINDS:
@@ -408,6 +419,10 @@ def _restore_item(kind: ItemKind, document: JsonObject) -> None:
             MarketplaceSource.model_validate(document.get("source") or {}),
             MarketplaceListing.model_validate(listing_raw) if listing_raw else None,
         )
+    elif kind == "automation":
+        from app.features.agent.automations import Automation, automation_store
+
+        automation_store.restore(Automation.model_validate(document))
     elif kind == "evaluation_set":
         from app.features.agent.evaluation import EvaluationSet, evaluation_set_store
 
