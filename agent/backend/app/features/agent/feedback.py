@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from app.features.agent.runtime import (
     FeedbackRating,
     FeedbackReason,
+    RunFeedback,
     RunState,
     run_answer_text,
 )
@@ -107,7 +108,7 @@ def build_feedback_report(
         until=now,
         summary=_summarize(current),
         previous=_summarize(previous),
-        items=[_item(run, agent_names, names) for run in listed],
+        items=[_item(run, run.feedback, agent_names, names) for run in listed if run.feedback],
         matched=len(matched),
     )
 
@@ -135,9 +136,12 @@ def _summarize(runs: list[RunState]) -> FeedbackSummary:
     return summary
 
 
-def _item(run: RunState, agent_names: Mapping[str, str], names: Mapping[str, str]) -> FeedbackItem:
-    feedback = run.feedback
-    assert feedback is not None
+def _item(
+    run: RunState,
+    feedback: RunFeedback,
+    agent_names: Mapping[str, str],
+    names: Mapping[str, str],
+) -> FeedbackItem:
     user_uuid = feedback.user_uuid
     return FeedbackItem(
         run_id=run.id,
