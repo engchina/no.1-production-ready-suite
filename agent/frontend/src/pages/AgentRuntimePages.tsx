@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
   Brain,
   Check,
@@ -7,26 +8,25 @@ import {
   FileText,
   GitBranch,
   ListChecks,
-  Minus,
   PlayCircle,
   Plus,
   Power,
   PowerOff,
   RefreshCw,
-  RotateCw,
   Save,
   Server,
   ShieldAlert,
+  SlidersHorizontal,
   Star,
   Trash2,
   Upload,
   X,
-  type LucideIcon,
 } from "lucide-react";
 
 import {
   Banner,
   Button,
+  buttonVariants,
   Card,
   CardContent,
   CardDescription,
@@ -100,8 +100,7 @@ import {
   type RunAuditData,
   type RunEvent,
   type RunState,
-  type RuntimeBinding,
-  type RuntimeDefinition,
+  type BuiltinRuntimeModel,
   type ToolCallAuditFilters,
   type ToolCallAuditRecord,
   type ToolAuditRecord,
@@ -117,11 +116,12 @@ import {
   focusFirstInvalidField,
   numberFieldError,
   parseJsonField,
-  requiredSelectError,
   requiredTextError,
 } from "@/lib/field-validation";
-import { t, type I18nKey } from "@/lib/i18n";
-import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
+import { t } from "@/lib/i18n";
+import { MENU_PERMISSIONS, useCapabilities, type AgentCapabilities } from "@/lib/permissions";
+import { APP_ROUTES } from "@/lib/routes";
+import { useAuth } from "@/components/security/AuthProvider";
 import { securityApi } from "@/lib/security-api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { sameDraft, useDirtySources, useEditorLeaveGuard, useSettingsLeaveGuard } from "@/lib/leave-guard";
@@ -583,15 +583,12 @@ function isRunTerminal(status: RunState["status"]): boolean {
 export function AgentsPage() {
   const queryClient = useQueryClient();
   const editor = useEditorRoute();
-  // 業務 Agent と Binding の変更は Agent 管理の権限（admin）だけ。それ以外は閲覧だけにする（#215）。
+  // 業務 Agent の変更は Agent 管理の権限（admin）だけ。それ以外は閲覧だけにする（#215）。
   const { admin: canManage } = useCapabilities();
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const skills = useQuery({ queryKey: ["skills"], queryFn: agentApi.listSkills });
-  const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: agentApi.listRuntimes });
-  const bindings = useQuery({
-    queryKey: ["runtime-bindings"],
-    queryFn: () => agentApi.listRuntimeBindings(),
-  });
+  // 組み込み Runtime で選べるモデル（システム設定 > モデル の登録モデル。#754）。
+  const runtimeStatus = useQuery({ queryKey: ["runtime-status"], queryFn: agentApi.getRuntimeStatus });
   const toggleAgent = useMutation({
     mutationFn: (agent: AgentProfile) => agentApi.patchAgent(agent.id, { enabled: !agent.enabled }),
     onSuccess: () => {
@@ -616,7 +613,6 @@ export function AgentsPage() {
       : [];
 
   const agentList = agents.data?.agents ?? [];
-  const bindingList = bindings.data?.bindings ?? [];
   // 作成できない利用者が `?id=new` を開いたら一覧を出す。
   const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
 
@@ -639,8 +635,6 @@ export function AgentsPage() {
             <QueryState query={agents} loadingLabel={t("loading.agents")} skeleton={<TableSkeleton columns={6} />}>
               <AgentTable
                 agents={agentList}
-                bindings={bindingList}
-                bindingsLoading={bindings.isLoading}
                 onOpen={(agent) => editor.openItem(agent.id)}
                 hrefFor={(agent) => editor.itemHref(agent.id)}
                 actionsFor={agentActions}
@@ -676,9 +670,9 @@ export function AgentsPage() {
       availableSkills={skills.data?.skills ?? []}
       skillsLoading={skills.isLoading}
       skillsError={skills.error}
-      bindings={agent ? bindingList.filter((binding) => binding.agent_id === agent.id) : []}
-      bindingsLoading={bindings.isLoading || runtimes.isLoading}
-      runtimes={runtimes.data?.runtimes ?? []}
+      models={runtimeStatus.data?.models ?? []}
+      defaultModelId={runtimeStatus.data?.model_id ?? ""}
+      modelsLoading={runtimeStatus.isLoading}
       actions={agent ? agentActions(agent) : []}
       readOnly={!canManage}
       onBack={() => editor.backToList()}
@@ -689,16 +683,11 @@ export function AgentsPage() {
 
 function AgentTable({
   agents,
-  bindings,
-  bindingsLoading,
   onOpen,
   hrefFor,
   actionsFor,
 }: {
   agents: AgentProfile[];
-  bindings: RuntimeBinding[];
-  /** 実行先を取得中は「未設定」と誤って出さず、セルの形の Skeleton にする。 */
-  bindingsLoading: boolean;
   onOpen: (agent: AgentProfile) => void;
   /** 名前のリンクの URL（新しいタブで開ける。#583）。 */
   hrefFor: (agent: AgentProfile) => string;
@@ -727,17 +716,12 @@ function AgentTable({
       render: (agent) => agent.skill_ids.length,
     },
     {
-      key: "binding",
-      header: t("agent.defaultBinding"),
-      render: (agent) => {
-        if (bindingsLoading) return <Skeleton className="h-4 w-24" testId={`agent-binding-loading-${agent.id}`} />;
-        const binding = bindings.find((candidate) => candidate.agent_id === agent.id && candidate.is_default);
-        return binding ? (
-          <span className="break-all text-xs text-fg">{binding.native_agent_ref}</span>
-        ) : (
-          <StatusBadge variant="warning" label={t("agent.unbound")} />
-        );
-      },
+      key: "model",
+      header: t("agent.model"),
+      // 空は「既定のテキストモデル」（システム設定 > モデル）。
+      render: (agent) => (
+        <span className="break-all text-xs text-fg">{agent.model_id || t("agent.modelDefault")}</span>
+      ),
     },
     {
       key: "enabled",
@@ -778,251 +762,99 @@ function AgentTable({
     />
   );
 }
+/**
+ * Runtime（組み込み Runtime の状態。#754）。業務 Agent は Control Plane の中の OpenAI Agents SDK で実行し、
+ * モデルは「システム設定 > モデル」の OCI Enterprise AI を使う。外部 Runtime の登録・Docker の操作は無い。
+ */
 export function RuntimesPage() {
-  const queryClient = useQueryClient();
-  // 有効 / 無効の切替とサービス操作・ログは Agent 管理の権限（admin）だけ。状態の確認は閲覧でもできる（#215）。
-  const { admin: canManage } = useCapabilities();
-  const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: agentApi.listRuntimes });
-  const [logs, setLogs] = useState<Record<string, string>>({});
-  // Runtime ごとの直近の操作の結果。カードの操作の直下に出し、次の操作まで残す（messaging.md §10。#725）。
-  const [results, setResults] = useState<Record<string, RuntimeOperationResult>>({});
-  const setResult = (runtimeId: string, result: RuntimeOperationResult | null) =>
-    setResults((current) => {
-      const next = { ...current };
-      if (result) next[runtimeId] = result;
-      else delete next[runtimeId];
-      return next;
-    });
-  const failure = (runtime: RuntimeDefinition, key: I18nKey, error: Error): RuntimeOperationResult => ({
-    tone: "danger",
-    message: t(key, { runtime: runtime.name, reason: error.message }),
-  });
-  const patchRuntime = useMutation({
-    mutationFn: ({ runtime, enabled }: { runtime: RuntimeDefinition; enabled: boolean }) =>
-      agentApi.patchRuntime(runtime.id, { enabled }),
-    onMutate: ({ runtime }) => setResult(runtime.id, null),
-    // 切り替えた結果はスイッチ自体が示すので、成功は出さない。
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["runtimes"] }),
-    onError: (error, { runtime }) => setResult(runtime.id, failure(runtime, "runtime.failed.enabled", error)),
-  });
-  const probe = useMutation({
-    mutationFn: (runtime: RuntimeDefinition) => agentApi.probeRuntime(runtime.id),
-    onMutate: (runtime) => setResult(runtime.id, null),
-    onSuccess: (probed, runtime) => {
-      setResult(runtime.id, {
-        tone: RUNTIME_STATUS_VARIANT[probed.status] === "success" ? "success" : "warning",
-        message: t("runtime.result.probe", { runtime: runtime.name, status: runtimeStatusLabel(probed.status) }),
-      });
-      void queryClient.invalidateQueries({ queryKey: ["runtimes"] });
-    },
-    onError: (error, runtime) => setResult(runtime.id, failure(runtime, "runtime.failed.probe", error)),
-  });
-  const serviceAction = useMutation({
-    mutationFn: ({
-      runtime,
-      action,
-    }: {
-      runtime: RuntimeDefinition;
-      action: RuntimeServiceAction;
-    }) => agentApi.runtimeServiceAction(runtime.managed_service_id as string, action),
-    onMutate: ({ runtime }) => setResult(runtime.id, null),
-    onSuccess: (_data, { runtime, action }) => {
-      setResult(runtime.id, { tone: "success", message: t(`runtime.result.${action}`, { runtime: runtime.name }) });
-      void queryClient.invalidateQueries({ queryKey: ["runtimes"] });
-    },
-    onError: (error, { runtime, action }) => setResult(runtime.id, failure(runtime, `runtime.failed.${action}`, error)),
-  });
-
-  async function loadLogs(runtime: RuntimeDefinition) {
-    if (!runtime.managed_service_id) return;
-    try {
-      const result = await agentApi.runtimeServiceLogs(runtime.managed_service_id);
-      setLogs((current) => ({ ...current, [runtime.id]: result.content }));
-    } catch (error) {
-      setLogs((current) => ({
-        ...current,
-        [runtime.id]: error instanceof Error ? error.message : t("common.error"),
-      }));
-    }
-  }
-
-  // Runtime ごとに、いま実行中の操作（状態確認・サービス操作）を 1 つだけ求める。
-  // サービスの pull / 起動はイメージの取得やコンテナの起動待ちで数十秒以上かかる。
-  function runtimeOperation(runtime: RuntimeDefinition): RuntimeOperation | null {
-    if (probe.isPending && probe.variables?.id === runtime.id) return "probe";
-    if (serviceAction.isPending && serviceAction.variables?.runtime.id === runtime.id) {
-      return serviceAction.variables.action;
-    }
-    return null;
-  }
+  const { hasPermission } = useAuth();
+  const status = useQuery({ queryKey: ["runtime-status"], queryFn: agentApi.getRuntimeStatus });
+  const data = status.data;
   return (
     <>
       <PageHeader
         wide
         title={t("nav.runtimes")}
         subtitle={t("page.runtimes.subtitle")}
-        actions={
-          <Button variant="secondary" onClick={() => void runtimes.refetch()} icon={RefreshCw}>
-            {t("common.retry")}
-          </Button>
-        }
+        actions={[
+          {
+            id: "refresh",
+            kind: "secondary",
+            label: t("runtime.refresh"),
+            icon: RefreshCw,
+            loading: status.isFetching && !status.isLoading,
+            onClick: () => void status.refetch(),
+          },
+        ]}
       />
       <PageBody wide>
-        <QueryState query={runtimes} loadingLabel={t("loading.runtimes")} skeleton={<RuntimeCardsSkeleton />}>
-          <div className="grid gap-4 xl:grid-cols-2">
-            {(runtimes.data?.runtimes ?? []).map((runtime) => {
-              const operation = runtimeOperation(runtime);
-              return (
-              <Card key={runtime.id} className="min-w-0">
-                <CardHeader className="flex-row items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <CardTitle className="flex items-center gap-2">
-                      <Server size={20} aria-hidden />
-                      {runtime.name}
-                    </CardTitle>
-                    <CardDescription className="break-all">
-                      {runtime.kind === "legacy_native" ? t("runtime.legacyReadOnly") : runtime.base_url}
-                    </CardDescription>
-                  </div>
-                  <StatusBadge
-                    variant={RUNTIME_STATUS_VARIANT[runtime.status]}
-                    label={runtimeStatusLabel(runtime.status)}
-                  />
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex flex-wrap gap-2" aria-label={t("runtime.capabilities")}>
-                    {Object.entries(runtime.capabilities).map(([name, supported]) => (
-                      <StatusBadge
-                        key={name}
-                        variant={supported ? "info" : "neutral"}
-                        label={`${name}: ${supported ? "on" : "off"}`}
-                        // 対応の有無は Runtime の probe で変わる「状態」なのでアイコンで冗長に符号化する。
-                        // 既定の Info（注意喚起）は「対応」の意味にならないため、形で on / off を区別する。
-                        icon={supported ? Check : Minus}
-                      />
-                    ))}
-                  </div>
-                  {runtime.kind !== "legacy_native" ? (
-                    <>
-                      <div className="flex flex-wrap items-center gap-3">
-                        <Switch
-                          checked={runtime.enabled}
-                          disabled={!canManage}
-                          onCheckedChange={(enabled) => patchRuntime.mutate({ runtime, enabled })}
-                          aria-label={`${runtime.name} ${t("agent.enabled")}`}
-                        />
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          loading={operation === "probe"}
-                          disabled={operation !== null && operation !== "probe"}
-                          onClick={() => probe.mutate(runtime)} icon={RefreshCw}>
-                          {t("runtime.probe")}
-                        </Button>
-                      </div>
-                      {canManage && runtime.managed_service_id ? (
-                        <div className="flex flex-wrap gap-2">
-                          {(["pull", "start", "stop", "restart", "remove"] as const).map(
-                            (action) => (
-                              <Button
-                                key={action}
-                                size="sm"
-                                variant={action === "remove" ? "danger" : "secondary"}
-                                icon={RUNTIME_SERVICE_ACTION_ICONS[action]}
-                                loading={operation === action}
-                                disabled={operation !== null && operation !== action}
-                                onClick={() => serviceAction.mutate({ runtime, action })}
-                              >
-                                {t(`runtime.action.${action}` as Parameters<typeof t>[0])}
-                              </Button>
-                            )
-                          )}
-                          <Button size="sm" variant="ghost" onClick={() => void loadLogs(runtime)}>
-                            {t("runtime.logs")}
-                          </Button>
-                        </div>
-                      ) : null}
-                      {operation ? (
-                        // スピナーは操作したボタンの loading が担う（messaging.md §3.7）。
-                        <ProcessingIndicator
-                          active
-                          label={t(RUNTIME_OPERATION_LABEL_KEYS[operation], { runtime: runtime.name })}
-                          operationKey={`${runtime.id}:${operation}`}
-                          placement="action"
-                          activityIcon="none"
-                          className="rounded-md border border-border bg-surface-sunken px-3 py-2"
-                          testId={`runtime-processing-${runtime.id}`}
-                        />
-                      ) : results[runtime.id] ? (
-                        // 操作の結果は起点の操作の直下に、カードの全幅で 1 つだけ出す（messaging.md §10.1）。
-                        <div data-testid={`runtime-result-${runtime.id}`}>
-                          <FormStatus tone={results[runtime.id].tone} message={results[runtime.id].message} />
-                        </div>
-                      ) : null}
-                    </>
-                  ) : null}
-                  {logs[runtime.id] ? (
-                    <pre className="max-h-56 overflow-auto rounded-md bg-surface-hover p-3 text-xs leading-5">
-                      {logs[runtime.id]}
-                    </pre>
-                  ) : null}
-                </CardContent>
-              </Card>
-              );
-            })}
-          </div>
+        <QueryState query={status} loadingLabel={t("loading.runtimes")} skeleton={<RuntimeCardsSkeleton />}>
+          {data ? (
+            <Card className="min-w-0" data-testid="builtin-runtime-card">
+              <CardHeader className="flex-row items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <CardTitle className="flex items-center gap-2">
+                    <Server size={20} aria-hidden />
+                    {t("runtime.builtin.title")}
+                  </CardTitle>
+                  <CardDescription>{t("runtime.builtin.description")}</CardDescription>
+                </div>
+                <StatusBadge
+                  variant={data.ready ? "success" : "warning"}
+                  label={data.ready ? t("runtime.builtin.ready") : t("runtime.builtin.notReady")}
+                />
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[max-content_1fr]">
+                  <dt className="text-fg-muted">{t("runtime.builtin.sdk")}</dt>
+                  <dd className="break-words">
+                    <code>{data.sdk}</code> {data.sdk_version}
+                  </dd>
+                  <dt className="text-fg-muted">{t("runtime.builtin.provider")}</dt>
+                  <dd>{data.model_provider}</dd>
+                  <dt className="text-fg-muted">{t("runtime.builtin.defaultModel")}</dt>
+                  <dd className="break-words">{data.model_id || t("runtime.builtin.modelUnset")}</dd>
+                  <dt className="text-fg-muted">{t("runtime.builtin.models")}</dt>
+                  <dd className="break-words">
+                    {data.models.length
+                      ? data.models.map((model) => model.display_name).join("、")
+                      : t("runtime.builtin.modelsEmpty")}
+                  </dd>
+                </dl>
+                {!data.ready ? (
+                  // 実行できない理由と、直す場所を出す（モデルの設定はシステム設定の権限がある利用者だけが開ける）。
+                  <Banner severity="warning" title={t("runtime.builtin.notReadyTitle")}>
+                    <div className="space-y-3">
+                      <p>{data.message ?? t("runtime.builtin.notReadyDefault")}</p>
+                      {hasPermission(MENU_PERMISSIONS.settingsModel) ? (
+                        <Link
+                          to={APP_ROUTES.settingsModel}
+                          className={buttonVariants({ variant: "secondary", size: "sm" })}
+                          data-testid="builtin-runtime-open-model-settings"
+                        >
+                          <SlidersHorizontal size={16} aria-hidden="true" />
+                          <span>{t("runtime.builtin.openModelSettings")}</span>
+                        </Link>
+                      ) : (
+                        <p className="text-fg-muted">{t("runtime.builtin.askAdmin")}</p>
+                      )}
+                    </div>
+                  </Banner>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
         </QueryState>
       </PageBody>
     </>
   );
 }
 
-type RuntimeServiceAction = "pull" | "start" | "stop" | "restart" | "remove";
-type RuntimeOperation = "probe" | RuntimeServiceAction;
-
-interface RuntimeOperationResult {
-  tone: "success" | "warning" | "danger";
-  message: string;
-}
-
-// Runtime の状態（backend の RuntimeStatus）→ StatusBadge の variant と日本語の label。
-const RUNTIME_STATUS_VARIANT: Record<RuntimeDefinition["status"], StatusVariant> = {
-  unknown: "neutral",
-  running: "success",
-  degraded: "warning",
-  stopped: "danger",
-  disabled: "neutral",
-  legacy: "neutral",
-};
-
-function runtimeStatusLabel(status: RuntimeDefinition["status"]): string {
-  return t(`runtime.status.${status}`);
-}
-
-// loading 中は先頭のアイコンがスピナーに置き換わるため、サービス操作のボタンにもアイコンを付ける（README §4 Button）。
-const RUNTIME_SERVICE_ACTION_ICONS = {
-  pull: Download,
-  start: Power,
-  stop: PowerOff,
-  restart: RotateCw,
-  remove: Trash2,
-} as const satisfies Record<RuntimeServiceAction, LucideIcon>;
-
-const RUNTIME_OPERATION_LABEL_KEYS = {
-  probe: "runtime.processing.probe",
-  pull: "runtime.processing.pull",
-  start: "runtime.processing.start",
-  stop: "runtime.processing.stop",
-  restart: "runtime.processing.restart",
-  remove: "runtime.processing.remove",
-} as const satisfies Record<RuntimeOperation, I18nKey>;
-
-/** Runtime のカード（2 列）の形。読み込み後のカードの高さを予約する。 */
+/** 組み込み Runtime のカードの形。読み込み後のカードの高さを予約する。 */
 function RuntimeCardsSkeleton() {
   return (
-    <div className="grid gap-4 xl:grid-cols-2" aria-hidden="true">
-      <Skeleton className="h-64" />
-      <Skeleton className="h-64" />
+    <div aria-hidden="true">
+      <Skeleton className="h-56" />
     </div>
   );
 }
@@ -1041,10 +873,8 @@ export function RunsPage() {
     refetchInterval: 5000,
   });
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
-  const bindings = useQuery({
-    queryKey: ["runtime-bindings"],
-    queryFn: () => agentApi.listRuntimeBindings(),
-  });
+  // 組み込み Runtime が実行できるか（モデル未設定なら Run は失敗するため、作成の前に知らせる。#754）。
+  const runtimeStatus = useQuery({ queryKey: ["runtime-status"], queryFn: agentApi.getRuntimeStatus });
   const createRun = useMutation({
     mutationFn: agentApi.createRun,
     onSuccess: (run) => {
@@ -1074,11 +904,9 @@ export function RunsPage() {
     },
   });
   // 作業状態（目標の下書き・選択中の Run・購読方式）はこのタブの sessionStorage に残す（#87）。
-  // Agent / Binding は実行条件なので残さず、戻るたびに選び直す（実行の意思は確認し直す）。
+  // Agent は実行条件なので残さず、戻るたびに選び直す（実行の意思は確認し直す）。
   const [goal, setGoal, goalSaved] = useWorkspaceState("runs", "goal", DEFAULT_RUN_GOAL, isString);
   const [agentId, setAgentId] = useState("default");
-  const [bindingId, setBindingId] = useState("");
-  const [bindingError, setBindingError] = useState<string | null>(null);
   const [goalError, setGoalError] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useWorkspaceState(
     "runs",
@@ -1103,11 +931,6 @@ export function RunsPage() {
   const runnableAgents = (agents.data?.agents ?? []).filter((agent) => agent.enabled);
   const selectedAgentId =
     runnableAgents.some((agent) => agent.id === agentId) || !runnableAgents.length ? agentId : runnableAgents[0].id;
-  const agentBindings = (bindings.data?.bindings ?? []).filter(
-    (binding) => binding.agent_id === selectedAgentId && binding.enabled
-  );
-  const defaultBinding = agentBindings.find((binding) => binding.is_default);
-  const resolvedBindingId = bindingId || defaultBinding?.id || "";
 
   useEffect(() => {
     if (!selectedRunId && runItems.length) {
@@ -1132,25 +955,17 @@ export function RunsPage() {
 
   function onAgentChange(value: string) {
     setAgentId(value);
-    setBindingId("");
-    setBindingError(null);
   }
 
   function submitRun() {
     // ゴールは backend（RunCreateRequest）でも必須（#540）。未入力は欄の下に出し、画面の並び順で最初の欄へ移す。
     const nextGoalError = goal.trim() ? null : t("run.goalRequired");
-    const nextBindingError = resolvedBindingId ? null : t("run.bindingRequired");
     setGoalError(nextGoalError);
-    setBindingError(nextBindingError);
-    if (nextGoalError || nextBindingError) {
-      focusField(nextGoalError ? "run-goal" : "run-binding");
+    if (nextGoalError) {
+      focusField("run-goal");
       return;
     }
-    createRun.mutate({
-      goal,
-      agent_id: selectedAgentId,
-      runtime_binding_id: resolvedBindingId,
-    });
+    createRun.mutate({ goal, agent_id: selectedAgentId });
   }
 
   async function cancelLatestRun(run: RunState, viaWebSocket = false) {
@@ -1173,7 +988,7 @@ export function RunsPage() {
   const actionPending = cancelRun.isPending || resumeRun.isPending || replayRun.isPending;
   // 一覧の行と詳細で同じ定義を使う（UX 契約 buttons.md §5.1）。取消は確認してから送る。
   const runActions = (run: RunState): EntityAction[] => {
-    const { isExternal, canCancel, canResume } = runCapabilities(run);
+    const { canCancel, canResume } = runCapabilities(run);
     return [
       {
         id: "resume",
@@ -1188,7 +1003,7 @@ export function RunsPage() {
         id: "replay",
         label: t("run.replay"),
         icon: RefreshCw,
-        visible: capabilities.operateRuns && !isExternal,
+        visible: capabilities.operateRuns,
         disabled: actionPending,
         onSelect: () => replayRun.mutate(run.id),
       },
@@ -1226,7 +1041,7 @@ export function RunsPage() {
                 <Card className="min-w-0">
                   <CardHeader>
                     <CardTitle>{t("run.form.submit")}</CardTitle>
-                    <CardDescription>{t("run.runtime")}</CardDescription>
+                    <CardDescription>{t("run.form.runtimeHint")}</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <SelectField
@@ -1248,33 +1063,11 @@ export function RunsPage() {
                       }}
                       textareaClassName="min-h-24"
                     />
-                    {/* 既定の Binding がない Agent だけ、実行先の選択が必須（submitRun の送信ガード）。 */}
-                    {/* 空の値は「既定の Binding を使う」（既定があれば選べる選択肢、なければ未選択の表示）。 */}
-                    {/* 既定が無いときは必須なので、未選択へ戻す選択肢（emptyOptionLabel）は出さない（誤りは別の Binding を選び直す。#647）。 */}
-                    <SelectField
-                      id="run-binding"
-                      label={t("run.form.binding")}
-                      required={!defaultBinding}
-                      error={bindingError ?? undefined}
-                      value={bindingId}
-                      placeholder={t("run.form.selectBinding")}
-                      options={[
-                        ...(defaultBinding
-                          ? [{ value: "", label: `${t("run.form.defaultBinding")}: ${defaultBinding.native_agent_ref}` }]
-                          : []),
-                        ...agentBindings.map((binding) => ({
-                          value: binding.id,
-                          label: `${binding.native_agent_ref} / ${binding.runtime_id}`,
-                        })),
-                      ]}
-                      onValueChange={(value) => {
-                        setBindingId(value);
-                        setBindingError(null);
-                      }}
-                    />
-                    {/* Agent・実行先を取得し終えるまでは「実行先がない」と判断できないため出さない。 */}
-                    {!agents.isLoading && !bindings.isLoading && !agentBindings.length ? (
-                      <Banner severity="warning">{t("run.unbound")}</Banner>
+                    {/* 組み込み Runtime が実行できないとき（モデル未設定など）は、理由と直す場所を知らせる。 */}
+                    {runtimeStatus.data && !runtimeStatus.data.ready ? (
+                      <Banner severity="warning" title={t("runtime.builtin.notReadyTitle")}>
+                        <p>{runtimeStatus.data.message ?? t("runtime.builtin.notReadyDefault")}</p>
+                      </Banner>
                     ) : null}
                     {!goalSaved ? <Banner severity="warning">{t("workspace.draftNotSaved")}</Banner> : null}
                     {createRun.error ? <Banner severity="danger">{createRun.error.message}</Banner> : null}
@@ -5536,6 +5329,7 @@ interface AgentDraft {
   description: string;
   instructions: string;
   skill_ids: string[];
+  model_id: string;
 }
 
 function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
@@ -5545,6 +5339,7 @@ function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
     instructions: agent?.instructions ?? "",
     // Skill の選択は集合なので並べ替えて比べる。
     skill_ids: [...(agent?.skill_ids ?? [])].sort(),
+    model_id: agent?.model_id ?? "",
   };
 }
 
@@ -5571,9 +5366,9 @@ function AgentEditorView({
   availableSkills,
   skillsLoading,
   skillsError,
-  bindings,
-  bindingsLoading,
-  runtimes,
+  models,
+  defaultModelId,
+  modelsLoading,
   actions,
   readOnly,
   onBack,
@@ -5584,12 +5379,13 @@ function AgentEditorView({
   /** Skill を取得中は「取得できません」と誤って出さず、読み込み中の表示にする。 */
   skillsLoading: boolean;
   skillsError: Error | null;
-  bindings: RuntimeBinding[];
-  /** 実行先（Binding / Runtime）を取得中は「未設定」と誤って出さず、読み込み中の表示にする。 */
-  bindingsLoading: boolean;
-  runtimes: RuntimeDefinition[];
+  /** 組み込み Runtime で選べるモデル（システム設定 > モデル の登録モデル。#754）。 */
+  models: BuiltinRuntimeModel[];
+  /** 空を選んだときに使う既定のテキストモデル（表示用）。 */
+  defaultModelId: string;
+  modelsLoading: boolean;
   actions: EntityAction[];
-  /** 変更の権限がない利用者は閲覧だけ（保存・Binding の操作を出さず、入力を無効にする）。 */
+  /** 変更の権限がない利用者は閲覧だけ（保存を出さず、入力を無効にする）。 */
   readOnly: boolean;
   onBack: () => void;
   onCreated: (agent: AgentProfile) => void;
@@ -5602,6 +5398,7 @@ function AgentEditorView({
   const [instructions, setInstructions] = useState(saved.instructions);
   const [newEnabled, setNewEnabled] = useState(true);
   const [skillIds, setSkillIds] = useState<string[]>(saved.skill_ids);
+  const [modelId, setModelId] = useState(saved.model_id);
   const [baseline, setBaseline] = useState<AgentDraft>(saved);
   const [nameError, setNameError] = useState<string | null>(null);
 
@@ -5625,6 +5422,7 @@ function AgentEditorView({
         description: payload.description ?? "",
         instructions: payload.instructions ?? "",
         skill_ids: [...(payload.skill_ids ?? [])].sort(),
+        model_id: payload.model_id ?? "",
       });
       void queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
@@ -5641,6 +5439,7 @@ function AgentEditorView({
     setAgentDescription(next.description);
     setInstructions(next.instructions);
     setSkillIds(next.skill_ids);
+    setModelId(next.model_id);
     setBaseline(next);
     setNameError(null);
   }
@@ -5650,8 +5449,9 @@ function AgentEditorView({
     description: agentDescription,
     instructions,
     skill_ids: [...skillIds].sort(),
+    model_id: modelId,
   };
-  // Agent のフォームと Binding 追加フォームの dirty を集約して 1 つの離脱ガードで守る（#87）。
+  // Agent のフォームの dirty を 1 つの離脱ガードで守る（#87）。
   const dirtySources = useDirtySources();
   const formDirty = !sameDraft(draft, baseline) || (!agent && !newEnabled);
   useReportDirty(formDirty, (dirty) => dirtySources.report("agent", dirty));
@@ -5681,6 +5481,7 @@ function AgentEditorView({
       description: agentDescription.trim(),
       instructions: instructions.trim(),
       skill_ids: skillIds,
+      model_id: modelId,
     };
     if (agent) {
       setName(payload.name);
@@ -5778,6 +5579,20 @@ function AgentEditorView({
                   onValueChange={setInstructions}
                   textareaClassName="min-h-24"
                 />
+                {/* 実行は組み込み Runtime（#754）。空は「既定のテキストモデル」（システム設定 > モデル）。 */}
+                <SelectField
+                  id={`${fieldId}-agent-model`}
+                  label={t("agent.model")}
+                  helper={t("agent.modelHint")}
+                  width="lg"
+                  disabled={modelsLoading}
+                  value={modelId}
+                  emptyOptionLabel={
+                    defaultModelId ? t("agent.modelDefaultWith", { model: defaultModelId }) : t("agent.modelDefault")
+                  }
+                  options={agentModelOptions(models, modelId)}
+                  onValueChange={setModelId}
+                />
                 {!agent ? (
                   <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-fg">
                     <input
@@ -5835,294 +5650,30 @@ function AgentEditorView({
             )}
           </Section>
         </fieldset>
-        {agent ? (
-          <RuntimeBindingsPanel
-            agent={agent}
-            bindings={bindings}
-            loading={bindingsLoading}
-            runtimes={runtimes}
-            readOnly={readOnly}
-            onDirtyChange={(dirty) => dirtySources.report("binding", dirty)}
-          />
-        ) : null}
       </PageBody>
     </>
   );
 }
 
-function bindingSyncVariant(status: string): StatusVariant {
-  if (status === "ready") return "success";
-  if (status === "error") return "danger";
-  return "warning";
+/** モデルの選択肢（空 =「既定のテキストモデル」は emptyOptionLabel）。登録から消えた保存済みの値も残す。 */
+function agentModelOptions(models: BuiltinRuntimeModel[], current: string): SelectFieldOption[] {
+  const options: SelectFieldOption[] = models.map((model) => ({
+    value: model.model_id,
+    label: model.display_name,
+  }));
+  if (current && !models.some((model) => model.model_id === current)) {
+    options.push({ value: current, label: t("agent.modelMissing", { model: current }) });
+  }
+  return options;
 }
 
-/** Agent の実行先（Runtime Binding）。登録済みの行の操作は RowActionMenu にまとめ、削除は確認する。 */
-/** backend の RuntimeBinding の識別子（`_SAFE_ID`）と同じ規則。 */
-const BINDING_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
-
-function RuntimeBindingsPanel({
-  agent,
-  bindings,
-  loading,
-  runtimes,
-  readOnly,
-  onDirtyChange,
-}: {
-  agent: AgentProfile;
-  bindings: RuntimeBinding[];
-  loading: boolean;
-  runtimes: RuntimeDefinition[];
-  /** Binding の追加・既定の変更・同期・削除を出さない（Agent 管理の権限がない利用者）。 */
-  readOnly: boolean;
-  onDirtyChange: (dirty: boolean) => void;
-}) {
-  const queryClient = useQueryClient();
-  const confirm = useConfirm();
-  const candidates = runtimes.filter((runtime) => runtime.kind !== "legacy_native");
-  const defaultRuntimeId = candidates[0]?.id ?? "";
-  const [runtimeId, setRuntimeId] = useState(defaultRuntimeId);
-  const [nativeAgentRef, setNativeAgentRef] = useState(agent.id);
-  const [runtimeError, setRuntimeError] = useState<string | null>(null);
-  const [nativeAgentRefError, setNativeAgentRefError] = useState<string | null>(null);
-  // 既定値（先頭の Runtime と Agent ID）から変えた入力を未保存の変更として扱う（#87）。
-  const dirty =
-    nativeAgentRef !== agent.id || (runtimeId !== "" && runtimeId !== defaultRuntimeId);
-  useReportDirty(dirty, onDirtyChange);
-
-  const refreshBindings = () => {
-    void queryClient.invalidateQueries({ queryKey: ["runtime-bindings"] });
-  };
-  const createBinding = useMutation({
-    mutationFn: agentApi.createRuntimeBinding,
-    onSuccess: () => {
-      toast.success(t("binding.saved"));
-      setRuntimeId(defaultRuntimeId);
-      setNativeAgentRef(agent.id);
-      refreshBindings();
-    },
-  });
-  const patchBinding = useMutation({
-    mutationFn: ({ binding, payload }: { binding: RuntimeBinding; payload: Partial<RuntimeBinding> }) =>
-      agentApi.patchRuntimeBinding(binding.id, payload),
-    onSuccess: refreshBindings,
-  });
-  const deleteBinding = useMutation({
-    mutationFn: agentApi.deleteRuntimeBinding,
-    onSuccess: () => {
-      toast.success(t("binding.deleted"));
-      refreshBindings();
-    },
-  });
-  const syncBinding = useMutation({
-    mutationFn: agentApi.syncRuntimeBinding,
-    onSuccess: refreshBindings,
-  });
-  const rowBusy = patchBinding.isPending || deleteBinding.isPending || syncBinding.isPending;
-  const error = createBinding.error ?? patchBinding.error ?? deleteBinding.error ?? syncBinding.error;
-
-  // Runtime が未選択のまま候補が揃ったら、先頭の候補を選ぶ（effect で setState しない。選べば条件が外れる）。
-  if (!runtimeId && candidates[0]) {
-    setRuntimeId(candidates[0].id);
-  }
-
-  // 追加ボタンを押せなくするだけにせず、押したときに欄の直下へ理由を出す（UX 契約 messaging.md §3.2.1。#541）。
-  function addBinding() {
-    const runtimeFieldId = `${agent.id}-binding-runtime`;
-    const refFieldId = `${agent.id}-binding-native-ref`;
-    const nextRuntimeError = requiredSelectError(runtimeId, t("binding.runtime"));
-    const trimmedRef = nativeAgentRef.trim();
-    const nextRefError =
-      requiredTextError(trimmedRef, t("binding.nativeAgentRef")) ??
-      (BINDING_REF_PATTERN.test(trimmedRef) ? null : t("binding.nativeAgentRefInvalid"));
-    setRuntimeError(nextRuntimeError);
-    setNativeAgentRefError(nextRefError);
-    if (
-      focusFirstInvalidField([
-        [runtimeFieldId, nextRuntimeError],
-        [refFieldId, nextRefError],
-      ])
-    ) {
-      return;
-    }
-    createBinding.mutate({
-      agent_id: agent.id,
-      runtime_id: runtimeId,
-      native_agent_ref: trimmedRef,
-      is_default: !bindings.length,
-      enabled: true,
-    });
-  }
-
-  async function removeBinding(binding: RuntimeBinding) {
-    const ok = await confirm({
-      title: t("binding.deleteTitle"),
-      description: t("binding.deleteMessage", { ref: binding.native_agent_ref, runtime: binding.runtime_id }),
-      confirmLabel: t("common.delete"),
-      cancelLabel: t("common.cancel"),
-      tone: "danger",
-    });
-    if (ok) deleteBinding.mutate(binding.id);
-  }
-
-  const bindingActions = (binding: RuntimeBinding): EntityAction[] => readOnly ? [] : [
-    {
-      id: "make-default",
-      label: t("binding.makeDefault"),
-      icon: Star,
-      visible: !binding.is_default,
-      disabled: rowBusy,
-      onSelect: () => patchBinding.mutate({ binding, payload: { is_default: true } }),
-    },
-    {
-      id: "sync",
-      label: t("binding.sync"),
-      icon: RefreshCw,
-      disabled: rowBusy,
-      loading: syncBinding.isPending && syncBinding.variables === binding.id,
-      onSelect: () => syncBinding.mutate(binding.id),
-    },
-    {
-      id: "delete",
-      label: t("common.delete"),
-      icon: Trash2,
-      tone: "danger",
-      disabled: rowBusy,
-      onSelect: () => removeBinding(binding),
-    },
-  ];
-
-  const columns: DataTableColumn<RuntimeBinding>[] = [
-    {
-      key: "native_agent_ref",
-      header: t("binding.nativeAgentRef"),
-      rowHeader: true,
-      render: (binding) => (
-        <div className="min-w-0">
-          <p className="break-words text-sm font-medium text-fg">{binding.native_agent_ref}</p>
-          <p className="mt-0.5 break-all text-xs text-fg-muted">{binding.runtime_id}</p>
-        </div>
-      ),
-    },
-    {
-      key: "sync_status",
-      header: t("binding.syncStatus"),
-      render: (binding) => (
-        <div className="space-y-1">
-          <StatusBadge variant={bindingSyncVariant(binding.sync_status)} label={binding.sync_status} />
-          {binding.sync_error ? <p className="text-xs text-danger-fg">{binding.sync_error}</p> : null}
-        </div>
-      ),
-    },
-    {
-      key: "is_default",
-      header: t("binding.default"),
-      render: (binding) =>
-        binding.is_default ? <StatusBadge variant="info" label={t("binding.default")} icon={false} /> : "-",
-    },
-    {
-      key: "actions",
-      header: t("settings.mcpServers.actions"),
-      align: "right",
-      render: (binding) => (
-        <RowActionMenu
-          actions={bindingActions(binding)}
-          ariaLabel={t("common.entityActions", { name: binding.native_agent_ref })}
-          loading={syncBinding.isPending && syncBinding.variables === binding.id}
-          testId={`binding-row-actions-${binding.id}`}
-        />
-      ),
-    },
-  ];
-
-  return (
-    <Section title={t("binding.title")} description={t("binding.description")}>
-      <Card className="min-w-0">
-        <CardContent className="space-y-4 pt-5">
-          {syncBinding.isPending ? (
-            // 実行先の Runtime へ Agent の定義を同期するため数秒以上かかる。スピナーは行メニューの loading が担う。
-            <ProcessingIndicator
-              active
-              label={t("binding.progress.syncing", {
-                ref: bindings.find((binding) => binding.id === syncBinding.variables)?.native_agent_ref ?? "",
-              })}
-              operationKey={`binding-sync-${syncBinding.variables ?? ""}`}
-              placement="action"
-              activityIcon="none"
-              className="rounded-md border border-border bg-surface-sunken px-3 py-2"
-              testId="binding-sync-processing"
-            />
-          ) : null}
-          {loading ? (
-            <TimedLoadingState label={t("loading.bindings")} testId="agent-bindings-loading">
-              <TableSkeleton rows={2} columns={columns.length} />
-            </TimedLoadingState>
-          ) : bindings.length ? (
-            <PagedDataTable
-              rows={bindings}
-              columns={columns}
-              getRowKey={(binding) => binding.id}
-              rowProps={() => ({ className: "align-top" })}
-              tableClassName="w-full min-w-[36rem]"
-              ariaLabel={t("binding.list")}
-            />
-          ) : (
-            <Banner severity="warning">{t("binding.empty")}</Banner>
-          )}
-          {readOnly ? null : (
-            <>
-              <div className="grid gap-3 md:grid-cols-2">
-                {/* Runtime と Runtime 内 Agent ID は RuntimeBinding の必須項目（未入力は追加を押したときに欄の下へ出す）。 */}
-                <SelectField
-                  id={`${agent.id}-binding-runtime`}
-                  label={t("binding.runtime")}
-                  className="min-w-0"
-                  required
-                  error={runtimeError ?? undefined}
-                  value={runtimeId}
-                  options={candidates.map((runtime) => ({ value: runtime.id, label: runtime.name }))}
-                  onValueChange={(value) => {
-                    setRuntimeId(value);
-                    setRuntimeError(null);
-                  }}
-                />
-                <TextField
-                  id={`${agent.id}-binding-native-ref`}
-                  label={t("binding.nativeAgentRef")}
-                  className="min-w-0"
-                  required
-                  error={nativeAgentRefError ?? undefined}
-                  value={nativeAgentRef}
-                  onValueChange={(value) => {
-                    setNativeAgentRef(value);
-                    setNativeAgentRefError(null);
-                  }}
-                />
-              </div>
-              {error ? <Banner severity="danger">{error.message}</Banner> : null}
-              <Button
-                variant="secondary"
-                loading={createBinding.isPending}
-                onClick={addBinding}
-                icon={Plus}
-              >
-                {t("binding.add")}
-              </Button>
-            </>
-          )}
-        </CardContent>
-      </Card>
-    </Section>
-  );
-}
 /** Run の取消・再開の可否。一覧の行メニューと詳細の ObjectActionBar・ストリーム操作で同じ判定を使う。 */
-function runCapabilities(run: RunState): { isExternal: boolean; canCancel: boolean; canResume: boolean } {
-  const isExternal = Boolean(run.binding_id);
+function runCapabilities(run: RunState): { canCancel: boolean; canResume: boolean } {
+  // 組み込み Runtime（#754）は承認がすべて決まると自動で再開する。手動の再開は使わない。
+  const isBuiltin = run.runtime_id === "builtin";
   return {
-    isExternal,
-    canCancel:
-      ["queued", "running", "waiting_approval"].includes(run.status) &&
-      (!isExternal || run.runtime_capabilities.cancel),
-    canResume: !isExternal && ["running", "waiting_approval"].includes(run.status),
+    canCancel: ["queued", "running", "waiting_approval"].includes(run.status),
+    canResume: !isBuiltin && ["running", "waiting_approval"].includes(run.status),
   };
 }
 
@@ -6236,7 +5787,7 @@ function RunDetail({
   capabilities: AgentCapabilities;
 }) {
   const structured = getStructuredResult(run);
-  const { isExternal, canCancel, canResume } = runCapabilities(run);
+  const { canCancel, canResume } = runCapabilities(run);
   const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
 
   return (
@@ -6262,14 +5813,10 @@ function RunDetail({
           <RunProgressIndicator run={run} />
           <div className="grid gap-2 text-xs text-fg-muted sm:grid-cols-2">
             <span>{`${t("run.form.agent")}: ${run.agent_id}`}</span>
-            <span>{`${t("run.runtime")}: ${run.runtime_id}`}</span>
-            <span>{`${t("run.form.binding")}: ${run.binding_id ?? t("runtime.legacyReadOnly")}`}</span>
+            <span>{`${t("run.runtime")}: ${run.runtime_id === "builtin" ? t("runtime.builtin.title") : run.runtime_id}`}</span>
             <span>{`${t("common.createdAt")}: ${formatDate(run.created_at)}`}</span>
             <span>{`${t("common.updatedAt")}: ${formatDate(run.updated_at)}`}</span>
           </div>
-          {isExternal && !run.runtime_capabilities.cancel && !isRunTerminal(run.status) ? (
-            <Banner severity="warning">{t("run.cancelUnsupported")}</Banner>
-          ) : null}
         </CardContent>
       </Card>
 

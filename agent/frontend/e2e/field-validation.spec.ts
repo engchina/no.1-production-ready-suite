@@ -127,27 +127,6 @@ for (const viewport of [
       expect(patchCount(mockApi, "/settings/external-nl2sql")).toBe(0);
     });
 
-    test("Binding の追加は押せる状態のまま、未入力の理由を欄の下に出す", async ({ page, mockApi }) => {
-      await page.goto("/agents?id=default");
-      const ref = page.locator("#default-binding-native-ref");
-      await ref.fill("");
-      const add = page.getByRole("button", { name: "実行先を追加" });
-      await expect(add).toBeEnabled();
-      await add.click();
-
-      await expectFieldError(page, "default-binding-native-ref", "Runtime 内 Agent ID を入力してください。");
-      await expect(ref).toBeFocused();
-      await ref.fill("bad ref");
-      await add.click();
-      await expectFieldError(
-        page,
-        "default-binding-native-ref",
-        "Runtime 内 Agent ID は英数字で始め、英数字と _ . - の 128 文字以内で入力してください。"
-      );
-      expect(patchCount(mockApi, "/runtime-bindings", "POST")).toBe(0);
-      await expectNoHorizontalOverflow(page);
-    });
-
     test("Skill の JSON の形式エラーは欄の下に出す", async ({ page, mockApi }) => {
       await page.goto("/skills?id=new");
       await page.locator("#skill-id").fill("e2e_json");

@@ -96,7 +96,7 @@ def _unclassified_operations(operations: list[tuple[str, str]]) -> list[str]:
 def test_every_api_route_is_classified_by_manifest() -> None:
     """全 API（method × path）が manifest に登録されている（登録外は既定で拒否）。"""
     operations = _api_operations()
-    # 外部 Runtime・Binding の API は #754 で削除した。件数の下限は、収集の取りこぼしを検出するため。
+    # 外部 Runtime・Binding の API は #754 で削除した。下限は収集の取りこぼしを検出するため。
     assert len(operations) > 100
     assert _unclassified_operations(operations) == []
     open_operations = {

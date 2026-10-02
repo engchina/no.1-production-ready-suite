@@ -21,7 +21,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any
+from typing import Any, cast
 
 from agents import (
     Agent,
@@ -116,10 +116,74 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
     )
 
 
+def _omit_empty_tools(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """ツールが無い呼び出しから `tools: []` と `tool_choice` を外す。
+
+    OCI Enterprise AI の xAI のモデルは、空の `tools` を「ツールなしで tool_choice を指定した」
+    として 400 で拒否する（gpt-oss は受け付ける。2026-10-02 に実環境で確認）。SDK はツールが
+    無くても空の `tools` を送るため、送る前に外す。
+    """
+    tools = kwargs.get("tools")
+    if isinstance(tools, list) and not tools:
+        return {
+            key: value
+            for key, value in kwargs.items()
+            if key not in {"tools", "tool_choice", "parallel_tool_calls"}
+        }
+    return kwargs
+
+
+class _OciStreamingResponses:
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def create(self, **kwargs: Any) -> Any:
+        return self._inner.create(**_omit_empty_tools(kwargs))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+class _OciResponses:
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    async def create(self, **kwargs: Any) -> Any:
+        return await self._inner.create(**_omit_empty_tools(kwargs))
+
+    @property
+    def with_streaming_response(self) -> _OciStreamingResponses:
+        return _OciStreamingResponses(self._inner.with_streaming_response)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+class _OciCompatClient:
+    """`responses.create` の引数だけを OCI Enterprise AI 向けに直し、他はそのまま渡す。"""
+
+    def __init__(self, inner: AsyncOpenAI) -> None:
+        self._inner = inner
+
+    @property
+    def responses(self) -> _OciResponses:
+        return _OciResponses(self._inner.responses)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+class OciResponsesModel(OpenAIResponsesModel):
+    """OCI Enterprise AI の Responses API 用（SDK の `_get_client` を包む。SDK は版を固定する）。"""
+
+    def _get_client(self) -> AsyncOpenAI:
+        return cast(AsyncOpenAI, _OciCompatClient(super()._get_client()))
+
+
 def _default_model_factory(target: ModelTarget) -> Model:
     headers = {"OpenAI-Project": target.project_ocid} if target.project_ocid else None
     client = AsyncOpenAI(base_url=target.endpoint, api_key=target.api_key, default_headers=headers)
-    return OpenAIResponsesModel(model=target.model_id, openai_client=client)
+    return OciResponsesModel(model=target.model_id, openai_client=client)
 
 
 # テストは SDK の ScriptedModel を返す関数に差し替える。

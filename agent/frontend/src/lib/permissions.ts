@@ -43,7 +43,7 @@ export const CAPABILITY_PERMISSIONS = {
   approvalsDecide: "agent.approvals.decide",
   /** 監査記録・ツール呼出し履歴の閲覧（auditor）。 */
   auditView: "agent.audit.view",
-  /** 業務 Agent・スキル・Runtime・Binding・プラグイン・運用設定・システム設定の変更とすべての操作（admin）。 */
+  /** 業務 Agent・スキル・プラグイン・運用設定・システム設定の変更とすべての操作（admin）。 */
   admin: "agent.admin",
 } as const;
 

@@ -158,6 +158,23 @@ function systemTablesStatus(ready: boolean): Record<string, unknown> {
 const SYSTEM_TABLES_LEGACY = systemTablesStatus(false);
 const SYSTEM_TABLES_READY = systemTablesStatus(true);
 
+/** `GET /api/runtime/status`（組み込み Runtime。#754）の既定の応答。 */
+export const BUILTIN_RUNTIME_STATUS = {
+  id: "builtin",
+  name: "組み込み Runtime",
+  sdk: "openai-agents",
+  sdk_version: "0.22.3",
+  model_provider: "OCI Enterprise AI（Responses API）",
+  model_id: "xai.grok-4",
+  ready: true,
+  error_code: null,
+  message: null,
+  models: [
+    { model_id: "xai.grok-4", display_name: "Grok 4" },
+    { model_id: "openai.gpt-oss-120b", display_name: "gpt-oss-120b" },
+  ],
+};
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -166,8 +183,8 @@ function createState() {
   const d = clone(defaults) as Record<string, Json & Json[]>;
   return {
     health: d.health as Json,
-    runtimes: d.runtimes as unknown as Json[],
-    bindings: [] as Json[],
+    // 組み込み Runtime の状態（#754）。既定は実行できる状態。
+    runtimeStatus: clone(BUILTIN_RUNTIME_STATUS) as Json,
     runs: [] as Json[],
     agents: d.agents as unknown as Json[],
     skills: d.skills as unknown as Json[],
@@ -444,62 +461,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     return { ...(state.systemTables as Json), operation: body.recreate ? "recreated" : "migrated", dropped_object_count: 1, created_object_count: 3 };
   }
 
-  // --- Runtime / Binding ---
-  if (head === "runtimes") {
-    if (method === "GET" && at("runtimes")) return { runtimes: state.runtimes };
-    if (method === "GET" && at("runtimes", "*", "status")) {
-      return findOr404(state.runtimes, "id", second, "runtime");
-    }
-  }
-  if (head === "runtime-bindings") {
-    if (method === "GET" && at("runtime-bindings")) {
-      const agentId = query.get("agent_id");
-      return {
-        bindings: agentId ? state.bindings.filter((binding) => binding.agent_id === agentId) : state.bindings,
-      };
-    }
-    if (method === "POST" && at("runtime-bindings")) {
-      const binding: Json = {
-        id: `binding-${String(body.agent_id)}-${state.bindings.length + 1}`,
-        is_default: false,
-        enabled: true,
-        policy: {},
-        sync_status: "pending",
-        sync_error: null,
-        created_at: MOCK_NOW,
-        updated_at: MOCK_NOW,
-        ...body,
-      };
-      if (binding.is_default) {
-        state.bindings.forEach((other) => {
-          if (other.agent_id === binding.agent_id) other.is_default = false;
-        });
-      }
-      state.bindings.push(binding);
-      return binding;
-    }
-    if (at("runtime-bindings", "*", "sync") && method === "POST") {
-      const binding = findOr404(state.bindings, "id", second, "binding");
-      binding.sync_status = "ready";
-      return binding;
-    }
-    if (at("runtime-bindings", "*")) {
-      const binding = findOr404(state.bindings, "id", second, "binding");
-      if (method === "PATCH") {
-        if (body.is_default) {
-          state.bindings.forEach((other) => {
-            if (other.agent_id === binding.agent_id) other.is_default = false;
-          });
-        }
-        Object.assign(binding, body);
-        return binding;
-      }
-      if (method === "DELETE") {
-        state.bindings = state.bindings.filter((candidate) => candidate.id !== second);
-        return { bindings: state.bindings };
-      }
-    }
-  }
+  // --- 組み込み Runtime（#754） ---
+  if (method === "GET" && at("runtime", "status")) return state.runtimeStatus;
 
   // --- Run / 承認 / 監査 ---
   if (method === "GET" && at("runs")) return { runs: state.runs };
@@ -696,7 +659,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       runs: state.runs,
       agents: state.agents,
       memory: state.memory,
-      control_plane_state: { runtimes: state.runtimes, bindings: state.bindings },
+      control_plane_state: {},
     };
   }
   if (method === "POST" && at("runtime", "snapshot", "import")) {

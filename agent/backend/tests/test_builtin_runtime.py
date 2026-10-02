@@ -349,3 +349,31 @@ def test_tracing_is_disabled() -> None:
 
     provider = get_trace_provider()
     assert getattr(provider, "_disabled", True) is True
+
+
+def test_oci_model_omits_empty_tools_for_xai() -> None:
+    """OCI の xAI のモデルは空の `tools` を 400 で拒否するため、送る前に外す（実環境で確認）。"""
+
+    class _Responses:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        async def create(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            return {}
+
+    class _Client:
+        def __init__(self) -> None:
+            self.responses = _Responses()
+            self.base_url = "https://oci.example/openai/v1"
+
+    client = _Client()
+    model = builtin_runtime.OciResponsesModel(model="xai.grok-4.3", openai_client=client)  # type: ignore[arg-type]
+    wrapped: Any = model._get_client()  # noqa: SLF001 - SDK の内部の差し替えを確かめる
+    assert wrapped.base_url == "https://oci.example/openai/v1"
+
+    anyio.run(lambda: wrapped.responses.create(model="m", input="x", tools=[], tool_choice="auto"))
+    anyio.run(lambda: wrapped.responses.create(model="m", input="x", tools=[{"type": "function"}]))
+
+    assert client.responses.calls[0] == {"model": "m", "input": "x"}
+    assert client.responses.calls[1]["tools"] == [{"type": "function"}]

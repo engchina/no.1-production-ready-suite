@@ -26,17 +26,6 @@ function seedRun(mockApi: MockApi, overrides: Record<string, unknown> = {}) {
     goal: "受注状況を確認する",
     agent_id: "default",
     runtime_id: "legacy-native",
-    binding_id: null,
-    external_run_id: null,
-    external_cursor: null,
-    runtime_capabilities: {
-      stream_events: true,
-      cancel: true,
-      artifacts: true,
-      approvals: true,
-      skill_sync: false,
-      mcp_sync: false,
-    },
     status: "completed",
     steps: [],
     events: [],
@@ -227,7 +216,7 @@ for (const viewport of VIEWPORTS) {
       await expectNoPageOverflow(page);
     });
 
-    test("Agent 管理の権限がなければ業務 Agent は閲覧だけ（作成・保存・Binding の操作を出さない）", async ({
+    test("Agent 管理の権限がなければ業務 Agent は閲覧だけ（作成・保存を出さない）", async ({
       page,
       mockApi,
     }) => {
@@ -246,7 +235,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByRole("heading", { name: "汎用業務 Agent", level: 1 })).toBeVisible();
       await expect(page.getByRole("button", { name: "保存" })).toHaveCount(0);
       await expect(page.locator("#default-agent-name")).toBeDisabled();
-      await expect(page.getByRole("button", { name: "実行先を追加" })).toHaveCount(0);
+      await expect(page.locator("#default-agent-model")).toBeDisabled();
       await expect(page.getByTestId("agent-object-actions")).toHaveCount(0);
       await expectNoPageOverflow(page);
     });

@@ -190,7 +190,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         ADMIN,
         _GROUP_CAPABILITIES,
         "Agent 管理（admin）",
-        "業務 Agent・スキル・Runtime・Binding・プラグイン・運用設定・システム設定の変更と、"
+        "業務 Agent・スキル・プラグイン・運用設定・システム設定の変更と、"
         "すべての操作ができます（エージェントの対象範囲の制限を受けません）。",
         implies=_ADMIN_MENUS,
     ),
@@ -313,7 +313,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/skills/reload"): _ADMIN_ONLY,
     ("PATCH", "/skills/{skill_id}"): _ADMIN_ONLY,
     ("DELETE", "/skills/{skill_id}"): _ADMIN_ONLY,
-    # ---- Control Plane: Runtime と Binding ----
+    # ---- Control Plane: 組み込み Runtime の状態 ----
     # ---- Control Plane: Run・承認・監査 ----
     # 組み込み Runtime の状態（#754）。
     ("GET", "/runtime/status"): _any(MENU_RUNTIMES, MENU_AGENTS),
