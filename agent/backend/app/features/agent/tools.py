@@ -18,6 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
+from pr_backend_core.internal_http import http_client_options
 from pr_system_settings.auth.errors import SecurityApiError
 from pr_system_settings.auth.service_token import issue_service_token
 from pydantic import BaseModel, Field, ValidationError
@@ -480,7 +481,7 @@ def _post_mcp_message(
     last_error: ExternalToolError | None = None
     for attempt in range(1, attempts + 1):
         try:
-            with httpx.Client(timeout=timeout_seconds) as client:
+            with httpx.Client(timeout=timeout_seconds, **http_client_options(url)) as client:
                 response = client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
                 response_headers = response.headers
@@ -673,7 +674,7 @@ def _fetch_mcp_oauth_bearer_token(
     if scope:
         form["scope"] = scope
     try:
-        with httpx.Client(timeout=timeout_seconds) as client:
+        with httpx.Client(timeout=timeout_seconds, **http_client_options(token_url)) as client:
             response = client.post(
                 token_url,
                 data=form,

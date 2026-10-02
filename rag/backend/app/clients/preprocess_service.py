@@ -19,6 +19,7 @@ import json
 import logging
 
 import httpx
+from pr_backend_core.internal_http import http_client_options
 from rag_parser_core.preprocess import ConvertOutcome, ConvertResponse, normalize_preprocess_profile
 
 from app.clients.http_retry import request_with_retry, retry_config_from_settings
@@ -91,7 +92,7 @@ class PreprocessServiceClient:
             ),
         }
         try:
-            with httpx.Client(timeout=self._timeout) as client:
+            with httpx.Client(timeout=self._timeout, **http_client_options(url)) as client:
                 response = request_with_retry(
                     client,
                     "POST",

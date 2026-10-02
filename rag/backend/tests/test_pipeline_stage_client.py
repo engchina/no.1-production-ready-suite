@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import socket
+import threading
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -393,3 +396,128 @@ def test_pipeline_stage_client_uses_short_connect_timeout(
     )
     short.run_vector_index(VectorIndexStageRequest(profile="accurate"))
     assert counting_vector_index_client.timeouts[-1].connect == 2.0
+
+
+# --- 環境のプロキシ(#852) ---------------------------------------------------
+
+
+def _unused_loopback_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+@pytest.fixture
+def proxy_environment(monkeypatch: MonkeyPatch) -> Iterator[str]:
+    """NO_PROXY の無いプロキシの環境。プロキシはどの要求にも ``502 cannotconnect`` を返す。"""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+    server.settimeout(0.1)
+    stop = threading.Event()
+    received: list[bytes] = []
+
+    def serve() -> None:
+        while not stop.is_set():
+            try:
+                conn, _ = server.accept()
+            except TimeoutError:
+                continue
+            with conn:
+                received.append(conn.recv(65536))
+                conn.sendall(
+                    b"HTTP/1.1 502 cannotconnect\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    proxy = f"http://127.0.0.1:{server.getsockname()[1]}"
+    for key in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(key, raising=False)
+    for key in ("HTTP_PROXY", "http_proxy"):
+        monkeypatch.setenv(key, proxy)
+    try:
+        yield proxy
+    finally:
+        stop.set()
+        thread.join(timeout=2)
+        server.close()
+    assert received == [], "内部の宛先への要求がプロキシへ送られた"
+
+
+def test_local_service_down_with_proxy_environment_falls_back(proxy_environment: str) -> None:
+    """未起動の 127.0.0.1 のサービスは、プロキシの 502 ではなく未到達として縮退する(#852)。"""
+    from rag_pipeline_core.stage import GuardrailStageRequest
+
+    url = f"http://127.0.0.1:{_unused_loopback_port()}"
+    client = PipelineStageClient(
+        Settings(rag_guardrail_service_enabled=True, rag_guardrail_service_url=url)
+    )
+    assert client.run_guardrail(GuardrailStageRequest()) is None
+
+
+def _gateway_error_client(monkeypatch: MonkeyPatch, status_code: int) -> None:
+    real_client = httpx.Client
+
+    def factory(*args: Any, **kwargs: Any) -> httpx.Client:
+        transport = httpx.MockTransport(lambda request: httpx.Response(status_code))
+        return real_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", factory)
+
+
+@pytest.mark.parametrize("status_code", [502, 504])
+def test_proxy_gateway_error_for_non_internal_host_falls_back(
+    monkeypatch: MonkeyPatch, status_code: int
+) -> None:
+    """内部と判定できない宛先でプロキシが返した 502 / 504 は、未到達として縮退する。"""
+    for key in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:80")
+    monkeypatch.setenv("http_proxy", "http://proxy.invalid:80")
+    _gateway_error_client(monkeypatch, status_code)
+    client = PipelineStageClient(
+        Settings(rag_chunking_service_enabled=True, rag_chunking_service_url="http://svc:8000")
+    )
+    assert client.run_chunking(_request()) is None
+
+
+@pytest.mark.parametrize(
+    ("url", "environment", "status_code"),
+    [
+        # プロキシを通さない内部の宛先の 502 は、サービス(またはその前段)の応答。
+        ("http://127.0.0.1:18034", {"HTTP_PROXY": "http://proxy.invalid:80"}, 502),
+        # プロキシが無ければ、サービスの応答。
+        ("http://svc:8000", {}, 502),
+        # NO_PROXY で外した宛先も、サービスの応答。
+        ("http://svc:8000", {"HTTP_PROXY": "http://proxy.invalid:80", "NO_PROXY": "svc"}, 502),
+        # 502 / 504 以外は、プロキシの環境でもサービスの応答。
+        ("http://svc:8000", {"HTTP_PROXY": "http://proxy.invalid:80"}, 500),
+    ],
+    ids=["internal", "no-proxy-env", "no-proxy-listed", "status-500"],
+)
+def test_service_error_responses_still_stop(
+    monkeypatch: MonkeyPatch, url: str, environment: dict[str, str], status_code: int
+) -> None:
+    """サービスが応答した失敗は今までどおり縮退せず止める(#852 で狭く保つ)。"""
+    for key in (
+        "NO_PROXY",
+        "no_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+        monkeypatch.setenv(key.lower(), value)
+    _gateway_error_client(monkeypatch, status_code)
+    client = PipelineStageClient(
+        Settings(rag_chunking_service_enabled=True, rag_chunking_service_url=url)
+    )
+    with pytest.raises(PipelineStageServiceError) as exc:
+        client.run_chunking(_request())
+    assert exc.value.reason == "remote_error"

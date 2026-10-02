@@ -22,6 +22,7 @@ No.1 Production Ready 製品群（**RAG / NL2SQL / Agent**）の backend が共�
 | `security.cors` | `configure_cors` |
 | `oracle_session.init_oracle_session` | Oracle の接続ごとの初期化（result cache を使わない。#333） |
 | `oracle_pool.SharedOraclePool` | 接続引数ごとに 1 つの python-oracledb の pool を遅延作成して共有する（スレッド安全。引数が変わると作り直し、`close()` で閉じる。新しい接続に `init_oracle_session`。#793）。`oracledb` は使うときに import する |
+| `internal_http.http_client_options` / `is_internal_url` | 宛先が内部（loopback・private・link-local・`localhost` / `*.local`・unix socket）なら環境のプロキシを使わない httpx の client の引数（`{"trust_env": False}`）を返す。外部の宛先は空（環境のプロキシを使う）。httpx は import しない（#852。backend-standard の「内部の HTTP と環境のプロキシ」） |
 
 ## 新サービスの最小構成
 

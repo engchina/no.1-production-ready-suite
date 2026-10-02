@@ -11,6 +11,7 @@ from typing import Literal, Protocol
 from uuid import uuid4
 
 import httpx
+from pr_backend_core.internal_http import http_client_options
 from prometheus_client import Counter, Histogram
 from pydantic import BaseModel, Field
 
@@ -124,7 +125,11 @@ class HttpTraceExporter:
         self._worker.join(timeout=min(5.0, self._timeout_seconds + 1.0))
 
     def _run(self) -> None:
-        with httpx.Client(timeout=self._timeout_seconds, follow_redirects=False) as client:
+        with httpx.Client(
+            timeout=self._timeout_seconds,
+            follow_redirects=False,
+            **http_client_options(self._endpoint),
+        ) as client:
             while not self._closed.is_set() or not self._queue.empty():
                 try:
                     event = self._queue.get(timeout=0.2)
