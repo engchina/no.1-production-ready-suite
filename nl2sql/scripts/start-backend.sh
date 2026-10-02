@@ -12,6 +12,13 @@ BACKEND_DIR="${ROOT_DIR}/backend"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8010}"
 
+# 一括起動は依存準備を先に完了し、HTTP の待機時間に含めない。
+mode="${1:-start}"
+case "${mode}" in
+  start|--prepare-only|--no-sync) ;;
+  *) echo "使い方: $0 [--prepare-only|--no-sync]" >&2; exit 2 ;;
+esac
+
 if ! command -v uv >/dev/null 2>&1; then
   echo "[backend] uv が見つかりません。https://docs.astral.sh/uv/ を参照してインストールしてください。" >&2
   exit 1
@@ -34,12 +41,17 @@ kill_port() {
   fi
 }
 
-kill_port "${PORT}"
-
 cd "${BACKEND_DIR}"
 
-echo "[backend] 依存を解決します (uv sync)..."
-uv sync
+if [ "${mode}" != "--no-sync" ]; then
+  echo "[backend] 依存を解決します (uv sync)..."
+  uv sync
+fi
+if [ "${mode}" = "--prepare-only" ]; then
+  exit 0
+fi
+
+kill_port "${PORT}"
 
 echo "[backend] http://${HOST}:${PORT}/docs で起動します..."
-exec uv run uvicorn app.main:app --reload --host "${HOST}" --port "${PORT}"
+exec uv run --no-sync uvicorn app.main:app --reload --host "${HOST}" --port "${PORT}"

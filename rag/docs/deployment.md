@@ -26,6 +26,24 @@ npm ci
 BACKEND_URL=http://localhost:8000 npm run dev   # BACKEND_URL 未指定なら /api は proxy せず 404（hermetic）
 ```
 
+一括起動はリポジトリ root で `./rag/scripts/start-all.sh` を実行する。最初に backend の
+`uv sync`（初回は Sudachi 辞書の構築を含む）が完了するまで待ち、その後に API を起動する。
+`BACKEND_READY_TIMEOUT_SECONDS`（既定 90 秒）は API の `/api/health` の待機だけに適用され、
+依存準備の時間は含まない。準備中も Ctrl+C で子プロセスをまとめて停止できる。
+
+NL2SQL と同じく、起動の判定には DB の readiness ではなくアプリの `/api/health` を使う。
+ADB が停止中でも API と画面は起動できる。DB を使う一覧・検索・取込は利用できず、
+取込 worker の Oracle 接続エラーは DB 復旧まで出ることがある。起動スクリプトは ADB を起動しない。
+
+企業プロキシを利用する場合は、起動するターミナルで HTTP / HTTPS のプロキシも有効にする
+（SSH だけの設定は npm に適用されない）。frontend の起動スクリプトは Ubuntu の
+`/etc/ssl/certs/ca-certificates.crt` を `NODE_EXTRA_CA_CERTS` に設定し、OS に登録済みの企業 CA を
+npm の証明書検証にも使う。別の CA ファイルが必要なら `NODE_EXTRA_CA_CERTS` を明示する。
+指定済みの値は上書きせず、`strict-ssl=false` や `NODE_TLS_REJECT_UNAUTHORIZED=0` は使わない。
+ネットワークの規則で公開 npm registry が禁止されている場合は、組織の推奨 registry を
+`npm_config_registry` で指定する。内部 registry を VPN で直接利用する構成では、そのホストを
+`no_proxy` / `NO_PROXY` に加える。証明書の追加だけではアクセス制限は解消しない。
+
 ### 前処理 / parser（uv の venv + systemd。#286）
 
 前処理と parser はサービスごとの uv の venv（`uv sync --locked --no-dev --python 3.12`）で動くネイティブのプロセスで、

@@ -17,6 +17,11 @@ PORT="${PORT:-3000}"
 # このスクリプトはローカル backend と組み合わせる起動経路なので、接続先を明示して渡す。
 export BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:8000}"
 
+# Ubuntu の企業 CA も信頼する。明示された追加 CA は保持し、TLS 検証は無効化しない。
+if [ -z "${NODE_EXTRA_CA_CERTS:-}" ] && [ -r /etc/ssl/certs/ca-certificates.crt ]; then
+  export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+fi
+
 if ! command -v npm >/dev/null 2>&1; then
   echo "[frontend] npm が見つかりません。Node.js をインストールしてください。" >&2
   exit 1
