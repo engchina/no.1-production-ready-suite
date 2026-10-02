@@ -2016,10 +2016,10 @@ def _require_case_sources(cases: list[EvaluationCase], agent_id: str) -> None:
         try:
             source = runtime_repository.get_run(case.source_run_id)
         except KeyError as exc:
-            raise HTTPException(status_code=422, detail="元の Run が見つかりません。") from exc
+            raise HTTPException(status_code=422, detail="元の実行が見つかりません。") from exc
         if source.agent_id != agent_id:
             raise HTTPException(
-                status_code=422, detail="元の Run と評価セットの業務 Agent が違います。"
+                status_code=422, detail="元の実行と評価セットの業務 Agent が違います。"
             )
 
 
@@ -2047,9 +2047,9 @@ async def get_run_evaluation_case(
     try:
         run = runtime_repository.get_run(run_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Run が見つかりません。") from exc
+        raise HTTPException(status_code=404, detail="実行が見つかりません。") from exc
     if not _agent_allowed(request, run.agent_id):
-        raise HTTPException(status_code=404, detail="Run が見つかりません。")
+        raise HTTPException(status_code=404, detail="実行が見つかりません。")
     agent = _require_evaluable_agent(request, run.agent_id)
     review = run.admin_review
     return ApiResponse(

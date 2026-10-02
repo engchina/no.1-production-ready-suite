@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Download, FileDown, FlaskConical, Plus, Save, Trash2, Undo2, Upload } from "lucide-react";
+import { Download, FileDown, FlaskConical, Plus, RotateCcw, Save, Trash2, Upload } from "lucide-react";
 import {
   Button,
   Card,
@@ -309,9 +309,15 @@ export function EvaluationSetEditor({
           testId: "editor-back",
         }}
         actions={[
-          ...(evaluationSet && dirty
-            ? [{ id: "discard", kind: "secondary" as const, label: t("common.discardChanges"), icon: Undo2, onClick: discard }]
-            : []),
+          // 変更を破棄は常に出し、変更が無いときは disabled（#618。#808）。
+          {
+            id: "discard",
+            kind: "secondary" as const,
+            label: t("common.discardChanges"),
+            icon: RotateCcw,
+            disabled: !dirty || save.isPending,
+            onClick: discard,
+          },
           {
             id: "save",
             kind: "primary" as const,

@@ -68,7 +68,7 @@ for (const viewport of VIEWPORTS) {
 
       await expectGate(page, "データベースの接続情報が未設定です");
       await expect(
-        gateCard(page).getByText(/^Agent の機能（業務 Agent・Run・承認・監査など）を使うには/)
+        gateCard(page).getByText(/^Agent の機能（業務 Agent・実行・承認・監査など）を使うには/)
       ).toBeVisible();
       await expect(page.getByText("診断コード: wallet_not_found", { exact: true })).toBeVisible();
       await expect(

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, KeySquare, Trash2 } from "lucide-react";
 import {
@@ -9,11 +9,12 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  DataTable,
   EmptyState,
+  ErrorState,
   Fieldset,
   FormActionBar,
   FormStatus,
+  ListToolbar,
   PageBody,
   PageHeader,
   RowActionMenu,
@@ -29,7 +30,8 @@ import {
   type DataTableColumn,
 } from "@engchina/production-ready-ui";
 
-import { listScrollLabel } from "@/components/ListViews";
+import { ListSearchField, listCountLabel, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
+import { PagedDataTable } from "@/components/ListViews";
 import { OneTimeSecret } from "@/components/OneTimeSecret";
 import { agentApi, type ApiKey, type ApiKeyCreated, type ApiKeyExpiryDays } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -66,6 +68,9 @@ export function ApiKeysPage() {
     () => new Map((agents.data?.agents ?? []).map((agent) => [agent.id, agent.name])),
     [agents.data]
   );
+  const [keyQuery, setKeyQuery] = useListSearch("apiKeys");
+  const allKeys = keys.data?.keys ?? [];
+  const visibleKeys = allKeys.filter((key) => matchesSearch(keyQuery, [key.name, key.token_prefix, key.owner_display_name]));
 
   const [name, setName] = useState("");
   const [scope, setScope] = useState<Scope>("selected");
@@ -275,16 +280,38 @@ export function ApiKeysPage() {
                 <TableSkeleton columns={5} />
               </TimedLoadingState>
             ) : keys.error ? (
-              <FormStatus tone="danger" message={keys.error.message} />
-            ) : (keys.data?.keys ?? []).length === 0 ? (
+              // 一覧の読み込みの失敗は再試行付きの ErrorState（messaging.md §3.6。#808）。
+              <ErrorState
+                message={keys.error.message}
+                retryLabel={t("common.retry")}
+                onRetry={() => void keys.refetch()}
+              />
+            ) : allKeys.length === 0 ? (
               <EmptyState title={t("apiKeys.list.empty")} hint={t("apiKeys.list.emptyHint")} />
             ) : (
-              <KeysTable
-                keys={keys.data?.keys ?? []}
-                agentNames={agentNames}
-                canManage={canManage}
-                onDelete={(key) => void confirmDelete(key)}
-              />
+              <div className="space-y-3">
+                <ListToolbar
+                  search={
+                    <ListSearchField
+                      id="api-key-search"
+                      label={t("apiKeys.search")}
+                      value={keyQuery}
+                      onSearch={setKeyQuery}
+                      count={visibleKeys.length}
+                    />
+                  }
+                  summary={listCountLabel(visibleKeys.length, allKeys.length)}
+                  testId="api-key-list-toolbar"
+                />
+                <KeysTable
+                  keys={visibleKeys}
+                  resetKey={keyQuery}
+                  agentNames={agentNames}
+                  canManage={canManage}
+                  onDelete={(key) => void confirmDelete(key)}
+                  empty={<NoMatchState title={t("apiKeys.noMatch")} onClear={() => setKeyQuery("")} />}
+                />
+              </div>
             )}
           </CardContent>
         </Card>
@@ -314,11 +341,15 @@ function CreatedKey({ created, onDone }: { created: ApiKeyCreated; onDone: () =>
 
 function KeysTable({
   keys,
+  resetKey,
+  empty,
   agentNames,
   canManage,
   onDelete,
 }: {
   keys: ApiKey[];
+  resetKey: unknown;
+  empty: ReactNode;
   agentNames: Map<string, string>;
   canManage: boolean;
   onDelete: (key: ApiKey) => void;
@@ -396,14 +427,16 @@ function KeysTable({
     });
   }
   return (
-    <DataTable
+    // 一覧の標準形（表頭の固定・5 / 8 行の縦スクロール・10 件/ページ。ページは作業状態に残す。#808）。
+    <PagedDataTable
+      pageKey="apiKeys"
+      resetKey={resetKey}
       rows={keys}
       columns={columns}
       getRowKey={(key) => key.id}
       ariaLabel={t("apiKeys.list.label")}
-      scrollAriaLabel={listScrollLabel(t("apiKeys.list.label"))}
-      tableClassName="w-full min-w-[760px]"
-      stickyHeader
+      tableClassName="w-full min-w-[54rem]"
+      empty={empty}
     />
   );
 }

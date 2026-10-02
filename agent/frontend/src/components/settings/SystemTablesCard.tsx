@@ -3,10 +3,10 @@ import {
   SystemTablesCard as SharedSystemTablesCard,
   type SystemTablesMessages,
 } from "@engchina/production-ready-system-settings";
+import { useConfirm } from "@engchina/production-ready-ui";
 
 import { useAuth } from "@/components/security/AuthProvider";
 import { DATABASE_GATE_ROUTES, databaseGateMessages } from "@/components/system/DatabaseGate";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import { api, ApiError } from "@/lib/api";
 import { isI18nKey, t } from "@/lib/i18n";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
