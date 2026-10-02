@@ -131,6 +131,7 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     from app.config import get_settings
     from app.rag.guardrail_adapter import reset_guardrail_static_cache
     from app.rag.rate_limit import reset_rate_limiter
+    from app.rag.vector_index_adapter import reset_vector_index_static_cache
     from app.security.service import set_security_service
     from app.services import control as service_control
 
@@ -145,6 +146,7 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     set_security_service(None)
     reset_rate_limiter()
     reset_guardrail_static_cache()
+    reset_vector_index_static_cache()
     _reset_runtime_settings(get_settings(), tmp_path)
     # サービス管理の systemctl / journalctl / sudo は実行しない(手元の systemd を触らない。#286)。
     # 既定は「systemd を使えない」扱いにし、必要なテストだけ fake を差し込む。
