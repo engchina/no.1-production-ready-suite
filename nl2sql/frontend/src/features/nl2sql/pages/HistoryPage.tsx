@@ -794,6 +794,10 @@ export function HistoryPage() {
 
   const selectedItem = sortedItems.find((item) => item.id === selectedId) ?? null;
   const hasActiveFilters = Boolean(search.trim()) || feedbackFilter !== "all" || safetyFilter !== "all";
+  // スケルトンで覆うのは、まだ 1 度も一覧を取得できていない初回の読み込みだけ（loadedFilters は取得の成功で入る）。
+  // 絞り込みの結果が 0 件のあとの取り直しでも、絞り込みの欄を含む一覧を出したまま処理中の表示にする。
+  // スケルトンへ置き換えると、入力中の検索欄や開いている選択欄が作り直されてフォーカスを失う（#739）。
+  const initialLoading = loading && !loadedFilters;
 
   const toggleSort = (key: HistorySortKey) => {
     setSort((current) => ({
@@ -840,7 +844,7 @@ export function HistoryPage() {
           }
         />
 
-        {loading && items.length === 0 ? (
+        {initialLoading ? (
           <DbObjectManagementPanelShell
             id="history-management-panel"
             labelledBy="history-grid-heading"
@@ -852,7 +856,7 @@ export function HistoryPage() {
             <HistoryListSkeleton />
             <HistoryDetailSkeleton />
           </DbObjectManagementPanelShell>
-        ) : items.length === 0 && !hasActiveFilters ? (
+        ) : items.length === 0 && !hasActiveFilters && !loading ? (
           <section className="rounded-md border border-border bg-surface p-4 shadow-sm" aria-label={t("history.workspace.label")}>
             <EmptyState title={t("history.empty.title")} hint={t("history.empty.hint")} />
           </section>

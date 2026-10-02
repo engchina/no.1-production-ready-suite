@@ -653,6 +653,45 @@ test("実行履歴は検索結果なしと条件クリアを案内する", async
   await expect(historyRows(page)).toHaveCount(3);
 });
 
+test("実行履歴は 0 件の絞り込みから条件を変えても、取り直しの間は絞り込みの欄を残す", async ({ page }) => {
+  // 0 件のときの取り直しで一覧ごとスケルトンに置き換えると、開いている選択欄・入力中の検索欄が
+  // 作り直されてフォーカスを失う（#739。nightly で安全状態の選択肢が DOM から外れて時間切れになった）。
+  const gate = createRequestGate();
+  let holdRequests = false;
+  await page.route("**/api/nl2sql/history**", async (route) => {
+    const url = new URL(route.request().url());
+    if (holdRequests) await gate.promise;
+    const filtered = historyItemsForRequest(url, historyItems);
+    await fulfillJson(route, { items: filtered, next_cursor: "", total: filtered.length });
+  });
+  await page.goto("/history");
+  await expect(historyRows(page)).toHaveCount(3);
+
+  const search = page.getByRole("searchbox", { name: "履歴検索" });
+  await search.fill("一致しない検索語");
+  await expect(page.getByText("条件に一致する履歴がありません")).toBeVisible();
+
+  holdRequests = true;
+  const safety = page.getByRole("combobox", { name: "安全状態フィルタ", exact: true });
+  await chooseSelectFieldOption(safety, "blocked");
+  await expect(page.getByTestId("history-workspace-processing")).toBeVisible();
+  await expect(page.getByTestId("history-list-skeleton")).toHaveCount(0);
+  await expect(page.getByTestId("history-filter-grid")).toBeVisible();
+  await expect(safety).toBeFocused();
+
+  // 検索欄を空にしても（絞り込みが残る間も、すべて解除した直後も）、取り直しの間は空の案内に置き換えない。
+  await search.fill("");
+  await search.press("Enter"); // debounce を待たずに検索語を外す
+  await chooseSelectFieldOption(safety, "all");
+  await expect(page.getByTestId("history-workspace-processing")).toBeVisible();
+  await expect(page.getByText("履歴はまだありません")).toHaveCount(0);
+  await expect(search).toBeVisible();
+
+  gate.release();
+  await expect(historyRows(page)).toHaveCount(3);
+  await expect(page.getByTestId("history-workspace-processing")).toHaveCount(0);
+});
+
 test("実行履歴の利用者評価フィルターに要確認は表示しない", async ({ page }) => {
   await mockHistory(page);
   await page.goto("/history");
