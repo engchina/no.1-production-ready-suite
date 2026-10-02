@@ -92,3 +92,7 @@
 - `frontend/e2e/leave-guard-workspace-state.spec.ts`：desktop / 375px のサイドナビ・パンくずの移動の確認、保存後の解除、未変更時の自由な移動、`beforeunload`、画面内の「一覧に戻る」、監査の絞り込み / Run の目標 / メモリの検索語の往復と再読込、URL の対象の再読込と一覧に無い ID の説明、確認語の解除。
 - `frontend/e2e/entity-archetypes.spec.ts`：desktop / 375px の A 型（URL で開く・再読込・戻る / 進む・パンくず・`?id=new`、行のボタンは対象名とメニューだけ、行メニューの Enter / 矢印 / Esc とフォーカスの戻り、破壊的な操作の確認とキャンセル、`ObjectActionBar` からの削除と一覧への復帰）と B 型（4 画面の `FixedSplitPane`、desktop は分割 / 375px は縦積み、divider のキー操作と保存 key、行の選択と詳細の更新、行メニューと詳細の操作の一致、承認の確認）。
 - `frontend/e2e/agent-settings.spec.ts` / `agent-runtime-flow.spec.ts`：各 A 型画面の作成・編集・削除の主な導線。
+
+## 業種テンプレート（#780）
+
+業務 Agent の新規作成（`/agents?id=new`）の先頭に「テンプレートから始める」を置く。テンプレート（`GET /api/agent-templates`。backend の `app/features/agent/templates.py`）を選ぶと、名前・説明・指示・Skill をフォームに入れる（入力済みなら確認してから置き換える）。テンプレートは業務 Agent を直接作らず、保存はいつもの「作成」で行う。使えない（登録されていない）Skill は外して知らせる。既存の業務 Agent の編集には出さない。

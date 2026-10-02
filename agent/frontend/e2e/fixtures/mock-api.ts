@@ -177,6 +177,40 @@ export const BUILTIN_RUNTIME_STATUS = {
   ],
 };
 
+/** 業種テンプレートの既定（backend の `AGENT_TEMPLATES` の一部と、使えない Skill を含む例）。 */
+export const AGENT_TEMPLATES = [
+  {
+    id: "internal-policy-helpdesk",
+    category: "共通（総務・人事）",
+    name: "社内規程の問い合わせ",
+    description: "就業規則・各種規程・社内手続きの質問に、規程の条項を示して答えます。",
+    instructions: "あなたは総務・人事の問い合わせ窓口です。\n- 業務 RAG で規程を検索し、条項を引用して答える。",
+    skill_ids: ["business_rag_research"],
+    sample_questions: ["育児休業はいつから取得できますか？", "在宅勤務の申請はどのように行いますか？"],
+    evaluation_cases: [{ question: "在宅勤務の申請は？", expected: "申請の方法と期限" }],
+  },
+  {
+    id: "sales-analytics",
+    category: "営業",
+    name: "営業分析",
+    description: "売上・受注・顧客のデータを自然言語で集計し、数字の根拠とともに答えます。",
+    instructions: "あなたは営業企画の分析担当です。\n- 構造化データ照会で集計し、期間と単位を示す。",
+    skill_ids: ["structured_data_query"],
+    sample_questions: ["今月の地域別の売上を教えてください。", "売上上位 10 社の顧客は？"],
+    evaluation_cases: [{ question: "今月の地域別の売上は？", expected: "地域ごとの金額" }],
+  },
+  {
+    id: "manufacturing-quality",
+    category: "製造",
+    name: "品質管理",
+    description: "品質基準・不具合報告の文書と、検査・不良率のデータをあわせて調べます。",
+    instructions: "あなたは製造部門の品質管理の担当です。",
+    skill_ids: ["business_rag_research", "quality_lab_only"],
+    sample_questions: ["先月のライン別の不良率を教えてください。", "溶接の外観検査の判定基準は？"],
+    evaluation_cases: [{ question: "溶接の判定基準は？", expected: "合否の条件" }],
+  },
+];
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -193,6 +227,8 @@ function createState() {
     tools: d.tools as unknown as Json[],
     // 監査の記録（`GET /api/audit/tool-calls`）。offset / limit で切り出して返す（#265）。
     auditRecords: [] as Json[],
+    // 業種テンプレート（`GET /api/agent-templates`。#780）。
+    agentTemplates: clone(AGENT_TEMPLATES) as Json[],
     plugins: [] as Json[],
     marketplaces: [] as Json[],
     tracePolicy: d.tracePolicy as Json,
@@ -514,6 +550,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     throw new HttpError(404, `approval not found: ${second}`);
   }
+  if (method === "GET" && at("agent-templates")) return { templates: state.agentTemplates };
   if (method === "GET" && at("audit", "tool-calls")) {
     const offset = Number(query.get("offset") ?? 0);
     const limit = Number(query.get("limit") ?? 100);

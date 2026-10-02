@@ -111,6 +111,7 @@ from app.features.agent.skills import (
     reload_declared_skills,
     skill_registry,
 )
+from app.features.agent.templates import AGENT_TEMPLATES, AgentTemplatesData
 from app.features.agent.tools import (
     MCP_TOOL_SEPARATOR,
     ExternalMcpToolsData,
@@ -1485,6 +1486,12 @@ async def get_run_audit(
         raise HTTPException(status_code=404, detail="run not found") from exc
     _require_agent_access(request, run.agent_id)
     return ApiResponse(data=_run_audit_data(run))
+
+
+@router.get("/agent-templates", response_model=ApiResponse[AgentTemplatesData])
+async def list_agent_templates() -> ApiResponse[AgentTemplatesData]:
+    """業種テンプレート（#780）。業務 Agent の新規作成の画面がフォームに入れる出発点。"""
+    return ApiResponse(data=AgentTemplatesData(templates=list(AGENT_TEMPLATES)))
 
 
 @router.get("/audit/tool-calls", response_model=ApiResponse[ToolCallAuditData])

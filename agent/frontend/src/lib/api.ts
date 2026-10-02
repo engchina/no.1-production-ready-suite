@@ -189,6 +189,18 @@ export interface RunState {
   updated_at: string;
 }
 
+/** 業種テンプレート（#780）。業務 Agent の新規作成のフォームに入れる出発点。 */
+export interface AgentTemplate {
+  id: string;
+  category: string;
+  name: string;
+  description: string;
+  instructions: string;
+  skill_ids: string[];
+  sample_questions: string[];
+  evaluation_cases: { question: string; expected: string }[];
+}
+
 export interface ToolAuditRecord {
   step_id: string;
   tool_name: string;
@@ -757,6 +769,7 @@ export const agentApi = {
   getRun: (runId: string) => request<RunState>(`/api/runs/${runId}`),
   getRunAudit: (runId: string) =>
     request<RunAuditData>(`/api/runs/${runId}/audit`),
+  listAgentTemplates: () => request<{ templates: AgentTemplate[] }>("/api/agent-templates"),
   listToolCallAudit: (filters: ToolCallAuditFilters) =>
     request<ToolCallAuditData>(`/api/audit/tool-calls${auditQuery(filters)}`),
   /** 監査 CSV。Cookie セッションで取得し、401 / 403 は他の API と同じく通知する（#215）。 */

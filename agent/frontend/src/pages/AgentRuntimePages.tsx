@@ -77,6 +77,7 @@ import {
 import {
   agentApi,
   type AgentProfile,
+  type AgentTemplate,
   type AgentProfilePatchPayload,
   type AgentSkill,
   type Artifact,
@@ -105,6 +106,7 @@ import {
   MissingEditorTarget,
 } from "@/components/EntityLayout";
 import { agentPaginationLabels, listScrollLabel, PagedDataTable, QueryState } from "@/components/ListViews";
+import { AgentTemplatePicker } from "@/components/agents/AgentTemplatePicker";
 import { useEditorRoute } from "@/lib/editor-route";
 import {
   focusFirstInvalidField,
@@ -4676,6 +4678,35 @@ function AgentEditorView({
   const [modelId, setModelId] = useState(saved.model_id);
   const [baseline, setBaseline] = useState<AgentDraft>(saved);
   const [nameError, setNameError] = useState<string | null>(null);
+  // 新規作成で選んだ業種テンプレート（#780）。
+  const [templateId, setTemplateId] = useState<string | null>(null);
+  const confirmTemplate = useConfirm();
+
+  async function applyTemplate(template: AgentTemplate) {
+    const touched = Boolean(name.trim() || agentDescription.trim() || instructions.trim() || skillIds.length);
+    if (touched && templateId !== template.id) {
+      const ok = await confirmTemplate({
+        title: t("agent.template.replaceTitle"),
+        description: t("agent.template.replaceDescription", { name: template.name }),
+        confirmLabel: t("agent.template.replace"),
+        tone: "warning",
+      });
+      if (!ok) return;
+    }
+    // 使えない（登録されていない）Skill は外して知らせる。
+    const known = new Set(availableSkills.map((skill) => skill.id));
+    const usable = template.skill_ids.filter((skillId) => known.has(skillId));
+    const missing = template.skill_ids.filter((skillId) => !known.has(skillId));
+    setName(template.name);
+    setNameError(null);
+    setAgentDescription(template.description);
+    setInstructions(template.instructions);
+    setSkillIds([...usable].sort());
+    setTemplateId(template.id);
+    toast.success(t("agent.template.applied", { name: template.name }), {
+      description: missing.length ? t("agent.template.skillsMissing", { skills: missing.join("、") }) : undefined,
+    });
+  }
 
   const createAgent = useMutation({
     mutationFn: agentApi.createAgent,
@@ -4804,6 +4835,9 @@ function AgentEditorView({
           attemptKey={saveAttemptKey}
           testId="agent-save-error"
         />
+        {!agent && !readOnly ? (
+          <AgentTemplatePicker selectedId={templateId} onApply={(template) => void applyTemplate(template)} />
+        ) : null}
         {agent ? (
           <Section
             title={t("editor.overview")}
