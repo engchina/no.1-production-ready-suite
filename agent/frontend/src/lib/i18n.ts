@@ -2,7 +2,7 @@ import { ja as ragJa } from "@/lib/rag-i18n";
 
 // 最小 i18n。日本語第一。UI 文言はここ経由で参照し、ハードコードしない。
 const agentJa = {
-  "app.title": "AI Agent Control Plane",
+  "app.title": "Production Ready Agent",
   "app.sidebarTitle.line1": "Production Ready",
   "app.sidebarTitle.line2": "Agent",
 
@@ -15,8 +15,10 @@ const agentJa = {
   "dbGate.notConfigured.message":
     "Agent の機能（業務 Agent・Run・承認・監査など）を使うには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
 
-  "nav.section.runtime": "実行",
-  "nav.section.controlPlane": "Control Plane",
+  // サイドナビの先頭は一般の利用者が毎日使う画面、その下に管理者が作る・運用する画面を置く（#791）。
+  // 先頭のセクションは NL2SQL と同じ「AI 活用」、作る画面は RAG の「ナレッジ構築」・NL2SQL の「データ準備」に当たる。
+  "nav.section.use": "AI 活用",
+  "nav.section.build": "Agent 構築",
   "nav.section.operations": "運用設定",
   // 業種テンプレート（#780）。
   "agent.template.title": "テンプレートから始める",
@@ -485,17 +487,17 @@ const agentJa = {
   "agent.version.publishedBadge": "公開中 v{version}",
   "agent.version.unpublished": "未公開",
   "agent.version.changed": "公開していない変更あり",
-  "agent.version.unpublishedHint": "この業務 Agent はまだ公開していません。公開するまで利用者のチャット・Run には使えません（管理者は Run の画面の「下書きで実行」で試せます）。",
+  "agent.version.unpublishedHint": "この業務 Agent はまだ公開していません。公開するまで利用者のチャット・Run には使えません（管理者は「実行履歴」の画面の「下書きで実行」で試せます）。",
   "agent.version.restore": "この版に戻す",
   "agent.version.restoreTitle": "v{version} に戻しますか?",
   "agent.version.restoreMessage": "この版を公開し直し、下書きもこの版の内容にします。保存していない下書きの変更は失われます。",
   "agent.version.restored": "v{version} に戻しました",
   "run.form.draft": "下書きで実行",
   "run.form.draftHint": "公開前の下書きの内容で試します（Agent 管理の権限）。",
-  "nav.runtimes": "Runtime",
-  "nav.runs": "Run",
-  "nav.approvals": "承認・監査",
-  "nav.audit": "監査",
+  "nav.runtimes": "実行環境",
+  "nav.runs": "実行履歴",
+  "nav.approvals": "承認",
+  "nav.audit": "監査ログ",
   "nav.tools": "ツール",
   "nav.settingsMcpConnections": "MCP 接続",
   "nav.settingsApiKeys": "API キー",
@@ -555,7 +557,7 @@ const agentJa = {
   "apiKeys.notPersistent":
     "API キーの保存先（Oracle）が無いため、作成したキーはバックエンドの再起動で消えます。システム設定 > データベースを設定してください。",
   "nav.settingsToolPolicy": "ツール権限",
-  "nav.settingsRuntimeSnapshot": "Control Plane バックアップ",
+  "nav.settingsRuntimeSnapshot": "バックアップと復元",
 
   // 認証と権限（#215）。ログイン・パスワード変更・権限なしの画面の文言は platform の共通部品が持つ。
   "nav.section.security": "セキュリティ設定",
@@ -567,10 +569,10 @@ const agentJa = {
   "capability.required.description":
     "{requirement}が必要です。システム管理者に、権限管理でロールへ付与するよう依頼してください。",
   "capability.viewRuns":
-    "Run の閲覧・Run の実行・承認の判断・監査の閲覧・Agent 管理のいずれかの権限",
-  "capability.operateRuns": "Run の実行・操作の権限",
+    "実行履歴の参照・業務 Agent の実行・承認の判断・監査ログの参照・Agent 管理のいずれかの権限",
+  "capability.operateRuns": "業務 Agent の実行の権限",
   "capability.decideApprovals": "承認の判断の権限",
-  "capability.viewAudit": "監査の閲覧の権限",
+  "capability.viewAudit": "監査ログの参照の権限",
   "capability.admin": "Agent 管理の権限",
   "security.roles.permissionSummary": "付与している機能権限: {count} 件",
   "security.roles.permissionSummarySystemAdmin": "SYSTEM_ADMIN はすべての機能権限を持ちます。",
@@ -584,10 +586,10 @@ const agentJa = {
   "security.permissions.formHint":
     "機能権限と、利用できるエージェントを設定します。保存すると、このロールのユーザーへ次回リクエストから反映されます。",
   "security.permissions.permissionsHint":
-    "メニュー権限は画面表示を許可します。Run の閲覧・実行・承認・監査・Agent 管理の権限は、関連する画面のメニュー権限を自動的に付与します。",
+    "メニュー権限は画面表示を許可します。参照権限・実行権限・管理権限は、関連する画面のメニュー権限を自動的に付与します。",
   "security.permissions.agents": "利用できるエージェント",
   "security.permissions.agentsHint":
-    "このロールの利用者が Run の実行・閲覧・承認・監査で扱えるエージェントを選択します。何も選ばない場合、このロールではエージェントを利用できません。",
+    "このロールの利用者がチャット・実行履歴・承認・監査ログで扱えるエージェントを選択します。何も選ばない場合、このロールではエージェントを利用できません。",
   "security.permissions.agentsAll": "すべてのエージェント",
   "security.permissions.agentsSearch": "エージェントを検索",
   "security.permissions.agentsSearchPlaceholder": "エージェント名・ID・説明で絞り込み",
@@ -615,7 +617,7 @@ const agentJa = {
   "runtime.refresh": "状態を再取得",
   "runtime.builtin.title": "組み込み Runtime",
   "runtime.builtin.description":
-    "業務 Agent を Control Plane の中で実行します（OpenAI Agents SDK）。モデルは OCI Enterprise AI の Responses API を使い、ツールの実行は承認・監査を通します。",
+    "業務 Agent をこの製品の中で実行します（OpenAI Agents SDK）。モデルは OCI Enterprise AI の Responses API を使い、ツールの実行は承認・監査を通します。",
   "runtime.builtin.ready": "実行できます",
   "runtime.builtin.notReady": "設定が必要",
   "runtime.builtin.sdk": "SDK",
@@ -628,15 +630,15 @@ const agentJa = {
   "runtime.builtin.notReadyDefault": "モデルの設定を確認してください。",
   "runtime.builtin.openModelSettings": "モデルの設定を開く",
   "runtime.builtin.askAdmin": "モデルの設定は、システム設定の権限がある管理者に依頼してください。",
-  "page.runs.subtitle": "業務 Agent を組み込み Runtime で実行し、ツールの呼び出しと承認を監視する",
-  "page.approvals.subtitle": "外部データ・副作用を伴うツール呼び出しの確認",
-  "page.audit.subtitle": "Run 横断のツール実行・承認・警告を検索する",
+  "page.runs.subtitle": "業務 Agent を実行し、実行（Run）ごとのツールの呼び出し・承認の経過と結果を確かめる",
+  "page.approvals.subtitle": "外部データ・副作用を伴うツール呼び出しを確かめて、承認・却下する",
+  "page.audit.subtitle": "業務 Agent の実行をまたいで、ツールの実行・承認・警告の記録を検索する",
   "page.tools.subtitle": "登録済みツールの契約・権限・監査タグ",
   "page.settings.rag.subtitle": "業務 RAG は外部サービスとして接続する",
   "page.settings.nl2sql.subtitle": "構造化データ取得は外部 NL2SQL として接続する",
   "page.settings.mcp.subtitle": "RAG・NL2SQL・外部の MCP の接続先と認証を管理する",
   "page.settings.toolPolicy.subtitle": "ツールごとの allow / ask / deny と既定動作を管理する",
-  "page.settings.runtimeSnapshot.subtitle": "Control Plane state のバックアップ・検証・復元",
+  "page.settings.runtimeSnapshot.subtitle": "業務 Agent・Run などのデータをバックアップし、検証して復元します。",
 
   "common.empty.title": "まだデータがありません",
   "common.loading": "読み込み中",
@@ -927,8 +929,7 @@ const agentJa = {
   "settings.mcpConnections.functionName": "ツール名",
 
   "nav.skills": "スキル",
-  "nav.skills.sidebar": "スキル (Skills)",
-  "page.skills.subtitle": "Business Agent が選択できる能力と内部依存を管理する",
+  "page.skills.subtitle": "業務 Agent に割り当てる指示と、使うツールを管理する",
   "skills.title": "スキル",
   "skills.description": "ビルトインに加え、ファイル / env 宣言・実行時追加のスキルを一覧・管理します。",
   "skills.add": "スキルを追加",
@@ -968,7 +969,7 @@ const agentJa = {
   "nav.plugins.sidebar": "プラグイン (Plugins)",
   "nav.pluginMarketplaces": "マーケットプレイス",
   "page.plugins.subtitle": "Skill / MCP / resource の配布パッケージを管理する",
-  "page.pluginMarketplaces.subtitle": "連携機能を選んで Control Plane にインストールする",
+  "page.pluginMarketplaces.subtitle": "スキルと MCP 接続をまとめたプラグインを選んでインストールする",
   "plugins.title": "インストール済み連携",
   "plugins.description": "連携パッケージは Skill・MCP・非実行 resource を一括登録します。",
   "plugins.install": "manifest から install",

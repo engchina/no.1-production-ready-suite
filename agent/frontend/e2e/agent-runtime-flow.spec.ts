@@ -229,7 +229,7 @@ test.describe("AI Agent Control Plane", () => {
       await installControlPlaneApi(page);
       await page.goto("/runtimes");
 
-      await expect(page.getByRole("heading", { name: "Runtime", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "実行環境", level: 1 })).toBeVisible();
       const card = page.getByTestId("builtin-runtime-card");
       await expect(card.getByRole("heading", { name: "組み込み Runtime" })).toBeVisible();
       await expect(card.locator("[data-status-variant]", { hasText: "実行できます" }).locator("svg")).toHaveCount(1);

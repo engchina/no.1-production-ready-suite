@@ -48,9 +48,10 @@ export function firstAllowedRoute(hasPermission: HasPermission): string {
 }
 
 /**
- * ログイン後・未知の URL・権限なしの画面から戻るときの既定入口。主画面の Run を開ければ Run、
- * 開けなければ `/` に戻し、`/` のルートが `firstAllowedRoute` で開ける画面へ振り分ける（NL2SQL と同じ形。#262）。
+ * ログイン後・未知の URL・権限なしの画面から戻るときの既定入口。ナビの先頭のチャットを開ければチャット
+ * （RAG と同じ。#791）、開けなければ `/` に戻し、`/` のルートが `firstAllowedRoute` で開ける画面へ
+ * 振り分ける（NL2SQL と同じ形。#262）。
  */
 export function defaultEntryRoute(hasPermission: HasPermission): string {
-  return hasPermission(ROUTE_PERMISSIONS[APP_ROUTES.runs]) ? APP_ROUTES.runs : APP_ROUTES.home;
+  return hasPermission(ROUTE_PERMISSIONS[APP_ROUTES.chat]) ? APP_ROUTES.chat : APP_ROUTES.home;
 }

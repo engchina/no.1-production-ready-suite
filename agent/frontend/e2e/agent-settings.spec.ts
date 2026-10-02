@@ -697,11 +697,11 @@ test.describe("Agent Runtime settings", () => {
     await expectNoHorizontalOverflow(page);
   });
 
-  test("Control Plane バックアップを検証できる", async ({ page }) => {
+  test("バックアップと復元で検証できる", async ({ page }) => {
     await page.goto("/settings/runtime-snapshot");
 
     await expect(
-      page.getByRole("heading", { name: "Control Plane バックアップ", level: 1 })
+      page.getByRole("heading", { name: "バックアップと復元", level: 1 })
     ).toBeVisible();
     const exportTextarea = page.locator("#runtime-snapshot-export");
     await expect(exportTextarea).toHaveValue(/agent-control-plane\.snapshot\.v2/);
