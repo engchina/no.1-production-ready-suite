@@ -106,10 +106,16 @@ from app.features.agent.control_plane_store import (
     save_api_key,
 )
 from app.features.agent.evaluation import (
+    EVALUATION_EXPECTED_MAX_CHARS,
+    EVALUATION_EXPECTED_TOOLS_MAX,
     EVALUATION_JOBS_PAGE_SIZE,
     EVALUATION_JOBS_PAGE_SIZE_MAX,
+    EVALUATION_MAX_CASES,
     CaseStatus,
     EvaluationBusyError,
+    EvaluationCase,
+    EvaluationCaseDraft,
+    EvaluationCaseDuplicateError,
     EvaluationCaseResult,
     EvaluationCasesData,
     EvaluationJob,
@@ -117,6 +123,8 @@ from app.features.agent.evaluation import (
     EvaluationJobsData,
     EvaluationRequest,
     EvaluationSet,
+    EvaluationSetFromTemplateRequest,
+    EvaluationSetFullError,
     EvaluationSetInput,
     EvaluationSetsData,
     evaluation_set_store,
@@ -189,7 +197,7 @@ from app.features.agent.skills import (
     reload_declared_skills,
     skill_registry,
 )
-from app.features.agent.templates import AGENT_TEMPLATES, AgentTemplatesData
+from app.features.agent.templates import AGENT_TEMPLATES, AgentTemplatesData, find_template
 from app.features.agent.tools import (
     MCP_TOOL_SEPARATOR,
     ExternalMcpToolsData,
@@ -1964,7 +1972,121 @@ def _evaluation_set_for_actor(request: Request, set_id: str) -> EvaluationSet:
 
 def _require_evaluable_agent(request: Request, agent_id: str) -> AgentProfile:
     _require_agent_access(request, agent_id)
-    return _control_plane_agent(agent_id)
+    try:
+        return _control_plane_agent(agent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="業務 Agent が見つかりません。") from exc
+
+
+def _require_case_sources(cases: list[EvaluationCase], agent_id: str) -> None:
+    """ケースの出どころ（`source_run_id`）は、同じ業務 Agent の Run だけ（#810）。"""
+    for case in cases:
+        if not case.source_run_id:
+            continue
+        try:
+            source = runtime_repository.get_run(case.source_run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=422, detail="元の Run が見つかりません。") from exc
+        if source.agent_id != agent_id:
+            raise HTTPException(
+                status_code=422, detail="元の Run と評価セットの業務 Agent が違います。"
+            )
+
+
+_CASE_DUPLICATE_DETAIL = "同じ質問の評価ケースが、この評価セットに既にあります。"
+_SET_FULL_DETAIL = (
+    f"評価セットのケースは {EVALUATION_MAX_CASES} 件までです。別の評価セットに追加してください。"
+)
+
+
+def _run_tool_names(run: RunState) -> list[str]:
+    """Run が呼んだ（呼ぼうとした）ツールの名前（重複を除いた呼んだ順。上限は評価ケースと同じ）。"""
+    names = [step.tool_call.name for step in run.steps if step.tool_call is not None]
+    return list(dict.fromkeys(names))[:EVALUATION_EXPECTED_TOOLS_MAX]
+
+
+@router.get("/runs/{run_id}/evaluation-case", response_model=ApiResponse[EvaluationCaseDraft])
+async def get_run_evaluation_case(
+    run_id: str, request: Request
+) -> ApiResponse[EvaluationCaseDraft]:
+    """Run（フィードバック・Run の詳細）から評価ケースの下書きを作る（保存しない。#810）。
+
+    質問は Run のゴール、期待する回答の要点は管理者の評価のコメント（無ければ空）、期待するツールは
+    Run が呼んだツール。権限は middleware のメニュー権限（`menu.evaluation`）。
+    """
+    try:
+        run = runtime_repository.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Run が見つかりません。") from exc
+    if not _agent_allowed(request, run.agent_id):
+        raise HTTPException(status_code=404, detail="Run が見つかりません。")
+    agent = _require_evaluable_agent(request, run.agent_id)
+    review = run.admin_review
+    return ApiResponse(
+        data=EvaluationCaseDraft(
+            agent_id=agent.id,
+            agent_name=agent.name,
+            source_run_id=run.id,
+            question=run.goal.strip(),
+            expected=(review.comment.strip() if review is not None else "")[
+                :EVALUATION_EXPECTED_MAX_CHARS
+            ],
+            expected_tools=_run_tool_names(run),
+            existing_set_ids=list(evaluation_set_store.sets_with_question(agent.id, run.goal)),
+        )
+    )
+
+
+@router.post("/evaluation-sets/{set_id}/cases", response_model=ApiResponse[EvaluationSet])
+async def append_evaluation_case(
+    set_id: str, case: EvaluationCase, request: Request
+) -> ApiResponse[EvaluationSet]:
+    """評価セットにケースを 1 件足す（フィードバックから追加するとき。#810）。
+
+    同じ質問は 409、上限（50 件）は 409。`source_run_id` の Run は同じ業務 Agent のものだけ。
+    """
+    item = _evaluation_set_for_actor(request, set_id)
+    _require_evaluable_agent(request, item.agent_id)
+    _require_case_sources([case], item.agent_id)
+    try:
+        updated = evaluation_set_store.append_case(item.id, case)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="評価セットが見つかりません。") from exc
+    except EvaluationCaseDuplicateError as exc:
+        raise HTTPException(status_code=409, detail=_CASE_DUPLICATE_DETAIL) from exc
+    except EvaluationSetFullError as exc:
+        raise HTTPException(status_code=409, detail=_SET_FULL_DETAIL) from exc
+    except ControlPlaneStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ApiResponse(data=updated)
+
+
+@router.post("/evaluation-sets/from-template", response_model=ApiResponse[EvaluationSet])
+async def create_evaluation_set_from_template(
+    payload: EvaluationSetFromTemplateRequest, request: Request
+) -> ApiResponse[EvaluationSet]:
+    """業務 Agent の作成に使った業種テンプレートの評価ケースで評価セットを作る（#810）。"""
+    agent = _require_evaluable_agent(request, payload.agent_id)
+    template = find_template(agent.template_id) if agent.template_id else None
+    if template is None or not template.evaluation_cases:
+        raise HTTPException(
+            status_code=409,
+            detail="この業務 Agent はテンプレートから作っていないため、評価ケースがありません。",
+        )
+    data = EvaluationSetInput(
+        agent_id=agent.id,
+        name=f"{template.name}（テンプレート）"[:100],
+        description="業種テンプレートの評価ケースから作りました。",
+        cases=[
+            EvaluationCase(question=case.question, expected=case.expected)
+            for case in template.evaluation_cases[:EVALUATION_MAX_CASES]
+        ],
+    )
+    try:
+        created = evaluation_set_store.create(data, created_by=_run_creator_user_uuid(request))
+    except ControlPlaneStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ApiResponse(data=created)
 
 
 @router.get("/evaluation-sets", response_model=ApiResponse[EvaluationSetsData])
@@ -2011,6 +2133,7 @@ async def create_evaluation_set(
     payload: EvaluationSetInput, request: Request
 ) -> ApiResponse[EvaluationSet]:
     _require_evaluable_agent(request, payload.agent_id)
+    _require_case_sources(payload.cases, payload.agent_id)
     try:
         created = evaluation_set_store.create(payload, created_by=_run_creator_user_uuid(request))
     except ControlPlaneStoreError as exc:
@@ -2076,11 +2199,21 @@ async def create_evaluation(
     agent = _require_evaluable_agent(request, item.agent_id)
     if not agent.enabled or agent.migration_required:
         raise HTTPException(status_code=409, detail="この業務 Agent は実行できない状態です。")
+    # 評価する版（#810）。省略時は、公開していない変更があれば下書き、なければ公開中の版。
+    target = evaluation.agent_version or (
+        "draft" if agent.has_unpublished_changes() else "published"
+    )
+    if target == "published" and agent.published_version is None:
+        raise HTTPException(
+            status_code=409,
+            detail="公開した版がありません。下書きで評価するか、公開してから評価してください。",
+        )
     job = EvaluationJob(
         agent_id=agent.id,
         agent_name=agent.name,
         set_id=item.id,
         set_name=item.name,
+        agent_version="draft" if target == "draft" else agent.published_version,
         created_by_user_uuid=_run_creator_user_uuid(request),
         results=[EvaluationCaseResult(case=case) for case in item.cases],
     )
@@ -2503,6 +2636,9 @@ async def create_agent(
     draft = agent.model_copy(
         update={"versioned": True, "versions": [], "published_version": None, "source": "runtime"}
     )
+    # 作成に使った業種テンプレート（#810）。知らないテンプレートは保存しない（400）。
+    if draft.template_id and find_template(draft.template_id) is None:
+        raise HTTPException(status_code=400, detail="業種テンプレートが見つかりません。")
     try:
         return ApiResponse(data=runtime_repository.create_agent(draft))
     except ValueError as exc:

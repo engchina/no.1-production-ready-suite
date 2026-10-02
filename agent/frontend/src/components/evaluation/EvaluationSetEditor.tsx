@@ -22,7 +22,15 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { agentPaginationLabels } from "@/components/ListViews";
-import { agentApi, type AgentProfile, type EvaluationCase, type EvaluationSet, type EvaluationSetInput } from "@/lib/api";
+import { EvaluationVersionField, usableEvaluationTarget } from "@/components/evaluation/EvaluationVersionField";
+import {
+  agentApi,
+  type AgentProfile,
+  type EvaluationCase,
+  type EvaluationSet,
+  type EvaluationSetInput,
+  type EvaluationTarget,
+} from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 
@@ -35,6 +43,8 @@ interface CaseDraft {
   question: string;
   expected: string;
   tools: string;
+  /** フィードバック・Run の詳細から追加したケースの元の Run（保存し直しても保つ。#810）。 */
+  sourceRunId: string | null;
 }
 
 interface SetDraft {
@@ -57,6 +67,7 @@ function caseDraft(item?: EvaluationCase): CaseDraft {
     question: item?.question ?? "",
     expected: item?.expected ?? "",
     tools: (item?.expected_tools ?? []).join(", "),
+    sourceRunId: item?.source_run_id ?? null,
   };
 }
 
@@ -87,6 +98,7 @@ function toPayload(draft: SetDraft): EvaluationSetInput {
         .split(/[,、]/)
         .map((tool) => tool.trim())
         .filter(Boolean),
+      source_run_id: item.sourceRunId,
     })),
   };
 }
@@ -119,7 +131,8 @@ export function EvaluationSetEditor({
   defaultAgentId: string;
   onBack: () => void;
   onSaved: (saved: EvaluationSet, created: boolean) => void;
-  onStart: (set: EvaluationSet) => void;
+  /** 評価を始める（評価する版を添える。#810）。 */
+  onStart: (set: EvaluationSet, version: EvaluationTarget) => void;
   onDeleted: () => void;
   starting: boolean;
 }) {
@@ -130,6 +143,8 @@ export function EvaluationSetEditor({
   const [draft, setDraft] = useState<SetDraft>(baseline);
   const [submitted, setSubmitted] = useState(false);
   const dirty = !sameDraft(comparable(draft), comparable(baseline));
+  // 評価する版（#810。実行の意思なので保存しない）。
+  const [versionChoice, setVersionChoice] = useState<EvaluationTarget | null>(null);
 
   const save = useMutation({
     mutationFn: (payload: EvaluationSetInput) =>
@@ -264,7 +279,7 @@ export function EvaluationSetEditor({
           // 保存していない変更があるときは、保存した内容で評価することになるため先に保存させる。
           disabled: dirty || starting,
           loading: starting,
-          onSelect: () => onStart(evaluationSet),
+          onSelect: () => onStart(evaluationSet, version),
           testId: "evaluation-set-start",
         },
         { id: "export", label: t("evaluation.set.export"), icon: Download, onSelect: () => void exportCases(evaluationSet) },
@@ -277,7 +292,9 @@ export function EvaluationSetEditor({
         },
       ]
     : [];
-  const agentName = agents.find((agent) => agent.id === draft.agentId)?.name ?? draft.agentId;
+  const setAgent = agents.find((agent) => agent.id === draft.agentId);
+  const agentName = setAgent?.name ?? draft.agentId;
+  const version = usableEvaluationTarget(setAgent, versionChoice);
 
   return (
     <>
@@ -345,10 +362,19 @@ export function EvaluationSetEditor({
                 onValueChange={(value) => setField("description", value)}
               />
               {evaluationSet ? (
-                <p className="text-sm text-fg">
-                  <span className="text-fg-muted">{`${t("evaluation.form.agent")}: `}</span>
-                  {agentName}
-                </p>
+                <>
+                  <p className="text-sm text-fg">
+                    <span className="text-fg-muted">{`${t("evaluation.form.agent")}: `}</span>
+                    {agentName}
+                  </p>
+                  {/* 「評価を開始」（上の操作）で評価する版（#810）。 */}
+                  <EvaluationVersionField
+                    id="evaluation-set-version"
+                    agent={setAgent}
+                    value={version}
+                    onChange={setVersionChoice}
+                  />
+                </>
               ) : (
                 <SelectField<string>
                   id="evaluation-set-agent"
@@ -407,7 +433,14 @@ export function EvaluationSetEditor({
                   <Card key={item.key} data-testid={`evaluation-case-${number}`}>
                     <CardContent className="space-y-3 pt-4">
                       <div className="flex flex-wrap items-end justify-between gap-3">
-                        <p className="text-sm font-semibold text-fg">{t("evaluation.set.caseNumber", { number })}</p>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-fg">{t("evaluation.set.caseNumber", { number })}</p>
+                          {item.sourceRunId ? (
+                            <p className="break-all text-xs text-fg-muted" data-testid={`evaluation-case-${number}-source`}>
+                              {t("evaluation.set.caseSource", { run: item.sourceRunId })}
+                            </p>
+                          ) : null}
+                        </div>
                         <div className="flex flex-wrap items-end gap-2">
                           <TextField
                             id={`${item.key}-id`}

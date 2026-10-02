@@ -695,7 +695,7 @@ import { SearchField } from "@engchina/production-ready-ui";
 | 閉じ方は「閉じるボタン・Escape・scrim のタップ」。製品は中の項目を選んだとき（会話の選択など）にも閉じる。閉じたら開く前にフォーカスがあった要素（`returnFocusRef` があればそこ）へ戻す | WAI-ARIA APG の Dialog（Modal）パターン。狭い画面では選んだら本文に戻る |
 | 開いたら閉じるボタンへフォーカスし、Tab / Shift+Tab を中で回す。中の部品が処理した Escape（`preventDefault` 済み。名前の編集の取消など）では閉じない | 開閉ボタンから入ってすぐ閉じられる。入れ子の Escape を 1 回で文脈ごと閉じない |
 | 閉じている間も描いたまま（`inert`・`visibility: hidden`）にし、開閉を transform（200ms、ease-out）で動かす。`prefers-reduced-motion` では動かさない | 開閉ボタンの `aria-controls` の先が常にある。動きで重なりの方向を示す |
-| body へ Portal で描く。中の `SelectField` の一覧・Tooltip はシート（`aria-modal`）の中に描かれる。確認ダイアログはシートの上に出る | 親の overflow に切られない。モーダルの外の要素として読まれない |
+| body へ Portal で描く。中の `SelectField` の一覧・Tooltip はシート（`aria-modal`）の中に描かれる。確認ダイアログはシートの上に出る。開いている間のシートは `translate: none`（`translate-x-0` の `0 0` でも fixed の子の基準がシートになり、一覧がシートの左端の分だけずれる。#810） | 親の overflow に切られない。モーダルの外の要素として読まれない |
 | 開閉の状態は保持しない（再読込・画面の行き来で開いたまま戻さない）。インラインのパネルの開閉は製品が作業状態に残してよい | 戻ったときにモーダルが画面を塞がない（UX 契約 workspace-state.md の「確認ダイアログは戻るときに解除する」と同じ扱い） |
 
 - 文言（`title` / `closeLabel`）は翻訳済みを渡す。開閉ボタンは製品の画面に置き、`aria-expanded`・`aria-controls`（`id` に渡した値）を付ける。Playwright では `data-testid`（シート）と `<testId>-scrim`、または role（`dialog` の名前）で操作する。

@@ -8,13 +8,18 @@ import { t } from "@/lib/i18n";
 /**
  * 業務 Agent の新規作成の「テンプレートから始める」（#780）。業種テンプレートを選ぶと、親がフォームに入れる。
  * テンプレートは選ぶボタン（`aria-pressed`）で、選んだテンプレートの質問の例を下に出す。
+ *
+ * `evaluationSet` を渡すと（品質評価の権限を持つ利用者）、選んだテンプレートの評価ケースで評価セットを
+ * 作るかを選ぶチェックボックス（既定はオン）を出す（#810）。
  */
 export function AgentTemplatePicker({
   selectedId,
   onApply,
+  evaluationSet,
 }: {
   selectedId: string | null;
   onApply: (template: AgentTemplate) => void;
+  evaluationSet?: { checked: boolean; onChange: (checked: boolean) => void };
 }) {
   const templates = useQuery({ queryKey: ["agent-templates"], queryFn: agentApi.listAgentTemplates });
   const selected = templates.data?.templates.find((template) => template.id === selectedId) ?? null;
@@ -71,6 +76,28 @@ export function AgentTemplatePicker({
                 ))}
               </ul>
             </div>
+          ) : null}
+          {selected && evaluationSet && selected.evaluation_cases.length ? (
+            <label
+              className="flex min-h-11 items-start gap-2 rounded-md border border-border px-3 py-2 text-sm text-fg"
+              data-testid="agent-template-evaluation-set"
+            >
+              <input
+                type="checkbox"
+                checked={evaluationSet.checked}
+                onChange={(event) => evaluationSet.onChange(event.target.checked)}
+                aria-describedby="agent-template-evaluation-set-helper"
+                className="mt-0.5 h-4 w-4 shrink-0"
+              />
+              <span className="min-w-0">
+                <span className="block font-medium">
+                  {t("agent.template.evaluationSet", { count: selected.evaluation_cases.length })}
+                </span>
+                <span id="agent-template-evaluation-set-helper" className="mt-0.5 block text-xs text-fg-muted">
+                  {t("agent.template.evaluationSetHelper")}
+                </span>
+              </span>
+            </label>
           ) : null}
         </div>
       )}

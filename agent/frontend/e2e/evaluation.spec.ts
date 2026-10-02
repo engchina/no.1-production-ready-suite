@@ -101,13 +101,19 @@ function seedFinishedJobs(mockApi: MockApi) {
     created_at: MOCK_NOW,
     started_at: MOCK_NOW,
     finished_at: MOCK_NOW,
+    agent_version: 1 as number | "draft" | null,
     previous_job_id: null as string | null,
     previous_summary: null as unknown,
+    previous_agent_version: null as number | "draft" | null,
+    previous_created_at: null as string | null,
   });
   const latest = job("eval-latest", results);
   const previous = job("eval-previous", previousResults);
+  latest.agent_version = "draft";
   latest.previous_job_id = previous.id;
   latest.previous_summary = previous.summary;
+  latest.previous_agent_version = previous.agent_version;
+  latest.previous_created_at = previous.created_at;
   mockApi.state.evaluations.push(latest, previous);
 }
 
@@ -144,8 +150,8 @@ for (const viewport of VIEWPORTS) {
       name: "経理の評価",
       description: "",
       cases: [
-        { question: "経費精算の締め日はいつですか？", expected: "毎月 25 日", expected_tools: ["rag_search"] },
-        { question: "今月の売上の合計はいくらですか？", expected: "合計金額（円）", expected_tools: [] },
+        { question: "経費精算の締め日はいつですか？", expected: "毎月 25 日", expected_tools: ["rag_search"], source_run_id: null },
+        { question: "今月の売上の合計はいくらですか？", expected: "合計金額（円）", expected_tools: [], source_run_id: null },
       ],
     });
 
@@ -161,7 +167,8 @@ for (const viewport of VIEWPORTS) {
     }
     await expect(page.getByText("評価を開始しました")).toBeVisible();
     await expect(page).toHaveURL(/\/evaluation$/);
-    expect(mockApi.lastRequest("POST", "/api/evaluations")?.body).toEqual({ set_id: "evset-1" });
+    // 公開していない変更の無い業務 Agent は、既定で公開中の版を評価する（#810）。
+    expect(mockApi.lastRequest("POST", "/api/evaluations")?.body).toEqual({ set_id: "evset-1", agent_version: "published" });
 
     await expect(page.getByTestId("evaluation-progress")).toContainText("経理の評価 を評価しています（0 / 2 件）");
     const summary = page.getByTestId("evaluation-summary");
@@ -189,7 +196,12 @@ for (const viewport of VIEWPORTS) {
       await expect(summary).toContainText("前回から +67 ポイント");
       await expect(summary).toContainText("50%");
       await expect(summary).toContainText("1 / 2 件");
-      await expect(page.getByTestId("evaluation-previous")).toHaveText("差は、同じ評価セットの前回の評価との比較です。");
+      // どの版どうしの比較かを出す（#810）。
+      await expect(page.getByTestId("evaluation-previous")).toContainText("同じ評価ケースで完了した前回の評価（v1・");
+      await expect(page.getByText("経理の評価（汎用業務 Agent・下書き）")).toBeVisible();
+      await expect(
+        page.getByRole("table", { name: "最近の評価" }).getByRole("row").nth(1)
+      ).toContainText("下書き");
       const results = page.getByRole("table", { name: "ケース別結果" });
       await expect(results.getByRole("row", { name: /sales-total/ })).toContainText("期待と違う");
       await expectNoHorizontalOverflow(page);
@@ -292,3 +304,93 @@ test("読み込み中は経過時間を出す", async ({ page, mockApi }) => {
   await expect(page.getByTestId("evaluation-loading")).toContainText("評価の結果を読み込んでいます");
   await expect(page.getByTestId("evaluation-summary")).toBeVisible();
 });
+
+// ---- #810: 評価する版・テンプレートの評価ケース ----------------------------------------------------
+
+function draftAgent(mockApi: MockApi) {
+  const agent = mockApi.state.agents.find((item) => item.id === "default");
+  if (!agent) throw new Error("default agent missing");
+  agent.unpublished_changes = true;
+  return agent;
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`評価する版を選んで始め、版を一覧と概要に出す (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    seedSet(mockApi);
+    draftAgent(mockApi);
+    await page.goto("/evaluation");
+
+    // 公開していない変更があれば、既定は下書き。公開中の版も選べる。
+    const version = page.getByTestId("evaluation-version");
+    await expect(version).toContainText("下書き（公開していない変更あり）");
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`evaluation-version-${viewport.name}.png`), fullPage: true });
+    await version.click();
+    await page.getByRole("option", { name: "公開中の版（v1）" }).click();
+    await expect(version).toContainText("公開中の版（v1）");
+
+    await page.getByTestId("evaluation-set-row-actions-evset-seeded").click();
+    await page.getByRole("menuitem", { name: "評価を開始" }).click();
+    await expect(page.getByText("評価を開始しました")).toBeVisible();
+    expect(mockApi.lastRequest("POST", "/api/evaluations")?.body).toEqual({
+      set_id: "evset-seeded",
+      agent_version: "published",
+    });
+    await expect(page.getByTestId("evaluation-summary")).toBeVisible();
+    await expect(page.getByText("経理の評価（汎用業務 Agent・v1）")).toBeVisible();
+    await expect(page.getByRole("table", { name: "最近の評価" }).getByRole("row").nth(1)).toContainText("v1");
+  });
+}
+
+test("評価セットのエディタでも評価する版を選べる", async ({ page, mockApi }) => {
+  seedSet(mockApi);
+  draftAgent(mockApi);
+  await page.goto("/evaluation?id=evset-seeded");
+  await expect(page.getByTestId("evaluation-set-version")).toContainText("下書き（公開していない変更あり）");
+  const actions = page.getByTestId("evaluation-set-actions");
+  const startButton = actions.getByRole("button", { name: "評価を開始" });
+  if (await startButton.count()) {
+    await startButton.click();
+  } else {
+    await page.getByTestId("evaluation-set-actions-more").click();
+    await page.getByRole("menuitem", { name: "評価を開始" }).click();
+  }
+  await expect(page.getByText("評価を開始しました")).toBeVisible();
+  expect(mockApi.lastRequest("POST", "/api/evaluations")?.body).toEqual({ set_id: "evset-seeded", agent_version: "draft" });
+});
+
+test("公開した版の無い業務 Agent は下書きだけを選べる", async ({ page, mockApi }) => {
+  seedSet(mockApi);
+  const agent = draftAgent(mockApi);
+  agent.published_version = null;
+  agent.versions = [];
+  await page.goto("/evaluation");
+  const version = page.getByTestId("evaluation-version");
+  await expect(version).toContainText("下書き（公開していない変更あり）");
+  await expect(page.getByText("公開した版が無いため、下書きで評価します。")).toBeVisible();
+  await version.click();
+  await expect(page.getByRole("option")).toHaveCount(1);
+});
+
+for (const viewport of VIEWPORTS) {
+  test(`テンプレートから作った業務 Agent は、評価セットが無ければテンプレートの評価ケースで作れる (${viewport.name})`, async ({
+    page,
+    mockApi,
+  }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const agent = mockApi.state.agents.find((item) => item.id === "default");
+    if (!agent) throw new Error("default agent missing");
+    agent.template_id = "internal-policy-helpdesk";
+    await page.goto("/evaluation");
+    await expect(page.getByText("この業務 Agent は業種テンプレートから作りました。")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`evaluation-from-template-${viewport.name}.png`), fullPage: true });
+    await page.getByTestId("evaluation-sets-from-template").click();
+    await expect(page.getByText("評価セット「社内規程の問い合わせ（テンプレート）」を作りました")).toBeVisible();
+    expect(mockApi.lastRequest("POST", "/api/evaluation-sets/from-template")?.body).toEqual({ agent_id: "default" });
+    await expect(
+      page.getByRole("table", { name: "評価セットの一覧" }).getByRole("row", { name: /社内規程の問い合わせ（テンプレート）/ })
+    ).toContainText("1");
+  });
+}
