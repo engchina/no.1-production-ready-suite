@@ -1,31 +1,28 @@
-# Production Control Plane for AI Agents
+# Production Ready Agent（業務 Agent Platform）
 
-**Define Business Agents once. Execute them anywhere.**
+**業務・業界の Agent を作り、Skill と MCP（RAG・NL2SQL・その他）を安全に使わせる。**
 
-OpenClaw、Hermes、DeerFlow などの Runtime と競合せず、それらを統合・管理する AI Agent
-Control Plane の参照実装です。Business Agent は Skill だけを選択し、MCP や resource の詳細、
-Runtime 固有設定は Control Plane が Binding 同期時に解決します。
+業務 Agent・Skill・Plugin を定義し、Control Plane の中の組み込み Runtime（OpenAI Agents SDK）で実行します。
+モデルは OCI Enterprise AI の Responses API、ツールの実行は承認・監査を通します（#754）。
 
 ```text
-Marketplace → 配布 package → Skill Registry
-                                  │
-Business Agent ───────────────→ Skill → MCP / resource
+Marketplace → Plugin（配布 package）→ Skill Registry
+                                         │
+業務 Agent（指示・Skill・モデル）──────→ Skill → ツール（RAG / NL2SQL / 外部 MCP）
        │
-       └─ Runtime Binding → OpenClaw / Hermes / DeerFlow
+       └─ Run → 組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI）→ 承認・監査・成果物
 ```
 
 ## 主要機能
 
-- Business Agent: 業務指示、説明、有効状態、`skill_ids`。
+- 業務 Agent: 業務指示、説明、有効状態、`skill_ids`、使うモデル（`model_id`。空なら既定のテキストモデル）。
 - Skill: AgentSkills 互換指示、`mcp_requirements`、`resource_ids`。
 - Marketplace: Skill / MCP / prompt・workflow・template resource の原子的 install。
-- Runtime/Binding: Agent 定義と実行先を分離し、Agent ごとに既定 Binding は最大1件。
-- Common Run: 状態、Event、cancel、Artifact、Approval、Audit を Runtime 間で正規化。
-- Runtime adapter: OpenClaw Gateway WS、Hermes Runs API、DeerFlow LangGraph API。
-- Binding MCP: 既存 RAG/NL2SQL tool を選択 Skill の閉包だけに限定して公開。
+- 組み込み Runtime: Agent と Skill の指示、Skill が必要とするツールを OpenAI Agents SDK に渡し、OCI Enterprise AI で実行する。
+  承認が必要なツールで止まり、承認・却下の後に再開する。SDK の tracing は外部へ送らない。
+- Common Run: 状態、Event、cancel、Artifact（回答・ツールの結果）、Approval、Audit。
 - Dispatcher: 開発は in-process、本番は Oracle row lock + claim/lease worker。
-- Runtime service management: 第三者の Runtime イメージ（固定 digest）の profile・healthcheck・volume・静的操作 allowlist（`docker-compose.yml`）。
-- Snapshot v2: Runtime/Binding を含む Control Plane backup。v1 snapshot/manifest を移行。
+- Snapshot v2: 業務 Agent・Run・Memory の Control Plane backup。
 - ログインと権限: RAG / NL2SQL と同じ共通認証（`AGENT_AUTH_MODE=production`）。ロールごとの権限と、
   エージェント単位の対象範囲（「セキュリティ設定 > 権限管理」）。local でもユーザー・ロールは共通 DB。詳細は
   [docs/security-rbac.md](docs/security-rbac.md)。
@@ -85,64 +82,19 @@ SKIP_E2E=0 E2E_ARGS="e2e/auth-login.spec.ts" scripts/check-all.sh   # 関係す�
 FULL=1 scripts/check-all.sh                                 # CI と同じく全部を実行
 ```
 
-## Runtime（第三者の構築済みイメージ）と dispatcher
+## 組み込み Runtime と dispatcher（#754）
 
-Control Plane（backend・frontend）と runtime-dispatcher は自前のコードなので、Docker を使わずネイティブで動かします
-（開発は上の `uv run` / `scripts/start-all.sh`、本番は systemd。#286 / #356）。Docker を使うのは、
-第三者が構築済みのイメージを配る Agent Runtime（OpenClaw・Hermes・DeerFlow）だけです。`docker-compose.yml` は
-この 3 つだけを持ち、イメージは公式 registry の `@sha256` で固定しています（派生イメージは作りません）。
-必要な profile だけ起動します。Docker socket は mount されません。
+業務 Agent は Control Plane の組み込み Runtime（`backend/app/features/agent/builtin_runtime.py`、`openai-agents` を版固定）
+で実行します。Docker・外部の Runtime は使いません。
 
-- `agent/.env`（`.env.runtime.example` から作る）: compose の `${...}` 補間用です。Runtime API の認証値を
-  `AGENT_OPENCLAW_GATEWAY_TOKEN` / `AGENT_HERMES_API_SERVER_KEY` / `AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN` に書き、
-  compose が各 Runtime の期待する名前（`OPENCLAW_GATEWAY_TOKEN` / `API_SERVER_KEY` / `DEER_FLOW_INTERNAL_AUTH_TOKEN`）へ
-  渡します。Control Plane の backend にも同じ名前・同じ値を設定します（Runtime 定義の `auth_secret_ref` が参照します）。
-- Control Plane が Binding ごとに書き出す Skill / MCP（`AGENT_RUNTIME_BINDINGS_DIR`、開発の既定は
-  `backend/.agent-runtime-bindings`）を、各 Runtime へ読み取り専用で渡します。場所を変えたときは `agent/.env` の
-  `AGENT_RUNTIME_BINDINGS_HOST_DIR` も合わせます。
-- Runtime から Control Plane の Binding MCP を呼ぶ場合は、backend の `AGENT_CONTROL_PLANE_PUBLIC_BASE_URL` を
-  `http://host.docker.internal:8020/api` にします（compose が `host.docker.internal` を host へ向けます。
-  `scripts/start-backend.sh` は既定で `0.0.0.0:8020` で listen します）。
-
-```bash
-cp .env.runtime.example .env
-docker compose --profile openclaw up -d runtime-openclaw
-docker compose --profile hermes up -d runtime-hermes
-docker compose --profile deerflow up -d runtime-deerflow
-```
-
-本番 dispatcher を使う場合は Oracle 設定を入れ、backend の `AGENT_RUNTIME_DISPATCH_MODE=external` を有効にして、
-dispatcher を別のプロセスで起動します（`backend/.env` と共通 `.env` を読みます）。
-
-```bash
-cd backend
-AGENT_RUNTIME_DISPATCH_MODE=external uv run python -m app.features.agent.runtime_dispatcher
-```
-
-公式 Runtime image は `docker-compose.yml` で `@sha256` 固定しています。更新時は公式 release と
-manifest を検証して digest を明示更新してください。
-
-### Control Plane を Docker Compose で動かしていた環境の移行（#356）
-
-#356 で、Control Plane の Dockerfile と compose の `control-plane` / `runtime-dispatcher` を削除しました。
-compose の project 名（`production-ready-agent-control-plane`）は変えていないので、Runtime の volume はそのまま使えます。
-
-1. 以前のコンテナを止めて消します（`agent/` で実行。Runtime の volume は残ります）。
-
-   ```bash
-   for service in control-plane runtime-dispatcher; do
-     docker ps -aq --filter label=com.docker.compose.project=production-ready-agent-control-plane \
-       --filter "label=com.docker.compose.service=${service}" | xargs -r docker rm -f
-   done
-   ```
-
-2. 以前の `agent/.env` に書いていた Control Plane の設定（`AGENT_AUTH_MODE` / `AGENT_RUNTIME_*` /
-   `AGENT_CONTROL_PLANE_*` など）は `backend/.env` へ移します（`agent/.env` は Runtime の補間だけに使います）。
-3. Control Plane の状態を named volume（`production-ready-agent-control-plane_control-plane-state`）に置いていた場合、
-   Binding の書き出し（`bindings/`）は次の同期で作り直されます。`AGENT_RUNTIME_REPOSITORY_BACKEND=file` などで
-   volume に保存していた状態を引き継ぐときは、中身を backend の保存先へ写してから volume を消します。
-4. backend を `uv run`（開発）または systemd の `production-ready-agent-backend`（Resource Manager の stack）で起動し、
-   初回は 運用設定 > システムテーブル か `cd backend && uv run python -m app.cli.agent_system_schema --initialize` でテーブルを作ります。
+- モデル: 「システム設定 > モデル」の OCI Enterprise AI の接続と、Agent の `model_id`（空なら既定のテキストモデル）。
+  Runtime 画面で SDK の版・既定のモデル・選べるモデル・実行できるかを確認できます。
+- 実行: 開発は API のプロセス（`AGENT_RUNTIME_DISPATCH_MODE=in_process`）。本番で別プロセスにする場合は
+  `uv run python -m app.features.agent.runtime_dispatcher` を起動します（Oracle の checkpoint の row lock と Run lease）。
+- 外部 Runtime（OpenClaw / Hermes / DeerFlow）・Binding・`docker-compose.yml`・`.env.runtime.example` は #754 で削除しました。
+  既存の環境で compose の Runtime を動かしていた場合は、`docker compose ... down` で止めてから volume を消してかまいません。
+  `backend/.env` の `AGENT_RUNTIME_BINDINGS_DIR` / `AGENT_RUNTIME_SERVICE_CONTROL_*` / `AGENT_CONTROL_PLANE_PUBLIC_BASE_URL` /
+  `AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET` は読まれません（削除してよい）。
 
 ## 既存環境の更新手順（#566 既定のテキストモデルの必須化）
 
@@ -180,13 +132,7 @@ compose の project 名（`production-ready-agent-control-plane`）は変えて�
    ```
 
 4. スクリプトが扱わないものを手で直す。
-   - compose の `agent/.env`: `OPENCLAW_GATEWAY_TOKEN` / `HERMES_API_SERVER_KEY` / `DEER_FLOW_INTERNAL_AUTH_TOKEN` を
-     `AGENT_OPENCLAW_GATEWAY_TOKEN` / `AGENT_HERMES_API_SERVER_KEY` / `AGENT_DEER_FLOW_INTERNAL_AUTH_TOKEN` へ改名する。
-   - Binding 個別の MCP token（`CONTROL_PLANE_MCP_TOKEN_<BINDING_ID>`）を `AGENT_BINDING_MCP_TOKEN_<BINDING_ID>` へ改名する
-     （移行スクリプトは `AGENT_CONTROL_PLANE_MCP_TOKEN_<BINDING_ID>` にするため、その名前からも改名する）。
-     Runtime 側で `api_key_env` を固定で設定している場合は、Binding を再同期する。
-   - 既存の Runtime 定義（snapshot や Oracle に保存済み）の `auth_secret_ref` が旧名（`OPENCLAW_GATEWAY_TOKEN` など）の
-     場合は、Runtime 画面または `PATCH /api/runtimes/{id}` で新名へ変更する。
+   - （#754 以降は外部 Runtime を使わないため、compose の `agent/.env` と Binding の token の改名は不要です。）
 5. 再配備または再起動する。
    - Resource Manager の stack で配備した instance: 手順 1〜4 を instance 上の
      `/u01/aipoc/no.1-production-ready-suite` で（`git pull` と `agent/backend` の `uv sync --locked --no-dev` の後に）
@@ -211,31 +157,24 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 | Method | Path | 用途 |
 |---|---|---|
 | `GET` | `/api/health` / `/api/ready` | 稼働確認・readiness（ログイン不要） |
-| `GET` | `/api/ready/database` | 画面の DB ゲートが使う DB の状態（3製品共通の判定と契約。常に 200。ログイン不要。#325）。`ok` / `not_configured` / `unreachable` を返す（Agent はシステムテーブルの確認をまだ持たないため `setup_required` は返さない）。ローカル認証（`AGENT_AUTH_MODE=local`）は共通 DB を使わないため、接続を試さず `ok`（`detail=local_auth`）を返し、画面のゲートは出ない。画面はシステム設定の 5 画面以外で、DB が使えるまで本文を案内に替える |
+| `GET` | `/api/ready/database` | 画面の DB ゲートが使う DB の状態（3製品共通の判定と契約。常に 200。ログイン不要。#325）。`ok` / `not_configured` / `unreachable` / `setup_required`（システムテーブルの作成・更新が必要。#751）を返す |
 | `POST` | `/api/auth/login` / `/api/auth/logout` / `/api/auth/password/change` | ログイン・ログアウト・パスワード変更（共通認証） |
 | `GET` | `/api/auth/me` | ログイン中の利用者（実効権限・`allowed_agent_ids`） |
 | `GET/POST/PATCH/DELETE` | `/api/security/users*` / `/api/security/roles*` | ユーザー管理・ロール管理（3製品共通） |
 | `GET` | `/api/security/permissions` / `/api/security/access-targets/agents` | 権限カタログ・権限管理で選べるエージェント（`q` / `limit` / `offset` / `ids` で検索とページング。#608） |
 | `PUT` | `/api/security/roles/{role_id}/access` | ロールの Agent 権限と対象範囲 |
-| `GET/POST/PATCH` | `/api/runtimes` | Runtime 定義 |
-| `GET` | `/api/runtimes/{id}/status` | capability/status probe |
-| `POST` | `/api/runtimes/services/{id}/{action}` | allowlist 済み service action |
-| `GET` | `/api/runtimes/services/{id}/logs` | service log |
-| `GET/POST/PATCH/DELETE` | `/api/runtime-bindings` | Agent と Runtime の Binding |
-| `POST` | `/api/runtime-bindings/{id}/sync` | Skill/MCP 閉包を Runtime へ同期 |
+| `GET` | `/api/runtime/status` | 組み込み Runtime の状態（SDK の版・既定のモデル・選べるモデル。API key は出さない） |
 | `GET/POST/PATCH` | `/api/agents` | Business Agent |
 | `GET/POST/PATCH` | `/api/skills` | Skill registry |
 | `GET/POST` | `/api/plugins` | Marketplace 配布 package（内部契約名） |
-| `POST` | `/api/runs` | Binding を固定して Run 作成 |
+| `POST` | `/api/runs` | Run 作成（組み込み Runtime で実行） |
 | `GET` | `/api/runs/{id}/events` | SSE event |
 | `WS` | `/api/runs/{id}/events/ws` | WebSocket event |
-| `POST` | `/api/runs/{id}/cancel` | capability 対応時だけ cancel |
+| `POST` | `/api/runs/{id}/cancel` | Run の取消 |
 | `GET` | `/api/runs/{id}/artifacts` | normalized Artifact |
-| `POST` | `/api/mcp/{binding_id}` | Binding 固有 MCP endpoint |
 | `GET/POST` | `/api/runtime/snapshot` | Snapshot v2 export/import |
 
-`POST /api/runs` は `agent_id` と任意の `runtime_binding_id` を受け取ります。Binding が解決できない
-場合は `409 runtime_binding_required`、旧 `tool_calls` は `422` です。移行期間の旧テスト/API は
+`POST /api/runs` は `agent_id` と `goal` を受け取り、組み込み Runtime で実行します。旧 `tool_calls` は `422` です。移行期間の旧テスト/API は
 `X-Agent-API-Version: 1` を明示した場合だけ動作し、deprecation/sunset header を返します。
 
 ## セキュリティ境界
@@ -243,11 +182,9 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 - production（`AGENT_AUTH_MODE=production`）は全 API を既定拒否の権限 manifest で守ります。Cookie のないリクエストは 401 です
   （RAG / NL2SQL と同じ。`X-Agent-Roles` などの header は使いません）（[docs/security-rbac.md](docs/security-rbac.md)）。
 - WebSocket は Cookie のセッションで `Origin` と `Host` の一致を必須にします。承認の決定者はログイン中の利用者です。
-- Runtime secret は環境変数値ではなく env 名で参照し、API/snapshot/log に値を出しません。
-- Binding MCP は Binding 固有 token と Skill allowlist の両方を検証します。
+- モデルの API key・外部の token は API/snapshot/log/Artifact に出しません。SDK の tracing は無効です。
+- ツールは Skill が必要とするものだけをモデルに渡し、ポリシーが「拒否」のツールは渡しません。
 - Plugin install は ID 衝突時に全体を失敗させます。参照中 Skill は削除できません。
-- Runtime の capability が無い操作は `409` で fail closed します。
-- Runtime 自動 failover は行いません。
 - Control Plane に別 LLM provider、外部 vector DB、新規 queue 製品を追加しません。
 
 ## 検証
@@ -262,7 +199,4 @@ uv run pytest -q
 cd ../frontend
 npm run build
 npm run test:e2e
-
-cd ..
-docker compose --profile openclaw --profile hermes --profile deerflow config --quiet   # 第三者 Runtime の compose
 ```

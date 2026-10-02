@@ -20,6 +20,7 @@ dependencies = [
   "websockets>=15,<17",
   "production-ready-backend-core",
   "production-ready-system-settings-backend",
+  "openai-agents==0.22.3",
 ]
 
 [dependency-groups]

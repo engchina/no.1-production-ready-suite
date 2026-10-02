@@ -26,7 +26,6 @@ from security_support import (
 
 import app.features.agent.tools as tools_module
 from app.features.agent.config import ExternalRagRuntimeConfig, runtime_config_store
-from app.features.agent.control_plane import RuntimeBinding, runtime_binding_registry
 from app.features.agent.tools import (
     ToolCall,
     ToolInvocationContext,
@@ -437,91 +436,3 @@ def test_direct_tool_invoke_uses_logged_in_user(
     assert response.status_code == 200, response.text
     assert response.json()["data"]["success"] is True
     assert mcp.calls_of("rag_search")[0]["claims"]["sub"] == operator.user_uuid
-
-
-# ---------------------------------------------------------------------------
-# Binding 経由の MCP
-# ---------------------------------------------------------------------------
-
-
-def test_binding_mcp_calls_rag_as_service_user(
-    monkeypatch: MonkeyPatch, auth: ProductionAuth
-) -> None:
-    service_user = auth.create_user("svc-binding")
-    monkeypatch.setattr(get_settings(), "agent_mcp_service_user_login_id", "svc-binding")
-    mcp = fake_product_mcp(monkeypatch)
-    binding = RuntimeBinding(
-        id="binding-mcp-233",
-        agent_id="default",
-        runtime_id="hermes-default",
-        native_agent_ref="agent",
-        enabled=True,
-    )
-    monkeypatch.setattr(runtime_binding_registry, "get", lambda binding_id: binding)
-    monkeypatch.setenv("AGENT_BINDING_MCP_TOKEN_BINDING_MCP_233", "binding-token-233")
-
-    response = client.post(
-        "/api/mcp/binding-mcp-233",
-        json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": "external_rag_search", "arguments": {"query": "契約"}},
-        },
-        headers={"Authorization": "Bearer binding-token-233"},
-    )
-
-    assert response.status_code == 200, response.text
-    assert response.json()["result"]["isError"] is False
-    [call] = mcp.calls_of("rag_search")
-    assert call["claims"]["sub"] == service_user.user_uuid
-    assert call["claims"]["agent_id"] == "default"
-
-
-def test_binding_mcp_hides_tools_that_require_approval(
-    monkeypatch: MonkeyPatch, auth: ProductionAuth
-) -> None:
-    """Binding の MCP は承認の記録を作れないため、承認が必要なツールを公開しない（#244）。"""
-    import app.features.agent.router as router_module
-    from app.features.agent.runtime import AgentProfile
-
-    auth.create_user("svc-binding")
-    monkeypatch.setattr(get_settings(), "agent_mcp_service_user_login_id", "svc-binding")
-    mcp = fake_product_mcp(monkeypatch)
-    binding = RuntimeBinding(
-        id="binding-mcp-244",
-        agent_id="nl2sql-agent",
-        runtime_id="hermes-default",
-        native_agent_ref="agent",
-        enabled=True,
-    )
-    monkeypatch.setattr(runtime_binding_registry, "get", lambda binding_id: binding)
-    monkeypatch.setattr(
-        router_module,
-        "_control_plane_agent",
-        lambda agent_id: AgentProfile(
-            id=agent_id, name="NL2SQL", instructions="", skill_ids=["structured_data_query"]
-        ),
-    )
-    monkeypatch.setenv("AGENT_BINDING_MCP_TOKEN_BINDING_MCP_244", "binding-token-244")
-    headers = {"Authorization": "Bearer binding-token-244"}
-
-    def rpc(method: str, params: dict[str, Any]) -> dict[str, Any]:
-        response = client.post(
-            "/api/mcp/binding-mcp-244",
-            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
-            headers=headers,
-        )
-        assert response.status_code == 200, response.text
-        body: dict[str, Any] = response.json()
-        return body
-
-    listed = [tool["name"] for tool in rpc("tools/list", {})["result"]["tools"]]
-    # Skill は external_nl2sql_query（SENSITIVE、既定 policy で承認）と get_job（READ）を要求する。
-    assert listed == ["external_nl2sql_get_job"]
-    denied = rpc(
-        "tools/call",
-        {"name": "external_nl2sql_query", "arguments": {"question": "件数", "row_limit": 5}},
-    )
-    assert denied["error"]["code"] == -32601
-    assert mcp.calls_of("nl2sql_query") == []

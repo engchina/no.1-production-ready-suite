@@ -1,26 +1,25 @@
-# AI Agent Control Plane 設計
+# Agent Platform 設計
 
 ## 1. Positioning
 
-> **Production Control Plane for AI Agents**
-> **Define Business Agents once. Execute them anywhere.**
+業務・業界の Agent を作り、Skill と MCP（RAG・NL2SQL・その他）を安全に使わせる製品。業務 Agent の定義と、
+その実行（組み込み Runtime）、共通の Run・Event・Artifact・Approval・Audit を 1 つの製品で持つ。
 
-Control Plane は Agent の業務定義を Runtime 実装から分離し、同じ Business Agent を OpenClaw、
-Hermes、DeerFlow、将来の Runtime へ明示 Binding で配置する。Runtime の自動切替は行わず、
-どの定義をどこで実行したかを常に監査できることを優先する。
+#754 で、外部の Runtime（OpenClaw / Hermes / DeerFlow）への Binding による配置をやめ、Control Plane の中の
+組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI の Responses API）で実行する形にした。
+今後の作り変えは「Agent Platform 再設計案」（2026-10-02）に沿う。
 
 ```mermaid
 flowchart TD
-  M["Marketplace"] --> P["Distribution package"]
+  M["Marketplace"] --> P["Plugin（配布 package）"]
   P --> R["Registry"]
   R --> S["Skill"]
-  S --> I["MCP / versioned resource"]
-  A["Business Agent"] --> S
-  A --> B["Runtime Binding"]
-  B --> X["Runtime adapter"]
-  X --> O["OpenClaw"]
-  X --> H["Hermes"]
-  X --> D["DeerFlow"]
+  S --> T["ツール（RAG / NL2SQL / 外部 MCP）"]
+  A["業務 Agent（指示・Skill・モデル）"] --> S
+  A --> X["Run"]
+  X --> B["組み込み Runtime（OpenAI Agents SDK）"]
+  B --> O["OCI Enterprise AI（Responses API）"]
+  B --> T
 ```
 
 ## 2. Domain contracts
@@ -46,8 +45,8 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 }
 ```
 
-Binding 同期は選択 Skill の和集合だけを materialize する。Runtime prompt への列挙だけで権限を
-表現せず、Skill allowlist と Binding MCP tool allowlist を実体として生成する。
+組み込み Runtime は、Agent の選択 Skill が要求するツールの和集合だけをモデルに渡す（指示への列挙だけで
+権限を表現せず、渡すツールの一覧を実体として絞る）。
 
 ### Marketplace package
 
@@ -58,75 +57,35 @@ Install は事前に Skill/MCP/resource の重複と参照を検証し、衝突�
 旧 `agents[]` は Agent を作らず template resource に変換して warning を返す。参照中 Skill を持つ
 package の disable/uninstall は `409`。
 
-### RuntimeDefinition
+### 組み込み Runtime（#754）
 
-Runtime は kind、接続先、secret env ref、managed service、capabilities、状態を持つ。secret 値は
-永続化しない。`legacy-native` は built-in read-only RuntimeDefinition として既存 Run に付与する。
-
-### RuntimeBinding
-
-Binding は `agent_id / runtime_id / native_agent_ref / is_default / enabled / policy / sync_status` を
-持つ。Agent ごとの既定は最大1件。同一 Runtime の `native_agent_ref` も一意。Agent 削除時は
-Binding と materialization を削除する。
+- `features/agent/builtin_runtime.py`。SDK は `openai-agents`（`pyproject.toml` で版を固定）。
+- モデル: Agent の `model_id`（空なら「システム設定 > モデル」の既定のテキストモデル）と、その接続（Endpoint・API key・
+  Project OCID）。`OpenAIResponsesModel` に OCI の OpenAI 互換の base URL を渡す。xAI のモデルは空の `tools` を
+  拒否するため、ツールが無い呼び出しでは `tools` / `tool_choice` を送らない（`OciResponsesModel`）。
+- 指示: 共通の前置き（日本語・根拠・推測しない）＋ Agent の指示 ＋ 割り当てた Skill の指示。
+- ツール: Skill の requirement（`server_id="control-plane"`）が要求する `tool_registry` のツールを `FunctionTool` にする。
+  実行は `tool_registry.invoke`（ポリシー・ガードレール・監査・成果物、RAG / NL2SQL のサービストークン）。
+  ポリシーの「拒否」は渡さず、「承認」は `needs_approval=True`。
+- 承認: SDK の中断（`result.interruptions`）で承認待ちの step と ApprovalRequest を作り、`result.to_state().to_string()`
+  を Run の metadata（`_builtin_sdk_state`）に保存して `waiting_approval` にする。すべて決まると `queued` に戻り、
+  状態を復元して承認・却下を反映し再開する。承認済みのツールは中断時の step を実行中にして結果を記録する。
+- tracing: `set_tracing_disabled(True)`（業務データを外部へ送らない）。
+- テスト: SDK の `agents.testing.ScriptedModel` でモデルを台本にする（`tests/test_builtin_runtime.py`）。
 
 ### RunState
 
-共通 Run は従来の状態/Event/Artifact/Audit に次を追加する。
+共通 Run は状態/Event/Artifact/Approval/Audit と `runtime_id`（新しい Run は `builtin`）を持つ。
+`POST /api/runs` は `agent_id` と `goal` だけを受け取り、組み込み Runtime で実行する。モデルの最終回答は
+`kind="answer"` の Artifact に残す。
 
-- `runtime_id`
-- `binding_id`
-- `external_run_id`
-- `external_cursor`
-- submit 時点の `runtime_capabilities`
+## 3. ツールとポリシー
 
-`POST /api/runs` は明示 Binding、Agent 既定 Binding の順に解決する。未 Binding、同期未完、
-Runtime disabled は `409`。外部 submit 後も Binding と capability snapshot は変えない。
+RAG / NL2SQL / 外部 MCP のツールは `tool_registry` に登録し、組み込み Runtime からだけ呼ぶ。schema 検証、ToolPolicy、
+PII/secret masking、audit metadata、成果物の保存を再利用する。外部 Runtime 向けの Binding MCP（`/api/mcp/{binding_id}`）
+と adapter 契約（`probe_capabilities / sync_binding / submit_run / ...`）は #754 で削除した。
 
-## 3. Adapter boundary
-
-```python
-class RuntimeAdapter(Protocol):
-    probe_capabilities(...)
-    sync_binding(...)
-    submit_run(...)
-    follow_events(...)
-    get_status(...)
-    cancel(...)
-    list_artifacts(...)
-```
-
-- OpenClaw: Gateway WebSocket protocol v3–4、`chat.send`、`agent.wait`、`sessions.abort`、
-  `artifacts.list`。内部 control-plane client として最小 scope で handshake する。
-- Hermes: `/v1/capabilities`、`/v1/runs`、SSE events、status、stop。
-- DeerFlow: `/api/langgraph/threads` と run/state、thread state の artifacts。
-
-Runtime が対応しない操作はローカル成功に置き換えず、
-`409 runtime_capability_unsupported` を返し UI に理由を表示する。
-
-## 4. Binding MCP
-
-`/api/mcp/{binding_id}` は MCP initialize / tools/list / tools/call の最小 surface を提供する。
-公開 tool は Agent の選択 Skill が要求する `server_id=control-plane` の閉包だけ。そのうち ToolPolicy で承認なしに実行できる（`allow`）tool だけを公開する。Binding MCP の呼び出しは Run と結びつかず承認の記録を作れないため、承認が必要（`ask`）・拒否（`deny`）の tool（例: 既定 policy の `external_nl2sql_query`・`external_rag_chat`）は `tools/list` に出さず、呼ぶと `-32601` で拒否する（#244）。tool 実行は既存の
-Pydantic input schema、ToolPolicy、PII/secret masking、audit metadata を再利用する。
-
-認証 token は次の順で解決する。
-
-1. `AGENT_BINDING_MCP_TOKEN_<NORMALIZED_BINDING_ID>`（Binding ID の英数字以外を `_` にして大文字化）
-2. `AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET` から HMAC-SHA256 派生
-
-Runtime へ同期する MCP server 定義の `api_key_env` にも 1 の名前を渡す。
-#211 で旧名 `CONTROL_PLANE_MCP_TOKEN_<ID>` は読まなくなった。
-
-token が無い場合は fail closed (`503`)。値を Binding JSON、snapshot、API に保存しない。
-
-Binding MCP endpoint は Runtime からの呼出し境界のため、production（`AGENT_AUTH_MODE=production`）でも
-Cookie のログインと権限 manifest の対象外で、この token だけで認証する（#215）。
-
-Binding MCP の呼び出しは Run と結びつかない（Runtime は Run の ID を送らない）。そのため RAG / NL2SQL の
-ツールは Run の利用者ではなく、サービス利用者（`AGENT_MCP_SERVICE_USER_LOGIN_ID`）として呼ぶ（§4.1）。
-サービス利用者が未設定なら、そのツールは `external_rag.user_required` などで失敗する。RAG / NL2SQL で
-できることはサービス利用者のロールの権限・対象範囲に限られるため、専用のユーザーを作り、必要な
-業務ビュー・業務プロファイルだけを割り当てる。
+## 4. 製品の MCP
 
 ### 4.1 RAG / NL2SQL の MCP（#233）
 
@@ -169,49 +128,29 @@ masking・監査を通す。契約は各製品のツール（#230〜#232）を�
 
 ## 5. Dispatcher and persistence
 
-開発時は FastAPI BackgroundTasks で submit する。本番は `runtime-dispatcher` が Oracle checkpoint
-row を `SELECT ... FOR UPDATE` し、queued Run に期限付き lease を付けて claim する。submit 成功または
-失敗時に lease を除去して Event を保存する。これにより別 queue 製品を追加しない。
+開発時は API のプロセスで実行する（`AGENT_RUNTIME_DISPATCH_MODE=in_process`。asyncio の task）。本番で別プロセスに
+する場合は `runtime-dispatcher`（`python -m app.features.agent.runtime_dispatcher`）が Oracle checkpoint row を
+`SELECT ... FOR UPDATE` し、queued の組み込み Runtime の Run に期限付き lease を付けて claim し、実行・再開する。
+実行を始めたら lease を外す（承認の決定で queued に戻った Run を、すぐ claim できるようにする）。別 queue 製品は追加しない。
 
 外部 dispatcher は `AGENT_RUNTIME_REPOSITORY_BACKEND=oracle_checkpoint|oracle_normalized` が前提。
 memory backend は process 間共有されないため production dispatcher に使用しない。
 
-## 6. Runtime services（第三者の構築済みイメージ）
-
-Control Plane（backend・frontend）と runtime-dispatcher は自前のコードなので Docker を使わず、開発は `uv run`、
-本番は systemd で動かす（#286 / #356）。`docker-compose.yml` は第三者の Runtime だけを opt-in profile で持つ。
-
-| Profile | Service | State | Health |
-|---|---|---|---|
-| `openclaw` | `runtime-openclaw` | `openclaw-state/auth` | `/readyz` |
-| `hermes` | `runtime-hermes` | `hermes-state` | `/health` |
-| `deerflow` | `runtime-deerflow` | `deerflow-state` | `/api/models` |
-
-外部 dispatcher（`AGENT_RUNTIME_DISPATCH_MODE=external`）は Oracle を使う別プロセス
-（`python -m app.features.agent.runtime_dispatcher`）で、compose の service ではない。
-各 Runtime は Control Plane の Binding の書き出し（`AGENT_RUNTIME_BINDINGS_DIR`）を読み取り専用で mount する。
-Runtime image はすべて公式 registry の multi-arch digest を固定する。Docker socket は mount しない。
-管理 API は `AGENT_RUNTIME_SERVICE_CONTROL_ENABLED=true` の管理者 host 運用でのみ有効。
-
 ## 7. Snapshot migration
 
-Snapshot v2 は runs/agents/legacy memory に `control_plane_state.runtimes/bindings` を追加する。
+Snapshot v2 は runs/agents/legacy memory を持つ（旧版の `control_plane_state.runtimes/bindings` は読み込んでも使わない。#754）。
 
 - v1 tool を一意に対応できる Skill へ推定。
 - 変換不能 tool があれば `migration_required=true`, `enabled=false`。
-- command prefix は最初の Binding 作成時に `policy.command_allowed_prefixes` へ移す。
 - 既存 Run は model default により `runtime_id=legacy-native`。
 - Memory は export/search だけを維持し、手動新規書込は `410`。
 - v1 Run は `X-Agent-API-Version: 1` 明示時のみ。deprecation/sunset header を返す。
 
 ## 8. UI information architecture
 
-主要ナビは「業務 Agent / Skill / Runtime / Run / 承認・監査 / Marketplace」。Agent 画面では Skill
-だけを選び、Agent 詳細の「実行先」panel で Binding を追加・同期する。Run は Agent と Binding 上書き
-だけを受け取り、Tool/arguments は表示しない。
-
-Runtime 画面は status、capabilities、enable、probe、管理可能な service action/log を表示する。
-未 Binding、sync error、degraded、capability 非対応を warning/error state として表示する。
+主要ナビは「業務 Agent / Skill / Runtime / Run / 承認・監査 / Marketplace」。Agent 画面では指示・Skill・モデルを選ぶ。
+Run は Agent とゴールだけを受け取る（実行先の選択は無い）。Runtime 画面は組み込み Runtime の状態（SDK の版・既定のモデル・
+選べるモデル・実行できるか）と、モデル未設定のときの理由と「システム設定 > モデル」への導線を出す。
 
 ## 9. Authentication and RBAC
 
@@ -225,8 +164,6 @@ Agent の権限（`AGENT_ROLE_PERMISSIONS`）と対象範囲（`AGENT_ROLE_AGENT
 
 ## 10. Non-goals
 
-- Control Plane 内の新しい Agent Runtime / planner / workflow engine
-- Runtime 自動 failover
+- 外部の Agent Runtime（OpenClaw / Hermes / DeerFlow など）への配置と adapter（#754 で削除）
+- 独立した planner / workflow engine
 - 外部 archive の Marketplace install
-- OKE / Container Instances driver
-- 別 LLM provider、外部 vector DB、新規 queue product

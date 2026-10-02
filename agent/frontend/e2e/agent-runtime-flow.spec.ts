@@ -35,39 +35,21 @@ const skill = {
   updated_at: now,
 };
 
-const runtime = {
-  id: "hermes-default",
-  name: "Hermes",
-  kind: "hermes",
-  base_url: "http://runtime-hermes:8642",
-  auth_secret_ref: "AGENT_HERMES_API_SERVER_KEY",
-  managed_service_id: "runtime-hermes",
-  capabilities: {
-    stream_events: true,
-    cancel: false,
-    artifacts: false,
-    approvals: false,
-    skill_sync: true,
-    mcp_sync: true,
-  },
-  enabled: true,
-  status: "degraded",
-  created_at: now,
-  updated_at: now,
-};
-
-const binding = {
-  id: "binding-default-hermes",
-  agent_id: "default",
-  runtime_id: "hermes-default",
-  native_agent_ref: "default-profile",
-  is_default: true,
-  enabled: true,
-  policy: {},
-  sync_status: "ready",
-  sync_error: null,
-  created_at: now,
-  updated_at: now,
+// 組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI。#754）の状態。
+const runtimeStatus = {
+  id: "builtin",
+  name: "組み込み Runtime",
+  sdk: "openai-agents",
+  sdk_version: "0.22.3",
+  model_provider: "OCI Enterprise AI（Responses API）",
+  model_id: "xai.grok-4",
+  ready: true,
+  error_code: null,
+  message: null,
+  models: [
+    { model_id: "xai.grok-4", display_name: "Grok 4" },
+    { model_id: "openai.gpt-oss-120b", display_name: "gpt-oss-120b" },
+  ],
 };
 
 function api(data: unknown) {
@@ -76,7 +58,7 @@ function api(data: unknown) {
 
 async function installControlPlaneApi(
   page: Page,
-  options?: { unbound?: boolean; auditRecords?: Record<string, unknown>[] }
+  options?: { notReady?: boolean; auditRecords?: Record<string, unknown>[]; agentPatches?: unknown[] }
 ) {
   let runs: Record<string, unknown>[] = [];
   await page.route("**/api/**", async (route: Route) => {
@@ -94,38 +76,41 @@ async function installControlPlaneApi(
       if (method === "POST") return respond(agent);
       return respond({ agents: [agent] });
     }
-    if (path.startsWith("/api/agents/")) return respond(agent);
+    if (path.startsWith("/api/agents/")) {
+      if (method === "PATCH") options?.agentPatches?.push(route.request().postDataJSON());
+      return respond(agent);
+    }
     if (path === "/api/skills") return respond({ skills: [skill], metadata: {} });
-    if (path === "/api/runtimes") return respond({ runtimes: [runtime] });
-    if (path.endsWith("/status") && path.startsWith("/api/runtimes/")) {
-      return respond({ ...runtime, status: "running" });
+    if (path === "/api/runtime/status") {
+      return respond(
+        options?.notReady
+          ? {
+              ...runtimeStatus,
+              model_id: "",
+              ready: false,
+              error_code: "runtime.model_not_configured",
+              message: "使うモデルが決まっていません。システム設定 > モデル で既定のテキストモデルを設定してください。",
+              models: [],
+            }
+          : runtimeStatus
+      );
     }
-    if (path.startsWith("/api/runtimes/services/")) return respond({ ok: true });
-    if (path === "/api/runtime-bindings") {
-      if (method === "POST") return respond(binding);
-      return respond({ bindings: options?.unbound ? [] : [binding] });
-    }
-    if (path.startsWith("/api/runtime-bindings/")) return respond(binding);
     if (path === "/api/runs" && method === "POST") {
       const body = route.request().postDataJSON() as { goal: string };
       const run = {
         id: "run-control-plane-e2e",
         goal: body.goal,
         agent_id: "default",
-        runtime_id: "hermes-default",
-        binding_id: binding.id,
-        external_run_id: "hermes-run-1",
-        external_cursor: null,
-        runtime_capabilities: runtime.capabilities,
+        runtime_id: "builtin",
         status: "running",
         steps: [],
         events: [
           {
             id: "event-1",
             run_id: "run-control-plane-e2e",
-            type: "runtime.submitted",
-            message: "外部 Runtime が Run を受理しました。",
-            payload: { external_run_id: "hermes-run-1" },
+            type: "run.status_changed",
+            message: "実行を開始しました。",
+            payload: { status: "running", runtime_id: "builtin" },
             created_at: now,
           },
         ],
@@ -161,47 +146,49 @@ function runDetail(page: Page) {
 }
 
 test.describe("AI Agent Control Plane", () => {
-  test("業務 Agent は Skill だけを選択し実行先を別パネルで管理する", async ({ page }) => {
-    await installControlPlaneApi(page);
+  test("業務 Agent は Skill とモデルを選び、実行先（Binding）の管理は無い", async ({ page }) => {
+    const agentPatches: unknown[] = [];
+    await installControlPlaneApi(page, { agentPatches });
     await page.goto("/agents");
 
     await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
-    // 一覧は既定の実行先だけを示し、Skill の選択と実行先の管理は全画面エディタで行う（#137）。
-    await expect(page.getByRole("table", { name: "業務 Agent 一覧" }).getByText("default-profile")).toBeVisible();
+    // 一覧はモデル（空は既定のテキストモデル）を示す（#754）。
+    await expect(page.getByRole("table", { name: "業務 Agent 一覧" }).getByText("既定のテキストモデル")).toBeVisible();
     await page.getByRole("link", { name: "汎用業務 Agent default", exact: true }).click();
     await expect(page).toHaveURL(/\/agents\?id=default$/);
     await expect(page.getByRole("heading", { name: "汎用業務 Agent", level: 1 })).toBeVisible();
     await expect(page.getByText("業務 RAG 調査").first()).toBeVisible();
-    await expect(page.getByRole("heading", { name: "実行先", exact: true })).toBeVisible();
-    await expect(page.getByText("default-profile")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "実行先", exact: true })).toHaveCount(0);
     await expect(page.getByText("利用可能ツール")).toHaveCount(0);
-    await expect(page.getByText("Command allowed prefixes")).toHaveCount(0);
+
+    // モデルは「既定のテキストモデル（…）」か、登録モデルから選ぶ。
+    const model = page.getByRole("combobox", { name: "モデル" });
+    await expect(model).toContainText("既定のテキストモデル（xai.grok-4）");
+    await model.click();
+    await page.getByRole("option", { name: "gpt-oss-120b" }).click();
+    await page.locator("[data-page-header-actions]").getByRole("button", { name: "保存" }).click();
+    await expect(page.getByText("Agent を保存しました")).toBeVisible();
+    expect(agentPatches.at(-1)).toMatchObject({ model_id: "openai.gpt-oss-120b" });
 
     await page.keyboard.press("Tab");
     await expectNoHorizontalOverflow(page);
     await page.setViewportSize({ width: 375, height: 812 });
-    await expect(page.getByText("default-profile")).toBeVisible();
+    await expect(model).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
 
-  test("未 Binding を明示し、Binding 指定で Run を作成できる", async ({ page }) => {
-    await installControlPlaneApi(page, { unbound: true });
-    await page.goto("/runs");
-    await expect(page.getByText("この Agent には実行可能な Binding がありません。")).toBeVisible();
-
-    await page.unroute("**/api/**");
+  test("Run は Agent とゴールだけで作成し、組み込み Runtime が実行する", async ({ page }) => {
     await installControlPlaneApi(page);
-    await page.reload();
+    await page.goto("/runs");
+    await expect(page.getByLabel("実行先 Binding")).toHaveCount(0);
     const goal = "契約情報を確認する";
     await page.getByLabel("ゴール").fill(goal);
-    await expect(page.getByLabel("実行先 Binding")).toContainText("default-profile");
     await page.getByRole("button", { name: "実行を作成" }).click();
 
     await expect(page.getByText("実行を作成しました", { exact: true })).toBeVisible();
     await expect(page.getByText(goal).first()).toBeVisible();
-    await expect(runDetail(page).getByText(/Runtime: hermes-default/)).toBeVisible();
-    await expect(page.getByText("この Runtime は取消に対応していません。")).toBeVisible();
-    await expect(page.getByText("runtime.submitted")).toBeVisible();
+    await expect(runDetail(page).getByText(/Runtime: 組み込み Runtime/)).toBeVisible();
+    await expect(page.getByText("run.status_changed").first()).toBeVisible();
     // 実行中の Run は、サーバーの開始時刻からの経過時間を出す（#376）。
     const progress = page.getByTestId("run-progress");
     await expect(progress).toContainText("Run を実行しています");
@@ -209,59 +196,49 @@ test.describe("AI Agent Control Plane", () => {
     await expect(progress.getByRole("timer")).toHaveAccessibleName(/^経過時間 /);
   });
 
-  test("Runtime の状態（日本語）、capability、管理操作と状態確認の結果を表示する", async ({ page }) => {
-    await installControlPlaneApi(page);
-    await page.goto("/runtimes");
-
-    await expect(page.getByRole("heading", { name: "Runtime", level: 1 })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Hermes" })).toBeVisible();
-    // 状態は英字の生の値（degraded）ではなく日本語で出す（messaging.md §10。#725）。
-    await expect(page.getByText("一部異常")).toBeVisible();
-    await expect(page.getByText("degraded")).toHaveCount(0);
-    await expect(page.getByText("cancel: off")).toBeVisible();
-    // 状態（Runtime の status、capability の対応有無）のバッジだけがアイコンを持つ
-    await expect(page.locator("[data-status-variant]", { hasText: "一部異常" }).locator("svg")).toHaveCount(1);
-    await expect(page.locator("[data-status-variant]", { hasText: "cancel: off" }).locator("svg")).toHaveCount(1);
-    await expect(page.locator("[data-status-variant]", { hasText: "mcp_sync: on" }).locator("svg")).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "状態確認" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Pull" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "起動", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "停止" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "再起動" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "削除" })).toBeVisible();
-
-    // 状態確認の結果は、その Runtime のカードの操作の直下に出す（messaging.md §10.1。#725）。
-    await page.getByRole("button", { name: "状態確認" }).click();
-    const result = page.getByTestId("runtime-result-hermes-default");
-    await expect(result.getByRole("status")).toHaveText("Hermes の状態を確認しました（稼働中）。");
-    await page.setViewportSize({ width: 375, height: 812 });
-    await expect(page.getByRole("heading", { name: "Hermes" })).toBeVisible();
-    await expect(result).toBeVisible();
-    await expectNoHorizontalOverflow(page);
+  test("モデルが未設定なら、Run の作成の前に理由を知らせる", async ({ page }) => {
+    await installControlPlaneApi(page, { notReady: true });
+    await page.goto("/runs");
+    // 警告（warning の Banner。アイコン付き）で、見出しと理由を出す。
+    await expect(page.getByText("業務 Agent を実行できません")).toBeVisible();
+    await expect(page.getByText(/既定のテキストモデルを設定してください。/)).toBeVisible();
   });
 
-  test("Runtime のサービス操作の失敗は、ページ先頭ではなくそのカードの操作の直下に出す", async ({ page }) => {
-    await installControlPlaneApi(page);
-    await page.route("**/api/runtimes/services/runtime-hermes/start", (route) =>
-      route.fulfill({
-        status: 409,
-        contentType: "application/json",
-        body: JSON.stringify({ data: null, error_messages: ["サービス操作は無効です。"], warning_messages: [] }),
-      })
-    );
-    await page.goto("/runtimes");
-    await page.getByRole("button", { name: "起動", exact: true }).click();
+  for (const viewport of [
+    { name: "desktop", width: 1280, height: 800 },
+    { name: "mobile", width: 375, height: 812 },
+  ]) {
+    test(`Runtime 画面は組み込み Runtime の状態と使うモデルを出す (${viewport.name})`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await installControlPlaneApi(page);
+      await page.goto("/runtimes");
 
-    const result = page.getByTestId("runtime-result-hermes-default");
-    await expect(result.getByRole("alert")).toHaveText("Hermes を起動できませんでした。サービス操作は無効です。");
-    // 結果はカードの中（操作の直下）だけに出し、ページ先頭の Banner には出さない。
-    await expect(page.getByRole("alert")).toHaveCount(1);
+      await expect(page.getByRole("heading", { name: "Runtime", level: 1 })).toBeVisible();
+      const card = page.getByTestId("builtin-runtime-card");
+      await expect(card.getByRole("heading", { name: "組み込み Runtime" })).toBeVisible();
+      await expect(card.locator("[data-status-variant]", { hasText: "実行できます" }).locator("svg")).toHaveCount(1);
+      await expect(card).toContainText("openai-agents 0.22.3");
+      await expect(card).toContainText("xai.grok-4");
+      await expect(card).toContainText("Grok 4、gpt-oss-120b");
+      // 外部 Runtime の操作（Pull・起動・停止・ログ）は無い（#754）。
+      await expect(page.getByRole("button", { name: "Pull" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "起動", exact: true })).toHaveCount(0);
+      await expectNoHorizontalOverflow(page);
+    });
 
-    // 次の操作を始めたら前の結果を消し、成功の結果に置き換える（messaging.md §10.4）。
-    await page.getByRole("button", { name: "再起動" }).click();
-    await expect(result.getByRole("status")).toHaveText("Hermes を再起動しました。");
-    await expect(page.getByRole("alert")).toHaveCount(0);
-  });
+    test(`モデルが未設定なら Runtime 画面で理由とモデルの設定への導線を出す (${viewport.name})`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await installControlPlaneApi(page, { notReady: true });
+      await page.goto("/runtimes");
+      const card = page.getByTestId("builtin-runtime-card");
+      await expect(card.locator("[data-status-variant]", { hasText: "設定が必要" })).toBeVisible();
+      await expect(card.getByText("業務 Agent を実行できません")).toBeVisible();
+      await expect(card.getByText(/既定のテキストモデルを設定してください。/)).toBeVisible();
+      await card.getByTestId("builtin-runtime-open-model-settings").click();
+      await expect(page).toHaveURL(/\/settings\/model$/);
+      await expectNoHorizontalOverflow(page);
+    });
+  }
 
   test("監査のエラーは要約を title に、エラーコードを開いた「詳細」に出す", async ({ page }) => {
     await installControlPlaneApi(page, {
@@ -291,37 +268,4 @@ test.describe("AI Agent Control Plane", () => {
     await expect(alert).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
-
-  for (const viewport of [
-    { name: "desktop", width: 1280, height: 800 },
-    { name: "mobile", width: 375, height: 812 },
-  ]) {
-    test(`Runtime のサービス操作の間は経過時間を出す (${viewport.name})`, async ({ page }) => {
-      await page.setViewportSize({ width: viewport.width, height: viewport.height });
-      await installControlPlaneApi(page);
-      // pull の応答を止めて、実行中の表示（#376）を確かめてから既定の mock へ渡す。
-      let release: () => void = () => {};
-      const released = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      await page.route("**/api/runtimes/services/**", async (route) => {
-        await released;
-        await route.fallback();
-      });
-      await page.goto("/runtimes");
-      await page.getByRole("button", { name: "Pull" }).click();
-
-      const processing = page.getByTestId("runtime-processing-hermes-default");
-      await expect(processing).toContainText("Hermes のイメージを取得しています");
-      await expect(processing.getByRole("timer")).toHaveAccessibleName(/経過時間 \d{2}:\d{2}/);
-      await expect(processing).toHaveAttribute("data-processing-activity-icon", "none");
-      // 同じ Runtime の他の操作は、実行中の操作が終わるまで押せない。
-      await expect(page.getByRole("button", { name: "起動", exact: true })).toBeDisabled();
-      await expectNoHorizontalOverflow(page);
-
-      release();
-      await expect(processing).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "起動", exact: true })).toBeEnabled();
-    });
-  }
 });

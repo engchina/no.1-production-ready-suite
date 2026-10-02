@@ -170,11 +170,8 @@ export interface RunState {
   id: string;
   goal: string;
   agent_id: string;
+  /** 実行した Runtime（新しい Run は組み込み Runtime の "builtin"。#754）。 */
   runtime_id: string;
-  binding_id?: string | null;
-  external_run_id?: string | null;
-  external_cursor?: string | null;
-  runtime_capabilities: RuntimeCapabilities;
   status:
     | "queued"
     | "running"
@@ -269,6 +266,8 @@ export interface AgentProfile {
   description: string;
   instructions: string;
   skill_ids: string[];
+  /** 組み込み Runtime で使うモデル（空なら既定のテキストモデル。#754）。 */
+  model_id?: string;
   migration_required: boolean;
   tool_names?: string[];
   command_allowed_prefixes?: string[];
@@ -283,6 +282,7 @@ export interface AgentProfileWritePayload {
   description?: string;
   instructions?: string;
   skill_ids: string[];
+  model_id?: string;
   enabled: boolean;
 }
 
@@ -291,6 +291,7 @@ export interface AgentProfilePatchPayload {
   description?: string;
   instructions?: string;
   skill_ids?: string[];
+  model_id?: string;
   enabled?: boolean;
 }
 
@@ -567,56 +568,28 @@ export interface RuntimeSnapshotImportPayload {
 export interface CreateRunPayload {
   goal: string;
   agent_id?: string;
-  runtime_binding_id?: string;
   metadata?: Record<string, unknown>;
 }
 
-export interface RuntimeCapabilities {
-  stream_events: boolean;
-  cancel: boolean;
-  artifacts: boolean;
-  approvals: boolean;
-  skill_sync: boolean;
-  mcp_sync: boolean;
+/** 組み込み Runtime で選べるモデル（システム設定 > モデル の登録モデル。#754）。 */
+export interface BuiltinRuntimeModel {
+  model_id: string;
+  display_name: string;
 }
 
-export interface RuntimeDefinition {
+/** 組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI）の状態。API key は含まない（#754）。 */
+export interface BuiltinRuntimeStatus {
   id: string;
   name: string;
-  kind: "openclaw" | "hermes" | "deerflow" | "legacy_native";
-  base_url: string;
-  auth_secret_ref?: string | null;
-  managed_service_id?: string | null;
-  capabilities: RuntimeCapabilities;
-  enabled: boolean;
-  status:
-    "unknown" | "running" | "degraded" | "stopped" | "disabled" | "legacy";
-  created_at: string;
-  updated_at: string;
-}
-
-export interface RuntimeBinding {
-  id: string;
-  agent_id: string;
-  runtime_id: string;
-  native_agent_ref: string;
-  is_default: boolean;
-  enabled: boolean;
-  policy: Record<string, unknown>;
-  sync_status: "pending" | "ready" | "error";
-  sync_error?: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface RuntimeBindingWritePayload {
-  id?: string;
-  agent_id: string;
-  runtime_id: string;
-  native_agent_ref: string;
-  is_default?: boolean;
-  enabled?: boolean;
-  policy?: Record<string, unknown>;
+  sdk: string;
+  sdk_version: string;
+  model_provider: string;
+  /** 既定のテキストモデル（空なら未設定）。 */
+  model_id: string;
+  ready: boolean;
+  error_code?: string | null;
+  message?: string | null;
+  models: BuiltinRuntimeModel[];
 }
 
 /**
@@ -838,64 +811,8 @@ function externalMcpToolsQuery(filters: ExternalMcpToolsFilters): string {
 }
 
 export const agentApi = {
-  listRuntimes: () =>
-    request<{ runtimes: RuntimeDefinition[] }>("/api/runtimes"),
-  patchRuntime: (runtimeId: string, payload: Partial<RuntimeDefinition>) =>
-    request<RuntimeDefinition>(
-      `/api/runtimes/${encodeURIComponent(runtimeId)}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify(payload),
-      },
-    ),
-  probeRuntime: (runtimeId: string) =>
-    request<RuntimeDefinition>(
-      `/api/runtimes/${encodeURIComponent(runtimeId)}/status`,
-    ),
-  runtimeServiceAction: (
-    serviceId: string,
-    action: "pull" | "start" | "stop" | "restart" | "remove",
-  ) =>
-    request<Record<string, unknown>>(
-      `/api/runtimes/services/${encodeURIComponent(serviceId)}/${action}`,
-      { method: "POST" },
-    ),
-  runtimeServiceLogs: (serviceId: string) =>
-    request<{ content: string }>(
-      `/api/runtimes/services/${encodeURIComponent(serviceId)}/logs`,
-    ),
-  listRuntimeBindings: (agentId?: string) =>
-    request<{ bindings: RuntimeBinding[] }>(
-      `/api/runtime-bindings${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""}`,
-    ),
-  createRuntimeBinding: (payload: RuntimeBindingWritePayload) =>
-    request<RuntimeBinding>("/api/runtime-bindings", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-  patchRuntimeBinding: (
-    bindingId: string,
-    payload: Partial<RuntimeBindingWritePayload>,
-  ) =>
-    request<RuntimeBinding>(
-      `/api/runtime-bindings/${encodeURIComponent(bindingId)}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify(payload),
-      },
-    ),
-  deleteRuntimeBinding: (bindingId: string) =>
-    request<{ bindings: RuntimeBinding[] }>(
-      `/api/runtime-bindings/${encodeURIComponent(bindingId)}`,
-      { method: "DELETE" },
-    ),
-  syncRuntimeBinding: (bindingId: string) =>
-    request<RuntimeBinding>(
-      `/api/runtime-bindings/${encodeURIComponent(bindingId)}/sync`,
-      {
-        method: "POST",
-      },
-    ),
+  // 組み込み Runtime の状態（SDK の版・既定のモデル・選べるモデル。#754）。
+  getRuntimeStatus: () => request<BuiltinRuntimeStatus>("/api/runtime/status"),
   listRuns: () => request<{ runs: RunState[] }>("/api/runs"),
   createRun: (payload: CreateRunPayload) =>
     request<RunState>("/api/runs", {

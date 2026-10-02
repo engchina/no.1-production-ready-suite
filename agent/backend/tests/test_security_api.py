@@ -2,7 +2,7 @@
 
 - production mode のログイン（DB ユーザー・構成管理者）・CSRF・強制パスワード変更
 - 権限の既定拒否（manifest 未登録・権限なし 403）と manifest の完全性
-- production で Cookie がないリクエスト（AGENT_RBAC_ENABLED の有無、`POST /mcp/{binding_id}`）
+- production で Cookie がないリクエスト（401）
 - `/security/*`（権限カタログ・対象の一覧・ロールの権限と対象範囲の保存と昇格防止）
 - 廃止した権限コード（`menu.dashboard`。#262）が DB に残っていても壊れないこと
 """
@@ -29,7 +29,6 @@ from security_support import (
 )
 
 import app.features.agent.router as agent_router
-from app.features.agent.control_plane import RuntimeBinding, runtime_binding_registry
 from app.features.agent.runtime import AgentProfile, runtime_repository
 from app.main import app
 from app.security import dependencies as security_dependencies
@@ -97,7 +96,8 @@ def _unclassified_operations(operations: list[tuple[str, str]]) -> list[str]:
 def test_every_api_route_is_classified_by_manifest() -> None:
     """全 API（method × path）が manifest に登録されている（登録外は既定で拒否）。"""
     operations = _api_operations()
-    assert len(operations) > 120
+    # 外部 Runtime・Binding の API は #754 で削除した。下限は収集の取りこぼしを検出するため。
+    assert len(operations) > 100
     assert _unclassified_operations(operations) == []
     open_operations = {
         (method, path) for method, path in operations if permission_for_route(method, path) is None
@@ -242,7 +242,11 @@ def test_manifest_key_assignments() -> None:
     assert _perm("POST", "/security/roles") == {"menu.security_roles"}
     assert _perm("PATCH", "/security/users/{user_uuid}") == {"menu.security_users"}
     assert _perm("PUT", "/security/roles/{role_id}/access") == {"menu.security_permissions"}
-    assert permission_for_route("POST", "/mcp/{binding_id}") is None
+    # 外部 Runtime の Binding の MCP は #754 で削除した（公開 path に残さない）。
+    assert "/mcp/{binding_id}" not in PUBLIC_API_PATHS
+    assert permission_for_route("GET", "/runtime/status") == frozenset(
+        {"menu.runtimes", "menu.agents"}
+    )
 
 
 def test_retired_permission_codes_are_not_in_catalog_or_manifest() -> None:
@@ -519,36 +523,6 @@ def test_local_mode_uses_oracle_security_store(monkeypatch: MonkeyPatch) -> None
         assert isinstance(security_service.get_security_service().store, OracleSecurityStore)
     finally:
         set_security_service(None)
-
-
-# ---------------------------------------------------------------------------
-# Runtime からの呼出し（Binding token）
-# ---------------------------------------------------------------------------
-
-
-def test_binding_mcp_endpoint_uses_token_without_cookie(
-    monkeypatch: MonkeyPatch, auth: ProductionAuth
-) -> None:
-    """`POST /mcp/{binding_id}` は Cookie・manifest の対象外で、Binding の token だけで通る。"""
-    binding = RuntimeBinding(
-        id="binding-sec-215",
-        agent_id="default",
-        runtime_id="hermes-default",
-        native_agent_ref="agent",
-        enabled=True,
-    )
-    monkeypatch.setattr(runtime_binding_registry, "get", lambda binding_id: binding)
-    monkeypatch.setenv("AGENT_BINDING_MCP_TOKEN_BINDING_SEC_215", "binding-token-215")
-    body = {"jsonrpc": "2.0", "id": 1, "method": "initialize"}
-    denied = client.post("/api/mcp/binding-sec-215", json=body)
-    assert denied.status_code == 401
-    allowed = client.post(
-        "/api/mcp/binding-sec-215",
-        json=body,
-        headers={"Authorization": "Bearer binding-token-215"},
-    )
-    assert allowed.status_code == 200, allowed.text
-    assert allowed.json()["result"]["serverInfo"]["name"] == "production-ready-agent-control-plane"
 
 
 # ---------------------------------------------------------------------------

@@ -79,7 +79,7 @@
 
 | 画面 | 保存する field | 戻ったときの検証 |
 |---|---|---|
-| Run | 目標の下書き（`runs.goal`）、選択中の Run（`runs.selectedRunId`）、イベント購読方式（`runs.streamMode`） | 選択中の Run が一覧に無ければ説明を出し、最新の Run を表示する。Agent / Binding は実行条件なので保存しない |
+| Run | 目標の下書き（`runs.goal`）、選択中の Run（`runs.selectedRunId`）、イベント購読方式（`runs.streamMode`） | 選択中の Run が一覧に無ければ説明を出し、最新の Run を表示する。Agent は実行条件なので保存しない |
 | 監査 | 入力中の絞り込み（`audit.filterForm`）、適用済みの絞り込み（`audit.appliedForm`）、ページ（`audit.page`） | 適用済みの条件とページ（API の offset）で一覧を取り直す。範囲外になったページは最後のページに寄せる。条件を適用し直すと 1 ページ目へ戻す |
 | メモリ | 検索語（`memory.query`） | 検索し直す |
 | 一覧のページ（#265） | `lists.agents` / `runs` / `approvals` / `tools` / `memory` / `mcpServers` / `skills` / `plugins` / `marketplaces` | 一覧 → エディタ → 一覧の移動と再読込で同じページに戻る。行が減って範囲外なら表示だけ末尾のページに寄せる。定期的な再取得ではページを戻さない。メモリは検索語を変えたときだけ 1 ページ目へ戻す |

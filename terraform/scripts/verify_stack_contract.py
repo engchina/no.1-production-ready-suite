@@ -60,7 +60,6 @@ SECRET_VARIABLES = [
     "existing_oracle_wallet_password",
     "app_admin_login_user_password",
     "nl2sql_oracle_deepsec_data_user_password",
-    "agent_control_plane_mcp_token_secret",
 ]
 # 製品ごとの入力は、その製品を選んだときだけフォームに出す（group の visible と、group 内の変数の接頭辞）。
 PRODUCT_GROUPS = {
@@ -143,9 +142,6 @@ REQUIRED_BACKEND_ENV_LINES = {
         "AGENT_RUNTIME_ORACLE_WALLET_DIR=${local.wallet_dir_host}\n",
         "AGENT_RUNTIME_ORACLE_WALLET_PASSWORD=${local.effective_oracle_wallet_password}\n",
         "AGENT_RUNTIME_ORACLE_CREATE_SCHEMA=true\n",
-        "AGENT_RUNTIME_SERVICE_CONTROL_ENABLED=false\n",
-        "AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=${trimspace(var.agent_control_plane_public_base_url)}\n",
-        "AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET=${var.agent_control_plane_mcp_token_secret}\n",
         # RAG / NL2SQL の MCP は、配備した製品の Compute の private IP だけを入れる（#233）。
         'AGENT_EXTERNAL_RAG_MCP_URL=${lookup(local.product_mcp_urls, "rag", "")}\n',
         'AGENT_EXTERNAL_NL2SQL_MCP_URL=${lookup(local.product_mcp_urls, "nl2sql", "")}\n',
@@ -235,7 +231,6 @@ INIT_SCRIPT_CONTRACTS = {
         'find "${WALLET_DIR}" -type f -exec chmod 0600 {} \\;',
         "import app.features.agent.runtime",
         "uv run python -m app.cli.agent_system_schema --initialize",
-        "location /api/mcp/ {\n        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};",
         "proxy_set_header Host \\$http_host;",
         "location = /health {",
         "uv sync --locked --no-dev --python 3.12",
@@ -857,10 +852,8 @@ def _verify_init_scripts(init_sources: dict[str, str]) -> None:
             raise AssertionError(f"{product} is deployed directly with systemd and must not require Docker")
 
 
-# 自前のコードは Docker イメージを作らない（#286 / #356）。Docker を使うのは、第三者の構築済みイメージ（digest 固定）で
-# Agent の Runtime を起動する agent/docker-compose.yml だけ。
-THIRD_PARTY_RUNTIME_COMPOSE = "agent/docker-compose.yml"
-THIRD_PARTY_RUNTIME_SERVICES = {"runtime-openclaw", "runtime-hermes", "runtime-deerflow"}
+# 自前のコードは Docker イメージを作らない（#286 / #356）。Agent の外部 Runtime の compose も #754 で削除し、
+# リポジトリに compose は無い。
 _IGNORED_SOURCE_DIRS = {"node_modules", ".venv", "dist", ".git"}
 
 
@@ -879,22 +872,11 @@ def _verify_no_own_container_images() -> None:
         path
         for pattern in ("docker-compose*.yml", "docker-compose*.yaml", "compose*.yml", "compose*.yaml")
         for path in _repo_files(pattern)
-        if path != THIRD_PARTY_RUNTIME_COMPOSE
     ]
     if (REPO_ROOT / ".dockerignore").exists():
         leftovers.append(".dockerignore")
     if leftovers:
-        raise AssertionError(f"own code must not build Docker images (#356): {', '.join(leftovers)}")
-    compose = (REPO_ROOT / THIRD_PARTY_RUNTIME_COMPOSE).read_text(encoding="utf-8")
-    if re.search(r"(?m)^\s+build:", compose):
-        raise AssertionError(f"{THIRD_PARTY_RUNTIME_COMPOSE} must not build images")
-    services_block = compose.split("\nservices:\n", 1)[-1].split("\nvolumes:\n", 1)[0]
-    services = set(re.findall(r"(?m)^  ([a-z0-9-]+):$", services_block))
-    if services != THIRD_PARTY_RUNTIME_SERVICES:
-        raise AssertionError(f"{THIRD_PARTY_RUNTIME_COMPOSE} must only run the third-party runtimes: {sorted(services)}")
-    images = re.findall(r"(?m)^    image: (\S+)$", compose)
-    if len(images) != len(THIRD_PARTY_RUNTIME_SERVICES) or not all("@sha256:" in image for image in images):
-        raise AssertionError(f"{THIRD_PARTY_RUNTIME_COMPOSE} images must be pinned by digest")
+        raise AssertionError(f"own code must not build Docker images or compose (#356 / #754): {', '.join(leftovers)}")
     rag_systemd = (REPO_ROOT / "rag" / "scripts" / "rag-systemd.sh").read_text(encoding="utf-8")
     if re.search(r"\bdocker\b", rag_systemd):
         raise AssertionError("rag/scripts/rag-systemd.sh must not use Docker")

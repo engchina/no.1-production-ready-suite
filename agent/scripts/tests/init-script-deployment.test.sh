@@ -83,25 +83,6 @@ run_nginx_case() (
   configure_nginx
 )
 
-run_public_base_url_case() (
-  local scenario="$1"
-  local port="$2"
-  local initial_value="$3"
-  local case_dir="${TEST_TMP_DIR}/${scenario}"
-  prepare_case "${case_dir}"
-  export APPLICATION_PORT="${port}"
-  # shellcheck source=/dev/null
-  source "${REPO_DIR}/init_script.sh"
-
-  curl() {
-    printf '%s\n' '[{"vnicId":"ocid1.vnic.oc1..test","privateIp":"10.0.1.23","subnetCidrBlock":"10.0.1.0/24"}]'
-  }
-
-  printf 'AGENT_RUNTIME_DISPATCH_MODE=in_process\nAGENT_CONTROL_PLANE_PUBLIC_BASE_URL=%s\n' \
-    "${initial_value}" > "${case_dir}/backend.env"
-  resolve_public_base_url "${case_dir}/backend.env"
-)
-
 run_install_env_case() (
   local case_dir="${TEST_TMP_DIR}/install-env"
   prepare_case "${case_dir}"
@@ -112,12 +93,8 @@ run_install_env_case() (
   # shellcheck source=/dev/null
   source "${REPO_DIR}/init_script.sh"
 
-  curl() {
-    printf '%s\n' '[{"vnicId":"ocid1.vnic.oc1..test","privateIp":"10.0.1.23","subnetCidrBlock":"10.0.1.0/24"}]'
-  }
-
   printf 'PLATFORM_ORACLE_DSN=agentdb_high\n' > "${PROPS_DIR}/platform.env"
-  printf 'AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=\n' > "${PROPS_DIR}/backend.env"
+  printf 'AGENT_AUTH_MODE=production\n' > "${PROPS_DIR}/backend.env"
   python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1], "w").writestr("tnsnames.ora", "agentdb_high=\n")' \
     "${PROPS_DIR}/wallet.zip"
 
@@ -130,8 +107,8 @@ install_suite="${TEST_TMP_DIR}/install-env/app/no.1-production-ready-suite"
 grep -qx 'PLATFORM_ORACLE_DSN=agentdb_high' "${install_suite}/platform/.env" \
   || fail "共通 .env が platform/.env に置かれていない"
 test "$(stat -c '%a' "${install_suite}/platform/.env")" = "600" || fail "platform/.env の permission が 0600 ではない"
-grep -qx 'AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=http://10.0.1.23/api' "${install_suite}/agent/backend/.env" \
-  || fail "backend/.env の public base URL が補われていない"
+grep -qx 'AGENT_AUTH_MODE=production' "${install_suite}/agent/backend/.env" \
+  || fail "backend/.env が置かれていない"
 test "$(stat -c '%a' "${install_suite}/agent/backend/.env")" = "600" || fail "backend/.env の permission が 0600 ではない"
 if grep -q 'PLATFORM_' "${install_suite}/agent/backend/.env"; then
   fail "backend/.env に共通の設定が入っている"
@@ -184,8 +161,9 @@ grep -Fq 'proxy_pass http://127.0.0.1:8020;' "${site}" || fail "/api/ が backen
 if grep -Fq 'auth_basic' "${site}"; then
   fail "Nginx に Basic 認証が残っている"
 fi
-awk '/location \/api\/mcp\/ \{/,/\}/' "${site}" | grep -Fq 'proxy_pass http://127.0.0.1:8020;' \
-  || fail "Binding MCP endpoint が backend へ proxy されていない"
+if grep -Fq 'location /api/mcp/' "${site}"; then
+  fail "外部 Runtime の Binding MCP の location が残っている（#754 で削除）"
+fi
 awk '/location \/api\/ \{/,/\}/' "${site}" | grep -Fq 'proxy_set_header Host $http_host;' \
   || fail "/api/ が port を含む Host を渡していない（WebSocket の Origin 検証）"
 awk '/location \/api\/ \{/,/\}/' "${site}" | grep -Fq 'proxy_set_header Upgrade $http_upgrade;' \
@@ -193,17 +171,6 @@ awk '/location \/api\/ \{/,/\}/' "${site}" | grep -Fq 'proxy_set_header Upgrade 
 test -L "${TEST_TMP_DIR}/nginx/sites-enabled/production-ready-agent" || fail "site が有効化されていない"
 test ! -e "${TEST_TMP_DIR}/nginx/sites-enabled/default" || fail "default site が残っている"
 grep -q '^nginx -t$' "${TEST_TMP_DIR}/nginx/systemctl.log" || fail "nginx -t が実行されていない"
-
-# --- AGENT_CONTROL_PLANE_PUBLIC_BASE_URL ---
-run_public_base_url_case public-url-default 80 ""
-grep -qx 'AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=http://10.0.1.23/api' \
-  "${TEST_TMP_DIR}/public-url-default/backend.env" || fail "private IP から public base URL を補っていない"
-run_public_base_url_case public-url-port 8080 ""
-grep -qx 'AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=http://10.0.1.23:8080/api' \
-  "${TEST_TMP_DIR}/public-url-port/backend.env" || fail "port 付きの public base URL になっていない"
-run_public_base_url_case public-url-explicit 80 "https://agent.example.com/api"
-grep -qx 'AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=https://agent.example.com/api' \
-  "${TEST_TMP_DIR}/public-url-explicit/backend.env" || fail "明示した public base URL が上書きされた"
 
 # --- 静的な不変条件 ---
 if grep -Eq 'configure_basic_auth|basic_auth_(user|password)|htpasswd' "${REPO_DIR}/init_script.sh"; then

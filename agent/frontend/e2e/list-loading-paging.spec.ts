@@ -44,10 +44,6 @@ function seedRuns(mockApi: MockApi, count: number) {
       goal: `検証の実行 ${String(index).padStart(2, "0")}`,
       agent_id: "default",
       runtime_id: "legacy-native",
-      binding_id: null,
-      external_run_id: null,
-      external_cursor: null,
-      runtime_capabilities: {},
       status: "completed",
       steps: [],
       events: [],
@@ -118,10 +114,9 @@ for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
     });
 
-    test("業務 Agent: 読み込み中は形の Skeleton と経過時間、実行先の取得中に「未設定」を出さない", async ({ page, mockApi }) => {
+    test("業務 Agent: 読み込み中は形の Skeleton と経過時間を出す", async ({ page, mockApi }) => {
       seedAgents(mockApi, 22);
       const releaseAgents = await holdResponses(page, "**/api/agents");
-      const releaseBindings = await holdResponses(page, "**/api/runtime-bindings**");
       await page.goto("/agents");
 
       const loading = page.getByTestId("query-loading");
@@ -134,11 +129,6 @@ for (const viewport of VIEWPORTS) {
 
       releaseAgents();
       await expect(page.getByTestId("agent-row-default")).toBeVisible();
-      // 実行先はまだ取得中: 「未設定」と誤って出さず、セルを Skeleton にする。
-      await expect(page.getByTestId("agent-binding-loading-default")).toBeVisible();
-      await expect(page.getByText("未設定", { exact: true })).toHaveCount(0);
-      releaseBindings();
-      await expect(page.getByTestId("agent-binding-loading-default")).toHaveCount(0);
 
       await expectScrollsInsideTable(page, "業務 Agent 一覧。スクロールできます。", viewport.visibleRows);
       const pager = page.getByTestId("agent-list-pagination");

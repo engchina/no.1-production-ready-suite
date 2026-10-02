@@ -19,20 +19,17 @@ def test_backend_unit_runs_a_single_worker() -> None:
 
 
 def test_own_code_has_no_container_image() -> None:
-    """自前のコードは Docker イメージを作らない。compose は第三者の Runtime だけを持つ（#356）。"""
+    """自前のコードは Docker イメージを作らない（#356）。外部 Runtime の compose も無い（#754）。"""
     ignored = {"node_modules", ".venv", "dist"}
-    dockerfiles = [
+    leftovers = [
         path
-        for path in AGENT_ROOT.rglob("Dockerfile*")
+        for pattern in (
+            "Dockerfile*",
+            "docker-compose*.yml",
+            "compose*.yml",
+            ".env.runtime.example",
+        )
+        for path in AGENT_ROOT.rglob(pattern)
         if not ignored.intersection(path.relative_to(AGENT_ROOT).parts)
     ]
-    assert dockerfiles == []
-    compose = (AGENT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-
-    assert "build:" not in compose
-    services_block = compose.split("\nservices:\n", 1)[1].split("\nvolumes:\n", 1)[0]
-    services = re.findall(r"(?m)^  ([a-z0-9-]+):\n", services_block)
-    assert set(services) == {"runtime-openclaw", "runtime-hermes", "runtime-deerflow"}
-    images = re.findall(r"(?m)^    image: (\S+)$", compose)
-    assert len(images) == 3
-    assert all("@sha256:" in image for image in images)
+    assert leftovers == []

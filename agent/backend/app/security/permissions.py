@@ -190,7 +190,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         ADMIN,
         _GROUP_CAPABILITIES,
         "Agent 管理（admin）",
-        "業務 Agent・スキル・Runtime・Binding・プラグイン・運用設定・システム設定の変更と、"
+        "業務 Agent・スキル・プラグイン・運用設定・システム設定の変更と、"
         "すべての操作ができます（エージェントの対象範囲の制限を受けません）。",
         implies=_ADMIN_MENUS,
     ),
@@ -246,12 +246,9 @@ def roles_for_permissions(codes: Iterable[str]) -> set[str]:
 
 # ---- API の権限 manifest ----
 
-# 公開 path。`/mcp/{binding_id}` は Runtime からの呼出し境界で、Binding 固有 token で認証する
-# （Cookie・manifest の対象外）。`/ready/database` は画面の DB ゲートがログイン前に使う
-# （接続先・資格情報は返さない。#325）。
-PUBLIC_API_PATHS = frozenset(
-    {"/health", "/ready", "/ready/database", "/auth/login", "/mcp/{binding_id}"}
-)
+# 公開 path。`/ready/database` は画面の DB ゲートがログイン前に使う（接続先・資格情報は返さない。
+# #325）。外部 Runtime の Binding の MCP（`/mcp/{binding_id}`）は #754 で削除した。
+PUBLIC_API_PATHS = frozenset({"/health", "/ready", "/ready/database", "/auth/login"})
 AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth/password/change"})
 # 権限なしで通す操作（method × path）。公開・ログインだけ・MCP の path でも、ここにない method は
 # 通常の認証と権限の判定にする（共通認証の `open_operations` にも渡す。#490）。
@@ -264,7 +261,6 @@ OPEN_API_OPERATIONS = frozenset(
         ("GET", "/auth/me"),
         ("POST", "/auth/logout"),
         ("POST", "/auth/password/change"),
-        ("POST", "/mcp/{binding_id}"),
     }
 )
 
@@ -281,7 +277,6 @@ _DECIDE = _any(APPROVALS_DECIDE, ADMIN)
 _RUN_LIST = _any(MENU_RUNS, MENU_APPROVALS)
 _RUN_DETAIL = _any(MENU_RUNS, MENU_APPROVALS, MENU_AUDIT)
 _AGENT_READ = _any(MENU_AGENTS, MENU_RUNS, MENU_SETTINGS_RUNTIME_SNAPSHOT)
-_BINDING_READ = _any(MENU_AGENTS, MENU_RUNS, MENU_RUNTIMES, MENU_SETTINGS_RUNTIME_SNAPSHOT)
 _TOOL_READ = _any(MENU_AUDIT, ADMIN)
 _PLUGIN_READ = _any(MENU_PLUGIN_MARKETPLACES)
 _EXTERNAL_SETTINGS_READ = _any(
@@ -318,20 +313,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/skills/reload"): _ADMIN_ONLY,
     ("PATCH", "/skills/{skill_id}"): _ADMIN_ONLY,
     ("DELETE", "/skills/{skill_id}"): _ADMIN_ONLY,
-    # ---- Control Plane: Runtime と Binding ----
-    ("GET", "/runtimes"): _any(MENU_RUNTIMES, MENU_AGENTS),
-    ("POST", "/runtimes"): _ADMIN_ONLY,
-    ("PATCH", "/runtimes/{runtime_id}"): _ADMIN_ONLY,
-    ("DELETE", "/runtimes/{runtime_id}"): _ADMIN_ONLY,
-    ("GET", "/runtimes/{runtime_id}/status"): _any(MENU_RUNTIMES),
-    ("POST", "/runtimes/services/{service_id}/{action}"): _ADMIN_ONLY,
-    ("GET", "/runtimes/services/{service_id}/logs"): _ADMIN_ONLY,
-    ("GET", "/runtime-bindings"): _BINDING_READ,
-    ("POST", "/runtime-bindings"): _ADMIN_ONLY,
-    ("PATCH", "/runtime-bindings/{binding_id}"): _ADMIN_ONLY,
-    ("DELETE", "/runtime-bindings/{binding_id}"): _ADMIN_ONLY,
-    ("POST", "/runtime-bindings/{binding_id}/sync"): _ADMIN_ONLY,
+    # ---- Control Plane: 組み込み Runtime の状態 ----
     # ---- Control Plane: Run・承認・監査 ----
+    # 組み込み Runtime の状態（#754）。
+    ("GET", "/runtime/status"): _any(MENU_RUNTIMES, MENU_AGENTS),
     ("GET", "/runs"): _RUN_LIST,
     ("POST", "/runs"): _OPERATE,
     ("GET", _RUN): _RUN_DETAIL,

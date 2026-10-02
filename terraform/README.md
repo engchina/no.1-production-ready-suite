@@ -126,19 +126,16 @@ sudo systemctl restart production-ready-rag-backend.service
 - ログイン: 共通認証（`AGENT_AUTH_MODE=production`。#215）。最初は構成管理者 `system_admin`（`app_admin_login_user_password`。RAG / NL2SQL と共通）で
   ログインし、「ユーザーとロール」でユーザーとロールを作り、「セキュリティ設定 > 権限管理」でロールごとのメニュー・実行 / 承認 / 監査 / 管理の権限・
   エージェントを設定します（業務ビューは RAG の権限管理）。`init_script.sh` が `python -m app.cli.agent_system_schema --initialize` で認証・権限のテーブルを作ります。
-  Nginx の Basic 認証は廃止しました。Binding MCP（`/api/mcp/`）は従来どおり Binding 固有 token で認証し、ログインは不要です。
+  Nginx の Basic 認証は廃止しました。
   `agent_app_auth_cookie_secure`（非表示の入力。既定 `false` → `PLATFORM_AUTH_COOKIE_SECURE`）は HTTPS の終端を前に置いたら `true` にします。
   Cookie のないリクエストは 401 です（header / JWT の認可は #750 で削除。[agent/docs/security-rbac.md](../agent/docs/security-rbac.md)）。
-- Runtime 連携（任意）: `agent_control_plane_public_base_url`（空なら `http://<Compute の private IP>[:port]/api`）、
-  `agent_control_plane_mcp_token_secret`（32 文字以上。空なら Binding MCP は fail closed）。
 - RAG / NL2SQL との連携（#233）: 同じ stack で RAG / NL2SQL も配備すると、Agent の `backend/.env` に
   `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（`http://<その製品の Compute の private IP>[:port]/api/mcp`）を書きます。
   配備しなかった製品の URL は空で、後から画面の「外部 RAG」「外部 NL2SQL」で設定できます。Agent は Run を作った利用者として
   呼び、認証は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`（stack が生成して全 Compute に同じ値を配る）で署名した短命の token です。
-  Binding 経由の MCP など Run の利用者がいない呼び出しを使う場合は、ユーザー管理で専用のユーザーを作り、Agent の `backend/.env` に
-  `AGENT_MCP_SERVICE_USER_LOGIN_ID` を設定します（[agent/docs/agent-control-plane-design.md §4.1](../agent/docs/agent-control-plane-design.md#41-rag--nl2sql-の-mcp233)）。
   Agent の Compute は RAG / NL2SQL の Compute の後に作ります（Terraform の resource は `oci_core_instance.agent`）。
-- Agent Runtime（OpenClaw / Hermes / DeerFlow）はこの stack では配備しません。起動後に Runtime 画面から登録します。
+- Agent の実行は Control Plane の組み込み Runtime（OpenAI Agents SDK と OCI Enterprise AI の Responses API。#754）。外部の Runtime と Docker は使いません。
+  モデルは「システム設定 > モデル」の OCI Enterprise AI の接続と既定のテキストモデルです。
 - Runtime 状態は Oracle に保存します（`oracle_checkpoint`、table は backend が起動時に作成）。gunicorn は 1 worker、dispatcher は `in_process` に固定します。
 - Compute の既定は 2 OCPU / 16 GB / 100 GB。
 
@@ -190,8 +187,7 @@ python terraform/scripts/verify_stack_contract.py terraform/dist/production-read
 出力は `terraform/dist/production-ready-suite-terraform-stack.zip` です。この zip を Resource Manager へ upload して stack を作成します。
 `verify_stack_contract.py` は、フォーム（`schema.yaml`）と Terraform 変数の一致、製品選択の契約、製品ごとの `backend/.env` の key が各製品の Settings にあること、
 RAG の前処理 / parser（`rag/scripts/rag-systemd.sh` の unit の定義と uv.lock があること）、各製品の `init_script.sh` の配備契約
-（Docker を入れないこと、RAG の sudoers・状態の保持を含む）と、自前のコードの Dockerfile・compose が無いこと（Agent の第三者 Runtime の
-`agent/docker-compose.yml` だけ。digest 固定。#356）を検証します。
+（Docker を入れないこと、RAG の sudoers・状態の保持を含む）と、Dockerfile・compose が無いこと（#356 / #754）を検証します。
 
 CI（`.github/workflows/ci.yml` の `Suite / Terraform`）は、`terraform fmt` / `terraform validate`（Terraform 1.5.7）と上の2つを実行します。
 各製品の `init_script.sh` のテスト（`<製品>/scripts/tests/init-script-deployment.test.sh`）は製品ごとの job が実行します。実テナンシーへの配備確認は手動で行います。

@@ -14,7 +14,7 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 
 - local でもユーザー管理・ロール管理・権限管理は共通 DB を読み書きします。共通 `.env` の `PLATFORM_ORACLE_*` が必要です
   （RAG / NL2SQL と同じ。旧版は local だけ InMemory で、画面が 0 件になり再起動で消えていました）。
-- Runtime からの呼出しは Binding token の `POST /api/mcp/{binding_id}`、RAG / NL2SQL への呼出しはサービストークンです（§7）。
+- RAG / NL2SQL への呼出しはサービストークンです（§7）。
 
 - 構成管理者（ログインユーザー ID は `system_admin` 固定）のパスワードは共通 `.env` の `PLATFORM_ADMIN_LOGIN_USER_PASSWORD`。
   3 製品で同じ値です。最初は構成管理者でログインし、ユーザー管理・ロール管理・権限管理で利用者を作ります。
@@ -30,8 +30,7 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 `/api` の全 route は `app.security.dependencies.authorize_api_request` を通ります。
 
 1. local: ローカル利用者（全権限・対象範囲の制限なし）を `request.state.principal` に入れて通す。
-2. production の公開 path: `/health`・`/ready`・`/ready/database`（画面の DB ゲート。#325）・`/auth/login`・`POST /mcp/{binding_id}`。
-   `POST /mcp/{binding_id}` は Runtime からの呼出し境界で、従来どおり Binding 固有 token（Bearer）で認証します（Cookie・manifest の対象外）。
+2. production の公開 path: `/health`・`/ready`・`/ready/database`（画面の DB ゲート。#325）・`/auth/login`。
 3. production で session Cookie あり: セッションを検証し、更新系（GET / HEAD / OPTIONS 以外）は `X-CSRF-Token` header と CSRF Cookie を照合し、
    強制パスワード変更中は `/auth/me`・`/auth/logout`・`/auth/password/change` 以外を 403 にし、権限 manifest の権限を確認します
    （manifest に登録のない API は 403）。Cookie が不正・期限切れなら 401。
@@ -50,7 +49,7 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 | `agent.runs.operate` | operator | Run の作成・取消・再開・再実行（閲覧を含む） | Run |
 | `agent.approvals.decide` | approver | 承認・却下（閲覧を含む） | 承認・監査 |
 | `agent.audit.view` | auditor | Run の監査・ツール呼出し履歴・trace event（閲覧を含む） | 監査 |
-| `agent.admin` | admin | 業務 Agent・スキル・Runtime・Binding・プラグイン・運用設定の変更とすべての操作（システム設定のメニューも暗黙に含む）。対象範囲の制限なし | ユーザーとロール・権限管理以外のすべてのメニュー |
+| `agent.admin` | admin | 業務 Agent・スキル・プラグイン・運用設定の変更とすべての操作（システム設定のメニューも暗黙に含む）。対象範囲の制限なし | ユーザーとロール・権限管理以外のすべてのメニュー |
 
 ### メニュー権限（`agent/frontend` のナビと同じ並び）
 
@@ -85,8 +84,8 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 | `POST /approvals/{id}/decision` | `agent.approvals.decide` / `agent.admin` | approver・範囲外は 403・決定者は利用者 |
 | `GET /audit/tool-calls(.csv)` | `menu.audit` | auditor・範囲で絞る |
 | `GET /agents` | `menu.agents` / `menu.runs` / `menu.settings_runtime_snapshot` | 利用できるエージェントだけ |
-| `GET /runtime-bindings` | `menu.agents` / `menu.runs` / `menu.runtimes` / `menu.settings_runtime_snapshot` | viewer 以上・利用できるエージェントの Binding だけ |
-| 業務 Agent・スキル・Runtime・Binding・プラグイン・Agent 固有の設定（外部 RAG / NL2SQL / MCP・snapshot）の変更 | `agent.admin` | admin |
+| `GET /runtime/status` | `menu.runtimes` / `menu.agents` | 組み込み Runtime の状態（API key は出さない） |
+| 業務 Agent・スキル・プラグイン・Agent 固有の設定（外部 RAG / NL2SQL / MCP・snapshot）の変更 | `agent.admin` | admin |
 | システム設定（OCI 認証・アップロード保存先・モデル・データベース）の保存・接続テスト・ADB 操作 | 各メニュー（`menu.settings_oci` / `menu.settings_upload_storage` / `menu.settings_model` / `menu.settings_database`。RAG / NL2SQL と同じ割り当て） | 同じメニュー権限（`require_system_settings_write`） |
 | 設定の GET（外部 RAG / NL2SQL / MCP、システム設定） | 各メニュー | — |
 | `GET /tools` | `menu.audit` / `agent.admin` | — |
@@ -128,7 +127,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 
 ## 7. 画面以外からの呼出し
 
-- Runtime → Control Plane: Binding 固有 token の `POST /api/mcp/{binding_id}`（Cookie・manifest の対象外）。
+- 外部 Runtime からの呼出し（Binding の MCP）は #754 で削除しました（実行は組み込み Runtime）。
 - Control Plane → RAG / NL2SQL: 呼び先の `POST /api/mcp` を、Run の利用者を `sub` にした短命のサービストークンで呼びます
   （[agent-control-plane-design.md §4.1](./agent-control-plane-design.md#41-rag--nl2sql-の-mcp233)）。
 - 旧版の `AGENT_RBAC_*`（`X-Agent-Roles` などの header・HMAC 署名 header・JWT bearer・外部 policy URL・
@@ -151,15 +150,12 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
    `menu.dashboard` を削除する（何度実行してもよい。出力の `retired_permission_rows` が削除した行数）。削除しないと、RAG / NL2SQL の
    ユーザー管理から非 SYSTEM_ADMIN の管理者がそのロールを割り当てるとき、他製品の権限の判定（生のコードで比べる）で 403 になることがあります。
 8. （#750 以降に更新する環境）`backend/.env` の `AGENT_RBAC_*` は読まれないので削除してよい。header / JWT で API を呼んでいた
-   クライアントは 401 になるため、画面のログインか Binding の MCP に移す。local の開発環境も共通 `.env` の `PLATFORM_ORACLE_*` が必要。
+   クライアントは 401 になるため、画面のログインに移す。local の開発環境も共通 `.env` の `PLATFORM_ORACLE_*` が必要。
    権限管理で業務ビューを割り当てていたロールは、RAG の権限管理で業務ビューを割り当てる。
 
 ## 9. 既知の制約
 
 - WebSocket のセッションは接続時だけ確認します（接続中に失効・権限変更しても切断しません）。
 - 範囲が制限された利用者の `GET /observability/events` は、件数上限（limit）を適用した後に範囲で絞ります。
-- `POST /mcp/{binding_id}`（Binding 経由の MCP）は Run と結びつかないため、RAG / NL2SQL のツールは Run の利用者ではなく
-  サービス利用者（`AGENT_MCP_SERVICE_USER_LOGIN_ID`）として呼びます。未設定ならそのツールは失敗します
-  （[agent-control-plane-design.md §4.1](./agent-control-plane-design.md#41-rag--nl2sql-の-mcp233)）。
 - local の Run は Run の利用者が `00000000-0000-0000-0000-000000000000`（ローカル利用者）です。production の RAG / NL2SQL を呼ぶと、
   その利用者は呼び先に存在しないため拒否されます（local 同士で使う）。

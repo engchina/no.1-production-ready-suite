@@ -37,6 +37,10 @@ from app.settings import get_settings
 JsonObject = dict[str, Any]
 OracleConnectFactory = Callable[[], Any]
 
+# 組み込み Runtime（#754）の Runtime ID と、承認待ちの Run に保存する SDK の状態の key。
+BUILTIN_RUNTIME_ID = "builtin"
+_BUILTIN_STATE_KEY = "_builtin_sdk_state"
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -145,6 +149,9 @@ class AgentProfile(BaseModel):
     description: str = ""
     instructions: str = ""
     skill_ids: list[str] = Field(default_factory=list)
+    # 組み込み Runtime で使うモデル（OCI Enterprise AI の model_id）。
+    # 空なら既定のテキストモデル（#754）。
+    model_id: str = ""
     migration_required: bool = False
     # Deprecated read compatibility。新規 UI/API は skill_ids だけを書き込む。
     tool_names: list[str] = Field(default_factory=list)
@@ -161,6 +168,7 @@ class AgentProfilePatch(BaseModel):
     description: str | None = None
     instructions: str | None = None
     skill_ids: list[str] | None = None
+    model_id: str | None = None
     tool_names: list[str] | None = None
     command_allowed_prefixes: list[str] | None = None
     enabled: bool | None = None
@@ -190,7 +198,6 @@ class MemorySearchRequest(BaseModel):
 class RunCreateRequest(BaseModel):
     goal: str
     agent_id: str = "default"
-    runtime_binding_id: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
     metadata: JsonObject = Field(default_factory=dict)
     planner_mode: PlannerMode = PlannerMode.AUTO
@@ -210,10 +217,6 @@ class RunState(BaseModel):
     goal: str
     agent_id: str
     runtime_id: str = "legacy-native"
-    binding_id: str | None = None
-    external_run_id: str | None = None
-    external_cursor: str | None = None
-    runtime_capabilities: JsonObject = Field(default_factory=dict)
     status: RunStatus
     steps: list[RunStep] = Field(default_factory=list)
     events: list[RunEvent] = Field(default_factory=list)
@@ -256,6 +259,7 @@ class AgentRuntimeSnapshot(BaseModel):
     runs: list[RunState] = Field(default_factory=list)
     agents: list[AgentProfile] = Field(default_factory=list)
     memory: list[MemoryEntry] = Field(default_factory=list)
+    # 旧版（#754 より前）の外部 Runtime と Binding。読み込んでも使わない。
     control_plane_state: JsonObject = Field(default_factory=dict)
 
 
@@ -315,35 +319,24 @@ class AgentRuntimeRepositoryContract(Protocol):
     def create_run(
         self, request: RunCreateRequest, *, created_by_user_uuid: str | None = None
     ) -> RunState: ...
-    def create_control_plane_run(
-        self,
-        request: RunCreateRequest,
-        *,
-        runtime_id: str,
-        binding_id: str,
-        capabilities: JsonObject,
-        created_by_user_uuid: str | None = None,
-    ) -> RunState: ...
-    def mark_runtime_submitted(
-        self,
-        run_id: str,
-        *,
-        external_run_id: str,
-        external_cursor: str | None,
-        external_status: str,
-    ) -> RunState: ...
-    def mark_runtime_failed(self, run_id: str, *, code: str, detail: str) -> RunState: ...
-    def record_runtime_event(
-        self, run_id: str, payload: JsonObject, *, cursor: str | None = None
-    ) -> RunState: ...
-    def reconcile_runtime_status(
-        self, run_id: str, *, external_status: str, payload: JsonObject | None = None
-    ) -> RunState: ...
-    def replace_runtime_artifacts(
-        self, run_id: str, artifacts: Sequence[JsonObject]
-    ) -> RunState: ...
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None: ...
     def persist_control_plane_state(self) -> None: ...
+    def create_builtin_run(
+        self, request: RunCreateRequest, *, created_by_user_uuid: str | None = None
+    ) -> RunState: ...
+    def begin_builtin_run(self, run_id: str) -> tuple[RunState, AgentProfile] | None: ...
+    def begin_builtin_resume(
+        self, run_id: str
+    ) -> tuple[RunState, AgentProfile, str, dict[str, bool]] | None: ...
+    def start_builtin_tool_step(
+        self, run_id: str, call: ToolCall
+    ) -> tuple[str, ToolInvocationContext]: ...
+    def finish_builtin_tool_step(self, run_id: str, step_id: str, result: ToolResult) -> None: ...
+    def request_builtin_approvals(
+        self, run_id: str, calls: Sequence[ToolCall], *, state: str
+    ) -> RunState: ...
+    def complete_builtin_run(self, run_id: str, answer: str) -> RunState: ...
+    def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
     def replay_run(self, run_id: str, *, created_by_user_uuid: str | None = None) -> RunState: ...
     def list_runs(self) -> list[RunState]: ...
     def get_run(self, run_id: str) -> RunState: ...
@@ -462,199 +455,6 @@ class AgentRuntimeRepository:
                 raise KeyError(run_id)
             return run.model_copy(deep=True)
 
-    def create_control_plane_run(
-        self,
-        request: RunCreateRequest,
-        *,
-        runtime_id: str,
-        binding_id: str,
-        capabilities: JsonObject,
-        created_by_user_uuid: str | None = None,
-    ) -> RunState:
-        """外部 Runtime 用の Run を投入する。tool loop はこのプロセスで実行しない。"""
-        with self._lock:
-            agent = self._agents.get(request.agent_id)
-            if agent is None:
-                raise KeyError(request.agent_id)
-            if not agent.enabled:
-                raise ValueError("agent disabled")
-            if request.tool_calls:
-                raise ValueError("legacy_tool_calls_not_supported")
-            run = RunState(
-                id=f"run_{uuid4().hex}",
-                goal=request.goal,
-                agent_id=request.agent_id,
-                runtime_id=runtime_id,
-                binding_id=binding_id,
-                created_by_user_uuid=created_by_user_uuid,
-                runtime_capabilities=dict(capabilities),
-                status=RunStatus.QUEUED,
-                metadata={**request.metadata, "_planner_mode": "runtime"},
-            )
-            self._runs[run.id] = run
-            self._append_event(
-                run,
-                RunEventType.RUN_CREATED,
-                "Control Plane が外部 Runtime Run を作成しました。",
-                {"runtime_id": runtime_id, "binding_id": binding_id},
-            )
-            self._persist_locked()
-            return run.model_copy(deep=True)
-
-    def mark_runtime_submitted(
-        self,
-        run_id: str,
-        *,
-        external_run_id: str,
-        external_cursor: str | None,
-        external_status: str,
-    ) -> RunState:
-        with self._lock:
-            run = self._require_run(run_id)
-            run.external_run_id = external_run_id
-            run.external_cursor = external_cursor
-            run.metadata.pop("_runtime_dispatch_lease", None)
-            submitted_status = _normalize_runtime_status(external_status)
-            run.status = (
-                submitted_status
-                if submitted_status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
-                else RunStatus.RUNNING
-            )
-            run.updated_at = _now()
-            self._append_event(
-                run,
-                RunEventType.RUNTIME_SUBMITTED,
-                "外部 Runtime が Run を受理しました。",
-                {"external_run_id": external_run_id, "external_status": external_status},
-            )
-            if run.status == RunStatus.COMPLETED:
-                self._append_event(
-                    run,
-                    RunEventType.RUN_COMPLETED,
-                    "外部 Runtime Run が完了しました。",
-                )
-            self._persist_locked()
-            return run.model_copy(deep=True)
-
-    def mark_runtime_failed(self, run_id: str, *, code: str, detail: str) -> RunState:
-        with self._lock:
-            run = self._require_run(run_id)
-            run.metadata.pop("_runtime_dispatch_lease", None)
-            run.status = RunStatus.FAILED
-            run.updated_at = _now()
-            self._append_event(
-                run,
-                RunEventType.RUNTIME_FAILED,
-                "外部 Runtime への dispatch に失敗しました。",
-                {"error_code": code, "detail": detail},
-            )
-            self._persist_locked()
-            return run.model_copy(deep=True)
-
-    def record_runtime_event(
-        self, run_id: str, payload: JsonObject, *, cursor: str | None = None
-    ) -> RunState:
-        """Runtime event を安全な metadata に縮約し、再接続時の重複を除外する。"""
-        with self._lock:
-            run = self._require_run(run_id)
-            event_payload = _runtime_event_metadata(payload)
-            event_key = _runtime_event_key(payload, cursor)
-            seen = run.metadata.setdefault("_runtime_event_keys", [])
-            if not isinstance(seen, list):
-                seen = []
-                run.metadata["_runtime_event_keys"] = seen
-            if event_key in seen:
-                return run.model_copy(deep=True)
-            seen.append(event_key)
-            del seen[:-256]
-            if cursor:
-                run.external_cursor = cursor
-            event_payload["runtime_event_key"] = event_key
-            run.updated_at = _now()
-            self._append_event(
-                run,
-                RunEventType.RUNTIME_EVENT,
-                "外部 Runtime からイベントを受信しました。",
-                event_payload,
-            )
-            self._persist_locked()
-            return run.model_copy(deep=True)
-
-    def reconcile_runtime_status(
-        self,
-        run_id: str,
-        *,
-        external_status: str,
-        payload: JsonObject | None = None,
-    ) -> RunState:
-        """Runtime 固有 status を Control Plane の共通 RunStatus へ写像する。"""
-        with self._lock:
-            run = self._require_run(run_id)
-            normalized = _normalize_runtime_status(external_status)
-            previous = run.status
-            run.metadata["_runtime_status"] = {
-                "status": external_status[:128],
-                **_runtime_event_metadata(payload or {}),
-            }
-            if (
-                normalized is not None
-                and not _is_terminal(run.status)
-                and not (normalized == RunStatus.QUEUED and run.status != RunStatus.QUEUED)
-            ):
-                run.status = normalized
-            run.updated_at = _now()
-            if run.status != previous:
-                if run.status == RunStatus.COMPLETED:
-                    event_type = RunEventType.RUN_COMPLETED
-                    message = "外部 Runtime Run が完了しました。"
-                elif run.status == RunStatus.FAILED:
-                    event_type = RunEventType.RUNTIME_FAILED
-                    message = "外部 Runtime Run が失敗しました。"
-                elif run.status == RunStatus.CANCELLED:
-                    event_type = RunEventType.RUN_CANCELLED
-                    message = "外部 Runtime Run がキャンセルされました。"
-                else:
-                    event_type = RunEventType.RUN_STATUS_CHANGED
-                    message = "外部 Runtime Run の状態を更新しました。"
-                self._append_event(
-                    run,
-                    event_type,
-                    message,
-                    {"external_status": external_status, "status": run.status.value},
-                )
-            self._persist_locked()
-            return run.model_copy(deep=True)
-
-    def replace_runtime_artifacts(self, run_id: str, artifacts: Sequence[JsonObject]) -> RunState:
-        """Runtime Artifact を共通 Artifact 契約へ決定論的に正規化する。"""
-        with self._lock:
-            run = self._require_run(run_id)
-            existing = {item.id: item for item in run.artifacts}
-            normalized = [
-                _runtime_artifact(run.id, item, index) for index, item in enumerate(artifacts)
-            ]
-            normalized = [
-                (
-                    item.model_copy(update={"created_at": existing[item.id].created_at})
-                    if item.id in existing
-                    else item
-                )
-                for item in normalized
-            ]
-            previous_ids = {item.id for item in run.artifacts}
-            run.artifacts = normalized
-            run.updated_at = _now()
-            for artifact in normalized:
-                if artifact.id not in previous_ids:
-                    self._append_event(
-                        run,
-                        RunEventType.ARTIFACT_CREATED,
-                        "外部 Runtime の Artifact を同期しました。",
-                        {"artifact_id": artifact.id, "kind": artifact.kind},
-                    )
-            self._persist_locked()
-            return run.model_copy(deep=True)
-
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None:
         with self._lock:
             run = self._claim_control_plane_run_locked(worker_id, lease_seconds=lease_seconds)
@@ -668,7 +468,8 @@ class AgentRuntimeRepository:
     ) -> RunState | None:
         now = _now()
         for run in reversed(self._sorted_runs_locked()):
-            if run.binding_id is None or run.status != RunStatus.QUEUED:
+            # 組み込み Runtime の queued の Run（新規・承認の決定後の再開。#754）だけを claim する。
+            if run.runtime_id != BUILTIN_RUNTIME_ID or run.status != RunStatus.QUEUED:
                 continue
             lease = run.metadata.get("_runtime_dispatch_lease")
             if isinstance(lease, dict):
@@ -861,6 +662,20 @@ class AgentRuntimeRepository:
                     "tool_name": step.tool_call.name if step.tool_call else step.kind,
                 },
             )
+            if run.runtime_id == BUILTIN_RUNTIME_ID:
+                # 組み込み Runtime（#754）は SDK が承認済みのツールを再開時に実行する。
+                # ここでは決定だけを記録し、承認待ちが残らなければ再開を待つ状態（queued）に
+                # する（再開は router が起動する）。
+                if request.approved:
+                    step.status = StepStatus.PENDING
+                else:
+                    step.status = StepStatus.CANCELLED
+                    step.completed_at = _now()
+                if _pending_approval_count(run) == 0:
+                    run.status = RunStatus.QUEUED
+                    run.updated_at = _now()
+                self._persist_locked()
+                return run.model_copy(deep=True)
             self._persist_locked()
 
         if request.approved:
@@ -885,6 +700,251 @@ class AgentRuntimeRepository:
                 self._write_run_memory(run)
                 self._persist_locked()
         return self.get_run(approval.run_id)
+
+    # ---- 組み込み Runtime（#754。実行は builtin_runtime、記録はここ） ----
+
+    def create_builtin_run(
+        self, request: RunCreateRequest, *, created_by_user_uuid: str | None = None
+    ) -> RunState:
+        """組み込み Runtime の Run を投入する（実行は builtin_runtime.execute_run）。"""
+        with self._lock:
+            agent = self._agents.get(request.agent_id)
+            if agent is None:
+                raise KeyError(request.agent_id)
+            if not agent.enabled:
+                raise ValueError("agent disabled")
+            run = RunState(
+                id=f"run_{uuid4().hex}",
+                goal=request.goal,
+                agent_id=request.agent_id,
+                runtime_id=BUILTIN_RUNTIME_ID,
+                created_by_user_uuid=created_by_user_uuid,
+                status=RunStatus.QUEUED,
+                metadata={**request.metadata},
+            )
+            self._runs[run.id] = run
+            self._append_event(
+                run,
+                RunEventType.RUN_CREATED,
+                "実行を作成しました。",
+                {"agent_id": request.agent_id, "runtime_id": BUILTIN_RUNTIME_ID},
+            )
+            self._persist_locked()
+            return run.model_copy(deep=True)
+
+    def begin_builtin_run(self, run_id: str) -> tuple[RunState, AgentProfile] | None:
+        """実行を始める（取消済み・終了済みなら None）。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            agent = self._agents.get(run.agent_id)
+            if _is_terminal(run.status) or run.status == RunStatus.WAITING_APPROVAL:
+                return None
+            if agent is None:
+                self._fail_builtin_locked(
+                    run, "runtime.agent_not_found", "業務 Agent が見つかりません。"
+                )
+                return None
+            self._set_builtin_running_locked(run, "実行を開始しました。")
+            return run.model_copy(deep=True), agent.model_copy(deep=True)
+
+    def begin_builtin_resume(
+        self, run_id: str
+    ) -> tuple[RunState, AgentProfile, str, dict[str, bool]] | None:
+        """承認の決定を反映して再開する（承認待ちが残る・状態が無いときは None）。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            agent = self._agents.get(run.agent_id)
+            state_text = run.metadata.get(_BUILTIN_STATE_KEY)
+            if _is_terminal(run.status) or _pending_approval_count(run) > 0:
+                return None
+            if agent is None or not isinstance(state_text, str):
+                self._fail_builtin_locked(
+                    run, "runtime.resume_state_missing", "再開に必要な実行の状態がありません。"
+                )
+                return None
+            decisions = {
+                approval.tool_call.trace_id or "": approval.status == ApprovalStatus.APPROVED
+                for approval in run.approvals
+                if approval.tool_call.trace_id
+                and approval.status in {ApprovalStatus.APPROVED, ApprovalStatus.REJECTED}
+            }
+            run.metadata.pop(_BUILTIN_STATE_KEY, None)
+            self._set_builtin_running_locked(run, "承認の決定を反映して実行を再開しました。")
+            return run.model_copy(deep=True), agent.model_copy(deep=True), state_text, decisions
+
+    def start_builtin_tool_step(
+        self, run_id: str, call: ToolCall
+    ) -> tuple[str, ToolInvocationContext]:
+        """ツールの step を始める（承認済みの step があれば、それを実行中にする）。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            step = next(
+                (
+                    item
+                    for item in run.steps
+                    if call.trace_id
+                    and item.tool_call is not None
+                    and item.tool_call.trace_id == call.trace_id
+                    and item.status in {StepStatus.PENDING, StepStatus.WAITING_APPROVAL}
+                ),
+                None,
+            )
+            if step is None:
+                step = RunStep(run_id=run_id, tool_call=call)
+                run.steps.append(step)
+            step.status = StepStatus.RUNNING
+            step.started_at = _now()
+            self._append_event(
+                run,
+                RunEventType.STEP_STARTED,
+                f"ツール {call.name} を開始しました。",
+                {"step_id": step.id, "tool_name": call.name},
+            )
+            context = self._tool_invocation_context_locked(run, call, approval_id=step.approval_id)
+            self._persist_locked()
+            return step.id, context
+
+    def finish_builtin_tool_step(self, run_id: str, step_id: str, result: ToolResult) -> None:
+        """ツールの結果を step・イベント・成果物に記録する。
+
+        失敗しても Run は続ける（結果を受け取ったモデルが判断する）。
+        """
+        with self._lock:
+            run = self._require_run(run_id)
+            step = self._require_step(run, step_id)
+            step.tool_result = result
+            step.completed_at = _now()
+            call_name = step.tool_call.name if step.tool_call else step.kind
+            if result.success:
+                step.status = StepStatus.COMPLETED
+                self._record_tool_success_artifacts(run, step, result)
+                self._append_event(
+                    run,
+                    RunEventType.TOOL_COMPLETED,
+                    f"ツール {call_name} が完了しました。",
+                    {
+                        "step_id": step.id,
+                        "tool_name": call_name,
+                        "output": result.output,
+                        "duration_ms": result.duration_ms,
+                        "guardrail_warnings": result.guardrail_warnings,
+                        "audit_metadata": result.audit_metadata,
+                    },
+                )
+                self._append_guardrail_events(run, step, result)
+            else:
+                step.status = StepStatus.FAILED
+                self._append_event(
+                    run,
+                    RunEventType.TOOL_FAILED,
+                    f"ツール {call_name} が失敗しました。",
+                    {
+                        "step_id": step.id,
+                        "tool_name": call_name,
+                        "error": result.error,
+                        "error_code": result.error_code,
+                        "error_details": result.error_details,
+                        "duration_ms": result.duration_ms,
+                        "audit_metadata": result.audit_metadata,
+                    },
+                )
+            run.updated_at = _now()
+            self._persist_locked()
+
+    def request_builtin_approvals(
+        self, run_id: str, calls: Sequence[ToolCall], *, state: str
+    ) -> RunState:
+        """承認が必要なツールで中断した Run を承認待ちにし、再開に使う状態を保存する。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            if _is_terminal(run.status):
+                return run.model_copy(deep=True)
+            for call in calls:
+                step = RunStep(
+                    run_id=run_id,
+                    status=StepStatus.WAITING_APPROVAL,
+                    tool_call=call,
+                    started_at=_now(),
+                )
+                approval = ApprovalRequest(
+                    run_id=run_id,
+                    step_id=step.id,
+                    tool_call=call,
+                    reason=f"{call.name} は承認が必要です。",
+                )
+                step.approval_id = approval.id
+                run.steps.append(step)
+                run.approvals.append(approval)
+                self._approvals[approval.id] = approval
+                self._append_event(
+                    run,
+                    RunEventType.TOOL_APPROVAL_REQUIRED,
+                    f"ツール {call.name} は承認待ちです。",
+                    {
+                        "approval_id": approval.id,
+                        "step_id": step.id,
+                        "tool_name": call.name,
+                        "policy_decision": "ask",
+                    },
+                )
+            run.metadata[_BUILTIN_STATE_KEY] = state
+            run.status = RunStatus.WAITING_APPROVAL
+            run.updated_at = _now()
+            self._persist_locked()
+            return run.model_copy(deep=True)
+
+    def complete_builtin_run(self, run_id: str, answer: str) -> RunState:
+        """モデルの最終回答を成果物に残して完了にする。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            if _is_terminal(run.status):
+                return run.model_copy(deep=True)
+            artifact = Artifact(name="回答", kind="answer", content={"text": answer})
+            run.artifacts.append(artifact)
+            self._append_event(
+                run,
+                RunEventType.ARTIFACT_CREATED,
+                "回答を保存しました。",
+                {"artifact_id": artifact.id, "kind": artifact.kind},
+            )
+            run.status = RunStatus.COMPLETED
+            run.updated_at = _now()
+            self._append_event(run, RunEventType.RUN_COMPLETED, "実行を完了しました。")
+            self._persist_locked()
+            return run.model_copy(deep=True)
+
+    def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState:
+        with self._lock:
+            run = self._require_run(run_id)
+            if not _is_terminal(run.status):
+                self._fail_builtin_locked(run, code, detail)
+            return run.model_copy(deep=True)
+
+    def _set_builtin_running_locked(self, run: RunState, message: str) -> None:
+        # 実行を始めたら dispatcher の lease は要らない（running は claim しない）。
+        # 残すと、承認の決定で queued に戻った Run を lease の期限まで claim できない。
+        run.metadata.pop("_runtime_dispatch_lease", None)
+        run.status = RunStatus.RUNNING
+        run.updated_at = _now()
+        self._append_event(
+            run,
+            RunEventType.RUN_STATUS_CHANGED,
+            message,
+            {"status": RunStatus.RUNNING.value, "runtime_id": BUILTIN_RUNTIME_ID},
+        )
+        self._persist_locked()
+
+    def _fail_builtin_locked(self, run: RunState, code: str, detail: str) -> None:
+        run.status = RunStatus.FAILED
+        run.updated_at = _now()
+        run.metadata.pop(_BUILTIN_STATE_KEY, None)
+        self._append_event(
+            run,
+            RunEventType.RUNTIME_FAILED,
+            detail,
+            {"error_code": code, "runtime_id": BUILTIN_RUNTIME_ID},
+        )
+        self._persist_locked()
 
     def list_agents(self) -> list[AgentProfile]:
         with self._lock:
@@ -929,9 +989,6 @@ class AgentRuntimeRepository:
             if agent_id not in self._agents:
                 raise KeyError(agent_id)
             del self._agents[agent_id]
-            from app.features.agent.control_plane import runtime_binding_registry
-
-            runtime_binding_registry.delete_for_agent(agent_id)
             self._persist_locked()
 
     def set_plugin_agents(self, source: str, agents: list[AgentProfile]) -> None:
@@ -996,18 +1053,13 @@ class AgentRuntimeRepository:
         return sorted(self._memory.values(), key=lambda entry: entry.created_at, reverse=True)
 
     def _export_snapshot_locked(self) -> AgentRuntimeSnapshot:
-        from app.features.agent.control_plane import export_control_plane_state
-
         return AgentRuntimeSnapshot(
             runs=[run.model_copy(deep=True) for run in self._sorted_runs_locked()],
             agents=[agent.model_copy(deep=True) for agent in self._sorted_agents_locked()],
             memory=[entry.model_copy(deep=True) for entry in self._sorted_memory_locked()],
-            control_plane_state=export_control_plane_state(),
         )
 
     def _replace_state_locked(self, snapshot: AgentRuntimeSnapshot) -> None:
-        from app.features.agent.control_plane import import_control_plane_state
-
         self._runs = {run.id: run.model_copy(deep=True) for run in snapshot.runs}
         self._agents = {agent.id: _migrate_legacy_agent(agent) for agent in snapshot.agents}
         if "default" not in self._agents:
@@ -1016,7 +1068,6 @@ class AgentRuntimeRepository:
         self._approvals = {
             approval.id: approval for run in self._runs.values() for approval in run.approvals
         }
-        import_control_plane_state(snapshot.control_plane_state)
 
     def _load_snapshot_from_disk(self) -> None:
         if self._snapshot_path is None:
@@ -2741,6 +2792,15 @@ def _runtime_artifact(run_id: str, payload: JsonObject, index: int) -> Artifact:
         name=name[:256],
         kind=kind[:128],
         content=_runtime_event_metadata(payload),
+    )
+
+
+def builtin_resume_pending(run: RunState) -> bool:
+    """承認がすべて決まり、保存した SDK の状態から再開を待つ組み込み Runtime の Run か。"""
+    return (
+        run.runtime_id == BUILTIN_RUNTIME_ID
+        and run.status == RunStatus.QUEUED
+        and isinstance(run.metadata.get(_BUILTIN_STATE_KEY), str)
     )
 
 
