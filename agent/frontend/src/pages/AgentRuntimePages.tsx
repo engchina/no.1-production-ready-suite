@@ -81,7 +81,15 @@ import {
 } from "@engchina/production-ready-ui";
 
 import {
+  SettingsTestResultPanel,
+  toSettingsTestResultDetails,
+  type SettingsTestResultDetail,
+  type SettingsTestResultTone,
+} from "@engchina/production-ready-system-settings";
+
+import {
   agentApi,
+  ApiError,
   type AgentProfile,
   type AgentTemplate,
   type AgentProfilePatchPayload,
@@ -179,10 +187,15 @@ interface RunWebSocketState {
   stopReason: string | null;
   /** 停止した購読を利用者の操作でつなぎ直す。 */
   reconnect: () => void;
+  /** 送って受付（ack）・拒否を待っているコマンド。押した操作だけを loading にする（messaging.md §3.7）。 */
+  pendingCommand: RunCommandKind | null;
   sendCancel: () => void;
   sendResume: () => void;
   sendApprovalDecision: (approvalId: string, approved: boolean) => void;
 }
+
+/** Run の詳細の操作（`ObjectActionBar`）のうち、WebSocket でも送れるもの。 */
+type RunCommandKind = "cancel" | "resume" | "approve" | "reject";
 
 type SseStreamStatus = "idle" | "open" | "failed";
 
@@ -234,7 +247,9 @@ const websocketStatusVariant: Record<WebSocketStreamStatus, StatusVariant> = {
 function useRunEventWebSocket(
   run: RunState | undefined,
   enabled: boolean,
-  onRuntimeEvent: () => void
+  onRuntimeEvent: () => void,
+  /** コマンド単位の拒否（権限のない取消など）。接続は保ったまま、操作の失敗として利用者に返す。 */
+  onCommandError: (message: string) => void
 ): RunWebSocketState {
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -250,6 +265,12 @@ function useRunEventWebSocket(
   const [lastEventId, setLastEventId] = useState<string | null>(null);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const [stopReason, setStopReason] = useState<string | null>(null);
+  const [pendingCommand, setPendingCommand] = useState<RunCommandKind | null>(null);
+  // 最新の callback を effect の中から呼ぶ（callback が変わっても接続し直さない）。
+  const onCommandErrorRef = useRef(onCommandError);
+  useLayoutEffect(() => {
+    onCommandErrorRef.current = onCommandError;
+  });
   // 利用者の「再接続」で増やし、effect をつなぎ直す。
   const [generation, setGeneration] = useState(0);
   const inactive = !enabled || !runId || !runStatus || isRunTerminal(runStatus);
@@ -268,6 +289,7 @@ function useRunEventWebSocket(
   const connectionChanged = useValuesChanged([enabled, onRuntimeEvent, runId, runStatus, generation]);
   if (connectionChanged) {
     setStopReason(null);
+    setPendingCommand(null);
     if (inactive) {
       setStatus("idle");
     } else {
@@ -352,6 +374,8 @@ function useRunEventWebSocket(
           socketRef.current = null;
         }
         if (disposed) return;
+        // 閉じた接続のコマンドの応答はもう来ない。
+        setPendingCommand(null);
         // backend は権限・認証で拒否すると error を送ってから 1008 で閉じる。つなぎ直しても同じ結果になる。
         if (event.code === WEBSOCKET_POLICY_VIOLATION || rejectedCode) {
           if (rejectedCode?.startsWith("auth.")) verifySession();
@@ -389,18 +413,20 @@ function useRunEventWebSocket(
         if (message.type === "command.accepted") {
           const duplicateLabel = message.duplicate ? ` / ${t("run.stream.duplicate")}` : "";
           setLastAck(`${message.command ?? "-"} / ${message.command_id ?? "-"}${duplicateLabel}`);
+          setPendingCommand(null);
           onRuntimeEvent();
           return;
         }
         if (message.type === "error") {
           const code = message.error_code ?? null;
           if (message.command) {
-            // コマンド単位の拒否（権限のない取消など）は接続を保ったまま理由だけを出す。
-            setLastError(
-              code?.startsWith("rbac.")
-                ? `${message.command}: ${t("run.stream.commandForbidden")}`
-                : code ?? message.message ?? "websocket.error"
-            );
+            // コマンド単位の拒否（権限のない取消など）は接続を保ったまま、操作の失敗として返す。
+            const reason = code?.startsWith("rbac.")
+              ? t("run.stream.commandForbidden")
+              : message.message ?? code ?? t("run.stream.commandFailedDefault");
+            setLastError(`${message.command}: ${code ?? reason}`);
+            setPendingCommand(null);
+            onCommandErrorRef.current(reason);
             return;
           }
           if (code && (code.startsWith("rbac.") || code.startsWith("auth.") || code === "run.not_found")) {
@@ -447,6 +473,7 @@ function useRunEventWebSocket(
       setLastError("websocket.not_open");
       return;
     }
+    setPendingCommand("cancel");
     socket.send(
       JSON.stringify({
         type: "cancel",
@@ -461,6 +488,7 @@ function useRunEventWebSocket(
       setLastError("websocket.not_open");
       return;
     }
+    setPendingCommand("resume");
     socket.send(
       JSON.stringify({
         type: "resume",
@@ -475,6 +503,7 @@ function useRunEventWebSocket(
       setLastError("websocket.not_open");
       return;
     }
+    setPendingCommand(approved ? "approve" : "reject");
     socket.send(
       JSON.stringify({
         type: "approval_decision",
@@ -495,6 +524,7 @@ function useRunEventWebSocket(
     reconnectAttempts,
     stopReason,
     reconnect,
+    pendingCommand,
     sendCancel,
     sendResume,
     sendApprovalDecision,
@@ -1120,6 +1150,16 @@ export function RunsPage() {
     },
     onError: (error) => toast.error(t("run.replayFailed"), { description: error.message }),
   });
+  const decideApproval = useMutation({
+    mutationFn: ({ approval, approved }: { approval: ApprovalRequest; approved: boolean }) =>
+      // 決定者はログイン中の利用者から server が決める（#215）。
+      agentApi.decideApproval(approval.id, { approved }),
+    onSuccess: (_data, { approved }) => {
+      toast.success(approved ? t("approval.decided") : t("approval.rejected"));
+      refreshRunQueries();
+    },
+    onError: (error) => toast.error(t("run.decideFailed"), { description: error.message }),
+  });
   // 作業状態（目標の下書き・選択中の Run・購読方式）はこのタブの sessionStorage に残す（#87）。
   // Agent は実行条件なので残さず、戻るたびに選び直す（実行の意思は確認し直す）。
   const [goal, setGoal, goalSaved] = useWorkspaceState("runs", "goal", DEFAULT_RUN_GOAL, isString);
@@ -1180,10 +1220,16 @@ export function RunsPage() {
   const refreshRuntimeEvents = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["runs"] });
   }, [queryClient]);
+  // WebSocket のコマンドの拒否も、REST の操作の失敗と同じく danger の Toast で返す（messaging.md §1）。
+  const onWebSocketCommandError = useCallback(
+    (reason: string) => toast.error(t("run.stream.commandFailed"), { description: reason }),
+    []
+  );
   const websocketState = useRunEventWebSocket(
     selectedRun,
     streamMode === "websocket",
-    refreshRuntimeEvents
+    refreshRuntimeEvents,
+    onWebSocketCommandError
   );
 
   const sseState = useRunEventSource(selectedRun, streamMode === "sse", refreshRuntimeEvents);
@@ -1203,7 +1249,14 @@ export function RunsPage() {
     createRun.mutate({ goal, agent_id: selectedAgentId, ...(draftRun ? { draft: true } : {}) });
   }
 
-  async function cancelLatestRun(run: RunState, viaWebSocket = false) {
+  /**
+   * 送る経路は handler の中で選ぶ（buttons.md §5.1。操作のボタンは ObjectActionBar / RowActionMenu の 1 か所）。
+   * 詳細で WebSocket の購読が接続済みのときはその接続でコマンドを送り、それ以外は REST を呼ぶ。
+   */
+  const viaWebSocket = (run: RunState) =>
+    streamMode === "websocket" && websocketState.status === "open" && run.id === selectedRun?.id;
+
+  async function cancelLatestRun(run: RunState) {
     const confirmed = await confirm({
       title: t("run.cancelTitle"),
       description: run.id,
@@ -1211,36 +1264,100 @@ export function RunsPage() {
       cancelLabel: t("common.cancel"),
       tone: "danger",
     });
-    if (confirmed) {
-      if (viaWebSocket) {
-        websocketState.sendCancel();
-      } else {
-        cancelRun.mutate(run.id);
-      }
+    if (!confirmed) return;
+    if (viaWebSocket(run)) {
+      websocketState.sendCancel();
+    } else {
+      cancelRun.mutate(run.id);
     }
   }
 
-  const actionPending = cancelRun.isPending || resumeRun.isPending || replayRun.isPending;
-  // 一覧の行と詳細で同じ定義を使う（UX 契約 buttons.md §5.1）。取消は確認してから送る。
+  function resumeLatestRun(run: RunState) {
+    if (viaWebSocket(run)) {
+      websocketState.sendResume();
+    } else {
+      resumeRun.mutate(run.id);
+    }
+  }
+
+  async function decideRunApproval(run: RunState, approval: ApprovalRequest, approved: boolean) {
+    const ok = await confirm({
+      title: approved ? t("run.approveTitle") : t("run.rejectTitle"),
+      description: approval.tool_call.name,
+      confirmLabel: approved ? t("common.approve") : t("common.reject"),
+      cancelLabel: t("common.cancel"),
+      tone: approved ? "info" : "danger",
+    });
+    if (!ok) return;
+    if (viaWebSocket(run)) {
+      websocketState.sendApprovalDecision(approval.id, approved);
+    } else {
+      decideApproval.mutate({ approval, approved });
+    }
+  }
+
+  // 操作ごとに pending を分け、押した操作だけを loading、他は disabled にする（messaging.md §3.7）。
+  const wsCommand = streamMode === "websocket" ? websocketState.pendingCommand : null;
+  const pendingAction: RunCommandKind | "replay" | null = cancelRun.isPending
+    ? "cancel"
+    : resumeRun.isPending
+      ? "resume"
+      : replayRun.isPending
+        ? "replay"
+        : decideApproval.isPending
+          ? decideApproval.variables?.approved
+            ? "approve"
+            : "reject"
+          : wsCommand;
+  // 一覧の行と詳細で同じ定義を使う（UX 契約 buttons.md §5.1）。取消・却下は確認してから送る。
   const runActions = (run: RunState): EntityAction[] => {
     const { canCancel, canResume } = runCapabilities(run);
+    const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
+    // 実行中の操作が対象の Run のものか（別の Run の行のボタンを回さない）。
+    const pendingRunId =
+      cancelRun.variables ?? resumeRun.variables ?? replayRun.variables ?? decideApproval.variables?.approval.run_id;
+    const isPendingFor = (kind: RunCommandKind | "replay") =>
+      pendingAction === kind && (wsCommand === kind ? run.id === selectedRun?.id : pendingRunId === run.id);
+    const busy = pendingAction !== null;
     return [
+      {
+        id: "approve",
+        label: t("common.approve"),
+        icon: Check,
+        // 承認・却下は承認の判断の権限（approver）が必要（#215）。
+        visible: capabilities.decideApprovals && pendingApproval !== undefined,
+        disabled: busy,
+        loading: isPendingFor("approve"),
+        onSelect: () => (pendingApproval ? decideRunApproval(run, pendingApproval, true) : undefined),
+      },
       {
         id: "resume",
         label: t("run.resume"),
         icon: PlayCircle,
         // 取消・再開・再実行は Run の実行・操作の権限（operator）が必要（#215）。
         visible: capabilities.operateRuns && canResume,
-        disabled: actionPending,
-        onSelect: () => resumeRun.mutate(run.id),
+        disabled: busy,
+        loading: isPendingFor("resume"),
+        onSelect: () => resumeLatestRun(run),
       },
       {
         id: "replay",
         label: t("run.replay"),
         icon: RefreshCw,
         visible: capabilities.operateRuns,
-        disabled: actionPending,
+        disabled: busy,
+        loading: isPendingFor("replay"),
         onSelect: () => replayRun.mutate(run.id),
+      },
+      {
+        id: "reject",
+        label: t("common.reject"),
+        icon: X,
+        tone: "danger",
+        visible: capabilities.decideApprovals && pendingApproval !== undefined,
+        disabled: busy,
+        loading: isPendingFor("reject"),
+        onSelect: () => (pendingApproval ? decideRunApproval(run, pendingApproval, false) : undefined),
       },
       {
         id: "cancel",
@@ -1248,7 +1365,8 @@ export function RunsPage() {
         icon: X,
         tone: "danger",
         visible: capabilities.operateRuns && canCancel,
-        disabled: actionPending,
+        disabled: busy,
+        loading: isPendingFor("cancel"),
         onSelect: () => cancelLatestRun(run),
       },
     ];
@@ -1435,12 +1553,6 @@ export function RunsPage() {
                   run={selectedRun}
                   agentName={agentNameOf(selectedRun.agent_id)}
                   actions={runActions(selectedRun)}
-                  actionPending={actionPending}
-                  onWebSocketCancel={() => void cancelLatestRun(selectedRun, true)}
-                  onWebSocketResume={() => websocketState.sendResume()}
-                  onWebSocketApprovalDecision={(approvalId, approved) =>
-                    websocketState.sendApprovalDecision(approvalId, approved)
-                  }
                   streamMode={streamMode}
                   onStreamModeChange={setStreamMode}
                   websocketState={websocketState}
@@ -2270,16 +2382,31 @@ function McpServiceTokenStatus({ connection }: { connection: McpConnectionSettin
 
 /**
  * 接続のツール（MCP の tools/list）。接続の確認を兼ね、ログイン中の利用者として取得する。
- * 結果は「ツールを取得」の直下に、カードの全幅で出す（messaging.md §10）。
+ * 結果は「ツールを取得」の直下に、カードの全幅の結果パネル（`SettingsTestResultPanel`）で出し、
+ * その下にツールの一覧を出す（messaging.md §10。#814）。
  */
 function McpConnectionToolsPanel({ connection }: { connection: McpConnectionSettings }) {
-  const [requested, setRequested] = useState(false);
-  const tools = useQuery({
-    queryKey: ["mcp-connection-tools", connection.server_id],
-    queryFn: () => agentApi.listMcpConnectionTools(connection.server_id),
-    enabled: requested && connection.configured,
-    retry: false,
+  const startedRef = useRef(0);
+  const [elapsedMs, setElapsedMs] = useState<number | undefined>(undefined);
+  const [checkedAt, setCheckedAt] = useState<string | undefined>(undefined);
+  const fetchTools = useMutation({
+    mutationFn: () => agentApi.listMcpConnectionTools(connection.server_id),
+    onMutate: () => {
+      startedRef.current = performance.now();
+    },
+    onSettled: () => {
+      setElapsedMs(Math.round(performance.now() - startedRef.current));
+      setCheckedAt(formatDate(new Date().toISOString()));
+    },
   });
+  // 接続の設定（URL・認証）を保存し直したら、前の設定での結果は消す（messaging.md §10.4）。
+  const { reset } = fetchTools;
+  const settingsKey = `${connection.base_url ?? ""}\u0000${connection.auth_mode ?? ""}\u0000${connection.configured}`;
+  useEffect(() => {
+    reset();
+  }, [reset, settingsKey]);
+
+  const tools = fetchTools.data?.tools ?? [];
 
   return (
     <Section title={t("settings.mcpConnections.tools")} description={t("settings.mcpConnections.toolsDescription")}>
@@ -2288,10 +2415,10 @@ function McpConnectionToolsPanel({ connection }: { connection: McpConnectionSett
           <div className="flex flex-wrap items-center gap-3">
             <Button
               variant="secondary"
-              onClick={() => (requested ? void tools.refetch() : setRequested(true))}
+              onClick={() => fetchTools.mutate()}
               disabled={!connection.configured}
               aria-describedby={!connection.configured ? "mcp-tools-configure-hint" : undefined}
-              loading={tools.isFetching}
+              loading={fetchTools.isPending}
               icon={RefreshCw}
             >
               {t("settings.mcpConnections.fetchTools")}
@@ -2303,22 +2430,82 @@ function McpConnectionToolsPanel({ connection }: { connection: McpConnectionSett
               </p>
             ) : null}
           </div>
-          {!requested || !connection.configured ? null : tools.error ? (
-            <Banner severity="danger" title={t("settings.mcpConnections.fetchFailed")}>
-              {tools.error.message}
-            </Banner>
-          ) : tools.isLoading ? (
-            <TimedLoadingState label={t("loading.mcpTools")} testId="mcp-tools-loading">
+          {fetchTools.isPending ? (
+            // 取得中は結果の位置に経過時間を出す。スピナーは押した「ツールを取得」が担う（messaging.md §3.7 / §10.2）。
+            <TimedLoadingState
+              label={t("loading.mcpTools")}
+              activityIcon="none"
+              testId="mcp-tools-loading"
+            >
               <TableSkeleton columns={4} />
             </TimedLoadingState>
-          ) : (tools.data?.tools ?? []).length ? (
-            <McpToolsList tools={tools.data?.tools ?? []} />
-          ) : (
-            <EmptyState title={t("settings.mcpDiscovery.empty")} />
-          )}
+          ) : fetchTools.error ? (
+            <McpToolsFailure connection={connection} error={fetchTools.error} elapsedMs={elapsedMs} checkedAt={checkedAt} />
+          ) : fetchTools.data ? (
+            <>
+              <SettingsTestResultPanel
+                tone={tools.length ? "success" : "warning"}
+                message={
+                  tools.length
+                    ? t("settings.mcpConnections.fetchSucceeded", {
+                        name: connection.label || connection.server_id,
+                        count: formatNumber(tools.length),
+                      })
+                    : t("settings.mcpConnections.fetchEmpty", { name: connection.label || connection.server_id })
+                }
+                elapsedMs={elapsedMs}
+                checkedAt={checkedAt}
+                troubleshooting={tools.length ? [] : [t("settings.mcpConnections.fetchEmptyHint")]}
+                details={toSettingsTestResultDetails({
+                  server_id: connection.server_id,
+                  base_url: connection.base_url,
+                  auth_mode: mcpAuthLabel(connection.auth_mode),
+                  tools: tools.length,
+                })}
+                testId="mcp-tools-result"
+              />
+              {tools.length ? <McpToolsList tools={tools} /> : null}
+            </>
+          ) : null}
         </CardContent>
       </Card>
     </Section>
+  );
+}
+
+/** ツールの取得の失敗（1 文目に何が起きたか、確認ポイント、技術的な詳細は開いた「詳細」）。 */
+function McpToolsFailure({
+  connection,
+  error,
+  elapsedMs,
+  checkedAt,
+}: {
+  connection: McpConnectionSettings;
+  error: Error;
+  elapsedMs?: number;
+  checkedAt?: string;
+}) {
+  const apiError = error instanceof ApiError ? error : null;
+  return (
+    <SettingsTestResultPanel
+      tone="danger"
+      message={t("settings.mcpConnections.fetchFailedMessage", { name: connection.label || connection.server_id })}
+      elapsedMs={elapsedMs}
+      checkedAt={checkedAt}
+      troubleshooting={[
+        error.message,
+        t("settings.mcpConnections.fetchFailedHintUrl"),
+        t("settings.mcpConnections.fetchFailedHintAuth"),
+      ]}
+      details={toSettingsTestResultDetails({
+        server_id: connection.server_id,
+        base_url: connection.base_url,
+        status_code: apiError?.status,
+        error_code: apiError?.errorCode,
+        request_id: apiError?.requestId,
+      })}
+      testId="mcp-tools-result"
+    />
   );
 }
 
@@ -2984,7 +3171,7 @@ function McpConnectionEditor({
           </Section>
         </fieldset>
         {/* 保存した接続だけツールを取得できる（入力中の値ではなく保存済みの設定で呼ぶ）。 */}
-        {connection ? <McpConnectionToolsPanel connection={connection} /> : null}
+        {connection ? <McpConnectionToolsPanel key={connection.server_id} connection={connection} /> : null}
       </PageBody>
     </>
   );
@@ -4588,6 +4775,11 @@ function MarketplaceDetail({
     onError: (error) => toast.error((error as Error).message),
   });
   const plugins = listing.data?.plugins ?? [];
+  // 他の一覧と同じく名前・ID・説明で絞り込む（page-archetypes.md #535 / #600。検索語は作業状態に残す。#814）。
+  const [pluginQuery, setPluginQuery] = useListSearch("marketplacePlugins");
+  const visiblePlugins = plugins.filter((manifest) =>
+    matchesSearch(pluginQuery, [manifest.name, manifest.id, manifest.description])
+  );
   const title = source.name || source.id;
 
   const columns: DataTableColumn<PluginManifest>[] = [
@@ -4682,23 +4874,37 @@ function MarketplaceDetail({
               testId="marketplace-install-processing"
             />
           ) : null}
-          {listing.isLoading ? (
-            <TimedLoadingState label={t("loading.marketplacePlugins")} testId="marketplace-plugins-loading">
-              <TableSkeleton columns={3} />
-            </TimedLoadingState>
-          ) : listing.error ? (
-            <Banner severity="danger">{(listing.error as Error).message}</Banner>
-          ) : (
+          <ListToolbar
+            search={
+              <ListSearchField
+                id="marketplace-plugin-search"
+                label={t("marketplaces.pluginSearch")}
+                value={pluginQuery}
+                onSearch={setPluginQuery}
+                count={visiblePlugins.length}
+              />
+            }
+            summary={listing.data ? listCountLabel(visiblePlugins.length, plugins.length) : undefined}
+            testId="marketplace-plugin-toolbar"
+          />
+          <QueryState query={listing} loadingLabel={t("loading.marketplacePlugins")} skeleton={<TableSkeleton columns={3} />} testId="marketplace-plugins-loading">
             <PagedDataTable
-              rows={plugins}
+              rows={visiblePlugins}
               columns={columns}
               getRowKey={(manifest) => manifest.id}
               rowProps={() => ({ className: "align-top" })}
               tableClassName="w-full min-w-[36rem]"
               ariaLabel={t("marketplaces.available")}
-              empty={<EmptyState title={t("marketplaces.availableEmpty")} />}
+              resetKey={pluginQuery}
+              empty={
+                plugins.length ? (
+                  <NoMatchState title={t("marketplaces.pluginNoMatch")} onClear={() => setPluginQuery("")} />
+                ) : (
+                  <EmptyState title={t("marketplaces.availableEmpty")} />
+                )
+              }
             />
-          )}
+          </QueryState>
         </Section>
       </PageBody>
     </>
@@ -4893,20 +5099,27 @@ export function RuntimeSnapshotSettingsPage() {
     queryKey: ["runtime", "snapshot"],
     queryFn: agentApi.exportRuntimeSnapshot,
   });
-  const importSnapshot = useMutation({
+  // 検証（dry run）と置換は別の操作なので、pending も結果も分ける（messaging.md §3.7「1 つの状態を複数のボタンで共有しない」）。
+  const validateStartedRef = useRef(0);
+  const [validateElapsedMs, setValidateElapsedMs] = useState<number | undefined>(undefined);
+  const validateSnapshot = useMutation({
     mutationFn: agentApi.importRuntimeSnapshot,
-    onSuccess: (result) => {
-      if (result.imported) {
-        toast.success(t("settings.snapshot.imported"));
-        void queryClient.invalidateQueries();
-        // 置換が済んだ入力は下書きではなくなるので空に戻す（確認語も解除する）。#87
-        setImportText("");
-        setReason("");
-        setConfirmText("");
-      } else {
-        toast.success(t("settings.snapshot.validated"));
-      }
-      setValidationResult(result);
+    onMutate: () => {
+      validateStartedRef.current = performance.now();
+    },
+    // 結果は「検証」の直下の結果パネル 1 か所に出す。成功の Toast は重ねない（messaging.md §10.1）。
+    onSettled: () => setValidateElapsedMs(Math.round(performance.now() - validateStartedRef.current)),
+  });
+  const replaceSnapshot = useMutation({
+    mutationFn: agentApi.importRuntimeSnapshot,
+    onSuccess: () => {
+      toast.success(t("settings.snapshot.imported"));
+      void queryClient.invalidateQueries();
+      // 置換が済んだ入力は下書きではなくなるので空に戻す（確認語も解除する）。#87
+      setImportText("");
+      setReason("");
+      setConfirmText("");
+      validateSnapshot.reset();
     },
   });
   const [exportText, setExportText] = useState("");
@@ -4914,9 +5127,9 @@ export function RuntimeSnapshotSettingsPage() {
   const [reason, setReason] = useState("");
   const [confirmText, setConfirmText] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
-  const [validationResult, setValidationResult] = useState<RuntimeSnapshotImportResult | null>(null);
+  const importPending = validateSnapshot.isPending || replaceSnapshot.isPending;
   // インポート JSON と理由は未保存の下書き。確認語は保存も復元もしない（離脱で state ごと消える）。#87
-  useSettingsLeaveGuard(importText.trim() !== "" || reason.trim() !== "", importSnapshot.isPending);
+  useSettingsLeaveGuard(importText.trim() !== "" || reason.trim() !== "", replaceSnapshot.isPending);
 
   // 取得したスナップショットが変わったレンダーで、エクスポート欄を取り直す（effect で setState しない）。
   const snapshotChanged = useValuesChanged([snapshot.data]);
@@ -4941,7 +5154,9 @@ export function RuntimeSnapshotSettingsPage() {
 
   function copyCurrentSnapshotToImport() {
     setImportText(exportText);
-    setValidationResult(null);
+    // 入力が変わったら、前の入力の検証の結果は消す（messaging.md §10.4）。
+    validateSnapshot.reset();
+    replaceSnapshot.reset();
     setImportError(null);
   }
 
@@ -4964,7 +5179,7 @@ export function RuntimeSnapshotSettingsPage() {
     if (!parsed) {
       return;
     }
-    importSnapshot.mutate({
+    validateSnapshot.mutate({
       snapshot: parsed,
       dry_run: true,
       confirm_replace: false,
@@ -4991,7 +5206,7 @@ export function RuntimeSnapshotSettingsPage() {
     if (!ok) {
       return;
     }
-    importSnapshot.mutate({
+    replaceSnapshot.mutate({
       snapshot: parsed,
       dry_run: false,
       confirm_replace: true,
@@ -5065,7 +5280,8 @@ export function RuntimeSnapshotSettingsPage() {
               value={importText}
               onValueChange={(value) => {
                 setImportText(value);
-                setValidationResult(null);
+                validateSnapshot.reset();
+                replaceSnapshot.reset();
                 setImportError(null);
               }}
               monospace
@@ -5083,11 +5299,30 @@ export function RuntimeSnapshotSettingsPage() {
               <Button
                 variant="secondary"
                 onClick={dryRunImport}
-                loading={importSnapshot.isPending} icon={ShieldAlert}>
+                loading={validateSnapshot.isPending}
+                disabled={replaceSnapshot.isPending}
+                icon={ShieldAlert}
+                data-testid="runtime-snapshot-validate"
+              >
                 {t("common.validate")}
               </Button>
             </div>
-            {validationResult ? <SnapshotValidationPanel result={validationResult} /> : null}
+            {/* 検証の結果は「検証」の直下にカードの全幅で 1 つだけ出す（messaging.md §10）。 */}
+            {validateSnapshot.isPending ? (
+              <ProcessingIndicator
+                active
+                label={t("settings.snapshot.validating")}
+                operationKey="runtime-snapshot-validate"
+                placement="result"
+                // スピナーは押した「検証」のボタンが担う（messaging.md §3.7）。
+                activityIcon="none"
+                testId="runtime-snapshot-validating"
+              />
+            ) : validateSnapshot.data ? (
+              <SnapshotValidationPanel result={validateSnapshot.data} elapsedMs={validateElapsedMs} />
+            ) : validateSnapshot.error ? (
+              <SnapshotValidationFailure error={validateSnapshot.error} elapsedMs={validateElapsedMs} />
+            ) : null}
             <ExecutionConfirmationField
               id={SNAPSHOT_REPLACE_CONFIRM_ID}
               value={confirmText}
@@ -5097,15 +5332,15 @@ export function RuntimeSnapshotSettingsPage() {
               placeholder={t("settings.snapshot.confirmPlaceholder")}
               helper={t("settings.snapshot.confirmRequired")}
               labels={{ label: t("settings.snapshot.confirmText") }}
-              disabled={importSnapshot.isPending}
+              disabled={importPending}
               actions={
                 <Button
                   variant="danger"
                   size="lg"
                   className="w-full sm:w-auto"
                   onClick={() => void replaceRuntimeSnapshot()}
-                  loading={importSnapshot.isPending}
-                  disabled={confirmText !== SNAPSHOT_REPLACE_CONFIRMATION}
+                  loading={replaceSnapshot.isPending}
+                  disabled={confirmText !== SNAPSHOT_REPLACE_CONFIRMATION || validateSnapshot.isPending}
                   // 使えない間は、理由（確認語欄の説明。id は ExecutionConfirmationField の `${id}-helper`）を
                   // ボタンの説明として読み上げる。一致したら外す（#426。#379 の置き換えで外れていた）。
                   aria-describedby={confirmText !== SNAPSHOT_REPLACE_CONFIRMATION ? SNAPSHOT_REPLACE_HELPER_ID : undefined}
@@ -5114,7 +5349,15 @@ export function RuntimeSnapshotSettingsPage() {
                 </Button>
               }
             />
-            {importSnapshot.error ? <Banner severity="danger">{importSnapshot.error.message}</Banner> : null}
+            {/* 置換の失敗は置換の操作の行の直下に出す（messaging.md §3.3 / §10.2）。成功は Toast。 */}
+            <FormStatus
+              tone="danger"
+              message={
+                replaceSnapshot.error
+                  ? t("settings.snapshot.replaceFailed", { reason: replaceSnapshot.error.message })
+                  : null
+              }
+            />
           </CardContent>
         </Card>
       </PageBody>
@@ -5149,45 +5392,77 @@ function SnapshotSummaryGrid({ summary }: { summary: RuntimeSnapshotSummary }) {
   );
 }
 
-function SnapshotValidationPanel({ result }: { result: RuntimeSnapshotImportResult }) {
-  const validation = result.validation;
+function snapshotSummaryDetails(summary: RuntimeSnapshotSummary): SettingsTestResultDetail[] {
+  const items: Array<[I18nKey, number]> = [
+    ["settings.snapshot.count.runs", summary.runs],
+    ["settings.snapshot.count.agents", summary.agents],
+    ["settings.snapshot.count.events", summary.events],
+    ["settings.snapshot.count.steps", summary.steps],
+    ["settings.snapshot.count.approvals", summary.approvals],
+    ["settings.snapshot.count.artifacts", summary.artifacts],
+    ["settings.snapshot.count.pendingToolCalls", summary.pending_tool_calls],
+  ];
+  return items.map(([label, value]) => ({ label: t(label), value: formatNumber(value) }));
+}
+
+/**
+ * スナップショットの検証の結果（messaging.md §10。#814）。1 つの結果パネルに、何が起きたか（有効 / 警告あり / 無効）、
+ * 所要時間、エラー・警告の一覧を出し、件数の集計は「詳細」に畳む（無効のときだけ開く）。
+ */
+function SnapshotValidationPanel({ result, elapsedMs }: { result: RuntimeSnapshotImportResult; elapsedMs?: number }) {
+  const { valid, errors, warnings, summary } = result.validation;
+  const tone: SettingsTestResultTone = !valid ? "danger" : warnings.length ? "warning" : "success";
+  const message = !valid
+    ? t("settings.snapshot.result.invalid", { count: formatNumber(errors.length) })
+    : warnings.length
+      ? t("settings.snapshot.result.validWithWarnings", { count: formatNumber(warnings.length) })
+      : t("settings.snapshot.result.valid");
   return (
-    <div className="space-y-3">
-      <Banner severity={validation.valid ? "success" : "danger"}>
-        <div className="flex flex-wrap items-center gap-3">
-          <StatusBadge
-            variant={validation.valid ? "success" : "danger"}
-            label={validation.valid ? t("common.valid") : t("common.invalid")}
-          />
-          <span>{result.dry_run ? t("common.validate") : t("common.replace")}</span>
-        </div>
-      </Banner>
-      <SnapshotSummaryGrid summary={validation.summary} />
-      {validation.errors.length ? (
-        <Banner severity="danger" title={t("settings.snapshot.errors")}>
-          <div className="space-y-1">
-            {validation.errors.map((error) => (
-              <p key={error} className="break-words [overflow-wrap:anywhere]">
-                {error}
-              </p>
-            ))}
-          </div>
-        </Banner>
-      ) : (
-        <Banner severity="success">{t("settings.snapshot.noIssues")}</Banner>
-      )}
-      {validation.warnings.length ? (
-        <Banner severity="warning" title={t("settings.snapshot.warnings")}>
-          <div className="space-y-1">
-            {validation.warnings.map((warning) => (
-              <p key={warning} className="break-words [overflow-wrap:anywhere]">
-                {warning}
-              </p>
-            ))}
-          </div>
-        </Banner>
-      ) : null}
+    <SettingsTestResultPanel
+      tone={tone}
+      message={message}
+      elapsedMs={elapsedMs}
+      details={snapshotSummaryDetails(summary)}
+      testId="runtime-snapshot-validation"
+    >
+      <SnapshotIssueList title={t("settings.snapshot.errors")} items={errors} />
+      <SnapshotIssueList title={t("settings.snapshot.warnings")} items={warnings} />
+    </SettingsTestResultPanel>
+  );
+}
+
+function SnapshotIssueList({ title, items }: { title: string; items: string[] }) {
+  if (!items.length) return null;
+  return (
+    <div className="space-y-1">
+      <p className="text-xs font-semibold text-fg">{title}</p>
+      <ul className="list-disc space-y-1 pl-5 text-xs leading-relaxed">
+        {items.map((item) => (
+          <li key={item} className="min-w-0 break-words [overflow-wrap:anywhere]">
+            {item}
+          </li>
+        ))}
+      </ul>
     </div>
+  );
+}
+
+/** 検証の要求そのものが失敗したとき（サーバーの障害・形式の拒否など）。 */
+function SnapshotValidationFailure({ error, elapsedMs }: { error: Error; elapsedMs?: number }) {
+  const apiError = error instanceof ApiError ? error : null;
+  return (
+    <SettingsTestResultPanel
+      tone="danger"
+      message={t("settings.snapshot.result.failed")}
+      elapsedMs={elapsedMs}
+      troubleshooting={[error.message, t("settings.snapshot.result.failedHint")]}
+      details={toSettingsTestResultDetails({
+        status_code: apiError?.status,
+        error_code: apiError?.errorCode,
+        request_id: apiError?.requestId,
+      })}
+      testId="runtime-snapshot-validation"
+    />
   );
 }
 
@@ -5740,10 +6015,6 @@ function RunDetail({
   run,
   agentName,
   actions,
-  actionPending,
-  onWebSocketCancel,
-  onWebSocketResume,
-  onWebSocketApprovalDecision,
   streamMode,
   onStreamModeChange,
   websocketState,
@@ -5754,10 +6025,6 @@ function RunDetail({
   /** 業務 Agent の名前（一覧に無いときは ID）。 */
   agentName: string;
   actions: EntityAction[];
-  actionPending: boolean;
-  onWebSocketCancel: () => void;
-  onWebSocketResume: () => void;
-  onWebSocketApprovalDecision: (approvalId: string, approved: boolean) => void;
   streamMode: RunStreamMode;
   onStreamModeChange: (mode: RunStreamMode) => void;
   websocketState: RunWebSocketState;
@@ -5766,7 +6033,6 @@ function RunDetail({
 }) {
   const queryClient = useQueryClient();
   const structured = getStructuredResult(run);
-  const { canCancel, canResume } = runCapabilities(run);
   const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
 
   return (
@@ -5827,14 +6093,6 @@ function RunDetail({
         onModeChange={onStreamModeChange}
         websocketState={websocketState}
         sseState={sseState}
-        // WebSocket のコマンドも REST と同じ capability で出し分ける（backend も同じ規則で拒否する）。
-        canCancel={canCancel && capabilities.operateRuns}
-        canResume={canResume && capabilities.operateRuns}
-        pendingApproval={capabilities.decideApprovals ? pendingApproval : undefined}
-        actionPending={actionPending}
-        onWebSocketCancel={onWebSocketCancel}
-        onWebSocketResume={onWebSocketResume}
-        onWebSocketApprovalDecision={onWebSocketApprovalDecision}
       />
 
       {run.status === "waiting_approval" ? (
@@ -6119,25 +6377,11 @@ function RunStreamControls({
   onModeChange,
   websocketState,
   sseState,
-  canCancel,
-  canResume,
-  pendingApproval,
-  actionPending,
-  onWebSocketCancel,
-  onWebSocketResume,
-  onWebSocketApprovalDecision,
 }: {
   mode: RunStreamMode;
   onModeChange: (mode: RunStreamMode) => void;
   websocketState: RunWebSocketState;
   sseState: RunEventSourceState;
-  canCancel: boolean;
-  canResume: boolean;
-  pendingApproval: ApprovalRequest | undefined;
-  actionPending: boolean;
-  onWebSocketCancel: () => void;
-  onWebSocketResume: () => void;
-  onWebSocketApprovalDecision: (approvalId: string, approved: boolean) => void;
 }) {
   return (
     <Card className="min-w-0">
@@ -6164,20 +6408,9 @@ function RunStreamControls({
           </ToggleChip>
         </div>
 
-        {mode === "websocket" ? (
-          <div className="grid min-w-0 gap-3 text-sm md:grid-cols-3 xl:grid-cols-5">
-            <StreamMetric label={t("run.stream.heartbeat")} value={websocketState.lastHeartbeat ?? "-"} />
-            <StreamMetric label={t("run.stream.ack")} value={websocketState.lastAck ?? "-"} />
-            <StreamMetric label={t("run.stream.error")} value={websocketState.lastError ?? "-"} />
-            <StreamMetric label={t("run.stream.lastEvent")} value={websocketState.lastEventId ?? "-"} />
-            <StreamMetric
-              label={t("run.stream.reconnects")}
-              value={String(websocketState.reconnectAttempts)}
-            />
-          </div>
-        ) : (
-          <p className="text-sm leading-6 text-fg-muted">{t("run.stream.sseDescription")}</p>
-        )}
+        <p className="text-sm leading-6 text-fg-muted">
+          {mode === "websocket" ? t("run.stream.websocketDescription") : t("run.stream.sseDescription")}
+        </p>
 
         {mode === "websocket" && websocketState.stopReason ? (
           <Banner
@@ -6206,57 +6439,17 @@ function RunStreamControls({
           </Banner>
         ) : null}
 
-        {mode === "websocket" && (pendingApproval || canResume || canCancel) ? (
-          <div className="flex flex-wrap gap-2">
-            {pendingApproval ? (
-              <>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => onWebSocketApprovalDecision(pendingApproval.id, true)}
-                  loading={actionPending}
-                  disabled={websocketState.status !== "open"}
-                  aria-label={t("run.stream.wsApprove")} icon={Check}>
-                  {t("run.stream.wsApprove")}
-                </Button>
-                {/* 承認の拒否・Run のキャンセルは確定的な破壊ではないため赤塗り（danger）にせず、
-                    secondary + tone="danger" で控えめに示す（buttons.md §3、README §4 Button）。 */}
-                <Button
-                  variant="secondary"
-                  tone="danger"
-                  size="sm"
-                  onClick={() => onWebSocketApprovalDecision(pendingApproval.id, false)}
-                  loading={actionPending}
-                  disabled={websocketState.status !== "open"}
-                  aria-label={t("run.stream.wsReject")} icon={X}>
-                  {t("run.stream.wsReject")}
-                </Button>
-              </>
-            ) : null}
-            {canResume ? (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={onWebSocketResume}
-                loading={actionPending}
-                disabled={websocketState.status !== "open"}
-                aria-label={t("run.stream.wsResume")} icon={PlayCircle}>
-                {t("run.stream.wsResume")}
-              </Button>
-            ) : null}
-            {canCancel ? (
-              <Button
-                variant="secondary"
-                tone="danger"
-                size="sm"
-                onClick={onWebSocketCancel}
-                loading={actionPending}
-                disabled={websocketState.status !== "open"}
-                aria-label={t("run.stream.wsCancel")} icon={X}>
-                {t("run.stream.wsCancel")}
-              </Button>
-            ) : null}
-          </div>
+        {/* 通信の指標は業務の判断に使わないので「接続の詳細」に畳む（messaging.md §10.3）。 */}
+        {mode === "websocket" ? (
+          <Disclosure summary={t("run.stream.details")} variant="plain" size="sm" data-testid="run-stream-details">
+            <dl className="grid min-w-0 gap-x-4 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-3">
+              <StreamMetric label={t("run.stream.heartbeat")} value={websocketState.lastHeartbeat ?? "-"} />
+              <StreamMetric label={t("run.stream.ack")} value={websocketState.lastAck ?? "-"} />
+              <StreamMetric label={t("run.stream.error")} value={websocketState.lastError ?? "-"} />
+              <StreamMetric label={t("run.stream.lastEvent")} value={websocketState.lastEventId ?? "-"} />
+              <StreamMetric label={t("run.stream.reconnects")} value={String(websocketState.reconnectAttempts)} />
+            </dl>
+          </Disclosure>
         ) : null}
       </CardContent>
     </Card>
@@ -6265,9 +6458,9 @@ function RunStreamControls({
 
 function StreamMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-md border border-border bg-surface-hover px-3 py-2">
-      <p className="text-xs font-medium text-fg-muted">{label}</p>
-      <p className="mt-1 break-words text-sm text-fg [overflow-wrap:anywhere]">{value}</p>
+    <div className="min-w-0">
+      <dt className="font-medium text-fg">{label}</dt>
+      <dd className="break-words text-fg-muted [overflow-wrap:anywhere]">{value}</dd>
     </div>
   );
 }

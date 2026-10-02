@@ -44,6 +44,18 @@ async function useWebSocketMode(page: Page) {
   await page.getByRole("group", { name: "ストリーム方式" }).getByRole("button", { name: "WebSocket" }).click();
 }
 
+/** Run の詳細の操作（直置きのボタン、無ければ「その他の操作」のメニュー）を押す。 */
+async function runObjectAction(page: Page, name: string) {
+  const bar = page.getByTestId("run-object-actions");
+  const direct = bar.getByRole("button", { name, exact: true });
+  if (await direct.count()) {
+    await direct.click();
+    return;
+  }
+  await bar.getByRole("button", { name: /その他の操作/ }).click();
+  await page.getByRole("menuitem", { name, exact: true }).click();
+}
+
 async function expectNoPageOverflow(page: Page) {
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
@@ -126,13 +138,65 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/runs");
       await useWebSocketMode(page);
       await expect(streamCard(page).getByText("接続済み", { exact: true })).toBeVisible();
-      await page.getByRole("button", { name: "WS キャンセル" }).click();
+      // 操作は Run の詳細の ObjectActionBar の 1 か所。購読中は WebSocket で送る（#814）。
+      await runObjectAction(page, "キャンセル");
       await page.getByRole("alertdialog").getByRole("button", { name: "実行をキャンセル" }).click();
 
-      await expect(streamCard(page).getByText("cancel: この操作を行う権限がありません。")).toBeVisible();
+      // 拒否は REST の操作の失敗と同じく danger の Toast で返し、接続は保つ。
+      await expect(page.getByText("実行の操作を送れませんでした")).toBeVisible();
+      await expect(page.getByText("この操作を行う権限がありません。")).toBeVisible();
       await expect(streamCard(page).getByText("接続済み", { exact: true })).toBeVisible();
       await expect(page.getByTestId("run-stream-stopped")).toHaveCount(0);
       expect(connections).toBe(1);
+    });
+
+    test("WebSocket の購読中は Run の操作をその接続で送り、押した操作だけが受付まで処理中になる", async ({
+      page,
+      mockApi,
+    }) => {
+      const commands: Array<{ type: string; command_id: string }> = [];
+      let socket: WebSocketRoute | null = null;
+      await page.routeWebSocket(WS_URL, (ws) => {
+        socket = ws;
+        ws.onMessage((message) => {
+          commands.push(JSON.parse(String(message)) as { type: string; command_id: string });
+        });
+      });
+
+      await page.goto("/runs");
+      await useWebSocketMode(page);
+      await expect(streamCard(page).getByText("接続済み", { exact: true })).toBeVisible();
+      // WebSocket 専用のボタン列は無く、操作は ObjectActionBar の 1 か所だけ。
+      await expect(streamCard(page).getByRole("button", { name: /WS / })).toHaveCount(0);
+      // 通信の指標は「接続の詳細」に畳む（既定で閉じる）。
+      const details = page.getByTestId("run-stream-details");
+      await expect(details).not.toHaveAttribute("open", "");
+      await expect(details.getByText("最後の応答確認")).toBeHidden();
+
+      const bar = page.getByTestId("run-object-actions");
+      const resume = bar.getByRole("button", { name: "再開", exact: true });
+      await resume.click();
+      await expect.poll(() => commands.map((command) => command.type)).toEqual(["resume"]);
+      expect(mockApi.lastRequest("POST", "/api/runs/run-stream/resume")).toBeUndefined();
+      // 押した「再開」だけが処理中（スピナーは 1 つ）、他の操作は押せない。
+      await expect(resume).toHaveAttribute("aria-busy", "true");
+      await expect(bar.getByRole("button", { name: "再実行", exact: true })).toBeDisabled();
+      // 操作の列で回るのは押した「再開」だけ（実行中の Run の進行表示のスピナーは別の処理）。
+      await expect(resume.locator("svg.animate-spin")).toHaveCount(1);
+      await expect(bar.locator("svg.animate-spin:visible")).toHaveCount(1);
+
+      socket!.send(JSON.stringify({ type: "command.accepted", command: "resume", command_id: commands[0].command_id }));
+      await expect(resume).not.toHaveAttribute("aria-busy", "true");
+      await details.getByText("接続の詳細").click();
+      await expect(details.getByText(/^resume \/ resume-/)).toBeVisible();
+      await expectNoPageOverflow(page);
+    });
+
+    test("SSE の購読中は Run の操作を REST で送る", async ({ page, mockApi }) => {
+      await page.goto("/runs");
+      await expect(page.getByText("購読を確認する").first()).toBeVisible();
+      await page.getByTestId("run-object-actions").getByRole("button", { name: "再開", exact: true }).click();
+      await expect.poll(() => mockApi.lastRequest("POST", "/api/runs/run-stream/resume")).toBeTruthy();
     });
 
     test("SSE の接続が切れたら自動の再接続をやめ、停止を示して再接続できる", async ({ page, mockApi }) => {
