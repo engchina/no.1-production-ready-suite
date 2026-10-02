@@ -41,6 +41,9 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
   `AGENT_RUNTIME_REPOSITORY_BACKEND` に従い、Oracle では共通の `PLATFORM_ORACLE_*` で `AGENT_RUNTIME_*` /
   `AGENT_CONTROL_PLANE_ITEMS` に保存する（テーブルはシステムテーブルが作る。アプリは DDL を実行しない）。
   MCP 接続の秘密は `app.secret_box` で暗号化する。`.env` の宣言は保存しない。
+- 利用状況・フィードバックの集計（#794）: Oracle の構成は Run の事実（`AGENT_RUN_FACTS`。1 Run = 1 行）を SQL で集計する
+  （期間は 365 日まで。書き込みは `run_facts_store` のバックグラウンドの MERGE で、Run を止めない）。memory / file は
+  メモリの Run を集計する。詳細は docs/agent-control-plane-design.md §5.2。
 - Plugin は Marketplace の**原子的な配布パッケージ**であり実行概念ではない。正式契約は `skills[] / mcp_servers[] / resources[]`。
 - Prompt / Workflow / Template は非実行・版管理 resource。独立 Workflow engine を作らない。
 

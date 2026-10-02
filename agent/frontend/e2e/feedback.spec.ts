@@ -159,6 +159,43 @@ for (const viewport of VIEWPORTS) {
   }
 }
 
+for (const viewport of VIEWPORTS) {
+  test(`365 日までの期間を選び、一覧はサーバー側でページングする (${viewport.name})`, async ({ page, mockApi }) => {
+    // #794: 90 日を超える期間は保存した Run の履歴で集計し、一覧は offset / limit で取得する。
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    seedReport(mockApi);
+    const report = mockApi.state.feedbackReport as Record<string, unknown>;
+    report.source = "history";
+    report.items = Array.from({ length: 23 }, (_, index) => item(`run-${String(index).padStart(2, "0")}`));
+    report.matched = 23;
+    await page.goto("/feedback");
+
+    await expect(page.getByTestId("report-source")).toHaveText("保存した Run の履歴（データベース）から集計しています。");
+    const table = page.getByRole("table", { name: "フィードバックの一覧" });
+    await expect(table.getByRole("row", { name: /run-00/ })).toBeVisible();
+    const pager = page.getByTestId("feedback-pagination");
+    await expect(pager).toContainText("1 - 10 / 23 件");
+    await pager.getByRole("button", { name: "次へ" }).click();
+    await expect(table.getByRole("row", { name: /run-10/ })).toBeVisible();
+    await expect(pager).toContainText("11 - 20 / 23 件");
+    let request = mockApi.lastRequest("GET", "/api/feedback");
+    expect([request?.searchParams.get("offset"), request?.searchParams.get("limit")]).toEqual(["10", "10"]);
+
+    // ページは作業状態に残す（再読込しても 2 ページ目）。
+    await page.reload();
+    await expect(page.getByTestId("feedback-pagination")).toContainText("11 - 20 / 23 件");
+
+    // 期間を変えると 1 ページ目から読み直す。
+    await page.locator("#feedback-period").click();
+    await page.getByRole("option", { name: "直近 365 日" }).click();
+    await expect(page.getByTestId("feedback-pagination")).toContainText("1 - 10 / 23 件");
+    request = mockApi.lastRequest("GET", "/api/feedback");
+    expect(request?.searchParams.get("days")).toBe("365");
+    expect(request?.searchParams.get("offset")).toBeNull();
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
 test("評価・理由で絞り込み、合う評価が無ければ絞り込みをクリアできる", async ({ page, mockApi }) => {
   seedReport(mockApi);
   await page.goto("/feedback");

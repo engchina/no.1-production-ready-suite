@@ -9,6 +9,7 @@ CLI（`python -m app.cli.agent_system_schema`）から明示されたときだ�
 - 接続は共通 `.env` の `PLATFORM_ORACLE_*`（`app.oracle_connection`）。
 - 共通認証の `PLATFORM_*` と組み込み SYSTEM_ADMIN ロールは、`AGENT_ROLE_*` の FK の参照先なので
   先に冪等に用意する（RAG と同じ）。管理対象ではないため、全再作成でも削除しない。
+- 利用状況・フィードバックの集計に使う Run の事実（`AGENT_RUN_FACTS`。#794）もここで作る。
 - Run・業務 Agent の保存先（`AGENT_RUNTIME_CHECKPOINTS` と監査用の projection
   `AGENT_RUNTIME_*`）と、画面で変えた定義（Skill・プラグイン・MCP 接続・ツール権限）の
   `AGENT_CONTROL_PLANE_ITEMS` もここで作る（#764。以前は Runtime repository が別の接続設定で
@@ -214,11 +215,57 @@ CONTROL_PLANE_STATEMENTS: tuple[str, ...] = (
     """,
 )
 
+# Run の事実（1 Run = 1 行。#794）。利用状況・フィードバックを期間（〜365 日）・日・業務 Agent・
+# 利用者・モデルで SQL 集計する（名前は `run_facts_store.RUN_FACTS_TABLE` と同じ）。
+# 日時は UTC の TIMESTAMP（タイムゾーンなし。session のタイムゾーンに依らない）。RATED_AT は
+# 本人の評価と管理者の評価の新しい方（フィードバックの期間と一覧の並び）。Run の snapshot
+# （AGENT_RUNTIME_CHECKPOINTS）とは別に残る分析用の履歴で、Run を整理しても集計は残る。
+RUN_FACTS_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE AGENT_RUN_FACTS (
+        RUN_ID VARCHAR2(128) NOT NULL,
+        AGENT_ID VARCHAR2(128) NOT NULL,
+        AGENT_NAME VARCHAR2(400 CHAR),
+        AGENT_VERSION VARCHAR2(32),
+        THREAD_ID VARCHAR2(128),
+        CREATED_BY_USER_UUID VARCHAR2(64),
+        STATUS VARCHAR2(32) NOT NULL,
+        RUN_SOURCE VARCHAR2(32) NOT NULL,
+        MODEL VARCHAR2(256 CHAR),
+        REQUESTS NUMBER(10),
+        INPUT_TOKENS NUMBER(19),
+        OUTPUT_TOKENS NUMBER(19),
+        TOTAL_TOKENS NUMBER(19),
+        FEEDBACK_RATING VARCHAR2(16),
+        FEEDBACK_REASON VARCHAR2(32),
+        FEEDBACK_COMMENT VARCHAR2(1000 CHAR),
+        FEEDBACK_USER_UUID VARCHAR2(64),
+        FEEDBACK_AT TIMESTAMP,
+        ADMIN_RATING VARCHAR2(16),
+        ADMIN_REASON VARCHAR2(32),
+        ADMIN_COMMENT VARCHAR2(1000 CHAR),
+        ADMIN_USER_UUID VARCHAR2(64),
+        ADMIN_AT TIMESTAMP,
+        RATED_AT TIMESTAMP,
+        QUESTION CLOB NOT NULL,
+        ANSWER CLOB,
+        CREATED_AT TIMESTAMP NOT NULL,
+        FINISHED_AT TIMESTAMP,
+        UPDATED_AT TIMESTAMP NOT NULL,
+        CONSTRAINT PK_AGENT_RUN_FACTS PRIMARY KEY (RUN_ID)
+    )
+    """,
+    "CREATE INDEX AGENT_RUN_FACTS_CREATED_IX ON AGENT_RUN_FACTS (CREATED_AT)",
+    "CREATE INDEX AGENT_RUN_FACTS_AGENT_CREATED_IX ON AGENT_RUN_FACTS (AGENT_ID, CREATED_AT)",
+    "CREATE INDEX AGENT_RUN_FACTS_RATED_IX ON AGENT_RUN_FACTS (RATED_AT)",
+)
+
 # 未初期化の DB と全再作成で作る、Agent の管理対象の DDL の全体。
 DOMAIN_STATEMENTS: tuple[str, ...] = (
     *BASE_STATEMENTS,
     *RUNTIME_STATEMENTS,
     *CONTROL_PLANE_STATEMENTS,
+    *RUN_FACTS_STATEMENTS,
 )
 
 
@@ -304,6 +351,12 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         # 以前は Runtime repository が作っていた。既存のテーブルは ORA-00955 として読み飛ばす。
         (*RUNTIME_STATEMENTS, *CONTROL_PLANE_STATEMENTS),
     ),
+    MigrationArtifact(
+        "20261003_007_run_facts",
+        "add run facts for usage / feedback reports beyond the in-memory runs (#794)",
+        # 既存の Run の事実は、アプリの起動時の backfill が Runtime repository から書く。
+        RUN_FACTS_STATEMENTS,
+    ),
 )
 
 # ---- manifest -----------------------------------------------------------------
@@ -321,6 +374,7 @@ MANAGED_TABLES: tuple[str, ...] = (
     "AGENT_RUNTIME_APPROVALS",
     "AGENT_RUNTIME_ARTIFACTS",
     "AGENT_CONTROL_PLANE_ITEMS",
+    "AGENT_RUN_FACTS",
 )
 MANAGED_INDEXES: tuple[str, ...] = (
     "AGENT_ROLE_AGENTS_AGENT_IDX",
@@ -330,6 +384,9 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "AGENT_RUNTIME_STEPS_ERROR_CODE_IX",
     "AGENT_RUNTIME_APPROVALS_RUN_STATUS_IX",
     "AGENT_RUNTIME_ARTIFACTS_RUN_KIND_IX",
+    "AGENT_RUN_FACTS_CREATED_IX",
+    "AGENT_RUN_FACTS_AGENT_CREATED_IX",
+    "AGENT_RUN_FACTS_RATED_IX",
 )
 MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     *((name, "TABLE") for name in MANAGED_TABLES),
@@ -649,6 +706,7 @@ __all__ = [
     "CONTROL_STATEMENTS",
     "DOMAIN_STATEMENTS",
     "RUNTIME_STATEMENTS",
+    "RUN_FACTS_STATEMENTS",
     "CONTROL_TABLE",
     "DOMAIN_TABLES",
     "MANAGED_FOREIGN_KEYS",

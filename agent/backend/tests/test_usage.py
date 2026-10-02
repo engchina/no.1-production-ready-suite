@@ -11,6 +11,7 @@ import pytest
 from pytest import MonkeyPatch
 from security_support import ProductionAuth, client, enable_production_auth, login
 
+from app.features.agent.run_facts import fact_from_run
 from app.features.agent.runtime import RunState, RunStatus, RunUsage, runtime_repository
 from app.features.agent.usage import build_usage_report, resolve_timezone
 from app.security.domain import LOCAL_DEBUG_USER_UUID
@@ -58,7 +59,7 @@ def _run(
 
 def _report(runs: list[RunState], days: int = 7) -> Any:
     return build_usage_report(
-        runs,
+        [fact_from_run(run) for run in runs],
         days=days,
         now=NOW,
         tz=TOKYO,
@@ -166,6 +167,13 @@ def test_usage_api_returns_the_report(seeded_runs: None) -> None:
 
 def test_usage_api_rejects_unknown_period_and_timezone() -> None:
     assert client.get("/api/usage", params={"days": 14}).status_code == 422
+    # 90 日を超える期間（#794）。
+    for days in (180, 365):
+        response = client.get("/api/usage", params={"days": days})
+        assert response.status_code == 200, response.text
+        assert len(response.json()["data"]["by_day"]) == days
+        # memory の構成はメモリの Run を集計する。
+        assert response.json()["data"]["source"] == "memory"
     bad_tz = client.get("/api/usage", params={"timezone": "Mars/Olympus"})
     assert bad_tz.status_code == 422
     assert "タイムゾーン" in bad_tz.text

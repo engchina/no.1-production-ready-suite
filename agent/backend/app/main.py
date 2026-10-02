@@ -39,9 +39,30 @@ def _restore_control_plane() -> None:
     logger.info("agent_control_plane_restored", extra={"restored": restored})
 
 
+def _prepare_history() -> None:
+    """評価の履歴の整理（保持期間）と、Run の事実の backfill（#794）。
+
+    Run の事実は Oracle の構成だけ保存する。Runtime repository にある Run の事実をすべて
+    キューに入れ、バックグラウンドで MERGE する（今見えている Run の集計を消さない）。
+    """
+    from app.features.agent import run_facts_store
+    from app.features.agent.evaluation import evaluation_store
+    from app.features.agent.runtime import runtime_repository
+
+    try:
+        evaluation_store.prune()
+    except Exception:  # noqa: BLE001 - 整理の失敗で起動を止めない
+        logger.exception("agent_evaluation_prune_failed")
+    try:
+        run_facts_store.backfill(runtime_repository)
+    except Exception:  # noqa: BLE001 - 集計用の事実の失敗で起動を止めない
+        logger.exception("agent_run_facts_backfill_failed")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await asyncio.to_thread(_restore_control_plane)
+    await asyncio.to_thread(_prepare_history)
     await start_trace_export_retry_worker()
     # 業務 Agent の自動実行のスケジューラ（#784。gunicorn は 1 worker のため 1 つだけ動く）。
     from app.features.agent.automations import run_scheduler
@@ -54,6 +75,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         with contextlib.suppress(asyncio.CancelledError):
             await scheduler
         await stop_trace_export_retry_worker()
+        # キューに残った Run の事実を書いてから終える（間に合わない分は次の起動の backfill）。
+        from app.features.agent import run_facts_store
+
+        await asyncio.to_thread(run_facts_store.flush, 5.0)
 
 
 app = create_app(

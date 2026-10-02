@@ -39,6 +39,7 @@ from app.system_schema import (
     MIGRATIONS,
     RECREATE_CONFIRMATION,
     RETIRED_MANAGED_OBJECTS,
+    RUN_FACTS_STATEMENTS,
     RUNTIME_STATEMENTS,
     SystemSchemaError,
     SystemSchemaManager,
@@ -296,6 +297,8 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
         "AGENT_RUNTIME_APPROVALS",
         "AGENT_RUNTIME_ARTIFACTS",
         "AGENT_CONTROL_PLANE_ITEMS",
+        # 利用状況・フィードバックの集計に使う Run の事実（#794）。
+        "AGENT_RUN_FACTS",
     } == DOMAIN_TABLES
     # 監査の検索に使う projection の索引（エラーコードは JSON_VALUE の関数索引）。
     assert any(
@@ -306,6 +309,15 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     # 既存の DB では Runtime repository が作っていたテーブルを、migration 006 で管理対象にする。
     migration_006 = next(item for item in MIGRATIONS if item.name.startswith("20261002_006"))
     assert migration_006.statements == (*RUNTIME_STATEMENTS, *CONTROL_PLANE_STATEMENTS)
+    # 既存の DB には migration 007 で Run の事実のテーブルと索引を足す（#794）。
+    migration_007 = next(item for item in MIGRATIONS if item.name.startswith("20261003_007"))
+    assert migration_007.statements == RUN_FACTS_STATEMENTS
+    assert not migration_007.destructive
+    assert {
+        "AGENT_RUN_FACTS_CREATED_IX",
+        "AGENT_RUN_FACTS_AGENT_CREATED_IX",
+        "AGENT_RUN_FACTS_RATED_IX",
+    } <= {name for name, kind in MANAGED_OBJECTS if kind == "INDEX"}
     # 共通認証の表は管理対象にしない（全再作成でも RAG / NL2SQL のユーザー・ロールを消さない）。
     assert not set(PLATFORM_AUTH_TABLES) & set(MANAGED_TABLES)
     assert ("AGENT_ROLE_BUSINESS_VIEWS", "TABLE") in RETIRED_MANAGED_OBJECTS
