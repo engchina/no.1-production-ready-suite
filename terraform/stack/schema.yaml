@@ -780,7 +780,7 @@ variables:
     required: true
     visible: false
     title: "Agent Runtime repository"
-    description: "Oracle repository for Agent Runtime state. The application creates its own tables at startup."
+    description: "Oracle repository for Agent runs, business agents and screen-edited definitions. The tables are created by the Agent system tables (init_script.sh); the application does not run DDL."
     enum:
       - "oracle_checkpoint"
       - "oracle_normalized"

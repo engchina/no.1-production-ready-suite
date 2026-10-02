@@ -41,6 +41,7 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { useValuesChanged } from "@/lib/render-sync";
 import { useSettingsLeaveGuard } from "@/lib/leave-guard";
 import { MetricPill, focusField } from "@/pages/shared/page-helpers";
+import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 /** 実行時スナップショットの置換の確認語（入力の完全一致で置換を許す）。 */
 const SNAPSHOT_REPLACE_CONFIRMATION = "REPLACE";
@@ -194,6 +195,7 @@ export function RuntimeSnapshotSettingsPage() {
         ]}
       />
       <PageBody wide className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <NonPersistentStorageNotice hint="storage.notice.backupHint" className="xl:col-span-full" />
         <QueryState query={snapshot} loadingLabel={t("loading.snapshot")} skeleton={<FormSkeleton fields={2} />}>
           <Card className="min-w-0">
             <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">

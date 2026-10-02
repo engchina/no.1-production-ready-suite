@@ -197,6 +197,7 @@ from app.features.agent.skills import (
     reload_declared_skills,
     skill_registry,
 )
+from app.features.agent.storage_status import RuntimeStorageStatus, runtime_storage_status
 from app.features.agent.templates import AGENT_TEMPLATES, AgentTemplatesData, find_template
 from app.features.agent.tools import (
     MCP_TOOL_SEPARATOR,
@@ -1523,6 +1524,15 @@ async def get_builtin_runtime_status(
 ) -> ApiResponse[BuiltinRuntimeStatus]:
     """組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI）の SDK の版と使うモデル。"""
     return ApiResponse(data=BuiltinRuntimeStatus.model_validate(builtin_runtime.runtime_status()))
+
+
+@router.get("/runtime/storage", response_model=ApiResponse[RuntimeStorageStatus])
+async def get_runtime_storage_status() -> ApiResponse[RuntimeStorageStatus]:
+    """Run・業務 Agent と画面で変えた定義の保存先（再起動で消えるか。#839）。接続先は返さない。
+
+    権限は manifest（保存先を案内する画面のメニュー）で判定する。
+    """
+    return ApiResponse(data=await run_in_threadpool(runtime_storage_status))
 
 
 # 実行中の組み込み Runtime の task（GC で消えないよう参照を持つ）。

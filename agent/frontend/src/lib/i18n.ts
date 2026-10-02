@@ -132,7 +132,6 @@ const agentJa = {
   "automation.created": "自動実行を作成しました",
   "automation.saved": "自動実行を保存しました",
   "automation.deleted": "自動実行を削除しました",
-  "automation.notPersistent": "自動実行の保存先（Oracle）が無いため、作成した自動実行はバックエンドの再起動で消えます。システム設定 > データベースを設定してください。",
   "automation.list.title": "自動実行の一覧",
   "automation.list.label": "自動実行の一覧",
   "automation.list.empty": "自動実行はまだありません",
@@ -606,8 +605,6 @@ const agentJa = {
   "apiKeys.deleteTitle": "「{name}」を削除しますか?",
   "apiKeys.deleteDescription": "このキーはすぐに使えなくなります。使っているシステムは呼べなくなります。",
   "apiKeys.deleted": "API キーを削除しました",
-  "apiKeys.notPersistent":
-    "API キーの保存先（Oracle）が無いため、作成したキーはバックエンドの再起動で消えます。システム設定 > データベースを設定してください。",
   "nav.settingsToolPolicy": "ツール権限",
   "nav.settingsRuntimeSnapshot": "バックアップと復元",
 
@@ -679,6 +676,35 @@ const agentJa = {
   "runtime.builtin.notReadyDefault": "モデルの設定を確認してください。",
   "runtime.builtin.openModelSettings": "モデルの設定を開く",
   "runtime.builtin.askAdmin": "モデルの設定は、システム設定の権限がある管理者に依頼してください。",
+
+  // 保存先（#839）。memory の構成では、作成・変更した内容がバックエンドの再起動で消える。
+  "storage.notice.title": "作成・変更した内容は、バックエンドの再起動で消えます",
+  "storage.notice.memoryBackend":
+    "データベースは設定済みですが、保存先がメモリのため、業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・API キー・品質評価などをデータベースに保存していません。",
+  "storage.notice.databaseNotConfigured":
+    "データベースが未設定のため、業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・API キー・品質評価などを保存していません。",
+  "storage.notice.openRuntime": "保存先を確認",
+  "storage.notice.askAdmin": "保存先をデータベースに切り替えるよう、システム管理者に依頼してください。",
+  "storage.notice.backupHint":
+    "再起動の前にここで書き出すと、業務 Agent と実行の履歴は再起動の後に復元できます。スキル・MCP 接続・自動実行・API キーなどはバックアップに入りません。",
+  "storage.card.title": "保存先",
+  "storage.card.description": "業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・API キー・品質評価などを保存する場所です。",
+  "storage.card.persistent": "保存しています",
+  "storage.card.notPersistent": "再起動で消えます",
+  "storage.card.backend": "保存先",
+  "storage.card.database": "データベースの設定",
+  "storage.card.databaseConfigured": "設定済み",
+  "storage.card.databaseNotConfigured": "未設定",
+  "storage.backend.memory": "メモリ（保存しない）",
+  "storage.backend.file": "ファイル（開発・検証用）",
+  "storage.backend.oracle_checkpoint": "Oracle AI Database",
+  "storage.backend.oracle_normalized": "Oracle AI Database（監査用の表も書き込む）",
+  "storage.fix.memoryBackend":
+    "バックエンドの設定（agent/backend/.env）で保存先をデータベースにして、バックエンドを再起動してください。テーブルは運用設定 > システムテーブルで作成済みのものを使います。",
+  "storage.fix.databaseNotConfigured":
+    "システム設定 > データベースを設定し、運用設定 > システムテーブルでテーブルを作成してから、バックエンドの設定（agent/backend/.env）で保存先をデータベースにして、バックエンドを再起動してください。",
+  "storage.fix.setting": "設定する値",
+  "storage.fix.openDatabaseSettings": "データベースの設定を開く",
   "page.runs.subtitle": "業務 Agent を実行し、実行ごとのツールの呼び出し・承認の経過と結果を確かめる",
   "page.approvals.subtitle": "外部データ・副作用を伴うツール呼び出しを確かめて、承認・却下する",
   "page.audit.subtitle": "業務 Agent の実行をまたいで、ツールの実行・承認・警告の記録を検索する",
@@ -1112,6 +1138,7 @@ const agentJa = {
   "loading.agents": "業務 Agent を読み込んでいます",
   "loading.skills": "スキルを読み込んでいます",
   "loading.runtimes": "実行環境を読み込んでいます",
+  "loading.runtimeStorage": "保存先を読み込んでいます",
   "loading.runs": "実行履歴を読み込んでいます",
   "loading.approvals": "承認を読み込んでいます",
   "loading.audit": "監査記録を読み込んでいます",

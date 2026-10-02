@@ -35,6 +35,7 @@ import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { AgentEditorView } from "@/pages/agents/AgentEditorView";
 import { formatDate } from "@/pages/shared/page-helpers";
+import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 export function AgentsPage() {
   const queryClient = useQueryClient();
@@ -119,6 +120,7 @@ export function AgentsPage() {
           }
         />
         <PageBody wide>
+          <NonPersistentStorageNotice />
           {skills.error ? <Banner severity="danger">{skills.error.message}</Banner> : null}
           <Section title={t("agent.list")}>
             <ListToolbar

@@ -40,6 +40,7 @@ import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 import { focusField } from "@/pages/shared/page-helpers";
+import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 const EMPTY_MARKETPLACE_FORM = { id: "", name: "", url: "" };
 
@@ -133,6 +134,7 @@ export function PluginMarketplacesPage() {
           }
         />
         <PageBody wide>
+          <NonPersistentStorageNotice />
           <Section title={t("marketplaces.list")} description={t("marketplaces.description")}>
             {refreshMutation.isPending ? (
               // 取得元（Git / HTTP）からプラグイン一覧を読み直すため数秒以上かかる。

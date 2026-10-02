@@ -53,6 +53,7 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 import { useCapabilities } from "@/lib/permissions";
 import { runStatusView } from "@/lib/status-labels";
+import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 // 業務 Agent の自動実行（スケジュール・Webhook。#784）。一覧 → 全画面エディタ（A 型。`?id=`）。
 // 自動実行は作った利用者として Run を作り、前回の Run が終わっていなければその回は飛ばす。
@@ -309,7 +310,7 @@ function AutomationList({
         }
       />
       <PageBody wide>
-        {list.data && !list.data.persistent ? <Banner severity="warning">{t("automation.notPersistent")}</Banner> : null}
+        <NonPersistentStorageNotice />
         <Card className="min-w-0">
           <CardContent className="pt-5">
             {list.isLoading ? (

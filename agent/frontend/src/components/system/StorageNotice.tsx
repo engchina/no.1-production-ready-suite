@@ -1,0 +1,81 @@
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
+import { HardDrive } from "lucide-react";
+import { Banner, ButtonLink } from "@engchina/production-ready-ui";
+
+import { useAuth } from "@/components/security/AuthProvider";
+import { agentApi, type RuntimeStorageStatus } from "@/lib/api";
+import { t, type I18nKey } from "@/lib/i18n";
+import { canOpenRoute } from "@/lib/route-permissions";
+import { APP_ROUTES } from "@/lib/routes";
+
+/** 保存先の状態の query key（実行環境の「状態を再取得」が取り直す）。 */
+export const RUNTIME_STORAGE_QUERY_KEY = ["runtime-storage"] as const;
+
+/**
+ * 保存先の状態（#839）。保存先はバックエンドの起動時に決まり、画面の操作では変わらないので、
+ * 画面を移るたびには取り直さない。
+ */
+export function useRuntimeStorage() {
+  return useQuery({
+    queryKey: RUNTIME_STORAGE_QUERY_KEY,
+    queryFn: agentApi.getRuntimeStorage,
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** 保存されない理由の 1 文目（DB は設定済みで保存先がメモリか、DB も未設定か）。 */
+export function storageReasonKey(status: RuntimeStorageStatus): I18nKey {
+  return status.reason === "database_not_configured"
+    ? "storage.notice.databaseNotConfigured"
+    : "storage.notice.memoryBackend";
+}
+
+/**
+ * 保存先がメモリのとき、作成・変更した内容が再起動で消えることを、定義・実行を作る画面の先頭に出す
+ * （UX 契約 messaging.md §3.4 の Banner。状況を出し続ける）。直し方の詳細は実行環境の「保存先」に
+ * 1 か所だけ書き、ここからはそこへ案内する（実行環境を開けない利用者には管理者への依頼を出す）。
+ * 保存されている・状態を取得できない・取得中は何も出さない（業務の画面を止めない）。
+ */
+export function NonPersistentStorageNotice({
+  hint,
+  className,
+}: {
+  /** 画面ごとの補足（バックアップと復元の「書き出すと復元できる範囲」など）。 */
+  hint?: I18nKey;
+  className?: string;
+}) {
+  const storage = useRuntimeStorage();
+  const { hasPermission } = useAuth();
+  const data = storage.data;
+  // 保存しないと分かったときだけ出す（不明な応答では出さない）。
+  if (data?.persistent !== false) return null;
+  const canOpenRuntime = canOpenRoute(APP_ROUTES.runtimes, hasPermission);
+  return (
+    <div className={className} data-testid="storage-not-persistent-notice">
+      <Banner
+        severity="warning"
+        title={t("storage.notice.title")}
+        action={
+          canOpenRuntime ? (
+            <ButtonLink
+              to={APP_ROUTES.runtimes}
+              linkComponent={Link}
+              size="sm"
+              icon={HardDrive}
+              testId="storage-notice-open-runtime"
+            >
+              {t("storage.notice.openRuntime")}
+            </ButtonLink>
+          ) : undefined
+        }
+      >
+        <div className="space-y-1">
+          <p>{t(storageReasonKey(data))}</p>
+          {canOpenRuntime ? null : <p>{t("storage.notice.askAdmin")}</p>}
+          {hint ? <p>{t(hint)}</p> : null}
+        </div>
+      </Banner>
+    </div>
+  );
+}

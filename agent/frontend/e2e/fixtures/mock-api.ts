@@ -160,6 +160,22 @@ function systemTablesStatus(ready: boolean): Record<string, unknown> {
 const SYSTEM_TABLES_LEGACY = systemTablesStatus(false);
 const SYSTEM_TABLES_READY = systemTablesStatus(true);
 
+/** `GET /api/runtime/storage`（保存先。#839）。Oracle に保存している状態。 */
+export const RUNTIME_STORAGE_PERSISTENT = {
+  backend: "oracle_checkpoint",
+  persistent: true,
+  database_configured: true,
+  reason: null,
+};
+
+/** 保存先がメモリ（DB は設定済み）。作成・変更した内容は再起動で消える。 */
+export const RUNTIME_STORAGE_MEMORY = {
+  backend: "memory",
+  persistent: false,
+  database_configured: true,
+  reason: "memory_backend",
+};
+
 /** `GET /api/runtime/status`（組み込み Runtime。#754）の既定の応答。 */
 export const BUILTIN_RUNTIME_STATUS = {
   id: "builtin",
@@ -448,6 +464,8 @@ function createState() {
     health: d.health as Json,
     // 組み込み Runtime の状態（#754）。既定は実行できる状態。
     runtimeStatus: clone(BUILTIN_RUNTIME_STATUS) as Json,
+    // 保存先（`GET /api/runtime/storage`。#839）。既定は Oracle に保存している状態。
+    runtimeStorage: clone(RUNTIME_STORAGE_PERSISTENT) as Json,
     runs: [] as Json[],
     agents: d.agents as unknown as Json[],
     skills: d.skills as unknown as Json[],
@@ -766,6 +784,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
 
   // --- 組み込み Runtime（#754） ---
   if (method === "GET" && at("runtime", "status")) return state.runtimeStatus;
+  if (method === "GET" && at("runtime", "storage")) return state.runtimeStorage;
 
   // --- Run / 承認 / 監査 ---
   if (method === "GET" && at("runs")) return { runs: state.runs };

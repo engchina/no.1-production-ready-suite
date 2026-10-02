@@ -679,7 +679,7 @@ variable "agent_app_auth_cookie_secure" {
 }
 
 variable "agent_runtime_repository_backend" {
-  description = "Oracle repository used for Agent Runtime state (AGENT_RUNTIME_REPOSITORY_BACKEND). The application creates its own tables at startup."
+  description = "Oracle repository for Agent runs, business agents and screen-edited definitions (AGENT_RUNTIME_REPOSITORY_BACKEND). The tables are created by the Agent system tables (init_script.sh runs agent_system_schema --initialize); the application does not run DDL."
   type        = string
   default     = "oracle_checkpoint"
 
