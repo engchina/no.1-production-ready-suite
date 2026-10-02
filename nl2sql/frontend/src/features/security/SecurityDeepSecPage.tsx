@@ -25,6 +25,7 @@ import {
   SelectField,
   TextField,
   FieldLegend,
+  useActionPending,
 } from "@engchina/production-ready-ui";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -555,12 +556,15 @@ function DeepSecPlanSteps({
   plan,
   stepNumbers,
   loading,
+  headerSpinning,
   loadError,
   onRetry,
 }: {
   plan: DeepSecPlan | null;
   stepNumbers: readonly number[];
   loading: boolean;
+  /** PageHeader の「表示を更新」が回っているか（押した読込・初回の読込）。 */
+  headerSpinning: boolean;
   loadError: string;
   onRetry: () => void;
 }) {
@@ -571,12 +575,12 @@ function DeepSecPlanSteps({
   if (loading && !plan) {
     // 文字だけにせず、経過時間と手順の形の Skeleton を出す（#265）。
     return (
-      // 計画の読込は PageHeader の「再読み込み」の loading がスピナーを出す（同じ処理のスピナーは 1 つ。
-      // messaging §3.7、#416）。
+      // 計画の読込を PageHeader の「再読み込み」から始めたときは、そのボタンがスピナーを出す（同じ処理の
+      // スピナーは 1 つ。messaging §3.7、#416）。「再試行」など他の起点ではこの表示が出す（#819）。
       <TimedLoadingState
         label={t("security.deepsec.planLoading")}
         testId="security-deepsec-plan-loading"
-        activityIcon="none"
+        activityIcon={headerSpinning ? "none" : "spinner"}
       >
         <ListSkeleton rows={Math.max(1, stepNumbers.length)} rowClassName="h-24" />
       </TimedLoadingState>
@@ -738,8 +742,9 @@ export function SecurityDeepSecPage() {
   const { abortAll: abortPlanRequests, run: runPlanRequest } = useRequestScope();
   const { abortAll: abortEntitlementRequests, run: runEntitlementRequest } = useRequestScope();
   const { abortAll: abortTargetObjectRequests, run: runTargetObjectRequest } = useRequestScope();
-  // 候補の続きの読込（「さらに読み込む」）は、そのボタンの loading がスピナーを出す。ヘッダーでは回さない
-  // （同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+  // ヘッダーの「表示を更新」は、押した読込（と初回の読込。messaging §3.7）の間だけ回す。操作の後の読み直し・
+  // 検索語の変更・候補の続きの読込では回さない（#819）。refreshing は各領域の読込をまとめたもの。
+  const headerRefresh = useActionPending();
   const refreshing =
     statusLoading ||
     planLoading ||
@@ -1130,8 +1135,10 @@ export function SecurityDeepSecPage() {
   useLayoutEffect(() => {
     loadRef.current = load;
   });
+  const trackHeaderRefreshRef = useRef(headerRefresh.track);
   useEffect(() => {
-    void loadRef.current();
+    // 初回の読込は PageHeader の唯一の操作「表示を更新」がスピナーを出す（messaging §3.7）。
+    void trackHeaderRefreshRef.current(() => loadRef.current());
     return () => {
       statusLoadSequence.current += 1;
       planLoadSequence.current += 1;
@@ -1658,9 +1665,12 @@ export function SecurityDeepSecPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            disabled: actionBlocked || targetObjectsLoadingMore,
-            onClick: () => { if (!actionBlocked && !targetObjectsLoadingMore) return load(true); },
-            loading: refreshing,
+            // 押した読込の間は loading（aria-disabled）だけにし、ネイティブの disabled でフォーカスを外さない。
+            disabled: !headerRefresh.pending && (actionBlocked || targetObjectsLoadingMore || refreshing),
+            onClick: () => {
+              if (!actionBlocked && !targetObjectsLoadingMore) return headerRefresh.track(() => load(true));
+            },
+            loading: headerRefresh.pending,
           },
         ]}
       />
@@ -1825,6 +1835,7 @@ export function SecurityDeepSecPage() {
                 plan={plan}
                 stepNumbers={[1, 2]}
                 loading={planLoading}
+                headerSpinning={headerRefresh.pending}
                 loadError={planLoadError}
                 onRetry={() => void loadPlan()}
               />
@@ -2044,7 +2055,8 @@ export function SecurityDeepSecPage() {
                         operationKey="security-deepsec-entitlements"
                         placement="panel"
                         testId="security-deepsec-entitlements-loading"
-                        activityIcon="none"
+                        // ヘッダーの「表示を更新」が回っていない読込（操作の後の読み直しなど）はここが出す（#819）。
+                        activityIcon={headerRefresh.pending ? "none" : "spinner"}
                       />
                     ) : null}
                     <div

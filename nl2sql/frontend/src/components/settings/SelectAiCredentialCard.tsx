@@ -15,6 +15,7 @@ import {
   SelectField,
   type SelectFieldOption,
   ExecutionConfirmationField,
+  useActionPending,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { ApiError, type SelectAiCredentialRegion } from "@/lib/api";
@@ -67,9 +68,12 @@ export function SelectAiCredentialCard() {
   ]);
   if (confirmationStale) setConfirmation("");
 
+  // 「再取得」を押した取り直しの間だけ回す。作成の後の invalidate・画面へ戻ったときの取り直しでは回さず、
+  // 無効にするだけ（押したボタンだけがスピナーを出す。#819）。
+  const manualRefresh = useActionPending();
   const refresh = () => {
     setConfirmation("");
-    return status.refetch();
+    return manualRefresh.track(() => status.refetch());
   };
 
   const resetFeedback = () => {
@@ -161,8 +165,8 @@ export function SelectAiCredentialCard() {
                     type="button"
                     size="sm"
                     variant="secondary"
-                    loading={status.isFetching}
-                    disabled={status.isFetching}
+                    loading={manualRefresh.pending}
+                    disabled={status.isFetching && !manualRefresh.pending}
                     onClick={() => void refresh()}
                     icon={RefreshCw}
                   >
@@ -235,8 +239,8 @@ export function SelectAiCredentialCard() {
                     type="button"
                     size="sm"
                     variant="secondary"
-                    loading={status.isFetching}
-                    disabled={status.isFetching}
+                    loading={manualRefresh.pending}
+                    disabled={status.isFetching && !manualRefresh.pending}
                     onClick={() => void refresh()}
                     icon={RefreshCw}
                   >

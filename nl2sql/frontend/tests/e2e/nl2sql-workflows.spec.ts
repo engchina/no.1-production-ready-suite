@@ -8952,6 +8952,13 @@ test("feedback management profile switch shows the entries skeleton instead of t
   await expect(page.getByTestId("feedback-management-entries-processing")).toContainText(
     "Select AI feedback を読み込んでいます"
   );
+  // profile の切り替えでは「最新エントリを取得」を回さず（押したボタンだけが loading を持つ）、
+  // 読込の表示がスピナーを出す（#819）。
+  await expect(page.getByRole("button", { name: "最新エントリを取得" })).not.toHaveAttribute("aria-busy", /.*/);
+  await expect(page.getByTestId("feedback-management-entries-processing")).toHaveAttribute(
+    "data-processing-activity-icon",
+    "spinner"
+  );
   await expect(entriesScrollRegion).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 

@@ -97,6 +97,10 @@ export function SqlToQuestionPage() {
   // Profile が変わったら、構造の編集状態を render 中に初期化する。
   if (useValuesChanged([selectedProfileId])) { setStructureItems([]); setEditingStructure(false); setRegenerated(null); setSqlGenerationError(""); }
   const [loading, setLoading] = useState(false);
+  // どのボタンが始めた読込か。スピナーは押したボタンだけが出す（#819）。初回の読込は §3.7 のとおり
+  // ヘッダーの「表示を更新」が出す。業務プロファイルの切り替え・画面へ戻ったときの取り直しは null
+  // （業務プロファイルの構造の読込中の表示がスピナーを出す）。
+  const [refreshOrigin, setRefreshOrigin] = useState<"header" | "notice" | null>("header");
   const [reverseLoading, setReverseLoading] = useState(false);
   const reverseInFlight = useRef(false);
   const [loadError, setLoadError] = useState("");
@@ -135,8 +139,9 @@ export function SqlToQuestionPage() {
       if (sequence === loadSequence.current) setLoading(false);
     }
   }, [runScopedRequest, setSelectedProfileId]);
-  const loadReferenceData = useCallback(() => {
+  const loadReferenceData = useCallback((origin: "header" | "notice" | null) => {
     setLoading(true);
+    setRefreshOrigin(origin);
     setLoadError("");
     return requestReferenceData();
   }, [requestReferenceData]);
@@ -199,7 +204,7 @@ export function SqlToQuestionPage() {
 
   const referenceVisited = useRef(false);
   useWorkspaceActivation(() => {
-    if (referenceVisited.current) void loadReferenceData();
+    if (referenceVisited.current) void loadReferenceData(null);
     referenceVisited.current = true;
   });
   // 初回表示（と依存の変化）で参照データを読み込む。読込中の表示は render 中に立てる。
@@ -349,8 +354,9 @@ export function SqlToQuestionPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            onClick: loadReferenceData,
-            loading,
+            onClick: () => void loadReferenceData("header"),
+            loading: loading && refreshOrigin === "header",
+            disabled: loading && refreshOrigin !== "header",
           },
         ]}
       />
@@ -362,8 +368,9 @@ export function SqlToQuestionPage() {
               type="button"
               variant="secondary"
               size="sm"
-              loading={loading}
-              onClick={() => void loadReferenceData()} icon={RefreshCw}>
+              loading={loading && refreshOrigin === "notice"}
+              disabled={loading && refreshOrigin !== "notice"}
+              onClick={() => void loadReferenceData("notice")} icon={RefreshCw}>
               <span>{t("sqlToQuestion.action.reload")}</span>
             </Button>
           }
@@ -406,6 +413,8 @@ export function SqlToQuestionPage() {
                 value={selectedProfileId}
                 options={profiles.map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) }))}
                 onValueChange={(nextProfileId) => {
+                  // 業務プロファイルの切り替えによる読込はボタンを回さない（#819）。
+                  setRefreshOrigin(null);
                   setSelectedProfileId(nextProfileId);
                   setActionError("");
                   setActivePanel("input");
@@ -467,6 +476,7 @@ export function SqlToQuestionPage() {
             right={
               <SchemaPreview
                 loading={loading}
+                buttonSpinning={refreshOrigin !== null}
                 profile={selectedProfile}
                 tables={schemaTables}
               />
@@ -596,10 +606,12 @@ export function SqlToQuestionPage() {
 
 function SchemaPreview({
   loading,
+  buttonSpinning,
   profile,
   tables,
 }: {
   loading: boolean;
+  buttonSpinning: boolean;
   profile: ProfileUsageContext | null;
   tables: SchemaTable[];
 }) {
@@ -611,9 +623,10 @@ function SchemaPreview({
         placement="panel"
         className="min-h-56 content-start"
         testId="sql-to-question-schema-skeleton"
-        // 参照データの読込は PageHeader の「再読み込み」の loading がスピナーを出す（同じ処理のスピナーは 1 つ。
-        // messaging §3.7、#416）。
-        activityIcon="none"
+        // 押したボタン（PageHeader・PageNotice の「再読み込み」）が回っているときは、そのボタンがスピナーを出す
+        // （同じ処理のスピナーは 1 つ。messaging §3.7、#416）。業務プロファイルの切り替えなど、ボタンを押していない
+        // 読込はこの表示がスピナーを出す（#819）。
+        activityIcon={buttonSpinning ? "none" : "spinner"}
       >
         <Skeleton className="h-5 w-40" aria-hidden="true" />
         <Skeleton className="h-16 w-full" aria-hidden="true" />

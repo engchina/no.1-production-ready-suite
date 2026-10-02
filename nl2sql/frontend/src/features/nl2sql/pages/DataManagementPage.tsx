@@ -29,6 +29,7 @@ import {
   SelectField,
   TextareaField,
   TextField,
+  useActionPending,
 } from "@engchina/production-ready-ui";
 
 import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
@@ -203,6 +204,9 @@ export function DataManagementPage() {
   const [syntheticResultLimitInput, setSyntheticResultLimitInput] = useState(String(DEFAULT_SYNTHETIC_RESULT_LIMIT));
   const [executedSyntheticResultLimit, setExecutedSyntheticResultLimit] = useState<number | null>(null);
   const [previewLoadingObject, setPreviewLoadingObject] = useState("");
+  // 「表示」を押して始めたプレビューか。切り詰めの後の自動の表示・「再試行」ではボタンを回さず、
+  // 結果の領域の読込表示がスピナーを出す（#819）。
+  const [previewFromButton, setPreviewFromButton] = useState(false);
   const [truncateTargetName, setTruncateTargetName] = useState("");
   const [truncateConfirmation, setTruncateConfirmation] = useState("");
   const [truncateLoading, setTruncateLoading] = useState(false);
@@ -214,6 +218,10 @@ export function DataManagementPage() {
   const [csvUploading, setCsvUploading] = useState(false);
   const [csvUploadError, setCsvUploadError] = useState("");
   const [syntheticLoading, setSyntheticLoading] = useState<SyntheticLoading>("");
+  // 「テーブル再取得」を押して始めた取得か。失敗の「再試行」からの取得ではボタンを回さない（#819）。
+  const [syntheticTablesFromButton, setSyntheticTablesFromButton] = useState(false);
+  // ヘッダーの「表示を更新」を押した取り直しの間だけ true（切り詰め・取込の後の取り直しでは回さない。#819）。
+  const manualRefresh = useActionPending();
   const [syntheticError, setSyntheticError] = useState("");
   const [syntheticErrorOperation, setSyntheticErrorOperation] = useState<SyntheticLoading>("");
   const [schemaJobId, setSchemaJobId] = useState("");
@@ -614,7 +622,10 @@ export function DataManagementPage() {
     }
   };
 
-  const showPreview = async (objectName: string, options: { manualSelection?: boolean } = {}) => {
+  const showPreview = async (
+    objectName: string,
+    options: { manualSelection?: boolean; fromButton?: boolean } = {}
+  ) => {
     const rowLimit = parsedPreviewRowLimit;
     if (!objectName || previewLoadingObject || rowLimit === null) return;
     const target = parseDbAdminObjectTarget(objectName);
@@ -625,6 +636,7 @@ export function DataManagementPage() {
     setPreview(null);
     setExecutedPreviewRowLimit(null);
     setPreviewLoadingObject(target.qualifiedName);
+    setPreviewFromButton(Boolean(options.fromButton));
     setPreviewError("");
     setExportError("");
     try {
@@ -817,10 +829,11 @@ export function DataManagementPage() {
     }
   };
 
-  const refreshSyntheticTables = async () => {
+  const refreshSyntheticTables = async (fromButton = false) => {
     const profileName = syntheticProfileName.trim();
     if (!profileName) return;
     setSyntheticLoading("tables");
+    setSyntheticTablesFromButton(fromButton);
     setSyntheticError("");
     setSyntheticErrorOperation("");
     try {
@@ -1006,9 +1019,9 @@ export function DataManagementPage() {
     (baseObjectsQuery.isFetching && !baseObjectsQuery.isFetchingNextPage) ||
     (previewObjectsQuery.isFetching && !previewObjectsQuery.isFetchingNextPage) ||
     (csvTablesQuery.isFetching && !csvTablesQuery.isFetchingNextPage);
-  // ヘッダーの「表示を更新」は、一覧を残したままの再読込だけ回す。初回の読込（一覧がまだ無い）は一覧の Skeleton が
-  // スピナーを出す（このボタンは狭い画面では「その他の操作」の中で見えない。同じ処理のスピナーは 1 つ。
-  // messaging §3.7、#416）。
+  // ヘッダーの「表示を更新」は、押した再読込の間だけ回す（manualRefresh。#819）。初回の読込（一覧がまだ無い）は
+  // 一覧の Skeleton がスピナーを出し、ボタンは無効にする（このボタンは狭い画面では「その他の操作」の中で見えない。
+  // 同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
   const objectReloadingWithContent = [baseObjectsQuery, previewObjectsQuery, csvTablesQuery].some(
     (query) => Boolean(query.data) && query.isFetching && !query.isFetchingNextPage
   );
@@ -1063,9 +1076,11 @@ export function DataManagementPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            loading: objectReloadingWithContent,
+            // 押した再読込の間だけ回す。切り詰め・取込の後の取り直しでは回さず、下の処理中の表示が
+            // スピナーを出す（#819）。
+            loading: manualRefresh.pending,
             disabled: objectRefreshingFromHeader && !objectReloadingWithContent,
-            onClick: () => void refreshObjects(true),
+            onClick: () => void manualRefresh.track(() => refreshObjects(true)),
           },
           {
             id: "refresh-data-schema",
@@ -1116,7 +1131,7 @@ export function DataManagementPage() {
             placement="workspace"
             className="rounded-md border border-border bg-surface px-3 py-2 shadow-sm"
             testId="data-management-workspace-processing"
-            activityIcon="none"
+            activityIcon={manualRefresh.pending ? "none" : "spinner"}
           />
         ) : null}
 
@@ -1177,6 +1192,7 @@ export function DataManagementPage() {
             <PreviewResultsPanel
               preview={preview}
               loading={Boolean(previewLoadingObject)}
+              showButtonLoading={previewFromButton}
               exporting={exportLoading}
               previewError={previewError}
               exportError={exportError}
@@ -1194,7 +1210,7 @@ export function DataManagementPage() {
               }
               truncateDisabled={Boolean(previewLoadingObject) || truncateLoading}
               onRowLimitChange={updatePreviewRowLimitInput}
-              onShowPreview={() => void showPreview(previewObject)}
+              onShowPreview={() => void showPreview(previewObject, { fromButton: true })}
               onClearPreview={clearPreview}
               onRetryPreview={() => void showPreview(previewObject)}
               onDownload={() => void downloadPreviewXlsx()}
@@ -1310,6 +1326,7 @@ export function DataManagementPage() {
               canLoadSyntheticDataResults={canLoadSyntheticDataResults}
               canClearSyntheticDataResults={canClearSyntheticDataResults}
               loading={syntheticLoading}
+              tablesButtonLoading={syntheticLoading === "tables" && syntheticTablesFromButton}
               error={syntheticWorkspaceError}
               resultError={syntheticResultError}
               dbProfileRefreshRequired={dbProfileRefreshRequired}
@@ -1317,7 +1334,7 @@ export function DataManagementPage() {
               dbProfileRefreshError={dbProfileRefreshError}
               dbProfileRefreshOperationKey={dbProfileRefreshJobId || "synthetic-db-profile-refresh"}
               onRefreshDbProfiles={() => void runDbProfileRefresh()}
-              onRefreshTables={() => void refreshSyntheticTables()}
+              onRefreshTables={() => void refreshSyntheticTables(true)}
               onSyntheticProfileNameChange={changeSyntheticProfileName}
               onSyntheticTableToggle={(tableName, selected) => {
                 const nextTables = selected
@@ -1646,6 +1663,7 @@ function previewObjectRowCountLabel(rowCount?: number | null) {
 function PreviewResultsPanel({
   preview,
   loading,
+  showButtonLoading,
   exporting,
   previewError,
   exportError,
@@ -1666,6 +1684,8 @@ function PreviewResultsPanel({
 }: {
   preview: DbAdminDataPreviewData | null;
   loading: boolean;
+  /** 「表示」を押して始めたプレビューか（そのときだけボタンを回す。#819）。 */
+  showButtonLoading: boolean;
   exporting: boolean;
   previewError: string;
   exportError: string;
@@ -1740,8 +1760,8 @@ function PreviewResultsPanel({
             variant="primary"
             size="lg"
             className="w-full sm:w-auto"
-            loading={loading}
-            disabled={!canShowPreview}
+            loading={loading && showButtonLoading}
+            disabled={!canShowPreview && !(loading && showButtonLoading)}
             onClick={onShowPreview} icon={Play}>
             <span>{t("dataMgmt.preview.show")}</span>
           </Button>
@@ -1761,8 +1781,9 @@ function PreviewResultsPanel({
           idPrefix="data-preview-results"
           ariaLabel={t("dataMgmt.preview.loading")}
           variant="detail"
-          // 直上の「表示」ボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
-          activityIcon="none"
+          // 「表示」を押したときは直上のボタンの loading がスピナーを出す（同じ処理のスピナーは 1 つ。
+          // messaging §3.7、#416）。切り詰めの後の自動の表示・「再試行」はこの表示が出す（#819）。
+          activityIcon={showButtonLoading ? "none" : "spinner"}
         />
       ) : previewError ? (
         <ErrorState message={previewError} onRetry={onRetryPreview} />
@@ -2103,6 +2124,7 @@ function SyntheticWorkspace({
   canLoadSyntheticDataResults,
   canClearSyntheticDataResults,
   loading,
+  tablesButtonLoading,
   error,
   resultError,
   dbProfileRefreshRequired,
@@ -2152,6 +2174,8 @@ function SyntheticWorkspace({
   canLoadSyntheticDataResults: boolean;
   canClearSyntheticDataResults: boolean;
   loading: SyntheticLoading;
+  /** 「テーブル再取得」を押して始めた取得の間だけ true（#819）。 */
+  tablesButtonLoading: boolean;
   error: string;
   resultError: string;
   dbProfileRefreshRequired: boolean;
@@ -2293,8 +2317,14 @@ function SyntheticWorkspace({
             variant="primary"
             size="lg"
             className="w-full sm:w-auto"
-            loading={loading === "tables"}
-            disabled={!syntheticProfileName || dbProfileRefreshRequired || dbProfileRefreshing}
+            // 押した取得の間だけ回す。失敗の「再試行」からの取得では無効にするだけ（候補の一覧の読込表示が出す。#819）。
+            loading={tablesButtonLoading}
+            disabled={
+              !syntheticProfileName ||
+              dbProfileRefreshRequired ||
+              dbProfileRefreshing ||
+              (loading === "tables" && !tablesButtonLoading)
+            }
             onClick={onRefreshTables} icon={RefreshCw}>
             <span>{t("dataTools.syntheticData.refreshTables")}</span>
           </Button>

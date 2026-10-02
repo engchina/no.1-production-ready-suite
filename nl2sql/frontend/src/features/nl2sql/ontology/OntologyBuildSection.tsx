@@ -556,7 +556,10 @@ export interface OntologyBuildSectionProps {
   onMarkdownStateChange?: (state: OntologyMarkdownState | null) => void;
   markdownRefreshVersion?: number;
   onRefreshSchema?: () => void | Promise<void>;
+  /** この部品の「スキーマを更新」が始めた更新の間だけ true（スピナーは押したボタンだけが出す。#819）。 */
   refreshingSchema?: boolean;
+  /** 別の場所で始めた更新を含め、スキーマの更新中は true（ボタンを無効にするだけ。#819）。 */
+  schemaRefreshDisabled?: boolean;
   /**
    * 起点の「オントロジーを取得」ボタンが loading（スピナー）を出しているか。出している間は、同じ取得で
    * 読み直す Markdown の読込表示はスピナーを出さない（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
@@ -573,6 +576,7 @@ export function OntologyBuildSection({
   markdownRefreshVersion = 0,
   onRefreshSchema,
   refreshingSchema = false,
+  schemaRefreshDisabled = false,
   workspaceFetching = false,
 }: OntologyBuildSectionProps) {
   const [businessText, setBusinessText] = useWorkspaceState(`markdown:${profileId}:business-text`, "");
@@ -1719,7 +1723,7 @@ export function OntologyBuildSection({
                           size="sm"
                           className="w-full sm:w-auto"
                           loading={refreshingSchema}
-                          disabled={refreshingSchema}
+                          disabled={schemaRefreshDisabled && !refreshingSchema}
                           onClick={() => void onRefreshSchema()}
                           data-testid="ontology-build-schema-refresh" icon={RefreshCw}>
                           <span>{t("profiles.schemaRefresh.action")}</span>

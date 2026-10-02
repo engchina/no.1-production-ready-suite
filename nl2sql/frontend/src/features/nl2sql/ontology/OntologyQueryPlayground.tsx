@@ -69,7 +69,10 @@ export interface OntologyQueryPlaygroundProps {
   loadErrorMessage?: string;
   onRetryLoad?: () => void;
   onRefreshSchema?: () => void | Promise<void>;
+  /** この部品の「スキーマを更新」が始めた更新の間だけ true（スピナーは押したボタンだけが出す。#819）。 */
   refreshingSchema?: boolean;
+  /** 別の場所で始めた更新を含め、スキーマの更新中は true（ボタンを無効にするだけ。#819）。 */
+  schemaRefreshDisabled?: boolean;
   /**
    * 起点の「オントロジーを取得」ボタンが loading（スピナー）を出しているか。出している間は、同じ取得の
    * 読込表示はスピナーを出さない（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
@@ -715,6 +718,7 @@ export function OntologyQueryPlayground({
   onRetryLoad,
   onRefreshSchema,
   refreshingSchema = false,
+  schemaRefreshDisabled = false,
   workspaceFetching = false,
 }: OntologyQueryPlaygroundProps) {
   const [question, setQuestion] = useState("");
@@ -884,7 +888,7 @@ export function OntologyQueryPlayground({
                   variant="secondary"
                   size="sm"
                   loading={refreshingSchema}
-                  disabled={refreshingSchema}
+                  disabled={schemaRefreshDisabled && !refreshingSchema}
                   onClick={() => void onRefreshSchema()} icon={RefreshCw}>
                   <span>
                     {t("profiles.schemaRefresh.action")}

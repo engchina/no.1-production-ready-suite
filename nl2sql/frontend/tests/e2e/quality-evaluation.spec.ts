@@ -628,8 +628,28 @@ test("desktop executes two engines twice, restores the job URL and downloads Exc
   expect(state.submittedBody()).toContain("enterprise_ai_direct");
   expect(state.submittedBody()).toContain("repeat_count");
 
+  // テンプレートのダウンロード中は、押したテンプレートのボタンだけが回り、結果のボタンは無効にするだけ。
+  // 結果のダウンロードの処理中の表示も出さない（押したボタンだけが loading を持つ。#819）。
+  const templateGate = createRequestGate();
+  await page.route("**/api/nl2sql/quality-evaluations/template.xlsx", async (route) => {
+    await templateGate.promise;
+    await route.fallback();
+  });
+  const templateButton = page.getByRole("button", { name: "テンプレートをダウンロード" });
+  const resultsButton = page.getByRole("button", { name: "結果 Excel をダウンロード" });
+  const templateDownload = page.waitForEvent("download");
+  await templateButton.click();
+  await expect(templateButton).toHaveAttribute("aria-busy", "true");
+  await expect(resultsButton).toBeDisabled();
+  await expect(resultsButton).not.toHaveAttribute("aria-busy", /.*/);
+  await expect(page.getByTestId("quality-evaluation-download-processing")).toHaveCount(0);
+  templateGate.release();
+  await templateDownload;
+  await expect(templateButton).not.toHaveAttribute("aria-busy", /.*/);
+  await expect(resultsButton).toBeEnabled();
+
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", { name: "結果 Excel をダウンロード" }).click();
+  await resultsButton.click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe(
     "nl2sql_quality_evaluation_20260722_job-001.xlsx"

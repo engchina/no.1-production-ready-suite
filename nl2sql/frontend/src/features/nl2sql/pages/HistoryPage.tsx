@@ -673,6 +673,10 @@ export function HistoryPage() {
   const detailHeadingRef = useRef<HTMLHeadingElement>(null);
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
+  // どのボタンが始めた読込か。スピナーは押したボタンだけが出す（#819）。初回の読込は §3.7 のとおり
+  // ヘッダーの「表示を更新」が出し、絞り込み・検索の変更による取り直しは null（一覧の処理中の表示だけ）。
+  const [loadOrigin, setLoadOrigin] = useState<"header" | "notice" | null>("header");
+  const [filtersSeen, setFiltersSeen] = useState(false);
   const [message, setMessage] = useState("");
   const [search, setSearch] = useWorkspaceState("search", "");
   const [feedbackFilter, setFeedbackFilter] = useWorkspaceState<HistoryFeedbackFilter>("feedbackFilter", "all");
@@ -722,8 +726,9 @@ export function HistoryPage() {
       });
   };
 
-  const load = async (announce = false) => {
+  const load = async (announce = false, origin: "header" | "notice" = "header") => {
     setLoading(true);
+    setLoadOrigin(origin);
     setMessage("");
     setLoadingMore(false);
     await fetchHistory(announce);
@@ -767,6 +772,9 @@ export function HistoryPage() {
   useLayoutEffect(() => { fetchHistoryRef.current = fetchHistory; });
   const filtersChanged = useValuesChanged([feedbackFilter, safetyFilter, search]);
   if (filtersChanged) {
+    // 最初のレンダーは初回の読込（ヘッダーが回る）。以降の絞り込みの変更はボタンを回さない（#819）。
+    if (filtersSeen) setLoadOrigin(null);
+    else setFiltersSeen(true);
     setLoading(true);
     setMessage("");
     setLoadingMore(false);
@@ -824,8 +832,9 @@ export function HistoryPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            onClick: () => load(true),
-            loading,
+            onClick: () => load(true, "header"),
+            loading: loading && loadOrigin === "header",
+            disabled: loading && loadOrigin !== "header",
           },
         ]}
       />
@@ -834,7 +843,15 @@ export function HistoryPage() {
         <PageNotice
           notice={message ? { tone: "danger", message: `${message} ${t("history.error.retryHint")}` } : null}
           action={
-            <Button type="button" variant="secondary" size="sm" loading={loading} onClick={() => void load()} icon={RefreshCw}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={loading && loadOrigin === "notice"}
+              disabled={loading && loadOrigin !== "notice"}
+              onClick={() => void load(false, "notice")}
+              icon={RefreshCw}
+            >
               <span>{t("history.action.refresh")}</span>
             </Button>
           }
@@ -873,7 +890,8 @@ export function HistoryPage() {
                   placement="workspace"
                   className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                   testId="history-workspace-processing"
-                  activityIcon="none"
+                  // 絞り込み・検索の変更による取り直しはボタンが回らないため、この表示がスピナーを出す（#819）。
+                  activityIcon={loadOrigin ? "none" : "spinner"}
                 />
               ) : undefined
             }
