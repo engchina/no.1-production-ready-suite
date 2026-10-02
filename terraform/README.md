@@ -125,7 +125,7 @@ sudo systemctl restart production-ready-rag-backend.service
 
 - ログイン: 共通認証（`AGENT_AUTH_MODE=production`。#215）。最初は構成管理者 `system_admin`（`app_admin_login_user_password`。RAG / NL2SQL と共通）で
   ログインし、「ユーザーとロール」でユーザーとロールを作り、「セキュリティ設定 > 権限管理」でロールごとのメニュー・実行 / 承認 / 監査 / 管理の権限・
-  エージェントを設定します（業務ビューは RAG の権限管理）。`init_script.sh` が `python -m app.cli.agent_security_migrate` で認証・権限のテーブルを作ります。
+  エージェントを設定します（業務ビューは RAG の権限管理）。`init_script.sh` が `python -m app.cli.agent_system_schema --initialize` で認証・権限のテーブルを作ります。
   Nginx の Basic 認証は廃止しました。Binding MCP（`/api/mcp/`）は従来どおり Binding 固有 token で認証し、ログインは不要です。
   `agent_app_auth_cookie_secure`（非表示の入力。既定 `false` → `PLATFORM_AUTH_COOKIE_SECURE`）は HTTPS の終端を前に置いたら `true` にします。
   Cookie のないリクエストは 401 です（header / JWT の認可は #750 で削除。[agent/docs/security-rbac.md](../agent/docs/security-rbac.md)）。
@@ -153,8 +153,8 @@ sudo systemctl restart production-ready-rag-backend.service
 sudo tail -f /var/log/agent-init.log
 sudo journalctl -u production-ready-agent-backend -f
 curl -i http://127.0.0.1:8020/api/health
-# 認証・権限のテーブルの作成（冪等）を手動で再実行する
-cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.agent_security_migrate
+# システムテーブル（認証・権限）の作成・更新（冪等）を手動で再実行する。画面の 運用設定 > システムテーブル でもできる
+cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.agent_system_schema --initialize
 ```
 
 既存の Agent の instance（Basic 認証で配備したもの）を更新する手順は [agent/docs/security-rbac.md §8](../agent/docs/security-rbac.md#8-既存環境の更新手順215) を参照してください。

@@ -722,8 +722,21 @@ def test_database_status_not_configured_skips_connection(monkeypatch: MonkeyPatc
     assert called == []
 
 
+class _SchemaStatus:
+    """DB ゲートの schema の確認（`system_schema_manager.status`）の差し替え。"""
+
+    def __init__(self, status: str, operation: str = "idle") -> None:
+        self.payload: dict[str, object] = {
+            "status": status,
+            "operation_state": {"status": operation},
+        }
+
+    def status(self) -> dict[str, object]:
+        return self.payload
+
+
 def test_database_status_ok_after_connection(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
-    """設定がそろい接続できれば ok（Agent は schema_probe をまだ持たない）。"""
+    """設定がそろい接続でき、システムテーブルが最新なら ok（RAG / NL2SQL と同じ。#751）。"""
     settings = _database_status_settings(_write_agent_wallet(tmp_path / "wallet"))
     called: list[object] = []
 
@@ -732,6 +745,7 @@ def test_database_status_ok_after_connection(monkeypatch: MonkeyPatch, tmp_path:
 
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
     monkeypatch.setattr(agent_router, "_test_database_connection", connect)
+    monkeypatch.setattr(agent_router, "system_schema_manager", _SchemaStatus("ready"))
 
     data = client.get("/api/ready/database").json()["data"]
 
@@ -765,32 +779,28 @@ def test_database_status_unreachable_does_not_leak_connection_details(
         assert secret not in text
 
 
-def test_database_status_local_auth_is_ok_without_database(monkeypatch: MonkeyPatch) -> None:
-    """ローカル認証は共通 DB を使わないため、DB 未設定でも接続を試さず ok（ゲートを出さない）。"""
-    called: list[object] = []
+def test_database_status_requires_system_tables(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    """接続できてもシステムテーブルが最新でない・操作中なら setup_required（#751）。"""
+    settings = _database_status_settings(_write_agent_wallet(tmp_path / "wallet"))
 
-    async def must_not_connect(candidate: object) -> None:
-        called.append(candidate)
+    async def connect(_candidate: object) -> None:
+        return None
 
-    settings = _database_status_settings(
-        app_auth_enabled=False, oracle_user="", oracle_password="", oracle_dsn=""
-    )
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
-    monkeypatch.setattr(agent_router, "_test_database_connection", must_not_connect)
+    monkeypatch.setattr(agent_router, "_test_database_connection", connect)
+    for schema, expected in (
+        (_SchemaStatus("missing"), "missing"),
+        (_SchemaStatus("outdated"), "outdated"),
+        (_SchemaStatus("ready", operation="running"), "ready"),
+    ):
+        monkeypatch.setattr(agent_router, "system_schema_manager", schema)
+        data = client.get("/api/ready/database").json()["data"]
+        assert data["status"] == "setup_required"
+        assert data["schema_status"] == expected
 
-    resp = client.get("/api/ready/database")
 
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["status"] == "ok"
-    assert data["check"] == "ok"
-    assert data["detail"] == "local_auth"
-    assert len(data["context_id"]) == 64
-    assert called == []
-
-
-def test_database_status_production_auth_still_checks_database(monkeypatch: MonkeyPatch) -> None:
-    """共通認証（production）では、DB 未設定なら not_configured（short circuit しない）。"""
+def test_database_status_missing_settings_is_not_configured(monkeypatch: MonkeyPatch) -> None:
+    """DB 未設定なら not_configured（接続もシステムテーブルの確認もしない）。"""
     settings = _database_status_settings(oracle_user="", oracle_password="", oracle_dsn="")
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
 
@@ -800,23 +810,14 @@ def test_database_status_production_auth_still_checks_database(monkeypatch: Monk
     assert data["check"] == "missing"
 
 
-def test_database_status_uses_real_settings_auth_mode(monkeypatch: MonkeyPatch) -> None:
-    """Settings の `auth_mode` から判定する（local は ok、production は DB を確かめる）。"""
-
-    def settings_for(auth_mode: str) -> Settings:
-        return Settings(
-            _env_file=None,
-            auth_mode=auth_mode,
-            oracle_user="",
-            oracle_dsn="",
-            oracle_password="",
+def test_database_status_does_not_short_circuit_local_auth(monkeypatch: MonkeyPatch) -> None:
+    """local でもユーザー・ロールは共通 DB にあるため、DB を確かめる（RAG と同じ。#750 / #751）。"""
+    for auth_mode in ("local", "production"):
+        settings = Settings(
+            _env_file=None, auth_mode=auth_mode, oracle_user="", oracle_dsn="", oracle_password=""
         )
-
-    monkeypatch.setattr(agent_router, "get_settings", lambda: settings_for("local"))
-    assert client.get("/api/ready/database").json()["data"]["status"] == "ok"
-
-    monkeypatch.setattr(agent_router, "get_settings", lambda: settings_for("production"))
-    assert client.get("/api/ready/database").json()["data"]["status"] == "not_configured"
+        monkeypatch.setattr(agent_router, "get_settings", lambda settings=settings: settings)
+        assert client.get("/api/ready/database").json()["data"]["status"] == "not_configured"
 
 
 def test_oci_settings_defaults_match_rag_when_credentials_missing(

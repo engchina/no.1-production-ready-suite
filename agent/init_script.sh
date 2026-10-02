@@ -2,7 +2,7 @@
 # OCI Resource Manager の統合 stack（terraform/stack、#217）の cloud-init から呼ばれる agent の Compute 初期化スクリプト。
 # Agent Control Plane を Docker なしで Nginx + systemd に直接配備する。
 # ADB の DDL は持たない。Runtime 状態の table は backend 起動時に Oracle repository が作成し、
-# 共通認証（PLATFORM_*）と Agent の権限（AGENT_ROLE_*）の table はアプリの CLI（agent_security_migrate）が作成する。
+# 共通認証（PLATFORM_*）と Agent のシステムテーブル（AGENT_*）はアプリの CLI（agent_system_schema）が作成する（#751）。
 # ログインは共通認証（AGENT_AUTH_MODE=production。構成管理者 system_admin と DB ユーザー。#215）。
 set -euo pipefail
 
@@ -418,7 +418,9 @@ install_backend() {
 
 # Runtime repository は import 時に Oracle へ接続し、自分の table を冪等に作成する
 # （AGENT_RUNTIME_ORACLE_CREATE_SCHEMA=true）。ここでは起動前に一度作らせ、失敗理由を init log に残す。
-# 共通認証（PLATFORM_*）と Agent の権限（AGENT_ROLE_*）の table は agent_security_migrate が冪等に作る（#215）。
+# 共通認証（PLATFORM_*）と Agent のシステムテーブル（AGENT_*）は agent_system_schema --initialize が冪等に作る
+# （#215 / #751）。データを消す migration（旧版の業務ビューの表の削除など）は自動では承認せず、
+# 運用設定 > システムテーブル で内容を確認して承認する。
 initialize_database_schema() {
   local runtime_ready=false
   local security_ready=false
@@ -432,13 +434,13 @@ initialize_database_schema() {
     log "WARNING: Agent Runtime Oracle repository initialization failed."
   fi
 
-  log "Applying Agent authentication/RBAC tables (idempotent)."
+  log "Applying Agent system tables (idempotent)."
   if retry_command 5 run_as_app_user_in_dir "${BACKEND_DIR}" \
-    "uv run python -m app.cli.agent_security_migrate"; then
+    "uv run python -m app.cli.agent_system_schema --initialize"; then
     security_ready=true
-    log "Agent authentication/RBAC tables are ready."
+    log "Agent system tables are ready."
   else
-    log "WARNING: Agent authentication/RBAC table initialization failed. Login returns SECURITY_SCHEMA_MIGRATION_REQUIRED until it succeeds."
+    log "WARNING: Agent system table initialization failed. If it requires approval of a data-removing migration, open Operations settings > System tables. Login returns SECURITY_SCHEMA_MIGRATION_REQUIRED until the tables exist."
   fi
 
   if [ "${runtime_ready}" = "true" ] && [ "${security_ready}" = "true" ]; then
@@ -449,7 +451,7 @@ initialize_database_schema() {
   DATABASE_INITIALIZATION_READY=false
   log "WARNING: Database initialization is incomplete. Check ADB reachability, backend/.env and platform/.env (PLATFORM_ORACLE_*)."
   log "Recovery: cd ${BACKEND_DIR} && sudo -u ${APP_USER} /usr/local/bin/uv run python -c 'import app.features.agent.runtime'"
-  log "Recovery: cd ${BACKEND_DIR} && sudo -u ${APP_USER} /usr/local/bin/uv run python -m app.cli.agent_security_migrate"
+  log "Recovery: cd ${BACKEND_DIR} && sudo -u ${APP_USER} /usr/local/bin/uv run python -m app.cli.agent_system_schema --initialize"
   log "Recovery: sudo systemctl restart ${BACKEND_SERVICE}"
   return 0
 }

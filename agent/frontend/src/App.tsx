@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 
-import { AppShell, PageHeader } from "@engchina/production-ready-ui";
+import { AppShell, PageBody, PageHeader } from "@engchina/production-ready-ui";
 import { RequireAuth, useForbiddenRedirect } from "@engchina/production-ready-system-settings";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
@@ -12,6 +12,7 @@ import { SecurityPermissionsPage } from "@/components/security/SecurityPermissio
 import { SecurityRolesPage } from "@/components/security/SecurityRolesPage";
 import { SecurityUsersPage } from "@/components/security/SecurityUsersPage";
 import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
+import { SystemTablesCard } from "@/components/settings/SystemTablesCard";
 import { AppearanceSettings } from "@/components/settings/AppearanceSettings";
 import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
 import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
@@ -126,6 +127,7 @@ export function App() {
           }
         />
         <Route path={APP_ROUTES.memory} element={<MemoryPage />} />
+        <Route path={APP_ROUTES.settingsSystemTables} element={<SettingsSystemTablesRoute />} />
         <Route
           path={APP_ROUTES.settingsConnection}
           element={<PlaceholderPage title={t("nav.settingsConnection")} subtitle={t("page.settings.subtitle")} />}
@@ -255,6 +257,18 @@ function SettingsUploadStorageRoute() {
         subtitle={t("settings.uploadStorage.subtitle")}
       />
       <UploadStorageSettingsClient />
+    </div>
+  );
+}
+
+/** システムテーブル（運用設定の先頭。構成は RAG / NL2SQL と同じ。#658 / #751）。 */
+function SettingsSystemTablesRoute() {
+  return (
+    <div>
+      <PageHeader wide title={t("nav.settingsSystemTables")} subtitle={t("settings.systemTables.subtitle")} />
+      <PageBody wide>
+        <SystemTablesCard />
+      </PageBody>
     </div>
   );
 }

@@ -133,7 +133,8 @@ async def security_migration_required_handler(
         status_code=409,
         detail=(
             "認証・権限のテーブルが未作成です。"
-            "`cd agent/backend && uv run python -m app.cli.agent_security_migrate` を"
+            "運用設定 > システムテーブル で「作成・更新」を実行するか、"
+            "`cd agent/backend && uv run python -m app.cli.agent_system_schema --initialize` を"
             "実行してから再試行してください。"
         ),
         code="SECURITY_SCHEMA_MIGRATION_REQUIRED",

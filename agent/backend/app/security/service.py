@@ -51,8 +51,9 @@ class SecurityService(AuthService):
     # 構成管理者の token は製品ごとに接頭辞を変える（署名鍵に service_name も使う）。
     configured_admin_token_prefix = "agent-system-admin-v1"  # nosec B105 - token の接頭辞
     migration_hint = (
-        "`cd agent/backend && uv run python -m app.cli.agent_security_migrate` を実行してから"
-        "再試行してください。"
+        "運用設定 > システムテーブル で「作成・更新」を実行するか、"
+        "`cd agent/backend && uv run python -m app.cli.agent_system_schema --initialize` を"
+        "実行してから再試行してください。"
     )
     schema_object_names = SECURITY_SCHEMA_OBJECT_NAMES
 

@@ -73,7 +73,7 @@ FastAPI の API ドキュメント（Swagger UI `/docs`・ReDoc `/redoc`・`/ope
 
 ### システムテーブルの管理（`/api/settings/database/system-tables`、#325）
 
-製品のシステムテーブル（versioned Oracle system schema）の状態の取得・作成 / 更新・全再作成は、`pr_system_settings.system_schema.SystemSchemaManagerBase` の上に製品の manager を作る（RAG の `app.rag.system_schema`、NL2SQL の `app.features.settings.system_schema`）。Agent はシステムテーブルの管理を持たない（DDL は `agent_security_migrate` の CLI だけ）。
+製品のシステムテーブル（versioned Oracle system schema）の状態の取得・作成 / 更新・全再作成は、`pr_system_settings.system_schema.SystemSchemaManagerBase` の上に製品の manager を作る（RAG の `app.rag.system_schema`、NL2SQL の `app.features.settings.system_schema`、Agent の `app.system_schema`。#751）。
 
 - API: `GET /api/settings/database/system-tables`（DDL を実行しない。取得できなければ 503、公開するのは ORA コードだけ）と `POST /api/settings/database/system-tables/initialize`（`{recreate, confirmation}`）。応答の骨格は `{status, schema_head, applied_versions, pending_versions, expected_/existing_object_count, expected_/existing_table_count, missing_objects, tables, operation_state}` で、製品が項目を足す（RAG の `schema_version` / `retired_objects`、NL2SQL の `objects`）。
 - 骨格が持つもの: 状態の分類（業務テーブルが無い → `missing`、必須 object の不足 → `partial`、廃止 object の残り・未適用 / checksum 不一致の migration → `outdated`、それ以外 → `ready`）、操作の lease（`<製品>_SCHEMA_OPERATIONS` の 1 行。期限切れは奪える。成功で `schema_epoch` を 1 増やす）、台帳（`<製品>_SCHEMA_MIGRATIONS` の MERGE と読み込み）、確認語の検証（DB に触る前に完全一致だけを通す。不一致は 422）、失敗の記録と安全化（`LAST_ERROR_CODE` に ORA コード。ORA-00054 は 409 と `Retry-After: 5`）、`ALTER SESSION SET DDL_LOCK_TIMEOUT`（0〜120 秒）。

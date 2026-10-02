@@ -4,7 +4,6 @@
 - 権限の既定拒否（manifest 未登録・権限なし 403）と manifest の完全性
 - production で Cookie がないリクエスト（AGENT_RBAC_ENABLED の有無、`POST /mcp/{binding_id}`）
 - `/security/*`（権限カタログ・対象の一覧・ロールの権限と対象範囲の保存と昇格防止）
-- `agent_security_migrate` の DDL と廃止した権限コードの削除（fake connection）
 - 廃止した権限コード（`menu.dashboard`。#262）が DB に残っていても壊れないこと
 """
 
@@ -30,12 +29,10 @@ from security_support import (
 )
 
 import app.features.agent.router as agent_router
-from app.cli import agent_security_migrate
 from app.features.agent.control_plane import RuntimeBinding, runtime_binding_registry
 from app.features.agent.runtime import AgentProfile, runtime_repository
 from app.main import app
 from app.security import dependencies as security_dependencies
-from app.security.migrations import AGENT_SECURITY_DDL
 from app.security.permissions import (
     ALL_PERMISSION_CODES,
     AUTHENTICATED_WITHOUT_PERMISSION,
@@ -812,141 +809,6 @@ def test_role_assignment_respects_agent_scope(auth: ProductionAuth) -> None:
         assert created.status_code == 200, created.text
 
 
-# ---------------------------------------------------------------------------
-# agent_security_migrate
-# ---------------------------------------------------------------------------
-
-
-class _FakeCursor:
-    def __init__(self, connection: _FakeConnection) -> None:
-        self._connection = connection
-
-    def __enter__(self) -> _FakeCursor:
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        return None
-
-    rowcount = 0
-
-    def execute(self, statement: str, params: dict[str, Any] | None = None) -> None:
-        normalized = " ".join(statement.split())
-        self._connection.statements.append(normalized)
-        if normalized.startswith("DELETE FROM AGENT_ROLE_PERMISSIONS WHERE PERMISSION_CODE"):
-            code = (params or {})["code"]
-            matched = {row for row in self._connection.role_permissions if row[1] == code}
-            self._connection.role_permissions -= matched
-            self.rowcount = len(matched)
-            return
-        if normalized.startswith("CREATE"):
-            name = normalized.split()[2] if normalized.split()[1] == "TABLE" else normalized
-            if name in self._connection.objects:
-                raise RuntimeError("ORA-00955: name is already used by an existing object")
-            self._connection.objects.add(name)
-
-
-class _FakeConnection:
-    def __init__(self) -> None:
-        self.statements: list[str] = []
-        self.objects: set[str] = set()
-        self.commits = 0
-        # AGENT_ROLE_PERMISSIONS の行（ROLE_ID, PERMISSION_CODE）。
-        self.role_permissions: set[tuple[str, str]] = set()
-
-    def cursor(self) -> _FakeCursor:
-        return _FakeCursor(self)
-
-    def commit(self) -> None:
-        self.commits += 1
-
-
-def test_agent_security_migrate_creates_tables_idempotently() -> None:
-    connection = _FakeConnection()
-
-    @contextmanager
-    def factory() -> Iterator[_FakeConnection]:
-        yield connection
-
-    first = agent_security_migrate.run(factory)
-    assert "mode=applied" in first
-    assert "agent(applied=3 skipped=0)" in first
-    tables = [item for item in connection.statements if item.startswith("CREATE TABLE")]
-    order = [item.split()[2] for item in tables]
-    # PLATFORM_* を先に作り、AGENT_ROLE_* はその後（FK が PLATFORM_ROLES を参照する）。
-    assert order.index("PLATFORM_ROLES") < order.index("AGENT_ROLE_PERMISSIONS")
-    assert order[-3:] == [
-        "AGENT_ROLE_PERMISSIONS",
-        "AGENT_ROLE_AGENTS",
-        "AGENT_ROLE_BUSINESS_VIEWS",
-    ]
-    for ddl in AGENT_SECURITY_DDL:
-        normalized = " ".join(ddl.split())
-        assert "REFERENCES PLATFORM_ROLES (ROLE_ID) ON DELETE CASCADE" in normalized
-        assert "PRIMARY KEY (ROLE_ID," in normalized
-    agents_ddl = " ".join(AGENT_SECURITY_DDL[1].split())
-    assert "AGENT_ID VARCHAR2(128) NOT NULL" in agents_ddl
-    views_ddl = " ".join(AGENT_SECURITY_DDL[2].split())
-    assert "BUSINESS_VIEW_ID VARCHAR2(64) NOT NULL" in views_ddl
-    # 組み込み SYSTEM_ADMIN ロールを MERGE で確認する（ユーザーは作らない）。
-    assert any(item.startswith("MERGE INTO PLATFORM_ROLES") for item in connection.statements)
-    assert not any("INSERT INTO PLATFORM_USERS" in item for item in connection.statements)
-
-    second = agent_security_migrate.run(factory)
-    assert "agent(applied=0 skipped=3)" in second
-
-
-def test_agent_security_migrate_removes_retired_permission_codes_idempotently() -> None:
-    """既存ロールに残る `menu.dashboard`（#262）を削除し、他のコードは残す（冪等）。"""
-    connection = _FakeConnection()
-    connection.role_permissions = {
-        ("role-a", "menu.dashboard"),
-        ("role-a", "menu.runs"),
-        ("role-b", "menu.dashboard"),
-        ("role-b", "agent.runs.view"),
-    }
-
-    @contextmanager
-    def factory() -> Iterator[_FakeConnection]:
-        yield connection
-
-    first = agent_security_migrate.run(factory)
-    assert "retired_permission_rows=2" in first
-    assert connection.role_permissions == {("role-a", "menu.runs"), ("role-b", "agent.runs.view")}
-    deletes = [item for item in connection.statements if item.startswith("DELETE")]
-    assert deletes == [
-        "DELETE FROM AGENT_ROLE_PERMISSIONS WHERE PERMISSION_CODE = :code",
-    ]
-    # SYSTEM_ADMIN ロールの確認は削除の後。
-    merge_index = next(
-        index
-        for index, item in enumerate(connection.statements)
-        if item.startswith("MERGE INTO PLATFORM_ROLES")
-    )
-    assert connection.statements.index(deletes[0]) < merge_index
-
-    second = agent_security_migrate.run(factory)
-    assert "retired_permission_rows=0" in second
-    assert connection.role_permissions == {("role-a", "menu.runs"), ("role-b", "agent.runs.view")}
-
-
-def test_agent_security_migrate_dry_run_and_failure(
-    monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    assert agent_security_migrate.main(["--dry-run"]) == 0
-    preview = capsys.readouterr().out
-    assert "mode=preview" in preview
-    assert "retired_permission_codes=1" in preview
-
-    @contextmanager
-    def broken() -> Iterator[Any]:
-        raise RuntimeError("DPY-6005: cannot connect")
-        yield  # pragma: no cover
-
-    monkeypatch.setattr(agent_security_migrate, "platform_oracle_connection", broken)
-    assert agent_security_migrate.main([]) == 1
-    assert "DPY-6005" in capsys.readouterr().err
-
-
 def test_migration_required_is_reported(auth: ProductionAuth, monkeypatch: MonkeyPatch) -> None:
     """production で認証のテーブルがなければ、migration の案内（409）を返す。"""
     from pr_system_settings.auth.errors import SecurityMigrationRequired
@@ -963,7 +825,8 @@ def test_migration_required_is_reported(auth: ProductionAuth, monkeypatch: Monke
     assert response.status_code == 409
     body = response.json()
     assert body["error_code"] == "SECURITY_SCHEMA_MIGRATION_REQUIRED"
-    assert "agent_security_migrate" in body["error_messages"][0]
+    assert "システムテーブル" in body["error_messages"][0]
+    assert "agent_system_schema" in body["error_messages"][0]
 
 
 def test_router_uses_local_debug_principal_with_all_permissions() -> None:

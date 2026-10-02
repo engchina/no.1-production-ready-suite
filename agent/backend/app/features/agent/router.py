@@ -41,8 +41,7 @@ from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse
 from pr_system_settings.database import build_database_router
 from pr_system_settings.database_status import (
-    READINESS_OK,
-    DatabaseStatusData,
+    DatabaseSchemaProbeResult,
     build_database_status_router,
 )
 from pr_system_settings.model import (
@@ -170,6 +169,7 @@ from app.security.domain import Principal
 from app.security.permissions import UNCLASSIFIED_PERMISSION, permission_for_route
 from app.security.service import get_security_service
 from app.settings import MODEL_SETTINGS_STORE, get_settings
+from app.system_schema import system_schema_manager
 
 router = APIRouter(tags=["agent-runtime"])
 logger = logging.getLogger(__name__)
@@ -558,29 +558,25 @@ router.include_router(
     prefix="/settings",
 )
 # DB の状態 API（`GET /api/ready/database`。3製品共通の判定と契約。#325）。画面の DB ゲートが使う。
-# ログイン不要の公開 path（`app.security.permissions.PUBLIC_API_PATHS`）。Agent は製品の
-# システムテーブルの確認（schema_probe）をまだ持たないため、設定の判定と接続確認だけを行う。
-# ローカル認証は共通 DB を使わないため、接続を試さず ok にする（`_local_auth_short_circuit`）。
+# ログイン不要の公開 path（`app.security.permissions.PUBLIC_API_PATHS`）。RAG / NL2SQL と同じく、
+# 設定の判定・接続確認に加えて Agent のシステムテーブルの状態を確かめる（#751）。local でも
+# 共通認証のユーザー・ロールは共通 DB にあるため、短絡しない。
 router.include_router(
     build_database_status_router(
         get_settings=lambda: get_settings(),
         test_connection=lambda settings: _test_database_connection(settings),
-        short_circuit=lambda settings: _local_auth_short_circuit(settings),
+        schema_probe=lambda settings: _system_schema_probe(settings),
     )
 )
 
 
-def _local_auth_short_circuit(settings: object) -> DatabaseStatusData | None:
-    """ローカル認証（`AGENT_AUTH_MODE=local`）では、DB を確かめずに ok を返す（#325）。
-
-    Agent で共通 DB（`PLATFORM_ORACLE_*`）を使うのは、共通認証のユーザー・ロール・セッションと
-    ロールに付ける Agent の権限（`security.store`）だけで、ローカル認証ではどちらも in-memory。
-    Run 等の保存先（`AGENT_RUNTIME_REPOSITORY_BACKEND`）は `AGENT_RUNTIME_ORACLE_*` を使い、
-    共通 DB とは独立している。DB 未設定の開発環境で、業務画面が DB ゲートで塞がれないようにする。
-    """
-    if getattr(settings, "app_auth_enabled", True):
-        return None
-    return DatabaseStatusData(status="ok", check=READINESS_OK, detail="local_auth")
+async def _system_schema_probe(_settings: object) -> DatabaseSchemaProbeResult:
+    """Agent のシステムテーブルの状態（例外は共通部品が setup_required へ正規化する）。"""
+    schema = await run_in_threadpool(system_schema_manager.status)
+    schema_status = schema["status"]
+    if schema_status != "ready" or schema["operation_state"]["status"] == "running":
+        return DatabaseSchemaProbeResult(status="setup_required", schema_status=schema_status)
+    return DatabaseSchemaProbeResult(status="ok", schema_status="ready")
 
 
 # モデル設定も3製品共通の実装（pr_system_settings.model。#103）。

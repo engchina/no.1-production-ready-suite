@@ -147,20 +147,20 @@ run_initialization_case success ""
 test "$(cat "${TEST_TMP_DIR}/success/ready")" = "true" || fail "DB 初期化成功時に ready にならない"
 grep -Fq "uv run python -c 'import app.features.agent.runtime'" "${TEST_TMP_DIR}/success/commands.log" \
   || fail "Runtime repository の初期化 command が実行されていない"
-grep -Fq "uv run python -m app.cli.agent_security_migrate" "${TEST_TMP_DIR}/success/commands.log" \
-  || fail "認証・権限の table の migration が実行されていない"
+grep -Fq "uv run python -m app.cli.agent_system_schema --initialize" "${TEST_TMP_DIR}/success/commands.log" \
+  || fail "システムテーブルの作成・更新が実行されていない"
 test "$(grep -c 'attempts=5' "${TEST_TMP_DIR}/success/commands.log")" = "2" \
   || fail "DB 初期化の各 command が retry されていない"
 runtime_line="$(grep -n 'import app.features.agent.runtime' "${TEST_TMP_DIR}/success/commands.log" | cut -d: -f1)"
-security_line="$(grep -n 'agent_security_migrate' "${TEST_TMP_DIR}/success/commands.log" | cut -d: -f1)"
+security_line="$(grep -n 'agent_system_schema' "${TEST_TMP_DIR}/success/commands.log" | cut -d: -f1)"
 test "${runtime_line}" -lt "${security_line}" || fail "Runtime repository の初期化の後に migration を実行していない"
 
 run_initialization_case degraded 'import app.features.agent.runtime'
 test "$(cat "${TEST_TMP_DIR}/degraded/ready")" = "false" || fail "DB 初期化失敗時に ready=false にならない"
-grep -Fq "agent_security_migrate" "${TEST_TMP_DIR}/degraded/commands.log" \
+grep -Fq "agent_system_schema" "${TEST_TMP_DIR}/degraded/commands.log" \
   || fail "Runtime repository の失敗時も migration を試みていない"
 
-run_initialization_case security-degraded 'agent_security_migrate'
+run_initialization_case security-degraded 'agent_system_schema'
 test "$(cat "${TEST_TMP_DIR}/security-degraded/ready")" = "false" \
   || fail "migration 失敗時に ready=false にならない"
 
