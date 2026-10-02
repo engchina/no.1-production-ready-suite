@@ -150,6 +150,9 @@ export function UserManagementPage({
   const [users, setUsers] = useState<SecurityUser[]>([]);
   const [roles, setRoles] = useState<SecurityRole[]>([]);
   const [loading, setLoading] = useState(true);
+  // 「表示を更新」を押した読み直しの間だけ、そのボタンを回す。初回の読込・エラーからの再試行は
+  // 押していないので、一覧の読込表示がスピナーを出し、「表示を更新」は disabled だけにする（#819）。
+  const [refreshRequested, setRefreshRequested] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -289,6 +292,7 @@ export function UserManagementPage({
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading(true);
+    setRefreshRequested(announce);
     setLoadError("");
     setActionError("");
     await requestData(sequence, announce);
@@ -790,7 +794,7 @@ export function UserManagementPage({
                   icon: RefreshCw,
                   disabled: operationBusy,
                   onClick: () => load(true),
-                  loading,
+                  loading: loading && refreshRequested,
                 },
               ]
             : canSubmitUserForm
@@ -860,7 +864,7 @@ export function UserManagementPage({
                     operationKey="security-users-load"
                     placement="panel"
                     testId="security-users-loading"
-                    activityIcon="none"
+                    activityIcon={refreshRequested ? "none" : "spinner"}
                   />
                 ) : null}
                 <DataTable

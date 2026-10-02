@@ -374,6 +374,8 @@ export function DocumentSectionsPanel({
                       label: t("sections.reset.action"),
                       icon: RotateCcw,
                       loading: reset.isPending,
+                      // 保存の処理中は押せないだけにする（スピナーは押した側だけ。#819）。
+                      disabled: save.isPending,
                       onClick: () => void resetToExtraction(),
                     },
                   ]

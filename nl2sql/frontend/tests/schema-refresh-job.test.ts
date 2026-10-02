@@ -140,7 +140,8 @@ test("shared schema feedback limits live announcements to the phase badge", () =
   assert.match(header, /<span aria-hidden="true">[\s\S]{0,120}className="sr-only"/u);
   assert.match(feedback, /announceActivity=\{false\}/u);
   assert.match(feedback, /announceSlow=\{false\}/u);
-  assert.match(feedback, /activityIcon="none"/u);
+  // 既定は "none"（更新を始めたボタンがスピナーを出す）。始めたボタンが回っていない画面だけ "spinner" を渡す（#819）。
+  assert.match(feedback, /activityIcon = "none"/u);
   assert.match(processing, /role="timer"/u);
   assert.match(processing, /aria-live="off"/u);
 });

@@ -1116,6 +1116,14 @@ export function DocumentWorkspace({
     submissionErrorDetail && submissionErrorDetail !== phaseStartFailedMessage
       ? `${phaseStartFailedMessage} ${submissionErrorDetail}`
       : phaseStartFailedMessage;
+  // 押した操作のボタンだけを回す。処理の要求中に別のレシピを選んでも、そのレシピの操作は回さない（#819）。
+  // variables は完了後も残るため、isPending のときだけ読む。
+  const approvePendingForRecipe =
+    approveDocument.isPending && approveDocument.variables?.recipeId === selectedRecipeId;
+  const enqueuePendingFor = (phase?: string) =>
+    enqueueIngestion.isPending &&
+    enqueueIngestion.variables?.recipeId === selectedRecipeId &&
+    (phase === undefined || enqueueIngestion.variables?.phase === phase);
   const showActionBar =
     Boolean(selectedRecipeId) &&
     (actionPlan.primary != null ||
@@ -1648,8 +1656,9 @@ export function DocumentWorkspace({
                       }
                     )
                   }
-                  loading={approveDocument.isPending}
+                  loading={approvePendingForRecipe}
                   disabled={
+                    (approveDocument.isPending && !approvePendingForRecipe) ||
                     saveReviewEdits.isPending ||
                     enqueueIngestion.isPending ||
                     (status === "REVIEW" && hasReviewEdits)
@@ -1675,17 +1684,24 @@ export function DocumentWorkspace({
                       }
                     )
                   }
-                  loading={enqueueIngestion.isPending} icon={Send}>
+                  loading={enqueuePendingFor("PREPROCESS")}
+                  disabled={
+                    approveDocument.isPending ||
+                    (enqueueIngestion.isPending && !enqueuePendingFor("PREPROCESS"))
+                  }
+                  icon={Send}>
                   {doc.duplicate_of_document_id ? t("action.enqueueDuplicateIngestion") : t("action.enqueueIngestion")}
                 </Button>
               ) : null}
               {retryPhase ? (
                 <Button
                   onClick={() => void handlePhaseRestart(retryPhase, "retry")}
-                  loading={
-                    enqueueIngestion.isPending &&
-                    enqueueIngestion.variables?.phase === retryPhase
-                  } icon={RotateCcw}>
+                  loading={enqueuePendingFor(retryPhase)}
+                  disabled={
+                    approveDocument.isPending ||
+                    (enqueueIngestion.isPending && !enqueuePendingFor(retryPhase))
+                  }
+                  icon={RotateCcw}>
                   {t(phaseRetryLabelKey(retryPhase))}
                 </Button>
               ) : null}
@@ -1695,13 +1711,10 @@ export function DocumentWorkspace({
                   variant="ghost"
                   icon={RotateCcw}
                   onClick={() => void handlePhaseRestart(phase, "reprocess")}
-                  loading={
-                    enqueueIngestion.isPending &&
-                    enqueueIngestion.variables?.phase === phase
-                  }
+                  loading={enqueuePendingFor(phase)}
                   disabled={
                     approveDocument.isPending ||
-                    (enqueueIngestion.isPending && enqueueIngestion.variables?.phase !== phase)
+                    (enqueueIngestion.isPending && !enqueuePendingFor(phase))
                   }
                 >
                   {t(`flow.reprocess.${phase.toLowerCase()}` as I18nKey)}

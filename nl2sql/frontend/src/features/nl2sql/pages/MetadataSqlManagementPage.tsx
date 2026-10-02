@@ -23,6 +23,7 @@ import {
   ProcessingIndicator,
   TextareaField,
   TextField,
+  useActionPending,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -248,6 +249,11 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const [validated, setValidated] = useState(false);
   const [checkedAt, setCheckedAt] = useState("");
   const [loading, setLoading] = useState("");
+  // 情報の取得をどこから始めたか。スピナーは押したボタンだけが出し、実行の後・画面へ戻ったときの取り直し
+  // （"auto"）は入力の領域の読込表示が出す（#819）。
+  const [detailsOrigin, setDetailsOrigin] = useState<"fetch" | "banner" | "auto">("auto");
+  // ヘッダーの「表示を更新」を押した取り直しの間だけ true（検索・絞り込み・他の操作の後の取り直しでは回さない。#819）。
+  const manualRefresh = useActionPending();
   const [message, setMessage] = useState("");
   const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
   const [schemaRefreshError, setSchemaRefreshError] = useState("");
@@ -405,7 +411,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     void refreshObjects();
     // 実行で列のコメント・annotation・ドメインが変わるため、構造と既存ドメインを取り直す。
     // 古いままだと続けて更新/削除を生成したときに実行前の関連付けを材料にしてしまう。
-    if (selectedTargets.length > 0) void fetchDetails(true);
+    if (selectedTargets.length > 0) void fetchDetails(true, "auto");
   };
 
   const toggleTarget = (target: MetadataSqlTarget) => {
@@ -460,7 +466,10 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     setGenerated(null);
   };
 
-  const fetchDetails = async (preserveWork = false) => {
+  const fetchDetails = async (
+    preserveWork = false,
+    origin: "fetch" | "banner" | "auto" = "fetch"
+  ) => {
     generationSequence.current += 1;
     if (selectedTargets.length === 0) {
       setMessage(t("metadataSql.error.noTarget"));
@@ -475,6 +484,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     if (!preserveWork) setActivePanel("input");
     setValidated(false);
     setLoading("details");
+    setDetailsOrigin(origin);
     setMessage("");
     try {
       const nextDetails: DbAdminObjectDetail[] = [];
@@ -525,7 +535,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   };
 
   useWorkspaceActivation(() => {
-    if (selectedTargets.length > 0) void fetchDetails(true);
+    if (selectedTargets.length > 0) void fetchDetails(true, "auto");
   });
 
   const generateSql = async () => {
@@ -607,10 +617,11 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
               kind: "utility",
               label: t("common.action.refresh"),
               icon: RefreshCw,
-              onClick: () => void refreshObjects(true),
+              onClick: () => void manualRefresh.track(() => refreshObjects(true)),
               // 初回の読込は対象の一覧の Skeleton がスピナーを出す（このボタンは狭い画面では「その他の操作」の中で
-              // 見えない）。ボタンは再読込（一覧があるとき）だけ回す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
-              loading: Boolean(objectsQuery.data) && objectsQuery.isFetching && !objectsQuery.isFetchingNextPage,
+              // 見えない）。ボタンは押した再読込の間だけ回す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+              // 検索・絞り込み・他の操作の後の取り直しでは回さず、一覧の処理中の表示がスピナーを出す（#819）。
+              loading: manualRefresh.pending,
               disabled: !objectsQuery.data && objectsQuery.isFetching,
             },
           {
@@ -627,7 +638,18 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       {selectedTargets.length > 0 && (checkedAt || activePanel !== "targets") ? (
         <PageBody wide className="pb-0">
           <Banner severity={validated ? "info" : "warning"} action={
-            <Button type="button" variant="secondary" size="sm" disabled={Boolean(loading)} onClick={() => void fetchDetails(true)}>{t("workspace.refresh")}</Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              icon={RefreshCw}
+              // 押した「再取得」の間だけ回す。「情報を取得」・実行の後の取り直しでは無効にするだけ（#819）。
+              loading={loading === "details" && detailsOrigin === "banner"}
+              disabled={Boolean(loading) && !(loading === "details" && detailsOrigin === "banner")}
+              onClick={() => void fetchDetails(true, "banner")}
+            >
+              {t("workspace.refresh")}
+            </Button>
           }>
             {t(checkedAt ? "workspace.snapshot" : "workspace.unverified")}{checkedAt ? ` (${formatDateTime(checkedAt)})` : ""}
           </Banner>
@@ -670,7 +692,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             placement="workspace"
             className="rounded-md border border-border bg-surface px-3 py-2 shadow-sm"
             testId={`${pageId}-workspace-processing`}
-            activityIcon="none"
+            activityIcon={manualRefresh.pending ? "none" : "spinner"}
           />
         ) : null}
 
@@ -721,8 +743,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             onRetry={() => void refreshObjects()}
             onLoadMore={() => void objectsQuery.fetchNextPage()}
             onRetryLoadMore={() => void objectsQuery.fetchNextPage()}
-            onFetchDetails={() => void fetchDetails()}
-            fetchingDetails={loading === "details"}
+            onFetchDetails={() => void fetchDetails(false, "fetch")}
+            fetchingDetails={loading === "details" && detailsOrigin === "fetch"}
           />
         </DbObjectManagementPanelShell>
 
@@ -739,6 +761,9 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             inputTexts={inputTexts}
             detailsReady={validated && details.length > 0}
             detailsLoading={loading === "details"}
+            // 押したボタン（「情報を取得」「最新情報を取得」）が回るときは、領域はスピナーを出さない（同じ処理の
+            // スピナーは 1 つ。SQL 生成と同じ）。実行の後・画面へ戻ったときの取り直しは領域が出す（#819）。
+            detailsButtonSpinning={detailsOrigin !== "auto"}
             selectedCount={selectedTargets.length}
             sampleLimit={sampleLimit}
             sampleText={refreshedSampleText ?? inputTexts.sampleText}
@@ -1006,6 +1031,7 @@ function MetadataInputPanel({
   inputTexts,
   detailsReady,
   detailsLoading,
+  detailsButtonSpinning,
   selectedCount,
   sampleLimit,
   sampleText,
@@ -1020,6 +1046,8 @@ function MetadataInputPanel({
   inputTexts: ReturnType<typeof buildMetadataInputTexts>;
   detailsReady: boolean;
   detailsLoading: boolean;
+  /** 情報の取得を始めたボタン（「情報を取得」「最新情報を取得」）が回っているか。 */
+  detailsButtonSpinning: boolean;
   selectedCount: number;
   sampleLimit: number;
   sampleText: string;
@@ -1049,6 +1077,8 @@ function MetadataInputPanel({
           ariaLabel={t("metadataSql.input.loading")}
           variant="detail"
           placement="result"
+          // 実行の後・画面へ戻ったときの取り直しはボタンが回らないため、この表示がスピナーを出す（#819）。
+          activityIcon={detailsButtonSpinning ? "none" : "spinner"}
         />
       ) : (
         <>

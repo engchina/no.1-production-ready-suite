@@ -2419,3 +2419,31 @@ export function isSameFeedback(value, submission): boolean; // 空白を除い�
 - 単体テストは `packages/ui/tests/feedback-controls.test.tsx`（すぐ保存・理由の必須・コメントの整形・修正した回答・同じ評価・失敗と再試行・保存中・`compact`・`readOnly`）。
 - 実ブラウザは RAG `e2e/chat.spec.ts` / `e2e/search-review.spec.ts` / `e2e/feedback.spec.ts` / `e2e/citation-variant-badge.spec.ts`、Agent `e2e/feedback.spec.ts`（チャットの回答の評価・管理者の評価。既存の spec のまま）。
 - 製品の置き換え: RAG の `components/feedback/FeedbackControls.tsx` と Agent の `components/chat/AnswerFeedback.tsx` は、API と文言をつなぐ薄いラッパーになった（見た目・振る舞いは変えない）。
+
+## useActionPending — **新規**（#819）
+
+`Button` の `loading` は押したボタンだけが持つ（UX 契約 buttons.md §8）。押したボタンが始めた処理の間だけ `true` になる状態を作る hook。
+
+```ts
+import { useActionPending } from "@engchina/production-ready-ui";
+
+export interface ActionPending {
+  pending: boolean;                                        // track に渡した処理のどれかが終わっていない間だけ true
+  track: <T>(work: () => Promise<T>) => Promise<T>;        // 処理を実行し、結果・例外はそのまま返す
+}
+export function useActionPending(): ActionPending;
+
+// 「表示を更新」: 押した取り直しの間だけ回す
+const manualRefresh = useActionPending();
+<PageHeader actions={[{ id: "refresh", kind: "utility", label, icon: RefreshCw,
+  loading: manualRefresh.pending, onClick: () => void manualRefresh.track(() => query.refetch()) }]} />
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 再取得のボタンに query の `isFetching` をそのまま渡さず、押した取り直しを `track` で包む | `isFetching` は定期の取り直し（`refetchInterval`）・他の操作の後の invalidate・絞り込みやページの切り替え（`keepPreviousData`）・フォーカスでも true になり、押していないボタンが回るため |
+| 重なった `track` はすべて終わるまで `pending`。unmount 後は state を更新しない | 連続で押したとき・画面を離れたときに状態がずれない |
+| 1 つの mutation を複数のボタンが使うときは、この hook ではなく `activeOperation` の state・`mutation.variables`（`isPending` のときだけ読む）・行の id で押したボタンを区別する | `mutation.isPending` だけでは押したボタンが分からない |
+
+- 単体テストは `packages/ui/tests/action-pending.test.tsx`。
+- 使う所: system-settings の `SystemTablesCard`（状態を再取得）、RAG のサービスのログの「再取得」、Agent の「表示を更新」（Runtime・実行履歴・監査・Snapshot・フィードバック・利用状況）と監査の「フィルター適用」、NL2SQL の一覧の「表示を更新」など。

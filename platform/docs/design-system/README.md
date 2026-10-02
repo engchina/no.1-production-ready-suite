@@ -315,6 +315,7 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
   - Playwright の `toBeDisabled()` は `aria-disabled` も無効と判定する。jest-dom の `toBeDisabled()` と CSS の `:disabled` は判定しないので、loading の検証は `aria-disabled` / `aria-busy` で行う
 - **旧実装のバグ:** `loading` でスピナーを**追加**していたため、スピナー＋アイコン＋ラベルの三重表示で幅が跳ねていました
 - 1秒を超えて領域全体が待ちになる処理は、ボタンではなく領域側で `LoadingState`。ボタンのスピナーは「この操作が進行中」だけを表す
+- **スピナーは押したボタンだけ（#819）**: `loading` は、そのボタンが始めた処理の間だけ true にする。同じ処理の間に使えない他のボタンは `disabled` だけにし、スピナーを出さない（Material・Carbon・Apple HIG と同じ）。1 つの mutation を複数のボタンが使うときは、押したボタンを `activeOperation`・`mutation.variables`・行の id で区別し、共有の `busy` を複数のボタンの `loading` に渡さない。再取得のボタンに query の `isFetching` をそのまま渡さない（定期の取り直し・他の操作の後の invalidate でも回るため。押した取り直しを `useActionPending` などで持つ）。例外はボタンが表す状態そのもの（ADB の「起動」と `STARTING`）。詳細は UX 契約 buttons.md §8
 - アイコンとスピナーは `sm` / `md` / `lg` とも **16px**（`BUTTON_ICON_SIZE`、`--icon-md`）。ボタンの高さで寸法を変えない（18px は §3 のアイコン寸法の 4 段に無く、`sm` の 14px は周りの 16px のアイコンとそろわない。#395）
 - `loading` 中のスピナーの色は `--color-fg-muted`。地と文字は disabled と同じ（`--color-surface-disabled` / `--color-fg-disabled`）だが、`fg-disabled` のままではライトで地に対して 2.82:1 になり、処理中を示す図形の 3:1（WCAG 1.4.11）に届かないため（`fg-muted` はライト 4.39:1 / ダーク 7.28:1。#395）
 - その場で結果を待ち、止められる操作（検索・チャットの送信など）は `loading` を使わず、実行中はボタンを「停止」に切り替える（UX 契約 buttons.md §3.1、#413）。スピナーは結果の領域の `ProcessingIndicator` が出す

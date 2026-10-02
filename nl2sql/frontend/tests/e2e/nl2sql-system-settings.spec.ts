@@ -2410,10 +2410,18 @@ test("情報を再取得は ADB 情報更新後に Wallet 取得も実行し進�
   await page.goto("/settings/database");
   await expect.poll(() => walletDownloadCount).toBe(0);
 
-  await page.getByRole("button", { name: "情報を再取得" }).click();
+  const adbCard = page.locator("#adb-management");
+  const refreshButton = adbCard.getByRole("button", { name: "情報を再取得" });
+  await refreshButton.click();
   await expect.poll(() => adbRefreshCount).toBe(1);
   await expect.poll(() => walletDownloadCount).toBe(1);
   await expectNoAdbWalletPendingStatus(page);
+  // スピナーは押した「情報を再取得」だけが出す。同じ保存と Wallet の取得を使う「保存」は無効にするだけ（#819）。
+  await expect(refreshButton).toHaveAttribute("aria-busy", "true");
+  const adbSaveButton = adbCard.getByRole("button", { name: "保存", exact: true });
+  await expect(adbSaveButton).toBeDisabled();
+  await expect(adbSaveButton).not.toHaveAttribute("aria-busy", /.*/);
+  await expect(adbCard.locator("svg.animate-spin:visible")).toHaveCount(1);
 
   walletGate.release();
 

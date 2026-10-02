@@ -17,6 +17,7 @@ import {
   StatusBadge,
   TimedLoadingState,
   toast,
+  useActionPending,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@engchina/production-ready-ui";
@@ -160,6 +161,9 @@ export function SystemTablesCard({
   const [operationError, setOperationError] = useState("");
   const operationErrorRef = useRef<HTMLDivElement>(null);
   const [recreateInput, setRecreateInput] = useState("");
+  // 「最新の状態を確認」を押した取り直しの間だけ、そのボタンを回す。実行中の定期の取り直しや、
+  // 親の画面の invalidate（ADB の保存などは ["settings", "database"] の下を取り直す）では回さない（#819）。
+  const manualRefresh = useActionPending();
   const recreateConfirmed = isSystemTableRecreateConfirmationValid(recreateInput, phrase);
 
   // 想定外の形の payload は描画せず、取得失敗として扱う（兄弟カードごと消さない）。
@@ -283,7 +287,7 @@ export function SystemTablesCard({
   const refreshStatus = async () => {
     setRecreateInput("");
     setOperationError("");
-    const result = await statusQuery.refetch();
+    const result = await manualRefresh.track(() => statusQuery.refetch());
     if (!result.error) toast.success(text("settings.database.systemTables.refreshed"));
   };
 
@@ -333,7 +337,7 @@ export function SystemTablesCard({
             routes={databaseRoutes}
             messages={databaseMessages}
             onRetry={() => void refreshStatus()}
-            isRetrying={statusQuery.isFetching}
+            isRetrying={manualRefresh.pending}
           />
         ) : null}
 
@@ -515,7 +519,7 @@ export function SystemTablesCard({
                 size="md"
                 variant="secondary"
                 onClick={() => void refreshStatus()}
-                loading={statusQuery.isFetching}
+                loading={manualRefresh.pending}
                 disabled={mutationPending}
                 icon={RefreshCw}
               >

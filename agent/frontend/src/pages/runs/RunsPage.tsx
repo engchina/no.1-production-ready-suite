@@ -28,6 +28,7 @@ import {
   isSubmitEnter,
   SelectField,
   TextareaField,
+  useActionPending,
 } from "@engchina/production-ready-ui";
 import { agentApi, type ApprovalRequest, type RunState } from "@/lib/api";
 import { AgentSplitPane } from "@/components/EntityLayout";
@@ -90,6 +91,8 @@ export function RunsPage() {
     queryFn: agentApi.listRuns,
     refetchInterval: 5000,
   });
+  // 「表示を更新」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
+  const manualRefresh = useActionPending();
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   // 組み込み Runtime が実行できるか（モデル未設定なら Run は失敗するため、作成の前に知らせる。#754）。
   const runtimeStatus = useQuery({ queryKey: ["runtime-status"], queryFn: agentApi.getRuntimeStatus });
@@ -286,9 +289,17 @@ export function RunsPage() {
   const runActions = (run: RunState): EntityAction[] => {
     const { canCancel, canResume } = runCapabilities(run);
     const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
-    // 実行中の操作が対象の Run のものか（別の Run の行のボタンを回さない）。
-    const pendingRunId =
-      cancelRun.variables ?? resumeRun.variables ?? replayRun.variables ?? decideApproval.variables?.approval.run_id;
+    // 実行中の操作が対象の Run のものか（別の Run の行のボタンを回さない）。variables は完了後も前の値が
+    // 残るため、処理中の mutation の variables だけを読む（#819）。
+    const pendingRunId = cancelRun.isPending
+      ? cancelRun.variables
+      : resumeRun.isPending
+        ? resumeRun.variables
+        : replayRun.isPending
+          ? replayRun.variables
+          : decideApproval.isPending
+            ? decideApproval.variables?.approval.run_id
+            : undefined;
     const isPendingFor = (kind: RunCommandKind | "replay") =>
       pendingAction === kind && (wsCommand === kind ? run.id === selectedRun?.id : pendingRunId === run.id);
     const busy = pendingAction !== null;
@@ -357,8 +368,8 @@ export function RunsPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            loading: runs.isFetching && !runs.isLoading,
-            onClick: () => void runs.refetch(),
+            loading: manualRefresh.pending,
+            onClick: () => void manualRefresh.track(() => runs.refetch()),
           },
         ]}
       />

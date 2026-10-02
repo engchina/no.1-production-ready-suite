@@ -110,7 +110,8 @@ export function EvaluationPage() {
   const [jobCursorHistory, setJobCursorHistory] = useState<Array<string | null>>([]);
   const [resultCursor, setResultCursor] = useState<string | null>(null);
   const [resultCursorHistory, setResultCursorHistory] = useState<Array<string | null>>([]);
-  const [downloading, setDownloading] = useState(false);
+  // どのボタンが始めたダウンロードか。スピナーは押したボタンだけが出し、もう一方は無効にするだけ（#819）。
+  const [downloading, setDownloading] = useState<"template" | "results" | null>(null);
 
   const capabilitiesQuery = useQuery({
     queryKey: ["quality-evaluations", "capabilities", profileId],
@@ -355,7 +356,7 @@ export function EvaluationPage() {
   };
 
   const downloadFile = async (path: string, fallbackName: string, origin: "template" | "results") => {
-    setDownloading(true);
+    setDownloading(origin);
     setDownloadError(null);
     try {
       const response = await apiFetch(path);
@@ -370,7 +371,7 @@ export function EvaluationPage() {
         message: cause instanceof Error ? cause.message : t("qualityEvaluation.error.download"),
       });
     } finally {
-      setDownloading(false);
+      setDownloading(null);
     }
   };
 
@@ -474,7 +475,8 @@ export function EvaluationPage() {
                       type="button"
                       size="sm"
                       variant="secondary"
-                      disabled={downloading}
+                      loading={downloading === "template"}
+                      disabled={downloading === "results"}
                       onClick={() =>
                         void downloadFile(
                           "/api/nl2sql/quality-evaluations/template.xlsx",
@@ -710,7 +712,8 @@ export function EvaluationPage() {
                     type="button"
                     size="sm"
                     variant="secondary"
-                    loading={downloading}
+                    loading={downloading === "results"}
+                    disabled={downloading === "template"}
                     onClick={() =>
                       void downloadFile(
                         `/api/nl2sql/quality-evaluations/${encodeURIComponent(
@@ -725,7 +728,7 @@ export function EvaluationPage() {
                 ) : null
               }
             />
-            {downloading ? (
+            {downloading === "results" ? (
               // 結果の Excel は件数に比例して生成に数秒以上かかる。スピナーはボタンの loading が担う。
               <ProcessingIndicator
                 active

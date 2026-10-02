@@ -205,6 +205,9 @@ export function FeedbackManagementPage() {
   const reviewDirtyRef = useRef(false);
   // 初回の読込は mount 時の effect で始まるため、最初から読込中にしておく。
   const [loading, setLoading] = useState("load");
+  // どのボタンが始めた読込か。スピナーは押したボタンだけが出す（#819）。初回の読込は §3.7 のとおり
+  // ヘッダーの「表示を更新」が出す。業務プロファイルの切り替え・保存の後の取り直しは null（領域の表示だけ）。
+  const [refreshOrigin, setRefreshOrigin] = useState<"header" | "notice" | "entries" | null>("header");
   const [message, setMessage] = useState("");
   const [actionResult, setActionResult] = useState<ActionResult>(null);
   const showActionError = (origin: ActionResultOrigin, err: unknown, fallback: string) =>
@@ -311,11 +314,12 @@ export function FeedbackManagementPage() {
     });
   };
 
-  const load = async (announce = false) => {
+  const load = async (announce = false, origin: "header" | "notice" = "header") => {
     if (loading) return;
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading("load");
+    setRefreshOrigin(origin);
     setMessage("");
     setActionResult(null);
     await requestData(sequence, announce);
@@ -386,10 +390,15 @@ export function FeedbackManagementPage() {
     }
   };
 
-  const refreshSelectAiFeedback = async (name = profileName, announce = false) => {
+  const refreshSelectAiFeedback = async (
+    name = profileName,
+    announce = false,
+    origin: "entries" | null = null
+  ) => {
     const trimmed = name.trim();
     if (!trimmed) return;
     setLoading("feedback");
+    setRefreshOrigin(origin);
     setActionResult(null);
     try {
       setFeedback(await fetchSelectAiFeedback(trimmed));
@@ -717,8 +726,8 @@ export function FeedbackManagementPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            onClick: () => load(true),
-            loading: loading === "load",
+            onClick: () => load(true, "header"),
+            loading: loading === "load" && refreshOrigin === "header",
             disabled: Boolean(loading),
           },
         ]}
@@ -734,8 +743,9 @@ export function FeedbackManagementPage() {
                 type="button"
                 variant="secondary"
                 size="sm"
-                loading={loading === "load"}
-                onClick={() => void load()} icon={RefreshCw}>
+                loading={loading === "load" && refreshOrigin === "notice"}
+                disabled={Boolean(loading) && !(loading === "load" && refreshOrigin === "notice")}
+                onClick={() => void load(false, "notice")} icon={RefreshCw}>
                 <span>{t("feedbackManagement.action.reload")}</span>
               </Button>
             ) : undefined
@@ -808,9 +818,13 @@ export function FeedbackManagementPage() {
                     // 隣の業務プロファイルの選択（md）と同じ高さ（#613）。
                     size="md"
                     className="w-full whitespace-nowrap sm:w-auto"
-                    loading={loading === "feedback"}
-                    disabled={!profileName.trim()}
-                    onClick={() => void refreshSelectAiFeedback()} icon={RefreshCw}>
+                    // 押したときの取り直しだけ回す。業務プロファイルの切り替え・保存の後は下の領域の表示だけ（#819）。
+                    loading={loading === "feedback" && refreshOrigin === "entries"}
+                    disabled={
+                      !profileName.trim() ||
+                      (Boolean(loading) && !(loading === "feedback" && refreshOrigin === "entries"))
+                    }
+                    onClick={() => void refreshSelectAiFeedback(profileName, false, "entries")} icon={RefreshCw}>
                     <span>{t("feedbackManagement.action.refresh")}</span>
                   </Button>
                 </div>
@@ -862,7 +876,8 @@ export function FeedbackManagementPage() {
                   placement="workspace"
                   className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                   testId="feedback-management-entries-processing"
-                  activityIcon="none"
+                  // ボタンが回っていないとき（業務プロファイルの切り替えなど）は、この表示がスピナーを出す（#819）。
+                  activityIcon={refreshOrigin === "entries" ? "none" : "spinner"}
                 />
               ) : null}
 

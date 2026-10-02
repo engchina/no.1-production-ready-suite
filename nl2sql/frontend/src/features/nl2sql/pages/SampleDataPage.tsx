@@ -161,6 +161,10 @@ export function SampleDataPage() {
   const [schemaRefreshError, setSchemaRefreshError] = useState("");
   const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
+  // どのボタンが始めた読込か。スピナーは押したボタンだけが出す（#819）。初回の読込は §3.7 のとおりヘッダーの
+  // 「表示を更新」が出す。種類の切り替え・画面へ戻ったときの読込は null（作業領域の読込表示がスピナーを出す）。
+  const [loadOrigin, setLoadOrigin] = useState<"header" | "notice" | null>("header");
+  const [datasetSeen, setDatasetSeen] = useState(false);
   const [message, setMessage] = useState("");
   // 取込・削除の実行の失敗は実行のボタンの直下に出す（ページ先頭へ送らない。messaging.md §10.1、#724）。
   const [executeError, setExecuteError] = useState("");
@@ -223,9 +227,10 @@ export function SampleDataPage() {
       });
   };
 
-  const load = async (announce = false) => {
+  const load = async (announce = false, origin: "header" | "notice" | null = null) => {
     if (loading) return;
     setLoading("load");
+    setLoadOrigin(origin);
     setMessage("");
     await fetchSampleInfo(announce);
   };
@@ -234,6 +239,9 @@ export function SampleDataPage() {
   // 別の処理の実行中は読み込まない（load() と同じ）。
   const datasetChanged = useValuesChanged([dataset]);
   if (datasetChanged && !loading) {
+    // 最初のレンダーは初回の読込（ヘッダーが回る）。以降の種類の切り替えはボタンを回さない（#819）。
+    if (datasetSeen) setLoadOrigin(null);
+    else setDatasetSeen(true);
     setLoading("load");
     setMessage("");
     setDatasetLoadRequest((request) => request + 1);
@@ -379,12 +387,18 @@ export function SampleDataPage() {
   const actionDescription = isDeleteAction
     ? t("dataTools.sample.deleteHint", { name: datasetLabel })
     : t("dataTools.sample.importHint", { name: datasetLabel });
-  // 読込（load）のスピナーは PageHeader の「表示を更新」（すぐ上にあり、狭い画面でも見える）の 1 つだけにする。
-  // 案内の「再読み込み」は無効にするだけ（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
-  const pageNoticeActionLoading = schemaRefreshNeedsFull ? schemaRefreshing : false;
+  // 読込（load）のスピナーは押したボタン（PageHeader の「表示を更新」か案内の「再読み込み」）の 1 つだけにし、
+  // もう一方は無効にするだけ（同じ処理のスピナーは 1 つ。messaging §3.7、#416。押したボタンだけが回す。#819）。
+  // 種類の切り替えなどボタンを押していない読込は、どちらも回さず作業領域の読込表示がスピナーを出す。
+  const noticeLoadPressed = loading === "load" && loadOrigin === "notice";
+  const pageNoticeActionLoading = schemaRefreshNeedsFull ? schemaRefreshing : noticeLoadPressed;
   const pageNoticeActionDisabled = schemaRefreshNeedsFull
-    ? schemaRefreshing
-    : loading === "load" || schemaRefreshing;
+    ? schemaRefreshing || Boolean(loading)
+    : (Boolean(loading) && !noticeLoadPressed) || schemaRefreshing;
+  const pageNoticeShown = Boolean(message || visibleSchemaRefreshError || sampleInfo?.warnings.length);
+  // 押したボタンが見えていて回っているときだけ、作業領域の読込表示はスピナーを出さない（案内は読込で消えることがある）。
+  const loadButtonSpinning =
+    loading === "load" && (loadOrigin === "header" || (loadOrigin === "notice" && pageNoticeShown));
 
   return (
     <>
@@ -399,9 +413,9 @@ export function SampleDataPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            onClick: () => load(true),
-            loading: loading === "load",
-            disabled: Boolean(loading),
+            onClick: () => load(true, "header"),
+            loading: loading === "load" && loadOrigin === "header",
+            disabled: Boolean(loading) && !(loading === "load" && loadOrigin === "header"),
           },
         ]}
       />
@@ -422,11 +436,11 @@ export function SampleDataPage() {
               variant="secondary"
               size="sm"
               loading={pageNoticeActionLoading}
-              disabled={pageNoticeActionDisabled || Boolean(loading)}
+              disabled={pageNoticeActionDisabled}
               onClick={
                 schemaRefreshNeedsFull
                   ? () => void refreshSchema()
-                  : () => void load()
+                  : () => void load(false, "notice")
               } icon={RefreshCw}>
               <span>
                 {schemaRefreshNeedsFull
@@ -503,7 +517,7 @@ export function SampleDataPage() {
               operationKey="sample-data-refresh"
               placement="workspace"
               testId="sample-data-workspace-refresh-skeleton"
-              activityIcon="none"
+              activityIcon={loadButtonSpinning ? "none" : "spinner"}
             />
           ) : (
             <section className="grid min-w-0 content-start gap-4" aria-labelledby="sample-data-action-heading">

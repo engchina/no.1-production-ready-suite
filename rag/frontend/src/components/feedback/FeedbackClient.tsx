@@ -727,14 +727,19 @@ function FeedbackPromotionActions({ detail }: { detail: FeedbackDetail }) {
     });
   }
 
+  // 押した操作だけを回す。要求中に別のフィードバックを開いても、そのフィードバックの操作は回さず無効にする（#819）。
+  const promotePending = promote.isPending && promote.variables === detail.feedback_id;
+  const evaluationCasePending =
+    evaluationCase.isPending && evaluationCase.variables === detail.feedback_id;
+  const promotionBusy = promote.isPending || evaluationCase.isPending;
   const actions: EntityAction[] = [
     {
       id: "approved-faq",
       label: t("feedback.promote.faq"),
       icon: BookmarkPlus,
       visible: canPromoteFaq,
-      disabled: promote.isPending,
-      loading: promote.isPending,
+      disabled: promotionBusy && !promotePending,
+      loading: promotePending,
       testId: "feedback-promote-faq",
       onSelect: () => void handlePromote(),
     },
@@ -742,8 +747,8 @@ function FeedbackPromotionActions({ detail }: { detail: FeedbackDetail }) {
       id: "evaluation-case",
       label: t("feedback.promote.evaluation"),
       icon: ClipboardList,
-      disabled: evaluationCase.isPending,
-      loading: evaluationCase.isPending,
+      disabled: promotionBusy && !evaluationCasePending,
+      loading: evaluationCasePending,
       testId: "feedback-promote-evaluation",
       onSelect: handleEvaluationCase,
     },

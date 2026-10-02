@@ -89,8 +89,18 @@ export function OntologyBuildPage() {
     Boolean(selectedProfileId) && ontologyViewRequestedProfileId === selectedProfileId;
   const profileDetailQuery = useProfileDetail(workspaceRequested ? selectedProfileId : "");
   const ontologyViewQuery = useProfileOntologyView(selectedProfileId, workspaceRequested);
+  const workspaceFetching = profileDetailQuery.isFetching || ontologyViewQuery.isFetching;
+  // 「オントロジーを取得」を押して始めた取得か。スピナーは押したボタンだけが出し、定期・他の操作の後の
+  // 取り直しでは回さない（領域の読込表示がスピナーを出す。#819）。
+  // "initial": 初めての取得（query が有効になったレンダーから取得中になる）。取得が終わったレンダーで下ろす。
+  // "refetch": 取得済みの取り直し。refetch の Promise が終わったら下ろす（取得中の通知はレンダーより遅れて届くため）。
+  const [workspaceFetchPressed, setWorkspaceFetchPressed] = useState<"initial" | "refetch" | null>(null);
+  if (workspaceFetchPressed === "initial" && !(workspaceRequested && workspaceFetching)) {
+    setWorkspaceFetchPressed(null);
+  }
   const workspaceButtonLoading =
-    workspaceRequested && (profileDetailQuery.isFetching || ontologyViewQuery.isFetching);
+    workspaceFetchPressed === "refetch" ||
+    (workspaceFetchPressed === "initial" && workspaceRequested && workspaceFetching);
   const { refetch: refetchOntologyView } = ontologyViewQuery;
   const { refetch: refetchProfileDetail } = profileDetailQuery;
   const selectedProfile = profileDetailQuery.data?.profile ?? null;
@@ -109,7 +119,9 @@ export function OntologyBuildPage() {
   const ontologyGraph = publishedGraphMatches ? loadedOntologyGraph : null;
   const visibleOntologyWarnings = hasPublishedOntology ? ontologyWarnings : [];
   const refreshing = sharedSchemaRefresh.isRefreshing;
-
+  // どの「スキーマを更新」が始めた更新か（#819）。スピナーは始めたボタンだけが job の間出し、もう一方は
+  // 無効にするだけ。別の画面で始めた更新（null）はどちらも回さず、ページの処理中の表示がスピナーを出す。
+  const [schemaRefreshOrigin, setSchemaRefreshOrigin] = useState<"build" | "playground" | null>(null);
   useEffect(() => {
     if (!searchParams.has("tab")) return;
     const next = new URLSearchParams();
@@ -138,22 +150,30 @@ export function OntologyBuildPage() {
     await refetchOntologyView();
   }, [refetchOntologyView, selectedProfileId, workspaceRequested]);
 
-  const handleLoadOntologyView = useCallback(() => {
+  // fromFetchButton: 「オントロジーを取得」から呼んだか。取得の失敗の「再試行」から呼んだときは、
+  // ボタンを回さず領域の読込表示がスピナーを出す（#819）。
+  const loadOntologyView = useCallback((fromFetchButton: boolean) => {
     if (!selectedProfileId) return;
     setPageError("");
     if (workspaceRequested) {
+      if (fromFetchButton) setWorkspaceFetchPressed("refetch");
       setMarkdownRefreshVersion(version => version + 1);
-      void Promise.all([refetchProfileDetail(), refetchOntologyView()]);
+      void Promise.all([refetchProfileDetail(), refetchOntologyView()]).finally(() => {
+        if (fromFetchButton) setWorkspaceFetchPressed(current => (current === "refetch" ? null : current));
+      });
       return;
     }
+    if (fromFetchButton) setWorkspaceFetchPressed("initial");
     setOntologyViewRequestedProfileId(selectedProfileId);
   }, [refetchOntologyView, refetchProfileDetail, selectedProfileId, workspaceRequested]);
 
-  const refreshSchema = async () => {
+  const refreshSchema = async (origin: "build" | "playground") => {
     setPageError("");
+    setSchemaRefreshOrigin(origin);
     try {
       await sharedSchemaRefresh.start();
     } catch (err) {
+      setSchemaRefreshOrigin(null);
       setPageError(err instanceof Error ? err.message : t("profiles.error.load"));
     }
   };
@@ -165,6 +185,7 @@ export function OntologyBuildPage() {
     const reportKey = `${completedSchemaRefreshJob.job_id}:${completedSchemaRefreshJob.status}`;
     if (handledSchemaRefreshJob !== reportKey) {
       setHandledSchemaRefreshJob(reportKey);
+      setSchemaRefreshOrigin(null);
       if (completedSchemaRefreshJob.status === "error") {
         setPageError(sharedSchemaRefresh.error || t("profiles.schemaRefresh.error"));
       }
@@ -255,7 +276,10 @@ export function OntologyBuildPage() {
       <PageBody wide className="grid min-w-0 gap-4">
         {pageError ? <Banner severity="danger">{pageError}</Banner> : null}
         {refreshing ? (
-          <SchemaRefreshProcessing testId="ontology-build-schema-refresh-processing" />
+          <SchemaRefreshProcessing
+            testId="ontology-build-schema-refresh-processing"
+            activityIcon={schemaRefreshOrigin ? "none" : "spinner"}
+          />
         ) : null}
 
         <DbObjectManagementPanelShell
@@ -319,7 +343,7 @@ export function OntologyBuildPage() {
                     loading={workspaceButtonLoading}
                     disabled={!selectedProfileId || profileDetailQuery.isLoading}
                     data-testid="ontology-view-fetch"
-                    onClick={handleLoadOntologyView} icon={RefreshCw}>
+                    onClick={() => loadOntologyView(true)} icon={RefreshCw}>
                     <span>{t("ontologyBuild.workspace.fetchAction")}</span>
                   </Button>
                 </div>
@@ -394,8 +418,9 @@ export function OntologyBuildPage() {
               workspaceFetching={workspaceButtonLoading}
               onPublished={handleOntologyPublished}
               onMarkdownStateChange={handleMarkdownStateChange}
-              onRefreshSchema={refreshSchema}
-              refreshingSchema={refreshing}
+              onRefreshSchema={() => refreshSchema("build")}
+              refreshingSchema={refreshing && schemaRefreshOrigin === "build"}
+              schemaRefreshDisabled={refreshing}
             />
             <OntologyQueryPlayground
               key={selectedProfileId}
@@ -405,9 +430,10 @@ export function OntologyBuildPage() {
               loadState={ontologyLoadState}
               workspaceFetching={workspaceButtonLoading}
               loadErrorMessage={ontologyErrorMessage}
-              onRetryLoad={handleLoadOntologyView}
-              onRefreshSchema={refreshSchema}
-              refreshingSchema={refreshing}
+              onRetryLoad={() => loadOntologyView(false)}
+              onRefreshSchema={() => refreshSchema("playground")}
+              refreshingSchema={refreshing && schemaRefreshOrigin === "playground"}
+              schemaRefreshDisabled={refreshing}
             />
           </>
         ) : null}

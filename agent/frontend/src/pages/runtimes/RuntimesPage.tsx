@@ -13,6 +13,7 @@ import {
   PageHeader,
   StatusBadge,
   PageBody,
+  useActionPending,
 } from "@engchina/production-ready-ui";
 import { agentApi } from "@/lib/api";
 import { QueryState } from "@/components/ListViews";
@@ -28,6 +29,8 @@ import { useAuth } from "@/components/security/AuthProvider";
 export function RuntimesPage() {
   const { hasPermission } = useAuth();
   const status = useQuery({ queryKey: ["runtime-status"], queryFn: agentApi.getRuntimeStatus });
+  // 「表示を更新」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
+  const manualRefresh = useActionPending();
   const data = status.data;
   return (
     <>
@@ -42,8 +45,8 @@ export function RuntimesPage() {
             kind: "utility",
             label: t("runtime.refresh"),
             icon: RefreshCw,
-            loading: status.isFetching && !status.isLoading,
-            onClick: () => void status.refetch(),
+            loading: manualRefresh.pending,
+            onClick: () => void manualRefresh.track(() => status.refetch()),
           },
         ]}
       />

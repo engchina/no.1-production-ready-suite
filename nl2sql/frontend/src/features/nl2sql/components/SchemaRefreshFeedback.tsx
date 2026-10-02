@@ -5,7 +5,11 @@ import {
   schemaRefreshHeaderPresentation,
   schemaRefreshProcessingLabel,
 } from "../schemaRefreshPresentation";
-import { ProcessingIndicator, type ProcessingPlacement } from "@engchina/production-ready-ui";
+import {
+  ProcessingIndicator,
+  type ProcessingActivityIcon,
+  type ProcessingPlacement,
+} from "@engchina/production-ready-ui";
 
 export function SchemaRefreshHeaderStatus({ testId }: { testId?: string }) {
   const { error, isStarting, job } = useSchemaRefreshCoordinator();
@@ -28,10 +32,16 @@ export function SchemaRefreshProcessing({
   placement = "workspace",
   className = "rounded-md border border-border bg-surface-sunken px-3 py-2",
   testId,
+  activityIcon = "none",
 }: {
   placement?: ProcessingPlacement;
   className?: string;
   testId?: string;
+  /**
+   * 既定は "none"（更新を始めたボタンの loading がスピナーを出す）。更新を始めたボタンがこの画面で
+   * 回っていないとき（別の画面で始めた更新など）は "spinner" を渡す（#819）。
+   */
+  activityIcon?: ProcessingActivityIcon;
 }) {
   const { isRefreshing, job } = useSchemaRefreshCoordinator();
   if (!isRefreshing) return null;
@@ -44,7 +54,7 @@ export function SchemaRefreshProcessing({
       placement={placement}
       className={className}
       testId={testId}
-      activityIcon="none"
+      activityIcon={activityIcon}
       announceActivity={false}
       announceSlow={false}
     />

@@ -19,6 +19,7 @@ import {
   PageBody,
   TextareaField,
   TextField,
+  useActionPending,
 } from "@engchina/production-ready-ui";
 import {
   SettingsTestResultPanel,
@@ -56,6 +57,8 @@ export function RuntimeSnapshotSettingsPage() {
     queryKey: ["runtime", "snapshot"],
     queryFn: agentApi.exportRuntimeSnapshot,
   });
+  // 「表示を更新」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
+  const manualRefresh = useActionPending();
   // 検証（dry run）と置換は別の操作なので、pending も結果も分ける（messaging.md §3.7「1 つの状態を複数のボタンで共有しない」）。
   const validateStartedRef = useRef(0);
   const [validateElapsedMs, setValidateElapsedMs] = useState<number | undefined>(undefined);
@@ -185,8 +188,8 @@ export function RuntimeSnapshotSettingsPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            loading: snapshot.isFetching && !snapshot.isLoading,
-            onClick: () => void snapshot.refetch(),
+            loading: manualRefresh.pending,
+            onClick: () => void manualRefresh.track(() => snapshot.refetch()),
           },
         ]}
       />

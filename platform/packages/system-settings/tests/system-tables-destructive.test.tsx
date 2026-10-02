@@ -12,6 +12,7 @@ import {
   type SystemTablesConfirmRequest,
   type SystemTablesInitializeRequest,
   type SystemTablesStatusData,
+  SYSTEM_TABLES_QUERY_KEY,
 } from "../src";
 
 // #619: データを消す未適用の migration は、「作成・更新」の前に確認ダイアログで承認させ、
@@ -94,6 +95,7 @@ async function renderCard(props: Pick<SystemTablesCardProps, "api"> & Partial<Sy
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
+  return client;
 }
 
 function initializeButton(): HTMLButtonElement {
@@ -158,5 +160,43 @@ describe("データを消す未適用の migration（#619）", () => {
     expect(host.querySelector('[data-testid="system-tables-destructive-migrations"]')).not.toBeNull();
     await act(async () => initializeButton().click());
     expect(initialize.mock.calls[0][0]).toEqual({ recreate: false, confirmation: undefined });
+  });
+});
+
+describe("「状態を再取得」のスピナー（#819）", () => {
+  function refreshButton(): HTMLButtonElement {
+    const button = [...host.querySelectorAll("button")].find((item) => item.textContent?.trim() === "状態を再取得");
+    if (!button) throw new Error("状態を再取得のボタンがありません");
+    return button;
+  }
+
+  it("親の画面の invalidate による取り直しでは回さず、押したときだけ回す", async () => {
+    let calls = 0;
+    const api: SystemTablesApi = {
+      // 2 回目以降の取得は待ったままにする（取り直し中の表示を確かめる）。
+      getSystemTablesStatus: () => {
+        calls += 1;
+        return calls === 1 ? Promise.resolve(statusData({ pending_destructive_migrations: [] })) : new Promise<never>(() => undefined);
+      },
+      initializeSystemTables: () => new Promise<never>(() => undefined),
+    };
+    const client = await renderCard({ api });
+    expect(refreshButton().getAttribute("aria-busy")).toBeNull();
+
+    // ADB の保存などは ["settings", "database"] の下をまとめて取り直す。押していないので回さない。
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: SYSTEM_TABLES_QUERY_KEY });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(calls).toBe(2);
+    expect(refreshButton().getAttribute("aria-busy")).toBeNull();
+    expect(initializeButton().disabled).toBe(true);
+
+    await act(async () => {
+      refreshButton().click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(refreshButton().getAttribute("aria-busy")).toBe("true");
+    expect(initializeButton().getAttribute("aria-busy")).toBeNull();
   });
 });

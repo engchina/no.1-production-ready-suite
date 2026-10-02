@@ -1166,6 +1166,8 @@ export function ProfileManagementPage() {
   const [dbProfileRefreshError, setDbProfileRefreshError] = useState("");
   const [dbProfileRefreshNeedsFull, setDbProfileRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
+  // 「表示を更新」をどこで押したか（ヘッダー / 失敗の案内）。スピナーは押したボタンだけが出す（#819）。
+  const [loadOrigin, setLoadOrigin] = useState<"header" | "notice">("header");
   // message は初回ロード失敗の常設 Banner 専用(クエリ状態を監視する effect が所有する)。
   // 保存/削除の成否は toast、名前検証は nameError で扱う。
   const [message, setMessage] = useState("");
@@ -1319,8 +1321,9 @@ export function ProfileManagementPage() {
     setSearchParams({ profile: profile.id });
   };
 
-  const load = async (announce = false) => {
+  const load = async (announce = false, origin: "header" | "notice" = "header") => {
     setLoading("load");
+    setLoadOrigin(origin);
     setRefreshError("");
     const results = await Promise.allSettled([
       profilesQuery.refetch(),
@@ -1918,7 +1921,9 @@ export function ProfileManagementPage() {
         placement="workspace"
         className="rounded-md border border-border bg-surface-sunken px-3 py-2"
         testId="profile-management-workspace-processing"
-        activityIcon="none"
+        // 押したボタン（「表示を更新」・業務プロファイルの再取得）が回っている間はスピナーを出さない。定期・他の
+        // 操作の後の一覧の取り直しはボタンを回さないため、この表示がスピナーを出す（#819）。
+        activityIcon={dbProfileRefreshing || loading === "load" ? "none" : "spinner"}
       />
     ) : undefined;
   const showProfileWorkspaceProcessing =
@@ -1952,7 +1957,16 @@ export function ProfileManagementPage() {
         <span>{t("profiles.action.dbProfileRefresh")}</span>
       </Button>
     ) : (
-      <Button type="button" variant="secondary" size="sm" disabled={mutationBusy} onClick={() => void load()} icon={RefreshCw}>
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        // 押した再読込の間だけ回す。ヘッダーの「表示を更新」の再読込の間は無効にするだけ（#819）。
+        loading={loading === "load" && loadOrigin === "notice"}
+        disabled={mutationBusy || (loading === "load" && loadOrigin !== "notice")}
+        onClick={() => void load(false, "notice")}
+        icon={RefreshCw}
+      >
         <span>{t("profiles.action.refresh")}</span>
       </Button>
     );
@@ -1987,9 +2001,11 @@ export function ProfileManagementPage() {
                   kind: "utility",
                   label: t("common.action.refresh"),
                   icon: RefreshCw,
-                  onClick: () => load(true),
-                  loading: (loading === "load" || profileListRefreshing) && !profileListShowsSpinner,
-                  disabled: profileListShowsSpinner,
+                  onClick: () => load(true, "header"),
+                  // 押した再読込の間だけ回す。定期・他の操作の後の一覧の取り直し（profileListRefreshing）と、
+                  // 失敗の案内の「表示を更新」の再読込では回さない（#819）。
+                  loading: loading === "load" && loadOrigin === "header" && !profileListShowsSpinner,
+                  disabled: profileListShowsSpinner || (loading === "load" && loadOrigin !== "header"),
                 },
                 {
                   id: "schema-refresh",

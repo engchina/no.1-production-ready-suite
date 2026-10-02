@@ -220,6 +220,10 @@
   - **ボタン内の loading 表示は共通 `Button` に任せる。** `Loader2` や `Spinner` を子要素として描画しない。loading 中にラベルを「実行中…」などに差し替えない。
   - **同じ処理の動的なスピナーは 1 つだけ**にする。主ボタンが `loading` の場合、同じ処理を説明する `ProcessingIndicator` / `TimedLoadingState` は `activityIcon="none"` にして、静的なラベル・経過時間・slow hint だけを表示する。
   - 更新・同期などの busy 表示も `<Button loading>` を使い、ボタン内のアイコンに個別に `animate-spin` を付けない。
+  - **`loading` は押したボタンだけが持つ（#819）。** `loading` を true にするのは、**そのボタンが始めた処理**の間だけ（Material・Carbon・Apple HIG と同じ。スピナーは利用者が操作した部品に出す）。同じ処理の間に使えない他のボタンは `disabled` にするだけで、スピナーを出さない。
+    - 複数のボタンが 1 つの mutation・関数を共有するとき（「保存」と「情報を再取得」が同じ保存を呼ぶ、行ごとの同じ操作など）は、どのボタンが始めたかを `activeOperation` の state・`mutation.variables`（`isPending` のときだけ読む。完了後も前の値が残る）・行の id で区別する。共有の `busy` / `pending` を複数のボタンの `loading` に渡さない（`disabled` には渡してよい）。
+    - 「表示を更新」などの再取得のボタンは、**押した取り直しの間だけ** `loading` にする。query の `isFetching` をそのまま渡すと、定期の取り直し（`refetchInterval`）・他の操作の後の invalidate・絞り込みやページの切り替え（`keepPreviousData`）でも回る。押した取り直しを state で持つ（共通の `useActionPending` など）。初回の読込でどちらがスピナーを出すかは [messaging.md §3.7](./messaging.md) に従う。
+    - 例外: ボタンが表す状態そのものが進行中のとき（Autonomous Database の「起動」と `STARTING`、「停止」と `STOPPING`）は、押していなくても `loading` にしてよい。durable job の開始のボタンは送信の間だけ `loading`、job の間は `disabled`（[messaging.md §3.7](./messaging.md)）。
 - emoji をアイコンに使わない（`no-emoji-icons`）。
 
 ---
@@ -231,6 +235,7 @@
 - [ ] `cursor-pointer` / `focus-visible` のリング（共通 `Button` 済み）。フォーカスの表示は outline 1 つ。`focus:ring-*` / `focus-visible:ring-*` を足したり、`focus(-visible):outline-none` で消したりしない（[デザインシステム README §4「フォーカスの表示」](../design-system/README.md)、adherence の lint が検出する）。
 - [ ] disabled は `disabled` 属性 + disabled の意味の色（共通 `Button` 済み）。見た目だけの無効化をしない。
 - [ ] `loading` 中は `aria-disabled="true"` + `aria-busy="true"`（共通 `Button` 済み）。Enter → loading → 完了でフォーカスがボタンに残り、`loading` 中の Enter / Space / クリック / 入力欄の Enter で二重に送信しない。
+- [ ] `loading`（`aria-busy="true"`）になるのは押したボタンだけ。同じ処理で使えない他のボタンは `disabled` だけ（§8。#819）。
 - [ ] トグルは `aria-pressed`、色だけで状態を伝えない。
 - [ ] 破壊的操作は danger + 確認（`useConfirm`）、主アクションと分ける。確認の前の起点・取り消せる停止や拒否は赤塗りにしない（§3）。
 - [ ] その場で結果を待つ操作は、実行と停止が同じ要素の 1 つのボタン。実行 → 停止 → 待機でフォーカスが残り、実行中の入力欄の Enter とダブルクリックの 2 回目で停止しない（§3.1）。

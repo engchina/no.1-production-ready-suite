@@ -678,6 +678,13 @@ test("実行履歴は 0 件の絞り込みから条件を変えても、取り�
   await expect(page.getByTestId("history-list-skeleton")).toHaveCount(0);
   await expect(page.getByTestId("history-filter-grid")).toBeVisible();
   await expect(safety).toBeFocused();
+  // 絞り込みの変更による取り直しでは、ヘッダーの「表示を更新」を回さず（押したボタンだけが loading を持つ）、
+  // 一覧の処理中の表示がスピナーを出す（#819）。
+  await expect(page.locator('header button[aria-busy="true"]')).toHaveCount(0);
+  await expect(page.getByTestId("history-workspace-processing")).toHaveAttribute(
+    "data-processing-activity-icon",
+    "spinner"
+  );
 
   // 検索欄を空にしても（絞り込みが残る間も、すべて解除した直後も）、取り直しの間は空の案内に置き換えない。
   await search.fill("");

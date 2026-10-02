@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, RefreshCw } from "lucide-react";
 import {
   Banner,
@@ -27,6 +27,7 @@ import {
   isSubmitEnter,
   SelectField,
   TextField,
+  useActionPending,
 } from "@engchina/production-ready-ui";
 import { agentApi, type ToolCallAuditFilters, type ToolCallAuditRecord } from "@/lib/api";
 import { agentPaginationLabels, listScrollLabel, QueryState } from "@/components/ListViews";
@@ -89,6 +90,16 @@ function auditFiltersOf(form: AuditFilterForm): ToolCallAuditFilters {
   };
 }
 
+/** 一覧の 1 ページの取得条件（条件の欄の値とページ番号から作る）。 */
+function auditPageFilters(form: AuditFilterForm, page: number) {
+  const filters = auditFiltersOf(form);
+  return { ...filters, offset: offsetForPage(page, filters.limit ?? DEFAULT_PAGE_SIZE) };
+}
+
+function auditQueryKey(filters: ReturnType<typeof auditPageFilters>) {
+  return ["audit", "tool-calls", filters] as const;
+}
+
 /** 1 ページの件数の上限（backend の `limit` の上限）。 */
 const AUDIT_MAX_PAGE_SIZE = 1000;
 
@@ -111,16 +122,21 @@ export function AuditPage() {
   );
   // ページ番号も作業状態に残す。ページは API の offset / limit に直して取得する（#265）。
   const [auditPage, setAuditPage] = useWorkspaceState("audit", "page", 1, isAuditPage);
-  const appliedFilters = useMemo(() => {
-    const filters = auditFiltersOf(appliedForm);
-    return { ...filters, offset: offsetForPage(auditPage, filters.limit ?? DEFAULT_PAGE_SIZE) };
-  }, [appliedForm, auditPage]);
+  const appliedFilters = useMemo(
+    () => auditPageFilters(appliedForm, auditPage),
+    [appliedForm, auditPage]
+  );
   const audit = useQuery({
-    queryKey: ["audit", "tool-calls", appliedFilters],
+    queryKey: auditQueryKey(appliedFilters),
     queryFn: () => agentApi.listToolCallAudit(appliedFilters),
     // ページを送っている間は今のページを出したまま取り直す（表を Skeleton に戻さない）。
     placeholderData: keepPreviousData,
   });
+  // 「表示を更新」と「フィルター適用」は同じ一覧を取り直すが、スピナーは押した側だけが出す。ページの切り替え・
+  // フォーカスでの取り直しでは、どちらも回さない（#819）。
+  const auditQueryClient = useQueryClient();
+  const manualRefresh = useActionPending();
+  const manualApply = useActionPending();
   const auditPaging = audit.data
     ? offsetPagination({
         offset: audit.data.offset,
@@ -143,8 +159,19 @@ export function AuditPage() {
   }
 
   function applyFilters() {
+    if (manualApply.pending) return;
     setAppliedForm(filterForm);
     setAuditPage(1);
+    // 条件を変えずに押したときも取り直す。新しい条件の取得は useQuery の取得と重ならない（同じ key）。
+    const filters = auditPageFilters(filterForm, 1);
+    void manualApply
+      .track(() =>
+        auditQueryClient.fetchQuery({
+          queryKey: auditQueryKey(filters),
+          queryFn: () => agentApi.listToolCallAudit(filters),
+        })
+      )
+      .catch(() => undefined);
   }
 
   // CSV も Cookie セッションで取得し、401 / 403 は他の API と同じく扱う（#215）。
@@ -176,8 +203,9 @@ export function AuditPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            loading: audit.isFetching && !audit.isLoading,
-            onClick: () => void audit.refetch(),
+            loading: manualRefresh.pending,
+            disabled: manualApply.pending,
+            onClick: () => void manualRefresh.track(() => audit.refetch()),
           },
         ]}
       />
@@ -261,7 +289,12 @@ export function AuditPage() {
               />
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button onClick={applyFilters} loading={audit.isFetching} icon={RefreshCw}>
+              <Button
+                onClick={applyFilters}
+                loading={manualApply.pending}
+                disabled={manualRefresh.pending}
+                icon={RefreshCw}
+              >
                 {t("audit.apply")}
               </Button>
               <Button

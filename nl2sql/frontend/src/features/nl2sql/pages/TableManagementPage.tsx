@@ -15,6 +15,7 @@ import {
   ProcessingIndicator,
   ExecutionConfirmationField,
   TextField,
+  useActionPending,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -358,6 +359,8 @@ export function TableManagementPage() {
   const [importSchemaRefreshError, setImportSchemaRefreshError] = useState("");
   const [importSchemaRefreshNeedsFull, setImportSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
+  // ヘッダーの「表示を更新」を押した取り直しの間だけ true（検索・絞り込み・他の操作の後の取り直しでは回さない。#819）。
+  const manualRefresh = useActionPending();
   const [message, setMessage] = useState("");
   useResetExecutionConsent(() => { setDropConfirmation(""); setDropTargetName(""); setImportConfirmation(""); }, JSON.stringify([importTable, importBase64, importSheet]));
   // 報告済みの schema refresh の終端（`<job_id>:<status>`）。一覧用と取込用。
@@ -904,10 +907,11 @@ export function TableManagementPage() {
                   label: t("common.action.refresh"),
                   icon: RefreshCw,
                   // 初回の読込は一覧の Skeleton がスピナーを出す（このボタンは狭い画面では「その他の操作」の中で
-                  // 見えない）。ボタンは再読込（一覧があるとき）だけ回す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
-                  loading: Boolean(tableObjectsQuery.data) && tableObjectsQuery.isFetching && !tableObjectsQuery.isFetchingNextPage,
+                  // 見えない）。ボタンは押した再読込の間だけ回す（同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
+                  // 検索・絞り込み・他の操作の後の取り直しでは回さず、一覧の処理中の表示がスピナーを出す（#819）。
+                  loading: manualRefresh.pending,
                   disabled: !tableObjectsQuery.data && tableObjectsQuery.isFetching,
-                  onClick: () => void refreshObjects(true),
+                  onClick: () => void manualRefresh.track(() => refreshObjects(true)),
                 },
                 {
                   id: "refresh-table-schema",
@@ -970,7 +974,7 @@ export function TableManagementPage() {
                     placement="workspace"
                     className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                     testId="table-management-workspace-processing"
-                    activityIcon="none"
+                    activityIcon={manualRefresh.pending ? "none" : "spinner"}
                   />
                 ) : undefined
               }

@@ -16,6 +16,7 @@ import {
   TableSkeleton,
   Tabs,
   type DataTableColumn,
+  useActionPending,
 } from "@engchina/production-ready-ui";
 
 import { PagedDataTable, QueryState } from "@/components/ListViews";
@@ -56,6 +57,8 @@ export function UsagePage() {
     // 期間を変えている間は前の集計を出したまま取り直す（Skeleton に戻さない）。
     placeholderData: keepPreviousData,
   });
+  // 「表示を更新」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
+  const manualRefresh = useActionPending();
 
   return (
     <>
@@ -69,8 +72,8 @@ export function UsagePage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            loading: report.isFetching && !report.isLoading,
-            onClick: () => void report.refetch(),
+            loading: manualRefresh.pending,
+            onClick: () => void manualRefresh.track(() => report.refetch()),
           },
         ]}
       />
