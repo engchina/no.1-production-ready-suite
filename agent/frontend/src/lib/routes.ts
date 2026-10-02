@@ -18,6 +18,8 @@ export const APP_ROUTES = {
   skills: "/skills",
   plugins: "/plugins",
   pluginMarketplaces: "/plugins/marketplaces",
+  // 改善・運用（#776）。
+  evaluation: "/evaluation",
   settingsSystemTables: "/settings/system-tables",
   settingsOci: "/settings/oci",
   settingsUploadStorage: "/settings/upload-storage",

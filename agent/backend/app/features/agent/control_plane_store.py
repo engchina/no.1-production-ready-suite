@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 
 from app.oracle_connection import connect_platform_oracle
 from app.secret_box import SecretBoxError, open_secret, seal_secret
@@ -29,16 +29,29 @@ from app.settings import get_settings
 logger = logging.getLogger(__name__)
 
 JsonObject = dict[str, Any]
-ItemKind = Literal["skill", "plugin", "marketplace", "mcp_connection", "tool_policy", "api_key"]
+ItemKind = Literal[
+    "skill",
+    "plugin",
+    "marketplace",
+    "mcp_connection",
+    "tool_policy",
+    "evaluation_set",
+    "evaluation_job",
+    "api_key",
+]
 ITEM_KINDS: tuple[ItemKind, ...] = (
     "mcp_connection",
     "tool_policy",
     "skill",
     "marketplace",
     "plugin",
+    # 品質評価の評価セットと評価の job（#776）。
+    "evaluation_set",
+    "evaluation_job",
     # 外部のクライアント向けの API キー（#778。秘密は保存せず hash だけ）。
     "api_key",
 )
+_EVALUATION_KINDS = {"evaluation_set", "evaluation_job"}
 ITEMS_TABLE = "AGENT_CONTROL_PLANE_ITEMS"
 _SECRET_FIELDS = ("api_key", "oauth_client_secret")
 
@@ -322,6 +335,19 @@ def save_tool_policy(policy: Any) -> None:
     )
 
 
+def save_evaluation_item(kind: str, item_id: str, document: JsonObject) -> None:
+    """品質評価の評価セット・job を保存する（#776）。"""
+    if kind not in _EVALUATION_KINDS:
+        raise ValueError(kind)
+    _put(cast(ItemKind, kind), item_id, document)
+
+
+def delete_evaluation_item(kind: str, item_id: str) -> None:
+    if kind not in _EVALUATION_KINDS:
+        raise ValueError(kind)
+    _delete(cast(ItemKind, kind), item_id)
+
+
 def save_api_key(record: Any) -> None:
     _put("api_key", record.id, record.model_dump(mode="json"))
 
@@ -382,6 +408,14 @@ def _restore_item(kind: ItemKind, document: JsonObject) -> None:
             MarketplaceSource.model_validate(document.get("source") or {}),
             MarketplaceListing.model_validate(listing_raw) if listing_raw else None,
         )
+    elif kind == "evaluation_set":
+        from app.features.agent.evaluation import EvaluationSet, evaluation_set_store
+
+        evaluation_set_store.restore(EvaluationSet.model_validate(document))
+    elif kind == "evaluation_job":
+        from app.features.agent.evaluation import EvaluationJob, evaluation_store
+
+        evaluation_store.restore(EvaluationJob.model_validate(document))
     elif kind == "api_key":
         from app.features.agent.api_keys import ApiKeyRecord, api_key_registry
 

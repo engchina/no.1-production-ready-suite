@@ -18,6 +18,7 @@ export const MENU_PERMISSIONS = {
   approvals: "menu.approvals",
   audit: "menu.audit",
   pluginMarketplaces: "menu.plugin_marketplaces",
+  evaluation: "menu.evaluation",
   settingsSystemTables: "menu.settings_system_tables",
   settingsExternalMcp: "menu.settings_external_mcp",
   settingsApiKeys: "menu.settings_api_keys",
