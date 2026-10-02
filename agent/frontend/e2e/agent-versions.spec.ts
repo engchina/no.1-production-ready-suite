@@ -71,7 +71,7 @@ for (const viewport of [
     expect(mockApi.state.agents.find((agent) => agent.id === "agent-770")?.instructions).toBe("v2 の指示");
 
     // v1 に戻す（版の行メニュー → 確認）。
-    await page.getByRole("button", { name: "v1 の操作" }).click();
+    await page.getByRole("button", { name: "v1 の操作", exact: true }).click();
     await page.getByRole("menuitem", { name: "この版に戻す" }).click();
     await expect(dialog.getByText("v1 に戻しますか?")).toBeVisible();
     await dialog.getByRole("button", { name: "この版に戻す", exact: true }).click();

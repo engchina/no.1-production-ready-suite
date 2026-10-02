@@ -49,12 +49,24 @@ _STAGE_ENABLED_FIELDS: dict[str, str] = {
 }
 
 
+# 接続の確立を待つ上限(秒)。サービスが無いときに接続が拒否されず SYN が落ちる環境(firewall・WSL
+# など)でも、stage の timeout(既定 120 秒)まで待たずに in-process へ縮退する(#828)。
+PIPELINE_STAGE_CONNECT_TIMEOUT_SECONDS = 5.0
+
+
 class PipelineStageClient:
     """pipeline ステージを HTTP で実行する。"""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._timeout = float(getattr(settings, "rag_pipeline_stage_timeout_seconds", 120.0))
+
+    def _http_timeout(self) -> httpx.Timeout:
+        """応答の待ちは stage の timeout、接続の確立は短い上限(#828)。"""
+        return httpx.Timeout(
+            self._timeout,
+            connect=min(self._timeout, PIPELINE_STAGE_CONNECT_TIMEOUT_SECONDS),
+        )
 
     def _service_url(self, stage: str) -> str | None:
         field = _STAGE_URL_FIELDS.get(stage)
@@ -77,7 +89,7 @@ class PipelineStageClient:
         if url is None:
             return None
         try:
-            with httpx.Client(timeout=self._timeout) as client:
+            with httpx.Client(timeout=self._http_timeout()) as client:
                 response = client.request(
                     "POST",
                     f"{url}/run",

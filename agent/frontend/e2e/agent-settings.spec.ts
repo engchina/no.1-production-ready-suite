@@ -10,14 +10,16 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(hasNoOverflow).toBe(true);
 }
 
-/** 行の操作メニュー（RowActionMenu）を開いて項目を選ぶ。 */
+/**
+ * 行の操作メニュー（RowActionMenu）を開いて項目を選ぶ。
+ * 名前は完全一致で探す（#831）。部分一致だと、一覧へ戻る画面の切替（transition）が終わる前は、まだ出ている
+ * エディタの「その他の操作（crm の操作）」に当たり、開いたメニューが一覧への切替で消える。
+ */
 async function chooseRowAction(page: Page, name: string, item: string) {
-  // エディタから一覧へ戻った直後は、一覧の取り直し・スクロールの復元でメニューが閉じることがある（メニューは
-  // スクロールで閉じる）。閉じたら開き直す。
-  await expect(async () => {
-    await page.getByRole("button", { name: `${name} の操作` }).click();
-    await page.getByRole("menuitem", { name: item }).click({ timeout: 2_000 });
-  }).toPass({ timeout: 15_000 });
+  const trigger = page.getByRole("button", { name: `${name} の操作`, exact: true });
+  await trigger.click();
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  await page.getByRole("menuitem", { name: item }).click();
 }
 
 async function expectDocumentScrollLocked(page: Page) {
