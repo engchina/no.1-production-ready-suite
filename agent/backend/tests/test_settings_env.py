@@ -66,3 +66,23 @@ def test_model_settings_file_resolves_next_to_platform_env(
     )
     absolute = tmp_path / "data" / "model-settings.json"
     assert resolve_model_settings_file(str(absolute)) == absolute
+
+
+def test_platform_and_product_env_examples_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    """実際の雛形を読み込み、初回起動時の設定解析エラーを検出する。"""
+    import os
+
+    from app.settings import Settings
+
+    for key in tuple(os.environ):
+        if key.startswith(("PLATFORM_", "AGENT_")):
+            monkeypatch.delenv(key)
+    backend = Path(__file__).resolve().parents[1]
+    settings = Settings(
+        _env_file=(backend.parents[1] / "platform" / ".env.example", backend / ".env.example")
+    )
+
+    assert settings.cors_origins
+    assert all(origin.startswith("http://") for origin in settings.cors_origins)
+    assert settings.oci_enterprise_ai_models == []
+    assert settings.oracle_password in ("", None)

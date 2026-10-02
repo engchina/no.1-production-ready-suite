@@ -889,3 +889,23 @@ def test_get_settings_keeps_running_when_the_reloaded_env_is_invalid() -> None:
     os.utime(env_file, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
 
     assert app_config.get_settings().rag_answer_record_retention_days == 30
+
+
+def test_platform_and_product_env_examples_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    """実際の雛形を読み込み、初回起動時の設定解析エラーを検出する。"""
+    import os
+
+    from app.config import Settings
+
+    for key in tuple(os.environ):
+        if key.startswith(("PLATFORM_", "RAG_")):
+            monkeypatch.delenv(key)
+    backend = Path(__file__).resolve().parents[1]
+    settings = Settings(
+        _env_file=(backend.parents[1] / "platform" / ".env.example", backend / ".env.example")
+    )
+
+    assert settings.cors_origins
+    assert all(origin.startswith("http://") for origin in settings.cors_origins)
+    assert settings.oci_enterprise_ai_models == []
+    assert settings.oracle_password in ("", None)
