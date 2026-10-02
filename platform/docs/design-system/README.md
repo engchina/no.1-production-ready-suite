@@ -1015,6 +1015,8 @@ QA に事前共有してください。**63点あります。**
 | `SearchableSelectField` / `SearchableMultiSelect`（#578） | **新規 export。** `SearchableSelectField` / `SearchableSelectFieldProps` / `SearchableMultiSelect` / `SearchableMultiSelectProps` / `SearchableSelectOption` / `SearchableSelectRemote` / `SearchableSelectLabels` / `SearchableMultiSelectLabels` / `DEFAULT_SEARCHABLE_SELECT_LABELS` / `filterSearchableOptions`。既存の部品の props は変えない |
 | `SearchableSelectField`（#635） | `leadingIcon?: LucideIcon` を追加（任意。ボタンの先頭の 16px のアイコン、読み上げない）。渡さなければ見た目は変わらない |
 | `RunStopButton` / `FeedbackControls`（#805） | **新規 export。** `RunStopButton` / `RunStopButtonProps` / `runStopClickAction` / `isRepeatedActivationKey` / `RunStopAction`（RAG の `components/RunStopButton.tsx` と `lib/run-stop.ts` から移した）と、`FeedbackControls` / `FeedbackControlsProps` / `FeedbackControlsLabels` / `FeedbackControlsValue` / `FeedbackControlsSubmission` / `FeedbackRating` / `FeedbackReasonOption` / `isSameFeedback`。既存の部品の props は変えない |
+| `PageHeader`（#823） | `actions` の型を `PageHeaderAction[] \| ReactNode` から `PageHeaderAction[]` にした（JSX の `<Button>` 等を渡す後方互換を**削除**。3 製品は #800 で配列に移した）。空の配列は操作の群れを描かない |
+| `@engchina/production-ready-system-settings` の `RoleManagementPage`（#823） | `renderRoleDetailExtra` を**削除。** ロールの詳細の末尾は `permissionSummary`（機能権限の件数と権限管理への導線。#800）だけにする |
 | `PageHeader` / `ObjectActionBar` / `FormActionBar`（#582） | 「その他の操作」のボタンとメニューの読み上げ名が「その他の操作（<操作のグループの名前>）」になる（見た目の文言は同じ）。`getByRole("button", { name: "その他の操作", exact: true })` の E2E は一致しなくなるので、`exact` を外すか `data-testid`（`page-actions-more` / `<testId>-more` / `form-actions-more`）で探す。`PageHeader` の lg 未満は、メニューに入るのが 1 つだけなら畳まない |
 
 ---

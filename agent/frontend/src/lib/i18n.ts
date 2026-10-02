@@ -224,7 +224,7 @@ const agentJa = {
   "loading.evaluationSets": "評価セットを読み込んでいます",
   "loading.evaluationSet": "評価セットを読み込んでいます",
   "evaluation.sets.title": "評価セット",
-  "evaluation.sets.description": "業務 Agent ごとに、評価ケースの集まりを保存します。指示・Skill・MCP 接続を変えたら同じ評価セットで評価し、前回と比べます。",
+  "evaluation.sets.description": "業務 Agent ごとに、評価ケースの集まりを保存します。指示・スキル・MCP 接続を変えたら同じ評価セットで評価し、前回と比べます。",
   "evaluation.sets.label": "評価セットの一覧",
   "evaluation.sets.empty": "この業務 Agent の評価セットはまだありません",
   "evaluation.sets.emptyHint": "評価セットを作り、評価ケースを表で入力するか Excel から取り込みます。",

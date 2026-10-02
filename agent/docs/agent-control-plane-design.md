@@ -114,7 +114,7 @@ audit metadata、成果物の保存を再利用する（#757）。外部 Runtime
 
 RAG / NL2SQL / 外部 MCP は「MCP 接続」（`config.McpConnectionConfig`、API `/api/settings/mcp-connections`）で
 管理する。RAG / NL2SQL は組み込みの接続 `rag` / `nl2sql`（各製品の `POST /api/mcp`。認証はサービストークン、
-aud は製品名。削除できない）。外部の MCP は画面・`AGENT_EXTERNAL_MCP_SERVERS_JSON`・連携機能で追加し、
+aud は製品名。削除できない）。外部の MCP は画面・`AGENT_EXTERNAL_MCP_SERVERS_JSON`・プラグインで追加し、
 認証方式は なし / API キー / OAuth client credentials / サービストークン。ツールは呼び先の契約（RAG / NL2SQL は
 `platform/contracts/mcp/`）をそのまま使い、Agent は引数を作り変えない。
 

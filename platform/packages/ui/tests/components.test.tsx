@@ -228,9 +228,9 @@ describe("PageHeader", () => {
     ).toMatch(/role="group"[^>]*data-testid="doc-actions"/);
   });
 
-  it("従来の ReactNode の actions もそのまま描画する（後方互換）", () => {
-    const html = renderToStaticMarkup(<PageHeader title="文書" actions={<button type="button">旧</button>} />);
-    expect(html).toContain("旧</button>");
+  it("actions が空なら操作の群れを描かない", () => {
+    const html = renderToStaticMarkup(<PageHeader title="文書" actionsTestId="doc-actions" actions={[]} />);
+    expect(html).not.toContain('data-testid="doc-actions"');
   });
 });
 

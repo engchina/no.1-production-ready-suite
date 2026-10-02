@@ -12,8 +12,12 @@ async function expectNoHorizontalOverflow(page: Page) {
 
 /** 行の操作メニュー（RowActionMenu）を開いて項目を選ぶ。 */
 async function chooseRowAction(page: Page, name: string, item: string) {
-  await page.getByRole("button", { name: `${name} の操作` }).click();
-  await page.getByRole("menuitem", { name: item }).click();
+  // エディタから一覧へ戻った直後は、一覧の取り直し・スクロールの復元でメニューが閉じることがある（メニューは
+  // スクロールで閉じる）。閉じたら開き直す。
+  await expect(async () => {
+    await page.getByRole("button", { name: `${name} の操作` }).click();
+    await page.getByRole("menuitem", { name: item }).click({ timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
 }
 
 async function expectDocumentScrollLocked(page: Page) {
@@ -420,7 +424,10 @@ test.describe("Agent Runtime settings", () => {
     await expect(toolsResult).toContainText(/CRM Gateway から \d+ 個のツールを取得しました。/);
     await expect(toolsResult).toContainText(/所要時間: \d+ ms/);
     await expect(toolsResult.locator("details")).not.toHaveAttribute("open", "");
-    const tools = page.getByRole("table", { name: "ツール" });
+    // md 以上は表、md 未満（mobile-375 の project）はカードの一覧（#823）。
+    const tools = (page.viewportSize()?.width ?? 1280) >= 768
+      ? page.getByRole("table", { name: "ツール" })
+      : page.getByRole("region", { name: /^ツール/ });
     await expect(tools.getByText("lookup_customer", { exact: true })).toBeVisible();
     await expect(tools.getByText("crm__update_order")).toBeVisible();
     await expect(tools.getByText("読み取り専用")).toBeVisible();
