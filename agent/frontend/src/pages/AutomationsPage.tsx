@@ -772,7 +772,7 @@ function AutomationEditor({
                     getRowKey={(run) => run.run_id}
                     ariaLabel={t("automation.history.label")}
                     scrollAriaLabel={listScrollLabel(t("automation.history.label"))}
-                    tableClassName="w-full min-w-[560px]"
+                    tableClassName="w-full min-w-[40rem]"
                     stickyHeader
                   />
                 )}

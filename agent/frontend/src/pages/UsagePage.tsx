@@ -69,8 +69,8 @@ export function UsagePage() {
         actions={[
           {
             id: "refresh",
-            kind: "secondary",
-            label: t("usage.refresh"),
+            kind: "utility",
+            label: t("common.action.refresh"),
             icon: RefreshCw,
             loading: manualRefresh.pending,
             onClick: () => void manualRefresh.track(() => report.refetch()),
@@ -98,7 +98,7 @@ function UsageSkeleton() {
   return (
     <div className="space-y-4">
       <Card>
-        <CardContent className="grid grid-cols-2 gap-4 pt-4 sm:grid-cols-3 xl:grid-cols-6">
+        <CardContent className="grid grid-cols-2 gap-4 pt-4 xl:grid-cols-3">
           {Array.from({ length: 6 }, (_, index) => (
             <Skeleton key={index} className="h-16" />
           ))}
@@ -135,7 +135,8 @@ function UsageContent({
           <ReportSourceNote source={report.source} />
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-3 xl:grid-cols-6" data-testid="usage-summary">
+          {/* 統計のタイルはカードの幅を等分する（6 個なので 2 / 3 列。design-system README §4）。 */}
+          <div className="grid grid-cols-2 gap-x-5 gap-y-4 xl:grid-cols-3" data-testid="usage-summary">
             <Metric label={t("usage.metric.totalTokens")} value={totals.total_tokens} previous={previous.total_tokens} />
             <Metric label={t("usage.metric.inputTokens")} value={totals.input_tokens} previous={previous.input_tokens} />
             <Metric label={t("usage.metric.outputTokens")} value={totals.output_tokens} previous={previous.output_tokens} />
@@ -318,7 +319,7 @@ function BreakdownTable<T extends UsageTotals>({
       columns={columns}
       getRowKey={rowKey}
       ariaLabel={label}
-      tableClassName="w-full min-w-[760px]"
+      tableClassName="w-full min-w-[54rem]"
       resetKey={resetKey}
     />
   );

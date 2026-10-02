@@ -10,6 +10,19 @@ export async function openSidebarNav(page: Page) {
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   // 画面の描画を待ってから、どちらの形かを見る（シェルが出る前に判定しない）。
   await expect(trigger.or(sidebar).first()).toBeVisible();
+  // 画面は route ごとに読む（React.lazy。#818）。読み込みの間は React の transition で前の画面とナビ（開いたドロワー）が残り、
+  // 読み終えてから閉じる。ナビの現在地が URL に追いつくまで待ってから、ドロワーの開閉を見る。
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const current = document.querySelector('aside a[aria-current="page"]');
+        const href = current?.getAttribute("href");
+        const path = window.location.pathname;
+        // 子の画面（/plugins/marketplaces など）で親の項目が現在地になる場合も、追いついたとみなす。
+        return !href || href === path || path.startsWith(`${href}/`) || href.startsWith(`${path}/`);
+      })
+    )
+    .toBe(true);
   if ((await trigger.isVisible()) && (await trigger.getAttribute("aria-expanded")) !== "true") {
     await trigger.click();
     await expect(page.getByTestId("nav-drawer")).toHaveAttribute("data-state", "open");

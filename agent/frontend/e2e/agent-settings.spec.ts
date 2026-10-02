@@ -343,7 +343,7 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByRole("heading", { name: "ツール権限", level: 1 })).toBeVisible();
     await expect(page.getByLabel("未指定ツールの既定動作")).toBeVisible();
     // Control Plane のツールだけを並べる（RAG / NL2SQL / 外部 MCP のツールは MCP 接続から取得する。#757）。
-    await expect(page.getByText("agent_skill_list")).toBeVisible();
+    await expect(page.getByText("agent_skill_list", { exact: true })).toBeVisible();
     await expect(page.getByText("rag__rag_search")).toHaveCount(0);
     await expect(page.getByText("sandbox_command_run")).toHaveCount(0);
     // 権限レベルと side_effects は tool の分類（状態ではない）なので、StatusBadge のアイコンを付けない
@@ -351,7 +351,17 @@ test.describe("Agent Runtime settings", () => {
     await expect(badges.filter({ hasText: /^(読み取り|書き込み|機密|副作用あり)$/ }).first()).toBeVisible();
     await expect(badges.filter({ hasText: /^(読み取り|書き込み|機密|副作用あり)$/ }).locator("svg")).toHaveCount(0);
 
-    const firstPolicy = page.getByRole("combobox", { name: "ポリシー", exact: true }).first();
+    // ツールは検索・ページングの表（#818）。ポリシーの読み上げ名はツール名を含む。
+    const table = page.getByRole("table", { name: "ツール権限" });
+    await expect(table.getByRole("columnheader", { name: "ポリシー" })).toBeVisible();
+    const search = page.getByRole("searchbox", { name: "ツール名・説明で絞り込み" });
+    await search.fill("該当なし");
+    await expect(page.getByText("検索に一致するツールがありません")).toBeVisible();
+    await page.getByRole("button", { name: "検索語をクリア" }).last().click();
+    await search.fill("agent_skill_list");
+    await expect(page.getByTestId("tool-policy-toolbar")).toContainText("1 件");
+    await expectNoHorizontalOverflow(page);
+    const firstPolicy = page.getByRole("combobox", { name: "agent_skill_list のポリシー", exact: true });
     // 連続保存では前回のトーストが残るため、保存 API の成功を待ってから最新のトーストを確認する。
     const savePolicy = async () => {
       const saved = page.waitForResponse(

@@ -126,8 +126,8 @@ export function FeedbackPage() {
         actions={[
           {
             id: "refresh",
-            kind: "secondary",
-            label: t("feedback.refresh"),
+            kind: "utility",
+            label: t("common.action.refresh"),
             icon: RefreshCw,
             loading: manualRefresh.pending,
             onClick: () => void manualRefresh.track(() => report.refetch()),
@@ -430,7 +430,7 @@ function FeedbackTable({ items, onOpen }: { items: FeedbackItem[]; onOpen: (item
       rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
       ariaLabel={t("feedback.list.label")}
       scrollAriaLabel={listScrollLabel(t("feedback.list.label"))}
-      tableClassName="w-full min-w-[820px]"
+      tableClassName="w-full min-w-[59rem]"
       stickyHeader
       visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
     />

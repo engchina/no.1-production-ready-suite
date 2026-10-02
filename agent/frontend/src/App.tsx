@@ -1,47 +1,101 @@
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 
-import { AppShell, PageBody, PageHeader } from "@engchina/production-ready-ui";
+import { AppShell, PageBody, PageHeader, TimedLoadingState } from "@engchina/production-ready-ui";
 import { RequireAuth, useForbiddenRedirect } from "@engchina/production-ready-system-settings";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
-import { ChatPage } from "@/pages/ChatPage";
 import { ForbiddenPage, LoginPage, PasswordChangePage } from "@/components/security/AuthPages";
 import { agentIdentityKey, useAuth } from "@/components/security/AuthProvider";
 import { CapabilityGate } from "@/components/security/CapabilityGate";
-import { SecurityPermissionsPage } from "@/components/security/SecurityPermissionsPage";
-import { SecurityRolesPage } from "@/components/security/SecurityRolesPage";
-import { SecurityUsersPage } from "@/components/security/SecurityUsersPage";
-import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
-import { SystemTablesCard } from "@/components/settings/SystemTablesCard";
-import { AppearanceSettings } from "@/components/settings/AppearanceSettings";
-import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
-import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
-import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { canOpenRoute, defaultEntryRoute, firstAllowedRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
-import { FeedbackPage } from "@/pages/FeedbackPage";
-import { AutomationsPage } from "@/pages/AutomationsPage";
-import { EvaluationPage } from "@/pages/EvaluationPage";
-import { ApiKeysPage } from "@/pages/ApiKeysPage";
-import { UsagePage } from "@/pages/UsagePage";
 import { t, type I18nKey } from "@/lib/i18n";
-import {
-  AgentsPage,
-  ApprovalsPage,
-  AuditPage,
-  McpConnectionsPage,
-  PluginMarketplacesPage,
-  PluginsPage,
-  RuntimeSnapshotSettingsPage,
-  RuntimesPage,
-  RunsPage,
-  SkillsPage,
-  ToolPolicySettingsPage,
-  ToolsPage,
-} from "@/pages/AgentRuntimePages";
+
+// 画面は route ごとに分けて読む（NL2SQL と同じ。#818）。最初に開いた画面のコードだけを読み、残りは移動したときに読む。
+const ChatPage = lazy(() =>
+  import("@/pages/ChatPage").then((module) => ({ default: module.ChatPage }))
+);
+const SecurityPermissionsPage = lazy(() =>
+  import("@/components/security/SecurityPermissionsPage").then((module) => ({ default: module.SecurityPermissionsPage }))
+);
+const SecurityRolesPage = lazy(() =>
+  import("@/components/security/SecurityRolesPage").then((module) => ({ default: module.SecurityRolesPage }))
+);
+const SecurityUsersPage = lazy(() =>
+  import("@/components/security/SecurityUsersPage").then((module) => ({ default: module.SecurityUsersPage }))
+);
+const DatabaseSettingsClient = lazy(() =>
+  import("@/components/settings/DatabaseSettingsClient").then((module) => ({ default: module.DatabaseSettingsClient }))
+);
+const SystemTablesCard = lazy(() =>
+  import("@/components/settings/SystemTablesCard").then((module) => ({ default: module.SystemTablesCard }))
+);
+const AppearanceSettings = lazy(() =>
+  import("@/components/settings/AppearanceSettings").then((module) => ({ default: module.AppearanceSettings }))
+);
+const ModelSettingsClient = lazy(() =>
+  import("@/components/settings/ModelSettingsClient").then((module) => ({ default: module.ModelSettingsClient }))
+);
+const OciSettingsClient = lazy(() =>
+  import("@/components/settings/OciSettingsClient").then((module) => ({ default: module.OciSettingsClient }))
+);
+const UploadStorageSettingsClient = lazy(() =>
+  import("@/components/settings/UploadStorageSettingsClient").then((module) => ({ default: module.UploadStorageSettingsClient }))
+);
+const FeedbackPage = lazy(() =>
+  import("@/pages/FeedbackPage").then((module) => ({ default: module.FeedbackPage }))
+);
+const AutomationsPage = lazy(() =>
+  import("@/pages/AutomationsPage").then((module) => ({ default: module.AutomationsPage }))
+);
+const EvaluationPage = lazy(() =>
+  import("@/pages/EvaluationPage").then((module) => ({ default: module.EvaluationPage }))
+);
+const ApiKeysPage = lazy(() =>
+  import("@/pages/ApiKeysPage").then((module) => ({ default: module.ApiKeysPage }))
+);
+const UsagePage = lazy(() =>
+  import("@/pages/UsagePage").then((module) => ({ default: module.UsagePage }))
+);
+const AgentsPage = lazy(() =>
+  import("@/pages/agents/AgentsPage").then((module) => ({ default: module.AgentsPage }))
+);
+const ApprovalsPage = lazy(() =>
+  import("@/pages/approvals/ApprovalsPage").then((module) => ({ default: module.ApprovalsPage }))
+);
+const AuditPage = lazy(() =>
+  import("@/pages/audit/AuditPage").then((module) => ({ default: module.AuditPage }))
+);
+const McpConnectionsPage = lazy(() =>
+  import("@/pages/settings/McpConnectionsPage").then((module) => ({ default: module.McpConnectionsPage }))
+);
+const PluginMarketplacesPage = lazy(() =>
+  import("@/pages/marketplaces/PluginMarketplacesPage").then((module) => ({ default: module.PluginMarketplacesPage }))
+);
+const PluginsPage = lazy(() =>
+  import("@/pages/plugins/PluginsPage").then((module) => ({ default: module.PluginsPage }))
+);
+const RuntimeSnapshotSettingsPage = lazy(() =>
+  import("@/pages/settings/RuntimeSnapshotSettingsPage").then((module) => ({ default: module.RuntimeSnapshotSettingsPage }))
+);
+const RuntimesPage = lazy(() =>
+  import("@/pages/runtimes/RuntimesPage").then((module) => ({ default: module.RuntimesPage }))
+);
+const RunsPage = lazy(() =>
+  import("@/pages/runs/RunsPage").then((module) => ({ default: module.RunsPage }))
+);
+const SkillsPage = lazy(() =>
+  import("@/pages/skills/SkillsPage").then((module) => ({ default: module.SkillsPage }))
+);
+const ToolPolicySettingsPage = lazy(() =>
+  import("@/pages/settings/ToolPolicySettingsPage").then((module) => ({ default: module.ToolPolicySettingsPage }))
+);
+const ToolsPage = lazy(() =>
+  import("@/pages/tools/ToolsPage").then((module) => ({ default: module.ToolsPage }))
+);
 
 /** 認証画面とルートの保護が使う URL（共通の RequireAuth へ渡す。#215）。 */
 const AUTH_ROUTES = {
@@ -212,9 +266,25 @@ function AuthorizedLayout() {
     >
       {/* DB が使えるまで本文だけを案内に替える（サイドナビは残し、システム設定の 5 画面は開ける。#325）。 */}
       <DatabaseGate>
-        <Outlet />
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <Outlet />
+        </Suspense>
       </DatabaseGate>
     </AppShell>
+  );
+}
+
+/** 画面のコードを読んでいる間（UX 契約 messaging.md §3.7 の placement="page"。白い画面にしない）。 */
+function RouteLoadingFallback() {
+  return (
+    <PageBody wide>
+      <TimedLoadingState
+        label={t("app.route.loading")}
+        operationKey="route-loading"
+        placement="page"
+        testId="route-loading"
+      />
+    </PageBody>
   );
 }
 
