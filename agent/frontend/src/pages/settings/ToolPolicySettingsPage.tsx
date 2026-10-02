@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Save } from "lucide-react";
 import {
-  Banner,
   Card,
   CardContent,
   CardDescription,
@@ -12,17 +11,19 @@ import {
   FormActionBar,
   FormStatus,
   FormSkeleton,
-  ListSkeleton,
-  TimedLoadingState,
+  ListToolbar,
+  TableSkeleton,
   PageHeader,
   StatusBadge,
   toast,
   PageBody,
   SelectField,
+  type DataTableColumn,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
-import { agentApi } from "@/lib/api";
-import { QueryState } from "@/components/ListViews";
+import { agentApi, type ToolDefinition } from "@/lib/api";
+import { PagedDataTable, QueryState } from "@/components/ListViews";
+import { ListSearchField, listCountLabel, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { t } from "@/lib/i18n";
 import { useValuesChanged } from "@/lib/render-sync";
 import { permissionView } from "@/lib/status-labels";
@@ -108,6 +109,11 @@ export function ToolPolicySettingsPage() {
   const draft = toolPolicyDraftOf(defaultMode, toolPolicies);
   useSettingsLeaveGuard(baseline !== null && !sameDraft(draft, baseline), mutation.isPending);
 
+  // ツールは件数が増えるので、他の一覧と同じく検索・ページングの表にする（page-archetypes.md §0-4 / #535。#818）。
+  const [toolQuery, setToolQuery] = useListSearch("toolPolicy");
+  const allTools = useMemo(() => tools.data?.tools ?? [], [tools.data?.tools]);
+  const visibleTools = allTools.filter((tool) => matchesSearch(toolQuery, [tool.name, tool.description]));
+
   function setPolicy(toolName: string, policy: ToolPolicyChoice) {
     setToolPolicies((current) => ({ ...current, [toolName]: policy }));
   }
@@ -117,6 +123,47 @@ export function ToolPolicySettingsPage() {
     { value: "allow", label: t("settings.toolPolicy.allow") },
     { value: "ask", label: t("settings.toolPolicy.ask") },
     { value: "deny", label: t("settings.toolPolicy.deny") },
+  ];
+
+  const toolPolicyColumns: DataTableColumn<ToolDefinition>[] = [
+    {
+      key: "name",
+      header: t("common.tool"),
+      rowHeader: true,
+      render: (tool) => (
+        <div className="min-w-0 space-y-1">
+          <p className="break-all text-sm font-medium text-fg">{tool.name}</p>
+          <p className="break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">{tool.description}</p>
+        </div>
+      ),
+    },
+    {
+      key: "permission",
+      header: t("common.permission"),
+      render: (tool) => <StatusBadge {...permissionView(tool.permission_level)} icon={false} />,
+    },
+    {
+      key: "side_effects",
+      header: t("settings.toolPolicy.sideEffects"),
+      render: (tool) =>
+        tool.side_effects ? <StatusBadge variant="warning" label={t("status.sideEffects")} icon={false} /> : "-",
+    },
+    {
+      key: "policy",
+      header: t("settings.toolPolicy.policy"),
+      className: "w-56",
+      render: (tool) => (
+        <SelectField<ToolPolicyChoice>
+          id={`tool-policy-${tool.name}`}
+          label={t("settings.toolPolicy.policyFor", { name: tool.name })}
+          labelHidden
+          size="sm"
+          value={toolPolicies[tool.name] ?? "default"}
+          options={toolPolicyOptions}
+          onValueChange={(value) => setPolicy(tool.name, value)}
+        />
+      ),
+    },
   ];
 
   function save() {
@@ -148,7 +195,7 @@ export function ToolPolicySettingsPage() {
     <>
       <PageHeader wide title={t("nav.settingsToolPolicy")} subtitle={t("page.settings.toolPolicy.subtitle")} />
       <PageBody wide>
-<div className="space-y-5">
+        <div className="space-y-5">
         <QueryState query={settings} loadingLabel={t("loading.settings")} skeleton={<FormSkeleton fields={4} />}>
           <Card className="min-w-0">
             <CardHeader>
@@ -168,47 +215,42 @@ export function ToolPolicySettingsPage() {
                 onValueChange={setDefaultMode}
               />
 
-              {tools.error ? <Banner severity="danger">{tools.error.message}</Banner> : null}
-              {tools.isLoading ? (
-                <TimedLoadingState label={t("loading.tools")} testId="tool-policy-tools-loading">
-                  <ListSkeleton rows={4} rowClassName="h-20" />
-                </TimedLoadingState>
-              ) : (tools.data?.tools ?? []).length ? (
-                <div className="grid gap-3" role="list" aria-label={t("nav.settingsToolPolicy")}>
-                  {(tools.data?.tools ?? []).map((tool) => {
-                    const policy = toolPolicies[tool.name] ?? "default";
-                    return (
-                      <div
-                        key={tool.name}
-                        className="grid min-w-0 gap-3 rounded-md border border-border p-3 md:grid-cols-[minmax(0,1fr)_190px] md:items-center"
-                      >
-                        <div className="min-w-0 space-y-2">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="break-all text-sm font-medium text-fg">{tool.name}</p>
-                            <StatusBadge {...permissionView(tool.permission_level)} icon={false} />
-                            {tool.side_effects ? (
-                              <StatusBadge variant="warning" label={t("status.sideEffects")} icon={false} />
-                            ) : null}
-                          </div>
-                          <p className="break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">
-                            {tool.description}
-                          </p>
-                        </div>
-                        <SelectField<ToolPolicyChoice>
-                          id={`tool-policy-${tool.name}`}
-                          label={t("settings.toolPolicy.policy")}
-                          className="min-w-0"
-                          value={policy}
-                          options={toolPolicyOptions}
-                          onValueChange={(value) => setPolicy(tool.name, value)}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <EmptyState title={t("common.empty.title")} />
-              )}
+              <ListToolbar
+                search={
+                  <ListSearchField
+                    id="tool-policy-search"
+                    label={t("settings.toolPolicy.search")}
+                    value={toolQuery}
+                    onSearch={setToolQuery}
+                    count={visibleTools.length}
+                  />
+                }
+                summary={tools.data ? listCountLabel(visibleTools.length, allTools.length) : undefined}
+                testId="tool-policy-toolbar"
+              />
+              <QueryState
+                query={tools}
+                loadingLabel={t("loading.tools")}
+                skeleton={<TableSkeleton columns={4} />}
+                testId="tool-policy-tools-loading"
+              >
+                <PagedDataTable<ToolDefinition>
+                  rows={visibleTools}
+                  columns={toolPolicyColumns}
+                  getRowKey={(tool) => tool.name}
+                  rowProps={() => ({ className: "align-top" })}
+                  tableClassName="w-full min-w-[46rem]"
+                  ariaLabel={t("nav.settingsToolPolicy")}
+                  resetKey={toolQuery}
+                  empty={
+                    allTools.length ? (
+                      <NoMatchState title={t("tool.noMatch")} onClear={() => setToolQuery("")} />
+                    ) : (
+                      <EmptyState title={t("common.empty.title")} />
+                    )
+                  }
+                />
+              </QueryState>
 
               <SettingsSaveBar
                 section={t("nav.settingsToolPolicy")}
@@ -219,8 +261,8 @@ export function ToolPolicySettingsPage() {
             </CardContent>
           </Card>
         </QueryState>
-      </div>
-</PageBody>
+        </div>
+      </PageBody>
     </>
   );
 }

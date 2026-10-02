@@ -11,6 +11,7 @@ import {
   CardTitle,
   Disclosure,
   EmptyState,
+  FormStatus,
   ListSkeleton,
   ObjectActionBar,
   ProcessingIndicator,
@@ -275,7 +276,7 @@ function RunTimelineItem({ event }: { event: RunEvent }) {
           {view.icon}
         </div>
       </div>
-      <div className="min-w-0 rounded-md border border-border bg-surface-sunken p-3">
+      <div className="min-w-0 rounded-md border border-border p-3">
         <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
             <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">
@@ -288,23 +289,20 @@ function RunTimelineItem({ event }: { event: RunEvent }) {
           <StatusBadge variant={view.badgeVariant} label={view.badgeLabel} />
         </div>
 
-        <div className="mt-3 grid min-w-0 gap-2 text-xs sm:grid-cols-2">
+        {/* key / value は <dl> で並べ、枠の中にさらに地の付いた箱を重ねない（入れ子の枠は 1 段まで。#818）。 */}
+        <dl className="mt-3 grid min-w-0 gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
           <TimelineFact label={t("run.timeline.eventType")} value={event.type} />
           <TimelineFact label={t("run.timeline.time")} value={formatDate(event.created_at)} />
           {view.details.map((detail) => (
             <TimelineFact key={`${detail.label}:${detail.value}`} label={detail.label} value={detail.value} />
           ))}
-        </div>
+        </dl>
 
         {view.warnings.length ? (
-          <div className="mt-3 flex min-w-0 flex-wrap gap-2">
+          // 警告は手書きのチップにせず、アイコン付きの FormStatus で出す（色だけに頼らない）。
+          <div className="mt-3 min-w-0 space-y-1 break-words [overflow-wrap:anywhere]">
             {view.warnings.map((warning) => (
-              <span
-                key={warning}
-                className="max-w-full break-all rounded-md border border-warning-border bg-warning-subtle px-2 py-1 text-xs text-warning-fg"
-              >
-                {warning}
-              </span>
+              <FormStatus key={warning} tone="warning" message={warning} />
             ))}
           </div>
         ) : null}
@@ -317,10 +315,9 @@ function RunTimelineItem({ event }: { event: RunEvent }) {
 
 function TimelineFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-md bg-surface-hover px-2 py-1.5">
-      <span className="text-fg-muted">{label}</span>
-      <span className="mx-1 text-fg-muted">/</span>
-      <span className="break-words font-medium text-fg [overflow-wrap:anywhere]">{value}</span>
+    <div className="min-w-0">
+      <dt className="text-fg-muted">{label}</dt>
+      <dd className="break-words font-medium text-fg [overflow-wrap:anywhere]">{value}</dd>
     </div>
   );
 }
@@ -585,7 +582,7 @@ function AuditRecordItem({ audit, record }: { audit: RunAuditData; record: ToolA
         <StatusBadge {...stepStatusView(record.status)} />
       </div>
 
-      <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
+      <dl className="mt-3 grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
         <AuditFact label={t("run.auditPolicy")} value={record.policy_decision ? policyDecisionView(record.policy_decision).label : "-"} />
         <AuditFact label={t("common.permission")} value={record.permission_level ? permissionView(record.permission_level).label : "-"} />
         <AuditFact label={t("run.auditApproval")} value={record.approval_status ? approvalStatusView(record.approval_status).label : "-"} />
@@ -593,19 +590,15 @@ function AuditRecordItem({ audit, record }: { audit: RunAuditData; record: ToolA
           label={t("run.auditDuration")}
           value={record.duration_ms === null || record.duration_ms === undefined ? "-" : `${record.duration_ms}ms`}
         />
-      </div>
+      </dl>
 
       {record.trace_id ? (
         <p className="mt-3 break-all text-xs text-fg-muted">{`${t("run.auditTrace")}: ${record.trace_id}`}</p>
       ) : null}
       {record.artifact_ids.length ? (
-        <div className="mt-3 flex min-w-0 flex-wrap gap-2">
-          {record.artifact_ids.map((artifactId) => (
-            <span key={artifactId} className="max-w-full break-all rounded-md border border-border px-2 py-1 text-xs text-fg-muted">
-              {`${t("run.auditArtifacts")}: ${artifactId}`}
-            </span>
-          ))}
-        </div>
+        <p className="mt-3 break-all text-xs text-fg-muted">
+          {`${t("run.auditArtifacts")}: ${record.artifact_ids.join(", ")}`}
+        </p>
       ) : null}
       {record.guardrail_warnings.length ? (
         <Banner severity="warning" title={t("run.auditWarnings")}>
@@ -638,9 +631,9 @@ function AuditRecordItem({ audit, record }: { audit: RunAuditData; record: ToolA
 
 function AuditFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md bg-surface-sunken px-3 py-2">
-      <p className="text-xs text-fg-muted">{label}</p>
-      <p className="mt-1 break-words text-xs font-medium text-fg [overflow-wrap:anywhere]">{value}</p>
+    <div className="min-w-0">
+      <dt className="text-fg-muted">{label}</dt>
+      <dd className="break-words font-medium text-fg [overflow-wrap:anywhere]">{value}</dd>
     </div>
   );
 }
@@ -799,7 +792,7 @@ function StructuredResultTable({ result }: { result: StructuredResult }) {
             render: (row) => formatValue(row[column.name]),
           }))}
           getRowKey={(_, index) => index}
-          tableClassName="w-full min-w-[560px]"
+          tableClassName="w-full min-w-[40rem]"
           ariaLabel={t("run.structuredResult")}
           empty={t("common.empty.title")}
         />

@@ -440,7 +440,7 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
       columns={columns}
       getRowKey={(record) => `${record.run_id}:${record.step_id}`}
       rowProps={() => ({ className: `align-top ${INFORMATION_TABLE_ROW_CLASS}` })}
-      tableClassName="w-full min-w-[980px]"
+      tableClassName="w-full min-w-[70rem]"
       ariaLabel={t("audit.records")}
       scrollAriaLabel={listScrollLabel(t("audit.records"))}
       stickyHeader

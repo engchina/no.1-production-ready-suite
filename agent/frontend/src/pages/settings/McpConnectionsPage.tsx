@@ -319,7 +319,7 @@ function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
         columns={mcpToolColumns}
         getRowKey={(tool) => tool.name}
         rowProps={() => ({ className: `align-top ${INFORMATION_TABLE_ROW_CLASS}` })}
-        tableClassName="w-full min-w-[640px]"
+        tableClassName="w-full min-w-[46rem]"
         ariaLabel={t("settings.mcpConnections.tools")}
         scrollAriaLabel={listScrollLabel(t("settings.mcpConnections.tools"))}
         stickyHeader
@@ -362,7 +362,7 @@ function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
 
 function McpToolMeta({ label, value }: { label: string; value: string }) {
   return (
-    <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-2">
+    <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-2">
       <dt className="font-medium text-fg">{label}</dt>
       <dd className="min-w-0 break-words">{value}</dd>
     </div>
