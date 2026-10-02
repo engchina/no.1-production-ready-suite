@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, FileText, FlaskConical, Trash2 } from "lucide-react";
+import { Download, Eye, FlaskConical, Pencil, Plus, Trash2 } from "lucide-react";
 import {
   Banner,
+  Button,
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
   EmptyState,
-  FormActionBar,
-  FormStatus,
   ListSkeleton,
   MessageText,
   PageBody,
@@ -22,7 +21,6 @@ import {
   SideSheet,
   StatusBadge,
   TableSkeleton,
-  TextareaField,
   TimedLoadingState,
   toast,
   useConfirm,
@@ -31,81 +29,36 @@ import {
   type StatusVariant,
 } from "@engchina/production-ready-ui";
 
+import { MissingEditorTarget } from "@/components/EntityLayout";
 import { PagedDataTable } from "@/components/ListViews";
+import { EvaluationSetEditor, downloadBlob } from "@/components/evaluation/EvaluationSetEditor";
 import {
   agentApi,
-  type EvaluationCase,
   type EvaluationCaseResult,
   type EvaluationJob,
   type EvaluationJobItem,
   type EvaluationJobStatus,
+  type EvaluationSetItem,
   type EvaluationSummary,
 } from "@/lib/api";
+import { useEditorRoute } from "@/lib/editor-route";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-state";
 
-// 品質評価（#776）。決まった質問（評価ケース）で業務 Agent を実行し、期待する回答の要点と比べて
-// 合否を判定する。画面の形は RAG の品質評価・NL2SQL の SQL生成評価にそろえる
-// （評価の条件 → 実行状況 → 評価概要 → ケース別結果 → 最近の評価）。
+// 品質評価（#776）。業務 Agent ごとの評価セット（評価ケースの集まり）で業務 Agent を実行し、
+// 期待する回答の要点と比べて合否を判定する。評価の Run は承認が要るツールを実行しない（dry-run）で、
+// 期待するツールを指定したケースはツールの選択も判定する。画面の形は RAG の品質評価・NL2SQL の
+// SQL生成評価にそろえる（評価セット → 実行状況 → 評価概要（前回との比較）→ ケース別結果 → 最近の評価）。
 
-const MAX_CASES = 50;
 const POLL_INTERVAL_MS = 1500;
 const ACTIVE: ReadonlySet<EvaluationJobStatus> = new Set(["queued", "running"]);
 
-const SAMPLE_CASES: EvaluationCase[] = [
-  {
-    id: "expense-deadline",
-    question: "経費精算の締め日はいつですか？",
-    expected: "毎月 25 日が締め日で、過ぎた分は翌月の精算になること",
-  },
-  {
-    id: "sales-total",
-    question: "今月の売上の合計はいくらですか？",
-    expected: "今月の売上の合計金額を、単位（円）付きの数値で答えていること",
-  },
-];
-
-type ParsedCases = { cases: EvaluationCase[]; error: null } | { cases: null; error: string };
-
-/** 評価ケースの JSON を読む（backend も同じ規則で検証する）。 */
-export function parseEvaluationCases(text: string): ParsedCases {
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return { cases: null, error: t("evaluation.form.invalidJson") };
-  }
-  if (!Array.isArray(value)) return { cases: null, error: t("evaluation.form.notArray") };
-  if (value.length === 0) return { cases: null, error: t("evaluation.form.empty") };
-  if (value.length > MAX_CASES) return { cases: null, error: t("evaluation.form.tooMany") };
-  const cases: EvaluationCase[] = [];
-  for (const [index, item] of value.entries()) {
-    const record = item as Record<string, unknown> | null;
-    const question = record?.question;
-    const expected = record?.expected;
-    if (typeof question !== "string" || !question.trim() || typeof expected !== "string" || !expected.trim()) {
-      return { cases: null, error: t("evaluation.form.caseInvalid", { index: index + 1 }) };
-    }
-    const id = typeof record?.id === "string" ? record.id : undefined;
-    cases.push({ ...(id ? { id } : {}), question, expected });
-  }
-  return { cases, error: null };
-}
-
 export function EvaluationPage() {
   const queryClient = useQueryClient();
-  const confirm = useConfirm();
+  const editor = useEditorRoute();
   const [agentId, setAgentId] = useWorkspaceState("evaluation", "agentId", "", isString);
-  const [casesJson, setCasesJson] = useWorkspaceState("evaluation", "casesJson", "", isString);
-  const [jobId, setJobId] = useWorkspaceState<"evaluation", string | null>(
-    "evaluation",
-    "jobId",
-    null,
-    isNullableString
-  );
-  const [touched, setTouched] = useState(false);
-  const [selectedCase, setSelectedCase] = useState<EvaluationCaseResult | null>(null);
+  const [jobId, setJobId] = useWorkspaceState<"evaluation", string | null>("evaluation", "jobId", null, isNullableString);
 
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const usableAgents = useMemo(
@@ -114,6 +67,119 @@ export function EvaluationPage() {
   );
   const selectedAgentId = usableAgents.some((agent) => agent.id === agentId) ? agentId : (usableAgents[0]?.id ?? "");
 
+  const start = useMutation({
+    mutationFn: (setId: string) => agentApi.createEvaluation({ set_id: setId }),
+    onSuccess: (created) => {
+      setJobId(created.id);
+      queryClient.setQueryData(["evaluation", created.id], created);
+      void queryClient.invalidateQueries({ queryKey: ["evaluations"] });
+      void queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
+      toast.success(t("evaluation.form.started"));
+      editor.backToList();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const target = editor.target;
+  const editingId = target.kind === "edit" ? target.id : null;
+  const editingSet = useQuery({
+    queryKey: ["evaluation-set", editingId],
+    queryFn: () => agentApi.getEvaluationSet(editingId ?? ""),
+    enabled: Boolean(editingId),
+    retry: false,
+  });
+
+  if (target.kind === "new") {
+    return (
+      <EvaluationSetEditor
+        agents={usableAgents}
+        defaultAgentId={selectedAgentId}
+        onBack={() => editor.backToList()}
+        onSaved={(saved) => {
+          setAgentId(saved.agent_id);
+          editor.openItem(saved.id, { replace: true });
+        }}
+        onStart={(set) => start.mutate(set.id)}
+        onDeleted={() => editor.backToList({ replace: true })}
+        starting={start.isPending}
+      />
+    );
+  }
+  if (target.kind === "edit") {
+    if (editingSet.isLoading) {
+      return (
+        <PageBody wide>
+          <TimedLoadingState label={t("loading.evaluationSet")} testId="evaluation-set-loading">
+            <ListSkeleton rows={4} />
+          </TimedLoadingState>
+        </PageBody>
+      );
+    }
+    if (!editingSet.data) {
+      return <MissingEditorTarget id={target.id} onBack={() => editor.backToList({ replace: true })} />;
+    }
+    return (
+      <EvaluationSetEditor
+        key={editingSet.data.id}
+        evaluationSet={editingSet.data}
+        agents={usableAgents}
+        defaultAgentId={selectedAgentId}
+        onBack={() => editor.backToList()}
+        onSaved={(saved) => queryClient.setQueryData(["evaluation-set", saved.id], saved)}
+        onStart={(set) => start.mutate(set.id)}
+        onDeleted={() => editor.backToList({ replace: true })}
+        starting={start.isPending}
+      />
+    );
+  }
+  return (
+    <EvaluationOverview
+      agentId={selectedAgentId}
+      onAgentChange={setAgentId}
+      agentOptions={usableAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
+      jobId={jobId}
+      onJobChange={setJobId}
+      onCreate={() => editor.openNew()}
+      onOpen={(set) => editor.openItem(set.id)}
+      itemHref={editor.itemHref}
+      onStart={(set) => start.mutate(set.id)}
+      starting={start.isPending}
+    />
+  );
+}
+
+function EvaluationOverview({
+  agentId,
+  onAgentChange,
+  agentOptions,
+  jobId,
+  onJobChange,
+  onCreate,
+  onOpen,
+  itemHref,
+  onStart,
+  starting,
+}: {
+  agentId: string;
+  onAgentChange: (agentId: string) => void;
+  agentOptions: { value: string; label: string }[];
+  jobId: string | null;
+  onJobChange: (jobId: string | null) => void;
+  onCreate: () => void;
+  onOpen: (set: EvaluationSetItem) => void;
+  itemHref: (id: string) => string;
+  onStart: (set: EvaluationSetItem) => void;
+  starting: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const [selectedCase, setSelectedCase] = useState<EvaluationCaseResult | null>(null);
+
+  const sets = useQuery({
+    queryKey: ["evaluation-sets", agentId],
+    queryFn: () => agentApi.listEvaluationSets(agentId),
+    enabled: Boolean(agentId),
+  });
   const jobs = useQuery({ queryKey: ["evaluations"], queryFn: agentApi.listEvaluations });
   // 表示する評価は、選んだ評価か、無ければ最新の評価。
   const shownJobId = jobId ?? jobs.data?.jobs[0]?.id ?? null;
@@ -125,30 +191,19 @@ export function EvaluationPage() {
     placeholderData: keepPreviousData,
     refetchInterval: (query) => (query.state.data && ACTIVE.has(query.state.data.status) ? POLL_INTERVAL_MS : false),
   });
-  // 表示していた評価が消えていたら、最新の評価に戻す。
   useEffect(() => {
-    if (jobId && job.isError) setJobId(null);
-  }, [jobId, job.isError, setJobId]);
-  // 実行中の評価が終わったら、最近の評価の一覧を取り直す。
+    if (jobId && job.isError) onJobChange(null);
+  }, [jobId, job.isError, onJobChange]);
+  // 実行中の評価が終わったら、評価セットと最近の評価を取り直す。
   const shownStatus = job.data?.status;
   useEffect(() => {
     if (shownStatus && !ACTIVE.has(shownStatus)) {
       void queryClient.invalidateQueries({ queryKey: ["evaluations"] });
+      void queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
     }
   }, [shownStatus, queryClient]);
-
-  const parsed = useMemo(() => parseEvaluationCases(casesJson), [casesJson]);
   const running = (jobs.data?.jobs ?? []).some((item) => ACTIVE.has(item.status)) || (job.data ? ACTIVE.has(job.data.status) : false);
 
-  const start = useMutation({
-    mutationFn: (cases: EvaluationCase[]) => agentApi.createEvaluation({ agent_id: selectedAgentId, cases }),
-    onSuccess: (created) => {
-      setJobId(created.id);
-      queryClient.setQueryData(["evaluation", created.id], created);
-      void queryClient.invalidateQueries({ queryKey: ["evaluations"] });
-      toast.success(t("evaluation.form.started"));
-    },
-  });
   const cancel = useMutation({
     mutationFn: (id: string) => agentApi.cancelEvaluation(id),
     onSuccess: (cancelled) => {
@@ -158,98 +213,115 @@ export function EvaluationPage() {
     },
     onError: (error) => toast.error(error.message),
   });
-  const remove = useMutation({
+  const removeJob = useMutation({
     mutationFn: (id: string) => agentApi.deleteEvaluation(id),
     onSuccess: (_data, id) => {
-      if (jobId === id) setJobId(null);
+      if (jobId === id) onJobChange(null);
       queryClient.removeQueries({ queryKey: ["evaluation", id] });
       void queryClient.invalidateQueries({ queryKey: ["evaluations"] });
       toast.success(t("evaluation.jobs.deleted"));
     },
     onError: (error) => toast.error(error.message),
   });
+  const removeSet = useMutation({
+    mutationFn: (id: string) => agentApi.deleteEvaluationSet(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
+      toast.success(t("evaluation.set.deleted"));
+    },
+    onError: (error) => toast.error(error.message),
+  });
 
-  function submit() {
-    setTouched(true);
-    if (parsed.cases && selectedAgentId) start.mutate(parsed.cases);
-  }
-
-  async function confirmDelete(item: EvaluationJobItem) {
+  async function confirmDeleteJob(item: EvaluationJobItem) {
     const ok = await confirm({
       title: t("evaluation.jobs.deleteTitle"),
       description: t("evaluation.jobs.deleteDescription", {
-        agent: item.agent_name || item.agent_id,
+        agent: item.set_name || item.agent_name || item.agent_id,
         started: formatDateTime(item.created_at),
       }),
       confirmLabel: t("evaluation.jobs.delete"),
       tone: "danger",
     });
-    if (ok) remove.mutate(item.id);
+    if (ok) removeJob.mutate(item.id);
   }
 
-  const casesError = touched || casesJson.trim() ? parsed.error : null;
+  async function confirmDeleteSet(item: EvaluationSetItem) {
+    const ok = await confirm({
+      title: t("evaluation.set.deleteTitle", { name: item.name }),
+      description: t("evaluation.set.deleteDescription"),
+      confirmLabel: t("evaluation.set.delete"),
+      tone: "danger",
+    });
+    if (ok) removeSet.mutate(item.id);
+  }
+
+  async function exportSet(item: EvaluationSetItem) {
+    try {
+      downloadBlob(await agentApi.downloadEvaluationSetXlsx(item.id), `${item.name}.xlsx`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return (
     <>
-      <PageHeader wide title={t("nav.evaluation")} subtitle={t("page.evaluation.subtitle")} />
+      <PageHeader
+        wide
+        title={t("nav.evaluation")}
+        subtitle={t("page.evaluation.subtitle")}
+        actions={[
+          {
+            id: "create",
+            kind: "primary",
+            label: t("evaluation.set.create"),
+            icon: Plus,
+            disabled: !agentId,
+            onClick: onCreate,
+          },
+        ]}
+      />
       <PageBody wide>
-        <Card>
+        <Card className="min-w-0">
           <CardHeader>
-            <CardTitle>{t("evaluation.form.title")}</CardTitle>
-            <CardDescription>{t("evaluation.form.description")}</CardDescription>
+            <CardTitle>{t("evaluation.sets.title")}</CardTitle>
+            <CardDescription>{t("evaluation.sets.description")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <SelectField<string>
               id="evaluation-agent"
               label={t("evaluation.form.agent")}
               width="md"
-              value={selectedAgentId}
-              options={usableAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
-              onValueChange={setAgentId}
-              disabled={usableAgents.length === 0}
+              value={agentId}
+              options={agentOptions}
+              onValueChange={onAgentChange}
+              disabled={agentOptions.length === 0}
             />
-            <TextareaField
-              id="evaluation-cases"
-              label={t("evaluation.form.cases")}
-              value={casesJson}
-              rows={10}
-              textareaClassName="font-mono"
-              helper={
-                parsed.cases
-                  ? `${t("evaluation.form.casesHelper")} ${t("evaluation.form.caseCount", { count: parsed.cases.length })}`
-                  : t("evaluation.form.casesHelper")
-              }
-              error={casesError ?? undefined}
-              onChange={(event) => setCasesJson(event.target.value)}
-            />
-            <FormActionBar
-              ariaLabel={t("evaluation.form.title")}
-              primaryActions={[
-                {
-                  id: "start",
-                  label: t("evaluation.form.start"),
-                  icon: FlaskConical,
-                  loading: start.isPending,
-                  disabled: !selectedAgentId || running,
-                  onClick: submit,
-                  testId: "evaluation-start",
-                },
-              ]}
-              secondaryActions={[
-                {
-                  id: "sample",
-                  label: t("evaluation.form.loadSample"),
-                  icon: FileText,
-                  onClick: () => setCasesJson(JSON.stringify(SAMPLE_CASES, null, 2)),
-                },
-              ]}
-              status={
-                start.error ? (
-                  <FormStatus tone="danger" message={start.error.message} />
-                ) : running && !start.isPending ? (
-                  <FormStatus tone="info" message={t("evaluation.form.busy")} />
-                ) : null
-              }
-            />
+            {sets.isLoading ? (
+              <TimedLoadingState label={t("loading.evaluationSets")} testId="evaluation-sets-loading">
+                <TableSkeleton columns={4} />
+              </TimedLoadingState>
+            ) : (sets.data?.sets ?? []).length === 0 ? (
+              <EmptyState
+                title={t("evaluation.sets.empty")}
+                hint={t("evaluation.sets.emptyHint")}
+                action={
+                  <Button variant="secondary" icon={Plus} onClick={onCreate} disabled={!agentId}>
+                    {t("evaluation.set.create")}
+                  </Button>
+                }
+              />
+            ) : (
+              <SetsTable
+                sets={sets.data?.sets ?? []}
+                running={running || starting}
+                itemHref={itemHref}
+                onOpen={onOpen}
+                onStart={onStart}
+                onExport={(item) => void exportSet(item)}
+                onDelete={(item) => void confirmDeleteSet(item)}
+              />
+            )}
+            {running ? <p className="text-xs text-fg-muted">{t("evaluation.form.busy")}</p> : null}
           </CardContent>
         </Card>
 
@@ -282,8 +354,8 @@ export function EvaluationPage() {
               <JobsTable
                 jobs={jobs.data?.jobs ?? []}
                 shownJobId={shownJobId}
-                onShow={(item) => setJobId(item.id)}
-                onDelete={(item) => void confirmDelete(item)}
+                onShow={(item) => onJobChange(item.id)}
+                onDelete={(item) => void confirmDeleteJob(item)}
               />
             )}
           </CardContent>
@@ -301,6 +373,107 @@ export function EvaluationPage() {
         </SideSheet>
       </PageBody>
     </>
+  );
+}
+
+function SetsTable({
+  sets,
+  running,
+  itemHref,
+  onOpen,
+  onStart,
+  onExport,
+  onDelete,
+}: {
+  sets: EvaluationSetItem[];
+  running: boolean;
+  itemHref: (id: string) => string;
+  onOpen: (item: EvaluationSetItem) => void;
+  onStart: (item: EvaluationSetItem) => void;
+  onExport: (item: EvaluationSetItem) => void;
+  onDelete: (item: EvaluationSetItem) => void;
+}) {
+  const columns: DataTableColumn<EvaluationSetItem>[] = [
+    {
+      key: "name",
+      header: t("evaluation.set.name"),
+      rowHeader: true,
+      className: "min-w-56",
+      render: (item) => (
+        <RowTitleButton
+          title={item.name}
+          subtitle={item.description || undefined}
+          href={itemHref(item.id)}
+          onClick={() => onOpen(item)}
+        />
+      ),
+    },
+    {
+      key: "cases",
+      header: t("evaluation.jobs.cases"),
+      align: "right",
+      className: "tabular-nums text-fg",
+      render: (item) => formatNumber(item.case_count),
+    },
+    {
+      key: "last",
+      header: t("evaluation.sets.last"),
+      render: (item) =>
+        item.last_job_status ? (
+          <span className="inline-flex flex-wrap items-center gap-2">
+            <StatusBadge
+              variant={jobStatusVariant(item.last_job_status)}
+              label={t(`evaluation.jobStatus.${item.last_job_status}` as I18nKey)}
+            />
+            <span className="text-xs tabular-nums text-fg">{formatRate(item.last_pass_rate)}</span>
+          </span>
+        ) : (
+          <span className="text-xs text-fg-muted">{t("evaluation.sets.never")}</span>
+        ),
+    },
+    {
+      key: "updated",
+      header: t("common.updatedAt"),
+      className: "whitespace-nowrap text-xs tabular-nums text-fg-muted",
+      render: (item) => formatDateTime(item.updated_at),
+    },
+    {
+      key: "actions",
+      header: t("settings.mcpServers.actions"),
+      align: "right",
+      render: (item) => {
+        const actions: EntityAction[] = [
+          {
+            id: "start",
+            label: t("evaluation.form.start"),
+            icon: FlaskConical,
+            disabled: running,
+            onSelect: () => onStart(item),
+            testId: `evaluation-set-start-${item.id}`,
+          },
+          { id: "edit", label: t("evaluation.set.edit"), icon: Pencil, onSelect: () => onOpen(item) },
+          { id: "export", label: t("evaluation.set.export"), icon: Download, onSelect: () => onExport(item) },
+          { id: "delete", label: t("evaluation.set.delete"), icon: Trash2, tone: "danger", onSelect: () => onDelete(item) },
+        ];
+        return (
+          <RowActionMenu
+            actions={actions}
+            ariaLabel={t("common.entityActions", { name: item.name })}
+            testId={`evaluation-set-row-actions-${item.id}`}
+          />
+        );
+      },
+    },
+  ];
+  return (
+    <PagedDataTable<EvaluationSetItem>
+      pageKey="evaluationSets"
+      rows={sets}
+      columns={columns}
+      getRowKey={(item) => item.id}
+      ariaLabel={t("evaluation.sets.label")}
+      tableClassName="w-full min-w-[720px]"
+    />
   );
 }
 
@@ -334,7 +507,7 @@ function JobView({
                 job.status === "queued"
                   ? t("evaluation.progress.queued")
                   : t("evaluation.progress.running", {
-                      agent: job.agent_name || job.agent_id,
+                      agent: job.set_name || job.agent_name || job.agent_id,
                       done: summary.completed,
                       total: summary.total,
                     })
@@ -355,6 +528,7 @@ function JobView({
           </div>
           <CardDescription>
             {t("evaluation.summary.description", {
+              set: job.set_name || "—",
               agent: job.agent_name || job.agent_id,
               started: formatDateTime(job.created_at),
             })}
@@ -366,7 +540,10 @@ function JobView({
               {job.error}
             </Banner>
           ) : null}
-          <SummaryMetrics summary={summary} />
+          <SummaryMetrics summary={summary} previous={job.previous_summary} />
+          <p className="text-xs text-fg-muted" data-testid="evaluation-previous">
+            {job.previous_summary ? t("evaluation.summary.comparedWithPrevious") : t("evaluation.summary.noPrevious")}
+          </p>
         </CardContent>
       </Card>
 
@@ -383,19 +560,35 @@ function JobView({
   );
 }
 
-function SummaryMetrics({ summary }: { summary: EvaluationSummary }) {
+function SummaryMetrics({ summary, previous }: { summary: EvaluationSummary; previous: EvaluationSummary | null }) {
   const ofTotal = t("evaluation.summary.ofTotal", { total: formatNumber(summary.total) });
   return (
     <div className="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-3 xl:grid-cols-6" data-testid="evaluation-summary">
-      <Metric label={t("evaluation.summary.passRate")} value={formatRate(summary.pass_rate)} detail={ofTotal} />
+      <Metric
+        label={t("evaluation.summary.passRate")}
+        value={formatRate(summary.pass_rate)}
+        detail={previous ? rateDelta(summary.pass_rate, previous.pass_rate) : ofTotal}
+      />
       <Metric
         label={t("evaluation.summary.averageScore")}
         value={summary.average_score === null ? "—" : summary.average_score.toFixed(2)}
-        detail="0〜1"
+        detail={previous ? scoreDelta(summary.average_score, previous.average_score) : "0〜1"}
+      />
+      <Metric
+        label={t("evaluation.summary.toolAccuracy")}
+        value={formatRate(summary.tool_accuracy)}
+        detail={
+          summary.tool_cases
+            ? t("evaluation.summary.toolCases", { correct: summary.tool_correct, total: summary.tool_cases })
+            : t("evaluation.summary.noToolCases")
+        }
       />
       <Metric label={t("evaluation.summary.correct")} value={formatNumber(summary.correct)} detail={ofTotal} />
-      <Metric label={t("evaluation.summary.incorrect")} value={formatNumber(summary.incorrect)} detail={ofTotal} />
-      <Metric label={t("evaluation.summary.uncertain")} value={formatNumber(summary.uncertain)} detail={ofTotal} />
+      <Metric
+        label={t("evaluation.summary.incorrect")}
+        value={formatNumber(summary.incorrect + summary.uncertain)}
+        detail={t("evaluation.summary.uncertainIncluded", { count: summary.uncertain })}
+      />
       <Metric label={t("evaluation.summary.errors")} value={formatNumber(summary.errors)} detail={ofTotal} />
     </div>
   );
@@ -432,17 +625,19 @@ function ResultsTable({
         <RowTitleButton title={result.case.question} subtitle={result.case.id} onClick={() => onOpen(result)} />
       ),
     },
-    {
-      key: "verdict",
-      header: t("evaluation.column.verdict"),
-      render: (result) => <CaseBadge result={result} />,
-    },
+    { key: "verdict", header: t("evaluation.column.verdict"), render: (result) => <CaseBadge result={result} /> },
     {
       key: "score",
       header: t("evaluation.column.score"),
       align: "right",
       className: "tabular-nums text-fg",
       render: (result) => (result.judgement ? result.judgement.score.toFixed(2) : "—"),
+    },
+    {
+      key: "tools",
+      header: t("evaluation.column.tools"),
+      className: "max-w-64 text-xs",
+      render: (result) => <ToolSelection result={result} />,
     },
     {
       key: "duration",
@@ -459,9 +654,25 @@ function ResultsTable({
       columns={columns}
       getRowKey={(result) => result.case.id}
       ariaLabel={t("evaluation.results.label")}
-      tableClassName="w-full min-w-[640px]"
+      tableClassName="w-full min-w-[760px]"
       resetKey={jobId}
     />
+  );
+}
+
+function ToolSelection({ result }: { result: EvaluationCaseResult }) {
+  return (
+    <span className="flex flex-col items-start gap-1">
+      {result.tool_selection_correct === null ? null : (
+        <StatusBadge
+          variant={result.tool_selection_correct ? "success" : "danger"}
+          label={result.tool_selection_correct ? t("evaluation.tools.correct") : t("evaluation.tools.incorrect")}
+        />
+      )}
+      <span className="break-all font-mono text-fg-muted">
+        {result.tool_calls.length ? result.tool_calls.join(", ") : t("evaluation.tools.none")}
+      </span>
+    </span>
   );
 }
 
@@ -533,6 +744,19 @@ function CaseDetail({ result }: { result: EvaluationCaseResult }) {
           ) : null}
         </>
       ) : null}
+      <DetailSection title={t("evaluation.detail.tools")}>
+        <div className="space-y-1 text-xs">
+          <p className="text-fg">
+            <span className="text-fg-muted">{`${t("evaluation.detail.expectedTools")}: `}</span>
+            <span className="font-mono">{result.case.expected_tools?.length ? result.case.expected_tools.join(", ") : "—"}</span>
+          </p>
+          <p className="text-fg">
+            <span className="text-fg-muted">{`${t("evaluation.detail.calledTools")}: `}</span>
+            <span className="font-mono">{result.tool_calls.length ? result.tool_calls.join(", ") : "—"}</span>
+          </p>
+          <p className="text-fg-muted">{t("evaluation.detail.dryRunNote")}</p>
+        </div>
+      </DetailSection>
       {result.error ? (
         <DetailSection title={t("evaluation.detail.error")}>
           <p className="break-words text-fg">{result.error}</p>
@@ -581,6 +805,7 @@ function JobsTable({
         />
       ),
     },
+    { key: "set", header: t("evaluation.jobs.set"), className: "text-xs text-fg", render: (item) => item.set_name || "—" },
     { key: "agent", header: t("evaluation.form.agent"), className: "text-xs text-fg", render: (item) => item.agent_name || item.agent_id },
     {
       key: "status",
@@ -595,13 +820,6 @@ function JobsTable({
       align: "right",
       className: "tabular-nums text-fg",
       render: (item) => formatRate(item.summary.pass_rate),
-    },
-    {
-      key: "cases",
-      header: t("evaluation.jobs.cases"),
-      align: "right",
-      className: "tabular-nums text-fg",
-      render: (item) => formatNumber(item.summary.total),
     },
     {
       key: "actions",
@@ -636,11 +854,25 @@ function JobsTable({
       columns={columns}
       getRowKey={(item) => item.id}
       ariaLabel={t("evaluation.jobs.label")}
-      tableClassName="w-full min-w-[640px]"
+      tableClassName="w-full min-w-[720px]"
     />
   );
 }
 
 function formatRate(value: number | null): string {
   return value === null ? "—" : `${Math.round(value * 100)}%`;
+}
+
+function rateDelta(current: number | null, previous: number | null): string {
+  if (current === null || previous === null) return t("evaluation.summary.previousUnknown");
+  const delta = Math.round((current - previous) * 100);
+  if (delta === 0) return t("evaluation.summary.previousSame");
+  return t("evaluation.summary.previousPoints", { value: `${delta > 0 ? "+" : "−"}${Math.abs(delta)}` });
+}
+
+function scoreDelta(current: number | null, previous: number | null): string {
+  if (current === null || previous === null) return t("evaluation.summary.previousUnknown");
+  const delta = current - previous;
+  if (Math.abs(delta) < 0.005) return t("evaluation.summary.previousSame");
+  return t("evaluation.summary.previousScore", { value: `${delta > 0 ? "+" : "−"}${Math.abs(delta).toFixed(2)}` });
 }

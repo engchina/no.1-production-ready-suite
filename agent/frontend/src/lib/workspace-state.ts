@@ -20,10 +20,10 @@ const MAX_VALUE_CHARS = 20_000;
 export const WORKSPACE_FIELDS = {
   runs: ["selectedRunId", "streamMode", "goal"],
   audit: ["filterForm", "appliedForm", "page"],
-  // 品質評価の業務 Agent・評価ケースの JSON・表示している評価（#776）。
-  evaluation: ["agentId", "casesJson", "jobId"],
+  // 品質評価の業務 Agent・表示している評価（#776）。評価ケースは評価セットとして保存する。
+  evaluation: ["agentId", "jobId"],
   // 一覧のページ番号（#265）。一覧 → エディタ → 一覧の移動と再読込で同じページに戻す。
-  lists: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "plugins", "marketplaces", "evaluationResults", "evaluationJobs"],
+  lists: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "plugins", "marketplaces", "evaluationSets", "evaluationResults", "evaluationJobs"],
 } as const;
 
 export type WorkspacePage = keyof typeof WORKSPACE_FIELDS;

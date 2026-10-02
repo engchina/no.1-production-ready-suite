@@ -330,6 +330,14 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/audit/tool-calls.csv"): _any(MENU_AUDIT),
     # ---- 改善・運用 ----
     # 品質評価（#776。評価の Run は始めた利用者の Run。router が業務 Agent の対象範囲を確かめる）。
+    ("GET", "/evaluation-sets"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation-sets"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation-sets/template.xlsx"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation-sets/parse-xlsx"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation-sets/{set_id}"): _any(MENU_EVALUATION),
+    ("PUT", "/evaluation-sets/{set_id}"): _any(MENU_EVALUATION),
+    ("DELETE", "/evaluation-sets/{set_id}"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation-sets/{set_id}/cases.xlsx"): _any(MENU_EVALUATION),
     ("POST", "/evaluations"): _any(MENU_EVALUATION),
     ("GET", "/evaluations"): _any(MENU_EVALUATION),
     ("GET", "/evaluations/{job_id}"): _any(MENU_EVALUATION),

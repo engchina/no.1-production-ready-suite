@@ -174,6 +174,9 @@ def test_api_changes_are_saved_and_restored(file_store: Path) -> None:
         "skill": 1,
         "marketplace": 1,
         "plugin": 1,
+        # 品質評価（#776）は tests/test_evaluation.py で確かめる。
+        "evaluation_set": 0,
+        "evaluation_job": 0,
     }
     skill = skill_registry.get("cp764_skill")
     assert skill is not None and skill.instructions == "手順"

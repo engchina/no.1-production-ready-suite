@@ -192,6 +192,15 @@ class RunCreateRequest(BaseModel):
         return value
 
 
+# 評価の Run（#776）で、承認が要るツールを実行しなかったときにモデルへ返す文。
+EVALUATION_DRY_RUN_MESSAGE = (
+    "品質評価の実行中のため、このツールは実行していません（承認が要る操作）。"
+    "実行した場合の結果は分からないものとして、ここまでの情報で回答を完成させてください。"
+)
+# 評価の Run の印（`metadata`）。組み込み Runtime は承認が要るツールを実行せずに続ける。
+EVALUATION_DRY_RUN_KEY = "evaluation_dry_run"
+
+
 class RunState(BaseModel):
     id: str
     goal: str
@@ -311,6 +320,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     def complete_builtin_run(self, run_id: str, answer: str) -> RunState: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
+    def record_builtin_dry_run_steps(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
     def list_runs(self) -> list[RunState]: ...
     def get_run(self, run_id: str) -> RunState: ...
     def list_artifacts(self, run_id: str) -> list[Artifact]: ...
@@ -782,6 +792,41 @@ class AgentRuntimeRepository:
             if not _is_terminal(run.status):
                 self._fail_builtin_locked(run, code, detail)
             return run.model_copy(deep=True)
+
+    def record_builtin_dry_run_steps(self, run_id: str, calls: Sequence[ToolCall]) -> None:
+        """評価の Run で実行しなかった（承認が要る）ツールの呼び出しを step に残す（#776）。
+
+        モデルがどのツールをどの引数で呼ぼうとしたかを、品質評価のツールの選択の判定に使う。
+        """
+        now = _now()
+        with self._lock:
+            run = self._require_run(run_id)
+            for call in calls:
+                run.steps.append(
+                    RunStep(
+                        run_id=run.id,
+                        status=StepStatus.CANCELLED,
+                        tool_call=call,
+                        tool_result=ToolResult(
+                            name=call.name,
+                            success=False,
+                            error=EVALUATION_DRY_RUN_MESSAGE,
+                            error_code="evaluation.dry_run",
+                            started_at=now,
+                            completed_at=now,
+                        ),
+                        started_at=now,
+                        completed_at=now,
+                    )
+                )
+                self._append_event(
+                    run,
+                    RunEventType.RUNTIME_EVENT,
+                    f"評価中のため、承認が要るツール {call.name} を実行しませんでした。",
+                    {"tool_name": call.name, "evaluation_dry_run": True},
+                )
+            run.updated_at = now
+            self._persist_locked()
 
     def note_builtin_warning(self, run_id: str, message: str) -> None:
         """実行は続けるが利用者に伝えたいこと（取得できなかった MCP 接続など）をイベントに残す。"""

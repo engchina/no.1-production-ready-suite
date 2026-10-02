@@ -194,6 +194,36 @@ export interface EvaluationCase {
   id?: string;
   question: string;
   expected: string;
+  /** 呼ぶべきツール（任意。`rag_search` のように MCP 接続の名前を省いてもよい）。 */
+  expected_tools?: string[];
+}
+
+/** 評価セット（業務 Agent ごとに保存する評価ケースの集まり。#776）。 */
+export interface EvaluationSetInput {
+  agent_id: string;
+  name: string;
+  description: string;
+  cases: EvaluationCase[];
+}
+
+export interface EvaluationSet extends EvaluationSetInput {
+  id: string;
+  cases: Required<EvaluationCase>[];
+  created_by_user_uuid: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvaluationSetItem {
+  id: string;
+  agent_id: string;
+  name: string;
+  description: string;
+  case_count: number;
+  updated_at: string;
+  last_job_id: string | null;
+  last_job_status: EvaluationJobStatus | null;
+  last_pass_rate: number | null;
 }
 
 export type JudgeVerdict = "correct" | "incorrect" | "uncertain";
@@ -221,6 +251,10 @@ export interface EvaluationCaseResult {
   run_id: string | null;
   answer: string;
   judgement: EvaluationJudgement | null;
+  /** 業務 Agent が呼んだ（呼ぼうとした）ツール。評価中は承認が要るツールを実行しない。 */
+  tool_calls: string[];
+  /** 期待するツールをすべて呼んだか（期待するツールが無いケースは null）。 */
+  tool_selection_correct: boolean | null;
   error: string | null;
   duration_ms: number | null;
 }
@@ -235,12 +269,21 @@ export interface EvaluationSummary {
   /** 正しいと判定したケース / 終わったケース（評価できなかったケースは不合格に数える）。 */
   pass_rate: number | null;
   average_score: number | null;
+  /** ツールの選択の正しさ（期待するツールを指定したケースのうち、すべて呼んだ割合）。 */
+  tool_cases: number;
+  tool_correct: number;
+  tool_accuracy: number | null;
 }
 
 export interface EvaluationJob {
   id: string;
   agent_id: string;
   agent_name: string;
+  set_id: string;
+  set_name: string;
+  /** 同じ評価セットの前回（完了した評価）。 */
+  previous_job_id: string | null;
+  previous_summary: EvaluationSummary | null;
   status: EvaluationJobStatus;
   created_by_user_uuid: string | null;
   results: EvaluationCaseResult[];
@@ -253,7 +296,7 @@ export interface EvaluationJob {
 
 export type EvaluationJobItem = Pick<
   EvaluationJob,
-  "id" | "agent_id" | "agent_name" | "status" | "summary" | "created_at" | "finished_at"
+  "id" | "agent_id" | "agent_name" | "set_id" | "set_name" | "status" | "summary" | "created_at" | "finished_at"
 >;
 
 export interface ToolAuditRecord {
@@ -825,7 +868,30 @@ export const agentApi = {
   getRunAudit: (runId: string) =>
     request<RunAuditData>(`/api/runs/${runId}/audit`),
   /** 品質評価（#776）。 */
-  createEvaluation: (payload: { agent_id: string; cases: EvaluationCase[] }) =>
+  listEvaluationSets: (agentId?: string) =>
+    request<{ sets: EvaluationSetItem[] }>(
+      `/api/evaluation-sets${agentId ? `?${new URLSearchParams({ agent_id: agentId }).toString()}` : ""}`
+    ),
+  getEvaluationSet: (setId: string) => request<EvaluationSet>(`/api/evaluation-sets/${encodeURIComponent(setId)}`),
+  createEvaluationSet: (payload: EvaluationSetInput) =>
+    request<EvaluationSet>("/api/evaluation-sets", { method: "POST", body: JSON.stringify(payload) }),
+  updateEvaluationSet: (setId: string, payload: EvaluationSetInput) =>
+    request<EvaluationSet>(`/api/evaluation-sets/${encodeURIComponent(setId)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteEvaluationSet: (setId: string) =>
+    request<null>(`/api/evaluation-sets/${encodeURIComponent(setId)}`, { method: "DELETE" }),
+  /** Excel の評価ケースを読む（保存しない）。 */
+  parseEvaluationCasesXlsx: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<{ cases: Required<EvaluationCase>[] }>("/api/evaluation-sets/parse-xlsx", { method: "POST", body });
+  },
+  downloadEvaluationTemplate: () => requestBlob("/api/evaluation-sets/template.xlsx"),
+  downloadEvaluationSetXlsx: (setId: string) =>
+    requestBlob(`/api/evaluation-sets/${encodeURIComponent(setId)}/cases.xlsx`),
+  createEvaluation: (payload: { set_id: string }) =>
     request<EvaluationJob>("/api/evaluations", { method: "POST", body: JSON.stringify(payload) }),
   listEvaluations: () => request<{ jobs: EvaluationJobItem[] }>("/api/evaluations"),
   getEvaluation: (jobId: string) => request<EvaluationJob>(`/api/evaluations/${encodeURIComponent(jobId)}`),

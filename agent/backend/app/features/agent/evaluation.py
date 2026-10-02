@@ -1,15 +1,20 @@
 """業務 Agent の品質評価（#776）。
 
-評価ケース（質問と期待する回答の要点）を 1 件ずつ業務 Agent の Run として実行し、回答を
-OCI Enterprise AI の既定のテキストモデルで判定する（LLM-as-judge）。形は RAG の品質評価・
-NL2SQL の SQL生成評価にそろえる（バックグラウンドの job・進み具合・取り消し・概要・ケース別結果）。
+評価セット（業務 Agent ごとに保存する評価ケースの集まり）を 1 件ずつ業務 Agent の Run として実行し、
+回答を OCI Enterprise AI の既定のテキストモデルで判定する（LLM-as-judge）。業界の評価の基盤
+（評価セットの保存・表での編集と取り込み・ツールの選択の評価・前回との比較）と、RAG の
+品質評価・NL2SQL の SQL生成評価の形（バックグラウンドの job・進み具合・取り消し・概要・
+ケース別結果）にそろえる。
 
 - Run は評価を始めた利用者の Run として作る（RAG / NL2SQL の MCP はこの利用者として呼ぶ）。
   `metadata.evaluation_job_id` で評価の Run と分かる。
+- 評価の Run は承認が要るツールを実行しない（dry-run。組み込み Runtime が「評価中のため実行して
+  いない」とモデルへ返して回答を完成させる）。呼ぼうとしたツールは step に残り、評価ケースの
+  「期待するツール」と比べてツールの選択を判定する。
 - in-process のモードでは job が自分で Run を実行し、dispatcher のモードでは別プロセスが
   実行するのを待つ（二重に実行しない）。
-- 承認が要るツールに達した Run は取り消し、「承認が必要なため評価できません」とする。
-- job と結果はメモリに置く（再起動で消える。Oracle への永続化は Control Plane の永続化の後）。
+- 評価セットと job は Control Plane の定義と同じ保存先（`AGENT_CONTROL_PLANE_ITEMS`。#764）に置く。
+  再起動の時点で実行中だった job は「中断」にする。
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -29,6 +35,7 @@ from pydantic import BaseModel, Field, computed_field, field_validator
 
 from app.features.agent import builtin_runtime
 from app.features.agent.runtime import (
+    EVALUATION_DRY_RUN_KEY,
     Artifact,
     RunCreateRequest,
     RunEventType,
@@ -39,20 +46,25 @@ from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
+EVALUATION_MAX_CASES = 50
+EVALUATION_QUESTION_MAX_CHARS = 4000
+EVALUATION_EXPECTED_MAX_CHARS = 8000
+EVALUATION_EXPECTED_TOOLS_MAX = 10
+# 残す job の数（古い終わった job から消す）。
+EVALUATION_JOBS_LIMIT = 50
+# 1 ケースの上限時間（Run の実行。判定は別）。
+CASE_TIMEOUT_SECONDS = 300.0
+# dispatcher のモードで Run の決着を待つ間隔。テストは短くする。
+settle_poll_seconds = 1.0
+# MCP 接続のツールの名前の区切り（`<接続>__<ツール>`。#757）。
+_MCP_SEPARATOR = "__"
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
 
 
-EVALUATION_MAX_CASES = 50
-EVALUATION_QUESTION_MAX_CHARS = 4000
-EVALUATION_EXPECTED_MAX_CHARS = 8000
-# 残す job の数（古いものから消す）。
-EVALUATION_JOBS_LIMIT = 20
-# 1 ケースの上限時間（Run の実行。判定は別）。
-CASE_TIMEOUT_SECONDS = 300.0
-# dispatcher のモードで Run の決着を待つ間隔。テストは短くする。
-settle_poll_seconds = 1.0
+# ---- 評価セット -------------------------------------------------------------------------
 
 
 class EvaluationCase(BaseModel):
@@ -61,6 +73,8 @@ class EvaluationCase(BaseModel):
     id: str = Field(default="", max_length=100)
     question: str = Field(min_length=1, max_length=EVALUATION_QUESTION_MAX_CHARS)
     expected: str = Field(min_length=1, max_length=EVALUATION_EXPECTED_MAX_CHARS)
+    # 呼ぶべきツール（任意）。`rag_search` のように MCP 接続の名前を省いてもよい。
+    expected_tools: list[str] = Field(default_factory=list)
 
     @field_validator("question", "expected")
     @classmethod
@@ -69,22 +83,78 @@ class EvaluationCase(BaseModel):
             raise ValueError("空白だけにはできません。")
         return value.strip()
 
+    @field_validator("expected_tools")
+    @classmethod
+    def _tools(cls, value: list[str]) -> list[str]:
+        cleaned = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        if len(cleaned) > EVALUATION_EXPECTED_TOOLS_MAX:
+            raise ValueError(f"期待するツールは {EVALUATION_EXPECTED_TOOLS_MAX} 個までです。")
+        return cleaned
 
-class EvaluationRequest(BaseModel):
+
+def number_cases(cases: list[EvaluationCase]) -> list[EvaluationCase]:
+    """id を省いたケースに `case-<番号>` を付け、重複を断る。"""
+    numbered = [
+        case if case.id.strip() else case.model_copy(update={"id": f"case-{index}"})
+        for index, case in enumerate(cases, start=1)
+    ]
+    ids = [case.id.strip() for case in numbered]
+    if len(set(ids)) != len(ids):
+        raise ValueError("ケースの id が重複しています。")
+    return [case.model_copy(update={"id": case.id.strip()}) for case in numbered]
+
+
+class EvaluationSetInput(BaseModel):
     agent_id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=500)
     cases: list[EvaluationCase] = Field(min_length=1, max_length=EVALUATION_MAX_CASES)
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("名前を入力してください。")
+        return value.strip()
 
     @field_validator("cases")
     @classmethod
-    def _unique_ids(cls, cases: list[EvaluationCase]) -> list[EvaluationCase]:
-        numbered = [
-            case if case.id.strip() else case.model_copy(update={"id": f"case-{index}"})
-            for index, case in enumerate(cases, start=1)
-        ]
-        ids = [case.id.strip() for case in numbered]
-        if len(set(ids)) != len(ids):
-            raise ValueError("ケースの id が重複しています。")
-        return numbered
+    def _cases(cls, cases: list[EvaluationCase]) -> list[EvaluationCase]:
+        return number_cases(cases)
+
+
+class EvaluationSet(EvaluationSetInput):
+    id: str = Field(default_factory=lambda: f"evset_{uuid4().hex}")
+    created_by_user_uuid: str | None = None
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class EvaluationSetItem(BaseModel):
+    """評価セットの一覧の 1 行（ケースを含めない）。"""
+
+    id: str
+    agent_id: str
+    name: str
+    description: str
+    case_count: int
+    updated_at: datetime
+    last_job_id: str | None = None
+    last_job_status: str | None = None
+    last_pass_rate: float | None = None
+
+
+class EvaluationSetsData(BaseModel):
+    sets: list[EvaluationSetItem] = Field(default_factory=list)
+
+
+class EvaluationCasesData(BaseModel):
+    """Excel から読んだケース（保存はしない。画面が評価セットのフォームに入れる）。"""
+
+    cases: list[EvaluationCase]
+
+
+# ---- 判定と結果 -------------------------------------------------------------------------
 
 
 class JudgeVerdict(StrEnum):
@@ -122,6 +192,7 @@ class CaseStatus(StrEnum):
     RUNNING = "running"
     JUDGED = "judged"
     RUN_FAILED = "run_failed"
+    # dry-run の後も承認待ちになった（通常は起きない。安全のために残す）。
     NEEDS_APPROVAL = "needs_approval"
     TIMED_OUT = "timed_out"
     JUDGE_FAILED = "judge_failed"
@@ -135,6 +206,7 @@ _ERROR_STATUSES = {
     CaseStatus.TIMED_OUT,
     CaseStatus.JUDGE_FAILED,
 }
+_UNFINISHED_STATUSES = {CaseStatus.PENDING, CaseStatus.RUNNING}
 
 
 class EvaluationCaseResult(BaseModel):
@@ -143,6 +215,10 @@ class EvaluationCaseResult(BaseModel):
     run_id: str | None = None
     answer: str = ""
     judgement: EvaluationJudgement | None = None
+    # 業務 Agent が呼んだ（呼ぼうとした）ツール。dry-run で実行しなかったものを含む。
+    tool_calls: list[str] = Field(default_factory=list)
+    # 期待するツールをすべて呼んだか（期待するツールが無いケースは None）。
+    tool_selection_correct: bool | None = None
     # 評価できなかった理由（利用者向けの日本語）。
     error: str | None = None
     duration_ms: int | None = None
@@ -166,20 +242,30 @@ class EvaluationSummary(BaseModel):
     incorrect: int = 0
     uncertain: int = 0
     errors: int = 0
-    # 合格率 = 正しいと判定したケース / 全ケース（評価できなかったケースは不合格に数える）。
+    # 合格率 = 正しいと判定したケース / 終わったケース（評価できなかったケースは不合格に数える）。
     pass_rate: float | None = None
     # 判定したケースのスコアの平均。
     average_score: float | None = None
+    # ツールの選択の正しさ（期待するツールを指定したケースのうち、すべて呼んだ割合）。
+    tool_cases: int = 0
+    tool_correct: int = 0
+    tool_accuracy: float | None = None
 
 
 def summarize(results: list[EvaluationCaseResult]) -> EvaluationSummary:
     summary = EvaluationSummary(total=len(results))
     scores: list[float] = []
+    cancelled = 0
     for result in results:
-        if result.status not in {CaseStatus.PENDING, CaseStatus.RUNNING}:
+        if result.status not in _UNFINISHED_STATUSES:
             summary.completed += 1
+        if result.status == CaseStatus.CANCELLED:
+            cancelled += 1
         if result.status in _ERROR_STATUSES:
             summary.errors += 1
+        if result.tool_selection_correct is not None:
+            summary.tool_cases += 1
+            summary.tool_correct += int(result.tool_selection_correct)
         judgement = result.judgement
         if result.status != CaseStatus.JUDGED or judgement is None:
             continue
@@ -190,20 +276,26 @@ def summarize(results: list[EvaluationCaseResult]) -> EvaluationSummary:
             summary.incorrect += 1
         else:
             summary.uncertain += 1
-    finished = summary.completed - sum(
-        1 for result in results if result.status == CaseStatus.CANCELLED
-    )
+    finished = summary.completed - cancelled
     if finished > 0:
         summary.pass_rate = summary.correct / finished
     if scores:
         summary.average_score = sum(scores) / len(scores)
+    if summary.tool_cases:
+        summary.tool_accuracy = summary.tool_correct / summary.tool_cases
     return summary
+
+
+class EvaluationRequest(BaseModel):
+    set_id: str = Field(min_length=1, max_length=100)
 
 
 class EvaluationJob(BaseModel):
     id: str = Field(default_factory=lambda: f"eval_{uuid4().hex}")
     agent_id: str
     agent_name: str = ""
+    set_id: str = ""
+    set_name: str = ""
     status: JobStatus = JobStatus.QUEUED
     created_by_user_uuid: str | None = None
     results: list[EvaluationCaseResult] = Field(default_factory=list)
@@ -212,6 +304,9 @@ class EvaluationJob(BaseModel):
     created_at: datetime = Field(default_factory=_now)
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    # 同じ評価セットの前回（完了した job）の概要。比較に使う（応答のときに入れる）。
+    previous_job_id: str | None = None
+    previous_summary: EvaluationSummary | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -225,6 +320,8 @@ class EvaluationJobItem(BaseModel):
     id: str
     agent_id: str
     agent_name: str
+    set_id: str
+    set_name: str
     status: JobStatus
     summary: EvaluationSummary
     created_at: datetime
@@ -243,14 +340,108 @@ class EvaluationJobActiveError(RuntimeError):
     """実行中の job は削除できない。"""
 
 
+class EvaluationSetInUseError(RuntimeError):
+    """実行中の評価が使っている評価セットは削除できない。"""
+
+
+# ---- 保存（Control Plane の保存先。#764） -------------------------------------------------
+
+
+def _save(kind: str, item_id: str, document: dict[str, Any]) -> None:
+    from app.features.agent import control_plane_store
+
+    control_plane_store.save_evaluation_item(kind, item_id, document)
+
+
+def _delete(kind: str, item_id: str) -> None:
+    from app.features.agent import control_plane_store
+
+    control_plane_store.delete_evaluation_item(kind, item_id)
+
+
+def _save_quietly(kind: str, item_id: str, document: dict[str, Any]) -> None:
+    """job の途中経過の保存（失敗しても評価は続ける。終わりにもう一度保存する）。"""
+    try:
+        _save(kind, item_id, document)
+    except Exception:  # noqa: BLE001 - 保存先の一時的な失敗で評価を止めない
+        logger.warning("agent_evaluation_not_saved", extra={"kind": kind, "item_id": item_id})
+
+
+class EvaluationSetStore:
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._sets: dict[str, EvaluationSet] = {}
+
+    def list(self, agent_id: str | None = None) -> list[EvaluationSet]:
+        with self._lock:
+            items = [
+                item.model_copy(deep=True)
+                for item in self._sets.values()
+                if agent_id is None or item.agent_id == agent_id
+            ]
+        return sorted(items, key=lambda item: item.updated_at, reverse=True)
+
+    def get(self, set_id: str) -> EvaluationSet:
+        with self._lock:
+            item = self._sets.get(set_id)
+            if item is None:
+                raise KeyError(set_id)
+            return item.model_copy(deep=True)
+
+    def create(self, data: EvaluationSetInput, *, created_by: str | None) -> EvaluationSet:
+        item = EvaluationSet(**data.model_dump(), created_by_user_uuid=created_by)
+        _save("evaluation_set", item.id, item.model_dump(mode="json"))
+        with self._lock:
+            self._sets[item.id] = item
+        return item.model_copy(deep=True)
+
+    def update(self, set_id: str, data: EvaluationSetInput) -> EvaluationSet:
+        with self._lock:
+            current = self._sets.get(set_id)
+            if current is None:
+                raise KeyError(set_id)
+            updated = current.model_copy(
+                update={
+                    "name": data.name,
+                    "description": data.description,
+                    "cases": data.cases,
+                    "updated_at": _now(),
+                }
+            )
+        _save("evaluation_set", set_id, updated.model_dump(mode="json"))
+        with self._lock:
+            self._sets[set_id] = updated
+        return updated.model_copy(deep=True)
+
+    def delete(self, set_id: str) -> None:
+        with self._lock:
+            if set_id not in self._sets:
+                raise KeyError(set_id)
+        _delete("evaluation_set", set_id)
+        with self._lock:
+            self._sets.pop(set_id, None)
+
+    def restore(self, item: EvaluationSet) -> None:
+        with self._lock:
+            self._sets[item.id] = item
+
+    def clear(self) -> None:
+        with self._lock:
+            self._sets.clear()
+
+
 class EvaluationStore:
-    """評価の job（メモリ。新しい順に `EVALUATION_JOBS_LIMIT` 件まで残す）。"""
+    """評価の job（新しい順に `EVALUATION_JOBS_LIMIT` 件まで残す）。"""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._jobs: OrderedDict[str, EvaluationJob] = OrderedDict()
 
+    def _persist(self, job: EvaluationJob) -> None:
+        _save_quietly("evaluation_job", job.id, job.model_dump(mode="json"))
+
     def create(self, job: EvaluationJob) -> EvaluationJob:
+        removed: list[str] = []
         with self._lock:
             if any(item.status in ACTIVE_JOB_STATUSES for item in self._jobs.values()):
                 raise EvaluationBusyError(job.id)
@@ -258,11 +449,18 @@ class EvaluationStore:
             while len(self._jobs) > EVALUATION_JOBS_LIMIT:
                 jobs = self._jobs.items()
                 finished = [key for key, item in jobs if item.status not in ACTIVE_JOB_STATUSES]
-                oldest = finished[0] if finished else None
-                if oldest is None:
+                if not finished:
                     break
-                self._jobs.pop(oldest)
-            return job.model_copy(deep=True)
+                self._jobs.pop(finished[0])
+                removed.append(finished[0])
+            copy = job.model_copy(deep=True)
+        self._persist(copy)
+        for job_id in removed:
+            try:
+                _delete("evaluation_job", job_id)
+            except Exception:  # noqa: BLE001 - 古い job の削除の失敗は無視する
+                logger.warning("agent_evaluation_prune_failed", extra={"job_id": job_id})
+        return copy
 
     def get(self, job_id: str) -> EvaluationJob:
         with self._lock:
@@ -271,22 +469,74 @@ class EvaluationStore:
                 raise KeyError(job_id)
             return job.model_copy(deep=True)
 
-    def list(self) -> list[EvaluationJob]:
+    def list(self, set_id: str | None = None) -> list[EvaluationJob]:
         with self._lock:
-            return [job.model_copy(deep=True) for job in reversed(self._jobs.values())]
+            return [
+                job.model_copy(deep=True)
+                for job in reversed(self._jobs.values())
+                if set_id is None or job.set_id == set_id
+            ]
 
-    def update(self, job_id: str, **changes: Any) -> EvaluationJob:
+    def with_previous(self, job: EvaluationJob) -> EvaluationJob:
+        """同じ評価セットの前回（この job より前に完了した job）の概要を入れる。"""
+        with self._lock:
+            previous = next(
+                (
+                    item
+                    for item in reversed(self._jobs.values())
+                    if job.set_id
+                    and item.set_id == job.set_id
+                    and item.id != job.id
+                    and item.status == JobStatus.COMPLETED
+                    and item.created_at < job.created_at
+                ),
+                None,
+            )
+            if previous is None:
+                return job
+            return job.model_copy(
+                update={"previous_job_id": previous.id, "previous_summary": previous.summary}
+            )
+
+    def latest_for_set(self, set_id: str) -> EvaluationJob | None:
+        with self._lock:
+            return next(
+                (
+                    item.model_copy(deep=True)
+                    for item in reversed(self._jobs.values())
+                    if item.set_id == set_id
+                ),
+                None,
+            )
+
+    def has_active_for_set(self, set_id: str) -> bool:
+        with self._lock:
+            return any(
+                item.set_id == set_id and item.status in ACTIVE_JOB_STATUSES
+                for item in self._jobs.values()
+            )
+
+    def _change(self, job_id: str, mutate: Callable[[EvaluationJob], None]) -> EvaluationJob:
         with self._lock:
             job = self._jobs[job_id]
+            mutate(job)
+            copy = job.model_copy(deep=True)
+        self._persist(copy)
+        return copy
+
+    def update(self, job_id: str, **changes: Any) -> EvaluationJob:
+        def mutate(job: EvaluationJob) -> None:
             for key, value in changes.items():
                 setattr(job, key, value)
-            return job.model_copy(deep=True)
+
+        return self._change(job_id, mutate)
 
     def update_result(self, job_id: str, index: int, **changes: Any) -> None:
-        with self._lock:
-            result = self._jobs[job_id].results[index]
+        def mutate(job: EvaluationJob) -> None:
             for key, value in changes.items():
-                setattr(result, key, value)
+                setattr(job.results[index], key, value)
+
+        self._change(job_id, mutate)
 
     def start(self, job_id: str) -> EvaluationJob | None:
         """待っている job を実行中にする。取り消し済み・無い job は None（実行しない）。"""
@@ -294,9 +544,7 @@ class EvaluationStore:
             job = self._jobs.get(job_id)
             if job is None or job.status != JobStatus.QUEUED:
                 return None
-            job.status = JobStatus.RUNNING
-            job.started_at = _now()
-            return job.model_copy(deep=True)
+        return self.update(job_id, status=JobStatus.RUNNING, started_at=_now())
 
     def is_cancelled(self, job_id: str) -> bool:
         with self._lock:
@@ -305,13 +553,15 @@ class EvaluationStore:
 
     def cancel(self, job_id: str) -> EvaluationJob:
         with self._lock:
-            job = self._jobs.get(job_id)
-            if job is None:
+            if job_id not in self._jobs:
                 raise KeyError(job_id)
+
+        def mutate(job: EvaluationJob) -> None:
             if job.status in ACTIVE_JOB_STATUSES:
                 job.status = JobStatus.CANCELLED
                 job.finished_at = _now()
-            return job.model_copy(deep=True)
+
+        return self._change(job_id, mutate)
 
     def delete(self, job_id: str) -> None:
         with self._lock:
@@ -320,14 +570,46 @@ class EvaluationStore:
                 raise KeyError(job_id)
             if job.status in ACTIVE_JOB_STATUSES:
                 raise EvaluationJobActiveError(job_id)
-            self._jobs.pop(job_id)
+        _delete("evaluation_job", job_id)
+        with self._lock:
+            self._jobs.pop(job_id, None)
+
+    def restore(self, job: EvaluationJob) -> None:
+        """保存した job を戻す。実行中だった job は再起動で中断したものとして終える。"""
+        if job.status in ACTIVE_JOB_STATUSES:
+            job.status = JobStatus.FAILED
+            job.error = "バックエンドの再起動で評価が中断しました。もう一度始めてください。"
+            job.finished_at = job.finished_at or _now()
+            for result in job.results:
+                if result.status in _UNFINISHED_STATUSES:
+                    result.status = CaseStatus.CANCELLED
+        with self._lock:
+            self._jobs[job.id] = job
+            ordered = sorted(self._jobs.values(), key=lambda item: item.created_at)
+            self._jobs = OrderedDict((item.id, item) for item in ordered)
 
     def clear(self) -> None:
         with self._lock:
             self._jobs.clear()
 
 
+evaluation_set_store = EvaluationSetStore()
 evaluation_store = EvaluationStore()
+
+
+def set_item(item: EvaluationSet) -> EvaluationSetItem:
+    latest = evaluation_store.latest_for_set(item.id)
+    return EvaluationSetItem(
+        id=item.id,
+        agent_id=item.agent_id,
+        name=item.name,
+        description=item.description,
+        case_count=len(item.cases),
+        updated_at=item.updated_at,
+        last_job_id=latest.id if latest else None,
+        last_job_status=latest.status.value if latest else None,
+        last_pass_rate=latest.summary.pass_rate if latest else None,
+    )
 
 
 def job_item(job: EvaluationJob) -> EvaluationJobItem:
@@ -335,12 +617,16 @@ def job_item(job: EvaluationJob) -> EvaluationJobItem:
         id=job.id,
         agent_id=job.agent_id,
         agent_name=job.agent_name,
+        set_id=job.set_id,
+        set_name=job.set_name,
         status=job.status,
         summary=job.summary,
         created_at=job.created_at,
         finished_at=job.finished_at,
     )
 
+
+# ---- 判定 -------------------------------------------------------------------------------
 
 JUDGE_INSTRUCTIONS = """あなたは業務 Agent の回答を採点する評価者です。
 質問・期待する回答の要点・実際の回答を読み、実際の回答が期待する要点を満たしているかを判定します。
@@ -350,7 +636,8 @@ JUDGE_INSTRUCTIONS = """あなたは業務 Agent の回答を採点する評価�
 - score: 期待する要点のうち、実際の回答が正しく満たしている割合（0 から 1）。
 - summary: 判定の理由を日本語で 1〜2 文。
 - missing_points: 欠けている・誤っている要点を日本語で（無ければ空の配列）。
-表現の違い・言い換え・補足の有無は減点しません。数値・固有名詞・結論の違いは誤りとして扱います。"""
+表現の違い・言い換え・補足の有無は減点しません。数値・固有名詞・結論の違いは誤りとして扱います。
+評価のため承認が要る操作は実行していません。「実行していない」こと自体は減点しません。"""
 
 
 def _judge_input(case: EvaluationCase, answer: str) -> str:
@@ -376,6 +663,24 @@ async def judge_answer(case: EvaluationCase, answer: str) -> EvaluationJudgement
     if isinstance(output, EvaluationJudgement):
         return output
     return EvaluationJudgement.model_validate(output)
+
+
+def tool_matches(called: str, expected: str) -> bool:
+    """呼んだツールが期待するツールか（MCP 接続の名前を省いた指定も受け付ける）。"""
+    return called == expected or called.endswith(f"{_MCP_SEPARATOR}{expected}")
+
+
+def tool_selection_correct(case: EvaluationCase, tool_calls: list[str]) -> bool | None:
+    if not case.expected_tools:
+        return None
+    return all(
+        any(tool_matches(called, item) for called in tool_calls) for item in case.expected_tools
+    )
+
+
+def _tool_calls(run: RunState) -> list[str]:
+    names = [step.tool_call.name for step in run.steps if step.tool_call is not None]
+    return list(dict.fromkeys(names))
 
 
 def _answer_text(artifacts: list[Artifact]) -> str:
@@ -454,7 +759,7 @@ def _cancel_remaining(job_id: str, store: EvaluationStore) -> None:
     except KeyError:
         return
     for index, item in enumerate(current.results):
-        if item.status in {CaseStatus.PENDING, CaseStatus.RUNNING}:
+        if item.status in _UNFINISHED_STATUSES:
             store.update_result(job_id, index, status=CaseStatus.CANCELLED)
 
 
@@ -481,7 +786,11 @@ async def _run_case(
         RunCreateRequest(
             goal=case.question,
             agent_id=job.agent_id,
-            metadata={"evaluation_job_id": job.id, "evaluation_case_id": case.id},
+            metadata={
+                "evaluation_job_id": job.id,
+                "evaluation_case_id": case.id,
+                EVALUATION_DRY_RUN_KEY: True,
+            },
         ),
         created_by_user_uuid=job.created_by_user_uuid,
     )
@@ -492,19 +801,25 @@ async def _run_case(
         repository.cancel_run(run.id)
         finish(CaseStatus.TIMED_OUT, error="上限時間（300 秒）までに回答が出ませんでした。")
         return
-    if store.is_cancelled(job.id) and settled.status not in {RunStatus.COMPLETED}:
+    tool_calls = _tool_calls(settled)
+    tools = {
+        "tool_calls": tool_calls,
+        "tool_selection_correct": tool_selection_correct(case, tool_calls),
+    }
+    if store.is_cancelled(job.id) and settled.status != RunStatus.COMPLETED:
         repository.cancel_run(run.id)
-        finish(CaseStatus.CANCELLED)
+        finish(CaseStatus.CANCELLED, **tools)
         return
     if settled.status == RunStatus.WAITING_APPROVAL:
         repository.cancel_run(run.id)
         finish(
             CaseStatus.NEEDS_APPROVAL,
-            error="承認が必要なツールを使うため評価できません（Run は取り消しました）。",
+            error="承認が必要なツールで止まったため評価できません（Run は取り消しました）。",
+            **tools,
         )
         return
     if settled.status != RunStatus.COMPLETED:
-        finish(CaseStatus.RUN_FAILED, error=_failure_message(settled))
+        finish(CaseStatus.RUN_FAILED, error=_failure_message(settled), **tools)
         return
     answer = _answer_text(settled.artifacts)
     try:
@@ -519,6 +834,6 @@ async def _run_case(
             if isinstance(exc, builtin_runtime.BuiltinRuntimeError)
             else f"判定のモデルの呼び出しに失敗しました（{type(exc).__name__}）。"
         )
-        finish(CaseStatus.JUDGE_FAILED, answer=answer, error=message)
+        finish(CaseStatus.JUDGE_FAILED, answer=answer, error=message, **tools)
         return
-    finish(CaseStatus.JUDGED, answer=answer, judgement=judgement)
+    finish(CaseStatus.JUDGED, answer=answer, judgement=judgement, **tools)

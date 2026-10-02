@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, evaluationSummary, expect, test, type MockApi } from "./fixtures/mock-api";
 
-// #776: 業務 Agent の品質評価（評価ケースで実行し、LLM で判定して合格率を出す）。
+// #776: 業務 Agent の品質評価（評価セットで実行し、LLM で判定して合格率とツールの選択を出す）。
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
@@ -22,19 +22,41 @@ async function useTheme(page: Page, theme: "light" | "dark") {
   }, theme);
 }
 
-function seedFinishedJob(mockApi: MockApi) {
+const SET = {
+  id: "evset-seeded",
+  agent_id: "default",
+  name: "経理の評価",
+  description: "月次の問い合わせ",
+  cases: [
+    { id: "expense-deadline", question: "経費精算の締め日はいつですか？", expected: "毎月 25 日", expected_tools: ["rag_search"] },
+    { id: "sales-total", question: "今月の売上の合計はいくらですか？", expected: "合計金額（円）", expected_tools: ["nl2sql_query"] },
+    { id: "register", question: "取引先を登録して", expected: "登録の手順", expected_tools: [] },
+  ],
+  created_by_user_uuid: "local",
+  created_at: MOCK_NOW,
+  updated_at: MOCK_NOW,
+};
+
+function seedSet(mockApi: MockApi) {
+  mockApi.state.evaluationSets.push(structuredClone(SET));
+}
+
+function seedFinishedJobs(mockApi: MockApi) {
+  seedSet(mockApi);
   const results = [
     {
-      case: { id: "expense-deadline", question: "経費精算の締め日はいつですか？", expected: "毎月 25 日" },
+      case: SET.cases[0],
       status: "judged",
       run_id: "run-eval-1",
       answer: "毎月 25 日です。",
       judgement: { verdict: "correct", score: 1, summary: "要点を満たしています。", missing_points: [] },
+      tool_calls: ["rag__rag_search"],
+      tool_selection_correct: true,
       error: null,
       duration_ms: 3200,
     },
     {
-      case: { id: "sales-total", question: "今月の売上の合計はいくらですか？", expected: "合計金額（円）" },
+      case: SET.cases[1],
       status: "judged",
       run_id: "run-eval-2",
       answer: "分かりません。",
@@ -44,126 +66,201 @@ function seedFinishedJob(mockApi: MockApi) {
         summary: "金額を答えていません。",
         missing_points: ["今月の売上の合計金額"],
       },
+      tool_calls: [],
+      tool_selection_correct: false,
       error: null,
       duration_ms: 5100,
     },
     {
-      case: { id: "register", question: "取引先を登録して", expected: "登録した" },
-      status: "needs_approval",
+      case: SET.cases[2],
+      status: "judged",
       run_id: "run-eval-3",
-      answer: "",
-      judgement: null,
-      error: "承認が必要なツールを使うため評価できません（Run は取り消しました）。",
+      answer: "取引先の登録の手順は次のとおりです。",
+      judgement: { verdict: "correct", score: 0.9, summary: "手順を答えています。", missing_points: [] },
+      tool_calls: ["eval776_register"],
+      tool_selection_correct: null,
+      error: null,
       duration_ms: 2100,
     },
   ];
-  mockApi.state.evaluations.push({
-    id: "eval-seeded",
+  const previousResults = results.map((item) => ({
+    ...item,
+    judgement: { ...item.judgement, verdict: "incorrect", score: 0.2 },
+  }));
+  const job = (id: string, items: typeof results) => ({
+    id,
     agent_id: "default",
     agent_name: "汎用業務 Agent",
+    set_id: SET.id,
+    set_name: SET.name,
     status: "completed",
     created_by_user_uuid: "local",
-    results,
+    results: items,
     error: null,
-    summary: evaluationSummary(results),
+    summary: evaluationSummary(items),
     created_at: MOCK_NOW,
     started_at: MOCK_NOW,
     finished_at: MOCK_NOW,
+    previous_job_id: null as string | null,
+    previous_summary: null as unknown,
   });
+  const latest = job("eval-latest", results);
+  const previous = job("eval-previous", previousResults);
+  latest.previous_job_id = previous.id;
+  latest.previous_summary = previous.summary;
+  mockApi.state.evaluations.push(latest, previous);
 }
 
 for (const viewport of VIEWPORTS) {
-  test(`評価ケースで評価を始め、進み具合の後に概要とケース別結果を出す (${viewport.name})`, async ({ page, mockApi }) => {
+  test(`評価セットを作り、評価を始めると進み具合の後に結果を出す (${viewport.name})`, async ({ page, mockApi }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/evaluation");
     await expect(page.getByRole("heading", { name: "品質評価", level: 1 })).toBeVisible();
-    await expect(page.getByText("まだ評価はありません")).toBeVisible();
+    await expect(page.getByText("この業務 Agent の評価セットはまだありません")).toBeVisible();
 
-    // JSON の誤りはその場で知らせ、開始しない。
-    const cases = page.getByLabel("評価ケース（JSON）");
-    await cases.fill("{ 壊れた JSON");
-    await expect(page.getByText("JSON の形式が正しくありません。")).toBeVisible();
-    await page.getByTestId("evaluation-start").click();
-    expect(mockApi.lastRequest("POST", "/api/evaluations")).toBeUndefined();
+    await page.getByRole("button", { name: "評価セットを作成" }).first().click();
+    await expect(page).toHaveURL(/\/evaluation\?id=new$/);
+    // 必須の入力が無ければ保存しない。
+    await page.getByRole("button", { name: "作成", exact: true }).first().click();
+    await expect(page.getByText("名前を入力してください。")).toBeVisible();
+    await expect(page.getByText("質問を入力してください。")).toBeVisible();
+    expect(mockApi.lastRequest("POST", "/api/evaluation-sets")).toBeUndefined();
 
-    await page.getByRole("button", { name: "サンプルを読み込む" }).click();
-    await expect(page.getByText("2 件のケース")).toBeVisible();
-    await page.getByTestId("evaluation-start").click();
+    await page.getByLabel("名前").fill("経理の評価");
+    const first = page.getByTestId("evaluation-case-1");
+    await first.getByLabel("質問").fill("経費精算の締め日はいつですか？");
+    await first.getByLabel("期待する回答の要点").fill("毎月 25 日");
+    await first.getByLabel("期待するツール").fill("rag_search");
+    await page.getByRole("button", { name: "ケースを追加" }).click();
+    const second = page.getByTestId("evaluation-case-2");
+    await second.getByLabel("質問").fill("今月の売上の合計はいくらですか？");
+    await second.getByLabel("期待する回答の要点").fill("合計金額（円）");
+    await page.getByRole("button", { name: "作成", exact: true }).first().click();
+
+    await expect(page.getByText("評価セットを作成しました")).toBeVisible();
+    await expect(page).toHaveURL(/\/evaluation\?id=evset-1$/);
+    expect(mockApi.lastRequest("POST", "/api/evaluation-sets")?.body).toEqual({
+      agent_id: "default",
+      name: "経理の評価",
+      description: "",
+      cases: [
+        { question: "経費精算の締め日はいつですか？", expected: "毎月 25 日", expected_tools: ["rag_search"] },
+        { question: "今月の売上の合計はいくらですか？", expected: "合計金額（円）", expected_tools: [] },
+      ],
+    });
+
+    // 評価セットから評価を始める（対象の操作は概要の ObjectActionBar）。
+    const actions = page.getByTestId("evaluation-set-actions");
+    await expect(actions).toBeVisible();
+    const startButton = actions.getByRole("button", { name: "評価を開始" });
+    if (await startButton.count()) {
+      await startButton.click();
+    } else {
+      await page.getByTestId("evaluation-set-actions-more").click();
+      await page.getByRole("menuitem", { name: "評価を開始" }).click();
+    }
     await expect(page.getByText("評価を開始しました")).toBeVisible();
-    const body = mockApi.lastRequest("POST", "/api/evaluations")?.body as { agent_id: string; cases: unknown[] };
-    expect(body.agent_id).toBe("default");
-    expect(body.cases).toHaveLength(2);
+    await expect(page).toHaveURL(/\/evaluation$/);
+    expect(mockApi.lastRequest("POST", "/api/evaluations")?.body).toEqual({ set_id: "evset-1" });
 
-    // 実行中は進み具合を出し、終わったら概要とケース別結果。
-    await expect(page.getByTestId("evaluation-progress")).toContainText("汎用業務 Agent を評価しています（0 / 2 件）");
+    await expect(page.getByTestId("evaluation-progress")).toContainText("経理の評価 を評価しています（0 / 2 件）");
     const summary = page.getByTestId("evaluation-summary");
     await expect(summary).toContainText("50%");
+    await expect(summary).toContainText("ツールの選択の正しさ");
     await expect(page.getByTestId("evaluation-progress")).toHaveCount(0);
     const results = page.getByRole("table", { name: "ケース別結果" });
-    await expect(results.getByRole("row", { name: /expense-deadline/ })).toContainText("正しい");
-    await expect(results.getByRole("row", { name: /sales-total/ })).toContainText("誤り");
-    await expect(page.getByRole("table", { name: "最近の評価" })).toContainText("完了");
+    await expect(results.getByRole("row", { name: /case-1/ })).toContainText("期待どおり");
+    await expect(results.getByRole("row", { name: /case-2/ })).toContainText("誤り");
+    await expect(page.getByRole("table", { name: "評価セットの一覧" }).getByRole("row", { name: /経理の評価/ })).toContainText(
+      "50%"
+    );
     await expectNoHorizontalOverflow(page);
   });
 
   for (const theme of ["light", "dark"] as const) {
-    test(`評価の概要・ケース別結果・詳細を出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`前回との比較・ツールの選択・ケースの詳細を出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);
-      seedFinishedJob(mockApi);
+      seedFinishedJobs(mockApi);
       await page.goto("/evaluation");
 
       const summary = page.getByTestId("evaluation-summary");
-      await expect(summary).toContainText("合格率");
-      await expect(summary).toContainText("33%");
-      await expect(summary).toContainText("0.60");
-      await expect(summary).toContainText("評価できなかった");
+      await expect(summary).toContainText("67%");
+      await expect(summary).toContainText("前回から +67 ポイント");
+      await expect(summary).toContainText("50%");
+      await expect(summary).toContainText("1 / 2 件");
+      await expect(page.getByTestId("evaluation-previous")).toHaveText("差は、同じ評価セットの前回の評価との比較です。");
       const results = page.getByRole("table", { name: "ケース別結果" });
-      await expect(results.getByRole("row", { name: /register/ })).toContainText("承認が必要");
+      await expect(results.getByRole("row", { name: /sales-total/ })).toContainText("期待と違う");
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`evaluation-${viewport.name}-${theme}.png`), fullPage: true });
 
       await results.getByRole("button", { name: /今月の売上の合計はいくらですか？/ }).click();
       const detail = page.getByRole("dialog", { name: "ケースの詳細" });
       await expect(detail).toContainText("合計金額（円）");
-      await expect(detail).toContainText("分かりません。");
       await expect(detail).toContainText("金額を答えていません。");
-      await expect(detail).toContainText("今月の売上の合計金額");
+      await expect(detail).toContainText("nl2sql_query");
+      await expect(detail).toContainText("承認が要るツールを実行せずに");
       await expect(detail).toBeInViewport({ ratio: 1 });
       await page.screenshot({ path: testInfo.outputPath(`evaluation-detail-${viewport.name}-${theme}.png`) });
     });
   }
 }
 
-test("実行中の評価は取り消せ、終わった評価は確認してから削除できる", async ({ page, mockApi }) => {
-  mockApi.state.evaluationPollsUntilDone = 1_000;
-  seedFinishedJob(mockApi);
-  await page.goto("/evaluation");
-  await page.getByRole("button", { name: "サンプルを読み込む" }).click();
-  await page.getByTestId("evaluation-start").click();
-  const progress = page.getByTestId("evaluation-progress");
-  await expect(progress).toBeVisible();
-  // 実行中はほかの評価を始められない。
-  await expect(page.getByTestId("evaluation-start")).toBeDisabled();
+test("Excel から評価ケースを取り込み（確認して置き換え）、テンプレートと書き出しを取得できる", async ({ page, mockApi }, testInfo) => {
+  seedSet(mockApi);
+  await page.goto("/evaluation?id=evset-seeded");
+  await expect(page.getByRole("heading", { name: "経理の評価", level: 1 })).toBeVisible();
+  await expect(page.getByText("評価ケース（3 件）")).toBeVisible();
 
-  await progress.getByRole("button", { name: "取り消し" }).click();
-  await expect(page.getByText("評価を取り消しました")).toBeVisible();
-  await expect(progress).toHaveCount(0);
-  expect(mockApi.lastRequest("POST", "/api/evaluations/eval-2/cancel")).toBeDefined();
-
-  // 前の評価を表示してから削除する（確認のダイアログ）。
-  await page.getByTestId("evaluation-row-actions-eval-seeded").click();
-  await page.getByRole("menuitem", { name: "削除" }).click();
+  await page.getByTestId("evaluation-set-file").setInputFiles({
+    name: "cases.xlsx",
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    buffer: Buffer.from("PK-mock"),
+  });
   const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
-  await expect(dialog.getByText("この評価を削除しますか?")).toBeVisible();
+  await expect(dialog.getByText("評価ケースを置き換えますか?")).toBeVisible();
+  await dialog.getByRole("button", { name: "置き換える" }).click();
+  await expect(page.getByText("Excel から 2 件を読み込みました。保存すると反映します。")).toBeVisible();
+  await expect(page.getByText("評価ケース（2 件）")).toBeVisible();
+  await expect(page.getByTestId("evaluation-case-1").getByLabel("質問")).toHaveValue("Excel の質問 1");
+  await page.screenshot({ path: testInfo.outputPath("evaluation-set-editor.png"), fullPage: true });
+  expect(mockApi.lastRequest("POST", "/api/evaluation-sets/parse-xlsx")).toBeDefined();
+
+  // 保存していない変更があるときは評価を始めず、変更を破棄できる。
+  await page.getByRole("button", { name: "変更を破棄" }).click();
+  await expect(page.getByText("評価ケース（3 件）")).toBeVisible();
+
+  await page.getByRole("button", { name: "テンプレートをダウンロード" }).click();
+  await expect.poll(() => mockApi.lastRequest("GET", "/api/evaluation-sets/template.xlsx")).toBeDefined();
+});
+
+test("保存していない変更があるときは、一覧へ戻る前に確かめる。一覧から評価セットを削除できる", async ({ page, mockApi }) => {
+  seedSet(mockApi);
+  await page.goto("/evaluation?id=evset-seeded");
+  await page.getByLabel("名前").fill("経理の評価（改）");
+  await page.getByRole("button", { name: "一覧へ戻る" }).last().click();
+  const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
+  await expect(dialog.getByText("変更を破棄しますか")).toBeVisible();
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page.getByLabel("名前")).toHaveValue("経理の評価（改）");
+
+  await page.getByRole("button", { name: "保存", exact: true }).first().click();
+  await expect(page.getByText("評価セットを保存しました")).toBeVisible();
+  await page.getByRole("button", { name: "一覧へ戻る" }).last().click();
+  await expect(page).toHaveURL(/\/evaluation$/);
+
+  await page.getByTestId("evaluation-set-row-actions-evset-seeded").click();
+  await page.getByRole("menuitem", { name: "削除" }).click();
+  await expect(dialog.getByText("「経理の評価（改）」を削除しますか?")).toBeVisible();
   await dialog.getByRole("button", { name: "削除", exact: true }).click();
-  await expect(page.getByText("評価を削除しました")).toBeVisible();
-  expect(mockApi.lastRequest("DELETE", "/api/evaluations/eval-seeded")).toBeDefined();
+  await expect(page.getByText("評価セットを削除しました")).toBeVisible();
+  await expect(page.getByText("この業務 Agent の評価セットはまだありません")).toBeVisible();
 });
 
 test("読み込み中は経過時間を出す", async ({ page, mockApi }) => {
-  seedFinishedJob(mockApi);
-  await page.route("**/api/evaluations/eval-seeded", async (route) => {
+  seedFinishedJobs(mockApi);
+  await page.route("**/api/evaluations/eval-latest", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     await route.fallback();
   });
