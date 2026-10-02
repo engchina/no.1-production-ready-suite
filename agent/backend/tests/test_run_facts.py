@@ -326,6 +326,10 @@ class _Connection:
         self.commits += 1
 
 
+def _no_names(_uuids: list[str]) -> dict[str, str]:
+    return {}
+
+
 def _oracle(connection: _Connection) -> OracleRunFactsStore:
     @contextmanager
     def connect() -> Iterator[_Connection]:
@@ -423,7 +427,7 @@ def test_usage_report_is_aggregated_in_sql() -> None:
 def test_usage_report_without_allowed_agents_does_not_query() -> None:
     connection = _Connection()
     report = _oracle(connection).usage_report(
-        days=30, now=NOW, tz=TOKYO, agent_ids=frozenset(), agent_names={}, user_names=dict
+        days=30, now=NOW, tz=TOKYO, agent_ids=frozenset(), agent_names={}, user_names=_no_names
     )
     assert (report.totals.runs, len(report.by_day), connection.executed) == (0, 30, [])
 
@@ -518,7 +522,7 @@ def test_missing_table_is_reported_as_unavailable() -> None:
     connection.error = RuntimeError("ORA-00942: table or view does not exist")
     with pytest.raises(RunFactsUnavailableError):
         _oracle(connection).usage_report(
-            days=7, now=NOW, tz=TOKYO, agent_ids=None, agent_names={}, user_names=dict
+            days=7, now=NOW, tz=TOKYO, agent_ids=None, agent_names={}, user_names=_no_names
         )
 
 
