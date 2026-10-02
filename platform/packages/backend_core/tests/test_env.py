@@ -85,3 +85,20 @@ def test_platform_env_file_can_be_overridden(
     assert platform_env_file(backend_dir) == tmp_path.resolve() / "platform" / ".env"
     monkeypatch.setenv("PLATFORM_ENV_FILE", str(tmp_path / "shared.env"))
     assert platform_env_file(backend_dir) == tmp_path / "shared.env"
+
+
+def test_backend_service_env_example_loads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """新サービスの雛形をコピーしたときの設定解析を検証する。"""
+    import os
+
+    for key in tuple(os.environ):
+        if key.startswith(("PLATFORM_", "SERVICE_")):
+            monkeypatch.delenv(key)
+    platform = Path(__file__).resolve().parents[3]
+    backend = platform / "templates" / "backend-service"
+
+    class Settings(BaseServiceSettings):
+        model_config = product_settings_config(prefix="SERVICE_", backend_dir=backend)
+
+    settings = Settings(_env_file=backend / ".env.example")
+    assert settings.cors_origins == ["http://localhost:3000"]

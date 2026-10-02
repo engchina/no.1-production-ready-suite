@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from app.config_audit import (
     ENV_ASSIGNMENT_RE,
     AuditPaths,
@@ -203,3 +205,23 @@ def test_terraform_env_keys_are_known_settings_in_the_right_file() -> None:
     assert backend_keys <= product_keys
     assert platform_env_keys <= platform_keys
     assert "PLATFORM_ADMIN_LOGIN_USER_PASSWORD" in platform_env_keys
+
+
+def test_platform_and_product_env_examples_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    """実際の雛形を読み込み、初回起動時の設定解析エラーを検出する。"""
+    import os
+
+    from app.settings import Settings
+
+    for key in tuple(os.environ):
+        if key.startswith(("PLATFORM_", "NL2SQL_")):
+            monkeypatch.delenv(key)
+    backend = Path(__file__).resolve().parents[1]
+    settings = Settings(
+        _env_file=(backend.parents[1] / "platform" / ".env.example", backend / ".env.example")
+    )
+
+    assert settings.cors_origins
+    assert all(origin.startswith("http://") for origin in settings.cors_origins)
+    assert settings.oci_enterprise_ai_models == []
+    assert settings.oracle_password in ("", None)
