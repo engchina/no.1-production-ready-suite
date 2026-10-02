@@ -256,10 +256,7 @@ async def stream_message(
 async def _load_sendable_conversation(
     oracle: OracleClient, conversation_id: str
 ) -> StoredConversation:
-    """送信できる会話を返す(会話・業務ビューの存在と状態、参照 KB の範囲を確認する)。
-
-    SSE の送信(`stream_message`)と MCP の送信(`send_chat_message`)が共通で使う。
-    """
+    """送信できる会話を返す(会話・業務ビューの存在と状態、参照 KB の範囲を確認する)。"""
     conversation = await oracle.get_conversation(conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE)
@@ -536,30 +533,6 @@ async def _generate_chat_answer(
             )
         raise
     return assistant, result
-
-
-async def send_chat_message(
-    conversation_id: str,
-    request: ChatMessageRequest,
-    settings: Settings,
-) -> tuple[StoredConversation, StoredMessage, SearchResponse]:
-    """ストリーミングせずに 1 往復を送る(MCP の `rag_chat_send_message`。#232)。
-
-    既定のモデル(`model_ids` 指定時はその先頭)1 系統で回答し、USER / ASSISTANT を保存する。
-    生成のタイムアウトは 504 にする(失敗も ERROR として保存済み)。
-    rate limit とチャットの有効判定は呼び出し側で行う。
-    """
-    oracle = OracleClient()
-    conversation = await _load_sendable_conversation(oracle, conversation_id)
-    turn = await _prepare_chat_turn(
-        oracle, conversation_id, conversation.business_view_id, request, settings
-    )
-    model_id = _resolve_compare_models(request, turn.settings)[0]["model_id"]
-    try:
-        assistant, result = await _generate_chat_answer(oracle, turn, model_id)
-    except AnswerTimeoutError as exc:
-        raise HTTPException(status_code=504, detail=exc.user_message) from exc
-    return conversation, assistant, result
 
 
 async def _stream_chat_events(

@@ -1,8 +1,8 @@
 """RAG の MCP サーバー（`POST /api/mcp`。#232）のテスト。
 
 production mode（InMemory の共通認証）で、Agent が作るサービストークンの利用者として呼ぶ。
-Oracle・LLM は既存の fake / スタブ（検索: 範囲で絞る fake の業務ビュー、チャット: インメモリの
-会話と固定回答の pipeline）に差し替え、実サービスは呼ばない。
+Oracle・LLM は既存の fake / スタブ（範囲で絞る fake の業務ビュー）に差し替え、実サービスは呼ばない。
+RAG のチャットは MCP で提供しない（#787）。
 """
 
 from __future__ import annotations
@@ -14,31 +14,22 @@ from pr_system_settings.auth.service_token import issue_service_token
 from pytest import MonkeyPatch
 
 from app.api.routes import business_views as business_views_route
-from app.api.routes import chat as chat_route
 from app.api.routes import search as search_route
-from app.clients.oracle import StoredConversation
 from app.config import get_settings
 from app.main import app
 from app.rag import request_context
-from app.rag.answer_timeout import answer_timeout_message
 from app.rag.request_context import AuditRequestContext, current_audit_request_context
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
 from app.security.permissions import SCOPE_FORBIDDEN_CODE, permission_for_route
 from tests.security_support import ProductionAuth, enable_production_auth, login
 from tests.support import AsgiTestClient
-from tests.test_chat_api import FakeChatOracle, _stub_stream
 from tests.test_search_business_view import RecordingPipeline
 from tests.test_security_api import ScopedFakeOracle
 from tests.test_security_scope import _captured_knowledge_base_ids, _install_search
 
 client = AsgiTestClient(app)
 SECRET = "rag-mcp-test-secret-0123456789abcdef"  # nosec B105 - テスト用
-ALL_TOOLS = [
-    "rag_list_business_views",
-    "rag_search",
-    "rag_chat_send_message",
-    "rag_chat_get_conversation",
-]
+ALL_TOOLS = ["rag_list_business_views", "rag_search"]
 
 
 @pytest.fixture
@@ -130,11 +121,8 @@ def test_initialize_and_tools_list_follow_user_permissions(auth: ProductionAuth)
     assert server_info == {"name": "production-ready-rag", "version": get_settings().app_version}
 
     assert _tool_names(_token(searcher.user_uuid)) == ["rag_list_business_views", "rag_search"]
-    assert _tool_names(_token(chatter.user_uuid)) == [
-        "rag_list_business_views",
-        "rag_chat_send_message",
-        "rag_chat_get_conversation",
-    ]
+    # チャットは MCP で提供しない（#787）。チャットだけの利用者は業務ビューの一覧だけを使える。
+    assert _tool_names(_token(chatter.user_uuid)) == ["rag_list_business_views"]
     assert _tool_names(_token(viewer.user_uuid)) == []
     assert _tool_names(_token(admin.user_uuid)) == ALL_TOOLS
 
@@ -278,153 +266,19 @@ def test_search_maps_citations_and_uses_token_user_context(
 
 
 # ---------------------------------------------------------------------------
-# チャット
+# チャット（MCP では提供しない。#787）
 # ---------------------------------------------------------------------------
 
 
-class OwnedChatOracle(FakeChatOracle):
-    """会話の持ち主（監査 context の user_id_hash）で絞る fake（Oracle の SQL と同じ）。"""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.owners: dict[str, str | None] = {}
-
-    async def create_conversation(
-        self, *, business_view_id: str, title: str | None = None
-    ) -> StoredConversation:
-        conversation = await super().create_conversation(
-            business_view_id=business_view_id, title=title
-        )
-        self.owners[conversation.id] = current_audit_request_context().user_id_hash
-        return conversation
-
-    async def get_conversation(self, conversation_id: str) -> StoredConversation | None:
-        owner = self.owners.get(conversation_id)
-        if owner != current_audit_request_context().user_id_hash:
-            return None
-        return await super().get_conversation(conversation_id)
-
-
-@pytest.fixture
-def chat_oracle(monkeypatch: MonkeyPatch) -> OwnedChatOracle:
-    fake = OwnedChatOracle()
-    _stub_stream(monkeypatch, fake, ["m1"])
-    return fake
-
-
-def test_chat_create_send_and_get_as_token_user(
-    auth: ProductionAuth, chat_oracle: OwnedChatOracle
-) -> None:
-    chatter = auth.user_with_permissions("chatter", ["menu.chat"])
-    other = auth.user_with_permissions("other", ["menu.chat"])
-    headers = _token(chatter.user_uuid)
-
-    first = _call(
-        "rag_chat_send_message",
-        {"content": "経費の上限は?", "business_view_id": "bv-1", "title": "経費"},
-        headers,
+@pytest.mark.parametrize("name", ["rag_chat_send_message", "rag_chat_get_conversation"])
+def test_chat_tools_are_not_provided(auth: ProductionAuth, name: str) -> None:
+    admin = auth.create_user("admin", system_admin=True)
+    response = _rpc(
+        "tools/call",
+        {"name": name, "arguments": {"content": "質問", "business_view_id": "bv-1"}},
+        headers=_token(admin.user_uuid),
     )
-    assert first["isError"] is False, first
-    body = first["structuredContent"]
-    conversation_id = body["conversation_id"]
-    assert body["answer"] == "回答"
-    assert body["citations"] == [
-        {"document_id": "d1", "chunk_id": "ch1", "file_name": None, "text": "根拠", "score": 0.9}
-    ]
-    stored = chat_oracle.messages[conversation_id]
-    assert [message.role for message in stored] == ["USER", "ASSISTANT"]
-    assert body["message_id"] == stored[1].id
-    assert stored[1].model == "m1"
-    # 会話の持ち主は token の利用者。
-    owner = request_context._header_hash(chatter.user_uuid, get_settings())
-    assert chat_oracle.owners[conversation_id] == owner
-    assert chat_oracle.conversations[conversation_id].title == "経費"
-
-    second = _call(
-        "rag_chat_send_message",
-        {"content": "交通費は?", "conversation_id": conversation_id},
-        headers,
-    )
-    assert second["structuredContent"]["conversation_id"] == conversation_id
-
-    detail = _call(
-        "rag_chat_get_conversation",
-        {"conversation_id": conversation_id, "message_limit": 3},
-        headers,
-    )["structuredContent"]
-    assert detail["conversation_id"] == conversation_id
-    assert detail["business_view_id"] == "bv-1"
-    assert detail["status"] == "ACTIVE"
-    assert [(item["role"], item["content"]) for item in detail["messages"]] == [
-        ("ASSISTANT", "回答"),
-        ("USER", "交通費は?"),
-        ("ASSISTANT", "回答"),
-    ]
-
-    # 他の利用者の会話は存在しないものとして 404。
-    hidden = _call(
-        "rag_chat_get_conversation", {"conversation_id": conversation_id}, _token(other.user_uuid)
-    )
-    assert hidden["isError"] is True
-    assert hidden["structuredContent"]["status"] == 404
-    denied_send = _call(
-        "rag_chat_send_message",
-        {"content": "続き", "conversation_id": conversation_id},
-        _token(other.user_uuid),
-    )
-    assert denied_send["structuredContent"]["status"] == 404
-
-
-def test_chat_send_validates_target_and_business_view(
-    auth: ProductionAuth, chat_oracle: OwnedChatOracle
-) -> None:
-    headers = _token(auth.user_with_permissions("chatter", ["menu.chat"]).user_uuid)
-    missing_target = _call("rag_chat_send_message", {"content": "質問"}, headers)
-    assert missing_target["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
-    unknown_view = _call(
-        "rag_chat_send_message", {"content": "質問", "business_view_id": "bv-missing"}, headers
-    )
-    assert unknown_view["structuredContent"]["status"] == 404
-    assert chat_oracle.conversations == {}
-
-
-def test_chat_tools_return_404_when_chat_disabled(
-    auth: ProductionAuth, chat_oracle: OwnedChatOracle, monkeypatch: MonkeyPatch
-) -> None:
-    monkeypatch.setattr(get_settings(), "rag_chat_enabled", False)
-    headers = _token(auth.user_with_permissions("chatter", ["menu.chat"]).user_uuid)
-    sent = _call("rag_chat_send_message", {"content": "質問", "business_view_id": "bv-1"}, headers)
-    assert sent["isError"] is True
-    assert sent["structuredContent"]["status"] == 404
-    assert sent["structuredContent"]["message"] == chat_route.CHAT_DISABLED_MESSAGE
-    got = _call("rag_chat_get_conversation", {"conversation_id": "conv-1"}, headers)
-    assert got["structuredContent"]["status"] == 404
-    assert chat_oracle.conversations == {}
-
-
-def test_chat_send_timeout_returns_504_and_saves_error(
-    auth: ProductionAuth, chat_oracle: OwnedChatOracle, monkeypatch: MonkeyPatch
-) -> None:
-    class TimeoutPipeline:
-        def __init__(self, *_args: object, **_kwargs: object) -> None:
-            pass
-
-        async def run(self, *_args: object, **_kwargs: object) -> SearchResponse:
-            raise TimeoutError
-
-    monkeypatch.setattr(chat_route, "RagPipeline", TimeoutPipeline)
-    headers = _token(auth.user_with_permissions("chatter", ["menu.chat"]).user_uuid)
-    result = _call(
-        "rag_chat_send_message", {"content": "質問", "business_view_id": "bv-1"}, headers
-    )
-    assert result["isError"] is True
-    assert result["structuredContent"]["status"] == 504
-    assert result["structuredContent"]["message"] == answer_timeout_message(None, None)
-    (conversation_id,) = chat_oracle.messages.keys()
-    # 新しく作った会話の ID を返し、再試行で会話を増やさないようにする（#252）。
-    assert result["structuredContent"]["details"] == {"conversation_id": conversation_id}
-    (messages,) = chat_oracle.messages.values()
-    assert [(message.role, message.status) for message in messages] == [
-        ("USER", "COMPLETE"),
-        ("ASSISTANT", "ERROR"),
-    ]
+    assert response.status_code == 200, response.text
+    error = response.json()["error"]
+    assert error["code"] == -32602
+    assert name in error["message"]

@@ -7,13 +7,12 @@
 - `rag_list_business_views`（業務ビュー一覧の route と同じ権限）:
   `business_views.list_business_views`（ACTIVE のみ）
 - `rag_search`（`menu.search`）: `search._run_search_with_timeout`
-- `rag_chat_send_message`（`menu.chat`）: `chat.create_conversation` / `chat.send_chat_message`
-- `rag_chat_get_conversation`（`menu.chat`）: `chat.get_conversation`
+
+RAG のチャットは画面の機能で、MCP では提供しない（#787）。MCP で提供するのは検索だけにする。
 """
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import HTTPException, Request
@@ -22,31 +21,27 @@ from pr_backend_core.mcp import (
     McpServer,
     McpTool,
     McpToolError,
-    mcp_error_from_exception,
 )
-from pydantic import AfterValidator, BaseModel, Field, ValidationError, model_validator
+from pydantic import AfterValidator, BaseModel, Field, ValidationError
 
 from app.api.routes import business_views as business_views_route
-from app.api.routes import chat as chat_route
 from app.api.routes import search as search_route
 from app.config import get_settings
 from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.business_view import BusinessViewStatus
-from app.schemas.chat import ChatMessageRequest, ConversationCreateRequest
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
-from app.security.permissions import MENU_CHAT, MENU_SEARCH, ROUTE_PERMISSIONS
+from app.security.permissions import MENU_SEARCH, ROUTE_PERMISSIONS
 
 MCP_SERVER_NAME = "production-ready-rag"
 CITATION_TEXT_MAX_CHARS = 1000
 
 BUSINESS_VIEW_READ_PERMISSIONS = ROUTE_PERMISSIONS[("GET", "/business-views")]
 SEARCH_PERMISSIONS = frozenset({MENU_SEARCH})
-CHAT_PERMISSIONS = frozenset({MENU_CHAT})
 
 INSTRUCTIONS = (
-    "Production Ready RAG の検索・回答とチャットのツールです。"
-    "まず rag_list_business_views で使える業務ビューを確認し、その id を rag_search / "
-    "rag_chat_send_message に渡してください。回答の根拠は citations にあります。"
+    "Production Ready RAG の検索・回答のツールです。"
+    "まず rag_list_business_views で使える業務ビューを確認し、その id を rag_search に"
+    "渡してください。回答の根拠は citations にあります。"
 )
 
 
@@ -93,34 +88,6 @@ class SearchInput(BaseModel):
     )
 
 
-class ChatSendMessageInput(BaseModel):
-    """チャットへの送信。`conversation_id` がなければ `business_view_id` で会話を作る。"""
-
-    content: str = Field(..., min_length=1, max_length=8000, description="送るメッセージ。")
-    conversation_id: OptionalText = Field(
-        default=None, max_length=128, description="続ける会話の id（指定時は業務ビューを無視）。"
-    )
-    business_view_id: OptionalText = Field(
-        default=None, max_length=128, description="新しい会話を作る業務ビューの id。"
-    )
-    title: OptionalText = Field(default=None, max_length=400, description="新しい会話の名前。")
-
-    @model_validator(mode="after")
-    def _require_target(self) -> ChatSendMessageInput:
-        if self.conversation_id is None and self.business_view_id is None:
-            raise ValueError("conversation_id か business_view_id を指定してください。")
-        return self
-
-
-class ChatGetConversationInput(BaseModel):
-    """会話の取得。"""
-
-    conversation_id: str = Field(..., min_length=1, max_length=128)
-    message_limit: int = Field(
-        default=20, ge=1, le=100, description="新しいほうから返すメッセージの最大件数。"
-    )
-
-
 # ---- 出力 ----
 
 
@@ -149,26 +116,6 @@ class SearchOutput(BaseModel):
     trace_id: str
     guardrail_warnings: list[str]
     citations: list[RagCitation]
-
-
-class ChatSendMessageOutput(SearchOutput):
-    conversation_id: str
-    message_id: str
-
-
-class ConversationMessageItem(BaseModel):
-    id: str
-    role: str
-    content: str
-    created_at: datetime
-
-
-class ConversationOutput(BaseModel):
-    conversation_id: str
-    title: str | None = None
-    business_view_id: str
-    status: str
-    messages: list[ConversationMessageItem]
 
 
 def _citation(chunk: RetrievedChunk) -> RagCitation:
@@ -245,65 +192,6 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         result = await search_route._run_search_with_timeout(request)
         return SearchOutput(**_answer_fields(result))
 
-    async def chat_send_message(arguments: ChatSendMessageInput) -> ChatSendMessageOutput:
-        settings = get_settings()
-        chat_route._require_chat_enabled(settings)
-        enforce_rate_limit("search", http_request)
-        conversation_id = arguments.conversation_id
-        if conversation_id is None:
-            assert arguments.business_view_id is not None  # nosec B101 - 入力の検証済み
-            created = await chat_route.create_conversation(
-                ConversationCreateRequest(
-                    business_view_id=arguments.business_view_id, title=arguments.title
-                )
-            )
-            assert created.data is not None  # nosec B101 - route は必ず data を返す
-            conversation_id = created.data.id
-            new_conversation = True
-        else:
-            new_conversation = False
-        try:
-            conversation, assistant, result = await chat_route.send_chat_message(
-                conversation_id, ChatMessageRequest(content=arguments.content), settings
-            )
-        except Exception as exc:
-            # 作った会話は失敗しても残る（発話と ERROR の回答を保存済み）。再試行で会話を増やさない
-            # よう、その ID をエラーに添える（#252。内部エラーは従来どおり隠す）。
-            converted = (
-                mcp_error_from_exception(exc, details={"conversation_id": conversation_id})
-                if new_conversation
-                else None
-            )
-            if converted is None:
-                raise
-            raise converted from exc
-        return ChatSendMessageOutput(
-            conversation_id=conversation.id,
-            message_id=assistant.id,
-            **_answer_fields(result),
-        )
-
-    async def chat_get_conversation(arguments: ChatGetConversationInput) -> ConversationOutput:
-        response = await chat_route.get_conversation(arguments.conversation_id)
-        detail = response.data
-        assert detail is not None  # nosec B101 - route は必ず data を返す
-        messages = detail.messages[-arguments.message_limit :]
-        return ConversationOutput(
-            conversation_id=detail.id,
-            title=detail.title,
-            business_view_id=detail.business_view_id,
-            status=detail.status.value,
-            messages=[
-                ConversationMessageItem(
-                    id=message.message_id,
-                    role=message.role.value,
-                    content=message.content,
-                    created_at=message.created_at,
-                )
-                for message in messages
-            ],
-        )
-
     return McpServer(
         name=MCP_SERVER_NAME,
         version=get_settings().app_version,
@@ -326,28 +214,6 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 handler=search,
                 output_model=SearchOutput,
                 permissions=(SEARCH_PERMISSIONS,),
-            ),
-            McpTool(
-                name="rag_chat_send_message",
-                description=(
-                    "チャットの会話にメッセージを送り、既定のモデルの回答を返します。"
-                    "conversation_id がなければ business_view_id の業務ビューで会話を作ります。"
-                ),
-                input_model=ChatSendMessageInput,
-                handler=chat_send_message,
-                output_model=ChatSendMessageOutput,
-                permissions=(CHAT_PERMISSIONS,),
-                read_only=False,
-            ),
-            McpTool(
-                name="rag_chat_get_conversation",
-                description=(
-                    "自分の会話と、新しいほうから最大 message_limit 件のメッセージを返します。"
-                ),
-                input_model=ChatGetConversationInput,
-                handler=chat_get_conversation,
-                output_model=ConversationOutput,
-                permissions=(CHAT_PERMISSIONS,),
             ),
         ],
     )

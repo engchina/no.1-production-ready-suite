@@ -53,7 +53,6 @@ CONTRACTS = Path(__file__).resolve().parents[3] / "platform/contracts/mcp"
 READ_ONLY = {
     "rag_search": True,
     "rag_list_business_views": True,
-    "rag_chat_send_message": False,
     "nl2sql_query": False,
     "nl2sql_get_job": True,
 }
@@ -346,7 +345,7 @@ def test_tools_list_reports_read_only_and_function_names(monkeypatch: MonkeyPatc
     }
 
     assert rag["rag_search"].read_only is True
-    assert rag["rag_chat_send_message"].read_only is False
+    assert rag["rag_list_business_views"].read_only is True
     assert rag["rag_search"].function_name == "rag__rag_search"
     assert "query" in rag["rag_search"].input_schema["properties"]
     assert nl2sql["nl2sql_query"].read_only is False
@@ -366,16 +365,9 @@ def test_write_tools_require_approval_by_default(monkeypatch: MonkeyPatch) -> No
     default_policy = ToolPolicy()
 
     query = _invoke("nl2sql", "nl2sql_query", {"question": "売上"}, policy=default_policy)
-    chat = _invoke(
-        "rag",
-        "rag_chat_send_message",
-        {"content": "質問", "business_view_id": "bv-sales"},
-        policy=default_policy,
-    )
     search = _invoke("rag", "rag_search", {"query": "契約"}, policy=default_policy)
 
     assert query.approval_required is True
-    assert chat.approval_required is True
     assert search.success is True, search.error
     assert [call["name"] for call in mcp.tool_calls] == ["rag_search"]
 

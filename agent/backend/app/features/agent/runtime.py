@@ -946,7 +946,6 @@ class AgentRuntimeRepository:
         # MCP 接続のツール（`<接続>__<ツール>`。#757）は、ツールの部分で成果物の種類を決める。
         artifact_kind_by_tool = {
             "rag_search": "rag_evidence",
-            "rag_chat_send_message": "rag_evidence",
             "nl2sql_query": "structured_table",
             "nl2sql_get_job": "structured_table",
         }

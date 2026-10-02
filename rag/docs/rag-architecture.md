@@ -111,9 +111,9 @@
 Agent（Production Control Plane）は RAG を `POST /api/mcp`（MCP の Streamable HTTP、JSON 応答。#232）で呼ぶ。製品同士はコードで依存しない。
 
 - 入口と認証: `Authorization: Bearer <サービストークン>`（`aud=rag`、`sub`=Run の利用者の `user_uuid`、署名鍵は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`）。Cookie / CSRF は使わない。route manifest では `/mcp` を「認証済みなら通す」とし、権限はツールごとに判定する。
-- 利用者: token の利用者の現在のロール・権限・業務ビュー / ナレッジベースの対象範囲を画面と同じ判定で使う。会話の持ち主・回答履歴・rate limit も同じ利用者。token の `agent_id` / `run_id` は hash して監査 context の agent / thread に入れる。
-- ツール: `rag_list_business_views`（業務ビュー一覧と同じ権限）、`rag_search`（`menu.search`。`POST /api/search` と同じ処理）、`rag_chat_send_message`（`menu.chat`。既定のモデル 1 系統で回答し、USER / ASSISTANT を保存。会話がなければ業務ビューで作る）、`rag_chat_get_conversation`（`menu.chat`）。入出力は [backend/README.md](../backend/README.md) の「MCP」を参照。
-- チャットの送信は SSE（`POST /api/chat/conversations/{id}/messages/stream`）と MCP で同じ関数（`_prepare_chat_turn` → `_generate_chat_answer`）を使う。
+- 利用者: token の利用者の現在のロール・権限・業務ビュー / ナレッジベースの対象範囲を画面と同じ判定で使う。回答履歴・rate limit も同じ利用者。token の `agent_id` / `run_id` は hash して監査 context の agent / thread に入れる。
+- ツール: `rag_list_business_views`（業務ビュー一覧と同じ権限）、`rag_search`（`menu.search`。`POST /api/search` と同じ処理）。入出力は [backend/README.md](../backend/README.md) の「MCP」を参照。
+- チャットは MCP で提供しない（#787）。チャットは画面（SSE の `POST /api/chat/conversations/{id}/messages/stream`）だけの機能で、MCP で提供するのは検索だけ。
 
 ## Oracle AI Database DDL 例
 

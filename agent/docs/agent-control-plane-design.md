@@ -101,10 +101,11 @@ aud は製品名。削除できない）。外部の MCP は画面・`AGENT_EXTE
 
 | ツール（モデルに渡す名前） | readOnlyHint | 既定の policy |
 |---|---|---|
-| `rag__rag_search` / `rag__rag_list_business_views` / `rag__rag_chat_get_conversation` | true | 承認なし（回答生成に LLM を使う） |
-| `rag__rag_chat_send_message` | false | 承認が必要（RAG に会話を作成・追記する） |
+| `rag__rag_search` / `rag__rag_list_business_views` | true | 承認なし（回答生成に LLM を使う） |
 | `nl2sql__nl2sql_list_profiles` / `nl2sql__nl2sql_recommend_profile` / `nl2sql__nl2sql_get_job` | true | 承認なし |
 | `nl2sql__nl2sql_query` | false | 承認が必要（業務 DB へ SQL を実行する） |
+
+RAG のチャットは MCP で提供しない（#787）。RAG の MCP は検索（`rag_search`）と業務ビューの一覧だけを持つ。
 
 ツール権限（`/settings/tool-policy`）は `<接続>__<ツール>` の名前で allow / ask / deny を上書きできる。
 NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_returned_as_audit_only` の警告を残す（実行はしない）。
