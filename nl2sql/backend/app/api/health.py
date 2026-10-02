@@ -14,11 +14,13 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter
+from pr_backend_core.oracle_errors import is_oracle_connection_error
 from pr_system_settings.database_status import (
     DatabaseSchemaProbeResult,
     DatabaseStatusData,
     build_database_status_router,
     safe_connection_error_detail,
+    safe_schema_error_detail,
 )
 
 from app.api.concurrency import run_sync_io
@@ -63,10 +65,17 @@ async def _incremental_store_probe(_settings: Any) -> DatabaseSchemaProbeResult:
                 "incremental_store_check_failed",
                 extra={"exception_type": type(exc).__name__},
             )
+            if is_oracle_connection_error(exc):
+                # 接続・pool の失敗は「接続できない」。初期化の不足として案内しない（#820）。
+                return DatabaseSchemaProbeResult(
+                    status="unreachable",
+                    check="migration_check_failed",
+                    detail=safe_connection_error_detail(exc),
+                )
             return DatabaseSchemaProbeResult(
-                status="unreachable",
+                status="setup_required",
                 check="migration_check_failed",
-                detail=safe_connection_error_detail(exc),
+                detail=safe_schema_error_detail(exc),
             )
         if not migrated:
             # DB 接続設定は有効で probe も成功している。migration 未適用を

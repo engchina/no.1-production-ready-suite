@@ -141,7 +141,16 @@ export {
 export {
   DATABASE_UNAVAILABLE_TITLE_ID,
   DatabaseUnavailableNotice,
+  adbLifecycleGroup,
+  adbLifecycleLabel,
+  databaseNoticeContent,
   databaseReasonCode,
+  databaseSettingsHref,
+  type AdbLifecycleGroup,
+  type DatabaseNoticeAction,
+  type DatabaseNoticeContent,
+  type DatabaseNoticeContentInput,
+  type DatabaseNoticeKind,
   type DatabaseUnavailableNoticeProps,
 } from "./database-gate/DatabaseUnavailableNotice";
 export {
@@ -157,6 +166,7 @@ export {
   type UseDatabaseStatusOptions,
 } from "./database-gate/useDatabaseStatus";
 export {
+  ADB_MANAGEMENT_ANCHOR_ID,
   DATABASE_STATUS_QUERY_KEY,
   DATABASE_UNAVAILABLE_EVENT,
   type DatabaseAvailability,

@@ -189,3 +189,195 @@ def test_fingerprint_does_not_contain_secret() -> None:
     assert "secret" not in fingerprint
     assert fingerprint == connect_kwargs_fingerprint(dict(reversed(list(KWARGS.items()))))
     assert fingerprint != connect_kwargs_fingerprint({**KWARGS, "password": "other"})
+
+
+# --- DB の停止中に作った pool の回復（#820） -------------------------------------------
+
+
+def _run_now(task: Any) -> None:
+    task()
+
+
+class _OracleError(Exception):
+    """python-oracledb の例外の代わり（文字列に DPY / ORA のコードを持つ）。"""
+
+
+class _DownDb:
+    """DB の状態を切り替えられる fake の oracledb。停止中に作った pool は起動後も壊れたまま。"""
+
+    POOL_GETMODE_TIMEDWAIT = 3
+
+    def __init__(self) -> None:
+        self.up = False
+        # 停止中に作った pool は、接続を作る処理が止まったままになる（ユーザー環境で観測した状態）。
+        self.break_new_pools = False
+        self.pools: list[_DownDbPool] = []
+
+    def create_pool(self, **kwargs: Any) -> _DownDbPool:
+        broken = self.break_new_pools and not self.up
+        pool = _DownDbPool(self, broken=broken, maximum=int(kwargs["max"]))
+        self.pools.append(pool)
+        return pool
+
+
+class _DownDbPool:
+    def __init__(self, db: _DownDb, *, broken: bool, maximum: int) -> None:
+        self._db = db
+        self.broken = broken
+        self.max = maximum
+        self.busy = 0
+        self.closed: list[bool] = []
+        self.acquires = 0
+
+    def acquire(self) -> _Connection:
+        self.acquires += 1
+        if self.broken:
+            raise _OracleError(
+                "DPY-4005: timed out waiting for the connection pool to return a connection"
+            )
+        if not self._db.up:
+            raise _OracleError("DPY-6005: cannot connect to database. ORA-12541: no listener")
+        self.busy += 1
+        return _Connection()
+
+    def close(self, force: bool = False) -> None:
+        self.closed.append(force)
+
+
+def test_pool_created_while_db_down_recovers_after_db_starts() -> None:
+    """停止中に作った pool が起動後も DPY-4005 を返しても、プロセスを再起動せずに借りられる。"""
+    db = _DownDb()
+    db.break_new_pools = True
+    pool = SharedOraclePool(name="test", oracledb_loader=lambda: db, pool_closer=_run_now)
+    pool._pool_for(KWARGS)  # 停止中に作られた pool（最初の要求・起動直後の処理など）
+
+    db.up = True
+    connection = pool.acquire(KWARGS)
+
+    assert isinstance(connection, _Connection)
+    assert len(db.pools) == 2
+    assert db.pools[0].broken is True
+    assert db.pools[0].closed  # 壊れた pool は閉じて、二度と使わない
+    assert isinstance(pool.acquire(KWARGS), _Connection)
+    assert len(db.pools) == 2
+
+
+def test_acquire_while_db_down_then_after_start() -> None:
+    """停止中の要求は失敗し、起動後の要求は新しい pool から借りられる。"""
+    db = _DownDb()
+    db.break_new_pools = True
+    pool = SharedOraclePool(name="test", oracledb_loader=lambda: db, pool_closer=_run_now)
+
+    with pytest.raises(_OracleError, match="DPY-4005"):
+        pool.acquire(KWARGS)
+
+    db.up = True
+    assert isinstance(pool.acquire(KWARGS), _Connection)
+    assert all(p.closed for p in db.pools[:-1])
+
+
+def test_retry_failure_surfaces_underlying_connection_error() -> None:
+    """やり直しも失敗したら、DPY-4005 ではなく新しい pool の本当の接続エラーを返す。"""
+    db = _DownDb()
+    db.up = True
+    pool = SharedOraclePool(name="test", oracledb_loader=lambda: db, pool_closer=_run_now)
+    pool.acquire(KWARGS)
+    db.pools[0].broken = True
+    db.up = False
+
+    with pytest.raises(_OracleError, match="DPY-6005") as raised:
+        pool.acquire(KWARGS)
+
+    assert "DPY-4005" not in str(raised.value)
+    assert len(db.pools) == 2
+    # 次の要求は、また新しい pool から始める。
+    db.up = True
+    assert isinstance(pool.acquire(KWARGS), _Connection)
+    assert len(db.pools) == 3
+
+
+def test_connection_error_discards_pool_without_retry() -> None:
+    """接続できないときは同じ要求の中でやり直さず、pool だけを捨てる（次は新しい pool）。"""
+    db = _DownDb()
+    db.up = True
+    pool = SharedOraclePool(name="test", oracledb_loader=lambda: db, pool_closer=_run_now)
+    pool.acquire(KWARGS)
+    db.up = False
+
+    with pytest.raises(_OracleError, match="DPY-6005"):
+        pool.acquire(KWARGS)
+
+    assert len(db.pools) == 1
+    assert db.pools[0].closed
+    db.up = True
+    assert isinstance(pool.acquire(KWARGS), _Connection)
+    assert len(db.pools) == 2
+
+
+def test_exhausted_pool_is_not_recreated() -> None:
+    """貸し出し中の接続が上限に達した本当の枯渇では、pool を作り直さない。"""
+    db = _DownDb()
+    db.up = True
+    pool = SharedOraclePool(
+        name="test", oracledb_loader=lambda: db, size=OraclePoolSize(1, 2), pool_closer=_run_now
+    )
+    pool.acquire(KWARGS)
+    current = db.pools[0]
+    current.busy = current.max
+    current.broken = True
+
+    with pytest.raises(_OracleError, match="DPY-4005"):
+        pool.acquire(KWARGS)
+
+    assert len(db.pools) == 1
+    assert current.closed == []
+
+
+def test_sql_error_keeps_pool() -> None:
+    """接続と関係ない失敗では pool を捨てない。"""
+
+    class _FailingPool(_Pool):
+        def acquire(self) -> _Connection:
+            raise _OracleError("ORA-00942: table or view does not exist")
+
+    class _Db(_FakeOracledb):
+        def create_pool(self, **kwargs: Any) -> _Pool:
+            created = _FailingPool(kwargs)
+            self.pools.append(created)
+            return created
+
+    fake = _Db()
+    pool = _pool(fake)
+    with pytest.raises(_OracleError, match="ORA-00942"):
+        pool.acquire(KWARGS)
+    assert len(fake.pools) == 1
+    assert fake.pools[0].closed == []
+
+
+def test_discarded_pool_is_closed_without_blocking_the_request() -> None:
+    """壊れた pool を閉じる処理（接続の試行が終わるまで戻らない）を、要求のスレッドで待たない。"""
+    release = threading.Event()
+    closing = threading.Event()
+
+    class _SlowClosePool(_DownDbPool):
+        def close(self, force: bool = False) -> None:
+            closing.set()
+            release.wait(5)
+            super().close(force)
+
+    class _SlowDb(_DownDb):
+        def create_pool(self, **kwargs: Any) -> _DownDbPool:
+            pool = _SlowClosePool(self, broken=self.break_new_pools and not self.up, maximum=4)
+            self.pools.append(pool)
+            return pool
+
+    slow = _SlowDb()
+    slow.break_new_pools = True
+    pool = SharedOraclePool(name="test", oracledb_loader=lambda: slow)
+    pool._pool_for(KWARGS)
+    slow.up = True
+
+    assert isinstance(pool.acquire(KWARGS), _Connection)  # close の完了を待たずに返る
+    assert closing.wait(5)
+    release.set()
+    pool.close()

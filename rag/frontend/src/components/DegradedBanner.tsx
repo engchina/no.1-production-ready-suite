@@ -1,6 +1,10 @@
 import { DatabaseUnavailableNotice } from "@engchina/production-ready-system-settings";
 
-import { DATABASE_GATE_ROUTES, databaseGateMessages } from "@/components/system/DatabaseGate";
+import {
+  DATABASE_GATE_ROUTES,
+  databaseGateMessages,
+  useDatabaseGatePermissions,
+} from "@/components/system/DatabaseGate";
 import { t } from "@/lib/i18n";
 
 /**
@@ -24,10 +28,13 @@ export function DegradedBanner({
   isRetrying?: boolean;
   className?: string;
 }) {
+  // データベース設定へのリンクは、その画面を開ける利用者だけに出す（#820）。
+  const { canManageDatabase } = useDatabaseGatePermissions();
   if (!messages || messages.length === 0) return null;
 
   return (
     <DatabaseUnavailableNotice
+      canManageDatabase={canManageDatabase}
       mode="banner"
       routes={DATABASE_GATE_ROUTES}
       messages={databaseGateMessages()}

@@ -364,7 +364,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
     @staticmethod
     @contextmanager
     def _default_connection() -> Iterator[Any]:
-        connection = OracleClient().connection_pool().acquire()
+        connection = OracleClient().acquire_connection()
         try:
             yield connection
         finally:
