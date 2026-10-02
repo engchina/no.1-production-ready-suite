@@ -10,6 +10,7 @@ import {
 import {
   DATABASE_GATE_ROUTES,
   databaseGateMessages,
+  useDatabaseGatePermissions,
 } from "@/components/system/DatabaseUnavailableNotice";
 import {
   DATABASE_UNAVAILABLE_EVENT,
@@ -32,11 +33,14 @@ import {
  */
 export function DatabaseGate({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
+  // 導線は開ける画面だけに出す。開けない利用者にはシステム管理者への連絡を案内する（#820）。
+  const permissions = useDatabaseGatePermissions();
   return (
     <SharedDatabaseGate
       api={api}
       routes={DATABASE_GATE_ROUTES}
       messages={databaseGateMessages()}
+      {...permissions}
       onContextChange={() => clearDatabaseContextQueries(queryClient)}
       onBeforeRetry={supersedeDatabaseUnavailableProbe}
       secondaryGate={PersistenceGate}

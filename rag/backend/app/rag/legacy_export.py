@@ -103,7 +103,7 @@ def _json_value(value: Any) -> Any:
 def _default_connection() -> Iterator[Any]:
     from app.clients.oracle import OracleClient
 
-    connection = OracleClient().connection_pool().acquire()
+    connection = OracleClient().acquire_connection()
     try:
         yield connection
     finally:

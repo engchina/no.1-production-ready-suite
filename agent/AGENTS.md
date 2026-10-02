@@ -73,10 +73,12 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
 
 - UI、エラー、通知、LLM 指示の第一言語は日本語。文言は i18n 経由。
 - 日本語フォントは `"Noto Sans JP", "Roboto", system-ui, sans-serif`、本文 14px。
-- ナビは上に一般の利用者の画面、下に管理者の画面を置く（RAG / NL2SQL と同じ。#791）。**AI 活用**：チャット / 実行履歴（Run の一覧）/
+- ナビは上に一般の利用者の画面、下に管理者の画面を置く（RAG / NL2SQL と同じ。#791）。**AI 活用**：チャット / 実行履歴（実行の一覧）/
   承認 → **Agent 構築**：業務 Agent / スキル / 自動実行 / マーケットプレイス → **改善・運用**：品質評価 / フィードバック /
   利用状況 / 監査ログ → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。既定の入口はチャット。
   画面・ナビの文言に「Control Plane」「Runtime」のような基盤の用語を使わない（識別子・URL・権限コードは変えない）。
+  用語は Run → 「実行」、Skill → 「スキル」、組み込み Runtime → 「実行環境」、Plugin → 「プラグイン」（#802 / #807。
+  表は docs/frontend-page-archetypes-spec.md §1）。
   チャット（#768）は業務利用者の入口で、1 往復が 1 Run。同じ会話（`thread_id`）の前の質問と回答を組み込み Runtime が
   モデルへ渡す（直近 10 往復）。会話は作った利用者だけが読み、続けられる（同じ Agent に限る）。
   Plugin、Tools を独立ナビに戻さない（旧エンジンの Planner・Memory は #756 で削除した）。
@@ -90,14 +92,15 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
   メニュー権限は `menu.*`、実データの閲覧・操作は capability（`agent.runs.view` / `agent.runs.operate` /
   `agent.approvals.decide` / `agent.audit.view` / `agent.admin`）。権限カタログと API の manifest の正本は
   `backend/app/security/permissions.py`、説明は [docs/security-rbac.md](./docs/security-rbac.md)。
-- Agent 編集画面は指示・Skill・モデルを選ぶ。Run は Agent とゴールだけで作る（実行先の選択は無い。#754）。
+- 業務 Agent の編集画面は指示・スキル・モデルを選ぶ。実行（Run）は業務 Agent と目標だけで作る（実行先の選択は無い。#754）。
 - 空、読込、エラー、モデル未設定（組み込み Runtime が実行できない）、承認待ちを明示する。
 - 画面の振る舞い（メッセージ機構・ボタンの役割と配置・ページの型・状態保持・横断的な保守契約）は
   platform の [UX 契約](../platform/docs/ux-contracts/README.md) を正本とする。
 - 各ページの型（A〜D）の割り当て、離脱ガードの対象画面、作業状態として残す field は
   [docs/frontend-page-archetypes-spec.md](./docs/frontend-page-archetypes-spec.md) に書く。
 - UI/UX 作業では必ず `ui-ux-pro-max` skill を使い、desktop と 375px、キーボード操作を
-  Playwright で確認する。
+  Playwright で確認する。Playwright は `desktop` と `mobile-375`（Pixel 5、375×812、タッチ）の 2 project（#823。NL2SQL と同じ）。
+  spec の中で viewport を回しているテストと、画面幅に関係しない spec は `mobile-375` では実行しない（`playwright.config.ts`）。
 
 ## デザインシステム / UI
 

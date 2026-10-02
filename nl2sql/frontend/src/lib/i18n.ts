@@ -2664,7 +2664,7 @@ const nl2sqlJa = {
   "settings.database.systemTables.recreate.sectionDescription":
     "NL2SQL の中核データを削除して migration を最初から適用します。削除したデータは復元できません。",
   "dbGate.setupRequired.message":
-    "データベースへの接続は確認できましたが、NL2SQL のシステムテーブルが初期化されていません。運用設定の「システムテーブル」から作成・更新してください。",
+    "データベースには接続できています。NL2SQL のシステムテーブルが作成されていないか、未適用の更新（migration）があります。運用設定の「システムテーブル」で作成・更新してから、再試行してください。",
 
   "dataTools.confirmation": "確認語",
   "dataTools.action.refresh": "データ更新",

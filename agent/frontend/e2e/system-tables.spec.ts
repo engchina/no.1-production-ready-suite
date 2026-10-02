@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
+import { openSidebarNav } from "./fixtures/nav";
 
 // 運用設定 > システムテーブル（#751。RAG / NL2SQL と同じ共通のカード）。
 // 旧版の DB（業務ビューの割り当ての表が残る）は、削除される内容を確認ダイアログで承認してから更新する。
@@ -45,7 +46,8 @@ for (const viewport of VIEWPORTS) {
 
 test("サイドナビの運用設定は、システムテーブルから始まる（RAG / NL2SQL と同じ。#658）", async ({ page }) => {
   await page.goto("/settings/system-tables");
-  const nav = page.getByRole("navigation").first();
+  // 375px（mobile-375 の project）ではナビはドロワーなので、開いてから見る（#823）。
+  const nav = await openSidebarNav(page);
   const operations = nav.getByRole("link", { name: "システムテーブル" });
   await expect(operations).toBeVisible();
   await expect(operations).toHaveAttribute("aria-current", "page");

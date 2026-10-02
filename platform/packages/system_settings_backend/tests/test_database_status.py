@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -251,6 +252,104 @@ def test_schema_probe_error_is_setup_required_with_safe_detail() -> None:
     assert data["check"] == "schema_check_failed"
     assert data["detail"] == "システムテーブルの状態を確認できませんでした (ORA-00942)。"
     assert "SECRET_OWNER" not in json.dumps(data)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("DPY-4005: timed out waiting for the connection pool to return a connection"),
+        RuntimeError("DPY-6005: cannot connect to database (CONNECTION_ID=x). ORA-12541"),
+        RuntimeError("ORA-03113: end-of-file on communication channel"),
+        TimeoutError(),
+    ],
+    ids=["pool_timeout", "cannot_connect", "eof", "timeout"],
+)
+def test_schema_probe_connection_error_is_unreachable(error: Exception) -> None:
+    """接続確認の後に接続・pool が失敗しても「初期化が必要」と案内しない（#820）。"""
+    harness = Harness()
+    harness.probe_error = error
+
+    data = harness.get()
+
+    assert data["status"] == "unreachable"
+    assert data["check"] == "ok"
+    assert data["detail"].startswith("Oracle connection probe")
+
+
+def test_wrapped_pool_timeout_from_schema_probe_is_unreachable() -> None:
+    """製品が包んだ例外（`raise ... from exc`）も、原因のコードで分類する。"""
+    harness = Harness()
+    try:
+        try:
+            raise RuntimeError("DPY-4005: timed out waiting for the connection pool")
+        except RuntimeError as inner:
+            raise ValueError("システムテーブルの状態を取得できません。") from inner
+    except ValueError as outer:
+        harness.probe_error = outer
+
+    data = harness.get()
+
+    assert data["status"] == "unreachable"
+    assert data["detail"] == "Oracle connection probe failed (DPY-4005)."
+
+
+def test_adb_lifecycle_is_added_only_when_unreachable() -> None:
+    """接続できないときだけ ADB の状態を返す（画面が停止中・起動中を出し分ける。#820）。"""
+    calls: list[str] = []
+
+    async def lifecycle(_settings: Any) -> str | None:
+        calls.append("adb")
+        return "STOPPED"
+
+    harness = Harness(adb_lifecycle=lifecycle, ok_cache_seconds=0)
+    assert harness.get()["adb_lifecycle_state"] is None
+    harness.probe_result = DatabaseSchemaProbeResult(status="setup_required")
+    assert harness.get()["adb_lifecycle_state"] is None
+    assert calls == []
+
+    harness.connect_error = RuntimeError("DPY-6005: cannot connect to database")
+    data = harness.get()
+
+    assert data["status"] == "unreachable"
+    assert data["adb_lifecycle_state"] == "STOPPED"
+    assert calls == ["adb"]
+
+    harness.connect_error = None
+    harness.probe_error = RuntimeError("DPY-4005: timed out waiting for the connection pool")
+    assert harness.get()["adb_lifecycle_state"] == "STOPPED"
+
+
+def test_default_adb_lifecycle_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADB OCID が無ければ OCI を呼ばない。取得の失敗は None（判定は変えない）。"""
+    from types import SimpleNamespace
+
+    from pr_system_settings import database_status as module
+
+    requested: list[str] = []
+    outcome: dict[str, Any] = {"state": "starting"}
+
+    class FakeClient:
+        def __init__(self, settings: Any) -> None:
+            self.settings = settings
+
+        async def get_autonomous_database(self, adb_ocid: str) -> Any:
+            requested.append(adb_ocid)
+            if isinstance(outcome["state"], Exception):
+                raise outcome["state"]
+            return SimpleNamespace(lifecycle_state=outcome["state"])
+
+    monkeypatch.setattr(module, "OciDatabaseClient", FakeClient)
+
+    def run(settings: Any) -> str | None:
+        return asyncio.run(module.adb_lifecycle_state(settings))
+
+    assert run(SimpleNamespace(oracle_adb_ocid="")) is None
+    assert requested == []
+    settings = SimpleNamespace(oracle_adb_ocid=" ocid1.autonomousdatabase.oc1..x ")
+    assert run(settings) == "STARTING"
+    assert requested == ["ocid1.autonomousdatabase.oc1..x"]
+    outcome["state"] = RuntimeError("NotAuthorizedOrNotFound")
+    assert run(settings) is None
 
 
 def test_short_circuit_skips_every_check() -> None:

@@ -347,14 +347,14 @@ describe("SystemTablesCard の状態ごとの表示", () => {
 
   it("状態を取得できないときは DB の案内（banner）と再試行を出し、操作を出さない", () => {
     const html = renderCard(clientWith(undefined, true));
-    expect(html).toContain("データベースを起動してください");
+    expect(html).toContain("データベースに接続できません");
     expect(html).toContain("再試行");
     expect(html).not.toContain("作成・更新");
   });
 
   it("想定外の形の payload は描画せず、取得失敗として扱う", () => {
     const html = renderCard(clientWith({ status: "ready" }));
-    expect(html).toContain("データベースを起動してください");
+    expect(html).toContain("データベースに接続できません");
     expect(html).not.toContain("作成・更新");
   });
 

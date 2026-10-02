@@ -1,19 +1,27 @@
 import { expect, test, type Page } from "@playwright/test";
-import { SYSTEM_TABLES_STATUS_OK, expectNoPageOverflow, mockLocalAuth } from "./_helpers";
+import {
+  SYSTEM_TABLES_STATUS_OK,
+  expectNoPageOverflow,
+  mockAuthUser,
+  mockLocalAuth,
+} from "./_helpers";
 
 /**
  * DB ゲート（3製品共通の部品。#325）: システム設定の 5 画面以外は、DB 接続不可/未設定のとき
- * エラー画面ではなく落ち着いた案内を表示し、データベース設定への導線と再試行を出す。
+ * エラー画面ではなく落ち着いた案内を表示し、状態ごとの導線（未設定・接続できない → データベース設定、
+ * 初期化が必要 → システムテーブル）と再試行を出す。設定を開けない利用者には導線を出さず、
+ * システム管理者への連絡を案内する（#820）。
  */
 
 type DbStatus = "ok" | "not_configured" | "unreachable" | "setup_required";
 
-function dbStatus(status: DbStatus, check?: string) {
+function dbStatus(status: DbStatus, check?: string, adbLifecycleState: string | null = null) {
   return {
     data: {
       status,
       check: check ?? (status === "not_configured" ? "missing" : "ok"),
       detail: status === "unreachable" ? "Oracle connection probe failed (ORA-12514)." : null,
+      adb_lifecycle_state: adbLifecycleState,
     },
     error_messages: [],
     warning_messages: [],
@@ -58,7 +66,7 @@ test("DB 接続済みでも schema 未作成ならシステムテーブルへ案
   await page.goto("/file-list");
 
   const link = await expectGate(page, {
-    title: "RAG システムテーブルの準備が必要です",
+    title: "システムテーブルの作成・更新が必要です",
     actionName: "システムテーブルを開く",
     actionHref: "/settings/system-tables",
     settingsHint:
@@ -87,7 +95,7 @@ test("DB 接続不可時、機能ページはエラーではなく起動の案�
 
   await page.goto("/file-list");
 
-  const link = await expectGate(page, { title: "データベースを起動してください" });
+  const link = await expectGate(page, { title: "データベースに接続できません" });
   // 全画面エラー(サーバー内部エラー)ではないこと
   await expect(page.getByText("サーバー内部でエラーが発生しました")).toHaveCount(0);
   // 設定を開くリンク → 再試行の順に Tab で移る。
@@ -104,7 +112,7 @@ test("DB 未設定時も再試行を出し、Wallet の不備は診断コード�
 
   await page.goto("/file-list");
 
-  await expectGate(page, { title: "データベースの接続情報が未設定です" });
+  await expectGate(page, { title: "データベースの接続情報が未設定です", actionHref: "/settings/database" });
   await expect(page.getByText(/RAG 機能\(取込・検索・索引\)を使うには/)).toBeVisible();
   await expect(page.getByText("診断コード: wallet_password_invalid", { exact: true })).toBeVisible();
   await expect(
@@ -132,7 +140,7 @@ test("再試行で DB が使えるようになったら本来のページを表�
   );
 
   await page.goto("/knowledge-bases");
-  await expectGate(page, { title: "データベースを起動してください" });
+  await expectGate(page, { title: "データベースに接続できません" });
 
   available = true;
   await page.getByRole("button", { name: "再試行" }).click();
@@ -158,7 +166,7 @@ test("状態の確認中は経過時間付きの読み込み表示を出す", as
   await expect(loading).toContainText("データベースの状態を確認しています");
   release();
   await expect(loading).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "データベースを起動してください" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "データベースに接続できません" })).toBeVisible();
 });
 
 test("システム設定の 5 画面は DB が無くてもゲートを通さずに開ける", async ({ page }) => {
@@ -207,6 +215,39 @@ test("DB 利用可能時は本来のページを表示する", async ({ page }) 
 
   await expect(page.getByRole("heading", { name: "ナレッジベース", exact: true })).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "データベースを起動してください" })
+    page.getByRole("heading", { name: "データベースに接続できません" })
   ).toHaveCount(0);
+});
+
+test("ADB が停止中なら停止の案内と ADB 管理への導線を出す", async ({ page }) => {
+  await routeAuth(page);
+  await page.route("**/api/ready/database", (route) =>
+    route.fulfill({ json: dbStatus("unreachable", "ok", "STOPPED") })
+  );
+
+  await page.goto("/file-list");
+
+  await expectGate(page, { title: "Autonomous Database が停止しています" });
+  await expect(page.getByText("Autonomous Database: 停止済み", { exact: true })).toBeVisible();
+});
+
+test("設定を開けない利用者には導線を出さず、システム管理者への連絡を案内する", async ({ page }) => {
+  await mockAuthUser(page, { permissions: ["menu.file_list"] });
+  let status: DbStatus = "unreachable";
+  await page.route("**/api/ready/database", (route) => route.fulfill({ json: dbStatus(status) }));
+
+  await page.goto("/file-list");
+
+  const card = page.locator('section[aria-labelledby="database-unavailable-title"]');
+  await expect(card.getByRole("heading", { level: 1, name: "データベースに接続できません" })).toBeVisible();
+  await expect(card.getByText(/システム管理者に連絡して、データベースの起動と接続の確認を依頼してください。$/)).toBeVisible();
+  await expect(card.getByRole("link")).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "再試行" })).toBeVisible();
+  await expectNoPageOverflow(page);
+
+  status = "setup_required";
+  await card.getByRole("button", { name: "再試行" }).click();
+  await expect(card.getByRole("heading", { level: 1, name: "システムテーブルの作成・更新が必要です" })).toBeVisible();
+  await expect(card.getByText(/システム管理者に連絡して、システムテーブルの作成・更新を依頼してください。$/)).toBeVisible();
+  await expect(card.getByRole("link")).toHaveCount(0);
 });

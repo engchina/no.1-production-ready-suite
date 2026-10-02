@@ -46,7 +46,13 @@ export function databaseNoticeStatus(status: DatabaseAvailability | undefined): 
 export type DatabaseGateView =
   | { kind: "children" }
   | { kind: "checking" }
-  | { kind: "notice"; status: DatabaseNoticeStatus; reasonCode: string | null }
+  | {
+      kind: "notice";
+      status: DatabaseNoticeStatus;
+      reasonCode: string | null;
+      /** ADB のライフサイクル状態（`unreachable` のときだけ。#820）。 */
+      adbLifecycleState: string | null;
+    }
   | { kind: "secondary" };
 
 export function databaseGateView({
@@ -67,11 +73,17 @@ export function databaseGateView({
 }): DatabaseGateView {
   if (exempt) return { kind: "children" };
   if (isPending) return { kind: "checking" };
-  if (isError) return { kind: "notice", status: "check_failed", reasonCode: null };
+  if (isError) return { kind: "notice", status: "check_failed", reasonCode: null, adbLifecycleState: null };
   const status = data?.status;
   const allowed = status === "ok" || (onSystemTables && status === "setup_required");
   if (!allowed) {
-    return { kind: "notice", status: databaseNoticeStatus(status), reasonCode: data?.check ?? null };
+    const noticeStatus = databaseNoticeStatus(status);
+    return {
+      kind: "notice",
+      status: noticeStatus,
+      reasonCode: data?.check ?? null,
+      adbLifecycleState: noticeStatus === "unreachable" ? (data?.adb_lifecycle_state ?? null) : null,
+    };
   }
   // システムテーブルの管理は製品の追加の確認（保存領域など）より前に開ける。
   if (onSystemTables || !hasSecondaryGate) return { kind: "children" };
@@ -81,6 +93,7 @@ export function databaseGateView({
 export interface DatabaseGateNoticeOptions {
   status?: DatabaseNoticeStatus;
   reasonCode?: string | null;
+  adbLifecycleState?: string | null;
   onRetry: () => void;
   isRetrying?: boolean;
   title?: string;
@@ -104,6 +117,13 @@ export interface DatabaseGateProps {
   isExempt?: (pathname: string) => boolean;
   /** 製品の i18n の値で既定の文言を上書きする（製品名が入る文言など）。 */
   messages?: Partial<DatabaseGateMessages>;
+  /**
+   * 利用者がデータベース設定を開けるか（製品の権限から渡す）。false なら設定への導線を出さず、
+   * システム管理者への連絡を案内する。既定は false（分からなければ導線を出さない。#820）。
+   */
+  canManageDatabase?: boolean;
+  /** 利用者がシステムテーブルの画面を開けるか（`setup_required` の導線）。既定は false（#820）。 */
+  canManageSystemTables?: boolean;
   onContextChange?: DatabaseContextChangeHandler;
   /** 再試行の直前に呼ぶ（NL2SQL は遅れて届いた古い確認の結果を捨てる）。 */
   onBeforeRetry?: () => void;
@@ -125,6 +145,8 @@ export function DatabaseGate({
   routes,
   isExempt = isDatabaseGateExemptPath,
   messages,
+  canManageDatabase = false,
+  canManageSystemTables = false,
   onContextChange,
   onBeforeRetry,
   secondaryGate: SecondaryGate,
@@ -164,7 +186,14 @@ export function DatabaseGate({
     <DatabaseGateChecking label={label} operationKey={operationKey} />
   );
   const renderNotice = (options: DatabaseGateNoticeOptions) => (
-    <DatabaseUnavailableNotice routes={routes} messages={messages} returnTo={returnTo} {...options} />
+    <DatabaseUnavailableNotice
+      routes={routes}
+      messages={messages}
+      returnTo={returnTo}
+      canManageDatabase={canManageDatabase}
+      canManageSystemTables={canManageSystemTables}
+      {...options}
+    />
   );
 
   if (view.kind === "checking") return renderChecking(m["dbGate.checking"]);
@@ -172,6 +201,7 @@ export function DatabaseGate({
     return renderNotice({
       status: view.status,
       reasonCode: view.reasonCode,
+      adbLifecycleState: view.adbLifecycleState,
       onRetry: () => {
         onBeforeRetry?.();
         void database.refetch();

@@ -3,9 +3,9 @@ import { closeSidebarNav, openSidebarNav } from "./_helpers/sidebar-nav";
 
 import { systemAdminMe } from "./_helpers/database-gate";
 
-const NOTICE_TITLE = "データベースを起動してください";
+const NOTICE_TITLE = "データベースに接続できません";
 const NOTICE_MESSAGE =
-  "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。";
+  "データベースが停止しているか、ネットワーク経由で到達できません。データベース設定で起動状態と接続情報を確認してから、再試行してください。";
 const NOTICE_HINT =
   "OCI 認証・アップロード保存先・モデル・データベース・外観の各設定ページは引き続き利用できます。";
 const RAW_DATABASE_ERROR = "Oracle に接続できませんでした (ORA-12514)。";

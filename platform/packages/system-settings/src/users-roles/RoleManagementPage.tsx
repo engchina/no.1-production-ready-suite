@@ -113,11 +113,6 @@ export interface RoleManagementPageProps<R extends SecurityRole = SecurityRole> 
   /** 一覧と詳細の分割比率を保存する localStorage key の前置き。 */
   splitStoragePrefix?: string;
   /**
-   * 詳細パネルの末尾に製品固有の情報を足す。機能権限の件数と権限管理への導線は `permissionSummary` を使う
-   * （3 製品で同じ形。#800）。ロールに付ける権限は製品ごとに違うため、共通画面では扱わない。
-   */
-  renderRoleDetailExtra?: (role: R) => ReactNode;
-  /**
    * 詳細パネルの末尾に、ロールに付けた機能権限の件数と、製品の権限管理への導線を出す（3 製品で同じ形。#800）。
    * ロールに付ける権限は製品ごとの権限管理が扱うため、ここでは件数と移動先だけを受け取る。
    */
@@ -140,7 +135,6 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
   canManage,
   describeError = describeErrorMessageOnly,
   splitStoragePrefix,
-  renderRoleDetailExtra,
   permissionSummary,
 }: RoleManagementPageProps<R>) {
   const confirm = useConfirm();
@@ -737,13 +731,8 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
               canManage={canManage}
               actions={selectedRole ? roleActions(selectedRole) : []}
               extra={
-                selectedRole ? (
-                  <>
-                    {permissionSummary ? (
-                      <RolePermissionSummaryRow role={selectedRole} summary={permissionSummary} />
-                    ) : null}
-                    {renderRoleDetailExtra ? renderRoleDetailExtra(selectedRole) : null}
-                  </>
+                selectedRole && permissionSummary ? (
+                  <RolePermissionSummaryRow role={selectedRole} summary={permissionSummary} />
                 ) : null
               }
             />

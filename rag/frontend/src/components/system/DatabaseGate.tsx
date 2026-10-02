@@ -7,18 +7,30 @@ import {
   type DatabaseGateRoutes,
 } from "@engchina/production-ready-system-settings";
 
+import { useAuth } from "@/components/security/AuthProvider";
 import { api } from "@/lib/api";
 import { ja, t, type I18nKey } from "@/lib/i18n";
+import { canOpenRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 
 /**
- * DB ゲートの導線。ADB の起動はデータベース設定の ADB 管理、システムテーブルの作成・更新は
- * 運用設定のシステムテーブル（NL2SQL と同じ。#658）。システムテーブルの画面は未初期化でも開ける。
+ * DB ゲートの導線。接続情報の確認と ADB の起動はデータベース設定（ADB が停止中などは共通の案内が
+ * ADB 管理のカードを付ける）、システムテーブルの作成・更新は運用設定のシステムテーブル（NL2SQL と
+ * 同じ。#658 / #820）。システムテーブルの画面は未初期化でも開ける。
  */
 export const DATABASE_GATE_ROUTES: DatabaseGateRoutes = {
-  databaseSettings: `${APP_ROUTES.settingsDatabase}#adb-management`,
+  databaseSettings: APP_ROUTES.settingsDatabase,
   systemTables: APP_ROUTES.settingsSystemTables,
 };
+
+/** 利用者が DB の復旧の画面（データベース設定・システムテーブル）を開けるか（#820）。 */
+export function useDatabaseGatePermissions(): { canManageDatabase: boolean; canManageSystemTables: boolean } {
+  const { hasPermission } = useAuth();
+  return {
+    canManageDatabase: canOpenRoute(APP_ROUTES.settingsDatabase, hasPermission),
+    canManageSystemTables: canOpenRoute(APP_ROUTES.settingsSystemTables, hasPermission),
+  };
+}
 
 /**
  * ゲートを通さない画面（3製品共通。#325）。システム設定の 5 画面だけで、RAG 固有の設定
@@ -37,8 +49,15 @@ export function databaseGateMessages(): Partial<DatabaseGateMessages> {
 
 /** 設定ページ以外を開く前にデータベースの利用可否を確認する（3製品共通の部品。#325）。 */
 export function DatabaseGate({ children }: { children: ReactNode }) {
+  // 導線は開ける画面だけに出す。開けない利用者にはシステム管理者への連絡を案内する（#820）。
+  const permissions = useDatabaseGatePermissions();
   return (
-    <SharedDatabaseGate api={api} routes={DATABASE_GATE_ROUTES} messages={databaseGateMessages()}>
+    <SharedDatabaseGate
+      api={api}
+      routes={DATABASE_GATE_ROUTES}
+      messages={databaseGateMessages()}
+      {...permissions}
+    >
       {children}
     </SharedDatabaseGate>
   );
