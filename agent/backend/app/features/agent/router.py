@@ -73,6 +73,11 @@ from starlette.concurrency import run_in_threadpool
 import app.settings as app_settings
 from app.features.agent import builtin_runtime
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
+from app.features.agent.feedback import (
+    FEEDBACK_PERIOD_DAYS,
+    FeedbackReport,
+    build_feedback_report,
+)
 from app.features.agent.plugins import (
     MarketplaceListing,
     MarketplaceSource,
@@ -95,8 +100,13 @@ from app.features.agent.runtime import (
     ApprovalDecisionRequest,
     Artifact,
     ArtifactsData,
+    FeedbackRating,
+    FeedbackReason,
     RunCreateRequest,
     RunEvent,
+    RunFeedback,
+    RunFeedbackRequest,
+    RunNotRatableError,
     RunsData,
     RunState,
     RunStatus,
@@ -126,6 +136,7 @@ from app.features.agent.tools import (
     list_mcp_connection_tools,
     tool_registry,
 )
+from app.features.agent.user_names import user_display_names
 from app.observability import (
     ObservabilityStatus,
     TraceEventsData,
@@ -1490,6 +1501,74 @@ async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadData
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     _require_agent_access(request, thread.agent_id)
     return ApiResponse(data=thread)
+
+
+@router.put("/runs/{run_id}/feedback", response_model=ApiResponse[RunState])
+async def put_run_feedback(
+    run_id: str,
+    feedback: RunFeedbackRequest,
+    request: Request,
+    _: None = Depends(require_operator),
+) -> ApiResponse[RunState]:
+    """チャットの回答への評価（#774）。
+
+    会話をした利用者（Run の作成者）だけが付け、付け直すと上書きする。
+    """
+    try:
+        run = runtime_repository.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    _require_agent_access(request, run.agent_id)
+    user_uuid = _run_creator_user_uuid(request)
+    if run.created_by_user_uuid is None or run.created_by_user_uuid != user_uuid:
+        raise HTTPException(
+            status_code=403, detail="フィードバックは、この会話をした利用者だけが付けられます。"
+        )
+    try:
+        updated = runtime_repository.set_run_feedback(
+            run_id,
+            RunFeedback(
+                rating=feedback.rating,
+                reason=feedback.reason,
+                comment=feedback.comment,
+                user_uuid=user_uuid,
+            ),
+        )
+    except RunNotRatableError as exc:
+        raise HTTPException(
+            status_code=409, detail="回答が出た Run にだけフィードバックを付けられます。"
+        ) from exc
+    return ApiResponse(data=updated)
+
+
+@router.get("/feedback", response_model=ApiResponse[FeedbackReport])
+async def get_feedback_report(
+    request: Request,
+    days: int = Query(default=30),
+    agent_id: str | None = Query(default=None, max_length=200),
+    rating: FeedbackRating | None = None,
+    reason: FeedbackReason | None = None,
+) -> ApiResponse[FeedbackReport]:
+    """フィードバックの集計と一覧（#774）。権限は middleware のメニュー権限（`menu.feedback`）。
+
+    対象は Run の一覧と同じく利用できる業務 Agent の Run だけ。
+    """
+    if days not in FEEDBACK_PERIOD_DAYS:
+        raise HTTPException(status_code=422, detail="期間は 7・30・90 日のどれかにしてください。")
+    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    report = await run_in_threadpool(
+        build_feedback_report,
+        runs,
+        days=days,
+        now=datetime.now(UTC),
+        agent_id=agent_id or None,
+        rating=rating,
+        reason=reason,
+        agent_names=agent_names,
+        user_names=user_display_names,
+    )
+    return ApiResponse(data=report)
 
 
 @router.get("/runs/{run_id}", response_model=ApiResponse[RunState])

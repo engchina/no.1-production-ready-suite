@@ -177,6 +177,67 @@ export const BUILTIN_RUNTIME_STATUS = {
   ],
 };
 
+function answerTextOf(run: Json): string {
+  const answer = ((run.artifacts as Json[] | undefined) ?? []).find((artifact) => artifact.kind === "answer");
+  const text = (answer?.content as Json | undefined)?.text;
+  return typeof text === "string" ? text : "";
+}
+
+/** Run の評価から `GET /api/feedback` の応答を作る（前の期間は 0 件。#774）。 */
+function feedbackReportFromRuns(
+  runs: Json[],
+  days: number,
+  filters: { agentId: string | null; rating: string | null; reason: string | null }
+): Json {
+  const rated = runs.filter(
+    (run) => run.feedback && (!filters.agentId || run.agent_id === filters.agentId)
+  ) as (Json & { feedback: Json })[];
+  const helpful = rated.filter((run) => run.feedback.rating === "helpful").length;
+  const reasons = new Map<string, number>();
+  for (const run of rated) {
+    const reason = run.feedback.reason as string | null;
+    if (reason) reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+  }
+  const summary = {
+    total: rated.length,
+    helpful,
+    not_helpful: rated.length - helpful,
+    helpful_rate: rated.length ? helpful / rated.length : null,
+    reason_counts: [...reasons.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([reason, count]) => ({ reason, count })),
+  };
+  const items = rated
+    .filter(
+      (run) =>
+        (!filters.rating || run.feedback.rating === filters.rating) &&
+        (!filters.reason || run.feedback.reason === filters.reason)
+    )
+    .map((run) => ({
+      run_id: run.id,
+      thread_id: run.thread_id ?? null,
+      agent_id: run.agent_id,
+      agent_name: run.agent_id === "default" ? "汎用業務 Agent" : "",
+      user_uuid: run.feedback.user_uuid,
+      display_name: "ローカル利用者",
+      question: run.goal,
+      answer: answerTextOf(run),
+      rating: run.feedback.rating,
+      reason: run.feedback.reason,
+      comment: run.feedback.comment,
+      updated_at: run.feedback.updated_at,
+    }));
+  return {
+    days,
+    since: MOCK_NOW,
+    until: MOCK_NOW,
+    summary,
+    previous: { total: 0, helpful: 0, not_helpful: 0, helpful_rate: null, reason_counts: [] },
+    items,
+    matched: items.length,
+  };
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -193,6 +254,8 @@ function createState() {
     tools: d.tools as unknown as Json[],
     // 監査の記録（`GET /api/audit/tool-calls`）。offset / limit で切り出して返す（#265）。
     auditRecords: [] as Json[],
+    // フィードバック（`GET /api/feedback`。#774）。null なら Run の評価から作る。
+    feedbackReport: null as Json | null,
     plugins: [] as Json[],
     marketplaces: [] as Json[],
     tracePolicy: d.tracePolicy as Json,
@@ -513,6 +576,17 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     state.runs.push(run);
     return run;
   }
+  // フィードバックの集計と一覧（#774）。`state.feedbackReport` があればそれを返し、無ければ Run の評価から作る。
+  if (method === "GET" && at("feedback")) {
+    const days = Number(query.get("days") ?? 30);
+    if (![7, 30, 90].includes(days)) throw new HttpError(422, "期間は 7・30・90 日のどれかにしてください。");
+    if (state.feedbackReport) return state.feedbackReport;
+    return feedbackReportFromRuns(state.runs, days, {
+      agentId: query.get("agent_id"),
+      rating: query.get("rating"),
+      reason: query.get("reason"),
+    });
+  }
   if (method === "GET" && at("threads")) {
     const agentId = query.get("agent_id");
     const grouped = new Map<string, Json[]>();
@@ -549,6 +623,20 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return run;
     }
     if (method === "POST" && at("runs", "*", "resume")) return run;
+    // チャットの回答への評価（#774）。役に立たなかったときは理由が必須。役に立った評価は理由・コメントを残さない。
+    if (method === "PUT" && at("runs", "*", "feedback")) {
+      if (run.status !== "completed") throw new HttpError(409, "回答が出た Run にだけフィードバックを付けられます。");
+      const helpful = body.rating === "helpful";
+      if (!helpful && !body.reason) throw new HttpError(422, "役に立たなかった理由を選んでください。");
+      run.feedback = {
+        rating: body.rating,
+        reason: helpful ? null : body.reason,
+        comment: helpful ? "" : String(body.comment ?? "").trim(),
+        user_uuid: "local",
+        updated_at: MOCK_NOW,
+      };
+      return run;
+    }
     if (method === "POST" && at("runs", "*", "replay")) {
       const replay = { ...clone(run), id: `${String(run.id)}-replay-${state.runs.length}`, status: "completed" };
       state.runs.unshift(replay);

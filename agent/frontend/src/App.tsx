@@ -22,6 +22,7 @@ import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { canOpenRoute, defaultEntryRoute, firstAllowedRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
+import { FeedbackPage } from "@/pages/FeedbackPage";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
   AgentsPage,
@@ -130,6 +131,7 @@ export function App() {
             </Capability>
           }
         />
+        <Route path={APP_ROUTES.feedback} element={<FeedbackPage />} />
         <Route path={APP_ROUTES.settingsSystemTables} element={<SettingsSystemTablesRoute />} />
         <Route path={APP_ROUTES.settingsOci} element={<SettingsOciRoute />} />
         <Route path={APP_ROUTES.settingsUploadStorage} element={<SettingsUploadStorageRoute />} />

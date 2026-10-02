@@ -189,6 +189,8 @@ export interface RunState {
   created_by_user_uuid?: string | null;
   /** 会話（スレッド。#768）。チャットの 1 往復が 1 Run。 */
   thread_id?: string | null;
+  /** 回答への評価（#774）。評価していない Run は null / 無し。 */
+  feedback?: RunFeedback | null;
   created_at: string;
   updated_at: string;
 }
@@ -525,6 +527,80 @@ export interface CreateRunPayload {
 }
 
 /** チャットの会話の一覧の 1 件（#768）。 */
+/** 回答の評価（RAG と同じ値。#774）。 */
+export type FeedbackRating = "helpful" | "not_helpful";
+
+/** 役に立たなかった理由（表示の順。#774）。 */
+export const FEEDBACK_REASONS = [
+  "incorrect",
+  "incomplete",
+  "not_relevant",
+  "answer_untrusted",
+  "ambiguous_question",
+  "wrong_action",
+] as const;
+export type FeedbackReason = (typeof FEEDBACK_REASONS)[number];
+
+export interface RunFeedback {
+  rating: FeedbackRating;
+  reason: FeedbackReason | null;
+  comment: string;
+  user_uuid: string | null;
+  updated_at: string;
+}
+
+export interface RunFeedbackPayload {
+  rating: FeedbackRating;
+  reason?: FeedbackReason;
+  comment?: string;
+}
+
+export type FeedbackPeriodDays = 7 | 30 | 90;
+
+export interface FeedbackSummary {
+  total: number;
+  helpful: number;
+  not_helpful: number;
+  /** 評価が 0 件のときは null。 */
+  helpful_rate: number | null;
+  reason_counts: { reason: FeedbackReason; count: number }[];
+}
+
+export interface FeedbackItem {
+  run_id: string;
+  thread_id: string | null;
+  agent_id: string;
+  agent_name: string;
+  user_uuid: string | null;
+  display_name: string;
+  question: string;
+  answer: string;
+  rating: FeedbackRating;
+  reason: FeedbackReason | null;
+  comment: string;
+  updated_at: string;
+}
+
+export interface FeedbackReport {
+  days: FeedbackPeriodDays;
+  since: string;
+  until: string;
+  summary: FeedbackSummary;
+  /** 直前の同じ長さの期間。 */
+  previous: FeedbackSummary;
+  /** 絞り込みに合う評価（新しい順。上限 500 件）。 */
+  items: FeedbackItem[];
+  /** 絞り込みに合う評価の件数。 */
+  matched: number;
+}
+
+export interface FeedbackFilters {
+  days: FeedbackPeriodDays;
+  agentId?: string;
+  rating?: FeedbackRating;
+  reason?: FeedbackReason;
+}
+
 export interface ThreadSummary {
   thread_id: string;
   agent_id: string;
@@ -782,6 +858,20 @@ export const agentApi = {
     request<ThreadsData>(
       `/api/threads${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""}`,
     ),
+  /** チャットの回答への評価（#774）。会話をした利用者だけ。付け直すと上書きする。 */
+  putRunFeedback: (runId: string, payload: RunFeedbackPayload) =>
+    request<RunState>(`/api/runs/${encodeURIComponent(runId)}/feedback`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  /** フィードバックの集計と一覧（#774）。 */
+  getFeedbackReport: (filters: FeedbackFilters) => {
+    const query = new URLSearchParams({ days: String(filters.days) });
+    if (filters.agentId) query.set("agent_id", filters.agentId);
+    if (filters.rating) query.set("rating", filters.rating);
+    if (filters.reason) query.set("reason", filters.reason);
+    return request<FeedbackReport>(`/api/feedback?${query.toString()}`);
+  },
   getThread: (threadId: string) =>
     request<ThreadData>(`/api/threads/${encodeURIComponent(threadId)}`),
   createRun: (payload: CreateRunPayload) =>

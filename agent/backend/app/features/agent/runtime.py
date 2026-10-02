@@ -20,7 +20,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from pr_backend_core.oracle_session import init_oracle_session
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.features.agent.config import runtime_config_store
 from app.features.agent.tools import (
@@ -190,6 +190,61 @@ class RunCreateRequest(BaseModel):
         return value
 
 
+class FeedbackRating(StrEnum):
+    """回答の評価（RAG と同じ値。#774）。"""
+
+    HELPFUL = "helpful"
+    NOT_HELPFUL = "not_helpful"
+
+
+class FeedbackReason(StrEnum):
+    """役に立たなかった理由（RAG の回答の理由に、Agent のツールの使い方を足したもの。#774）。"""
+
+    INCORRECT = "incorrect"
+    INCOMPLETE = "incomplete"
+    NOT_RELEVANT = "not_relevant"
+    ANSWER_UNTRUSTED = "answer_untrusted"
+    AMBIGUOUS_QUESTION = "ambiguous_question"
+    WRONG_ACTION = "wrong_action"
+
+
+FEEDBACK_COMMENT_MAX_CHARS = 1000
+
+
+class RunFeedbackRequest(BaseModel):
+    """チャットの回答への評価。役に立たなかったときは理由が必須（RAG と同じ。#774）。"""
+
+    rating: FeedbackRating
+    reason: FeedbackReason | None = None
+    comment: str = Field(default="", max_length=FEEDBACK_COMMENT_MAX_CHARS)
+
+    @model_validator(mode="after")
+    def _reason_for_not_helpful(self) -> RunFeedbackRequest:
+        if self.rating == FeedbackRating.NOT_HELPFUL:
+            if self.reason is None:
+                raise ValueError("役に立たなかった理由を選んでください。")
+            self.comment = self.comment.strip()
+        else:
+            # 役に立った評価には理由・コメントを残さない（RAG と同じ）。
+            self.reason = None
+            self.comment = ""
+        return self
+
+
+class RunFeedback(BaseModel):
+    """Run（チャットの 1 往復）の回答への評価。付け直すと上書きする（#774）。"""
+
+    rating: FeedbackRating
+    reason: FeedbackReason | None = None
+    comment: str = ""
+    user_uuid: str | None = None
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class RunNotRatableError(ValueError):
+    """回答の無い Run（完了していない Run）には評価を付けられない（#774）。"""
+
+
 class RunState(BaseModel):
     id: str
     goal: str
@@ -207,6 +262,8 @@ class RunState(BaseModel):
     created_by_user_uuid: str | None = None
     # 会話（スレッド。#768）。チャットの 1 往復が 1 Run。#768 より前の Run は None。
     thread_id: str | None = None
+    # 回答への評価（#774）。評価していない Run は None。
+    feedback: RunFeedback | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -345,6 +402,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     def complete_builtin_run(self, run_id: str, answer: str) -> RunState: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
+    def set_run_feedback(self, run_id: str, feedback: RunFeedback) -> RunState: ...
     def thread_history(self, run_id: str, *, limit: int) -> list[tuple[str, str]]: ...
     def list_threads(
         self, *, user_uuid: str | None, agent_id: str | None = None
@@ -897,6 +955,16 @@ class AgentRuntimeRepository:
             run = self._require_run(run_id)
             if not _is_terminal(run.status):
                 self._fail_builtin_locked(run, code, detail)
+            return run.model_copy(deep=True)
+
+    def set_run_feedback(self, run_id: str, feedback: RunFeedback) -> RunState:
+        """回答への評価を保存する（上書き。#774）。完了していない Run は RunNotRatableError。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            if run.status != RunStatus.COMPLETED or run_answer_text(run) is None:
+                raise RunNotRatableError(run_id)
+            run.feedback = feedback
+            self._persist_locked()
             return run.model_copy(deep=True)
 
     def note_builtin_warning(self, run_id: str, message: str) -> None:

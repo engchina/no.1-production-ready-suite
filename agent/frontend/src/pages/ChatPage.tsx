@@ -31,8 +31,10 @@ import {
   type Artifact,
   type RunState,
   type RunStep,
+  type ThreadData,
   type ThreadSummary,
 } from "@/lib/api";
+import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-state";
@@ -119,6 +121,15 @@ export function ChatPage() {
   useEffect(() => {
     conversationEndRef.current?.scrollIntoView({ block: "end" });
   }, [lastRunId, lastRunStatus]);
+
+  // 評価を保存した Run を、会話の取り直しを待たずに差し替える（#774）。
+  function replaceRun(updated: RunState) {
+    queryClient.setQueryData<ThreadData>(["thread", threadId], (current) =>
+      current
+        ? { ...current, runs: current.runs.map((item) => (item.id === updated.id ? updated : item)) }
+        : current
+    );
+  }
 
   const send = useMutation({
     mutationFn: (goal: string) =>
@@ -287,8 +298,11 @@ export function ChatPage() {
                       key={run.id}
                       run={run}
                       canDecide={capabilities.decideApprovals}
+                      // 評価は会話をした本人だけ（会話の一覧は本人の会話だけ。backend も作成者を確かめる。#774）。
+                      canRate={capabilities.operateRuns}
                       deciding={decide.isPending}
                       onDecide={(approval, approved) => decide.mutate({ approval, approved })}
+                      onFeedbackSaved={replaceRun}
                     />
                   ))
                 )}
@@ -412,13 +426,17 @@ function ThreadList({
 function ChatTurn({
   run,
   canDecide,
+  canRate,
   deciding,
   onDecide,
+  onFeedbackSaved,
 }: {
   run: RunState;
   canDecide: boolean;
+  canRate: boolean;
   deciding: boolean;
   onDecide: (approval: ApprovalRequest, approved: boolean) => void;
+  onFeedbackSaved: (run: RunState) => void;
 }) {
   const answer = answerText(run.artifacts);
   const citations = runCitations(run.artifacts);
@@ -515,6 +533,10 @@ function ChatTurn({
               ))}
             </ul>
           </Disclosure>
+        ) : null}
+
+        {canRate && run.status === "completed" && answer ? (
+          <AnswerFeedback run={run} onSaved={onFeedbackSaved} />
         ) : null}
       </div>
     </div>
