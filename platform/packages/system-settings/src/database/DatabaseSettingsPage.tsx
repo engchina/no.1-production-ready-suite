@@ -432,11 +432,10 @@ export function DatabaseSettingsPage({
 
   return (
     <PageBody wide>
-      <fieldset
-        disabled={operationBusy}
-        aria-busy={operationBusy}
-        className="min-w-0 space-y-6"
-      >
+      {/* ページ全体を <fieldset disabled> で包まない。押したボタン（保存・接続テスト・Wallet・パスワードの表示）まで
+          ネイティブの disabled になり、フォーカスが body へ外れるため（#355）。他の操作は部品ごとに disabled にし、
+          押したボタンは loading（aria-disabled）でフォーカスを保つ（#835）。 */}
+      <div aria-busy={operationBusy} className="min-w-0 space-y-6">
         <AdbManagementCard
           api={api}
           errorMessage={errorMessage}
@@ -451,6 +450,7 @@ export function DatabaseSettingsPage({
           walletEnsurePending={
             walletDownload.isPending && adbWalletDownloadActive
           }
+          externalBusy={operationBusy && !(walletDownload.isPending && adbWalletDownloadActive)}
         />
 
         <form
@@ -480,6 +480,7 @@ export function DatabaseSettingsPage({
                   required
                   value={form.user}
                   ref={userRef}
+                  disabled={operationBusy}
                   onValueChange={(value) => updateForm({ user: value })}
                   placeholder={t("settings.database.placeholder.dbUser")}
                   error={errors.user}
@@ -490,6 +491,7 @@ export function DatabaseSettingsPage({
                   label={t("settings.database.field.dbPassword")}
                   required={!settings.has_password}
                   value={form.password}
+                  disabled={operationBusy}
                   onValueChange={(value) => updateForm({ password: value })}
                   visible={passwordVisible}
                   onVisibleChange={() => void togglePasswordVisible(settings)}
@@ -529,6 +531,7 @@ export function DatabaseSettingsPage({
                     label={t("settings.database.field.connectionSecurity")}
                     value={form.connectionSecurity}
                     options={databaseConnectionSecurityOptions()}
+                    disabled={operationBusy}
                     onValueChange={(value) =>
                       updateForm({
                         connectionSecurity: value,
@@ -550,7 +553,8 @@ export function DatabaseSettingsPage({
                   <>
                     <div className="min-w-0">
                       <WalletUploadField
-                        disabled={operationBusy}
+                        // アップロード中はアップロードの欄が loading でフォーカスを保つ（#835）。
+                        disabled={operationBusy && !walletUpload.isPending}
                         settings={settings}
                         uploadPending={walletUpload.isPending}
                         autoDownloadPending={
@@ -580,6 +584,7 @@ export function DatabaseSettingsPage({
                       ref={walletPasswordRef}
                       label={t("settings.database.field.walletPassword")}
                       value={form.walletPassword}
+                      disabled={operationBusy}
                       onValueChange={(value) =>
                         updateForm({ walletPassword: value })
                       }
@@ -611,6 +616,7 @@ export function DatabaseSettingsPage({
                     />
 
                     <WalletServiceField
+                      disabled={operationBusy}
                       value={form.dsn}
                       onChange={(value) => updateForm({ dsn: value })}
                       services={settings.available_services}
@@ -622,6 +628,7 @@ export function DatabaseSettingsPage({
                 ) : (
                   <>
                     <WalletServiceField
+                      disabled={operationBusy}
                       value={form.dsn}
                       onChange={(value) => updateForm({ dsn: value })}
                       services={settings.available_services}
@@ -648,6 +655,8 @@ export function DatabaseSettingsPage({
                     label: t("settings.database.actions.saveDb"),
                     icon: Save,
                     loading: save.isPending,
+                    // 押したボタンはネイティブの disabled にせず loading（aria-disabled）でフォーカスを保つ（#355 / #835）。
+                    disabled: operationBusy && !save.isPending,
                   },
                 ]}
                 secondaryActions={[
@@ -656,6 +665,7 @@ export function DatabaseSettingsPage({
                     label: t("settings.database.actions.testDb"),
                     icon: PlugZap,
                     loading: test.isPending,
+                    disabled: operationBusy && !test.isPending,
                     onClick: () => runTest(settings),
                   },
                 ]}
@@ -692,8 +702,13 @@ export function DatabaseSettingsPage({
           </Card>
         </form>
 
-        {children}
-      </fieldset>
+        {children ? (
+          // 製品が足すカードには押したボタンが無いので、処理中は fieldset でまとめて無効にする。
+          <fieldset disabled={operationBusy} className="min-w-0 space-y-6">
+            {children}
+          </fieldset>
+        ) : null}
+      </div>
     </PageBody>
   );
 }
@@ -744,6 +759,7 @@ function AdbManagementCard({
   ensureWalletFromOci,
   walletEnsureError,
   walletEnsurePending,
+  externalBusy,
 }: {
   api: DatabaseSettingsApi;
   errorMessage?: (error: unknown) => string | undefined;
@@ -752,6 +768,8 @@ function AdbManagementCard({
   ensureWalletFromOci: () => Promise<unknown>;
   walletEnsureError: string | null;
   walletEnsurePending: boolean;
+  /** DB 接続のカードの処理中（保存・接続テスト・Wallet・パスワードの表示）。このカードの操作を無効にする。 */
+  externalBusy: boolean;
 }) {
   const infoQuery = useAdbInfo(api);
   const saveSettings = useUpdateAdbSettings(api);
@@ -788,14 +806,6 @@ function AdbManagementCard({
   const saveButtonLoading = activeOperation === "save" && saveOrRefreshPending;
   const refreshButtonLoading =
     activeOperation === "refresh" && saveOrRefreshPending;
-  const startButtonLoading =
-    (activeOperation === "start" &&
-      (saveSettings.isPending || start.isPending)) ||
-    lifecycle === "STARTING";
-  const stopButtonLoading =
-    (activeOperation === "stop" &&
-      (saveSettings.isPending || stop.isPending)) ||
-    lifecycle === "STOPPING";
   // 遷移中は useAdbInfo が背景ポーリングするため、その isFetching で操作ボタンを
   // 無効化しない(4 秒ごとのちらつき/無効化を避ける)。明示的な操作の最中だけ busy。
   const busy =
@@ -803,7 +813,13 @@ function AdbManagementCard({
     saveSettings.isPending ||
     start.isPending ||
     stop.isPending ||
-    walletEnsurePending;
+    walletEnsurePending ||
+    externalBusy;
+  // 押したボタンは busy でも disabled にしない（loading の aria-disabled でフォーカスを保つ。#355 / #835）。
+  const startPressed =
+    activeOperation === "start" && (saveSettings.isPending || start.isPending);
+  const stopPressed =
+    activeOperation === "stop" && (saveSettings.isPending || stop.isPending);
 
   function appendLog(result: AdbInfoData) {
     setLog((current) =>
@@ -875,6 +891,9 @@ function AdbManagementCard({
     }
   }
 
+  const startButtonLoading = startPressed || lifecycle === "STARTING";
+  const stopButtonLoading = stopPressed || lifecycle === "STOPPING";
+
   // 押した操作の説明を優先する（STARTING / STOPPING の間に「情報を再取得」を押したときなど）。
   const adbProcessingLabel =
     saveButtonLoading || refreshButtonLoading
@@ -924,7 +943,7 @@ function AdbManagementCard({
             variant="secondary"
             size="sm"
             loading={refreshButtonLoading}
-            disabled={busy}
+            disabled={busy && !refreshButtonLoading}
             onClick={() => void handleRefresh("refresh")}
             icon={RefreshCw}
           >
@@ -943,6 +962,7 @@ function AdbManagementCard({
             value={region}
             options={ADB_REGION_OPTIONS}
             onValueChange={setRegion}
+            disabled={busy}
             helper={
               // 候補に無い保存値（以前の候補の us-chicago-1 など）はそのまま出し、選び直すよう案内する（#660）。
               regionSupported
@@ -973,7 +993,7 @@ function AdbManagementCard({
               label: t("settings.database.actions.save"),
               icon: Save,
               loading: saveButtonLoading,
-              disabled: busy || !ocid.trim(),
+              disabled: (busy && !saveButtonLoading) || !ocid.trim(),
               onClick: () => void handleRefresh("save"),
             },
           ]}
@@ -983,7 +1003,7 @@ function AdbManagementCard({
               label: t("settings.adb.action.start"),
               icon: Power,
               loading: startButtonLoading,
-              disabled: busy || !ocid.trim() || !canStart,
+              disabled: startPressed ? false : busy || !ocid.trim() || !canStart,
               onClick: () => void handleStart(),
             },
             {
@@ -991,7 +1011,7 @@ function AdbManagementCard({
               label: t("settings.adb.action.stop"),
               icon: PowerOff,
               loading: stopButtonLoading,
-              disabled: busy || !ocid.trim() || !canStop,
+              disabled: stopPressed ? false : busy || !ocid.trim() || !canStop,
               onClick: () => void handleStop(),
             },
           ]}
@@ -1138,9 +1158,11 @@ function WalletServiceField({
   services,
   connectionSecurity,
   error,
+  disabled = false,
   onChange,
 }: {
   value: string;
+  disabled?: boolean;
   services: string[];
   connectionSecurity: DatabaseConnectionSecurity;
   error?: string;
@@ -1164,6 +1186,7 @@ function WalletServiceField({
         value={value.trim()}
         options={serviceOptions}
         onValueChange={onChange}
+        disabled={disabled}
         required
         error={error}
         placeholder={t("settings.database.placeholder.serviceDsn")}
@@ -1182,6 +1205,7 @@ function WalletServiceField({
       }
       required
       value={value}
+      disabled={disabled}
       onValueChange={onChange}
       placeholder={
         usesWalletMtlS
