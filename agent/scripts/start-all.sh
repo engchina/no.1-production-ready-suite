@@ -17,6 +17,7 @@ pids=()
 _cleaning=0
 
 cleanup() {
+  local exit_code="${1:-0}"
   # 再入防止: 最初の Ctrl+C で全トラップを解除し、二度目以降の INT は無視する。
   # (これをしないと cleanup 中の Ctrl+C で再入し「停止しています...」を繰り返す)
   if [ "${_cleaning}" -eq 1 ]; then
@@ -55,11 +56,12 @@ cleanup() {
   done
 
   echo "[start-all] 停止しました。"
-  exit 130
+  exit "${exit_code}"
 }
 # INT/TERM は即時停止、EXIT は正常終了時の後始末(いずれも cleanup を 1 度だけ実行)。
-trap cleanup INT TERM
-trap cleanup EXIT
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
+trap 'cleanup $?' EXIT
 
 # 各スクリプトを独立したプロセスグループで起動する
 set -m
@@ -94,8 +96,19 @@ wait_for_backend_ready() {
   done
 }
 
+echo "[start-all] バックエンドの依存を準備します（初回のダウンロード・構築には時間がかかります）..."
+"${SCRIPT_DIR}/start-backend.sh" --prepare-only &
+pids+=("$!")
+if wait "${pids[0]}"; then
+  pids=()
+else
+  status=$?
+  echo "[start-all] バックエンドの依存準備に失敗しました。" >&2
+  exit "${status}"
+fi
+
 echo "[start-all] バックエンドを起動します..."
-HOST="${BACKEND_HOST}" PORT="${BACKEND_PORT}" "${SCRIPT_DIR}/start-backend.sh" &
+HOST="${BACKEND_HOST}" PORT="${BACKEND_PORT}" "${SCRIPT_DIR}/start-backend.sh" --no-sync &
 pids+=("$!")
 backend_pid="$!"
 
