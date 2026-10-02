@@ -12,8 +12,8 @@ from typing import Any
 
 import anyio
 import pytest
-from agents import FunctionTool
-from agents.testing import ScriptedModel, assistant_message, function_call
+from agents import FunctionTool, Usage
+from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 from mcp_support import fake_product_mcp
 from pytest import MonkeyPatch
 
@@ -23,6 +23,7 @@ from app.features.agent.config import runtime_config_store
 from app.features.agent.runtime import (
     BUILTIN_RUNTIME_ID,
     AgentProfile,
+    AgentProfilePatch,
     ApprovalDecisionRequest,
     RunCreateRequest,
     RunStatus,
@@ -245,6 +246,90 @@ def test_rejected_tool_is_not_executed(monkeypatch: MonkeyPatch, calls: _Calls) 
     assert run.status == RunStatus.COMPLETED
     assert calls.items == []
     assert [step.status for step in run.steps] == ["cancelled"]
+
+
+def _usage(requests: int, input_tokens: int, output_tokens: int) -> Usage:
+    return Usage(
+        requests=requests,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )
+
+
+def test_usage_is_recorded_and_accumulates_across_approval(
+    monkeypatch: MonkeyPatch, calls: _Calls
+) -> None:
+    """モデルの利用量を Run に残し、承認待ちから再開しても累計にする（#772）。"""
+    del calls
+    monkeypatch.setattr(
+        builtin_runtime, "enterprise_ai_default_model_id", lambda _settings: "default-model"
+    )
+    _script(
+        monkeypatch,
+        ModelStep(
+            output=[function_call(WRITE, {"query": "登録"}, call_id="call-u")],
+            usage=_usage(1, 100, 20),
+        ),
+        ModelStep(output=[assistant_message("登録しました。")], usage=_usage(1, 150, 30)),
+    )
+    run_id = _create_run("登録して")
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+    waiting = runtime_repository.get_run(run_id)
+    assert waiting.usage is not None
+    assert (waiting.usage.requests, waiting.usage.total_tokens) == (1, 120)
+    # Agent がモデルを指定しないときは、その時点の既定のテキストモデルの名前を残す。
+    assert waiting.usage.model == "default-model"
+
+    [approval] = waiting.approvals
+    runtime_repository.decide_approval(approval.id, ApprovalDecisionRequest(approved=True))
+    anyio.run(builtin_runtime.resume_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED
+    assert run.usage is not None
+    assert run.usage.model_dump() == {
+        "model": "default-model",
+        "requests": 2,
+        "input_tokens": 250,
+        "output_tokens": 50,
+        "total_tokens": 300,
+    }
+
+
+def test_usage_is_recorded_when_the_run_fails_after_model_calls(
+    monkeypatch: MonkeyPatch, calls: _Calls
+) -> None:
+    """ツール呼び出しの上限で止まった Run も、それまでの利用量を残す（#772）。"""
+    del calls
+    monkeypatch.setattr(builtin_runtime, "_max_turns", lambda: 2)
+    _script(
+        monkeypatch,
+        *[
+            ModelStep(
+                output=[function_call(LOOKUP, {"query": "売上"}, call_id=f"call-{index}")],
+                usage=_usage(1, 10, 5),
+            )
+            for index in range(2)
+        ],
+    )
+    run_id = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="ずっと調べる", agent_id=AGENT_ID), created_by_user_uuid=USER_UUID
+    ).id
+    runtime_repository.patch_agent(AGENT_ID, AgentProfilePatch(model_id="explicit-model"))
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.FAILED
+    assert run.events[-1].payload["error_code"] == "runtime.max_turns_exceeded"
+    assert run.usage is not None
+    assert (run.usage.model, run.usage.requests, run.usage.total_tokens) == (
+        "explicit-model",
+        2,
+        30,
+    )
 
 
 def test_missing_model_settings_fail_the_run(monkeypatch: MonkeyPatch, calls: _Calls) -> None:

@@ -188,6 +188,16 @@ class RunCreateRequest(BaseModel):
         return value
 
 
+class RunUsage(BaseModel):
+    """Run が使ったモデルの量（#772）。承認待ちからの再開を含めた累計（SDK の `Usage`）。"""
+
+    model: str = ""
+    requests: int = Field(default=0, ge=0)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+
+
 class RunState(BaseModel):
     id: str
     goal: str
@@ -203,6 +213,8 @@ class RunState(BaseModel):
     # Run を作った利用者（共通認証の user_uuid。#233）。RAG / NL2SQL の MCP はこの利用者として呼ぶ。
     # この項目がない既存の Run は None。
     created_by_user_uuid: str | None = None
+    # モデルの利用量（#772）。組み込み Runtime がモデルを呼ぶ前の Run・#772 より前の Run は None。
+    usage: RunUsage | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -307,6 +319,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     def complete_builtin_run(self, run_id: str, answer: str) -> RunState: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
+    def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None: ...
     def list_runs(self) -> list[RunState]: ...
     def get_run(self, run_id: str) -> RunState: ...
     def list_artifacts(self, run_id: str) -> list[Artifact]: ...
@@ -778,6 +791,15 @@ class AgentRuntimeRepository:
             if not _is_terminal(run.status):
                 self._fail_builtin_locked(run, code, detail)
             return run.model_copy(deep=True)
+
+    def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None:
+        """モデルの利用量（再開を含めた累計）を Run に記録する（#772）。"""
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None:
+                return
+            run.usage = usage
+            self._persist_locked()
 
     def note_builtin_warning(self, run_id: str, message: str) -> None:
         """実行は続けるが利用者に伝えたいこと（取得できなかった MCP 接続など）をイベントに残す。"""

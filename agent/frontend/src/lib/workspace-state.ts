@@ -20,8 +20,10 @@ const MAX_VALUE_CHARS = 20_000;
 export const WORKSPACE_FIELDS = {
   runs: ["selectedRunId", "streamMode", "goal"],
   audit: ["filterForm", "appliedForm", "page"],
+  // 利用状況の期間と内訳のタブ（#772）。
+  usage: ["days", "view"],
   // 一覧のページ番号（#265）。一覧 → エディタ → 一覧の移動と再読込で同じページに戻す。
-  lists: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "plugins", "marketplaces"],
+  lists: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "plugins", "marketplaces", "usage"],
 } as const;
 
 export type WorkspacePage = keyof typeof WORKSPACE_FIELDS;

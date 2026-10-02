@@ -185,8 +185,47 @@ export interface RunState {
   artifacts: Artifact[];
   pending_tool_calls: ToolCall[];
   metadata: Record<string, unknown>;
+  /** モデルの利用量（#772）。モデルを呼ぶ前の Run・記録を始める前の Run は null / 無し。 */
+  usage?: RunUsage | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Run が使ったモデルの量（承認待ちからの再開を含めた累計。#772）。 */
+export interface RunUsage {
+  model: string;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+/** 利用状況の集計の 1 行（#772）。 */
+export interface UsageTotals {
+  runs: number;
+  /** 利用量を記録した Run（記録を始める前の Run・モデルを呼ぶ前に止まった Run は含まない）。 */
+  runs_with_usage: number;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+export type UsagePeriodDays = 7 | 30 | 90;
+
+export interface UsageReport {
+  days: UsagePeriodDays;
+  timezone: string;
+  since: string;
+  until: string;
+  totals: UsageTotals;
+  /** 直前の同じ長さの期間。 */
+  previous: UsageTotals;
+  by_agent: (UsageTotals & { agent_id: string; agent_name: string })[];
+  by_user: (UsageTotals & { user_uuid: string | null; display_name: string })[];
+  by_model: (UsageTotals & { model: string })[];
+  /** 期間のすべての日（古い順。Run の無い日も 0 で入る）。 */
+  by_day: (UsageTotals & { day: string })[];
 }
 
 export interface ToolAuditRecord {
@@ -757,6 +796,9 @@ export const agentApi = {
   getRun: (runId: string) => request<RunState>(`/api/runs/${runId}`),
   getRunAudit: (runId: string) =>
     request<RunAuditData>(`/api/runs/${runId}/audit`),
+  /** 利用状況（#772）。日は画面のブラウザのタイムゾーンで区切る。 */
+  getUsageReport: (days: UsagePeriodDays, timezone: string) =>
+    request<UsageReport>(`/api/usage?${new URLSearchParams({ days: String(days), timezone }).toString()}`),
   listToolCallAudit: (filters: ToolCallAuditFilters) =>
     request<ToolCallAuditData>(`/api/audit/tool-calls${auditQuery(filters)}`),
   /** 監査 CSV。Cookie セッションで取得し、401 / 403 は他の API と同じく通知する（#215）。 */

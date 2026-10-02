@@ -123,6 +123,13 @@ from app.features.agent.tools import (
     list_mcp_connection_tools,
     tool_registry,
 )
+from app.features.agent.usage import (
+    DEFAULT_TIMEZONE,
+    USAGE_PERIOD_DAYS,
+    UsageReport,
+    build_usage_report,
+    resolve_timezone,
+)
 from app.observability import (
     ObservabilityStatus,
     TraceEventsData,
@@ -140,9 +147,10 @@ from app.security.dependencies import (
     WebSocketAuthRejected,
     actor_roles_for_principal,
     authenticate_websocket,
+    local_debug_principal,
     permission_route_path,
 )
-from app.security.domain import Principal
+from app.security.domain import LOCAL_DEBUG_USER_UUID, Principal
 from app.security.permissions import UNCLASSIFIED_PERMISSION, permission_for_route
 from app.security.service import get_security_service
 from app.settings import MODEL_SETTINGS_STORE, get_settings
@@ -1485,6 +1493,55 @@ async def get_run_audit(
         raise HTTPException(status_code=404, detail="run not found") from exc
     _require_agent_access(request, run.agent_id)
     return ApiResponse(data=_run_audit_data(run))
+
+
+@router.get("/usage", response_model=ApiResponse[UsageReport])
+async def get_usage_report(
+    request: Request,
+    days: int = Query(default=30),
+    timezone: str = Query(default=DEFAULT_TIMEZONE, max_length=64),
+) -> ApiResponse[UsageReport]:
+    """利用状況（#772）。利用できる業務 Agent の Run のモデル利用量を集計する。
+
+    権限は middleware のメニュー権限（`menu.usage`）で確かめる。日は `timezone`（画面の
+    ブラウザの IANA 名）で区切る。
+    """
+    if days not in USAGE_PERIOD_DAYS:
+        raise HTTPException(status_code=422, detail="期間は 7・30・90 日のどれかにしてください。")
+    try:
+        tz = resolve_timezone(timezone)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    report = await run_in_threadpool(
+        build_usage_report,
+        runs,
+        days=days,
+        now=datetime.now(UTC),
+        tz=tz,
+        agent_names=agent_names,
+        user_names=_user_display_names,
+    )
+    return ApiResponse(data=report)
+
+
+def _user_display_names(user_uuids: list[str]) -> dict[str, str]:
+    """利用者の表示名（共通認証の利用者。local のローカル利用者を含む）。引けない人は省く。"""
+    names: dict[str, str] = {}
+    if LOCAL_DEBUG_USER_UUID in user_uuids:
+        names[LOCAL_DEBUG_USER_UUID] = local_debug_principal().display_name
+    remaining = [uuid for uuid in user_uuids if uuid not in names]
+    if not remaining:
+        return names
+    try:
+        identities = get_security_service().store.get_user_identities(remaining)
+    except Exception:  # noqa: BLE001 - 名前は表示の補助。引けなくても集計は返す
+        logger.warning("agent_usage_user_names_unavailable", exc_info=True)
+        return names
+    for uuid, identity in identities.items():
+        names[uuid] = identity.display_name or identity.login_user_id
+    return names
 
 
 @router.get("/audit/tool-calls", response_model=ApiResponse[ToolCallAuditData])

@@ -449,8 +449,10 @@ async def execute_run(run_id: str) -> None:
             user_uuid=run.created_by_user_uuid,
         )
         result = await Runner.run(sdk_agent, run.goal, max_turns=_max_turns())
+        _record_usage(run_id, result, agent.model_id)
         await _finish(run_id, result)
     except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
+        _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
         _record_failure(run_id, exc)
 
 
@@ -481,8 +483,10 @@ async def resume_run(run_id: str) -> None:
             else:
                 state.reject(item)
         result = await Runner.run(sdk_agent, state, max_turns=_max_turns())
+        _record_usage(run_id, result, agent.model_id)
         await _finish(run_id, result)
     except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
+        _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
         _record_failure(run_id, exc)
 
 
@@ -508,6 +512,40 @@ async def _finish(run_id: str, result: Any) -> None:
         output if isinstance(output, str) else json.dumps(output, ensure_ascii=False, default=str)
     )
     runtime_repository.complete_builtin_run(run_id, answer)
+
+
+def _record_usage(run_id: str, source: object, model_id: str) -> None:
+    """SDK の累計の利用量を Run に記録する（#772）。
+
+    `source` は `Runner.run` の結果か、失敗の `run_data`（SDK の例外が持つときだけ）。SDK の
+    `Usage` は承認待ちで保存する RunState に入り、再開後も累計で続くため、毎回上書きでよい。
+    """
+    from app.features.agent.runtime import RunUsage, runtime_repository
+
+    usage = getattr(getattr(source, "context_wrapper", None), "usage", None)
+    if usage is None:
+        return
+    runtime_repository.record_builtin_usage(
+        run_id,
+        RunUsage(
+            model=_model_label(model_id),
+            requests=int(getattr(usage, "requests", 0) or 0),
+            input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+            output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+            total_tokens=int(getattr(usage, "total_tokens", 0) or 0),
+        ),
+    )
+
+
+def _model_label(model_id: str) -> str:
+    """利用量に残すモデル名（Agent の指定が空なら、その時点の既定のテキストモデル）。"""
+    explicit = (model_id or "").strip()
+    if explicit:
+        return explicit
+    try:
+        return enterprise_ai_default_model_id(get_settings()) or ""
+    except Exception:  # noqa: BLE001 - モデル名は記録の補助。取れなくても利用量は残す
+        return ""
 
 
 def _arguments(value: object) -> dict[str, Any]:

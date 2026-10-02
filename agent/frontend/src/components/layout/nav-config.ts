@@ -2,6 +2,7 @@ import {
   BadgeCheck,
   Blocks,
   Bot,
+  ChartColumn,
   ClipboardList,
   Container,
   DatabaseBackup,
@@ -57,8 +58,8 @@ const USER_ROLE_MENU_PERMISSIONS = {
 
 /**
  * Agent コンソールのサイドナビ構成（共有 Sidebar が消費する）。並び方は NL2SQL / RAG と同じ
- * （製品のセクション → セキュリティ設定 → 共通のユーザーとロール → 運用設定 → 共通のシステム設定。
- * Agent は「改善・運用」を持たない。#658）。
+ * （製品のセクション → 改善・運用 → セキュリティ設定 → 共通のユーザーとロール → 運用設定 →
+ * 共通のシステム設定。#658 / #772）。
  */
 export const NAV_SECTIONS: NavSection[] = [
   {
@@ -83,6 +84,12 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: MENU_PERMISSIONS.pluginMarketplaces,
       },
     ],
+  },
+  {
+    // 業務 Agent の使われ方を確かめて直す画面。RAG / NL2SQL の「改善・運用」（nav.section.improve）と
+    // 同じ名前・同じ位置にする（#658 / #772）。
+    titleKey: "nav.section.improve",
+    items: [{ href: APP_ROUTES.usage, labelKey: "nav.usage", icon: ChartColumn, permission: MENU_PERMISSIONS.usage }],
   },
   {
     // Agent 固有のセキュリティ（ロールへの機能権限とエージェント / 業務ビューの対象範囲の付与。#215）。

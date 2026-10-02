@@ -56,6 +56,7 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 | グループ | コード |
 |---|---|
 | Control Plane | `menu.agents` / `menu.skills` / `menu.runtimes` / `menu.runs` / `menu.approvals` / `menu.audit` / `menu.plugin_marketplaces` |
+| 改善・運用 | `menu.usage`（利用状況。#772。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ） |
 | 運用設定 | `menu.settings_system_tables` / `menu.settings_external_mcp`（MCP 接続）/ `menu.settings_runtime_snapshot` |
 | システム設定（3 製品共通） | `menu.settings_oci` / `menu.settings_upload_storage` / `menu.settings_model` / `menu.settings_database` / `menu.settings_appearance` |
 | ユーザーとロール（3 製品共通） | `menu.security_users` / `menu.security_roles` |
