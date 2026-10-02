@@ -6,6 +6,8 @@ import {
   ClipboardList,
   Container,
   DatabaseBackup,
+  FlaskConical,
+  KeySquare,
   LockKeyhole,
   PlayCircle,
   PlugZap,
@@ -58,8 +60,8 @@ const USER_ROLE_MENU_PERMISSIONS = {
 
 /**
  * Agent コンソールのサイドナビ構成（共有 Sidebar が消費する）。並び方は NL2SQL / RAG と同じ
- * （製品のセクション → セキュリティ設定 → 共通のユーザーとロール → 運用設定 → 共通のシステム設定。
- * Agent は「改善・運用」を持たない。#658）。
+ * （製品のセクション → 改善・運用 → セキュリティ設定 → 共通のユーザーとロール → 運用設定 →
+ * 共通のシステム設定。#658 / #776）。
  */
 export const NAV_SECTIONS: NavSection[] = [
   {
@@ -89,6 +91,19 @@ export const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.pluginMarketplaces",
         icon: Store,
         permission: MENU_PERMISSIONS.pluginMarketplaces,
+      },
+    ],
+  },
+  {
+    // 業務 Agent の品質を確かめて直す画面。RAG / NL2SQL の「改善・運用」（nav.section.improve）と
+    // 同じ名前・同じ位置・同じアイコン（品質評価は FlaskConical）にする（#658 / #776）。
+    titleKey: "nav.section.improve",
+    items: [
+      {
+        href: APP_ROUTES.evaluation,
+        labelKey: "nav.evaluation",
+        icon: FlaskConical,
+        permission: MENU_PERMISSIONS.evaluation,
       },
     ],
   },
@@ -132,6 +147,14 @@ export const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.settingsMcpConnections",
         icon: PlugZap,
         permission: MENU_PERMISSIONS.settingsExternalMcp,
+      },
+      {
+        // 業務 Agent を MCP（`POST /api/mcp`）で呼ぶ外部のクライアント向け（#778）。
+        // KeyRound は共通の OCI 認証が使うため、別のアイコンにする（#658）。
+        href: APP_ROUTES.settingsApiKeys,
+        labelKey: "nav.settingsApiKeys",
+        icon: KeySquare,
+        permission: MENU_PERMISSIONS.settingsApiKeys,
       },
       {
         href: APP_ROUTES.settingsRuntimeSnapshot,

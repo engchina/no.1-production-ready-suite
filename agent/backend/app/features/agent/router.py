@@ -21,7 +21,7 @@ from io import StringIO
 from pathlib import Path
 from time import monotonic
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import httpx
 from anyio import fail_after
@@ -30,14 +30,17 @@ from fastapi import (
     APIRouter,
     BackgroundTasks,
     Depends,
+    File,
     HTTPException,
     Query,
     Request,
+    UploadFile,
     WebSocket,
     WebSocketDisconnect,
 )
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse
+from pr_backend_core.mcp import mcp_http_response
 from pr_system_settings.database import build_database_router
 from pr_system_settings.database_status import (
     DatabaseSchemaProbeResult,
@@ -73,6 +76,13 @@ from starlette.concurrency import run_in_threadpool
 
 import app.settings as app_settings
 from app.features.agent import builtin_runtime, control_plane_store
+from app.features.agent.api_keys import (
+    ApiKeyCreated,
+    ApiKeyCreateRequest,
+    ApiKeysListData,
+    api_key_registry,
+    key_view,
+)
 from app.features.agent.automations import (
     WEBHOOK_PAYLOAD_MAX_BYTES,
     Automation,
@@ -89,7 +99,38 @@ from app.features.agent.automations import (
 )
 from app.features.agent.automations import fire as fire_automation
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
-from app.features.agent.control_plane_store import ControlPlaneStoreError, get_control_plane_store
+from app.features.agent.control_plane_store import (
+    ControlPlaneStoreError,
+    delete_api_key,
+    get_control_plane_store,
+    save_api_key,
+)
+from app.features.agent.evaluation import (
+    CaseStatus,
+    EvaluationBusyError,
+    EvaluationCaseResult,
+    EvaluationCasesData,
+    EvaluationJob,
+    EvaluationJobActiveError,
+    EvaluationJobsData,
+    EvaluationRequest,
+    EvaluationSet,
+    EvaluationSetInput,
+    EvaluationSetsData,
+    evaluation_set_store,
+    evaluation_store,
+    job_item,
+    run_evaluation_job,
+    set_item,
+)
+from app.features.agent.evaluation_excel import (
+    EXCEL_MAX_BYTES,
+    EvaluationExcelError,
+    export_set_xlsx,
+    parse_cases_xlsx,
+    template_xlsx,
+)
+from app.features.agent.mcp_server import build_agent_mcp_server
 from app.features.agent.plugins import (
     MarketplaceListing,
     MarketplaceSource,
@@ -140,6 +181,7 @@ from app.features.agent.tools import (
     list_mcp_connection_tools,
     tool_registry,
 )
+from app.features.agent.user_names import user_display_names
 from app.observability import (
     ObservabilityStatus,
     TraceEventsData,
@@ -1675,6 +1717,208 @@ def _schedule_automation_runs(fired: AutomationFired) -> None:
         _schedule_builtin_run(runtime_repository.get_run(fired.run_id))
 
 
+# 実行中の評価の task（GC で消えないよう参照を持つ。#776）。
+_evaluation_tasks: set[asyncio.Task[None]] = set()
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _evaluation_set_for_actor(request: Request, set_id: str) -> EvaluationSet:
+    try:
+        item = evaluation_set_store.get(set_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="評価セットが見つかりません。") from exc
+    if not _agent_allowed(request, item.agent_id):
+        raise HTTPException(status_code=404, detail="評価セットが見つかりません。")
+    return item
+
+
+def _require_evaluable_agent(request: Request, agent_id: str) -> AgentProfile:
+    _require_agent_access(request, agent_id)
+    return _control_plane_agent(agent_id)
+
+
+@router.get("/evaluation-sets", response_model=ApiResponse[EvaluationSetsData])
+async def list_evaluation_sets(
+    request: Request, agent_id: str | None = Query(default=None, max_length=200)
+) -> ApiResponse[EvaluationSetsData]:
+    """評価セット（#776。利用できる業務 Agent のものだけ。新しい順）。"""
+    items = [
+        set_item(item)
+        for item in evaluation_set_store.list(agent_id or None)
+        if _agent_allowed(request, item.agent_id)
+    ]
+    return ApiResponse(data=EvaluationSetsData(sets=items))
+
+
+@router.get("/evaluation-sets/template.xlsx")
+async def evaluation_set_template() -> Response:
+    """評価ケースの Excel のテンプレート。
+
+    列は ケースID・質問・期待する回答の要点・期待するツール。
+    """
+    return Response(
+        content=template_xlsx(),
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="evaluation-cases-template.xlsx"'},
+    )
+
+
+@router.post("/evaluation-sets/parse-xlsx", response_model=ApiResponse[EvaluationCasesData])
+async def parse_evaluation_cases(
+    file: Annotated[UploadFile, File()],
+) -> ApiResponse[EvaluationCasesData]:
+    """Excel の評価ケースを読む（保存しない。画面が評価セットのフォームに入れる）。"""
+    data = await file.read(EXCEL_MAX_BYTES + 1)
+    try:
+        cases = await run_in_threadpool(parse_cases_xlsx, data)
+    except EvaluationExcelError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=EvaluationCasesData(cases=cases))
+
+
+@router.post("/evaluation-sets", response_model=ApiResponse[EvaluationSet])
+async def create_evaluation_set(
+    payload: EvaluationSetInput, request: Request
+) -> ApiResponse[EvaluationSet]:
+    _require_evaluable_agent(request, payload.agent_id)
+    try:
+        created = evaluation_set_store.create(payload, created_by=_run_creator_user_uuid(request))
+    except ControlPlaneStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ApiResponse(data=created)
+
+
+@router.get("/evaluation-sets/{set_id}", response_model=ApiResponse[EvaluationSet])
+async def get_evaluation_set(set_id: str, request: Request) -> ApiResponse[EvaluationSet]:
+    return ApiResponse(data=_evaluation_set_for_actor(request, set_id))
+
+
+@router.put("/evaluation-sets/{set_id}", response_model=ApiResponse[EvaluationSet])
+async def update_evaluation_set(
+    set_id: str, payload: EvaluationSetInput, request: Request
+) -> ApiResponse[EvaluationSet]:
+    current = _evaluation_set_for_actor(request, set_id)
+    if payload.agent_id != current.agent_id:
+        raise HTTPException(status_code=422, detail="評価セットの業務 Agent は変えられません。")
+    try:
+        updated = evaluation_set_store.update(set_id, payload)
+    except ControlPlaneStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ApiResponse(data=updated)
+
+
+@router.delete("/evaluation-sets/{set_id}", response_model=ApiResponse[None])
+async def delete_evaluation_set(set_id: str, request: Request) -> ApiResponse[None]:
+    """評価セットを削除する（評価の結果は残す）。実行中の評価が使っていれば 409。"""
+    item = _evaluation_set_for_actor(request, set_id)
+    if evaluation_store.has_active_for_set(item.id):
+        raise HTTPException(
+            status_code=409,
+            detail="この評価セットで評価を実行しています。終わってから削除してください。",
+        )
+    try:
+        evaluation_set_store.delete(item.id)
+    except ControlPlaneStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ApiResponse(data=None)
+
+
+@router.get("/evaluation-sets/{set_id}/cases.xlsx")
+async def export_evaluation_set(set_id: str, request: Request) -> Response:
+    item = _evaluation_set_for_actor(request, set_id)
+    return Response(
+        content=await run_in_threadpool(export_set_xlsx, item),
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{item.id}.xlsx"'},
+    )
+
+
+@router.post("/evaluations", response_model=ApiResponse[EvaluationJob], status_code=202)
+async def create_evaluation(
+    evaluation: EvaluationRequest,
+    request: Request,
+) -> ApiResponse[EvaluationJob]:
+    """品質評価を始める（#776）。権限は middleware のメニュー権限（`menu.evaluation`）。
+
+    評価の Run は始めた利用者の Run として作るため、業務 Agent の対象範囲を確かめる。
+    """
+    item = _evaluation_set_for_actor(request, evaluation.set_id)
+    agent = _require_evaluable_agent(request, item.agent_id)
+    if not agent.enabled or agent.migration_required:
+        raise HTTPException(status_code=409, detail="この業務 Agent は実行できない状態です。")
+    job = EvaluationJob(
+        agent_id=agent.id,
+        agent_name=agent.name,
+        set_id=item.id,
+        set_name=item.name,
+        created_by_user_uuid=_run_creator_user_uuid(request),
+        results=[EvaluationCaseResult(case=case) for case in item.cases],
+    )
+    try:
+        created = evaluation_store.create(job)
+    except EvaluationBusyError as exc:
+        raise HTTPException(
+            status_code=409, detail="ほかの評価を実行しています。終わってから始めてください。"
+        ) from exc
+    task = asyncio.get_running_loop().create_task(run_evaluation_job(created.id))
+    _evaluation_tasks.add(task)
+    task.add_done_callback(_evaluation_tasks.discard)
+    return ApiResponse(data=evaluation_store.with_previous(created))
+
+
+@router.get("/evaluations", response_model=ApiResponse[EvaluationJobsData])
+async def list_evaluations(
+    request: Request, set_id: str | None = Query(default=None, max_length=100)
+) -> ApiResponse[EvaluationJobsData]:
+    """最近の評価（新しい順。利用できる業務 Agent の評価だけ）。"""
+    jobs = [
+        job
+        for job in evaluation_store.list(set_id or None)
+        if _agent_allowed(request, job.agent_id)
+    ]
+    return ApiResponse(data=EvaluationJobsData(jobs=[job_item(job) for job in jobs]))
+
+
+def _evaluation_for_actor(request: Request, job_id: str) -> EvaluationJob:
+    try:
+        job = evaluation_store.get(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="評価が見つかりません。") from exc
+    if not _agent_allowed(request, job.agent_id):
+        raise HTTPException(status_code=404, detail="評価が見つかりません。")
+    return job
+
+
+@router.get("/evaluations/{job_id}", response_model=ApiResponse[EvaluationJob])
+async def get_evaluation(job_id: str, request: Request) -> ApiResponse[EvaluationJob]:
+    """評価の結果（同じ評価セットの前回の概要を添える）。"""
+    return ApiResponse(data=evaluation_store.with_previous(_evaluation_for_actor(request, job_id)))
+
+
+@router.post("/evaluations/{job_id}/cancel", response_model=ApiResponse[EvaluationJob])
+async def cancel_evaluation(job_id: str, request: Request) -> ApiResponse[EvaluationJob]:
+    """評価を取り消す（実行中のケースの Run も取り消し、残りのケースは実行しない）。"""
+    job = _evaluation_for_actor(request, job_id)
+    cancelled = evaluation_store.cancel(job.id)
+    for result in cancelled.results:
+        if result.status == CaseStatus.RUNNING and result.run_id:
+            with contextlib.suppress(KeyError):
+                runtime_repository.cancel_run(result.run_id)
+    return ApiResponse(data=evaluation_store.with_previous(evaluation_store.get(job.id)))
+
+
+@router.delete("/evaluations/{job_id}", response_model=ApiResponse[None])
+async def delete_evaluation(job_id: str, request: Request) -> ApiResponse[None]:
+    job = _evaluation_for_actor(request, job_id)
+    try:
+        evaluation_store.delete(job.id)
+    except EvaluationJobActiveError as exc:
+        raise HTTPException(
+            status_code=409, detail="実行中の評価は削除できません。取り消してから削除してください。"
+        ) from exc
+    return ApiResponse(data=None)
+
+
 @router.get("/audit/tool-calls", response_model=ApiResponse[ToolCallAuditData])
 async def list_tool_call_audit(
     request: Request,
@@ -2061,6 +2305,114 @@ def _upsert_mcp_connection(server_id: str, payload: McpConnectionPatch) -> McpCo
     )
     _persist(lambda: control_plane_store.save_mcp_connection(config))
     return config
+
+
+@router.post("/mcp", response_class=Response)
+async def mcp_endpoint(request: Request) -> Response:
+    """業務 Agent の MCP（#778）。`initialize` / `ping` / `tools/list` / `tools/call` を処理する。
+
+    認証はサービストークン（audience `agent`）か Agent の API キー（`authorize_api_request`）。
+    ツールごとの権限は、ここで呼び出し元の利用者の権限から判定する。
+    """
+    principal = getattr(request.state, "principal", None)
+
+    def has_any_permission(permissions: frozenset[str]) -> bool:
+        return principal is not None and bool(principal.has_any_permission(set(permissions)))
+
+    return await mcp_http_response(
+        request, build_agent_mcp_server(principal), has_any_permission=has_any_permission
+    )
+
+
+@router.get("/settings/api-keys", response_model=ApiResponse[ApiKeysListData])
+async def list_api_keys() -> ApiResponse[ApiKeysListData]:
+    """API キー（#778。秘密と hash は返さない）。"""
+    records = api_key_registry.list()
+    people = {record.owner_user_uuid for record in records} | {
+        record.created_by_user_uuid for record in records if record.created_by_user_uuid
+    }
+    names = await run_in_threadpool(user_display_names, sorted(people))
+    return ApiResponse(
+        data=ApiKeysListData(
+            keys=[key_view(record, names) for record in records],
+            persistent=get_control_plane_store().persistent,
+        )
+    )
+
+
+@router.post("/settings/api-keys", response_model=ApiResponse[ApiKeyCreated])
+async def create_api_key(
+    payload: ApiKeyCreateRequest,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[ApiKeyCreated]:
+    """API キーを作る。秘密（`token`）はこの応答で 1 回だけ返す。
+
+    キーは実行する利用者（既定は作った利用者）として動く。ほかの利用者（連携用の専用の利用者など）を
+    選べるのはシステム管理者だけ（利用者を管理できる人だけが、ほかの利用者の権限を使うキーを作れる）。
+    """
+    creator = _request_principal(request)
+    if creator is None:
+        raise HTTPException(status_code=401, detail="ログインしてください。")
+    owner = payload.run_as_user_uuid or creator.user_uuid
+    if owner != creator.user_uuid:
+        if not creator.is_system_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="ほかの利用者として動くキーは、システム管理者だけが作れます。",
+            )
+        await run_in_threadpool(_require_key_owner_usable, owner)
+    known_agents = {agent.id for agent in runtime_repository.list_agents()}
+    unknown = sorted(set(payload.agent_ids or []) - known_agents)
+    if unknown:
+        raise HTTPException(
+            status_code=422, detail=f"業務 Agent が見つかりません: {', '.join(unknown)}"
+        )
+    record, token = api_key_registry.create(
+        payload, owner_user_uuid=owner, created_by_user_uuid=creator.user_uuid
+    )
+    try:
+        _persist(lambda: save_api_key(record))
+    except HTTPException:
+        api_key_registry.delete(record.id)
+        raise
+    names = await run_in_threadpool(user_display_names, sorted({owner, creator.user_uuid}))
+    return ApiResponse(data=ApiKeyCreated(key=key_view(record, names), token=token))
+
+
+def _require_key_owner_usable(user_uuid: str) -> None:
+    """キーで動ける利用者か（有効で、初回のパスワード変更が済んでいる）。"""
+    try:
+        user = get_security_service().store.get_user(user_uuid)
+    except Exception as exc:  # noqa: BLE001 - 利用者を確かめられなければ作らない
+        raise HTTPException(status_code=503, detail="利用者を確認できません。") from exc
+    if user is None:
+        raise HTTPException(status_code=422, detail="実行する利用者が見つかりません。")
+    if user.status != "ACTIVE":
+        raise HTTPException(status_code=422, detail="実行する利用者が無効になっています。")
+    if user.force_password_change:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "実行する利用者の初回のパスワード変更が済んでいないため、キーで動けません。"
+                "一度ログインしてパスワードを変更してください。"
+            ),
+        )
+
+
+@router.delete("/settings/api-keys/{key_id}", response_model=ApiResponse[None])
+async def delete_api_key_endpoint(
+    key_id: str,
+    _: None = Depends(require_admin),
+) -> ApiResponse[None]:
+    """API キーを削除する（失効。すぐに使えなくなる）。"""
+    try:
+        record = api_key_registry.get(key_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="API キーが見つかりません。") from exc
+    _persist(lambda: delete_api_key(record.id))
+    api_key_registry.delete(record.id)
+    return ApiResponse(data=None)
 
 
 @router.get("/settings/mcp-connections", response_model=ApiResponse[McpConnectionsData])

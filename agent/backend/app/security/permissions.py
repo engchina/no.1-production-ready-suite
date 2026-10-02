@@ -61,10 +61,12 @@ MENU_AUTOMATIONS = "menu.automations"
 MENU_APPROVALS = "menu.approvals"
 MENU_AUDIT = "menu.audit"
 MENU_PLUGIN_MARKETPLACES = "menu.plugin_marketplaces"
+MENU_EVALUATION = "menu.evaluation"
 MENU_SECURITY_PERMISSIONS = "menu.security_permissions"
 MENU_SETTINGS_SYSTEM_TABLES = "menu.settings_system_tables"
 # MCP 接続（#757。旧「外部 MCP」。権限コードは保存値なので変えない）。
 MENU_SETTINGS_EXTERNAL_MCP = "menu.settings_external_mcp"
+MENU_SETTINGS_API_KEYS = "menu.settings_api_keys"
 MENU_SETTINGS_RUNTIME_SNAPSHOT = "menu.settings_runtime_snapshot"
 MENU_SECURITY_USERS = "menu.security_users"
 MENU_SECURITY_ROLES = "menu.security_roles"
@@ -95,6 +97,7 @@ CAPABILITY_ROLES: dict[str, str] = {
 # サイドナビの表示名）と同じにする（#567 / #580。一致は
 # tests/test_permission_catalog_nav.py が確かめる）。ナビに無い capability は後ろに置く。
 _GROUP_CONTROL_PLANE = "Control Plane"
+_GROUP_IMPROVE = "改善・運用"
 _GROUP_SECURITY = "セキュリティ設定"
 _GROUP_OPERATIONS = "運用設定"
 _GROUP_USERS_ROLES = "ユーザーとロール"
@@ -118,8 +121,10 @@ _ADMIN_MENUS = (
     MENU_APPROVALS,
     MENU_AUDIT,
     MENU_PLUGIN_MARKETPLACES,
+    MENU_EVALUATION,
     MENU_SETTINGS_SYSTEM_TABLES,
     MENU_SETTINGS_EXTERNAL_MCP,
+    MENU_SETTINGS_API_KEYS,
     MENU_SETTINGS_RUNTIME_SNAPSHOT,
     *_SYSTEM_SETTINGS_MENUS,
 )
@@ -135,6 +140,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_APPROVALS, _GROUP_CONTROL_PLANE, "承認・監査"),
     _menu_permission(MENU_AUDIT, _GROUP_CONTROL_PLANE, "監査"),
     _menu_permission(MENU_PLUGIN_MARKETPLACES, _GROUP_CONTROL_PLANE, "マーケットプレイス"),
+    # 業務のセクションの後の「改善・運用」（RAG / NL2SQL と同じ名前・位置。#658 / #776）。
+    _menu_permission(MENU_EVALUATION, _GROUP_IMPROVE, "品質評価"),
     # 権限管理は Agent 固有。ユーザー管理・ロール管理は 3 製品共通の画面（#206）。
     _menu_permission(MENU_SECURITY_PERMISSIONS, _GROUP_SECURITY, "権限管理"),
     # 並びはサイドナビと同じ
@@ -144,6 +151,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ。#658 / #751）。
     _menu_permission(MENU_SETTINGS_SYSTEM_TABLES, _GROUP_OPERATIONS, "システムテーブル"),
     _menu_permission(MENU_SETTINGS_EXTERNAL_MCP, _GROUP_OPERATIONS, "MCP 接続"),
+    # 外部のクライアントが業務 Agent を MCP で呼ぶための API キー（#778）。
+    _menu_permission(MENU_SETTINGS_API_KEYS, _GROUP_OPERATIONS, "API キー"),
     _menu_permission(
         MENU_SETTINGS_RUNTIME_SNAPSHOT, _GROUP_OPERATIONS, "Control Plane バックアップ"
     ),
@@ -269,8 +278,14 @@ OPEN_API_OPERATIONS = frozenset(
         ("POST", "/auth/logout"),
         ("POST", "/auth/password/change"),
         ("POST", "/hooks/{automation_id}"),
+        # MCP（#778）。サービストークンか API キーで認証し、ツールごとに利用者の権限で判定する。
+        ("POST", "/mcp"),
     }
 )
+# サービストークン（共通 .env の PLATFORM_SERVICE_TOKEN_SECRET。audience `agent`）で認証する path。
+# Cookie・CSRF を使わない。Agent の API キー（`prak_`）も同じ path で受ける（#778）。
+SERVICE_TOKEN_API_PATHS = frozenset({"/mcp"})
+SERVICE_TOKEN_AUDIENCE = "agent"  # nosec B105 - サービストークンの audience の名前（秘密ではない）
 
 
 def _any(*codes: str) -> frozenset[str]:
@@ -339,6 +354,21 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("DELETE", "/automations/{automation_id}"): _ADMIN_ONLY,
     ("POST", "/automations/{automation_id}/run"): _ADMIN_ONLY,
     ("POST", "/automations/{automation_id}/webhook-token"): _ADMIN_ONLY,
+    # ---- 改善・運用 ----
+    # 品質評価（#776。評価の Run は始めた利用者の Run。router が業務 Agent の対象範囲を確かめる）。
+    ("GET", "/evaluation-sets"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation-sets"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation-sets/template.xlsx"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation-sets/parse-xlsx"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation-sets/{set_id}"): _any(MENU_EVALUATION),
+    ("PUT", "/evaluation-sets/{set_id}"): _any(MENU_EVALUATION),
+    ("DELETE", "/evaluation-sets/{set_id}"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation-sets/{set_id}/cases.xlsx"): _any(MENU_EVALUATION),
+    ("POST", "/evaluations"): _any(MENU_EVALUATION),
+    ("GET", "/evaluations"): _any(MENU_EVALUATION),
+    ("GET", "/evaluations/{job_id}"): _any(MENU_EVALUATION),
+    ("POST", "/evaluations/{job_id}/cancel"): _any(MENU_EVALUATION),
+    ("DELETE", "/evaluations/{job_id}"): _any(MENU_EVALUATION),
     # ---- Control Plane: プラグインとマーケットプレイス ----
     ("GET", "/plugins"): _PLUGIN_READ,
     ("GET", "/plugins/{plugin_id}"): _PLUGIN_READ,
@@ -357,6 +387,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/settings/database/system-tables/initialize"): _any(MENU_SETTINGS_SYSTEM_TABLES),
     # MCP 接続（#757）。一覧は Skill の編集（使う接続を選ぶ）からも読む。ツールの取得は接続の確認。
     ("GET", "/settings/mcp-connections"): _any(MENU_SETTINGS_EXTERNAL_MCP, MENU_SKILLS),
+    # API キー（#778）。作成と削除は Agent 管理（キーは作った利用者として動くため）。
+    ("GET", "/settings/api-keys"): _any(MENU_SETTINGS_API_KEYS),
+    ("POST", "/settings/api-keys"): _ADMIN_ONLY,
+    ("DELETE", "/settings/api-keys/{key_id}"): _ADMIN_ONLY,
     ("POST", "/settings/mcp-connections"): _ADMIN_ONLY,
     ("PATCH", "/settings/mcp-connections/{server_id}"): _ADMIN_ONLY,
     ("DELETE", "/settings/mcp-connections/{server_id}"): _ADMIN_ONLY,
