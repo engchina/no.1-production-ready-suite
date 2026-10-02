@@ -36,6 +36,7 @@ from app.features.nl2sql.profile_access import (
     profile_access_denied,
 )
 from app.features.nl2sql.service import (
+    JOB_FAILED_ERROR_CODE,
     SCHEMA_CATALOG_EMPTY_ERROR_CODE,
     Nl2SqlPersistenceUnavailable,
     Nl2SqlRepositoryOperationFailed,
@@ -64,7 +65,8 @@ _INSTRUCTIONS = (
     "自然言語の質問から SQL を生成・実行します。業務プロファイルが分からないときは "
     "nl2sql_list_profiles / nl2sql_recommend_profile で選び、nl2sql_query に渡してください。"
     "nl2sql_query が pending / running を返したら、"
-    "job_id を nl2sql_get_job に渡して続きを取得します。"
+    "job_id と wait_seconds（最大 45 秒）を nl2sql_get_job に渡し、"
+    "done / error になるまで続きを取得します。"
 )
 
 
@@ -103,7 +105,15 @@ class QueryInput(_Input):
 
 class GetJobInput(_Input):
     job_id: str = Field(min_length=1, max_length=128)
-    wait_seconds: int = Field(default=0, ge=0, le=MAX_WAIT_SECONDS, description="完了を待つ秒数")
+    wait_seconds: int = Field(
+        default=0,
+        ge=0,
+        le=MAX_WAIT_SECONDS,
+        description=(
+            "完了を待つ秒数（0 はすぐ返す）。pending / running の間は 40 程度を渡し、"
+            "終わるまでの呼び出しの回数を減らす"
+        ),
+    )
 
 
 class ProfileItem(BaseModel):
@@ -148,7 +158,14 @@ class Nl2SqlJobResult(BaseModel):
     has_more: bool = False
     truncated: bool = False
     history_id: str | None = None
-    error_code: str | None = None
+    error_code: str | None = Field(
+        default=None,
+        description=(
+            "失敗の分類。status が error のときは必ず入る。Oracle のエラーなら ORA-xxxxx / "
+            "DPY-xxxx、それ以外は SQL_BLOCKED（安全性の判定で止めた）・SQL_EXECUTION_FAILED・"
+            "SCHEMA_CATALOG_EMPTY・JOB_CANCELLED・JOB_INTERRUPTED・NL2SQL_JOB_FAILED など"
+        ),
+    )
     error_message: str | None = None
 
 
@@ -184,7 +201,9 @@ def _job_result(job: JobData) -> Nl2SqlJobResult:
         job_id=job.job_id,
         status=job.status,
         profile_id=job.profile_id or None,
-        error_code=job.error_code,
+        # 旧い snapshot など、error_code を持たない失敗も分類できるようにする（#847）。
+        error_code=job.error_code
+        or (JOB_FAILED_ERROR_CODE if job.status == JobStatus.ERROR else None),
         error_message=job.error_message,
     )
     if result is None:
@@ -353,7 +372,10 @@ def build_mcp_server(request: Request) -> McpServer:
         ),
         McpTool(
             name="nl2sql_get_job",
-            description="nl2sql_query で作ったジョブの状態と結果を返します（本人のジョブだけ）。",
+            description=(
+                "nl2sql_query で作ったジョブの状態と結果を返します（本人のジョブだけ）。"
+                "wait_seconds の間、完了を待ってから返します。"
+            ),
             input_model=GetJobInput,
             handler=get_job,
             output_model=Nl2SqlJobResult,

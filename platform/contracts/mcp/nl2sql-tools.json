@@ -3,7 +3,7 @@
   "tools": [
     {
       "name": "nl2sql_get_job",
-      "description": "nl2sql_query で作ったジョブの状態と結果を返します（本人のジョブだけ）。",
+      "description": "nl2sql_query で作ったジョブの状態と結果を返します（本人のジョブだけ）。wait_seconds の間、完了を待ってから返します。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -15,7 +15,7 @@
           },
           "wait_seconds": {
             "default": 0,
-            "description": "完了を待つ秒数",
+            "description": "完了を待つ秒数（0 はすぐ返す）。pending / running の間は 40 程度を渡し、終わるまでの呼び出しの回数を減らす",
             "maximum": 45,
             "minimum": 0,
             "title": "Wait Seconds",
@@ -185,6 +185,7 @@
               }
             ],
             "default": null,
+            "description": "失敗の分類。status が error のときは必ず入る。Oracle のエラーなら ORA-xxxxx / DPY-xxxx、それ以外は SQL_BLOCKED（安全性の判定で止めた）・SQL_EXECUTION_FAILED・SCHEMA_CATALOG_EMPTY・JOB_CANCELLED・JOB_INTERRUPTED・NL2SQL_JOB_FAILED など",
             "title": "Error Code"
           },
           "error_message": {
@@ -497,6 +498,7 @@
               }
             ],
             "default": null,
+            "description": "失敗の分類。status が error のときは必ず入る。Oracle のエラーなら ORA-xxxxx / DPY-xxxx、それ以外は SQL_BLOCKED（安全性の判定で止めた）・SQL_EXECUTION_FAILED・SCHEMA_CATALOG_EMPTY・JOB_CANCELLED・JOB_INTERRUPTED・NL2SQL_JOB_FAILED など",
             "title": "Error Code"
           },
           "error_message": {

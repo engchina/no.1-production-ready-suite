@@ -30,6 +30,9 @@ from app.features.nl2sql.oracle_adapter import OracleAdapterError
 from app.features.nl2sql.service import (
     _NL2SQL_JOB_STAGES,
     JOB_CANCELLED_ERROR_CODE,
+    JOB_FAILED_ERROR_CODE,
+    SQL_BLOCKED_ERROR_CODE,
+    SQL_EXECUTION_FAILED_ERROR_CODE,
     Nl2SqlService,
     StoredJob,
     _new_job_steps,
@@ -494,3 +497,77 @@ def test_execute_sql_oracle_error_keeps_generated_sql_result_and_history(
     assert history is not None
     assert history.generated_sql == "SELECT ID FROM APP.ORDERS"
     assert history.safety_is_safe is True
+    # 失敗の分類は Oracle のコード（#847）。永続化した snapshot にも残る。
+    assert job.error_code == "ORA-00904"
+    persisted = repository.get_document("jobs", created.job_id)
+    assert persisted is not None
+    assert persisted["error_code"] == "ORA-00904"
+
+
+def _run_owned_job(monkeypatch: pytest.MonkeyPatch, owner: Nl2SqlService) -> Any:
+    monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
+    created = owner.start_job(_request(), actor_user_uuid="user-1", actor_is_system_admin=True)
+    assert owner.run_next_nl2sql_job(job_id=created.job_id, worker_id="worker-owner") is True
+    job = owner.get_job(created.job_id)
+    assert job is not None
+    return job
+
+
+def test_execute_sql_error_without_oracle_code_is_classified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = _worker(_repository())
+
+    def failing_execute(*_args: object, **_kwargs: object) -> None:
+        raise OracleAdapterError("SQL の実行が打ち切られました。")
+
+    monkeypatch.setattr(owner, "execute_sql", failing_execute)
+    job = _run_owned_job(monkeypatch, owner)
+
+    assert job.status == JobStatus.ERROR
+    assert job.error_code == SQL_EXECUTION_FAILED_ERROR_CODE
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (
+            OracleAdapterError(
+                "Select AI の生成に失敗しました: ORA-04027: self-deadlock during automatic "
+                "validation for object DBMS_CLOUD_AI"
+            ),
+            "ORA-04027",
+        ),
+        (RuntimeError("想定外の失敗"), JOB_FAILED_ERROR_CODE),
+    ],
+    ids=["oracle-code", "no-code"],
+)
+def test_failed_job_always_has_error_code(
+    monkeypatch: pytest.MonkeyPatch, error: Exception, expected: str
+) -> None:
+    """例外で失敗したジョブも error_code を null にしない（#847。MCP の呼び出し側が分類する）。"""
+    owner = _worker(_repository())
+
+    def failing_generate(*_args: object, **_kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr(owner, "_generate_selected_engine", failing_generate)
+    job = _run_owned_job(monkeypatch, owner)
+
+    assert job.status == JobStatus.ERROR
+    assert job.error_code == expected
+    steps = {step.stage: step.status for step in job.steps}
+    assert steps["generate_sql"] == JobStepStatus.ERROR
+
+
+def test_blocked_sql_job_has_error_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    owner = _worker(
+        _repository(),
+        _FakeEnterpriseAiClient('{"sql":"DELETE FROM APP.ORDERS","explanation":"削除します。"}'),
+    )
+    job = _run_owned_job(monkeypatch, owner)
+
+    assert job.status == JobStatus.ERROR
+    assert job.result is not None
+    assert job.result.safety.is_safe is False
+    assert job.error_code == SQL_BLOCKED_ERROR_CODE
