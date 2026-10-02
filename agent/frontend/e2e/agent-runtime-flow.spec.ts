@@ -198,7 +198,7 @@ test.describe("AI Agent Control Plane", () => {
     await page.goto("/runs");
     await expect(page.getByLabel("実行先 Binding")).toHaveCount(0);
     const goal = "契約情報を確認する";
-    await page.getByLabel("目標").fill(goal);
+    await page.locator("#run-goal").fill(goal);
     await page.getByRole("button", { name: "実行を作成" }).click();
 
     await expect(page.getByText("実行を作成しました", { exact: true })).toBeVisible();
@@ -272,7 +272,7 @@ test.describe("AI Agent Control Plane", () => {
       ],
     });
     await page.goto("/runs");
-    await page.getByLabel("目標").fill("契約情報を確認する");
+    await page.locator("#run-goal").fill("契約情報を確認する");
     await page.getByRole("button", { name: "実行を作成" }).click();
 
     const alert = page.getByRole("alert").filter({ hasText: "ツールの実行でエラーが発生しました" });

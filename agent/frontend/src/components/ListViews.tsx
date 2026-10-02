@@ -48,6 +48,11 @@ export type PagedDataTableProps<T> = Omit<SharedPagedDataTableProps<T>, "paginat
  * 定期的な再取得（Run・承認の 5 秒ごと）で行が変わってもページを戻さない（戻すのは `resetKey` が変わったときだけ）。
  */
 export function PagedDataTable<T>({ pageKey, scrollAriaLabel, ...props }: PagedDataTableProps<T>) {
+  // 0 件の空の状態（EmptyState など）は表の外に出す。表の中に置くと、横スクロールする幅の広い表の中央に寄り、
+  // 375px で文言と「検索語をクリア」が切れる（RAG / NL2SQL も 0 件は表の代わりに空の状態を出す。#808）。
+  if (props.rows.length === 0 && props.empty !== undefined && typeof props.empty !== "string") {
+    return <>{props.empty}</>;
+  }
   const shared = {
     ...props,
     // 表の中の縦スクロール領域に Tab で到達して読み上げられるようにする（WCAG 2.1.1）。

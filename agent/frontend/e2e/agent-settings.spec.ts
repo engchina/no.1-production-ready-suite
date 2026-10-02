@@ -578,7 +578,7 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByRole("heading", { name: "マーケットプレイス", level: 1 })).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
-    await page.getByRole("button", { name: "マーケットプレイスを追加" }).click();
+    await page.getByRole("button", { name: "マーケットプレイスを追加", exact: true }).click();
     await page.locator("#mkt-id").fill("fixture_market");
     await page.locator("#mkt-name").fill("Fixture Market");
     await page.locator("#mkt-url").fill("http://marketplace.example.test/marketplace");
@@ -704,12 +704,10 @@ test.describe("Agent Runtime settings", () => {
     await expect(page).toHaveURL(/\/agents\?id=new$/);
     await page.locator("#new-agent-name").fill("RAG Skill Agent");
     await page.locator("#new-agent-description").fill("Skill で能力を選択する");
-    await page
-      .locator("label")
-      .filter({ hasText: "業務 RAG 調査" })
-      .first()
-      .locator("input")
-      .check();
+    // スキルは ListPicker（listbox）で選ぶ（#808）。
+    const skillOption = page.getByRole("option", { name: /^業務 RAG 調査/ });
+    await skillOption.click();
+    await expect(skillOption).toHaveAttribute("aria-checked", "true");
     await page.getByRole("button", { name: "作成" }).first().click();
     await expect(page.getByText("Agent を作成しました")).toBeVisible();
     await expect(page.getByRole("heading", { name: "RAG Skill Agent", level: 1 })).toBeVisible();
