@@ -22,7 +22,12 @@ from pathlib import Path
 from typing import Any, Protocol, TypeVar, cast
 from uuid import uuid4
 
-from pr_backend_core.oracle_pool import DEFAULT_WAIT_TIMEOUT_MS, recover_pool_error
+from pr_backend_core.oracle_pool import (
+    DEFAULT_WAIT_TIMEOUT_MS,
+    PoolCloser,
+    close_in_background,
+    recover_pool_error,
+)
 from pr_backend_core.oracle_session import init_oracle_session
 
 from app.config import Settings, get_settings
@@ -288,6 +293,8 @@ _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
 # 終了時（`close_oracle_pool`）に閉じる。
 _SHARED_ORACLE_POOL_LOCK = threading.Lock()
 _RETIRED_ORACLE_POOLS: list[OraclePoolProtocol] = []
+# 捨てた pool を閉じる処理を走らせる（既定は別のスレッド。テストは同期にする）。
+_ORACLE_POOL_CLOSER: PoolCloser = close_in_background
 _ORACLE_CLIENT_INITIALIZED_LIB_DIR: str | None = None
 _DB_TEST_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="oracle_db_test_")
 
@@ -11640,17 +11647,24 @@ def close_oracle_pool() -> None:
 def _discard_shared_pool(pool: OraclePoolProtocol, *, reason: str, exc: BaseException) -> None:
     """壊れた共有 pool を捨てる（次に借りるときに作り直す。#820）。
 
-    貸し出し中の接続があって閉じられなければ、その接続を使っている処理は止めずに後で閉じる。
+    閉じるのは別のスレッド。貸し出し中の接続があって閉じられなければ、その接続を使っている処理は
+    止めずに終了時に閉じる。
     """
     global _SHARED_ORACLE_POOL
     with _SHARED_ORACLE_POOL_LOCK:
         if _SHARED_ORACLE_POOL is not pool:
             return  # 別のスレッドが入れ替え済み
         _SHARED_ORACLE_POOL = None
+
+    def close() -> None:
         try:
             pool.close()
         except Exception:  # noqa: BLE001 - 貸し出し中。終了時に閉じる
-            _RETIRED_ORACLE_POOLS.append(pool)
+            with _SHARED_ORACLE_POOL_LOCK:
+                _RETIRED_ORACLE_POOLS.append(pool)
+
+    # `pool.close()` は試している接続が終わるまで戻らないことがあるため、要求と lock を止めない。
+    _ORACLE_POOL_CLOSER(close)
     logger.warning(
         "oracle_pool_discarded",
         extra={"pool": "rag", "reason": reason, **oracle_error_log_fields(exc)},

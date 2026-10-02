@@ -50,6 +50,18 @@ DEFAULT_PING_INTERVAL_SECONDS = 60
 
 OracledbLoader = Callable[[], Any]
 SessionCallback = Callable[[Any, str | None], None]
+# 捨てた pool を閉じる処理を走らせる（既定は daemon thread。テストは同期で走らせる）。
+PoolCloser = Callable[[Callable[[], None]], None]
+
+
+def close_in_background(task: Callable[[], None]) -> None:
+    """捨てた pool を別のスレッドで閉じる（#820）。
+
+    python-oracledb の `pool.close()` は、pool が試している接続（停止中の DB への接続など）が
+    終わるまで戻らないことがある（`tcp_connect_timeout` の間。手元で 16 秒を観測）。要求のスレッドと
+    pool の lock を、その間止めない。
+    """
+    threading.Thread(target=task, name="oracle-pool-close", daemon=True).start()
 
 
 def _load_oracledb() -> Any:
@@ -105,6 +117,7 @@ class SharedOraclePool:
         ping_interval_seconds: int = DEFAULT_PING_INTERVAL_SECONDS,
         session_callback: SessionCallback | None = init_oracle_session,
         oracledb_loader: OracledbLoader = _load_oracledb,
+        pool_closer: PoolCloser = close_in_background,
     ) -> None:
         self.name = name
         self._size = size or OraclePoolSize()
@@ -118,6 +131,7 @@ class SharedOraclePool:
         self._fingerprint: str | None = None
         # 設定の変更で入れ替えた pool のうち、貸し出し中の接続があって閉じられなかったもの。
         self._retired: list[Any] = []
+        self._pool_closer = pool_closer
 
     @property
     def size(self) -> OraclePoolSize:
@@ -193,11 +207,26 @@ class SharedOraclePool:
                 pool.close(force=True)
 
     def _discard(self, pool: Any, *, reason: str, exc: BaseException) -> None:
-        """今の pool が `pool` なら捨てる（別のスレッドが作り直していれば何もしない）。"""
+        """今の pool が `pool` なら捨てる（別のスレッドが作り直していれば何もしない）。
+
+        閉じるのは別のスレッド（`pool_closer`）。貸し出し中の接続があって閉じられなければ、今までどおり
+        後で閉じる（その接続を使っている処理は止めない）。
+        """
+        target: Any = pool
         with self._lock:
-            if self._pool is not pool:
+            if id(self._pool) != id(target):
                 return
-            self._retire_current_locked()
+            self._pool = None
+            self._fingerprint = None
+
+        def close() -> None:
+            try:
+                target.close()
+            except Exception:  # noqa: BLE001 - 貸し出し中。次の作成時・終了時に閉じ直す
+                with self._lock:
+                    self._retired.append(target)
+
+        self._pool_closer(close)
         logger.warning(
             "oracle_pool_discarded",
             extra={
@@ -299,6 +328,8 @@ def _release(connection: Any) -> None:
 
 __all__ = [
     "DEFAULT_POOL_MAX",
+    "PoolCloser",
+    "close_in_background",
     "DEFAULT_POOL_MIN",
     "OraclePoolSize",
     "PoolRecovery",

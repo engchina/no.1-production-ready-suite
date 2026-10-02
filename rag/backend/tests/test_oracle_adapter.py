@@ -114,6 +114,7 @@ def test_shared_pool_created_while_db_down_recovers_after_start(
     """DB の停止中に作った共有 pool を、起動後はプロセスを再起動せずに作り直して使う（#820）。"""
     db = _RecoveringDb()
     monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL", None)
+    monkeypatch.setattr(oracle_module, "_ORACLE_POOL_CLOSER", lambda task: task())
     monkeypatch.setattr("app.clients.oracle.importlib.import_module", lambda name: db)
     settings = Settings.model_construct(
         oracle_user="rag_app",
