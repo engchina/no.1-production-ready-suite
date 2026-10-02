@@ -108,7 +108,7 @@ Oracle AI Database の業務データに、自然言語で SQL を生成・検�
 ### lint
 
 - `frontend/.oxlintrc.json` は platform の `docs/design-system/adherence.oxlintrc.json` を `extends` で相対パス参照し（`../../platform/…`）、生の hex / inline style の生の px / 書体 / 型・角丸の任意値 / 旧トークン名 / 内部パス直 import / loading 中のラベル差し替えを `src/**` で検出する。ルールと JS プラグイン（`design-system-plugin.mjs`）は **NL2SQL にコピーしない**（正本は platform。変更は platform に Issue を立てる）。monorepo の `platform/` が同じ階層にあるため、CI の `NL2SQL / Frontend` job はそのまま `npm run lint`（`oxlint --deny-warnings`）を実行できる。
-- アプリ固有のルールを `.oxlintrc.json` に足す場合は、`design-system/restricted-syntax` / `no-restricted-imports` を同じ名前で上書きしない（adherence のセレクタが消える）。アプリ固有のセレクタは、platform のプラグインを別名で再公開した `frontend/lint/app-design-system-plugin.mjs` の `nl2sql-design-system/restricted-syntax` に書く（現在は手書き `<table>` の禁止、#530。RAG / Agent の置き換え後に adherence へ移す）。
+- アプリ固有のルールを `.oxlintrc.json` に足す場合は、`design-system/restricted-syntax` / `no-restricted-imports` を同じ名前で上書きしない（adherence のセレクタが消える）。アプリ固有のセレクタは、platform のプラグインを別名で再公開した `frontend/lint/app-design-system-plugin.mjs` の `nl2sql-design-system/restricted-syntax` に書く（現在は無い。手書き `<table>` の禁止（#530）は 3 製品で同じ規則として platform の adherence へ移した。#800）。
 - 誤検知や正当な例外（グラフ座標など px が正しい幾何値）は `// oxlint-disable-next-line <rule>` に理由コメントを添えて局所的に除外する。ルール自体を緩める必要がある場合は platform の adherence 設定に Issue を立てる。
 
 ### NL2SQL 固有

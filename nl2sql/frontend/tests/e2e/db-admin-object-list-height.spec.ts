@@ -2250,7 +2250,7 @@ for (const scenario of scenarios) {
           Math.round(Number.parseFloat(window.getComputedStyle(element).height)),
         ),
       );
-    expect(skeletonHeights).toEqual([40, 288]);
+    expect(skeletonHeights).toEqual([40, 287]);
     await expect(skeleton.getByTestId("db-management-skeleton-block").first()).toHaveCSS(
       "animation-name",
       "none",

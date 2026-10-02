@@ -86,7 +86,7 @@ export function CitationCard({
               ) : null}
               {recipeSlot ? (
                 <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
-                  <Layers size={11} aria-hidden />
+                  <Layers size={14} aria-hidden />
                   {t("documents.recipes.name", { slot: recipeSlot })}
                 </span>
               ) : null}

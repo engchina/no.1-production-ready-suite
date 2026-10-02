@@ -473,6 +473,43 @@ export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & Button
 export declare function Button(props: ButtonProps): JSX.Element;
 ```
 
+### ButtonLink（#800）
+
+画面を移るだけの操作を、`Button` と同じ見た目のリンクで出す（README §4「Button」の「画面を移るだけの操作は `ButtonLink`」）。
+
+```ts
+/** react-router の Link をそのまま渡せる（packages/ui はルーターに依存しない）。 */
+export type ButtonLinkComponent = React.ComponentType<{
+  to: string;
+  className?: string;
+  children: React.ReactNode;
+  "aria-label"?: string;
+  "data-testid"?: string;
+}>;
+
+export type ButtonLinkProps = ButtonVariantToneProps & {
+  to: string;
+  /** 省略すると <a href>。 */
+  linkComponent?: ButtonLinkComponent;
+  size?: "sm" | "md" | "lg";
+  icon?: LucideIcon;
+  trailingIcon?: LucideIcon;
+  children: React.ReactNode;
+  className?: string;
+  "aria-label"?: string;
+  testId?: string;
+};
+
+/** 既定の variant は secondary。loading / disabled は持たない。 */
+export declare function ButtonLink(props: ButtonLinkProps): JSX.Element;
+```
+
+```tsx
+<ButtonLink to={`/settings/security/permissions?role=${id}`} linkComponent={Link} size="sm" icon={LockKeyhole}>
+  権限管理で設定
+</ButtonLink>
+```
+
 ---
 
 ## StatusBadge.jsx — 変更
