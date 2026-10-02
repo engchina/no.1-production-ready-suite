@@ -337,6 +337,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/audit/tool-calls.csv"): _any(MENU_AUDIT),
     # チャットの回答への評価（#774。会話をした利用者だけ。router が作成者を確かめる）。
     ("PUT", f"{_RUN}/feedback"): _OPERATE,
+    # 管理者の評価（#774。だれの回答にも付けられる）。
+    ("PUT", f"{_RUN}/admin-review"): _ADMIN_ONLY,
     # ---- 改善・運用 ----
     # フィードバック（#774。集計の対象は Run の一覧と同じく利用できる業務 Agent の Run）。
     ("GET", "/feedback"): _any(MENU_FEEDBACK),

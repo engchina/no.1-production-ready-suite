@@ -190,49 +190,63 @@ function feedbackReportFromRuns(
   filters: { agentId: string | null; rating: string | null; reason: string | null }
 ): Json {
   const rated = runs.filter(
-    (run) => run.feedback && (!filters.agentId || run.agent_id === filters.agentId)
-  ) as (Json & { feedback: Json })[];
-  const helpful = rated.filter((run) => run.feedback.rating === "helpful").length;
+    (run) => (run.feedback || run.admin_review) && (!filters.agentId || run.agent_id === filters.agentId)
+  );
+  const owned = rated.filter((run) => run.feedback).map((run) => run.feedback as Json);
+  const reviews = rated.filter((run) => run.admin_review).map((run) => run.admin_review as Json);
+  const helpful = owned.filter((item) => item.rating === "helpful").length;
   const reasons = new Map<string, number>();
-  for (const run of rated) {
-    const reason = run.feedback.reason as string | null;
+  for (const item of owned) {
+    const reason = item.reason as string | null;
     if (reason) reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
   }
   const summary = {
-    total: rated.length,
+    total: owned.length,
     helpful,
-    not_helpful: rated.length - helpful,
-    helpful_rate: rated.length ? helpful / rated.length : null,
-    reason_counts: [...reasons.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([reason, count]) => ({ reason, count })),
+    not_helpful: owned.length - helpful,
+    helpful_rate: owned.length ? helpful / owned.length : null,
+    reason_counts: [...reasons.entries()].sort((a, b) => b[1] - a[1]).map(([reason, count]) => ({ reason, count })),
+    admin_reviewed: reviews.length,
+    admin_not_helpful: reviews.filter((item) => item.rating === "not_helpful").length,
+  };
+  const matches = (item: unknown) => {
+    const rating = item as Json | null | undefined;
+    return Boolean(
+      rating &&
+        (!filters.rating || rating.rating === filters.rating) &&
+        (!filters.reason || rating.reason === filters.reason)
+    );
   };
   const items = rated
-    .filter(
-      (run) =>
-        (!filters.rating || run.feedback.rating === filters.rating) &&
-        (!filters.reason || run.feedback.reason === filters.reason)
-    )
+    .filter((run) => matches(run.feedback) || matches(run.admin_review))
     .map((run) => ({
       run_id: run.id,
       thread_id: run.thread_id ?? null,
       agent_id: run.agent_id,
       agent_name: run.agent_id === "default" ? "汎用業務 Agent" : "",
-      user_uuid: run.feedback.user_uuid,
+      user_uuid: run.created_by_user_uuid ?? null,
       display_name: "ローカル利用者",
       question: run.goal,
       answer: answerTextOf(run),
-      rating: run.feedback.rating,
-      reason: run.feedback.reason,
-      comment: run.feedback.comment,
-      updated_at: run.feedback.updated_at,
+      feedback: run.feedback ?? null,
+      admin_review: run.admin_review ?? null,
+      reviewer_display_name: run.admin_review ? "ローカル利用者" : "",
+      updated_at: MOCK_NOW,
     }));
   return {
     days,
     since: MOCK_NOW,
     until: MOCK_NOW,
     summary,
-    previous: { total: 0, helpful: 0, not_helpful: 0, helpful_rate: null, reason_counts: [] },
+    previous: {
+      total: 0,
+      helpful: 0,
+      not_helpful: 0,
+      helpful_rate: null,
+      reason_counts: [],
+      admin_reviewed: 0,
+      admin_not_helpful: 0,
+    },
     items,
     matched: items.length,
   };
@@ -624,6 +638,20 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     if (method === "POST" && at("runs", "*", "resume")) return run;
     // チャットの回答への評価（#774）。役に立たなかったときは理由が必須。役に立った評価は理由・コメントを残さない。
+    // 管理者の評価（#774）。本人の評価とは別に残す。
+    if (method === "PUT" && at("runs", "*", "admin-review")) {
+      if (run.status !== "completed") throw new HttpError(409, "回答が出た Run にだけ評価を付けられます。");
+      const helpful = body.rating === "helpful";
+      if (!helpful && !body.reason) throw new HttpError(422, "役に立たなかった理由を選んでください。");
+      run.admin_review = {
+        rating: body.rating,
+        reason: helpful ? null : body.reason,
+        comment: helpful ? "" : String(body.comment ?? "").trim(),
+        user_uuid: "local",
+        updated_at: MOCK_NOW,
+      };
+      return run;
+    }
     if (method === "PUT" && at("runs", "*", "feedback")) {
       if (run.status !== "completed") throw new HttpError(409, "回答が出た Run にだけフィードバックを付けられます。");
       const helpful = body.rating === "helpful";

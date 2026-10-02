@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 
+import { dbUser } from "./fixtures/auth";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 
 // #774: チャットの回答への評価と、フィードバックの集計の画面。
@@ -32,12 +33,16 @@ function item(runId: string, overrides: Record<string, unknown> = {}) {
     display_name: "山田 太郎",
     question: `${runId} の質問：今月の契約件数は？`,
     answer: "今月の契約件数は 12 件です。",
-    rating: "helpful",
-    reason: null,
-    comment: "",
+    feedback: rating("helpful"),
+    admin_review: null,
+    reviewer_display_name: "",
     updated_at: MOCK_NOW,
     ...overrides,
   };
+}
+
+function rating(value: "helpful" | "not_helpful", reason: string | null = null, comment = "") {
+  return { rating: value, reason, comment, user_uuid: "u-1", updated_at: MOCK_NOW };
 }
 
 function seedReport(mockApi: MockApi) {
@@ -54,14 +59,20 @@ function seedReport(mockApi: MockApi) {
         { reason: "incomplete", count: 3 },
         { reason: "wrong_action", count: 1 },
       ],
+      admin_reviewed: 3,
+      admin_not_helpful: 1,
     },
-    previous: { total: 8, helpful: 4, not_helpful: 4, helpful_rate: 0.5, reason_counts: [] },
+    previous: {
+      total: 8,
+      helpful: 4,
+      not_helpful: 4,
+      helpful_rate: 0.5,
+      reason_counts: [],
+      admin_reviewed: 0,
+      admin_not_helpful: 0,
+    },
     items: [
-      item("run-a", {
-        rating: "not_helpful",
-        reason: "incomplete",
-        comment: "先月との比較が無い。",
-      }),
+      item("run-a", { feedback: rating("not_helpful", "incomplete", "先月との比較が無い。") }),
       item("run-b"),
     ],
     matched: 2,
@@ -122,6 +133,9 @@ for (const viewport of VIEWPORTS) {
       const reasons = page.getByTestId("feedback-reasons");
       await expect(reasons).toContainText("情報が足りない");
       await expect(reasons).toContainText("3 / 75%");
+      await expect(page.getByTestId("feedback-admin-summary")).toHaveText(
+        "管理者の評価: 3 件（うち役に立たなかった 1 件）"
+      )
 
       const table = page.getByRole("table", { name: "フィードバックの一覧" });
       const bad = table.getByRole("row", { name: /run-a/ });
@@ -172,4 +186,77 @@ test("評価が無い期間は空の状態を出し、読み込み中は経過�
   await expect(page.getByTestId("feedback-loading")).toContainText("フィードバックを読み込んでいます");
   await expect(page.getByText("この期間のフィードバックはありません")).toBeVisible();
   await expectNoHorizontalOverflow(page);
+});
+
+function seedRatedRun(mockApi: MockApi) {
+  mockApi.state.runs.push({
+    id: "run-admin-774",
+    goal: "今月の契約件数は？",
+    agent_id: "default",
+    runtime_id: "builtin",
+    status: "completed",
+    steps: [],
+    events: [],
+    approvals: [],
+    artifacts: [
+      { id: "answer-1", name: "回答", kind: "answer", content: { text: "今月は 12 件です。" }, created_at: MOCK_NOW },
+    ],
+    pending_tool_calls: [],
+    metadata: {},
+    created_by_user_uuid: "u-2",
+    feedback: rating("helpful"),
+    created_at: MOCK_NOW,
+    updated_at: MOCK_NOW,
+  });
+}
+
+test("管理者はだれの回答にも評価を付けられ、本人の評価とは別に残る", async ({ page, mockApi }) => {
+  seedRatedRun(mockApi);
+  await page.goto("/feedback");
+  await page
+    .getByRole("table", { name: "フィードバックの一覧" })
+    .getByRole("button", { name: /今月の契約件数は？/ })
+    .click();
+  const detail = page.getByRole("dialog", { name: "フィードバックの詳細" });
+  await expect(detail.getByTestId("feedback-detail-owner")).toContainText("役に立った");
+  await expect(detail.getByTestId("feedback-detail-admin")).toContainText("まだ評価していません。");
+
+  const review = detail.getByTestId("admin-review-run-admin-774");
+  await expect(review).toContainText("管理者の評価");
+  await review.getByRole("button", { name: "この回答は役に立たなかった" }).click();
+  await review.getByRole("button", { name: "内容が正しくない" }).click();
+  await review.getByLabel("コメント").fill("件数は 15 件が正しい");
+  await review.getByRole("button", { name: "フィードバックを保存" }).click();
+  await expect(page.getByText("フィードバックを保存しました。")).toBeVisible();
+  expect(mockApi.lastRequest("PUT", "/api/runs/run-admin-774/admin-review")?.body).toEqual({
+    rating: "not_helpful",
+    reason: "incorrect",
+    comment: "件数は 15 件が正しい",
+  });
+  await expect(detail.getByTestId("feedback-detail-admin")).toContainText("内容が正しくない");
+  // 本人の評価はそのまま。
+  await expect(detail.getByTestId("feedback-detail-owner")).toContainText("役に立った");
+  expect(mockApi.lastRequest("PUT", "/api/runs/run-admin-774/feedback")).toBeUndefined();
+
+  // Run の詳細でも管理者の評価を付け直せる（付けた評価が選ばれている）。
+  await page.keyboard.press("Escape");
+  await page.goto("/runs");
+  const runReview = page.getByTestId("admin-review-run-admin-774");
+  await expect(runReview.getByRole("button", { name: "この回答は役に立たなかった" })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
+});
+
+test("Agent 管理の権限が無い利用者には管理者の評価の操作を出さない", async ({ page, mockApi }) => {
+  seedRatedRun(mockApi);
+  mockApi.setCurrentUser(dbUser({ permissions: ["menu.feedback"] }));
+  await page.goto("/feedback");
+  await page
+    .getByRole("table", { name: "フィードバックの一覧" })
+    .getByRole("button", { name: /今月の契約件数は？/ })
+    .click();
+  const detail = page.getByRole("dialog", { name: "フィードバックの詳細" });
+  await expect(detail.getByTestId("feedback-detail-admin")).toContainText("まだ評価していません。");
+  await expect(detail.getByTestId("admin-review-run-admin-774")).toHaveCount(0);
 });

@@ -1541,6 +1541,37 @@ async def put_run_feedback(
     return ApiResponse(data=updated)
 
 
+@router.put("/runs/{run_id}/admin-review", response_model=ApiResponse[RunState])
+async def put_run_admin_review(
+    run_id: str,
+    review: RunFeedbackRequest,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[RunState]:
+    """管理者の評価（#774）。Agent 管理の権限でだれの回答にも付けられ、本人の評価とは別に残す。"""
+    try:
+        run = runtime_repository.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    _require_agent_access(request, run.agent_id)
+    try:
+        updated = runtime_repository.set_run_feedback(
+            run_id,
+            RunFeedback(
+                rating=review.rating,
+                reason=review.reason,
+                comment=review.comment,
+                user_uuid=_run_creator_user_uuid(request),
+            ),
+            admin=True,
+        )
+    except RunNotRatableError as exc:
+        raise HTTPException(
+            status_code=409, detail="回答が出た Run にだけ評価を付けられます。"
+        ) from exc
+    return ApiResponse(data=updated)
+
+
 @router.get("/feedback", response_model=ApiResponse[FeedbackReport])
 async def get_feedback_report(
     request: Request,

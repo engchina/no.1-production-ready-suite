@@ -207,7 +207,7 @@ def test_feedback_api_returns_the_report(seeded_runs: None) -> None:
     assert response.status_code == 200, response.text
     data = response.json()["data"]
     item = next(item for item in data["items"] if item["run_id"] == "feedback-774-done")
-    assert (item["reason"], item["comment"], item["display_name"]) == (
+    assert (item["feedback"]["reason"], item["feedback"]["comment"], item["display_name"]) == (
         "incomplete",
         "件数が足りない",
         "ローカル利用者",
@@ -249,3 +249,42 @@ def test_feedback_permissions(auth: ProductionAuth, seeded_runs: None) -> None:
     assert scoped.status_code == 200, scoped.text
     # 利用できる業務 Agent（sales）の評価だけ。
     assert scoped.json()["data"]["items"] == []
+    # 管理者の評価は Agent 管理の権限だけ（Run の実行権限では付けられない）。
+    denied = client.put(
+        "/api/runs/feedback-774-other/admin-review",
+        json={"rating": "helpful"},
+        headers=login("operator-774"),
+    )
+    assert denied.status_code == 403
+
+
+def test_admin_reviews_any_answer_separately_from_the_owner(seeded_runs: None) -> None:
+    """管理者はだれの回答にも評価を付けられ、本人の評価とは別に残る（#774）。"""
+    del seeded_runs
+    client.put("/api/runs/feedback-774-other/feedback", json={"rating": "helpful"})
+    # 本人ではない Run（作成者は ALICE）にも管理者の評価は付けられる（local は管理者）。
+    reviewed = client.put(
+        "/api/runs/feedback-774-other/admin-review",
+        json={"rating": "not_helpful", "reason": "incorrect", "comment": "金額が違う"},
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    run = reviewed.json()["data"]
+    assert run["feedback"] is None
+    assert (run["admin_review"]["rating"], run["admin_review"]["comment"]) == (
+        "not_helpful",
+        "金額が違う",
+    )
+    assert run["admin_review"]["user_uuid"] == LOCAL_DEBUG_USER_UUID
+    running = client.put("/api/runs/feedback-774-running/admin-review", json={"rating": "helpful"})
+    assert running.status_code == 409
+
+    data = client.get("/api/feedback", params={"days": 7}).json()["data"]
+    item = next(item for item in data["items"] if item["run_id"] == "feedback-774-other")
+    assert item["feedback"] is None
+    assert item["admin_review"]["reason"] == "incorrect"
+    assert item["reviewer_display_name"] == "ローカル利用者"
+    assert data["summary"]["admin_reviewed"] >= 1
+    assert data["summary"]["admin_not_helpful"] >= 1
+    # 評価・理由の絞り込みは、管理者の評価にも当てる。
+    by_reason = client.get("/api/feedback", params={"days": 7, "reason": "incorrect"}).json()
+    assert "feedback-774-other" in [item["run_id"] for item in by_reason["data"]["items"]]

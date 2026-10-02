@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import {
   Button,
@@ -31,7 +31,11 @@ import {
   type FeedbackReason,
   type FeedbackReport,
   type FeedbackSummary,
+  type RunFeedback,
+  type RunState,
 } from "@/lib/api";
+import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
+import { useCapabilities } from "@/lib/permissions";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { isString, useWorkspaceState, type WorkspaceValidator } from "@/lib/workspace-state";
@@ -63,6 +67,7 @@ export function FeedbackPage() {
   const [rating, setRating] = useWorkspaceState("feedback", "rating", "", isRatingFilter);
   const [reason, setReason] = useWorkspaceState("feedback", "reason", "", isReasonFilter);
   const [selected, setSelected] = useState<FeedbackItem | null>(null);
+  const queryClient = useQueryClient();
 
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const filters = useMemo(
@@ -170,7 +175,15 @@ export function FeedbackPage() {
           side="right"
           data-testid="feedback-detail"
         >
-          {selected ? <FeedbackDetail item={selected} /> : null}
+          {selected ? (
+            <FeedbackDetail
+              item={selected}
+              onReviewed={(run) => {
+                setSelected((current) => (current ? { ...current, admin_review: run.admin_review ?? null } : current));
+                void queryClient.invalidateQueries({ queryKey: ["feedback"] });
+              }}
+            />
+          ) : null}
         </SideSheet>
       </PageBody>
     </>
@@ -210,7 +223,7 @@ function FeedbackContent({
   resetKey: string;
 }) {
   const { summary, previous } = report;
-  if (summary.total === 0) {
+  if (summary.total === 0 && summary.admin_reviewed === 0) {
     return (
       <Card>
         <CardContent className="pt-4">
@@ -242,6 +255,12 @@ function FeedbackContent({
             />
           </div>
           <ReasonCounts summary={summary} />
+          <p className="text-xs text-fg-muted lg:col-span-2" data-testid="feedback-admin-summary">
+            {t("feedback.summary.admin", {
+              count: formatNumber(summary.admin_reviewed),
+              notHelpful: formatNumber(summary.admin_not_helpful),
+            })}
+          </p>
         </CardContent>
       </Card>
 
@@ -345,13 +364,18 @@ function FeedbackTable({
     {
       key: "rating",
       header: t("feedback.column.rating"),
-      render: (item) => <RatingBadge rating={item.rating} />,
+      render: (item) => (item.feedback ? <RatingBadge rating={item.feedback.rating} /> : <NoRating />),
     },
     {
       key: "reason",
       header: t("feedback.column.reason"),
       className: "text-xs text-fg",
-      render: (item) => (item.reason ? reasonLabel(item.reason) : "—"),
+      render: (item) => (item.feedback?.reason ? reasonLabel(item.feedback.reason) : "—"),
+    },
+    {
+      key: "admin_review",
+      header: t("feedback.column.adminReview"),
+      render: (item) => (item.admin_review ? <RatingBadge rating={item.admin_review.rating} /> : <NoRating />),
     },
     {
       key: "agent",
@@ -385,23 +409,24 @@ function FeedbackTable({
   );
 }
 
+function NoRating() {
+  return <span className="text-xs text-fg-muted">—</span>;
+}
+
 function RatingBadge({ rating }: { rating: FeedbackRating }) {
   return (
     <StatusBadge variant={rating === "helpful" ? "success" : "danger"} label={ratingLabel(rating)} />
   );
 }
 
-function FeedbackDetail({ item }: { item: FeedbackItem }) {
+function FeedbackDetail({ item, onReviewed }: { item: FeedbackItem; onReviewed: (run: RunState) => void }) {
+  const capabilities = useCapabilities();
   return (
     <div className="space-y-4 text-sm">
-      <div className="flex flex-wrap items-center gap-2">
-        <RatingBadge rating={item.rating} />
-        {item.reason ? <span className="text-fg">{reasonLabel(item.reason)}</span> : null}
-      </div>
       <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
         <dt className="text-fg-muted">{t("feedback.column.agent")}</dt>
         <dd className="break-words text-fg">{item.agent_name || t("feedback.agentDeleted")}</dd>
-        <dt className="text-fg-muted">{t("feedback.detail.ratedBy")}</dt>
+        <dt className="text-fg-muted">{t("feedback.column.user")}</dt>
         <dd className="break-words text-fg">{item.display_name || t("feedback.userUnknown")}</dd>
         <dt className="text-fg-muted">{t("feedback.column.ratedAt")}</dt>
         <dd className="tabular-nums text-fg">{formatDateTime(item.updated_at)}</dd>
@@ -418,15 +443,48 @@ function FeedbackDetail({ item }: { item: FeedbackItem }) {
           <MessageText text={item.answer} className="text-sm text-fg" />
         </div>
       </section>
-      <section className="space-y-1">
-        <h3 className="text-xs font-semibold text-fg-muted">{t("feedback.detail.comment")}</h3>
-        {item.comment ? (
-          <p className="whitespace-pre-wrap break-words text-fg">{item.comment}</p>
-        ) : (
-          <p className="text-fg-muted">{t("feedback.detail.noComment")}</p>
-        )}
-      </section>
+      <RatingSection title={t("feedback.detail.ownerRating")} rating={item.feedback} testId="feedback-detail-owner" />
+      <RatingSection
+        title={t("feedback.detail.adminReview")}
+        rating={item.admin_review}
+        by={item.reviewer_display_name}
+        testId="feedback-detail-admin"
+      />
+      {/* 管理者の評価は Agent 管理の権限だけ（本人の評価とは別に残す。#774）。 */}
+      {capabilities.admin ? (
+        <AnswerFeedback runId={item.run_id} current={item.admin_review} mode="admin" onSaved={onReviewed} />
+      ) : null}
     </div>
+  );
+}
+
+function RatingSection({
+  title,
+  rating,
+  by,
+  testId,
+}: {
+  title: string;
+  rating: RunFeedback | null;
+  by?: string;
+  testId: string;
+}) {
+  return (
+    <section className="space-y-1" data-testid={testId}>
+      <h3 className="text-xs font-semibold text-fg-muted">{title}</h3>
+      {rating ? (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <RatingBadge rating={rating.rating} />
+            {rating.reason ? <span className="text-fg">{reasonLabel(rating.reason)}</span> : null}
+            {by ? <span className="text-xs text-fg-muted">{by}</span> : null}
+          </div>
+          {rating.comment ? <p className="whitespace-pre-wrap break-words text-fg">{rating.comment}</p> : null}
+        </>
+      ) : (
+        <p className="text-fg-muted">{t("feedback.detail.notRated")}</p>
+      )}
+    </section>
   );
 }
 

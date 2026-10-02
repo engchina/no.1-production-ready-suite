@@ -536,7 +536,7 @@ function ChatTurn({
         ) : null}
 
         {canRate && run.status === "completed" && answer ? (
-          <AnswerFeedback run={run} onSaved={onFeedbackSaved} />
+          <AnswerFeedback runId={run.id} current={run.feedback ?? null} onSaved={onFeedbackSaved} />
         ) : null}
       </div>
     </div>

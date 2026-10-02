@@ -32,12 +32,17 @@ class ReasonCount(BaseModel):
 
 
 class FeedbackSummary(BaseModel):
+    """利用者（会話の本人）の評価の集計と、管理者の評価の件数。"""
+
     total: int = 0
     helpful: int = 0
     not_helpful: int = 0
     # 評価が 0 件のときは None（画面は「—」）。
     helpful_rate: float | None = None
     reason_counts: list[ReasonCount] = Field(default_factory=list)
+    # 管理者の評価（#774）。
+    admin_reviewed: int = 0
+    admin_not_helpful: int = 0
 
 
 class FeedbackItem(BaseModel):
@@ -45,13 +50,16 @@ class FeedbackItem(BaseModel):
     thread_id: str | None
     agent_id: str
     agent_name: str
+    # 会話の本人（Run の作成者）。
     user_uuid: str | None
     display_name: str
     question: str
     answer: str
-    rating: FeedbackRating
-    reason: FeedbackReason | None
-    comment: str
+    # 本人の評価・管理者の評価（どちらかは必ずある）。
+    feedback: RunFeedback | None = None
+    admin_review: RunFeedback | None = None
+    reviewer_display_name: str = ""
+    # 新しい方の評価の日時。
     updated_at: datetime
 
 
@@ -65,6 +73,21 @@ class FeedbackReport(BaseModel):
     items: list[FeedbackItem] = Field(default_factory=list)
     # 絞り込みに合う評価の件数（`items` は上限までの新しい順）。
     matched: int = 0
+
+
+def _rated_at(run: RunState) -> datetime | None:
+    times = [item.updated_at for item in (run.feedback, run.admin_review) if item is not None]
+    return max(times) if times else None
+
+
+def _matches(run: RunState, rating: FeedbackRating | None, reason: FeedbackReason | None) -> bool:
+    """評価・理由の絞り込み（本人の評価か管理者の評価のどちらかが合えばよい）。"""
+    return any(
+        item is not None
+        and (rating is None or item.rating == rating)
+        and (reason is None or item.reason == reason)
+        for item in (run.feedback, run.admin_review)
+    )
 
 
 def build_feedback_report(
@@ -83,32 +106,30 @@ def build_feedback_report(
     current: list[RunState] = []
     previous: list[RunState] = []
     for run in runs:
-        feedback = run.feedback
-        if feedback is None or (agent_id and run.agent_id != agent_id):
+        rated_at = _rated_at(run)
+        if rated_at is None or (agent_id and run.agent_id != agent_id):
             continue
-        if since <= feedback.updated_at <= now:
+        if since <= rated_at <= now:
             current.append(run)
-        elif previous_since <= feedback.updated_at < since:
+        elif previous_since <= rated_at < since:
             previous.append(run)
 
-    matched = [
-        run
-        for run in current
-        if run.feedback is not None
-        and (rating is None or run.feedback.rating == rating)
-        and (reason is None or run.feedback.reason == reason)
-    ]
-    matched.sort(key=lambda run: run.feedback.updated_at if run.feedback else now, reverse=True)
+    matched = [run for run in current if _matches(run, rating, reason)]
+    matched.sort(key=lambda run: _rated_at(run) or now, reverse=True)
     listed = matched[:FEEDBACK_ITEMS_LIMIT]
-    raters = {run.feedback.user_uuid for run in listed if run.feedback and run.feedback.user_uuid}
-    names = user_names(sorted(raters))
+    people = {run.created_by_user_uuid for run in listed if run.created_by_user_uuid} | {
+        run.admin_review.user_uuid
+        for run in listed
+        if run.admin_review is not None and run.admin_review.user_uuid
+    }
+    names = user_names(sorted(people))
     return FeedbackReport(
         days=days,
         since=since,
         until=now,
         summary=_summarize(current),
         previous=_summarize(previous),
-        items=[_item(run, run.feedback, agent_names, names) for run in listed if run.feedback],
+        items=[_item(run, agent_names, names, now) for run in listed],
         matched=len(matched),
     )
 
@@ -117,6 +138,11 @@ def _summarize(runs: list[RunState]) -> FeedbackSummary:
     summary = FeedbackSummary()
     reasons: dict[FeedbackReason, int] = {}
     for run in runs:
+        review = run.admin_review
+        if review is not None:
+            summary.admin_reviewed += 1
+            if review.rating == FeedbackRating.NOT_HELPFUL:
+                summary.admin_not_helpful += 1
         feedback = run.feedback
         if feedback is None:
             continue
@@ -138,22 +164,24 @@ def _summarize(runs: list[RunState]) -> FeedbackSummary:
 
 def _item(
     run: RunState,
-    feedback: RunFeedback,
     agent_names: Mapping[str, str],
     names: Mapping[str, str],
+    now: datetime,
 ) -> FeedbackItem:
-    user_uuid = feedback.user_uuid
+    owner = run.created_by_user_uuid
+    review = run.admin_review
+    reviewer = review.user_uuid if review is not None else None
     return FeedbackItem(
         run_id=run.id,
         thread_id=run.thread_id,
         agent_id=run.agent_id,
         agent_name=agent_names.get(run.agent_id, ""),
-        user_uuid=user_uuid,
-        display_name=names.get(user_uuid, "") if user_uuid else "",
+        user_uuid=owner,
+        display_name=names.get(owner, "") if owner else "",
         question=run.goal,
         answer=run_answer_text(run) or "",
-        rating=feedback.rating,
-        reason=feedback.reason,
-        comment=feedback.comment,
-        updated_at=feedback.updated_at,
+        feedback=run.feedback,
+        admin_review=review,
+        reviewer_display_name=names.get(reviewer, "") if reviewer else "",
+        updated_at=_rated_at(run) or now,
     )

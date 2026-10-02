@@ -191,6 +191,8 @@ export interface RunState {
   thread_id?: string | null;
   /** 回答への評価（#774）。評価していない Run は null / 無し。 */
   feedback?: RunFeedback | null;
+  /** 管理者の評価（本人の評価とは別。#774）。 */
+  admin_review?: RunFeedback | null;
   created_at: string;
   updated_at: string;
 }
@@ -564,6 +566,9 @@ export interface FeedbackSummary {
   /** 評価が 0 件のときは null。 */
   helpful_rate: number | null;
   reason_counts: { reason: FeedbackReason; count: number }[];
+  /** 管理者の評価の件数と、そのうち役に立たなかった件数。 */
+  admin_reviewed: number;
+  admin_not_helpful: number;
 }
 
 export interface FeedbackItem {
@@ -571,13 +576,16 @@ export interface FeedbackItem {
   thread_id: string | null;
   agent_id: string;
   agent_name: string;
+  /** 会話の本人（Run の作成者）。 */
   user_uuid: string | null;
   display_name: string;
   question: string;
   answer: string;
-  rating: FeedbackRating;
-  reason: FeedbackReason | null;
-  comment: string;
+  /** 本人の評価・管理者の評価（どちらかは必ずある）。 */
+  feedback: RunFeedback | null;
+  admin_review: RunFeedback | null;
+  reviewer_display_name: string;
+  /** 新しい方の評価の日時。 */
   updated_at: string;
 }
 
@@ -861,6 +869,12 @@ export const agentApi = {
   /** チャットの回答への評価（#774）。会話をした利用者だけ。付け直すと上書きする。 */
   putRunFeedback: (runId: string, payload: RunFeedbackPayload) =>
     request<RunState>(`/api/runs/${encodeURIComponent(runId)}/feedback`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  /** 管理者の評価（#774。Agent 管理の権限）。 */
+  putRunAdminReview: (runId: string, payload: RunFeedbackPayload) =>
+    request<RunState>(`/api/runs/${encodeURIComponent(runId)}/admin-review`, {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
