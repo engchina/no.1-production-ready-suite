@@ -27,6 +27,49 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
+# 共有 UI（packages/ui と packages/system-settings）の成果物が、ソース・設定より新しいか。
+# 変更が無いときは build を省く（起動中の別の製品の Vite が読む dist を消さない。#816）。
+shared_ui_up_to_date() {
+  [ "${FORCE_SHARED_UI_BUILD:-0}" != "1" ] || return 1
+  local artifact
+  for artifact in index.js index.d.ts tokens.css; do
+    [ -f "${SHARED_UI_DIR}/dist/${artifact}" ] || return 1
+  done
+  local settings_dir="${SHARED_PLATFORM_DIR}/packages/system-settings"
+  if [ -f "${settings_dir}/package.json" ] && [ ! -f "${settings_dir}/dist/index.js" ]; then
+    return 1
+  fi
+  # vite が最初に書く index.js を基準にする（その後に変えたソースがあれば build し直す）。
+  local stamp="${SHARED_UI_DIR}/dist/index.js"
+  local newer
+  newer="$(find "${SHARED_UI_DIR}" "${settings_dir}" "${SHARED_PLATFORM_DIR}/package.json" \
+    "${SHARED_PLATFORM_DIR}/package-lock.json" \
+    \( -name node_modules -o -name dist \) -prune -o -type f -newer "${stamp}" -print -quit 2>/dev/null || true)"
+  [ -z "${newer}" ]
+}
+
+# 3 製品の start-all.sh を同時に起動すると、共有 UI の build（vite build は dist を空にしてから書く）が
+# 重なり、成果物の確認が失敗する。build と確認を flock で排他にする（flock が無い環境は排他なし。#816）。
+SHARED_UI_LOCK_FD=""
+lock_shared_ui() {
+  command -v flock >/dev/null 2>&1 || return 0
+  local key
+  key="$(printf '%s' "$(cd "${SHARED_PLATFORM_DIR}" && pwd)" | cksum | cut -d' ' -f1)"
+  exec 9>"${TMPDIR:-/tmp}/production-ready-shared-ui-${key}.lock"
+  SHARED_UI_LOCK_FD=9
+  if ! flock -n 9; then
+    echo "[frontend] 別の製品が共有 UI を build しています。終わるまで待ちます..."
+    flock 9
+  fi
+}
+
+unlock_shared_ui() {
+  [ -n "${SHARED_UI_LOCK_FD}" ] || return 0
+  flock -u 9 || true
+  exec 9>&-
+  SHARED_UI_LOCK_FD=""
+}
+
 prepare_shared_ui() {
   if [ ! -f "${SHARED_UI_DIR}/package.json" ]; then
     echo "[frontend] 共有 UI パッケージが見つかりません: ${SHARED_UI_DIR}" >&2
@@ -52,12 +95,16 @@ prepare_shared_ui() {
     )
   fi
 
-  echo "[frontend] 共有 UI パッケージをビルドします..."
-  (
-    cd "${SHARED_PLATFORM_DIR}"
-    # 共有 UI と共有システム設定画面を依存順に build する（platform の npm run build）。
-    npm run build
-  )
+  if shared_ui_up_to_date; then
+    echo "[frontend] 共有 UI パッケージは最新です（build を省きます。常に build するには FORCE_SHARED_UI_BUILD=1）。"
+  else
+    echo "[frontend] 共有 UI パッケージをビルドします..."
+    (
+      cd "${SHARED_PLATFORM_DIR}"
+      # 共有 UI と共有システム設定画面を依存順に build する（platform の npm run build）。
+      npm run build
+    )
+  fi
 
   local artifact
   for artifact in index.js index.d.ts tokens.css; do
@@ -87,7 +134,9 @@ kill_port() {
 
 kill_port "${PORT}"
 
+lock_shared_ui
 prepare_shared_ui
+unlock_shared_ui
 
 cd "${FRONTEND_DIR}"
 
