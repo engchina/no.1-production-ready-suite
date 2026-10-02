@@ -147,7 +147,11 @@ skill_registry.register(
         instructions=(
             "SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。"
             "業務プロファイルが分からなければ nl2sql_recommend_profile で選ぶ。"
-            "結果の status が pending / running なら nl2sql_get_job で続きを取る。"
+            "nl2sql_query / nl2sql_get_job は、ジョブが終わるまでツールの中で待ってから返す。"
+            "それでも status が pending / running なら、nl2sql_get_job に job_id と "
+            "wait_seconds=40 を渡して続きを取る。結果が出ないまま答えるときは、"
+            "実行中であることと job_id を伝え、結果を推測で補わない。"
+            "status が error なら error_message と error_code を伝える。"
         ),
         mcp_requirements=[
             SkillMcpRequirement(

@@ -149,6 +149,12 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
 - **再試行**: `tools/call` は 502 / 504・timeout で再試行しない（読み取り専用でも LLM を使うツール（`rag_search`）が
   あり、処理が進んでいる可能性がある）。429 / 503 と接続失敗だけ `AGENT_EXTERNAL_MCP_MAX_RETRIES` 回まで再試行する。
   `tools/list` は 429 / 5xx・timeout も再試行する。
+- **NL2SQL のジョブの完了を待つ（#848）**: 組み込みの接続 `nl2sql` の `nl2sql_query` / `nl2sql_get_job` の結果が
+  `pending` / `running`（`job_id` あり）なら、ツールの handler の中で `nl2sql_get_job` を `wait_seconds`（最大 20 秒。
+  接続の timeout から 15 秒引いた値以下）付きで繰り返し呼び、完了した結果をモデルに返す。待つ合計の上限は
+  `AGENT_NL2SQL_JOB_WAIT_SECONDS`（既定 300 秒、0 で待たない）で、1 回の待ちごとに Run がキャンセル・終了していないかを
+  確かめる。上限を超えた・Run が終わった・続きの取得に失敗したときは最後の結果（`running` と `job_id`）を返す。
+  SDK の function tool の timeout は待つ分を足した値にする。外部の MCP 接続のツールは対象外。
 - **設定**: `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（例 `http://rag-host/api/mcp`）、
   `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS` / `AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS`（既定 60 秒）は接続 `rag` / `nl2sql` の
   初期値。画面の「MCP 接続」で URL・タイムアウトを変更でき（保存先に残り、.env の値より優先する。#764）、署名鍵と
