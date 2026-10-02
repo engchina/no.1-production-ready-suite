@@ -254,7 +254,7 @@ class QualityEvaluationService:
         settings = get_settings()
         if settings.nl2sql_persistence_mode.strip().lower() == "oracle":
             return OracleQualityEvaluationRepository(
-                connection_factory=self._nl2sql._oracle_adapter.connection  # noqa: SLF001
+                connection_factory=self._nl2sql._oracle_adapter.state_connection  # noqa: SLF001
             )
         return MemoryQualityEvaluationRepository()
 
