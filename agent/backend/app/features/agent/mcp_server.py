@@ -26,6 +26,7 @@ from app.features.agent.runtime import (
     RunEventType,
     RunState,
     RunStatus,
+    agent_unavailable_reason,
     runtime_repository,
 )
 from app.security.domain import Principal
@@ -100,7 +101,8 @@ def build_agent_mcp_server(principal: Principal | None) -> McpServer:
         agents = [
             AgentSummary(id=agent.id, name=agent.name, description=agent.description or "")
             for agent in runtime_repository.list_agents()
-            if agent.enabled and not agent.migration_required and caller.can_use_agent(agent.id)
+            # 公開した版の無い業務 Agent は利用者の Run で使えないので出さない（#792）。
+            if agent_unavailable_reason(agent) is None and caller.can_use_agent(agent.id)
         ]
         return ListAgentsOutput(agents=agents)
 
@@ -114,10 +116,9 @@ def build_agent_mcp_server(principal: Principal | None) -> McpServer:
             raise McpToolError(
                 "AGENT_NOT_FOUND", "業務 Agent が見つからないか、使う権限がありません。", status=404
             )
-        if not agent.enabled or agent.migration_required:
-            raise McpToolError(
-                "AGENT_NOT_AVAILABLE", "この業務 Agent は実行できない状態です。", status=409
-            )
+        reason = agent_unavailable_reason(agent)
+        if reason is not None:
+            raise McpToolError("AGENT_NOT_AVAILABLE", reason, status=409)
         run = runtime_repository.create_builtin_run(
             RunCreateRequest(
                 goal=arguments.question,

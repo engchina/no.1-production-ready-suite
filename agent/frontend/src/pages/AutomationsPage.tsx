@@ -43,6 +43,7 @@ import {
   type AutomationTrigger,
   type ScheduleFrequency,
 } from "@/lib/api";
+import { isRunnableAgent } from "@/lib/agent-availability";
 import { useEditorRoute } from "@/lib/editor-route";
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -107,7 +108,7 @@ export function AutomationsPage() {
   const canManage = capabilities.admin;
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const usableAgents = useMemo(
-    () => (agents.data?.agents ?? []).filter((agent) => agent.enabled && !agent.migration_required),
+    () => (agents.data?.agents ?? []).filter(isRunnableAgent),
     [agents.data]
   );
   const target = editor.target;

@@ -35,6 +35,8 @@ flowchart TD
 `POST /agents/{id}/versions/{version}/restore` はその版を公開し直し、下書きもその内容にする（ロールバック）。
 画面・API で作る Agent は下書きから始め、#770 より前の Agent（`versioned=false`）は読み込み時に現在の内容を
 v1 として公開する。
+利用者の Run を作る入口（チャットの選択肢・MCP の `agent_list_agents` / `agent_ask`・自動実行の作成と実行）は、
+公開した版の無い Agent を出さず・選ばせない（`runtime.agent_unavailable_reason`。#792）。品質評価は下書きでも評価できる。
 Plugin、MCP、Tool、Runtime を Agent に埋め込まない。`tool_names` は移行リリースの読取互換だけである
 （`command_allowed_prefixes` は #756 で削除した）。
 
