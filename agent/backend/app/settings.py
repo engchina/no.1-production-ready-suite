@@ -138,11 +138,13 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_runtime_dispatch_poll_seconds: float = 1.0
     agent_runtime_dispatch_lease_seconds: int = 120
     agent_permission_default_mode: str = "approval"
-    agent_runtime_repository_backend: str = "memory"
+    # Run・業務 Agent と画面で変えた定義の保存先（auto / memory / file / oracle_checkpoint /
+    # oracle_normalized）。Oracle は共通の PLATFORM_ORACLE_* で接続し、テーブルはシステムテーブルが
+    # 作る（#764）。oracle_normalized は監査用の projection（AGENT_RUNTIME_RUNS など）も書く。
+    # auto（既定。#839）は DB の設定がそろっていれば oracle_checkpoint、無ければ memory
+    # （起動時に判定）。
+    agent_runtime_repository_backend: str = "auto"
     agent_runtime_snapshot_path: str | None = None
-    # Run・業務 Agent の保存先（memory / file / oracle_checkpoint / oracle_normalized）。Oracle は
-    # 共通の PLATFORM_ORACLE_* で接続し、テーブルはシステムテーブルが作る（#764）。
-    # oracle_normalized は監査用の projection（AGENT_RUNTIME_RUNS など）も書く。
     agent_runtime_projection_retention_days: int = 0
     agent_runtime_projection_write_mode: str = "replace"
     agent_max_tool_calls_per_run: int = 20

@@ -7,15 +7,21 @@ store に差し替える（開発機の共通 `.env` の DB に触れない）�
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 
-import pytest
-from pr_system_settings.database_status import clear_database_status_cache
+# 保存先の既定は `auto`（#839）。開発機の共通 `.env` に DB の設定があると、`app` の import 時に
+# Run の repository が Oracle に接続するため、テストは memory に固定する（`auto` を確かめるテストは
+# settings を差し替えて `storage_backend.reset()` する）。`app` を import する前に設定する。
+os.environ["AGENT_RUNTIME_REPOSITORY_BACKEND"] = "memory"
 
-from app.features.agent import run_facts_store
-from app.security.service import SecurityService, set_security_service
-from app.security.store import InMemorySecurityStore
-from app.settings import get_settings
+import pytest  # noqa: E402
+from pr_system_settings.database_status import clear_database_status_cache  # noqa: E402
+
+from app.features.agent import run_facts_store, storage_backend  # noqa: E402
+from app.security.service import SecurityService, set_security_service  # noqa: E402
+from app.security.store import InMemorySecurityStore  # noqa: E402
+from app.settings import get_settings  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -44,3 +50,11 @@ def _no_run_facts_store() -> Iterator[None]:
     run_facts_store.configure(None)
     yield
     run_facts_store.configure(None)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_storage_backend_decision() -> Iterator[None]:
+    """保存先の `auto` の判定（#839）をテストごとにやり直す。"""
+    storage_backend.reset()
+    yield
+    storage_backend.reset()

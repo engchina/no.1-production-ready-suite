@@ -987,13 +987,16 @@ export interface BuiltinRuntimeStatus {
 
 /**
  * 業務 Agent・スキル・MCP 接続・実行などの保存先（#839）。`persistent` が false なら再起動で消える。
- * `reason`: `memory_backend` は DB は設定済みで保存先の設定がメモリ、`database_not_configured` は DB も未設定。
+ * `reason`: `memory_backend` は DB は設定済みで保存先にメモリを明示、`restart_required` は既定（auto）で DB も
+ * 設定済みだが起動時は使えなかった（再起動で DB になる）、`database_not_configured` は DB が未設定。
  */
 export interface RuntimeStorageStatus {
   backend: "memory" | "file" | "oracle_checkpoint" | "oracle_normalized";
+  /** 設定の値（`AGENT_RUNTIME_REPOSITORY_BACKEND`。既定は `auto`。#839）。 */
+  configured_backend: string;
   persistent: boolean;
   database_configured: boolean;
-  reason: "memory_backend" | "database_not_configured" | null;
+  reason: "memory_backend" | "restart_required" | "database_not_configured" | null;
 }
 
 /**

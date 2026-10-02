@@ -18,14 +18,14 @@ import {
 } from "@engchina/production-ready-ui";
 import { agentApi, type RuntimeStorageStatus } from "@/lib/api";
 import { QueryState } from "@/components/ListViews";
-import { storageReasonKey, useRuntimeStorage } from "@/components/system/StorageNotice";
+import { storageFixKey, storageReasonKey, useRuntimeStorage } from "@/components/system/StorageNotice";
 import { t } from "@/lib/i18n";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
 import { canOpenRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { useAuth } from "@/components/security/AuthProvider";
 
-/** 保存先をデータベースにする設定（agent/backend/.env。#764 / #839）。 */
+/** 保存先をデータベースにする設定（agent/backend/.env。既定の auto なら要らない。#764 / #839）。 */
 const PERSISTENT_STORAGE_SETTING = "AGENT_RUNTIME_REPOSITORY_BACKEND=oracle_checkpoint";
 
 /**
@@ -177,15 +177,14 @@ function StorageCard({ status }: { status: RuntimeStorageStatus }) {
           >
             <div className="space-y-2" data-testid="runtime-storage-fix">
               <p>{t(storageReasonKey(status))}</p>
-              <p>
-                {status.reason === "database_not_configured"
-                  ? t("storage.fix.databaseNotConfigured")
-                  : t("storage.fix.memoryBackend")}
-              </p>
-              <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                <span>{t("storage.fix.setting")}</span>
-                <code className="break-all font-mono">{PERSISTENT_STORAGE_SETTING}</code>
-              </p>
+              <p>{t(storageFixKey(status))}</p>
+              {/* 既定（auto）なら設定は要らない。メモリなどを明示しているときだけ、直す値を出す。 */}
+              {status.configured_backend !== "auto" && status.reason !== "restart_required" ? (
+                <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                  <span>{t("storage.fix.setting")}</span>
+                  <code className="break-all font-mono">{PERSISTENT_STORAGE_SETTING}</code>
+                </p>
+              ) : null}
             </div>
           </Banner>
         ) : null}

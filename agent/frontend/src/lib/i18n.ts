@@ -681,6 +681,8 @@ const agentJa = {
   "storage.notice.title": "作成・変更した内容は、バックエンドの再起動で消えます",
   "storage.notice.memoryBackend":
     "データベースは設定済みですが、保存先がメモリのため、業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・API キー・品質評価などをデータベースに保存していません。",
+  "storage.notice.restartRequired":
+    "データベースは設定済みですが、バックエンドの起動時には使えなかったため、業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・API キー・品質評価などを保存していません。",
   "storage.notice.databaseNotConfigured":
     "データベースが未設定のため、業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・API キー・品質評価などを保存していません。",
   "storage.notice.openRuntime": "保存先を確認",
@@ -700,8 +702,12 @@ const agentJa = {
   "storage.backend.oracle_checkpoint": "Oracle AI Database",
   "storage.backend.oracle_normalized": "Oracle AI Database（監査用の表も書き込む）",
   "storage.fix.memoryBackend":
-    "バックエンドの設定（agent/backend/.env）で保存先をデータベースにして、バックエンドを再起動してください。テーブルは運用設定 > システムテーブルで作成済みのものを使います。",
+    "バックエンドの設定（agent/backend/.env）で保存先にメモリを指定しています。AGENT_RUNTIME_REPOSITORY_BACKEND の指定を消す（既定の auto）か、データベースにして、バックエンドを再起動してください。テーブルは運用設定 > システムテーブルで作成済みのものを使います。",
+  "storage.fix.restartRequired":
+    "保存先はバックエンドの起動時に決まります。起動時はデータベースが未設定か接続できなかったため、メモリにしています。バックエンドを再起動すると、データベースに保存します。",
   "storage.fix.databaseNotConfigured":
+    "システム設定 > データベースを設定し、運用設定 > システムテーブルでテーブルを作成してから、バックエンドを再起動してください。保存先は自動でデータベースになります。",
+  "storage.fix.databaseNotConfiguredExplicit":
     "システム設定 > データベースを設定し、運用設定 > システムテーブルでテーブルを作成してから、バックエンドの設定（agent/backend/.env）で保存先をデータベースにして、バックエンドを再起動してください。",
   "storage.fix.setting": "設定する値",
   "storage.fix.openDatabaseSettings": "データベースの設定を開く",

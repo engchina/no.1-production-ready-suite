@@ -163,14 +163,16 @@ const SYSTEM_TABLES_READY = systemTablesStatus(true);
 /** `GET /api/runtime/storage`（保存先。#839）。Oracle に保存している状態。 */
 export const RUNTIME_STORAGE_PERSISTENT = {
   backend: "oracle_checkpoint",
+  configured_backend: "auto",
   persistent: true,
   database_configured: true,
   reason: null,
 };
 
-/** 保存先がメモリ（DB は設定済み）。作成・変更した内容は再起動で消える。 */
+/** 保存先にメモリを明示している（DB は設定済み）。作成・変更した内容は再起動で消える。 */
 export const RUNTIME_STORAGE_MEMORY = {
   backend: "memory",
+  configured_backend: "memory",
   persistent: false,
   database_configured: true,
   reason: "memory_backend",

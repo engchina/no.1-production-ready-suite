@@ -74,10 +74,10 @@ frontend の Vite は `BACKEND_URL` を明示したときだけ `/api` を backe
 運用設定 > システムテーブル か `cd backend && uv run python -m app.cli.agent_system_schema --initialize` でテーブルを作ります（[docs/security-rbac.md](docs/security-rbac.md)）。
 
 業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・API キー・品質評価などの保存先は `backend/.env` の
-`AGENT_RUNTIME_REPOSITORY_BACKEND` です。既定の `memory` は保存せず、backend の再起動（`--reload` のファイルの変更での
-再起動を含む）で消えます。データベースを設定してシステムテーブルを作ったら、`AGENT_RUNTIME_REPOSITORY_BACKEND=oracle_checkpoint`
-にして再起動してください。今の保存先は「運用設定 > 実行環境」の「保存先」で確認でき、保存していないときは業務 Agent・実行履歴・
-MCP 接続などの画面の先頭に案内が出ます（#839）。
+`AGENT_RUNTIME_REPOSITORY_BACKEND` です。既定の `auto` は、共通 `.env` の `PLATFORM_ORACLE_*` がそろっていればデータベース
+（`oracle_checkpoint`。テーブルはシステムテーブルが作る）、無ければメモリ（backend の再起動で消える）に保存します。保存先は起動時に
+決まるので、起動の後にデータベースを設定したら backend を再起動してください。今の保存先は「運用設定 > 実行環境」の「保存先」で
+確認でき、保存していないときは業務 Agent・実行履歴・MCP 接続などの画面の先頭に案内が出ます（#839）。
 
 既存 helper を使う場合:
 

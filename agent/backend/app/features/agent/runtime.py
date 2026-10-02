@@ -21,8 +21,10 @@ from threading import Condition, Lock
 from typing import Any, Protocol
 from uuid import uuid4
 
+from pr_backend_core.oracle_errors import is_oracle_connection_error
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
+from app.features.agent import storage_backend
 from app.features.agent.config import runtime_config_store
 from app.features.agent.tools import (
     ToolCall,
@@ -2856,15 +2858,26 @@ def _active_tool_policy() -> ToolPolicy:
 
 def build_runtime_repository() -> AgentRuntimeRepositoryContract:
     settings = get_settings()
-    backend = settings.agent_runtime_repository_backend.strip().lower()
-    if backend in {"oracle", "oracle_checkpoint", "oracle_normalized"}:
+    # `auto`（既定）は DB の設定がそろっていれば oracle_checkpoint、無ければ memory（#839）。
+    backend = storage_backend.resolved_backend()
+    if backend in storage_backend.ORACLE_BACKENDS:
         # 共通の PLATFORM_ORACLE_* で接続する（#764。旧 AGENT_RUNTIME_ORACLE_* は読まない）。
-        if backend == "oracle_normalized":
-            return AgentRuntimeOracleNormalizedRepository(
-                projection_retention_days=settings.agent_runtime_projection_retention_days,
-                projection_write_mode=settings.agent_runtime_projection_write_mode,
-            )
-        return AgentRuntimeOracleCheckpointRepository()
+        try:
+            if backend == "oracle_normalized":
+                return AgentRuntimeOracleNormalizedRepository(
+                    projection_retention_days=settings.agent_runtime_projection_retention_days,
+                    projection_write_mode=settings.agent_runtime_projection_write_mode,
+                )
+            return AgentRuntimeOracleCheckpointRepository()
+        except Exception as exc:
+            # `auto` で選んだ Oracle に起動時に接続できない（ADB の停止中など）ときは、起動を
+            # 止めずに memory にする（画面は DB ゲートと保存先の案内で再起動を促す）。
+            # 明示した Oracle は止める。
+            if not storage_backend.is_auto() or not is_oracle_connection_error(exc):
+                raise
+            logger.warning("agent_runtime_repository_oracle_unavailable_use_memory", exc_info=True)
+            storage_backend.fall_back_to_memory()
+            backend = "memory"
     if backend in {"memory", "in_memory", "file", "file_snapshot"}:
         snapshot_path = (
             settings.agent_runtime_snapshot_path

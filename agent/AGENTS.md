@@ -41,7 +41,8 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
   `AGENT_RUNTIME_REPOSITORY_BACKEND` に従い、Oracle では共通の `PLATFORM_ORACLE_*` で `AGENT_RUNTIME_*` /
   `AGENT_CONTROL_PLANE_ITEMS` に保存する（テーブルはシステムテーブルが作る。アプリは DDL を実行しない）。
   MCP 接続の秘密は `app.secret_box` で暗号化する。`.env` の宣言は保存しない。
-  既定の `memory` は保存しない（再起動で消える）。保存先の状態は `GET /api/runtime/storage` が返し、「実行環境」の「保存先」の
+  既定の `auto` は、DB の設定がそろっていれば `oracle_checkpoint`、無ければ `memory`（保存しない。再起動で消える）を起動時に選ぶ
+  （`storage_backend`。#839）。テストは `tests/conftest.py` で memory に固定する。保存先の状態は `GET /api/runtime/storage` が返し、「実行環境」の「保存先」の
   カードと、定義・実行を作る画面の先頭の `NonPersistentStorageNotice`（warning の Banner）が案内する（#839）。
 - 利用状況・フィードバックの集計（#794）: Oracle の構成は Run の事実（`AGENT_RUN_FACTS`。1 Run = 1 行）を SQL で集計する
   （期間は 365 日まで。書き込みは `run_facts_store` のバックグラウンドの MERGE で、Run を止めない）。memory / file は
