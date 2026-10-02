@@ -53,5 +53,22 @@ fi
 
 kill_port "${PORT}"
 
+# 環境のプロキシ（OCI のための HTTP_PROXY 等）を、同じマシンのサービス・MCP への呼び出しに使わない
+# （#852）。backend のコードも内部の宛先ではプロキシを外す（pr_backend_core.internal_http）。
+# ここは多重の防御として、既存の値を残したまま NO_PROXY / no_proxy に loopback を足す。
+add_loopback_no_proxy() {
+  local result="$1" host
+  for host in localhost 127.0.0.1 ::1; do
+    case ",${result}," in
+      *",${host},"*) ;;
+      *) result="${result:+${result},}${host}" ;;
+    esac
+  done
+  printf '%s' "${result}"
+}
+NO_PROXY="$(add_loopback_no_proxy "${NO_PROXY:-${no_proxy:-}}")"
+no_proxy="$(add_loopback_no_proxy "${no_proxy:-${NO_PROXY}}")"
+export NO_PROXY no_proxy
+
 echo "[backend] http://${HOST}:${PORT} で起動します（稼働確認: /api/health）..."
 exec uv run --no-sync uvicorn app.main:app --reload --host "${HOST}" --port "${PORT}"

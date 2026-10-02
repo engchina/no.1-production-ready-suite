@@ -44,6 +44,13 @@ npm の証明書検証にも使う。別の CA ファイルが必要なら `NODE
 `npm_config_registry` で指定する。内部 registry を VPN で直接利用する構成では、そのホストを
 `no_proxy` / `NO_PROXY` に加える。証明書の追加だけではアクセス制限は解消しない。
 
+backend から同じマシン・private network のサービス（前処理・parser・pipeline の stage・サービス管理の
+health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロキシを通さない（#852。判定は
+`pr_backend_core.internal_http`）。`scripts/start-backend.sh` も、既存の値を残したまま `NO_PROXY` /
+`no_proxy` に `localhost,127.0.0.1,::1` を足して backend を起動する。以前はプロキシが 127.0.0.1 へ届けられず
+`502 cannotconnect` を返し、未起動の pipeline の stage を「サービスの応答した失敗」と見て検索が止まっていた。
+内部の宛先を名前（`127.0.0.1` 以外のホスト名）で設定する場合は、そのホストを `NO_PROXY` に加える。
+
 ### 前処理 / parser（uv の venv + systemd。#286）
 
 前処理と parser はサービスごとの uv の venv（`uv sync --locked --no-dev --python 3.12`）で動くネイティブのプロセスで、

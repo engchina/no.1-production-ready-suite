@@ -12,6 +12,7 @@ from threading import Lock
 from typing import Any, Literal
 
 import httpx
+from pr_backend_core.internal_http import http_client_options
 from pydantic import BaseModel, Field, ValidationError
 
 from app.features.agent.config import McpConnectionConfig, runtime_config_store
@@ -311,7 +312,7 @@ def _fetch_marketplace_listing(
     url: str, timeout_seconds: float
 ) -> tuple[MarketplaceListing | None, str | None]:
     try:
-        with httpx.Client(timeout=timeout_seconds) as client:
+        with httpx.Client(timeout=timeout_seconds, **http_client_options(url)) as client:
             response = client.get(url, headers={"accept": "application/json"})
             response.raise_for_status()
             payload = response.json()

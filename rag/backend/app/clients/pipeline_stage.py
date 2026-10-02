@@ -5,14 +5,21 @@ remote 委譲を試し、サービス未起動・未到達なら ``None`` を返
 ``rag_pipeline_core`` 実装へ縮退する。remote が応答した後の HTTP error / 不正応答は、
 壊れたサービスを隠さないため処理停止する。
 
+内部の宛先(127.0.0.1 など)へは環境のプロキシ(``HTTP_PROXY``)を通さない(#852)。内部と判定
+できない宛先がプロキシを通り、プロキシが接続できずに返した 502 / 504 は、サービスの応答では
+なく未到達として縮退する。
+
 確定スタックは不変。ロジックは backend と共有パッケージ ``rag_pipeline_core`` で同一。
 """
 
 from __future__ import annotations
 
 import logging
+import urllib.request
+from urllib.parse import urlsplit
 
 import httpx
+from pr_backend_core.internal_http import http_client_options, is_internal_url
 from rag_pipeline_core.stage import (
     ChunkingStageRequest,
     ChunkingStageResponse,
@@ -89,7 +96,7 @@ class PipelineStageClient:
         if url is None:
             return None
         try:
-            with httpx.Client(timeout=self._http_timeout()) as client:
+            with httpx.Client(timeout=self._http_timeout(), **http_client_options(url)) as client:
                 response = client.request(
                     "POST",
                     f"{url}/run",
@@ -100,6 +107,16 @@ class PipelineStageClient:
                 payload: dict[str, object] = response.json()
                 return payload
         except httpx.HTTPStatusError as exc:
+            if _is_proxy_gateway_error(url, exc.response.status_code):
+                logger.info(
+                    "pipeline stage service unreachable via proxy; falling back to in-process",
+                    extra={
+                        "stage": stage,
+                        "service_url": url,
+                        "status_code": exc.response.status_code,
+                    },
+                )
+                return None
             logger.warning(
                 "pipeline stage service returned error",
                 extra={"stage": stage, "service_url": url, "error": str(exc)},
@@ -192,6 +209,25 @@ class PipelineStageClient:
 
 
 _JSON_HEADERS = {"content-type": "application/json"}
+
+# プロキシが宛先へ接続できなかったときの応答(Bad Gateway / Gateway Timeout)。
+_PROXY_GATEWAY_STATUSES = frozenset({502, 504})
+
+
+def _is_proxy_gateway_error(url: str, status_code: int) -> bool:
+    """502 / 504 が、サービスではなく環境のプロキシの応答か(#852)。
+
+    内部の宛先はプロキシを通さない(``http_client_options``)ため、その 502 / 504 はサービス
+    (またはその前段)の応答として止める。内部と判定できない宛先で、環境のプロキシが設定され
+    ``NO_PROXY`` で外れていないときだけ、プロキシが接続できなかった応答として扱う。
+    """
+    if status_code not in _PROXY_GATEWAY_STATUSES or is_internal_url(url):
+        return False
+    parts = urlsplit(url)
+    proxies = urllib.request.getproxies_environment()
+    if not (proxies.get(parts.scheme.lower()) or proxies.get("all")):
+        return False
+    return not bool(urllib.request.proxy_bypass(parts.hostname or ""))
 
 
 class PipelineStageServiceError(RuntimeError):
