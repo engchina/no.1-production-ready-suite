@@ -188,9 +188,8 @@ export type DbManagementLoadingSkeletonVariant = "list" | "detail" | "compact";
 // 一覧の行の最小高さ。表示行数（5/8 行）は DataTable の visibleRows が表頭と行の実測から決める。
 export const DB_OBJECT_GRID_ROW_CLASS = INFORMATION_TABLE_ROW_CLASS;
 
-function SkeletonBlock({ className = "" }: { className?: string }) {
-  return <Skeleton className={className} testId="db-management-skeleton-block" />;
-}
+/** 読込スケルトンの棒の data-testid（e2e が形と数を確かめる）。棒は共有の Skeleton をそのまま使う。 */
+const SKELETON_BLOCK_TEST_ID = "db-management-skeleton-block";
 
 /**
  * データ準備系の管理画面で共有する読込スケルトン。
@@ -228,9 +227,9 @@ export function DbManagementLoadingSkeleton({
         activityIcon={activityIcon}
       >
         <div className="grid gap-2">
-          <SkeletonBlock className="h-11" />
+          <Skeleton className="h-11" testId={SKELETON_BLOCK_TEST_ID} />
           {Array.from({ length: rows }, (_, index) => (
-            <SkeletonBlock key={index} className="h-[3.5rem]" />
+            <Skeleton key={index} className="h-14" testId={SKELETON_BLOCK_TEST_ID} />
           ))}
         </div>
       </TimedLoadingState>
@@ -247,8 +246,8 @@ export function DbManagementLoadingSkeleton({
         testId={testId ?? `${idPrefix}-compact-skeleton`}
         activityIcon={activityIcon}
       >
-        <SkeletonBlock className="h-10" />
-        <SkeletonBlock className="h-24" />
+        <Skeleton className="h-10" testId={SKELETON_BLOCK_TEST_ID} />
+        <Skeleton className="h-24" testId={SKELETON_BLOCK_TEST_ID} />
       </TimedLoadingState>
     );
   }
@@ -262,9 +261,9 @@ export function DbManagementLoadingSkeleton({
       testId={testId ?? `${idPrefix}-detail-skeleton`}
       activityIcon={activityIcon}
     >
-      <SkeletonBlock className="h-[64px]" />
-      <SkeletonBlock className="h-[40px]" />
-      <SkeletonBlock className="h-[288px]" />
+      <Skeleton className="h-18" testId={SKELETON_BLOCK_TEST_ID} />
+      <Skeleton className="h-11.5" testId={SKELETON_BLOCK_TEST_ID} />
+      <Skeleton className="h-82" testId={SKELETON_BLOCK_TEST_ID} />
     </TimedLoadingState>
   );
 }
@@ -1306,8 +1305,8 @@ export function DbObjectDetailPanel({
           placement="tab"
           testId={`${idPrefix}-ddl-skeleton`}
         >
-          <SkeletonBlock className="h-[40px]" />
-          <SkeletonBlock className="h-[288px]" />
+          <Skeleton className="h-11.5" testId={SKELETON_BLOCK_TEST_ID} />
+          <Skeleton className="h-82" testId={SKELETON_BLOCK_TEST_ID} />
         </TimedLoadingState>
       ) : ddlError ? (
         <section

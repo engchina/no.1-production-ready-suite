@@ -319,6 +319,11 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 - `loading` 中のスピナーの色は `--color-fg-muted`。地と文字は disabled と同じ（`--color-surface-disabled` / `--color-fg-disabled`）だが、`fg-disabled` のままではライトで地に対して 2.82:1 になり、処理中を示す図形の 3:1（WCAG 1.4.11）に届かないため（`fg-muted` はライト 4.39:1 / ダーク 7.28:1。#395）
 - その場で結果を待ち、止められる操作（検索・チャットの送信など）は `loading` を使わず、実行中はボタンを「停止」に切り替える（UX 契約 buttons.md §3.1、#413）。スピナーは結果の領域の `ProcessingIndicator` が出す
 
+**画面を移るだけの操作は `ButtonLink`（#800）**
+
+- 別の画面で設定する導線（ロールの詳細の「権限管理で設定」など）は、`<button onClick={navigate}>` ではなくリンクにする（新しいタブで開ける・読み上げで「リンク」と分かる）。
+- `ButtonLink` は `Button` と同じ見た目・寸法（`size`）・アイコンの寸法（16px）のリンク。アイコンは `icon` / `trailingIcon` で渡し、`<Link className={buttonVariants(...)}>` の子にアイコンを手書きしない。react-router の `Link` は `linkComponent` で渡す（`packages/ui` はルーターに依存しない）。既定の variant は `secondary`。`loading` / `disabled` は持たない（移動は待ちが無く、移動できないときはリンクを出さない）。
+
 **variant と tone（danger の使い方）**
 
 - 赤塗りの `variant="danger"` は **実際の破壊的な確定**（確認ダイアログの確定、確認語を入力した「危険な操作」区画の実行）にだけ使う。
@@ -897,7 +902,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**62点あります。**
+QA に事前共有してください。**63点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -963,6 +968,8 @@ QA に事前共有してください。**62点あります。**
 | 60 | サイドナビの項目名の行の高さが上がる（#658） | 項目名 `leading-5`（17.5px）→ `leading-6`（21px）、ブランド名 `leading-5` / `leading-4` → `leading-6` / `leading-5` | `truncate` は行の高さで切り取るため、Noto Sans JP の字面（約 1.45em）より低いと「HuggingFace」の g などの下端が切れた。行（44px）とヘッダー（3.5rem）の高さは変えない |
 | 61 | **RAG のチャットの会話の履歴が既定で閉じ、チャットが全幅になる。業務ビューの欄の説明文が無くなる**（#664） | チャット: 左に会話の一覧のパネル（280px、見出し「会話」・「新しい会話」・一覧・ページ送り）を常に表示し、lg 未満では業務ビューとチャットの間に縦に積んでいた。会話を選ぶまで入力欄は無効。RAG 検索・チャットの「対象の業務ビュー」の欄の下に説明文（「選んだ業務ビューが参照するナレッジベースを検索し、…」）→ 会話の履歴は既定で閉じ、チャットの上端の行に開閉ボタン（`PanelLeftOpen` / `PanelLeftClose`、「会話の履歴」）・今の会話の名前・「新しい会話」を置く。lg 以上は開くと左に 280px のパネル（開閉は作業状態に残る）、lg 未満は左からの `SideSheet`（会話を選ぶ・Esc・外側で閉じる）。一覧はパネル・シートの高さまで伸ばして中でスクロールし、ページ送りは下に常に見える。会話を選ばなくても入力でき、最初の送信で会話を作る。業務ビューの欄の説明文は出さない | 多くの利用者は会話の履歴を使わないので、チャットに面積を渡す（ChatGPT・Claude・Gemini・Microsoft Copilot と同じ型。§4「`SideSheet`」）。説明文は毎回読む情報ではなく、縦の面積を取っていた |
 | 62 | サイドナビのセクションの見出しが大文字にならない | CSS の `uppercase` で英字を大文字（「Agent 構築」→「AGENT 構築」）→ i18n の文言のまま（太さ・大きさ・字間は同じ） | 日本語第一の UI で、英字の製品用語（Agent・AI・MCP）の綴りを変えない。日本語だけの見出しは変わらない（#801） |
+| 63 | **Agent のチャットの送信が、回答の作成中は同じ位置で「停止」になる**（#805） | 回答の作成中・承認待ちは送信のボタンが `disabled`（`loading` のスピナー）になり、止める手段が無かった → RAG と同じ共有の `RunStopButton` で、同じボタンが `secondary` の「停止」（`Square`）になり、押すと Run を中止する。止めた回答は会話に停止のアイコン付きの文で出す。RAG の検索・チャット・検索テストの見た目と、回答の評価（RAG・Agent とも共有の `FeedbackControls` に置き換え）の見た目は変えない | UX 契約 buttons.md §3.1。ChatGPT・Copilot・Gemini と同じ、入力欄の送信と停止の 1 つのボタン |
+| 64 | **生の色・型のスケールの外の文字・アイコンの寸法・`min-h-*` で決めた複数行の欄の高さを、トークンと `rows` にそろえる**（#800） | RAG の文書の原本プレビューの bbox の縁取りが `rgba(255,255,255,0.9)` の白（ダークテーマで白い線が浮く）。ナレッジベースの処理の流れ・関係情報の図のラベルが 10 / 11px、余白・角丸が数値の px。アイコンに 10 / 11 / 28px。NL2SQL の複数行の欄の高さを `rows` と `textareaClassName="min-h-*"` の両方で決め、多くは `min-h-*` が無効（`rows` の方が高い）、一部（`rows={2}` の欄など）は `min-h-*` が勝っていた。設定のプレビューは `h-44` / `h-56` の固定。NL2SQL の読込スケルトンが `h-[64px]` / `h-[40px]` / `h-[288px]` の px。ロールの詳細の「権限管理で設定」が枠の中の枠 | 縁取りは `ring-1 ring-surface/90`（面の色。ライトは白・ダークは面の暗い色）。図のラベルは `--font-size-xs`（12px）、余白・角丸は `--space-*` / `--radius-*`。アイコンは 14 / 24px。複数行の欄の高さは `rows` だけで決める（`rows={2}` の欄は 70px → 約 64px。プレビューは 7 / 9 行）。スケルトンは rem（`h-18` / `h-11.5` / `h-82`、約 63 / 40 / 287px）。権限の導線は詳細の区切り線の下に置き、`ButtonLink` で出す | トークンの外の値はテーマ・密度の変更に追従しない。adherence の lint が `<table>`・`PageHeader` の `actions` の JSX・`rgba()` などの色の関数・数値の文字サイズと余白・`textareaClassName` の高さを検出するようにした（#800） |
 
 ### API の非互換
 
@@ -1006,6 +1013,7 @@ QA に事前共有してください。**62点あります。**
 | `SelectField` / `SearchableSelectField`（#647） | 追加のみ（既存の props・id・aria は変えない）。`SelectField` に `emptyOptionLabel`（任意の欄で未選択へ戻す、先頭の空の値の選択肢。`required` の欄・`options` に空の値がある欄では出さない。値の型 `T` が `""` を含むときだけ渡せる）を追加。`SelectField` / `SearchableSelectField` に `describedBy`（欄の外の説明の id。`helper`・`error` の id の後ろに足して `aria-describedby` に渡す）を追加 |
 | `SearchableSelectField` / `SearchableMultiSelect`（#578） | **新規 export。** `SearchableSelectField` / `SearchableSelectFieldProps` / `SearchableMultiSelect` / `SearchableMultiSelectProps` / `SearchableSelectOption` / `SearchableSelectRemote` / `SearchableSelectLabels` / `SearchableMultiSelectLabels` / `DEFAULT_SEARCHABLE_SELECT_LABELS` / `filterSearchableOptions`。既存の部品の props は変えない |
 | `SearchableSelectField`（#635） | `leadingIcon?: LucideIcon` を追加（任意。ボタンの先頭の 16px のアイコン、読み上げない）。渡さなければ見た目は変わらない |
+| `RunStopButton` / `FeedbackControls`（#805） | **新規 export。** `RunStopButton` / `RunStopButtonProps` / `runStopClickAction` / `isRepeatedActivationKey` / `RunStopAction`（RAG の `components/RunStopButton.tsx` と `lib/run-stop.ts` から移した）と、`FeedbackControls` / `FeedbackControlsProps` / `FeedbackControlsLabels` / `FeedbackControlsValue` / `FeedbackControlsSubmission` / `FeedbackRating` / `FeedbackReasonOption` / `isSameFeedback`。既存の部品の props は変えない |
 | `PageHeader` / `ObjectActionBar` / `FormActionBar`（#582） | 「その他の操作」のボタンとメニューの読み上げ名が「その他の操作（<操作のグループの名前>）」になる（見た目の文言は同じ）。`getByRole("button", { name: "その他の操作", exact: true })` の E2E は一致しなくなるので、`exact` を外すか `data-testid`（`page-actions-more` / `<testId>-more` / `form-actions-more`）で探す。`PageHeader` の lg 未満は、メニューに入るのが 1 つだけなら畳まない |
 
 ---

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from pr_backend_core.oracle_pool import SharedOraclePool
 from pr_backend_core.oracle_session import init_oracle_session
 
 from app.clients.oracle_diagnostics import oracle_connection_diagnostics
@@ -617,6 +618,17 @@ def _pem_file_is_encrypted(path: Path) -> bool:
     return "BEGIN ENCRYPTED PRIVATE KEY" in text or "PROC-TYPE: 4,ENCRYPTED" in text
 
 
+# 共通認証（PLATFORM_*）の store が使う接続 pool（#793）。認証は要求のたびに通るため、毎回
+# Wallet / mTLS の handshake と認証をやり直さない。接続引数が変わると作り直し、DB 設定の保存時・
+# 終了時に `close_auth_connection_pool`（`close_oracle_pools` から）で閉じる。
+_AUTH_CONNECTION_POOL = SharedOraclePool(name="nl2sql-auth")
+
+
+def close_auth_connection_pool() -> None:
+    """共通認証の接続 pool を閉じる（次に借りるときに作り直す）。"""
+    _AUTH_CONNECTION_POOL.close()
+
+
 class OracleNl2SqlAdapter:
     """Thin python-oracledb wrapper.
 
@@ -719,6 +731,51 @@ class OracleNl2SqlAdapter:
                 raise
         finally:
             conn.close()
+
+    @contextmanager
+    def pooled_connection(self) -> Iterator[Any]:
+        """共通認証の store 用に、pool から接続を借りる（#793）。
+
+        `connection()` と同じく、未コミットの変更を持たない（例外時は rollback して返す）。
+        呼び出しの timeout は借りるたびに `connection()` と同じ値を設定する。業務データ・DeepSec の
+        接続には使わない。
+        """
+        oracledb = self._load_oracledb()
+        self._init_client(oracledb)
+        if not self.is_configured():
+            raise OracleAdapterError("Oracle 接続情報が不足しています。")
+        try:
+            conn = _AUTH_CONNECTION_POOL.acquire(_oracle_connect_kwargs(self.settings))
+        except OracleAdapterError:
+            raise
+        except Exception as exc:
+            diagnostics = oracle_connection_diagnostics(exc)
+            logger.error(
+                "%s %s",
+                diagnostics["summary"],
+                diagnostics["suggested_action"],
+                extra={
+                    **diagnostics,
+                    "event": "oracle_connection_failed",
+                    "operation": "acquire",
+                    "pool": _AUTH_CONNECTION_POOL.name,
+                },
+            )
+            raise OracleAdapterError(f"Oracle 接続に失敗しました: {exc}") from exc
+        try:
+            if hasattr(conn, "call_timeout"):
+                conn.call_timeout = int(
+                    max(1.0, float(self.settings.nl2sql_oracle_call_timeout_seconds)) * 1000
+                )
+            yield conn
+        except BaseException:
+            with suppress(Exception):
+                conn.rollback()
+            raise
+        finally:
+            # pool に返す（未コミットの変更は rollback される。切れた接続は pool が捨てる）。
+            with suppress(Exception):
+                conn.close()
 
     @contextmanager
     def user_data_connection(self) -> Iterator[Any]:

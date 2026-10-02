@@ -433,7 +433,7 @@ export function SqlToQuestionPage() {
                 }}
                 rows={9}
                 monospace
-                textareaClassName="min-h-56 min-w-0"
+                textareaClassName="min-w-0"
                 // 下書きは業務プロファイルごとのキー（sql:<id>）に保存する。プロファイルが決まる前に入力させると、
                 // 自動で選ばれた時点でキーが変わって入力が消えるため、決まるまでは入力させない（#455）。
                 disabled={actionBusy || !selectedProfileId}
@@ -514,7 +514,7 @@ export function SqlToQuestionPage() {
                 rows={16}
                 disabled={actionBusy}
                 monospace
-                textareaClassName="min-h-64 min-w-0"
+                textareaClassName="min-w-0"
               />
               {structureItems.length > 0 && <LogicalStructureList items={structureItems} />}
               <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
@@ -562,7 +562,7 @@ export function SqlToQuestionPage() {
                     className="mt-1 font-semibold"
                   />
                 </div>
-                <div className="flex flex-wrap items-center gap-[8px] border-t border-border pt-4">
+                <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
                   <Button type="button" size="lg" loading={questionSqlLoading} disabled={actionBusy || !reverse.question.trim() || loading || !!loadError || !selectedProfile} onClick={() => void generateQuestionSql()} icon={ArrowRightLeft}>
                     {t("sqlToQuestion.actions.questionSql")}
                   </Button>

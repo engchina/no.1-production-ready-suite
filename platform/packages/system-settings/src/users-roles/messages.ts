@@ -79,6 +79,9 @@ export const USERS_ROLES_MESSAGES = {
   "security.roles.noResultsTitle": "条件に一致するロールがありません",
   "security.roles.noSelectionHint": "一覧のロールを選ぶと、状態や基本情報を確認できます。",
   "security.roles.noSelectionTitle": "ロールを選択してください",
+  "security.roles.openPermissions": "権限管理で設定",
+  "security.roles.permissionSummary": "付与している機能権限: {count} 件",
+  "security.roles.permissionSummarySystemAdmin": "SYSTEM_ADMIN はすべての機能権限を持ちます。",
   "security.roles.restore": "復元",
   "security.roles.restoreConfirm":
     "このロールを復元すると、このロールに紐づくユーザーへ、このロール由来の権限が次回リクエストから反映されます。",

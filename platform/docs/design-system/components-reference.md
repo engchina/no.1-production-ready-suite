@@ -473,6 +473,43 @@ export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & Button
 export declare function Button(props: ButtonProps): JSX.Element;
 ```
 
+### ButtonLink（#800）
+
+画面を移るだけの操作を、`Button` と同じ見た目のリンクで出す（README §4「Button」の「画面を移るだけの操作は `ButtonLink`」）。
+
+```ts
+/** react-router の Link をそのまま渡せる（packages/ui はルーターに依存しない）。 */
+export type ButtonLinkComponent = React.ComponentType<{
+  to: string;
+  className?: string;
+  children: React.ReactNode;
+  "aria-label"?: string;
+  "data-testid"?: string;
+}>;
+
+export type ButtonLinkProps = ButtonVariantToneProps & {
+  to: string;
+  /** 省略すると <a href>。 */
+  linkComponent?: ButtonLinkComponent;
+  size?: "sm" | "md" | "lg";
+  icon?: LucideIcon;
+  trailingIcon?: LucideIcon;
+  children: React.ReactNode;
+  className?: string;
+  "aria-label"?: string;
+  testId?: string;
+};
+
+/** 既定の variant は secondary。loading / disabled は持たない。 */
+export declare function ButtonLink(props: ButtonLinkProps): JSX.Element;
+```
+
+```tsx
+<ButtonLink to={`/settings/security/permissions?role=${id}`} linkComponent={Link} size="sm" icon={LockKeyhole}>
+  権限管理で設定
+</ButtonLink>
+```
+
 ---
 
 ## StatusBadge.jsx — 変更
@@ -2238,3 +2275,147 @@ export interface SideSheetProps {
 - 閉じている間も描いたまま（`inert`・`data-state="closed"`）。開いている間は `data-state="open"`。
 - キー操作はナビのドロワーと同じ helper（`focusableIn` / `navDrawerKeyAction`）。閉じるボタンの Tooltip が出ている間の 1 回目の Escape は吹き出しだけを閉じる（README §4「`Tooltip`」）。
 - 単体テストは `packages/ui/tests/side-sheet.test.tsx`、実ブラウザは RAG の `e2e/chat.spec.ts`（375px の開閉・Esc・外側・フォーカスの戻り）。
+
+---
+
+## RunStopButton — **新規**（#805。#413 で RAG に作った部品を移した）
+
+その場で結果を待つ操作（検索・チャットの送信・検索テスト）の「実行」と「停止」を 1 つのボタンで出す部品。規則は UX 契約 buttons.md §3.1「その場の実行と停止」。
+
+```tsx
+import { FieldActionRow, RunStopButton, TextareaField, isSubmitEnter } from "@engchina/production-ready-ui";
+import { SendHorizontal } from "lucide-react";
+
+<FieldActionRow
+  actions={
+    <RunStopButton
+      running={sending}                 // true の間は同じボタンが「停止」
+      onRun={send}
+      onStop={stop}                     // RAG: AbortController で止める / Agent: Run の中止の API
+      runLabel={t("chat.send")}         // 翻訳済み
+      stopLabel={t("chat.stop")}
+      runIcon={SendHorizontal}
+      runDisabled={!draft.trim()}       // aria-disabled（フォーカスを受ける）。停止には効かない
+      size="lg"                         // 並べる入力欄と同じ size（既定 lg）
+      testId="chat-send"
+    />
+  }
+>
+  <TextareaField
+    id="chat-composer" label={t("chat.composer.label")} labelHidden rows={2} value={draft}
+    onKeyDown={(event) => {
+      // 入力欄の Enter は送信だけ（実行中の Enter で停止しない）。IME の確定の Enter では送らない。
+      if (isSubmitEnter(event) && !event.shiftKey) { event.preventDefault(); send(); }
+    }}
+    …
+  />
+</FieldActionRow>
+```
+
+### RunStopButton の props
+
+```ts
+export interface RunStopButtonProps {
+  running: boolean;
+  onRun: () => void;
+  onStop: () => void;
+  runLabel: string;            // 翻訳済み
+  stopLabel: string;           // 翻訳済み
+  runIcon: LucideIcon;         // 停止のアイコンは Square に固定
+  runDisabled?: boolean;       // 実行できない間。aria-disabled（ネイティブの disabled にしない）
+  size?: "sm" | "md" | "lg";   // 既定 lg
+  className?: string;
+  testId?: string;             // data-testid。data-state は "idle" / "running"
+}
+
+// DOM に依存しない判定（単体テスト用にも export）
+export function runStopClickAction(options: { running: boolean; runDisabled?: boolean; clickCount: number }): "run" | "stop" | "ignore";
+export function isRepeatedActivationKey(event: { key: string; repeat?: boolean }): boolean;
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 同じ `<button>` のまま、実行中は `secondary` の「停止」（`Square`）。`loading` は使わない | 要素が替わらないのでフォーカスが残る。処理中のスピナーと経過時間は結果の領域の `ProcessingIndicator` が出す（動くスピナーは 1 つ。messaging §3.7） |
+| 2 つのラベルを同じセルに重ね、見えない方は `invisible` | 「検索テスト」→「停止」で幅が縮まず、位置もずれない。見えない方は読み上げの名前に入らない |
+| ダブルクリックの 2 回目（`detail >= 2`）と押し続けた Enter / Space の繰り返しは無視する | 実行で「停止」に変わった直後に、続けて停止しない |
+| 停止は赤塗り・赤文字にしない | 取り消せる停止で、途中までの内容は残る（buttons.md §3） |
+
+- 単体テストは `packages/ui/tests/run-stop-button.test.tsx`（判定・要素が替わらない・`aria-disabled`・ダブルクリック・Enter の繰り返し）。
+- 実ブラウザは RAG `e2e/chat.spec.ts` / `e2e/search-review.spec.ts` / `e2e/knowledge-base-search-test.spec.ts` / `e2e/answer-progress.spec.ts`、Agent `e2e/chat.spec.ts`（実行中の停止 → `POST /api/runs/{id}/cancel` → 送信に戻る。desktop / 375px、ライト / ダーク）。
+- 製品の置き換え: RAG の `components/RunStopButton.tsx` と `lib/run-stop.ts` は削除した。Agent のチャットの送信（`loading` / `disabled` の `Button`）を置き換えた。
+
+---
+
+## FeedbackControls — **新規**（#805）
+
+回答・引用への評価（役に立った / 役に立たなかった）の部品。RAG の回答・引用の評価と、Agent のチャットの回答の評価・管理者の評価（#774）が同じ部品を使う。保存の API・payload・権限は製品が `onSubmit` で持ち、部品は業務の文言を持たない（`labels`）。
+
+```tsx
+import { FeedbackControls, toast } from "@engchina/production-ready-ui";
+
+<FeedbackControls<FeedbackReason>
+  value={current ? { rating: current.rating, reason: current.reason, comment: current.comment } : null}
+  reasons={REASONS.map((value) => ({ value, label: t(`feedback.reason.${value}`) }))}
+  labels={{
+    question: t("…question"), helpful: t("…helpful"), notHelpful: t("…notHelpful"),
+    savedInline: t("…savedInline"), reasonLegend: t("…reasonLegend"),
+    commentLabel: t("…commentLabel"), commentPlaceholder: t("…commentPlaceholder"),
+    commentCount: (count, max) => t("…commentCount", { count, max }),
+    save: t("…save"), cancel: t("common.cancel"), retry: t("common.retry"), saveError: t("…saveError"),
+  }}
+  getErrorMessage={(error) => (error instanceof ApiError ? error.message : null)}
+  onSubmit={async (submission) => {   // { rating, reason, comment, correctedAnswer }（空は null）
+    await api.saveFeedback(toPayload(submission));
+    toast.success(t("…saved"));        // 成功の Toast は製品が出す
+  }}
+  correctedAnswer                      // 任意:「修正した回答」の欄（RAG の回答の評価）
+  compact                              // 任意: 引用のカードの中の小さな形
+  disabled={loadingCurrent}            // 任意
+  readOnly                             // 任意: 保存済みの評価を見せるだけ
+  commentId="feedback-comment-answer"  // 任意: 欄の id（e2e で使うとき）
+  data-testid="chat-feedback-run-1"
+/>
+```
+
+### FeedbackControls の props
+
+```ts
+export type FeedbackRating = "helpful" | "not_helpful";
+export interface FeedbackControlsValue<R extends string = string> {
+  rating: FeedbackRating; reason?: R | null; comment?: string | null; correctedAnswer?: string | null;
+}
+export interface FeedbackControlsSubmission<R extends string = string> {
+  rating: FeedbackRating; reason: R | null; comment: string | null; correctedAnswer: string | null;
+}
+export interface FeedbackControlsProps<R extends string = string> {
+  value: FeedbackControlsValue<R> | null | undefined;
+  reasons: readonly { value: R; label: string }[];
+  onSubmit: (submission: FeedbackControlsSubmission<R>) => Promise<unknown>; // reject で失敗の表示
+  labels: FeedbackControlsLabels;               // すべて翻訳済み（既定の日本語は持たない）
+  getErrorMessage?: (error: unknown) => string | null | undefined; // 無ければ labels.saveError
+  commentMaxLength?: number;                    // 既定 1000
+  correctedAnswer?: boolean;                    // 「修正した回答」の欄
+  correctedAnswerMaxLength?: number;            // 既定 20000
+  compact?: boolean;
+  disabled?: boolean;
+  readOnly?: boolean;
+  commentId?: string;
+  correctedAnswerId?: string;
+  className?: string;
+  "data-testid"?: string;
+}
+export function isSameFeedback(value, submission): boolean; // 空白を除いて比べ、空文字と null を同じとみなす
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 「役に立った」はすぐ保存、「役に立たなかった」は理由（必須。`FieldLegend required`）・コメント（任意）・修正した回答（任意）をその場で開く | 良い評価は 1 回の操作で済ませ、悪い評価は改善に使える理由を必ず残す |
+| ボタンは `ghost` / 評価済みは `secondary` + `aria-pressed`、`iconOnly`（Tooltip は `aria-label` と同じ文言）。評価済みの 👍 は `text-success-fg`、👎 は `text-danger-fg` | 色だけに頼らず押された状態を `aria-pressed` と枠で示す |
+| 保存済みと同じ内容は送り直さず閉じる | 二重の保存・Toast を出さない |
+| 保存中は押したボタンだけ `loading`（ほかは `disabled`） | 動くスピナーは操作 1 つに 1 つ（messaging §3.7） |
+| 失敗は部品の下に `role="alert"` の文言と「再試行」（同じ内容を送り直す）。次の保存まで残す | 結果は起点の操作の直下に出す（messaging §10）。成功は Toast（製品） |
+| 問い・ボタン・保存済みの表示は 1 行。`compact` は問いを読み上げだけにし、右寄せ・保存済みの表示なし・上の区切り線なし | 引用のカードの中に収める |
+
+- 単体テストは `packages/ui/tests/feedback-controls.test.tsx`（すぐ保存・理由の必須・コメントの整形・修正した回答・同じ評価・失敗と再試行・保存中・`compact`・`readOnly`）。
+- 実ブラウザは RAG `e2e/chat.spec.ts` / `e2e/search-review.spec.ts` / `e2e/feedback.spec.ts` / `e2e/citation-variant-badge.spec.ts`、Agent `e2e/feedback.spec.ts`（チャットの回答の評価・管理者の評価。既存の spec のまま）。
+- 製品の置き換え: RAG の `components/feedback/FeedbackControls.tsx` と Agent の `components/chat/AnswerFeedback.tsx` は、API と文言をつなぐ薄いラッパーになった（見た目・振る舞いは変えない）。

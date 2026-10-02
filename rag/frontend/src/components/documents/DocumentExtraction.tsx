@@ -369,7 +369,7 @@ function ExtractionFieldsPanel({ fields }: { fields: ExtractionField[] }) {
                     lowConfidence ? "bg-warning-subtle text-warning-fg" : "bg-success-subtle text-success-fg"
                   }`}
                 >
-                  {lowConfidence ? <CircleAlert size={11} aria-hidden /> : null}
+                  {lowConfidence ? <CircleAlert size={14} aria-hidden /> : null}
                   {confidenceText(field.confidence)}
                 </span>
               ) : null}

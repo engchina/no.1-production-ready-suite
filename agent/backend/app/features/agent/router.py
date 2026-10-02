@@ -230,7 +230,11 @@ from app.observability import (
     patch_trace_policy,
     trace_exporter_status,
 )
-from app.oracle_connection import oracle_connect_kwargs
+from app.oracle_connection import (
+    close_platform_oracle_pool,
+    oracle_connect_kwargs,
+    platform_oracle_connection,
+)
 from app.security.dependencies import (
     WebSocketAuthRejected,
     actor_roles_for_principal,
@@ -536,6 +540,8 @@ router.include_router(
         get_settings=lambda: get_settings(),
         env_file=lambda: app_settings.PLATFORM_ENV_FILE,
         test_connection=lambda candidate: _test_database_connection(candidate),
+        # 接続先・Wallet を変えたら、古い設定の接続 pool を閉じる（RAG / NL2SQL と同じ。#793）。
+        on_saved=lambda _settings: close_platform_oracle_pool(),
         write_dependencies=[Depends(require_system_settings_write)],
         action_dependencies=[Depends(require_system_settings_write)],
     ),
@@ -545,10 +551,11 @@ router.include_router(
 # ログイン不要の公開 path（`app.security.permissions.PUBLIC_API_PATHS`）。RAG / NL2SQL と同じく、
 # 設定の判定・接続確認に加えて Agent のシステムテーブルの状態を確かめる（#751）。local でも
 # 共通認証のユーザー・ロールは共通 DB にあるため、短絡しない。
+# 接続確認は保存済みの設定で pool から借りる（要求のたびに新しい接続を張らない。#793）。
 router.include_router(
     build_database_status_router(
         get_settings=lambda: get_settings(),
-        test_connection=lambda settings: _test_database_connection(settings),
+        test_connection=lambda settings: _test_database_status_connection(settings),
         schema_probe=lambda settings: _system_schema_probe(settings),
     )
 )
@@ -962,6 +969,29 @@ async def _test_oracle_connection(settings: SimpleNamespace) -> None:
             f"Oracle AI Database の接続テストが {timeout_seconds:g} 秒でタイムアウトしました。"
             "データベースの起動状態、Wallet サービス名、ネットワーク到達性を確認してください。"
         ) from exc
+
+
+async def _test_database_status_connection(settings: Any) -> None:
+    """DB ゲートの接続確認。保存済みの設定の接続を pool から借りて `SELECT 1`（#793）。
+
+    システム設定の「接続テスト」（保存前の候補の値）とは違い、新しい接続を毎回は張らない。
+    pool の接続が切れていれば SELECT が失敗し（unreachable）、その接続は pool が捨てる。
+    """
+    timeout_seconds = _settings_float_from(settings, "oracle_db_test_timeout_seconds", 15.0)
+    try:
+        with fail_after(timeout_seconds):
+            await anyio_to_thread.run_sync(_ping_platform_oracle_sync, settings)
+    except TimeoutError as exc:
+        raise OracleConnectionTimeoutError(
+            f"Oracle AI Database の接続確認が {timeout_seconds:g} 秒でタイムアウトしました。"
+            "データベースの起動状態、Wallet サービス名、ネットワーク到達性を確認してください。"
+        ) from exc
+
+
+def _ping_platform_oracle_sync(settings: Any) -> None:
+    with platform_oracle_connection(settings) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT 1 FROM DUAL")
+        cursor.fetchone()
 
 
 def _test_oracle_connection_sync(settings: SimpleNamespace) -> None:

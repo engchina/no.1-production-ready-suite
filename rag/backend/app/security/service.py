@@ -125,6 +125,9 @@ class SecurityService(AuthService):
         role = super().get_role(role_id)
         return None if role is None else as_role(role)
 
+    def get_roles(self, role_ids: Sequence[str]) -> list[RoleRecord]:
+        return [as_role(role) for role in super().get_roles(role_ids)]
+
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]:
         return [as_role(role) for role in super().list_roles(include_archived=include_archived)]
 

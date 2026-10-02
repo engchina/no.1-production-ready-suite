@@ -1149,7 +1149,7 @@ export function FeedbackManagementPage() {
                     value={selectedAppFeedback.executable_sql || selectedAppFeedback.generated_sql}
                     readOnly
                     rows={5}
-                    textareaClassName="min-h-32 min-w-0 max-w-full"
+                    textareaClassName="min-w-0 max-w-full"
                   />
                   <div className="grid min-w-0 gap-3 sm:grid-cols-2">
                     <div className="rounded-md border border-border bg-surface p-3">
@@ -1178,7 +1178,7 @@ export function FeedbackManagementPage() {
                     value={selectedAppFeedback.feedback_comment}
                     readOnly
                     rows={3}
-                    textareaClassName="min-h-24 min-w-0 max-w-full"
+                    textareaClassName="min-w-0 max-w-full"
                     placeholder={t("feedbackManagement.appFeedback.userFeedbackEmpty")}
                   />
                   <SelectField<FeedbackRating>
@@ -1258,7 +1258,7 @@ export function FeedbackManagementPage() {
                         setReviewErrors((current) => ({ ...current, selectAiResponse: undefined }));
                       }}
                       rows={5}
-                      textareaClassName="min-h-32 min-w-0 max-w-full"
+                      textareaClassName="min-w-0 max-w-full"
                       placeholder={t("feedbackManagement.appFeedback.selectAiResponsePlaceholder")}
                     />
                   )}

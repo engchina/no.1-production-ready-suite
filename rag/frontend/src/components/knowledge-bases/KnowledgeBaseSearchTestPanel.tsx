@@ -3,7 +3,6 @@
 import { FlaskConical, Search as SearchIcon, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { RunStopButton } from "@/components/RunStopButton";
 import { AnswerProgress } from "@/components/search/AnswerProgress";
 import { CitationCard } from "@/components/search/CitationCard";
 import {
@@ -13,6 +12,7 @@ import {
   CardTitle,
   FieldActionRow,
   TextField,
+  RunStopButton,
 } from "@engchina/production-ready-ui";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { ApiError, type RetrievedChunk } from "@/lib/api";

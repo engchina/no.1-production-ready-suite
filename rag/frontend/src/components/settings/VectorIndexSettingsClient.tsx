@@ -232,7 +232,7 @@ export function VectorIndexSettingsClient() {
           description={t("settings.vectorIndex.reindexSql.description")}
           value={settings.reindex_sql}
           copyLabel={t("settings.vectorIndex.reindexSql.copy")}
-          previewHeightClassName="h-44"
+          previewRows={7}
         />
       ) : null}
     </PageBody>
