@@ -55,8 +55,8 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 
 | グループ | コード |
 |---|---|
-| Control Plane | `menu.agents` / `menu.skills` / `menu.runtimes` / `menu.runs` / `menu.approvals` / `menu.audit` / `menu.plugin_marketplaces` |
-| 改善・運用 | `menu.evaluation`（品質評価。#776。評価の Run は始めた利用者の Run なので、業務 Agent の対象範囲も確かめる） |
+| Control Plane | `menu.chat`（チャット。`agent.runs.operate` が含む。#768）/ `menu.agents` / `menu.skills` / `menu.runtimes` / `menu.runs` / `menu.approvals` / `menu.audit` / `menu.plugin_marketplaces` |
+| 改善・運用 | `menu.feedback`（フィードバック。#774。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ。チャットの回答の評価は `agent.runs.operate` を持つ会話の本人が付け、管理者の評価（`PUT /api/runs/{id}/admin-review`）は `agent.admin` がだれの回答にも本人の評価とは別に付ける） / `menu.evaluation`（品質評価。#776。評価の Run は始めた利用者の Run なので、業務 Agent の対象範囲も確かめる） / `menu.usage`（利用状況。#772。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ） |
 | 運用設定 | `menu.settings_system_tables` / `menu.settings_external_mcp`（MCP 接続）/ `menu.settings_api_keys`（API キー。#778。作成・削除は `agent.admin`）/ `menu.settings_runtime_snapshot` |
 | システム設定（3 製品共通） | `menu.settings_oci` / `menu.settings_upload_storage` / `menu.settings_model` / `menu.settings_database` / `menu.settings_appearance` |
 | ユーザーとロール（3 製品共通） | `menu.security_users` / `menu.security_roles` |
@@ -78,10 +78,12 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 | API | 必要な権限（いずれか） | router の追加の判定 |
 |---|---|---|
 | `GET /runs` | `menu.runs` / `menu.approvals` | viewer 以上・対象範囲で絞る |
+| `POST /agents/{id}/publish`・`POST /agents/{id}/versions/{version}/restore`（#770） | `agent.admin` | 下書きで実行（`POST /runs` の `draft=true`）も `agent.admin` だけ |
 | `GET /runs/{id}`・`/audit`・`/artifacts*` | `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上（監査は auditor）・範囲外は 403 |
 | `GET /runs/{id}/events`（SSE） | `menu.runs` / `menu.approvals` | viewer 以上・範囲外は 403 |
 | `WS /runs/{id}/events/ws` | `menu.runs` / `menu.approvals` | viewer 以上・範囲外は close 1008 |
 | `POST /runs`・`/runs/{id}/cancel`・`resume`・`replay` | `agent.runs.operate` / `agent.admin` | operator・範囲外は 403 |
+| `GET /threads`・`GET /threads/{thread_id}`（チャットの会話。#768） | `menu.chat` | 作った利用者の会話だけ（別の利用者の会話は 404）・範囲外の Agent の会話は出さない |
 | `POST /approvals/{id}/decision` | `agent.approvals.decide` / `agent.admin` | approver・範囲外は 403・決定者は利用者 |
 | `GET /audit/tool-calls(.csv)` | `menu.audit` | auditor・範囲で絞る |
 | `GET /agents` | `menu.agents` / `menu.runs` / `menu.settings_runtime_snapshot` | 利用できるエージェントだけ |

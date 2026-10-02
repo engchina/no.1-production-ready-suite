@@ -2,6 +2,7 @@ import {
   BadgeCheck,
   Blocks,
   Bot,
+  ChartColumn,
   CalendarClock,
   ClipboardList,
   Container,
@@ -9,10 +10,12 @@ import {
   FlaskConical,
   KeySquare,
   LockKeyhole,
+  MessagesSquare,
   PlayCircle,
   PlugZap,
   Store,
   TableProperties,
+  ThumbsUp,
   type LucideIcon,
 } from "lucide-react";
 
@@ -61,12 +64,14 @@ const USER_ROLE_MENU_PERMISSIONS = {
 /**
  * Agent コンソールのサイドナビ構成（共有 Sidebar が消費する）。並び方は NL2SQL / RAG と同じ
  * （製品のセクション → 改善・運用 → セキュリティ設定 → 共通のユーザーとロール → 運用設定 →
- * 共通のシステム設定。#658 / #776）。
+ * 共通のシステム設定。#658 / #774 / #776）。
  */
 export const NAV_SECTIONS: NavSection[] = [
   {
     titleKey: "nav.section.controlPlane",
     items: [
+      // 業務利用者の入口（#768。RAG のチャットと同じアイコン）。
+      { href: APP_ROUTES.chat, labelKey: "nav.chat", icon: MessagesSquare, permission: MENU_PERMISSIONS.chat },
       { href: APP_ROUTES.agents, labelKey: "nav.agents", icon: Bot, permission: MENU_PERMISSIONS.agents },
       {
         href: APP_ROUTES.skills,
@@ -95,8 +100,9 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    // 業務 Agent の品質を確かめて直す画面。RAG / NL2SQL の「改善・運用」（nav.section.improve）と
-    // 同じ名前・同じ位置・同じアイコン（品質評価は FlaskConical）にする（#658 / #776）。
+    // 業務 Agent の回答と品質を確かめて直す画面。RAG / NL2SQL の「改善・運用」（nav.section.improve）と
+    // 同じ名前・同じ位置・同じ並び・同じアイコン（品質評価は FlaskConical、フィードバックは ThumbsUp）にする
+    // （#658 / #772 / #774 / #776）。
     titleKey: "nav.section.improve",
     items: [
       {
@@ -105,6 +111,9 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: FlaskConical,
         permission: MENU_PERMISSIONS.evaluation,
       },
+      { href: APP_ROUTES.feedback, labelKey: "nav.feedback", icon: ThumbsUp, permission: MENU_PERMISSIONS.feedback },
+      // 利用状況（#772）。RAG / NL2SQL に無い項目なので、共通の 2 項目の後ろに置く。
+      { href: APP_ROUTES.usage, labelKey: "nav.usage", icon: ChartColumn, permission: MENU_PERMISSIONS.usage },
     ],
   },
   {

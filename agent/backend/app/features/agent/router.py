@@ -130,6 +130,11 @@ from app.features.agent.evaluation_excel import (
     parse_cases_xlsx,
     template_xlsx,
 )
+from app.features.agent.feedback import (
+    FEEDBACK_PERIOD_DAYS,
+    FeedbackReport,
+    build_feedback_report,
+)
 from app.features.agent.mcp_server import build_agent_mcp_server
 from app.features.agent.plugins import (
     MarketplaceListing,
@@ -145,20 +150,30 @@ from app.features.agent.plugins import (
 )
 from app.features.agent.runtime import (
     BUILTIN_RUNTIME_ID,
+    AgentNotPublishedError,
     AgentProfile,
     AgentProfilePatch,
+    AgentPublishRequest,
     AgentRuntimeSnapshot,
     AgentRuntimeSnapshotValidation,
     AgentsData,
     ApprovalDecisionRequest,
     Artifact,
     ArtifactsData,
+    FeedbackRating,
+    FeedbackReason,
     RunCreateRequest,
     RunEvent,
+    RunFeedback,
+    RunFeedbackRequest,
+    RunNotRatableError,
     RunsData,
     RunState,
     RunStatus,
     RuntimeToolCallAuditData,
+    ThreadData,
+    ThreadNotFoundError,
+    ThreadsData,
     builtin_resume_pending,
     runtime_repository,
 )
@@ -169,6 +184,7 @@ from app.features.agent.skills import (
     reload_declared_skills,
     skill_registry,
 )
+from app.features.agent.templates import AGENT_TEMPLATES, AgentTemplatesData
 from app.features.agent.tools import (
     MCP_TOOL_SEPARATOR,
     ExternalMcpToolsData,
@@ -180,6 +196,13 @@ from app.features.agent.tools import (
     ToolResult,
     list_mcp_connection_tools,
     tool_registry,
+)
+from app.features.agent.usage import (
+    DEFAULT_TIMEZONE,
+    USAGE_PERIOD_DAYS,
+    UsageReport,
+    build_usage_report,
+    resolve_timezone,
 )
 from app.features.agent.user_names import user_display_names
 from app.observability import (
@@ -1518,16 +1541,162 @@ async def create_run(
                 status_code=409,
                 detail={"code": "agent_disabled", "message": "無効な業務 Agent は実行できません。"},
             )
+        # 下書きで試すのは Agent 管理（admin）だけ（#770）。
+        if run_request.draft and not _policy_has_roles(_actor_policy(request), {"admin"}):
+            raise HTTPException(
+                status_code=403,
+                detail="下書きで実行できるのは Agent 管理の権限がある利用者だけです。",
+            )
         # 実行は組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI。#754）。
         run = runtime_repository.create_builtin_run(
             run_request, created_by_user_uuid=_run_creator_user_uuid(request)
         )
         _schedule_builtin_run(run)
         return ApiResponse(data=run)
+    except AgentNotPublishedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "agent_unpublished",
+                "message": (
+                    "公開していない業務 Agent は実行できません。"
+                    "公開するか、下書きで実行してください。"
+                ),
+            },
+        ) from exc
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="agent not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/threads", response_model=ApiResponse[ThreadsData])
+async def list_threads(
+    request: Request,
+    agent_id: str | None = None,
+) -> ApiResponse[ThreadsData]:
+    """ログイン中の利用者の会話（チャット。#768）。使えなくなった Agent の会話は出さない。"""
+    policy = _actor_policy(request)
+    threads = [
+        thread
+        for thread in runtime_repository.list_threads(
+            user_uuid=_run_creator_user_uuid(request), agent_id=agent_id
+        )
+        if _policy_allows_agent(policy, thread.agent_id)
+    ]
+    return ApiResponse(data=ThreadsData(threads=threads))
+
+
+@router.get("/threads/{thread_id}", response_model=ApiResponse[ThreadData])
+async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadData]:
+    """会話の Run（古い順）。作った利用者だけが読める。"""
+    try:
+        thread = runtime_repository.get_thread(thread_id, user_uuid=_run_creator_user_uuid(request))
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
+    _require_agent_access(request, thread.agent_id)
+    return ApiResponse(data=thread)
+
+
+@router.put("/runs/{run_id}/feedback", response_model=ApiResponse[RunState])
+async def put_run_feedback(
+    run_id: str,
+    feedback: RunFeedbackRequest,
+    request: Request,
+    _: None = Depends(require_operator),
+) -> ApiResponse[RunState]:
+    """チャットの回答への評価（#774）。
+
+    会話をした利用者（Run の作成者）だけが付け、付け直すと上書きする。
+    """
+    try:
+        run = runtime_repository.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    _require_agent_access(request, run.agent_id)
+    user_uuid = _run_creator_user_uuid(request)
+    if run.created_by_user_uuid is None or run.created_by_user_uuid != user_uuid:
+        raise HTTPException(
+            status_code=403, detail="フィードバックは、この会話をした利用者だけが付けられます。"
+        )
+    try:
+        updated = runtime_repository.set_run_feedback(
+            run_id,
+            RunFeedback(
+                rating=feedback.rating,
+                reason=feedback.reason,
+                comment=feedback.comment,
+                user_uuid=user_uuid,
+            ),
+        )
+    except RunNotRatableError as exc:
+        raise HTTPException(
+            status_code=409, detail="回答が出た Run にだけフィードバックを付けられます。"
+        ) from exc
+    return ApiResponse(data=updated)
+
+
+@router.put("/runs/{run_id}/admin-review", response_model=ApiResponse[RunState])
+async def put_run_admin_review(
+    run_id: str,
+    review: RunFeedbackRequest,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[RunState]:
+    """管理者の評価（#774）。Agent 管理の権限でだれの回答にも付けられ、本人の評価とは別に残す。"""
+    try:
+        run = runtime_repository.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    _require_agent_access(request, run.agent_id)
+    try:
+        updated = runtime_repository.set_run_feedback(
+            run_id,
+            RunFeedback(
+                rating=review.rating,
+                reason=review.reason,
+                comment=review.comment,
+                user_uuid=_run_creator_user_uuid(request),
+            ),
+            admin=True,
+        )
+    except RunNotRatableError as exc:
+        raise HTTPException(
+            status_code=409, detail="回答が出た Run にだけ評価を付けられます。"
+        ) from exc
+    return ApiResponse(data=updated)
+
+
+@router.get("/feedback", response_model=ApiResponse[FeedbackReport])
+async def get_feedback_report(
+    request: Request,
+    days: int = Query(default=30),
+    agent_id: str | None = Query(default=None, max_length=200),
+    rating: FeedbackRating | None = None,
+    reason: FeedbackReason | None = None,
+) -> ApiResponse[FeedbackReport]:
+    """フィードバックの集計と一覧（#774）。権限は middleware のメニュー権限（`menu.feedback`）。
+
+    対象は Run の一覧と同じく利用できる業務 Agent の Run だけ。
+    """
+    if days not in FEEDBACK_PERIOD_DAYS:
+        raise HTTPException(status_code=422, detail="期間は 7・30・90 日のどれかにしてください。")
+    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    report = await run_in_threadpool(
+        build_feedback_report,
+        runs,
+        days=days,
+        now=datetime.now(UTC),
+        agent_id=agent_id or None,
+        rating=rating,
+        reason=reason,
+        agent_names=agent_names,
+        user_names=user_display_names,
+    )
+    return ApiResponse(data=report)
 
 
 @router.get("/runs/{run_id}", response_model=ApiResponse[RunState])
@@ -1556,6 +1725,12 @@ async def get_run_audit(
         raise HTTPException(status_code=404, detail="run not found") from exc
     _require_agent_access(request, run.agent_id)
     return ApiResponse(data=_run_audit_data(run))
+
+
+@router.get("/agent-templates", response_model=ApiResponse[AgentTemplatesData])
+async def list_agent_templates() -> ApiResponse[AgentTemplatesData]:
+    """業種テンプレート（#780）。業務 Agent の新規作成の画面がフォームに入れる出発点。"""
+    return ApiResponse(data=AgentTemplatesData(templates=list(AGENT_TEMPLATES)))
 
 
 def _automation_for_actor(request: Request, automation_id: str) -> Automation:
@@ -1919,6 +2094,37 @@ async def delete_evaluation(job_id: str, request: Request) -> ApiResponse[None]:
     return ApiResponse(data=None)
 
 
+@router.get("/usage", response_model=ApiResponse[UsageReport])
+async def get_usage_report(
+    request: Request,
+    days: int = Query(default=30),
+    timezone: str = Query(default=DEFAULT_TIMEZONE, max_length=64),
+) -> ApiResponse[UsageReport]:
+    """利用状況（#772）。利用できる業務 Agent の Run のモデル利用量を集計する。
+
+    権限は middleware のメニュー権限（`menu.usage`）で確かめる。日は `timezone`（画面の
+    ブラウザの IANA 名）で区切る。
+    """
+    if days not in USAGE_PERIOD_DAYS:
+        raise HTTPException(status_code=422, detail="期間は 7・30・90 日のどれかにしてください。")
+    try:
+        tz = resolve_timezone(timezone)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    report = await run_in_threadpool(
+        build_usage_report,
+        runs,
+        days=days,
+        now=datetime.now(UTC),
+        tz=tz,
+        agent_names=agent_names,
+        user_names=user_display_names,
+    )
+    return ApiResponse(data=report)
+
+
 @router.get("/audit/tool-calls", response_model=ApiResponse[ToolCallAuditData])
 async def list_tool_call_audit(
     request: Request,
@@ -2211,10 +2417,53 @@ async def create_agent(
     agent: AgentProfile,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentProfile]:
+    # 画面・API で作る Agent は下書きから始める（公開するまで利用者の Run には使えない。#770）。
+    # 版の項目は送られても使わない。
+    draft = agent.model_copy(
+        update={"versioned": True, "versions": [], "published_version": None, "source": "runtime"}
+    )
     try:
-        return ApiResponse(data=runtime_repository.create_agent(agent))
+        return ApiResponse(data=runtime_repository.create_agent(draft))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/agents/{agent_id}/publish", response_model=ApiResponse[AgentProfile])
+async def publish_agent(
+    agent_id: str,
+    payload: AgentPublishRequest,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[AgentProfile]:
+    """下書きを新しい版として公開する（#770）。利用者の Run はこの版で実行する。"""
+    try:
+        agent = runtime_repository.publish_agent(
+            agent_id, note=payload.note, published_by=_actor_display_name(request)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="agent not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ApiResponse(data=agent)
+
+
+@router.post(
+    "/agents/{agent_id}/versions/{version}/restore", response_model=ApiResponse[AgentProfile]
+)
+async def restore_agent_version(
+    agent_id: str,
+    version: int,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[AgentProfile]:
+    """前の版を公開し直し、下書きもその内容にする（#770）。"""
+    try:
+        agent = runtime_repository.restore_agent_version(
+            agent_id, version, published_by=_actor_display_name(request)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
+    return ApiResponse(data=agent)
 
 
 @router.patch("/agents/{agent_id}", response_model=ApiResponse[AgentProfile])

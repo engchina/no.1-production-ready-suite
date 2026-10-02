@@ -10,6 +10,7 @@
 type Json = Record<string, unknown>;
 
 export const MENU_PERMISSION_CODES = [
+  "menu.chat",
   "menu.agents",
   "menu.skills",
   "menu.runtimes",
@@ -19,6 +20,8 @@ export const MENU_PERMISSION_CODES = [
   "menu.audit",
   "menu.plugin_marketplaces",
   "menu.evaluation",
+  "menu.feedback",
+  "menu.usage",
   "menu.security_permissions",
   "menu.security_users",
   "menu.security_roles",
@@ -44,6 +47,7 @@ export const CAPABILITY_PERMISSION_CODES = [
 export const ALL_PERMISSION_CODES: string[] = [...MENU_PERMISSION_CODES, ...CAPABILITY_PERMISSION_CODES];
 
 const ADMIN_MENUS = [
+  "menu.chat",
   "menu.agents",
   "menu.skills",
   "menu.runtimes",
@@ -53,6 +57,8 @@ const ADMIN_MENUS = [
   "menu.audit",
   "menu.plugin_marketplaces",
   "menu.evaluation",
+  "menu.feedback",
+  "menu.usage",
   "menu.settings_system_tables",
   "menu.settings_external_mcp",
   "menu.settings_api_keys",
@@ -65,6 +71,7 @@ const ADMIN_MENUS = [
 ];
 
 const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string, label: string]> = {
+  "menu.chat": ["Control Plane", "チャット"],
   "menu.agents": ["Control Plane", "業務 Agent"],
   "menu.skills": ["Control Plane", "スキル (Skills)"],
   "menu.runtimes": ["Control Plane", "Runtime"],
@@ -74,6 +81,8 @@ const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string
   "menu.audit": ["Control Plane", "監査"],
   "menu.plugin_marketplaces": ["Control Plane", "マーケットプレイス"],
   "menu.evaluation": ["改善・運用", "品質評価"],
+  "menu.feedback": ["改善・運用", "フィードバック"],
+  "menu.usage": ["改善・運用", "利用状況"],
   "menu.security_permissions": ["セキュリティ設定", "権限管理"],
   "menu.settings_system_tables": ["運用設定", "システムテーブル"],
   "menu.settings_external_mcp": ["運用設定", "MCP 接続"],
@@ -107,8 +116,8 @@ export const PERMISSION_CATALOG: Json[] = [
     code: "agent.runs.operate",
     group: CAPABILITY_GROUP,
     label: "Run の実行・操作（operator）",
-    description: "利用できるエージェントで Run の作成・取消・再開・再実行ができます。",
-    implies: ["menu.runs"],
+    description: "利用できるエージェントで Run の作成・取消・再開・再実行と、チャットができます。",
+    implies: ["menu.runs", "menu.chat"],
   },
   {
     code: "agent.approvals.decide",

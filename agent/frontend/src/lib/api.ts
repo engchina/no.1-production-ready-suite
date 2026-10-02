@@ -185,8 +185,30 @@ export interface RunState {
   artifacts: Artifact[];
   pending_tool_calls: ToolCall[];
   metadata: Record<string, unknown>;
+  /** Run を作った利用者（共通認証の user_uuid）。 */
+  created_by_user_uuid?: string | null;
+  /** 会話（スレッド。#768）。チャットの 1 往復が 1 Run。 */
+  thread_id?: string | null;
+  /** 回答への評価（#774）。評価していない Run は null / 無し。 */
+  feedback?: RunFeedback | null;
+  /** 管理者の評価（本人の評価とは別。#774）。 */
+  admin_review?: RunFeedback | null;
+  /** モデルの利用量（#772）。モデルを呼ぶ前の Run・記録を始める前の Run は null / 無し。 */
+  usage?: RunUsage | null;
   created_at: string;
   updated_at: string;
+}
+
+/** 業種テンプレート（#780）。業務 Agent の新規作成のフォームに入れる出発点。 */
+export interface AgentTemplate {
+  id: string;
+  category: string;
+  name: string;
+  description: string;
+  instructions: string;
+  skill_ids: string[];
+  sample_questions: string[];
+  evaluation_cases: { question: string; expected: string }[];
 }
 
 /** 品質評価のケース（#776）。`id` を省くと `case-<番号>`。 */
@@ -393,6 +415,43 @@ export interface AutomationFired {
   message: string;
 }
 
+/** Run が使ったモデルの量（承認待ちからの再開を含めた累計。#772）。 */
+export interface RunUsage {
+  model: string;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+/** 利用状況の集計の 1 行（#772）。 */
+export interface UsageTotals {
+  runs: number;
+  /** 利用量を記録した Run（記録を始める前の Run・モデルを呼ぶ前に止まった Run は含まない）。 */
+  runs_with_usage: number;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+export type UsagePeriodDays = 7 | 30 | 90;
+
+export interface UsageReport {
+  days: UsagePeriodDays;
+  timezone: string;
+  since: string;
+  until: string;
+  totals: UsageTotals;
+  /** 直前の同じ長さの期間。 */
+  previous: UsageTotals;
+  by_agent: (UsageTotals & { agent_id: string; agent_name: string })[];
+  by_user: (UsageTotals & { user_uuid: string | null; display_name: string })[];
+  by_model: (UsageTotals & { model: string })[];
+  /** 期間のすべての日（古い順。Run の無い日も 0 で入る）。 */
+  by_day: (UsageTotals & { day: string })[];
+}
+
 export interface ToolAuditRecord {
   step_id: string;
   tool_name: string;
@@ -473,6 +532,11 @@ export interface AgentProfile {
   /** 組み込み Runtime で使うモデル（空なら既定のテキストモデル。#754）。 */
   model_id?: string;
   migration_required: boolean;
+  /** 公開した版（#770）。利用者の Run は公開中の版（published_version）で実行する。 */
+  versions: AgentVersion[];
+  published_version: number | null;
+  /** 下書きに公開していない変更があるか（公開した版が無いときも true）。 */
+  unpublished_changes: boolean;
   tool_names?: string[];
   enabled: boolean;
   created_at: string;
@@ -716,10 +780,130 @@ export interface RuntimeSnapshotImportPayload {
   reason?: string | null;
 }
 
+/** 公開した業務 Agent の版（#770）。 */
+export interface AgentVersion {
+  version: number;
+  name: string;
+  description: string;
+  instructions: string;
+  skill_ids: string[];
+  model_id: string;
+  note: string;
+  published_at: string;
+  published_by?: string | null;
+}
+
 export interface CreateRunPayload {
   goal: string;
   agent_id?: string;
   metadata?: Record<string, unknown>;
+  /** 公開前の下書きで実行する（Agent 管理の権限が要る。#770）。 */
+  draft?: boolean;
+  /** 続ける会話（#768）。省略すると新しい会話を始める。 */
+  thread_id?: string;
+}
+
+/** チャットの会話の一覧の 1 件（#768）。 */
+/** 回答の評価（RAG と同じ値。#774）。 */
+export type FeedbackRating = "helpful" | "not_helpful";
+
+/** 役に立たなかった理由（表示の順。#774）。 */
+export const FEEDBACK_REASONS = [
+  "incorrect",
+  "incomplete",
+  "not_relevant",
+  "answer_untrusted",
+  "ambiguous_question",
+  "wrong_action",
+] as const;
+export type FeedbackReason = (typeof FEEDBACK_REASONS)[number];
+
+export interface RunFeedback {
+  rating: FeedbackRating;
+  reason: FeedbackReason | null;
+  comment: string;
+  user_uuid: string | null;
+  updated_at: string;
+}
+
+export interface RunFeedbackPayload {
+  rating: FeedbackRating;
+  reason?: FeedbackReason;
+  comment?: string;
+}
+
+export type FeedbackPeriodDays = 7 | 30 | 90;
+
+export interface FeedbackSummary {
+  total: number;
+  helpful: number;
+  not_helpful: number;
+  /** 評価が 0 件のときは null。 */
+  helpful_rate: number | null;
+  reason_counts: { reason: FeedbackReason; count: number }[];
+  /** 管理者の評価の件数と、そのうち役に立たなかった件数。 */
+  admin_reviewed: number;
+  admin_not_helpful: number;
+}
+
+export interface FeedbackItem {
+  run_id: string;
+  thread_id: string | null;
+  agent_id: string;
+  agent_name: string;
+  /** 会話の本人（Run の作成者）。 */
+  user_uuid: string | null;
+  display_name: string;
+  question: string;
+  answer: string;
+  /** 本人の評価・管理者の評価（どちらかは必ずある）。 */
+  feedback: RunFeedback | null;
+  admin_review: RunFeedback | null;
+  reviewer_display_name: string;
+  /** 新しい方の評価の日時。 */
+  updated_at: string;
+}
+
+export interface FeedbackReport {
+  days: FeedbackPeriodDays;
+  since: string;
+  until: string;
+  summary: FeedbackSummary;
+  /** 直前の同じ長さの期間。 */
+  previous: FeedbackSummary;
+  /** 絞り込みに合う評価（新しい順。上限 500 件）。 */
+  items: FeedbackItem[];
+  /** 絞り込みに合う評価の件数。 */
+  matched: number;
+}
+
+export interface FeedbackFilters {
+  days: FeedbackPeriodDays;
+  agentId?: string;
+  rating?: FeedbackRating;
+  reason?: FeedbackReason;
+}
+
+export interface ThreadSummary {
+  thread_id: string;
+  agent_id: string;
+  /** 最初の質問の 1 行目。 */
+  title: string;
+  run_count: number;
+  last_status: RunState["status"];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ThreadsData {
+  threads: ThreadSummary[];
+}
+
+export interface ThreadData {
+  thread_id: string;
+  agent_id: string;
+  /** 会話の Run（古い順）。 */
+  runs: RunState[];
 }
 
 /** 組み込み Runtime で選べるモデル（システム設定 > モデル の登録モデル。#754）。 */
@@ -953,6 +1137,42 @@ export const agentApi = {
   // 組み込み Runtime の状態（SDK の版・既定のモデル・選べるモデル。#754）。
   getRuntimeStatus: () => request<BuiltinRuntimeStatus>("/api/runtime/status"),
   listRuns: () => request<{ runs: RunState[] }>("/api/runs"),
+  publishAgent: (agentId: string, note = "") =>
+    request<AgentProfile>(`/api/agents/${encodeURIComponent(agentId)}/publish`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  restoreAgentVersion: (agentId: string, version: number) =>
+    request<AgentProfile>(
+      `/api/agents/${encodeURIComponent(agentId)}/versions/${version}/restore`,
+      { method: "POST" },
+    ),
+  listThreads: (agentId?: string) =>
+    request<ThreadsData>(
+      `/api/threads${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""}`,
+    ),
+  /** チャットの回答への評価（#774）。会話をした利用者だけ。付け直すと上書きする。 */
+  putRunFeedback: (runId: string, payload: RunFeedbackPayload) =>
+    request<RunState>(`/api/runs/${encodeURIComponent(runId)}/feedback`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  /** 管理者の評価（#774。Agent 管理の権限）。 */
+  putRunAdminReview: (runId: string, payload: RunFeedbackPayload) =>
+    request<RunState>(`/api/runs/${encodeURIComponent(runId)}/admin-review`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  /** フィードバックの集計と一覧（#774）。 */
+  getFeedbackReport: (filters: FeedbackFilters) => {
+    const query = new URLSearchParams({ days: String(filters.days) });
+    if (filters.agentId) query.set("agent_id", filters.agentId);
+    if (filters.rating) query.set("rating", filters.rating);
+    if (filters.reason) query.set("reason", filters.reason);
+    return request<FeedbackReport>(`/api/feedback?${query.toString()}`);
+  },
+  getThread: (threadId: string) =>
+    request<ThreadData>(`/api/threads/${encodeURIComponent(threadId)}`),
   createRun: (payload: CreateRunPayload) =>
     request<RunState>("/api/runs", {
       method: "POST",
@@ -961,6 +1181,7 @@ export const agentApi = {
   getRun: (runId: string) => request<RunState>(`/api/runs/${runId}`),
   getRunAudit: (runId: string) =>
     request<RunAuditData>(`/api/runs/${runId}/audit`),
+  listAgentTemplates: () => request<{ templates: AgentTemplate[] }>("/api/agent-templates"),
   /** 自動実行（#784）。 */
   listAutomations: () => request<{ automations: Automation[]; persistent: boolean }>("/api/automations"),
   getAutomation: (automationId: string) =>
@@ -1013,6 +1234,9 @@ export const agentApi = {
     request<EvaluationJob>(`/api/evaluations/${encodeURIComponent(jobId)}/cancel`, { method: "POST" }),
   deleteEvaluation: (jobId: string) =>
     request<null>(`/api/evaluations/${encodeURIComponent(jobId)}`, { method: "DELETE" }),
+  /** 利用状況（#772）。日は画面のブラウザのタイムゾーンで区切る。 */
+  getUsageReport: (days: UsagePeriodDays, timezone: string) =>
+    request<UsageReport>(`/api/usage?${new URLSearchParams({ days: String(days), timezone }).toString()}`),
   listToolCallAudit: (filters: ToolCallAuditFilters) =>
     request<ToolCallAuditData>(`/api/audit/tool-calls${auditQuery(filters)}`),
   /** 監査 CSV。Cookie セッションで取得し、401 / 403 は他の API と同じく通知する（#215）。 */
