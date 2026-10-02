@@ -16,6 +16,7 @@ from pr_system_settings import model as shared_model
 from pr_system_settings.model import (
     ENTERPRISE_AI_API_KEY_ENV,
     ENTERPRISE_AI_SECONDARY_API_KEY_ENV,
+    ENTERPRISE_AI_TERTIARY_API_KEY_ENV,
     EnterpriseAiConfiguredModel,
     ModelSecretStateMixin,
     ModelSettingsSection,
@@ -36,6 +37,9 @@ class FakeSettings(ModelSecretStateMixin):
     oci_enterprise_ai_secondary_endpoint: str = ""
     oci_enterprise_ai_secondary_project_ocid: str = ""
     oci_enterprise_ai_secondary_api_key: str = ""
+    oci_enterprise_ai_tertiary_endpoint: str = ""
+    oci_enterprise_ai_tertiary_project_ocid: str = ""
+    oci_enterprise_ai_tertiary_api_key: str = ""
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     oci_enterprise_ai_default_text_model: str = ""
     oci_enterprise_ai_default_vision_model: str = ""
@@ -94,6 +98,7 @@ PARSER_SECTION = ModelSettingsSection(
 def _no_process_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ENTERPRISE_AI_API_KEY_ENV, raising=False)
     monkeypatch.delenv(ENTERPRISE_AI_SECONDARY_API_KEY_ENV, raising=False)
+    monkeypatch.delenv(ENTERPRISE_AI_TERTIARY_API_KEY_ENV, raising=False)
     monkeypatch.delenv(PARSER_KEY_ENV, raising=False)
 
 

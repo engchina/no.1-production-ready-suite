@@ -140,6 +140,48 @@ describe("buildSectionSavePayload（接続。#533 / #542）", () => {
   });
 });
 
+describe("buildSectionSavePayload（ターシャリ接続。#786）", () => {
+  const tertiary = {
+    connection_id: "tertiary" as const,
+    endpoint: "https://api.openai.com/v1",
+    project_ocid: "",
+    api_key: "",
+    has_api_key: true,
+    clear_api_key: false,
+  };
+  const withTertiary: ModelSettingsPayload = {
+    ...baseline,
+    enterprise_ai: {
+      ...baseline.enterprise_ai,
+      connections: [...baseline.enterprise_ai.connections, tertiary],
+      models: [{ ...baseline.enterprise_ai.models[0]!, connection_id: "tertiary" }],
+    },
+  };
+
+  it("ターシャリ接続を使う登録モデルはそのまま送り、Project OCID は空のまま送る", () => {
+    const payload = buildSectionSavePayload(withTertiary, withTertiary, "enterprise_models");
+    expect(payload.enterprise_ai.models[0]?.connection_id).toBe("tertiary");
+    expect(payload.enterprise_ai.connections.map((c) => c.connection_id)).toEqual([
+      "primary",
+      "tertiary",
+    ]);
+    expect(payload.enterprise_ai.connections[1]?.project_ocid).toBe("");
+  });
+
+  it("ターシャリ接続を削除すると、使っていた保存済みのモデルをプライマリ接続に移す", () => {
+    const draft: ModelSettingsPayload = {
+      ...withTertiary,
+      enterprise_ai: {
+        ...withTertiary.enterprise_ai,
+        connections: [...baseline.enterprise_ai.connections],
+      },
+    };
+    const payload = buildSectionSavePayload(withTertiary, draft, "enterprise_connection");
+    expect(payload.enterprise_ai.connections.map((c) => c.connection_id)).toEqual(["primary"]);
+    expect(payload.enterprise_ai.models[0]?.connection_id).toBe("primary");
+  });
+});
+
 describe("ModelSettingsPage", () => {
   it("読み込み中は状態表示を出す", () => {
     const pending = () => new Promise<never>(() => undefined);

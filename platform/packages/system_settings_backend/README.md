@@ -16,8 +16,8 @@
 
 各製品は router を include し、製品ごとの差（Settings の取得、共通 `.env` の場所、書込み権限・操作権限の依存関係）を引数で渡す。
 システム設定の保存先は3製品共通の `platform/.env`（`PLATFORM_*`。#211）で、製品は `platform_env_file(BACKEND_DIR)` の値を `env_file` に渡す。
-モデル設定の `model-settings.json` と API key（`PLATFORM_OCI_ENTERPRISE_AI_API_KEY`、セカンダリ接続は `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY`）も共有し、製品固有の節の secret は `section_env_file`（製品の `backend/.env`）へ保存する。
-OCI Enterprise AI の接続はプライマリ接続とセカンダリ接続の 2 つまでで、モデルを呼ぶ製品は `enterprise_ai_connection_for_model(settings, model_id)` でモデルの接続（Endpoint・Project・API key）を引く（#533 / #542。[platform/README.md](../../README.md) の「OCI Enterprise AI のプライマリ接続・セカンダリ接続」）。
+モデル設定の `model-settings.json` と API key（`PLATFORM_OCI_ENTERPRISE_AI_API_KEY`、セカンダリ接続は `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY`、ターシャリ接続は `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_API_KEY`）も共有し、製品固有の節の secret は `section_env_file`（製品の `backend/.env`）へ保存する。
+OCI Enterprise AI の接続はプライマリ接続・セカンダリ接続・ターシャリ接続（OpenAI / OpenAI 互換 API 向け。Project OCID は任意。#786）の 3 つまでで、モデルを呼ぶ製品は `enterprise_ai_connection_for_model(settings, model_id)` でモデルの接続（Endpoint・Project・API key）を引く（#533 / #542 / #786。[platform/README.md](../../README.md) の「OCI Enterprise AI のプライマリ接続・セカンダリ接続・ターシャリ接続」）。
 既定のモデルは既定のテキストモデルと既定の Vision モデルの 2 つで、登録モデルがあれば 2 つとも必須（`validate_default_models`、空なら 422。#499 / #566）。実行時の解決（`enterprise_ai_default_model_id`）は、テキストが空の既存環境のために Vision → 登録モデルの先頭 の代替を残す。
 OCI 認証の `action_dependencies` は、config 読込・接続テスト・namespace 取得に付ける依存関係（Agent は `require_admin`）。
 

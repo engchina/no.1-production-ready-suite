@@ -53,6 +53,10 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "oci_enterprise_ai_secondary_endpoint",
         "oci_enterprise_ai_secondary_project_ocid",
         "oci_enterprise_ai_secondary_api_key",
+        # OCI Enterprise AI のターシャリ接続（#786。OpenAI / OpenAI 互換 API 向け）。
+        "oci_enterprise_ai_tertiary_endpoint",
+        "oci_enterprise_ai_tertiary_project_ocid",
+        "oci_enterprise_ai_tertiary_api_key",
         "oci_enterprise_ai_models",
         "oci_enterprise_ai_default_text_model",
         "oci_enterprise_ai_default_vision_model",
