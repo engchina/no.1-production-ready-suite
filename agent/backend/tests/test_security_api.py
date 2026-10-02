@@ -97,7 +97,7 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     """全 API（method × path）が manifest に登録されている（登録外は既定で拒否）。"""
     operations = _api_operations()
     # 外部 Runtime・Binding の API は #754 で削除した。下限は収集の取りこぼしを検出するため。
-    assert len(operations) > 100
+    assert len(operations) > 80
     assert _unclassified_operations(operations) == []
     open_operations = {
         (method, path) for method, path in operations if permission_for_route(method, path) is None
@@ -220,7 +220,7 @@ def test_manifest_key_assignments() -> None:
     }
     assert _perm("PATCH", "/settings/model") == {"menu.settings_model"}
     assert _perm("POST", "/settings/database/adb/start") == {"menu.settings_database"}
-    assert _perm("PATCH", "/settings/external-rag") == {"agent.admin"}
+    assert _perm("PATCH", "/settings/mcp-connections/{server_id}") == {"agent.admin"}
     assert _perm("PATCH", "/settings/tool-policy") == {"agent.admin"}
     assert _perm("POST", "/runs") == {"agent.runs.operate", "agent.admin"}
     assert _perm("POST", "/runs/{run_id}/cancel") == {"agent.runs.operate", "agent.admin"}
@@ -231,7 +231,13 @@ def test_manifest_key_assignments() -> None:
     assert _perm("GET", "/runs") == {"menu.runs", "menu.approvals"}
     assert _perm("GET", "/tools") == {"menu.audit", "agent.admin"}
     assert _perm("GET", "/observability/status") == {"menu.audit"}
-    assert _perm("GET", "/settings/external-rag") == {"menu.settings_external_rag"}
+    assert _perm("GET", "/settings/mcp-connections") == {
+        "menu.settings_external_mcp",
+        "menu.skills",
+    }
+    assert _perm("GET", "/settings/mcp-connections/{server_id}/tools") == {
+        "menu.settings_external_mcp"
+    }
     assert _perm("GET", "/audit/tool-calls") == {"menu.audit"}
     assert _perm("GET", "/settings/oci") == {"menu.settings_oci"}
     assert _perm("GET", "/security/roles/{role_id}") == {
@@ -250,14 +256,18 @@ def test_manifest_key_assignments() -> None:
 
 
 def test_retired_permission_codes_are_not_in_catalog_or_manifest() -> None:
-    """廃止した `menu.dashboard`（#262）はカタログ・implies・manifest に現れない。"""
-    assert RETIRED_PERMISSION_CODES == ("menu.dashboard",)
+    """廃止したコード（#262 / #757）はカタログ・implies・manifest に現れない。"""
+    assert RETIRED_PERMISSION_CODES == (
+        "menu.dashboard",
+        "menu.settings_external_rag",
+        "menu.settings_external_nl2sql",
+    )
     retired = set(RETIRED_PERMISSION_CODES)
     assert not retired & ALL_PERMISSION_CODES
     assert all(not retired & set(item.implies) for item in PERMISSION_CATALOG)
     for permissions in [*ROUTE_PERMISSIONS.values(), *WEBSOCKET_PERMISSIONS.values()]:
         assert not retired & permissions
-    assert expand_permissions({"menu.dashboard"}) == set()
+    assert expand_permissions(retired) == set()
 
 
 def test_capabilities_map_to_legacy_roles_and_imply_menus() -> None:
@@ -309,7 +319,7 @@ def test_production_without_cookie_is_401(auth: ProductionAuth) -> None:
         ("GET", "/api/tools"),
         ("GET", "/api/observability/status"),
         ("GET", "/api/audit/tool-calls"),
-        ("GET", "/api/settings/external-rag"),
+        ("GET", "/api/settings/mcp-connections"),
         ("GET", "/api/settings/oci"),
         ("GET", "/api/security/permissions"),
         ("POST", "/api/runs"),
@@ -423,12 +433,12 @@ def test_permission_denied_returns_403(auth: ProductionAuth) -> None:
     auth.user_with_permissions("auditor1", ["agent.audit.view"])
     auth.user_with_permissions("admin1", ["agent.admin"])
     auditor = login("auditor1")
-    response = client.get("/api/settings/external-mcp", headers=auditor)
+    response = client.get("/api/settings/mcp-connections", headers=auditor)
     assert response.status_code == 403
     assert response.json()["error_messages"] == ["この機能を利用する権限がありません。"]
     assert client.get("/api/audit/tool-calls", headers=auditor).status_code == 200
     admin = login("admin1")
-    assert client.get("/api/settings/external-mcp", headers=admin).status_code == 200
+    assert client.get("/api/settings/mcp-connections", headers=admin).status_code == 200
 
 
 def test_menu_without_capability_can_open_page_but_not_read_runs(auth: ProductionAuth) -> None:

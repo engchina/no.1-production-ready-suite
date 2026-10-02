@@ -21,7 +21,11 @@ def _now() -> datetime:
 
 
 class SkillMcpRequirement(BaseModel):
-    """Skill の内部実装が必要とする MCP server / tool allowlist。"""
+    """Skill が使う MCP 接続とツールの許可リスト（#757）。
+
+    `server_id` は MCP 接続の ID（`rag` / `nl2sql` / 登録した接続）。`control-plane` は
+    Control Plane のツール（`tool_registry`）。`tool_names` が空なら接続のすべてのツールを使う。
+    """
 
     server_id: str
     tool_names: list[str] = Field(default_factory=list)
@@ -121,12 +125,15 @@ skill_registry.register(
     AgentSkillDefinition(
         id="business_rag_research",
         name="業務 RAG 調査",
-        description="外部業務 RAG を使って根拠付き情報を検索する。",
-        instructions="ユーザーの目的を外部 RAG の query として扱い、引用と根拠を返す。",
+        description="業務 RAG（MCP 接続 rag）を使って根拠付き情報を検索する。",
+        instructions=(
+            "ユーザーの目的を rag_search の query として扱い、引用と根拠を返す。"
+            "対象の業務ビューが分からなければ rag_list_business_views で確かめる。"
+        ),
         mcp_requirements=[
             SkillMcpRequirement(
-                server_id="control-plane",
-                tool_names=["external_rag_search", "external_rag_list_business_views"],
+                server_id="rag",
+                tool_names=["rag_search", "rag_list_business_views"],
             )
         ],
         tags=["rag", "research", "business-data"],
@@ -136,15 +143,21 @@ skill_registry.register(
     AgentSkillDefinition(
         id="structured_data_query",
         name="構造化データ照会",
-        description="外部 NL2SQL/構造化データサービスへ質問を渡して表形式結果を取得する。",
+        description="NL2SQL（MCP 接続 nl2sql）へ質問を渡して表形式の結果を取得する。",
         instructions=(
             "SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。"
-            "結果の status が pending / running なら external_nl2sql_get_job で続きを取る。"
+            "業務プロファイルが分からなければ nl2sql_recommend_profile で選ぶ。"
+            "結果の status が pending / running なら nl2sql_get_job で続きを取る。"
         ),
         mcp_requirements=[
             SkillMcpRequirement(
-                server_id="control-plane",
-                tool_names=["external_nl2sql_query", "external_nl2sql_get_job"],
+                server_id="nl2sql",
+                tool_names=[
+                    "nl2sql_query",
+                    "nl2sql_get_job",
+                    "nl2sql_list_profiles",
+                    "nl2sql_recommend_profile",
+                ],
             )
         ],
         tags=["nl2sql", "structured-data", "audit-sql"],
@@ -152,43 +165,13 @@ skill_registry.register(
 )
 skill_registry.register(
     AgentSkillDefinition(
-        id="mcp_tool_discovery",
-        name="MCP ツール探索",
-        description="外部 MCP gateway の tools/list を呼んで利用可能な tool を確認する。",
-        instructions="MCP tool 実行前に schema と説明を確認する。",
-        mcp_requirements=[
-            SkillMcpRequirement(server_id="control-plane", tool_names=["external_mcp_list_tools"])
-        ],
-        tags=["mcp", "tool-discovery"],
-    )
-)
-skill_registry.register(
-    AgentSkillDefinition(
-        id="mcp_tool_call",
-        name="MCP ツール実行",
-        description="外部 MCP gateway 経由で指定 tool を実行する。",
-        instructions="MCP tool の schema に合わせた arguments を渡す。副作用は通常承認対象になる。",
-        mcp_requirements=[
-            SkillMcpRequirement(server_id="control-plane", tool_names=["external_mcp_call"])
-        ],
-        tags=["mcp", "tool-call"],
-    )
-)
-skill_registry.register(
-    AgentSkillDefinition(
         id="rag_then_structured_data",
         name="RAG 後に構造化データ照会",
-        description="業務 RAG で文脈を確認した後、外部 NL2SQL へ同じ目的を渡す。",
+        description="業務 RAG で文脈を確認した後、NL2SQL へ同じ目的を渡す。",
         instructions="非構造文脈と構造化表の両方が必要な調査に使う。",
         mcp_requirements=[
-            SkillMcpRequirement(
-                server_id="control-plane",
-                tool_names=[
-                    "external_rag_search",
-                    "external_nl2sql_query",
-                    "external_nl2sql_get_job",
-                ],
-            )
+            SkillMcpRequirement(server_id="rag", tool_names=["rag_search"]),
+            SkillMcpRequirement(server_id="nl2sql", tool_names=["nl2sql_query", "nl2sql_get_job"]),
         ],
         tags=["rag", "nl2sql", "business-data"],
     )

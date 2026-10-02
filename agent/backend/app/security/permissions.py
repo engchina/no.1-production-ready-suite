@@ -63,8 +63,7 @@ MENU_PLUGIN_MARKETPLACES = "menu.plugin_marketplaces"
 MENU_SECURITY_PERMISSIONS = "menu.security_permissions"
 MENU_SETTINGS_SYSTEM_TABLES = "menu.settings_system_tables"
 MENU_SETTINGS_CONNECTION = "menu.settings_connection"
-MENU_SETTINGS_EXTERNAL_RAG = "menu.settings_external_rag"
-MENU_SETTINGS_EXTERNAL_NL2SQL = "menu.settings_external_nl2sql"
+# MCP 接続（#757。旧「外部 MCP」。権限コードは保存値なので変えない）。
 MENU_SETTINGS_EXTERNAL_MCP = "menu.settings_external_mcp"
 MENU_SETTINGS_RUNTIME_SNAPSHOT = "menu.settings_runtime_snapshot"
 MENU_SECURITY_USERS = "menu.security_users"
@@ -120,8 +119,6 @@ _ADMIN_MENUS = (
     MENU_PLUGIN_MARKETPLACES,
     MENU_SETTINGS_SYSTEM_TABLES,
     MENU_SETTINGS_CONNECTION,
-    MENU_SETTINGS_EXTERNAL_RAG,
-    MENU_SETTINGS_EXTERNAL_NL2SQL,
     MENU_SETTINGS_EXTERNAL_MCP,
     MENU_SETTINGS_RUNTIME_SNAPSHOT,
     *_SYSTEM_SETTINGS_MENUS,
@@ -145,9 +142,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ。#658 / #751）。
     _menu_permission(MENU_SETTINGS_SYSTEM_TABLES, _GROUP_OPERATIONS, "システムテーブル"),
     _menu_permission(MENU_SETTINGS_CONNECTION, _GROUP_OPERATIONS, "Agent 接続設定"),
-    _menu_permission(MENU_SETTINGS_EXTERNAL_RAG, _GROUP_OPERATIONS, "外部 RAG"),
-    _menu_permission(MENU_SETTINGS_EXTERNAL_NL2SQL, _GROUP_OPERATIONS, "外部 NL2SQL"),
-    _menu_permission(MENU_SETTINGS_EXTERNAL_MCP, _GROUP_OPERATIONS, "外部 MCP"),
+    _menu_permission(MENU_SETTINGS_EXTERNAL_MCP, _GROUP_OPERATIONS, "MCP 接続"),
     _menu_permission(
         MENU_SETTINGS_RUNTIME_SNAPSHOT, _GROUP_OPERATIONS, "Control Plane バックアップ"
     ),
@@ -202,7 +197,13 @@ ALL_PERMISSION_CODES = frozenset(item.code for item in PERMISSION_CATALOG)
 # （`app.system_schema`）が削除する。
 # 削除前でも `normalize_permission_codes` が捨てるため、実効権限・権限管理の表示と保存には現れない。
 # - `menu.dashboard`: ダッシュボード機能の廃止（#262）。
-RETIRED_PERMISSION_CODES: tuple[str, ...] = ("menu.dashboard",)
+# - `menu.settings_external_rag` / `menu.settings_external_nl2sql`: 外部 RAG / 外部 NL2SQL の画面を
+#   MCP 接続（`menu.settings_external_mcp`）へまとめた（#757）。
+RETIRED_PERMISSION_CODES: tuple[str, ...] = (
+    "menu.dashboard",
+    "menu.settings_external_rag",
+    "menu.settings_external_nl2sql",
+)
 PERMISSION_BY_CODE = {item.code: item for item in PERMISSION_CATALOG}
 CAPABILITY_CODES = frozenset(CAPABILITY_ROLES)
 
@@ -279,9 +280,6 @@ _RUN_DETAIL = _any(MENU_RUNS, MENU_APPROVALS, MENU_AUDIT)
 _AGENT_READ = _any(MENU_AGENTS, MENU_RUNS, MENU_SETTINGS_RUNTIME_SNAPSHOT)
 _TOOL_READ = _any(MENU_AUDIT, ADMIN)
 _PLUGIN_READ = _any(MENU_PLUGIN_MARKETPLACES)
-_EXTERNAL_SETTINGS_READ = _any(
-    MENU_SETTINGS_EXTERNAL_RAG, MENU_SETTINGS_EXTERNAL_NL2SQL, MENU_SETTINGS_EXTERNAL_MCP
-)
 _SECURITY_ROLE_READ = _any(MENU_SECURITY_USERS, MENU_SECURITY_ROLES, MENU_SECURITY_PERMISSIONS)
 
 _RUN = "/runs/{run_id}"
@@ -296,7 +294,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/trace-policy"): _ADMIN_ONLY,
     # ツール定義は監査・ツール一覧・ツール権限（管理者だけの非表示画面）が読む。
     ("GET", "/tools"): _TOOL_READ,
-    ("GET", "/tools/external-mcp"): _EXTERNAL_SETTINGS_READ,
     ("POST", "/tools/invoke"): _OPERATE,
     # ---- Control Plane: 業務 Agent ----
     ("GET", "/agents"): _AGENT_READ,
@@ -340,20 +337,15 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("DELETE", "/plugins/marketplaces/{marketplace_id}"): _ADMIN_ONLY,
     ("POST", "/plugins/marketplaces/{marketplace_id}/refresh"): _ADMIN_ONLY,
     # ---- 運用設定 ----
-    ("GET", "/settings/external-rag"): _any(MENU_SETTINGS_EXTERNAL_RAG),
-    ("PATCH", "/settings/external-rag"): _ADMIN_ONLY,
-    ("GET", "/settings/external-nl2sql"): _any(MENU_SETTINGS_EXTERNAL_NL2SQL),
-    ("PATCH", "/settings/external-nl2sql"): _ADMIN_ONLY,
     # システムテーブル（#751。NL2SQL と同じくメニュー権限で状態の確認と作成・更新）。
     ("GET", "/settings/database/system-tables"): _any(MENU_SETTINGS_SYSTEM_TABLES),
     ("POST", "/settings/database/system-tables/initialize"): _any(MENU_SETTINGS_SYSTEM_TABLES),
-    ("GET", "/settings/external-mcp"): _any(MENU_SETTINGS_EXTERNAL_MCP),
-    ("PATCH", "/settings/external-mcp"): _ADMIN_ONLY,
-    ("GET", "/settings/external-mcp-servers"): _any(MENU_SETTINGS_EXTERNAL_MCP),
-    ("POST", "/settings/external-mcp-servers"): _ADMIN_ONLY,
-    ("PATCH", "/settings/external-mcp-servers/{server_id}"): _ADMIN_ONLY,
-    ("DELETE", "/settings/external-mcp-servers/{server_id}"): _ADMIN_ONLY,
-    ("POST", "/settings/external-mcp-servers/{server_id}/default"): _ADMIN_ONLY,
+    # MCP 接続（#757）。一覧は Skill の編集（使う接続を選ぶ）からも読む。ツールの取得は接続の確認。
+    ("GET", "/settings/mcp-connections"): _any(MENU_SETTINGS_EXTERNAL_MCP, MENU_SKILLS),
+    ("POST", "/settings/mcp-connections"): _ADMIN_ONLY,
+    ("PATCH", "/settings/mcp-connections/{server_id}"): _ADMIN_ONLY,
+    ("DELETE", "/settings/mcp-connections/{server_id}"): _ADMIN_ONLY,
+    ("GET", "/settings/mcp-connections/{server_id}/tools"): _any(MENU_SETTINGS_EXTERNAL_MCP),
     ("GET", "/runtime/snapshot"): _ADMIN_ONLY,
     ("POST", "/runtime/snapshot/import"): _ADMIN_ONLY,
     # ナビに出さない設定（ツール権限）は管理者だけ。

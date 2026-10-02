@@ -24,9 +24,8 @@ export const APP_ROUTES = {
   settingsUploadStorage: "/settings/upload-storage",
   settingsModel: SYSTEM_SETTINGS_PATHS.model,
   settingsDatabase: SYSTEM_SETTINGS_PATHS.database,
-  settingsExternalRag: "/settings/external-rag",
-  settingsExternalNl2Sql: "/settings/external-nl2sql",
-  settingsExternalMcp: "/settings/external-mcp",
+  // MCP 接続（RAG / NL2SQL / 外部 MCP。#757）。
+  settingsMcpConnections: "/settings/mcp-connections",
   settingsToolPolicy: "/settings/tool-policy",
   settingsRuntimeSnapshot: "/settings/runtime-snapshot",
   // 共通のユーザー管理・ロール管理（#206）と、Agent 固有の権限管理（#215）。

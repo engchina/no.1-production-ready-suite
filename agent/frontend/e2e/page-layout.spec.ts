@@ -55,23 +55,16 @@ test.describe("画面幅（PageHeader / PageBody の wide）", () => {
 });
 
 test.describe("操作前の案内", () => {
-  test("MCP 未設定の案内は警告にせず、取得ボタンが使えない理由として関連付ける", async ({ page }) => {
-    await page.route("**/api/settings/external-mcp-servers", (route) =>
-      route.fulfill({
-        contentType: "application/json",
-        body: JSON.stringify({ data: { servers: [], default_server_id: "default" }, error_messages: [], warning_messages: [] }),
-      })
-    );
-    await page.goto("/settings/external-mcp");
+  test("MCP 接続の未設定は、ツールを取得できない理由として関連付ける", async ({ page }) => {
+    await page.goto("/settings/mcp-connections?id=rag");
 
-    const hint = page.getByText("Base URL を設定すると MCP tool 一覧を取得できます。");
+    const hint = page.getByText("接続を使えるように設定すると、ツールを取得できます。");
     await expect(hint).toBeVisible();
-    await expect(page.getByRole("alert")).toHaveCount(0);
-    await expect(page.getByRole("status").filter({ hasText: "Base URL を設定すると" })).toHaveCount(0);
+    await expect(page.getByRole("status").filter({ hasText: "接続を使えるように設定すると" })).toHaveCount(0);
 
-    const refresh = page.getByRole("button", { name: "取得" });
-    await expect(refresh).toBeDisabled();
-    await expect(refresh).toHaveAccessibleDescription("Base URL を設定すると MCP tool 一覧を取得できます。");
+    const fetchTools = page.getByRole("button", { name: "ツールを取得" });
+    await expect(fetchTools).toBeDisabled();
+    await expect(fetchTools).toHaveAccessibleDescription("接続を使えるように設定すると、ツールを取得できます。");
   });
 
   test("置換ボタンが使えない理由を常時表示し、入力後は関連付けを外す", async ({ page }) => {

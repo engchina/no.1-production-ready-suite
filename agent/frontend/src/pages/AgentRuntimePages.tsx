@@ -15,7 +15,6 @@ import {
   Server,
   ShieldAlert,
   SlidersHorizontal,
-  Star,
   Trash2,
   Upload,
   X,
@@ -82,10 +81,10 @@ import {
   type AgentSkill,
   type Artifact,
   type ApprovalRequest,
-  type ExternalMcpServerSettings,
   type ExternalMcpToolInfo,
-  type ProductMcpSettings,
-  type ProductMcpSettingsPatch,
+  type McpAuthMode,
+  type McpConnectionSettings,
+  type McpConnectionWritePayload,
   type MarketplaceSource,
   type PluginManifest,
   type PluginSummary,
@@ -1780,180 +1779,6 @@ export function ToolsPage() {
   );
 }
 
-interface ExternalSettingsDraft {
-  mcpUrl: string;
-  timeoutSeconds: string;
-  defaultLimit: string;
-}
-
-/**
- * 外部 RAG / 外部 NL2SQL（各製品の MCP）の接続設定（#233）。
- * 認証は呼び出しごとのサービストークン（Run の利用者として呼ぶ）なので API キー欄はない。
- * 署名鍵とサービス利用者は .env で管理し、ここでは設定済みかどうかだけを表示する。
- */
-export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
-  const queryClient = useQueryClient();
-  // 運用設定の変更は Agent 管理の権限（admin）だけ。メニュー権限だけの利用者は閲覧になる（#215）。
-  const { admin: canManage } = useCapabilities();
-  const isRag = kind === "rag";
-  const isNl2Sql = kind === "nl2sql";
-  const title = isRag ? t("nav.settingsExternalRag") : t("nav.settingsExternalNl2Sql");
-  const subtitle = isRag ? t("page.settings.rag.subtitle") : t("page.settings.nl2sql.subtitle");
-  const settings = useQuery({
-    queryKey: ["settings", kind],
-    queryFn: isRag ? agentApi.getExternalRagSettings : agentApi.getExternalNl2SqlSettings,
-  });
-  const mutation = useMutation({
-    mutationFn: (payload: ProductMcpSettingsPatch) => {
-      if (isRag) {
-        return agentApi.patchExternalRagSettings(payload);
-      }
-      return agentApi.patchExternalNl2SqlSettings(payload);
-    },
-    onSuccess: () => {
-      toast.success(t("common.saved"));
-      void queryClient.invalidateQueries({ queryKey: ["settings", kind] });
-    },
-  });
-  const [mcpUrl, setMcpUrl] = useState("");
-  const [timeoutSeconds, setTimeoutSeconds] = useState("60");
-  const [defaultLimit, setDefaultLimit] = useState("100");
-  const [baseline, setBaseline] = useState<ExternalSettingsDraft | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<{ timeout?: string | null; defaultLimit?: string | null }>({});
-
-  // server 値が変わったレンダーで、フォームと比較の基準を server 値に戻す。
-  const serverChanged = useValuesChanged([settings.data]);
-  if (serverChanged) {
-    const current = settings.data;
-    if (current) {
-      const saved = {
-        mcpUrl: current.mcp_url ?? "",
-        timeoutSeconds: String(current.timeout_seconds),
-        defaultLimit: String(current.default_limit ?? 100),
-      };
-      setMcpUrl(saved.mcpUrl);
-      setTimeoutSeconds(saved.timeoutSeconds);
-      setDefaultLimit(saved.defaultLimit);
-      setBaseline(saved);
-    }
-  }
-
-  const draft: ExternalSettingsDraft = { mcpUrl, timeoutSeconds, defaultLimit };
-  // RAG では既定件数を扱わないので比較から外す。
-  const comparable = (value: ExternalSettingsDraft) => (isNl2Sql ? value : { ...value, defaultLimit: "" });
-  const isDirty = baseline !== null && !sameDraft(comparable(draft), comparable(baseline));
-  useSettingsLeaveGuard(isDirty, mutation.isPending);
-
-  function save() {
-    const submitted = draft;
-    // 空の数値を 0 として送らない。規則は backend（ProductMcpSettingsPatch）と同じ（#540 / #541）。
-    const nextErrors = {
-      timeout: numberFieldError(timeoutSeconds, {
-        label: t("settings.timeout"),
-        min: 0,
-        exclusiveMin: true,
-        max: MCP_TIMEOUT_MAX_SECONDS,
-      }),
-      defaultLimit: isNl2Sql
-        ? numberFieldError(defaultLimit, { label: t("settings.defaultLimit"), integer: true, min: 1, max: 1000 })
-        : null,
-    };
-    setFieldErrors(nextErrors);
-    if (
-      focusFirstInvalidField([
-        [`${kind}-timeout`, nextErrors.timeout],
-        ["nl2sql-default-limit", nextErrors.defaultLimit],
-      ])
-    ) {
-      return;
-    }
-    mutation.mutate(
-      {
-        mcp_url: mcpUrl.trim(),
-        timeout_seconds: Number(timeoutSeconds),
-        default_limit: isNl2Sql ? Number(defaultLimit) : undefined,
-      },
-      { onSuccess: () => setBaseline(submitted) }
-    );
-  }
-
-  return (
-    <>
-      <PageHeader wide title={title} subtitle={subtitle} />
-      <PageBody wide>
-<div className="space-y-5">
-        <QueryState query={settings} loadingLabel={t("loading.settings")} skeleton={<FormSkeleton fields={3} />}>
-          <ProductMcpNotice settings={settings.data} />
-          <Card>
-            <CardHeader>
-              <CardTitle>{title}</CardTitle>
-              <CardDescription>{t("settings.productMcp.description")}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* URL は全幅、タイムアウト・既定件数は 2 列に並べる。 */}
-              <fieldset disabled={!canManage} className="grid min-w-0 gap-x-6 gap-y-4 lg:grid-cols-2">
-                <TextField
-                  id={`${kind}-mcp-url`}
-                  label={t("settings.productMcp.url")}
-                  className="lg:col-span-2"
-                  type="url"
-                  inputMode="url"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={mcpUrl}
-                  onValueChange={setMcpUrl}
-                  placeholder={isRag ? "http://rag-host/api/mcp" : "http://nl2sql-host/api/mcp"}
-                  helper={t("settings.productMcp.urlHint")}
-                />
-                {/* 空欄を 0 として送らない。backend（ProductMcpSettingsPatch）も 0 以下を拒否する（#540）。 */}
-                <TextField
-                  id={`${kind}-timeout`}
-                  label={t("settings.timeout")}
-                  required
-                  error={fieldErrors.timeout ?? undefined}
-                  type="number"
-                  min="1"
-                  value={timeoutSeconds}
-                  onValueChange={(value) => {
-                    setTimeoutSeconds(value);
-                    setFieldErrors((current) => ({ ...current, timeout: null }));
-                  }}
-                />
-                {isNl2Sql ? (
-                  <TextField
-                    id="nl2sql-default-limit"
-                    label={t("settings.defaultLimit")}
-                    required
-                    error={fieldErrors.defaultLimit ?? undefined}
-                    helper={t("settings.productMcp.defaultLimitHint")}
-                    type="number"
-                    min="1"
-                    max="1000"
-                    value={defaultLimit}
-                    onValueChange={(value) => {
-                      setDefaultLimit(value);
-                      setFieldErrors((current) => ({ ...current, defaultLimit: null }));
-                    }}
-                  />
-                ) : null}
-              </fieldset>
-              {settings.data ? <ProductMcpAuthStatus settings={settings.data} /> : null}
-              {canManage ? (
-                <SettingsSaveBar section={title} onSave={save} saving={mutation.isPending} error={mutation.error} />
-              ) : null}
-            </CardContent>
-          </Card>
-        </QueryState>
-      </div>
-</PageBody>
-    </>
-  );
-}
-
-/**
- * 運用設定のカードの保存の行（UX 契約 buttons §5.2.1 の FormActionBar）。
- * 保存の成功は Toast、失敗は操作の行の FormStatus に出す（messaging.md §10.2。#725）。
- */
 function SettingsSaveBar({
   section,
   onSave,
@@ -1974,20 +1799,25 @@ function SettingsSaveBar({
   );
 }
 
-/** 未設定のときだけ、何が足りずどう直すかを示す（設定済みの常設 success バナーは出さない）。 */
-function ProductMcpNotice({ settings }: { settings?: ProductMcpSettings }) {
-  if (!settings) {
+/** 接続を使えない理由と直し方（使えるときは出さない。常設の success の面にしない）。 */
+function McpConnectionNotice({ connection }: { connection: McpConnectionSettings }) {
+  if (connection.configured) {
     return null;
   }
   const missing = [
-    settings.configured ? null : t("settings.productMcp.missingUrl"),
-    settings.service_token_configured ? null : t("settings.productMcp.missingSecret"),
+    connection.base_url ? null : t("settings.mcpConnections.missingUrl"),
+    connection.auth_mode === "service_token" && !connection.service_token_configured
+      ? t("settings.mcpConnections.missingSecret")
+      : null,
+    connection.auth_mode === "api_key" && !connection.api_key_configured
+      ? t("settings.mcpConnections.missingApiKey")
+      : null,
+    connection.auth_mode === "oauth_client_credentials" && !connection.oauth_configured
+      ? t("settings.mcpConnections.missingOauth")
+      : null,
   ].filter((item): item is string => item !== null);
-  if (missing.length === 0) {
-    return null;
-  }
   return (
-    <Banner severity="warning" title={t("settings.productMcp.notReady")}>
+    <Banner severity="warning" title={t("settings.mcpConnections.notReady")}>
       {/* 環境変数名は長く区切りがないため、狭い幅では任意の位置で折り返す。 */}
       <ul className="list-disc space-y-1 pl-5 break-words [overflow-wrap:anywhere]">
         {missing.map((item) => (
@@ -1998,21 +1828,21 @@ function ProductMcpNotice({ settings }: { settings?: ProductMcpSettings }) {
   );
 }
 
-/** サービス間認証の状態（.env で管理。値は表示しない）。 */
-function ProductMcpAuthStatus({ settings }: { settings: ProductMcpSettings }) {
+/** サービストークンの準備の状態（.env で管理。値は表示しない）。 */
+function McpServiceTokenStatus({ connection }: { connection: McpConnectionSettings }) {
   const rows = [
     {
       id: "secret",
       label: t("settings.productMcp.secret"),
       hint: t("settings.productMcp.secretHint"),
-      configured: settings.service_token_configured,
+      configured: connection.service_token_configured,
       missingVariant: "warning" as const,
     },
     {
       id: "service-user",
       label: t("settings.productMcp.serviceUser"),
       hint: t("settings.productMcp.serviceUserHint"),
-      configured: settings.service_user_configured,
+      configured: connection.service_user_configured,
       missingVariant: "neutral" as const,
     },
   ];
@@ -2035,83 +1865,87 @@ function ProductMcpAuthStatus({ settings }: { settings: ProductMcpSettings }) {
   );
 }
 
-function McpDiscoveryPanel({ configured }: { configured: boolean }) {
-  const [serverId, setServerId] = useState("");
-  const [traceId, setTraceId] = useState("");
-  const filters = useMemo(
-    () => ({
-      server_id: serverId.trim() || undefined,
-      trace_id: traceId.trim() || undefined,
-    }),
-    [serverId, traceId]
-  );
+/**
+ * 接続のツール（MCP の tools/list）。接続の確認を兼ね、ログイン中の利用者として取得する。
+ * 結果は「ツールを取得」の直下に、カードの全幅で出す（messaging.md §10）。
+ */
+function McpConnectionToolsPanel({ connection }: { connection: McpConnectionSettings }) {
+  const [requested, setRequested] = useState(false);
   const tools = useQuery({
-    queryKey: ["external-mcp-tools", filters.server_id ?? "", filters.trace_id ?? ""],
-    queryFn: () => agentApi.listExternalMcpTools(filters),
-    enabled: configured,
+    queryKey: ["mcp-connection-tools", connection.server_id],
+    queryFn: () => agentApi.listMcpConnectionTools(connection.server_id),
+    enabled: requested && connection.configured,
     retry: false,
   });
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("settings.mcpDiscovery.title")}</CardTitle>
-        <CardDescription>{t("settings.mcpDiscovery.description")}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid min-w-0 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
-          <TextField
-            id="mcp-discovery-server-id"
-            label={t("settings.mcpDiscovery.serverId")}
-            className="min-w-0"
-            value={serverId}
-            onValueChange={setServerId}
-          />
-          <TextField
-            id="mcp-discovery-trace-id"
-            label={t("settings.mcpDiscovery.traceId")}
-            className="min-w-0"
-            value={traceId}
-            onValueChange={setTraceId}
-          />
-          <Button
-            variant="secondary"
-            onClick={() => void tools.refetch()}
-            disabled={!configured}
-            aria-describedby={!configured ? "mcp-discovery-configure-hint" : undefined}
-            loading={tools.isFetching}
-            icon={RefreshCw}>
-            {t("settings.mcpDiscovery.refresh")}
-          </Button>
-        </div>
+    <Section title={t("settings.mcpConnections.tools")} description={t("settings.mcpConnections.toolsDescription")}>
+      <Card className="min-w-0">
+        <CardContent className="space-y-4 pt-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              variant="secondary"
+              onClick={() => (requested ? void tools.refetch() : setRequested(true))}
+              disabled={!connection.configured}
+              aria-describedby={!connection.configured ? "mcp-tools-configure-hint" : undefined}
+              loading={tools.isFetching}
+              icon={RefreshCw}
+            >
+              {t("settings.mcpConnections.fetchTools")}
+            </Button>
+            {!connection.configured ? (
+              // 未設定は通常の状態。警告にせず「ツールを取得」が使えない理由として補助テキストで伝える。
+              <p id="mcp-tools-configure-hint" className="text-sm leading-6 text-fg-muted">
+                {t("settings.mcpConnections.configureFirst")}
+              </p>
+            ) : null}
+          </div>
+          {!requested || !connection.configured ? null : tools.error ? (
+            <Banner severity="danger" title={t("settings.mcpConnections.fetchFailed")}>
+              {tools.error.message}
+            </Banner>
+          ) : tools.isLoading ? (
+            <TimedLoadingState label={t("loading.mcpTools")} testId="mcp-tools-loading">
+              <TableSkeleton columns={4} />
+            </TimedLoadingState>
+          ) : (tools.data?.tools ?? []).length ? (
+            <McpToolsList tools={tools.data?.tools ?? []} />
+          ) : (
+            <EmptyState title={t("settings.mcpDiscovery.empty")} />
+          )}
+        </CardContent>
+      </Card>
+    </Section>
+  );
+}
 
-        {!configured ? (
-          // 未設定は通常の初期状態。警告にせず「取得」が使えない理由として補助テキストで伝える。
-          <p id="mcp-discovery-configure-hint" className="text-sm leading-6 text-fg-muted">
-            {t("settings.mcpDiscovery.configureFirst")}
-          </p>
-        ) : tools.error ? (
-          <Banner severity="danger">{tools.error.message}</Banner>
-        ) : tools.isLoading ? (
-          <TimedLoadingState label={t("loading.mcpTools")} testId="mcp-tools-loading">
-            <TableSkeleton columns={5} />
-          </TimedLoadingState>
-        ) : (tools.data?.tools ?? []).length ? (
-          <McpToolsList tools={tools.data?.tools ?? []} />
-        ) : (
-          <EmptyState title={t("settings.mcpDiscovery.empty")} />
-        )}
-      </CardContent>
-    </Card>
+function McpToolApprovalBadge({ tool }: { tool: ExternalMcpToolInfo }) {
+  // readOnlyHint の無いツールは、ツール権限で許可しない限り実行の前に承認を求める。
+  return tool.read_only ? (
+    <StatusBadge variant="neutral" label={t("settings.mcpConnections.readOnly")} icon={false} />
+  ) : (
+    <StatusBadge variant="warning" label={t("settings.mcpConnections.needsApproval")} icon={false} />
   );
 }
 
 function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
-  // 絞り込み（server / trace）で取り直した一覧は別の結果なので、そのときだけ 1 ページ目へ戻す。
+  // 取り直した一覧は別の結果なので、そのときだけ 1 ページ目へ戻す。
   const { page, setPage, totalPages, pageItems, range } = usePagination(tools, DEFAULT_PAGE_SIZE, { resetKey: tools });
   const labels = agentPaginationLabels();
   const mcpToolColumns: DataTableColumn<ExternalMcpToolInfo>[] = [
-    { key: "name", header: t("settings.mcpDiscovery.tool"), className: "font-mono text-xs text-fg" },
+    {
+      key: "name",
+      header: t("settings.mcpDiscovery.tool"),
+      rowHeader: true,
+      render: (tool) => (
+        <div className="min-w-0 space-y-0.5">
+          <p className="break-words font-mono text-xs font-medium text-fg">{tool.name}</p>
+          {tool.function_name ? (
+            <p className="break-words font-mono text-xs text-fg-muted">{tool.function_name}</p>
+          ) : null}
+        </div>
+      ),
+    },
     {
       key: "description",
       header: t("settings.mcpDiscovery.descriptionColumn"),
@@ -2119,22 +1953,15 @@ function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
       render: (tool) => tool.description || "-",
     },
     {
-      key: "server_id",
-      header: t("settings.mcpDiscovery.server"),
-      className: "text-fg-muted",
-      render: (tool) => tool.server_id ?? "-",
+      key: "approval",
+      header: t("settings.mcpConnections.approval"),
+      render: (tool) => <McpToolApprovalBadge tool={tool} />,
     },
     {
       key: "input_schema",
       header: t("settings.mcpDiscovery.inputSchema"),
       className: "text-fg-muted",
       render: (tool) => schemaSummary(tool.input_schema),
-    },
-    {
-      key: "output_schema",
-      header: t("settings.mcpDiscovery.outputSchema"),
-      className: "text-fg-muted",
-      render: (tool) => schemaSummary(tool.output_schema),
     },
   ];
 
@@ -2145,30 +1972,30 @@ function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
         className="hidden md:block"
         rows={pageItems}
         columns={mcpToolColumns}
-        getRowKey={(tool) => `${tool.server_id ?? "default"}:${tool.name}`}
+        getRowKey={(tool) => tool.name}
         rowProps={() => ({ className: `align-top ${INFORMATION_TABLE_ROW_CLASS}` })}
-        tableClassName="w-full min-w-[720px]"
-        ariaLabel={t("settings.mcpDiscovery.title")}
-        scrollAriaLabel={listScrollLabel(t("settings.mcpDiscovery.title"))}
+        tableClassName="w-full min-w-[640px]"
+        ariaLabel={t("settings.mcpConnections.tools")}
+        scrollAriaLabel={listScrollLabel(t("settings.mcpConnections.tools"))}
         stickyHeader
         visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
       />
       <div
         className={`grid gap-3 md:hidden ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
         role="region"
-        aria-label={listScrollLabel(t("settings.mcpDiscovery.title"))}
+        aria-label={listScrollLabel(t("settings.mcpConnections.tools"))}
         tabIndex={0}
       >
         {pageItems.map((tool) => (
-          <div key={`${tool.server_id ?? "default"}:${tool.name}`} className="rounded-md border border-border p-3">
-            <div className="min-w-0 space-y-1">
-              <p className="break-words font-mono text-xs font-medium text-fg">{tool.name}</p>
-              <p className="text-sm leading-6 text-fg-muted">{tool.description || "-"}</p>
+          <div key={tool.name} className="rounded-md border border-border p-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <p className="min-w-0 break-words font-mono text-xs font-medium text-fg">{tool.name}</p>
+              <McpToolApprovalBadge tool={tool} />
             </div>
+            <p className="mt-1 text-sm leading-6 text-fg-muted">{tool.description || "-"}</p>
             <dl className="mt-3 grid grid-cols-1 gap-2 text-xs text-fg-muted">
-              <McpToolMeta label={t("settings.mcpDiscovery.server")} value={tool.server_id ?? "-"} />
+              <McpToolMeta label={t("settings.mcpConnections.functionName")} value={tool.function_name ?? "-"} />
               <McpToolMeta label={t("settings.mcpDiscovery.inputSchema")} value={schemaSummary(tool.input_schema)} />
-              <McpToolMeta label={t("settings.mcpDiscovery.outputSchema")} value={schemaSummary(tool.output_schema)} />
             </dl>
           </div>
         ))}
@@ -2210,7 +2037,10 @@ function schemaSummary(schema?: Record<string, unknown> | null): string {
   return type;
 }
 
-function mcpAuthLabel(mode?: string | null): string {
+function mcpAuthLabel(mode?: McpAuthMode | null): string {
+  if (mode === "service_token") {
+    return t("settings.mcpConnections.authServiceToken");
+  }
   if (mode === "oauth_client_credentials") {
     return t("settings.mcpServers.authOauth");
   }
@@ -2220,10 +2050,20 @@ function mcpAuthLabel(mode?: string | null): string {
   return t("settings.mcpServers.authNone");
 }
 
-interface McpServerFormState {
+function mcpSourceLabel(source: string): string {
+  if (source === "builtin") return t("settings.mcpConnections.sourceBuiltin");
+  if (source === "env") return t("settings.mcpConnections.sourceEnv");
+  if (source.startsWith("plugin:")) return t("settings.mcpConnections.sourcePlugin");
+  return t("settings.mcpConnections.sourceRuntime");
+}
+
+interface McpConnectionFormState {
   serverId: string;
   label: string;
   baseUrl: string;
+  authMode: McpAuthMode;
+  apiKey: string;
+  serviceAudience: string;
   timeoutSeconds: string;
   sessionId: string;
   oauthTokenUrl: string;
@@ -2232,10 +2072,13 @@ interface McpServerFormState {
   oauthScope: string;
 }
 
-const EMPTY_MCP_FORM: McpServerFormState = {
+const EMPTY_MCP_FORM: McpConnectionFormState = {
   serverId: "",
   label: "",
   baseUrl: "",
+  authMode: "none",
+  apiKey: "",
+  serviceAudience: "",
   timeoutSeconds: "10",
   sessionId: "",
   oauthTokenUrl: "",
@@ -2244,64 +2087,57 @@ const EMPTY_MCP_FORM: McpServerFormState = {
   oauthScope: "",
 };
 
-function mcpFormOf(server: ExternalMcpServerSettings | undefined): McpServerFormState {
-  if (!server) return EMPTY_MCP_FORM;
+function mcpFormOf(connection: McpConnectionSettings | undefined): McpConnectionFormState {
+  if (!connection) return EMPTY_MCP_FORM;
   return {
     ...EMPTY_MCP_FORM,
-    serverId: server.server_id,
-    label: server.label ?? "",
-    baseUrl: server.base_url ?? "",
-    timeoutSeconds: String(server.timeout_seconds),
+    serverId: connection.server_id,
+    label: connection.label ?? "",
+    baseUrl: connection.base_url ?? "",
+    authMode: connection.auth_mode,
+    serviceAudience: connection.service_audience ?? "",
+    timeoutSeconds: String(connection.timeout_seconds),
   };
 }
 
-export function McpServersPage() {
+export function McpConnectionsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const editor = useEditorRoute();
-  // 接続先の追加・変更・削除は Agent 管理の権限（admin）だけ。tool 一覧の取得は実データの閲覧権限が要る（#215）。
+  // 接続の追加・変更・削除は Agent 管理の権限（admin）だけ（#215）。
   const capabilities = useCapabilities();
   const canManage = capabilities.admin;
-  const servers = useQuery({
-    queryKey: ["mcp-servers"],
-    queryFn: agentApi.listExternalMcpServers,
+  const connections = useQuery({
+    queryKey: ["mcp-connections"],
+    queryFn: agentApi.listMcpConnections,
   });
 
   function invalidate() {
     return Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["mcp-servers"] }),
-      queryClient.invalidateQueries({ queryKey: ["external-mcp-tools"] }),
+      queryClient.invalidateQueries({ queryKey: ["mcp-connections"] }),
+      queryClient.invalidateQueries({ queryKey: ["mcp-connection-tools"] }),
     ]);
   }
 
-  const setDefaultMutation = useMutation({
-    mutationFn: (serverId: string) => agentApi.setDefaultExternalMcpServer(serverId),
-    onSuccess: () => {
-      toast.success(t("settings.mcpServers.defaultUpdated"));
-      void invalidate();
-    },
-    onError: (error) => toast.error(error.message),
-  });
-
   const deleteMutation = useMutation({
-    mutationFn: (serverId: string) => agentApi.deleteExternalMcpServer(serverId),
+    mutationFn: (serverId: string) => agentApi.deleteMcpConnection(serverId),
     onSuccess: () => {
-      toast.success(t("settings.mcpServers.deleted"));
+      toast.success(t("settings.mcpConnections.deleted"));
       void invalidate();
     },
     onError: (error) => toast.error(error.message),
   });
 
-  async function remove(server: ExternalMcpServerSettings) {
+  async function remove(connection: McpConnectionSettings) {
     const ok = await confirm({
-      title: t("settings.mcpServers.confirmDeleteTitle"),
-      description: t("settings.mcpServers.confirmDeleteMessage", { id: server.server_id }),
+      title: t("settings.mcpConnections.confirmDeleteTitle"),
+      description: t("settings.mcpServers.confirmDeleteMessage", { id: connection.server_id }),
       confirmLabel: t("settings.mcpServers.delete"),
       cancelLabel: t("common.cancel"),
       tone: "danger",
     });
     if (!ok) return;
-    deleteMutation.mutate(server.server_id, {
+    deleteMutation.mutate(connection.server_id, {
       // エディタから削除したら、消えた対象へ戻れないよう履歴を置き換えて一覧へ戻る。
       onSuccess: () => {
         if (editor.target.kind === "edit") editor.backToList({ replace: true });
@@ -2309,34 +2145,28 @@ export function McpServersPage() {
     });
   }
 
-  const busy = setDefaultMutation.isPending || deleteMutation.isPending;
   // 一覧の行と詳細（エディタの概要）で同じ定義を使う（UX 契約 buttons.md §5.1）。
-  const serverActions = (server: ExternalMcpServerSettings): EntityAction[] => canManage ? [
-    {
-      id: "set-default",
-      label: t("settings.mcpServers.setDefault"),
-      icon: Star,
-      visible: !server.is_default,
-      disabled: busy,
-      onSelect: () => setDefaultMutation.mutate(server.server_id),
-    },
-    {
-      id: "delete",
-      label: t("settings.mcpServers.delete"),
-      icon: Trash2,
-      tone: "danger",
-      disabled: server.server_id === "default" || busy,
-      onSelect: () => remove(server),
-    },
-  ] : [];
+  // RAG / NL2SQL・宣言・連携機能の接続は削除できない（項目を出さない）。
+  const connectionActions = (connection: McpConnectionSettings): EntityAction[] =>
+    canManage && connection.removable
+      ? [
+          {
+            id: "delete",
+            label: t("settings.mcpServers.delete"),
+            icon: Trash2,
+            tone: "danger",
+            disabled: deleteMutation.isPending,
+            onSelect: () => remove(connection),
+          },
+        ]
+      : [];
 
-  const list = servers.data?.servers ?? [];
+  const list = connections.data?.connections ?? [];
   // 追加できない利用者が `?id=new` を開いたら一覧を出す。
   const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
-  const listTitle = t("nav.settingsExternalMcp");
+  const listTitle = t("nav.settingsMcpConnections");
 
   if (target.kind === "list") {
-    const anyConfigured = list.some((server) => server.configured);
     return (
       <>
         <PageHeader
@@ -2349,7 +2179,7 @@ export function McpServersPage() {
                   {
                     id: "create",
                     kind: "primary",
-                    label: t("settings.mcpServers.add"),
+                    label: t("settings.mcpConnections.add"),
                     icon: Plus,
                     onClick: editor.openNew,
                   },
@@ -2358,33 +2188,29 @@ export function McpServersPage() {
           }
         />
         <PageBody wide className="space-y-6">
-          <Section title={t("settings.mcpServers.title")} description={t("settings.mcpServers.description")}>
-            <QueryState query={servers} loadingLabel={t("loading.mcpServers")} skeleton={<TableSkeleton columns={6} />}>
-              <McpServerTable
-                servers={list}
-                onOpen={(server) => editor.openItem(server.server_id)}
-                hrefFor={(server) => editor.itemHref(server.server_id)}
-                actionsFor={serverActions}
+          <Section title={t("settings.mcpConnections.title")} description={t("settings.mcpConnections.description")}>
+            <QueryState query={connections} loadingLabel={t("loading.mcpServers")} skeleton={<TableSkeleton columns={6} />}>
+              <McpConnectionTable
+                connections={list}
+                onOpen={(connection) => editor.openItem(connection.server_id)}
+                hrefFor={(connection) => editor.itemHref(connection.server_id)}
+                actionsFor={connectionActions}
               />
             </QueryState>
           </Section>
-          {/* 接続先の一覧を取得し終えるまでは「未設定」と判断できないため、探索のパネルを出さない。 */}
-          {capabilities.viewRuns && servers.data ? <McpDiscoveryPanel configured={anyConfigured} /> : null}
         </PageBody>
       </>
     );
   }
 
-  const server = target.kind === "edit" ? list.find((candidate) => candidate.server_id === target.id) : undefined;
-  if (target.kind === "edit" && !server) {
+  const connection =
+    target.kind === "edit" ? list.find((candidate) => candidate.server_id === target.id) : undefined;
+  if (target.kind === "edit" && !connection) {
     return (
       <>
-        <PageHeader
-          wide
-          title={listTitle}
-        />
+        <PageHeader wide title={listTitle} />
         <PageBody wide>
-          <QueryState query={servers} loadingLabel={t("loading.mcpServers")} skeleton={<FormSkeleton fields={4} />}>
+          <QueryState query={connections} loadingLabel={t("loading.mcpServers")} skeleton={<FormSkeleton fields={4} />}>
             <MissingEditorTarget id={target.id} onBack={() => editor.backToList()} />
           </QueryState>
         </PageBody>
@@ -2393,10 +2219,10 @@ export function McpServersPage() {
   }
 
   return (
-    <McpServerEditor
-      key={server?.server_id ?? "new"}
-      server={server}
-      actions={server ? serverActions(server) : []}
+    <McpConnectionEditor
+      key={connection?.server_id ?? "new"}
+      connection={connection}
+      actions={connection ? connectionActions(connection) : []}
       readOnly={!canManage}
       onBack={() => editor.backToList()}
       onSaved={async (serverId) => {
@@ -2407,56 +2233,69 @@ export function McpServersPage() {
   );
 }
 
-/** 外部 MCP サーバーの全画面エディタ（A 型。`?id=new` / `?id=<server id>`）。 */
-function McpServerEditor({
-  server,
+/** MCP 接続の全画面エディタ（A 型。`?id=new` / `?id=<接続 ID>`）。 */
+function McpConnectionEditor({
+  connection,
   actions,
   readOnly,
   onBack,
   onSaved,
 }: {
-  server?: ExternalMcpServerSettings;
+  connection?: McpConnectionSettings;
   actions: EntityAction[];
   /** 変更の権限がない利用者は閲覧だけ（保存を出さず、入力を無効にする）。 */
   readOnly: boolean;
   onBack: () => void;
   onSaved: (serverId: string) => Promise<void>;
 }) {
-  const [form, setForm] = useState<McpServerFormState>(() => mcpFormOf(server));
-  const [formBaseline, setFormBaseline] = useState<McpServerFormState>(() => mcpFormOf(server));
+  const [form, setForm] = useState<McpConnectionFormState>(() => mcpFormOf(connection));
+  const [formBaseline, setFormBaseline] = useState<McpConnectionFormState>(() => mcpFormOf(connection));
   const [serverIdError, setServerIdError] = useState<string | null>(null);
   const [timeoutError, setTimeoutError] = useState<string | null>(null);
-  const editingId = server?.server_id ?? null;
+  const editingId = connection?.server_id ?? null;
+  // RAG / NL2SQL は Run の利用者のサービストークンで呼ぶ接続（認証方式は変えられない）。
+  const builtin = connection?.source === "builtin";
 
   // 送る内容は mutate の引数で渡す（クリック直前の入力を closure の古い state で送らない）。
   const saveMutation = useMutation({
-    mutationFn: (current: McpServerFormState) => {
-      const payload = {
+    mutationFn: (current: McpConnectionFormState) => {
+      const payload: McpConnectionWritePayload = {
         label: current.label || null,
-        base_url: current.baseUrl,
+        base_url: current.baseUrl.trim(),
         timeout_seconds: Number(current.timeoutSeconds),
         session_id: current.sessionId || undefined,
-        oauth_token_url: current.oauthTokenUrl || undefined,
-        oauth_client_id: current.oauthClientId || undefined,
-        oauth_client_secret: current.oauthClientSecret || undefined,
-        oauth_scope: current.oauthScope || undefined,
       };
-      if (editingId) {
-        return agentApi.updateExternalMcpServer(editingId, payload);
+      if (!builtin) {
+        payload.auth_mode = current.authMode;
       }
-      return agentApi.createExternalMcpServer({ server_id: current.serverId.trim(), ...payload });
+      if (current.authMode === "api_key" && current.apiKey) {
+        payload.api_key = current.apiKey;
+      }
+      if (current.authMode === "service_token" && !builtin) {
+        payload.service_audience = current.serviceAudience.trim();
+      }
+      if (current.authMode === "oauth_client_credentials") {
+        payload.oauth_token_url = current.oauthTokenUrl || undefined;
+        payload.oauth_client_id = current.oauthClientId || undefined;
+        payload.oauth_client_secret = current.oauthClientSecret || undefined;
+        payload.oauth_scope = current.oauthScope || undefined;
+      }
+      if (editingId) {
+        return agentApi.updateMcpConnection(editingId, payload);
+      }
+      return agentApi.createMcpConnection({ server_id: current.serverId.trim(), ...payload });
     },
     onSuccess: async (saved, current) => {
-      toast.success(editingId ? t("settings.mcpServers.updated") : t("settings.mcpServers.created"));
-      // secret 欄は保存後に空へ戻す（値は保持も表示もしない）。
-      const next = { ...current, sessionId: "", oauthClientSecret: "" };
+      toast.success(editingId ? t("settings.mcpConnections.updated") : t("settings.mcpConnections.created"));
+      // 秘密の欄は保存後に空へ戻す（値は保持も表示もしない）。
+      const next = { ...current, apiKey: "", sessionId: "", oauthClientSecret: "" };
       setForm(next);
       setFormBaseline(next);
       await onSaved(saved.server_id ?? current.serverId.trim());
     },
   });
 
-  // 開いた時点の内容から変わっていれば未保存（secret 欄も含む。値は保存しない）。#87
+  // 開いた時点の内容から変わっていれば未保存（秘密の欄も含む。値は保存しない）。#87
   const formDirty = !sameDraft(form, formBaseline);
   const { confirmClose } = useEditorLeaveGuard(formDirty, saveMutation.isPending);
 
@@ -2467,7 +2306,7 @@ function McpServerEditor({
   function save() {
     const nextServerIdError =
       !editingId && !form.serverId.trim() ? t("settings.mcpServers.idRequired") : null;
-    // 空のタイムアウトを 0 として保存しない。規則は backend（ExternalMcpServerCreate / Patch）と同じ（#540）。
+    // 空のタイムアウトを 0 として保存しない。規則は backend（McpConnectionCreate / Patch）と同じ（#540）。
     const nextTimeoutError = numberFieldError(form.timeoutSeconds, {
       label: t("settings.timeout"),
       min: 0,
@@ -2487,15 +2326,21 @@ function McpServerEditor({
     saveMutation.mutate(form);
   }
 
-  const listTitle = t("nav.settingsExternalMcp");
-  const title = server ? server.label || server.server_id : t("settings.mcpServers.addTitle");
+  const authOptions: SelectFieldOption<McpAuthMode>[] = [
+    { value: "none", label: t("settings.mcpServers.authNone") },
+    { value: "api_key", label: t("settings.mcpServers.authApiKey") },
+    { value: "oauth_client_credentials", label: t("settings.mcpServers.authOauth") },
+    { value: "service_token", label: t("settings.mcpConnections.authServiceToken") },
+  ];
+  const listTitle = t("nav.settingsMcpConnections");
+  const title = connection ? connection.label || connection.server_id : t("settings.mcpConnections.addTitle");
 
   return (
     <>
       <PageHeader
         wide
         title={title}
-        subtitle={server ? server.server_id : t("page.settings.mcp.subtitle")}
+        subtitle={connection ? connection.server_id : t("page.settings.mcp.subtitle")}
         // 一覧へ戻るは左上、保存は右端の primary（#618）。
         back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: listTitle }), onClick: () => void back(), testId: "editor-back" }}
         actions={[
@@ -2521,43 +2366,45 @@ function McpServerEditor({
           attemptKey={saveMutation.submittedAt}
           testId="mcp-server-save-error"
         />
-        {server ? (
+        {connection ? (
           <Section
             title={t("editor.overview")}
             actions={
               <ObjectActionBar
                 actions={actions}
-                ariaLabel={t("common.entityActions", { name: server.server_id })}
+                ariaLabel={t("common.entityActions", { name: connection.server_id })}
                 moreLabel={t("common.moreActions")}
                 testId="mcp-server-object-actions"
               />
             }
           >
-            <div className="flex flex-wrap items-center gap-2">
-              {server.is_default ? (
-                <StatusBadge variant="info" label={t("settings.mcpServers.default")} icon={false} />
-              ) : null}
-              <StatusBadge
-                variant={server.configured ? "success" : "warning"}
-                label={server.configured ? t("common.configured") : t("common.notConfigured")}
-              />
-              <span className="text-xs text-fg-muted">
-                {`${t("settings.mcpServers.auth")}: ${mcpAuthLabel(server.auth_mode)}`}
-              </span>
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge
+                  variant={connection.configured ? "success" : "warning"}
+                  label={connection.configured ? t("common.configured") : t("common.notConfigured")}
+                />
+                <StatusBadge variant="neutral" label={mcpSourceLabel(connection.source)} icon={false} />
+                <span className="text-xs text-fg-muted">
+                  {`${t("settings.mcpServers.auth")}: ${mcpAuthLabel(connection.auth_mode)}`}
+                </span>
+              </div>
+              <McpConnectionNotice connection={connection} />
             </div>
           </Section>
         ) : null}
         <fieldset disabled={readOnly} className="min-w-0 space-y-6">
-          <Section title={t("mcpServers.connection")} description={t("settings.apiKeyManaged")}>
+          <Section title={t("mcpServers.connection")}>
             <Card className="min-w-0">
-              <CardContent className="space-y-4 pt-5">
-                {/* Server ID は作成時だけ入力でき、必須（backend の create_external_mcp_server と送信ガード）。 */}
+              <CardContent className="grid gap-4 pt-5 md:grid-cols-2">
+                {/* 接続 ID は作成時だけ入力でき、必須。モデルに渡すツール名（<接続>__<ツール>）の先頭になる。 */}
                 <TextField
                   id="mcp-server-id"
-                  label={t("settings.mcpServers.serverId")}
+                  label={t("settings.mcpConnections.serverId")}
+                  className="min-w-0"
                   required={!editingId}
                   error={serverIdError ?? undefined}
-                  helper={t("settings.mcpServers.serverIdHint")}
+                  helper={t("settings.mcpConnections.serverIdHint")}
                   value={form.serverId}
                   disabled={Boolean(editingId)}
                   onValueChange={(value) => {
@@ -2568,18 +2415,23 @@ function McpServerEditor({
                 <TextField
                   id="mcp-server-label"
                   label={t("settings.mcpServers.label")}
+                  className="min-w-0"
                   value={form.label}
                   onValueChange={(value) => setForm({ ...form, label: value })}
                 />
-                <TextField
-                  id="mcp-server-base-url"
-                  label={t("settings.baseUrl")}
-                  value={form.baseUrl}
-                  onValueChange={(value) => setForm({ ...form, baseUrl: value })}
-                />
+                <div className="min-w-0 md:col-span-2">
+                  <TextField
+                    id="mcp-server-base-url"
+                    label={t("settings.mcpConnections.url")}
+                    helper={builtin ? t("settings.mcpConnections.urlHintBuiltin") : t("settings.mcpConnections.urlHint")}
+                    value={form.baseUrl}
+                    onValueChange={(value) => setForm({ ...form, baseUrl: value })}
+                  />
+                </div>
                 <TextField
                   id="mcp-server-timeout"
                   label={t("settings.timeout")}
+                  className="min-w-0"
                   required
                   error={timeoutError ?? undefined}
                   type="number"
@@ -2593,6 +2445,8 @@ function McpServerEditor({
                 <TextField
                   id="mcp-server-session"
                   label={t("settings.mcpSessionId")}
+                  className="min-w-0"
+                  helper={t("settings.mcpSessionHint")}
                   value={form.sessionId}
                   autoComplete="off"
                   onValueChange={(value) => setForm({ ...form, sessionId: value })}
@@ -2600,105 +2454,164 @@ function McpServerEditor({
               </CardContent>
             </Card>
           </Section>
-          <Section title={t("mcpServers.oauth")}>
+          <Section title={t("settings.mcpConnections.authSection")}>
             <Card className="min-w-0">
               <CardContent className="grid gap-4 pt-5 md:grid-cols-2">
-                <TextField
-                  id="mcp-server-oauth-token"
-                  label={t("settings.mcpServers.oauthTokenUrl")}
-                  className="min-w-0"
-                  value={form.oauthTokenUrl}
-                  onValueChange={(value) => setForm({ ...form, oauthTokenUrl: value })}
+                <SelectField<McpAuthMode>
+                  id="mcp-server-auth-mode"
+                  label={t("settings.mcpServers.auth")}
+                  value={form.authMode}
+                  options={authOptions}
+                  disabled={builtin}
+                  helper={builtin ? t("settings.mcpConnections.authBuiltinHint") : undefined}
+                  onValueChange={(value) => setForm({ ...form, authMode: value })}
                 />
-                <TextField
-                  id="mcp-server-oauth-scope"
-                  label={t("settings.mcpServers.oauthScope")}
-                  className="min-w-0"
-                  value={form.oauthScope}
-                  onValueChange={(value) => setForm({ ...form, oauthScope: value })}
-                />
-                <TextField
-                  id="mcp-server-oauth-client"
-                  label={t("settings.mcpServers.oauthClientId")}
-                  className="min-w-0"
-                  value={form.oauthClientId}
-                  autoComplete="off"
-                  onValueChange={(value) => setForm({ ...form, oauthClientId: value })}
-                />
-                {/* API が保存済みの有無を返さないため、「保存済み / 未設定」を出す SecretField ではなく password の TextField にする（#631）。 */}
-                <TextField
-                  id="mcp-server-oauth-secret"
-                  label={t("settings.mcpServers.oauthClientSecret")}
-                  className="min-w-0"
-                  type="password"
-                  value={form.oauthClientSecret}
-                  autoComplete="off"
-                  onValueChange={(value) => setForm({ ...form, oauthClientSecret: value })}
-                />
+                {form.authMode === "service_token" ? (
+                  <TextField
+                    id="mcp-server-audience"
+                    label={t("settings.mcpConnections.audience")}
+                    className="min-w-0"
+                    helper={t("settings.mcpConnections.audienceHint")}
+                    value={form.serviceAudience}
+                    disabled={builtin}
+                    onValueChange={(value) => setForm({ ...form, serviceAudience: value })}
+                  />
+                ) : null}
+                {form.authMode === "api_key" ? (
+                  // API が保存済みの有無だけを返すため、値は表示しない password の欄にする（#631）。
+                  <TextField
+                    id="mcp-server-api-key"
+                    label={t("settings.mcpServers.authApiKey")}
+                    className="min-w-0"
+                    type="password"
+                    helper={
+                      connection?.api_key_configured
+                        ? t("settings.mcpServers.secretManaged")
+                        : t("settings.mcpConnections.apiKeyHint")
+                    }
+                    value={form.apiKey}
+                    autoComplete="off"
+                    onValueChange={(value) => setForm({ ...form, apiKey: value })}
+                  />
+                ) : null}
+                {form.authMode === "oauth_client_credentials" ? (
+                  <>
+                    <TextField
+                      id="mcp-server-oauth-token"
+                      label={t("settings.mcpServers.oauthTokenUrl")}
+                      className="min-w-0"
+                      value={form.oauthTokenUrl}
+                      onValueChange={(value) => setForm({ ...form, oauthTokenUrl: value })}
+                    />
+                    <TextField
+                      id="mcp-server-oauth-scope"
+                      label={t("settings.mcpServers.oauthScope")}
+                      className="min-w-0"
+                      value={form.oauthScope}
+                      onValueChange={(value) => setForm({ ...form, oauthScope: value })}
+                    />
+                    <TextField
+                      id="mcp-server-oauth-client"
+                      label={t("settings.mcpServers.oauthClientId")}
+                      className="min-w-0"
+                      value={form.oauthClientId}
+                      autoComplete="off"
+                      onValueChange={(value) => setForm({ ...form, oauthClientId: value })}
+                    />
+                    <TextField
+                      id="mcp-server-oauth-secret"
+                      label={t("settings.mcpServers.oauthClientSecret")}
+                      className="min-w-0"
+                      type="password"
+                      helper={connection?.oauth_configured ? t("settings.mcpServers.secretManaged") : undefined}
+                      value={form.oauthClientSecret}
+                      autoComplete="off"
+                      onValueChange={(value) => setForm({ ...form, oauthClientSecret: value })}
+                    />
+                  </>
+                ) : null}
+                {form.authMode === "service_token" && connection ? (
+                  <div className="min-w-0 md:col-span-2">
+                    <McpServiceTokenStatus connection={connection} />
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           </Section>
         </fieldset>
+        {/* 保存した接続だけツールを取得できる（入力中の値ではなく保存済みの設定で呼ぶ）。 */}
+        {connection ? <McpConnectionToolsPanel connection={connection} /> : null}
       </PageBody>
     </>
   );
 }
 
-function McpServerTable({
-  servers,
+function McpConnectionTable({
+  connections,
   onOpen,
   hrefFor,
   actionsFor,
 }: {
-  servers: ExternalMcpServerSettings[];
-  onOpen: (server: ExternalMcpServerSettings) => void;
+  connections: McpConnectionSettings[];
+  onOpen: (connection: McpConnectionSettings) => void;
   /** 名前のリンクの URL（新しいタブで開ける。#583）。 */
-  hrefFor: (server: ExternalMcpServerSettings) => string;
-  actionsFor: (server: ExternalMcpServerSettings) => EntityAction[];
+  hrefFor: (connection: McpConnectionSettings) => string;
+  actionsFor: (connection: McpConnectionSettings) => EntityAction[];
 }) {
-  const columns: DataTableColumn<ExternalMcpServerSettings>[] = [
+  const columns: DataTableColumn<McpConnectionSettings>[] = [
     {
       key: "server_id",
-      header: t("settings.mcpServers.serverId"),
+      header: t("settings.mcpConnections.serverId"),
       rowHeader: true,
-      render: (server) => (
-        <div className="flex flex-wrap items-center gap-2">
-          <RowTitleButton title={server.server_id} href={hrefFor(server)} onClick={() => onOpen(server)} />
-          {server.is_default ? (
-            <StatusBadge variant="info" label={t("settings.mcpServers.default")} icon={false} />
-          ) : null}
-        </div>
+      render: (connection) => (
+        <RowTitleButton
+          title={connection.label || connection.server_id}
+          subtitle={connection.server_id}
+          href={hrefFor(connection)}
+          onClick={() => onOpen(connection)}
+        />
       ),
     },
     {
-      key: "label",
-      header: t("settings.mcpServers.label"),
-      className: "text-fg-muted",
-      render: (server) => server.label || "-",
-    },
-    {
       key: "base_url",
-      header: t("settings.baseUrl"),
+      header: t("settings.mcpConnections.url"),
       className: "max-w-xs break-all text-fg-muted",
-      render: (server) => server.base_url || "-",
+      render: (connection) => connection.base_url || "-",
     },
     {
       key: "auth_mode",
       header: t("settings.mcpServers.auth"),
       className: "text-fg-muted",
-      render: (server) => mcpAuthLabel(server.auth_mode),
+      render: (connection) => mcpAuthLabel(connection.auth_mode),
+    },
+    {
+      key: "source",
+      header: t("settings.mcpConnections.source"),
+      render: (connection) => (
+        <StatusBadge variant="neutral" label={mcpSourceLabel(connection.source)} icon={false} />
+      ),
+    },
+    {
+      key: "status",
+      header: t("common.status"),
+      render: (connection) => (
+        <StatusBadge
+          variant={connection.configured ? "success" : "warning"}
+          label={connection.configured ? t("common.configured") : t("common.notConfigured")}
+        />
+      ),
     },
     {
       key: "actions",
       header: t("settings.mcpServers.actions"),
       align: "right",
-      render: (server) => (
+      render: (connection) => (
         <RowActionMenu
-          actions={actionsFor(server)}
-          ariaLabel={t("common.entityActions", { name: server.server_id })}
-          // 既定の default サーバーは既定化も削除もできない。使える項目の無いメニューは開かせない。
-          disabled={visibleEntityActions(actionsFor(server)).every((action) => action.disabled)}
-          testId={`mcp-server-row-actions-${server.server_id}`}
+          actions={actionsFor(connection)}
+          ariaLabel={t("common.entityActions", { name: connection.server_id })}
+          // RAG / NL2SQL などは削除できない。使える項目の無いメニューは開かせない。
+          disabled={visibleEntityActions(actionsFor(connection)).every((action) => action.disabled)}
+          testId={`mcp-server-row-actions-${connection.server_id}`}
         />
       ),
     },
@@ -2707,14 +2620,14 @@ function McpServerTable({
   return (
     <PagedDataTable
       pageKey="mcpServers"
-      rows={servers}
+      rows={connections}
       columns={columns}
-      getRowKey={(server) => server.server_id}
+      getRowKey={(connection) => connection.server_id}
       onRowClick={onOpen}
       rowProps={() => ({ className: "align-top" })}
-      tableClassName="w-full min-w-[44rem]"
-      ariaLabel={t("settings.mcpServers.title")}
-      empty={<EmptyState title={t("settings.mcpServers.empty")} />}
+      tableClassName="w-full min-w-[48rem]"
+      ariaLabel={t("settings.mcpConnections.title")}
+      empty={<EmptyState title={t("settings.mcpConnections.empty")} />}
     />
   );
 }

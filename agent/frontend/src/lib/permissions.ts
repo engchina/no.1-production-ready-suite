@@ -20,8 +20,6 @@ export const MENU_PERMISSIONS = {
   pluginMarketplaces: "menu.plugin_marketplaces",
   settingsSystemTables: "menu.settings_system_tables",
   settingsConnection: "menu.settings_connection",
-  settingsExternalRag: "menu.settings_external_rag",
-  settingsExternalNl2Sql: "menu.settings_external_nl2sql",
   settingsExternalMcp: "menu.settings_external_mcp",
   settingsRuntimeSnapshot: "menu.settings_runtime_snapshot",
   settingsOci: "menu.settings_oci",

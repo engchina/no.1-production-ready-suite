@@ -24,7 +24,7 @@ const skill = {
   description: "根拠付き情報を検索する",
   instructions: "検索して根拠を返す",
   mcp_requirements: [
-    { server_id: "control-plane", tool_names: ["external_rag_search"] },
+    { server_id: "rag", tool_names: ["rag_search"] },
   ],
   resource_ids: [],
   enabled: true,
@@ -244,10 +244,10 @@ test.describe("AI Agent Control Plane", () => {
       auditRecords: [
         {
           step_id: "step-1",
-          tool_name: "external_rag_search",
+          tool_name: "rag__rag_search",
           status: "failed",
-          error: "外部 RAG に接続できませんでした。",
-          error_code: "external_mcp.unavailable",
+          error: "RAG に接続できませんでした。",
+          error_code: "mcp.http_error",
           guardrail_warnings: [],
           artifact_ids: [],
           audit_metadata: {},
@@ -259,10 +259,10 @@ test.describe("AI Agent Control Plane", () => {
     await page.getByRole("button", { name: "実行を作成" }).click();
 
     const alert = page.getByRole("alert").filter({ hasText: "ツールの実行でエラーが発生しました" });
-    await expect(alert).toContainText("外部 RAG に接続できませんでした。");
+    await expect(alert).toContainText("RAG に接続できませんでした。");
     const details = alert.locator("details");
     await expect(details).toHaveAttribute("open", "");
-    await expect(details).toContainText("エラーコード: external_mcp.unavailable");
+    await expect(details).toContainText("エラーコード: mcp.http_error");
     await page.setViewportSize({ width: 375, height: 812 });
     await expect(alert).toBeVisible();
     await expectNoHorizontalOverflow(page);

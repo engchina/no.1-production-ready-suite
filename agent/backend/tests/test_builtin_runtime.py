@@ -12,11 +12,14 @@ from typing import Any
 
 import anyio
 import pytest
+from agents import FunctionTool
 from agents.testing import ScriptedModel, assistant_message, function_call
+from mcp_support import fake_product_mcp
 from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
 from app.features.agent.builtin_runtime import ModelTarget
+from app.features.agent.config import runtime_config_store
 from app.features.agent.runtime import (
     BUILTIN_RUNTIME_ID,
     AgentProfile,
@@ -381,3 +384,108 @@ def test_oci_model_omits_empty_tools_for_xai() -> None:
 
     assert client.responses.calls[0] == {"model": "m", "input": "x"}
     assert client.responses.calls[1]["tools"] == [{"type": "function"}]
+
+
+# ---------------------------------------------------------------------------
+# MCP 接続のツール（RAG / NL2SQL。#757）
+# ---------------------------------------------------------------------------
+
+MCP_SKILL_ID = "test757-skill"
+MCP_AGENT_ID = "test757-agent"
+
+
+@pytest.fixture
+def mcp_agent(monkeypatch: MonkeyPatch) -> Iterator[Any]:
+    """RAG の rag_search と、NL2SQL のすべてのツールを使う Agent（fake の MCP サーバー）。"""
+    mcp = fake_product_mcp(monkeypatch)
+    skill_registry.upsert_custom(
+        AgentSkillDefinition(
+            id=MCP_SKILL_ID,
+            name="MCP の Skill",
+            instructions="RAG と NL2SQL で調べる。",
+            mcp_requirements=[
+                SkillMcpRequirement(server_id="rag", tool_names=["rag_search"]),
+                SkillMcpRequirement(server_id="nl2sql"),
+            ],
+        )
+    )
+    runtime_repository.create_agent(
+        AgentProfile(id=MCP_AGENT_ID, name="MCP の Agent", skill_ids=[MCP_SKILL_ID])
+    )
+    try:
+        yield mcp
+    finally:
+        repository: Any = runtime_repository
+        with repository._lock:  # noqa: SLF001 - テストの後始末
+            for run_id in [
+                run_id for run_id, run in repository._runs.items() if run.agent_id == MCP_AGENT_ID
+            ]:
+                run = repository._runs.pop(run_id)
+                for approval in run.approvals:
+                    repository._approvals.pop(approval.id, None)
+        with contextlib.suppress(KeyError, ValueError):
+            runtime_repository.delete_agent(MCP_AGENT_ID)
+        with contextlib.suppress(KeyError, ValueError):
+            skill_registry.remove(MCP_SKILL_ID)
+
+
+def _create_mcp_run(goal: str) -> str:
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal=goal, agent_id=MCP_AGENT_ID), created_by_user_uuid=USER_UUID
+    )
+    return run.id
+
+
+def test_mcp_connection_tools_are_given_to_the_model(
+    monkeypatch: MonkeyPatch, mcp_agent: Any
+) -> None:
+    model = _script(
+        monkeypatch,
+        [function_call("rag__rag_search", {"query": "契約の更新条件"}, call_id="call-rag")],
+        [assistant_message("更新条件は契約書の第 5 条です。")],
+    )
+    run_id = _create_mcp_run("契約の更新条件を調べて")
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    # Skill が許可したツールだけを渡す（rag は rag_search だけ、nl2sql はすべて）。
+    tools = {tool.name: tool for tool in model.calls[0].tools if isinstance(tool, FunctionTool)}
+    assert "rag__rag_search" in tools
+    assert "rag__rag_chat_send_message" not in tools
+    assert {"nl2sql__nl2sql_query", "nl2sql__nl2sql_get_job"} <= set(tools)
+    # readOnlyHint の無いツールは承認が必要、読み取り専用のツールは承認なし。
+    assert tools["nl2sql__nl2sql_query"].needs_approval is True
+    assert tools["rag__rag_search"].needs_approval is False
+    # ツールは Run の利用者のサービストークン（aud = 接続）で呼ぶ。
+    [call] = mcp_agent.calls_of("rag_search")
+    assert call["claims"]["sub"] == USER_UUID
+    assert call["claims"]["aud"] == "rag"
+    assert call["claims"]["run_id"] == run_id
+    assert call["arguments"] == {"query": "契約の更新条件"}
+    [step] = run.steps
+    assert step.tool_call is not None and step.tool_call.name == "rag__rag_search"
+    assert step.status == "completed"
+    # RAG の結果は根拠の成果物として残る。
+    evidence = next(item for item in run.artifacts if item.kind == "rag_evidence")
+    assert evidence.content["citations"][0]["file_name"] == "契約書.pdf"
+
+
+def test_unavailable_mcp_connection_is_skipped_with_a_warning(
+    monkeypatch: MonkeyPatch, mcp_agent: Any
+) -> None:
+    runtime_config_store.upsert_mcp_server("nl2sql", base_url="")
+    model = _script(monkeypatch, [assistant_message("RAG だけで回答しました。")])
+    run_id = _create_mcp_run("売上を調べて")
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED
+    names = {tool.name for tool in model.calls[0].tools}
+    assert "rag__rag_search" in names
+    assert not any(name.startswith("nl2sql__") for name in names)
+    warning = next(event for event in run.events if event.type == "runtime.event")
+    assert "NL2SQL" in warning.message
+    assert warning.payload == {"severity": "warning"}

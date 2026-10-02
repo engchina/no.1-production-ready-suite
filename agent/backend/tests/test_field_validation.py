@@ -40,12 +40,11 @@ async def test_run_with_empty_goal_is_rejected_with_field_message() -> None:
 @pytest.mark.parametrize(
     ("method", "path", "payload"),
     [
-        ("POST", "/api/settings/external-mcp-servers", {"server_id": "t0", "timeout_seconds": 0}),
-        ("PATCH", "/api/settings/external-mcp-servers/default", {"timeout_seconds": -1}),
-        ("PATCH", "/api/settings/external-mcp", {"timeout_seconds": 601}),
-        ("PATCH", "/api/settings/external-nl2sql", {"timeout_seconds": 0}),
+        ("POST", "/api/settings/mcp-connections", {"server_id": "t0", "timeout_seconds": 0}),
+        ("PATCH", "/api/settings/mcp-connections/rag", {"timeout_seconds": -1}),
+        ("PATCH", "/api/settings/mcp-connections/nl2sql", {"timeout_seconds": 601}),
     ],
-    ids=["mcp-create-zero", "mcp-patch-negative", "legacy-mcp-over", "nl2sql-zero"],
+    ids=["mcp-create-zero", "mcp-patch-negative", "mcp-patch-over"],
 )
 async def test_mcp_timeout_is_never_saved_as_zero(
     method: str, path: str, payload: dict[str, object]
@@ -57,8 +56,19 @@ async def test_mcp_timeout_is_never_saved_as_zero(
 
 
 @pytest.mark.asyncio
-async def test_nl2sql_default_limit_message_matches_screen() -> None:
-    response = await _request("PATCH", "/api/settings/external-nl2sql", {"default_limit": 0})
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"server_id": "a__b"}, "接続 ID は英数字で始まる"),
+        ({"server_id": "control-plane"}, "接続 ID は英数字で始まる"),
+        ({"server_id": "erp", "base_url": "ftp://erp"}, "MCP の URL は http:// または https://"),
+    ],
+    ids=["double-underscore", "reserved", "url-scheme"],
+)
+async def test_mcp_connection_id_and_url_are_validated(
+    payload: dict[str, object], message: str
+) -> None:
+    response = await _request("POST", "/api/settings/mcp-connections", payload)
     assert response.status_code == 422
-    (message,) = response.json()["error_messages"]
-    assert message.endswith("既定取得件数は 1 以上 1000 以下の整数を入力してください。")
+    (error,) = response.json()["error_messages"]
+    assert message in error

@@ -27,8 +27,7 @@ import {
   AgentsPage,
   ApprovalsPage,
   AuditPage,
-  ExternalSettingsPage,
-  McpServersPage,
+  McpConnectionsPage,
   PluginMarketplacesPage,
   PluginsPage,
   RuntimeSnapshotSettingsPage,
@@ -132,9 +131,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsUploadStorage} element={<SettingsUploadStorageRoute />} />
         <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
-        <Route path={APP_ROUTES.settingsExternalRag} element={<ExternalSettingsPage key="rag" kind="rag" />} />
-        <Route path={APP_ROUTES.settingsExternalNl2Sql} element={<ExternalSettingsPage key="nl2sql" kind="nl2sql" />} />
-        <Route path={APP_ROUTES.settingsExternalMcp} element={<McpServersPage />} />
+        <Route path={APP_ROUTES.settingsMcpConnections} element={<McpConnectionsPage />} />
         <Route path={APP_ROUTES.settingsToolPolicy} element={<ToolPolicySettingsPage />} />
         <Route
           path={APP_ROUTES.settingsRuntimeSnapshot}

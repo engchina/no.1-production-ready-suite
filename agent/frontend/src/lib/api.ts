@@ -294,33 +294,48 @@ export interface AgentProfilePatchPayload {
   enabled?: boolean;
 }
 
-export interface ExternalServiceSettings {
-  base_url?: string | null;
-  api_key_configured: boolean;
-  oauth_configured?: boolean;
-  auth_mode?: "none" | "api_key" | "oauth_client_credentials" | string;
-  session_configured?: boolean;
-  timeout_seconds: number;
-  default_limit?: number | null;
-  configured: boolean;
-}
+export type McpAuthMode = "none" | "api_key" | "oauth_client_credentials" | "service_token";
 
-/** 外部 RAG / NL2SQL（各製品の MCP）の接続設定。token は呼び出しごとに作るため API キーはない（#233）。 */
-export interface ProductMcpSettings {
-  mcp_url?: string | null;
+/** MCP 接続（#757。RAG / NL2SQL / 外部 MCP）。資格情報の値は返らず、設定済みかだけを返す。 */
+export interface McpConnectionSettings {
+  server_id: string;
+  label?: string | null;
+  base_url?: string | null;
+  auth_mode: McpAuthMode;
+  /** サービストークンの aud（呼び先の製品名）。service_token のときだけ。 */
+  service_audience?: string | null;
   timeout_seconds: number;
-  default_limit?: number | null;
+  /** builtin（RAG / NL2SQL）/ env / plugin:<id> / runtime。runtime だけ削除できる。 */
+  source: string;
+  removable: boolean;
+  /** URL と認証方式に必要な資格情報がそろっているか。 */
   configured: boolean;
+  api_key_configured: boolean;
+  oauth_configured: boolean;
+  session_configured: boolean;
   /** 共通 .env の PLATFORM_SERVICE_TOKEN_SECRET が 32 文字以上あるか（値は返らない）。 */
   service_token_configured: boolean;
   /** AGENT_MCP_SERVICE_USER_LOGIN_ID があるか（Run の利用者がいない呼び出しで使う）。 */
   service_user_configured: boolean;
 }
 
-export interface ProductMcpSettingsPatch {
-  mcp_url?: string | null;
+export interface McpConnectionsData {
+  connections: McpConnectionSettings[];
+}
+
+export interface McpConnectionWritePayload {
+  server_id?: string;
+  label?: string | null;
+  base_url?: string | null;
+  auth_mode?: McpAuthMode;
+  api_key?: string | null;
   timeout_seconds?: number;
-  default_limit?: number;
+  session_id?: string | null;
+  oauth_token_url?: string | null;
+  oauth_client_id?: string | null;
+  oauth_client_secret?: string | null;
+  oauth_scope?: string | null;
+  service_audience?: string | null;
 }
 
 export interface ExternalMcpToolInfo {
@@ -329,40 +344,16 @@ export interface ExternalMcpToolInfo {
   input_schema: Record<string, unknown>;
   output_schema?: Record<string, unknown> | null;
   server_id?: string | null;
+  /** MCP の readOnlyHint。false のツールは既定で承認が必要。 */
+  read_only: boolean;
+  /** Agent のモデルに渡すツール名（`<接続>__<ツール>`）。 */
+  function_name?: string | null;
   metadata: Record<string, unknown>;
 }
 
 export interface ExternalMcpToolsData {
   tools: ExternalMcpToolInfo[];
   metadata: Record<string, unknown>;
-}
-
-export interface ExternalMcpToolsFilters {
-  server_id?: string;
-  trace_id?: string;
-}
-
-export interface ExternalMcpServerSettings extends ExternalServiceSettings {
-  server_id: string;
-  label?: string | null;
-  is_default: boolean;
-}
-
-export interface ExternalMcpServersData {
-  servers: ExternalMcpServerSettings[];
-  default_server_id: string;
-}
-
-export interface ExternalMcpServerWritePayload {
-  server_id?: string;
-  label?: string | null;
-  base_url?: string | null;
-  timeout_seconds?: number;
-  session_id?: string | null;
-  oauth_token_url?: string | null;
-  oauth_client_id?: string | null;
-  oauth_client_secret?: string | null;
-  oauth_scope?: string | null;
 }
 
 export interface AgentSkill {
@@ -754,18 +745,6 @@ function auditQuery(filters: ToolCallAuditFilters): string {
   return query ? `?${query}` : "";
 }
 
-function externalMcpToolsQuery(filters: ExternalMcpToolsFilters): string {
-  const params = new URLSearchParams();
-  if (filters.server_id) {
-    params.set("server_id", filters.server_id);
-  }
-  if (filters.trace_id) {
-    params.set("trace_id", filters.trace_id);
-  }
-  const query = params.toString();
-  return query ? `?${query}` : "";
-}
-
 export const agentApi = {
   // 組み込み Runtime の状態（SDK の版・既定のモデル・選べるモデル。#754）。
   getRuntimeStatus: () => request<BuiltinRuntimeStatus>("/api/runtime/status"),
@@ -838,59 +817,26 @@ export const agentApi = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
-  getExternalRagSettings: () =>
-    request<ProductMcpSettings>("/api/settings/external-rag"),
-  patchExternalRagSettings: (payload: ProductMcpSettingsPatch) =>
-    request<ProductMcpSettings>("/api/settings/external-rag", {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-    }),
-  getExternalNl2SqlSettings: () =>
-    request<ProductMcpSettings>("/api/settings/external-nl2sql"),
-  patchExternalNl2SqlSettings: (payload: ProductMcpSettingsPatch) =>
-    request<ProductMcpSettings>("/api/settings/external-nl2sql", {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-    }),
-  getExternalMcpSettings: () =>
-    request<ExternalServiceSettings>("/api/settings/external-mcp"),
-  patchExternalMcpSettings: (payload: {
-    base_url?: string | null;
-    timeout_seconds?: number;
-    session_id?: string | null;
-  }) =>
-    request<ExternalServiceSettings>("/api/settings/external-mcp", {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-    }),
-  listExternalMcpTools: (filters: ExternalMcpToolsFilters) =>
-    request<ExternalMcpToolsData>(
-      `/api/tools/external-mcp${externalMcpToolsQuery(filters)}`,
-    ),
-  listExternalMcpServers: () =>
-    request<ExternalMcpServersData>("/api/settings/external-mcp-servers"),
-  createExternalMcpServer: (payload: ExternalMcpServerWritePayload) =>
-    request<ExternalMcpServerSettings>("/api/settings/external-mcp-servers", {
+  listMcpConnections: () =>
+    request<McpConnectionsData>("/api/settings/mcp-connections"),
+  createMcpConnection: (payload: McpConnectionWritePayload) =>
+    request<McpConnectionSettings>("/api/settings/mcp-connections", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  updateExternalMcpServer: (
-    serverId: string,
-    payload: ExternalMcpServerWritePayload,
-  ) =>
-    request<ExternalMcpServerSettings>(
-      `/api/settings/external-mcp-servers/${encodeURIComponent(serverId)}`,
+  updateMcpConnection: (serverId: string, payload: McpConnectionWritePayload) =>
+    request<McpConnectionSettings>(
+      `/api/settings/mcp-connections/${encodeURIComponent(serverId)}`,
       { method: "PATCH", body: JSON.stringify(payload) },
     ),
-  deleteExternalMcpServer: (serverId: string) =>
-    request<ExternalMcpServersData>(
-      `/api/settings/external-mcp-servers/${encodeURIComponent(serverId)}`,
+  deleteMcpConnection: (serverId: string) =>
+    request<McpConnectionsData>(
+      `/api/settings/mcp-connections/${encodeURIComponent(serverId)}`,
       { method: "DELETE" },
     ),
-  setDefaultExternalMcpServer: (serverId: string) =>
-    request<ExternalMcpServersData>(
-      `/api/settings/external-mcp-servers/${encodeURIComponent(serverId)}/default`,
-      { method: "POST" },
+  listMcpConnectionTools: (serverId: string) =>
+    request<ExternalMcpToolsData>(
+      `/api/settings/mcp-connections/${encodeURIComponent(serverId)}/tools`,
     ),
   listSkills: () => request<AgentSkillListData>("/api/skills"),
   getSkill: (skillId: string) =>

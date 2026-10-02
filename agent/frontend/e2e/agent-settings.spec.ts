@@ -318,9 +318,9 @@ test.describe("Agent Runtime settings", () => {
 
     await expect(page.getByRole("heading", { name: "ツール権限", level: 1 })).toBeVisible();
     await expect(page.getByLabel("未指定ツールの既定動作")).toBeVisible();
-    await expect(page.getByText("external_rag_search")).toBeVisible();
-    await expect(page.getByText("external_nl2sql_query")).toBeVisible();
-    await expect(page.getByText("external_mcp_call")).toBeVisible();
+    // Control Plane のツールだけを並べる（RAG / NL2SQL / 外部 MCP のツールは MCP 接続から取得する。#757）。
+    await expect(page.getByText("agent_skill_list")).toBeVisible();
+    await expect(page.getByText("rag__rag_search")).toHaveCount(0);
     await expect(page.getByText("sandbox_command_run")).toHaveCount(0);
     // 権限レベルと side_effects は tool の分類（状態ではない）なので、StatusBadge のアイコンを付けない
     const badges = page.locator("main [data-status-variant]");
@@ -347,49 +347,106 @@ test.describe("Agent Runtime settings", () => {
     await savePolicy();
   });
 
-  test("複数 MCP サーバーを登録・既定設定・削除し tool 探索できる", async ({ page }) => {
-    await page.goto("/settings/external-mcp");
+  test("MCP 接続を API キーで追加し、ツールを取得して削除できる", async ({ page, mockApi }) => {
+    await page.goto("/settings/mcp-connections");
 
-    await expect(page.getByRole("heading", { name: "外部 MCP", level: 1 })).toBeVisible();
-    await expect(page.getByText("MCP tool は外部 JSON-RPC gateway として接続する")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "MCP サーバー" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "MCP 接続", level: 1 })).toBeVisible();
+    // RAG / NL2SQL は組み込みの接続として最初から並ぶ。
+    const table = page.getByRole("table", { name: "MCP 接続" });
+    await expect(table.getByRole("link", { name: /RAG rag/ })).toBeVisible();
+    await expect(table.getByRole("link", { name: /NL2SQL nl2sql/ })).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
-    // サーバーを追加（全画面エディタ ?id=new。フォームと探索パネルで Server ID ラベルが重複するため id 指定）
-    await page.getByRole("button", { name: "サーバーを追加" }).click();
-    await expect(page).toHaveURL(/\/settings\/external-mcp\?id=new$/);
+    await page.getByRole("button", { name: "接続を追加" }).click();
+    await expect(page).toHaveURL(/\/settings\/mcp-connections\?id=new$/);
     await page.locator("#mcp-server-id").fill("crm");
     await page.locator("#mcp-server-label").fill("CRM Gateway");
     await page.locator("#mcp-server-base-url").fill("http://mcp.example.test/jsonrpc");
     await page.locator("#mcp-server-timeout").fill("7");
+    await chooseSelectFieldOption(page.locator("#mcp-server-auth-mode"), "api_key");
+    await page.locator("#mcp-server-api-key").fill("crm-secret");
     await page.getByRole("button", { name: "作成" }).click();
-    await expect(page.getByText("サーバーを追加しました")).toBeVisible();
-    // 作成後は作成した対象のエディタへ移り、概要の ObjectActionBar で既定に切り替えられる
+    await expect(page.getByText("MCP 接続を追加しました")).toBeVisible();
+    // 作成後は作成した対象のエディタへ移る。API キーの値は送るだけで、画面にも応答にも残らない。
     await expect(page).toHaveURL(/\?id=crm$/);
     await expect(page.getByRole("heading", { name: "CRM Gateway", level: 1 })).toBeVisible();
-    await page.getByTestId("mcp-server-object-actions").getByRole("button", { name: "既定にする" }).click();
-    await expect(page.getByText("既定サーバーを変更しました")).toBeVisible();
+    expect(mockApi.lastRequest("POST", "/api/settings/mcp-connections")?.body).toMatchObject({
+      server_id: "crm",
+      auth_mode: "api_key",
+      api_key: "crm-secret",
+    });
+    await expect(page.locator("#mcp-server-api-key")).toHaveValue("");
+    await expect(page.getByText("この接続はまだ使えません")).toHaveCount(0);
 
-    // tool 探索（一覧に戻って crm の mock gateway を引く）
-    await page.getByTestId("editor-back").click();
-    await expect(page.getByRole("heading", { name: "MCP tools/list" })).toBeVisible();
-    await page.locator("#mcp-discovery-server-id").fill("crm");
-    await page.locator("#mcp-discovery-trace-id").fill("trace-ui-mcp-list");
-    await page.getByRole("button", { name: "取得" }).click();
-    await expect(page.getByRole("cell", { name: "lookup_customer" })).toBeVisible();
-    await expect(page.getByRole("cell", { name: "search_orders" })).toBeVisible();
+    // ツールの取得は保存した接続で呼び、結果はボタンの直下に出す（読み取り専用か、承認が必要か）。
+    await page.getByRole("button", { name: "ツールを取得" }).click();
+    const tools = page.getByRole("table", { name: "ツール" });
+    await expect(tools.getByText("lookup_customer", { exact: true })).toBeVisible();
+    await expect(tools.getByText("crm__update_order")).toBeVisible();
+    await expect(tools.getByText("読み取り専用")).toBeVisible();
+    await expect(tools.getByText("承認が必要")).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
-    // モバイル幅でも崩れない
     await page.setViewportSize({ width: 375, height: 812 });
     await expectNoHorizontalOverflow(page);
     await page.setViewportSize({ width: 1280, height: 800 });
 
-    // 削除（行メニュー → 確認。crm を消すと既定は default へ戻る）
+    // 削除（行メニュー → 確認）。
+    await page.getByTestId("editor-back").click();
     await chooseRowAction(page, "crm", "削除");
     await page.getByRole("button", { name: "削除", exact: true }).click();
-    await expect(page.getByText("サーバーを削除しました")).toBeVisible();
+    await expect(page.getByText("MCP 接続を削除しました")).toBeVisible();
     await expect(page.getByRole("button", { name: "crm の操作" })).toHaveCount(0);
+  });
+
+  test("RAG / NL2SQL の接続は URL を保存し、サービストークンの準備の状態を表示する", async ({ page, mockApi }) => {
+    await page.goto("/settings/mcp-connections?id=rag");
+
+    await expect(page.getByRole("heading", { name: "RAG", level: 1 })).toBeVisible();
+    // 未設定のあいだは、足りないものと直し方を warning の Banner で示す。
+    const notice = page.getByRole("status").filter({ hasText: "この接続はまだ使えません" });
+    await expect(notice).toContainText("MCP の URL が未設定です");
+    await expect(notice).toContainText("PLATFORM_SERVICE_TOKEN_SECRET");
+    // 認証方式は Run の利用者のサービストークンで固定し、API キーの欄は無い。
+    await expect(page.locator("#mcp-server-auth-mode")).toBeDisabled();
+    await expect(page.locator("#mcp-server-api-key")).toHaveCount(0);
+    const authStatus = page.getByRole("list", { name: "サービス間認証の状態" });
+    await expect(authStatus.getByRole("listitem")).toHaveCount(2);
+    await expect(authStatus).toContainText("AGENT_MCP_SERVICE_USER_LOGIN_ID");
+    await expect(page.locator("#mcp-server-timeout")).toHaveValue("60");
+    // RAG / NL2SQL は削除できない（対象の操作が無い）。
+    await expect(page.getByTestId("mcp-server-object-actions").getByRole("button")).toHaveCount(0);
+
+    await page.locator("#mcp-server-base-url").fill("http://rag-host/api/mcp");
+    await page.getByRole("button", { name: "保存" }).click();
+    await expect(page.getByText("MCP 接続を保存しました")).toBeVisible();
+    await expect(notice).not.toContainText("MCP の URL が未設定です");
+    await expect(notice).toContainText("PLATFORM_SERVICE_TOKEN_SECRET");
+    expect(mockApi.lastRequest("PATCH", "/api/settings/mcp-connections/rag")?.body).toEqual({
+      label: "RAG",
+      base_url: "http://rag-host/api/mcp",
+      timeout_seconds: 60,
+    });
+
+    // すべて設定済みなら Banner は出さず、状態は StatusBadge で示す。
+    const nl2sql = mockApi.state.mcpConnections.connections.find((item) => item.server_id === "nl2sql")!;
+    Object.assign(nl2sql, {
+      base_url: "http://nl2sql-host/api/mcp",
+      configured: true,
+      service_token_configured: true,
+      service_user_configured: true,
+    });
+    await page.goto("/settings/mcp-connections?id=nl2sql");
+    await expect(page.getByRole("heading", { name: "NL2SQL", level: 1 })).toBeVisible();
+    await expect(page.locator("#mcp-server-base-url")).toHaveValue("http://nl2sql-host/api/mcp");
+    await expect(page.getByText("この接続はまだ使えません")).toHaveCount(0);
+    await expect(
+      page.getByRole("list", { name: "サービス間認証の状態" }).getByText("設定済み")
+    ).toHaveCount(2);
+
+    await page.setViewportSize({ width: 375, height: 812 });
+    await expect(page.locator("#mcp-server-base-url")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
   });
 
   test("スキルを追加・編集・削除でき、ビルトインは保護される", async ({ page }) => {
@@ -412,7 +469,7 @@ test.describe("Agent Runtime settings", () => {
     await page.getByLabel("名前").fill("E2E カスタム");
     await page
       .getByLabel("MCP 依存 (JSON)")
-      .fill('[{"server_id":"control-plane","tool_names":["external_rag_search"]}]');
+      .fill('[{"server_id":"rag","tool_names":["rag_search"]}]');
     await page.getByLabel("Resource ID (JSON)").fill('["prompt.e2e"]');
     await page.getByRole("button", { name: "作成" }).click();
     await expect(page.getByText("スキルを追加しました")).toBeVisible();
@@ -420,7 +477,7 @@ test.describe("Agent Runtime settings", () => {
     // URL の更新は画面の切替（transition）より先に終わるため、編集のエディタが出たことを待つ。
     await expect(page.getByRole("heading", { name: "E2E カスタム", level: 1 })).toBeVisible();
     await expect(page.locator("#skill-id")).toBeDisabled();
-    await expect(page.getByLabel("MCP 依存 (JSON)")).toHaveValue(/external_rag_search/);
+    await expect(page.getByLabel("MCP 依存 (JSON)")).toHaveValue(/rag_search/);
 
     // 編集
     await page.getByLabel("名前").fill("E2E カスタム改");
@@ -528,57 +585,6 @@ test.describe("Agent Runtime settings", () => {
     await expectNoHorizontalOverflow(page);
   });
 
-  test("外部 RAG / NL2SQL は MCP の URL を保存し、サービス間認証の状態を表示する", async ({ page, mockApi }) => {
-    await page.goto("/settings/external-rag");
-
-    await expect(page.getByRole("heading", { name: "外部 RAG", level: 1 })).toBeVisible();
-    // 未設定のあいだは、足りないものと直し方を warning の Banner で示す。API キー欄はない。
-    const notice = page.getByRole("status").filter({ hasText: "この接続はまだ使えません" });
-    await expect(notice).toContainText("MCP の URL が未設定です");
-    await expect(notice).toContainText("PLATFORM_SERVICE_TOKEN_SECRET");
-    await expect(page.getByText("API key")).toHaveCount(0);
-    const authStatus = page.getByRole("list", { name: "サービス間認証の状態" });
-    await expect(authStatus.getByRole("listitem")).toHaveCount(2);
-    await expect(authStatus).toContainText("AGENT_MCP_SERVICE_USER_LOGIN_ID");
-    await expect(page.getByLabel("タイムアウト秒")).toHaveValue("60");
-
-    const url = page.getByLabel("MCP の URL");
-    await expect(url).toHaveAccessibleDescription(/接続先の製品の \/api\/mcp/);
-    await url.fill("rag.example.test");
-    await page.getByRole("button", { name: "保存" }).click();
-    await expect(page.getByText("MCP の URL は http:// または https:// で始めてください。")).toBeVisible();
-
-    await url.fill("http://rag-host/api/mcp");
-    await page.getByRole("button", { name: "保存" }).click();
-    await expect(page.getByText("設定を保存しました")).toBeVisible();
-    await expect(notice).not.toContainText("MCP の URL が未設定です");
-    await expect(notice).toContainText("PLATFORM_SERVICE_TOKEN_SECRET");
-    expect(mockApi.state.externalRag).toMatchObject({ mcp_url: "http://rag-host/api/mcp", configured: true });
-
-    // すべて設定済みなら Banner は出さず、状態は StatusBadge で示す。
-    Object.assign(mockApi.state.externalNl2Sql, {
-      mcp_url: "http://nl2sql-host/api/mcp",
-      configured: true,
-      service_token_configured: true,
-      service_user_configured: true,
-    });
-    await page.goto("/settings/external-nl2sql");
-    await expect(page.getByRole("heading", { name: "外部 NL2SQL", level: 1 })).toBeVisible();
-    await expect(page.getByLabel("MCP の URL")).toHaveValue("http://nl2sql-host/api/mcp");
-    await expect(page.getByText("この接続はまだ使えません")).toHaveCount(0);
-    await expect(
-      page.getByRole("list", { name: "サービス間認証の状態" }).getByText("設定済み")
-    ).toHaveCount(2);
-    await page.getByLabel("既定取得件数").fill("50");
-    await page.getByRole("button", { name: "保存" }).click();
-    await expect(page.getByText("設定を保存しました")).toBeVisible();
-    expect(mockApi.state.externalNl2Sql).toMatchObject({ default_limit: 50 });
-
-    await page.setViewportSize({ width: 375, height: 812 });
-    await expect(page.getByLabel("MCP の URL")).toBeVisible();
-    await expectNoHorizontalOverflow(page);
-  });
-
   // 保存の失敗は保存ボタンの上の Banner ではなく、操作の行の FormStatus に出す（messaging.md §10.2。#725）。
   for (const viewport of [
     { name: "desktop", width: 1280, height: 800 },
@@ -586,9 +592,9 @@ test.describe("Agent Runtime settings", () => {
   ]) {
     test(`設定の保存の失敗は操作の行に出す (${viewport.name})`, async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
-      await page.goto("/settings/external-rag");
-      await expect(page.getByRole("heading", { name: "外部 RAG", level: 1 })).toBeVisible();
-      await page.route("**/api/settings/external-rag", (route) =>
+      await page.goto("/settings/tool-policy");
+      await expect(page.getByRole("heading", { name: "ツール権限", level: 1 })).toBeVisible();
+      await page.route("**/api/settings/tool-policy", (route) =>
         route.request().method() === "PATCH"
           ? route.fulfill({
               status: 500,
@@ -597,10 +603,10 @@ test.describe("Agent Runtime settings", () => {
             })
           : route.fallback()
       );
-      await page.getByLabel("MCP の URL").fill("http://rag-host/api/mcp");
+      await chooseSelectFieldOption(page.locator("#tool-policy-default-mode"), "deny");
       await page.getByRole("button", { name: "保存", exact: true }).click();
 
-      const actions = page.getByRole("group", { name: "外部 RAG の保存" });
+      const actions = page.getByRole("group", { name: "ツール権限 の保存" });
       await expect(actions.getByRole("alert")).toHaveText("保存できませんでした。設定ファイルに書き込めません。");
       await expect(page.getByRole("alert")).toHaveCount(1);
       await expectNoHorizontalOverflow(page);
@@ -615,6 +621,20 @@ test.describe("Agent Runtime settings", () => {
   ]) {
     test(`通知を出したまま、ページの末尾の保存を押せる (${viewport.name})`, async ({ page, mockApi }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      // 保存ボタンが画面の下端に来るよう、ツールの一覧を長くする（MCP 接続のツールは並ばないため。#757）。
+      for (let index = 1; index <= 12; index += 1) {
+        mockApi.state.tools.push({
+          name: `e2e_tool_${index}`,
+          description: "スクロールの確認用のツール",
+          input_schema: { type: "object" },
+          output_schema: { type: "object" },
+          permission_level: "read",
+          side_effects: false,
+          timeout_seconds: 10,
+          max_retries: 0,
+          audit_tags: [],
+        });
+      }
       await page.goto("/settings/tool-policy");
       await expect(page.getByRole("heading", { name: "ツール権限", level: 1 })).toBeVisible();
       const saves = () =>

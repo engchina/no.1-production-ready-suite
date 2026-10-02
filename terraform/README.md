@@ -131,7 +131,7 @@ sudo systemctl restart production-ready-rag-backend.service
   Cookie のないリクエストは 401 です（header / JWT の認可は #750 で削除。[agent/docs/security-rbac.md](../agent/docs/security-rbac.md)）。
 - RAG / NL2SQL との連携（#233）: 同じ stack で RAG / NL2SQL も配備すると、Agent の `backend/.env` に
   `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（`http://<その製品の Compute の private IP>[:port]/api/mcp`）を書きます。
-  配備しなかった製品の URL は空で、後から画面の「外部 RAG」「外部 NL2SQL」で設定できます。Agent は Run を作った利用者として
+  これは Agent の「MCP 接続」の `rag` / `nl2sql` の初期値です（#757）。配備しなかった製品の URL は空で、後から画面の「MCP 接続」で設定できます。Agent は Run を作った利用者として
   呼び、認証は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`（stack が生成して全 Compute に同じ値を配る）で署名した短命の token です。
   Agent の Compute は RAG / NL2SQL の Compute の後に作ります（Terraform の resource は `oci_core_instance.agent`）。
 - Agent の実行は Control Plane の組み込み Runtime（OpenAI Agents SDK と OCI Enterprise AI の Responses API。#754）。外部の Runtime と Docker は使いません。
