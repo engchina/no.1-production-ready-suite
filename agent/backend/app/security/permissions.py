@@ -61,6 +61,7 @@ MENU_APPROVALS = "menu.approvals"
 MENU_AUDIT = "menu.audit"
 MENU_PLUGIN_MARKETPLACES = "menu.plugin_marketplaces"
 MENU_SECURITY_PERMISSIONS = "menu.security_permissions"
+MENU_SETTINGS_SYSTEM_TABLES = "menu.settings_system_tables"
 MENU_SETTINGS_CONNECTION = "menu.settings_connection"
 MENU_SETTINGS_EXTERNAL_RAG = "menu.settings_external_rag"
 MENU_SETTINGS_EXTERNAL_NL2SQL = "menu.settings_external_nl2sql"
@@ -117,6 +118,7 @@ _ADMIN_MENUS = (
     MENU_APPROVALS,
     MENU_AUDIT,
     MENU_PLUGIN_MARKETPLACES,
+    MENU_SETTINGS_SYSTEM_TABLES,
     MENU_SETTINGS_CONNECTION,
     MENU_SETTINGS_EXTERNAL_RAG,
     MENU_SETTINGS_EXTERNAL_NL2SQL,
@@ -140,6 +142,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     # （セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。#658）。
     _menu_permission(MENU_SECURITY_USERS, _GROUP_USERS_ROLES, "ユーザー管理"),
     _menu_permission(MENU_SECURITY_ROLES, _GROUP_USERS_ROLES, "ロール管理"),
+    # 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ。#658 / #751）。
+    _menu_permission(MENU_SETTINGS_SYSTEM_TABLES, _GROUP_OPERATIONS, "システムテーブル"),
     _menu_permission(MENU_SETTINGS_CONNECTION, _GROUP_OPERATIONS, "Agent 接続設定"),
     _menu_permission(MENU_SETTINGS_EXTERNAL_RAG, _GROUP_OPERATIONS, "外部 RAG"),
     _menu_permission(MENU_SETTINGS_EXTERNAL_NL2SQL, _GROUP_OPERATIONS, "外部 NL2SQL"),
@@ -194,7 +198,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
 
 ALL_PERMISSION_CODES = frozenset(item.code for item in PERMISSION_CATALOG)
 
-# 廃止した権限コード。既存ロールに残る行は `security.migrations` が冪等に削除する。
+# 廃止した権限コード。既存ロールに残る行は、システムテーブルの migration
+# （`app.system_schema`）が削除する。
 # 削除前でも `normalize_permission_codes` が捨てるため、実効権限・権限管理の表示と保存には現れない。
 # - `menu.dashboard`: ダッシュボード機能の廃止（#262）。
 RETIRED_PERMISSION_CODES: tuple[str, ...] = ("menu.dashboard",)
@@ -361,6 +366,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/external-rag"): _ADMIN_ONLY,
     ("GET", "/settings/external-nl2sql"): _any(MENU_SETTINGS_EXTERNAL_NL2SQL),
     ("PATCH", "/settings/external-nl2sql"): _ADMIN_ONLY,
+    # システムテーブル（#751。NL2SQL と同じくメニュー権限で状態の確認と作成・更新）。
+    ("GET", "/settings/database/system-tables"): _any(MENU_SETTINGS_SYSTEM_TABLES),
+    ("POST", "/settings/database/system-tables/initialize"): _any(MENU_SETTINGS_SYSTEM_TABLES),
     ("GET", "/settings/external-mcp"): _any(MENU_SETTINGS_EXTERNAL_MCP),
     ("PATCH", "/settings/external-mcp"): _ADMIN_ONLY,
     ("GET", "/settings/external-mcp-servers"): _any(MENU_SETTINGS_EXTERNAL_MCP),

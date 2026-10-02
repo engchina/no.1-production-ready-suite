@@ -11,12 +11,12 @@ import { isI18nKey, t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 
 /**
- * DB ゲートの導線。ADB の起動と接続情報の確認はデータベース設定の ADB 管理。
- * Agent はシステムテーブルの確認（`schema_probe`）をまだ持たないため、`systemTables` は渡さない
- * （状態 API は `setup_required` を返さない）。
+ * DB ゲートの導線。ADB の起動と接続情報の確認はデータベース設定の ADB 管理、システムテーブルの
+ * 作成・更新は運用設定のシステムテーブル（状態 API が `setup_required` を返す。RAG / NL2SQL と同じ。#751）。
  */
 export const DATABASE_GATE_ROUTES: DatabaseGateRoutes = {
   databaseSettings: `${APP_ROUTES.settingsDatabase}#adb-management`,
+  systemTables: APP_ROUTES.settingsSystemTables,
 };
 
 /** 共通の DB ゲートの文言を、Agent の辞書にある値で上書きする（製品名の入る文言など）。 */
@@ -30,8 +30,8 @@ export function databaseGateMessages(): Partial<DatabaseGateMessages> {
 
 /**
  * 業務画面を開く前にデータベースの利用可否を確認する（3製品共通の部品。#325）。
- * ゲートを通さない画面は共通の既定（システム設定の 5 画面）。ローカル認証（`AGENT_AUTH_MODE=local`）は
- * DB を使わないため、backend の状態 API が常に `ok` を返し、ゲートは出ない。
+ * ゲートを通さない画面は共通の既定（システム設定の 5 画面とシステムテーブル）。ローカル認証でも
+ * ユーザー・ロールは共通 DB にあるため、DB を確かめる（#750 / #751）。
  */
 export function DatabaseGate({ children }: { children: ReactNode }) {
   return (

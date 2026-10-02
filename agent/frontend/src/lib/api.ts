@@ -23,6 +23,12 @@ import type {
   DatabaseStatusData,
   DatabaseWalletDownloadData,
 } from "@engchina/production-ready-system-settings";
+// システムテーブルの API 型は3製品共通（platform の共有パッケージ。#325 / #751）。
+import type {
+  SystemTablesInitializeRequest,
+  SystemTablesOperationData,
+  SystemTablesStatusData,
+} from "@engchina/production-ready-system-settings";
 export type {
   EnterpriseAiConfiguredModel,
   EnterpriseAiModelSettings,
@@ -1111,6 +1117,12 @@ export const api = {
   // DB の状態（画面の DB ゲートが使う。3製品共通の判定と契約。ログイン不要。#325）。
   getDatabaseStatus: (options?: { signal?: AbortSignal }) =>
     request<DatabaseStatusData>("/api/ready/database", { signal: options?.signal }),
+
+  // システムテーブル（運用設定。3製品共通のカードと契約。#751）。
+  getSystemTablesStatus: (options?: { signal?: AbortSignal }) =>
+    request<SystemTablesStatusData>("/api/settings/database/system-tables", { signal: options?.signal }),
+  initializeSystemTables: (body: SystemTablesInitializeRequest) =>
+    request<SystemTablesOperationData>("/api/settings/database/system-tables/initialize", jsonBody(body)),
 
   getModelSettings: () => request<ModelSettingsData>("/api/settings/model"),
   updateModelSettings: (body: ModelSettingsPayload) =>

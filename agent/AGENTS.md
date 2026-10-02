@@ -79,7 +79,7 @@ Prompt、Workflow、Template、Runtime 固有設定を直接参照してはな�
 - 日本語フォントは `"Noto Sans JP", "Roboto", system-ui, sans-serif`、本文 14px。
 - ナビは「業務 Agent / Skill / Runtime / Run / 承認・監査 / Marketplace」を主要導線とする。
   Plugin、Tools、Planner、Memory を独立ナビに戻さない。
-- 設定は2セクションに分ける。**運用設定**：Agent 接続設定 / 外部 RAG / 外部 NL2SQL / 外部 MCP /
+- 設定は2セクションに分ける。**運用設定**：システムテーブル（先頭。RAG / NL2SQL と同じ。#751）/ Agent 接続設定 / 外部 RAG / 外部 NL2SQL / 外部 MCP /
   Control Plane バックアップ（Agent 固有）。**システム設定**：OCI 認証 / アップロード保存先 / モデル /
   データベース / 外観（3製品で共通。画面と API は platform の共有パッケージ）。
   ツール権限 / Command Policy / Runtime Safety はナビに出さない（Control Plane 化で外した方針を維持）。
@@ -160,7 +160,8 @@ backend/app/features/agent/
   plugins.py                Marketplace package の原子的 install
   router.py                 REST / SSE / WS / Binding MCP endpoint
 backend/app/security/       共通認証の上の Agent の権限・対象範囲・権限管理 API（#215）
-backend/app/cli/agent_security_migrate.py  PLATFORM_* と AGENT_ROLE_* の冪等な DDL
+backend/app/system_schema.py               システムテーブル（AGENT_* の DDL・migration・状態。#751）
+backend/app/cli/agent_system_schema.py     システムテーブルの status / initialize / recreate の CLI
 frontend/src/
   pages/AgentRuntimePages.tsx
   lib/api.ts, lib/i18n.ts, lib/routes.ts

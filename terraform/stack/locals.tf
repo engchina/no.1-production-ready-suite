@@ -122,7 +122,7 @@ EOT
 
   # Agent は python-oracledb Thin mode + Wallet(mTLS) だけで接続する。
   # Runtime 状態の Oracle repository は起動時に自分の table を作成し、共通認証と Agent の権限の table は
-  # init_script.sh が agent_security_migrate で作成する（DDL は Terraform に持たない）。
+  # init_script.sh が agent_system_schema --initialize で作成する（DDL は Terraform に持たない。#751）。
   # ログインは共通認証（構成管理者 system_admin と、ユーザー管理で作る DB ユーザー。#215）。
   # gunicorn は 1 worker・dispatcher は in_process に固定する（checkpoint repository は process 内に状態を持つため）。
   agent_data_dir_host = "/u01/data/production-ready-agent"

@@ -1,4 +1,4 @@
-"""Agent の認証/RBAC の永続化（#215）。DDL は `security.migrations` の責務。
+"""Agent の認証/RBAC の永続化（#215）。DDL はシステムテーブル（`app.system_schema`）の責務。
 
 ユーザー・ロール・セッション（`PLATFORM_*`）は platform の `pr_system_settings.auth.store`。
 ここにはロールに付ける Agent のデータだけを置く。

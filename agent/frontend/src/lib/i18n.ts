@@ -18,6 +18,40 @@ const agentJa = {
   "nav.section.runtime": "実行",
   "nav.section.controlPlane": "Control Plane",
   "nav.section.operations": "運用設定",
+  "nav.settingsSystemTables": "システムテーブル管理",
+  "nav.settingsSystemTables.sidebar": "システムテーブル",
+  "dbGate.openSystemTables": "システムテーブルを開く",
+  "settings.systemTables.subtitle":
+    "Agent の内部 schema（ロールの権限・対象範囲と台帳）と migration の状態を確認・初期化します。",
+  // システムテーブルのカードは 3 製品共通（#325 / #751）。ここには Agent 固有の文言だけを置き、
+  // それ以外は共通の既定（SYSTEM_TABLES_MESSAGES）を使う。見出しは RAG / NL2SQL と同じ。
+  "settings.database.systemTables.title": "システムテーブル",
+  "settings.database.systemTables.description":
+    "Agent が使用する Oracle テーブル（ロールの権限・利用できるエージェント・migration の台帳）と索引の状態を確認し、管理者の明示操作で準備します。3 製品共通のユーザー・ロールのテーブル（PLATFORM_*）も先に用意します。",
+  "settings.database.systemTables.readOnly":
+    "システムテーブルの作成・更新と全再作成には「システムテーブル」の権限が必要です。状態の確認と再取得はできます。",
+  "settings.database.systemTables.summary.objectsHint": "テーブル・索引の合計",
+  "settings.database.systemTables.statusHint.missing":
+    "Agent のシステムテーブルがまだありません。「作成・更新」で必要なオブジェクトを作成してください。",
+  "settings.database.systemTables.statusHint.partial":
+    "必須オブジェクトが {count} 件不足しています。「作成・更新」で不足分を補ってください。",
+  "settings.database.systemTables.statusHint.outdated":
+    "DDL または migration の更新が必要です。「作成・更新」は既存データを保持して更新します。",
+  "settings.database.systemTables.action.recreate": "すべて再作成",
+  "settings.database.systemTables.operation.initialized": "Agent のシステムテーブルを作成しました。",
+  "settings.database.systemTables.operation.migrated": "Agent のシステムテーブルを更新しました。",
+  "settings.database.systemTables.operation.recreated": "Agent のシステムテーブルをすべて再作成しました。",
+  "settings.database.systemTables.previousFailureLockDetail":
+    "Oracle の対象オブジェクトのロックが待機時間内に解放されませんでした。権限管理の保存を止めてから、状態を再取得して再試行してください。",
+  "settings.database.systemTables.error.recovery":
+    "状態を再取得し、Oracle のロック状態を確認して再試行してください。",
+  "settings.database.systemTables.recreate.sectionDescription":
+    "ロールに付けた Agent の権限と利用できるエージェントを削除して再作成します。元に戻せません。3 製品共通のユーザー・ロール（PLATFORM_*）と、RAG / NL2SQL のテーブルは削除しません。",
+  "settings.database.systemTables.confirmation.helper":
+    "この操作は取り消せません。{phrase} と正確に入力し、続く確認ダイアログでも承認してください。",
+  "settings.database.systemTables.confirm.title": "Agent の権限の割り当てを削除しますか？",
+  "settings.database.systemTables.confirm.description":
+    "管理対象の Agent のテーブルを削除して再作成します。ロールに付けた Agent の権限と利用できるエージェントは復元できません。",
   "nav.section.settings": "システム設定",
   "nav.settingsAppearance": "外観",
   "appearance.subtitle": "配色テーマ（ライト / ダーク）を切り替えます。既定はライトです。",

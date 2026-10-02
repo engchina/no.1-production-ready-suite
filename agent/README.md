@@ -74,7 +74,7 @@ frontend の Vite は `BACKEND_URL` を明示したときだけ `/api` を backe
 
 ローカル開発の既定は `AGENT_AUTH_MODE=local`（全権限のローカル利用者。ログイン不要）です。ログインを確認するときは
 `AGENT_AUTH_MODE=production` にし、共通 `.env` の `PLATFORM_ORACLE_*` と `PLATFORM_ADMIN_LOGIN_USER_PASSWORD` を設定して
-`cd backend && uv run python -m app.cli.agent_security_migrate` でテーブルを作ります（[docs/security-rbac.md](docs/security-rbac.md)）。
+運用設定 > システムテーブル か `cd backend && uv run python -m app.cli.agent_system_schema --initialize` でテーブルを作ります（[docs/security-rbac.md](docs/security-rbac.md)）。
 
 既存 helper を使う場合:
 
@@ -142,7 +142,7 @@ compose の project 名（`production-ready-agent-control-plane`）は変えて�
    Binding の書き出し（`bindings/`）は次の同期で作り直されます。`AGENT_RUNTIME_REPOSITORY_BACKEND=file` などで
    volume に保存していた状態を引き継ぐときは、中身を backend の保存先へ写してから volume を消します。
 4. backend を `uv run`（開発）または systemd の `production-ready-agent-backend`（Resource Manager の stack）で起動し、
-   初回は `cd backend && uv run python -m app.cli.agent_security_migrate` でテーブルを作ります。
+   初回は 運用設定 > システムテーブル か `cd backend && uv run python -m app.cli.agent_system_schema --initialize` でテーブルを作ります。
 
 ## 既存環境の更新手順（#566 既定のテキストモデルの必須化）
 
@@ -196,7 +196,7 @@ compose の project 名（`production-ready-agent-control-plane`）は変えて�
 ## 既存環境の更新手順（#215）
 
 #215 で Agent も共通認証のログインと権限管理になり、Resource Manager の stack の Nginx Basic 認証を廃止しました。
-共通 `.env` の `PLATFORM_ADMIN_*` の確認、`AGENT_AUTH_MODE=production`、`agent_security_migrate` の実行、
+共通 `.env` の `PLATFORM_ADMIN_*` の確認、`AGENT_AUTH_MODE=production`、システムテーブルの作成・更新、
 Nginx の Basic 認証の削除の手順は [docs/security-rbac.md §8](docs/security-rbac.md#8-既存環境の更新手順215) を参照してください。
 
 ## OCI への配備（Resource Manager）

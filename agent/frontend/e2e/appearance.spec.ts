@@ -77,17 +77,21 @@ for (const viewport of [
       "nav-section-nav-section-settings",
     ]);
 
-    // セキュリティ設定は権限管理、運用設定は Agent 固有の5項目、ユーザーとロール・システム設定は3製品共通。
+    // セキュリティ設定は権限管理、運用設定はシステムテーブル（先頭。#751）と Agent 固有の5項目、
+    // ユーザーとロール・システム設定は3製品共通。
     const security = sidebar.locator("#nav-section-nav-section-security");
     const operations = sidebar.locator("#nav-section-nav-section-operations");
     const userRoles = sidebar.locator("#nav-section-nav-section-userRoles");
     const settings = sidebar.locator("#nav-section-nav-section-settings");
     await expect(security.getByRole("link")).toHaveCount(1);
     await expect(security.locator('a[href="/settings/security/permissions"]')).toHaveCount(1);
-    await expect(operations.getByRole("link")).toHaveCount(5);
+    await expect(operations.getByRole("link")).toHaveCount(6);
+    // 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ）。
+    await expect(operations.getByRole("link").first()).toHaveAttribute("href", "/settings/system-tables");
     await expect(userRoles.getByRole("link")).toHaveCount(2);
     await expect(settings.getByRole("link")).toHaveCount(5);
     for (const href of [
+      "/settings/system-tables",
       "/settings/connection",
       "/settings/external-rag",
       "/settings/external-nl2sql",

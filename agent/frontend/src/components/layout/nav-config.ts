@@ -12,6 +12,7 @@ import {
   PlayCircle,
   PlugZap,
   Store,
+  TableProperties,
   type LucideIcon,
 } from "lucide-react";
 
@@ -110,9 +111,17 @@ export const NAV_SECTIONS: NavSection[] = [
     })),
   },
   {
-    // Agent 固有の運用設定（接続先と Control Plane のバックアップ。#87）。
+    // Agent 固有の運用設定（接続先と Control Plane のバックアップ。#87）。先頭はシステムテーブル
+    // （RAG / NL2SQL と同じ並びとアイコン。#658 / #751）。
     titleKey: "nav.section.operations",
     items: [
+      {
+        href: APP_ROUTES.settingsSystemTables,
+        labelKey: "nav.settingsSystemTables",
+        sidebarLabelKey: "nav.settingsSystemTables.sidebar",
+        icon: TableProperties,
+        permission: MENU_PERMISSIONS.settingsSystemTables,
+      },
       {
         href: APP_ROUTES.settingsConnection,
         labelKey: "nav.settingsConnection",

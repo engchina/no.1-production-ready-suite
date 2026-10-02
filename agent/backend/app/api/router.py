@@ -10,9 +10,11 @@ WebSocket は handler の中で認証する（`app.security.dependencies.authent
 from fastapi import APIRouter, Depends
 
 from app.features.agent.router import router as agent_router
+from app.features.settings.system_tables import router as system_tables_router
 from app.security.dependencies import authorize_api_request
 from app.security.router import router as security_router
 
 api_router = APIRouter(dependencies=[Depends(authorize_api_request)])
 api_router.include_router(security_router)
 api_router.include_router(agent_router)
+api_router.include_router(system_tables_router)

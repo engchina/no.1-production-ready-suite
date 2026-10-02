@@ -92,6 +92,72 @@ const MOCK_MARKETPLACE_LISTING = {
   ],
 };
 
+type SystemTableRow = { name: string; object_type: string; exists: boolean };
+
+const SYSTEM_TABLE_OBJECTS: Array<[string, string]> = [
+  ["AGENT_SCHEMA_OPERATIONS", "TABLE"],
+  ["AGENT_SCHEMA_MIGRATIONS", "TABLE"],
+  ["AGENT_ROLE_PERMISSIONS", "TABLE"],
+  ["AGENT_ROLE_AGENTS", "TABLE"],
+  ["AGENT_ROLE_AGENTS_AGENT_IDX", "INDEX"],
+];
+const SYSTEM_TABLE_MIGRATIONS = [
+  "20261002_001_role_access",
+  "20261002_002_remove_retired_permission_codes",
+  "20261002_003_retire_role_business_views",
+];
+
+/** `GET /api/settings/database/system-tables` の応答（backend の `app.system_schema` と同じ形。#751）。 */
+function systemTablesStatus(ready: boolean): Record<string, unknown> {
+  const exists = (name: string) => ready || !name.startsWith("AGENT_SCHEMA") && name !== "AGENT_ROLE_AGENTS_AGENT_IDX";
+  const objects: Array<SystemTableRow & Record<string, unknown>> = SYSTEM_TABLE_OBJECTS.map(([name, object_type]) => ({
+    name,
+    object_type,
+    exists: exists(name),
+    estimated_rows: exists(name) && object_type === "TABLE" ? 0 : null,
+    created_at: exists(name) ? MOCK_NOW : null,
+    last_analyzed_at: null,
+  }));
+  return {
+    status: ready ? "ready" : "partial",
+    schema_head: SYSTEM_TABLE_MIGRATIONS.at(-1),
+    applied_versions: ready ? SYSTEM_TABLE_MIGRATIONS : [],
+    pending_versions: ready ? [] : SYSTEM_TABLE_MIGRATIONS,
+    pending_destructive_migrations: ready
+      ? []
+      : [
+          {
+            name: "20261002_003_retire_role_business_views",
+            description:
+              "権限管理でロールに割り当てていた業務ビュー（AGENT_ROLE_BUSINESS_VIEWS）を削除します。#750 から使っていません。",
+          },
+        ],
+    expected_object_count: objects.length,
+    existing_object_count: objects.filter((item) => item.exists).length,
+    expected_table_count: 4,
+    existing_table_count: objects.filter((item) => item.exists && item.object_type === "TABLE").length,
+    missing_objects: objects.filter((item) => !item.exists).map(({ name, object_type }) => ({ name, object_type })),
+    retired_objects: ready ? [] : [{ name: "AGENT_ROLE_BUSINESS_VIEWS", object_type: "TABLE" }],
+    missing_foreign_keys: [],
+    orphaned_foreign_keys: [],
+    mismatched_foreign_keys: [],
+    disabled_foreign_keys: [],
+    tables: objects.filter((item) => item.object_type === "TABLE").map(({ object_type: _type, ...table }) => table),
+    objects,
+    operation_state: {
+      status: "idle",
+      operation_kind: null,
+      lease_expires_at: null,
+      last_error_code: null,
+      schema_epoch: ready ? 1 : 0,
+      updated_at: ready ? MOCK_NOW : null,
+    },
+  };
+}
+
+const SYSTEM_TABLES_LEGACY = systemTablesStatus(false);
+const SYSTEM_TABLES_READY = systemTablesStatus(true);
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -124,6 +190,8 @@ function createState() {
     adbInfo: d.adbInfo as Json,
     uploadStorage: d.uploadStorage as Json,
     ociSettings: d.ociSettings as Json,
+    // システムテーブルの状態（#751）。既定は旧版の DB（業務ビューの表の削除を承認する前）。
+    systemTables: clone(SYSTEM_TABLES_LEGACY) as Json,
     // DB の状態（`GET /api/ready/database`。DB ゲートが使う。#325）。既定は使える状態。
     databaseStatus: {
       status: "ok",
@@ -364,6 +432,17 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   // --- health ---
   if (method === "GET" && at("health")) return state.health;
   if (method === "GET" && at("ready", "database")) return state.databaseStatus;
+  // システムテーブル（#751）。作成・更新は承認（allow_destructive）が無ければ 409（backend と同じ）。
+  if (method === "GET" && at("settings", "database", "system-tables")) return state.systemTables;
+  if (method === "POST" && at("settings", "database", "system-tables", "initialize")) {
+    const current = state.systemTables as Json;
+    const destructive = (current.pending_destructive_migrations as Json[] | undefined) ?? [];
+    if (!body.recreate && destructive.length > 0 && body.allow_destructive !== true) {
+      throw new HttpError(409, "データを削除する未適用の migration があります。内容を確認して承認してください。");
+    }
+    state.systemTables = clone(SYSTEM_TABLES_READY) as Json;
+    return { ...(state.systemTables as Json), operation: body.recreate ? "recreated" : "migrated", dropped_object_count: 1, created_object_count: 3 };
+  }
 
   // --- Runtime / Binding ---
   if (head === "runtimes") {

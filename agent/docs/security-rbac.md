@@ -21,7 +21,7 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 - 認証ポリシー（セッションの有効期限・ロック・パスワード長・Argon2 のコスト・`PLATFORM_AUTH_COOKIE_SECURE`）は共通 `.env` の `PLATFORM_AUTH_*`。
 - Cookie 名は製品ごと（`AGENT_APP_AUTH_SESSION_COOKIE_NAME=agent_session` / `AGENT_APP_AUTH_CSRF_COOKIE_NAME=agent_csrf`）。
   同じホストで 3 製品を動かしてもセッションは混ざりません。
-- テーブルは `cd agent/backend && uv run python -m app.cli.agent_security_migrate` で作ります（`PLATFORM_ORACLE_*` で接続し、
+- テーブルは 運用設定 > システムテーブル の「作成・更新」か、`cd agent/backend && uv run python -m app.cli.agent_system_schema --initialize` で作ります（`PLATFORM_ORACLE_*` で接続し、
   `PLATFORM_*` → `AGENT_ROLE_*` → 組み込み SYSTEM_ADMIN ロールの順に冪等に適用。ユーザーは作りません）。
   未適用のままログインすると `409 SECURITY_SCHEMA_MIGRATION_REQUIRED` になります。
 
@@ -67,7 +67,7 @@ Run の一覧・詳細は `agent.runs.view`（または operate / decide / audit
 暗黙に含むため、capability だけを付けたロールでも画面を開けます。
 
 ダッシュボード（`menu.dashboard`・グループ「概要」）は廃止しました（#262）。`/` は画面を持たず、ナビの並び順で最初に開ける画面へ移します
-（未知の URL・ログイン後は Run を開ければ Run）。既存ロールに残る `menu.dashboard` は `agent_security_migrate` が削除します（§8）。
+（未知の URL・ログイン後は Run を開ければ Run）。既存ロールに残る `menu.dashboard` はシステムテーブルの作成・更新（migration）が削除します（§8）。
 削除前でも、カタログにないコードは実効権限・権限管理の表示から除かれ、権限管理で保存すると消えます。
 
 ### manifest（抜粋。正本は `backend/app/security/permissions.py`）
@@ -140,14 +140,14 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
    （12〜30 文字、大文字・小文字・数字を含み、`admin` と `"` を含まない）があることを確認する（RAG / NL2SQL と共通）。
    HTTPS で配信している場合は `PLATFORM_AUTH_COOKIE_SECURE=true`。
 2. `agent/backend/.env` に `AGENT_AUTH_MODE=production` を書く。
-3. テーブルを作る: `cd agent/backend && uv sync --locked --no-dev && uv run python -m app.cli.agent_security_migrate`。
+3. テーブルを作る: `cd agent/backend && uv sync --locked --no-dev && uv run python -m app.cli.agent_system_schema --initialize`（画面の 運用設定 > システムテーブル でもよい）。
 4. Nginx の Basic 認証を廃止する（Resource Manager の stack で配備した instance）。`/etc/nginx/sites-available/production-ready-agent` から
    `auth_basic` / `auth_basic_user_file` を削除し、`location /api/` の `proxy_set_header Host` を `$http_host` にして
    `sudo nginx -t && sudo systemctl reload nginx`。`/etc/nginx/production-ready-agent.htpasswd` と
    `/u01/aipoc/props/basic_auth_*` は削除してよい（`init_script.sh` を再実行しても同じ設定になる）。
 5. `sudo systemctl restart production-ready-agent-backend`（開発は backend の `uv run` を起動し直す）。
 6. `system_admin` でログインし、ロール管理でロールを作り、権限管理で Agent の権限・エージェントを割り当て、ユーザーに付ける。
-7. （#262 以降に更新する環境）手順 3 の `agent_security_migrate` を再実行し、既存ロールに残る廃止した権限コード
+7. （#262 以降に更新する環境）手順 3 のシステムテーブルの作成・更新を再実行し、既存ロールに残る廃止した権限コード
    `menu.dashboard` を削除する（何度実行してもよい。出力の `retired_permission_rows` が削除した行数）。削除しないと、RAG / NL2SQL の
    ユーザー管理から非 SYSTEM_ADMIN の管理者がそのロールを割り当てるとき、他製品の権限の判定（生のコードで比べる）で 403 になることがあります。
 8. （#750 以降に更新する環境）`backend/.env` の `AGENT_RBAC_*` は読まれないので削除してよい。header / JWT で API を呼んでいた

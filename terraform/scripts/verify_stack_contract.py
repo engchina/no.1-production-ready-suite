@@ -234,7 +234,7 @@ INIT_SCRIPT_CONTRACTS = {
         'install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"',
         'find "${WALLET_DIR}" -type f -exec chmod 0600 {} \\;',
         "import app.features.agent.runtime",
-        "uv run python -m app.cli.agent_security_migrate",
+        "uv run python -m app.cli.agent_system_schema --initialize",
         "location /api/mcp/ {\n        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};",
         "proxy_set_header Host \\$http_host;",
         "location = /health {",
@@ -266,7 +266,7 @@ INIT_SCRIPT_ORDER = {
     ],
     "agent": [
         "import app.features.agent.runtime",
-        "app.cli.agent_security_migrate",
+        "app.cli.agent_system_schema --initialize",
         "  install_runtime_env\n",
         "  install_backend\n",
         "  initialize_database_schema\n",
