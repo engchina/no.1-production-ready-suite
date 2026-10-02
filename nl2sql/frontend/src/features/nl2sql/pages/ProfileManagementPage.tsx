@@ -604,7 +604,6 @@ function SelectAiConfigFields({
           value={form.selectAiConfig.role}
           rows={6}
           onChange={(event) => updateSelectAiConfig(setForm, { role: event.currentTarget.value })}
-          textareaClassName="min-h-40"
           placeholder={t("profiles.placeholder.role")}
         />
         <TextareaField
@@ -618,7 +617,6 @@ function SelectAiConfigFields({
               additional_instructions: event.currentTarget.value,
             })
           }
-          textareaClassName="min-h-40"
           placeholder={t("profiles.placeholder.additionalInstructions")}
         />
       </div>

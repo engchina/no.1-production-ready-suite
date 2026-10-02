@@ -1817,7 +1817,7 @@ export function SecurityDeepSecPage() {
                 </Button>
               </div>
             ) : null}
-            <section className="grid gap-[16px]" aria-labelledby="security-deepsec-foundation-plan-title">
+            <section className="grid gap-4" aria-labelledby="security-deepsec-foundation-plan-title">
               <h3 id="security-deepsec-foundation-plan-title" className="text-base font-semibold">
                 {t("security.deepsec.plan")}
               </h3>

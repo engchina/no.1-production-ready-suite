@@ -11,6 +11,7 @@ import {
 import {
   Archive,
   ArchiveRestore,
+  LockKeyhole,
   Pencil,
   Plus,
   RefreshCw,
@@ -20,8 +21,11 @@ import {
   Trash2,
 } from "lucide-react";
 
+import { Link } from "react-router-dom";
+
 import {
   Banner,
+  ButtonLink,
   EmptyState,
   toast,
   DataTable,
@@ -109,10 +113,25 @@ export interface RoleManagementPageProps<R extends SecurityRole = SecurityRole> 
   /** 一覧と詳細の分割比率を保存する localStorage key の前置き。 */
   splitStoragePrefix?: string;
   /**
-   * 詳細パネルの末尾に製品固有の情報を足す（例: 付与済みの権限数と権限管理への導線）。
-   * ロールに付ける権限は製品ごとに違うため、共通画面では扱わない。
+   * 詳細パネルの末尾に製品固有の情報を足す。機能権限の件数と権限管理への導線は `permissionSummary` を使う
+   * （3 製品で同じ形。#800）。ロールに付ける権限は製品ごとに違うため、共通画面では扱わない。
    */
   renderRoleDetailExtra?: (role: R) => ReactNode;
+  /**
+   * 詳細パネルの末尾に、ロールに付けた機能権限の件数と、製品の権限管理への導線を出す（3 製品で同じ形。#800）。
+   * ロールに付ける権限は製品ごとの権限管理が扱うため、ここでは件数と移動先だけを受け取る。
+   */
+  permissionSummary?: RolePermissionSummary<R>;
+}
+
+/** ロールの詳細に出す、機能権限の件数と権限管理への導線（#800）。 */
+export interface RolePermissionSummary<R extends SecurityRole = SecurityRole> {
+  /** ロールに付けている機能権限の数（製品の API のロールが持つ権限の一覧の件数）。 */
+  count: (role: R) => number;
+  /** 製品の権限管理の画面のパス。`?role=<role_id>` を付けて開く。 */
+  permissionsPath: string;
+  /** 権限管理を開けるか（製品の権限判定）。false なら件数だけを出す。 */
+  canManagePermissions: boolean;
 }
 
 /** ロール管理（3製品共通。ロールの基本情報と状態だけを扱う。#206）。 */
@@ -122,6 +141,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
   describeError = describeErrorMessageOnly,
   splitStoragePrefix,
   renderRoleDetailExtra,
+  permissionSummary,
 }: RoleManagementPageProps<R>) {
   const confirm = useConfirm();
   const [roles, setRoles] = useState<R[]>([]);
@@ -712,7 +732,16 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
               role={selectedRole}
               canManage={canManage}
               actions={selectedRole ? roleActions(selectedRole) : []}
-              extra={selectedRole && renderRoleDetailExtra ? renderRoleDetailExtra(selectedRole) : null}
+              extra={
+                selectedRole ? (
+                  <>
+                    {permissionSummary ? (
+                      <RolePermissionSummaryRow role={selectedRole} summary={permissionSummary} />
+                    ) : null}
+                    {renderRoleDetailExtra ? renderRoleDetailExtra(selectedRole) : null}
+                  </>
+                ) : null
+              }
             />
           </SecurityManagementPanelShell>
         ) : (
@@ -794,7 +823,6 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                   id="security-role-description"
                   label={t("security.roles.description")}
                   disabled={inputReadOnly}
-                  textareaClassName="min-h-24"
                   value={draft.description}
                   onValueChange={(value) => {
                     if (inputReadOnly) return;
@@ -820,6 +848,42 @@ export function RoleStatusBadges({ role }: { role: SecurityRole }) {
       />
       {role.archived ? (
         <StatusBadge variant="neutral" label={t("security.roles.archivedDisabled")} />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * 機能権限の件数と権限管理への導線（#800）。詳細の区切り線の下に置き、枠の中に枠を重ねない。
+ * 組み込み・アーカイブ済みのロールには権限を付けられないため、導線を出さない。
+ */
+function RolePermissionSummaryRow<R extends SecurityRole>({
+  role,
+  summary,
+}: {
+  role: R;
+  summary: RolePermissionSummary<R>;
+}) {
+  return (
+    <div
+      className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between"
+      data-testid="security-roles-permission-summary"
+    >
+      <p className="text-sm text-fg">
+        {role.role_code === SYSTEM_ADMIN_ROLE_CODE
+          ? t("security.roles.permissionSummarySystemAdmin")
+          : t("security.roles.permissionSummary", { count: summary.count(role) })}
+      </p>
+      {summary.canManagePermissions && !role.is_built_in && !role.archived ? (
+        <ButtonLink
+          to={`${summary.permissionsPath}?role=${encodeURIComponent(role.role_id)}`}
+          linkComponent={Link}
+          size="sm"
+          icon={LockKeyhole}
+          testId="security-roles-open-permissions"
+        >
+          {t("security.roles.openPermissions")}
+        </ButtonLink>
       ) : null}
     </div>
   );

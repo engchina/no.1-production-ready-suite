@@ -345,7 +345,7 @@ function GroupEditor({
             </Button>
         </div>
       ))}
-      <div className="flex min-w-0 flex-wrap gap-[8px]">
+      <div className="flex min-w-0 flex-wrap gap-2">
         <Button
           size="sm"
           variant="secondary"

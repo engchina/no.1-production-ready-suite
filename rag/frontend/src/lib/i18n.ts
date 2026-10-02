@@ -10,6 +10,7 @@ export const ja = {
   "common.confirm": "実行",
   "common.cancel": "キャンセル",
   "common.dismiss": "閉じる",
+  "common.notifications": "通知",
   "common.apiError": "APIエラー ({status})",
   "common.clearSearch": "検索語をクリア",
   // 一覧の絞り込みの件数の読み上げ（SearchField の resultCountLabel。#535）。
@@ -85,9 +86,6 @@ export const ja = {
   "nav.securityUsers": "ユーザー管理",
   "nav.securityRoles": "ロール管理",
   "nav.securityPermissions": "権限管理",
-  "security.roles.permissionSummary": "付与している機能権限: {count} 件",
-  "security.roles.permissionSummarySystemAdmin": "SYSTEM_ADMIN はすべての機能権限を持ちます。",
-  "security.roles.openPermissions": "権限管理で設定",
   "security.permissions.subtitle":
     "ロールごとに、使える画面（機能権限）と利用できる業務ビュー・ナレッジベースを設定します。ロールの作成・名称変更・アーカイブはロール管理で行います。",
   "security.permissions.listHint":

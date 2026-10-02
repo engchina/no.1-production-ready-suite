@@ -20,6 +20,12 @@ const CONTROL_HEIGHT = "共有の操作部品（Button / TextField";
 const FIELD_WIDTH = "入力欄・選択欄の幅を w-* / max-w-* で書かない";
 const NATIVE_HEIGHT = "ネイティブの <input> / <select> の高さを";
 const BACK_IN_ACTIONS = "「一覧へ戻る」を PageHeader の actions";
+const HANDWRITTEN_TABLE = "<table> を手書きしない";
+const JSX_ACTIONS = "PageHeader の actions に JSX";
+const RAW_COLOR_FUNCTION = "rgba() / rgb() / hsl() などの生の色を書かない";
+const NUMERIC_TYPE = "文字サイズ・行間・字間を数値";
+const NUMERIC_SPACING = "inline style の余白・角丸を数値";
+const TEXTAREA_HEIGHT = "複数行の入力欄（TextareaField）の高さを";
 
 async function lint(code: string) {
   const eslint = new ESLint({
@@ -255,5 +261,83 @@ const b = <PageHeader title="x" back={{ label: "一覧へ戻る", onClick: f }} 
 const c = <Other actions={[{ id: "back" }]} />;
 `);
     expect(linesWith(messages, BACK_IN_ACTIONS)).toEqual([2]);
+  });
+});
+
+describe("adherence: 表は DataTable（#129 / #530 / #800）", () => {
+  it("手書きの table / thead / tbody / tr / th / td を検出し、DataTable と大文字の部品は許す", async () => {
+    const messages = await lint(`
+const a = <table className="w-full"><tbody><tr><td>x</td></tr></tbody></table>;
+const b = <thead><tr><th>見出し</th></tr></thead>;
+const c = <DataTable columns={columns} rows={rows} getRowKey={key} />;
+const d = <TableSkeleton rows={5} />;
+`);
+    expect(linesWith(messages, HANDWRITTEN_TABLE)).toEqual([2, 2, 2, 2, 3, 3, 3]);
+  });
+});
+
+describe("adherence: PageHeader の actions は配列（#800）", () => {
+  it("actions の中の JSX（要素・Fragment・条件の中）を検出し、配列・ほかの部品は許す", async () => {
+    const messages = await lint(`
+const a = <PageHeader title="x" actions={<Button icon={RefreshCw}>表示を更新</Button>} />;
+const b = <PageHeader title="x" actions={<><Button>a</Button><Button>b</Button></>} />;
+const c = <PageHeader title="x" actions={busy ? <Spinner /> : [{ id: "save", kind: "primary", label: "保存", icon: Save, onClick: f }]} />;
+const d = <PageHeader title="x" actions={[{ id: "save", kind: "primary", label: "保存", icon: Save, onClick: f }]} />;
+const e = <PageHeader title="x" status={<StatusBadge variant="success" label="稼働中" />} tabs={<Tabs items={items} />} />;
+const g = <Other actions={<Button>x</Button>} />;
+`);
+    // Fragment は Fragment と中の要素をそれぞれ報告する（3 行目は 3 件）。
+    expect(linesWith(messages, JSX_ACTIONS)).toEqual([2, 3, 3, 3, 4]);
+  });
+});
+
+describe("adherence: 生の色の関数（#800）", () => {
+  it("rgba / rgb / hsl / oklch を className・style・テンプレートで検出し、トークンと color-mix は許す", async () => {
+    const messages = await lint(`
+const a = <span className="shadow-[0_0_0_1px_rgba(255,255,255,0.9)]" />;
+const b = <span style={{ color: "rgb(0 0 0)" }} />;
+const c = <span style={{ background: \`hsl(\${hue} 50% 50%)\` }} />;
+const d = <span style={{ color: "oklch(0.7 0.1 200)" }} />;
+const e = <span className="ring-1 ring-surface/90 bg-accent-emphasis/15" />;
+const g = <span className="bg-[color-mix(in_srgb,var(--color-fg)_12%,var(--color-surface))]" />;
+const h = <span style={{ color: "var(--color-fg-muted)" }} />;
+`);
+    expect(linesWith(messages, RAW_COLOR_FUNCTION)).toEqual([2, 3, 4, 5]);
+  });
+});
+
+describe("adherence: inline style の数値（#800）", () => {
+  it("文字サイズ・行間・字間の数値と、JSX の style の余白・角丸の数値を検出する", async () => {
+    const messages = await lint(`
+const a = <div style={{ fontSize: 11 }}>x</div>;
+const b = { labelStyle: { fill: "var(--color-fg-muted)", fontSize: 10 } };
+const c = <div style={{ lineHeight: 1.4, letterSpacing: 0.5 }}>x</div>;
+const d = <div style={{ marginTop: 2, paddingInline: 6, gap: 4, borderRadius: 8 }}>x</div>;
+`);
+    expect(linesWith(messages, NUMERIC_TYPE)).toEqual([2, 3, 4, 4]);
+    expect(linesWith(messages, NUMERIC_SPACING)).toEqual([5, 5, 5, 5]);
+  });
+
+  it("トークン・0・寸法と座標・グラフのライブラリの設定・fontWeight は許す", async () => {
+    const messages = await lint(`
+const a = <div style={{ fontSize: "var(--font-size-xs)", marginTop: 0, padding: "var(--space-2)" }}>x</div>;
+const b = <div style={{ width: 120, height: 48, left: x, top: 0, fontWeight: 600, opacity: 0.5 }}>x</div>;
+const c = { padding: 0.18, duration: 300 };
+const d = { pathOptions: { borderRadius: 8, offset: 12 } };
+`);
+    expect(messages).toEqual([]);
+  });
+});
+
+describe("adherence: 複数行の入力欄の高さは rows（#613 / #800）", () => {
+  it("textareaClassName の h-* / min-h-* を検出し、rows・max-h-*・幅は許す", async () => {
+    const messages = await lint(`
+const a = <TextareaField id="a" label="a" textareaClassName="min-h-24" />;
+const b = <TextareaField id="b" label="b" textareaClassName="h-44 font-mono" />;
+const c = <TextareaField id="c" label="c" textareaClassName={\`md:min-h-40 \${x}\`} />;
+const d = <TextareaField id="d" label="d" rows={6} textareaClassName="max-h-[16.625rem] min-w-0 max-w-full" />;
+const e = <TextareaField id="e" label="e" rows={9} monospace />;
+`);
+    expect(linesWith(messages, TEXTAREA_HEIGHT)).toEqual([2, 3, 4]);
   });
 });

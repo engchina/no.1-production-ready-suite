@@ -130,10 +130,6 @@ function engineTimingStatusVariant(status: EngineTiming["status"]): StatusVarian
   return "warning";
 }
 
-function HistorySkeletonBlock({ className = "" }: { className?: string }) {
-  return <Skeleton className={className} />;
-}
-
 function HistoryListSkeleton() {
   return (
     <TimedLoadingState
@@ -148,11 +144,11 @@ function HistoryListSkeleton() {
       activityIcon="none"
     >
       <h2 id="history-grid-heading" className="sr-only">{t("history.list.title")}</h2>
-      <HistorySkeletonBlock className="h-14" />
-      <HistorySkeletonBlock className="h-28" />
+      <Skeleton className="h-14" />
+      <Skeleton className="h-28" />
       <div className="grid gap-2" data-testid="history-list-skeleton">
         {Array.from({ length: 6 }, (_, index) => (
-          <HistorySkeletonBlock key={index} className="h-20" />
+          <Skeleton key={index} className="h-20" />
         ))}
       </div>
     </TimedLoadingState>
@@ -170,9 +166,9 @@ function HistoryDetailSkeleton() {
       framed={false}
       activityIcon="none"
     >
-      <HistorySkeletonBlock className="h-20" />
-      <HistorySkeletonBlock className="h-11" />
-      <HistorySkeletonBlock className="h-72" />
+      <Skeleton className="h-20" />
+      <Skeleton className="h-11" />
+      <Skeleton className="h-72" />
     </TimedLoadingState>
   );
 }

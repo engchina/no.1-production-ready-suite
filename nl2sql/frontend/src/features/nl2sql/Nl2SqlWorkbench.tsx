@@ -1252,7 +1252,7 @@ function ExecutableNl2SqlWorkbench() {
                           disabled={active}
                           rows={5}
                           resize="none"
-                          textareaClassName="min-h-36 max-h-[16.625rem]"
+                          textareaClassName="max-h-[16.625rem]"
                           placeholder={t("nl2sql.question.placeholder")}
                         />
                         {guidedClarificationOpen ? (
@@ -1334,7 +1334,6 @@ function ExecutableNl2SqlWorkbench() {
                                   onChange={(event) => setSelectAiInstructionsOverride(event.currentTarget.value)}
                                   disabled={active}
                                   rows={3}
-                                  textareaClassName="min-h-24"
                                   placeholder={t("nl2sql.selectAiOverrides.additionalInstructionsPlaceholder")}
                                 />
                                 <div className="overflow-hidden rounded-md border border-border bg-surface">
@@ -1373,7 +1372,6 @@ function ExecutableNl2SqlWorkbench() {
                                       onChange={(event) => setSelectAiRoleOverride(event.currentTarget.value)}
                                       disabled={active}
                                       rows={2}
-                                      textareaClassName="min-h-20"
                                       placeholder={t("nl2sql.selectAiOverrides.rolePlaceholder")}
                                     />
                                   </div>

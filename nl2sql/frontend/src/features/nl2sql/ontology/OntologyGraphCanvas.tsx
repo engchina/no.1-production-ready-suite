@@ -1053,7 +1053,7 @@ function OntologyFlow({
             edge.review_status === "proposed" ? "5 4" : mappingEdge ? "4 3" : undefined,
           opacity: emphasis.active && !highlighted ? 0.3 : hoverDimmed ? 0.35 : 1,
         },
-        labelStyle: { fill: cssVar("--color-fg-muted"), fontSize: 11, fontWeight: 600 },
+        labelStyle: { fill: cssVar("--color-fg-muted"), fontSize: cssVar("--font-size-xs"), fontWeight: 600 },
         labelBgStyle: { fill: cssVar("--color-surface"), fillOpacity: 0.92 },
         labelBgPadding: [6, 3] as [number, number],
         labelBgBorderRadius: 4,

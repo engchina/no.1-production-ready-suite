@@ -35,7 +35,8 @@ interface PreviewCardProps {
   ariaLabel?: string;
   copyLabel: string;
   icon: LucideIcon;
-  previewHeightClassName: string;
+  /** プレビューの行数（高さは rows で決める。textareaClassName の h-* は使わない。#613 / #800）。 */
+  previewRows: number;
 }
 
 export function EnvPreviewCard(props: Omit<PreviewCardProps, "title" | "icon" | "copyLabel">) {
@@ -81,14 +82,14 @@ export function SettingsSupplementalPanels({
         <EnvPreviewCard
           description={env.description}
           value={env.value}
-          previewHeightClassName="h-44"
+          previewRows={7}
         />
       ) : null}
       {json ? (
         <JsonPreviewCard
           description={json.description}
           value={json.value}
-          previewHeightClassName="h-56"
+          previewRows={9}
         />
       ) : null}
       {status}
@@ -114,7 +115,7 @@ function SettingsPreviewCard({
   ariaLabel,
   copyLabel,
   icon,
-  previewHeightClassName,
+  previewRows,
 }: PreviewCardProps) {
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const previewId = useId();
@@ -156,7 +157,7 @@ function SettingsPreviewCard({
           value={value}
           monospace
           resize="none"
-          textareaClassName={previewHeightClassName}
+          rows={previewRows}
         />
         {copyState === "error" ? (
           <FormStatus

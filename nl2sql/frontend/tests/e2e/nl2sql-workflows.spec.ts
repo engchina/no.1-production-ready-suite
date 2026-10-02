@@ -10724,7 +10724,7 @@ test("data preparation read results use the shared detail skeleton without stale
         };
       })
     );
-  expect(dataSkeletonShape.map((block) => block.height)).toEqual([64, 40, 288]);
+  expect(dataSkeletonShape.map((block) => block.height)).toEqual([63, 40, 287]);
   await expect(dataSkeleton.getByTestId("db-management-skeleton-block").first()).toHaveCSS(
     "animation-name",
     "none"

@@ -157,7 +157,7 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
       {value.status === "ready" && <>
         <Disclosure data-testid="ontology-publication-data-validation" summary={t("markdownOntology.dataValidation")} icon={ShieldCheck}
           summaryClassName="px-4 py-3 font-medium" contentClassName="grid gap-4 p-4">
-            <TextareaField id="markdown-acceptance" label={t("markdownOntology.acceptance")} rows={5} monospace textareaClassName="min-h-32" value={acceptance} helper={t("markdownOntology.acceptanceHint")} error={acceptanceError || undefined} onChange={e=>{setAcceptance(e.target.value);setAcceptanceError("");}} />
+            <TextareaField id="markdown-acceptance" label={t("markdownOntology.acceptance")} rows={5} monospace value={acceptance} helper={t("markdownOntology.acceptanceHint")} error={acceptanceError || undefined} onChange={e=>{setAcceptance(e.target.value);setAcceptanceError("");}} />
             <ContentActionBar ariaLabel={t("markdownOntology.dataValidation")}>
               <Button icon={ShieldCheck} type="button" variant="secondary" size="md" disabled={Boolean(busy)} loading={busy === "data"} onClick={()=>void dataValidation()}>{t("markdownOntology.dataValidation")}</Button>
             </ContentActionBar>

@@ -1111,7 +1111,6 @@ function MetadataInputPanel({
             value={extraText}
             onChange={(event) => onExtraTextChange(event.currentTarget.value)}
             rows={6}
-            textareaClassName="min-h-32"
           />
 
           <ContentActionBar

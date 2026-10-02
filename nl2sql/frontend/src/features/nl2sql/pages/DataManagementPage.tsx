@@ -2349,7 +2349,6 @@ function SyntheticWorkspace({
             onChange={(event) => onSyntheticPromptChange(event.currentTarget.value)}
             rows={5}
             placeholder={t("dataTools.syntheticData.promptPlaceholder")}
-            textareaClassName="min-h-40"
           />
           <fieldset className="grid content-start gap-3 rounded-md border border-border bg-surface p-3">
             <legend className="px-1 text-sm font-semibold text-fg">{t("dataTools.syntheticData.options")}</legend>
