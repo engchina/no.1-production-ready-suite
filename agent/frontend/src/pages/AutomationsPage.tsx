@@ -50,6 +50,7 @@ import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 import { useCapabilities } from "@/lib/permissions";
+import { runStatusView } from "@/lib/status-labels";
 
 // 業務 Agent の自動実行（スケジュール・Webhook。#784）。一覧 → 全画面エディタ（A 型。`?id=`）。
 // 自動実行は作った利用者として Run を作り、前回の Run が終わっていなければその回は飛ばす。
@@ -84,14 +85,6 @@ function resultVariant(result: Automation["last_result"]): StatusVariant {
   if (result === "created") return "success";
   if (result === "skipped") return "warning";
   return "danger";
-}
-
-function runStatusVariant(status: AutomationRun["status"]): StatusVariant {
-  if (status === "completed") return "success";
-  if (status === "failed") return "danger";
-  if (status === "cancelled") return "neutral";
-  if (status === "waiting_approval") return "warning";
-  return "pending";
 }
 
 // Webhook の URL のコピー（秘密ではない）。失敗しても値は Toast に入れない（#790。秘密のコピーは OneTimeSecret）。
@@ -780,11 +773,11 @@ function historyColumns(): DataTableColumn<AutomationRun>[] {
     {
       key: "status",
       header: t("automation.history.status"),
-      render: (run) => <StatusBadge variant={runStatusVariant(run.status)} label={run.status} />,
+      render: (run) => <StatusBadge {...runStatusView(run.status)} />,
     },
     {
       key: "run",
-      header: "Run",
+      header: t("automation.history.run"),
       className: "break-all font-mono text-xs text-fg-muted",
       render: (run) => run.run_id,
     },

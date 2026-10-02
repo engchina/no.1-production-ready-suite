@@ -123,7 +123,7 @@ test("一覧から今すぐ実行し、実行履歴に出す。未保存の離�
   await page.goto("/automations");
   await page.getByTestId("automation-row-actions-auto-seeded").click();
   await page.getByRole("menuitem", { name: "今すぐ実行" }).click();
-  await expect(page.getByText("Run を作りました")).toBeVisible();
+  await expect(page.getByText("実行を開始しました")).toBeVisible();
   expect(mockApi.lastRequest("POST", "/api/automations/auto-seeded/run")).toBeDefined();
 
   await page.getByRole("table", { name: "自動実行の一覧" }).getByRole("link", { name: /毎朝の売上の要約/ }).click();

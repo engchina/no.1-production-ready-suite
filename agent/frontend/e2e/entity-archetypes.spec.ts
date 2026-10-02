@@ -266,10 +266,10 @@ for (const viewport of VIEWPORTS) {
       seedRun(mockApi, "run-e2e-1", "一つ目の目標");
       seedRun(mockApi, "run-e2e-2", "二つ目の目標");
       await page.goto("/runs");
-      const detail = page.getByRole("region", { name: "実行詳細" });
+      const detail = page.getByRole("region", { name: "実行の詳細" });
       await expect(detail.getByText("run-e2e-1", { exact: true }).first()).toBeVisible();
 
-      await page.getByRole("button", { name: /^二つ目の目標 default/ }).click();
+      await page.getByRole("button", { name: /^二つ目の目標 汎用業務 Agent/ }).click();
       await expect(detail.getByText("run-e2e-2", { exact: true }).first()).toBeVisible();
       await expect(page.getByTestId("run-row-run-e2e-2")).toHaveAttribute("aria-current", "true");
       await expect(page.getByTestId("run-object-actions").getByRole("button", { name: "再実行" })).toBeVisible();
@@ -287,8 +287,8 @@ for (const viewport of VIEWPORTS) {
       seedRun(mockApi, "run-e2e-1", "一つ目の目標");
       seedRun(mockApi, "run-e2e-2", "二つ目の目標");
       await page.goto("/runs");
-      const first = page.getByRole("button", { name: /^一つ目の目標 default/ });
-      const second = page.getByRole("button", { name: /^二つ目の目標 default/ });
+      const first = page.getByRole("button", { name: /^一つ目の目標 汎用業務 Agent/ });
+      const second = page.getByRole("button", { name: /^二つ目の目標 汎用業務 Agent/ });
       await expect(first).toHaveAttribute("data-row-title-button", "");
       // 既定で先頭の Run を詳細に出し、その題名のボタンが「現在の項目」。
       await expect(first).toHaveAttribute("aria-current", "true");
@@ -345,10 +345,10 @@ for (const viewport of VIEWPORTS) {
       await expect(detail.getByText("nl2sql__nl2sql_query の引数")).toBeVisible();
 
       await page.getByRole("button", { name: "rag__rag_search の操作" }).click();
-      await page.getByRole("menuitem", { name: "拒否" }).click();
+      await page.getByRole("menuitem", { name: "却下" }).click();
       const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
-      await expect(dialog.getByText("ツール実行を拒否します")).toBeVisible();
-      await dialog.getByRole("button", { name: "拒否", exact: true }).click();
+      await expect(dialog.getByText("ツールの実行を却下しますか?")).toBeVisible();
+      await dialog.getByRole("button", { name: "却下", exact: true }).click();
       await expect
         .poll(() => mockApi.lastRequest("POST", "/api/approvals/approval-e2e-1/decision")?.body)
         .toMatchObject({ approved: false });

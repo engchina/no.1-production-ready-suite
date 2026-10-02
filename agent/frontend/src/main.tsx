@@ -1,6 +1,6 @@
-import { StrictMode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { RouterProvider, createBrowserRouter } from "react-router-dom";
+import { RouterProvider, createBrowserRouter, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { ConfirmProvider, Toaster, initTheme } from "@engchina/production-ready-ui";
@@ -12,6 +12,7 @@ import { AuthProvider } from "@/components/security/AuthProvider";
 import "./globals.css";
 // 書体は @fontsource の woff2 を同一 origin で配信する（外部 CDN に依存しない）。
 import "./fonts.css";
+import { t } from "@/lib/i18n";
 import { useUiStore } from "@/lib/ui-store";
 
 // 永続化テーマを描画前に適用（FOUC 回避）＋ store / OS 設定の変更を購読する（#95）。
@@ -24,18 +25,34 @@ if (!root) {
 
 const queryClient = new QueryClient();
 
+/**
+ * 共有 ConfirmProvider に Agent の文言を渡し、ルートが変わったら開いている確認をキャンセルする
+ * （messaging.md §3.5 の `navigationKey`。NL2SQL と同じ形。#802）。
+ */
+function AppConfirmProvider({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  return (
+    <ConfirmProvider
+      labels={{ confirm: t("common.confirm"), cancel: t("common.cancel") }}
+      navigationKey={location.key}
+    >
+      {children}
+    </ConfirmProvider>
+  );
+}
+
 // 既存のルート定義（App の <Routes>）はそのまま、全体を data router の 1 つの splat route に載せる。
 // data router にすると、共有の離脱ガードがブラウザの戻る/進むも確認できる（useBlocker。#138）。
 const router = createBrowserRouter([
   {
     path: "*",
     element: (
-      <>
+      <AppConfirmProvider>
         {/* ブラウザの戻る/進むの blocker はアプリで 1 つ。各画面のガードはここへ未保存を登録する（#586）。 */}
         <UnsavedChangesBlocker />
         <App />
-        <Toaster dismissLabel="閉じる" />
-      </>
+        <Toaster dismissLabel={t("common.dismiss")} regionLabel={t("common.notifications")} />
+      </AppConfirmProvider>
     ),
   },
 ]);
@@ -45,9 +62,7 @@ createRoot(root).render(
     <QueryClientProvider client={queryClient}>
       {/* 共通の認証（Cookie セッション。ローカルはログインなしの全権限の利用者。#215）。 */}
       <AuthProvider>
-        <ConfirmProvider labels={{ confirm: "実行", cancel: "キャンセル" }}>
-          <RouterProvider router={router} />
-        </ConfirmProvider>
+        <RouterProvider router={router} />
       </AuthProvider>
     </QueryClientProvider>
   </StrictMode>

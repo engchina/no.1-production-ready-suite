@@ -158,7 +158,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 }
 
 function runDetail(page: Page) {
-  return page.locator("section").filter({ hasText: "実行詳細" }).first();
+  return page.locator("section").filter({ hasText: "実行の詳細" }).first();
 }
 
 test.describe("AI Agent Control Plane", () => {
@@ -198,16 +198,16 @@ test.describe("AI Agent Control Plane", () => {
     await page.goto("/runs");
     await expect(page.getByLabel("実行先 Binding")).toHaveCount(0);
     const goal = "契約情報を確認する";
-    await page.getByLabel("ゴール").fill(goal);
+    await page.getByLabel("目標").fill(goal);
     await page.getByRole("button", { name: "実行を作成" }).click();
 
     await expect(page.getByText("実行を作成しました", { exact: true })).toBeVisible();
     await expect(page.getByText(goal).first()).toBeVisible();
-    await expect(runDetail(page).getByText(/Runtime: 組み込み Runtime/)).toBeVisible();
+    await expect(runDetail(page).getByText(/実行環境: 組み込みの実行環境/)).toBeVisible();
     await expect(page.getByText("run.status_changed").first()).toBeVisible();
     // 実行中の Run は、サーバーの開始時刻からの経過時間を出す（#376）。
     const progress = page.getByTestId("run-progress");
-    await expect(progress).toContainText("Run を実行しています");
+    await expect(progress).toContainText("実行しています");
     await expect(progress).toHaveAttribute("data-processing-placement", "job");
     await expect(progress.getByRole("timer")).toHaveAccessibleName(/^経過時間 /);
   });
@@ -231,7 +231,7 @@ test.describe("AI Agent Control Plane", () => {
 
       await expect(page.getByRole("heading", { name: "実行環境", level: 1 })).toBeVisible();
       const card = page.getByTestId("builtin-runtime-card");
-      await expect(card.getByRole("heading", { name: "組み込み Runtime" })).toBeVisible();
+      await expect(card.getByRole("heading", { name: "組み込みの実行環境" })).toBeVisible();
       await expect(card.locator("[data-status-variant]", { hasText: "実行できます" }).locator("svg")).toHaveCount(1);
       await expect(card).toContainText("openai-agents 0.22.3");
       await expect(card).toContainText("xai.grok-4");
@@ -272,7 +272,7 @@ test.describe("AI Agent Control Plane", () => {
       ],
     });
     await page.goto("/runs");
-    await page.getByLabel("ゴール").fill("契約情報を確認する");
+    await page.getByLabel("目標").fill("契約情報を確認する");
     await page.getByRole("button", { name: "実行を作成" }).click();
 
     const alert = page.getByRole("alert").filter({ hasText: "ツールの実行でエラーが発生しました" });

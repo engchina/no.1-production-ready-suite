@@ -118,12 +118,23 @@ import {
   parseJsonField,
 } from "@/lib/field-validation";
 import { formatNumber } from "@/lib/format";
-import { t } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 import { MENU_PERMISSIONS, useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { APP_ROUTES } from "@/lib/routes";
 import { useAuth } from "@/components/security/AuthProvider";
 import { securityApi } from "@/lib/security-api";
 import { useValuesChanged } from "@/lib/render-sync";
+import {
+  approvalStatusOptions,
+  approvalStatusView,
+  artifactKindView,
+  eventTypeView,
+  permissionView,
+  policyDecisionView,
+  runStatusView,
+  stepStatusOptions,
+  stepStatusView,
+} from "@/lib/status-labels";
 import { sameDraft, useDirtySources, useEditorLeaveGuard, useSettingsLeaveGuard } from "@/lib/leave-guard";
 import {
   isNullableString,
@@ -197,24 +208,6 @@ interface WebSocketMessage {
   error_code?: string;
   message?: string;
 }
-
-const statusVariant: Record<RunState["status"], StatusVariant> = {
-  queued: "neutral",
-  running: "info",
-  waiting_approval: "warning",
-  completed: "success",
-  failed: "danger",
-  cancelled: "warning",
-};
-
-const stepStatusVariant: Record<string, StatusVariant> = {
-  pending: "neutral",
-  running: "info",
-  waiting_approval: "warning",
-  completed: "success",
-  failed: "danger",
-  cancelled: "warning",
-};
 
 const websocketStatusVariant: Record<WebSocketStreamStatus, StatusVariant> = {
   idle: "neutral",
@@ -929,8 +922,9 @@ export function RuntimesPage() {
         subtitle={t("page.runtimes.subtitle")}
         actions={[
           {
+            // 外部の状態（モデルの設定）の再確認。ページツールなので utility（buttons.md §5）。文言は製品のまま。
             id: "refresh",
-            kind: "secondary",
+            kind: "utility",
             label: t("runtime.refresh"),
             icon: RefreshCw,
             loading: status.isFetching && !status.isLoading,
@@ -1037,13 +1031,16 @@ export function RunsPage() {
   const refreshRunQueries = () => {
     void queryClient.invalidateQueries({ queryKey: ["runs"] });
   };
+  // 行メニュー・詳細の操作で、結果を出す固定の面が無いため、失敗は danger の Toast で返す（messaging.md §1）。
   const cancelRun = useMutation({
     mutationFn: agentApi.cancelRun,
     onSuccess: refreshRunQueries,
+    onError: (error) => toast.error(t("run.cancelFailed"), { description: error.message }),
   });
   const resumeRun = useMutation({
     mutationFn: agentApi.resumeRun,
     onSuccess: refreshRunQueries,
+    onError: (error) => toast.error(t("run.resumeFailed"), { description: error.message }),
   });
   const replayRun = useMutation({
     mutationFn: agentApi.replayRun,
@@ -1051,6 +1048,7 @@ export function RunsPage() {
       toast.success(t("run.createdToast"));
       refreshRunQueries();
     },
+    onError: (error) => toast.error(t("run.replayFailed"), { description: error.message }),
   });
   // 作業状態（目標の下書き・選択中の Run・購読方式）はこのタブの sessionStorage に残す（#87）。
   // Agent は実行条件なので残さず、戻るたびに選び直す（実行の意思は確認し直す）。
@@ -1105,6 +1103,12 @@ export function RunsPage() {
   );
 
   const sseState = useRunEventSource(selectedRun, streamMode === "sse", refreshRuntimeEvents);
+
+  const agentNames = useMemo(
+    () => new Map((agents.data?.agents ?? []).map((agent) => [agent.id, agent.name])),
+    [agents.data?.agents]
+  );
+  const agentNameOf = (agentId: string) => agentNames.get(agentId) ?? agentId;
 
   function onAgentChange(value: string) {
     setAgentId(value);
@@ -1178,11 +1182,16 @@ export function RunsPage() {
         wide
         title={t("nav.runs")}
         subtitle={t("page.runs.subtitle")}
-        actions={
-          <Button variant="secondary" onClick={() => void runs.refetch()} aria-label="実行一覧を再読み込み" icon={RefreshCw}>
-            {t("common.retry")}
-          </Button>
-        }
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            loading: runs.isFetching && !runs.isLoading,
+            onClick: () => void runs.refetch(),
+          },
+        ]}
       />
       <PageBody wide>
         <AgentSplitPane
@@ -1253,6 +1262,7 @@ export function RunsPage() {
                 ) : null}
                 <RunHistoryList
                   runs={runItems}
+                  agentNameOf={agentNameOf}
                   selectedRunId={selectedRun?.id ?? null}
                   actionsFor={runActions}
                   onSelect={(runId) => {
@@ -1275,6 +1285,7 @@ export function RunsPage() {
               {selectedRun ? (
                 <RunDetail
                   run={selectedRun}
+                  agentName={agentNameOf(selectedRun.agent_id)}
                   actions={runActions(selectedRun)}
                   actionPending={actionPending}
                   onWebSocketCancel={() => void cancelLatestRun(selectedRun, true)}
@@ -1379,7 +1390,7 @@ export function ApprovalsPage() {
       key: "status",
       header: t("common.status"),
       render: ({ approval }) => (
-        <StatusBadge variant={approvalStatusVariant(approval.status)} label={approval.status} />
+        <StatusBadge {...approvalStatusView(approval.status)} />
       ),
     },
     {
@@ -1442,15 +1453,12 @@ export function ApprovalsPage() {
                           {selected.run.goal}
                         </CardDescription>
                       </div>
-                      <StatusBadge
-                        variant={approvalStatusVariant(selected.approval.status)}
-                        label={selected.approval.status}
-                      />
+                      <StatusBadge {...approvalStatusView(selected.approval.status)} />
                     </CardHeader>
                     <CardContent className="space-y-3">
                       <div className="grid gap-2 text-xs text-fg-muted sm:grid-cols-2">
                         <span className="break-all">{`${t("audit.runId")}: ${selected.run.id}`}</span>
-                        <span>{`${t("audit.runStatus")}: ${selected.run.status}`}</span>
+                        <span>{`${t("audit.runStatus")}: ${runStatusView(selected.run.status).label}`}</span>
                       </div>
                       <JsonPanel title={t("approval.arguments")} value={selected.approval.tool_call.arguments} />
                     </CardContent>
@@ -1595,11 +1603,16 @@ export function AuditPage() {
         wide
         title={t("nav.audit")}
         subtitle={t("page.audit.subtitle")}
-        actions={
-          <Button variant="secondary" onClick={() => void audit.refetch()} aria-label={t("common.retry")} icon={RefreshCw}>
-            {t("common.retry")}
-          </Button>
-        }
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            loading: audit.isFetching && !audit.isLoading,
+            onClick: () => void audit.refetch(),
+          },
+        ]}
       />
       <PageBody wide>
         <Card className="min-w-0">
@@ -1635,10 +1648,7 @@ export function AuditPage() {
                 value={stepStatus}
                 options={[
                   { value: "", label: t("common.all") },
-                  ...["pending", "running", "waiting_approval", "completed", "failed", "cancelled"].map((status) => ({
-                    value: status,
-                    label: status,
-                  })),
+                  ...stepStatusOptions(),
                 ]}
                 onValueChange={(value) => setFilter("stepStatus", value)}
               />
@@ -1648,7 +1658,7 @@ export function AuditPage() {
                 value={approvalStatus}
                 options={[
                   { value: "", label: t("common.all") },
-                  ...["pending", "approved", "rejected", "cancelled"].map((status) => ({ value: status, label: status })),
+                  ...approvalStatusOptions(),
                 ]}
                 onValueChange={(value) => setFilter("approvalStatus", value)}
               />
@@ -1784,7 +1794,7 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
       key: "status",
       header: t("audit.stepStatus"),
       render: (record) => (
-        <StatusBadge variant={stepStatusVariant[record.status] ?? "neutral"} label={record.status} />
+        <StatusBadge {...stepStatusView(record.status)} />
       ),
     },
     {
@@ -1792,7 +1802,7 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
       header: t("audit.approvalStatus"),
       render: (record) =>
         record.approval_status ? (
-          <StatusBadge variant={approvalStatusVariant(record.approval_status)} label={record.approval_status} />
+          <StatusBadge {...approvalStatusView(record.approval_status)} />
         ) : (
           <span className="text-xs text-fg-muted">-</span>
         ),
@@ -1800,18 +1810,22 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
     {
       key: "policy_decision",
       header: t("run.auditPolicy"),
-      className: "text-xs text-fg",
-      render: (record) => record.policy_decision ?? "-",
+      render: (record) =>
+        record.policy_decision ? (
+          <StatusBadge {...policyDecisionView(record.policy_decision)} icon={false} />
+        ) : (
+          <span className="text-xs text-fg-muted">-</span>
+        ),
     },
     {
       key: "permission_level",
       header: t("common.permission"),
       render: (record) => (
-        <StatusBadge
-          variant={permissionStatusVariant(record.permission_level)}
-          label={record.permission_level ?? "-"}
-          icon={false}
-        />
+        record.permission_level ? (
+          <StatusBadge {...permissionView(record.permission_level)} icon={false} />
+        ) : (
+          <span className="text-xs text-fg-muted">-</span>
+        )
       ),
     },
     {
@@ -1868,32 +1882,6 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
   );
 }
 
-function approvalStatusVariant(status: string): StatusVariant {
-  if (status === "approved") {
-    return "success";
-  }
-  if (status === "rejected") {
-    return "danger";
-  }
-  if (status === "pending") {
-    return "pending";
-  }
-  return "neutral";
-}
-
-function permissionStatusVariant(permission?: string | null): StatusVariant {
-  if (permission === "read") {
-    return "success";
-  }
-  if (permission === "write") {
-    return "warning";
-  }
-  if (permission === "sensitive") {
-    return "danger";
-  }
-  return "neutral";
-}
-
 export function ToolsPage() {
   const tools = useQuery({ queryKey: ["tools"], queryFn: agentApi.listTools });
   const [selectedName, setSelectedName] = useState<string | null>(null);
@@ -1917,7 +1905,7 @@ export function ToolsPage() {
       key: "permission",
       header: t("common.permission"),
       render: (tool) => (
-        <StatusBadge variant={permissionStatusVariant(tool.permission_level)} label={tool.permission_level} icon={false} />
+        <StatusBadge {...permissionView(tool.permission_level)} icon={false} />
       ),
     },
   ];
@@ -2210,7 +2198,7 @@ function schemaSummary(schema?: Record<string, unknown> | null): string {
   const properties = schema.properties;
   if (properties && typeof properties === "object" && !Array.isArray(properties)) {
     const count = Object.keys(properties).length;
-    return `${type} / ${count} fields`;
+    return t("settings.mcpDiscovery.schemaSummary", { type, count });
   }
   return type;
 }
@@ -2893,6 +2881,8 @@ export function SkillsPage() {
       toast.success(t("skills.reloaded"));
       void invalidate();
     },
+    // ヘッダーの操作で固定の面が無いため、失敗は danger の Toast（messaging.md §1「失敗を黙って捨てない」）。
+    onError: (error) => toast.error(t("skills.reloadFailed"), { description: error.message }),
   });
 
   async function remove(skill: AgentSkill) {
@@ -3385,7 +3375,11 @@ export function PluginsPage() {
   });
   const reloadMutation = useMutation({
     mutationFn: () => agentApi.reloadPlugins(),
-    onSuccess: () => void invalidate(),
+    onSuccess: () => {
+      toast.success(t("plugins.reloaded"));
+      void invalidate();
+    },
+    onError: (error) => toast.error(t("plugins.reloadFailed"), { description: error.message }),
   });
 
   async function uninstall(plugin: PluginSummary) {
@@ -3453,7 +3447,7 @@ export function PluginsPage() {
           moreActionsLabel={t("common.moreActions")}
         />
         <PageBody wide>
-          <Section title={t("plugins.title")} description={t("plugins.description")}>
+          <Section title={t("plugins.list")} description={t("plugins.description")}>
             <QueryState query={plugins} loadingLabel={t("loading.plugins")} skeleton={<TableSkeleton columns={5} />}>
               <PluginTable
                 plugins={list}
@@ -4406,19 +4400,9 @@ export function ToolPolicySettingsPage() {
                         <div className="min-w-0 space-y-2">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="break-all text-sm font-medium text-fg">{tool.name}</p>
-                            <StatusBadge
-                              variant={
-                                tool.permission_level === "read"
-                                  ? "success"
-                                  : tool.permission_level === "write"
-                                    ? "warning"
-                                    : "danger"
-                              }
-                              label={tool.permission_level}
-                              icon={false}
-                            />
+                            <StatusBadge {...permissionView(tool.permission_level)} icon={false} />
                             {tool.side_effects ? (
-                              <StatusBadge variant="warning" label="side_effects" icon={false} />
+                              <StatusBadge variant="warning" label={t("status.sideEffects")} icon={false} />
                             ) : null}
                           </div>
                           <p className="break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">
@@ -4583,14 +4567,16 @@ export function RuntimeSnapshotSettingsPage() {
         wide
         title={t("nav.settingsRuntimeSnapshot")}
         subtitle={t("page.settings.runtimeSnapshot.subtitle")}
-        actions={
-          <Button
-            variant="secondary"
-            onClick={() => void snapshot.refetch()}
-            aria-label={t("common.retry")} icon={RefreshCw}>
-            {t("common.retry")}
-          </Button>
-        }
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            loading: snapshot.isFetching && !snapshot.isLoading,
+            onClick: () => void snapshot.refetch(),
+          },
+        ]}
       />
       <PageBody wide className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <QueryState query={snapshot} loadingLabel={t("loading.snapshot")} skeleton={<FormSkeleton fields={2} />}>
@@ -4700,24 +4686,24 @@ function SnapshotSummaryBadge({ summary }: { summary: RuntimeSnapshotSummary }) 
   return (
     // 件数の表示。保留中の承認・tool call の有無は隣の集計（SnapshotSummaryGrid）が数値で示すので、
     // ここで色だけで状態を表さない。
-    <StatusBadge variant="neutral" label={`${summary.runs} runs`} icon={false} />
+    <StatusBadge variant="neutral" label={t("settings.snapshot.runCount", { count: formatNumber(summary.runs) })} icon={false} />
   );
 }
 
 function SnapshotSummaryGrid({ summary }: { summary: RuntimeSnapshotSummary }) {
-  const items = [
-    ["runs", summary.runs],
-    ["agents", summary.agents],
-    ["events", summary.events],
-    ["steps", summary.steps],
-    ["approvals", summary.approvals],
-    ["artifacts", summary.artifacts],
-    ["pending_tool_calls", summary.pending_tool_calls],
+  const items: Array<[I18nKey, number]> = [
+    ["settings.snapshot.count.runs", summary.runs],
+    ["settings.snapshot.count.agents", summary.agents],
+    ["settings.snapshot.count.events", summary.events],
+    ["settings.snapshot.count.steps", summary.steps],
+    ["settings.snapshot.count.approvals", summary.approvals],
+    ["settings.snapshot.count.artifacts", summary.artifacts],
+    ["settings.snapshot.count.pendingToolCalls", summary.pending_tool_calls],
   ];
   return (
     <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4" aria-label={t("settings.snapshot.summary")}>
       {items.map(([label, value]) => (
-        <MetricPill key={label} label={String(label)} value={String(value)} />
+        <MetricPill key={label} label={t(label)} value={formatNumber(value)} />
       ))}
     </div>
   );
@@ -5173,11 +5159,14 @@ function RunHistoryList({
   selectedRunId,
   onSelect,
   actionsFor,
+  agentNameOf,
 }: {
   runs: RunState[];
   selectedRunId: string | null;
   onSelect: (runId: string) => void;
   actionsFor: (run: RunState) => EntityAction[];
+  /** 業務 Agent の ID を名前にする（一覧に無い・読めないときは ID のまま）。 */
+  agentNameOf: (agentId: string) => string;
 }) {
   const columns: DataTableColumn<RunState>[] = [
     {
@@ -5189,7 +5178,7 @@ function RunHistoryList({
           title={run.goal}
           // 長いゴールは 2 行で切り詰め、全文は Tooltip と右の詳細で読む。
           maxLines={2}
-          subtitle={`${run.agent_id} / ${formatDate(run.created_at)}`}
+          subtitle={`${agentNameOf(run.agent_id)} / ${formatDate(run.created_at)}`}
           current={run.id === selectedRunId}
           onClick={() => onSelect(run.id)}
         />
@@ -5198,7 +5187,7 @@ function RunHistoryList({
     {
       key: "status",
       header: t("common.status"),
-      render: (run) => <StatusBadge variant={statusVariant[run.status]} label={run.status} />,
+      render: (run) => <StatusBadge {...runStatusView(run.status)} />,
     },
     {
       key: "actions",
@@ -5256,6 +5245,7 @@ function RunHistorySkeleton() {
 
 function RunDetail({
   run,
+  agentName,
   actions,
   actionPending,
   onWebSocketCancel,
@@ -5268,6 +5258,8 @@ function RunDetail({
   capabilities,
 }: {
   run: RunState;
+  /** 業務 Agent の名前（一覧に無いときは ID）。 */
+  agentName: string;
   actions: EntityAction[];
   actionPending: boolean;
   onWebSocketCancel: () => void;
@@ -5291,7 +5283,7 @@ function RunDetail({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <CardTitle>{t("run.detail")}</CardTitle>
-              <StatusBadge variant={statusVariant[run.status]} label={run.status} />
+              <StatusBadge {...runStatusView(run.status)} />
             </div>
             <CardDescription className="break-words [overflow-wrap:anywhere]">{run.id}</CardDescription>
           </div>
@@ -5306,7 +5298,7 @@ function RunDetail({
           <p className="text-sm leading-6 text-fg">{run.goal}</p>
           <RunProgressIndicator run={run} />
           <div className="grid gap-2 text-xs text-fg-muted sm:grid-cols-2">
-            <span>{`${t("run.form.agent")}: ${run.agent_id}`}</span>
+            <span>{`${t("run.form.agent")}: ${agentName}`}</span>
             <span>{`${t("run.runtime")}: ${run.runtime_id === "builtin" ? t("runtime.builtin.title") : run.runtime_id}`}</span>
             <span>{`${t("common.createdAt")}: ${formatDate(run.created_at)}`}</span>
             <span>{`${t("common.updatedAt")}: ${formatDate(run.updated_at)}`}</span>
@@ -5370,10 +5362,7 @@ function RunDetail({
                   <div key={step.id} className="min-w-0 rounded-md border border-border p-3">
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-sm font-medium text-fg">{step.tool_call?.name ?? step.kind}</span>
-                      <StatusBadge
-                        variant={stepStatusVariant[step.status] ?? "neutral"}
-                        label={step.status}
-                      />
+                      <StatusBadge {...stepStatusView(step.status)} />
                     </div>
                     {step.tool_result?.error ? (
                       <p className="mt-2 text-xs text-danger-fg">{step.tool_result.error}</p>
@@ -5528,8 +5517,7 @@ function timelineEventView(event: RunEvent): TimelineEventView {
       title: t("run.runtime"),
       subtitle: event.message,
       icon: <Server size={16} aria-hidden />,
-      badgeLabel: event.type.replace("runtime.", ""),
-      badgeVariant: event.type === "runtime.failed" ? "danger" : "info",
+      ...timelineBadge(event.type),
       details: compactTimelineDetails([
         [t("run.timeline.runtime"), payloadString(event.payload, "runtime_id")],
         [t("run.timeline.externalRun"), payloadString(event.payload, "external_run_id")],
@@ -5543,8 +5531,7 @@ function timelineEventView(event: RunEvent): TimelineEventView {
       title: t("run.guardrailWarning"),
       subtitle: event.message,
       icon: <ShieldAlert size={16} aria-hidden />,
-      badgeLabel: t("run.timeline.warning"),
-      badgeVariant: "warning",
+      ...timelineBadge(event.type),
       details: [],
       warnings: payloadStringArray(event.payload, "warnings"),
       payloadPreview: event.payload,
@@ -5556,8 +5543,7 @@ function timelineEventView(event: RunEvent): TimelineEventView {
       title: toolName,
       subtitle: event.message,
       icon: <PlayCircle size={16} aria-hidden />,
-      badgeLabel: event.type.replace("tool.", ""),
-      badgeVariant: event.type === "tool.failed" ? "danger" : "success",
+      ...timelineBadge(event.type),
       details: compactTimelineDetails([
         [t("run.timeline.step"), payloadString(event.payload, "step_id")],
         [t("run.auditDuration"), payloadNumberText(event.payload, "duration_ms", "ms")],
@@ -5570,8 +5556,7 @@ function timelineEventView(event: RunEvent): TimelineEventView {
       title: t("run.auditApproval"),
       subtitle: event.message,
       icon: <Check size={16} aria-hidden />,
-      badgeLabel: event.type.replace("approval.", ""),
-      badgeVariant: "warning",
+      ...timelineBadge(event.type),
       details: compactTimelineDetails([
         [t("run.timeline.approval"), payloadString(event.payload, "approval_id")],
         [t("run.timeline.step"), payloadString(event.payload, "step_id")],
@@ -5584,8 +5569,7 @@ function timelineEventView(event: RunEvent): TimelineEventView {
       title: payloadString(event.payload, "name") ?? t("run.artifacts"),
       subtitle: event.message,
       icon: <FileText size={16} aria-hidden />,
-      badgeLabel: payloadString(event.payload, "kind") ?? t("run.artifacts"),
-      badgeVariant: "info",
+      ...timelineBadge(event.type),
       details: compactTimelineDetails([[t("run.auditArtifacts"), payloadString(event.payload, "artifact_id")]]),
       warnings: [],
     };
@@ -5594,11 +5578,16 @@ function timelineEventView(event: RunEvent): TimelineEventView {
     title: event.message,
     subtitle: `${event.type} / ${formatDate(event.created_at)}`,
     icon: <GitBranch size={16} aria-hidden />,
-    badgeLabel: event.type.split(".")[0] ?? "event",
-    badgeVariant: event.type.includes("failed") ? "danger" : "neutral",
+    ...timelineBadge(event.type),
     details: [],
     warnings: [],
   };
+}
+
+/** タイムラインのバッジ（イベントの種類を日本語にする。lib/status-labels.ts）。 */
+function timelineBadge(type: string): Pick<TimelineEventView, "badgeLabel" | "badgeVariant"> {
+  const view = eventTypeView(type);
+  return { badgeLabel: view.label, badgeVariant: view.variant };
 }
 
 function compactTimelineDetails(items: Array<[string, string | null]>): Array<{ label: string; value: string }> {
@@ -5837,29 +5826,20 @@ function AuditPanel({ runId }: { runId: string }) {
 }
 
 function AuditRecordItem({ audit, record }: { audit: RunAuditData; record: ToolAuditRecord }) {
-  const status: StatusVariant =
-    record.status === "completed"
-      ? "success"
-      : record.status === "failed"
-        ? "danger"
-        : record.status === "waiting_approval"
-          ? "warning"
-          : "neutral";
-
   return (
     <div className="min-w-0 rounded-md border border-border p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="break-all text-sm font-medium text-fg">{record.tool_name}</p>
-          <p className="mt-0.5 break-all text-xs text-fg-muted">{`${audit.status} / ${record.step_id}`}</p>
+          <p className="mt-0.5 break-all text-xs text-fg-muted">{`${runStatusView(audit.status).label} / ${record.step_id}`}</p>
         </div>
-        <StatusBadge variant={status} label={record.status} />
+        <StatusBadge {...stepStatusView(record.status)} />
       </div>
 
       <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
-        <AuditFact label={t("run.auditPolicy")} value={record.policy_decision ?? "-"} />
-        <AuditFact label={t("common.permission")} value={record.permission_level ?? "-"} />
-        <AuditFact label={t("run.auditApproval")} value={record.approval_status ?? "-"} />
+        <AuditFact label={t("run.auditPolicy")} value={record.policy_decision ? policyDecisionView(record.policy_decision).label : "-"} />
+        <AuditFact label={t("common.permission")} value={record.permission_level ? permissionView(record.permission_level).label : "-"} />
+        <AuditFact label={t("run.auditApproval")} value={record.approval_status ? approvalStatusView(record.approval_status).label : "-"} />
         <AuditFact
           label={t("run.auditDuration")}
           value={record.duration_ms === null || record.duration_ms === undefined ? "-" : `${record.duration_ms}ms`}
@@ -5932,7 +5912,7 @@ function ArtifactsPanel({ run }: { run: RunState }) {
                   <p className="break-all text-sm font-medium text-fg">{artifact.name}</p>
                   <p className="mt-0.5 text-xs text-fg-muted">{formatDate(artifact.created_at)}</p>
                 </div>
-                <StatusBadge variant={artifact.kind === "rag_evidence" ? "info" : "success"} label={artifact.kind} icon={false} />
+                <StatusBadge {...artifactKindView(artifact.kind)} icon={false} />
               </div>
               {artifact.kind === "rag_evidence" ? (
                 <RagEvidenceArtifact artifact={artifact} />
@@ -6011,11 +5991,11 @@ function StructuredArtifactSummary({ artifact }: { artifact: Artifact }) {
     <div className="mt-3 space-y-3">
       <div className="grid gap-2 text-sm sm:grid-cols-3">
         <MetricPill label={t("run.rowCount")} value={rowCount === null ? "-" : String(rowCount)} />
-        <MetricPill label={t("run.truncated")} value={truncated === null ? "-" : truncated ? "true" : "false"} />
+        <MetricPill label={t("run.truncated")} value={truncated === null ? "-" : truncated ? t("common.yes") : t("common.no")} />
         <MetricPill label={t("run.columns")} value={String(arrayOfRecords(artifact.content.columns).length)} />
       </div>
       {typeof artifact.content.sql === "string" ? (
-        <JsonPanel title="sql" value={artifact.content.sql} />
+        <JsonPanel title={t("run.sql")} value={artifact.content.sql} />
       ) : null}
       {warnings.length ? (
         <Banner severity="warning">
@@ -6063,8 +6043,6 @@ function MetricPill({ label, value }: { label: string; value: string }) {
 }
 
 function ToolCard({ tool }: { tool: ToolDefinition }) {
-  const permissionVariant: StatusVariant =
-    tool.permission_level === "read" ? "success" : tool.permission_level === "write" ? "warning" : "danger";
   return (
     <Card className="min-w-0">
       <CardHeader className="flex-row items-start justify-between gap-4">
@@ -6072,7 +6050,7 @@ function ToolCard({ tool }: { tool: ToolDefinition }) {
           <CardTitle>{tool.name}</CardTitle>
           <CardDescription>{tool.description}</CardDescription>
         </div>
-        <StatusBadge variant={permissionVariant} label={tool.permission_level} icon={false} />
+        <StatusBadge {...permissionView(tool.permission_level)} icon={false} />
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap gap-2">
@@ -6083,8 +6061,8 @@ function ToolCard({ tool }: { tool: ToolDefinition }) {
           ))}
         </div>
         <div className="grid min-w-0 gap-3 md:grid-cols-2">
-          <JsonPanel title="input_schema" value={tool.input_schema} />
-          <JsonPanel title="output_schema" value={tool.output_schema} />
+          <JsonPanel title={t("settings.mcpDiscovery.inputSchema")} value={tool.input_schema} />
+          <JsonPanel title={t("tool.outputSchema")} value={tool.output_schema} />
         </div>
       </CardContent>
     </Card>

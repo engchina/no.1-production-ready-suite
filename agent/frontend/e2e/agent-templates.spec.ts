@@ -74,7 +74,7 @@ test("入力した内容があるときは、確認してからテンプレー�
 test("使えない Skill は外して知らせ、既存の業務 Agent の編集にはテンプレートを出さない", async ({ page }) => {
   await page.goto("/agents?id=new");
   await page.getByTestId("agent-template-manufacturing-quality").click();
-  await expect(page.getByText("使えない Skill は外しました: quality_lab_only")).toBeVisible();
+  await expect(page.getByText("使えないスキルは外しました: quality_lab_only")).toBeVisible();
   await expect(page.getByRole("checkbox", { name: /^業務 RAG 調査/ })).toBeChecked();
 
   await page.goto("/agents?id=default");

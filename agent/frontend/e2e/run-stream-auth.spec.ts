@@ -36,7 +36,7 @@ function streamCard(page: Page) {
   return page
     .locator("div")
     .filter({ has: page.getByRole("group", { name: "ストリーム方式" }) })
-    .filter({ hasText: "Run event の受信方式" })
+    .filter({ hasText: "実行のイベントの受け取り方" })
     .last();
 }
 
@@ -69,7 +69,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByText("購読を確認する").first()).toBeVisible();
       await useWebSocketMode(page);
 
-      await expect(page.getByTestId("run-stream-stopped")).toHaveText("この Run のイベントを購読する権限がありません。");
+      await expect(page.getByTestId("run-stream-stopped")).toHaveText("この実行のイベントを購読する権限がありません。");
       await expect(streamCard(page).getByText("停止", { exact: true })).toBeVisible();
       // 再接続の待ち時間（最初は 0.5 秒）を過ぎても、つなぎ直さない。
       await page.waitForTimeout(2_000);
