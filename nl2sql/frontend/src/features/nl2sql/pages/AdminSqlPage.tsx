@@ -39,6 +39,8 @@ import {
 import type { DbAdminExecuteData, SchemaRefreshJob } from "../types";
 
 const ADMIN_EXECUTE_CONFIRMATION = "ADMIN_EXECUTE";
+/** 失敗の案内の「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。#821）。 */
+const ADMIN_SQL_SCHEMA_REFRESH_NOTICE = "admin-sql-notice";
 const MUTATING_SQL_TOKEN =
   /\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|begin|declare|call)\b/i;
 const Q_QUOTE_CLOSERS: Record<string, string> = {
@@ -214,6 +216,7 @@ export function AdminSqlPage() {
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
   const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
+  const noticeSchemaRefreshStarting = sharedSchemaRefresh.startingOrigin === ADMIN_SQL_SCHEMA_REFRESH_NOTICE;
   const visibleSchemaRefreshError = schemaRefreshJobQuery.error
     ? schemaRefreshJobQuery.error instanceof Error
       ? schemaRefreshJobQuery.error.message
@@ -266,7 +269,7 @@ export function AdminSqlPage() {
   const refreshSchema = async () => {
     setReportedSchemaRefresh("");
     try {
-      const job = await sharedSchemaRefresh.start();
+      const job = await sharedSchemaRefresh.start(ADMIN_SQL_SCHEMA_REFRESH_NOTICE);
       setSchemaRefreshJobId(job.job_id);
       if (!job.job_id && job.status === "done") {
         setSchemaRefreshError("");
@@ -440,8 +443,9 @@ export function AdminSqlPage() {
                 type="button"
                 variant="secondary"
                 size="sm"
-                loading={schemaRefreshing}
-                disabled={schemaRefreshing}
+                // 押したときの送信の間だけ回し、job の間は無効にするだけ（スピナーは進行の表示。#821）。
+                loading={noticeSchemaRefreshStarting}
+                disabled={schemaRefreshing && !noticeSchemaRefreshStarting}
                 onClick={() => void refreshSchema()} icon={RefreshCw}>
                 <span>{t("common.action.schemaRefresh")}</span>
               </Button>

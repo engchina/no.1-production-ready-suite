@@ -505,7 +505,8 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
             icon: Archive,
             tone: "danger",
             visible: !role.is_built_in && !role.archived,
-            disabled: operationBusy,
+            // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+            disabled: operationBusy && !(changingRoleId === role.role_id),
             loading: changingRoleId === role.role_id,
             onSelect: () => changeArchived(role, true),
           },
@@ -514,7 +515,8 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
             label: t("security.roles.restore"),
             icon: ArchiveRestore,
             visible: !role.is_built_in && role.archived,
-            disabled: operationBusy,
+            // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+            disabled: operationBusy && !(changingRoleId === role.role_id),
             loading: changingRoleId === role.role_id,
             onSelect: () => changeArchived(role, false),
           },
@@ -525,7 +527,8 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
             tone: "danger",
             visible: canDeleteRole(role),
             loading: deletingRoleId === role.role_id,
-            disabled: operationBusy,
+            // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+            disabled: operationBusy && !(deletingRoleId === role.role_id),
             onSelect: () => handleDelete(role),
           },
         ]
@@ -609,7 +612,8 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                   kind: "utility",
                   label: t("common.action.refresh"),
                   icon: RefreshCw,
-                  disabled: operationBusy,
+                  // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+                  disabled: operationBusy && !(loading && refreshRequested),
                   onClick: () => load(true),
                   loading: loading && refreshRequested,
                 },
@@ -622,7 +626,8 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
                     label: activeView === "edit" ? t("security.common.save") : t("security.common.create"),
                     icon: activeView === "edit" ? Save : Plus,
                     loading: busy,
-                    disabled: operationBusy,
+                    // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+                    disabled: operationBusy && !busy,
                     testId: "security-roles-submit",
                     onClick: () => formRef.current?.requestSubmit(),
                   },

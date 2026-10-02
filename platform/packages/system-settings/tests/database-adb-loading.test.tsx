@@ -157,7 +157,7 @@ describe("Autonomous Database 管理の操作のスピナー（#819）", () => {
     // 動くスピナーは押したボタンの 1 つだけ（処理中の表示は activityIcon="none"）。
     expect(host.querySelectorAll('button[aria-busy="true"]')).toHaveLength(1);
 
-    // 後半: Wallet の取得（ページ全体の fieldset が無効になる）。
+    // 後半: Wallet の取得（DB 接続のカードの操作も無効になる。押したボタンはフォーカスを保つ。#835）。
     await act(async () => {
       update.resolve(AVAILABLE);
     });

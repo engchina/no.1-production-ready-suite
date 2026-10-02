@@ -121,6 +121,8 @@ const SELECT_AI_REGION_OPTIONS = [
   { value: "ap-osaka-1", label: "ap-osaka-1" },
 ] as const satisfies readonly SelectFieldOption<string>[];
 const PROFILE_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/u;
+/** ヘッダーの「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。#821）。 */
+const PROFILE_SCHEMA_REFRESH_HEADER = "profile-management-header";
 
 interface ProfileFormState {
   name: string;
@@ -1214,6 +1216,8 @@ export function ProfileManagementPage() {
     ? "error"
     : (dbProfileRefreshJob?.status ?? "");
   const dbProfileRefreshing = dbProfileRefreshIsActive(dbProfileRefreshStatus);
+  // どの「業務プロファイルを再取得」で始めた送信か（ヘッダー / 失敗の案内）。送信の間だけ押した側を回す（#821）。
+  const [dbProfileRefreshOrigin, setDbProfileRefreshOrigin] = useState<"header" | "notice">("header");
   const dbProfilesQuery = useQuery({
     queryKey: ["nl2sql", "select-ai", "business-profiles"],
     queryFn: () => apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL),
@@ -1346,13 +1350,14 @@ export function ProfileManagementPage() {
 
   const runSchemaRefresh = async () => {
     try {
-      await sharedSchemaRefresh.start();
+      await sharedSchemaRefresh.start(PROFILE_SCHEMA_REFRESH_HEADER);
     } catch {
       // 共通 Coordinator が失敗状態と Toast を一度だけ管理する。
     }
   };
 
-  const runDbProfileRefresh = async () => {
+  const runDbProfileRefresh = async (origin: "header" | "notice") => {
+    setDbProfileRefreshOrigin(origin);
     try {
       const job = await startDbProfileRefresh.mutateAsync();
       setDbProfileRefreshError("");
@@ -1902,6 +1907,13 @@ export function ProfileManagementPage() {
     />
   );
   const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
+  // スキーマの更新・業務プロファイルの再取得は durable job。開始のボタンは押した側だけを送信の間 loading にし、
+  // job の間は無効にするだけ。job の間のスピナーは一覧の上の進行の表示が 1 つだけ出す（messaging §3.7、#821）。
+  const headerSchemaRefreshStarting = sharedSchemaRefresh.startingOrigin === PROFILE_SCHEMA_REFRESH_HEADER;
+  const dbProfileRefreshStarting = startDbProfileRefresh.isPending;
+  const dbProfileRefreshBusy = dbProfileRefreshing || dbProfileRefreshStarting;
+  const headerDbProfileRefreshStarting = dbProfileRefreshStarting && dbProfileRefreshOrigin === "header";
+  const noticeDbProfileRefreshStarting = dbProfileRefreshStarting && dbProfileRefreshOrigin === "notice";
   const profileListRefreshing = profilesQuery.isFetching && !profilesQuery.isFetchingNextPage;
   const profileWorkspaceProcessing = schemaRefreshing ? (
       <SchemaRefreshProcessing testId="profile-management-workspace-processing" />
@@ -1921,9 +1933,9 @@ export function ProfileManagementPage() {
         placement="workspace"
         className="rounded-md border border-border bg-surface-sunken px-3 py-2"
         testId="profile-management-workspace-processing"
-        // 押したボタン（「表示を更新」・業務プロファイルの再取得）が回っている間はスピナーを出さない。定期・他の
-        // 操作の後の一覧の取り直しはボタンを回さないため、この表示がスピナーを出す（#819）。
-        activityIcon={dbProfileRefreshing || loading === "load" ? "none" : "spinner"}
+        // 押した「表示を更新」が回っている間はスピナーを出さない。定期・他の操作の後の一覧の取り直しと、
+        // 業務プロファイルの再取得の job の間はボタンを回さないため、この表示がスピナーを出す（#819 / #821）。
+        activityIcon={loading === "load" && !dbProfileRefreshing ? "none" : "spinner"}
       />
     ) : undefined;
   const showProfileWorkspaceProcessing =
@@ -1933,7 +1945,6 @@ export function ProfileManagementPage() {
   // 初回の読込は一覧の読込表示がスピナーを出す。ヘッダーの「表示を更新」は回さない（狭い画面では「その他の操作」の
   // 中で見えない。同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
   const profileListShowsSpinner = profileListLoading && !showProfileWorkspaceProcessing;
-  const dbProfileRefreshNoticeShown = Boolean(dbProfileRefreshError && dbProfileRefreshNeedsFull);
   const headerDbProfileRefreshStatus =
     dbProfileRefreshing || dbProfileRefreshStatus === "error" ? dbProfileRefreshStatus : "";
   const headerRefreshStatus = headerDbProfileRefreshStatus;
@@ -1952,8 +1963,9 @@ export function ProfileManagementPage() {
         type="button"
         variant="secondary"
         size="sm"
-        loading={startDbProfileRefresh.isPending || dbProfileRefreshing}
-        onClick={() => void runDbProfileRefresh()} icon={RefreshCw}>
+        loading={noticeDbProfileRefreshStarting}
+        disabled={dbProfileRefreshBusy && !noticeDbProfileRefreshStarting}
+        onClick={() => void runDbProfileRefresh("notice")} icon={RefreshCw}>
         <span>{t("profiles.action.dbProfileRefresh")}</span>
       </Button>
     ) : (
@@ -2013,19 +2025,17 @@ export function ProfileManagementPage() {
                   label: t("common.action.schemaRefresh"),
                   icon: RefreshCw,
                   onClick: runSchemaRefresh,
-                  loading: schemaRefreshing,
-                  disabled: schemaRefreshing,
+                  loading: headerSchemaRefreshStarting,
+                  disabled: schemaRefreshing && !headerSchemaRefreshStarting,
                 },
                 {
                   id: "db-profile-refresh",
                   kind: "utility",
                   label: t("profiles.action.dbProfileRefresh"),
                   icon: RefreshCw,
-                  onClick: runDbProfileRefresh,
-                  // 失敗の案内に同じ操作のボタンが出ているときは、そちらだけを回す（#416）。
-                  loading:
-                    (dbProfileRefreshing || startDbProfileRefresh.isPending) && !dbProfileRefreshNoticeShown,
-                  disabled: dbProfileRefreshing || startDbProfileRefresh.isPending,
+                  onClick: () => runDbProfileRefresh("header"),
+                  loading: headerDbProfileRefreshStarting,
+                  disabled: dbProfileRefreshBusy && !headerDbProfileRefreshStarting,
                 },
               ]
             : []

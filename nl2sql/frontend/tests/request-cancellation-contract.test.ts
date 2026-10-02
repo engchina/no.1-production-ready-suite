@@ -82,7 +82,7 @@ test("data management refresh uses the paged read model and shared durable schem
   );
   assert.match(source, /useDbAdminObjects\(/u);
   assert.match(source, /useSchemaRefreshCoordinator\(\)/u);
-  assert.match(source, /sharedSchemaRefresh\.start\(\)/u);
+  assert.match(source, /sharedSchemaRefresh\.start\(origin\)/u);
   assert.doesNotMatch(source, /\/api\/schema\/catalog["']/u);
   assert.doesNotMatch(source, /\/api\/schema\/refresh["']/u);
   assert.doesNotMatch(source, /Promise\.all\(\[\s*refreshSchema/u);

@@ -60,6 +60,9 @@ import {
 import { dbAdminObjectCountsFromPage } from "../dbAdminObjectCounts";
 import { useDbObjectDetailRequest } from "../useDbObjectDetailRequest";
 
+/** ヘッダーの「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。#821）。 */
+const VIEW_SCHEMA_REFRESH_HEADER = "view-management-header";
+
 type ActiveView = "list" | "create" | "joinWhere";
 
 const VIEW_MANAGEMENT_ID = "view-management";
@@ -346,6 +349,7 @@ export function ViewManagementPage() {
   );
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
   const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
+  const headerSchemaRefreshStarting = sharedSchemaRefresh.startingOrigin === VIEW_SCHEMA_REFRESH_HEADER;
   const visibleSchemaRefreshError = schemaRefreshError || sharedSchemaRefresh.error;
   const viewItems = useMemo(
     () => (viewObjectsQuery.data?.pages ?? []).flatMap((page) => page.items),
@@ -415,7 +419,9 @@ export function ViewManagementPage() {
     await refetchObjects(announce);
   };
 
-  const refreshSchema = async () => {
+  // origin: 押したボタン（ヘッダー）。案内の「スキーマを更新」などは起点を持たず、送信の間は進行の表示が
+  // スピナーを出す（#821）。
+  const refreshSchema = async (origin = "") => {
     setLoading("schema-refresh");
     setMessage("");
     setSchemaRefreshError("");
@@ -423,7 +429,7 @@ export function ViewManagementPage() {
     try {
       // 列サンプル値は詳細 API が返すため catalog 全取得はしない。schema-refresh 時のみ
       // サーバ側 catalog を再構築してから一覧(refreshed_at を含む)を取り直す。
-      const job = await sharedSchemaRefresh.start();
+      const job = await sharedSchemaRefresh.start(origin);
       if (job.job_id) {
         setReportedSchemaRefresh("");
         setSchemaRefreshJobId(job.job_id);
@@ -743,9 +749,10 @@ export function ViewManagementPage() {
                   kind: "utility",
                   label: t("common.action.schemaRefresh"),
                   icon: RefreshCw,
-                  loading: sharedSchemaRefresh.isStarting,
-                  disabled: schemaRefreshing,
-                  onClick: () => void refreshSchema(),
+                  // 押したときの送信の間だけ回し、job の間は無効にするだけ（スピナーは進行の表示。#821）。
+                  loading: headerSchemaRefreshStarting,
+                  disabled: schemaRefreshing && !headerSchemaRefreshStarting,
+                  onClick: () => void refreshSchema(VIEW_SCHEMA_REFRESH_HEADER),
                 },
               ]
             : []

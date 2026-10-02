@@ -409,7 +409,10 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
 
   return (
     <PageBody wide>
-      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-6">
+      {/* ページ全体を <fieldset disabled> で包まない。押したボタン（保存・接続テスト・取込・取得・鍵のファイル）まで
+          ネイティブの disabled になり、フォーカスが body へ外れるため（#355）。他の操作は部品ごとに disabled にし、
+          押したボタンは loading（aria-disabled）でフォーカスを保つ（#835）。 */}
+      <div aria-busy={busy} className="min-w-0 space-y-6">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -429,6 +432,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 placeholder="~/.oci/config"
                 importState={configImportState}
                 importError={configImportMessage}
+                busy={busy}
                 onApply={() => void importConfigFromPath()}
                 readOnly
                 required
@@ -448,6 +452,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 label={t("settings.oci.field.userOcid")}
                 value={draft.userOcid}
                 onValueChange={(value) => updateDraft("userOcid", value)}
+                disabled={busy}
                 error={errorText(errors.userOcid, "userOcid")}
                 helper={t("settings.oci.helper.userOcid")}
                 placeholder="ocid1.user.oc1.."
@@ -458,6 +463,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 label={t("settings.oci.field.tenancyOcid")}
                 value={draft.tenancyOcid}
                 onValueChange={(value) => updateDraft("tenancyOcid", value)}
+                disabled={busy}
                 error={errorText(errors.tenancyOcid, "tenancyOcid")}
                 helper={t("settings.oci.helper.tenancyOcid")}
                 placeholder="ocid1.tenancy.oc1.."
@@ -468,6 +474,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 label={t("settings.oci.field.fingerprint")}
                 value={draft.fingerprint}
                 onValueChange={(value) => updateDraft("fingerprint", value)}
+                disabled={busy}
                 error={errorText(errors.fingerprint, "fingerprint")}
                 helper={t("settings.oci.helper.fingerprint")}
                 placeholder="12:34:56:78:90:ab:cd:ef"
@@ -479,6 +486,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 value={draft.region}
                 options={OCI_REGION_OPTIONS}
                 onValueChange={(value) => updateDraft("region", value)}
+                disabled={busy}
                 error={errorText(errors.region, "region")}
                 helper={t("settings.oci.helper.region")}
                 placeholder={t("settings.oci.placeholder.region")}
@@ -491,7 +499,8 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
               label={t("settings.oci.field.keyFile")}
               value={draft.keyFile}
               error={errorText(errors.keyFile, "keyFile")}
-              disabled={busy}
+              // 鍵のファイルの読み込み中は、その欄が loading でフォーカスを保つ（#835）。
+              disabled={busy && keyFileState !== "loading"}
               fileState={keyFileState}
               fileMessage={keyFileMessage}
               keyFileExists={keyFileExists}
@@ -501,6 +510,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
 
             <SectionActions
               ariaContext={t("nav.settingsOci")}
+              busy={busy}
               saveState={authSaveState}
               saveLabel={t("settings.oci.actions.saveAuth")}
               onSave={() => void saveAuthDraft()}
@@ -532,6 +542,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 placeholder="mytenancynamespace"
                 fetchState={namespaceFetchState}
                 fetchError={namespaceFetchMessage}
+                busy={busy}
                 onFetch={() => void fetchObjectStorageNamespace()}
                 required
               />
@@ -541,6 +552,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
                 value={draft.objectStorageRegion}
                 options={OCI_REGION_OPTIONS}
                 onValueChange={(value) => updateDraft("objectStorageRegion", value)}
+                disabled={busy}
                 error={errorText(errors.objectStorageRegion, "objectStorageRegion")}
                 helper={t("settings.oci.helper.objectStorageRegion")}
                 placeholder={t("settings.oci.placeholder.region")}
@@ -550,13 +562,14 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
 
             <SectionActions
               ariaContext={t("settings.oci.storage.title")}
+              busy={busy}
               saveState={storageSaveState}
               saveLabel={t("settings.oci.actions.save")}
               onSave={saveStorageDraft}
             />
           </CardContent>
         </Card>
-      </fieldset>
+      </div>
     </PageBody>
   );
 }
@@ -567,6 +580,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
  */
 function SectionActions({
   ariaContext,
+  busy,
   saveState,
   saveLabel,
   onSave,
@@ -575,6 +589,8 @@ function SectionActions({
   onTest,
 }: {
   ariaContext: string;
+  /** ページのいずれかの操作の処理中。押したボタン以外を無効にする。 */
+  busy: boolean;
   saveState: FeedbackState;
   saveLabel: string;
   onSave: () => void;
@@ -595,7 +611,8 @@ function SectionActions({
           ariaLabel: `${ariaContext}: ${saveLabel}`,
           icon: Save,
           loading: isSaving,
-          disabled: isTesting,
+          // 押したボタンはネイティブの disabled にせず loading（aria-disabled）でフォーカスを保つ（#355 / #835）。
+          disabled: busy && !isSaving,
           onClick: onSave,
         },
       ]}
@@ -608,7 +625,7 @@ function SectionActions({
                 ariaLabel: `${ariaContext}: ${testLabel}`,
                 icon: ShieldCheck,
                 loading: isTesting,
-                disabled: isSaving,
+                disabled: busy && !isTesting,
                 onClick: onTest,
               },
             ]
@@ -804,6 +821,7 @@ function ConfigFileField({
   placeholder,
   importState,
   importError,
+  busy,
   onApply,
   readOnly = false,
   required,
@@ -817,6 +835,7 @@ function ConfigFileField({
   placeholder: string;
   importState: FeedbackState;
   importError: string;
+  busy: boolean;
   onApply: () => void;
   readOnly?: boolean;
   required?: boolean;
@@ -841,6 +860,7 @@ function ConfigFileField({
         label: configImportButtonLabel(importState),
         icon: RefreshCw,
         loading: importState === "loading",
+        disabled: busy && importState !== "loading",
         onClick: onApply,
       }}
     />
@@ -856,6 +876,7 @@ function NamespaceField({
   placeholder,
   fetchState,
   fetchError,
+  busy,
   onFetch,
   required,
 }: {
@@ -867,6 +888,7 @@ function NamespaceField({
   placeholder: string;
   fetchState: FeedbackState;
   fetchError: string;
+  busy: boolean;
   onFetch: () => void;
   required?: boolean;
 }) {
@@ -893,6 +915,7 @@ function NamespaceField({
         ariaLabel: `${label}: ${buttonLabel}`,
         icon: RefreshCw,
         loading: fetchState === "loading",
+        disabled: busy && fetchState !== "loading",
         onClick: onFetch,
       }}
     />
