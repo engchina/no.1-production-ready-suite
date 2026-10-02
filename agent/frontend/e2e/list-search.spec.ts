@@ -148,7 +148,7 @@ for (const viewport of VIEWPORTS) {
       await expect(toolbar).toContainText("3 / 4 件");
     });
 
-    test("実行履歴は状態のチップで絞り込み、承認は既定で保留中だけを出す", async ({ page, mockApi }) => {
+    test("実行履歴は状態のチップで絞り込み、承認は既定で保留中だけを出す", async ({ page, mockApi }, testInfo) => {
       seedRun(mockApi, "run-done", "completed", [approval("approval-done", "run-done", "approved")]);
       seedRun(mockApi, "run-failed", "failed");
       seedRun(mockApi, "run-waiting", "waiting_approval", [approval("approval-pending", "run-waiting", "pending")]);
@@ -161,6 +161,7 @@ for (const viewport of VIEWPORTS) {
       await expect(table.getByTestId("run-row-run-done")).toHaveCount(0);
       // 詳細も絞り込んだ一覧から選ぶ。
       await expect(page.getByRole("region", { name: "実行の詳細" })).toContainText("run-failed");
+      await page.screenshot({ path: testInfo.outputPath(`runs-filter-${viewport.name}.png`), fullPage: true });
 
       await page.locator("#run-search").fill("該当なし");
       await expect(page.getByText("条件に一致する実行がありません")).toBeVisible();
@@ -178,6 +179,7 @@ for (const viewport of VIEWPORTS) {
       await approvalChips.getByRole("button", { name: "判断済み" }).click();
       await expect(approvals.getByRole("button", { name: "tool_approval-done 目標 run-done", exact: true })).toBeVisible();
       await expect(page.getByRole("region", { name: "承認の詳細" }).getByText("承認済み", { exact: true })).toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath(`approvals-filter-${viewport.name}.png`), fullPage: true });
       await expectNoHorizontalOverflow(page);
     });
 

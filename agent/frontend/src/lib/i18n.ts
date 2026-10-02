@@ -584,9 +584,6 @@ const agentJa = {
   "capability.decideApprovals": "承認の判断の権限",
   "capability.viewAudit": "監査ログの参照の権限",
   "capability.admin": "Agent 管理の権限",
-  "security.roles.permissionSummary": "付与している機能権限: {count} 件",
-  "security.roles.permissionSummarySystemAdmin": "SYSTEM_ADMIN はすべての機能権限を持ちます。",
-  "security.roles.openPermissions": "権限管理で設定",
   "security.permissions.subtitle":
     "ロールごとに、使える画面（機能権限）と利用できるエージェントを設定します。ロールの作成・名称変更・アーカイブはロール管理で行います。",
   "security.permissions.listHint":
