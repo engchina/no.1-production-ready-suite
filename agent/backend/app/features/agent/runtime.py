@@ -188,6 +188,10 @@ class AgentProfile(BaseModel):
     enabled: bool = True
     # 由来層: builtin(default)/ runtime(UI/API)/ plugin:<id>(plugin install)。
     source: str = "runtime"
+    # 作成に使った業種テンプレート（#780 / #810）。
+    # テンプレートの評価ケースで評価セットを作るときに使う。
+    # 空はテンプレートを使っていない（#810 より前の Agent も空のまま読める）。
+    template_id: str = Field(default="", max_length=100)
     # 版（#770）。上の名前〜モデルは下書きで、公開すると版になる。利用者の Run は公開中の版で動く。
     # versioned=False は #770 より前の Agent（読み込み時に現在の内容を v1 として公開する）。
     versioned: bool = False
@@ -492,7 +496,11 @@ class AgentRuntimeRepositoryContract(Protocol):
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None: ...
     def persist_control_plane_state(self) -> None: ...
     def create_builtin_run(
-        self, request: RunCreateRequest, *, created_by_user_uuid: str | None = None
+        self,
+        request: RunCreateRequest,
+        *,
+        created_by_user_uuid: str | None = None,
+        agent_version: int | None = None,
     ) -> RunState: ...
     def begin_builtin_run(self, run_id: str) -> tuple[RunState, AgentProfile] | None: ...
     def begin_builtin_resume(
@@ -783,9 +791,17 @@ class AgentRuntimeRepository:
     # ---- 組み込み Runtime（#754。実行は builtin_runtime、記録はここ） ----
 
     def create_builtin_run(
-        self, request: RunCreateRequest, *, created_by_user_uuid: str | None = None
+        self,
+        request: RunCreateRequest,
+        *,
+        created_by_user_uuid: str | None = None,
+        agent_version: int | None = None,
     ) -> RunState:
-        """組み込み Runtime の Run を投入する（実行は builtin_runtime.execute_run）。"""
+        """組み込み Runtime の Run を投入する（実行は builtin_runtime.execute_run）。
+
+        `agent_version` は公開した版を指定して実行する（品質評価が始めたときの版に固定する。#810）。
+        API の `RunCreateRequest` からは指定できない。
+        """
         with self._lock:
             agent = self._agents.get(request.agent_id)
             if agent is None:
@@ -794,9 +810,15 @@ class AgentRuntimeRepository:
                 raise ValueError("agent disabled")
             if not request.draft and agent.published() is None:
                 raise AgentNotPublishedError(request.agent_id)
+            if (
+                not request.draft
+                and agent_version is not None
+                and not any(item.version == agent_version for item in agent.versions)
+            ):
+                raise AgentNotPublishedError(request.agent_id)
             # 使う版（#770）。下書きで試すときは "draft"。
-            agent_version: int | str = (
-                "draft" if request.draft else agent.published_version or "draft"
+            used_version: int | str = (
+                "draft" if request.draft else agent_version or agent.published_version or "draft"
             )
             if request.thread_id is not None:
                 # 続ける会話は、同じ利用者・同じ Agent のものだけ（他人の会話へ書き込ませない）。
@@ -811,7 +833,7 @@ class AgentRuntimeRepository:
                 created_by_user_uuid=created_by_user_uuid,
                 thread_id=request.thread_id or f"thread_{uuid4().hex}",
                 status=RunStatus.QUEUED,
-                metadata={**request.metadata, "agent_version": agent_version},
+                metadata={**request.metadata, "agent_version": used_version},
             )
             self._runs[run.id] = run
             self._append_event(

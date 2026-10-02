@@ -218,7 +218,28 @@ export interface EvaluationCase {
   expected: string;
   /** 呼ぶべきツール（任意。`rag_search` のように MCP 接続の名前を省いてもよい）。 */
   expected_tools?: string[];
+  /** ケースの出どころ（フィードバック・Run の詳細から追加したときの Run の ID。#810）。 */
+  source_run_id?: string | null;
 }
+
+/** Run から作る評価ケースの下書き（保存しない。#810）。 */
+export interface EvaluationCaseDraft {
+  agent_id: string;
+  agent_name: string;
+  source_run_id: string;
+  question: string;
+  /** 管理者の評価のコメント（無ければ空）。 */
+  expected: string;
+  /** Run が呼んだ（呼ぼうとした）ツール。 */
+  expected_tools: string[];
+  /** 同じ質問のケースを既に持つ評価セット。 */
+  existing_set_ids: string[];
+}
+
+/** 評価する版（#810）。published = 公開中の版、draft = 下書き。 */
+export type EvaluationTarget = "published" | "draft";
+/** 評価した版（版の番号か "draft"。#810 より前の評価は null）。 */
+export type EvaluatedAgentVersion = number | "draft" | null;
 
 /** 評価セット（業務 Agent ごとに保存する評価ケースの集まり。#776）。 */
 export interface EvaluationSetInput {
@@ -303,9 +324,13 @@ export interface EvaluationJob {
   agent_name: string;
   set_id: string;
   set_name: string;
-  /** 同じ評価セットの前回（完了した評価）。 */
+  /** 評価した版（#810）。 */
+  agent_version: EvaluatedAgentVersion;
+  /** 同じ評価セット・同じ評価ケースの前回（完了した評価）。比べた版と日時（#810）。 */
   previous_job_id: string | null;
   previous_summary: EvaluationSummary | null;
+  previous_agent_version: EvaluatedAgentVersion;
+  previous_created_at: string | null;
   status: EvaluationJobStatus;
   created_by_user_uuid: string | null;
   results: EvaluationCaseResult[];
@@ -318,7 +343,16 @@ export interface EvaluationJob {
 
 export type EvaluationJobItem = Pick<
   EvaluationJob,
-  "id" | "agent_id" | "agent_name" | "set_id" | "set_name" | "status" | "summary" | "created_at" | "finished_at"
+  | "id"
+  | "agent_id"
+  | "agent_name"
+  | "set_id"
+  | "set_name"
+  | "agent_version"
+  | "status"
+  | "summary"
+  | "created_at"
+  | "finished_at"
 >;
 
 export interface EvaluationJobsPage {
@@ -552,6 +586,8 @@ export interface AgentProfile {
   published_version: number | null;
   /** 下書きに公開していない変更があるか（公開した版が無いときも true）。 */
   unpublished_changes: boolean;
+  /** 作成に使った業種テンプレート（#810。空は使っていない）。 */
+  template_id?: string;
   tool_names?: string[];
   enabled: boolean;
   created_at: string;
@@ -566,6 +602,8 @@ export interface AgentProfileWritePayload {
   skill_ids: string[];
   model_id?: string;
   enabled: boolean;
+  /** 作成に使った業種テンプレート（#810）。 */
+  template_id?: string;
 }
 
 export interface AgentProfilePatchPayload {
@@ -1248,7 +1286,22 @@ export const agentApi = {
   downloadEvaluationTemplate: () => requestBlob("/api/evaluation-sets/template.xlsx"),
   downloadEvaluationSetXlsx: (setId: string) =>
     requestBlob(`/api/evaluation-sets/${encodeURIComponent(setId)}/cases.xlsx`),
-  createEvaluation: (payload: { set_id: string }) =>
+  /** Run（フィードバック・Run の詳細）から評価ケースの下書きを作る（#810）。 */
+  getRunEvaluationCase: (runId: string) =>
+    request<EvaluationCaseDraft>(`/api/runs/${encodeURIComponent(runId)}/evaluation-case`),
+  /** 評価セットにケースを 1 件足す（同じ質問・上限は 409。#810）。 */
+  appendEvaluationCase: (setId: string, payload: EvaluationCase) =>
+    request<EvaluationSet>(`/api/evaluation-sets/${encodeURIComponent(setId)}/cases`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  /** 業務 Agent の作成に使った業種テンプレートの評価ケースで評価セットを作る（#810）。 */
+  createEvaluationSetFromTemplate: (agentId: string) =>
+    request<EvaluationSet>("/api/evaluation-sets/from-template", {
+      method: "POST",
+      body: JSON.stringify({ agent_id: agentId }),
+    }),
+  createEvaluation: (payload: { set_id: string; agent_version?: EvaluationTarget }) =>
     request<EvaluationJob>("/api/evaluations", { method: "POST", body: JSON.stringify(payload) }),
   /** 評価の履歴（新しい順のページ。終わった評価は 365 日残る。#794）。 */
   listEvaluations: (page: { offset: number; limit: number }) =>

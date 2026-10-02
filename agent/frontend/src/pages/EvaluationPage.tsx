@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Eye, FlaskConical, Pencil, Plus, Trash2 } from "lucide-react";
+import { ClipboardList, Download, Eye, FlaskConical, Pencil, Plus, Trash2 } from "lucide-react";
 import {
   Banner,
   Button,
@@ -37,13 +37,20 @@ import { MissingEditorTarget } from "@/components/EntityLayout";
 import { listScrollLabel, PagedDataTable, ServerPagination, usePersistedPage } from "@/components/ListViews";
 import { EvaluationSetEditor, downloadBlob } from "@/components/evaluation/EvaluationSetEditor";
 import {
+  EvaluationVersionField,
+  evaluatedVersionLabel,
+  usableEvaluationTarget,
+} from "@/components/evaluation/EvaluationVersionField";
+import {
   agentApi,
+  type AgentProfile,
   type EvaluationCaseResult,
   type EvaluationJob,
   type EvaluationJobItem,
   type EvaluationJobStatus,
   type EvaluationSetItem,
   type EvaluationSummary,
+  type EvaluationTarget,
 } from "@/lib/api";
 import { useEditorRoute } from "@/lib/editor-route";
 import { formatDateTime, formatNumber } from "@/lib/format";
@@ -72,9 +79,18 @@ export function EvaluationPage() {
     [agents.data]
   );
   const selectedAgentId = usableAgents.some((agent) => agent.id === agentId) ? agentId : (usableAgents[0]?.id ?? "");
+  const selectedAgent = usableAgents.find((agent) => agent.id === selectedAgentId);
+  // 評価する版（#810）。選んだ業務 Agent ごとの選択で、業務 Agent を変えたら既定に戻す。
+  // 実行の意思なので作業状態には残さない（workspace-state.md）。
+  const [versionChoice, setVersionChoice] = useState<{ agentId: string; value: EvaluationTarget } | null>(null);
+  const target = usableEvaluationTarget(
+    selectedAgent,
+    versionChoice?.agentId === selectedAgentId ? versionChoice.value : null
+  );
 
   const start = useMutation({
-    mutationFn: (setId: string) => agentApi.createEvaluation({ set_id: setId }),
+    mutationFn: ({ setId, version }: { setId: string; version: EvaluationTarget }) =>
+      agentApi.createEvaluation({ set_id: setId, agent_version: version }),
     onSuccess: (created) => {
       setJobId(created.id);
       queryClient.setQueryData(["evaluation", created.id], created);
@@ -86,8 +102,8 @@ export function EvaluationPage() {
     onError: (error) => toast.error(error.message),
   });
 
-  const target = editor.target;
-  const editingId = target.kind === "edit" ? target.id : null;
+  const editorTarget = editor.target;
+  const editingId = editorTarget.kind === "edit" ? editorTarget.id : null;
   const editingSet = useQuery({
     queryKey: ["evaluation-set", editingId],
     queryFn: () => agentApi.getEvaluationSet(editingId ?? ""),
@@ -95,7 +111,7 @@ export function EvaluationPage() {
     retry: false,
   });
 
-  if (target.kind === "new") {
+  if (editorTarget.kind === "new") {
     return (
       <EvaluationSetEditor
         agents={usableAgents}
@@ -105,13 +121,13 @@ export function EvaluationPage() {
           setAgentId(saved.agent_id);
           editor.openItem(saved.id, { replace: true });
         }}
-        onStart={(set) => start.mutate(set.id)}
+        onStart={(set, version) => start.mutate({ setId: set.id, version })}
         onDeleted={() => editor.backToList({ replace: true })}
         starting={start.isPending}
       />
     );
   }
-  if (target.kind === "edit") {
+  if (editorTarget.kind === "edit") {
     if (editingSet.isLoading) {
       return (
         <PageBody wide>
@@ -122,7 +138,7 @@ export function EvaluationPage() {
       );
     }
     if (!editingSet.data) {
-      return <MissingEditorTarget id={target.id} onBack={() => editor.backToList({ replace: true })} />;
+      return <MissingEditorTarget id={editorTarget.id} onBack={() => editor.backToList({ replace: true })} />;
     }
     return (
       <EvaluationSetEditor
@@ -132,7 +148,7 @@ export function EvaluationPage() {
         defaultAgentId={selectedAgentId}
         onBack={() => editor.backToList()}
         onSaved={(saved) => queryClient.setQueryData(["evaluation-set", saved.id], saved)}
-        onStart={(set) => start.mutate(set.id)}
+        onStart={(set, version) => start.mutate({ setId: set.id, version })}
         onDeleted={() => editor.backToList({ replace: true })}
         starting={start.isPending}
       />
@@ -141,6 +157,9 @@ export function EvaluationPage() {
   return (
     <EvaluationOverview
       agentId={selectedAgentId}
+      agent={selectedAgent}
+      version={target}
+      onVersionChange={(value) => setVersionChoice({ agentId: selectedAgentId, value })}
       onAgentChange={setAgentId}
       agentOptions={usableAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
       jobId={jobId}
@@ -148,7 +167,7 @@ export function EvaluationPage() {
       onCreate={() => editor.openNew()}
       onOpen={(set) => editor.openItem(set.id)}
       itemHref={editor.itemHref}
-      onStart={(set) => start.mutate(set.id)}
+      onStart={(set) => start.mutate({ setId: set.id, version: target })}
       starting={start.isPending}
     />
   );
@@ -156,6 +175,9 @@ export function EvaluationPage() {
 
 function EvaluationOverview({
   agentId,
+  agent,
+  version,
+  onVersionChange,
   onAgentChange,
   agentOptions,
   jobId,
@@ -167,6 +189,9 @@ function EvaluationOverview({
   starting,
 }: {
   agentId: string;
+  agent: AgentProfile | undefined;
+  version: EvaluationTarget;
+  onVersionChange: (version: EvaluationTarget) => void;
   onAgentChange: (agentId: string) => void;
   agentOptions: { value: string; label: string }[];
   jobId: string | null;
@@ -241,6 +266,15 @@ function EvaluationOverview({
     },
     onError: (error) => toast.error(error.message),
   });
+  // 業種テンプレートの評価ケースで評価セットを作る（評価セットの無い、テンプレートから作った業務 Agent。#810）。
+  const fromTemplate = useMutation({
+    mutationFn: (id: string) => agentApi.createEvaluationSetFromTemplate(id),
+    onSuccess: (created) => {
+      void queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
+      toast.success(t("evaluation.sets.fromTemplateCreated", { name: created.name }));
+    },
+    onError: (error) => toast.error(error.message),
+  });
   const removeSet = useMutation({
     mutationFn: (id: string) => agentApi.deleteEvaluationSet(id),
     onSuccess: () => {
@@ -305,15 +339,18 @@ function EvaluationOverview({
             <CardDescription>{t("evaluation.sets.description")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <SelectField<string>
-              id="evaluation-agent"
-              label={t("evaluation.form.agent")}
-              width="md"
-              value={agentId}
-              options={agentOptions}
-              onValueChange={onAgentChange}
-              disabled={agentOptions.length === 0}
-            />
+            <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
+              <SelectField<string>
+                id="evaluation-agent"
+                label={t("evaluation.form.agent")}
+                width="md"
+                value={agentId}
+                options={agentOptions}
+                onValueChange={onAgentChange}
+                disabled={agentOptions.length === 0}
+              />
+              <EvaluationVersionField id="evaluation-version" agent={agent} value={version} onChange={onVersionChange} />
+            </div>
             {sets.isLoading ? (
               <TimedLoadingState label={t("loading.evaluationSets")} testId="evaluation-sets-loading">
                 <TableSkeleton columns={4} />
@@ -321,11 +358,23 @@ function EvaluationOverview({
             ) : (sets.data?.sets ?? []).length === 0 ? (
               <EmptyState
                 title={t("evaluation.sets.empty")}
-                hint={t("evaluation.sets.emptyHint")}
+                hint={agent?.template_id ? t("evaluation.sets.fromTemplateHint") : t("evaluation.sets.emptyHint")}
                 action={
-                  <Button variant="secondary" icon={Plus} onClick={onCreate} disabled={!agentId}>
-                    {t("evaluation.set.create")}
-                  </Button>
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {agent?.template_id ? (
+                      <Button
+                        icon={ClipboardList}
+                        loading={fromTemplate.isPending}
+                        onClick={() => fromTemplate.mutate(agent.id)}
+                        data-testid="evaluation-sets-from-template"
+                      >
+                        {t("evaluation.sets.fromTemplate")}
+                      </Button>
+                    ) : null}
+                    <Button variant="secondary" icon={Plus} onClick={onCreate} disabled={!agentId}>
+                      {t("evaluation.set.create")}
+                    </Button>
+                  </div>
                 }
               />
             ) : (
@@ -560,6 +609,7 @@ function JobView({
             {t("evaluation.summary.description", {
               set: job.set_name || "—",
               agent: job.agent_name || job.agent_id,
+              version: evaluatedVersionLabel(job.agent_version),
               started: formatDateTime(job.created_at),
             })}
           </CardDescription>
@@ -572,7 +622,13 @@ function JobView({
           ) : null}
           <SummaryMetrics summary={summary} previous={job.previous_summary} />
           <p className="text-xs text-fg-muted" data-testid="evaluation-previous">
-            {job.previous_summary ? t("evaluation.summary.comparedWithPrevious") : t("evaluation.summary.noPrevious")}
+            {/* どの版どうしを比べたかを出す（同じ評価ケースの前回とだけ比べる。#810）。 */}
+            {job.previous_summary
+              ? t("evaluation.summary.comparedWithPrevious", {
+                  version: evaluatedVersionLabel(job.previous_agent_version),
+                  started: job.previous_created_at ? formatDateTime(job.previous_created_at) : "—",
+                })
+              : t("evaluation.summary.noPrevious")}
           </p>
         </CardContent>
       </Card>
@@ -836,6 +892,12 @@ function JobsTable({
       ),
     },
     { key: "set", header: t("evaluation.jobs.set"), className: "text-xs text-fg", render: (item) => item.set_name || "—" },
+    {
+      key: "version",
+      header: t("evaluation.version.column"),
+      className: "whitespace-nowrap text-xs tabular-nums text-fg",
+      render: (item) => evaluatedVersionLabel(item.agent_version),
+    },
     { key: "agent", header: t("evaluation.form.agent"), className: "text-xs text-fg", render: (item) => item.agent_name || item.agent_id },
     {
       key: "status",

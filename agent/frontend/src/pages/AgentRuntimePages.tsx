@@ -123,6 +123,7 @@ import {
 } from "@/components/ListFilters";
 import { AgentTemplatePicker } from "@/components/agents/AgentTemplatePicker";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
+import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
 import { useEditorRoute } from "@/lib/editor-route";
 import {
   focusFirstInvalidField,
@@ -5280,8 +5281,11 @@ function AgentEditorView({
   const [modelId, setModelId] = useState(saved.model_id);
   const [baseline, setBaseline] = useState<AgentDraft>(saved);
   const [nameError, setNameError] = useState<string | null>(null);
-  // 新規作成で選んだ業種テンプレート（#780）。
+  // 新規作成で選んだ業種テンプレート（#780）。作成した業務 Agent に残す（#810）。
   const [templateId, setTemplateId] = useState<string | null>(null);
+  // テンプレートの評価ケースで評価セットを作るか（既定はオン。品質評価の権限を持つ利用者だけ。#810）。
+  const canCreateEvaluationSet = useCanEditEvaluationSets();
+  const [templateEvaluationSet, setTemplateEvaluationSet] = useState(true);
   const confirmTemplate = useConfirm();
 
   async function applyTemplate(template: AgentTemplate) {
@@ -5315,6 +5319,18 @@ function AgentEditorView({
     onSuccess: async (created) => {
       toast.success(t("agent.created"));
       setBaseline(draft);
+      if (created.template_id && canCreateEvaluationSet && templateEvaluationSet) {
+        // 評価セットの作成に失敗しても業務 Agent は作れている。品質評価の画面から作り直せる（#810）。
+        try {
+          const evaluationSet = await agentApi.createEvaluationSetFromTemplate(created.id);
+          void queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
+          toast.success(t("evaluation.sets.fromTemplateCreated", { name: evaluationSet.name }));
+        } catch (error) {
+          toast.error(t("agent.template.evaluationSetFailed"), {
+            description: error instanceof Error ? error.message : undefined,
+          });
+        }
+      }
       // 一覧を取り直してから作成した Agent のエディタへ移る（戻るで空の新規フォームへ戻さない）。
       await queryClient.invalidateQueries({ queryKey: ["agents"] });
       onCreated(created);
@@ -5428,7 +5444,7 @@ function AgentEditorView({
       patchAgent.mutate(payload);
       return;
     }
-    createAgent.mutate({ ...payload, enabled: newEnabled });
+    createAgent.mutate({ ...payload, enabled: newEnabled, ...(templateId ? { template_id: templateId } : {}) });
   }
 
   const fieldId = agent?.id ?? "new";
@@ -5477,7 +5493,15 @@ function AgentEditorView({
           testId="agent-save-error"
         />
         {!agent && !readOnly ? (
-          <AgentTemplatePicker selectedId={templateId} onApply={(template) => void applyTemplate(template)} />
+          <AgentTemplatePicker
+            selectedId={templateId}
+            onApply={(template) => void applyTemplate(template)}
+            evaluationSet={
+              canCreateEvaluationSet
+                ? { checked: templateEvaluationSet, onChange: setTemplateEvaluationSet }
+                : undefined
+            }
+          />
         ) : null}
         {agent ? (
           <Section
@@ -5768,6 +5792,7 @@ function RunDetail({
   const structured = getStructuredResult(run);
   const { canCancel, canResume } = runCapabilities(run);
   const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
+  const canAddCase = useCanEditEvaluationSets();
 
   return (
     <section className="space-y-5" aria-label={t("run.detail")}>
@@ -5816,8 +5841,19 @@ function RunDetail({
               runId={run.id}
               current={run.admin_review ?? null}
               mode="admin"
-              onSaved={() => void queryClient.invalidateQueries({ queryKey: ["runs"] })}
+              onSaved={() => {
+                void queryClient.invalidateQueries({ queryKey: ["runs"] });
+                void queryClient.invalidateQueries({ queryKey: ["evaluation-case-draft", run.id] });
+              }}
             />
+          ) : null}
+          {/* 管理者の評価の下で、この Run の質問を評価ケースにする（品質評価の権限。評価の Run は除く。#810）。 */}
+          {capabilities.admin &&
+          canAddCase &&
+          !run.metadata?.evaluation_job_id &&
+          run.status === "completed" &&
+          run.artifacts.some((item) => item.kind === "answer") ? (
+            <AddToEvaluationCase key={run.id} runId={run.id} testId="run-add-case" />
           ) : null}
         </CardContent>
       </Card>
