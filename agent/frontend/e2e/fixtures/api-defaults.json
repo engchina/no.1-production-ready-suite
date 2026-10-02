@@ -9,27 +9,18 @@
     {
       "id": "default",
       "name": "汎用業務 Agent",
-      "description": "外部 RAG / NL2SQL と承認フローを使う既定 Agent。",
+      "description": "RAG / NL2SQL の MCP 接続と承認フローを使う既定 Agent。",
       "instructions": "業務データは外部ツール経由で取得し、根拠と監査情報を残す。",
       "skill_ids": [
         "business_rag_research",
         "structured_data_query",
-        "mcp_tool_discovery",
-        "mcp_tool_call",
         "rag_then_structured_data"
       ],
       "model_id": "",
       "migration_required": false,
       "tool_names": [
         "agent_skill_list",
-        "echo",
-        "external_mcp_call",
-        "external_mcp_list_tools",
-        "external_nl2sql_get_job",
-        "external_nl2sql_query",
-        "external_rag_chat",
-        "external_rag_list_business_views",
-        "external_rag_search"
+        "echo"
       ],
       "enabled": true,
       "source": "builtin",
@@ -41,14 +32,14 @@
     {
       "id": "business_rag_research",
       "name": "業務 RAG 調査",
-      "description": "外部業務 RAG を使って根拠付き情報を検索する。",
-      "instructions": "ユーザーの目的を外部 RAG の query として扱い、引用と根拠を返す。",
+      "description": "業務 RAG（MCP 接続 rag）を使って根拠付き情報を検索する。",
+      "instructions": "ユーザーの目的を rag_search の query として扱い、引用と根拠を返す。対象の業務ビューが分からなければ rag_list_business_views で確かめる。",
       "mcp_requirements": [
         {
-          "server_id": "control-plane",
+          "server_id": "rag",
           "tool_names": [
-            "external_rag_search",
-            "external_rag_list_business_views"
+            "rag_search",
+            "rag_list_business_views"
           ]
         }
       ],
@@ -64,63 +55,22 @@
       "updated_at": "2026-06-28T00:00:00Z"
     },
     {
-      "id": "mcp_tool_call",
-      "name": "MCP ツール実行",
-      "description": "外部 MCP gateway 経由で指定 tool を実行する。",
-      "instructions": "MCP tool の schema に合わせた arguments を渡す。副作用は通常承認対象になる。",
-      "mcp_requirements": [
-        {
-          "server_id": "control-plane",
-          "tool_names": [
-            "external_mcp_call"
-          ]
-        }
-      ],
-      "resource_ids": [],
-      "enabled": true,
-      "tags": [
-        "mcp",
-        "tool-call"
-      ],
-      "source": "builtin",
-      "created_at": "2026-06-28T00:00:00Z",
-      "updated_at": "2026-06-28T00:00:00Z"
-    },
-    {
-      "id": "mcp_tool_discovery",
-      "name": "MCP ツール探索",
-      "description": "外部 MCP gateway の tools/list を呼んで利用可能な tool を確認する。",
-      "instructions": "MCP tool 実行前に schema と説明を確認する。",
-      "mcp_requirements": [
-        {
-          "server_id": "control-plane",
-          "tool_names": [
-            "external_mcp_list_tools"
-          ]
-        }
-      ],
-      "resource_ids": [],
-      "enabled": true,
-      "tags": [
-        "mcp",
-        "tool-discovery"
-      ],
-      "source": "builtin",
-      "created_at": "2026-06-28T00:00:00Z",
-      "updated_at": "2026-06-28T00:00:00Z"
-    },
-    {
       "id": "rag_then_structured_data",
       "name": "RAG 後に構造化データ照会",
-      "description": "業務 RAG で文脈を確認した後、外部 NL2SQL へ同じ目的を渡す。",
+      "description": "業務 RAG で文脈を確認した後、NL2SQL へ同じ目的を渡す。",
       "instructions": "非構造文脈と構造化表の両方が必要な調査に使う。",
       "mcp_requirements": [
         {
-          "server_id": "control-plane",
+          "server_id": "rag",
           "tool_names": [
-            "external_rag_search",
-            "external_nl2sql_query",
-            "external_nl2sql_get_job"
+            "rag_search"
+          ]
+        },
+        {
+          "server_id": "nl2sql",
+          "tool_names": [
+            "nl2sql_query",
+            "nl2sql_get_job"
           ]
         }
       ],
@@ -138,14 +88,16 @@
     {
       "id": "structured_data_query",
       "name": "構造化データ照会",
-      "description": "外部 NL2SQL/構造化データサービスへ質問を渡して表形式結果を取得する。",
-      "instructions": "SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。結果の status が pending / running なら external_nl2sql_get_job で続きを取る。",
+      "description": "NL2SQL（MCP 接続 nl2sql）へ質問を渡して表形式の結果を取得する。",
+      "instructions": "SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。業務プロファイルが分からなければ nl2sql_recommend_profile で選ぶ。結果の status が pending / running なら nl2sql_get_job で続きを取る。",
       "mcp_requirements": [
         {
-          "server_id": "control-plane",
+          "server_id": "nl2sql",
           "tool_names": [
-            "external_nl2sql_query",
-            "external_nl2sql_get_job"
+            "nl2sql_query",
+            "nl2sql_get_job",
+            "nl2sql_list_profiles",
+            "nl2sql_recommend_profile"
           ]
         }
       ],
@@ -241,7 +193,7 @@
             "type": "object"
           },
           "SkillMcpRequirement": {
-            "description": "Skill の内部実装が必要とする MCP server / tool allowlist。",
+            "description": "Skill が使う MCP 接続とツールの許可リスト（#757）。\n\n`server_id` は MCP 接続の ID（`rag` / `nl2sql` / 登録した接続）。`control-plane` は\nControl Plane のツール（`tool_registry`）。`tool_names` が空なら接続のすべてのツールを使う。",
             "properties": {
               "server_id": {
                 "title": "Server Id",
@@ -310,1124 +262,6 @@
       "audit_tags": [
         "debug"
       ]
-    },
-    {
-      "name": "external_mcp_call",
-      "description": "外部 MCP JSON-RPC gateway 経由で MCP tool を呼び出す。",
-      "input_schema": {
-        "properties": {
-          "tool_name": {
-            "title": "Tool Name",
-            "type": "string"
-          },
-          "arguments": {
-            "additionalProperties": true,
-            "title": "Arguments",
-            "type": "object"
-          },
-          "server_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Server Id"
-          },
-          "trace_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Trace Id"
-          }
-        },
-        "required": [
-          "tool_name"
-        ],
-        "title": "ExternalMcpCallInput",
-        "type": "object"
-      },
-      "output_schema": {
-        "properties": {
-          "tool_name": {
-            "title": "Tool Name",
-            "type": "string"
-          },
-          "content": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "title": "Content",
-            "type": "array"
-          },
-          "structured_content": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Structured Content"
-          },
-          "result": {
-            "additionalProperties": true,
-            "title": "Result",
-            "type": "object"
-          },
-          "is_error": {
-            "default": false,
-            "title": "Is Error",
-            "type": "boolean"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "title": "Metadata",
-            "type": "object"
-          }
-        },
-        "required": [
-          "tool_name"
-        ],
-        "title": "ExternalMcpCallOutput",
-        "type": "object"
-      },
-      "permission_level": "sensitive",
-      "side_effects": true,
-      "timeout_seconds": 10.0,
-      "max_retries": 3,
-      "audit_tags": [
-        "external",
-        "mcp",
-        "tool-gateway"
-      ]
-    },
-    {
-      "name": "external_mcp_list_tools",
-      "description": "外部 MCP JSON-RPC gateway の tools/list を呼び、利用可能 tool を取得する。",
-      "input_schema": {
-        "properties": {
-          "server_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Server Id"
-          },
-          "trace_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Trace Id"
-          }
-        },
-        "title": "ExternalMcpListToolsInput",
-        "type": "object"
-      },
-      "output_schema": {
-        "$defs": {
-          "ExternalMcpToolInfo": {
-            "properties": {
-              "name": {
-                "title": "Name",
-                "type": "string"
-              },
-              "description": {
-                "default": "",
-                "title": "Description",
-                "type": "string"
-              },
-              "input_schema": {
-                "additionalProperties": true,
-                "title": "Input Schema",
-                "type": "object"
-              },
-              "output_schema": {
-                "anyOf": [
-                  {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Output Schema"
-              },
-              "server_id": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Server Id"
-              },
-              "metadata": {
-                "additionalProperties": true,
-                "title": "Metadata",
-                "type": "object"
-              }
-            },
-            "required": [
-              "name"
-            ],
-            "title": "ExternalMcpToolInfo",
-            "type": "object"
-          }
-        },
-        "properties": {
-          "tools": {
-            "items": {
-              "$ref": "#/$defs/ExternalMcpToolInfo"
-            },
-            "title": "Tools",
-            "type": "array"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "title": "Metadata",
-            "type": "object"
-          }
-        },
-        "title": "ExternalMcpToolsData",
-        "type": "object"
-      },
-      "permission_level": "read",
-      "side_effects": false,
-      "timeout_seconds": 10.0,
-      "max_retries": 3,
-      "audit_tags": [
-        "external",
-        "mcp",
-        "tool-discovery"
-      ]
-    },
-    {
-      "name": "external_nl2sql_get_job",
-      "description": "NL2SQL のジョブ（MCP の nl2sql_get_job）の状態と結果を取得する（本人のジョブだけ）。",
-      "input_schema": {
-        "properties": {
-          "job_id": {
-            "minLength": 1,
-            "title": "Job Id",
-            "type": "string"
-          },
-          "wait_seconds": {
-            "default": 0,
-            "maximum": 45,
-            "minimum": 0,
-            "title": "Wait Seconds",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "job_id"
-        ],
-        "title": "ExternalNl2SqlGetJobInput",
-        "type": "object"
-      },
-      "output_schema": {
-        "description": "NL2SQL のジョブの結果。待ち時間内に終わらなければ pending / running のまま返る。",
-        "properties": {
-          "job_id": {
-            "title": "Job Id",
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "pending",
-              "running",
-              "done",
-              "error"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "profile_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Profile Id"
-          },
-          "generated_sql": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Generated Sql"
-          },
-          "executable_sql": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Executable Sql"
-          },
-          "explanation": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Explanation"
-          },
-          "is_safe": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Is Safe"
-          },
-          "safety_issues": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Safety Issues"
-          },
-          "columns": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Columns",
-            "type": "array"
-          },
-          "rows": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "title": "Rows",
-            "type": "array"
-          },
-          "returned_count": {
-            "default": 0,
-            "title": "Returned Count",
-            "type": "integer"
-          },
-          "total": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Total"
-          },
-          "has_more": {
-            "default": false,
-            "title": "Has More",
-            "type": "boolean"
-          },
-          "truncated": {
-            "default": false,
-            "title": "Truncated",
-            "type": "boolean"
-          },
-          "history_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "History Id"
-          },
-          "error_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Error Code"
-          },
-          "error_message": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Error Message"
-          }
-        },
-        "required": [
-          "job_id",
-          "status"
-        ],
-        "title": "Nl2SqlJobResult",
-        "type": "object"
-      },
-      "permission_level": "read",
-      "side_effects": false,
-      "timeout_seconds": 60.0,
-      "max_retries": 3,
-      "audit_tags": [
-        "external",
-        "nl2sql",
-        "structured-data",
-        "audit-sql",
-        "mcp"
-      ]
-    },
-    {
-      "name": "external_nl2sql_query",
-      "description": "NL2SQL（MCP の nl2sql_query）で質問から SQL を生成・実行し、表形式の結果を取得する。待ち時間内に終わらなければ job_id を返すので external_nl2sql_get_job で続きを取る。",
-      "input_schema": {
-        "properties": {
-          "question": {
-            "maxLength": 4000,
-            "minLength": 1,
-            "title": "Question",
-            "type": "string"
-          },
-          "profile_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Profile Id"
-          },
-          "row_limit": {
-            "anyOf": [
-              {
-                "maximum": 1000,
-                "minimum": 1,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Row Limit"
-          },
-          "wait_seconds": {
-            "default": 40,
-            "maximum": 45,
-            "minimum": 0,
-            "title": "Wait Seconds",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "question"
-        ],
-        "title": "ExternalNl2SqlInput",
-        "type": "object"
-      },
-      "output_schema": {
-        "description": "NL2SQL のジョブの結果。待ち時間内に終わらなければ pending / running のまま返る。",
-        "properties": {
-          "job_id": {
-            "title": "Job Id",
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "pending",
-              "running",
-              "done",
-              "error"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "profile_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Profile Id"
-          },
-          "generated_sql": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Generated Sql"
-          },
-          "executable_sql": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Executable Sql"
-          },
-          "explanation": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Explanation"
-          },
-          "is_safe": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Is Safe"
-          },
-          "safety_issues": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Safety Issues"
-          },
-          "columns": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Columns",
-            "type": "array"
-          },
-          "rows": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "title": "Rows",
-            "type": "array"
-          },
-          "returned_count": {
-            "default": 0,
-            "title": "Returned Count",
-            "type": "integer"
-          },
-          "total": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Total"
-          },
-          "has_more": {
-            "default": false,
-            "title": "Has More",
-            "type": "boolean"
-          },
-          "truncated": {
-            "default": false,
-            "title": "Truncated",
-            "type": "boolean"
-          },
-          "history_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "History Id"
-          },
-          "error_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Error Code"
-          },
-          "error_message": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Error Message"
-          }
-        },
-        "required": [
-          "job_id",
-          "status"
-        ],
-        "title": "Nl2SqlJobResult",
-        "type": "object"
-      },
-      "permission_level": "sensitive",
-      "side_effects": false,
-      "timeout_seconds": 60.0,
-      "max_retries": 3,
-      "audit_tags": [
-        "external",
-        "nl2sql",
-        "structured-data",
-        "audit-sql",
-        "mcp"
-      ]
-    },
-    {
-      "name": "external_rag_chat",
-      "description": "業務 RAG の会話（MCP の rag_chat_send_message）にメッセージを送り、回答を取得する。conversation_id がなければ business_view_id の業務ビューで会話を作る。",
-      "input_schema": {
-        "properties": {
-          "content": {
-            "maxLength": 8000,
-            "minLength": 1,
-            "title": "Content",
-            "type": "string"
-          },
-          "conversation_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Conversation Id"
-          },
-          "business_view_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Business View Id"
-          },
-          "title": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Title"
-          }
-        },
-        "required": [
-          "content"
-        ],
-        "title": "ExternalRagChatInput",
-        "type": "object"
-      },
-      "output_schema": {
-        "$defs": {
-          "RagCitation": {
-            "properties": {
-              "document_id": {
-                "title": "Document Id",
-                "type": "string"
-              },
-              "chunk_id": {
-                "title": "Chunk Id",
-                "type": "string"
-              },
-              "file_name": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "File Name"
-              },
-              "text": {
-                "default": "",
-                "title": "Text",
-                "type": "string"
-              },
-              "score": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Score"
-              }
-            },
-            "required": [
-              "document_id",
-              "chunk_id"
-            ],
-            "title": "RagCitation",
-            "type": "object"
-          }
-        },
-        "properties": {
-          "conversation_id": {
-            "title": "Conversation Id",
-            "type": "string"
-          },
-          "message_id": {
-            "title": "Message Id",
-            "type": "string"
-          },
-          "answer": {
-            "title": "Answer",
-            "type": "string"
-          },
-          "trace_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Trace Id"
-          },
-          "guardrail_warnings": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Guardrail Warnings",
-            "type": "array"
-          },
-          "citations": {
-            "items": {
-              "$ref": "#/$defs/RagCitation"
-            },
-            "title": "Citations",
-            "type": "array"
-          }
-        },
-        "required": [
-          "conversation_id",
-          "message_id",
-          "answer"
-        ],
-        "title": "ExternalRagChatOutput",
-        "type": "object"
-      },
-      "permission_level": "write",
-      "side_effects": true,
-      "timeout_seconds": 60.0,
-      "max_retries": 3,
-      "audit_tags": [
-        "external",
-        "rag",
-        "business-data",
-        "conversation",
-        "mcp"
-      ]
-    },
-    {
-      "name": "external_rag_list_business_views",
-      "description": "利用者が使える業務 RAG の業務ビュー（MCP の rag_list_business_views）を一覧する。",
-      "input_schema": {
-        "properties": {
-          "query": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Query"
-          },
-          "limit": {
-            "default": 50,
-            "maximum": 200,
-            "minimum": 1,
-            "title": "Limit",
-            "type": "integer"
-          }
-        },
-        "title": "ExternalRagListBusinessViewsInput",
-        "type": "object"
-      },
-      "output_schema": {
-        "$defs": {
-          "RagBusinessView": {
-            "properties": {
-              "id": {
-                "title": "Id",
-                "type": "string"
-              },
-              "name": {
-                "title": "Name",
-                "type": "string"
-              },
-              "description": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Description"
-              },
-              "status": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Status"
-              },
-              "knowledge_base_count": {
-                "default": 0,
-                "title": "Knowledge Base Count",
-                "type": "integer"
-              }
-            },
-            "required": [
-              "id",
-              "name"
-            ],
-            "title": "RagBusinessView",
-            "type": "object"
-          }
-        },
-        "properties": {
-          "business_views": {
-            "items": {
-              "$ref": "#/$defs/RagBusinessView"
-            },
-            "title": "Business Views",
-            "type": "array"
-          }
-        },
-        "title": "ExternalRagListBusinessViewsOutput",
-        "type": "object"
-      },
-      "permission_level": "read",
-      "side_effects": false,
-      "timeout_seconds": 60.0,
-      "max_retries": 3,
-      "audit_tags": [
-        "external",
-        "rag",
-        "discovery",
-        "mcp"
-      ]
-    },
-    {
-      "name": "external_rag_search",
-      "description": "業務 RAG（MCP の rag_search）で検索し、回答と引用を取得する。",
-      "input_schema": {
-        "properties": {
-          "query": {
-            "minLength": 1,
-            "title": "Query",
-            "type": "string"
-          },
-          "business_view_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Business View Id"
-          },
-          "knowledge_base_ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Knowledge Base Ids"
-          },
-          "top_k": {
-            "anyOf": [
-              {
-                "maximum": 100,
-                "minimum": 1,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Top K"
-          },
-          "filters": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "type": "string"
-                },
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Filters"
-          }
-        },
-        "required": [
-          "query"
-        ],
-        "title": "ExternalRagSearchInput",
-        "type": "object"
-      },
-      "output_schema": {
-        "$defs": {
-          "RagCitation": {
-            "properties": {
-              "document_id": {
-                "title": "Document Id",
-                "type": "string"
-              },
-              "chunk_id": {
-                "title": "Chunk Id",
-                "type": "string"
-              },
-              "file_name": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "File Name"
-              },
-              "text": {
-                "default": "",
-                "title": "Text",
-                "type": "string"
-              },
-              "score": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Score"
-              }
-            },
-            "required": [
-              "document_id",
-              "chunk_id"
-            ],
-            "title": "RagCitation",
-            "type": "object"
-          }
-        },
-        "properties": {
-          "answer": {
-            "title": "Answer",
-            "type": "string"
-          },
-          "trace_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Trace Id"
-          },
-          "guardrail_warnings": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Guardrail Warnings",
-            "type": "array"
-          },
-          "citations": {
-            "items": {
-              "$ref": "#/$defs/RagCitation"
-            },
-            "title": "Citations",
-            "type": "array"
-          }
-        },
-        "required": [
-          "answer"
-        ],
-        "title": "ExternalRagSearchOutput",
-        "type": "object"
-      },
-      "permission_level": "read",
-      "side_effects": false,
-      "timeout_seconds": 60.0,
-      "max_retries": 3,
-      "audit_tags": [
-        "external",
-        "rag",
-        "business-data",
-        "mcp"
-      ]
     }
   ],
   "tracePolicy": {
@@ -1441,50 +275,6 @@
     "allow": [],
     "ask": [],
     "deny": []
-  },
-  "externalRag": {
-    "mcp_url": null,
-    "timeout_seconds": 60.0,
-    "default_limit": null,
-    "configured": false,
-    "service_token_configured": false,
-    "service_user_configured": false
-  },
-  "externalNl2Sql": {
-    "mcp_url": null,
-    "timeout_seconds": 60.0,
-    "default_limit": 100,
-    "configured": false,
-    "service_token_configured": false,
-    "service_user_configured": false
-  },
-  "externalMcp": {
-    "base_url": null,
-    "api_key_configured": false,
-    "oauth_configured": false,
-    "auth_mode": "none",
-    "session_configured": false,
-    "timeout_seconds": 10.0,
-    "default_limit": null,
-    "configured": false
-  },
-  "externalMcpServers": {
-    "servers": [
-      {
-        "base_url": null,
-        "api_key_configured": false,
-        "oauth_configured": false,
-        "auth_mode": "none",
-        "session_configured": false,
-        "timeout_seconds": 10.0,
-        "default_limit": null,
-        "configured": false,
-        "server_id": "default",
-        "label": "default",
-        "is_default": true
-      }
-    ],
-    "default_server_id": "default"
   },
   "modelSettings": {
     "settings": {
@@ -1578,5 +368,41 @@
     "key_file_exists": false,
     "config_file_exists": false,
     "config_source": "runtime"
+  },
+  "mcpConnections": {
+    "connections": [
+      {
+        "server_id": "nl2sql",
+        "label": "NL2SQL",
+        "base_url": null,
+        "auth_mode": "service_token",
+        "service_audience": "nl2sql",
+        "timeout_seconds": 60.0,
+        "source": "builtin",
+        "removable": false,
+        "configured": false,
+        "api_key_configured": false,
+        "oauth_configured": false,
+        "session_configured": false,
+        "service_token_configured": false,
+        "service_user_configured": false
+      },
+      {
+        "server_id": "rag",
+        "label": "RAG",
+        "base_url": null,
+        "auth_mode": "service_token",
+        "service_audience": "rag",
+        "timeout_seconds": 60.0,
+        "source": "builtin",
+        "removable": false,
+        "configured": false,
+        "api_key_configured": false,
+        "oauth_configured": false,
+        "session_configured": false,
+        "service_token_configured": false,
+        "service_user_configured": false
+      }
+    ]
   }
 }

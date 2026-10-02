@@ -51,8 +51,8 @@ for (const viewport of [
       await expectNoHorizontalOverflow(page);
     });
 
-    test("外部 MCP のタイムアウトは必須で、空を 0 として保存しない", async ({ page, mockApi }) => {
-      await page.goto("/settings/external-mcp?id=new");
+    test("MCP 接続のタイムアウトは必須で、空を 0 として保存しない", async ({ page, mockApi }) => {
+      await page.goto("/settings/mcp-connections?id=new");
       await page.locator("#mcp-server-id").fill("crm");
       await page.locator("#mcp-server-timeout").fill("");
       await page.getByRole("button", { name: "作成" }).click();
@@ -62,20 +62,8 @@ for (const viewport of [
       await page.locator("#mcp-server-timeout").fill("601");
       await page.getByRole("button", { name: "作成" }).click();
       await expectFieldError(page, "mcp-server-timeout", "タイムアウト秒は 0 より大きく 600 以下の数値を入力してください。");
-      expect(patchCount(mockApi, "/settings/external-mcp-servers", "POST")).toBe(0);
+      expect(patchCount(mockApi, "/settings/mcp-connections", "POST")).toBe(0);
       await expectNoHorizontalOverflow(page);
-    });
-
-    test("外部 NL2SQL の数値は欄の下に理由を出す", async ({ page, mockApi }) => {
-      await page.goto("/settings/external-nl2sql");
-      await page.getByLabel("タイムアウト秒").fill("0");
-      await page.getByLabel("既定取得件数").fill("");
-      await page.getByRole("button", { name: "保存" }).click();
-
-      await expectFieldError(page, "nl2sql-timeout", "タイムアウト秒は 0 より大きく 600 以下の数値を入力してください。");
-      await expectFieldError(page, "nl2sql-default-limit", "既定取得件数を入力してください。");
-      await expect(page.locator("#nl2sql-timeout")).toBeFocused();
-      expect(patchCount(mockApi, "/settings/external-nl2sql")).toBe(0);
     });
 
     test("Skill の JSON の形式エラーは欄の下に出す", async ({ page, mockApi }) => {

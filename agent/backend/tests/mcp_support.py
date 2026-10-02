@@ -23,11 +23,7 @@ from pr_system_settings.auth.service_token import verify_service_token
 from pydantic import BaseModel, ConfigDict, Field
 from pytest import MonkeyPatch
 
-from app.features.agent.config import (
-    ExternalNl2SqlRuntimeConfig,
-    ExternalRagRuntimeConfig,
-    runtime_config_store,
-)
+from app.features.agent.config import McpConnectionConfig, runtime_config_store
 from app.settings import get_settings
 
 SERVICE_TOKEN_SECRET = "agent-mcp-test-secret-0123456789abcdef"  # nosec B105 - テスト用
@@ -148,7 +144,7 @@ class FakeProductMcp:
     # 次の tools/call に返す HTTP status（再試行の確認用。先頭から使う）。
     # "timeout" は読み取りの timeout。
     tool_call_statuses: list[int | Literal["timeout"]] = field(default_factory=list)
-    # MCP 以外の URL（planner など）への応答と、その request（url / json / timeout）。
+    # MCP 以外の URL（外部 MCP など）への応答と、その request（url / json / timeout）。
     other_responses: dict[str, dict[str, Any]] = field(default_factory=dict)
     other_calls: list[dict[str, Any]] = field(default_factory=list)
     _session_counter: int = 0
@@ -267,28 +263,23 @@ def fake_product_mcp(
     outputs: dict[str, ToolOutput] | None = None,
     rag_timeout_seconds: float = 60.0,
     nl2sql_timeout_seconds: float = 60.0,
-    nl2sql_default_limit: int = 100,
     secret: str = SERVICE_TOKEN_SECRET,
 ) -> FakeProductMcp:
-    """RAG / NL2SQL の MCP を fake にし、Agent の接続設定と署名鍵を合わせる。"""
+    """RAG / NL2SQL の MCP を fake にし、MCP 接続（`rag` / `nl2sql`）の URL と署名鍵を合わせる。"""
     fake = FakeProductMcp()
     if outputs:
         fake.outputs.update(outputs)
     monkeypatch.setattr(get_settings(), "app_service_token_secret", secret)
-    monkeypatch.setattr(
-        runtime_config_store,
-        "_rag",
-        ExternalRagRuntimeConfig(mcp_url=RAG_MCP_URL, timeout_seconds=rag_timeout_seconds),
+    connections: dict[str, McpConnectionConfig] = {
+        config.server_id: config for config in runtime_config_store.list_mcp_servers()
+    }
+    connections["rag"] = connections["rag"].model_copy(
+        update={"base_url": RAG_MCP_URL, "timeout_seconds": rag_timeout_seconds}
     )
-    monkeypatch.setattr(
-        runtime_config_store,
-        "_nl2sql",
-        ExternalNl2SqlRuntimeConfig(
-            mcp_url=NL2SQL_MCP_URL,
-            timeout_seconds=nl2sql_timeout_seconds,
-            default_limit=nl2sql_default_limit,
-        ),
+    connections["nl2sql"] = connections["nl2sql"].model_copy(
+        update={"base_url": NL2SQL_MCP_URL, "timeout_seconds": nl2sql_timeout_seconds}
     )
+    monkeypatch.setattr(runtime_config_store, "_mcp_servers", connections)
     monkeypatch.setattr("app.features.agent.tools.httpx.Client", fake.client_factory)
     return fake
 

@@ -49,23 +49,25 @@ export interface MockAccount {
   user: CurrentUserPayload;
 }
 
-/** 外部 MCP gateway の tools/list 相当（旧 external-tools-server.mjs の応答と同じ内容）。 */
+/** MCP 接続の tools/list 相当（`GET /api/settings/mcp-connections/{id}/tools`。#757）。 */
 const MOCK_MCP_TOOLS = [
   {
     name: "lookup_customer",
     description: "顧客情報を検索する",
     input_schema: { type: "object", properties: { customer_id: { type: "string" } } },
     output_schema: { type: "object" },
+    read_only: true,
     metadata: { fixture: true },
   },
   {
-    name: "search_orders",
-    description: "受注を検索する",
+    name: "update_order",
+    description: "受注を更新する",
     input_schema: {
       type: "object",
-      properties: { account_id: { type: "string" }, limit: { type: "number" } },
+      properties: { order_id: { type: "string" }, status: { type: "string" } },
     },
     output_schema: { type: "object" },
+    read_only: false,
     metadata: { fixture: true },
   },
 ];
@@ -195,10 +197,8 @@ function createState() {
     marketplaces: [] as Json[],
     tracePolicy: d.tracePolicy as Json,
     toolPolicy: d.toolPolicy as Json,
-    externalRag: d.externalRag as Json,
-    externalNl2Sql: d.externalNl2Sql as Json,
-    externalMcp: d.externalMcp as Json,
-    externalMcpServers: d.externalMcpServers as Json as { servers: Json[]; default_server_id: string },
+    // MCP 接続（RAG / NL2SQL / 外部 MCP。#757）。
+    mcpConnections: d.mcpConnections as Json as { connections: Json[] },
     modelSettings: d.modelSettings as Json,
     databaseSettings: d.databaseSettings as Json,
     adbInfo: d.adbInfo as Json,
@@ -298,21 +298,48 @@ function skillFromPayload(payload: Json, source: string, current?: Json): Json {
   };
 }
 
-function mcpServer(payload: Json, current?: Json): Json {
-  const merged: Json = { timeout_seconds: 10, label: null, ...current, ...payload };
-  const baseUrl = (merged.base_url as string | null | undefined) ?? null;
-  return {
-    server_id: merged.server_id,
-    label: merged.label ?? merged.server_id,
-    base_url: baseUrl,
+/** MCP 接続の公開設定（backend の `_mcp_connection_settings` と同じ形。資格情報の値は返さない）。 */
+function mcpConnection(payload: Json, current?: Json): Json {
+  const merged: Json = {
+    timeout_seconds: 10,
+    label: null,
+    auth_mode: "none",
+    source: "runtime",
+    removable: true,
     api_key_configured: false,
     oauth_configured: false,
-    auth_mode: "none",
-    session_configured: Boolean(merged.session_id),
+    session_configured: false,
+    service_token_configured: false,
+    service_user_configured: false,
+    ...current,
+    ...payload,
+  };
+  const baseUrl = typeof merged.base_url === "string" && merged.base_url ? merged.base_url : null;
+  const apiKeyConfigured = Boolean(payload.api_key) || Boolean(current?.api_key_configured);
+  const oauthConfigured =
+    Boolean(payload.oauth_token_url && payload.oauth_client_id && payload.oauth_client_secret) ||
+    Boolean(current?.oauth_configured);
+  const mode = String(merged.auth_mode);
+  const ready =
+    mode === "none" ||
+    (mode === "api_key" && apiKeyConfigured) ||
+    (mode === "oauth_client_credentials" && oauthConfigured) ||
+    (mode === "service_token" && Boolean(merged.service_token_configured));
+  return {
+    server_id: merged.server_id,
+    label: merged.label ?? null,
+    base_url: baseUrl,
+    auth_mode: mode,
+    service_audience: mode === "service_token" ? merged.service_audience || merged.server_id : null,
     timeout_seconds: merged.timeout_seconds,
-    default_limit: null,
-    configured: Boolean(baseUrl),
-    is_default: false,
+    source: merged.source,
+    removable: merged.source === "runtime",
+    configured: Boolean(baseUrl) && ready,
+    api_key_configured: apiKeyConfigured,
+    oauth_configured: oauthConfigured,
+    session_configured: Boolean(payload.session_id) || Boolean(current?.session_configured),
+    service_token_configured: Boolean(merged.service_token_configured),
+    service_user_configured: Boolean(merged.service_user_configured),
   };
 }
 
@@ -664,62 +691,47 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         return state[key];
       }
     }
-    const external: Record<string, "externalRag" | "externalNl2Sql" | "externalMcp"> = {
-      "external-rag": "externalRag",
-      "external-nl2sql": "externalNl2Sql",
-      "external-mcp": "externalMcp",
-    };
-    if (method === "GET" && at("settings", "*") && second in external) return state[external[second]];
-    // 外部 RAG / NL2SQL（各製品の MCP。#233）。署名鍵とサービス利用者は .env なので PATCH では変わらない。
-    if (method === "PATCH" && at("settings", "*") && (second === "external-rag" || second === "external-nl2sql")) {
-      const current = state[external[second]] as Json;
-      const mcpUrl = typeof body.mcp_url === "string" ? body.mcp_url.trim() : undefined;
-      if (mcpUrl && !/^https?:\/\/\S+/.test(mcpUrl)) {
-        throw new HttpError(422, "MCP の URL は http:// または https:// で始めてください。");
-      }
-      if (mcpUrl !== undefined) current.mcp_url = mcpUrl || null;
-      if (typeof body.timeout_seconds === "number") current.timeout_seconds = body.timeout_seconds;
-      if (second === "external-nl2sql" && typeof body.default_limit === "number") {
-        current.default_limit = body.default_limit;
-      }
-      current.configured = Boolean(current.mcp_url);
-      return current;
-    }
-
-    if (second === "external-mcp-servers") {
-      const servers = state.externalMcpServers;
-      const serversData = () => ({
-        servers: servers.servers.map((server) => ({
-          ...server,
-          is_default: server.server_id === servers.default_server_id,
-        })),
-        default_server_id: servers.default_server_id,
-      });
-      if (method === "GET" && at("settings", "external-mcp-servers")) return serversData();
-      if (method === "POST" && at("settings", "external-mcp-servers")) {
-        const id = String(body.server_id ?? "");
-        if (!id || servers.servers.some((server) => server.server_id === id)) {
-          throw new HttpError(409, `MCP server already exists: ${id}`);
+    if (second === "mcp-connections") {
+      const store = state.mcpConnections;
+      const listData = () => ({ connections: store.connections });
+      if (method === "GET" && at("settings", "mcp-connections")) return listData();
+      if (method === "POST" && at("settings", "mcp-connections")) {
+        const id = String(body.server_id ?? "").trim();
+        if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(id) || id.includes("__")) {
+          throw new HttpError(422, "接続 ID は英数字で始まる 40 文字以内の英数字・「-」・「_」で入力してください。");
         }
-        const server = mcpServer(body);
-        servers.servers.push(server);
-        return server;
+        if (store.connections.some((connection) => connection.server_id === id)) {
+          throw new HttpError(409, "MCP 接続の ID はすでに使われています。");
+        }
+        const connection = mcpConnection({ ...body, server_id: id });
+        store.connections.push(connection);
+        store.connections.sort((left, right) => String(left.server_id).localeCompare(String(right.server_id)));
+        return connection;
       }
-      if (third && at("settings", "external-mcp-servers", "*", "default") && method === "POST") {
-        findOr404(servers.servers, "server_id", third, "MCP server");
-        servers.default_server_id = third;
-        return serversData();
+      if (third && at("settings", "mcp-connections", "*", "tools") && method === "GET") {
+        const connection = findOr404(store.connections, "server_id", third, "MCP 接続");
+        if (!connection.configured) throw new HttpError(400, "MCP 接続の URL が設定されていません。");
+        return {
+          tools: MOCK_MCP_TOOLS.map((tool) => ({
+            ...tool,
+            server_id: third,
+            function_name: `${third}__${tool.name}`,
+          })),
+          metadata: { server_id: third, method: "tools/list" },
+        };
       }
-      if (third && at("settings", "external-mcp-servers", "*")) {
-        const server = findOr404(servers.servers, "server_id", third, "MCP server");
+      if (third && at("settings", "mcp-connections", "*")) {
+        const connection = findOr404(store.connections, "server_id", third, "MCP 接続");
         if (method === "PATCH") {
-          Object.assign(server, mcpServer({ ...body, server_id: third }, server));
-          return server;
+          Object.assign(connection, mcpConnection({ ...body, server_id: third }, connection));
+          return connection;
         }
         if (method === "DELETE") {
-          servers.servers = servers.servers.filter((candidate) => candidate.server_id !== third);
-          if (servers.default_server_id === third) servers.default_server_id = "default";
-          return serversData();
+          if (!connection.removable) {
+            throw new HttpError(400, "RAG / NL2SQL・宣言・連携機能の MCP 接続は削除できません。");
+          }
+          store.connections = store.connections.filter((candidate) => candidate.server_id !== third);
+          return listData();
         }
       }
     }
@@ -806,17 +818,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (method === "POST" && at("settings", "oci", "object-storage", "namespace")) {
       return { namespace: "mocktenancynamespace" };
     }
-  }
-
-  // --- 外部 MCP tools/list ---
-  if (method === "GET" && at("tools", "external-mcp")) {
-    const serverId = query.get("server_id") || state.externalMcpServers.default_server_id;
-    const server = findOr404(state.externalMcpServers.servers, "server_id", serverId, "MCP server");
-    if (!server.base_url) throw new HttpError(409, "external MCP is not configured");
-    return {
-      tools: MOCK_MCP_TOOLS.map((tool) => ({ ...tool, server_id: serverId })),
-      metadata: { server_id: serverId, trace_id: query.get("trace_id") },
-    };
   }
 
   return undefined;

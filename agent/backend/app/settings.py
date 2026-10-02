@@ -103,30 +103,21 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oracle_adb_region: str | None = None
     oracle_tcp_connect_timeout_seconds: float = 10.0
     oracle_db_test_timeout_seconds: float = 15.0
-    # RAG / NL2SQL は各製品の MCP（`POST /api/mcp`）を Run の利用者として呼ぶ（#233）。
-    # 例: http://rag-host/api/mcp。token は共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET で署名する。
-    # LLM を使う呼び出しがあるため、タイムアウトは NL2SQL の待ち時間（最大 45 秒）より長くする。
+    # MCP 接続（#757）。RAG / NL2SQL は各製品の MCP（`POST /api/mcp`）で、接続 `rag` / `nl2sql`
+    # の URL の初期値になる（例: http://rag-host/api/mcp）。Run の利用者のサービストークン
+    # （共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET で署名）で呼ぶ（#233）。LLM を使う
+    # 呼び出しがあるため、タイムアウトは NL2SQL の待ち時間（最大 45 秒）より長くする。
     agent_external_rag_mcp_url: str | None = None
     agent_external_rag_timeout_seconds: float = 60.0
-    agent_external_rag_max_retries: int = 3
     agent_external_nl2sql_mcp_url: str | None = None
     agent_external_nl2sql_timeout_seconds: float = 60.0
-    agent_external_nl2sql_default_limit: int = 100
-    agent_external_nl2sql_max_retries: int = 3
-    # Run の利用者がいない呼び出し（Binding 経由の MCP・外部 RBAC で作った Run）で使う共通認証の
-    # ログインユーザー ID。空ならその呼び出しは失敗する。
+    # Run の利用者がいない呼び出し（画面からのツール一覧の取得など、利用者のいない経路）で使う
+    # 共通認証のログインユーザー ID。空ならその呼び出しは失敗する。
     agent_mcp_service_user_login_id: str = ""
-    agent_external_mcp_base_url: str | None = None
-    agent_external_mcp_api_key: str | None = None
-    agent_external_mcp_session_id: str | None = None
-    agent_external_mcp_oauth_token_url: str | None = None
-    agent_external_mcp_oauth_client_id: str | None = None
-    agent_external_mcp_oauth_client_secret: str | None = None
-    agent_external_mcp_oauth_scope: str | None = None
-    agent_external_mcp_timeout_seconds: float = 10.0
+    # MCP の呼び出しの再試行（429 / 503・接続失敗。読み取り専用のツールは 502 / 504・timeout も）。
     agent_external_mcp_max_retries: int = 3
-    # 複数 MCP server の宣言。JSON list か {"servers": [...]}。各項目は
-    # server_id/id 必須、base_url・auth・timeout_seconds を任意で持つ。
+    # MCP 接続の宣言。JSON list か {"servers": [...]}。各項目は server_id/id 必須、
+    # base_url・auth_mode・資格情報・timeout_seconds を任意で持つ。
     agent_external_mcp_servers_json: str | None = None
     # Skill 外部定義: 中立ディレクトリ(skills/<id>/SKILL.md)と JSON 宣言。
     agent_skills_dir: str | None = None

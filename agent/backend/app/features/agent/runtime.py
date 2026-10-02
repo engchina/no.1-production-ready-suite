@@ -28,6 +28,7 @@ from app.features.agent.tools import (
     ToolInvocationContext,
     ToolPolicy,
     ToolResult,
+    mcp_base_tool_name,
     tool_registry,
 )
 from app.observability import record_runtime_event
@@ -305,6 +306,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> RunState: ...
     def complete_builtin_run(self, run_id: str, answer: str) -> RunState: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
+    def note_builtin_warning(self, run_id: str, message: str) -> None: ...
     def list_runs(self) -> list[RunState]: ...
     def get_run(self, run_id: str) -> RunState: ...
     def list_artifacts(self, run_id: str) -> list[Artifact]: ...
@@ -777,6 +779,13 @@ class AgentRuntimeRepository:
                 self._fail_builtin_locked(run, code, detail)
             return run.model_copy(deep=True)
 
+    def note_builtin_warning(self, run_id: str, message: str) -> None:
+        """実行は続けるが利用者に伝えたいこと（取得できなかった MCP 接続など）をイベントに残す。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            self._append_event(run, RunEventType.RUNTIME_EVENT, message, {"severity": "warning"})
+            self._persist_locked()
+
     def _set_builtin_running_locked(self, run: RunState, message: str) -> None:
         # 実行を始めたら dispatcher の lease は要らない（running は claim しない）。
         # 残すと、承認の決定で queued に戻った Run を lease の期限まで claim できない。
@@ -930,13 +939,14 @@ class AgentRuntimeRepository:
     ) -> None:
         if step.tool_call is None or result.output is None:
             return
+        # MCP 接続のツール（`<接続>__<ツール>`。#757）は、ツールの部分で成果物の種類を決める。
         artifact_kind_by_tool = {
-            "external_rag_search": "rag_evidence",
-            "external_rag_chat": "rag_evidence",
-            "external_nl2sql_query": "structured_table",
-            "external_nl2sql_get_job": "structured_table",
+            "rag_search": "rag_evidence",
+            "rag_chat_send_message": "rag_evidence",
+            "nl2sql_query": "structured_table",
+            "nl2sql_get_job": "structured_table",
         }
-        kind = artifact_kind_by_tool.get(step.tool_call.name)
+        kind = artifact_kind_by_tool.get(mcp_base_tool_name(step.tool_call.name))
         if kind is None:
             return
         artifact = Artifact(
@@ -2325,7 +2335,7 @@ def _tool_call_signature(call: ToolCall) -> str:
 def _validate_snapshot(snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshotValidation:
     errors: list[str] = []
     warnings: list[str] = []
-    registered_tools = set(tool_registry.names())
+    # ツール名は検証しない（MCP 接続のツールは動的で、旧版のツール名も記録に残る。#757）。
     summary = AgentRuntimeSnapshotSummary(
         runs=len(snapshot.runs),
         agents=len(snapshot.agents),
@@ -2355,10 +2365,10 @@ def _validate_snapshot(snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshotVa
         warnings.append("default agent is missing and will be recreated")
 
     for agent in snapshot.agents:
-        _validate_agent_snapshot(agent, registered_tools, errors)
+        _validate_agent_snapshot(agent, errors)
 
     for run in snapshot.runs:
-        _validate_run_snapshot(run, registered_tools, errors, warnings)
+        _validate_run_snapshot(run, errors, warnings)
 
     return AgentRuntimeSnapshotValidation(
         valid=not errors,
@@ -2382,21 +2392,14 @@ def _append_duplicate_errors(label: str, values: list[str], errors: list[str]) -
 
 def _validate_agent_snapshot(
     agent: AgentProfile,
-    registered_tools: set[str],
     errors: list[str],
 ) -> None:
     if not agent.id:
         errors.append("agent id must not be empty")
-    unknown_tools = sorted(
-        {tool_name for tool_name in agent.tool_names if tool_name not in registered_tools}
-    )
-    if unknown_tools:
-        errors.append(f"agent {agent.id} references unknown tools: {', '.join(unknown_tools)}")
 
 
 def _validate_run_snapshot(
     run: RunState,
-    registered_tools: set[str],
     errors: list[str],
     warnings: list[str],
 ) -> None:
@@ -2413,12 +2416,9 @@ def _validate_run_snapshot(
         if event.run_id != run.id:
             errors.append(f"event {event.id} belongs to {event.run_id}, expected {run.id}")
     for step in run.steps:
-        _validate_step_snapshot(run, step, approval_id_set, registered_tools, errors)
+        _validate_step_snapshot(run, step, approval_id_set, errors)
     for approval in run.approvals:
         _validate_approval_snapshot(run, approval, step_id_set, errors)
-    for call in run.pending_tool_calls:
-        if call.name not in registered_tools:
-            errors.append(f"run {run.id} pending call references unknown tool: {call.name}")
 
     pending_approvals = [
         approval.id for approval in run.approvals if approval.status == ApprovalStatus.PENDING
@@ -2437,15 +2437,12 @@ def _validate_step_snapshot(
     run: RunState,
     step: RunStep,
     approval_ids: set[str],
-    registered_tools: set[str],
     errors: list[str],
 ) -> None:
     if step.run_id != run.id:
         errors.append(f"step {step.id} belongs to {step.run_id}, expected {run.id}")
     if step.approval_id is not None and step.approval_id not in approval_ids:
         errors.append(f"step {step.id} references missing approval {step.approval_id}")
-    if step.tool_call is not None and step.tool_call.name not in registered_tools:
-        errors.append(f"step {step.id} references unknown tool: {step.tool_call.name}")
 
 
 def _validate_approval_snapshot(
@@ -2464,13 +2461,11 @@ def _default_agent() -> AgentProfile:
     return AgentProfile(
         id="default",
         name="汎用業務 Agent",
-        description="外部 RAG / NL2SQL と承認フローを使う既定 Agent。",
+        description="RAG / NL2SQL の MCP 接続と承認フローを使う既定 Agent。",
         instructions="業務データは外部ツール経由で取得し、根拠と監査情報を残す。",
         skill_ids=[
             "business_rag_research",
             "structured_data_query",
-            "mcp_tool_discovery",
-            "mcp_tool_call",
             "rag_then_structured_data",
         ],
         tool_names=tool_registry.names(),
@@ -2481,9 +2476,19 @@ def _default_agent() -> AgentProfile:
 _LEGACY_TOOL_SKILLS: dict[str, str] = {
     "external_rag_search": "business_rag_research",
     "external_nl2sql_query": "structured_data_query",
-    "external_mcp_list_tools": "mcp_tool_discovery",
-    "external_mcp_call": "mcp_tool_call",
 }
+# 削除したツール（#756 / #757）。移行では無視する（Skill の推定にも、移行の失敗にも数えない）。
+_RETIRED_LEGACY_TOOLS: frozenset[str] = frozenset(
+    {
+        "external_rag_chat",
+        "external_rag_list_business_views",
+        "external_nl2sql_get_job",
+        "external_mcp_call",
+        "external_mcp_list_tools",
+        "sandbox_command_run",
+        "agent_skill_run",
+    }
+)
 
 
 def _migrate_legacy_agent(agent: AgentProfile) -> AgentProfile:
@@ -2494,7 +2499,9 @@ def _migrate_legacy_agent(agent: AgentProfile) -> AgentProfile:
         for tool_name in agent.tool_names
         if (skill_id := _LEGACY_TOOL_SKILLS.get(tool_name)) is not None
     }
-    unmapped = sorted(set(agent.tool_names).difference(_LEGACY_TOOL_SKILLS))
+    unmapped = sorted(
+        set(agent.tool_names).difference(_LEGACY_TOOL_SKILLS).difference(_RETIRED_LEGACY_TOOLS)
+    )
     return agent.model_copy(
         deep=True,
         update={

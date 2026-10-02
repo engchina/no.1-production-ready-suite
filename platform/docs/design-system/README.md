@@ -251,7 +251,7 @@ readme が規定していた「左右ガター 2rem / セクション間 1.5rem�
 | 設定の画面（OCI・データベース・モデルなど、1 ページに複数のカードのフォームがある画面）は、今までどおりカードの末尾の `FormActionBar` | 1 ページに保存の対象が複数あるので、ページのヘッダーに 1 つの保存を置けない |
 
 - 部品: `PageHeader` の `back`（`{ label, onClick, ariaLabel?, disabled?, testId? }`。`data-page-header-back`）。`actions` に `id: "back"` の操作を入れない。（adherence の lint が `PageHeader` の `actions` の `id: "back"` を検出する）
-- 置き換えた画面: RAG のナレッジベース・業務ビューのエディタ・文書の詳細・対象の読み込み中 / 失敗の画面、Agent のエージェント・Skill・外部 MCP サーバー・プラグイン・マーケットプレイスのエディタと詳細、NL2SQL の業務プロファイル・テーブル・ビューの作業の画面、system-settings のユーザー・ロール・権限管理の編集。RAG・Agent の `EditorBreadcrumbs` は削除。
+- 置き換えた画面: RAG のナレッジベース・業務ビューのエディタ・文書の詳細・対象の読み込み中 / 失敗の画面、Agent のエージェント・Skill・MCP 接続・プラグイン・マーケットプレイスのエディタと詳細、NL2SQL の業務プロファイル・テーブル・ビューの作業の画面、system-settings のユーザー・ロール・権限管理の編集。RAG・Agent の `EditorBreadcrumbs` は削除。
 
 ### `Button`（変更）— ★ アイコンと loading の統一基準
 

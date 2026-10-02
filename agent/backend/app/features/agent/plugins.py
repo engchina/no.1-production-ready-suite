@@ -14,7 +14,7 @@ from typing import Any, Literal
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
-from app.features.agent.config import ExternalMcpRuntimeConfig, runtime_config_store
+from app.features.agent.config import McpConnectionConfig, runtime_config_store
 from app.features.agent.runtime import AgentProfile, runtime_repository
 from app.features.agent.skills import AgentSkillDefinition, skill_registry
 
@@ -32,7 +32,7 @@ class PluginManifest(BaseModel):
     description: str = ""
     author: str = ""
     skills: list[AgentSkillDefinition] = Field(default_factory=list)
-    mcp_servers: list[ExternalMcpRuntimeConfig] = Field(default_factory=list)
+    mcp_servers: list[McpConnectionConfig] = Field(default_factory=list)
     resources: list[PluginResource] = Field(default_factory=list)
     # Deprecated input compatibility。install 時に template resource へ変換し、Agent は作成しない。
     agents: list[AgentProfile] = Field(default_factory=list)

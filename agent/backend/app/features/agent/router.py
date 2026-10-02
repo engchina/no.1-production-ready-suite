@@ -72,7 +72,7 @@ from starlette.concurrency import run_in_threadpool
 
 import app.settings as app_settings
 from app.features.agent import builtin_runtime
-from app.features.agent.config import runtime_config_store
+from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
 from app.features.agent.plugins import (
     MarketplaceListing,
     MarketplaceSource,
@@ -112,15 +112,15 @@ from app.features.agent.skills import (
     skill_registry,
 )
 from app.features.agent.tools import (
+    MCP_TOOL_SEPARATOR,
     ExternalMcpToolsData,
-    ExternalServiceSettings,
     ExternalToolError,
     ToolCall,
     ToolDefinitionsData,
     ToolInvocationContext,
     ToolPolicy,
     ToolResult,
-    list_external_mcp_tools,
+    list_mcp_connection_tools,
     tool_registry,
 )
 from app.observability import (
@@ -176,104 +176,83 @@ def _validate_mcp_timeout(value: float | None) -> float | None:
     return value
 
 
-class SettingsPatch(BaseModel):
+_MCP_CONNECTION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
+
+
+def _validate_mcp_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if value and not re.match(r"^https?://[^\s/]+", value):
+        raise ValueError("MCP の URL は http:// または https:// で始めてください。")
+    return value
+
+
+class McpConnectionSettings(BaseModel):
+    """MCP 接続の公開設定（#757。資格情報の値は返さず、設定済みかだけを返す）。"""
+
+    server_id: str
+    label: str | None = None
     base_url: str | None = None
-    timeout_seconds: float | None = None
-    default_limit: int | None = None
-    session_id: str | None = None
-
-    @field_validator("timeout_seconds")
-    @classmethod
-    def _validate_timeout(cls, value: float | None) -> float | None:
-        return _validate_mcp_timeout(value)
-
-
-class ProductMcpSettings(BaseModel):
-    """外部 RAG / NL2SQL（各製品の MCP）の接続設定。token は呼び出しごとに作る（#233）。"""
-
-    mcp_url: str | None = None
+    auth_mode: McpAuthMode
+    service_audience: str | None = None
     timeout_seconds: float
-    default_limit: int | None = None
-    configured: bool = False
-    # 共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET（値は返さない）。
+    # 由来: builtin(RAG / NL2SQL) / env / plugin:<id> / runtime。runtime だけ削除できる。
+    source: str
+    removable: bool
+    # URL と認証方式に必要な資格情報がそろい、呼び出せる状態か。
+    configured: bool
+    api_key_configured: bool = False
+    oauth_configured: bool = False
+    session_configured: bool = False
+    # サービストークン: 共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET と、利用者のいない呼び出しの
+    # AGENT_MCP_SERVICE_USER_LOGIN_ID（値は返さない）。
     service_token_configured: bool = False
-    # Run の利用者がいない呼び出しで使う AGENT_MCP_SERVICE_USER_LOGIN_ID（値は返さない）。
     service_user_configured: bool = False
 
 
-class ProductMcpSettingsPatch(BaseModel):
-    mcp_url: str | None = None
+class McpConnectionsData(BaseModel):
+    connections: list[McpConnectionSettings] = Field(default_factory=list)
+
+
+class McpConnectionPatch(BaseModel):
+    label: str | None = None
+    base_url: str | None = None
+    auth_mode: McpAuthMode | None = None
+    api_key: str | None = None
     timeout_seconds: float | None = None
-    default_limit: int | None = None
+    session_id: str | None = None
+    oauth_token_url: str | None = None
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = None
+    oauth_scope: str | None = None
+    service_audience: str | None = None
 
     @field_validator("timeout_seconds")
     @classmethod
     def _validate_timeout(cls, value: float | None) -> float | None:
         return _validate_mcp_timeout(value)
 
-    @field_validator("default_limit")
+    @field_validator("base_url")
     @classmethod
-    def _validate_default_limit(cls, value: int | None) -> int | None:
-        # 画面の「既定取得件数」と同じ文言（#541）。
-        if value is not None and not 1 <= value <= 1000:
-            raise ValueError("既定取得件数は 1 以上 1000 以下の整数を入力してください。")
-        return value
+    def _validate_base_url(cls, value: str | None) -> str | None:
+        return _validate_mcp_url(value)
 
-    @field_validator("mcp_url")
+
+class McpConnectionCreate(McpConnectionPatch):
+    server_id: str
+
+    @field_validator("server_id")
     @classmethod
-    def _validate_mcp_url(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
+    def _validate_server_id(cls, value: str) -> str:
         value = value.strip()
-        if value and not re.match(r"^https?://[^\s/]+", value):
-            raise ValueError("MCP の URL は http:// または https:// で始めてください。")
+        # ID はモデルに渡すツール名（`<接続>__<ツール>`）の先頭になる。
+        if not _MCP_CONNECTION_ID_PATTERN.match(value) or "__" in value or value == "control-plane":
+            raise ValueError(
+                "接続 ID は英数字で始まる 40 文字以内の英数字・「-」・「_」で入力してください"
+                "（「__」と control-plane は使えません）。"
+            )
         return value
-
-
-class ExternalMcpServerSettings(ExternalServiceSettings):
-    """単一 MCP server の公開設定(credential は configured フラグのみ)。"""
-
-    server_id: str
-    label: str | None = None
-    is_default: bool = False
-
-
-class ExternalMcpServersData(BaseModel):
-    servers: list[ExternalMcpServerSettings] = Field(default_factory=list)
-    default_server_id: str
-
-
-class ExternalMcpServerCreate(BaseModel):
-    server_id: str
-    label: str | None = None
-    base_url: str | None = None
-    timeout_seconds: float | None = None
-    session_id: str | None = None
-    oauth_token_url: str | None = None
-    oauth_client_id: str | None = None
-    oauth_client_secret: str | None = None
-    oauth_scope: str | None = None
-
-    @field_validator("timeout_seconds")
-    @classmethod
-    def _validate_timeout(cls, value: float | None) -> float | None:
-        return _validate_mcp_timeout(value)
-
-
-class ExternalMcpServerPatch(BaseModel):
-    label: str | None = None
-    base_url: str | None = None
-    timeout_seconds: float | None = None
-    session_id: str | None = None
-    oauth_token_url: str | None = None
-    oauth_client_id: str | None = None
-    oauth_client_secret: str | None = None
-    oauth_scope: str | None = None
-
-    @field_validator("timeout_seconds")
-    @classmethod
-    def _validate_timeout(cls, value: float | None) -> float | None:
-        return _validate_mcp_timeout(value)
 
 
 class AgentSkillCreate(BaseModel):
@@ -1354,23 +1333,6 @@ async def uninstall_plugin(
     return ApiResponse(data=_plugin_list_response())
 
 
-@router.get("/tools/external-mcp", response_model=ApiResponse[ExternalMcpToolsData])
-async def list_external_mcp_tool_definitions(
-    server_id: str | None = None,
-    trace_id: str | None = None,
-    _: None = Depends(require_viewer),
-) -> ApiResponse[ExternalMcpToolsData]:
-    """外部 MCP gateway の tools/list を標準化して返す。"""
-    try:
-        return ApiResponse(data=list_external_mcp_tools(server_id=server_id, trace_id=trace_id))
-    except ExternalToolError as exc:
-        status_code = 400 if exc.code == "external_mcp.not_configured" else 502
-        raise HTTPException(
-            status_code=status_code,
-            detail={"code": exc.code, "message": exc.message, "details": exc.details},
-        ) from exc
-
-
 @router.post("/tools/invoke", response_model=ApiResponse[ToolResult])
 async def invoke_tool(
     call: ToolCall,
@@ -1857,215 +1819,134 @@ async def delete_agent(
     return ApiResponse(data=AgentsData(agents=runtime_repository.list_agents()))
 
 
-def _product_mcp_settings(
-    mcp_url: str | None, timeout_seconds: float, default_limit: int | None = None
-) -> ProductMcpSettings:
+def _mcp_connection_settings(config: McpConnectionConfig) -> McpConnectionSettings:
     settings = get_settings()
-    return ProductMcpSettings(
-        mcp_url=mcp_url,
-        timeout_seconds=timeout_seconds,
-        default_limit=default_limit,
-        configured=bool(mcp_url),
-        service_token_configured=len(settings.app_service_token_secret.strip()) >= 32,
+    mode = config.effective_auth_mode()
+    oauth_configured = _mcp_oauth_configured(config)
+    service_token_configured = len(settings.app_service_token_secret.strip()) >= 32
+    credentials_ready = {
+        "none": True,
+        "api_key": bool(config.api_key),
+        "oauth_client_credentials": oauth_configured,
+        "service_token": service_token_configured,
+    }[mode]
+    return McpConnectionSettings(
+        server_id=config.server_id,
+        label=config.label,
+        base_url=config.base_url,
+        auth_mode=mode,
+        service_audience=config.audience() if mode == "service_token" else None,
+        timeout_seconds=config.timeout_seconds,
+        source=config.source,
+        removable=config.source == "runtime",
+        configured=bool(config.base_url) and credentials_ready,
+        api_key_configured=bool(config.api_key),
+        oauth_configured=oauth_configured,
+        session_configured=bool(config.session_id),
+        service_token_configured=service_token_configured,
         service_user_configured=bool(settings.agent_mcp_service_user_login_id.strip()),
     )
 
 
-@router.get("/settings/external-rag", response_model=ApiResponse[ProductMcpSettings])
-async def get_external_rag_settings() -> ApiResponse[ProductMcpSettings]:
-    config = runtime_config_store.get_rag()
-    return ApiResponse(data=_product_mcp_settings(config.mcp_url, config.timeout_seconds))
-
-
-@router.patch("/settings/external-rag", response_model=ApiResponse[ProductMcpSettings])
-async def patch_external_rag_settings(
-    patch: ProductMcpSettingsPatch,
-    _: None = Depends(require_admin),
-) -> ApiResponse[ProductMcpSettings]:
-    runtime_config_store.patch_rag(
-        mcp_url=patch.mcp_url,
-        timeout_seconds=patch.timeout_seconds,
-    )
-    return await get_external_rag_settings()
-
-
-@router.get("/settings/external-nl2sql", response_model=ApiResponse[ProductMcpSettings])
-async def get_external_nl2sql_settings() -> ApiResponse[ProductMcpSettings]:
-    config = runtime_config_store.get_nl2sql()
-    return ApiResponse(
-        data=_product_mcp_settings(config.mcp_url, config.timeout_seconds, config.default_limit)
+def _mcp_connections_response() -> McpConnectionsData:
+    return McpConnectionsData(
+        connections=[
+            _mcp_connection_settings(config) for config in runtime_config_store.list_mcp_servers()
+        ]
     )
 
 
-@router.patch("/settings/external-nl2sql", response_model=ApiResponse[ProductMcpSettings])
-async def patch_external_nl2sql_settings(
-    patch: ProductMcpSettingsPatch,
-    _: None = Depends(require_admin),
-) -> ApiResponse[ProductMcpSettings]:
-    runtime_config_store.patch_nl2sql(
-        mcp_url=patch.mcp_url,
-        timeout_seconds=patch.timeout_seconds,
-        default_limit=patch.default_limit,
-    )
-    return await get_external_nl2sql_settings()
-
-
-@router.get("/settings/external-mcp", response_model=ApiResponse[ExternalServiceSettings])
-async def get_external_mcp_settings() -> ApiResponse[ExternalServiceSettings]:
-    config = runtime_config_store.get_mcp()
-    oauth_configured = _mcp_oauth_configured(config)
-    return ApiResponse(
-        data=ExternalServiceSettings(
-            base_url=config.base_url,
-            api_key_configured=bool(config.api_key),
-            oauth_configured=oauth_configured,
-            auth_mode=(
-                "oauth_client_credentials"
-                if oauth_configured
-                else "api_key"
-                if config.api_key
-                else "none"
-            ),
-            session_configured=bool(config.session_id),
-            timeout_seconds=config.timeout_seconds,
-            configured=bool(config.base_url),
-        )
-    )
-
-
-@router.patch("/settings/external-mcp", response_model=ApiResponse[ExternalServiceSettings])
-async def patch_external_mcp_settings(
-    patch: SettingsPatch,
-    _: None = Depends(require_admin),
-) -> ApiResponse[ExternalServiceSettings]:
-    runtime_config_store.patch_mcp(
-        base_url=patch.base_url,
-        timeout_seconds=patch.timeout_seconds,
-        session_id=patch.session_id,
-    )
-    return await get_external_mcp_settings()
-
-
-def _mcp_server_settings(config: object, *, default_id: str) -> ExternalMcpServerSettings:
-    oauth_configured = _mcp_oauth_configured(config)
-    return ExternalMcpServerSettings(
-        server_id=getattr(config, "server_id", "default"),
-        label=getattr(config, "label", None),
-        is_default=getattr(config, "server_id", "default") == default_id,
-        base_url=getattr(config, "base_url", None),
-        api_key_configured=bool(getattr(config, "api_key", None)),
-        oauth_configured=oauth_configured,
-        auth_mode=(
-            "oauth_client_credentials"
-            if oauth_configured
-            else "api_key"
-            if getattr(config, "api_key", None)
-            else "none"
-        ),
-        session_configured=bool(getattr(config, "session_id", None)),
-        timeout_seconds=getattr(config, "timeout_seconds", 10.0),
-        configured=bool(getattr(config, "base_url", None)),
-    )
-
-
-@router.get("/settings/external-mcp-servers", response_model=ApiResponse[ExternalMcpServersData])
-async def list_external_mcp_servers() -> ApiResponse[ExternalMcpServersData]:
-    """登録済み MCP server を一覧する(credential は露出しない)。"""
-    default_id = runtime_config_store.mcp_default_id()
-    servers = [
-        _mcp_server_settings(config, default_id=default_id)
-        for config in runtime_config_store.list_mcp_servers()
-    ]
-    return ApiResponse(data=ExternalMcpServersData(servers=servers, default_server_id=default_id))
-
-
-@router.post(
-    "/settings/external-mcp-servers", response_model=ApiResponse[ExternalMcpServerSettings]
-)
-async def create_external_mcp_server(
-    payload: ExternalMcpServerCreate,
-    _: None = Depends(require_admin),
-) -> ApiResponse[ExternalMcpServerSettings]:
-    server_id = payload.server_id.strip()
-    if not server_id:
-        raise HTTPException(status_code=400, detail="server_id is required")
-    existing = {config.server_id for config in runtime_config_store.list_mcp_servers()}
-    if server_id in existing:
-        raise HTTPException(status_code=409, detail="server already exists")
-    config = runtime_config_store.upsert_mcp_server(
+def _upsert_mcp_connection(server_id: str, payload: McpConnectionPatch) -> McpConnectionConfig:
+    return runtime_config_store.upsert_mcp_server(
         server_id,
         label=payload.label,
         base_url=payload.base_url,
+        auth_mode=payload.auth_mode,
+        api_key=payload.api_key,
         timeout_seconds=payload.timeout_seconds,
         session_id=payload.session_id,
         oauth_token_url=payload.oauth_token_url,
         oauth_client_id=payload.oauth_client_id,
         oauth_client_secret=payload.oauth_client_secret,
         oauth_scope=payload.oauth_scope,
+        service_audience=payload.service_audience,
     )
-    return ApiResponse(
-        data=_mcp_server_settings(config, default_id=runtime_config_store.mcp_default_id())
-    )
+
+
+@router.get("/settings/mcp-connections", response_model=ApiResponse[McpConnectionsData])
+async def list_mcp_connections() -> ApiResponse[McpConnectionsData]:
+    """MCP 接続（RAG / NL2SQL / 外部 MCP。#757）を一覧する（資格情報は返さない）。"""
+    return ApiResponse(data=_mcp_connections_response())
+
+
+@router.post("/settings/mcp-connections", response_model=ApiResponse[McpConnectionSettings])
+async def create_mcp_connection(
+    payload: McpConnectionCreate,
+    _: None = Depends(require_admin),
+) -> ApiResponse[McpConnectionSettings]:
+    existing = {config.server_id for config in runtime_config_store.list_mcp_servers()}
+    if payload.server_id in existing:
+        raise HTTPException(status_code=409, detail="MCP 接続の ID はすでに使われています。")
+    config = _upsert_mcp_connection(payload.server_id, payload)
+    return ApiResponse(data=_mcp_connection_settings(config))
 
 
 @router.patch(
-    "/settings/external-mcp-servers/{server_id}",
-    response_model=ApiResponse[ExternalMcpServerSettings],
+    "/settings/mcp-connections/{server_id}", response_model=ApiResponse[McpConnectionSettings]
 )
-async def patch_external_mcp_server(
+async def patch_mcp_connection(
     server_id: str,
-    patch: ExternalMcpServerPatch,
+    patch: McpConnectionPatch,
     _: None = Depends(require_admin),
-) -> ApiResponse[ExternalMcpServerSettings]:
-    existing = {config.server_id for config in runtime_config_store.list_mcp_servers()}
-    if server_id not in existing:
-        raise HTTPException(status_code=404, detail="server not found")
-    config = runtime_config_store.upsert_mcp_server(
-        server_id,
-        label=patch.label,
-        base_url=patch.base_url,
-        timeout_seconds=patch.timeout_seconds,
-        session_id=patch.session_id,
-        oauth_token_url=patch.oauth_token_url,
-        oauth_client_id=patch.oauth_client_id,
-        oauth_client_secret=patch.oauth_client_secret,
-        oauth_scope=patch.oauth_scope,
-    )
-    return ApiResponse(
-        data=_mcp_server_settings(config, default_id=runtime_config_store.mcp_default_id())
-    )
+) -> ApiResponse[McpConnectionSettings]:
+    try:
+        runtime_config_store.get_mcp(server_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="MCP 接続が見つかりません。") from exc
+    config = _upsert_mcp_connection(server_id, patch)
+    return ApiResponse(data=_mcp_connection_settings(config))
 
 
 @router.delete(
-    "/settings/external-mcp-servers/{server_id}",
-    response_model=ApiResponse[ExternalMcpServersData],
+    "/settings/mcp-connections/{server_id}", response_model=ApiResponse[McpConnectionsData]
 )
-async def delete_external_mcp_server(
+async def delete_mcp_connection(
     server_id: str,
     _: None = Depends(require_admin),
-) -> ApiResponse[ExternalMcpServersData]:
+) -> ApiResponse[McpConnectionsData]:
     try:
         runtime_config_store.remove_mcp_server(server_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="MCP 接続が見つかりません。") from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="server not found") from exc
-    return await list_external_mcp_servers()
+        raise HTTPException(
+            status_code=400,
+            detail="RAG / NL2SQL・宣言・連携機能の MCP 接続は削除できません。",
+        ) from exc
+    return ApiResponse(data=_mcp_connections_response())
 
 
-@router.post(
-    "/settings/external-mcp-servers/{server_id}/default",
-    response_model=ApiResponse[ExternalMcpServersData],
+@router.get(
+    "/settings/mcp-connections/{server_id}/tools",
+    response_model=ApiResponse[ExternalMcpToolsData],
 )
-async def set_default_external_mcp_server(
+async def list_mcp_connection_tool_definitions(
     server_id: str,
-    _: None = Depends(require_admin),
-) -> ApiResponse[ExternalMcpServersData]:
+    request: Request,
+) -> ApiResponse[ExternalMcpToolsData]:
+    """接続のツール一覧（`tools/list`）。接続の確認を兼ね、ログイン中の利用者として呼ぶ。"""
+    context = ToolInvocationContext(user_uuid=_run_creator_user_uuid(request))
     try:
-        runtime_config_store.set_default_mcp_server(server_id)
+        data = await asyncio.to_thread(list_mcp_connection_tools, server_id, context=context)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="server not found") from exc
-    return await list_external_mcp_servers()
+        raise HTTPException(status_code=404, detail="MCP 接続が見つかりません。") from exc
+    except ExternalToolError as exc:
+        status_code = 400 if exc.code.endswith("_not_configured") else 502
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": exc.message, "details": exc.details},
+        ) from exc
+    return ApiResponse(data=data)
 
 
 @router.get("/settings/tool-policy", response_model=ApiResponse[ToolPolicySettings])
@@ -2536,17 +2417,24 @@ def _validate_tool_policy_patch(patch: ToolPolicySettingsPatch) -> None:
     if patch.default_mode is not None and patch.default_mode not in {"approval", "deny"}:
         raise ValueError("default_mode must be approval or deny")
     registered_tools = set(tool_registry.names())
+    connections = {config.server_id for config in runtime_config_store.list_mcp_servers()}
     unknown_tools = sorted(
         {
             name
             for names in (patch.allow, patch.ask, patch.deny)
             if names is not None
             for name in names
-            if name not in registered_tools
+            if name not in registered_tools and not _is_mcp_function_name(name, connections)
         }
     )
     if unknown_tools:
         raise ValueError(f"unknown tool: {', '.join(unknown_tools)}")
+
+
+def _is_mcp_function_name(name: str, connections: set[str]) -> bool:
+    """MCP 接続のツール（`<接続>__<ツール>`。#757）の名前か（ツールの存在は呼び先が決める）。"""
+    server_id, separator, tool_name = name.partition(MCP_TOOL_SEPARATOR)
+    return bool(separator and tool_name) and server_id in connections
 
 
 def _mcp_oauth_configured(config: object) -> bool:

@@ -26,8 +26,9 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
   - モデルは OCI Enterprise AI の Responses API（システム設定 > モデルの接続）。別の LLM provider は組み込まない。
   - SDK の tracing は常に無効にする（業務データを外部へ送らない）。
 - 外部の Runtime（OpenClaw / Hermes / DeerFlow など）・Binding・Docker の Runtime は持たない（#754 で削除）。
-- 指示は「Agent の指示 + 割り当てた Skill の指示」。ツールは Skill の requirement（`server_id="control-plane"`）が
-  必要とする `tool_registry` のツールだけを function tool として渡す。
+- 指示は「Agent の指示 + 割り当てた Skill の指示」。ツールは Skill の requirement が必要とするものだけを
+  function tool として渡す。`server_id="control-plane"` は `tool_registry` のツール、それ以外は MCP 接続
+  （`rag` / `nl2sql` / 登録した接続）の `tools/list` のツール（名前は `<接続>__<ツール>`。#757）。
 - ツールの実行は `tool_registry.invoke`（ポリシー・ガードレール・監査・成果物）を必ず通す。
   - ポリシーが「拒否」のツールはモデルに渡さない。
   - 「承認」のツールは SDK の `needs_approval` で中断する。中断した Run は `waiting_approval` にし、SDK の状態を Run に保存する。
@@ -39,12 +40,16 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
 
 ## MCP 境界
 
-- RAG / NL2SQL / external MCP のツールは、組み込み Runtime から `tool_registry` を通してだけ呼ぶ
-  （schema 検証・policy・masking・監査を再利用する）。外部 API key・token を snapshot、API、ログ、Artifact に出さない。
-- RAG / NL2SQL は各製品の `POST /api/mcp` を `external_rag_*` / `external_nl2sql_*` ツールから呼ぶ（#233）。token は
-  呼び出しごとの `issue_service_token`（`sub` = Run の利用者 `RunState.created_by_user_uuid`、なければ
-  `AGENT_MCP_SERVICE_USER_LOGIN_ID` のサービス利用者）。承認後の実行も承認者ではなく Run の利用者で呼ぶ（組み込み Runtime も同じ）。
-  LLM を使う・書き込むツールは 502 / 504・timeout で再試行しない。詳細は docs/agent-control-plane-design.md §4.1。
+- RAG / NL2SQL / 外部 MCP は「MCP 接続」1 つの仕組みで管理する（#757。旧「外部 RAG」「外部 NL2SQL」「外部 MCP」は削除）。
+  RAG / NL2SQL は組み込みの接続 `rag` / `nl2sql`（認証はサービストークン、削除できない）で、URL の初期値は
+  `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`。外部の MCP は認証方式（なし / API キー /
+  OAuth client credentials / サービストークン）を選んで追加する。
+- MCP 接続のツールは、組み込み Runtime から `tool_registry.invoke`（`definition` / `handler` を渡す）を通してだけ呼ぶ
+  （policy・masking・監査を再利用する）。承認の要否は MCP の `readOnlyHint` とツール権限（`<接続>__<ツール>` の名前）。
+  外部 API key・token を snapshot、API、ログ、Artifact に出さない。
+- サービストークンは呼び出しごとの `issue_service_token`（`sub` = Run の利用者 `RunState.created_by_user_uuid`、なければ
+  `AGENT_MCP_SERVICE_USER_LOGIN_ID` のサービス利用者。`aud` = 接続の audience）。承認後の実行も承認者ではなく Run の利用者で呼ぶ。
+  `tools/call` は 502 / 504・timeout で再試行しない（LLM を使うツールがある）。詳細は docs/agent-control-plane-design.md §4.1。
 
 ## 技術スタック
 
@@ -61,7 +66,7 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
 - 日本語フォントは `"Noto Sans JP", "Roboto", system-ui, sans-serif`、本文 14px。
 - ナビは「業務 Agent / Skill / Runtime / Run / 承認・監査 / Marketplace」を主要導線とする。
   Plugin、Tools を独立ナビに戻さない（旧エンジンの Planner・Memory は #756 で削除した）。
-- 設定は2セクションに分ける。**運用設定**：システムテーブル（先頭。RAG / NL2SQL と同じ。#751）/ Agent 接続設定 / 外部 RAG / 外部 NL2SQL / 外部 MCP /
+- 設定は2セクションに分ける。**運用設定**：システムテーブル（先頭。RAG / NL2SQL と同じ。#751）/ Agent 接続設定 / MCP 接続（#757）/
   Control Plane バックアップ（Agent 固有）。**システム設定**：OCI 認証 / アップロード保存先 / モデル /
   データベース / 外観（3製品で共通。画面と API は platform の共有パッケージ）。
   ツール権限はナビに出さない（Control Plane 化で外した方針を維持）。Command Policy・Runtime Safety の画面と

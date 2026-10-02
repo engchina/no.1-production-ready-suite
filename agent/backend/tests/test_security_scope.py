@@ -37,7 +37,7 @@ from app.security.service import set_security_service
 
 AGENT_A = "agent-scope-a-215"
 AGENT_B = "agent-scope-b-215"
-APPROVAL_TOOL = "external_nl2sql_query"
+APPROVAL_TOOL = "nl2sql__nl2sql_query"
 
 
 @dataclass
@@ -72,9 +72,7 @@ def _create_run(agent_id: str, business_view_id: str | None, *, approval: bool) 
 @pytest.fixture
 def scope_data() -> Iterator[ScopeData]:
     for agent_id in (AGENT_A, AGENT_B):
-        runtime_repository.create_agent(
-            AgentProfile(id=agent_id, name=agent_id, tool_names=[APPROVAL_TOOL])
-        )
+        runtime_repository.create_agent(AgentProfile(id=agent_id, name=agent_id))
     try:
         yield ScopeData(
             run_a1=_create_run(AGENT_A, "bv-a", approval=True),

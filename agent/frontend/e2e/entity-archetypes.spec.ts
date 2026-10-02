@@ -131,27 +131,33 @@ for (const viewport of VIEWPORTS) {
     });
 
     test("一覧の行は操作メニュー 1 つだけを持ち、キーボードで開閉できる", async ({ page, mockApi }) => {
-      mockApi.state.externalMcpServers.servers.push({
+      mockApi.state.mcpConnections.connections.push({
         server_id: "crm",
         label: "CRM Gateway",
         base_url: "http://mcp.example.test/jsonrpc",
+        auth_mode: "none",
+        service_audience: null,
+        timeout_seconds: 10,
+        source: "runtime",
+        removable: true,
+        configured: true,
         api_key_configured: false,
         oauth_configured: false,
-        auth_mode: "none",
         session_configured: false,
-        timeout_seconds: 10,
-        default_limit: null,
-        configured: true,
-        is_default: false,
+        service_token_configured: false,
+        service_user_configured: false,
       });
-      await page.goto("/settings/external-mcp");
-      const table = page.getByRole("table", { name: "MCP サーバー" });
-      await expect(table.getByRole("row")).toHaveCount(3);
+      await page.goto("/settings/mcp-connections");
+      const table = page.getByRole("table", { name: "MCP 接続" });
+      // 見出しの行 + RAG / NL2SQL（組み込み）+ CRM。
+      await expect(table.getByRole("row")).toHaveCount(4);
 
       // 各行のボタンは「対象名」と「操作メニュー」だけ（文字ボタンを並べない）。
+      // RAG / NL2SQL（組み込みの接続）は削除できず、使える操作が無いので行メニューを出さない。
       for (const row of await table.getByRole("row").all()) {
         if ((await row.getByRole("columnheader").count()) > 0) continue;
-        await expect(row.locator('[aria-haspopup="menu"]')).toHaveCount(1);
+        const builtin = (await row.getByText("組み込み").count()) > 0;
+        await expect(row.locator('[aria-haspopup="menu"]')).toHaveCount(builtin ? 0 : 1);
         expect(await row.getByRole("button").count()).toBeLessThanOrEqual(2);
       }
 
@@ -161,31 +167,27 @@ for (const viewport of VIEWPORTS) {
       await page.keyboard.press("Enter");
       const menu = page.getByRole("menu");
       await expect(menu).toBeVisible();
-      await expect(menu.getByRole("menuitem", { name: "既定にする" })).toBeFocused();
-      await page.keyboard.press("ArrowDown");
       await expect(menu.getByRole("menuitem", { name: "削除" })).toBeFocused();
       await page.keyboard.press("Escape");
       await expect(menu).toHaveCount(0);
       await expect(trigger).toBeFocused();
       await expect(trigger).toHaveAttribute("aria-expanded", "false");
 
-      // 既定のサーバーは既定にも削除にもできないため、行メニュー自体を使えない。
-      await expect(page.getByRole("button", { name: "default の操作" })).toBeDisabled();
 
       // 破壊的な操作は確認する。キャンセルでは消えない。
       await trigger.click();
       await page.getByRole("menuitem", { name: "削除" }).click();
       const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
-      await expect(dialog.getByText("サーバーを削除しますか?")).toBeVisible();
+      await expect(dialog.getByText("MCP 接続を削除しますか?")).toBeVisible();
       await expectNoHorizontalOverflow(page);
       await dialog.getByRole("button", { name: "キャンセル" }).click();
       await expect(trigger).toBeVisible();
-      expect(mockApi.lastRequest("DELETE", "/api/settings/external-mcp-servers/crm")).toBeUndefined();
+      expect(mockApi.lastRequest("DELETE", "/api/settings/mcp-connections/crm")).toBeUndefined();
 
       await trigger.click();
       await page.getByRole("menuitem", { name: "削除" }).click();
       await dialog.getByRole("button", { name: "削除", exact: true }).click();
-      await expect(page.getByText("サーバーを削除しました")).toBeVisible();
+      await expect(page.getByText("MCP 接続を削除しました")).toBeVisible();
       await expect(trigger).toHaveCount(0);
     });
 
@@ -228,7 +230,7 @@ for (const viewport of VIEWPORTS) {
 
     test("Run / 承認 / ツールは FixedSplitPane で一覧と詳細を並べる", async ({ page, mockApi }) => {
       seedRun(mockApi, "run-e2e-1", "一つ目の目標");
-      seedRun(mockApi, "run-e2e-2", "二つ目の目標", [approval("approval-e2e-1", "external_rag_search", "run-e2e-2")]);
+      seedRun(mockApi, "run-e2e-2", "二つ目の目標", [approval("approval-e2e-1", "rag__rag_search", "run-e2e-2")]);
       for (const [path, splitId] of [
         ["/runs", "runs-list"],
         ["/approvals", "approvals-list"],
@@ -332,17 +334,17 @@ for (const viewport of VIEWPORTS) {
 
     test("承認は行メニューから確認して判断し、詳細に引数を出す", async ({ page, mockApi }) => {
       seedRun(mockApi, "run-e2e-2", "二つ目の目標", [
-        approval("approval-e2e-1", "external_rag_search", "run-e2e-2"),
-        approval("approval-e2e-2", "external_nl2sql_query", "run-e2e-2"),
+        approval("approval-e2e-1", "rag__rag_search", "run-e2e-2"),
+        approval("approval-e2e-2", "nl2sql__nl2sql_query", "run-e2e-2"),
       ]);
       await page.goto("/approvals");
       const detail = page.getByRole("region", { name: "承認の詳細" });
-      await expect(detail.getByText("external_rag_search の引数")).toBeVisible();
+      await expect(detail.getByText("rag__rag_search の引数")).toBeVisible();
 
-      await page.getByRole("button", { name: "external_nl2sql_query 二つ目の目標", exact: true }).click();
-      await expect(detail.getByText("external_nl2sql_query の引数")).toBeVisible();
+      await page.getByRole("button", { name: "nl2sql__nl2sql_query 二つ目の目標", exact: true }).click();
+      await expect(detail.getByText("nl2sql__nl2sql_query の引数")).toBeVisible();
 
-      await page.getByRole("button", { name: "external_rag_search の操作" }).click();
+      await page.getByRole("button", { name: "rag__rag_search の操作" }).click();
       await page.getByRole("menuitem", { name: "拒否" }).click();
       const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
       await expect(dialog.getByText("ツール実行を拒否します")).toBeVisible();
@@ -351,7 +353,7 @@ for (const viewport of VIEWPORTS) {
         .poll(() => mockApi.lastRequest("POST", "/api/approvals/approval-e2e-1/decision")?.body)
         .toMatchObject({ approved: false });
       // 判断済みの承認は行メニューを持たない。
-      await expect(page.getByRole("button", { name: "external_rag_search の操作" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "rag__rag_search の操作" })).toHaveCount(0);
       await expectNoHorizontalOverflow(page);
     });
   });

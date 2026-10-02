@@ -134,7 +134,18 @@ class MigrationArtifact:
         return bool(self.destructive_note)
 
 
-_RETIRED_CODES_SQL = ", ".join(f"'{code}'" for code in RETIRED_PERMISSION_CODES)
+def _retired_codes_sql(codes: tuple[str, ...]) -> str:
+    return ", ".join(f"'{code}'" for code in codes)
+
+
+# migration の SQL は checksum に入るため、適用済みの migration の対象は固定する。
+# 新しく廃止したコードは新しい migration で消す（全体は RETIRED_PERMISSION_CODES）。
+_RETIRED_CODES_002 = ("menu.dashboard",)
+_RETIRED_CODES_004 = ("menu.settings_external_rag", "menu.settings_external_nl2sql")
+if set(_RETIRED_CODES_002) | set(_RETIRED_CODES_004) != set(
+    RETIRED_PERMISSION_CODES
+):  # pragma: no cover - 定義の誤りを起動時に検出
+    raise RuntimeError("廃止した権限コードを消す migration を追加してください。")
 
 # 未初期化の DB（`missing`）と全再作成では、正本の DDL で最新の形を作り、migration は実行せずに
 # 記録だけする。それ以外は未適用・checksum 不一致の migration を順に適用する。
@@ -149,7 +160,7 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         "remove retired permission codes from roles",
         (
             "DELETE FROM AGENT_ROLE_PERMISSIONS "  # nosec B608 - 固定の権限コード
-            f"WHERE PERMISSION_CODE IN ({_RETIRED_CODES_SQL})",
+            f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_002)})",
         ),
     ),
     MigrationArtifact(
@@ -160,6 +171,14 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
             "権限管理でロールに割り当てていた業務ビュー（AGENT_ROLE_BUSINESS_VIEWS）を削除します。"
             "#750 から使っていません。業務ビューの権限は RAG の権限管理で割り当てます。"
             "割り当てを控える必要があれば、先にテーブルを書き出してください。"
+        ),
+    ),
+    MigrationArtifact(
+        "20261002_004_remove_external_settings_permissions",
+        "remove external RAG / NL2SQL menu permissions (merged into MCP connections)",
+        (
+            "DELETE FROM AGENT_ROLE_PERMISSIONS "  # nosec B608 - 固定の権限コード
+            f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_004)})",
         ),
     ),
 )

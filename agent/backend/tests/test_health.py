@@ -34,6 +34,7 @@ from starlette.websockets import WebSocket
 
 import app.features.agent.router as agent_router
 import app.features.agent.runtime as runtime_module
+import app.features.agent.tools as tools_module
 import app.settings as app_settings
 from app.features.agent.builtin_runtime import build_function_tools
 from app.features.agent.config import runtime_config_store
@@ -46,7 +47,16 @@ from app.features.agent.runtime import (
     RunCreateRequest,
     RunState,
 )
-from app.features.agent.tools import ToolCall, ToolInvocationContext, ToolPolicy, tool_registry
+from app.features.agent.tools import (
+    ExternalMcpToolInfo,
+    McpConnectionClient,
+    ToolCall,
+    ToolInvocationContext,
+    ToolPolicy,
+    mcp_tool_definition,
+    mcp_tool_handler,
+    tool_registry,
+)
 from app.main import app
 from app.observability import (
     TRACE_EVENTS,
@@ -578,18 +588,6 @@ def _reset_tool_policy() -> None:
         allow=[],
         ask=[],
         deny=[],
-    )
-
-
-def _reset_mcp() -> None:
-    runtime_config_store.patch_mcp(
-        base_url="",
-        timeout_seconds=10,
-        session_id="",
-        oauth_token_url="",
-        oauth_client_id="",
-        oauth_client_secret="",
-        oauth_scope="",
     )
 
 
@@ -1476,24 +1474,13 @@ def test_model_test_vision_payload_sends_shared_jpeg_image() -> None:
     assert base64.b64decode(image_url.removeprefix(prefix)) == MODEL_TEST_IMAGE_BYTES
 
 
-def test_list_tools_v2_includes_external_tools() -> None:
+def test_list_tools_lists_control_plane_tools() -> None:
     resp = client.get("/api/tools")
     assert resp.status_code == 200
     tools = {tool["name"]: tool for tool in resp.json()["data"]["tools"]}
     assert "echo" in tools
-    assert tools["external_rag_search"]["permission_level"] == "read"
-    assert tools["external_rag_search"]["max_retries"] == 3
-    assert tools["external_nl2sql_query"]["permission_level"] == "sensitive"
-    assert tools["external_nl2sql_query"]["max_retries"] == 3
-    assert tools["external_nl2sql_query"]["output_schema"]["properties"]["columns"]
-    assert tools["external_mcp_call"]["permission_level"] == "sensitive"
-    assert tools["external_mcp_call"]["side_effects"] is True
-    assert tools["external_mcp_call"]["max_retries"] == 3
-    assert tools["external_mcp_call"]["input_schema"]["properties"]["tool_name"]
-    assert tools["external_mcp_list_tools"]["permission_level"] == "read"
-    assert tools["external_mcp_list_tools"]["side_effects"] is False
-    assert tools["external_mcp_list_tools"]["max_retries"] == 3
-    assert tools["external_mcp_list_tools"]["output_schema"]["properties"]["tools"]
+    # RAG / NL2SQL / 外部 MCP のツールは MCP 接続から取得する（#757。tool_registry には無い）。
+    assert not {name for name in tools if name.startswith("external_")}
     assert tools["agent_skill_list"]["permission_level"] == "read"
     # Skill の展開ツールとコマンド実行ツールは #756 で削除した。
     assert "agent_skill_run" not in tools
@@ -2146,7 +2133,7 @@ def test_runtime_repository_snapshot_replace_restores_indexes() -> None:
     run = _seed_waiting_run(
         source,
         "snapshot replace で承認索引を復元する",
-        [ToolCall(name="external_nl2sql_query", arguments={"question": "承認索引を確認して"})],
+        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "承認索引を確認して"})],
     )
     approval_id = run.approvals[0].id
     snapshot = source.export_snapshot()
@@ -2171,7 +2158,7 @@ def test_runtime_repository_persists_snapshot_to_disk(tmp_path: Path) -> None:
     waiting = _seed_waiting_run(
         source,
         "disk snapshot の承認索引を保存する",
-        [ToolCall(name="external_nl2sql_query", arguments={"question": "承認索引を保存して"})],
+        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "承認索引を保存して"})],
     )
     approval_id = waiting.approvals[0].id
 
@@ -2205,7 +2192,7 @@ def test_runtime_repository_persists_checkpoint_to_oracle() -> None:
         "Oracle checkpoint の承認索引を保存する",
         [
             ToolCall(
-                name="external_nl2sql_query", arguments={"question": "Oracle checkpoint を確認して"}
+                name="nl2sql__nl2sql_query", arguments={"question": "Oracle checkpoint を確認して"}
             )
         ],
     )
@@ -2297,7 +2284,7 @@ def test_runtime_repository_persists_normalized_oracle_projection() -> None:
     waiting = _seed_waiting_run(
         repository,
         "Oracle projection approval を保存する",
-        [ToolCall(name="external_nl2sql_query", arguments={"question": "projection approval"})],
+        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "projection approval"})],
     )
     repository.decide_approval(
         waiting.approvals[0].id,
@@ -4947,7 +4934,7 @@ def test_oracle_projection_incremental_mode_upserts_without_full_delete() -> Non
     waiting = _seed_waiting_run(
         repository,
         "Oracle incremental projection",
-        [ToolCall(name="external_nl2sql_query", arguments={"question": "incremental approval"})],
+        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "incremental approval"})],
     )
     repository.decide_approval(
         waiting.approvals[0].id,
@@ -5130,7 +5117,9 @@ def test_skill_registry_lists_builtin_skills() -> None:
     assert "workspace_command" not in skills
     assert "tool_calls" not in skills["business_rag_research"]
     assert skills["business_rag_research"]["mcp_requirements"][0]["tool_names"]
-    assert listed.json()["data"]["metadata"]["count"] >= 4
+    assert listed.json()["data"]["metadata"]["count"] >= 3
+    assert skills["business_rag_research"]["mcp_requirements"][0]["server_id"] == "rag"
+    assert "mcp_tool_call" not in skills
     # Skill を ToolCall の計画へ展開する API は #756 で削除した。
     assert client.post("/api/skills/plan", json={}).status_code in {404, 405}
 
@@ -5156,23 +5145,12 @@ def test_invoke_unknown_tool() -> None:
     assert data["error"] == "unknown tool"
 
 
-def test_external_nl2sql_requires_approval_by_default() -> None:
-    tools = {
-        tool.name: tool
-        for tool in build_function_tools(
-            "run_policy_default", ["external_nl2sql_query", "external_rag_search"]
-        )
-    }
-    assert tools["external_nl2sql_query"].needs_approval is True
-    assert tools["external_rag_search"].needs_approval is False
-
-
 def test_cancelled_run_cancels_pending_approvals_and_blocks_late_approval() -> None:
     run = _seed_api_run(
         "キャンセル後の承認を防ぐ",
         [
             ToolCall(
-                name="external_nl2sql_query",
+                name="nl2sql__nl2sql_query",
                 arguments={"question": "キャンセル保護を確認して", "mode": "execute"},
             )
         ],
@@ -5196,62 +5174,6 @@ def test_cancelled_run_cancels_pending_approvals_and_blocks_late_approval() -> N
     assert late_run["status"] == "cancelled"
     assert late_run["steps"][0]["status"] == "cancelled"
     assert late_run["approvals"][0]["status"] == "cancelled"
-
-
-def test_external_settings_patch_updates_non_secret_runtime_values(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(runtime_config_store, "_rag", runtime_config_store.get_rag())
-    monkeypatch.setattr(runtime_config_store, "_nl2sql", runtime_config_store.get_nl2sql())
-    monkeypatch.setattr(app_settings.get_settings(), "app_service_token_secret", "")
-    rag = client.patch(
-        "/api/settings/external-rag",
-        json={"mcp_url": "http://rag.example.test/api/mcp", "timeout_seconds": 3},
-    )
-    assert rag.status_code == 200
-    assert rag.json()["data"] == {
-        "mcp_url": "http://rag.example.test/api/mcp",
-        "timeout_seconds": 3,
-        "default_limit": None,
-        "configured": True,
-        "service_token_configured": False,
-        "service_user_configured": False,
-    }
-
-    nl2sql = client.patch(
-        "/api/settings/external-nl2sql",
-        json={
-            "mcp_url": "http://nl2sql.example.test/api/mcp",
-            "timeout_seconds": 4,
-            "default_limit": 25,
-        },
-    )
-    assert nl2sql.status_code == 200
-    data = nl2sql.json()["data"]
-    assert data["mcp_url"] == "http://nl2sql.example.test/api/mcp"
-    assert data["default_limit"] == 25
-    assert data["configured"] is True
-    # 旧設定の API キー欄は無い（呼び出しごとのサービストークンを使う）。
-    assert "api_key_configured" not in data
-
-    invalid = client.patch("/api/settings/external-rag", json={"mcp_url": "rag.example.test"})
-    assert invalid.status_code == 422
-
-    mcp = client.patch(
-        "/api/settings/external-mcp",
-        json={
-            "base_url": "https://mcp.example.test/jsonrpc",
-            "timeout_seconds": 5,
-            "session_id": "session-settings-1",
-        },
-    )
-    assert mcp.status_code == 200
-    mcp_data = mcp.json()["data"]
-    assert mcp_data["base_url"] == "https://mcp.example.test/jsonrpc"
-    assert mcp_data["configured"] is True
-    assert mcp_data["session_configured"] is True
-    assert mcp_data["oauth_configured"] is False
-    assert mcp_data["auth_mode"] == "none"
 
 
 def test_tool_policy_settings_can_force_read_tool_approval() -> None:
@@ -5288,65 +5210,13 @@ def test_tool_policy_settings_reject_unknown_tools() -> None:
         _reset_tool_policy()
 
 
-def test_external_mcp_tool_calls_jsonrpc_gateway_and_preserves_trace_id(
+def test_mcp_connection_oauth_client_credentials_adds_bearer_and_caches_token(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    runtime_config_store.patch_mcp(
+    runtime_config_store.upsert_mcp_server(
+        "oauth757",
         base_url="https://mcp.example.test/jsonrpc",
-        timeout_seconds=6,
-        session_id="session-call-1",
-    )
-    calls = _fake_http_client(
-        monkeypatch,
-        {
-            "jsonrpc": "2.0",
-            "id": "trace-mcp-1",
-            "result": {
-                "content": [{"type": "text", "text": "顧客情報を取得しました"}],
-                "structuredContent": {"customer_id": "C-001", "status": "active"},
-            },
-        },
-    )
-
-    try:
-        result = tool_registry.invoke(
-            ToolCall(
-                name="external_mcp_call",
-                arguments={
-                    "tool_name": "lookup_customer",
-                    "arguments": {"customer_id": "C-001"},
-                    "server_id": "crm",
-                    "trace_id": "trace-mcp-1",
-                },
-            ),
-            policy=ToolPolicy(allow={"external_mcp_call"}),
-        )
-
-        assert result.success is True
-        assert result.output is not None
-        assert result.output["tool_name"] == "lookup_customer"
-        assert result.output["content"][0]["text"] == "顧客情報を取得しました"
-        assert result.output["structured_content"]["customer_id"] == "C-001"
-        assert result.output["metadata"]["jsonrpc_id"] == "trace-mcp-1"
-        assert calls[0]["url"] == "https://mcp.example.test/jsonrpc"
-        assert calls[0]["timeout"] == 6
-        assert calls[0]["json"]["method"] == "tools/call"
-        assert calls[0]["json"]["id"] == "trace-mcp-1"
-        assert calls[0]["json"]["params"]["name"] == "lookup_customer"
-        assert calls[0]["json"]["params"]["server_id"] == "crm"
-        assert calls[0]["json"]["params"]["arguments"] == {"customer_id": "C-001"}
-        assert calls[0]["headers"]["Mcp-Session-Id"] == "session-call-1"
-        # 固定の session id を設定した従来の gateway には initialize を送らない。
-        assert len(calls) == 1
-    finally:
-        _reset_mcp()
-
-
-def test_external_mcp_oauth_client_credentials_adds_bearer_and_caches_token(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    runtime_config_store.patch_mcp(
-        base_url="https://mcp.example.test/jsonrpc",
+        auth_mode="oauth_client_credentials",
         timeout_seconds=6,
         session_id="session-oauth-1",
         oauth_token_url="https://auth.example.test/oauth/token",
@@ -5376,14 +5246,7 @@ def test_external_mcp_oauth_client_credentials_adds_bearer_and_caches_token(
             auth: tuple[str, str] | None = None,
         ) -> _FakeResponse:
             calls.append(
-                {
-                    "url": url,
-                    "json": json,
-                    "headers": headers or {},
-                    "data": data,
-                    "auth": auth,
-                    "timeout": self.timeout,
-                }
+                {"url": url, "json": json, "headers": headers or {}, "data": data, "auth": auth}
             )
             if url == "https://auth.example.test/oauth/token":
                 return _FakeResponse({"access_token": "oauth-access-token", "expires_in": 3600})
@@ -5398,107 +5261,39 @@ def test_external_mcp_oauth_client_credentials_adds_bearer_and_caches_token(
             )
 
     monkeypatch.setattr("app.features.agent.tools.httpx.Client", OAuthFakeClient)
+    monkeypatch.setattr(tools_module, "_mcp_oauth_token_cache", {})
 
     try:
-        first = tool_registry.invoke(
-            ToolCall(
-                name="external_mcp_call",
-                arguments={"tool_name": "lookup_customer", "trace_id": "trace-oauth-1"},
-            ),
-            policy=ToolPolicy(allow={"external_mcp_call"}),
+        mcp_client = McpConnectionClient(
+            runtime_config_store.get_mcp("oauth757"), context=ToolInvocationContext()
         )
-        second = tool_registry.invoke(
-            ToolCall(
-                name="external_mcp_list_tools",
-                arguments={"trace_id": "trace-oauth-2"},
-            )
-        )
-
-        token_calls = [
-            call for call in calls if call["url"] == "https://auth.example.test/oauth/token"
-        ]
-        gateway_calls = [
-            call for call in calls if call["url"] == "https://mcp.example.test/jsonrpc"
-        ]
-
-        assert first.success is True
-        assert second.success is True
-        assert len(token_calls) == 1
-        assert token_calls[0]["data"] == {
-            "grant_type": "client_credentials",
-            "scope": "mcp.tools",
-        }
-        assert token_calls[0]["auth"] == ("mcp-client", "mcp-secret")
-        assert len(gateway_calls) == 2
-        assert gateway_calls[0]["headers"]["Authorization"] == "Bearer oauth-access-token"
-        assert gateway_calls[1]["headers"]["Authorization"] == "Bearer oauth-access-token"
-        assert gateway_calls[0]["headers"]["Mcp-Session-Id"] == "session-oauth-1"
+        first = mcp_client.call_tool("lookup_customer", {}, trace_id="trace-oauth-1")
+        second = mcp_client.list_tools(trace_id="trace-oauth-2")
     finally:
-        _reset_mcp()
+        runtime_config_store.remove_mcp_server("oauth757")
+
+    token_calls = [call for call in calls if call["url"] == "https://auth.example.test/oauth/token"]
+    gateway_calls = [call for call in calls if call["url"] == "https://mcp.example.test/jsonrpc"]
+
+    assert first == {"content": "ok"}
+    assert second.tools == []
+    assert len(token_calls) == 1
+    assert token_calls[0]["data"] == {"grant_type": "client_credentials", "scope": "mcp.tools"}
+    assert token_calls[0]["auth"] == ("mcp-client", "mcp-secret")
+    # 固定の session id があれば initialize を省き、tools/call と tools/list だけを送る。
+    assert [call["json"]["method"] for call in gateway_calls] == ["tools/call", "tools/list"]
+    assert gateway_calls[0]["headers"]["Authorization"] == "Bearer oauth-access-token"
+    assert gateway_calls[1]["headers"]["Authorization"] == "Bearer oauth-access-token"
+    assert gateway_calls[0]["headers"]["Mcp-Session-Id"] == "session-oauth-1"
+    # 旧 gateway の server_id は params に入れない（標準の MCP）。
+    assert gateway_calls[0]["json"]["params"] == {"name": "lookup_customer", "arguments": {}}
 
 
-def test_external_mcp_list_tools_discovers_gateway_tools(
+def test_mcp_connection_list_tools_accepts_streamable_http_chunks(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    runtime_config_store.patch_mcp(
-        base_url="https://mcp.example.test/jsonrpc",
-        timeout_seconds=6,
-        session_id="session-list-1",
-    )
-    calls = _fake_http_client(
-        monkeypatch,
-        {
-            "jsonrpc": "2.0",
-            "id": "trace-mcp-list",
-            "result": {
-                "tools": [
-                    {
-                        "name": "lookup_customer",
-                        "description": "顧客情報を検索する",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {"customer_id": {"type": "string"}},
-                        },
-                        "outputSchema": {"type": "object"},
-                        "serverId": "crm",
-                        "metadata": {"owner": "sales-ops"},
-                    }
-                ],
-                "nextCursor": "cursor-2",
-            },
-        },
-    )
-
-    try:
-        result = tool_registry.invoke(
-            ToolCall(
-                name="external_mcp_list_tools",
-                arguments={"server_id": "crm", "trace_id": "trace-mcp-list"},
-            )
-        )
-
-        assert result.success is True
-        assert result.output is not None
-        assert result.output["tools"][0]["name"] == "lookup_customer"
-        assert result.output["tools"][0]["input_schema"]["properties"]["customer_id"]
-        assert result.output["tools"][0]["output_schema"] == {"type": "object"}
-        assert result.output["tools"][0]["server_id"] == "crm"
-        assert result.output["tools"][0]["metadata"]["owner"] == "sales-ops"
-        assert result.output["metadata"]["next_cursor"] == "cursor-2"
-        assert calls[0]["json"]["method"] == "tools/list"
-        assert calls[0]["json"]["id"] == "trace-mcp-list"
-        assert calls[0]["json"]["params"]["server_id"] == "crm"
-        assert calls[0]["headers"]["Mcp-Session-Id"] == "session-list-1"
-    finally:
-        _reset_mcp()
-
-
-def test_external_mcp_list_tools_accepts_streamable_http_chunks(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    runtime_config_store.patch_mcp(
-        base_url="https://mcp.example.test/jsonrpc",
-        timeout_seconds=6,
+    runtime_config_store.upsert_mcp_server(
+        "stream757", base_url="https://mcp.example.test/jsonrpc", timeout_seconds=6
     )
     calls: list[dict[str, Any]] = []
 
@@ -5529,7 +5324,8 @@ def test_external_mcp_list_tools_accepts_streamable_http_chunks(
                         "event: message",
                         (
                             'data: {"jsonrpc":"2.0","id":"trace-stream",'
-                            '"result":{"tools":[{"name":"stream_tool","description":"stream"}]}}'
+                            '"result":{"tools":[{"name":"stream_tool","description":"stream",'
+                            '"annotations":{"readOnlyHint":true}}]}}'
                         ),
                     ]
                 )
@@ -5537,19 +5333,16 @@ def test_external_mcp_list_tools_accepts_streamable_http_chunks(
 
     monkeypatch.setattr("app.features.agent.tools.httpx.Client", StreamClient)
     try:
-        result = tool_registry.invoke(
-            ToolCall(
-                name="external_mcp_list_tools",
-                arguments={"trace_id": "trace-stream"},
-            )
-        )
+        result = McpConnectionClient(
+            runtime_config_store.get_mcp("stream757"), context=ToolInvocationContext()
+        ).list_tools(trace_id="trace-stream")
     finally:
-        _reset_mcp()
+        runtime_config_store.remove_mcp_server("stream757")
 
-    assert result.success is True
-    assert result.output is not None
-    assert result.output["tools"][0]["name"] == "stream_tool"
-    # session id を設定していない gateway には、最初に MCP の initialize を送る。
+    assert [tool.name for tool in result.tools] == ["stream_tool"]
+    assert result.tools[0].read_only is True
+    assert result.tools[0].function_name == "stream757__stream_tool"
+    # session id を設定していない接続には、最初に MCP の initialize を送る。
     assert [call["json"]["method"] for call in calls] == [
         "initialize",
         "notifications/initialized",
@@ -5558,154 +5351,8 @@ def test_external_mcp_list_tools_accepts_streamable_http_chunks(
     assert calls[0]["json"]["params"]["protocolVersion"] == "2025-06-18"
     assert calls[-1]["headers"]["Accept"] == "application/json, text/event-stream"
     assert calls[-1]["headers"]["MCP-Protocol-Version"] == "2025-06-18"
-
-
-def test_external_mcp_list_tools_endpoint(monkeypatch: MonkeyPatch) -> None:
-    runtime_config_store.patch_mcp(
-        base_url="https://mcp.example.test/jsonrpc",
-        timeout_seconds=6,
-    )
-    calls = _fake_http_client(
-        monkeypatch,
-        {
-            "jsonrpc": "2.0",
-            "id": "trace-mcp-list-api",
-            "result": {
-                "tools": [
-                    {
-                        "name": "search_orders",
-                        "description": "受注を検索する",
-                        "input_schema": {"type": "object"},
-                    }
-                ]
-            },
-        },
-    )
-
-    try:
-        resp = client.get("/api/tools/external-mcp?server_id=erp&trace_id=trace-mcp-list-api")
-
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert data["tools"][0]["name"] == "search_orders"
-        assert data["tools"][0]["server_id"] == "erp"
-        assert data["metadata"]["method"] == "tools/list"
-        assert calls[-1]["json"]["method"] == "tools/list"
-        assert calls[-1]["json"]["params"]["server_id"] == "erp"
-    finally:
-        _reset_mcp()
-
-
-def test_external_mcp_rpc_error_is_normalized(monkeypatch: MonkeyPatch) -> None:
-    runtime_config_store.patch_mcp(
-        base_url="https://mcp.example.test/jsonrpc",
-        timeout_seconds=6,
-    )
-    _fake_http_client(
-        monkeypatch,
-        {
-            "jsonrpc": "2.0",
-            "id": "trace-mcp-error",
-            "error": {"code": -32601, "message": "tool not found"},
-        },
-    )
-
-    try:
-        result = tool_registry.invoke(
-            ToolCall(
-                name="external_mcp_call",
-                arguments={"tool_name": "missing_tool", "trace_id": "trace-mcp-error"},
-            ),
-            policy=ToolPolicy(allow={"external_mcp_call"}),
-        )
-
-        assert result.success is False
-        assert result.error == "external MCP gateway returned a JSON-RPC error"
-        assert result.error_code == "external_mcp.rpc_error"
-        assert result.error_details["error"]["message"] == "tool not found"
-        assert result.error_details["tool_name"] == "missing_tool"
-    finally:
-        _reset_mcp()
-
-
-def test_external_mcp_without_base_url_fails() -> None:
-    _reset_mcp()
-
-    result = tool_registry.invoke(
-        ToolCall(name="external_mcp_call", arguments={"tool_name": "lookup_customer"}),
-        policy=ToolPolicy(allow={"external_mcp_call"}),
-    )
-
-    assert result.success is False
-    assert result.error == "external MCP gateway is not configured"
-    assert result.error_code == "external_mcp.not_configured"
-
-
-def test_external_mcp_list_tools_without_base_url_fails() -> None:
-    _reset_mcp()
-
-    result = tool_registry.invoke(ToolCall(name="external_mcp_list_tools"))
-    resp = client.get("/api/tools/external-mcp")
-
-    assert result.success is False
-    assert result.error == "external MCP gateway is not configured"
-    assert result.error_code == "external_mcp.not_configured"
-    assert resp.status_code == 400
-    assert "external_mcp.not_configured" in resp.json()["error_messages"][0]
-
-
-def test_run_external_rag_records_evidence_artifact(monkeypatch: MonkeyPatch) -> None:
-    fake_product_mcp(
-        monkeypatch,
-        outputs={
-            "rag_search": {
-                "answer": "監査ログは Run のイベントとして確認できます。",
-                "trace_id": "rag-trace-artifact",
-                "guardrail_warnings": [],
-                "citations": [
-                    {
-                        "document_id": "doc-ops",
-                        "chunk_id": "chunk-1",
-                        "file_name": "Operations Guide.pdf",
-                        "text": "Run events are append-only.",
-                        "score": 0.92,
-                    }
-                ],
-            }
-        },
-    )
-
-    run = _seed_api_run(
-        "RAG evidence artifact を確認する",
-        [ToolCall(name="external_rag_search", arguments={"query": "監査ログの確認方法"})],
-    )
-
-    assert run["status"] == "completed"
-    assert run["artifacts"][0]["kind"] == "rag_evidence"
-    assert run["artifacts"][-1]["kind"] == "answer"
-    assert run["artifacts"][0]["content"]["citations"][0]["file_name"] == "Operations Guide.pdf"
-    assert "artifact.created" in [event["type"] for event in run["events"]]
-
-    artifacts = client.get(f"/api/runs/{run['id']}/artifacts")
-    assert artifacts.status_code == 200
-    assert artifacts.json()["data"]["artifacts"][0]["id"] == run["artifacts"][0]["id"]
-
-    artifact = client.get(f"/api/runs/{run['id']}/artifacts/{run['artifacts'][0]['id']}")
-    assert artifact.status_code == 200
-    assert (
-        artifact.json()["data"]["content"]["answer"]
-        == "監査ログは Run のイベントとして確認できます。"
-    )
-
-    audit = client.get(f"/api/runs/{run['id']}/audit")
-    assert audit.status_code == 200
-    audit_record = audit.json()["data"]["records"][0]
-    assert audit_record["tool_name"] == "external_rag_search"
-    assert audit_record["status"] == "completed"
-    assert audit_record["permission_level"] == "read"
-    assert audit_record["duration_ms"] >= 0
-    assert audit_record["artifact_ids"] == [run["artifacts"][0]["id"]]
-    assert audit_record["audit_metadata"]["tool_name"] == "external_rag_search"
+    # 接続の宣言がない認証方式（なし）は Authorization を送らない。
+    assert "Authorization" not in calls[-1]["headers"]
 
 
 def test_global_tool_call_audit_filters_and_exports_csv() -> None:
@@ -5783,10 +5430,14 @@ def test_tool_guardrail_masks_sensitive_fields_and_audits_injection(
         },
     )
 
+    config = runtime_config_store.get_mcp("nl2sql")
+    info = ExternalMcpToolInfo(name="nl2sql_query", function_name="nl2sql__nl2sql_query")
     result = tool_registry.invoke(
-        ToolCall(name="external_nl2sql_query", arguments={"question": "危険な出力を確認"}),
-        policy=ToolPolicy(allow={"external_nl2sql_query"}),
+        ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "危険な出力を確認"}),
+        policy=ToolPolicy(allow={"nl2sql__nl2sql_query"}),
         context=ToolInvocationContext(user_uuid="user-guardrail"),
+        definition=mcp_tool_definition(config, info),
+        handler=mcp_tool_handler(config, info),
     )
 
     assert result.success is True
@@ -5913,7 +5564,7 @@ def test_websocket_events_send_heartbeat_and_command_ack() -> None:
     _reset_tool_policy()
     run = _seed_api_run(
         "WebSocket heartbeat を確認する",
-        [ToolCall(name="external_nl2sql_query", arguments={"question": "承認待ちにする"})],
+        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "承認待ちにする"})],
         approval=True,
     )
     websocket = _CommandWebSocket([{"type": "cancel", "command_id": "cmd-cancel-1"}])
@@ -5945,7 +5596,7 @@ def test_websocket_events_accept_resume_command() -> None:
     _reset_tool_policy()
     run = _seed_api_run(
         "WebSocket resume を確認する",
-        [ToolCall(name="external_nl2sql_query", arguments={"question": "承認待ち resume"})],
+        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "承認待ち resume"})],
         approval=True,
     )
     websocket = _CommandWebSocket(
@@ -5979,7 +5630,7 @@ def test_websocket_events_deduplicates_command_id() -> None:
     _reset_tool_policy()
     run = _seed_api_run(
         "WebSocket command idempotency を確認する",
-        [ToolCall(name="external_nl2sql_query", arguments={"question": "重複 resume を防ぐ"})],
+        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "重複 resume を防ぐ"})],
         approval=True,
     )
     websocket = _CommandWebSocket(
@@ -6021,7 +5672,7 @@ def test_websocket_events_accept_approval_decision_command(monkeypatch: MonkeyPa
     monkeypatch.setattr(agent_router, "_schedule_builtin_run", finish)
     run = _seed_api_run(
         "WebSocket approval を確認する",
-        [ToolCall(name="external_nl2sql_query", arguments={"question": "WS で承認する"})],
+        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "WS で承認する"})],
         approval=True,
     )
     approval_id = run["approvals"][0]["id"]
@@ -6063,7 +5714,7 @@ def test_websocket_events_return_structured_command_errors() -> None:
     _reset_tool_policy()
     run = _seed_api_run(
         "WebSocket command error を確認する",
-        [ToolCall(name="external_nl2sql_query", arguments={"question": "承認待ちにする"})],
+        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "承認待ちにする"})],
         approval=True,
     )
     websocket = _CommandWebSocket(
@@ -6108,54 +5759,77 @@ def test_mcp_servers_from_json_parses_declarations() -> None:
     assert _mcp_servers_from_json(None) == []
 
 
-def test_mcp_server_registry_crud_and_default() -> None:
-    listed = client.get("/api/settings/external-mcp-servers")
+def test_mcp_connections_api_crud_and_builtin_protection(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        runtime_config_store,
+        "_mcp_servers",
+        {config.server_id: config for config in runtime_config_store.list_mcp_servers()},
+    )
+    monkeypatch.setattr(app_settings.get_settings(), "app_service_token_secret", "")
+    listed = client.get("/api/settings/mcp-connections")
     assert listed.status_code == 200
-    data = listed.json()["data"]
-    assert data["default_server_id"] == "default"
-    assert any(server["server_id"] == "default" for server in data["servers"])
+    connections = {item["server_id"]: item for item in listed.json()["data"]["connections"]}
+    rag = connections["rag"]
+    assert rag["source"] == "builtin"
+    assert rag["auth_mode"] == "service_token"
+    assert rag["service_audience"] == "rag"
+    assert rag["removable"] is False
+    # 署名鍵が無いサービストークンの接続は使えない（URL があっても configured にしない）。
+    patched_rag = client.patch(
+        "/api/settings/mcp-connections/rag",
+        json={"base_url": "http://rag.example.test/api/mcp", "timeout_seconds": 3},
+    )
+    assert patched_rag.status_code == 200
+    assert patched_rag.json()["data"]["base_url"] == "http://rag.example.test/api/mcp"
+    assert patched_rag.json()["data"]["timeout_seconds"] == 3
+    assert patched_rag.json()["data"]["configured"] is False
+    assert patched_rag.json()["data"]["service_token_configured"] is False
+    assert client.request("DELETE", "/api/settings/mcp-connections/rag").status_code == 400
 
     created = client.post(
-        "/api/settings/external-mcp-servers",
+        "/api/settings/mcp-connections",
         json={
             "server_id": "erp",
             "label": "ERP",
-            "base_url": "https://erp.example.test",
+            "base_url": "https://erp.example.test/mcp",
+            "auth_mode": "api_key",
+            "api_key": "erp-secret-key",
             "timeout_seconds": 7,
         },
     )
-    assert created.status_code == 200
-    assert created.json()["data"]["server_id"] == "erp"
-    assert created.json()["data"]["configured"] is True
-
-    dup = client.post(
-        "/api/settings/external-mcp-servers",
-        json={"server_id": "erp", "base_url": "https://dup.test"},
+    assert created.status_code == 200, created.text
+    erp = created.json()["data"]
+    assert erp["configured"] is True
+    assert erp["api_key_configured"] is True
+    assert erp["removable"] is True
+    # 資格情報の値は返さない。
+    assert "erp-secret-key" not in created.text
+    assert (
+        client.post("/api/settings/mcp-connections", json={"server_id": "erp"}).status_code == 409
     )
-    assert dup.status_code == 409
 
-    patched = client.patch("/api/settings/external-mcp-servers/erp", json={"timeout_seconds": 12})
-    assert patched.status_code == 200
-    assert patched.json()["data"]["timeout_seconds"] == 12
+    switched = client.patch("/api/settings/mcp-connections/erp", json={"auth_mode": "none"})
+    assert switched.json()["data"]["auth_mode"] == "none"
+    assert client.patch("/api/settings/mcp-connections/missing", json={}).status_code == 404
 
-    # 登録済み server は専用 endpoint を引く
-    assert runtime_config_store.get_mcp("erp").base_url == "https://erp.example.test"
-    # 未登録 server_id は default へ fallback(従来の gateway ルーティング互換)
-    assert runtime_config_store.get_mcp("unknown").server_id == "default"
-
-    set_default = client.post("/api/settings/external-mcp-servers/erp/default")
-    assert set_default.status_code == 200
-    assert set_default.json()["data"]["default_server_id"] == "erp"
-
-    deleted = client.request("DELETE", "/api/settings/external-mcp-servers/erp")
+    deleted = client.request("DELETE", "/api/settings/mcp-connections/erp")
     assert deleted.status_code == 200
-    assert deleted.json()["data"]["default_server_id"] == "default"
-    assert all(server["server_id"] != "erp" for server in deleted.json()["data"]["servers"])
+    assert "erp" not in {item["server_id"] for item in deleted.json()["data"]["connections"]}
+    # 旧 API は削除した（外部 RAG / 外部 NL2SQL / 単一の外部 MCP / 既定のサーバー）。
+    for path in ("/api/settings/external-rag", "/api/settings/external-mcp-servers"):
+        assert client.get(path).status_code == 404
 
-    # default server は削除不可
-    assert client.request("DELETE", "/api/settings/external-mcp-servers/default").status_code == 400
-    # 不在 server は 404
-    assert client.request("DELETE", "/api/settings/external-mcp-servers/missing").status_code == 404
+
+def test_tool_policy_accepts_mcp_connection_tool_names() -> None:
+    try:
+        accepted = client.patch(
+            "/api/settings/tool-policy", json={"allow": ["nl2sql__nl2sql_query"]}
+        )
+        assert accepted.status_code == 200, accepted.text
+        rejected = client.patch("/api/settings/tool-policy", json={"allow": ["unknown__tool"]})
+        assert rejected.status_code == 400
+    finally:
+        _reset_tool_policy()
 
 
 def test_skill_loader_reads_skill_md_and_json(tmp_path: Any) -> None:
@@ -6265,8 +5939,8 @@ def _skill_ids() -> set[str]:
 
 
 def _mcp_ids() -> set[str]:
-    data = client.get("/api/settings/external-mcp-servers").json()["data"]
-    return {s["server_id"] for s in data["servers"]}
+    data = client.get("/api/settings/mcp-connections").json()["data"]
+    return {s["server_id"] for s in data["connections"]}
 
 
 def _agent_ids() -> set[str]:

@@ -9,10 +9,10 @@
 
 | 型 | ページ（ルート） | 補足 |
 |---|---|---|
-| A. 一覧 → 全画面エディタ | 業務 Agent（`/agents`）/ Skill（`/skills`）/ 外部 MCP（`/settings/external-mcp`）/ 連携機能（`/plugins`）/ マーケットプレイス（`/plugins/marketplaces`） | `?id=` を唯一の情報源にする（§1.1）。 |
+| A. 一覧 → 全画面エディタ | 業務 Agent（`/agents`）/ Skill（`/skills`）/ MCP 接続（`/settings/mcp-connections`）/ 連携機能（`/plugins`）/ マーケットプレイス（`/plugins/marketplaces`） | `?id=` を唯一の情報源にする（§1.1）。 |
 | B. マスタ詳細の閲覧 | Run（`/runs`）/ 承認（`/approvals`）/ ツール（`/tools`） | 一覧と詳細を `FixedSplitPane` で並べる（§1.2）。 |
 | C. ツール / ワークフロー | 監査（`/audit`）/ Control Plane バックアップ（`/settings/runtime-snapshot`） | 監査は 絞り込み → 適用 → 結果の `DataTable`。バックアップは 入力 → 検証 → 置換。 |
-| D. ダッシュボード / 状態 | Runtime（`/runtimes`）/ Agent 接続設定（`/settings/connection`）/ 外部 RAG（`/settings/external-rag`）/ 外部 NL2SQL（`/settings/external-nl2sql`）/ ツール権限（`/settings/tool-policy`） | 運用設定の単一フォームは「状態 + 最小の編集」として D 型に置く。ダッシュボード（`/`）は廃止した（#262）。 |
+| D. ダッシュボード / 状態 | Runtime（`/runtimes`）/ Agent 接続設定（`/settings/connection`）/ ツール権限（`/settings/tool-policy`） | 運用設定の単一フォームは「状態 + 最小の編集」として D 型に置く。ダッシュボード（`/`）は廃止した（#262）。 |
 
 `/` は画面を持たない入口で、NL2SQL と同じく次のように振り分ける（`frontend/src/lib/route-permissions.ts`）。
 
@@ -34,7 +34,7 @@
 |---|---|---|---|
 | 業務 Agent | Agent ID | 概要 / 基本情報 / Skill / 実行先（既存のみ） | 有効にする・無効にする |
 | Skill | Skill ID | 概要 / 基本情報 / 内部依存。ビルトイン・ファイル・env は読み取り専用の詳細 | 削除（実行時に追加した Skill だけ） |
-| 外部 MCP | Server ID | 概要 / 接続 / OAuth。一覧の下に MCP tools/list | 既定にする・削除（`default` は削除不可） |
+| MCP 接続 | 接続 ID | 概要 / 接続 / 認証 / ツール（tools/list の取得） | 削除（RAG / NL2SQL・宣言・連携機能の接続は削除不可） |
 | 連携機能 | Plugin ID | `new` は manifest の入力。既存は概要 / 内容（Skill・MCP・resource） | 有効にする・無効にする・アンインストール |
 | マーケットプレイス | Marketplace ID | `new` は追加フォーム。既存は概要 / 利用可能な連携機能（行メニューから install） | 更新・削除 |
 
@@ -64,9 +64,9 @@
 | 画面 | フック | dirty の対象 |
 |---|---|---|
 | 業務 Agent | `useEditorLeaveGuard` + `useDirtySources` | エディタのフォーム（Skill は集合として比較）と、実行先の追加フォーム。画面内の「一覧に戻る」とパンくずでも破棄を確認する |
-| Skill / 外部 MCP | `useEditorLeaveGuard` | 全画面エディタのフォーム（開いた時点の内容と比較）。画面内の「一覧に戻る」とパンくずでも破棄を確認する |
+| Skill / MCP 接続 | `useEditorLeaveGuard` | 全画面エディタのフォーム（開いた時点の内容と比較）。画面内の「一覧に戻る」とパンくずでも破棄を確認する |
 | 連携機能 / マーケットプレイス | `useEditorLeaveGuard` | `?id=new` の manifest の入力 / 追加フォームの入力 |
-| 外部 RAG / 外部 NL2SQL / ツール権限 | `useSettingsLeaveGuard` | 取得した設定との差分（ツール権限の「既定」は未指定として比較） |
+| ツール権限 | `useSettingsLeaveGuard` | 取得した設定との差分（ツール権限の「既定」は未指定として比較） |
 | Control Plane バックアップ | `useSettingsLeaveGuard` | インポート JSON と理由。確認語（`REPLACE`）は対象外で、離脱で解除される |
 
 ブラウザの戻る / 進む（`popstate`）も、data router の root（`main.tsx`）に 1 つだけ置いた共有の `UnsavedChangesBlocker` で確認する（#138 / #586）。A 型のエディタで未保存の編集があるときも、戻る / 進むで `?id=` が変わる前に破棄を確認する。

@@ -130,8 +130,8 @@ for (const viewport of VIEWPORTS) {
     });
 
     test("変更していなければ確認なしで移動できる", async ({ page }) => {
-      await page.goto("/settings/external-mcp");
-      await expect(page.getByRole("heading", { name: "外部 MCP", level: 1 })).toBeVisible();
+      await page.goto("/settings/mcp-connections");
+      await expect(page.getByRole("heading", { name: "MCP 接続", level: 1 })).toBeVisible();
       expect(await beforeUnloadBlocks(page)).toBe(false);
 
       await (await sidebarLink(page, "/agents")).click();

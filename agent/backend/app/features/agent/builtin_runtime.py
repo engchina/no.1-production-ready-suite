@@ -6,9 +6,12 @@ Control Plane の中で業務 Agent を実行する。外部の Runtime・Bindin
   テキストモデル）。
   SDK の tracing は無効にする（業務データを外部へ送らない）。
 - 指示: Agent の指示と、割り当てた Skill の指示を合わせる。
-- ツール: Skill が必要とする `tool_registry` のツールを function tool にする。実行は
-  `tool_registry.invoke`（ポリシー・ガードレール・監査・RAG / NL2SQL のサービストークン）を通す。
-  ポリシーが「拒否」のツールは渡さない。「承認」のツールは SDK の `needs_approval` で中断する。
+- ツール: Skill が必要とするツールを function tool にする（#757）。`control-plane` は
+  `tool_registry` のツール、それ以外の server_id は MCP 接続（RAG / NL2SQL / 外部 MCP）の
+  `tools/list` のツール（名前は `<接続>__<ツール>`、一覧は Run の利用者の権限で絞られる）。
+  実行は `tool_registry.invoke`（ポリシー・ガードレール・監査・サービストークン）を通す。
+  ポリシーが「拒否」のツールは渡さない。「承認」のツールは SDK の `needs_approval` で中断する
+  （MCP のツールは readOnlyHint が無ければ既定で承認が必要）。
 - 承認: 中断した Run は SDK の状態を Run に保存して `waiting_approval` にする。すべての承認が
   決まったら状態を復元し、承認・却下を反映して再開する。
 """
@@ -45,9 +48,16 @@ from pr_system_settings.model import (
 from app.features.agent.config import runtime_config_store
 from app.features.agent.skills import skill_registry
 from app.features.agent.tools import (
+    ExternalToolError,
     ToolCall,
+    ToolDefinition,
+    ToolHandler,
+    ToolInvocationContext,
     ToolPolicy,
     ToolPolicyDecision,
+    list_mcp_connection_tools,
+    mcp_tool_definition,
+    mcp_tool_handler,
     tool_registry,
 )
 from app.settings import get_settings
@@ -216,6 +226,56 @@ def agent_tool_names(skill_ids: list[str]) -> list[str]:
     return names
 
 
+def agent_mcp_requirements(skill_ids: list[str]) -> dict[str, set[str] | None]:
+    """Agent の Skill が必要とする MCP 接続と、使ってよいツール（None は接続のすべてのツール）。"""
+    requirements: dict[str, set[str] | None] = {}
+    for skill_id in skill_ids:
+        skill = skill_registry.get(skill_id)
+        if skill is None or not skill.enabled:
+            continue
+        for requirement in skill.mcp_requirements:
+            server_id = requirement.server_id.strip()
+            if not server_id or server_id == CONTROL_PLANE_SERVER_ID:
+                continue
+            if not requirement.tool_names:
+                requirements[server_id] = None
+                continue
+            current = requirements.get(server_id, set())
+            if current is None:
+                continue
+            requirements[server_id] = current | set(requirement.tool_names)
+    return requirements
+
+
+McpRuntimeTool = tuple[ToolDefinition, ToolHandler]
+
+
+def discover_mcp_tools(
+    skill_ids: list[str], *, context: ToolInvocationContext
+) -> tuple[list[McpRuntimeTool], list[str]]:
+    """Skill が必要とする MCP 接続のツールを取得する。取得できない接続は飛ばして理由を返す。"""
+    tools: list[McpRuntimeTool] = []
+    warnings: list[str] = []
+    for server_id, allowed in agent_mcp_requirements(skill_ids).items():
+        try:
+            config = runtime_config_store.get_mcp(server_id)
+        except KeyError:
+            warnings.append(f"MCP 接続「{server_id}」は登録されていません。")
+            continue
+        try:
+            listed = list_mcp_connection_tools(server_id, context=context)
+        except ExternalToolError as exc:
+            warnings.append(
+                f"MCP 接続「{config.label or server_id}」のツールを取得できません: {exc}"
+            )
+            continue
+        for tool in listed.tools:
+            if allowed is not None and tool.name not in allowed:
+                continue
+            tools.append((mcp_tool_definition(config, tool), mcp_tool_handler(config, tool)))
+    return tools, warnings
+
+
 def compose_instructions(agent_instructions: str, skill_ids: list[str]) -> str:
     """Agent の指示と Skill の指示（AgentSkills の本文）を 1 つの system の指示にする。"""
     sections = [
@@ -247,7 +307,15 @@ class _ToolRecorder:
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
 
-    async def invoke(self, name: str, arguments: str, call_id: str) -> str:
+    async def invoke(
+        self,
+        name: str,
+        arguments: str,
+        call_id: str,
+        *,
+        definition: ToolDefinition | None = None,
+        handler: ToolHandler | None = None,
+    ) -> str:
         from app.features.agent.runtime import runtime_repository
 
         try:
@@ -260,7 +328,13 @@ class _ToolRecorder:
         step_id, context = runtime_repository.start_builtin_tool_step(self.run_id, call)
         # 承認は SDK の needs_approval で済んでいる（拒否のツールは渡していない）。
         result = await asyncio.to_thread(
-            tool_registry.invoke, call, policy=_active_policy(), context=context, force=True
+            tool_registry.invoke,
+            call,
+            policy=_active_policy(),
+            context=context,
+            force=True,
+            definition=definition,
+            handler=handler,
         )
         runtime_repository.finish_builtin_tool_step(self.run_id, step_id, result)
         if result.success:
@@ -271,27 +345,50 @@ class _ToolRecorder:
         )
 
 
-def build_function_tools(run_id: str, tool_names: list[str]) -> list[FunctionTool]:
+def build_function_tools(
+    run_id: str, tool_names: list[str], mcp_tools: list[McpRuntimeTool] | None = None
+) -> list[FunctionTool]:
     policy = _active_policy()
     recorder = _ToolRecorder(run_id)
-    tools: list[FunctionTool] = []
+    entries: list[tuple[ToolDefinition, ToolHandler | None]] = []
     for name in tool_names:
-        definition = tool_registry.get(name)
-        if definition is None:
+        registered = tool_registry.get(name)
+        if registered is not None:
+            entries.append((registered, None))
+    entries.extend(mcp_tools or [])
+    tools: list[FunctionTool] = []
+    seen: set[str] = set()
+    for definition, handler in entries:
+        if definition.name in seen:
             continue
+        seen.add(definition.name)
         decision = policy.decide(definition)
         if decision == ToolPolicyDecision.DENY:
             continue
 
-        async def on_invoke(ctx: ToolContext[Any], arguments: str, *, _name: str = name) -> str:
+        async def on_invoke(
+            ctx: ToolContext[Any],
+            arguments: str,
+            *,
+            _definition: ToolDefinition = definition,
+            _handler: ToolHandler | None = handler,
+        ) -> str:
             # 引数の型を ToolContext にすると、SDK は呼び出し ID（承認の記録と結び付ける）を渡す。
             call_id = str(getattr(ctx, "tool_call_id", "") or "")
-            return await recorder.invoke(_name, arguments, call_id)
+            if _handler is None:
+                return await recorder.invoke(_definition.name, arguments, call_id)
+            return await recorder.invoke(
+                _definition.name,
+                arguments,
+                call_id,
+                definition=_definition,
+                handler=_handler,
+            )
 
         schema = dict(definition.input_schema)
         tools.append(
             FunctionTool(
-                name=name,
+                name=definition.name,
                 description=definition.description,
                 params_json_schema=schema,
                 on_invoke_tool=on_invoke,
@@ -304,13 +401,29 @@ def build_function_tools(run_id: str, tool_names: list[str]) -> list[FunctionToo
 
 
 def build_sdk_agent(
-    run_id: str, *, name: str, instructions: str, skill_ids: list[str], model_id: str
+    run_id: str,
+    *,
+    name: str,
+    instructions: str,
+    skill_ids: list[str],
+    model_id: str,
+    agent_id: str | None = None,
+    user_uuid: str | None = None,
 ) -> Agent[Any]:
+    """SDK の Agent を作る（MCP 接続のツール一覧を HTTP で取るので、イベントループの外で呼ぶ）。"""
+    from app.features.agent.runtime import runtime_repository
+
     target = resolve_model_target(model_id)
+    mcp_tools, warnings = discover_mcp_tools(
+        skill_ids,
+        context=ToolInvocationContext(run_id=run_id, agent_id=agent_id, user_uuid=user_uuid),
+    )
+    for warning in warnings:
+        runtime_repository.note_builtin_warning(run_id, warning)
     return Agent(
         name=name or "agent",
         instructions=compose_instructions(instructions, skill_ids),
-        tools=list(build_function_tools(run_id, agent_tool_names(skill_ids))),
+        tools=list(build_function_tools(run_id, agent_tool_names(skill_ids), mcp_tools)),
         model=model_factory(target),
         model_settings=ModelSettings(store=False),
     )
@@ -325,12 +438,15 @@ async def execute_run(run_id: str) -> None:
         return
     run, agent = started
     try:
-        sdk_agent = build_sdk_agent(
+        sdk_agent = await asyncio.to_thread(
+            build_sdk_agent,
             run_id,
             name=agent.name,
             instructions=agent.instructions,
             skill_ids=agent.skill_ids,
             model_id=agent.model_id,
+            agent_id=agent.id,
+            user_uuid=run.created_by_user_uuid,
         )
         result = await Runner.run(sdk_agent, run.goal, max_turns=_max_turns())
         await _finish(run_id, result)
@@ -347,12 +463,15 @@ async def resume_run(run_id: str) -> None:
         return
     run, agent, state_text, decisions = resumed
     try:
-        sdk_agent = build_sdk_agent(
+        sdk_agent = await asyncio.to_thread(
+            build_sdk_agent,
             run_id,
             name=agent.name,
             instructions=agent.instructions,
             skill_ids=agent.skill_ids,
             model_id=agent.model_id,
+            agent_id=agent.id,
+            user_uuid=run.created_by_user_uuid,
         )
         state = await RunState.from_string(sdk_agent, state_text)
         for item in state.get_interruptions():

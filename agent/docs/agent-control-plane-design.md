@@ -39,13 +39,14 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
   "id": "business_rag_research",
   "instructions": "...",
   "mcp_requirements": [
-    {"server_id": "control-plane", "tool_names": ["external_rag_search"]}
+    {"server_id": "rag", "tool_names": ["rag_search", "rag_list_business_views"]}
   ],
   "resource_ids": []
 }
 ```
 
-組み込み Runtime は、Agent の選択 Skill が要求するツールの和集合だけをモデルに渡す（指示への列挙だけで
+`server_id` は MCP 接続の ID（`control-plane` は Control Plane のツール）。`tool_names` が空なら接続のすべての
+ツールを使う。組み込み Runtime は、Agent の選択 Skill が要求するツールの和集合だけをモデルに渡す（指示への列挙だけで
 権限を表現せず、渡すツールの一覧を実体として絞る）。
 
 ### Marketplace package
@@ -64,9 +65,11 @@ package の disable/uninstall は `409`。
   Project OCID）。`OpenAIResponsesModel` に OCI の OpenAI 互換の base URL を渡す。xAI のモデルは空の `tools` を
   拒否するため、ツールが無い呼び出しでは `tools` / `tool_choice` を送らない（`OciResponsesModel`）。
 - 指示: 共通の前置き（日本語・根拠・推測しない）＋ Agent の指示 ＋ 割り当てた Skill の指示。
-- ツール: Skill の requirement（`server_id="control-plane"`）が要求する `tool_registry` のツールを `FunctionTool` にする。
-  実行は `tool_registry.invoke`（ポリシー・ガードレール・監査・成果物、RAG / NL2SQL のサービストークン）。
-  ポリシーの「拒否」は渡さず、「承認」は `needs_approval=True`。
+- ツール: Skill の requirement が要求するツールを `FunctionTool` にする。`control-plane` は `tool_registry` の
+  ツール、それ以外は MCP 接続の `tools/list`（Run の利用者として取得。名前は `<接続>__<ツール>`、英数字・`_`・`-`
+  で 64 文字以内）。取得できない接続は飛ばして Run に `runtime.event`（warning）を残す（#757）。
+  実行は `tool_registry.invoke`（ポリシー・ガードレール・監査・成果物、サービストークン）。
+  ポリシーの「拒否」は渡さず、「承認」は `needs_approval=True`（MCP のツールは `readOnlyHint` が無ければ既定で承認）。
 - 承認: SDK の中断（`result.interruptions`）で承認待ちの step と ApprovalRequest を作り、`result.to_state().to_string()`
   を Run の metadata（`_builtin_sdk_state`）に保存して `waiting_approval` にする。すべて決まると `queued` に戻り、
   状態を復元して承認・却下を反映し再開する。承認済みのツールは中断時の step を実行中にして結果を記録する。
@@ -81,50 +84,56 @@ package の disable/uninstall は `409`。
 
 ## 3. ツールとポリシー
 
-RAG / NL2SQL / 外部 MCP のツールは `tool_registry` に登録し、組み込み Runtime からだけ呼ぶ。schema 検証、ToolPolicy、
-PII/secret masking、audit metadata、成果物の保存を再利用する。外部 Runtime 向けの Binding MCP（`/api/mcp/{binding_id}`）
+Control Plane のツール（`echo` / `agent_skill_list`）は `tool_registry` に登録する。MCP 接続のツールは登録せず、
+Run ごとに `tools/list` から作ったツール定義を `tool_registry.invoke` に渡し、ToolPolicy、PII/secret masking、
+audit metadata、成果物の保存を再利用する（#757）。外部 Runtime 向けの Binding MCP（`/api/mcp/{binding_id}`）
 と adapter 契約（`probe_capabilities / sync_binding / submit_run / ...`）は #754 で削除した。
 
 ## 4. 製品の MCP
 
-### 4.1 RAG / NL2SQL の MCP（#233）
+### 4.1 MCP 接続（RAG / NL2SQL / 外部 MCP。#233 / #757）
 
-業務 RAG / NL2SQL は各製品の `POST /api/mcp`（MCP の Streamable HTTP、JSON 応答）を呼ぶ。runtime には直接
-見せず、Control Plane のツール（`external_rag_*` / `external_nl2sql_*`）として schema 検証・ToolPolicy・
-masking・監査を通す。契約は各製品のツール（#230〜#232）をそのまま通す。
+RAG / NL2SQL / 外部 MCP は「MCP 接続」（`config.McpConnectionConfig`、API `/api/settings/mcp-connections`）で
+管理する。RAG / NL2SQL は組み込みの接続 `rag` / `nl2sql`（各製品の `POST /api/mcp`。認証はサービストークン、
+aud は製品名。削除できない）。外部の MCP は画面・`AGENT_EXTERNAL_MCP_SERVERS_JSON`・連携機能で追加し、
+認証方式は なし / API キー / OAuth client credentials / サービストークン。ツールは呼び先の契約（RAG / NL2SQL は
+`platform/contracts/mcp/`）をそのまま使い、Agent は引数を作り変えない。
 
-| Agent のツール | 呼び先のツール | permission level | 備考 |
-|---|---|---|---|
-| `external_rag_search` | `rag_search` | READ | 回答生成に LLM を使う |
-| `external_rag_chat` | `rag_chat_send_message` | WRITE（side effects あり） | RAG に会話を作成・追記する。既定の policy で承認が必要 |
-| `external_rag_list_business_views` | `rag_list_business_views` | READ | 利用者が RAG で使える業務ビューの一覧 |
-| `external_nl2sql_query` | `nl2sql_query` | SENSITIVE | 業務 DB へ SQL を実行する。既定の policy で承認が必要。`row_limit` を省略すると `AGENT_EXTERNAL_NL2SQL_DEFAULT_LIMIT`（1〜1000 に丸める） |
-| `external_nl2sql_get_job` | `nl2sql_get_job` | READ | 待ち時間内に終わらなかったジョブの続き（本人のジョブだけ） |
+| ツール（モデルに渡す名前） | readOnlyHint | 既定の policy |
+|---|---|---|
+| `rag__rag_search` / `rag__rag_list_business_views` / `rag__rag_chat_get_conversation` | true | 承認なし（回答生成に LLM を使う） |
+| `rag__rag_chat_send_message` | false | 承認が必要（RAG に会話を作成・追記する） |
+| `nl2sql__nl2sql_list_profiles` / `nl2sql__nl2sql_recommend_profile` / `nl2sql__nl2sql_get_job` | true | 承認なし |
+| `nl2sql__nl2sql_query` | false | 承認が必要（業務 DB へ SQL を実行する） |
+
+ツール権限（`/settings/tool-policy`）は `<接続>__<ツール>` の名前で allow / ask / deny を上書きできる。
+NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_returned_as_audit_only` の警告を残す（実行はしない）。
 
 - **利用者**: Run の作成時に、ログイン中の利用者（Cookie のセッション。local mode ではローカル利用者）の
   `user_uuid` を `RunState.created_by_user_uuid` に記録する（checkpoint の JSON に入る。項目がない既存の Run は
   None）。Run からのツール呼び出し
   （承認後の再実行を含む）は `ToolInvocationContext.user_uuid` / `run_id` にこの値を入れるため、承認者ではなく
   Run を作った利用者として呼ぶ。再実行（replay）の Run は、再実行を指示した利用者になる。単発の
-  `POST /tools/invoke` は呼び出したログイン中の利用者として呼ぶ。
-- **token**: 呼び出しごとに `issue_service_token(PLATFORM_SERVICE_TOKEN_SECRET, subject=<Run の利用者 or
-  サービス利用者>, audience="rag"|"nl2sql", issuer="agent", claims={"run_id", "agent_id"})`（HS256、60 秒）を
+  `POST /tools/invoke` と画面の「ツールを取得」（`GET /settings/mcp-connections/{id}/tools`）は、ログイン中の利用者として呼ぶ。
+- **token**（サービストークンの接続）: 呼び出しごとに `issue_service_token(PLATFORM_SERVICE_TOKEN_SECRET, subject=<Run の利用者 or
+  サービス利用者>, audience=<接続の audience>, issuer="agent", claims={"run_id", "agent_id"})`（HS256、60 秒）を
   作り、`Authorization: Bearer` で送る。署名鍵は 3 製品の共通 `.env` で同じ値にする（32 文字以上。未設定なら
-  `*.service_token_not_configured`）。サービス利用者の login ID → `user_uuid` は共通認証の store で解決し、
+  `mcp.service_token_not_configured`）。サービス利用者の login ID → `user_uuid` は共通認証の store で解決し、
   プロセス内にキャッシュする。
 - **MCP の手順**: 呼び出しごとに `initialize`（`2025-06-18`）→ `notifications/initialized` → `tools/call`。
   応答の `Mcp-Session-Id` を以降の request に付け、`Accept: application/json, text/event-stream` と
-  `MCP-Protocol-Version` を送る。結果は `structuredContent`、`isError: true` は `*.tool_error`（呼び先の
-  `error_code` / `message` / `status` を `error_details` に入れる）。SSE の途中経過と paging は扱わない。
-  外部 MCP gateway（`AGENT_EXTERNAL_MCP_*`）も同じ client を使う。固定の session id を設定した gateway には
-  `initialize` を送らず、`initialize` を持たない gateway（`-32601`）はそのまま `tools/*` を呼ぶ。
-- **再試行**: LLM を使う・書き込むツール（`rag_search` / `rag_chat_send_message` / `nl2sql_query`）は、
-  502 / 504・timeout で再試行しない（処理が進んでいる可能性があり、重複させない）。429 / 503 と接続失敗だけ
-  `AGENT_EXTERNAL_*_MAX_RETRIES` 回まで再試行する。読み取りだけのツールは従来どおり 429 / 5xx・timeout も再試行する。
+  `MCP-Protocol-Version` を送る。結果は `structuredContent`（無ければ text の `content`）、`isError: true` は
+  `mcp.tool_error`（呼び先の `error_code` / `message` / `status` を `error_details` に入れる）。SSE の途中経過と
+  paging は扱わない。すべての接続が同じ client（`McpConnectionClient`）を使う。固定の session id を設定した接続には
+  `initialize` を送らず、`initialize` を持たない接続（`-32601`）はそのまま `tools/*` を呼ぶ。
+- **再試行**: `tools/call` は 502 / 504・timeout で再試行しない（読み取り専用でも LLM を使うツール（`rag_search`）が
+  あり、処理が進んでいる可能性がある）。429 / 503 と接続失敗だけ `AGENT_EXTERNAL_MCP_MAX_RETRIES` 回まで再試行する。
+  `tools/list` は 429 / 5xx・timeout も再試行する。
 - **設定**: `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（例 `http://rag-host/api/mcp`）、
-  `AGENT_EXTERNAL_*_TIMEOUT_SECONDS`（既定 60 秒）。画面の「外部 RAG」「外部 NL2SQL」では URL・タイムアウト・
-  既定取得件数を変更でき、署名鍵とサービス利用者は設定済みかどうかだけを表示する。旧名
-  （`AGENT_EXTERNAL_RAG_BASE_URL` / `AGENT_EXTERNAL_RAG_API_KEY` と NL2SQL の同等）は読まない。
+  `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS` / `AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS`（既定 60 秒）は接続 `rag` / `nl2sql` の
+  初期値。画面の「MCP 接続」で URL・タイムアウトを変更でき（プロセス内の値。再起動で .env の値に戻る）、署名鍵と
+  サービス利用者は設定済みかどうかだけを表示する。旧「外部 MCP」の単一の設定（`AGENT_EXTERNAL_MCP_BASE_URL` 等）・
+  既定のサーバー・NL2SQL の既定取得件数（`AGENT_EXTERNAL_NL2SQL_DEFAULT_LIMIT`）は #757 で削除した。
 
 ## 5. Dispatcher and persistence
 

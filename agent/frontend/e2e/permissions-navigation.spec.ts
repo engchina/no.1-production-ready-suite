@@ -44,7 +44,7 @@ function pendingApproval(id: string) {
     id,
     run_id: "run-running",
     step_id: `${id}-step`,
-    tool_call: { name: "external_rag_search", arguments: { query: "受注" } },
+    tool_call: { name: "rag__rag_search", arguments: { query: "受注" } },
     status: "pending",
     reason: "承認が必要です",
     decided_by: null,
@@ -104,7 +104,7 @@ for (const viewport of VIEWPORTS) {
       await expectNoPageOverflow(page);
 
       // ナビにない画面を URL で直接開くと権限なしの画面へ移す。
-      for (const path of ["/settings/external-rag", "/audit", "/settings/security/permissions", "/tools"]) {
+      for (const path of ["/settings/mcp-connections", "/audit", "/settings/security/permissions", "/tools"]) {
         await page.goto(path);
         await expect(page).toHaveURL(/\/forbidden$/);
         await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
@@ -142,7 +142,7 @@ for (const viewport of VIEWPORTS) {
       signIn(mockApi, dbUser({ permissions: ["menu.approvals", "agent.runs.view"], allowed_agent_ids: ["default"] }));
       await page.goto("/approvals");
       await expect(page.getByRole("heading", { name: "承認・監査", level: 1 })).toBeVisible();
-      await expect(page.getByText("external_rag_search").first()).toBeVisible();
+      await expect(page.getByText("rag__rag_search").first()).toBeVisible();
       await expect(page.getByTestId("approval-object-actions")).toHaveCount(0);
 
       // 承認の判断の権限（agent.approvals.decide）がある利用者。
