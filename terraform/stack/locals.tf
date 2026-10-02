@@ -121,8 +121,8 @@ EOT
   # ---------------------------------------------------------------- Agent
 
   # Agent は python-oracledb Thin mode + Wallet(mTLS) だけで接続する。
-  # Runtime 状態の Oracle repository は起動時に自分の table を作成し、共通認証と Agent の権限の table は
-  # init_script.sh が agent_system_schema --initialize で作成する（DDL は Terraform に持たない。#751）。
+  # 共通認証・Agent の権限・Run の保存先・定義の table は、init_script.sh が agent_system_schema --initialize で
+  # 作成する（DDL は Terraform に持たない。#751 / #764）。DB は共通の PLATFORM_ORACLE_*（platform/.env）で接続する。
   # ログインは共通認証（構成管理者 system_admin と、ユーザー管理で作る DB ユーザー。#215）。
   # gunicorn は 1 worker・dispatcher は in_process に固定する（checkpoint repository は process 内に状態を持つため）。
   agent_data_dir_host = "/u01/data/production-ready-agent"
@@ -139,12 +139,6 @@ AGENT_AUTH_MODE=production
 
 AGENT_RUNTIME_REPOSITORY_BACKEND=${var.agent_runtime_repository_backend}
 AGENT_RUNTIME_DISPATCH_MODE=in_process
-AGENT_RUNTIME_ORACLE_DSN=${local.effective_oracle_dsn}
-AGENT_RUNTIME_ORACLE_USER=${local.effective_oracle_user}
-AGENT_RUNTIME_ORACLE_PASSWORD=${local.effective_oracle_password}
-AGENT_RUNTIME_ORACLE_WALLET_DIR=${local.wallet_dir_host}
-AGENT_RUNTIME_ORACLE_WALLET_PASSWORD=${local.effective_oracle_wallet_password}
-AGENT_RUNTIME_ORACLE_CREATE_SCHEMA=true
 AGENT_ARTIFACT_STORAGE_PATH=${local.agent_data_dir_host}/artifacts
 
 AGENT_EXTERNAL_RAG_MCP_URL=${lookup(local.product_mcp_urls, "rag", "")}

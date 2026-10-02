@@ -22,6 +22,9 @@ import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { canOpenRoute, defaultEntryRoute, firstAllowedRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
+import { AutomationsPage } from "@/pages/AutomationsPage";
+import { EvaluationPage } from "@/pages/EvaluationPage";
+import { ApiKeysPage } from "@/pages/ApiKeysPage";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
   AgentsPage,
@@ -130,12 +133,15 @@ export function App() {
             </Capability>
           }
         />
+        <Route path={APP_ROUTES.automations} element={<AutomationsPage />} />
+        <Route path={APP_ROUTES.evaluation} element={<EvaluationPage />} />
         <Route path={APP_ROUTES.settingsSystemTables} element={<SettingsSystemTablesRoute />} />
         <Route path={APP_ROUTES.settingsOci} element={<SettingsOciRoute />} />
         <Route path={APP_ROUTES.settingsUploadStorage} element={<SettingsUploadStorageRoute />} />
         <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
         <Route path={APP_ROUTES.settingsMcpConnections} element={<McpConnectionsPage />} />
+        <Route path={APP_ROUTES.settingsApiKeys} element={<ApiKeysPage />} />
         <Route path={APP_ROUTES.settingsToolPolicy} element={<ToolPolicySettingsPage />} />
         <Route
           path={APP_ROUTES.settingsRuntimeSnapshot}

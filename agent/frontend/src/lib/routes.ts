@@ -14,12 +14,16 @@ export const APP_ROUTES = {
   agents: "/agents",
   runtimes: "/runtimes",
   runs: "/runs",
+  // 業務 Agent の自動実行（スケジュール・Webhook。#784）。
+  automations: "/automations",
   approvals: "/approvals",
   audit: "/audit",
   tools: "/tools",
   skills: "/skills",
   plugins: "/plugins",
   pluginMarketplaces: "/plugins/marketplaces",
+  // 改善・運用（#776）。
+  evaluation: "/evaluation",
   settingsSystemTables: "/settings/system-tables",
   settingsOci: "/settings/oci",
   settingsUploadStorage: "/settings/upload-storage",
@@ -27,6 +31,8 @@ export const APP_ROUTES = {
   settingsDatabase: SYSTEM_SETTINGS_PATHS.database,
   // MCP 接続（RAG / NL2SQL / 外部 MCP。#757）。
   settingsMcpConnections: "/settings/mcp-connections",
+  // 業務 Agent を MCP で呼ぶ外部のクライアント向けの API キー（#778）。
+  settingsApiKeys: "/settings/api-keys",
   settingsToolPolicy: "/settings/tool-policy",
   settingsRuntimeSnapshot: "/settings/runtime-snapshot",
   // 共通のユーザー管理・ロール管理（#206）と、Agent 固有の権限管理（#215）。

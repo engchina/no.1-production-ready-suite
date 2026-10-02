@@ -1,5 +1,7 @@
 """FastAPI エントリポイント。共通 app factory で薄く構成する。"""
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -25,12 +27,32 @@ configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 
+def _restore_control_plane() -> None:
+    """画面・API で変えた定義（Skill・プラグイン・MCP 接続・ツール権限）を読み込む（#764）。"""
+    from app.features.agent.control_plane_store import restore_control_plane
+
+    try:
+        restored = restore_control_plane()
+    except Exception:  # noqa: BLE001 - DB の障害で起動を止めない（画面の DB の案内に任せる）
+        logger.exception("agent_control_plane_restore_failed")
+        return
+    logger.info("agent_control_plane_restored", extra={"restored": restored})
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    await asyncio.to_thread(_restore_control_plane)
     await start_trace_export_retry_worker()
+    # 業務 Agent の自動実行のスケジューラ（#784。gunicorn は 1 worker のため 1 つだけ動く）。
+    from app.features.agent.automations import run_scheduler
+
+    scheduler = asyncio.create_task(run_scheduler())
     try:
         yield
     finally:
+        scheduler.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await scheduler
         await stop_trace_export_retry_worker()
 
 
