@@ -220,11 +220,37 @@ class _FakeOracleStore:
         return "AGENT_RUNTIME_CHECKPOINTS" in self.created_objects
 
 
+class _FakeOracleLob:
+    """oracledb の LOB と同じく、接続を閉じた後は読めない（DPY-1001。#765 の読み忘れの検出）。"""
+
+    def __init__(self, text: str, connection: "_FakeOracleConnection") -> None:
+        self._text = text
+        self._connection = connection
+
+    def read(self) -> str:
+        if self._connection.closed:
+            raise RuntimeError("DPY-1001: not connected to database")
+        return self._text
+
+
 class _FakeOracleCursor:
-    def __init__(self, store: _FakeOracleStore) -> None:
+    def __init__(self, store: _FakeOracleStore, connection: "_FakeOracleConnection") -> None:
         self._store = store
+        self._connection = connection
         self._row: tuple[Any, ...] | None = None
         self._rows: list[tuple[Any, ...]] = []
+
+    def _lob(self, value: Any) -> Any:
+        # JSON の CLOB 列を LOB として返す（文字列のまま返すと閉じた後の読み出しを検出できない）。
+        if isinstance(value, str) and value[:1] in {"{", "["}:
+            return _FakeOracleLob(value, self._connection)
+        return value
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return tuple(self._lob(value) for value in self._row) if self._row is not None else None
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return [tuple(self._lob(value) for value in row) for row in self._rows]
 
     def __enter__(self) -> "_FakeOracleCursor":
         return self
@@ -314,12 +340,6 @@ class _FakeOracleCursor:
             self._store.session_statements.append(normalized)
             return
         raise AssertionError(f"unexpected statement: {statement}")
-
-    def fetchone(self) -> tuple[Any, ...] | None:
-        return self._row
-
-    def fetchall(self) -> list[tuple[Any, ...]]:
-        return self._rows
 
     def _tool_call_audit_rows(self, params: dict[str, Any]) -> list[tuple[Any, ...]]:
         runs = sorted(
@@ -443,15 +463,16 @@ class _FakeOracleConnection:
     def __init__(self, store: _FakeOracleStore) -> None:
         self._store = store
         self.commits = 0
+        self.closed = False
 
     def __enter__(self) -> "_FakeOracleConnection":
         return self
 
     def __exit__(self, *args: object) -> None:
-        return None
+        self.closed = True
 
     def cursor(self) -> _FakeOracleCursor:
-        return _FakeOracleCursor(self._store)
+        return _FakeOracleCursor(self._store, self)
 
     def commit(self) -> None:
         self.commits += 1
