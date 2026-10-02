@@ -191,4 +191,63 @@ def test_frontend_uses_system_ca_and_preserves_explicit_ca(
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert Path(env["TEST_EVENTS"]).read_text().splitlines() == [expected] * 3
+    # 共有 UI の成果物がソースより新しいので build を省き、npm install と npm run dev だけ（#816）。
+    assert Path(env["TEST_EVENTS"]).read_text().splitlines() == [expected] * 2
+
+
+def _frontend_with_shared_ui(startup: tuple[Path, dict[str, str]]) -> tuple[Path, Path]:
+    scripts, env = startup
+    shutil.copy2(Path(env["TEST_SOURCE"]) / "start-frontend.sh", scripts / "start-frontend.sh")
+    platform = scripts.parents[1] / "platform"
+    ui = platform / "packages" / "ui"
+    (ui / "src").mkdir(parents=True)
+    (ui / "dist").mkdir()
+    (platform / "node_modules").mkdir()
+    for path in [platform / "package.json", ui / "package.json", ui / "src" / "button.tsx"]:
+        path.write_text("{}")
+    for name in ("index.js", "index.d.ts", "tokens.css"):
+        (ui / "dist" / name).touch()
+    linked_ui = scripts.parent / "frontend" / "node_modules" / "@engchina" / "production-ready-ui"
+    linked_ui.mkdir(parents=True)
+    (linked_ui / "package.json").write_text("{}")
+    _executable(Path(env["TEST_DIR"]) / "bin" / "npm", 'printf "%s\\n" "$*" >> "$TEST_EVENTS"\n')
+    return scripts, ui
+
+
+def _run_frontend(scripts: Path, env: dict[str, str]) -> list[str]:
+    result = subprocess.run(
+        ["bash", str(scripts / "start-frontend.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return Path(env["TEST_EVENTS"]).read_text().splitlines()
+
+
+def test_frontend_builds_shared_ui_only_when_sources_changed(
+    startup: tuple[Path, dict[str, str]],
+) -> None:
+    """共有 UI は成果物より新しいソースがあるときだけ build する。
+
+    3 製品の同時起動で、起動中の別の製品が読む dist を消さない（#816）。
+    """
+    _, env = startup
+    scripts, ui = _frontend_with_shared_ui(startup)
+    events = Path(env["TEST_EVENTS"])
+
+    assert not any(line.startswith("run build") for line in _run_frontend(scripts, env))
+
+    # dist より新しいソースがあれば build する。
+    later = time.time() + 5
+    os.utime(ui / "src" / "button.tsx", (later, later))
+    events.write_text("")
+    assert "run build" in _run_frontend(scripts, env)
+
+    # FORCE_SHARED_UI_BUILD=1 なら常に build する。
+    for name in ("index.js", "index.d.ts", "tokens.css"):
+        os.utime(ui / "dist" / name, (later + 5, later + 5))
+    events.write_text("")
+    assert "run build" in _run_frontend(scripts, {**env, "FORCE_SHARED_UI_BUILD": "1"})
