@@ -172,4 +172,4 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 
 - Cookie・CSRF を使わず `Authorization: Bearer` で認証する。`prak_` で始まるものは Agent の API キー、それ以外は共通のサービストークン（audience `agent`、署名鍵は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`。RAG / NL2SQL と同じ）。
 - API キーは「実行する利用者」として動く（既定は作った利用者。ほかの利用者＝連携用の専用の利用者を選べるのはシステム管理者だけで、その利用者は有効で初回のパスワード変更が済んでいること。権限は利用者の現在のロールから毎回計算し直す）。キーに付けた業務 Agent に絞る。秘密は作成時の応答で 1 回だけ返し、`AGENT_CONTROL_PLANE_ITEMS`（kind `api_key`）には SHA-256 の hash だけを保存する。local で作ったキーは production では使えない。
-- ツールの権限: `agent_list_agents` / `agent_get_run` は `agent.runs.view`（または operate / admin）、`agent_ask` は `agent.runs.operate`（または admin）。`agent_get_run` は呼び出し元が作った Run だけを読める。
+- ツールの権限: `agent_list_agents` / `agent_get_run` は `agent.runs.view`（または operate / admin）、`agent_ask` は `agent.runs.operate`（または admin）。`agent_get_run` は呼び出し元が作った Run だけを読める。`agent_ask` の `thread_id`（#798）で続けられるのは、呼び出し元が作った同じ業務 Agent の会話だけ（それ以外は存在を漏らさず `THREAD_NOT_FOUND`）。
