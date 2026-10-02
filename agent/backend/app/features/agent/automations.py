@@ -44,7 +44,7 @@ from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-WEBHOOK_TOKEN_PREFIX = "prwh_"
+WEBHOOK_TOKEN_PREFIX = "prwh_"  # nosec B105 - 秘密の前に付ける目印（秘密ではない）
 WEBHOOK_PAYLOAD_MAX_BYTES = 16 * 1024
 AUTOMATION_GOAL_MAX_CHARS = 4000
 DEFAULT_TIMEZONE = "Asia/Tokyo"
