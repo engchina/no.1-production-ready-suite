@@ -130,6 +130,7 @@ from app.features.agent.usage import (
     build_usage_report,
     resolve_timezone,
 )
+from app.features.agent.user_names import user_display_names
 from app.observability import (
     ObservabilityStatus,
     TraceEventsData,
@@ -147,10 +148,9 @@ from app.security.dependencies import (
     WebSocketAuthRejected,
     actor_roles_for_principal,
     authenticate_websocket,
-    local_debug_principal,
     permission_route_path,
 )
-from app.security.domain import LOCAL_DEBUG_USER_UUID, Principal
+from app.security.domain import Principal
 from app.security.permissions import UNCLASSIFIED_PERMISSION, permission_for_route
 from app.security.service import get_security_service
 from app.settings import MODEL_SETTINGS_STORE, get_settings
@@ -1521,27 +1521,9 @@ async def get_usage_report(
         now=datetime.now(UTC),
         tz=tz,
         agent_names=agent_names,
-        user_names=_user_display_names,
+        user_names=user_display_names,
     )
     return ApiResponse(data=report)
-
-
-def _user_display_names(user_uuids: list[str]) -> dict[str, str]:
-    """利用者の表示名（共通認証の利用者。local のローカル利用者を含む）。引けない人は省く。"""
-    names: dict[str, str] = {}
-    if LOCAL_DEBUG_USER_UUID in user_uuids:
-        names[LOCAL_DEBUG_USER_UUID] = local_debug_principal().display_name
-    remaining = [uuid for uuid in user_uuids if uuid not in names]
-    if not remaining:
-        return names
-    try:
-        identities = get_security_service().store.get_user_identities(remaining)
-    except Exception:  # noqa: BLE001 - 名前は表示の補助。引けなくても集計は返す
-        logger.warning("agent_usage_user_names_unavailable", exc_info=True)
-        return names
-    for uuid, identity in identities.items():
-        names[uuid] = identity.display_name or identity.login_user_id
-    return names
 
 
 @router.get("/audit/tool-calls", response_model=ApiResponse[ToolCallAuditData])
