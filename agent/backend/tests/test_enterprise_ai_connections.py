@@ -1,4 +1,4 @@
-"""モデルの接続テストが、テストするモデルの接続で呼ぶこと（#533）。
+"""モデルの接続テストが、テストするモデルの接続で呼ぶこと（#533 / #786）。
 
 HTTP は httpx.MockTransport（決定論）で受け、URL・API key・Project のヘッダーを確かめる。
 """
@@ -17,6 +17,8 @@ from app.settings import Settings
 
 PRIMARY = "https://primary.example/openai/v1"
 SECONDARY = "https://secondary.example/openai/v1"
+# ターシャリ接続（#786）は OpenAI / OpenAI 互換 API 向けで、Project OCID を入れない。
+TERTIARY = "https://api.openai.example/v1"
 
 
 def _payload() -> dict[str, Any]:
@@ -36,10 +38,17 @@ def _payload() -> dict[str, Any]:
                     "api_key": "",
                     "has_api_key": True,
                 },
+                {
+                    "connection_id": "tertiary",
+                    "endpoint": TERTIARY,
+                    "project_ocid": "",
+                    "api_key": "sk-tertiary",
+                },
             ],
             "models": [
                 {"model_id": "text-a"},
                 {"model_id": "vision-b", "vision_enabled": True, "connection_id": "secondary"},
+                {"model_id": "gpt-c", "connection_id": "tertiary"},
             ],
             "default_text_model_id": "text-a",
             "default_vision_model_id": "vision-b",
@@ -67,8 +76,10 @@ def _payload() -> dict[str, Any]:
             "vision-b",
             (SECONDARY, "Bearer sk-saved-secondary", "ocid1.project.secondary"),
         ),
+        # Project OCID のないターシャリ接続は OpenAI-Project ヘッダーを送らない（#786）。
+        ("enterprise_text", "gpt-c", (TERTIARY, "Bearer sk-tertiary", "")),
     ],
-    ids=["text-primary", "vision-secondary"],
+    ids=["text-primary", "vision-secondary", "text-tertiary"],
 )
 def test_model_test_uses_connection_of_tested_model(
     monkeypatch: pytest.MonkeyPatch,
@@ -80,7 +91,8 @@ def test_model_test_uses_connection_of_tested_model(
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
-        base = PRIMARY if url.startswith(PRIMARY) else SECONDARY
+        base = next(item for item in (PRIMARY, SECONDARY, TERTIARY) if url.startswith(item))
+        assert url == f"{base}/responses"
         calls.append(
             (base, request.headers["Authorization"], request.headers.get("OpenAI-Project", ""))
         )

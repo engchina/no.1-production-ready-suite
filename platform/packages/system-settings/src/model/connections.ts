@@ -1,5 +1,6 @@
 /**
- * OCI Enterprise AI の接続（プライマリ接続・セカンダリ接続）と、登録モデルが使う接続（#533 / #542）。
+ * OCI Enterprise AI の接続（プライマリ接続・セカンダリ接続・ターシャリ接続）と、登録モデルが使う接続
+ * （#533 / #542 / #786）。
  * 検証の規則は backend の `pr_system_settings.model.validate_enterprise_ai_connections` と同じ。
  */
 import type { SelectFieldOption } from "@engchina/production-ready-ui";
@@ -16,6 +17,16 @@ import {
 
 export const PRIMARY_CONNECTION_ID: EnterpriseAiConnectionId = "primary";
 export const SECONDARY_CONNECTION_ID: EnterpriseAiConnectionId = "secondary";
+export const TERTIARY_CONNECTION_ID: EnterpriseAiConnectionId = "tertiary";
+
+/**
+ * Project OCID を任意にする接続（#786）。ターシャリ接続は OpenAI / OpenAI 互換 API 向けで、
+ * Project OCID（`OpenAI-Project` ヘッダー）は OCI Enterprise AI に使うときだけ要る。
+ * backend の ENTERPRISE_AI_PROJECT_OCID_OPTIONAL_CONNECTION_IDS と同じ。
+ */
+export function isProjectOcidOptional(connectionId: EnterpriseAiConnectionId): boolean {
+  return connectionId === TERTIARY_CONNECTION_ID;
+}
 
 /** 接続の入力欄（検証とフォーカスの順）。 */
 export type ConnectionField = "endpoint" | "project_ocid" | "api_key";
@@ -47,14 +58,49 @@ export function modelConnectionFieldId(index: number): string {
   return `enterprise-model-connection-${index}`;
 }
 
+const CONNECTION_LABEL_KEYS = {
+  primary: "settings.model.connection.primary",
+  secondary: "settings.model.connection.secondary",
+  tertiary: "settings.model.connection.tertiary",
+} as const satisfies Record<EnterpriseAiConnectionId, Parameters<typeof t>[0]>;
+
+function isConnectionId(value: string): value is EnterpriseAiConnectionId {
+  return (ENTERPRISE_AI_CONNECTION_IDS as readonly string[]).includes(value);
+}
+
 /**
- * 利用者に見せる接続の名前（タブの名前と同じ「プライマリ接続」「セカンダリ接続」。#542）。
- * 知らない ID はプライマリ接続（backend の `connection_label` と同じ）。
+ * 利用者に見せる接続の名前（タブの名前と同じ「プライマリ接続」「セカンダリ接続」「ターシャリ接続」。
+ * #542 / #786）。知らない ID はプライマリ接続（backend の `connection_label` と同じ）。
  */
 export function connectionLabel(connectionId: string): string {
-  return connectionId === SECONDARY_CONNECTION_ID
-    ? t("settings.model.connection.secondary")
-    : t("settings.model.connection.primary");
+  return t(
+    CONNECTION_LABEL_KEYS[
+      isConnectionId(connectionId) ? connectionId : PRIMARY_CONNECTION_ID
+    ],
+  );
+}
+
+/** 接続を ENTERPRISE_AI_CONNECTION_IDS の順（タブの順）に並べる（backend は順を検証する）。 */
+export function sortConnections<T extends { connection_id: EnterpriseAiConnectionId }>(
+  connections: readonly T[],
+): T[] {
+  return [...connections].sort(
+    (a, b) =>
+      ENTERPRISE_AI_CONNECTION_IDS.indexOf(a.connection_id) -
+      ENTERPRISE_AI_CONNECTION_IDS.indexOf(b.connection_id),
+  );
+}
+
+/**
+ * 接続を「設定」する（空の入力欄を足す）。ターシャリ接続を先に設定してからセカンダリ接続を設定しても、
+ * タブの順に並べる。すでにある接続はそのまま。
+ */
+export function addConnection(
+  connections: readonly EnterpriseAiConnectionSettings[],
+  connectionId: EnterpriseAiConnectionId,
+): EnterpriseAiConnectionSettings[] {
+  if (hasConnection(connections, connectionId)) return [...connections];
+  return sortConnections([...connections, emptyConnection(connectionId)]);
 }
 
 /** モデルの接続（未指定はプライマリ接続）。 */
@@ -75,7 +121,7 @@ export function emptyConnection(
   };
 }
 
-/** その接続が画面にあるか（セカンダリ接続は「設定」したときだけある）。 */
+/** その接続が画面にあるか（セカンダリ接続・ターシャリ接続は「設定」したときだけある）。 */
 export function hasConnection(
   connections: readonly EnterpriseAiConnectionSettings[],
   connectionId: EnterpriseAiConnectionId,
@@ -156,8 +202,9 @@ export function connectionHasApiKey(connection: EnterpriseAiConnectionSettings):
 }
 
 /**
- * 接続の入力のエラー（#542）。
+ * 接続の入力のエラー（#542 / #786）。
  * - セカンダリ接続を設定したら、Endpoint URL・Project OCID・API key はすべて必須
+ * - ターシャリ接続を設定したら、Endpoint URL・API key は必須（Project OCID は任意）
  * - プライマリ接続は OCI で運用するときだけ必須（「OCI 運用時必須」の表示だけで、保存は止めない）
  */
 export function validateConnections(
@@ -168,7 +215,9 @@ export function validateConnections(
     if (connection.connection_id === PRIMARY_CONNECTION_ID) continue;
     const present: Record<ConnectionField, boolean> = {
       endpoint: Boolean(connection.endpoint.trim()),
-      project_ocid: Boolean(connection.project_ocid.trim()),
+      project_ocid:
+        isProjectOcidOptional(connection.connection_id) ||
+        Boolean(connection.project_ocid.trim()),
       api_key: connectionHasApiKey(connection),
     };
     const fieldErrors: Partial<Record<ConnectionField, string>> = {};
@@ -265,7 +314,7 @@ export function normalizeModelSettings(
   const enterprise = settings.enterprise_ai as EnterpriseAiModelSettings &
     Partial<Omit<EnterpriseAiConnectionSettings, "connection_id">>;
   const connections = Array.isArray(enterprise.connections)
-    ? enterprise.connections.map((connection) => ({
+    ? sortConnections(enterprise.connections).map((connection) => ({
         ...emptyConnection(connection.connection_id),
         endpoint: connection.endpoint ?? "",
         project_ocid: connection.project_ocid ?? "",

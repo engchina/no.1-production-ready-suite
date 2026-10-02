@@ -87,6 +87,10 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oci_enterprise_ai_secondary_endpoint: str = ""
     oci_enterprise_ai_secondary_project_ocid: str = ""
     oci_enterprise_ai_secondary_api_key: str = ""
+    # ターシャリ接続（#786。OpenAI / OpenAI 互換 API 向け。Project OCID は任意）。
+    oci_enterprise_ai_tertiary_endpoint: str = ""
+    oci_enterprise_ai_tertiary_project_ocid: str = ""
+    oci_enterprise_ai_tertiary_api_key: str = ""
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     oci_enterprise_ai_default_text_model: str = ""
     oci_enterprise_ai_default_vision_model: str = ""

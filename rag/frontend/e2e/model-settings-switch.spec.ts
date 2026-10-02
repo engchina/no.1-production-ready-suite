@@ -368,6 +368,9 @@ for (const scheme of ["light", "dark"] as const) {
     const tablist = page.getByRole("tablist", { name: "OCI Enterprise AI の接続" });
     const primaryTab = tablist.getByRole("tab", { name: "プライマリ接続" });
     const secondaryTab = tablist.getByRole("tab", { name: "セカンダリ接続" });
+    const tertiaryTab = tablist.getByRole("tab", { name: "ターシャリ接続" });
+    // タブの並びはプライマリ接続 → セカンダリ接続 → ターシャリ接続（#786）。
+    await expect(tablist.getByRole("tab")).toHaveText(["プライマリ接続", "セカンダリ接続", "ターシャリ接続"]);
     await expect(primaryTab).toHaveAttribute("aria-selected", "true");
     await expect(page.getByLabel("表示名", { exact: true })).toHaveCount(0);
     await expect(page.locator("#enterprise-connection-name")).toHaveCount(0);
@@ -391,6 +394,11 @@ for (const scheme of ["light", "dark"] as const) {
     await page.keyboard.press("Home");
     await expect(primaryTab).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("End");
+    await expect(tertiaryTab).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("enterprise-connection-tertiary-empty")).toContainText(
+      "ターシャリ接続は設定されていません。"
+    );
+    await page.keyboard.press("ArrowLeft");
     await expect(secondaryTab).toHaveAttribute("aria-selected", "true");
     await page.screenshot({
       path: testInfo.outputPath(`connection-secondary-empty-${scheme}-${testInfo.project.name}.png`),
@@ -512,6 +520,73 @@ test("セカンダリ接続を使うモデルがあるとき、削除は確認�
     { connection_id: "primary" },
     { connection_id: "primary" },
   ]);
+});
+
+test("ターシャリ接続は Endpoint URL と API key だけで設定し、登録モデルで選べる（#786）", async ({
+  page,
+}, testInfo) => {
+  const patches: Array<{ enterprise_ai: Record<string, unknown> }> = [];
+  await mockModelSettings(page, (payload) =>
+    patches.push(payload as { enterprise_ai: Record<string, unknown> })
+  );
+  await page.goto("/settings/model");
+
+  const tablist = page.getByRole("tablist", { name: "OCI Enterprise AI の接続" });
+  await expect(tablist.getByRole("tab")).toHaveText(["プライマリ接続", "セカンダリ接続", "ターシャリ接続"]);
+  const tertiaryTab = tablist.getByRole("tab", { name: "ターシャリ接続" });
+  await tertiaryTab.click();
+  const empty = page.getByTestId("enterprise-connection-tertiary-empty");
+  await expect(empty).toContainText("ターシャリ接続は設定されていません。");
+  await expect(empty).toContainText("OpenAI や OpenAI 互換 API");
+  await page.getByRole("button", { name: "ターシャリ接続を設定" }).click();
+
+  // Endpoint URL と API key は必須、Project OCID は任意（OCI Enterprise AI を使うときだけ）。
+  const tertiary = page.getByTestId("enterprise-connection-tertiary");
+  const endpoint = page.locator("#enterprise-tertiary-endpoint");
+  const project = page.locator("#enterprise-tertiary-project-ocid");
+  const apiKey = page.locator("#enterprise-tertiary-api-key");
+  await expect(endpoint).toBeFocused();
+  await expect(endpoint).toHaveAttribute("aria-required", "true");
+  await expect(apiKey).toHaveAttribute("aria-required", "true");
+  await expect(project).not.toHaveAttribute("aria-required", "true");
+  await expect(endpoint).toHaveAttribute("placeholder", "https://api.openai.com/v1");
+  await expect(apiKey).toHaveAttribute("placeholder", /^sk-/);
+  await expect(tertiary).toContainText("OCI Enterprise AI を使うときだけ");
+  await expect(tertiary).not.toContainText("任意");
+
+  await endpoint.fill("https://api.openai.com/v1");
+  await apiKey.fill("sk-openai-input");
+  await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
+  await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。").first()).toBeVisible();
+  expect(patches[0]?.enterprise_ai.connections).toEqual([
+    expect.objectContaining({ connection_id: "primary" }),
+    expect.objectContaining({
+      connection_id: "tertiary",
+      endpoint: "https://api.openai.com/v1",
+      project_ocid: "",
+      api_key: "sk-openai-input",
+    }),
+  ]);
+
+  // 登録モデルの「接続」で、設定したターシャリ接続を選べる（未設定のセカンダリ接続は出さない）。
+  const modelConnection1 = page.getByRole("combobox", { name: "モデル 1 の接続" });
+  await modelConnection1.click();
+  const options = page.getByRole("listbox", { name: "モデル 1 の接続" }).getByRole("option");
+  await expect(options).toHaveText(["プライマリ接続", "ターシャリ接続"]);
+  await options.filter({ hasText: "ターシャリ接続" }).click();
+  await expect(modelConnection1).toContainText("ターシャリ接続");
+  await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+  await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
+  expect(patches[1]?.enterprise_ai.models).toMatchObject([
+    { model_id: "enterprise-llm", connection_id: "tertiary" },
+    { model_id: "enterprise-vision", connection_id: "primary" },
+  ]);
+
+  await expectNoPageOverflow(page);
+  await tablist.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: testInfo.outputPath(`connection-tertiary-${testInfo.project.name}.png`),
+  });
 });
 
 test("モデル設定はモデルごとのテスト成功と失敗を行内に表示する", async ({ page }) => {

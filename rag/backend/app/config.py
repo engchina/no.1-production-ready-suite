@@ -311,6 +311,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     oci_enterprise_ai_secondary_endpoint: str = Field(default="")
     oci_enterprise_ai_secondary_project_ocid: str = Field(default="")
     oci_enterprise_ai_secondary_api_key: str = Field(default="")
+    # ターシャリ接続（#786。OpenAI / OpenAI 互換 API 向け。Project OCID は任意）。
+    oci_enterprise_ai_tertiary_endpoint: str = Field(default="")
+    oci_enterprise_ai_tertiary_project_ocid: str = Field(default="")
+    oci_enterprise_ai_tertiary_api_key: str = Field(default="")
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     # 既定のテキストモデルと既定の Vision モデル（#499。画面・API では 2 つとも必須。#566）。
     # 呼び出しに使う ID は enterprise_ai_default_model_id / enterprise_ai_vision_model_id

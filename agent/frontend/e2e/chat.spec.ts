@@ -184,3 +184,27 @@ test("実行に失敗した回答は理由を出す", async ({ page, mockApi }) 
   await expect(turn.getByText("モデルの呼び出しに失敗しました（BadRequestError）。")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
+
+test("公開していない業務 Agent はチャットで選べない（#792）", async ({ page, mockApi }) => {
+  const published = mockApi.state.agents[0] as Record<string, unknown>;
+  mockApi.state.agents.push({
+    ...published,
+    id: "draft-792",
+    name: "下書きの業務 Agent",
+    versions: [],
+    published_version: null,
+    unpublished_changes: true,
+  });
+  await page.goto("/chat");
+  await page.locator("#chat-agent").click();
+  await expect(page.getByRole("option", { name: new RegExp(String(published.name)) })).toBeVisible();
+  await expect(page.getByRole("option", { name: /下書きの業務 Agent/ })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  // 公開した業務 Agent が 1 つも無いときは、公開を管理者に依頼するよう案内する。
+  mockApi.state.agents.forEach((agent) => {
+    (agent as Record<string, unknown>).published_version = null;
+  });
+  await page.reload();
+  await expect(page.getByText("業務 Agent の公開と権限の付与を管理者に依頼してください。", { exact: false })).toBeVisible();
+});

@@ -298,3 +298,28 @@ def test_system_admin_can_bind_a_key_to_a_dedicated_service_user(
     )
     assert pending.status_code == 422
     assert "初回のパスワード変更" in pending.text
+
+
+def test_unpublished_agents_are_not_listed_or_asked(agents: None) -> None:
+    """公開した版の無い業務 Agent は利用者の Run で使えないので、一覧に出さず断る（#792）。"""
+    del agents
+    draft_id = "mcp-792-draft"
+    created = client.post(
+        "/api/agents", json={"id": draft_id, "name": "下書きの Agent", "instructions": "答える。"}
+    )
+    assert created.status_code == 200, created.text
+    try:
+        assert created.json()["data"]["published_version"] is None
+        listed = _call("agent_list_agents", {})["structuredContent"]["agents"]
+        assert draft_id not in {item["id"] for item in listed}
+        refused = _call("agent_ask", {"agent_id": draft_id, "question": "q"})
+        assert refused["isError"] is True
+        assert "公開していない業務 Agent" in json.dumps(refused, ensure_ascii=False)
+
+        published = client.post(f"/api/agents/{draft_id}/publish", json={"note": "初版"})
+        assert published.status_code == 200, published.text
+        listed = _call("agent_list_agents", {})["structuredContent"]["agents"]
+        assert draft_id in {item["id"] for item in listed}
+    finally:
+        with contextlib.suppress(KeyError, ValueError):
+            runtime_repository.delete_agent(draft_id)

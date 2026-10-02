@@ -1933,6 +1933,74 @@ test("モデル設定はプライマリ接続とセカンダリ接続をタブ�
   await expectNoHorizontalOverflow(page);
 });
 
+test("ターシャリ接続は Endpoint URL と API key だけで設定し、登録モデルで選べる (#786)", async ({
+  page,
+}) => {
+  await page.unroute("**/api/settings/model");
+  let current: Record<string, unknown> = modelSettingsFixture();
+  const requests: Array<Record<string, unknown>> = [];
+  await page.route("**/api/settings/model", async (route) => {
+    if (route.request().method() === "PATCH") {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      requests.push(body);
+      current = modelSettingsFixture({ settings: body });
+    }
+    await fulfillJson(route, current);
+  });
+
+  await page.goto("/settings/model");
+  const tablist = page.getByRole("tablist", { name: "OCI Enterprise AI の接続" });
+  // タブの並びはプライマリ接続 → セカンダリ接続 → ターシャリ接続。
+  await expect(tablist.getByRole("tab")).toHaveText([
+    "プライマリ接続",
+    "セカンダリ接続",
+    "ターシャリ接続",
+  ]);
+  await tablist.getByRole("tab", { name: "ターシャリ接続" }).click();
+  await expect(page.getByTestId("enterprise-connection-tertiary-empty")).toContainText(
+    "ターシャリ接続は設定されていません。"
+  );
+  await page.getByRole("button", { name: "ターシャリ接続を設定" }).click();
+  const endpoint = page.locator("#enterprise-tertiary-endpoint");
+  const project = page.locator("#enterprise-tertiary-project-ocid");
+  const apiKey = page.locator("#enterprise-tertiary-api-key");
+  await expect(endpoint).toBeFocused();
+  await expect(endpoint).toHaveAttribute("aria-required", "true");
+  await expect(apiKey).toHaveAttribute("aria-required", "true");
+  await expect(project).not.toHaveAttribute("aria-required", "true");
+  await expect(endpoint).toHaveAttribute("placeholder", "https://api.openai.com/v1");
+  await expect(apiKey).toHaveAttribute("placeholder", /^sk-/);
+
+  await endpoint.fill("https://api.openai.com/v1");
+  await apiKey.fill("sk-openai-fixture");
+  await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
+  await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。").first()).toBeVisible();
+  const connections = (requests[0].enterprise_ai as Record<string, unknown>)
+    .connections as Array<Record<string, unknown>>;
+  expect(connections.map((connection) => connection.connection_id)).toEqual([
+    "primary",
+    "tertiary",
+  ]);
+  expect(connections[1]).toMatchObject({
+    endpoint: "https://api.openai.com/v1",
+    project_ocid: "",
+    api_key: "sk-openai-fixture",
+  });
+
+  const modelConnection = page.getByRole("combobox", { name: "モデル 2 の接続" });
+  await modelConnection.click();
+  const options = page.getByRole("listbox", { name: "モデル 2 の接続" }).getByRole("option");
+  await expect(options).toHaveText(["プライマリ接続", "ターシャリ接続"]);
+  await options.filter({ hasText: "ターシャリ接続" }).click();
+  await page.getByRole("button", { name: "登録モデル: 保存" }).click();
+  await expect(page.getByText("登録モデルを保存しました。")).toBeVisible();
+  const models = (requests[1].enterprise_ai as Record<string, unknown>).models as Array<
+    Record<string, unknown>
+  >;
+  expect(models.map((model) => model.connection_id)).toEqual(["primary", "tertiary"]);
+  await expectNoHorizontalOverflow(page);
+});
+
 test("legacy JSON の原因と復旧方法を表示し、保存時に既存 Key を保持して移行する", async ({
   page,
 }) => {
