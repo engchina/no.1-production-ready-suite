@@ -22,17 +22,6 @@ const pageWidthRules = [
   },
 ];
 
-// 一時的な除外（#800）: adherence に足した「PageHeader の actions に JSX を渡さない」「TextareaField の高さを
-// textareaClassName の h-* / min-h-* で決めない」に、src/pages/AgentRuntimePages.tsx が今は違反している。
-// 同じファイルを並行の PR（Agent の UI 監査の PR-1 / PR-2）が直しているため、conflict を避けてこのファイルだけで
-// この 2 つの規則を外す。その PR の merge 後に、この除外（PENDING_AGENT_FIXES と下の files の設定）を削除する。
-const PENDING_AGENT_FIXES = ["PageHeader の actions に JSX", "複数行の入力欄（TextareaField）の高さを"];
-const [adherenceSeverity, ...adherenceSelectors] = adherenceRules["design-system/restricted-syntax"];
-const adherenceWithoutPendingFixes = [
-  adherenceSeverity,
-  ...adherenceSelectors.filter(({ message }) => !PENDING_AGENT_FIXES.some((prefix) => message.startsWith(prefix))),
-];
-
 export default tseslint.config(
   { ignores: ["dist", "node_modules", "playwright-report", "test-results"] },
   js.configs.recommended,
@@ -63,13 +52,6 @@ export default tseslint.config(
       // adherence のセレクタを残したまま、全画面 wide の検査を末尾に足す（同じルール名で上書きしない）。
       "no-restricted-syntax": [...adherenceRules["design-system/restricted-syntax"], ...pageWidthRules],
       "no-restricted-imports": adherenceRules["no-restricted-imports"],
-    },
-  },
-  {
-    // 一時的な除外（#800。上の PENDING_AGENT_FIXES を参照）。
-    files: ["src/pages/AgentRuntimePages.tsx"],
-    rules: {
-      "no-restricted-syntax": [...adherenceWithoutPendingFixes, ...pageWidthRules],
     },
   },
 );

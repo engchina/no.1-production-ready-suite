@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, KeyRound, Pencil, Play, Plus, Save, Trash2, Undo2 } from "lucide-react";
+import { Copy, KeyRound, Pencil, Play, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import {
   Banner,
   Button,
@@ -10,6 +10,7 @@ import {
   EmptyState,
   Fieldset,
   ListSkeleton,
+  ListToolbar,
   ObjectActionBar,
   PageBody,
   PageHeader,
@@ -34,6 +35,7 @@ import {
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { OneTimeSecret } from "@/components/OneTimeSecret";
 import { PagedDataTable, listScrollLabel } from "@/components/ListViews";
+import { ListSearchField, listCountLabel, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
 import {
   agentApi,
   type AgentProfile,
@@ -219,6 +221,12 @@ function AutomationList({
   const runNow = useRunNow();
   const confirmDelete = useDeleteAutomation();
   const agentNames = new Map(agents.map((agent) => [agent.id, agent.name]));
+  // 一覧の絞り込み（名前・業務 Agent。#808）。検索語は作業状態に残し、変わったら 1 ページ目へ戻す。
+  const [query, setQuery] = useListSearch("automations");
+  const allItems = list.data?.automations ?? [];
+  const visibleItems = allItems.filter((item) =>
+    matchesSearch(query, [item.name, item.goal, item.agent_id, agentNames.get(item.agent_id)])
+  );
 
   const columns: DataTableColumn<Automation>[] = [
     {
@@ -310,7 +318,7 @@ function AutomationList({
               </TimedLoadingState>
             ) : list.error ? (
               <Banner severity="danger">{list.error.message}</Banner>
-            ) : (list.data?.automations ?? []).length === 0 ? (
+            ) : allItems.length === 0 ? (
               <EmptyState
                 title={t("automation.list.empty")}
                 hint={t("automation.list.emptyHint")}
@@ -323,14 +331,31 @@ function AutomationList({
                 }
               />
             ) : (
-              <PagedDataTable<Automation>
-                pageKey="automations"
-                rows={list.data?.automations ?? []}
-                columns={columns}
-                getRowKey={(item) => item.id}
-                ariaLabel={t("automation.list.label")}
-                tableClassName="w-full min-w-[760px]"
-              />
+              <div className="space-y-3">
+                <ListToolbar
+                  search={
+                    <ListSearchField
+                      id="automation-search"
+                      label={t("automation.search")}
+                      value={query}
+                      onSearch={setQuery}
+                      count={visibleItems.length}
+                    />
+                  }
+                  summary={listCountLabel(visibleItems.length, allItems.length)}
+                  testId="automation-list-toolbar"
+                />
+                <PagedDataTable<Automation>
+                  pageKey="automations"
+                  resetKey={query}
+                  rows={visibleItems}
+                  columns={columns}
+                  getRowKey={(item) => item.id}
+                  ariaLabel={t("automation.list.label")}
+                  tableClassName="w-full min-w-[54rem]"
+                  empty={<NoMatchState title={t("automation.noMatch")} onClear={() => setQuery("")} />}
+                />
+              </div>
             )}
           </CardContent>
         </Card>
@@ -497,9 +522,18 @@ function AutomationEditor({
           readOnly
             ? []
             : [
-                ...(automation && dirty
-                  ? [{ id: "discard", kind: "secondary" as const, label: t("common.discardChanges"), icon: Undo2, onClick: () => setDraft(baseline) }]
-                  : []),
+                // 変更を破棄は常に出し、変更が無いときは disabled（#618。#808）。
+                {
+                  id: "discard",
+                  kind: "secondary" as const,
+                  label: t("common.discardChanges"),
+                  icon: RotateCcw,
+                  disabled: !dirty || save.isPending,
+                  onClick: () => {
+                    setDraft(baseline);
+                    setSubmitted(false);
+                  },
+                },
                 {
                   id: "save",
                   kind: "primary" as const,
@@ -539,7 +573,7 @@ function AutomationEditor({
                     {t("automation.lastResult", { message: automation.last_message ?? "" })}
                   </p>
                 ) : null}
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
                   <TextField
                     id="automation-name"
                     label={t("automation.name")}

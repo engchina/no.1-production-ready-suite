@@ -43,7 +43,9 @@ import {
   INFORMATION_TABLE_FOCUS_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  ListPicker,
   ListSkeleton,
+  ListToolbar,
   ObjectActionBar,
   offsetForPage,
   offsetPagination,
@@ -69,10 +71,12 @@ import {
   type StatusVariant,
   PageBody,
   RowTitleButton,
+  SecretField,
   isSubmitEnter,
   SelectField,
   TextareaField,
   TextField,
+  type ListPickerItem,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 
@@ -109,6 +113,14 @@ import {
   MissingEditorTarget,
 } from "@/components/EntityLayout";
 import { agentPaginationLabels, listScrollLabel, PagedDataTable, QueryState } from "@/components/ListViews";
+import {
+  FilterChipGroup,
+  ListSearchField,
+  listCountLabel,
+  matchesSearch,
+  NoMatchState,
+  useListSearch,
+} from "@/components/ListFilters";
 import { AgentTemplatePicker } from "@/components/agents/AgentTemplatePicker";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { useEditorRoute } from "@/lib/editor-route";
@@ -633,6 +645,9 @@ export function AgentsPage() {
       : [];
 
   const agentList = agents.data?.agents ?? [];
+  // 一覧の絞り込み（名前・ID・説明。#808）。検索語は作業状態に残し、変わったら 1 ページ目へ戻す。
+  const [agentQuery, setAgentQuery] = useListSearch("agents");
+  const visibleAgents = agentList.filter((agent) => matchesSearch(agentQuery, [agent.name, agent.id, agent.description]));
   // 作成できない利用者が `?id=new` を開いたら一覧を出す。
   const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
 
@@ -652,12 +667,43 @@ export function AgentsPage() {
         <PageBody wide>
           {skills.error ? <Banner severity="danger">{skills.error.message}</Banner> : null}
           <Section title={t("agent.list")}>
+            <ListToolbar
+              search={
+                <ListSearchField
+                  id="agent-search"
+                  label={t("agent.search")}
+                  value={agentQuery}
+                  onSearch={setAgentQuery}
+                  count={visibleAgents.length}
+                />
+              }
+              summary={agents.data ? listCountLabel(visibleAgents.length, agentList.length) : undefined}
+              testId="agent-list-toolbar"
+            />
             <QueryState query={agents} loadingLabel={t("loading.agents")} skeleton={<TableSkeleton columns={6} />}>
               <AgentTable
-                agents={agentList}
+                agents={visibleAgents}
+                resetKey={agentQuery}
                 onOpen={(agent) => editor.openItem(agent.id)}
                 hrefFor={(agent) => editor.itemHref(agent.id)}
                 actionsFor={agentActions}
+                empty={
+                  agentList.length ? (
+                    <NoMatchState title={t("agent.noMatch")} onClear={() => setAgentQuery("")} />
+                  ) : (
+                    <EmptyState
+                      title={t("agent.empty.title")}
+                      hint={canManage ? t("agent.empty.hint") : t("agent.empty.restrictedHint")}
+                      action={
+                        canManage ? (
+                          <Button variant="secondary" icon={Plus} onClick={editor.openNew}>
+                            {t("agent.createFirst")}
+                          </Button>
+                        ) : undefined
+                      }
+                    />
+                  )
+                }
               />
             </QueryState>
           </Section>
@@ -822,11 +868,17 @@ function AgentVersionsSection({ agent, readOnly }: { agent: AgentProfile; readOn
 
 function AgentTable({
   agents,
+  resetKey,
+  empty,
   onOpen,
   hrefFor,
   actionsFor,
 }: {
   agents: AgentProfile[];
+  /** 検索語など、変わったら 1 ページ目へ戻す契機。 */
+  resetKey?: unknown;
+  /** 0 件のときの表示（データが無い / 検索に一致しない）。 */
+  empty: ReactNode;
   onOpen: (agent: AgentProfile) => void;
   /** 名前のリンクの URL（新しいタブで開ける。#583）。 */
   hrefFor: (agent: AgentProfile) => string;
@@ -894,6 +946,7 @@ function AgentTable({
   return (
     <PagedDataTable
       pageKey="agents"
+      resetKey={resetKey}
       rows={agents}
       columns={columns}
       getRowKey={(agent) => agent.id}
@@ -902,7 +955,7 @@ function AgentTable({
       tableClassName="w-full min-w-[46rem]"
       ariaLabel={t("agent.list")}
       paginationTestId="agent-list-pagination"
-      empty={<EmptyState title={t("common.empty.title")} />}
+      empty={empty}
     />
   );
 }
@@ -1005,6 +1058,23 @@ function RuntimeCardsSkeleton() {
 }
 
 const DEFAULT_RUN_GOAL = t("run.form.goalDefault");
+
+/** 実行履歴の状態の絞り込み（「実行中・待機中」は queued と running をまとめる）。 */
+const RUN_STATUS_FILTERS = ["all", "active", "waiting_approval", "completed", "failed", "cancelled"] as const;
+type RunStatusFilter = (typeof RUN_STATUS_FILTERS)[number];
+const isRunStatusFilter = isOneOf<RunStatusFilter>(RUN_STATUS_FILTERS);
+
+function runMatchesStatusFilter(run: RunState, filter: RunStatusFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "active") return run.status === "queued" || run.status === "running";
+  return run.status === filter;
+}
+
+function runStatusFilterLabel(filter: RunStatusFilter): string {
+  if (filter === "all") return t("run.filter.all");
+  if (filter === "active") return t("run.filter.active");
+  return runStatusView(filter).label;
+}
 /** 外部 MCP のタイムアウト秒の上限（backend の `_MCP_TIMEOUT_MAX_SECONDS` と同じ）。 */
 const MCP_TIMEOUT_MAX_SECONDS = 600;
 
@@ -1071,9 +1141,23 @@ export function RunsPage() {
   useEditorLeaveGuard(!goalSaved && goal !== DEFAULT_RUN_GOAL);
 
   const runItems = useMemo(() => runs.data?.runs ?? [], [runs.data?.runs]);
+  const agentNames = useMemo(
+    () => new Map((agents.data?.agents ?? []).map((agent) => [agent.id, agent.name])),
+    [agents.data?.agents]
+  );
+  const agentNameOf = (agentId: string) => agentNames.get(agentId) ?? agentId;
+  // 実行履歴の絞り込み（目標・実行 ID・業務 Agent の検索と、状態のチップ。#808）。どちらも作業状態に残す。
+  const [runQuery, setRunQuery] = useListSearch("runs");
+  const [runFilter, setRunFilter] = useWorkspaceState("listFilter", "runs", "all" as RunStatusFilter, isRunStatusFilter);
+  const visibleRuns = runItems.filter(
+    (run) =>
+      runMatchesStatusFilter(run, runFilter) &&
+      matchesSearch(runQuery, [run.goal, run.id, run.agent_id, agentNames.get(run.agent_id)])
+  );
   const runIds = useMemo(() => runs.data?.runs.map((run) => run.id), [runs.data?.runs]);
   const restoredSelection = useRestoredSelectionCheck(selectedRunId, runIds);
-  const selectedRun = runItems.find((run) => run.id === selectedRunId) ?? runItems[0];
+  // 詳細は絞り込んだ一覧の中から選ぶ（絞り込みで隠れた実行を詳細に出したままにしない）。
+  const selectedRun = visibleRuns.find((run) => run.id === selectedRunId) ?? visibleRuns[0];
   // 利用できるエージェントは backend が絞り込む。既定の Agent を使えない利用者は、使える最初の Agent を選ぶ（#215）。
   // 下書きで実行するのは Agent 管理（admin）だけ（#770）。下書きでなければ公開した版のある Agent だけ選べる。
   const [runDraft, setRunDraft] = useState(false);
@@ -1103,12 +1187,6 @@ export function RunsPage() {
   );
 
   const sseState = useRunEventSource(selectedRun, streamMode === "sse", refreshRuntimeEvents);
-
-  const agentNames = useMemo(
-    () => new Map((agents.data?.agents ?? []).map((agent) => [agent.id, agent.name])),
-    [agents.data?.agents]
-  );
-  const agentNameOf = (agentId: string) => agentNames.get(agentId) ?? agentId;
 
   function onAgentChange(value: string) {
     setAgentId(value);
@@ -1206,9 +1284,11 @@ export function RunsPage() {
                     <CardDescription>{t("run.form.runtimeHint")}</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
+                    {/* grid の外に単独で置く選択欄は値の長さの幅（業務 Agent の名前は lg。#613）。 */}
                     <SelectField
                       id="run-agent"
                       label={t("run.form.agent")}
+                      width="lg"
                       value={selectedAgentId}
                       options={runnableAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
                       onValueChange={onAgentChange}
@@ -1235,7 +1315,15 @@ export function RunsPage() {
                         setGoal(value);
                         setGoalError(null);
                       }}
-                      textareaClassName="min-h-24"
+                      rows={4}
+                      helper={t("run.form.submitShortcut")}
+                      // 目標は重い問い合わせ（page-archetypes.md #535）。複数行なので Ctrl/⌘+Enter で明示的に実行する。
+                      onKeyDown={(event) => {
+                        if ((event.ctrlKey || event.metaKey) && isSubmitEnter(event)) {
+                          event.preventDefault();
+                          if (!createRun.isPending) submitRun();
+                        }
+                      }}
                     />
                     {/* 組み込み Runtime が実行できないとき（モデル未設定など）は、理由と直す場所を知らせる。 */}
                     {runtimeStatus.data && !runtimeStatus.data.ready ? (
@@ -1244,10 +1332,28 @@ export function RunsPage() {
                       </Banner>
                     ) : null}
                     {!goalSaved ? <Banner severity="warning">{t("workspace.draftNotSaved")}</Banner> : null}
-                    {createRun.error ? <Banner severity="danger">{createRun.error.message}</Banner> : null}
-                    <Button onClick={submitRun} loading={createRun.isPending} className="w-full" icon={PlayCircle}>
-                      {t("run.form.submit")}
-                    </Button>
+                    {/* 工程を進める主操作は区切り線の下の lg、失敗はその操作の行に出す（buttons.md §5.2.1、messaging.md §3.3）。 */}
+                    <FormActionBar
+                      ariaLabel={t("run.form.actions")}
+                      primaryActions={[
+                        {
+                          id: "create-run",
+                          label: t("run.form.submit"),
+                          icon: PlayCircle,
+                          loading: createRun.isPending,
+                          onClick: submitRun,
+                          testId: "run-create-submit",
+                        },
+                      ]}
+                      status={
+                        createRun.error ? (
+                          <FormStatus
+                            tone="danger"
+                            message={t("run.form.failed", { reason: createRun.error.message })}
+                          />
+                        ) : null
+                      }
+                    />
                   </CardContent>
                 </Card>
               ) : null}
@@ -1261,7 +1367,49 @@ export function RunsPage() {
                   <Banner severity="warning">{t("workspace.selectionMissing")}</Banner>
                 ) : null}
                 <RunHistoryList
-                  runs={runItems}
+                  runs={visibleRuns}
+                  resetKey={`${runQuery}\u0000${runFilter}`}
+                  toolbar={
+                    <ListToolbar
+                      search={
+                        <ListSearchField
+                          id="run-search"
+                          label={t("run.search")}
+                          value={runQuery}
+                          onSearch={setRunQuery}
+                          count={visibleRuns.length}
+                        />
+                      }
+                      filters={
+                        <FilterChipGroup label={t("run.filter.label")}>
+                          {RUN_STATUS_FILTERS.map((filter) => (
+                            <ToggleChip key={filter} selected={runFilter === filter} onClick={() => setRunFilter(filter)}>
+                              {runStatusFilterLabel(filter)}
+                            </ToggleChip>
+                          ))}
+                        </FilterChipGroup>
+                      }
+                      summary={listCountLabel(visibleRuns.length, runItems.length)}
+                      testId="run-list-toolbar"
+                    />
+                  }
+                  empty={
+                    runItems.length ? (
+                      <NoMatchState
+                        title={t("run.noMatch")}
+                        clearLabel={runFilter === "all" ? t("common.clearSearch") : t("common.clearFilters")}
+                        onClear={() => {
+                          setRunQuery("");
+                          setRunFilter("all");
+                        }}
+                      />
+                    ) : (
+                      <EmptyState
+                        title={t("run.empty.title")}
+                        hint={capabilities.operateRuns ? t("run.empty.hint") : undefined}
+                      />
+                    )
+                  }
                   agentNameOf={agentNameOf}
                   selectedRunId={selectedRun?.id ?? null}
                   actionsFor={runActions}
@@ -1312,6 +1460,15 @@ export function RunsPage() {
 
 type ApprovalRow = { run: RunState; approval: ApprovalRequest };
 
+const APPROVAL_FILTERS = ["pending", "decided", "all"] as const;
+type ApprovalFilter = (typeof APPROVAL_FILTERS)[number];
+const isApprovalFilter = isOneOf<ApprovalFilter>(APPROVAL_FILTERS);
+
+function approvalMatchesFilter(approval: ApprovalRequest, filter: ApprovalFilter): boolean {
+  if (filter === "all") return true;
+  return filter === "pending" ? approval.status === "pending" : approval.status !== "pending";
+}
+
 export function ApprovalsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
@@ -1325,7 +1482,8 @@ export function ApprovalsPage() {
     mutationFn: ({ approval, approved }: { approval: ApprovalRequest; approved: boolean }) =>
       // 決定者はログイン中の利用者から server が決める（#215）。
       agentApi.decideApproval(approval.id, { approved }),
-    onSuccess: () => {
+    onSuccess: (_data, { approved }) => {
+      toast.success(approved ? t("approval.decided") : t("approval.rejected"));
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
     },
     onError: (error) => toast.error(error.message),
@@ -1334,8 +1492,21 @@ export function ApprovalsPage() {
     () => (runs.data?.runs ?? []).flatMap((run) => run.approvals.map((approval) => ({ run, approval }))),
     [runs.data?.runs]
   );
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = approvals.find((row) => row.approval.id === selectedId) ?? approvals[0];
+  // 承認キューの既定は「保留中」（判断の要る承認を先に見せる）。検索語・絞り込み・選択は作業状態に残す（#808）。
+  const [approvalQuery, setApprovalQuery] = useListSearch("approvals");
+  const [approvalFilter, setApprovalFilter] = useWorkspaceState(
+    "listFilter",
+    "approvals",
+    "pending" as ApprovalFilter,
+    isApprovalFilter
+  );
+  const visibleApprovals = approvals.filter(
+    ({ run, approval }) =>
+      approvalMatchesFilter(approval, approvalFilter) &&
+      matchesSearch(approvalQuery, [approval.tool_call.name, run.goal, run.id])
+  );
+  const [selectedId, setSelectedId] = useWorkspaceState("approvals", "selectedId", null as string | null, isNullableString);
+  const selected = visibleApprovals.find((row) => row.approval.id === selectedId) ?? visibleApprovals[0];
 
   async function decideApproval(approval: ApprovalRequest, approved: boolean) {
     const ok = await confirm({
@@ -1416,10 +1587,37 @@ export function ApprovalsPage() {
             splitId="approvals-list"
             left={
               <Section title={t("approval.list")}>
-                {/* 5 秒ごとの再取得で行が変わっても、ページは作業状態に残して戻さない。 */}
+                <ListToolbar
+                  search={
+                    <ListSearchField
+                      id="approval-search"
+                      label={t("approval.search")}
+                      value={approvalQuery}
+                      onSearch={setApprovalQuery}
+                      count={visibleApprovals.length}
+                    />
+                  }
+                  filters={
+                    <FilterChipGroup label={t("approval.filter.label")}>
+                      {APPROVAL_FILTERS.map((filter) => (
+                        <ToggleChip
+                          key={filter}
+                          selected={approvalFilter === filter}
+                          onClick={() => setApprovalFilter(filter)}
+                        >
+                          {t(`approval.filter.${filter}`)}
+                        </ToggleChip>
+                      ))}
+                    </FilterChipGroup>
+                  }
+                  summary={listCountLabel(visibleApprovals.length, approvals.length)}
+                  testId="approval-list-toolbar"
+                />
+                {/* 5 秒ごとの再取得で行が変わっても、ページは作業状態に残して戻さない（戻すのは絞り込みを変えたときだけ）。 */}
                 <PagedDataTable
                   pageKey="approvals"
-                  rows={approvals}
+                  resetKey={`${approvalQuery}\u0000${approvalFilter}`}
+                  rows={visibleApprovals}
                   columns={columns}
                   getRowKey={({ approval }) => approval.id}
                   selectedRowKey={selected?.approval.id ?? null}
@@ -1427,7 +1625,24 @@ export function ApprovalsPage() {
                   rowProps={() => ({ className: "align-top" })}
                   ariaLabel={t("approval.list")}
                   paginationTestId="approval-list-pagination"
-                  empty={<EmptyState title={t("common.empty.title")} />}
+                  empty={
+                    // 検索語があるか、保留中以外の絞り込みで判断済みの承認が無いときは「一致しない」。保留中が無いのは通常の状態。
+                    approvalQuery || (approvals.length > 0 && approvalFilter !== "pending") ? (
+                      <NoMatchState
+                        title={t("approval.noMatch")}
+                        clearLabel={approvalFilter === "pending" ? t("common.clearSearch") : t("common.clearFilters")}
+                        onClear={() => {
+                          setApprovalQuery("");
+                          setApprovalFilter("pending");
+                        }}
+                      />
+                    ) : (
+                      <EmptyState
+                        title={approvalFilter === "pending" ? t("approval.empty.pendingTitle") : t("approval.empty.title")}
+                        hint={t("approval.empty.hint")}
+                      />
+                    )
+                  }
                 />
               </Section>
             }
@@ -1886,7 +2101,9 @@ export function ToolsPage() {
   const tools = useQuery({ queryKey: ["tools"], queryFn: agentApi.listTools });
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const list = tools.data?.tools ?? [];
-  const selected = list.find((tool) => tool.name === selectedName) ?? list[0];
+  const [toolQuery, setToolQuery] = useListSearch("tools");
+  const visibleTools = list.filter((tool) => matchesSearch(toolQuery, [tool.name, tool.description]));
+  const selected = visibleTools.find((tool) => tool.name === selectedName) ?? visibleTools[0];
 
   const columns: DataTableColumn<ToolDefinition>[] = [
     {
@@ -1919,15 +2136,35 @@ export function ToolsPage() {
             splitId="tools-list"
             left={
               <Section title={t("tool.list")}>
+                <ListToolbar
+                  search={
+                    <ListSearchField
+                      id="tool-search"
+                      label={t("tool.search")}
+                      value={toolQuery}
+                      onSearch={setToolQuery}
+                      count={visibleTools.length}
+                    />
+                  }
+                  summary={listCountLabel(visibleTools.length, list.length)}
+                  testId="tool-list-toolbar"
+                />
                 <PagedDataTable
                   pageKey="tools"
-                  rows={list}
+                  resetKey={toolQuery}
+                  rows={visibleTools}
                   columns={columns}
                   getRowKey={(tool) => tool.name}
                   selectedRowKey={selected?.name ?? null}
                   onRowClick={(tool) => setSelectedName(tool.name)}
                   ariaLabel={t("tool.list")}
-                  empty={<EmptyState title={t("common.empty.title")} />}
+                  empty={
+                    list.length ? (
+                      <NoMatchState title={t("tool.noMatch")} onClear={() => setToolQuery("")} />
+                    ) : (
+                      <EmptyState title={t("common.empty.title")} />
+                    )
+                  }
                 />
               </Section>
             }
@@ -2328,6 +2565,10 @@ export function McpConnectionsPage() {
       : [];
 
   const list = connections.data?.connections ?? [];
+  const [mcpQuery, setMcpQuery] = useListSearch("mcpServers");
+  const visibleConnections = list.filter((connection) =>
+    matchesSearch(mcpQuery, [connection.label, connection.server_id, connection.base_url])
+  );
   // 追加できない利用者が `?id=new` を開いたら一覧を出す。
   const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
   const listTitle = t("nav.settingsMcpConnections");
@@ -2355,9 +2596,30 @@ export function McpConnectionsPage() {
         />
         <PageBody wide className="space-y-6">
           <Section title={t("settings.mcpConnections.title")} description={t("settings.mcpConnections.description")}>
+            <ListToolbar
+              search={
+                <ListSearchField
+                  id="mcp-connection-search"
+                  label={t("settings.mcpConnections.search")}
+                  value={mcpQuery}
+                  onSearch={setMcpQuery}
+                  count={visibleConnections.length}
+                />
+              }
+              summary={connections.data ? listCountLabel(visibleConnections.length, list.length) : undefined}
+              testId="mcp-connection-list-toolbar"
+            />
             <QueryState query={connections} loadingLabel={t("loading.mcpServers")} skeleton={<TableSkeleton columns={6} />}>
               <McpConnectionTable
-                connections={list}
+                connections={visibleConnections}
+                resetKey={mcpQuery}
+                empty={
+                  list.length ? (
+                    <NoMatchState title={t("settings.mcpConnections.noMatch")} onClear={() => setMcpQuery("")} />
+                  ) : (
+                    <EmptyState title={t("settings.mcpConnections.empty")} />
+                  )
+                }
                 onOpen={(connection) => editor.openItem(connection.server_id)}
                 hrefFor={(connection) => editor.itemHref(connection.server_id)}
                 actionsFor={connectionActions}
@@ -2514,6 +2776,18 @@ function McpConnectionEditor({
             ? []
             : [
                 {
+                  id: "discard",
+                  kind: "secondary" as const,
+                  label: t("editor.actions.discard"),
+                  icon: RotateCcw,
+                  disabled: !formDirty || saveMutation.isPending,
+                  onClick: () => {
+                    setForm(formBaseline);
+                    setServerIdError(null);
+                    setTimeoutError(null);
+                  },
+                },
+                {
                   id: "save",
                   kind: "primary" as const,
                   label: editingId ? t("common.save") : t("common.create"),
@@ -2562,7 +2836,7 @@ function McpConnectionEditor({
         <fieldset disabled={readOnly} className="min-w-0 space-y-6">
           <Section title={t("mcpServers.connection")}>
             <Card className="min-w-0">
-              <CardContent className="grid gap-4 pt-5 md:grid-cols-2">
+              <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2">
                 {/* 接続 ID は作成時だけ入力でき、必須。モデルに渡すツール名（<接続>__<ツール>）の先頭になる。 */}
                 <TextField
                   id="mcp-server-id"
@@ -2585,7 +2859,7 @@ function McpConnectionEditor({
                   value={form.label}
                   onValueChange={(value) => setForm({ ...form, label: value })}
                 />
-                <div className="min-w-0 md:col-span-2">
+                <div className="col-span-full min-w-0">
                   <TextField
                     id="mcp-server-base-url"
                     label={t("settings.mcpConnections.url")}
@@ -2622,7 +2896,7 @@ function McpConnectionEditor({
           </Section>
           <Section title={t("settings.mcpConnections.authSection")}>
             <Card className="min-w-0">
-              <CardContent className="grid gap-4 pt-5 md:grid-cols-2">
+              <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2">
                 <SelectField<McpAuthMode>
                   id="mcp-server-auth-mode"
                   label={t("settings.mcpServers.auth")}
@@ -2644,20 +2918,22 @@ function McpConnectionEditor({
                   />
                 ) : null}
                 {form.authMode === "api_key" ? (
-                  // API が保存済みの有無だけを返すため、値は表示しない password の欄にする（#631）。
-                  <TextField
+                  // 秘密は共有の SecretField（保存済み / 未設定の表示・表示の切り替え。#631）。API は保存済みの有無だけを返す。
+                  <SecretField
                     id="mcp-server-api-key"
                     label={t("settings.mcpServers.authApiKey")}
-                    className="min-w-0"
-                    type="password"
+                    value={form.apiKey}
+                    onValueChange={(value) => setForm({ ...form, apiKey: value })}
+                    hasSavedSecret={Boolean(connection?.api_key_configured)}
+                    savedLabel={t("settings.mcpConnections.secretSaved")}
+                    notSetLabel={t("settings.mcpConnections.secretNotSet")}
+                    showLabel={t("settings.mcpConnections.apiKeyShow")}
+                    hideLabel={t("settings.mcpConnections.apiKeyHide")}
                     helper={
                       connection?.api_key_configured
-                        ? t("settings.mcpServers.secretManaged")
+                        ? `${t("settings.mcpConnections.apiKeyHint")}${t("settings.mcpConnections.secretKeepHint")}`
                         : t("settings.mcpConnections.apiKeyHint")
                     }
-                    value={form.apiKey}
-                    autoComplete="off"
-                    onValueChange={(value) => setForm({ ...form, apiKey: value })}
                   />
                 ) : null}
                 {form.authMode === "oauth_client_credentials" ? (
@@ -2684,20 +2960,22 @@ function McpConnectionEditor({
                       autoComplete="off"
                       onValueChange={(value) => setForm({ ...form, oauthClientId: value })}
                     />
-                    <TextField
+                    <SecretField
                       id="mcp-server-oauth-secret"
                       label={t("settings.mcpServers.oauthClientSecret")}
-                      className="min-w-0"
-                      type="password"
-                      helper={connection?.oauth_configured ? t("settings.mcpServers.secretManaged") : undefined}
                       value={form.oauthClientSecret}
-                      autoComplete="off"
                       onValueChange={(value) => setForm({ ...form, oauthClientSecret: value })}
+                      hasSavedSecret={Boolean(connection?.oauth_configured)}
+                      savedLabel={t("settings.mcpConnections.secretSaved")}
+                      notSetLabel={t("settings.mcpConnections.secretNotSet")}
+                      showLabel={t("settings.mcpConnections.oauthSecretShow")}
+                      hideLabel={t("settings.mcpConnections.oauthSecretHide")}
+                      helper={connection?.oauth_configured ? t("settings.mcpConnections.secretKeepHint") : undefined}
                     />
                   </>
                 ) : null}
                 {form.authMode === "service_token" && connection ? (
-                  <div className="min-w-0 md:col-span-2">
+                  <div className="col-span-full min-w-0">
                     <McpServiceTokenStatus connection={connection} />
                   </div>
                 ) : null}
@@ -2714,11 +2992,15 @@ function McpConnectionEditor({
 
 function McpConnectionTable({
   connections,
+  resetKey,
+  empty,
   onOpen,
   hrefFor,
   actionsFor,
 }: {
   connections: McpConnectionSettings[];
+  resetKey?: unknown;
+  empty: ReactNode;
   onOpen: (connection: McpConnectionSettings) => void;
   /** 名前のリンクの URL（新しいタブで開ける。#583）。 */
   hrefFor: (connection: McpConnectionSettings) => string;
@@ -2786,6 +3068,7 @@ function McpConnectionTable({
   return (
     <PagedDataTable
       pageKey="mcpServers"
+      resetKey={resetKey}
       rows={connections}
       columns={columns}
       getRowKey={(connection) => connection.server_id}
@@ -2793,7 +3076,7 @@ function McpConnectionTable({
       rowProps={() => ({ className: "align-top" })}
       tableClassName="w-full min-w-[48rem]"
       ariaLabel={t("settings.mcpConnections.title")}
-      empty={<EmptyState title={t("settings.mcpConnections.empty")} />}
+      empty={empty}
     />
   );
 }
@@ -2916,6 +3199,10 @@ export function SkillsPage() {
   ];
 
   const list = skills.data?.skills ?? [];
+  const [skillQuery, setSkillQuery] = useListSearch("skills");
+  const visibleSkills = list.filter((skill) =>
+    matchesSearch(skillQuery, [skill.name, skill.id, skill.description, skill.tags.join(" ")])
+  );
   // 追加できない利用者が `?id=new` を開いたら一覧を出す。
   const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
 
@@ -2945,9 +3232,40 @@ export function SkillsPage() {
         />
         <PageBody wide>
           <Section title={t("skills.list")} description={t("skills.description")}>
+            <ListToolbar
+              search={
+                <ListSearchField
+                  id="skill-search"
+                  label={t("skills.search")}
+                  value={skillQuery}
+                  onSearch={setSkillQuery}
+                  count={visibleSkills.length}
+                />
+              }
+              summary={skills.data ? listCountLabel(visibleSkills.length, list.length) : undefined}
+              testId="skill-list-toolbar"
+            />
             <QueryState query={skills} loadingLabel={t("loading.skills")} skeleton={<TableSkeleton columns={5} />}>
               <SkillTable
-                skills={list}
+                skills={visibleSkills}
+                resetKey={skillQuery}
+                empty={
+                  list.length ? (
+                    <NoMatchState title={t("skills.noMatch")} onClear={() => setSkillQuery("")} />
+                  ) : (
+                    <EmptyState
+                      title={t("skills.empty")}
+                      hint={canManage ? t("skills.emptyHint") : undefined}
+                      action={
+                        canManage ? (
+                          <Button variant="secondary" icon={Plus} onClick={editor.openNew}>
+                            {t("skills.addFirst")}
+                          </Button>
+                        ) : undefined
+                      }
+                    />
+                  )
+                }
                 onOpen={(skill) => editor.openItem(skill.id)}
                 hrefFor={(skill) => editor.itemHref(skill.id)}
                 actionsFor={skillActions}
@@ -3089,6 +3407,18 @@ function SkillEditor({
   const title = skill ? skill.name : t("skills.addTitle");
   const headerActions: PageHeaderAction[] = [];
   if (editable) {
+    // 変更を破棄は保存の左の secondary。変更が無いときは disabled（#618）。
+    headerActions.push({
+      id: "discard",
+      kind: "secondary",
+      label: t("editor.actions.discard"),
+      icon: RotateCcw,
+      disabled: !formDirty || saveMutation.isPending,
+      onClick: () => {
+        setForm(formBaseline);
+        setFieldErrors({});
+      },
+    });
     headerActions.push({
       id: "save",
       kind: "primary",
@@ -3146,7 +3476,8 @@ function SkillEditor({
           <>
             <Section title={t("skills.basic")}>
               <Card className="min-w-0">
-                <CardContent className="space-y-4 pt-5">
+                {/* ID / 名前、説明 / タグを同じ行に、指示は全幅（README §4「wide 画面の 100% 充填」）。 */}
+                <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2">
                   {/* ID は作成時だけ入力でき、必須（backend の create_agent_skill と送信ガード）。 */}
                   <TextField
                     id="skill-id"
@@ -3177,12 +3508,6 @@ function SkillEditor({
                     value={form.description}
                     onValueChange={(value) => setForm({ ...form, description: value })}
                   />
-                  <TextareaField
-                    id="skill-instructions"
-                    label={t("skills.instructions")}
-                    value={form.instructions}
-                    onValueChange={(value) => setForm({ ...form, instructions: value })}
-                  />
                   <TextField
                     id="skill-tags"
                     label={t("skills.tags")}
@@ -3190,7 +3515,15 @@ function SkillEditor({
                     value={form.tags}
                     onValueChange={(value) => setForm({ ...form, tags: value })}
                   />
-                  <label className="flex items-center gap-2 text-sm text-fg">
+                  <TextareaField
+                    id="skill-instructions"
+                    label={t("skills.instructions")}
+                    className="col-span-full"
+                    rows={8}
+                    value={form.instructions}
+                    onValueChange={(value) => setForm({ ...form, instructions: value })}
+                  />
+                  <label className="col-span-full flex items-center gap-2 text-sm text-fg">
                     <Switch
                       checked={form.enabled}
                       aria-label={t("skills.enabledLabel")}
@@ -3203,7 +3536,7 @@ function SkillEditor({
             </Section>
             <Section title={t("skills.dependencies")}>
               <Card className="min-w-0">
-                <CardContent className="space-y-4 pt-5">
+                <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2">
                   <TextareaField
                     id="skill-mcp-requirements"
                     label={t("skills.mcpRequirements")}
@@ -3225,7 +3558,7 @@ function SkillEditor({
                     required
                     error={fieldErrors.resourceIds}
                     value={form.resourceIdsJson}
-                    rows={4}
+                    rows={8}
                     monospace
                     spellCheck={false}
                     onValueChange={(value) => {
@@ -3245,11 +3578,15 @@ function SkillEditor({
 
 function SkillTable({
   skills,
+  resetKey,
+  empty,
   onOpen,
   hrefFor,
   actionsFor,
 }: {
   skills: AgentSkill[];
+  resetKey?: unknown;
+  empty: ReactNode;
   onOpen: (skill: AgentSkill) => void;
   /** 名前のリンクの URL（新しいタブで開ける。#583）。 */
   hrefFor: (skill: AgentSkill) => string;
@@ -3304,6 +3641,7 @@ function SkillTable({
   return (
     <PagedDataTable
       pageKey="skills"
+      resetKey={resetKey}
       rows={skills}
       columns={columns}
       getRowKey={(skill) => skill.id}
@@ -3311,7 +3649,7 @@ function SkillTable({
       rowProps={(skill) => ({ className: "align-top", "data-testid": `skill-row-${skill.id}` })}
       tableClassName="w-full min-w-[44rem]"
       ariaLabel={t("skills.list")}
-      empty={<EmptyState title={t("skills.empty")} />}
+      empty={empty}
     />
   );
 }
@@ -3419,6 +3757,10 @@ export function PluginsPage() {
   ] : [];
 
   const list = plugins.data?.plugins ?? [];
+  const [pluginQuery, setPluginQuery] = useListSearch("plugins");
+  const visiblePlugins = list.filter((plugin) =>
+    matchesSearch(pluginQuery, [plugin.name, plugin.id, plugin.description, plugin.marketplace_id])
+  );
   // install できない利用者が `?id=new` を開いたら一覧を出す。
   const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
 
@@ -3448,9 +3790,40 @@ export function PluginsPage() {
         />
         <PageBody wide>
           <Section title={t("plugins.list")} description={t("plugins.description")}>
+            <ListToolbar
+              search={
+                <ListSearchField
+                  id="plugin-search"
+                  label={t("plugins.search")}
+                  value={pluginQuery}
+                  onSearch={setPluginQuery}
+                  count={visiblePlugins.length}
+                />
+              }
+              summary={plugins.data ? listCountLabel(visiblePlugins.length, list.length) : undefined}
+              testId="plugin-list-toolbar"
+            />
             <QueryState query={plugins} loadingLabel={t("loading.plugins")} skeleton={<TableSkeleton columns={5} />}>
               <PluginTable
-                plugins={list}
+                plugins={visiblePlugins}
+                resetKey={pluginQuery}
+                empty={
+                  list.length ? (
+                    <NoMatchState title={t("plugins.noMatch")} onClear={() => setPluginQuery("")} />
+                  ) : (
+                    <EmptyState
+                      title={t("plugins.empty")}
+                      hint={canManage ? t("plugins.emptyHint") : undefined}
+                      action={
+                        canManage ? (
+                          <Button variant="secondary" icon={Plus} onClick={editor.openNew}>
+                            {t("plugins.installFirst")}
+                          </Button>
+                        ) : undefined
+                      }
+                    />
+                  )
+                }
                 onOpen={(plugin) => editor.openItem(plugin.id)}
                 hrefFor={(plugin) => editor.itemHref(plugin.id)}
                 actionsFor={pluginActions}
@@ -3543,6 +3916,17 @@ function PluginInstallEditor({
         // 一覧へ戻るは左上、保存は右端の primary（#618）。
         back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("plugins.title") }), onClick: () => void back(), testId: "editor-back" }}
         actions={[
+          {
+            id: "discard",
+            kind: "secondary",
+            label: t("editor.actions.discard"),
+            icon: RotateCcw,
+            disabled: manifestJson.trim() === "" || installMutation.isPending,
+            onClick: () => {
+              setManifestJson("");
+              setManifestError(null);
+            },
+          },
           {
             id: "install",
             kind: "primary",
@@ -3704,11 +4088,15 @@ function PluginBundle({ plugin }: { plugin: PluginSummary }) {
 
 function PluginTable({
   plugins,
+  resetKey,
+  empty,
   onOpen,
   hrefFor,
   actionsFor,
 }: {
   plugins: PluginSummary[];
+  resetKey?: unknown;
+  empty: ReactNode;
   onOpen: (plugin: PluginSummary) => void;
   /** 名前のリンクの URL（新しいタブで開ける。#583）。 */
   hrefFor: (plugin: PluginSummary) => string;
@@ -3766,6 +4154,7 @@ function PluginTable({
   return (
     <PagedDataTable
       pageKey="plugins"
+      resetKey={resetKey}
       rows={plugins}
       columns={columns}
       getRowKey={(plugin) => plugin.id}
@@ -3773,7 +4162,7 @@ function PluginTable({
       rowProps={() => ({ className: "align-top" })}
       tableClassName="w-full min-w-[46rem]"
       ariaLabel={t("plugins.title")}
-      empty={<EmptyState title={t("plugins.empty")} />}
+      empty={empty}
     />
   );
 }
@@ -3851,6 +4240,8 @@ export function PluginMarketplacesPage() {
   ] : [];
 
   const list = markets.data?.marketplaces ?? [];
+  const [marketQuery, setMarketQuery] = useListSearch("marketplaces");
+  const visibleMarkets = list.filter((source) => matchesSearch(marketQuery, [source.name, source.id, source.url]));
   // 追加できない利用者が `?id=new` を開いたら一覧を出す。
   const target = !canManage && editor.target.kind === "new" ? ({ kind: "list" } as const) : editor.target;
 
@@ -3874,9 +4265,40 @@ export function PluginMarketplacesPage() {
               // スピナーは行メニューの loading が担う（messaging.md §3.7）。
               <MarketplaceRefreshProcessing id={refreshMutation.variables} />
             ) : null}
+            <ListToolbar
+              search={
+                <ListSearchField
+                  id="marketplace-search"
+                  label={t("marketplaces.search")}
+                  value={marketQuery}
+                  onSearch={setMarketQuery}
+                  count={visibleMarkets.length}
+                />
+              }
+              summary={markets.data ? listCountLabel(visibleMarkets.length, list.length) : undefined}
+              testId="marketplace-list-toolbar"
+            />
             <QueryState query={markets} loadingLabel={t("loading.marketplaces")} skeleton={<TableSkeleton columns={5} />}>
               <MarketplaceTable
-                sources={list}
+                sources={visibleMarkets}
+                resetKey={marketQuery}
+                empty={
+                  list.length ? (
+                    <NoMatchState title={t("marketplaces.noMatch")} onClear={() => setMarketQuery("")} />
+                  ) : (
+                    <EmptyState
+                      title={t("marketplaces.empty")}
+                      hint={canManage ? t("marketplaces.emptyHint") : undefined}
+                      action={
+                        canManage ? (
+                          <Button variant="secondary" icon={Plus} onClick={editor.openNew}>
+                            {t("marketplaces.addFirst")}
+                          </Button>
+                        ) : undefined
+                      }
+                    />
+                  )
+                }
                 onOpen={(source) => editor.openItem(source.id)}
                 hrefFor={(source) => editor.itemHref(source.id)}
                 actionsFor={marketplaceActions}
@@ -3978,6 +4400,17 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
         back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("marketplaces.title") }), onClick: () => void back(), testId: "editor-back" }}
         actions={[
           {
+            id: "discard",
+            kind: "secondary",
+            label: t("editor.actions.discard"),
+            icon: RotateCcw,
+            disabled: sameDraft(form, EMPTY_MARKETPLACE_FORM) || addMutation.isPending,
+            onClick: () => {
+              setForm(EMPTY_MARKETPLACE_FORM);
+              setIdError(null);
+            },
+          },
+          {
             id: "create",
             kind: "primary",
             label: t("common.create"),
@@ -3997,7 +4430,8 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
         />
         <Section title={t("marketplaces.overview")}>
           <Card className="min-w-0">
-            <CardContent className="space-y-4 pt-5">
+            {/* ID / 名前を同じ行に、URL は全幅（README §4「wide 画面の 100% 充填」）。 */}
+            <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2">
               <TextField
                 id="mkt-id"
                 label={t("marketplaces.id")}
@@ -4017,6 +4451,7 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
               />
               <TextField
                 id="mkt-url"
+                className="col-span-full"
                 label={t("marketplaces.url")}
                 helper={t("marketplaces.urlHint")}
                 value={form.url}
@@ -4032,11 +4467,15 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
 
 function MarketplaceTable({
   sources,
+  resetKey,
+  empty,
   onOpen,
   hrefFor,
   actionsFor,
 }: {
   sources: MarketplaceSource[];
+  resetKey?: unknown;
+  empty: ReactNode;
   onOpen: (source: MarketplaceSource) => void;
   /** 名前のリンクの URL（新しいタブで開ける。#583）。 */
   hrefFor: (source: MarketplaceSource) => string;
@@ -4091,6 +4530,7 @@ function MarketplaceTable({
   return (
     <PagedDataTable
       pageKey="marketplaces"
+      resetKey={resetKey}
       rows={sources}
       columns={columns}
       getRowKey={(source) => source.id}
@@ -4098,7 +4538,7 @@ function MarketplaceTable({
       rowProps={() => ({ className: "align-top" })}
       tableClassName="w-full min-w-[44rem]"
       ariaLabel={t("marketplaces.list")}
-      empty={<EmptyState title={t("marketplaces.empty")} />}
+      empty={empty}
     />
   );
 }
@@ -4597,7 +5037,7 @@ export function RuntimeSnapshotSettingsPage() {
                 readOnly
                 monospace
                 spellCheck={false}
-                textareaClassName="min-h-80"
+                rows={16}
               />
               <div className="flex flex-wrap gap-2">
                 <Button variant="secondary" onClick={downloadSnapshot} icon={Download}>
@@ -4630,7 +5070,7 @@ export function RuntimeSnapshotSettingsPage() {
               }}
               monospace
               spellCheck={false}
-              textareaClassName="min-h-80"
+              rows={16}
             />
             <TextField
               id="runtime-snapshot-reason"
@@ -4929,13 +5369,43 @@ function AgentEditorView({
     if (await confirmClose()) onBack();
   }
 
-  function toggleSkill(skillId: string) {
-    setSkillIds((current) =>
-      current.includes(skillId)
-        ? current.filter((id) => id !== skillId)
-        : [...current, skillId].sort()
-    );
+  function setSkillSelected(skillId: string, selected: boolean) {
+    setSkillIds((current) => {
+      const next = current.filter((id) => id !== skillId);
+      return selected ? [...next, skillId].sort() : next;
+    });
   }
+
+  /** 「変更を破棄」: 保存済みの内容（新規は空のフォーム）に戻す（#618。確認は出さない。RAG と同じ）。 */
+  function discardChanges() {
+    setName(baseline.name);
+    setAgentDescription(baseline.description);
+    setInstructions(baseline.instructions);
+    setSkillIds(baseline.skill_ids);
+    setModelId(baseline.model_id);
+    setNewEnabled(true);
+    setNameError(null);
+    setTemplateId(null);
+  }
+
+  // スキルの選択は ListPicker（検索・表示中をすべて選択・選択中だけ表示・キーボード。page-archetypes.md「大量の候補から選ぶ」）。
+  const [skillSearch, setSkillSearch] = useState("");
+  const skillItem = (skill: AgentSkill): ListPickerItem => ({
+    key: skill.id,
+    label: skill.name,
+    textValue: skill.name,
+    description: skill.description || skill.id,
+    meta: (
+      <span className="flex shrink-0 flex-wrap items-center gap-1.5">
+        <StatusBadge variant={skillSourceVariant(skill.source)} label={skillSourceLabel(skill.source)} icon={false} />
+        {skill.enabled ? null : <StatusBadge variant="neutral" label={t("agent.disabled")} />}
+      </span>
+    ),
+  });
+  const skillItems = availableSkills
+    .filter((skill) => matchesSearch(skillSearch, [skill.name, skill.id, skill.description]))
+    .map(skillItem);
+  const selectedSkillItems = availableSkills.filter((skill) => skillIds.includes(skill.id)).map(skillItem);
 
   function saveAgent() {
     setNameError(null);
@@ -4974,10 +5444,19 @@ function AgentEditorView({
         subtitle={agent ? agent.id : t("page.agents.subtitle")}
         // 一覧へ戻るは左上、保存は右端の primary（#618）。
         back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("nav.agents") }), onClick: () => void back(), testId: "editor-back" }}
+        // 一覧へ戻るは左上、保存は右端の primary、変更を破棄はその左の secondary（#618）。
         actions={[
           ...(readOnly
             ? []
             : [
+                {
+                  id: "discard",
+                  kind: "secondary" as const,
+                  label: t("editor.actions.discard"),
+                  icon: RotateCcw,
+                  disabled: !formDirty || pending,
+                  onClick: discardChanges,
+                },
                 {
                   id: "save",
                   kind: "primary" as const,
@@ -5030,7 +5509,8 @@ function AgentEditorView({
         <fieldset disabled={readOnly} className="min-w-0 space-y-6">
           <Section title={t("agent.basic")}>
             <Card className="min-w-0">
-              <CardContent className="space-y-4 pt-5">
+              {/* wide の画面では段組みで埋める（名前 / 説明、モデル / 有効を同じ行に、指示は全幅。README §4）。 */}
+              <CardContent className="grid gap-x-6 gap-y-4 pt-5 lg:grid-cols-2">
                 <TextField
                   id={`${fieldId}-agent-name`}
                   label={t("agent.name")}
@@ -5051,16 +5531,16 @@ function AgentEditorView({
                 <TextareaField
                   id={`${fieldId}-agent-instructions`}
                   label={t("agent.instructions")}
+                  className="col-span-full"
                   value={instructions}
                   onValueChange={setInstructions}
-                  textareaClassName="min-h-24"
+                  rows={8}
                 />
                 {/* 実行は組み込み Runtime（#754）。空は「既定のテキストモデル」（システム設定 > モデル）。 */}
                 <SelectField
                   id={`${fieldId}-agent-model`}
                   label={t("agent.model")}
                   helper={t("agent.modelHint")}
-                  width="lg"
                   disabled={modelsLoading}
                   value={modelId}
                   emptyOptionLabel={
@@ -5070,12 +5550,13 @@ function AgentEditorView({
                   onValueChange={setModelId}
                 />
                 {!agent ? (
-                  <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-fg">
-                    <input
-                      type="checkbox"
+                  // 有効は Switch（スキルのエディタと同じ形）。作成した後は対象の操作（有効にする / 無効にする）で切り替える。
+                  <label className="flex items-center gap-2 self-end text-sm text-fg">
+                    <Switch
                       checked={newEnabled}
-                      onChange={(event) => setNewEnabled(event.target.checked)}
-                      className="h-4 w-4"
+                      aria-label={t("agent.enabled")}
+                      onCheckedChange={setNewEnabled}
+                      data-testid="agent-new-enabled"
                     />
                     {t("agent.enabled")}
                   </label>
@@ -5087,40 +5568,42 @@ function AgentEditorView({
             {skillsError ? <Banner severity="danger">{skillsError.message}</Banner> : null}
             {skillsLoading ? (
               <TimedLoadingState label={t("loading.skills")} testId="agent-skills-loading">
-                <ListSkeleton rows={4} rowClassName="h-11" className="md:grid-cols-2" />
+                <ListSkeleton rows={4} />
               </TimedLoadingState>
             ) : availableSkills.length ? (
-              <div className="grid gap-2 md:grid-cols-2">
-                {availableSkills.map((skill) => (
-                  <label
-                    key={skill.id}
-                    className="flex min-h-11 min-w-0 flex-col items-stretch justify-between gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm md:flex-row md:items-center"
-                  >
-                    <span className="flex min-w-0 flex-1 items-start gap-2">
-                      <input
-                        type="checkbox"
-                        checked={skillIds.includes(skill.id)}
-                        onChange={() => toggleSkill(skill.id)}
-                        className="mt-0.5 h-4 w-4 shrink-0"
-                      />
-                      <span className="min-w-0">
-                        <span className="block break-words font-medium leading-5 text-fg [overflow-wrap:anywhere]">
-                          {skill.name}
-                        </span>
-                        <span className="mt-1 block text-xs leading-5 text-fg-muted">{skill.description}</span>
-                      </span>
-                    </span>
-                    <span className="flex shrink-0 flex-wrap items-center gap-1.5">
-                      <StatusBadge
-                        variant={skillSourceVariant(skill.source)}
-                        label={skillSourceLabel(skill.source)}
-                        icon={false}
-                      />
-                      {skill.enabled ? null : <StatusBadge variant="neutral" label={t("agent.disabled")} />}
-                    </span>
-                  </label>
-                ))}
-              </div>
+              <ListPicker
+                id={`${fieldId}-agent-skills`}
+                label={t("agent.skillPicker.label")}
+                items={skillItems}
+                selectedKeys={new Set(skillIds)}
+                selectedItems={selectedSkillItems}
+                onToggle={(item, selected) => setSkillSelected(item.key, selected)}
+                onSelectMany={(items) =>
+                  setSkillIds((current) => [...new Set([...current, ...items.map((item) => item.key)])].sort())
+                }
+                onClearSelection={() => setSkillIds([])}
+                search={{
+                  id: `${fieldId}-agent-skill-search`,
+                  label: t("agent.skillPicker.search"),
+                  placeholder: t("agent.skillPicker.search"),
+                  value: skillSearch,
+                  onSearch: setSkillSearch,
+                }}
+                disabled={readOnly || pending}
+                labels={{
+                  resultCount: ({ visible, total, selected }) =>
+                    t("agent.skillPicker.count", {
+                      visible: formatNumber(visible),
+                      total: formatNumber(total),
+                      selected: formatNumber(selected),
+                    }),
+                  emptyTitle: t("agent.skillPicker.empty"),
+                  noResultsTitle: t("agent.skillPicker.noMatch"),
+                  selectedEmpty: t("agent.skillPicker.selectedEmpty"),
+                  clearSearch: t("common.clearSearch"),
+                }}
+                testId="agent-skill-picker"
+              />
             ) : skillsError ? null : (
               <Banner severity="warning">{t("agent.skillsUnavailable")}</Banner>
             )}
@@ -5156,12 +5639,20 @@ function runCapabilities(run: RunState): { canCancel: boolean; canResume: boolea
 
 function RunHistoryList({
   runs,
+  resetKey,
+  toolbar,
+  empty,
   selectedRunId,
   onSelect,
   actionsFor,
   agentNameOf,
 }: {
   runs: RunState[];
+  /** 検索語・絞り込みが変わったら 1 ページ目へ戻す契機。 */
+  resetKey: unknown;
+  /** 表の上の検索・絞り込み（ListToolbar）。 */
+  toolbar: ReactNode;
+  empty: ReactNode;
   selectedRunId: string | null;
   onSelect: (runId: string) => void;
   actionsFor: (run: RunState) => EntityAction[];
@@ -5209,10 +5700,12 @@ function RunHistoryList({
         <CardTitle>{t("run.history")}</CardTitle>
         <CardDescription>{t("run.historyDescription")}</CardDescription>
       </CardHeader>
-      <CardContent>
-        {/* 5 秒ごとの再取得で行が変わっても、ページは作業状態に残して戻さない。 */}
+      <CardContent className="space-y-3">
+        {toolbar}
+        {/* 5 秒ごとの再取得で行が変わっても、ページは作業状態に残して戻さない（戻すのは絞り込みを変えたときだけ）。 */}
         <PagedDataTable
           pageKey="runs"
+          resetKey={resetKey}
           rows={runs}
           columns={columns}
           getRowKey={(run) => run.id}
@@ -5221,7 +5714,7 @@ function RunHistoryList({
           rowProps={(run) => ({ className: "align-top", "data-testid": `run-row-${run.id}` })}
           ariaLabel={t("run.history")}
           paginationTestId="run-history-pagination"
-          empty={<EmptyState title={t("common.empty.title")} />}
+          empty={empty}
         />
       </CardContent>
     </Card>
