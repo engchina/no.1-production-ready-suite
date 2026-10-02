@@ -20,6 +20,7 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
+from pr_backend_core.internal_http import http_client_options
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     Counter,
@@ -584,7 +585,10 @@ def _export_trace_event_webhook(event: TraceEvent) -> None:
         "source": settings.service_name,
         "event": event.model_dump(mode="json"),
     }
-    with httpx.Client(timeout=settings.agent_trace_exporter_timeout_seconds) as client:
+    with httpx.Client(
+        timeout=settings.agent_trace_exporter_timeout_seconds,
+        **http_client_options(settings.agent_trace_exporter_url),
+    ) as client:
         response = client.post(
             settings.agent_trace_exporter_url,
             json=payload,
@@ -599,9 +603,13 @@ def _export_trace_event_otlp(event: TraceEvent) -> None:
     settings = get_settings()
     if settings.agent_opentelemetry_endpoint is None:
         return
-    with httpx.Client(timeout=settings.agent_trace_exporter_timeout_seconds) as client:
+    endpoint = _otlp_traces_endpoint(settings.agent_opentelemetry_endpoint)
+    with httpx.Client(
+        timeout=settings.agent_trace_exporter_timeout_seconds,
+        **http_client_options(endpoint),
+    ) as client:
         response = client.post(
-            _otlp_traces_endpoint(settings.agent_opentelemetry_endpoint),
+            endpoint,
             json=_otlp_trace_payload(event, service_name=settings.service_name),
             headers={"Content-Type": "application/json"},
         )

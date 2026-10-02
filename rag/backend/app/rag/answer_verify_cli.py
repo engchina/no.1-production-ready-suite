@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from pr_backend_core.internal_http import http_client_options
 
 from app.rag.evaluation_cli import _request_headers
 
@@ -72,6 +73,7 @@ class RagApi:
             timeout=timeout,
             headers={"Accept": "application/json", **headers},
             transport=transport,
+            **http_client_options(base_url),
         )
 
     def close(self) -> None:

@@ -40,6 +40,7 @@ if [ "$1" = sync ]; then
   exit 0
 fi
 [ "$1" = run ] && [ "$2" = --no-sync ]
+printf '%s\n%s\n' "${NO_PROXY-<unset>}" "${no_proxy-<unset>}" > "$TEST_DIR/server-no-proxy"
 echo server >> "$TEST_EVENTS"
 if [ "${TEST_SERVER_FAIL:-0}" != 0 ]; then exit 24; fi
 touch "$TEST_DIR/serving"
@@ -116,6 +117,36 @@ def test_readiness_does_not_use_the_proxy_from_the_environment(
     result = _run(startup)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "backend ready を確認しました" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    [
+        ({}, ["localhost,127.0.0.1,::1"] * 2),
+        (
+            {"NO_PROXY": "example.com,127.0.0.1"},
+            ["example.com,127.0.0.1,localhost,::1"] * 2,
+        ),
+        (
+            {"NO_PROXY": ".corp", "no_proxy": "localhost,10.0.0.1"},
+            [".corp,localhost,127.0.0.1,::1", "localhost,10.0.0.1,127.0.0.1,::1"],
+        ),
+    ],
+    ids=["unset", "upper-only", "both"],
+)
+def test_backend_does_not_send_loopback_calls_through_the_proxy(
+    startup: tuple[Path, dict[str, str]], environment: dict[str, str], expected: list[str]
+) -> None:
+    """backend は既存の NO_PROXY を残したまま loopback を足して起動する（#852）。"""
+    _, env = startup
+    for key in ("no_proxy", "NO_PROXY"):
+        env.pop(key, None)
+    env.update(http_proxy="http://proxy.invalid:80", HTTP_PROXY="http://proxy.invalid:80")
+    env.update(environment)
+    result = _run(startup)
+    assert result.returncode == 0, result.stdout + result.stderr
+    no_proxy = (Path(env["TEST_DIR"]) / "server-no-proxy").read_text().splitlines()
+    assert no_proxy == expected
 
 
 @pytest.mark.parametrize("failure", ["TEST_SYNC_FAIL", "TEST_SERVER_FAIL", "TEST_NOT_READY"])

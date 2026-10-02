@@ -11,6 +11,7 @@ import logging
 from typing import Literal
 
 import httpx
+from pr_backend_core.internal_http import http_client_options
 
 from app.config import Settings
 from app.services.catalog import (
@@ -49,7 +50,7 @@ async def probe_health(settings: Settings, url: str, service_id: str) -> HealthS
     """/health を 1 回だけ問い合わせる(例外は unreachable へ縮退)。"""
     timeout = float(settings.rag_service_status_probe_timeout_seconds)
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, **http_client_options(url)) as client:
             response = await client.get(f"{url}/health")
             response.raise_for_status()
             payload = response.json()

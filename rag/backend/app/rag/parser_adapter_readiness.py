@@ -13,6 +13,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from pr_backend_core.internal_http import http_client_options
+
 from app.clients.external_parser import (
     ENGINE_SPECS,
     external_parser_connection,
@@ -246,7 +248,10 @@ def _probe_service_health(
     try:
         import httpx
 
-        with httpx.Client(timeout=float(settings.rag_parser_readiness_probe_timeout_seconds)) as c:
+        with httpx.Client(
+            timeout=float(settings.rag_parser_readiness_probe_timeout_seconds),
+            **http_client_options(url),
+        ) as c:
             response = request_with_retry(
                 c,
                 "GET",

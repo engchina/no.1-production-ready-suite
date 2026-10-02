@@ -126,8 +126,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # 共通認証のログインユーザー ID。空ならその呼び出しは失敗する。
     agent_mcp_service_user_login_id: str = ""
     # MCP の 1 メッセージの再試行の回数（#854）。送信前の失敗（接続できない・接続の timeout）と
-    # 429 / 503 は全メッセージ、502 / 504 は手順（initialize・tools/list）と読み取り専用のツールだけ。
-    # 待ちは指数 backoff + jitter（Retry-After に従う）で、呼び出し全体は接続の timeout に収める。
+    # 429 / 503 は全メッセージ、502 / 504 は手順（initialize・tools/list）と読み取り専用の
+    # ツールだけ。待ちは指数 backoff + jitter（Retry-After に従う）で、呼び出し全体は接続の
+    # timeout に収める。
     agent_external_mcp_max_retries: int = 3
     # MCP 接続の宣言。JSON list か {"servers": [...]}。各項目は server_id/id 必須、
     # base_url・auth_mode・資格情報・timeout_seconds を任意で持つ。
@@ -151,6 +152,12 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # （起動時に判定）。
     agent_runtime_repository_backend: str = "auto"
     agent_runtime_snapshot_path: str | None = None
+    # 起動時に保存先の DB へ接続できない（接続のエラー）ときの再試行の回数と、最初の待ち（秒。
+    # 指数 backoff + jitter、上限 30 秒）。1 回の接続の上限は
+    # PLATFORM_ORACLE_TCP_CONNECT_TIMEOUT_SECONDS。
+    # それでも接続できなければ auto は memory で起動し、明示した oracle_* は止まる（#853）。
+    agent_runtime_storage_connect_retries: int = Field(default=2, ge=0, le=10)
+    agent_runtime_storage_connect_retry_delay_seconds: float = Field(default=2.0, ge=0.0, le=30.0)
     agent_runtime_projection_retention_days: int = 0
     agent_runtime_projection_write_mode: str = "replace"
     agent_max_tool_calls_per_run: int = 20

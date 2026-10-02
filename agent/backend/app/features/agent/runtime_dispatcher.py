@@ -5,6 +5,9 @@
 `AGENT_RUNTIME_DISPATCH_MODE` が `in_process` 以外のとき、API は Run を queued で作るだけで、
 この worker が Oracle の checkpoint の row lock で Run を claim して実行する。承認がすべて決まって
 queued に戻った Run は、保存した SDK の状態から再開する。
+
+1 回の claim・実行の失敗（DB の一時的な障害など）で worker を止めない。失敗はログに残し、
+待ち（poll の間隔から 2 倍ずつ、上限 60 秒）を置いて続ける（#853）。
 """
 
 from __future__ import annotations
@@ -20,6 +23,10 @@ from app.features.agent.runtime import builtin_resume_pending, runtime_repositor
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
+# 失敗が続いたときの待ちの上限（秒）。
+_MAX_ERROR_BACKOFF_SECONDS = 60.0
+# 待ち（テストは待たない関数に差し替える）。
+_sleep = asyncio.sleep
 
 
 async def dispatch_once(worker_id: str) -> bool:
@@ -46,10 +53,23 @@ async def run_forever() -> None:
     )
     poll_seconds = max(0.1, settings.agent_runtime_dispatch_poll_seconds)
     logger.info("runtime-dispatcher started: %s", worker_id)
+    failures = 0
     while True:
-        claimed = await dispatch_once(worker_id)
+        try:
+            claimed = await dispatch_once(worker_id)
+        except Exception:  # noqa: BLE001 - 1 回の失敗で worker を止めない（#853）
+            failures += 1
+            delay = min(poll_seconds * (2.0 ** (failures - 1)), _MAX_ERROR_BACKOFF_SECONDS)
+            logger.warning(
+                "runtime_dispatcher_iteration_failed",
+                extra={"worker_id": worker_id, "failures": failures, "delay_seconds": delay},
+                exc_info=True,
+            )
+            await _sleep(delay)
+            continue
+        failures = 0
         if not claimed:
-            await asyncio.sleep(poll_seconds)
+            await _sleep(poll_seconds)
 
 
 def main() -> None:

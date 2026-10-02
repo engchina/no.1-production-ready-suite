@@ -18,7 +18,7 @@ os.environ["AGENT_RUNTIME_REPOSITORY_BACKEND"] = "memory"
 import pytest  # noqa: E402
 from pr_system_settings.database_status import clear_database_status_cache  # noqa: E402
 
-from app.features.agent import run_facts_store, storage_backend, tools  # noqa: E402
+from app.features.agent import run_facts_store, runtime, storage_backend, tools  # noqa: E402
 from app.security.service import SecurityService, set_security_service  # noqa: E402
 from app.security.store import InMemorySecurityStore  # noqa: E402
 from app.settings import get_settings  # noqa: E402
@@ -58,6 +58,12 @@ def _fresh_storage_backend_decision() -> Iterator[None]:
     storage_backend.reset()
     yield
     storage_backend.reset()
+
+
+@pytest.fixture(autouse=True)
+def _no_storage_connect_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """起動時の保存先の DB の接続の再試行（#853）はテストでは待たない。"""
+    monkeypatch.setattr(runtime, "_retry_sleep", lambda _seconds: None)
 
 
 @pytest.fixture(autouse=True)

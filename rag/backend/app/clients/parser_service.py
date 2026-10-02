@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from typing import cast
 
 import httpx
+from pr_backend_core.internal_http import http_client_options
 from rag_parser_core.capabilities import supported_modalities
 from rag_parser_core.result import ParseResponse, ParserRegistryResult
 
@@ -390,7 +391,7 @@ class ParserServiceClient:
         files: Mapping[str, tuple[str, bytes, str]],
         data: Mapping[str, str],
     ) -> object:
-        with httpx.Client(timeout=self._timeout) as client:
+        with httpx.Client(timeout=self._timeout, **http_client_options(url)) as client:
             response = request_with_retry(
                 client,
                 "POST",

@@ -97,6 +97,27 @@ Agent が RAG / NL2SQL を呼ぶときは、呼び先の `POST /api/mcp`（MCP �
 - 呼び出し元の再試行と timeout（#854。Agent の `McpSession`）: 送信前の失敗（接続できない・接続の timeout）と 429 / 503 はどのメッセージも、502 / 504 は状態を変えない手順（`initialize`・`tools/list`）と読み取り専用（`annotations.readOnlyHint=true`）のツールの `tools/call` だけ、上限付きの指数 backoff + jitter（`Retry-After` に従う）で再試行する。書き込みのツールは呼び先に届いた可能性がある失敗（読み取りの timeout・500 / 502 / 504）では再送しない。1 回のツールの呼び出し全体は接続の timeout に収める。呼び先は、副作用のあるツールに `readOnlyHint` を付けない・429 / 503 は処理を始める前にだけ返す（`Retry-After` を付けてよい）こと。
 - ツールの契約（名前・`inputSchema`・`outputSchema`（`McpTool.output_model`。#250）・`annotations`）の正本は `platform/contracts/mcp/<製品>-tools.json`（#248）。RAG / NL2SQL の `tests/test_mcp_contract.py` が実装と一致を、Agent の `tests/test_product_mcp_contract.py` が送る引数の収まりと、読む出力の項目（入れ子を含む）が呼び先の出力にあることを確かめる。ツールを変えたら呼び先の製品で `UPDATE_MCP_CONTRACT=1 uv run pytest tests/test_mcp_contract.py` で契約を書き直し、Agent のテストも通す。
 
+## 内部の HTTP と環境のプロキシ（#852）
+
+OCI に届くために `HTTP_PROXY` / `HTTPS_PROXY`（社内プロキシ）を設定した環境でも、同じマシン・private network の
+サービスへの HTTP は環境のプロキシを通さない。プロキシは 127.0.0.1 などへ届けられず `502 cannotconnect` などを返し、
+未起動のサービスへの「未到達」が「サービスの応答した失敗」に見えてしまう（#852 で RAG の pipeline の stage が
+in-process へ縮退せず、MCP の `rag_search` が止まった）。
+
+- httpx の client（`Client` / `AsyncClient`）は、宛先の URL を `pr_backend_core.internal_http.http_client_options(url)`
+  に通した引数で作る: `httpx.Client(timeout=..., **http_client_options(url))`。宛先が内部（loopback `127.0.0.0/8`・`::1`・
+  `localhost` / `*.localhost`・`0.0.0.0`・link-local・RFC 1918 / ULA の private・`*.local` / `*.internal`・unix socket）なら
+  `trust_env=False`（環境のプロキシ・`SSL_CERT_FILE`・`.netrc` を読まない）、外部（OCI・外部の MCP など）なら空で、
+  今までどおり環境のプロキシを使う。DNS は引かず、名前の形と IP の値だけで判定する（`is_internal_url`）。
+- 対象: RAG の前処理・parser・外部 parser・pipeline の stage・サービス管理の health・parser の readiness・trace の送信・
+  評価 / 検証 / 負荷の CLI、Agent の MCP 接続（RAG / NL2SQL / 外部）と OAuth の token・マーケットプレイスの取得・trace の
+  送信。宛先が設定値の接続も、内部の宛先のときだけプロキシを外す。OCI Enterprise AI など外部だけへの client は対象外。
+- 多重の防御として、各製品の `scripts/start-backend.sh` は既存の値を残したまま `NO_PROXY` / `no_proxy` に
+  `localhost,127.0.0.1,::1` を足して backend を起動する（起動の readiness の確認は #781 の `curl --noproxy "*"`）。
+- 内部の宛先をホスト名（例: VCN の DNS 名）で設定する場合は、名前からは判定できないため `NO_PROXY` に加える。RAG の
+  pipeline の stage は、内部と判定できない宛先で環境のプロキシを通り 502 / 504 が返ったときだけ、プロキシの応答として
+  未到達（in-process へ縮退）にする。サービス自身が応答した失敗は今までどおり縮退せず止める。
+
 ## 統一レスポンス envelope
 
 ```jsonc

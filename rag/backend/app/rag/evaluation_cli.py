@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
+from pr_backend_core.internal_http import http_client_options
 from pydantic import ValidationError
 
 from app.clients.http_retry import HttpRetryConfig, request_with_retry
@@ -251,7 +252,10 @@ def _post_evaluation_request(
     status_url: str | None = None
     try:
         with httpx.Client(
-            timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=False, transport=transport
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            follow_redirects=False,
+            transport=transport,
+            **http_client_options(submit_url),
         ) as client:
             job = _job_from_response(
                 _request_json(client, "POST", submit_url, json=payload, headers=request_headers)

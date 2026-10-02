@@ -14,6 +14,7 @@ from itertools import batched
 from typing import Any, Literal, cast
 
 import httpx
+from pr_backend_core.internal_http import http_client_options
 from rag_parser_core.extraction import ExtractionMetadataValue, ExtractionPage
 from rag_parser_core.result import ParserRegistryResult
 
@@ -411,7 +412,9 @@ class ExternalParserClient:
         if connection.api_key:
             headers["Authorization"] = f"Bearer {connection.api_key}"
         try:
-            with httpx.Client(timeout=timeout or self._timeout) as client:
+            with httpx.Client(
+                timeout=timeout or self._timeout, **http_client_options(url)
+            ) as client:
                 response = request_with_retry(
                     client,
                     method,

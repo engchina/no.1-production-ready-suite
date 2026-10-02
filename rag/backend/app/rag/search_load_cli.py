@@ -22,6 +22,7 @@ from time import perf_counter
 from typing import Any
 
 import httpx
+from pr_backend_core.internal_http import http_client_options
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.clients.http_retry import HttpRetryConfig, async_request_with_retry
@@ -232,7 +233,9 @@ async def _run_load(
     if timeout <= 0:
         raise SearchLoadCliError("timeout は 0 より大きい値にしてください。")
     semaphore = asyncio.Semaphore(scenario.concurrency)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout, follow_redirects=False, **http_client_options(api_url)
+    ) as client:
         tasks = [
             _run_one(
                 client,

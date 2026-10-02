@@ -122,6 +122,9 @@ def test_storage_api_returns_status_without_connection_details(monkeypatch: Monk
         "persistent": False,
         "database_configured": True,
         "reason": "memory_backend",
+        "repaired_runs": 0,
+        "skipped_runs": 0,
+        "skipped_agents": 0,
     }
 
 
