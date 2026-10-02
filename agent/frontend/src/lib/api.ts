@@ -189,6 +189,73 @@ export interface RunState {
   updated_at: string;
 }
 
+/** 品質評価のケース（#776）。`id` を省くと `case-<番号>`。 */
+export interface EvaluationCase {
+  id?: string;
+  question: string;
+  expected: string;
+}
+
+export type JudgeVerdict = "correct" | "incorrect" | "uncertain";
+export type EvaluationCaseStatus =
+  | "pending"
+  | "running"
+  | "judged"
+  | "run_failed"
+  | "needs_approval"
+  | "timed_out"
+  | "judge_failed"
+  | "cancelled";
+export type EvaluationJobStatus = "queued" | "running" | "completed" | "cancelled" | "failed";
+
+export interface EvaluationJudgement {
+  verdict: JudgeVerdict;
+  score: number;
+  summary: string;
+  missing_points: string[];
+}
+
+export interface EvaluationCaseResult {
+  case: Required<EvaluationCase>;
+  status: EvaluationCaseStatus;
+  run_id: string | null;
+  answer: string;
+  judgement: EvaluationJudgement | null;
+  error: string | null;
+  duration_ms: number | null;
+}
+
+export interface EvaluationSummary {
+  total: number;
+  completed: number;
+  correct: number;
+  incorrect: number;
+  uncertain: number;
+  errors: number;
+  /** 正しいと判定したケース / 終わったケース（評価できなかったケースは不合格に数える）。 */
+  pass_rate: number | null;
+  average_score: number | null;
+}
+
+export interface EvaluationJob {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  status: EvaluationJobStatus;
+  created_by_user_uuid: string | null;
+  results: EvaluationCaseResult[];
+  error: string | null;
+  summary: EvaluationSummary;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export type EvaluationJobItem = Pick<
+  EvaluationJob,
+  "id" | "agent_id" | "agent_name" | "status" | "summary" | "created_at" | "finished_at"
+>;
+
 export interface ToolAuditRecord {
   step_id: string;
   tool_name: string;
@@ -757,6 +824,15 @@ export const agentApi = {
   getRun: (runId: string) => request<RunState>(`/api/runs/${runId}`),
   getRunAudit: (runId: string) =>
     request<RunAuditData>(`/api/runs/${runId}/audit`),
+  /** 品質評価（#776）。 */
+  createEvaluation: (payload: { agent_id: string; cases: EvaluationCase[] }) =>
+    request<EvaluationJob>("/api/evaluations", { method: "POST", body: JSON.stringify(payload) }),
+  listEvaluations: () => request<{ jobs: EvaluationJobItem[] }>("/api/evaluations"),
+  getEvaluation: (jobId: string) => request<EvaluationJob>(`/api/evaluations/${encodeURIComponent(jobId)}`),
+  cancelEvaluation: (jobId: string) =>
+    request<EvaluationJob>(`/api/evaluations/${encodeURIComponent(jobId)}/cancel`, { method: "POST" }),
+  deleteEvaluation: (jobId: string) =>
+    request<null>(`/api/evaluations/${encodeURIComponent(jobId)}`, { method: "DELETE" }),
   listToolCallAudit: (filters: ToolCallAuditFilters) =>
     request<ToolCallAuditData>(`/api/audit/tool-calls${auditQuery(filters)}`),
   /** 監査 CSV。Cookie セッションで取得し、401 / 403 は他の API と同じく通知する（#215）。 */

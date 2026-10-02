@@ -177,6 +177,52 @@ export const BUILTIN_RUNTIME_STATUS = {
   ],
 };
 
+/** 応答に出す評価（mock の内部の数 `_polls` を除く）。 */
+function publicJob(job: Json): Json {
+  return clone(Object.fromEntries(Object.entries(job).filter(([key]) => key !== "_polls")));
+}
+
+/** 評価の概要（backend の `summarize` と同じ数え方）。 */
+export function evaluationSummary(results: Json[]): Json {
+  const judged = results.filter((item) => item.status === "judged" && item.judgement);
+  const verdict = (name: string) => judged.filter((item) => (item.judgement as Json).verdict === name).length;
+  const completed = results.filter((item) => item.status !== "pending" && item.status !== "running").length;
+  const cancelled = results.filter((item) => item.status === "cancelled").length;
+  const errors = results.filter((item) =>
+    ["run_failed", "needs_approval", "timed_out", "judge_failed"].includes(String(item.status))
+  ).length;
+  const scores = judged.map((item) => Number((item.judgement as Json).score));
+  const finished = completed - cancelled;
+  return {
+    total: results.length,
+    completed,
+    correct: verdict("correct"),
+    incorrect: verdict("incorrect"),
+    uncertain: verdict("uncertain"),
+    errors,
+    pass_rate: finished > 0 ? verdict("correct") / finished : null,
+    average_score: scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null,
+  };
+}
+
+/** 実行中の評価を完了にする（質問に「売上」を含むケースは誤り、それ以外は正しい）。 */
+function finishEvaluation(job: Json) {
+  for (const [index, result] of (job.results as Json[]).entries()) {
+    const question = String((result.case as Json).question);
+    const wrong = question.includes("売上");
+    result.status = "judged";
+    result.run_id = `run-eval-${index + 1}`;
+    result.answer = wrong ? "分かりません。" : "毎月 25 日です。過ぎた分は翌月の精算になります。";
+    result.judgement = wrong
+      ? { verdict: "incorrect", score: 0, summary: "金額を答えていません。", missing_points: ["今月の売上の合計金額"] }
+      : { verdict: "correct", score: 1, summary: "要点を満たしています。", missing_points: [] };
+    result.duration_ms = 4200;
+  }
+  job.status = "completed";
+  job.finished_at = MOCK_NOW;
+  job.summary = evaluationSummary(job.results as Json[]);
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -193,6 +239,9 @@ function createState() {
     tools: d.tools as unknown as Json[],
     // 監査の記録（`GET /api/audit/tool-calls`）。offset / limit で切り出して返す（#265）。
     auditRecords: [] as Json[],
+    // 品質評価（#776）。新しい順。作成直後は実行中で、`pollsUntilDone` 回の取得の後に完了する。
+    evaluations: [] as Json[],
+    evaluationPollsUntilDone: 1,
     plugins: [] as Json[],
     marketplaces: [] as Json[],
     tracePolicy: d.tracePolicy as Json,
@@ -513,6 +562,74 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       }
     }
     throw new HttpError(404, `approval not found: ${second}`);
+  }
+  // --- 品質評価（#776） ---
+  if (method === "POST" && at("evaluations")) {
+    if (state.evaluations.some((job) => job.status === "running")) {
+      throw new HttpError(409, "ほかの評価を実行しています。終わってから始めてください。");
+    }
+    const cases = (body.cases as Json[] | undefined) ?? [];
+    const job: Json = {
+      id: `eval-${state.evaluations.length + 1}`,
+      agent_id: body.agent_id,
+      agent_name: body.agent_id === "default" ? "汎用業務 Agent" : String(body.agent_id),
+      status: "running",
+      created_by_user_uuid: "local",
+      results: cases.map((item, index) => ({
+        case: { id: item.id ?? `case-${index + 1}`, question: item.question, expected: item.expected },
+        status: "pending",
+        run_id: null,
+        answer: "",
+        judgement: null,
+        error: null,
+        duration_ms: null,
+      })),
+      error: null,
+      summary: evaluationSummary([]),
+      created_at: MOCK_NOW,
+      started_at: MOCK_NOW,
+      finished_at: null,
+      _polls: 0,
+    };
+    job.summary = evaluationSummary(job.results as Json[]);
+    state.evaluations.unshift(job);
+    return publicJob(job);
+  }
+  if (method === "GET" && at("evaluations")) {
+    return {
+      jobs: state.evaluations.map((job) => ({
+        id: job.id,
+        agent_id: job.agent_id,
+        agent_name: job.agent_name,
+        status: job.status,
+        summary: job.summary,
+        created_at: job.created_at,
+        finished_at: job.finished_at,
+      })),
+    };
+  }
+  if (head === "evaluations" && second) {
+    const job = findOr404(state.evaluations, "id", second, "evaluation");
+    if (method === "GET" && at("evaluations", "*")) {
+      if (job.status === "running") {
+        job._polls = Number(job._polls) + 1;
+        if (Number(job._polls) > state.evaluationPollsUntilDone) finishEvaluation(job);
+      }
+      return publicJob(job);
+    }
+    if (method === "POST" && at("evaluations", "*", "cancel")) {
+      job.status = "cancelled";
+      for (const result of job.results as Json[]) {
+        if (result.status === "pending" || result.status === "running") result.status = "cancelled";
+      }
+      job.summary = evaluationSummary(job.results as Json[]);
+      return publicJob(job);
+    }
+    if (method === "DELETE" && at("evaluations", "*")) {
+      if (job.status === "running") throw new HttpError(409, "実行中の評価は削除できません。");
+      state.evaluations = state.evaluations.filter((item) => item !== job);
+      return null;
+    }
   }
   if (method === "GET" && at("audit", "tool-calls")) {
     const offset = Number(query.get("offset") ?? 0);

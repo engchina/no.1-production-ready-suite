@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -74,6 +75,18 @@ import app.settings as app_settings
 from app.features.agent import builtin_runtime, control_plane_store
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
 from app.features.agent.control_plane_store import ControlPlaneStoreError
+from app.features.agent.evaluation import (
+    CaseStatus,
+    EvaluationBusyError,
+    EvaluationCaseResult,
+    EvaluationJob,
+    EvaluationJobActiveError,
+    EvaluationJobsData,
+    EvaluationRequest,
+    evaluation_store,
+    job_item,
+    run_evaluation_job,
+)
 from app.features.agent.plugins import (
     MarketplaceListing,
     MarketplaceSource,
@@ -1498,6 +1511,87 @@ async def get_run_audit(
         raise HTTPException(status_code=404, detail="run not found") from exc
     _require_agent_access(request, run.agent_id)
     return ApiResponse(data=_run_audit_data(run))
+
+
+# 実行中の評価の task（GC で消えないよう参照を持つ。#776）。
+_evaluation_tasks: set[asyncio.Task[None]] = set()
+
+
+@router.post("/evaluations", response_model=ApiResponse[EvaluationJob], status_code=202)
+async def create_evaluation(
+    evaluation: EvaluationRequest,
+    request: Request,
+) -> ApiResponse[EvaluationJob]:
+    """品質評価を始める（#776）。権限は middleware のメニュー権限（`menu.evaluation`）。
+
+    評価の Run は始めた利用者の Run として作るため、業務 Agent の対象範囲を確かめる。
+    """
+    _require_agent_access(request, evaluation.agent_id)
+    agent = _control_plane_agent(evaluation.agent_id)
+    if not agent.enabled or agent.migration_required:
+        raise HTTPException(status_code=409, detail="この業務 Agent は実行できない状態です。")
+    job = EvaluationJob(
+        agent_id=agent.id,
+        agent_name=agent.name,
+        created_by_user_uuid=_run_creator_user_uuid(request),
+        results=[EvaluationCaseResult(case=case) for case in evaluation.cases],
+    )
+    try:
+        created = evaluation_store.create(job)
+    except EvaluationBusyError as exc:
+        raise HTTPException(
+            status_code=409, detail="ほかの評価を実行しています。終わってから始めてください。"
+        ) from exc
+    task = asyncio.get_running_loop().create_task(run_evaluation_job(created.id))
+    _evaluation_tasks.add(task)
+    task.add_done_callback(_evaluation_tasks.discard)
+    return ApiResponse(data=created)
+
+
+@router.get("/evaluations", response_model=ApiResponse[EvaluationJobsData])
+async def list_evaluations(request: Request) -> ApiResponse[EvaluationJobsData]:
+    """最近の評価（新しい順。利用できる業務 Agent の評価だけ）。"""
+    jobs = [job for job in evaluation_store.list() if _agent_allowed(request, job.agent_id)]
+    return ApiResponse(data=EvaluationJobsData(jobs=[job_item(job) for job in jobs]))
+
+
+def _evaluation_for_actor(request: Request, job_id: str) -> EvaluationJob:
+    try:
+        job = evaluation_store.get(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="評価が見つかりません。") from exc
+    if not _agent_allowed(request, job.agent_id):
+        raise HTTPException(status_code=404, detail="評価が見つかりません。")
+    return job
+
+
+@router.get("/evaluations/{job_id}", response_model=ApiResponse[EvaluationJob])
+async def get_evaluation(job_id: str, request: Request) -> ApiResponse[EvaluationJob]:
+    return ApiResponse(data=_evaluation_for_actor(request, job_id))
+
+
+@router.post("/evaluations/{job_id}/cancel", response_model=ApiResponse[EvaluationJob])
+async def cancel_evaluation(job_id: str, request: Request) -> ApiResponse[EvaluationJob]:
+    """評価を取り消す（実行中のケースの Run も取り消し、残りのケースは実行しない）。"""
+    job = _evaluation_for_actor(request, job_id)
+    cancelled = evaluation_store.cancel(job.id)
+    for result in cancelled.results:
+        if result.status == CaseStatus.RUNNING and result.run_id:
+            with contextlib.suppress(KeyError):
+                runtime_repository.cancel_run(result.run_id)
+    return ApiResponse(data=evaluation_store.get(job.id))
+
+
+@router.delete("/evaluations/{job_id}", response_model=ApiResponse[None])
+async def delete_evaluation(job_id: str, request: Request) -> ApiResponse[None]:
+    job = _evaluation_for_actor(request, job_id)
+    try:
+        evaluation_store.delete(job.id)
+    except EvaluationJobActiveError as exc:
+        raise HTTPException(
+            status_code=409, detail="実行中の評価は削除できません。取り消してから削除してください。"
+        ) from exc
+    return ApiResponse(data=None)
 
 
 @router.get("/audit/tool-calls", response_model=ApiResponse[ToolCallAuditData])

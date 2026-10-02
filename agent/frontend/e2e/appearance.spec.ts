@@ -65,12 +65,14 @@ for (const viewport of [
     // 認証の確認後にサイドナビを描く。最後のセクションが出るまで待ってから並びを読む。
     await expect(sidebar.locator("#nav-section-nav-section-settings")).toHaveCount(1);
 
-    // 並びは NL2SQL / RAG と同じ「… → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定」（#87 / #215 / #658）。
+    // 並びは NL2SQL / RAG と同じ「… → 改善・運用 → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定」
+    // （#87 / #215 / #658 / #776）。
     const sectionIds = await sidebar
       .locator('[id^="nav-section-nav-section-"]')
       .evaluateAll((elements) => elements.map((element) => element.id));
     expect(sectionIds).toEqual([
       "nav-section-nav-section-controlPlane",
+      "nav-section-nav-section-improve",
       "nav-section-nav-section-security",
       "nav-section-nav-section-userRoles",
       "nav-section-nav-section-operations",
@@ -79,6 +81,8 @@ for (const viewport of [
 
     // セキュリティ設定は権限管理、運用設定はシステムテーブル（先頭。#751）と Agent 固有の2項目（MCP 接続・バックアップ。#757 / #762）、
     // ユーザーとロール・システム設定は3製品共通。
+    // 改善・運用は品質評価（#776。アイコンは RAG / NL2SQL と同じ FlaskConical）。
+    await expect(sidebar.locator('#nav-section-nav-section-improve a[href="/evaluation"]')).toHaveCount(1);
     const security = sidebar.locator("#nav-section-nav-section-security");
     const operations = sidebar.locator("#nav-section-nav-section-operations");
     const userRoles = sidebar.locator("#nav-section-nav-section-userRoles");
