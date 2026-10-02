@@ -1,0 +1,482 @@
+import { useRef, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Download, FileDown, FlaskConical, Plus, Save, Trash2, Undo2, Upload } from "lucide-react";
+import {
+  Button,
+  Card,
+  CardContent,
+  EmptyState,
+  ObjectActionBar,
+  PageBody,
+  PageHeader,
+  Pagination,
+  SaveErrorBanner,
+  Section,
+  SelectField,
+  TextareaField,
+  TextField,
+  toast,
+  useConfirm,
+  usePagination,
+  type EntityAction,
+} from "@engchina/production-ready-ui";
+
+import { agentPaginationLabels } from "@/components/ListViews";
+import { agentApi, type AgentProfile, type EvaluationCase, type EvaluationSet, type EvaluationSetInput } from "@/lib/api";
+import { t } from "@/lib/i18n";
+import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
+
+export const EVALUATION_MAX_CASES = 50;
+
+/** 画面で編集するケース（期待するツールはカンマ区切りの文字で持つ）。 */
+interface CaseDraft {
+  key: string;
+  id: string;
+  question: string;
+  expected: string;
+  tools: string;
+}
+
+interface SetDraft {
+  agentId: string;
+  name: string;
+  description: string;
+  cases: CaseDraft[];
+}
+
+let draftKey = 0;
+function nextKey() {
+  draftKey += 1;
+  return `case-draft-${draftKey}`;
+}
+
+function caseDraft(item?: EvaluationCase): CaseDraft {
+  return {
+    key: nextKey(),
+    id: item?.id ?? "",
+    question: item?.question ?? "",
+    expected: item?.expected ?? "",
+    tools: (item?.expected_tools ?? []).join(", "),
+  };
+}
+
+function draftOf(set: EvaluationSet | undefined, agentId: string): SetDraft {
+  return {
+    agentId: set?.agent_id ?? agentId,
+    name: set?.name ?? "",
+    description: set?.description ?? "",
+    cases: set ? set.cases.map((item) => caseDraft(item)) : [caseDraft()],
+  };
+}
+
+/** 比べるときは画面だけの key を外す。 */
+function comparable(draft: SetDraft) {
+  return { ...draft, cases: draft.cases.map(({ key: _key, ...rest }) => rest) };
+}
+
+function toPayload(draft: SetDraft): EvaluationSetInput {
+  return {
+    agent_id: draft.agentId,
+    name: draft.name.trim(),
+    description: draft.description.trim(),
+    cases: draft.cases.map((item) => ({
+      id: item.id.trim() || undefined,
+      question: item.question.trim(),
+      expected: item.expected.trim(),
+      expected_tools: item.tools
+        .split(/[,、]/)
+        .map((tool) => tool.trim())
+        .filter(Boolean),
+    })),
+  };
+}
+
+export function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/**
+ * 評価セットの全画面エディタ（A 型。`?id=new` / `?id=<評価セット ID>`。#776）。
+ * 評価ケースは表で 1 件ずつ編集し、Excel で取り込み・書き出しできる（NL2SQL の SQL生成評価と同じ列）。
+ */
+export function EvaluationSetEditor({
+  evaluationSet,
+  agents,
+  defaultAgentId,
+  onBack,
+  onSaved,
+  onStart,
+  onDeleted,
+  starting,
+}: {
+  evaluationSet?: EvaluationSet;
+  agents: AgentProfile[];
+  defaultAgentId: string;
+  onBack: () => void;
+  onSaved: (saved: EvaluationSet, created: boolean) => void;
+  onStart: (set: EvaluationSet) => void;
+  onDeleted: () => void;
+  starting: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const fileInput = useRef<HTMLInputElement | null>(null);
+  const [baseline, setBaseline] = useState<SetDraft>(() => draftOf(evaluationSet, defaultAgentId));
+  const [draft, setDraft] = useState<SetDraft>(baseline);
+  const [submitted, setSubmitted] = useState(false);
+  const dirty = !sameDraft(comparable(draft), comparable(baseline));
+
+  const save = useMutation({
+    mutationFn: (payload: EvaluationSetInput) =>
+      evaluationSet ? agentApi.updateEvaluationSet(evaluationSet.id, payload) : agentApi.createEvaluationSet(payload),
+    onSuccess: async (saved) => {
+      const next = draftOf(saved, saved.agent_id);
+      setBaseline(next);
+      setDraft(next);
+      setSubmitted(false);
+      toast.success(evaluationSet ? t("evaluation.set.saved") : t("evaluation.set.created"));
+      await queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
+      onSaved(saved, !evaluationSet);
+    },
+  });
+  const importCases = useMutation({
+    mutationFn: (file: File) => agentApi.parseEvaluationCasesXlsx(file),
+    onError: (error) => toast.error(t("evaluation.set.importFailed"), { description: error.message }),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => agentApi.deleteEvaluationSet(id),
+    onSuccess: async () => {
+      toast.success(t("evaluation.set.deleted"));
+      await queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
+      onDeleted();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const { confirmClose } = useEditorLeaveGuard(dirty, save.isPending);
+
+  const pagination = usePagination(draft.cases, 10, { resetKey: evaluationSet?.id ?? "new" });
+  const labels = agentPaginationLabels();
+
+  const nameError = submitted && !draft.name.trim() ? t("evaluation.set.nameRequired") : undefined;
+  const tooMany = draft.cases.length > EVALUATION_MAX_CASES;
+
+  function setField<K extends keyof SetDraft>(key: K, value: SetDraft[K]) {
+    setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateCase(key: string, patch: Partial<CaseDraft>) {
+    setDraft((current) => ({
+      ...current,
+      cases: current.cases.map((item) => (item.key === key ? { ...item, ...patch } : item)),
+    }));
+  }
+
+  function addCase() {
+    setDraft((current) => ({ ...current, cases: [...current.cases, caseDraft()] }));
+    // 追加したケースが見えるページへ移る。
+    pagination.setPage(Math.ceil((draft.cases.length + 1) / 10));
+  }
+
+  function removeCase(key: string) {
+    setDraft((current) => ({ ...current, cases: current.cases.filter((item) => item.key !== key) }));
+  }
+
+  async function back() {
+    if (await confirmClose()) onBack();
+  }
+
+  function discard() {
+    setDraft(baseline);
+    setSubmitted(false);
+  }
+
+  function submit() {
+    setSubmitted(true);
+    const invalid =
+      !draft.name.trim() ||
+      draft.cases.length === 0 ||
+      tooMany ||
+      draft.cases.some((item) => !item.question.trim() || !item.expected.trim());
+    if (invalid) return;
+    save.mutate(toPayload(draft));
+  }
+
+  async function onFile(file: File | undefined) {
+    if (!file) return;
+    const parsed = await importCases.mutateAsync(file).catch(() => null);
+    if (fileInput.current) fileInput.current.value = "";
+    if (!parsed) return;
+    const hasContent = draft.cases.some((item) => item.question.trim() || item.expected.trim());
+    if (hasContent) {
+      const ok = await confirm({
+        title: t("evaluation.set.importReplaceTitle"),
+        description: t("evaluation.set.importReplaceDescription", { count: parsed.cases.length }),
+        confirmLabel: t("evaluation.set.importReplace"),
+        tone: "warning",
+      });
+      if (!ok) return;
+    }
+    setField(
+      "cases",
+      parsed.cases.map((item) => caseDraft(item))
+    );
+    pagination.setPage(1);
+    toast.success(t("evaluation.set.imported", { count: parsed.cases.length }));
+  }
+
+  async function downloadTemplate() {
+    try {
+      downloadBlob(await agentApi.downloadEvaluationTemplate(), "evaluation-cases-template.xlsx");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function exportCases(set: EvaluationSet) {
+    try {
+      downloadBlob(await agentApi.downloadEvaluationSetXlsx(set.id), `${set.name}.xlsx`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function confirmDelete(set: EvaluationSet) {
+    const ok = await confirm({
+      title: t("evaluation.set.deleteTitle", { name: set.name }),
+      description: t("evaluation.set.deleteDescription"),
+      confirmLabel: t("evaluation.set.delete"),
+      tone: "danger",
+    });
+    if (ok) remove.mutate(set.id);
+  }
+
+  const objectActions: EntityAction[] = evaluationSet
+    ? [
+        {
+          id: "start",
+          label: t("evaluation.form.start"),
+          icon: FlaskConical,
+          // 保存していない変更があるときは、保存した内容で評価することになるため先に保存させる。
+          disabled: dirty || starting,
+          loading: starting,
+          onSelect: () => onStart(evaluationSet),
+          testId: "evaluation-set-start",
+        },
+        { id: "export", label: t("evaluation.set.export"), icon: Download, onSelect: () => void exportCases(evaluationSet) },
+        {
+          id: "delete",
+          label: t("evaluation.set.delete"),
+          icon: Trash2,
+          tone: "danger",
+          onSelect: () => void confirmDelete(evaluationSet),
+        },
+      ]
+    : [];
+  const agentName = agents.find((agent) => agent.id === draft.agentId)?.name ?? draft.agentId;
+
+  return (
+    <>
+      <PageHeader
+        wide
+        title={evaluationSet ? evaluationSet.name : t("evaluation.set.create")}
+        subtitle={t("evaluation.set.subtitle")}
+        back={{
+          label: t("common.backToList"),
+          ariaLabel: t("editor.backToListOf", { list: t("nav.evaluation") }),
+          onClick: () => void back(),
+          testId: "editor-back",
+        }}
+        actions={[
+          ...(evaluationSet && dirty
+            ? [{ id: "discard", kind: "secondary" as const, label: t("common.discardChanges"), icon: Undo2, onClick: discard }]
+            : []),
+          {
+            id: "save",
+            kind: "primary" as const,
+            label: evaluationSet ? t("common.save") : t("common.create"),
+            icon: Save,
+            loading: save.isPending,
+            onClick: submit,
+          },
+        ]}
+        moreActionsLabel={t("common.moreActions")}
+      />
+      <PageBody wide className="space-y-6">
+        <SaveErrorBanner
+          message={save.error?.message ?? null}
+          attemptKey={save.submittedAt}
+          testId="evaluation-set-save-error"
+        />
+        <Section
+          title={t("evaluation.set.basic")}
+          actions={
+            evaluationSet ? (
+              <ObjectActionBar
+                actions={objectActions}
+                ariaLabel={t("common.entityActions", { name: evaluationSet.name })}
+                moreLabel={t("common.moreActions")}
+                testId="evaluation-set-actions"
+              />
+            ) : undefined
+          }
+        >
+          <Card>
+            <CardContent className="space-y-4 pt-5">
+              <TextField
+                id="evaluation-set-name"
+                label={t("evaluation.set.name")}
+                required
+                maxLength={100}
+                value={draft.name}
+                error={nameError}
+                onValueChange={(value) => setField("name", value)}
+              />
+              <TextareaField
+                id="evaluation-set-description"
+                label={t("evaluation.set.description")}
+                rows={2}
+                maxLength={500}
+                value={draft.description}
+                onValueChange={(value) => setField("description", value)}
+              />
+              {evaluationSet ? (
+                <p className="text-sm text-fg">
+                  <span className="text-fg-muted">{`${t("evaluation.form.agent")}: `}</span>
+                  {agentName}
+                </p>
+              ) : (
+                <SelectField<string>
+                  id="evaluation-set-agent"
+                  label={t("evaluation.form.agent")}
+                  helper={t("evaluation.set.agentHelper")}
+                  width="md"
+                  value={draft.agentId}
+                  options={agents.map((agent) => ({ value: agent.id, label: agent.name }))}
+                  onValueChange={(value) => setField("agentId", value)}
+                />
+              )}
+            </CardContent>
+          </Card>
+        </Section>
+
+        <Section title={t("evaluation.set.cases", { count: draft.cases.length })} description={t("evaluation.set.casesDescription")}>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" icon={Plus} onClick={addCase} disabled={draft.cases.length >= EVALUATION_MAX_CASES}>
+              {t("evaluation.set.addCase")}
+            </Button>
+            <Button
+              variant="secondary"
+              icon={Upload}
+              loading={importCases.isPending}
+              onClick={() => fileInput.current?.click()}
+              data-testid="evaluation-set-import"
+            >
+              {t("evaluation.set.import")}
+            </Button>
+            <Button variant="ghost" icon={FileDown} onClick={() => void downloadTemplate()}>
+              {t("evaluation.set.template")}
+            </Button>
+            {/* Excel の取り込み（ネイティブの file の入力。ボタンから開く）。 */}
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              className="sr-only"
+              aria-label={t("evaluation.set.import")}
+              data-testid="evaluation-set-file"
+              onChange={(event) => void onFile(event.target.files?.[0])}
+            />
+          </div>
+          {tooMany ? (
+            <p className="text-sm text-danger-fg" role="alert">
+              {t("evaluation.form.tooMany")}
+            </p>
+          ) : null}
+          {draft.cases.length === 0 ? (
+            <EmptyState title={t("evaluation.set.noCases")} hint={t("evaluation.set.noCasesHint")} />
+          ) : (
+            <div className="space-y-3">
+              {pagination.pageItems.map((item) => {
+                const number = draft.cases.indexOf(item) + 1;
+                return (
+                  <Card key={item.key} data-testid={`evaluation-case-${number}`}>
+                    <CardContent className="space-y-3 pt-4">
+                      <div className="flex flex-wrap items-end justify-between gap-3">
+                        <p className="text-sm font-semibold text-fg">{t("evaluation.set.caseNumber", { number })}</p>
+                        <div className="flex flex-wrap items-end gap-2">
+                          <TextField
+                            id={`${item.key}-id`}
+                            label={t("evaluation.set.caseId")}
+                            width="sm"
+                            maxLength={100}
+                            placeholder={`case-${number}`}
+                            value={item.id}
+                            onValueChange={(value) => updateCase(item.key, { id: value })}
+                          />
+                          <Button
+                            variant="ghost"
+                            iconOnly
+                            icon={Trash2}
+                            aria-label={t("evaluation.set.removeCase", { number })}
+                            onClick={() => removeCase(item.key)}
+                          />
+                        </div>
+                      </div>
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        <TextareaField
+                          id={`${item.key}-question`}
+                          label={t("evaluation.detail.question")}
+                          required
+                          rows={2}
+                          maxLength={4000}
+                          value={item.question}
+                          error={submitted && !item.question.trim() ? t("evaluation.set.questionRequired") : undefined}
+                          onValueChange={(value) => updateCase(item.key, { question: value })}
+                        />
+                        <TextareaField
+                          id={`${item.key}-expected`}
+                          label={t("evaluation.detail.expected")}
+                          required
+                          rows={2}
+                          maxLength={8000}
+                          value={item.expected}
+                          error={submitted && !item.expected.trim() ? t("evaluation.set.expectedRequired") : undefined}
+                          onValueChange={(value) => updateCase(item.key, { expected: value })}
+                        />
+                      </div>
+                      <TextField
+                        id={`${item.key}-tools`}
+                        label={t("evaluation.set.expectedTools")}
+                        helper={t("evaluation.set.expectedToolsHelper")}
+                        value={item.tools}
+                        onValueChange={(value) => updateCase(item.key, { tools: value })}
+                      />
+                    </CardContent>
+                  </Card>
+                );
+              })}
+              {pagination.totalPages > 1 ? (
+                <Pagination
+                  page={pagination.page}
+                  totalPages={pagination.totalPages}
+                  onPageChange={pagination.setPage}
+                  summary={labels.summary(pagination.range)}
+                  pageIndicator={labels.pageIndicator?.(pagination.page, pagination.totalPages)}
+                  prevLabel={labels.prev}
+                  nextLabel={labels.next}
+                  ariaLabel={labels.ariaLabel}
+                  testId="evaluation-cases-pagination"
+                />
+              ) : null}
+            </div>
+          )}
+        </Section>
+      </PageBody>
+    </>
+  );
+}

@@ -373,23 +373,12 @@ install_backend() {
   run_as_app_user_in_dir "${BACKEND_DIR}" "uv sync --locked --no-dev --python 3.12"
 }
 
-# Runtime repository は import 時に Oracle へ接続し、自分の table を冪等に作成する
-# （AGENT_RUNTIME_ORACLE_CREATE_SCHEMA=true）。ここでは起動前に一度作らせ、失敗理由を init log に残す。
-# 共通認証（PLATFORM_*）と Agent のシステムテーブル（AGENT_*）は agent_system_schema --initialize が冪等に作る
-# （#215 / #751）。データを消す migration（旧版の業務ビューの表の削除など）は自動では承認せず、
+# 共通認証（PLATFORM_*）と Agent のシステムテーブル（権限・Run の保存先・定義。AGENT_*）は
+# agent_system_schema --initialize が冪等に作る（#215 / #751 / #764。接続は PLATFORM_ORACLE_*）。
+# データを消す migration（旧版の業務ビューの表の削除など）は自動では承認せず、
 # 運用設定 > システムテーブル で内容を確認して承認する。
 initialize_database_schema() {
-  local runtime_ready=false
   local security_ready=false
-
-  log "Initializing Agent Runtime Oracle repository (idempotent)."
-  if retry_command 5 run_as_app_user_in_dir "${BACKEND_DIR}" \
-    "uv run python -c 'import app.features.agent.runtime'"; then
-    runtime_ready=true
-    log "Agent Runtime Oracle repository is ready."
-  else
-    log "WARNING: Agent Runtime Oracle repository initialization failed."
-  fi
 
   log "Applying Agent system tables (idempotent)."
   if retry_command 5 run_as_app_user_in_dir "${BACKEND_DIR}" \
@@ -400,14 +389,13 @@ initialize_database_schema() {
     log "WARNING: Agent system table initialization failed. If it requires approval of a data-removing migration, open Operations settings > System tables. Login returns SECURITY_SCHEMA_MIGRATION_REQUIRED until the tables exist."
   fi
 
-  if [ "${runtime_ready}" = "true" ] && [ "${security_ready}" = "true" ]; then
+  if [ "${security_ready}" = "true" ]; then
     DATABASE_INITIALIZATION_READY=true
     return 0
   fi
 
   DATABASE_INITIALIZATION_READY=false
   log "WARNING: Database initialization is incomplete. Check ADB reachability, backend/.env and platform/.env (PLATFORM_ORACLE_*)."
-  log "Recovery: cd ${BACKEND_DIR} && sudo -u ${APP_USER} /usr/local/bin/uv run python -c 'import app.features.agent.runtime'"
   log "Recovery: cd ${BACKEND_DIR} && sudo -u ${APP_USER} /usr/local/bin/uv run python -m app.cli.agent_system_schema --initialize"
   log "Recovery: sudo systemctl restart ${BACKEND_SERVICE}"
   return 0

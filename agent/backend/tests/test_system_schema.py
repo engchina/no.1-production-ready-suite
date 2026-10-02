@@ -29,6 +29,7 @@ from app.cli import agent_system_schema
 from app.security.permissions import ALL_PERMISSION_CODES, permission_for_route
 from app.security.service import set_security_service
 from app.system_schema import (
+    CONTROL_PLANE_STATEMENTS,
     CONTROL_TABLE,
     DOMAIN_TABLES,
     MANAGED_FOREIGN_KEYS,
@@ -38,6 +39,7 @@ from app.system_schema import (
     MIGRATIONS,
     RECREATE_CONFIRMATION,
     RETIRED_MANAGED_OBJECTS,
+    RUNTIME_STATEMENTS,
     SystemSchemaError,
     SystemSchemaManager,
     classify_system_schema_status,
@@ -283,7 +285,27 @@ def _legacy_database() -> _FakeDatabase:
 def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     assert managed_manifest_from_schema() == set(MANAGED_OBJECTS)
     assert MANAGED_TABLES[:2] == (CONTROL_TABLE, MIGRATION_TABLE)
-    assert {"AGENT_ROLE_PERMISSIONS", "AGENT_ROLE_AGENTS"} == DOMAIN_TABLES
+    assert {
+        "AGENT_ROLE_PERMISSIONS",
+        "AGENT_ROLE_AGENTS",
+        # Run・業務 Agent の保存先と、画面で変えた定義（#764）。
+        "AGENT_RUNTIME_CHECKPOINTS",
+        "AGENT_RUNTIME_RUNS",
+        "AGENT_RUNTIME_EVENTS",
+        "AGENT_RUNTIME_STEPS",
+        "AGENT_RUNTIME_APPROVALS",
+        "AGENT_RUNTIME_ARTIFACTS",
+        "AGENT_CONTROL_PLANE_ITEMS",
+    } == DOMAIN_TABLES
+    # 監査の検索に使う projection の索引（エラーコードは JSON_VALUE の関数索引）。
+    assert any(
+        "AGENT_RUNTIME_STEPS_ERROR_CODE_IX" in statement
+        and "JSON_VALUE(TOOL_RESULT_JSON" in statement
+        for statement in RUNTIME_STATEMENTS
+    )
+    # 既存の DB では Runtime repository が作っていたテーブルを、migration 006 で管理対象にする。
+    migration_006 = next(item for item in MIGRATIONS if item.name.startswith("20261002_006"))
+    assert migration_006.statements == (*RUNTIME_STATEMENTS, *CONTROL_PLANE_STATEMENTS)
     # 共通認証の表は管理対象にしない（全再作成でも RAG / NL2SQL のユーザー・ロールを消さない）。
     assert not set(PLATFORM_AUTH_TABLES) & set(MANAGED_TABLES)
     assert ("AGENT_ROLE_BUSINESS_VIEWS", "TABLE") in RETIRED_MANAGED_OBJECTS
@@ -378,7 +400,8 @@ def test_recreate_requires_confirmation_and_keeps_shared_auth_tables() -> None:
     assert result["operation"] == "recreated"
     assert result["status"] == "ready"
     dropped = [item.split()[2] for item in database.executed if item.startswith("DROP TABLE")]
-    assert set(dropped) == {"AGENT_ROLE_PERMISSIONS", "AGENT_ROLE_AGENTS", MIGRATION_TABLE}
+    # 全再作成は Run の保存先・定義の表も消す（共通認証の表は残す）。
+    assert set(dropped) == (set(DOMAIN_TABLES) | {MIGRATION_TABLE})
     assert not set(dropped) & set(PLATFORM_AUTH_TABLES)
 
 

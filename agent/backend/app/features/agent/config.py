@@ -165,6 +165,34 @@ class AgentRuntimeConfigStore:
                 config.service_audience = service_audience or None
             return config.model_copy(deep=True)
 
+    def restore_mcp_server(self, stored: McpConnectionConfig) -> None:
+        """保存した接続を重ねる（#764）。
+
+        RAG / NL2SQL・宣言の接続は、画面で変えた項目だけを上書きする。
+        """
+        with self._lock:
+            current = self._mcp_servers.get(stored.server_id)
+            if current is None:
+                self._mcp_servers[stored.server_id] = stored.model_copy(
+                    deep=True, update={"source": "runtime"}
+                )
+                return
+            fields = {
+                "label": stored.label,
+                "base_url": stored.base_url,
+                "timeout_seconds": stored.timeout_seconds,
+                "session_id": stored.session_id,
+                "api_key": stored.api_key,
+                "oauth_token_url": stored.oauth_token_url,
+                "oauth_client_id": stored.oauth_client_id,
+                "oauth_client_secret": stored.oauth_client_secret,
+                "oauth_scope": stored.oauth_scope,
+            }
+            if current.source != "builtin":
+                fields["auth_mode"] = stored.auth_mode
+                fields["service_audience"] = stored.service_audience
+            self._mcp_servers[stored.server_id] = current.model_copy(update=fields)
+
     def remove_mcp_server(self, server_id: str) -> None:
         """画面・API で追加した接続だけを削除する（RAG / NL2SQL・宣言・プラグインの接続は不可）。"""
         with self._lock:
