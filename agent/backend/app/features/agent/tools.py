@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -27,6 +28,8 @@ from app.features.agent.skills import (
     skill_registry,
 )
 from app.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 JsonObject = dict[str, Any]
 _MCP_OAUTH_TOKEN_SKEW_SECONDS = 30.0
@@ -1129,11 +1132,107 @@ def _mcp_tools_from_result(server_id: str, response: JsonRpcResponse) -> Externa
     )
 
 
+# 組み込みの接続のツールのうち、結果が実行中のジョブ（`status` が pending / running と
+# `job_id`）なら、完了まで続きを取るもの（接続 → ツール → 続きを取るツール。#848）。
+_PRODUCT_JOB_FOLLOW_UPS: dict[str, dict[str, str]] = {
+    "nl2sql": {"nl2sql_query": "nl2sql_get_job", "nl2sql_get_job": "nl2sql_get_job"},
+}
+_IN_FLIGHT_JOB_STATUSES = frozenset({"pending", "running"})
+# 1 回の続きの取得で呼び先に待ってもらう秒数の上限。Run のキャンセルはこの間隔で確かめる。
+_JOB_POLL_WAIT_SECONDS = 20
+# 呼び先の待ち（wait_seconds）に足す、HTTP の往復とジョブの読み込みの余裕（秒）。
+_JOB_POLL_MARGIN_SECONDS = 15
+
+
+def _job_follow_up_tool(config: McpConnectionConfig, tool_name: str) -> str | None:
+    """完了まで続きを取るツールの名前（組み込みの接続だけ。外部の MCP 接続は対象外）。"""
+    if config.source != "builtin":
+        return None
+    return _PRODUCT_JOB_FOLLOW_UPS.get(config.server_id, {}).get(tool_name)
+
+
+def _job_wait_budget_seconds() -> float:
+    return max(0.0, float(get_settings().agent_nl2sql_job_wait_seconds))
+
+
+def _run_is_finished(run_id: str | None) -> bool:
+    """Run がキャンセル・終了していれば True（ジョブの完了を待つのをやめる）。"""
+    if not run_id:
+        return False
+    from app.features.agent.runtime import RunStatus, runtime_repository
+
+    try:
+        status = runtime_repository.get_run(run_id).status
+    except KeyError:
+        return True
+    except Exception:  # noqa: BLE001 - 保存先の一時的な失敗では待ちを止めない
+        logger.warning("mcp_job_wait_run_status_failed", extra={"run_id": run_id}, exc_info=True)
+        return False
+    return status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
+
+
+def _job_in_flight(result: JsonObject) -> str | None:
+    """結果が実行中のジョブなら job_id を返す。"""
+    job_id = result.get("job_id")
+    if result.get("status") in _IN_FLIGHT_JOB_STATUSES and isinstance(job_id, str) and job_id:
+        return job_id
+    return None
+
+
+def wait_for_product_job(
+    client: McpConnectionClient,
+    follow_up_tool: str,
+    result: JsonObject,
+    *,
+    context: ToolInvocationContext,
+    timeout_seconds: float,
+) -> JsonObject:
+    """実行中のジョブの続きを、完了するか待つ合計の上限まで取る（#848）。
+
+    モデルに「実行中」のまま答えさせず、ツールの呼び出しの回数も消費しない。待つ合計は
+    `AGENT_NL2SQL_JOB_WAIT_SECONDS` で上限を持ち、1 回の待ちごとに Run がキャンセル・終了して
+    いないかを確かめる。上限を超えた・Run が終わった・続きの取得に失敗したときは、最後の結果を
+    そのまま返す（モデルが job_id で続きを取れる）。
+    """
+    deadline = monotonic() + _job_wait_budget_seconds()
+    per_call_limit = max(
+        1, min(_JOB_POLL_WAIT_SECONDS, int(timeout_seconds) - _JOB_POLL_MARGIN_SECONDS)
+    )
+    polls = 0
+    while (job_id := _job_in_flight(result)) is not None:
+        remaining = deadline - monotonic()
+        if remaining < 1 or _run_is_finished(context.run_id):
+            break
+        polls += 1
+        try:
+            result = client.call_tool(
+                follow_up_tool,
+                {"job_id": job_id, "wait_seconds": max(1, min(per_call_limit, int(remaining)))},
+                idempotent=True,
+                trace_id=f"{context.trace_id}-wait-{polls}" if context.trace_id else None,
+            )
+        except ExternalToolError as exc:
+            logger.warning(
+                "mcp_job_wait_failed",
+                extra={
+                    "run_id": context.run_id,
+                    "tool_name": follow_up_tool,
+                    "error_code": exc.code,
+                },
+            )
+            break
+    return result
+
+
 def mcp_tool_definition(config: McpConnectionConfig, tool: ExternalMcpToolInfo) -> ToolDefinition:
     """MCP 接続のツールを Runtime のツール定義にする（承認の要否は readOnlyHint とポリシー）。"""
     schema = dict(tool.input_schema) or {"type": "object", "properties": {}}
     schema.setdefault("type", "object")
     label = config.label or config.server_id
+    timeout_seconds = config.timeout_seconds
+    if _job_follow_up_tool(config, tool.name) is not None:
+        # ジョブの完了を待つ分（#848）。SDK の function tool の timeout はこの値から決まる。
+        timeout_seconds += _job_wait_budget_seconds()
     return ToolDefinition(
         name=tool.function_name or mcp_function_name(config.server_id, tool.name),
         description=f"[{label}] {tool.description}".strip(),
@@ -1141,18 +1240,31 @@ def mcp_tool_definition(config: McpConnectionConfig, tool: ExternalMcpToolInfo) 
         output_schema=tool.output_schema or {"type": "object"},
         permission_level=ToolPermissionLevel.READ if tool.read_only else ToolPermissionLevel.WRITE,
         side_effects=not tool.read_only,
-        timeout_seconds=config.timeout_seconds,
+        timeout_seconds=timeout_seconds,
         max_retries=get_settings().agent_external_mcp_max_retries,
         audit_tags=["mcp", config.server_id],
     )
 
 
 def mcp_tool_handler(config: McpConnectionConfig, tool: ExternalMcpToolInfo) -> ToolHandler:
-    """MCP 接続のツールを呼ぶ handler（429 / 503・接続失敗だけ再試行する）。"""
+    """MCP 接続のツールを呼ぶ handler（429 / 503・接続失敗だけ再試行する）。
+
+    組み込みの NL2SQL のジョブのツールは、結果が実行中なら完了まで続きを取る（#848）。
+    """
+    follow_up_tool = _job_follow_up_tool(config, tool.name)
 
     def handle(arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
         client = McpConnectionClient(config, context=context)
-        return client.call_tool(tool.name, arguments, trace_id=context.trace_id)
+        result = client.call_tool(tool.name, arguments, trace_id=context.trace_id)
+        if follow_up_tool is None:
+            return result
+        return wait_for_product_job(
+            client,
+            follow_up_tool,
+            result,
+            context=context,
+            timeout_seconds=config.timeout_seconds,
+        )
 
     return handle
 

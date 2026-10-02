@@ -31,6 +31,7 @@ from typing import Any, Literal, NoReturn
 
 from charset_normalizer import from_bytes
 from dotenv import dotenv_values
+from pr_backend_core.oracle_errors import oracle_error_codes
 from pydantic import BaseModel, ValidationError
 from pydantic import Field as PydanticField
 
@@ -614,6 +615,16 @@ def _safe_oracle_error_code(exc: Exception) -> str:
     return match.group(0).upper() if match else ""
 
 
+def _job_failure_error_code(exc: BaseException, *, fallback: str) -> str:
+    """失敗したジョブの `error_code`（#847）。
+
+    例外（原因の連鎖を含む）の Oracle のコード（`ORA-04027` など）の先頭、無ければ `fallback`。
+    `null` のまま返さない（MCP の呼び出し側が失敗を分類できるようにする）。
+    """
+    codes = oracle_error_codes(exc)
+    return codes[0] if codes else fallback
+
+
 _TEMPLATE_XLSX_UPLOAD_MESSAGE = (
     "ダウンロードした .xlsx テンプレートファイルをアップロードしてください。"
 )
@@ -857,6 +868,10 @@ _SCHEMA_EMPTY_MESSAGE = (
 )
 SCHEMA_CATALOG_EMPTY_ERROR_CODE = "SCHEMA_CATALOG_EMPTY"
 JOB_CANCELLED_ERROR_CODE = "JOB_CANCELLED"
+# 失敗したジョブの `error_code`（#847）。Oracle のコード（ORA / DPY / DPI）があれば優先する。
+JOB_FAILED_ERROR_CODE = "NL2SQL_JOB_FAILED"
+SQL_EXECUTION_FAILED_ERROR_CODE = "SQL_EXECUTION_FAILED"
+SQL_BLOCKED_ERROR_CODE = "SQL_BLOCKED"
 # プロセス内 job/history の保持上限(terminal な古いものから捨てる)。
 # incremental repository 有効時は DB 側が正本で、これはメモリ肥大の安全弁。
 _JOB_RETENTION_LIMIT = 200
@@ -18655,7 +18670,7 @@ class Nl2SqlService:
                     job.error_code = (
                         SCHEMA_CATALOG_EMPTY_ERROR_CODE
                         if isinstance(exc, SchemaCatalogEmptyError)
-                        else None
+                        else _job_failure_error_code(exc, fallback=JOB_FAILED_ERROR_CODE)
                     )
                 job.finished_at = _utc_now()
                 self._clear_job_worker_state_locked(job)
@@ -19074,6 +19089,7 @@ class Nl2SqlService:
         # 生成 SQL の実行時エラー（ORA-00904 等）は job 全体の失敗にせず、生成 SQL と safety を
         # 含む result と履歴を残したうえで ERROR として公開する。
         execution_error: str | None = None
+        execution_error_code: str | None = None
         if analysis.safety.is_safe:
             try:
                 safety, executable, results = self.execute_sql(
@@ -19090,6 +19106,9 @@ class Nl2SqlService:
                     },
                 )
                 execution_error = f"生成した SQL の実行に失敗しました: {exc}"
+                execution_error_code = _job_failure_error_code(
+                    exc, fallback=SQL_EXECUTION_FAILED_ERROR_CODE
+                )
                 safety = analysis.safety
                 executable = analysis.executable_sql
                 results = QueryResults(columns=[], rows=[], total=0)
@@ -19226,6 +19245,13 @@ class Nl2SqlService:
             JobStatus.DONE if safety.is_safe and execution_error is None else JobStatus.ERROR
         )
         final_error_message = safety.blocked_reason if not safety.is_safe else execution_error
+        final_error_code = (
+            SQL_BLOCKED_ERROR_CODE
+            if not safety.is_safe
+            else execution_error_code
+            if execution_error is not None
+            else None
+        )
         history_item = HistoryItem(
             business_release_id=job.business_release_id,
             id=history_id,
@@ -19255,6 +19281,7 @@ class Nl2SqlService:
             steps=final_steps,
             status=final_status,
             error_message=final_error_message,
+            error_code=final_error_code,
             warning_message=None,
             result=result,
             finished_at=finished,
@@ -19284,6 +19311,7 @@ class Nl2SqlService:
             job.steps = final_steps
             job.status = final_status
             job.error_message = final_error_message
+            job.error_code = final_error_code
             job.warning_message = persistence_warning
             job.result = result
             job.finished_at = finished

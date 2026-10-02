@@ -155,6 +155,8 @@ class _FakeNl2SqlService:
             profile_id=job.request.profile_id or "default",
             created_at=CREATED_AT,
             result=job.result,
+            error_code=job.error_code,
+            error_message=job.error_message,
         )
 
 
@@ -528,6 +530,41 @@ def test_query_returns_pending_job_after_wait_and_get_job_continues(
     _, content = _structured(_run(_call("nl2sql_get_job", {"job_id": job_id}), token=token))
     assert content["status"] == "done"
     assert content["returned_count"] == 2
+
+
+@pytest.mark.parametrize(
+    ("stored_code", "expected"),
+    [("ORA-04027", "ORA-04027"), (None, "NL2SQL_JOB_FAILED")],
+    ids=["oracle-code", "legacy-null"],
+)
+def test_failed_job_returns_error_code(
+    users: _Users,
+    fake_service: _FakeNl2SqlService,
+    stored_code: str | None,
+    expected: str,
+) -> None:
+    """失敗したジョブの error_code は null にしない（#847）。"""
+    user = users.create("mcp.failed", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+    token = _token(user.user_uuid)
+    fake_service.finish_after_polls = None
+    _, content = _structured(
+        _run(
+            _call("nl2sql_query", {"question": "売上", "profile_id": "sales", "wait_seconds": 0}),
+            token=token,
+        )
+    )
+    job = fake_service.jobs[content["job_id"]]
+    job.status = JobStatus.ERROR
+    job.error_code = stored_code
+    job.error_message = "NL2SQL ジョブに失敗しました: ORA-04027"
+
+    is_error, content = _structured(
+        _run(_call("nl2sql_get_job", {"job_id": job.job_id}), token=token)
+    )
+    assert is_error is False
+    assert content["status"] == "error"
+    assert content["error_code"] == expected
+    assert content["error_message"] == "NL2SQL ジョブに失敗しました: ORA-04027"
 
 
 def test_get_job_hides_other_users_jobs(users: _Users, fake_service: _FakeNl2SqlService) -> None:
