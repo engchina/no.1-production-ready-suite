@@ -10,6 +10,9 @@
   システム設定と同じ `database_readiness` の判定）。
 - 既定の `auto` は起動時に DB の設定を見て決める（`storage_backend`）。起動の後に DB を設定した
   ときは、再起動するまで memory のまま（`reason=restart_required`）。
+- 起動時の読み込みで直した Run（`repaired_runs`）と、直せずに読み込まず保存先に元の JSON のまま
+  残している Run・業務 Agent（`skipped_runs` / `skipped_agents`）の数を返す（#853）。
+- `auto` で checkpoint 全体が読めず memory で起動したときは `reason=checkpoint_invalid`（#853）。
 - 接続先・資格情報は返さない。
 """
 
@@ -30,7 +33,11 @@ StorageBackend = Literal["memory", "file", "oracle_checkpoint", "oracle_normaliz
 # - `restart_required`: 保存先は `auto` で DB も設定済みだが、起動時は DB が未設定か接続できなかった
 #   （再起動で Oracle になる）
 # - `database_not_configured`: DB の設定がそろっていない
-NotPersistentReason = Literal["memory_backend", "restart_required", "database_not_configured"]
+# - `checkpoint_invalid`: 保存先は `auto` で DB に接続できたが、保存済みの checkpoint 全体が読めず
+#   （JSON の破損・未対応の版）、上書きしないよう memory で起動した（#853）
+NotPersistentReason = Literal[
+    "memory_backend", "restart_required", "database_not_configured", "checkpoint_invalid"
+]
 
 
 class RuntimeStorageStatus(BaseModel):
@@ -47,6 +54,11 @@ class RuntimeStorageStatus(BaseModel):
     database_configured: bool
     # persistent が False の理由（True のときは None）。
     reason: NotPersistentReason | None = None
+    # 起動時の読み込みで整合しない状態を直した Run の数（#853）。
+    repaired_runs: int = 0
+    # 直せずに読み込まなかった Run・業務 Agent の数（保存先に元の JSON のまま残す。#853）。
+    skipped_runs: int = 0
+    skipped_agents: int = 0
 
 
 def effective_backend() -> StorageBackend:
@@ -68,7 +80,9 @@ def runtime_storage_status() -> RuntimeStorageStatus:
     configured = database_configured()
     reason: NotPersistentReason | None = None
     if not persistent:
-        if not configured:
+        if storage_backend.fallback_reason() == storage_backend.FALLBACK_CHECKPOINT_INVALID:
+            reason = "checkpoint_invalid"
+        elif not configured:
             reason = "database_not_configured"
         elif storage_backend.is_auto():
             reason = "restart_required"
@@ -80,4 +94,15 @@ def runtime_storage_status() -> RuntimeStorageStatus:
         persistent=persistent,
         database_configured=configured,
         reason=reason,
+        **_runtime_health(),
     )
+
+
+def _runtime_health() -> dict[str, int]:
+    """Run の repository の読み込みの結果（取得できなければ 0。状態の取得を止めない）。"""
+    from app.features.agent.runtime import runtime_repository
+
+    try:
+        return runtime_repository.storage_health().model_dump()
+    except Exception:  # noqa: BLE001 - 件数の取得の失敗で保存先の状態を返せなくしない
+        return {}

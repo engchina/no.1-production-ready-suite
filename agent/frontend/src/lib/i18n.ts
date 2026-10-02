@@ -685,6 +685,8 @@ const agentJa = {
     "データベースは設定済みですが、バックエンドの起動時には使えなかったため、業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・API キー・品質評価などを保存していません。",
   "storage.notice.databaseNotConfigured":
     "データベースが未設定のため、業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・API キー・品質評価などを保存していません。",
+  "storage.notice.checkpointInvalid":
+    "データベースは設定済みですが、保存済みの実行の記録（checkpoint）全体を読み込めなかったため、上書きしないよう業務 Agent・スキル・MCP 接続・実行の履歴などをデータベースに保存していません。",
   "storage.notice.openRuntime": "保存先を確認",
   "storage.notice.askAdmin": "保存先をデータベースに切り替えるよう、システム管理者に依頼してください。",
   "storage.notice.backupHint":
@@ -697,6 +699,16 @@ const agentJa = {
   "storage.card.database": "データベースの設定",
   "storage.card.databaseConfigured": "設定済み",
   "storage.card.databaseNotConfigured": "未設定",
+  "storage.card.repairedRuns": "起動時に直した実行",
+  "storage.card.count": "{count} 件",
+  "storage.card.repairedRunsHint":
+    "終わった実行に残った承認待ちの取消など、整合しない状態を直して読み込みました。直した内容は各実行の経過に残っています。",
+  "storage.skipped.title": "読み込めなかった記録があります",
+  "storage.skipped.body":
+    "実行 {runs} 件・業務 Agent {agents} 件は、形が崩れているなどの理由で直せなかったため読み込んでいません。保存先には元の内容のまま残しています。",
+  "storage.skipped.fix":
+    "バックアップと復元で書き出すと、quarantined に元の内容と理由が入っています。必要なら内容を直してから復元してください。",
+  "storage.skipped.openBackup": "バックアップと復元を開く",
   "storage.backend.memory": "メモリ（保存しない）",
   "storage.backend.file": "ファイル（開発・検証用）",
   "storage.backend.oracle_checkpoint": "Oracle AI Database",
@@ -709,6 +721,8 @@ const agentJa = {
     "システム設定 > データベースを設定し、運用設定 > システムテーブルでテーブルを作成してから、バックエンドを再起動してください。保存先は自動でデータベースになります。",
   "storage.fix.databaseNotConfiguredExplicit":
     "システム設定 > データベースを設定し、運用設定 > システムテーブルでテーブルを作成してから、バックエンドの設定（agent/backend/.env）で保存先をデータベースにして、バックエンドを再起動してください。",
+  "storage.fix.checkpointInvalid":
+    "バックエンドのログ（agent_runtime_checkpoint_corrupt_use_memory）で原因を確かめ、データベースの AGENT_RUNTIME_CHECKPOINTS の行（CHECKPOINT_KEY='default'）の内容を退避してから行を削除するか、バックアップと復元で書き出した内容を戻して、バックエンドを再起動してください。",
   "storage.fix.setting": "設定する値",
   "storage.fix.openDatabaseSettings": "データベースの設定を開く",
   "page.runs.subtitle": "業務 Agent を実行し、実行ごとのツールの呼び出し・承認の経過と結果を確かめる",

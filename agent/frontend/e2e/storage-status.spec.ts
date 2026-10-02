@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { dbUser } from "./fixtures/auth";
-import { RUNTIME_STORAGE_MEMORY, expect, test } from "./fixtures/mock-api";
+import { RUNTIME_STORAGE_MEMORY, RUNTIME_STORAGE_PERSISTENT, expect, test } from "./fixtures/mock-api";
 
 // 保存先（#839）。保存先がメモリのときは、作成・変更した内容が再起動で消えることを、定義・実行を作る画面と
 // 運用設定の画面に出し、直し方は実行環境の「保存先」に 1 か所だけ書く。DB が設定済みなら DB の設定へは案内しない。
@@ -121,4 +121,47 @@ test("実行環境を開けない利用者には、管理者への依頼を出�
   await expect(notice).toContainText(NOTICE_TITLE);
   await expect(notice).toContainText("システム管理者に依頼してください");
   await expect(page.getByTestId("storage-notice-open-runtime")).toHaveCount(0);
+});
+
+test("起動時に直した実行と、読み込めなかった記録の件数を出す（#853）", async ({ page, mockApi }) => {
+  mockApi.state.runtimeStorage = {
+    ...RUNTIME_STORAGE_PERSISTENT,
+    repaired_runs: 2,
+    skipped_runs: 1,
+    skipped_agents: 0,
+  };
+  await page.goto("/runtimes");
+  const card = page.getByTestId("runtime-storage-card");
+  await expect(card).toContainText("保存しています");
+  await expect(page.getByTestId("runtime-storage-repaired")).toContainText("2 件");
+  const skipped = page.getByTestId("runtime-storage-skipped");
+  await expect(skipped).toContainText("実行 1 件・業務 Agent 0 件");
+  await expect(skipped).toContainText("quarantined");
+  await expectNoPageOverflow(page);
+  await page.getByTestId("runtime-storage-open-backup").click();
+  await expect(page).toHaveURL(/\/settings\/runtime-snapshot$/);
+});
+
+test("直した・読み込めなかった記録が無いときは件数を出さない", async ({ page }) => {
+  await page.goto("/runtimes");
+  await expect(page.getByTestId("runtime-storage-card")).toContainText("保存しています");
+  await expect(page.getByTestId("runtime-storage-repaired")).toHaveCount(0);
+  await expect(page.getByTestId("runtime-storage-skipped")).toHaveCount(0);
+});
+
+test("checkpoint 全体が読めず memory で起動したときは、退避と復元を案内する（#853）", async ({ page, mockApi }) => {
+  mockApi.state.runtimeStorage = {
+    ...RUNTIME_STORAGE_MEMORY,
+    configured_backend: "auto",
+    reason: "checkpoint_invalid",
+  };
+  await page.goto("/agents");
+  await expect(page.getByTestId("storage-not-persistent-notice")).toContainText("checkpoint");
+
+  await page.goto("/runtimes");
+  const fix = page.getByTestId("runtime-storage-fix");
+  await expect(fix).toContainText("全体を読み込めなかった");
+  await expect(fix).toContainText("CHECKPOINT_KEY='default'");
+  await expect(fix).not.toContainText(SETTING);
+  await expectNoPageOverflow(page);
 });

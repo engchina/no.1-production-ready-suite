@@ -182,7 +182,8 @@ memory backend は process 間共有されないため production dispatcher に
 マーケットプレイス・実行履歴・自動実行・品質評価・MCP 接続・API キー・ツール権限・バックアップと復元・システムテーブルの
 画面の先頭に warning の Banner（`NonPersistentStorageNotice`）を出し、実行環境へ案内する。理由は、DB の設定がそろって
 いれば `memory_backend`（memory などを明示。保存先の設定を直す）か `restart_required`（`auto` で起動時は DB を使えなかった。
-再起動する）、そろっていなければ `database_not_configured`（DB の設定から直す）。
+再起動する）、そろっていなければ `database_not_configured`（DB の設定から直す）。`auto` で保存済みの checkpoint 全体が読めず memory で
+起動したときは `checkpoint_invalid`（#853。§5.1.1）。
 
 | 対象 | memory | file | oracle_checkpoint / oracle_normalized |
 |---|---|---|---|
@@ -200,6 +201,32 @@ memory backend は process 間共有されないため production dispatcher に
   Fernet で暗号化して保存する（`app.secret_box`。`enc:v1:...`）。署名鍵を変えると復号できないため、その接続の秘密は
   画面で入れ直す。署名鍵が無いと秘密を含む接続は保存できない（503）。
 - 1 worker・`in_process` の前提は変えない（checkpoint は process 内の状態を丸ごと書くため）。
+
+### 5.1.1 起動時の読み込みと再試行（#853）
+
+保存先の 1 件の不整合で backend（module の import）を止めない。読み込み（Oracle の checkpoint・file の snapshot・
+dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を JSON として読み、Run・業務 Agent を 1 件ずつ検証する。
+
+- **直す**（`_repair_run`。待ちを終わらせる方向だけで、承認・再開の方向には直さない）: 終わった Run に残った pending の承認 →
+  `cancelled`（`decided_by="system:storage-repair"`、承認待ちの step も `cancelled`）、承認待ちなのに pending の承認が無い Run →
+  `failed`（`runtime.inconsistent_state`）、Event / step / 承認の `run_id` のずれ → 入っている Run に合わせる、無い承認を指す
+  step → 参照を外す。直した内容は Run の `runtime.event`（`payload.source="storage_repair"`）とログ
+  `agent_runtime_snapshot_run_repaired` に残す。
+- **退避する**: schema に合わない・id が空 / 重複・直しても整合しない（承認が無い step を指すなど）Run・業務 Agent は読み込まず、
+  元の JSON と理由を snapshot の `quarantined` に入れる（ログ `agent_runtime_snapshot_record_quarantined`）。次の保存でも
+  `quarantined` は残り、バックアップの書き出しで中身を確かめられる（黙って消さない）。
+- 直した・退避したら、読み込みの直後に保存する（失敗しても起動は止めない）。件数は `GET /api/runtime/storage` の
+  `repaired_runs`（この起動で直した Run）・`skipped_runs` / `skipped_agents`（退避している数）と「保存先」のカードに出す。
+- snapshot 全体が読めない（JSON の破損・object でない・未対応の版）ときだけ止める。`auto` は checkpoint を上書きしないよう
+  memory で起動し、`reason=checkpoint_invalid` で案内する。明示した `oracle_*` / `file` は、直し方（行・ファイルを退避して
+  削除するか、バックアップを戻す）を書いた例外で起動を止める（データの保護）。
+- 利用者が明示的に行う復元（`replace_snapshot`）は今までどおり厳密に検証して拒否する。
+- 起動時の DB の接続のエラー（`is_oracle_connection_error`）は、`AGENT_RUNTIME_STORAGE_CONNECT_RETRIES`（既定 2）回まで、
+  `AGENT_RUNTIME_STORAGE_CONNECT_RETRY_DELAY_SECONDS`（既定 2 秒）から 2 倍ずつ（上限 30 秒、後半を jitter）待って再試行する。
+  1 回の接続の上限は `PLATFORM_ORACLE_TCP_CONNECT_TIMEOUT_SECONDS`。接続以外のエラーは再試行しない。それでも接続できなければ
+  `auto` は memory（#851）、明示した `oracle_*` は ORA / DPY のコードと直し方を書いた例外で止める。待ちは
+  `runtime._retry_sleep` で差し替える（テストは待たない）。
+- runtime-dispatcher は 1 回の claim・実行の失敗で止まらず、ログを残して poll の間隔から 2 倍ずつ（上限 60 秒）待って続ける。
 
 ### 5.2 Run の事実と集計（#794）
 
