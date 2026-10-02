@@ -8,8 +8,12 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  DataTable,
   EmptyState,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
   MessageText,
+  offsetForPage,
   PageBody,
   PageHeader,
   RowTitleButton,
@@ -21,10 +25,11 @@ import {
   type DataTableColumn,
 } from "@engchina/production-ready-ui";
 
-import { PagedDataTable, QueryState } from "@/components/ListViews";
+import { listScrollLabel, QueryState, ServerPagination, usePersistedPage } from "@/components/ListViews";
 import {
   agentApi,
   FEEDBACK_REASONS,
+  REPORT_PERIOD_DAYS,
   type FeedbackItem,
   type FeedbackPeriodDays,
   type FeedbackRating,
@@ -35,6 +40,7 @@ import {
   type RunState,
 } from "@/lib/api";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
+import { ReportSourceNote } from "@/components/ReportSourceNote";
 import { useCapabilities } from "@/lib/permissions";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -42,8 +48,10 @@ import { isString, useWorkspaceState, type WorkspaceValidator } from "@/lib/work
 
 // フィードバック（#774）。チャットの回答への利用者の評価を集計し、役に立たなかった回答と理由を確かめる。
 // 画面の形は RAG のフィードバック（集計 → 理由 → 一覧 → 詳細）にそろえる。
+// 期間は 365 日まで。Oracle の構成は保存した Run の履歴を集計し、一覧はサーバー側でページングする（#794）。
 
-const PERIODS: readonly FeedbackPeriodDays[] = [7, 30, 90];
+const PERIODS: readonly FeedbackPeriodDays[] = REPORT_PERIOD_DAYS;
+const PAGE_SIZE = 10;
 const RATINGS: readonly FeedbackRating[] = ["helpful", "not_helpful"];
 
 const isPeriod: WorkspaceValidator<FeedbackPeriodDays> = (value): value is FeedbackPeriodDays =>
@@ -66,6 +74,8 @@ export function FeedbackPage() {
   const [agentId, setAgentId] = useWorkspaceState("feedback", "agentId", "", isString);
   const [rating, setRating] = useWorkspaceState("feedback", "rating", "", isRatingFilter);
   const [reason, setReason] = useWorkspaceState("feedback", "reason", "", isReasonFilter);
+  // 一覧のページ（作業状態。絞り込みを変えたら 1 ページ目へ戻す）。
+  const [page, setPage] = usePersistedPage("feedback");
   const [selected, setSelected] = useState<FeedbackItem | null>(null);
   const queryClient = useQueryClient();
 
@@ -76,8 +86,10 @@ export function FeedbackPage() {
       agentId: agentId || undefined,
       rating: (rating || undefined) as FeedbackRating | undefined,
       reason: (reason || undefined) as FeedbackReason | undefined,
+      offset: offsetForPage(page, PAGE_SIZE),
+      limit: PAGE_SIZE,
     }),
-    [days, agentId, rating, reason]
+    [days, agentId, rating, reason, page]
   );
   const report = useQuery({
     queryKey: ["feedback", filters],
@@ -87,9 +99,18 @@ export function FeedbackPage() {
   });
   const filtered = Boolean(rating || reason);
 
+  // 絞り込みを変えたら 1 ページ目から読む（UX 契約 workspace-state.md）。
+  function changeFilter<T>(set: (value: T) => void) {
+    return (value: T) => {
+      set(value);
+      setPage(1);
+    };
+  }
+
   function clearListFilters() {
     setRating("");
     setReason("");
+    setPage(1);
   }
 
   return (
@@ -116,7 +137,7 @@ export function FeedbackPage() {
             label={t("feedback.filter.period")}
             value={String(days)}
             options={PERIODS.map((period) => ({ value: String(period), label: t(`feedback.period.${period}` as I18nKey) }))}
-            onValueChange={(value) => setDays(Number(value) as FeedbackPeriodDays)}
+            onValueChange={(value) => changeFilter(setDays)(Number(value) as FeedbackPeriodDays)}
           />
           <SelectField<string>
             id="feedback-agent"
@@ -126,7 +147,7 @@ export function FeedbackPage() {
               { value: "", label: t("feedback.filter.all") },
               ...(agents.data?.agents ?? []).map((agent) => ({ value: agent.id, label: agent.name })),
             ]}
-            onValueChange={setAgentId}
+            onValueChange={changeFilter(setAgentId)}
           />
           <SelectField<string>
             id="feedback-rating"
@@ -136,7 +157,7 @@ export function FeedbackPage() {
               { value: "", label: t("feedback.filter.all") },
               ...RATINGS.map((item) => ({ value: item, label: ratingLabel(item) })),
             ]}
-            onValueChange={setRating}
+            onValueChange={changeFilter(setRating)}
           />
           <SelectField<string>
             id="feedback-reason"
@@ -146,7 +167,7 @@ export function FeedbackPage() {
               { value: "", label: t("feedback.filter.all") },
               ...FEEDBACK_REASONS.map((item) => ({ value: item, label: reasonLabel(item) })),
             ]}
-            onValueChange={setReason}
+            onValueChange={changeFilter(setReason)}
           />
         </div>
         <QueryState
@@ -161,7 +182,8 @@ export function FeedbackPage() {
               filtered={filtered}
               onClearFilters={clearListFilters}
               onOpen={setSelected}
-              resetKey={JSON.stringify(filters)}
+              page={page}
+              onPageChange={setPage}
             />
           ) : null}
         </QueryState>
@@ -214,13 +236,15 @@ function FeedbackContent({
   filtered,
   onClearFilters,
   onOpen,
-  resetKey,
+  page,
+  onPageChange,
 }: {
   report: FeedbackReport;
   filtered: boolean;
   onClearFilters: () => void;
   onOpen: (item: FeedbackItem) => void;
-  resetKey: string;
+  page: number;
+  onPageChange: (page: number) => void;
 }) {
   const { summary, previous } = report;
   if (summary.total === 0 && summary.admin_reviewed === 0) {
@@ -228,6 +252,7 @@ function FeedbackContent({
       <Card>
         <CardContent className="pt-4">
           <EmptyState title={t("feedback.empty.title")} hint={t("feedback.empty.hint")} />
+          <ReportSourceNote source={report.source} />
         </CardContent>
       </Card>
     );
@@ -238,6 +263,7 @@ function FeedbackContent({
         <CardHeader>
           <CardTitle>{t("feedback.summary.title")}</CardTitle>
           <CardDescription>{t("feedback.summary.description")}</CardDescription>
+          <ReportSourceNote source={report.source} />
         </CardHeader>
         <CardContent className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
           <div className="grid grid-cols-2 gap-x-5 gap-y-4 self-start sm:grid-cols-4 lg:grid-cols-2" data-testid="feedback-summary">
@@ -270,7 +296,7 @@ function FeedbackContent({
           <CardDescription>{t("feedback.list.description")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          {report.items.length === 0 ? (
+          {report.matched === 0 ? (
             <EmptyState
               title={t("feedback.noMatch.title")}
               action={
@@ -282,17 +308,19 @@ function FeedbackContent({
               }
             />
           ) : (
-            <>
-              {report.matched > report.items.length ? (
-                <p className="text-xs text-fg-muted">
-                  {t("feedback.list.truncated", {
-                    matched: formatNumber(report.matched),
-                    shown: formatNumber(report.items.length),
-                  })}
-                </p>
-              ) : null}
-              <FeedbackTable items={report.items} onOpen={onOpen} resetKey={resetKey} />
-            </>
+            <div className="grid min-w-0 gap-2">
+              <FeedbackTable items={report.items} onOpen={onOpen} />
+              <ServerPagination
+                offset={report.offset}
+                limit={report.limit}
+                total={report.matched}
+                count={report.items.length}
+                page={page}
+                onPageChange={onPageChange}
+                ariaLabel={t("feedback.pagerLabel")}
+                testId="feedback-pagination"
+              />
+            </div>
           )}
         </CardContent>
       </Card>
@@ -344,15 +372,7 @@ function ReasonCounts({ summary }: { summary: FeedbackSummary }) {
   );
 }
 
-function FeedbackTable({
-  items,
-  onOpen,
-  resetKey,
-}: {
-  items: FeedbackItem[];
-  onOpen: (item: FeedbackItem) => void;
-  resetKey: string;
-}) {
+function FeedbackTable({ items, onOpen }: { items: FeedbackItem[]; onOpen: (item: FeedbackItem) => void }) {
   const columns: DataTableColumn<FeedbackItem>[] = [
     {
       key: "question",
@@ -397,14 +417,16 @@ function FeedbackTable({
     },
   ];
   return (
-    <PagedDataTable<FeedbackItem>
-      pageKey="feedback"
+    <DataTable<FeedbackItem>
       rows={items}
       columns={columns}
       getRowKey={(item) => item.run_id}
+      rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
       ariaLabel={t("feedback.list.label")}
+      scrollAriaLabel={listScrollLabel(t("feedback.list.label"))}
       tableClassName="w-full min-w-[820px]"
-      resetKey={resetKey}
+      stickyHeader
+      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
     />
   );
 }

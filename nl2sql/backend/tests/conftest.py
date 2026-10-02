@@ -11,7 +11,7 @@ import contextvars
 import functools
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -107,3 +107,13 @@ def _no_retry_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     import app.features.nl2sql.reverse_generation as reverse_generation
 
     monkeypatch.setattr(reverse_generation, "_retry_sleep", lambda _seconds: None)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_database_status_cache() -> Iterator[None]:
+    """DB の状態 API の `ok` の cache（#793）をテストごとに捨てる（テストの順序に依らない）。"""
+    from pr_system_settings.database_status import clear_database_status_cache
+
+    clear_database_status_cache()
+    yield
+    clear_database_status_cache()

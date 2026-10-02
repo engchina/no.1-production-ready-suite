@@ -120,6 +120,28 @@ test("期間を変えると、その期間で集計し直し、Run が無けれ�
   await expect(page.locator("#usage-period")).toContainText("直近 7 日");
 });
 
+test("90 日を超える期間（180・365 日）を選べ、集計元を出す", async ({ page, mockApi }) => {
+  // #794: Oracle の構成は保存した Run の履歴（AGENT_RUN_FACTS）を集計する。
+  const report = emptyUsageReport(365) as Record<string, unknown>;
+  report.source = "history";
+  report.totals = totals(3, 3_000, 300);
+  mockApi.state.usageReports["365"] = report;
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/usage");
+  await expect(page.getByTestId("report-source")).toHaveAttribute("data-source", "memory");
+
+  await page.locator("#usage-period").click();
+  await expect(page.getByRole("option", { name: "直近 180 日" })).toBeVisible();
+  await page.getByRole("option", { name: "直近 365 日" }).click();
+
+  await expect(page.getByTestId("usage-summary")).toContainText("3,300");
+  await expect(page.getByTestId("report-source")).toHaveText("保存した Run の履歴（データベース）から集計しています。");
+  expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("days")).toBe("365");
+  await page.getByRole("tab", { name: "日ごと" }).click();
+  await expect(page.getByText("1 - 10 / 365 件")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
 test("読み込み中は経過時間と集計の形の Skeleton を出す", async ({ page }) => {
   await page.route("**/api/usage?*", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 1_500));

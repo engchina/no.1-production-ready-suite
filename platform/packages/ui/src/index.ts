@@ -15,6 +15,7 @@ export {
   INFORMATION_TABLE_FOCUS_CLASS,
 } from "./lib/list-density";
 export { isImeComposing, isSubmitEnter, type KeyboardEventLike } from "./lib/keyboard";
+export { isRepeatedActivationKey, runStopClickAction, type RunStopAction } from "./lib/run-stop";
 
 // --- UI primitives ---
 export { Button, buttonVariants, type ButtonProps, type ButtonVariantToneProps } from "./components/ui/button";
@@ -33,6 +34,7 @@ export {
   type FieldWidth,
 } from "./components/ui/control-size";
 export { FieldActionRow, type FieldActionRowProps } from "./components/ui/field-action-row";
+export { RunStopButton, type RunStopButtonProps } from "./components/ui/run-stop-button";
 export { TextareaField, defaultTextareaCount, type TextareaFieldProps } from "./components/ui/textarea-field";
 export {
   SearchField,
@@ -186,6 +188,16 @@ export {
   SaveErrorBanner,
   type SaveErrorBannerProps,
 } from "./components/feedback/save-error-banner";
+export {
+  FeedbackControls,
+  isSameFeedback,
+  type FeedbackControlsLabels,
+  type FeedbackControlsProps,
+  type FeedbackControlsSubmission,
+  type FeedbackControlsValue,
+  type FeedbackRating,
+  type FeedbackReasonOption,
+} from "./components/feedback/feedback-controls";
 
 // --- data ---
 export {

@@ -307,7 +307,8 @@ function answerTextOf(run: Json): string {
 function feedbackReportFromRuns(
   runs: Json[],
   days: number,
-  filters: { agentId: string | null; rating: string | null; reason: string | null }
+  filters: { agentId: string | null; rating: string | null; reason: string | null },
+  page: { offset: number; limit: number }
 ): Json {
   const rated = runs.filter(
     (run) => (run.feedback || run.admin_review) && (!filters.agentId || run.agent_id === filters.agentId)
@@ -355,6 +356,7 @@ function feedbackReportFromRuns(
     }));
   return {
     days,
+    source: "memory",
     since: MOCK_NOW,
     until: MOCK_NOW,
     summary,
@@ -367,9 +369,21 @@ function feedbackReportFromRuns(
       admin_reviewed: 0,
       admin_not_helpful: 0,
     },
-    items,
+    // 一覧はサーバー側のページング（#794）。
+    items: items.slice(page.offset, page.offset + page.limit),
     matched: items.length,
+    offset: page.offset,
+    limit: page.limit,
   };
+}
+
+/** 集計で選べる期間（日。#794）。 */
+export const REPORT_PERIOD_DAYS = [7, 30, 90, 180, 365];
+const REPORT_PERIOD_DETAIL = "期間は 7・30・90・180・365 日のどれかにしてください。";
+
+/** offset / limit の query（既定は 10 件/ページ）。 */
+function pageOf(query: URLSearchParams): { offset: number; limit: number } {
+  return { offset: Number(query.get("offset") ?? 0), limit: Number(query.get("limit") ?? 10) };
 }
 
 const EMPTY_USAGE_TOTALS = {
@@ -391,6 +405,7 @@ export function emptyUsageReport(days: number, timezone = "Asia/Tokyo"): Json {
   });
   return {
     days,
+    source: "memory",
     timezone,
     since: `${dayList[0]}T00:00:00+09:00`,
     until: MOCK_NOW,
@@ -764,13 +779,26 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   // フィードバックの集計と一覧（#774）。`state.feedbackReport` があればそれを返し、無ければ Run の評価から作る。
   if (method === "GET" && at("feedback")) {
     const days = Number(query.get("days") ?? 30);
-    if (![7, 30, 90].includes(days)) throw new HttpError(422, "期間は 7・30・90 日のどれかにしてください。");
-    if (state.feedbackReport) return state.feedbackReport;
-    return feedbackReportFromRuns(state.runs, days, {
-      agentId: query.get("agent_id"),
-      rating: query.get("rating"),
-      reason: query.get("reason"),
-    });
+    if (!REPORT_PERIOD_DAYS.includes(days)) throw new HttpError(422, REPORT_PERIOD_DETAIL);
+    const page = pageOf(query);
+    if (state.feedbackReport) {
+      const report = state.feedbackReport;
+      const items = (report.items as Json[] | undefined) ?? [];
+      return {
+        source: "memory",
+        ...report,
+        items: items.slice(page.offset, page.offset + page.limit),
+        matched: (report.matched as number | undefined) ?? items.length,
+        offset: page.offset,
+        limit: page.limit,
+      };
+    }
+    return feedbackReportFromRuns(
+      state.runs,
+      days,
+      { agentId: query.get("agent_id"), rating: query.get("rating"), reason: query.get("reason") },
+      page
+    );
   }
   if (method === "GET" && at("threads")) {
     const agentId = query.get("agent_id");
@@ -946,8 +974,13 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     return publicJob(job);
   }
   if (method === "GET" && at("evaluations")) {
+    // 評価の履歴はサーバー側のページング（#794）。
+    const page = pageOf(query);
     return {
-      jobs: state.evaluations.map((job) => ({
+      total: state.evaluations.length,
+      offset: page.offset,
+      limit: page.limit,
+      jobs: state.evaluations.slice(page.offset, page.offset + page.limit).map((job) => ({
         id: job.id,
         agent_id: job.agent_id,
         agent_name: job.agent_name,
@@ -1040,7 +1073,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
   if (method === "GET" && at("usage")) {
     const days = Number(query.get("days") ?? 30);
-    if (![7, 30, 90].includes(days)) throw new HttpError(422, "期間は 7・30・90 日のどれかにしてください。");
+    if (!REPORT_PERIOD_DAYS.includes(days)) throw new HttpError(422, REPORT_PERIOD_DETAIL);
     return state.usageReports[String(days)] ?? emptyUsageReport(days, query.get("timezone") ?? "Asia/Tokyo");
   }
   if (method === "GET" && at("audit", "tool-calls")) {

@@ -282,3 +282,13 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     # 本番既定は False(PREPROCESSED で停止)。既存テストは preprocess を越えて
     # REVIEW まで進む前提なのでテスト既定は自動進行とし、停止挙動は専用テストで検証する。
     settings.rag_auto_parse_after_preprocess_enabled = True
+
+
+@pytest.fixture(autouse=True)
+def _fresh_database_status_cache() -> Iterator[None]:
+    """DB の状態 API の `ok` の cache（#793）をテストごとに捨てる（テストの順序に依らない）。"""
+    from pr_system_settings.database_status import clear_database_status_cache
+
+    clear_database_status_cache()
+    yield
+    clear_database_status_cache()

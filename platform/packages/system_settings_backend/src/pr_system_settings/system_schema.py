@@ -41,6 +41,8 @@ from typing import Any, ClassVar, Literal
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
+from .database_status import clear_database_status_cache
+
 SystemSchemaStatus = Literal["missing", "partial", "outdated", "ready"]
 SystemSchemaOperation = Literal["no_op", "initialized", "migrated", "recreated"]
 SystemSchemaOperationStatus = Literal["idle", "running", "failed"]
@@ -805,6 +807,8 @@ class SystemSchemaManagerBase(ABC):
         kind = self._operation_kind(recreate)
         self._ensure_control_schema()
         self._claim_lease(owner, kind)
+        # DB ゲートの `ok` の cache を、操作の間（実行中は setup_required）と後に使わない（#793）。
+        clear_database_status_cache()
         try:
             with self._connection_factory() as connection:
                 return self._initialize_on(connection, owner, recreate=recreate)
@@ -817,6 +821,8 @@ class SystemSchemaManagerBase(ABC):
             self._record_failure(owner, code)
             self._log_operation_failed(kind, code, exc)
             raise self._operation_error(code) from exc
+        finally:
+            clear_database_status_cache()
 
     # ---- 手順の部品 ---------------------------------------------------------
 
@@ -1266,6 +1272,7 @@ class SystemSchemaManagerBase(ABC):
         owner = uuid.uuid4().hex
         self._ensure_control_schema()
         self._claim_lease(owner, self._operation_kind(False))
+        clear_database_status_cache()
         try:
             with self._connection_factory() as connection:
                 return self._delete_orphaned_rows_on(

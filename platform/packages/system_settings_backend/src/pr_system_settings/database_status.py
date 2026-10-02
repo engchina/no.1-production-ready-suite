@@ -17,6 +17,12 @@
 4. `schema_probe(settings)`：製品の準備状態の確認。`ok` 以外はその結果を返す
 5. `ok`
 
+`ok` の結果だけを、接続先と資格情報の指紋ごとに短時間（既定 30 秒）サーバー側で cache する（#793）。
+画面の cache（15 秒）は全画面の再読み込みで消えるため、そのたびに接続確認とシステムテーブルの確認を
+やり直さないためのもの。1・2 は毎回行い（設定の不足はすぐ出す）、`unreachable` / `setup_required` は
+cache しない（直したらすぐ通す）。システムテーブルの操作と DB 設定の保存で cache を捨てる
+（`clear_database_status_cache`）。DB が止まったことに気づくのは最大で cache の時間だけ遅れる。
+
 ログイン不要の path なので、`detail` には接続先・資格情報・Wallet の path を含めない
 （ORA / DPY / DPI のコードだけ。#320）。共有パッケージは oracledb に依存しないため、
 接続確認と準備状態の確認は製品から注入する。
@@ -27,6 +33,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
+import time
+import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -95,6 +104,88 @@ def database_context_id(fields: Sequence[object]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+# `ok` の結果を cache する秒数（0 以下なら cache しない）。
+DEFAULT_OK_CACHE_SECONDS = 30.0
+
+# cache の key に含める接続の設定（生値は保持せず、hash だけを key にする）。
+_CONNECTION_FINGERPRINT_FIELDS = (
+    "oracle_user",
+    "oracle_dsn",
+    "oracle_password",
+    "resolved_oracle_wallet_dir",
+    "oracle_wallet_password",
+    "oracle_connection_security",
+    "oracle_driver_mode",
+    "oracle_client_lib_dir",
+)
+
+
+def database_status_cache_key(settings: Any, context_id: str) -> str:
+    """接続先と資格情報が同じときだけ一致する key（資格情報は hash にしか使わない）。"""
+    fields = [context_id]
+    for name in _CONNECTION_FINGERPRINT_FIELDS:
+        try:
+            value = getattr(settings, name, "")
+        except Exception:  # noqa: BLE001 - property の失敗は空として扱う
+            value = ""
+        fields.append(str(value or ""))
+    return database_context_id(fields)
+
+
+class DatabaseStatusCache:
+    """`ok` の DB の状態を、key ごとに `ttl_seconds` だけ覚える（スレッド安全）。"""
+
+    def __init__(
+        self,
+        ttl_seconds: float = DEFAULT_OK_CACHE_SECONDS,
+        *,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        self.ttl_seconds = float(ttl_seconds)
+        self._clock = clock or time.monotonic
+        self._lock = threading.Lock()
+        self._entries: dict[str, tuple[float, DatabaseStatusData]] = {}
+        _CACHES.add(self)
+
+    @property
+    def enabled(self) -> bool:
+        return self.ttl_seconds > 0
+
+    def get(self, key: str) -> DatabaseStatusData | None:
+        if not self.enabled:
+            return None
+        now = self._clock()
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            expires_at, data = entry
+            if expires_at <= now:
+                self._entries.pop(key, None)
+                return None
+            return data.model_copy()
+
+    def put(self, key: str, data: DatabaseStatusData) -> None:
+        if not self.enabled or data.status != "ok":
+            return
+        with self._lock:
+            # 接続先が変わったら古い key は使わないため、最新の 1 件だけを持つ。
+            self._entries = {key: (self._clock() + self.ttl_seconds, data.model_copy())}
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_CACHES: weakref.WeakSet[DatabaseStatusCache] = weakref.WeakSet()
+
+
+def clear_database_status_cache() -> None:
+    """DB の状態の cache をすべて捨てる（システムテーブルの操作・DB 設定の保存の後。テスト）。"""
+    for cache in list(_CACHES):
+        cache.clear()
+
+
 def _is_timeout(exc: BaseException) -> bool:
     # 製品の OracleConnectionTimeoutError は TimeoutError 派生とは限らない（Agent）。
     return isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower()
@@ -136,6 +227,7 @@ async def database_status(
     short_circuit: ShortCircuit | None = None,
     context_fields: ContextFields | None = None,
     connection_failure_log_extra: Callable[[Exception], Mapping[str, Any]] | None = None,
+    cache: DatabaseStatusCache | None = None,
 ) -> DatabaseStatusData:
     """DB の状態を判定する（判定の順はモジュールの docstring を参照）。"""
     context_id = database_context_id((context_fields or default_context_fields)(settings))
@@ -153,6 +245,33 @@ async def database_status(
         # 設定が不足している：接続を試さない。
         return DatabaseStatusData(status="not_configured", check=check, context_id=context_id)
 
+    cache_key = database_status_cache_key(settings, context_id) if cache is not None else ""
+    if cache is not None and (cached := cache.get(cache_key)) is not None:
+        return cached
+
+    result = await _probe_database(
+        settings,
+        check=check,
+        context_id=context_id,
+        test_connection=test_connection,
+        schema_probe=schema_probe,
+        connection_failure_log_extra=connection_failure_log_extra,
+    )
+    if cache is not None:
+        cache.put(cache_key, result)
+    return result
+
+
+async def _probe_database(
+    settings: Any,
+    *,
+    check: str,
+    context_id: str,
+    test_connection: TestConnection,
+    schema_probe: SchemaProbe | None,
+    connection_failure_log_extra: Callable[[Exception], Mapping[str, Any]] | None,
+) -> DatabaseStatusData:
+    """接続確認と製品の準備状態の確認（判定の 3〜5）。"""
     # 接続確認の timeout は製品の test_connection が持つ（Oracle 用の timeout）。ここで
     # 閲覧 API 用の短い timeout をかけると、起動済み ADB の初回接続を unreachable と誤判定する。
     try:
@@ -205,6 +324,7 @@ def build_database_status_router(
     short_circuit: ShortCircuit | None = None,
     context_fields: ContextFields | None = None,
     connection_failure_log_extra: Callable[[Exception], Mapping[str, Any]] | None = None,
+    ok_cache_seconds: float = DEFAULT_OK_CACHE_SECONDS,
 ) -> APIRouter:
     """`GET /ready/database` の router を作る。製品側で `/api` 配下に include する。
 
@@ -217,10 +337,12 @@ def build_database_status_router(
     - `short_circuit(settings)`：DB を使わない構成なら応答を返す（NL2SQL の memory モード）
     - `context_fields(settings)`：`context_id` の元にする接続先の値（既定は DSN・ユーザー・Wallet）
     - `connection_failure_log_extra(exc)`：接続確認の失敗をログに出すときの追加項目
+    - `ok_cache_seconds`：`ok` の結果を cache する秒数（0 で cache しない。#793）
 
     ログイン不要の path にするため、製品の公開 path の一覧に `/ready/database` を入れる。
     """
     router = APIRouter()
+    cache = DatabaseStatusCache(ok_cache_seconds)
 
     @router.get("/ready/database", response_model=ApiResponse[DatabaseStatusData])
     async def get_database_status() -> ApiResponse[DatabaseStatusData]:
@@ -234,6 +356,7 @@ def build_database_status_router(
                 short_circuit=short_circuit,
                 context_fields=context_fields,
                 connection_failure_log_extra=connection_failure_log_extra,
+                cache=cache,
             )
         )
 
