@@ -3447,8 +3447,9 @@ class Nl2SqlService:
         ):
             # Repository construction is deliberately zero-I/O. Oracle is touched only by
             # readiness or a data request, so module import time is independent of data size.
+            # 状態の読み書きは pool から借りる（1 回のジョブで数十回読み書きする。#830）。
             self._incremental_repository = OracleIncrementalNl2SqlRepository(
-                connection_factory=self._oracle_adapter.connection
+                connection_factory=self._oracle_adapter.state_connection
             )
             self._store = MemoryNl2SqlStore()
         else:
@@ -3551,7 +3552,7 @@ class Nl2SqlService:
         mode = settings.nl2sql_persistence_mode.strip().lower()
         if mode == "oracle":
             return OracleJsonNl2SqlStore(
-                connection_factory=self._oracle_adapter.connection,
+                connection_factory=self._oracle_adapter.state_connection,
                 table_name=settings.nl2sql_oracle_state_table,
                 migration_mirror_enabled=settings.nl2sql_migration_mirror_enabled,
             )
@@ -4234,29 +4235,39 @@ class Nl2SqlService:
         self._job_execution_context.owners = owners
         job.execution_owner = (job.worker_id, job.attempt)
 
-    def _assert_job_execution(self, job_id: str) -> None:
+    def _assert_job_execution(self, job_id: str, *, probe_cancel: bool = False) -> bool:
+        """この worker がまだ job を実行してよいかを DB で確かめる。
+
+        `probe_cancel=True` なら、別プロセスからのキャンセル要求も同じ往復で読み、要求があれば
+        True を返す（stage の境界ごとの往復を 1 回にする。#830）。
+        """
         repository = self._incremental_repository
         if repository is None:
-            return
+            return False
         with self._lock:
             job = self._jobs.get(job_id)
             owner = self._job_execution_owner(job) if job else None
         if job is None or owner is None or job.execution_owner != owner:
             raise JobExecutionLost(job_id)
+        keys = [("jobs", job_id)]
+        if probe_cancel:
+            keys.append((_JOB_CANCEL_COLLECTION, job_id))
         try:
-            current = repository.get_document("jobs", job_id)
+            documents = repository.get_documents(keys)
         except Exception as exc:
             self._raise_incremental_repository_failure(
                 operation="job_owner_probe",
                 exc=exc,
                 operation_error_code="job_owner_query_failed",
             )
+        current = documents.get(("jobs", job_id))
         if current is None or not _state_document_matches_fence(
             current,
             {"status": "running", "worker_id": owner[0], "attempt": owner[1]},
             require_live_lease=True,
         ):
             raise JobExecutionLost(job_id)
+        return (_JOB_CANCEL_COLLECTION, job_id) in documents
 
     def _heartbeat_job(self, job_id: str, owner: tuple[str, int]) -> bool:
         """元の claim の時刻だけを更新し、並行する進捗・結果保存を巻き戻さない。"""
@@ -7104,9 +7115,12 @@ class Nl2SqlService:
         elapsed_ms: int | None = None,
         running_stage: str | None = None,
     ) -> None:
-        """実処理と UI の段階表示を同じ job snapshot 上で進める。"""
+        """実処理と UI の段階表示を同じ job snapshot 上で進める。
 
-        self._assert_job_execution(job_id)
+        実行所有権は保存（`_persist_job` の fence 付きの更新）で確かめる。保存の前に読み直さない
+        （stage ごとの往復を減らす。#830）。
+        """
+
         with self._lock:
             job = self._execution_job_locked(job_id)
             known_stages = {step.stage for step in job.steps}
@@ -7365,30 +7379,19 @@ class Nl2SqlService:
 
         ローカルフラグに加えて repository 上のキャンセル要求も確認する。gunicorn の
         複数 worker 構成では cancel API が別プロセスへ届くため、ローカルフラグだけでは
-        止まらない。キャンセル要求の取得失敗は次の境界で再確認する。
-        実行所有権の取得失敗は別に扱い、確認できないまま次の外部呼び出しへ進めない。
+        止まらない。キャンセル要求は実行所有権と同じ往復で読み（#830）、取得に失敗したら
+        確認できないまま次の外部呼び出しへ進めない。
         """
 
-        self._assert_job_execution(job_id)
+        # 実行所有権とキャンセル要求は 1 回の往復で読む（#830）。
+        cancel_requested = self._assert_job_execution(job_id, probe_cancel=True)
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 return
             if job.cancel_requested:
                 raise JobCancelledError()
-        repository = self._incremental_repository
-        if repository is None:
-            return
-        try:
-            document = repository.get_document(_JOB_CANCEL_COLLECTION, job_id)
-        except Exception:
-            logger.warning(
-                "nl2sql_job_cancel_probe_failed",
-                extra={"job_id": job_id},
-                exc_info=True,
-            )
-            return
-        if document is None:
+        if not cancel_requested:
             return
         with self._lock:
             job = self._jobs.get(job_id)
@@ -19000,7 +19003,7 @@ class Nl2SqlService:
             return None
 
     def _run_job(self, job_id: str) -> None:
-        self._assert_job_execution(job_id)
+        # 実行所有権は直後の保存（fence 付きの更新）で確かめる（#830）。
         total_started = time.monotonic()
         with self._lock:
             job = self._execution_job_locked(job_id)

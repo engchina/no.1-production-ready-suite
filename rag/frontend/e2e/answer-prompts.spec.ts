@@ -133,10 +133,15 @@ test("回答生成のプロンプトは編集中の内容を背景の再取得�
   const editor = page.getByRole("textbox", { name: "テンプレート", exact: true });
   await expect(editor).toHaveValue(content);
 
-  // 未編集なら保存値の変更へ追従する。
+  // 未編集なら保存値の変更へ追従する。初回の取得（StrictMode の再購読による取り直しを含む）が
+  // まだ途中だと、フォーカスの再取得はその取得（保存版 A）にまとめられるため、B が届くまで再取得を促す（#833）。
   content = "保存版 B {{question}} {{images}}";
-  await refetchOnFocus(page);
-  await expect(editor).toHaveValue(content);
+  await expect
+    .poll(async () => {
+      await refetchOnFocus(page);
+      return editor.inputValue();
+    })
+    .toBe(content);
 
   // 編集中は、保存値が変わっても編集内容を残す。
   await editor.fill("編集中 {{question}} {{images}}");
