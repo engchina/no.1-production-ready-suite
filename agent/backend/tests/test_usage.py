@@ -186,8 +186,9 @@ def test_usage_needs_the_menu_permission_and_is_limited_to_allowed_agents(
     assert denied.status_code == 403
 
     bob = auth.user_with_permissions("usage-772", [MENU_USAGE], agent_ids=["sales-772"])
-    with runtime_repository._lock:  # noqa: SLF001 - 作成者を作った利用者に合わせる
-        runtime_repository._runs["usage-772-b"].created_by_user_uuid = bob.user_uuid  # noqa: SLF001
+    repository: Any = runtime_repository
+    with repository._lock:  # noqa: SLF001 - 作成者を作った利用者に合わせる
+        repository._runs["usage-772-b"].created_by_user_uuid = bob.user_uuid  # noqa: SLF001
     allowed = client.get("/api/usage", headers=login("usage-772"))
 
     assert allowed.status_code == 200, allowed.text
