@@ -846,7 +846,7 @@ server {
     # 600 秒）と画面の timeout（630 秒）より長くし、backend の 504 と理由を画面に届ける。
     # - 保存済みの回答の評価（標準回答による評価。#304）: 画面が失敗を出した後で評価を保存しない。
     # - チャット・RAG 検索の回答生成（RAG_ANSWER_TIMEOUT_SECONDS。上限 600 秒。#375）と、
-    #   同じ回答生成を呼ぶ MCP（rag_search / rag_chat_send_message）。
+    #   同じ回答生成を呼ぶ MCP（rag_search）。
     # - 品質評価（golden set。/api/evaluation/run・/compare。#383）: backend は評価全体を 600 秒で
     #   打ち切り、残りのケースを失敗として結果を返す。
     location ~ ^/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|mcp)\$ {

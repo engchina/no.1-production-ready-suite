@@ -193,7 +193,7 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 ## 既存環境の更新手順（#635 RAG 検索の業務ビューを 1 つにする）
 
 - **画面**: RAG 検索の「対象の業務ビュー」を 1 つだけ選ぶ欄にし、チャットの業務ビューの欄と同じ部品・文言・幅にした。以前の画面で複数を選んでいた作業状態（sessionStorage の `search.businessViewIds`）は読まず、再読込後は未選択から始まる。
-- **API**: `POST /api/search`・`POST /api/search/stream` は業務ビューを `business_view_id`（1 つ）だけで受ける。`business_view_ids` を送ると 422 を返す（読み捨てると業務ビューの外を検索するため）。検索の絞り込みの候補 `GET /api/search/extraction-fields` の query も `business_view_ids` から `business_view_id` に変えた。MCP の `rag_search` / `rag_chat_send_message` と検証 CLI（`app.rag.answer_verify_cli`）は元から 1 つで、入力は変わらない。
+- **API**: `POST /api/search`・`POST /api/search/stream` は業務ビューを `business_view_id`（1 つ）だけで受ける。`business_view_ids` を送ると 422 を返す（読み捨てると業務ビューの外を検索するため）。検索の絞り込みの候補 `GET /api/search/extraction-fields` の query も `business_view_ids` から `business_view_id` に変えた。MCP の `rag_search`（当時あったチャットの送信のツールは #787 で削除）と検証 CLI（`app.rag.answer_verify_cli`）は元から 1 つで、入力は変わらない。
 - **データベース**: DDL・データの移行は要らない。回答の記録・質問の履歴は元から業務ビューを 1 つだけ保存している。以前に複数の業務ビューで検索した監査（`rag_search_audit` の `business_view_applied`）は `bv-1,bv-2` の文字列のまま残り、表示・集計は変わらない。
 - **手順**: コードを更新して backend と frontend を再起動する。`/api/search` を直接呼ぶ独自のスクリプトがあれば、`business_view_ids: [id]` を `business_view_id: id` に変える。
 
