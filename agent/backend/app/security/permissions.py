@@ -64,6 +64,7 @@ MENU_APPROVALS = "menu.approvals"
 MENU_AUDIT = "menu.audit"
 MENU_PLUGIN_MARKETPLACES = "menu.plugin_marketplaces"
 MENU_EVALUATION = "menu.evaluation"
+MENU_FEEDBACK = "menu.feedback"
 MENU_SECURITY_PERMISSIONS = "menu.security_permissions"
 MENU_SETTINGS_SYSTEM_TABLES = "menu.settings_system_tables"
 # MCP 接続（#757。旧「外部 MCP」。権限コードは保存値なので変えない）。
@@ -125,6 +126,7 @@ _ADMIN_MENUS = (
     MENU_AUDIT,
     MENU_PLUGIN_MARKETPLACES,
     MENU_EVALUATION,
+    MENU_FEEDBACK,
     MENU_SETTINGS_SYSTEM_TABLES,
     MENU_SETTINGS_EXTERNAL_MCP,
     MENU_SETTINGS_API_KEYS,
@@ -146,6 +148,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_PLUGIN_MARKETPLACES, _GROUP_CONTROL_PLANE, "マーケットプレイス"),
     # 業務のセクションの後の「改善・運用」（RAG / NL2SQL と同じ名前・位置。#658 / #776）。
     _menu_permission(MENU_EVALUATION, _GROUP_IMPROVE, "品質評価"),
+    # 業務のセクションの後の「改善・運用」（RAG / NL2SQL と同じ名前・位置。#658 / #774）。
+    _menu_permission(MENU_FEEDBACK, _GROUP_IMPROVE, "フィードバック"),
     # 権限管理は Agent 固有。ユーザー管理・ロール管理は 3 製品共通の画面（#206）。
     _menu_permission(MENU_SECURITY_PERMISSIONS, _GROUP_SECURITY, "権限管理"),
     # 並びはサイドナビと同じ
@@ -376,6 +380,13 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/evaluations/{job_id}"): _any(MENU_EVALUATION),
     ("POST", "/evaluations/{job_id}/cancel"): _any(MENU_EVALUATION),
     ("DELETE", "/evaluations/{job_id}"): _any(MENU_EVALUATION),
+    # チャットの回答への評価（#774。会話をした利用者だけ。router が作成者を確かめる）。
+    ("PUT", f"{_RUN}/feedback"): _OPERATE,
+    # 管理者の評価（#774。だれの回答にも付けられる）。
+    ("PUT", f"{_RUN}/admin-review"): _ADMIN_ONLY,
+    # ---- 改善・運用 ----
+    # フィードバック（#774。集計の対象は Run の一覧と同じく利用できる業務 Agent の Run）。
+    ("GET", "/feedback"): _any(MENU_FEEDBACK),
     # ---- Control Plane: プラグインとマーケットプレイス ----
     ("GET", "/plugins"): _PLUGIN_READ,
     ("GET", "/plugins/{plugin_id}"): _PLUGIN_READ,

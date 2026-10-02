@@ -263,6 +263,81 @@ function automationFields(body: Json): Json {
   };
 }
 
+function answerTextOf(run: Json): string {
+  const answer = ((run.artifacts as Json[] | undefined) ?? []).find((artifact) => artifact.kind === "answer");
+  const text = (answer?.content as Json | undefined)?.text;
+  return typeof text === "string" ? text : "";
+}
+
+/** Run の評価から `GET /api/feedback` の応答を作る（前の期間は 0 件。#774）。 */
+function feedbackReportFromRuns(
+  runs: Json[],
+  days: number,
+  filters: { agentId: string | null; rating: string | null; reason: string | null }
+): Json {
+  const rated = runs.filter(
+    (run) => (run.feedback || run.admin_review) && (!filters.agentId || run.agent_id === filters.agentId)
+  );
+  const owned = rated.filter((run) => run.feedback).map((run) => run.feedback as Json);
+  const reviews = rated.filter((run) => run.admin_review).map((run) => run.admin_review as Json);
+  const helpful = owned.filter((item) => item.rating === "helpful").length;
+  const reasons = new Map<string, number>();
+  for (const item of owned) {
+    const reason = item.reason as string | null;
+    if (reason) reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+  }
+  const summary = {
+    total: owned.length,
+    helpful,
+    not_helpful: owned.length - helpful,
+    helpful_rate: owned.length ? helpful / owned.length : null,
+    reason_counts: [...reasons.entries()].sort((a, b) => b[1] - a[1]).map(([reason, count]) => ({ reason, count })),
+    admin_reviewed: reviews.length,
+    admin_not_helpful: reviews.filter((item) => item.rating === "not_helpful").length,
+  };
+  const matches = (item: unknown) => {
+    const rating = item as Json | null | undefined;
+    return Boolean(
+      rating &&
+        (!filters.rating || rating.rating === filters.rating) &&
+        (!filters.reason || rating.reason === filters.reason)
+    );
+  };
+  const items = rated
+    .filter((run) => matches(run.feedback) || matches(run.admin_review))
+    .map((run) => ({
+      run_id: run.id,
+      thread_id: run.thread_id ?? null,
+      agent_id: run.agent_id,
+      agent_name: run.agent_id === "default" ? "汎用業務 Agent" : "",
+      user_uuid: run.created_by_user_uuid ?? null,
+      display_name: "ローカル利用者",
+      question: run.goal,
+      answer: answerTextOf(run),
+      feedback: run.feedback ?? null,
+      admin_review: run.admin_review ?? null,
+      reviewer_display_name: run.admin_review ? "ローカル利用者" : "",
+      updated_at: MOCK_NOW,
+    }));
+  return {
+    days,
+    since: MOCK_NOW,
+    until: MOCK_NOW,
+    summary,
+    previous: {
+      total: 0,
+      helpful: 0,
+      not_helpful: 0,
+      helpful_rate: null,
+      reason_counts: [],
+      admin_reviewed: 0,
+      admin_not_helpful: 0,
+    },
+    items,
+    matched: items.length,
+  };
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -279,6 +354,8 @@ function createState() {
     tools: d.tools as unknown as Json[],
     // 監査の記録（`GET /api/audit/tool-calls`）。offset / limit で切り出して返す（#265）。
     auditRecords: [] as Json[],
+    // フィードバック（`GET /api/feedback`。#774）。null なら Run の評価から作る。
+    feedbackReport: null as Json | null,
     // 自動実行（#784）。`automationRuns` は自動実行ごとの実行履歴。
     automations: [] as Json[],
     automationsPersistent: true,
@@ -615,6 +692,17 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     state.runs.push(run);
     return run;
   }
+  // フィードバックの集計と一覧（#774）。`state.feedbackReport` があればそれを返し、無ければ Run の評価から作る。
+  if (method === "GET" && at("feedback")) {
+    const days = Number(query.get("days") ?? 30);
+    if (![7, 30, 90].includes(days)) throw new HttpError(422, "期間は 7・30・90 日のどれかにしてください。");
+    if (state.feedbackReport) return state.feedbackReport;
+    return feedbackReportFromRuns(state.runs, days, {
+      agentId: query.get("agent_id"),
+      rating: query.get("rating"),
+      reason: query.get("reason"),
+    });
+  }
   if (method === "GET" && at("threads")) {
     const agentId = query.get("agent_id");
     const grouped = new Map<string, Json[]>();
@@ -651,6 +739,34 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return run;
     }
     if (method === "POST" && at("runs", "*", "resume")) return run;
+    // チャットの回答への評価（#774）。役に立たなかったときは理由が必須。役に立った評価は理由・コメントを残さない。
+    // 管理者の評価（#774）。本人の評価とは別に残す。
+    if (method === "PUT" && at("runs", "*", "admin-review")) {
+      if (run.status !== "completed") throw new HttpError(409, "回答が出た Run にだけ評価を付けられます。");
+      const helpful = body.rating === "helpful";
+      if (!helpful && !body.reason) throw new HttpError(422, "役に立たなかった理由を選んでください。");
+      run.admin_review = {
+        rating: body.rating,
+        reason: helpful ? null : body.reason,
+        comment: helpful ? "" : String(body.comment ?? "").trim(),
+        user_uuid: "local",
+        updated_at: MOCK_NOW,
+      };
+      return run;
+    }
+    if (method === "PUT" && at("runs", "*", "feedback")) {
+      if (run.status !== "completed") throw new HttpError(409, "回答が出た Run にだけフィードバックを付けられます。");
+      const helpful = body.rating === "helpful";
+      if (!helpful && !body.reason) throw new HttpError(422, "役に立たなかった理由を選んでください。");
+      run.feedback = {
+        rating: body.rating,
+        reason: helpful ? null : body.reason,
+        comment: helpful ? "" : String(body.comment ?? "").trim(),
+        user_uuid: "local",
+        updated_at: MOCK_NOW,
+      };
+      return run;
+    }
     if (method === "POST" && at("runs", "*", "replay")) {
       const replay = { ...clone(run), id: `${String(run.id)}-replay-${state.runs.length}`, status: "completed" };
       state.runs.unshift(replay);

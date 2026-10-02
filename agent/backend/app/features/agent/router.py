@@ -130,6 +130,11 @@ from app.features.agent.evaluation_excel import (
     parse_cases_xlsx,
     template_xlsx,
 )
+from app.features.agent.feedback import (
+    FEEDBACK_PERIOD_DAYS,
+    FeedbackReport,
+    build_feedback_report,
+)
 from app.features.agent.mcp_server import build_agent_mcp_server
 from app.features.agent.plugins import (
     MarketplaceListing,
@@ -153,8 +158,13 @@ from app.features.agent.runtime import (
     ApprovalDecisionRequest,
     Artifact,
     ArtifactsData,
+    FeedbackRating,
+    FeedbackReason,
     RunCreateRequest,
     RunEvent,
+    RunFeedback,
+    RunFeedbackRequest,
+    RunNotRatableError,
     RunsData,
     RunState,
     RunStatus,
@@ -1561,6 +1571,105 @@ async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadData
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     _require_agent_access(request, thread.agent_id)
     return ApiResponse(data=thread)
+
+
+@router.put("/runs/{run_id}/feedback", response_model=ApiResponse[RunState])
+async def put_run_feedback(
+    run_id: str,
+    feedback: RunFeedbackRequest,
+    request: Request,
+    _: None = Depends(require_operator),
+) -> ApiResponse[RunState]:
+    """チャットの回答への評価（#774）。
+
+    会話をした利用者（Run の作成者）だけが付け、付け直すと上書きする。
+    """
+    try:
+        run = runtime_repository.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    _require_agent_access(request, run.agent_id)
+    user_uuid = _run_creator_user_uuid(request)
+    if run.created_by_user_uuid is None or run.created_by_user_uuid != user_uuid:
+        raise HTTPException(
+            status_code=403, detail="フィードバックは、この会話をした利用者だけが付けられます。"
+        )
+    try:
+        updated = runtime_repository.set_run_feedback(
+            run_id,
+            RunFeedback(
+                rating=feedback.rating,
+                reason=feedback.reason,
+                comment=feedback.comment,
+                user_uuid=user_uuid,
+            ),
+        )
+    except RunNotRatableError as exc:
+        raise HTTPException(
+            status_code=409, detail="回答が出た Run にだけフィードバックを付けられます。"
+        ) from exc
+    return ApiResponse(data=updated)
+
+
+@router.put("/runs/{run_id}/admin-review", response_model=ApiResponse[RunState])
+async def put_run_admin_review(
+    run_id: str,
+    review: RunFeedbackRequest,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[RunState]:
+    """管理者の評価（#774）。Agent 管理の権限でだれの回答にも付けられ、本人の評価とは別に残す。"""
+    try:
+        run = runtime_repository.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    _require_agent_access(request, run.agent_id)
+    try:
+        updated = runtime_repository.set_run_feedback(
+            run_id,
+            RunFeedback(
+                rating=review.rating,
+                reason=review.reason,
+                comment=review.comment,
+                user_uuid=_run_creator_user_uuid(request),
+            ),
+            admin=True,
+        )
+    except RunNotRatableError as exc:
+        raise HTTPException(
+            status_code=409, detail="回答が出た Run にだけ評価を付けられます。"
+        ) from exc
+    return ApiResponse(data=updated)
+
+
+@router.get("/feedback", response_model=ApiResponse[FeedbackReport])
+async def get_feedback_report(
+    request: Request,
+    days: int = Query(default=30),
+    agent_id: str | None = Query(default=None, max_length=200),
+    rating: FeedbackRating | None = None,
+    reason: FeedbackReason | None = None,
+) -> ApiResponse[FeedbackReport]:
+    """フィードバックの集計と一覧（#774）。権限は middleware のメニュー権限（`menu.feedback`）。
+
+    対象は Run の一覧と同じく利用できる業務 Agent の Run だけ。
+    """
+    if days not in FEEDBACK_PERIOD_DAYS:
+        raise HTTPException(status_code=422, detail="期間は 7・30・90 日のどれかにしてください。")
+    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    report = await run_in_threadpool(
+        build_feedback_report,
+        runs,
+        days=days,
+        now=datetime.now(UTC),
+        agent_id=agent_id or None,
+        rating=rating,
+        reason=reason,
+        agent_names=agent_names,
+        user_names=user_display_names,
+    )
+    return ApiResponse(data=report)
 
 
 @router.get("/runs/{run_id}", response_model=ApiResponse[RunState])

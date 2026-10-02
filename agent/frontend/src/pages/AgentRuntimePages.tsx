@@ -105,6 +105,7 @@ import {
   MissingEditorTarget,
 } from "@/components/EntityLayout";
 import { agentPaginationLabels, listScrollLabel, PagedDataTable, QueryState } from "@/components/ListViews";
+import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { useEditorRoute } from "@/lib/editor-route";
 import {
   focusFirstInvalidField,
@@ -5063,6 +5064,7 @@ function RunDetail({
   sseState: RunEventSourceState;
   capabilities: AgentCapabilities;
 }) {
+  const queryClient = useQueryClient();
   const structured = getStructuredResult(run);
   const { canCancel, canResume } = runCapabilities(run);
   const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
@@ -5094,6 +5096,15 @@ function RunDetail({
             <span>{`${t("common.createdAt")}: ${formatDate(run.created_at)}`}</span>
             <span>{`${t("common.updatedAt")}: ${formatDate(run.updated_at)}`}</span>
           </div>
+          {/* 管理者の評価（#774）。Agent 管理の権限で、回答が出た Run に付ける（本人の評価とは別）。 */}
+          {capabilities.admin && run.status === "completed" && run.artifacts.some((item) => item.kind === "answer") ? (
+            <AnswerFeedback
+              runId={run.id}
+              current={run.admin_review ?? null}
+              mode="admin"
+              onSaved={() => void queryClient.invalidateQueries({ queryKey: ["runs"] })}
+            />
+          ) : null}
         </CardContent>
       </Card>
 

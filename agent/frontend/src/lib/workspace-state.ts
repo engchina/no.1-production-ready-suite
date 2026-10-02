@@ -22,10 +22,12 @@ export const WORKSPACE_FIELDS = {
   chat: ["agentId", "threadId", "draft"],
   runs: ["selectedRunId", "streamMode", "goal"],
   audit: ["filterForm", "appliedForm", "page"],
+  // フィードバックの絞り込み（#774）。
+  feedback: ["days", "agentId", "rating", "reason"],
   // 品質評価の業務 Agent・表示している評価（#776）。評価ケースは評価セットとして保存する。
   evaluation: ["agentId", "jobId"],
   // 一覧のページ番号（#265）。一覧 → エディタ → 一覧の移動と再読込で同じページに戻す。
-  lists: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "plugins", "marketplaces", "evaluationSets", "evaluationResults", "evaluationJobs", "automations"],
+  lists: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "plugins", "marketplaces", "evaluationSets", "evaluationResults", "evaluationJobs", "automations", "feedback"],
 } as const;
 
 export type WorkspacePage = keyof typeof WORKSPACE_FIELDS;

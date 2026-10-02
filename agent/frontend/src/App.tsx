@@ -22,6 +22,7 @@ import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { canOpenRoute, defaultEntryRoute, firstAllowedRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
+import { FeedbackPage } from "@/pages/FeedbackPage";
 import { AutomationsPage } from "@/pages/AutomationsPage";
 import { EvaluationPage } from "@/pages/EvaluationPage";
 import { ApiKeysPage } from "@/pages/ApiKeysPage";
@@ -133,6 +134,7 @@ export function App() {
             </Capability>
           }
         />
+        <Route path={APP_ROUTES.feedback} element={<FeedbackPage />} />
         <Route path={APP_ROUTES.automations} element={<AutomationsPage />} />
         <Route path={APP_ROUTES.evaluation} element={<EvaluationPage />} />
         <Route path={APP_ROUTES.settingsSystemTables} element={<SettingsSystemTablesRoute />} />
