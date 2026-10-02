@@ -806,7 +806,7 @@ const agentJa = {
   "run.replayTitle": "同じ条件で再実行しますか?",
   "run.guardrailWarning": "安全検査の警告",
   "run.stream": "ストリーム",
-  "run.streamDescription": "実行のイベントの受け取り方と、WebSocket の操作の状態",
+  "run.streamDescription": "実行のイベントの受け取り方と、接続の状態",
   "run.streamMode": "ストリーム方式",
   "run.stream.sse": "SSE",
   "run.stream.websocket": "WebSocket",
@@ -817,10 +817,6 @@ const agentJa = {
   "run.stream.lastEvent": "最後のイベント",
   "run.stream.reconnects": "再接続の回数",
   "run.stream.duplicate": "重複",
-  "run.stream.wsCancel": "WS キャンセル",
-  "run.stream.wsResume": "WS 再開",
-  "run.stream.wsApprove": "WS 承認",
-  "run.stream.wsReject": "WS 却下",
   "run.stream.wsIdle": "未接続",
   "run.stream.wsConnecting": "接続中",
   "run.stream.wsOpen": "接続済み",
@@ -876,7 +872,6 @@ const agentJa = {
   "settings.productMcp.serviceUserHint":
     "実行の利用者がいない呼び出しで使うログインユーザー ID です。未設定ならその呼び出しだけ失敗します。",
   "settings.timeout": "タイムアウト秒",
-  "settings.mcpDiscovery.empty": "MCP tool は見つかりませんでした。",
   "settings.mcpDiscovery.tool": "ツール",
   "settings.mcpDiscovery.descriptionColumn": "説明",
   "settings.mcpDiscovery.inputSchema": "入力の形式",
@@ -902,7 +897,6 @@ const agentJa = {
   "settings.snapshot.confirmPlaceholder": "REPLACE",
   "settings.snapshot.copyCurrent": "現在値を入力へ反映",
   "settings.snapshot.downloaded": "スナップショットをダウンロードしました",
-  "settings.snapshot.validated": "スナップショットを検証しました",
   "settings.snapshot.imported": "スナップショットで置き換えました",
   "settings.snapshot.confirmRequired": "置換するには REPLACE と入力してください",
   "settings.snapshot.replaceTitle": "スナップショットで置き換えますか?",
@@ -910,7 +904,6 @@ const agentJa = {
   "settings.snapshot.summary": "サマリー",
   "settings.snapshot.errors": "エラー",
   "settings.snapshot.warnings": "警告",
-  "settings.snapshot.noIssues": "検証エラーはありません",
 
   "settings.mcpServers.delete": "削除",
   "settings.mcpServers.label": "表示名",
@@ -963,7 +956,6 @@ const agentJa = {
   "settings.mcpConnections.toolsDescription":
     "接続が公開しているツール（tools/list）です。ログイン中の利用者として取得するため、接続の確認にも使えます。",
   "settings.mcpConnections.fetchTools": "ツールを取得",
-  "settings.mcpConnections.fetchFailed": "ツールを取得できませんでした",
   "settings.mcpConnections.configureFirst": "接続を使えるように設定すると、ツールを取得できます。",
   "settings.mcpConnections.approval": "承認",
   "settings.mcpConnections.readOnly": "読み取り専用",
@@ -1268,6 +1260,29 @@ const agentJa = {
   "automation.noMatch": "検索に一致する自動実行がありません",
   "apiKeys.search": "名前・実行する利用者で絞り込み",
   "apiKeys.noMatch": "検索に一致する API キーがありません",
+  // 操作の結果の出し方（messaging.md §10。#814）。
+  "settings.snapshot.validating": "スナップショットを検証しています",
+  "settings.snapshot.result.valid": "スナップショットは有効です。置換できます。",
+  "settings.snapshot.result.validWithWarnings":
+    "スナップショットは有効ですが、警告が {count} 件あります。内容を確かめてから置換してください。",
+  "settings.snapshot.result.invalid": "スナップショットに問題が {count} 件あります。直すまで置換できません。",
+  "settings.snapshot.result.failed": "スナップショットを検証できませんでした。",
+  "settings.snapshot.result.failedHint": "インポート JSON の形式とサーバーの状態を確かめて、もう一度検証してください。",
+  "settings.snapshot.replaceFailed": "スナップショットで置き換えられませんでした。{reason}",
+  "marketplaces.pluginSearch": "名前・ID・説明で絞り込み",
+  "marketplaces.pluginNoMatch": "検索に一致するプラグインがありません",
+  "run.decideFailed": "承認の判断を送れませんでした",
+  "run.stream.commandFailed": "実行の操作を送れませんでした",
+  "run.stream.commandFailedDefault": "サーバーが操作を受け付けませんでした。",
+  "run.stream.websocketDescription":
+    "WebSocket で、終わっていない実行のイベントを受け取ります。接続中は、承認・再開・キャンセルもこの接続で送ります。",
+  "run.stream.details": "接続の詳細",
+  "settings.mcpConnections.fetchSucceeded": "{name} から {count} 個のツールを取得しました。",
+  "settings.mcpConnections.fetchEmpty": "{name} に接続できましたが、公開されているツールがありません。",
+  "settings.mcpConnections.fetchEmptyHint": "接続先の MCP サーバーがツールを公開しているか確かめてください。",
+  "settings.mcpConnections.fetchFailedMessage": "{name} からツールを取得できませんでした。",
+  "settings.mcpConnections.fetchFailedHintUrl": "URL が MCP のエンドポイント（例: https://…/api/mcp）を指しているか確かめてください。",
+  "settings.mcpConnections.fetchFailedHintAuth": "認証方式と、API キー・クライアントシークレット・サービストークンの設定を確かめてください。",
 } as const;
 
 const ja = {

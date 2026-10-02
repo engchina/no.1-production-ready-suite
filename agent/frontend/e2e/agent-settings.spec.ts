@@ -404,6 +404,12 @@ test.describe("Agent Runtime settings", () => {
 
     // ツールの取得は保存した接続で呼び、結果はボタンの直下に出す（読み取り専用か、承認が必要か）。
     await page.getByRole("button", { name: "ツールを取得" }).click();
+    // 結果は結果パネル（何が起きたか・所要時間・詳細は畳む）で出し、その下に一覧を出す（messaging.md §10。#814）。
+    const toolsResult = page.getByTestId("mcp-tools-result");
+    await expect(toolsResult).toHaveAttribute("data-tone", "success");
+    await expect(toolsResult).toContainText(/CRM Gateway から \d+ 個のツールを取得しました。/);
+    await expect(toolsResult).toContainText(/所要時間: \d+ ms/);
+    await expect(toolsResult.locator("details")).not.toHaveAttribute("open", "");
     const tools = page.getByRole("table", { name: "ツール" });
     await expect(tools.getByText("lookup_customer", { exact: true })).toBeVisible();
     await expect(tools.getByText("crm__update_order")).toBeVisible();
@@ -414,6 +420,23 @@ test.describe("Agent Runtime settings", () => {
     await page.setViewportSize({ width: 375, height: 812 });
     await expectNoHorizontalOverflow(page);
     await page.setViewportSize({ width: 1280, height: 800 });
+
+    // 取得の失敗は、原因・確認ポイントと、開いた「詳細」（status / error code）を同じ位置に出す。一覧は出さない。
+    await page.route("**/api/settings/mcp-connections/crm/tools", (route) =>
+      route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "MCP サーバーに接続できませんでした。", error_code: "mcp.unreachable" }),
+      })
+    );
+    await page.getByRole("button", { name: "ツールを取得" }).click();
+    await expect(toolsResult).toHaveAttribute("data-tone", "danger");
+    await expect(toolsResult).toContainText("CRM Gateway からツールを取得できませんでした。");
+    await expect(toolsResult).toContainText("MCP サーバーに接続できませんでした。");
+    await expect(toolsResult.locator("details")).toHaveAttribute("open", "");
+    await expect(toolsResult).toContainText("502");
+    await expect(tools).toHaveCount(0);
+    await page.unroute("**/api/settings/mcp-connections/crm/tools");
 
     // 削除（行メニュー → 確認）。
     await page.getByTestId("editor-back").click();
@@ -593,6 +616,15 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByText("プラグインの一覧を更新しました")).toBeVisible();
     await expect(page.getByRole("heading", { name: "インストールできるプラグイン" })).toBeVisible();
     await expect(page.getByText("Fixture Plugin")).toBeVisible();
+    // 他の一覧と同じく、名前・ID・説明で絞り込める（0 件は「検索語をクリア」。#814）。
+    const pluginSearch = page.getByRole("searchbox", { name: "名前・ID・説明で絞り込み" });
+    await pluginSearch.fill("該当なし");
+    await expect(page.getByText("検索に一致するプラグインがありません")).toBeVisible();
+    await page.getByRole("button", { name: "検索語をクリア" }).last().click();
+    await expect(pluginSearch).toHaveValue("");
+    await pluginSearch.fill("fixture_plugin");
+    await expect(page.getByTestId("marketplace-plugin-toolbar")).toContainText("1 件");
+    await expect(page.getByText("Fixture Plugin")).toBeVisible();
     await chooseRowAction(page, "fixture_plugin", "インストール");
     await expect(page.getByText("プラグインをインストールしました")).toBeVisible();
 
@@ -741,9 +773,18 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByRole("button", { name: "置換" })).toBeDisabled();
 
     await page.getByRole("button", { name: "検証" }).click();
-    await expect(page.getByText("スナップショットを検証しました")).toBeVisible();
-    await expect(page.getByText("有効")).toBeVisible();
-    await expect(page.getByText("検証エラーはありません")).toBeVisible();
+    // 結果は「検証」の直下の結果パネル 1 つ（messaging.md §10。#814）。Toast や success の帯を重ねない。
+    const result = page.getByTestId("runtime-snapshot-validation");
+    await expect(result).toHaveAttribute("data-tone", "success");
+    await expect(result).toContainText("スナップショットは有効です。置換できます。");
+    await expect(result).toContainText(/所要時間: \d+ ms/);
+    await expect(page.locator("[data-settings-test-result]")).toHaveCount(1);
+    // 件数の集計は「詳細」に畳む（成功のときは閉じている）。
+    const details = result.locator("details");
+    await expect(details).not.toHaveAttribute("open", "");
+    await result.getByText("詳細", { exact: true }).click();
+    await expect(details).toHaveAttribute("open", "");
+    await expect(details.getByText("業務 Agent", { exact: true })).toBeVisible();
 
     const invalidSnapshot = {
       ...snapshot,
@@ -751,10 +792,15 @@ test.describe("Agent Runtime settings", () => {
       agents: [...snapshot.agents, { ...snapshot.agents[0] }],
     };
     await page.getByLabel("インポート JSON").fill(JSON.stringify(invalidSnapshot, null, 2));
+    // 入力を変えたら、前の入力の結果は消す（messaging.md §10.4）。
+    await expect(result).toHaveCount(0);
     await page.getByRole("button", { name: "検証" }).click();
-    await expect(page.getByText("無効")).toBeVisible();
-    await expect(page.getByText(/unsupported snapshot version/)).toBeVisible();
-    await expect(page.getByText(/duplicate agent id/)).toBeVisible();
+    await expect(result).toHaveAttribute("data-tone", "danger");
+    await expect(result).toContainText(/スナップショットに問題が \d+ 件あります。直すまで置換できません。/);
+    await expect(result.getByText(/unsupported snapshot version/)).toBeVisible();
+    await expect(result.getByText(/duplicate agent id/)).toBeVisible();
+    // 失敗のときは「詳細」を開いて出す。
+    await expect(result.locator("details")).toHaveAttribute("open", "");
 
     // 置換の確認語は共有の実行確認語欄（#379）。一致するまで置換を押せない。
     const confirmation = page.getByTestId("execution-confirmation-field");
