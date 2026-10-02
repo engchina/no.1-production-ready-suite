@@ -57,7 +57,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`サイドナビはセキュリティ設定 → ユーザーとロール → 運用設定 → システム設定の順に並べる (${viewport.name})`, async ({ page }) => {
+  test(`サイドナビは利用者向け → 管理者向け（AI 活用 → Agent 構築 → … → システム設定）の順に並べる (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/settings/appearance");
     // 375px ではナビがドロワー（#367）。開いてから並びを読む。
@@ -65,13 +65,15 @@ for (const viewport of [
     // 認証の確認後にサイドナビを描く。最後のセクションが出るまで待ってから並びを読む。
     await expect(sidebar.locator("#nav-section-nav-section-settings")).toHaveCount(1);
 
-    // 並びは NL2SQL / RAG と同じ「… → 改善・運用 → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定」
-    // （#87 / #215 / #658 / #774 / #776）。
+    // 並びは NL2SQL / RAG と同じく、上に一般の利用者が使う画面、下に管理者の画面
+    // 「AI 活用 → Agent 構築 → 改善・運用 → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定」
+    // （#87 / #215 / #658 / #774 / #776 / #791）。
     const sectionIds = await sidebar
       .locator('[id^="nav-section-nav-section-"]')
       .evaluateAll((elements) => elements.map((element) => element.id));
     expect(sectionIds).toEqual([
-      "nav-section-nav-section-controlPlane",
+      "nav-section-nav-section-use",
+      "nav-section-nav-section-build",
       "nav-section-nav-section-improve",
       "nav-section-nav-section-security",
       "nav-section-nav-section-userRoles",
@@ -79,11 +81,23 @@ for (const viewport of [
       "nav-section-nav-section-settings",
     ]);
 
-    // 改善・運用は RAG / NL2SQL と同じ品質評価・フィードバックの後に、Agent の利用状況（#772）。
-    await expect(sidebar.locator("#nav-section-nav-section-improve").getByRole("link")).toHaveCount(3);
-    await expect(sidebar.locator('#nav-section-nav-section-improve a[href="/usage"]')).toHaveCount(1);
-    // セキュリティ設定は権限管理、運用設定はシステムテーブル（先頭。#751）と Agent 固有の3項目
-    // （MCP 接続・API キー・バックアップ。#757 / #762 / #778）、
+    // 各セクションの見出しは利用者の言葉（「Control Plane」のような基盤の用語を出さない。#791）。
+    for (const title of ["AI 活用", "Agent 構築", "改善・運用", "運用設定"]) {
+      await expect(sidebar.getByText(title, { exact: true })).toBeVisible();
+    }
+    await expect(sidebar.getByText(/Control Plane/)).toHaveCount(0);
+    // AI 活用は一般の利用者の画面（チャット → 実行履歴 → 承認）。チャットが既定の入口（#768 / #791）。
+    const linkHrefs = (section: string) =>
+      sidebar
+        .locator(`#nav-section-nav-section-${section} a[href]`)
+        .evaluateAll((links) => links.map((link) => link.getAttribute("href")));
+    expect(await linkHrefs("use")).toEqual(["/chat", "/runs", "/approvals"]);
+    // Agent 構築は管理者が業務 Agent を作る画面（RAG のナレッジ構築・NL2SQL のデータ準備に当たる）。
+    expect(await linkHrefs("build")).toEqual(["/agents", "/skills", "/automations", "/plugins/marketplaces"]);
+    // 改善・運用は RAG / NL2SQL と同じ品質評価・フィードバックの後に、Agent の利用状況（#772）と監査ログ（#791）。
+    expect(await linkHrefs("improve")).toEqual(["/evaluation", "/feedback", "/usage", "/audit"]);
+    // セキュリティ設定は権限管理、運用設定はシステムテーブル（先頭。#751）と Agent 固有の4項目
+    // （実行環境・MCP 接続・API キー・バックアップと復元。#757 / #762 / #778 / #791）、
     // ユーザーとロール・システム設定は3製品共通。
     // 改善・運用は品質評価（#776。アイコンは RAG / NL2SQL と同じ FlaskConical）。
     await expect(sidebar.locator('#nav-section-nav-section-improve a[href="/evaluation"]')).toHaveCount(1);
@@ -95,13 +109,14 @@ for (const viewport of [
     const settings = sidebar.locator("#nav-section-nav-section-settings");
     await expect(security.getByRole("link")).toHaveCount(1);
     await expect(security.locator('a[href="/settings/security/permissions"]')).toHaveCount(1);
-    await expect(operations.getByRole("link")).toHaveCount(4);
+    await expect(operations.getByRole("link")).toHaveCount(5);
     // 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ）。
     await expect(operations.getByRole("link").first()).toHaveAttribute("href", "/settings/system-tables");
     await expect(userRoles.getByRole("link")).toHaveCount(2);
     await expect(settings.getByRole("link")).toHaveCount(5);
     for (const href of [
       "/settings/system-tables",
+      "/runtimes",
       "/settings/mcp-connections",
       "/settings/api-keys",
       "/settings/runtime-snapshot",

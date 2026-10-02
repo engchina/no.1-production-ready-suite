@@ -51,23 +51,23 @@ def _menu_permission(code: str, group: str, label: str) -> PermissionDefinition:
     return _permission(code, group, label, f"「{label}」の画面を表示し、関連操作を利用できます。")
 
 
-# ---- メニュー権限（agent/frontend の nav-config.ts と同じ並び） ----
+# ---- メニュー権限（agent/frontend の nav-config.ts と同じ並び。コードは保存値なので変えない） ----
 
 # 業務利用者のチャット（#768）。
 MENU_CHAT = "menu.chat"
+MENU_RUNS = "menu.runs"
+MENU_APPROVALS = "menu.approvals"
 MENU_AGENTS = "menu.agents"
 MENU_SKILLS = "menu.skills"
-MENU_RUNTIMES = "menu.runtimes"
-MENU_RUNS = "menu.runs"
 MENU_AUTOMATIONS = "menu.automations"
-MENU_APPROVALS = "menu.approvals"
-MENU_AUDIT = "menu.audit"
 MENU_PLUGIN_MARKETPLACES = "menu.plugin_marketplaces"
 MENU_EVALUATION = "menu.evaluation"
 MENU_FEEDBACK = "menu.feedback"
 MENU_USAGE = "menu.usage"
+MENU_AUDIT = "menu.audit"
 MENU_SECURITY_PERMISSIONS = "menu.security_permissions"
 MENU_SETTINGS_SYSTEM_TABLES = "menu.settings_system_tables"
+MENU_RUNTIMES = "menu.runtimes"
 # MCP 接続（#757。旧「外部 MCP」。権限コードは保存値なので変えない）。
 MENU_SETTINGS_EXTERNAL_MCP = "menu.settings_external_mcp"
 MENU_SETTINGS_API_KEYS = "menu.settings_api_keys"
@@ -99,14 +99,20 @@ CAPABILITY_ROLES: dict[str, str] = {
 
 # グループ・名前・並び順は左のナビ（frontend の nav-config.ts と、i18n の
 # サイドナビの表示名）と同じにする（#567 / #580。一致は
-# tests/test_permission_catalog_nav.py が確かめる）。ナビに無い capability は後ろに置く。
-_GROUP_CONTROL_PLANE = "Control Plane"
+# tests/test_permission_catalog_nav.py が確かめる）。上に一般の利用者の画面（AI 活用）、
+# 下に管理者の画面を置く（RAG / NL2SQL と同じ並び。#658 / #791）。
+# ナビに無い capability は後ろに置き、グループは NL2SQL / RAG と同じ「参照権限 / 実行権限 /
+# 管理権限」にする（#791）。
+_GROUP_USE = "AI 活用"
+_GROUP_BUILD = "Agent 構築"
 _GROUP_IMPROVE = "改善・運用"
 _GROUP_SECURITY = "セキュリティ設定"
 _GROUP_OPERATIONS = "運用設定"
 _GROUP_USERS_ROLES = "ユーザーとロール"
 _GROUP_SETTINGS = "システム設定"
-_GROUP_CAPABILITIES = "実行・承認・管理の権限"
+_GROUP_READ = "参照権限"
+_GROUP_EXECUTE = "実行権限"
+_GROUP_MANAGE = "管理権限"
 
 _SYSTEM_SETTINGS_MENUS = (
     MENU_SETTINGS_OCI,
@@ -118,18 +124,18 @@ _SYSTEM_SETTINGS_MENUS = (
 # agent.admin が暗黙に含むメニュー（ユーザーとロール・権限管理は含まない）。
 _ADMIN_MENUS = (
     MENU_CHAT,
+    MENU_RUNS,
+    MENU_APPROVALS,
     MENU_AGENTS,
     MENU_SKILLS,
-    MENU_RUNTIMES,
-    MENU_RUNS,
     MENU_AUTOMATIONS,
-    MENU_APPROVALS,
-    MENU_AUDIT,
     MENU_PLUGIN_MARKETPLACES,
     MENU_EVALUATION,
     MENU_FEEDBACK,
     MENU_USAGE,
+    MENU_AUDIT,
     MENU_SETTINGS_SYSTEM_TABLES,
+    MENU_RUNTIMES,
     MENU_SETTINGS_EXTERNAL_MCP,
     MENU_SETTINGS_API_KEYS,
     MENU_SETTINGS_RUNTIME_SNAPSHOT,
@@ -138,22 +144,25 @@ _ADMIN_MENUS = (
 
 
 PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
-    _menu_permission(MENU_CHAT, _GROUP_CONTROL_PLANE, "チャット"),
-    _menu_permission(MENU_AGENTS, _GROUP_CONTROL_PLANE, "業務 Agent"),
-    _menu_permission(MENU_SKILLS, _GROUP_CONTROL_PLANE, "スキル (Skills)"),
-    _menu_permission(MENU_RUNTIMES, _GROUP_CONTROL_PLANE, "Runtime"),
-    _menu_permission(MENU_RUNS, _GROUP_CONTROL_PLANE, "Run"),
+    # 一般の利用者が毎日使う画面（NL2SQL の「AI 活用」と同じ名前。#791）。
+    _menu_permission(MENU_CHAT, _GROUP_USE, "チャット"),
+    # Run の一覧（NL2SQL の「実行履歴」と同じ名前。#791）。
+    _menu_permission(MENU_RUNS, _GROUP_USE, "実行履歴"),
+    _menu_permission(MENU_APPROVALS, _GROUP_USE, "承認"),
+    # 管理者が業務 Agent を作る画面（RAG「ナレッジ構築」・NL2SQL「データ準備」に当たる。#791）。
+    _menu_permission(MENU_AGENTS, _GROUP_BUILD, "業務 Agent"),
+    _menu_permission(MENU_SKILLS, _GROUP_BUILD, "スキル"),
     # 業務 Agent の自動実行（スケジュール・Webhook。#784）。
-    _menu_permission(MENU_AUTOMATIONS, _GROUP_CONTROL_PLANE, "自動実行"),
-    _menu_permission(MENU_APPROVALS, _GROUP_CONTROL_PLANE, "承認・監査"),
-    _menu_permission(MENU_AUDIT, _GROUP_CONTROL_PLANE, "監査"),
-    _menu_permission(MENU_PLUGIN_MARKETPLACES, _GROUP_CONTROL_PLANE, "マーケットプレイス"),
+    _menu_permission(MENU_AUTOMATIONS, _GROUP_BUILD, "自動実行"),
+    _menu_permission(MENU_PLUGIN_MARKETPLACES, _GROUP_BUILD, "マーケットプレイス"),
     # 業務のセクションの後の「改善・運用」（RAG / NL2SQL と同じ名前・位置。#658 / #776）。
     _menu_permission(MENU_EVALUATION, _GROUP_IMPROVE, "品質評価"),
     # 業務のセクションの後の「改善・運用」（RAG / NL2SQL と同じ名前・位置。#658 / #774）。
     _menu_permission(MENU_FEEDBACK, _GROUP_IMPROVE, "フィードバック"),
     # 利用状況（#772。RAG / NL2SQL に無い Agent の項目なので、共通の 2 項目の後ろ）。
     _menu_permission(MENU_USAGE, _GROUP_IMPROVE, "利用状況"),
+    # 実行をまたぐツールの実行・承認・警告の記録（#791）。
+    _menu_permission(MENU_AUDIT, _GROUP_IMPROVE, "監査ログ"),
     # 権限管理は Agent 固有。ユーザー管理・ロール管理は 3 製品共通の画面（#206）。
     _menu_permission(MENU_SECURITY_PERMISSIONS, _GROUP_SECURITY, "権限管理"),
     # 並びはサイドナビと同じ
@@ -162,53 +171,55 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SECURITY_ROLES, _GROUP_USERS_ROLES, "ロール管理"),
     # 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ。#658 / #751）。
     _menu_permission(MENU_SETTINGS_SYSTEM_TABLES, _GROUP_OPERATIONS, "システムテーブル"),
+    # 組み込み Runtime の状態とモデルの確認（#754 / #791）。
+    _menu_permission(MENU_RUNTIMES, _GROUP_OPERATIONS, "実行環境"),
     _menu_permission(MENU_SETTINGS_EXTERNAL_MCP, _GROUP_OPERATIONS, "MCP 接続"),
     # 外部のクライアントが業務 Agent を MCP で呼ぶための API キー（#778）。
     _menu_permission(MENU_SETTINGS_API_KEYS, _GROUP_OPERATIONS, "API キー"),
-    _menu_permission(
-        MENU_SETTINGS_RUNTIME_SNAPSHOT, _GROUP_OPERATIONS, "Control Plane バックアップ"
-    ),
+    _menu_permission(MENU_SETTINGS_RUNTIME_SNAPSHOT, _GROUP_OPERATIONS, "バックアップと復元"),
     _menu_permission(MENU_SETTINGS_OCI, _GROUP_SETTINGS, "OCI 認証"),
     _menu_permission(MENU_SETTINGS_UPLOAD_STORAGE, _GROUP_SETTINGS, "アップロード保存先"),
     _menu_permission(MENU_SETTINGS_MODEL, _GROUP_SETTINGS, "モデル"),
     _menu_permission(MENU_SETTINGS_DATABASE, _GROUP_SETTINGS, "データベース"),
     _menu_permission(MENU_SETTINGS_APPEARANCE, _GROUP_SETTINGS, "外観"),
+    # capability は従来の 5 ロール（viewer / operator / approver / auditor / admin）に対応する。
+    # 名前は利用者の言葉にし、ロール名は docs/security-rbac.md の対応表に書く（#791）。
     _permission(
         RUNS_VIEW,
-        _GROUP_CAPABILITIES,
-        "Run の閲覧（viewer）",
-        "利用できるエージェントの Run・イベント・成果物を表示できます。",
+        _GROUP_READ,
+        "実行履歴の参照",
+        "利用できる業務 Agent の実行（Run）・イベント・成果物を表示できます。",
         implies=(MENU_RUNS,),
     ),
     _permission(
+        AUDIT_VIEW,
+        _GROUP_READ,
+        "監査ログの参照",
+        "利用できる業務 Agent の実行の監査記録・ツール呼出し履歴を表示できます"
+        "（実行履歴の参照を含みます）。",
+        implies=(MENU_AUDIT,),
+    ),
+    _permission(
         RUNS_OPERATE,
-        _GROUP_CAPABILITIES,
-        "Run の実行・操作（operator）",
-        "利用できるエージェントで Run の作成・取消・再開・再実行と、チャットができます"
-        "（Run の閲覧を含みます）。",
+        _GROUP_EXECUTE,
+        "業務 Agent の実行",
+        "利用できる業務 Agent でチャットと、実行（Run）の作成・取消・再開・再実行ができます"
+        "（実行履歴の参照を含みます）。",
         implies=(MENU_RUNS, MENU_CHAT),
     ),
     _permission(
         APPROVALS_DECIDE,
-        _GROUP_CAPABILITIES,
-        "承認の判断（approver）",
-        "利用できるエージェントの Run の承認・却下ができます（Run の閲覧を含みます）。",
+        _GROUP_EXECUTE,
+        "承認の判断",
+        "利用できる業務 Agent の実行の承認・却下ができます（実行履歴の参照を含みます）。",
         implies=(MENU_APPROVALS,),
     ),
     _permission(
-        AUDIT_VIEW,
-        _GROUP_CAPABILITIES,
-        "監査の閲覧（auditor）",
-        "利用できるエージェントの Run の監査記録・ツール呼出し履歴を表示できます"
-        "（Run の閲覧を含みます）。",
-        implies=(MENU_AUDIT,),
-    ),
-    _permission(
         ADMIN,
-        _GROUP_CAPABILITIES,
-        "Agent 管理（admin）",
+        _GROUP_MANAGE,
+        "Agent 管理",
         "業務 Agent・スキル・プラグイン・運用設定・システム設定の変更と、"
-        "すべての操作ができます（エージェントの対象範囲の制限を受けません）。",
+        "すべての操作ができます（業務 Agent の対象範囲の制限を受けません）。",
         implies=_ADMIN_MENUS,
     ),
 )

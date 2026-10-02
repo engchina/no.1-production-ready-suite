@@ -80,7 +80,7 @@ for (const viewport of VIEWPORTS) {
         password: "CorrectPass!123",
       });
       await openSidebarNav(page);
-      await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "実行履歴", level: 1 })).toBeVisible();
     });
 
     test("ログイン失敗は入力ミスの文言だけを出し、ログイン画面に留まる", async ({ page, mockApi }) => {
@@ -141,7 +141,7 @@ for (const viewport of VIEWPORTS) {
       mockApi.setCurrentUser(ADMIN_USER);
 
       await page.goto("/runs");
-      await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "実行履歴", level: 1 })).toBeVisible();
 
       // セッションが切れた（backend が 401 を返す）状態で別の画面を開く。
       mockApi.setCurrentUser(null);
@@ -195,10 +195,10 @@ for (const viewport of VIEWPORTS) {
       await expect(sidebar(page).getByRole("button", { name: "ログアウト" })).toHaveCount(0);
       await expect(sidebar(page).getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
 
-      // ログイン画面を開いても既定の入口（主画面の Run）へ戻す。
+      // ログイン画面を開いても既定の入口（ナビの先頭のチャット。RAG と同じ。#791）へ戻す。
       await page.goto("/login");
-      await expect(page).toHaveURL(/\/runs$/);
-      await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
+      await expect(page).toHaveURL(/\/chat$/);
+      await expect(page.getByRole("heading", { name: "チャット", level: 1 })).toBeVisible();
     });
   });
 }

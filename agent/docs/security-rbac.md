@@ -1,6 +1,6 @@
 # ログインと権限（#215 / #750）
 
-Agent Control Plane の画面は、RAG / NL2SQL と同じ共通認証（platform の `pr_system_settings.auth`）でログインします。
+Agent の画面は、RAG / NL2SQL と同じ共通認証（platform の `pr_system_settings.auth`）でログインします。
 ユーザー・ロール・セッションは 3 製品で共有する `PLATFORM_*` テーブル、ロールに付ける Agent の権限と対象範囲（エージェント）は
 `AGENT_ROLE_*` テーブルに保存します。local でも production でも同じ Oracle のテーブルを使います（#750）。
 Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）は #750 で削除しました。
@@ -43,31 +43,38 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 
 ### capability（従来の 5 ロールに対応）
 
-| capability | 従来のロール | 内容 | 暗黙に含むメニュー |
-|---|---|---|---|
-| `agent.runs.view` | viewer | 利用できる範囲の Run・イベント・成果物の閲覧 | Run |
-| `agent.runs.operate` | operator | Run の作成・取消・再開・再実行（閲覧を含む） | Run |
-| `agent.approvals.decide` | approver | 承認・却下（閲覧を含む） | 承認・監査 |
-| `agent.audit.view` | auditor | Run の監査・ツール呼出し履歴・trace event（閲覧を含む） | 監査 |
-| `agent.admin` | admin | 業務 Agent・スキル・プラグイン・運用設定の変更とすべての操作（システム設定のメニューも暗黙に含む）。対象範囲の制限なし | ユーザーとロール・権限管理以外のすべてのメニュー |
+グループは NL2SQL / RAG と同じ「参照権限 / 実行権限 / 管理権限」で、権限管理ではナビのメニュー権限の後ろに並びます（#791）。
+
+| グループ | capability | 名前（権限管理） | 従来のロール | 内容 | 暗黙に含むメニュー |
+|---|---|---|---|---|---|
+| 参照権限 | `agent.runs.view` | 実行履歴の参照 | viewer | 利用できる範囲の Run・イベント・成果物の閲覧 | 実行履歴 |
+| 参照権限 | `agent.audit.view` | 監査ログの参照 | auditor | Run の監査・ツール呼出し履歴・trace event（閲覧を含む） | 監査ログ |
+| 実行権限 | `agent.runs.operate` | 業務 Agent の実行 | operator | チャットと、Run の作成・取消・再開・再実行（閲覧を含む） | 実行履歴・チャット |
+| 実行権限 | `agent.approvals.decide` | 承認の判断 | approver | 承認・却下（閲覧を含む） | 承認 |
+| 管理権限 | `agent.admin` | Agent 管理 | admin | 業務 Agent・スキル・プラグイン・運用設定の変更とすべての操作（システム設定のメニューも暗黙に含む）。対象範囲の制限なし | ユーザーとロール・権限管理以外のすべてのメニュー |
 
 ### メニュー権限（`agent/frontend` のナビと同じ並び）
 
+グループ・名前・並びはサイドナビと同じです（#567。上に一般の利用者の画面、下に管理者の画面。#791）。
+
 | グループ | コード |
 |---|---|
-| Control Plane | `menu.chat`（チャット。`agent.runs.operate` が含む。#768）/ `menu.agents` / `menu.skills` / `menu.runtimes` / `menu.runs` / `menu.approvals` / `menu.audit` / `menu.plugin_marketplaces` |
-| 改善・運用 | `menu.feedback`（フィードバック。#774。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ。チャットの回答の評価は `agent.runs.operate` を持つ会話の本人が付け、管理者の評価（`PUT /api/runs/{id}/admin-review`）は `agent.admin` がだれの回答にも本人の評価とは別に付ける） / `menu.evaluation`（品質評価。#776。評価の Run は始めた利用者の Run なので、業務 Agent の対象範囲も確かめる） / `menu.usage`（利用状況。#772。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ） |
-| 運用設定 | `menu.settings_system_tables` / `menu.settings_external_mcp`（MCP 接続）/ `menu.settings_api_keys`（API キー。#778。作成・削除は `agent.admin`）/ `menu.settings_runtime_snapshot` |
-| システム設定（3 製品共通） | `menu.settings_oci` / `menu.settings_upload_storage` / `menu.settings_model` / `menu.settings_database` / `menu.settings_appearance` |
-| ユーザーとロール（3 製品共通） | `menu.security_users` / `menu.security_roles` |
+| AI 活用 | `menu.chat`（チャット。`agent.runs.operate` が含む。#768）/ `menu.runs`（実行履歴）/ `menu.approvals`（承認） |
+| Agent 構築 | `menu.agents`（業務 Agent）/ `menu.skills`（スキル）/ `menu.automations`（自動実行。#784）/ `menu.plugin_marketplaces`（マーケットプレイス） |
+| 改善・運用 | `menu.evaluation`（品質評価。#776。評価の Run は始めた利用者の Run なので、業務 Agent の対象範囲も確かめる） / `menu.feedback`（フィードバック。#774。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ。チャットの回答の評価は `agent.runs.operate` を持つ会話の本人が付け、管理者の評価（`PUT /api/runs/{id}/admin-review`）は `agent.admin` がだれの回答にも本人の評価とは別に付ける） / `menu.usage`（利用状況。#772。集計は Run の一覧と同じく利用できる業務 Agent の Run だけ）/ `menu.audit`（監査ログ） |
 | セキュリティ設定 | `menu.security_permissions` |
+| ユーザーとロール（3 製品共通） | `menu.security_users` / `menu.security_roles` |
+| 運用設定 | `menu.settings_system_tables` / `menu.runtimes`（実行環境）/ `menu.settings_external_mcp`（MCP 接続）/ `menu.settings_api_keys`（API キー。#778。作成・削除は `agent.admin`）/ `menu.settings_runtime_snapshot`（バックアップと復元） |
+| システム設定（3 製品共通） | `menu.settings_oci` / `menu.settings_upload_storage` / `menu.settings_model` / `menu.settings_database` / `menu.settings_appearance` |
 
-画面の表示にはメニュー権限、実データの閲覧・操作には capability が必要です。たとえば Run 画面は `menu.runs` で開けますが、
+権限コードは保存値なので、ナビの名前・グループを変えてもコードは変えません（#791 で「Control Plane」グループを分けたときも同じ）。
+
+画面の表示にはメニュー権限、実データの閲覧・操作には capability が必要です。たとえば実行履歴の画面は `menu.runs` で開けますが、
 Run の一覧・詳細は `agent.runs.view`（または operate / decide / audit / admin）がないと 403 です。capability は関連メニューを
 暗黙に含むため、capability だけを付けたロールでも画面を開けます。
 
 ダッシュボード（`menu.dashboard`・グループ「概要」）は廃止しました（#262）。`/` は画面を持たず、ナビの並び順で最初に開ける画面へ移します
-（未知の URL・ログイン後は Run を開ければ Run）。既存ロールに残る `menu.dashboard` はシステムテーブルの作成・更新（migration）が削除します（§8）。
+（未知の URL・ログイン後はチャットを開ければチャット。#791）。既存ロールに残る `menu.dashboard` はシステムテーブルの作成・更新（migration）が削除します（§8）。
 削除前でも、カタログにないコードは実効権限・権限管理の表示から除かれ、権限管理で保存すると消えます。
 
 ### manifest（抜粋。正本は `backend/app/security/permissions.py`）
@@ -164,7 +171,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 
 ## 自動実行（スケジュール・Webhook。#784）
 
-- メニュー権限 `menu.automations`（Control Plane /「自動実行」）。作成・変更・削除・今すぐ実行・Webhook の秘密の発行は `agent.admin`。
+- メニュー権限 `menu.automations`（Agent 構築 /「自動実行」）。作成・変更・削除・今すぐ実行・Webhook の秘密の発行は `agent.admin`。
 - 自動実行は作った利用者として Run を作る（実行のたびに利用者の現在の権限と対象範囲を確かめ、実行できなければ「開始できず」）。前回の Run が終わっていなければ、その回は飛ばす。
 - Webhook（`POST /api/hooks/{automation_id}`）は公開 path で、Cookie・CSRF を使わず自動実行の秘密（`Authorization: Bearer prwh_…`）で認証する。秘密は発行時に 1 回だけ返し、`AGENT_CONTROL_PLANE_ITEMS`（kind `automation`）には SHA-256 の hash だけを保存する。自動実行が無い・秘密が違う・Webhook でないは区別せず 401。
 

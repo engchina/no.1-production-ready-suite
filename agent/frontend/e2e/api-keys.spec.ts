@@ -48,7 +48,11 @@ for (const viewport of VIEWPORTS) {
 
       const created = page.getByTestId("api-key-created");
       await expect(created).toContainText("この秘密は今だけ表示します");
-      await expect(page.getByTestId("api-key-token")).toHaveText(/^prak_[0-9a-f]{16}_/);
+      await expect(page.getByTestId("api-key-token")).toHaveValue(/^prak_[0-9a-f]{16}_/);
+      // 結果は起点の「作成」の行の直下に出す（messaging.md §10.1。#790）。
+      const createBox = await page.getByTestId("api-key-create").boundingBox();
+      const createdBox = await created.boundingBox();
+      expect(createdBox && createBox && createdBox.y).toBeGreaterThan((createBox?.y ?? 0) + (createBox?.height ?? 0) - 1);
       expect(mockApi.lastRequest("POST", "/api/settings/api-keys")?.body).toEqual({
         name: "基幹システムの問い合わせ連携",
         agent_ids: ["default"],
@@ -76,6 +80,41 @@ for (const viewport of VIEWPORTS) {
     });
   }
 }
+
+test("キーのコピーに失敗しても秘密を Toast に出さず、欄を選択して手でコピーできるようにする (#790)", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: () => Promise.reject(new DOMException("denied", "NotAllowedError")) },
+    });
+  });
+  await page.goto("/settings/api-keys");
+
+  // 秘密ではない接続先 URL も、失敗の Toast に値を入れない。
+  await page.getByRole("button", { name: "URL をコピー" }).click();
+  await expect(page.getByText("コピーできませんでした。表示中の URL を選択してコピーしてください。")).toBeVisible();
+
+  await page.getByLabel("名前").fill("コピー失敗の確認");
+  await page.getByRole("radio", { name: "使えるすべての業務 Agent" }).check();
+  await page.getByTestId("api-key-create").click();
+  const tokenField = page.getByTestId("api-key-token");
+  await expect(tokenField).toHaveValue(/^prak_/);
+  const token = await tokenField.inputValue();
+
+  const created = page.getByTestId("api-key-created");
+  await created.getByRole("button", { name: "キーをコピー" }).click();
+  await expect(created.getByText("コピーできませんでした。表示中のキーを選択してコピーしてください。")).toBeVisible();
+  // 欄の文字を選択し、Ctrl+C でそのままコピーできる状態にする。
+  await expect(tokenField).toBeFocused();
+  const selection = await tokenField.evaluate((input: HTMLInputElement) =>
+    input.value.slice(input.selectionStart ?? 0, input.selectionEnd ?? 0)
+  );
+  expect(selection).toBe(token);
+  // 秘密は Toast にも、入力欄の外の文字にも出さない。
+  await expect(page.locator("[data-toast-placement]")).toContainText("コピーできませんでした");
+  await expect(page.locator("[data-toast-placement]")).not.toContainText(token);
+  await expect(page.getByText(token)).toHaveCount(0);
+});
 
 test("すべての業務 Agent・無期限のキーを作れ、保存先が無いときは知らせる", async ({ page, mockApi }) => {
   mockApi.state.apiKeysPersistent = false;

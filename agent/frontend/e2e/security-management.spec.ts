@@ -105,7 +105,7 @@ for (const viewport of VIEWPORTS) {
       expect(mockApi.requests.some((request) => request.method === "PATCH" && request.path.startsWith("/api/security/roles"))).toBe(false);
 
       // 保存後も編集を続けられる。Agent 管理を付けるとエージェントは全件が対象になり、空の一覧を送る。
-      await page.getByRole("checkbox", { name: /^Agent 管理（admin）/ }).check();
+      await page.getByRole("checkbox", { name: /^Agent 管理/ }).check();
       await expect(page.getByText("Agent 管理の権限により、すべてのエージェントを利用できます。個別選択は不要です。")).toBeVisible();
       await expect(page.getByTestId("security-roles-agent-access-list")).toHaveCount(0);
       await editActions(page).getByRole("button", { name: "保存" }).click();

@@ -91,7 +91,7 @@ for (const viewport of VIEWPORTS) {
       await (await sidebarLink(page, "/runs")).click();
       await dialog.getByRole("button", { name: "破棄して移動" }).click();
       await expect(page).toHaveURL(/\/runs$/);
-      await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "実行履歴", level: 1 })).toBeVisible();
       expect(await beforeUnloadBlocks(page)).toBe(false);
     });
 
@@ -162,7 +162,7 @@ for (const viewport of VIEWPORTS) {
 
     test("監査の絞り込み条件は移動して戻っても、再読込しても残る", async ({ page, mockApi }) => {
       await page.goto("/audit");
-      await expect(page.getByRole("heading", { name: "監査", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "監査ログ", level: 1 })).toBeVisible();
       await page.locator("#audit-run-id").fill("run-e2e-1");
       await chooseSelectFieldOption(page.locator("#audit-tool-name"), "echo");
       await chooseSelectFieldOption(page.locator("#audit-warning-filter"), "true");

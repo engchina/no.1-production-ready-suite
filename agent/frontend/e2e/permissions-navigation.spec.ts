@@ -82,7 +82,7 @@ for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
     });
 
-    test("Run の閲覧だけの利用者は、Run だけをナビに出し、他の URL は権限なしの画面へ移す", async ({
+    test("実行履歴の参照だけの利用者は、実行履歴だけをナビに出し、他の URL は権限なしの画面へ移す", async ({
       page,
       mockApi,
     }) => {
@@ -90,7 +90,7 @@ for (const viewport of VIEWPORTS) {
       seedRun(mockApi, { status: "running" });
 
       await page.goto("/runs");
-      await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "実行履歴", level: 1 })).toBeVisible();
       // agent.runs.view は menu.runs を含む（implies）。項目が 0 件のセクションは出さない。
       expect(await sidebarHrefs(page)).toEqual(["/runs"]);
 
@@ -110,10 +110,10 @@ for (const viewport of VIEWPORTS) {
         await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
       }
       await expectNoPageOverflow(page);
-      // 「利用可能な画面へ戻る」は既定の入口（主画面の Run）へ。
+      // 「利用可能な画面へ戻る」は既定の入口（チャット）を開けないので、ナビの最初の画面（実行履歴）へ。
       await page.getByRole("button", { name: "利用可能な画面へ戻る" }).click();
       await expect(page).toHaveURL(/\/runs$/);
-      await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "実行履歴", level: 1 })).toBeVisible();
 
       // `/` と未知の URL も Run へ振り分ける（ダッシュボードは廃止。#262）。
       await page.goto("/");
@@ -141,7 +141,7 @@ for (const viewport of VIEWPORTS) {
       // 承認の画面を開ける（menu.approvals）が判断の権限がない利用者。
       signIn(mockApi, dbUser({ permissions: ["menu.approvals", "agent.runs.view"], allowed_agent_ids: ["default"] }));
       await page.goto("/approvals");
-      await expect(page.getByRole("heading", { name: "承認・監査", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "承認", level: 1 })).toBeVisible();
       await expect(page.getByText("rag__rag_search").first()).toBeVisible();
       await expect(page.getByTestId("approval-object-actions")).toHaveCount(0);
 
@@ -161,8 +161,8 @@ for (const viewport of VIEWPORTS) {
       signIn(mockApi, dbUser({ permissions: ["menu.runs"], allowed_agent_ids: [] }));
 
       await page.goto("/runs");
-      await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
-      await expect(page.getByTestId("capability-required")).toContainText("Run の閲覧");
+      await expect(page.getByRole("heading", { name: "実行履歴", level: 1 })).toBeVisible();
+      await expect(page.getByTestId("capability-required")).toContainText("実行履歴の参照");
       expect(mockApi.requests.some((request) => request.path === "/api/runs")).toBe(false);
       await expectNoPageOverflow(page);
     });
@@ -180,30 +180,31 @@ for (const viewport of VIEWPORTS) {
       await expect(page).toHaveURL(/\/settings\/security\/users$/);
     });
 
-    test("/ はナビの並び順で最初に開ける画面、未知の URL は主画面の Run へ移り、履歴に / を残さない", async ({
+    test("/ と未知の URL はナビの並び順で最初に開ける画面へ移り、履歴に / を残さない", async ({
       page,
       mockApi,
     }) => {
       // ダッシュボード（#262 で廃止）の項目・セクションはナビに出さない。
       signIn(mockApi, dbUser({ permissions: ["menu.agents", "agent.runs.view"], allowed_agent_ids: ["default"] }));
 
-      await page.goto("/runs");
-      await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
-      expect(await sidebarHrefs(page)).toEqual(["/agents", "/runs"]);
+      await page.goto("/agents");
+      await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
+      // 上に利用者の画面（AI 活用の実行履歴）、下に管理者の画面（Agent 構築の業務 Agent）。#791
+      expect(await sidebarHrefs(page)).toEqual(["/runs", "/agents"]);
       await expect(sidebar(page).getByText("ダッシュボード")).toHaveCount(0);
       await expect(sidebar(page).locator('a[href="/"]')).toHaveCount(0);
 
-      // `/` はナビの並び順で最初に開ける画面（業務 Agent）へ置き換えで移る。戻ると `/` ではなく元の画面。
+      // `/` はナビの並び順で最初に開ける画面（実行履歴）へ置き換えで移る。戻ると `/` ではなく元の画面。
       await page.goto("/");
-      await expect(page).toHaveURL(/\/agents$/);
-      await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
-      await page.goBack();
       await expect(page).toHaveURL(/\/runs$/);
+      await expect(page.getByRole("heading", { name: "実行履歴", level: 1 })).toBeVisible();
+      await page.goBack();
+      await expect(page).toHaveURL(/\/agents$/);
 
-      // 未知の URL は主画面の Run へ。
+      // 未知の URL は既定の入口（チャット）を開けないので、ナビの最初の画面（実行履歴）へ。
       await page.goto("/no-such-page");
       await expect(page).toHaveURL(/\/runs$/);
-      await expect(page.getByRole("heading", { name: "Run", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "実行履歴", level: 1 })).toBeVisible();
       await expectNoPageOverflow(page);
     });
 
