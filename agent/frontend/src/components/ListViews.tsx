@@ -94,7 +94,7 @@ export function QueryState<T>({
   testId = "query-loading",
   children,
 }: {
-  query: { isLoading: boolean; error: Error | null; data?: T };
+  query: { isLoading: boolean; error: Error | null; data?: T; refetch?: () => unknown };
   /** i18n 済みの「〜を読み込んでいます」。 */
   loadingLabel: string;
   /** 読み込み後の内容の形をした Skeleton（`TableSkeleton` / `ListSkeleton` / `FormSkeleton` など）。 */
@@ -118,7 +118,15 @@ export function QueryState<T>({
     );
   }
   if (query.error) {
-    return <ErrorState message={query.error.message} retryLabel={t("common.retry")} />;
+    // 取得の失敗は領域だけを占め、再試行を出す（messaging.md §3.6）。
+    const refetch = query.refetch;
+    return (
+      <ErrorState
+        message={query.error.message}
+        retryLabel={t("common.retry")}
+        onRetry={refetch ? () => void refetch() : undefined}
+      />
+    );
   }
   return <>{children}</>;
 }

@@ -161,7 +161,9 @@ backend/app/security/       共通認証の上の Agent の権限・対象範囲
 backend/app/system_schema.py               システムテーブル（AGENT_* の DDL・migration・状態。#751）
 backend/app/cli/agent_system_schema.py     システムテーブルの status / initialize / recreate の CLI
 frontend/src/
-  pages/AgentRuntimePages.tsx
+  App.tsx                   route（画面は React.lazy で route ごとに読む。#818）
+  pages/<領域>/<画面>.tsx    agents / runs / approvals / audit / skills / plugins / marketplaces / settings など
+  pages/shared/             2 画面以上で使う小さな部品・helper
   lib/api.ts, lib/i18n.ts, lib/routes.ts
 docs/agent-control-plane-design.md
 ```
