@@ -121,6 +121,30 @@
           {
             "selector": "JSXOpeningElement[name.name='PageHeader'] > JSXAttribute[name.name='actions'] Property[key.name='id'][value.value='back']",
             "message": "「一覧へ戻る」を PageHeader の actions（右の操作の列）に入れない。PageHeader の back（タイトルの上の左端）で渡す。保存は右端の primary、変更を破棄はその左（docs/design-system/README.md §4「詳細・作成・編集の画面の操作」、#618）。"
+          },
+          {
+            "selector": "JSXOpeningElement[name.name=/^(?:table|thead|tbody|tfoot|tr|th|td|colgroup)$/]",
+            "message": "<table> を手書きしない。@engchina/production-ready-ui の DataTable（stickyHeader / visibleRows / selectedRowKey 等）を使う。固定表頭・表示行数・行の選択状態・aria-sort は DataTable が持つ（#129 / #530）。例外は元の文書の表を再現して編集するグリッド（見出し行がなく列数が表ごとに変わるもの）だけで、理由を添えて局所的に除外する。"
+          },
+          {
+            "selector": "JSXOpeningElement[name.name='PageHeader'] > JSXAttribute[name.name='actions'] :matches(JSXElement, JSXFragment)",
+            "message": "PageHeader の actions に JSX（Button 等）を渡さない。{ id, kind, label, icon, onClick } の配列で渡す。配列なら danger → utility → secondary → primary の順に並び、狭い画面では primary 以外が「その他の操作」にまとまる（docs/design-system/README.md §4「PageHeader」、#800）。"
+          },
+          {
+            "selector": ":matches(Literal[value=/(?<![a-zA-Z])(?:rgba?|hsla?|hwb|oklch|oklab)\\(/], TemplateElement[value.raw=/(?<![a-zA-Z])(?:rgba?|hsla?|hwb|oklch|oklab)\\(/])",
+            "message": "rgba() / rgb() / hsl() などの生の色を書かない。色トークン（bg-surface / ring-surface / var(--color-*)）を使い、透過は bg-accent-emphasis/15 のような不透明度の修飾か color-mix(in srgb, var(--color-*) …) で作る。生の色はダークテーマで切り替わらない（#800）。"
+          },
+          {
+            "selector": "Property[key.name=/^(?:fontSize|lineHeight|letterSpacing)$/] > Literal[raw=/^[\\d.]+$/]",
+            "message": "文字サイズ・行間・字間を数値（fontSize: 11 等。React は px として扱う）で書かない。型のトークン（var(--font-size-xs) / var(--line-height-xs) 等）か text-xs / text-sm のユーティリティを使う。11px のような型のスケールの外の値を作らない（docs/design-system/README.md §3、#800）。"
+          },
+          {
+            "selector": "JSXAttribute[name.name='style'] Property[key.name=/^(?:margin|padding|gap|rowGap|columnGap|borderRadius)(?:Top|Right|Bottom|Left|Inline|Block|InlineStart|InlineEnd|BlockStart|BlockEnd)?$/] > Literal[raw=/^(?:[1-9][\\d.]*|0?\\.\\d*[1-9]\\d*)$/]",
+            "message": "inline style の余白・角丸を数値（marginTop: 2 等。React は px として扱う）で書かない。余白・角丸のトークン（var(--space-*) / var(--radius-*)）か Tailwind のユーティリティ（mt-0.5 / rounded-md 等）を使う（#800）。"
+          },
+          {
+            "selector": "JSXAttribute[name.name='textareaClassName'] :matches(Literal[value=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*(?:h|min-h)-/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w@\\[\\]&_\\/.-]+:)*(?:h|min-h)-/])",
+            "message": "複数行の入力欄（TextareaField）の高さを textareaClassName の h-* / min-h-* で決めない。rows で行数を渡す（高さは行数と行の高さで決まり、文字の大きさ・等幅の設定に追従する。docs/design-system/README.md §4「操作部品の高さと幅」、#613 / #800）。伸びすぎを止める max-h-* は使ってよい。"
           }
         ]
       }

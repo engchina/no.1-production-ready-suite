@@ -26,7 +26,6 @@ import { SyntheticRunNotifications } from "@/features/nl2sql/syntheticRuns";
 import { SchemaRefreshCoordinator } from "@/features/nl2sql/SchemaRefreshCoordinator";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
-import { useUiStore } from "@/lib/ui-store";
 import { useAuth } from "@/features/security/AuthProvider";
 import { RequireAuth, useForbiddenRedirect } from "@engchina/production-ready-system-settings";
 import {
@@ -402,10 +401,8 @@ function AppLayout({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     mainRef.current = document.getElementById("pr-main");
   });
-  const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
 
   useEffect(() => () => { mainScrollPositions.clear(); }, []);
-  useCollapseSidebarOnNarrowViewport(setSidebarCollapsed);
   useMainScrollRestoration(mainRef, location, navigationType);
 
   return (
@@ -417,18 +414,6 @@ function AppLayout({ children }: { children: ReactNode }) {
 
 type RouterLocation = ReturnType<typeof useLocation>;
 type RouterNavigationType = ReturnType<typeof useNavigationType>;
-
-function useCollapseSidebarOnNarrowViewport(setSidebarCollapsed: (collapsed: boolean) => void) {
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 640px)");
-    const collapseIfNarrow = () => {
-      if (media.matches) setSidebarCollapsed(true);
-    };
-    collapseIfNarrow();
-    media.addEventListener("change", collapseIfNarrow);
-    return () => media.removeEventListener("change", collapseIfNarrow);
-  }, [setSidebarCollapsed]);
-}
 
 const mainScrollPositions = new Map<string, number>();
 

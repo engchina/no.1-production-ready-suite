@@ -19,15 +19,17 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { PagedDataTable, QueryState } from "@/components/ListViews";
-import { agentApi, type UsagePeriodDays, type UsageReport, type UsageTotals } from "@/lib/api";
+import { ReportSourceNote } from "@/components/ReportSourceNote";
+import { agentApi, REPORT_PERIOD_DAYS, type UsagePeriodDays, type UsageReport, type UsageTotals } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useWorkspaceState, type WorkspaceValidator } from "@/lib/workspace-state";
 
 // 利用状況（#772）。業務 Agent の Run が使ったモデルの量を、期間・業務 Agent・利用者・モデル・日ごとに見る。
-// 金額には換算しない（モデルの単価は契約で変わるため）。
+// 金額には換算しない（モデルの単価は契約で変わるため）。期間は 365 日まで。Oracle の構成は保存した
+// Run の履歴（AGENT_RUN_FACTS）を SQL で集計する（#794）。
 
-const PERIODS: readonly UsagePeriodDays[] = [7, 30, 90];
+const PERIODS: readonly UsagePeriodDays[] = REPORT_PERIOD_DAYS;
 const VIEWS = ["agent", "user", "model", "day"] as const;
 type UsageView = (typeof VIEWS)[number];
 
@@ -127,6 +129,7 @@ function UsageContent({
           <CardDescription>
             {t("usage.summary.description", { since: formatDay(report.since), timezone: report.timezone })}
           </CardDescription>
+          <ReportSourceNote source={report.source} />
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-3 xl:grid-cols-6" data-testid="usage-summary">

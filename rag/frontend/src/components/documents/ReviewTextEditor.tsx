@@ -154,8 +154,9 @@ export function ReviewTextEditor({
                 <p className="text-xs text-fg-muted">{table.caption}</p>
               ) : null}
               <div className="overflow-auto rounded-md border border-border">
-                {/* DataTable の例外（#129）: 元の文書の表を再現して各セルを直接編集するグリッドで、
-                    見出し行がなく列数も表ごとに変わるため、一覧用の DataTable では表せない。 */}
+                {/* eslint-disable no-restricted-syntax -- DataTable の例外（#129。adherence の「<table> を手書きしない」#800）:
+                    元の文書の表を再現して各セルを直接編集するグリッドで、見出し行がなく列数も表ごとに変わるため、
+                    一覧用の DataTable では表せない。セルの textarea も同じ理由で TextareaField を使わない（#584）。 */}
                 <table className="w-full border-collapse text-sm">
                   <tbody>
                     {Array.from(new Set(table.cells.map((cell) => cell.row)))
@@ -176,7 +177,7 @@ export function ReviewTextEditor({
                                       col: cell.col + 1,
                                     })}
                                   </label>
-                                  {/* eslint-disable-next-line no-restricted-syntax -- 元の文書の表のセルを再現して編集するグリッド（DataTable の例外 #129 と同じ）。セルは見出しと枠を表が持ち、欄ごとのラベル・余白を持たないため TextareaField を使わない（#584）。 */}
+                                  {/* セルは見出しと枠を表が持ち、欄ごとのラベル・余白を持たないため TextareaField を使わない（#584。上の表の除外に含む）。 */}
                                   <textarea
                                     id={fieldId}
                                     value={
@@ -205,6 +206,7 @@ export function ReviewTextEditor({
                       ))}
                   </tbody>
                 </table>
+                {/* eslint-enable no-restricted-syntax */}
               </div>
             </div>
           ))}

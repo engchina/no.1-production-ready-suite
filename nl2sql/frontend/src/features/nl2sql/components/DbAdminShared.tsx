@@ -1012,7 +1012,6 @@ export function StatementRunnerCard({
         rows={9}
         placeholder={placeholder}
         monospace
-        textareaClassName="min-h-52"
       />
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <SqlFileInput

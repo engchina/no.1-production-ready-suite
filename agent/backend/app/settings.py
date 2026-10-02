@@ -107,6 +107,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oracle_adb_region: str | None = None
     oracle_tcp_connect_timeout_seconds: float = 10.0
     oracle_db_test_timeout_seconds: float = 15.0
+    # PLATFORM_ORACLE_* の接続 pool の大きさ（Agent 固有。`app.oracle_connection`。#793）。
+    oracle_pool_min_connections: int = 1
+    oracle_pool_max_connections: int = 8
     # MCP 接続（#757）。RAG / NL2SQL は各製品の MCP（`POST /api/mcp`）で、接続 `rag` / `nl2sql`
     # の URL の初期値になる（例: http://rag-host/api/mcp）。Run の利用者のサービストークン
     # （共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET で署名）で呼ぶ（#233）。LLM を使う

@@ -1516,7 +1516,6 @@ export function OntologyBuildSection({
         <TextareaField
           id="ontology-build-business-text"
           label={t("profiles.ontologyBuild.businessText")}
-          textareaClassName="min-h-24"
           value={businessText}
           rows={4}
           placeholder={t("profiles.ontologyBuild.businessTextPlaceholder")}
@@ -1921,7 +1920,6 @@ export function OntologyBuildSection({
                   labelHidden
                   surface="code"
                   data-testid="ontology-markdown-draft-editor"
-                  textareaClassName="min-h-[22rem]"
                   value={draftMarkdown}
                   rows={18}
                   spellCheck={false}

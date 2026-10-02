@@ -319,6 +319,9 @@ class _BareMissingTableAdapter:
     def connection(self) -> Iterator[_BareMissingTableConnection]:
         yield _BareMissingTableConnection()
 
+    # 共通認証の store は pool の接続を借りる（#793）。
+    pooled_connection = connection
+
 
 def test_oracle_store_maps_bare_ora_00942_to_operation_security_object(
     monkeypatch: pytest.MonkeyPatch,

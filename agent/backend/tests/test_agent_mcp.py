@@ -323,3 +323,55 @@ def test_unpublished_agents_are_not_listed_or_asked(agents: None) -> None:
     finally:
         with contextlib.suppress(KeyError, ValueError):
             runtime_repository.delete_agent(draft_id)
+
+
+def test_ask_continues_the_conversation_with_thread_id(
+    monkeypatch: MonkeyPatch, auth: ProductionAuth, agents: None
+) -> None:
+    """agent_ask は thread_id で同じ会話の続きとして答え、他人の会話は続けられない（#798）。"""
+    del agents
+    model = _script(
+        monkeypatch,
+        [assistant_message("今月の経費は 50 万円です。")],
+        [assistant_message("最も多いのは交通費です。")],
+    )
+    owner = auth.user_with_permissions(
+        "mcp-798-owner", [RUNS_OPERATE], agent_ids=[AGENT_ID, OTHER_AGENT_ID]
+    )
+    headers = _bearer(
+        issue_service_token(SECRET, subject=owner.user_uuid, audience="agent", issuer="x")
+    )
+    first = _call("agent_ask", {"agent_id": AGENT_ID, "question": "今月の経費は？"}, headers)
+    thread_id = first["structuredContent"]["thread_id"]
+    assert thread_id and thread_id.startswith("thread_")
+
+    follow_up = {"agent_id": AGENT_ID, "question": "その中で一番多いのは？", "thread_id": thread_id}
+    second = _call("agent_ask", follow_up, headers)["structuredContent"]
+    assert (second["thread_id"], second["answer"]) == (thread_id, "最も多いのは交通費です。")
+    # モデルには前の質問と回答が渡る。
+    last_input = json.dumps(model.calls[-1].input, ensure_ascii=False, default=str)
+    assert "今月の経費は？" in last_input and "今月の経費は 50 万円です。" in last_input
+    again = _call("agent_get_run", {"run_id": second["run_id"]}, headers)
+    assert again["structuredContent"]["thread_id"] == thread_id
+
+    # 別の業務 Agent・存在しない会話は続けられない（存在を漏らさない）。
+    for agent_id, other_thread in ((OTHER_AGENT_ID, thread_id), (AGENT_ID, f"thread_{'0' * 32}")):
+        refused = _call(
+            "agent_ask",
+            {"agent_id": agent_id, "question": "続き", "thread_id": other_thread},
+            headers,
+        )
+        assert refused["isError"] is True
+        assert refused["structuredContent"]["error_code"] == "THREAD_NOT_FOUND"
+
+    # 他人の会話も続けられない。
+    other = auth.user_with_permissions("mcp-798-other", [RUNS_OPERATE], agent_ids=[AGENT_ID])
+    other_headers = _bearer(
+        issue_service_token(SECRET, subject=other.user_uuid, audience="agent", issuer="x")
+    )
+    refused = _call(
+        "agent_ask",
+        {"agent_id": AGENT_ID, "question": "続き", "thread_id": thread_id},
+        other_headers,
+    )
+    assert refused["structuredContent"]["error_code"] == "THREAD_NOT_FOUND"

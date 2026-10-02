@@ -180,7 +180,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 
 ### 禁止事項
 
-- 生の hex（`#1a73c1` 等）と生の px を書く。色は `--color-*` トークン（`bg-surface` / `text-fg-muted` / `border-border-control` 等のユーティリティ）を使う。旧名（`bg-card` / `text-muted` / `bg-primary` / `var(--primary)` / `--graph-line` 等）は platform で削除済みで、書くと未定義になり色が付かない。
+- 生の hex（`#1a73c1` 等）・`rgba()` などの色の関数と、生の px（inline style の数値の `fontSize: 11` / `marginTop: 2` を含む）を書く。色は `--color-*` トークン（`bg-surface` / `text-fg-muted` / `border-border-control` 等のユーティリティ）を使う。旧名（`bg-card` / `text-muted` / `bg-primary` / `var(--primary)` / `--graph-line` 等）は platform で削除済みで、書くと未定義になり色が付かない。
 - `globals.css` に色トークンや `.dark { … }` の上書きを定義する。
 - `TextField` / `PageHeader` / `Button` / `StatusBadge` などの共有コンポーネントを再実装する。
 - 操作部品の高さ・幅を手書きする（`touchTarget`・`h-*` / `min-h-*`・欄の `w-*` / `max-w-*`）。`size` / `width` を渡す（下の「操作部品の高さと幅」、#613）。
@@ -205,7 +205,8 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 </AppShell>
 ```
 
-- `PageHeader` の `actions` は配列で渡す（danger → utility → secondary → primary の順に自動で並び、右端が primary になる）。
+- `PageHeader` の `actions` は配列で渡す（danger → utility → secondary → primary の順に自動で並び、右端が primary になる）。JSX（`<Button>` 等）は渡さない（adherence の lint が検出する。#800）。
+- 画面を移るだけの操作（別の画面で設定する導線など）は `ButtonLink`（`Button` と同じ見た目のリンク。アイコンは `icon` で渡す）。`<Link className={buttonVariants(...)}>` の子にアイコンを手書きしない（#800）。
 - **詳細・作成・編集の画面（#618。3 製品で統一）**: 「一覧へ戻る」は `PageHeader` の `back`（左上・タイトルの上。`actions` に入れない。2 階層のパンくずは出さない）、保存・作成は `PageHeader` の右端の primary、「変更を破棄」はその左の secondary。対象への操作（アーカイブ・削除など）は最初のカードの見出しの右の `ObjectActionBar` 1 か所。保存の失敗はヘッダーの直下の `SaveErrorBanner`（#585）、未保存の離脱の確認は製品の離脱ガード（#586）のまま。文言は「一覧へ戻る」「保存」「作成」「変更を破棄」。例外は確認語が要る保存（`ExecutionConfirmationField` の操作行）。設定の画面のカードのフォームは `FormActionBar`。正本は design-system README §4「詳細・作成・編集の画面の操作」、UX 契約 `buttons.md` §4 / `page-archetypes.md` の A 型。
 - `PageHeader` と `PageBody` に `wide` を渡す場合は必ず両方に同じ値を渡す。片方だけだと 1920px でタイトルと本文の左端がずれる。
 - 単位の境界: 文字サイズとコントロール高さは px、余白とレイアウト寸法は rem（14px ルート）。

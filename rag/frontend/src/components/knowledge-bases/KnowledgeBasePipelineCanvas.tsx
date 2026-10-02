@@ -15,7 +15,7 @@ const NODE_STYLE = {
   color: "var(--color-fg)",
   border: "1px solid var(--color-border)",
   borderRadius: "var(--radius-lg)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   width: 168,
   padding: "var(--space-2)",
   textAlign: "left" as const,
@@ -30,8 +30,8 @@ function valueLabel(key: I18nKey, raw: string | null): string {
 function nodeLabel(name: string, value: string) {
   return (
     <div>
-      <div style={{ fontWeight: 600 }}>{name}</div>
-      <div style={{ marginTop: 2, fontSize: 11, color: "var(--color-fg-muted)" }}>{value}</div>
+      <div className="font-semibold">{name}</div>
+      <div className="mt-0.5 text-fg-muted">{value}</div>
     </div>
   );
 }

@@ -6,7 +6,8 @@ RAG / NL2SQL と同じ共通の `pr_backend_core.mcp` の JSON-RPC の実装を�
 - `agent_list_agents`: 呼び出し元が使える業務 Agent。
 - `agent_ask`: 業務 Agent に質問する。呼び出し元の Run を作り、`wait_seconds` まで回答を待つ。
   終わらなければ `run_id` と状態を返す（`agent_get_run` で後から読む）。承認が要るときは
-  承認待ちを返す（承認は Agent の画面で行う）。
+  承認待ちを返す（承認は Agent の画面で行う）。出力の `thread_id` を次の `agent_ask` に渡すと
+  同じ会話の続きとして答える（#798。自分の・同じ業務 Agent の会話だけ）。
 - `agent_get_run`: 呼び出し元が作った Run の状態と回答。
 """
 
@@ -26,6 +27,7 @@ from app.features.agent.runtime import (
     RunEventType,
     RunState,
     RunStatus,
+    ThreadNotFoundError,
     agent_unavailable_reason,
     runtime_repository,
 )
@@ -74,6 +76,14 @@ class AskInput(BaseModel):
         le=ASK_MAX_WAIT_SECONDS,
         description="回答を待つ秒数。終わらなければ run_id を返すので agent_get_run で読む。",
     )
+    thread_id: str | None = Field(
+        default=None,
+        pattern=r"^thread_[0-9a-f]{32}$",
+        description=(
+            "続ける会話の ID（前の agent_ask / agent_get_run の thread_id）。"
+            "省略すると新しい会話を始める。"
+        ),
+    )
 
 
 class GetRunInput(BaseModel):
@@ -83,6 +93,8 @@ class GetRunInput(BaseModel):
 class RunOutput(BaseModel):
     run_id: str
     agent_id: str
+    # 会話の ID。続きの質問は agent_ask の thread_id に渡す（#798）。
+    thread_id: str | None = None
     # queued / running / waiting_approval / completed / failed / cancelled
     status: str
     answer: str | None = None
@@ -119,14 +131,21 @@ def build_agent_mcp_server(principal: Principal | None) -> McpServer:
         reason = agent_unavailable_reason(agent)
         if reason is not None:
             raise McpToolError("AGENT_NOT_AVAILABLE", reason, status=409)
-        run = runtime_repository.create_builtin_run(
-            RunCreateRequest(
-                goal=arguments.question,
-                agent_id=agent.id,
-                metadata={"source": "mcp", "mcp_session": caller.session_id},
-            ),
-            created_by_user_uuid=caller.user_uuid,
-        )
+        try:
+            run = runtime_repository.create_builtin_run(
+                RunCreateRequest(
+                    goal=arguments.question,
+                    agent_id=agent.id,
+                    thread_id=arguments.thread_id,
+                    metadata={"source": "mcp", "mcp_session": caller.session_id},
+                ),
+                created_by_user_uuid=caller.user_uuid,
+            )
+        except ThreadNotFoundError as exc:
+            # 他人・別の業務 Agent の会話も「無い」として扱う（存在を漏らさない。#798）。
+            raise McpToolError(
+                "THREAD_NOT_FOUND", "続ける会話が見つかりません。", status=404
+            ) from exc
         _schedule(run)
         settled = await _wait(run.id, arguments.wait_seconds)
         return _run_output(settled)
@@ -148,6 +167,7 @@ def build_agent_mcp_server(principal: Principal | None) -> McpServer:
         instructions=(
             "業務 Agent に質問するときは agent_list_agents で ID を確かめ、agent_ask を呼ぶ。"
             "回答が間に合わないときは返った run_id で agent_get_run を呼ぶ。"
+            "続きの質問は、返った thread_id を agent_ask の thread_id に渡す。"
         ),
         tools=[
             McpTool(
@@ -235,6 +255,7 @@ def _run_output(run: RunState) -> RunOutput:
     return RunOutput(
         run_id=run.id,
         agent_id=run.agent_id,
+        thread_id=run.thread_id,
         status=str(status.value if hasattr(status, "value") else status),
         answer=_answer(run),
         pending_approvals=pending,

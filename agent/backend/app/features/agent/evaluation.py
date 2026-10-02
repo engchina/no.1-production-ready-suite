@@ -25,7 +25,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 from uuid import uuid4
@@ -50,8 +50,14 @@ EVALUATION_MAX_CASES = 50
 EVALUATION_QUESTION_MAX_CHARS = 4000
 EVALUATION_EXPECTED_MAX_CHARS = 8000
 EVALUATION_EXPECTED_TOOLS_MAX = 10
-# 残す job の数（古い終わった job から消す）。
-EVALUATION_JOBS_LIMIT = 50
+# 終わった job を残す期間（日）。利用状況・フィードバックの最長の期間（365 日）と同じ（#794）。
+# 以前は件数（50 件）で消していたため、前回との比較・評価の履歴が 50 件より前を失っていた。
+EVALUATION_JOBS_RETENTION_DAYS = 365
+# メモリと保存先を守るための件数の上限（期間内でもこれを超えたら古い終わった job から消す）。
+EVALUATION_JOBS_MAX = 2000
+# 評価の履歴の一覧の 1 ページの既定と上限。
+EVALUATION_JOBS_PAGE_SIZE = 10
+EVALUATION_JOBS_PAGE_SIZE_MAX = 100
 # 1 ケースの上限時間（Run の実行。判定は別）。
 CASE_TIMEOUT_SECONDS = 300.0
 # dispatcher のモードで Run の決着を待つ間隔。テストは短くする。
@@ -330,6 +336,10 @@ class EvaluationJobItem(BaseModel):
 
 class EvaluationJobsData(BaseModel):
     jobs: list[EvaluationJobItem] = Field(default_factory=list)
+    # 絞り込みに合う job の件数（ページングの総数）。
+    total: int = 0
+    offset: int = 0
+    limit: int = EVALUATION_JOBS_PAGE_SIZE
 
 
 class EvaluationBusyError(RuntimeError):
@@ -431,7 +441,7 @@ class EvaluationSetStore:
 
 
 class EvaluationStore:
-    """評価の job（新しい順に `EVALUATION_JOBS_LIMIT` 件まで残す）。"""
+    """評価の job（終わった job は `EVALUATION_JOBS_RETENTION_DAYS` 日残す。#794）。"""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -441,18 +451,11 @@ class EvaluationStore:
         _save_quietly("evaluation_job", job.id, job.model_dump(mode="json"))
 
     def create(self, job: EvaluationJob) -> EvaluationJob:
-        removed: list[str] = []
         with self._lock:
             if any(item.status in ACTIVE_JOB_STATUSES for item in self._jobs.values()):
                 raise EvaluationBusyError(job.id)
             self._jobs[job.id] = job
-            while len(self._jobs) > EVALUATION_JOBS_LIMIT:
-                jobs = self._jobs.items()
-                finished = [key for key, item in jobs if item.status not in ACTIVE_JOB_STATUSES]
-                if not finished:
-                    break
-                self._jobs.pop(finished[0])
-                removed.append(finished[0])
+            removed = self._prune_locked(job.created_at)
             copy = job.model_copy(deep=True)
         self._persist(copy)
         for job_id in removed:
@@ -461,6 +464,18 @@ class EvaluationStore:
             except Exception:  # noqa: BLE001 - 古い job の削除の失敗は無視する
                 logger.warning("agent_evaluation_prune_failed", extra={"job_id": job_id})
         return copy
+
+    def _prune_locked(self, now: datetime) -> list[str]:
+        """保持期間を過ぎた・件数の上限を超えた、終わった job を古い順に消す（実行中は残す）。"""
+        cutoff = now - timedelta(days=EVALUATION_JOBS_RETENTION_DAYS)
+        removed: list[str] = []
+        for key, item in list(self._jobs.items()):
+            if item.status in ACTIVE_JOB_STATUSES:
+                continue
+            if item.created_at < cutoff or len(self._jobs) > EVALUATION_JOBS_MAX:
+                self._jobs.pop(key)
+                removed.append(key)
+        return removed
 
     def get(self, job_id: str) -> EvaluationJob:
         with self._lock:
@@ -476,6 +491,24 @@ class EvaluationStore:
                 for job in reversed(self._jobs.values())
                 if set_id is None or job.set_id == set_id
             ]
+
+    def page(
+        self,
+        *,
+        set_id: str | None = None,
+        allowed: Callable[[str], bool] = lambda _agent_id: True,
+        offset: int = 0,
+        limit: int = EVALUATION_JOBS_PAGE_SIZE,
+    ) -> EvaluationJobsData:
+        """評価の履歴の 1 ページ（新しい順。`allowed` は業務 Agent の対象範囲）。"""
+        with self._lock:
+            matched = [
+                job
+                for job in reversed(self._jobs.values())
+                if (set_id is None or job.set_id == set_id) and allowed(job.agent_id)
+            ]
+            items = [job_item(job) for job in matched[offset : offset + limit]]
+        return EvaluationJobsData(jobs=items, total=len(matched), offset=offset, limit=limit)
 
     def with_previous(self, job: EvaluationJob) -> EvaluationJob:
         """同じ評価セットの前回（この job より前に完了した job）の概要を入れる。"""
@@ -587,6 +620,17 @@ class EvaluationStore:
             self._jobs[job.id] = job
             ordered = sorted(self._jobs.values(), key=lambda item: item.created_at)
             self._jobs = OrderedDict((item.id, item) for item in ordered)
+
+    def prune(self, now: datetime | None = None) -> tuple[str, ...]:
+        """保持期間を過ぎた job を消す（起動時の復元の後。保存先からも消す）。"""
+        with self._lock:
+            removed = self._prune_locked(now or _now())
+        for job_id in removed:
+            try:
+                _delete("evaluation_job", job_id)
+            except Exception:  # noqa: BLE001 - 古い job の削除の失敗は無視する
+                logger.warning("agent_evaluation_prune_failed", extra={"job_id": job_id})
+        return tuple(removed)
 
     def clear(self) -> None:
         with self._lock:

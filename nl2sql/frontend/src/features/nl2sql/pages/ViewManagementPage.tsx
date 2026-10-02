@@ -242,7 +242,6 @@ function ViewJoinWherePanel({
               value={result.join_text}
               rows={5}
               monospace
-              textareaClassName="min-h-32"
             />
             <TextareaField
               id="view-join-where-where-result"
@@ -251,7 +250,6 @@ function ViewJoinWherePanel({
               value={result.where_text}
               rows={5}
               monospace
-              textareaClassName="min-h-32"
             />
           </div>
           {result.structure_markdown ? (

@@ -137,7 +137,6 @@ export function SelectAiFeedbackAddPanel({
           value={generatedSql}
           readOnly
           rows={12}
-          textareaClassName="min-h-72"
           placeholder={t("nl2sql.selectAiFeedbackAdd.responsePlaceholder")}
         />
         {/* 評価は送信ボタンで決まるので、入力の aria-required ではなく「「違う」のとき必須」のタグで条件を伝える（#531）。 */}
@@ -155,7 +154,6 @@ export function SelectAiFeedbackAddPanel({
           }}
           rows={3}
           error={contentError || undefined}
-          textareaClassName="min-h-24"
           placeholder={t("nl2sql.selectAiFeedbackAdd.contentPlaceholder")}
         />
         <div className="flex flex-wrap items-center justify-end gap-3">

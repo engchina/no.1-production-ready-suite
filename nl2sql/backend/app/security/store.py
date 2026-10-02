@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import copy
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -28,6 +29,8 @@ from pr_system_settings.auth.store import (
     AuthStore,
     InMemoryAuthStore,
     OracleAuthStore,
+    in_list_binds,
+    values_by_role_id,
 )
 
 from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
@@ -69,6 +72,7 @@ def _raise_missing_security_migration_if_needed(exc: Exception, object_name: str
 
 class SecurityStore(AuthStore, Protocol):
     def get_role(self, role_id: str) -> RoleRecord | None: ...
+    def get_roles(self, role_ids: Sequence[str]) -> list[RoleRecord]: ...
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]: ...
     def create_role(self, role: PlatformRoleRecord) -> RoleRecord: ...
     def update_role(self, role: PlatformRoleRecord, *, expected_version: int) -> RoleRecord: ...
@@ -113,6 +117,9 @@ class InMemorySecurityStore(InMemoryAuthStore):
     def get_role(self, role_id: str) -> RoleRecord | None:
         role = super().get_role(role_id)
         return None if role is None else as_role(role)
+
+    def get_roles(self, role_ids: Sequence[str]) -> list[RoleRecord]:
+        return [as_role(role) for role in super().get_roles(role_ids)]
 
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]:
         return [
@@ -219,11 +226,15 @@ class OracleSecurityStore(OracleAuthStore):
     def __init__(self, settings: Settings) -> None:
         self._adapter = OracleNl2SqlAdapter(settings)
         # 呼び出しのたびに _adapter を引く（テストで adapter を差し替えられるように）。
-        super().__init__(lambda: self._adapter.connection())
+        # 要求ごとに通る認証の読み書きのため、接続は pool から借りる（#793）。
+        super().__init__(lambda: self._adapter.pooled_connection())
 
     def get_role(self, role_id: str) -> RoleRecord | None:
         role = super().get_role(role_id)
         return None if role is None else as_role(role)
+
+    def get_roles(self, role_ids: Sequence[str]) -> list[RoleRecord]:
+        return [as_role(role) for role in super().get_roles(role_ids)]
 
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]:
         return [
@@ -249,68 +260,85 @@ class OracleSecurityStore(OracleAuthStore):
         return as_role(restored)
 
     def _role_details(self, cursor: Any, role: PlatformRoleRecord) -> RoleRecord:
-        role_id = role.role_id
-        cursor.execute(
-            "SELECT PERMISSION_CODE FROM NL2SQL_APP_ROLE_PERMISSIONS WHERE ROLE_ID = :role_id",
-            {"role_id": role_id},
+        return as_role(self._roles_details(cursor, [role])[0])
+
+    def _roles_details(
+        self, cursor: Any, roles: Sequence[PlatformRoleRecord]
+    ) -> list[PlatformRoleRecord]:
+        """権限・業務プロファイル・Data Grant を、ロールの数によらず表ごとに一括で読む（#793）。"""
+        role_ids = [role.role_id for role in roles]
+        permissions = values_by_role_id(
+            cursor, "SELECT ROLE_ID, PERMISSION_CODE FROM NL2SQL_APP_ROLE_PERMISSIONS", role_ids
         )
-        permissions = {str(item[0]) for item in cursor.fetchall()}
         try:
-            cursor.execute(
-                "SELECT PROFILE_ID FROM NL2SQL_APP_ROLE_PROFILES WHERE ROLE_ID = :role_id",
-                {"role_id": role_id},
+            allowed_profile_ids = values_by_role_id(
+                cursor, "SELECT ROLE_ID, PROFILE_ID FROM NL2SQL_APP_ROLE_PROFILES", role_ids
             )
         except Exception as exc:
             _raise_missing_security_migration_if_needed(exc, "NL2SQL_APP_ROLE_PROFILES")
             raise
-        allowed_profile_ids = {str(item[0]) for item in cursor.fetchall()}
-        cursor.execute(
-            """
-            SELECT ENTITLEMENT_ID, RESOURCE_CODE, SCOPE_CODE, CAPABILITY,
-                   TARGET_OWNER, TARGET_OBJECT, TARGET_TYPE, COLUMN_NAMES,
-                   SCOPE_MODE, SCOPE_COLUMN, SCOPE_FILTERS, DATA_GRANT_NAME, SQL_CHECKSUM,
-                   APPLY_STATUS, APPLY_ERROR_MESSAGE, APPLIED_AT, SCOPE_EXPRESSION
-              FROM NL2SQL_APP_DATA_ENTITLEMENTS
-             WHERE ROLE_ID = :role_id
-             ORDER BY TARGET_OWNER, TARGET_OBJECT, SCOPE_CODE, CAPABILITY, ENTITLEMENT_ID
-            """,
-            {"role_id": role_id},
-        )
-        entitlements = [
-            DataEntitlementRecord(
-                entitlement_id=str(item[0]),
-                role_id=role_id,
-                resource_code=str(item[1]),
-                scope_code=str(item[2]),
-                capability=str(item[3]),
-                target_owner="" if item[4] is None else str(item[4]),
-                target_object="" if item[5] is None else str(item[5]),
-                target_type="TABLE" if item[6] is None else str(item[6]),
-                column_names=self._json_string_list(item[7]),
-                scope_mode="ALL" if item[8] is None else str(item[8]),
-                scope_column="" if item[9] is None else str(item[9]),
-                scope_filters=scope_filters_from_json(item[10]),
-                data_grant_name="" if item[11] is None else str(item[11]),
-                sql_checksum="" if item[12] is None else str(item[12]),
-                apply_status="PENDING" if item[13] is None else str(item[13]),
-                apply_error_message="" if item[14] in (None, "-") else str(item[14]),
-                applied_at=item[15],
-                scope_expression=scope_expression_from_json(item[16]),
+        entitlements = self._entitlements_by_role(cursor, role_ids)
+        return [
+            RoleRecord(
+                role_id=role.role_id,
+                role_code=role.role_code,
+                display_name=role.display_name,
+                description=role.description,
+                is_built_in=role.is_built_in,
+                archived=role.archived,
+                version=role.version,
+                permissions=permissions.get(role.role_id, set()),
+                entitlements=entitlements.get(role.role_id, []),
+                allowed_profile_ids=allowed_profile_ids.get(role.role_id, set()),
             )
-            for item in cursor.fetchall()
+            for role in roles
         ]
-        return RoleRecord(
-            role_id=role_id,
-            role_code=role.role_code,
-            display_name=role.display_name,
-            description=role.description,
-            is_built_in=role.is_built_in,
-            archived=role.archived,
-            version=role.version,
-            permissions=permissions,
-            entitlements=entitlements,
-            allowed_profile_ids=allowed_profile_ids,
-        )
+
+    def _entitlements_by_role(
+        self, cursor: Any, role_ids: Sequence[str]
+    ) -> dict[str, list[DataEntitlementRecord]]:
+        entitlements: dict[str, list[DataEntitlementRecord]] = {}
+        for placeholders, binds in in_list_binds("role_", role_ids):
+            # 展開するのは生成した bind 名だけ。値はすべて bind する。
+            cursor.execute(
+                f"""
+                SELECT ROLE_ID, ENTITLEMENT_ID, RESOURCE_CODE, SCOPE_CODE, CAPABILITY,
+                       TARGET_OWNER, TARGET_OBJECT, TARGET_TYPE, COLUMN_NAMES,
+                       SCOPE_MODE, SCOPE_COLUMN, SCOPE_FILTERS, DATA_GRANT_NAME, SQL_CHECKSUM,
+                       APPLY_STATUS, APPLY_ERROR_MESSAGE, APPLIED_AT, SCOPE_EXPRESSION
+                  FROM NL2SQL_APP_DATA_ENTITLEMENTS
+                 WHERE ROLE_ID IN ({placeholders})
+                 ORDER BY ROLE_ID, TARGET_OWNER, TARGET_OBJECT, SCOPE_CODE, CAPABILITY,
+                          ENTITLEMENT_ID
+                """,  # nosec B608
+                binds,
+            )
+            for row in cursor.fetchall():
+                role_id = str(row[0])
+                item = row[1:]
+                entitlements.setdefault(role_id, []).append(
+                    DataEntitlementRecord(
+                        entitlement_id=str(item[0]),
+                        role_id=role_id,
+                        resource_code=str(item[1]),
+                        scope_code=str(item[2]),
+                        capability=str(item[3]),
+                        target_owner="" if item[4] is None else str(item[4]),
+                        target_object="" if item[5] is None else str(item[5]),
+                        target_type="TABLE" if item[6] is None else str(item[6]),
+                        column_names=self._json_string_list(item[7]),
+                        scope_mode="ALL" if item[8] is None else str(item[8]),
+                        scope_column="" if item[9] is None else str(item[9]),
+                        scope_filters=scope_filters_from_json(item[10]),
+                        data_grant_name="" if item[11] is None else str(item[11]),
+                        sql_checksum="" if item[12] is None else str(item[12]),
+                        apply_status="PENDING" if item[13] is None else str(item[13]),
+                        apply_error_message="" if item[14] in (None, "-") else str(item[14]),
+                        applied_at=item[15],
+                        scope_expression=scope_expression_from_json(item[16]),
+                    )
+                )
+        return entitlements
 
     @staticmethod
     def _json_string_list(value: Any) -> list[str]:

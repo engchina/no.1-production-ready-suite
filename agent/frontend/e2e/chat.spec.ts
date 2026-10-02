@@ -143,10 +143,12 @@ test("回答の出典と使ったツールを畳んで出し、承認待ちは�
   await expect(turn.getByText("nl2sql__nl2sql_query を実行します。", { exact: false })).toBeVisible();
   // 承認待ちのあいだは次の質問を送れない。
   await expect(page.getByTestId("chat-composer-hint")).toHaveText(
-    "承認待ちのツールがあります。判断が済むと次の質問を送れます。"
+    "承認待ちのツールがあります。判断が済むか「停止」を押すと、次の質問を送れます。"
   );
   await page.getByRole("textbox", { name: "質問" }).fill("次の質問");
-  await expect(page.getByTestId("chat-send")).toBeDisabled();
+  // 承認待ちの間、送信のボタンは同じ位置で「停止」になる（#805）。
+  await expect(page.getByTestId("chat-send")).toHaveAccessibleName("停止");
+  await expect(page.getByTestId("chat-send")).toHaveAttribute("data-state", "running");
 
   await turn.getByText("出典（1）").click();
   await expect(turn.getByText("1. 契約書.pdf")).toBeVisible();
@@ -158,6 +160,98 @@ test("回答の出典と使ったツールを畳んで出し、承認待ちは�
   expect(mockApi.lastRequest("POST", "/api/approvals/approval-chat-1/decision")?.body).toEqual({
     approved: true,
   });
+});
+
+// #805: 回答の作成中は、送信のボタンが同じ位置で「停止」になり、押すと Run を止めて「送信」に戻る（RAG と同じ。buttons.md §3.1）。
+for (const viewport of VIEWPORTS) {
+  for (const theme of ["light", "dark"] as const) {
+    test(`回答の作成中は送信が停止になり、押すと Run を止める (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+      seedThread(mockApi, { status: "running" });
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await useTheme(page, theme);
+      await page.goto("/chat");
+      if (viewport.width >= 1024) {
+        await page.getByTestId("chat-history").getByRole("button", { name: /契約の更新条件は？/ }).click();
+      } else {
+        await page.getByRole("button", { name: "会話の履歴" }).click();
+        await page.getByRole("dialog", { name: "会話の履歴" }).getByText("契約の更新条件は？").click();
+      }
+
+      const turn = page.getByTestId("chat-turn-run-chat-seed");
+      await expect(turn.getByTestId("chat-answering")).toBeVisible();
+      const button = page.getByTestId("chat-send");
+      await expect(button).toHaveAccessibleName("停止");
+      await expect(button).toHaveAttribute("data-state", "running");
+      await expect(button).not.toHaveAttribute("aria-disabled", "true");
+      await expect(page.getByTestId("chat-composer-hint")).toHaveText(
+        "回答を作成しています。終わるか「停止」を押すと、次の質問を送れます。"
+      );
+
+      // 作成中も次の質問を書ける。入力欄の Enter では送らず、停止もしない。
+      const composer = page.getByRole("textbox", { name: "質問" });
+      await composer.fill("次の質問");
+      await composer.press("Enter");
+      await expect(composer).toHaveValue("次の質問");
+      expect(mockApi.lastRequest("POST", "/api/runs")).toBeUndefined();
+      expect(mockApi.lastRequest("POST", "/api/runs/run-chat-seed/cancel")).toBeUndefined();
+      await expectNoHorizontalOverflow(page);
+      await page.screenshot({ path: testInfo.outputPath(`chat-running-${viewport.name}-${theme}.png`) });
+
+      await button.click();
+      await expect.poll(() => mockApi.lastRequest("POST", "/api/runs/run-chat-seed/cancel")).toBeTruthy();
+      // 同じボタンが「送信」に戻り、フォーカスはボタンに残る。会話には止めた状態が出る。
+      await expect(button).toHaveAccessibleName("送信");
+      await expect(button).toHaveAttribute("data-state", "idle");
+      await expect(button).toBeFocused();
+      await expect(turn.getByTestId("chat-cancelled")).toHaveText(
+        "回答の作成を停止しました。もう一度送ると、新しく回答を作成します。"
+      );
+      await expect(turn.getByTestId("chat-answering")).toHaveCount(0);
+      await expect(page.getByTestId("chat-composer-hint")).toHaveCount(0);
+      await expect(composer).toHaveValue("次の質問");
+      await page.screenshot({ path: testInfo.outputPath(`chat-stopped-${viewport.name}-${theme}.png`) });
+    });
+  }
+}
+
+test("送信の要求中に停止を押すと、作られた Run をすぐ止める（#805）", async ({ page, mockApi }) => {
+  // Run の作成の応答を遅らせ、要求中に「停止」を押す。
+  await page.route("**/api/runs", async (route) => {
+    if (route.request().method() === "POST") await new Promise((resolve) => setTimeout(resolve, 800));
+    await route.fallback();
+  });
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "質問" });
+  await composer.fill("今月の売上は？");
+  const button = page.getByTestId("chat-send");
+  await button.click();
+  await expect(button).toHaveAccessibleName("停止");
+  // 送ったら入力欄は空になり、次の質問を書ける。
+  await expect(composer).toHaveValue("");
+  await button.click();
+
+  await expect.poll(() => mockApi.lastRequest("POST", "/api/runs/run-chat-1/cancel")).toBeTruthy();
+  await expect(page.getByTestId("chat-turn-run-chat-1").getByTestId("chat-cancelled")).toBeVisible();
+  await expect(button).toHaveAccessibleName("送信");
+});
+
+test("送れなかった質問は入力欄に戻す（#805）", async ({ page, mockApi }) => {
+  await page.route("**/api/runs", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "実行環境に接続できません。" }),
+    });
+  });
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "質問" });
+  await composer.fill("今月の売上は？");
+  await composer.press("Enter");
+  await expect(page.getByText("実行環境に接続できません。")).toBeVisible();
+  await expect(composer).toHaveValue("今月の売上は？");
+  await expect(page.getByTestId("chat-send")).toHaveAccessibleName("送信");
+  expect(mockApi.lastRequest("POST", "/api/runs/run-chat-1/cancel")).toBeUndefined();
 });
 
 test("実行に失敗した回答は理由を出す", async ({ page, mockApi }) => {
