@@ -32,6 +32,10 @@ import { OntologyBuildSection } from "../ontology/OntologyBuildSection";
 import { OntologyQueryPlayground } from "../ontology/OntologyQueryPlayground";
 import type { OntologyMarkdownState } from "../ontology/types";
 
+/** 「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。押したボタンだけを回す。#821）。 */
+const ONTOLOGY_SCHEMA_REFRESH_BUILD = "ontology-build";
+const ONTOLOGY_SCHEMA_REFRESH_PLAYGROUND = "ontology-playground";
+
 function listLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
   if (isTimeoutError(error)) {
     return t("objectSelector.loadMoreTimeout", {
@@ -119,9 +123,11 @@ export function OntologyBuildPage() {
   const ontologyGraph = publishedGraphMatches ? loadedOntologyGraph : null;
   const visibleOntologyWarnings = hasPublishedOntology ? ontologyWarnings : [];
   const refreshing = sharedSchemaRefresh.isRefreshing;
-  // どの「スキーマを更新」が始めた更新か（#819）。スピナーは始めたボタンだけが job の間出し、もう一方は
-  // 無効にするだけ。別の画面で始めた更新（null）はどちらも回さず、ページの処理中の表示がスピナーを出す。
-  const [schemaRefreshOrigin, setSchemaRefreshOrigin] = useState<"build" | "playground" | null>(null);
+  // 2 つの「スキーマを更新」は、押した側だけを送信の間 loading にする。job の間はどちらも無効にするだけで、
+  // スピナーはページの進行の表示が 1 つだけ出す（durable job の規則。messaging §3.7、#821）。
+  const buildSchemaRefreshStarting = sharedSchemaRefresh.startingOrigin === ONTOLOGY_SCHEMA_REFRESH_BUILD;
+  const playgroundSchemaRefreshStarting =
+    sharedSchemaRefresh.startingOrigin === ONTOLOGY_SCHEMA_REFRESH_PLAYGROUND;
   useEffect(() => {
     if (!searchParams.has("tab")) return;
     const next = new URLSearchParams();
@@ -167,13 +173,11 @@ export function OntologyBuildPage() {
     setOntologyViewRequestedProfileId(selectedProfileId);
   }, [refetchOntologyView, refetchProfileDetail, selectedProfileId, workspaceRequested]);
 
-  const refreshSchema = async (origin: "build" | "playground") => {
+  const refreshSchema = async (origin: string) => {
     setPageError("");
-    setSchemaRefreshOrigin(origin);
     try {
-      await sharedSchemaRefresh.start();
+      await sharedSchemaRefresh.start(origin);
     } catch (err) {
-      setSchemaRefreshOrigin(null);
       setPageError(err instanceof Error ? err.message : t("profiles.error.load"));
     }
   };
@@ -185,7 +189,6 @@ export function OntologyBuildPage() {
     const reportKey = `${completedSchemaRefreshJob.job_id}:${completedSchemaRefreshJob.status}`;
     if (handledSchemaRefreshJob !== reportKey) {
       setHandledSchemaRefreshJob(reportKey);
-      setSchemaRefreshOrigin(null);
       if (completedSchemaRefreshJob.status === "error") {
         setPageError(sharedSchemaRefresh.error || t("profiles.schemaRefresh.error"));
       }
@@ -276,10 +279,7 @@ export function OntologyBuildPage() {
       <PageBody wide className="grid min-w-0 gap-4">
         {pageError ? <Banner severity="danger">{pageError}</Banner> : null}
         {refreshing ? (
-          <SchemaRefreshProcessing
-            testId="ontology-build-schema-refresh-processing"
-            activityIcon={schemaRefreshOrigin ? "none" : "spinner"}
-          />
+          <SchemaRefreshProcessing testId="ontology-build-schema-refresh-processing" />
         ) : null}
 
         <DbObjectManagementPanelShell
@@ -418,8 +418,8 @@ export function OntologyBuildPage() {
               workspaceFetching={workspaceButtonLoading}
               onPublished={handleOntologyPublished}
               onMarkdownStateChange={handleMarkdownStateChange}
-              onRefreshSchema={() => refreshSchema("build")}
-              refreshingSchema={refreshing && schemaRefreshOrigin === "build"}
+              onRefreshSchema={() => refreshSchema(ONTOLOGY_SCHEMA_REFRESH_BUILD)}
+              refreshingSchema={buildSchemaRefreshStarting}
               schemaRefreshDisabled={refreshing}
             />
             <OntologyQueryPlayground
@@ -431,8 +431,8 @@ export function OntologyBuildPage() {
               workspaceFetching={workspaceButtonLoading}
               loadErrorMessage={ontologyErrorMessage}
               onRetryLoad={() => loadOntologyView(false)}
-              onRefreshSchema={() => refreshSchema("playground")}
-              refreshingSchema={refreshing && schemaRefreshOrigin === "playground"}
+              onRefreshSchema={() => refreshSchema(ONTOLOGY_SCHEMA_REFRESH_PLAYGROUND)}
+              refreshingSchema={playgroundSchemaRefreshStarting}
               schemaRefreshDisabled={refreshing}
             />
           </>

@@ -73,6 +73,9 @@ import type {
   SchemaRefreshJob,
 } from "../types";
 
+/** ヘッダーの「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。#821）。 */
+const METADATA_SCHEMA_REFRESH_HEADER = "metadata-sql-header";
+
 type MetadataMode = "comment" | "annotation" | "domain";
 type MetadataPanel = "targets" | "input" | "execute";
 type TargetFilter = "all" | "table" | "view";
@@ -263,6 +266,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
   const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
+  const headerSchemaRefreshStarting = sharedSchemaRefresh.startingOrigin === METADATA_SCHEMA_REFRESH_HEADER;
   const visibleSchemaRefreshError = schemaRefreshError || sharedSchemaRefresh.error;
 
   const allTargets = useMemo(
@@ -352,13 +356,15 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     await reloadObjects(announce);
   };
 
-  const refreshSchema = async () => {
+  // origin: 押したボタン（ヘッダー）。案内の「スキーマを更新」などは起点を持たず、送信の間は進行の表示が
+  // スピナーを出す（#821）。
+  const refreshSchema = async (origin = "") => {
     setLoading("schema-refresh");
     setMessage("");
     setSchemaRefreshError("");
     setSchemaRefreshNeedsFull(false);
     try {
-      const job = await sharedSchemaRefresh.start();
+      const job = await sharedSchemaRefresh.start(origin);
       if (job.job_id) {
         setReportedSchemaRefreshJob("");
         setSchemaRefreshJobId(job.job_id);
@@ -629,9 +635,10 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             kind: "utility",
             label: t("common.action.schemaRefresh"),
             icon: RefreshCw,
-            onClick: () => void refreshSchema(),
-            loading: sharedSchemaRefresh.isStarting,
-            disabled: schemaRefreshing,
+            onClick: () => void refreshSchema(METADATA_SCHEMA_REFRESH_HEADER),
+            // 押したときの送信の間だけ回し、job の間は無効にするだけ（スピナーは進行の表示。#821）。
+            loading: headerSchemaRefreshStarting,
+            disabled: schemaRefreshing && !headerSchemaRefreshStarting,
           },
         ]}
       />

@@ -140,8 +140,9 @@ test("shared schema feedback limits live announcements to the phase badge", () =
   assert.match(header, /<span aria-hidden="true">[\s\S]{0,120}className="sr-only"/u);
   assert.match(feedback, /announceActivity=\{false\}/u);
   assert.match(feedback, /announceSlow=\{false\}/u);
-  // 既定は "none"（更新を始めたボタンがスピナーを出す）。始めたボタンが回っていない画面だけ "spinner" を渡す（#819）。
-  assert.match(feedback, /activityIcon = "none"/u);
+  // 既定は、押したボタンが送信中（loading）の間だけ "none"、job の間は "spinner"（durable job の規則。#821）。
+  assert.match(feedback, /activityIcon \?\? \(startingOrigin \? "none" : "spinner"\)/u);
+  assert.doesNotMatch(feedback, /activityIcon = "none"/u);
   assert.match(processing, /role="timer"/u);
   assert.match(processing, /aria-live="off"/u);
 });
@@ -167,4 +168,28 @@ test("view create renders the shared schema progress in its task panel", () => {
   const view = source("../src/features/nl2sql/pages/ViewManagementPage.tsx");
   assert.match(view, /footerProcessing=/u);
   assert.match(view, /SchemaRefreshProcessing testId="view-create-schema-refresh-processing"/u);
+});
+
+test("「スキーマを更新」は押したボタンだけを送信の間 loading にし、job の間は回さない（#821）", () => {
+  const pages = [
+    "../src/features/nl2sql/Nl2SqlWorkbench.tsx",
+    "../src/features/nl2sql/components/SchemaReferencePanel.tsx",
+    "../src/features/nl2sql/pages/AdminSqlPage.tsx",
+    "../src/features/nl2sql/pages/DataManagementPage.tsx",
+    "../src/features/nl2sql/pages/MetadataSqlManagementPage.tsx",
+    "../src/features/nl2sql/pages/OntologyBuildPage.tsx",
+    "../src/features/nl2sql/pages/ProfileManagementPage.tsx",
+    "../src/features/nl2sql/pages/SampleDataPage.tsx",
+    "../src/features/nl2sql/pages/TableManagementPage.tsx",
+    "../src/features/nl2sql/pages/ViewManagementPage.tsx",
+  ];
+  for (const path of pages) {
+    const page = source(path);
+    // job の間ずっと true の値・どのボタンが押したかを区別しない値を、ボタンの loading に渡さない。
+    assert.doesNotMatch(page, /loading(?::|=\{)\s*(?:schemaRefreshing|refreshing)\b/u, path);
+    assert.doesNotMatch(page, /loading(?::|=\{)\s*(?:sharedSchemaRefresh|schemaRefresh)\.(?:isRefreshing|isStarting)/u, path);
+    assert.doesNotMatch(page, /refreshingSchema=\{refreshing\b/u, path);
+  }
+  const coordinator = source("../src/features/nl2sql/SchemaRefreshCoordinator.tsx");
+  assert.match(coordinator, /const startingOrigin = isStarting \? startOrigin : ""/u);
 });

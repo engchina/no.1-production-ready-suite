@@ -928,6 +928,8 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
     await moreButton.click();
     await expect(menu.getByRole("menuitem", { name: "DB Profile 一覧を再取得" })).toBeDisabled();
     await page.keyboard.press("Escape");
+    // job の間のスピナーは一覧の上の進行の表示の 1 つだけ（#821）。
+    await expectSingleSpinner(page, page.getByTestId("profile-management-workspace-processing"));
     dbProfileRefreshCanComplete = true;
     await expect.poll(() => dbProfileRefreshPolls).toBeGreaterThanOrEqual(2);
     await expect(page.getByText("DB Profile 一覧更新: 完了", { exact: true })).toHaveCount(0);
@@ -1004,6 +1006,9 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
       "DB Profile 一覧を再取得しています"
     );
     await expect(dbProfileRefreshButton).toBeDisabled();
+    // job の間は押したボタンも回さず無効にするだけ。スピナーは一覧の上の進行の表示の 1 つだけ（#821）。
+    await expect(dbProfileRefreshButton).not.toHaveAttribute("aria-busy", "true");
+    await expectSingleSpinner(page, page.getByTestId("profile-management-workspace-processing"));
     dbProfileRefreshCanComplete = true;
     await expect.poll(() => dbProfileRefreshPolls).toBeGreaterThanOrEqual(2);
     await expect(page.getByText("DB Profile 一覧更新: 完了", { exact: true })).toHaveCount(0);

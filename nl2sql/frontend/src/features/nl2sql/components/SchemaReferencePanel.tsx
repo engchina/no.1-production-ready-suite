@@ -41,6 +41,7 @@ export function SchemaReferencePanel({
   listMaxHeightClass = "max-h-72",
   onRefreshSchema,
   refreshing = false,
+  refreshStarting = false,
   searchQuery,
   onSearchQueryChange,
   hasMore = false,
@@ -63,7 +64,13 @@ export function SchemaReferencePanel({
   listMaxHeightClass?: string;
   /** catalog が空のときに「スキーマを更新」導線を出す（POST /api/schema/refresh-jobs）。 */
   onRefreshSchema?: () => void;
+  /** スキーマの更新の送信中または job の実行中（進行の表示を出し、更新のボタンを無効にする）。 */
   refreshing?: boolean;
+  /**
+   * このパネルの「スキーマを更新」で始めた更新の送信中。このときだけボタンを loading にする。job の間と、
+   * ほかのボタン（ページヘッダーなど）で始めた更新では無効にするだけ（buttons §8、#821）。
+   */
+  refreshStarting?: boolean;
   searchQuery?: string;
   onSearchQueryChange?: (value: string) => void;
   hasMore?: boolean;
@@ -219,8 +226,8 @@ export function SchemaReferencePanel({
               type="button"
               variant="secondary"
               size="sm"
-              loading={refreshing}
-              disabled={disabled}
+              loading={refreshStarting}
+              disabled={disabled || (refreshing && !refreshStarting)}
               onClick={onRefreshSchema} icon={RefreshCw}>
               <span>{t("nl2sql.schema.refresh")}</span>
             </Button>
