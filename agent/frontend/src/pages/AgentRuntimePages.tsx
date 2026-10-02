@@ -108,12 +108,14 @@ import {
   MissingEditorTarget,
 } from "@/components/EntityLayout";
 import { agentPaginationLabels, listScrollLabel, PagedDataTable, QueryState } from "@/components/ListViews";
+import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { useEditorRoute } from "@/lib/editor-route";
 import {
   focusFirstInvalidField,
   numberFieldError,
   parseJsonField,
 } from "@/lib/field-validation";
+import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { MENU_PERMISSIONS, useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { APP_ROUTES } from "@/lib/routes";
@@ -5243,6 +5245,7 @@ function RunDetail({
   sseState: RunEventSourceState;
   capabilities: AgentCapabilities;
 }) {
+  const queryClient = useQueryClient();
   const structured = getStructuredResult(run);
   const { canCancel, canResume } = runCapabilities(run);
   const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
@@ -5273,7 +5276,30 @@ function RunDetail({
             <span>{`${t("run.runtime")}: ${run.runtime_id === "builtin" ? t("runtime.builtin.title") : run.runtime_id}`}</span>
             <span>{`${t("common.createdAt")}: ${formatDate(run.created_at)}`}</span>
             <span>{`${t("common.updatedAt")}: ${formatDate(run.updated_at)}`}</span>
+            {/* モデルの利用量（承認待ちからの再開を含めた累計。#772）。 */}
+            <span className="sm:col-span-2" data-testid="run-usage">
+              {`${t("run.usage")}: ${
+                run.usage
+                  ? t("run.usage.summary", {
+                      model: run.usage.model || t("usage.modelNone"),
+                      requests: formatNumber(run.usage.requests),
+                      input: formatNumber(run.usage.input_tokens),
+                      output: formatNumber(run.usage.output_tokens),
+                      total: formatNumber(run.usage.total_tokens),
+                    })
+                  : t("run.usage.none")
+              }`}
+            </span>
           </div>
+          {/* 管理者の評価（#774）。Agent 管理の権限で、回答が出た Run に付ける（本人の評価とは別）。 */}
+          {capabilities.admin && run.status === "completed" && run.artifacts.some((item) => item.kind === "answer") ? (
+            <AnswerFeedback
+              runId={run.id}
+              current={run.admin_review ?? null}
+              mode="admin"
+              onSaved={() => void queryClient.invalidateQueries({ queryKey: ["runs"] })}
+            />
+          ) : null}
         </CardContent>
       </Card>
 

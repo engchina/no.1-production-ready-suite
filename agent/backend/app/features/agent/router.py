@@ -7,12 +7,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 import stat
 from asyncio import sleep, wait_for
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from csv import DictWriter
 from datetime import UTC, datetime
 from importlib import import_module
@@ -20,7 +21,7 @@ from io import StringIO
 from pathlib import Path
 from time import monotonic
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import httpx
 from anyio import fail_after
@@ -29,14 +30,17 @@ from fastapi import (
     APIRouter,
     BackgroundTasks,
     Depends,
+    File,
     HTTPException,
     Query,
     Request,
+    UploadFile,
     WebSocket,
     WebSocketDisconnect,
 )
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse
+from pr_backend_core.mcp import mcp_http_response
 from pr_system_settings.database import build_database_router
 from pr_system_settings.database_status import (
     DatabaseSchemaProbeResult,
@@ -71,8 +75,67 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 import app.settings as app_settings
-from app.features.agent import builtin_runtime
+from app.features.agent import builtin_runtime, control_plane_store
+from app.features.agent.api_keys import (
+    ApiKeyCreated,
+    ApiKeyCreateRequest,
+    ApiKeysListData,
+    api_key_registry,
+    key_view,
+)
+from app.features.agent.automations import (
+    WEBHOOK_PAYLOAD_MAX_BYTES,
+    Automation,
+    AutomationDetail,
+    AutomationFired,
+    AutomationInput,
+    AutomationsData,
+    AutomationTrigger,
+    AutomationWebhookToken,
+    automation_store,
+    issue_webhook_token,
+    recent_runs,
+    verify_webhook_token,
+)
+from app.features.agent.automations import fire as fire_automation
 from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
+from app.features.agent.control_plane_store import (
+    ControlPlaneStoreError,
+    delete_api_key,
+    get_control_plane_store,
+    save_api_key,
+)
+from app.features.agent.evaluation import (
+    CaseStatus,
+    EvaluationBusyError,
+    EvaluationCaseResult,
+    EvaluationCasesData,
+    EvaluationJob,
+    EvaluationJobActiveError,
+    EvaluationJobsData,
+    EvaluationRequest,
+    EvaluationSet,
+    EvaluationSetInput,
+    EvaluationSetsData,
+    evaluation_set_store,
+    evaluation_store,
+    job_item,
+    run_evaluation_job,
+    set_item,
+)
+from app.features.agent.evaluation_excel import (
+    EXCEL_MAX_BYTES,
+    EvaluationExcelError,
+    export_set_xlsx,
+    parse_cases_xlsx,
+    template_xlsx,
+)
+from app.features.agent.feedback import (
+    FEEDBACK_PERIOD_DAYS,
+    FeedbackReport,
+    build_feedback_report,
+)
+from app.features.agent.mcp_server import build_agent_mcp_server
 from app.features.agent.plugins import (
     MarketplaceListing,
     MarketplaceSource,
@@ -97,12 +160,20 @@ from app.features.agent.runtime import (
     ApprovalDecisionRequest,
     Artifact,
     ArtifactsData,
+    FeedbackRating,
+    FeedbackReason,
     RunCreateRequest,
     RunEvent,
+    RunFeedback,
+    RunFeedbackRequest,
+    RunNotRatableError,
     RunsData,
     RunState,
     RunStatus,
     RuntimeToolCallAuditData,
+    ThreadData,
+    ThreadNotFoundError,
+    ThreadsData,
     builtin_resume_pending,
     runtime_repository,
 )
@@ -125,6 +196,14 @@ from app.features.agent.tools import (
     list_mcp_connection_tools,
     tool_registry,
 )
+from app.features.agent.usage import (
+    DEFAULT_TIMEZONE,
+    USAGE_PERIOD_DAYS,
+    UsageReport,
+    build_usage_report,
+    resolve_timezone,
+)
+from app.features.agent.user_names import user_display_names
 from app.observability import (
     ObservabilityStatus,
     TraceEventsData,
@@ -1106,9 +1185,11 @@ async def create_agent_skill(
         source="runtime",
     )
     try:
-        return ApiResponse(data=skill_registry.upsert_custom(skill))
+        saved = skill_registry.upsert_custom(skill)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _persist(lambda: control_plane_store.save_skill(saved))
+    return ApiResponse(data=saved)
 
 
 @router.patch("/skills/{skill_id}", response_model=ApiResponse[AgentSkillDefinition])
@@ -1147,9 +1228,11 @@ async def patch_agent_skill(
         }
     )
     try:
-        return ApiResponse(data=skill_registry.upsert_custom(updated))
+        saved = skill_registry.upsert_custom(updated)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _persist(lambda: control_plane_store.save_skill(saved))
+    return ApiResponse(data=saved)
 
 
 @router.delete("/skills/{skill_id}", response_model=ApiResponse[AgentSkillListOutput])
@@ -1163,6 +1246,7 @@ async def delete_agent_skill(
         raise HTTPException(status_code=404, detail="skill not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _persist(lambda: control_plane_store.delete_skill(skill_id))
     skills = skill_registry.list()
     return ApiResponse(data=AgentSkillListOutput(skills=skills, metadata={"count": len(skills)}))
 
@@ -1219,6 +1303,7 @@ async def install_plugin(
         record = plugin_registry.install(manifest, marketplace_id=payload.marketplace_id)
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _persist(lambda: control_plane_store.save_plugin(record))
     return ApiResponse(data=record)
 
 
@@ -1242,9 +1327,11 @@ async def add_plugin_marketplace(
 ) -> ApiResponse[MarketplaceSource]:
     try:
         source = MarketplaceSource(id=payload.id, name=payload.name or payload.id, url=payload.url)
-        return ApiResponse(data=marketplace_registry.add(source, payload.listing))
+        added = marketplace_registry.add(source, payload.listing)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _persist(lambda: control_plane_store.save_marketplace(added, payload.listing))
+    return ApiResponse(data=added)
 
 
 @router.post(
@@ -1288,6 +1375,7 @@ async def delete_plugin_marketplace(
         marketplace_registry.remove(marketplace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="marketplace not found") from exc
+    _persist(lambda: control_plane_store.delete_marketplace(marketplace_id))
     return ApiResponse(data=MarketplaceSourcesOutput(marketplaces=marketplace_registry.list()))
 
 
@@ -1314,11 +1402,13 @@ async def patch_plugin(
             raise HTTPException(status_code=404, detail="plugin not found")
         return ApiResponse(data=record)
     try:
-        return ApiResponse(data=plugin_registry.set_enabled(plugin_id, patch.enabled))
+        record = plugin_registry.set_enabled(plugin_id, patch.enabled)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="plugin not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _persist(lambda: control_plane_store.save_plugin(record))
+    return ApiResponse(data=record)
 
 
 @router.delete("/plugins/{plugin_id}", response_model=ApiResponse[PluginListOutput])
@@ -1332,6 +1422,7 @@ async def uninstall_plugin(
         raise HTTPException(status_code=404, detail="plugin not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _persist(lambda: control_plane_store.delete_plugin(plugin_id))
     return ApiResponse(data=_plugin_list_response())
 
 
@@ -1472,10 +1563,139 @@ async def create_run(
                 ),
             },
         ) from exc
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="agent not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/threads", response_model=ApiResponse[ThreadsData])
+async def list_threads(
+    request: Request,
+    agent_id: str | None = None,
+) -> ApiResponse[ThreadsData]:
+    """ログイン中の利用者の会話（チャット。#768）。使えなくなった Agent の会話は出さない。"""
+    policy = _actor_policy(request)
+    threads = [
+        thread
+        for thread in runtime_repository.list_threads(
+            user_uuid=_run_creator_user_uuid(request), agent_id=agent_id
+        )
+        if _policy_allows_agent(policy, thread.agent_id)
+    ]
+    return ApiResponse(data=ThreadsData(threads=threads))
+
+
+@router.get("/threads/{thread_id}", response_model=ApiResponse[ThreadData])
+async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadData]:
+    """会話の Run（古い順）。作った利用者だけが読める。"""
+    try:
+        thread = runtime_repository.get_thread(thread_id, user_uuid=_run_creator_user_uuid(request))
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
+    _require_agent_access(request, thread.agent_id)
+    return ApiResponse(data=thread)
+
+
+@router.put("/runs/{run_id}/feedback", response_model=ApiResponse[RunState])
+async def put_run_feedback(
+    run_id: str,
+    feedback: RunFeedbackRequest,
+    request: Request,
+    _: None = Depends(require_operator),
+) -> ApiResponse[RunState]:
+    """チャットの回答への評価（#774）。
+
+    会話をした利用者（Run の作成者）だけが付け、付け直すと上書きする。
+    """
+    try:
+        run = runtime_repository.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    _require_agent_access(request, run.agent_id)
+    user_uuid = _run_creator_user_uuid(request)
+    if run.created_by_user_uuid is None or run.created_by_user_uuid != user_uuid:
+        raise HTTPException(
+            status_code=403, detail="フィードバックは、この会話をした利用者だけが付けられます。"
+        )
+    try:
+        updated = runtime_repository.set_run_feedback(
+            run_id,
+            RunFeedback(
+                rating=feedback.rating,
+                reason=feedback.reason,
+                comment=feedback.comment,
+                user_uuid=user_uuid,
+            ),
+        )
+    except RunNotRatableError as exc:
+        raise HTTPException(
+            status_code=409, detail="回答が出た Run にだけフィードバックを付けられます。"
+        ) from exc
+    return ApiResponse(data=updated)
+
+
+@router.put("/runs/{run_id}/admin-review", response_model=ApiResponse[RunState])
+async def put_run_admin_review(
+    run_id: str,
+    review: RunFeedbackRequest,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[RunState]:
+    """管理者の評価（#774）。Agent 管理の権限でだれの回答にも付けられ、本人の評価とは別に残す。"""
+    try:
+        run = runtime_repository.get_run(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    _require_agent_access(request, run.agent_id)
+    try:
+        updated = runtime_repository.set_run_feedback(
+            run_id,
+            RunFeedback(
+                rating=review.rating,
+                reason=review.reason,
+                comment=review.comment,
+                user_uuid=_run_creator_user_uuid(request),
+            ),
+            admin=True,
+        )
+    except RunNotRatableError as exc:
+        raise HTTPException(
+            status_code=409, detail="回答が出た Run にだけ評価を付けられます。"
+        ) from exc
+    return ApiResponse(data=updated)
+
+
+@router.get("/feedback", response_model=ApiResponse[FeedbackReport])
+async def get_feedback_report(
+    request: Request,
+    days: int = Query(default=30),
+    agent_id: str | None = Query(default=None, max_length=200),
+    rating: FeedbackRating | None = None,
+    reason: FeedbackReason | None = None,
+) -> ApiResponse[FeedbackReport]:
+    """フィードバックの集計と一覧（#774）。権限は middleware のメニュー権限（`menu.feedback`）。
+
+    対象は Run の一覧と同じく利用できる業務 Agent の Run だけ。
+    """
+    if days not in FEEDBACK_PERIOD_DAYS:
+        raise HTTPException(status_code=422, detail="期間は 7・30・90 日のどれかにしてください。")
+    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    report = await run_in_threadpool(
+        build_feedback_report,
+        runs,
+        days=days,
+        now=datetime.now(UTC),
+        agent_id=agent_id or None,
+        rating=rating,
+        reason=reason,
+        agent_names=agent_names,
+        user_names=user_display_names,
+    )
+    return ApiResponse(data=report)
 
 
 @router.get("/runs/{run_id}", response_model=ApiResponse[RunState])
@@ -1504,6 +1724,398 @@ async def get_run_audit(
         raise HTTPException(status_code=404, detail="run not found") from exc
     _require_agent_access(request, run.agent_id)
     return ApiResponse(data=_run_audit_data(run))
+
+
+def _automation_for_actor(request: Request, automation_id: str) -> Automation:
+    try:
+        item = automation_store.get(automation_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="自動実行が見つかりません。") from exc
+    if not _agent_allowed(request, item.agent_id):
+        raise HTTPException(status_code=404, detail="自動実行が見つかりません。")
+    return item
+
+
+@router.get("/automations", response_model=ApiResponse[AutomationsData])
+async def list_automations(request: Request) -> ApiResponse[AutomationsData]:
+    """業務 Agent の自動実行（#784。利用できる業務 Agent のものだけ）。"""
+    items = [item for item in automation_store.list() if _agent_allowed(request, item.agent_id)]
+    return ApiResponse(
+        data=AutomationsData(automations=items, persistent=get_control_plane_store().persistent)
+    )
+
+
+@router.post("/automations", response_model=ApiResponse[Automation])
+async def create_automation(
+    payload: AutomationInput,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[Automation]:
+    """自動実行を作る。Run は作った利用者として作る（RAG / NL2SQL の MCP もこの利用者）。"""
+    _require_agent_access(request, payload.agent_id)
+    _control_plane_agent(payload.agent_id)
+    owner = _run_creator_user_uuid(request)
+    if owner is None:
+        raise HTTPException(status_code=401, detail="ログインしてください。")
+    try:
+        created = automation_store.create(payload, owner=owner, now=datetime.now(UTC))
+    except ControlPlaneStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ApiResponse(data=created)
+
+
+@router.get("/automations/{automation_id}", response_model=ApiResponse[AutomationDetail])
+async def get_automation(automation_id: str, request: Request) -> ApiResponse[AutomationDetail]:
+    """自動実行と、最近の Run（新しい順に 10 件）。"""
+    item = _automation_for_actor(request, automation_id)
+    return ApiResponse(data=AutomationDetail(automation=item, runs=recent_runs(item.id)))
+
+
+@router.put("/automations/{automation_id}", response_model=ApiResponse[Automation])
+async def update_automation(
+    automation_id: str,
+    payload: AutomationInput,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[Automation]:
+    item = _automation_for_actor(request, automation_id)
+    if payload.agent_id != item.agent_id:
+        _require_agent_access(request, payload.agent_id)
+        _control_plane_agent(payload.agent_id)
+    try:
+        updated = automation_store.update(item.id, payload, now=datetime.now(UTC))
+    except ControlPlaneStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ApiResponse(data=updated)
+
+
+@router.delete("/automations/{automation_id}", response_model=ApiResponse[None])
+async def delete_automation_endpoint(
+    automation_id: str,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[None]:
+    item = _automation_for_actor(request, automation_id)
+    try:
+        automation_store.delete(item.id)
+    except ControlPlaneStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ApiResponse(data=None)
+
+
+@router.post("/automations/{automation_id}/run", response_model=ApiResponse[AutomationFired])
+async def run_automation_now(
+    automation_id: str,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[AutomationFired]:
+    """今すぐ実行する（スケジュール・Webhook と同じく、前回の Run が終わっていなければ飛ばす）。"""
+    item = _automation_for_actor(request, automation_id)
+    fired = await run_in_threadpool(fire_automation, item.id, trigger="manual")
+    _schedule_automation_runs(fired)
+    return ApiResponse(data=fired)
+
+
+@router.post(
+    "/automations/{automation_id}/webhook-token",
+    response_model=ApiResponse[AutomationWebhookToken],
+)
+async def issue_automation_webhook_token(
+    automation_id: str,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[AutomationWebhookToken]:
+    """Webhook の秘密を発行し直す。
+
+    前の秘密はすぐに使えなくなる。秘密はこの応答で 1 回だけ返す。
+    """
+    item = _automation_for_actor(request, automation_id)
+    if item.trigger != AutomationTrigger.WEBHOOK:
+        raise HTTPException(status_code=409, detail="Webhook のトリガーではありません。")
+    try:
+        updated, token = issue_webhook_token(item.id)
+    except ControlPlaneStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ApiResponse(data=AutomationWebhookToken(automation=updated, token=token))
+
+
+@router.post("/hooks/{automation_id}", response_model=ApiResponse[AutomationFired], status_code=202)
+async def receive_automation_webhook(
+    automation_id: str, request: Request
+) -> ApiResponse[AutomationFired]:
+    """Webhook の入口（#784）。Cookie・CSRF を使わず、自動実行の秘密（Bearer `prwh_…`）で認証する。
+
+    受け取った JSON（16KB まで）を指示の後ろに添えて、自動実行の利用者の Run を作る。
+    """
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    token = token.strip() if scheme.lower() == "bearer" else ""
+    try:
+        item = automation_store.get(automation_id)
+    except KeyError:
+        item = None
+    # 自動実行が無い・秘密が違う・Webhook でない・無効は区別せずに 401（存在を漏らさない）。
+    if (
+        item is None
+        or not token
+        or item.trigger != AutomationTrigger.WEBHOOK
+        or not verify_webhook_token(item, token)
+    ):
+        raise HTTPException(status_code=401, detail="Webhook の秘密が正しくありません。")
+    if not item.enabled:
+        raise HTTPException(status_code=409, detail="この自動実行は無効になっています。")
+    body = await request.body()
+    if len(body) > WEBHOOK_PAYLOAD_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="受け取るデータは 16KB までです。")
+    payload: Any = None
+    if body.strip():
+        try:
+            payload = json.loads(body)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="JSON として読めません。") from exc
+    fired = await run_in_threadpool(fire_automation, item.id, trigger="webhook", payload=payload)
+    _schedule_automation_runs(fired)
+    return ApiResponse(data=fired)
+
+
+def _schedule_automation_runs(fired: AutomationFired) -> None:
+    """スレッドで作った Run を、このプロセス（in-process のモード）で実行する。"""
+    if not fired.run_id:
+        return
+    with contextlib.suppress(KeyError):
+        _schedule_builtin_run(runtime_repository.get_run(fired.run_id))
+
+
+# 実行中の評価の task（GC で消えないよう参照を持つ。#776）。
+_evaluation_tasks: set[asyncio.Task[None]] = set()
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _evaluation_set_for_actor(request: Request, set_id: str) -> EvaluationSet:
+    try:
+        item = evaluation_set_store.get(set_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="評価セットが見つかりません。") from exc
+    if not _agent_allowed(request, item.agent_id):
+        raise HTTPException(status_code=404, detail="評価セットが見つかりません。")
+    return item
+
+
+def _require_evaluable_agent(request: Request, agent_id: str) -> AgentProfile:
+    _require_agent_access(request, agent_id)
+    return _control_plane_agent(agent_id)
+
+
+@router.get("/evaluation-sets", response_model=ApiResponse[EvaluationSetsData])
+async def list_evaluation_sets(
+    request: Request, agent_id: str | None = Query(default=None, max_length=200)
+) -> ApiResponse[EvaluationSetsData]:
+    """評価セット（#776。利用できる業務 Agent のものだけ。新しい順）。"""
+    items = [
+        set_item(item)
+        for item in evaluation_set_store.list(agent_id or None)
+        if _agent_allowed(request, item.agent_id)
+    ]
+    return ApiResponse(data=EvaluationSetsData(sets=items))
+
+
+@router.get("/evaluation-sets/template.xlsx")
+async def evaluation_set_template() -> Response:
+    """評価ケースの Excel のテンプレート。
+
+    列は ケースID・質問・期待する回答の要点・期待するツール。
+    """
+    return Response(
+        content=template_xlsx(),
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="evaluation-cases-template.xlsx"'},
+    )
+
+
+@router.post("/evaluation-sets/parse-xlsx", response_model=ApiResponse[EvaluationCasesData])
+async def parse_evaluation_cases(
+    file: Annotated[UploadFile, File()],
+) -> ApiResponse[EvaluationCasesData]:
+    """Excel の評価ケースを読む（保存しない。画面が評価セットのフォームに入れる）。"""
+    data = await file.read(EXCEL_MAX_BYTES + 1)
+    try:
+        cases = await run_in_threadpool(parse_cases_xlsx, data)
+    except EvaluationExcelError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=EvaluationCasesData(cases=cases))
+
+
+@router.post("/evaluation-sets", response_model=ApiResponse[EvaluationSet])
+async def create_evaluation_set(
+    payload: EvaluationSetInput, request: Request
+) -> ApiResponse[EvaluationSet]:
+    _require_evaluable_agent(request, payload.agent_id)
+    try:
+        created = evaluation_set_store.create(payload, created_by=_run_creator_user_uuid(request))
+    except ControlPlaneStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ApiResponse(data=created)
+
+
+@router.get("/evaluation-sets/{set_id}", response_model=ApiResponse[EvaluationSet])
+async def get_evaluation_set(set_id: str, request: Request) -> ApiResponse[EvaluationSet]:
+    return ApiResponse(data=_evaluation_set_for_actor(request, set_id))
+
+
+@router.put("/evaluation-sets/{set_id}", response_model=ApiResponse[EvaluationSet])
+async def update_evaluation_set(
+    set_id: str, payload: EvaluationSetInput, request: Request
+) -> ApiResponse[EvaluationSet]:
+    current = _evaluation_set_for_actor(request, set_id)
+    if payload.agent_id != current.agent_id:
+        raise HTTPException(status_code=422, detail="評価セットの業務 Agent は変えられません。")
+    try:
+        updated = evaluation_set_store.update(set_id, payload)
+    except ControlPlaneStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ApiResponse(data=updated)
+
+
+@router.delete("/evaluation-sets/{set_id}", response_model=ApiResponse[None])
+async def delete_evaluation_set(set_id: str, request: Request) -> ApiResponse[None]:
+    """評価セットを削除する（評価の結果は残す）。実行中の評価が使っていれば 409。"""
+    item = _evaluation_set_for_actor(request, set_id)
+    if evaluation_store.has_active_for_set(item.id):
+        raise HTTPException(
+            status_code=409,
+            detail="この評価セットで評価を実行しています。終わってから削除してください。",
+        )
+    try:
+        evaluation_set_store.delete(item.id)
+    except ControlPlaneStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return ApiResponse(data=None)
+
+
+@router.get("/evaluation-sets/{set_id}/cases.xlsx")
+async def export_evaluation_set(set_id: str, request: Request) -> Response:
+    item = _evaluation_set_for_actor(request, set_id)
+    return Response(
+        content=await run_in_threadpool(export_set_xlsx, item),
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{item.id}.xlsx"'},
+    )
+
+
+@router.post("/evaluations", response_model=ApiResponse[EvaluationJob], status_code=202)
+async def create_evaluation(
+    evaluation: EvaluationRequest,
+    request: Request,
+) -> ApiResponse[EvaluationJob]:
+    """品質評価を始める（#776）。権限は middleware のメニュー権限（`menu.evaluation`）。
+
+    評価の Run は始めた利用者の Run として作るため、業務 Agent の対象範囲を確かめる。
+    """
+    item = _evaluation_set_for_actor(request, evaluation.set_id)
+    agent = _require_evaluable_agent(request, item.agent_id)
+    if not agent.enabled or agent.migration_required:
+        raise HTTPException(status_code=409, detail="この業務 Agent は実行できない状態です。")
+    job = EvaluationJob(
+        agent_id=agent.id,
+        agent_name=agent.name,
+        set_id=item.id,
+        set_name=item.name,
+        created_by_user_uuid=_run_creator_user_uuid(request),
+        results=[EvaluationCaseResult(case=case) for case in item.cases],
+    )
+    try:
+        created = evaluation_store.create(job)
+    except EvaluationBusyError as exc:
+        raise HTTPException(
+            status_code=409, detail="ほかの評価を実行しています。終わってから始めてください。"
+        ) from exc
+    task = asyncio.get_running_loop().create_task(run_evaluation_job(created.id))
+    _evaluation_tasks.add(task)
+    task.add_done_callback(_evaluation_tasks.discard)
+    return ApiResponse(data=evaluation_store.with_previous(created))
+
+
+@router.get("/evaluations", response_model=ApiResponse[EvaluationJobsData])
+async def list_evaluations(
+    request: Request, set_id: str | None = Query(default=None, max_length=100)
+) -> ApiResponse[EvaluationJobsData]:
+    """最近の評価（新しい順。利用できる業務 Agent の評価だけ）。"""
+    jobs = [
+        job
+        for job in evaluation_store.list(set_id or None)
+        if _agent_allowed(request, job.agent_id)
+    ]
+    return ApiResponse(data=EvaluationJobsData(jobs=[job_item(job) for job in jobs]))
+
+
+def _evaluation_for_actor(request: Request, job_id: str) -> EvaluationJob:
+    try:
+        job = evaluation_store.get(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="評価が見つかりません。") from exc
+    if not _agent_allowed(request, job.agent_id):
+        raise HTTPException(status_code=404, detail="評価が見つかりません。")
+    return job
+
+
+@router.get("/evaluations/{job_id}", response_model=ApiResponse[EvaluationJob])
+async def get_evaluation(job_id: str, request: Request) -> ApiResponse[EvaluationJob]:
+    """評価の結果（同じ評価セットの前回の概要を添える）。"""
+    return ApiResponse(data=evaluation_store.with_previous(_evaluation_for_actor(request, job_id)))
+
+
+@router.post("/evaluations/{job_id}/cancel", response_model=ApiResponse[EvaluationJob])
+async def cancel_evaluation(job_id: str, request: Request) -> ApiResponse[EvaluationJob]:
+    """評価を取り消す（実行中のケースの Run も取り消し、残りのケースは実行しない）。"""
+    job = _evaluation_for_actor(request, job_id)
+    cancelled = evaluation_store.cancel(job.id)
+    for result in cancelled.results:
+        if result.status == CaseStatus.RUNNING and result.run_id:
+            with contextlib.suppress(KeyError):
+                runtime_repository.cancel_run(result.run_id)
+    return ApiResponse(data=evaluation_store.with_previous(evaluation_store.get(job.id)))
+
+
+@router.delete("/evaluations/{job_id}", response_model=ApiResponse[None])
+async def delete_evaluation(job_id: str, request: Request) -> ApiResponse[None]:
+    job = _evaluation_for_actor(request, job_id)
+    try:
+        evaluation_store.delete(job.id)
+    except EvaluationJobActiveError as exc:
+        raise HTTPException(
+            status_code=409, detail="実行中の評価は削除できません。取り消してから削除してください。"
+        ) from exc
+    return ApiResponse(data=None)
+
+
+@router.get("/usage", response_model=ApiResponse[UsageReport])
+async def get_usage_report(
+    request: Request,
+    days: int = Query(default=30),
+    timezone: str = Query(default=DEFAULT_TIMEZONE, max_length=64),
+) -> ApiResponse[UsageReport]:
+    """利用状況（#772）。利用できる業務 Agent の Run のモデル利用量を集計する。
+
+    権限は middleware のメニュー権限（`menu.usage`）で確かめる。日は `timezone`（画面の
+    ブラウザの IANA 名）で区切る。
+    """
+    if days not in USAGE_PERIOD_DAYS:
+        raise HTTPException(status_code=422, detail="期間は 7・30・90 日のどれかにしてください。")
+    try:
+        tz = resolve_timezone(timezone)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    report = await run_in_threadpool(
+        build_usage_report,
+        runs,
+        days=days,
+        now=datetime.now(UTC),
+        tz=tz,
+        agent_names=agent_names,
+        user_names=user_display_names,
+    )
+    return ApiResponse(data=report)
 
 
 @router.get("/audit/tool-calls", response_model=ApiResponse[ToolCallAuditData])
@@ -1919,7 +2531,7 @@ def _mcp_connections_response() -> McpConnectionsData:
 
 
 def _upsert_mcp_connection(server_id: str, payload: McpConnectionPatch) -> McpConnectionConfig:
-    return runtime_config_store.upsert_mcp_server(
+    config = runtime_config_store.upsert_mcp_server(
         server_id,
         label=payload.label,
         base_url=payload.base_url,
@@ -1933,6 +2545,116 @@ def _upsert_mcp_connection(server_id: str, payload: McpConnectionPatch) -> McpCo
         oauth_scope=payload.oauth_scope,
         service_audience=payload.service_audience,
     )
+    _persist(lambda: control_plane_store.save_mcp_connection(config))
+    return config
+
+
+@router.post("/mcp", response_class=Response)
+async def mcp_endpoint(request: Request) -> Response:
+    """業務 Agent の MCP（#778）。`initialize` / `ping` / `tools/list` / `tools/call` を処理する。
+
+    認証はサービストークン（audience `agent`）か Agent の API キー（`authorize_api_request`）。
+    ツールごとの権限は、ここで呼び出し元の利用者の権限から判定する。
+    """
+    principal = getattr(request.state, "principal", None)
+
+    def has_any_permission(permissions: frozenset[str]) -> bool:
+        return principal is not None and bool(principal.has_any_permission(set(permissions)))
+
+    return await mcp_http_response(
+        request, build_agent_mcp_server(principal), has_any_permission=has_any_permission
+    )
+
+
+@router.get("/settings/api-keys", response_model=ApiResponse[ApiKeysListData])
+async def list_api_keys() -> ApiResponse[ApiKeysListData]:
+    """API キー（#778。秘密と hash は返さない）。"""
+    records = api_key_registry.list()
+    people = {record.owner_user_uuid for record in records} | {
+        record.created_by_user_uuid for record in records if record.created_by_user_uuid
+    }
+    names = await run_in_threadpool(user_display_names, sorted(people))
+    return ApiResponse(
+        data=ApiKeysListData(
+            keys=[key_view(record, names) for record in records],
+            persistent=get_control_plane_store().persistent,
+        )
+    )
+
+
+@router.post("/settings/api-keys", response_model=ApiResponse[ApiKeyCreated])
+async def create_api_key(
+    payload: ApiKeyCreateRequest,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[ApiKeyCreated]:
+    """API キーを作る。秘密（`token`）はこの応答で 1 回だけ返す。
+
+    キーは実行する利用者（既定は作った利用者）として動く。ほかの利用者（連携用の専用の利用者など）を
+    選べるのはシステム管理者だけ（利用者を管理できる人だけが、ほかの利用者の権限を使うキーを作れる）。
+    """
+    creator = _request_principal(request)
+    if creator is None:
+        raise HTTPException(status_code=401, detail="ログインしてください。")
+    owner = payload.run_as_user_uuid or creator.user_uuid
+    if owner != creator.user_uuid:
+        if not creator.is_system_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="ほかの利用者として動くキーは、システム管理者だけが作れます。",
+            )
+        await run_in_threadpool(_require_key_owner_usable, owner)
+    known_agents = {agent.id for agent in runtime_repository.list_agents()}
+    unknown = sorted(set(payload.agent_ids or []) - known_agents)
+    if unknown:
+        raise HTTPException(
+            status_code=422, detail=f"業務 Agent が見つかりません: {', '.join(unknown)}"
+        )
+    record, token = api_key_registry.create(
+        payload, owner_user_uuid=owner, created_by_user_uuid=creator.user_uuid
+    )
+    try:
+        _persist(lambda: save_api_key(record))
+    except HTTPException:
+        api_key_registry.delete(record.id)
+        raise
+    names = await run_in_threadpool(user_display_names, sorted({owner, creator.user_uuid}))
+    return ApiResponse(data=ApiKeyCreated(key=key_view(record, names), token=token))
+
+
+def _require_key_owner_usable(user_uuid: str) -> None:
+    """キーで動ける利用者か（有効で、初回のパスワード変更が済んでいる）。"""
+    try:
+        user = get_security_service().store.get_user(user_uuid)
+    except Exception as exc:  # noqa: BLE001 - 利用者を確かめられなければ作らない
+        raise HTTPException(status_code=503, detail="利用者を確認できません。") from exc
+    if user is None:
+        raise HTTPException(status_code=422, detail="実行する利用者が見つかりません。")
+    if user.status != "ACTIVE":
+        raise HTTPException(status_code=422, detail="実行する利用者が無効になっています。")
+    if user.force_password_change:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "実行する利用者の初回のパスワード変更が済んでいないため、キーで動けません。"
+                "一度ログインしてパスワードを変更してください。"
+            ),
+        )
+
+
+@router.delete("/settings/api-keys/{key_id}", response_model=ApiResponse[None])
+async def delete_api_key_endpoint(
+    key_id: str,
+    _: None = Depends(require_admin),
+) -> ApiResponse[None]:
+    """API キーを削除する（失効。すぐに使えなくなる）。"""
+    try:
+        record = api_key_registry.get(key_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="API キーが見つかりません。") from exc
+    _persist(lambda: delete_api_key(record.id))
+    api_key_registry.delete(record.id)
+    return ApiResponse(data=None)
 
 
 @router.get("/settings/mcp-connections", response_model=ApiResponse[McpConnectionsData])
@@ -1985,6 +2707,7 @@ async def delete_mcp_connection(
             status_code=400,
             detail="RAG / NL2SQL・宣言・連携機能の MCP 接続は削除できません。",
         ) from exc
+    _persist(lambda: control_plane_store.delete_mcp_connection(server_id))
     return ApiResponse(data=_mcp_connections_response())
 
 
@@ -2025,12 +2748,13 @@ async def patch_tool_policy_settings(
         _validate_tool_policy_patch(patch)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    runtime_config_store.patch_tool_policy(
+    policy = runtime_config_store.patch_tool_policy(
         default_mode=patch.default_mode,
         allow=patch.allow,
         ask=patch.ask,
         deny=patch.deny,
     )
+    _persist(lambda: control_plane_store.save_tool_policy(policy))
     return ApiResponse(data=_tool_policy_settings_response())
 
 
@@ -2491,6 +3215,15 @@ def _validate_tool_policy_patch(patch: ToolPolicySettingsPatch) -> None:
     )
     if unknown_tools:
         raise ValueError(f"unknown tool: {', '.join(unknown_tools)}")
+
+
+def _persist(action: Callable[[], None]) -> None:
+    """変更を保存する（#764）。保存できなければ 503（変更は再起動で失われる）。"""
+    try:
+        action()
+    except ControlPlaneStoreError as exc:
+        logger.warning("agent_control_plane_persist_failed", extra={"reason": str(exc)})
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 def _is_mcp_function_name(name: str, connections: set[str]) -> bool:

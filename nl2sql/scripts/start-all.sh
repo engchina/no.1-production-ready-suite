@@ -77,7 +77,9 @@ wait_for_backend_ready() {
 
   echo "[start-all] backend readiness を待機します: ${BACKEND_READY_URL}"
   while true; do
-    if curl -fsS --max-time 2 "${BACKEND_READY_URL}" >/dev/null 2>&1; then
+    # 起動したローカルの backend だけを確かめる。環境変数のプロキシ（NO_PROXY に 127.0.0.1 が無い
+    # 端末）を経由すると 502 になり、ready を確認できないため、プロキシを使わない（#781）。
+    if curl -fsS --noproxy "*" --max-time 2 "${BACKEND_READY_URL}" >/dev/null 2>&1; then
       echo "[start-all] backend ready を確認しました。"
       return 0
     fi

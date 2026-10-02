@@ -8,20 +8,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 from collections.abc import Callable, Iterator, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from importlib import import_module
 from pathlib import Path
 from threading import Condition, Lock
 from typing import Any, Protocol
 from uuid import uuid4
 
-from pr_backend_core.oracle_session import init_oracle_session
-from pydantic import BaseModel, Field, computed_field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from app.features.agent.config import runtime_config_store
 from app.features.agent.tools import (
@@ -33,8 +32,13 @@ from app.features.agent.tools import (
     tool_registry,
 )
 from app.observability import record_runtime_event
+from app.oracle_connection import connect_platform_oracle
 from app.settings import get_settings
 
+logger = logging.getLogger(__name__)
+# Run・業務 Agent の Oracle のテーブル（作成はシステムテーブル。`app.system_schema`。#764）。
+RUNTIME_CHECKPOINT_TABLE = "AGENT_RUNTIME_CHECKPOINTS"
+RUNTIME_PROJECTION_PREFIX = "AGENT_RUNTIME"
 JsonObject = dict[str, Any]
 OracleConnectFactory = Callable[[], Any]
 
@@ -236,6 +240,8 @@ class RunCreateRequest(BaseModel):
     metadata: JsonObject = Field(default_factory=dict)
     # 公開前の下書きで実行する（管理者が試すとき。#770）。既定は公開中の版。
     draft: bool = False
+    # 会話（スレッド）を続けるときの ID（#768）。省略すると新しい会話を始める。
+    thread_id: str | None = Field(default=None, pattern=r"^thread_[0-9a-f]{32}$")
 
     @field_validator("goal")
     @classmethod
@@ -245,6 +251,80 @@ class RunCreateRequest(BaseModel):
         if not value.strip():
             raise ValueError("ゴールを入力してください。")
         return value
+
+
+class FeedbackRating(StrEnum):
+    """回答の評価（RAG と同じ値。#774）。"""
+
+    HELPFUL = "helpful"
+    NOT_HELPFUL = "not_helpful"
+
+
+class FeedbackReason(StrEnum):
+    """役に立たなかった理由（RAG の回答の理由に、Agent のツールの使い方を足したもの。#774）。"""
+
+    INCORRECT = "incorrect"
+    INCOMPLETE = "incomplete"
+    NOT_RELEVANT = "not_relevant"
+    ANSWER_UNTRUSTED = "answer_untrusted"
+    AMBIGUOUS_QUESTION = "ambiguous_question"
+    WRONG_ACTION = "wrong_action"
+
+
+FEEDBACK_COMMENT_MAX_CHARS = 1000
+
+
+class RunFeedbackRequest(BaseModel):
+    """チャットの回答への評価。役に立たなかったときは理由が必須（RAG と同じ。#774）。"""
+
+    rating: FeedbackRating
+    reason: FeedbackReason | None = None
+    comment: str = Field(default="", max_length=FEEDBACK_COMMENT_MAX_CHARS)
+
+    @model_validator(mode="after")
+    def _reason_for_not_helpful(self) -> RunFeedbackRequest:
+        if self.rating == FeedbackRating.NOT_HELPFUL:
+            if self.reason is None:
+                raise ValueError("役に立たなかった理由を選んでください。")
+            self.comment = self.comment.strip()
+        else:
+            # 役に立った評価には理由・コメントを残さない（RAG と同じ）。
+            self.reason = None
+            self.comment = ""
+        return self
+
+
+class RunFeedback(BaseModel):
+    """Run（チャットの 1 往復）の回答への評価。付け直すと上書きする（#774）。"""
+
+    rating: FeedbackRating
+    reason: FeedbackReason | None = None
+    comment: str = ""
+    user_uuid: str | None = None
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class RunNotRatableError(ValueError):
+    """回答の無い Run（完了していない Run）には評価を付けられない（#774）。"""
+
+
+# 評価の Run（#776）で、承認が要るツールを実行しなかったときにモデルへ返す文。
+EVALUATION_DRY_RUN_MESSAGE = (
+    "品質評価の実行中のため、このツールは実行していません（承認が要る操作）。"
+    "実行した場合の結果は分からないものとして、ここまでの情報で回答を完成させてください。"
+)
+# 評価の Run の印（`metadata`）。組み込み Runtime は承認が要るツールを実行せずに続ける。
+EVALUATION_DRY_RUN_KEY = "evaluation_dry_run"
+
+
+class RunUsage(BaseModel):
+    """Run が使ったモデルの量（#772）。承認待ちからの再開を含めた累計（SDK の `Usage`）。"""
+
+    model: str = ""
+    requests: int = Field(default=0, ge=0)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
 
 
 class RunState(BaseModel):
@@ -262,8 +342,50 @@ class RunState(BaseModel):
     # Run を作った利用者（共通認証の user_uuid。#233）。RAG / NL2SQL の MCP はこの利用者として呼ぶ。
     # この項目がない既存の Run は None。
     created_by_user_uuid: str | None = None
+    # 会話（スレッド。#768）。チャットの 1 往復が 1 Run。#768 より前の Run は None。
+    thread_id: str | None = None
+    # 回答への評価（#774）。評価していない Run は None。
+    feedback: RunFeedback | None = None
+    # 管理者の評価（Agent 管理の権限。だれの回答にも付けられ、本人の評価とは別に残す。#774）。
+    admin_review: RunFeedback | None = None
+    # モデルの利用量（#772）。組み込み Runtime がモデルを呼ぶ前の Run・#772 より前の Run は None。
+    usage: RunUsage | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
+
+
+class ThreadNotFoundError(LookupError):
+    """会話が無い・別の利用者や別の Agent の会話（#768）。"""
+
+
+class ThreadSummary(BaseModel):
+    thread_id: str
+    agent_id: str
+    title: str
+    run_count: int
+    last_status: RunStatus
+    created_at: datetime
+    updated_at: datetime
+
+
+class ThreadsData(BaseModel):
+    threads: list[ThreadSummary] = Field(default_factory=list)
+
+
+class ThreadData(BaseModel):
+    thread_id: str
+    agent_id: str
+    runs: list[RunState] = Field(default_factory=list)
+
+
+def run_answer_text(run: RunState) -> str | None:
+    """組み込み Runtime の最終回答（`kind="answer"` の成果物）。"""
+    for artifact in reversed(run.artifacts):
+        if artifact.kind == "answer" and isinstance(artifact.content, dict):
+            text = artifact.content.get("text")
+            if isinstance(text, str):
+                return text
+    return None
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -366,6 +488,16 @@ class AgentRuntimeRepositoryContract(Protocol):
     def complete_builtin_run(self, run_id: str, answer: str) -> RunState: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
+    def set_run_feedback(
+        self, run_id: str, feedback: RunFeedback, *, admin: bool = False
+    ) -> RunState: ...
+    def thread_history(self, run_id: str, *, limit: int) -> list[tuple[str, str]]: ...
+    def list_threads(
+        self, *, user_uuid: str | None, agent_id: str | None = None
+    ) -> list[ThreadSummary]: ...
+    def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData: ...
+    def record_builtin_dry_run_steps(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
+    def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None: ...
     def list_runs(self) -> list[RunState]: ...
     def get_run(self, run_id: str) -> RunState: ...
     def list_artifacts(self, run_id: str) -> list[Artifact]: ...
@@ -643,12 +775,18 @@ class AgentRuntimeRepository:
             agent_version: int | str = (
                 "draft" if request.draft else agent.published_version or "draft"
             )
+            if request.thread_id is not None:
+                # 続ける会話は、同じ利用者・同じ Agent のものだけ（他人の会話へ書き込ませない）。
+                self._require_thread_locked(
+                    request.thread_id, user_uuid=created_by_user_uuid, agent_id=request.agent_id
+                )
             run = RunState(
                 id=f"run_{uuid4().hex}",
                 goal=request.goal,
                 agent_id=request.agent_id,
                 runtime_id=BUILTIN_RUNTIME_ID,
                 created_by_user_uuid=created_by_user_uuid,
+                thread_id=request.thread_id or f"thread_{uuid4().hex}",
                 status=RunStatus.QUEUED,
                 metadata={**request.metadata, "agent_version": agent_version},
             )
@@ -661,6 +799,77 @@ class AgentRuntimeRepository:
             )
             self._persist_locked()
             return run.model_copy(deep=True)
+
+    def _thread_runs_locked(self, thread_id: str) -> list[RunState]:
+        return sorted(
+            (run for run in self._runs.values() if run.thread_id == thread_id),
+            key=lambda run: run.created_at,
+        )
+
+    def _require_thread_locked(
+        self, thread_id: str, *, user_uuid: str | None, agent_id: str | None = None
+    ) -> list[RunState]:
+        runs = self._thread_runs_locked(thread_id)
+        if (
+            not runs
+            or runs[0].created_by_user_uuid != user_uuid
+            or (agent_id is not None and runs[0].agent_id != agent_id)
+        ):
+            raise ThreadNotFoundError(thread_id)
+        return runs
+
+    def thread_history(self, run_id: str, *, limit: int) -> list[tuple[str, str]]:
+        """同じ会話の前の往復（質問と回答。完了したものだけ、古い順、最大 `limit` 往復）。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            if run.thread_id is None:
+                return []
+            turns = [
+                (previous.goal, answer)
+                for previous in self._thread_runs_locked(run.thread_id)
+                if previous.id != run.id
+                and previous.created_at <= run.created_at
+                and previous.status == RunStatus.COMPLETED
+                and (answer := run_answer_text(previous)) is not None
+            ]
+            return turns[-limit:] if limit > 0 else []
+
+    def list_threads(
+        self, *, user_uuid: str | None, agent_id: str | None = None
+    ) -> list[ThreadSummary]:
+        """利用者の会話の一覧（新しい順）。会話は作った利用者だけが見る（チャットは個人の作業）。"""
+        with self._lock:
+            grouped: dict[str, list[RunState]] = {}
+            for run in self._runs.values():
+                if run.thread_id is None or run.created_by_user_uuid != user_uuid:
+                    continue
+                if agent_id is not None and run.agent_id != agent_id:
+                    continue
+                grouped.setdefault(run.thread_id, []).append(run)
+            summaries = []
+            for thread_id, runs in grouped.items():
+                runs.sort(key=lambda item: item.created_at)
+                summaries.append(
+                    ThreadSummary(
+                        thread_id=thread_id,
+                        agent_id=runs[0].agent_id,
+                        title=runs[0].goal.strip().splitlines()[0][:80],
+                        run_count=len(runs),
+                        last_status=runs[-1].status,
+                        created_at=runs[0].created_at,
+                        updated_at=max(run.updated_at for run in runs),
+                    )
+                )
+            return sorted(summaries, key=lambda item: item.updated_at, reverse=True)
+
+    def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData:
+        with self._lock:
+            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid)
+            return ThreadData(
+                thread_id=thread_id,
+                agent_id=runs[0].agent_id,
+                runs=[run.model_copy(deep=True) for run in runs],
+            )
 
     def begin_builtin_run(self, run_id: str) -> tuple[RunState, AgentProfile] | None:
         """実行を始める（取消済み・終了済みなら None）。"""
@@ -849,6 +1058,68 @@ class AgentRuntimeRepository:
             if not _is_terminal(run.status):
                 self._fail_builtin_locked(run, code, detail)
             return run.model_copy(deep=True)
+
+    def set_run_feedback(
+        self, run_id: str, feedback: RunFeedback, *, admin: bool = False
+    ) -> RunState:
+        """回答への評価を保存する（上書き。#774）。完了していない Run は RunNotRatableError。
+
+        `admin` は管理者の評価（本人の評価とは別の項目）。
+        """
+        with self._lock:
+            run = self._require_run(run_id)
+            if run.status != RunStatus.COMPLETED or run_answer_text(run) is None:
+                raise RunNotRatableError(run_id)
+            if admin:
+                run.admin_review = feedback
+            else:
+                run.feedback = feedback
+            self._persist_locked()
+            return run.model_copy(deep=True)
+
+    def record_builtin_dry_run_steps(self, run_id: str, calls: Sequence[ToolCall]) -> None:
+        """評価の Run で実行しなかった（承認が要る）ツールの呼び出しを step に残す（#776）。
+
+        モデルがどのツールをどの引数で呼ぼうとしたかを、品質評価のツールの選択の判定に使う。
+        """
+        now = _now()
+        with self._lock:
+            run = self._require_run(run_id)
+            for call in calls:
+                run.steps.append(
+                    RunStep(
+                        run_id=run.id,
+                        status=StepStatus.CANCELLED,
+                        tool_call=call,
+                        tool_result=ToolResult(
+                            name=call.name,
+                            success=False,
+                            error=EVALUATION_DRY_RUN_MESSAGE,
+                            error_code="evaluation.dry_run",
+                            started_at=now,
+                            completed_at=now,
+                        ),
+                        started_at=now,
+                        completed_at=now,
+                    )
+                )
+                self._append_event(
+                    run,
+                    RunEventType.RUNTIME_EVENT,
+                    f"評価中のため、承認が要るツール {call.name} を実行しませんでした。",
+                    {"tool_name": call.name, "evaluation_dry_run": True},
+                )
+            run.updated_at = now
+            self._persist_locked()
+
+    def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None:
+        """モデルの利用量（再開を含めた累計）を Run に記録する（#772）。"""
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None:
+                return
+            run.usage = usage
+            self._persist_locked()
 
     def note_builtin_warning(self, run_id: str, message: str) -> None:
         """実行は続けるが利用者に伝えたいこと（取得できなかった MCP 接続など）をイベントに残す。"""
@@ -1174,79 +1445,39 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
     def __init__(
         self,
         *,
-        dsn: str,
-        user: str,
-        password: str,
-        table_name: str = "AGENT_RUNTIME_CHECKPOINTS",
         checkpoint_key: str = "default",
-        create_schema: bool = True,
         connect_factory: OracleConnectFactory | None = None,
-        wallet_dir: str | None = None,
-        wallet_password: str | None = None,
     ) -> None:
-        self._oracle_dsn = dsn
-        self._oracle_user = user
-        self._oracle_password = password
-        self._oracle_wallet_dir = (wallet_dir or "").strip() or None
-        self._oracle_wallet_password = wallet_password or None
-        self._oracle_table_name = _validate_oracle_identifier(table_name)
+        # 接続は共通の PLATFORM_ORACLE_*、テーブルはシステムテーブルが作る（#764）。
+        self._oracle_table_name = RUNTIME_CHECKPOINT_TABLE
         self._oracle_checkpoint_key = checkpoint_key
-        self._oracle_connect_factory = connect_factory
+        self._oracle_connect_factory = connect_factory or connect_platform_oracle
         super().__init__(snapshot_path=None)
-        if create_schema:
-            self._ensure_oracle_schema()
         self._load_snapshot_from_oracle()
 
     def _connect_oracle(self) -> Any:
-        if self._oracle_connect_factory is not None:
-            return self._oracle_connect_factory()
-        oracledb = import_module("oracledb")
-        connection = oracledb.connect(**self._oracle_connect_kwargs())
-        # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
-        init_oracle_session(connection)
-        return connection
-
-    def _oracle_connect_kwargs(self) -> dict[str, object]:
-        """Thin mode の接続引数。Wallet(mTLS) 指定時だけ config_dir 等を足す。"""
-        kwargs: dict[str, object] = {
-            "user": self._oracle_user,
-            "password": self._oracle_password,
-            "dsn": self._oracle_dsn,
-        }
-        if self._oracle_wallet_dir:
-            wallet_dir = str(Path(self._oracle_wallet_dir).expanduser())
-            kwargs["config_dir"] = wallet_dir
-            kwargs["wallet_location"] = wallet_dir
-        if self._oracle_wallet_password:
-            kwargs["wallet_password"] = self._oracle_wallet_password
-        return kwargs
-
-    def _ensure_oracle_schema(self) -> None:
-        ddl = f"""
-        CREATE TABLE {self._oracle_table_name} (
-            checkpoint_key VARCHAR2(128) PRIMARY KEY,
-            snapshot_json CLOB NOT NULL,
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-        )
-        """
-        with self._connect_oracle() as connection, connection.cursor() as cursor:
-            try:
-                cursor.execute(ddl)
-            except Exception as exc:
-                if not _is_oracle_object_exists_error(exc):
-                    raise
-            connection.commit()
+        return self._oracle_connect_factory()
 
     def _load_snapshot_from_oracle(self) -> None:
         query = (
             f"SELECT snapshot_json FROM {self._oracle_table_name} "
             "WHERE checkpoint_key = :checkpoint_key"
         )
-        with self._connect_oracle() as connection, connection.cursor() as cursor:
-            cursor.execute(query, checkpoint_key=self._oracle_checkpoint_key)
-            row = cursor.fetchone()
-            # CLOB は接続を閉じる前に読む（閉じた後に読むと DPY-1001。#765）。
-            snapshot_json = _oracle_lob_to_text(row[0]) if row is not None else None
+        try:
+            with self._connect_oracle() as connection, connection.cursor() as cursor:
+                cursor.execute(query, checkpoint_key=self._oracle_checkpoint_key)
+                row = cursor.fetchone()
+                # CLOB は接続を閉じる前に読む（閉じた後に読むと DPY-1001。#765）。
+                snapshot_json = _oracle_lob_to_text(row[0]) if row is not None else None
+        except Exception as exc:
+            if not _is_oracle_table_missing_error(exc):
+                raise
+            # システムテーブルを作る前でも起動できるようにする（画面は作成へ案内する）。
+            logger.warning(
+                "agent_runtime_tables_missing",
+                extra={"table": self._oracle_table_name},
+            )
+            return
         if snapshot_json is None:
             return
         try:
@@ -1327,47 +1558,18 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
     def __init__(
         self,
         *,
-        dsn: str,
-        user: str,
-        password: str,
-        table_name: str = "AGENT_RUNTIME_CHECKPOINTS",
         checkpoint_key: str = "default",
-        projection_prefix: str = "AGENT_RUNTIME",
         projection_retention_days: int = 0,
         projection_write_mode: str = "replace",
-        create_schema: bool = True,
         connect_factory: OracleConnectFactory | None = None,
-        wallet_dir: str | None = None,
-        wallet_password: str | None = None,
     ) -> None:
-        self._oracle_projection_prefix = _validate_oracle_identifier(projection_prefix)
+        self._oracle_projection_prefix = RUNTIME_PROJECTION_PREFIX
         self._oracle_projection_tables = _oracle_projection_tables(self._oracle_projection_prefix)
         self._oracle_projection_retention_days = max(0, projection_retention_days)
         self._oracle_projection_write_mode = projection_write_mode.strip().lower() or "replace"
         if self._oracle_projection_write_mode not in {"replace", "incremental"}:
             raise ValueError("projection_write_mode must be replace or incremental")
-        super().__init__(
-            dsn=dsn,
-            user=user,
-            password=password,
-            table_name=table_name,
-            checkpoint_key=checkpoint_key,
-            create_schema=create_schema,
-            connect_factory=connect_factory,
-            wallet_dir=wallet_dir,
-            wallet_password=wallet_password,
-        )
-
-    def _ensure_oracle_schema(self) -> None:
-        super()._ensure_oracle_schema()
-        with self._connect_oracle() as connection, connection.cursor() as cursor:
-            for ddl in [*self._oracle_projection_ddls(), *self._oracle_projection_index_ddls()]:
-                try:
-                    cursor.execute(ddl)
-                except Exception as exc:
-                    if not _is_oracle_object_exists_error(exc):
-                        raise
-            connection.commit()
+        super().__init__(checkpoint_key=checkpoint_key, connect_factory=connect_factory)
 
     def _persist_locked(self) -> None:
         snapshot = self._export_snapshot_locked()
@@ -1535,103 +1737,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
             if isinstance(step_id, str) and isinstance(artifact_id, str):
                 artifact_ids_by_step.setdefault(step_id, []).append(artifact_id)
         return artifact_ids_by_step
-
-    def _oracle_projection_ddls(self) -> list[str]:
-        tables = self._oracle_projection_tables
-        return [
-            f"""
-            CREATE TABLE {tables["runs"]} (
-                run_id VARCHAR2(128) PRIMARY KEY,
-                agent_id VARCHAR2(128) NOT NULL,
-                status VARCHAR2(32) NOT NULL,
-                goal CLOB NOT NULL,
-                metadata_json CLOB,
-                pending_tool_calls_json CLOB,
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                updated_at TIMESTAMP WITH TIME ZONE NOT NULL
-            )
-            """,
-            f"""
-            CREATE TABLE {tables["events"]} (
-                event_id VARCHAR2(128) PRIMARY KEY,
-                run_id VARCHAR2(128) NOT NULL,
-                event_type VARCHAR2(128) NOT NULL,
-                message CLOB NOT NULL,
-                payload_json CLOB,
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL
-            )
-            """,
-            f"""
-            CREATE TABLE {tables["steps"]} (
-                step_id VARCHAR2(128) PRIMARY KEY,
-                run_id VARCHAR2(128) NOT NULL,
-                kind VARCHAR2(64) NOT NULL,
-                status VARCHAR2(32) NOT NULL,
-                tool_name VARCHAR2(256),
-                approval_id VARCHAR2(128),
-                tool_call_json CLOB,
-                tool_result_json CLOB,
-                started_at TIMESTAMP WITH TIME ZONE,
-                completed_at TIMESTAMP WITH TIME ZONE
-            )
-            """,
-            f"""
-            CREATE TABLE {tables["approvals"]} (
-                approval_id VARCHAR2(128) PRIMARY KEY,
-                run_id VARCHAR2(128) NOT NULL,
-                step_id VARCHAR2(128) NOT NULL,
-                tool_name VARCHAR2(256) NOT NULL,
-                status VARCHAR2(32) NOT NULL,
-                reason CLOB NOT NULL,
-                decided_by VARCHAR2(256),
-                decided_at TIMESTAMP WITH TIME ZONE,
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                tool_call_json CLOB NOT NULL
-            )
-            """,
-            f"""
-            CREATE TABLE {tables["artifacts"]} (
-                artifact_id VARCHAR2(128) PRIMARY KEY,
-                run_id VARCHAR2(128) NOT NULL,
-                name VARCHAR2(512) NOT NULL,
-                kind VARCHAR2(128) NOT NULL,
-                content_json CLOB NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL
-            )
-            """,
-        ]
-
-    def _oracle_projection_index_ddls(self) -> list[str]:
-        tables = self._oracle_projection_tables
-        prefix = self._oracle_projection_prefix
-        return [
-            f"""
-            CREATE INDEX {prefix}_RUNS_STATUS_CREATED_IX
-            ON {tables["runs"]} (status, created_at)
-            """,
-            f"""
-            CREATE INDEX {prefix}_EVENTS_RUN_TYPE_CREATED_IX
-            ON {tables["events"]} (run_id, event_type, created_at)
-            """,
-            f"""
-            CREATE INDEX {prefix}_STEPS_RUN_TOOL_STATUS_IX
-            ON {tables["steps"]} (run_id, tool_name, status, completed_at)
-            """,
-            f"""
-            CREATE INDEX {prefix}_STEPS_ERROR_CODE_IX
-            ON {tables["steps"]} (
-                JSON_VALUE(tool_result_json, '$.error_code' RETURNING VARCHAR2(128))
-            )
-            """,
-            f"""
-            CREATE INDEX {prefix}_APPROVALS_RUN_STATUS_IX
-            ON {tables["approvals"]} (run_id, status, created_at)
-            """,
-            f"""
-            CREATE INDEX {prefix}_ARTIFACTS_RUN_KIND_IX
-            ON {tables["artifacts"]} (run_id, kind, created_at)
-            """,
-        ]
 
     def _replace_projection_cursor(
         self,
@@ -2140,9 +2245,9 @@ def _projection_tool_call_where(
     return where_sql, params
 
 
-def _is_oracle_object_exists_error(exc: Exception) -> bool:
+def _is_oracle_table_missing_error(exc: Exception) -> bool:
     text = str(exc)
-    return "ORA-00955" in text or "name is already used by an existing object" in text
+    return "ORA-00942" in text or "table or view does not exist" in text
 
 
 def _oracle_lob_to_text(value: object) -> str:
@@ -2676,48 +2781,13 @@ def build_runtime_repository() -> AgentRuntimeRepositoryContract:
     settings = get_settings()
     backend = settings.agent_runtime_repository_backend.strip().lower()
     if backend in {"oracle", "oracle_checkpoint", "oracle_normalized"}:
-        dsn = settings.agent_runtime_oracle_dsn
-        user = settings.agent_runtime_oracle_user
-        password = settings.agent_runtime_oracle_password
-        missing = [
-            name
-            for name, value in {
-                "AGENT_RUNTIME_ORACLE_DSN": dsn,
-                "AGENT_RUNTIME_ORACLE_USER": user,
-                "AGENT_RUNTIME_ORACLE_PASSWORD": password,
-            }.items()
-            if not value
-        ]
-        if missing:
-            raise RuntimeError(
-                "Oracle-backed Agent Runtime repository requires: " + ", ".join(missing)
-            )
-        if dsn is None or user is None or password is None:
-            raise RuntimeError("Oracle-backed Agent Runtime repository configuration is invalid")
+        # 共通の PLATFORM_ORACLE_* で接続する（#764。旧 AGENT_RUNTIME_ORACLE_* は読まない）。
         if backend == "oracle_normalized":
             return AgentRuntimeOracleNormalizedRepository(
-                dsn=dsn,
-                user=user,
-                password=password,
-                table_name=settings.agent_runtime_oracle_table,
-                checkpoint_key=settings.agent_runtime_oracle_checkpoint_key,
-                projection_prefix=settings.agent_runtime_oracle_projection_prefix,
-                projection_retention_days=(settings.agent_runtime_oracle_projection_retention_days),
-                projection_write_mode=settings.agent_runtime_oracle_projection_write_mode,
-                create_schema=settings.agent_runtime_oracle_create_schema,
-                wallet_dir=settings.agent_runtime_oracle_wallet_dir,
-                wallet_password=settings.agent_runtime_oracle_wallet_password,
+                projection_retention_days=settings.agent_runtime_projection_retention_days,
+                projection_write_mode=settings.agent_runtime_projection_write_mode,
             )
-        return AgentRuntimeOracleCheckpointRepository(
-            dsn=dsn,
-            user=user,
-            password=password,
-            table_name=settings.agent_runtime_oracle_table,
-            checkpoint_key=settings.agent_runtime_oracle_checkpoint_key,
-            create_schema=settings.agent_runtime_oracle_create_schema,
-            wallet_dir=settings.agent_runtime_oracle_wallet_dir,
-            wallet_password=settings.agent_runtime_oracle_wallet_password,
-        )
+        return AgentRuntimeOracleCheckpointRepository()
     if backend in {"memory", "in_memory", "file", "file_snapshot"}:
         snapshot_path = (
             settings.agent_runtime_snapshot_path

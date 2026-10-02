@@ -177,6 +177,198 @@ export const BUILTIN_RUNTIME_STATUS = {
   ],
 };
 
+/** 応答に出す評価（mock の内部の数 `_polls` を除く）。 */
+function publicJob(job: Json): Json {
+  return clone(Object.fromEntries(Object.entries(job).filter(([key]) => key !== "_polls")));
+}
+
+/** 評価セットの入力を保存する形にする（id を省いたケースは `case-<番号>`）。 */
+function normalizedSet(body: Json): Json {
+  return {
+    agent_id: body.agent_id,
+    name: body.name,
+    description: body.description ?? "",
+    cases: ((body.cases as Json[] | undefined) ?? []).map((item, index) => ({
+      id: (item.id as string | undefined) || `case-${index + 1}`,
+      question: item.question,
+      expected: item.expected,
+      expected_tools: item.expected_tools ?? [],
+    })),
+  };
+}
+
+/** 評価の概要（backend の `summarize` と同じ数え方）。 */
+export function evaluationSummary(results: Json[]): Json {
+  const judged = results.filter((item) => item.status === "judged" && item.judgement);
+  const verdict = (name: string) => judged.filter((item) => (item.judgement as Json).verdict === name).length;
+  const completed = results.filter((item) => item.status !== "pending" && item.status !== "running").length;
+  const cancelled = results.filter((item) => item.status === "cancelled").length;
+  const errors = results.filter((item) =>
+    ["run_failed", "needs_approval", "timed_out", "judge_failed"].includes(String(item.status))
+  ).length;
+  const scores = judged.map((item) => Number((item.judgement as Json).score));
+  const finished = completed - cancelled;
+  const toolResults = results.filter((item) => item.tool_selection_correct !== null && item.tool_selection_correct !== undefined);
+  const toolCorrect = toolResults.filter((item) => item.tool_selection_correct === true).length;
+  return {
+    total: results.length,
+    completed,
+    correct: verdict("correct"),
+    incorrect: verdict("incorrect"),
+    uncertain: verdict("uncertain"),
+    errors,
+    pass_rate: finished > 0 ? verdict("correct") / finished : null,
+    average_score: scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null,
+    tool_cases: toolResults.length,
+    tool_correct: toolCorrect,
+    tool_accuracy: toolResults.length ? toolCorrect / toolResults.length : null,
+  };
+}
+
+/** 実行中の評価を完了にする（質問に「売上」を含むケースは誤り、それ以外は正しい）。 */
+function finishEvaluation(job: Json) {
+  for (const [index, result] of (job.results as Json[]).entries()) {
+    const question = String((result.case as Json).question);
+    const wrong = question.includes("売上");
+    result.status = "judged";
+    result.run_id = `run-eval-${index + 1}`;
+    result.answer = wrong ? "分かりません。" : "毎月 25 日です。過ぎた分は翌月の精算になります。";
+    result.judgement = wrong
+      ? { verdict: "incorrect", score: 0, summary: "金額を答えていません。", missing_points: ["今月の売上の合計金額"] }
+      : { verdict: "correct", score: 1, summary: "要点を満たしています。", missing_points: [] };
+    result.duration_ms = 4200;
+    const expectedTools = ((result.case as Json).expected_tools as string[] | undefined) ?? [];
+    result.tool_calls = wrong ? [] : ["rag__rag_search"];
+    result.tool_selection_correct = expectedTools.length
+      ? expectedTools.every((tool) => (result.tool_calls as string[]).some((called) => called === tool || called.endsWith(`__${tool}`)))
+      : null;
+  }
+  job.status = "completed";
+  job.finished_at = MOCK_NOW;
+  job.summary = evaluationSummary(job.results as Json[]);
+}
+
+/** 自動実行の入力を保存する形にする（次回は MOCK_NOW の翌日。Webhook・無効は無し）。 */
+function automationFields(body: Json): Json {
+  const schedule = body.trigger === "schedule" ? (body.schedule ?? null) : null;
+  return {
+    agent_id: body.agent_id,
+    name: body.name,
+    goal: body.goal,
+    enabled: body.enabled ?? true,
+    trigger: body.trigger ?? "schedule",
+    schedule,
+    next_run_at:
+      schedule && (body.enabled ?? true) ? new Date(Date.parse(MOCK_NOW) + 86_400_000).toISOString() : null,
+  };
+}
+
+function answerTextOf(run: Json): string {
+  const answer = ((run.artifacts as Json[] | undefined) ?? []).find((artifact) => artifact.kind === "answer");
+  const text = (answer?.content as Json | undefined)?.text;
+  return typeof text === "string" ? text : "";
+}
+
+/** Run の評価から `GET /api/feedback` の応答を作る（前の期間は 0 件。#774）。 */
+function feedbackReportFromRuns(
+  runs: Json[],
+  days: number,
+  filters: { agentId: string | null; rating: string | null; reason: string | null }
+): Json {
+  const rated = runs.filter(
+    (run) => (run.feedback || run.admin_review) && (!filters.agentId || run.agent_id === filters.agentId)
+  );
+  const owned = rated.filter((run) => run.feedback).map((run) => run.feedback as Json);
+  const reviews = rated.filter((run) => run.admin_review).map((run) => run.admin_review as Json);
+  const helpful = owned.filter((item) => item.rating === "helpful").length;
+  const reasons = new Map<string, number>();
+  for (const item of owned) {
+    const reason = item.reason as string | null;
+    if (reason) reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+  }
+  const summary = {
+    total: owned.length,
+    helpful,
+    not_helpful: owned.length - helpful,
+    helpful_rate: owned.length ? helpful / owned.length : null,
+    reason_counts: [...reasons.entries()].sort((a, b) => b[1] - a[1]).map(([reason, count]) => ({ reason, count })),
+    admin_reviewed: reviews.length,
+    admin_not_helpful: reviews.filter((item) => item.rating === "not_helpful").length,
+  };
+  const matches = (item: unknown) => {
+    const rating = item as Json | null | undefined;
+    return Boolean(
+      rating &&
+        (!filters.rating || rating.rating === filters.rating) &&
+        (!filters.reason || rating.reason === filters.reason)
+    );
+  };
+  const items = rated
+    .filter((run) => matches(run.feedback) || matches(run.admin_review))
+    .map((run) => ({
+      run_id: run.id,
+      thread_id: run.thread_id ?? null,
+      agent_id: run.agent_id,
+      agent_name: run.agent_id === "default" ? "汎用業務 Agent" : "",
+      user_uuid: run.created_by_user_uuid ?? null,
+      display_name: "ローカル利用者",
+      question: run.goal,
+      answer: answerTextOf(run),
+      feedback: run.feedback ?? null,
+      admin_review: run.admin_review ?? null,
+      reviewer_display_name: run.admin_review ? "ローカル利用者" : "",
+      updated_at: MOCK_NOW,
+    }));
+  return {
+    days,
+    since: MOCK_NOW,
+    until: MOCK_NOW,
+    summary,
+    previous: {
+      total: 0,
+      helpful: 0,
+      not_helpful: 0,
+      helpful_rate: null,
+      reason_counts: [],
+      admin_reviewed: 0,
+      admin_not_helpful: 0,
+    },
+    items,
+    matched: items.length,
+  };
+}
+
+const EMPTY_USAGE_TOTALS = {
+  runs: 0,
+  runs_with_usage: 0,
+  requests: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+  total_tokens: 0,
+};
+
+/** Run の無い期間の `GET /api/usage`（#772）。日は MOCK_NOW までの `days` 日（古い順）。 */
+export function emptyUsageReport(days: number, timezone = "Asia/Tokyo"): Json {
+  const end = new Date(MOCK_NOW);
+  const dayList = Array.from({ length: days }, (_, index) => {
+    const day = new Date(end);
+    day.setUTCDate(end.getUTCDate() - (days - 1 - index));
+    return day.toISOString().slice(0, 10);
+  });
+  return {
+    days,
+    timezone,
+    since: `${dayList[0]}T00:00:00+09:00`,
+    until: MOCK_NOW,
+    totals: { ...EMPTY_USAGE_TOTALS },
+    previous: { ...EMPTY_USAGE_TOTALS },
+    by_agent: [],
+    by_user: [],
+    by_model: [],
+    by_day: dayList.map((day) => ({ ...EMPTY_USAGE_TOTALS, day })),
+  };
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -193,6 +385,26 @@ function createState() {
     tools: d.tools as unknown as Json[],
     // 監査の記録（`GET /api/audit/tool-calls`）。offset / limit で切り出して返す（#265）。
     auditRecords: [] as Json[],
+    // フィードバック（`GET /api/feedback`。#774）。null なら Run の評価から作る。
+    feedbackReport: null as Json | null,
+    // 自動実行（#784）。`automationRuns` は自動実行ごとの実行履歴。
+    automations: [] as Json[],
+    automationsPersistent: true,
+    automationRuns: {} as Record<string, Json[]>,
+    // 品質評価（#776）。新しい順。作成直後は実行中で、`pollsUntilDone` 回の取得の後に完了する。
+    evaluations: [] as Json[],
+    evaluationPollsUntilDone: 1,
+    // 評価セット（#776）と、Excel の取り込み（parse-xlsx）が返すケース。
+    evaluationSets: [] as Json[],
+    parsedCases: [
+      { id: "from-excel-1", question: "Excel の質問 1", expected: "Excel の要点 1", expected_tools: ["rag_search"] },
+      { id: "from-excel-2", question: "Excel の質問 2", expected: "Excel の要点 2", expected_tools: [] },
+    ] as Json[],
+    // API キー（`/api/settings/api-keys`。#778）。`apiKeysPersistent` が false なら保存先が無い。
+    apiKeys: [] as Json[],
+    apiKeysPersistent: true,
+    // 利用状況（`GET /api/usage`。#772）。期間（日数）ごとの応答。無い期間は Run の無い集計を返す。
+    usageReports: {} as Record<string, Json>,
     plugins: [] as Json[],
     marketplaces: [] as Json[],
     tracePolicy: d.tracePolicy as Json,
@@ -486,6 +698,69 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
 
   // --- Run / 承認 / 監査 ---
   if (method === "GET" && at("runs")) return { runs: state.runs };
+  // チャット（#768）。mock の Run はすぐ完了し、質問を引いた回答の成果物を持つ（実行中・承認待ちは spec が state を書き換える）。
+  if (method === "POST" && at("runs")) {
+    const threadId = typeof body.thread_id === "string" ? body.thread_id : null;
+    if (threadId && !state.runs.some((run) => run.thread_id === threadId)) {
+      throw new HttpError(404, "会話が見つかりません。");
+    }
+    const id = `run-chat-${state.runs.length + 1}`;
+    const run: Json = {
+      id,
+      goal: String(body.goal ?? ""),
+      agent_id: String(body.agent_id ?? "default"),
+      runtime_id: "builtin",
+      status: "completed",
+      steps: [],
+      events: [],
+      approvals: [],
+      artifacts: [{ id: `${id}-answer`, name: "回答", kind: "answer", content: { text: `「${String(body.goal ?? "")}」への回答です。` } }],
+      pending_tool_calls: [],
+      metadata: {},
+      created_by_user_uuid: "local",
+      thread_id: threadId ?? `thread_${String(state.runs.length + 1).padStart(32, "0")}`,
+      created_at: MOCK_NOW,
+      updated_at: MOCK_NOW,
+    };
+    state.runs.push(run);
+    return run;
+  }
+  // フィードバックの集計と一覧（#774）。`state.feedbackReport` があればそれを返し、無ければ Run の評価から作る。
+  if (method === "GET" && at("feedback")) {
+    const days = Number(query.get("days") ?? 30);
+    if (![7, 30, 90].includes(days)) throw new HttpError(422, "期間は 7・30・90 日のどれかにしてください。");
+    if (state.feedbackReport) return state.feedbackReport;
+    return feedbackReportFromRuns(state.runs, days, {
+      agentId: query.get("agent_id"),
+      rating: query.get("rating"),
+      reason: query.get("reason"),
+    });
+  }
+  if (method === "GET" && at("threads")) {
+    const agentId = query.get("agent_id");
+    const grouped = new Map<string, Json[]>();
+    for (const run of state.runs) {
+      if (typeof run.thread_id !== "string") continue;
+      if (agentId && run.agent_id !== agentId) continue;
+      grouped.set(run.thread_id, [...(grouped.get(run.thread_id) ?? []), run]);
+    }
+    return {
+      threads: [...grouped.entries()].map(([threadId, runs]) => ({
+        thread_id: threadId,
+        agent_id: runs[0].agent_id,
+        title: String(runs[0].goal).split("\n")[0],
+        run_count: runs.length,
+        last_status: runs[runs.length - 1].status,
+        created_at: runs[0].created_at,
+        updated_at: runs[runs.length - 1].updated_at,
+      })).reverse(),
+    };
+  }
+  if (method === "GET" && at("threads", "*")) {
+    const runs = state.runs.filter((run) => run.thread_id === second);
+    if (runs.length === 0) throw new HttpError(404, "会話が見つかりません。");
+    return { thread_id: second, agent_id: runs[0].agent_id, runs };
+  }
   if (head === "runs" && second) {
     const run = findOr404(state.runs, "id", second, "run");
     if (method === "GET" && at("runs", "*", "audit")) {
@@ -497,6 +772,34 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return run;
     }
     if (method === "POST" && at("runs", "*", "resume")) return run;
+    // チャットの回答への評価（#774）。役に立たなかったときは理由が必須。役に立った評価は理由・コメントを残さない。
+    // 管理者の評価（#774）。本人の評価とは別に残す。
+    if (method === "PUT" && at("runs", "*", "admin-review")) {
+      if (run.status !== "completed") throw new HttpError(409, "回答が出た Run にだけ評価を付けられます。");
+      const helpful = body.rating === "helpful";
+      if (!helpful && !body.reason) throw new HttpError(422, "役に立たなかった理由を選んでください。");
+      run.admin_review = {
+        rating: body.rating,
+        reason: helpful ? null : body.reason,
+        comment: helpful ? "" : String(body.comment ?? "").trim(),
+        user_uuid: "local",
+        updated_at: MOCK_NOW,
+      };
+      return run;
+    }
+    if (method === "PUT" && at("runs", "*", "feedback")) {
+      if (run.status !== "completed") throw new HttpError(409, "回答が出た Run にだけフィードバックを付けられます。");
+      const helpful = body.rating === "helpful";
+      if (!helpful && !body.reason) throw new HttpError(422, "役に立たなかった理由を選んでください。");
+      run.feedback = {
+        rating: body.rating,
+        reason: helpful ? null : body.reason,
+        comment: helpful ? "" : String(body.comment ?? "").trim(),
+        user_uuid: "local",
+        updated_at: MOCK_NOW,
+      };
+      return run;
+    }
     if (method === "POST" && at("runs", "*", "replay")) {
       const replay = { ...clone(run), id: `${String(run.id)}-replay-${state.runs.length}`, status: "completed" };
       state.runs.unshift(replay);
@@ -513,6 +816,195 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       }
     }
     throw new HttpError(404, `approval not found: ${second}`);
+  }
+  // --- 品質評価（#776） ---
+  // --- 評価セット（#776） ---
+  if (method === "GET" && at("evaluation-sets")) {
+    const agentId = query.get("agent_id");
+    return {
+      sets: state.evaluationSets
+        .filter((item) => !agentId || item.agent_id === agentId)
+        .map((item) => {
+          const latest = state.evaluations.find((job) => job.set_id === item.id);
+          return {
+            id: item.id,
+            agent_id: item.agent_id,
+            name: item.name,
+            description: item.description,
+            case_count: (item.cases as Json[]).length,
+            updated_at: item.updated_at,
+            last_job_id: latest?.id ?? null,
+            last_job_status: latest?.status ?? null,
+            last_pass_rate: latest ? ((latest.summary as Json).pass_rate ?? null) : null,
+          };
+        }),
+    };
+  }
+  if (method === "POST" && at("evaluation-sets", "parse-xlsx")) return { cases: state.parsedCases };
+  if (method === "POST" && at("evaluation-sets")) {
+    const item: Json = {
+      ...normalizedSet(body),
+      id: `evset-${state.evaluationSets.length + 1}`,
+      created_by_user_uuid: "local",
+      created_at: MOCK_NOW,
+      updated_at: MOCK_NOW,
+    };
+    state.evaluationSets.unshift(item);
+    return item;
+  }
+  if (head === "evaluation-sets" && second) {
+    const item = findOr404(state.evaluationSets, "id", second, "evaluation set");
+    if (method === "GET" && at("evaluation-sets", "*")) return item;
+    if (method === "PUT" && at("evaluation-sets", "*")) {
+      Object.assign(item, normalizedSet(body), { updated_at: MOCK_NOW });
+      return item;
+    }
+    if (method === "DELETE" && at("evaluation-sets", "*")) {
+      state.evaluationSets = state.evaluationSets.filter((candidate) => candidate !== item);
+      return null;
+    }
+  }
+  // --- 品質評価（#776） ---
+  if (method === "POST" && at("evaluations")) {
+    if (state.evaluations.some((job) => job.status === "running")) {
+      throw new HttpError(409, "ほかの評価を実行しています。終わってから始めてください。");
+    }
+    const evaluationSet = findOr404(state.evaluationSets, "id", String(body.set_id), "evaluation set");
+    const cases = evaluationSet.cases as Json[];
+    const job: Json = {
+      id: `eval-${state.evaluations.length + 1}`,
+      agent_id: evaluationSet.agent_id,
+      agent_name: evaluationSet.agent_id === "default" ? "汎用業務 Agent" : String(evaluationSet.agent_id),
+      set_id: evaluationSet.id,
+      set_name: evaluationSet.name,
+      status: "running",
+      created_by_user_uuid: "local",
+      results: cases.map((item) => ({
+        case: item,
+        status: "pending",
+        run_id: null,
+        answer: "",
+        judgement: null,
+        tool_calls: [],
+        tool_selection_correct: null,
+        error: null,
+        duration_ms: null,
+      })),
+      error: null,
+      summary: evaluationSummary([]),
+      created_at: MOCK_NOW,
+      started_at: MOCK_NOW,
+      finished_at: null,
+      previous_job_id: null,
+      previous_summary: null,
+      _polls: 0,
+    };
+    job.summary = evaluationSummary(job.results as Json[]);
+    const previous = state.evaluations.find((item) => item.set_id === evaluationSet.id && item.status === "completed");
+    if (previous) {
+      job.previous_job_id = previous.id;
+      job.previous_summary = previous.summary;
+    }
+    state.evaluations.unshift(job);
+    return publicJob(job);
+  }
+  if (method === "GET" && at("evaluations")) {
+    return {
+      jobs: state.evaluations.map((job) => ({
+        id: job.id,
+        agent_id: job.agent_id,
+        agent_name: job.agent_name,
+        set_id: job.set_id ?? "",
+        set_name: job.set_name ?? "",
+        status: job.status,
+        summary: job.summary,
+        created_at: job.created_at,
+        finished_at: job.finished_at,
+      })),
+    };
+  }
+  if (head === "evaluations" && second) {
+    const job = findOr404(state.evaluations, "id", second, "evaluation");
+    if (method === "GET" && at("evaluations", "*")) {
+      if (job.status === "running") {
+        job._polls = Number(job._polls) + 1;
+        if (Number(job._polls) > state.evaluationPollsUntilDone) finishEvaluation(job);
+      }
+      return publicJob(job);
+    }
+    if (method === "POST" && at("evaluations", "*", "cancel")) {
+      job.status = "cancelled";
+      for (const result of job.results as Json[]) {
+        if (result.status === "pending" || result.status === "running") result.status = "cancelled";
+      }
+      job.summary = evaluationSummary(job.results as Json[]);
+      return publicJob(job);
+    }
+    if (method === "DELETE" && at("evaluations", "*")) {
+      if (job.status === "running") throw new HttpError(409, "実行中の評価は削除できません。");
+      state.evaluations = state.evaluations.filter((item) => item !== job);
+      return null;
+    }
+  }
+  // --- 自動実行（#784） ---
+  if (method === "GET" && at("automations")) {
+    return { automations: state.automations, persistent: state.automationsPersistent };
+  }
+  if (method === "POST" && at("automations")) {
+    const item: Json = {
+      ...automationFields(body),
+      id: `auto-${state.automations.length + 1}`,
+      run_as_user_uuid: "local",
+      created_by_user_uuid: "local",
+      webhook_token_prefix: null,
+      last_run_at: null,
+      last_run_id: null,
+      last_trigger: null,
+      last_result: null,
+      last_message: null,
+      created_at: MOCK_NOW,
+      updated_at: MOCK_NOW,
+    };
+    state.automations.unshift(item);
+    return item;
+  }
+  if (head === "automations" && second) {
+    const item = findOr404(state.automations, "id", second, "automation");
+    if (method === "GET" && at("automations", "*")) {
+      return { automation: item, runs: state.automationRuns[String(item.id)] ?? [] };
+    }
+    if (method === "PUT" && at("automations", "*")) {
+      Object.assign(item, automationFields(body), { updated_at: MOCK_NOW });
+      return item;
+    }
+    if (method === "DELETE" && at("automations", "*")) {
+      state.automations = state.automations.filter((candidate) => candidate !== item);
+      return null;
+    }
+    if (method === "POST" && at("automations", "*", "run")) {
+      const runs = (state.automationRuns[String(item.id)] ??= []);
+      const runId = `run-auto-${runs.length + 1}`;
+      runs.unshift({ run_id: runId, status: "queued", trigger: "manual", created_at: MOCK_NOW, updated_at: MOCK_NOW });
+      Object.assign(item, {
+        last_run_at: MOCK_NOW,
+        last_run_id: runId,
+        last_trigger: "manual",
+        last_result: "created",
+        last_message: "Run を作りました。",
+      });
+      return { run_id: runId, result: "created", message: "Run を作りました。" };
+    }
+    if (method === "POST" && at("automations", "*", "webhook-token")) {
+      if (item.trigger !== "webhook") throw new HttpError(409, "Webhook のトリガーではありません。");
+      const token = `prwh_${"t".repeat(43)}`;
+      item.webhook_token_prefix = token.slice(0, 9);
+      return { automation: item, token };
+    }
+  }
+  if (method === "GET" && at("usage")) {
+    const days = Number(query.get("days") ?? 30);
+    if (![7, 30, 90].includes(days)) throw new HttpError(422, "期間は 7・30・90 日のどれかにしてください。");
+    return state.usageReports[String(days)] ?? emptyUsageReport(days, query.get("timezone") ?? "Asia/Tokyo");
   }
   if (method === "GET" && at("audit", "tool-calls")) {
     const offset = Number(query.get("offset") ?? 0);
@@ -708,6 +1200,42 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
 
   // --- 設定 ---
+  if (head === "settings" && second === "api-keys") {
+    if (method === "GET" && at("settings", "api-keys")) {
+      return { keys: state.apiKeys, persistent: state.apiKeysPersistent };
+    }
+    if (method === "POST" && at("settings", "api-keys")) {
+      const id = `${(state.apiKeys.length + 1).toString(16).padStart(16, "0")}`;
+      const token = `prak_${id}_${"x".repeat(43)}`;
+      const days = body.expires_in_days as number | null;
+      const key: Json = {
+        id,
+        name: body.name,
+        owner_user_uuid: (body.run_as_user_uuid as string | null) ?? "local",
+        owner_display_name: body.run_as_user_uuid
+          ? String(
+              (state.security.users as Json[]).find((user) => user.user_uuid === body.run_as_user_uuid)
+                ?.display_name ?? body.run_as_user_uuid
+            )
+          : "ローカル利用者",
+        created_by_user_uuid: "local",
+        created_by_display_name: "ローカル利用者",
+        agent_ids: body.agent_ids ?? null,
+        token_prefix: `prak_${id}_xxxx`,
+        created_at: MOCK_NOW,
+        expires_at: days ? new Date(Date.parse(MOCK_NOW) + days * 86_400_000).toISOString() : null,
+        last_used_at: null,
+        expired: false,
+      };
+      state.apiKeys.unshift(key);
+      return { key, token };
+    }
+    if (method === "DELETE" && at("settings", "api-keys", "*")) {
+      findOr404(state.apiKeys, "id", third, "api key");
+      state.apiKeys = state.apiKeys.filter((key) => key.id !== third);
+      return null;
+    }
+  }
   if (head === "settings") {
     const patchable: Record<string, keyof MockApiState> = {
       "trace-policy": "tracePolicy",
@@ -891,6 +1419,15 @@ export async function installMockApi(page: Page): Promise<MockApi> {
     });
     // Run のイベント購読（SSE）。e2e は stream を保てないため空の stream を返して閉じる
     // （画面は購読の停止を示す。#215）。
+    // Excel の書き出し・テンプレート（#776）。中身は確かめないため、Excel の形の空のデータを返す。
+    if (method === "GET" && url.pathname.endsWith(".xlsx")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        body: Buffer.from("PK-mock-xlsx"),
+      });
+      return;
+    }
     if (method === "GET" && /^\/api\/runs\/[^/]+\/events$/.test(url.pathname)) {
       await route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
       return;
