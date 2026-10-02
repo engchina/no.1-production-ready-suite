@@ -246,6 +246,9 @@ class _FakeItemsCursor:
     def __exit__(self, *args: object) -> None:
         return None
 
+    def setinputsizes(self, **sizes: Any) -> None:
+        self._db.input_sizes.append(dict(sizes))
+
     def execute(self, statement: str, **params: Any) -> None:
         if not self._db.table_exists:
             raise RuntimeError("ORA-00942: table or view does not exist")
@@ -268,6 +271,7 @@ class _FakeItemsDatabase:
         self.table_exists = True
         self.rows: dict[tuple[str, str], str] = {}
         self.commits = 0
+        self.input_sizes: list[dict[str, Any]] = []
 
     def connect(self) -> _FakeItemsConnection:
         return _FakeItemsConnection(self)
@@ -305,6 +309,10 @@ def test_oracle_item_store_merges_loads_and_deletes() -> None:
     store.delete("skill", "s1")
     assert "skill" not in store.load()
     assert database.commits == 4
+    # 定義の JSON は 4,000 byte を超えうるため CLOB で bind する（#841）。削除は bind しない。
+    import oracledb
+
+    assert database.input_sizes == [{"item_json": oracledb.DB_TYPE_CLOB}] * 3
 
 
 def test_oracle_item_store_without_table_starts_empty_and_refuses_writes() -> None:
