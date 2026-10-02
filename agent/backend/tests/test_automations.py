@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -270,3 +271,25 @@ def test_automation_permissions(auth: ProductionAuth, store: Path) -> None:
     other = login("other-784")
     assert client.get("/api/automations", headers=other).json()["data"]["automations"] == []
     assert client.get(f"/api/automations/{automation['id']}", headers=other).status_code == 404
+
+
+def test_unpublished_agents_cannot_be_automated(store: Path) -> None:
+    """自動実行は利用者の Run なので、公開した版の無い業務 Agent は選べない（#792）。"""
+    del store
+    draft_id = "automation-792-draft"
+    created = client.post(
+        "/api/agents", json={"id": draft_id, "name": "下書きの Agent", "instructions": "答える。"}
+    )
+    assert created.status_code == 200, created.text
+    try:
+        refused = client.post("/api/automations", json={**BODY, "agent_id": draft_id})
+        assert refused.status_code == 422
+        assert "公開していない業務 Agent" in refused.text
+        automation = client.post("/api/automations", json=BODY).json()["data"]
+        moved = client.put(
+            f"/api/automations/{automation['id']}", json={**BODY, "agent_id": draft_id}
+        )
+        assert moved.status_code == 422
+    finally:
+        with contextlib.suppress(KeyError, ValueError):
+            runtime_repository.delete_agent(draft_id)

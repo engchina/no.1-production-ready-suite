@@ -9,15 +9,31 @@
 
 | 型 | ページ（ルート） | 補足 |
 |---|---|---|
-| A. 一覧 → 全画面エディタ | 自動実行（`/automations`。#784）/ 業務 Agent（`/agents`）/ Skill（`/skills`）/ MCP 接続（`/settings/mcp-connections`）/ 連携機能（`/plugins`）/ マーケットプレイス（`/plugins/marketplaces`） | `?id=` を唯一の情報源にする（§1.1）。 |
-| B. マスタ詳細の閲覧 | Run（`/runs`）/ 承認（`/approvals`）/ ツール（`/tools`） | 一覧と詳細を `FixedSplitPane` で並べる（§1.2）。 |
-| C. ツール / ワークフロー | 監査（`/audit`）/ フィードバック（`/feedback`。絞り込み → 集計と一覧 → 詳細の side sheet）/ 品質評価（`/evaluation`。評価セットの一覧 → 実行状況 → 評価概要（前回との比較）→ ケース別結果 → 最近の評価。評価セットは A 型の `?id=` の全画面エディタで、評価ケースを 1 件ずつ編集し Excel で取り込み・書き出しする）/ Control Plane バックアップ（`/settings/runtime-snapshot`） | 監査は 絞り込み → 適用 → 結果の `DataTable`。バックアップは 入力 → 検証 → 置換。 |
-| D. ダッシュボード / 状態 | Runtime（`/runtimes`）/ 利用状況（`/usage`）/ ツール権限（`/settings/tool-policy`） | 運用設定の単一フォームは「状態 + 最小の編集」として D 型に置く。ダッシュボード（`/`）は廃止した（#262）。 |
+| A. 一覧 → 全画面エディタ | 自動実行（`/automations`。#784）/ 業務 Agent（`/agents`）/ スキル（`/skills`）/ MCP 接続（`/settings/mcp-connections`）/ 連携機能（`/plugins`）/ マーケットプレイス（`/plugins/marketplaces`） | `?id=` を唯一の情報源にする（§1.1）。 |
+| B. マスタ詳細の閲覧 | 実行履歴（`/runs`。Run の一覧）/ 承認（`/approvals`）/ ツール（`/tools`） | 一覧と詳細を `FixedSplitPane` で並べる（§1.2）。 |
+| C. ツール / ワークフロー | 監査ログ（`/audit`）/ フィードバック（`/feedback`。絞り込み → 集計と一覧 → 詳細の side sheet）/ 品質評価（`/evaluation`。評価セットの一覧 → 実行状況 → 評価概要（前回との比較）→ ケース別結果 → 最近の評価。評価セットは A 型の `?id=` の全画面エディタで、評価ケースを 1 件ずつ編集し Excel で取り込み・書き出しする）/ バックアップと復元（`/settings/runtime-snapshot`） | 監査ログは 絞り込み → 適用 → 結果の `DataTable`。バックアップは 入力 → 検証 → 置換。 |
+| D. ダッシュボード / 状態 | 実行環境（`/runtimes`。組み込み Runtime の状態）/ 利用状況（`/usage`）/ ツール権限（`/settings/tool-policy`） | 運用設定の単一フォームは「状態 + 最小の編集」として D 型に置く。ダッシュボード（`/`）は廃止した（#262）。 |
+
+### サイドナビの構成（#791）
+
+上に一般の利用者が毎日使う画面、下に管理者が作る・運用する画面を置く（RAG・NL2SQL と同じ考え方。#658）。
+正本は `frontend/src/components/layout/nav-config.ts`。権限管理の機能の一覧も同じ並び・名前になる（#567）。
+
+| セクション | 項目 | 使う人 |
+|---|---|---|
+| AI 活用（NL2SQL と同じ名前） | チャット / 実行履歴（`/runs`）/ 承認 | 一般の利用者 |
+| Agent 構築（RAG の「ナレッジ構築」・NL2SQL の「データ準備」に当たる） | 業務 Agent / スキル / 自動実行 / マーケットプレイス | 管理者（作る人） |
+| 改善・運用 | 品質評価 / フィードバック / 利用状況 / 監査ログ | 管理者・監査担当 |
+| セキュリティ設定 → ユーザーとロール | 権限管理 → ユーザー管理 / ロール管理 | 管理者 |
+| 運用設定 | システムテーブル / 実行環境（`/runtimes`）/ MCP 接続 / API キー / バックアップと復元 | 管理者 |
+| システム設定（3 製品共通） | OCI 認証 / アップロード保存先 / モデル / データベース / 外観 | 管理者 |
+
+画面・ナビの文言に「Control Plane」「Runtime」のような基盤の用語を使わない（コードの識別子・URL・権限コードはそのまま）。
 
 `/` は画面を持たない入口で、NL2SQL と同じく次のように振り分ける（`frontend/src/lib/route-permissions.ts`）。
 
 - `/` → ナビの並び順で最初に開ける画面（`firstAllowedRoute`。どれも開けなければ権限なしの画面）。
-- 未知の URL・ログイン後・権限なしの画面の「利用可能な画面へ戻る」→ 既定入口（`defaultEntryRoute`）。主画面の Run（`/runs`）を開ければ Run、開けなければ `/` を経て最初に開ける画面。
+- 未知の URL・ログイン後・権限なしの画面の「利用可能な画面へ戻る」→ 既定入口（`defaultEntryRoute`）。ナビの先頭のチャット（`/chat`）を開ければチャット（RAG と同じ。#791）、開けなければ `/` を経て最初に開ける画面。
 - どちらも `Navigate replace` で移し、履歴に `/` や未知の URL を残さない。
 
 ### 1.1 A 型（一覧 → 全画面エディタ）
@@ -67,7 +83,7 @@
 | Skill / MCP 接続 | `useEditorLeaveGuard` | 全画面エディタのフォーム（開いた時点の内容と比較）。画面内の「一覧に戻る」とパンくずでも破棄を確認する |
 | 連携機能 / マーケットプレイス | `useEditorLeaveGuard` | `?id=new` の manifest の入力 / 追加フォームの入力 |
 | ツール権限 | `useSettingsLeaveGuard` | 取得した設定との差分（ツール権限の「既定」は未指定として比較） |
-| Control Plane バックアップ | `useSettingsLeaveGuard` | インポート JSON と理由。確認語（`REPLACE`）は対象外で、離脱で解除される |
+| バックアップと復元 | `useSettingsLeaveGuard` | インポート JSON と理由。確認語（`REPLACE`）は対象外で、離脱で解除される |
 
 ブラウザの戻る / 進む（`popstate`）も、data router の root（`main.tsx`）に 1 つだけ置いた共有の `UnsavedChangesBlocker` で確認する（#138 / #586）。A 型のエディタで未保存の編集があるときも、戻る / 進むで `?id=` が変わる前に破棄を確認する。
 

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, KeyRound, Pencil, Play, Plus, Save, Trash2, Undo2 } from "lucide-react";
+import { Copy, KeyRound, Pencil, Play, Plus, Save, Trash2, Undo2 } from "lucide-react";
 import {
   Banner,
   Button,
@@ -32,6 +32,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { MissingEditorTarget } from "@/components/EntityLayout";
+import { OneTimeSecret } from "@/components/OneTimeSecret";
 import { PagedDataTable, listScrollLabel } from "@/components/ListViews";
 import {
   agentApi,
@@ -43,6 +44,7 @@ import {
   type AutomationTrigger,
   type ScheduleFrequency,
 } from "@/lib/api";
+import { isRunnableAgent } from "@/lib/agent-availability";
 import { useEditorRoute } from "@/lib/editor-route";
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -92,12 +94,13 @@ function runStatusVariant(status: AutomationRun["status"]): StatusVariant {
   return "pending";
 }
 
-async function copyText(text: string) {
+// Webhook の URL のコピー（秘密ではない）。失敗しても値は Toast に入れない（#790。秘密のコピーは OneTimeSecret）。
+async function copyWebhookUrl(text: string) {
   try {
     await navigator.clipboard.writeText(text);
     toast.success(t("automation.copied"));
   } catch {
-    toast.error(text);
+    toast.error(t("automation.webhook.copyUrlFailed"));
   }
 }
 
@@ -107,7 +110,7 @@ export function AutomationsPage() {
   const canManage = capabilities.admin;
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const usableAgents = useMemo(
-    () => (agents.data?.agents ?? []).filter((agent) => agent.enabled && !agent.migration_required),
+    () => (agents.data?.agents ?? []).filter(isRunnableAgent),
     [agents.data]
   );
   const target = editor.target;
@@ -420,7 +423,6 @@ function AutomationEditor({
     onSuccess: (result) => {
       setToken(result.token);
       void queryClient.invalidateQueries({ queryKey: ["automation", result.automation.id] });
-      toast.success(t("automation.webhook.issued"));
     },
     onError: (error) => toast.error(error.message),
   });
@@ -680,7 +682,7 @@ function AutomationEditor({
                           <code className="min-w-0 break-all rounded-md bg-surface-sunken px-3 py-2 font-mono text-sm text-fg" data-testid="automation-webhook-url">
                             {webhookUrl}
                           </code>
-                          <Button variant="secondary" icon={Copy} onClick={() => void copyText(webhookUrl)}>
+                          <Button variant="secondary" icon={Copy} onClick={() => void copyWebhookUrl(webhookUrl)}>
                             {t("automation.webhook.copyUrl")}
                           </Button>
                         </div>
@@ -689,22 +691,6 @@ function AutomationEditor({
                             ? t("automation.webhook.current", { prefix: automation.webhook_token_prefix })
                             : t("automation.webhook.none")}
                         </p>
-                        {token ? (
-                          <Banner severity="success" title={t("automation.webhook.issued")}>
-                            <div className="space-y-2" data-testid="automation-webhook-token">
-                              <p>{t("automation.webhook.issuedDescription")}</p>
-                              <code className="block break-all rounded-md bg-surface px-3 py-2 font-mono text-sm text-fg">{token}</code>
-                              <div className="flex flex-wrap gap-2">
-                                <Button size="sm" icon={Copy} onClick={() => void copyText(token)}>
-                                  {t("automation.webhook.copy")}
-                                </Button>
-                                <Button size="sm" variant="secondary" icon={Check} onClick={() => setToken(null)}>
-                                  {t("automation.webhook.done")}
-                                </Button>
-                              </div>
-                            </div>
-                          </Banner>
-                        ) : null}
                         {!readOnly ? (
                           <Button
                             variant="secondary"
@@ -716,6 +702,24 @@ function AutomationEditor({
                           >
                             {automation.webhook_token_prefix ? t("automation.webhook.reissue") : t("automation.webhook.issue")}
                           </Button>
+                        ) : null}
+                        {/* 発行した秘密は起点の「秘密を発行」の直下に 1 回だけ出す（messaging.md §10.1。#790）。 */}
+                        {token ? (
+                          <OneTimeSecret
+                            key={token}
+                            id="automation-webhook-secret"
+                            title={t("automation.webhook.issued")}
+                            description={t("automation.webhook.issuedDescription")}
+                            label={t("automation.webhook.secret")}
+                            value={token}
+                            copyLabel={t("automation.webhook.copy")}
+                            copiedMessage={t("automation.copied")}
+                            copyFailedMessage={t("automation.webhook.copyFailed")}
+                            doneLabel={t("automation.webhook.done")}
+                            onDone={() => setToken(null)}
+                            testId="automation-webhook-token"
+                            valueTestId="automation-webhook-secret"
+                          />
                         ) : null}
                       </>
                     ) : (

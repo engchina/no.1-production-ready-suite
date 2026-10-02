@@ -11,21 +11,21 @@ type Json = Record<string, unknown>;
 
 export const MENU_PERMISSION_CODES = [
   "menu.chat",
+  "menu.runs",
+  "menu.approvals",
   "menu.agents",
   "menu.skills",
-  "menu.runtimes",
-  "menu.runs",
   "menu.automations",
-  "menu.approvals",
-  "menu.audit",
   "menu.plugin_marketplaces",
   "menu.evaluation",
   "menu.feedback",
   "menu.usage",
+  "menu.audit",
   "menu.security_permissions",
   "menu.security_users",
   "menu.security_roles",
   "menu.settings_system_tables",
+  "menu.runtimes",
   "menu.settings_external_mcp",
   "menu.settings_api_keys",
   "menu.settings_runtime_snapshot",
@@ -38,9 +38,9 @@ export const MENU_PERMISSION_CODES = [
 
 export const CAPABILITY_PERMISSION_CODES = [
   "agent.runs.view",
+  "agent.audit.view",
   "agent.runs.operate",
   "agent.approvals.decide",
-  "agent.audit.view",
   "agent.admin",
 ] as const;
 
@@ -48,18 +48,18 @@ export const ALL_PERMISSION_CODES: string[] = [...MENU_PERMISSION_CODES, ...CAPA
 
 const ADMIN_MENUS = [
   "menu.chat",
+  "menu.runs",
+  "menu.approvals",
   "menu.agents",
   "menu.skills",
-  "menu.runtimes",
-  "menu.runs",
   "menu.automations",
-  "menu.approvals",
-  "menu.audit",
   "menu.plugin_marketplaces",
   "menu.evaluation",
   "menu.feedback",
   "menu.usage",
+  "menu.audit",
   "menu.settings_system_tables",
+  "menu.runtimes",
   "menu.settings_external_mcp",
   "menu.settings_api_keys",
   "menu.settings_runtime_snapshot",
@@ -71,23 +71,23 @@ const ADMIN_MENUS = [
 ];
 
 const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string, label: string]> = {
-  "menu.chat": ["Control Plane", "チャット"],
-  "menu.agents": ["Control Plane", "業務 Agent"],
-  "menu.skills": ["Control Plane", "スキル (Skills)"],
-  "menu.runtimes": ["Control Plane", "Runtime"],
-  "menu.runs": ["Control Plane", "Run"],
-  "menu.automations": ["Control Plane", "自動実行"],
-  "menu.approvals": ["Control Plane", "承認・監査"],
-  "menu.audit": ["Control Plane", "監査"],
-  "menu.plugin_marketplaces": ["Control Plane", "マーケットプレイス"],
+  "menu.chat": ["AI 活用", "チャット"],
+  "menu.runs": ["AI 活用", "実行履歴"],
+  "menu.approvals": ["AI 活用", "承認"],
+  "menu.agents": ["Agent 構築", "業務 Agent"],
+  "menu.skills": ["Agent 構築", "スキル"],
+  "menu.automations": ["Agent 構築", "自動実行"],
+  "menu.plugin_marketplaces": ["Agent 構築", "マーケットプレイス"],
   "menu.evaluation": ["改善・運用", "品質評価"],
   "menu.feedback": ["改善・運用", "フィードバック"],
   "menu.usage": ["改善・運用", "利用状況"],
+  "menu.audit": ["改善・運用", "監査ログ"],
   "menu.security_permissions": ["セキュリティ設定", "権限管理"],
   "menu.settings_system_tables": ["運用設定", "システムテーブル"],
+  "menu.runtimes": ["運用設定", "実行環境"],
   "menu.settings_external_mcp": ["運用設定", "MCP 接続"],
   "menu.settings_api_keys": ["運用設定", "API キー"],
-  "menu.settings_runtime_snapshot": ["運用設定", "Control Plane バックアップ"],
+  "menu.settings_runtime_snapshot": ["運用設定", "バックアップと復元"],
   "menu.security_users": ["ユーザーとロール", "ユーザー管理"],
   "menu.security_roles": ["ユーザーとロール", "ロール管理"],
   "menu.settings_oci": ["システム設定", "OCI 認証"],
@@ -97,7 +97,10 @@ const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string
   "menu.settings_appearance": ["システム設定", "外観"],
 };
 
-const CAPABILITY_GROUP = "実行・承認・管理の権限";
+// capability のグループは NL2SQL / RAG と同じ「参照権限 / 実行権限 / 管理権限」（#791）。
+const READ_GROUP = "参照権限";
+const EXECUTE_GROUP = "実行権限";
+const MANAGE_GROUP = "管理権限";
 
 /** `GET /api/security/permissions` の応答（backend の PERMISSION_CATALOG と同じ並び・implies）。 */
 export const PERMISSION_CATALOG: Json[] = [
@@ -107,37 +110,39 @@ export const PERMISSION_CATALOG: Json[] = [
   }),
   {
     code: "agent.runs.view",
-    group: CAPABILITY_GROUP,
-    label: "Run の閲覧（viewer）",
-    description: "利用できるエージェントの Run・イベント・成果物を表示できます。",
+    group: READ_GROUP,
+    label: "実行履歴の参照",
+    description: "利用できる業務 Agent の実行（Run）・イベント・成果物を表示できます。",
     implies: ["menu.runs"],
   },
   {
+    code: "agent.audit.view",
+    group: READ_GROUP,
+    label: "監査ログの参照",
+    description: "利用できる業務 Agent の実行の監査記録・ツール呼出し履歴を表示できます（実行履歴の参照を含みます）。",
+    implies: ["menu.audit"],
+  },
+  {
     code: "agent.runs.operate",
-    group: CAPABILITY_GROUP,
-    label: "Run の実行・操作（operator）",
-    description: "利用できるエージェントで Run の作成・取消・再開・再実行と、チャットができます。",
+    group: EXECUTE_GROUP,
+    label: "業務 Agent の実行",
+    description:
+      "利用できる業務 Agent でチャットと、実行（Run）の作成・取消・再開・再実行ができます（実行履歴の参照を含みます）。",
     implies: ["menu.runs", "menu.chat"],
   },
   {
     code: "agent.approvals.decide",
-    group: CAPABILITY_GROUP,
-    label: "承認の判断（approver）",
-    description: "利用できるエージェントの Run の承認・却下ができます。",
+    group: EXECUTE_GROUP,
+    label: "承認の判断",
+    description: "利用できる業務 Agent の実行の承認・却下ができます（実行履歴の参照を含みます）。",
     implies: ["menu.approvals"],
   },
   {
-    code: "agent.audit.view",
-    group: CAPABILITY_GROUP,
-    label: "監査の閲覧（auditor）",
-    description: "利用できるエージェントの Run の監査記録を表示できます。",
-    implies: ["menu.audit"],
-  },
-  {
     code: "agent.admin",
-    group: CAPABILITY_GROUP,
-    label: "Agent 管理（admin）",
-    description: "業務 Agent・スキル・Runtime・運用設定・システム設定の変更と、すべての操作ができます。",
+    group: MANAGE_GROUP,
+    label: "Agent 管理",
+    description:
+      "業務 Agent・スキル・プラグイン・運用設定・システム設定の変更と、すべての操作ができます（業務 Agent の対象範囲の制限を受けません）。",
     implies: ADMIN_MENUS,
   },
 ];

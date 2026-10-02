@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, KeySquare, Trash2 } from "lucide-react";
+import { Copy, KeySquare, Trash2 } from "lucide-react";
 import {
   Banner,
   Button,
@@ -30,6 +30,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { listScrollLabel } from "@/components/ListViews";
+import { OneTimeSecret } from "@/components/OneTimeSecret";
 import { agentApi, type ApiKey, type ApiKeyCreated, type ApiKeyExpiryDays } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -44,12 +45,13 @@ const EXPIRY_OPTIONS = ["30", "90", "365", "none"] as const;
 type ExpiryOption = (typeof EXPIRY_OPTIONS)[number];
 type Scope = "all" | "selected";
 
-async function copyText(text: string) {
+// 接続先 URL のコピー（秘密ではない）。失敗しても値は Toast に入れない（#790。秘密のコピーは OneTimeSecret）。
+async function copyEndpoint(text: string) {
   try {
     await navigator.clipboard.writeText(text);
     toast.success(t("apiKeys.copied"));
   } catch {
-    toast.error(text);
+    toast.error(t("apiKeys.endpoint.copyFailed"));
   }
 }
 
@@ -154,7 +156,7 @@ export function ApiKeysPage() {
               >
                 {endpoint}
               </code>
-              <Button variant="secondary" icon={Copy} onClick={() => void copyText(endpoint)}>
+              <Button variant="secondary" icon={Copy} onClick={() => void copyEndpoint(endpoint)}>
                 {t("apiKeys.endpoint.copy")}
               </Button>
             </div>
@@ -169,9 +171,6 @@ export function ApiKeysPage() {
               <CardDescription>{t("apiKeys.create.description")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {created ? (
-                <CreatedKey created={created} onDone={() => setCreated(null)} />
-              ) : null}
               <div className="grid gap-4 md:grid-cols-2">
                 <TextField
                   id="api-key-name"
@@ -260,6 +259,8 @@ export function ApiKeysPage() {
                 ]}
                 status={create.error ? <FormStatus tone="danger" message={create.error.message} /> : null}
               />
+              {/* 作成の結果（秘密）は起点の「作成」の行の直下・カードの全幅に出す（messaging.md §10.1。#790）。 */}
+              {created ? <CreatedKey key={created.token} created={created} onDone={() => setCreated(null)} /> : null}
             </CardContent>
           </Card>
         ) : null}
@@ -294,22 +295,20 @@ export function ApiKeysPage() {
 
 function CreatedKey({ created, onDone }: { created: ApiKeyCreated; onDone: () => void }) {
   return (
-    <Banner severity="success" title={t("apiKeys.created.title")}>
-      <div className="space-y-2" data-testid="api-key-created">
-        <p>{t("apiKeys.created.description")}</p>
-        <code className="block break-all rounded-md bg-surface px-3 py-2 font-mono text-sm text-fg" data-testid="api-key-token">
-          {created.token}
-        </code>
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" icon={Copy} onClick={() => void copyText(created.token)}>
-            {t("apiKeys.created.copy")}
-          </Button>
-          <Button size="sm" variant="secondary" icon={Check} onClick={onDone}>
-            {t("apiKeys.created.done")}
-          </Button>
-        </div>
-      </div>
-    </Banner>
+    <OneTimeSecret
+      id="api-key-created-token"
+      title={t("apiKeys.created.title")}
+      description={t("apiKeys.created.description")}
+      label={t("apiKeys.created.label")}
+      value={created.token}
+      copyLabel={t("apiKeys.created.copy")}
+      copiedMessage={t("apiKeys.copied")}
+      copyFailedMessage={t("apiKeys.created.copyFailed")}
+      doneLabel={t("apiKeys.created.done")}
+      onDone={onDone}
+      testId="api-key-created"
+      valueTestId="api-key-token"
+    />
   );
 }
 

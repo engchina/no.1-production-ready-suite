@@ -220,6 +220,26 @@ class AgentNotPublishedError(ValueError):
     """公開した版の無い業務 Agent を、下書きではない Run で実行しようとした（#770）。"""
 
 
+AGENT_UNPUBLISHED_MESSAGE = (
+    "公開していない業務 Agent は実行できません。公開してから使ってください。"
+)
+
+
+def agent_unavailable_reason(agent: AgentProfile | None) -> str | None:
+    """利用者の Run（チャット・MCP・自動実行）で使えない理由。使えるなら None（#792）。
+
+    利用者の Run は公開中の版で実行する（#770）ため、無効・移行が要る・公開した版が無い
+    業務 Agent は使えない。品質評価と管理者の「下書きで実行」はこの判定を使わない。
+    """
+    if agent is None:
+        return "業務 Agent が見つかりません。"
+    if not agent.enabled or agent.migration_required:
+        return "この業務 Agent は実行できない状態です。"
+    if agent.published() is None:
+        return AGENT_UNPUBLISHED_MESSAGE
+    return None
+
+
 class AgentPublishRequest(BaseModel):
     note: str = Field(default="", max_length=500)
 

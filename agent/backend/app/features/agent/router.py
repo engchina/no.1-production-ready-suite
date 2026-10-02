@@ -178,6 +178,7 @@ from app.features.agent.runtime import (
     ThreadData,
     ThreadNotFoundError,
     ThreadsData,
+    agent_unavailable_reason,
     builtin_resume_pending,
     runtime_repository,
 )
@@ -1778,6 +1779,15 @@ async def list_agent_templates() -> ApiResponse[AgentTemplatesData]:
     return ApiResponse(data=AgentTemplatesData(templates=list(AGENT_TEMPLATES)))
 
 
+def _require_runnable_agent(agent_id: str) -> None:
+    """自動実行の Run は利用者の Run なので、公開した版の無い業務 Agent は選べない（#792）。"""
+    reason = agent_unavailable_reason(_control_plane_agent(agent_id))
+    if reason is not None:
+        raise HTTPException(
+            status_code=422, detail={"code": "agent_unavailable", "message": reason}
+        )
+
+
 def _automation_for_actor(request: Request, automation_id: str) -> Automation:
     try:
         item = automation_store.get(automation_id)
@@ -1805,7 +1815,7 @@ async def create_automation(
 ) -> ApiResponse[Automation]:
     """自動実行を作る。Run は作った利用者として作る（RAG / NL2SQL の MCP もこの利用者）。"""
     _require_agent_access(request, payload.agent_id)
-    _control_plane_agent(payload.agent_id)
+    _require_runnable_agent(payload.agent_id)
     owner = _run_creator_user_uuid(request)
     if owner is None:
         raise HTTPException(status_code=401, detail="ログインしてください。")
@@ -1833,7 +1843,7 @@ async def update_automation(
     item = _automation_for_actor(request, automation_id)
     if payload.agent_id != item.agent_id:
         _require_agent_access(request, payload.agent_id)
-        _control_plane_agent(payload.agent_id)
+    _require_runnable_agent(payload.agent_id)
     try:
         updated = automation_store.update(item.id, payload, now=datetime.now(UTC))
     except ControlPlaneStoreError as exc:
