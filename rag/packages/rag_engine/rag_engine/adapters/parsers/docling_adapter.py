@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from html import escape
+from pathlib import Path
 from typing import Any, Sequence
 
 import rag_engine.resources.model_pool as model_pool
@@ -884,6 +885,27 @@ def _prepare_docling_env(settings: Settings) -> None:
     os.environ.setdefault("ONNXRUNTIME_DISABLE_TELEMETRY", "1")
 
 
+def _docling_artifacts_path(cache_dir: Path) -> Path | None:
+    """取得済みの Docling のモデルの場所を返す(無ければ None。#829)。
+
+    配備の手順は ``docling-tools models download`` でモデルを ``<docling の cache_dir>/models``
+    (既定 ``~/.cache/docling/models``)へ取得する。この場所を ``artifacts_path`` に渡さないと、
+    Docling は converter の作成のたびに HuggingFace Hub へ最新の版を問い合わせ、外へ出られない
+    環境では接続の確立を待ち続ける。``DOCLING_ARTIFACTS_PATH`` を明示したときは Docling が
+    それを読むので、ここでは上書きしない。取得していない(取得に失敗した)ときは None を返し、
+    今までどおり初回の解析で HuggingFace Hub から取得させる。
+    """
+    if os.environ.get("DOCLING_ARTIFACTS_PATH", "").strip():
+        return None
+    models_dir = cache_dir / "models"
+    try:
+        if models_dir.is_dir() and any(models_dir.iterdir()):
+            return models_dir
+    except OSError:
+        return None
+    return None
+
+
 def _build_docling_converter(settings: Settings):
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import (
@@ -893,12 +915,16 @@ def _build_docling_converter(settings: Settings):
         RapidOcrOptions,
         TableStructureOptions,
     )
+    from docling.datamodel.settings import settings as docling_settings
     from docling.document_converter import DocumentConverter, PdfFormatOption
     from rag_engine.adapters.parsers.docling_progress import ProgressPdfPipeline
 
     device_value = settings.docling_device.lower()
     device = AcceleratorDevice.CPU if device_value == "cpu" else device_value
     pipeline_options = PdfPipelineOptions()
+    artifacts_path = _docling_artifacts_path(Path(docling_settings.cache_dir))
+    if artifacts_path is not None:
+        pipeline_options.artifacts_path = artifacts_path
     pipeline_options.do_ocr = settings.docling_do_ocr
     pipeline_options.do_table_structure = settings.docling_do_table_structure
     pipeline_options.accelerator_options = AcceleratorOptions(num_threads=settings.docling_num_threads, device=device)
