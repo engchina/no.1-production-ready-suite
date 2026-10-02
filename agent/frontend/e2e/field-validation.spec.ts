@@ -45,7 +45,7 @@ for (const viewport of [
       await goal.fill("   ");
       await page.getByRole("button", { name: "実行を作成" }).click();
 
-      await expectFieldError(page, "run-goal", "ゴールを入力してください。");
+      await expectFieldError(page, "run-goal", "目標を入力してください。");
       await expect(goal).toBeFocused();
       expect(patchCount(mockApi, "/api/runs", "POST")).toBe(0);
       await expectNoHorizontalOverflow(page);
@@ -75,7 +75,7 @@ for (const viewport of [
       await page.getByRole("button", { name: "作成" }).click();
 
       await expectFieldError(page, "skill-mcp-requirements", "MCP 依存 (JSON) は有効な JSON で入力してください。");
-      await expectFieldError(page, "skill-resource-ids", "Resource ID (JSON) は JSON の配列で入力してください。");
+      await expectFieldError(page, "skill-resource-ids", "リソース ID（JSON）は JSON の配列で入力してください。");
       await expect(page.locator("#skill-mcp-requirements")).toBeFocused();
       expect(patchCount(mockApi, "/api/skills", "POST")).toBe(0);
     });

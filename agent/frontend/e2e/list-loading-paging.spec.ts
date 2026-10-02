@@ -168,7 +168,7 @@ for (const viewport of VIEWPORTS) {
       // 5 秒ごとの再取得と同じく、一覧を取り直す（行も増える）。
       seedRuns(mockApi, 1);
       const refetched = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/runs");
-      await page.getByRole("button", { name: "実行一覧を再読み込み" }).click();
+      await page.getByRole("button", { name: "表示を更新" }).click();
       await refetched;
       await expect(pager).toContainText("11 - 20 / 24 件");
       await expect(pager).toContainText("2 / 3 ページ");

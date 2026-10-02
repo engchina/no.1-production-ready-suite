@@ -22,7 +22,6 @@ import {
   TimedLoadingState,
   isSubmitEnter,
   toast,
-  type StatusVariant,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -38,6 +37,7 @@ import { isRunnableAgent } from "@/lib/agent-availability";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
+import { runStatusView, stepStatusView } from "@/lib/status-labels";
 import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-state";
 
 /**
@@ -413,7 +413,7 @@ function ThreadList({
                 <span>{formatTime(item.updated_at)}</span>
                 <span>{t("chat.threads.turns", { count: item.run_count })}</span>
                 {item.last_status === "completed" ? null : (
-                  <StatusBadge variant={runStatusVariant(item.last_status)} label={t(`chat.status.${item.last_status}`)} />
+                  <StatusBadge variant={runStatusView(item.last_status).variant} label={t(`chat.status.${item.last_status}`)} />
                 )}
               </span>
             </button>
@@ -548,7 +548,7 @@ function ToolStepRow({ step }: { step: RunStep }) {
   return (
     <li className="flex flex-wrap items-center justify-between gap-2 text-xs">
       <span className="min-w-0 break-all font-mono text-fg">{step.tool_call?.name}</span>
-      <StatusBadge variant={stepStatusVariant(step.status)} label={t(`chat.step.${step.status}`)} />
+      <StatusBadge {...stepStatusView(step.status)} />
     </li>
   );
 }
@@ -591,22 +591,6 @@ function runCitations(artifacts: Artifact[]): CitationView[] {
 function failureMessage(run: RunState): string {
   const event = [...run.events].reverse().find((item) => item.type === "runtime.failed");
   return event?.message || t("chat.failedUnknown");
-}
-
-function runStatusVariant(status: RunState["status"]): StatusVariant {
-  if (status === "failed") return "danger";
-  if (status === "waiting_approval") return "warning";
-  if (status === "cancelled") return "neutral";
-  if (status === "completed") return "success";
-  return "info";
-}
-
-function stepStatusVariant(status: RunStep["status"]): StatusVariant {
-  if (status === "completed") return "success";
-  if (status === "failed") return "danger";
-  if (status === "waiting_approval") return "warning";
-  if (status === "cancelled") return "neutral";
-  return "info";
 }
 
 function formatTime(value: string): string {

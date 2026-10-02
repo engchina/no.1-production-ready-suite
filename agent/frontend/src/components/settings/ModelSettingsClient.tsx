@@ -12,7 +12,7 @@ export function ModelSettingsClient() {
       <ModelSettingsPage
         api={api}
         errorMessage={(error) => (error instanceof ApiError ? error.message : undefined)}
-        placeholders={{ displayName: "業務 RAG 標準" }}
+        placeholders={{ displayName: t("settings.model.displayNamePlaceholder") }}
       />
     </div>
   );

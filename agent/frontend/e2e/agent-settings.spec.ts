@@ -348,8 +348,8 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByText("sandbox_command_run")).toHaveCount(0);
     // 権限レベルと side_effects は tool の分類（状態ではない）なので、StatusBadge のアイコンを付けない
     const badges = page.locator("main [data-status-variant]");
-    await expect(badges.filter({ hasText: /^(read|write|sensitive|side_effects)$/ }).first()).toBeVisible();
-    await expect(badges.filter({ hasText: /^(read|write|sensitive|side_effects)$/ }).locator("svg")).toHaveCount(0);
+    await expect(badges.filter({ hasText: /^(読み取り|書き込み|機密|副作用あり)$/ }).first()).toBeVisible();
+    await expect(badges.filter({ hasText: /^(読み取り|書き込み|機密|副作用あり)$/ }).locator("svg")).toHaveCount(0);
 
     const firstPolicy = page.getByRole("combobox", { name: "ポリシー", exact: true }).first();
     // 連続保存では前回のトーストが残るため、保存 API の成功を待ってから最新のトーストを確認する。
@@ -494,7 +494,7 @@ test.describe("Agent Runtime settings", () => {
     await page
       .getByLabel("MCP 依存 (JSON)")
       .fill('[{"server_id":"rag","tool_names":["rag_search"]}]');
-    await page.getByLabel("Resource ID (JSON)").fill('["prompt.e2e"]');
+    await page.getByLabel("リソース ID（JSON）").fill('["prompt.e2e"]');
     await page.getByRole("button", { name: "作成" }).click();
     await expect(page.getByText("スキルを追加しました")).toBeVisible();
     await expect(page).toHaveURL(/\/skills\?id=e2e_custom$/);
@@ -523,14 +523,14 @@ test.describe("Agent Runtime settings", () => {
     await expectNoHorizontalOverflow(page);
   });
 
-  test("plugin を manifest から install・無効化・アンインストールできる", async ({ page }) => {
+  test("プラグインをマニフェストからインストール・無効化・アンインストールできる", async ({ page }) => {
     await page.goto("/plugins");
     await expect(
-      page.getByRole("heading", { name: "インストール済み連携", level: 1 })
+      page.getByRole("heading", { name: "プラグイン", level: 1 })
     ).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
-    await page.getByRole("button", { name: "manifest から install" }).click();
+    await page.getByRole("button", { name: "マニフェストからインストール" }).click();
     const manifest = JSON.stringify({
       id: "ui_plugin",
       name: "UI Plugin",
@@ -554,21 +554,21 @@ test.describe("Agent Runtime settings", () => {
       ],
     });
     await page.locator("#plugin-manifest").fill(manifest);
-    await page.getByRole("button", { name: "install", exact: true }).click();
-    await expect(page.getByText("連携機能をインストールしました")).toBeVisible();
-    // install 後は連携機能の詳細へ移り、manifest の内容を確認できる
+    await page.getByRole("button", { name: "インストール", exact: true }).click();
+    await expect(page.getByText("プラグインをインストールしました")).toBeVisible();
+    // インストール後はプラグインの詳細へ移り、マニフェストの内容を確認できる
     await expect(page).toHaveURL(/\/plugins\?id=ui_plugin$/);
     await expect(page.locator("pre").filter({ hasText: "ui_plugin_skill" })).toBeVisible();
 
     // 無効化（詳細の ObjectActionBar）
     await page.getByTestId("plugin-object-actions").getByRole("button", { name: "無効にする" }).click();
-    await expect(page.getByText("連携機能の有効状態を更新しました")).toBeVisible();
+    await expect(page.getByText("プラグインの有効状態を更新しました")).toBeVisible();
 
     // アンインストール（詳細の「その他の操作」→ 確認。一覧へ戻る）
     await page.getByTestId("plugin-object-actions-more").click();
     await page.getByRole("menuitem", { name: "アンインストール" }).click();
     await page.getByRole("button", { name: "アンインストール", exact: true }).click();
-    await expect(page.getByText("連携機能をアンインストールしました")).toBeVisible();
+    await expect(page.getByText("プラグインをアンインストールしました")).toBeVisible();
     await expect(page).toHaveURL(/\/plugins$/);
     await expect(page.getByRole("button", { name: "ui_plugin の操作" })).toHaveCount(0);
   });
@@ -587,20 +587,20 @@ test.describe("Agent Runtime settings", () => {
     await expect(page).toHaveURL(/\?id=fixture_market$/);
     await expect(page.getByRole("heading", { name: "Fixture Market", level: 1 })).toBeVisible();
 
-    // リモート HTTP 取得（詳細の ObjectActionBar）→ 利用可能な連携機能を行メニューから install
-    await expect(page.getByText("連携機能がありません。URL を更新してください。")).toBeVisible();
+    // リモート HTTP 取得（詳細の ObjectActionBar）→ インストールできるプラグインを行メニューからインストール
+    await expect(page.getByText("プラグインがありません。「更新」で一覧を読み直してください。")).toBeVisible();
     await page.getByTestId("marketplace-object-actions").getByRole("button", { name: "更新" }).click();
-    await expect(page.getByText("連携機能一覧を更新しました")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "利用可能な連携機能" })).toBeVisible();
+    await expect(page.getByText("プラグインの一覧を更新しました")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "インストールできるプラグイン" })).toBeVisible();
     await expect(page.getByText("Fixture Plugin")).toBeVisible();
     await chooseRowAction(page, "fixture_plugin", "インストール");
-    await expect(page.getByText("連携機能をインストールしました")).toBeVisible();
+    await expect(page.getByText("プラグインをインストールしました")).toBeVisible();
 
     // cleanup: plugins ページでアンインストール、marketplace を削除
     await page.goto("/plugins");
     await chooseRowAction(page, "fixture_plugin", "アンインストール");
     await page.getByRole("button", { name: "アンインストール", exact: true }).click();
-    await expect(page.getByText("連携機能をアンインストールしました")).toBeVisible();
+    await expect(page.getByText("プラグインをアンインストールしました")).toBeVisible();
 
     await page.goto("/plugins/marketplaces");
     await chooseRowAction(page, "fixture_market", "削除");
@@ -743,7 +743,7 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByRole("button", { name: "置換" })).toBeDisabled();
 
     await page.getByRole("button", { name: "検証" }).click();
-    await expect(page.getByText("Snapshot を検証しました")).toBeVisible();
+    await expect(page.getByText("スナップショットを検証しました")).toBeVisible();
     await expect(page.getByText("有効")).toBeVisible();
     await expect(page.getByText("検証エラーはありません")).toBeVisible();
 
