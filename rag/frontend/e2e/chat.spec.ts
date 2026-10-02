@@ -288,12 +288,25 @@ async function openPersistedConversation(page: Page, width: number, messages: ob
   await history.getByRole("list", { name: "会話の履歴" }).getByRole("button").filter({ hasText: "件・" }).click();
 }
 
-async function modelCardBox(page: Page, model: string) {
-  const heading = page.getByRole("heading", { name: model, level: 3 });
-  await heading.scrollIntoViewIfNeeded();
-  const box = await heading.locator("..").boundingBox();
-  if (!box) throw new Error(`${model} の回答カードを計測できません。`);
-  return box;
+/**
+ * 回答モデルのカード（見出しの親）の位置と大きさを、同じスクロール位置で一度に測る。
+ * カードごとに scrollIntoView してから測ると、測る間にメッセージ一覧のスクロールが動き、
+ * 縦並び・横並びの比較が別々のスクロール位置の座標どうしになる（375px で縦並びを誤判定した。#833）。
+ */
+async function modelCardBoxes(page: Page, models: string[]) {
+  const headings = models.map((model) => page.getByRole("heading", { name: model, level: 3 }));
+  for (const heading of headings) await expect(heading).toBeAttached();
+  await headings[0].scrollIntoViewIfNeeded();
+  const cards = await Promise.all(headings.map((heading) => heading.locator("..").elementHandle()));
+  return page.evaluate(
+    (elements) =>
+      elements.map((element) => {
+        if (!element) throw new Error("回答カードを計測できません。");
+        const { x, y, width, height } = element.getBoundingClientRect();
+        return { x, y, width, height };
+      }),
+    cards
+  );
 }
 
 for (const viewport of [
@@ -435,8 +448,7 @@ for (const viewport of [
 test("2モデルは広い画面で空き列なく横並びになる", async ({ page }) => {
   await openPersistedConversation(page, 2048, [userMessage, ...comparisonReplies.slice(0, 2)]);
 
-  const first = await modelCardBox(page, "xai.grok-4.3");
-  const second = await modelCardBox(page, "google.gemini-2.5-pro");
+  const [first, second] = await modelCardBoxes(page, ["xai.grok-4.3", "google.gemini-2.5-pro"]);
   expect(Math.abs(first.y - second.y)).toBeLessThanOrEqual(1);
   expect(first.width).toBeGreaterThanOrEqual(560);
   expect(second.x).toBeGreaterThan(first.x + first.width);
@@ -480,9 +492,11 @@ test("チャット回答の低評価理由を保存し、選択状態を維持�
 test("3モデルはカード幅を維持して次の行へ折り返す", async ({ page }) => {
   await openPersistedConversation(page, 2048, [userMessage, ...comparisonReplies]);
 
-  const first = await modelCardBox(page, "xai.grok-4.3");
-  const second = await modelCardBox(page, "google.gemini-2.5-pro");
-  const third = await modelCardBox(page, "cohere.command-a");
+  const [first, second, third] = await modelCardBoxes(page, [
+    "xai.grok-4.3",
+    "google.gemini-2.5-pro",
+    "cohere.command-a",
+  ]);
   expect(Math.abs(first.y - second.y)).toBeLessThanOrEqual(1);
   expect(third.y).toBeGreaterThan(first.y + first.height);
   expect(Math.min(first.width, second.width, third.width)).toBeGreaterThanOrEqual(560);
@@ -500,8 +514,7 @@ for (const viewport of [
       ...comparisonReplies.slice(0, 2),
     ]);
 
-    const first = await modelCardBox(page, "xai.grok-4.3");
-    const second = await modelCardBox(page, "google.gemini-2.5-pro");
+    const [first, second] = await modelCardBoxes(page, ["xai.grok-4.3", "google.gemini-2.5-pro"]);
     expect(second.y).toBeGreaterThan(first.y + first.height);
     await expectNoPageOverflow(page);
   });

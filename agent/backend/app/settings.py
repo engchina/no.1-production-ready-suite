@@ -118,6 +118,10 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_external_rag_timeout_seconds: float = 60.0
     agent_external_nl2sql_mcp_url: str | None = None
     agent_external_nl2sql_timeout_seconds: float = 60.0
+    # NL2SQL のジョブが pending / running のまま返ったとき、ツールの中で完了を待つ合計の上限
+    # （秒。#848）。
+    # nl2sql_get_job を wait_seconds 付きで繰り返し呼ぶ。0 なら待たずにそのまま返す。
+    agent_nl2sql_job_wait_seconds: float = 300.0
     # Run の利用者がいない呼び出し（画面からのツール一覧の取得など、利用者のいない経路）で使う
     # 共通認証のログインユーザー ID。空ならその呼び出しは失敗する。
     agent_mcp_service_user_login_id: str = ""

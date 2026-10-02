@@ -31,6 +31,7 @@ from typing import Any, Literal, NoReturn
 
 from charset_normalizer import from_bytes
 from dotenv import dotenv_values
+from pr_backend_core.oracle_errors import oracle_error_codes
 from pydantic import BaseModel, ValidationError
 from pydantic import Field as PydanticField
 
@@ -614,6 +615,16 @@ def _safe_oracle_error_code(exc: Exception) -> str:
     return match.group(0).upper() if match else ""
 
 
+def _job_failure_error_code(exc: BaseException, *, fallback: str) -> str:
+    """失敗したジョブの `error_code`（#847）。
+
+    例外（原因の連鎖を含む）の Oracle のコード（`ORA-04027` など）の先頭、無ければ `fallback`。
+    `null` のまま返さない（MCP の呼び出し側が失敗を分類できるようにする）。
+    """
+    codes = oracle_error_codes(exc)
+    return codes[0] if codes else fallback
+
+
 _TEMPLATE_XLSX_UPLOAD_MESSAGE = (
     "ダウンロードした .xlsx テンプレートファイルをアップロードしてください。"
 )
@@ -857,6 +868,10 @@ _SCHEMA_EMPTY_MESSAGE = (
 )
 SCHEMA_CATALOG_EMPTY_ERROR_CODE = "SCHEMA_CATALOG_EMPTY"
 JOB_CANCELLED_ERROR_CODE = "JOB_CANCELLED"
+# 失敗したジョブの `error_code`（#847）。Oracle のコード（ORA / DPY / DPI）があれば優先する。
+JOB_FAILED_ERROR_CODE = "NL2SQL_JOB_FAILED"
+SQL_EXECUTION_FAILED_ERROR_CODE = "SQL_EXECUTION_FAILED"
+SQL_BLOCKED_ERROR_CODE = "SQL_BLOCKED"
 # プロセス内 job/history の保持上限(terminal な古いものから捨てる)。
 # incremental repository 有効時は DB 側が正本で、これはメモリ肥大の安全弁。
 _JOB_RETENTION_LIMIT = 200
@@ -3432,8 +3447,9 @@ class Nl2SqlService:
         ):
             # Repository construction is deliberately zero-I/O. Oracle is touched only by
             # readiness or a data request, so module import time is independent of data size.
+            # 状態の読み書きは pool から借りる（1 回のジョブで数十回読み書きする。#830）。
             self._incremental_repository = OracleIncrementalNl2SqlRepository(
-                connection_factory=self._oracle_adapter.connection
+                connection_factory=self._oracle_adapter.state_connection
             )
             self._store = MemoryNl2SqlStore()
         else:
@@ -3536,7 +3552,7 @@ class Nl2SqlService:
         mode = settings.nl2sql_persistence_mode.strip().lower()
         if mode == "oracle":
             return OracleJsonNl2SqlStore(
-                connection_factory=self._oracle_adapter.connection,
+                connection_factory=self._oracle_adapter.state_connection,
                 table_name=settings.nl2sql_oracle_state_table,
                 migration_mirror_enabled=settings.nl2sql_migration_mirror_enabled,
             )
@@ -4219,29 +4235,39 @@ class Nl2SqlService:
         self._job_execution_context.owners = owners
         job.execution_owner = (job.worker_id, job.attempt)
 
-    def _assert_job_execution(self, job_id: str) -> None:
+    def _assert_job_execution(self, job_id: str, *, probe_cancel: bool = False) -> bool:
+        """この worker がまだ job を実行してよいかを DB で確かめる。
+
+        `probe_cancel=True` なら、別プロセスからのキャンセル要求も同じ往復で読み、要求があれば
+        True を返す（stage の境界ごとの往復を 1 回にする。#830）。
+        """
         repository = self._incremental_repository
         if repository is None:
-            return
+            return False
         with self._lock:
             job = self._jobs.get(job_id)
             owner = self._job_execution_owner(job) if job else None
         if job is None or owner is None or job.execution_owner != owner:
             raise JobExecutionLost(job_id)
+        keys = [("jobs", job_id)]
+        if probe_cancel:
+            keys.append((_JOB_CANCEL_COLLECTION, job_id))
         try:
-            current = repository.get_document("jobs", job_id)
+            documents = repository.get_documents(keys)
         except Exception as exc:
             self._raise_incremental_repository_failure(
                 operation="job_owner_probe",
                 exc=exc,
                 operation_error_code="job_owner_query_failed",
             )
+        current = documents.get(("jobs", job_id))
         if current is None or not _state_document_matches_fence(
             current,
             {"status": "running", "worker_id": owner[0], "attempt": owner[1]},
             require_live_lease=True,
         ):
             raise JobExecutionLost(job_id)
+        return (_JOB_CANCEL_COLLECTION, job_id) in documents
 
     def _heartbeat_job(self, job_id: str, owner: tuple[str, int]) -> bool:
         """元の claim の時刻だけを更新し、並行する進捗・結果保存を巻き戻さない。"""
@@ -7089,9 +7115,12 @@ class Nl2SqlService:
         elapsed_ms: int | None = None,
         running_stage: str | None = None,
     ) -> None:
-        """実処理と UI の段階表示を同じ job snapshot 上で進める。"""
+        """実処理と UI の段階表示を同じ job snapshot 上で進める。
 
-        self._assert_job_execution(job_id)
+        実行所有権は保存（`_persist_job` の fence 付きの更新）で確かめる。保存の前に読み直さない
+        （stage ごとの往復を減らす。#830）。
+        """
+
         with self._lock:
             job = self._execution_job_locked(job_id)
             known_stages = {step.stage for step in job.steps}
@@ -7350,30 +7379,19 @@ class Nl2SqlService:
 
         ローカルフラグに加えて repository 上のキャンセル要求も確認する。gunicorn の
         複数 worker 構成では cancel API が別プロセスへ届くため、ローカルフラグだけでは
-        止まらない。キャンセル要求の取得失敗は次の境界で再確認する。
-        実行所有権の取得失敗は別に扱い、確認できないまま次の外部呼び出しへ進めない。
+        止まらない。キャンセル要求は実行所有権と同じ往復で読み（#830）、取得に失敗したら
+        確認できないまま次の外部呼び出しへ進めない。
         """
 
-        self._assert_job_execution(job_id)
+        # 実行所有権とキャンセル要求は 1 回の往復で読む（#830）。
+        cancel_requested = self._assert_job_execution(job_id, probe_cancel=True)
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 return
             if job.cancel_requested:
                 raise JobCancelledError()
-        repository = self._incremental_repository
-        if repository is None:
-            return
-        try:
-            document = repository.get_document(_JOB_CANCEL_COLLECTION, job_id)
-        except Exception:
-            logger.warning(
-                "nl2sql_job_cancel_probe_failed",
-                extra={"job_id": job_id},
-                exc_info=True,
-            )
-            return
-        if document is None:
+        if not cancel_requested:
             return
         with self._lock:
             job = self._jobs.get(job_id)
@@ -18652,7 +18670,7 @@ class Nl2SqlService:
                     job.error_code = (
                         SCHEMA_CATALOG_EMPTY_ERROR_CODE
                         if isinstance(exc, SchemaCatalogEmptyError)
-                        else None
+                        else _job_failure_error_code(exc, fallback=JOB_FAILED_ERROR_CODE)
                     )
                 job.finished_at = _utc_now()
                 self._clear_job_worker_state_locked(job)
@@ -18985,7 +19003,7 @@ class Nl2SqlService:
             return None
 
     def _run_job(self, job_id: str) -> None:
-        self._assert_job_execution(job_id)
+        # 実行所有権は直後の保存（fence 付きの更新）で確かめる（#830）。
         total_started = time.monotonic()
         with self._lock:
             job = self._execution_job_locked(job_id)
@@ -19071,6 +19089,7 @@ class Nl2SqlService:
         # 生成 SQL の実行時エラー（ORA-00904 等）は job 全体の失敗にせず、生成 SQL と safety を
         # 含む result と履歴を残したうえで ERROR として公開する。
         execution_error: str | None = None
+        execution_error_code: str | None = None
         if analysis.safety.is_safe:
             try:
                 safety, executable, results = self.execute_sql(
@@ -19087,6 +19106,9 @@ class Nl2SqlService:
                     },
                 )
                 execution_error = f"生成した SQL の実行に失敗しました: {exc}"
+                execution_error_code = _job_failure_error_code(
+                    exc, fallback=SQL_EXECUTION_FAILED_ERROR_CODE
+                )
                 safety = analysis.safety
                 executable = analysis.executable_sql
                 results = QueryResults(columns=[], rows=[], total=0)
@@ -19223,6 +19245,13 @@ class Nl2SqlService:
             JobStatus.DONE if safety.is_safe and execution_error is None else JobStatus.ERROR
         )
         final_error_message = safety.blocked_reason if not safety.is_safe else execution_error
+        final_error_code = (
+            SQL_BLOCKED_ERROR_CODE
+            if not safety.is_safe
+            else execution_error_code
+            if execution_error is not None
+            else None
+        )
         history_item = HistoryItem(
             business_release_id=job.business_release_id,
             id=history_id,
@@ -19252,6 +19281,7 @@ class Nl2SqlService:
             steps=final_steps,
             status=final_status,
             error_message=final_error_message,
+            error_code=final_error_code,
             warning_message=None,
             result=result,
             finished_at=finished,
@@ -19281,6 +19311,7 @@ class Nl2SqlService:
             job.steps = final_steps
             job.status = final_status
             job.error_message = final_error_message
+            job.error_code = final_error_code
             job.warning_message = persistence_warning
             job.result = result
             job.finished_at = finished

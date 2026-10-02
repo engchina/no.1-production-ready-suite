@@ -666,6 +666,10 @@ class IncrementalNl2SqlRepository(Protocol):
 
     def get_document(self, collection: str, entity_id: str) -> dict[str, Any] | None: ...
 
+    def get_documents(
+        self, keys: Sequence[tuple[str, str]]
+    ) -> dict[tuple[str, str], dict[str, Any]]: ...
+
     def delete_document(self, collection: str, entity_id: str) -> None: ...
 
     def list_documents(
@@ -1271,6 +1275,17 @@ class MemoryIncrementalNl2SqlRepository:
         with self._lock:
             value = self._documents.get((collection, entity_id))
             return _memory_document_payload(value) if value else None
+
+    def get_documents(
+        self, keys: Sequence[tuple[str, str]]
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        """複数の文書をまとめて読む（無いものは結果に含めない）。"""
+        found: dict[tuple[str, str], dict[str, Any]] = {}
+        for collection, entity_id in dict.fromkeys(keys):
+            payload = self.get_document(collection, entity_id)
+            if payload is not None:
+                found[(collection, entity_id)] = payload
+        return found
 
     def delete_document(self, collection: str, entity_id: str) -> None:
         with self._lock:
@@ -2468,6 +2483,36 @@ class OracleIncrementalNl2SqlRepository:
             clob_bytes=len(raw.encode("utf-8")),
         )
         return cast(dict[str, Any], json.loads(raw)) if raw else None
+
+    def get_documents(
+        self, keys: Sequence[tuple[str, str]]
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        """複数の文書を 1 回の往復で読む（無いものは結果に含めない。#830）。"""
+        unique = list(dict.fromkeys(keys))
+        if not unique:
+            return {}
+        binds: dict[str, str] = {}
+        conditions: list[str] = []
+        for index, (collection, entity_id) in enumerate(unique):
+            binds[f"collection_{index}"] = collection
+            binds[f"entity_id_{index}"] = entity_id
+            conditions.append(
+                f"(COLLECTION = :collection_{index} AND ENTITY_ID = :entity_id_{index})"
+            )
+        raw_by_key: dict[tuple[str, str], str] = {}
+        with self._connection_factory() as connection, connection.cursor() as cursor:
+            # 条件は固定の fragment と bind だけで組み立てる。
+            cursor.execute(
+                "SELECT COLLECTION, ENTITY_ID, PAYLOAD_JSON FROM NL2SQL_STATE_DOCUMENTS "  # nosec B608
+                "WHERE " + " OR ".join(conditions),
+                binds,
+            )
+            for row in cursor.fetchall():
+                raw_by_key[(str(row[0]), str(row[1]))] = _read_lob(row[2])
+        record_repository("state_document_batch", rows=len(raw_by_key))
+        return {
+            key: cast(dict[str, Any], json.loads(raw)) for key, raw in raw_by_key.items() if raw
+        }
 
     def delete_document(self, collection: str, entity_id: str) -> None:
         with self._connection_factory() as connection, connection.cursor() as cursor:

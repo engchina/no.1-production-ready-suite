@@ -383,6 +383,155 @@ def test_nl2sql_sql_is_flagged_by_the_guardrail(monkeypatch: MonkeyPatch) -> Non
 
 
 # ---------------------------------------------------------------------------
+# NL2SQL のジョブの完了を待つ（#848）
+# ---------------------------------------------------------------------------
+
+
+def _job_output(status: str, job_id: str = "job-1") -> dict[str, Any]:
+    output: dict[str, Any] = {"job_id": job_id, "status": status}
+    if status == "done":
+        output.update(columns=["AMOUNT"], rows=[{"AMOUNT": 1200}], returned_count=1)
+    return output
+
+
+def _get_job_after(polls_until_done: int) -> Any:
+    """`polls_until_done` 回目の nl2sql_get_job で done を返す fake（それまでは running）。"""
+    calls = {"count": 0}
+
+    def get_job(argument: Any) -> dict[str, Any]:
+        calls["count"] += 1
+        status = "done" if calls["count"] >= polls_until_done else "running"
+        return _job_output(status, argument.job_id)
+
+    return get_job
+
+
+def test_running_nl2sql_job_is_awaited_inside_the_tool(monkeypatch: MonkeyPatch) -> None:
+    mcp = fake_product_mcp(
+        monkeypatch,
+        outputs={"nl2sql_query": _job_output("running"), "nl2sql_get_job": _get_job_after(3)},
+    )
+
+    result = _invoke(
+        "nl2sql",
+        "nl2sql_query",
+        {"question": "部門別の売上", "wait_seconds": 45},
+        context=ToolInvocationContext(user_uuid=USER_UUID, run_id=None, trace_id="call-1"),
+    )
+
+    assert result.success is True, result.error
+    assert result.output is not None
+    assert result.output["status"] == "done"
+    assert result.output["rows"] == [{"AMOUNT": 1200}]
+    # 続きは nl2sql_get_job を wait_seconds 付き（MCP の timeout 60 秒に収まる値）で呼ぶ。
+    waits = mcp.calls_of("nl2sql_get_job")
+    assert [call["arguments"] for call in waits] == [{"job_id": "job-1", "wait_seconds": 20}] * 3
+    # 待つ分を含めて、SDK の function tool の timeout を決める。
+    config = runtime_config_store.get_mcp("nl2sql")
+    info = ExternalMcpToolInfo(name="nl2sql_query", server_id="nl2sql")
+    assert mcp_tool_definition(config, info).timeout_seconds == 60.0 + 300.0
+    rag = runtime_config_store.get_mcp("rag")
+    assert (
+        mcp_tool_definition(
+            rag, ExternalMcpToolInfo(name="rag_search", server_id="rag")
+        ).timeout_seconds
+        == 60.0
+    )
+
+
+def test_nl2sql_get_job_also_waits_until_done(monkeypatch: MonkeyPatch) -> None:
+    mcp = fake_product_mcp(monkeypatch, outputs={"nl2sql_get_job": _get_job_after(2)})
+
+    result = _invoke("nl2sql", "nl2sql_get_job", {"job_id": "job-7"})
+
+    assert result.output is not None
+    assert result.output["status"] == "done"
+    assert [call["arguments"]["job_id"] for call in mcp.calls_of("nl2sql_get_job")] == [
+        "job-7",
+        "job-7",
+    ]
+
+
+def test_job_wait_stops_at_the_total_budget(monkeypatch: MonkeyPatch) -> None:
+    mcp = fake_product_mcp(
+        monkeypatch,
+        outputs={"nl2sql_query": _job_output("running"), "nl2sql_get_job": _job_output("running")},
+    )
+    monkeypatch.setattr(get_settings(), "agent_nl2sql_job_wait_seconds", 50.0)
+    clock = {"now": 1000.0}
+
+    def fake_monotonic() -> float:
+        clock["now"] += 10.0  # 呼ぶたびに 10 秒進む（待ちの代わり）
+        return clock["now"]
+
+    monkeypatch.setattr(tools_module, "monotonic", fake_monotonic)
+
+    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
+
+    # 上限を超えたら running のまま返す（モデルが job_id で続きを取れる）。
+    assert result.output is not None
+    assert (result.output["status"], result.output["job_id"]) == ("running", "job-1")
+    polls = mcp.calls_of("nl2sql_get_job")
+    assert 1 <= len(polls) <= 5
+    assert all(1 <= call["arguments"]["wait_seconds"] <= 20 for call in polls)
+
+
+def test_job_wait_is_disabled_with_zero_budget(monkeypatch: MonkeyPatch) -> None:
+    mcp = fake_product_mcp(monkeypatch, outputs={"nl2sql_query": _job_output("pending")})
+    monkeypatch.setattr(get_settings(), "agent_nl2sql_job_wait_seconds", 0.0)
+
+    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
+
+    assert result.output is not None
+    assert result.output["status"] == "pending"
+    assert mcp.calls_of("nl2sql_get_job") == []
+
+
+def test_job_wait_stops_when_the_run_is_cancelled(monkeypatch: MonkeyPatch) -> None:
+    from app.features.agent.runtime import RunStatus, runtime_repository
+
+    mcp = fake_product_mcp(
+        monkeypatch,
+        outputs={"nl2sql_query": _job_output("running"), "nl2sql_get_job": _job_output("running")},
+    )
+    statuses = iter([RunStatus.RUNNING, RunStatus.CANCELLED])
+
+    class _Run:
+        def __init__(self, status: RunStatus) -> None:
+            self.status = status
+
+    def get_run(run_id: str) -> _Run:
+        assert run_id == "run-1"
+        return _Run(next(statuses))
+
+    monkeypatch.setattr(runtime_repository, "get_run", get_run)
+
+    result = _invoke(
+        "nl2sql",
+        "nl2sql_query",
+        {"question": "売上"},
+        context=ToolInvocationContext(user_uuid=USER_UUID, run_id="run-1"),
+    )
+
+    # 1 回目の待ちの後、Run がキャンセルされていたら待つのをやめる。
+    assert result.output is not None
+    assert result.output["status"] == "running"
+    assert len(mcp.calls_of("nl2sql_get_job")) == 1
+
+
+def test_job_wait_failure_returns_the_last_result(monkeypatch: MonkeyPatch) -> None:
+    mcp = fake_product_mcp(monkeypatch, outputs={"nl2sql_query": _job_output("running")})
+    mcp.outputs["nl2sql_get_job"] = McpToolError("NL2SQL_UNAVAILABLE", "一時的に利用できません。")
+
+    result = _invoke("nl2sql", "nl2sql_query", {"question": "売上"})
+
+    assert result.success is True, result.error
+    assert result.output is not None
+    assert result.output["status"] == "running"
+    assert len(mcp.calls_of("nl2sql_get_job")) == 1
+
+
+# ---------------------------------------------------------------------------
 # 外部 MCP の接続（API キー・structuredContent の無い応答）
 # ---------------------------------------------------------------------------
 
