@@ -10,8 +10,11 @@ import hashlib
 import json
 import logging
 import re
+import secrets
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from enum import StrEnum
 from time import monotonic, perf_counter
 from typing import Any
@@ -344,11 +347,65 @@ class ToolRegistry:
 MCP_PROTOCOL_VERSION = "2025-06-18"
 _MCP_ACCEPT = "application/json, text/event-stream"
 _MCP_METHOD_NOT_FOUND = -32601
-# 再試行してよい HTTP status。LLM を使う呼び出し・書き込み（idempotent=False）は、受け付ける前に
-# 断られた 429 / 503 と接続できなかったときだけ再試行する（502 / 504・timeout は処理が進んでいる
-# かもしれず、再試行すると LLM の呼び出しや会話の書き込みが重複する）。
-_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
-_NON_IDEMPOTENT_RETRY_STATUSES = frozenset({429, 503})
+
+
+class McpRetryKind(StrEnum):
+    """MCP の 1 メッセージの再試行の分類（#854）。
+
+    - `protocol`: `initialize`・`notifications/initialized`・`tools/list`（状態を変えない手順）
+    - `read_only`: 読み取り専用（`readOnlyHint=true`）のツールの `tools/call`
+    - `unsafe`: それ以外の `tools/call`（書き込み・副作用があり得る）
+    """
+
+    PROTOCOL = "protocol"
+    READ_ONLY = "read_only"
+    UNSAFE = "unsafe"
+
+
+# 再試行してよい HTTP status。429 / 503 は受け付ける前に断られた応答なので、どのメッセージでも
+# 再試行する。502 / 504 は呼び先で処理が進んでいる可能性があるので、副作用の無いものだけ。
+# 500 は手順のメッセージだけ（ツールの 500 は同じ入力で繰り返し失敗することが多い）。
+_RETRY_STATUSES: dict[McpRetryKind, frozenset[int]] = {
+    McpRetryKind.PROTOCOL: frozenset({429, 500, 502, 503, 504}),
+    McpRetryKind.READ_ONLY: frozenset({429, 502, 503, 504}),
+    McpRetryKind.UNSAFE: frozenset({429, 503}),
+}
+# 接続の確立の timeout の上限（秒）。残りの時間がこれより短ければ残りの時間。
+_MCP_CONNECT_TIMEOUT_SECONDS = 10.0
+# 再試行の待ち: 0.5 秒から 2 倍ずつ、上限 8 秒（後半を jitter）。Retry-After は上限 30 秒まで従う。
+_MCP_RETRY_BASE_DELAY_SECONDS = 0.5
+_MCP_RETRY_MAX_DELAY_SECONDS = 8.0
+_MCP_RETRY_AFTER_MAX_SECONDS = 30.0
+# 待った後に残っていてほしい時間（秒）。これより短くなるなら再試行しない。
+_MCP_RETRY_MIN_REMAINING_SECONDS = 1.0
+# 再試行の待ち（テストは待たない関数に差し替える。AGENTS.md の CI の規約）。
+_retry_sleep: Callable[[float], None] = time.sleep
+_jitter = secrets.SystemRandom()
+
+
+def _mcp_backoff_seconds(attempt: int) -> float:
+    delay = min(
+        _MCP_RETRY_BASE_DELAY_SECONDS * (2.0 ** (attempt - 1)), _MCP_RETRY_MAX_DELAY_SECONDS
+    )
+    return delay / 2 + _jitter.uniform(0, delay / 2)
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """`Retry-After`（秒か HTTP 日付）。無い・読めないときは None。"""
+    value = response.headers.get("retry-after", "").strip()
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            when = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        seconds = (when - _now()).total_seconds()
+    return max(0.0, seconds)
 
 
 class McpSession:
@@ -356,6 +413,9 @@ class McpSession:
 
     最初に `initialize` → `notifications/initialized` を送り、応答の `Mcp-Session-Id` を以降の
     request に付ける。固定の session id を設定した従来の gateway には `initialize` を送らない。
+
+    期限（#854）: `initialize` から最後の request までの全体を `timeout_seconds`（接続の timeout）で
+    区切る。各 POST の timeout は残りの時間で、再試行の待ちも期限に収まるときだけ行う。
 
     ponytail: セッションはツール呼び出しをまたいで再利用しない（呼び出しごとに initialize する）。
     SSE の応答は最後の JSON だけを読み（途中経過の通知は捨てる）、`nextCursor` の paging はしない。
@@ -371,13 +431,17 @@ class McpSession:
         service_code: str,
         service_label: str,
         session_id: str | None = None,
+        target_name: str | None = None,
     ) -> None:
         self._url = url
         self._headers = dict(headers)
         self._timeout_seconds = timeout_seconds
+        self._deadline = monotonic() + max(0.1, timeout_seconds)
         self._max_retries = max(0, max_retries)
         self._service_code = service_code
         self._service_label = service_label
+        # 失敗のメッセージで「〜のサービスが起動しているか」に使う名前（RAG・NL2SQL など）。
+        self._target_name = target_name or service_label
         self._session_id = session_id
         self._protocol_version = MCP_PROTOCOL_VERSION
         self._initialized = session_id is not None
@@ -390,16 +454,22 @@ class McpSession:
         request_id: str,
         idempotent: bool = True,
     ) -> JsonRpcResponse:
+        """JSON-RPC の request を送る。`tools/call` は `idempotent`（読み取り専用のツール）で
+        送信後の失敗（502 / 504）を再試行するかを決める。ほかのメソッドは手順として扱う。"""
         if not self._initialized:
             self._initialize()
         payload: JsonObject = {"jsonrpc": "2.0", "id": request_id, "method": method}
         if params is not None:
             payload["params"] = params
-        data, _headers = self._post(payload, idempotent=idempotent)
+        if method != "tools/call":
+            kind = McpRetryKind.PROTOCOL
+        else:
+            kind = McpRetryKind.READ_ONLY if idempotent else McpRetryKind.UNSAFE
+        data, _headers = self._post(payload, kind=kind)
         if data is None:
             raise ExternalToolError(
                 f"{self._service_code}.missing_result",
-                f"{self._service_label} returned an empty response",
+                f"{self._service_label}が空の応答を返しました。",
                 {"method": method},
             )
         return _mcp_jsonrpc_response(data)
@@ -420,7 +490,7 @@ class McpSession:
                     },
                 },
             },
-            idempotent=True,
+            kind=McpRetryKind.PROTOCOL,
         )
         response = _mcp_jsonrpc_response(data or {})
         if response.error is not None:
@@ -429,7 +499,7 @@ class McpSession:
                 return
             raise ExternalToolError(
                 f"{self._service_code}.initialize_failed",
-                f"{self._service_label} rejected MCP initialize",
+                f"{self._service_label}が MCP の initialize を拒否しました。",
                 {"error": response.error},
             )
         session_id = headers.get("mcp-session-id")
@@ -438,7 +508,9 @@ class McpSession:
         version = (response.result or {}).get("protocolVersion")
         if isinstance(version, str) and version:
             self._protocol_version = version
-        self._post({"jsonrpc": "2.0", "method": "notifications/initialized"}, idempotent=True)
+        self._post(
+            {"jsonrpc": "2.0", "method": "notifications/initialized"}, kind=McpRetryKind.PROTOCOL
+        )
 
     def _request_headers(self) -> dict[str, str]:
         headers = {
@@ -450,16 +522,18 @@ class McpSession:
             headers["Mcp-Session-Id"] = self._session_id
         return headers
 
-    def _post(self, payload: JsonObject, *, idempotent: bool) -> tuple[JsonObject | None, Any]:
+    def _post(self, payload: JsonObject, *, kind: McpRetryKind) -> tuple[JsonObject | None, Any]:
         return _post_mcp_message(
             service_code=self._service_code,
             service_label=self._service_label,
+            target_name=self._target_name,
             url=self._url,
             payload=payload,
             headers=self._request_headers(),
             timeout_seconds=self._timeout_seconds,
             max_retries=self._max_retries,
-            idempotent=idempotent,
+            kind=kind,
+            deadline=self._deadline,
         )
 
 
@@ -472,15 +546,39 @@ def _post_mcp_message(
     headers: dict[str, str],
     timeout_seconds: float,
     max_retries: int,
-    idempotent: bool = True,
+    kind: McpRetryKind = McpRetryKind.PROTOCOL,
+    deadline: float | None = None,
+    target_name: str | None = None,
 ) -> tuple[JsonObject | None, Any]:
-    """JSON-RPC の 1 メッセージを POST する。本文のない応答（通知への 202）は None。"""
-    attempts = max_retries + 1
-    retry_statuses = _RETRY_STATUSES if idempotent else _NON_IDEMPOTENT_RETRY_STATUSES
-    last_error: ExternalToolError | None = None
-    for attempt in range(1, attempts + 1):
+    """JSON-RPC の 1 メッセージを POST する。本文のない応答（通知への 202）は None。
+
+    再試行（#854。MCP の意味に合わせる）:
+    - 送信前の失敗（接続できない・接続の timeout・pool の待ち）と 429 / 503 は、どの分類でも
+      再試行する
+    - 送信後の失敗（502 / 504・通信の途中の切断）は `protocol` と `read_only` だけ。500・読み取りの
+      timeout は `protocol` だけ（ツールは呼び先で処理が進んでいる可能性がある）
+    - 待ちは指数 backoff + jitter、429 / 503 の `Retry-After` に従う。期限（`deadline`）を超える
+      待ちはしない
+    """
+    target = target_name or service_label
+    end = deadline if deadline is not None else monotonic() + max(0.1, timeout_seconds)
+    attempts = max(0, max_retries) + 1
+    retry_statuses = _RETRY_STATUSES[kind]
+    attempt = 0
+    while True:
+        attempt += 1
+        remaining = end - monotonic()
+        if remaining <= 0:
+            raise ExternalToolError(
+                f"{service_code}.timeout",
+                f"{service_label}が {timeout_seconds:g} 秒以内に応答しませんでした"
+                f"（{target} のサービスの負荷や処理の時間を確認してください）。",
+                {"attempts": attempt - 1, "retryable": False, "timeout_seconds": timeout_seconds},
+            )
+        timeout = httpx.Timeout(remaining, connect=min(remaining, _MCP_CONNECT_TIMEOUT_SECONDS))
+        retry_after: float | None = None
         try:
-            with httpx.Client(timeout=timeout_seconds) as client:
+            with httpx.Client(timeout=timeout) as client:
                 response = client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
                 response_headers = response.headers
@@ -493,52 +591,97 @@ def _post_mcp_message(
                     attempt=attempt,
                 )
             return data, response_headers
-        except httpx.TimeoutException as exc:
-            last_error = ExternalToolError(
-                f"{service_code}.timeout",
-                f"{service_label} request timed out",
-                {"attempt": attempt, "max_retries": max_retries},
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+            # 呼び先に届いていない（サービスが起動していない・URL が違う・ネットワーク）。
+            retryable = True
+            error = ExternalToolError(
+                f"{service_code}.unreachable",
+                f"{service_label}に接続できません（{target} のサービスが起動しているか、"
+                "接続の URL が正しいかを確認してください）。",
+                {"reason": type(exc).__name__},
             )
-            if attempt >= attempts or not idempotent:
-                raise last_error from exc
+        except httpx.TimeoutException as exc:
+            retryable = kind == McpRetryKind.PROTOCOL
+            error = ExternalToolError(
+                f"{service_code}.timeout",
+                f"{service_label}が {timeout_seconds:g} 秒以内に応答しませんでした"
+                f"（{target} のサービスの負荷や処理の時間を確認してください）。",
+                {"reason": type(exc).__name__, "timeout_seconds": timeout_seconds},
+            )
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code
-            last_error = ExternalToolError(
+            retryable = status_code in retry_statuses
+            if status_code in {429, 503}:
+                retry_after = _retry_after_seconds(exc.response)
+            error = ExternalToolError(
                 f"{service_code}.http_error",
-                f"{service_label} returned HTTP {status_code}",
-                {
-                    "attempt": attempt,
-                    "max_retries": max_retries,
-                    "status_code": status_code,
-                    "body": _response_text(exc.response),
-                },
+                _http_error_message(service_label, target, status_code),
+                {"status_code": status_code, "body": _response_text(exc.response)},
             )
-            if attempt >= attempts or status_code not in retry_statuses:
-                raise last_error from exc
         except httpx.RequestError as exc:
-            last_error = ExternalToolError(
+            # 送った後に通信が切れた（応答の途中の切断など）。副作用の無いものだけ再試行する。
+            retryable = kind != McpRetryKind.UNSAFE
+            error = ExternalToolError(
                 f"{service_code}.request_error",
-                f"{service_label} request failed",
-                {
-                    "attempt": attempt,
-                    "max_retries": max_retries,
-                    "reason": str(exc),
-                },
+                f"{service_label}との通信が途中で切れました（{target} のサービスの状態を"
+                "確認してください）。",
+                {"reason": type(exc).__name__},
             )
-            # 送信前の失敗（接続できない）だけは、LLM を使う呼び出しでも再試行してよい。
-            if attempt >= attempts or not (idempotent or isinstance(exc, httpx.ConnectError)):
-                raise last_error from exc
         except ExternalToolError:
             raise
         except ValueError as exc:
             raise ExternalToolError(
                 f"{service_code}.invalid_json",
-                f"{service_label} response body is not valid JSON",
+                f"{service_label}の応答が JSON ではありません。",
                 {"attempt": attempt},
             ) from exc
-    if last_error is not None:
-        raise last_error
-    raise ExternalToolError(f"{service_code}.unknown_error", f"{service_label} failed")
+        delay = 0.0
+        if retryable and attempt < attempts:
+            delay = (
+                min(retry_after, _MCP_RETRY_AFTER_MAX_SECONDS)
+                if retry_after is not None
+                else _mcp_backoff_seconds(attempt)
+            )
+            if end - monotonic() - delay < _MCP_RETRY_MIN_REMAINING_SECONDS:
+                retryable = False
+        error.details.update(
+            {
+                "attempts": attempt,
+                "max_retries": max_retries,
+                "retryable": retryable and attempt < attempts,
+            }
+        )
+        if not retryable or attempt >= attempts:
+            raise error
+        logger.warning(
+            "mcp_request_retry",
+            extra={
+                "service": target,
+                "method": payload.get("method"),
+                "error_code": error.code,
+                "attempt": attempt,
+                "max_retries": max_retries,
+                "delay_seconds": round(delay, 2),
+            },
+        )
+        _retry_sleep(delay)
+
+
+def _http_error_message(service_label: str, target: str, status_code: int) -> str:
+    """HTTP のエラーの利用者向けの 1 文（直し方を添える）。"""
+    prefix = f"{service_label}が HTTP {status_code} を返しました"
+    if status_code in {401, 403}:
+        return f"{prefix}（認証・権限の設定を確認してください）。"
+    if status_code == 404:
+        return f"{prefix}（接続の URL が正しいかを確認してください）。"
+    if status_code == 429:
+        return f"{prefix}（{target} が混み合っています。時間をおいて再実行してください）。"
+    if status_code >= 500:
+        return (
+            f"{prefix}（{target} のサービスが一時的に利用できない可能性があります。"
+            "時間をおいて再実行してください）。"
+        )
+    return f"{prefix}。"
 
 
 def _response_json_object(
@@ -979,8 +1122,10 @@ class McpConnectionClient:
         idempotent: bool = False,
         trace_id: str | None = None,
     ) -> JsonObject:
-        """ツールを呼ぶ。既定では 502 / 504・timeout で再試行しない（読み取り専用でも LLM を
-        使うツール（rag_search など）があり、再試行すると処理が重複する）。"""
+        """ツールを呼ぶ。`idempotent=False`（既定。書き込みのツール）は、送信前の失敗と 429 / 503
+        だけ再試行する。`idempotent=True`（読み取り専用のツール）は 502 / 504 も再試行する。
+        読み取りの timeout はどちらも再試行しない（呼び先で LLM の処理が進んでいる可能性が
+        ある）。"""
         response = self._session().request(
             "tools/call",
             {"name": tool_name, "arguments": arguments},
@@ -1068,6 +1213,7 @@ class McpConnectionClient:
             service_code="mcp",
             service_label=f"MCP 接続「{self._label}」",
             session_id=config.session_id,
+            target_name=self._label,
         )
 
     def _service_token(self) -> str:
@@ -1247,7 +1393,7 @@ def mcp_tool_definition(config: McpConnectionConfig, tool: ExternalMcpToolInfo) 
 
 
 def mcp_tool_handler(config: McpConnectionConfig, tool: ExternalMcpToolInfo) -> ToolHandler:
-    """MCP 接続のツールを呼ぶ handler（429 / 503・接続失敗だけ再試行する）。
+    """MCP 接続のツールを呼ぶ handler（再試行は `_post_mcp_message`。#854）。
 
     組み込みの NL2SQL のジョブのツールは、結果が実行中なら完了まで続きを取る（#848）。
     """
@@ -1255,7 +1401,10 @@ def mcp_tool_handler(config: McpConnectionConfig, tool: ExternalMcpToolInfo) -> 
 
     def handle(arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
         client = McpConnectionClient(config, context=context)
-        result = client.call_tool(tool.name, arguments, trace_id=context.trace_id)
+        # 読み取り専用（readOnlyHint）のツールだけ、送信後の失敗（502 / 504）も再試行する（#854）。
+        result = client.call_tool(
+            tool.name, arguments, idempotent=tool.read_only, trace_id=context.trace_id
+        )
         if follow_up_tool is None:
             return result
         return wait_for_product_job(

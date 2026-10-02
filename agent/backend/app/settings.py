@@ -125,7 +125,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # Run の利用者がいない呼び出し（画面からのツール一覧の取得など、利用者のいない経路）で使う
     # 共通認証のログインユーザー ID。空ならその呼び出しは失敗する。
     agent_mcp_service_user_login_id: str = ""
-    # MCP の呼び出しの再試行（429 / 503・接続失敗。読み取り専用のツールは 502 / 504・timeout も）。
+    # MCP の 1 メッセージの再試行の回数（#854）。送信前の失敗（接続できない・接続の timeout）と
+    # 429 / 503 は全メッセージ、502 / 504 は手順（initialize・tools/list）と読み取り専用のツールだけ。
+    # 待ちは指数 backoff + jitter（Retry-After に従う）で、呼び出し全体は接続の timeout に収める。
     agent_external_mcp_max_retries: int = 3
     # MCP 接続の宣言。JSON list か {"servers": [...]}。各項目は server_id/id 必須、
     # base_url・auth_mode・資格情報・timeout_seconds を任意で持つ。

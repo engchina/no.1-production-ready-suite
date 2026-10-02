@@ -18,7 +18,7 @@ os.environ["AGENT_RUNTIME_REPOSITORY_BACKEND"] = "memory"
 import pytest  # noqa: E402
 from pr_system_settings.database_status import clear_database_status_cache  # noqa: E402
 
-from app.features.agent import run_facts_store, storage_backend  # noqa: E402
+from app.features.agent import run_facts_store, storage_backend, tools  # noqa: E402
 from app.security.service import SecurityService, set_security_service  # noqa: E402
 from app.security.store import InMemorySecurityStore  # noqa: E402
 from app.settings import get_settings  # noqa: E402
@@ -58,3 +58,9 @@ def _fresh_storage_backend_decision() -> Iterator[None]:
     storage_backend.reset()
     yield
     storage_backend.reset()
+
+
+@pytest.fixture(autouse=True)
+def _no_mcp_retry_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MCP の再試行の待ち（#854）はテストでは待たない。"""
+    monkeypatch.setattr(tools, "_retry_sleep", lambda _seconds: None)
