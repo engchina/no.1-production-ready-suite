@@ -177,6 +177,8 @@ class RunCreateRequest(BaseModel):
     goal: str
     agent_id: str = "default"
     metadata: JsonObject = Field(default_factory=dict)
+    # 会話（スレッド）を続けるときの ID（#768）。省略すると新しい会話を始める。
+    thread_id: str | None = Field(default=None, pattern=r"^thread_[0-9a-f]{32}$")
 
     @field_validator("goal")
     @classmethod
@@ -203,8 +205,44 @@ class RunState(BaseModel):
     # Run を作った利用者（共通認証の user_uuid。#233）。RAG / NL2SQL の MCP はこの利用者として呼ぶ。
     # この項目がない既存の Run は None。
     created_by_user_uuid: str | None = None
+    # 会話（スレッド。#768）。チャットの 1 往復が 1 Run。#768 より前の Run は None。
+    thread_id: str | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
+
+
+class ThreadNotFoundError(LookupError):
+    """会話が無い・別の利用者や別の Agent の会話（#768）。"""
+
+
+class ThreadSummary(BaseModel):
+    thread_id: str
+    agent_id: str
+    title: str
+    run_count: int
+    last_status: RunStatus
+    created_at: datetime
+    updated_at: datetime
+
+
+class ThreadsData(BaseModel):
+    threads: list[ThreadSummary] = Field(default_factory=list)
+
+
+class ThreadData(BaseModel):
+    thread_id: str
+    agent_id: str
+    runs: list[RunState] = Field(default_factory=list)
+
+
+def run_answer_text(run: RunState) -> str | None:
+    """組み込み Runtime の最終回答（`kind="answer"` の成果物）。"""
+    for artifact in reversed(run.artifacts):
+        if artifact.kind == "answer" and isinstance(artifact.content, dict):
+            text = artifact.content.get("text")
+            if isinstance(text, str):
+                return text
+    return None
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -307,6 +345,11 @@ class AgentRuntimeRepositoryContract(Protocol):
     def complete_builtin_run(self, run_id: str, answer: str) -> RunState: ...
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState: ...
     def note_builtin_warning(self, run_id: str, message: str) -> None: ...
+    def thread_history(self, run_id: str, *, limit: int) -> list[tuple[str, str]]: ...
+    def list_threads(
+        self, *, user_uuid: str | None, agent_id: str | None = None
+    ) -> list[ThreadSummary]: ...
+    def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData: ...
     def list_runs(self) -> list[RunState]: ...
     def get_run(self, run_id: str) -> RunState: ...
     def list_artifacts(self, run_id: str) -> list[Artifact]: ...
@@ -572,12 +615,18 @@ class AgentRuntimeRepository:
                 raise KeyError(request.agent_id)
             if not agent.enabled:
                 raise ValueError("agent disabled")
+            if request.thread_id is not None:
+                # 続ける会話は、同じ利用者・同じ Agent のものだけ（他人の会話へ書き込ませない）。
+                self._require_thread_locked(
+                    request.thread_id, user_uuid=created_by_user_uuid, agent_id=request.agent_id
+                )
             run = RunState(
                 id=f"run_{uuid4().hex}",
                 goal=request.goal,
                 agent_id=request.agent_id,
                 runtime_id=BUILTIN_RUNTIME_ID,
                 created_by_user_uuid=created_by_user_uuid,
+                thread_id=request.thread_id or f"thread_{uuid4().hex}",
                 status=RunStatus.QUEUED,
                 metadata={**request.metadata},
             )
@@ -590,6 +639,77 @@ class AgentRuntimeRepository:
             )
             self._persist_locked()
             return run.model_copy(deep=True)
+
+    def _thread_runs_locked(self, thread_id: str) -> list[RunState]:
+        return sorted(
+            (run for run in self._runs.values() if run.thread_id == thread_id),
+            key=lambda run: run.created_at,
+        )
+
+    def _require_thread_locked(
+        self, thread_id: str, *, user_uuid: str | None, agent_id: str | None = None
+    ) -> list[RunState]:
+        runs = self._thread_runs_locked(thread_id)
+        if (
+            not runs
+            or runs[0].created_by_user_uuid != user_uuid
+            or (agent_id is not None and runs[0].agent_id != agent_id)
+        ):
+            raise ThreadNotFoundError(thread_id)
+        return runs
+
+    def thread_history(self, run_id: str, *, limit: int) -> list[tuple[str, str]]:
+        """同じ会話の前の往復（質問と回答。完了したものだけ、古い順、最大 `limit` 往復）。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            if run.thread_id is None:
+                return []
+            turns = [
+                (previous.goal, answer)
+                for previous in self._thread_runs_locked(run.thread_id)
+                if previous.id != run.id
+                and previous.created_at <= run.created_at
+                and previous.status == RunStatus.COMPLETED
+                and (answer := run_answer_text(previous)) is not None
+            ]
+            return turns[-limit:] if limit > 0 else []
+
+    def list_threads(
+        self, *, user_uuid: str | None, agent_id: str | None = None
+    ) -> list[ThreadSummary]:
+        """利用者の会話の一覧（新しい順）。会話は作った利用者だけが見る（チャットは個人の作業）。"""
+        with self._lock:
+            grouped: dict[str, list[RunState]] = {}
+            for run in self._runs.values():
+                if run.thread_id is None or run.created_by_user_uuid != user_uuid:
+                    continue
+                if agent_id is not None and run.agent_id != agent_id:
+                    continue
+                grouped.setdefault(run.thread_id, []).append(run)
+            summaries = []
+            for thread_id, runs in grouped.items():
+                runs.sort(key=lambda item: item.created_at)
+                summaries.append(
+                    ThreadSummary(
+                        thread_id=thread_id,
+                        agent_id=runs[0].agent_id,
+                        title=runs[0].goal.strip().splitlines()[0][:80],
+                        run_count=len(runs),
+                        last_status=runs[-1].status,
+                        created_at=runs[0].created_at,
+                        updated_at=max(run.updated_at for run in runs),
+                    )
+                )
+            return sorted(summaries, key=lambda item: item.updated_at, reverse=True)
+
+    def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData:
+        with self._lock:
+            runs = self._require_thread_locked(thread_id, user_uuid=user_uuid)
+            return ThreadData(
+                thread_id=thread_id,
+                agent_id=runs[0].agent_id,
+                runs=[run.model_copy(deep=True) for run in runs],
+            )
 
     def begin_builtin_run(self, run_id: str) -> tuple[RunState, AgentProfile] | None:
         """実行を始める（取消済み・終了済みなら None）。"""

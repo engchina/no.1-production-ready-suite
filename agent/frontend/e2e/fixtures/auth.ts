@@ -10,6 +10,7 @@
 type Json = Record<string, unknown>;
 
 export const MENU_PERMISSION_CODES = [
+  "menu.chat",
   "menu.agents",
   "menu.skills",
   "menu.runtimes",
@@ -41,6 +42,7 @@ export const CAPABILITY_PERMISSION_CODES = [
 export const ALL_PERMISSION_CODES: string[] = [...MENU_PERMISSION_CODES, ...CAPABILITY_PERMISSION_CODES];
 
 const ADMIN_MENUS = [
+  "menu.chat",
   "menu.agents",
   "menu.skills",
   "menu.runtimes",
@@ -59,6 +61,7 @@ const ADMIN_MENUS = [
 ];
 
 const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string, label: string]> = {
+  "menu.chat": ["Control Plane", "チャット"],
   "menu.agents": ["Control Plane", "業務 Agent"],
   "menu.skills": ["Control Plane", "スキル (Skills)"],
   "menu.runtimes": ["Control Plane", "Runtime"],
@@ -98,8 +101,8 @@ export const PERMISSION_CATALOG: Json[] = [
     code: "agent.runs.operate",
     group: CAPABILITY_GROUP,
     label: "Run の実行・操作（operator）",
-    description: "利用できるエージェントで Run の作成・取消・再開・再実行ができます。",
-    implies: ["menu.runs"],
+    description: "利用できるエージェントで Run の作成・取消・再開・再実行と、チャットができます。",
+    implies: ["menu.runs", "menu.chat"],
   },
   {
     code: "agent.approvals.decide",

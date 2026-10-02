@@ -185,6 +185,10 @@ export interface RunState {
   artifacts: Artifact[];
   pending_tool_calls: ToolCall[];
   metadata: Record<string, unknown>;
+  /** Run を作った利用者（共通認証の user_uuid）。 */
+  created_by_user_uuid?: string | null;
+  /** 会話（スレッド。#768）。チャットの 1 往復が 1 Run。 */
+  thread_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -516,6 +520,31 @@ export interface CreateRunPayload {
   goal: string;
   agent_id?: string;
   metadata?: Record<string, unknown>;
+  /** 続ける会話（#768）。省略すると新しい会話を始める。 */
+  thread_id?: string;
+}
+
+/** チャットの会話の一覧の 1 件（#768）。 */
+export interface ThreadSummary {
+  thread_id: string;
+  agent_id: string;
+  /** 最初の質問の 1 行目。 */
+  title: string;
+  run_count: number;
+  last_status: RunState["status"];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ThreadsData {
+  threads: ThreadSummary[];
+}
+
+export interface ThreadData {
+  thread_id: string;
+  agent_id: string;
+  /** 会話の Run（古い順）。 */
+  runs: RunState[];
 }
 
 /** 組み込み Runtime で選べるモデル（システム設定 > モデル の登録モデル。#754）。 */
@@ -749,6 +778,12 @@ export const agentApi = {
   // 組み込み Runtime の状態（SDK の版・既定のモデル・選べるモデル。#754）。
   getRuntimeStatus: () => request<BuiltinRuntimeStatus>("/api/runtime/status"),
   listRuns: () => request<{ runs: RunState[] }>("/api/runs"),
+  listThreads: (agentId?: string) =>
+    request<ThreadsData>(
+      `/api/threads${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""}`,
+    ),
+  getThread: (threadId: string) =>
+    request<ThreadData>(`/api/threads/${encodeURIComponent(threadId)}`),
   createRun: (payload: CreateRunPayload) =>
     request<RunState>("/api/runs", {
       method: "POST",

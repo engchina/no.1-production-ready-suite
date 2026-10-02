@@ -64,7 +64,9 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
 
 - UI、エラー、通知、LLM 指示の第一言語は日本語。文言は i18n 経由。
 - 日本語フォントは `"Noto Sans JP", "Roboto", system-ui, sans-serif`、本文 14px。
-- ナビは「業務 Agent / Skill / Runtime / Run / 承認・監査 / Marketplace」を主要導線とする。
+- ナビは「チャット / 業務 Agent / Skill / Runtime / Run / 承認・監査 / Marketplace」を主要導線とする。
+  チャット（#768）は業務利用者の入口で、1 往復が 1 Run。同じ会話（`thread_id`）の前の質問と回答を組み込み Runtime が
+  モデルへ渡す（直近 10 往復）。会話は作った利用者だけが読み、続けられる（同じ Agent に限る）。
   Plugin、Tools を独立ナビに戻さない（旧エンジンの Planner・Memory は #756 で削除した）。
 - 設定は2セクションに分ける。**運用設定**：システムテーブル（先頭。RAG / NL2SQL と同じ。#751）/ Agent 接続設定 / MCP 接続（#757）/
   Control Plane バックアップ（Agent 固有）。**システム設定**：OCI 認証 / アップロード保存先 / モデル /

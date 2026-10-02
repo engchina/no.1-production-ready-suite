@@ -365,6 +365,7 @@ def test_database_user_login_me_and_logout(auth: ProductionAuth) -> None:
     assert set(data["permissions"]) == {
         "agent.runs.operate",
         "menu.agents",
+        "menu.chat",
         "menu.runs",
     }
     assert data["allowed_agent_ids"] == ["default"]

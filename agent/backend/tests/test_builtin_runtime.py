@@ -26,6 +26,7 @@ from app.features.agent.runtime import (
     ApprovalDecisionRequest,
     RunCreateRequest,
     RunStatus,
+    ThreadNotFoundError,
     builtin_resume_pending,
     runtime_repository,
 )
@@ -489,3 +490,118 @@ def test_unavailable_mcp_connection_is_skipped_with_a_warning(
     warning = next(event for event in run.events if event.type == "runtime.event")
     assert "NL2SQL" in warning.message
     assert warning.payload == {"severity": "warning"}
+
+
+# ---------------------------------------------------------------------------
+# 会話（スレッド。#768）
+# ---------------------------------------------------------------------------
+
+
+def test_thread_passes_previous_turns_to_the_model(monkeypatch: MonkeyPatch, calls: _Calls) -> None:
+    model = _script(
+        monkeypatch,
+        [assistant_message("今月の売上は 120 万円です。")],
+        [assistant_message("先月は 100 万円なので 20 万円増えました。")],
+    )
+    first_id = _create_run("今月の売上は？")
+    anyio.run(builtin_runtime.execute_run, first_id)
+    first = runtime_repository.get_run(first_id)
+    assert first.thread_id is not None and first.thread_id.startswith("thread_")
+
+    second = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="先月と比べると？", agent_id=AGENT_ID, thread_id=first.thread_id),
+        created_by_user_uuid=USER_UUID,
+    )
+    anyio.run(builtin_runtime.execute_run, second.id)
+
+    assert runtime_repository.get_run(second.id).status == RunStatus.COMPLETED
+    # 1 回目は質問だけ、2 回目は前の質問と回答を付けてモデルへ渡す。
+    assert model.calls[0].input == [{"role": "user", "content": "今月の売上は？"}]
+    assert model.calls[1].input == [
+        {"role": "user", "content": "今月の売上は？"},
+        {"role": "assistant", "content": "今月の売上は 120 万円です。"},
+        {"role": "user", "content": "先月と比べると？"},
+    ]
+
+    thread = runtime_repository.get_thread(first.thread_id, user_uuid=USER_UUID)
+    assert [run.id for run in thread.runs] == [first_id, second.id]
+    [summary] = [
+        item
+        for item in runtime_repository.list_threads(user_uuid=USER_UUID, agent_id=AGENT_ID)
+        if item.thread_id == first.thread_id
+    ]
+    assert (summary.title, summary.run_count, summary.last_status) == (
+        "今月の売上は？",
+        2,
+        RunStatus.COMPLETED,
+    )
+
+
+def test_thread_belongs_to_its_user_and_agent(calls: _Calls) -> None:
+    first_id = _create_run("自分の会話")
+    thread_id = runtime_repository.get_run(first_id).thread_id
+    assert thread_id is not None
+
+    # 別の利用者は続けられず、一覧にも出ない。別の Agent でも続けられない。
+    with pytest.raises(ThreadNotFoundError):
+        runtime_repository.create_builtin_run(
+            RunCreateRequest(goal="横取り", agent_id=AGENT_ID, thread_id=thread_id),
+            created_by_user_uuid="99999999-0000-0000-0000-000000000000",
+        )
+    with pytest.raises(ThreadNotFoundError):
+        runtime_repository.create_builtin_run(
+            RunCreateRequest(goal="別の Agent", agent_id="default", thread_id=thread_id),
+            created_by_user_uuid=USER_UUID,
+        )
+    with pytest.raises(ThreadNotFoundError):
+        runtime_repository.get_thread(thread_id, user_uuid="99999999-0000-0000-0000-000000000000")
+    others = runtime_repository.list_threads(user_uuid="99999999-0000-0000-0000-000000000000")
+    assert thread_id not in {item.thread_id for item in others}
+
+
+def test_thread_api_lists_and_continues_conversation(
+    monkeypatch: MonkeyPatch, calls: _Calls
+) -> None:
+    from pr_system_settings.auth.domain import LOCAL_DEBUG_USER_UUID
+    from security_support import client
+
+    scheduled: list[str] = []
+    monkeypatch.setattr(
+        "app.features.agent.router._schedule_builtin_run", lambda run: scheduled.append(run.id)
+    )
+
+    created = client.post("/api/runs", json={"goal": "最初の質問", "agent_id": AGENT_ID})
+    assert created.status_code == 200, created.text
+    thread_id = created.json()["data"]["thread_id"]
+    continued = client.post(
+        "/api/runs",
+        json={"goal": "続きの質問", "agent_id": AGENT_ID, "thread_id": thread_id},
+    )
+    assert continued.status_code == 200, continued.text
+    assert continued.json()["data"]["thread_id"] == thread_id
+    assert continued.json()["data"]["created_by_user_uuid"] == LOCAL_DEBUG_USER_UUID
+
+    listed = client.get(f"/api/threads?agent_id={AGENT_ID}")
+    assert listed.status_code == 200
+    [thread] = [item for item in listed.json()["data"]["threads"] if item["thread_id"] == thread_id]
+    assert thread["title"] == "最初の質問"
+    assert thread["run_count"] == 2
+
+    detail = client.get(f"/api/threads/{thread_id}")
+    assert detail.status_code == 200
+    assert [run["goal"] for run in detail.json()["data"]["runs"]] == ["最初の質問", "続きの質問"]
+
+    missing = "thread_" + "0" * 32
+    assert client.get(f"/api/threads/{missing}").status_code == 404
+    unknown = client.post(
+        "/api/runs", json={"goal": "x", "agent_id": AGENT_ID, "thread_id": missing}
+    )
+    assert unknown.status_code == 404
+    assert unknown.json()["error_messages"] == ["会話が見つかりません。"]
+    assert (
+        client.post(
+            "/api/runs", json={"goal": "x", "agent_id": AGENT_ID, "thread_id": "bad"}
+        ).status_code
+        == 422
+    )
+    assert len(scheduled) == 2

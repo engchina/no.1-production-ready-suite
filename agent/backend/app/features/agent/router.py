@@ -101,6 +101,9 @@ from app.features.agent.runtime import (
     RunState,
     RunStatus,
     RuntimeToolCallAuditData,
+    ThreadData,
+    ThreadNotFoundError,
+    ThreadsData,
     builtin_resume_pending,
     runtime_repository,
 )
@@ -1453,10 +1456,40 @@ async def create_run(
         )
         _schedule_builtin_run(run)
         return ApiResponse(data=run)
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="agent not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/threads", response_model=ApiResponse[ThreadsData])
+async def list_threads(
+    request: Request,
+    agent_id: str | None = None,
+) -> ApiResponse[ThreadsData]:
+    """ログイン中の利用者の会話（チャット。#768）。使えなくなった Agent の会話は出さない。"""
+    policy = _actor_policy(request)
+    threads = [
+        thread
+        for thread in runtime_repository.list_threads(
+            user_uuid=_run_creator_user_uuid(request), agent_id=agent_id
+        )
+        if _policy_allows_agent(policy, thread.agent_id)
+    ]
+    return ApiResponse(data=ThreadsData(threads=threads))
+
+
+@router.get("/threads/{thread_id}", response_model=ApiResponse[ThreadData])
+async def get_thread(thread_id: str, request: Request) -> ApiResponse[ThreadData]:
+    """会話の Run（古い順）。作った利用者だけが読める。"""
+    try:
+        thread = runtime_repository.get_thread(thread_id, user_uuid=_run_creator_user_uuid(request))
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
+    _require_agent_access(request, thread.agent_id)
+    return ApiResponse(data=thread)
 
 
 @router.get("/runs/{run_id}", response_model=ApiResponse[RunState])

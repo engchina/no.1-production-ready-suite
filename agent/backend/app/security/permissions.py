@@ -53,6 +53,8 @@ def _menu_permission(code: str, group: str, label: str) -> PermissionDefinition:
 
 # ---- メニュー権限（agent/frontend の nav-config.ts と同じ並び） ----
 
+# 業務利用者のチャット（#768）。
+MENU_CHAT = "menu.chat"
 MENU_AGENTS = "menu.agents"
 MENU_SKILLS = "menu.skills"
 MENU_RUNTIMES = "menu.runtimes"
@@ -109,6 +111,7 @@ _SYSTEM_SETTINGS_MENUS = (
 )
 # agent.admin が暗黙に含むメニュー（ユーザーとロール・権限管理は含まない）。
 _ADMIN_MENUS = (
+    MENU_CHAT,
     MENU_AGENTS,
     MENU_SKILLS,
     MENU_RUNTIMES,
@@ -124,6 +127,7 @@ _ADMIN_MENUS = (
 
 
 PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
+    _menu_permission(MENU_CHAT, _GROUP_CONTROL_PLANE, "チャット"),
     _menu_permission(MENU_AGENTS, _GROUP_CONTROL_PLANE, "業務 Agent"),
     _menu_permission(MENU_SKILLS, _GROUP_CONTROL_PLANE, "スキル (Skills)"),
     _menu_permission(MENU_RUNTIMES, _GROUP_CONTROL_PLANE, "Runtime"),
@@ -159,9 +163,9 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         RUNS_OPERATE,
         _GROUP_CAPABILITIES,
         "Run の実行・操作（operator）",
-        "利用できるエージェントで Run の作成・取消・再開・再実行ができます"
+        "利用できるエージェントで Run の作成・取消・再開・再実行と、チャットができます"
         "（Run の閲覧を含みます）。",
-        implies=(MENU_RUNS,),
+        implies=(MENU_RUNS, MENU_CHAT),
     ),
     _permission(
         APPROVALS_DECIDE,
@@ -276,7 +280,7 @@ _DECIDE = _any(APPROVALS_DECIDE, ADMIN)
 # 画面の読み取り（メニュー権限。capability は関連メニューを暗黙に含む）。
 _RUN_LIST = _any(MENU_RUNS, MENU_APPROVALS)
 _RUN_DETAIL = _any(MENU_RUNS, MENU_APPROVALS, MENU_AUDIT)
-_AGENT_READ = _any(MENU_AGENTS, MENU_RUNS, MENU_SETTINGS_RUNTIME_SNAPSHOT)
+_AGENT_READ = _any(MENU_AGENTS, MENU_RUNS, MENU_CHAT, MENU_SETTINGS_RUNTIME_SNAPSHOT)
 _TOOL_READ = _any(MENU_AUDIT, ADMIN)
 _PLUGIN_READ = _any(MENU_PLUGIN_MARKETPLACES)
 _SECURITY_ROLE_READ = _any(MENU_SECURITY_USERS, MENU_SECURITY_ROLES, MENU_SECURITY_PERMISSIONS)
@@ -312,6 +316,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/runtime/status"): _any(MENU_RUNTIMES, MENU_AGENTS),
     ("GET", "/runs"): _RUN_LIST,
     ("POST", "/runs"): _OPERATE,
+    # チャットの会話（#768）。会話は作った利用者だけが読む（handler が利用者で絞る）。
+    ("GET", "/threads"): _any(MENU_CHAT),
+    ("GET", "/threads/{thread_id}"): _any(MENU_CHAT),
     ("GET", _RUN): _RUN_DETAIL,
     ("GET", f"{_RUN}/audit"): _RUN_DETAIL,
     ("GET", f"{_RUN}/artifacts"): _RUN_DETAIL,

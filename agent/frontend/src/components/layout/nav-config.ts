@@ -6,6 +6,7 @@ import {
   Container,
   DatabaseBackup,
   LockKeyhole,
+  MessagesSquare,
   PlayCircle,
   PlugZap,
   Store,
@@ -64,6 +65,8 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     titleKey: "nav.section.controlPlane",
     items: [
+      // 業務利用者の入口（#768。RAG のチャットと同じアイコン）。
+      { href: APP_ROUTES.chat, labelKey: "nav.chat", icon: MessagesSquare, permission: MENU_PERMISSIONS.chat },
       { href: APP_ROUTES.agents, labelKey: "nav.agents", icon: Bot, permission: MENU_PERMISSIONS.agents },
       {
         href: APP_ROUTES.skills,
