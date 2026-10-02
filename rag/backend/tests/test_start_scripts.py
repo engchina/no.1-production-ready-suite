@@ -83,7 +83,9 @@ def _run(startup: tuple[Path, dict[str, str]]) -> subprocess.CompletedProcess[st
     )
 
 
-def test_slow_dependency_preparation_does_not_consume_health_timeout(startup) -> None:
+def test_slow_dependency_preparation_does_not_consume_health_timeout(
+    startup: tuple[Path, dict[str, str]],
+) -> None:
     _, env = startup
     env["TEST_SYNC_DELAY"] = "3"
     result = _run(startup)
@@ -96,7 +98,9 @@ def test_slow_dependency_preparation_does_not_consume_health_timeout(startup) ->
 
 
 @pytest.mark.parametrize("failure", ["TEST_SYNC_FAIL", "TEST_SERVER_FAIL", "TEST_NOT_READY"])
-def test_failed_stage_does_not_start_frontend(startup, failure: str) -> None:
+def test_failed_stage_does_not_start_frontend(
+    startup: tuple[Path, dict[str, str]], failure: str
+) -> None:
     _, env = startup
     env[failure] = "1"
     result = _run(startup)
@@ -109,7 +113,7 @@ def test_failed_stage_does_not_start_frontend(startup, failure: str) -> None:
         assert "readiness" not in result.stdout
 
 
-def test_cancellation_during_dependency_preparation(startup) -> None:
+def test_cancellation_during_dependency_preparation(startup: tuple[Path, dict[str, str]]) -> None:
     scripts, env = startup
     env["TEST_SYNC_DELAY"] = "60"
     with subprocess.Popen(
@@ -134,7 +138,9 @@ def test_cancellation_during_dependency_preparation(startup) -> None:
 
 
 @pytest.mark.parametrize("custom_ca", [False, True])
-def test_frontend_uses_system_ca_and_preserves_explicit_ca(startup, custom_ca: bool) -> None:
+def test_frontend_uses_system_ca_and_preserves_explicit_ca(
+    startup: tuple[Path, dict[str, str]], custom_ca: bool
+) -> None:
     scripts, env = startup
     shutil.copy2(Path(env["TEST_SOURCE"]) / "start-frontend.sh", scripts / "start-frontend.sh")
     platform = scripts.parents[1] / "platform"
