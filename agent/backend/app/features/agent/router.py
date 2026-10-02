@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -73,6 +74,7 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 import app.settings as app_settings
+from app.features.agent import builtin_runtime
 from app.features.agent.config import runtime_config_store
 from app.features.agent.control_plane import (
     RUNTIME_ADAPTERS,
@@ -103,6 +105,7 @@ from app.features.agent.plugins import (
     reload_declared_plugins,
 )
 from app.features.agent.runtime import (
+    BUILTIN_RUNTIME_ID,
     AgentProfile,
     AgentProfilePatch,
     AgentRuntimeSnapshot,
@@ -119,7 +122,9 @@ from app.features.agent.runtime import (
     RunEvent,
     RunsData,
     RunState,
+    RunStatus,
     RuntimeToolCallAuditData,
+    builtin_resume_pending,
     runtime_repository,
 )
 from app.features.agent.skills import (
@@ -1883,30 +1888,29 @@ async def delete_runtime_binding(
     return ApiResponse(data=RuntimeBindingListData(bindings=runtime_binding_registry.list()))
 
 
-async def _dispatch_control_plane_run(
-    run_id: str,
-    runtime: RuntimeDefinition,
-    binding: RuntimeBinding,
-    agent: AgentProfile,
-) -> None:
-    try:
-        submission = await RUNTIME_ADAPTERS[runtime.kind].submit_run(
-            runtime,
-            binding,
-            goal=runtime_repository.get_run(run_id).goal,
-            instructions=agent.instructions,
-            control_plane_run_id=run_id,
-        )
-        runtime_repository.mark_runtime_submitted(
-            run_id,
-            external_run_id=submission.external_run_id,
-            external_cursor=submission.external_cursor,
-            external_status=submission.status,
-        )
-    except RuntimeAdapterError as exc:
-        runtime_repository.mark_runtime_failed(run_id, code=exc.code, detail=str(exc))
-    except (httpx.HTTPError, ValueError) as exc:
-        runtime_repository.mark_runtime_failed(run_id, code="runtime.unavailable", detail=str(exc))
+# 実行中の組み込み Runtime の task（GC で消えないよう参照を持つ）。
+_builtin_tasks: set[asyncio.Task[None]] = set()
+
+
+def _schedule_builtin_run(run: RunState) -> None:
+    """組み込み Runtime の Run を、このプロセスで実行・再開する（dispatcher のときは何もしない）。
+
+    承認がすべて決まって queued に戻った Run（再開の状態を持つ）は再開し、それ以外は
+    最初から実行する。
+    本番の別プロセス（`runtime_dispatcher`）は同じ判定で Run を claim する。
+    """
+    if run.runtime_id != BUILTIN_RUNTIME_ID or run.status != RunStatus.QUEUED:
+        return
+    if get_settings().agent_runtime_dispatch_mode.strip().lower() != "in_process":
+        return
+    coroutine = (
+        builtin_runtime.resume_run(run.id)
+        if builtin_resume_pending(run)
+        else builtin_runtime.execute_run(run.id)
+    )
+    task = asyncio.get_running_loop().create_task(coroutine)
+    _builtin_tasks.add(task)
+    task.add_done_callback(_builtin_tasks.discard)
 
 
 @router.get("/runs", response_model=ApiResponse[RunsData])
@@ -1956,59 +1960,16 @@ async def create_run(
                     "message": "tool_calls は廃止されました。Agent に Skill を割り当ててください。",
                 },
             )
-        binding = (
-            runtime_binding_registry.get(run_request.runtime_binding_id)
-            if run_request.runtime_binding_id
-            else runtime_binding_registry.default_for_agent(run_request.agent_id)
+        if not agent.enabled:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "agent_disabled", "message": "無効な業務 Agent は実行できません。"},
+            )
+        # 実行は組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI。#754）。
+        run = runtime_repository.create_builtin_run(
+            run_request, created_by_user_uuid=_run_creator_user_uuid(request)
         )
-        if binding is None:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "runtime_binding_required",
-                    "message": "実行先 Runtime Binding を設定してください。",
-                },
-            )
-        if binding.agent_id != run_request.agent_id:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "runtime_binding_agent_mismatch",
-                    "message": "指定した Binding はこの Agent の実行先ではありません。",
-                },
-            )
-        if not binding.enabled or binding.sync_status != "ready":
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "runtime_binding_unavailable",
-                    "message": "Binding を有効化し、同期を完了してください。",
-                },
-            )
-        runtime = runtime_registry.get(binding.runtime_id)
-        if runtime is None or not runtime.enabled or runtime.kind == "legacy_native":
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "runtime_unavailable",
-                    "message": "選択した Runtime は実行できません。",
-                },
-            )
-        run = runtime_repository.create_control_plane_run(
-            run_request,
-            runtime_id=runtime.id,
-            binding_id=binding.id,
-            capabilities=runtime.capabilities.model_dump(mode="json"),
-            created_by_user_uuid=_run_creator_user_uuid(request),
-        )
-        if get_settings().agent_runtime_dispatch_mode.strip().lower() == "in_process":
-            background_tasks.add_task(
-                _dispatch_control_plane_run,
-                run.id,
-                runtime,
-                binding,
-                agent,
-            )
+        _schedule_builtin_run(run)
         return ApiResponse(data=run)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="agent not found") from exc
@@ -2341,7 +2302,9 @@ async def decide_approval(
         if principal is not None:
             # 決定者はログイン中の利用者（body の decided_by は使わない。なりすまし防止。#215）。
             request = request.model_copy(update={"decided_by": principal.login_user_id})
-        return ApiResponse(data=runtime_repository.decide_approval(approval_id, request))
+        decided = runtime_repository.decide_approval(approval_id, request)
+        _schedule_builtin_run(decided)
+        return ApiResponse(data=decided)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="approval not found") from exc
 
@@ -2973,7 +2936,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             # 決定者はログイン中の利用者（message の decided_by は使わない。#215）。
             decided_by = principal.login_user_id
         comment = message.get("comment")
-        runtime_repository.decide_approval(
+        decided = runtime_repository.decide_approval(
             approval_id,
             ApprovalDecisionRequest(
                 approved=approved,
@@ -2983,6 +2946,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
                 comment=comment if isinstance(comment, str) and comment else None,
             ),
         )
+        _schedule_builtin_run(decided)
         await websocket.send_json(
             _websocket_command_accepted("approval_decision", normalized_command_id)
         )
