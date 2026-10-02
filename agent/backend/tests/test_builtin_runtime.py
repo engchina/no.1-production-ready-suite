@@ -315,10 +315,12 @@ def test_usage_is_recorded_when_the_run_fails_after_model_calls(
             for index in range(2)
         ],
     )
-    run_id = runtime_repository.create_builtin_run(
-        RunCreateRequest(goal="ずっと調べる", agent_id=AGENT_ID), created_by_user_uuid=USER_UUID
-    ).id
+    # Run は作成時の版を使う（#770）。モデルを変えた下書きで実行する。
     runtime_repository.patch_agent(AGENT_ID, AgentProfilePatch(model_id="explicit-model"))
+    run_id = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="ずっと調べる", agent_id=AGENT_ID, draft=True),
+        created_by_user_uuid=USER_UUID,
+    ).id
 
     anyio.run(builtin_runtime.execute_run, run_id)
 

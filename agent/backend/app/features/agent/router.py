@@ -150,8 +150,10 @@ from app.features.agent.plugins import (
 )
 from app.features.agent.runtime import (
     BUILTIN_RUNTIME_ID,
+    AgentNotPublishedError,
     AgentProfile,
     AgentProfilePatch,
+    AgentPublishRequest,
     AgentRuntimeSnapshot,
     AgentRuntimeSnapshotValidation,
     AgentsData,
@@ -1538,12 +1540,29 @@ async def create_run(
                 status_code=409,
                 detail={"code": "agent_disabled", "message": "無効な業務 Agent は実行できません。"},
             )
+        # 下書きで試すのは Agent 管理（admin）だけ（#770）。
+        if run_request.draft and not _policy_has_roles(_actor_policy(request), {"admin"}):
+            raise HTTPException(
+                status_code=403,
+                detail="下書きで実行できるのは Agent 管理の権限がある利用者だけです。",
+            )
         # 実行は組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI。#754）。
         run = runtime_repository.create_builtin_run(
             run_request, created_by_user_uuid=_run_creator_user_uuid(request)
         )
         _schedule_builtin_run(run)
         return ApiResponse(data=run)
+    except AgentNotPublishedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "agent_unpublished",
+                "message": (
+                    "公開していない業務 Agent は実行できません。"
+                    "公開するか、下書きで実行してください。"
+                ),
+            },
+        ) from exc
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     except KeyError as exc:
@@ -2391,10 +2410,53 @@ async def create_agent(
     agent: AgentProfile,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentProfile]:
+    # 画面・API で作る Agent は下書きから始める（公開するまで利用者の Run には使えない。#770）。
+    # 版の項目は送られても使わない。
+    draft = agent.model_copy(
+        update={"versioned": True, "versions": [], "published_version": None, "source": "runtime"}
+    )
     try:
-        return ApiResponse(data=runtime_repository.create_agent(agent))
+        return ApiResponse(data=runtime_repository.create_agent(draft))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/agents/{agent_id}/publish", response_model=ApiResponse[AgentProfile])
+async def publish_agent(
+    agent_id: str,
+    payload: AgentPublishRequest,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[AgentProfile]:
+    """下書きを新しい版として公開する（#770）。利用者の Run はこの版で実行する。"""
+    try:
+        agent = runtime_repository.publish_agent(
+            agent_id, note=payload.note, published_by=_actor_display_name(request)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="agent not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ApiResponse(data=agent)
+
+
+@router.post(
+    "/agents/{agent_id}/versions/{version}/restore", response_model=ApiResponse[AgentProfile]
+)
+async def restore_agent_version(
+    agent_id: str,
+    version: int,
+    request: Request,
+    _: None = Depends(require_admin),
+) -> ApiResponse[AgentProfile]:
+    """前の版を公開し直し、下書きもその内容にする（#770）。"""
+    try:
+        agent = runtime_repository.restore_agent_version(
+            agent_id, version, published_by=_actor_display_name(request)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="version not found") from exc
+    return ApiResponse(data=agent)
 
 
 @router.patch("/agents/{agent_id}", response_model=ApiResponse[AgentProfile])

@@ -24,8 +24,28 @@
       ],
       "enabled": true,
       "source": "builtin",
+      "versioned": true,
+      "versions": [
+        {
+          "version": 1,
+          "name": "汎用業務 Agent",
+          "description": "RAG / NL2SQL の MCP 接続と承認フローを使う既定 Agent。",
+          "instructions": "業務データは外部ツール経由で取得し、根拠と監査情報を残す。",
+          "skill_ids": [
+            "business_rag_research",
+            "structured_data_query",
+            "rag_then_structured_data"
+          ],
+          "model_id": "",
+          "note": "版の導入（#770）の前の内容",
+          "published_at": "2026-06-28T00:00:00Z",
+          "published_by": null
+        }
+      ],
+      "published_version": 1,
       "created_at": "2026-06-28T00:00:00Z",
-      "updated_at": "2026-06-28T00:00:00Z"
+      "updated_at": "2026-06-28T00:00:00Z",
+      "unpublished_changes": false
     }
   ],
   "skills": [

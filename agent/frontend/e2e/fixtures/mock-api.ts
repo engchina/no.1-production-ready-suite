@@ -1037,6 +1037,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         created_at: MOCK_NOW,
         updated_at: MOCK_NOW,
         ...body,
+        // 画面・API で作る Agent は下書きから始める（#770）。
+        versioned: true,
+        versions: [],
+        published_version: null,
+        unpublished_changes: true,
       };
       state.agents.push(agent);
       return agent;
@@ -1044,6 +1049,31 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (method === "PATCH" && at("agents", "*")) {
       const agent = findOr404(state.agents, "id", second, "agent");
       Object.assign(agent, body, { updated_at: MOCK_NOW });
+      agent.unpublished_changes = true;
+      return agent;
+    }
+    // 下書きを版として公開する・前の版に戻す（#770）。
+    const VERSIONED = ["name", "description", "instructions", "skill_ids", "model_id"] as const;
+    if (method === "POST" && at("agents", "*", "publish")) {
+      const agent = findOr404(state.agents, "id", second, "agent");
+      const versions = (agent.versions as Json[] | undefined) ?? [];
+      const version = Math.max(0, ...versions.map((item) => Number(item.version))) + 1;
+      const snapshot: Json = { version, note: body.note ?? "", published_at: MOCK_NOW, published_by: "local" };
+      for (const field of VERSIONED) snapshot[field] = clone(agent[field] ?? (field === "skill_ids" ? [] : ""));
+      agent.versions = [...versions, snapshot];
+      agent.published_version = version;
+      agent.unpublished_changes = false;
+      return agent;
+    }
+    if (method === "POST" && at("agents", "*", "versions", "*", "restore")) {
+      const agent = findOr404(state.agents, "id", second, "agent");
+      const target = ((agent.versions as Json[] | undefined) ?? []).find(
+        (item) => String(item.version) === segments[3]
+      );
+      if (!target) throw new HttpError(404, "version not found");
+      for (const field of VERSIONED) agent[field] = clone(target[field]);
+      agent.published_version = target.version;
+      agent.unpublished_changes = false;
       return agent;
     }
   }

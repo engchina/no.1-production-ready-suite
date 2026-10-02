@@ -33,6 +33,8 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
   - ポリシーが「拒否」のツールはモデルに渡さない。
   - 「承認」のツールは SDK の `needs_approval` で中断する。中断した Run は `waiting_approval` にし、SDK の状態を Run に保存する。
   - 承認がすべて決まったら状態を復元して再開する。却下したツールは実行しない。
+- 業務 Agent は版を持つ（#770）。編集は下書きで、「公開」した版だけが利用者の Run に使われる。「この版に戻す」で
+  前の版を公開し直す。下書きで実行できるのは Agent 管理（admin）だけ。
 - Run は Agent を選ぶだけで作れる（Binding の選択は無い）。開発は API のプロセスで実行（`in_process`）し、
   本番は Oracle checkpoint の row lock と Run lease を使う runtime-dispatcher（`python -m app.features.agent.runtime_dispatcher`）。
 - 保存先（#764）: Run・業務 Agent と、画面・API で変えた定義（Skill・プラグイン・マーケットプレイス・MCP 接続・ツール権限）は

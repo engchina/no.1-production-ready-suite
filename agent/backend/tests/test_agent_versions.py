@@ -1,0 +1,155 @@
+"""業務 Agent の下書き・公開・版の履歴・前の版に戻す（#770）。"""
+
+from __future__ import annotations
+
+import contextlib
+from collections.abc import Iterator
+from typing import Any
+
+import pytest
+from pytest import MonkeyPatch
+from security_support import (
+    ProductionAuth,
+    client,
+    enable_production_auth,
+    login,
+)
+
+from app.features.agent.runtime import (
+    AgentProfile,
+    AgentRuntimeRepository,
+    AgentRuntimeSnapshot,
+    RunCreateRequest,
+    runtime_repository,
+)
+from app.security.permissions import MENU_RUNS, RUNS_OPERATE
+from app.security.service import set_security_service
+
+AGENT_ID = "agent-versions-770"
+
+
+@pytest.fixture
+def scheduled(monkeypatch: MonkeyPatch) -> Iterator[list[str]]:
+    """API の Run は作るだけで実行しない（実行に使う Agent の内容は repository で確かめる）。"""
+    runs: list[str] = []
+    monkeypatch.setattr(
+        "app.features.agent.router._schedule_builtin_run", lambda run: runs.append(run.id)
+    )
+    try:
+        yield runs
+    finally:
+        repository: Any = runtime_repository
+        with repository._lock:  # noqa: SLF001 - テストの後始末
+            for run_id in [
+                run_id for run_id, run in repository._runs.items() if run.agent_id == AGENT_ID
+            ]:
+                repository._runs.pop(run_id)
+        with contextlib.suppress(KeyError, ValueError):
+            runtime_repository.delete_agent(AGENT_ID)
+
+
+def _instructions_used(run_id: str) -> str:
+    started = runtime_repository.begin_builtin_run(run_id)
+    assert started is not None
+    return started[1].instructions
+
+
+def test_agents_created_by_api_start_as_unpublished_draft(scheduled: list[str]) -> None:
+    created = client.post(
+        "/api/agents",
+        json={
+            "id": AGENT_ID,
+            "name": "経理の Agent",
+            "instructions": "v1 の指示",
+            # 版の項目は送っても使わない。
+            "versions": [{"version": 9, "name": "偽"}],
+            "published_version": 9,
+        },
+    )
+    assert created.status_code == 200, created.text
+    agent = created.json()["data"]
+    assert (agent["versions"], agent["published_version"]) == ([], None)
+    assert agent["unpublished_changes"] is True
+
+    # 公開していない Agent の Run は断る。下書きでは試せる（local は管理者）。
+    refused = client.post("/api/runs", json={"goal": "質問", "agent_id": AGENT_ID})
+    assert refused.status_code == 409
+    assert "公開していない業務 Agent" in refused.json()["error_messages"][0]
+    draft = client.post("/api/runs", json={"goal": "試す", "agent_id": AGENT_ID, "draft": True})
+    assert draft.status_code == 200, draft.text
+    assert draft.json()["data"]["metadata"]["agent_version"] == "draft"
+
+
+def test_runs_use_published_version_until_republished_and_can_roll_back(
+    scheduled: list[str],
+) -> None:
+    client.post("/api/agents", json={"id": AGENT_ID, "name": "経理", "instructions": "v1 の指示"})
+    published = client.post(f"/api/agents/{AGENT_ID}/publish", json={"note": "最初の公開"})
+    assert published.status_code == 200, published.text
+    v1 = published.json()["data"]
+    assert v1["published_version"] == 1
+    assert v1["versions"][0]["note"] == "最初の公開"
+    assert v1["versions"][0]["published_by"] == "local"
+    assert v1["unpublished_changes"] is False
+
+    # 下書きを変えても、利用者の Run は公開中の v1 の内容で実行する。
+    patched = client.patch(f"/api/agents/{AGENT_ID}", json={"instructions": "v2 の指示（作業中）"})
+    assert patched.json()["data"]["unpublished_changes"] is True
+    run = client.post("/api/runs", json={"goal": "質問", "agent_id": AGENT_ID}).json()["data"]
+    assert run["metadata"]["agent_version"] == 1
+    assert _instructions_used(run["id"]) == "v1 の指示"
+    draft_run = client.post(
+        "/api/runs", json={"goal": "試す", "agent_id": AGENT_ID, "draft": True}
+    ).json()["data"]
+    assert _instructions_used(draft_run["id"]) == "v2 の指示（作業中）"
+
+    v2 = client.post(f"/api/agents/{AGENT_ID}/publish", json={}).json()["data"]
+    assert v2["published_version"] == 2
+    run2 = client.post("/api/runs", json={"goal": "質問", "agent_id": AGENT_ID}).json()["data"]
+    assert _instructions_used(run2["id"]) == "v2 の指示（作業中）"
+
+    # 前の版に戻すと、その版を公開し直し、下書きもその内容になる。
+    restored = client.post(f"/api/agents/{AGENT_ID}/versions/1/restore")
+    assert restored.status_code == 200, restored.text
+    data = restored.json()["data"]
+    assert (data["published_version"], data["instructions"]) == (1, "v1 の指示")
+    assert [item["version"] for item in data["versions"]] == [1, 2]
+    run3 = client.post("/api/runs", json={"goal": "質問", "agent_id": AGENT_ID}).json()["data"]
+    assert _instructions_used(run3["id"]) == "v1 の指示"
+    assert client.post(f"/api/agents/{AGENT_ID}/versions/9/restore").status_code == 404
+
+
+def test_agents_without_versions_are_published_as_v1() -> None:
+    # #770 より前の Agent（版の項目が無い）は、読み込み時に現在の内容を v1 として公開する。
+    legacy = AgentProfile(id="legacy-770", name="古い Agent", instructions="以前の指示")
+    snapshot = AgentRuntimeSnapshot(agents=[legacy])
+    repository = AgentRuntimeRepository()
+    repository.replace_snapshot(snapshot)
+
+    agent = next(item for item in repository.list_agents() if item.id == "legacy-770")
+    assert agent.published_version == 1
+    assert agent.versions[0].instructions == "以前の指示"
+    assert agent.unpublished_changes is False
+    default = next(item for item in repository.list_agents() if item.id == "default")
+    assert default.published_version == 1
+    run = repository.create_builtin_run(RunCreateRequest(goal="質問", agent_id="legacy-770"))
+    assert run.metadata["agent_version"] == 1
+
+
+@pytest.fixture
+def auth(monkeypatch: MonkeyPatch) -> Iterator[ProductionAuth]:
+    yield enable_production_auth(monkeypatch)
+    set_security_service(None)
+
+
+def test_draft_runs_need_agent_admin(auth: ProductionAuth, scheduled: list[str]) -> None:
+    auth.user_with_permissions("operator-770", [MENU_RUNS, RUNS_OPERATE], agent_ids=["default"])
+
+    response = client.post(
+        "/api/runs",
+        json={"goal": "下書きで試す", "agent_id": "default", "draft": True},
+        headers=login("operator-770"),
+    )
+
+    assert response.status_code == 403
+    assert "Agent 管理" in response.json()["error_messages"][0]

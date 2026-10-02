@@ -12,6 +12,7 @@ import logging
 import os
 import re
 from collections.abc import Callable, Iterator, Sequence
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -19,7 +20,7 @@ from threading import Condition, Lock
 from typing import Any, Protocol
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from app.features.agent.config import runtime_config_store
 from app.features.agent.tools import (
@@ -148,6 +149,30 @@ class ApprovalRequest(BaseModel):
     created_at: datetime = Field(default_factory=_now)
 
 
+# 版に残す業務 Agent の項目（下書き = AgentProfile の同名の項目。#770）。
+AGENT_VERSIONED_FIELDS: tuple[str, ...] = (
+    "name",
+    "description",
+    "instructions",
+    "skill_ids",
+    "model_id",
+)
+
+
+class AgentVersion(BaseModel):
+    """公開した業務 Agent の版（#770）。利用者の Run は公開中の版の内容で実行する。"""
+
+    version: int
+    name: str
+    description: str = ""
+    instructions: str = ""
+    skill_ids: list[str] = Field(default_factory=list)
+    model_id: str = ""
+    note: str = ""
+    published_at: datetime = Field(default_factory=_now)
+    published_by: str | None = None
+
+
 class AgentProfile(BaseModel):
     id: str = Field(default_factory=lambda: f"agent_{uuid4().hex}")
     name: str
@@ -163,8 +188,40 @@ class AgentProfile(BaseModel):
     enabled: bool = True
     # 由来層: builtin(default)/ runtime(UI/API)/ plugin:<id>(plugin install)。
     source: str = "runtime"
+    # 版（#770）。上の名前〜モデルは下書きで、公開すると版になる。利用者の Run は公開中の版で動く。
+    # versioned=False は #770 より前の Agent（読み込み時に現在の内容を v1 として公開する）。
+    versioned: bool = False
+    versions: list[AgentVersion] = Field(default_factory=list)
+    published_version: int | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
+
+    def published(self) -> AgentVersion | None:
+        return next(
+            (item for item in self.versions if item.version == self.published_version), None
+        )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def unpublished_changes(self) -> bool:
+        """下書きに公開していない変更があるか（公開した版が無いときも True）。"""
+        return self.has_unpublished_changes()
+
+    def has_unpublished_changes(self) -> bool:
+        published = self.published()
+        if published is None:
+            return True
+        return any(
+            getattr(self, field) != getattr(published, field) for field in AGENT_VERSIONED_FIELDS
+        )
+
+
+class AgentNotPublishedError(ValueError):
+    """公開した版の無い業務 Agent を、下書きではない Run で実行しようとした（#770）。"""
+
+
+class AgentPublishRequest(BaseModel):
+    note: str = Field(default="", max_length=500)
 
 
 class AgentProfilePatch(BaseModel):
@@ -181,6 +238,8 @@ class RunCreateRequest(BaseModel):
     goal: str
     agent_id: str = "default"
     metadata: JsonObject = Field(default_factory=dict)
+    # 公開前の下書きで実行する（管理者が試すとき。#770）。既定は公開中の版。
+    draft: bool = False
     # 会話（スレッド）を続けるときの ID（#768）。省略すると新しい会話を始める。
     thread_id: str | None = Field(default=None, pattern=r"^thread_[0-9a-f]{32}$")
 
@@ -456,6 +515,12 @@ class AgentRuntimeRepositoryContract(Protocol):
     def list_agents(self) -> list[AgentProfile]: ...
     def create_agent(self, agent: AgentProfile) -> AgentProfile: ...
     def patch_agent(self, agent_id: str, patch: AgentProfilePatch) -> AgentProfile: ...
+    def publish_agent(
+        self, agent_id: str, *, note: str = "", published_by: str | None = None
+    ) -> AgentProfile: ...
+    def restore_agent_version(
+        self, agent_id: str, version: int, *, published_by: str | None = None
+    ) -> AgentProfile: ...
     def delete_agent(self, agent_id: str) -> None: ...
     def set_plugin_agents(self, source: str, agents: list[AgentProfile]) -> None: ...
     def remove_agents_by_source(self, source: str) -> None: ...
@@ -472,7 +537,7 @@ class AgentRuntimeRepository:
         self._condition = Condition(self._lock)
         self._runs: dict[str, RunState] = {}
         self._approvals: dict[str, ApprovalRequest] = {}
-        default_agent = _default_agent()
+        default_agent = _ensure_versioned(_default_agent())
         self._agents: dict[str, AgentProfile] = {default_agent.id: default_agent}
         self._snapshot_path = Path(snapshot_path) if snapshot_path else None
         if self._snapshot_path is not None and self._snapshot_path.exists():
@@ -704,6 +769,12 @@ class AgentRuntimeRepository:
                 raise KeyError(request.agent_id)
             if not agent.enabled:
                 raise ValueError("agent disabled")
+            if not request.draft and agent.published() is None:
+                raise AgentNotPublishedError(request.agent_id)
+            # 使う版（#770）。下書きで試すときは "draft"。
+            agent_version: int | str = (
+                "draft" if request.draft else agent.published_version or "draft"
+            )
             if request.thread_id is not None:
                 # 続ける会話は、同じ利用者・同じ Agent のものだけ（他人の会話へ書き込ませない）。
                 self._require_thread_locked(
@@ -717,7 +788,7 @@ class AgentRuntimeRepository:
                 created_by_user_uuid=created_by_user_uuid,
                 thread_id=request.thread_id or f"thread_{uuid4().hex}",
                 status=RunStatus.QUEUED,
-                metadata={**request.metadata},
+                metadata={**request.metadata, "agent_version": agent_version},
             )
             self._runs[run.id] = run
             self._append_event(
@@ -813,7 +884,7 @@ class AgentRuntimeRepository:
                 )
                 return None
             self._set_builtin_running_locked(run, "実行を開始しました。")
-            return run.model_copy(deep=True), agent.model_copy(deep=True)
+            return run.model_copy(deep=True), _agent_for_run(agent, run)
 
     def begin_builtin_resume(
         self, run_id: str
@@ -838,7 +909,7 @@ class AgentRuntimeRepository:
             }
             run.metadata.pop(_BUILTIN_STATE_KEY, None)
             self._set_builtin_running_locked(run, "承認の決定を反映して実行を再開しました。")
-            return run.model_copy(deep=True), agent.model_copy(deep=True), state_text, decisions
+            return run.model_copy(deep=True), _agent_for_run(agent, run), state_text, decisions
 
     def start_builtin_tool_step(
         self, run_id: str, call: ToolCall
@@ -1096,7 +1167,49 @@ class AgentRuntimeRepository:
             now = _now()
             agent.created_at = now
             agent.updated_at = now
-            self._agents[agent.id] = agent
+            self._agents[agent.id] = _ensure_versioned(agent)
+            self._persist_locked()
+            return self._agents[agent.id].model_copy(deep=True)
+
+    def publish_agent(
+        self, agent_id: str, *, note: str = "", published_by: str | None = None
+    ) -> AgentProfile:
+        """下書きを新しい版として公開する（#770）。"""
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if agent is None:
+                raise KeyError(agent_id)
+            self._validate_agent_skills(agent.skill_ids)
+            version = max((item.version for item in agent.versions), default=0) + 1
+            agent.versions.append(
+                AgentVersion(
+                    version=version,
+                    note=note.strip(),
+                    published_by=published_by,
+                    **{field: getattr(agent, field) for field in AGENT_VERSIONED_FIELDS},
+                )
+            )
+            agent.published_version = version
+            agent.versioned = True
+            agent.updated_at = _now()
+            self._persist_locked()
+            return agent.model_copy(deep=True)
+
+    def restore_agent_version(
+        self, agent_id: str, version: int, *, published_by: str | None = None
+    ) -> AgentProfile:
+        """前の版を公開し直し、下書きもその内容にする（ロールバック。#770）。"""
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if agent is None:
+                raise KeyError(agent_id)
+            target = next((item for item in agent.versions if item.version == version), None)
+            if target is None:
+                raise KeyError(f"{agent_id}@{version}")
+            for field in AGENT_VERSIONED_FIELDS:
+                setattr(agent, field, deepcopy(getattr(target, field)))
+            agent.published_version = version
+            agent.updated_at = _now()
             self._persist_locked()
             return agent.model_copy(deep=True)
 
@@ -1172,9 +1285,11 @@ class AgentRuntimeRepository:
 
     def _replace_state_locked(self, snapshot: AgentRuntimeSnapshot) -> None:
         self._runs = {run.id: run.model_copy(deep=True) for run in snapshot.runs}
-        self._agents = {agent.id: _migrate_legacy_agent(agent) for agent in snapshot.agents}
+        self._agents = {
+            agent.id: _ensure_versioned(_migrate_legacy_agent(agent)) for agent in snapshot.agents
+        }
         if "default" not in self._agents:
-            self._agents["default"] = _default_agent()
+            self._agents["default"] = _ensure_versioned(_default_agent())
         self._approvals = {
             approval.id: approval for run in self._runs.values() for approval in run.approvals
         }
@@ -2595,6 +2710,40 @@ _RETIRED_LEGACY_TOOLS: frozenset[str] = frozenset(
         "agent_skill_run",
     }
 )
+
+
+def _ensure_versioned(agent: AgentProfile) -> AgentProfile:
+    """#770 より前の Agent（版を持たない）は、現在の内容を v1 として公開する。"""
+    if agent.versioned:
+        return agent
+    return agent.model_copy(
+        update={
+            "versioned": True,
+            "versions": [
+                AgentVersion(
+                    version=1,
+                    note="版の導入（#770）の前の内容",
+                    published_at=agent.updated_at,
+                    **{field: getattr(agent, field) for field in AGENT_VERSIONED_FIELDS},
+                )
+            ],
+            "published_version": 1,
+        }
+    )
+
+
+def _agent_for_run(agent: AgentProfile, run: RunState) -> AgentProfile:
+    """Run が使う版の内容を重ねた Agent（下書きの Run・版の無い古い Run は現在の内容）。"""
+    version = run.metadata.get("agent_version")
+    target = next(
+        (item for item in agent.versions if isinstance(version, int) and item.version == version),
+        None,
+    )
+    if target is None:
+        return agent.model_copy(deep=True)
+    return agent.model_copy(
+        deep=True, update={field: getattr(target, field) for field in AGENT_VERSIONED_FIELDS}
+    )
 
 
 def _migrate_legacy_agent(agent: AgentProfile) -> AgentProfile:
