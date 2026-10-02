@@ -29,13 +29,15 @@ from app.settings import get_settings
 logger = logging.getLogger(__name__)
 
 JsonObject = dict[str, Any]
-ItemKind = Literal["skill", "plugin", "marketplace", "mcp_connection", "tool_policy"]
+ItemKind = Literal["skill", "plugin", "marketplace", "mcp_connection", "tool_policy", "api_key"]
 ITEM_KINDS: tuple[ItemKind, ...] = (
     "mcp_connection",
     "tool_policy",
     "skill",
     "marketplace",
     "plugin",
+    # 外部のクライアント向けの API キー（#778。秘密は保存せず hash だけ）。
+    "api_key",
 )
 ITEMS_TABLE = "AGENT_CONTROL_PLANE_ITEMS"
 _SECRET_FIELDS = ("api_key", "oauth_client_secret")
@@ -320,6 +322,14 @@ def save_tool_policy(policy: Any) -> None:
     )
 
 
+def save_api_key(record: Any) -> None:
+    _put("api_key", record.id, record.model_dump(mode="json"))
+
+
+def delete_api_key(key_id: str) -> None:
+    _delete("api_key", key_id)
+
+
 # ---- 復元（起動時） ---------------------------------------------------------------
 
 
@@ -372,6 +382,10 @@ def _restore_item(kind: ItemKind, document: JsonObject) -> None:
             MarketplaceSource.model_validate(document.get("source") or {}),
             MarketplaceListing.model_validate(listing_raw) if listing_raw else None,
         )
+    elif kind == "api_key":
+        from app.features.agent.api_keys import ApiKeyRecord, api_key_registry
+
+        api_key_registry.restore(ApiKeyRecord.model_validate(document))
     elif kind == "plugin":
         manifest = PluginManifest.model_validate(document.get("manifest") or {})
         record = plugin_registry.install(

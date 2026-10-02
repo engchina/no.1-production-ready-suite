@@ -189,6 +189,41 @@ export interface RunState {
   updated_at: string;
 }
 
+/** 外部のクライアント向けの API キー（#778。秘密は作成時の応答にだけ入る）。 */
+export interface ApiKey {
+  id: string;
+  name: string;
+  owner_user_uuid: string;
+  owner_display_name: string;
+  /** null は「作った利用者が使える業務 Agent すべて」。 */
+  agent_ids: string[] | null;
+  token_prefix: string;
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  expired: boolean;
+}
+
+export interface ApiKeysData {
+  keys: ApiKey[];
+  /** false はキーの保存先（Oracle）が無い（再起動で消える）。 */
+  persistent: boolean;
+}
+
+export type ApiKeyExpiryDays = 30 | 90 | 365;
+
+export interface CreateApiKeyPayload {
+  name: string;
+  agent_ids: string[] | null;
+  expires_in_days: ApiKeyExpiryDays | null;
+}
+
+export interface ApiKeyCreated {
+  key: ApiKey;
+  /** `prak_…`。この応答でだけ返る。 */
+  token: string;
+}
+
 export interface ToolAuditRecord {
   step_id: string;
   tool_name: string;
@@ -817,6 +852,12 @@ export const agentApi = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  /** API キー（#778）。 */
+  listApiKeys: () => request<ApiKeysData>("/api/settings/api-keys"),
+  createApiKey: (payload: CreateApiKeyPayload) =>
+    request<ApiKeyCreated>("/api/settings/api-keys", { method: "POST", body: JSON.stringify(payload) }),
+  deleteApiKey: (keyId: string) =>
+    request<null>(`/api/settings/api-keys/${encodeURIComponent(keyId)}`, { method: "DELETE" }),
   listMcpConnections: () =>
     request<McpConnectionsData>("/api/settings/mcp-connections"),
   createMcpConnection: (payload: McpConnectionWritePayload) =>

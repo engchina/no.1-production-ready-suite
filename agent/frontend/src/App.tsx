@@ -21,6 +21,7 @@ import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { canOpenRoute, defaultEntryRoute, firstAllowedRoute } from "@/lib/route-permissions";
 import { APP_ROUTES } from "@/lib/routes";
+import { ApiKeysPage } from "@/pages/ApiKeysPage";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
   AgentsPage,
@@ -127,6 +128,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
         <Route path={APP_ROUTES.settingsMcpConnections} element={<McpConnectionsPage />} />
+        <Route path={APP_ROUTES.settingsApiKeys} element={<ApiKeysPage />} />
         <Route path={APP_ROUTES.settingsToolPolicy} element={<ToolPolicySettingsPage />} />
         <Route
           path={APP_ROUTES.settingsRuntimeSnapshot}
