@@ -18,6 +18,7 @@ import logging
 import os
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from importlib import import_module
 from pathlib import Path
 from threading import Lock
 from typing import Any, Literal, Protocol, cast
@@ -182,6 +183,9 @@ class OracleItemStore:
         """  # nosec B608 - テーブル名は固定
         self._execute(
             statement,
+            # 定義の JSON（長い指示の Skill など）は 4,000 byte を超えうる。型を指定しないと
+            # `SELECT :item_json ... FROM dual` の bind が VARCHAR2 になり ORA-01461（#841）。
+            clob_params=("item_json",),
             item_kind=kind,
             item_id=item_id,
             item_json=json.dumps(document, ensure_ascii=False, sort_keys=True, default=str),
@@ -194,9 +198,12 @@ class OracleItemStore:
             item_id=item_id,
         )
 
-    def _execute(self, statement: str, **params: Any) -> None:
+    def _execute(self, statement: str, *, clob_params: tuple[str, ...] = (), **params: Any) -> None:
         try:
             with self._connect() as connection, connection.cursor() as cursor:
+                if clob_params:
+                    clob = import_module("oracledb").DB_TYPE_CLOB
+                    cursor.setinputsizes(**{name: clob for name in clob_params})
                 cursor.execute(statement, **params)
                 connection.commit()
         except Exception as exc:

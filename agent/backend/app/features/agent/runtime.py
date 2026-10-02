@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterator, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from importlib import import_module
 from pathlib import Path
 from threading import Condition, Lock
 from typing import Any, Protocol
@@ -1618,6 +1619,9 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
             SYSTIMESTAMP
         )
         """
+        # snapshot は全 Run を含み 4,000 / 32,767 byte を超える。型を指定しないと
+        # `SELECT :snapshot_json ... FROM dual` の bind が VARCHAR2 になり ORA-01461（#841）。
+        cursor.setinputsizes(snapshot_json=import_module("oracledb").DB_TYPE_CLOB)
         cursor.execute(
             statement,
             checkpoint_key=self._oracle_checkpoint_key,

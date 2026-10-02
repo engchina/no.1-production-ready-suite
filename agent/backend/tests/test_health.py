@@ -213,6 +213,7 @@ class _FakeOracleStore:
         self.rows_by_table: dict[str, list[dict[str, Any]]] = {}
         self.session_statements: list[str] = []
         self.executed_statements: list[str] = []
+        self.input_sizes: list[dict[str, Any]] = []
 
     @property
     def table_created(self) -> bool:
@@ -256,6 +257,9 @@ class _FakeOracleCursor:
 
     def __exit__(self, *args: object) -> None:
         return None
+
+    def setinputsizes(self, **sizes: Any) -> None:
+        self._store.input_sizes.append(dict(sizes))
 
     def execute(self, statement: str, **params: Any) -> None:
         normalized = " ".join(statement.upper().split())
@@ -2290,6 +2294,10 @@ def test_runtime_repository_persists_checkpoint_to_oracle() -> None:
     assert "default" in store.snapshot_by_key
     assert restored.get_run(completed.id).status == "completed"
     assert decided.approvals[0].status == "rejected"
+    # snapshot は 4,000 / 32,767 byte を超えるため CLOB で bind する（#841）。
+    import oracledb
+
+    assert {"snapshot_json": oracledb.DB_TYPE_CLOB} in store.input_sizes
 
 
 def test_runtime_repository_persists_normalized_oracle_projection() -> None:
