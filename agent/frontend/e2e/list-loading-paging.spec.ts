@@ -200,5 +200,47 @@ for (const viewport of VIEWPORTS) {
       await expect(pager).toContainText("11 - 20 / 25 件");
       await expectNoHorizontalOverflow(page);
     });
+
+    test("監査: 「フィルター適用」と「表示を更新」は押した側だけが回り、ページの切り替えではどちらも回さない（#819）", async ({ page, mockApi }) => {
+      seedAuditRecords(mockApi, 25);
+      await page.goto("/audit");
+      const pager = page.getByTestId("audit-pagination");
+      await expect(pager).toContainText("1 - 10 / 25 件");
+      const apply = page.getByRole("button", { name: "フィルター適用", exact: true });
+      const refresh = page.getByRole("button", { name: "表示を更新" });
+
+      // フィルター適用: フィルター適用だけが回り、表示を更新は押せないだけ。
+      let release = await holdResponses(page, "**/api/audit/tool-calls?**");
+      await apply.click();
+      await expect(apply).toHaveAttribute("aria-busy", "true");
+      await expect(refresh).toBeDisabled();
+      await expect(refresh).not.toHaveAttribute("aria-busy", /.*/);
+      release();
+      await expect(apply).not.toHaveAttribute("aria-busy", /.*/);
+
+      // ページの切り替え（前のページを出したままの取り直し）では、どちらも回さない。
+      release = await holdResponses(page, "**/api/audit/tool-calls?**");
+      const nextPageRequested = page.waitForRequest(
+        (request) =>
+          new URL(request.url()).pathname === "/api/audit/tool-calls" &&
+          new URL(request.url()).searchParams.get("offset") === "10"
+      );
+      await pager.getByRole("button", { name: "次へ" }).click();
+      await nextPageRequested;
+      await expect(apply).not.toHaveAttribute("aria-busy", /.*/);
+      await expect(refresh).not.toHaveAttribute("aria-busy", /.*/);
+      release();
+      await expect(pager).toContainText("11 - 20 / 25 件");
+
+      // 表示を更新: 表示を更新だけが回り、フィルター適用は押せないだけ。
+      release = await holdResponses(page, "**/api/audit/tool-calls?**");
+      await refresh.click();
+      await expect(refresh).toHaveAttribute("aria-busy", "true");
+      await expect(apply).toBeDisabled();
+      await expect(apply).not.toHaveAttribute("aria-busy", /.*/);
+      release();
+      await expect(refresh).not.toHaveAttribute("aria-busy", /.*/);
+      await expectNoHorizontalOverflow(page);
+    });
   });
 }

@@ -63,6 +63,7 @@ import {
   Switch,
   ToggleChip,
   toast,
+  useActionPending,
   useConfirm,
   type DataTableColumn,
   visibleEntityActions,
@@ -997,6 +998,8 @@ function AgentTable({
 export function RuntimesPage() {
   const { hasPermission } = useAuth();
   const status = useQuery({ queryKey: ["runtime-status"], queryFn: agentApi.getRuntimeStatus });
+  // 「表示を更新」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
+  const manualRefresh = useActionPending();
   const data = status.data;
   return (
     <>
@@ -1011,8 +1014,8 @@ export function RuntimesPage() {
             kind: "utility",
             label: t("runtime.refresh"),
             icon: RefreshCw,
-            loading: status.isFetching && !status.isLoading,
-            onClick: () => void status.refetch(),
+            loading: manualRefresh.pending,
+            onClick: () => void manualRefresh.track(() => status.refetch()),
           },
         ]}
       />
@@ -1118,6 +1121,8 @@ export function RunsPage() {
     queryFn: agentApi.listRuns,
     refetchInterval: 5000,
   });
+  // 「表示を更新」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
+  const manualRefresh = useActionPending();
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   // 組み込み Runtime が実行できるか（モデル未設定なら Run は失敗するため、作成の前に知らせる。#754）。
   const runtimeStatus = useQuery({ queryKey: ["runtime-status"], queryFn: agentApi.getRuntimeStatus });
@@ -1314,9 +1319,17 @@ export function RunsPage() {
   const runActions = (run: RunState): EntityAction[] => {
     const { canCancel, canResume } = runCapabilities(run);
     const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
-    // 実行中の操作が対象の Run のものか（別の Run の行のボタンを回さない）。
-    const pendingRunId =
-      cancelRun.variables ?? resumeRun.variables ?? replayRun.variables ?? decideApproval.variables?.approval.run_id;
+    // 実行中の操作が対象の Run のものか（別の Run の行のボタンを回さない）。variables は完了後も前の値が
+    // 残るため、処理中の mutation の variables だけを読む（#819）。
+    const pendingRunId = cancelRun.isPending
+      ? cancelRun.variables
+      : resumeRun.isPending
+        ? resumeRun.variables
+        : replayRun.isPending
+          ? replayRun.variables
+          : decideApproval.isPending
+            ? decideApproval.variables?.approval.run_id
+            : undefined;
     const isPendingFor = (kind: RunCommandKind | "replay") =>
       pendingAction === kind && (wsCommand === kind ? run.id === selectedRun?.id : pendingRunId === run.id);
     const busy = pendingAction !== null;
@@ -1385,8 +1398,8 @@ export function RunsPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            loading: runs.isFetching && !runs.isLoading,
-            onClick: () => void runs.refetch(),
+            loading: manualRefresh.pending,
+            onClick: () => void manualRefresh.track(() => runs.refetch()),
           },
         ]}
       />
@@ -1850,6 +1863,16 @@ function auditFiltersOf(form: AuditFilterForm): ToolCallAuditFilters {
   };
 }
 
+/** 一覧の 1 ページの取得条件（条件の欄の値とページ番号から作る）。 */
+function auditPageFilters(form: AuditFilterForm, page: number) {
+  const filters = auditFiltersOf(form);
+  return { ...filters, offset: offsetForPage(page, filters.limit ?? DEFAULT_PAGE_SIZE) };
+}
+
+function auditQueryKey(filters: ReturnType<typeof auditPageFilters>) {
+  return ["audit", "tool-calls", filters] as const;
+}
+
 /** 1 ページの件数の上限（backend の `limit` の上限）。 */
 const AUDIT_MAX_PAGE_SIZE = 1000;
 
@@ -1872,16 +1895,21 @@ export function AuditPage() {
   );
   // ページ番号も作業状態に残す。ページは API の offset / limit に直して取得する（#265）。
   const [auditPage, setAuditPage] = useWorkspaceState("audit", "page", 1, isAuditPage);
-  const appliedFilters = useMemo(() => {
-    const filters = auditFiltersOf(appliedForm);
-    return { ...filters, offset: offsetForPage(auditPage, filters.limit ?? DEFAULT_PAGE_SIZE) };
-  }, [appliedForm, auditPage]);
+  const appliedFilters = useMemo(
+    () => auditPageFilters(appliedForm, auditPage),
+    [appliedForm, auditPage]
+  );
   const audit = useQuery({
-    queryKey: ["audit", "tool-calls", appliedFilters],
+    queryKey: auditQueryKey(appliedFilters),
     queryFn: () => agentApi.listToolCallAudit(appliedFilters),
     // ページを送っている間は今のページを出したまま取り直す（表を Skeleton に戻さない）。
     placeholderData: keepPreviousData,
   });
+  // 「表示を更新」と「適用」は同じ一覧を取り直すが、スピナーは押した側だけが出す。ページの切り替え・
+  // フォーカスでの取り直しでは、どちらも回さない（#819）。
+  const auditQueryClient = useQueryClient();
+  const manualRefresh = useActionPending();
+  const manualApply = useActionPending();
   const auditPaging = audit.data
     ? offsetPagination({
         offset: audit.data.offset,
@@ -1904,8 +1932,19 @@ export function AuditPage() {
   }
 
   function applyFilters() {
+    if (manualApply.pending) return;
     setAppliedForm(filterForm);
     setAuditPage(1);
+    // 条件を変えずに押したときも取り直す。新しい条件の取得は useQuery の取得と重ならない（同じ key）。
+    const filters = auditPageFilters(filterForm, 1);
+    void manualApply
+      .track(() =>
+        auditQueryClient.fetchQuery({
+          queryKey: auditQueryKey(filters),
+          queryFn: () => agentApi.listToolCallAudit(filters),
+        })
+      )
+      .catch(() => undefined);
   }
 
   // CSV も Cookie セッションで取得し、401 / 403 は他の API と同じく扱う（#215）。
@@ -1937,8 +1976,9 @@ export function AuditPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            loading: audit.isFetching && !audit.isLoading,
-            onClick: () => void audit.refetch(),
+            loading: manualRefresh.pending,
+            disabled: manualApply.pending,
+            onClick: () => void manualRefresh.track(() => audit.refetch()),
           },
         ]}
       />
@@ -2022,7 +2062,12 @@ export function AuditPage() {
               />
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button onClick={applyFilters} loading={audit.isFetching} icon={RefreshCw}>
+              <Button
+                onClick={applyFilters}
+                loading={manualApply.pending}
+                disabled={manualRefresh.pending}
+                icon={RefreshCw}
+              >
                 {t("audit.apply")}
               </Button>
               <Button
@@ -5100,6 +5145,8 @@ export function RuntimeSnapshotSettingsPage() {
     queryKey: ["runtime", "snapshot"],
     queryFn: agentApi.exportRuntimeSnapshot,
   });
+  // 「表示を更新」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
+  const manualRefresh = useActionPending();
   // 検証（dry run）と置換は別の操作なので、pending も結果も分ける（messaging.md §3.7「1 つの状態を複数のボタンで共有しない」）。
   const validateStartedRef = useRef(0);
   const [validateElapsedMs, setValidateElapsedMs] = useState<number | undefined>(undefined);
@@ -5229,8 +5276,8 @@ export function RuntimeSnapshotSettingsPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            loading: snapshot.isFetching && !snapshot.isLoading,
-            onClick: () => void snapshot.refetch(),
+            loading: manualRefresh.pending,
+            onClick: () => void manualRefresh.track(() => snapshot.refetch()),
           },
         ]}
       />

@@ -782,16 +782,12 @@ function AdbManagementCard({
     info && (info.lifecycle_state || info.status !== "success"),
   );
   const refreshWalletPending = refreshAttemptedWallet && walletEnsurePending;
-  const saveSettingsFeedbackPending =
-    (activeOperation === "save" || activeOperation === "refresh") &&
-    saveSettings.isPending;
-  const saveButtonLoading =
-    saveSettingsFeedbackPending ||
-    ((activeOperation === "save" || activeOperation === "refresh") &&
-      refreshWalletPending);
+  // 「保存」と「情報を再取得」は同じ保存の mutation と Wallet の取得を使うが、スピナーは
+  // 押したボタンだけが出す。もう一方は下の busy で disabled にするだけ（buttons.md §8。#819）。
+  const saveOrRefreshPending = saveSettings.isPending || refreshWalletPending;
+  const saveButtonLoading = activeOperation === "save" && saveOrRefreshPending;
   const refreshButtonLoading =
-    activeOperation === "refresh" &&
-    (saveSettings.isPending || refreshWalletPending);
+    activeOperation === "refresh" && saveOrRefreshPending;
   const startButtonLoading =
     (activeOperation === "start" &&
       (saveSettings.isPending || start.isPending)) ||
@@ -879,13 +875,15 @@ function AdbManagementCard({
     }
   }
 
-  const adbProcessingLabel = startButtonLoading
-    ? t("settings.adb.processing.start")
-    : stopButtonLoading
-      ? t("settings.adb.processing.stop")
-      : saveButtonLoading || refreshButtonLoading
-        ? t("settings.adb.processing.refresh")
-        : null;
+  // 押した操作の説明を優先する（STARTING / STOPPING の間に「情報を再取得」を押したときなど）。
+  const adbProcessingLabel =
+    saveButtonLoading || refreshButtonLoading
+      ? t("settings.adb.processing.refresh")
+      : startButtonLoading
+        ? t("settings.adb.processing.start")
+        : stopButtonLoading
+          ? t("settings.adb.processing.stop")
+          : null;
 
   const apiMessage = (error: unknown) =>
     error ? errorMessage?.(error) : undefined;

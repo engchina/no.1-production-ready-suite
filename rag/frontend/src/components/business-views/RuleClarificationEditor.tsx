@@ -82,7 +82,9 @@ export function RuleClarificationEditor({
   const [draft, setDraft] = useState<RuleClarification | null>(stored);
   const [dirty, setDirty] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [saving, setSaving] = useState(false);
+  // 保存と削除は同じ persist を使う。スピナーは押した操作だけが出し、他は無効にする（#819）。
+  const [pendingOperation, setPendingOperation] = useState<"save" | "remove" | null>(null);
+  const saving = pendingOperation !== null;
   const [error, setError] = useState("");
   const errors = draft ? clarificationErrors(draft) : null;
 
@@ -98,8 +100,12 @@ export function RuleClarificationEditor({
     });
   };
 
-  const persist = async (value: RuleClarification | null, message: string) => {
-    setSaving(true);
+  const persist = async (
+    operation: "save" | "remove",
+    value: RuleClarification | null,
+    message: string
+  ) => {
+    setPendingOperation(operation);
     setError("");
     try {
       await api.saveRuleClarification(businessViewId, ruleId, value);
@@ -112,7 +118,7 @@ export function RuleClarificationEditor({
     } catch (failure) {
       setError(failure instanceof ApiError ? failure.message : t("clarification.error.save"));
     } finally {
-      setSaving(false);
+      setPendingOperation(null);
     }
   };
 
@@ -124,6 +130,7 @@ export function RuleClarificationEditor({
       return;
     }
     void persist(
+      "save",
       {
         ...draft,
         question: draft.question.trim(),
@@ -142,7 +149,7 @@ export function RuleClarificationEditor({
     });
     if (!confirmed) return;
     setDraft(null);
-    void persist(null, t("clarification.toast.removed"));
+    void persist("remove", null, t("clarification.toast.removed"));
   };
 
   return (
@@ -277,8 +284,8 @@ export function RuleClarificationEditor({
               id: "save",
               label: t("clarification.save"),
               icon: Save,
-              loading: saving,
-              disabled: draft === null || !dirty,
+              loading: pendingOperation === "save",
+              disabled: draft === null || !dirty || pendingOperation === "remove",
               onClick: save,
             },
           ]}
@@ -303,6 +310,8 @@ export function RuleClarificationEditor({
                     id: "remove",
                     label: t("clarification.remove.action"),
                     icon: X,
+                    loading: pendingOperation === "remove",
+                    disabled: pendingOperation === "save",
                     onClick: () => void remove(),
                   },
                 ]

@@ -16,6 +16,7 @@ export {
 } from "./lib/list-density";
 export { isImeComposing, isSubmitEnter, type KeyboardEventLike } from "./lib/keyboard";
 export { isRepeatedActivationKey, runStopClickAction, type RunStopAction } from "./lib/run-stop";
+export { useActionPending, type ActionPending } from "./lib/action-pending";
 
 // --- UI primitives ---
 export { Button, buttonVariants, type ButtonProps, type ButtonVariantToneProps } from "./components/ui/button";

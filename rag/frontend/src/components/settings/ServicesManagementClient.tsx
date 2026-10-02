@@ -18,6 +18,7 @@ import {
   type StatusVariant,
   TimedLoadingState,
   ListSkeleton,
+  useActionPending,
 } from "@engchina/production-ready-ui";
 import { Fragment, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -690,6 +691,9 @@ function ServiceLogPanel({
   logsQuery: UseQueryResult<ServiceLogsData>;
 }) {
   const content = logsQuery.data?.content ?? "";
+  // 「再取得」を押した取り直しの間だけ回す。サービスの起動・停止の後の invalidate（["services"] の下）や
+  // ウィンドウのフォーカスでの取り直しでは回さない（#819）。
+  const manualRefetch = useActionPending();
 
   async function copyLogs() {
     try {
@@ -725,11 +729,11 @@ function ServiceLogPanel({
             type="button"
             variant="secondary"
             size="sm"
-            // 初回の取得は下の読込表示がスピナーを出す。ボタンは内容を残した再取得だけ回す
-            // （同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
-            loading={logsQuery.isFetching && !logsQuery.isPending}
+            // 初回の取得は下の読込表示がスピナーを出す。ボタンは押した再取得だけ回す
+            // （同じ処理のスピナーは 1 つ。messaging §3.7、#416 / #819）。
+            loading={manualRefetch.pending}
             disabled={logsQuery.isPending}
-            onClick={() => void logsQuery.refetch()}
+            onClick={() => void manualRefetch.track(() => logsQuery.refetch())}
             aria-label={t("settings.services.logs.refresh")} icon={RefreshCw}>
             {t("settings.services.logs.refresh")}
           </Button>

@@ -221,7 +221,13 @@ export function DocumentRecipeManager({
     return <FormStatus tone="info" message={t("documents.recipes.empty")} />;
   }
 
-  const processPending = enqueue.isPending || approve.isPending;
+  // 押したレシピの操作だけを回す。処理中に別のレシピを選んでも、そのレシピの操作は回さない（#819）。
+  const processPending =
+    (enqueue.isPending && enqueue.variables?.recipeId === selected.recipe_id) ||
+    (approve.isPending && approve.variables?.recipeId === selected.recipe_id);
+  const deletePending =
+    deleteRecipe.isPending && deleteRecipe.variables?.recipeId === selected.recipe_id;
+  const recipeOperationPending = enqueue.isPending || approve.isPending || deleteRecipe.isPending;
   const processError = enqueue.error ?? approve.error;
   // 削除の失敗（処理中・最少 1 件など）も操作の近くに出す。以前は確認ダイアログを閉じた後に何も出なかった（#281）。
   const deleteError = deleteRecipe.error;
@@ -235,7 +241,7 @@ export function DocumentRecipeManager({
       label: processButtonLabel(selected),
       icon: selected.status === "ERROR" ? RotateCcw : Play,
       loading: processPending,
-      disabled: active,
+      disabled: active || (recipeOperationPending && !processPending),
       onSelect: handleProcess,
     },
     {
@@ -244,8 +250,8 @@ export function DocumentRecipeManager({
       ariaLabel: atMinimum ? t("documents.recipes.deleteDisabledMin") : undefined,
       icon: Trash2,
       tone: "danger",
-      loading: deleteRecipe.isPending,
-      disabled: atMinimum || active || deleteRecipe.isPending,
+      loading: deletePending,
+      disabled: atMinimum || active || (recipeOperationPending && !deletePending),
       onSelect: handleDelete,
     },
   ];

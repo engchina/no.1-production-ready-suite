@@ -23,6 +23,7 @@ import {
   StatusBadge,
   TableSkeleton,
   type DataTableColumn,
+  useActionPending,
 } from "@engchina/production-ready-ui";
 
 import { listScrollLabel, QueryState, ServerPagination, usePersistedPage } from "@/components/ListViews";
@@ -98,6 +99,8 @@ export function FeedbackPage() {
     // 絞り込みを変えている間は前の結果を出したまま取り直す（Skeleton に戻さない）。
     placeholderData: keepPreviousData,
   });
+  // 「表示を更新」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
+  const manualRefresh = useActionPending();
   const filtered = Boolean(rating || reason);
 
   // 絞り込みを変えたら 1 ページ目から読む（UX 契約 workspace-state.md）。
@@ -126,8 +129,8 @@ export function FeedbackPage() {
             kind: "secondary",
             label: t("feedback.refresh"),
             icon: RefreshCw,
-            loading: report.isFetching && !report.isLoading,
-            onClick: () => void report.refetch(),
+            loading: manualRefresh.pending,
+            onClick: () => void manualRefresh.track(() => report.refetch()),
           },
         ]}
       />

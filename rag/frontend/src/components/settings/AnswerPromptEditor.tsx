@@ -134,7 +134,8 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
           size="md"
           icon={Save}
           loading={save.isPending && save.variables?.content !== null}
-          disabled={!dirty || !content.trim()}
+          // 「既定に戻す」の処理中は押せないだけにする（スピナーは押した側だけ。#819）。
+          disabled={!dirty || !content.trim() || (save.isPending && save.variables?.content === null)}
           onClick={() => save.mutate({ key: prompt.key, content })}
         >
           {t("settings.answerPrompts.save")}

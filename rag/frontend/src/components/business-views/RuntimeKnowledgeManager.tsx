@@ -192,6 +192,10 @@ export function RuntimeKnowledgeManager({
       },
     );
 
+  // variables は完了後も残るため、isPending のときだけ読む。
+  const deletePending = save.isPending && save.variables?.delete === true;
+  const savePending = save.isPending && !deletePending;
+
   const confirmDelete = async () => {
     const ok = await confirm({
       title: t("businessViews.runtime.deleteConfirm.title", { kind: kindLabel }),
@@ -371,10 +375,12 @@ export function RuntimeKnowledgeManager({
             />
           </div>
           <div className="flex flex-wrap gap-2">
+            {/* 保存と削除は同じ mutation（delete で区別）。スピナーは押した側だけが出し、他は無効にする（#819）。 */}
             <Button
               size="sm"
               icon={Save}
-              loading={save.isPending}
+              loading={savePending}
+              disabled={deletePending}
               onClick={saveForm}
             >
               {t("businessViews.runtime.save")}
@@ -385,6 +391,7 @@ export function RuntimeKnowledgeManager({
                   size="sm"
                   variant="ghost"
                   icon={X}
+                  disabled={save.isPending}
                   onClick={() => load(emptyForm(kind))}
                 >
                   {t("businessViews.runtime.cancel")}
@@ -397,7 +404,8 @@ export function RuntimeKnowledgeManager({
                   tone="danger"
                   icon={Trash2}
                   className="sm:ml-auto"
-                  disabled={save.isPending}
+                  loading={deletePending}
+                  disabled={savePending}
                   onClick={() => void confirmDelete()}
                 >
                   {t("businessViews.faq.delete")}
