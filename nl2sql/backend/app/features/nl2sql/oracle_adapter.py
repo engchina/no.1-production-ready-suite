@@ -11,6 +11,7 @@ import importlib
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager, suppress
@@ -19,7 +20,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from pr_backend_core.oracle_pool import SharedOraclePool
+from pr_backend_core.oracle_pool import OraclePoolSize, SharedOraclePool
 from pr_backend_core.oracle_session import init_oracle_session
 
 from app.clients.oracle_diagnostics import oracle_connection_diagnostics
@@ -629,6 +630,22 @@ def close_auth_connection_pool() -> None:
     _AUTH_CONNECTION_POOL.close()
 
 
+# NL2SQL の状態の保存先（業務プロファイル・ジョブ・履歴・オントロジー・評価。`NL2SQL_*` の表）が使う
+# 接続 pool（#830）。1 回の問い合わせのジョブは状態を数十回読み書きするため、そのたびに
+# Wallet / mTLS の handshake と認証をやり直さない。業務データの SQL・Select AI（`DBMS_CLOUD_AI`）・
+# DeepSec の接続は session の状態を持ち得るため、この pool を使わず今までどおり単発の接続
+# （`connection()`）にする。
+_STATE_CONNECTION_POOL = SharedOraclePool(name="nl2sql-state")
+# 同じスレッドが状態の接続を借りたまま、もう 1 本借りようとしたか
+# （pool の上限で自分を待たないため）。
+_STATE_CONNECTION_DEPTH = threading.local()
+
+
+def close_state_connection_pool() -> None:
+    """状態の保存先の接続 pool を閉じる（次に借りるときに作り直す）。"""
+    _STATE_CONNECTION_POOL.close()
+
+
 class OracleNl2SqlAdapter:
     """Thin python-oracledb wrapper.
 
@@ -773,6 +790,65 @@ class OracleNl2SqlAdapter:
                 conn.rollback()
             raise
         finally:
+            # pool に返す（未コミットの変更は rollback される。切れた接続は pool が捨てる）。
+            with suppress(Exception):
+                conn.close()
+
+    @contextmanager
+    def state_connection(self) -> Iterator[Any]:
+        """状態の保存先（`NL2SQL_*` の表）の読み書きに、pool から接続を借りる（#830）。
+
+        `connection()` と同じく、返すときに未コミットの変更を持たない（例外のときは rollback し、
+        正常に抜けても pool に返すときに python-oracledb が rollback する。commit は呼び出し側）。
+        呼び出しの timeout は借りるたびに `connection()` と同じ値を設定し、result cache の無効化
+        （`init_oracle_session`）は pool の session callback が新しい接続ごとに当てる。
+        同じスレッドが借りたまま入れ子で借りるときは、pool の上限で自分を待たないよう単発の接続に
+        する。業務データ・Select AI・DeepSec の接続には使わない（session の状態を持ち得る）。
+        """
+        depth = int(getattr(_STATE_CONNECTION_DEPTH, "value", 0))
+        if depth > 0:
+            logger.debug("nl2sql_state_connection_nested", extra={"depth": depth})
+            with self.connection() as conn:
+                yield conn
+            return
+        oracledb = self._load_oracledb()
+        self._init_client(oracledb)
+        if not self.is_configured():
+            raise OracleAdapterError("Oracle 接続情報が不足しています。")
+        _STATE_CONNECTION_POOL.resize(
+            OraclePoolSize.of(1, self.settings.nl2sql_oracle_state_pool_max)
+        )
+        try:
+            conn = _STATE_CONNECTION_POOL.acquire(_oracle_connect_kwargs(self.settings))
+        except OracleAdapterError:
+            raise
+        except Exception as exc:
+            diagnostics = oracle_connection_diagnostics(exc)
+            logger.error(
+                "%s %s",
+                diagnostics["summary"],
+                diagnostics["suggested_action"],
+                extra={
+                    **diagnostics,
+                    "event": "oracle_connection_failed",
+                    "operation": "acquire",
+                    "pool": _STATE_CONNECTION_POOL.name,
+                },
+            )
+            raise OracleAdapterError(f"Oracle 接続に失敗しました: {exc}") from exc
+        _STATE_CONNECTION_DEPTH.value = depth + 1
+        try:
+            if hasattr(conn, "call_timeout"):
+                conn.call_timeout = int(
+                    max(1.0, float(self.settings.nl2sql_oracle_call_timeout_seconds)) * 1000
+                )
+            yield conn
+        except BaseException:
+            with suppress(Exception):
+                conn.rollback()
+            raise
+        finally:
+            _STATE_CONNECTION_DEPTH.value = depth
             # pool に返す（未コミットの変更は rollback される。切れた接続は pool が捨てる）。
             with suppress(Exception):
                 conn.close()

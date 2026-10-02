@@ -200,6 +200,10 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oracle_db_test_timeout_seconds: float = 15.0
     oracle_tcp_connect_timeout_seconds: float = 10.0
     nl2sql_oracle_connect_timeout_seconds: int = 5
+    # 状態の保存先（業務プロファイル・ジョブ・履歴・オントロジー・評価）の接続 pool の上限（#830）。
+    # ジョブの worker・heartbeat・API の要求が短く借りて返す。
+    # 業務データ・Select AI の接続は含まない。
+    nl2sql_oracle_state_pool_max: int = Field(default=8, ge=1, le=64)
     nl2sql_csv_import_max_rows: int = 5000
     # 件数未指定の SELECT 実行で読み込む行数の安全上限(超えた分は読まず truncated にする)。
     nl2sql_max_result_rows: int = Field(default=100000, ge=1)
