@@ -75,7 +75,7 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 import app.settings as app_settings
-from app.features.agent import builtin_runtime, control_plane_store
+from app.features.agent import builtin_runtime, control_plane_store, run_facts_store
 from app.features.agent.api_keys import (
     ApiKeyCreated,
     ApiKeyCreateRequest,
@@ -106,6 +106,8 @@ from app.features.agent.control_plane_store import (
     save_api_key,
 )
 from app.features.agent.evaluation import (
+    EVALUATION_JOBS_PAGE_SIZE,
+    EVALUATION_JOBS_PAGE_SIZE_MAX,
     CaseStatus,
     EvaluationBusyError,
     EvaluationCaseResult,
@@ -119,7 +121,6 @@ from app.features.agent.evaluation import (
     EvaluationSetsData,
     evaluation_set_store,
     evaluation_store,
-    job_item,
     run_evaluation_job,
     set_item,
 )
@@ -131,6 +132,8 @@ from app.features.agent.evaluation_excel import (
     template_xlsx,
 )
 from app.features.agent.feedback import (
+    FEEDBACK_PAGE_SIZE,
+    FEEDBACK_PAGE_SIZE_MAX,
     FEEDBACK_PERIOD_DAYS,
     FeedbackReport,
     build_feedback_report,
@@ -148,6 +151,7 @@ from app.features.agent.plugins import (
     plugin_registry,
     reload_declared_plugins,
 )
+from app.features.agent.run_facts import fact_from_run
 from app.features.agent.runtime import (
     BUILTIN_RUNTIME_ID,
     AgentNotPublishedError,
@@ -174,6 +178,7 @@ from app.features.agent.runtime import (
     ThreadData,
     ThreadNotFoundError,
     ThreadsData,
+    agent_unavailable_reason,
     builtin_resume_pending,
     runtime_repository,
 )
@@ -1706,27 +1711,68 @@ async def get_feedback_report(
     agent_id: str | None = Query(default=None, max_length=200),
     rating: FeedbackRating | None = None,
     reason: FeedbackReason | None = None,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=FEEDBACK_PAGE_SIZE, ge=1, le=FEEDBACK_PAGE_SIZE_MAX),
 ) -> ApiResponse[FeedbackReport]:
     """フィードバックの集計と一覧（#774）。権限は middleware のメニュー権限（`menu.feedback`）。
 
-    対象は Run の一覧と同じく利用できる業務 Agent の Run だけ。
+    対象は Run の一覧と同じく利用できる業務 Agent の Run だけ。Oracle の構成は保存した Run の
+    事実（`AGENT_RUN_FACTS`）を SQL で集計し、一覧はサーバー側でページングする（#794）。
     """
     if days not in FEEDBACK_PERIOD_DAYS:
-        raise HTTPException(status_code=422, detail="期間は 7・30・90 日のどれかにしてください。")
-    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+        raise HTTPException(status_code=422, detail=_PERIOD_DETAIL)
+    now = datetime.now(UTC)
     agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    store = run_facts_store.reporting_store()
+    if store is not None:
+        try:
+            return ApiResponse(
+                data=await run_in_threadpool(
+                    store.feedback_report,
+                    days=days,
+                    now=now,
+                    agent_ids=_report_agent_scope(request),
+                    agent_id=agent_id or None,
+                    rating=rating,
+                    reason=reason,
+                    offset=offset,
+                    limit=limit,
+                    agent_names=agent_names,
+                    user_names=user_display_names,
+                )
+            )
+        except run_facts_store.RunFactsUnavailableError:
+            logger.warning("agent_run_facts_table_missing", extra={"report": "feedback"})
+        except Exception:  # noqa: BLE001 - DB の障害でも画面を出す（メモリの Run を集計する）
+            logger.exception("agent_run_facts_report_failed", extra={"report": "feedback"})
+    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
     report = await run_in_threadpool(
         build_feedback_report,
-        runs,
+        [fact_from_run(run) for run in runs],
         days=days,
-        now=datetime.now(UTC),
+        now=now,
         agent_id=agent_id or None,
         rating=rating,
         reason=reason,
         agent_names=agent_names,
         user_names=user_display_names,
+        offset=offset,
+        limit=limit,
     )
     return ApiResponse(data=report)
+
+
+_PERIOD_DETAIL = (
+    "期間は "
+    + "・".join(str(days) for days in FEEDBACK_PERIOD_DAYS)
+    + " 日のどれかにしてください。"
+)
+
+
+def _report_agent_scope(request: Request) -> frozenset[str] | None:
+    """集計の対象の業務 Agent（None は制限なし。Run の一覧と同じ判定）。"""
+    allowed = _request_agent_ids(request)
+    return None if allowed is None else frozenset(allowed)
 
 
 @router.get("/runs/{run_id}", response_model=ApiResponse[RunState])
@@ -1763,6 +1809,15 @@ async def list_agent_templates() -> ApiResponse[AgentTemplatesData]:
     return ApiResponse(data=AgentTemplatesData(templates=list(AGENT_TEMPLATES)))
 
 
+def _require_runnable_agent(agent_id: str) -> None:
+    """自動実行の Run は利用者の Run なので、公開した版の無い業務 Agent は選べない（#792）。"""
+    reason = agent_unavailable_reason(_control_plane_agent(agent_id))
+    if reason is not None:
+        raise HTTPException(
+            status_code=422, detail={"code": "agent_unavailable", "message": reason}
+        )
+
+
 def _automation_for_actor(request: Request, automation_id: str) -> Automation:
     try:
         item = automation_store.get(automation_id)
@@ -1790,7 +1845,7 @@ async def create_automation(
 ) -> ApiResponse[Automation]:
     """自動実行を作る。Run は作った利用者として作る（RAG / NL2SQL の MCP もこの利用者）。"""
     _require_agent_access(request, payload.agent_id)
-    _control_plane_agent(payload.agent_id)
+    _require_runnable_agent(payload.agent_id)
     owner = _run_creator_user_uuid(request)
     if owner is None:
         raise HTTPException(status_code=401, detail="ログインしてください。")
@@ -1818,7 +1873,7 @@ async def update_automation(
     item = _automation_for_actor(request, automation_id)
     if payload.agent_id != item.agent_id:
         _require_agent_access(request, payload.agent_id)
-        _control_plane_agent(payload.agent_id)
+    _require_runnable_agent(payload.agent_id)
     try:
         updated = automation_store.update(item.id, payload, now=datetime.now(UTC))
     except ControlPlaneStoreError as exc:
@@ -2073,15 +2128,20 @@ async def create_evaluation(
 
 @router.get("/evaluations", response_model=ApiResponse[EvaluationJobsData])
 async def list_evaluations(
-    request: Request, set_id: str | None = Query(default=None, max_length=100)
+    request: Request,
+    set_id: str | None = Query(default=None, max_length=100),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=EVALUATION_JOBS_PAGE_SIZE, ge=1, le=EVALUATION_JOBS_PAGE_SIZE_MAX),
 ) -> ApiResponse[EvaluationJobsData]:
-    """最近の評価（新しい順。利用できる業務 Agent の評価だけ）。"""
-    jobs = [
-        job
-        for job in evaluation_store.list(set_id or None)
-        if _agent_allowed(request, job.agent_id)
-    ]
-    return ApiResponse(data=EvaluationJobsData(jobs=[job_item(job) for job in jobs]))
+    """評価の履歴（新しい順のページ。利用できる業務 Agent の評価だけ。保持は 365 日。#794）。"""
+    return ApiResponse(
+        data=evaluation_store.page(
+            set_id=set_id or None,
+            allowed=lambda agent_id: _agent_allowed(request, agent_id),
+            offset=offset,
+            limit=limit,
+        )
+    )
 
 
 def _evaluation_for_actor(request: Request, job_id: str) -> EvaluationJob:
@@ -2132,22 +2192,43 @@ async def get_usage_report(
 ) -> ApiResponse[UsageReport]:
     """利用状況（#772）。利用できる業務 Agent の Run のモデル利用量を集計する。
 
+    Oracle の構成は保存した Run の事実（`AGENT_RUN_FACTS`）を SQL で集計する（#794）。
+
     権限は middleware のメニュー権限（`menu.usage`）で確かめる。日は `timezone`（画面の
     ブラウザの IANA 名）で区切る。
     """
     if days not in USAGE_PERIOD_DAYS:
-        raise HTTPException(status_code=422, detail="期間は 7・30・90 日のどれかにしてください。")
+        raise HTTPException(status_code=422, detail=_PERIOD_DETAIL)
     try:
         tz = resolve_timezone(timezone)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    now = datetime.now(UTC)
     agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    store = run_facts_store.reporting_store()
+    if store is not None:
+        try:
+            return ApiResponse(
+                data=await run_in_threadpool(
+                    store.usage_report,
+                    days=days,
+                    now=now,
+                    tz=tz,
+                    agent_ids=_report_agent_scope(request),
+                    agent_names=agent_names,
+                    user_names=user_display_names,
+                )
+            )
+        except run_facts_store.RunFactsUnavailableError:
+            logger.warning("agent_run_facts_table_missing", extra={"report": "usage"})
+        except Exception:  # noqa: BLE001 - DB の障害でも画面を出す（メモリの Run を集計する）
+            logger.exception("agent_run_facts_report_failed", extra={"report": "usage"})
+    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
     report = await run_in_threadpool(
         build_usage_report,
-        runs,
+        [fact_from_run(run) for run in runs],
         days=days,
-        now=datetime.now(UTC),
+        now=now,
         tz=tz,
         agent_names=agent_names,
         user_names=user_display_names,

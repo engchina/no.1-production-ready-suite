@@ -220,6 +220,26 @@ class AgentNotPublishedError(ValueError):
     """公開した版の無い業務 Agent を、下書きではない Run で実行しようとした（#770）。"""
 
 
+AGENT_UNPUBLISHED_MESSAGE = (
+    "公開していない業務 Agent は実行できません。公開してから使ってください。"
+)
+
+
+def agent_unavailable_reason(agent: AgentProfile | None) -> str | None:
+    """利用者の Run（チャット・MCP・自動実行）で使えない理由。使えるなら None（#792）。
+
+    利用者の Run は公開中の版で実行する（#770）ため、無効・移行が要る・公開した版が無い
+    業務 Agent は使えない。品質評価と管理者の「下書きで実行」はこの判定を使わない。
+    """
+    if agent is None:
+        return "業務 Agent が見つかりません。"
+    if not agent.enabled or agent.migration_required:
+        return "この業務 Agent は実行できない状態です。"
+    if agent.published() is None:
+        return AGENT_UNPUBLISHED_MESSAGE
+    return None
+
+
 class AgentPublishRequest(BaseModel):
     note: str = Field(default="", max_length=500)
 
@@ -629,6 +649,7 @@ class AgentRuntimeRepository:
         with self._condition:
             self._replace_state_locked(snapshot)
             self._persist_locked()
+            self._record_all_facts_locked()
             self._condition.notify_all()
             return self._export_snapshot_locked()
 
@@ -690,6 +711,7 @@ class AgentRuntimeRepository:
                 {"cancelled_approval_ids": cancelled_approval_ids},
             )
             self._persist_locked()
+            self._record_fact_locked(run)
             return run.model_copy(deep=True)
 
     def decide_approval(self, approval_id: str, request: ApprovalDecisionRequest) -> RunState:
@@ -750,6 +772,7 @@ class AgentRuntimeRepository:
                     run.status = RunStatus.QUEUED
                     run.updated_at = _now()
                 self._persist_locked()
+                self._record_fact_locked(run)
                 return run.model_copy(deep=True)
             # 旧エンジンの Run（#756 で実行を削除）は再開しない。決定だけを記録し、step を閉じる。
             step.status = StepStatus.CANCELLED
@@ -798,6 +821,7 @@ class AgentRuntimeRepository:
                 {"agent_id": request.agent_id, "runtime_id": BUILTIN_RUNTIME_ID},
             )
             self._persist_locked()
+            self._record_fact_locked(run)
             return run.model_copy(deep=True)
 
     def _thread_runs_locked(self, thread_id: str) -> list[RunState]:
@@ -1030,6 +1054,7 @@ class AgentRuntimeRepository:
             run.status = RunStatus.WAITING_APPROVAL
             run.updated_at = _now()
             self._persist_locked()
+            self._record_fact_locked(run)
             return run.model_copy(deep=True)
 
     def complete_builtin_run(self, run_id: str, answer: str) -> RunState:
@@ -1050,6 +1075,7 @@ class AgentRuntimeRepository:
             run.updated_at = _now()
             self._append_event(run, RunEventType.RUN_COMPLETED, "実行を完了しました。")
             self._persist_locked()
+            self._record_fact_locked(run)
             return run.model_copy(deep=True)
 
     def fail_builtin_run(self, run_id: str, *, code: str, detail: str) -> RunState:
@@ -1075,6 +1101,7 @@ class AgentRuntimeRepository:
             else:
                 run.feedback = feedback
             self._persist_locked()
+            self._record_fact_locked(run)
             return run.model_copy(deep=True)
 
     def record_builtin_dry_run_steps(self, run_id: str, calls: Sequence[ToolCall]) -> None:
@@ -1120,6 +1147,7 @@ class AgentRuntimeRepository:
                 return
             run.usage = usage
             self._persist_locked()
+            self._record_fact_locked(run)
 
     def note_builtin_warning(self, run_id: str, message: str) -> None:
         """実行は続けるが利用者に伝えたいこと（取得できなかった MCP 接続など）をイベントに残す。"""
@@ -1141,6 +1169,7 @@ class AgentRuntimeRepository:
             {"status": RunStatus.RUNNING.value, "runtime_id": BUILTIN_RUNTIME_ID},
         )
         self._persist_locked()
+        self._record_fact_locked(run)
 
     def _fail_builtin_locked(self, run: RunState, code: str, detail: str) -> None:
         run.status = RunStatus.FAILED
@@ -1153,6 +1182,7 @@ class AgentRuntimeRepository:
             {"error_code": code, "runtime_id": BUILTIN_RUNTIME_ID},
         )
         self._persist_locked()
+        self._record_fact_locked(run)
 
     def list_agents(self) -> list[AgentProfile]:
         with self._lock:
@@ -1270,6 +1300,28 @@ class AgentRuntimeRepository:
             ]:
                 del self._agents[agent_id]
             self._persist_locked()
+
+    def _record_fact_locked(self, run: RunState) -> None:
+        """Run の事実（集計用。#794）をバックグラウンドの保存のキューに入れる。
+
+        Oracle の構成だけ保存する（memory / file では何もしない）。失敗しても Run は続ける。
+        """
+        try:
+            from app.features.agent import run_facts_store
+
+            agent = self._agents.get(run.agent_id)
+            run_facts_store.record_run(run, agent_name=agent.name if agent is not None else "")
+        except Exception:  # noqa: BLE001 - 集計用の事実で Run を止めない
+            logger.warning("agent_run_fact_not_queued", extra={"run_id": run.id})
+
+    def _record_all_facts_locked(self) -> None:
+        try:
+            from app.features.agent import run_facts_store
+
+            names = {agent.id: agent.name for agent in self._agents.values()}
+            run_facts_store.record_runs(self._runs.values(), names)
+        except Exception:  # noqa: BLE001 - 集計用の事実で置き換えを止めない
+            logger.warning("agent_run_facts_not_queued")
 
     def _sorted_runs_locked(self) -> list[RunState]:
         return sorted(self._runs.values(), key=lambda run: run.created_at, reverse=True)

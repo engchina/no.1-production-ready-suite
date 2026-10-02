@@ -11,6 +11,7 @@ from pytest import MonkeyPatch
 from security_support import ProductionAuth, client, enable_production_auth, login
 
 from app.features.agent.feedback import build_feedback_report
+from app.features.agent.run_facts import fact_from_run
 from app.features.agent.runtime import (
     Artifact,
     FeedbackRating,
@@ -60,14 +61,16 @@ def _run(
 
 def _report(runs: list[RunState], **filters: Any) -> Any:
     return build_feedback_report(
-        runs,
-        days=7,
+        [fact_from_run(run) for run in runs],
+        days=filters.get("days", 7),
         now=NOW,
         agent_id=filters.get("agent_id"),
         rating=filters.get("rating"),
         reason=filters.get("reason"),
         agent_names={"default": "汎用業務 Agent", "sales": "営業の Agent"},
         user_names=lambda uuids: {uuid: "Alice" for uuid in uuids if uuid == ALICE},
+        offset=filters.get("offset", 0),
+        limit=filters.get("limit", 10),
     )
 
 
@@ -131,6 +134,35 @@ def test_report_filters_the_list_by_agent_rating_and_reason() -> None:
     assert [item.run_id for item in by_reason.items] == ["r3"]
     empty = _report([])
     assert (empty.summary.total, empty.summary.helpful_rate, empty.items) == (0, None, [])
+
+
+def test_report_pages_the_list_newest_first_and_counts_every_match() -> None:
+    """一覧はサーバー側のページング（#794）。集計と件数はすべての評価で数える。"""
+    runs = [_run(f"r{index:02d}", rated_at=NOW - timedelta(hours=index)) for index in range(25)]
+
+    first = _report(runs, limit=10)
+    third = _report(runs, offset=20, limit=10)
+
+    assert (first.matched, first.summary.total, first.offset, first.limit) == (25, 25, 0, 10)
+    assert [item.run_id for item in first.items] == [f"r{index:02d}" for index in range(10)]
+    assert [item.run_id for item in third.items] == [f"r{index:02d}" for index in range(20, 25)]
+    beyond = _report(runs, offset=40, limit=10)
+    assert (beyond.items, beyond.matched) == ([], 25)
+
+
+def test_long_periods_include_older_ratings() -> None:
+    """90 日を超える期間（180・365 日）を選べる（#794）。"""
+    runs = [
+        _run("recent", rated_at=NOW - timedelta(days=10)),
+        _run("half-year", rated_at=NOW - timedelta(days=150)),
+        _run("last-year", rated_at=NOW - timedelta(days=500)),
+    ]
+
+    assert _report(runs, days=90).summary.total == 1
+    year = _report(runs, days=365)
+    assert year.summary.total == 2
+    # 直前の 365 日（比較用）。
+    assert year.previous.total == 1
 
 
 @pytest.fixture
@@ -202,7 +234,9 @@ def test_feedback_api_returns_the_report(seeded_runs: None) -> None:
         json={"rating": "not_helpful", "reason": "incomplete", "comment": "件数が足りない"},
     )
 
-    response = client.get("/api/feedback", params={"days": 7, "rating": "not_helpful"})
+    response = client.get(
+        "/api/feedback", params={"days": 7, "rating": "not_helpful", "limit": 100}
+    )
 
     assert response.status_code == 200, response.text
     data = response.json()["data"]
@@ -213,6 +247,9 @@ def test_feedback_api_returns_the_report(seeded_runs: None) -> None:
         "ローカル利用者",
     )
     assert client.get("/api/feedback", params={"days": 14}).status_code == 422
+    assert client.get("/api/feedback", params={"days": 365}).status_code == 200
+    assert client.get("/api/feedback", params={"limit": 101}).status_code == 422
+    assert client.get("/api/feedback", params={"offset": -1}).status_code == 422
     assert client.get("/api/feedback", params={"reason": "unknown"}).status_code == 422
 
 

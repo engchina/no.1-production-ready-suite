@@ -551,8 +551,12 @@ def test_permission_catalog_lists_menus_and_capabilities(auth: ProductionAuth) -
     assert response.status_code == 200
     codes = [item["code"] for item in response.json()["data"]]
     assert codes == [item.code for item in PERMISSION_CATALOG]
+    groups = {item["code"]: item["group"] for item in response.json()["data"]}
+    # capability のグループは NL2SQL / RAG と同じ「参照権限 / 実行権限 / 管理権限」（#791）。
+    assert groups["agent.runs.view"] == groups["agent.audit.view"] == "参照権限"
+    assert groups["agent.runs.operate"] == groups["agent.approvals.decide"] == "実行権限"
+    assert groups["agent.admin"] == "管理権限"
     admin = next(item for item in response.json()["data"] if item["code"] == "agent.admin")
-    assert admin["group"] == "実行・承認・管理の権限"
     assert "menu.agents" in admin["implies"]
 
 

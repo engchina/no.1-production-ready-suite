@@ -41,6 +41,9 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
   `AGENT_RUNTIME_REPOSITORY_BACKEND` に従い、Oracle では共通の `PLATFORM_ORACLE_*` で `AGENT_RUNTIME_*` /
   `AGENT_CONTROL_PLANE_ITEMS` に保存する（テーブルはシステムテーブルが作る。アプリは DDL を実行しない）。
   MCP 接続の秘密は `app.secret_box` で暗号化する。`.env` の宣言は保存しない。
+- 利用状況・フィードバックの集計（#794）: Oracle の構成は Run の事実（`AGENT_RUN_FACTS`。1 Run = 1 行）を SQL で集計する
+  （期間は 365 日まで。書き込みは `run_facts_store` のバックグラウンドの MERGE で、Run を止めない）。memory / file は
+  メモリの Run を集計する。詳細は docs/agent-control-plane-design.md §5.2。
 - Plugin は Marketplace の**原子的な配布パッケージ**であり実行概念ではない。正式契約は `skills[] / mcp_servers[] / resources[]`。
 - Prompt / Workflow / Template は非実行・版管理 resource。独立 Workflow engine を作らない。
 
@@ -70,12 +73,15 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
 
 - UI、エラー、通知、LLM 指示の第一言語は日本語。文言は i18n 経由。
 - 日本語フォントは `"Noto Sans JP", "Roboto", system-ui, sans-serif`、本文 14px。
-- ナビは「チャット / 業務 Agent / Skill / Runtime / Run / 承認・監査 / Marketplace」を主要導線とする。
+- ナビは上に一般の利用者の画面、下に管理者の画面を置く（RAG / NL2SQL と同じ。#791）。**AI 活用**：チャット / 実行履歴（Run の一覧）/
+  承認 → **Agent 構築**：業務 Agent / スキル / 自動実行 / マーケットプレイス → **改善・運用**：品質評価 / フィードバック /
+  利用状況 / 監査ログ → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。既定の入口はチャット。
+  画面・ナビの文言に「Control Plane」「Runtime」のような基盤の用語を使わない（識別子・URL・権限コードは変えない）。
   チャット（#768）は業務利用者の入口で、1 往復が 1 Run。同じ会話（`thread_id`）の前の質問と回答を組み込み Runtime が
   モデルへ渡す（直近 10 往復）。会話は作った利用者だけが読み、続けられる（同じ Agent に限る）。
   Plugin、Tools を独立ナビに戻さない（旧エンジンの Planner・Memory は #756 で削除した）。
-- 設定は2セクションに分ける。**運用設定**：システムテーブル（先頭。RAG / NL2SQL と同じ。#751）/ Agent 接続設定 / MCP 接続（#757）/
-  Control Plane バックアップ（Agent 固有）。**システム設定**：OCI 認証 / アップロード保存先 / モデル /
+- 設定は2セクションに分ける。**運用設定**：システムテーブル（先頭。RAG / NL2SQL と同じ。#751）/ 実行環境（組み込み Runtime の状態）/
+  MCP 接続（#757）/ API キー（#778）/ バックアップと復元（Agent 固有）。**システム設定**：OCI 認証 / アップロード保存先 / モデル /
   データベース / 外観（3製品で共通。画面と API は platform の共有パッケージ）。
   ツール権限はナビに出さない（Control Plane 化で外した方針を維持）。Command Policy・Runtime Safety の画面と
   コマンド実行ツール（`sandbox_command_run`）は #756 で削除した。

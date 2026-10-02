@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import json
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from app.features.agent.control_plane_store import (
     set_control_plane_store,
 )
 from app.features.agent.evaluation import (
+    EVALUATION_JOBS_RETENTION_DAYS,
     CaseStatus,
     EvaluationCase,
     EvaluationCaseResult,
@@ -364,6 +366,51 @@ def test_previous_run_of_the_same_set_is_compared(agent: None) -> None:
     assert data["previous_summary"]["pass_rate"] == 0.0
     # 前回が無い評価は比較しない。
     assert client.get(f"/api/evaluations/{first.id}").json()["data"]["previous_summary"] is None
+
+
+def _finished_job(created_at: datetime, *, set_id: str = "evset_history") -> EvaluationJob:
+    judged = EvaluationCaseResult(
+        case=_case("c1", "q", "x"),
+        status=CaseStatus.JUDGED,
+        judgement=evaluation.EvaluationJudgement(
+            verdict=JudgeVerdict.CORRECT, score=1.0, summary="正しい", missing_points=[]
+        ),
+    )
+    job = EvaluationJob(
+        agent_id=AGENT_ID,
+        set_id=set_id,
+        status=JobStatus.COMPLETED,
+        results=[judged],
+        created_at=created_at,
+        finished_at=created_at,
+    )
+    evaluation_store.restore(job)
+    return job
+
+
+def test_history_is_kept_for_a_year_and_listed_page_by_page(agent: None) -> None:
+    """評価の履歴は件数（旧 50 件）ではなく期間（365 日）で残し、ページで読む（#794）。"""
+    del agent
+    now = datetime.now(UTC)
+    expired = _finished_job(now - timedelta(days=EVALUATION_JOBS_RETENTION_DAYS + 30))
+    jobs = [_finished_job(now - timedelta(days=300 - index)) for index in range(60)]
+
+    assert evaluation_store.prune() == (expired.id,)
+    # 新しい評価を始めても、50 件を超えた古い履歴は消えない。
+    latest = _job(_case("c1", "q", "x"), set_id="evset_history")
+
+    first = client.get("/api/evaluations", params={"set_id": "evset_history"}).json()["data"]
+    assert (first["total"], first["offset"], first["limit"], len(first["jobs"])) == (61, 0, 10, 10)
+    assert first["jobs"][0]["id"] == latest.id
+    last = client.get(
+        "/api/evaluations", params={"set_id": "evset_history", "offset": 60, "limit": 10}
+    ).json()["data"]
+    assert [item["id"] for item in last["jobs"]] == [jobs[0].id]
+    assert client.get("/api/evaluations", params={"limit": 101}).status_code == 422
+    # 前回との比較は、残っているすべての履歴から探す。
+    second = client.get(f"/api/evaluations/{jobs[1].id}").json()["data"]
+    assert second["previous_job_id"] == jobs[0].id
+    assert client.get(f"/api/evaluations/{expired.id}").status_code == 404
 
 
 def test_cases_can_be_imported_and_exported_as_excel(agent: None) -> None:

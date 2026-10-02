@@ -125,7 +125,7 @@ for (const viewport of VIEWPORTS) {
       setDatabaseStatus(mockApi, "ok");
       await gateCard(page).getByRole("button", { name: "再試行" }).click();
 
-      await expect(page.getByRole("heading", { level: 1, name: "Run" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "実行履歴" })).toBeVisible();
       await expect(gateCard(page)).toHaveCount(0);
       await expectNoHorizontalOverflow(page);
     });

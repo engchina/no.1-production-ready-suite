@@ -5,13 +5,13 @@ import {
   ChartColumn,
   CalendarClock,
   ClipboardList,
-  Container,
+  Cpu,
   DatabaseBackup,
   FlaskConical,
+  History,
   KeySquare,
   LockKeyhole,
   MessagesSquare,
-  PlayCircle,
   PlugZap,
   Store,
   TableProperties,
@@ -62,26 +62,29 @@ const USER_ROLE_MENU_PERMISSIONS = {
 } satisfies Record<UserRoleKey, string>;
 
 /**
- * Agent コンソールのサイドナビ構成（共有 Sidebar が消費する）。並び方は NL2SQL / RAG と同じ
- * （製品のセクション → 改善・運用 → セキュリティ設定 → 共通のユーザーとロール → 運用設定 →
- * 共通のシステム設定。#658 / #774 / #776）。
+ * Agent コンソールのサイドナビ構成（共有 Sidebar が消費する）。並び方は NL2SQL / RAG と同じで、上に一般の
+ * 利用者が使う画面、下に管理者の画面を置く（AI 活用 → Agent 構築 → 改善・運用 → セキュリティ設定 →
+ * 共通のユーザーとロール → 運用設定 → 共通のシステム設定。#658 / #774 / #776 / #791）。
  */
 export const NAV_SECTIONS: NavSection[] = [
   {
-    titleKey: "nav.section.controlPlane",
+    // 一般の利用者が毎日使う画面（#791）。NL2SQL の「AI 活用」と同じ名前・位置。先頭のチャットが既定の入口
+    // （RAG と同じ。route-permissions の defaultEntryRoute）。
+    titleKey: "nav.section.use",
     items: [
       // 業務利用者の入口（#768。RAG のチャットと同じアイコン）。
       { href: APP_ROUTES.chat, labelKey: "nav.chat", icon: MessagesSquare, permission: MENU_PERMISSIONS.chat },
+      // Run の一覧（URL・権限コードは変えない）。名前とアイコンは NL2SQL の「実行履歴」と同じ（#791）。
+      { href: APP_ROUTES.runs, labelKey: "nav.runs", icon: History, permission: MENU_PERMISSIONS.runs },
+      { href: APP_ROUTES.approvals, labelKey: "nav.approvals", icon: BadgeCheck, permission: MENU_PERMISSIONS.approvals },
+    ],
+  },
+  {
+    // 管理者が業務 Agent を作る画面（#791）。RAG の「ナレッジ構築」・NL2SQL の「データ準備」に当たる。
+    titleKey: "nav.section.build",
+    items: [
       { href: APP_ROUTES.agents, labelKey: "nav.agents", icon: Bot, permission: MENU_PERMISSIONS.agents },
-      {
-        href: APP_ROUTES.skills,
-        labelKey: "nav.skills",
-        sidebarLabelKey: "nav.skills.sidebar",
-        icon: Blocks,
-        permission: MENU_PERMISSIONS.skills,
-      },
-      { href: APP_ROUTES.runtimes, labelKey: "nav.runtimes", icon: Container, permission: MENU_PERMISSIONS.runtimes },
-      { href: APP_ROUTES.runs, labelKey: "nav.runs", icon: PlayCircle, permission: MENU_PERMISSIONS.runs },
+      { href: APP_ROUTES.skills, labelKey: "nav.skills", icon: Blocks, permission: MENU_PERMISSIONS.skills },
       // 業務 Agent の自動実行（スケジュール・Webhook。#784）。
       {
         href: APP_ROUTES.automations,
@@ -89,8 +92,6 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: CalendarClock,
         permission: MENU_PERMISSIONS.automations,
       },
-      { href: APP_ROUTES.approvals, labelKey: "nav.approvals", icon: BadgeCheck, permission: MENU_PERMISSIONS.approvals },
-      { href: APP_ROUTES.audit, labelKey: "nav.audit", icon: ClipboardList, permission: MENU_PERMISSIONS.audit },
       {
         href: APP_ROUTES.pluginMarketplaces,
         labelKey: "nav.pluginMarketplaces",
@@ -114,6 +115,8 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: APP_ROUTES.feedback, labelKey: "nav.feedback", icon: ThumbsUp, permission: MENU_PERMISSIONS.feedback },
       // 利用状況（#772）。RAG / NL2SQL に無い項目なので、共通の 2 項目の後ろに置く。
       { href: APP_ROUTES.usage, labelKey: "nav.usage", icon: ChartColumn, permission: MENU_PERMISSIONS.usage },
+      // 監査ログ（実行をまたぐツールの実行・承認・警告の記録）は、実行を見守る運用の画面なので利用状況の後ろ（#791）。
+      { href: APP_ROUTES.audit, labelKey: "nav.audit", icon: ClipboardList, permission: MENU_PERMISSIONS.audit },
     ],
   },
   {
@@ -140,7 +143,7 @@ export const NAV_SECTIONS: NavSection[] = [
     })),
   },
   {
-    // Agent 固有の運用設定（接続先と Control Plane のバックアップ。#87）。先頭はシステムテーブル
+    // Agent 固有の運用設定（実行環境・接続先・バックアップ。#87 / #791）。先頭はシステムテーブル
     // （RAG / NL2SQL と同じ並びとアイコン。#658 / #751）。
     titleKey: "nav.section.operations",
     items: [
@@ -151,6 +154,8 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: TableProperties,
         permission: MENU_PERMISSIONS.settingsSystemTables,
       },
+      // 組み込み Runtime の状態とモデルの確認（RAG の「サービス」と同じく運用の画面。#791）。
+      { href: APP_ROUTES.runtimes, labelKey: "nav.runtimes", icon: Cpu, permission: MENU_PERMISSIONS.runtimes },
       {
         href: APP_ROUTES.settingsMcpConnections,
         labelKey: "nav.settingsMcpConnections",
