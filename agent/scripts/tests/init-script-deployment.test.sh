@@ -119,23 +119,17 @@ run_install_env_case
 grep -qx 'PLATFORM_ORACLE_DSN=saved_from_ui' "${install_suite}/platform/.env" \
   || fail "再実行で共通 .env が上書きされた"
 
-# --- DB 初期化（Runtime repository の import と、共通認証・Agent 権限の migration。#215） ---
+# --- DB 初期化（共通認証・Agent の権限・Run の保存先・定義のシステムテーブル。#215 / #764） ---
 run_initialization_case success ""
 test "$(cat "${TEST_TMP_DIR}/success/ready")" = "true" || fail "DB 初期化成功時に ready にならない"
-grep -Fq "uv run python -c 'import app.features.agent.runtime'" "${TEST_TMP_DIR}/success/commands.log" \
-  || fail "Runtime repository の初期化 command が実行されていない"
 grep -Fq "uv run python -m app.cli.agent_system_schema --initialize" "${TEST_TMP_DIR}/success/commands.log" \
   || fail "システムテーブルの作成・更新が実行されていない"
-test "$(grep -c 'attempts=5' "${TEST_TMP_DIR}/success/commands.log")" = "2" \
-  || fail "DB 初期化の各 command が retry されていない"
-runtime_line="$(grep -n 'import app.features.agent.runtime' "${TEST_TMP_DIR}/success/commands.log" | cut -d: -f1)"
-security_line="$(grep -n 'agent_system_schema' "${TEST_TMP_DIR}/success/commands.log" | cut -d: -f1)"
-test "${runtime_line}" -lt "${security_line}" || fail "Runtime repository の初期化の後に migration を実行していない"
-
-run_initialization_case degraded 'import app.features.agent.runtime'
-test "$(cat "${TEST_TMP_DIR}/degraded/ready")" = "false" || fail "DB 初期化失敗時に ready=false にならない"
-grep -Fq "agent_system_schema" "${TEST_TMP_DIR}/degraded/commands.log" \
-  || fail "Runtime repository の失敗時も migration を試みていない"
+# Run の保存先のテーブルもシステムテーブルが作る（Runtime repository の import で作らない）。
+if grep -Fq "import app.features.agent.runtime" "${TEST_TMP_DIR}/success/commands.log"; then
+  fail "Runtime repository の import でテーブルを作っている"
+fi
+test "$(grep -c 'attempts=5' "${TEST_TMP_DIR}/success/commands.log")" = "1" \
+  || fail "DB 初期化の command が retry されていない"
 
 run_initialization_case security-degraded 'agent_system_schema'
 test "$(cat "${TEST_TMP_DIR}/security-degraded/ready")" = "false" \

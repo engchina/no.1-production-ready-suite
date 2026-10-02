@@ -8,18 +8,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from importlib import import_module
 from pathlib import Path
 from threading import Condition, Lock
 from typing import Any, Protocol
 from uuid import uuid4
 
-from pr_backend_core.oracle_session import init_oracle_session
 from pydantic import BaseModel, Field, field_validator
 
 from app.features.agent.config import runtime_config_store
@@ -32,8 +31,13 @@ from app.features.agent.tools import (
     tool_registry,
 )
 from app.observability import record_runtime_event
+from app.oracle_connection import connect_platform_oracle
 from app.settings import get_settings
 
+logger = logging.getLogger(__name__)
+# Run・業務 Agent の Oracle のテーブル（作成はシステムテーブル。`app.system_schema`。#764）。
+RUNTIME_CHECKPOINT_TABLE = "AGENT_RUNTIME_CHECKPOINTS"
+RUNTIME_PROJECTION_PREFIX = "AGENT_RUNTIME"
 JsonObject = dict[str, Any]
 OracleConnectFactory = Callable[[], Any]
 
@@ -1059,79 +1063,39 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
     def __init__(
         self,
         *,
-        dsn: str,
-        user: str,
-        password: str,
-        table_name: str = "AGENT_RUNTIME_CHECKPOINTS",
         checkpoint_key: str = "default",
-        create_schema: bool = True,
         connect_factory: OracleConnectFactory | None = None,
-        wallet_dir: str | None = None,
-        wallet_password: str | None = None,
     ) -> None:
-        self._oracle_dsn = dsn
-        self._oracle_user = user
-        self._oracle_password = password
-        self._oracle_wallet_dir = (wallet_dir or "").strip() or None
-        self._oracle_wallet_password = wallet_password or None
-        self._oracle_table_name = _validate_oracle_identifier(table_name)
+        # 接続は共通の PLATFORM_ORACLE_*、テーブルはシステムテーブルが作る（#764）。
+        self._oracle_table_name = RUNTIME_CHECKPOINT_TABLE
         self._oracle_checkpoint_key = checkpoint_key
-        self._oracle_connect_factory = connect_factory
+        self._oracle_connect_factory = connect_factory or connect_platform_oracle
         super().__init__(snapshot_path=None)
-        if create_schema:
-            self._ensure_oracle_schema()
         self._load_snapshot_from_oracle()
 
     def _connect_oracle(self) -> Any:
-        if self._oracle_connect_factory is not None:
-            return self._oracle_connect_factory()
-        oracledb = import_module("oracledb")
-        connection = oracledb.connect(**self._oracle_connect_kwargs())
-        # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
-        init_oracle_session(connection)
-        return connection
-
-    def _oracle_connect_kwargs(self) -> dict[str, object]:
-        """Thin mode の接続引数。Wallet(mTLS) 指定時だけ config_dir 等を足す。"""
-        kwargs: dict[str, object] = {
-            "user": self._oracle_user,
-            "password": self._oracle_password,
-            "dsn": self._oracle_dsn,
-        }
-        if self._oracle_wallet_dir:
-            wallet_dir = str(Path(self._oracle_wallet_dir).expanduser())
-            kwargs["config_dir"] = wallet_dir
-            kwargs["wallet_location"] = wallet_dir
-        if self._oracle_wallet_password:
-            kwargs["wallet_password"] = self._oracle_wallet_password
-        return kwargs
-
-    def _ensure_oracle_schema(self) -> None:
-        ddl = f"""
-        CREATE TABLE {self._oracle_table_name} (
-            checkpoint_key VARCHAR2(128) PRIMARY KEY,
-            snapshot_json CLOB NOT NULL,
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
-        )
-        """
-        with self._connect_oracle() as connection, connection.cursor() as cursor:
-            try:
-                cursor.execute(ddl)
-            except Exception as exc:
-                if not _is_oracle_object_exists_error(exc):
-                    raise
-            connection.commit()
+        return self._oracle_connect_factory()
 
     def _load_snapshot_from_oracle(self) -> None:
         query = (
             f"SELECT snapshot_json FROM {self._oracle_table_name} "
             "WHERE checkpoint_key = :checkpoint_key"
         )
-        with self._connect_oracle() as connection, connection.cursor() as cursor:
-            cursor.execute(query, checkpoint_key=self._oracle_checkpoint_key)
-            row = cursor.fetchone()
-            # CLOB は接続を閉じる前に読む（閉じた後に読むと DPY-1001。#765）。
-            snapshot_json = _oracle_lob_to_text(row[0]) if row is not None else None
+        try:
+            with self._connect_oracle() as connection, connection.cursor() as cursor:
+                cursor.execute(query, checkpoint_key=self._oracle_checkpoint_key)
+                row = cursor.fetchone()
+                # CLOB は接続を閉じる前に読む（閉じた後に読むと DPY-1001。#765）。
+                snapshot_json = _oracle_lob_to_text(row[0]) if row is not None else None
+        except Exception as exc:
+            if not _is_oracle_table_missing_error(exc):
+                raise
+            # システムテーブルを作る前でも起動できるようにする（画面は作成へ案内する）。
+            logger.warning(
+                "agent_runtime_tables_missing",
+                extra={"table": self._oracle_table_name},
+            )
+            return
         if snapshot_json is None:
             return
         try:
@@ -1212,47 +1176,18 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
     def __init__(
         self,
         *,
-        dsn: str,
-        user: str,
-        password: str,
-        table_name: str = "AGENT_RUNTIME_CHECKPOINTS",
         checkpoint_key: str = "default",
-        projection_prefix: str = "AGENT_RUNTIME",
         projection_retention_days: int = 0,
         projection_write_mode: str = "replace",
-        create_schema: bool = True,
         connect_factory: OracleConnectFactory | None = None,
-        wallet_dir: str | None = None,
-        wallet_password: str | None = None,
     ) -> None:
-        self._oracle_projection_prefix = _validate_oracle_identifier(projection_prefix)
+        self._oracle_projection_prefix = RUNTIME_PROJECTION_PREFIX
         self._oracle_projection_tables = _oracle_projection_tables(self._oracle_projection_prefix)
         self._oracle_projection_retention_days = max(0, projection_retention_days)
         self._oracle_projection_write_mode = projection_write_mode.strip().lower() or "replace"
         if self._oracle_projection_write_mode not in {"replace", "incremental"}:
             raise ValueError("projection_write_mode must be replace or incremental")
-        super().__init__(
-            dsn=dsn,
-            user=user,
-            password=password,
-            table_name=table_name,
-            checkpoint_key=checkpoint_key,
-            create_schema=create_schema,
-            connect_factory=connect_factory,
-            wallet_dir=wallet_dir,
-            wallet_password=wallet_password,
-        )
-
-    def _ensure_oracle_schema(self) -> None:
-        super()._ensure_oracle_schema()
-        with self._connect_oracle() as connection, connection.cursor() as cursor:
-            for ddl in [*self._oracle_projection_ddls(), *self._oracle_projection_index_ddls()]:
-                try:
-                    cursor.execute(ddl)
-                except Exception as exc:
-                    if not _is_oracle_object_exists_error(exc):
-                        raise
-            connection.commit()
+        super().__init__(checkpoint_key=checkpoint_key, connect_factory=connect_factory)
 
     def _persist_locked(self) -> None:
         snapshot = self._export_snapshot_locked()
@@ -1420,103 +1355,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
             if isinstance(step_id, str) and isinstance(artifact_id, str):
                 artifact_ids_by_step.setdefault(step_id, []).append(artifact_id)
         return artifact_ids_by_step
-
-    def _oracle_projection_ddls(self) -> list[str]:
-        tables = self._oracle_projection_tables
-        return [
-            f"""
-            CREATE TABLE {tables["runs"]} (
-                run_id VARCHAR2(128) PRIMARY KEY,
-                agent_id VARCHAR2(128) NOT NULL,
-                status VARCHAR2(32) NOT NULL,
-                goal CLOB NOT NULL,
-                metadata_json CLOB,
-                pending_tool_calls_json CLOB,
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                updated_at TIMESTAMP WITH TIME ZONE NOT NULL
-            )
-            """,
-            f"""
-            CREATE TABLE {tables["events"]} (
-                event_id VARCHAR2(128) PRIMARY KEY,
-                run_id VARCHAR2(128) NOT NULL,
-                event_type VARCHAR2(128) NOT NULL,
-                message CLOB NOT NULL,
-                payload_json CLOB,
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL
-            )
-            """,
-            f"""
-            CREATE TABLE {tables["steps"]} (
-                step_id VARCHAR2(128) PRIMARY KEY,
-                run_id VARCHAR2(128) NOT NULL,
-                kind VARCHAR2(64) NOT NULL,
-                status VARCHAR2(32) NOT NULL,
-                tool_name VARCHAR2(256),
-                approval_id VARCHAR2(128),
-                tool_call_json CLOB,
-                tool_result_json CLOB,
-                started_at TIMESTAMP WITH TIME ZONE,
-                completed_at TIMESTAMP WITH TIME ZONE
-            )
-            """,
-            f"""
-            CREATE TABLE {tables["approvals"]} (
-                approval_id VARCHAR2(128) PRIMARY KEY,
-                run_id VARCHAR2(128) NOT NULL,
-                step_id VARCHAR2(128) NOT NULL,
-                tool_name VARCHAR2(256) NOT NULL,
-                status VARCHAR2(32) NOT NULL,
-                reason CLOB NOT NULL,
-                decided_by VARCHAR2(256),
-                decided_at TIMESTAMP WITH TIME ZONE,
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                tool_call_json CLOB NOT NULL
-            )
-            """,
-            f"""
-            CREATE TABLE {tables["artifacts"]} (
-                artifact_id VARCHAR2(128) PRIMARY KEY,
-                run_id VARCHAR2(128) NOT NULL,
-                name VARCHAR2(512) NOT NULL,
-                kind VARCHAR2(128) NOT NULL,
-                content_json CLOB NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL
-            )
-            """,
-        ]
-
-    def _oracle_projection_index_ddls(self) -> list[str]:
-        tables = self._oracle_projection_tables
-        prefix = self._oracle_projection_prefix
-        return [
-            f"""
-            CREATE INDEX {prefix}_RUNS_STATUS_CREATED_IX
-            ON {tables["runs"]} (status, created_at)
-            """,
-            f"""
-            CREATE INDEX {prefix}_EVENTS_RUN_TYPE_CREATED_IX
-            ON {tables["events"]} (run_id, event_type, created_at)
-            """,
-            f"""
-            CREATE INDEX {prefix}_STEPS_RUN_TOOL_STATUS_IX
-            ON {tables["steps"]} (run_id, tool_name, status, completed_at)
-            """,
-            f"""
-            CREATE INDEX {prefix}_STEPS_ERROR_CODE_IX
-            ON {tables["steps"]} (
-                JSON_VALUE(tool_result_json, '$.error_code' RETURNING VARCHAR2(128))
-            )
-            """,
-            f"""
-            CREATE INDEX {prefix}_APPROVALS_RUN_STATUS_IX
-            ON {tables["approvals"]} (run_id, status, created_at)
-            """,
-            f"""
-            CREATE INDEX {prefix}_ARTIFACTS_RUN_KIND_IX
-            ON {tables["artifacts"]} (run_id, kind, created_at)
-            """,
-        ]
 
     def _replace_projection_cursor(
         self,
@@ -2025,9 +1863,9 @@ def _projection_tool_call_where(
     return where_sql, params
 
 
-def _is_oracle_object_exists_error(exc: Exception) -> bool:
+def _is_oracle_table_missing_error(exc: Exception) -> bool:
     text = str(exc)
-    return "ORA-00955" in text or "name is already used by an existing object" in text
+    return "ORA-00942" in text or "table or view does not exist" in text
 
 
 def _oracle_lob_to_text(value: object) -> str:
@@ -2527,48 +2365,13 @@ def build_runtime_repository() -> AgentRuntimeRepositoryContract:
     settings = get_settings()
     backend = settings.agent_runtime_repository_backend.strip().lower()
     if backend in {"oracle", "oracle_checkpoint", "oracle_normalized"}:
-        dsn = settings.agent_runtime_oracle_dsn
-        user = settings.agent_runtime_oracle_user
-        password = settings.agent_runtime_oracle_password
-        missing = [
-            name
-            for name, value in {
-                "AGENT_RUNTIME_ORACLE_DSN": dsn,
-                "AGENT_RUNTIME_ORACLE_USER": user,
-                "AGENT_RUNTIME_ORACLE_PASSWORD": password,
-            }.items()
-            if not value
-        ]
-        if missing:
-            raise RuntimeError(
-                "Oracle-backed Agent Runtime repository requires: " + ", ".join(missing)
-            )
-        if dsn is None or user is None or password is None:
-            raise RuntimeError("Oracle-backed Agent Runtime repository configuration is invalid")
+        # 共通の PLATFORM_ORACLE_* で接続する（#764。旧 AGENT_RUNTIME_ORACLE_* は読まない）。
         if backend == "oracle_normalized":
             return AgentRuntimeOracleNormalizedRepository(
-                dsn=dsn,
-                user=user,
-                password=password,
-                table_name=settings.agent_runtime_oracle_table,
-                checkpoint_key=settings.agent_runtime_oracle_checkpoint_key,
-                projection_prefix=settings.agent_runtime_oracle_projection_prefix,
-                projection_retention_days=(settings.agent_runtime_oracle_projection_retention_days),
-                projection_write_mode=settings.agent_runtime_oracle_projection_write_mode,
-                create_schema=settings.agent_runtime_oracle_create_schema,
-                wallet_dir=settings.agent_runtime_oracle_wallet_dir,
-                wallet_password=settings.agent_runtime_oracle_wallet_password,
+                projection_retention_days=settings.agent_runtime_projection_retention_days,
+                projection_write_mode=settings.agent_runtime_projection_write_mode,
             )
-        return AgentRuntimeOracleCheckpointRepository(
-            dsn=dsn,
-            user=user,
-            password=password,
-            table_name=settings.agent_runtime_oracle_table,
-            checkpoint_key=settings.agent_runtime_oracle_checkpoint_key,
-            create_schema=settings.agent_runtime_oracle_create_schema,
-            wallet_dir=settings.agent_runtime_oracle_wallet_dir,
-            wallet_password=settings.agent_runtime_oracle_wallet_password,
-        )
+        return AgentRuntimeOracleCheckpointRepository()
     if backend in {"memory", "in_memory", "file", "file_snapshot"}:
         snapshot_path = (
             settings.agent_runtime_snapshot_path

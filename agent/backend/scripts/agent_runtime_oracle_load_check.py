@@ -54,16 +54,11 @@ def main() -> int:
         )
         return 2
 
+    # 接続は共通の PLATFORM_ORACLE_*、テーブルはシステムテーブルが作る（#764）。
     repository = AgentRuntimeOracleNormalizedRepository(
-        dsn=config["dsn"],
-        user=config["user"],
-        password=config["password"],
-        table_name=args.table_name,
         checkpoint_key=args.checkpoint_key,
-        projection_prefix=args.projection_prefix,
         projection_retention_days=args.retention_days,
         projection_write_mode=args.write_mode,
-        create_schema=not args.skip_schema_create,
     )
     marker = f"load-{uuid4().hex}"
     started = perf_counter()
@@ -158,12 +153,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--write-mode",
         choices=["replace", "incremental"],
-        default=os.getenv("AGENT_RUNTIME_ORACLE_PROJECTION_WRITE_MODE", "incremental"),
+        default=os.getenv("AGENT_RUNTIME_PROJECTION_WRITE_MODE", "incremental"),
     )
     parser.add_argument(
         "--retention-days",
         type=int,
-        default=int(os.getenv("AGENT_RUNTIME_ORACLE_PROJECTION_RETENTION_DAYS", "0")),
+        default=int(os.getenv("AGENT_RUNTIME_PROJECTION_RETENTION_DAYS", "0")),
     )
     parser.add_argument("--sla-write-ms", type=int, default=0)
     parser.add_argument("--sla-audit-p95-ms", type=int, default=0)
@@ -185,9 +180,9 @@ def _parse_args() -> argparse.Namespace:
 
 def _oracle_config_from_env() -> dict[str, str]:
     return {
-        "dsn": os.getenv("AGENT_RUNTIME_ORACLE_DSN", ""),
-        "user": os.getenv("AGENT_RUNTIME_ORACLE_USER", ""),
-        "password": os.getenv("AGENT_RUNTIME_ORACLE_PASSWORD", ""),
+        "dsn": os.getenv("PLATFORM_ORACLE_DSN", ""),
+        "user": os.getenv("PLATFORM_ORACLE_USER", ""),
+        "password": os.getenv("PLATFORM_ORACLE_PASSWORD", ""),
     }
 
 

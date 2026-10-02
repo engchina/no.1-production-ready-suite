@@ -2201,10 +2201,6 @@ def test_runtime_repository_persists_checkpoint_to_oracle() -> None:
         return _FakeOracleConnection(store)
 
     source = AgentRuntimeOracleCheckpointRepository(
-        dsn="fake-dsn",
-        user="runtime",
-        password="secret",
-        table_name="agent_runtime_checkpoints",
         connect_factory=connect,
     )
     completed = _seed_run(source, "Oracle checkpoint を保存する")
@@ -2220,10 +2216,6 @@ def test_runtime_repository_persists_checkpoint_to_oracle() -> None:
     approval_id = waiting.approvals[0].id
 
     restored = AgentRuntimeOracleCheckpointRepository(
-        dsn="fake-dsn",
-        user="runtime",
-        password="secret",
-        table_name="AGENT_RUNTIME_CHECKPOINTS",
         connect_factory=connect,
     )
     decided = restored.decide_approval(
@@ -2231,56 +2223,9 @@ def test_runtime_repository_persists_checkpoint_to_oracle() -> None:
         ApprovalDecisionRequest(approved=False, decided_by="oracle-test"),
     )
 
-    assert store.table_created is True
     assert "default" in store.snapshot_by_key
     assert restored.get_run(completed.id).status == "completed"
     assert decided.approvals[0].status == "rejected"
-
-
-def test_runtime_repository_oracle_connect_passes_wallet_only_when_configured(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """Terraform stack の ADB(mTLS) 接続用に Wallet 引数を Thin mode へ渡す。"""
-    store = _FakeOracleStore()
-    captured: list[dict[str, object]] = []
-
-    class FakeOracleDb:
-        @staticmethod
-        def connect(**kwargs: object) -> _FakeOracleConnection:
-            captured.append(kwargs)
-            return _FakeOracleConnection(store)
-
-    def fake_import_module(name: str) -> object:
-        if name == "oracledb":
-            return FakeOracleDb
-        raise AssertionError(name)
-
-    monkeypatch.setattr(runtime_module, "import_module", fake_import_module)
-
-    AgentRuntimeOracleCheckpointRepository(
-        dsn="agentadb_high",
-        user="ADMIN",
-        password="secret",
-        wallet_dir="/u01/aipoc/wallet",
-        wallet_password="wallet-secret",
-    )
-    assert captured[0] == {
-        "user": "ADMIN",
-        "password": "secret",
-        "dsn": "agentadb_high",
-        "config_dir": "/u01/aipoc/wallet",
-        "wallet_location": "/u01/aipoc/wallet",
-        "wallet_password": "wallet-secret",
-    }
-
-    captured.clear()
-    AgentRuntimeOracleCheckpointRepository(
-        dsn="fake-dsn",
-        user="runtime",
-        password="secret",
-        wallet_dir="  ",
-    )
-    assert captured[0] == {"user": "runtime", "password": "secret", "dsn": "fake-dsn"}
 
 
 def test_runtime_repository_persists_normalized_oracle_projection() -> None:
@@ -2290,11 +2235,6 @@ def test_runtime_repository_persists_normalized_oracle_projection() -> None:
         return _FakeOracleConnection(store)
 
     repository = AgentRuntimeOracleNormalizedRepository(
-        dsn="fake-dsn",
-        user="runtime",
-        password="secret",
-        table_name="AGENT_RUNTIME_CHECKPOINTS",
-        projection_prefix="AGENT_RUNTIME",
         connect_factory=connect,
     )
     completed = _seed_run(
@@ -2312,20 +2252,8 @@ def test_runtime_repository_persists_normalized_oracle_projection() -> None:
         ApprovalDecisionRequest(approved=False, decided_by="oracle-projection-test"),
     )
 
-    assert {
-        "AGENT_RUNTIME_CHECKPOINTS",
-        "AGENT_RUNTIME_RUNS",
-        "AGENT_RUNTIME_EVENTS",
-        "AGENT_RUNTIME_STEPS",
-        "AGENT_RUNTIME_APPROVALS",
-        "AGENT_RUNTIME_ARTIFACTS",
-    }.issubset(store.created_objects)
-    assert "AGENT_RUNTIME_MEMORY" not in store.created_objects
-    assert any(
-        "CREATE INDEX AGENT_RUNTIME_STEPS_ERROR_CODE_IX" in statement
-        and "JSON_VALUE(TOOL_RESULT_JSON" in statement
-        for statement in store.executed_statements
-    )
+    # テーブルはシステムテーブルが作る（#764）。repository は DDL を実行しない。
+    assert not store.created_objects
     run_rows = store.rows_by_table["AGENT_RUNTIME_RUNS"]
     event_rows = store.rows_by_table["AGENT_RUNTIME_EVENTS"]
     step_rows = store.rows_by_table["AGENT_RUNTIME_STEPS"]
@@ -2336,27 +2264,6 @@ def test_runtime_repository_persists_normalized_oracle_projection() -> None:
     assert any(row["tool_name"] == "echo" for row in step_rows)
     assert approval_rows[0]["status"] == "rejected"
     assert "default" in store.snapshot_by_key
-
-
-def test_oracle_normalized_schema_artifact_documents_indexes_and_partitioning() -> None:
-    sql_path = (
-        Path(__file__).resolve().parents[1] / "sql" / "agent_runtime_oracle_normalized_v1.sql"
-    )
-    sql = sql_path.read_text()
-
-    for table in [
-        "AGENT_RUNTIME_RUNS",
-        "AGENT_RUNTIME_EVENTS",
-        "AGENT_RUNTIME_STEPS",
-        "AGENT_RUNTIME_APPROVALS",
-        "AGENT_RUNTIME_ARTIFACTS",
-    ]:
-        assert f"CREATE TABLE {table}" in sql
-    assert "AGENT_RUNTIME_MEMORY" not in sql
-    assert "CREATE INDEX AGENT_RUNTIME_STEPS_ERROR_CODE_IX" in sql
-    assert "JSON_VALUE(tool_result_json, '$.error_code'" in sql
-    assert "PARTITION BY RANGE (created_at)" in sql
-    assert "AGENT_RUNTIME_ORACLE_PROJECTION_RETENTION_DAYS" in sql
 
 
 def test_oracle_load_check_dry_run_reports_benchmark_options() -> None:
@@ -4859,11 +4766,6 @@ def test_runtime_repository_reads_tool_call_audit_from_oracle_projection() -> No
         return _FakeOracleConnection(store)
 
     repository = AgentRuntimeOracleNormalizedRepository(
-        dsn="fake-dsn",
-        user="runtime",
-        password="secret",
-        table_name="AGENT_RUNTIME_CHECKPOINTS",
-        projection_prefix="AGENT_RUNTIME",
         connect_factory=connect,
     )
     run = _seed_run(
@@ -4905,11 +4807,6 @@ def test_oracle_projection_audit_uses_db_side_pagination() -> None:
         return _FakeOracleConnection(store)
 
     repository = AgentRuntimeOracleNormalizedRepository(
-        dsn="fake-dsn",
-        user="runtime",
-        password="secret",
-        table_name="AGENT_RUNTIME_CHECKPOINTS",
-        projection_prefix="AGENT_RUNTIME",
         connect_factory=connect,
     )
     for index in range(3):
@@ -4944,11 +4841,6 @@ def test_oracle_projection_incremental_mode_upserts_without_full_delete() -> Non
         return _FakeOracleConnection(store)
 
     repository = AgentRuntimeOracleNormalizedRepository(
-        dsn="fake-dsn",
-        user="runtime",
-        password="secret",
-        table_name="AGENT_RUNTIME_CHECKPOINTS",
-        projection_prefix="AGENT_RUNTIME",
         projection_write_mode="incremental",
         connect_factory=connect,
     )
@@ -4983,11 +4875,6 @@ def test_oracle_projection_retention_removes_old_projection_rows() -> None:
         return _FakeOracleConnection(store)
 
     repository = AgentRuntimeOracleNormalizedRepository(
-        dsn="fake-dsn",
-        user="runtime",
-        password="secret",
-        table_name="AGENT_RUNTIME_CHECKPOINTS",
-        projection_prefix="AGENT_RUNTIME",
         projection_retention_days=1,
         projection_write_mode="incremental",
         connect_factory=connect,
@@ -5052,11 +4939,6 @@ def test_global_tool_call_audit_uses_oracle_projection(monkeypatch: MonkeyPatch)
         return _FakeOracleConnection(store)
 
     repository = AgentRuntimeOracleNormalizedRepository(
-        dsn="fake-dsn",
-        user="runtime",
-        password="secret",
-        table_name="AGENT_RUNTIME_CHECKPOINTS",
-        projection_prefix="AGENT_RUNTIME",
         connect_factory=connect,
     )
     run = _seed_run(

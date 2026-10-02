@@ -136,12 +136,6 @@ REQUIRED_BACKEND_ENV_LINES = {
         "AGENT_AUTH_MODE=production\n",
         "AGENT_RUNTIME_REPOSITORY_BACKEND=${var.agent_runtime_repository_backend}\n",
         "AGENT_RUNTIME_DISPATCH_MODE=in_process\n",
-        "AGENT_RUNTIME_ORACLE_DSN=${local.effective_oracle_dsn}\n",
-        "AGENT_RUNTIME_ORACLE_USER=${local.effective_oracle_user}\n",
-        "AGENT_RUNTIME_ORACLE_PASSWORD=${local.effective_oracle_password}\n",
-        "AGENT_RUNTIME_ORACLE_WALLET_DIR=${local.wallet_dir_host}\n",
-        "AGENT_RUNTIME_ORACLE_WALLET_PASSWORD=${local.effective_oracle_wallet_password}\n",
-        "AGENT_RUNTIME_ORACLE_CREATE_SCHEMA=true\n",
         # RAG / NL2SQL の MCP は、配備した製品の Compute の private IP だけを入れる（#233）。
         'AGENT_EXTERNAL_RAG_MCP_URL=${lookup(local.product_mcp_urls, "rag", "")}\n',
         'AGENT_EXTERNAL_NL2SQL_MCP_URL=${lookup(local.product_mcp_urls, "nl2sql", "")}\n',
@@ -229,7 +223,6 @@ INIT_SCRIPT_CONTRACTS = {
         'BACKEND_WORKERS="1"',
         'install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"',
         'find "${WALLET_DIR}" -type f -exec chmod 0600 {} \\;',
-        "import app.features.agent.runtime",
         "uv run python -m app.cli.agent_system_schema --initialize",
         "proxy_set_header Host \\$http_host;",
         "location = /health {",
@@ -260,7 +253,6 @@ INIT_SCRIPT_ORDER = {
         "app.cli.app_security_migrate --apply --skip-bootstrap",
     ],
     "agent": [
-        "import app.features.agent.runtime",
         "app.cli.agent_system_schema --initialize",
         "  install_runtime_env\n",
         "  install_backend\n",
