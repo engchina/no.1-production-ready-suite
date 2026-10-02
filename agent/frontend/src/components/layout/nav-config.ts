@@ -2,6 +2,7 @@ import {
   BadgeCheck,
   Blocks,
   Bot,
+  ChartColumn,
   CalendarClock,
   ClipboardList,
   Container,
@@ -101,7 +102,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     // 業務 Agent の回答と品質を確かめて直す画面。RAG / NL2SQL の「改善・運用」（nav.section.improve）と
     // 同じ名前・同じ位置・同じ並び・同じアイコン（品質評価は FlaskConical、フィードバックは ThumbsUp）にする
-    // （#658 / #774 / #776）。
+    // （#658 / #772 / #774 / #776）。
     titleKey: "nav.section.improve",
     items: [
       {
@@ -111,6 +112,8 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: MENU_PERMISSIONS.evaluation,
       },
       { href: APP_ROUTES.feedback, labelKey: "nav.feedback", icon: ThumbsUp, permission: MENU_PERMISSIONS.feedback },
+      // 利用状況（#772）。RAG / NL2SQL に無い項目なので、共通の 2 項目の後ろに置く。
+      { href: APP_ROUTES.usage, labelKey: "nav.usage", icon: ChartColumn, permission: MENU_PERMISSIONS.usage },
     ],
   },
   {

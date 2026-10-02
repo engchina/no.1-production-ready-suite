@@ -258,6 +258,16 @@ EVALUATION_DRY_RUN_MESSAGE = (
 EVALUATION_DRY_RUN_KEY = "evaluation_dry_run"
 
 
+class RunUsage(BaseModel):
+    """Run が使ったモデルの量（#772）。承認待ちからの再開を含めた累計（SDK の `Usage`）。"""
+
+    model: str = ""
+    requests: int = Field(default=0, ge=0)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+
+
 class RunState(BaseModel):
     id: str
     goal: str
@@ -279,6 +289,8 @@ class RunState(BaseModel):
     feedback: RunFeedback | None = None
     # 管理者の評価（Agent 管理の権限。だれの回答にも付けられ、本人の評価とは別に残す。#774）。
     admin_review: RunFeedback | None = None
+    # モデルの利用量（#772）。組み込み Runtime がモデルを呼ぶ前の Run・#772 より前の Run は None。
+    usage: RunUsage | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -426,6 +438,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> list[ThreadSummary]: ...
     def get_thread(self, thread_id: str, *, user_uuid: str | None) -> ThreadData: ...
     def record_builtin_dry_run_steps(self, run_id: str, calls: Sequence[ToolCall]) -> None: ...
+    def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None: ...
     def list_runs(self) -> list[RunState]: ...
     def get_run(self, run_id: str) -> RunState: ...
     def list_artifacts(self, run_id: str) -> list[Artifact]: ...
@@ -1026,6 +1039,15 @@ class AgentRuntimeRepository:
                     {"tool_name": call.name, "evaluation_dry_run": True},
                 )
             run.updated_at = now
+            self._persist_locked()
+
+    def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None:
+        """モデルの利用量（再開を含めた累計）を Run に記録する（#772）。"""
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None:
+                return
+            run.usage = usage
             self._persist_locked()
 
     def note_builtin_warning(self, run_id: str, message: str) -> None:

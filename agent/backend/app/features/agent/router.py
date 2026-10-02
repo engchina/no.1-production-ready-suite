@@ -194,6 +194,13 @@ from app.features.agent.tools import (
     list_mcp_connection_tools,
     tool_registry,
 )
+from app.features.agent.usage import (
+    DEFAULT_TIMEZONE,
+    USAGE_PERIOD_DAYS,
+    UsageReport,
+    build_usage_report,
+    resolve_timezone,
+)
 from app.features.agent.user_names import user_display_names
 from app.observability import (
     ObservabilityStatus,
@@ -2059,6 +2066,37 @@ async def delete_evaluation(job_id: str, request: Request) -> ApiResponse[None]:
             status_code=409, detail="実行中の評価は削除できません。取り消してから削除してください。"
         ) from exc
     return ApiResponse(data=None)
+
+
+@router.get("/usage", response_model=ApiResponse[UsageReport])
+async def get_usage_report(
+    request: Request,
+    days: int = Query(default=30),
+    timezone: str = Query(default=DEFAULT_TIMEZONE, max_length=64),
+) -> ApiResponse[UsageReport]:
+    """利用状況（#772）。利用できる業務 Agent の Run のモデル利用量を集計する。
+
+    権限は middleware のメニュー権限（`menu.usage`）で確かめる。日は `timezone`（画面の
+    ブラウザの IANA 名）で区切る。
+    """
+    if days not in USAGE_PERIOD_DAYS:
+        raise HTTPException(status_code=422, detail="期間は 7・30・90 日のどれかにしてください。")
+    try:
+        tz = resolve_timezone(timezone)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    runs = _filter_runs_for_actor(request, runtime_repository.list_runs())
+    agent_names = {agent.id: agent.name for agent in runtime_repository.list_agents()}
+    report = await run_in_threadpool(
+        build_usage_report,
+        runs,
+        days=days,
+        now=datetime.now(UTC),
+        tz=tz,
+        agent_names=agent_names,
+        user_names=user_display_names,
+    )
+    return ApiResponse(data=report)
 
 
 @router.get("/audit/tool-calls", response_model=ApiResponse[ToolCallAuditData])

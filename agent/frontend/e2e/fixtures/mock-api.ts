@@ -338,6 +338,37 @@ function feedbackReportFromRuns(
   };
 }
 
+const EMPTY_USAGE_TOTALS = {
+  runs: 0,
+  runs_with_usage: 0,
+  requests: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+  total_tokens: 0,
+};
+
+/** Run の無い期間の `GET /api/usage`（#772）。日は MOCK_NOW までの `days` 日（古い順）。 */
+export function emptyUsageReport(days: number, timezone = "Asia/Tokyo"): Json {
+  const end = new Date(MOCK_NOW);
+  const dayList = Array.from({ length: days }, (_, index) => {
+    const day = new Date(end);
+    day.setUTCDate(end.getUTCDate() - (days - 1 - index));
+    return day.toISOString().slice(0, 10);
+  });
+  return {
+    days,
+    timezone,
+    since: `${dayList[0]}T00:00:00+09:00`,
+    until: MOCK_NOW,
+    totals: { ...EMPTY_USAGE_TOTALS },
+    previous: { ...EMPTY_USAGE_TOTALS },
+    by_agent: [],
+    by_user: [],
+    by_model: [],
+    by_day: dayList.map((day) => ({ ...EMPTY_USAGE_TOTALS, day })),
+  };
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -372,6 +403,8 @@ function createState() {
     // API キー（`/api/settings/api-keys`。#778）。`apiKeysPersistent` が false なら保存先が無い。
     apiKeys: [] as Json[],
     apiKeysPersistent: true,
+    // 利用状況（`GET /api/usage`。#772）。期間（日数）ごとの応答。無い期間は Run の無い集計を返す。
+    usageReports: {} as Record<string, Json>,
     plugins: [] as Json[],
     marketplaces: [] as Json[],
     tracePolicy: d.tracePolicy as Json,
@@ -967,6 +1000,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       item.webhook_token_prefix = token.slice(0, 9);
       return { automation: item, token };
     }
+  }
+  if (method === "GET" && at("usage")) {
+    const days = Number(query.get("days") ?? 30);
+    if (![7, 30, 90].includes(days)) throw new HttpError(422, "期間は 7・30・90 日のどれかにしてください。");
+    return state.usageReports[String(days)] ?? emptyUsageReport(days, query.get("timezone") ?? "Asia/Tokyo");
   }
   if (method === "GET" && at("audit", "tool-calls")) {
     const offset = Number(query.get("offset") ?? 0);

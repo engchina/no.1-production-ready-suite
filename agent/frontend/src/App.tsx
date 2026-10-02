@@ -26,6 +26,7 @@ import { FeedbackPage } from "@/pages/FeedbackPage";
 import { AutomationsPage } from "@/pages/AutomationsPage";
 import { EvaluationPage } from "@/pages/EvaluationPage";
 import { ApiKeysPage } from "@/pages/ApiKeysPage";
+import { UsagePage } from "@/pages/UsagePage";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
   AgentsPage,
@@ -137,6 +138,7 @@ export function App() {
         <Route path={APP_ROUTES.feedback} element={<FeedbackPage />} />
         <Route path={APP_ROUTES.automations} element={<AutomationsPage />} />
         <Route path={APP_ROUTES.evaluation} element={<EvaluationPage />} />
+        <Route path={APP_ROUTES.usage} element={<UsagePage />} />
         <Route path={APP_ROUTES.settingsSystemTables} element={<SettingsSystemTablesRoute />} />
         <Route path={APP_ROUTES.settingsOci} element={<SettingsOciRoute />} />
         <Route path={APP_ROUTES.settingsUploadStorage} element={<SettingsUploadStorageRoute />} />

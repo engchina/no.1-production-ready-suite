@@ -22,6 +22,7 @@ export const MENU_PERMISSIONS = {
   pluginMarketplaces: "menu.plugin_marketplaces",
   evaluation: "menu.evaluation",
   feedback: "menu.feedback",
+  usage: "menu.usage",
   settingsSystemTables: "menu.settings_system_tables",
   settingsExternalMcp: "menu.settings_external_mcp",
   settingsApiKeys: "menu.settings_api_keys",

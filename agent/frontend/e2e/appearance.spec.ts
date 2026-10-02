@@ -79,6 +79,9 @@ for (const viewport of [
       "nav-section-nav-section-settings",
     ]);
 
+    // 改善・運用は RAG / NL2SQL と同じ品質評価・フィードバックの後に、Agent の利用状況（#772）。
+    await expect(sidebar.locator("#nav-section-nav-section-improve").getByRole("link")).toHaveCount(3);
+    await expect(sidebar.locator('#nav-section-nav-section-improve a[href="/usage"]')).toHaveCount(1);
     // セキュリティ設定は権限管理、運用設定はシステムテーブル（先頭。#751）と Agent 固有の3項目
     // （MCP 接続・API キー・バックアップ。#757 / #762 / #778）、
     // ユーザーとロール・システム設定は3製品共通。
