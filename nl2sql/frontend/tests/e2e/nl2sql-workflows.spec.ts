@@ -4471,10 +4471,23 @@ test("query workbench generates SQL through the job flow and shows results", asy
   await expect(feedbackResponse).toBeFocused();
   const sqlDisplayBox = await feedbackResponse.boundingBox();
   expect(sqlDisplayBox).not.toBeNull();
-  const minimumSqlHeight = await page.evaluate(
-    () => 18 * Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
-  );
-  expect(sqlDisplayBox!.height).toBeGreaterThanOrEqual(minimumSqlHeight);
+  // 生成 SQL は 12 行を見せる（#465）。高さは TextareaField の rows で決まる（textareaClassName の
+  // min-h-72 は #800 で外した）ので、18rem ではなく「行の高さ × 12 + 上下の余白と枠」を下限にする。
+  const sqlDisplayMetrics = await feedbackResponse.evaluate((node) => {
+    const style = getComputedStyle(node);
+    const px = (value: string) => Number.parseFloat(value);
+    return {
+      rows: (node as HTMLTextAreaElement).rows,
+      minimumHeight:
+        12 * px(style.lineHeight) +
+        px(style.paddingTop) +
+        px(style.paddingBottom) +
+        px(style.borderTopWidth) +
+        px(style.borderBottomWidth),
+    };
+  });
+  expect(sqlDisplayMetrics.rows).toBe(12);
+  expect(sqlDisplayBox!.height).toBeGreaterThanOrEqual(sqlDisplayMetrics.minimumHeight - 0.5);
   expect(sqlDisplayBox!.x).toBeGreaterThanOrEqual(0);
   expect(sqlDisplayBox!.x + sqlDisplayBox!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
   await feedbackResponse.screenshot({ path: testInfo.outputPath("generated-sql-height.png") });

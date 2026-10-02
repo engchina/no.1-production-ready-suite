@@ -162,7 +162,7 @@ for (const viewport of VIEWPORTS) {
       }
 
       // Enter で開いて先頭の項目へフォーカス、矢印で移動、Esc で閉じて trigger へ戻る。
-      const trigger = page.getByRole("button", { name: "crm の操作" });
+      const trigger = page.getByRole("button", { name: "crm の操作", exact: true });
       await trigger.focus();
       await page.keyboard.press("Enter");
       const menu = page.getByRole("menu");
@@ -274,7 +274,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByTestId("run-row-run-e2e-2")).toHaveAttribute("aria-current", "true");
       await expect(page.getByTestId("run-object-actions").getByRole("button", { name: "再実行" })).toBeVisible();
 
-      await page.getByRole("button", { name: "run-e2e-1 の操作" }).click();
+      await page.getByRole("button", { name: "run-e2e-1 の操作", exact: true }).click();
       await expect(page.getByRole("menuitem", { name: "再実行" })).toBeVisible();
       await expect(page.getByRole("menuitem", { name: "キャンセル" })).toHaveCount(0);
       await page.getByRole("menuitem", { name: "再実行" }).click();
@@ -344,7 +344,7 @@ for (const viewport of VIEWPORTS) {
       await page.getByRole("button", { name: "nl2sql__nl2sql_query 二つ目の目標", exact: true }).click();
       await expect(detail.getByText("nl2sql__nl2sql_query の引数")).toBeVisible();
 
-      await page.getByRole("button", { name: "rag__rag_search の操作" }).click();
+      await page.getByRole("button", { name: "rag__rag_search の操作", exact: true }).click();
       await page.getByRole("menuitem", { name: "却下" }).click();
       const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
       await expect(dialog.getByText("ツールの実行を却下しますか?")).toBeVisible();
