@@ -63,6 +63,39 @@ _ROLE_REFERENCED_MESSAGE = (
 # 役割 → 権限コードの集合（テーブル単位）。
 RolePermissionCodes = dict[str, dict[str, set[str]]]
 
+# 1 つの IN に並べる bind の上限（Oracle の IN リストは 1,000 件まで。ORA-01795）。
+IN_LIST_CHUNK_SIZE = 1000
+
+
+def in_list_binds(
+    prefix: str, values: Iterable[str], *, chunk_size: int = IN_LIST_CHUNK_SIZE
+) -> Iterator[tuple[str, dict[str, str]]]:
+    """`IN (...)` の placeholder と bind を、1,000 件ごとに分けて返す（#793）。
+
+    展開するのは生成した bind 名だけで、値はすべて bind する。重複は 1 つにまとめる。
+    """
+    unique = list(dict.fromkeys(values))
+    size = max(1, min(int(chunk_size), IN_LIST_CHUNK_SIZE))
+    for offset in range(0, len(unique), size):
+        chunk = unique[offset : offset + size]
+        binds = {f"{prefix}{index}": value for index, value in enumerate(chunk)}
+        yield ", ".join(f":{key}" for key in binds), binds
+
+
+def values_by_role_id(cursor: Any, select: str, role_ids: Sequence[str]) -> dict[str, set[str]]:
+    """`<select> WHERE ROLE_ID IN (...)` の (ROLE_ID, 値) をロールごとに集める（#793）。
+
+    製品の一括の hook（`_roles_details`）用。`select` は製品が書く固定の
+    `SELECT ROLE_ID, <列> FROM <表>` で、ロールの数によらず 1,000 件ごとに 1 回だけ実行する。
+    """
+    values: dict[str, set[str]] = {}
+    for placeholders, binds in in_list_binds("role_", role_ids):
+        # 展開するのは固定の SELECT と生成した bind 名だけ。値はすべて bind する。
+        cursor.execute(f"{select} WHERE ROLE_ID IN ({placeholders})", binds)  # nosec B608
+        for role_id, value in cursor.fetchall():
+            values.setdefault(str(role_id), set()).add(str(value))
+    return values
+
 
 class AuthStore(Protocol):
     def bootstrap(self, *, login_user_id: str, display_name: str, password_hash: str) -> bool: ...
@@ -88,6 +121,7 @@ class AuthStore(Protocol):
     def record_login_success(self, user_uuid: str, *, password_hash: str | None = None) -> None: ...
     def list_roles(self, *, include_archived: bool = False) -> Sequence[RoleRecord]: ...
     def get_role(self, role_id: str) -> RoleRecord | None: ...
+    def get_roles(self, role_ids: Sequence[str]) -> Sequence[RoleRecord]: ...
     def create_role(self, role: RoleRecord) -> RoleRecord: ...
     def update_role(self, role: RoleRecord, *, expected_version: int) -> RoleRecord: ...
     def archive_role(self, role_id: str, *, expected_version: int) -> RoleRecord: ...
@@ -298,6 +332,15 @@ class InMemoryAuthStore:
     def get_role(self, role_id: str) -> RoleRecord | None:
         with self._lock:
             return _copy_optional(self.roles.get(role_id))
+
+    def get_roles(self, role_ids: Sequence[str]) -> Sequence[RoleRecord]:
+        """指定したロールを指定の順に返す（無いものは除く。重複は 1 つ）。"""
+        with self._lock:
+            return [
+                copy.deepcopy(role)
+                for role_id in dict.fromkeys(role_ids)
+                if (role := self.roles.get(role_id)) is not None
+            ]
 
     def create_role(self, role: RoleRecord) -> RoleRecord:
         with self._lock:
@@ -555,10 +598,19 @@ class OracleAuthStore:
             return self._user_from_row(cursor, row) if row else None
 
     def list_users(self) -> list[UserRecord]:
+        """全ユーザーとロールの割り当てを、ユーザー数によらず 2 回の SQL で読む（#793）。"""
         with self.connection(USERS_TABLE) as conn, conn.cursor() as cursor:
             cursor.execute(self._user_select() + " ORDER BY LOGIN_USER_ID_NORMALIZED")
             rows = cursor.fetchall()
-            return [self._user_from_row(cursor, row) for row in rows]
+            if not rows:
+                return []
+            cursor.execute(
+                "SELECT USER_UUID, ROLE_ID FROM PLATFORM_USER_ROLES ORDER BY USER_UUID, ROLE_ID"
+            )
+            role_ids: dict[str, list[str]] = {}
+            for user_uuid, role_id in cursor.fetchall():
+                role_ids.setdefault(str(user_uuid), []).append(str(role_id))
+            return [self._user_record(row, role_ids.get(str(row[0]), [])) for row in rows]
 
     @staticmethod
     def _user_select() -> str:
@@ -601,9 +653,12 @@ class OracleAuthStore:
             "SELECT ROLE_ID FROM PLATFORM_USER_ROLES WHERE USER_UUID = :user_uuid ORDER BY ROLE_ID",
             {"user_uuid": user_uuid},
         )
-        role_ids = [str(item[0]) for item in cursor.fetchall()]
+        return self._user_record(row, [str(item[0]) for item in cursor.fetchall()])
+
+    @staticmethod
+    def _user_record(row: Any, role_ids: list[str]) -> UserRecord:
         return UserRecord(
-            user_uuid=user_uuid,
+            user_uuid=str(row[0]),
             login_user_id=str(row[1]),
             display_name=str(row[2]),
             password_hash=str(row[3]),
@@ -837,7 +892,26 @@ class OracleAuthStore:
                 sql += " WHERE ARCHIVED = 0"
             sql += " ORDER BY ROLE_CODE"
             cursor.execute(sql)
-            return [self._role_from_row(cursor, row) for row in cursor.fetchall()]
+            roles = [self._role_base(row) for row in cursor.fetchall()]
+            return self._roles_details(cursor, roles) if roles else []
+
+    def get_roles(self, role_ids: Sequence[str]) -> Sequence[RoleRecord]:
+        """指定したロールを指定の順に返す（無いものは除く）。ロール数によらず一括で読む（#793）。"""
+        ids = list(dict.fromkeys(role_id for role_id in role_ids if role_id))
+        if not ids:
+            return []
+        with self.connection(ROLES_TABLE) as conn, conn.cursor() as cursor:
+            found: dict[str, RoleRecord] = {}
+            for placeholders, binds in in_list_binds("role_", ids):
+                cursor.execute(
+                    self._role_select() + f" WHERE ROLE_ID IN ({placeholders})",  # nosec B608
+                    binds,
+                )
+                for row in cursor.fetchall():
+                    role = self._role_base(row)
+                    found[role.role_id] = role
+            ordered = [found[role_id] for role_id in ids if role_id in found]
+            return self._roles_details(cursor, ordered) if ordered else []
 
     def get_role(self, role_id: str) -> RoleRecord | None:
         with self.connection(ROLES_TABLE) as conn, conn.cursor() as cursor:
@@ -853,7 +927,10 @@ class OracleAuthStore:
         )
 
     def _role_from_row(self, cursor: Any, row: Any) -> RoleRecord:
-        role = self.role_class(
+        return self._role_details(cursor, self._role_base(row))
+
+    def _role_base(self, row: Any) -> RoleRecord:
+        return self.role_class(
             role_id=str(row[0]),
             role_code=str(row[1]),
             display_name=str(row[2]),
@@ -862,11 +939,18 @@ class OracleAuthStore:
             archived=bool(row[5]),
             version=int(row[6]),
         )
-        return self._role_details(cursor, role)
 
     def _role_details(self, cursor: Any, role: RoleRecord) -> RoleRecord:
-        """製品固有のロールのデータ（権限・対象範囲）を読み込む hook。"""
+        """製品固有のロールのデータ（権限・対象範囲）を読み込む hook（1 件）。"""
         return role
+
+    def _roles_details(self, cursor: Any, roles: Sequence[RoleRecord]) -> list[RoleRecord]:
+        """複数のロールの製品固有のデータを読み込む hook（一覧・principal 用。#793）。
+
+        既定は `_role_details` を 1 件ずつ呼ぶ（後方互換）。ロールの数だけ SQL が増えるため、製品は
+        `ROLE_ID IN (...)`（`in_list_binds`）で一括に読むよう上書きする。順序は `roles` のまま返す。
+        """
+        return [self._role_details(cursor, role) for role in roles]
 
     def _replace_role_details(self, cursor: Any, role: RoleRecord) -> None:
         """製品固有のロールのデータを、ロール本体と同じトランザクションで書き込む hook。"""
@@ -1139,21 +1223,20 @@ class OracleAuthStore:
             for table in tables:
                 if table not in allowed_tables:
                     raise SecurityStoreError("未登録の権限テーブルです。")
-                binds = {f"role_{index}": value for index, value in enumerate(ids)}
-                placeholders = ", ".join(f":{key}" for key in binds)
-                try:
-                    # テーブル名は登録済みの定数だけ。値はすべて bind する。
-                    cursor.execute(
-                        f"SELECT ROLE_ID, PERMISSION_CODE FROM {table} "  # nosec B608
-                        f"WHERE ROLE_ID IN ({placeholders})",
-                        binds,
-                    )
-                except Exception as exc:
-                    if "ORA-00942" in str(exc).upper():
-                        continue
-                    raise
-                for role_id, code in cursor.fetchall():
-                    result[table].setdefault(str(role_id), set()).add(str(code))
+                for placeholders, binds in in_list_binds("role_", ids):
+                    try:
+                        # テーブル名は登録済みの定数だけ。値はすべて bind する。
+                        cursor.execute(
+                            f"SELECT ROLE_ID, PERMISSION_CODE FROM {table} "  # nosec B608
+                            f"WHERE ROLE_ID IN ({placeholders})",
+                            binds,
+                        )
+                    except Exception as exc:
+                        if "ORA-00942" in str(exc).upper():
+                            break
+                        raise
+                    for role_id, code in cursor.fetchall():
+                        result[table].setdefault(str(role_id), set()).add(str(code))
         return result
 
     @staticmethod

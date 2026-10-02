@@ -79,6 +79,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         from app.features.agent import run_facts_store
 
         await asyncio.to_thread(run_facts_store.flush, 5.0)
+        # 共通 DB（PLATFORM_ORACLE_*）の接続 pool を閉じる（#793）。
+        from app.oracle_connection import close_platform_oracle_pool
+
+        await asyncio.to_thread(close_platform_oracle_pool)
 
 
 app = create_app(
