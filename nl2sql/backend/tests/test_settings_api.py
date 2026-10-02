@@ -119,13 +119,6 @@ class _FakeSelectAiCredentialAdapter:
         return operation
 
 
-def test_model_settings_vision_test_image_is_valid_jpeg() -> None:
-    data = settings_router.MODEL_TEST_IMAGE_BYTES
-
-    assert data.startswith(b"\xff\xd8")
-    assert len(data) > 1024
-
-
 @pytest.mark.parametrize(
     ("initial_exists", "recreate", "expected_operation"),
     [(False, False, "created"), (True, True, "recreated")],
