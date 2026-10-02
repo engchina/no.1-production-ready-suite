@@ -946,17 +946,14 @@ class _PersistedEnterpriseAiSettings(BaseModel):
                 endpoint=self.endpoint,
                 project_ocid=self.project_ocid,
             )
-            return (
-                [primary]
-                + [
-                    EnterpriseAiConnectionSettings(
-                        connection_id=item.connection_id,
-                        endpoint=item.endpoint,
-                        project_ocid=item.project_ocid,
-                    )
-                    for item in enterprise_ai_connections(settings)[1:]
-                ]
-            )
+            return [primary] + [
+                EnterpriseAiConnectionSettings(
+                    connection_id=item.connection_id,
+                    endpoint=item.endpoint,
+                    project_ocid=item.project_ocid,
+                )
+                for item in enterprise_ai_connections(settings)[1:]
+            ]
         saved = {item.connection_id: item for item in reversed(self.connections)}
         connections: list[EnterpriseAiConnectionSettings] = []
         for connection_id in ENTERPRISE_AI_CONNECTION_IDS:
