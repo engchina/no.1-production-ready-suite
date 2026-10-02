@@ -474,7 +474,7 @@ def test_database_gate_reports_setup_required_until_ready(
     async def connected(_settings: object) -> None:
         return None
 
-    monkeypatch.setattr(agent_router, "_test_database_connection", connected)
+    monkeypatch.setattr(agent_router, "_test_database_status_connection", connected)
 
     # local でも短絡せず、システムテーブルの状態を確かめる（RAG と同じ。#751）。
     before = client.get("/api/ready/database").json()["data"]

@@ -834,7 +834,7 @@ def test_router_uses_local_debug_principal_with_all_permissions() -> None:
 
 
 class _RecordingCursor:
-    def __init__(self, rows: dict[str, list[tuple[str]]]) -> None:
+    def __init__(self, rows: dict[str, list[tuple[str, ...]]]) -> None:
         self.rows = rows
         self.executed: list[tuple[str, dict[str, Any]]] = []
         self._last = ""
@@ -843,7 +843,7 @@ class _RecordingCursor:
         self._last = statement
         self.executed.append((statement, dict(params or {})))
 
-    def fetchall(self) -> list[tuple[str]]:
+    def fetchall(self) -> list[tuple[str, ...]]:
         for table, rows in self.rows.items():
             if table in self._last:
                 return rows
@@ -866,14 +866,14 @@ def test_oracle_store_reads_and_replaces_agent_role_details() -> None:
     )
     cursor = _RecordingCursor(
         {
-            "AGENT_ROLE_PERMISSIONS": [("agent.runs.view",)],
-            "AGENT_ROLE_AGENTS": [("default",)],
+            "AGENT_ROLE_PERMISSIONS": [("role-1", "agent.runs.view")],
+            "AGENT_ROLE_AGENTS": [("role-1", "default")],
         }
     )
     loaded = store._role_details(cursor, base)
     assert loaded.permissions == {"agent.runs.view"}
     assert loaded.agent_ids == {"default"}
-    assert all(params == {"role_id": "role-1"} for _, params in cursor.executed)
+    assert all(params == {"role_0": "role-1"} for _, params in cursor.executed)
 
     cursor = _RecordingCursor({})
     loaded.agent_ids = {"a-2", "a-1"}
@@ -890,6 +890,114 @@ def test_oracle_store_reads_and_replaces_agent_role_details() -> None:
         if "INSERT INTO AGENT_ROLE_AGENTS" in sql
     ]
     assert inserted_agents == ["a-1", "a-2"]
+
+
+def test_oracle_store_reads_role_details_in_one_query_per_table() -> None:
+    """ロールの一覧のロールの権限・対象範囲は、ロールの数によらず表ごとに 1 回で読む（#793）。"""
+    from app.security.domain import RoleRecord
+    from app.security.store import OracleSecurityStore
+
+    store = OracleSecurityStore(connection_factory=lambda: None)  # type: ignore[arg-type,return-value]
+    roles = [
+        RoleRecord(
+            role_id=f"role-{index}",
+            role_code=f"R{index}",
+            display_name=f"R{index}",
+            description="",
+            is_built_in=False,
+            archived=False,
+            version=1,
+        )
+        for index in range(25)
+    ]
+    cursor = _RecordingCursor(
+        {
+            "AGENT_ROLE_PERMISSIONS": [("role-3", "agent.runs.view"), ("role-3", "agent.admin")],
+            "AGENT_ROLE_AGENTS": [("role-7", "default")],
+        }
+    )
+
+    loaded = store._roles_details(cursor, roles)
+
+    assert len(cursor.executed) == 2
+    assert [role.role_id for role in loaded] == [role.role_id for role in roles]
+    by_id = {role.role_id: role for role in loaded}
+    assert by_id["role-3"].permissions == {"agent.runs.view", "agent.admin"}  # type: ignore[attr-defined]
+    assert by_id["role-7"].agent_ids == {"default"}  # type: ignore[attr-defined]
+    assert by_id["role-0"].permissions == set()  # type: ignore[attr-defined]
+
+
+def test_platform_oracle_connection_reuses_one_pool(monkeypatch: MonkeyPatch) -> None:
+    """共通 DB の接続は要求ごとに張らず、pool から借りる（#793）。"""
+    from app import oracle_connection
+    from app.settings import Settings
+
+    created: list[dict[str, Any]] = []
+    acquired: list[Any] = []
+
+    class _Connection:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+        def __enter__(self) -> _Connection:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            self.close()
+
+        def rollback(self) -> None:
+            return None
+
+    class _Pool:
+        def acquire(self) -> _Connection:
+            connection = _Connection()
+            acquired.append(connection)
+            return connection
+
+        def close(self, force: bool = False) -> None:
+            return None
+
+    class _FakeOracledb:
+        POOL_GETMODE_TIMEDWAIT = 3
+
+        @staticmethod
+        def create_pool(**kwargs: Any) -> _Pool:
+            created.append(kwargs)
+            return _Pool()
+
+        @staticmethod
+        def connect(**_kwargs: Any) -> Any:
+            raise AssertionError("pool を使わずに接続している")
+
+    pool = oracle_connection._PLATFORM_POOL
+    pool.close()
+    monkeypatch.setattr(pool, "_oracledb_loader", lambda: _FakeOracledb)
+    settings = Settings(
+        _env_file=None,
+        oracle_user="ADMIN",
+        oracle_password="secret",  # nosec B106 - テスト用
+        oracle_dsn="suiteadb_high",
+        oracle_client_lib_dir="",
+        oracle_pool_max_connections=6,
+    )
+    monkeypatch.setattr(oracle_connection, "_current_settings", lambda value: value or settings)
+    try:
+        for _ in range(3):
+            with oracle_connection.platform_oracle_connection():
+                pass
+        with oracle_connection.connect_platform_oracle() as _connection:
+            pass
+    finally:
+        oracle_connection.close_platform_oracle_pool()
+
+    assert len(created) == 1
+    assert (created[0]["min"], created[0]["max"]) == (1, 6)
+    assert created[0]["user"] == "ADMIN"
+    assert len(acquired) == 4
+    assert all(connection.closed for connection in acquired)
 
 
 def test_platform_oracle_connection_uses_platform_settings() -> None:

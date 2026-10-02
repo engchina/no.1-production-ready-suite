@@ -54,6 +54,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         with contextlib.suppress(asyncio.CancelledError):
             await scheduler
         await stop_trace_export_retry_worker()
+        # 共通 DB（PLATFORM_ORACLE_*）の接続 pool を閉じる（#793）。
+        from app.oracle_connection import close_platform_oracle_pool
+
+        await asyncio.to_thread(close_platform_oracle_pool)
 
 
 app = create_app(

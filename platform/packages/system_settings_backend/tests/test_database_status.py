@@ -14,9 +14,12 @@ from pydantic import BaseModel
 
 from pr_system_settings.database_status import (
     DatabaseSchemaProbeResult,
+    DatabaseStatusCache,
     DatabaseStatusData,
     build_database_status_router,
+    clear_database_status_cache,
     database_context_id,
+    database_status_cache_key,
     safe_connection_error_detail,
 )
 
@@ -289,3 +292,94 @@ def test_context_fields_can_be_injected() -> None:
     harness = Harness(context_fields=lambda settings: ["mode", settings.oracle_user])
 
     assert harness.get()["context_id"] == database_context_id(["mode", "APP"])
+
+
+# ---- `ok` の結果の cache（#793） ------------------------------------------------
+
+
+def test_ok_is_cached_and_skips_connection_and_probe() -> None:
+    """全画面の再読み込みのたびに接続確認とシステムテーブルの確認をやり直さない。"""
+    harness = Harness()
+
+    first = harness.get()
+    for _ in range(3):
+        assert harness.get() == first
+
+    assert harness.calls == ["connect", "probe"]
+
+
+def test_cache_can_be_disabled() -> None:
+    harness = Harness(ok_cache_seconds=0)
+
+    harness.get()
+    harness.get()
+
+    assert harness.calls == ["connect", "probe", "connect", "probe"]
+
+
+def test_failures_are_not_cached() -> None:
+    """不通・準備が必要は cache せず、直したらすぐに ok になる。"""
+    harness = Harness()
+    harness.connect_error = RuntimeError("DPY-6005: cannot connect")
+    assert harness.get()["status"] == "unreachable"
+    assert harness.get()["status"] == "unreachable"
+    harness.connect_error = None
+    harness.probe_result = DatabaseSchemaProbeResult(
+        status="setup_required", schema_status="missing"
+    )
+    assert harness.get()["status"] == "setup_required"
+    harness.probe_result = DatabaseSchemaProbeResult()
+    assert harness.get()["status"] == "ok"
+
+    assert harness.calls == ["connect", "connect", "connect", "probe", "connect", "probe"]
+
+
+def test_cache_still_checks_settings_every_time() -> None:
+    """設定の不足は cache より先に判定する（接続設定を消したらすぐ not_configured）。"""
+    harness = Harness()
+    assert harness.get()["status"] == "ok"
+    harness.settings.oracle_user = ""
+
+    assert harness.get()["status"] == "not_configured"
+    assert harness.calls == ["connect", "probe"]
+
+
+def test_cache_is_keyed_by_connection_and_credentials() -> None:
+    harness = Harness()
+    harness.get()
+
+    # 資格情報だけが変わったとき（context_id は同じ）も確かめ直す。
+    harness.settings.oracle_password = "rotated-password"
+    harness.get()
+    harness.settings.oracle_dsn = "other.example.oraclecloud.com:1522/other_high"
+    harness.get()
+
+    assert harness.calls == ["connect", "probe"] * 3
+
+
+def test_clear_database_status_cache() -> None:
+    harness = Harness()
+    harness.get()
+    clear_database_status_cache()
+    harness.get()
+
+    assert harness.calls == ["connect", "probe"] * 2
+
+
+def test_cache_expires() -> None:
+    now = [100.0]
+    cache = DatabaseStatusCache(30, clock=lambda: now[0])
+    data = DatabaseStatusData(status="ok", check="ok", context_id="ctx")
+    cache.put("key", data)
+
+    assert cache.get("key") == data
+    now[0] += 30
+    assert cache.get("key") is None
+
+
+def test_cache_key_does_not_contain_secrets() -> None:
+    settings = FakeSettings()
+    key = database_status_cache_key(settings, "ctx")
+
+    assert settings.oracle_password not in key
+    assert len(key) == 64

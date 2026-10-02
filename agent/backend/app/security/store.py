@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -26,6 +27,7 @@ from pr_system_settings.auth.store import (
     ConnectionFactory,
     InMemoryAuthStore,
     OracleAuthStore,
+    values_by_role_id,
 )
 
 from app.oracle_connection import platform_oracle_connection
@@ -46,6 +48,7 @@ if PRODUCT_ROLE_PERMISSION_TABLES.get("agent") != ROLE_PERMISSIONS_TABLE:  # pra
 
 class SecurityStore(AuthStore, Protocol):
     def get_role(self, role_id: str) -> RoleRecord | None: ...
+    def get_roles(self, role_ids: Sequence[str]) -> list[RoleRecord]: ...
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]: ...
     def create_role(self, role: PlatformRoleRecord) -> RoleRecord: ...
     def update_role(self, role: PlatformRoleRecord, *, expected_version: int) -> RoleRecord: ...
@@ -73,6 +76,9 @@ class InMemorySecurityStore(InMemoryAuthStore):
     def get_role(self, role_id: str) -> RoleRecord | None:
         role = super().get_role(role_id)
         return None if role is None else as_role(role)
+
+    def get_roles(self, role_ids: Sequence[str]) -> list[RoleRecord]:
+        return [as_role(role) for role in super().get_roles(role_ids)]
 
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]:
         return [as_role(role) for role in super().list_roles(include_archived=include_archived)]
@@ -103,6 +109,9 @@ class OracleSecurityStore(OracleAuthStore):
         role = super().get_role(role_id)
         return None if role is None else as_role(role)
 
+    def get_roles(self, role_ids: Sequence[str]) -> list[RoleRecord]:
+        return [as_role(role) for role in super().get_roles(role_ids)]
+
     def list_roles(self, *, include_archived: bool = False) -> list[RoleRecord]:
         return [as_role(role) for role in super().list_roles(include_archived=include_archived)]
 
@@ -119,24 +128,33 @@ class OracleSecurityStore(OracleAuthStore):
         return as_role(super().restore_role(role_id, expected_version=expected_version))
 
     def _role_details(self, cursor: Any, role: PlatformRoleRecord) -> RoleRecord:
-        binds = {"role_id": role.role_id}
-        cursor.execute(
-            "SELECT PERMISSION_CODE FROM AGENT_ROLE_PERMISSIONS WHERE ROLE_ID = :role_id", binds
+        return as_role(self._roles_details(cursor, [role])[0])
+
+    def _roles_details(
+        self, cursor: Any, roles: Sequence[PlatformRoleRecord]
+    ) -> list[PlatformRoleRecord]:
+        """ロールの権限と対象範囲を、ロールの数によらず表ごとに一括で読む（#793）。"""
+        role_ids = [role.role_id for role in roles]
+        permissions = values_by_role_id(
+            cursor, "SELECT ROLE_ID, PERMISSION_CODE FROM AGENT_ROLE_PERMISSIONS", role_ids
         )
-        permissions = {str(row[0]) for row in cursor.fetchall()}
-        cursor.execute("SELECT AGENT_ID FROM AGENT_ROLE_AGENTS WHERE ROLE_ID = :role_id", binds)
-        agent_ids = {str(row[0]) for row in cursor.fetchall()}
-        return RoleRecord(
-            role_id=role.role_id,
-            role_code=role.role_code,
-            display_name=role.display_name,
-            description=role.description,
-            is_built_in=role.is_built_in,
-            archived=role.archived,
-            version=role.version,
-            permissions=permissions,
-            agent_ids=agent_ids,
+        agent_ids = values_by_role_id(
+            cursor, "SELECT ROLE_ID, AGENT_ID FROM AGENT_ROLE_AGENTS", role_ids
         )
+        return [
+            RoleRecord(
+                role_id=role.role_id,
+                role_code=role.role_code,
+                display_name=role.display_name,
+                description=role.description,
+                is_built_in=role.is_built_in,
+                archived=role.archived,
+                version=role.version,
+                permissions=permissions.get(role.role_id, set()),
+                agent_ids=agent_ids.get(role.role_id, set()),
+            )
+            for role in roles
+        ]
 
     def _replace_role_details(self, cursor: Any, role: PlatformRoleRecord) -> None:
         agent_role = as_role(role)

@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
+from pr_system_settings.database_status import clear_database_status_cache
 
 from app.security.service import SecurityService, set_security_service
 from app.security.store import InMemorySecurityStore
@@ -23,3 +24,11 @@ def _in_memory_security_service() -> Iterator[None]:
     set_security_service(SecurityService(store, get_settings()))
     yield
     set_security_service(None)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_database_status_cache() -> Iterator[None]:
+    """DB の状態 API の `ok` の cache（#793）をテストごとに捨てる（テストの順序に依らない）。"""
+    clear_database_status_cache()
+    yield
+    clear_database_status_cache()
