@@ -79,7 +79,8 @@ for (const viewport of [
       "nav-section-nav-section-settings",
     ]);
 
-    // セキュリティ設定は権限管理、運用設定はシステムテーブル（先頭。#751）と Agent 固有の2項目（MCP 接続・バックアップ。#757 / #762）、
+    // セキュリティ設定は権限管理、運用設定はシステムテーブル（先頭。#751）と Agent 固有の3項目
+    // （MCP 接続・API キー・バックアップ。#757 / #762 / #778）、
     // ユーザーとロール・システム設定は3製品共通。
     // 改善・運用は品質評価（#776。アイコンは RAG / NL2SQL と同じ FlaskConical）。
     await expect(sidebar.locator('#nav-section-nav-section-improve a[href="/evaluation"]')).toHaveCount(1);
@@ -89,7 +90,7 @@ for (const viewport of [
     const settings = sidebar.locator("#nav-section-nav-section-settings");
     await expect(security.getByRole("link")).toHaveCount(1);
     await expect(security.locator('a[href="/settings/security/permissions"]')).toHaveCount(1);
-    await expect(operations.getByRole("link")).toHaveCount(3);
+    await expect(operations.getByRole("link")).toHaveCount(4);
     // 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ）。
     await expect(operations.getByRole("link").first()).toHaveAttribute("href", "/settings/system-tables");
     await expect(userRoles.getByRole("link")).toHaveCount(2);
@@ -97,6 +98,7 @@ for (const viewport of [
     for (const href of [
       "/settings/system-tables",
       "/settings/mcp-connections",
+      "/settings/api-keys",
       "/settings/runtime-snapshot",
     ]) {
       await expect(operations.locator(`a[href="${href}"]`)).toHaveCount(1);

@@ -6,6 +6,7 @@ import {
   Container,
   DatabaseBackup,
   FlaskConical,
+  KeySquare,
   LockKeyhole,
   PlayCircle,
   PlugZap,
@@ -138,6 +139,14 @@ export const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.settingsMcpConnections",
         icon: PlugZap,
         permission: MENU_PERMISSIONS.settingsExternalMcp,
+      },
+      {
+        // 業務 Agent を MCP（`POST /api/mcp`）で呼ぶ外部のクライアント向け（#778）。
+        // KeyRound は共通の OCI 認証が使うため、別のアイコンにする（#658）。
+        href: APP_ROUTES.settingsApiKeys,
+        labelKey: "nav.settingsApiKeys",
+        icon: KeySquare,
+        permission: MENU_PERMISSIONS.settingsApiKeys,
       },
       {
         href: APP_ROUTES.settingsRuntimeSnapshot,

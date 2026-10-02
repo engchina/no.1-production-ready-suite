@@ -57,7 +57,7 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 |---|---|
 | Control Plane | `menu.agents` / `menu.skills` / `menu.runtimes` / `menu.runs` / `menu.approvals` / `menu.audit` / `menu.plugin_marketplaces` |
 | 改善・運用 | `menu.evaluation`（品質評価。#776。評価の Run は始めた利用者の Run なので、業務 Agent の対象範囲も確かめる） |
-| 運用設定 | `menu.settings_system_tables` / `menu.settings_external_mcp`（MCP 接続）/ `menu.settings_runtime_snapshot` |
+| 運用設定 | `menu.settings_system_tables` / `menu.settings_external_mcp`（MCP 接続）/ `menu.settings_api_keys`（API キー。#778。作成・削除は `agent.admin`）/ `menu.settings_runtime_snapshot` |
 | システム設定（3 製品共通） | `menu.settings_oci` / `menu.settings_upload_storage` / `menu.settings_model` / `menu.settings_database` / `menu.settings_appearance` |
 | ユーザーとロール（3 製品共通） | `menu.security_users` / `menu.security_roles` |
 | セキュリティ設定 | `menu.security_permissions` |
@@ -159,3 +159,9 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 - 範囲が制限された利用者の `GET /observability/events` は、件数上限（limit）を適用した後に範囲で絞ります。
 - local の Run は Run の利用者が `00000000-0000-0000-0000-000000000000`（ローカル利用者）です。production の RAG / NL2SQL を呼ぶと、
   その利用者は呼び先に存在しないため拒否されます（local 同士で使う）。
+
+## 業務 Agent の MCP（`POST /api/mcp`。#778）
+
+- Cookie・CSRF を使わず `Authorization: Bearer` で認証する。`prak_` で始まるものは Agent の API キー、それ以外は共通のサービストークン（audience `agent`、署名鍵は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`。RAG / NL2SQL と同じ）。
+- API キーは「実行する利用者」として動く（既定は作った利用者。ほかの利用者＝連携用の専用の利用者を選べるのはシステム管理者だけで、その利用者は有効で初回のパスワード変更が済んでいること。権限は利用者の現在のロールから毎回計算し直す）。キーに付けた業務 Agent に絞る。秘密は作成時の応答で 1 回だけ返し、`AGENT_CONTROL_PLANE_ITEMS`（kind `api_key`）には SHA-256 の hash だけを保存する。local で作ったキーは production では使えない。
+- ツールの権限: `agent_list_agents` / `agent_get_run` は `agent.runs.view`（または operate / admin）、`agent_ask` は `agent.runs.operate`（または admin）。`agent_get_run` は呼び出し元が作った Run だけを読める。
