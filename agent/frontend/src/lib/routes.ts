@@ -19,7 +19,6 @@ export const APP_ROUTES = {
   plugins: "/plugins",
   pluginMarketplaces: "/plugins/marketplaces",
   settingsSystemTables: "/settings/system-tables",
-  settingsConnection: "/settings/connection",
   settingsOci: "/settings/oci",
   settingsUploadStorage: "/settings/upload-storage",
   settingsModel: SYSTEM_SETTINGS_PATHS.model,

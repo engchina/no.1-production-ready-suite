@@ -62,7 +62,6 @@ MENU_AUDIT = "menu.audit"
 MENU_PLUGIN_MARKETPLACES = "menu.plugin_marketplaces"
 MENU_SECURITY_PERMISSIONS = "menu.security_permissions"
 MENU_SETTINGS_SYSTEM_TABLES = "menu.settings_system_tables"
-MENU_SETTINGS_CONNECTION = "menu.settings_connection"
 # MCP 接続（#757。旧「外部 MCP」。権限コードは保存値なので変えない）。
 MENU_SETTINGS_EXTERNAL_MCP = "menu.settings_external_mcp"
 MENU_SETTINGS_RUNTIME_SNAPSHOT = "menu.settings_runtime_snapshot"
@@ -118,7 +117,6 @@ _ADMIN_MENUS = (
     MENU_AUDIT,
     MENU_PLUGIN_MARKETPLACES,
     MENU_SETTINGS_SYSTEM_TABLES,
-    MENU_SETTINGS_CONNECTION,
     MENU_SETTINGS_EXTERNAL_MCP,
     MENU_SETTINGS_RUNTIME_SNAPSHOT,
     *_SYSTEM_SETTINGS_MENUS,
@@ -141,7 +139,6 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SECURITY_ROLES, _GROUP_USERS_ROLES, "ロール管理"),
     # 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ。#658 / #751）。
     _menu_permission(MENU_SETTINGS_SYSTEM_TABLES, _GROUP_OPERATIONS, "システムテーブル"),
-    _menu_permission(MENU_SETTINGS_CONNECTION, _GROUP_OPERATIONS, "Agent 接続設定"),
     _menu_permission(MENU_SETTINGS_EXTERNAL_MCP, _GROUP_OPERATIONS, "MCP 接続"),
     _menu_permission(
         MENU_SETTINGS_RUNTIME_SNAPSHOT, _GROUP_OPERATIONS, "Control Plane バックアップ"
@@ -199,10 +196,12 @@ ALL_PERMISSION_CODES = frozenset(item.code for item in PERMISSION_CATALOG)
 # - `menu.dashboard`: ダッシュボード機能の廃止（#262）。
 # - `menu.settings_external_rag` / `menu.settings_external_nl2sql`: 外部 RAG / 外部 NL2SQL の画面を
 #   MCP 接続（`menu.settings_external_mcp`）へまとめた（#757）。
+# - `menu.settings_connection`: 中身のない「Agent 接続設定」の画面を削除した（#762）。
 RETIRED_PERMISSION_CODES: tuple[str, ...] = (
     "menu.dashboard",
     "menu.settings_external_rag",
     "menu.settings_external_nl2sql",
+    "menu.settings_connection",
 )
 PERMISSION_BY_CODE = {item.code: item for item in PERMISSION_CATALOG}
 CAPABILITY_CODES = frozenset(CAPABILITY_ROLES)

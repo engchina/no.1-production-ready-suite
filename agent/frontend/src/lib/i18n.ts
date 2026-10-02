@@ -67,7 +67,6 @@ const agentJa = {
   "nav.approvals": "承認・監査",
   "nav.audit": "監査",
   "nav.tools": "ツール",
-  "nav.settingsConnection": "Agent 接続設定",
   "nav.settingsMcpConnections": "MCP 接続",
   "nav.settingsToolPolicy": "ツール権限",
   "nav.settingsRuntimeSnapshot": "Control Plane バックアップ",
@@ -147,7 +146,6 @@ const agentJa = {
   "page.approvals.subtitle": "外部データ・副作用を伴うツール呼び出しの確認",
   "page.audit.subtitle": "Run 横断のツール実行・承認・警告を検索する",
   "page.tools.subtitle": "登録済みツールの契約・権限・監査タグ",
-  "page.settings.subtitle": "外部サービス接続の設定",
   "page.settings.rag.subtitle": "業務 RAG は外部サービスとして接続する",
   "page.settings.nl2sql.subtitle": "構造化データ取得は外部 NL2SQL として接続する",
   "page.settings.mcp.subtitle": "RAG・NL2SQL・外部の MCP の接続先と認証を管理する",
@@ -155,7 +153,6 @@ const agentJa = {
   "page.settings.runtimeSnapshot.subtitle": "Control Plane state のバックアップ・検証・復元",
 
   "common.empty.title": "まだデータがありません",
-  "common.empty.hint": "バックエンド接続後にここへ表示されます。",
   "common.loading": "読み込み中",
   "common.skipToMain": "本文へスキップ",
   "common.retry": "再試行",

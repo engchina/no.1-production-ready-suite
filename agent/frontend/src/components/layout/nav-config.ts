@@ -2,7 +2,6 @@ import {
   BadgeCheck,
   Blocks,
   Bot,
-  Cable,
   ClipboardList,
   Container,
   DatabaseBackup,
@@ -119,12 +118,6 @@ export const NAV_SECTIONS: NavSection[] = [
         sidebarLabelKey: "nav.settingsSystemTables.sidebar",
         icon: TableProperties,
         permission: MENU_PERMISSIONS.settingsSystemTables,
-      },
-      {
-        href: APP_ROUTES.settingsConnection,
-        labelKey: "nav.settingsConnection",
-        icon: Cable,
-        permission: MENU_PERMISSIONS.settingsConnection,
       },
       {
         href: APP_ROUTES.settingsMcpConnections,

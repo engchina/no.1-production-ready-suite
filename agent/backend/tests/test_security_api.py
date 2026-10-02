@@ -261,6 +261,7 @@ def test_retired_permission_codes_are_not_in_catalog_or_manifest() -> None:
         "menu.dashboard",
         "menu.settings_external_rag",
         "menu.settings_external_nl2sql",
+        "menu.settings_connection",
     )
     retired = set(RETIRED_PERMISSION_CODES)
     assert not retired & ALL_PERMISSION_CODES

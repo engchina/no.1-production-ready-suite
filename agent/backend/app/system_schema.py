@@ -142,7 +142,8 @@ def _retired_codes_sql(codes: tuple[str, ...]) -> str:
 # 新しく廃止したコードは新しい migration で消す（全体は RETIRED_PERMISSION_CODES）。
 _RETIRED_CODES_002 = ("menu.dashboard",)
 _RETIRED_CODES_004 = ("menu.settings_external_rag", "menu.settings_external_nl2sql")
-if set(_RETIRED_CODES_002) | set(_RETIRED_CODES_004) != set(
+_RETIRED_CODES_005 = ("menu.settings_connection",)
+if set(_RETIRED_CODES_002) | set(_RETIRED_CODES_004) | set(_RETIRED_CODES_005) != set(
     RETIRED_PERMISSION_CODES
 ):  # pragma: no cover - 定義の誤りを起動時に検出
     raise RuntimeError("廃止した権限コードを消す migration を追加してください。")
@@ -179,6 +180,14 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         (
             "DELETE FROM AGENT_ROLE_PERMISSIONS "  # nosec B608 - 固定の権限コード
             f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_004)})",
+        ),
+    ),
+    MigrationArtifact(
+        "20261002_005_remove_connection_settings_permission",
+        "remove the placeholder agent connection settings menu permission",
+        (
+            "DELETE FROM AGENT_ROLE_PERMISSIONS "  # nosec B608 - 固定の権限コード
+            f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_005)})",
         ),
     ),
 )
