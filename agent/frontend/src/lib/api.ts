@@ -189,6 +189,210 @@ export interface RunState {
   updated_at: string;
 }
 
+/** 品質評価のケース（#776）。`id` を省くと `case-<番号>`。 */
+export interface EvaluationCase {
+  id?: string;
+  question: string;
+  expected: string;
+  /** 呼ぶべきツール（任意。`rag_search` のように MCP 接続の名前を省いてもよい）。 */
+  expected_tools?: string[];
+}
+
+/** 評価セット（業務 Agent ごとに保存する評価ケースの集まり。#776）。 */
+export interface EvaluationSetInput {
+  agent_id: string;
+  name: string;
+  description: string;
+  cases: EvaluationCase[];
+}
+
+export interface EvaluationSet extends EvaluationSetInput {
+  id: string;
+  cases: Required<EvaluationCase>[];
+  created_by_user_uuid: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvaluationSetItem {
+  id: string;
+  agent_id: string;
+  name: string;
+  description: string;
+  case_count: number;
+  updated_at: string;
+  last_job_id: string | null;
+  last_job_status: EvaluationJobStatus | null;
+  last_pass_rate: number | null;
+}
+
+export type JudgeVerdict = "correct" | "incorrect" | "uncertain";
+export type EvaluationCaseStatus =
+  | "pending"
+  | "running"
+  | "judged"
+  | "run_failed"
+  | "needs_approval"
+  | "timed_out"
+  | "judge_failed"
+  | "cancelled";
+export type EvaluationJobStatus = "queued" | "running" | "completed" | "cancelled" | "failed";
+
+export interface EvaluationJudgement {
+  verdict: JudgeVerdict;
+  score: number;
+  summary: string;
+  missing_points: string[];
+}
+
+export interface EvaluationCaseResult {
+  case: Required<EvaluationCase>;
+  status: EvaluationCaseStatus;
+  run_id: string | null;
+  answer: string;
+  judgement: EvaluationJudgement | null;
+  /** 業務 Agent が呼んだ（呼ぼうとした）ツール。評価中は承認が要るツールを実行しない。 */
+  tool_calls: string[];
+  /** 期待するツールをすべて呼んだか（期待するツールが無いケースは null）。 */
+  tool_selection_correct: boolean | null;
+  error: string | null;
+  duration_ms: number | null;
+}
+
+export interface EvaluationSummary {
+  total: number;
+  completed: number;
+  correct: number;
+  incorrect: number;
+  uncertain: number;
+  errors: number;
+  /** 正しいと判定したケース / 終わったケース（評価できなかったケースは不合格に数える）。 */
+  pass_rate: number | null;
+  average_score: number | null;
+  /** ツールの選択の正しさ（期待するツールを指定したケースのうち、すべて呼んだ割合）。 */
+  tool_cases: number;
+  tool_correct: number;
+  tool_accuracy: number | null;
+}
+
+export interface EvaluationJob {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  set_id: string;
+  set_name: string;
+  /** 同じ評価セットの前回（完了した評価）。 */
+  previous_job_id: string | null;
+  previous_summary: EvaluationSummary | null;
+  status: EvaluationJobStatus;
+  created_by_user_uuid: string | null;
+  results: EvaluationCaseResult[];
+  error: string | null;
+  summary: EvaluationSummary;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export type EvaluationJobItem = Pick<
+  EvaluationJob,
+  "id" | "agent_id" | "agent_name" | "set_id" | "set_name" | "status" | "summary" | "created_at" | "finished_at"
+>;
+
+/** 外部のクライアント向けの API キー（#778。秘密は作成時の応答にだけ入る）。 */
+export interface ApiKey {
+  id: string;
+  name: string;
+  /** 実行する利用者（キーはこの利用者として動く）。 */
+  owner_user_uuid: string;
+  owner_display_name: string;
+  created_by_user_uuid: string;
+  created_by_display_name: string;
+  /** null は「実行する利用者が使える業務 Agent すべて」。 */
+  agent_ids: string[] | null;
+  token_prefix: string;
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  expired: boolean;
+}
+
+export interface ApiKeysData {
+  keys: ApiKey[];
+  /** false はキーの保存先（Oracle）が無い（再起動で消える）。 */
+  persistent: boolean;
+}
+
+export type ApiKeyExpiryDays = 30 | 90 | 365;
+
+export interface CreateApiKeyPayload {
+  name: string;
+  agent_ids: string[] | null;
+  expires_in_days: ApiKeyExpiryDays | null;
+  /** 実行する利用者。null は作った利用者（ほかの利用者はシステム管理者だけ）。 */
+  run_as_user_uuid: string | null;
+}
+
+export interface ApiKeyCreated {
+  key: ApiKey;
+  /** `prak_…`。この応答でだけ返る。 */
+  token: string;
+}
+
+/** 業務 Agent の自動実行（スケジュール・Webhook。#784）。 */
+export type ScheduleFrequency = "daily" | "weekdays" | "weekly" | "hourly";
+export type AutomationTrigger = "schedule" | "webhook";
+
+export interface AutomationSchedule {
+  frequency: ScheduleFrequency;
+  /** HH:MM（毎日・平日・毎週）。 */
+  time: string;
+  /** 0 = 月曜 … 6 = 日曜（毎週）。 */
+  weekdays: number[];
+  /** 毎時の分。 */
+  minute: number;
+  timezone: string;
+}
+
+export interface AutomationInput {
+  agent_id: string;
+  name: string;
+  goal: string;
+  enabled: boolean;
+  trigger: AutomationTrigger;
+  schedule: AutomationSchedule | null;
+}
+
+export interface Automation extends AutomationInput {
+  id: string;
+  run_as_user_uuid: string;
+  created_by_user_uuid: string;
+  webhook_token_prefix: string | null;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_run_id: string | null;
+  last_trigger: string | null;
+  /** Run の作成（created）・前回の Run が終わっていないため飛ばした（skipped）・作れなかった（failed_to_start）。 */
+  last_result: "created" | "skipped" | "failed_to_start" | null;
+  last_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AutomationRun {
+  run_id: string;
+  status: RunState["status"];
+  trigger: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AutomationFired {
+  run_id: string | null;
+  result: "created" | "skipped" | "failed_to_start";
+  message: string;
+}
+
 export interface ToolAuditRecord {
   step_id: string;
   tool_name: string;
@@ -757,6 +961,58 @@ export const agentApi = {
   getRun: (runId: string) => request<RunState>(`/api/runs/${runId}`),
   getRunAudit: (runId: string) =>
     request<RunAuditData>(`/api/runs/${runId}/audit`),
+  /** 自動実行（#784）。 */
+  listAutomations: () => request<{ automations: Automation[]; persistent: boolean }>("/api/automations"),
+  getAutomation: (automationId: string) =>
+    request<{ automation: Automation; runs: AutomationRun[] }>(`/api/automations/${encodeURIComponent(automationId)}`),
+  createAutomation: (payload: AutomationInput) =>
+    request<Automation>("/api/automations", { method: "POST", body: JSON.stringify(payload) }),
+  updateAutomation: (automationId: string, payload: AutomationInput) =>
+    request<Automation>(`/api/automations/${encodeURIComponent(automationId)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteAutomation: (automationId: string) =>
+    request<null>(`/api/automations/${encodeURIComponent(automationId)}`, { method: "DELETE" }),
+  runAutomation: (automationId: string) =>
+    request<AutomationFired>(`/api/automations/${encodeURIComponent(automationId)}/run`, { method: "POST" }),
+  issueAutomationWebhookToken: (automationId: string) =>
+    request<{ automation: Automation; token: string }>(
+      `/api/automations/${encodeURIComponent(automationId)}/webhook-token`,
+      { method: "POST" }
+    ),
+  /** 品質評価（#776）。 */
+  listEvaluationSets: (agentId?: string) =>
+    request<{ sets: EvaluationSetItem[] }>(
+      `/api/evaluation-sets${agentId ? `?${new URLSearchParams({ agent_id: agentId }).toString()}` : ""}`
+    ),
+  getEvaluationSet: (setId: string) => request<EvaluationSet>(`/api/evaluation-sets/${encodeURIComponent(setId)}`),
+  createEvaluationSet: (payload: EvaluationSetInput) =>
+    request<EvaluationSet>("/api/evaluation-sets", { method: "POST", body: JSON.stringify(payload) }),
+  updateEvaluationSet: (setId: string, payload: EvaluationSetInput) =>
+    request<EvaluationSet>(`/api/evaluation-sets/${encodeURIComponent(setId)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteEvaluationSet: (setId: string) =>
+    request<null>(`/api/evaluation-sets/${encodeURIComponent(setId)}`, { method: "DELETE" }),
+  /** Excel の評価ケースを読む（保存しない）。 */
+  parseEvaluationCasesXlsx: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<{ cases: Required<EvaluationCase>[] }>("/api/evaluation-sets/parse-xlsx", { method: "POST", body });
+  },
+  downloadEvaluationTemplate: () => requestBlob("/api/evaluation-sets/template.xlsx"),
+  downloadEvaluationSetXlsx: (setId: string) =>
+    requestBlob(`/api/evaluation-sets/${encodeURIComponent(setId)}/cases.xlsx`),
+  createEvaluation: (payload: { set_id: string }) =>
+    request<EvaluationJob>("/api/evaluations", { method: "POST", body: JSON.stringify(payload) }),
+  listEvaluations: () => request<{ jobs: EvaluationJobItem[] }>("/api/evaluations"),
+  getEvaluation: (jobId: string) => request<EvaluationJob>(`/api/evaluations/${encodeURIComponent(jobId)}`),
+  cancelEvaluation: (jobId: string) =>
+    request<EvaluationJob>(`/api/evaluations/${encodeURIComponent(jobId)}/cancel`, { method: "POST" }),
+  deleteEvaluation: (jobId: string) =>
+    request<null>(`/api/evaluations/${encodeURIComponent(jobId)}`, { method: "DELETE" }),
   listToolCallAudit: (filters: ToolCallAuditFilters) =>
     request<ToolCallAuditData>(`/api/audit/tool-calls${auditQuery(filters)}`),
   /** 監査 CSV。Cookie セッションで取得し、401 / 403 は他の API と同じく通知する（#215）。 */
@@ -817,6 +1073,12 @@ export const agentApi = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  /** API キー（#778）。 */
+  listApiKeys: () => request<ApiKeysData>("/api/settings/api-keys"),
+  createApiKey: (payload: CreateApiKeyPayload) =>
+    request<ApiKeyCreated>("/api/settings/api-keys", { method: "POST", body: JSON.stringify(payload) }),
+  deleteApiKey: (keyId: string) =>
+    request<null>(`/api/settings/api-keys/${encodeURIComponent(keyId)}`, { method: "DELETE" }),
   listMcpConnections: () =>
     request<McpConnectionsData>("/api/settings/mcp-connections"),
   createMcpConnection: (payload: McpConnectionWritePayload) =>
