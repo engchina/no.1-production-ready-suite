@@ -1,10 +1,13 @@
 import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { RouterProvider, createBrowserRouter, useLocation } from "react-router-dom";
+import { RouterProvider, createBrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConfirmProvider, Toaster } from "@engchina/production-ready-ui";
 import { initTheme } from "@engchina/production-ready-ui";
-import { UnsavedChangesBlocker } from "@engchina/production-ready-system-settings";
+import {
+  UnsavedChangesBlocker,
+  useConfirmNavigationKey,
+} from "@engchina/production-ready-system-settings";
 
 import { App } from "./App";
 import { installBrowserErrorGuards } from "@/lib/browser-error-guards";
@@ -40,11 +43,11 @@ const queryClient = new QueryClient();
 
 /** 共有 ConfirmProvider に NL2SQL の文言を注入し、ルート遷移で開いている確認をキャンセルする。 */
 function AppConfirmProvider({ children }: { children: ReactNode }) {
-  const location = useLocation();
+  const navigationKey = useConfirmNavigationKey();
   return (
     <ConfirmProvider
       labels={{ confirm: t("common.confirm"), cancel: t("common.cancel") }}
-      navigationKey={location.key}
+      navigationKey={navigationKey}
     >
       {children}
     </ConfirmProvider>

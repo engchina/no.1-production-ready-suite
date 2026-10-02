@@ -219,7 +219,7 @@ DB ゲートは、DB が使えない理由を利用者が取り違えないよ�
   - フォーカストラップ。開いたら確認ボタンへフォーカスし、閉じたら trigger に戻す。
   - `Esc` とオーバーレイのクリックでキャンセル（`escape-routes`）。破棄系は誤操作を防ぐためオーバーレイのクリックを無効にしてよい。
   - scrim は共有トークン `--scrim`、overlay は `--z-dialog` で Toast（`--z-toast`）より上。
-  - メニュー（`role="menu"`）の項目から開いた場合は、閉じたあとメニューの trigger にフォーカスを戻す。ルートが変わったら開いている確認はキャンセルする（`useLocation().key` を `navigationKey` に渡す）。
+  - メニュー（`role="menu"`）の項目から開いた場合は、閉じたあとメニューの trigger にフォーカスを戻す。ルートが変わったら開いている確認はキャンセルする（`@engchina/production-ready-system-settings` の `useConfirmNavigationKey()` を `navigationKey` に渡す）。キャンセルするのは戻る / 進む（POP）・リンクや `navigate()` の遷移（PUSH）・パスの変わる置き換え（REPLACE）で、画面が選択中の対象やページ番号を URL に書き戻すだけの同じパスの置き換えではキャンセルしない（`useLocation().key` をそのまま渡すと、画面を開いた直後に開いた確認が後から届いた書き戻しで閉じる。#833）。
   - 確認ボタンは操作のトーンに合わせる（削除なら `danger`）。キャンセルを既定のフォーカスにしてもよい。
   - enter は trigger を起点にした scale + fade（`modal-motion`）、`prefers-reduced-motion` ではフェードだけ。
 - **API**：

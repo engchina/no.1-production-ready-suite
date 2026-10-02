@@ -25,6 +25,8 @@ export {
   useSettingsDraftGuard,
   type DraftGuardMessages,
 } from "./guards/useSettingsDraftGuard";
+// 確認ダイアログを閉じる画面遷移の識別子（ConfirmProvider の navigationKey。#833）
+export { useConfirmNavigationKey } from "./guards/useConfirmNavigationKey";
 
 // アップロード保存先（#97）
 export {
