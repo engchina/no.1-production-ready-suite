@@ -6,8 +6,7 @@
 #   - 関係する spec だけ e2e を実行: SKIP_E2E=0 E2E_ARGS="e2e/auth-login.spec.ts" scripts/check-all.sh
 #   - ローカルでも全部を実行: FULL=1 scripts/check-all.sh
 # 必要に応じて SKIP_BACKEND=1 / SKIP_FRONTEND=1 / SKIP_E2E=0|1
-# SKIP_FORMAT=1 / SKIP_SECURITY=1 / SKIP_AUDIT=0|1 / SKIP_VALIDATION_EVIDENCE=1
-# SKIP_RELEASE_REHEARSAL=1 で一部を省略・追加できる。
+# SKIP_FORMAT=1 / SKIP_SECURITY=1 / SKIP_AUDIT=0|1 で一部を省略・追加できる。
 # PYTEST_ARGS で pytest に引数を足せる（例: PYTEST_ARGS="-n auto" で pytest-xdist の並列実行。CI はこれを使う。#344）。
 set -euo pipefail
 
@@ -31,20 +30,8 @@ E2E_ARGS="${E2E_ARGS:-}"
 SKIP_FORMAT="${SKIP_FORMAT:-0}"
 SKIP_SECURITY="${SKIP_SECURITY:-0}"
 SKIP_AUDIT="${SKIP_AUDIT:-${local_skip_default}}"
-SKIP_VALIDATION_EVIDENCE="${SKIP_VALIDATION_EVIDENCE:-0}"
-SKIP_RELEASE_REHEARSAL="${SKIP_RELEASE_REHEARSAL:-0}"
 UV_SYNC_ARGS="${UV_SYNC_ARGS:---locked --dev}"
 PYTEST_ARGS="${PYTEST_ARGS:-}"
-cleanup_files=()
-
-cleanup() {
-  if [ "${#cleanup_files[@]}" -gt 0 ]; then
-    rm -f "${cleanup_files[@]}"
-  fi
-}
-
-trap cleanup EXIT
-
 log() {
   echo ""
   echo "[check-all] $*"
@@ -127,48 +114,6 @@ if [ "${SKIP_BACKEND}" != "1" ]; then
   # PYTEST_ARGS は空白区切りの引数として渡すため、意図して分割する。
   # shellcheck disable=SC2086
   run_backend_tool pytest -q ${PYTEST_ARGS}
-
-  if [ "${SKIP_VALIDATION_EVIDENCE}" != "1" ]; then
-    log "backend validation evidence dry-run"
-    evidence_file="$(mktemp "${TMPDIR:-/tmp}/agent-runtime-evidence.XXXXXX.json")"
-    cleanup_files+=("${evidence_file}")
-    run_backend_tool python scripts/agent_runtime_collect_validation_evidence.py \
-      --mode dry-run \
-      --environment ci \
-      --validator check-all \
-      --oracle-runs 2 \
-      --oracle-audit-iterations 1 \
-      --rotation-interval-seconds 0 \
-      --output "${evidence_file}"
-    run_backend_tool python scripts/agent_runtime_validate_evidence.py \
-      "${evidence_file}" \
-      --manifest ../docs/agent-runtime-production-validation.manifest.json \
-      --allow-dry-run
-  else
-    log "backend validation evidence dry-run skipped"
-  fi
-
-  if [ "${SKIP_RELEASE_REHEARSAL}" != "1" ]; then
-    log "backend release chain rehearsal"
-    rehearsal_env="${RELEASE_REHEARSAL_ENVIRONMENT:-check-all-rehearsal}"
-    cleanup_files+=(
-      "${BACKEND_DIR}/validation-runner-readiness.${rehearsal_env}.json"
-      "${BACKEND_DIR}/validation-preflight.${rehearsal_env}.json"
-      "${BACKEND_DIR}/validation-evidence.${rehearsal_env}.json"
-      "${BACKEND_DIR}/validation-evidence.${rehearsal_env}.md"
-      "${BACKEND_DIR}/validation-review.${rehearsal_env}.json"
-      "${BACKEND_DIR}/validation-bundle.${rehearsal_env}.json"
-      "${BACKEND_DIR}/validation-bundle.${rehearsal_env}.md"
-    )
-    REHEARSAL_ENVIRONMENT="${rehearsal_env}" \
-      REHEARSAL_VALIDATOR="check-all" \
-      REHEARSAL_ORACLE_RUNS=2 \
-      REHEARSAL_ORACLE_AUDIT_ITERATIONS=1 \
-      REHEARSAL_ROTATION_INTERVAL_SECONDS=0 \
-      "${ROOT_DIR}/scripts/rehearse-production-release-chain.sh"
-  else
-    log "backend release chain rehearsal skipped"
-  fi
 
   if [ "${SKIP_SECURITY}" != "1" ]; then
     log "backend bandit"

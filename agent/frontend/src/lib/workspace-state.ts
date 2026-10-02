@@ -18,10 +18,18 @@ const MAX_VALUE_CHARS = 20_000;
  * A 型（一覧 → 全画面エディタ）の編集対象は URL の `?id=` が唯一の情報源なので、ここには置かない（#137）。
  */
 export const WORKSPACE_FIELDS = {
+  // チャット（#768）: 選んだ Agent・会話と、送る前の下書き。
+  chat: ["agentId", "threadId", "draft"],
   runs: ["selectedRunId", "streamMode", "goal"],
   audit: ["filterForm", "appliedForm", "page"],
+  // フィードバックの絞り込み（#774）。
+  feedback: ["days", "agentId", "rating", "reason"],
+  // 品質評価の業務 Agent・表示している評価（#776）。評価ケースは評価セットとして保存する。
+  evaluation: ["agentId", "jobId"],
+  // 利用状況の期間と内訳のタブ（#772）。
+  usage: ["days", "view"],
   // 一覧のページ番号（#265）。一覧 → エディタ → 一覧の移動と再読込で同じページに戻す。
-  lists: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "plugins", "marketplaces"],
+  lists: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "plugins", "marketplaces", "evaluationSets", "evaluationResults", "evaluationJobs", "automations", "feedback", "usage"],
 } as const;
 
 export type WorkspacePage = keyof typeof WORKSPACE_FIELDS;

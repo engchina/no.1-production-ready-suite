@@ -10,6 +10,8 @@ import {
   Plus,
   Power,
   PowerOff,
+  Rocket,
+  RotateCcw,
   RefreshCw,
   Save,
   Server,
@@ -80,6 +82,7 @@ import {
   type AgentTemplate,
   type AgentProfilePatchPayload,
   type AgentSkill,
+  type AgentVersion,
   type Artifact,
   type ApprovalRequest,
   type ExternalMcpToolInfo,
@@ -107,12 +110,14 @@ import {
 } from "@/components/EntityLayout";
 import { agentPaginationLabels, listScrollLabel, PagedDataTable, QueryState } from "@/components/ListViews";
 import { AgentTemplatePicker } from "@/components/agents/AgentTemplatePicker";
+import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { useEditorRoute } from "@/lib/editor-route";
 import {
   focusFirstInvalidField,
   numberFieldError,
   parseJsonField,
 } from "@/lib/field-validation";
+import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { MENU_PERMISSIONS, useCapabilities, type AgentCapabilities } from "@/lib/permissions";
 import { APP_ROUTES } from "@/lib/routes";
@@ -574,6 +579,7 @@ function isRunTerminal(status: RunState["status"]): boolean {
 
 export function AgentsPage() {
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const editor = useEditorRoute();
   // 業務 Agent の変更は Agent 管理の権限（admin）だけ。それ以外は閲覧だけにする（#215）。
   const { admin: canManage } = useCapabilities();
@@ -590,10 +596,39 @@ export function AgentsPage() {
     onError: (error) => toast.error(error.message),
   });
 
+  const publishAgent = useMutation({
+    mutationFn: (agent: AgentProfile) => agentApi.publishAgent(agent.id),
+    onSuccess: (published) => {
+      toast.success(t("agent.version.published", { version: published.published_version ?? 0 }));
+      void queryClient.invalidateQueries({ queryKey: ["agents"] });
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  async function confirmPublish(agent: AgentProfile) {
+    const next = Math.max(0, ...(agent.versions ?? []).map((item) => item.version)) + 1;
+    const ok = await confirm({
+      title: t("agent.version.publishTitle", { version: next }),
+      description: t("agent.version.publishMessage"),
+      confirmLabel: t("agent.version.publish"),
+      cancelLabel: t("common.cancel"),
+    });
+    if (ok) publishAgent.mutate(agent);
+  }
+
   // 一覧の行と詳細（エディタの概要）で同じ定義を使う（UX 契約 buttons.md §5.1）。
   const agentActions = (agent: AgentProfile): EntityAction[] =>
     canManage
       ? [
+          {
+            // 下書きを版として公開する（#770）。公開していない変更があるときだけ出す。
+            id: "publish",
+            label: t("agent.version.publish"),
+            icon: Rocket,
+            visible: agent.unpublished_changes,
+            disabled: publishAgent.isPending,
+            onSelect: () => void confirmPublish(agent),
+          },
           {
             id: "toggle-enabled",
             label: agent.enabled ? t("agent.disable") : t("agent.enable"),
@@ -673,6 +708,125 @@ export function AgentsPage() {
   );
 }
 
+/** 公開の状態（公開中 vN / 未公開 / 公開していない変更あり。#770）。 */
+function AgentVersionBadges({ agent }: { agent: AgentProfile }) {
+  if (agent.published_version === null) {
+    return <StatusBadge variant="warning" label={t("agent.version.unpublished")} />;
+  }
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <StatusBadge
+        variant="success"
+        label={t("agent.version.publishedBadge", { version: agent.published_version })}
+      />
+      {agent.unpublished_changes ? (
+        <StatusBadge variant="info" label={t("agent.version.changed")} icon={false} />
+      ) : null}
+    </span>
+  );
+}
+
+/** 公開した版の一覧と「この版に戻す」（#770）。 */
+function AgentVersionsSection({ agent, readOnly }: { agent: AgentProfile; readOnly: boolean }) {
+  const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const restore = useMutation({
+    mutationFn: (version: number) => agentApi.restoreAgentVersion(agent.id, version),
+    onSuccess: (restored) => {
+      toast.success(t("agent.version.restored", { version: restored.published_version ?? 0 }));
+      void queryClient.invalidateQueries({ queryKey: ["agents"] });
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  async function confirmRestore(version: AgentVersion) {
+    const ok = await confirm({
+      title: t("agent.version.restoreTitle", { version: version.version }),
+      description: t("agent.version.restoreMessage"),
+      confirmLabel: t("agent.version.restore"),
+      cancelLabel: t("common.cancel"),
+    });
+    if (ok) restore.mutate(version.version);
+  }
+
+  const rows = [...(agent.versions ?? [])].reverse();
+  const columns: DataTableColumn<AgentVersion>[] = [
+    {
+      key: "version",
+      header: t("agent.version.number"),
+      rowHeader: true,
+      render: (version) => (
+        <span className="inline-flex flex-wrap items-center gap-2">
+          <span className="font-medium text-fg">{`v${version.version}`}</span>
+          {version.version === agent.published_version ? (
+            <StatusBadge variant="success" label={t("agent.version.current")} />
+          ) : null}
+        </span>
+      ),
+    },
+    {
+      key: "published_at",
+      header: t("agent.version.publishedAt"),
+      className: "text-fg-muted",
+      render: (version) => formatDate(version.published_at),
+    },
+    {
+      key: "published_by",
+      header: t("agent.version.publishedBy"),
+      className: "text-fg-muted",
+      render: (version) => version.published_by || "-",
+    },
+    {
+      key: "note",
+      header: t("agent.version.note"),
+      className: "max-w-sm break-words text-fg-muted",
+      render: (version) => version.note || "-",
+    },
+    {
+      key: "actions",
+      header: t("settings.mcpServers.actions"),
+      align: "right",
+      render: (version) => (
+        <RowActionMenu
+          actions={
+            readOnly
+              ? []
+              : [
+                  {
+                    id: "restore",
+                    label: t("agent.version.restore"),
+                    icon: RotateCcw,
+                    visible: version.version !== agent.published_version || agent.unpublished_changes,
+                    disabled: restore.isPending,
+                    onSelect: () => void confirmRestore(version),
+                  },
+                ]
+          }
+          ariaLabel={t("common.entityActions", { name: `v${version.version}` })}
+          testId={`agent-version-actions-${version.version}`}
+        />
+      ),
+    },
+  ];
+
+  return (
+    <Section title={t("agent.version.title")} description={t("agent.version.description")}>
+      {rows.length === 0 ? (
+        <EmptyState title={t("agent.version.empty")} />
+      ) : (
+        <DataTable
+          rows={rows}
+          columns={columns}
+          getRowKey={(version) => String(version.version)}
+          rowProps={() => ({ className: "align-top" })}
+          tableClassName="w-full min-w-[40rem]"
+          ariaLabel={t("agent.version.title")}
+        />
+      )}
+    </Section>
+  );
+}
+
 function AgentTable({
   agents,
   onOpen,
@@ -724,6 +878,11 @@ function AgentTable({
           label={agent.enabled ? t("agent.enabled") : t("agent.disabled")}
         />
       ),
+    },
+    {
+      key: "version",
+      header: t("agent.version.column"),
+      render: (agent) => <AgentVersionBadges agent={agent} />,
     },
     {
       key: "actions",
@@ -918,7 +1077,12 @@ export function RunsPage() {
   const restoredSelection = useRestoredSelectionCheck(selectedRunId, runIds);
   const selectedRun = runItems.find((run) => run.id === selectedRunId) ?? runItems[0];
   // 利用できるエージェントは backend が絞り込む。既定の Agent を使えない利用者は、使える最初の Agent を選ぶ（#215）。
-  const runnableAgents = (agents.data?.agents ?? []).filter((agent) => agent.enabled);
+  // 下書きで実行するのは Agent 管理（admin）だけ（#770）。下書きでなければ公開した版のある Agent だけ選べる。
+  const [runDraft, setRunDraft] = useState(false);
+  const draftRun = capabilities.admin && runDraft;
+  const runnableAgents = (agents.data?.agents ?? []).filter(
+    (agent) => agent.enabled && (draftRun || agent.published_version !== null)
+  );
   const selectedAgentId =
     runnableAgents.some((agent) => agent.id === agentId) || !runnableAgents.length ? agentId : runnableAgents[0].id;
 
@@ -954,7 +1118,7 @@ export function RunsPage() {
       focusField("run-goal");
       return;
     }
-    createRun.mutate({ goal, agent_id: selectedAgentId });
+    createRun.mutate({ goal, agent_id: selectedAgentId, ...(draftRun ? { draft: true } : {}) });
   }
 
   async function cancelLatestRun(run: RunState, viaWebSocket = false) {
@@ -1040,6 +1204,18 @@ export function RunsPage() {
                       options={runnableAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
                       onValueChange={onAgentChange}
                     />
+                    {capabilities.admin ? (
+                      <label className="flex items-center gap-2 text-sm text-fg">
+                        <Switch
+                          checked={runDraft}
+                          aria-label={t("run.form.draft")}
+                          onCheckedChange={setRunDraft}
+                          data-testid="run-draft"
+                        />
+                        {t("run.form.draft")}
+                        <span className="text-xs text-fg-muted">{t("run.form.draftHint")}</span>
+                      </label>
+                    ) : null}
                     <TextareaField
                       id="run-goal"
                       label={t("run.form.goal")}
@@ -4855,9 +5031,14 @@ function AgentEditorView({
                 variant={agent.enabled ? "success" : "neutral"}
                 label={agent.enabled ? t("agent.enabled") : t("agent.disabled")}
               />
+              <AgentVersionBadges agent={agent} />
               <span className="text-xs text-fg-muted">{`${t("common.updatedAt")}: ${formatDate(agent.updated_at)}`}</span>
             </div>
             {agent.migration_required ? <Banner severity="warning">{t("agent.migrationRequired")}</Banner> : null}
+            {agent.published_version === null ? (
+              // 公開するまで利用者のチャット・Run には使えない（管理者は Run の画面の「下書きで実行」で試せる）。
+              <Banner severity="info">{t("agent.version.unpublishedHint")}</Banner>
+            ) : null}
           </Section>
         ) : null}
         <fieldset disabled={readOnly} className="min-w-0 space-y-6">
@@ -4959,6 +5140,7 @@ function AgentEditorView({
             )}
           </Section>
         </fieldset>
+        {agent ? <AgentVersionsSection agent={agent} readOnly={readOnly} /> : null}
       </PageBody>
     </>
   );
@@ -5097,6 +5279,7 @@ function RunDetail({
   sseState: RunEventSourceState;
   capabilities: AgentCapabilities;
 }) {
+  const queryClient = useQueryClient();
   const structured = getStructuredResult(run);
   const { canCancel, canResume } = runCapabilities(run);
   const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
@@ -5127,7 +5310,30 @@ function RunDetail({
             <span>{`${t("run.runtime")}: ${run.runtime_id === "builtin" ? t("runtime.builtin.title") : run.runtime_id}`}</span>
             <span>{`${t("common.createdAt")}: ${formatDate(run.created_at)}`}</span>
             <span>{`${t("common.updatedAt")}: ${formatDate(run.updated_at)}`}</span>
+            {/* モデルの利用量（承認待ちからの再開を含めた累計。#772）。 */}
+            <span className="sm:col-span-2" data-testid="run-usage">
+              {`${t("run.usage")}: ${
+                run.usage
+                  ? t("run.usage.summary", {
+                      model: run.usage.model || t("usage.modelNone"),
+                      requests: formatNumber(run.usage.requests),
+                      input: formatNumber(run.usage.input_tokens),
+                      output: formatNumber(run.usage.output_tokens),
+                      total: formatNumber(run.usage.total_tokens),
+                    })
+                  : t("run.usage.none")
+              }`}
+            </span>
           </div>
+          {/* 管理者の評価（#774）。Agent 管理の権限で、回答が出た Run に付ける（本人の評価とは別）。 */}
+          {capabilities.admin && run.status === "completed" && run.artifacts.some((item) => item.kind === "answer") ? (
+            <AnswerFeedback
+              runId={run.id}
+              current={run.admin_review ?? null}
+              mode="admin"
+              onSaved={() => void queryClient.invalidateQueries({ queryKey: ["runs"] })}
+            />
+          ) : null}
         </CardContent>
       </Card>
 

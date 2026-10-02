@@ -41,6 +41,7 @@ from app.security.permissions import (
     PUBLIC_API_PATHS,
     RETIRED_PERMISSION_CODES,
     ROUTE_PERMISSIONS,
+    SERVICE_TOKEN_API_PATHS,
     UNCLASSIFIED_PERMISSION,
     WEBSOCKET_PERMISSIONS,
     expand_permissions,
@@ -102,8 +103,9 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     open_operations = {
         (method, path) for method, path in operations if permission_for_route(method, path) is None
     }
-    assert {path for _method, path in open_operations} == set(PUBLIC_API_PATHS) | set(
-        AUTHENTICATED_WITHOUT_PERMISSION
+    # MCP（#778）はサービストークン・API キーで認証し、ツールごとに権限を判定する。
+    assert {path for _method, path in open_operations} == (
+        set(PUBLIC_API_PATHS) | set(AUTHENTICATED_WITHOUT_PERMISSION) | set(SERVICE_TOKEN_API_PATHS)
     )
     # 権限なしで通す path に method を足したら、ここで気づく（method 単位で照合する。#490）。
     assert open_operations == set(OPEN_API_OPERATIONS)
@@ -365,6 +367,7 @@ def test_database_user_login_me_and_logout(auth: ProductionAuth) -> None:
     assert set(data["permissions"]) == {
         "agent.runs.operate",
         "menu.agents",
+        "menu.chat",
         "menu.runs",
     }
     assert data["allowed_agent_ids"] == ["default"]
@@ -900,7 +903,6 @@ def test_platform_oracle_connection_uses_platform_settings() -> None:
         oracle_dsn="suiteadb_high",
         oracle_client_lib_dir="/opt/instantclient",
         oracle_wallet_password="wallet-secret",  # nosec B106 - テスト用
-        agent_runtime_oracle_dsn="runtime_high",
     )
     kwargs = platform_oracle_connect_kwargs(settings)
     assert kwargs["user"] == "ADMIN"

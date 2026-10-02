@@ -14,6 +14,23 @@ const agent = {
   migration_required: false,
   enabled: true,
   source: "builtin",
+  // 公開中の v1（#770）。
+  versioned: true,
+  versions: [
+    {
+      version: 1,
+      name: "汎用業務 Agent",
+      description: "業務調査を行う",
+      instructions: "根拠を示して回答する。",
+      skill_ids: ["business_rag_research"],
+      model_id: "",
+      note: "",
+      published_at: now,
+      published_by: null,
+    },
+  ],
+  published_version: 1,
+  unpublished_changes: false,
   created_at: now,
   updated_at: now,
 };

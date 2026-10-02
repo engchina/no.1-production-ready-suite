@@ -9,8 +9,10 @@ CLI（`python -m app.cli.agent_system_schema`）から明示されたときだ�
 - 接続は共通 `.env` の `PLATFORM_ORACLE_*`（`app.oracle_connection`）。
 - 共通認証の `PLATFORM_*` と組み込み SYSTEM_ADMIN ロールは、`AGENT_ROLE_*` の FK の参照先なので
   先に冪等に用意する（RAG と同じ）。管理対象ではないため、全再作成でも削除しない。
-- Run の保存先（`AGENT_RUNTIME_ORACLE_*` の checkpoint / projection）は Runtime repository が作る。
-  ここでは扱わない（別の接続設定のため）。
+- Run・業務 Agent の保存先（`AGENT_RUNTIME_CHECKPOINTS` と監査用の projection
+  `AGENT_RUNTIME_*`）と、画面で変えた定義（Skill・プラグイン・MCP 接続・ツール権限）の
+  `AGENT_CONTROL_PLANE_ITEMS` もここで作る（#764。以前は Runtime repository が別の接続設定で
+  作っていた）。全再作成はこれらも消す（Run の履歴も消える）。
 """
 
 from __future__ import annotations
@@ -113,6 +115,112 @@ BASE_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX AGENT_ROLE_AGENTS_AGENT_IDX ON AGENT_ROLE_AGENTS (AGENT_ID)",
 )
 
+# Run・業務 Agent の checkpoint（snapshot の JSON）と、oracle_normalized の監査用の
+# projection（#764）。名前は `app.features.agent.runtime` の RUNTIME_CHECKPOINT_TABLE /
+# RUNTIME_PROJECTION_PREFIX と同じ。
+RUNTIME_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE AGENT_RUNTIME_CHECKPOINTS (
+        CHECKPOINT_KEY VARCHAR2(128) PRIMARY KEY,
+        SNAPSHOT_JSON CLOB NOT NULL,
+        UPDATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE AGENT_RUNTIME_RUNS (
+        RUN_ID VARCHAR2(128) PRIMARY KEY,
+        AGENT_ID VARCHAR2(128) NOT NULL,
+        STATUS VARCHAR2(32) NOT NULL,
+        GOAL CLOB NOT NULL,
+        METADATA_JSON CLOB,
+        PENDING_TOOL_CALLS_JSON CLOB,
+        CREATED_AT TIMESTAMP WITH TIME ZONE NOT NULL,
+        UPDATED_AT TIMESTAMP WITH TIME ZONE NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE AGENT_RUNTIME_EVENTS (
+        EVENT_ID VARCHAR2(128) PRIMARY KEY,
+        RUN_ID VARCHAR2(128) NOT NULL,
+        EVENT_TYPE VARCHAR2(128) NOT NULL,
+        MESSAGE CLOB NOT NULL,
+        PAYLOAD_JSON CLOB,
+        CREATED_AT TIMESTAMP WITH TIME ZONE NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE AGENT_RUNTIME_STEPS (
+        STEP_ID VARCHAR2(128) PRIMARY KEY,
+        RUN_ID VARCHAR2(128) NOT NULL,
+        KIND VARCHAR2(64) NOT NULL,
+        STATUS VARCHAR2(32) NOT NULL,
+        TOOL_NAME VARCHAR2(256),
+        APPROVAL_ID VARCHAR2(128),
+        TOOL_CALL_JSON CLOB,
+        TOOL_RESULT_JSON CLOB,
+        STARTED_AT TIMESTAMP WITH TIME ZONE,
+        COMPLETED_AT TIMESTAMP WITH TIME ZONE
+    )
+    """,
+    """
+    CREATE TABLE AGENT_RUNTIME_APPROVALS (
+        APPROVAL_ID VARCHAR2(128) PRIMARY KEY,
+        RUN_ID VARCHAR2(128) NOT NULL,
+        STEP_ID VARCHAR2(128) NOT NULL,
+        TOOL_NAME VARCHAR2(256) NOT NULL,
+        STATUS VARCHAR2(32) NOT NULL,
+        REASON CLOB NOT NULL,
+        DECIDED_BY VARCHAR2(256),
+        DECIDED_AT TIMESTAMP WITH TIME ZONE,
+        CREATED_AT TIMESTAMP WITH TIME ZONE NOT NULL,
+        TOOL_CALL_JSON CLOB NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE AGENT_RUNTIME_ARTIFACTS (
+        ARTIFACT_ID VARCHAR2(128) PRIMARY KEY,
+        RUN_ID VARCHAR2(128) NOT NULL,
+        NAME VARCHAR2(512) NOT NULL,
+        KIND VARCHAR2(128) NOT NULL,
+        CONTENT_JSON CLOB NOT NULL,
+        CREATED_AT TIMESTAMP WITH TIME ZONE NOT NULL
+    )
+    """,
+    "CREATE INDEX AGENT_RUNTIME_RUNS_STATUS_CREATED_IX ON AGENT_RUNTIME_RUNS (STATUS, CREATED_AT)",
+    "CREATE INDEX AGENT_RUNTIME_EVENTS_RUN_TYPE_CREATED_IX "
+    "ON AGENT_RUNTIME_EVENTS (RUN_ID, EVENT_TYPE, CREATED_AT)",
+    "CREATE INDEX AGENT_RUNTIME_STEPS_RUN_TOOL_STATUS_IX "
+    "ON AGENT_RUNTIME_STEPS (RUN_ID, TOOL_NAME, STATUS, COMPLETED_AT)",
+    "CREATE INDEX AGENT_RUNTIME_STEPS_ERROR_CODE_IX ON AGENT_RUNTIME_STEPS "
+    "(JSON_VALUE(TOOL_RESULT_JSON, '$.error_code' RETURNING VARCHAR2(128)))",
+    "CREATE INDEX AGENT_RUNTIME_APPROVALS_RUN_STATUS_IX "
+    "ON AGENT_RUNTIME_APPROVALS (RUN_ID, STATUS, CREATED_AT)",
+    "CREATE INDEX AGENT_RUNTIME_ARTIFACTS_RUN_KIND_IX "
+    "ON AGENT_RUNTIME_ARTIFACTS (RUN_ID, KIND, CREATED_AT)",
+)
+
+# 画面・API で変えた定義（#764）。ITEM_KIND は skill / plugin / marketplace / mcp_connection /
+# tool_policy / api_key（#778）。ITEM_JSON は定義の JSON（MCP 接続の秘密は暗号化した値、
+# API キーは秘密を持たず SHA-256 の hash だけ）。
+CONTROL_PLANE_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE AGENT_CONTROL_PLANE_ITEMS (
+        ITEM_KIND VARCHAR2(32) NOT NULL,
+        ITEM_ID VARCHAR2(200) NOT NULL,
+        ITEM_JSON CLOB NOT NULL,
+        UPDATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+        CONSTRAINT PK_AGENT_CONTROL_PLANE_ITEMS PRIMARY KEY (ITEM_KIND, ITEM_ID)
+    )
+    """,
+)
+
+# 未初期化の DB と全再作成で作る、Agent の管理対象の DDL の全体。
+DOMAIN_STATEMENTS: tuple[str, ...] = (
+    *BASE_STATEMENTS,
+    *RUNTIME_STATEMENTS,
+    *CONTROL_PLANE_STATEMENTS,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class MigrationArtifact:
@@ -190,6 +298,12 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
             f"WHERE PERMISSION_CODE IN ({_retired_codes_sql(_RETIRED_CODES_005)})",
         ),
     ),
+    MigrationArtifact(
+        "20261002_006_runtime_and_control_plane_tables",
+        "manage run checkpoint / projection tables and add control plane items (#764)",
+        # 以前は Runtime repository が作っていた。既存のテーブルは ORA-00955 として読み飛ばす。
+        (*RUNTIME_STATEMENTS, *CONTROL_PLANE_STATEMENTS),
+    ),
 )
 
 # ---- manifest -----------------------------------------------------------------
@@ -200,8 +314,23 @@ MANAGED_TABLES: tuple[str, ...] = (
     MIGRATION_TABLE,
     "AGENT_ROLE_PERMISSIONS",
     "AGENT_ROLE_AGENTS",
+    "AGENT_RUNTIME_CHECKPOINTS",
+    "AGENT_RUNTIME_RUNS",
+    "AGENT_RUNTIME_EVENTS",
+    "AGENT_RUNTIME_STEPS",
+    "AGENT_RUNTIME_APPROVALS",
+    "AGENT_RUNTIME_ARTIFACTS",
+    "AGENT_CONTROL_PLANE_ITEMS",
 )
-MANAGED_INDEXES: tuple[str, ...] = ("AGENT_ROLE_AGENTS_AGENT_IDX",)
+MANAGED_INDEXES: tuple[str, ...] = (
+    "AGENT_ROLE_AGENTS_AGENT_IDX",
+    "AGENT_RUNTIME_RUNS_STATUS_CREATED_IX",
+    "AGENT_RUNTIME_EVENTS_RUN_TYPE_CREATED_IX",
+    "AGENT_RUNTIME_STEPS_RUN_TOOL_STATUS_IX",
+    "AGENT_RUNTIME_STEPS_ERROR_CODE_IX",
+    "AGENT_RUNTIME_APPROVALS_RUN_STATUS_IX",
+    "AGENT_RUNTIME_ARTIFACTS_RUN_KIND_IX",
+)
 MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     *((name, "TABLE") for name in MANAGED_TABLES),
     *((name, "INDEX") for name in MANAGED_INDEXES),
@@ -230,7 +359,7 @@ def managed_manifest_from_schema() -> set[tuple[str, str]]:
     """DDL の正本の CREATE TABLE / INDEX（manifest と一致することをテストで確かめる）。"""
 
     objects: set[tuple[str, str]] = set()
-    for statement in (*CONTROL_STATEMENTS, *BASE_STATEMENTS):
+    for statement in (*CONTROL_STATEMENTS, *DOMAIN_STATEMENTS):
         if (table := _CREATE_TABLE_PATTERN.match(statement)) is not None:
             objects.add((table.group(1).upper(), "TABLE"))
         if (index := _CREATE_INDEX_PATTERN.match(statement)) is not None:
@@ -405,7 +534,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
 
         self._heartbeat(connection, owner)
         # 全再作成は台帳（AGENT_SCHEMA_MIGRATIONS）も消すため、制御テーブルから作り直す（冪等）。
-        self._execute_statements(connection, (*CONTROL_STATEMENTS, *BASE_STATEMENTS))
+        self._execute_statements(connection, (*CONTROL_STATEMENTS, *DOMAIN_STATEMENTS))
         if before["status"] == "missing" or recreate:
             for migration in MIGRATIONS:
                 self._record_migration(connection, migration)
@@ -516,7 +645,10 @@ system_schema_manager = SystemSchemaManager()
 
 __all__ = [
     "BASE_STATEMENTS",
+    "CONTROL_PLANE_STATEMENTS",
     "CONTROL_STATEMENTS",
+    "DOMAIN_STATEMENTS",
+    "RUNTIME_STATEMENTS",
     "CONTROL_TABLE",
     "DOMAIN_TABLES",
     "MANAGED_FOREIGN_KEYS",

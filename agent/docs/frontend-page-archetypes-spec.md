@@ -9,10 +9,10 @@
 
 | 型 | ページ（ルート） | 補足 |
 |---|---|---|
-| A. 一覧 → 全画面エディタ | 業務 Agent（`/agents`）/ Skill（`/skills`）/ MCP 接続（`/settings/mcp-connections`）/ 連携機能（`/plugins`）/ マーケットプレイス（`/plugins/marketplaces`） | `?id=` を唯一の情報源にする（§1.1）。 |
+| A. 一覧 → 全画面エディタ | 自動実行（`/automations`。#784）/ 業務 Agent（`/agents`）/ Skill（`/skills`）/ MCP 接続（`/settings/mcp-connections`）/ 連携機能（`/plugins`）/ マーケットプレイス（`/plugins/marketplaces`） | `?id=` を唯一の情報源にする（§1.1）。 |
 | B. マスタ詳細の閲覧 | Run（`/runs`）/ 承認（`/approvals`）/ ツール（`/tools`） | 一覧と詳細を `FixedSplitPane` で並べる（§1.2）。 |
-| C. ツール / ワークフロー | 監査（`/audit`）/ Control Plane バックアップ（`/settings/runtime-snapshot`） | 監査は 絞り込み → 適用 → 結果の `DataTable`。バックアップは 入力 → 検証 → 置換。 |
-| D. ダッシュボード / 状態 | Runtime（`/runtimes`）/ ツール権限（`/settings/tool-policy`） | 運用設定の単一フォームは「状態 + 最小の編集」として D 型に置く。ダッシュボード（`/`）は廃止した（#262）。 |
+| C. ツール / ワークフロー | 監査（`/audit`）/ フィードバック（`/feedback`。絞り込み → 集計と一覧 → 詳細の side sheet）/ 品質評価（`/evaluation`。評価セットの一覧 → 実行状況 → 評価概要（前回との比較）→ ケース別結果 → 最近の評価。評価セットは A 型の `?id=` の全画面エディタで、評価ケースを 1 件ずつ編集し Excel で取り込み・書き出しする）/ Control Plane バックアップ（`/settings/runtime-snapshot`） | 監査は 絞り込み → 適用 → 結果の `DataTable`。バックアップは 入力 → 検証 → 置換。 |
+| D. ダッシュボード / 状態 | Runtime（`/runtimes`）/ 利用状況（`/usage`）/ ツール権限（`/settings/tool-policy`） | 運用設定の単一フォームは「状態 + 最小の編集」として D 型に置く。ダッシュボード（`/`）は廃止した（#262）。 |
 
 `/` は画面を持たない入口で、NL2SQL と同じく次のように振り分ける（`frontend/src/lib/route-permissions.ts`）。
 
