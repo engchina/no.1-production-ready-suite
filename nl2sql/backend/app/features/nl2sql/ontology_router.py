@@ -622,7 +622,8 @@ class OntologyApiRuntime:
         if settings.nl2sql_persistence_mode.strip().lower() != "oracle":
             return InMemoryOntologyStore()
         adapter = getattr(legacy_service, "_oracle_adapter", None)
-        connection_factory = getattr(adapter, "connection", None)
+        # オントロジーの状態（`NL2SQL_ONTOLOGY_*`）は pool から借りる（#830）。
+        connection_factory = getattr(adapter, "state_connection", None)
         if not callable(connection_factory):
             raise RuntimeError("Oracle Ontology store 用の connection factory がありません。")
         return OracleOntologyStore(connection_factory=connection_factory)
