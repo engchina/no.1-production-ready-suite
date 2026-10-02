@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, History, MessageSquarePlus, SendHorizontal, Wrench, X } from "lucide-react";
+import { BookOpen, Check, History, MessageSquarePlus, SendHorizontal, Square, Wrench, X } from "lucide-react";
 import {
   Banner,
   Button,
@@ -14,6 +14,7 @@ import {
   PageBody,
   PageHeader,
   ProcessingIndicator,
+  RunStopButton,
   SearchableSelectField,
   SideSheet,
   Skeleton,
@@ -47,6 +48,8 @@ import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-s
  */
 
 const ACTIVE_STATUSES = new Set<RunState["status"]>(["queued", "running"]);
+/** 「停止」で止められる Run（回答の作成中と、ツールの承認待ち。#805）。 */
+const STOPPABLE_STATUSES = new Set<RunState["status"]>(["queued", "running", "waiting_approval"]);
 const POLL_INTERVAL_MS = 1500;
 
 function useHistoryInline(): boolean {
@@ -116,6 +119,7 @@ export function ChatPage() {
   const runs = threadId && !threadOfOtherAgent ? (thread.data?.runs ?? []) : [];
   const running = runs.some((run) => ACTIVE_STATUSES.has(run.status));
   const waitingApproval = runs.some((run) => run.status === "waiting_approval");
+  const stoppableRun = [...runs].reverse().find((run) => STOPPABLE_STATUSES.has(run.status));
   const lastRunId = runs.at(-1)?.id;
   const lastRunStatus = runs.at(-1)?.status;
 
@@ -132,6 +136,18 @@ export function ChatPage() {
     );
   }
 
+  // 送信の要求中に「停止」を押したら、Run ができた直後に止める（Run の id は応答で分かる。#805）。
+  const stopAfterCreateRef = useRef(false);
+  const cancel = useMutation({
+    mutationFn: (runId: string) => agentApi.cancelRun(runId),
+    onSuccess: (updated) => {
+      // 取り直しを待たずに止めた状態を出し、ボタンを「送信」に戻す。
+      replaceRun(updated);
+      void queryClient.invalidateQueries({ queryKey: ["thread", updated.thread_id ?? threadId] });
+      void queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+  });
+
   const send = useMutation({
     mutationFn: (goal: string) =>
       agentApi.createRun({
@@ -140,10 +156,18 @@ export function ChatPage() {
         thread_id: threadId ?? undefined,
       }),
     onSuccess: (run) => {
-      setDraft("");
       if (run.thread_id) setThreadId(run.thread_id);
       void queryClient.invalidateQueries({ queryKey: ["thread", run.thread_id] });
       void queryClient.invalidateQueries({ queryKey: ["threads"] });
+      if (stopAfterCreateRef.current) {
+        stopAfterCreateRef.current = false;
+        cancel.mutate(run.id);
+      }
+    },
+    onError: (_error, goal) => {
+      stopAfterCreateRef.current = false;
+      // 送れなかった質問を入力欄に戻す。送信の後に書き始めた次の質問は上書きしない（RAG のチャットと同じ）。
+      setDraft((current) => (current.trim() ? current : goal));
     },
   });
 
@@ -160,19 +184,34 @@ export function ChatPage() {
   function submit() {
     const goal = draft.trim();
     // 実行中・承認待ちのあいだは次の質問を送らない（前の回答を会話の履歴に含めるため）。
+    // 実行中の Enter でも停止しない（停止はボタンだけ。buttons.md §3.1）。
     if (!goal || !selectedAgentId || running || waitingApproval || send.isPending) return;
+    // 送ったら入力欄を空にし、回答の作成中も次の質問を書けるようにする（RAG のチャットと同じ）。
+    setDraft("");
+    cancel.reset();
     send.mutate(goal);
+  }
+
+  function stop() {
+    if (cancel.isPending) return;
+    if (send.isPending) {
+      stopAfterCreateRef.current = true;
+      return;
+    }
+    if (stoppableRun) cancel.mutate(stoppableRun.id);
   }
 
   function startNewThread() {
     setThreadId(null);
     send.reset();
+    cancel.reset();
     setHistorySheetOpen(false);
   }
 
   function openThread(item: ThreadSummary) {
     setThreadId(item.thread_id);
     send.reset();
+    cancel.reset();
     setHistorySheetOpen(false);
   }
 
@@ -187,6 +226,8 @@ export function ChatPage() {
   );
 
   const composerBlocked = running || waitingApproval;
+  // 送信と停止は同じボタン。送信の要求中・回答の作成中・承認待ちは同じ位置で「停止」になる（buttons.md §3.1、#805）。
+  const stoppable = send.isPending || Boolean(stoppableRun);
 
   return (
     <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
@@ -315,16 +356,17 @@ export function ChatPage() {
                 <FieldActionRow
                   actions={
                     // 主な問い合わせの入力の行なので lg（README §4「操作部品の高さと幅」）。
-                    <Button
+                    <RunStopButton
+                      running={stoppable}
+                      onRun={submit}
+                      onStop={stop}
+                      runLabel={t("chat.send")}
+                      stopLabel={t("chat.stop")}
+                      runIcon={SendHorizontal}
+                      runDisabled={!draft.trim() || composerBlocked}
                       size="lg"
-                      icon={SendHorizontal}
-                      loading={send.isPending}
-                      disabled={!draft.trim() || composerBlocked}
-                      onClick={submit}
-                      data-testid="chat-send"
-                    >
-                      {t("chat.send")}
-                    </Button>
+                      testId="chat-send"
+                    />
                   }
                 >
                   <TextareaField
@@ -351,6 +393,11 @@ export function ChatPage() {
                   </p>
                 ) : null}
                 {send.error ? <Banner severity="danger">{send.error.message}</Banner> : null}
+                {cancel.error ? (
+                  <Banner severity="danger" title={t("chat.stopFailed")}>
+                    {cancel.error.message}
+                  </Banner>
+                ) : null}
               </div>
             </section>
           </div>
@@ -458,7 +505,13 @@ function ChatTurn({
         ) : null}
         {answer ? <MessageText text={answer} className="text-sm text-fg" /> : null}
         {failure ? <Banner severity="danger" title={t("chat.failed")}>{failure}</Banner> : null}
-        {run.status === "cancelled" ? <p className="text-sm text-fg-muted">{t("chat.cancelled")}</p> : null}
+        {run.status === "cancelled" ? (
+          // 止めた回答の状態（途中までの回答は上に残す）。色だけに頼らず、停止のアイコンを添える（#805）。
+          <p className="flex items-center gap-1.5 text-sm text-fg-muted" data-testid="chat-cancelled">
+            <Square size={14} aria-hidden="true" />
+            {t("chat.cancelled")}
+          </p>
+        ) : null}
 
         {pendingApprovals.map((approval) => (
           <Banner key={approval.id} severity="warning" title={t("chat.approval.title")}>

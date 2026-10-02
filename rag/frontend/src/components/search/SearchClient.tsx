@@ -20,6 +20,7 @@ import {
   TimedLoadingState,
   Skeleton,
   StatusBadge,
+  RunStopButton,
 } from "@engchina/production-ready-ui";
 import {
   Clock3,
@@ -58,7 +59,6 @@ import {
 } from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
 import { isNullableString, isOneOf, useWorkspaceState } from "@/lib/workspace-state";
-import { RunStopButton } from "@/components/RunStopButton";
 import { AnswerProgress } from "./AnswerProgress";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
 import { parseAnswerDiagnostics } from "@/lib/answer-diagnostics";
