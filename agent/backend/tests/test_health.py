@@ -1662,6 +1662,25 @@ def test_model_test_payloads_use_text_and_vision_defaults() -> None:
     )
 
 
+def test_model_test_vision_payload_sends_shared_jpeg_image() -> None:
+    """画像のテストは 3 製品共通の JPEG を送る（1×1 の PNG は gateway が拒否する。#745）。"""
+    from pr_system_settings.model import EnterpriseAiModelSettings
+    from pr_system_settings.model_test_input import (
+        MODEL_TEST_IMAGE_BYTES,
+        MODEL_TEST_VISION_PROMPT,
+    )
+
+    settings = EnterpriseAiModelSettings(default_vision_model_id="vision-model")
+    payload = agent_router._enterprise_vision_payload(settings, prompt=MODEL_TEST_VISION_PROMPT)
+
+    content = payload["input"][0]["content"]  # type: ignore[index]
+    assert content[0] == {"type": "input_text", "text": MODEL_TEST_VISION_PROMPT}
+    image_url = content[1]["image_url"]
+    prefix = "data:image/jpeg;base64,"
+    assert image_url.startswith(prefix)
+    assert base64.b64decode(image_url.removeprefix(prefix)) == MODEL_TEST_IMAGE_BYTES
+
+
 def test_list_tools_v2_includes_external_tools() -> None:
     resp = client.get("/api/tools")
     assert resp.status_code == 200

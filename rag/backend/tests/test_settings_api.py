@@ -21,6 +21,7 @@ from dotenv import dotenv_values
 from pr_system_settings import database as shared_database
 from pr_system_settings import oci_connectivity
 from pr_system_settings.model import ModelSettingsStore, save_model_settings
+from pr_system_settings.model_test_input import MODEL_TEST_IMAGE_BYTES
 from pytest import MonkeyPatch
 
 from app import config as app_config
@@ -70,14 +71,6 @@ def _saved_env_value(settings: Settings, name: str) -> str | None:
 
 def _saved_enterprise_ai_api_key(settings: Settings) -> str | None:
     return _saved_env_value(settings, "PLATFORM_OCI_ENTERPRISE_AI_API_KEY")
-
-
-def test_model_settings_vision_test_image_is_valid_jpeg() -> None:
-    """Vision モデルの接続テストには provider が受理できる JPEG を使う。"""
-    data = settings_routes.MODEL_TEST_IMAGE_BYTES
-
-    assert data.startswith(b"\xff\xd8")
-    assert len(data) > 1024
 
 
 def test_parser_adapter_settings_reports_flags_and_package_status(
@@ -1597,7 +1590,7 @@ def test_model_settings_test_enterprise_vision_uses_smoke_image_payload(
     assert body["details"]["surface"] == "vision"
     assert body["details"]["response_chars"] == len("画像を確認しました。")
     assert observed[0][0].oci_enterprise_ai_default_vision_model == "google.gemini-2.5-flash"
-    assert observed[0][1] == settings_routes.MODEL_TEST_IMAGE_BYTES
+    assert observed[0][1] == MODEL_TEST_IMAGE_BYTES
     assert observed[0][2]
     assert observed[0][3] == "image/jpeg"
 

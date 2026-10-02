@@ -54,6 +54,15 @@ from pr_system_settings.model import (
     enterprise_ai_connection_for_model,
     model_payload,
 )
+from pr_system_settings.model_test_input import (
+    MODEL_TEST_EMBEDDING_INPUT,
+    MODEL_TEST_RERANK_DOCUMENTS,
+    MODEL_TEST_RERANK_QUERY,
+    MODEL_TEST_TEXT_PROMPT,
+    MODEL_TEST_VISION_PROMPT,
+    model_test_image_data_url,
+    model_test_text_context,
+)
 from pr_system_settings.oci import build_oci_router
 from pr_system_settings.oci_auth import (
     load_oci_config_without_prompt as _load_oci_config_without_prompt,
@@ -165,9 +174,6 @@ from app.settings import MODEL_SETTINGS_STORE, get_settings
 router = APIRouter(tags=["agent-runtime"])
 
 PASSPHRASE_CONFIG_KEYS = frozenset({"pass_phrase", "passphrase", "key_password"})
-MODEL_TEST_IMAGE_BYTES = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
-)
 _WEBSOCKET_COMMAND_DEDUPE_TTL_SECONDS = 300.0
 _WEBSOCKET_COMMAND_DEDUPE_MAX_ENTRIES = 2000
 _websocket_command_dedupe: dict[tuple[str, str], tuple[str, float]] = {}
@@ -686,8 +692,8 @@ async def _run_enterprise_text_model_test(
 ) -> str:
     payload = _enterprise_text_payload(
         settings,
-        prompt="モデル接続テストです。短く応答してください。",
-        context="これは Production Ready RAG のモデル接続テスト用コンテキストです。",
+        prompt=MODEL_TEST_TEXT_PROMPT,
+        context=model_test_text_context("Production Ready Agent"),
         project_ocid=connection.project_ocid,
     )
     response = await _post_enterprise_ai(settings, connection, settings.api_path, payload)
@@ -699,7 +705,7 @@ async def _run_enterprise_vision_model_test(
 ) -> str:
     payload = _enterprise_vision_payload(
         settings,
-        prompt="白い背景にある大きな図形の色を日本語で1語だけ返してください。",
+        prompt=MODEL_TEST_VISION_PROMPT,
         project_ocid=connection.project_ocid,
     )
     response = await _post_enterprise_ai(settings, connection, settings.api_path, payload)
@@ -754,10 +760,9 @@ def _enterprise_vision_payload(
     prompt: str,
     project_ocid: str = "",
 ) -> dict[str, object]:
-    image_data = base64.b64encode(MODEL_TEST_IMAGE_BYTES).decode("ascii")
     content = [
         {"type": "input_text", "text": prompt},
-        {"type": "input_image", "image_url": f"data:image/png;base64,{image_data}"},
+        {"type": "input_image", "image_url": model_test_image_data_url()},
     ]
     values = {
         "model": settings.default_vision_model_id,
@@ -882,7 +887,7 @@ async def _run_oci_embedding_model_test(
     models = import_module("oci.generative_ai_inference.models")
     client = cast(Any, _oci_genai_inference_client(settings))
     details = models.EmbedTextDetails(
-        inputs=["モデル接続テスト"],
+        inputs=[MODEL_TEST_EMBEDDING_INPUT],
         serving_mode=models.OnDemandServingMode(model_id=model_settings.embedding_model),
         compartment_id=_require_non_empty(
             _settings_str_from(settings, "oci_compartment_id"),
@@ -913,11 +918,8 @@ async def _run_oci_rerank_model_test(
     models = import_module("oci.generative_ai_inference.models")
     client = cast(Any, _oci_genai_inference_client(settings))
     details = models.RerankTextDetails(
-        input="モデル接続テスト",
-        documents=[
-            "これはモデル接続テストに関する候補文書です。",
-            "別の業務文書に関する候補文書です。",
-        ],
+        input=MODEL_TEST_RERANK_QUERY,
+        documents=list(MODEL_TEST_RERANK_DOCUMENTS),
         serving_mode=models.OnDemandServingMode(model_id=model_settings.rerank_model),
         compartment_id=_require_non_empty(
             _settings_str_from(settings, "oci_compartment_id"),
