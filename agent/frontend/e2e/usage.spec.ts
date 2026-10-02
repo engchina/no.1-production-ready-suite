@@ -71,7 +71,7 @@ for (const viewport of VIEWPORTS) {
       // Run あたりの token は、利用量を記録した Run（11 件）で割る（100,000 / 11 ≒ 9,091。前は 65,000 / 8 ≒ 8,125）。
       await expect(summary).toContainText("9,091");
       await expect(summary).toContainText("前の期間から +966");
-      await expect(page.getByTestId("usage-unrecorded")).toContainText("利用量の記録がない Run が 1 件あります");
+      await expect(page.getByTestId("usage-unrecorded")).toContainText("利用量の記録がない実行が 1 件あります");
 
       // 業務 Agent ごと（既定のタブ）。token の割合を数字でも出す。
       const agents = page.getByRole("table", { name: "業務 Agent ごとの利用量" });
@@ -110,7 +110,7 @@ test("期間を変えると、その期間で集計し直し、Run が無けれ�
   await page.locator("#usage-period").click();
   await page.getByRole("option", { name: "直近 7 日" }).click();
 
-  await expect(page.getByText("この期間の Run はありません")).toBeVisible();
+  await expect(page.getByText("この期間の実行はありません")).toBeVisible();
   const request = mockApi.lastRequest("GET", "/api/usage");
   expect(request?.searchParams.get("days")).toBe("7");
   // 日は画面のブラウザのタイムゾーンで区切る。
@@ -135,7 +135,7 @@ test("90 日を超える期間（180・365 日）を選べ、集計元を出す"
   await page.getByRole("option", { name: "直近 365 日" }).click();
 
   await expect(page.getByTestId("usage-summary")).toContainText("3,300");
-  await expect(page.getByTestId("report-source")).toHaveText("保存した Run の履歴（データベース）から集計しています。");
+  await expect(page.getByTestId("report-source")).toHaveText("保存した実行の履歴（データベース）から集計しています。");
   expect(mockApi.lastRequest("GET", "/api/usage")?.searchParams.get("days")).toBe("365");
   await page.getByRole("tab", { name: "日ごと" }).click();
   await expect(page.getByText("1 - 10 / 365 件")).toBeVisible();
@@ -149,7 +149,7 @@ test("読み込み中は経過時間と集計の形の Skeleton を出す", asyn
   });
   await page.goto("/usage");
   await expect(page.getByTestId("usage-loading")).toContainText("利用状況を読み込んでいます");
-  await expect(page.getByText("この期間の Run はありません")).toBeVisible();
+  await expect(page.getByText("この期間の実行はありません")).toBeVisible();
 });
 
 test("Run の詳細にモデルの利用量を出す", async ({ page, mockApi }) => {

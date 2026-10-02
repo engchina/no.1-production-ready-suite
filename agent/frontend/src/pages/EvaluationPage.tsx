@@ -10,7 +10,9 @@ import {
   CardHeader,
   CardTitle,
   DataTable,
+  Disclosure,
   EmptyState,
+  ErrorState,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   ListSkeleton,
@@ -355,6 +357,9 @@ function EvaluationOverview({
               <TimedLoadingState label={t("loading.evaluationSets")} testId="evaluation-sets-loading">
                 <TableSkeleton columns={4} />
               </TimedLoadingState>
+            ) : sets.error ? (
+              // 取得の失敗を「評価セットがありません」と出さない（messaging.md §3.6。#818）。
+              <ErrorState message={sets.error.message} retryLabel={t("common.retry")} onRetry={() => void sets.refetch()} />
             ) : (sets.data?.sets ?? []).length === 0 ? (
               <EmptyState
                 title={t("evaluation.sets.empty")}
@@ -415,6 +420,8 @@ function EvaluationOverview({
               <TimedLoadingState label={t("loading.evaluations")} testId="evaluations-loading">
                 <ListSkeleton rows={3} />
               </TimedLoadingState>
+            ) : jobs.error && !jobs.data ? (
+              <ErrorState message={jobs.error.message} retryLabel={t("common.retry")} onRetry={() => void jobs.refetch()} />
             ) : !jobs.data || jobs.data.total === 0 ? (
               <EmptyState title={t("evaluation.jobs.empty")} hint={t("evaluation.jobs.emptyHint")} />
             ) : (
@@ -551,7 +558,7 @@ function SetsTable({
       columns={columns}
       getRowKey={(item) => item.id}
       ariaLabel={t("evaluation.sets.label")}
-      tableClassName="w-full min-w-[720px]"
+      tableClassName="w-full min-w-[51rem]"
     />
   );
 }
@@ -616,8 +623,16 @@ function JobView({
         </CardHeader>
         <CardContent className="space-y-4">
           {job.status === "failed" ? (
+            // 1 文目に何が起きたかと対処、サーバーのエラーの本文は「詳細」に畳む（失敗なので開いて出す。messaging.md §10.3）。
             <Banner severity="danger" title={t("evaluation.summary.failed")}>
-              {job.error}
+              <div className="min-w-0 space-y-2">
+                <p>{t("evaluation.summary.failedHint")}</p>
+                {job.error ? (
+                  <Disclosure variant="plain" size="sm" summary={t("evaluation.summary.failedDetails")} defaultOpen>
+                    <p className="break-words text-xs text-fg-muted [overflow-wrap:anywhere]">{job.error}</p>
+                  </Disclosure>
+                ) : null}
+              </div>
             </Banner>
           ) : null}
           <SummaryMetrics summary={summary} previous={job.previous_summary} />
@@ -649,7 +664,8 @@ function JobView({
 function SummaryMetrics({ summary, previous }: { summary: EvaluationSummary; previous: EvaluationSummary | null }) {
   const ofTotal = t("evaluation.summary.ofTotal", { total: formatNumber(summary.total) });
   return (
-    <div className="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-3 xl:grid-cols-6" data-testid="evaluation-summary">
+    // 統計のタイルはカードの幅を等分する（6 個なので 2 / 3 列。design-system README §4「wide 画面の 100% 充填」）。
+    <div className="grid grid-cols-2 gap-x-5 gap-y-4 xl:grid-cols-3" data-testid="evaluation-summary">
       <Metric
         label={t("evaluation.summary.passRate")}
         value={formatRate(summary.pass_rate)}
@@ -658,7 +674,7 @@ function SummaryMetrics({ summary, previous }: { summary: EvaluationSummary; pre
       <Metric
         label={t("evaluation.summary.averageScore")}
         value={summary.average_score === null ? "—" : summary.average_score.toFixed(2)}
-        detail={previous ? scoreDelta(summary.average_score, previous.average_score) : "0〜1"}
+        detail={previous ? scoreDelta(summary.average_score, previous.average_score) : t("evaluation.summary.scoreRange")}
       />
       <Metric
         label={t("evaluation.summary.toolAccuracy")}
@@ -740,7 +756,7 @@ function ResultsTable({
       columns={columns}
       getRowKey={(result) => result.case.id}
       ariaLabel={t("evaluation.results.label")}
-      tableClassName="w-full min-w-[760px]"
+      tableClassName="w-full min-w-[54rem]"
       resetKey={jobId}
     />
   );
@@ -947,7 +963,7 @@ function JobsTable({
       rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
       ariaLabel={t("evaluation.jobs.label")}
       scrollAriaLabel={listScrollLabel(t("evaluation.jobs.label"))}
-      tableClassName="w-full min-w-[720px]"
+      tableClassName="w-full min-w-[51rem]"
       stickyHeader
       visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
     />

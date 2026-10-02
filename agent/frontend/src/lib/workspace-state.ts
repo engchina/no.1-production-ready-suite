@@ -33,7 +33,7 @@ export const WORKSPACE_FIELDS = {
   // 一覧のページ番号（#265）。一覧 → エディタ → 一覧の移動と再読込で同じページに戻す。
   lists: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "plugins", "marketplaces", "evaluationSets", "evaluationResults", "evaluationJobs", "automations", "feedback", "usage", "apiKeys"],
   // 一覧の絞り込みの検索語（SearchField が確定した値。#535 / #808）。
-  listSearch: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "plugins", "marketplaces", "marketplacePlugins", "automations", "apiKeys"],
+  listSearch: ["agents", "runs", "approvals", "tools", "mcpServers", "skills", "plugins", "marketplaces", "marketplacePlugins", "toolPolicy", "automations", "apiKeys"],
   // 一覧の状態の絞り込み（実行履歴の状態・承認の保留中 / 判断済み。#808）。
   listFilter: ["runs", "approvals"],
 } as const;

@@ -170,7 +170,7 @@ for (const viewport of VIEWPORTS) {
     report.matched = 23;
     await page.goto("/feedback");
 
-    await expect(page.getByTestId("report-source")).toHaveText("保存した Run の履歴（データベース）から集計しています。");
+    await expect(page.getByTestId("report-source")).toHaveText("保存した実行の履歴（データベース）から集計しています。");
     const table = page.getByRole("table", { name: "フィードバックの一覧" });
     await expect(table.getByRole("row", { name: /run-00/ })).toBeVisible();
     const pager = page.getByTestId("feedback-pagination");
