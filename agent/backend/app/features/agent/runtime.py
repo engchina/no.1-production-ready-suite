@@ -1130,9 +1130,10 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         with self._connect_oracle() as connection, connection.cursor() as cursor:
             cursor.execute(query, checkpoint_key=self._oracle_checkpoint_key)
             row = cursor.fetchone()
-        if row is None:
+            # CLOB は接続を閉じる前に読む（閉じた後に読むと DPY-1001。#765）。
+            snapshot_json = _oracle_lob_to_text(row[0]) if row is not None else None
+        if snapshot_json is None:
             return
-        snapshot_json = _oracle_lob_to_text(row[0])
         try:
             snapshot = AgentRuntimeSnapshot.model_validate_json(snapshot_json)
         except ValueError as exc:
@@ -1299,16 +1300,16 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
                 offset=offset,
                 limit=limit,
             )
-
-        records: list[RuntimeToolCallAuditRecord] = []
-        for row in rows:
-            record = _runtime_audit_record_from_projection_row(
-                row,
-                artifact_ids_by_step=artifact_ids_by_step,
-            )
-            if record is None:
-                continue
-            records.append(record)
+            # CLOB の列は接続を閉じる前に読む（閉じた後に読むと DPY-1001。#765）。
+            records: list[RuntimeToolCallAuditRecord] = []
+            for row in rows:
+                record = _runtime_audit_record_from_projection_row(
+                    row,
+                    artifact_ids_by_step=artifact_ids_by_step,
+                )
+                if record is None:
+                    continue
+                records.append(record)
 
         return RuntimeToolCallAuditData(total=total, offset=offset, limit=limit, records=records)
 
