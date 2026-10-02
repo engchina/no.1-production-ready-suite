@@ -2,12 +2,11 @@
 
 ログイン・セッション・CSRF・構成管理者・ユーザー / ロールの共通操作・製品をまたぐ権限昇格の防止は
 platform の `pr_system_settings.auth.service.AuthService`。ここには Agent の実効権限と対象範囲
-（エージェント・業務ビュー）の組み立てと、権限管理（ロールの権限・対象範囲の更新）だけを置く。
+（エージェント）の組み立てと、権限管理（ロールの権限・対象範囲の更新）だけを置く。
 """
 
 from __future__ import annotations
 
-import re
 import threading
 from collections.abc import Collection, Iterable, Sequence
 from pathlib import Path
@@ -34,15 +33,11 @@ from .permissions import (
 )
 from .store import (
     SECURITY_SCHEMA_OBJECT_NAMES,
-    InMemorySecurityStore,
     OracleSecurityStore,
     SecurityConflict,
     SecurityNotFound,
     SecurityStore,
 )
-
-# 業務ビューは Agent にマスタがない（Run の metadata の文字列）。ID の形式だけを確認する。
-BUSINESS_VIEW_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 
 
 class SecurityService(AuthService):
@@ -102,11 +97,6 @@ class SecurityService(AuthService):
                 if unrestricted
                 else frozenset(item for role in agent_roles for item in role.agent_ids)
             ),
-            allowed_business_view_ids=(
-                None
-                if unrestricted
-                else frozenset(item for role in agent_roles for item in role.business_view_ids)
-            ),
         )
 
     def login(
@@ -140,9 +130,7 @@ class SecurityService(AuthService):
             return False
         if not expand_permissions(role.permissions).issubset(actor.permissions):
             return False
-        return _targets_within(role.agent_ids, actor.allowed_agent_ids) and _targets_within(
-            role.business_view_ids, actor.allowed_business_view_ids
-        )
+        return _targets_within(role.agent_ids, actor.allowed_agent_ids)
 
     def _assert_actor_can_restore_role(
         self, actor: PlatformPrincipal, role: PlatformRoleRecord
@@ -162,7 +150,6 @@ class SecurityService(AuthService):
         expected_version: int,
         permissions: Iterable[str],
         agent_ids: Iterable[str],
-        business_view_ids: Iterable[str],
         known_agent_ids: Collection[str],
         actor: PlatformPrincipal,
         request_id: str = "",
@@ -170,8 +157,8 @@ class SecurityService(AuthService):
     ) -> RoleRecord:
         """権限管理画面の保存。ロールの Agent 権限と対象範囲だけを置き換える。
 
-        - 組み込み / アーカイブ済みのロールは 409、未知の権限コード・エージェント ID と
-          形式が不正な業務ビュー ID は 400。
+        - 組み込み / アーカイブ済みのロールは 409、未知の権限コードと、新しく足す未知の
+          エージェント ID は 400。割り当て済みで削除されたエージェントは黙って外す（#750）。
         - SYSTEM_ADMIN 以外は、自分が持たない権限・自分の範囲外の対象を足すと 403。
         - `agent.admin` を含むロールは全対象を利用できるため、対象リストを空にする。
         """
@@ -187,25 +174,17 @@ class SecurityService(AuthService):
         if unknown:
             raise SecurityApiError(400, f"未登録の権限コードです: {', '.join(sorted(unknown))}")
         normalized_permissions = normalize_permission_codes(requested_permissions)
-        next_agent_ids = _clean_ids(agent_ids)
-        next_business_view_ids = _clean_ids(business_view_ids)
-        unknown_agents = next_agent_ids - set(known_agent_ids)
+        known = set(known_agent_ids)
+        requested_agent_ids = _clean_ids(agent_ids)
+        unknown_agents = requested_agent_ids - known - current.agent_ids
         if unknown_agents:
             raise SecurityApiError(
                 400, f"エージェントが見つかりません: {', '.join(sorted(unknown_agents))}"
             )
-        invalid_views = {
-            item for item in next_business_view_ids if not BUSINESS_VIEW_ID_PATTERN.match(item)
-        }
-        if invalid_views:
-            raise SecurityApiError(
-                400,
-                "業務ビュー ID は英数字と . _ : - の 64 文字以内で指定してください: "
-                + ", ".join(sorted(invalid_views)),
-            )
+        # 割り当て済みのまま削除されたエージェント（古い版の残り）は保存しない。
+        next_agent_ids = requested_agent_ids & known
         if grants_all_targets(normalized_permissions):
             next_agent_ids = set()
-            next_business_view_ids = set()
         principal = as_principal(actor)
         if not principal.is_system_admin:
             added_permissions = expand_permissions(normalized_permissions) - expand_permissions(
@@ -219,13 +198,6 @@ class SecurityService(AuthService):
                 raise SecurityApiError(
                     403, "自分が利用できないエージェントをロールに追加することはできません。"
                 )
-            if not _targets_within(
-                next_business_view_ids - current.business_view_ids,
-                principal.allowed_business_view_ids,
-            ):
-                raise SecurityApiError(
-                    403, "自分が利用できない業務ビューをロールに追加することはできません。"
-                )
         updated = RoleRecord(
             role_id=current.role_id,
             role_code=current.role_code,
@@ -236,20 +208,15 @@ class SecurityService(AuthService):
             version=current.version,
             permissions=normalized_permissions,
             agent_ids=next_agent_ids,
-            business_view_ids=next_business_view_ids,
         )
         try:
             return as_role(self.store.update_role(updated, expected_version=expected_version))
         except (SecurityConflict, SecurityNotFound) as exc:
             raise self._store_error(exc) from exc
 
-    def assigned_business_view_ids(self) -> set[str]:
-        """ロールに割り当て済みの業務ビュー ID（アーカイブ済みのロールを含む）。"""
-        return {
-            item
-            for role in self.list_roles(include_archived=True)
-            for item in role.business_view_ids
-        }
+    def remove_agent_assignments(self, agent_id: str) -> int:
+        """削除したエージェントを全ロールの対象範囲から外す（#750）。"""
+        return self.store.remove_agent_assignments(agent_id)
 
 
 def _clean_ids(values: Iterable[str]) -> set[str]:
@@ -268,18 +235,15 @@ _SERVICE_LOCK = threading.Lock()
 def get_security_service() -> SecurityService:
     """process で 1 つの service。
 
-    production は Oracle の `PLATFORM_*` / `AGENT_ROLE_*`（共通 `.env` の `PLATFORM_ORACLE_*`）、
-    local は Oracle を使わない InMemory の store（local ではログインしないため使われない）。
+    RAG / NL2SQL と同じく、local でも production でも Oracle の `PLATFORM_*` / `AGENT_ROLE_*`
+    （共通 `.env` の `PLATFORM_ORACLE_*`）を使う（#750）。local はログインを省略するだけで、
+    ユーザー管理・ロール管理・権限管理と、MCP のサービス利用者の解決は同じ DB を読む。
     """
     global _SERVICE
     if _SERVICE is None:
         with _SERVICE_LOCK:
             if _SERVICE is None:
-                settings = settings_module.get_settings()
-                store: SecurityStore = (
-                    OracleSecurityStore() if settings.app_auth_enabled else InMemorySecurityStore()
-                )
-                _SERVICE = SecurityService(store, settings)
+                _SERVICE = SecurityService(OracleSecurityStore(), settings_module.get_settings())
     return _SERVICE
 
 

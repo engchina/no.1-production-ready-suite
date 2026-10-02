@@ -4,8 +4,8 @@
 ここにはロールに付ける Agent のデータだけを置く。
 
 - 権限コード（`AGENT_ROLE_PERMISSIONS`。製品をまたぐ権限昇格の判定も読む）
-- 対象範囲のエージェント（`AGENT_ROLE_AGENTS`）
-- 対象範囲の業務ビュー（`AGENT_ROLE_BUSINESS_VIEWS`）
+- 対象範囲のエージェント（`AGENT_ROLE_AGENTS`。エージェントの削除で
+  `remove_agent_assignments` が消す）
 
 接続は共通 `.env` の `PLATFORM_ORACLE_*`（`app.oracle_connection`）。Runtime repository の
 `AGENT_RUNTIME_ORACLE_*` とは独立している。
@@ -34,8 +34,7 @@ from .domain import RoleRecord, as_role
 
 ROLE_PERMISSIONS_TABLE = "AGENT_ROLE_PERMISSIONS"
 ROLE_AGENTS_TABLE = "AGENT_ROLE_AGENTS"
-ROLE_BUSINESS_VIEWS_TABLE = "AGENT_ROLE_BUSINESS_VIEWS"
-AGENT_SECURITY_TABLES = (ROLE_PERMISSIONS_TABLE, ROLE_AGENTS_TABLE, ROLE_BUSINESS_VIEWS_TABLE)
+AGENT_SECURITY_TABLES = (ROLE_PERMISSIONS_TABLE, ROLE_AGENTS_TABLE)
 SECURITY_SCHEMA_OBJECT_NAMES = frozenset(PLATFORM_AUTH_TABLES) | frozenset(AGENT_SECURITY_TABLES)
 
 # 製品をまたぐ権限昇格の判定（platform）が読むテーブル名と一致させる。
@@ -52,13 +51,24 @@ class SecurityStore(AuthStore, Protocol):
     def update_role(self, role: PlatformRoleRecord, *, expected_version: int) -> RoleRecord: ...
     def archive_role(self, role_id: str, *, expected_version: int) -> RoleRecord: ...
     def restore_role(self, role_id: str, *, expected_version: int) -> RoleRecord: ...
+    def remove_agent_assignments(self, agent_id: str) -> int: ...
 
 
 @dataclass
 class InMemorySecurityStore(InMemoryAuthStore):
-    """local mode と単体テスト用。production は OracleSecurityStore を使う。"""
+    """単体テスト用。local / production はどちらも OracleSecurityStore を使う（#750）。"""
 
     role_class: type[PlatformRoleRecord] = RoleRecord
+
+    def remove_agent_assignments(self, agent_id: str) -> int:
+        removed = 0
+        with self._lock:
+            for role in self.roles.values():
+                agent_role = as_role(role)
+                if agent_id in agent_role.agent_ids:
+                    agent_role.agent_ids.discard(agent_id)
+                    removed += 1
+        return removed
 
     def get_role(self, role_id: str) -> RoleRecord | None:
         role = super().get_role(role_id)
@@ -116,11 +126,6 @@ class OracleSecurityStore(OracleAuthStore):
         permissions = {str(row[0]) for row in cursor.fetchall()}
         cursor.execute("SELECT AGENT_ID FROM AGENT_ROLE_AGENTS WHERE ROLE_ID = :role_id", binds)
         agent_ids = {str(row[0]) for row in cursor.fetchall()}
-        cursor.execute(
-            "SELECT BUSINESS_VIEW_ID FROM AGENT_ROLE_BUSINESS_VIEWS WHERE ROLE_ID = :role_id",
-            binds,
-        )
-        business_view_ids = {str(row[0]) for row in cursor.fetchall()}
         return RoleRecord(
             role_id=role.role_id,
             role_code=role.role_code,
@@ -131,7 +136,6 @@ class OracleSecurityStore(OracleAuthStore):
             version=role.version,
             permissions=permissions,
             agent_ids=agent_ids,
-            business_view_ids=business_view_ids,
         )
 
     def _replace_role_details(self, cursor: Any, role: PlatformRoleRecord) -> None:
@@ -148,12 +152,6 @@ class OracleSecurityStore(OracleAuthStore):
                 "INSERT INTO AGENT_ROLE_AGENTS (ROLE_ID, AGENT_ID) VALUES (:role_id, :agent_id)",
                 {"role_id": agent_role.role_id, "agent_id": agent_id},
             )
-        for business_view_id in sorted(agent_role.business_view_ids):
-            cursor.execute(
-                "INSERT INTO AGENT_ROLE_BUSINESS_VIEWS (ROLE_ID, BUSINESS_VIEW_ID) "
-                "VALUES (:role_id, :business_view_id)",
-                {"role_id": agent_role.role_id, "business_view_id": business_view_id},
-            )
 
     def _before_delete_role(self, cursor: Any, role_id: str) -> None:
         # FK は ON DELETE CASCADE だが、ロール本体の削除と同じトランザクションで明示的に消す。
@@ -164,4 +162,13 @@ class OracleSecurityStore(OracleAuthStore):
         binds = {"role_id": role_id}
         cursor.execute("DELETE FROM AGENT_ROLE_PERMISSIONS WHERE ROLE_ID = :role_id", binds)
         cursor.execute("DELETE FROM AGENT_ROLE_AGENTS WHERE ROLE_ID = :role_id", binds)
-        cursor.execute("DELETE FROM AGENT_ROLE_BUSINESS_VIEWS WHERE ROLE_ID = :role_id", binds)
+
+    def remove_agent_assignments(self, agent_id: str) -> int:
+        """削除したエージェントを全ロールの対象範囲から外す（ロールの版は変えない。#750）。"""
+        with self.connection(ROLE_AGENTS_TABLE) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM AGENT_ROLE_AGENTS WHERE AGENT_ID = :agent_id", {"agent_id": agent_id}
+            )
+            removed = int(cursor.rowcount or 0)
+            connection.commit()
+        return removed

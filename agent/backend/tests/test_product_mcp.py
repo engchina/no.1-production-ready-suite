@@ -12,21 +12,16 @@ from typing import Any, Literal
 import pytest
 from mcp_support import (
     SERVICE_TOKEN_SECRET,
-    FakeProductMcp,
     McpToolError,
     fake_product_mcp,
 )
-from pr_system_settings.auth.domain import CONFIGURED_SYSTEM_ADMIN_USER_UUID
 from pr_system_settings.auth.service_token import verify_service_token
 from pytest import MonkeyPatch
 from security_support import (
     ProductionAuth,
     client,
     enable_production_auth,
-    enable_signed_identity,
     login,
-    login_configured_admin,
-    signed_identity_headers,
 )
 
 import app.features.agent.tools as tools_module
@@ -444,19 +439,8 @@ def test_direct_tool_invoke_uses_logged_in_user(
     assert mcp.calls_of("rag_search")[0]["claims"]["sub"] == operator.user_uuid
 
 
-def test_run_created_by_external_rbac_has_no_user(monkeypatch: MonkeyPatch) -> None:
-    enable_production_auth(monkeypatch, rbac_enabled=True)
-    try:
-        enable_signed_identity(monkeypatch)
-        run = _run_with_nl2sql(signed_identity_headers(sub="svc-operator", roles=["operator"]))
-    finally:
-        set_security_service(None)
-
-    assert run["created_by_user_uuid"] is None
-
-
 # ---------------------------------------------------------------------------
-# Binding 経由の MCP と権限管理の業務ビューの候補
+# Binding 経由の MCP
 # ---------------------------------------------------------------------------
 
 
@@ -541,50 +525,3 @@ def test_binding_mcp_hides_tools_that_require_approval(
     )
     assert denied["error"]["code"] == -32601
     assert mcp.calls_of("nl2sql_query") == []
-
-
-def _access_targets(headers: dict[str, str]) -> dict[str, Any]:
-    response = client.get("/api/security/access-targets/business-views", headers=headers)
-    assert response.status_code == 200, response.text
-    body: dict[str, Any] = response.json()
-    return body
-
-
-def test_access_targets_include_rag_business_views_as_viewer(
-    monkeypatch: MonkeyPatch, auth: ProductionAuth
-) -> None:
-    mcp = fake_product_mcp(monkeypatch)
-
-    body = _access_targets(login_configured_admin())
-
-    views = {item["id"]: item["name"] for item in body["data"]["items"]}
-    assert views["bv-sales"] == "営業の業務ビュー"
-    assert body["warning_messages"] == []
-    assert body["data"]["warnings"] == []
-    [call] = mcp.calls_of("rag_list_business_views")
-    assert call["arguments"] == {"limit": 200}
-    # 画面を開いた管理者として RAG を呼ぶ。
-    assert call["claims"]["sub"] == CONFIGURED_SYSTEM_ADMIN_USER_UUID
-
-
-def test_access_targets_warn_when_rag_fails_or_is_not_configured(
-    monkeypatch: MonkeyPatch, auth: ProductionAuth
-) -> None:
-    auth.create_role([], business_view_ids=["bv-assigned"])
-    mcp: FakeProductMcp = fake_product_mcp(monkeypatch)
-    mcp.tool_call_statuses.extend([401] * 4)
-    headers = login_configured_admin()
-
-    failed = _access_targets(headers)
-    monkeypatch.setattr(runtime_config_store, "_rag", ExternalRagRuntimeConfig(mcp_url=None))
-    unconfigured = _access_targets(headers)
-
-    for body in (failed, unconfigured):
-        view_ids = [item["id"] for item in body["data"]["items"]]
-        assert "bv-assigned" in view_ids
-        assert "bv-sales" not in view_ids
-        assert len(body["warning_messages"]) == 1
-        # 画面が候補を出したまま警告を表示できるよう、data にも同じ警告を入れる（#240）。
-        assert body["data"]["warnings"] == body["warning_messages"]
-    assert "RAG の業務ビューを取得できませんでした" in failed["warning_messages"][0]
-    assert "設定されていない" in unconfigured["warning_messages"][0]

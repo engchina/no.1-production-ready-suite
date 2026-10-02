@@ -154,7 +154,6 @@ export interface CurrentUserPayload {
   is_system_admin: boolean;
   permissions: string[];
   allowed_agent_ids: string[] | null;
-  allowed_business_view_ids: string[] | null;
   debug_mode: boolean;
   password_change_allowed: boolean;
 }
@@ -170,7 +169,6 @@ export const LOCAL_CURRENT_USER: CurrentUserPayload = {
   is_system_admin: true,
   permissions: ALL_PERMISSION_CODES,
   allowed_agent_ids: null,
-  allowed_business_view_ids: null,
   debug_mode: true,
   password_change_allowed: false,
 };
@@ -190,7 +188,6 @@ export function dbUser(overrides: Partial<CurrentUserPayload> = {}): CurrentUser
     is_system_admin: false,
     permissions: [],
     allowed_agent_ids: [],
-    allowed_business_view_ids: [],
     debug_mode: false,
     password_change_allowed: true,
     ...overrides,
@@ -208,7 +205,6 @@ export const SYSTEM_ADMIN_ROLE: Json = {
   version: 1,
   permissions: [],
   agent_ids: [],
-  business_view_ids: [],
 };
 
 export const OPERATOR_ROLE: Json = {
@@ -221,7 +217,6 @@ export const OPERATOR_ROLE: Json = {
   version: 3,
   permissions: ["agent.runs.operate", "menu.agents"],
   agent_ids: ["default"],
-  business_view_ids: ["sales-east"],
 };
 
 export const SECURITY_USERS: Json[] = [
@@ -262,13 +257,11 @@ export const SECURITY_USERS: Json[] = [
 ];
 
 /**
- * 権限管理の対象の候補（`GET /api/security/access-targets/{agents,business-views}` の元データ。#608）。
- * 業務ビューは Run に現れた ID（ロールに割り当て済みの ID はモックが足す）。
+ * 権限管理の対象の候補（`GET /api/security/access-targets/agents` の元データ。#608）。
  */
 export const ACCESS_TARGETS: Json = {
   agents: [
     { id: "default", name: "汎用業務 Agent", description: "既定 Agent", status: "enabled" },
     { id: "finance", name: "経理 Agent", description: null, status: "disabled" },
   ],
-  business_views: [{ id: "sales-east", name: "sales-east" }],
 };

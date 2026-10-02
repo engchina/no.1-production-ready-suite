@@ -27,7 +27,7 @@ Business Agent ───────────────→ Skill → MCP / 
 - Runtime service management: 第三者の Runtime イメージ（固定 digest）の profile・healthcheck・volume・静的操作 allowlist（`docker-compose.yml`）。
 - Snapshot v2: Runtime/Binding を含む Control Plane backup。v1 snapshot/manifest を移行。
 - ログインと権限: RAG / NL2SQL と同じ共通認証（`AGENT_AUTH_MODE=production`）。ロールごとの権限と、
-  エージェント・業務ビュー単位の対象範囲（「セキュリティ設定 > 権限管理」）。詳細は
+  エージェント単位の対象範囲（「セキュリティ設定 > 権限管理」）。local でもユーザー・ロールは共通 DB。詳細は
   [docs/security-rbac.md](docs/security-rbac.md)。
 
 設計詳細は [docs/agent-control-plane-design.md](docs/agent-control-plane-design.md) を参照してください。
@@ -213,9 +213,9 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 | `GET` | `/api/health` / `/api/ready` | 稼働確認・readiness（ログイン不要） |
 | `GET` | `/api/ready/database` | 画面の DB ゲートが使う DB の状態（3製品共通の判定と契約。常に 200。ログイン不要。#325）。`ok` / `not_configured` / `unreachable` を返す（Agent はシステムテーブルの確認をまだ持たないため `setup_required` は返さない）。ローカル認証（`AGENT_AUTH_MODE=local`）は共通 DB を使わないため、接続を試さず `ok`（`detail=local_auth`）を返し、画面のゲートは出ない。画面はシステム設定の 5 画面以外で、DB が使えるまで本文を案内に替える |
 | `POST` | `/api/auth/login` / `/api/auth/logout` / `/api/auth/password/change` | ログイン・ログアウト・パスワード変更（共通認証） |
-| `GET` | `/api/auth/me` | ログイン中の利用者（実効権限・`allowed_agent_ids` / `allowed_business_view_ids`） |
+| `GET` | `/api/auth/me` | ログイン中の利用者（実効権限・`allowed_agent_ids`） |
 | `GET/POST/PATCH/DELETE` | `/api/security/users*` / `/api/security/roles*` | ユーザー管理・ロール管理（3製品共通） |
-| `GET` | `/api/security/permissions` / `/api/security/access-targets/{agents,business-views}` | 権限カタログ・権限管理で選べるエージェントと業務ビュー（`q` / `limit` / `offset` / `ids` で検索とページング。#608） |
+| `GET` | `/api/security/permissions` / `/api/security/access-targets/agents` | 権限カタログ・権限管理で選べるエージェント（`q` / `limit` / `offset` / `ids` で検索とページング。#608） |
 | `PUT` | `/api/security/roles/{role_id}/access` | ロールの Agent 権限と対象範囲 |
 | `GET/POST/PATCH` | `/api/runtimes` | Runtime 定義 |
 | `GET` | `/api/runtimes/{id}/status` | capability/status probe |
@@ -240,8 +240,8 @@ Agent Control Plane は専用の Compute 1 台に配備します。ログイン�
 
 ## セキュリティ境界
 
-- production（`AGENT_AUTH_MODE=production`）は全 API を既定拒否の権限 manifest で守ります。Cookie のないリクエストは
-  `AGENT_RBAC_ENABLED=true` かつ信頼できる identity（HMAC 署名 header・JWT・外部 policy）があるときだけその identity で判定し、それ以外は 401 です（`X-Agent-Roles` の自己申告は信じません）（[docs/security-rbac.md](docs/security-rbac.md)）。
+- production（`AGENT_AUTH_MODE=production`）は全 API を既定拒否の権限 manifest で守ります。Cookie のないリクエストは 401 です
+  （RAG / NL2SQL と同じ。`X-Agent-Roles` などの header は使いません）（[docs/security-rbac.md](docs/security-rbac.md)）。
 - WebSocket は Cookie のセッションで `Origin` と `Host` の一致を必須にします。承認の決定者はログイン中の利用者です。
 - Runtime secret は環境変数値ではなく env 名で参照し、API/snapshot/log に値を出しません。
 - Binding MCP は Binding 固有 token と Skill allowlist の両方を検証します。

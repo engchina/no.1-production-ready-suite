@@ -1,8 +1,8 @@
 """Agent の認証/RBAC のドメイン型（#215）。
 
 ユーザー・ロール・セッションは platform の `PLATFORM_*`（`pr_system_settings.auth`）。
-ここではロールに Agent の権限と対象範囲（エージェント・業務ビュー）を、利用者に実効の
-対象範囲を足す。
+ここではロールに Agent の権限と対象範囲（エージェント）を、利用者に実効の対象範囲を足す。
+業務ビューの判定は RAG が Run の利用者のサービストークンで行う（#750）。
 """
 
 from __future__ import annotations
@@ -21,11 +21,10 @@ from pr_system_settings.auth.domain import RoleRecord as PlatformRoleRecord
 
 @dataclass(slots=True)
 class RoleRecord(PlatformRoleRecord):
-    """共通のロールに、Agent の権限と対象範囲（エージェント・業務ビュー）を足す。"""
+    """共通のロールに、Agent の権限と対象範囲（エージェント）を足す。"""
 
     permissions: set[str] = field(default_factory=set)
     agent_ids: set[str] = field(default_factory=set)
-    business_view_ids: set[str] = field(default_factory=set)
 
 
 @dataclass(slots=True)
@@ -37,15 +36,10 @@ class Principal(PlatformPrincipal):
     """
 
     allowed_agent_ids: frozenset[str] | None = None
-    allowed_business_view_ids: frozenset[str] | None = None
 
     def can_use_agent(self, agent_id: str) -> bool:
         allowed = self.allowed_agent_ids
         return allowed is None or agent_id in allowed
-
-    def can_use_business_view(self, business_view_id: str) -> bool:
-        allowed = self.allowed_business_view_ids
-        return allowed is None or business_view_id in allowed
 
 
 def as_role(role: PlatformRoleRecord) -> RoleRecord:

@@ -18,15 +18,11 @@ from app.observability import (
     stop_trace_export_retry_worker,
 )
 from app.readiness import readiness_checks
-from app.security.dependencies import untrusted_external_rbac_warning
 from app.settings import get_settings
 
 settings = get_settings()
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
-_external_rbac_warning = untrusted_external_rbac_warning(settings)
-if _external_rbac_warning:
-    logger.warning(_external_rbac_warning)
 
 
 @asynccontextmanager

@@ -24,17 +24,15 @@ from security_support import (
     ProductionAuth,
     client,
     enable_production_auth,
-    enable_signed_identity,
     login,
     login_configured_admin,
     session_headers,
-    signed_identity_headers,
 )
 
 import app.features.agent.router as agent_router
 from app.cli import agent_security_migrate
 from app.features.agent.control_plane import RuntimeBinding, runtime_binding_registry
-from app.features.agent.runtime import AgentProfile, RunCreateRequest, runtime_repository
+from app.features.agent.runtime import AgentProfile, runtime_repository
 from app.main import app
 from app.security import dependencies as security_dependencies
 from app.security.migrations import AGENT_SECURITY_DDL
@@ -42,7 +40,6 @@ from app.security.permissions import (
     ALL_PERMISSION_CODES,
     AUTHENTICATED_WITHOUT_PERMISSION,
     CAPABILITY_ROLES,
-    EXTERNAL_ROLE_READ_MENUS,
     OPEN_API_OPERATIONS,
     PERMISSION_CATALOG,
     PUBLIC_API_PATHS,
@@ -52,7 +49,6 @@ from app.security.permissions import (
     WEBSOCKET_PERMISSIONS,
     expand_permissions,
     permission_for_route,
-    permissions_for_roles,
 )
 from app.security.service import set_security_service
 from app.settings import get_settings
@@ -63,12 +59,6 @@ HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 @pytest.fixture
 def auth(monkeypatch: MonkeyPatch) -> Iterator[ProductionAuth]:
     yield enable_production_auth(monkeypatch)
-    set_security_service(None)
-
-
-@pytest.fixture
-def auth_with_external_rbac(monkeypatch: MonkeyPatch) -> Iterator[ProductionAuth]:
-    yield enable_production_auth(monkeypatch, rbac_enabled=True)
     set_security_service(None)
 
 
@@ -259,16 +249,13 @@ def test_manifest_key_assignments() -> None:
 
 
 def test_retired_permission_codes_are_not_in_catalog_or_manifest() -> None:
-    """廃止した `menu.dashboard`（#262）はカタログ・implies・manifest・外部ロールに現れない。"""
+    """廃止した `menu.dashboard`（#262）はカタログ・implies・manifest に現れない。"""
     assert RETIRED_PERMISSION_CODES == ("menu.dashboard",)
     retired = set(RETIRED_PERMISSION_CODES)
     assert not retired & ALL_PERMISSION_CODES
     assert all(not retired & set(item.implies) for item in PERMISSION_CATALOG)
     for permissions in [*ROUTE_PERMISSIONS.values(), *WEBSOCKET_PERMISSIONS.values()]:
         assert not retired & permissions
-    assert not retired & EXTERNAL_ROLE_READ_MENUS
-    # 外部連携のロールも廃止コードを受け取らない。
-    assert not retired & permissions_for_roles({"admin", "viewer"})
     assert expand_permissions({"menu.dashboard"}) == set()
 
 
@@ -290,10 +277,6 @@ def test_capabilities_map_to_legacy_roles_and_imply_menus() -> None:
     # メニュー権限は capability を暗黙に含まない（昇格しない）。
     assert expand_permissions({"menu.runs"}) == {"menu.runs"}
     assert expand_permissions({"unknown.code"}) == set()
-    # 外部連携のロールは capability と Control Plane の読み取りメニュー。未知のロールは空。
-    assert "agent.runs.operate" in permissions_for_roles({"Operator"})
-    assert "menu.security_users" not in permissions_for_roles({"admin"})
-    assert permissions_for_roles({"guest"}) == set()
 
 
 def test_unclassified_route_is_denied_even_for_system_admin(
@@ -317,8 +300,8 @@ def test_unclassified_route_is_denied_even_for_system_admin(
 # ---------------------------------------------------------------------------
 
 
-def test_production_without_cookie_and_rbac_disabled_is_401(auth: ProductionAuth) -> None:
-    """Cookie がなく外部連携の RBAC も無効なら、どの保護 API も 401（全開放にしない）。"""
+def test_production_without_cookie_is_401(auth: ProductionAuth) -> None:
+    """production で Cookie がなければ、どの保護 API も 401（全開放にしない）。"""
     for method, path in (
         ("GET", "/api/runs"),
         ("GET", "/api/agents"),
@@ -358,7 +341,6 @@ def test_database_user_login_me_and_logout(auth: ProductionAuth) -> None:
         "operator1",
         ["agent.runs.operate", "menu.agents"],
         agent_ids=["default"],
-        business_view_ids=["bv-1"],
     )
     login_response = client.post(
         "/api/auth/login", json={"login_user_id": "operator1", "password": USER_PASSWORD}
@@ -374,7 +356,7 @@ def test_database_user_login_me_and_logout(auth: ProductionAuth) -> None:
         "menu.runs",
     }
     assert data["allowed_agent_ids"] == ["default"]
-    assert data["allowed_business_view_ids"] == ["bv-1"]
+    assert "allowed_business_view_ids" not in data
     assert data["debug_mode"] is False
     assert data["password_change_allowed"] is True
     headers = session_headers(login_response)
@@ -415,7 +397,6 @@ def test_configured_system_admin_login_has_all_permissions_and_no_scope(
     assert data["is_system_admin"] is True
     assert set(data["permissions"]) == set(ALL_PERMISSION_CODES)
     assert data["allowed_agent_ids"] is None
-    assert data["allowed_business_view_ids"] is None
     # 構成管理者の token は Agent 固有の接頭辞（他製品の token と混ざらない）。
     assert str(response.cookies.get("agent_session")).startswith("agent-system-admin-v1.")
     headers = session_headers(response)
@@ -423,15 +404,18 @@ def test_configured_system_admin_login_has_all_permissions_and_no_scope(
     assert client.get("/api/runtime/snapshot", headers=headers).status_code == 200
 
 
-def test_invalid_session_cookie_is_401_even_with_external_rbac(
-    auth_with_external_rbac: ProductionAuth,
-) -> None:
-    """Cookie があるときは Cookie で判定し、header の RBAC に切り替えない。"""
-    response = client.get(
-        "/api/runs",
-        headers={"cookie": "agent_session=tampered", "X-Agent-Roles": "admin"},
+def test_invalid_session_cookie_is_401_and_headers_are_not_trusted(auth: ProductionAuth) -> None:
+    """Cookie が不正なら 401。`X-Agent-Roles` などの自己申告の header は使わない（#750）。"""
+    for headers in (
+        {"cookie": "agent_session=tampered", "X-Agent-Roles": "admin"},
+        {"X-Agent-Roles": "admin", "X-Agent-Business-Views": "*"},
+        {"X-Agent-Actor": "ops"},
+    ):
+        assert client.get("/api/runs", headers=headers).status_code == 401, headers
+    assert (
+        client.post("/api/runs", json={"goal": "x"}, headers={"X-Agent-Roles": "admin"}).status_code
+        == 401
     )
-    assert response.status_code == 401
 
 
 def test_permission_denied_returns_403(auth: ProductionAuth) -> None:
@@ -488,7 +472,6 @@ def test_state_changing_request_requires_csrf_token(auth: ProductionAuth) -> Non
     data = created.json()["data"]
     assert data["permissions"] == []
     assert data["agent_ids"] == []
-    assert data["business_view_ids"] == []
 
 
 def test_forced_password_change_blocks_other_apis(auth: ProductionAuth) -> None:
@@ -519,121 +502,31 @@ def test_local_mode_uses_all_permissions_without_login() -> None:
     assert data["is_system_admin"] is True
     assert set(data["permissions"]) == set(ALL_PERMISSION_CODES)
     assert data["allowed_agent_ids"] is None
-    assert data["allowed_business_view_ids"] is None
     assert data["password_change_allowed"] is False
     # 従来どおり API はログインなしで使える。
     assert client.get("/api/runs").status_code == 200
 
 
+def test_local_mode_uses_oracle_security_store(monkeypatch: MonkeyPatch) -> None:
+    """local でもユーザー・ロールは Oracle の PLATFORM_*（RAG / NL2SQL と同じ。#750）。
+
+    InMemory にすると、ユーザー管理・ロール管理・権限管理が空になり、MCP のサービス利用者も
+    見つからない。
+    """
+    from app.security import service as security_service
+    from app.security.store import OracleSecurityStore
+
+    assert get_settings().auth_mode == "local"
+    set_security_service(None)
+    try:
+        assert isinstance(security_service.get_security_service().store, OracleSecurityStore)
+    finally:
+        set_security_service(None)
+
+
 # ---------------------------------------------------------------------------
-# production で Cookie のないリクエスト（外部連携）
+# Runtime からの呼出し（Binding token）
 # ---------------------------------------------------------------------------
-
-
-def test_production_without_cookie_rejects_self_declared_headers(
-    monkeypatch: MonkeyPatch, auth_with_external_rbac: ProductionAuth
-) -> None:
-    """信頼できる identity がなければ、AGENT_RBAC_ENABLED=true でも自己申告の header は 401。"""
-    monkeypatch.setattr(
-        get_settings(),
-        "agent_rbac_actor_policies_json",
-        '{"ops": {"roles": ["admin"]}}',
-    )
-    for headers in (
-        {},
-        {"X-Agent-Roles": "admin"},
-        {"X-Agent-Roles": "viewer", "X-Agent-Business-Views": "*"},
-        {"X-Agent-Actor": "ops"},
-    ):
-        for method, path in (("GET", "/api/runs"), ("GET", "/api/settings/oci")):
-            response = client.request(method, path, headers=headers)
-            assert response.status_code == 401, (headers, path)
-    assert (
-        client.post("/api/runs", json={"goal": "x"}, headers={"X-Agent-Roles": "admin"}).status_code
-        == 401
-    )
-
-
-def test_untrusted_external_rbac_warning() -> None:
-    from types import SimpleNamespace
-
-    from app.security.dependencies import untrusted_external_rbac_warning
-
-    def settings(**overrides: object) -> SimpleNamespace:
-        values: dict[str, object] = {
-            "app_auth_enabled": True,
-            "agent_rbac_enabled": True,
-            "agent_rbac_identity_hmac_secret": None,
-            "agent_rbac_jwt_bearer_enabled": False,
-            "agent_rbac_policy_url": None,
-        }
-        values.update(overrides)
-        return SimpleNamespace(**values)
-
-    warning = untrusted_external_rbac_warning(settings())
-    assert warning is not None and "AGENT_RBAC_IDENTITY_HMAC_SECRET" in warning
-    assert untrusted_external_rbac_warning(settings(app_auth_enabled=False)) is None
-    assert untrusted_external_rbac_warning(settings(agent_rbac_enabled=False)) is None
-    assert untrusted_external_rbac_warning(settings(agent_rbac_identity_hmac_secret="s")) is None
-    assert untrusted_external_rbac_warning(settings(agent_rbac_jwt_bearer_enabled=True)) is None
-    assert untrusted_external_rbac_warning(settings(agent_rbac_policy_url="https://p")) is None
-
-
-def test_production_without_cookie_uses_signed_identity_when_enabled(
-    monkeypatch: MonkeyPatch, auth_with_external_rbac: ProductionAuth
-) -> None:
-    """Cookie がなく信頼できる identity があれば、そのロールで判定する（外部連携用）。"""
-    enable_signed_identity(monkeypatch)
-    assert client.get("/api/runs").status_code == 401
-    # 署名のない自己申告は使わない。
-    assert client.get("/api/runs", headers={"X-Agent-Roles": "admin"}).status_code == 401
-    assert (
-        client.get("/api/runs", headers=signed_identity_headers(roles=["guest"])).status_code == 401
-    )
-    viewer = signed_identity_headers(sub="svc-viewer", roles=["viewer"], business_view_ids=["*"])
-    assert client.get("/api/runs", headers=viewer).status_code == 200
-    assert client.get("/api/agents", headers=viewer).status_code == 200
-    # 変更系は capability（admin / operator）が必要。
-    assert client.patch("/api/settings/tool-policy", json={}, headers=viewer).status_code == 403
-    assert client.get("/api/settings/oci", headers=viewer).status_code == 403
-    operator = {**signed_identity_headers(roles=["operator"]), "X-Agent-API-Version": "1"}
-    created = client.post(
-        "/api/runs", json={"goal": "外部連携の Run", "metadata": {}}, headers=operator
-    )
-    assert created.status_code == 200, created.text
-    admin = signed_identity_headers(roles=["admin"])
-    assert client.get("/api/settings/oci", headers=admin).status_code == 200
-    # ログインだけで使える API とユーザー管理は Cookie のセッションが必要。
-    assert client.get("/api/auth/me", headers=admin).status_code == 401
-    assert client.get("/api/security/users", headers=admin).status_code == 403
-
-
-def test_production_without_cookie_uses_jwt_when_enabled(
-    monkeypatch: MonkeyPatch, auth_with_external_rbac: ProductionAuth
-) -> None:
-    import base64
-    import hashlib
-    import hmac
-    import json
-
-    settings = get_settings()
-    monkeypatch.setattr(settings, "agent_rbac_jwt_bearer_enabled", True)
-    monkeypatch.setattr(settings, "agent_rbac_jwt_hs256_secret", "jwt-secret-for-test")
-
-    def b64(value: bytes) -> str:
-        return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
-
-    header = b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-    payload = b64(json.dumps({"sub": "svc", "roles": ["auditor"]}).encode())
-    signature = b64(
-        hmac.new(b"jwt-secret-for-test", f"{header}.{payload}".encode(), hashlib.sha256).digest()
-    )
-    bearer = {"Authorization": f"Bearer {header}.{payload}.{signature}"}
-    assert client.get("/api/audit/tool-calls", headers=bearer).status_code == 200
-    assert client.post("/api/runs", json={"goal": "x"}, headers=bearer).status_code == 403
-    # 署名が不正ならロールなし（401）。header のロールも信頼しない。
-    forged = {"Authorization": f"Bearer {header}.{payload}.bad", "X-Agent-Roles": "admin"}
-    assert client.get("/api/audit/tool-calls", headers=forged).status_code == 401
 
 
 def test_binding_mcp_endpoint_uses_token_without_cookie(
@@ -685,60 +578,50 @@ def _target_items(headers: dict[str, str], kind: str, query: str = "") -> list[d
     return items
 
 
-def test_access_targets_lists_agents_and_business_views(auth: ProductionAuth) -> None:
-    role = auth.create_role([], business_view_ids=["bv-assigned"])
-    del role
+def test_access_targets_lists_agents(auth: ProductionAuth) -> None:
     with _agent("agent-target-215", "対象 Agent"):
-        runtime_repository.create_run(
-            RunCreateRequest(goal="bv を記録する", metadata={"business_view_id": "bv-from-run"})
-        )
         headers = login_configured_admin()
         agents = {item["id"]: item for item in _target_items(headers, "agents")}
         assert agents["agent-target-215"]["name"] == "対象 Agent"
         assert agents["agent-target-215"]["status"] == "enabled"
         assert "default" in agents
-        views = _target_items(headers, "business-views")
-        assert {"bv-assigned", "bv-from-run"} <= {item["id"] for item in views}
-        assert all(item["name"] == item["id"] for item in views)
 
         # 範囲が制限された利用者には範囲内だけを見せる。
         auth.user_with_permissions(
-            "scoped-perm-admin",
-            ["menu.security_permissions"],
-            agent_ids=["default"],
-            business_view_ids=["bv-from-run"],
+            "scoped-perm-admin", ["menu.security_permissions"], agent_ids=["default"]
         )
         scoped = login("scoped-perm-admin")
         assert [item["id"] for item in _target_items(scoped, "agents")] == ["default"]
-        assert [item["id"] for item in _target_items(scoped, "business-views")] == ["bv-from-run"]
+    # 業務ビューの候補は持たない（RAG が判定する。#750）。
+    response = client.get("/api/security/access-targets/business-views", headers=headers)
+    assert response.status_code in {403, 404}
 
 
 def test_access_targets_search_and_page_on_server(auth: ProductionAuth) -> None:
     """権限管理の候補は `q` / `limit` / `offset` / `ids` でサーバー側で絞る（#608）。"""
-    auth.create_role([], business_view_ids=["bv608-a", "bv608-b", "bv608-c"])
-    with _agent("agent-search-608", "検索 Agent"):
+    with (
+        _agent("agent608-a", "検索 Agent A"),
+        _agent("agent608-b", "検索 Agent B"),
+        _agent("agent608-c", "検索 Agent C"),
+    ):
         headers = login_configured_admin()
-        assert [item["id"] for item in _target_items(headers, "agents", "?q=検索")] == [
-            "agent-search-608"
+        assert [item["id"] for item in _target_items(headers, "agents", "?q=agent608-b")] == [
+            "agent608-b"
         ]
-        assert [
-            item["id"] for item in _target_items(headers, "agents", "?ids=agent-search-608")
-        ] == ["agent-search-608"]
-        response = client.get(
-            "/api/security/access-targets/business-views?q=bv608-&limit=2&offset=0", headers=headers
-        )
-        page = response.json()["data"]
-        assert [item["id"] for item in page["items"]] == ["bv608-a", "bv608-b"]
+        assert [item["id"] for item in _target_items(headers, "agents", "?ids=agent608-c")] == [
+            "agent608-c"
+        ]
+        page = client.get(
+            "/api/security/access-targets/agents?q=agent608-&limit=2&offset=0", headers=headers
+        ).json()["data"]
+        assert [item["id"] for item in page["items"]] == ["agent608-a", "agent608-b"]
         assert page["total"] == 3
         assert page["has_next"] is True
         rest = client.get(
-            "/api/security/access-targets/business-views?q=bv608-&limit=2&offset=2", headers=headers
+            "/api/security/access-targets/agents?q=agent608-&limit=2&offset=2", headers=headers
         ).json()["data"]
-        assert [item["id"] for item in rest["items"]] == ["bv608-c"]
+        assert [item["id"] for item in rest["items"]] == ["agent608-c"]
         assert rest["has_next"] is False
-        assert [
-            item["id"] for item in _target_items(headers, "business-views", "?ids=bv608-c&ids=bv-x")
-        ] == ["bv608-c"]
         assert (
             client.get("/api/security/access-targets/agents?limit=101", headers=headers).status_code
             == 422
@@ -758,13 +641,12 @@ def test_update_role_access_saves_permissions_and_targets(auth: ProductionAuth) 
         version=1,
         permissions=["agent.runs.view", "menu.agents"],
         agent_ids=["default"],
-        business_view_ids=["bv-1", "sales:q3"],
     )
     assert response.status_code == 200, response.text
     data = response.json()["data"]
     assert data["permissions"] == ["agent.runs.view", "menu.agents"]
     assert data["agent_ids"] == ["default"]
-    assert data["business_view_ids"] == ["bv-1", "sales:q3"]
+    assert "business_view_ids" not in data
     assert response.headers["ETag"] == '"2"'
     # agent.admin を含むロールは対象を空に正規化する（制限を受けない）。
     admin_role = _put_access(
@@ -773,11 +655,9 @@ def test_update_role_access_saves_permissions_and_targets(auth: ProductionAuth) 
         version=2,
         permissions=["agent.admin"],
         agent_ids=["default"],
-        business_view_ids=["bv-1"],
     )
     assert admin_role.status_code == 200
     assert admin_role.json()["data"]["agent_ids"] == []
-    assert admin_role.json()["data"]["business_view_ids"] == []
     # GET /security/roles にも Agent の権限と対象が出る。
     listed = client.get("/api/security/roles", headers=headers).json()["data"]
     role = next(item for item in listed if item["role_id"] == target.role_id)
@@ -792,10 +672,6 @@ def test_update_role_access_validates_codes_and_targets(auth: ProductionAuth) ->
     unknown_agent = _put_access(headers, target.role_id, version=1, agent_ids=["no-such-agent"])
     assert unknown_agent.status_code == 400
     assert "エージェントが見つかりません" in unknown_agent.json()["error_messages"][0]
-    invalid_view = _put_access(
-        headers, target.role_id, version=1, business_view_ids=["bad view/../x"]
-    )
-    assert invalid_view.status_code == 400
     stale = _put_access(headers, target.role_id, version=9, permissions=[])
     assert stale.status_code == 409
     builtin = _put_access(
@@ -811,7 +687,6 @@ def test_update_role_access_prevents_privilege_escalation(auth: ProductionAuth) 
             "delegate",
             ["menu.security_permissions", "agent.runs.view"],
             agent_ids=["agent-escalation-a"],
-            business_view_ids=["bv-a"],
         )
         target = auth.create_role([])
         headers = login("delegate")
@@ -820,7 +695,6 @@ def test_update_role_access_prevents_privilege_escalation(auth: ProductionAuth) 
             ({"permissions": ["agent.runs.operate"]}, "権限"),
             ({"permissions": ["menu.security_users"]}, "権限"),
             ({"agent_ids": ["agent-escalation-b"]}, "エージェント"),
-            ({"business_view_ids": ["bv-b"]}, "業務ビュー"),
         ):
             response = _put_access(headers, target.role_id, version=1, **body)
             assert response.status_code == 403, body
@@ -831,9 +705,39 @@ def test_update_role_access_prevents_privilege_escalation(auth: ProductionAuth) 
             version=1,
             permissions=["agent.runs.view"],
             agent_ids=["agent-escalation-a"],
-            business_view_ids=["bv-a"],
         )
         assert allowed.status_code == 200, allowed.text
+
+
+def test_deleted_agent_is_removed_from_roles_and_does_not_block_saving(
+    auth: ProductionAuth,
+) -> None:
+    """削除したエージェントはロールの対象範囲から外れ、残っていても保存を止めない（#750）。"""
+    headers = login_configured_admin()
+    with _agent("agent-deleted-750"), _agent("agent-kept-750"):
+        target = auth.create_role([], agent_ids=["agent-deleted-750", "agent-kept-750"])
+        deleted = client.delete("/api/agents/agent-deleted-750", headers=headers)
+        assert deleted.status_code == 200, deleted.text
+        stored = auth.store.get_role(target.role_id)
+        assert stored is not None
+        assert stored.agent_ids == {"agent-kept-750"}
+
+        # 後始末に失敗して削除済みの ID が残ったロールも、表示どおりに保存すれば外れる。
+        # 新しく足す未知の ID だけは 400。
+        stale = auth.create_role([], agent_ids=["agent-gone-750", "agent-kept-750"])
+        saved = _put_access(
+            headers,
+            stale.role_id,
+            version=1,
+            agent_ids=["agent-gone-750", "agent-kept-750"],
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["data"]["agent_ids"] == ["agent-kept-750"]
+        unknown = _put_access(
+            headers, stale.role_id, version=2, agent_ids=["agent-kept-750", "agent-new-750"]
+        )
+        assert unknown.status_code == 400
+        assert "agent-new-750" in unknown.json()["error_messages"][0]
 
 
 def test_retired_permission_code_left_in_db_is_ignored(auth: ProductionAuth) -> None:
@@ -861,7 +765,6 @@ def test_retired_permission_code_left_in_db_is_ignored(auth: ProductionAuth) -> 
             version=shown["version"],
             permissions=shown["permissions"],
             agent_ids=shown["agent_ids"],
-            business_view_ids=shown["business_view_ids"],
         )
         assert saved.status_code == 200, saved.text
         stored = auth.store.get_role(stale.role_id)
@@ -1063,15 +966,20 @@ def test_migration_required_is_reported(auth: ProductionAuth, monkeypatch: Monke
     assert "agent_security_migrate" in body["error_messages"][0]
 
 
-def test_router_helpers_do_not_use_local_debug_principal() -> None:
-    """local のローカル利用者は router の RBAC に使わない（従来の header 判定のまま）。"""
+def test_router_uses_local_debug_principal_with_all_permissions() -> None:
+    """local のローカル利用者は全権限・対象範囲の制限なしとして router の RBAC に使う（#750）。"""
     from types import SimpleNamespace
 
-    from app.security.dependencies import local_debug_principal, session_principal
+    from app.security.dependencies import local_debug_principal
 
     connection = SimpleNamespace(state=SimpleNamespace(principal=local_debug_principal()))
-    assert session_principal(connection) is None
-    assert agent_router._session_actor_policy(connection) is None
+    policy = agent_router._actor_policy(connection)
+    assert "admin" in policy.roles
+    assert policy.agent_ids is None
+    # 利用者がいなければ何も許可しない（header の RBAC に切り替えない）。
+    anonymous = agent_router._actor_policy(SimpleNamespace(state=SimpleNamespace()))
+    assert anonymous.roles == set()
+    assert anonymous.agent_ids == set()
 
 
 class _RecordingCursor:
@@ -1109,24 +1017,22 @@ def test_oracle_store_reads_and_replaces_agent_role_details() -> None:
         {
             "AGENT_ROLE_PERMISSIONS": [("agent.runs.view",)],
             "AGENT_ROLE_AGENTS": [("default",)],
-            "AGENT_ROLE_BUSINESS_VIEWS": [("bv-1",)],
         }
     )
     loaded = store._role_details(cursor, base)
     assert loaded.permissions == {"agent.runs.view"}
     assert loaded.agent_ids == {"default"}
-    assert loaded.business_view_ids == {"bv-1"}
     assert all(params == {"role_id": "role-1"} for _, params in cursor.executed)
 
     cursor = _RecordingCursor({})
     loaded.agent_ids = {"a-2", "a-1"}
     store._replace_role_details(cursor, loaded)
     statements = [" ".join(sql.split()) for sql, _ in cursor.executed]
-    assert statements[:3] == [
+    assert statements[:2] == [
         "DELETE FROM AGENT_ROLE_PERMISSIONS WHERE ROLE_ID = :role_id",
         "DELETE FROM AGENT_ROLE_AGENTS WHERE ROLE_ID = :role_id",
-        "DELETE FROM AGENT_ROLE_BUSINESS_VIEWS WHERE ROLE_ID = :role_id",
     ]
+    assert not any("BUSINESS_VIEW" in statement for statement in statements)
     inserted_agents = [
         params["agent_id"]
         for sql, params in cursor.executed
@@ -1184,14 +1090,3 @@ def test_system_settings_actions_use_menu_permissions_for_session(
     monkeypatch.setattr(security_dependencies, "permission_for_route", lambda *_args: None)
     assert _read_missing_oci_config(model_admin, tmp_path) == 403
     assert _read_missing_oci_config(oci_admin, tmp_path) not in {401, 403}
-
-
-def test_system_settings_actions_stay_admin_for_external_roles(
-    monkeypatch: MonkeyPatch, auth_with_external_rbac: ProductionAuth, tmp_path: Any
-) -> None:
-    """header / JWT の経路のシステム設定の保存・操作は従来どおり admin だけ。"""
-    enable_signed_identity(monkeypatch)
-    operator = signed_identity_headers(roles=["operator", "viewer", "auditor", "approver"])
-    assert _read_missing_oci_config(operator, tmp_path) == 403
-    admin = signed_identity_headers(roles=["admin"])
-    assert _read_missing_oci_config(admin, tmp_path) not in {401, 403}

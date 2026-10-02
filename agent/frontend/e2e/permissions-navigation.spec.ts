@@ -136,7 +136,7 @@ for (const viewport of VIEWPORTS) {
     test("Run の実行権限があれば Run の作成と取消を出す", async ({ page, mockApi }) => {
       signIn(
         mockApi,
-        dbUser({ permissions: ["agent.runs.operate"], allowed_agent_ids: ["default"], allowed_business_view_ids: [] })
+        dbUser({ permissions: ["agent.runs.operate"], allowed_agent_ids: ["default"] })
       );
       seedRun(mockApi, { status: "running" });
 

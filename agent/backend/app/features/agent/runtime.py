@@ -222,7 +222,7 @@ class RunState(BaseModel):
     pending_tool_calls: list[ToolCall] = Field(default_factory=list)
     metadata: JsonObject = Field(default_factory=dict)
     # Run を作った利用者（共通認証の user_uuid。#233）。RAG / NL2SQL の MCP はこの利用者として呼ぶ。
-    # 外部連携（header / JWT の RBAC）で作った Run と、この項目がない既存の Run は None。
+    # この項目がない既存の Run は None。
     created_by_user_uuid: str | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
@@ -2030,7 +2030,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
         approval_status: str | None = None,
         error_code: str | None = None,
         has_guardrail_warnings: bool | None = None,
-        business_view_ids: set[str] | None = None,
         offset: int = 0,
         limit: int = 100,
     ) -> RuntimeToolCallAuditData:
@@ -2045,7 +2044,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
                 approval_status=approval_status,
                 error_code=error_code,
                 has_guardrail_warnings=has_guardrail_warnings,
-                business_view_ids=business_view_ids,
             )
             rows = self._projection_tool_call_rows(
                 cursor,
@@ -2055,7 +2053,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
                 approval_status=approval_status,
                 error_code=error_code,
                 has_guardrail_warnings=has_guardrail_warnings,
-                business_view_ids=business_view_ids,
                 offset=offset,
                 limit=limit,
             )
@@ -2065,7 +2062,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
             record = _runtime_audit_record_from_projection_row(
                 row,
                 artifact_ids_by_step=artifact_ids_by_step,
-                business_view_ids=business_view_ids,
             )
             if record is None:
                 continue
@@ -2083,7 +2079,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
         approval_status: str | None,
         error_code: str | None,
         has_guardrail_warnings: bool | None,
-        business_view_ids: set[str] | None,
         offset: int,
         limit: int,
     ) -> list[tuple[Any, ...]]:
@@ -2095,7 +2090,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
             approval_status=approval_status,
             error_code=error_code,
             has_guardrail_warnings=has_guardrail_warnings,
-            business_view_ids=business_view_ids,
         )
         params["offset"] = offset
         params["limit"] = limit
@@ -2140,7 +2134,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
         approval_status: str | None,
         error_code: str | None,
         has_guardrail_warnings: bool | None,
-        business_view_ids: set[str] | None,
     ) -> int:
         tables = self._oracle_projection_tables
         where_sql, params = _projection_tool_call_where(
@@ -2150,7 +2143,6 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
             approval_status=approval_status,
             error_code=error_code,
             has_guardrail_warnings=has_guardrail_warnings,
-            business_view_ids=business_view_ids,
         )
         cursor.execute(
             f"""
@@ -2813,7 +2805,6 @@ def _projection_tool_call_where(
     approval_status: str | None,
     error_code: str | None,
     has_guardrail_warnings: bool | None,
-    business_view_ids: set[str] | None,
 ) -> tuple[str, JsonObject]:
     clauses: list[str] = []
     params: JsonObject = {}
@@ -2836,25 +2827,6 @@ def _projection_tool_call_where(
         clauses.append("JSON_EXISTS(s.tool_result_json, '$.guardrail_warnings[*]')")
     elif has_guardrail_warnings is False:
         clauses.append("NOT JSON_EXISTS(s.tool_result_json, '$.guardrail_warnings[*]')")
-    if business_view_ids is not None:
-        business_view_values = sorted(business_view_ids)
-        if business_view_values:
-            placeholders: list[str] = []
-            for index, value in enumerate(business_view_values):
-                key = f"business_view_id_{index}"
-                placeholders.append(f":{key}")
-                params[key] = value
-            in_clause = ", ".join(placeholders)
-            clauses.append(
-                "("
-                "JSON_VALUE(r.metadata_json, '$.business_view_id') "
-                f"IN ({in_clause}) OR "
-                "JSON_VALUE(s.tool_call_json, '$.arguments.business_view_id') "
-                f"IN ({in_clause})"
-                ")"
-            )
-        else:
-            clauses.append("1 = 0")
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     return where_sql, params
 
@@ -3058,7 +3030,6 @@ def _runtime_audit_record_from_projection_row(
     row: tuple[Any, ...],
     *,
     artifact_ids_by_step: dict[str, list[str]],
-    business_view_ids: set[str] | None,
 ) -> RuntimeToolCallAuditRecord | None:
     (
         run_id,
@@ -3081,14 +3052,6 @@ def _runtime_audit_record_from_projection_row(
     tool_call = _projection_tool_call(tool_call_json)
     result = _projection_tool_result(tool_result_json)
     tool_name = str(row_tool_name or (tool_call.name if tool_call is not None else "tool"))
-    metadata = _json_load_object(metadata_json)
-    if not _projection_business_view_allowed(
-        metadata=metadata,
-        tool_call=tool_call,
-        allowed_business_view_ids=business_view_ids,
-    ):
-        return None
-
     definition = tool_registry.get(tool_name)
     audit_metadata = result.audit_metadata if result is not None else {}
     permission_level = (
@@ -3148,23 +3111,6 @@ def _projection_tool_result(value: object | None) -> ToolResult | None:
         return ToolResult.model_validate_json(_oracle_lob_to_text(value))
     except ValueError:
         return None
-
-
-def _projection_business_view_allowed(
-    *,
-    metadata: JsonObject,
-    tool_call: ToolCall | None,
-    allowed_business_view_ids: set[str] | None,
-) -> bool:
-    if allowed_business_view_ids is None:
-        return True
-    business_view_id = metadata.get("business_view_id")
-    if not isinstance(business_view_id, str) and tool_call is not None:
-        candidate = tool_call.arguments.get("business_view_id")
-        business_view_id = candidate if isinstance(candidate, str) else None
-    if not isinstance(business_view_id, str) or not business_view_id:
-        return True
-    return business_view_id in allowed_business_view_ids
 
 
 def _datetime_text(value: object | None) -> str | None:

@@ -90,7 +90,6 @@ CAPABILITY_ROLES: dict[str, str] = {
     AUDIT_VIEW: "auditor",
     ADMIN: "admin",
 }
-ROLE_CAPABILITIES: dict[str, str] = {role: code for code, role in CAPABILITY_ROLES.items()}
 
 # グループ・名前・並び順は左のナビ（frontend の nav-config.ts と、i18n の
 # サイドナビの表示名）と同じにする（#567 / #580。一致は
@@ -157,14 +156,14 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         RUNS_VIEW,
         _GROUP_CAPABILITIES,
         "Run の閲覧（viewer）",
-        "利用できるエージェント・業務ビューの Run・イベント・成果物を表示できます。",
+        "利用できるエージェントの Run・イベント・成果物を表示できます。",
         implies=(MENU_RUNS,),
     ),
     _permission(
         RUNS_OPERATE,
         _GROUP_CAPABILITIES,
         "Run の実行・操作（operator）",
-        "利用できるエージェント・業務ビューで Run の作成・取消・再開・再実行ができます"
+        "利用できるエージェントで Run の作成・取消・再開・再実行ができます"
         "（Run の閲覧を含みます）。",
         implies=(MENU_RUNS,),
     ),
@@ -172,14 +171,14 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         APPROVALS_DECIDE,
         _GROUP_CAPABILITIES,
         "承認の判断（approver）",
-        "利用できるエージェント・業務ビューの Run の承認・却下ができます（Run の閲覧を含みます）。",
+        "利用できるエージェントの Run の承認・却下ができます（Run の閲覧を含みます）。",
         implies=(MENU_APPROVALS,),
     ),
     _permission(
         AUDIT_VIEW,
         _GROUP_CAPABILITIES,
         "監査の閲覧（auditor）",
-        "利用できるエージェント・業務ビューの Run の監査記録・ツール呼出し履歴を表示できます"
+        "利用できるエージェントの Run の監査記録・ツール呼出し履歴を表示できます"
         "（Run の閲覧を含みます）。",
         implies=(MENU_AUDIT,),
     ),
@@ -188,7 +187,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         _GROUP_CAPABILITIES,
         "Agent 管理（admin）",
         "業務 Agent・スキル・Runtime・Binding・プラグイン・運用設定・システム設定の変更と、"
-        "すべての操作ができます（エージェント・業務ビューの対象範囲の制限を受けません）。",
+        "すべての操作ができます（エージェントの対象範囲の制限を受けません）。",
         implies=_ADMIN_MENUS,
     ),
 )
@@ -231,45 +230,13 @@ def expand_permissions(codes: Iterable[str]) -> set[str]:
 
 
 def grants_all_targets(codes: Iterable[str]) -> bool:
-    """`agent.admin` はすべてのエージェント・業務ビューを利用できる（対象範囲の制限を受けない）。"""
+    """`agent.admin` はすべてのエージェントを利用できる（対象範囲の制限を受けない）。"""
     return ADMIN in expand_permissions(codes)
 
 
 def roles_for_permissions(codes: Iterable[str]) -> set[str]:
     """実効権限の capability → 従来のロール名（router の `require_*` が使う）。"""
     return {CAPABILITY_ROLES[code] for code in codes if code in CAPABILITY_ROLES}
-
-
-# 外部連携（header / JWT / 外部 policy）のロールが読めるメニュー。従来の header RBAC で
-# `require_viewer` だけが守っていた Control Plane の読み取りを、ロールを持つ利用者に保つ。
-# 運用設定・システム設定・ユーザーとロールは含めない
-# （admin は implies で運用設定・システム設定を得る）。
-EXTERNAL_ROLE_READ_MENUS = frozenset(
-    {
-        MENU_AGENTS,
-        MENU_SKILLS,
-        MENU_RUNTIMES,
-        MENU_RUNS,
-        MENU_APPROVALS,
-        MENU_AUDIT,
-        MENU_PLUGIN_MARKETPLACES,
-    }
-)
-
-
-def permissions_for_roles(roles: Iterable[str]) -> set[str]:
-    """外部連携（header / JWT / 外部 policy）のロール名 → 実効権限（manifest の判定に使う）。
-
-    既知のロールを 1 つも持たなければ空（既定拒否）。
-    """
-    capabilities = {
-        ROLE_CAPABILITIES[role.strip().lower()]
-        for role in roles
-        if role.strip().lower() in ROLE_CAPABILITIES
-    }
-    if not capabilities:
-        return set()
-    return expand_permissions(capabilities) | set(EXTERNAL_ROLE_READ_MENUS)
 
 
 # ---- API の権限 manifest ----
@@ -413,8 +380,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/settings/planner"): _ADMIN_ONLY,
     ("PATCH", "/settings/planner"): _ADMIN_ONLY,
     # ---- システム設定（3 製品共通。RAG / NL2SQL と同じくメニュー権限で保存・操作できる） ----
-    # 外部連携（header / JWT）のロールでは、保存・操作は従来どおり admin だけ（router の
-    # `require_system_settings_write`。admin は implies でシステム設定のメニューを持つ）。
     ("GET", "/settings/upload-storage"): _any(MENU_SETTINGS_UPLOAD_STORAGE, MENU_SETTINGS_OCI),
     ("PATCH", "/settings/upload-storage"): _any(MENU_SETTINGS_UPLOAD_STORAGE),
     ("GET", "/settings/oci"): _any(MENU_SETTINGS_OCI),
@@ -461,7 +426,6 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- セキュリティ設定: 権限管理 ----
     ("GET", "/security/permissions"): _any(MENU_SECURITY_PERMISSIONS),
     ("GET", "/security/access-targets/agents"): _any(MENU_SECURITY_PERMISSIONS),
-    ("GET", "/security/access-targets/business-views"): _any(MENU_SECURITY_PERMISSIONS),
     ("PUT", "/security/roles/{role_id}/access"): _any(MENU_SECURITY_PERMISSIONS),
 }
 

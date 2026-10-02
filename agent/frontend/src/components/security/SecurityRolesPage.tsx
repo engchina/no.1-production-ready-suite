@@ -32,11 +32,7 @@ export function SecurityRolesPage() {
           <p className="text-sm text-fg">
             {role.role_code === SYSTEM_ADMIN_ROLE_CODE
               ? t("security.roles.permissionSummarySystemAdmin")
-              : t("security.roles.permissionSummary", {
-                  count: role.permissions?.length ?? 0,
-                  agents: role.agent_ids?.length ?? 0,
-                  businessViews: role.business_view_ids?.length ?? 0,
-                })}
+              : t("security.roles.permissionSummary", { count: role.permissions?.length ?? 0 })}
           </p>
           {canManagePermissions && !role.is_built_in && !role.archived ? (
             <Link

@@ -141,7 +141,7 @@ function createState() {
     security: {
       users: clone(SECURITY_USERS),
       roles: [clone(SYSTEM_ADMIN_ROLE), clone(OPERATOR_ROLE)],
-      accessTargets: clone(ACCESS_TARGETS) as { agents: Json[]; business_views: Json[]; business_view_warnings?: string[] },
+      accessTargets: clone(ACCESS_TARGETS) as { agents: Json[] },
     },
   };
 }
@@ -344,22 +344,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     if (method === "GET" && at("security", "permissions")) return PERMISSION_CATALOG;
     // 権限管理の対象の候補（#608）: backend と同じく q（名前・ID・説明）・ids・limit / offset で絞った Page を返す。
-    // 業務ビューは候補にロールへ割り当て済みの ID も含める（backend と同じ）。
     if (method === "GET" && at("security", "access-targets", "agents")) {
       return accessTargetPage(state.security.accessTargets.agents, query);
-    }
-    if (method === "GET" && at("security", "access-targets", "business-views")) {
-      const known = new Map(state.security.accessTargets.business_views.map((view) => [view.id as string, view]));
-      for (const role of state.security.roles) {
-        for (const id of (role.business_view_ids as string[] | undefined) ?? []) {
-          if (!known.has(id)) known.set(id, { id, name: id });
-        }
-      }
-      const views = [...known.values()].sort((left, right) => String(left.id).localeCompare(String(right.id)));
-      return {
-        ...accessTargetPage(views, query),
-        warnings: state.security.accessTargets.business_view_warnings ?? [],
-      };
     }
     if (method === "PUT" && at("security", "roles", "*", "access")) {
       const role = findRole(state, third);
@@ -370,7 +356,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         permissions: [...((body.permissions as string[]) ?? [])].sort(),
         // agent.admin を含むロールは対象を空に正規化する（backend と同じ）。
         agent_ids: grantsAll ? [] : [...((body.agent_ids as string[]) ?? [])].sort(),
-        business_view_ids: grantsAll ? [] : [...((body.business_view_ids as string[]) ?? [])].sort(),
       });
       return role;
     }

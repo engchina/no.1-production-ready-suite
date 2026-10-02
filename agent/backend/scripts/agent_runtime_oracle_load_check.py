@@ -90,9 +90,9 @@ def main() -> int:
     audit_latencies_ms: list[int] = []
     for _ in range(args.audit_iterations):
         audit_started = perf_counter()
+        # 業務ビューでの絞り込みは #750 で削除した。ツール名で絞った監査の読み出しの時間を測る。
         audit = repository.list_tool_call_audit_projection(
             tool_name="echo",
-            business_view_ids={marker},
             limit=min(args.runs, args.audit_limit),
         )
         audit_latencies_ms.append(round((perf_counter() - audit_started) * 1000))

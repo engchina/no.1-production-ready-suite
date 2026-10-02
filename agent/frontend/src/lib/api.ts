@@ -632,7 +632,6 @@ export const CSRF_COOKIE_NAME = "agent_csrf";
  */
 export interface CurrentUser extends BaseCurrentUser {
   allowed_agent_ids: string[] | null;
-  allowed_business_view_ids: string[] | null;
 }
 
 /** ロール（共通のロール項目に Agent の権限と対象範囲を足したもの）。 */
@@ -646,7 +645,6 @@ export interface SecurityRole {
   version: number;
   permissions: string[];
   agent_ids: string[];
-  business_view_ids: string[];
 }
 
 /** 権限管理で選べるエージェント（Runtime repository の業務 Agent）。status は enabled / disabled。 */
@@ -657,14 +655,6 @@ export interface AgentAccessTarget {
   status: string;
 }
 
-/** 権限管理で選べる業務ビュー。Agent にマスタはなく、Run に現れた ID とロールに割り当て済みの ID。 */
-export interface BusinessViewAccessTarget {
-  id: string;
-  name: string;
-}
-
-/** 権限管理の対象の種類（`GET /api/security/access-targets/{kind}`。#608）。 */
-export type AccessTargetKind = "agents" | "business-views";
 
 /** 権限管理の対象の候補の 1 ページ（検索とページング。#608）。 */
 export interface AccessTargetPage<T> {
@@ -673,8 +663,6 @@ export interface AccessTargetPage<T> {
   limit: number;
   offset: number;
   has_next: boolean;
-  /** RAG の業務ビューを読めなかった理由（業務ビューだけ。#240）。 */
-  warnings?: string[];
 }
 
 /** 権限管理画面の保存（`PUT /api/security/roles/{role_id}/access`）。 */
@@ -683,7 +671,6 @@ export interface RoleAccessUpdate {
   version: number;
   permissions: string[];
   agent_ids: string[];
-  business_view_ids: string[];
 }
 
 /** 入力項目に結び付く API の問題（JSON Pointer と表示文言）。 */
