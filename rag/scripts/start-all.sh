@@ -118,7 +118,7 @@ echo "[start-all] フロントエンドを起動します..."
 PORT="${FRONTEND_PORT}" BACKEND_URL="${BACKEND_URL}" "${SCRIPT_DIR}/start-frontend.sh" &
 pids+=("$!")
 
-echo "[start-all] backend: ${BACKEND_URL}/docs  frontend: http://localhost:${FRONTEND_PORT}"
+echo "[start-all] backend: ${BACKEND_URL}/api/health  frontend: http://localhost:${FRONTEND_PORT}"
 echo "[start-all] 停止するには Ctrl+C を押してください。"
 
 # いずれかのプロセスが終了したら cleanup が走る

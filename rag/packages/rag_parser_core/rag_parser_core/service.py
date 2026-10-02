@@ -90,7 +90,10 @@ def create_parse_app(
     import_name / distribution_names: readiness 表示の version 検出に使う。
     runtime_health: package 導入以外に必要な外部 runtime(vLLM 等)の疎通確認。
     """
-    app = FastAPI(title=title or f"parser-{backend}")
+    # API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。
+    app = FastAPI(
+        title=title or f"parser-{backend}", docs_url=None, redoc_url=None, openapi_url=None
+    )
 
     @app.get("/health", response_model=ParseHealth)
     async def health() -> ParseHealth:
@@ -145,7 +148,9 @@ def create_service_parse_app(
     package readiness ではなく `is_configured`(OCI 設定の充足)で /health を返す。
     `parse` は OCI を呼んで ParseResponse を返す非同期ハンドラ(env 由来 config で構築)。
     """
-    app = FastAPI(title=title or f"parser-{backend}")
+    app = FastAPI(
+        title=title or f"parser-{backend}", docs_url=None, redoc_url=None, openapi_url=None
+    )
 
     @app.get("/health", response_model=ParseHealth)
     async def health() -> ParseHealth:

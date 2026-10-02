@@ -36,7 +36,7 @@ def create_app(
     """標準構成の FastAPI アプリを生成する。
 
     Args:
-        service_name: OpenAPI title に使うサービス名。
+        service_name: OpenAPI title に使うサービス名（`app.openapi()` に反映）。
         version: アプリ version（health/ready と OpenAPI に反映）。
         cors_origins: CORS 許可オリジン。
         api_router: 業務ルーター（`api_prefix` 配下に include）。
@@ -45,7 +45,16 @@ def create_app(
         unhandled_message: 未処理例外時のユーザー向けメッセージ。
         enable_metrics: MetricsMiddleware と `/metrics` を有効化するか。
     """
-    app = FastAPI(title=service_name, version=version, lifespan=lifespan)
+    # API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。
+    # schema はテストなどから `app.openapi()` で得られる。
+    app = FastAPI(
+        title=service_name,
+        version=version,
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
 
     configure_cors(app, origins=cors_origins)
 

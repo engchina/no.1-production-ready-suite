@@ -83,3 +83,12 @@ def test_metrics_endpoint_exposed() -> None:
     resp = client.get("/metrics")
     assert resp.status_code == 200
     assert "http_requests_total" in resp.text
+
+
+def test_api_docs_are_not_exposed() -> None:
+    """API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。"""
+    client = _build_client()
+    for path in ("/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"):
+        assert client.get(path).status_code == 404, path
+    # schema はテストなどから app.openapi() で得られる。
+    assert "/api/health" in client.app.openapi()["paths"]  # type: ignore[attr-defined]

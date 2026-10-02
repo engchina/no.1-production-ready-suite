@@ -47,7 +47,8 @@ def create_vector_index_app(
     *, health_probe: HealthProbe | None = None, title: str = "pipeline-vector-index"
 ) -> FastAPI:
     """vector_index ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
-    app = FastAPI(title=title)
+    # API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。
+    app = FastAPI(title=title, docs_url=None, redoc_url=None, openapi_url=None)
     probe = health_probe or (
         lambda: StageHealth(status="ok", stage="vector_index", package_name="rag_pipeline_core")
     )
@@ -72,7 +73,7 @@ def create_graph_app(
     *, health_probe: HealthProbe | None = None, title: str = "pipeline-graphrag"
 ) -> FastAPI:
     """graphrag ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
-    app = FastAPI(title=title)
+    app = FastAPI(title=title, docs_url=None, redoc_url=None, openapi_url=None)
     probe = health_probe or (
         lambda: StageHealth(status="ok", stage="graphrag", package_name="rag_pipeline_core")
     )
@@ -94,7 +95,7 @@ def create_guardrail_app(
     *, health_probe: HealthProbe | None = None, title: str = "pipeline-guardrail"
 ) -> FastAPI:
     """guardrail ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
-    app = FastAPI(title=title)
+    app = FastAPI(title=title, docs_url=None, redoc_url=None, openapi_url=None)
     probe = health_probe or (
         lambda: StageHealth(status="ok", stage="guardrail", package_name="rag_pipeline_core")
     )
@@ -117,7 +118,7 @@ def create_evaluation_app(
     *, health_probe: HealthProbe | None = None, title: str = "pipeline-evaluation"
 ) -> FastAPI:
     """evaluation ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
-    app = FastAPI(title=title)
+    app = FastAPI(title=title, docs_url=None, redoc_url=None, openapi_url=None)
     probe = health_probe or (
         lambda: StageHealth(status="ok", stage="evaluation", package_name="rag_pipeline_core")
     )
@@ -140,7 +141,7 @@ def create_chunking_app(
     title: str = "pipeline-chunking",
 ) -> FastAPI:
     """chunking ステージサービスの FastAPI app を生成する(``POST /run`` + ``GET /health``)。"""
-    app = FastAPI(title=title)
+    app = FastAPI(title=title, docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.get("/health", response_model=StageHealth)
     def health() -> StageHealth:

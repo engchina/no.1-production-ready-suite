@@ -56,6 +56,10 @@ Dockerfile は持たない（自前のコードは Docker イメージを作ら�
 共通エンドポイント: `GET /api/health` `GET /api/ready` `GET /metrics`。
 業務エンドポイントは `features/<domain>` 配下に置く。
 
+FastAPI の API ドキュメント（Swagger UI `/docs`・ReDoc `/redoc`・`/openapi.json`）は、環境を問わず公開しない（#748）。
+`create_app` は `docs_url` / `redoc_url` / `openapi_url` を `None` にする。`create_app` を使わずに `FastAPI(...)` を作るアプリ
+（RAG の backend・parser / 前処理 / pipeline のサービス）も同じ 3 つを `None` で渡す。schema が要るテストは `app.openapi()` を使う。
+
 ### DB の状態 API（`GET /api/ready/database`、#325）
 
 画面の DB ゲートが使う DB の状態は、3製品とも `pr_system_settings.database_status.build_database_status_router` で提供する（製品が独自に実装しない）。ログイン不要の公開 path にする（各製品の `PUBLIC_API_PATHS`）。
