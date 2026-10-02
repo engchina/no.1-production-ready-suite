@@ -166,7 +166,9 @@ export function SecretField({
           iconOnly
           icon={visible ? EyeOff : Eye}
           loading={revealPending}
-          disabled={inputDisabled}
+          // 保存済みの値の取得中（revealPending）は、呼び出し側が欄を disabled にしても切り替えボタンは
+          // ネイティブの disabled にしない（loading の aria-disabled でフォーカスを保つ。#355 / #835）。
+          disabled={inputDisabled && !revealPending}
           aria-label={toggleLabel}
           onClick={toggleVisible}
           className="absolute inset-y-0 right-0 h-full min-h-0 rounded-l-none disabled:border-transparent disabled:bg-transparent aria-disabled:border-transparent aria-disabled:bg-transparent"

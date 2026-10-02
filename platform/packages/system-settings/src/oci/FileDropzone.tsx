@@ -249,7 +249,13 @@ export function FileDropzone({
             type="file"
             accept={accept}
             multiple={multiple}
-            disabled={interactionDisabled}
+            // 読み込み中（loading）はネイティブの disabled にせず aria-disabled にし、選んだ入力にフォーカスを保つ。
+            // ファイルの選択の画面は click の既定動作を止めて開かない（#355 / #835）。
+            disabled={disabled || undefined}
+            aria-disabled={loading && !disabled ? true : undefined}
+            onClick={(event) => {
+              if (loading) event.preventDefault();
+            }}
             required={required}
             aria-label={ariaLabel}
             aria-required={required}

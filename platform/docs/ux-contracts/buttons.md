@@ -217,6 +217,7 @@
 - 非同期処理は `loading` prop を使う（共通 `Button` がアイコンをスピナーに置き換え、`aria-busy` と `aria-disabled` を付けてクリック・Enter / Space・form の送信を止める）。
   - **`loading` を渡すボタンは必ず `icon` を持つ**（アイコンが無いとスピナーの分だけ幅が変わる。adherence の lint が検出する）。
   - **`loading` 中もフォーカスはボタンに残る。** ネイティブの `disabled` を付けるとフォーカスが `body` へ外れるため、共通 `Button` は `loading` のときだけ `aria-disabled` にする。完了後もフォーカスはボタンのまま（#355）。製品側で `disabled={pending}` を足してフォーカスを外さない。
+    - 処理中に他の操作をまとめて無効にするときも、押したボタンを `disabled` にしない。共有の `busy` を使うなら `disabled: busy && !loading` にする（`disabled` と `loading` が重なると `disabled` が優先され、ネイティブの disabled になる）。押したボタンを含む領域を `<fieldset disabled>` で包まない（中のボタンの prop に関係なくすべてが `:disabled` になる）。他の入力欄・操作は部品ごとに `disabled` を渡す（#835）。
   - **ボタン内の loading 表示は共通 `Button` に任せる。** `Loader2` や `Spinner` を子要素として描画しない。loading 中にラベルを「実行中…」などに差し替えない。
   - **同じ処理の動的なスピナーは 1 つだけ**にする。主ボタンが `loading` の場合、同じ処理を説明する `ProcessingIndicator` / `TimedLoadingState` は `activityIcon="none"` にして、静的なラベル・経過時間・slow hint だけを表示する。
   - 更新・同期などの busy 表示も `<Button loading>` を使い、ボタン内のアイコンに個別に `animate-spin` を付けない。

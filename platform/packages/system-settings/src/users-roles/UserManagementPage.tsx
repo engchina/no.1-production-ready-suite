@@ -667,7 +667,8 @@ export function UserManagementPage({
     onSelect: () => handleResetPassword(user),
     visible: user.status === "ACTIVE" && !user.is_bootstrap_admin,
     loading: resettingUserId === user.user_uuid,
-    disabled: operationBusy,
+    // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+    disabled: operationBusy && !(resettingUserId === user.user_uuid),
   });
 
   const userActions = (user: SecurityUser): EntityAction[] =>
@@ -686,7 +687,8 @@ export function UserManagementPage({
             label: t("security.users.unlock"),
             visible: Boolean(user.locked_until),
             loading: unlockingUserId === user.user_uuid,
-            disabled: operationBusy,
+            // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+            disabled: operationBusy && !(unlockingUserId === user.user_uuid),
             onSelect: () => handleUnlock(user),
           },
           {
@@ -695,7 +697,8 @@ export function UserManagementPage({
             icon: user.status === "ACTIVE" ? UserX : UserCheck,
             tone: user.status === "ACTIVE" ? "danger" : "default",
             loading: statusChangingUserId === user.user_uuid,
-            disabled: operationBusy,
+            // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+            disabled: operationBusy && !(statusChangingUserId === user.user_uuid),
             onSelect: () => handleToggleStatus(user),
           },
           {
@@ -705,7 +708,8 @@ export function UserManagementPage({
             tone: "danger",
             visible: canDeleteUser(user),
             loading: deletingUserId === user.user_uuid,
-            disabled: operationBusy,
+            // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+            disabled: operationBusy && !(deletingUserId === user.user_uuid),
             onSelect: () => handleDelete(user),
           },
         ]
@@ -792,7 +796,8 @@ export function UserManagementPage({
                   kind: "utility",
                   label: t("common.action.refresh"),
                   icon: RefreshCw,
-                  disabled: operationBusy,
+                  // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+                  disabled: operationBusy && !(loading && refreshRequested),
                   onClick: () => load(true),
                   loading: loading && refreshRequested,
                 },
@@ -805,7 +810,8 @@ export function UserManagementPage({
                     label: activeView === "edit" ? t("security.common.save") : t("security.common.create"),
                     icon: activeView === "edit" ? Save : Plus,
                     loading: busy,
-                    disabled: operationBusy,
+                    // 押したボタンは loading（aria-disabled）でフォーカスを保つ。ネイティブの disabled にしない（#355 / #835）。
+                    disabled: operationBusy && !busy,
                     testId: "security-users-submit",
                     onClick: () => formRef.current?.requestSubmit(),
                   },
