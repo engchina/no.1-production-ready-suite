@@ -5,6 +5,7 @@ const agentJa = {
   "app.title": "Production Ready Agent",
   "app.sidebarTitle.line1": "Production Ready",
   "app.sidebarTitle.line2": "Agent",
+  "app.route.loading": "画面を読み込んでいます",
 
   "nav.sidebar.aria": "サイドナビゲーション",
   "nav.sidebar.expand": "サイドバーを展開",
