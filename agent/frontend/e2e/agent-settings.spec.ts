@@ -249,14 +249,38 @@ test.describe("Agent Runtime settings", () => {
 
     await page.goto("/settings/model");
     await expect(page.getByRole("heading", { name: "モデル設定", level: 1 })).toBeVisible();
-    // OCI Enterprise AI の接続はプライマリ接続・セカンダリ接続のタブ。登録モデルごとに接続を選ぶ（#533 / #542）。
+    // OCI Enterprise AI の接続はプライマリ接続・セカンダリ接続・ターシャリ接続のタブ（この順）。
+    // 登録モデルごとに接続を選ぶ（#533 / #542 / #786）。
     const connectionTabs = page.getByRole("tablist", { name: "OCI Enterprise AI の接続" });
+    await expect(connectionTabs.getByRole("tab")).toHaveText([
+      "プライマリ接続",
+      "セカンダリ接続",
+      "ターシャリ接続",
+    ]);
     await expect(connectionTabs.getByRole("tab", { name: "プライマリ接続" })).toHaveAttribute(
       "aria-selected",
       "true"
     );
     await connectionTabs.getByRole("tab", { name: "セカンダリ接続" }).click();
     await expect(page.getByRole("button", { name: "セカンダリ接続を設定" })).toBeVisible();
+    // ターシャリ接続（OpenAI / OpenAI 互換 API 向け）は Project OCID が任意。
+    await connectionTabs.getByRole("tab", { name: "ターシャリ接続" }).click();
+    await page.getByRole("button", { name: "ターシャリ接続を設定" }).click();
+    await expect(page.locator("#enterprise-tertiary-endpoint")).toHaveAttribute(
+      "placeholder",
+      "https://api.openai.com/v1"
+    );
+    await expect(page.locator("#enterprise-tertiary-endpoint")).toHaveAttribute(
+      "aria-required",
+      "true"
+    );
+    await expect(page.locator("#enterprise-tertiary-project-ocid")).not.toHaveAttribute(
+      "aria-required",
+      "true"
+    );
+    await page.getByRole("button", { name: "ターシャリ接続を削除" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "削除" }).click();
+    await expect(page.getByRole("button", { name: "ターシャリ接続を設定" })).toBeFocused();
     await connectionTabs.getByRole("tab", { name: "プライマリ接続" }).click();
     await expect(page.getByRole("combobox", { name: "モデル 1 の接続" })).toContainText(
       "プライマリ接続"

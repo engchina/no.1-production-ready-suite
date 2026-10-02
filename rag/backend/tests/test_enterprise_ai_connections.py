@@ -1,4 +1,4 @@
-"""OCI Enterprise AI の接続をモデルごとに選ぶ（#533）。呼び出しが対象モデルの接続を使うこと。
+"""OCI Enterprise AI の接続をモデルごとに選ぶ（#533 / #786）。呼び出しが対象モデルの接続を使うこと。
 
 HTTP は決定論の fake transport で受け、URL・API key・Project のヘッダーを確かめる。
 """
@@ -19,6 +19,8 @@ from app.services.control import service_runtime_env
 
 PRIMARY = "https://primary.example/openai/v1"
 SECONDARY = "https://secondary.example/openai/v1"
+# ターシャリ接続（#786）は OpenAI / OpenAI 互換 API 向けで、Project OCID を入れない。
+TERTIARY = "https://api.openai.example/v1"
 
 
 def _settings(**overrides: Any) -> Settings:
@@ -30,6 +32,9 @@ def _settings(**overrides: Any) -> Settings:
         "oci_enterprise_ai_secondary_endpoint": SECONDARY,
         "oci_enterprise_ai_secondary_project_ocid": "ocid1.project.secondary",
         "oci_enterprise_ai_secondary_api_key": "sk-secondary",
+        "oci_enterprise_ai_tertiary_endpoint": TERTIARY,
+        "oci_enterprise_ai_tertiary_project_ocid": "",
+        "oci_enterprise_ai_tertiary_api_key": "sk-tertiary",
         "oci_enterprise_ai_models": [
             EnterpriseAiConfiguredModel(model_id="text-a", display_name="A"),
             EnterpriseAiConfiguredModel(
@@ -40,6 +45,9 @@ def _settings(**overrides: Any) -> Settings:
             ),
             EnterpriseAiConfiguredModel(
                 model_id="text-c", display_name="C", connection_id="secondary"
+            ),
+            EnterpriseAiConfiguredModel(
+                model_id="gpt-d", display_name="D", connection_id="tertiary"
             ),
         ],
         "oci_enterprise_ai_default_text_model": "text-a",
@@ -99,12 +107,14 @@ class RecordingTransport:
 
 def _connection_of(call: Mapping[str, Any]) -> tuple[str, str, str]:
     headers = call["headers"]
-    base = PRIMARY if call["url"].startswith(PRIMARY) else SECONDARY
+    base = next(item for item in (PRIMARY, SECONDARY, TERTIARY) if call["url"].startswith(item))
     return base, headers["Authorization"], headers.get("OpenAI-Project", "")
 
 
 PRIMARY_CONNECTION = (PRIMARY, "Bearer sk-primary", "ocid1.project.primary")
 SECONDARY_CONNECTION = (SECONDARY, "Bearer sk-secondary", "ocid1.project.secondary")
+# Project OCID がないので OpenAI-Project ヘッダーは送らない。
+TERTIARY_CONNECTION = (TERTIARY, "Bearer sk-tertiary", "")
 
 
 def test_config_uses_text_and_vision_connections() -> None:
@@ -177,6 +187,18 @@ async def test_compare_model_override_uses_that_model_connection() -> None:
     assert client.preview_llm_request("質問", "根拠").url.startswith(SECONDARY)
 
 
+async def test_tertiary_model_uses_responses_api_without_project_header() -> None:
+    """ターシャリ接続（Project OCID なし）のモデルは、OpenAI-Project ヘッダーなしで呼ぶ。"""
+    transport = RecordingTransport()
+    client = OciEnterpriseAiClient(settings=_settings(), http_transport=transport, model_id="gpt-d")
+
+    await client.generate("質問", "根拠")
+
+    assert _connection_of(transport.calls[0]) == TERTIARY_CONNECTION
+    assert "OpenAI-Project" not in transport.calls[0]["headers"]
+    assert transport.calls[0]["url"] == f"{TERTIARY}/responses"
+
+
 def test_default_transport_is_built_per_connection(monkeypatch: pytest.MonkeyPatch) -> None:
     built: list[str] = []
 
@@ -246,6 +268,12 @@ def _two_connection_payload() -> dict[str, Any]:
                     "project_ocid": "ocid1.project.secondary",
                     "api_key": "sk-secondary",
                 },
+                {
+                    "connection_id": "tertiary",
+                    "endpoint": TERTIARY,
+                    "project_ocid": "",
+                    "api_key": "sk-tertiary",
+                },
             ],
             "models": [
                 {"model_id": "text-a", "display_name": "A"},
@@ -255,6 +283,7 @@ def _two_connection_payload() -> dict[str, Any]:
                     "vision_enabled": True,
                     "connection_id": "secondary",
                 },
+                {"model_id": "gpt-d", "display_name": "D", "connection_id": "tertiary"},
             ],
             "default_text_model_id": "text-a",
             "default_vision_model_id": "vision-b",
@@ -274,8 +303,9 @@ def _two_connection_payload() -> dict[str, Any]:
     [
         ("enterprise_text", "text-a", PRIMARY_CONNECTION),
         ("enterprise_vision", "vision-b", SECONDARY_CONNECTION),
+        ("enterprise_text", "gpt-d", TERTIARY_CONNECTION),
     ],
-    ids=["text-primary", "vision-secondary"],
+    ids=["text-primary", "vision-secondary", "text-tertiary"],
 )
 def test_model_settings_test_calls_connection_of_tested_model(
     monkeypatch: pytest.MonkeyPatch,
@@ -303,3 +333,4 @@ def test_model_settings_test_calls_connection_of_tested_model(
     assert response.json()["data"]["status"] == "success", response.text
     assert [_connection_of(call) for call in transport.calls] == [expected]
     assert "sk-primary" not in response.text and "sk-secondary" not in response.text
+    assert "sk-tertiary" not in response.text

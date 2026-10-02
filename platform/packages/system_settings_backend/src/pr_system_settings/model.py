@@ -1,12 +1,13 @@
 """モデル設定の API（3製品共通。NL2SQL の実装を基準に移設。#103）。
 
 - OCI Enterprise AI（回答生成 / Vision）と OCI Generative AI（埋め込み / リランク）の設定
-- OCI Enterprise AI の接続（Endpoint URL・Project OCID・API key）は、プライマリ接続と
-  セカンダリ接続の 2 件まで（#533 / #542）。登録モデルごとに `connection_id` で使う接続を選ぶ
+- OCI Enterprise AI の接続（Endpoint URL・Project OCID・API key）は、プライマリ接続・
+  セカンダリ接続・ターシャリ接続の 3 件まで（#533 / #542 / #786）。ターシャリ接続は OpenAI /
+  OpenAI 互換 API 向けで、Project OCID は任意。登録モデルごとに `connection_id` で使う接続を選ぶ
   （未指定ならプライマリ接続）。実行時は `enterprise_ai_connection_for_model` でモデルから接続を引く
 - API key は共通 `.env`（`platform/.env`）の `PLATFORM_OCI_ENTERPRISE_AI_API_KEY`
-  （プライマリ接続）と `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY`（セカンダリ接続）だけに
-  保存し、JSON には書かない
+  （プライマリ接続）・`PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY`（セカンダリ接続）・
+  `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_API_KEY`（ターシャリ接続）だけに保存し、JSON には書かない
 - それ以外は `model-settings.json`（`version: 3`）へ保存し、起動時と mtime の変化時に読み込む
 - 製品固有の節（RAG の `parser_adapters`）は `ModelSettingsSection` で読み書きする
 - モデル単位の接続テスト。実際の呼び出しは製品が `run_model_test` で渡す
@@ -40,22 +41,32 @@ logger = logging.getLogger(__name__)
 
 ENTERPRISE_AI_API_KEY_ENV = "PLATFORM_OCI_ENTERPRISE_AI_API_KEY"
 ENTERPRISE_AI_SECONDARY_API_KEY_ENV = "PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY"
+ENTERPRISE_AI_TERTIARY_API_KEY_ENV = "PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_API_KEY"
 # OCI Enterprise AI の接続（#533）。プライマリ接続が既定。接続ごとに Settings の属性（env 名）が
-# 決まっているので、ID は枠の名前にする。画面の名前は「プライマリ接続」「セカンダリ接続」（#542）。
-# プライマリ接続は #533 より前からの属性・env 名をそのまま使う。
+# 決まっているので、ID は枠の名前にする。画面の名前は「プライマリ接続」「セカンダリ接続」
+# 「ターシャリ接続」（#542 / #786）。プライマリ接続は #533 より前からの属性・env 名をそのまま使う。
 ENTERPRISE_AI_PRIMARY_CONNECTION_ID: Final = "primary"
 ENTERPRISE_AI_SECONDARY_CONNECTION_ID: Final = "secondary"
+ENTERPRISE_AI_TERTIARY_CONNECTION_ID: Final = "tertiary"
 ENTERPRISE_AI_CONNECTION_IDS = (
     ENTERPRISE_AI_PRIMARY_CONNECTION_ID,
     ENTERPRISE_AI_SECONDARY_CONNECTION_ID,
+    ENTERPRISE_AI_TERTIARY_CONNECTION_ID,
 )
 MAX_ENTERPRISE_AI_CONNECTIONS = len(ENTERPRISE_AI_CONNECTION_IDS)
+# 設定してもしなくてもよい接続（プライマリ接続の後ろ）。Endpoint URL があるときだけ有効になる。
+_OPTIONAL_CONNECTION_IDS = ENTERPRISE_AI_CONNECTION_IDS[1:]
+# Project OCID を任意にする接続（#786）。ターシャリ接続は OpenAI / OpenAI 互換 API 向けで、
+# Project OCID（`OpenAI-Project` ヘッダー）は OCI Enterprise AI に使うときだけ要る。
+ENTERPRISE_AI_PROJECT_OCID_OPTIONAL_CONNECTION_IDS: Final = frozenset(
+    {ENTERPRISE_AI_TERTIARY_CONNECTION_ID}
+)
 MODEL_SETTINGS_DOCUMENT_VERSION = 3
 MODEL_SETTINGS_FILE_MODE = 0o600
 MODEL_SETTINGS_DIRECTORY_MODE = 0o700
 
 EnterpriseAiVlmInputMode = Literal["auto", "files_api", "inline_image"]
-EnterpriseAiConnectionId = Literal["primary", "secondary"]
+EnterpriseAiConnectionId = Literal["primary", "secondary", "tertiary"]
 ModelSettingsSecretSource = Literal["environment", "legacy_json", "missing"]
 ModelSettingsTestStatus = Literal["success", "failed"]
 ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "embedding", "rerank"]
@@ -99,7 +110,7 @@ EnterpriseAiModelEntrySettings = EnterpriseAiConfiguredModel
 class EnterpriseAiConnectionSettings(BaseModel):
     """OCI Enterprise AI の接続 1 件（#533）。`api_key` は書き込み専用で、応答では空にする。
 
-    接続の表示名は持たない（#542。画面は ID から「プライマリ接続」「セカンダリ接続」と表示する）。
+    接続の表示名は持たない（#542。画面は ID から「プライマリ接続」などと表示する）。
     #533 の表示名（`display_name`）を含む payload も、知らない key として無視して受け付ける。
     """
 
@@ -124,7 +135,7 @@ _LEGACY_CONNECTION_KEYS = ("endpoint", "project_ocid", "api_key", "has_api_key",
 class EnterpriseAiModelSettings(BaseModel):
     """OCI Enterprise AI モデル provider 設定。"""
 
-    # 1 件目（プライマリ接続）が既定。2 件目（セカンダリ接続）は任意（#533）。
+    # 1 件目（プライマリ接続）が既定。セカンダリ接続・ターシャリ接続は任意（#533 / #786）。
     connections: list[EnterpriseAiConnectionSettings] = Field(
         default_factory=lambda: [EnterpriseAiConnectionSettings()],
         min_length=1,
@@ -166,11 +177,17 @@ class EnterpriseAiModelSettings(BaseModel):
     def validate_connection_order(
         cls, value: list[EnterpriseAiConnectionSettings]
     ) -> list[EnterpriseAiConnectionSettings]:
-        """接続は「プライマリ接続 → セカンダリ接続」の順に、重複なく並べる。"""
-        ids = [connection.connection_id for connection in value]
-        if ids != list(ENTERPRISE_AI_CONNECTION_IDS[: len(ids)]):
+        """接続はプライマリ接続を先頭に「セカンダリ → ターシャリ」の順で、重複なく並べる。
+
+        セカンダリ接続を置かずにターシャリ接続だけを置いてもよい（#786）。
+        """
+        positions = [
+            ENTERPRISE_AI_CONNECTION_IDS.index(connection.connection_id) for connection in value
+        ]
+        if not positions or positions[0] != 0 or positions != sorted(set(positions)):
             raise ValueError(
-                "接続はプライマリ接続（primary）、セカンダリ接続（secondary）の順に指定してください。"
+                "接続はプライマリ接続（primary）を先頭に、セカンダリ接続（secondary）、"
+                "ターシャリ接続（tertiary）の順で、重複なく指定してください。"
             )
         return value
 
@@ -295,11 +312,15 @@ class ModelSecretStateMixin(BaseModel):
     """製品の Settings に混ぜる、Enterprise AI API key の取得元の状態。
 
     `class Settings(ModelSecretStateMixin, BaseSettings)` のように先頭に置く。
-    セカンダリ接続の API key（#533）は `.env` / 環境変数だけから読む（旧 JSON の互換はない）。
+    セカンダリ接続・ターシャリ接続の API key（#533 / #786）は `.env` / 環境変数だけから読む
+    （旧 JSON の互換はない）。
     """
 
     _environment_enterprise_ai_api_key: str = PrivateAttr(default="")
-    _environment_enterprise_ai_secondary_api_key: str = PrivateAttr(default="")
+    # セカンダリ接続・ターシャリ接続の API key の基準値（接続 ID → key）。
+    _environment_enterprise_ai_connection_api_keys: dict[str, str] = PrivateAttr(
+        default_factory=dict
+    )
     _model_secret_source: ModelSettingsSecretSource = PrivateAttr(default="missing")
     _legacy_model_secret_detected: bool = PrivateAttr(default=False)
     _model_secret_state_initialized: bool = PrivateAttr(default=False)
@@ -318,27 +339,37 @@ class ModelSecretStateMixin(BaseModel):
         self,
         environment_api_key: str | None = None,
         environment_secondary_api_key: str | None = None,
+        environment_tertiary_api_key: str | None = None,
     ) -> None:
         """JSON 再読込前に環境由来 secret を基準値へ戻す。
 
         値を渡すと新しい基準値にする（別 worker が `.env` を更新した場合）。
         """
+        environment_keys = {
+            ENTERPRISE_AI_SECONDARY_CONNECTION_ID: environment_secondary_api_key,
+            ENTERPRISE_AI_TERTIARY_CONNECTION_ID: environment_tertiary_api_key,
+        }
         if not self._model_secret_state_initialized:
             self._environment_enterprise_ai_api_key = _api_key_of(self).strip()
-            self._environment_enterprise_ai_secondary_api_key = _setting_text(
-                self, _SECONDARY_FIELDS.api_key
-            )
+            self._environment_enterprise_ai_connection_api_keys = {
+                connection_id: _setting_text(self, _CONNECTION_FIELDS[connection_id].api_key)
+                for connection_id in _OPTIONAL_CONNECTION_IDS
+            }
             self._model_secret_state_initialized = True
         if environment_api_key is not None:
             self._environment_enterprise_ai_api_key = environment_api_key.strip()
-        if environment_secondary_api_key is not None:
-            self._environment_enterprise_ai_secondary_api_key = (
-                environment_secondary_api_key.strip()
-            )
+        for connection_id, environment_key in environment_keys.items():
+            if environment_key is not None:
+                self._environment_enterprise_ai_connection_api_keys[connection_id] = (
+                    environment_key.strip()
+                )
         self._set_api_key(self._environment_enterprise_ai_api_key)
-        _set_if_field(
-            self, _SECONDARY_FIELDS.api_key, self._environment_enterprise_ai_secondary_api_key
-        )
+        for connection_id in _OPTIONAL_CONNECTION_IDS:
+            _set_if_field(
+                self,
+                _CONNECTION_FIELDS[connection_id].api_key,
+                self._environment_enterprise_ai_connection_api_keys.get(connection_id, ""),
+            )
         self._model_secret_source = (
             "environment" if self._environment_enterprise_ai_api_key else "missing"
         )
@@ -388,7 +419,8 @@ class _ConnectionFields:
 
 
 # プライマリ接続は #533 より前からの属性・env 名（既存環境の更新は要らない）。セカンダリ接続は
-# `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_*`（`PLATFORM_SETTING_FIELDS` に登録）。
+# `PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_*`、ターシャリ接続は `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_*`
+# （どちらも `PLATFORM_SETTING_FIELDS` に登録）。
 _PRIMARY_FIELDS = _ConnectionFields(
     endpoint="oci_enterprise_ai_endpoint",
     project_ocid="oci_enterprise_ai_project_ocid",
@@ -401,9 +433,16 @@ _SECONDARY_FIELDS = _ConnectionFields(
     api_key="oci_enterprise_ai_secondary_api_key",
     api_key_env=ENTERPRISE_AI_SECONDARY_API_KEY_ENV,
 )
+_TERTIARY_FIELDS = _ConnectionFields(
+    endpoint="oci_enterprise_ai_tertiary_endpoint",
+    project_ocid="oci_enterprise_ai_tertiary_project_ocid",
+    api_key="oci_enterprise_ai_tertiary_api_key",
+    api_key_env=ENTERPRISE_AI_TERTIARY_API_KEY_ENV,
+)
 _CONNECTION_FIELDS: dict[str, _ConnectionFields] = {
     ENTERPRISE_AI_PRIMARY_CONNECTION_ID: _PRIMARY_FIELDS,
     ENTERPRISE_AI_SECONDARY_CONNECTION_ID: _SECONDARY_FIELDS,
+    ENTERPRISE_AI_TERTIARY_CONNECTION_ID: _TERTIARY_FIELDS,
 }
 
 
@@ -437,12 +476,13 @@ def _connection_from_settings(settings: Any, connection_id: str) -> EnterpriseAi
 def enterprise_ai_connections(settings: Any) -> list[EnterpriseAiConnection]:
     """設定済みの接続の一覧。
 
-    プライマリ接続は常にあり、セカンダリ接続は Endpoint URL があるときだけある。
+    プライマリ接続は常にあり、セカンダリ接続・ターシャリ接続は Endpoint URL があるときだけある。
     """
     connections = [_connection_from_settings(settings, ENTERPRISE_AI_PRIMARY_CONNECTION_ID)]
-    secondary = _connection_from_settings(settings, ENTERPRISE_AI_SECONDARY_CONNECTION_ID)
-    if secondary.endpoint:
-        connections.append(secondary)
+    for connection_id in _OPTIONAL_CONNECTION_IDS:
+        connection = _connection_from_settings(settings, connection_id)
+        if connection.endpoint:
+            connections.append(connection)
     return connections
 
 
@@ -583,6 +623,7 @@ class ModelFieldError:
 ENTERPRISE_AI_CONNECTION_LABELS: Final[Mapping[str, str]] = {
     ENTERPRISE_AI_PRIMARY_CONNECTION_ID: "プライマリ接続",
     ENTERPRISE_AI_SECONDARY_CONNECTION_ID: "セカンダリ接続",
+    ENTERPRISE_AI_TERTIARY_CONNECTION_ID: "ターシャリ接続",
 }
 
 
@@ -600,6 +641,8 @@ def validate_enterprise_ai_connections(
     """接続と、登録モデルが指す接続を確かめる（#533 / #542）。
 
     - セカンダリ接続を設定したら、Endpoint URL・Project OCID・API key はすべて必須。
+      ターシャリ接続（OpenAI / OpenAI 互換 API 向け。#786）は Endpoint URL・API key が必須で、
+      Project OCID は任意（OCI Enterprise AI に使うときだけ入れる）。
       API key は保存後の値（`resolve_api_keys` の結果。空欄は保存済みの値を保持）で確かめるので、
       `api_keys` を渡したときだけ確かめる
     - プライマリ接続は OCI で運用するときだけ必須（画面は「OCI 運用時必須」）なので、
@@ -611,10 +654,9 @@ def validate_enterprise_ai_connections(
         if connection.connection_id == ENTERPRISE_AI_PRIMARY_CONNECTION_ID:
             continue
         label = connection_label(connection.connection_id)
-        required = [
-            ("endpoint", "Endpoint URL", bool(connection.endpoint)),
-            ("project_ocid", "Project OCID", bool(connection.project_ocid)),
-        ]
+        required = [("endpoint", "Endpoint URL", bool(connection.endpoint))]
+        if connection.connection_id not in ENTERPRISE_AI_PROJECT_OCID_OPTIONAL_CONNECTION_IDS:
+            required.append(("project_ocid", "Project OCID", bool(connection.project_ocid)))
         if api_keys is not None:
             required.append(
                 ("api_key", "API key", bool(api_keys.get(connection.connection_id, "")))
@@ -746,7 +788,7 @@ def apply_model_settings(settings: Any, payload: ModelSettingsPayload) -> None:
     generative = payload.generative_ai
     models = [model.model_copy() for model in enterprise.models if model.model_id]
     for connection_id, fields in _CONNECTION_FIELDS.items():
-        # payload にない接続（セカンダリ接続を削除した場合）は空にする。
+        # payload にない接続（セカンダリ接続・ターシャリ接続を削除した場合）は空にする。
         connection = enterprise.connection(connection_id) or EnterpriseAiConnectionSettings()
         _set_if_field(settings, fields.endpoint, connection.endpoint)
         _set_if_field(settings, fields.project_ocid, connection.project_ocid)
@@ -789,7 +831,7 @@ def _secret_value(*, current: str, update: str | None, clear: bool) -> str:
 def resolve_api_keys(settings: Any, payload: ModelSettingsPayload) -> dict[str, str]:
     """保存後の接続ごとの API key（空欄は現在値を保持、`clear_api_key` は削除）。
 
-    payload にない接続（削除したセカンダリ接続）の key は空にする。
+    payload にない接続（削除したセカンダリ接続・ターシャリ接続）の key は空にする。
     """
     keys: dict[str, str] = {}
     for connection_id, fields in _CONNECTION_FIELDS.items():
@@ -895,8 +937,8 @@ class _PersistedEnterpriseAiSettings(BaseModel):
     def connection_settings(self, settings: Any) -> list[EnterpriseAiConnectionSettings]:
         """保存済みの接続。読み込みは失敗させない（知らない ID・重複は捨てる）。
 
-        #533 より前の JSON は top-level の接続をプライマリ接続にし、セカンダリ接続は今の
-        Settings（env）のまま。
+        #533 より前の JSON は top-level の接続をプライマリ接続にし、セカンダリ接続・
+        ターシャリ接続は今の Settings（env）のまま。
         """
         if self.connections is None:
             primary = EnterpriseAiConnectionSettings(
@@ -904,14 +946,17 @@ class _PersistedEnterpriseAiSettings(BaseModel):
                 endpoint=self.endpoint,
                 project_ocid=self.project_ocid,
             )
-            return [primary] + [
-                EnterpriseAiConnectionSettings(
-                    connection_id=ENTERPRISE_AI_SECONDARY_CONNECTION_ID,
-                    endpoint=item.endpoint,
-                    project_ocid=item.project_ocid,
-                )
-                for item in enterprise_ai_connections(settings)[1:]
-            ]
+            return (
+                [primary]
+                + [
+                    EnterpriseAiConnectionSettings(
+                        connection_id=item.connection_id,
+                        endpoint=item.endpoint,
+                        project_ocid=item.project_ocid,
+                    )
+                    for item in enterprise_ai_connections(settings)[1:]
+                ]
+            )
         saved = {item.connection_id: item for item in reversed(self.connections)}
         connections: list[EnterpriseAiConnectionSettings] = []
         for connection_id in ENTERPRISE_AI_CONNECTION_IDS:
@@ -1010,6 +1055,9 @@ class ModelSettingsStore:
             self._environment_api_key(
                 settings, refresh=refresh_secret, name=ENTERPRISE_AI_SECONDARY_API_KEY_ENV
             ),
+            self._environment_api_key(
+                settings, refresh=refresh_secret, name=ENTERPRISE_AI_TERTIARY_API_KEY_ENV
+            ),
         )
         path = self.path(settings)
         if not path.is_file():
@@ -1080,32 +1128,33 @@ class ModelSettingsStore:
         *,
         api_key: str,
         secondary_api_key: str | None = None,
+        tertiary_api_key: str | None = None,
     ) -> None:
         """`.env` の API key → JSON の順に保存する。JSON に失敗したら `.env` を元に戻す。
 
         `.env` を先に書くのは、JSON の mtime を見て再読込する別 worker が新しい key を読めるように
         するため。`lock()` の中で呼ぶ。失敗時は OSError を送出する。
-        `secondary_api_key`（セカンダリ接続）を省くと今の値のまま。payload にセカンダリ接続が
-        なければ消す。
+        `secondary_api_key`（セカンダリ接続）・`tertiary_api_key`（ターシャリ接続）を省くと今の値の
+        まま。payload にその接続がなければ消す。
         """
-        if payload.enterprise_ai.connection(ENTERPRISE_AI_SECONDARY_CONNECTION_ID) is None:
-            secondary_api_key = ""
-        elif secondary_api_key is None:
-            secondary_api_key = _setting_text(settings, _SECONDARY_FIELDS.api_key)
+        api_key_values: dict[str, str | None] = {ENTERPRISE_AI_API_KEY_ENV: api_key.strip() or None}
+        optional_keys = {
+            ENTERPRISE_AI_SECONDARY_CONNECTION_ID: secondary_api_key,
+            ENTERPRISE_AI_TERTIARY_CONNECTION_ID: tertiary_api_key,
+        }
+        for connection_id, connection_key in optional_keys.items():
+            fields = _CONNECTION_FIELDS[connection_id]
+            if payload.enterprise_ai.connection(connection_id) is None:
+                connection_key = ""
+            elif connection_key is None:
+                connection_key = _setting_text(settings, fields.api_key)
+            api_key_values[fields.api_key_env] = connection_key.strip() or None
         section_values: dict[str, str | None] = {
             secret.env: str(getattr(settings, secret.attr, "") or "").strip() or None
             for section in self._sections
             for secret in section.secrets
         }
-        targets = [
-            (
-                self.env_file(settings),
-                {
-                    ENTERPRISE_AI_API_KEY_ENV: api_key.strip() or None,
-                    ENTERPRISE_AI_SECONDARY_API_KEY_ENV: secondary_api_key.strip() or None,
-                },
-            )
-        ]
+        targets = [(self.env_file(settings), api_key_values)]
         if section_values:
             targets.append((self.section_env_file(settings), section_values))
         written: list[tuple[Path, dict[str, str | None]]] = []
@@ -1472,11 +1521,13 @@ def save_model_settings(
 
     登録モデルか既定のモデルを変える保存では既定のモデルを検証する（不正なら HTTPException(422)）。
     変えない保存（接続情報・Generative AI の節だけの保存）は、保存済みの状態が不正でも止めない。
-    接続（セカンダリ接続の必須の欄。#542）と、登録モデルが指す接続は毎回検証する（#533）。
+    接続（セカンダリ接続・ターシャリ接続の必須の欄。#542 / #786）と、登録モデルが指す接続は
+    毎回検証する（#533）。
     永続化の失敗は HTTPException(500)。
     """
     # 接続（#533）は毎回確かめる。直す欄は同じ画面にあるので、保存済みの状態が不正でも止める。
-    # セカンダリ接続の API key は、保存後の値（空欄は保存済みの値を保持）で確かめる（#542）。
+    # セカンダリ接続・ターシャリ接続の API key は、保存後の値（空欄は保存済みの値を保持）で
+    # 確かめる（#542）。
     errors = validate_enterprise_ai_connections(
         payload.enterprise_ai, api_keys=resolve_api_keys(settings, payload)
     )
@@ -1493,6 +1544,7 @@ def save_model_settings(
                 payload,
                 api_key=keys[ENTERPRISE_AI_PRIMARY_CONNECTION_ID],
                 secondary_api_key=keys[ENTERPRISE_AI_SECONDARY_CONNECTION_ID],
+                tertiary_api_key=keys[ENTERPRISE_AI_TERTIARY_CONNECTION_ID],
             )
     except OSError as exc:
         raise HTTPException(

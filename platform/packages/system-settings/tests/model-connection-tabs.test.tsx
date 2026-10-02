@@ -8,8 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ModelSettingsPage, type ModelSettingsApi, type ModelSettingsData } from "../src";
 
-// #542: OCI Enterprise AI の接続は、カードの中の共有 Tabs（プライマリ接続 / セカンダリ接続）で切り替える。
-// 表示名の欄はなく、セカンダリ接続は「設定」したときだけ入力欄を出し、3 つの欄とも必須にする。
+// #542: OCI Enterprise AI の接続は、カードの中の共有 Tabs（プライマリ接続 / セカンダリ接続 / ターシャリ接続）で
+// 切り替える。表示名の欄はなく、セカンダリ接続は「設定」したときだけ入力欄を出し、3 つの欄とも必須にする。
+// #786: ターシャリ接続（OpenAI / OpenAI 互換 API 向け）は Endpoint URL と API key が必須で、Project OCID は任意。
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -142,8 +143,22 @@ async function click(element: HTMLElement) {
   });
 }
 
+/** React の制御された input に値を入れる（value の setter を経由して onChange を起こす）。 */
+async function setInputValue(id: string, value: string) {
+  const input = host.querySelector<HTMLInputElement>(`#${id}`);
+  if (!input) throw new Error(`input not found: ${id}`);
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  await act(async () => {
+    setter?.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 async function submitConnections() {
-  const form = host.querySelector<HTMLFormElement>("#enterprise-endpoint, #enterprise-secondary-endpoint, #enterprise-secondary-add")
+  const form = host
+    .querySelector<HTMLFormElement>(
+      "#enterprise-endpoint, #enterprise-secondary-endpoint, #enterprise-secondary-add, #enterprise-tertiary-endpoint, #enterprise-tertiary-add",
+    )
     ?.closest("form");
   if (!form) throw new Error("connection form not found");
   expect(form.noValidate).toBe(true);
@@ -169,6 +184,12 @@ describe("ModelSettingsPage の接続のタブ（#542）", () => {
 
     const tablist = host.querySelector('[role="tablist"][aria-label="OCI Enterprise AI の接続"]');
     expect(tablist).not.toBeNull();
+    // タブの並びはプライマリ接続 → セカンダリ接続 → ターシャリ接続（#786）。
+    expect([...tablist!.querySelectorAll('[role="tab"]')].map((item) => item.textContent)).toEqual([
+      "プライマリ接続",
+      "セカンダリ接続",
+      "ターシャリ接続",
+    ]);
     expect(tab("プライマリ接続").getAttribute("aria-selected")).toBe("true");
     expect(tab("セカンダリ接続").getAttribute("aria-selected")).toBe("false");
     expect(host.querySelector("#enterprise-connection-name")).toBeNull();
@@ -190,6 +211,14 @@ describe("ModelSettingsPage の接続のタブ（#542）", () => {
     expect(host.textContent).toContain("セカンダリ接続は設定されていません。");
     await act(async () => {
       tab("セカンダリ接続").dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      );
+    });
+    expect(tab("ターシャリ接続").getAttribute("aria-selected")).toBe("true");
+    expect(host.querySelector('[data-testid="enterprise-connection-tertiary-empty"]')).not.toBeNull();
+    expect(host.textContent).toContain("ターシャリ接続は設定されていません。");
+    await act(async () => {
+      tab("ターシャリ接続").dispatchEvent(
         new KeyboardEvent("keydown", { key: "Home", bubbles: true }),
       );
     });
@@ -257,5 +286,80 @@ describe("ModelSettingsPage の接続のタブ（#542）", () => {
     expect(host.querySelector('[data-testid="enterprise-connection-secondary-empty"]')).not.toBeNull();
     expect(document.activeElement?.id).toBe("enterprise-secondary-add");
     expect(host.querySelector('[data-testid="enterprise-connection-tab-secondary-unsaved"]')).not.toBeNull();
+  });
+
+  it("ターシャリ接続は Endpoint URL と API key だけで保存でき、Project OCID は任意（#786）", async () => {
+    const updateModelSettings = vi.fn(pending);
+    await renderPage({
+      getModelSettings: async () => data(),
+      updateModelSettings,
+      testModelSettings: pending,
+    });
+
+    await click(tab("ターシャリ接続"));
+    expect(host.textContent).toContain("OpenAI や OpenAI 互換 API");
+    await click(buttonByText("ターシャリ接続を設定"));
+    expect(document.activeElement?.id).toBe("enterprise-tertiary-endpoint");
+    expect(labelText("enterprise-tertiary-endpoint")).toBe("Endpoint URL必須");
+    expect(labelText("enterprise-tertiary-project-ocid")).toBe("Project OCID");
+    expect(labelText("enterprise-tertiary-api-key")).toBe("API key必須");
+    // OpenAI の例を出す。
+    expect(
+      host.querySelector<HTMLInputElement>("#enterprise-tertiary-endpoint")?.placeholder,
+    ).toBe("https://api.openai.com/v1");
+    expect(
+      host.querySelector<HTMLInputElement>("#enterprise-tertiary-api-key")?.placeholder,
+    ).toMatch(/^sk-/);
+    expect(host.textContent).toContain("OCI Enterprise AI を使うときだけ");
+    expect(host.textContent).not.toContain("任意");
+
+    // 未入力の保存は Endpoint URL と API key だけをエラーにする。
+    await submitConnections();
+    expect(fieldError("enterprise-tertiary-endpoint")).toBe("Endpoint URL を入力してください。");
+    expect(fieldError("enterprise-tertiary-project-ocid")).toBeUndefined();
+    expect(fieldError("enterprise-tertiary-api-key")).toBe("API key を入力してください。");
+    expect(updateModelSettings).not.toHaveBeenCalled();
+
+    await setInputValue("enterprise-tertiary-endpoint", "https://api.openai.com/v1");
+    await setInputValue("enterprise-tertiary-api-key", "sk-openai");
+    await submitConnections();
+    expect(updateModelSettings).toHaveBeenCalledTimes(1);
+    const payload = updateModelSettings.mock.calls[0]![0];
+    expect(payload.enterprise_ai.connections.map((c) => c.connection_id)).toEqual([
+      "primary",
+      "tertiary",
+    ]);
+    expect(payload.enterprise_ai.connections[1]).toMatchObject({
+      endpoint: "https://api.openai.com/v1",
+      project_ocid: "",
+      api_key: "sk-openai",
+    });
+  });
+
+  it("ターシャリ接続を先に設定してからセカンダリ接続を設定しても、タブの順に送る（#786）", async () => {
+    const updateModelSettings = vi.fn(pending);
+    await renderPage({
+      getModelSettings: async () => data(),
+      updateModelSettings,
+      testModelSettings: pending,
+    });
+
+    await click(tab("ターシャリ接続"));
+    await click(buttonByText("ターシャリ接続を設定"));
+    await setInputValue("enterprise-tertiary-endpoint", "https://api.openai.com/v1");
+    await setInputValue("enterprise-tertiary-api-key", "sk-openai");
+    await click(tab("セカンダリ接続"));
+    await click(buttonByText("セカンダリ接続を設定"));
+    await setInputValue("enterprise-secondary-endpoint", "https://secondary.example");
+    await setInputValue("enterprise-secondary-project-ocid", "ocid1.generativeaiproject.oc1..s");
+    await setInputValue("enterprise-secondary-api-key", "sk-secondary");
+    await submitConnections();
+
+    const payload = updateModelSettings.mock.calls[0]![0];
+    expect(payload.enterprise_ai.connections.map((c) => c.connection_id)).toEqual([
+      "primary",
+      "secondary",
+      "tertiary",
+    ]);
   });
 });
