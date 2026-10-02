@@ -132,8 +132,6 @@ variableGroups:
   - title: Agent Control Plane
     visible: deploy_agent
     variables:
-      - agent_control_plane_public_base_url
-      - agent_control_plane_mcp_token_secret
       - agent_instance_display_name
       - agent_instance_flex_shape_ocpus
       - agent_instance_flex_shape_memory
@@ -776,22 +774,6 @@ variables:
     title: "Agent secure session cookie (HTTPS only)"
     description: "Written to PLATFORM_AUTH_COOKIE_SECURE in the Agent Compute platform/.env. Keep disabled while the application is served over plain HTTP; enable it after you put HTTPS in front."
     default: false
-
-  agent_control_plane_public_base_url:
-    type: string
-    required: false
-    visible: deploy_agent
-    title: "Control Plane public API base URL"
-    description: "Optional. Written to AGENT_CONTROL_PLANE_PUBLIC_BASE_URL and advertised to Runtimes for Binding MCP callbacks. Leave blank to use http://<Compute private IP>[:application port]/api."
-
-  agent_control_plane_mcp_token_secret:
-    type: password
-    required: false
-    visible: deploy_agent
-    title: "Binding MCP token master secret"
-    description: "Optional. Written to AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET (32 characters or more). Leave blank to keep the Binding MCP endpoint fail-closed (503) until you configure it."
-    confirmation: true
-    pattern: '^$|^[^"\r\n]{32,}$'
 
   agent_runtime_repository_backend:
     type: enum

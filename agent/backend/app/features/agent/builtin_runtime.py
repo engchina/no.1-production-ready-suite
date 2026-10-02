@@ -39,6 +39,7 @@ from openai import AsyncOpenAI
 from pr_system_settings.model import (
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
+    enterprise_ai_model_catalog,
 )
 
 from app.features.agent.config import runtime_config_store
@@ -369,6 +370,12 @@ def runtime_status() -> dict[str, Any]:
         "ready": False,
         "error_code": None,
         "message": None,
+        # Agent ごとに選べるモデル（システム設定 > モデル の登録モデル。ID と表示名だけ）。
+        "models": [
+            {"model_id": model.model_id, "display_name": model.display_name or model.model_id}
+            for model in enterprise_ai_model_catalog(get_settings())
+            if model.model_id
+        ],
     }
     try:
         target = resolve_model_target("")

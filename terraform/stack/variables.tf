@@ -678,38 +678,6 @@ variable "agent_app_auth_cookie_secure" {
   default     = false
 }
 
-variable "agent_control_plane_mcp_token_secret" {
-  description = "Optional master secret for deriving Binding MCP tokens (AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET). Leave blank to keep the Binding MCP endpoint fail-closed (503)."
-  type        = string
-  sensitive   = true
-  default     = ""
-
-  validation {
-    condition = (
-      var.agent_control_plane_mcp_token_secret == ""
-      || (
-        length(var.agent_control_plane_mcp_token_secret) >= 32
-        && !can(regex("[\r\n\"]", var.agent_control_plane_mcp_token_secret))
-      )
-    )
-    error_message = "agent_control_plane_mcp_token_secret must be empty or at least 32 characters without double quotes or line breaks."
-  }
-}
-
-variable "agent_control_plane_public_base_url" {
-  description = "Optional Control Plane API base URL advertised to Runtimes for Binding MCP callbacks. Leave blank to use http://<Compute private IP>[:application_port]/api."
-  type        = string
-  default     = ""
-
-  validation {
-    condition = (
-      var.agent_control_plane_public_base_url == ""
-      || can(regex("^https?://[^\\s\"]+$", var.agent_control_plane_public_base_url))
-    )
-    error_message = "agent_control_plane_public_base_url must be empty or an http(s) URL without spaces or quotes."
-  }
-}
-
 variable "agent_runtime_repository_backend" {
   description = "Oracle repository used for Agent Runtime state (AGENT_RUNTIME_REPOSITORY_BACKEND). The application creates its own tables at startup."
   type        = string

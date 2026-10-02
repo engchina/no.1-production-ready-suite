@@ -358,7 +358,6 @@ install_runtime_env() {
     install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${PROPS_DIR}/platform.env" "${PLATFORM_REPO_DIR}/.env"
   fi
   install -m 0600 -o "${APP_USER}" -g "${APP_GROUP}" "${PROPS_DIR}/backend.env" "${BACKEND_DIR}/.env"
-  resolve_public_base_url "${BACKEND_DIR}/.env"
 
   rm -rf "${WALLET_DIR}"
   install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"
@@ -366,48 +365,6 @@ install_runtime_env() {
   chown -R "${APP_USER}:${APP_GROUP}" "${WALLET_DIR}"
   find "${WALLET_DIR}" -type d -exec chmod 0700 {} \;
   find "${WALLET_DIR}" -type f -exec chmod 0600 {} \;
-}
-
-compute_private_ip() {
-  local private_ip=""
-  private_ip="$(
-    curl -fsS --max-time 5 -H "Authorization: Bearer Oracle" "${OCI_IMDS_VNICS_URL}" 2>/dev/null \
-      | grep -o '"privateIp"[[:space:]]*:[[:space:]]*"[^"]*"' \
-      | head -n 1 \
-      | sed 's/.*"\([^"]*\)"$/\1/'
-  )" || private_ip=""
-  if [ -z "${private_ip}" ]; then
-    private_ip="$(hostname -I 2>/dev/null | awk '{print $1}')" || private_ip=""
-  fi
-  printf '%s\n' "${private_ip:-127.0.0.1}"
-}
-
-# AGENT_CONTROL_PLANE_PUBLIC_BASE_URL が空なら、Runtime から届く Compute の private IP で補う。
-# 明示値（Resource Manager の入力）は変更しない。
-resolve_public_base_url() {
-  local env_file="$1"
-  local current
-  local base_url
-  local private_ip
-
-  current="$(sed -n 's/^AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=//p' "${env_file}" | tail -n 1)"
-  if [ -n "${current}" ]; then
-    log "AGENT_CONTROL_PLANE_PUBLIC_BASE_URL is configured explicitly."
-    return 0
-  fi
-
-  private_ip="$(compute_private_ip)"
-  if [ "${APPLICATION_PORT}" = "80" ]; then
-    base_url="http://${private_ip}/api"
-  else
-    base_url="http://${private_ip}:${APPLICATION_PORT}/api"
-  fi
-  if grep -q '^AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=' "${env_file}"; then
-    sed -i "s|^AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=.*$|AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=${base_url}|" "${env_file}"
-  else
-    printf 'AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=%s\n' "${base_url}" >> "${env_file}"
-  fi
-  log "AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=${base_url}"
 }
 
 install_backend() {
@@ -517,17 +474,6 @@ server {
 
     location = /api {
         return 308 /api/;
-    }
-
-    # Binding MCP endpoint は Binding 固有 token で認証する（Runtime からの呼出し境界。ログイン不要）。
-    location /api/mcp/ {
-        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_buffering off;
     }
 
     # WebSocket は Origin と Host の一致を確認するため、port を含む Host（\$http_host）を渡す。

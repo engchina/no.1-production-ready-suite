@@ -198,7 +198,6 @@ class MemorySearchRequest(BaseModel):
 class RunCreateRequest(BaseModel):
     goal: str
     agent_id: str = "default"
-    runtime_binding_id: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
     metadata: JsonObject = Field(default_factory=dict)
     planner_mode: PlannerMode = PlannerMode.AUTO
@@ -218,10 +217,6 @@ class RunState(BaseModel):
     goal: str
     agent_id: str
     runtime_id: str = "legacy-native"
-    binding_id: str | None = None
-    external_run_id: str | None = None
-    external_cursor: str | None = None
-    runtime_capabilities: JsonObject = Field(default_factory=dict)
     status: RunStatus
     steps: list[RunStep] = Field(default_factory=list)
     events: list[RunEvent] = Field(default_factory=list)
@@ -264,6 +259,7 @@ class AgentRuntimeSnapshot(BaseModel):
     runs: list[RunState] = Field(default_factory=list)
     agents: list[AgentProfile] = Field(default_factory=list)
     memory: list[MemoryEntry] = Field(default_factory=list)
+    # 旧版（#754 より前）の外部 Runtime と Binding。読み込んでも使わない。
     control_plane_state: JsonObject = Field(default_factory=dict)
 
 
@@ -322,33 +318,6 @@ class RuntimeToolCallAuditData(BaseModel):
 class AgentRuntimeRepositoryContract(Protocol):
     def create_run(
         self, request: RunCreateRequest, *, created_by_user_uuid: str | None = None
-    ) -> RunState: ...
-    def create_control_plane_run(
-        self,
-        request: RunCreateRequest,
-        *,
-        runtime_id: str,
-        binding_id: str,
-        capabilities: JsonObject,
-        created_by_user_uuid: str | None = None,
-    ) -> RunState: ...
-    def mark_runtime_submitted(
-        self,
-        run_id: str,
-        *,
-        external_run_id: str,
-        external_cursor: str | None,
-        external_status: str,
-    ) -> RunState: ...
-    def mark_runtime_failed(self, run_id: str, *, code: str, detail: str) -> RunState: ...
-    def record_runtime_event(
-        self, run_id: str, payload: JsonObject, *, cursor: str | None = None
-    ) -> RunState: ...
-    def reconcile_runtime_status(
-        self, run_id: str, *, external_status: str, payload: JsonObject | None = None
-    ) -> RunState: ...
-    def replace_runtime_artifacts(
-        self, run_id: str, artifacts: Sequence[JsonObject]
     ) -> RunState: ...
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None: ...
     def persist_control_plane_state(self) -> None: ...
@@ -486,199 +455,6 @@ class AgentRuntimeRepository:
                 raise KeyError(run_id)
             return run.model_copy(deep=True)
 
-    def create_control_plane_run(
-        self,
-        request: RunCreateRequest,
-        *,
-        runtime_id: str,
-        binding_id: str,
-        capabilities: JsonObject,
-        created_by_user_uuid: str | None = None,
-    ) -> RunState:
-        """外部 Runtime 用の Run を投入する。tool loop はこのプロセスで実行しない。"""
-        with self._lock:
-            agent = self._agents.get(request.agent_id)
-            if agent is None:
-                raise KeyError(request.agent_id)
-            if not agent.enabled:
-                raise ValueError("agent disabled")
-            if request.tool_calls:
-                raise ValueError("legacy_tool_calls_not_supported")
-            run = RunState(
-                id=f"run_{uuid4().hex}",
-                goal=request.goal,
-                agent_id=request.agent_id,
-                runtime_id=runtime_id,
-                binding_id=binding_id,
-                created_by_user_uuid=created_by_user_uuid,
-                runtime_capabilities=dict(capabilities),
-                status=RunStatus.QUEUED,
-                metadata={**request.metadata, "_planner_mode": "runtime"},
-            )
-            self._runs[run.id] = run
-            self._append_event(
-                run,
-                RunEventType.RUN_CREATED,
-                "Control Plane が外部 Runtime Run を作成しました。",
-                {"runtime_id": runtime_id, "binding_id": binding_id},
-            )
-            self._persist_locked()
-            return run.model_copy(deep=True)
-
-    def mark_runtime_submitted(
-        self,
-        run_id: str,
-        *,
-        external_run_id: str,
-        external_cursor: str | None,
-        external_status: str,
-    ) -> RunState:
-        with self._lock:
-            run = self._require_run(run_id)
-            run.external_run_id = external_run_id
-            run.external_cursor = external_cursor
-            run.metadata.pop("_runtime_dispatch_lease", None)
-            submitted_status = _normalize_runtime_status(external_status)
-            run.status = (
-                submitted_status
-                if submitted_status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
-                else RunStatus.RUNNING
-            )
-            run.updated_at = _now()
-            self._append_event(
-                run,
-                RunEventType.RUNTIME_SUBMITTED,
-                "外部 Runtime が Run を受理しました。",
-                {"external_run_id": external_run_id, "external_status": external_status},
-            )
-            if run.status == RunStatus.COMPLETED:
-                self._append_event(
-                    run,
-                    RunEventType.RUN_COMPLETED,
-                    "外部 Runtime Run が完了しました。",
-                )
-            self._persist_locked()
-            return run.model_copy(deep=True)
-
-    def mark_runtime_failed(self, run_id: str, *, code: str, detail: str) -> RunState:
-        with self._lock:
-            run = self._require_run(run_id)
-            run.metadata.pop("_runtime_dispatch_lease", None)
-            run.status = RunStatus.FAILED
-            run.updated_at = _now()
-            self._append_event(
-                run,
-                RunEventType.RUNTIME_FAILED,
-                "外部 Runtime への dispatch に失敗しました。",
-                {"error_code": code, "detail": detail},
-            )
-            self._persist_locked()
-            return run.model_copy(deep=True)
-
-    def record_runtime_event(
-        self, run_id: str, payload: JsonObject, *, cursor: str | None = None
-    ) -> RunState:
-        """Runtime event を安全な metadata に縮約し、再接続時の重複を除外する。"""
-        with self._lock:
-            run = self._require_run(run_id)
-            event_payload = _runtime_event_metadata(payload)
-            event_key = _runtime_event_key(payload, cursor)
-            seen = run.metadata.setdefault("_runtime_event_keys", [])
-            if not isinstance(seen, list):
-                seen = []
-                run.metadata["_runtime_event_keys"] = seen
-            if event_key in seen:
-                return run.model_copy(deep=True)
-            seen.append(event_key)
-            del seen[:-256]
-            if cursor:
-                run.external_cursor = cursor
-            event_payload["runtime_event_key"] = event_key
-            run.updated_at = _now()
-            self._append_event(
-                run,
-                RunEventType.RUNTIME_EVENT,
-                "外部 Runtime からイベントを受信しました。",
-                event_payload,
-            )
-            self._persist_locked()
-            return run.model_copy(deep=True)
-
-    def reconcile_runtime_status(
-        self,
-        run_id: str,
-        *,
-        external_status: str,
-        payload: JsonObject | None = None,
-    ) -> RunState:
-        """Runtime 固有 status を Control Plane の共通 RunStatus へ写像する。"""
-        with self._lock:
-            run = self._require_run(run_id)
-            normalized = _normalize_runtime_status(external_status)
-            previous = run.status
-            run.metadata["_runtime_status"] = {
-                "status": external_status[:128],
-                **_runtime_event_metadata(payload or {}),
-            }
-            if (
-                normalized is not None
-                and not _is_terminal(run.status)
-                and not (normalized == RunStatus.QUEUED and run.status != RunStatus.QUEUED)
-            ):
-                run.status = normalized
-            run.updated_at = _now()
-            if run.status != previous:
-                if run.status == RunStatus.COMPLETED:
-                    event_type = RunEventType.RUN_COMPLETED
-                    message = "外部 Runtime Run が完了しました。"
-                elif run.status == RunStatus.FAILED:
-                    event_type = RunEventType.RUNTIME_FAILED
-                    message = "外部 Runtime Run が失敗しました。"
-                elif run.status == RunStatus.CANCELLED:
-                    event_type = RunEventType.RUN_CANCELLED
-                    message = "外部 Runtime Run がキャンセルされました。"
-                else:
-                    event_type = RunEventType.RUN_STATUS_CHANGED
-                    message = "外部 Runtime Run の状態を更新しました。"
-                self._append_event(
-                    run,
-                    event_type,
-                    message,
-                    {"external_status": external_status, "status": run.status.value},
-                )
-            self._persist_locked()
-            return run.model_copy(deep=True)
-
-    def replace_runtime_artifacts(self, run_id: str, artifacts: Sequence[JsonObject]) -> RunState:
-        """Runtime Artifact を共通 Artifact 契約へ決定論的に正規化する。"""
-        with self._lock:
-            run = self._require_run(run_id)
-            existing = {item.id: item for item in run.artifacts}
-            normalized = [
-                _runtime_artifact(run.id, item, index) for index, item in enumerate(artifacts)
-            ]
-            normalized = [
-                (
-                    item.model_copy(update={"created_at": existing[item.id].created_at})
-                    if item.id in existing
-                    else item
-                )
-                for item in normalized
-            ]
-            previous_ids = {item.id for item in run.artifacts}
-            run.artifacts = normalized
-            run.updated_at = _now()
-            for artifact in normalized:
-                if artifact.id not in previous_ids:
-                    self._append_event(
-                        run,
-                        RunEventType.ARTIFACT_CREATED,
-                        "外部 Runtime の Artifact を同期しました。",
-                        {"artifact_id": artifact.id, "kind": artifact.kind},
-                    )
-            self._persist_locked()
-            return run.model_copy(deep=True)
-
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None:
         with self._lock:
             run = self._claim_control_plane_run_locked(worker_id, lease_seconds=lease_seconds)
@@ -692,7 +468,8 @@ class AgentRuntimeRepository:
     ) -> RunState | None:
         now = _now()
         for run in reversed(self._sorted_runs_locked()):
-            if run.binding_id is None or run.status != RunStatus.QUEUED:
+            # 組み込み Runtime の queued の Run（新規・承認の決定後の再開。#754）だけを claim する。
+            if run.runtime_id != BUILTIN_RUNTIME_ID or run.status != RunStatus.QUEUED:
                 continue
             lease = run.metadata.get("_runtime_dispatch_lease")
             if isinstance(lease, dict):
@@ -1144,6 +921,9 @@ class AgentRuntimeRepository:
             return run.model_copy(deep=True)
 
     def _set_builtin_running_locked(self, run: RunState, message: str) -> None:
+        # 実行を始めたら dispatcher の lease は要らない（running は claim しない）。
+        # 残すと、承認の決定で queued に戻った Run を lease の期限まで claim できない。
+        run.metadata.pop("_runtime_dispatch_lease", None)
         run.status = RunStatus.RUNNING
         run.updated_at = _now()
         self._append_event(
@@ -1209,9 +989,6 @@ class AgentRuntimeRepository:
             if agent_id not in self._agents:
                 raise KeyError(agent_id)
             del self._agents[agent_id]
-            from app.features.agent.control_plane import runtime_binding_registry
-
-            runtime_binding_registry.delete_for_agent(agent_id)
             self._persist_locked()
 
     def set_plugin_agents(self, source: str, agents: list[AgentProfile]) -> None:
@@ -1276,18 +1053,13 @@ class AgentRuntimeRepository:
         return sorted(self._memory.values(), key=lambda entry: entry.created_at, reverse=True)
 
     def _export_snapshot_locked(self) -> AgentRuntimeSnapshot:
-        from app.features.agent.control_plane import export_control_plane_state
-
         return AgentRuntimeSnapshot(
             runs=[run.model_copy(deep=True) for run in self._sorted_runs_locked()],
             agents=[agent.model_copy(deep=True) for agent in self._sorted_agents_locked()],
             memory=[entry.model_copy(deep=True) for entry in self._sorted_memory_locked()],
-            control_plane_state=export_control_plane_state(),
         )
 
     def _replace_state_locked(self, snapshot: AgentRuntimeSnapshot) -> None:
-        from app.features.agent.control_plane import import_control_plane_state
-
         self._runs = {run.id: run.model_copy(deep=True) for run in snapshot.runs}
         self._agents = {agent.id: _migrate_legacy_agent(agent) for agent in snapshot.agents}
         if "default" not in self._agents:
@@ -1296,7 +1068,6 @@ class AgentRuntimeRepository:
         self._approvals = {
             approval.id: approval for run in self._runs.values() for approval in run.approvals
         }
-        import_control_plane_state(snapshot.control_plane_state)
 
     def _load_snapshot_from_disk(self) -> None:
         if self._snapshot_path is None:

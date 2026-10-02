@@ -25,7 +25,6 @@ from security_support import (
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from app.features.agent.control_plane import RuntimeBinding, runtime_binding_registry
 from app.features.agent.planner import PlannerMode
 from app.features.agent.runtime import (
     AgentProfile,
@@ -214,34 +213,12 @@ def test_operator_run_creation_is_scoped(auth: ProductionAuth, scope_data: Scope
     assert created.status_code == 200, created.text
 
 
-def test_agent_and_binding_lists_are_scoped(
-    monkeypatch: MonkeyPatch, auth: ProductionAuth, scope_data: ScopeData
-) -> None:
-    bindings = [
-        RuntimeBinding(
-            id=f"binding-{agent_id}",
-            agent_id=agent_id,
-            runtime_id="hermes-default",
-            native_agent_ref="agent",
-        )
-        for agent_id in (AGENT_A, AGENT_B)
-    ]
-    monkeypatch.setattr(
-        runtime_binding_registry,
-        "list",
-        lambda agent_id=None: [
-            item for item in bindings if agent_id is None or item.agent_id == agent_id
-        ],
-    )
+def test_agent_list_is_scoped(auth: ProductionAuth, scope_data: ScopeData) -> None:
     _scoped_user(auth, "scoped-agents", ["agent.runs.operate", "menu.agents"])
     headers = login("scoped-agents")
     agents = client.get("/api/agents", headers=headers)
     assert agents.status_code == 200
     assert [item["id"] for item in agents.json()["data"]["agents"]] == [AGENT_A]
-    listed = client.get("/api/runtime-bindings", headers=headers)
-    assert [item["agent_id"] for item in listed.json()["data"]["bindings"]] == [AGENT_A]
-    filtered = client.get(f"/api/runtime-bindings?agent_id={AGENT_B}", headers=headers)
-    assert filtered.json()["data"]["bindings"] == []
 
     admin = login_configured_admin()
     all_agents = {

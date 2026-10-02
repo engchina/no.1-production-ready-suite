@@ -7,11 +7,8 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import hmac
 import json
 import logging
-import os
 import re
 import stat
 from asyncio import sleep, wait_for
@@ -76,22 +73,6 @@ from starlette.concurrency import run_in_threadpool
 import app.settings as app_settings
 from app.features.agent import builtin_runtime
 from app.features.agent.config import runtime_config_store
-from app.features.agent.control_plane import (
-    RUNTIME_ADAPTERS,
-    RuntimeAdapterError,
-    RuntimeBinding,
-    RuntimeBindingListData,
-    RuntimeBindingPatch,
-    RuntimeDefinition,
-    RuntimeListData,
-    RuntimePatch,
-    RuntimeServiceAction,
-    control_runtime_service,
-    probe_runtime,
-    runtime_binding_registry,
-    runtime_registry,
-    runtime_service_logs,
-)
 from app.features.agent.plugins import (
     MarketplaceListing,
     MarketplaceSource,
@@ -145,7 +126,6 @@ from app.features.agent.tools import (
     ToolDefinitionsData,
     ToolInvocationContext,
     ToolPolicy,
-    ToolPolicyDecision,
     ToolResult,
     ToolsData,
     list_external_mcp_tools,
@@ -1508,152 +1488,6 @@ async def invoke_tool(
     )
 
 
-def _binding_token_env_name(binding_id: str) -> str:
-    """Binding 個別の MCP token を置く環境変数名（#211 で `AGENT_` 接頭辞に統一）。
-
-    master secret（`AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET`）と名前が重ならないよう、
-    `AGENT_CONTROL_PLANE_MCP_TOKEN_` ではなく `AGENT_BINDING_MCP_TOKEN_` で始める。
-    """
-    safe_id = re.sub(r"[^A-Za-z0-9]", "_", binding_id).upper()
-    return f"AGENT_BINDING_MCP_TOKEN_{safe_id}"
-
-
-def _binding_mcp_token(binding_id: str) -> str | None:
-    direct = os.environ.get(_binding_token_env_name(binding_id), "").strip()
-    if direct:
-        return direct
-    secret = get_settings().agent_control_plane_mcp_token_secret
-    if not secret:
-        return None
-    return hmac.new(secret.encode("utf-8"), binding_id.encode("utf-8"), hashlib.sha256).hexdigest()
-
-
-def _binding_mcp_tool_names(binding: RuntimeBinding) -> set[str]:
-    agent = _control_plane_agent(binding.agent_id)
-    names: set[str] = set()
-    for skill_id in agent.skill_ids:
-        skill = skill_registry.get(skill_id)
-        if skill is None or not skill.enabled:
-            continue
-        for requirement in skill.mcp_requirements:
-            if requirement.server_id == "control-plane":
-                names.update(requirement.tool_names)
-    # Binding の MCP は Run と結びつかず承認の記録を作れないため、policy で承認なしに実行できる
-    # ツールだけを公開する（承認が必要・拒否のツールは tools/list に出さず、呼んでも拒否。#244）。
-    policy = _configured_tool_policy()
-    return {
-        name
-        for name in names
-        if (definition := tool_registry.get(name)) is not None
-        and policy.decide(definition) == ToolPolicyDecision.ALLOW
-    }
-
-
-def _json_rpc_error(request_id: object, code: int, message: str) -> dict[str, Any]:
-    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
-
-
-@router.post("/mcp/{binding_id}")
-async def control_plane_mcp(
-    binding_id: str,
-    payload: dict[str, Any],
-    request: Request,
-) -> dict[str, Any]:
-    """Binding 固有 token で Skill の必要 tool だけを公開する MCP endpoint。"""
-    binding = runtime_binding_registry.get(binding_id)
-    if binding is None or not binding.enabled:
-        raise HTTPException(status_code=404, detail="binding not found")
-    expected = _binding_mcp_token(binding_id)
-    if expected is None:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "binding_mcp_token_not_configured",
-                "message": "Binding MCP token が設定されていません。",
-            },
-        )
-    authorization = request.headers.get("authorization", "")
-    supplied = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
-    if not supplied or not hmac.compare_digest(supplied, expected):
-        raise HTTPException(status_code=401, detail="invalid binding token")
-
-    request_id = payload.get("id")
-    method = payload.get("method")
-    allowed_names = _binding_mcp_tool_names(binding)
-    if method == "initialize":
-        return {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                "protocolVersion": "2025-03-26",
-                "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "production-ready-agent-control-plane", "version": "2"},
-            },
-        }
-    if method == "notifications/initialized":
-        return {"jsonrpc": "2.0", "id": request_id, "result": {}}
-    if method == "tools/list":
-        definitions = [
-            definition
-            for definition in tool_registry.definitions()
-            if definition.name in allowed_names
-        ]
-        return {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                "tools": [
-                    {
-                        "name": definition.name,
-                        "description": definition.description,
-                        "inputSchema": definition.input_schema,
-                    }
-                    for definition in definitions
-                ]
-            },
-        }
-    if method == "tools/call":
-        params = payload.get("params")
-        if not isinstance(params, dict):
-            return _json_rpc_error(request_id, -32602, "params must be an object")
-        name = str(params.get("name", ""))
-        if name not in allowed_names:
-            return _json_rpc_error(
-                request_id,
-                -32601,
-                "tool is not allowed by Binding Skills or requires approval",
-            )
-        arguments = params.get("arguments", {})
-        if not isinstance(arguments, dict):
-            return _json_rpc_error(request_id, -32602, "arguments must be an object")
-        # Binding の MCP は Run と結びつかない（Runtime は Run の ID を送らない）。RAG / NL2SQL の
-        # ツールは Run の利用者ではなく、サービス利用者（AGENT_MCP_SERVICE_USER_LOGIN_ID）で
-        # 呼ぶ（#233）。
-        # ツールは外部の HTTP を同期で待つため、event loop を止めないよう threadpool で実行する。
-        result = await run_in_threadpool(
-            tool_registry.invoke,
-            ToolCall(name=name, arguments=arguments),
-            policy=_configured_tool_policy(),
-            context=ToolInvocationContext(agent_id=binding.agent_id, user_uuid=None),
-        )
-        body = result.model_dump(mode="json")
-        return {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": json.dumps(body, ensure_ascii=False),
-                    }
-                ],
-                "structuredContent": body,
-                "isError": not result.success,
-            },
-        }
-    return _json_rpc_error(request_id, -32601, "method not found")
-
-
 def _control_plane_agent(agent_id: str) -> AgentProfile:
     agent = next((item for item in runtime_repository.list_agents() if item.id == agent_id), None)
     if agent is None:
@@ -1661,231 +1495,32 @@ def _control_plane_agent(agent_id: str) -> AgentProfile:
     return agent
 
 
-async def _sync_runtime_binding(binding: RuntimeBinding) -> RuntimeBinding:
-    agent = _control_plane_agent(binding.agent_id)
-    runtime = runtime_registry.get(binding.runtime_id)
-    if runtime is None:
-        raise KeyError(binding.runtime_id)
-    skills: list[AgentSkillDefinition] = []
-    mcp_ids: set[str] = set()
-    for skill_id in agent.skill_ids:
-        skill = skill_registry.get(skill_id)
-        if skill is None or not skill.enabled:
-            raise ValueError(f"skill is unavailable: {skill_id}")
-        skills.append(skill)
-        mcp_ids.update(requirement.server_id for requirement in skill.mcp_requirements)
-    configured_mcp = {item.server_id: item for item in runtime_config_store.list_mcp_servers()}
-    missing_mcp = sorted(mcp_ids.difference({*configured_mcp, "control-plane"}))
-    if missing_mcp:
-        raise ValueError(f"MCP server is unavailable: {', '.join(missing_mcp)}")
-    try:
-        mcp_servers = [
-            configured_mcp[item].model_dump(mode="json")
-            for item in sorted(mcp_ids)
-            if item != "control-plane"
-        ]
-        if "control-plane" in mcp_ids:
-            settings = get_settings()
-            mcp_servers.append(
-                {
-                    "server_id": "control-plane",
-                    "base_url": (
-                        f"{settings.agent_control_plane_public_base_url.rstrip('/')}"
-                        f"/mcp/{binding.id}"
-                    ),
-                    "api_key_env": _binding_token_env_name(binding.id),
-                }
-            )
-        await RUNTIME_ADAPTERS[runtime.kind].sync_binding(
-            runtime,
-            binding,
-            agent=agent.model_dump(mode="json", exclude={"tool_names", "command_allowed_prefixes"}),
-            skills=[skill.model_dump(mode="json") for skill in skills],
-            mcp_servers=mcp_servers,
-        )
-    except Exception as exc:
-        updated = runtime_binding_registry.set_sync_result(binding.id, "error", str(exc))
-        runtime_repository.persist_control_plane_state()
-        return updated
-    updated = runtime_binding_registry.set_sync_result(binding.id, "ready")
-    runtime_repository.persist_control_plane_state()
-    return updated
+class BuiltinRuntimeModel(BaseModel):
+    model_id: str
+    display_name: str
 
 
-@router.get("/runtimes", response_model=ApiResponse[RuntimeListData])
-async def list_runtimes(_: None = Depends(require_viewer)) -> ApiResponse[RuntimeListData]:
-    return ApiResponse(data=RuntimeListData(runtimes=runtime_registry.list()))
+class BuiltinRuntimeStatus(BaseModel):
+    """組み込み Runtime の状態（Runtime 画面。API key は出さない。#754）。"""
+
+    id: str
+    name: str
+    sdk: str
+    sdk_version: str
+    model_provider: str
+    model_id: str
+    ready: bool
+    error_code: str | None = None
+    message: str | None = None
+    models: list[BuiltinRuntimeModel] = Field(default_factory=list)
 
 
-@router.post("/runtimes", response_model=ApiResponse[RuntimeDefinition])
-async def create_runtime(
-    runtime: RuntimeDefinition,
-    _: None = Depends(require_admin),
-) -> ApiResponse[RuntimeDefinition]:
-    try:
-        created = runtime_registry.create(runtime)
-        runtime_repository.persist_control_plane_state()
-        return ApiResponse(data=created)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@router.patch("/runtimes/{runtime_id}", response_model=ApiResponse[RuntimeDefinition])
-async def patch_runtime(
-    runtime_id: str,
-    patch: RuntimePatch,
-    _: None = Depends(require_admin),
-) -> ApiResponse[RuntimeDefinition]:
-    try:
-        updated = runtime_registry.patch(runtime_id, patch)
-        runtime_repository.persist_control_plane_state()
-        return ApiResponse(data=updated)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="runtime not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@router.delete("/runtimes/{runtime_id}", response_model=ApiResponse[RuntimeListData])
-async def delete_runtime(
-    runtime_id: str,
-    _: None = Depends(require_admin),
-) -> ApiResponse[RuntimeListData]:
-    if runtime_binding_registry.references_runtime(runtime_id):
-        raise HTTPException(status_code=409, detail="runtime is referenced by bindings")
-    try:
-        runtime_registry.delete(runtime_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="runtime not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    runtime_repository.persist_control_plane_state()
-    return ApiResponse(data=RuntimeListData(runtimes=runtime_registry.list()))
-
-
-@router.get("/runtimes/{runtime_id}/status", response_model=ApiResponse[RuntimeDefinition])
-async def get_runtime_status(
-    runtime_id: str,
+@router.get("/runtime/status", response_model=ApiResponse[BuiltinRuntimeStatus])
+async def get_builtin_runtime_status(
     _: None = Depends(require_viewer),
-) -> ApiResponse[RuntimeDefinition]:
-    try:
-        return ApiResponse(data=await probe_runtime(runtime_id))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="runtime not found") from exc
-
-
-@router.post("/runtimes/services/{service_id}/{action}", response_model=ApiResponse[dict[str, Any]])
-async def run_runtime_service_action(
-    service_id: str,
-    action: RuntimeServiceAction,
-    _: None = Depends(require_admin),
-) -> ApiResponse[dict[str, Any]]:
-    try:
-        return ApiResponse(data=await control_runtime_service(service_id, action))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="runtime service not found") from exc
-    except RuntimeAdapterError as exc:
-        status = 409 if exc.code == "runtime_service_control_disabled" else 502
-        raise HTTPException(
-            status_code=status,
-            detail={"code": exc.code, "message": str(exc)},
-        ) from exc
-
-
-@router.get("/runtimes/services/{service_id}/logs", response_model=ApiResponse[dict[str, Any]])
-async def get_runtime_service_logs(
-    service_id: str,
-    lines: int = Query(default=200, ge=1, le=1000),
-    _: None = Depends(require_admin),
-) -> ApiResponse[dict[str, Any]]:
-    try:
-        return ApiResponse(data=await runtime_service_logs(service_id, lines))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="runtime service not found") from exc
-    except RuntimeAdapterError as exc:
-        status = 409 if exc.code == "runtime_service_control_disabled" else 502
-        raise HTTPException(
-            status_code=status,
-            detail={"code": exc.code, "message": str(exc)},
-        ) from exc
-
-
-@router.get("/runtime-bindings", response_model=ApiResponse[RuntimeBindingListData])
-async def list_runtime_bindings(
-    request: Request,
-    agent_id: str | None = None,
-    _: None = Depends(require_viewer),
-) -> ApiResponse[RuntimeBindingListData]:
-    """Binding の一覧。RBAC が有効なら利用者が使えるエージェントの Binding だけに絞る（#215）。"""
-    bindings = [
-        binding
-        for binding in runtime_binding_registry.list(agent_id=agent_id)
-        if _agent_allowed(request, binding.agent_id)
-    ]
-    return ApiResponse(data=RuntimeBindingListData(bindings=bindings))
-
-
-@router.post("/runtime-bindings", response_model=ApiResponse[RuntimeBinding])
-async def create_runtime_binding(
-    binding: RuntimeBinding,
-    _: None = Depends(require_admin),
-) -> ApiResponse[RuntimeBinding]:
-    try:
-        agent = _control_plane_agent(binding.agent_id)
-        runtime = runtime_registry.get(binding.runtime_id)
-        if runtime is None or runtime.kind == "legacy_native":
-            raise ValueError("runtime is unavailable")
-        if agent.command_allowed_prefixes and "command_allowed_prefixes" not in binding.policy:
-            binding.policy["command_allowed_prefixes"] = list(agent.command_allowed_prefixes)
-        created = runtime_binding_registry.create(binding)
-        runtime_repository.persist_control_plane_state()
-        return ApiResponse(data=await _sync_runtime_binding(created))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="agent not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@router.patch("/runtime-bindings/{binding_id}", response_model=ApiResponse[RuntimeBinding])
-async def patch_runtime_binding(
-    binding_id: str,
-    patch: RuntimeBindingPatch,
-    _: None = Depends(require_admin),
-) -> ApiResponse[RuntimeBinding]:
-    try:
-        if patch.runtime_id is not None and runtime_registry.get(patch.runtime_id) is None:
-            raise ValueError("runtime is unavailable")
-        updated = runtime_binding_registry.patch(binding_id, patch)
-        runtime_repository.persist_control_plane_state()
-        return ApiResponse(data=await _sync_runtime_binding(updated))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="binding not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@router.post("/runtime-bindings/{binding_id}/sync", response_model=ApiResponse[RuntimeBinding])
-async def sync_runtime_binding(
-    binding_id: str,
-    _: None = Depends(require_admin),
-) -> ApiResponse[RuntimeBinding]:
-    binding = runtime_binding_registry.get(binding_id)
-    if binding is None:
-        raise HTTPException(status_code=404, detail="binding not found")
-    return ApiResponse(data=await _sync_runtime_binding(binding))
-
-
-@router.delete("/runtime-bindings/{binding_id}", response_model=ApiResponse[RuntimeBindingListData])
-async def delete_runtime_binding(
-    binding_id: str,
-    _: None = Depends(require_admin),
-) -> ApiResponse[RuntimeBindingListData]:
-    try:
-        runtime_binding_registry.delete(binding_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="binding not found") from exc
-    runtime_repository.persist_control_plane_state()
-    return ApiResponse(data=RuntimeBindingListData(bindings=runtime_binding_registry.list()))
+) -> ApiResponse[BuiltinRuntimeStatus]:
+    """組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI）の SDK の版と使うモデル。"""
+    return ApiResponse(data=BuiltinRuntimeStatus.model_validate(builtin_runtime.runtime_status()))
 
 
 # 実行中の組み込み Runtime の task（GC で消えないよう参照を持つ）。
@@ -2205,34 +1840,6 @@ async def cancel_run(
     try:
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
-        if run.binding_id is not None:
-            if run.status == "cancelled":
-                return ApiResponse(data=run)
-            if not bool(run.runtime_capabilities.get("cancel")):
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "runtime_capability_unsupported",
-                        "message": "この Runtime は Run の取消に対応していません。",
-                        "capability": "cancel",
-                    },
-                )
-            runtime = runtime_registry.get(run.runtime_id)
-            if runtime is None or run.external_run_id is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "runtime_run_not_submitted",
-                        "message": "外部 Runtime の Run ID がまだ確定していません。",
-                    },
-                )
-            try:
-                await RUNTIME_ADAPTERS[runtime.kind].cancel(runtime, run.external_run_id)
-            except RuntimeAdapterError as exc:
-                raise HTTPException(
-                    status_code=409,
-                    detail={"code": exc.code, "message": str(exc)},
-                ) from exc
         return ApiResponse(data=runtime_repository.cancel_run(run_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
@@ -2247,15 +1854,19 @@ async def resume_run(
     try:
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
-        if run.binding_id is not None:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "runtime_capability_unsupported",
-                    "message": "外部 Runtime Run の再開はサポートしていません。",
-                    "capability": "resume",
-                },
-            )
+        if run.runtime_id == BUILTIN_RUNTIME_ID:
+            # 組み込み Runtime は承認がすべて決まると自動で再開する。
+            # 止まっている Run だけ再開を起動し直す。
+            if not builtin_resume_pending(run):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "run_not_resumable",
+                        "message": "承認待ちが残っているか、再開できる状態ではありません。",
+                    },
+                )
+            _schedule_builtin_run(run)
+            return ApiResponse(data=run)
         return ApiResponse(data=runtime_repository.resume_run(run_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
@@ -2270,15 +1881,21 @@ async def replay_run(
     try:
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
-        if run.binding_id is not None:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "runtime_capability_unsupported",
-                    "message": "外部 Runtime Run は新規 Run として再実行してください。",
-                    "capability": "replay",
-                },
+        if run.runtime_id == BUILTIN_RUNTIME_ID:
+            # 同じ Agent・ゴールの新しい Run として実行する（再実行を指示した利用者として）。
+            replayed = runtime_repository.create_builtin_run(
+                RunCreateRequest(
+                    goal=run.goal,
+                    agent_id=run.agent_id,
+                    metadata={
+                        **{k: v for k, v in run.metadata.items() if not k.startswith("_")},
+                        "replayed_from_run_id": run.id,
+                    },
+                ),
+                created_by_user_uuid=_run_creator_user_uuid(request),
             )
+            _schedule_builtin_run(replayed)
+            return ApiResponse(data=replayed)
         return ApiResponse(
             data=runtime_repository.replay_run(
                 run_id, created_by_user_uuid=_run_creator_user_uuid(request)

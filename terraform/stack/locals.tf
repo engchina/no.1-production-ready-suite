@@ -145,11 +145,7 @@ AGENT_RUNTIME_ORACLE_PASSWORD=${local.effective_oracle_password}
 AGENT_RUNTIME_ORACLE_WALLET_DIR=${local.wallet_dir_host}
 AGENT_RUNTIME_ORACLE_WALLET_PASSWORD=${local.effective_oracle_wallet_password}
 AGENT_RUNTIME_ORACLE_CREATE_SCHEMA=true
-AGENT_RUNTIME_BINDINGS_DIR=${local.agent_data_dir_host}/bindings
 AGENT_ARTIFACT_STORAGE_PATH=${local.agent_data_dir_host}/artifacts
-AGENT_RUNTIME_SERVICE_CONTROL_ENABLED=false
-AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=${trimspace(var.agent_control_plane_public_base_url)}
-AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET=${var.agent_control_plane_mcp_token_secret}
 
 AGENT_EXTERNAL_RAG_MCP_URL=${lookup(local.product_mcp_urls, "rag", "")}
 AGENT_EXTERNAL_NL2SQL_MCP_URL=${lookup(local.product_mcp_urls, "nl2sql", "")}

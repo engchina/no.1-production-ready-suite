@@ -101,6 +101,16 @@ def calls() -> Iterator[_Calls]:
     try:
         yield recorded
     finally:
+        # このテストの Run も消す（削除した Agent を参照する Run が残ると、同じ worker の後の
+        # snapshot の検証が失敗する）。
+        repository: Any = runtime_repository
+        with repository._lock:  # noqa: SLF001 - テストの後始末
+            for run_id in [
+                run_id for run_id, run in repository._runs.items() if run.agent_id == AGENT_ID
+            ]:
+                run = repository._runs.pop(run_id)
+                for approval in run.approvals:
+                    repository._approvals.pop(approval.id, None)
         with contextlib.suppress(KeyError, ValueError):
             runtime_repository.delete_agent(AGENT_ID)
         with contextlib.suppress(KeyError, ValueError):
@@ -256,3 +266,86 @@ def test_cancelled_run_is_not_started(monkeypatch: MonkeyPatch, calls: _Calls) -
     assert runtime_repository.get_run(run_id).status == RunStatus.CANCELLED
     assert model.calls == ()
     assert calls.items == []
+
+
+def _dispatch_until_settled(run_id: str) -> None:
+    """runtime-dispatcher で、この Run が承認待ちか終了になるまで claim と実行を繰り返す。"""
+    from app.features.agent.runtime_dispatcher import dispatch_once
+
+    for _ in range(20):
+        status = runtime_repository.get_run(run_id).status
+        if status in {RunStatus.WAITING_APPROVAL, RunStatus.COMPLETED, RunStatus.FAILED}:
+            return
+        anyio.run(dispatch_once, "worker-754")
+    raise AssertionError(f"run did not settle: {runtime_repository.get_run(run_id).status}")
+
+
+def test_api_run_is_executed_and_resumed_by_dispatcher(
+    monkeypatch: MonkeyPatch, calls: _Calls
+) -> None:
+    """API は Run を queued で作り、dispatcher（本番の別プロセス）が実行・承認後の再開をする。"""
+    from security_support import client
+
+    from app.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "agent_runtime_dispatch_mode", "dispatcher")
+    _script(
+        monkeypatch,
+        [function_call(WRITE, {"query": "登録"}, call_id="call-api")],
+        [assistant_message("登録しました。")],
+    )
+
+    created = client.post("/api/runs", json={"goal": "登録して", "agent_id": AGENT_ID})
+    assert created.status_code == 200, created.text
+    run_id = created.json()["data"]["id"]
+    assert created.json()["data"]["status"] == "queued"
+    assert created.json()["data"]["runtime_id"] == BUILTIN_RUNTIME_ID
+
+    _dispatch_until_settled(run_id)
+    waiting = runtime_repository.get_run(run_id)
+    assert waiting.status == RunStatus.WAITING_APPROVAL
+    approval_id = waiting.approvals[0].id
+
+    decided = client.post(f"/api/approvals/{approval_id}/decision", json={"approved": True})
+    assert decided.status_code == 200, decided.text
+    assert decided.json()["data"]["status"] == "queued"
+    # 決定者はログイン中の利用者（local はローカル利用者）。
+    assert decided.json()["data"]["approvals"][0]["decided_by"] == "local"
+
+    _dispatch_until_settled(run_id)
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.COMPLETED
+    assert [name for name, _, _ in calls.items] == [WRITE]
+
+
+def test_runtime_status_reports_model_and_missing_settings(monkeypatch: MonkeyPatch) -> None:
+    from security_support import client
+
+    monkeypatch.setattr(
+        builtin_runtime,
+        "resolve_model_target",
+        lambda _model_id="": ModelTarget(
+            model_id="xai.grok-4", endpoint="https://oci.example", project_ocid="", api_key="secret"
+        ),
+    )
+    ready = client.get("/api/runtime/status").json()["data"]
+    assert ready["ready"] is True
+    assert ready["model_id"] == "xai.grok-4"
+    assert ready["sdk"] == "openai-agents"
+    assert "secret" not in str(ready)
+
+    def missing(_model_id: str = "") -> ModelTarget:
+        raise builtin_runtime.BuiltinRuntimeError("runtime.model_not_configured", "モデル未設定")
+
+    monkeypatch.setattr(builtin_runtime, "resolve_model_target", missing)
+    blocked = client.get("/api/runtime/status").json()["data"]
+    assert blocked["ready"] is False
+    assert blocked["error_code"] == "runtime.model_not_configured"
+
+
+def test_tracing_is_disabled() -> None:
+    """業務データを含む trace を外部（OpenAI）へ送らない。"""
+    from agents.tracing import get_trace_provider
+
+    provider = get_trace_provider()
+    assert getattr(provider, "_disabled", True) is True
