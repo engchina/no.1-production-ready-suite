@@ -115,6 +115,8 @@ type PreviewObjectKindFilter = "all" | PreviewObjectKind;
 type SyntheticLoading = "" | "tables" | "generate" | "results";
 
 const DATA_MANAGEMENT_ID = "data-management";
+/** ヘッダーの「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。#821）。 */
+const DATA_SCHEMA_REFRESH_HEADER = "data-management-header";
 const DEFAULT_DATA_PREVIEW_ROW_LIMIT = DEFAULT_SQL_ROW_LIMIT;
 const DEFAULT_SYNTHETIC_RESULT_LIMIT = DEFAULT_SQL_ROW_LIMIT;
 const DEFAULT_OBJECT_PICKER_SORT: DbObjectPickerSortState = { key: "name", direction: "asc" };
@@ -577,12 +579,14 @@ export function DataManagementPage() {
     }
   };
 
-  const submitSchemaRefresh = async () => {
+  // origin: 押したボタン（ヘッダー）。失敗の案内のボタンは押すと案内ごと消えるので起点を持たず、送信の間は
+  // 進行の表示がスピナーを出す（#821）。
+  const submitSchemaRefresh = async (origin = "") => {
     setSchemaJobError("");
     setSchemaJobNeedsFull(false);
     setReportedSchemaJob("");
     try {
-      const job = await sharedSchemaRefresh.start();
+      const job = await sharedSchemaRefresh.start(origin);
       setSchemaJobId(job.job_id);
       if (!job.job_id && job.status === "done") await refreshObjects();
     } catch (error) {
@@ -1010,6 +1014,7 @@ export function DataManagementPage() {
     ? apiErrorMessage(schemaJobQuery.error, "dataMgmt.schemaJob.error")
     : schemaJobError || sharedSchemaRefresh.error;
   const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
+  const headerSchemaRefreshStarting = sharedSchemaRefresh.startingOrigin === DATA_SCHEMA_REFRESH_HEADER;
   const objectRefreshing =
     ((baseObjectsQuery.isFetching && !baseObjectsQuery.isFetchingNextPage) ||
       (previewObjectsQuery.isFetching && !previewObjectsQuery.isFetchingNextPage) ||
@@ -1087,9 +1092,10 @@ export function DataManagementPage() {
             kind: "utility",
             label: t("common.action.schemaRefresh"),
             icon: RefreshCw,
-            loading: schemaRefreshing,
-            disabled: schemaRefreshing,
-            onClick: () => void submitSchemaRefresh(),
+            // 押したときの送信の間だけ回し、job の間は無効にするだけ（スピナーは進行の表示。#821）。
+            loading: headerSchemaRefreshStarting,
+            disabled: schemaRefreshing && !headerSchemaRefreshStarting,
+            onClick: () => void submitSchemaRefresh(DATA_SCHEMA_REFRESH_HEADER),
           },
         ]}
         actionsTestId="data-management-actions"

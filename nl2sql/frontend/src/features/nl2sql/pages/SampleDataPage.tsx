@@ -41,6 +41,8 @@ type SampleStep = "tables" | "views" | "data" | "all";
 type SampleAction = "import" | "delete";
 
 const SAMPLE_DATA_ID = "sample-data";
+/** 案内の「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。#821）。 */
+const SAMPLE_DATA_SCHEMA_REFRESH_NOTICE = "sample-data-notice";
 const SAMPLE_STEPS: SampleStep[] = ["all", "tables", "views", "data"];
 const SAMPLE_DATASETS: SampleDataset[] = ["hr", "sales", "inquiries"];
 
@@ -279,7 +281,7 @@ export function SampleDataPage() {
     if (loading || schemaRefreshing) return;
     setReportedSchemaRefresh("");
     try {
-      const job = await sharedSchemaRefresh.start();
+      const job = await sharedSchemaRefresh.start(SAMPLE_DATA_SCHEMA_REFRESH_NOTICE);
       setSchemaRefreshJobId(job.job_id);
       if (!job.job_id && job.status === "done") {
         setSchemaRefreshError("");
@@ -391,9 +393,13 @@ export function SampleDataPage() {
   // もう一方は無効にするだけ（同じ処理のスピナーは 1 つ。messaging §3.7、#416。押したボタンだけが回す。#819）。
   // 種類の切り替えなどボタンを押していない読込は、どちらも回さず作業領域の読込表示がスピナーを出す。
   const noticeLoadPressed = loading === "load" && loadOrigin === "notice";
-  const pageNoticeActionLoading = schemaRefreshNeedsFull ? schemaRefreshing : noticeLoadPressed;
+  // スキーマの更新は durable job。押したときの送信の間だけ回し、job の間は無効にするだけ（スピナーは
+  // 作業領域の進行の表示。messaging §3.7、#821）。
+  const noticeSchemaRefreshStarting =
+    sharedSchemaRefresh.startingOrigin === SAMPLE_DATA_SCHEMA_REFRESH_NOTICE;
+  const pageNoticeActionLoading = schemaRefreshNeedsFull ? noticeSchemaRefreshStarting : noticeLoadPressed;
   const pageNoticeActionDisabled = schemaRefreshNeedsFull
-    ? schemaRefreshing || Boolean(loading)
+    ? (schemaRefreshing && !noticeSchemaRefreshStarting) || Boolean(loading)
     : (Boolean(loading) && !noticeLoadPressed) || schemaRefreshing;
   const pageNoticeShown = Boolean(message || visibleSchemaRefreshError || sampleInfo?.warnings.length);
   // 押したボタンが見えていて回っているときだけ、作業領域の読込表示はスピナーを出さない（案内は読込で消えることがある）。

@@ -4147,6 +4147,174 @@ test("catalog 空のときスキーマ参照からスキーマを更新して表
   expect(refreshed).toBe(true);
 });
 
+test("スキーマの更新は押したボタンだけが送信の間回り、job の間は進行の表示だけがスピナーを出す (#821)", async ({
+  page,
+}) => {
+  await mockNl2SqlApi(page);
+  // job の完了まで catalog は空のまま（ヘッダーの「DB 構造を再取得」とスキーマ参照の「スキーマを更新」が両方出る）。
+  let catalogFilled = false;
+  await page.unroute("**/api/schema/catalog");
+  await page.route("**/api/schema/catalog", (route) =>
+    fulfillJson(
+      route,
+      catalogFilled ? schemaCatalog : { refreshed_at: "2026-06-21T10:00:00.000Z", tables: [] }
+    )
+  );
+  await page.unroute("**/api/schema/objects?*");
+  await page.route("**/api/schema/objects?*", (route) => {
+    const tables = catalogFilled ? schemaCatalog.tables : [];
+    return fulfillJson(route, {
+      items: tables.map((table) => ({
+        owner: table.owner,
+        object_name: table.table_name,
+        object_type: table.table_type,
+        logical_name: table.logical_name,
+        comment: table.comment,
+        row_count: table.row_count,
+        column_count: table.columns.length,
+        last_ddl_at: "",
+      })),
+      next_cursor: null,
+      total: tables.length,
+      catalog_version: catalogFilled ? 2 : 1,
+    });
+  });
+  await page.unroute("**/api/nl2sql/profiles");
+  await page.route("**/api/nl2sql/profiles", (route) =>
+    fulfillJson(route, [{ ...profiles[0], allowed_tables: [], allowed_views: [] }])
+  );
+  const jobBody = (jobId: string, status: "running" | "done") => ({
+    job_id: jobId,
+    status,
+    mode: "full",
+    source: "manual",
+    target_objects: [],
+    requires_full_refresh: false,
+    phase: status === "done" ? "done" : "fetching",
+    created_at: "2026-06-21T10:00:00.000Z",
+    started_at: "2026-06-21T10:00:01.000Z",
+    scanned_objects: status === "done" ? schemaCatalog.tables.length : 0,
+    changed_objects: status === "done" ? schemaCatalog.tables.length : 0,
+    deleted_objects: 0,
+    catalog_version: status === "done" ? 2 : null,
+    error_code: "",
+  });
+  // 送信（POST）と job の完了を、テストの側で順に進める。
+  let submitted = 0;
+  let submitGate = createRequestGate();
+  const finishedJobs = new Set<string>();
+  await page.route("**/api/schema/refresh-jobs", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    submitted += 1;
+    const jobId = `schema-refresh-821-${submitted}`;
+    await submitGate.promise;
+    await fulfillJson(route, jobBody(jobId, "running"));
+  });
+  await page.route("**/api/schema/refresh-jobs/schema-refresh-821-*", (route) => {
+    const jobId = new URL(route.request().url()).pathname.split("/").pop() ?? "";
+    return fulfillJson(route, jobBody(jobId, finishedJobs.has(jobId) ? "done" : "running"));
+  });
+
+  await page.goto("/query");
+  await openSchemaPicker(page);
+  const schemaPanel = page.getByTestId("nl2sql-schema-reference");
+  await expect(schemaPanel.getByText(/スキーマ未取得/)).toBeVisible();
+  const headerButton = page
+    .locator("[data-page-header]")
+    .getByRole("button", { name: "DB 構造を再取得", exact: true });
+  const panelButton = schemaPanel.getByRole("button", { name: "スキーマを更新", exact: true });
+  const processing = page.getByTestId("schema-reference-refreshing");
+  await expect(headerButton).toBeVisible();
+  await expect(panelButton).toBeVisible();
+
+  const expectJobPhase = async () => {
+    // job の間はどちらのボタンも回さず無効にし、スピナーは進行の表示の 1 つだけ。
+    await expect(processing).toContainText("DB 構造を再取得しています");
+    for (const button of [headerButton, panelButton]) {
+      await expect(button).toBeDisabled();
+      await expect(button).not.toHaveAttribute("aria-busy", "true");
+    }
+    await expectSingleSpinner(page, processing);
+  };
+
+  // 1) ページヘッダーで押す: 送信の間はヘッダーのボタンだけが回り、スキーマ参照のボタンは無効にするだけ。
+  await headerButton.click();
+  await expect.poll(() => submitted).toBe(1);
+  await expect(headerButton).toHaveAttribute("aria-busy", "true");
+  await expect(panelButton).toBeDisabled();
+  await expect(panelButton).not.toHaveAttribute("aria-busy", "true");
+  await expectSingleSpinner(page, headerButton);
+  submitGate.release();
+  await expectJobPhase();
+  finishedJobs.add("schema-refresh-821-1");
+  await expect(processing).toHaveCount(0);
+  await expect(headerButton).toBeEnabled();
+  await expect(panelButton).toBeEnabled();
+  await expect(page.locator("svg.animate-spin:visible")).toHaveCount(0);
+
+  // 2) スキーマ参照でキーボードで押す: 送信の間はそのボタンだけが回り、フォーカスはボタンに残る（#355）。
+  submitGate = createRequestGate();
+  await panelButton.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => submitted).toBe(2);
+  await expect(panelButton).toHaveAttribute("aria-busy", "true");
+  await expect(panelButton).toBeFocused();
+  await expect(headerButton).toBeDisabled();
+  await expect(headerButton).not.toHaveAttribute("aria-busy", "true");
+  await expectSingleSpinner(page, panelButton);
+  submitGate.release();
+  await expectJobPhase();
+  catalogFilled = true;
+  finishedJobs.add("schema-refresh-821-2");
+  await expect(page.getByRole("button", { name: "請求 を開閉" })).toBeVisible();
+  await expect(processing).toHaveCount(0);
+  await expect(headerButton).toBeEnabled();
+  await expectNoHorizontalScroll(page);
+});
+
+test("別の画面で始めたスキーマの更新は、どの更新のボタンも回さず進行の表示がスピナーを出す (#821)", async ({
+  page,
+}) => {
+  await mockNl2SqlApi(page);
+  let finished = false;
+  const activeJob = () => ({
+    job_id: "schema-refresh-821-elsewhere",
+    status: finished ? "done" : "running",
+    mode: "full",
+    source: "manual",
+    target_objects: [],
+    requires_full_refresh: false,
+    phase: finished ? "done" : "fetching",
+    created_at: "2026-06-21T10:00:00.000Z",
+    started_at: "2026-06-21T10:00:01.000Z",
+    scanned_objects: 0,
+    changed_objects: 0,
+    deleted_objects: 0,
+    catalog_version: null,
+    error_code: "",
+  });
+  await page.unroute("**/api/schema/refresh-jobs/active");
+  await page.route("**/api/schema/refresh-jobs/active", (route) =>
+    fulfillJson(route, { active_job: finished ? null : activeJob() })
+  );
+  await page.route("**/api/schema/refresh-jobs/schema-refresh-821-elsewhere", (route) =>
+    fulfillJson(route, activeJob())
+  );
+
+  await page.goto("/query");
+  const headerButton = page
+    .locator("[data-page-header]")
+    .getByRole("button", { name: "DB 構造を再取得", exact: true });
+  const processing = page.getByTestId("schema-reference-refreshing");
+  await expect(processing).toContainText("DB 構造を再取得しています");
+  await expect(headerButton).toBeDisabled();
+  await expect(headerButton).not.toHaveAttribute("aria-busy", "true");
+  await expectSingleSpinner(page, processing);
+  finished = true;
+  await expect(processing).toHaveCount(0);
+  await expect(headerButton).toBeEnabled();
+});
+
 test("owner 付きの許可表でもスキーマ参照が対象表に絞り込める", async ({ page }) => {
   await mockNl2SqlApi(page);
   // allowed_tables に owner 修飾（APP.INVOICES）が入っていても INVOICES にスコープされる
@@ -8120,9 +8288,11 @@ test("管理 SQL の差分同期不整合はDB構造再取得CTAを表示する"
   await refreshButton.click();
   await expect.poll(() => manualRefreshStarted).toBe(1);
   await expect(refreshButton).toBeDisabled();
-  await expect(refreshButton.locator("svg.animate-spin")).toBeVisible();
   const schemaSync = adminSql.getByTestId("admin-sql-schema-refresh-processing");
   await expect(schemaSync).toContainText("DB 構造を再取得しています");
+  // job の間はボタンを回さず無効にするだけ。スピナーは進行の表示の 1 つだけ（#821）。
+  await expect(refreshButton).not.toHaveAttribute("aria-busy", "true");
+  await expectSingleSpinner(page, schemaSync);
   await expectNoHorizontalScroll(page);
 
   manualRefreshGate.release();
@@ -13145,9 +13315,11 @@ test("SampleData schema refresh recovery disables CTA while workspace processing
   await refreshButton.click();
   await expect.poll(() => manualRefreshStarted).toBe(1);
   await expect(refreshButton).toBeDisabled();
-  await expect(refreshButton.locator("svg.animate-spin")).toBeVisible();
   const processing = page.getByTestId("sample-data-workspace-processing");
   await expect(processing).toContainText("DB 構造を再取得しています");
+  // job の間はボタンを回さず無効にするだけ。スピナーは作業領域の進行の表示の 1 つだけ（#821）。
+  await expect(refreshButton).not.toHaveAttribute("aria-busy", "true");
+  await expectSingleSpinner(page, processing);
   await expectNoHorizontalScroll(page);
 
   manualRefreshGate.release();

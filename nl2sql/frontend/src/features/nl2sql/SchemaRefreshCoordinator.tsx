@@ -25,11 +25,21 @@ import type { SchemaRefreshActiveJobData, SchemaRefreshJob } from "./types";
 
 export interface SchemaRefreshCoordinatorValue {
   job: SchemaRefreshJob | null;
+  /** job の投入（POST）を送信している間。 */
   isStarting: boolean;
+  /**
+   * 送信中の更新を始めた起点（`start(origin)` に渡した値）。送信中でなければ ""。
+   * 押した「スキーマを更新」だけを送信の間 `loading` にするために使う。job の間はどのボタンも回さず
+   * `disabled` にし、スピナーは `SchemaRefreshProcessing` が 1 つだけ出す（durable job の規則。
+   * UX 契約 messaging §3.7「進捗の表示に残す」・buttons §8、#821）。
+   */
+  startingOrigin: string;
+  /** 送信中または job の実行中。 */
   isRefreshing: boolean;
   completedJob: SchemaRefreshJob | null;
   error: string;
-  start: () => Promise<SchemaRefreshJob>;
+  /** `origin` は押したボタンの識別子（同じ画面の複数の「スキーマを更新」を区別する）。 */
+  start: (origin?: string) => Promise<SchemaRefreshJob>;
   track: (job: SchemaRefreshJob | string) => void;
   clearError: () => void;
 }
@@ -58,6 +68,8 @@ export function SchemaRefreshCoordinator({
   const [trackedSnapshot, setTrackedSnapshot] = useState<SchemaRefreshJob | null>(null);
   const [completedJob, setCompletedJob] = useState<SchemaRefreshJob | null>(null);
   const [error, setError] = useState("");
+  // 送信中の更新を始めた起点。isStarting の間だけ意味を持つ（startingOrigin で公開する）。
+  const [startOrigin, setStartOrigin] = useState("");
   // 終端を報告済みの job（`<job_id>:<status>`）。track で空に戻す。
   const [reportedTerminal, setReportedTerminal] = useState("");
   // 実行中の job を見つけて追跡し始めた job。job の cache の seed は effect で行う。
@@ -94,13 +106,15 @@ export function SchemaRefreshCoordinator({
 
   const job = jobQuery.data ?? trackedSnapshot;
   const isStarting = startMutation.isPending;
+  const startingOrigin = isStarting ? startOrigin : "";
   const isRefreshing =
     isStarting ||
     schemaRefreshJobIsActive(job) ||
     (Boolean(trackedJobId) && !job);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (origin = "") => {
     setError("");
+    setStartOrigin(origin);
     try {
       const nextJob = await startMutation.mutateAsync();
       track(nextJob);
@@ -151,6 +165,7 @@ export function SchemaRefreshCoordinator({
     () => ({
       job,
       isStarting,
+      startingOrigin,
       isRefreshing,
       completedJob,
       error,
@@ -158,7 +173,7 @@ export function SchemaRefreshCoordinator({
       track,
       clearError: () => setError(""),
     }),
-    [completedJob, error, isRefreshing, isStarting, job, start, track],
+    [completedJob, error, isRefreshing, isStarting, job, start, startingOrigin, track],
   );
 
   return <SchemaRefreshContext.Provider value={value}>{children}</SchemaRefreshContext.Provider>;
