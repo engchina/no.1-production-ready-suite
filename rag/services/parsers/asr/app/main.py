@@ -22,7 +22,8 @@ from rag_parser_core.result import ParseHealth, ParseResponse
 from app.transcribe import transcribe
 
 _BACKEND = "asr"
-app = FastAPI(title="parser-asr")
+# API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。
+app = FastAPI(title="parser-asr", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 def _version() -> tuple[bool, str | None]:

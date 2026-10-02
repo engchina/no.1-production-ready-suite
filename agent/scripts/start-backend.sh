@@ -53,5 +53,5 @@ fi
 
 kill_port "${PORT}"
 
-echo "[backend] http://${HOST}:${PORT}/docs で起動します..."
+echo "[backend] http://${HOST}:${PORT} で起動します（稼働確認: /api/health）..."
 exec uv run --no-sync uvicorn app.main:app --reload --host "${HOST}" --port "${PORT}"

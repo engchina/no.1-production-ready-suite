@@ -27,7 +27,7 @@ cd backend
 uv sync
 cp ../../platform/.env.example ../../platform/.env   # 3製品共通の設定（OCI / Oracle 接続など。PLATFORM_*）
 cp .env.example .env        # RAG 固有の設定（RAG_*）
-uv run uvicorn app.main:app --reload    # http://localhost:8000/docs
+uv run uvicorn app.main:app --reload    # http://localhost:8000/api/health
 
 # フロントエンド（別ターミナル）
 cd frontend

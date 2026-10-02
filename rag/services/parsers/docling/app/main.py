@@ -20,7 +20,8 @@ from app.extraction import analyze_source
 
 _BACKEND = "docling"
 logger = logging.getLogger(__name__)
-app = FastAPI(title="parser-docling")
+# API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。
+app = FastAPI(title="parser-docling", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @app.get("/health", response_model=ParseHealth)

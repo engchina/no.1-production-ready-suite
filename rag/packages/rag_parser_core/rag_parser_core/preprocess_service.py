@@ -49,7 +49,8 @@ def create_preprocess_app(
     converter は各サービスが重い変換依存(LibreOffice / pymupdf 等)を内包して実装し、
     本 factory は HTTP 契約(`POST /convert` / `GET /health`)だけを担う。
     """
-    app = FastAPI(title=title or "preprocess")
+    # API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。
+    app = FastAPI(title=title or "preprocess", docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.get("/health", response_model=ConvertHealth)
     def health() -> ConvertHealth:

@@ -155,7 +155,7 @@ init_script.sh            Compute への配備（systemd の backend・worker �
 ## 開発コマンド
 
 ```bash
-# backend（http://localhost:8010/docs）
+# backend（http://localhost:8010/api/health）
 cd backend && uv sync
 uv run uvicorn app.main:app --reload --port 8010   # または ../scripts/start-backend.sh
 uv run pytest tests/test_<対象>.py                  # 関係するテスト（全件は CI）
