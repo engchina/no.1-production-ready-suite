@@ -120,7 +120,7 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
 ## 開発・検証
 
 - 機能変更と同時に pytest / Playwright を追加・更新する。
-- 完了前に `scripts/check-all.sh`（backend の ruff format/ruff check/mypy/pytest・検証 evidence の dry-run・release chain の rehearsal・bandit、
+- 完了前に `scripts/check-all.sh`（backend の ruff format/ruff check/mypy/pytest・bandit、
   frontend の lint/build）を実行する。
   - `check-all.sh` のローカルの既定は Playwright e2e と pip-audit を省く（#339）。関係する spec だけ
     `SKIP_E2E=0 E2E_ARGS="e2e/<対象>.spec.ts" scripts/check-all.sh` で実行する。全部を実行するときは `FULL=1`。
