@@ -57,6 +57,7 @@ test("保存先がメモリなら、各画面に案内を出し、実行環境�
   await expect(card).toContainText("設定済み");
   const fix = page.getByTestId("runtime-storage-fix");
   await expect(fix).toContainText("agent/backend/.env");
+  await expect(fix).toContainText("保存先にメモリを指定しています");
   await expect(fix).toContainText(SETTING);
   // DB は設定済みなので、データベースの設定へは案内しない。
   await expect(page.getByTestId("runtime-storage-open-database-settings")).toHaveCount(0);
@@ -65,9 +66,10 @@ test("保存先がメモリなら、各画面に案内を出し、実行環境�
   await expectNoPageOverflow(page);
 });
 
-test("DB も未設定なら、データベースの設定へ案内する", async ({ page, mockApi }) => {
+test("DB も未設定なら、データベースの設定へ案内する（既定の auto なら設定の値は要らない）", async ({ page, mockApi }) => {
   mockApi.state.runtimeStorage = {
     ...RUNTIME_STORAGE_MEMORY,
+    configured_backend: "auto",
     database_configured: false,
     reason: "database_not_configured",
   };
@@ -76,9 +78,28 @@ test("DB も未設定なら、データベースの設定へ案内する", async
 
   await page.goto("/runtimes");
   await expect(page.getByTestId("runtime-storage-card")).toContainText("未設定");
-  await expect(page.getByTestId("runtime-storage-fix")).toContainText("システム設定 > データベースを設定し");
+  const fix = page.getByTestId("runtime-storage-fix");
+  await expect(fix).toContainText("システム設定 > データベースを設定し");
+  await expect(fix).toContainText("保存先は自動でデータベースになります");
+  await expect(fix).not.toContainText(SETTING);
   await page.getByTestId("runtime-storage-open-database-settings").click();
   await expect(page).toHaveURL(/\/settings\/database/);
+});
+
+test("既定（auto）で起動の後に DB を設定したときは、再起動を案内する", async ({ page, mockApi }) => {
+  mockApi.state.runtimeStorage = {
+    ...RUNTIME_STORAGE_MEMORY,
+    configured_backend: "auto",
+    reason: "restart_required",
+  };
+  await page.goto("/agents");
+  await expect(page.getByTestId("storage-not-persistent-notice")).toContainText("バックエンドの起動時には使えなかった");
+
+  await page.goto("/runtimes");
+  const fix = page.getByTestId("runtime-storage-fix");
+  await expect(fix).toContainText("バックエンドを再起動すると、データベースに保存します");
+  await expect(fix).not.toContainText(SETTING);
+  await expect(page.getByTestId("runtime-storage-open-database-settings")).toHaveCount(0);
 });
 
 test("バックアップと復元には、書き出すと復元できる範囲を添える", async ({ page, mockApi }) => {

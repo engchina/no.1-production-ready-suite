@@ -4,7 +4,8 @@
 ツール権限。`.env` の宣言（`AGENT_SKILLS_DIR` / `AGENT_PLUGINS_JSON` など）と組み込みの定義は
 起動のたびに読み込むので保存しない。
 
-- 保存先は Run の保存先（`AGENT_RUNTIME_REPOSITORY_BACKEND`）に合わせる。`oracle_*` は
+- 保存先は Run の保存先（`AGENT_RUNTIME_REPOSITORY_BACKEND`。`auto` は `storage_backend` が
+  決める）に合わせる。`oracle_*` は
   `AGENT_CONTROL_PLANE_ITEMS`（共通の `PLATFORM_ORACLE_*`。テーブルはシステムテーブルが作る）、
   `file` は snapshot の隣の JSON ファイル、`memory` は保存しない（従来どおりプロセス内だけ）。
 - MCP 接続の API キー・OAuth の client secret は `app.secret_box` で暗号化して保存する。
@@ -23,6 +24,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Literal, Protocol, cast
 
+from app.features.agent import storage_backend
 from app.oracle_connection import connect_platform_oracle
 from app.secret_box import SecretBoxError, open_secret, seal_secret
 from app.settings import get_settings
@@ -229,10 +231,11 @@ def _lob_text(value: object) -> str:
 
 def build_control_plane_store() -> ControlPlaneItemStore:
     settings = get_settings()
-    backend = settings.agent_runtime_repository_backend.strip().lower()
-    if backend in {"oracle", "oracle_checkpoint", "oracle_normalized"}:
+    # Run の保存先と同じ決定に従う（`auto` は起動時に 1 回だけ判定する。#839）。
+    backend = storage_backend.resolved_backend()
+    if backend in storage_backend.ORACLE_BACKENDS:
         return OracleItemStore()
-    if backend in {"file", "file_snapshot"} and settings.agent_runtime_snapshot_path:
+    if backend in storage_backend.FILE_BACKENDS and settings.agent_runtime_snapshot_path:
         snapshot = Path(settings.agent_runtime_snapshot_path)
         return FileItemStore(snapshot.with_name(f"{snapshot.stem}.control-plane.json"))
     return MemoryItemStore()

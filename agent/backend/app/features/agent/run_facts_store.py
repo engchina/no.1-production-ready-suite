@@ -27,6 +27,7 @@ from importlib import import_module
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
+from app.features.agent import storage_backend
 from app.features.agent.feedback import (
     FeedbackReport,
     FeedbackSummary,
@@ -48,7 +49,6 @@ from app.features.agent.usage import (
     usage_period,
 )
 from app.oracle_connection import connect_platform_oracle
-from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -766,7 +766,8 @@ _writer: RunFactsWriter | None = None
 
 
 def _default_store() -> RunFactsStore | None:
-    backend = get_settings().agent_runtime_repository_backend.strip().lower()
+    # Run の保存先と同じ決定に従う（`auto` は起動時に 1 回だけ判定する。#839）。
+    backend = storage_backend.resolved_backend()
     return OracleRunFactsStore() if backend in _ORACLE_BACKENDS else None
 
 

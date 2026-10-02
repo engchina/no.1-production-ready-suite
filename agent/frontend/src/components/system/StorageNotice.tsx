@@ -24,11 +24,22 @@ export function useRuntimeStorage() {
   });
 }
 
-/** 保存されない理由の 1 文目（DB は設定済みで保存先がメモリか、DB も未設定か）。 */
+/** 保存されない理由の 1 文目（保存先にメモリを指定・再起動が必要・DB が未設定）。 */
 export function storageReasonKey(status: RuntimeStorageStatus): I18nKey {
-  return status.reason === "database_not_configured"
-    ? "storage.notice.databaseNotConfigured"
-    : "storage.notice.memoryBackend";
+  if (status.reason === "database_not_configured") return "storage.notice.databaseNotConfigured";
+  if (status.reason === "restart_required") return "storage.notice.restartRequired";
+  return "storage.notice.memoryBackend";
+}
+
+/** 直し方（保存先の既定は auto。DB を設定して再起動すれば DB に保存する。#839）。 */
+export function storageFixKey(status: RuntimeStorageStatus): I18nKey {
+  if (status.reason === "restart_required") return "storage.fix.restartRequired";
+  if (status.reason === "database_not_configured") {
+    return status.configured_backend === "auto"
+      ? "storage.fix.databaseNotConfigured"
+      : "storage.fix.databaseNotConfiguredExplicit";
+  }
+  return "storage.fix.memoryBackend";
 }
 
 /**
