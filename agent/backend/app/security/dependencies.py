@@ -10,15 +10,20 @@
 3. production: 共通認証（DB ユーザー・構成管理者）の session Cookie を検証し、更新系は CSRF を
    照合し、manifest の権限を確認する。Cookie が無ければ 401。router は利用者から `ActorPolicy`
    を作る。
+4. `POST /mcp`（#778）: Cookie・CSRF を使わず `Authorization: Bearer` で認証する。`prak_` で始まる
+   ものは Agent の API キー（作った利用者として、キーに付けた業務 Agent に絞る）、それ以外は
+   共通のサービストークン（audience `agent`。RAG / NL2SQL と同じ）。
 """
 
 from __future__ import annotations
 
+import dataclasses
+import logging
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import Request, WebSocket
+from fastapi import HTTPException, Request, WebSocket
 from pr_system_settings.auth import dependencies as platform_dependencies
 from pr_system_settings.auth.domain import Principal as PlatformPrincipal
 from pr_system_settings.auth.errors import SecurityApiError, SecurityMigrationRequired
@@ -26,6 +31,8 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
 
 import app.settings as app_settings
+from app.features.agent.api_keys import api_key_registry, looks_like_api_key, narrow_agent_ids
+from app.features.agent.control_plane_store import save_api_key
 
 from .domain import LOCAL_DEBUG_USER_UUID, SYSTEM_ADMIN_ROLE_CODE, Principal, as_principal
 from .permissions import (
@@ -33,6 +40,8 @@ from .permissions import (
     AUTHENTICATED_WITHOUT_PERMISSION,
     OPEN_API_OPERATIONS,
     PUBLIC_API_PATHS,
+    SERVICE_TOKEN_API_PATHS,
+    SERVICE_TOKEN_AUDIENCE,
     UNCLASSIFIED_PERMISSION,
     WEBSOCKET_PERMISSIONS,
     permission_for_route,
@@ -43,7 +52,10 @@ from .service import get_security_service
 permission_route_path = platform_dependencies.permission_route_path
 request_context = platform_dependencies.request_context
 
+logger = logging.getLogger(__name__)
+
 _LOGIN_REQUIRED = "ログインしてください。"
+_API_KEY_INVALID = "API キーが無効です（期限切れ・削除済み・誤り）。"
 _PERMISSION_DENIED = "この機能を利用する権限がありません。"
 
 
@@ -81,6 +93,11 @@ async def authorize_api_request(connection: HTTPConnection) -> AsyncIterator[Non
         yield
         return
     request = connection
+    api_key = _mcp_api_key(request)
+    if api_key is not None:
+        request.state.principal = await _authenticate_api_key(api_key)
+        yield
+        return
     async with platform_dependencies.authorize_request(
         request,
         settings=app_settings.get_settings(),
@@ -93,9 +110,57 @@ async def authorize_api_request(connection: HTTPConnection) -> AsyncIterator[Non
         enter_actor=_enter_actor,
         exit_actor=_exit_actor,
         unclassified_permission=UNCLASSIFIED_PERMISSION,
+        service_token_paths=SERVICE_TOKEN_API_PATHS,
+        service_token_audience=SERVICE_TOKEN_AUDIENCE,
         open_operations=OPEN_API_OPERATIONS,
     ):
         yield
+
+
+def _mcp_api_key(request: Request) -> str | None:
+    """`POST /api/mcp` の `Authorization: Bearer prak_…`（Agent の API キー）。それ以外は None。"""
+    if request.method != "POST" or request.url.path.rstrip("/") != "/api/mcp":
+        return None
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    token = token.strip()
+    if scheme.lower() != "bearer" or not looks_like_api_key(token):
+        return None
+    return token
+
+
+async def _authenticate_api_key(token: str) -> Principal:
+    """API キーの利用者（作った利用者の現在の権限を、キーに付けた業務 Agent に絞る）。"""
+    authenticated = api_key_registry.authenticate(token)
+    if authenticated is None:
+        raise HTTPException(status_code=401, detail=_API_KEY_INVALID)
+    record, persist_last_used = authenticated
+    if persist_last_used:
+        try:
+            await run_in_threadpool(save_api_key, record)
+        except Exception:  # noqa: BLE001 - 最後に使った日時の保存は認証を止めない
+            logger.warning("agent_api_key_last_used_not_saved", extra={"key_id": record.id})
+    settings = app_settings.get_settings()
+    if record.owner_user_uuid == LOCAL_DEBUG_USER_UUID:
+        # local で作ったキーは local でだけ使える（production のローカル利用者はいない）。
+        if settings.app_auth_enabled:
+            raise HTTPException(status_code=401, detail=_API_KEY_INVALID)
+        owner = local_debug_principal()
+    else:
+        try:
+            owner = as_principal(
+                await run_in_threadpool(
+                    get_security_service().principal_for_worker, record.owner_user_uuid
+                )
+            )
+        except (SecurityApiError, SecurityMigrationRequired) as exc:
+            raise HTTPException(
+                status_code=403, detail="API キーを作った利用者の権限を確認できません。"
+            ) from exc
+    return dataclasses.replace(
+        owner,
+        allowed_agent_ids=narrow_agent_ids(owner.allowed_agent_ids, record.agent_ids),
+        session_id=f"api-key:{record.id}",
+    )
 
 
 def current_principal(request: Request) -> Principal:

@@ -200,7 +200,8 @@ RUNTIME_STATEMENTS: tuple[str, ...] = (
 )
 
 # 画面・API で変えた定義（#764）。ITEM_KIND は skill / plugin / marketplace / mcp_connection /
-# tool_policy。ITEM_JSON は定義の JSON（MCP 接続の秘密は暗号化した値）。
+# tool_policy / api_key（#778）。ITEM_JSON は定義の JSON（MCP 接続の秘密は暗号化した値、
+# API キーは秘密を持たず SHA-256 の hash だけ）。
 CONTROL_PLANE_STATEMENTS: tuple[str, ...] = (
     """
     CREATE TABLE AGENT_CONTROL_PLANE_ITEMS (

@@ -193,6 +193,9 @@ function createState() {
     tools: d.tools as unknown as Json[],
     // 監査の記録（`GET /api/audit/tool-calls`）。offset / limit で切り出して返す（#265）。
     auditRecords: [] as Json[],
+    // API キー（`/api/settings/api-keys`。#778）。`apiKeysPersistent` が false なら保存先が無い。
+    apiKeys: [] as Json[],
+    apiKeysPersistent: true,
     plugins: [] as Json[],
     marketplaces: [] as Json[],
     tracePolicy: d.tracePolicy as Json,
@@ -678,6 +681,42 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
 
   // --- 設定 ---
+  if (head === "settings" && second === "api-keys") {
+    if (method === "GET" && at("settings", "api-keys")) {
+      return { keys: state.apiKeys, persistent: state.apiKeysPersistent };
+    }
+    if (method === "POST" && at("settings", "api-keys")) {
+      const id = `${(state.apiKeys.length + 1).toString(16).padStart(16, "0")}`;
+      const token = `prak_${id}_${"x".repeat(43)}`;
+      const days = body.expires_in_days as number | null;
+      const key: Json = {
+        id,
+        name: body.name,
+        owner_user_uuid: (body.run_as_user_uuid as string | null) ?? "local",
+        owner_display_name: body.run_as_user_uuid
+          ? String(
+              (state.security.users as Json[]).find((user) => user.user_uuid === body.run_as_user_uuid)
+                ?.display_name ?? body.run_as_user_uuid
+            )
+          : "ローカル利用者",
+        created_by_user_uuid: "local",
+        created_by_display_name: "ローカル利用者",
+        agent_ids: body.agent_ids ?? null,
+        token_prefix: `prak_${id}_xxxx`,
+        created_at: MOCK_NOW,
+        expires_at: days ? new Date(Date.parse(MOCK_NOW) + days * 86_400_000).toISOString() : null,
+        last_used_at: null,
+        expired: false,
+      };
+      state.apiKeys.unshift(key);
+      return { key, token };
+    }
+    if (method === "DELETE" && at("settings", "api-keys", "*")) {
+      findOr404(state.apiKeys, "id", third, "api key");
+      state.apiKeys = state.apiKeys.filter((key) => key.id !== third);
+      return null;
+    }
+  }
   if (head === "settings") {
     const patchable: Record<string, keyof MockApiState> = {
       "trace-policy": "tracePolicy",
