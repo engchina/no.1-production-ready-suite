@@ -27,6 +27,14 @@ flowchart TD
 ### Business Agent
 
 `AgentProfile` の正式な編集対象は `name / description / instructions / skill_ids / model_id / enabled`。
+
+版（#770）: 名前・説明・指示・Skill・モデルは「下書き」で、`POST /agents/{id}/publish` で版（`AgentVersion`: 版の番号・
+内容・公開日時・公開者・メモ）を作り、`published_version` にする。通常の Run は公開中の版の内容で実行し
+（`RunState.metadata.agent_version`）、公開していない Agent の Run は 409（`agent_unpublished`）。Agent 管理
+（admin）は `RunCreateRequest.draft=true` で下書きを試せる（`agent_version="draft"`）。
+`POST /agents/{id}/versions/{version}/restore` はその版を公開し直し、下書きもその内容にする（ロールバック）。
+画面・API で作る Agent は下書きから始め、#770 より前の Agent（`versioned=false`）は読み込み時に現在の内容を
+v1 として公開する。
 Plugin、MCP、Tool、Runtime を Agent に埋め込まない。`tool_names` は移行リリースの読取互換だけである
 （`command_allowed_prefixes` は #756 で削除した）。
 

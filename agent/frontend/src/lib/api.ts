@@ -269,6 +269,11 @@ export interface AgentProfile {
   /** 組み込み Runtime で使うモデル（空なら既定のテキストモデル。#754）。 */
   model_id?: string;
   migration_required: boolean;
+  /** 公開した版（#770）。利用者の Run は公開中の版（published_version）で実行する。 */
+  versions: AgentVersion[];
+  published_version: number | null;
+  /** 下書きに公開していない変更があるか（公開した版が無いときも true）。 */
+  unpublished_changes: boolean;
   tool_names?: string[];
   enabled: boolean;
   created_at: string;
@@ -512,10 +517,25 @@ export interface RuntimeSnapshotImportPayload {
   reason?: string | null;
 }
 
+/** 公開した業務 Agent の版（#770）。 */
+export interface AgentVersion {
+  version: number;
+  name: string;
+  description: string;
+  instructions: string;
+  skill_ids: string[];
+  model_id: string;
+  note: string;
+  published_at: string;
+  published_by?: string | null;
+}
+
 export interface CreateRunPayload {
   goal: string;
   agent_id?: string;
   metadata?: Record<string, unknown>;
+  /** 公開前の下書きで実行する（Agent 管理の権限が要る。#770）。 */
+  draft?: boolean;
 }
 
 /** 組み込み Runtime で選べるモデル（システム設定 > モデル の登録モデル。#754）。 */
@@ -749,6 +769,16 @@ export const agentApi = {
   // 組み込み Runtime の状態（SDK の版・既定のモデル・選べるモデル。#754）。
   getRuntimeStatus: () => request<BuiltinRuntimeStatus>("/api/runtime/status"),
   listRuns: () => request<{ runs: RunState[] }>("/api/runs"),
+  publishAgent: (agentId: string, note = "") =>
+    request<AgentProfile>(`/api/agents/${encodeURIComponent(agentId)}/publish`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
+  restoreAgentVersion: (agentId: string, version: number) =>
+    request<AgentProfile>(
+      `/api/agents/${encodeURIComponent(agentId)}/versions/${version}/restore`,
+      { method: "POST" },
+    ),
   createRun: (payload: CreateRunPayload) =>
     request<RunState>("/api/runs", {
       method: "POST",

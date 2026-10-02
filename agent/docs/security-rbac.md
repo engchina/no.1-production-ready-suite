@@ -77,6 +77,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 | API | 必要な権限（いずれか） | router の追加の判定 |
 |---|---|---|
 | `GET /runs` | `menu.runs` / `menu.approvals` | viewer 以上・対象範囲で絞る |
+| `POST /agents/{id}/publish`・`POST /agents/{id}/versions/{version}/restore`（#770） | `agent.admin` | 下書きで実行（`POST /runs` の `draft=true`）も `agent.admin` だけ |
 | `GET /runs/{id}`・`/audit`・`/artifacts*` | `menu.runs` / `menu.approvals` / `menu.audit` | viewer 以上（監査は auditor）・範囲外は 403 |
 | `GET /runs/{id}/events`（SSE） | `menu.runs` / `menu.approvals` | viewer 以上・範囲外は 403 |
 | `WS /runs/{id}/events/ws` | `menu.runs` / `menu.approvals` | viewer 以上・範囲外は close 1008 |
