@@ -44,6 +44,23 @@ npm の証明書検証にも使う。別の CA ファイルが必要なら `NODE
 `npm_config_registry` で指定する。内部 registry を VPN で直接利用する構成では、そのホストを
 `no_proxy` / `NO_PROXY` に加える。証明書の追加だけではアクセス制限は解消しない。
 
+Python の依存準備にも同じ HTTP(S) proxy が必要。ローカルの `rag-parser-core` などの隔離 build は
+`build-system.requires` の `hatchling` を別に解決するため、既存の venv があっても PyPI への接続が
+必要になることがある。`Failed to resolve requirements from build-system.requires` と接続 timeout が
+出た場合は、起動するのと同じ terminal で組織の proxy 設定を有効にする。利用者が
+`~/proxy-switch.sh` を使う環境なら、次のように実行する（helper の無い環境では組織の設定を使う）。
+
+```bash
+source ~/proxy-switch.sh
+proxy on
+./rag/scripts/start-all.sh
+```
+
+依存準備だけを確認する場合は `./rag/scripts/start-backend.sh --prepare-only`。
+接続の timeout は parser のコードのエラーとは区別し、build isolation や TLS 検証を無効にして
+回避しない。起動スクリプトは指定済みの proxy を継承し、社内 proxy の宛先を固定しない。
+ポートの掃除は TCP listener だけを停止し、health の問い合わせや接続側の client は停止しない。
+
 backend から同じマシン・private network のサービス（前処理・parser・pipeline の stage・サービス管理の
 health の確認）への HTTP は、`HTTP_PROXY` を設定していてもプロキシを通さない（#852。判定は
 `pr_backend_core.internal_http`）。`scripts/start-backend.sh` も、既存の値を残したまま `NO_PROXY` /
