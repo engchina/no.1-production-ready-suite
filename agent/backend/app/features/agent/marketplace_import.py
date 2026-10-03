@@ -103,7 +103,7 @@ def catalog_origin(url: str) -> tuple[str, str, str] | None:
     ):
         return None
     parts = parsed.path.strip("/").split("/")
-    if len(parts) < 5:
+    if len(parts) < 4:
         return None
     repo = github_repository("/".join(parts[:2]))
     # 現在の JSON URL の形式。slash を含む ref は source.ref で扱う。
@@ -458,7 +458,7 @@ def _build_manifest(
             else [
                 p
                 for p in snapshot.files
-                if p.startswith(directory + "/") and p.endswith("/SKILL.md")
+                if (not directory or p.startswith(directory + "/")) and p.endswith("/SKILL.md")
             ]
         )
         if directory != at("skills") and not found:
@@ -472,10 +472,11 @@ def _build_manifest(
     reference_bytes = 0
     for path in skill_files:
         folder = str(PurePosixPath(path).parent)
+        prefix = folder + "/" if folder != "." else ""
         # サービス外での保持を明示的に禁じた資料は、Skill 本文を取り込む前に断る。
         license_paths = [
             p
-            for p in (at("LICENSE"), f"{folder}/LICENSE.txt", f"{folder}/LICENSE")
+            for p in (at("LICENSE"), f"{prefix}LICENSE.txt", f"{prefix}LICENSE")
             if p in snapshot.files
         ]
         licenses = {p: snapshot.read(p) for p in dict.fromkeys(license_paths)}
@@ -501,7 +502,6 @@ def _build_manifest(
                 f"{skill.name}: 元製品のツール指定は使いません。MCP はこの製品で設定してください。"
             )
         skill.mcp_requirements = []
-        prefix = folder + "/" if folder != "." else ""
         references = [
             p
             for p in snapshot.files

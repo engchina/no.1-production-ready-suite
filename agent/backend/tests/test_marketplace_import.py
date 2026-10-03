@@ -721,3 +721,34 @@ def test_same_plugin_in_two_catalogs_can_be_installed_independently(
             registry.uninstall(two.id)
     finally:
         registry.uninstall(one.id)
+
+
+def test_root_catalog_url_resolves_relative_sources(distribution: dict[str, Any]) -> None:
+    distribution["files"]["marketplace.json"] = distribution["files"].pop(
+        ".claude-plugin/marketplace.json"
+    )
+    listing = importer.fetch_catalog(
+        "https://raw.githubusercontent.com/sample/catalog/main/marketplace.json", "root-catalog", 10
+    )
+    entry = listing.plugins[0]
+    assert isinstance(entry, MarketplaceEntry) and entry.repository == "sample/catalog"
+    assert (
+        importer.prepare_import(entry, "root-catalog").manifest.skills[0].instructions
+        == "比較する範囲を確認してください。"
+    )
+
+
+def test_root_skill_license_is_checked_before_reading_body(distribution: dict[str, Any]) -> None:
+    distribution["files"]["SKILL.md"] = SKILL
+    distribution["files"]["LICENSE.txt"] = (
+        "Test-only notice: retain copies outside the Services is restricted."
+    )
+    entry = MarketplaceEntry(
+        id="root-skill",
+        name="root-skill",
+        source={"source": "github", "repo": "sample/catalog", "sha": REVISION},
+        upstream={"strict": False, "skills": ["."]},
+    )
+    with pytest.raises(ValueError, match="サービス外での保持"):
+        importer.prepare_import(entry, "root-skill")
+    assert not any(url.endswith("/SKILL.md") for url in distribution["requests"])
