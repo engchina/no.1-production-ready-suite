@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, History, MessageSquarePlus, SendHorizontal, Square, Wrench, X } from "lucide-react";
+import { BookOpen, Check, PanelLeftClose, PanelLeftOpen, Plus, SendHorizontal, Square, Wrench, X } from "lucide-react";
 import {
   Banner,
   Button,
@@ -52,34 +52,40 @@ const ACTIVE_STATUSES = new Set<RunState["status"]>(["queued", "running"]);
 const STOPPABLE_STATUSES = new Set<RunState["status"]>(["queued", "running", "waiting_approval"]);
 const POLL_INTERVAL_MS = 1500;
 
+/** 会話の履歴を本文の横にインラインで出す幅（Tailwind の lg）。未満はモーダルの side sheet で開く（RAG と同じ。#664 / #889）。 */
+const HISTORY_INLINE_QUERY = "(min-width: 1024px)";
+
 function useHistoryInline(): boolean {
-  // lg（1024px）以上は会話の一覧を左に並べ、未満は「会話の履歴」で開く side sheet にする（RAG と同じ）。
-  const query = "(min-width: 1024px)";
-  const [inline, setInline] = useState(() =>
-    typeof window === "undefined" ? true : window.matchMedia(query).matches
+  return useSyncExternalStore(
+    (onChange) => {
+      const query = window.matchMedia(HISTORY_INLINE_QUERY);
+      query.addEventListener("change", onChange);
+      return () => query.removeEventListener("change", onChange);
+    },
+    () => window.matchMedia(HISTORY_INLINE_QUERY).matches,
+    () => true
   );
-  useEffect(() => {
-    const media = window.matchMedia(query);
-    const update = () => setInline(media.matches);
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-  return inline;
 }
 
 export function ChatPage() {
   const queryClient = useQueryClient();
   const capabilities = useCapabilities();
+  // 会話の履歴は既定で閉じ、チャットを全幅にする（RAG のチャットと同じ型。#664 / #889）。
+  // lg 以上のインラインのパネルの開閉は作業状態に残す。lg 未満のモーダルの side sheet は残さない
+  // （戻ったとき・再読込で画面を塞がない。workspace-state.md）。
   const historyInline = useHistoryInline();
   const [historyPanelOpen, setHistoryPanelOpen] = useWorkspaceState("chat", "historyOpen", false);
   const [historySheetOpen, setHistorySheetOpen] = useState(false);
-  const historyOpen = historyInline ? historyPanelOpen : historySheetOpen;
+  // lg 以上に広げたらモーダルのシートを閉じる（インラインのパネルは作業状態のまま）。
   const [previousHistoryInline, setPreviousHistoryInline] = useState(historyInline);
   if (previousHistoryInline !== historyInline) {
     setPreviousHistoryInline(historyInline);
-    setHistorySheetOpen(false);
+    if (historyInline) setHistorySheetOpen(false);
   }
+  const historyOpen = historyInline ? historyPanelOpen : historySheetOpen;
+  const historyId = useId();
   const historyToggleRef = useRef<HTMLButtonElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const [agentId, setAgentId] = useWorkspaceState("chat", "agentId", "", isString);
   const [threadId, setThreadId] = useWorkspaceState<"chat", string | null>(
     "chat",
@@ -210,27 +216,39 @@ export function ChatPage() {
     if (stoppableRun) cancel.mutate(stoppableRun.id);
   }
 
+  function toggleHistory() {
+    if (historyInline) setHistoryPanelOpen(!historyPanelOpen);
+    else setHistorySheetOpen((open) => !open);
+  }
+
   function startNewThread() {
     setThreadId(null);
     send.reset();
     cancel.reset();
-    setHistorySheetOpen(false);
+    // 新しい会話はすぐ書き始められるよう、入力欄へフォーカスする（RAG と同じ）。
+    requestAnimationFrame(() => composerRef.current?.focus());
   }
 
   function openThread(item: ThreadSummary) {
+    // lg 未満のシートは、会話を選んだら閉じる（SideSheet が開閉ボタンへフォーカスを戻す）。
+    setHistorySheetOpen(false);
     setThreadId(item.thread_id);
     send.reset();
     cancel.reset();
-    setHistorySheetOpen(false);
   }
+
+  // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す（RAG と同じ。#664）。
+  const currentThreadId = threadOfOtherAgent ? null : threadId;
+  const currentThreadTitle = currentThreadId
+    ? (threads.data?.threads.find((item) => item.thread_id === currentThreadId)?.title ?? runs[0]?.goal)
+    : undefined;
 
   const historyContent = (
     <ThreadList
       threads={threads.data?.threads ?? []}
       loading={threads.isLoading}
-      currentThreadId={threadOfOtherAgent ? null : threadId}
+      currentThreadId={currentThreadId}
       onOpen={openThread}
-      onNew={startNewThread}
     />
   );
 
@@ -278,29 +296,36 @@ export function ChatPage() {
           <div
             className={
               historyInline && historyPanelOpen
-                ? "grid min-w-0 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,17.5rem)_minmax(0,1fr)]"
+                ? "grid min-w-0 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[20rem_minmax(0,1fr)]"
                 : "grid min-w-0 gap-4 lg:min-h-0 lg:flex-1"
             }
           >
             {historyInline ? (
+              // lg 以上: 開くとチャットの左に並べ、チャットの幅が縮む。閉じている間も描いて aria-controls の先を保つ。
               <aside
-                id="chat-history-sheet"
+                id={historyId}
                 aria-label={t("chat.threads.title")}
                 data-testid="chat-history"
-                className={historyPanelOpen ? "flex min-h-0 min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface px-3 pb-3 pt-2 shadow-sm" : "hidden"}
+                className={
+                  historyPanelOpen
+                    ? "flex min-h-0 min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface px-3 pb-3 pt-2 shadow-sm"
+                    : "hidden"
+                }
               >
+                {/* 見出しの行はチャットの上端の行と高さをそろえる。 */}
                 <h2 className="flex min-h-8 items-center px-1 text-sm font-medium text-fg">
                   {t("chat.threads.title")}
                 </h2>
                 {historyContent}
               </aside>
             ) : (
+              // lg 未満: 本文の上に重ねるモーダルの side sheet（会話を選ぶ・Esc・scrim・閉じるボタンで閉じる）。
               <SideSheet
                 open={historySheetOpen}
                 onClose={() => setHistorySheetOpen(false)}
                 title={t("chat.threads.title")}
                 closeLabel={t("chat.threads.close")}
-                id="chat-history-sheet"
+                id={historyId}
                 returnFocusRef={historyToggleRef}
                 bodyClassName="gap-3"
                 data-testid="chat-history"
@@ -313,28 +338,37 @@ export function ChatPage() {
               aria-label={t("chat.conversation")}
               className="flex h-[70dvh] min-h-[28rem] min-w-0 flex-col rounded-lg border border-border bg-surface shadow-sm lg:h-auto lg:min-h-0"
             >
-              <div className="flex min-h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
-                <h2 className="min-w-0 truncate text-sm font-medium text-fg">
-                  {threadId && runs[0] ? runs[0].goal : t("chat.newConversation")}
-                </h2>
-                <div className="flex shrink-0 items-center gap-2">
-                  {(
-                    <Button
-                      ref={historyToggleRef}
-                      variant="secondary"
-                      size="sm"
-                      icon={History}
-                      aria-controls="chat-history-sheet"
-                      aria-expanded={historyOpen}
-                      onClick={() => historyInline ? setHistoryPanelOpen(!historyPanelOpen) : setHistorySheetOpen(!historySheetOpen)}
+              {/* 上端の行: 会話の履歴の開閉・今の会話の名前・新しい会話（履歴を閉じていても使える。RAG と同じ。#664 / #889）。 */}
+              <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+                <Button
+                  ref={historyToggleRef}
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  iconOnly
+                  icon={historyOpen ? PanelLeftClose : PanelLeftOpen}
+                  aria-label={t("chat.threads.title")}
+                  aria-expanded={historyOpen}
+                  aria-controls={historyId}
+                  data-testid="chat-history-toggle"
+                  onClick={toggleHistory}
+                />
+                <div className="min-w-0 flex-1">
+                  {!currentThreadId ? null : currentThreadTitle ? (
+                    <h2
+                      className="truncate text-sm font-medium text-fg"
+                      title={currentThreadTitle}
+                      data-testid="chat-conversation-title"
                     >
-                      {t("chat.threads.open")}
-                    </Button>
+                      {currentThreadTitle}
+                    </h2>
+                  ) : (
+                    <Skeleton className="h-4 w-40" />
                   )}
-                  <Button variant="secondary" size="sm" icon={MessageSquarePlus} onClick={startNewThread}>
-                    {t("chat.threads.new")}
-                  </Button>
                 </div>
+                <Button type="button" variant="secondary" size="sm" icon={Plus} onClick={startNewThread}>
+                  {t("chat.threads.new")}
+                </Button>
               </div>
 
               <div ref={conversationRef} className="min-h-0 flex-1 space-y-6 overflow-y-auto p-4" data-testid="chat-conversation">
@@ -379,6 +413,7 @@ export function ChatPage() {
                   }
                 >
                   <TextareaField
+                    ref={composerRef}
                     id="chat-composer"
                     label={t("chat.composer.label")}
                     labelHidden
@@ -416,13 +451,11 @@ function ThreadList({
   loading,
   currentThreadId,
   onOpen,
-  onNew,
 }: {
   threads: ThreadSummary[];
   loading: boolean;
   currentThreadId: string | null;
   onOpen: (thread: ThreadSummary) => void;
-  onNew: () => void;
 }) {
   if (loading) {
     return (
@@ -432,19 +465,15 @@ function ThreadList({
     );
   }
   if (threads.length === 0) {
-    return (
-      <EmptyState
-        title={t("chat.threads.empty")}
-        action={
-          <Button variant="secondary" size="sm" icon={MessageSquarePlus} onClick={onNew}>
-            {t("chat.threads.new")}
-          </Button>
-        }
-      />
-    );
+    // 「新しい会話」はチャットの上端の行の 1 か所だけに置く（RAG と同じ。#889）。
+    return <p className="px-1 text-sm text-fg-muted">{t("chat.threads.empty")}</p>;
   }
   return (
-    <ul className="min-h-0 space-y-1 overflow-y-auto" aria-label={t("chat.threads.title")}>
+    <ul
+      // パネル（lg 以上）・シート（lg 未満）の高さまで伸ばし、超えたら中をスクロールする（RAG と同じ。#664）。
+      className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain"
+      aria-label={t("chat.threads.title")}
+    >
       {threads.map((item) => {
         const current = item.thread_id === currentThreadId;
         return (

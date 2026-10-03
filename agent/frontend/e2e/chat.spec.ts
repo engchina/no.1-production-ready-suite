@@ -123,10 +123,10 @@ for (const viewport of VIEWPORTS) {
 
       // 会話の履歴（desktop は左、375px は side sheet）。
       if (viewport.width >= 1024) {
-        await page.getByRole("button", { name: "会話の履歴" }).click();
+        await page.getByTestId("chat-history-toggle").click();
         await expect(page.getByTestId("chat-history").getByText("今月の売上は？")).toBeVisible();
       } else {
-        await page.getByRole("button", { name: "会話の履歴" }).click();
+        await page.getByTestId("chat-history-toggle").click();
         const sheet = page.getByRole("dialog", { name: "会話の履歴" });
         await expect(sheet.getByText("今月の売上は？")).toBeVisible();
         await expect(sheet.getByText("2 往復")).toBeVisible();
@@ -135,9 +135,11 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`chat-${viewport.name}-${theme}.png`), fullPage: true });
 
-      // 新しい会話は thread_id を付けずに送る。
-      await page.getByRole("button", { name: "新しい会話" }).first().click();
+      // 新しい会話は上端の行の 1 か所だけ（#889）。押すと会話を外し、すぐ書けるよう入力欄へフォーカスする。
+      await page.getByRole("button", { name: "新しい会話", exact: true }).click();
       await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
+      await expect(page.getByTestId("chat-conversation-title")).toHaveCount(0);
+      await expect(composer).toBeFocused();
     });
   }
 }
@@ -219,10 +221,10 @@ for (const viewport of VIEWPORTS) {
       await useTheme(page, theme);
       await page.goto("/chat");
       if (viewport.width >= 1024) {
-        await page.getByRole("button", { name: "会話の履歴" }).click();
+        await page.getByTestId("chat-history-toggle").click();
         await page.getByTestId("chat-history").getByRole("button", { name: /契約の更新条件は？/ }).click();
       } else {
-        await page.getByRole("button", { name: "会話の履歴" }).click();
+        await page.getByTestId("chat-history-toggle").click();
         await page.getByRole("dialog", { name: "会話の履歴" }).getByText("契約の更新条件は？").click();
       }
 
@@ -376,7 +378,7 @@ test("実行に失敗した回答は理由を出す", async ({ page, mockApi }) 
   });
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/chat");
-  await page.getByRole("button", { name: "会話の履歴" }).click();
+  await page.getByTestId("chat-history-toggle").click();
   await page.getByRole("dialog", { name: "会話の履歴" }).getByText("契約の更新条件は？").click();
 
   const turn = page.getByTestId("chat-turn-run-chat-seed");
@@ -413,42 +415,135 @@ test("公開していない業務 Agent はチャットで選べない（#792）
 async function openSeedThread(page: Page) {
   const viewport = page.viewportSize();
   if (viewport && viewport.width >= 1024) {
-    const toggle = page.getByRole("button", { name: "会話の履歴", exact: true });
+    const toggle = page.getByTestId("chat-history-toggle");
     if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
     await page.getByTestId("chat-history").getByRole("button", { name: /契約の更新条件は？/ }).click();
     return;
   }
-  await page.getByRole("button", { name: "会話の履歴" }).click();
+  await page.getByTestId("chat-history-toggle").click();
   await page.getByRole("dialog", { name: "会話の履歴" }).getByText("契約の更新条件は？").click();
 }
 
-// #871: RAG と同じ既定の全幅表示と、履歴の明示開閉・復元。
-for (const width of [1280, 375]) {
-  test(`履歴は既定で閉じ、会話を全幅で表示する (${width}px)`, async ({ page, mockApi }) => {
-    seedThread(mockApi, {});
-    await page.setViewportSize({ width, height: 900 });
-    await page.goto("/chat");
-    const toggle = page.getByRole("button", { name: "会話の履歴", exact: true });
-    await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await expect(page.getByTestId("chat-history")).not.toBeVisible();
-    if (width >= 1024) {
-      const panel = page.getByRole("region", { name: "会話", exact: true });
-      const before = await panel.boundingBox();
-      await toggle.click();
-      await expect(page.getByTestId("chat-history")).toBeVisible();
-      const opened = await panel.boundingBox();
-      expect(before!.width - opened!.width).toBeGreaterThan(200);
-      await page.reload();
-      await expect(toggle).toHaveAttribute("aria-expanded", "true");
-      await toggle.click();
-      await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    } else {
-      await toggle.click();
-      await expect(page.getByRole("dialog", { name: "会話の履歴" })).toBeVisible();
-      await page.keyboard.press("Escape");
-      await expect(toggle).toBeFocused();
-      await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    }
-    await expectNoHorizontalOverflow(page);
-  });
+// #871 / #889: RAG と同じ型。会話の履歴は既定で閉じて会話を全幅にし、上端の行の左端のアイコンだけのボタンで開閉する。
+async function expectHistoryToggleAtStart(page: Page) {
+  const toggle = page.getByTestId("chat-history-toggle");
+  const conversation = page.getByRole("region", { name: "会話", exact: true });
+  const newThread = page.getByRole("button", { name: "新しい会話", exact: true });
+  await expect(toggle).toHaveAccessibleName("会話の履歴");
+  // アイコンだけ（文字を出さない）。ナビの「実行履歴」と同じ History のアイコンは使わない。
+  await expect(toggle).toHaveText("");
+  await expect(toggle.locator("svg.lucide-history")).toHaveCount(0);
+  // aria-controls の先（パネルかシート）は閉じている間も描いてある。
+  const controls = await toggle.getAttribute("aria-controls");
+  expect(controls).toBeTruthy();
+  await expect(page.locator(`[id="${controls}"]`)).toHaveCount(1);
+  const [toggleBox, conversationBox, newThreadBox] = await Promise.all([
+    toggle.boundingBox(),
+    conversation.boundingBox(),
+    newThread.boundingBox(),
+  ]);
+  if (!toggleBox || !conversationBox || !newThreadBox) throw new Error("レイアウトを計測できません。");
+  // 会話の欄の上端の行の左端に置き、「新しい会話」は右端。
+  expect(toggleBox.x - conversationBox.x).toBeLessThanOrEqual(24);
+  expect(toggleBox.y - conversationBox.y).toBeLessThanOrEqual(24);
+  expect(newThreadBox.x).toBeGreaterThan(toggleBox.x + toggleBox.width);
+  expect(conversationBox.x + conversationBox.width - (newThreadBox.x + newThreadBox.width)).toBeLessThanOrEqual(24);
 }
+
+test("会話の履歴は既定で閉じ、開くと会話の左に並び、開閉の状態が再読込で残る (1280px)", async ({ page, mockApi }) => {
+  seedThread(mockApi, {});
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/chat");
+  const toggle = page.getByTestId("chat-history-toggle");
+  const history = page.getByTestId("chat-history");
+  const conversation = page.getByRole("region", { name: "会話", exact: true });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(toggle.locator("svg.lucide-panel-left-open")).toHaveCount(1);
+  await expect(history).not.toBeVisible();
+  await expectHistoryToggleAtStart(page);
+  // 会話を選ぶまで今の会話の名前は出さない。
+  await expect(page.getByTestId("chat-conversation-title")).toHaveCount(0);
+
+  // キーボード（Enter）で開くと会話の左に並び、会話の幅が縮む。フォーカスは開閉ボタンに残る。
+  const before = await conversation.boundingBox();
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(history).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(toggle.locator("svg.lucide-panel-left-close")).toHaveCount(1);
+  await expect(toggle).toBeFocused();
+  await expect(page.getByRole("complementary", { name: "会話の履歴" })).toBeVisible();
+  const [historyBox, opened] = await Promise.all([history.boundingBox(), conversation.boundingBox()]);
+  if (!historyBox || !before || !opened) throw new Error("レイアウトを計測できません。");
+  expect(before.width - opened.width).toBeGreaterThan(200);
+  expect(Math.abs(historyBox.y - opened.y)).toBeLessThanOrEqual(1);
+  expect(opened.x).toBeGreaterThan(historyBox.x + historyBox.width);
+
+  // 会話を選んでもインラインのパネルは開いたまま。今の会話の名前は上端に出る。
+  await history.getByRole("button", { name: /^契約の更新条件は？/ }).click();
+  await expect(page.getByTestId("chat-conversation-title")).toHaveText("契約の更新条件は？");
+  await expect(history).toBeVisible();
+
+  // 開閉の状態は作業状態として残る（workspace-state.md）。
+  await page.reload();
+  await expect(history).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(history).not.toBeVisible();
+  // 履歴を閉じていても、今の会話の名前は出したまま。
+  await expect(page.getByTestId("chat-conversation-title")).toHaveText("契約の更新条件は？");
+  await page.reload();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(history).not.toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("375px では会話の履歴をシートで開き、Esc・外側・会話の選択で閉じてフォーカスを開閉ボタンへ戻す", async ({
+  page,
+  mockApi,
+}) => {
+  seedThread(mockApi, {});
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/chat");
+  const toggle = page.getByTestId("chat-history-toggle");
+  const sheet = page.getByRole("dialog", { name: "会話の履歴" });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(sheet).toBeHidden();
+  await expectHistoryToggleAtStart(page);
+
+  // キーボードで開く → 閉じるボタンへフォーカス → Tab は中で回る → Esc で閉じてボタンへ戻る。
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(sheet).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(sheet.getByRole("button", { name: "会話の履歴を閉じる" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(sheet.getByRole("button", { name: /^契約の更新条件は？/ })).toBeFocused();
+  await expectNoHorizontalOverflow(page);
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(toggle).toBeFocused();
+
+  // シートの外側（scrim）を押すと閉じる。
+  await toggle.click();
+  await expect(sheet).toBeVisible();
+  await page.getByTestId("chat-history-scrim").click({ position: { x: 360, y: 400 } });
+  await expect(sheet).toBeHidden();
+
+  // 会話を選ぶと閉じ、フォーカスは開閉ボタンへ戻り、今の会話の名前が上端に出る。
+  await toggle.click();
+  await sheet.getByRole("button", { name: /^契約の更新条件は？/ }).click();
+  await expect(sheet).toBeHidden();
+  await expect(toggle).toBeFocused();
+  await expect(page.getByTestId("chat-conversation-title")).toHaveText("契約の更新条件は？");
+
+  // モーダルのシートの開閉は残さない（再読込で画面を塞がない）。
+  await toggle.click();
+  await expect(sheet).toBeVisible();
+  await page.reload();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(sheet).toBeHidden();
+  await expectNoHorizontalOverflow(page);
+});
