@@ -23,6 +23,7 @@ prepare_case() {
   export APP_ROOT="${case_dir}/app"
   export AGENT_INIT_TEST_MODE=true
   export SYSTEMD_UNIT_DIR="${case_dir}/units"
+  export NGINX_LOGGING_CONF_DIR="${case_dir}/conf.d"
   export NGINX_SITES_AVAILABLE_DIR="${case_dir}/sites-available"
   export NGINX_SITES_ENABLED_DIR="${case_dir}/sites-enabled"
 }

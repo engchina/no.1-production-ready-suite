@@ -1,8 +1,9 @@
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Component, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 
 import {
   Banner,
+  logBrowserDiagnostic,
   Button,
 } from "@engchina/production-ready-ui";
 import { t } from "@/lib/i18n";
@@ -38,9 +39,8 @@ export class CardErrorBoundary extends Component<
     return { error };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo): void {
-    // 原因特定にはコンポーネント境界の情報が要る。console 出力だけに留め、UI へは出さない。
-    console.error("[CardErrorBoundary]", this.props.label ?? "", error, info.componentStack);
+  componentDidCatch(error: Error): void {
+    logBrowserDiagnostic("ERROR", { event: "card_render_failed", serviceName: "production-ready-rag", error });
   }
 
   private handleReset = (): void => {

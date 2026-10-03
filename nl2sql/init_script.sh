@@ -547,6 +547,12 @@ configure_systemd() {
 }
 
 configure_nginx() {
+  # log_format は http context に置く。テストでは conf.d の場所も隔離する。
+  local logging_dir="${NGINX_LOGGING_CONF_DIR:-/etc/nginx/conf.d}"
+  local template_dir
+  template_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../platform/templates/nginx" && pwd)"
+  mkdir -p "${logging_dir}"
+  install -m 0644 "${template_dir}/logging.conf" "${logging_dir}/production-ready-logging.conf"
   log "Configuring Nginx on port ${APPLICATION_PORT}."
   cat > /etc/nginx/sites-available/production-ready-nl2sql <<EOF
 server {
@@ -556,7 +562,8 @@ server {
     root ${FRONTEND_DIR}/dist;
     index index.html;
 
-    access_log /var/log/nginx/production-ready-nl2sql-access.log;
+    set \$pr_service_name "production-ready-nl2sql";
+    access_log /var/log/nginx/production-ready-nl2sql-access.log production_ready_json if=\$pr_loggable;
     error_log /var/log/nginx/production-ready-nl2sql-error.log warn;
 
     client_max_body_size 200M;
@@ -572,6 +579,7 @@ server {
         proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
+        proxy_set_header X-Request-ID \$pr_request_id;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;

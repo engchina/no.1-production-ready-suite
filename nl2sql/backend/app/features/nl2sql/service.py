@@ -23,7 +23,7 @@ import time
 import unicodedata
 import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,6 +31,7 @@ from typing import Any, Literal, NoReturn
 
 from charset_normalizer import from_bytes
 from dotenv import dotenv_values
+from pr_backend_core.observability.request_context import bind_log_context
 from pr_backend_core.oracle_errors import oracle_error_codes
 from pydantic import BaseModel, ValidationError
 from pydantic import Field as PydanticField
@@ -5048,6 +5049,8 @@ class Nl2SqlService:
             return False
         claimed_job_id = job_id or ""
         job: SchemaRefreshJob | None = None
+        log_scopes = ExitStack()
+        log_scopes.enter_context(bind_log_context(worker_id=self._schema_refresh_worker_id))
         try:
             refresh_observation = observe_schema_refresh()
             refresh_state = refresh_observation.__enter__()
@@ -5059,6 +5062,7 @@ class Nl2SqlService:
             if job is None:
                 return False
             claimed_job_id = job.job_id
+            log_scopes.enter_context(bind_log_context(job_id=job.job_id))
             phase_started = time.monotonic()
             job = repository.save_refresh_job(
                 job.model_copy(update={"phase": SchemaRefreshPhase.SCANNING}), expected_owner=job
@@ -5324,6 +5328,7 @@ class Nl2SqlService:
                     )
             return False
         finally:
+            log_scopes.close()
             observation = locals().get("refresh_observation")
             if observation is not None:
                 observation.__exit__(None, None, None)
@@ -18623,90 +18628,95 @@ class Nl2SqlService:
         ]
 
     def _run_job_safely(self, job_id: str) -> None:
-        try:
-            with self._lock:
-                pending = self._jobs.get(job_id)
-                if pending is None:
-                    logger.warning("nl2sql_job_missing_before_run", extra={"job_id": job_id})
-                    return
-                actor_user_uuid = pending.actor_user_uuid
-                actor_is_system_admin = pending.actor_is_system_admin
-            with (
-                self._keep_job_lease_alive(job_id),
-                actor_scope(actor_user_uuid, is_system_admin=actor_is_system_admin),
-            ):
-                self._run_job(job_id)
-        except JobExecutionLost:
-            logger.info("nl2sql_job_execution_lost", extra={"job_id": job_id})
-        except Exception as exc:  # pragma: no cover - defensive boundary
+        with bind_log_context(job_id=job_id):
             try:
-                self._assert_job_execution(job_id)
-            except JobExecutionLost:
-                logger.info("nl2sql_job_late_error_discarded", extra={"job_id": job_id})
-                return
-            except Exception:
-                logger.exception("nl2sql_job_error_owner_probe_failed", extra={"job_id": job_id})
-                return
-            with self._lock:
-                job = self._jobs.get(job_id)
-                if job is None:
-                    # 例外ハンドラ内で KeyError を起こすと worker スレッドごと落ちる。
-                    logger.exception(
-                        "nl2sql_job_failed_without_record",
-                        extra={"job_id": job_id, "exception_type": type(exc).__name__},
-                    )
-                    return
-                if (
-                    self._incremental_repository is not None
-                    and job.execution_owner != self._job_execution_owner(job)
+                with self._lock:
+                    pending = self._jobs.get(job_id)
+                    if pending is None:
+                        logger.warning("nl2sql_job_missing_before_run", extra={"job_id": job_id})
+                        return
+                    actor_user_uuid = pending.actor_user_uuid
+                    actor_is_system_admin = pending.actor_is_system_admin
+                with (
+                    self._keep_job_lease_alive(job_id),
+                    actor_scope(actor_user_uuid, is_system_admin=actor_is_system_admin),
                 ):
+                    self._run_job(job_id)
+            except JobExecutionLost:
+                logger.info("nl2sql_job_execution_lost", extra={"job_id": job_id})
+            except Exception as exc:  # pragma: no cover - defensive boundary
+                try:
+                    self._assert_job_execution(job_id)
+                except JobExecutionLost:
+                    logger.info("nl2sql_job_late_error_discarded", extra={"job_id": job_id})
                     return
-                job.status = JobStatus.ERROR
-                if isinstance(exc, JobCancelledError):
-                    job.error_message = str(exc)
-                    job.error_code = JOB_CANCELLED_ERROR_CODE
-                else:
-                    job.error_message = f"NL2SQL ジョブに失敗しました: {exc}"
-                    job.error_code = (
-                        SCHEMA_CATALOG_EMPTY_ERROR_CODE
-                        if isinstance(exc, SchemaCatalogEmptyError)
-                        else _job_failure_error_code(exc, fallback=JOB_FAILED_ERROR_CODE)
+                except Exception:
+                    logger.exception(
+                        "nl2sql_job_error_owner_probe_failed", extra={"job_id": job_id}
                     )
-                job.finished_at = _utc_now()
-                self._clear_job_worker_state_locked(job)
-                failure_index = _job_failure_step_index(job.steps)
-                failure_stage = job.steps[failure_index].stage if failure_index is not None else ""
-                if failure_index is not None:
-                    job.steps[failure_index] = job.steps[failure_index].model_copy(
-                        update={"status": JobStepStatus.ERROR}
+                    return
+                with self._lock:
+                    job = self._jobs.get(job_id)
+                    if job is None:
+                        # 例外ハンドラ内で KeyError を起こすと worker スレッドごと落ちる。
+                        logger.exception(
+                            "nl2sql_job_failed_without_record",
+                            extra={"job_id": job_id, "exception_type": type(exc).__name__},
+                        )
+                        return
+                    if (
+                        self._incremental_repository is not None
+                        and job.execution_owner != self._job_execution_owner(job)
+                    ):
+                        return
+                    job.status = JobStatus.ERROR
+                    if isinstance(exc, JobCancelledError):
+                        job.error_message = str(exc)
+                        job.error_code = JOB_CANCELLED_ERROR_CODE
+                    else:
+                        job.error_message = f"NL2SQL ジョブに失敗しました: {exc}"
+                        job.error_code = (
+                            SCHEMA_CATALOG_EMPTY_ERROR_CODE
+                            if isinstance(exc, SchemaCatalogEmptyError)
+                            else _job_failure_error_code(exc, fallback=JOB_FAILED_ERROR_CODE)
+                        )
+                    job.finished_at = _utc_now()
+                    self._clear_job_worker_state_locked(job)
+                    failure_index = _job_failure_step_index(job.steps)
+                    failure_stage = (
+                        job.steps[failure_index].stage if failure_index is not None else ""
                     )
-                request = job.request
-            logger.exception(
-                "nl2sql_job_failed",
-                extra={
-                    "job_id": job_id,
-                    "failure_stage": failure_stage,
-                    "engine": request.engine.value,
-                    "profile_id": request.profile_id or "",
-                    "exception_type": type(exc).__name__,
-                },
-            )
-            try:
-                self._persist_job(job_id)
-            except Exception as persist_exc:  # pragma: no cover - defensive log boundary
+                    if failure_index is not None:
+                        job.steps[failure_index] = job.steps[failure_index].model_copy(
+                            update={"status": JobStepStatus.ERROR}
+                        )
+                    request = job.request
                 logger.exception(
-                    "nl2sql_job_error_state_persist_failed",
+                    "nl2sql_job_failed",
                     extra={
                         "job_id": job_id,
                         "failure_stage": failure_stage,
                         "engine": request.engine.value,
                         "profile_id": request.profile_id or "",
-                        "exception_type": type(persist_exc).__name__,
+                        "exception_type": type(exc).__name__,
                     },
                 )
-        finally:
-            owners = getattr(self._job_execution_context, "owners", {})
-            owners.pop(job_id, None)
+                try:
+                    self._persist_job(job_id)
+                except Exception as persist_exc:  # pragma: no cover - defensive log boundary
+                    logger.exception(
+                        "nl2sql_job_error_state_persist_failed",
+                        extra={
+                            "job_id": job_id,
+                            "failure_stage": failure_stage,
+                            "engine": request.engine.value,
+                            "profile_id": request.profile_id or "",
+                            "exception_type": type(persist_exc).__name__,
+                        },
+                    )
+            finally:
+                owners = getattr(self._job_execution_context, "owners", {})
+                owners.pop(job_id, None)
 
     def _build_interpretation_artifact(
         self,

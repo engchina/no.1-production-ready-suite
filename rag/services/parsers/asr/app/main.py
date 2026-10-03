@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import logging
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, UploadFile
+from pr_backend_core.logging import configure_http_logging
 from rag_parser_core.asr import ASR_TEMPLATE, build_transcript_extraction
 from rag_parser_core.result import ParseHealth, ParseResponse
 
@@ -24,6 +26,8 @@ from app.transcribe import transcribe
 _BACKEND = "asr"
 # API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。
 app = FastAPI(title="parser-asr", docs_url=None, redoc_url=None, openapi_url=None)
+configure_http_logging(app, service_name="parser-asr")
+logger = logging.getLogger(__name__)
 
 
 def _version() -> tuple[bool, str | None]:
@@ -67,6 +71,10 @@ async def parse(
     try:
         text, segments, language = await asyncio.to_thread(transcribe, source_bytes, suffix=suffix)
     except Exception:  # noqa: BLE001 - 転写失敗は backend を fallback させる
+        logger.exception(
+            "音声の転写に失敗したため代替経路へ切り替えます",
+            extra={"event": "asr_transcription_failed", "outcome": "fallback"},
+        )
         return ParseResponse(
             extraction=None,
             parser_backend=_BACKEND,

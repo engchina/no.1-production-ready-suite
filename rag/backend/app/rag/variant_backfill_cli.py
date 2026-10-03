@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from pr_backend_core.logging import configure_cli_logging
+
 BACKFILL_ARTIFACT_VERSION = "20260629_001"
 STATUS_ENUM = (
     "not_requested",
@@ -467,6 +469,7 @@ def variant_backfill_manifest(
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint。"""
+    configure_cli_logging("rag")
     parser = _build_parser()
     args = parser.parse_args(argv)
     output_format = args.format

@@ -576,6 +576,13 @@ jobs:
           bash scripts/tests/init-script-deployment.test.sh
           bash scripts/tests/update-after-pull.test.sh
           bash scripts/tests/tail-logs.test.sh
+          bash ../platform/scripts/tests/log-viewer.test.sh
+
+      - name: Verify Nginx logging contract
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends nginx
+          bash ../platform/scripts/tests/nginx-logging.test.sh
           bash scripts/tests/start-frontend.test.sh
           bash scripts/tests/start-frontend.test.sh ../rag/scripts/start-frontend.sh
           bash scripts/tests/start-frontend.test.sh ../agent/scripts/start-frontend.sh

@@ -19,6 +19,7 @@ dependencies = [
 # parser マイクロサービスが共通 FastAPI app factory(service.py)を使うための extra。
 # core 本体の依存は軽量に保ち、HTTP サーバ依存はこの extra に隔離する。
 service = [
+    "production-ready-backend-core",
     "fastapi>=0.121,<1.0",
     "uvicorn[standard]>=0.37",
     "gunicorn>=23,<24",
@@ -51,3 +52,6 @@ line-ending = "auto"
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[tool.uv.sources]
+production-ready-backend-core = { path = "../../../platform/packages/backend_core", editable = true }

@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from fastapi import FastAPI
+from pr_backend_core.logging import configure_http_logging
 
 from rag_pipeline_core.chunking import Chunk, chunk_extraction_with_strategy
 from rag_pipeline_core.evaluation import resolve_evaluation
@@ -49,6 +50,7 @@ def create_vector_index_app(
     """vector_index ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
     # API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。
     app = FastAPI(title=title, docs_url=None, redoc_url=None, openapi_url=None)
+    configure_http_logging(app, service_name=app.title)
     probe = health_probe or (
         lambda: StageHealth(status="ok", stage="vector_index", package_name="rag_pipeline_core")
     )
@@ -74,6 +76,7 @@ def create_graph_app(
 ) -> FastAPI:
     """graphrag ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
     app = FastAPI(title=title, docs_url=None, redoc_url=None, openapi_url=None)
+    configure_http_logging(app, service_name=app.title)
     probe = health_probe or (
         lambda: StageHealth(status="ok", stage="graphrag", package_name="rag_pipeline_core")
     )
@@ -96,6 +99,7 @@ def create_guardrail_app(
 ) -> FastAPI:
     """guardrail ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
     app = FastAPI(title=title, docs_url=None, redoc_url=None, openapi_url=None)
+    configure_http_logging(app, service_name=app.title)
     probe = health_probe or (
         lambda: StageHealth(status="ok", stage="guardrail", package_name="rag_pipeline_core")
     )
@@ -119,6 +123,7 @@ def create_evaluation_app(
 ) -> FastAPI:
     """evaluation ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
     app = FastAPI(title=title, docs_url=None, redoc_url=None, openapi_url=None)
+    configure_http_logging(app, service_name=app.title)
     probe = health_probe or (
         lambda: StageHealth(status="ok", stage="evaluation", package_name="rag_pipeline_core")
     )
@@ -142,6 +147,7 @@ def create_chunking_app(
 ) -> FastAPI:
     """chunking ステージサービスの FastAPI app を生成する(``POST /run`` + ``GET /health``)。"""
     app = FastAPI(title=title, docs_url=None, redoc_url=None, openapi_url=None)
+    configure_http_logging(app, service_name=app.title)
 
     @app.get("/health", response_model=StageHealth)
     def health() -> StageHealth:

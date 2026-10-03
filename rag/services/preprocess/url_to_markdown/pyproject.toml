@@ -4,12 +4,14 @@ version = "0.1.0"
 description = "前処理(Preprocess)microservice: URL→クリーン Markdown(trafilatura、外部 SaaS 非使用)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "production-ready-backend-core",
     "rag-parser-core[service]",
     "httpx>=0.28,<1.0",
     "trafilatura>=1.12,<2.0",
 ]
 
 [tool.uv.sources]
+production-ready-backend-core = { path = "../../../../platform/packages/backend_core", editable = true }
 rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
 
 [build-system]

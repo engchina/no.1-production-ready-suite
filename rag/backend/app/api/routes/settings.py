@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
+from pr_backend_core.logging import safe_exception_fields
 from pr_system_settings.database import build_database_router
 from pr_system_settings.model import build_model_router, model_payload
 from pr_system_settings.model_test_input import (
@@ -527,7 +528,7 @@ async def update_answer_record_settings(
         try:
             await OracleClient().purge_answer_records(payload.retention_days)
         except Exception as exc:  # 次の回答保存時にも削除するため、設定保存は止めない。
-            logger.warning("answer record purge failed", extra={"error": str(exc)})
+            logger.warning("answer record purge failed", extra={**safe_exception_fields(exc)})
     return ApiResponse(data=AnswerRecordSettingsData(retention_days=payload.retention_days))
 
 
@@ -564,7 +565,7 @@ async def update_query_history_settings(
         try:
             await OracleClient().purge_query_history(payload.retention_days)
         except Exception as exc:  # 次の記録時にも削除するため、設定保存は止めない。
-            logger.warning("query history purge failed", extra={"error": str(exc)})
+            logger.warning("query history purge failed", extra={**safe_exception_fields(exc)})
     return ApiResponse(data=_query_history_settings(settings))
 
 

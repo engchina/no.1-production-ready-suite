@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Docling parser microservice (independent dependency boundary)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "production-ready-backend-core",
     "rag-parser-core[service]",
     # rag_poc の解析実装(読み順・表補修)。Vision は backend の解析後の段が行う(#497)。
     "rag-engine[docling]",
@@ -21,6 +22,7 @@ dependencies = [
 exclude-dependencies = ["opencv-python"]
 
 [tool.uv.sources]
+production-ready-backend-core = { path = "../../../../platform/packages/backend_core", editable = true }
 rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
 rag-engine = { path = "../../../packages/rag_engine", editable = true }
 

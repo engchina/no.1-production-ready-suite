@@ -141,3 +141,7 @@ production-ready-backend-core = { path = "../../platform/packages/backend_core",
 ```
 
 > path source 変更時は **`uv lock` 再生成**。monorepo なので CI もローカルも同じ相対パス（`../../platform/…`）で解決する。
+
+## 共通の診断ログ
+
+API・worker・RAG の独立微サービス・browser の共通 schema、JST 時刻、相関、例外の安全化、HTTP summary と運用方法は [logging-standard.md](./logging-standard.md) を正本とする（#858）。`configure_logging` を各 process の bootstrap で呼び、製品の自由な handler / format を追加しない。

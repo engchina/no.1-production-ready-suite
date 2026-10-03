@@ -4,10 +4,12 @@ version = "0.1.0"
 description = "pipeline ステージ microservice: chunking(構造化抽出の戦略分割、決定論・外部依存なし)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "production-ready-backend-core",
     "rag-pipeline-core[service]",
 ]
 
 [tool.uv.sources]
+production-ready-backend-core = { path = "../../../../platform/packages/backend_core", editable = true }
 rag-pipeline-core = { path = "../../../packages/rag_pipeline_core", editable = true }
 rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
 

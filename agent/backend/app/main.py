@@ -23,7 +23,12 @@ from app.readiness import readiness_checks
 from app.settings import get_settings
 
 settings = get_settings()
-configure_logging(settings.log_level)
+configure_logging(
+    settings.log_level,
+    service_name=settings.service_name,
+    service_version=settings.app_version,
+    environment=settings.environment,
+)
 logger = logging.getLogger(__name__)
 
 

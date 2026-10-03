@@ -4,12 +4,14 @@ version = "0.1.0"
 description = "前処理(Preprocess)microservice: 画像補正(OpenCV、OCR 前処理)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "production-ready-backend-core",
     "rag-parser-core[service]",
     "opencv-python-headless>=4.10,<5.0",
     "numpy>=1.26,<3.0",
 ]
 
 [tool.uv.sources]
+production-ready-backend-core = { path = "../../../../platform/packages/backend_core", editable = true }
 rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
 
 [build-system]

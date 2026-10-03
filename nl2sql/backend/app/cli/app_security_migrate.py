@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 from typing import Any
 
+from pr_backend_core.logging import configure_cli_logging
 from pr_system_settings.auth.migrations import PLATFORM_AUTH_DDL, PLATFORM_AUTH_DDL_IGNORED_ERRORS
 
 from app.clients.oracle_runtime import get_oracle_pool_manager
@@ -328,6 +329,7 @@ def apply_security_migrations() -> tuple[int, ...]:
 
 
 def main() -> int:
+    configure_cli_logging("nl2sql")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="Oracle へ migration を適用する")
     parser.add_argument(

@@ -674,7 +674,10 @@ def test_worker_loop_logs_failure_cause_and_backs_off(caplog: pytest.LogCaptureF
     first = caplog.records[0]
     assert first.getMessage() == "synthetic_worker_poll_failed"
     assert cast(Any, first).error_type == "RuntimeError"
-    assert "DPY-6005" in cast(Any, first).error
+    assert cast(Any, first).exception_type == "RuntimeError"
+    assert cast(Any, first).error_code == "DPY-6005"
+    assert not hasattr(first, "error")  # raw exception text は出力しない
+    assert cast(Any, first).exception_frames[-1]["function"] == "tick"
     assert cast(Any, caplog.records[-1]).consecutive_failures == 6
 
 

@@ -20,6 +20,8 @@ from urllib.parse import urlsplit
 
 import httpx
 from pr_backend_core.internal_http import http_client_options, is_internal_url
+from pr_backend_core.logging import safe_exception_fields, safe_url
+from pr_backend_core.observability.request_context import outbound_correlation_headers
 from rag_pipeline_core.stage import (
     ChunkingStageRequest,
     ChunkingStageResponse,
@@ -101,7 +103,7 @@ class PipelineStageClient:
                     "POST",
                     f"{url}/run",
                     content=request_json,
-                    headers=_JSON_HEADERS,
+                    headers={**_JSON_HEADERS, **outbound_correlation_headers()},
                 )
                 response.raise_for_status()
                 payload: dict[str, object] = response.json()
@@ -112,32 +114,32 @@ class PipelineStageClient:
                     "pipeline stage service unreachable via proxy; falling back to in-process",
                     extra={
                         "stage": stage,
-                        "service_url": url,
+                        "service_url": safe_url(url),
                         "status_code": exc.response.status_code,
                     },
                 )
                 return None
             logger.warning(
                 "pipeline stage service returned error",
-                extra={"stage": stage, "service_url": url, "error": str(exc)},
+                extra={"stage": stage, "service_url": safe_url(url), **safe_exception_fields(exc)},
             )
             raise PipelineStageServiceError(stage, "remote_error", service_url=url) from exc
         except httpx.InvalidURL as exc:
             logger.warning(
                 "pipeline stage service URL is invalid",
-                extra={"stage": stage, "service_url": url, "error": str(exc)},
+                extra={"stage": stage, "service_url": safe_url(url), **safe_exception_fields(exc)},
             )
             raise PipelineStageServiceError(stage, "invalid_url", service_url=url) from exc
         except httpx.RequestError as exc:
-            logger.info(
+            logger.warning(
                 "pipeline stage service unavailable; falling back to in-process",
-                extra={"stage": stage, "service_url": url, "error": str(exc)},
+                extra={"stage": stage, "service_url": safe_url(url), **safe_exception_fields(exc)},
             )
             return None
         except ValueError as exc:
             logger.warning(
                 "pipeline stage service returned invalid JSON",
-                extra={"stage": stage, "service_url": url, "error": str(exc)},
+                extra={"stage": stage, "service_url": safe_url(url), **safe_exception_fields(exc)},
             )
             raise PipelineStageServiceError(stage, "invalid_response", service_url=url) from exc
 

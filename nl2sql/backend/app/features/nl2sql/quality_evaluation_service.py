@@ -20,6 +20,7 @@ from openpyxl import Workbook, load_workbook  # type: ignore[import-untyped]
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE  # type: ignore[import-untyped]
 from openpyxl.styles import Alignment, Font, PatternFill  # type: ignore[import-untyped]
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
+from pr_backend_core.observability.request_context import bind_log_context
 
 from app.settings import get_settings
 
@@ -934,180 +935,185 @@ class QualityEvaluationService:
         return self._refresh_progress(job, worker_id=job.worker_id, attempt_no=job.attempt_no)
 
     def _process_claimed_job(self, job: QualityEvaluationJobRecord) -> None:
-        worker_id = job.worker_id
-        attempt_no = job.attempt_no
-        try:
-            for case in job.cases:
-                for engine in job.engines:
-                    for repetition in range(1, job.repeat_count + 1):
-                        if self._repository.has_result(
-                            job_id=job.job_id,
-                            case_no=case.case_no,
-                            engine=engine.value,
-                            repetition_no=repetition,
-                        ):
-                            continue
-                        latest = self._repository.get_job(job.job_id)
-                        if latest is None or latest.status in _TERMINAL_STATUSES:
-                            return
-                        if not self._worker_fence_matches(
-                            latest, worker_id=worker_id, attempt_no=attempt_no
-                        ):
-                            return
-                        now = datetime.now(UTC)
-                        timeout_seconds = self._attempt_timeout_seconds(latest)
-                        job = latest.model_copy(
-                            update={
-                                "status": QualityEvaluationStatus.RUNNING,
-                                "current_case_id": case.case_id,
-                                "current_engine": engine,
-                                "current_repetition": repetition,
-                                "current_attempt_started_at": now.isoformat(),
-                                "heartbeat_at": now.isoformat(),
-                                "lease_expires_at": (
-                                    now + timedelta(seconds=self._attempt_lease_seconds(latest))
-                                ).isoformat(),
-                                "attempt_timeout_seconds": timeout_seconds,
-                                "updated_at": now.isoformat(),
-                            },
-                            deep=True,
-                        )
-                        saved_job = self._repository.save_job_if_worker_current(
-                            job,
-                            worker_id=worker_id,
-                            attempt_no=attempt_no,
-                        )
-                        if saved_job is None:
-                            self._log_worker_fence_lost(
+        with bind_log_context(job_id=job.job_id):
+            worker_id = job.worker_id
+            attempt_no = job.attempt_no
+            try:
+                for case in job.cases:
+                    for engine in job.engines:
+                        for repetition in range(1, job.repeat_count + 1):
+                            if self._repository.has_result(
                                 job_id=job.job_id,
-                                profile_id=job.profile_id,
+                                case_no=case.case_no,
+                                engine=engine.value,
+                                repetition_no=repetition,
+                            ):
+                                continue
+                            latest = self._repository.get_job(job.job_id)
+                            if latest is None or latest.status in _TERMINAL_STATUSES:
+                                return
+                            if not self._worker_fence_matches(
+                                latest, worker_id=worker_id, attempt_no=attempt_no
+                            ):
+                                return
+                            now = datetime.now(UTC)
+                            timeout_seconds = self._attempt_timeout_seconds(latest)
+                            job = latest.model_copy(
+                                update={
+                                    "status": QualityEvaluationStatus.RUNNING,
+                                    "current_case_id": case.case_id,
+                                    "current_engine": engine,
+                                    "current_repetition": repetition,
+                                    "current_attempt_started_at": now.isoformat(),
+                                    "heartbeat_at": now.isoformat(),
+                                    "lease_expires_at": (
+                                        now + timedelta(seconds=self._attempt_lease_seconds(latest))
+                                    ).isoformat(),
+                                    "attempt_timeout_seconds": timeout_seconds,
+                                    "updated_at": now.isoformat(),
+                                },
+                                deep=True,
+                            )
+                            saved_job = self._repository.save_job_if_worker_current(
+                                job,
                                 worker_id=worker_id,
                                 attempt_no=attempt_no,
-                                operation="attempt_start",
                             )
-                            return
-                        job = saved_job
-                        result = self._evaluate_attempt(job, case, engine, repetition)
-                        latest = self._repository.get_job(job.job_id)
-                        if latest is None or latest.status in _TERMINAL_STATUSES:
-                            return
-                        if not self._worker_fence_matches(
-                            latest, worker_id=worker_id, attempt_no=attempt_no
-                        ):
-                            return
-                        result_saved = self._repository.save_result_if_worker_current(
-                            result,
-                            worker_id=worker_id,
-                            attempt_no=attempt_no,
-                        )
-                        latest = self._repository.get_job(job.job_id)
-                        if latest is None or latest.status in _TERMINAL_STATUSES:
-                            return
-                        if not self._worker_fence_matches(
-                            latest, worker_id=worker_id, attempt_no=attempt_no
-                        ):
-                            return
-                        if not result_saved:
-                            self._log_worker_fence_lost(
-                                job_id=job.job_id,
-                                profile_id=job.profile_id,
-                                worker_id=worker_id,
-                                attempt_no=attempt_no,
-                                operation="result_save",
-                            )
-                            return
-                        if saved_job := self._refresh_progress_after_saved_result(
-                            latest,
-                            result,
-                            worker_id=worker_id,
-                            attempt_no=attempt_no,
-                        ):
+                            if saved_job is None:
+                                self._log_worker_fence_lost(
+                                    job_id=job.job_id,
+                                    profile_id=job.profile_id,
+                                    worker_id=worker_id,
+                                    attempt_no=attempt_no,
+                                    operation="attempt_start",
+                                )
+                                return
                             job = saved_job
-            latest = self._repository.get_job(job.job_id)
-            if latest is None or latest.status in _TERMINAL_STATUSES:
-                return
-            if not self._worker_fence_matches(latest, worker_id=worker_id, attempt_no=attempt_no):
-                return
-            results = self._repository.all_results(job.job_id)
-            errors = sum(1 for item in results if item.generation_error or item.judge_error)
-            finished = _utc_now()
-            job = latest.model_copy(
-                update={
-                    "status": (
-                        QualityEvaluationStatus.COMPLETED_WITH_ERRORS
-                        if errors
-                        else QualityEvaluationStatus.COMPLETED
-                    ),
-                    "completed_attempts": len(results),
-                    "success_count": sum(item.generation_succeeded for item in results),
-                    "error_count": errors,
-                    "engine_summaries": self._summaries(job, results),
-                    "current_case_id": "",
-                    "current_engine": None,
-                    "current_repetition": 0,
-                    "current_attempt_started_at": None,
-                    "heartbeat_at": finished,
-                    "lease_expires_at": None,
-                    "finished_at": finished,
-                    "updated_at": finished,
-                },
-                deep=True,
-            )
-            saved_job = self._repository.save_job_if_worker_current(
-                job,
-                worker_id=worker_id,
-                attempt_no=attempt_no,
-            )
-            if saved_job is None:
-                self._log_worker_fence_lost(
-                    job_id=job.job_id,
-                    profile_id=job.profile_id,
+                            result = self._evaluate_attempt(job, case, engine, repetition)
+                            latest = self._repository.get_job(job.job_id)
+                            if latest is None or latest.status in _TERMINAL_STATUSES:
+                                return
+                            if not self._worker_fence_matches(
+                                latest, worker_id=worker_id, attempt_no=attempt_no
+                            ):
+                                return
+                            result_saved = self._repository.save_result_if_worker_current(
+                                result,
+                                worker_id=worker_id,
+                                attempt_no=attempt_no,
+                            )
+                            latest = self._repository.get_job(job.job_id)
+                            if latest is None or latest.status in _TERMINAL_STATUSES:
+                                return
+                            if not self._worker_fence_matches(
+                                latest, worker_id=worker_id, attempt_no=attempt_no
+                            ):
+                                return
+                            if not result_saved:
+                                self._log_worker_fence_lost(
+                                    job_id=job.job_id,
+                                    profile_id=job.profile_id,
+                                    worker_id=worker_id,
+                                    attempt_no=attempt_no,
+                                    operation="result_save",
+                                )
+                                return
+                            if saved_job := self._refresh_progress_after_saved_result(
+                                latest,
+                                result,
+                                worker_id=worker_id,
+                                attempt_no=attempt_no,
+                            ):
+                                job = saved_job
+                latest = self._repository.get_job(job.job_id)
+                if latest is None or latest.status in _TERMINAL_STATUSES:
+                    return
+                if not self._worker_fence_matches(
+                    latest, worker_id=worker_id, attempt_no=attempt_no
+                ):
+                    return
+                results = self._repository.all_results(job.job_id)
+                errors = sum(1 for item in results if item.generation_error or item.judge_error)
+                finished = _utc_now()
+                job = latest.model_copy(
+                    update={
+                        "status": (
+                            QualityEvaluationStatus.COMPLETED_WITH_ERRORS
+                            if errors
+                            else QualityEvaluationStatus.COMPLETED
+                        ),
+                        "completed_attempts": len(results),
+                        "success_count": sum(item.generation_succeeded for item in results),
+                        "error_count": errors,
+                        "engine_summaries": self._summaries(job, results),
+                        "current_case_id": "",
+                        "current_engine": None,
+                        "current_repetition": 0,
+                        "current_attempt_started_at": None,
+                        "heartbeat_at": finished,
+                        "lease_expires_at": None,
+                        "finished_at": finished,
+                        "updated_at": finished,
+                    },
+                    deep=True,
+                )
+                saved_job = self._repository.save_job_if_worker_current(
+                    job,
                     worker_id=worker_id,
                     attempt_no=attempt_no,
-                    operation="completion",
                 )
+                if saved_job is None:
+                    self._log_worker_fence_lost(
+                        job_id=job.job_id,
+                        profile_id=job.profile_id,
+                        worker_id=worker_id,
+                        attempt_no=attempt_no,
+                        operation="completion",
+                    )
+                    return
+                job = saved_job
+                logger.info(
+                    "quality_evaluation_completed",
+                    extra={
+                        "job_id": job.job_id,
+                        "profile_id": job.profile_id,
+                        "completed_attempts": job.completed_attempts,
+                        "error_count": job.error_count,
+                        "status": job.status.value,
+                    },
+                )
+            except _QualityEvaluationWorkerFenceLost:
                 return
-            job = saved_job
-            logger.info(
-                "quality_evaluation_completed",
-                extra={
-                    "job_id": job.job_id,
-                    "profile_id": job.profile_id,
-                    "completed_attempts": job.completed_attempts,
-                    "error_count": job.error_count,
-                    "status": job.status.value,
-                },
-            )
-        except _QualityEvaluationWorkerFenceLost:
-            return
-        except Exception as exc:
-            logger.exception(
-                "quality_evaluation_failed",
-                extra={"job_id": job.job_id, "profile_id": job.profile_id},
-            )
-            latest = self._repository.get_job(job.job_id)
-            if latest is None or latest.status in _TERMINAL_STATUSES:
-                return
-            if not self._worker_fence_matches(latest, worker_id=worker_id, attempt_no=attempt_no):
-                return
-            # 同メソッド上部の now(datetime)と束縛を分ける(ISO 文字列)。
-            now_iso = _utc_now()
-            failed = latest.model_copy(
-                update={
-                    "status": QualityEvaluationStatus.FAILED,
-                    "error_message": str(exc)[:1000],
-                    "current_attempt_started_at": None,
-                    "lease_expires_at": None,
-                    "finished_at": now_iso,
-                    "updated_at": now_iso,
-                },
-                deep=True,
-            )
-            self._repository.save_job_if_worker_current(
-                failed,
-                worker_id=worker_id,
-                attempt_no=attempt_no,
-            )
+            except Exception as exc:
+                logger.exception(
+                    "quality_evaluation_failed",
+                    extra={"job_id": job.job_id, "profile_id": job.profile_id},
+                )
+                latest = self._repository.get_job(job.job_id)
+                if latest is None or latest.status in _TERMINAL_STATUSES:
+                    return
+                if not self._worker_fence_matches(
+                    latest, worker_id=worker_id, attempt_no=attempt_no
+                ):
+                    return
+                # 同メソッド上部の now(datetime)と束縛を分ける(ISO 文字列)。
+                now_iso = _utc_now()
+                failed = latest.model_copy(
+                    update={
+                        "status": QualityEvaluationStatus.FAILED,
+                        "error_message": str(exc)[:1000],
+                        "current_attempt_started_at": None,
+                        "lease_expires_at": None,
+                        "finished_at": now_iso,
+                        "updated_at": now_iso,
+                    },
+                    deep=True,
+                )
+                self._repository.save_job_if_worker_current(
+                    failed,
+                    worker_id=worker_id,
+                    attempt_no=attempt_no,
+                )
 
     def _refresh_progress(
         self,
