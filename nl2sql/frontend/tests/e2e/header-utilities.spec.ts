@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./_helpers/test";
 
 for (const theme of ["light", "dark"]) {
   for (const width of [1280, 1920, 375]) {

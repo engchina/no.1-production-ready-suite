@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/test";
 
 import { NAV_SECTIONS } from "../src/components/layout/nav-config";
 import { t } from "../src/lib/i18n";

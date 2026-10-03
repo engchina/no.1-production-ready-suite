@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./fixtures/test";
 import { mockLocalAuth } from "./_helpers";
 
 // platform/docs/ux-contracts/messaging.md §3.5 ConfirmDialog の振る舞いを検証する。

@@ -149,6 +149,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - **すべての job に `timeout-minutes` を付ける**（通常 10〜15 分、e2e は実測の倍程度）。既定の 360 分のまま止まると、runner と PR の待ちを長く塞ぐ。
 - キャッシュ（#339）: uv は main の push だけが保存し PR は復元だけ（repo の上限 10 GB を PR の cache で埋めないため）、`.mypy_cache` は lock とブランチを key に main から復元、共有 UI の dist は `.github/actions/platform-ui`（platform の frontend のソースの hash）、Playwright のブラウザは `.github/actions/playwright-browsers`（Playwright の版）がキャッシュする。
 - Agent は `Agent / Backend`・`Agent / Frontend`（lint・build）・`Agent / E2E smoke` の 3 job に分けている（#339）。
+- PR の e2e は、smoke の job に加えて、`E2E impact / 影響を受ける spec の選択`（`e2e-impact`）が差分に影響を受ける spec を選び、`<製品> / E2E impact (n/m)` が shard に分けて実行する（#885）。選択に使う spec ごとの実行範囲は nightly（`e2e-nightly.yml`）が artifact `e2e-impact-<製品>-<shard>`（14 日保存）に記録する。選択の規則と単体テストは `platform/scripts/e2e_impact.py`・`platform/scripts/tests/test_e2e_impact.py`。
 - backend の pytest は、CI では pytest-xdist で並列に実行する（`uv run pytest -n auto`。Agent は `scripts/check-all.sh` に `PYTEST_ARGS="-n auto"` を渡す。#344）。テストは並列でも直列でも通るように書く。
   - 書き出すファイルは `tmp_path` に置く（backend 直下など固定のパスを、別のテストと共有しない）。
   - `parametrize` のテスト ID を、実行のたびに変わる値（作成時刻を含む zip / xlsx / docx の bytes 等）から作らない。worker ごとに ID が変わり収集が失敗するので、`ids=` で固定する。
@@ -256,7 +257,11 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 
 - **UI/UX に関する作業（設計・実装・レビュー・改善）は必ず `ui-ux-pro-max` skill を使う。**
 - UI/UX 変更ごとに Playwright で実画面を確認し、desktop と 375px 幅を最低限検証する。空/読込/エラー/ブロック状態も必要に応じて確認する。
-- **e2e の量**：ローカルの検証も PR の検証も、変更に関係する spec だけを選び、1 回おおむね 1 分以内で終わる量にする（`-g` や spec のパスで絞る）。Playwright の全件は `.github/workflows/e2e-nightly.yml` が毎晩実行する。PR の CI（`ci.yml` の `rag-e2e` / `nl2sql-e2e` / `agent-e2e`）は約 1 分の smoke だけを実行する（#184 / #339）。
+- **e2e の量**：ローカルの検証は、変更に関係する spec だけを選び、1 回おおむね 1 分以内で終わる量にする（`-g` や spec のパスで絞る）。Playwright の全件は `.github/workflows/e2e-nightly.yml` が毎晩実行する。PR の CI は、約 1 分の smoke（`ci.yml` の `rag-e2e` / `nl2sql-e2e` / `agent-e2e`。#184 / #339）と、**差分に影響を受ける spec**（`e2e-impact` と `<製品>-e2e-impact`。#885）を実行する。
+- **画面のコードを変えたら、その画面を検証している既存の spec も同じ PR で直す（#885）。** 文言・role・aria-label・testid・DOM 構造・幅を変えた PR で、別の spec の期待値が古いまま残り、merge 後の nightly で初めて壊れることが続いた（#882〜#884 ほか）。
+  - PR の CI の `e2e-impact` が、nightly の全件の実行で記録した spec ごとの実行範囲（coverage）と差分の行から、影響を受ける spec を選んで実行する（`platform/scripts/e2e_impact.py`。選んだ spec と理由は job の summary に出る）。i18n の辞書の変更は、そのキーを参照する画面と、古い文言を書いている spec を選ぶ。記録が無い・判定できない変更（package.json / lock / vite / playwright の設定・CSS）は全件を shard に分けて実行する。
+  - 同じ選択をローカルで見るには `python3 platform/scripts/e2e_impact.py select --product <製品> --base origin/main --download`（nightly の記録を `gh` で取得する）。PR を出す前に、出てきた spec を実行して直す。
+  - spec は `test` を `@playwright/test` から直接 import せず、記録の fixture を足した製品の `test`（RAG・Agent `e2e/fixtures/test.ts`、NL2SQL `tests/e2e/_helpers/test.ts`）から import する（`expect` や型も同じ module から import できる）。`e2e-impact` の `check-imports` が検出する。
 - ライト / ダークの両テーマで確認する。
 - 1280px / 1920px の両幅で確認する。1920px では PageHeader のタイトルと本文の左端が揃うこと。
 - キーボード操作（最初の Tab で「本文へスキップ」、フォーカスリングの視認性、`Tabs` の ← → / Home / End）を確認する。

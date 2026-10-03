@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "./_helpers/test";
 
 // #372: 共有の Tooltip。アイコンだけの Button は既定で aria-label と同じ文言を、ホバー（遅延あり）と
 // キーボードのフォーカス（すぐ）で出す。Escape で閉じ、吹き出しへポインタを移しても消えない（WCAG 1.4.13）。

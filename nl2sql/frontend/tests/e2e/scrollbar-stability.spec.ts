@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 
 // 無頭ブラウザーの scrollbar 非表示を解除し、通常の scrollbar による幅変更を検出する。

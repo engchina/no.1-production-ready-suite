@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "./fixtures/test";
 import { expectMainScrollEndsAtContent, expectNoPageOverflow, LOCAL_AUTH_ME } from "./_helpers";
 
 type OciStageStatus = "success" | "failed" | "skipped";

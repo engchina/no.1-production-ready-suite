@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/test";
 import type { Plugin, UserConfig, ViteDevServer } from "vite";
 
 import viteConfig from "../vite.config";

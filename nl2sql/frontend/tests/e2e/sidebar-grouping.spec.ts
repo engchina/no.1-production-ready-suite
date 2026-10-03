@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./_helpers/test";
 import { openSidebarNav } from "./_helpers/sidebar-nav";
 import type { CurrentUser } from "../../src/features/security/types";
 

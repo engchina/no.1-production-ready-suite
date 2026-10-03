@@ -1,5 +1,5 @@
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Page, type Route } from "./_helpers/test";
 
 function envelope(data: unknown) {
   return { data, error_messages: [], warning_messages: [] };

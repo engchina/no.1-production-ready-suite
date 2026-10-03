@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./fixtures/test";
 
 import { APP_ROUTES } from "../src/lib/routes";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
