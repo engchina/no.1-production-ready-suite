@@ -1130,7 +1130,8 @@ export interface ClarificationAnswer {
 export interface CompareModel {
   model_id: string;
   display_name: string;
-  kind: "text" | "vision";
+  /** 役割（#675）。既定のテキストモデルが画像対応モデルも兼ねるときは 1 件で `text_vision`（#888）。 */
+  kind: "text" | "vision" | "text_vision";
 }
 
 export interface SearchDiagnostics {

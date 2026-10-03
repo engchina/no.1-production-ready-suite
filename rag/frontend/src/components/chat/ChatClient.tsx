@@ -61,6 +61,7 @@ import { ApprovedFaqSuggestions } from "@/components/search/ApprovedFaqSuggestio
 import { ClarificationChoice } from "./ClarificationChoice";
 import type { AnswerStageEvent } from "@/lib/answer-progress";
 import { streamChatMessage, type ChatColumn } from "@/lib/chat-stream";
+import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
@@ -1342,13 +1343,14 @@ export function ChatClient() {
                       selected={selectedModelIds.includes(model.model_id)}
                       onClick={() => toggleModel(model.model_id)}
                     >
-                      {t(`answerModel.${model.kind}`, { name: model.display_name })}
+                      {answerModelLabel(model)}
                     </ToggleChip>
                   ))}
-                  {/* 候補は既定のテキストモデル（先頭。未選択のときに答える）と既定の Vision モデル（#675）。 */}
+                  {/* 候補は既定のテキストモデル（先頭。未選択のときに答える）と既定の画像対応モデル（#675）。
+                      同じモデルなら 1 件で、画像対応モデルも兼ねることを名前と説明で出す（#888）。 */}
                   {selectedModelIds.length === 0 ? (
                     <span className="text-xs text-fg-muted" data-testid="chat-default-model">
-                      {t(compareModels.length > 1 ? "chat.compare.default" : "chat.compare.defaultTextOnly")}
+                      {t(answerModelHelpKey(compareModels, "chat.compare.default"))}
                     </span>
                   ) : null}
                 </div>

@@ -338,11 +338,15 @@ def test_compare_models_list_only_default_text_and_vision(monkeypatch: MonkeyPat
         {"model_id": "m3", "display_name": "M3", "kind": "vision"},
     ]
 
-    # Vision が未設定か、テキストと同じモデルならテキストの 1 件だけ。
-    for vision in ([], ["m2"]):
-        _stub_answer_models(monkeypatch, ["m1", "m2"], text="m2", vision=vision)
-        data = client.get("/api/chat/models").json()["data"]
-        assert [(m["model_id"], m["kind"]) for m in data] == [("m2", "text")]
+    # Vision が未設定ならテキストの 1 件だけ。
+    _stub_answer_models(monkeypatch, ["m1", "m2"], text="m2", vision=[])
+    data = client.get("/api/chat/models").json()["data"]
+    assert [(m["model_id"], m["kind"]) for m in data] == [("m2", "text")]
+
+    # テキストと同じモデルなら 1 件にまとめ、画像対応モデルでもあることを kind で伝える(#888)。
+    _stub_answer_models(monkeypatch, ["m1", "m2"], text="m2", vision=["m2"])
+    data = client.get("/api/chat/models").json()["data"]
+    assert data == [{"model_id": "m2", "display_name": "M2", "kind": "text_vision"}]
 
 
 def test_build_history_takes_first_assistant_per_turn() -> None:

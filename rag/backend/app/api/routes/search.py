@@ -71,23 +71,36 @@ ANSWER_EVALUATION_TIMEOUT_MESSAGE = (
 def answer_model_choices(settings: Settings) -> list[dict[str, str]]:
     """回答に選べるモデル(既定のテキストモデル、既定の Vision モデルの順。#675)。
 
-    チャットの比較と RAG 検索の選択で共通に使う。Vision が未設定か、テキストと同じモデルなら
-    テキストの 1 件だけ。``kind`` は ``text`` / ``vision``。
+    チャットの比較と RAG 検索の選択で共通に使う。``kind`` は ``text`` / ``vision`` /
+    ``text_vision``。Vision が未設定ならテキストの 1 件だけ。テキストと同じモデルなら 1 件に
+    まとめ、``kind`` を ``text_vision`` にして画像対応モデルでもあることを画面に伝える
+    (同じモデルを 2 件並べても比較にならない。#888)。
     """
     labels = {
         model.model_id: model.display_name or model.model_id
         for model in enterprise_ai_model_catalog(settings)
         if model.model_id
     }
+    text_model = enterprise_ai_default_model_id(settings)
+    vision_model = enterprise_ai_vision_model_id(settings)
     choices: list[dict[str, str]] = []
-    for kind, model_id in (
-        ("text", enterprise_ai_default_model_id(settings)),
-        ("vision", enterprise_ai_vision_model_id(settings)),
-    ):
-        if model_id and all(choice["model_id"] != model_id for choice in choices):
-            choices.append(
-                {"model_id": model_id, "display_name": labels.get(model_id, model_id), "kind": kind}
-            )
+    if text_model:
+        kind = "text_vision" if vision_model == text_model else "text"
+        choices.append(
+            {
+                "model_id": text_model,
+                "display_name": labels.get(text_model, text_model),
+                "kind": kind,
+            }
+        )
+    if vision_model and vision_model != text_model:
+        choices.append(
+            {
+                "model_id": vision_model,
+                "display_name": labels.get(vision_model, vision_model),
+                "kind": "vision",
+            }
+        )
     return choices
 
 
