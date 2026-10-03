@@ -115,7 +115,8 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   const menuIconSignatures = await sidebar.locator("nav a svg").evaluateAll((icons) =>
     icons.map((icon) => icon.innerHTML.replace(/\s+/g, " ").trim())
   );
-  expect(menuIconSignatures).toHaveLength(30);
+  // AI 活用の先頭にチャットを足した（#871）ため 31 項目。
+  expect(menuIconSignatures).toHaveLength(31);
   expect(new Set(menuIconSignatures).size).toBe(menuIconSignatures.length);
 
   for (const section of ["データ準備", "AI 活用", "改善・運用", "セキュリティ設定", "ユーザーとロール", "運用設定", "システム設定"]) {
@@ -157,8 +158,20 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
     await expect(sidebar.getByText(label, { exact: true })).toBeVisible();
   }
 
-  for (const label of ["SQL 生成", "SELECT SQL を実行", "SQL から質問を生成", "実行履歴"]) {
-    await expect(sidebar.getByText(label, { exact: true })).toBeVisible();
+  const aiUseLabels = ["チャット", "SQL 生成", "SELECT SQL を実行", "SQL から質問を生成", "実行履歴"];
+  const aiUseItemBoxes = await Promise.all(
+    aiUseLabels.map(async (label) => {
+      const item = sidebar.getByText(label, { exact: true });
+      await expect(item).toBeVisible();
+      return item.boundingBox();
+    })
+  );
+  if (aiUseItemBoxes.some((box) => box === null)) {
+    throw new Error("AI 活用のメニュー位置を取得できませんでした。");
+  }
+  // AI 活用はチャットを先頭に置く（#871）。
+  for (let index = 1; index < aiUseItemBoxes.length; index += 1) {
+    expect(aiUseItemBoxes[index - 1]!.y).toBeLessThan(aiUseItemBoxes[index]!.y);
   }
   await expect(sidebar.getByText("SQL 確認・修復", { exact: true })).toHaveCount(0);
 
