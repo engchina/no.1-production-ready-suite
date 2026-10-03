@@ -379,7 +379,11 @@ def test_install_failure_revokes_all_components(
     from app.features.agent.config import runtime_config_store
 
     registry, entry = catalog()
+    distribution["files"]["plugins/analysis/.mcp.json"] = json.dumps(
+        {"mcpServers": {"business": {"url": "https://business.example/api/mcp"}}}
+    )
     manifest = registry.preview("test-import", entry.id).manifest
+    assert len(manifest.mcp_servers) == 1
     plugins = PluginRegistry()
     original = plugin_resource_registry.set_declared
     if failure == "registration":
@@ -673,3 +677,47 @@ def test_refresh_does_not_overwrite_a_source_changed_during_download(
     with pytest.raises(ValueError, match="設定が変わり"):
         registry.refresh("changing")
     assert registry.get_listing("changing").plugins[0].id == "new"
+
+
+@pytest.mark.parametrize("limit_kind", ["file", "total", "reference", "deadline"])
+def test_download_caps_reject_before_registration(
+    distribution: dict[str, Any], monkeypatch: pytest.MonkeyPatch, limit_kind: str
+) -> None:
+    registry, entry = catalog()
+    if limit_kind == "reference":
+        monkeypatch.setattr(importer, "MAX_REFERENCE_BYTES", 1)
+        with pytest.raises(ValueError, match="上限"):
+            registry.preview("test-import", entry.id)
+    else:
+        if limit_kind == "total":
+            monkeypatch.setattr(importer, "MAX_TOTAL_BYTES", 1)
+        with importer.DownloadSession(CATALOG_URL) as session:
+            if limit_kind == "deadline":
+                session.deadline = 0
+            with pytest.raises(ValueError, match="上限"):
+                session.read(
+                    CATALOG_URL.replace("/main/", f"/{REVISION}/"),
+                    limit=1 if limit_kind == "file" else 1024,
+                )
+    assert not any(s.source == f"plugin:{entry.id}" for s in skill_registry.list())
+
+
+def test_same_plugin_in_two_catalogs_can_be_installed_independently(
+    distribution: dict[str, Any],
+) -> None:
+    first = importer.fetch_catalog(CATALOG_URL, "independent-one", 10).plugins[0]
+    second = importer.fetch_catalog(CATALOG_URL, "independent-two", 10).plugins[0]
+    assert first.id != second.id
+    registry = PluginRegistry()
+    one = registry.install(importer.prepare_import(first, "independent-one").manifest)
+    try:
+        two = registry.install(importer.prepare_import(second, "independent-two").manifest)
+        try:
+            assert one.manifest.skills[0].id != two.manifest.skills[0].id
+            assert one.manifest.resources[0].id != two.manifest.resources[0].id
+            registry.set_enabled(one.id, False)
+            assert skill_registry.get(two.manifest.skills[0].id)
+        finally:
+            registry.uninstall(two.id)
+    finally:
+        registry.uninstall(one.id)
