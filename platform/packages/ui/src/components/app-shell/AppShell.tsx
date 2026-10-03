@@ -85,7 +85,7 @@ export function AppShell({
   return (
     <NavDrawerContext.Provider value={context}>
       <div
-        className={cn("relative flex h-screen w-full overflow-hidden bg-canvas text-fg", drawer && "flex-col", className)}
+        className={cn("fixed inset-0 flex w-full overflow-hidden bg-canvas text-fg", drawer && "flex-col", className)}
         data-nav-mode={drawer ? "drawer" : undefined}
       >
         <a className="pr-skip-link" href="#pr-main" inert={backgroundInert}>
@@ -128,8 +128,7 @@ export function AppShell({
           tabIndex={-1}
           inert={backgroundInert}
           className={cn(
-            "flex min-w-0 flex-1 flex-col overflow-y-auto",
-            drawer && "min-h-0",
+            "flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto",
             backgroundInert && "overflow-hidden",
             mainClassName
           )}

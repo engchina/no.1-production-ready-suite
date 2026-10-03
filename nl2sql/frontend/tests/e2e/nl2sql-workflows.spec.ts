@@ -2805,8 +2805,10 @@ async function expectNoHorizontalScroll(page: Page) {
   const size = await page.evaluate(() => ({
     width: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,
+    documentOverflow: document.documentElement.scrollHeight - window.innerHeight,
   }));
   expect(size.scrollWidth).toBeLessThanOrEqual(size.width + 1);
+  expect(size.documentOverflow).toBeLessThanOrEqual(1);
 }
 
 async function expectMainScrollDoesNotExposeTrailingBlank(panel: Locator) {

@@ -25,6 +25,7 @@ async function measureLayout(page: Page) {
       bodyLeft: Math.round(b.left),
       bodyWidth: Math.round(b.width),
       mainWidth: Math.round(main.getBoundingClientRect().width),
+      documentOverflow: document.documentElement.scrollHeight - window.innerHeight,
     };
   });
 }
@@ -49,6 +50,7 @@ test.describe("画面幅（PageHeader / PageBody の wide）", () => {
         expect(layout.headerWidth, label).toBe(layout.bodyWidth);
         expect(layout.bodyWidth, label).toBe(layout.mainWidth);
         expect(layout.bodyWidth, label).toBeGreaterThan(CONTENT_MAX_WIDTH);
+        expect(layout.documentOverflow, label).toBeLessThanOrEqual(1);
       }
     });
   }

@@ -81,7 +81,7 @@ export function ChatPage() {
     isNullableString
   );
   const [draft, setDraft] = useWorkspaceState("chat", "draft", "", isString);
-  const conversationEndRef = useRef<HTMLDivElement | null>(null);
+  const conversationRef = useRef<HTMLDivElement | null>(null);
 
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const usableAgents = useMemo(
@@ -124,7 +124,9 @@ export function ChatPage() {
   const lastRunStatus = runs.at(-1)?.status;
 
   useEffect(() => {
-    conversationEndRef.current?.scrollIntoView({ block: "end" });
+    // 祖先（ページ・document）を動かさず、会話だけを末尾へ移動する。
+    const conversation = conversationRef.current;
+    conversation?.scrollTo({ top: conversation.scrollHeight });
   }, [lastRunId, lastRunStatus]);
 
   // 評価を保存した Run を、会話の取り直しを待たずに差し替える（#774）。
@@ -230,7 +232,7 @@ export function ChatPage() {
   const stoppable = send.isPending || Boolean(stoppableRun);
 
   return (
-    <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
+    <div className="flex min-h-full shrink-0 flex-col lg:h-full lg:min-h-0">
       <PageHeader wide title={t("chat.title")} subtitle={t("chat.subtitle")} />
       <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4">
         <Card className="shrink-0">
@@ -301,9 +303,9 @@ export function ChatPage() {
 
             <section
               aria-label={t("chat.conversation")}
-              className="flex min-h-[28rem] min-w-0 flex-col rounded-lg border border-border bg-surface shadow-sm lg:min-h-0"
+              className="flex h-[70dvh] min-h-[28rem] min-w-0 flex-col rounded-lg border border-border bg-surface shadow-sm lg:h-auto lg:min-h-0"
             >
-              <div className="flex min-h-12 items-center justify-between gap-2 border-b border-border px-3 py-2">
+              <div className="flex min-h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
                 <h2 className="min-w-0 truncate text-sm font-medium text-fg">
                   {threadId && runs[0] ? runs[0].goal : t("chat.newConversation")}
                 </h2>
@@ -327,7 +329,7 @@ export function ChatPage() {
                 </div>
               </div>
 
-              <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-4" data-testid="chat-conversation">
+              <div ref={conversationRef} className="min-h-0 flex-1 space-y-6 overflow-y-auto p-4" data-testid="chat-conversation">
                 {threadId && thread.isLoading ? (
                   <TimedLoadingState label={t("chat.loading")} framed={false} testId="chat-thread-loading">
                     <ListSkeleton rows={3} />
@@ -348,10 +350,9 @@ export function ChatPage() {
                     />
                   ))
                 )}
-                <div ref={conversationEndRef} />
               </div>
 
-              <div className="space-y-2 border-t border-border p-3">
+              <div className="shrink-0 space-y-2 border-t border-border p-3">
                 {/* 入力欄と送信の行。送信は入力欄の下端にそろえ、375px では下に全幅で置く（#613）。 */}
                 <FieldActionRow
                   actions={
