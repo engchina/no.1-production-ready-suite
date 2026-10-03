@@ -2201,8 +2201,11 @@ def test_route_permissions_cover_every_mounted_route() -> None:
     """
 
     mounted = _mounted_api_operations()
-    assert len(mounted) == 272
-    assert len(ROUTE_PERMISSIONS) == 263
+    # SQL チャットの一覧・会話取得も、生成権限で保護する（#871）。
+    assert len(mounted) == 274
+    assert len(ROUTE_PERMISSIONS) == 265
+    for path in ("/nl2sql/chats", "/nl2sql/chats/{conversation_id}"):
+        assert ROUTE_PERMISSIONS[("GET", path)] == frozenset({QUERY_GENERATE_PERMISSION})
     assert set(ROUTE_PERMISSIONS).isdisjoint(OPEN_API_OPERATIONS)
     assert set(ROUTE_PERMISSIONS) | set(OPEN_API_OPERATIONS) == mounted
     for key, permissions in ROUTE_PERMISSIONS.items():
