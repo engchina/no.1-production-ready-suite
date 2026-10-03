@@ -29,6 +29,18 @@ Marketplace → Plugin（配布 package）→ Skill Registry
 
 設計詳細は [docs/agent-control-plane-design.md](docs/agent-control-plane-design.md) を参照してください。
 
+### 外部マーケットプレイスの導入
+
+管理者は「マーケットプレイス」で公開カタログの JSON URL を追加し、「更新」→プラグインの
+「導入内容を確認」→「インストール」と進みます。Skill の指示、参照文書、配布元と取得した版、対応しない機能を
+確認してから導入します。外部配布物は公開 GitHub の HTTPS repository から読み取り、配布コードを実行しません。
+更新の失敗では前回の一覧を保持します。導入確認後に版が変わった場合は内容を再確認します。
+
+対応する構成は Skill の指示と Markdown の参照文書、利用条件の表示、秘密情報を含まない HTTP MCP です。
+scripts・hooks・commands・stdio MCP など元製品の機能は実行できません。必要な業務ツールは MCP 接続で設定してください。
+利用条件がサービス外の保持を明示的に制限する Skill は導入できません。「動作確認済み」の意味での導入ではなく、
+割り当てるモデルとツールでの確認が必要です。取得範囲と上限は設計書の「外部カタログの互換インポート」を参照してください。
+
 ## ローカル開発
 
 monorepo `no.1-production-ready-suite` の `agent/` で作業します。共有 package は同じ repository の `../platform/` を相対パスで参照します。

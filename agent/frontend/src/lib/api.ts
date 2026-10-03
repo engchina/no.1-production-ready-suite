@@ -716,6 +716,8 @@ export interface PluginManifest {
   skills?: AgentSkill[];
   mcp_servers?: Record<string, unknown>[];
   resources?: PluginResource[];
+  import_metadata?: Record<string, unknown>;
+  import_warnings?: string[];
   /** @deprecated v1 manifest compatibility only. */
   agents?: Record<string, unknown>[];
 }
@@ -760,6 +762,23 @@ export interface MarketplaceSource {
   url?: string | null;
   plugin_count: number;
   last_error?: string | null;
+  refresh_status?: "not_fetched" | "ready" | "failed";
+  revision?: string | null;
+}
+
+export interface MarketplaceEntry {
+  catalog_entry: true;
+  id: string;
+  name: string;
+  version?: string;
+  description?: string;
+  unavailable_reason?: string | null;
+}
+
+export interface PluginImportPreview {
+  manifest: PluginManifest;
+  digest: string;
+  warnings: string[];
 }
 
 export interface MarketplaceSourcesData {
@@ -768,7 +787,7 @@ export interface MarketplaceSourcesData {
 
 export interface MarketplaceListing {
   name: string;
-  plugins: PluginManifest[];
+  plugins: (PluginManifest | MarketplaceEntry)[];
 }
 
 export interface TraceExportRetryData {
@@ -1450,11 +1469,18 @@ export const agentApi = {
     manifest?: PluginManifest;
     marketplace_id?: string;
     plugin_id?: string;
+    preview_digest?: string;
+    accept_limitations?: boolean;
   }) =>
     request<PluginRecord>("/api/plugins", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  previewMarketplacePlugin: (marketplaceId: string, pluginId: string) =>
+    request<PluginImportPreview>(
+      `/api/plugins/marketplaces/${encodeURIComponent(marketplaceId)}/plugins/${encodeURIComponent(pluginId)}/preview`,
+      { method: "POST" }
+    ),
   setPluginEnabled: (pluginId: string, enabled: boolean) =>
     request<PluginRecord>(`/api/plugins/${encodeURIComponent(pluginId)}`, {
       method: "PATCH",

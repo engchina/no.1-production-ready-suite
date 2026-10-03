@@ -1,0 +1,71 @@
+[
+  {
+    "catalog": "official",
+    "plugin": "code-review",
+    "unsupported": "ValueError",
+    "reason": "対応する Skill / HTTP MCP がありません。commands・agents・hooks は導入できません。"
+  },
+  {
+    "catalog": "official",
+    "plugin": "feature-dev",
+    "unsupported": "ValueError",
+    "reason": "対応する Skill / HTTP MCP がありません。commands・agents・hooks は導入できません。"
+  },
+  {
+    "catalog": "official",
+    "plugin": "frontend-design",
+    "revision": "d182ca456ca09d31d139f7d3818d1d333b103cce",
+    "skills": [
+      "frontend-design"
+    ],
+    "resources": 2,
+    "warnings": [
+      "外部 Skill の指示と参照文書を導入します。元製品の実行機能や業務での動作を確認したものではありません。",
+      "配布元の利用条件は別途適用されます。導入前に利用できる範囲を確認してください。",
+      "frontend-design: Markdown 以外の補助ファイルは導入しません。文書生成や画像・データの操作には対応するツールが必要です。"
+    ]
+  },
+  {
+    "catalog": "skills",
+    "plugin": "document-skills",
+    "unsupported": "ValueError",
+    "reason": "配布元の利用条件がサービス外での保持を制限するため、この Skill は導入できません。"
+  },
+  {
+    "catalog": "superpowers",
+    "plugin": "superpowers",
+    "revision": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
+    "skills": [
+      "brainstorming",
+      "diagnosing-superpowers",
+      "dispatching-parallel-agents",
+      "executing-plans",
+      "finishing-a-development-branch",
+      "receiving-code-review",
+      "requesting-code-review",
+      "subagent-driven-development",
+      "systematic-debugging",
+      "test-driven-development",
+      "using-git-worktrees",
+      "using-superpowers",
+      "verification-before-completion",
+      "writing-plans",
+      "writing-skills"
+    ],
+    "resources": 46,
+    "warnings": [
+      "外部 Skill の指示と参照文書を導入します。元製品の実行機能や業務での動作を確認したものではありません。",
+      "配布元の利用条件は別途適用されます。導入前に利用できる範囲を確認してください。",
+      "hooks は元製品の実行機能です。この製品では自動実行しません。",
+      "配布物の scripts は実行しません。必要な処理は MCP ツールで設定してください。",
+      "brainstorming: scripts を必要とする操作はこの製品では実行できません。",
+      "brainstorming: Markdown 以外の補助ファイルは導入しません。文書生成や画像・データの操作には対応するツールが必要です。",
+      "executing-plans: scripts を必要とする操作はこの製品では実行できません。",
+      "executing-plans: Markdown 以外の補助ファイルは導入しません。文書生成や画像・データの操作には対応するツールが必要です。",
+      "subagent-driven-development: scripts を必要とする操作はこの製品では実行できません。",
+      "subagent-driven-development: Markdown 以外の補助ファイルは導入しません。文書生成や画像・データの操作には対応するツールが必要です。",
+      "systematic-debugging: Markdown 以外の補助ファイルは導入しません。文書生成や画像・データの操作には対応するツールが必要です。",
+      "writing-skills: Markdown 以外の補助ファイルは導入しません。文書生成や画像・データの操作には対応するツールが必要です。"
+    ]
+  }
+]

@@ -1,11 +1,12 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Plus, RotateCcw, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Download, Plus, RotateCcw, RefreshCw, Save, Trash2, X, Eye } from "lucide-react";
 import {
   Banner,
   Button,
   Card,
   CardContent,
+  Disclosure,
   EmptyState,
   FormSkeleton,
   ListToolbar,
@@ -25,22 +26,24 @@ import {
   RowTitleButton,
   TextField,
 } from "@engchina/production-ready-ui";
-import { agentApi, type MarketplaceSource, type PluginManifest } from "@/lib/api";
+import {
+  agentApi,
+  ApiError,
+  type MarketplaceSource,
+  type PluginManifest,
+  type MarketplaceEntry,
+  type PluginImportPreview,
+} from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { PagedDataTable, QueryState } from "@/components/ListViews";
-import {
-  ListSearchField,
-  listCountLabel,
-  matchesSearch,
-  NoMatchState,
-  useListSearch,
-} from "@/components/ListFilters";
+import { ListSearchField, listCountLabel, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
 import { useEditorRoute } from "@/lib/editor-route";
 import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 import { focusField } from "@/pages/shared/page-helpers";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
+import { JsonPreview } from "@/pages/shared/page-helpers";
 
 const EMPTY_MARKETPLACE_FORM = { id: "", name: "", url: "" };
 
@@ -61,8 +64,9 @@ export function PluginMarketplacesPage() {
 
   const refreshMutation = useMutation({
     mutationFn: (id: string) => agentApi.refreshPluginMarketplace(id),
-    onSuccess: (_data, id) => {
-      toast.success(t("marketplaces.refreshed"));
+    onSuccess: (data, id) => {
+      if (data.last_error) toast.error(t("marketplaces.refreshFailed"));
+      else toast.success(t("marketplaces.refreshed"));
       void invalidate();
       void queryClient.invalidateQueries({ queryKey: ["marketplace-plugins", id] });
     },
@@ -95,24 +99,27 @@ export function PluginMarketplacesPage() {
 
   const busy = refreshMutation.isPending || deleteMutation.isPending;
   // 一覧の行と詳細で同じ定義を使う（UX 契約 buttons.md §5.1）。
-  const marketplaceActions = (source: MarketplaceSource): EntityAction[] => canManage ? [
-    {
-      id: "refresh",
-      label: t("marketplaces.refresh"),
-      icon: RefreshCw,
-      disabled: busy,
-      loading: refreshMutation.isPending && refreshMutation.variables === source.id,
-      onSelect: () => refreshMutation.mutate(source.id),
-    },
-    {
-      id: "delete",
-      label: t("marketplaces.delete"),
-      icon: Trash2,
-      tone: "danger",
-      disabled: busy,
-      onSelect: () => remove(source),
-    },
-  ] : [];
+  const marketplaceActions = (source: MarketplaceSource): EntityAction[] =>
+    canManage
+      ? [
+          {
+            id: "refresh",
+            label: t("marketplaces.refresh"),
+            icon: RefreshCw,
+            disabled: busy,
+            loading: refreshMutation.isPending && refreshMutation.variables === source.id,
+            onSelect: () => refreshMutation.mutate(source.id),
+          },
+          {
+            id: "delete",
+            label: t("marketplaces.delete"),
+            icon: Trash2,
+            tone: "danger",
+            disabled: busy,
+            onSelect: () => remove(source),
+          },
+        ]
+      : [];
 
   const list = markets.data?.marketplaces ?? [];
   const [marketQuery, setMarketQuery] = useListSearch("marketplaces");
@@ -154,7 +161,11 @@ export function PluginMarketplacesPage() {
               summary={markets.data ? listCountLabel(visibleMarkets.length, list.length) : undefined}
               testId="marketplace-list-toolbar"
             />
-            <QueryState query={markets} loadingLabel={t("loading.marketplaces")} skeleton={<TableSkeleton columns={5} />}>
+            <QueryState
+              query={markets}
+              loadingLabel={t("loading.marketplaces")}
+              skeleton={<TableSkeleton columns={5} />}
+            >
               <MarketplaceTable
                 sources={visibleMarkets}
                 resetKey={marketQuery}
@@ -202,10 +213,7 @@ export function PluginMarketplacesPage() {
   if (!source) {
     return (
       <>
-        <PageHeader
-          wide
-          title={t("marketplaces.title")}
-        />
+        <PageHeader wide title={t("marketplaces.title")} />
         <PageBody wide>
           <QueryState query={markets} loadingLabel={t("loading.marketplaces")} skeleton={<FormSkeleton fields={3} />}>
             <MissingEditorTarget id={target.id} onBack={() => editor.backToList()} />
@@ -217,6 +225,7 @@ export function PluginMarketplacesPage() {
 
   return (
     <MarketplaceDetail
+      key={`${source.id}:${source.revision ?? "native"}`}
       source={source}
       actions={marketplaceActions(source)}
       refreshing={refreshMutation.isPending && refreshMutation.variables === source.id}
@@ -273,7 +282,12 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
         title={title}
         subtitle={t("page.pluginMarketplaces.subtitle")}
         // 一覧へ戻るは左上、保存は右端の primary（#618）。
-        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("marketplaces.title") }), onClick: () => void back(), testId: "editor-back" }}
+        back={{
+          label: t("common.backToList"),
+          ariaLabel: t("editor.backToListOf", { list: t("marketplaces.title") }),
+          onClick: () => void back(),
+          testId: "editor-back",
+        }}
         actions={[
           {
             id: "discard",
@@ -363,7 +377,12 @@ function MarketplaceTable({
       header: t("marketplaces.name"),
       rowHeader: true,
       render: (source) => (
-        <RowTitleButton title={source.name || source.id} subtitle={source.id} href={hrefFor(source)} onClick={() => onOpen(source)} />
+        <RowTitleButton
+          title={source.name || source.id}
+          subtitle={source.id}
+          href={hrefFor(source)}
+          onClick={() => onOpen(source)}
+        />
       ),
     },
     {
@@ -386,7 +405,10 @@ function MarketplaceTable({
         source.last_error ? (
           <StatusBadge variant="warning" label={t("common.error")} />
         ) : (
-          <StatusBadge variant="success" label={t("common.valid")} />
+          <StatusBadge
+            variant={source.refresh_status === "not_fetched" ? "info" : "success"}
+            label={source.refresh_status === "not_fetched" ? t("marketplaces.notFetched") : t("common.valid")}
+          />
         ),
     },
     {
@@ -450,18 +472,47 @@ function MarketplaceDetail({
   onBack: () => void;
   onInstalled: () => void;
 }) {
+  const confirm = useConfirm();
+  const [review, setReview] = useState<{
+    marketplaceId: string;
+    pluginId: string;
+    preview: PluginImportPreview;
+  } | null>(null);
+  const reviewRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (review) {
+      reviewRef.current?.focus();
+      reviewRef.current?.scrollIntoView({ block: "nearest" });
+    }
+  }, [review]);
+  const previewMutation = useMutation({
+    onMutate: () => setReview(null),
+    mutationFn: (pluginId: string) => agentApi.previewMarketplacePlugin(source.id, pluginId),
+    onSuccess: (preview, pluginId) => setReview({ marketplaceId: source.id, pluginId, preview }),
+    onError: (error) => toast.error(error.message),
+  });
   const listing = useQuery({
     queryKey: ["marketplace-plugins", source.id],
     queryFn: () => agentApi.listMarketplacePlugins(source.id),
   });
   const installMutation = useMutation({
-    mutationFn: (pluginId: string) => agentApi.installPlugin({ marketplace_id: source.id, plugin_id: pluginId }),
+    mutationFn: (request: { pluginId: string; preview?: PluginImportPreview }) =>
+      agentApi.installPlugin({
+        marketplace_id: source.id,
+        plugin_id: request.pluginId,
+        preview_digest: request.preview?.digest,
+        accept_limitations: Boolean(request.preview),
+      }),
     onSuccess: () => {
       toast.success(t("plugins.installed"));
+      setReview(null);
       onInstalled();
       void listing.refetch();
     },
-    onError: (error) => toast.error((error as Error).message),
+    onError: (error) => {
+      toast.error((error as Error).message);
+      if (error instanceof ApiError && error.status === 409) setReview(null);
+    },
   });
   const plugins = listing.data?.plugins ?? [];
   // 他の一覧と同じく名前・ID・説明で絞り込む（page-archetypes.md #535 / #600。検索語は作業状態に残す。#814）。
@@ -471,7 +522,19 @@ function MarketplaceDetail({
   );
   const title = source.name || source.id;
 
-  const columns: DataTableColumn<PluginManifest>[] = [
+  async function importReviewed() {
+    if (!review || review.marketplaceId !== source.id || installMutation.isPending) return;
+    const ok = await confirm({
+      title: t("marketplaces.confirmImport"),
+      description: t("marketplaces.confirmImportDescription", { name: review.preview.manifest.name }),
+      confirmLabel: t("marketplaces.install"),
+      cancelLabel: t("common.cancel"),
+      tone: "info",
+    });
+    if (ok) installMutation.mutate({ pluginId: review.pluginId, preview: review.preview });
+  }
+
+  const columns: DataTableColumn<PluginManifest | MarketplaceEntry>[] = [
     {
       key: "name",
       header: t("plugins.title"),
@@ -490,7 +553,14 @@ function MarketplaceDetail({
       key: "description",
       header: t("agent.description"),
       className: "max-w-sm text-xs text-fg-muted",
-      render: (manifest) => manifest.description || "-",
+      render: (manifest) => (
+        <div>
+          {manifest.description || "-"}
+          {"catalog_entry" in manifest && manifest.unavailable_reason ? (
+            <p className="mt-2 text-fg-muted">{manifest.unavailable_reason}</p>
+          ) : null}
+        </div>
+      ),
     },
     {
       key: "actions",
@@ -501,12 +571,21 @@ function MarketplaceDetail({
           actions={[
             {
               id: "install",
-              label: t("marketplaces.install"),
-              icon: Download,
+              label: "catalog_entry" in manifest ? t("marketplaces.review") : t("marketplaces.install"),
+              icon: "catalog_entry" in manifest ? Eye : Download,
               visible: canInstall,
-              disabled: installMutation.isPending,
-              loading: installMutation.isPending && installMutation.variables === manifest.id,
-              onSelect: () => installMutation.mutate(manifest.id),
+              disabled:
+                refreshing ||
+                installMutation.isPending ||
+                previewMutation.isPending ||
+                Boolean("catalog_entry" in manifest && manifest.unavailable_reason),
+              loading:
+                (installMutation.isPending && installMutation.variables?.pluginId === manifest.id) ||
+                (previewMutation.isPending && previewMutation.variables === manifest.id),
+              onSelect: () =>
+                "catalog_entry" in manifest
+                  ? previewMutation.mutate(manifest.id)
+                  : installMutation.mutate({ pluginId: manifest.id }),
             },
           ]}
           ariaLabel={t("common.entityActions", { name: manifest.id })}
@@ -523,9 +602,13 @@ function MarketplaceDetail({
         title={title}
         subtitle={source.id}
         // 一覧へ戻るは左上、保存は右端の primary（#618）。
-        back={{ label: t("common.backToList"), ariaLabel: t("editor.backToListOf", { list: t("marketplaces.title") }), onClick: onBack, testId: "editor-back" }}
-        actions={[
-        ]}
+        back={{
+          label: t("common.backToList"),
+          ariaLabel: t("editor.backToListOf", { list: t("marketplaces.title") }),
+          onClick: onBack,
+          testId: "editor-back",
+        }}
+        actions={[]}
       />
       <PageBody wide className="space-y-6">
         <Section
@@ -548,15 +631,31 @@ function MarketplaceDetail({
             <span className="break-all text-xs text-fg-muted">{source.url || "-"}</span>
           </div>
           {source.last_error ? <Banner severity="warning">{source.last_error}</Banner> : null}
+          {source.last_error && source.plugin_count > 0 ? (
+            <p className="text-sm text-fg-muted">{t("marketplaces.stale")}</p>
+          ) : null}
+          {source.refresh_status === "not_fetched" ? (
+            <Banner severity="info">{t("marketplaces.notFetchedHint")}</Banner>
+          ) : null}
           {refreshing ? <MarketplaceRefreshProcessing id={source.id} /> : null}
         </Section>
         <Section title={t("marketplaces.available")}>
+          {previewMutation.isPending ? (
+            <ProcessingIndicator
+              active
+              label={t("marketplaces.progress.previewing")}
+              operationKey={`marketplace-preview-${previewMutation.variables ?? ""}`}
+              placement="action"
+              activityIcon="none"
+              testId="marketplace-preview-processing"
+            />
+          ) : null}
           {installMutation.isPending ? (
             // プラグインの取得と Skill / MCP の登録を行うため数秒以上かかる。
             <ProcessingIndicator
               active
-              label={t("marketplaces.progress.installing", { id: installMutation.variables ?? "" })}
-              operationKey={`marketplace-install-${installMutation.variables ?? ""}`}
+              label={t("marketplaces.progress.installing", { id: installMutation.variables?.pluginId ?? "" })}
+              operationKey={`marketplace-install-${installMutation.variables?.pluginId ?? ""}`}
               placement="action"
               activityIcon="none"
               className="mb-3 rounded-md border border-border bg-surface-sunken px-3 py-2"
@@ -576,7 +675,12 @@ function MarketplaceDetail({
             summary={listing.data ? listCountLabel(visiblePlugins.length, plugins.length) : undefined}
             testId="marketplace-plugin-toolbar"
           />
-          <QueryState query={listing} loadingLabel={t("loading.marketplacePlugins")} skeleton={<TableSkeleton columns={3} />} testId="marketplace-plugins-loading">
+          <QueryState
+            query={listing}
+            loadingLabel={t("loading.marketplacePlugins")}
+            skeleton={<TableSkeleton columns={3} />}
+            testId="marketplace-plugins-loading"
+          >
             <PagedDataTable
               rows={visiblePlugins}
               columns={columns}
@@ -595,6 +699,97 @@ function MarketplaceDetail({
             />
           </QueryState>
         </Section>
+        {review && review.marketplaceId === source.id ? (
+          <Section
+            title={t("marketplaces.reviewTitle", { name: review.preview.manifest.name })}
+            actions={
+              <ObjectActionBar
+                ariaLabel={t("marketplaces.review")}
+                testId="marketplace-import-actions"
+                actions={[
+                  {
+                    id: "import",
+                    label: t("marketplaces.install"),
+                    icon: Download,
+                    loading: installMutation.isPending,
+                    disabled: installMutation.isPending || refreshing,
+                    onSelect: importReviewed,
+                  },
+                  {
+                    id: "close",
+                    label: t("marketplaces.closeReview"),
+                    icon: X,
+                    disabled: installMutation.isPending,
+                    onSelect: () => setReview(null),
+                  },
+                ]}
+              />
+            }
+          >
+            <div
+              ref={reviewRef}
+              tabIndex={-1}
+              aria-label={t("marketplaces.reviewTitle", { name: review.preview.manifest.name })}
+              data-testid="marketplace-import-preview"
+              className="min-w-0 space-y-4"
+            >
+              <Banner severity="warning">
+                <ul className="list-disc space-y-2 pl-4">
+                  {review.preview.warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </Banner>
+              <p className="text-sm text-fg-muted">
+                {t("marketplaces.importCounts", {
+                  skills: review.preview.manifest.skills?.length ?? 0,
+                  mcp: review.preview.manifest.mcp_servers?.length ?? 0,
+                  resources: review.preview.manifest.resources?.length ?? 0,
+                })}
+              </p>
+              <dl className="space-y-2 text-sm">
+                <div>
+                  <dt className="text-fg-muted">{t("marketplaces.importOrigin")}</dt>
+                  <dd className="break-words [overflow-wrap:anywhere]">
+                    {String(review.preview.manifest.import_metadata?.repository ?? "")}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-fg-muted">{t("marketplaces.importRevision")}</dt>
+                  <dd className="break-words font-mono [overflow-wrap:anywhere]">
+                    {String(review.preview.manifest.import_metadata?.revision ?? "")}
+                  </dd>
+                </div>
+              </dl>
+              {(review.preview.manifest.skills ?? []).map((skill) => (
+                <Disclosure key={skill.id} summary={skill.name} description={skill.description}>
+                  <p className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere]">
+                    {skill.instructions}
+                  </p>
+                </Disclosure>
+              ))}
+              {review.preview.manifest.resources?.length ? (
+                <Disclosure summary={t("marketplaces.importReferences")}>
+                  <ul className="space-y-2 text-sm">
+                    {review.preview.manifest.resources.map((resource) => (
+                      <li key={resource.id} className="break-words [overflow-wrap:anywhere]">
+                        {resource.name}
+                      </li>
+                    ))}
+                  </ul>
+                </Disclosure>
+              ) : null}
+              {review.preview.manifest.mcp_servers?.length ? (
+                <Disclosure summary={t("marketplaces.importConnections")}>
+                  <JsonPreview value={review.preview.manifest.mcp_servers} />
+                </Disclosure>
+              ) : null}
+              <Disclosure summary={t("marketplaces.importDetails")}>
+                <JsonPreview value={review.preview.manifest} />
+              </Disclosure>
+            </div>
+          </Section>
+        ) : null}
       </PageBody>
     </>
   );

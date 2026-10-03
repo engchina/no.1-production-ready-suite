@@ -337,3 +337,88 @@ def test_store_follows_runtime_repository_backend(tmp_path: Path, monkeypatch: M
     monkeypatch.setattr(settings, "agent_runtime_repository_backend", "memory")
     monkeypatch.setattr(settings, "agent_runtime_snapshot_path", None)
     assert control_plane_store.build_control_plane_store().persistent is False
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_external_catalog_and_import_metadata_survive_restart(
+    file_store: Path, enabled: bool
+) -> None:
+    from app.features.agent.plugins import (
+        MarketplaceEntry,
+        MarketplaceListing,
+        MarketplaceSource,
+        PluginManifest,
+        PluginResource,
+        plugin_resource_registry,
+    )
+    from app.features.agent.skills import AgentSkillDefinition
+
+    revision = "a" * 40
+    listing = MarketplaceListing(
+        name="固定配布元",
+        revision=revision,
+        plugins=[
+            MarketplaceEntry(
+                id="cp764_plugin",
+                name="外部 Skill",
+                source="./skills",
+                repository="sample/catalog",
+                revision=revision,
+            )
+        ],
+    )
+    source = marketplace_registry.add(
+        MarketplaceSource(
+            id="cp764_market",
+            url="https://raw.githubusercontent.com/sample/catalog/main/.claude-plugin/marketplace.json",
+            refresh_status="failed",
+            last_error="取得失敗",
+            revision=revision,
+        ),
+        listing,
+    )
+    control_plane_store.save_marketplace(source, listing)
+    manifest = PluginManifest(
+        id="cp764_plugin",
+        name="外部 Skill",
+        skills=[
+            AgentSkillDefinition(
+                id="cp764_skill",
+                name="保存する Skill",
+                instructions="実際の指示",
+                resource_ids=["cp764_ref"],
+            )
+        ],
+        resources=[
+            PluginResource(
+                id="cp764_ref",
+                kind="prompt",
+                name="REFERENCE.md",
+                content="参照の本文",
+                metadata={"external_skill_reference": True},
+            )
+        ],
+        import_metadata={"revision": revision, "repository": "sample/catalog"},
+        import_warnings=["scripts は実行しません。"],
+    )
+    record = plugin_registry.install(manifest, marketplace_id=source.id)
+    if not enabled:
+        record = plugin_registry.set_enabled(record.id, False)
+    control_plane_store.save_plugin(record)
+    saved = file_store.read_text()
+    plugin_registry.uninstall(record.id)
+    marketplace_registry.remove(source.id)
+    restored = restore_control_plane()
+    assert restored["marketplace"] == restored["plugin"] == 1
+    current_source = next(s for s in marketplace_registry.list() if s.id == source.id)
+    assert current_source.refresh_status == "failed"
+    assert current_source.last_error == "取得失敗"
+    assert current_source.revision == revision
+    assert isinstance(marketplace_registry.get_listing(source.id).plugins[0], MarketplaceEntry)
+    current = plugin_registry.get(record.id)
+    assert current is not None and current.enabled == enabled
+    assert current.manifest.import_metadata == manifest.import_metadata
+    assert current.warnings == manifest.import_warnings
+    assert (plugin_resource_registry.get("cp764_ref") is not None) == enabled
+    assert (skill_registry.get("cp764_skill") is not None) == enabled
+    assert file_store.read_text() == saved

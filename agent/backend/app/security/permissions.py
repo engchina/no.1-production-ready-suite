@@ -443,6 +443,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/plugins/marketplaces"): _ADMIN_ONLY,
     ("DELETE", "/plugins/marketplaces/{marketplace_id}"): _ADMIN_ONLY,
     ("POST", "/plugins/marketplaces/{marketplace_id}/refresh"): _ADMIN_ONLY,
+    ("POST", "/plugins/marketplaces/{marketplace_id}/plugins/{plugin_id}/preview"): _ADMIN_ONLY,
     # ---- 運用設定 ----
     # システムテーブル（#751。NL2SQL と同じくメニュー権限で状態の確認と作成・更新）。
     ("GET", "/settings/database/system-tables"): _any(MENU_SETTINGS_SYSTEM_TABLES),

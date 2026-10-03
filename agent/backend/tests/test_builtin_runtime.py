@@ -724,3 +724,57 @@ def test_thread_api_lists_and_continues_conversation(
         == 422
     )
     assert len(scheduled) == 2
+
+
+@pytest.mark.parametrize("permitted", [True, False])
+def test_external_skill_reads_only_its_saved_reference(
+    monkeypatch: MonkeyPatch, calls: _Calls, permitted: bool
+) -> None:
+    from app.features.agent.plugins import PluginResource, plugin_resource_registry
+    from app.features.agent.skill_resources import RESOURCE_TOOL_NAME
+
+    del calls
+    resource_id = "test-skill-reference"
+    source = "test-skill-reference-source"
+    plugin_resource_registry.set_declared(
+        source,
+        [
+            PluginResource(
+                id=resource_id,
+                kind="prompt",
+                name="REFERENCE.md",
+                media_type="text/markdown",
+                content="対象の根拠を確認する。",
+                metadata={"external_skill_reference": True},
+            )
+        ],
+    )
+    skill = skill_registry.get(SKILL_ID)
+    assert skill is not None
+    skill_registry.upsert_custom(skill.model_copy(update={"resource_ids": [resource_id]}))
+    model = _script(
+        monkeypatch,
+        [
+            function_call(
+                RESOURCE_TOOL_NAME,
+                {"resource_id": resource_id if permitted else "unassigned-reference", "offset": 0},
+                call_id="read-reference",
+            )
+        ],
+        [assistant_message("確認しました。")],
+    )
+    try:
+        run_id = _create_run()
+        anyio.run(builtin_runtime.execute_run, run_id)
+        run = runtime_repository.get_run(run_id)
+        assert run.status == RunStatus.COMPLETED
+        assert "REFERENCE.md" in str(model.calls[0].system_instructions)
+        assert "対象の根拠を確認する。" not in str(model.calls[0].system_instructions)
+        if permitted:
+            assert "対象の根拠を確認する。" in str(model.calls[1].input)
+            assert run.steps[0].status == "completed"
+        else:
+            assert "割り当てられていない" in str(model.calls[1].input)
+            assert run.steps[0].status == "failed"
+    finally:
+        plugin_resource_registry.set_declared(source, [])
