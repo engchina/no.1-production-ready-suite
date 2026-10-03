@@ -69,8 +69,8 @@ const USERS = [
 ];
 
 const PERMISSION_CATALOG = [
-  { code: "menu.search", group: "検索・回答プロファイル", label: "RAG 検索", description: "RAG 検索を表示します。", implies: [] },
-  { code: "menu.chat", group: "検索・回答プロファイル", label: "チャット", description: "チャットを表示します。", implies: [] },
+  { code: "menu.search", group: "AI 活用", label: "RAG 検索", description: "RAG 検索を表示します。", implies: [] },
+  { code: "menu.chat", group: "AI 活用", label: "チャット", description: "チャットを表示します。", implies: [] },
   {
     code: "menu.knowledge_bases",
     group: "ナレッジ構築",
@@ -222,8 +222,9 @@ test("権限管理で検索・回答プロファイルと KB を選んで保存�
 
   // 機能の一覧は左のナビと同じグループ・並び順・名前（Issue 567）。backend のカタログが RAG 検索 → チャットの
   // 順でも、ナビの順（チャット → RAG 検索）に並べ、ナビに無い capability は後ろに置く。
+  // チャット・RAG 検索のグループはナビの先頭のセクション「AI 活用」（#860 で 3 製品の名前にそろえた）。
   const featureList = page.locator('form[aria-labelledby="security-permissions-form-heading"] fieldset').first();
-  await expect(featureList.locator("h3")).toHaveText(["検索・回答プロファイル", "ナレッジ構築", "管理権限"]);
+  await expect(featureList.locator("h3")).toHaveText(["AI 活用", "ナレッジ構築", "管理権限"]);
   await expect(featureList.getByRole("checkbox").nth(0)).toHaveAccessibleName(/^チャット/);
   await expect(featureList.getByRole("checkbox").nth(1)).toHaveAccessibleName(/^RAG 検索/);
 
