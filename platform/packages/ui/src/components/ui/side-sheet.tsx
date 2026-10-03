@@ -144,7 +144,7 @@ export function SideSheet({
           {headerActions}
           <Button type="button" variant="ghost" size="sm" iconOnly icon={X} aria-label={closeLabel} onClick={onClose} />
         </div>
-        <div className={cn("flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-3", bodyClassName)}>
+        <div className={cn("flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain [scrollbar-gutter:stable] p-3", bodyClassName)}>
           {children}
         </div>
       </div>

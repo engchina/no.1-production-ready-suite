@@ -128,7 +128,7 @@ export function AppShell({
           tabIndex={-1}
           inert={backgroundInert}
           className={cn(
-            "flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto",
+            "flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]",
             backgroundInert && "overflow-hidden",
             mainClassName
           )}

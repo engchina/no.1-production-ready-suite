@@ -24,7 +24,7 @@ async function measureLayout(page: Page) {
       headerWidth: Math.round(h.width),
       bodyLeft: Math.round(b.left),
       bodyWidth: Math.round(b.width),
-      mainWidth: Math.round(main.getBoundingClientRect().width),
+      mainWidth: main.clientWidth,
       documentOverflow: document.documentElement.scrollHeight - window.innerHeight,
     };
   });

@@ -31,9 +31,9 @@ describe("一覧の表示密度の定数（#265、NL2SQL の基準と同じ値�
 
   it("行リストのスクロールの高さは 5 行 / 8 行（3.5rem × 行数）に一致する", () => {
     const rem = (rows: number) => `${rows * INFORMATION_LIST_VISIBLE_ROWS.rowHeightRem}rem`;
-    expect(INFORMATION_LIST_SCROLL_CLASS).toBe(`max-h-[${rem(5)}] overflow-auto md:max-h-[${rem(8)}]`);
+    expect(INFORMATION_LIST_SCROLL_CLASS).toBe(`max-h-[${rem(5)}] overflow-auto [scrollbar-gutter:stable] md:max-h-[${rem(8)}]`);
     // h-56 = 14rem = 3.5rem × 4 行 + 余白。5 行目の一部が見えてスクロールできると分かる。
-    expect(INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS).toBe("h-56 max-h-56 overflow-auto");
+    expect(INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS).toBe("h-56 max-h-56 overflow-auto [scrollbar-gutter:stable]");
     expect(INFORMATION_TABLE_FOCUS_CLASS).toContain("focus-visible:outline-focus-ring");
     expect(INFORMATION_TABLE_FOCUS_CLASS).not.toMatch(/ring-/);
   });

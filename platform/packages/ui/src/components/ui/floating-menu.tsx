@@ -298,7 +298,7 @@ export function FloatingActionMenu({
       data-floating-menu-placement={position?.placement}
       className={cn(
         "fixed z-[var(--z-dropdown)] grid gap-1 rounded-md border border-border bg-surface-raised p-1 text-sm shadow-[var(--shadow-popover)]",
-        position?.constrained && "overflow-y-auto overscroll-contain",
+        position?.constrained && "overflow-y-auto overscroll-contain [scrollbar-gutter:stable]",
         !position && "opacity-0",
         className
       )}

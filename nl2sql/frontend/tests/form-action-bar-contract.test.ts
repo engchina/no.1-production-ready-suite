@@ -64,7 +64,7 @@ test("FormActionBar の danger menu は shared floating menu で viewport 内に
   assert.match(floatingSource, /getBoundingClientRect/u);
   assert.match(floatingSource, /menu\.scrollHeight \+ menuBorderHeight/u);
   assert.match(floatingSource, /constrained \? \{ maxHeight/u);
-  assert.match(floatingSource, /position\?\.constrained && "overflow-y-auto overscroll-contain"/u);
+  assert.match(floatingSource, /position\?\.constrained && "overflow-y-auto overscroll-contain(?: [^"]*)?"/u);
   assert.doesNotMatch(floatingSource, /"fixed[^"]*overflow-y-auto/u);
 });
 

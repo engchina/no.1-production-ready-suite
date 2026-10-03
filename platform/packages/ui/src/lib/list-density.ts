@@ -28,10 +28,10 @@ export const INFORMATION_TABLE_ROW_CLASS = "h-[3.5rem]";
 export const INFORMATION_LIST_ROW_CLASS = "min-h-[3.5rem]";
 
 /** 表ではない行リストを md 未満 5 行・md 以上 8 行の高さで縦スクロールにする。 */
-export const INFORMATION_LIST_SCROLL_CLASS = "max-h-[17.5rem] overflow-auto md:max-h-[28rem]";
+export const INFORMATION_LIST_SCROLL_CLASS = "max-h-[17.5rem] overflow-auto [scrollbar-gutter:stable] md:max-h-[28rem]";
 
 /** 画面幅によらず 5 行の高さで縦スクロールにする小さな行リスト。 */
-export const INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS = "h-56 max-h-56 overflow-auto";
+export const INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS = "h-56 max-h-56 overflow-auto [scrollbar-gutter:stable]";
 
 /** Tab で到達できるスクロール領域のフォーカスの表示（outline に一本化、#355）。 */
 export const INFORMATION_TABLE_FOCUS_CLASS =

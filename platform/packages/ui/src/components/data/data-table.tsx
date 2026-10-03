@@ -288,7 +288,7 @@ export function DataTable<T>({
       style={scrollStyle}
       className={cn(
         "rounded-md border border-border bg-surface",
-        scrollable ? "overflow-auto" : "overflow-x-auto",
+        scrollable ? "overflow-auto [scrollbar-gutter:stable]" : "overflow-x-auto",
         scrollAriaLabel && "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
         className
       )}

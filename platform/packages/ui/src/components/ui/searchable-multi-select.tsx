@@ -469,7 +469,7 @@ export function SearchableMultiSelect({
       {chips.length > 0 ? (
         <ul
           aria-label={labels.selectedList(label)}
-          className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto"
+          className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto [scrollbar-gutter:stable]"
           data-searchable-chips=""
         >
           {chips.map((option) => (
