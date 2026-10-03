@@ -103,7 +103,7 @@
 
 | 画面 | 保存する field | 戻ったときの検証 |
 |---|---|---|
-| チャット | 選んだ業務 Agent（`chat.agentId`）、会話（`chat.threadId`）、送る前の下書き（`chat.draft`） | 会話が無くなっていれば新しい会話にする |
+| チャット | 選んだ業務 Agent（`chat.agentId`）、会話（`chat.threadId`）、送る前の下書き（`chat.draft`）、デスクトップの履歴の開閉（`chat.historyOpen`。既定で閉じる） | 会話が無くなっていれば新しい会話にする |
 | 実行履歴 | 目標の下書き（`runs.goal`）、選択中の実行（`runs.selectedRunId`）、イベント購読方式（`runs.streamMode`） | 選択中の実行が一覧に無ければ説明を出し、最新の実行を表示する。業務 Agent は実行条件なので保存しない |
 | 承認 | 選択中の承認（`approvals.selectedId`） | 判断は確認し直すので残さない |
 | フィードバック / 品質評価 / 利用状況 | 絞り込み（`feedback.*`）、業務 Agent と表示中の評価（`evaluation.*`）、期間と内訳のタブ（`usage.*`） | 期間・対象で取り直す |

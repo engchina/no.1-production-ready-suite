@@ -123,6 +123,7 @@ for (const viewport of VIEWPORTS) {
 
       // 会話の履歴（desktop は左、375px は side sheet）。
       if (viewport.width >= 1024) {
+        await page.getByRole("button", { name: "会話の履歴" }).click();
         await expect(page.getByTestId("chat-history").getByText("今月の売上は？")).toBeVisible();
       } else {
         await page.getByRole("button", { name: "会話の履歴" }).click();
@@ -218,6 +219,7 @@ for (const viewport of VIEWPORTS) {
       await useTheme(page, theme);
       await page.goto("/chat");
       if (viewport.width >= 1024) {
+        await page.getByRole("button", { name: "会話の履歴" }).click();
         await page.getByTestId("chat-history").getByRole("button", { name: /契約の更新条件は？/ }).click();
       } else {
         await page.getByRole("button", { name: "会話の履歴" }).click();
@@ -411,9 +413,42 @@ test("公開していない業務 Agent はチャットで選べない（#792）
 async function openSeedThread(page: Page) {
   const viewport = page.viewportSize();
   if (viewport && viewport.width >= 1024) {
+    const toggle = page.getByRole("button", { name: "会話の履歴", exact: true });
+    if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
     await page.getByTestId("chat-history").getByRole("button", { name: /契約の更新条件は？/ }).click();
     return;
   }
   await page.getByRole("button", { name: "会話の履歴" }).click();
   await page.getByRole("dialog", { name: "会話の履歴" }).getByText("契約の更新条件は？").click();
+}
+
+// #871: RAG と同じ既定の全幅表示と、履歴の明示開閉・復元。
+for (const width of [1280, 375]) {
+  test(`履歴は既定で閉じ、会話を全幅で表示する (${width}px)`, async ({ page, mockApi }) => {
+    seedThread(mockApi, {});
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/chat");
+    const toggle = page.getByRole("button", { name: "会話の履歴", exact: true });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByTestId("chat-history")).not.toBeVisible();
+    if (width >= 1024) {
+      const panel = page.getByRole("region", { name: "会話", exact: true });
+      const before = await panel.boundingBox();
+      await toggle.click();
+      await expect(page.getByTestId("chat-history")).toBeVisible();
+      const opened = await panel.boundingBox();
+      expect(before!.width - opened!.width).toBeGreaterThan(200);
+      await page.reload();
+      await expect(toggle).toHaveAttribute("aria-expanded", "true");
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    } else {
+      await toggle.click();
+      await expect(page.getByRole("dialog", { name: "会話の履歴" })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(toggle).toBeFocused();
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    }
+    await expectNoHorizontalOverflow(page);
+  });
 }

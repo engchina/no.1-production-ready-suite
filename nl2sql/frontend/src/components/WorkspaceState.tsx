@@ -6,6 +6,7 @@ import { Banner } from "@engchina/production-ready-ui";
 import { useAuth } from "@/features/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { draftKey, readDraft, writeDraft } from "@/lib/workspace-drafts";
+import { APP_ROUTES } from "@/lib/routes";
 
 const WorkspaceContext = createContext("legacy");
 const ActivityContext = createContext({ active: true, page: "" });
@@ -20,10 +21,11 @@ const useDraftFailures = create<{ keys: Set<string>; mark: (key: string, failed:
 }));
 
 export function WorkspaceBoundary({ contextId, children }: { contextId: string; children: ReactNode }) {
-  return <WorkspaceContext.Provider value={contextId}><div key={contextId}>{children}</div></WorkspaceContext.Provider>;
+  const { pathname } = useLocation();
+  return <WorkspaceContext.Provider value={contextId}><div key={contextId} className={pathname === APP_ROUTES.chat ? "flex min-h-0 flex-1 flex-col" : undefined}>{children}</div></WorkspaceContext.Provider>;
 }
 export function WorkspacePage({ active, page, children }: { active: boolean; page: string; children: ReactNode }) {
-  return <ActivityContext.Provider value={{ active, page }}><div hidden={!active}>{children}</div></ActivityContext.Provider>;
+  return <ActivityContext.Provider value={{ active, page }}><div hidden={!active} className={active && page === APP_ROUTES.chat ? "flex min-h-0 flex-1 flex-col" : undefined}>{children}</div></ActivityContext.Provider>;
 }
 export function useWorkspaceActive() { return useContext(ActivityContext).active; }
 

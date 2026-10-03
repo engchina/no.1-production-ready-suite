@@ -41,6 +41,7 @@ const [
 moduleResolver._resolveFilename = originalResolveFilename;
 
 const EXPECTED_ICON_NAMES_BY_LABEL_KEY = new Map<string, string>([
+  ["nav.chat", "MessagesSquare"],
   ["nav.query", "Sparkles"],
   ["nav.directSql", "FileCode2"],
   ["nav.sqlToQuestion", "MessageSquareCode"],

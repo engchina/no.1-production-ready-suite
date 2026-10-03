@@ -52,6 +52,7 @@ const Nl2SqlWorkbench = lazy(() =>
     default: module.Nl2SqlWorkbench,
   }))
 );
+const SqlChatPage = lazy(() => import("@/features/nl2sql/SqlChatPage").then((module) => ({ default: module.SqlChatPage })));
 const DirectSqlPage = lazy(() =>
   import("@/features/nl2sql/pages/DirectSqlPage").then((module) => ({
     default: module.DirectSqlPage,
@@ -203,6 +204,7 @@ const SecurityDeepSecPage = lazy(() =>
  * module 直下で JSX を一度だけ生成し、同一 instance を維持する(再マウント=state破棄を防ぐ)。
  */
 const KEEP_ALIVE_PAGES = [
+  { path: APP_ROUTES.chat, element: <SqlChatPage /> },
   { path: APP_ROUTES.query, element: <Nl2SqlWorkbench /> },
   { path: APP_ROUTES.sqlToQuestion, element: <SqlToQuestionPage /> },
   { path: APP_ROUTES.directSql, element: <DirectSqlPage /> },
@@ -298,7 +300,7 @@ function AuthorizedApplication() {
             <SyntheticRunNotifications />
             <KeepAlivePages />
             <Routes>
-            <Route path={APP_ROUTES.home} element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />
+            <Route path={APP_ROUTES.home} element={<Navigate to={auth.hasPermission(ROUTE_PERMISSIONS[APP_ROUTES.query]) ? APP_ROUTES.query : firstAllowedRoute(auth.hasPermission)} replace />} />
             <Route path={APP_ROUTES.sampleData} element={<SampleDataPage />} />
             {/* 旧ルート互換: スキーマ管理はテーブルの管理へ、データ投入はデータの管理へ */}
             <Route path="/schema" element={<Navigate to={APP_ROUTES.tableManagement} replace />} />

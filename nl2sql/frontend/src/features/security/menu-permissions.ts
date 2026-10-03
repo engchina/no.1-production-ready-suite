@@ -1,6 +1,7 @@
 import type { CurrentUser } from "./types";
 
 export const MENU_PERMISSIONS = {
+  chat: "menu.chat",
   query: "menu.query",
   directSql: "menu.direct_sql",
   sqlToQuestion: "menu.sql_to_question",
@@ -56,6 +57,11 @@ export type CapabilityPermission =
   (typeof CAPABILITY_PERMISSIONS)[keyof typeof CAPABILITY_PERMISSIONS];
 
 const PERMISSION_IMPLIES: Record<string, string[]> = {
+  [MENU_PERMISSIONS.chat]: [
+    CAPABILITY_PERMISSIONS.queryGenerate,
+    CAPABILITY_PERMISSIONS.profilesRead,
+    CAPABILITY_PERMISSIONS.schemaRead,
+  ],
   [MENU_PERMISSIONS.query]: [
     CAPABILITY_PERMISSIONS.queryGenerate,
     CAPABILITY_PERMISSIONS.sqlExecute,

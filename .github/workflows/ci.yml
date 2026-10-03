@@ -670,7 +670,7 @@ jobs:
       # 全件は e2e-nightly.yml が毎晩 8 shard で実行する。CI=true で retries 2、負荷対策で 1 worker（#175）。
       - name: Playwright E2E (smoke)
         run: |
-          npx playwright test --workers=1 tests/e2e/header-utilities.spec.ts tests/e2e/scrollbar-stability.spec.ts
+          npx playwright test --workers=1 tests/e2e/header-utilities.spec.ts tests/e2e/scrollbar-stability.spec.ts tests/e2e/sql-chat.spec.ts
           npx playwright test --workers=1 --project=desktop tests/e2e/database-gate.spec.ts
 
       - name: Upload Playwright report

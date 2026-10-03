@@ -1174,10 +1174,21 @@ class JobCreateRequest(BaseModel):
     use_ontology_context: bool = True
     include_interpretation: bool = False
     include_show_prompt: bool = False
+    # チャットは既存の非同期ジョブで生成・安全検査だけを行う。既存 API の既定は実行あり。
+    generation_only: bool = False
+    previous_job_id: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def validate_select_ai_overrides(self) -> JobCreateRequest:
         _validate_select_ai_request_overrides(self.engine, self.select_ai_overrides)
+        if self.previous_job_id and not self.generation_only:
+            raise ValueError("会話の継続は SQL の生成だけのジョブで利用できます。")
+        if self.generation_only and self.engine == Nl2SqlEngine.SELECT_AI_AGENT:
+            raise ValueError("チャットでは Select AI または Enterprise AI を選んでください。")
+        if self.generation_only and not self.question.strip():
+            raise ValueError("クエリを入力してください。")
+        if self.generation_only and len(self.question) > 10000:
+            raise ValueError("クエリは 10000 文字以内で入力してください。")
         return self
 
 
@@ -1198,6 +1209,10 @@ class JobData(BaseModel):
     status: JobStatus
     # 実行に使った業務プロファイル（未指定のジョブは "default"）。MCP の結果に載せる（#231）。
     profile_id: str = ""
+    question: str = ""
+    conversation_id: str = ""
+    previous_job_id: str | None = None
+    generation_only: bool = False
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
@@ -1211,8 +1226,29 @@ class JobData(BaseModel):
     steps: list[JobStepData] = Field(default_factory=list)
 
 
+class SqlChatSummary(BaseModel):
+    """永続ジョブを会話の単位で表示する。"""
+
+    id: str
+    title: str
+    profile_id: str
+    created_at: str
+
+
+class SqlChatPage(BaseModel):
+    items: list[SqlChatSummary]
+    next_cursor: str | None = None
+
+
+class SqlChatData(BaseModel):
+    conversation: SqlChatSummary
+    turns: list[JobData]
+
+
 class HistoryItem(BaseModel):
     """検索履歴。"""
+
+    generation_only: bool = False
 
     business_release_id: str = ""
     id: str
