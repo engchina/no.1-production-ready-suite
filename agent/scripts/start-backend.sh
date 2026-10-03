@@ -24,16 +24,16 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-# 既に同じポートで起動しているプロセスがあれば停止する
+# 同じポートの listener だけを停止する（接続側の client / readiness は停止しない）。
 kill_port() {
   local port="$1"
   local pids
-  pids="$(lsof -ti "tcp:${port}" 2>/dev/null || true)"
+  pids="$(lsof -nP -t -a -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true)"
   if [ -n "${pids}" ]; then
     echo "[backend] ポート ${port} を使用中のプロセスを停止します (PID: ${pids//$'\n'/ })..."
     kill ${pids} 2>/dev/null || true
     sleep 1
-    pids="$(lsof -ti "tcp:${port}" 2>/dev/null || true)"
+    pids="$(lsof -nP -t -a -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true)"
     if [ -n "${pids}" ]; then
       echo "[backend] 強制停止します (kill -9)..."
       kill -9 ${pids} 2>/dev/null || true

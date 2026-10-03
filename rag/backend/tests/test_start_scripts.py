@@ -258,6 +258,49 @@ def _run_frontend(scripts: Path, env: dict[str, str]) -> list[str]:
     return Path(env["TEST_EVENTS"]).read_text().splitlines()
 
 
+@pytest.mark.parametrize("script_name", ["start-backend.sh", "start-frontend.sh"])
+def test_port_cleanup_stops_listener_but_preserves_connected_client(
+    startup: tuple[Path, dict[str, str]], script_name: str
+) -> None:
+    """宛先 port が同じ client を停止せず、既存 listener だけを置き換える（#880）。"""
+    scripts, env = startup
+    if script_name == "start-frontend.sh":
+        scripts, _ = _frontend_with_shared_ui(startup)
+    listener = subprocess.Popen(["sleep", "60"])
+    client = subprocess.Popen(["sleep", "60"])
+    try:
+        env.update(TEST_LISTENER_PID=str(listener.pid), TEST_CLIENT_PID=str(client.pid))
+        _executable(
+            Path(env["TEST_DIR"]) / "bin" / "lsof",
+            """
+# TCP の port 指定だけでは接続側も一致する。LISTEN の絞り込みなら listener だけ。
+if [[ " $* " = *" -sTCP:LISTEN "* ]]; then
+  echo "$TEST_LISTENER_PID"
+else
+  printf '%s\\n%s\\n' "$TEST_LISTENER_PID" "$TEST_CLIENT_PID"
+fi
+""",
+        )
+        args = ["bash", str(scripts / script_name)]
+        if script_name == "start-backend.sh":
+            # HTTP サーバを起動せず、port の掃除が終わったところまでを確認する。
+            args.append("--no-sync")
+            env["TEST_SERVER_FAIL"] = "1"
+        result = subprocess.run(
+            args, env=env, capture_output=True, text=True, timeout=10, check=False
+        )
+        assert result.returncode == (24 if script_name == "start-backend.sh" else 0), (
+            result.stdout + result.stderr
+        )
+        assert listener.wait(timeout=2) == -signal.SIGTERM
+        assert client.poll() is None, "port の宛先が一致する client は停止しない"
+    finally:
+        for process in (listener, client):
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=2)
+
+
 def test_frontend_builds_shared_ui_only_when_sources_changed(
     startup: tuple[Path, dict[str, str]],
 ) -> None:
