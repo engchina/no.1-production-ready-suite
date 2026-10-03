@@ -126,8 +126,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # legacy snapshot の running job が lease を持たずこの秒数更新されない場合のみ、
     # 再起動前の中断として扱う。新しい queue job は lease 期限後に worker が再 claim する。
     nl2sql_job_stale_after_seconds: float = Field(default=1800.0, ge=60.0)
-    # deterministic: local/CI 用 mock, oracle: python-oracledb 経由で Oracle / Select AI を呼ぶ。
-    nl2sql_runtime_mode: str = "deterministic"
+    # oracle（既定）: python-oracledb 経由で Oracle / Select AI を呼ぶ。
+    # deterministic: CI / テスト用の決定論スタブで、tests/conftest.py が明示する（#897）。
+    nl2sql_runtime_mode: str = "oracle"
     # oracle が既定。memory は local/CI で明示指定する非永続モード。
     nl2sql_persistence_mode: str = "oracle"
     nl2sql_oracle_state_table: str = "NL2SQL_STATE_STORE"
