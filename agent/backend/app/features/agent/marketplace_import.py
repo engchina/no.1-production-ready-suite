@@ -453,8 +453,10 @@ def _build_manifest(
             "配布物の scripts は実行しません。必要な処理は MCP ツールで設定してください。"
         )
     dirs = [] if entry.upstream.get("strict") is False and "skills" in component else [at("skills")]
+    explicit_dirs: list[str] = []
     if "skills" in component:
-        dirs.extend(at(path) for path in _paths(component["skills"]))
+        explicit_dirs = [at(path) for path in _paths(component["skills"])]
+        dirs.extend(explicit_dirs)
     skill_files: list[str] = []
     for directory in dict.fromkeys(dirs):
         # path は Skill 自体、または Skill ディレクトリをまとめたフォルダ。
@@ -468,7 +470,7 @@ def _build_manifest(
                 if (not directory or p.startswith(directory + "/")) and p.endswith("/SKILL.md")
             ]
         )
-        if directory != at("skills") and not found:
+        if directory in explicit_dirs and not found:
             raise ValueError("明示的な skills path に SKILL.md がありません。")
         skill_files.extend(found)
     skill_files = sorted(set(skill_files))
@@ -576,7 +578,10 @@ def _build_manifest(
     servers = []
     mcp = component.get("mcpServers")
     if isinstance(mcp, str):
-        mcp = snapshot.optional_json(at(mcp))
+        mcp_path = at(mcp)
+        if mcp_path not in snapshot.files:
+            raise ValueError("明示的な MCP 定義ファイルが配布物にありません。")
+        mcp = snapshot.optional_json(mcp_path)
     elif mcp is None:
         mcp = snapshot.optional_json(at(".mcp.json"))
     if isinstance(mcp, dict) and "mcpServers" in mcp:

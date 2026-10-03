@@ -754,3 +754,29 @@ def test_root_skill_license_is_checked_before_reading_body(distribution: dict[st
     with pytest.raises(ValueError, match="サービス外での保持"):
         importer.prepare_import(entry, "root-skill")
     assert not any(url.endswith("/SKILL.md") for url in distribution["requests"])
+
+
+def test_missing_explicit_default_skill_directory_rejects_the_whole_bundle(
+    distribution: dict[str, Any],
+) -> None:
+    registry, entry = catalog()
+    distribution["files"] = {
+        path.replace("/skills/analyze", "/custom/analyze"): text
+        for path, text in distribution["files"].items()
+    }
+    entry.upstream = {"strict": False, "skills": ["./custom/analyze", "./skills"]}
+    with pytest.raises(ValueError, match="明示的な skills path"):
+        importer.prepare_import(entry, "test-import")
+    assert not any(s.source == f"plugin:{entry.id}" for s in skill_registry.list())
+
+
+def test_missing_explicit_mcp_file_does_not_silently_import_skills(
+    distribution: dict[str, Any],
+) -> None:
+    registry, entry = catalog()
+    distribution["files"]["plugins/analysis/.claude-plugin/plugin.json"] = json.dumps(
+        {"name": "analysis", "mcpServers": "./config/missing.json"}
+    )
+    with pytest.raises(ValueError, match="明示的な MCP"):
+        registry.preview("test-import", entry.id)
+    assert not any(s.source == f"plugin:{entry.id}" for s in skill_registry.list())
