@@ -555,7 +555,11 @@ export function ChatClient() {
     const targetId = location.hash.slice(1);
     if (!targetId || !persistedMessages.length) return;
     const animationFrame = window.requestAnimationFrame(() => {
-      document.getElementById(targetId)?.scrollIntoView({ block: "center", behavior: "auto" });
+      const container = scrollRef.current;
+      const target = document.getElementById(targetId);
+      if (!container || !target || !container.contains(target)) return;
+      const offset = target.getBoundingClientRect().top - container.getBoundingClientRect().top;
+      container.scrollTo({ top: container.scrollTop + offset - (container.clientHeight - target.clientHeight) / 2 });
     });
     return () => window.cancelAnimationFrame(animationFrame);
   }, [location.hash, persistedMessages.length]);
@@ -1074,7 +1078,7 @@ export function ChatClient() {
   const activeTitle = activeConversation?.title ?? t("chat.sessions.untitled");
 
   return (
-    <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
+    <div className="flex min-h-full shrink-0 flex-col lg:h-full lg:min-h-0">
       <PageHeader wide title={t("chat.title")} subtitle={t("chat.subtitle")} />
 
       <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4">
