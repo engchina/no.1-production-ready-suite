@@ -940,8 +940,10 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     for (const run of state.runs) {
       const approval = ((run.approvals as Json[] | undefined) ?? []).find((candidate) => candidate.id === second);
       if (approval) {
+        if (approval.status !== "pending") throw new HttpError(409, "この承認への判断は終了しています。");
         approval.status = body.approved ? "approved" : "rejected";
-        approval.decided_by = body.decided_by ?? null;
+        approval.decided_by = state.auth.currentUser?.login_user_id ?? "local";
+        approval.decided_at = MOCK_NOW;
         return run;
       }
     }

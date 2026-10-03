@@ -228,11 +228,10 @@ for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
     });
 
-    test("承認 / ツールは FixedSplitPane で一覧と詳細を並べる", async ({ page, mockApi }) => {
+    test("ツールは FixedSplitPane で一覧と詳細を並べる", async ({ page, mockApi }) => {
       seedRun(mockApi, "run-e2e-1", "一つ目の目標");
       seedRun(mockApi, "run-e2e-2", "二つ目の目標", [approval("approval-e2e-1", "rag__rag_search", "run-e2e-2")]);
       for (const [path, splitId] of [
-        ["/approvals", "approvals-list"],
         ["/tools", "tools-list"],
       ] as const) {
         await page.goto(path);
@@ -345,11 +344,14 @@ for (const viewport of VIEWPORTS) {
       ]);
       await page.goto("/approvals");
       const detail = page.getByRole("region", { name: "承認の詳細" });
+      await page.locator('a[data-approval-id="approval-e2e-1"]').click();
       await expect(detail.getByText("rag__rag_search の引数")).toBeVisible();
+      await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
 
-      await page.getByRole("button", { name: "nl2sql__nl2sql_query 二つ目の目標", exact: true }).click();
+      await page.locator('a[data-approval-id="approval-e2e-2"]').click();
       await expect(detail.getByText("nl2sql__nl2sql_query の引数")).toBeVisible();
 
+      await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
       await page.getByRole("button", { name: "rag__rag_search の操作", exact: true }).click();
       await page.getByRole("menuitem", { name: "却下" }).click();
       const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));

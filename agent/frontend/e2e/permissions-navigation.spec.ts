@@ -141,7 +141,8 @@ for (const viewport of VIEWPORTS) {
       // 承認の画面を開ける（menu.approvals）が判断の権限がない利用者。
       signIn(mockApi, dbUser({ permissions: ["menu.approvals", "agent.runs.view"], allowed_agent_ids: ["default"] }));
       await page.goto("/approvals");
-      await expect(page.getByRole("heading", { name: "承認", level: 1 })).toBeVisible();
+      await page.locator('a[data-approval-id="approval-1"]').click();
+      await expect(page.getByRole("heading", { name: "承認の詳細", level: 1 })).toBeVisible();
       await expect(page.getByText("rag__rag_search").first()).toBeVisible();
       await expect(page.getByTestId("approval-object-actions")).toHaveCount(0);
 
