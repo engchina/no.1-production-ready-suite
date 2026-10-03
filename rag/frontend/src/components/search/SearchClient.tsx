@@ -51,6 +51,7 @@ import { streamSearch, type SearchStageEvent } from "@/lib/search-stream";
 import { answerStageLabel } from "@/lib/answer-progress";
 import { isSubmitEnter } from "@/lib/keyboard";
 import { t } from "@/lib/i18n";
+import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { APP_ROUTES } from "@/lib/routes";
 import {
   useSearchAnswerProfiles,
@@ -592,16 +593,12 @@ export function SearchClient() {
                           setAnswerModelId(answerModelId === model.model_id ? "" : model.model_id)
                         }
                       >
-                        {t(`answerModel.${model.kind}`, { name: model.display_name })}
+                        {answerModelLabel(model)}
                       </ToggleChip>
                     ))}
                     {answerModelId ? null : (
                       <span className="text-xs text-fg-muted">
-                        {t(
-                          answerModels.length > 1
-                            ? "search.answerModel.help"
-                            : "chat.compare.defaultTextOnly"
-                        )}
+                        {t(answerModelHelpKey(answerModels, "search.answerModel.help"))}
                       </span>
                     )}
                   </div>

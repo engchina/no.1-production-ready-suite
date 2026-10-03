@@ -390,3 +390,42 @@ test("回答のモデルは既定のテキストモデルと画像対応モデ�
   );
   await expectNoPageOverflow(page);
 });
+
+test("既定のテキストモデルが画像対応モデルも兼ねるとき、回答するモデルに画像対応を出す（#888）", async ({
+  page,
+}) => {
+  // 既定のテキストモデルと既定の画像対応モデルが同じ（例: xai.grok-4.3）なら 1 件で kind は text_vision。
+  const shared = [{ model_id: "xai.grok-4.3", display_name: "xai.grok-4.3", kind: "text_vision" }];
+  const bodies: Record<string, unknown>[] = [];
+  await mockChat(page, "bv-1");
+  await page.route("**/api/chat/models", (route) => route.fulfill(envelope(shared)));
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理ビュー");
+  const chip = page.getByRole("button", { name: "xai.grok-4.3（テキスト・画像対応）" });
+  await expect(chip).toBeVisible();
+  await expect(page.getByRole("button", { name: "xai.grok-4.3（テキスト）" })).toHaveCount(0);
+  await expect(page.getByTestId("chat-default-model")).toHaveText(
+    "このモデルは画像対応モデルも兼ね、根拠の図や画像も読んで回答します。"
+  );
+  await expectNoPageOverflow(page);
+
+  await mockAnswerHistory(page, 0);
+  await page.route("**/api/search/models", (route) => route.fulfill(envelope(shared)));
+  await page.route("**/api/search/stream", async (route) => {
+    bodies.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fulfill({ status: 500, json: { data: null, error_messages: [], warning_messages: [] } });
+  });
+  await page.goto("/search");
+  await selectSearchAnswerProfile(page, /経理ビュー/);
+  await enableSearchAnswer(page);
+  const modelRow = page.getByTestId("search-answer-model");
+  await expect(modelRow.getByRole("button")).toHaveText(["xai.grok-4.3（テキスト・画像対応）"]);
+  await expect(modelRow).toContainText("このモデルは画像対応モデルも兼ね、根拠の図や画像も読んで回答します。");
+  // 選ぶと、そのモデルで回答する（比較はしない）。
+  await modelRow.getByRole("button", { name: "xai.grok-4.3（テキスト・画像対応）" }).click();
+  await page.getByRole("textbox", { name: "RAG 検索" }).fill("図の数値は？");
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+  await expect.poll(() => bodies.length).toBe(1);
+  expect(bodies[0]).toMatchObject({ generate_answer: true, model_id: "xai.grok-4.3" });
+  await expectNoPageOverflow(page);
+});

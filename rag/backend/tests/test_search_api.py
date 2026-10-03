@@ -131,6 +131,16 @@ def test_search_uses_selected_answer_model_only_from_choices(monkeypatch: Monkey
         ("vision-m", "vision"),
     ]
 
+    # 既定のテキストモデルが画像対応モデルも兼ねるときは 1 件で、kind は text_vision(#888)。
+    # 選ぶと回答のモデルになる。
+    monkeypatch.setattr(search_route, "enterprise_ai_vision_model_id", lambda _s: "text-m")
+    models = client.get("/api/search/models").json()["data"]
+    assert [(m["model_id"], m["kind"]) for m in models] == [("text-m", "text_vision")]
+    answer_models.clear()
+    response = client.post("/api/search", json={"query": "承認条件", "model_id": "text-m"})
+    assert response.status_code == 200
+    assert answer_models == ["text-m"]
+
 
 def test_search_api_accepts_and_ignores_removed_standard_options(
     monkeypatch: MonkeyPatch,
