@@ -77,6 +77,35 @@ Install は事前に Skill/MCP/resource の重複と参照を検証し、衝突�
 旧 `agents[]` は Agent を作らず template resource に変換して warning を返す。参照中 Skill を持つ
 package の disable/uninstall は `409`。
 
+#### 外部カタログの互換インポート（#862）
+
+`MarketplaceEntry` は配布先を示す一覧の項目であり、導入済みの `PluginManifest` と分ける。
+更新ではカタログだけを取得し、1 項目の未対応・重複で他の項目を失わない。状態は
+`not_fetched / ready / failed`。取得失敗では旧一覧を保持し、成功通知を出さず古い一覧と案内する。
+URL がある配布元も、最後の一覧・revision・失敗状態を保存して復元する。
+
+- 配布物の取得元は公開 GitHub の HTTPS。repository 内の相対 path、`url`、`github`、`git-subdir`、
+  明示的な `skills` ディレクトリ、`ref` / 40 桁の `sha` に対応。raw カタログ URL の ref は 1 path segment。
+  slash を含む branch は source の `ref` で指定する。`strict:false` の明示的な構成は既定のディレクトリより優先する。
+- ref を commit SHA に確定して Git tree と raw の blob hash を照合。root 外の path、symlink、転送先への追従を断る。
+  上限はカタログ 1,000 項目、Skill 40 件、HTTP 80 件、1 ファイル 1 MiB、全体 12 MiB、参照文書 4 MiB。
+  Git tree は 8 MiB、取得期限は更新 10 秒・導入内容の取得 120 秒。同じ revision のファイルは取得単位で再利用する。
+- `SKILL.md` の name・description・非空の instructions を保持する。Markdown の参照文書と利用条件の表示を
+  非実行 resource に保存し、本文には resource ID / path だけを列挙する。割り当てた Skill の resource だけを
+  `skill_reference_read` で 8,000 文字ずつ読む。指示の外部 URL や配布コードを自動で実行しない。
+- 資格情報や動的設定を含まない HTTPS の HTTP MCP だけを登録する。stdio、commands、agents、hooks、LSP、
+  scripts、Markdown 以外の補助ファイルは導入・実行の対象外とし、具体的な制約を表示する。
+  元製品の `allowed-tools` は引き継がない。必要なツールはこの製品の MCP 接続で設定する。
+- サービス外の保持を明示的に制限する利用条件を検出した Skill は本文の取得前に拒否する。
+  その他の利用条件も導入前の確認対象であり、ライセンス適合性や業務実行を保証する機能ではない。
+- `POST /api/plugins/marketplaces/{marketplace_id}/plugins/{plugin_id}/preview` は管理者だけが呼ぶ。
+  導入は `preview_digest` と `accept_limitations` を必須とし、取得し直した内容が変わったら `409` で再確認する。
+  ID は marketplace / plugin / path の namespace で分け、revision の更新だけでは変えない。
+  変換した manifest は既存の原子的 install を使い、登録・保存の失敗は今回の全コンポーネントを撤去する。
+
+固定実形式の fixture と実 HTTP の確認結果は `backend/tests/fixtures/marketplaces/README.md` を参照。
+Claude Code の全機能の互換性や、Skill が業務のモデル・ツールで動くことの検証とは区別する。
+
 ### 組み込み Runtime（#754）
 
 - `features/agent/builtin_runtime.py`。SDK は `openai-agents`（`pyproject.toml` で版を固定）。

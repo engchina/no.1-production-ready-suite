@@ -290,6 +290,20 @@ def compose_instructions(agent_instructions: str, skill_ids: list[str]) -> str:
         if skill is None or not skill.enabled or not skill.instructions.strip():
             continue
         sections.append(f"# Skill: {skill.name}\n{skill.instructions.strip()}")
+        # 本文へ全参照文書を詰めず、割り当て済みの文書の索引だけを渡す（#862）。
+        from app.features.agent.plugins import plugin_resource_registry
+
+        for resource_id in skill.resource_ids:
+            resource = plugin_resource_registry.get(resource_id)
+            if (
+                resource
+                and resource.metadata.get("external_skill_reference")
+                and isinstance(resource.content, str)
+            ):
+                sections.append(
+                    f"参照文書 {resource.name}: resource_id={resource.id}。"
+                    "必要な部分だけ skill_reference_read で読んでください。"
+                )
     return "\n\n".join(sections)
 
 
@@ -347,7 +361,10 @@ class _ToolRecorder:
 
 
 def build_function_tools(
-    run_id: str, tool_names: list[str], mcp_tools: list[McpRuntimeTool] | None = None
+    run_id: str,
+    tool_names: list[str],
+    mcp_tools: list[McpRuntimeTool] | None = None,
+    resource_ids: list[str] | None = None,
 ) -> list[FunctionTool]:
     policy = _active_policy()
     recorder = _ToolRecorder(run_id)
@@ -357,6 +374,10 @@ def build_function_tools(
         if registered is not None:
             entries.append((registered, None))
     entries.extend(mcp_tools or [])
+    if resource_ids:
+        from app.features.agent.skill_resources import reference_tool
+
+        entries.append(reference_tool(resource_ids))
     tools: list[FunctionTool] = []
     seen: set[str] = set()
     for definition, handler in entries:
@@ -413,6 +434,7 @@ def build_sdk_agent(
 ) -> Agent[Any]:
     """SDK の Agent を作る（MCP 接続のツール一覧を HTTP で取るので、イベントループの外で呼ぶ）。"""
     from app.features.agent.runtime import runtime_repository
+    from app.features.agent.skill_resources import skill_reference_ids
 
     target = resolve_model_target(model_id)
     mcp_tools, warnings = discover_mcp_tools(
@@ -424,7 +446,14 @@ def build_sdk_agent(
     return Agent(
         name=name or "agent",
         instructions=compose_instructions(instructions, skill_ids),
-        tools=list(build_function_tools(run_id, agent_tool_names(skill_ids), mcp_tools)),
+        tools=list(
+            build_function_tools(
+                run_id,
+                agent_tool_names(skill_ids),
+                mcp_tools,
+                resource_ids=skill_reference_ids(skill_ids),
+            )
+        ),
         model=model_factory(target),
         model_settings=ModelSettings(store=False),
     )

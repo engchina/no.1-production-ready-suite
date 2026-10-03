@@ -1,0 +1,7 @@
+{
+  "repository": "anthropics/skills",
+  "revision": "8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4",
+  "files_sha256": {
+    ".claude-plugin/marketplace.json": "9bafecba8a8fd0a4d73670cc442504fcb27394d3f8960a5171f570d443b81936"
+  }
+}

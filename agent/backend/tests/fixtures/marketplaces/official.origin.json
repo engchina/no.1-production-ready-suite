@@ -1,0 +1,7 @@
+{
+  "repository": "anthropics/claude-plugins-official",
+  "revision": "d182ca456ca09d31d139f7d3818d1d333b103cce",
+  "files_sha256": {
+    ".claude-plugin/marketplace.json": "f4ed0f9ae77f3683c3f9b8e0d989a5cff1fde821771f71bac6459106a5342a5f"
+  }
+}

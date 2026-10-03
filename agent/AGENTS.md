@@ -50,6 +50,9 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
   （期間は 365 日まで。書き込みは `run_facts_store` のバックグラウンドの MERGE で、Run を止めない）。memory / file は
   メモリの Run を集計する。詳細は docs/agent-control-plane-design.md §5.2。
 - Plugin は Marketplace の**原子的な配布パッケージ**であり実行概念ではない。正式契約は `skills[] / mcp_servers[] / resources[]`。
+- 外部カタログは導入前に固定 revision の Skill / HTTP MCP / 参照 resource へ変換し、内容と制約の確認を必須にする（#862）。
+  外部 Skill の `resource_ids` が指す参照文書は、その Run にだけ `skill_reference_read` を渡して必要な部分を読む。
+  読み取りも `tool_registry.invoke` のポリシー・監査を通し、配布物の scripts / hooks / command は実行しない。
 - Prompt / Workflow / Template は非実行・版管理 resource。独立 Workflow engine を作らない。
 
 ## MCP 境界

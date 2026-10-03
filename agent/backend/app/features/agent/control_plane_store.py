@@ -311,8 +311,8 @@ def delete_plugin(plugin_id: str) -> None:
 
 def save_marketplace(source: Any, listing: Any | None = None) -> None:
     document: JsonObject = {"source": source.model_dump(mode="json")}
-    # URL の無いマーケットプレイスは取り直せないため、一覧も保存する。
-    if listing is not None and not source.url:
+    # 前回の一覧・固定 revision と失敗状態を URL のある配布元も再起動後に保つ（#862）。
+    if listing is not None:
         document["listing"] = listing.model_dump(mode="json")
     _put("marketplace", source.id, document)
 

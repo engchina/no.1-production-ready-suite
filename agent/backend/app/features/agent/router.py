@@ -72,7 +72,7 @@ from pr_system_settings.oci_auth import (
 from pr_system_settings.upload_storage import (
     build_upload_storage_router,
 )
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.concurrency import run_in_threadpool
 
 import app.settings as app_settings
@@ -149,9 +149,11 @@ from app.features.agent.feedback import (
 )
 from app.features.agent.mcp_server import build_agent_mcp_server
 from app.features.agent.plugins import (
+    MarketplaceEntry,
     MarketplaceListing,
     MarketplaceSource,
     MarketplaceSourcesOutput,
+    PluginImportPreview,
     PluginListOutput,
     PluginManifest,
     PluginRecord,
@@ -381,6 +383,8 @@ class PluginInstallRequest(BaseModel):
     manifest: PluginManifest | None = None
     marketplace_id: str | None = None
     plugin_id: str | None = None
+    preview_digest: str | None = None
+    accept_limitations: bool = False
 
 
 class PluginPatch(BaseModel):
@@ -1340,16 +1344,44 @@ async def install_plugin(
                 status_code=400,
                 detail="manifest or (marketplace_id, plugin_id) is required",
             )
-        manifest = marketplace_registry.find_manifest(payload.marketplace_id, payload.plugin_id)
+        entry = marketplace_registry.find_entry(payload.marketplace_id, payload.plugin_id)
+        if isinstance(entry, MarketplaceEntry):
+            if not payload.preview_digest or not payload.accept_limitations:
+                raise HTTPException(
+                    status_code=400, detail="外部プラグインの導入内容と制約を確認してください。"
+                )
+            try:
+                preview = await run_in_threadpool(
+                    marketplace_registry.preview, payload.marketplace_id, payload.plugin_id
+                )
+            except (ValueError, httpx.HTTPError) as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="外部プラグインの取得・検証に失敗しました。配布元と導入内容を再確認してください。",
+                ) from exc
+            if (
+                preview.digest != payload.preview_digest
+                or marketplace_registry.find_entry(payload.marketplace_id, payload.plugin_id)
+                != entry
+            ):
+                raise HTTPException(
+                    status_code=409, detail="配布物が変わりました。導入内容を再確認してください。"
+                )
+            manifest = preview.manifest
+        else:
+            manifest = entry
         if manifest is None:
             raise HTTPException(status_code=404, detail="plugin not found in marketplace")
     if plugin_registry.get(manifest.id) is not None:
         raise HTTPException(status_code=409, detail="plugin already installed")
     try:
-        record = plugin_registry.install(manifest, marketplace_id=payload.marketplace_id)
+        record = plugin_registry.install(
+            manifest,
+            marketplace_id=payload.marketplace_id,
+            persist=lambda installed: _persist(lambda: control_plane_store.save_plugin(installed)),
+        )
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    _persist(lambda: control_plane_store.save_plugin(record))
     return ApiResponse(data=record)
 
 
@@ -1390,9 +1422,46 @@ async def refresh_plugin_marketplace(
 ) -> ApiResponse[MarketplaceSource]:
     """marketplace の url から plugin 一覧を HTTP 取得して更新する(url 無しは no-op)。"""
     try:
-        return ApiResponse(data=marketplace_registry.refresh(marketplace_id))
+        source = await run_in_threadpool(marketplace_registry.refresh, marketplace_id)
+        listing = marketplace_registry.get_listing(marketplace_id)
+        _persist(lambda: control_plane_store.save_marketplace(source, listing))
+        return ApiResponse(
+            data=source, warning_messages=[source.last_error] if source.last_error else []
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="marketplace not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post(
+    "/plugins/marketplaces/{marketplace_id}/plugins/{plugin_id}/preview",
+    response_model=ApiResponse[PluginImportPreview],
+)
+async def preview_marketplace_plugin(
+    marketplace_id: str,
+    plugin_id: str,
+    _: None = Depends(require_admin),
+) -> ApiResponse[PluginImportPreview]:
+    try:
+        return ApiResponse(
+            data=await run_in_threadpool(marketplace_registry.preview, marketplace_id, plugin_id)
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="配布元に対象のプラグインがありません。"
+        ) from exc
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=400, detail="配布物の構成が不正です。配布元の定義を確認してください。"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="配布物の取得に失敗しました。しばらく待ってから再試行してください。",
+        ) from exc
 
 
 @router.get(

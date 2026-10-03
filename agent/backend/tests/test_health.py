@@ -3474,27 +3474,12 @@ def test_plugin_marketplace_add_refresh_and_install(monkeypatch: MonkeyPatch) ->
     pid = "mkt_plugin"
     listing_payload = {"name": "Test Market", "plugins": [_plugin_manifest(pid)]}
 
-    class _FakeMarketResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, Any]:
-            return listing_payload
-
-    class FakeMarketClient:
-        def __init__(self, timeout: float) -> None:
-            self.timeout = timeout
-
-        def __enter__(self) -> "FakeMarketClient":
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            return None
-
-        def get(self, url: str, *, headers: dict[str, str]) -> _FakeMarketResponse:
-            return _FakeMarketResponse()
-
-    monkeypatch.setattr("app.features.agent.plugins.httpx.Client", FakeMarketClient)
+    original_client = httpx.Client
+    transport = httpx.MockTransport(lambda _: httpx.Response(200, json=listing_payload))
+    monkeypatch.setattr(
+        "app.features.agent.plugins.httpx.Client",
+        lambda **kwargs: original_client(transport=transport, **kwargs),
+    )
 
     add = client.post(
         "/api/plugins/marketplaces",
