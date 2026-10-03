@@ -41,6 +41,7 @@ async function expectProfileListNoHorizontalOverflow(page: Page) {
       overflowX: listStyle.overflowX,
       overflowY: listStyle.overflowY,
       listOffsetWidth: list.offsetWidth,
+      listClientWidth: list.clientWidth,
       listScrollWidth: list.scrollWidth,
       listLeft: listRect.left,
       listRight: listRect.right,
@@ -58,7 +59,7 @@ async function expectProfileListNoHorizontalOverflow(page: Page) {
   expect(metrics.overflowX).toBe("hidden");
   expect(metrics.overflowY).toBe("auto");
   expect(metrics.pageHorizontal).toBe(false);
-  expect(metrics.listScrollWidth).toBeLessThanOrEqual(metrics.listOffsetWidth + 1);
+  expect(metrics.listScrollWidth).toBeLessThanOrEqual(metrics.listClientWidth + 1);
   expect(metrics.gridScrollWidth).toBeLessThanOrEqual(metrics.gridOffsetWidth + 1);
   expect(metrics.gridLeft).toBeGreaterThanOrEqual(metrics.listLeft - 1);
   expect(metrics.gridRight).toBeLessThanOrEqual(metrics.listRight + 1);
@@ -75,8 +76,9 @@ async function expectProfileListNoHorizontalOverflow(page: Page) {
   expect(nameCellOverflow).toEqual([]);
   if (viewportWidth >= 768) {
     // wide 画面ではカードの中身も 100% を使う（#575）。一覧の表は幅を止めず、一覧の枠いっぱいに広げる。
+    // 枠いっぱい = 枠線と、スクロールバーのために予約した幅（scrollbar-gutter: stable。#867）を除いた内幅。
     expect(Math.abs(metrics.gridLeft - metrics.listLeft)).toBeLessThanOrEqual(1);
-    expect(metrics.gridWidth).toBeGreaterThanOrEqual(metrics.listOffsetWidth - 2);
+    expect(metrics.gridWidth).toBeGreaterThanOrEqual(metrics.listClientWidth - 1);
     expect(metrics.lastHeaderRight).toBeLessThanOrEqual(metrics.listRight + 1);
   }
 }

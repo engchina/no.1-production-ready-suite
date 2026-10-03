@@ -1085,7 +1085,9 @@ export function DbObjectGrid({
           rowProps={() => ({ className: DB_OBJECT_GRID_ROW_CLASS })}
           testId={`${idPrefix}-grid`}
           scrollTestId="db-admin-object-list"
-          tableClassName="w-full min-w-[16rem] table-fixed lg:min-w-[24rem]"
+          // lg 以上の最小幅は、1280px の一覧枠の内幅（scrollbar-gutter: stable の分を除いた 325px。#867）に
+          // 収まる 22rem にする。24rem では内幅を 11px 超え、一覧の中に横スクロールが出る（#883）。
+          tableClassName="w-full min-w-[16rem] table-fixed lg:min-w-[22rem]"
           stickyHeader
           visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
         />

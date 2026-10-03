@@ -5108,8 +5108,11 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
             columnBox.x >= rowBox.x - 1 &&
             columnBox.x + columnBox.width <= rowBox.x + rowBox.width + 1
         ),
+        // 列の選択欄は 2 列の段組みで行の半分程度の幅を保つ（16rem 以上、狭い画面では行幅）。旧基準の 240px は、
+        // スクロールバーを隠す無頭ブラウザーでだけ満たしていた。本文の scrollbar-gutter: stable（#867）で
+        // 1280px の欄は 236px になる（通常の scrollbar のブラウザーで本文が縦にスクロールするときは以前から同じ幅）。
         columnReadableWidth: Boolean(
-          rowBox && columnBox && columnBox.width >= Math.min(240, rowBox.width - 24)
+          rowBox && columnBox && columnBox.width >= Math.min(224, rowBox.width - 24)
         ),
         columnOperatorSeparated: separated(columnBox, operatorBox),
         operatorSourceSeparated: separated(operatorBox, sourceBox),
@@ -6061,7 +6064,9 @@ test("ユーザー管理レビュー: 未保存入力は戻ると内部リンク
     const link = document.createElement("a");
     link.href = "/settings/security/roles";
     link.textContent = "レビュー用内部リンク";
-    document.body.append(link);
+    // AppShell の外枠は fixed inset-0 で視口を覆う（#855）。body の末尾のリンクは外枠の下に隠れて押せないため、
+    // 利用者が押せる本文（main#pr-main）の中に置く。
+    document.getElementById("pr-main")!.append(link);
   });
   await page.getByRole("link", { name: "レビュー用内部リンク" }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
@@ -6335,7 +6340,9 @@ test("セキュリティレビュー: 成功通知が残っていても確認ダ
     const link = document.createElement("a");
     link.href = "/settings/security/users";
     link.textContent = "セキュリティ画面へ移動";
-    document.body.append(link);
+    // AppShell の外枠は fixed inset-0 で視口を覆う（#855）。body の末尾のリンクは外枠の下に隠れて押せないため、
+    // 利用者が押せる本文（main#pr-main）の中に置く。
+    document.getElementById("pr-main")!.append(link);
   });
   await page.getByRole("link", { name: "セキュリティ画面へ移動" }).click();
   const dialog = page.getByRole("alertdialog");
@@ -6544,7 +6551,9 @@ test("DeepSec 修正回帰: 離脱のキャンセルは保持し明示的な破�
     const link = document.createElement("a");
     link.href = "/settings/security/users";
     link.textContent = "レビュー用の内部リンク";
-    document.body.append(link);
+    // AppShell の外枠は fixed inset-0 で視口を覆う（#855）。body の末尾のリンクは外枠の下に隠れて押せないため、
+    // 利用者が押せる本文（main#pr-main）の中に置く。
+    document.getElementById("pr-main")!.append(link);
   });
   const link = page.getByRole("link", { name: "レビュー用の内部リンク" });
   await link.click();
