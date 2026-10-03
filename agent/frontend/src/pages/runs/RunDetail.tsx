@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FileText, GitBranch, PlayCircle, RefreshCw, Server, ShieldAlert } from "lucide-react";
 import {
@@ -17,6 +17,8 @@ import {
   ProcessingIndicator,
   StatusBadge,
   ToggleChip,
+  Tabs,
+  TabPanel,
   type DataTableColumn,
   type EntityAction,
   type StatusVariant,
@@ -54,7 +56,10 @@ import {
 import { JsonPanel, JsonPreview, MetricPill, formatDate } from "@/pages/shared/page-helpers";
 
 /** Run の取消・再開の可否。一覧の行メニューと詳細の ObjectActionBar・ストリーム操作で同じ判定を使う。 */
-export function runCapabilities(run: RunState): { canCancel: boolean; canResume: boolean } {
+export function runCapabilities(run: RunState): {
+  canCancel: boolean;
+  canResume: boolean;
+} {
   // 組み込み Runtime（#754）は承認がすべて決まると自動で再開する。手動の再開は使わない。
   const isBuiltin = run.runtime_id === "builtin";
   return {
@@ -83,6 +88,8 @@ export function RunDetail({
   sseState: RunEventSourceState;
   capabilities: AgentCapabilities;
 }) {
+  const [selectedTab, setTab] = useState("result");
+  const tab = selectedTab === "audit" && !capabilities.viewAudit ? "result" : selectedTab;
   const queryClient = useQueryClient();
   const structured = getStructuredResult(run);
   const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
@@ -129,85 +136,106 @@ export function RunDetail({
               }`}
             </span>
           </div>
-          {/* 管理者の評価（#774）。Agent 管理の権限で、回答が出た Run に付ける（本人の評価とは別）。 */}
-          {capabilities.admin && run.status === "completed" && run.artifacts.some((item) => item.kind === "answer") ? (
-            <AnswerFeedback
-              runId={run.id}
-              current={run.admin_review ?? null}
-              mode="admin"
-              onSaved={() => {
-                void queryClient.invalidateQueries({ queryKey: ["runs"] });
-                void queryClient.invalidateQueries({ queryKey: ["evaluation-case-draft", run.id] });
-              }}
-            />
-          ) : null}
-          {/* 管理者の評価の下で、この Run の質問を評価ケースにする（品質評価の権限。評価の Run は除く。#810）。 */}
-          {capabilities.admin &&
-          canAddCase &&
-          !run.metadata?.evaluation_job_id &&
-          run.status === "completed" &&
-          run.artifacts.some((item) => item.kind === "answer") ? (
-            <AddToEvaluationCase key={run.id} runId={run.id} testId="run-add-case" />
-          ) : null}
         </CardContent>
       </Card>
-
-      <RunStreamControls
-        mode={streamMode}
-        onModeChange={onStreamModeChange}
-        websocketState={websocketState}
-        sseState={sseState}
-      />
 
       {run.status === "waiting_approval" ? (
         <Banner severity="warning" title={t("run.waitingApproval")}>
           {pendingApproval?.tool_call.name}
         </Banner>
       ) : null}
-
-      <div className="grid min-w-0 gap-5 xl:grid-cols-2">
-        <Card className="min-w-0">
-          <CardHeader>
-            <CardTitle>{t("run.steps")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {run.steps.length ? (
-              <div className="space-y-3">
-                {run.steps.map((step) => (
-                  <div key={step.id} className="min-w-0 rounded-md border border-border p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-sm font-medium text-fg">{step.tool_call?.name ?? step.kind}</span>
-                      <StatusBadge {...stepStatusView(step.status)} />
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        ariaLabel={t("run.detailTabs")}
+        items={[
+          { id: "result", label: t("run.tab.result") },
+          { id: "process", label: t("run.tab.process") },
+          ...(capabilities.viewAudit ? [{ id: "audit", label: t("run.audit") }] : []),
+        ]}
+      />
+      <TabPanel id="result" value={tab} className="space-y-5">
+        <ArtifactsPanel run={run} onShowProcess={() => setTab("process")} />
+        {structured ? <StructuredResultTable key={run.id} result={structured} /> : null}
+        {capabilities.admin && run.status === "completed" && run.artifacts.some((item) => item.kind === "answer") ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>{t("run.reviewTitle")}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {/* 管理者の評価（#774）。Agent 管理の権限で、回答が出た Run に付ける（本人の評価とは別）。 */}
+              <AnswerFeedback
+                runId={run.id}
+                current={run.admin_review ?? null}
+                mode="admin"
+                onSaved={() => {
+                  void queryClient.invalidateQueries({ queryKey: ["runs"] });
+                  void queryClient.invalidateQueries({
+                    queryKey: ["evaluation-case-draft", run.id],
+                  });
+                }}
+              />
+              {/* 管理者の評価の下で、この Run の質問を評価ケースにする（品質評価の権限。評価の Run は除く。#810）。 */}
+              {canAddCase && !run.metadata?.evaluation_job_id ? (
+                <AddToEvaluationCase key={run.id} runId={run.id} testId="run-add-case" />
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
+      </TabPanel>
+      <TabPanel id="process" value={tab} className="space-y-5">
+        <div className="min-w-0 space-y-5">
+          <Card className="min-w-0">
+            <CardHeader>
+              <CardTitle>{t("run.steps")}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {run.steps.length ? (
+                <div className="space-y-3">
+                  {run.steps.map((step) => (
+                    <div key={step.id} className="min-w-0 rounded-md border border-border p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-medium text-fg">{step.tool_call?.name ?? step.kind}</span>
+                        <StatusBadge {...stepStatusView(step.status)} />
+                      </div>
+                      {step.tool_result?.error ? (
+                        <p className="mt-2 text-xs text-danger-fg">{step.tool_result.error}</p>
+                      ) : null}
+                      {step.tool_result?.output ? <JsonPreview value={step.tool_result.output} /> : null}
                     </div>
-                    {step.tool_result?.error ? (
-                      <p className="mt-2 text-xs text-danger-fg">{step.tool_result.error}</p>
-                    ) : null}
-                    {step.tool_result?.output ? <JsonPreview value={step.tool_result.output} /> : null}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <EmptyState title={t("common.empty.title")} />
-            )}
-          </CardContent>
-        </Card>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState title={t("common.empty.title")} />
+              )}
+            </CardContent>
+          </Card>
 
-        <Card className="min-w-0">
-          <CardHeader>
-            <CardTitle>{t("run.timeline")}</CardTitle>
-            <CardDescription>{t("run.timelineDescription")}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <RunTimeline events={run.events} />
-          </CardContent>
-        </Card>
-      </div>
+          <Card className="min-w-0">
+            <CardHeader>
+              <CardTitle>{t("run.timeline")}</CardTitle>
+              <CardDescription>{t("run.timelineDescription")}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <RunTimeline events={run.events} />
+            </CardContent>
+          </Card>
+        </div>
 
-      <ArtifactsPanel run={run} />
-      {/* Run の監査記録は監査の閲覧（auditor）か Agent 管理の権限が必要（#215）。 */}
-      {capabilities.viewAudit ? <AuditPanel runId={run.id} /> : null}
-
-      {structured ? <StructuredResultTable key={run.id} result={structured} /> : null}
+        <Disclosure summary={t("run.stream")} description={t("run.streamDescription")}>
+          <RunStreamControls
+            mode={streamMode}
+            onModeChange={onStreamModeChange}
+            websocketState={websocketState}
+            sseState={sseState}
+          />
+        </Disclosure>
+      </TabPanel>
+      {capabilities.viewAudit ? (
+        <TabPanel id="audit" value={tab}>
+          {tab === "audit" ? <AuditPanel runId={run.id} /> : null}
+        </TabPanel>
+      ) : null}
     </section>
   );
 }
@@ -279,12 +307,8 @@ function RunTimelineItem({ event }: { event: RunEvent }) {
       <div className="min-w-0 rounded-md border border-border p-3">
         <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">
-              {view.title}
-            </p>
-            <p className="mt-1 break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">
-              {view.subtitle}
-            </p>
+            <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">{view.title}</p>
+            <p className="mt-1 break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">{view.subtitle}</p>
           </div>
           <StatusBadge variant={view.badgeVariant} label={view.badgeLabel} />
         </div>
@@ -402,9 +426,7 @@ function timelineBadge(type: string): Pick<TimelineEventView, "badgeLabel" | "ba
 }
 
 function compactTimelineDetails(items: Array<[string, string | null]>): Array<{ label: string; value: string }> {
-  return items
-    .filter((item): item is [string, string] => Boolean(item[1]))
-    .map(([label, value]) => ({ label, value }));
+  return items.filter((item): item is [string, string] => Boolean(item[1])).map(([label, value]) => ({ label, value }));
 }
 
 function payloadString(payload: Record<string, unknown> | null, key: string): string | null {
@@ -420,11 +442,7 @@ function payloadStringArray(payload: Record<string, unknown>, key: string): stri
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-function payloadNumberText(
-  payload: Record<string, unknown>,
-  key: string,
-  suffix = ""
-): string | null {
+function payloadNumberText(payload: Record<string, unknown>, key: string, suffix = ""): string | null {
   const value = payload[key];
   if (typeof value !== "number" || Number.isNaN(value)) {
     return null;
@@ -583,9 +601,18 @@ function AuditRecordItem({ audit, record }: { audit: RunAuditData; record: ToolA
       </div>
 
       <dl className="mt-3 grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
-        <AuditFact label={t("run.auditPolicy")} value={record.policy_decision ? policyDecisionView(record.policy_decision).label : "-"} />
-        <AuditFact label={t("common.permission")} value={record.permission_level ? permissionView(record.permission_level).label : "-"} />
-        <AuditFact label={t("run.auditApproval")} value={record.approval_status ? approvalStatusView(record.approval_status).label : "-"} />
+        <AuditFact
+          label={t("run.auditPolicy")}
+          value={record.policy_decision ? policyDecisionView(record.policy_decision).label : "-"}
+        />
+        <AuditFact
+          label={t("common.permission")}
+          value={record.permission_level ? permissionView(record.permission_level).label : "-"}
+        />
+        <AuditFact
+          label={t("run.auditApproval")}
+          value={record.approval_status ? approvalStatusView(record.approval_status).label : "-"}
+        />
         <AuditFact
           label={t("run.auditDuration")}
           value={record.duration_ms === null || record.duration_ms === undefined ? "-" : `${record.duration_ms}ms`}
@@ -604,7 +631,9 @@ function AuditRecordItem({ audit, record }: { audit: RunAuditData; record: ToolA
         <Banner severity="warning" title={t("run.auditWarnings")}>
           <div className="space-y-1">
             {record.guardrail_warnings.map((warning) => (
-              <p key={warning} className="break-words [overflow-wrap:anywhere]">{warning}</p>
+              <p key={warning} className="break-words [overflow-wrap:anywhere]">
+                {warning}
+              </p>
             ))}
           </div>
         </Banner>
@@ -638,7 +667,9 @@ function AuditFact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ArtifactsPanel({ run }: { run: RunState }) {
+function ArtifactsPanel({ run, onShowProcess }: { run: RunState; onShowProcess: () => void }) {
+  // 最終回答を先に読む。ツールが返した中間成果物は、その後に元の順序で並べる。
+  const artifacts = [...run.artifacts].sort((a, b) => Number(b.kind === "answer") - Number(a.kind === "answer"));
   return (
     <Card className="min-w-0">
       <CardHeader>
@@ -647,7 +678,7 @@ function ArtifactsPanel({ run }: { run: RunState }) {
       </CardHeader>
       <CardContent className="space-y-4">
         {run.artifacts.length ? (
-          run.artifacts.map((artifact) => (
+          artifacts.map((artifact) => (
             <div key={artifact.id} className="min-w-0 rounded-md border border-border p-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -656,7 +687,11 @@ function ArtifactsPanel({ run }: { run: RunState }) {
                 </div>
                 <StatusBadge {...artifactKindView(artifact.kind)} icon={false} />
               </div>
-              {artifact.kind === "rag_evidence" ? (
+              {artifact.kind === "answer" && typeof (artifact.content.text ?? artifact.content.answer) === "string" ? (
+                <p className="whitespace-pre-wrap break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">
+                  {String(artifact.content.text ?? artifact.content.answer)}
+                </p>
+              ) : artifact.kind === "rag_evidence" ? (
                 <RagEvidenceArtifact artifact={artifact} />
               ) : artifact.kind === "structured_table" ? (
                 <StructuredArtifactSummary artifact={artifact} />
@@ -666,7 +701,15 @@ function ArtifactsPanel({ run }: { run: RunState }) {
             </div>
           ))
         ) : (
-          <EmptyState title={t("run.noArtifacts")} />
+          <EmptyState
+            title={t("run.noArtifacts")}
+            hint={t("run.noArtifactsHint")}
+            action={
+              <Button variant="secondary" icon={GitBranch} onClick={onShowProcess}>
+                {t("run.tab.process")}
+              </Button>
+            }
+          />
         )}
       </CardContent>
     </Card>
@@ -733,7 +776,10 @@ function StructuredArtifactSummary({ artifact }: { artifact: Artifact }) {
     <div className="mt-3 space-y-3">
       <div className="grid gap-2 text-sm sm:grid-cols-3">
         <MetricPill label={t("run.rowCount")} value={rowCount === null ? "-" : String(rowCount)} />
-        <MetricPill label={t("run.truncated")} value={truncated === null ? "-" : truncated ? t("common.yes") : t("common.no")} />
+        <MetricPill
+          label={t("run.truncated")}
+          value={truncated === null ? "-" : truncated ? t("common.yes") : t("common.no")}
+        />
         <MetricPill label={t("run.columns")} value={String(arrayOfRecords(artifact.content.columns).length)} />
       </div>
       {typeof artifact.content.sql === "string" ? (
@@ -767,9 +813,7 @@ function EvidenceItem({
       <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">{title}</p>
       {subtitle ? <p className="mt-1 break-all text-xs text-fg-muted">{subtitle}</p> : null}
       {detail ? (
-        <p className="mt-2 line-clamp-4 break-words text-xs leading-5 text-fg [overflow-wrap:anywhere]">
-          {detail}
-        </p>
+        <p className="mt-2 line-clamp-4 break-words text-xs leading-5 text-fg [overflow-wrap:anywhere]">{detail}</p>
       ) : null}
     </div>
   );
@@ -786,11 +830,13 @@ function StructuredResultTable({ result }: { result: StructuredResult }) {
       <CardContent>
         <PagedDataTable
           rows={result.rows}
-          columns={result.columns.map((column): DataTableColumn<Record<string, unknown>> => ({
-            key: column.name,
-            header: column.label ?? column.name,
-            render: (row) => formatValue(row[column.name]),
-          }))}
+          columns={result.columns.map(
+            (column): DataTableColumn<Record<string, unknown>> => ({
+              key: column.name,
+              header: column.label ?? column.name,
+              render: (row) => formatValue(row[column.name]),
+            })
+          )}
           getRowKey={(_, index) => index}
           tableClassName="w-full min-w-[40rem]"
           ariaLabel={t("run.structuredResult")}

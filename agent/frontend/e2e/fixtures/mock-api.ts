@@ -806,7 +806,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       steps: [],
       events: [],
       approvals: [],
-      artifacts: [{ id: `${id}-answer`, name: "回答", kind: "answer", content: { text: `「${String(body.goal ?? "")}」への回答です。` } }],
+      artifacts: [{ id: `${id}-answer`, name: "回答", kind: "answer", created_at: MOCK_NOW, content: { text: `「${String(body.goal ?? "")}」への回答です。` } }],
       pending_tool_calls: [],
       metadata: {},
       created_by_user_uuid: "local",

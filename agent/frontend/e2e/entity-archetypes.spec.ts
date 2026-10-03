@@ -228,11 +228,10 @@ for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
     });
 
-    test("Run / 承認 / ツールは FixedSplitPane で一覧と詳細を並べる", async ({ page, mockApi }) => {
+    test("承認 / ツールは FixedSplitPane で一覧と詳細を並べる", async ({ page, mockApi }) => {
       seedRun(mockApi, "run-e2e-1", "一つ目の目標");
       seedRun(mockApi, "run-e2e-2", "二つ目の目標", [approval("approval-e2e-1", "rag__rag_search", "run-e2e-2")]);
       for (const [path, splitId] of [
-        ["/runs", "runs-list"],
         ["/approvals", "approvals-list"],
         ["/tools", "tools-list"],
       ] as const) {
@@ -267,13 +266,16 @@ for (const viewport of VIEWPORTS) {
       seedRun(mockApi, "run-e2e-2", "二つ目の目標");
       await page.goto("/runs");
       const detail = page.getByRole("region", { name: "実行の詳細" });
+      await page.locator('a[data-run-id="run-e2e-1"]').click();
       await expect(detail.getByText("run-e2e-1", { exact: true }).first()).toBeVisible();
+      await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
 
-      await page.getByRole("button", { name: /^二つ目の目標 汎用業務 Agent/ }).click();
+      await page.getByRole("link", { name: /^二つ目の目標 汎用業務 Agent/ }).click();
       await expect(detail.getByText("run-e2e-2", { exact: true }).first()).toBeVisible();
-      await expect(page.getByTestId("run-row-run-e2e-2")).toHaveAttribute("aria-current", "true");
       await expect(page.getByTestId("run-object-actions").getByRole("button", { name: "再実行" })).toBeVisible();
 
+      await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
+      await expect(page.getByTestId("run-row-run-e2e-2")).toHaveAttribute("aria-current", "true");
       await page.getByRole("button", { name: "run-e2e-1 の操作", exact: true }).click();
       await expect(page.getByRole("menuitem", { name: "再実行" })).toBeVisible();
       await expect(page.getByRole("menuitem", { name: "キャンセル" })).toHaveCount(0);
@@ -282,34 +284,38 @@ for (const viewport of VIEWPORTS) {
       expect(mockApi.lastRequest("POST", "/api/runs/run-e2e-1/replay")).toBeDefined();
     });
 
-    test("行の題名のボタン（共有 RowTitleButton）はキーボードで選べ、選んだ行と題名を aria-current で伝える", async ({ page, mockApi }, testInfo) => {
+    test("行の題名のリンク（共有 RowTitleButton）はキーボードで選べ、選んだ行と題名を aria-current で伝える", async ({ page, mockApi }, testInfo) => {
       // #421: Agent の EntityLayout の RowTitleButton を packages/ui の共有部品へ移した。
       seedRun(mockApi, "run-e2e-1", "一つ目の目標");
       seedRun(mockApi, "run-e2e-2", "二つ目の目標");
       await page.goto("/runs");
-      const first = page.getByRole("button", { name: /^一つ目の目標 汎用業務 Agent/ });
-      const second = page.getByRole("button", { name: /^二つ目の目標 汎用業務 Agent/ });
+      const first = page.getByRole("link", { name: /^一つ目の目標 汎用業務 Agent/ });
+      const second = page.getByRole("link", { name: /^二つ目の目標 汎用業務 Agent/ });
       await expect(first).toHaveAttribute("data-row-title-button", "");
-      // 既定で先頭の Run を詳細に出し、その題名のボタンが「現在の項目」。
-      await expect(first).toHaveAttribute("aria-current", "true");
+      // 一覧では自動で詳細を開かず、選んだ履歴だけを現在の項目にする。
+      await expect(first).not.toHaveAttribute("aria-current", /.*/);
       await expect(second).not.toHaveAttribute("aria-current", /.*/);
 
       await second.focus();
       await page.keyboard.press("Enter");
+      await expect(page).toHaveURL(/id=run-e2e-2$/);
+      await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
       await expect(second).toHaveAttribute("aria-current", "true");
       await expect(page.getByTestId("run-row-run-e2e-2")).toHaveAttribute("aria-current", "true");
       await expect(first).not.toHaveAttribute("aria-current", /.*/);
       await first.focus();
-      await page.keyboard.press("Space");
+      await page.keyboard.press("Enter");
+      await expect(page).toHaveURL(/id=run-e2e-1$/);
+      await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
       await expect(first).toHaveAttribute("aria-current", "true");
       await expect(page.getByTestId("run-row-run-e2e-1")).toHaveAttribute("aria-current", "true");
 
       // 長い目標は 2 行で切り詰め、キーボードのフォーカスで Tooltip を出す
-      // （Tooltip は短い文の部品なので先頭 120 文字まで。全文は右の詳細）。
+      // （Tooltip は短い文の部品なので先頭 120 文字まで。全文は全幅の詳細）。
       const longContent = `長い目標${"の本文".repeat(60)}`;
       seedRun(mockApi, "run-e2e-long", longContent);
       await page.goto("/runs");
-      const longTitleButton = page.locator("button[data-row-title-button]").filter({ hasText: "長い目標" });
+      const longTitleButton = page.locator("a[data-row-title-button]").filter({ hasText: "長い目標" });
       await expect(longTitleButton).toBeVisible();
       const clamp = await longTitleButton.locator("span").first().evaluate((node) => ({
         clamp: getComputedStyle(node).webkitLineClamp,

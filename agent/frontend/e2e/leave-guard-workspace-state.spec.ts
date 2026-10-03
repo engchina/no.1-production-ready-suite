@@ -221,10 +221,11 @@ for (const viewport of VIEWPORTS) {
     });
 
     test("Run の目標は残り、確認語は移動で解除される", async ({ page }) => {
-      await page.goto("/runs");
+      await page.goto("/runs?id=new");
       await page.locator("#run-goal").fill("下書きの目標");
       await page.goto("/skills");
       await (await sidebarLink(page, "/runs")).click();
+      await page.getByRole("button", { name: "実行を作成", exact: true }).click();
       await expect(page.locator("#run-goal")).toHaveValue("下書きの目標");
       await page.reload();
       await expect(page.locator("#run-goal")).toHaveValue("下書きの目標");
@@ -236,7 +237,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page).toHaveURL(/\/runs$/);
       // URL が変わっても、遅い環境では Run の画面が出るまで前の画面が残る。画面が切り替わって
       // スナップショット画面が unmount されたことを確かめてから戻る（#254）。
-      await expect(page.locator("#run-goal")).toBeVisible();
+      await expect(page.getByRole("heading", { name: "実行履歴", level: 1 })).toBeVisible();
       await expect(page.locator("#runtime-snapshot-confirm")).toHaveCount(0);
       await (await sidebarLink(page, "/settings/runtime-snapshot")).click();
       await expect(page).toHaveURL(/\/settings\/runtime-snapshot$/);

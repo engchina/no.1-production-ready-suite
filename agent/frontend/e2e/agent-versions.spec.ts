@@ -119,7 +119,7 @@ test("公開していない Agent は、管理者が「下書きで実行」に�
       },
     });
   });
-  await page.goto("/runs");
+  await page.goto("/runs?id=new");
   const agentSelect = page.locator("#run-agent");
   await agentSelect.click();
   await expect(page.getByRole("option", { name: "経理の Agent" })).toHaveCount(0);

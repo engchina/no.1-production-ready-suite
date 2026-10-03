@@ -232,7 +232,7 @@ test("Run の詳細にモデルの利用量を出す", async ({ page, mockApi })
     created_at: MOCK_NOW,
     updated_at: MOCK_NOW,
   });
-  await page.goto("/runs");
+  await page.goto("/runs?id=run-usage-772");
   await expect(page.getByTestId("run-usage")).toHaveText(
     "モデルの利用量: xai.grok-4 を 2 回呼び出し、入力 1,200 / 出力 300 token（合計 1,500）"
   );
@@ -251,7 +251,7 @@ for (const recorded of [false, true]) {
       created_at: MOCK_NOW,
       updated_at: MOCK_NOW,
     });
-    await page.goto("/runs");
+    await page.goto("/runs?id=run-missing-usage");
     await expect(page.getByTestId("run-usage")).toHaveText(recorded
       ? "モデルの利用量: モデル名未記録 を 1 回呼び出し、入力 100 / 出力 20 token（合計 120）"
       : "モデルの利用量: 利用量未記録");
