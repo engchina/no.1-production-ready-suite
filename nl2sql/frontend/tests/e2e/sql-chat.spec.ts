@@ -1,6 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { openSidebarNav, closeSidebarNav } from "./_helpers/sidebar-nav";
+import {
+  chooseSelectFieldOption,
+  expectSelectFieldValue,
+} from "./_helpers/select-field";
+import { expectedControlHeight } from "./_helpers/control-height";
 
 const profile = {
   id: "sales",
@@ -9,6 +14,8 @@ const profile = {
   archived: false,
   allowed_tables: ["APP.SALES"],
   allowed_views: [],
+  allowed_table_count: 1,
+  allowed_view_count: 0,
   version: 1,
 };
 const now = "2026-10-02T22:00:00Z";
@@ -112,7 +119,17 @@ for (const width of [1280, 375]) {
       exact: true,
     });
     await expect(history).toHaveAttribute("aria-expanded", "false");
+    await expect(history).toHaveAttribute("aria-controls", "sql-chat-history");
     await expect(page.getByTestId("sql-chat-history")).not.toBeVisible();
+    // 会話の履歴の開閉はアイコンだけのボタンで、会話の欄の上端の行の左端にある（#889）。
+    await expect(history).toHaveText("");
+    const toggleBox = (await history.boundingBox())!;
+    const newButtonBox = (await page
+      .getByRole("button", { name: "新しい会話", exact: true })
+      .boundingBox())!;
+    const panelBox = (await page.getByTestId("sql-chat-panel").boundingBox())!;
+    expect(toggleBox.x - panelBox.x).toBeLessThan(24);
+    expect(toggleBox.x).toBeLessThan(newButtonBox.x);
     const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
     await composer.fill("カテゴリ別売上");
     await composer.press("Enter");
@@ -269,7 +286,9 @@ test("安全検査でブロックした SQL は未実行のまま表示する", 
   ).toHaveCount(0);
 });
 
-test("利用できるプロファイルがないと送信を禁止する", async ({ page }) => {
+test("利用できるプロファイルがないと会話の欄を出さず送信できない", async ({
+  page,
+}) => {
   const state = await setup(page);
   await page.route("**/api/nl2sql/profiles/search**", (route) =>
     route.fulfill({
@@ -277,16 +296,110 @@ test("利用できるプロファイルがないと送信を禁止する", async
     }),
   );
   await page.goto("/chat");
+  // RAG・Agent のチャットと同じく、上部のカードに空の状態だけを出す（#891）。
   await expect(
     page.getByText("利用できる業務プロファイルがありません", { exact: true }),
   ).toBeVisible();
-  await page
-    .getByRole("textbox", { name: "クエリ", exact: true })
-    .fill("カテゴリ別売上");
-  await expect(page.getByTestId("sql-chat-send")).toHaveAttribute(
-    "aria-disabled",
-    "true",
-  );
-  await page.getByRole("textbox", { name: "クエリ", exact: true }).press("Enter");
+  await expect(page.locator("#sql-chat-profile")).toHaveCount(0);
+  await expect(page.getByTestId("sql-chat-panel")).toHaveCount(0);
+  await expect(
+    page.getByRole("textbox", { name: "クエリ", exact: true }),
+  ).toHaveCount(0);
   expect(state.requests).toHaveLength(0);
+});
+
+test("業務プロファイルの欄は RAG の検索・回答プロファイルと同じ形で、読み込み中は欄の形を出す", async ({
+  page,
+}) => {
+  await setup(page);
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/nl2sql/profiles/search**", async (route) => {
+    await released;
+    await route.fulfill({
+      json: { data: { items: [profile], total: 1, next_cursor: null } },
+    });
+  });
+  await page.goto("/chat");
+  // 読み込み中: ラベルと欄の形の Skeleton と経過時間（#891）。
+  const loading = page.getByTestId("sql-chat-profiles-loading");
+  await expect(loading).toBeVisible();
+  await expect(loading).toContainText("業務プロファイルを読み込んでいます");
+  release();
+  await expect(page.getByTestId("sql-chat-profiles-loading")).toHaveCount(0);
+  const field = page.locator("#sql-chat-profile");
+  await expect(field).toBeVisible();
+  await expect(field).toContainText("売上分析");
+  // 必須の表示・先頭の検索アイコン・カードの幅いっぱい（#635 / #891）。
+  await expect(page.getByText("必須", { exact: true }).first()).toBeVisible();
+  await expect(field.locator("svg").first()).toBeVisible();
+  const card = (await page
+    .locator(".rounded-lg")
+    .filter({ has: field })
+    .first()
+    .boundingBox())!;
+  const fieldBox = (await field.boundingBox())!;
+  expect(card.width - fieldBox.width).toBeLessThan(64);
+  expect(fieldBox.height).toBe(await expectedControlHeight(page, "md"));
+  await field.click();
+  await expect(page.getByRole("option", { name: /売上分析/ })).toContainText(
+    "表・ビュー 1 件",
+  );
+  await page.keyboard.press("Escape");
+  await expect(field).toBeFocused();
+});
+
+test("生成方法は入力欄の直上で選び、Select AI Agent も送れる", async ({
+  page,
+}) => {
+  const state = await setup(page);
+  await page.goto("/chat");
+  const row = page.getByTestId("sql-chat-engine-row");
+  const engine = page.getByRole("combobox", { name: "生成方法", exact: true });
+  await expect(row).toContainText("生成方法");
+  await expectSelectFieldValue(engine, "select_ai");
+  await expect(page.getByTestId("sql-chat-engine-description")).toContainText(
+    "Oracle Select AI",
+  );
+  // 入力欄の直上の行（RAG のチャットの「回答するモデル」と同じ位置。#890）。
+  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const rowBox = (await row.boundingBox())!;
+  const composerBox = (await composer.boundingBox())!;
+  expect(rowBox.y + rowBox.height).toBeLessThanOrEqual(composerBox.y);
+  expect(composerBox.y - (rowBox.y + rowBox.height)).toBeLessThan(24);
+  await expect(engine).toHaveAttribute("aria-describedby", /.+/);
+  expect((await engine.boundingBox())!.height).toBe(
+    await expectedControlHeight(page, "sm"),
+  );
+  await engine.click();
+  await expect(page.getByRole("option")).toHaveText([
+    "Select AI",
+    "Select AI Agent",
+    "Enterprise AI",
+  ]);
+  await page.keyboard.press("Escape");
+  await chooseSelectFieldOption(engine, "select_ai_agent");
+  await expect(page.getByTestId("sql-chat-engine-description")).toContainText(
+    "Select AI Agent",
+  );
+  await composer.fill("カテゴリ別売上");
+  await composer.press("Enter");
+  await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
+  expect(state.requests[0]).toMatchObject({
+    engine: "select_ai_agent",
+    generation_only: true,
+  });
+  // 生成方法は作業状態に残る。
+  await page.reload();
+  await expectSelectFieldValue(
+    page.getByRole("combobox", { name: "生成方法", exact: true }),
+    "select_ai_agent",
+  );
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(0);
 });
