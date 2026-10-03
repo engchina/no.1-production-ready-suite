@@ -71,7 +71,8 @@ for (const viewport of VIEWPORTS) {
       // Run あたりの token は、利用量を記録した Run（11 件）で割る（100,000 / 11 ≒ 9,091。前は 65,000 / 8 ≒ 8,125）。
       await expect(summary).toContainText("9,091");
       await expect(summary).toContainText("前の期間から +966");
-      await expect(page.getByTestId("usage-unrecorded")).toContainText("利用量の記録がない実行が 1 件あります");
+      await expect(page.getByTestId("usage-unrecorded")).toContainText("利用量が未記録の実行が 1 件あります");
+      await expect(page.getByTestId("usage-unrecorded")).toContainText("未記録は利用量がゼロであることを意味しません");
 
       // 業務 Agent ごと（既定のタブ）。token の割合を数字でも出す。
       const agents = page.getByRole("table", { name: "業務 Agent ごとの利用量" });
@@ -88,7 +89,9 @@ for (const viewport of VIEWPORTS) {
       await page.getByRole("tab", { name: /利用者ごと/ }).press("ArrowRight");
       const models = page.getByRole("table", { name: "モデルごとの利用量" });
       await expect(models).toContainText("xai.grok-4");
-      await expect(models).toContainText("記録なし");
+      await expect(models).not.toContainText("記録なし");
+      await expect(models.getByRole("row")).toHaveCount(2);
+      await expect(page.getByRole("tab", { name: /モデルごと/ })).toContainText("1");
 
       // 日ごとは新しい日から。期間の 30 日をページングする。
       await page.getByRole("tab", { name: "日ごと" }).click();
@@ -101,6 +104,46 @@ for (const viewport of VIEWPORTS) {
     });
   }
 }
+
+test("利用量が記録済みならモデル名なし・0 token の実行もモデル内訳に残す", async ({ page, mockApi }) => {
+  seedReport(mockApi);
+  const report = mockApi.state.usageReports["30"] as Record<string, unknown>;
+  report.totals = totals(14, 90_500, 10_050, 13);
+  (report.by_model as Record<string, unknown>[]).push(
+    { model: "", ...totals(1, 500, 50) },
+    { model: "model-zero", ...totals(1, 0, 0), requests: 0 },
+  );
+  await page.goto("/usage");
+  await page.getByRole("tab", { name: /モデルごと/ }).click();
+  const models = page.getByRole("table", { name: "モデルごとの利用量" });
+  await expect(models.getByRole("row", { name: /モデル名未記録/ })).toContainText("550");
+  await expect(models.getByRole("row", { name: /model-zero/ })).toContainText("0%");
+  await expect(models.getByRole("row")).toHaveCount(4);
+  await expect(page.getByRole("tab", { name: /モデルごと/ })).toContainText("3");
+});
+
+test("全件利用量未記録でも実行数を残し、モデル内訳に専用の空状態を出す", async ({ page, mockApi }) => {
+  seedReport(mockApi);
+  const report = mockApi.state.usageReports["30"] as Record<string, unknown>;
+  report.totals = totals(1, 0, 0, 0);
+  report.by_agent = [{ agent_id: "default", agent_name: "汎用業務 Agent", ...totals(1, 0, 0, 0) }];
+  // 更新前の backend の応答も想定し、欠測を0利用量のモデルとして表示しない。
+  report.by_model = [{ model: "", ...totals(1, 0, 0, 0) }];
+  await page.goto("/usage");
+  await expect(page.getByRole("table", { name: "業務 Agent ごとの利用量" })).toContainText("汎用業務 Agent");
+  await expect(page.getByTestId("usage-unrecorded")).toContainText("実行数には含めます");
+  await page.getByRole("tab", { name: /モデルごと/ }).click();
+  await expect(page.getByText("この期間にモデルの利用量の記録はありません")).toBeVisible();
+  await expect(page.getByRole("table", { name: "モデルごとの利用量" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: /モデルごと/ })).toContainText("0");
+  // 表示更新後の修正済み API（空配列）でも同じ状態を維持する。
+  report.by_model = [];
+  const refresh = page.getByRole("button", { name: "表示を更新", exact: true });
+  await refresh.focus();
+  await refresh.press("Enter");
+  await expect(page.getByText("この期間にモデルの利用量の記録はありません")).toBeVisible();
+  await expect(refresh).toBeFocused();
+});
 
 test("期間を変えると、その期間で集計し直し、Run が無ければ空の状態を出す", async ({ page, mockApi }) => {
   seedReport(mockApi);
@@ -152,6 +195,26 @@ test("読み込み中は経過時間と集計の形の Skeleton を出す", asyn
   await expect(page.getByText("この期間の実行はありません")).toBeVisible();
 });
 
+test("取得エラーを利用量未記録と混同せず、再試行で内訳を表示する", async ({ page, mockApi }) => {
+  seedReport(mockApi);
+  let failed = true;
+  await page.route("**/api/usage?*", async (route) => {
+    if (failed) {
+      await route.fulfill({ status: 503, json: { data: null, error_messages: ["利用状況を取得できませんでした"], warning_messages: [] } });
+    } else {
+      await route.fallback();
+    }
+  });
+  await page.goto("/usage");
+  // TanStack Query の既定の再試行（1・2・4秒）が終わってから取得エラーになる。
+  await expect(page.getByText("利用状況を取得できませんでした")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("usage-unrecorded")).toHaveCount(0);
+  await expect(page.getByText("この期間にモデルの利用量の記録はありません")).toHaveCount(0);
+  failed = false;
+  await page.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(page.getByTestId("usage-summary")).toContainText("100,000");
+});
+
 test("Run の詳細にモデルの利用量を出す", async ({ page, mockApi }) => {
   mockApi.state.runs.push({
     id: "run-usage-772",
@@ -174,3 +237,23 @@ test("Run の詳細にモデルの利用量を出す", async ({ page, mockApi })
     "モデルの利用量: xai.grok-4 を 2 回呼び出し、入力 1,200 / 出力 300 token（合計 1,500）"
   );
 });
+
+for (const recorded of [false, true]) {
+  test(`実行詳細は利用量未記録とモデル名未記録を区別する (${recorded ? "モデル名なし" : "利用量なし"})`, async ({ page, mockApi }) => {
+    mockApi.state.runs.push({
+      id: "run-missing-usage",
+      goal: "業務の質問",
+      agent_id: "default",
+      runtime_id: "builtin",
+      status: "completed",
+      steps: [], events: [], approvals: [], artifacts: [], pending_tool_calls: [], metadata: {},
+      usage: recorded ? { model: "", requests: 1, input_tokens: 100, output_tokens: 20, total_tokens: 120 } : null,
+      created_at: MOCK_NOW,
+      updated_at: MOCK_NOW,
+    });
+    await page.goto("/runs");
+    await expect(page.getByTestId("run-usage")).toHaveText(recorded
+      ? "モデルの利用量: モデル名未記録 を 1 回呼び出し、入力 100 / 出力 20 token（合計 120）"
+      : "モデルの利用量: 利用量未記録");
+  });
+}

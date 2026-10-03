@@ -124,6 +124,8 @@ function UsageContent({
 }) {
   const { totals, previous } = report;
   const unrecorded = totals.runs - totals.runs_with_usage;
+  // 更新前の backend が返す欠測の行もモデル件数に含めない。記録済みの0 token は残す。
+  const models = report.by_model.filter((row) => row.runs_with_usage > 0);
   return (
     <div className="space-y-4">
       <Card>
@@ -166,7 +168,7 @@ function UsageContent({
             items={[
               { id: "agent", label: t("usage.view.agent"), count: report.by_agent.length },
               { id: "user", label: t("usage.view.user"), count: report.by_user.length },
-              { id: "model", label: t("usage.view.model"), count: report.by_model.length },
+              { id: "model", label: t("usage.view.model"), count: models.length },
               { id: "day", label: t("usage.view.day") },
             ]}
           />
@@ -207,22 +209,27 @@ function UsageContent({
                   )}
                 />
               </TabPanel>
-              <TabPanel idPrefix="usage" id="model" value={view}>
-                <BreakdownTable
-                  rows={report.by_model}
-                  total={totals.total_tokens}
-                  rowKey={(row) => row.model || "none"}
-                  label={t("usage.table.model")}
-                  nameHeader={t("usage.column.model")}
-                  resetKey={`model:${report.days}`}
-                  name={(row) =>
-                    row.model ? (
-                      <span className="break-all font-mono text-xs text-fg">{row.model}</span>
-                    ) : (
-                      <span className="text-fg-muted">{t("usage.modelNone")}</span>
-                    )
-                  }
-                />
+              <TabPanel idPrefix="usage" id="model" value={view} className="space-y-3">
+                <p className="text-xs text-fg-muted">{t("usage.model.description")}</p>
+                {models.length === 0 ? (
+                  <EmptyState title={t("usage.model.empty.title")} hint={t("usage.model.empty.description")} />
+                ) : (
+                  <BreakdownTable
+                    rows={models}
+                    total={totals.total_tokens}
+                    rowKey={(row) => row.model || "none"}
+                    label={t("usage.table.model")}
+                    nameHeader={t("usage.column.model")}
+                    resetKey={`model:${report.days}`}
+                    name={(row) =>
+                      row.model ? (
+                        <span className="break-all font-mono text-xs text-fg">{row.model}</span>
+                      ) : (
+                        <span className="text-fg-muted">{t("usage.modelNone")}</span>
+                      )
+                    }
+                  />
+                )}
               </TabPanel>
               <TabPanel idPrefix="usage" id="day" value={view}>
                 <BreakdownTable

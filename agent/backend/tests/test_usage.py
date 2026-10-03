@@ -32,13 +32,14 @@ def _run(
     user: str | None = ALICE,
     tokens: tuple[int, int] | None = (100, 20),
     model: str = "model-a",
+    requests: int = 1,
 ) -> RunState:
     usage = (
         None
         if tokens is None
         else RunUsage(
             model=model,
-            requests=1,
+            requests=requests,
             input_tokens=tokens[0],
             output_tokens=tokens[1],
             total_tokens=sum(tokens),
@@ -103,7 +104,36 @@ def test_report_sums_the_period_and_compares_with_the_previous_period() -> None:
         (BOB, "", 1),
         (ALICE, "Alice", 2),
     ]
-    assert [(item.model, item.runs) for item in report.by_model] == [("model-a", 2), ("", 1)]
+    assert [(item.model, item.runs) for item in report.by_model] == [("model-a", 2)]
+
+
+@pytest.mark.parametrize("model", ["model-a", ""])
+@pytest.mark.parametrize("tokens,requests", [((0, 0), 0), ((100, 20), 1)])
+def test_model_breakdown_keeps_recorded_zero_usage_and_unknown_model_names(
+    model: str, tokens: tuple[int, int], requests: int
+) -> None:
+    report = _report(
+        [
+            _run("unrecorded", NOW, tokens=None),
+            _run("recorded", NOW, tokens=tokens, model=model, requests=requests),
+        ]
+    )
+
+    assert (report.totals.runs, report.totals.runs_with_usage) == (2, 1)
+    assert [
+        (item.model, item.runs, item.requests, item.total_tokens) for item in report.by_model
+    ] == [(model, 1, requests, sum(tokens))]
+    assert report.by_agent[0].runs == report.by_user[0].runs == 2
+    assert sum(item.runs for item in report.by_day) == 2
+
+
+def test_model_breakdown_is_empty_when_all_runs_have_no_usage_record() -> None:
+    report = _report([_run("unrecorded", NOW, tokens=None)])
+
+    assert report.by_model == []
+    assert (report.totals.runs, report.totals.runs_with_usage) == (1, 0)
+    assert report.by_agent[0].runs == report.by_user[0].runs == 1
+    assert sum(item.runs for item in report.by_day) == 1
 
 
 def test_days_are_split_in_the_viewer_timezone_and_every_day_is_listed() -> None:
