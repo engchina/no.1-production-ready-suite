@@ -32,52 +32,52 @@ import { RuntimeKnowledgeManager, runtimeKindLabel } from "./RuntimeKnowledgeMan
 
 type KnowledgeTab = "approvedFaq" | "terms" | "domainKeywords" | "rules";
 
-/** 業務ビュー単位の知識(ドメインキーワード等)。編集中の業務ビューにだけ表示する。 */
-export function BusinessViewKnowledgePanel({
-  businessViewId,
+/** 検索・回答プロファイル単位の知識(ドメインキーワード等)。編集中の検索・回答プロファイルにだけ表示する。 */
+export function SearchAnswerProfileKnowledgePanel({
+  searchAnswerProfileId,
 }: {
-  businessViewId: string;
+  searchAnswerProfileId: string;
 }) {
   // よく使う Approved FAQ を先頭・既定のタブにする(#636)。
   const [tab, setTab] = useState<KnowledgeTab>("approvedFaq");
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{t("businessViews.knowledge.title")}</CardTitle>
+        <CardTitle>{t("searchAnswerProfiles.knowledge.title")}</CardTitle>
         <CardDescription>
-          {t("businessViews.knowledge.description")}
+          {t("searchAnswerProfiles.knowledge.description")}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <Tabs
-          idPrefix="business-view-knowledge"
-          ariaLabel={t("businessViews.knowledge.title")}
+          idPrefix="search-answer-profile-knowledge"
+          ariaLabel={t("searchAnswerProfiles.knowledge.title")}
           value={tab}
           onChange={(value) => setTab(value as KnowledgeTab)}
           // 回答フローで使う順に並べる（#682）: 類似問の提示 → 用語・同義語で質問を広げる →
           // ドメインキーワードでキーワード検索の語を切り出す → 回答ルールを回答の生成に渡す。
           items={[
-            { id: "approvedFaq", label: t("businessViews.faq.title") },
+            { id: "approvedFaq", label: t("searchAnswerProfiles.faq.title") },
             { id: "terms", label: runtimeKindLabel("terms") },
             {
               id: "domainKeywords",
-              label: t("businessViews.domainKeywords.title"),
+              label: t("searchAnswerProfiles.domainKeywords.title"),
             },
             { id: "rules", label: runtimeKindLabel("rules") },
           ]}
         />
         <div
           role="tabpanel"
-          id={`business-view-knowledge-panel-${tab}`}
-          aria-labelledby={`business-view-knowledge-tab-${tab}`}
+          id={`search-answer-profile-knowledge-panel-${tab}`}
+          aria-labelledby={`search-answer-profile-knowledge-tab-${tab}`}
         >
           {tab === "domainKeywords" ? (
-            <DomainKeywordsEditor businessViewId={businessViewId} />
+            <DomainKeywordsEditor searchAnswerProfileId={searchAnswerProfileId} />
           ) : tab === "approvedFaq" ? (
-            <ApprovedFaqManager businessViewId={businessViewId} />
+            <ApprovedFaqManager searchAnswerProfileId={searchAnswerProfileId} />
           ) : (
             // 種類ごとに編集中の入力を持つので、タブを切り替えたら作り直す。
-            <RuntimeKnowledgeManager key={tab} businessViewId={businessViewId} kind={tab} />
+            <RuntimeKnowledgeManager key={tab} searchAnswerProfileId={searchAnswerProfileId} kind={tab} />
           )}
         </div>
       </CardContent>
@@ -96,10 +96,10 @@ function parseKeywords(text: string): string[] {
   ];
 }
 
-function DomainKeywordsEditor({ businessViewId }: { businessViewId: string }) {
-  const query = useDomainKeywords(businessViewId);
-  const save = useSaveDomainKeywords(businessViewId);
-  const suggest = useSuggestDomainKeywords(businessViewId);
+function DomainKeywordsEditor({ searchAnswerProfileId }: { searchAnswerProfileId: string }) {
+  const query = useDomainKeywords(searchAnswerProfileId);
+  const save = useSaveDomainKeywords(searchAnswerProfileId);
+  const suggest = useSuggestDomainKeywords(searchAnswerProfileId);
   const [text, setText] = useState("");
   const saved = useMemo(
     () => query.data?.keywords ?? [],
@@ -122,9 +122,9 @@ function DomainKeywordsEditor({ businessViewId }: { businessViewId: string }) {
   if (query.isPending) {
     return (
       <TimedLoadingState
-        label={t("businessViews.knowledge.loading")}
-        operationKey="business-view-knowledge-load"
-        testId="business-view-knowledge-loading"
+        label={t("searchAnswerProfiles.knowledge.loading")}
+        operationKey="search-answer-profile-knowledge-load"
+        testId="search-answer-profile-knowledge-loading"
       >
         <Skeleton className="h-40 w-full" />
       </TimedLoadingState>
@@ -136,12 +136,12 @@ function DomainKeywordsEditor({ businessViewId }: { businessViewId: string }) {
       <div className="min-w-0 space-y-2">
         <TextareaField
           id="domain-keywords-editor"
-          label={t("businessViews.domainKeywords.editorLabel")}
-          helper={t("businessViews.domainKeywords.help")}
+          label={t("searchAnswerProfiles.domainKeywords.editorLabel")}
+          helper={t("searchAnswerProfiles.domainKeywords.help")}
           value={text}
           onChange={(event) => setText(event.target.value)}
           rows={12}
-          placeholder={t("businessViews.domainKeywords.placeholder")}
+          placeholder={t("searchAnswerProfiles.domainKeywords.placeholder")}
           disabled={save.isPending}
         />
         <div className="flex flex-wrap items-center gap-2">
@@ -154,7 +154,7 @@ function DomainKeywordsEditor({ businessViewId }: { businessViewId: string }) {
               save.mutate(current, {
                 onSuccess: (data) =>
                   toast.success(
-                    t("businessViews.domainKeywords.saved", {
+                    t("searchAnswerProfiles.domainKeywords.saved", {
                       count: data.keywords.length,
                     }),
                   ),
@@ -162,22 +162,22 @@ function DomainKeywordsEditor({ businessViewId }: { businessViewId: string }) {
                   toast.error(
                     error instanceof ApiError
                       ? error.message
-                      : t("businessViews.domainKeywords.saveError"),
+                      : t("searchAnswerProfiles.domainKeywords.saveError"),
                   ),
               })
             }
           >
-            {t("businessViews.domainKeywords.save")}
+            {t("searchAnswerProfiles.domainKeywords.save")}
           </Button>
           <span className="tnum text-xs text-fg-muted">
-            {t("businessViews.domainKeywords.count", { count: current.length })}
+            {t("searchAnswerProfiles.domainKeywords.count", { count: current.length })}
           </span>
         </div>
       </div>
       <div className="min-w-0 space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-sm font-medium text-fg">
-            {t("businessViews.domainKeywords.candidates")}
+            {t("searchAnswerProfiles.domainKeywords.candidates")}
           </span>
           <Button
             size="sm"
@@ -186,17 +186,17 @@ function DomainKeywordsEditor({ businessViewId }: { businessViewId: string }) {
             loading={suggest.isPending}
             onClick={() => suggest.mutate()}
           >
-            {t("businessViews.domainKeywords.suggest")}
+            {t("searchAnswerProfiles.domainKeywords.suggest")}
           </Button>
         </div>
         <p className="text-xs leading-relaxed text-fg-muted">
-          {t("businessViews.domainKeywords.suggestHelp")}
+          {t("searchAnswerProfiles.domainKeywords.suggestHelp")}
         </p>
         {suggest.isPending ? (
           // 参照ナレッジベースの配信中チャンクを走査するため、件数が多いと数秒以上かかる。
           <ProcessingIndicator
             active
-            label={t("businessViews.domainKeywords.suggesting")}
+            label={t("searchAnswerProfiles.domainKeywords.suggesting")}
             operationKey="domain-keywords-suggest"
             placement="action"
             activityIcon="none"
@@ -209,19 +209,19 @@ function DomainKeywordsEditor({ businessViewId }: { businessViewId: string }) {
             message={
               suggest.error instanceof ApiError
                 ? suggest.error.message
-                : t("businessViews.domainKeywords.suggestError")
+                : t("searchAnswerProfiles.domainKeywords.suggestError")
             }
           />
         ) : null}
         {suggest.data && candidates.length === 0 ? (
           <p className="text-xs text-fg-muted">
-            {t("businessViews.domainKeywords.noCandidates")}
+            {t("searchAnswerProfiles.domainKeywords.noCandidates")}
           </p>
         ) : null}
         {candidates.length > 0 ? (
           <ul
             className="flex flex-wrap gap-2"
-            aria-label={t("businessViews.domainKeywords.candidates")}
+            aria-label={t("searchAnswerProfiles.domainKeywords.candidates")}
           >
             {candidates.map((candidate) => (
               <li key={candidate.keyword}>
@@ -229,7 +229,7 @@ function DomainKeywordsEditor({ businessViewId }: { businessViewId: string }) {
                   size="sm"
                   variant="ghost"
                   icon={Plus}
-                  title={t("businessViews.domainKeywords.candidateStats", {
+                  title={t("searchAnswerProfiles.domainKeywords.candidateStats", {
                     frequency: candidate.frequency,
                     documents: candidate.document_count,
                   })}

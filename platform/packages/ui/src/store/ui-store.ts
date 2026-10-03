@@ -32,6 +32,8 @@ export interface UiState {
 export interface CreateUiStoreOptions {
   /** localStorage の永続化キー（アプリごとに一意）。 */
   storageKey: string;
+  /** セクション改名の対応（旧 key → 現行 key）。既存の折りたたみ状態を保持する。 */
+  sectionKeyMigrations?: Readonly<Record<string, string>>;
   /**
    * 旧バージョンが単独で持っていた「サイドバー折りたたみ真偽値」の localStorage キー。
    * 指定すると初期値を移行する（任意）。
@@ -96,6 +98,18 @@ export function createUiStore(options: CreateUiStoreOptions) {
       }),
       {
         name: options.storageKey,
+        merge: (persisted, current) => {
+          const saved = persisted && typeof persisted === "object"
+            ? persisted as Partial<UiState> : {};
+          const collapsedSections = { ...saved.collapsedSections };
+          for (const [oldKey, newKey] of Object.entries(options.sectionKeyMigrations ?? {})) {
+            if (Object.hasOwn(collapsedSections, oldKey)) {
+              if (!Object.hasOwn(collapsedSections, newKey)) collapsedSections[newKey] = collapsedSections[oldKey];
+              delete collapsedSections[oldKey];
+            }
+          }
+          return { ...current, ...saved, collapsedSections };
+        },
         partialize: (state) => ({
           sidebarCollapsed: state.sidebarCollapsed,
           collapsedSections: state.collapsedSections,

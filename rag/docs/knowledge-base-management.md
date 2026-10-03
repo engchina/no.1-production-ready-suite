@@ -162,10 +162,10 @@ Phase 1 では必須にしない。
 
 アップロード時にナレッジベースが指定されない場合は、tenant ごとに `DEFAULT` を自動作成し、その文書を所属させる。`DEFAULT` は予約名で、ユーザー作成・改名・アーカイブはできない。
 
-説明は必須のため（#521）、DEFAULT の KB と業務ビューには既定の説明を入れる。作成するとき（`_ensure_default_knowledge_base` / `_ensure_default_business_view`）と、
-説明が空の既存の DEFAULT を読み込んだとき（業務ビュー一覧の `ensure_default_business_view`・DEFAULT 行きのアップロード）に補い、
+説明は必須のため（#521）、DEFAULT の KB と検索・回答プロファイルには既定の説明を入れる。作成するとき（`_ensure_default_knowledge_base` / `_ensure_default_search_answer_profile`）と、
+説明が空の既存の DEFAULT を読み込んだとき（検索・回答プロファイル一覧の `ensure_default_search_answer_profile`・DEFAULT 行きのアップロード）に補い、
 migration `20260930_001_default_descriptions` も説明が空の DEFAULT に同じ文言を入れる。利用者が入れた説明は上書きしない。
-文言は `DEFAULT_KNOWLEDGE_BASE_DESCRIPTION` / `DEFAULT_BUSINESS_VIEW_DESCRIPTION`（`app/schemas/`）。
+文言は `DEFAULT_KNOWLEDGE_BASE_DESCRIPTION` / `DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION`（`app/schemas/`）。
 
 理由:
 
@@ -215,7 +215,7 @@ migration `20260930_001_default_descriptions` も説明が空の DEFAULT に同�
 ```
 
 KB が持つのは所属（スコープ）と名前・説明だけとする。文書の処理（文書解析・文書分割など）は文書のレシピ、
-検索方法（回答の検索と生成）と安全チェックは業務ビューの検索・回答設定で扱い、品質評価はグローバル設定だけで扱う(#301。根拠確認・回答スタイルは #595 で削除した)。
+検索方法（回答の検索と生成）と安全チェックは検索・回答プロファイルの検索・回答設定で扱い、品質評価はグローバル設定だけで扱う(#301。根拠確認・回答スタイルは #595 で削除した)。
 旧 `retrieval_config` / `adapter_config`（`ingestion` / `query`）の保存値は後方互換の読み取り対象に留め、runtime では使わない。
 
 > 3 層モデル（`rag/AGENTS.md`「RAG 設定責務」）以降、文書レシピの既定は global から解決し、KB の
@@ -349,9 +349,9 @@ GET /api/documents?knowledge_base_id=kb_1&status=INDEXED&q=規程&limit=50&offse
 互換性のため、Phase 1 では `filters.knowledge_base_id` も単一 ID として受け付ける。ただし新規 UI は
 `knowledge_base_ids` を使う。
 
-業務ビューで検索するときは `business_view_id` を 1 つ渡す（RAG 検索・チャット・MCP の `rag_search` が使う）。
-業務ビューの参照 KB を検索対象へ展開し、その業務ビューの検索・回答設定で回答する。複数の業務ビューを受ける
-`business_view_ids` は #635 で削除し、送ると 422 を返す（読み捨てて業務ビューの外を検索しないため）。
+検索・回答プロファイルで検索するときは `search_answer_profile_id` を 1 つ渡す（RAG 検索・チャット・MCP の `rag_search` が使う）。
+検索・回答プロファイルの参照 KB を検索対象へ展開し、その検索・回答プロファイルの検索・回答設定で回答する。複数の検索・回答プロファイルを受ける
+`search_answer_profile_ids` は #635 で削除し、送ると 422 を返す（読み捨てて検索・回答プロファイルの外を検索しないため）。
 
 retrieval SQL の基本条件:
 
@@ -388,7 +388,7 @@ WHERE d.status = 'INDEXED'
 - 項目の無い文書、`number` / `date` に変換できない値（例: 「約100万円」）は一致しない（除かれる）。取込は抽出値を
   型に寄せて保存する（`normalize_field_value`。桁区切りを除いた数字・`YYYY-MM-DD`・`true` / `false`）。
 - 関数索引は作っていない。実データの件数で実行計画を確かめ、必要なら検討する。
-- 画面の候補は `GET /api/search/extraction-fields?business_view_id=` が返す（選んだ業務ビューの参照 KB の定義の和集合）。
+- 画面の候補は `GET /api/search/extraction-fields?search_answer_profile_id=` が返す（選んだ検索・回答プロファイルの参照 KB の定義の和集合）。
 
 ### 6.6 評価 API
 
@@ -507,8 +507,8 @@ UI 方針:
 
 - 名前と説明は必須（#521）。名前は最大 256 文字、説明は最大 2000 文字（作成と同じ）。空・空白だけは画面が欄の直下に
   `FieldError` を出して送らず、最初の不正な欄へフォーカスする。API も空・空白だけ・`null` の説明を 422 で拒否する
-  （更新で説明を省略したときは変更しない）。業務ビューも同じ。
-- 説明が必須になる前に作った説明の空の KB・業務ビューも一覧・詳細で読める。編集して保存するときに説明の入力を求める
+  （更新で説明を省略したときは変更しない）。検索・回答プロファイルも同じ。
+- 説明が必須になる前に作った説明の空の KB・検索・回答プロファイルも一覧・詳細で読める。編集して保存するときに説明の入力を求める
   （変更がなくても閉じない）。
 - DEFAULT は名前を読み取り専用にし、説明だけを送る。
 - 同名（大文字小文字を区別せず、アーカイブ済みを含む）の 409 は、名前の欄の下に理由を出す。その他の失敗はフォームの下の `FormStatus`。
@@ -523,7 +523,7 @@ UI 方針:
 - 説明: optional、最大 2000 文字。
 - 既定検索モード: segmented control (`hybrid / vector / keyword`)。
 - 構築設定: 折りたたみ領域。文書解析、文書分割、索引構築、品質 gate を設定。
-- 検索・回答設定は業務ビュー側で設定し、KB 作成/編集フォームには出さない。
+- 検索・回答設定は検索・回答プロファイル側で設定し、KB 作成/編集フォームには出さない。
 
 UX 要件:
 
@@ -572,7 +572,7 @@ UX 要件:
 ### 8.4.1 KB を選ぶ UI（#302、#578）
 
 KB の選択は、共有 UI の検索できる選択部品（`SearchableMultiSelect` / `SearchableSelectField`。#578）で作る。
-複数選択（業務ビューの参照 KB・品質評価・文書詳細の所属先は `KnowledgeBaseScopePicker`、アップロードの登録先）は
+複数選択（検索・回答プロファイルの参照 KB・品質評価・文書詳細の所属先は `KnowledgeBaseScopePicker`、アップロードの登録先）は
 「検索欄 ＋ 候補の一覧（開いている間だけ）＋ 選択済みの chip」、文書インデックスの絞り込みは単一選択
 （ボタンに選択中の名前を切らずに出し、押すと検索欄と候補の一覧が開く）。
 
@@ -612,17 +612,17 @@ KB の選択は、共有 UI の検索できる選択部品（`SearchableMultiSel
   `layer_fingerprint.current_field_definitions`）と比べる。文書一覧では、層のある文書の所属 KB の定義を
   1 回の問い合わせ（`list_documents_extraction_field_sets`）で読む。
 
-### 8.4.2 アーカイブした KB と業務ビューの参照（#302）
+### 8.4.2 アーカイブした KB と検索・回答プロファイルの参照（#302）
 
-KB をアーカイブしても業務ビューの `knowledge_base_ids` からは外さない（業務ビューの設定を黙って変えない）。
-アーカイブ済み・存在しない KB は検索されないため、業務ビューの画面で警告する。
+KB をアーカイブしても検索・回答プロファイルの `knowledge_base_ids` からは外さない（検索・回答プロファイルの設定を黙って変えない）。
+アーカイブ済み・存在しない KB は検索されないため、検索・回答プロファイルの画面で警告する。
 
-- API：業務ビューの詳細は `knowledge_bases`（アーカイブ済みを含み `status` 付き）と `missing_knowledge_base_ids`、
+- API：検索・回答プロファイルの詳細は `knowledge_bases`（アーカイブ済みを含み `status` 付き）と `missing_knowledge_base_ids`、
   一覧・詳細は `archived_knowledge_base_count` / `missing_knowledge_base_count` を返す（tenant 内で解決。利用者の KB 範囲では絞らない）。
-- 一覧：該当する業務ビューがあれば `Banner`（warning）を出し、「参照 KB」列に `StatusBadge`（warning）「要確認」を付ける（アーカイブ済みの業務ビューは除く）。
+- 一覧：該当する検索・回答プロファイルがあれば `Banner`（warning）を出し、「参照 KB」列に `StatusBadge`（warning）「要確認」を付ける（アーカイブ済みの検索・回答プロファイルは除く）。
 - 編集画面：`Banner` にアーカイブ済みの KB の名前と見つからない KB の ID を並べ、外して保存するよう案内する。すべてが該当するときは
   「結果が 0 件になる」ことも伝える。警告は下書き（選択中の KB）に合わせて更新し、外すと消える。
-- アーカイブの確認ダイアログにも「参照している業務ビューでも検索されなくなる」ことを書く。
+- アーカイブの確認ダイアログにも「参照している検索・回答プロファイルでも検索されなくなる」ことを書く。
 
 ### 8.5 アップロード画面
 
@@ -733,7 +733,7 @@ Local store も Oracle adapter と同じ契約で更新し、単体テストが�
 
 - `KnowledgeBaseManagementClient.tsx`: 一覧（検索・状態の絞り込み・ページング）と作成フォーム
 - `KnowledgeBaseDetailClient.tsx`: 詳細（所属文書の追加・解除、アーカイブ、検索テスト、関係情報）
-- `KnowledgeBaseScopePicker.tsx` / `KnowledgeBaseMultiSelect.tsx`: 評価・業務ビュー・アップロード・文書詳細で使う複数選択と、文書インデックスの絞り込みの選択肢・文言（共有の `SearchableMultiSelect` / `SearchableSelectField`。200 件以下は画面側、超えるとサーバー側の検索。#302 / #578）
+- `KnowledgeBaseScopePicker.tsx` / `KnowledgeBaseMultiSelect.tsx`: 評価・検索・回答プロファイル・アップロード・文書詳細で使う複数選択と、文書インデックスの絞り込みの選択肢・文言（共有の `SearchableMultiSelect` / `SearchableSelectField`。200 件以下は画面側、超えるとサーバー側の検索。#302 / #578）
 - `KnowledgeBaseStatusPill.tsx`: 状態のバッジ（一覧・詳細で共有）
 - `KnowledgeBaseSearchTestPanel.tsx`: 詳細の検索テスト
 - `KnowledgeBaseGraphView.tsx` / `KnowledgeBasePipelineCanvas.tsx`: 関係情報と取込パイプラインの読み取り専用の図（高度な診断）

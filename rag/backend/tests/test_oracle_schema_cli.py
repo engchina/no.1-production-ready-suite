@@ -7,8 +7,8 @@ from pathlib import Path
 from pytest import CaptureFixture
 
 from app.rag import oracle_schema
-from app.schemas.business_view import DEFAULT_BUSINESS_VIEW_DESCRIPTION
 from app.schemas.knowledge_base import DEFAULT_KNOWLEDGE_BASE_DESCRIPTION
+from app.schemas.search_answer_profile import DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION
 
 
 def test_oracle_schema_sql_contains_required_rag_tables() -> None:
@@ -24,8 +24,8 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "CREATE TABLE rag_knowledge_bases" in sql
     assert "CREATE TABLE rag_document_knowledge_bases" in sql
     assert "extraction_fields     JSON," in sql
-    assert "-- section: business_views" in sql
-    assert "CREATE TABLE rag_business_views" in sql
+    assert "-- section: search_answer_profiles" in sql
+    assert "CREATE TABLE rag_search_answer_profiles" in sql
     # 旧 standard の回答エンジンだけが使っていた表は base schema から外した（#596）。
     assert "CREATE TABLE rag_prompt_versions" not in sql
     assert "CREATE TABLE rag_generation_settings" not in sql
@@ -108,11 +108,11 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "documents",
         "document_recipes",
         "knowledge_bases",
-        "business_views",
+        "search_answer_profiles",
         "answer_records",
         "answer_prompts",
         "query_history",
-        "business_view_knowledge",
+        "search_answer_profile_knowledge",
         "document_sections",
         "conversations",
         "messages",
@@ -204,8 +204,8 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "ALTER TABLE rag_ingestion_jobs DROP CONSTRAINT" in sql
     assert "(phase IN (''PREPROCESS'', ''EXTRACT'', ''CHUNK'', ''INDEX''))" in sql
     assert "-- migration: 20260619_001_business_views" in sql
-    assert "table_name = 'RAG_BUSINESS_VIEWS'" in sql
-    assert "rag_business_views_status_ck" in sql
+    assert "table_name = 'RAG_SEARCH_ANSWER_PROFILES'" in sql
+    assert "rag_search_answer_profiles_status_ck" in sql
     assert "-- migration: 20260621_001_chunk_sets" in sql
     assert "CREATE TABLE rag_chunk_sets" in sql
     assert "RAG_DOCUMENT_EXTRACTIONS_DOCUMENT_IDX" in sql
@@ -253,12 +253,12 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "-- migration: 20260630_002_default_business_view" in sql
     assert "JSON_MERGEPATCH" in sql
     assert "JSON_ARRAY(kb.knowledge_base_id RETURNING JSON)" in sql
-    assert "INSERT INTO rag_business_views" in sql
+    assert "INSERT INTO rag_search_answer_profiles" in sql
     assert "-- migration: 20260630_003_document_recipes" in sql
     assert "CREATE TABLE rag_document_recipes" in sql
     assert "RAG_CHUNK_SETS_RECIPE_ACTIVE_UIDX" in sql
     assert "-- migration: 20260701_001_general_feedback" in sql
-    assert "business_view_id VARCHAR2(64)" in sql
+    assert "search_answer_profile_id VARCHAR2(64)" in sql
     assert "RAG_FEEDBACK_USER_TRACE_IDX" in sql
     assert "column_name IN ('DOCUMENT_ID', 'CHUNK_ID')" in sql
     assert "AND nullable = 'N'" in sql
@@ -318,14 +318,16 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "ON rag_evaluation_jobs (status, heartbeat_at)" in jobs_migration
     assert "index_name = 'RAG_EVALUATION_JOBS_OWNER_CREATED_IDX'" in jobs_migration
     assert "query" not in jobs_migration.split("-- migration: ", 1)[0].lower()
-    # 説明が空の DEFAULT の KB・業務ビューに既定の説明を補う（#521）。利用者の説明は上書きしない。
+    # 説明が空の DEFAULT の KB・検索・回答プロファイル
+    # に既定の説明を補う（#521）。利用者の説明は上書きしない。
+    #
     descriptions_migration = sql.split("-- migration: 20260930_001_default_descriptions", 1)[
         1
     ].split("-- migration: ", 1)[0]
     assert "UPDATE rag_knowledge_bases" in descriptions_migration
-    assert "UPDATE rag_business_views" in descriptions_migration
+    assert "UPDATE rag_search_answer_profiles" in descriptions_migration
     assert f"'{DEFAULT_KNOWLEDGE_BASE_DESCRIPTION}'" in descriptions_migration
-    assert f"'{DEFAULT_BUSINESS_VIEW_DESCRIPTION}'" in descriptions_migration
+    assert f"'{DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION}'" in descriptions_migration
     assert descriptions_migration.count("AND TRIM(description) IS NULL") == 2
     assert "name =" not in descriptions_migration
     # 派生情報レイヤーに、作ったときの入力の指紋の列を足す（#550）。無ければ足す（冪等）。

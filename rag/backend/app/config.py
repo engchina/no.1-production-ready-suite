@@ -172,7 +172,7 @@ QueryStrategy = Literal[
     "hyde",
 ]
 AnswerFlow = Literal["crag", "standard_rag"]
-# 配信モード(業務ビュー層): 1 文書が複数 chunk_set を持つとき、検索時にどう配信するか。
+# 配信モード(検索・回答プロファイル層): 1 文書が複数 chunk_set を持つとき、検索時にどう配信するか。
 # single=is_serving の単一 chunk_set のみ(既定・現挙動)、fused=複数 chunk_set を RRF 融合 +
 # source-span 重複除去(opt-in)、routed=Router で query ごと選択(後続)。
 ServingMode = Literal["single", "fused", "routed"]
@@ -735,7 +735,8 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     )
     rag_query_strategy: QueryStrategy = Field(
         default="auto_routing",
-        description="質問の拡張(query rewriting / expansion)の方式。業務ビューで上書きできる。",
+        description="質問の拡張(query rewriting / expa"
+        "nsion)の方式。検索・回答プロファイルで上書きできる。",
     )
     rag_answer_flow: AnswerFlow = Field(
         default="crag",
@@ -760,16 +761,17 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "回答で、検索範囲の画面目録(文書ごとの番号付きの見出し)から質問を解決する"
             "操作画面を LLM で選び、その画面の根拠を検索候補に加える"
             "(LLM の呼び出しが 1 回増える。#554)。"
-            "業務ビューで上書きできる。"
+            "検索・回答プロファイルで上書きできる。"
         ),
     )
     rag_auto_field_filter_enabled: bool = Field(
         default=False,
         description=(
-            "質問に書かれた条件(「2025 年以降」「10 万円以上」など)を、業務ビューの KB で定義した"
+            "質問に書かれた条件(「2025 年以降」「10 万円以"
+            "上」など)を、検索・回答プロファイルの KB で定義した"
             "抽出項目の条件として LLM で読み取り、検索を絞り込む(self-query。LLM の呼び出しが"
             " 1 回増える。読み取った条件で 0 件なら条件を外して検索し直す。#652)。"
-            "業務ビューで上書きできる。"
+            "検索・回答プロファイルで上書きできる。"
         ),
     )
     rag_answer_record_retention_days: int = Field(
@@ -783,7 +785,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_query_history_enabled: bool = Field(
         default=False,
         description=(
-            "回答に成功した質問を業務ビュー単位で保存し、よく聞かれる質問を候補に出す"
+            "回答に成功した質問を検索・回答プロファイル単位で保存し、よく聞かれる質問を候補に出す"
             "(rag_poc の QUERY_HISTORY_ENABLED と同じく既定は無効)。"
         ),
     )
@@ -807,7 +809,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_runtime_knowledge: dict[str, object] = Field(
         default_factory=dict,
         description=(
-            "リクエスト単位で業務ビューから解決する用語・ルール"
+            "リクエスト単位で検索・回答プロファイルから解決する用語・ルール"
             "(rag_poc runtime knowledge payload)。"
             "回答フローだけが使う。"
         ),
@@ -815,7 +817,7 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     rag_domain_keywords: list[str] = Field(
         default_factory=list,
         description=(
-            "リクエスト単位で業務ビューから解決するドメインキーワード。"
+            "リクエスト単位で検索・回答プロファイルから解決するドメインキーワード。"
             "全文検索で分割せず 1 語として優先する。"
         ),
     )

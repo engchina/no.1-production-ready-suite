@@ -24,9 +24,10 @@ import httpx
 from pr_backend_core.internal_http import http_client_options
 from pr_system_settings.auth.errors import SecurityApiError
 from pr_system_settings.auth.service_token import issue_service_token
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.features.agent.config import McpConnectionConfig, runtime_config_store
+from app.features.agent.profile_name_migration import migrate_rag_call
 from app.features.agent.skills import (
     AgentSkillListOutput,
     skill_registry,
@@ -65,6 +66,11 @@ class ToolCall(BaseModel):
     name: str
     arguments: JsonObject = Field(default_factory=dict)
     trace_id: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_saved_names(cls, value: object) -> object:
+        return migrate_rag_call(value)
 
 
 class ToolDefinition(BaseModel):

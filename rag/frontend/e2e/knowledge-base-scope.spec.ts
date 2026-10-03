@@ -1,12 +1,12 @@
 import { expect, type Page, test } from "@playwright/test";
 import { mockEvaluationJobs } from "./_evaluation-jobs";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await mockKnowledgeBases(page);
-  await mockBusinessViews(page);
+  await mockSearchAnswerProfiles(page);
 });
 
 test("狭い画面幅(375px)でも検索ページがページを横スクロール(崩れ)させない", async ({ page }) => {
@@ -25,8 +25,8 @@ test("狭い画面幅(375px)でも検索ページがページを横スクロー�
   // 検索前(結果カラムが空)の初期表示で横はみ出しが無いこと。
   await expectNoPageOverflow(page);
 
-  // 業務ビューを選択してから検索する(検索は business view 選択が前提)。
-  await selectBusinessView(page, /経理ビュー/);
+  // 検索・回答プロファイルを選択してから検索する(検索は search answer profile 選択が前提)。
+  await selectSearchAnswerProfile(page, /経理ビュー/);
 
   // 検索実行後(結果・引用カードが出た状態)でも横はみ出しが無いこと。
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("経費申請の承認フロー");
@@ -102,8 +102,8 @@ test("評価実行と比較実行は選択したナレッジベースを使う",
   await expectNoHorizontalOverflow(page);
 });
 
-async function mockBusinessViews(page: Page) {
-  await page.route("**/api/business-views**", async (route) => {
+async function mockSearchAnswerProfiles(page: Page) {
+  await page.route("**/api/search-answer-profiles**", async (route) => {
     await route.fulfill({
       json: {
         data: {

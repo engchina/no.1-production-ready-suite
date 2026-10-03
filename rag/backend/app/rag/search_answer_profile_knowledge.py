@@ -1,7 +1,7 @@
-"""業務ビュー単位の知識(ドメインキーワード等)を Oracle の JSON payload で管理する。
+"""検索・回答プロファイル単位の知識(ドメインキーワード等)を Oracle の JSON payload で管理する。
 
 payload 形式と正規化・候補生成は rag_poc の ``rag_engine.knowledge`` をそのまま使う。
-保存先はファイルではなく ``rag_business_view_knowledge``(業務ビュー × 種別)。
+保存先はファイルではなく ``rag_search_answer_profile_knowledge``(検索・回答プロファイル × 種別)。
 """
 
 from __future__ import annotations
@@ -61,12 +61,12 @@ from rag_engine.knowledge.runtime_knowledge_management import (
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
 from app.rag.answer_engine import AnswerScope
-from app.schemas.business_view_knowledge import (
+from app.schemas.search import PageRange, format_page_ranges
+from app.schemas.search_answer_profile_knowledge import (
     ClarificationAnswer,
     ClarificationSection,
     RuleClarification,
 )
-from app.schemas.search import PageRange, format_page_ranges
 
 logger = logging.getLogger(__name__)
 
@@ -75,16 +75,16 @@ DEFAULT_CANDIDATE_LIMIT = 50
 DEFAULT_CANDIDATE_SOURCE_CHUNKS = 2000
 
 
-class BusinessViewKnowledgeStore(Protocol):
-    async def get_business_view_knowledge(
-        self, business_view_id: str, kind: str
+class SearchAnswerProfileKnowledgeStore(Protocol):
+    async def get_search_answer_profile_knowledge(
+        self, search_answer_profile_id: str, kind: str
     ) -> dict[str, object] | None: ...
 
-    async def save_business_view_knowledge(
-        self, business_view_id: str, kind: str, payload: dict[str, object]
+    async def save_search_answer_profile_knowledge(
+        self, search_answer_profile_id: str, kind: str, payload: dict[str, object]
     ) -> None: ...
 
-    async def list_business_view_chunk_texts(
+    async def list_search_answer_profile_chunk_texts(
         self, knowledge_base_ids: list[str], *, limit: int
     ) -> list[tuple[str, str, str]]: ...
 
@@ -96,26 +96,28 @@ class DomainKeywordSuggestion:
 
 
 async def load_domain_keywords(
-    store: BusinessViewKnowledgeStore, business_view_id: str
+    store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str
 ) -> list[str]:
     """保存済みドメインキーワード(正規化済み)を返す。未登録は空。"""
-    payload = await store.get_business_view_knowledge(business_view_id, DOMAIN_KEYWORDS_KIND)
+    payload = await store.get_search_answer_profile_knowledge(
+        search_answer_profile_id, DOMAIN_KEYWORDS_KIND
+    )
     if payload is None:
         return []
     return normalize_domain_keywords(payload.get("keywords"))
 
 
 async def save_domain_keywords(
-    store: BusinessViewKnowledgeStore,
-    business_view_id: str,
+    store: SearchAnswerProfileKnowledgeStore,
+    search_answer_profile_id: str,
     keywords: list[str],
 ) -> list[str]:
     """正規化(重複・空白・長さ・件数上限)して保存し、保存後の一覧を返す。"""
     normalized = normalize_domain_keywords(keywords)
     if len(normalized) > MAX_DOMAIN_KEYWORDS:
         raise ValueError(f"ドメインキーワードは {MAX_DOMAIN_KEYWORDS} 件までです。")
-    await store.save_business_view_knowledge(
-        business_view_id,
+    await store.save_search_answer_profile_knowledge(
+        search_answer_profile_id,
         DOMAIN_KEYWORDS_KIND,
         {
             "schema_version": DOMAIN_KEYWORDS_SCHEMA_VERSION,
@@ -127,21 +129,23 @@ async def save_domain_keywords(
 
 
 async def suggest_domain_keywords(
-    store: BusinessViewKnowledgeStore,
-    business_view_id: str,
+    store: SearchAnswerProfileKnowledgeStore,
+    search_answer_profile_id: str,
     knowledge_base_ids: list[str],
     *,
     limit: int = DEFAULT_CANDIDATE_LIMIT,
     max_source_chunks: int = DEFAULT_CANDIDATE_SOURCE_CHUNKS,
 ) -> DomainKeywordSuggestion:
     """参照 KB の配信中 chunk から TF-IDF でキーワード候補を作る(LLM は使わない)。"""
-    rows = await store.list_business_view_chunk_texts(knowledge_base_ids, limit=max_source_chunks)
+    rows = await store.list_search_answer_profile_chunk_texts(
+        knowledge_base_ids, limit=max_source_chunks
+    )
     sources = [
         DomainKeywordSourceText(chunk_id=chunk_id, document_id=document_id, text=text)
         for chunk_id, document_id, text in rows
         if text.strip()
     ]
-    existing = await load_domain_keywords(store, business_view_id)
+    existing = await load_domain_keywords(store, search_answer_profile_id)
     candidates = suggest_domain_keyword_candidates(
         sources,
         existing_keywords=existing,
@@ -172,15 +176,17 @@ FAQ_ENABLED_KEY = "enabled"
 
 
 def approved_faq_enabled(payload: Mapping[str, object] | None) -> bool:
-    """回答の前に類似問を提示するか(業務ビューごと。未設定はオン。#684)。"""
+    """回答の前に類似問を提示するか(検索・回答プロファイルごと。未設定はオン。#684)。"""
     return (payload or {}).get(FAQ_ENABLED_KEY) is not False
 
 
 async def load_approved_faq(
-    store: BusinessViewKnowledgeStore, business_view_id: str
+    store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str
 ) -> list[ApprovedFaqRecord]:
-    """業務ビューの承認済み FAQ を返す。"""
-    payload = await store.get_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND)
+    """検索・回答プロファイルの承認済み FAQ を返す。"""
+    payload = await store.get_search_answer_profile_knowledge(
+        search_answer_profile_id, APPROVED_FAQ_KIND
+    )
     if payload is None:
         return []
     with _faq_file(payload) as path:
@@ -188,30 +194,37 @@ async def load_approved_faq(
 
 
 async def load_approved_faq_enabled(
-    store: BusinessViewKnowledgeStore, business_view_id: str
+    store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str
 ) -> bool:
-    payload = await store.get_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND)
+    payload = await store.get_search_answer_profile_knowledge(
+        search_answer_profile_id, APPROVED_FAQ_KIND
+    )
     return approved_faq_enabled(payload)
 
 
 async def save_approved_faq_enabled(
-    store: BusinessViewKnowledgeStore, business_view_id: str, enabled: bool
+    store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str, enabled: bool
 ) -> None:
     """類似問の提示のオン / オフを保存する(FAQ の登録内容は変えない)。"""
-    payload = await store.get_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND)
+    payload = await store.get_search_answer_profile_knowledge(
+        search_answer_profile_id, APPROVED_FAQ_KIND
+    )
     with _faq_file(payload) as path:
         # 未登録なら FAQ の標準形式(空)に設定だけを持たせる。
         base = load_approved_faq_payload(path)
-    await store.save_business_view_knowledge(
-        business_view_id, APPROVED_FAQ_KIND, {**base, FAQ_ENABLED_KEY: enabled}
+    await store.save_search_answer_profile_knowledge(
+        search_answer_profile_id, APPROVED_FAQ_KIND, {**base, FAQ_ENABLED_KEY: enabled}
     )
 
 
 async def find_approved_faq(
-    store: BusinessViewKnowledgeStore, business_view_id: str, faq_id: str
+    store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str, faq_id: str
 ) -> ApprovedFaqRecord | None:
-    """利用者が選んだ類似問を、業務ビューの承認済み FAQ から引き直す(提示がオンのときだけ)。"""
-    payload = await store.get_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND)
+    """利用者が選んだ類似問を、検索・回答プロファイルの承認"
+    "済み FAQ から引き直す(提示がオンのときだけ)。"""
+    payload = await store.get_search_answer_profile_knowledge(
+        search_answer_profile_id, APPROVED_FAQ_KIND
+    )
     if payload is None or not approved_faq_enabled(payload):
         return None
     with _faq_file(payload) as path:
@@ -227,15 +240,17 @@ async def find_approved_faq(
 
 
 async def mutate_approved_faq(
-    store: BusinessViewKnowledgeStore,
-    business_view_id: str,
+    store: SearchAnswerProfileKnowledgeStore,
+    search_answer_profile_id: str,
     operation: Callable[[Path], ApprovedFaqMutationResult],
 ) -> ApprovedFaqMutation:
     """rag_poc の FAQ 更新関数(ファイル前提)を一時ファイル上で実行し、結果を DB へ保存する。
 
     ponytail: 同時編集は後勝ち。競合検出が必要になったら revision を条件に MERGE する。
     """
-    payload = await store.get_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND)
+    payload = await store.get_search_answer_profile_knowledge(
+        search_answer_profile_id, APPROVED_FAQ_KIND
+    )
     with _faq_file(payload) as path:
         result = operation(path)
         updated = load_approved_faq_payload(path)
@@ -243,7 +258,9 @@ async def mutate_approved_faq(
     if payload is not None and FAQ_ENABLED_KEY in payload:
         # FAQ の更新関数は設定を知らないので、類似問の提示のオン / オフを引き継ぐ。
         updated = {**updated, FAQ_ENABLED_KEY: payload[FAQ_ENABLED_KEY]}
-    await store.save_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND, updated)
+    await store.save_search_answer_profile_knowledge(
+        search_answer_profile_id, APPROVED_FAQ_KIND, updated
+    )
     return ApprovedFaqMutation(
         records=records,
         inserted_count=result.inserted_count,
@@ -252,20 +269,24 @@ async def mutate_approved_faq(
 
 
 async def add_approved_faq(
-    store: BusinessViewKnowledgeStore, business_view_id: str, *, question: str, answer: str
+    store: SearchAnswerProfileKnowledgeStore,
+    search_answer_profile_id: str,
+    *,
+    question: str,
+    answer: str,
 ) -> ApprovedFaqMutation:
     return await mutate_approved_faq(
         store,
-        business_view_id,
+        search_answer_profile_id,
         lambda path: add_approved_faq_record(path, question=question, approved_answer=answer),
     )
 
 
 async def delete_approved_faq(
-    store: BusinessViewKnowledgeStore, business_view_id: str, ids: list[str]
+    store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str, ids: list[str]
 ) -> ApprovedFaqMutation:
     return await mutate_approved_faq(
-        store, business_view_id, lambda path: delete_approved_faq_records(path, ids)
+        store, search_answer_profile_id, lambda path: delete_approved_faq_records(path, ids)
     )
 
 
@@ -281,8 +302,8 @@ def read_approved_faq_excel(content: bytes, file_name: str) -> list[ApprovedFaqI
 
 
 async def import_approved_faq(
-    store: BusinessViewKnowledgeStore,
-    business_view_id: str,
+    store: SearchAnswerProfileKnowledgeStore,
+    search_answer_profile_id: str,
     rows: list[ApprovedFaqImportRow],
     *,
     mode: str,
@@ -291,14 +312,14 @@ async def import_approved_faq(
         raise ValueError(f"取込モードが不正です: {mode}")
     return await mutate_approved_faq(
         store,
-        business_view_id,
+        search_answer_profile_id,
         lambda path: apply_approved_faq_import_rows(path, rows, mode=mode),
     )
 
 
 async def suggest_approved_faq(
-    store: BusinessViewKnowledgeStore,
-    business_view_id: str,
+    store: SearchAnswerProfileKnowledgeStore,
+    search_answer_profile_id: str,
     question: str,
     *,
     limit: int = DEFAULT_APPROVED_FAQ_SUGGESTION_LIMIT,
@@ -313,7 +334,9 @@ async def suggest_approved_faq(
     index は FAQ payload の ``semantic_index_cache`` に保持し、FAQ 集合の署名が変われば作り直す。
     embedding に失敗しても文字列照合で続ける。
     """
-    payload = await store.get_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND)
+    payload = await store.get_search_answer_profile_knowledge(
+        search_answer_profile_id, APPROVED_FAQ_KIND
+    )
     if payload is None or not question.strip() or not approved_faq_enabled(payload):
         return []
     with _faq_file(payload) as path:
@@ -328,8 +351,8 @@ async def suggest_approved_faq(
                 payload, records, embed, model=embedding_model, dimensions=embedding_dimensions
             )
             if cache is not None:
-                await store.save_business_view_knowledge(
-                    business_view_id,
+                await store.save_search_answer_profile_knowledge(
+                    search_answer_profile_id,
                     APPROVED_FAQ_KIND,
                     {**payload, FAQ_SEMANTIC_CACHE_KEY: cache},
                 )
@@ -402,16 +425,18 @@ RUNTIME_KNOWLEDGE_KIND = "runtime_knowledge"
 
 
 async def load_runtime_knowledge_payload(
-    store: BusinessViewKnowledgeStore, business_view_id: str
+    store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str
 ) -> dict[str, object]:
-    """業務ビューの用語・ルール payload を返す(未登録は空の標準形式)。"""
-    payload = await store.get_business_view_knowledge(business_view_id, RUNTIME_KNOWLEDGE_KIND)
+    """検索・回答プロファイルの用語・ルール payload を返す(未登録は空の標準形式)。"""
+    payload = await store.get_search_answer_profile_knowledge(
+        search_answer_profile_id, RUNTIME_KNOWLEDGE_KIND
+    )
     return payload or {"schema_version": 1, "terms": [], "rules": []}
 
 
 async def edit_runtime_knowledge(
-    store: BusinessViewKnowledgeStore,
-    business_view_id: str,
+    store: SearchAnswerProfileKnowledgeStore,
+    search_answer_profile_id: str,
     *,
     kind: str,
     selected: str | None,
@@ -424,7 +449,7 @@ async def edit_runtime_knowledge(
     delete: bool = False,
 ) -> dict[str, object]:
     """rag_poc の edit_knowledge を一時ファイル上で実行し、結果を DB へ保存する。"""
-    payload = await load_runtime_knowledge_payload(store, business_view_id)
+    payload = await load_runtime_knowledge_payload(store, search_answer_profile_id)
     with _runtime_knowledge_dir(payload) as (work_dir, path):
         snapshot = load_knowledge_snapshot(work_dir, path)
         updated, _ = edit_knowledge(
@@ -440,8 +465,8 @@ async def edit_runtime_knowledge(
             delete=delete,
             confirmed=delete,
         )
-    await store.save_business_view_knowledge(
-        business_view_id, RUNTIME_KNOWLEDGE_KIND, dict(updated.payload)
+    await store.save_search_answer_profile_knowledge(
+        search_answer_profile_id, RUNTIME_KNOWLEDGE_KIND, dict(updated.payload)
     )
     return dict(updated.payload)
 
@@ -483,13 +508,13 @@ def rule_clarification(rule: Mapping[str, object]) -> RuleClarification | None:
 
 
 async def save_rule_clarification(
-    store: BusinessViewKnowledgeStore,
-    business_view_id: str,
+    store: SearchAnswerProfileKnowledgeStore,
+    search_answer_profile_id: str,
     rule_id: str,
     clarification: RuleClarification | None,
 ) -> dict[str, object]:
     """ルールに確認の質問を保存する(None は外す)。ルールが無ければ KeyError。"""
-    payload = await load_runtime_knowledge_payload(store, business_view_id)
+    payload = await load_runtime_knowledge_payload(store, search_answer_profile_id)
     rules = _rules(payload)
     rule = next((item for item in rules if str(item.get("id", "")) == rule_id), None)
     if rule is None:
@@ -499,7 +524,9 @@ async def save_rule_clarification(
     else:
         rule["clarification"] = clarification.model_dump()
     updated = {**payload, "rules": rules}
-    await store.save_business_view_knowledge(business_view_id, RUNTIME_KNOWLEDGE_KIND, updated)
+    await store.save_search_answer_profile_knowledge(
+        search_answer_profile_id, RUNTIME_KNOWLEDGE_KIND, updated
+    )
     return updated
 
 

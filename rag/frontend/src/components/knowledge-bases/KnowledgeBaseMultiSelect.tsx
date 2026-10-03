@@ -85,7 +85,7 @@ export function knowledgeBaseChipOptions(
 
 /**
  * ナレッジベースの複数選択（検索 ＋ 候補の一覧 ＋ 選択済みの chip。#578）。
- * アップロードの登録先・検索範囲・評価・業務ビュー・文書詳細の所属 KB で同じ操作にそろえる。
+ * アップロードの登録先・検索範囲・評価・検索・回答プロファイル・文書詳細の所属 KB で同じ操作にそろえる。
  * 候補は `useKnowledgeBaseChoices`（200 件以下は画面側で絞り込み、超えるとサーバー側の検索）から渡す。
  */
 export function KnowledgeBaseMultiSelect({

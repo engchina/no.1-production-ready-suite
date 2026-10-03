@@ -8,20 +8,20 @@ import {
 import { Search } from "lucide-react";
 import { useMemo } from "react";
 
-import { DEFAULT_BUSINESS_VIEW_NAME, type BusinessViewSummary } from "@/lib/api";
+import { DEFAULT_SEARCH_ANSWER_PROFILE_NAME, type SearchAnswerProfileSummary } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
 /**
- * 対象の業務ビューを 1 つ選ぶ欄（RAG 検索とチャットで同じ部品・同じ文言。#635）。
+ * 対象の検索・回答プロファイルを 1 つ選ぶ欄（RAG 検索とチャットで同じ部品・同じ文言。#635）。
  *
- * 共有の SearchableSelectField（ボタン → 検索欄と候補の一覧）。業務ビューは件数が少ない前提で、
- * 全件を画面側で名前と説明で絞り込む。候補の右端に参照 KB の件数を出し、参照 KB が 0 件の業務ビューは
+ * 共有の SearchableSelectField（ボタン → 検索欄と候補の一覧）。検索・回答プロファイルは件数が少ない前提で、
+ * 全件を画面側で名前と説明で絞り込む。候補の右端に参照 KB の件数を出し、参照 KB が 0 件の検索・回答プロファイルは
  * 後ろに並べる（選んだときの理由の表示と送信の抑止は画面側）。
  *
  * 幅は全幅にする。RAG 検索では直下の質問欄（全幅）と左右の端をそろえ、チャットでも同じ見た目にする。
  * 欄の下に説明文（helper）は出さない（毎回読む情報ではなく、縦の面積を取るため。#664）。
  */
-export function BusinessViewSelect({
+export function SearchAnswerProfileSelect({
   id,
   items,
   value,
@@ -30,7 +30,7 @@ export function BusinessViewSelect({
   error,
 }: {
   id: string;
-  items: BusinessViewSummary[];
+  items: SearchAnswerProfileSummary[];
   value: string | null;
   onChange: (id: string) => void;
   disabled?: boolean;
@@ -39,11 +39,11 @@ export function BusinessViewSelect({
 }) {
   const options = useMemo<SearchableSelectOption[]>(
     () =>
-      sortBusinessViews(items).map((view) => ({
+      sortSearchAnswerProfiles(items).map((view) => ({
         value: view.id,
         label: view.name,
         searchText: `${view.name} ${view.description ?? ""}`,
-        meta: t("businessViewSelect.knowledgeBaseCount", { count: view.knowledge_base_count }),
+        meta: t("searchAnswerProfileSelect.knowledgeBaseCount", { count: view.knowledge_base_count }),
       })),
     [items]
   );
@@ -51,31 +51,31 @@ export function BusinessViewSelect({
   return (
     <SearchableSelectField
       id={id}
-      label={t("businessViews.scope.label")}
+      label={t("searchAnswerProfiles.scope.label")}
       required
       value={value ?? ""}
       options={options}
       onValueChange={(next) => {
         if (!disabled) onChange(next);
       }}
-      placeholder={t("businessViewSelect.placeholder")}
+      placeholder={t("searchAnswerProfileSelect.placeholder")}
       leadingIcon={Search}
       error={error || undefined}
       disabled={disabled}
       width="full"
       labels={{
-        searchPlaceholder: t("businessViewSelect.searchPlaceholder"),
+        searchPlaceholder: t("searchAnswerProfileSelect.searchPlaceholder"),
         clearSearch: t("common.clearSearch"),
-        count: (shown, total) => t("businessViewSelect.count", { shown, total }),
-        noMatch: (query) => t("businessViewSelect.noMatch", { query }),
-        empty: t("businessViewSelect.emptyList"),
+        count: (shown, total) => t("searchAnswerProfileSelect.count", { shown, total }),
+        noMatch: (query) => t("searchAnswerProfileSelect.noMatch", { query }),
+        empty: t("searchAnswerProfileSelect.emptyList"),
       }}
     />
   );
 }
 
-/** 業務ビューを読み込んでいる間の欄の形（ラベル・欄）。RAG 検索とチャットで同じにする。 */
-export function BusinessViewSelectSkeleton() {
+/** 検索・回答プロファイルを読み込んでいる間の欄の形（ラベル・欄）。RAG 検索とチャットで同じにする。 */
+export function SearchAnswerProfileSelectSkeleton() {
   return (
     <div className="space-y-1.5" aria-hidden>
       <Skeleton className="h-4 w-32" />
@@ -84,10 +84,10 @@ export function BusinessViewSelectSkeleton() {
   );
 }
 
-function sortBusinessViews(items: BusinessViewSummary[]) {
+function sortSearchAnswerProfiles(items: SearchAnswerProfileSummary[]) {
   return [...items].sort((a, b) => {
-    if (a.name === DEFAULT_BUSINESS_VIEW_NAME) return -1;
-    if (b.name === DEFAULT_BUSINESS_VIEW_NAME) return 1;
+    if (a.name === DEFAULT_SEARCH_ANSWER_PROFILE_NAME) return -1;
+    if (b.name === DEFAULT_SEARCH_ANSWER_PROFILE_NAME) return 1;
     if (b.knowledge_base_count !== a.knowledge_base_count) {
       return b.knowledge_base_count - a.knowledge_base_count;
     }

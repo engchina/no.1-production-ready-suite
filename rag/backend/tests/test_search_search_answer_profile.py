@@ -1,6 +1,6 @@
-"""検索 API の Business View 解決テスト。
+"""検索 API の Search Answer Profile 解決テスト。
 
-Business View 指定時に参照 KB 群を検索対象へ展開し、その回答の設定を
+Search Answer Profile 指定時に参照 KB 群を検索対象へ展開し、その回答の設定を
 検索 runtime / diagnostics へ反映することを検証する。
 """
 
@@ -14,13 +14,13 @@ from app.api.routes import search as search_route
 from app.config import Settings
 from app.main import app
 from app.rag import extraction_field_adapter as fields_mod
-from app.rag.business_view_config import BusinessViewConfig
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import FieldDefinition
 from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig, KnowledgeBaseQueryConfig
-from app.schemas.business_view import BusinessViewDetail, BusinessViewStatus
+from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.schemas.knowledge_base import KnowledgeBaseDetail, KnowledgeBaseStatus
 from app.schemas.search import SearchRequest, SearchResponse
+from app.schemas.search_answer_profile import SearchAnswerProfileDetail, SearchAnswerProfileStatus
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -59,24 +59,26 @@ class RecordingPipeline:
 
 
 class FakeViewOracle:
-    """業務ビューを返すテスト用 Oracle。"""
+    """検索・回答プロファイルを返すテスト用 Oracle。"""
 
-    def __init__(self, views: dict[str, BusinessViewConfig]) -> None:
+    def __init__(self, views: dict[str, SearchAnswerProfileConfig]) -> None:
         self._views = views
 
-    async def get_business_view_knowledge(
-        self, business_view_id: str, kind: str
+    async def get_search_answer_profile_knowledge(
+        self, search_answer_profile_id: str, kind: str
     ) -> dict[str, object] | None:
         return None
 
-    async def get_business_view(self, business_view_id: str) -> BusinessViewDetail | None:
-        config = self._views.get(business_view_id)
+    async def get_search_answer_profile(
+        self, search_answer_profile_id: str
+    ) -> SearchAnswerProfileDetail | None:
+        config = self._views.get(search_answer_profile_id)
         if config is None:
             return None
-        return BusinessViewDetail(
-            id=business_view_id,
-            name=f"view {business_view_id}",
-            status=BusinessViewStatus.ACTIVE,
+        return SearchAnswerProfileDetail(
+            id=search_answer_profile_id,
+            name=f"view {search_answer_profile_id}",
+            status=SearchAnswerProfileStatus.ACTIVE,
             config=config,
             created_at=datetime(2026, 1, 1, tzinfo=UTC),
             updated_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -92,7 +94,7 @@ def _reset() -> None:
     RecordingPipeline.captured_request = None
 
 
-def _install(monkeypatch: MonkeyPatch, views: dict[str, BusinessViewConfig]) -> None:
+def _install(monkeypatch: MonkeyPatch, views: dict[str, SearchAnswerProfileConfig]) -> None:
     monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
     monkeypatch.setattr(
         search_route,
@@ -101,9 +103,11 @@ def _install(monkeypatch: MonkeyPatch, views: dict[str, BusinessViewConfig]) -> 
     )
 
 
-def test_business_view_expands_kbs_and_applies_query_config(monkeypatch: MonkeyPatch) -> None:
+def test_search_answer_profile_expands_kbs_and_applies_query_config(
+    monkeypatch: MonkeyPatch,
+) -> None:
     """参照 KB 群が検索対象へ展開され、query 設定が pipeline と diagnostics に効く。"""
-    config = BusinessViewConfig(
+    config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1", "kb-2"],
         query=KnowledgeBaseQueryConfig(
             query_strategy="rag_fusion",
@@ -114,7 +118,7 @@ def test_business_view_expands_kbs_and_applies_query_config(monkeypatch: MonkeyP
 
     response = client.post(
         "/api/search",
-        json={"query": "経費精算の上限", "business_view_id": "bv-1"},
+        json={"query": "経費精算の上限", "search_answer_profile_id": "bv-1"},
     )
 
     assert response.status_code == 200
@@ -122,7 +126,7 @@ def test_business_view_expands_kbs_and_applies_query_config(monkeypatch: MonkeyP
     assert RecordingPipeline.captured_settings is not None
     assert RecordingPipeline.captured_settings.rag_query_strategy == "rag_fusion"
     assert RecordingPipeline.captured_settings.rag_answer_flow == "standard_rag"
-    assert diagnostics["business_view_applied"] == "bv-1"
+    assert diagnostics["search_answer_profile_applied"] == "bv-1"
     # 参照 KB が検索対象へ展開されている。
     assert RecordingPipeline.captured_request is not None
     assert RecordingPipeline.captured_request.knowledge_base_ids == ["kb-1", "kb-2"]
@@ -130,19 +134,24 @@ def test_business_view_expands_kbs_and_applies_query_config(monkeypatch: MonkeyP
 
 
 @pytest.mark.parametrize("path", ["/api/search", "/api/search/stream"])
-def test_business_view_ids_is_rejected(monkeypatch: MonkeyPatch, path: str) -> None:
-    """業務ビューは 1 つだけ。削除した business_view_ids は読み捨てず 422 にする（#635）。"""
-    _install(monkeypatch, {"bv-1": BusinessViewConfig(knowledge_base_ids=["kb-1"])})
+def test_search_answer_profile_ids_is_rejected(monkeypatch: MonkeyPatch, path: str) -> None:
+    """検索・回答プロファイルは 1 つだけ。削除した search_answ"
+    "er_profile_ids は読み捨てず 422 にする（#635）。"""
+    _install(monkeypatch, {"bv-1": SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"])})
 
-    response = client.post(path, json={"query": "経費精算の上限", "business_view_ids": ["bv-1"]})
+    response = client.post(
+        path, json={"query": "経費精算の上限", "search_answer_profile_ids": ["bv-1"]}
+    )
 
     assert response.status_code == 422
     assert RecordingPipeline.captured_request is None
 
 
-def test_saved_standard_options_of_business_view_are_ignored(monkeypatch: MonkeyPatch) -> None:
+def test_saved_standard_options_of_search_answer_profile_are_ignored(
+    monkeypatch: MonkeyPatch,
+) -> None:
     """保存済みの旧 standard の値(回答スタイル・persona など。#595 で削除)は読み捨てて検索する。"""
-    config = BusinessViewConfig.model_validate(
+    config = SearchAnswerProfileConfig.model_validate(
         {
             "knowledge_base_ids": ["kb-1"],
             "system_prompt": "あなたは経理規程アシスタントです。",
@@ -159,7 +168,7 @@ def test_saved_standard_options_of_business_view_are_ignored(monkeypatch: Monkey
 
     response = client.post(
         "/api/search",
-        json={"query": "上限額", "business_view_id": "bv-1"},
+        json={"query": "上限額", "search_answer_profile_id": "bv-1"},
     )
 
     assert response.status_code == 200
@@ -170,11 +179,11 @@ def test_saved_standard_options_of_business_view_are_ignored(monkeypatch: Monkey
         assert not hasattr(settings, removed)
 
 
-def test_business_view_guardrail_policy_reaches_pipeline_settings(
+def test_search_answer_profile_guardrail_policy_reaches_pipeline_settings(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """業務ビューの regulated 設定が実 pipeline 構築に使う Settings へ届く。"""
-    config = BusinessViewConfig(
+    """検索・回答プロファイルの regulated 設定が実 pipeline 構築に使う Settings へ届く。"""
+    config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1"],
         query=KnowledgeBaseQueryConfig(guardrail_policy="regulated"),
     )
@@ -182,7 +191,7 @@ def test_business_view_guardrail_policy_reaches_pipeline_settings(
 
     response = client.post(
         "/api/search",
-        json={"query": "上限額", "business_view_id": "bv-1"},
+        json={"query": "上限額", "search_answer_profile_id": "bv-1"},
     )
 
     assert response.status_code == 200
@@ -191,15 +200,15 @@ def test_business_view_guardrail_policy_reaches_pipeline_settings(
 
 
 def test_request_kb_ids_take_precedence_over_view(monkeypatch: MonkeyPatch) -> None:
-    """request 明示の KB は業務ビューの参照 KB より優先する。"""
-    config = BusinessViewConfig(knowledge_base_ids=["kb-1", "kb-2"])
+    """request 明示の KB は検索・回答プロファイルの参照 KB より優先する。"""
+    config = SearchAnswerProfileConfig(knowledge_base_ids=["kb-1", "kb-2"])
     _install(monkeypatch, {"bv-1": config})
 
     response = client.post(
         "/api/search",
         json={
             "query": "上限額",
-            "business_view_id": "bv-1",
+            "search_answer_profile_id": "bv-1",
             "knowledge_base_ids": ["kb-9"],
         },
     )
@@ -210,40 +219,45 @@ def test_request_kb_ids_take_precedence_over_view(monkeypatch: MonkeyPatch) -> N
 
 
 @pytest.mark.parametrize("path", ["/api/search", "/api/search/stream"])
-def test_business_view_without_knowledge_bases_is_rejected(
+def test_search_answer_profile_without_knowledge_bases_is_rejected(
     monkeypatch: MonkeyPatch, path: str
 ) -> None:
-    """参照 KB が 0 件の業務ビューでは利用者の全 KB を検索せず、理由を 409 で返す（#304）。"""
-    _install(monkeypatch, {"bv-empty": BusinessViewConfig()})
+    """参照 KB が 0 件の検索・回答プロファイルでは利用者の"
+    "全 KB を検索せず、理由を 409 で返す（#304）。"""
+    _install(monkeypatch, {"bv-empty": SearchAnswerProfileConfig()})
 
-    response = client.post(path, json={"query": "上限額", "business_view_id": "bv-empty"})
+    response = client.post(path, json={"query": "上限額", "search_answer_profile_id": "bv-empty"})
 
     assert response.status_code == 409
     assert response.json()["error_messages"] == [
-        search_route.BUSINESS_VIEW_NO_KNOWLEDGE_BASES_MESSAGE
+        search_route.SEARCH_ANSWER_PROFILE_NO_KNOWLEDGE_BASES_MESSAGE
     ]
     assert RecordingPipeline.captured_request is None
 
 
-def test_missing_business_view_is_rejected(monkeypatch: MonkeyPatch) -> None:
-    """明示した業務ビューが無い場合は別 scope へ縮退せず 404 にする。"""
+def test_missing_search_answer_profile_is_rejected(monkeypatch: MonkeyPatch) -> None:
+    """明示した検索・回答プロファイルが無い場合は別 scope へ縮退せず 404 にする。"""
     _install(monkeypatch, {})
 
     response = client.post(
         "/api/search",
-        json={"query": "上限額", "business_view_id": "missing"},
+        json={"query": "上限額", "search_answer_profile_id": "missing"},
     )
 
     assert response.status_code == 404
-    assert response.json()["error_messages"] == ["指定した業務ビューが見つかりません: missing"]
+    assert response.json()["error_messages"] == [
+        "指定した検索・回答プロファイルが見つかりません: missing"
+    ]
 
 
-def test_archived_business_view_is_rejected(monkeypatch: MonkeyPatch) -> None:
+def test_archived_search_answer_profile_is_rejected(monkeypatch: MonkeyPatch) -> None:
     class ArchivedOracle(FakeViewOracle):
-        async def get_business_view(self, business_view_id: str) -> BusinessViewDetail | None:
-            detail = await super().get_business_view(business_view_id)
+        async def get_search_answer_profile(
+            self, search_answer_profile_id: str
+        ) -> SearchAnswerProfileDetail | None:
+            detail = await super().get_search_answer_profile(search_answer_profile_id)
             return (
-                detail.model_copy(update={"status": BusinessViewStatus.ARCHIVED})
+                detail.model_copy(update={"status": SearchAnswerProfileStatus.ARCHIVED})
                 if detail
                 else None
             )
@@ -252,28 +266,28 @@ def test_archived_business_view_is_rejected(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(
         search_route,
         "OracleClient",
-        lambda *_args, **_kwargs: ArchivedOracle({"bv-1": BusinessViewConfig()}),
+        lambda *_args, **_kwargs: ArchivedOracle({"bv-1": SearchAnswerProfileConfig()}),
     )
 
     response = client.post(
         "/api/search",
-        json={"query": "上限額", "business_view_id": "bv-1"},
+        json={"query": "上限額", "search_answer_profile_id": "bv-1"},
     )
 
     assert response.status_code == 409
     assert "アーカイブ済み" in response.json()["error_messages"][0]
 
 
-def test_business_view_serving_mode_flows_to_settings_and_diagnostics(
+def test_search_answer_profile_serving_mode_flows_to_settings_and_diagnostics(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """業務ビューの serving_mode=fused が pipeline settings へ流れる。"""
-    config = BusinessViewConfig(knowledge_base_ids=["kb-1"], serving_mode="fused")
+    """検索・回答プロファイルの serving_mode=fused が pipeline settings へ流れる。"""
+    config = SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"], serving_mode="fused")
     _install(monkeypatch, {"bv-1": config})
 
     response = client.post(
         "/api/search",
-        json={"query": "上限額", "business_view_id": "bv-1"},
+        json={"query": "上限額", "search_answer_profile_id": "bv-1"},
     )
 
     assert response.status_code == 200
@@ -281,33 +295,35 @@ def test_business_view_serving_mode_flows_to_settings_and_diagnostics(
     assert settings is not None
     assert settings.rag_serving_mode == "fused"
     diagnostics = response.json()["data"]["diagnostics"]
-    assert diagnostics["business_view_applied"] == "bv-1"
+    assert diagnostics["search_answer_profile_applied"] == "bv-1"
 
 
 class FakeViewAndKbOracle:
-    """Business View と、その参照 KB(legacy query 付き)を返すテスト用 Oracle。"""
+    """Search Answer Profile と、その参照 KB(legacy query 付き)を返すテスト用 Oracle。"""
 
     def __init__(
         self,
-        views: dict[str, BusinessViewConfig],
+        views: dict[str, SearchAnswerProfileConfig],
         kb_configs: dict[str, KnowledgeBaseAdapterConfig],
     ) -> None:
         self._views = views
         self._kb_configs = kb_configs
 
-    async def get_business_view_knowledge(
-        self, business_view_id: str, kind: str
+    async def get_search_answer_profile_knowledge(
+        self, search_answer_profile_id: str, kind: str
     ) -> dict[str, object] | None:
         return None
 
-    async def get_business_view(self, business_view_id: str) -> BusinessViewDetail | None:
-        config = self._views.get(business_view_id)
+    async def get_search_answer_profile(
+        self, search_answer_profile_id: str
+    ) -> SearchAnswerProfileDetail | None:
+        config = self._views.get(search_answer_profile_id)
         if config is None:
             return None
-        return BusinessViewDetail(
-            id=business_view_id,
-            name=f"view {business_view_id}",
-            status=BusinessViewStatus.ACTIVE,
+        return SearchAnswerProfileDetail(
+            id=search_answer_profile_id,
+            name=f"view {search_answer_profile_id}",
+            status=SearchAnswerProfileStatus.ACTIVE,
             config=config,
             created_at=datetime(2026, 1, 1, tzinfo=UTC),
             updated_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -327,12 +343,12 @@ class FakeViewAndKbOracle:
         )
 
 
-def test_business_view_ignores_single_kb_legacy_query(monkeypatch: MonkeyPatch) -> None:
-    """Business View は単一 KB に解決しても KB legacy query を下層に重ねない。"""
+def test_search_answer_profile_ignores_single_kb_legacy_query(monkeypatch: MonkeyPatch) -> None:
+    """Search Answer Profile は単一 KB に解決しても KB legacy query を下層に重ねない。"""
     kb_config = KnowledgeBaseAdapterConfig.model_validate(
         {"query": {"vector_index_profile": "fast", "neighbor_child_count": 9}}
     )
-    view_config = BusinessViewConfig(
+    profile_config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1"],
         query=KnowledgeBaseQueryConfig(answer_flow="standard_rag"),
     )
@@ -341,35 +357,35 @@ def test_business_view_ignores_single_kb_legacy_query(monkeypatch: MonkeyPatch) 
         search_route,
         "OracleClient",
         lambda *_args, **_kwargs: FakeViewAndKbOracle(
-            {"bv-1": view_config},
+            {"bv-1": profile_config},
             {"kb-1": kb_config},
         ),
     )
 
     response = client.post(
         "/api/search",
-        json={"query": "上限額", "business_view_id": "bv-1"},
+        json={"query": "上限額", "search_answer_profile_id": "bv-1"},
     )
 
     assert response.status_code == 200
     settings = RecordingPipeline.captured_settings
     assert settings is not None
-    # Business View が設定した回答の設定は Business View 値が効く。
+    # Search Answer Profile が設定した回答の設定は Search Answer Profile 値が効く。
     assert settings.rag_answer_flow == "standard_rag"
-    # Business View が触れていない項目は KB legacy 値ではなく global 既定。
+    # Search Answer Profile が触れていない項目は KB legacy 値ではなく global 既定。
     assert settings.rag_neighbor_child_count == 3
     assert settings.rag_vector_index_profile == "accurate"
     diagnostics = response.json()["data"]["diagnostics"]
-    assert diagnostics["business_view_applied"] == "bv-1"
+    assert diagnostics["search_answer_profile_applied"] == "bv-1"
     assert diagnostics["kb_adapter_config_applied"] is None
 
 
 class FakeFieldSetOracle(FakeViewOracle):
-    """業務ビューと、KB ごとの項目抽出の定義(#549)を返すテスト用 Oracle。"""
+    """検索・回答プロファイルと、KB ごとの項目抽出の定義(#549)を返すテスト用 Oracle。"""
 
     def __init__(
         self,
-        views: dict[str, BusinessViewConfig],
+        views: dict[str, SearchAnswerProfileConfig],
         field_sets: dict[str, list[FieldDefinition] | None],
     ) -> None:
         super().__init__(views)
@@ -385,14 +401,15 @@ class FakeFieldSetOracle(FakeViewOracle):
         ]
 
 
-def test_search_extraction_fields_unions_business_view_knowledge_bases(
+def test_search_extraction_fields_unions_search_answer_profile_knowledge_bases(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """検索の絞り込みの項目は、選んだ業務ビューの KB の定義(無ければ既定)の和集合(#549)。"""
+    """検索の絞り込みの項目は、選んだ検索・回答プロファイル"
+    "の KB の定義(無ければ既定)の和集合(#549)。"""
     monkeypatch.setenv(fields_mod.FIELD_SCHEMA_FILE_ENV, str(tmp_path / "fields.json"))
     fields_mod.save_field_schema([FieldDefinition(name="請求書番号")])
     oracle = FakeFieldSetOracle(
-        {"bv-1": BusinessViewConfig(knowledge_base_ids=["kb-contract", "kb-default"])},
+        {"bv-1": SearchAnswerProfileConfig(knowledge_base_ids=["kb-contract", "kb-default"])},
         {
             "kb-contract": [
                 FieldDefinition(name="契約日", value_type="date"),
@@ -403,7 +420,7 @@ def test_search_extraction_fields_unions_business_view_knowledge_bases(
     )
     monkeypatch.setattr(search_route, "OracleClient", lambda *_args, **_kwargs: oracle)
 
-    response = client.get("/api/search/extraction-fields?business_view_id=bv-1")
+    response = client.get("/api/search/extraction-fields?search_answer_profile_id=bv-1")
 
     assert response.status_code == 200
     assert oracle.requested_kb_ids == ["kb-contract", "kb-default"]
@@ -415,11 +432,11 @@ def test_search_extraction_fields_unions_business_view_knowledge_bases(
 def test_search_extraction_fields_without_knowledge_bases_and_missing_view(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    oracle = FakeFieldSetOracle({"bv-empty": BusinessViewConfig()}, {})
+    oracle = FakeFieldSetOracle({"bv-empty": SearchAnswerProfileConfig()}, {})
     monkeypatch.setattr(search_route, "OracleClient", lambda *_args, **_kwargs: oracle)
 
-    empty = client.get("/api/search/extraction-fields?business_view_id=bv-empty")
+    empty = client.get("/api/search/extraction-fields?search_answer_profile_id=bv-empty")
     assert empty.status_code == 200
     assert empty.json()["data"]["fields"] == []
-    missing = client.get("/api/search/extraction-fields?business_view_id=bv-missing")
+    missing = client.get("/api/search/extraction-fields?search_answer_profile_id=bv-missing")
     assert missing.status_code == 404

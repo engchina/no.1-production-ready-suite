@@ -32,7 +32,7 @@ const RETENTION_OPTIONS: SelectFieldOption<string>[] = [
 
 /**
  * 質問履歴（rag_poc の QUERY_HISTORY_*）。全体設定で、既定は無効（質問の本文を保存するため）。
- * 有効にすると、回答に成功した質問を業務ビュー単位で保存し、RAG 検索に「よく聞かれている質問」を出す。
+ * 有効にすると、回答に成功した質問を検索・回答プロファイル単位で保存し、RAG 検索に「よく聞かれている質問」を出す。
  */
 export function QueryHistorySettingsCard() {
   const query = useQueryHistorySettings();

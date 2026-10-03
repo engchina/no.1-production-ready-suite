@@ -25,7 +25,7 @@ import { useLeaveGuard } from "@/lib/leave-guard";
 import { useAnsweringSettings, useUpdateAnsweringSettings } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 
-// 選択肢の名前は業務ビューの上書きの欄と同じ文言を使う（backend の QueryStrategy と同じ順）。
+// 選択肢の名前は検索・回答プロファイルの上書きの欄と同じ文言を使う（backend の QueryStrategy と同じ順）。
 const QUERY_STRATEGY_OPTIONS: SelectFieldOption<QueryStrategyName>[] = (
   [
     "auto_routing",
@@ -35,10 +35,10 @@ const QUERY_STRATEGY_OPTIONS: SelectFieldOption<QueryStrategyName>[] = (
     "step_back_prompting",
     "hyde",
   ] as const
-).map((value) => ({ value, label: t(`businessViews.queryStrategy.${value}`) }));
+).map((value) => ({ value, label: t(`searchAnswerProfiles.queryStrategy.${value}`) }));
 const ANSWER_FLOW_OPTIONS: SelectFieldOption<AnswerFlowName>[] = [
-  { value: "crag", label: t("businessViews.answerFlow.crag") },
-  { value: "standard_rag", label: t("businessViews.answerFlow.standard_rag") },
+  { value: "crag", label: t("searchAnswerProfiles.answerFlow.crag") },
+  { value: "standard_rag", label: t("searchAnswerProfiles.answerFlow.standard_rag") },
 ];
 // 0〜20（backend の rag_neighbor_child_count と同じ範囲）。SelectField は文字列値を扱う。
 const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
@@ -61,7 +61,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
 
 /**
  * 回答の検索と生成の全体既定（質問の拡張・回答の生成方式・根拠の前後の数・rerank・画面目録。#593）。
- * 業務ビューの「検索・回答設定」で上書きできる。業務ビューを指定しない呼び出し(MCP など)もこの値を使う。
+ * 検索・回答プロファイルの「検索・回答設定」で上書きできる。検索・回答プロファイルを指定しない呼び出し(MCP など)もこの値を使う。
  */
 export function AnsweringSettingsCard() {
   const query = useAnsweringSettings();

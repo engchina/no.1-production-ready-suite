@@ -1,6 +1,8 @@
-"""RAG の対象範囲（業務ビュー・ナレッジベース）の絞り込みテスト（#214）。
+"""RAG の対象範囲（検索・回答プロファイル・ナレッジベース）の絞り込みテスト（#214）。
 
-- Oracle の SQL に利用者の範囲の条件と bind が入ること（業務ビュー・回答履歴・文書・feedback）
+- Oracle の SQL に利用者の範囲の条件と bind が
+入ること（検索・回答プロファイル・回答履歴・文書・feedback）
+
 - DEFAULT の確認は範囲に関係なく行い、重複 INSERT しないこと
 - 検索の KB は利用者の範囲との積集合になること
 - 共通認証のテーブルをシステムテーブルの全再作成で消さないこと
@@ -20,11 +22,14 @@ from app.api.routes import search as search_route
 from app.clients.oracle import OracleClient, _feedback_dashboard_filters
 from app.config import Settings
 from app.main import app
-from app.rag.business_view_config import BusinessViewConfig, dump_business_view_config
 from app.rag.request_context import (
     AuditRequestContext,
     reset_audit_request_context,
     set_audit_request_context,
+)
+from app.rag.search_answer_profile_config import (
+    SearchAnswerProfileConfig,
+    dump_search_answer_profile_config,
 )
 from app.rag.system_schema import (
     MANAGED_TABLES,
@@ -32,13 +37,13 @@ from app.rag.system_schema import (
     RECREATE_CONFIRMATION,
     SystemSchemaManager,
 )
-from app.schemas.business_view import BusinessViewDetail
 from app.schemas.search import SearchRequest
+from app.schemas.search_answer_profile import SearchAnswerProfileDetail
 from app.security.permissions import SCOPE_FORBIDDEN_CODE
 from tests.security_support import enable_production_auth, login
 from tests.support import AsgiTestClient
 from tests.test_oracle_adapter import FakeOraclePool, _oracle_knowledge_base_row, _run_inline
-from tests.test_search_business_view import FakeViewOracle, RecordingPipeline
+from tests.test_search_search_answer_profile import FakeViewOracle, RecordingPipeline
 from tests.test_system_schema_manager import _FakeDatabase
 
 client = AsgiTestClient(app)
@@ -47,7 +52,7 @@ client = AsgiTestClient(app)
 @contextmanager
 def _scope(
     *,
-    business_view_ids: set[str] | None = None,
+    search_answer_profile_ids: set[str] | None = None,
     knowledge_base_ids: set[str] | None = None,
     user_id_hash: str | None = None,
     answer_records_unrestricted: bool = False,
@@ -57,8 +62,8 @@ def _scope(
             request_id="scope-test",
             user_id_hash=user_id_hash,
             answer_records_unrestricted=answer_records_unrestricted,
-            allowed_business_view_ids=(
-                None if business_view_ids is None else frozenset(business_view_ids)
+            allowed_search_answer_profile_ids=(
+                None if search_answer_profile_ids is None else frozenset(search_answer_profile_ids)
             ),
             allowed_knowledge_base_ids=(
                 None if knowledge_base_ids is None else frozenset(knowledge_base_ids)
@@ -76,54 +81,54 @@ def _client(pool: FakeOraclePool) -> OracleClient:
 
 
 # ---------------------------------------------------------------------------
-# 業務ビュー
+# 検索・回答プロファイル
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_business_view_list_count_and_get_are_scoped() -> None:
+async def test_search_answer_profile_list_count_and_get_are_scoped() -> None:
     pool = FakeOraclePool(execute_results=[[], [{"count_value": 0}], []])
     oracle = _client(pool)
-    with _scope(business_view_ids={"bv-2", "bv-1"}):
-        assert await oracle.list_business_views() == []
-        assert await oracle.count_business_views() == 0
-        assert await oracle.get_business_view("bv-3") is None
+    with _scope(search_answer_profile_ids={"bv-2", "bv-1"}):
+        assert await oracle.list_search_answer_profiles() == []
+        assert await oracle.count_search_answer_profiles() == 0
+        assert await oracle.get_search_answer_profile("bv-3") is None
     calls = pool.connection.calls
     assert len(calls) == 3
     for call in calls:
         assert (
-            "bv.business_view_id IN (:access_business_view_id_0, :access_business_view_id_1)"
-            in call.statement
-        )
-        assert call.parameters["access_business_view_id_0"] == "bv-1"
-        assert call.parameters["access_business_view_id_1"] == "bv-2"
+            "bv.search_answer_profile_id IN (:access_search_answ"
+            "er_profile_id_0, :access_search_answer_profile_id_1)"
+        ) in call.statement
+        assert call.parameters["access_search_answer_profile_id_0"] == "bv-1"
+        assert call.parameters["access_search_answer_profile_id_1"] == "bv-2"
 
 
 @pytest.mark.anyio
-async def test_business_view_scope_empty_denies_all_and_none_is_unrestricted() -> None:
+async def test_search_answer_profile_scope_empty_denies_all_and_none_is_unrestricted() -> None:
     pool = FakeOraclePool(execute_results=[[], []])
     oracle = _client(pool)
-    with _scope(business_view_ids=set()):
-        await oracle.list_business_views()
+    with _scope(search_answer_profile_ids=set()):
+        await oracle.list_search_answer_profiles()
     with _scope():
-        await oracle.list_business_views()
+        await oracle.list_search_answer_profiles()
     restricted, unrestricted = pool.connection.calls
     assert "1 = 0" in restricted.statement
-    assert "access_business_view_id" not in unrestricted.statement
+    assert "access_search_answer_profile_id" not in unrestricted.statement
     assert "1 = 0" not in unrestricted.statement
 
 
 @pytest.mark.anyio
-async def test_business_view_update_and_archive_treat_out_of_scope_as_missing() -> None:
+async def test_search_answer_profile_update_and_archive_treat_out_of_scope_as_missing() -> None:
     pool = FakeOraclePool(execute_results=[[], []])
     oracle = _client(pool)
-    with _scope(business_view_ids={"bv-1"}):
+    with _scope(search_answer_profile_ids={"bv-1"}):
         with pytest.raises(KeyError):
-            await oracle.update_business_view("bv-9", name="x", update_fields={"name"})
+            await oracle.update_search_answer_profile("bv-9", name="x", update_fields={"name"})
         with pytest.raises(KeyError):
-            await oracle.archive_business_view("bv-9")
+            await oracle.archive_search_answer_profile("bv-9")
     for call in pool.connection.calls:
-        assert "business_view_id IN (:access_business_view_id_0)" in call.statement
+        assert "search_answer_profile_id IN (:access_search_answer_profile_id_0)" in call.statement
     assert not any(call.statement.startswith("UPDATE") for call in pool.connection.calls)
 
 
@@ -133,30 +138,30 @@ async def test_business_view_update_and_archive_treat_out_of_scope_as_missing() 
 
 
 @pytest.mark.anyio
-async def test_answer_records_are_scoped_to_allowed_business_views() -> None:
+async def test_answer_records_are_scoped_to_allowed_search_answer_profiles() -> None:
     pool = FakeOraclePool(execute_results=[[], [], [], []])
     oracle = _client(pool)
-    with _scope(business_view_ids={"bv-1"}):
-        await oracle.list_answer_records(business_view_id=None, limit=10)
-        await oracle.list_answer_records(business_view_id="bv-9", limit=10)
+    with _scope(search_answer_profile_ids={"bv-1"}):
+        await oracle.list_answer_records(search_answer_profile_id=None, limit=10)
+        await oracle.list_answer_records(search_answer_profile_id="bv-9", limit=10)
         assert await oracle.get_answer_record("trace-1") is None
         assert await oracle.save_answer_evaluation("trace-1", {"score": 1}) is False
         assert await oracle.delete_answer_record("trace-1") is False
     statements = [call.statement for call in pool.connection.calls]
     assert len(statements) == 5
     for call in pool.connection.calls:
-        assert "business_view_id IN (:access_business_view_id_0)" in call.statement
-        assert call.parameters["access_business_view_id_0"] == "bv-1"
-    # 明示した業務ビューも範囲の条件と AND で組み合わせる（範囲外は 0 件）。
-    assert "business_view_id = :business_view_id" in statements[1]
+        assert "search_answer_profile_id IN (:access_search_answer_profile_id_0)" in call.statement
+        assert call.parameters["access_search_answer_profile_id_0"] == "bv-1"
+    # 明示した検索・回答プロファイルも範囲の条件と AND で組み合わせる（範囲外は 0 件）。
+    assert "search_answer_profile_id = :search_answer_profile_id" in statements[1]
 
 
 @pytest.mark.anyio
 async def test_answer_records_are_unrestricted_without_scope() -> None:
     pool = FakeOraclePool(execute_results=[[]])
     with _scope():
-        await _client(pool).list_answer_records(business_view_id=None, limit=10)
-    assert "access_business_view_id" not in pool.connection.calls[0].statement
+        await _client(pool).list_answer_records(search_answer_profile_id=None, limit=10)
+    assert "access_search_answer_profile_id" not in pool.connection.calls[0].statement
 
 
 @pytest.mark.anyio
@@ -165,8 +170,8 @@ async def test_answer_records_are_scoped_to_owner() -> None:
     pool = FakeOraclePool(execute_results=[[], [{"count_value": 0}], [], [], []])
     oracle = _client(pool)
     with _scope(user_id_hash="owner-hash"):
-        await oracle.list_answer_records(business_view_id="bv-1", limit=10)
-        assert await oracle.count_answer_records(business_view_id="bv-1") == 0
+        await oracle.list_answer_records(search_answer_profile_id="bv-1", limit=10)
+        assert await oracle.count_answer_records(search_answer_profile_id="bv-1") == 0
         assert await oracle.get_answer_record("trace-1") is None
         assert await oracle.save_answer_evaluation("trace-1", {"score": 1}) is False
         assert await oracle.delete_answer_record("trace-1") is False
@@ -184,14 +189,16 @@ async def test_answer_records_are_unrestricted_for_managers() -> None:
     pool = FakeOraclePool(execute_results=[[], [{"count_value": 3}]])
     oracle = _client(pool)
     with _scope(
-        business_view_ids={"bv-1"}, user_id_hash="manager-hash", answer_records_unrestricted=True
+        search_answer_profile_ids={"bv-1"},
+        user_id_hash="manager-hash",
+        answer_records_unrestricted=True,
     ):
-        await oracle.list_answer_records(business_view_id=None, limit=10)
-        assert await oracle.count_answer_records(business_view_id=None) == 3
+        await oracle.list_answer_records(search_answer_profile_id=None, limit=10)
+        assert await oracle.count_answer_records(search_answer_profile_id=None) == 3
     for call in pool.connection.calls:
         assert "answer_owner_user_id_hash" not in call.statement
-        # 業務ビューの範囲の制限は持ち主と別に残る。
-        assert "business_view_id IN (:access_business_view_id_0)" in call.statement
+        # 検索・回答プロファイルの範囲の制限は持ち主と別に残る。
+        assert "search_answer_profile_id IN (:access_search_answer_profile_id_0)" in call.statement
 
 
 @pytest.mark.anyio
@@ -200,9 +207,9 @@ async def test_answer_records_filter_trace_ids() -> None:
     oracle = _client(pool)
     with _scope(user_id_hash="owner-hash"):
         await oracle.list_answer_records(
-            business_view_id="bv-1", limit=10, trace_ids=["trace-1", "trace-2"]
+            search_answer_profile_id="bv-1", limit=10, trace_ids=["trace-1", "trace-2"]
         )
-        await oracle.list_answer_records(business_view_id="bv-1", limit=10, trace_ids=[])
+        await oracle.list_answer_records(search_answer_profile_id="bv-1", limit=10, trace_ids=[])
     listed, empty = pool.connection.calls
     assert "trace_id IN (:trace_id_0, :trace_id_1)" in listed.statement
     assert listed.parameters["trace_id_1"] == "trace-2"
@@ -255,30 +262,34 @@ def test_answer_history_api_limits_regular_users_to_own_answers(
     assert "answer_owner_user_id_hash" not in admin_list.statement
 
 
-def test_feedback_filters_are_scoped_to_allowed_business_views() -> None:
-    with _scope(business_view_ids={"bv-1", "bv-2"}):
+def test_feedback_filters_are_scoped_to_allowed_search_answer_profiles() -> None:
+    with _scope(search_answer_profile_ids={"bv-1", "bv-2"}):
         where_sql, binds = _feedback_dashboard_filters(
-            business_view_id=None,
+            search_answer_profile_id=None,
             target_type=None,
             rating=None,
             reason=None,
             period_days=None,
             search_query=None,
         )
-    assert "f.business_view_id IN (:access_business_view_id_0, :access_business_view_id_1)" in (
-        where_sql
-    )
-    assert binds == {"access_business_view_id_0": "bv-1", "access_business_view_id_1": "bv-2"}
+    assert (
+        "f.search_answer_profile_id IN (:access_search_answe"
+        "r_profile_id_0, :access_search_answer_profile_id_1)"
+    ) in (where_sql)
+    assert binds == {
+        "access_search_answer_profile_id_0": "bv-1",
+        "access_search_answer_profile_id_1": "bv-2",
+    }
 
 
 @pytest.mark.anyio
-async def test_feedback_detail_is_scoped_to_allowed_business_views() -> None:
+async def test_feedback_detail_is_scoped_to_allowed_search_answer_profiles() -> None:
     pool = FakeOraclePool(execute_results=[[]])
-    with _scope(business_view_ids={"bv-1"}):
+    with _scope(search_answer_profile_ids={"bv-1"}):
         assert await _client(pool).get_feedback_detail("feedback-1") is None
     call = pool.connection.calls[0]
-    assert "f.business_view_id IN (:access_business_view_id_0)" in call.statement
-    assert call.parameters["access_business_view_id_0"] == "bv-1"
+    assert "f.search_answer_profile_id IN (:access_search_answer_profile_id_0)" in call.statement
+    assert call.parameters["access_search_answer_profile_id_0"] == "bv-1"
 
 
 # ---------------------------------------------------------------------------
@@ -384,15 +395,15 @@ def test_upload_without_knowledge_base_is_rejected_for_restricted_user(
 # ---------------------------------------------------------------------------
 
 
-def _default_business_view_row(knowledge_base_id: str) -> dict[str, object]:
+def _default_search_answer_profile_row(knowledge_base_id: str) -> dict[str, object]:
     return {
-        "business_view_id": "bv-default",
+        "search_answer_profile_id": "bv-default",
         "tenant_id_hash": None,
         "name": "DEFAULT",
-        "description": "既定の業務ビュー",
+        "description": "既定の検索・回答プロファイル",
         "status": "ACTIVE",
-        "view_config": dump_business_view_config(
-            BusinessViewConfig(knowledge_base_ids=[knowledge_base_id])
+        "profile_config": dump_search_answer_profile_config(
+            SearchAnswerProfileConfig(knowledge_base_ids=[knowledge_base_id])
         ),
         "created_at": datetime(2026, 1, 1, tzinfo=UTC),
         "updated_at": datetime(2026, 1, 1, tzinfo=UTC),
@@ -401,16 +412,16 @@ def _default_business_view_row(knowledge_base_id: str) -> dict[str, object]:
 
 
 @pytest.mark.anyio
-async def test_default_business_view_is_checked_without_user_scope() -> None:
-    """DEFAULT KB / 業務ビューが利用者の範囲外でも「ない」と判断して重複作成しない。"""
+async def test_default_search_answer_profile_is_checked_without_user_scope() -> None:
+    """DEFAULT KB / 検索・回答プロファイルが利用者の範囲外でも「ない」と判断して重複作成しない。"""
     pool = FakeOraclePool(
         execute_results=[
             [_oracle_knowledge_base_row(name="DEFAULT")],
-            [_default_business_view_row("kb-1")],
+            [_default_search_answer_profile_row("kb-1")],
         ]
     )
-    with _scope(business_view_ids={"bv-1"}, knowledge_base_ids={"kb-other"}):
-        view = await _client(pool).ensure_default_business_view()
+    with _scope(search_answer_profile_ids={"bv-1"}, knowledge_base_ids={"kb-other"}):
+        view = await _client(pool).ensure_default_search_answer_profile()
     assert view.name == "DEFAULT"
     statements = [call.statement for call in pool.connection.calls]
     assert len(statements) == 2
@@ -425,22 +436,25 @@ async def test_default_business_view_is_checked_without_user_scope() -> None:
 
 
 class ScopedViewOracle(FakeViewOracle):
-    """範囲外の業務ビューを「存在しない」として返す fake（Oracle の SQL と同じ扱い）。"""
+    """範囲外の検索・回答プロファイルを「存在しない」として返"
+    "す fake（Oracle の SQL と同じ扱い）。"""
 
-    async def get_business_view(self, business_view_id: str) -> BusinessViewDetail | None:
+    async def get_search_answer_profile(
+        self, search_answer_profile_id: str
+    ) -> SearchAnswerProfileDetail | None:
         from app.rag.request_context import current_audit_request_context
 
-        allowed = current_audit_request_context().allowed_business_view_ids
-        if allowed is not None and business_view_id not in allowed:
+        allowed = current_audit_request_context().allowed_search_answer_profile_ids
+        if allowed is not None and search_answer_profile_id not in allowed:
             return None
-        return await super().get_business_view(business_view_id)
+        return await super().get_search_answer_profile(search_answer_profile_id)
 
 
 def _install_search(monkeypatch: MonkeyPatch) -> None:
     views = {
-        "bv-1": BusinessViewConfig(knowledge_base_ids=["kb-1", "kb-2"]),
-        "bv-2": BusinessViewConfig(knowledge_base_ids=["kb-3"]),
-        "bv-3": BusinessViewConfig(knowledge_base_ids=["kb-8", "kb-9"]),
+        "bv-1": SearchAnswerProfileConfig(knowledge_base_ids=["kb-1", "kb-2"]),
+        "bv-2": SearchAnswerProfileConfig(knowledge_base_ids=["kb-3"]),
+        "bv-3": SearchAnswerProfileConfig(knowledge_base_ids=["kb-8", "kb-9"]),
     }
     RecordingPipeline.captured_request = None
     monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
@@ -454,28 +468,32 @@ def _captured_knowledge_base_ids() -> list[str]:
     return list(captured.knowledge_base_ids)
 
 
-def test_search_intersects_business_view_kbs_with_allowed_kbs(monkeypatch: MonkeyPatch) -> None:
+def test_search_intersects_search_answer_profile_kbs_with_allowed_kbs(
+    monkeypatch: MonkeyPatch,
+) -> None:
     _install_search(monkeypatch)
     auth = enable_production_auth(monkeypatch)
     auth.user_with_permissions(
-        "searcher", ["menu.search"], business_view_ids=["bv-1"], knowledge_base_ids=["kb-1"]
+        "searcher", ["menu.search"], search_answer_profile_ids=["bv-1"], knowledge_base_ids=["kb-1"]
     )
     auth.user_with_permissions(
-        "kb-manager", ["menu.search", "rag.knowledge_bases.manage"], business_view_ids=["bv-1"]
+        "kb-manager",
+        ["menu.search", "rag.knowledge_bases.manage"],
+        search_answer_profile_ids=["bv-1"],
     )
     headers = login(client, "searcher")
 
     response = client.post(
-        "/api/search", json={"query": "規程", "business_view_id": "bv-1"}, headers=headers
+        "/api/search", json={"query": "規程", "search_answer_profile_id": "bv-1"}, headers=headers
     )
     assert response.status_code == 200, response.text
     assert _captured_knowledge_base_ids() == ["kb-1"]
 
-    # request が業務ビューを上書きして範囲外の KB を指定しても読めない。
+    # request が検索・回答プロファイルを上書きして範囲外の KB を指定しても読めない。
     RecordingPipeline.captured_request = None
     override = client.post(
         "/api/search",
-        json={"query": "規程", "business_view_id": "bv-1", "knowledge_base_ids": ["kb-3"]},
+        json={"query": "規程", "search_answer_profile_id": "bv-1", "knowledge_base_ids": ["kb-3"]},
         headers=headers,
     )
     assert override.status_code == 403
@@ -491,38 +509,41 @@ def test_search_intersects_business_view_kbs_with_allowed_kbs(monkeypatch: Monke
     assert mixed.status_code == 200
     assert _captured_knowledge_base_ids() == ["kb-1"]
 
-    # 範囲外の業務ビューは存在しないものとして 404。
+    # 範囲外の検索・回答プロファイルは存在しないものとして 404。
     missing = client.post(
-        "/api/search", json={"query": "規程", "business_view_id": "bv-2"}, headers=headers
+        "/api/search", json={"query": "規程", "search_answer_profile_id": "bv-2"}, headers=headers
     )
     assert missing.status_code == 404
 
-    # KB の範囲が無制限（rag.knowledge_bases.manage）なら業務ビューの KB をそのまま使う。
+    # KB の範囲が無制限（rag.knowledge_bases.m
+    # anage）なら検索・回答プロファイルの KB をそのまま使う。
+    #
     manager = login(client, "kb-manager")
     response = client.post(
-        "/api/search", json={"query": "規程", "business_view_id": "bv-1"}, headers=manager
+        "/api/search", json={"query": "規程", "search_answer_profile_id": "bv-1"}, headers=manager
     )
     assert response.status_code == 200
     assert _captured_knowledge_base_ids() == ["kb-1", "kb-2"]
 
 
-def test_business_view_without_permitted_kbs_is_forbidden_not_empty(
+def test_search_answer_profile_without_permitted_kbs_is_forbidden_not_empty(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """業務ビューの KB が 1 つも許可されていない検索は、黙って 0 件にせず 403 にする。"""
+    """検索・回答プロファイルの KB が 1 つも許可され"
+    "ていない検索は、黙って 0 件にせず 403 にする。"""
     _install_search(monkeypatch)
     auth = enable_production_auth(monkeypatch)
     auth.user_with_permissions(
         "searcher",
         ["menu.search"],
-        business_view_ids=["bv-1", "bv-3"],
+        search_answer_profile_ids=["bv-1", "bv-3"],
         knowledge_base_ids=["kb-1"],
     )
     headers = login(client, "searcher")
-    message = [search_route.BUSINESS_VIEW_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE]
+    message = [search_route.SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE]
     for path in ("/api/search", "/api/search/stream"):
         denied = client.post(
-            path, json={"query": "規程", "business_view_id": "bv-3"}, headers=headers
+            path, json={"query": "規程", "search_answer_profile_id": "bv-3"}, headers=headers
         )
         assert denied.status_code == 403, path
         assert denied.json()["error_messages"] == message
@@ -531,7 +552,9 @@ def test_business_view_without_permitted_kbs_is_forbidden_not_empty(
     assert RecordingPipeline.captured_request is None
 
     stream = client.post(
-        "/api/search/stream", json={"query": "規程", "business_view_id": "bv-1"}, headers=headers
+        "/api/search/stream",
+        json={"query": "規程", "search_answer_profile_id": "bv-1"},
+        headers=headers,
     )
     assert stream.status_code == 200
     assert "event: done" in stream.text
@@ -539,20 +562,20 @@ def test_business_view_without_permitted_kbs_is_forbidden_not_empty(
 
 
 def test_chat_stream_without_permitted_kbs_is_forbidden(monkeypatch: MonkeyPatch) -> None:
-    """チャットも、業務ビューの KB が 1 つも許可されていなければ stream の前に 403。"""
+    """チャットも、検索・回答プロファイルの KB が 1 つも許可されていなければ stream の前に 403。"""
     from app.api.routes import chat as chat_route
     from app.clients.oracle import StoredConversation
 
     views = {
-        "bv-1": BusinessViewConfig(knowledge_base_ids=["kb-1", "kb-2"]),
-        "bv-3": BusinessViewConfig(knowledge_base_ids=["kb-9"]),
+        "bv-1": SearchAnswerProfileConfig(knowledge_base_ids=["kb-1", "kb-2"]),
+        "bv-3": SearchAnswerProfileConfig(knowledge_base_ids=["kb-9"]),
     }
 
     class FakeChatOracle(ScopedViewOracle):
         async def get_conversation(self, conversation_id: str) -> StoredConversation | None:
             return StoredConversation(
                 id=conversation_id,
-                business_view_id="bv-3",
+                search_answer_profile_id="bv-3",
                 created_at=datetime(2026, 1, 1, tzinfo=UTC),
                 updated_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
@@ -565,7 +588,10 @@ def test_chat_stream_without_permitted_kbs_is_forbidden(monkeypatch: MonkeyPatch
     monkeypatch.setattr(chat_route, "_stream_chat_events", fail_stream)
     auth = enable_production_auth(monkeypatch)
     auth.user_with_permissions(
-        "chatter", ["menu.chat"], business_view_ids=["bv-1", "bv-3"], knowledge_base_ids=["kb-1"]
+        "chatter",
+        ["menu.chat"],
+        search_answer_profile_ids=["bv-1", "bv-3"],
+        knowledge_base_ids=["kb-1"],
     )
     response = client.post(
         "/api/chat/conversations/conversation-1/messages/stream",
@@ -574,19 +600,19 @@ def test_chat_stream_without_permitted_kbs_is_forbidden(monkeypatch: MonkeyPatch
     )
     assert response.status_code == 403
     assert response.json()["error_messages"] == [
-        search_route.BUSINESS_VIEW_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE
+        search_route.SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE
     ]
 
 
-def test_ensure_business_view_knowledge_bases_permitted() -> None:
+def test_ensure_search_answer_profile_knowledge_bases_permitted() -> None:
     with _scope():
-        search_route.ensure_business_view_knowledge_bases_permitted(["kb-9"])
+        search_route.ensure_search_answer_profile_knowledge_bases_permitted(["kb-9"])
     with _scope(knowledge_base_ids={"kb-1"}):
-        search_route.ensure_business_view_knowledge_bases_permitted(["kb-1", "kb-9"])
-        # 参照 KB のない業務ビューは Oracle の条件が範囲へ絞る（ここでは拒否しない）。
-        search_route.ensure_business_view_knowledge_bases_permitted([])
+        search_route.ensure_search_answer_profile_knowledge_bases_permitted(["kb-1", "kb-9"])
+        # 参照 KB のない検索・回答プロファイルは Oracle の条件が範囲へ絞る（ここでは拒否しない）。
+        search_route.ensure_search_answer_profile_knowledge_bases_permitted([])
         with pytest.raises(SecurityApiError) as denied:
-            search_route.ensure_business_view_knowledge_bases_permitted(["kb-9"])
+            search_route.ensure_search_answer_profile_knowledge_bases_permitted(["kb-9"])
     assert (denied.value.status_code, denied.value.code) == (403, SCOPE_FORBIDDEN_CODE)
 
 
@@ -619,9 +645,11 @@ def test_preserved_platform_tables_are_not_managed() -> None:
         "PLATFORM_AUTH_SESSIONS",
     }
     assert set(PRESERVED_TABLES).isdisjoint(MANAGED_TABLES)
-    assert {"RAG_ROLE_PERMISSIONS", "RAG_ROLE_BUSINESS_VIEWS", "RAG_ROLE_KNOWLEDGE_BASES"} <= set(
-        MANAGED_TABLES
-    )
+    assert {
+        "RAG_ROLE_PERMISSIONS",
+        "RAG_ROLE_SEARCH_ANSWER_PROFILES",
+        "RAG_ROLE_KNOWLEDGE_BASES",
+    } <= set(MANAGED_TABLES)
 
 
 def test_initialize_creates_platform_auth_tables_first_and_recreate_keeps_them() -> None:
@@ -643,15 +671,15 @@ def test_initialize_creates_platform_auth_tables_first_and_recreate_keeps_them()
 
 
 @pytest.mark.anyio
-async def test_conversations_are_scoped_to_allowed_business_views() -> None:
+async def test_conversations_are_scoped_to_allowed_search_answer_profiles() -> None:
     pool = FakeOraclePool(execute_results=[[], []])
     oracle = _client(pool)
-    with _scope(business_view_ids={"bv-1"}):
+    with _scope(search_answer_profile_ids={"bv-1"}):
         assert await oracle.get_conversation("conversation-1") is None
         assert await oracle.list_conversations() == []
     for call in pool.connection.calls:
-        assert "business_view_id IN (:access_business_view_id_0)" in call.statement
-        assert call.parameters["access_business_view_id_0"] == "bv-1"
+        assert "search_answer_profile_id IN (:access_search_answer_profile_id_0)" in call.statement
+        assert call.parameters["access_search_answer_profile_id_0"] == "bv-1"
 
 
 @pytest.mark.anyio

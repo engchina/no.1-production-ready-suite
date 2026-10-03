@@ -3,7 +3,9 @@
 rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子文脈 / 生成 + 監査ラウンド)を
 そのまま使い、``AnswerDependencies`` の I/O だけを差し替える。
 
-- 検索: backend の Oracle hybrid 検索(業務ビューの KB フィルタとドメインキーワード付き)。
+- 検索: backend の Oracle hybrid 検索(
+検索・回答プロファイルの KB フィルタとドメインキーワード付き)。
+
   複数の検索文は原質問主軸の重み付き RRF で融合し、同じ親の兄弟 chunk と
   親本文(``parent_text``)で親子を復元する。
   質問の理解(``inquiry_conditions``)が名指しした文書名・ページは検索条件に足し、

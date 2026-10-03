@@ -112,7 +112,7 @@ def test_answers_evaluates_resumes_and_summarizes(
     )
     out = tmp_path / "out"
     api = FakeApi(fail_ids={"失敗する質問"})
-    args = ["answers", "--qa", str(qa), "--business-view", "bv-1", "--out", str(out)]
+    args = ["answers", "--qa", str(qa), "--search-answer-profile", "bv-1", "--out", str(out)]
 
     assert main([*args, "--tenant-id", "tenant-a"], transport=httpx.MockTransport(api)) == 0
     first_calls = len(api.requests)
@@ -123,7 +123,7 @@ def test_answers_evaluates_resumes_and_summarizes(
     search_path, search_body, headers = api.requests[0]
     assert (search_path, search_body) == (
         "/api/search",
-        {"query": "承認者は？", "business_view_id": "bv-1"},
+        {"query": "承認者は？", "search_answer_profile_id": "bv-1"},
     )
     assert headers["x-tenant-id"] == "tenant-a"
     a1 = json.loads((out / "a1.json").read_text(encoding="utf-8"))
@@ -142,7 +142,15 @@ def test_answers_records_error_when_answer_has_no_record(tmp_path: Path) -> None
     api = FakeApi(path="blocked")
 
     main(
-        ["answers", "--qa", str(qa), "--business-view", "bv-1", "--out", str(tmp_path / "out")],
+        [
+            "answers",
+            "--qa",
+            str(qa),
+            "--search-answer-profile",
+            "bv-1",
+            "--out",
+            str(tmp_path / "out"),
+        ],
         transport=httpx.MockTransport(api),
     )
 
@@ -176,7 +184,7 @@ def test_regression_runs_repeats_resumes_and_summarizes(tmp_path: Path) -> None:
         "regression",
         "--cases",
         str(cases),
-        "--business-view",
+        "--search-answer-profile",
         "bv-1",
         "--out",
         str(out),

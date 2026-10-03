@@ -66,7 +66,7 @@ def local_debug_principal() -> Principal:
         session_id="local-debug",
         csrf_token_hash="",  # nosec B106 - local はブラウザのセッションを作らない
         password_change_allowed=False,
-        allowed_business_view_ids=None,
+        allowed_search_answer_profile_ids=None,
         allowed_knowledge_base_ids=None,
     )
 
@@ -100,7 +100,7 @@ def audit_context_for_request(
         request_id=request_id,
         settings=settings,
         user_uuid=rag_principal.user_uuid,
-        allowed_business_view_ids=rag_principal.allowed_business_view_ids,
+        allowed_search_answer_profile_ids=rag_principal.allowed_search_answer_profile_ids,
         allowed_knowledge_base_ids=rag_principal.allowed_knowledge_base_ids,
         service_token_claims=claims if isinstance(claims, dict) else None,
         # 保存済みの回答は持ち主だけが扱う。SYSTEM_ADMIN と rag.feedback.manage は全件（#304）。

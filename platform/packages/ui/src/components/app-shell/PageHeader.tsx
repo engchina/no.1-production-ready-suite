@@ -40,7 +40,7 @@ export interface PageHeaderBack {
   label: string;
   /** 戻る操作（未保存の変更の確認は呼び出し側の離脱ガードが行う。#586）。 */
   onClick: () => void;
-  /** 読み上げ名（戻り先を足すとき。例:「業務ビューの一覧へ戻る」）。省略すると label。 */
+  /** 読み上げ名（戻り先を足すとき。例:「検索・回答プロファイルの一覧へ戻る」）。省略すると label。 */
   ariaLabel?: string;
   disabled?: boolean;
   testId?: string;

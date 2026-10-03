@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { firstInvalidFieldId, requiredTextError } from "./required-fields";
 
-describe("必須の入力欄（業務ビュー・ナレッジベースの名前と説明）", () => {
+describe("必須の入力欄（検索・回答プロファイル・ナレッジベースの名前と説明）", () => {
   it("空・空白だけ（全角空白・改行を含む）は未入力として文言を返す", () => {
     expect(requiredTextError("", "説明を入力してください。")).toBe("説明を入力してください。");
     expect(requiredTextError(" 　\n\t", "説明を入力してください。")).toBe("説明を入力してください。");

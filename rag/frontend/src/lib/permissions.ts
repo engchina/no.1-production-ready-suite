@@ -9,7 +9,7 @@
 export const MENU_PERMISSIONS = {
   search: "menu.search",
   chat: "menu.chat",
-  businessViews: "menu.business_views",
+  searchAnswerProfiles: "menu.search_answer_profiles",
   evaluation: "menu.evaluation",
   feedback: "menu.feedback",
   upload: "menu.upload",
@@ -39,8 +39,8 @@ export const MENU_PERMISSIONS = {
 } as const;
 
 export const CAPABILITY_PERMISSIONS = {
-  /** 業務ビューの作成・アーカイブと、すべての業務ビューの利用。 */
-  businessViewsManage: "rag.business_views.manage",
+  /** 検索・回答プロファイルの作成・アーカイブと、すべての検索・回答プロファイルの利用。 */
+  searchAnswerProfilesManage: "rag.search_answer_profiles.manage",
   /** ナレッジベースの作成・アーカイブと、すべてのナレッジベースの利用。 */
   knowledgeBasesManage: "rag.knowledge_bases.manage",
   /** フィードバックの回答を承認済み FAQ へ反映する。 */

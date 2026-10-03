@@ -12,7 +12,7 @@ import {
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
-  await page.route("**/api/business-views**", (route) =>
+  await page.route("**/api/search-answer-profiles**", (route) =>
     route.fulfill({
       json: {
         data: {
@@ -98,7 +98,7 @@ test("高密度一覧を検索・数値ページングし、行を選ぶと分�
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "会話を開く" })).toHaveAttribute(
     "href",
-    "/chat?business_view_id=bv-1&conversation_id=conv-1#message-msg-1"
+    "/chat?search_answer_profile_id=bv-1&conversation_id=conv-1#message-msg-1"
   );
 
   await page.screenshot({ path: testInfo.outputPath("feedback-root-cause-desktop.png"), fullPage: true });
@@ -256,7 +256,7 @@ test("回答のフィードバックを詳細から Approved FAQ に登録し、
     promoted = route.request().method() === "POST";
     await route.fulfill({
       json: {
-        data: { business_view_id: "bv-1", question: "最新の経費申請期限を教えて", inserted_count: 1, deleted_count: 0 },
+        data: { search_answer_profile_id: "bv-1", question: "最新の経費申請期限を教えて", inserted_count: 1, deleted_count: 0 },
         error_messages: [],
         warning_messages: [],
       },
@@ -283,7 +283,7 @@ test("回答のフィードバックを詳細から Approved FAQ に登録し、
   const actions = detail.getByTestId("feedback-detail-actions");
 
   await actions.getByRole("button", { name: "Approved FAQ に登録" }).click();
-  const confirmDialog = page.getByRole("alertdialog", { name: "業務ビューの Approved FAQ に登録しますか？" });
+  const confirmDialog = page.getByRole("alertdialog", { name: "検索・回答プロファイルの Approved FAQ に登録しますか？" });
   await confirmDialog.getByRole("button", { name: "Approved FAQ に登録" }).click();
   await expect(page.getByText("Approved FAQ に登録しました: 最新の経費申請期限を教えて")).toBeVisible();
   expect(promoted).toBe(true);
@@ -302,7 +302,7 @@ test("承認 FAQ への反映の権限が無い利用者には Approved FAQ へ�
   // フィードバックの閲覧だけを持つ DB ユーザー（rag.feedback.manage なし。#214）。
   await mockAuthUser(page, {
     permissions: ["menu.feedback", "menu.evaluation"],
-    allowed_business_view_ids: ["bv-1"],
+    allowed_search_answer_profile_ids: ["bv-1"],
   });
   await page.route("**/api/feedback/feedback-answer", (route) => {
     const envelope = feedbackDetailEnvelope();
@@ -336,7 +336,7 @@ test("見える範囲を案内する: SYSTEM_ADMIN はすべての利用者の�
   // SYSTEM_ADMIN 以外のロール（承認 FAQ への反映の権限を持っていても同じ）。後の route が優先する。
   await mockAuthUser(page, {
     permissions: ["menu.feedback", "rag.feedback.manage"],
-    allowed_business_view_ids: ["bv-1"],
+    allowed_search_answer_profile_ids: ["bv-1"],
   });
   await page.reload();
   const ownNotice = page.getByRole("status").filter({ hasText: "自分が送ったフィードバックだけを表示しています" });
@@ -451,8 +451,8 @@ function feedbackEnvelope(limit: number, offset: number) {
           {
             feedback_id: "feedback-answer",
             trace_id: "trace-answer-123456789",
-            business_view_id: "bv-1",
-            business_view_name: "経理ビュー",
+            search_answer_profile_id: "bv-1",
+            search_answer_profile_name: "経理ビュー",
             target_type: "answer",
             source_surface: "chat",
             document_id: null,
@@ -473,8 +473,8 @@ function feedbackEnvelope(limit: number, offset: number) {
           {
             feedback_id: "feedback-citation",
             trace_id: "trace-citation-123456789",
-            business_view_id: "bv-1",
-            business_view_name: "経理ビュー",
+            search_answer_profile_id: "bv-1",
+            search_answer_profile_name: "経理ビュー",
             target_type: "citation",
             source_surface: "search",
             document_id: "doc-1",
@@ -493,11 +493,11 @@ function feedbackEnvelope(limit: number, offset: number) {
             has_comment: false,
           },
           {
-            // 列幅の検査用: 最も長い対象 / 送信元・理由・業務ビュー名・モデル名
+            // 列幅の検査用: 最も長い対象 / 送信元・理由・検索・回答プロファイル名・モデル名
             feedback_id: "feedback-legacy-long",
             trace_id: "trace-legacy-long",
-            business_view_id: "bv-2",
-            business_view_name: "経理・財務・監査の横断ナレッジ業務ビュー",
+            search_answer_profile_id: "bv-2",
+            search_answer_profile_name: "経理・財務・監査の横断ナレッジ検索・回答プロファイル",
             target_type: "citation",
             source_surface: null,
             document_id: "doc-2",
@@ -518,8 +518,8 @@ function feedbackEnvelope(limit: number, offset: number) {
           ...Array.from({ length: 8 }, (_, index) => ({
             feedback_id: `feedback-extra-${index + 1}`,
             trace_id: `trace-extra-${index + 1}`,
-            business_view_id: "bv-1",
-            business_view_name: "経理ビュー",
+            search_answer_profile_id: "bv-1",
+            search_answer_profile_name: "経理ビュー",
             target_type: index % 2 === 0 ? "answer" : "citation",
             source_surface: index % 3 === 0 ? "chat" : "search",
             document_id: index % 2 === 0 ? null : "doc-1",
@@ -554,8 +554,8 @@ function feedbackDetailEnvelope() {
     data: {
       feedback_id: "feedback-answer",
       trace_id: "trace-answer-123456789",
-      business_view_id: "bv-1",
-      business_view_name: "経理ビュー",
+      search_answer_profile_id: "bv-1",
+      search_answer_profile_name: "経理ビュー",
       target_type: "citation",
       source_surface: "chat",
       document_id: "doc-1",
@@ -609,7 +609,7 @@ test("検索欄は隣の SelectField と同じ高さで、先頭アイコン・�
 
   const search = page.getByRole("searchbox", { name: "問題・回答・コメントを検索" });
   await expect(search).toBeVisible();
-  const select = page.getByRole("combobox", { name: "業務ビュー" });
+  const select = page.getByRole("combobox", { name: "検索・回答プロファイル" });
   const [searchBox, selectBox] = await Promise.all([search.boundingBox(), select.boundingBox()]);
   expect(searchBox && selectBox).toBeTruthy();
   // 入力欄・選択欄は md（36px）。タッチ端末では Button と同じく 44px（#613）。

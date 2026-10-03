@@ -67,7 +67,7 @@ function isNumber(value: string): boolean {
 
 /**
  * 行を backend の条件にする。誤りのある行は条件に入れず、行の key ごとの誤りを返す。
- * `fields` は選んだ業務ビューで使える項目（未取得なら undefined）。
+ * `fields` は選んだ検索・回答プロファイルで使える項目（未取得なら undefined）。
  */
 export function extractionFieldConditions(
   rows: readonly ExtractionFieldFilterRow[],

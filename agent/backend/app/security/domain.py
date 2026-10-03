@@ -2,7 +2,7 @@
 
 ユーザー・ロール・セッションは platform の `PLATFORM_*`（`pr_system_settings.auth`）。
 ここではロールに Agent の権限と対象範囲（エージェント）を、利用者に実効の対象範囲を足す。
-業務ビューの判定は RAG が Run の利用者のサービストークンで行う（#750）。
+検索・回答プロファイルの判定は RAG が Run の利用者のサービストークンで行う（#750）。
 """
 
 from __future__ import annotations

@@ -14,7 +14,7 @@ assignees: []
 - secret / token / 個人情報 / 実 credential は書かない。
 - feature / docs / refactor / investigation でも4項目を性質に合わせて具体化する
   （問題=背景や不足、症状=現状の制約や具体例、原因=設計上の理由または調査対象）。
-- 3 層モデル（文書レシピ / KB スコープ / Business View）に関わる場合は、どの層の責務かを
+- 3 層モデル（文書レシピ / KB スコープ / Search Answer Profile）に関わる場合は、どの層の責務かを
   明記し、責務越境になっていないかを 修正方針 に書く。
 不要な HTML コメントは削除して構いません。
 -->

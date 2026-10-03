@@ -20,7 +20,7 @@ test.beforeEach(async ({ page }) => {
 
 /**
  * 認証画面（ログイン・パスワード変更・権限なし。AppShell を持たない）以外の全ルート。
- * 詳細画面は代表 id で開く（文書詳細・ナレッジベース詳細は業務ビューと同じ PageHeader + PageBody。
+ * 詳細画面は代表 id で開く（文書詳細・ナレッジベース詳細は検索・回答プロファイルと同じ PageHeader + PageBody。
  * #555 / #581）。A 型の作成の画面（`?id=new`）も測る。
  */
 const PATHS = [
@@ -29,7 +29,7 @@ const PATHS = [
     .map(([, path]) => path),
   `${APP_ROUTES.knowledgeBases}/kb-layout`,
   `${APP_ROUTES.knowledgeBases}?id=new`,
-  `${APP_ROUTES.businessViews}?id=new`,
+  `${APP_ROUTES.searchAnswerProfiles}?id=new`,
   `${APP_ROUTES.documents}/doc-layout`,
 ];
 

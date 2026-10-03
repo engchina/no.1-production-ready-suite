@@ -6,9 +6,9 @@ from decimal import Decimal
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.clients.oracle import OracleClient
-from app.rag.business_view_knowledge import import_approved_faq
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
+from app.rag.search_answer_profile_knowledge import import_approved_faq
 from app.schemas.common import ApiResponse, Page
 from app.schemas.evaluation import STANDARD_ANSWER_MAX_CHARS, EvaluationCase
 from app.schemas.feedback import (
@@ -40,8 +40,8 @@ async def submit_feedback(
     """回答または引用 feedback を追記する。"""
     enforce_rate_limit("search", http_request)
     oracle = OracleClient()
-    if await oracle.get_business_view(request.business_view_id) is None:
-        raise HTTPException(status_code=404, detail="業務ビューが見つかりません。")
+    if await oracle.get_search_answer_profile(request.search_answer_profile_id) is None:
+        raise HTTPException(status_code=404, detail="検索・回答プロファイルが見つかりません。")
     details = await _resolve_feedback_details(oracle, request)
     payload = request.model_dump(
         mode="json",
@@ -54,7 +54,7 @@ async def submit_feedback(
         data=FeedbackSubmissionResponse(
             feedback_id=feedback_id,
             trace_id=request.trace_id,
-            business_view_id=request.business_view_id,
+            search_answer_profile_id=request.search_answer_profile_id,
             target_type=request.target_type,
             source_surface=request.source_surface,
             document_id=request.document_id,
@@ -79,7 +79,7 @@ async def current_feedback(
 
 @router.get("", response_model=ApiResponse[FeedbackDashboard])
 async def list_feedback(
-    business_view_id: str | None = Query(default=None, min_length=1, max_length=64),
+    search_answer_profile_id: str | None = Query(default=None, min_length=1, max_length=64),
     target_type: FeedbackTargetType | None = None,
     rating: FeedbackRating | None = None,
     reason: FeedbackReason | None = None,
@@ -95,7 +95,7 @@ async def list_feedback(
     集計は Oracle の SQL の条件で同じ範囲に絞る（`OracleClient.list_feedback_dashboard_rows`）。
     """
     rows, total, groups, previous_groups = await OracleClient().list_feedback_dashboard_rows(
-        business_view_id=business_view_id,
+        search_answer_profile_id=search_answer_profile_id,
         target_type=target_type.value if target_type else None,
         rating=rating.value if rating else None,
         reason=reason.value if reason else None,
@@ -137,7 +137,7 @@ async def get_feedback_detail(
 async def promote_feedback_to_approved_faq(
     feedback_id: str,
 ) -> ApiResponse[FeedbackApprovedFaqPromotion]:
-    """回答 feedback を業務ビューの Approved FAQ へ登録する(rag_poc の FAQ 昇格)。
+    """回答 feedback を検索・回答プロファイルの Approved FAQ へ登録する(rag_poc の FAQ 昇格)。
 
     「役に立った」は保存した回答、それ以外は修正した回答を登録する。同じ質問の FAQ は置き換える。
     """
@@ -153,15 +153,15 @@ async def promote_feedback_to_approved_faq(
     row = approved_faq_import_row_from_answer_feedback(record)
     if row is None:
         raise HTTPException(status_code=409, detail=approved_faq_feedback_skip_reason(record))
-    business_view_id = str(detail.business_view_id)
-    if await oracle.get_business_view(business_view_id) is None:
-        raise HTTPException(status_code=404, detail="業務ビューが見つかりません。")
+    search_answer_profile_id = str(detail.search_answer_profile_id)
+    if await oracle.get_search_answer_profile(search_answer_profile_id) is None:
+        raise HTTPException(status_code=404, detail="検索・回答プロファイルが見つかりません。")
     result = await import_approved_faq(
-        oracle, business_view_id, [row], mode=APPROVED_FAQ_IMPORT_MODE_DELETE_THEN_INSERT
+        oracle, search_answer_profile_id, [row], mode=APPROVED_FAQ_IMPORT_MODE_DELETE_THEN_INSERT
     )
     return ApiResponse(
         data=FeedbackApprovedFaqPromotion(
-            business_view_id=business_view_id,
+            search_answer_profile_id=search_answer_profile_id,
             question=row.question,
             inserted_count=result.inserted_count,
             deleted_count=result.deleted_count,
@@ -268,7 +268,7 @@ async def _resolve_feedback_details(
     """chat は server record、検索は画面の snapshot を保存する。
 
     検索の snapshot は画面が送る内容なので、trace の存在は確かめない
-    （監査の保存先に依存させない。#457）。業務ビューの利用範囲は呼び出し元が確かめ、
+    （監査の保存先に依存させない。#457）。検索・回答プロファイルの利用範囲は呼び出し元が確かめ、
     一覧・詳細はフィードバックを送った本人の会話・監査だけを結び付ける。
     """
     details: dict[str, object] | None = None

@@ -21,7 +21,7 @@ RAG の回答は、単純な「近い chunk を prompt へ入れる」形では�
 - tenant: production では client の `X-Tenant-ID` を使わず、tenant なし（単一 tenant）で動かす（#225）。local だけは `X-Tenant-ID` を hash 化し、Oracle document/chunk/knowledge base の predicate に使う。
 - user: production はログイン中の利用者（MCP ではサービストークンの利用者。#232）、local は `X-User-ID` を hash 化し、監査相関と回答の記録の持ち主に使う。
 - role / agent / thread: `X-RAG-Role-ID`、`X-RAG-Agent-ID`、`X-RAG-Thread-ID`（MCP（`POST /api/mcp`。#232）では header ではなくサービストークンの `agent_id` / `run_id`）を hash 化して request context に持つ。Agent Memory の scope に使っていたが、Agent Memory は #595 で削除した。
-- ACL: production はログイン中の利用者のロールの業務ビュー / ナレッジベースの対象範囲を使う（#214）。local だけは `X-RAG-Allowed-Document-Ids`、`X-RAG-Allowed-Category-Names`、`X-RAG-Allowed-Knowledge-Base-Ids` を request scope として固定する。
+- ACL: production はログイン中の利用者のロールの検索・回答プロファイル / ナレッジベースの対象範囲を使う（#214）。local だけは `X-RAG-Allowed-Document-Ids`、`X-RAG-Allowed-Category-Names`、`X-RAG-Allowed-Knowledge-Base-Ids` を request scope として固定する。
 - dataset: `knowledge_base_ids` / `filters.knowledge_base_id` を Oracle knowledge base membership に固定する。
 - source ACL: `filters.source_acl` を chunk metadata `source_acl` に固定する。
 - version: `filters.document_version` を chunk metadata `document_version` に固定する。

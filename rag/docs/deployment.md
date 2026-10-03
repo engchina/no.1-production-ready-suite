@@ -197,12 +197,12 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 3. クローンの Wallet を取得し、クローンに接続して表を書き出す。RAG の書き出しの CLI は接続先を環境変数で変えられる（例: クローン用の共通 `.env` を用意し、`PLATFORM_ENV_FILE=<そのファイル> uv run python -m app.rag.legacy_export --table rag_agent_memories --output <出力先>`）。必要な行を元の DB へ戻す場合は、戻す先の表（無くなった表は戻さない）と取り込み方を決めてから行う。
 4. 取り出しが終わったらクローンを終了（削除）する。
 
-## 既存環境の更新手順（#635 RAG 検索の業務ビューを 1 つにする）
+## 既存環境の更新手順（#635 RAG 検索の検索・回答プロファイルを 1 つにする）
 
-- **画面**: RAG 検索の「対象の業務ビュー」を 1 つだけ選ぶ欄にし、チャットの業務ビューの欄と同じ部品・文言・幅にした。以前の画面で複数を選んでいた作業状態（sessionStorage の `search.businessViewIds`）は読まず、再読込後は未選択から始まる。
-- **API**: `POST /api/search`・`POST /api/search/stream` は業務ビューを `business_view_id`（1 つ）だけで受ける。`business_view_ids` を送ると 422 を返す（読み捨てると業務ビューの外を検索するため）。検索の絞り込みの候補 `GET /api/search/extraction-fields` の query も `business_view_ids` から `business_view_id` に変えた。MCP の `rag_search`（当時あったチャットの送信のツールは #787 で削除）と検証 CLI（`app.rag.answer_verify_cli`）は元から 1 つで、入力は変わらない。
-- **データベース**: DDL・データの移行は要らない。回答の記録・質問の履歴は元から業務ビューを 1 つだけ保存している。以前に複数の業務ビューで検索した監査（`rag_search_audit` の `business_view_applied`）は `bv-1,bv-2` の文字列のまま残り、表示・集計は変わらない。
-- **手順**: コードを更新して backend と frontend を再起動する。`/api/search` を直接呼ぶ独自のスクリプトがあれば、`business_view_ids: [id]` を `business_view_id: id` に変える。
+- **画面**: RAG 検索の「対象の検索・回答プロファイル」を 1 つだけ選ぶ欄にし、チャットの検索・回答プロファイルの欄と同じ部品・文言・幅にした。以前の画面で複数を選んでいた作業状態（sessionStorage の `search.searchAnswerProfileIds`）は読まず、再読込後は未選択から始まる。
+- **API**: `POST /api/search`・`POST /api/search/stream` は検索・回答プロファイルを `search_answer_profile_id`（1 つ）だけで受ける。`search_answer_profile_ids` を送ると 422 を返す（読み捨てると検索・回答プロファイルの外を検索するため）。検索の絞り込みの候補 `GET /api/search/extraction-fields` の query も `search_answer_profile_ids` から `search_answer_profile_id` に変えた。MCP の `rag_search`（当時あったチャットの送信のツールは #787 で削除）と検証 CLI（`app.rag.answer_verify_cli`）は元から 1 つで、入力は変わらない。
+- **データベース**: DDL・データの移行は要らない。回答の記録・質問の履歴は元から検索・回答プロファイルを 1 つだけ保存している。以前に複数の検索・回答プロファイルで検索した監査（`rag_search_audit` の `search_answer_profile_applied`）は `bv-1,bv-2` の文字列のまま残り、表示・集計は変わらない。
+- **手順**: コードを更新して backend と frontend を再起動する。`/api/search` を直接呼ぶ独自のスクリプトがあれば、`search_answer_profile_ids: [id]` を `search_answer_profile_id: id` に変える。
 
 ## 既存環境の更新手順（#599 rag_poc から移したときの名前の改名）
 
@@ -238,7 +238,7 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 |---|---|---|
 | 分割方式（`RAG_CHUNKING_STRATEGY`・文書 / レシピの処理設定・KB の構築設定） | `docrag_small_to_big` | `small_to_big` |
 | 分割のパラメータ（処理設定・文書分割の設定の API） | `docrag_child_target_chars` など 5 項目 | `chunk_child_target_chars` など（`docrag_` を `chunk_` に） |
-| 業務ビューの検索・回答設定（`view_config.query`） | `docrag_query_strategy`・`docrag_answer_flow`・`docrag_neighbor_child_count`・`docrag_rerank_enabled`・`docrag_screen_linking_enabled` | `query_strategy`・`answer_flow`・`neighbor_child_count`・`rerank_enabled`・`screen_linking_enabled` |
+| 検索・回答プロファイルの検索・回答設定（`profile_config.query`） | `docrag_query_strategy`・`docrag_answer_flow`・`docrag_neighbor_child_count`・`docrag_rerank_enabled`・`docrag_screen_linking_enabled` | `query_strategy`・`answer_flow`・`neighbor_child_count`・`rerank_enabled`・`screen_linking_enabled` |
 | 回答生成のプロンプトの表・API | `rag_docrag_prompts`・`/api/settings/docrag-prompts` | `rag_answer_prompts`・`/api/settings/answer-prompts` |
 | 検索の応答の `diagnostics` | `retrieval_strategy: "docrag"`・`retrieval_strategy_adapter: "docrag_grounded"` / `"docrag_retrieval_only"`・`docrag`（回答フローの診断） | `"hybrid"`・`"grounded"` / `"retrieval_only"`・`answer` |
 | 回答の記録の詳細の API・チャットの SSE の `metadata` | `docrag` | `answer_diagnostics` |
@@ -253,7 +253,7 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 ### システムテーブルの更新がすること
 
 - migration `20260930_008_answer_prompts_table`: 回答生成のプロンプトの表を `rag_docrag_prompts` から `rag_answer_prompts` へ移す。新しい表が無ければ `ALTER TABLE ... RENAME TO` で改名し、ある（システムテーブルの更新は migration の前に新しい表を作る）ときは旧表の行を新しい表へ写す。写した後、旧表は退役したオブジェクトとして消える（行は新しい表に残る）。主キーの制約と index はシステムの名前（`SYS_C...`）なので改名しない。
-- migration `20260930_009_stored_engine_names`: 上の表の保存値を書き換える。対象は、文書・レシピの処理設定と解析結果、KB の構築設定、業務ビューの設定、取込ジョブの上書き、chunk set・抽出・派生情報レイヤーの記録、chunk の metadata、回答の記録、会話・フィードバックの引用、品質評価の入力と結果の JSON の列と、回答の記録の `answer_engine`・検索の監査の `error_stage`。旧名を含む行だけを更新し（冪等）、行は消さない。chunk が多い環境（`rag_chunks` の親子階層の chunk はすべて更新する）では時間がかかり、undo を使う。
+- migration `20260930_009_stored_engine_names`: 上の表の保存値を書き換える。対象は、文書・レシピの処理設定と解析結果、KB の構築設定、検索・回答プロファイルの設定、取込ジョブの上書き、chunk set・抽出・派生情報レイヤーの記録、chunk の metadata、回答の記録、会話・フィードバックの引用、品質評価の入力と結果の JSON の列と、回答の記録の `answer_engine`・検索の監査の `error_stage`。旧名を含む行だけを更新し（冪等）、行は消さない。chunk が多い環境（`rag_chunks` の親子階層の chunk はすべて更新する）では時間がかかり、undo を使う。
 - migration `20261001_001_document_sections`: 人が修正した文書の章節（章節ナビゲーション）の表 `rag_document_sections` を足す（#713）。文書ごとに 1 行で、文書を消すと一緒に消える。表を足すだけで既存の行は変えない。修正の後に新しく抽出された章節は表示のときに自動で足し（「新しく抽出」の印。保存すると外れる）、人が消した抽出の章節は `sections_json` の `removed_source_ids` に覚えて足し直さない（#721。保存の形は `{"sections": [...], "removed_source_ids": [...]}`、以前の配列の形もそのまま読む）。チャットの確認で選んだ章節は、回答のときに章節 ID で今のページを読み直す。
 - 章節の抽出規則（#715）: 全体の既定は `backend/section-rules.json`（`RAG_SECTION_RULES_FILE` で場所を変えられる。抽出項目の定義と同じ形）。ファイルが無ければ「解析エンジンの見出し」（これまでどおり）。規則は章節を表示するたびに保存済みの抽出結果へ当てるので、取込のやり直しも migration も要らない。処理レシピの「章節の抽出規則」で文書ごとに方式を上書きできる。
 
@@ -315,11 +315,11 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 
      ```sql
      SELECT COUNT(*) FROM rag_chunks WHERE JSON_SERIALIZE(metadata_json RETURNING CLOB) LIKE '%docrag%';
-     SELECT COUNT(*) FROM rag_business_views WHERE JSON_SERIALIZE(view_config RETURNING CLOB) LIKE '%docrag%';
+     SELECT COUNT(*) FROM rag_search_answer_profiles WHERE JSON_SERIALIZE(profile_config RETURNING CLOB) LIKE '%docrag%';
      SELECT COUNT(*) FROM rag_answer_prompts;  -- 編集したプロンプトの件数が更新の前と同じ
      ```
 
-   - 検索・回答設定の「検索方法」「文書分割」と業務ビューの「検索・回答設定」に、更新の前の値が出る。RAG 検索で回答し、「回答の根拠と実行記録」が出る。
+   - 検索・回答設定の「検索方法」「文書分割」と検索・回答プロファイルの「検索・回答設定」に、更新の前の値が出る。RAG 検索で回答し、「回答の根拠と実行記録」が出る。
 
 ## 既存環境の更新手順（#621 関係情報の構築の選択肢を 2 つにする）
 
@@ -519,7 +519,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 
 #594 で回答を回答フローだけにした後、#595 で標準の回答フロー（`standard`）だけが使っていたコード・画面・API・設定を削除した。回答の挙動は #594 から変わらない。旧名との互換は持たない。一覧は [rag-engine.md の「標準の回答フローの設定の削除」](./rag-engine.md)。
 
-- **画面**: 根拠確認（`/settings/grounding`）・回答スタイル（`/settings/generation`）・高度な検索（`/settings/agentic`）を削除した。ブックマークなどの古い URL は検索方法（`/settings/retrieval`）へ移す。検索方法は「回答の検索と生成」「回答の記録の保存期間」「質問履歴」の 3 カード、回答プロンプトは回答生成のプロンプトだけ（system prompt の版の作成・有効化は削除）。業務ビューの検索モード・検索オプション・根拠確認・回答スタイル・回答プロンプト（system prompt / 既定の言語）の欄と、RAG 検索の検索モードのチップ・検索の内訳の診断も削除した。
+- **画面**: 根拠確認（`/settings/grounding`）・回答スタイル（`/settings/generation`）・高度な検索（`/settings/agentic`）を削除した。ブックマークなどの古い URL は検索方法（`/settings/retrieval`）へ移す。検索方法は「回答の検索と生成」「回答の記録の保存期間」「質問履歴」の 3 カード、回答プロンプトは回答生成のプロンプトだけ（system prompt の版の作成・有効化は削除）。検索・回答プロファイルの検索モード・検索オプション・根拠確認・回答スタイル・回答プロンプト（system prompt / 既定の言語）の欄と、RAG 検索の検索モードのチップ・検索の内訳の診断も削除した。
 - **API**: `GET/PATCH /api/settings/retrieval`・`/grounding`・`/generation`・`/agentic`、`GET/POST /api/settings/prompts`・`POST /api/settings/prompts/{version_id}/activate` を削除した。`POST /api/search` などの `mode`・`strategy`・`rerank_top_n`・`generation_profile` と、チャットの送信の `mode` は、送っても 422 にせず読み捨てる。
 - **メニュー権限**: `menu.settings_grounding` / `menu.settings_generation` / `menu.settings_agentic` を削除した。ロールに保存済みの値は読み込み時に捨てる（権限管理の画面にも出ない）。DB の行は #596 で削除した（上の「既存環境の更新手順（#596）」）。
 - **環境変数**: 次の `RAG_*` は読まなくなった。`backend/.env` に残っていても起動し、値は使わない。次に編集するときに消してよい。
@@ -539,51 +539,51 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 
 ## 既存環境の更新手順（#594 回答の方式を 1 つにする）
 
-#594 で回答の方式を、根拠照合・監査付きの回答（質問の振り分けと拡張 → 検索 → CRAG の根拠の判定 → 回答の生成 → 監査）の 1 つにし、回答エンジンの選択（`backend/.env` の `RAG_ANSWER_ENGINE` と、業務ビューの「回答エンジン」）を削除した。旧名との互換は持たない。仕組みと設定は [rag-engine.md](./rag-engine.md) を参照。
+#594 で回答の方式を、根拠照合・監査付きの回答（質問の振り分けと拡張 → 検索 → CRAG の根拠の判定 → 回答の生成 → 監査）の 1 つにし、回答エンジンの選択（`backend/.env` の `RAG_ANSWER_ENGINE` と、検索・回答プロファイルの「回答エンジン」）を削除した。旧名との互換は持たない。仕組みと設定は [rag-engine.md](./rag-engine.md) を参照。
 
 ### 変わること
 
 - **回答の方式が全員変わる。** 次の呼び出しは、これまでの標準の回答（`RAG_ANSWER_ENGINE` の既定 `standard`）から新しい方式に変わる。
-  - DEFAULT 業務ビュー（`query` が空で、全体の既定を継承していた）。
-  - 「回答エンジン」を継承していた業務ビューと、「標準」を明示していた業務ビューの RAG 検索・チャット。
-  - 業務ビューを指定しない呼び出し（MCP の `rag_search` / `/api/search` のナレッジベースだけの指定、品質評価、staging smoke）。
+  - DEFAULT 検索・回答プロファイル（`query` が空で、全体の既定を継承していた）。
+  - 「回答エンジン」を継承していた検索・回答プロファイルと、「標準」を明示していた検索・回答プロファイルの RAG 検索・チャット。
+  - 検索・回答プロファイルを指定しない呼び出し（MCP の `rag_search` / `/api/search` のナレッジベースだけの指定、品質評価、staging smoke）。
   - ナレッジベースの検索テストとレシピの検索比較は、回答を作らずに検索だけを行う（#593 の検索だけの経路。LLM を呼ばない）。
-- **LLM の呼び出しが増える。** 標準の回答は 1 回の回答で回答の生成が 1 回（とオプションのクエリ拡張など）だった。新しい方式は、既定（質問の拡張 = 自動ルーティング、回答の生成方式 = CRAG）で、質問の振り分け・CRAG の根拠の判定（根拠が足りなければ検索文を書き換えて最大 3 回）・回答の生成・監査の順に、1 回の回答で少なくとも 4 回呼ぶ。チャットで会話履歴があると質問の書き換えが 1 回、「画面目録で操作画面を探す」を有効にすると 1 回増える。回答の時間と OCI Enterprise AI の利用量が増えるので、`RAG_ANSWER_TIMEOUT_SECONDS`（既定 300 秒）と利用の上限を見直す。回数を減らすときは、検索・回答設定 › 検索方法の「回答の検索と生成」（業務ビューごとは「検索・回答設定」）で、質問の拡張を「単純検索」、回答の生成方式を「標準 RAG」にする。
+- **LLM の呼び出しが増える。** 標準の回答は 1 回の回答で回答の生成が 1 回（とオプションのクエリ拡張など）だった。新しい方式は、既定（質問の拡張 = 自動ルーティング、回答の生成方式 = CRAG）で、質問の振り分け・CRAG の根拠の判定（根拠が足りなければ検索文を書き換えて最大 3 回）・回答の生成・監査の順に、1 回の回答で少なくとも 4 回呼ぶ。チャットで会話履歴があると質問の書き換えが 1 回、「画面目録で操作画面を探す」を有効にすると 1 回増える。回答の時間と OCI Enterprise AI の利用量が増えるので、`RAG_ANSWER_TIMEOUT_SECONDS`（既定 300 秒）と利用の上限を見直す。回数を減らすときは、検索・回答設定 › 検索方法の「回答の検索と生成」（検索・回答プロファイルごとは「検索・回答設定」）で、質問の拡張を「単純検索」、回答の生成方式を「標準 RAG」にする。
 - 回答の記録（`rag_answer_records`）は、すべての回答で保存する（保存期間は `RAG_ANSWER_RECORD_RETENTION_DAYS`）。品質評価の結果も新しい方式の回答になるので、更新の前の結果と比べるときは同じケースで評価し直す。
-- 業務ビューの「検索方法」「検索オプション」「根拠確認」「回答スタイル」「回答プロンプト」と、検索・回答設定の同じ名前の画面の設定は、回答に使われない（#594 では入力を残し、「現在の回答では、この設定は使われません。」と表示していた。欄は #595 で削除した）。回答の上書きは、業務ビューの「質問の拡張」「回答の生成方式」「根拠の前後から加える数」「回答の検索のオプション」で行う（業務ビューの編集画面で常に表示する）。安全チェックは今までどおり質問と回答の両方に適用する。
+- 検索・回答プロファイルの「検索方法」「検索オプション」「根拠確認」「回答スタイル」「回答プロンプト」と、検索・回答設定の同じ名前の画面の設定は、回答に使われない（#594 では入力を残し、「現在の回答では、この設定は使われません。」と表示していた。欄は #595 で削除した）。回答の上書きは、検索・回答プロファイルの「質問の拡張」「回答の生成方式」「根拠の前後から加える数」「回答の検索のオプション」で行う（検索・回答プロファイルの編集画面で常に表示する）。安全チェックは今までどおり質問と回答の両方に適用する。
 
 ### 更新の前に確かめる
 
-`backend/.env` の `RAG_ANSWER_ENGINE` を確かめる（行が無いか `standard` なら、継承していた業務ビューもすべて変わる）。
+`backend/.env` の `RAG_ANSWER_ENGINE` を確かめる（行が無いか `standard` なら、継承していた検索・回答プロファイルもすべて変わる）。
 
 ```bash
 grep '^RAG_ANSWER_ENGINE=' backend/.env
 ```
 
-「回答エンジン」に標準（`standard`）を明示していた業務ビューを、Oracle で確かめる（`view_config` は業務ビューの設定の JSON）。
+「回答エンジン」に標準（`standard`）を明示していた検索・回答プロファイルを、Oracle で確かめる（`profile_config` は検索・回答プロファイルの設定の JSON）。
 
 ```sql
--- 「標準」を明示していた業務ビュー（#594 の後は新しい方式で回答する）
-SELECT business_view_id, name, status
-  FROM rag_business_views
- WHERE JSON_VALUE(view_config, '$.query.answer_engine') = 'standard'
+-- 「標準」を明示していた検索・回答プロファイル（#594 の後は新しい方式で回答する）
+SELECT search_answer_profile_id, name, status
+  FROM rag_search_answer_profiles
+ WHERE JSON_VALUE(profile_config, '$.query.answer_engine') = 'standard'
  ORDER BY name;
 
--- 回答エンジンの設定ごとの件数（「(継承)」は全体の既定を継承。DEFAULT 業務ビューを含む）
-SELECT NVL(JSON_VALUE(view_config, '$.query.answer_engine'), '(継承)') AS answer_engine,
+-- 回答エンジンの設定ごとの件数（「(継承)」は全体の既定を継承。DEFAULT 検索・回答プロファイルを含む）
+SELECT NVL(JSON_VALUE(profile_config, '$.query.answer_engine'), '(継承)') AS answer_engine,
        status,
        COUNT(*) AS view_count
-  FROM rag_business_views
- GROUP BY NVL(JSON_VALUE(view_config, '$.query.answer_engine'), '(継承)'), status
+  FROM rag_search_answer_profiles
+ GROUP BY NVL(JSON_VALUE(profile_config, '$.query.answer_engine'), '(継承)'), status
  ORDER BY answer_engine, status;
 ```
 
-標準の回答と比べたい業務ビューは、更新の前に代表の質問の回答を控えておく（品質評価のケースにしておくと、更新の後に同じケースで比べられる）。
+標準の回答と比べたい検索・回答プロファイルは、更新の前に代表の質問の回答を控えておく（品質評価のケースにしておくと、更新の後に同じケースで比べられる）。
 
 ### 手順
 
 1. `backend/.env` から `RAG_ANSWER_ENGINE` の行を削除する（`sed -i '/^RAG_ANSWER_ENGINE=/d' backend/.env`。直前の説明のコメント行も消してよい）。行が残っていても読まない。
-2. 業務ビューに保存済みの `query.answer_engine` は読み込み時に捨て、次に保存したときに消える（DDL・データの移行は要らない）。
+2. 検索・回答プロファイルに保存済みの `query.answer_engine` は読み込み時に捨て、次に保存したときに消える（DDL・データの移行は要らない）。
 3. 回答の時間と利用量を見直す（上の「LLM の呼び出しが増える」）。
 4. 文書分割の既定を見直す（下の「文書分割の既定」）。
 5. backend を再起動する。
@@ -601,9 +601,9 @@ SELECT NVL(JSON_VALUE(view_config, '$.query.answer_engine'), '(継承)') AS answ
 
 #588 で全文検索（Oracle Text）の検索語の分割を、Sudachi（形態素解析）と文字種の区切りを組み合わせた 1 つの方式にし、選択を削除した（分割の中身は [rag-architecture.md の「ハイブリッド検索」](./rag-architecture.md)）。旧名との互換は持たない。
 
-- 「検索・回答設定 › 検索方法」と業務ビューの編集の「全文検索の分割方式」の選択は無くなった。
+- 「検索・回答設定 › 検索方法」と検索・回答プロファイルの編集の「全文検索の分割方式」の選択は無くなった。
 - `backend/.env` の `RAG_TEXT_SEARCH_TOKENIZER` は読まない。行が残っていても無視するが、混乱を避けるため削除する（`sed -i '/^RAG_TEXT_SEARCH_TOKENIZER=/d' backend/.env`。直前の説明のコメント行も消してよい）。
-- 業務ビューに保存済みの上書き（`query.text_search_tokenizer`）は読み込み時に捨て、次に保存したときに消える（移行の作業は要らない）。
+- 検索・回答プロファイルに保存済みの上書き（`query.text_search_tokenizer`）は読み込み時に捨て、次に保存したときに消える（移行の作業は要らない）。
 - rag_engine を単独で使う環境の `TEXT_SEARCH_TOKENIZER`（`auto` / `regex` / `sudachi`）も読まない。辞書の設定（`TEXT_SEARCH_TOKENIZER_SUDACHI_DICT` / `_CONFIG` / `_LATIN_STEMMER`）は今までどおり使う。
 - 索引（`rag_chunks_text_idx` などの `RAG_TEXT_WORLD_LEXER`）は変えていないので、作り直しは要らない。backend を再起動すると新しい分割になる。
 - Sudachi の辞書（`sudachidict_full`。backend の依存に含まれる）が入っていない環境では、自動で文字種の区切りだけで分割し、backend の log に「Sudachi を使えないため、全文検索の語は文字種の区切りだけで作ります」を 1 回出す。
@@ -683,7 +683,7 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
 
    画面の「システム設定 > データベース > RAG システムテーブル」からでもよい。
 3. `system_admin` でログインし、「ユーザーとロール」でロールとユーザーを作り、「セキュリティ設定 > 権限管理」で
-   ロールごとのメニュー・業務ビュー・ナレッジベースを設定する。NL2SQL と同じ Oracle schema を使う場合、ユーザーとロールは NL2SQL と共有される。
+   ロールごとのメニュー・検索・回答プロファイル・ナレッジベースを設定する。NL2SQL と同じ Oracle schema を使う場合、ユーザーとロールは NL2SQL と共有される。
 4. 注意:
    - 会話と回答履歴の持ち主は、ログインしたユーザー（`user_uuid`）になる。旧方式で作った会話（持ち主は共通の `admin-user-id`）は、新しいユーザーからは見えない（移行はしない）。
    - 保存済みの回答（`rag_answer_records`）は #304 から持ち主（`user_id_hash`）で分ける。システムテーブルの初期化（migration `20260928_002_answer_record_owner`）で列を足し、既存の行はチャットの回答・検索の監査から利用者が 1 人に決まるものだけ持ち主を補う。補えなかった行は SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者だけが一覧・詳細・評価・削除できる（不要なら管理者が削除するか、保存期間の経過で消える）。
@@ -1001,7 +1001,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `RAG_RRF_K`: hybrid retrieval の Reciprocal Rank Fusion 定数。小さいほど上位 rank を強く優先する。golden set で keyword/vector の寄与と citation 安定性を確認して調整する。
 - `RAG_EMBEDDING_CACHE_ENABLED` / `RAG_EMBEDDING_CACHE_MAX_ENTRIES` / `RAG_EMBEDDING_BATCH_SIZE`: backend process 内で OCI Generative AI embedding 結果を LRU cache する。cache key は本文そのものではなく、model id、input type、dimension、本文 SHA-256 から作る。batch 内や連続検索で同じ query/chunk が出た場合は miss だけを OCI へ送る。miss は最大 96 件かつ合計 100,000 文字の先に達した単位で OCI embedding request に分割し、返却順を元入力順へ戻す。単一入力は 100,000 文字を超えると拒否し、本文を暗黙に切り詰めない。[Cohere Embed 4](https://docs.oracle.com/en-us/iaas/Content/generative-ai/cohere-embed-4.htm) の 128k token はリクエスト全入力の token 総量であり、この文字数予算とは別の保守的な保護値である。worker 間共有はしないため、容量と batch size は worker 数、メモリ、OCI payload limit、p95 latency を見て調整する。`MAX_ENTRIES=0` は無効化と同じ。
 - `RAG_RERANK_CACHE_ENABLED` / `RAG_RERANK_CACHE_MAX_ENTRIES`: backend process 内で OCI Generative AI rerank 結果を LRU cache する。cache key は query/document 原文ではなく SHA-256、model id、top_n、document 順序から作る。候補順や top_n が変わると別 cache entry になる。頻出 FAQ / 評価実行 / 再検索の p95 latency と OCI 呼び出し数を見て調整する。`MAX_ENTRIES=0` は無効化と同じ。
-- `RAG_ANSWER_TIMEOUT_SECONDS`: LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP・品質評価の 1 ケース）の通しの timeout（既定 300 秒、上限は LLM 1 回の timeout の上限と同じ 600 秒。#375 / #383）。agentic（検索の計画・multi_hop の再分解）を使う業務ビューでは LLM を最大 3 回呼ぶため、推論型のモデルの p95 latency × 呼び出し回数より長くする。画面は SSE を打ち切らず、`/api/search` の非ストリームは 630 秒、Nginx（`init_script.sh` が生成する回答生成・評価・MCP の `location`）は 660 秒待つ（backend の 504 と理由が画面に届くよう、外側ほど長くする）。
+- `RAG_ANSWER_TIMEOUT_SECONDS`: LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP・品質評価の 1 ケース）の通しの timeout（既定 300 秒、上限は LLM 1 回の timeout の上限と同じ 600 秒。#375 / #383）。agentic（検索の計画・multi_hop の再分解）を使う検索・回答プロファイルでは LLM を最大 3 回呼ぶため、推論型のモデルの p95 latency × 呼び出し回数より長くする。画面は SSE を打ち切らず、`/api/search` の非ストリームは 630 秒、Nginx（`init_script.sh` が生成する回答生成・評価・MCP の `location`）は 660 秒待つ（backend の 504 と理由が画面に届くよう、外側ほど長くする）。
 - 品質評価（golden set）は job（`/api/evaluation/jobs/run`・`/jobs/compare`。#390）で動く。1 ケースを `RAG_ANSWER_TIMEOUT_SECONDS` で打ち切り、時間切れになった工程をケースの結果（`error_stage` と `error_message`）に残して次のケースへ進む。job 全体は `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（既定 3600 秒、60〜86400）で打ち切り、残りのケースは実行せずに失敗（`error_type=EvaluationTimeBudgetExceeded`）として結果を返す。画面は job の状態を 2 秒ごとに取得して進捗（終わったケースの数 / 全体・実行中のケース・経過時間）を出し、取り消しもできる。評価 CLI は job の終わりを `RAG_EVALUATION_TIMEOUT_SECONDS`（既定 3900 秒）まで待ち、超えたら job を取り消す。
   - job は投入を受けた backend のプロセスの中で動き、状態は `rag_evaluation_jobs` に保存する（Gunicorn の別の worker に状態の取得・取り消しが届いても同じ結果になる）。backend の停止・再起動では実行中の job を失敗にし（別のプロセスは引き継がない）、プロセスが落ちて heartbeat が 120 秒途絶えた job も、次の状態の取得で失敗にする。同時に実行できる job は 2 件まで（全プロセスの合計）。終わった job は 7 日で消す（結果は評価 artifact の `rag_evaluation_runs` にも残る）。
   - 以前の同期の `/api/evaluation/run`・`/compare` は、外部から直接呼ぶ利用のために残している。評価全体を 600 秒で打ち切り、Nginx は 660 秒待つ（#383）。

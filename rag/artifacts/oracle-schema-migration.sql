@@ -567,21 +567,21 @@ BEGIN
     SELECT COUNT(*)
     INTO v_table_count
     FROM user_tables
-    WHERE table_name = 'RAG_BUSINESS_VIEWS';
+    WHERE table_name = 'RAG_SEARCH_ANSWER_PROFILES';
 
     IF v_table_count = 0 THEN
         EXECUTE IMMEDIATE
-            'CREATE TABLE rag_business_views ('
-            || 'business_view_id VARCHAR2(64) PRIMARY KEY,'
+            'CREATE TABLE rag_search_answer_profiles ('
+            || 'search_answer_profile_id VARCHAR2(64) PRIMARY KEY,'
             || 'tenant_id_hash CHAR(64),'
             || 'name VARCHAR2(256) NOT NULL,'
             || 'description VARCHAR2(2000),'
             || 'status VARCHAR2(32) DEFAULT ''ACTIVE'' NOT NULL,'
-            || 'view_config JSON,'
+            || 'profile_config JSON,'
             || 'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
             || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
             || 'archived_at TIMESTAMP WITH TIME ZONE,'
-            || 'CONSTRAINT rag_business_views_status_ck CHECK '
+            || 'CONSTRAINT rag_search_answer_profiles_status_ck CHECK '
             || '(status IN (''ACTIVE'', ''ARCHIVED''))'
             || ')';
     END IF;
@@ -589,23 +589,23 @@ BEGIN
     SELECT COUNT(*)
     INTO v_index_count
     FROM user_indexes
-    WHERE index_name = 'RAG_BUSINESS_VIEWS_TENANT_NAME_UIDX';
+    WHERE index_name = 'RAG_SEARCH_ANSWER_PROFILES_TENANT_NAME_UIDX';
 
     IF v_index_count = 0 THEN
         EXECUTE IMMEDIATE
-            'CREATE UNIQUE INDEX rag_business_views_tenant_name_uidx '
-            || 'ON rag_business_views (NVL(tenant_id_hash, ''__GLOBAL__''), LOWER(name))';
+            'CREATE UNIQUE INDEX rag_search_answer_profiles_tenant_name_uidx '
+            || 'ON rag_search_answer_profiles (NVL(tenant_id_hash, ''__GLOBAL__''), LOWER(name))';
     END IF;
 
     SELECT COUNT(*)
     INTO v_index_count
     FROM user_indexes
-    WHERE index_name = 'RAG_BUSINESS_VIEWS_TENANT_STATUS_IDX';
+    WHERE index_name = 'RAG_SEARCH_ANSWER_PROFILES_TENANT_STATUS_IDX';
 
     IF v_index_count = 0 THEN
         EXECUTE IMMEDIATE
-            'CREATE INDEX rag_business_views_tenant_status_idx '
-            || 'ON rag_business_views (tenant_id_hash, status, updated_at DESC)';
+            'CREATE INDEX rag_search_answer_profiles_tenant_status_idx '
+            || 'ON rag_search_answer_profiles (tenant_id_hash, status, updated_at DESC)';
     END IF;
 END;
 /
@@ -1311,12 +1311,12 @@ END;
 COMMIT;
 
 -- migration: 20260630_002_default_business_view
-UPDATE rag_business_views bv
+UPDATE rag_search_answer_profiles bv
 SET
     status = 'ACTIVE',
-    view_config = (
+    profile_config = (
         SELECT JSON_MERGEPATCH(
-            COALESCE(bv.view_config, JSON_OBJECT('version' VALUE 1 RETURNING JSON)),
+            COALESCE(bv.profile_config, JSON_OBJECT('version' VALUE 1 RETURNING JSON)),
             JSON_OBJECT(
                 'knowledge_base_ids' VALUE
                     JSON_ARRAY(kb.knowledge_base_id RETURNING JSON)
@@ -1340,13 +1340,13 @@ WHERE LOWER(bv.name) = 'default'
             NVL(bv.tenant_id_hash, '__GLOBAL__')
   );
 
-INSERT INTO rag_business_views (
-    business_view_id,
+INSERT INTO rag_search_answer_profiles (
+    search_answer_profile_id,
     tenant_id_hash,
     name,
     description,
     status,
-    view_config,
+    profile_config,
     created_at,
     updated_at,
     archived_at
@@ -1374,7 +1374,7 @@ WHERE LOWER(kb.name) = 'default'
   AND kb.status = 'ACTIVE'
   AND NOT EXISTS (
       SELECT 1
-      FROM rag_business_views bv
+      FROM rag_search_answer_profiles bv
       WHERE LOWER(bv.name) = 'default'
         AND NVL(bv.tenant_id_hash, '__GLOBAL__') =
             NVL(kb.tenant_id_hash, '__GLOBAL__')

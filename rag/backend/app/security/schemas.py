@@ -27,7 +27,7 @@ class CurrentUserData(BaseModel):
     is_system_admin: bool
     permissions: list[str]
     # None（null）は制限なし。
-    allowed_business_view_ids: list[str] | None = None
+    allowed_search_answer_profile_ids: list[str] | None = None
     allowed_knowledge_base_ids: list[str] | None = None
     debug_mode: bool = False
     password_change_allowed: bool
@@ -43,7 +43,9 @@ class CurrentUserData(BaseModel):
             role_codes=list(principal.role_codes),
             is_system_admin=principal.is_system_admin,
             permissions=sorted(principal.permissions),
-            allowed_business_view_ids=_sorted_or_none(principal.allowed_business_view_ids),
+            allowed_search_answer_profile_ids=_sorted_or_none(
+                principal.allowed_search_answer_profile_ids
+            ),
             allowed_knowledge_base_ids=_sorted_or_none(principal.allowed_knowledge_base_ids),
             debug_mode=debug_mode,
             password_change_allowed=principal.password_change_allowed and not debug_mode,
@@ -54,7 +56,7 @@ class RoleData(SharedRoleData):
     """共通のロール項目に、RAG の権限と対象範囲を足す。"""
 
     permissions: list[str]
-    business_view_ids: list[str]
+    search_answer_profile_ids: list[str]
     knowledge_base_ids: list[str]
 
     @classmethod
@@ -68,7 +70,7 @@ class RoleData(SharedRoleData):
             archived=role.archived,
             version=role.version,
             permissions=sorted(normalize_permission_codes(role.permissions)),
-            business_view_ids=sorted(role.business_view_ids),
+            search_answer_profile_ids=sorted(role.search_answer_profile_ids),
             knowledge_base_ids=sorted(role.knowledge_base_ids),
         )
 
@@ -78,7 +80,9 @@ class RoleAccessUpdateRequest(BaseModel):
 
     version: int = Field(ge=1)
     permissions: list[str] = Field(default_factory=list, max_length=200)
-    business_view_ids: list[str] = Field(default_factory=list, max_length=MAX_ACCESS_TARGETS)
+    search_answer_profile_ids: list[str] = Field(
+        default_factory=list, max_length=MAX_ACCESS_TARGETS
+    )
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=MAX_ACCESS_TARGETS)
 
 
@@ -101,7 +105,7 @@ class PermissionData(BaseModel):
 
 
 class AccessTargetData(BaseModel):
-    """権限管理画面で選べる対象（業務ビュー・ナレッジベース）。"""
+    """権限管理画面で選べる対象（検索・回答プロファイル・ナレッジベース）。"""
 
     id: str
     name: str

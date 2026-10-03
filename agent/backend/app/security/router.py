@@ -5,7 +5,9 @@
 - `GET /security/access-targets/agents`: 権限管理で選べるエージェント（検索とページング。#608）
 - `PUT /security/roles/{role_id}/access`: ロールの Agent 権限と対象範囲（エージェント）の保存
 
-業務ビューの判定は RAG が Run の利用者のサービストークンで行うため、Agent は持たない（#750）。
+検索・回答プロファイルの判定は RAG が Run の利用者の
+サービストークンで行うため、Agent は持たない（#750）。
+
 """
 
 from __future__ import annotations

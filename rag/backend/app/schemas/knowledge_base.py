@@ -85,7 +85,7 @@ class KnowledgeBaseCreateRequest(BaseModel):
         default=None,
         description=(
             "廃止(#302)。指定すると 422。KB は所属だけを持ち、構築設定は文書レシピ、"
-            "検索・回答設定は業務ビューで指定する。"
+            "検索・回答設定は検索・回答プロファイルで指定する。"
         ),
         json_schema_extra={"deprecated": True},
     )
@@ -114,7 +114,7 @@ class KnowledgeBaseUpdateRequest(BaseModel):
         default=None,
         description=(
             "廃止(#302)。指定すると 422。KB は所属だけを持ち、構築設定は文書レシピ、"
-            "検索・回答設定は業務ビューで指定する。"
+            "検索・回答設定は検索・回答プロファイルで指定する。"
         ),
         json_schema_extra={"deprecated": True},
     )

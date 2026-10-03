@@ -1,11 +1,11 @@
 """Approved FAQ の embedding 意味照合(rag_poc semantic index)。"""
 
-from app.rag.business_view_knowledge import (
+from app.rag.search_answer_profile_knowledge import (
     FAQ_SEMANTIC_CACHE_KEY,
     add_approved_faq,
     suggest_approved_faq,
 )
-from tests.test_business_view_domain_keywords import FakeKnowledgeOracle
+from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
 
 
 class StubEmbedder:

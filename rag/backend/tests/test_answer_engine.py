@@ -295,25 +295,31 @@ async def test_pipeline_blocked_query_does_not_run_answer_flow(
     assert [audit["outcome"] for audit in audits] == ["blocked"]
 
 
-def test_business_view_ignores_removed_text_search_tokenizer_override() -> None:
+def test_search_answer_profile_ignores_removed_text_search_tokenizer_override() -> None:
     """全文検索の分割方式の上書きは #588 で削除した。保存済みの値は読み捨てる。"""
-    from app.rag.business_view_config import BusinessViewConfig, resolve_business_view_settings
     from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
+    from app.rag.search_answer_profile_config import (
+        SearchAnswerProfileConfig,
+        resolve_search_answer_profile_settings,
+    )
 
     query = KnowledgeBaseQueryConfig.model_validate({"text_search_tokenizer": "sudachi"})
-    config = BusinessViewConfig(knowledge_base_ids=["kb-1"], query=query)
+    config = SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"], query=query)
 
-    settings, _ = resolve_business_view_settings(Settings(), config)
+    settings, _ = resolve_search_answer_profile_settings(Settings(), config)
 
     assert "text_search_tokenizer" not in query.model_dump()
     assert not hasattr(settings, "rag_text_search_tokenizer")
 
 
-def test_business_view_overrides_answer_options() -> None:
-    from app.rag.business_view_config import BusinessViewConfig, resolve_business_view_settings
+def test_search_answer_profile_overrides_answer_options() -> None:
     from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
+    from app.rag.search_answer_profile_config import (
+        SearchAnswerProfileConfig,
+        resolve_search_answer_profile_settings,
+    )
 
-    config = BusinessViewConfig(
+    config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1"],
         query=KnowledgeBaseQueryConfig(
             query_strategy="hyde",
@@ -323,7 +329,7 @@ def test_business_view_overrides_answer_options() -> None:
         ),
     )
 
-    settings, _ = resolve_business_view_settings(Settings(), config)
+    settings, _ = resolve_search_answer_profile_settings(Settings(), config)
 
     assert settings.rag_query_strategy == "hyde"
     assert settings.rag_answer_flow == "standard_rag"
@@ -848,13 +854,14 @@ async def test_answer_record_is_saved_per_surface(monkeypatch: pytest.MonkeyPatc
     )
 
     response = await pipeline.run(
-        SearchRequest(query="受注の登録方法は？", business_view_id="bv-1"), trace_id="trace-1"
+        SearchRequest(query="受注の登録方法は？", search_answer_profile_id="bv-1"),
+        trace_id="trace-1",
     )
     await pipeline.run(SearchRequest(query="受注の登録方法は？"), trace_id="trace-2", history=[])
 
     first, second = oracle.saved
     assert first["trace_id"] == "trace-1"
-    assert first["business_view_id"] == "bv-1"
+    assert first["search_answer_profile_id"] == "bv-1"
     assert first["surface"] == "search"
     assert first["answer"] == response.answer
     assert first["citations"][0]["chunk_id"] == "doc-1:c1"
@@ -1924,17 +1931,20 @@ def test_build_engine_settings_passes_screen_linking(tmp_path: Any) -> None:
     assert enabled.screen_linking_enabled is True
 
 
-def test_business_view_overrides_screen_linking() -> None:
-    """業務ビューで画面目録の連携を上書きできる(#554)。"""
-    from app.rag.business_view_config import BusinessViewConfig, resolve_business_view_settings
+def test_search_answer_profile_overrides_screen_linking() -> None:
+    """検索・回答プロファイルで画面目録の連携を上書きできる(#554)。"""
     from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
+    from app.rag.search_answer_profile_config import (
+        SearchAnswerProfileConfig,
+        resolve_search_answer_profile_settings,
+    )
 
-    config = BusinessViewConfig(
+    config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1"],
         query=KnowledgeBaseQueryConfig(screen_linking_enabled=True),
     )
 
-    settings, _ = resolve_business_view_settings(Settings(), config)
+    settings, _ = resolve_search_answer_profile_settings(Settings(), config)
 
     assert settings.rag_screen_linking_enabled is True
     assert Settings().rag_screen_linking_enabled is False
@@ -2235,7 +2245,7 @@ async def test_answer_engine_relaxes_auto_field_conditions_without_hits(
 async def test_pipeline_reads_field_conditions_only_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """設定が有効なときだけ、業務ビューの項目の定義で質問から条件を読み取る(#652)。"""
+    """設定が有効なときだけ、検索・回答プロファイルの項目の定義で質問から条件を読み取る(#652)。"""
     import rag_engine.adapters.oci as engine_oci
 
     import app.rag.pipeline as pipeline_module
@@ -2244,7 +2254,7 @@ async def test_pipeline_reads_field_conditions_only_when_enabled(
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
 
     class ViewOracle(SavingOracle):
-        async def get_business_view(self, business_view_id: str) -> Any:
+        async def get_search_answer_profile(self, search_answer_profile_id: str) -> Any:
             from types import SimpleNamespace
 
             return SimpleNamespace(
@@ -2270,7 +2280,7 @@ async def test_pipeline_reads_field_conditions_only_when_enabled(
             llm=llm,  # type: ignore[arg-type]
         )
         response = await pipeline.run(
-            SearchRequest(query="10万円以上の受注は？", business_view_id="bv-1"),
+            SearchRequest(query="10万円以上の受注は？", search_answer_profile_id="bv-1"),
             progress_callback=capture,
         )
         answer = cast(dict[str, Any], response.diagnostics.answer or {})
@@ -2294,7 +2304,7 @@ async def test_pipeline_reads_field_conditions_only_when_enabled(
     response = await pipeline.run(
         SearchRequest(
             query="10万円以上の受注は？",
-            business_view_id="bv-1",
+            search_answer_profile_id="bv-1",
             auto_field_filter_excluded=["金額"],
         )
     )

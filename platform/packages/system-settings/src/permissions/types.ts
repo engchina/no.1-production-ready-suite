@@ -16,7 +16,7 @@ export interface PermissionRole extends SecurityRole {
   permissions: string[];
 }
 
-/** 利用できる対象の候補 1 件（業務プロファイル・業務ビュー・ナレッジベース・エージェントなど）。 */
+/** 利用できる対象の候補 1 件（業務プロファイル・検索・回答プロファイル・ナレッジベース・エージェントなど）。 */
 export interface RolePermissionTargetItem {
   id: string;
   name: string;
@@ -29,10 +29,10 @@ export interface RolePermissionTargetItem {
 
 /**
  * 候補の一覧にない ID を直接入力して追加する欄の設定（#215）。
- * マスタを持たない対象（例: Agent の業務ビュー）に使う。入力した ID は候補に足して選択状態にする。
+ * マスタを持たない対象（例: Agent の検索・回答プロファイル）に使う。入力した ID は候補に足して選択状態にする。
  */
 export interface RolePermissionCustomIdOptions {
-  /** 入力欄のラベル（例: 業務ビュー ID を直接入力）。 */
+  /** 入力欄のラベル（例: 検索・回答プロファイル ID を直接入力）。 */
   label: string;
   placeholder?: string;
   /** 入力欄の補足。 */
@@ -73,7 +73,7 @@ export interface RolePermissionTargetPage {
 
 /**
  * ロールに付ける「利用できる対象」の 1 種類。製品固有の対象はこの形で権限管理画面へ差し込む。
- * 例: NL2SQL の業務プロファイル、RAG の業務ビュー・ナレッジベース、Agent のエージェント・業務ビュー。
+ * 例: NL2SQL の業務プロファイル、RAG の検索・回答プロファイル・ナレッジベース、Agent のエージェント・検索・回答プロファイル。
  */
 export interface RolePermissionTargetSection<R extends PermissionRole = PermissionRole> {
   /** draft.targets の key。テスト ID と要素 ID の `security-roles-<key>-*` にも使う。 */

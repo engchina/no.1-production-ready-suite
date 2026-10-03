@@ -1,6 +1,8 @@
 """チャット(会話 / マルチモデル比較)API。
 
-会話は業務ビュー(Business View)配下に置く。メッセージ送信は既存 RAG パイプラインを
+会話は検索・回答プロファイル(Search Answer Pro
+file)配下に置く。メッセージ送信は既存 RAG パイプラインを
+
 再利用し、会話履歴を生成プロンプトへ前置する(検索は最新メッセージのみで実行)。
 ``model_ids`` を複数指定すると設定済み OCI モデルへ fan-out し横並び比較できる。
 """
@@ -21,8 +23,8 @@ from app.api.routes.search import (
     _resolve_query_context,
     _sse_event,
     answer_model_choices,
-    ensure_business_view_has_knowledge_bases,
-    ensure_business_view_knowledge_bases_permitted,
+    ensure_search_answer_profile_has_knowledge_bases,
+    ensure_search_answer_profile_knowledge_bases_permitted,
 )
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oracle import OracleClient, StoredConversation, StoredMessage
@@ -34,17 +36,17 @@ from app.config import (
 from app.db_degradation import load_or_degrade
 from app.rag.answer_engine import AnswerScope
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
-from app.rag.business_view_knowledge import (
-    clarification_document_ids,
-    find_approved_faq,
-    load_runtime_knowledge_payload,
-    resolve_clarification,
-)
 from app.rag.document_sections_service import document_sections
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import new_trace_id
 from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgress
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.search_answer_profile_knowledge import (
+    clarification_document_ids,
+    find_approved_faq,
+    load_runtime_knowledge_payload,
+    resolve_clarification,
+)
 from app.schemas.chat import (
     ChatMessage,
     ChatMessageRequest,
@@ -63,7 +65,7 @@ router = APIRouter()
 
 CHAT_DISABLED_MESSAGE = "チャット機能は現在無効です。"
 CONVERSATION_NOT_FOUND_MESSAGE = "会話が見つかりません。"
-BUSINESS_VIEW_NOT_FOUND_MESSAGE = "業務ビューが見つかりません。"
+SEARCH_ANSWER_PROFILE_NOT_FOUND_MESSAGE = "検索・回答プロファイルが見つかりません。"
 HISTORY_PROMPT_LIMIT = 40
 BLOCKED_MESSAGE_PLACEHOLDER = "安全ポリシーにより内容を保存しませんでした。"
 
@@ -74,8 +76,8 @@ def _require_chat_enabled(settings: Settings) -> None:
         raise HTTPException(status_code=404, detail=CHAT_DISABLED_MESSAGE)
 
 
-def _business_view_is_archived(view: object) -> bool:
-    """テスト fake を含む業務ビューの status を寛容に判定する。"""
+def _search_answer_profile_is_archived(view: object) -> bool:
+    """テスト fake を含む検索・回答プロファイルの status を寛容に判定する。"""
     status = getattr(view, "status", None)
     return getattr(status, "value", status) == "ARCHIVED"
 
@@ -83,7 +85,7 @@ def _business_view_is_archived(view: object) -> bool:
 def _to_conversation_summary(conversation: StoredConversation) -> ConversationSummary:
     return ConversationSummary(
         id=conversation.id,
-        business_view_id=conversation.business_view_id,
+        search_answer_profile_id=conversation.search_answer_profile_id,
         title=conversation.title,
         status=ConversationStatus(conversation.status),
         message_count=conversation.message_count,
@@ -128,7 +130,7 @@ async def list_compare_models() -> ApiResponse[list[dict[str, str]]]:
 
 @router.get("/conversations", response_model=ApiResponse[Page[ConversationSummary]])
 async def list_conversations(
-    business_view_id: str | None = Query(default=None, max_length=128),
+    search_answer_profile_id: str | None = Query(default=None, max_length=128),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[Page[ConversationSummary]]:
@@ -139,9 +141,9 @@ async def list_conversations(
 
     async def _load() -> Page[ConversationSummary]:
         items = await oracle.list_conversations(
-            business_view_id=business_view_id, limit=limit, offset=offset
+            search_answer_profile_id=search_answer_profile_id, limit=limit, offset=offset
         )
-        total = await oracle.count_conversations(business_view_id=business_view_id)
+        total = await oracle.count_conversations(search_answer_profile_id=search_answer_profile_id)
         return Page(
             items=[_to_conversation_summary(item) for item in items],
             total=total,
@@ -166,20 +168,20 @@ async def list_conversations(
 async def create_conversation(
     request: ConversationCreateRequest,
 ) -> ApiResponse[ConversationDetail]:
-    """業務ビュー配下に会話を作成する。"""
+    """検索・回答プロファイル配下に会話を作成する。"""
     settings = get_settings()
     _require_chat_enabled(settings)
     oracle = OracleClient()
-    view = await oracle.get_business_view(request.business_view_id)
+    view = await oracle.get_search_answer_profile(request.search_answer_profile_id)
     if view is None:
-        raise HTTPException(status_code=404, detail=BUSINESS_VIEW_NOT_FOUND_MESSAGE)
-    if _business_view_is_archived(view):
+        raise HTTPException(status_code=404, detail=SEARCH_ANSWER_PROFILE_NOT_FOUND_MESSAGE)
+    if _search_answer_profile_is_archived(view):
         raise HTTPException(
             status_code=409,
-            detail="アーカイブ済みの業務ビューでは会話を作成できません。",
+            detail="アーカイブ済みの検索・回答プロファイルでは会話を作成できません。",
         )
     conversation = await oracle.create_conversation(
-        business_view_id=request.business_view_id, title=request.title
+        search_answer_profile_id=request.search_answer_profile_id, title=request.title
     )
     detail = ConversationDetail(**_to_conversation_summary(conversation).model_dump(), messages=[])
     return ApiResponse(data=detail)
@@ -241,10 +243,12 @@ async def stream_message(
     enforce_rate_limit("search", http_request)
     oracle = OracleClient()
     conversation = await _load_sendable_conversation(oracle, conversation_id)
-    # 業務ビューの解決・発話の検査・USER の保存は、応答を始める前に行う。応答を始めた後の
+    # 検索・回答プロファイルの解決・発話の検査・USER
+    #  の保存は、応答を始める前に行う。応答を始めた後の
+    #
     # HTTPException（409 / 404）や DB の例外は、利用者に理由を返せず stream が途切れるため（#463）。
     turn = await _prepare_chat_turn(
-        oracle, conversation_id, conversation.business_view_id, request, settings
+        oracle, conversation_id, conversation.search_answer_profile_id, request, settings
     )
     return StreamingResponse(
         _stream_chat_events(turn, request),
@@ -256,27 +260,29 @@ async def stream_message(
 async def _load_sendable_conversation(
     oracle: OracleClient, conversation_id: str
 ) -> StoredConversation:
-    """送信できる会話を返す(会話・業務ビューの存在と状態、参照 KB の範囲を確認する)。"""
+    """送信できる会話を返す(会話・検索・回答プロファイルの存在と状態、参照 KB の範囲を確認する)。"""
     conversation = await oracle.get_conversation(conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE)
     if conversation.status != "ACTIVE":
         raise HTTPException(status_code=409, detail="アーカイブ済みの会話には送信できません。")
-    view = await oracle.get_business_view(conversation.business_view_id)
+    view = await oracle.get_search_answer_profile(conversation.search_answer_profile_id)
     if view is None:
-        raise HTTPException(status_code=404, detail=BUSINESS_VIEW_NOT_FOUND_MESSAGE)
-    if _business_view_is_archived(view):
+        raise HTTPException(status_code=404, detail=SEARCH_ANSWER_PROFILE_NOT_FOUND_MESSAGE)
+    if _search_answer_profile_is_archived(view):
         raise HTTPException(
             status_code=409,
-            detail="アーカイブ済みの業務ビューではチャットできません。",
+            detail="アーカイブ済みの検索・回答プロファイルではチャットできません。",
         )
-    # 業務ビューの参照 KB が 0 件なら 409（全 KB を検索しない。#304）、1 つも利用できないなら
+    # 検索・回答プロファイルの参照 KB が 0 件なら 409（
+    # 全 KB を検索しない。#304）、1 つも利用できないなら
+    #
     # 403（#214）。どちらも生成を始める前に HTTP の status で返す。
-    view_config = getattr(view, "config", None)
-    if view_config is not None:
-        knowledge_base_ids = view_config.normalized_knowledge_base_ids()
-        ensure_business_view_has_knowledge_bases(knowledge_base_ids)
-        ensure_business_view_knowledge_bases_permitted(knowledge_base_ids)
+    profile_config = getattr(view, "config", None)
+    if profile_config is not None:
+        knowledge_base_ids = profile_config.normalized_knowledge_base_ids()
+        ensure_search_answer_profile_has_knowledge_bases(knowledge_base_ids)
+        ensure_search_answer_profile_knowledge_bases_permitted(knowledge_base_ids)
     return conversation
 
 
@@ -374,14 +380,14 @@ async def _current_section_pages(
 async def _prepare_chat_turn(
     oracle: OracleClient,
     conversation_id: str,
-    business_view_id: str,
+    search_answer_profile_id: str,
     request: ChatMessageRequest,
     settings: Settings,
 ) -> PreparedChatTurn:
-    """業務ビューの設定を解決し、発話を検査して USER メッセージを保存する。"""
+    """検索・回答プロファイルの設定を解決し、発話を検査して USER メッセージを保存する。"""
     approved_faq: tuple[str, str] | None = None
     if request.approved_faq_id:
-        record = await find_approved_faq(oracle, business_view_id, request.approved_faq_id)
+        record = await find_approved_faq(oracle, search_answer_profile_id, request.approved_faq_id)
         if record is None:
             raise HTTPException(
                 status_code=422,
@@ -391,7 +397,7 @@ async def _prepare_chat_turn(
     scope: AnswerScope | None = None
     filters: dict[str, str] = {}
     if request.clarification is not None:
-        payload = await load_runtime_knowledge_payload(oracle, business_view_id)
+        payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
         resolved = resolve_clarification(
             payload,
             request.clarification,
@@ -403,7 +409,7 @@ async def _prepare_chat_turn(
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "選んだ確認の答えが見つかりません。業務ビューのルールが変わった可能性が"
+                    "選んだ確認の答えが見つかりません。検索・回答プロファイルのルールが変わった可能性が"
                     "あります。もう一度送信して選び直してください。"
                 ),
             )
@@ -413,7 +419,7 @@ async def _prepare_chat_turn(
     base_request = SearchRequest(
         query=request.content,
         top_k=request.top_k,
-        business_view_id=business_view_id,
+        search_answer_profile_id=search_answer_profile_id,
         filters=filters,
     )
     (

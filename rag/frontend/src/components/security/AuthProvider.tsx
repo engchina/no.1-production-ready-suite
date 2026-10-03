@@ -10,7 +10,7 @@ import { securityApi } from "@/lib/security-api";
 import { bindWorkspaceOwner, clearWorkspace } from "@/lib/workspace-state";
 
 /**
- * 利用者と認可が変わったと判断する key（#214）。権限に加えて、利用できる業務ビューとナレッジベースも含める。
+ * 利用者と認可が変わったと判断する key（#214）。権限に加えて、利用できる検索・回答プロファイルとナレッジベースも含める。
  * どれかが変わったら共通の AuthProvider が React Query の cache を破棄し、一覧を取り直させる。
  */
 export function ragIdentityKey(user: CurrentUser): string {
@@ -18,7 +18,7 @@ export function ragIdentityKey(user: CurrentUser): string {
   return JSON.stringify([
     user.user_uuid,
     [...user.permissions].sort(),
-    sorted(user.allowed_business_view_ids),
+    sorted(user.allowed_search_answer_profile_ids),
     sorted(user.allowed_knowledge_base_ids),
   ]);
 }

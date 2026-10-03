@@ -167,7 +167,7 @@ describe("adherence: 任意の表示（#531）", () => {
     const messages = await lint(`
 const a = <TextField id="m" label="メモ" placeholder="メモ(任意)" />;
 const b = <textarea placeholder={\`説明（任意）\`} />;
-const c = { "businessViews.field.descriptionPlaceholder": "この業務ビューの用途(任意)" };
+const c = { "searchAnswerProfiles.field.descriptionPlaceholder": "この検索・回答プロファイルの用途(任意)" };
 const d = { descriptionPlaceholder: "任意で入力します" };
 const e = { "feedback.controls.commentLabel": "コメント（任意）" };
 const f = <label htmlFor="x">許可表(任意・カンマ区切り)</label>;
@@ -211,7 +211,7 @@ const c = <SelectField id="s" label="種別" required requiredLabel={t("common.r
 const d = <FieldLabel htmlFor="sql" label="SQL" required />;
 const e = <Fieldset legend="ロール" required>…</Fieldset>;
 const f = <FieldError id="e" message={t("profiles.error.nameRequired")} />;
-const g = <p>{t("businessViews.scope.required")}</p>;
+const g = <p>{t("searchAnswerProfiles.scope.required")}</p>;
 const h = <code>SELECT * FROM t</code>;
 const i = { scope_code: "*" };
 const j = <Route path="*" element={<Home />} />;

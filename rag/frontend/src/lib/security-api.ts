@@ -143,20 +143,20 @@ export const securityApi = {
   // ---- 権限管理（RAG 固有） ----
   permissions: (options: RequestOptions = {}) =>
     request<PermissionDefinition[]>("/api/security/permissions", { signal: options.signal }),
-  /** 権限管理で選べる業務ビュー / KB の候補（サーバー側の検索とページング。#608）。 */
+  /** 権限管理で選べる検索・回答プロファイル / KB の候補（サーバー側の検索とページング。#608）。 */
   accessTargets: (kind: AccessTargetKind, query: RolePermissionTargetQuery, options: RequestOptions = {}) =>
     request<AccessTargetPage>(
       `/api/security/access-targets/${kind}?${rolePermissionTargetSearchParams(query).toString()}`,
       { signal: options.signal },
     ),
-  /** ロールの RAG 権限と対象範囲（業務ビュー・KB）だけを置き換える。 */
+  /** ロールの RAG 権限と対象範囲（検索・回答プロファイル・KB）だけを置き換える。 */
   updateRoleAccess: (update: RoleAccessUpdate) =>
     mutate<SecurityRole>(
       `/api/security/roles/${encodeURIComponent(update.role_id)}/access`,
       send("PUT", {
         version: update.version,
         permissions: update.permissions,
-        business_view_ids: update.business_view_ids,
+        search_answer_profile_ids: update.search_answer_profile_ids,
         knowledge_base_ids: update.knowledge_base_ids,
       }),
     ).then(normalizeRole),
@@ -170,7 +170,7 @@ export function normalizeRole(role: SecurityRole): SecurityRole {
   return {
     ...role,
     permissions: role.permissions ?? [],
-    business_view_ids: role.business_view_ids ?? [],
+    search_answer_profile_ids: role.search_answer_profile_ids ?? [],
     knowledge_base_ids: role.knowledge_base_ids ?? [],
   };
 }

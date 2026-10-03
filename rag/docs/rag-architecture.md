@@ -70,10 +70,10 @@
    - `SearchRequest` の `mode`・`strategy`・`rerank_top_n`・`generation_profile` は #595 で削除した。旧クライアントが送っても 422 にせず読み捨てる。
    - `filters` は `document_id`、`file_name`、`category_name`、`status` に加え、chunk metadata の `content_kind`、`section_title`、`section_path`、`source_acl`、`document_version` に対応し、retrieval 前に適用する。
    - `content_kind` は `text` / `list` / `table` / `figure` の完全一致、`section_title` / `section_path` は部分一致で使い、複雑文書の章節、表、図・画像説明だけに検索候補を絞れるようにする。RAG 検索の画面からは #649 で入力欄を外した（API の条件としては残す）。
-   - 抽出項目の値の条件（`filters.extraction_fields`。#549）は、利用者が手で指定するほか、`RAG_AUTO_FIELD_FILTER_ENABLED` が有効な業務ビューでは質問から LLM で読み取って足す（self-query。#652。読み取った条件で 0 件なら外して検索し直す。詳細は `docs/rag-engine.md`）。
+   - 抽出項目の値の条件（`filters.extraction_fields`。#549）は、利用者が手で指定するほか、`RAG_AUTO_FIELD_FILTER_ENABLED` が有効な検索・回答プロファイルでは質問から LLM で読み取って足す（self-query。#652。読み取った条件で 0 件なら外して検索し直す。詳細は `docs/rag-engine.md`）。
    - `source_acl` と `document_version` は Oracle chunk metadata に対する完全一致 filter として使い、AIDB RAG の Business Context Pack で tenant / ACL / dataset / version を検索前に固定する。
    - keyword score は重複を除いた query token coverage として 0.0-1.0 に正規化する。
-   - keyword（Oracle Text）の検索語の分割は 1 つだけで、設定では選ばない（#588。`rag_engine` の `retrieval/text_search_tokenizer.py`）。Sudachi の長い単位（C）と短い単位（A）を主の語にし、文字種の区切り（漢字・カタカナ・英数字の連続）・漢字の複合語の先頭 2 字と末尾 2 字・送り仮名を除いた形（「取り消し」→「取消」）を補う語として足す。業務ビューのドメインキーワードは 1 語として優先する。語は `ACCUM` で結び、重みはキーワード 2・主の語 1・補う語と 1 字の語 0.5（多くの語に当たる chunk ほど上にし、補った語だけの一致は軽くする）。語は最大 24 語、query は最大 3,800 文字。Sudachi の辞書が使えない環境では、自動で文字種の区切りだけにする（文字種の連続を主の語にする）。索引の側（`RAG_TEXT_WORLD_LEXER` = `WORLD_LEXER`）は変えない。回答の検索とフィードバックの検索は同じ分割を使う。
+   - keyword（Oracle Text）の検索語の分割は 1 つだけで、設定では選ばない（#588。`rag_engine` の `retrieval/text_search_tokenizer.py`）。Sudachi の長い単位（C）と短い単位（A）を主の語にし、文字種の区切り（漢字・カタカナ・英数字の連続）・漢字の複合語の先頭 2 字と末尾 2 字・送り仮名を除いた形（「取り消し」→「取消」）を補う語として足す。検索・回答プロファイルのドメインキーワードは 1 語として優先する。語は `ACCUM` で結び、重みはキーワード 2・主の語 1・補う語と 1 字の語 0.5（多くの語に当たる chunk ほど上にし、補った語だけの一致は軽くする）。語は最大 24 語、query は最大 3,800 文字。Sudachi の辞書が使えない環境では、自動で文字種の区切りだけにする（文字種の連続を主の語にする）。索引の側（`RAG_TEXT_WORLD_LEXER` = `WORLD_LEXER`）は変えない。回答の検索とフィードバックの検索は同じ分割を使う。
    - vector / keyword / hybrid の同点は document id、chunk index、chunk id で安定順にし、評価の再現性を保つ。
    - citation metadata には章節 metadata に加えて `retrieval_mode`、vector/keyword の rank/score、`rrf_k`、RRF score を含め、hybrid 召回の由来を query 本文なしで追跡できるようにする。
 
@@ -111,8 +111,8 @@
 Agent（Production Control Plane）は RAG を `POST /api/mcp`（MCP の Streamable HTTP、JSON 応答。#232）で呼ぶ。製品同士はコードで依存しない。
 
 - 入口と認証: `Authorization: Bearer <サービストークン>`（`aud=rag`、`sub`=Run の利用者の `user_uuid`、署名鍵は共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`）。Cookie / CSRF は使わない。route manifest では `/mcp` を「認証済みなら通す」とし、権限はツールごとに判定する。
-- 利用者: token の利用者の現在のロール・権限・業務ビュー / ナレッジベースの対象範囲を画面と同じ判定で使う。回答履歴・rate limit も同じ利用者。token の `agent_id` / `run_id` は hash して監査 context の agent / thread に入れる。
-- ツール: `rag_list_business_views`（業務ビュー一覧と同じ権限）、`rag_search`（`menu.search`。`POST /api/search` と同じ処理）。入出力は [backend/README.md](../backend/README.md) の「MCP」を参照。
+- 利用者: token の利用者の現在のロール・権限・検索・回答プロファイル / ナレッジベースの対象範囲を画面と同じ判定で使う。回答履歴・rate limit も同じ利用者。token の `agent_id` / `run_id` は hash して監査 context の agent / thread に入れる。
+- ツール: `rag_list_search_answer_profiles`（検索・回答プロファイル一覧と同じ権限）、`rag_search`（`menu.search`。`POST /api/search` と同じ処理）。入出力は [backend/README.md](../backend/README.md) の「MCP」を参照。
 - チャットは MCP で提供しない（#787）。チャットは画面（SSE の `POST /api/chat/conversations/{id}/messages/stream`）だけの機能で、MCP で提供するのは検索だけ。
 
 ## Oracle AI Database DDL 例
@@ -242,7 +242,7 @@ CREATE TABLE rag_ingestion_audit (
 );
 ```
 
-document / chunk table には `tenant_id_hash` を持たせる。production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` を使わず、tenant なし（単一 tenant）で動かす。利用者と業務ビュー / ナレッジベースの対象範囲はログイン中の利用者（MCP ではサービストークンの利用者）から決め、client の `X-RAG-Allowed-*` header も使わない（#214 / #225）。local（`RAG_AUTH_MODE=local`）だけは開発・検証のため、HTTP header `X-Tenant-ID` がある場合に raw tenant id を保存せず hash 化し、一覧・詳細・重複判定・retrieval を同一 tenant に閉じる（header がない場合は全体を参照できる）。同じく local では `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与すると、document id / category name scope を request context に保持し、document 一覧、詳細、chunk count、Oracle AI Vector Search、Oracle Text keyword search の SQL predicate に適用する。scope header が存在するが有効値がない場合は deny-all とする。
+document / chunk table には `tenant_id_hash` を持たせる。production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` を使わず、tenant なし（単一 tenant）で動かす。利用者と検索・回答プロファイル / ナレッジベースの対象範囲はログイン中の利用者（MCP ではサービストークンの利用者）から決め、client の `X-RAG-Allowed-*` header も使わない（#214 / #225）。local（`RAG_AUTH_MODE=local`）だけは開発・検証のため、HTTP header `X-Tenant-ID` がある場合に raw tenant id を保存せず hash 化し、一覧・詳細・重複判定・retrieval を同一 tenant に閉じる（header がない場合は全体を参照できる）。同じく local では `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与すると、document id / category name scope を request context に保持し、document 一覧、詳細、chunk count、Oracle AI Vector Search、Oracle Text keyword search の SQL predicate に適用する。scope header が存在するが有効値がない場合は deny-all とする。
 
 監査 table は query 本文、OCR 原文、tenant/user id の raw 値を保存しない。検索は `query_hash` と `query_chars`、filter key、安全チェックの code、検索件数・citation 件数、引用した文書 ID、RAG 設定 fingerprint を保存する（旧 standard の検索・context の内訳の列は #595 以降は既定値。既存の監査の行を変えないため列は残す。#596）。回答フローの工程と根拠は回答の記録（`rag_answer_records`）に残す。tenant/user id は `tenant_id_hash` / `user_id_hash` として保存する。取込は `source_sha256` と `source_bytes` を保存し、trace id / request id でアプリログ・Langfuse・Prometheus と相関する。
 

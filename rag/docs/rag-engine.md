@@ -17,7 +17,7 @@ sibling repo `../rag_poc` の、解析から回答生成までの実装を本リ
 | `backend/app/rag/vision.py` | 解析後の図・画像の読み取り（Vision）。Docling を含む全ての解析エンジンで、rag_engine の `describe_layout_pictures`（対象と周辺文脈の 2 枚の画像・装飾画像の skip・表内画像の検出・prompt の metadata）を既定の Vision モデルで実行する。Docling は結果を `layout_records` の record にも書き戻す（#497） |
 | `backend/app/rag/chunking_small_to_big.py` | チャンク戦略 `small_to_big`（画面の表示名は「親子階層（small-to-big）」。rag_poc の Small-to-Big 親子分割） |
 | `backend/app/rag/answer_engine.py` | 回答フロー（rag_poc の回答フローを backend の検索・rerank で駆動。#594 から回答はこれだけ） |
-| `backend/app/rag/business_view_knowledge.py` | 業務ビュー単位の知識（Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール） |
+| `backend/app/rag/search_answer_profile_knowledge.py` | 検索・回答プロファイル単位の知識（Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール） |
 | `backend/app/rag/document_crop.py` | 解析に使ったファイルからの bbox の切り出し（プレビューと回答画像で共用） |
 
 LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の Responses API）だけを使う。接続先はモデル設定（`OCI_ENTERPRISE_AI_*`）。embedding と rerank は Cohere（OCI SDK）のままである。
@@ -29,9 +29,9 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | Docling 解析 | 文書レシピ | 検索・回答設定 > 文書解析、または文書のレシピ編集 |
 | 図・画像を AI で読み取る（Vision） | 文書レシピ | 文書のレシピ編集（解析エンジンに関係なく選べる）。全体の既定は `backend/.env` の `RAG_VISION_ENABLED`。文書解析の画面の「解析後の処理」から保存できる（#497 / #528） |
 | 親子階層（small-to-big） | 文書レシピ | 検索・回答設定 > 文書分割「親子階層（small-to-big）」（分割パラメータ 5 項目もここで設定）、または文書のレシピ編集 |
-| Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール | 業務ビュー | 業務ビューを編集 >「業務ビューの知識」 |
-| 回答の設定（質問の拡張・回答の生成方式・根拠の前後から加える数・Rerank・画面目録で操作画面を探す） | 業務ビュー | 業務ビューを編集 > 検索・回答設定（#594 で回答エンジンの選択を削除し、常に表示する） |
-| 回答の検索と生成の全体既定（質問の拡張・回答の生成方式・根拠の前後から加える数・Rerank・画面目録で操作画面を探す） | global | 検索・回答設定 > 検索方法「回答の検索と生成」（`GET` / `PATCH /api/settings/answering`。`backend/.env` の `RAG_*` に保存する。#593）。業務ビューで上書きできる |
+| Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール | 検索・回答プロファイル | 検索・回答プロファイルを編集 >「検索・回答プロファイルの知識」 |
+| 回答の設定（質問の拡張・回答の生成方式・根拠の前後から加える数・Rerank・画面目録で操作画面を探す） | 検索・回答プロファイル | 検索・回答プロファイルを編集 > 検索・回答設定（#594 で回答エンジンの選択を削除し、常に表示する） |
+| 回答の検索と生成の全体既定（質問の拡張・回答の生成方式・根拠の前後から加える数・Rerank・画面目録で操作画面を探す） | global | 検索・回答設定 > 検索方法「回答の検索と生成」（`GET` / `PATCH /api/settings/answering`。`backend/.env` の `RAG_*` に保存する。#593）。検索・回答プロファイルで上書きできる |
 
 | 文書の分類（大分類・中分類・小分類）と有効期間 | 文書のメタデータ | 文書詳細の「文書の分類と有効期間」（`PUT /api/documents/{id}/classification`） |
 | 質問履歴（記録するか・保存期間・最小回数・件数・除外する語） | global | 検索・回答設定 > 検索方法「質問履歴」（既定は無効。#593 で回答スタイルの画面から移した） |
@@ -46,7 +46,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 
 分類フィルタと有効期間は rag_poc の `_classification_filter_sql` と同じ意味で絞り込む。分類は指定した項目だけを比べる。保存・検索の入力の両方で表記をそろえ（NFKC・前後の空白・連続する空白。`app/schemas/classification.py` の `normalize_category_value`）、比較は先頭の番号の接頭辞（`10_` など）を除いた名前で行う（rag_engine の `_category_label` と同じ。保存値の接頭辞は残す。#547）。文書詳細の分類の入力は、保存済みの分類の値（`GET /api/documents/classification-options`）を候補に出す。既存の文書の分類の表記は `uv run python -m app.rag.classification_normalization --dry-run` で件数を確かめ、Oracle のバックアップ後に `--apply` でそろえる。アップロードはファイル名だけを送り、フォルダの相対パスを持たないため、rag_poc のパスからの分類の推定は移していない。有効期間は基準日（未指定なら今日）で常に絞り、期間のない文書は除外しない。終了日は排他的（`effective_to` の当日は期間外）。分類と有効期間は文書単位で、レシピを切り替えても変わらない。
 
-回答の業務の絞り込み（#545 / #546 / #553）: 業務の範囲の正本は業務ビュー・ナレッジベース（検索範囲）で、その中で質問が大分類の名前を含むときだけ、さらにその業務の候補に絞る。大分類の語の一覧は、検索範囲（`filters` と同じ条件）の文書に保存済みの大分類の DISTINCT（`OracleClient.retrieval_large_categories`）で、1 回の回答で 1 回だけ読む。質問との比較は #547 の正規化（NFKC・空白・番号の接頭辞を外す `category_label`）と大文字・小文字の違いを無視して行い、長い名前から照合する（「業務A」の中の「業務」は拾わない）。一致した大分類は rag_engine の `AnswerDependencies.business_domains` で質問の理解（`inquiry_conditions.business_domains`）へ渡し、rag_engine の `_same_business_records`（一致する候補が無ければ絞らない）と business_match のチャネルが使う。名指しが無い、範囲外の大分類、一致する候補が無いときは絞らない。質問の業務名に domain profile の `business_patterns` は使わない（下の `RAG_ENGINE_DOMAIN_PROFILE_FILE`）。
+回答の業務の絞り込み（#545 / #546 / #553）: 業務の範囲の正本は検索・回答プロファイル・ナレッジベース（検索範囲）で、その中で質問が大分類の名前を含むときだけ、さらにその業務の候補に絞る。大分類の語の一覧は、検索範囲（`filters` と同じ条件）の文書に保存済みの大分類の DISTINCT（`OracleClient.retrieval_large_categories`）で、1 回の回答で 1 回だけ読む。質問との比較は #547 の正規化（NFKC・空白・番号の接頭辞を外す `category_label`）と大文字・小文字の違いを無視して行い、長い名前から照合する（「業務A」の中の「業務」は拾わない）。一致した大分類は rag_engine の `AnswerDependencies.business_domains` で質問の理解（`inquiry_conditions.business_domains`）へ渡し、rag_engine の `_same_business_records`（一致する候補が無ければ絞らない）と business_match のチャネルが使う。名指しが無い、範囲外の大分類、一致する候補が無いときは絞らない。質問の業務名に domain profile の `business_patterns` は使わない（下の `RAG_ENGINE_DOMAIN_PROFILE_FILE`）。
 
 ## 使い方（推奨の流れ）
 
@@ -56,16 +56,16 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
    - 要素の種別と bbox
    - 表のテキスト化
    - Vision の読み取り内容（画面名・ボタン・表の行・操作手順など）と切り出し画像
-4. **業務ビュー**：
+4. **検索・回答プロファイル**：
    - 必要なら質問の拡張・回答の生成方式・根拠の前後から加える数・Rerank・画面目録で操作画面を探すを上書きする（既定は自動ルーティング / CRAG / 3 / ON / OFF。回答エンジンの選択は #594 で削除した）。
-   - 業務ビューの知識に、Approved FAQ・用語・同義語・ドメインキーワード・回答ルールを登録する。タブは回答フローで使う順に並ぶ（類似問の提示 → 用語・同義語で質問を広げる → ドメインキーワードでキーワード検索の語を切り出す → 回答ルールを回答の生成に渡す。#682）。
+   - 検索・回答プロファイルの知識に、Approved FAQ・用語・同義語・ドメインキーワード・回答ルールを登録する。タブは回答フローで使う順に並ぶ（類似問の提示 → 用語・同義語で質問を広げる → ドメインキーワードでキーワード検索の語を切り出す → 回答ルールを回答の生成に渡す。#682）。
 5. **検索**：
-   - 業務ビューを選んで検索すると、先に類似する承認済み FAQ を照会する。候補があれば「この FAQ の回答を使う（LLM を使わない）」か「類似問を使用しない」を選ぶ。
+   - 検索・回答プロファイルを選んで検索すると、先に類似する承認済み FAQ を照会する。候補があれば「この FAQ の回答を使う（LLM を使わない）」か「類似問を使用しない」を選ぶ。
    - 回答には「回答の根拠と実行記録」パネル（信頼度、人手確認、根拠の構成、実行記録）が付く。
    - 保存された回答（回答の記録）は、チャットの各回答の「この回答の根拠と実行記録」から回答・根拠・実行記録ごと開き直せる（会話の回答の trace_id で保存の有無を引き当てる。#304）。「この回答を削除」で個別に削除できる。検索画面の回答履歴の一覧は #444 で削除した（一覧の API `GET /api/search/answers` は、チャットの引き当て（`trace_id` の指定）が使うため残している）。
-   - 扱えるのは自分の回答だけ（詳細・評価・削除も同じ）。SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者は、利用できる業務ビューのすべての利用者の回答を扱える（#304）。
-   - 参照するナレッジベースが 0 件の業務ビューでは検索・チャットしない（利用者が使える全 KB を検索しない）。画面は選んだ時点で理由を示し、API は 409 と理由（「この業務ビューには参照するナレッジベースがありません。…」）を返す（#304）。
-   - RAG 検索・チャットで選ぶ業務ビューは 1 つ（#635。同じ選択欄 `BusinessViewSelect`）。回答はその業務ビューの参照 KB と検索・回答設定・知識で作る。
+   - 扱えるのは自分の回答だけ（詳細・評価・削除も同じ）。SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者は、利用できる検索・回答プロファイルのすべての利用者の回答を扱える（#304）。
+   - 参照するナレッジベースが 0 件の検索・回答プロファイルでは検索・チャットしない（利用者が使える全 KB を検索しない）。画面は選んだ時点で理由を示し、API は 409 と理由（「この検索・回答プロファイルには参照するナレッジベースがありません。…」）を返す（#304）。
+   - RAG 検索・チャットで選ぶ検索・回答プロファイルは 1 つ（#635。同じ選択欄 `SearchAnswerProfileSelect`）。回答はその検索・回答プロファイルの参照 KB と検索・回答設定・知識で作る。
 6. **評価**：回答の根拠と実行記録のパネル（RAG 検索・チャット）の「標準回答による評価」に期待する回答を入れて「標準回答で評価」を押すと、評価の基準（検索・回答設定）の指標のうち 1 件の回答で測れるもの（Faithfulness（主張の判定）・標準回答の網羅・拒答の正しさ・引用の追跡可能性。根拠との語句の一致率は参考値）を、選んでいる基準の閾値で判定し（`rag_engine.evaluation.answer_eval` が LLM で標準回答の項目の照合と主張の監査を行い、`app/rag/answer_metrics.py` が指標と合否を付ける。#680）、結果を回答記録に保存する。rag_poc と違い、生成の後に評価する。この機能より前に保存した回答は評価の入力を持たないので評価できない。評価は LLM を複数回呼ぶため、この API だけ時間の上限を長くしている（#304）：backend は評価全体を LLM 1 回の timeout の設定の上限（600 秒）で打ち切って 504 と理由を返し、評価を保存しない。画面は 630 秒、Nginx（`init_script.sh` が生成する、評価と回答生成・MCP の `location ~ ^/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|mcp)$`）は 660 秒待つ（backend の理由が画面に届くよう、外側ほど長くする）。
 7. **フィードバック**：回答を「役に立たなかった」と評価するときに、rag_poc の分類（ナレッジ不足・情報が古い・質問が曖昧を含む）と修正した回答を入力できる。管理者はフィードバック画面の詳細から、Approved FAQ への登録と品質評価のケースへの追加ができる。フィードバック画面の一覧・集計・詳細は、SYSTEM_ADMIN はすべての利用者の分、ほかのロールは自分が送った分だけで、画面の先頭に見える範囲を案内する（#408）。
 8. **検証**：`uv run python -m app.rag.answer_verify_cli`（`answers` / `regression` / `crag-goldset`）で、QA の一括の標準回答評価、rag_poc の問い合わせ回帰、CRAG goldset の評価を実行できる（`docs/evaluation-observability-guardrails.md`）。
@@ -82,14 +82,14 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_CHUNK_PARENT_MAX_PAGES` | `3` | 親チャンク最大ページ数（1〜5） |
 | `RAG_CHUNK_PARENT_MAX_CHILDREN` | `12` | 親チャンク最大 child 数（3〜20） |
 | `RAG_VISION_ENABLED` | `false` | 解析の後に図と画像入りの表を既定の Vision モデルで説明し、図の要素の本文にする。全ての解析エンジンで使える（文書レシピで上書きできる。#497。旧 `RAG_PARSER_DOCLING_VISION_ENABLED` は読まない） |
-| `RAG_QUERY_STRATEGY` | `auto_routing` | 質問の拡張（query rewriting / expansion）の方式（`simple_retrieval` / `rag_fusion` / `query_decomposition` / `step_back_prompting` / `hyde`）。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、業務ビューで上書きできる |
-| `RAG_ANSWER_FLOW` | `crag` | 回答の生成方式。`crag`（CRAG）は検索結果を評価して必要なら補正検索し、`standard_rag`（標準 RAG）は補正検索をしない。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、業務ビューで上書きできる |
-| `RAG_NEIGHBOR_CHILD_COUNT` | `3` | 回答で根拠の child の前後から context へ足す近傍 child 数（0〜20）。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、業務ビューで上書きできる |
-| `RAG_RERANK_ENABLED` | `true` | 回答で検索候補を rerank で並べ替える。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、業務ビューで上書きできる |
-| `RAG_SCREEN_LINKING_ENABLED` | `false` | 画面目録で操作画面を探す（rag_poc の画面目録の連携、#554）。検索範囲の文書の番号付きの見出し（「（２）帳票印字設定」など）の目録から、質問を解決する画面を LLM で選び、その画面の child chunk（画面ごとに最大 10 件）と親を検索候補に加える。候補は足すだけで減らさず、順位は rerank が決める。回答ごとに LLM の呼び出しが 1 回増える。目録は検索範囲（`filters` と同じ条件）の全文書の `section_path` を DB で集計して作り（`OracleClient.retrieval_screen_sections`）、検索範囲と索引の状態（chunk の件数と chunk_id・文書名の hash。文書の追加・削除・再索引で変わる）ごとに process 内で cache する。選んだ画面の chunk も DB から読む（`retrieval_screen_chunks`）ので、検索で出なかった画面も候補に加わる。rag_engine の `AnswerDependencies.screen_catalog` / `screen_chunks` で注入する。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、業務ビューで上書きできる（業務ビューを編集 > 検索・回答設定 >「回答の検索のオプション」） |
-| `RAG_AUTO_FIELD_FILTER_ENABLED` | `false` | 質問から抽出項目の条件を読み取って検索を絞り込む（self-query、#652）。業務ビューの参照 KB で定義した抽出項目（名前・型。検索の「抽出項目の値で絞り込む」と同じ定義）と質問を回答の LLM（チャットの比較ではその列のモデル）に渡し、「2025年以降」「10万円以上」のような条件を `filters.extraction_fields` の条件にする（`app/rag/field_filter_reader.py`）。出力は定義と型で検証し、定義に無い項目・型に合わない演算子や値は使わない。利用者が手で指定した条件の項目には足さない。読み取った条件で 0 件なら、その条件を外して 1 回だけ検索し直し、診断（`diagnostics.answer.auto_field_filter` の `relaxed`）と画面に出す。項目の定義が無い業務ビューでは LLM を呼ばない。チャットは会話履歴で書き換えた質問から読む。RAG 検索の画面は読み取った条件を「自動」のチップで出し、外すと `auto_field_filter_excluded` にその項目を入れて検索し直す。工程の名前は `field_filter`（「検索条件の読み取り」）。質問ごとに LLM の呼び出しが 1 回増える。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、業務ビューで上書きできる |
+| `RAG_QUERY_STRATEGY` | `auto_routing` | 質問の拡張（query rewriting / expansion）の方式（`simple_retrieval` / `rag_fusion` / `query_decomposition` / `step_back_prompting` / `hyde`）。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、検索・回答プロファイルで上書きできる |
+| `RAG_ANSWER_FLOW` | `crag` | 回答の生成方式。`crag`（CRAG）は検索結果を評価して必要なら補正検索し、`standard_rag`（標準 RAG）は補正検索をしない。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、検索・回答プロファイルで上書きできる |
+| `RAG_NEIGHBOR_CHILD_COUNT` | `3` | 回答で根拠の child の前後から context へ足す近傍 child 数（0〜20）。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、検索・回答プロファイルで上書きできる |
+| `RAG_RERANK_ENABLED` | `true` | 回答で検索候補を rerank で並べ替える。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、検索・回答プロファイルで上書きできる |
+| `RAG_SCREEN_LINKING_ENABLED` | `false` | 画面目録で操作画面を探す（rag_poc の画面目録の連携、#554）。検索範囲の文書の番号付きの見出し（「（２）帳票印字設定」など）の目録から、質問を解決する画面を LLM で選び、その画面の child chunk（画面ごとに最大 10 件）と親を検索候補に加える。候補は足すだけで減らさず、順位は rerank が決める。回答ごとに LLM の呼び出しが 1 回増える。目録は検索範囲（`filters` と同じ条件）の全文書の `section_path` を DB で集計して作り（`OracleClient.retrieval_screen_sections`）、検索範囲と索引の状態（chunk の件数と chunk_id・文書名の hash。文書の追加・削除・再索引で変わる）ごとに process 内で cache する。選んだ画面の chunk も DB から読む（`retrieval_screen_chunks`）ので、検索で出なかった画面も候補に加わる。rag_engine の `AnswerDependencies.screen_catalog` / `screen_chunks` で注入する。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、検索・回答プロファイルで上書きできる（検索・回答プロファイルを編集 > 検索・回答設定 >「回答の検索のオプション」） |
+| `RAG_AUTO_FIELD_FILTER_ENABLED` | `false` | 質問から抽出項目の条件を読み取って検索を絞り込む（self-query、#652）。検索・回答プロファイルの参照 KB で定義した抽出項目（名前・型。検索の「抽出項目の値で絞り込む」と同じ定義）と質問を回答の LLM（チャットの比較ではその列のモデル）に渡し、「2025年以降」「10万円以上」のような条件を `filters.extraction_fields` の条件にする（`app/rag/field_filter_reader.py`）。出力は定義と型で検証し、定義に無い項目・型に合わない演算子や値は使わない。利用者が手で指定した条件の項目には足さない。読み取った条件で 0 件なら、その条件を外して 1 回だけ検索し直し、診断（`diagnostics.answer.auto_field_filter` の `relaxed`）と画面に出す。項目の定義が無い検索・回答プロファイルでは LLM を呼ばない。チャットは会話履歴で書き換えた質問から読む。RAG 検索の画面は読み取った条件を「自動」のチップで出し、外すと `auto_field_filter_excluded` にその項目を入れて検索し直す。工程の名前は `field_filter`（「検索条件の読み取り」）。質問ごとに LLM の呼び出しが 1 回増える。検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、検索・回答プロファイルで上書きできる |
 | `RAG_APPROVED_FAQ_SEMANTIC_ENABLED` | `true` | 類似問の照合に embedding の意味類似度を加える |
-| `RAG_APPROVED_FAQ_CHAT_MIN_SCORE` | `0.75` | チャットで類似問を提示する一致度の下限（0〜1）。チャットは送信のたびに類似問を照会し、この値以上の候補を最大 3 件と「どれでもない」を出して、どれかを選ぶまで回答しない。類似問を選ぶと、資料を検索せずに質問と類似問・承認済みの回答だけから LLM が回答する（業務ビューの知識の「Approved FAQ（類似問）」でオン / オフ。#684 / #702 / #709） |
+| `RAG_APPROVED_FAQ_CHAT_MIN_SCORE` | `0.75` | チャットで類似問を提示する一致度の下限（0〜1）。チャットは送信のたびに類似問を照会し、この値以上の候補を最大 3 件と「どれでもない」を出して、どれかを選ぶまで回答しない。類似問を選ぶと、資料を検索せずに質問と類似問・承認済みの回答だけから LLM が回答する（検索・回答プロファイルの知識の「Approved FAQ（類似問）」でオン / オフ。#684 / #702 / #709） |
 | `RAG_APPROVED_FAQ_CHAT_MAX_GAP` | `0.1` | チャットで類似問を提示するとき、1 位の一致度からこの差より離れた候補を出さない（#709） |
 | `RAG_ANSWER_VISION_ENABLED` | `true` | 画像を見て答える必要がある質問（rag_engine の `should_include_image_evidence`）では、根拠の図を切り出して既定の Vision モデル（システム設定 > モデル）へ添付して回答する。それ以外の回答・質問の拡張・監査は既定のテキストモデル（チャットの比較ではその列のモデル）で行う。Vision モデルが未設定なら添付しない（#649） |
 | `RAG_HISTORY_REWRITE_ENABLED` | `true` | チャットで、会話履歴から質問を書き換える |
@@ -98,7 +98,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_ENGINE_DOMAIN_PROFILE_FILE`（backend の process の環境変数） | 未指定 | legacy profile の JSON（業務固有の語。書式は rag_poc の `domain_profile.example.json`。業務固有の profile は同梱していない）。rag_engine の `rag_engine.profiles` が process の環境変数（`os.environ`）を直接読み、未指定なら作業ディレクトリ（backend は `rag/backend/`）の `domain_profile.json` を読む。どちらのファイルもなければ分類・別名・判定語なしで動く。`backend/.env` / 共通 `.env` に書いても process の環境変数にはならないため効かない。指定するときは systemd の unit の `Environment=` か、起動する shell の `export` で渡す。読んだ内容は process 内で cache するため、変えたら backend を再起動する。rag_engine の設定（`build_engine_settings`）には読み先を渡していない（#569）。質問の業務名（`business_patterns`）には使わない（検索範囲の大分類の語の一覧から照合する。#553）。今も使う項目は、質問の検索語の別名（`aliases`）、ファイル・データの確認と外部連携の判定語（`file_data_terms` / `external_context_terms`）、操作手順の節ラベル（`operation_section_pattern`）、問い合わせ元の語（`requester_terms`）、大分類・中分類の候補（`categories`。business_match の番号付きの分類名の照合）と、取込時の chunk の `retrieval_profile.business_domains`（`business_patterns`。business_match の照合先の 1 つ）。画面からは管理できない |
 | `RAG_ENGINE_RENDER_DPI`（docling サービス） | `300` | 解析時のページ画像の解像度。bbox はこの画像の px 座標になる |
 
-**チャットの確認の質問（#717）**: 業務ビューのルールに確認の質問と選択肢（2〜8 件。表示名・説明・検索に足す語・回答に渡す前提・章節）を設定すると、チャットは質問がそのルールに一致したとき（選択肢の名前・語が質問に既に入っていれば除く）、回答の前に確認を出す。類似問の提示の後（「どれでもない」を選んだとき）に出し、1 つの質問で聞き返すのは 1 回だけ。選んだ答えは backend がルールから引き直し、章節は検索の絞り込み `page_ranges`（文書と chunk のページの重なり。複数の章節は OR）に、選択・前提・その他の入力は回答のプロンプトの前置きに、検索に足す語は補助の検索文にする。範囲の中に根拠が無ければ、そのように答える（範囲の外から補わない）。回答の末尾に対象の範囲を示し、回答の記録の diagnostics の `scope` に残す。章節のページは、ルールに保存したときのページを使う（抽出をやり直してページが変わったら、ルールの章節を選び直す）。
+**チャットの確認の質問（#717）**: 検索・回答プロファイルのルールに確認の質問と選択肢（2〜8 件。表示名・説明・検索に足す語・回答に渡す前提・章節）を設定すると、チャットは質問がそのルールに一致したとき（選択肢の名前・語が質問に既に入っていれば除く）、回答の前に確認を出す。類似問の提示の後（「どれでもない」を選んだとき）に出し、1 つの質問で聞き返すのは 1 回だけ。選んだ答えは backend がルールから引き直し、章節は検索の絞り込み `page_ranges`（文書と chunk のページの重なり。複数の章節は OR）に、選択・前提・その他の入力は回答のプロンプトの前置きに、検索に足す語は補助の検索文にする。範囲の中に根拠が無ければ、そのように答える（範囲の外から補わない）。回答の末尾に対象の範囲を示し、回答の記録の diagnostics の `scope` に残す。章節のページは、ルールに保存したときのページを使う（抽出をやり直してページが変わったら、ルールの章節を選び直す）。
 
 Vision は backend がモデル設定の既定の Vision モデル（OCI Enterprise AI）で呼ぶ。docling サービスは LLM を呼ばないため、OCI Enterprise AI の設定は渡さない（#497）。
 
@@ -137,9 +137,9 @@ ai-foundations-lab の検証との照合（#512）:
 
 ## 保存先
 
-- **質問履歴**：`rag_query_history`（業務ビュー単位。安全チェックでマスクした後の質問・正規化した質問・分類条件）。migration `20260926_005_query_history` で作成する。設定が有効なときだけ、回答に成功した質問（検索とチャット）を記録し、保存期間を過ぎたものを削除する。候補は rag_poc の `suggest_query_history_questions`（最小回数・類似度・分類・除外する語）で出す。
+- **質問履歴**：`rag_query_history`（検索・回答プロファイル単位。安全チェックでマスクした後の質問・正規化した質問・分類条件）。migration `20260926_005_query_history` で作成する。設定が有効なときだけ、回答に成功した質問（検索とチャット）を記録し、保存期間を過ぎたものを削除する。候補は rag_poc の `suggest_query_history_questions`（最小回数・類似度・分類・除外する語）で出す。
 - **文書の分類と有効期間**：`rag_documents.classification`（JSON）。migration `20260926_001_documents_classification` で列を追加する。ACL に使う `category_name` とは別に持つ。
-- **業務ビューの知識**：`rag_business_view_knowledge`（業務ビュー × 種別、rag_poc の JSON payload のまま）。表は「運用設定 > システムテーブル」から、migration `20260925_001_business_view_knowledge` で作成する。
+- **検索・回答プロファイルの知識**：`rag_search_answer_profile_knowledge`（検索・回答プロファイル × 種別、rag_poc の JSON payload のまま）。表は「運用設定 > システムテーブル」から、migration `20260925_001_business_view_knowledge` で作成する。
 - **親子チャンク**：子を `rag_chunks` に保存する。親の本文（`parent_text`）、検索用テキスト（`engine_search_text`）、metadata v4（`engine_metadata_json`）は子の metadata に持つ。
 - **回答の記録**：`rag_answer_records`（trace_id 単位で質問・書き換え後の質問・回答・引用・回答フローの診断情報・持ち主 `user_id_hash`）。持ち主は回答を生成した利用者（監査 context の `user_id_hash`）で、migration `20260928_002_answer_record_owner` が列と index（`rag_answer_records_owner_idx`）を足す。既存の行（持ち主なし）は、同じ trace_id のチャットの回答（`rag_messages`）か検索の監査（`rag_search_audit`。監査を Oracle に保存している環境だけ）から利用者が 1 人に決まるものだけ持ち主を補い、補えなかった行は持ち主なしのまま SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者だけが扱える（一般の利用者のチャットからは開けない）。標準回答での評価の入力（`evaluation_input_json`、根拠の本文を含む）と評価結果（`evaluation_json`）も同じ行に持つ（migration `20260926_002_answer_record_evaluation`）。回答を同じ trace_id で保存し直すと評価結果は消える。migration `20260925_002_answer_records` で作成する。保存に失敗しても回答は返す。保存期間を過ぎた記録は、回答の保存時と保存期間の設定変更時に削除する。
 - **切り出し画像**：保存しない。プレビューは `GET /api/documents/{id}/crop` で、回答時は一時ディレクトリで都度作る。
@@ -153,12 +153,12 @@ ai-foundations-lab の検証との照合（#512）:
 
 | 削除した設定 | あった場所 | 今の回答フローでの扱い |
 |---|---|---|
-| 検索モード・検索オプション（クエリ拡張・LLM マルチクエリ生成・gap-stop・業務適合加重・補正検索） | 検索・回答設定 > 検索方法、業務ビュー「検索方法」 | 「質問の拡張」で作った検索文ごとにハイブリッド検索し、補正は CRAG（回答の生成方式）が行う。検索方法の画面は「回答の検索と生成」「回答の記録の保存期間」「質問履歴」の 3 カードになった |
-| 処理方式・補正検索（CRAG）のしきい値・再検索の上限回数・低 grade で回答を保留する | 検索・回答設定 > 根拠確認（`/settings/grounding`）、業務ビュー「根拠確認」 | 根拠の確認は「回答の生成方式」（CRAG / 標準 RAG）で選ぶ |
-| 回答スタイル | 検索・回答設定 > 回答スタイル（`/settings/generation`）、業務ビュー「回答スタイル」 | 回答は回答生成のプロンプトの形で書く（回答の記録の保存期間と質問履歴は、#593 で検索方法の画面へ移した） |
+| 検索モード・検索オプション（クエリ拡張・LLM マルチクエリ生成・gap-stop・業務適合加重・補正検索） | 検索・回答設定 > 検索方法、検索・回答プロファイル「検索方法」 | 「質問の拡張」で作った検索文ごとにハイブリッド検索し、補正は CRAG（回答の生成方式）が行う。検索方法の画面は「回答の検索と生成」「回答の記録の保存期間」「質問履歴」の 3 カードになった |
+| 処理方式・補正検索（CRAG）のしきい値・再検索の上限回数・低 grade で回答を保留する | 検索・回答設定 > 根拠確認（`/settings/grounding`）、検索・回答プロファイル「根拠確認」 | 根拠の確認は「回答の生成方式」（CRAG / 標準 RAG）で選ぶ |
+| 回答スタイル | 検索・回答設定 > 回答スタイル（`/settings/generation`）、検索・回答プロファイル「回答スタイル」 | 回答は回答生成のプロンプトの形で書く（回答の記録の保存期間と質問履歴は、#593 で検索方法の画面へ移した） |
 | 高度な検索（検索の計画: 書き換え / HyDE / 分解） | 検索・回答設定 > 高度な検索（`/settings/agentic`） | 「質問の拡張」が同じ役割を持つ |
 | system prompt の版（カスタム回答スタイル） | 検索・回答設定 > 回答プロンプト | 回答プロンプトの画面は回答生成のプロンプトだけになった |
-| 回答の役割・口調・既定の回答言語 | 業務ビュー「回答プロンプト」 | 削除した（保存済みの値は読み込み時に捨て、次に保存すると消える） |
+| 回答の役割・口調・既定の回答言語 | 検索・回答プロファイル「回答プロンプト」 | 削除した（保存済みの値は読み込み時に捨て、次に保存すると消える） |
 
 - 削除した画面の URL（`/settings/grounding`・`/settings/generation`・`/settings/agentic`）は検索方法（`/settings/retrieval`）へ移す。
 - 削除した API は `GET/PATCH /api/settings/retrieval`・`/grounding`・`/generation`・`/agentic`、`GET/POST /api/settings/prompts`・`POST /api/settings/prompts/{version_id}/activate`。回答の設定は `/api/settings/answering`・`/answer-records`・`/query-history`・`/answer-prompts` だけになった。
@@ -174,7 +174,7 @@ standard の回答エンジンを消す（#592）前に、standard だけが持�
 - **検索だけの経路**: `SearchRequest.retrieval_only`（既定 `false`）が `true` のとき、`AnswerEngine.retrieve` が回答の検索（`_search`）を原質問 1 本で呼び、候補を引用として返す（回答は空）。質問の理解・質問の拡張・rerank・CRAG・回答の生成は行わず、LLM を呼ばない。回答の記録・質問履歴も保存しない（検索の監査は残す）。進捗は `retrieval` の 1 工程。KB の検索テストとレシピの検索比較が使う。レシピの比較の `filters.chunk_set_id` は Oracle の検索条件（`_oracle_retrieval_where`）でそのまま効く。回答エンジンが standard のときは今までどおり回答していた（`retrieval_only` を無視する。#594 で standard は呼ばれなくなった）。
 - **全体既定の画面**: 質問の拡張・回答の生成方式・根拠の前後から加える数・Rerank・画面目録で操作画面を探すの全体既定を、検索・回答設定 > 検索方法「回答の検索と生成」で変えられる（`GET` / `PATCH /api/settings/answering`。権限は `menu.settings_retrieval`）。回答の記録の保存期間と質問履歴のカードも同じ画面へ移した（API の権限も `menu.settings_retrieval` に変えた）。
 - **回答フローの進捗**: 回答フローの各工程（`rag_engine.generation.execution_record._execution_step`。質問の理解・文書検索（1回目）など）の開始と終了を、`answer` の中の入れ子の工程として進捗（SSE の `stage`）へ流す。工程の名前は `answer_step:<工程名>` で、画面の進捗と時間切れの文言は工程名をそのまま出す（`ANSWER_STEP_STAGE_PREFIX`。frontend の `answer-progress.ts` と同じ）。
-- **固定の同義語 14 組**（`query_transform.SYNONYM_GROUPS`）は既定の別名（aliases）へ移さない。会計・文書管理の一般語と英訳の組で、業務ごとの別名（業務ビューの用語・同義語、domain profile の `aliases`）と重なり、移すと回答の検索語が今の挙動から変わるため。#595 で `query_transform.py` ごと削除した。
+- **固定の同義語 14 組**（`query_transform.SYNONYM_GROUPS`）は既定の別名（aliases）へ移さない。会計・文書管理の一般語と英訳の組で、業務ごとの別名（検索・回答プロファイルの用語・同義語、domain profile の `aliases`）と重なり、移すと回答の検索語が今の挙動から変わるため。#595 で `query_transform.py` ごと削除した。
 
 ## 親子階層（`hierarchical_parent_child`）の削除（#271）
 
@@ -197,4 +197,4 @@ LlamaIndex AutoMerging 風の分割方式「親子階層」は削除し、一覧
 
 ## 既知の制約
 
-- 業務ビューの知識の同時編集は後勝ちになる。
+- 検索・回答プロファイルの知識の同時編集は後勝ちになる。

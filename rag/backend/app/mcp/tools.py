@@ -1,11 +1,13 @@
 """RAG が Agent に公開する MCP ツール（#232）。
 
 入口は `POST /api/mcp`（`app.api.routes.mcp`）。利用者はサービストークンの `sub`（Agent の Run の
-利用者）で、権限・業務ビュー / ナレッジベースの対象範囲は画面と同じ判定を使う。各ツールは
+利用者）で、権限・検索・回答プロファイル / ナレッ
+ジベースの対象範囲は画面と同じ判定を使う。各ツールは
+
 既存の route と同じ関数（rate limit・timeout・範囲の判定を含む）を呼ぶだけにする。
 
-- `rag_list_business_views`（業務ビュー一覧の route と同じ権限）:
-  `business_views.list_business_views`（ACTIVE のみ）
+- `rag_list_search_answer_profiles`（検索・回答プロファイル一覧の route と同じ権限）:
+  `search_answer_profiles.list_search_answer_profiles`（ACTIVE のみ）
 - `rag_search`（`menu.search`）: `search._run_search_with_timeout`
 
 RAG のチャットは画面の機能で、MCP では提供しない（#787）。MCP で提供するのは検索だけにする。
@@ -22,25 +24,26 @@ from pr_backend_core.mcp import (
     McpTool,
     McpToolError,
 )
-from pydantic import AfterValidator, BaseModel, Field, ValidationError
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
 
-from app.api.routes import business_views as business_views_route
 from app.api.routes import search as search_route
+from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.config import get_settings
 from app.rag.rate_limit import enforce_rate_limit
-from app.schemas.business_view import BusinessViewStatus
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
+from app.schemas.search_answer_profile import SearchAnswerProfileStatus
 from app.security.permissions import MENU_SEARCH, ROUTE_PERMISSIONS
 
 MCP_SERVER_NAME = "production-ready-rag"
 CITATION_TEXT_MAX_CHARS = 1000
 
-BUSINESS_VIEW_READ_PERMISSIONS = ROUTE_PERMISSIONS[("GET", "/business-views")]
+SEARCH_ANSWER_PROFILE_READ_PERMISSIONS = ROUTE_PERMISSIONS[("GET", "/search-answer-profiles")]
 SEARCH_PERMISSIONS = frozenset({MENU_SEARCH})
 
 INSTRUCTIONS = (
     "Production Ready RAG の検索・回答のツールです。"
-    "まず rag_list_business_views で使える業務ビューを確認し、その id を rag_search に"
+    "まず rag_list_search_answer_profiles で使"
+    "える検索・回答プロファイルを確認し、その id を rag_search に"
     "渡してください。回答の根拠は citations にあります。"
 )
 
@@ -59,8 +62,8 @@ OptionalText = Annotated[str | None, AfterValidator(_strip_or_none)]
 # ---- 入力 ----
 
 
-class ListBusinessViewsInput(BaseModel):
-    """業務ビュー一覧の条件。"""
+class ListSearchAnswerProfilesInput(BaseModel):
+    """検索・回答プロファイル一覧の条件。"""
 
     query: OptionalText = Field(
         default=None, max_length=200, description="名前・説明の部分一致（省略時は全件）。"
@@ -69,18 +72,20 @@ class ListBusinessViewsInput(BaseModel):
 
 
 class SearchInput(BaseModel):
-    """検索・回答の条件。"""
+    """検索・回答の条件。旧 scope を含む未定義項目は拒否する。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     query: str = Field(..., min_length=1, max_length=8000, description="質問文。")
-    business_view_id: OptionalText = Field(
+    search_answer_profile_id: OptionalText = Field(
         default=None,
         max_length=128,
-        description="業務ビューの id。参照するナレッジベースと検索・回答設定を使う。",
+        description="検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。",
     )
     knowledge_base_ids: list[str] = Field(
         default_factory=list,
         max_length=200,
-        description="検索するナレッジベースの id（省略時は業務ビューの参照先）。",
+        description="検索するナレッジベースの id（省略時は検索・回答プロファイルの参照先）。",
     )
     top_k: int | None = Field(default=None, ge=1, le=100, description="検索する件数。")
     filters: dict[str, str] = Field(
@@ -91,7 +96,7 @@ class SearchInput(BaseModel):
 # ---- 出力 ----
 
 
-class BusinessViewItem(BaseModel):
+class SearchAnswerProfileItem(BaseModel):
     id: str
     name: str
     description: str | None = None
@@ -99,8 +104,8 @@ class BusinessViewItem(BaseModel):
     knowledge_base_count: int
 
 
-class ListBusinessViewsOutput(BaseModel):
-    business_views: list[BusinessViewItem]
+class ListSearchAnswerProfilesOutput(BaseModel):
+    search_answer_profiles: list[SearchAnswerProfileItem]
 
 
 class RagCitation(BaseModel):
@@ -143,8 +148,8 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
         "knowledge_base_ids": arguments.knowledge_base_ids,
         "filters": arguments.filters,
     }
-    if arguments.business_view_id is not None:
-        payload["business_view_id"] = arguments.business_view_id
+    if arguments.search_answer_profile_id is not None:
+        payload["search_answer_profile_id"] = arguments.search_answer_profile_id
     if arguments.top_k is not None:
         payload["top_k"] = arguments.top_k
     try:
@@ -164,18 +169,23 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
 def build_rag_mcp_server(http_request: Request) -> McpServer:
     """1 リクエスト分の MCP サーバー（rate limit に呼び出し元の request を使う）。"""
 
-    async def list_business_views(arguments: ListBusinessViewsInput) -> ListBusinessViewsOutput:
-        response = await business_views_route.list_business_views(
-            status=BusinessViewStatus.ACTIVE, q=arguments.query, limit=arguments.limit, offset=0
+    async def list_search_answer_profiles(
+        arguments: ListSearchAnswerProfilesInput,
+    ) -> ListSearchAnswerProfilesOutput:
+        response = await search_answer_profiles_route.list_search_answer_profiles(
+            status=SearchAnswerProfileStatus.ACTIVE,
+            q=arguments.query,
+            limit=arguments.limit,
+            offset=0,
         )
         if response.warning_messages:
             # DB 停止時の縮退（空一覧）は、Agent には「0 件」と区別できるエラーで返す。
             raise HTTPException(status_code=503, detail=response.warning_messages[0])
         page = response.data
         items = page.items if page is not None else []
-        return ListBusinessViewsOutput(
-            business_views=[
-                BusinessViewItem(
+        return ListSearchAnswerProfilesOutput(
+            search_answer_profiles=[
+                SearchAnswerProfileItem(
                     id=view.id,
                     name=view.name,
                     description=view.description,
@@ -198,17 +208,17 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         instructions=INSTRUCTIONS,
         tools=[
             McpTool(
-                name="rag_list_business_views",
-                description="利用できる業務ビュー（ACTIVE）の一覧を返します。",
-                input_model=ListBusinessViewsInput,
-                handler=list_business_views,
-                output_model=ListBusinessViewsOutput,
-                permissions=(BUSINESS_VIEW_READ_PERMISSIONS,),
+                name="rag_list_search_answer_profiles",
+                description="利用できる検索・回答プロファイル（ACTIVE）の一覧を返します。",
+                input_model=ListSearchAnswerProfilesInput,
+                handler=list_search_answer_profiles,
+                output_model=ListSearchAnswerProfilesOutput,
+                permissions=(SEARCH_ANSWER_PROFILE_READ_PERMISSIONS,),
             ),
             McpTool(
                 name="rag_search",
                 description=(
-                    "業務ビューのナレッジベースを検索し、根拠（citations）付きの回答を返します。"
+                    "検索・回答プロファイルのナレッジベースを検索し、根拠（citations）付きの回答を返します。"
                 ),
                 input_model=SearchInput,
                 handler=search,

@@ -1,4 +1,4 @@
-"""業務ビュー単位の知識(ドメインキーワード等)の API schema。"""
+"""検索・回答プロファイル単位の知識(ドメインキーワード等)の API schema。"""
 
 from typing import Literal
 
@@ -8,9 +8,9 @@ from app.schemas.common import JsonValue
 
 
 class DomainKeywordsData(BaseModel):
-    """業務ビューのドメインキーワード。"""
+    """検索・回答プロファイルのドメインキーワード。"""
 
-    business_view_id: str
+    search_answer_profile_id: str
     keywords: list[str] = Field(default_factory=list)
 
 
@@ -46,9 +46,9 @@ class ApprovedFaqRecordData(BaseModel):
 
 
 class ApprovedFaqListData(BaseModel):
-    business_view_id: str
+    search_answer_profile_id: str
     records: list[ApprovedFaqRecordData] = Field(default_factory=list)
-    # 回答の前に類似問を提示するか(業務ビューごと。未設定はオン。#684)。
+    # 回答の前に類似問を提示するか(検索・回答プロファイルごと。未設定はオン。#684)。
     enabled: bool = True
 
 
@@ -116,9 +116,9 @@ class ApprovedFaqSuggestionsData(BaseModel):
 
 
 class RuntimeKnowledgeData(BaseModel):
-    """業務ビューの用語・ルール(rag_poc runtime knowledge の標準形式)。"""
+    """検索・回答プロファイルの用語・ルール(rag_poc runtime knowledge の標準形式)。"""
 
-    business_view_id: str
+    search_answer_profile_id: str
     terms: list[dict[str, JsonValue]] = Field(default_factory=list)
     rules: list[dict[str, JsonValue]] = Field(default_factory=list)
 
@@ -159,7 +159,7 @@ class QuerySuggestion(BaseModel):
 
 
 class QuerySuggestionsData(BaseModel):
-    business_view_id: str
+    search_answer_profile_id: str
     enabled: bool
     suggestions: list[QuerySuggestion] = Field(default_factory=list)
 

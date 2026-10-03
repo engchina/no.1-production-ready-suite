@@ -2,7 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
-// #302: 業務ビューの参照 KB の警告（アーカイブ済み・見つからない）と、KB の名前・説明の編集。
+// #302: 検索・回答プロファイルの参照 KB の警告（アーカイブ済み・見つからない）と、KB の名前・説明の編集。
 
 type KnowledgeBaseStatus = "ACTIVE" | "ARCHIVED";
 
@@ -20,43 +20,43 @@ test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
 });
 
-test("業務ビューの一覧は、参照 KB にアーカイブ済み・見つからないものがある行を要確認で示す", async ({
+test("検索・回答プロファイルの一覧は、参照 KB にアーカイブ済み・見つからないものがある行を要確認で示す", async ({
   page,
 }) => {
   await mockKnowledgeBases(page, defaultKnowledgeBases());
-  await mockBusinessViews(page, [
-    businessView("bv-1", "経理ビュー", ["kb-1", "kb-old", "kb-gone"]),
-    businessView("bv-2", "人事ビュー", ["kb-1"]),
+  await mockSearchAnswerProfiles(page, [
+    searchAnswerProfile("bv-1", "経理ビュー", ["kb-1", "kb-old", "kb-gone"]),
+    searchAnswerProfile("bv-2", "人事ビュー", ["kb-1"]),
   ]);
 
-  await page.goto("/business-views");
+  await page.goto("/search-answer-profiles");
 
   await expect(
-    page.getByText("参照するナレッジベースにアーカイブ済み・見つからないものがある業務ビューがあります")
+    page.getByText("参照するナレッジベースにアーカイブ済み・見つからないものがある検索・回答プロファイルがあります")
   ).toBeVisible();
-  const issueRow = page.getByTestId("business-view-row-bv-1");
+  const issueRow = page.getByTestId("search-answer-profile-row-bv-1");
   await expect(issueRow.getByText("要確認")).toBeVisible();
   await expect(issueRow.getByText("参照 KB 3 件のうち、アーカイブ済み 1 件・見つからない 1 件")).toBeAttached();
-  await expect(page.getByTestId("business-view-row-bv-2").getByText("要確認")).toHaveCount(0);
+  await expect(page.getByTestId("search-answer-profile-row-bv-2").getByText("要確認")).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
-test("業務ビューの編集画面は、検索されない参照 KB を名前付きで警告し、外すと警告が消える", async ({
+test("検索・回答プロファイルの編集画面は、検索されない参照 KB を名前付きで警告し、外すと警告が消える", async ({
   page,
 }) => {
   await mockKnowledgeBases(page, defaultKnowledgeBases());
   let patchBody: Record<string, unknown> | null = null;
-  await mockBusinessViews(
+  await mockSearchAnswerProfiles(
     page,
-    [businessView("bv-1", "経理ビュー", ["kb-1", "kb-old", "kb-gone"])],
+    [searchAnswerProfile("bv-1", "経理ビュー", ["kb-1", "kb-old", "kb-gone"])],
     (body) => {
       patchBody = body;
     }
   );
 
-  await page.goto("/business-views?id=bv-1");
+  await page.goto("/search-answer-profiles?id=bv-1");
 
-  const banner = page.getByTestId("business-view-kb-issues");
+  const banner = page.getByTestId("search-answer-profile-kb-issues");
   await expect(page.getByText("参照するナレッジベースの一部が検索対象になっていません")).toBeVisible();
   await expect(banner.getByText("アーカイブ済み（1 件）: 旧規程")).toBeVisible();
   await expect(banner.getByText(/見つからない（1 件。.*）: kb-gone/)).toBeVisible();
@@ -69,7 +69,7 @@ test("業務ビューの編集画面は、検索されない参照 KB を名前�
 
   await page.getByLabel("旧規程 を選択から外す").click();
   await page.getByLabel("不明なナレッジベース（kb-gone） を選択から外す").click();
-  await expect(page.getByTestId("business-view-kb-issues")).toHaveCount(0);
+  await expect(page.getByTestId("search-answer-profile-kb-issues")).toHaveCount(0);
 
   await page.locator("[data-page-header-actions]").getByRole("button", { name: "保存", exact: true }).click();
   await expect
@@ -77,20 +77,20 @@ test("業務ビューの編集画面は、検索されない参照 KB を名前�
     .toEqual(["kb-1"]);
 });
 
-test("参照 KB がすべて検索されない業務ビューは、結果が 0 件になることを伝える", async ({ page }) => {
+test("参照 KB がすべて検索されない検索・回答プロファイルは、結果が 0 件になることを伝える", async ({ page }) => {
   await mockKnowledgeBases(page, defaultKnowledgeBases());
-  await mockBusinessViews(page, [businessView("bv-1", "旧ビュー", ["kb-old"])]);
+  await mockSearchAnswerProfiles(page, [searchAnswerProfile("bv-1", "旧ビュー", ["kb-old"])]);
 
-  await page.goto("/business-views?id=bv-1");
+  await page.goto("/search-answer-profiles?id=bv-1");
 
   await expect(
     page.getByText(
-      "参照するすべてのナレッジベースが検索対象外のため、この業務ビューの検索・回答は結果が 0 件になります。"
+      "参照するすべてのナレッジベースが検索対象外のため、この検索・回答プロファイルの検索・回答は結果が 0 件になります。"
     )
   ).toBeVisible();
 });
 
-// #555: 名前・説明は詳細の「基本情報」の欄でそのまま編集し、PageHeader の「保存する」で保存する（業務ビューと同じ）。
+// #555: 名前・説明は詳細の「基本情報」の欄でそのまま編集し、PageHeader の「保存する」で保存する（検索・回答プロファイルと同じ）。
 test("ナレッジベースの詳細で名前と説明を編集でき、同名は名前の欄に理由を出す", async ({ page }) => {
   const knowledgeBases = defaultKnowledgeBases();
   const patches: Record<string, unknown>[] = [];
@@ -298,11 +298,11 @@ async function mockDocuments(page: Page) {
   });
 }
 
-function businessView(id: string, name: string, knowledgeBaseIds: string[]) {
+function searchAnswerProfile(id: string, name: string, knowledgeBaseIds: string[]) {
   return { id, name, knowledgeBaseIds };
 }
 
-async function mockBusinessViews(
+async function mockSearchAnswerProfiles(
   page: Page,
   views: { id: string; name: string; knowledgeBaseIds: string[] }[],
   onPatch?: (body: Record<string, unknown>) => void
@@ -338,20 +338,20 @@ async function mockBusinessViews(
       missing_knowledge_base_ids: missing,
     };
   };
-  await page.route("**/api/business-views**", async (route) => {
+  await page.route("**/api/search-answer-profiles**", async (route) => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     const id = pathname.split("/")[3];
     if (pathname.endsWith("/domain-keywords")) {
-      await route.fulfill(envelope({ business_view_id: id, keywords: [] }));
+      await route.fulfill(envelope({ search_answer_profile_id: id, keywords: [] }));
       return;
     }
     if (pathname.endsWith("/approved-faq")) {
-      await route.fulfill(envelope({ business_view_id: id, records: [] }));
+      await route.fulfill(envelope({ search_answer_profile_id: id, records: [] }));
       return;
     }
     if (pathname.endsWith("/runtime-knowledge")) {
-      await route.fulfill(envelope({ business_view_id: id, terms: [], rules: [] }));
+      await route.fulfill(envelope({ search_answer_profile_id: id, terms: [], rules: [] }));
       return;
     }
     const view = views.find((item) => item.id === id);

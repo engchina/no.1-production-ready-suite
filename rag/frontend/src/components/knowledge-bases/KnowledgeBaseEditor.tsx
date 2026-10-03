@@ -59,14 +59,14 @@ const NAME_FIELD_ID = "knowledge-base-name";
 const DESCRIPTION_FIELD_ID = "knowledge-base-description";
 
 /**
- * ナレッジベースの全画面エディタ（新規 / 詳細。#555）。業務ビューのエディタと同じ構成にする
+ * ナレッジベースの全画面エディタ（新規 / 詳細。#555）。検索・回答プロファイルのエディタと同じ構成にする
  * （platform UX 契約 page-archetypes.md §1 A、RAG の docs/frontend-page-archetypes-spec.md）。
  *
  * - `PageHeader`: パンくず（ナレッジベース › 対象名）・状態・件数、`一覧へ戻る`（secondary）と
  *   `保存する` / `作成する`（primary）。
  * - 本文: 「基本情報」のカード（名前・説明。見出しに対象の操作の `ObjectActionBar`）→ `children`
  *   （詳細だけ。所属文書・検索テスト・関係情報・構築フロー）。
- * - 未保存の名前・説明は下書きとしてこのタブに残し、離脱を確認する（業務ビューと同じ部品）。
+ * - 未保存の名前・説明は下書きとしてこのタブに残し、離脱を確認する（検索・回答プロファイルと同じ部品）。
  */
 export function KnowledgeBaseEditor({
   initial,

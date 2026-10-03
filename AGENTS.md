@@ -10,7 +10,7 @@
 | ディレクトリ | 内容 | 固有ルール |
 |---|---|---|
 | `platform/` | 3製品の共通基盤。`packages/ui`（`@engchina/production-ready-ui`）、`packages/system-settings`（`@engchina/production-ready-system-settings`、共通のシステム設定画面とユーザー管理・ロール管理画面）、`packages/backend_core`（`pr_backend_core`）、`packages/system_settings_backend`（`pr_system_settings`、共通のシステム設定 API と共通認証基盤（ユーザー・ロール・セッション・ログイン））、デザインシステム（`docs/design-system/`） | [platform/AGENTS.md](./platform/AGENTS.md) |
-| `rag/` | Production Ready RAG（ナレッジ構築・業務ビュー・検索・回答） | [rag/AGENTS.md](./rag/AGENTS.md) |
+| `rag/` | Production Ready RAG（ナレッジ構築・検索・回答プロファイル・検索・回答） | [rag/AGENTS.md](./rag/AGENTS.md) |
 | `nl2sql/` | Production Ready NL2SQL（SQL 専用の自然言語問い合わせ） | [nl2sql/AGENTS.md](./nl2sql/AGENTS.md) |
 | `agent/` | Production Control Plane for AI Agents | [agent/AGENTS.md](./agent/AGENTS.md) |
 | `terraform/` | 3製品を OCI Resource Manager で配備する統合 stack（ADB 1つ＋選んだ製品ごとの Compute） | [terraform/README.md](./terraform/README.md) |
@@ -71,7 +71,7 @@
 - タイトルは対象と事象が分かる具体的な文にする。「不具合」「修正」「対応」だけの曖昧なタイトルにしない。
 - 本文は Markdown 見出しで構造化し、確認した事実と推測を区別する。未調査・未確定の項目は断定せず「調査中」「未確認」と明記し、判明後に本文を更新する。
 - API、関数、設定 key、status code、error message、再現値など、調査・レビュー・回帰テストに必要な具体情報を記載する。secret、token、個人情報、実 credential は記載しない。
-- 製品ごとの用語規約（例: RAG の `ナレッジ構築` / `業務ビュー` / `検索・回答設定`）は各製品の `AGENTS.md` に従う。
+- 製品ごとの用語規約（例: RAG の `ナレッジ構築` / `検索・回答プロファイル` / `検索・回答設定`）は各製品の `AGENTS.md` に従う。
 - RAG の「DocRAG」は rag_poc から移したときの名前で、画面・docs・Issue / PR の地の文にも、コードの識別子・設定・API・DB の名前にも使わず、RAG の標準の用語・名前で呼ぶ（[rag/AGENTS.md](./rag/AGENTS.md)、#598 / #599）。
 
 #### Issue
@@ -217,7 +217,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - 正本は [platform/docs/design-system/README.md](./platform/docs/design-system/README.md) §4「操作部品の高さと幅」、画面での選び方は UX 契約 `page-archetypes.md`「入力欄・選択欄・ボタンの高さと幅」。業界の指針（Carbon の 3 段の field / button、Material 3 の密度と当たり判定、Apple HIG の 44pt、WCAG 2.5.5 / 2.5.8、GOV.UK の「欄の幅は入る値の長さに合わせる」、Atlassian の `width`）から決めた。
 - **高さは 3 段**: `sm` 32px（表の行・密なツールバーの中）/ **`md` 36px（既定。入力欄・選択欄・一覧のツールバー・フォームの欄の横の操作・ページヘッダーの操作）**/ `lg` 40px（工程・フォームの末尾で次へ進む主操作の行、チャット・検索テストなど主な問い合わせの入力の行、確認語欄、ログインなど 1 つの作業だけの画面）。**タッチ端末（`pointer: coarse`）では 3 段とも 44px**（入力欄・選択欄も）。
 - **1 つの行の中では、入力欄・選択欄・ボタンに同じ `size` を渡す。** `Button`・`TextField`・`SearchField`・`SecretField`・`SelectField`・`SearchableSelectField` が `size` を受け取り、同じトークン（`--control-height-*`）を参照する。
-- **幅は入る値（とラベル）の長さで選ぶ**: `width` = `xs` 8rem（数値・短いコード）/ `sm` 12rem（短い列挙）/ `md` 20rem（名前）/ `lg` 28rem（長めの名前）/ `full`（URL・OCID・文章・一覧の検索欄）。sm（640px）未満は全幅。**フォームの grid のセルに置く欄は `width` を渡さない**（セルの幅。grid の段組みで最大幅を決める）。**grid の外に単独で置く選択欄・短い値の欄は必ず `width` を渡し**、カードや行の幅いっぱいに伸ばさない。例外: 画面の対象を決める主な選択欄（RAG の検索・チャットの「業務ビュー」。候補の検索欄を持つ `SearchableSelectField`）は、同じ画面の全幅の問い合わせの入力と左右の端をそろえるため `full` にし、画面どうしで同じ部品・幅にする（#635）。
+- **幅は入る値（とラベル）の長さで選ぶ**: `width` = `xs` 8rem（数値・短いコード）/ `sm` 12rem（短い列挙）/ `md` 20rem（名前）/ `lg` 28rem（長めの名前）/ `full`（URL・OCID・文章・一覧の検索欄）。sm（640px）未満は全幅。**フォームの grid のセルに置く欄は `width` を渡さない**（セルの幅。grid の段組みで最大幅を決める）。**grid の外に単独で置く選択欄・短い値の欄は必ず `width` を渡し**、カードや行の幅いっぱいに伸ばさない。例外: 画面の対象を決める主な選択欄（RAG の検索・チャットの「検索・回答プロファイル」。候補の検索欄を持つ `SearchableSelectField`）は、同じ画面の全幅の問い合わせの入力と左右の端をそろえるため `full` にし、画面どうしで同じ部品・幅にする（#635）。
 - **入力欄と、その値への操作（送信・実行・取得）の行は `FieldActionRow`**（操作は入力欄の下端にそろい、375px では下に全幅）。複数行の入力欄の高さは `rows` で決める。
 - **製品で書かないもの**（adherence の lint が検出する）: `touchTarget`、共有の操作部品への `h-*` / `min-h-*`、入力欄・選択欄への `w-*` / `max-w-*`、ネイティブの `<input>` / `<select>` への `h-*` / `min-h-*`。
 - **フォームの入力はネイティブの `<select>` / テキスト系の `<input>` で書かず、共有の部品を使う（#631）**: 選択は `SelectField`（数十件を超えるなら `SearchableSelectField`。無効は `disabled`、表の行などラベルを見せない所は `labelHidden`）、1 行の文字・数値・URL は `TextField`（`type="number"` など）、秘密は `SecretField`、一覧の絞り込みは `SearchField`、複数行は `TextareaField`。ネイティブの `<select>` は adherence の lint が検出する。ネイティブのまま残すのは checkbox / radio / file / range / hidden / color と、部品で表せない所（`<optgroup>`・選べない選択肢が要る選択など）だけで、理由を添えて lint を局所的に除外し、`fieldControlClassName({ size, width })` で見た目をそろえる。e2e は `selectOption` ではなく combobox を押して選択肢を選ぶ（`SelectField` はボタンと選択肢に `data-value` を出す。NL2SQL `tests/e2e/_helpers/select-field.ts`・Agent `e2e/fixtures/select-field.ts` の `chooseSelectFieldOption`）。
@@ -286,7 +286,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - **3製品で同じ機能は platform に 1 セットだけ置く。** システム設定（OCI 認証・アップロード保存先・モデル・データベース・外観）とユーザー管理・ロール管理は、画面を `packages/system-settings`、API（または API 契約）を `packages/system_settings_backend` に置き、製品は `api` や権限判定を渡す薄いラッパーだけを持つ（#70 / #206）。
 - **製品固有の機能は、共通のメニューに混ぜず製品固有のメニューセクションに置く。** 例: NL2SQL の権限管理（ロールごとの機能権限・業務プロファイル利用権限）と Deep Data Security は「セキュリティ設定」。
 - **サイドナビの下部の並びとセクション名は 3 製品で同じにする（#658）**: 製品の業務のセクションの後に「改善・運用」（無い製品は無し）→「セキュリティ設定」（製品固有の権限管理など。旧「◯◯ セキュリティ」）→「ユーザーとロール」→「運用設定」（製品固有の運用。システムテーブルがあれば先頭）→「システム設定」。backend の権限カタログの `group` と並びもナビにそろえる。
-- **ナビのアイコンは、3 製品で同じ機能なら同じアイコン、違う機能なら違うアイコンにする（1 つの製品の中で同じアイコンを 2 つの項目に使わない。#658）。** 共通の項目（システム設定・ユーザーとロール）は `packages/system-settings` のアイコン、製品間で同じ機能（権限管理 `LockKeyhole`・システムテーブル `TableProperties`・品質評価 `FlaskConical`・フィードバック `ThumbsUp`・業務ビュー / 業務プロファイル `BriefcaseBusiness`）はそろえる。重複は各製品のテスト（RAG `src/lib/route-permissions.test.ts`、NL2SQL `tests/nav-config-icons.test.ts`、Agent `e2e/appearance.spec.ts`）が検出する。
+- **ナビのアイコンは、3 製品で同じ機能なら同じアイコン、違う機能なら違うアイコンにする（1 つの製品の中で同じアイコンを 2 つの項目に使わない。#658）。** 共通の項目（システム設定・ユーザーとロール）は `packages/system-settings` のアイコン、製品間で同じ機能（権限管理 `LockKeyhole`・システムテーブル `TableProperties`・品質評価 `FlaskConical`・フィードバック `ThumbsUp`・検索・回答プロファイル / 業務プロファイル `BriefcaseBusiness`）はそろえる。重複は各製品のテスト（RAG `src/lib/route-permissions.test.ts`、NL2SQL `tests/nav-config-icons.test.ts`、Agent `e2e/appearance.spec.ts`）が検出する。
 - ロールの基本情報（コード・名称・説明・アーカイブ）は共通のロール管理が扱い、ロールに付ける権限は製品ごとの権限管理が扱う。共通のロール API は権限を変更しない。
 - **権限管理の機能（メニュー）の一覧は、左のナビを正本にしてグループ・並び順・名前をそろえる（#567）。** 一覧は製品の `nav-config.ts` から作り（`packages/system-settings` の `permissionNavSections` / `arrangePermissionsByNav` を、製品の `PERMISSIONS_API.permissions` で通す）、backend のカタログの `group` / `label` を画面に使わない。名前はサイドナビの表示名（`sidebarLabelKey` があればそれ）。ナビに無い権限（画面の中の操作を許可する capability）は、ナビの後ろに backend のグループのまま置く。
   - 画面のあるメニュー権限は必ずナビの項目にする。ナビを変えたら権限の一覧は自動で追従し、ナビとメニュー権限・backend のカタログの code のずれは各製品のテスト（RAG `src/lib/permission-nav.test.ts`、NL2SQL `tests/permission-nav.test.ts`、Agent `e2e/permission-catalog.spec.ts`）が検出する。権限の code・保存値は変えない。

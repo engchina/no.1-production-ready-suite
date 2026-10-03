@@ -48,23 +48,23 @@ describe("PageHeader（lg 未満）", () => {
   const buttonTexts = () => Array.from(host.querySelectorAll("button")).map((button) => button.textContent);
 
   it("メニューに入るのが 1 つだけなら畳まず、「一覧へ戻る」を 1 タップで押せる", () => {
-    act(() => root.render(<PageHeader title="業務ビュー" actions={[back, save]} />));
+    act(() => root.render(<PageHeader title="検索・回答プロファイル" actions={[back, save]} />));
     expect(host.querySelector('[data-testid="page-actions-more"]')).toBeNull();
     expect(buttonTexts()).toEqual(["一覧へ戻る", "保存"]);
   });
 
   it("2 つ以上なら畳み、メニューのボタンの読み上げ名に対象（actionsLabel）を足す", () => {
     act(() =>
-      root.render(<PageHeader title="業務ビュー" actions={[back, reload, save]} actionsLabel="業務ビューの操作" />)
+      root.render(<PageHeader title="検索・回答プロファイル" actions={[back, reload, save]} actionsLabel="検索・回答プロファイルの操作" />)
     );
     const trigger = host.querySelector('[data-testid="page-actions-more"]') as HTMLButtonElement;
     expect(trigger.textContent).toBe("その他の操作");
-    expect(trigger.getAttribute("aria-label")).toBe("その他の操作（業務ビューの操作）");
+    expect(trigger.getAttribute("aria-label")).toBe("その他の操作（検索・回答プロファイルの操作）");
     expect(buttonTexts()).toEqual(["その他の操作", "保存"]);
   });
 
   it("actionsLabel を渡さなければ既定の「ページ操作」を足す", () => {
-    act(() => root.render(<PageHeader title="業務ビュー" actions={[back, reload, save]} />));
+    act(() => root.render(<PageHeader title="検索・回答プロファイル" actions={[back, reload, save]} />));
     const trigger = host.querySelector('[data-testid="page-actions-more"]') as HTMLButtonElement;
     expect(trigger.getAttribute("aria-label")).toBe("その他の操作（ページ操作）");
   });

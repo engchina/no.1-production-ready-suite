@@ -52,7 +52,7 @@ CONTRACTS = Path(__file__).resolve().parents[3] / "platform/contracts/mcp"
 # fake の RAG / NL2SQL のツールの readOnlyHint（`mcp_support.FakeProductMcp`）。
 READ_ONLY = {
     "rag_search": True,
-    "rag_list_business_views": True,
+    "rag_list_search_answer_profiles": True,
     "nl2sql_query": False,
     "nl2sql_get_job": True,
 }
@@ -183,7 +183,7 @@ def test_token_subject_audience_and_claims_follow_run_user(monkeypatch: MonkeyPa
     mcp = fake_product_mcp(monkeypatch)
     context = ToolInvocationContext(user_uuid=USER_UUID, run_id="run-233", agent_id="agent-233")
 
-    rag = _invoke("rag", "rag_list_business_views", {"limit": 10}, context=context)
+    rag = _invoke("rag", "rag_list_search_answer_profiles", {"limit": 10}, context=context)
     nl2sql = _invoke("nl2sql", "nl2sql_get_job", {"job_id": "job-1"}, context=context)
 
     assert rag.success is True, rag.error
@@ -274,20 +274,20 @@ def test_is_error_is_converted_to_tool_error(monkeypatch: MonkeyPatch) -> None:
         monkeypatch,
         outputs={
             "rag_search": McpToolError(
-                "RAG_BUSINESS_VIEW_FORBIDDEN",
-                "この業務ビューは利用できません。",
-                details={"business_view_id": "bv-x"},
+                "RAG_SEARCH_ANSWER_PROFILE_FORBIDDEN",
+                "この検索・回答プロファイルは利用できません。",
+                details={"search_answer_profile_id": "bv-x"},
             )
         },
     )
 
-    result = _invoke("rag", "rag_search", {"query": "a", "business_view_id": "bv-x"})
+    result = _invoke("rag", "rag_search", {"query": "a", "search_answer_profile_id": "bv-x"})
 
     assert result.success is False
     assert result.error_code == "mcp.tool_error"
-    assert result.error == "この業務ビューは利用できません。"
-    assert result.error_details["error_code"] == "RAG_BUSINESS_VIEW_FORBIDDEN"
-    assert result.error_details["details"] == {"business_view_id": "bv-x"}
+    assert result.error == "この検索・回答プロファイルは利用できません。"
+    assert result.error_details["error_code"] == "RAG_SEARCH_ANSWER_PROFILE_FORBIDDEN"
+    assert result.error_details["details"] == {"search_answer_profile_id": "bv-x"}
     assert result.error_details["tool_name"] == "rag_search"
     assert result.error_details["server_id"] == "rag"
 
@@ -459,7 +459,7 @@ def test_tools_list_reports_read_only_and_function_names(monkeypatch: MonkeyPatc
     }
 
     assert rag["rag_search"].read_only is True
-    assert rag["rag_list_business_views"].read_only is True
+    assert rag["rag_list_search_answer_profiles"].read_only is True
     assert rag["rag_search"].function_name == "rag__rag_search"
     assert "query" in rag["rag_search"].input_schema["properties"]
     assert nl2sql["nl2sql_query"].read_only is False

@@ -254,7 +254,10 @@ def variant_backfill_phases() -> tuple[BackfillPhase, ...]:
             acceptance=(
                 "migration manifest の sha256 をレビュー済み artifact として保存している。",
                 "検証 SQL に書き込み文が含まれていない。",
-                "RAG repo の公開面はナレッジ構築 / 業務ビュー / 検索・回答設定に閉じている。",
+                (
+                    "RAG repo の公開面はナレッジ構築 / 検索"
+                    "・回答プロファイル / 検索・回答設定に閉じている。"
+                ),
             ),
         ),
         BackfillPhase(
@@ -301,18 +304,18 @@ def variant_backfill_phases() -> tuple[BackfillPhase, ...]:
             phase_id="04_validate_serving",
             title="検索配信を検証する",
             objective=(
-                "Business View 検索が KB の serving chunk_set だけを使い、"
+                "Search Answer Profile 検索が KB の serving chunk_set だけを使い、"
                 "古い KB query 設定を使わないことを確認する。"
             ),
             commands=(
                 "uv run pytest tests/test_search_api.py tests/test_knowledge_bases_api.py "
-                "tests/test_business_views_api.py -q",
-                "staging で代表 Business View の検索 diagnostics を保存する。",
+                "tests/test_search_answer_profiles_api.py -q",
+                "staging で代表 Search Answer Profile の検索 diagnostics を保存する。",
             ),
             acceptance=(
                 "`serving_chunk_sets_not_indexed` が 0。",
                 "`chunks_referencing_missing_chunk_set` が 0。",
-                "検索 diagnostics の設定解決順が request > Business View > "
+                "検索 diagnostics の設定解決順が request > Search Answer Profile > "
                 "global defaults になっている。",
             ),
         ),

@@ -27,7 +27,7 @@ for (const viewport of [
     await expect(sidebar).toContainText("ナレッジ構築");
     await expect(sidebar).toContainText("検索・回答設定");
     await expect(sidebar.getByRole("link", { name: "RAG 検索" })).toBeVisible();
-    await expect(sidebar.getByRole("link", { name: "業務ビュー (Business View)" })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "検索・回答プロファイル (Search Answer Profile)" })).toBeVisible();
     await expect(sidebar.getByRole("link", { name: /NL2SQL|SQL コンソール|Select AI/ })).toHaveCount(0);
   });
 }

@@ -86,7 +86,7 @@ function loginTarget(loginUserId: string): CurrentUserPayload {
     display_name: "管理 太郎",
     role_codes: ["RAG_ADMIN"],
     permissions: ALL_PERMISSION_CODES,
-    allowed_business_view_ids: null,
+    allowed_search_answer_profile_ids: null,
     allowed_knowledge_base_ids: null,
   });
 }
@@ -225,7 +225,7 @@ test("ローカル DEBUG はログインせずに全画面を使え、アカウ�
           role_codes: ["SYSTEM_ADMIN"],
           is_system_admin: true,
           permissions: ALL_PERMISSION_CODES,
-          allowed_business_view_ids: null,
+          allowed_search_answer_profile_ids: null,
           allowed_knowledge_base_ids: null,
           password_change_allowed: false,
         }),

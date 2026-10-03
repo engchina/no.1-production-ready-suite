@@ -329,7 +329,7 @@ class EvaluationCompareRequest(BaseModel):
 class EvaluationRunRequest(BaseModel):
     """評価実行リクエスト。
 
-    回答エンジンの全体の既定で評価する(業務ビューは受け取らない。#301)。検索の方式(mode)と
+    回答エンジンの全体の既定で評価する(検索・回答プロファイルは受け取らない。#301)。検索の方式(mode)と
     rerank の件数(rerank_top_n)は回答エンジンが使わないため持たない(#591。以前の golden set の
     指定は無視する)。
     """

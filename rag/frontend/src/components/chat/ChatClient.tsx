@@ -39,7 +39,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { ListPagination } from "@/components/ListPagination";
-import { BusinessViewSelect, BusinessViewSelectSkeleton } from "@/components/business-views/BusinessViewSelect";
+import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
 import { CitationCard } from "@/components/search/CitationCard";
 import { AnswerProgress } from "@/components/search/AnswerProgress";
 import { SavedAnswerRecord } from "@/components/search/SavedAnswerRecord";
@@ -65,7 +65,7 @@ import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
 import {
-  useBusinessViews,
+  useSearchAnswerProfiles,
   useCompareModels,
   useConversation,
   useConversations,
@@ -98,9 +98,9 @@ function useHistoryInline(): boolean {
   );
 }
 
-/** 会話一覧のページ（業務ビューごと。#403）。別の業務ビューに移ったら 1 ページ目から。 */
+/** 会話一覧のページ（検索・回答プロファイルごと。#403）。別の検索・回答プロファイルに移ったら 1 ページ目から。 */
 interface ConversationsPage {
-  businessViewId: string | null;
+  searchAnswerProfileId: string | null;
   offset: number;
 }
 
@@ -109,7 +109,7 @@ function isConversationsPage(value: unknown): value is ConversationsPage {
   return (
     typeof page === "object" &&
     page !== null &&
-    isNullableString(page.businessViewId) &&
+    isNullableString(page.searchAnswerProfileId) &&
     Number.isInteger(page.offset) &&
     page.offset >= 0
   );
@@ -162,7 +162,7 @@ function AssistantColumn({
   answer,
   citations,
   traceId,
-  businessViewId,
+  searchAnswerProfileId,
   messageId,
   streaming,
   errorMessage,
@@ -177,7 +177,7 @@ function AssistantColumn({
   answer: string;
   citations: RetrievedChunk[];
   traceId: string | null;
-  businessViewId: string;
+  searchAnswerProfileId: string;
   messageId: string | null;
   streaming: boolean;
   errorMessage: string | null;
@@ -262,13 +262,13 @@ function AssistantColumn({
           summary={t("chat.answerDetails.open")}
           className="border-t border-border px-2 pt-1"
         >
-          <SavedAnswerRecord traceId={traceId} businessViewId={businessViewId} showAnswer={false} />
+          <SavedAnswerRecord traceId={traceId} searchAnswerProfileId={searchAnswerProfileId} showAnswer={false} />
         </Disclosure>
       ) : null}
       {!streaming && !errorMessage ? (
         <FeedbackControls
           traceId={traceId}
-          businessViewId={businessViewId}
+          searchAnswerProfileId={searchAnswerProfileId}
           targetType="answer"
           sourceSurface="chat"
           messageId={messageId}
@@ -287,7 +287,7 @@ function AssistantColumn({
                 chunk={chunk}
                 index={index}
                 traceId={traceId}
-                businessViewId={businessViewId}
+                searchAnswerProfileId={searchAnswerProfileId}
                 sourceSurface="chat"
                 messageId={messageId}
               />
@@ -303,12 +303,12 @@ function AssistantColumn({
 function MessageTurn({
   user,
   columns,
-  businessViewId,
+  searchAnswerProfileId,
   onRetry,
   onAskUnscoped,
 }: {
   user: ChatMessage;
-  businessViewId: string;
+  searchAnswerProfileId: string;
   /** 失敗した回答があるときに同じ質問をもう一度送る（最新のターンだけ渡す）。 */
   onRetry?: () => void;
   /** 確認で範囲を絞った回答のとき、範囲を指定せずに同じ質問を送る（最新のターンだけ渡す。#721）。 */
@@ -365,7 +365,7 @@ function MessageTurn({
             answer={column.answer}
             citations={column.citations}
             traceId={column.traceId}
-            businessViewId={businessViewId}
+            searchAnswerProfileId={searchAnswerProfileId}
             messageId={column.messageId}
             streaming={column.streaming}
             errorMessage={column.errorMessage}
@@ -399,45 +399,45 @@ export function ChatClient() {
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
 
-  const businessViewsQuery = useBusinessViews({ status: "ACTIVE", limit: 50, offset: 0 });
-  const businessViews = businessViewsQuery.data?.items ?? [];
-  // 選択中の業務ビュー・会話・入力中の下書きは、ページを行き来しても再読込しても残す
+  const searchAnswerProfilesQuery = useSearchAnswerProfiles({ status: "ACTIVE", limit: 50, offset: 0 });
+  const searchAnswerProfiles = searchAnswerProfilesQuery.data?.items ?? [];
+  // 選択中の検索・回答プロファイル・会話・入力中の下書きは、ページを行き来しても再読込しても残す
   // （workspace-state.md）。URL の deep-link があればそちらを優先する。
-  const urlBusinessViewId = searchParams.get("business_view_id");
+  const urlSearchAnswerProfileId = searchParams.get("search_answer_profile_id");
   const urlConversationId = searchParams.get("conversation_id");
-  const [businessViewId, setBusinessViewId] = useWorkspaceState<string | null>(
-    "chat.businessViewId",
+  const [searchAnswerProfileId, setSearchAnswerProfileId] = useWorkspaceState<string | null>(
+    "chat.searchAnswerProfileId",
     null,
     isNullableString,
-    urlBusinessViewId ?? undefined
+    urlSearchAnswerProfileId ?? undefined
   );
-  // 復元した業務ビューがアーカイブ・削除済みなら選択を外す（別の業務ビューへ置き換えない）。
-  const businessViewMissing =
-    Boolean(businessViewId) &&
-    Boolean(businessViewsQuery.data) &&
-    !businessViewsQuery.data?.has_next &&
-    !businessViews.some((view) => view.id === businessViewId);
+  // 復元した検索・回答プロファイルがアーカイブ・削除済みなら選択を外す（別の検索・回答プロファイルへ置き換えない）。
+  const searchAnswerProfileMissing =
+    Boolean(searchAnswerProfileId) &&
+    Boolean(searchAnswerProfilesQuery.data) &&
+    !searchAnswerProfilesQuery.data?.has_next &&
+    !searchAnswerProfiles.some((view) => view.id === searchAnswerProfileId);
   useEffect(() => {
-    if (businessViewMissing) setBusinessViewId(null);
-  }, [businessViewMissing, setBusinessViewId]);
-  // 参照 KB が 0 件の業務ビューではチャットしない（利用者の全 KB を検索しない。#304）。
+    if (searchAnswerProfileMissing) setSearchAnswerProfileId(null);
+  }, [searchAnswerProfileMissing, setSearchAnswerProfileId]);
+  // 参照 KB が 0 件の検索・回答プロファイルではチャットしない（利用者の全 KB を検索しない。#304）。
   // backend も送信時に 409 で理由を返すが、送信する前にこの場で理由を示す。
-  const canOpenBusinessViews = useAuth().hasPermission(MENU_PERMISSIONS.businessViews);
-  const selectedBusinessView = businessViews.find((view) => view.id === businessViewId);
-  const businessViewWithoutKnowledgeBases = selectedBusinessView?.knowledge_base_count === 0;
+  const canOpenSearchAnswerProfiles = useAuth().hasPermission(MENU_PERMISSIONS.searchAnswerProfiles);
+  const selectedSearchAnswerProfile = searchAnswerProfiles.find((view) => view.id === searchAnswerProfileId);
+  const searchAnswerProfileWithoutKnowledgeBases = selectedSearchAnswerProfile?.knowledge_base_count === 0;
   // 会話一覧はサーバー側でページングする（50 件で打ち切らない。#403）。
-  // ページは作業状態として残す（workspace-state.md）。別の業務ビューに移ったら 1 ページ目から。
+  // ページは作業状態として残す（workspace-state.md）。別の検索・回答プロファイルに移ったら 1 ページ目から。
   const [conversationsPage, setConversationsPage] = useWorkspaceState<ConversationsPage>(
     "chat.conversationsPage",
-    { businessViewId, offset: 0 },
+    { searchAnswerProfileId, offset: 0 },
     isConversationsPage
   );
   const conversationOffset =
-    conversationsPage.businessViewId === businessViewId ? conversationsPage.offset : 0;
+    conversationsPage.searchAnswerProfileId === searchAnswerProfileId ? conversationsPage.offset : 0;
   const setConversationOffset = (offset: number) =>
-    setConversationsPage({ businessViewId, offset });
+    setConversationsPage({ searchAnswerProfileId, offset });
   const conversationsQuery = useConversations({
-    business_view_id: businessViewId ?? undefined,
+    search_answer_profile_id: searchAnswerProfileId ?? undefined,
     limit: DEFAULT_PAGE_SIZE,
     offset: conversationOffset,
   });
@@ -462,7 +462,7 @@ export function ChatClient() {
     "chat.conversationId",
     null,
     isNullableString,
-    urlConversationId ?? (urlBusinessViewId ? null : undefined)
+    urlConversationId ?? (urlSearchAnswerProfileId ? null : undefined)
   );
   const conversationQuery = useConversation(activeId);
   const persistedMessages = useMemo(
@@ -478,7 +478,7 @@ export function ChatClient() {
         .map((message) => message.trace_id as string),
     [persistedMessages]
   );
-  const savedAnswerQuery = useSavedAnswerTraceIds(businessViewId, replyTraceIds);
+  const savedAnswerQuery = useSavedAnswerTraceIds(searchAnswerProfileId, replyTraceIds);
   const answerTraceIds = savedAnswerQuery.data ?? EMPTY_TRACE_IDS;
 
   const createConversation = useCreateConversation();
@@ -491,13 +491,13 @@ export function ChatClient() {
 
   const [composer, setComposer] = useWorkspaceState("chat.composer", "");
   // 回答の前に選ぶ類似の承認済み FAQ（選ぶまで送らない。#684）。選ぶ前に画面を離れても、戻ったとき・
-  // 再読込で同じ質問と候補を出す（作業状態。#702）。業務ビューを変えたら消す。
+  // 再読込で同じ質問と候補を出す（作業状態。#702）。検索・回答プロファイルを変えたら消す。
   const [faqChoice, setFaqChoice] = useWorkspaceState<FaqChoice | null>(
     "chat.faqChoice",
     null,
     isFaqChoice
   );
-  // 回答の前に答える確認の質問（業務ビューのルール。#717）。類似問の提示の後に出し、作業状態に残す。
+  // 回答の前に答える確認の質問（検索・回答プロファイルのルール。#717）。類似問の提示の後に出し、作業状態に残す。
   const [clarifyChoice, setClarifyChoice] = useWorkspaceState<ClarifyChoice | null>(
     "chat.clarifyChoice",
     null,
@@ -528,14 +528,14 @@ export function ChatClient() {
   const [titleError, setTitleError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const previousBusinessViewIdRef = useRef(businessViewId);
+  const previousSearchAnswerProfileIdRef = useRef(searchAnswerProfileId);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
-  // 業務ビューを切り替えたら会話選択と進行中ストリームをリセットする。
+  // 検索・回答プロファイルを切り替えたら会話選択と進行中ストリームをリセットする。
   useEffect(() => {
-    if (previousBusinessViewIdRef.current === businessViewId) return;
-    previousBusinessViewIdRef.current = businessViewId;
+    if (previousSearchAnswerProfileIdRef.current === searchAnswerProfileId) return;
+    previousSearchAnswerProfileIdRef.current = searchAnswerProfileId;
     abortRef.current?.abort();
     setActiveId(null);
     setLiveTurn(null);
@@ -544,7 +544,7 @@ export function ChatClient() {
     setErrorText("");
     setEditingId(null);
     setTitleError("");
-  }, [businessViewId, setActiveId, setFaqChoice, setClarifyChoice]);
+  }, [searchAnswerProfileId, setActiveId, setFaqChoice, setClarifyChoice]);
 
   // メッセージが増えたら末尾までスクロールする。
   useEffect(() => {
@@ -603,7 +603,7 @@ export function ChatClient() {
   }
 
   async function startNewConversation() {
-    if (!businessViewId) return;
+    if (!searchAnswerProfileId) return;
     setErrorText("");
     const emptyConversation = conversations.find(
       (conversation) => conversation.status === "ACTIVE" && conversation.message_count === 0
@@ -614,7 +614,7 @@ export function ChatClient() {
       return;
     }
     try {
-      const created = await createConversation.mutateAsync({ business_view_id: businessViewId });
+      const created = await createConversation.mutateAsync({ search_answer_profile_id: searchAnswerProfileId });
       // 新しい会話は一覧の先頭（更新日時の新しい順）に入るので、1 ページ目に戻して見せる。
       setConversationOffset(0);
       setActiveId(created.id);
@@ -707,19 +707,19 @@ export function ChatClient() {
 
   /**
    * 送信する。`retryContent` を渡すと、入力欄ではなくその質問（失敗した回答の質問）を送り直す。
-   * 業務ビューの類似問の提示がオンで近い承認済み FAQ があれば、回答を作る前に最大 3 件と「どれでもない」を
+   * 検索・回答プロファイルの類似問の提示がオンで近い承認済み FAQ があれば、回答を作る前に最大 3 件と「どれでもない」を
    * 出し、どれかを選ぶまで送らない（#684）。照会に失敗したときは類似問を使わずに送る。
    */
   async function send(retryContent?: string) {
     const content = (retryContent ?? composer).trim();
-    if (!content || !businessViewId || sending || pendingChoice || businessViewWithoutKnowledgeBases) {
+    if (!content || !searchAnswerProfileId || sending || pendingChoice || searchAnswerProfileWithoutKnowledgeBases) {
       return;
     }
     setSending(true);
     setErrorText("");
     let suggestions: ApprovedFaqSuggestionData[] = [];
     try {
-      suggestions = (await api.suggestApprovedFaq(businessViewId, content, "chat")).suggestions ?? [];
+      suggestions = (await api.suggestApprovedFaq(searchAnswerProfileId, content, "chat")).suggestions ?? [];
     } catch {
       // 類似問は補助。照会できなくても回答は作る。
     }
@@ -743,14 +743,14 @@ export function ChatClient() {
   }
 
   /**
-   * 質問が業務ビューのルールの確認に当たれば、回答の前に確認の質問を出す（#717）。1 つの質問で聞き返すのは
+   * 質問が検索・回答プロファイルのルールの確認に当たれば、回答の前に確認の質問を出す（#717）。1 つの質問で聞き返すのは
    * 1 回だけ。照会に失敗したときは確認を使わずに送る。
    */
   async function clarifyOrDeliver(content: string, retryContent?: string) {
-    if (!businessViewId) return;
+    if (!searchAnswerProfileId) return;
     let suggestion: ClarificationSuggestionData | null = null;
     try {
-      suggestion = (await api.suggestClarification(businessViewId, content)).suggestion ?? null;
+      suggestion = (await api.suggestClarification(searchAnswerProfileId, content)).suggestion ?? null;
     } catch {
       // 確認は補助。照会できなくても回答は作る。
     }
@@ -785,7 +785,7 @@ export function ChatClient() {
     approvedFaqId?: string,
     clarification?: ClarificationAnswer
   ) {
-    if (!businessViewId) return;
+    if (!searchAnswerProfileId) return;
     if (retryContent === undefined) setComposer("");
     const controller = new AbortController();
     abortRef.current = controller;
@@ -794,7 +794,7 @@ export function ChatClient() {
       let conversationId = activeId;
       if (!conversationId) {
         // 会話を選んでいなければ、最初の送信で会話を作る（会話の履歴を開かずに始められる。#664）。
-        const created = await createConversation.mutateAsync({ business_view_id: businessViewId });
+        const created = await createConversation.mutateAsync({ search_answer_profile_id: searchAnswerProfileId });
         conversationId = created.id;
         // 作った会話の内容（空）を先に入れ、読み込み中の表示で送信中の質問を隠さない。
         queryClient.setQueryData(queryKeys.conversation(created.id), created);
@@ -900,8 +900,8 @@ export function ChatClient() {
     setLiveTurn(null);
   }
 
-  const businessViewLoading = businessViewsQuery.isLoading;
-  const noBusinessViews = !businessViewLoading && businessViews.length === 0;
+  const searchAnswerProfileLoading = searchAnswerProfilesQuery.isLoading;
+  const noSearchAnswerProfiles = !searchAnswerProfileLoading && searchAnswerProfiles.length === 0;
   const liveColumns = liveTurn
     ? liveTurn.columns.map((column) => ({
         key: column.model_id || "default",
@@ -1082,56 +1082,56 @@ export function ChatClient() {
       <PageHeader wide title={t("chat.title")} subtitle={t("chat.subtitle")} />
 
       <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4">
-        {/* 業務ビュー scope */}
+        {/* 検索・回答プロファイル scope */}
         <Card className="shrink-0">
           <CardContent className="p-4 sm:p-5">
-            {businessViewLoading ? (
+            {searchAnswerProfileLoading ? (
               <TimedLoadingState
-                label={t("chat.businessView.loading")}
-                operationKey="chat-business-views-load"
+                label={t("chat.searchAnswerProfile.loading")}
+                operationKey="chat-search-answer-profiles-load"
                 framed={false}
-                testId="chat-business-views-loading"
+                testId="chat-search-answer-profiles-loading"
               >
-                <BusinessViewSelectSkeleton />
+                <SearchAnswerProfileSelectSkeleton />
               </TimedLoadingState>
-            ) : noBusinessViews ? (
+            ) : noSearchAnswerProfiles ? (
               <EmptyState
-                title={t("chat.businessView.empty")}
+                title={t("chat.searchAnswerProfile.empty")}
                 action={
-                  <Button onClick={() => navigate(APP_ROUTES.businessViews)} variant="secondary">
-                    {t("chat.businessView.open")}
+                  <Button onClick={() => navigate(APP_ROUTES.searchAnswerProfiles)} variant="secondary">
+                    {t("chat.searchAnswerProfile.open")}
                   </Button>
                 }
               />
             ) : (
               <div className="space-y-4">
                 {/* RAG 検索と同じ部品・文言・幅（#635）。 */}
-                <BusinessViewSelect
-                  id="chat-business-view"
-                  items={businessViews}
-                  value={businessViewId}
-                  onChange={setBusinessViewId}
+                <SearchAnswerProfileSelect
+                  id="chat-search-answer-profile"
+                  items={searchAnswerProfiles}
+                  value={searchAnswerProfileId}
+                  onChange={setSearchAnswerProfileId}
                 />
-                {businessViewWithoutKnowledgeBases && businessViewId ? (
+                {searchAnswerProfileWithoutKnowledgeBases && searchAnswerProfileId ? (
                   <Banner
                     severity="warning"
                     action={
-                      canOpenBusinessViews ? (
+                      canOpenSearchAnswerProfiles ? (
                         <Button
                           variant="secondary"
                           size="sm"
                           onClick={() =>
                             navigate(
-                              `${APP_ROUTES.businessViews}?id=${encodeURIComponent(businessViewId)}`
+                              `${APP_ROUTES.searchAnswerProfiles}?id=${encodeURIComponent(searchAnswerProfileId)}`
                             )
                           }
                         >
-                          {t("chat.businessView.openSettings")}
+                          {t("chat.searchAnswerProfile.openSettings")}
                         </Button>
                       ) : undefined
                     }
                   >
-                    {t("chat.businessView.noKnowledgeBases")}
+                    {t("chat.searchAnswerProfile.noKnowledgeBases")}
                   </Banner>
                 ) : null}
               </div>
@@ -1139,10 +1139,10 @@ export function ChatClient() {
           </CardContent>
         </Card>
 
-        {businessViewLoading || noBusinessViews ? null : !businessViewId ? (
+        {searchAnswerProfileLoading || noSearchAnswerProfiles ? null : !searchAnswerProfileId ? (
           <Card className="min-h-0 flex-1">
             <CardContent className="p-4 sm:p-5">
-              <EmptyState title={t("chat.businessView.required")} />
+              <EmptyState title={t("chat.searchAnswerProfile.required")} />
             </CardContent>
           </Card>
         ) : (
@@ -1257,7 +1257,7 @@ export function ChatClient() {
                     <MessageTurn
                       key={turn.user.message_id}
                       user={turn.user}
-                      businessViewId={businessViewId}
+                      searchAnswerProfileId={searchAnswerProfileId}
                       onRetry={
                         // 最新の質問の失敗（時間切れなど）だけ、同じ質問をもう一度送れる（#375）。
                         turn.user.message_id === lastTurnId &&
@@ -1293,7 +1293,7 @@ export function ChatClient() {
                     <MessageTurn
                       user={liveTurn.user}
                       columns={liveColumns}
-                      businessViewId={businessViewId}
+                      searchAnswerProfileId={searchAnswerProfileId}
                     />
                   ) : null}
                   {/* 送る前の質問と、選んでから回答する類似問（#684）。質問の吹き出しは送信後と同じ形。 */}
@@ -1367,7 +1367,7 @@ export function ChatClient() {
                     runIcon={SendHorizontal}
                     runDisabled={
                       composer.trim().length === 0 ||
-                      businessViewWithoutKnowledgeBases ||
+                      searchAnswerProfileWithoutKnowledgeBases ||
                       pendingChoice
                     }
                     size="lg"

@@ -1,7 +1,7 @@
-"""業務ビュー(Business View)関連スキーマ。
+"""検索・回答プロファイルのスキーマ。
 
-KB が「文書をどう加工して索引するか(加工する側視点)」を司るのに対し、業務ビューは
-「どの KB 群を、どんな検索/生成方針・persona で束ねて回答するか(利用する側視点)」を司る。
+KB は文書 membership の範囲、文書レシピは加工設定を持つ。
+プロファイルは参照 KB・検索/回答/安全チェックの上書き・用途専用の知識をまとめる。
 """
 
 from datetime import datetime
@@ -9,45 +9,45 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.rag.business_view_config import BusinessViewConfig
+from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.schemas.knowledge_base import (
     DESCRIPTION_REQUIRED_MESSAGE,
     KnowledgeBaseRef,
     KnowledgeBaseStatus,
 )
 
-DEFAULT_BUSINESS_VIEW_NAME = "DEFAULT"
+DEFAULT_SEARCH_ANSWER_PROFILE_NAME = "DEFAULT"
 # DEFAULT は改名できないため、説明は既定の文言を補う（作成・読み込み時と migration。#521）。
-DEFAULT_BUSINESS_VIEW_DESCRIPTION = (
-    "DEFAULT ナレッジベースを検索・回答に使う、既定の業務ビューです。"
+DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION = (
+    "DEFAULT ナレッジベースを検索・回答に使う、既定の検索・回答プロファイルです。"
 )
 
 
-class BusinessViewStatus(StrEnum):
-    """業務ビューの運用状態。"""
+class SearchAnswerProfileStatus(StrEnum):
+    """検索・回答プロファイルの運用状態。"""
 
     ACTIVE = "ACTIVE"
     ARCHIVED = "ARCHIVED"
 
 
-class BusinessViewRef(BaseModel):
-    """他スキーマへ埋め込む軽量な業務ビュー参照。"""
+class SearchAnswerProfileRef(BaseModel):
+    """他スキーマへ埋め込む軽量な検索・回答プロファイル参照。"""
 
     id: str
     name: str
 
 
-class BusinessViewKnowledgeBaseRef(KnowledgeBaseRef):
-    """業務ビューが参照する KB の {id, name, status}(アーカイブ済みを含む)。"""
+class SearchAnswerProfileKnowledgeBaseRef(KnowledgeBaseRef):
+    """検索・回答プロファイルが参照する KB の {id, name, status}(アーカイブ済みを含む)。"""
 
     status: KnowledgeBaseStatus
 
 
-class BusinessViewSummary(BusinessViewRef):
-    """一覧表示用の業務ビュー要約。"""
+class SearchAnswerProfileSummary(SearchAnswerProfileRef):
+    """一覧表示用の検索・回答プロファイル要約。"""
 
     description: str | None = None
-    status: BusinessViewStatus
+    status: SearchAnswerProfileStatus
     knowledge_base_count: int = 0
     archived_knowledge_base_count: int = Field(
         default=0,
@@ -62,11 +62,11 @@ class BusinessViewSummary(BusinessViewRef):
     archived_at: datetime | None = None
 
 
-class BusinessViewDetail(BusinessViewSummary):
-    """詳細表示用の業務ビュー情報。"""
+class SearchAnswerProfileDetail(SearchAnswerProfileSummary):
+    """詳細表示用の検索・回答プロファイル情報。"""
 
-    config: BusinessViewConfig = Field(default_factory=BusinessViewConfig)
-    knowledge_bases: list[BusinessViewKnowledgeBaseRef] = Field(
+    config: SearchAnswerProfileConfig = Field(default_factory=SearchAnswerProfileConfig)
+    knowledge_bases: list[SearchAnswerProfileKnowledgeBaseRef] = Field(
         default_factory=list,
         description=(
             "参照 KB の解決済み一覧(存在する KB のみ。アーカイブ済みを含み、status で見分ける)。"
@@ -78,17 +78,17 @@ class BusinessViewDetail(BusinessViewSummary):
     )
 
 
-class BusinessViewCreateRequest(BaseModel):
-    """業務ビュー作成 request。"""
+class SearchAnswerProfileCreateRequest(BaseModel):
+    """検索・回答プロファイル作成 request。"""
 
     name: str = Field(..., min_length=1, max_length=256)
     description: str = Field(..., max_length=2000)
-    config: BusinessViewConfig = Field(default_factory=BusinessViewConfig)
+    config: SearchAnswerProfileConfig = Field(default_factory=SearchAnswerProfileConfig)
 
     @field_validator("name")
     @classmethod
     def normalize_name(cls, value: str) -> str:
-        return _business_view_name(value)
+        return _search_answer_profile_name(value)
 
     @field_validator("description")
     @classmethod
@@ -97,12 +97,12 @@ class BusinessViewCreateRequest(BaseModel):
         return _required_clean_text(value, DESCRIPTION_REQUIRED_MESSAGE)
 
 
-class BusinessViewUpdateRequest(BaseModel):
-    """業務ビュー更新 request。指定フィールドのみ更新する。"""
+class SearchAnswerProfileUpdateRequest(BaseModel):
+    """検索・回答プロファイル更新 request。指定フィールドのみ更新する。"""
 
     name: str | None = Field(default=None, min_length=1, max_length=256)
     description: str | None = Field(default=None, max_length=2000)
-    config: BusinessViewConfig | None = Field(
+    config: SearchAnswerProfileConfig | None = Field(
         default=None,
         description="指定時は設定一式を置換する。",
     )
@@ -112,7 +112,7 @@ class BusinessViewUpdateRequest(BaseModel):
     def normalize_name(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return _business_view_name(value)
+        return _search_answer_profile_name(value)
 
     @field_validator("description")
     @classmethod
@@ -128,8 +128,8 @@ def _required_clean_text(value: str, message: str) -> str:
     return cleaned
 
 
-def _business_view_name(value: str) -> str:
+def _search_answer_profile_name(value: str) -> str:
     cleaned = _required_clean_text(value, "名前を入力してください。")
-    if cleaned.casefold() == DEFAULT_BUSINESS_VIEW_NAME.casefold():
+    if cleaned.casefold() == DEFAULT_SEARCH_ANSWER_PROFILE_NAME.casefold():
         raise ValueError("DEFAULT は予約名のため使用できません。")
     return cleaned

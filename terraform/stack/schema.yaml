@@ -601,7 +601,7 @@ variables:
     required: true
     visible: true
     title: "RAG"
-    description: "Production Ready RAG（ナレッジ構築・業務ビュー・検索・回答）を専用の Compute に配備します。少なくとも1つの製品を選択してください。"
+    description: "Production Ready RAG（ナレッジ構築・検索・回答プロファイル・検索・回答）を専用の Compute に配備します。少なくとも1つの製品を選択してください。"
     default: true
 
   deploy_nl2sql:

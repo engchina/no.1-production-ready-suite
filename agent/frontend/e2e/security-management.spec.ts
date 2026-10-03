@@ -5,7 +5,7 @@ import { expect, test } from "./fixtures/mock-api";
 
 // ユーザー管理・ロール管理（3製品共通の画面）と Agent の権限管理（#215）。
 // 権限管理は機能権限に加えて、利用できるエージェントを PUT /api/security/roles/{id}/access で保存する。
-// 業務ビューの判定は RAG が Run の利用者のサービストークンで行うため、Agent の権限管理には出さない（#750）。
+// 検索・回答プロファイルの判定は RAG が Run の利用者のサービストークンで行うため、Agent の権限管理には出さない（#750）。
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 800 },
@@ -69,7 +69,7 @@ for (const viewport of VIEWPORTS) {
       await expectNoPageOverflow(page);
     });
 
-    test("権限管理でエージェントを保存し、Agent 管理では全件が対象になる。業務ビューは出さない", async ({
+    test("権限管理でエージェントを保存し、Agent 管理では全件が対象になる。検索・回答プロファイルは出さない", async ({
       page,
       mockApi,
     }) => {
@@ -79,8 +79,8 @@ for (const viewport of VIEWPORTS) {
 
       const agents = page.getByTestId("security-roles-agent-access-list");
       await expect(agents).toHaveAccessibleName("利用できるエージェント");
-      await expect(page.getByTestId("security-roles-business-view-access-list")).toHaveCount(0);
-      await expect(page.getByText("利用できる業務ビュー")).toHaveCount(0);
+      await expect(page.getByTestId("security-roles-search-answer-profile-access-list")).toHaveCount(0);
+      await expect(page.getByText("利用できる検索・回答プロファイル")).toHaveCount(0);
       // 無効なエージェントは状態を示す。保存済みの対象は選択済み。
       await expect(agents.getByText("無効")).toBeVisible();
       await expect(agents.getByRole("option", { name: /汎用業務 Agent/ })).toBeChecked();
@@ -99,7 +99,7 @@ for (const viewport of VIEWPORTS) {
       });
       const firstBody = first?.body as Record<string, string[]>;
       expect(firstBody.agent_ids).toHaveLength(2);
-      expect(firstBody).not.toHaveProperty("business_view_ids");
+      expect(firstBody).not.toHaveProperty("search_answer_profile_ids");
       expect([...firstBody.permissions].sort()).toEqual(["agent.runs.operate", "menu.agents"]);
       // 共通のロール API には送らない（権限は Agent の保存 API だけが変える）。
       expect(mockApi.requests.some((request) => request.method === "PATCH" && request.path.startsWith("/api/security/roles"))).toBe(false);

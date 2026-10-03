@@ -371,7 +371,7 @@ def test_database_user_login_me_and_logout(auth: ProductionAuth) -> None:
         "menu.runs",
     }
     assert data["allowed_agent_ids"] == ["default"]
-    assert "allowed_business_view_ids" not in data
+    assert "allowed_search_answer_profile_ids" not in data
     assert data["debug_mode"] is False
     assert data["password_change_allowed"] is True
     headers = session_headers(login_response)
@@ -581,8 +581,8 @@ def test_access_targets_lists_agents(auth: ProductionAuth) -> None:
         )
         scoped = login("scoped-perm-admin")
         assert [item["id"] for item in _target_items(scoped, "agents")] == ["default"]
-    # 業務ビューの候補は持たない（RAG が判定する。#750）。
-    response = client.get("/api/security/access-targets/business-views", headers=headers)
+    # 検索・回答プロファイルの候補は持たない（RAG が判定する。#750）。
+    response = client.get("/api/security/access-targets/search-answer-profiles", headers=headers)
     assert response.status_code in {403, 404}
 
 
@@ -635,7 +635,7 @@ def test_update_role_access_saves_permissions_and_targets(auth: ProductionAuth) 
     data = response.json()["data"]
     assert data["permissions"] == ["agent.runs.view", "menu.agents"]
     assert data["agent_ids"] == ["default"]
-    assert "business_view_ids" not in data
+    assert "search_answer_profile_ids" not in data
     assert response.headers["ETag"] == '"2"'
     # agent.admin を含むロールは対象を空に正規化する（制限を受けない）。
     admin_role = _put_access(
@@ -887,7 +887,7 @@ def test_oracle_store_reads_and_replaces_agent_role_details() -> None:
         "DELETE FROM AGENT_ROLE_PERMISSIONS WHERE ROLE_ID = :role_id",
         "DELETE FROM AGENT_ROLE_AGENTS WHERE ROLE_ID = :role_id",
     ]
-    assert not any("BUSINESS_VIEW" in statement for statement in statements)
+    assert not any("SEARCH_ANSWER_PROFILE" in statement for statement in statements)
     inserted_agents = [
         params["agent_id"]
         for sql, params in cursor.executed

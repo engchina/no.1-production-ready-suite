@@ -54,12 +54,12 @@ describe("workspace-state", () => {
   });
 
   it("scope ごとに別の値を持ち、削除できる", () => {
-    writeWorkspace("businessViews.draft", { name: "a" }, "bv-1");
-    writeWorkspace("businessViews.draft", { name: "b" }, "new");
-    expect(readWorkspace("businessViews.draft", { name: "" }, undefined, "bv-1")).toEqual({ name: "a" });
-    removeWorkspace("businessViews.draft", "bv-1");
-    expect(readWorkspace("businessViews.draft", { name: "" }, undefined, "bv-1")).toEqual({ name: "" });
-    expect(readWorkspace("businessViews.draft", { name: "" }, undefined, "new")).toEqual({ name: "b" });
+    writeWorkspace("searchAnswerProfiles.draft", { name: "a" }, "bv-1");
+    writeWorkspace("searchAnswerProfiles.draft", { name: "b" }, "new");
+    expect(readWorkspace("searchAnswerProfiles.draft", { name: "" }, undefined, "bv-1")).toEqual({ name: "a" });
+    removeWorkspace("searchAnswerProfiles.draft", "bv-1");
+    expect(readWorkspace("searchAnswerProfiles.draft", { name: "" }, undefined, "bv-1")).toEqual({ name: "" });
+    expect(readWorkspace("searchAnswerProfiles.draft", { name: "" }, undefined, "new")).toEqual({ name: "b" });
   });
 
   it("期限切れの値は初期値に戻して消す", () => {
@@ -76,8 +76,8 @@ describe("workspace-state", () => {
     expect(readWorkspace("search.topK", "20", isOneOf(["5", "10", "20"] as const))).toBe("20");
     storage.setItem(`${WORKSPACE_NAMESPACE}search.query`, "{broken");
     expect(readWorkspace("search.query", "fallback")).toBe("fallback");
-    writeWorkspace("search.businessViewId", ["bv-1", "bv-2"]);
-    expect(readWorkspace("search.businessViewId", null, isNullableString)).toBeNull();
+    writeWorkspace("search.searchAnswerProfileId", ["bv-1", "bv-2"]);
+    expect(readWorkspace("search.searchAnswerProfileId", null, isNullableString)).toBeNull();
   });
 
   it("上限を超える値は保存せず false を返す", () => {

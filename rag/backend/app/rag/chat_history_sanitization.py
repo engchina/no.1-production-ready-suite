@@ -11,8 +11,8 @@ from dataclasses import asdict, dataclass
 from app.api.routes.chat import BLOCKED_MESSAGE_PLACEHOLDER
 from app.clients.oracle import OracleClient, StoredMessage
 from app.config import Settings, get_settings
-from app.rag.business_view_config import resolve_business_view_settings
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
+from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 
 BLOCKED_ANSWER_PLACEHOLDER = "安全ポリシーにより回答を保存しませんでした。"
 
@@ -36,7 +36,7 @@ async def sanitize_chat_history(
     oracle: OracleClient | None = None,
     settings: Settings | None = None,
 ) -> SanitizationCounts:
-    """会話単位で Business View 設定を解決し、既存メッセージを冪等に浄化する。"""
+    """会話単位で Search Answer Profile 設定を解決し、既存メッセージを冪等に浄化する。"""
     client = oracle or OracleClient()
     global_settings = settings or get_settings()
     counts = SanitizationCounts()
@@ -50,13 +50,13 @@ async def sanitize_chat_history(
         for conversation in conversations:
             counts.conversations += 1
             messages = await client.list_messages_for_guardrail_migration(conversation.id)
-            config = await client.get_business_view_config_for_guardrail_migration(
-                conversation.business_view_id
+            config = await client.get_search_answer_profile_config_for_guardrail_migration(
+                conversation.search_answer_profile_id
             )
             if config is None:
                 counts.failed += len(messages)
                 continue
-            effective_settings, _ = resolve_business_view_settings(global_settings, config)
+            effective_settings, _ = resolve_search_answer_profile_settings(global_settings, config)
             # 移行 CLI は policy preset の静的 core を使い、stage service の可用性に依存しない。
             effective_settings = effective_settings.model_copy(
                 update={"rag_guardrail_service_enabled": False}

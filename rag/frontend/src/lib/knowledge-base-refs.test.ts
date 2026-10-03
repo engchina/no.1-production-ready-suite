@@ -23,7 +23,7 @@ describe("resolveKnowledgeBaseSelection（参照 KB の状態）", () => {
     ]);
   });
 
-  it("範囲外で引けない KB は、画面が持つ参照（業務ビューの参照 KB）の名前と状態で出す", () => {
+  it("範囲外で引けない KB は、画面が持つ参照（検索・回答プロファイルの参照 KB）の名前と状態で出す", () => {
     const health = resolveKnowledgeBaseSelection({
       ids: ["kb-out-of-scope"],
       found: [],

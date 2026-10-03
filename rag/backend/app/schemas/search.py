@@ -204,8 +204,13 @@ class SearchRequest(BaseModel):
     ``generation_profile``)は #595 で削除した。旧クライアントが送っても 422 にせず、
     未定義の項目として読み捨てる(pydantic の既定 ``extra="ignore"``)。
 
-    業務ビューは 1 つだけ(``business_view_id``)を受ける。複数の ``business_view_ids`` は #635 で
-    削除した。読み捨てると業務ビューの範囲を外れて検索してしまうため、送られたら 422 にする。
+    検索・回答プロファイルは 1 つだけ(``search_answer_profile
+    _id``)を受ける。複数の ``search_answer_profile_ids
+    `` は
+    #635 で
+    削除した。読み捨てると検索・回答プロファイルの範囲を
+    外れて検索してしまうため、送られたら 422 にする。
+
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -214,12 +219,13 @@ class SearchRequest(BaseModel):
     top_k: int = Field(default=20, ge=1, le=100)
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
-    business_view_id: str | None = Field(
+    search_answer_profile_id: str | None = Field(
         default=None,
         max_length=128,
         description=(
-            "検索対象の業務ビュー(Business View)ID(1 つ。#635)。指定時は参照 KB 群を検索対象へ"
-            "展開し、業務ビューの回答の設定を適用する。"
+            "検索対象の検索・回答プロファイル(Search Answer Pro"
+            "file)ID(1 つ。#635)。指定時は参照 KB 群を検索対象へ"
+            "展開し、検索・回答プロファイルの回答の設定を適用する。"
         ),
     )
     retrieval_only: bool = Field(
@@ -255,18 +261,25 @@ class SearchRequest(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def reject_business_view_ids(cls, data: object) -> object:
-        """削除した ``business_view_ids`` を黙って読み捨てない(業務ビューの外を検索しない)。"""
-        if isinstance(data, dict) and "business_view_ids" in data:
+    def reject_search_answer_profile_ids(cls, data: object) -> object:
+        """削除した ``search_answer_profile_ids`"
+        "` を黙って読み捨てない(検索・回答プロファイルの外を検索しない)。"""
+        if isinstance(data, dict) and any(
+            key in data for key in ("business_view_id", "business_view_ids")
+        ):
             raise ValueError(
-                "business_view_ids は使えません。"
-                "業務ビューは business_view_id で 1 つ指定してください。"
+                "対象の旧指定は使えません。search_answer_profile_id を指定してください。"
+            )
+        if isinstance(data, dict) and "search_answer_profile_ids" in data:
+            raise ValueError(
+                "search_answer_profile_ids は使えません。"
+                "検索・回答プロファイルは search_answer_profile_id で 1 つ指定してください。"
             )
         return data
 
-    @field_validator("business_view_id")
+    @field_validator("search_answer_profile_id")
     @classmethod
-    def validate_business_view_id(cls, value: str | None) -> str | None:
+    def validate_search_answer_profile_id(cls, value: str | None) -> str | None:
         """空文字は未指定として扱う。"""
         if value is None:
             return None
@@ -344,7 +357,7 @@ class SearchDiagnostics(BaseModel):
     filter_keys: list[str] = Field(default_factory=list)
     knowledge_base_count: int = 0
     kb_adapter_config_applied: str | None = None
-    business_view_applied: str | None = None
+    search_answer_profile_applied: str | None = None
     config_fingerprint: str = ""
 
 
@@ -582,7 +595,7 @@ class AnswerRecordSummary(BaseModel):
     """保存された回答の一覧行(本文・根拠は含めない)。"""
 
     trace_id: str
-    business_view_id: str | None = None
+    search_answer_profile_id: str | None = None
     surface: Literal["search", "chat"]
     answer_engine: str
     question: str

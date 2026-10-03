@@ -2,7 +2,9 @@
 
 - `/auth/*`・`/security/users*`・`/security/roles*`: platform の `build_auth_router`
 - `GET /security/permissions`: 権限カタログ
-- `GET /security/access-targets/{business-views,knowledge-bases}`: 権限管理で選べる業務ビューと
+- `GET /security/access-targets/{search-answ
+er-profiles,knowledge-bases}`: 権限管理で選べる検索・回答
+プロファイルと
   ナレッジベース（検索とページング。#608）
 - `PUT /security/roles/{role_id}/access`: ロールの RAG 権限と対象範囲の保存
 """
@@ -21,8 +23,8 @@ from starlette.concurrency import run_in_threadpool
 from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.rag.request_context import unrestricted_access_scope
-from app.schemas.business_view import BusinessViewSummary
 from app.schemas.knowledge_base import KnowledgeBaseSummary
+from app.schemas.search_answer_profile import SearchAnswerProfileSummary
 
 from .dependencies import current_principal, local_debug_principal, request_context
 from .domain import as_principal, as_role
@@ -81,7 +83,9 @@ def _access_target_page(
     )
 
 
-def _access_target_data(item: BusinessViewSummary | KnowledgeBaseSummary) -> AccessTargetData:
+def _access_target_data(
+    item: SearchAnswerProfileSummary | KnowledgeBaseSummary,
+) -> AccessTargetData:
     return AccessTargetData(
         id=item.id,
         name=item.name,
@@ -91,27 +95,29 @@ def _access_target_data(item: BusinessViewSummary | KnowledgeBaseSummary) -> Acc
 
 
 @router.get(
-    "/security/access-targets/business-views",
+    "/security/access-targets/search-answer-profiles",
     response_model=ApiResponse[Page[AccessTargetData]],
 )
-async def list_business_view_access_targets(
+async def list_search_answer_profile_access_targets(
     q: str | None = Query(default=None, max_length=200),
     limit: int = Query(default=50, ge=1, le=ACCESS_TARGET_PAGE_LIMIT_MAX),
     offset: int = Query(default=0, ge=0),
     ids: Annotated[list[str] | None, Query(max_length=ACCESS_TARGET_PAGE_LIMIT_MAX)] = None,
 ) -> ApiResponse[Page[AccessTargetData]]:
-    """権限管理画面で選べる業務ビュー（アーカイブ済みを含む）を、検索とページングで返す（#608）。
+    """権限管理画面で選べる検索・回答プロファイル（アーカイブ済みを含む）を、検索とページングで返す（#608）。
 
     - `q`: 名前・説明の部分一致。`ids`: その ID だけ（ロールに選択済みの対象の名前の解決に使う）。
-    - 一覧は利用者の対象範囲で絞る（SYSTEM_ADMIN と `rag.business_views.manage` を持つ利用者は全件、
+    - 一覧は利用者の対象範囲で絞る（SYSTEM_ADMIN と `rag.se
+    arch_answer_profiles.manage` を持つ利用者は全件、
+
       それ以外は自分の範囲内だけ）。範囲外の対象は見せない。
     """
     oracle = OracleClient()
     query = (q or "").strip() or None
-    views = await oracle.list_business_views(
-        query=query, limit=limit, offset=offset, business_view_ids=ids
+    views = await oracle.list_search_answer_profiles(
+        query=query, limit=limit, offset=offset, search_answer_profile_ids=ids
     )
-    total = await oracle.count_business_views(query=query, business_view_ids=ids)
+    total = await oracle.count_search_answer_profiles(query=query, search_answer_profile_ids=ids)
     return ApiResponse(
         data=_access_target_page(
             [_access_target_data(view) for view in views], total=total, limit=limit, offset=offset
@@ -131,7 +137,9 @@ async def list_knowledge_base_access_targets(
 ) -> ApiResponse[Page[AccessTargetData]]:
     """権限管理画面で選べるナレッジベース（アーカイブ済みを含む）を、検索とページングで返す（#608）。
 
-    絞り込み・対象範囲は業務ビューと同じ（`rag.knowledge_bases.manage` を持つ利用者は全件）。
+    絞り込み・対象範囲は検索・回答プロファイルと同じ（`rag.kn
+    owledge_bases.manage` を持つ利用者は全件）。
+
     """
     oracle = OracleClient()
     query = (q or "").strip() or None
@@ -153,13 +161,14 @@ async def update_role_access(
     request: Request,
     response: Response,
 ) -> ApiResponse[RoleData]:
-    """権限管理画面の保存。ロールの RAG 権限と対象範囲（業務ビュー・KB）だけを置き換える。"""
+    """権限管理画面の保存。ロールの RAG 権限と対象範"
+    "囲（検索・回答プロファイル・KB）だけを置き換える。"""
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
     # 指定 ID の存在確認は利用者の範囲と無関係に行う（範囲外は 403、存在しない ID は 400）。
     with unrestricted_access_scope():
         (
-            known_business_view_ids,
+            known_search_answer_profile_ids,
             known_knowledge_base_ids,
         ) = await OracleClient().list_access_target_ids()
     role = await run_in_threadpool(
@@ -167,9 +176,9 @@ async def update_role_access(
             role_id,
             expected_version=payload.version,
             permissions=payload.permissions,
-            business_view_ids=payload.business_view_ids,
+            search_answer_profile_ids=payload.search_answer_profile_ids,
             knowledge_base_ids=payload.knowledge_base_ids,
-            known_business_view_ids=known_business_view_ids,
+            known_search_answer_profile_ids=known_search_answer_profile_ids,
             known_knowledge_base_ids=known_knowledge_base_ids,
             actor=actor,
             request_id=request_id,

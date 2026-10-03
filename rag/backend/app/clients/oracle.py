@@ -31,11 +31,6 @@ from pr_backend_core.oracle_pool import (
 from pr_backend_core.oracle_session import init_oracle_session
 
 from app.config import Settings, get_settings
-from app.rag.business_view_config import (
-    BusinessViewConfig,
-    dump_business_view_config,
-    parse_business_view_config,
-)
 from app.rag.chunking import Chunk
 from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY, engine_search_text
 from app.rag.extraction_field_adapter import (
@@ -55,16 +50,13 @@ from app.rag.kb_adapter_config import (
     parse_adapter_config,
 )
 from app.rag.request_context import current_audit_request_context, unrestricted_access_scope
+from app.rag.search_answer_profile_config import (
+    SearchAnswerProfileConfig,
+    dump_search_answer_profile_config,
+    parse_search_answer_profile_config,
+)
 from app.rag.source_profile import build_source_profile
 from app.rag.vector_index_adapter import resolve_vector_index_adapter
-from app.schemas.business_view import (
-    DEFAULT_BUSINESS_VIEW_DESCRIPTION,
-    DEFAULT_BUSINESS_VIEW_NAME,
-    BusinessViewDetail,
-    BusinessViewKnowledgeBaseRef,
-    BusinessViewStatus,
-    BusinessViewSummary,
-)
 from app.schemas.classification import CLASSIFICATION_CATEGORY_KEYS, category_label
 from app.schemas.common import JsonValue
 from app.schemas.document import (
@@ -97,6 +89,14 @@ from app.schemas.search import (
     SearchMode,
     parse_extraction_field_filter,
     parse_page_ranges,
+)
+from app.schemas.search_answer_profile import (
+    DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION,
+    DEFAULT_SEARCH_ANSWER_PROFILE_NAME,
+    SearchAnswerProfileDetail,
+    SearchAnswerProfileKnowledgeBaseRef,
+    SearchAnswerProfileStatus,
+    SearchAnswerProfileSummary,
 )
 
 logger = logging.getLogger(__name__)
@@ -239,26 +239,26 @@ class StoredKnowledgeBase:
 
 
 @dataclass
-class StoredBusinessView:
-    """業務ビュー(Business View)行。"""
+class StoredSearchAnswerProfile:
+    """検索・回答プロファイル(Search Answer Profile)行。"""
 
     id: str
     name: str
-    status: BusinessViewStatus
+    status: SearchAnswerProfileStatus
     created_at: datetime
     updated_at: datetime
     tenant_id_hash: str | None = None
     description: str | None = None
-    view_config: dict[str, object] = field(default_factory=dict)
+    profile_config: dict[str, object] = field(default_factory=dict)
     archived_at: datetime | None = None
 
 
 @dataclass
 class StoredConversation:
-    """チャット会話(conversation)行。業務ビュー配下に置く。"""
+    """チャット会話(conversation)行。検索・回答プロファイル配下に置く。"""
 
     id: str
-    business_view_id: str
+    search_answer_profile_id: str
     created_at: datetime
     updated_at: datetime
     title: str | None = None
@@ -2156,62 +2156,66 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
-    async def create_business_view(
+    async def create_search_answer_profile(
         self,
         *,
         name: str,
         description: str | None = None,
-        config: BusinessViewConfig | None = None,
-    ) -> BusinessViewDetail:
-        """業務ビューを作成する。"""
-        return await self._create_business_view_with_oracle(
+        config: SearchAnswerProfileConfig | None = None,
+    ) -> SearchAnswerProfileDetail:
+        """検索・回答プロファイルを作成する。"""
+        return await self._create_search_answer_profile_with_oracle(
             name=name,
             description=description,
-            config=config or BusinessViewConfig(),
+            config=config or SearchAnswerProfileConfig(),
         )
 
-    async def ensure_default_business_view(self) -> BusinessViewDetail:
-        """tenant ごとの DEFAULT KB と DEFAULT 業務ビューを取得または作成する。
+    async def ensure_default_search_answer_profile(self) -> SearchAnswerProfileDetail:
+        """tenant ごとの DEFAULT KB と DEFAULT 検索・回答プロファイルを取得または作成する。
 
         利用者の範囲で探すと範囲外の DEFAULT を重複作成するため、範囲を外して確認する（#214）。
         """
         with unrestricted_access_scope():
-            return await self._run_transaction(_ensure_default_business_view)
+            return await self._run_transaction(_ensure_default_search_answer_profile)
 
-    async def list_business_views(
+    async def list_search_answer_profiles(
         self,
         *,
-        status: BusinessViewStatus | None = None,
+        status: SearchAnswerProfileStatus | None = None,
         query: str | None = None,
         limit: int | None = None,
         offset: int = 0,
-        business_view_ids: Sequence[str] | None = None,
-    ) -> list[BusinessViewSummary]:
-        """業務ビュー一覧を返す。参照 KB のうちアーカイブ済み・存在しない件数も埋める(#302)。
+        search_answer_profile_ids: Sequence[str] | None = None,
+    ) -> list[SearchAnswerProfileSummary]:
+        """検索・回答プロファイル一覧を返す。参照 KB の
+        うちアーカイブ済み・存在しない件数も埋める(#302)。
 
-        `business_view_ids` を渡すとその ID に絞る（権限管理の選択済みの名前の解決。#608）。
+
+        `search_answer_profile_ids` を渡すとその ID に絞る（権限管理の選択済みの名前の解決。#608）。
         """
-        stored = await self._list_business_views_with_oracle(
+        stored = await self._list_search_answer_profiles_with_oracle(
             status=status,
             query=query,
             limit=limit,
             offset=offset,
-            business_view_ids=business_view_ids,
+            search_answer_profile_ids=search_answer_profile_ids,
         )
         return await self._with_knowledge_base_reference_counts(stored)
 
     async def _with_knowledge_base_reference_counts(
         self,
-        views: Sequence[StoredBusinessView],
-    ) -> list[BusinessViewSummary]:
-        """一覧の業務ビューごとに、参照 KB のアーカイブ済み・存在しない件数を数える。
+        views: Sequence[StoredSearchAnswerProfile],
+    ) -> list[SearchAnswerProfileSummary]:
+        """一覧の検索・回答プロファイルごとに、参照 KB のアーカイブ済み・存在しない件数を数える。
 
         ページ内の参照 KB をまとめて 1 回で解決する(tenant 内。利用者の KB 範囲では絞らない。
         詳細の `knowledge_bases` と同じ範囲)。
         """
-        summaries = [_to_business_view_summary(view) for view in views]
+        summaries = [_to_search_answer_profile_summary(view) for view in views]
         referenced = {
-            view.id: parse_business_view_config(view.view_config).normalized_knowledge_base_ids()
+            view.id: parse_search_answer_profile_config(
+                view.profile_config
+            ).normalized_knowledge_base_ids()
             for view in views
         }
         all_ids = _unique_optional_sequence(
@@ -2239,24 +2243,24 @@ class OracleClient:
             for summary in summaries
         ]
 
-    async def count_business_views(
+    async def count_search_answer_profiles(
         self,
         *,
-        status: BusinessViewStatus | None = None,
+        status: SearchAnswerProfileStatus | None = None,
         query: str | None = None,
-        business_view_ids: Sequence[str] | None = None,
+        search_answer_profile_ids: Sequence[str] | None = None,
     ) -> int:
-        """条件に一致する業務ビュー数を返す。"""
-        return await self._count_business_views_with_oracle(
-            status=status, query=query, business_view_ids=business_view_ids
+        """条件に一致する検索・回答プロファイル数を返す。"""
+        return await self._count_search_answer_profiles_with_oracle(
+            status=status, query=query, search_answer_profile_ids=search_answer_profile_ids
         )
 
-    async def get_business_view(
+    async def get_search_answer_profile(
         self,
-        business_view_id: str,
-    ) -> BusinessViewDetail | None:
-        """業務ビュー詳細を返す。参照 KB の名前も解決して埋める。"""
-        view = await self._get_business_view_with_oracle(business_view_id)
+        search_answer_profile_id: str,
+    ) -> SearchAnswerProfileDetail | None:
+        """検索・回答プロファイル詳細を返す。参照 KB の名前も解決して埋める。"""
+        view = await self._get_search_answer_profile_with_oracle(search_answer_profile_id)
         if view is None:
             return None
         knowledge_base_ids = view.config.normalized_knowledge_base_ids()
@@ -2280,14 +2284,17 @@ class OracleClient:
         )
 
     async def list_access_target_ids(self) -> tuple[set[str], set[str]]:
-        """tenant 内の全業務ビュー・全ナレッジベースの ID（アーカイブ済みを含む）。
+        """tenant 内の全検索・回答プロファイル・全ナレッジベースの ID（アーカイブ済みを含む）。
 
         権限管理で指定された ID の存在確認に使う。利用者の対象範囲では絞らない（#214）。
         """
         tenant_binds = _with_tenant_bind({})
         view_rows = await self._fetch_all(
             _render_sql(
-                "SELECT business_view_id FROM rag_business_views WHERE {tenant_sql}",
+                (
+                    "SELECT search_answer_profile_id FROM rag_"
+                    "search_answer_profiles WHERE {tenant_sql}"
+                ),
                 tenant_sql=_oracle_tenant_predicate(),
             ),
             tenant_binds,
@@ -2300,7 +2307,7 @@ class OracleClient:
             tenant_binds,
         )
         return (
-            {str(row["business_view_id"]) for row in view_rows},
+            {str(row["search_answer_profile_id"]) for row in view_rows},
             {str(row["knowledge_base_id"]) for row in base_rows},
         )
 
@@ -2308,7 +2315,7 @@ class OracleClient:
         """回答を保存する(同じ trace_id は上書き)。"""
         binds = {
             "trace_id": record["trace_id"],
-            "business_view_id": record.get("business_view_id"),
+            "search_answer_profile_id": record.get("search_answer_profile_id"),
             "surface": record["surface"],
             "answer_engine": record["answer_engine"],
             "question": record["question"],
@@ -2329,7 +2336,7 @@ class OracleClient:
                 USING (SELECT :trace_id AS trace_id FROM dual) source
                 ON (target.trace_id = source.trace_id)
                 WHEN MATCHED THEN UPDATE SET
-                    target.business_view_id = :business_view_id,
+                    target.search_answer_profile_id = :search_answer_profile_id,
                     target.surface = :surface,
                     target.answer_engine = :answer_engine,
                     target.question = :question,
@@ -2340,11 +2347,11 @@ class OracleClient:
                     target.evaluation_input_json = :evaluation_input_json,
                     target.evaluation_json = NULL
                 WHEN NOT MATCHED THEN INSERT (
-                    trace_id, business_view_id, surface, answer_engine, question,
+                    trace_id, search_answer_profile_id, surface, answer_engine, question,
                     rewritten_question, answer, citations_json, diagnostics_json,
                     evaluation_input_json, user_id_hash
                 ) VALUES (
-                    :trace_id, :business_view_id, :surface, :answer_engine, :question,
+                    :trace_id, :search_answer_profile_id, :surface, :answer_engine, :question,
                     :rewritten_question, :answer, :citations_json, :diagnostics_json,
                     :evaluation_input_json, :user_id_hash
                 )
@@ -2360,24 +2367,24 @@ class OracleClient:
     async def list_answer_records(
         self,
         *,
-        business_view_id: str | None,
+        search_answer_profile_id: str | None,
         limit: int,
         offset: int = 0,
         trace_ids: Sequence[str] | None = None,
     ) -> list[dict[str, object]]:
         """保存済み回答を新しい順に返す(本文・JSON は含めない一覧用)。
 
-        利用できる業務ビューが制限されているときは、その業務ビューの回答だけを返す（#214）。
+        利用できる検索・回答プロファイルが制限されているときは、その検索・回答プロファイルの回答だけを返す（#214）。
         持ち主の回答だけを返す（SYSTEM_ADMIN と `rag.feedback.manage` は全件。#304）。
         `trace_ids` を渡すとその回答だけにする（チャットが会話の回答を引き当てる）。
         """
         where, binds = _answer_record_list_where(
-            business_view_id=business_view_id, trace_ids=trace_ids
+            search_answer_profile_id=search_answer_profile_id, trace_ids=trace_ids
         )
         binds.update({"limit": limit, "offset": offset})
         rows = await self._fetch_all(
             f"""
-            SELECT trace_id, business_view_id, surface, answer_engine, question,
+            SELECT trace_id, search_answer_profile_id, surface, answer_engine, question,
                    rewritten_question, created_at,
                    JSON_VALUE(diagnostics_json, '$.confidence') AS confidence
             FROM rag_answer_records
@@ -2392,12 +2399,12 @@ class OracleClient:
     async def count_answer_records(
         self,
         *,
-        business_view_id: str | None,
+        search_answer_profile_id: str | None,
         trace_ids: Sequence[str] | None = None,
     ) -> int:
         """`list_answer_records` と同じ条件の件数（ページングの総件数。#304）。"""
         where, binds = _answer_record_list_where(
-            business_view_id=business_view_id, trace_ids=trace_ids
+            search_answer_profile_id=search_answer_profile_id, trace_ids=trace_ids
         )
         row = await self._fetch_one(
             f"SELECT COUNT(*) AS count_value FROM rag_answer_records WHERE {where}",
@@ -2406,11 +2413,11 @@ class OracleClient:
         return _row_count_value(row)
 
     async def get_answer_record(self, trace_id: str) -> dict[str, object] | None:
-        """保存済み回答を 1 件返す（利用できる業務ビューの回答だけ。#214）。"""
+        """保存済み回答を 1 件返す（利用できる検索・回答プロファイルの回答だけ。#214）。"""
         row = await self._fetch_one(
             _render_sql(
                 """
-            SELECT trace_id, business_view_id, surface, answer_engine, question,
+            SELECT trace_id, search_answer_profile_id, surface, answer_engine, question,
                    rewritten_question, answer, citations_json, diagnostics_json,
                    evaluation_input_json, evaluation_json, created_at
             FROM rag_answer_records
@@ -2442,16 +2449,16 @@ class OracleClient:
                 connection,
                 """
                 INSERT INTO rag_query_history (
-                    query_id, business_view_id, surface, question, normalized_question,
+                    query_id, search_answer_profile_id, surface, question, normalized_question,
                     classification_filter
                 ) VALUES (
-                    :query_id, :business_view_id, :surface, :question, :normalized_question,
+                    :query_id, :search_answer_profile_id, :surface, :question, :normalized_question,
                     :classification_filter
                 )
                 """,
                 {
                     "query_id": uuid4().hex,
-                    "business_view_id": record["business_view_id"],
+                    "search_answer_profile_id": record["search_answer_profile_id"],
                     "surface": record["surface"],
                     "question": record["question"],
                     "normalized_question": record["normalized_question"],
@@ -2463,11 +2470,14 @@ class OracleClient:
         await self._run_transaction(operation)
 
     async def list_query_history(
-        self, business_view_id: str, *, retention_days: int, limit: int = 5000
+        self, search_answer_profile_id: str, *, retention_days: int, limit: int = 5000
     ) -> list[dict[str, object]]:
-        """業務ビューの保持期間内の質問履歴を新しい順に返す(0 日は無期限)。"""
-        where = "WHERE business_view_id = :business_view_id"
-        binds: dict[str, object] = {"business_view_id": business_view_id, "limit": limit}
+        """検索・回答プロファイルの保持期間内の質問履歴を新しい順に返す(0 日は無期限)。"""
+        where = "WHERE search_answer_profile_id = :search_answer_profile_id"
+        binds: dict[str, object] = {
+            "search_answer_profile_id": search_answer_profile_id,
+            "limit": limit,
+        }
         if retention_days > 0:
             where += " AND created_at >= SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')"
             binds["days"] = retention_days
@@ -2609,19 +2619,19 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
-    async def get_business_view_knowledge(
+    async def get_search_answer_profile_knowledge(
         self,
-        business_view_id: str,
+        search_answer_profile_id: str,
         kind: str,
     ) -> dict[str, object] | None:
-        """業務ビューの知識 payload(JSON)を返す。未登録は None。"""
+        """検索・回答プロファイルの知識 payload(JSON)を返す。未登録は None。"""
         row = await self._fetch_one(
             """
             SELECT payload_json
-            FROM rag_business_view_knowledge
-            WHERE business_view_id = :business_view_id AND kind = :kind
+            FROM rag_search_answer_profile_knowledge
+            WHERE search_answer_profile_id = :search_answer_profile_id AND kind = :kind
             """,
-            {"business_view_id": business_view_id, "kind": kind},
+            {"search_answer_profile_id": search_answer_profile_id, "kind": kind},
         )
         if row is None:
             return None
@@ -2630,15 +2640,15 @@ class OracleClient:
             payload = json.loads(payload)
         return payload if isinstance(payload, dict) else None
 
-    async def save_business_view_knowledge(
+    async def save_search_answer_profile_knowledge(
         self,
-        business_view_id: str,
+        search_answer_profile_id: str,
         kind: str,
         payload: Mapping[str, object],
     ) -> None:
-        """業務ビューの知識 payload を upsert する(revision を進める)。"""
+        """検索・回答プロファイルの知識 payload を upsert する(revision を進める)。"""
         binds = {
-            "business_view_id": business_view_id,
+            "search_answer_profile_id": search_answer_profile_id,
             "kind": kind,
             "payload_json": _json_bind(dict(payload)),
         }
@@ -2647,20 +2657,21 @@ class OracleClient:
             _execute(
                 connection,
                 """
-                MERGE INTO rag_business_view_knowledge target
+                MERGE INTO rag_search_answer_profile_knowledge target
                 USING (
-                    SELECT :business_view_id AS business_view_id, :kind AS kind FROM dual
+                    SELECT :search_answer_profile_id AS search_answer_profile_id,
+                           :kind AS kind FROM dual
                 ) source
                 ON (
-                    target.business_view_id = source.business_view_id
+                    target.search_answer_profile_id = source.search_answer_profile_id
                     AND target.kind = source.kind
                 )
                 WHEN MATCHED THEN UPDATE SET
                     target.payload_json = :payload_json,
                     target.revision = target.revision + 1,
                     target.updated_at = SYSTIMESTAMP
-                WHEN NOT MATCHED THEN INSERT (business_view_id, kind, payload_json)
-                    VALUES (source.business_view_id, source.kind, :payload_json)
+                WHEN NOT MATCHED THEN INSERT (search_answer_profile_id, kind, payload_json)
+                    VALUES (source.search_answer_profile_id, source.kind, :payload_json)
                 """,
                 binds,
                 input_sizes=_json_input_sizes("payload_json"),
@@ -2756,13 +2767,15 @@ class OracleClient:
 
         await self._run_transaction(operation)
 
-    async def list_business_view_chunk_texts(
+    async def list_search_answer_profile_chunk_texts(
         self,
         knowledge_base_ids: Sequence[str],
         *,
         limit: int,
     ) -> list[tuple[str, str, str]]:
-        """業務ビューが参照する KB の配信中 chunk を (chunk_id, document_id, text) で返す。
+        """検索・回答プロファイルが参照する KB の配信中 chunk を
+         (chunk_id, document_id, text) で返す。
+
 
         ドメインキーワード候補の TF-IDF コーパスに使う。
         """
@@ -2792,27 +2805,29 @@ class OracleClient:
             for row in rows
         ]
 
-    async def update_business_view(
+    async def update_search_answer_profile(
         self,
-        business_view_id: str,
+        search_answer_profile_id: str,
         *,
         name: str | None = None,
         description: str | None = None,
-        config: BusinessViewConfig | None = None,
+        config: SearchAnswerProfileConfig | None = None,
         update_fields: set[str] | None = None,
-    ) -> BusinessViewDetail:
-        """業務ビューを更新する。"""
-        return await self._update_business_view_with_oracle(
-            business_view_id=business_view_id,
+    ) -> SearchAnswerProfileDetail:
+        """検索・回答プロファイルを更新する。"""
+        return await self._update_search_answer_profile_with_oracle(
+            search_answer_profile_id=search_answer_profile_id,
             name=name,
             description=description,
             config=config,
             update_fields=update_fields,
         )
 
-    async def archive_business_view(self, business_view_id: str) -> BusinessViewDetail:
-        """業務ビューをアーカイブする。参照 KB・文書は変更しない。"""
-        return await self._archive_business_view_with_oracle(business_view_id)
+    async def archive_search_answer_profile(
+        self, search_answer_profile_id: str
+    ) -> SearchAnswerProfileDetail:
+        """検索・回答プロファイルをアーカイブする。参照 KB・文書は変更しない。"""
+        return await self._archive_search_answer_profile_with_oracle(search_answer_profile_id)
 
     # --- 回答生成設定 / Prompt 版 -----------------------------------------
 
@@ -2821,14 +2836,14 @@ class OracleClient:
     async def create_conversation(
         self,
         *,
-        business_view_id: str,
+        search_answer_profile_id: str,
         title: str | None = None,
     ) -> StoredConversation:
-        """業務ビュー配下にチャット会話を作成する。"""
+        """検索・回答プロファイル配下にチャット会話を作成する。"""
         now = datetime.now(UTC)
         conversation = StoredConversation(
             id=uuid4().hex,
-            business_view_id=business_view_id,
+            search_answer_profile_id=search_answer_profile_id,
             title=title,
             status="ACTIVE",
             message_count=0,
@@ -2844,7 +2859,7 @@ class OracleClient:
                 """
                 INSERT INTO rag_conversations (
                     conversation_id,
-                    business_view_id,
+                    search_answer_profile_id,
                     tenant_id_hash,
                     user_id_hash,
                     title,
@@ -2854,7 +2869,7 @@ class OracleClient:
                     updated_at
                 ) VALUES (
                     :conversation_id,
-                    :business_view_id,
+                    :search_answer_profile_id,
                     :tenant_id_hash,
                     :user_id_hash,
                     :title,
@@ -2873,12 +2888,14 @@ class OracleClient:
     async def list_conversations(
         self,
         *,
-        business_view_id: str | None = None,
+        search_answer_profile_id: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[StoredConversation]:
         """会話一覧を更新が新しい順に返す(tenant/user scope で絞る)。"""
-        where_sql, binds = _oracle_conversation_where(business_view_id=business_view_id)
+        where_sql, binds = _oracle_conversation_where(
+            search_answer_profile_id=search_answer_profile_id
+        )
         binds["offset"] = offset
         if limit is not None:
             binds["limit"] = limit
@@ -2890,7 +2907,7 @@ class OracleClient:
                 """
             SELECT
                 c.conversation_id,
-                c.business_view_id,
+                c.search_answer_profile_id,
                 c.tenant_id_hash,
                 c.user_id_hash,
                 c.title,
@@ -2910,9 +2927,11 @@ class OracleClient:
         )
         return [_stored_conversation_from_row(row) for row in rows]
 
-    async def count_conversations(self, *, business_view_id: str | None = None) -> int:
+    async def count_conversations(self, *, search_answer_profile_id: str | None = None) -> int:
         """条件に一致する会話数を返す。"""
-        where_sql, binds = _oracle_conversation_where(business_view_id=business_view_id)
+        where_sql, binds = _oracle_conversation_where(
+            search_answer_profile_id=search_answer_profile_id
+        )
         row = await self._fetch_one(
             _render_sql(
                 """
@@ -2933,7 +2952,7 @@ class OracleClient:
                 """
             SELECT
                 c.conversation_id,
-                c.business_view_id,
+                c.search_answer_profile_id,
                 c.tenant_id_hash,
                 c.user_id_hash,
                 c.title,
@@ -3161,7 +3180,7 @@ class OracleClient:
         """運用 CLI 用に全 tenant の会話をページングする(API からは使用しない)。"""
         rows = await self._fetch_all(
             """
-            SELECT conversation_id, business_view_id, tenant_id_hash, user_id_hash,
+            SELECT conversation_id, search_answer_profile_id, tenant_id_hash, user_id_hash,
                    title, status, message_count, created_at, updated_at
             FROM rag_conversations
             ORDER BY created_at ASC, conversation_id ASC
@@ -3188,19 +3207,23 @@ class OracleClient:
         )
         return [_stored_message_from_row(row) for row in rows]
 
-    async def get_business_view_config_for_guardrail_migration(
-        self, business_view_id: str
-    ) -> BusinessViewConfig | None:
-        """運用 CLI 用に tenant scope を越えて業務ビュー設定だけを読む。"""
+    async def get_search_answer_profile_config_for_guardrail_migration(
+        self, search_answer_profile_id: str
+    ) -> SearchAnswerProfileConfig | None:
+        """運用 CLI 用に tenant scope を越えて検索・回答プロファイル設定だけを読む。"""
         row = await self._fetch_one(
             """
-            SELECT view_config
-            FROM rag_business_views
-            WHERE business_view_id = :business_view_id
+            SELECT profile_config
+            FROM rag_search_answer_profiles
+            WHERE search_answer_profile_id = :search_answer_profile_id
             """,
-            {"business_view_id": business_view_id},
+            {"search_answer_profile_id": search_answer_profile_id},
         )
-        return None if row is None else parse_business_view_config(_json_loads(row["view_config"]))
+        return (
+            None
+            if row is None
+            else parse_search_answer_profile_config(_json_loads(row["profile_config"]))
+        )
 
     async def update_message_for_guardrail_migration(
         self,
@@ -4040,7 +4063,7 @@ class OracleClient:
                 INSERT INTO rag_citation_feedback (
                     feedback_id,
                     trace_id,
-                    business_view_id,
+                    search_answer_profile_id,
                     target_type,
                     source_surface,
                     document_id,
@@ -4054,7 +4077,7 @@ class OracleClient:
                 ) VALUES (
                     :feedback_id,
                     :trace_id,
-                    :business_view_id,
+                    :search_answer_profile_id,
                     :target_type,
                     :source_surface,
                     :document_id,
@@ -4130,7 +4153,7 @@ class OracleClient:
             SELECT
                 f.feedback_id,
                 f.trace_id,
-                f.business_view_id,
+                f.search_answer_profile_id,
                 f.target_type,
                 f.source_surface,
                 f.document_id,
@@ -4196,7 +4219,7 @@ class OracleClient:
     async def list_feedback_dashboard_rows(
         self,
         *,
-        business_view_id: str | None,
+        search_answer_profile_id: str | None,
         target_type: str | None,
         rating: str | None,
         reason: str | None,
@@ -4213,7 +4236,7 @@ class OracleClient:
     ]:
         """有効な最新 feedback の明細、総数、集計 group を返す。"""
         where_sql, binds = _feedback_dashboard_filters(
-            business_view_id=business_view_id,
+            search_answer_profile_id=search_answer_profile_id,
             target_type=target_type,
             rating=rating,
             reason=reason,
@@ -4221,7 +4244,7 @@ class OracleClient:
             search_query=search_query,
         )
         previous_where_sql, previous_binds = _feedback_dashboard_filters(
-            business_view_id=business_view_id,
+            search_answer_profile_id=search_answer_profile_id,
             target_type=target_type,
             rating=rating,
             reason=reason,
@@ -4246,8 +4269,8 @@ class OracleClient:
             SELECT
                 f.feedback_id,
                 f.trace_id,
-                f.business_view_id,
-                bv.name AS business_view_name,
+                f.search_answer_profile_id,
+                bv.name AS search_answer_profile_name,
                 f.target_type,
                 f.source_surface,
                 f.document_id,
@@ -4265,8 +4288,8 @@ class OracleClient:
                 CASE WHEN fd.comment_text IS NULL THEN 0 ELSE 1 END AS has_comment
             FROM latest_feedback f
             LEFT JOIN rag_feedback_details fd ON fd.feedback_id = f.feedback_id
-            LEFT JOIN rag_business_views bv
-              ON bv.business_view_id = f.business_view_id
+            LEFT JOIN rag_search_answer_profiles bv
+              ON bv.search_answer_profile_id = f.search_answer_profile_id
              AND NVL(bv.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
             OUTER APPLY (
                 SELECT am.message_id, am.conversation_id, am.model, am.elapsed_ms
@@ -4330,7 +4353,7 @@ class OracleClient:
         return rows, _int_value((count_row or {}).get("total")), groups, previous_groups
 
     async def feedback_exists(self, feedback_id: str) -> bool:
-        """送った利用者にかかわらず、利用できる業務ビューに feedback があるか（#408）。
+        """送った利用者にかかわらず、利用できる検索・回答プロファイルに feedback があるか（#408）。
 
         詳細を送信者で絞って見つからなかったとき、他人の分（403）とない ID（404）を分けるために
         使う（NL2SQL のジョブと同じ応答）。本文は読まない。
@@ -4347,10 +4370,11 @@ class OracleClient:
                 """,
                 tenant_sql=_oracle_tenant_predicate(alias="f"),
                 scope_sql=" AND ".join(
-                    _business_view_scope_predicates("f.business_view_id") or ["1 = 1"]
+                    _search_answer_profile_scope_predicates("f.search_answer_profile_id")
+                    or ["1 = 1"]
                 ),
             ),
-            _with_business_view_scope_bind(_with_tenant_bind({"feedback_id": feedback_id})),
+            _with_search_answer_profile_scope_bind(_with_tenant_bind({"feedback_id": feedback_id})),
         )
         return row is not None
 
@@ -4369,8 +4393,8 @@ class OracleClient:
                 SELECT
                     f.feedback_id,
                     f.trace_id,
-                    f.business_view_id,
-                    bv.name AS business_view_name,
+                    f.search_answer_profile_id,
+                    bv.name AS search_answer_profile_name,
                     f.target_type,
                     f.source_surface,
                     f.document_id,
@@ -4402,8 +4426,8 @@ class OracleClient:
                     a.config_fingerprint
                 FROM rag_citation_feedback f
                 LEFT JOIN rag_feedback_details fd ON fd.feedback_id = f.feedback_id
-                LEFT JOIN rag_business_views bv
-                  ON bv.business_view_id = f.business_view_id
+                LEFT JOIN rag_search_answer_profiles bv
+                  ON bv.search_answer_profile_id = f.search_answer_profile_id
                  AND NVL(bv.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
                 OUTER APPLY (
                     SELECT am.message_id, am.conversation_id, am.model, am.elapsed_ms
@@ -4439,11 +4463,14 @@ class OracleClient:
                 """,
                 feedback_tenant_sql=_oracle_tenant_predicate(alias="f"),
                 feedback_scope_sql=" AND ".join(
-                    [*_business_view_scope_predicates("f.business_view_id"), *owner_predicates]
+                    [
+                        *_search_answer_profile_scope_predicates("f.search_answer_profile_id"),
+                        *owner_predicates,
+                    ]
                     or ["1 = 1"]
                 ),
             ),
-            _with_business_view_scope_bind(
+            _with_search_answer_profile_scope_bind(
                 _with_tenant_bind({"feedback_id": feedback_id, **owner_binds})
             ),
         )
@@ -5422,44 +5449,44 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
-    async def _create_business_view_with_oracle(
+    async def _create_search_answer_profile_with_oracle(
         self,
         *,
         name: str,
         description: str | None,
-        config: BusinessViewConfig,
-    ) -> BusinessViewDetail:
-        """Oracle business view table へ行を作成する。"""
+        config: SearchAnswerProfileConfig,
+    ) -> SearchAnswerProfileDetail:
+        """Oracle search answer profile table へ行を作成する。"""
         now = datetime.now(UTC)
-        view = StoredBusinessView(
+        view = StoredSearchAnswerProfile(
             id=uuid4().hex,
             tenant_id_hash=_current_tenant_id_hash(),
             name=name,
             description=description,
-            status=BusinessViewStatus.ACTIVE,
-            view_config=dump_business_view_config(config),
+            status=SearchAnswerProfileStatus.ACTIVE,
+            profile_config=dump_search_answer_profile_config(config),
             created_at=now,
             updated_at=now,
         )
 
-        def operation(connection: OracleConnectionProtocol) -> BusinessViewDetail:
-            _insert_business_view(connection, view)
-            return _to_business_view_detail(view)
+        def operation(connection: OracleConnectionProtocol) -> SearchAnswerProfileDetail:
+            _insert_search_answer_profile(connection, view)
+            return _to_search_answer_profile_detail(view)
 
         return await self._run_transaction(operation)
 
-    async def _list_business_views_with_oracle(
+    async def _list_search_answer_profiles_with_oracle(
         self,
         *,
-        status: BusinessViewStatus | None,
+        status: SearchAnswerProfileStatus | None,
         query: str | None,
         limit: int | None,
         offset: int,
-        business_view_ids: Sequence[str] | None = None,
-    ) -> list[StoredBusinessView]:
-        """Oracle business view table から一覧取得する(集計前の保存値)。"""
-        where_sql, binds = _oracle_business_view_where(
-            status=status, query=query, business_view_ids=business_view_ids
+        search_answer_profile_ids: Sequence[str] | None = None,
+    ) -> list[StoredSearchAnswerProfile]:
+        """Oracle search answer profile table から一覧取得する(集計前の保存値)。"""
+        where_sql, binds = _oracle_search_answer_profile_where(
+            status=status, query=query, search_answer_profile_ids=search_answer_profile_ids
         )
         binds["offset"] = offset
         if limit is not None:
@@ -5471,16 +5498,16 @@ class OracleClient:
             _render_sql(
                 """
             SELECT
-                bv.business_view_id,
+                bv.search_answer_profile_id,
                 bv.tenant_id_hash,
                 bv.name,
                 bv.description,
                 bv.status,
-                bv.view_config,
+                bv.profile_config,
                 bv.created_at,
                 bv.updated_at,
                 bv.archived_at
-            FROM rag_business_views bv
+            FROM rag_search_answer_profiles bv
             WHERE {where_sql}
             ORDER BY
                 CASE WHEN UPPER(bv.name) = 'DEFAULT' THEN 0 ELSE 1 END,
@@ -5493,24 +5520,24 @@ class OracleClient:
             ),
             binds,
         )
-        return [_stored_business_view_from_row(row) for row in rows]
+        return [_stored_search_answer_profile_from_row(row) for row in rows]
 
-    async def _count_business_views_with_oracle(
+    async def _count_search_answer_profiles_with_oracle(
         self,
         *,
-        status: BusinessViewStatus | None,
+        status: SearchAnswerProfileStatus | None,
         query: str | None,
-        business_view_ids: Sequence[str] | None = None,
+        search_answer_profile_ids: Sequence[str] | None = None,
     ) -> int:
-        """Oracle business view table の件数を取得する。"""
-        where_sql, binds = _oracle_business_view_where(
-            status=status, query=query, business_view_ids=business_view_ids
+        """Oracle search answer profile table の件数を取得する。"""
+        where_sql, binds = _oracle_search_answer_profile_where(
+            status=status, query=query, search_answer_profile_ids=search_answer_profile_ids
         )
         row = await self._fetch_one(
             _render_sql(
                 """
             SELECT COUNT(*) AS count_value
-            FROM rag_business_views bv
+            FROM rag_search_answer_profiles bv
             WHERE {where_sql}
             """,
                 where_sql=where_sql,
@@ -5519,48 +5546,50 @@ class OracleClient:
         )
         return _row_count_value(row)
 
-    async def _get_business_view_with_oracle(
+    async def _get_search_answer_profile_with_oracle(
         self,
-        business_view_id: str,
-    ) -> BusinessViewDetail | None:
-        """Oracle business view table から詳細取得する(KB 名は未解決)。"""
+        search_answer_profile_id: str,
+    ) -> SearchAnswerProfileDetail | None:
+        """Oracle search answer profile table から詳細取得する(KB 名は未解決)。"""
         rows = await self._fetch_all(
             _render_sql(
                 """
             SELECT
-                bv.business_view_id,
+                bv.search_answer_profile_id,
                 bv.tenant_id_hash,
                 bv.name,
                 bv.description,
                 bv.status,
-                bv.view_config,
+                bv.profile_config,
                 bv.created_at,
                 bv.updated_at,
                 bv.archived_at
-            FROM rag_business_views bv
-            WHERE bv.business_view_id = :business_view_id
+            FROM rag_search_answer_profiles bv
+            WHERE bv.search_answer_profile_id = :search_answer_profile_id
               AND {access_sql}
             """,
-                access_sql=" AND ".join(_oracle_business_view_access_predicates(alias="bv")),
+                access_sql=" AND ".join(
+                    _oracle_search_answer_profile_access_predicates(alias="bv")
+                ),
             ),
-            _with_business_view_scope_bind(
-                _with_tenant_bind({"business_view_id": business_view_id})
+            _with_search_answer_profile_scope_bind(
+                _with_tenant_bind({"search_answer_profile_id": search_answer_profile_id})
             ),
         )
         if not rows:
             return None
-        return _to_business_view_detail(_stored_business_view_from_row(rows[0]))
+        return _to_search_answer_profile_detail(_stored_search_answer_profile_from_row(rows[0]))
 
-    async def _update_business_view_with_oracle(
+    async def _update_search_answer_profile_with_oracle(
         self,
         *,
-        business_view_id: str,
+        search_answer_profile_id: str,
         name: str | None,
         description: str | None,
-        config: BusinessViewConfig | None,
+        config: SearchAnswerProfileConfig | None,
         update_fields: set[str] | None,
-    ) -> BusinessViewDetail:
-        """Oracle business view table を更新する。"""
+    ) -> SearchAnswerProfileDetail:
+        """Oracle search answer profile table を更新する。"""
         fields = update_fields or {
             field_name
             for field_name, value in {
@@ -5571,13 +5600,15 @@ class OracleClient:
             if value is not None
         }
 
-        def operation(connection: OracleConnectionProtocol) -> BusinessViewDetail:
-            existing = _select_business_view(connection, business_view_id)
+        def operation(connection: OracleConnectionProtocol) -> SearchAnswerProfileDetail:
+            existing = _select_search_answer_profile(connection, search_answer_profile_id)
             if existing is None:
-                raise KeyError(f"business_view_id={business_view_id} は存在しません。")
-            is_default = existing.name.casefold() == DEFAULT_BUSINESS_VIEW_NAME.casefold()
+                raise KeyError(
+                    f"search_answer_profile_id={search_answer_profile_id} は存在しません。"
+                )
+            is_default = existing.name.casefold() == DEFAULT_SEARCH_ANSWER_PROFILE_NAME.casefold()
             if is_default and "name" in fields:
-                raise ValueError("DEFAULT 業務ビューの名前は変更できません。")
+                raise ValueError("DEFAULT 検索・回答プロファイルの名前は変更できません。")
             if is_default and "config" in fields and config is not None:
                 default_knowledge_base = _select_knowledge_base_by_name(
                     connection,
@@ -5586,57 +5617,59 @@ class OracleClient:
                 if default_knowledge_base is None or config.knowledge_base_ids != [
                     default_knowledge_base.id
                 ]:
-                    raise ValueError("DEFAULT 業務ビューの参照 KB は変更できません。")
+                    raise ValueError("DEFAULT 検索・回答プロファイルの参照 KB は変更できません。")
             updated = existing
             now = datetime.now(UTC)
             if fields:
                 if "name" in fields and name is not None:
-                    updated = updated_copy_business_view(updated, name=name)
+                    updated = updated_copy_search_answer_profile(updated, name=name)
                 if "description" in fields:
-                    updated = updated_copy_business_view(updated, description=description)
+                    updated = updated_copy_search_answer_profile(updated, description=description)
                 if "config" in fields and config is not None:
-                    updated = updated_copy_business_view(
+                    updated = updated_copy_search_answer_profile(
                         updated,
-                        view_config=dump_business_view_config(config),
+                        profile_config=dump_search_answer_profile_config(config),
                     )
-                updated = updated_copy_business_view(updated, updated_at=now)
+                updated = updated_copy_search_answer_profile(updated, updated_at=now)
                 _execute(
                     connection,
                     _render_sql(
                         """
-                    UPDATE rag_business_views
+                    UPDATE rag_search_answer_profiles
                     SET
                         name = :name,
                         description = :description,
-                        view_config = :view_config,
+                        profile_config = :profile_config,
                         updated_at = :updated_at
-                    WHERE business_view_id = :business_view_id
+                    WHERE search_answer_profile_id = :search_answer_profile_id
                       AND {tenant_sql}
                     """,
                         tenant_sql=_oracle_tenant_predicate(),
                     ),
-                    _business_view_binds(updated),
+                    _search_answer_profile_binds(updated),
                 )
-            return _to_business_view_detail(updated)
+            return _to_search_answer_profile_detail(updated)
 
         return await self._run_transaction(operation)
 
-    async def _archive_business_view_with_oracle(
+    async def _archive_search_answer_profile_with_oracle(
         self,
-        business_view_id: str,
-    ) -> BusinessViewDetail:
-        """Oracle business view table の status を ARCHIVED にする。"""
+        search_answer_profile_id: str,
+    ) -> SearchAnswerProfileDetail:
+        """Oracle search answer profile table の status を ARCHIVED にする。"""
 
-        def operation(connection: OracleConnectionProtocol) -> BusinessViewDetail:
-            existing = _select_business_view(connection, business_view_id)
+        def operation(connection: OracleConnectionProtocol) -> SearchAnswerProfileDetail:
+            existing = _select_search_answer_profile(connection, search_answer_profile_id)
             if existing is None:
-                raise KeyError(f"business_view_id={business_view_id} は存在しません。")
-            if existing.name.casefold() == DEFAULT_BUSINESS_VIEW_NAME.casefold():
-                raise ValueError("DEFAULT 業務ビューはアーカイブできません。")
+                raise KeyError(
+                    f"search_answer_profile_id={search_answer_profile_id} は存在しません。"
+                )
+            if existing.name.casefold() == DEFAULT_SEARCH_ANSWER_PROFILE_NAME.casefold():
+                raise ValueError("DEFAULT 検索・回答プロファイルはアーカイブできません。")
             now = datetime.now(UTC)
-            archived = updated_copy_business_view(
+            archived = updated_copy_search_answer_profile(
                 existing,
-                status=BusinessViewStatus.ARCHIVED,
+                status=SearchAnswerProfileStatus.ARCHIVED,
                 updated_at=now,
                 archived_at=now,
             )
@@ -5644,26 +5677,26 @@ class OracleClient:
                 connection,
                 _render_sql(
                     """
-                UPDATE rag_business_views
+                UPDATE rag_search_answer_profiles
                 SET
                     status = :status,
                     updated_at = :updated_at,
                     archived_at = :archived_at
-                WHERE business_view_id = :business_view_id
+                WHERE search_answer_profile_id = :search_answer_profile_id
                   AND {tenant_sql}
                 """,
                     tenant_sql=_oracle_tenant_predicate(),
                 ),
-                _business_view_binds(archived),
+                _search_answer_profile_binds(archived),
             )
-            return _to_business_view_detail(archived)
+            return _to_search_answer_profile_detail(archived)
 
         return await self._run_transaction(operation)
 
     async def _resolve_knowledge_base_refs(
         self,
         knowledge_base_ids: Sequence[str],
-    ) -> list[BusinessViewKnowledgeBaseRef]:
+    ) -> list[SearchAnswerProfileKnowledgeBaseRef]:
         """参照 KB ID 群から存在する KB の {id, name, status} を tenant scope で解決する。
 
         アーカイブ済みの KB も返す(status で見分ける。#302)。存在しない KB は落とす。
@@ -5690,7 +5723,7 @@ class OracleClient:
         by_id = {str(row["knowledge_base_id"]): row for row in rows}
         # 入力順を保ち、存在しない KB は落とす。
         return [
-            BusinessViewKnowledgeBaseRef(
+            SearchAnswerProfileKnowledgeBaseRef(
                 id=knowledge_base_id,
                 name=str(by_id[knowledge_base_id]["name"]),
                 status=_knowledge_base_status(by_id[knowledge_base_id].get("status")),
@@ -9020,7 +9053,7 @@ def _citation_feedback_binds(
     return {
         "feedback_id": feedback_id,
         "trace_id": _audit_str(feedback, "trace_id", ""),
-        "business_view_id": _audit_optional_str(feedback, "business_view_id"),
+        "search_answer_profile_id": _audit_optional_str(feedback, "search_answer_profile_id"),
         "target_type": _audit_str(feedback, "target_type", "citation"),
         "source_surface": _audit_optional_str(feedback, "source_surface"),
         "document_id": _audit_optional_str(feedback, "document_id"),
@@ -9098,7 +9131,7 @@ def _feedback_latest_cte() -> str:
 
 def _feedback_dashboard_filters(
     *,
-    business_view_id: str | None,
+    search_answer_profile_id: str | None,
     target_type: str | None,
     rating: str | None,
     reason: str | None,
@@ -9108,15 +9141,21 @@ def _feedback_dashboard_filters(
 ) -> tuple[str, dict[str, object]]:
     """列名を固定した feedback 一覧 filter を組み立てる。
 
-    利用できる業務ビューが制限されているときは、その業務ビューの feedback だけにする（#214）。
+    利用できる検索・回答プロファイルが制限されているときは、その検索
+    ・回答プロファイルの feedback だけにする（#214）。
+
     SYSTEM_ADMIN 以外は、自分が送った feedback だけにする（#408）。一覧・件数・集計（今期と
     前期）はすべてこの条件を使うので、集計の数字も同じ範囲になる。
     """
     owner_predicates, owner_binds = _feedback_owner_scope("f.user_id_hash")
-    clauses = ["1 = 1", *_business_view_scope_predicates("f.business_view_id"), *owner_predicates]
-    binds: dict[str, object] = _with_business_view_scope_bind(owner_binds)
+    clauses = [
+        "1 = 1",
+        *_search_answer_profile_scope_predicates("f.search_answer_profile_id"),
+        *owner_predicates,
+    ]
+    binds: dict[str, object] = _with_search_answer_profile_scope_bind(owner_binds)
     for column, value in (
-        ("business_view_id", business_view_id),
+        ("search_answer_profile_id", search_answer_profile_id),
         ("target_type", target_type),
         ("rating", rating),
         ("reason", reason),
@@ -9660,62 +9699,64 @@ def _select_knowledge_base(
     return None if not rows else _stored_knowledge_base_from_row(rows[0])
 
 
-def _select_business_view(
+def _select_search_answer_profile(
     connection: OracleConnectionProtocol,
-    business_view_id: str,
-) -> StoredBusinessView | None:
+    search_answer_profile_id: str,
+) -> StoredSearchAnswerProfile | None:
     rows = _fetch_all(
         connection,
         _render_sql(
             """
         SELECT
-            business_view_id,
+            search_answer_profile_id,
             tenant_id_hash,
             name,
             description,
             status,
-            view_config,
+            profile_config,
             created_at,
             updated_at,
             archived_at
-        FROM rag_business_views
-        WHERE business_view_id = :business_view_id
+        FROM rag_search_answer_profiles
+        WHERE search_answer_profile_id = :search_answer_profile_id
           AND {access_sql}
         """,
-            access_sql=" AND ".join(_oracle_business_view_access_predicates()),
+            access_sql=" AND ".join(_oracle_search_answer_profile_access_predicates()),
         ),
-        _with_business_view_scope_bind(_with_tenant_bind({"business_view_id": business_view_id})),
+        _with_search_answer_profile_scope_bind(
+            _with_tenant_bind({"search_answer_profile_id": search_answer_profile_id})
+        ),
     )
-    return None if not rows else _stored_business_view_from_row(rows[0])
+    return None if not rows else _stored_search_answer_profile_from_row(rows[0])
 
 
-def _select_business_view_by_name(
+def _select_search_answer_profile_by_name(
     connection: OracleConnectionProtocol,
     name: str,
-) -> StoredBusinessView | None:
+) -> StoredSearchAnswerProfile | None:
     rows = _fetch_all(
         connection,
         _render_sql(
             """
         SELECT
-            business_view_id,
+            search_answer_profile_id,
             tenant_id_hash,
             name,
             description,
             status,
-            view_config,
+            profile_config,
             created_at,
             updated_at,
             archived_at
-        FROM rag_business_views
-        WHERE LOWER(name) = :business_view_name
+        FROM rag_search_answer_profiles
+        WHERE LOWER(name) = :search_answer_profile_name
           AND {tenant_sql}
         """,
             tenant_sql=_oracle_tenant_predicate(),
         ),
-        _with_tenant_bind({"business_view_name": name.casefold()}),
+        _with_tenant_bind({"search_answer_profile_name": name.casefold()}),
     )
-    return None if not rows else _stored_business_view_from_row(rows[0])
+    return None if not rows else _stored_search_answer_profile_from_row(rows[0])
 
 
 def _select_conversation(
@@ -9728,7 +9769,7 @@ def _select_conversation(
             """
         SELECT
             conversation_id,
-            business_view_id,
+            search_answer_profile_id,
             tenant_id_hash,
             user_id_hash,
             title,
@@ -9818,36 +9859,36 @@ def _insert_knowledge_base(
     )
 
 
-def _insert_business_view(
+def _insert_search_answer_profile(
     connection: OracleConnectionProtocol,
-    view: StoredBusinessView,
+    view: StoredSearchAnswerProfile,
 ) -> None:
     _execute(
         connection,
         """
-        INSERT INTO rag_business_views (
-            business_view_id,
+        INSERT INTO rag_search_answer_profiles (
+            search_answer_profile_id,
             tenant_id_hash,
             name,
             description,
             status,
-            view_config,
+            profile_config,
             created_at,
             updated_at,
             archived_at
         ) VALUES (
-            :business_view_id,
+            :search_answer_profile_id,
             :tenant_id_hash,
             :name,
             :description,
             :status,
-            :view_config,
+            :profile_config,
             :created_at,
             :updated_at,
             :archived_at
         )
         """,
-        _business_view_binds(view),
+        _search_answer_profile_binds(view),
     )
 
 
@@ -9899,43 +9940,47 @@ def _ensure_default_knowledge_base(
     return knowledge_base
 
 
-def _ensure_default_business_view(connection: OracleConnectionProtocol) -> BusinessViewDetail:
+def _ensure_default_search_answer_profile(
+    connection: OracleConnectionProtocol,
+) -> SearchAnswerProfileDetail:
     knowledge_base = _ensure_default_knowledge_base(connection, DEFAULT_KNOWLEDGE_BASE_NAME)
-    existing = _select_business_view_by_name(connection, DEFAULT_BUSINESS_VIEW_NAME)
+    existing = _select_search_answer_profile_by_name(connection, DEFAULT_SEARCH_ANSWER_PROFILE_NAME)
     now = datetime.now(UTC)
     if existing is None:
-        view = StoredBusinessView(
+        view = StoredSearchAnswerProfile(
             id=uuid4().hex,
             tenant_id_hash=_current_tenant_id_hash(),
-            name=DEFAULT_BUSINESS_VIEW_NAME,
-            description=DEFAULT_BUSINESS_VIEW_DESCRIPTION,
-            status=BusinessViewStatus.ACTIVE,
-            view_config=dump_business_view_config(
-                BusinessViewConfig(knowledge_base_ids=[knowledge_base.id])
+            name=DEFAULT_SEARCH_ANSWER_PROFILE_NAME,
+            description=DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION,
+            status=SearchAnswerProfileStatus.ACTIVE,
+            profile_config=dump_search_answer_profile_config(
+                SearchAnswerProfileConfig(knowledge_base_ids=[knowledge_base.id])
             ),
             created_at=now,
             updated_at=now,
         )
-        _insert_business_view(connection, view)
-        return _to_business_view_detail(view)
+        _insert_search_answer_profile(connection, view)
+        return _to_search_answer_profile_detail(view)
 
-    config = parse_business_view_config(existing.view_config)
+    config = parse_search_answer_profile_config(existing.profile_config)
     normalized_config = config.model_copy(update={"knowledge_base_ids": [knowledge_base.id]})
     # 説明が必須になる前（#521）に作った DEFAULT は、既定の説明を補う（改名できないため）。
     described = bool((existing.description or "").strip())
     if (
-        existing.status == BusinessViewStatus.ACTIVE
+        existing.status == SearchAnswerProfileStatus.ACTIVE
         and existing.archived_at is None
         and config == normalized_config
         and described
     ):
-        return _to_business_view_detail(existing)
+        return _to_search_answer_profile_detail(existing)
 
-    normalized = updated_copy_business_view(
+    normalized = updated_copy_search_answer_profile(
         existing,
-        description=existing.description if described else DEFAULT_BUSINESS_VIEW_DESCRIPTION,
-        status=BusinessViewStatus.ACTIVE,
-        view_config=dump_business_view_config(normalized_config),
+        description=existing.description
+        if described
+        else DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION,
+        status=SearchAnswerProfileStatus.ACTIVE,
+        profile_config=dump_search_answer_profile_config(normalized_config),
         updated_at=now,
         archived_at=None,
     )
@@ -9943,21 +9988,21 @@ def _ensure_default_business_view(connection: OracleConnectionProtocol) -> Busin
         connection,
         _render_sql(
             """
-        UPDATE rag_business_views
+        UPDATE rag_search_answer_profiles
         SET
             description = :description,
             status = :status,
-            view_config = :view_config,
+            profile_config = :profile_config,
             updated_at = :updated_at,
             archived_at = :archived_at
-        WHERE business_view_id = :business_view_id
+        WHERE search_answer_profile_id = :search_answer_profile_id
           AND {tenant_sql}
         """,
             tenant_sql=_oracle_tenant_predicate(),
         ),
-        _business_view_binds(normalized),
+        _search_answer_profile_binds(normalized),
     )
-    return _to_business_view_detail(normalized)
+    return _to_search_answer_profile_detail(normalized)
 
 
 def _require_active_knowledge_base(
@@ -10219,32 +10264,34 @@ def _oracle_knowledge_base_where(
     return " AND ".join(clauses), binds
 
 
-def _oracle_business_view_where(
+def _oracle_search_answer_profile_where(
     *,
-    status: BusinessViewStatus | None = None,
+    status: SearchAnswerProfileStatus | None = None,
     query: str | None = None,
-    business_view_ids: Sequence[str] | None = None,
+    search_answer_profile_ids: Sequence[str] | None = None,
 ) -> tuple[str, dict[str, object]]:
-    clauses = _oracle_business_view_access_predicates(alias="bv")
-    binds = _with_business_view_scope_bind(_with_tenant_bind({}))
-    if business_view_ids is not None:
-        ids = _unique_optional_sequence(business_view_ids)
+    clauses = _oracle_search_answer_profile_access_predicates(alias="bv")
+    binds = _with_search_answer_profile_scope_bind(_with_tenant_bind({}))
+    if search_answer_profile_ids is not None:
+        ids = _unique_optional_sequence(search_answer_profile_ids)
         if not ids:
             # 空の ID 指定は「どれにも一致しない」(IN () は SQL として不正)。
             clauses.append("1 = 0")
         else:
-            in_sql, in_binds = _oracle_in_predicate("bv.business_view_id", "filter_bv_id", ids)
+            in_sql, in_binds = _oracle_in_predicate(
+                "bv.search_answer_profile_id", "filter_bv_id", ids
+            )
             clauses.append(in_sql)
             binds.update(in_binds)
     if status is not None:
-        clauses.append("bv.status = :business_view_status")
-        binds["business_view_status"] = status.value
+        clauses.append("bv.status = :search_answer_profile_status")
+        binds["search_answer_profile_status"] = status.value
     if query and query.strip():
         clauses.append(
-            "(LOWER(bv.name) LIKE :business_view_query ESCAPE '\\' "
-            "OR LOWER(bv.description) LIKE :business_view_query ESCAPE '\\')"
+            "(LOWER(bv.name) LIKE :search_answer_profile_query ESCAPE '\\' "
+            "OR LOWER(bv.description) LIKE :search_answer_profile_query ESCAPE '\\')"
         )
-        binds["business_view_query"] = _like_pattern(query)
+        binds["search_answer_profile_query"] = _like_pattern(query)
     return " AND ".join(clauses), binds
 
 
@@ -10627,7 +10674,7 @@ def _oracle_tenant_predicate(*, alias: str | None = None) -> str:
 def _oracle_conversation_access_predicate_sql(*, alias: str | None = None) -> str:
     """会話を tenant と、認証時は作成ユーザーへ閉じる。
 
-    利用できる業務ビューが制限されているときは、その業務ビューの会話だけにする（#214）。
+    利用できる検索・回答プロファイルが制限されているときは、その検索・回答プロファイルの会話だけにする（#214）。
     """
     predicates = [_oracle_tenant_predicate(alias=alias)]
     context = current_audit_request_context()
@@ -10635,8 +10682,8 @@ def _oracle_conversation_access_predicate_sql(*, alias: str | None = None) -> st
         column = f"{alias}.user_id_hash" if alias else "user_id_hash"
         predicates.append(f"{column} = :conversation_user_id_hash")
     predicates.extend(
-        _business_view_scope_predicates(
-            f"{alias}.business_view_id" if alias else "business_view_id"
+        _search_answer_profile_scope_predicates(
+            f"{alias}.search_answer_profile_id" if alias else "search_answer_profile_id"
         )
     )
     return " AND ".join(predicates)
@@ -10707,29 +10754,29 @@ def _oracle_document_knowledge_base_scope_predicates(*, alias: str | None = None
     ]
 
 
-def _oracle_business_view_access_predicates(*, alias: str | None = None) -> list[str]:
-    """tenant と、利用できる業務ビュー（#214）を SQL predicate にする。
+def _oracle_search_answer_profile_access_predicates(*, alias: str | None = None) -> list[str]:
+    """tenant と、利用できる検索・回答プロファイル（#214）を SQL predicate にする。
 
-    bind は `_with_business_view_scope_bind` で足す（`_with_tenant_bind` には含めない）。
+    bind は `_with_search_answer_profile_scope_bind` で足す（`_with_tenant_bind` には含めない）。
     """
     predicates = [_oracle_tenant_predicate(alias=alias)]
     predicates.extend(
-        _business_view_scope_predicates(
-            f"{alias}.business_view_id" if alias else "business_view_id"
+        _search_answer_profile_scope_predicates(
+            f"{alias}.search_answer_profile_id" if alias else "search_answer_profile_id"
         )
     )
     return predicates
 
 
-def _business_view_scope_predicates(column: str) -> list[str]:
-    """利用できる業務ビューが制限されているとき、列をその業務ビューへ絞る。"""
-    allowed = current_audit_request_context().allowed_business_view_ids
+def _search_answer_profile_scope_predicates(column: str) -> list[str]:
+    """利用できる検索・回答プロファイルが制限されているとき、列をその検索・回答プロファイルへ絞る。"""
+    allowed = current_audit_request_context().allowed_search_answer_profile_ids
     if allowed is None:
         return []
     if not allowed:
         return ["1 = 0"]
     placeholders = ", ".join(
-        f":access_business_view_id_{index}" for index, _ in enumerate(sorted(allowed))
+        f":access_search_answer_profile_id_{index}" for index, _ in enumerate(sorted(allowed))
     )
     return [f"{column} IN ({placeholders})"]
 
@@ -10766,15 +10813,15 @@ def _answer_record_owner_hash() -> str | None:
 
 
 def _answer_record_scope_predicates() -> list[str]:
-    """回答履歴を、利用できる業務ビュー（#214）と持ち主（#304）の回答へ絞る。"""
-    predicates = _business_view_scope_predicates("business_view_id")
+    """回答履歴を、利用できる検索・回答プロファイル（#214）と持ち主（#304）の回答へ絞る。"""
+    predicates = _search_answer_profile_scope_predicates("search_answer_profile_id")
     if _answer_record_owner_hash() is not None:
         predicates.append("user_id_hash = :answer_owner_user_id_hash")
     return predicates
 
 
 def _answer_record_scope_sql() -> str:
-    """回答履歴を、利用できる業務ビューの回答へ絞る（業務ビューなしの回答は制限時に見せない）。
+    """回答履歴を、利用できる検索・回答プロファイルの回答へ絞る（検索・回答プロファイルなしの回答は制限時に見せない）。
 
     持ち主の回答だけにする（#304）。bind は `_with_answer_record_scope_bind` で足す。
     """
@@ -10782,8 +10829,8 @@ def _answer_record_scope_sql() -> str:
 
 
 def _with_answer_record_scope_bind(binds: Mapping[str, object]) -> dict[str, object]:
-    """`_answer_record_scope_sql` の bind（業務ビューの範囲と持ち主）を足す。"""
-    resolved = _with_business_view_scope_bind(binds)
+    """`_answer_record_scope_sql` の bind（検索・回答プロファイルの範囲と持ち主）を足す。"""
+    resolved = _with_search_answer_profile_scope_bind(binds)
     owner = _answer_record_owner_hash()
     if owner is not None:
         resolved["answer_owner_user_id_hash"] = owner
@@ -10791,14 +10838,14 @@ def _with_answer_record_scope_bind(binds: Mapping[str, object]) -> dict[str, obj
 
 
 def _answer_record_list_where(
-    *, business_view_id: str | None, trace_ids: Sequence[str] | None
+    *, search_answer_profile_id: str | None, trace_ids: Sequence[str] | None
 ) -> tuple[str, dict[str, object]]:
-    """回答履歴の一覧・件数の WHERE と bind（範囲・持ち主・業務ビュー・trace_id）。"""
+    """回答履歴の一覧・件数の WHERE と bind（範囲・持ち主・検索・回答プロファイル・trace_id）。"""
     clauses = [_answer_record_scope_sql()]
     binds = _with_answer_record_scope_bind({})
-    if business_view_id:
-        clauses.append("business_view_id = :business_view_id")
-        binds["business_view_id"] = business_view_id
+    if search_answer_profile_id:
+        clauses.append("search_answer_profile_id = :search_answer_profile_id")
+        binds["search_answer_profile_id"] = search_answer_profile_id
     if trace_ids is not None:
         if not trace_ids:
             clauses.append("1 = 0")
@@ -10809,13 +10856,13 @@ def _answer_record_list_where(
     return " AND ".join(clauses), binds
 
 
-def _with_business_view_scope_bind(binds: Mapping[str, object]) -> dict[str, object]:
-    """`_business_view_scope_predicates` の bind を足す。"""
+def _with_search_answer_profile_scope_bind(binds: Mapping[str, object]) -> dict[str, object]:
+    """`_search_answer_profile_scope_predicates` の bind を足す。"""
     resolved = dict(binds)
-    allowed = current_audit_request_context().allowed_business_view_ids
+    allowed = current_audit_request_context().allowed_search_answer_profile_ids
     if allowed is not None:
-        for index, business_view_id in enumerate(sorted(allowed)):
-            resolved[f"access_business_view_id_{index}"] = business_view_id
+        for index, search_answer_profile_id in enumerate(sorted(allowed)):
+            resolved[f"access_search_answer_profile_id_{index}"] = search_answer_profile_id
     return resolved
 
 
@@ -10885,8 +10932,8 @@ def _with_tenant_bind(
 
 
 def _with_conversation_access_bind(binds: Mapping[str, object]) -> dict[str, object]:
-    """会話 access predicate 用の tenant/user/業務ビュー範囲の bind を足す。"""
-    resolved = _with_business_view_scope_bind(_with_tenant_bind(binds))
+    """会話 access predicate 用の tenant/user/検索・回答プロファイル範囲の bind を足す。"""
+    resolved = _with_search_answer_profile_scope_bind(_with_tenant_bind(binds))
     user_id_hash = current_audit_request_context().user_id_hash
     if user_id_hash is not None:
         resolved["conversation_user_id_hash"] = user_id_hash
@@ -10953,14 +11000,14 @@ def _knowledge_base_binds(knowledge_base: StoredKnowledgeBase) -> dict[str, obje
     }
 
 
-def _business_view_binds(view: StoredBusinessView) -> dict[str, object]:
+def _search_answer_profile_binds(view: StoredSearchAnswerProfile) -> dict[str, object]:
     return {
-        "business_view_id": view.id,
+        "search_answer_profile_id": view.id,
         "tenant_id_hash": view.tenant_id_hash,
         "name": view.name,
         "description": view.description,
         "status": view.status.value,
-        "view_config": _json_dumps(view.view_config),
+        "profile_config": _json_dumps(view.profile_config),
         "created_at": view.created_at,
         "updated_at": view.updated_at,
         "archived_at": view.archived_at,
@@ -10970,7 +11017,7 @@ def _business_view_binds(view: StoredBusinessView) -> dict[str, object]:
 def _conversation_binds(conversation: StoredConversation) -> dict[str, object]:
     return {
         "conversation_id": conversation.id,
-        "business_view_id": conversation.business_view_id,
+        "search_answer_profile_id": conversation.search_answer_profile_id,
         "tenant_id_hash": conversation.tenant_id_hash,
         "user_id_hash": conversation.user_id_hash,
         "title": conversation.title,
@@ -11012,13 +11059,13 @@ def _message_binds(message: StoredMessage) -> dict[str, object]:
 
 def _oracle_conversation_where(
     *,
-    business_view_id: str | None = None,
+    search_answer_profile_id: str | None = None,
 ) -> tuple[str, dict[str, object]]:
     clauses = [_oracle_conversation_access_predicate_sql(alias="c")]
     binds = _with_conversation_access_bind({})
-    if business_view_id is not None:
-        clauses.append("c.business_view_id = :business_view_id")
-        binds["business_view_id"] = business_view_id
+    if search_answer_profile_id is not None:
+        clauses.append("c.search_answer_profile_id = :search_answer_profile_id")
+        binds["search_answer_profile_id"] = search_answer_profile_id
     return " AND ".join(clauses), binds
 
 
@@ -11119,14 +11166,14 @@ def _stored_knowledge_base_from_row(row: Mapping[str, object]) -> StoredKnowledg
     )
 
 
-def _stored_business_view_from_row(row: Mapping[str, object]) -> StoredBusinessView:
-    return StoredBusinessView(
-        id=str(row["business_view_id"]),
+def _stored_search_answer_profile_from_row(row: Mapping[str, object]) -> StoredSearchAnswerProfile:
+    return StoredSearchAnswerProfile(
+        id=str(row["search_answer_profile_id"]),
         tenant_id_hash=_optional_str(row.get("tenant_id_hash")),
         name=str(row["name"]),
         description=_optional_str(row.get("description")),
-        status=_business_view_status(row.get("status")),
-        view_config=_json_loads(row.get("view_config")),
+        status=_search_answer_profile_status(row.get("status")),
+        profile_config=_json_loads(row.get("profile_config")),
         created_at=_datetime_value(row.get("created_at")),
         updated_at=_datetime_value(row.get("updated_at")),
         archived_at=_optional_datetime(row.get("archived_at")),
@@ -11136,7 +11183,7 @@ def _stored_business_view_from_row(row: Mapping[str, object]) -> StoredBusinessV
 def _stored_conversation_from_row(row: Mapping[str, object]) -> StoredConversation:
     return StoredConversation(
         id=str(row["conversation_id"]),
-        business_view_id=str(row["business_view_id"]),
+        search_answer_profile_id=str(row["search_answer_profile_id"]),
         tenant_id_hash=_optional_str(row.get("tenant_id_hash")),
         user_id_hash=_optional_str(row.get("user_id_hash")),
         title=_optional_str(row.get("title")),
@@ -11522,10 +11569,10 @@ def _knowledge_base_status(value: object) -> KnowledgeBaseStatus:
     return KnowledgeBaseStatus(str(value or KnowledgeBaseStatus.ACTIVE.value))
 
 
-def _business_view_status(value: object) -> BusinessViewStatus:
-    if isinstance(value, BusinessViewStatus):
+def _search_answer_profile_status(value: object) -> SearchAnswerProfileStatus:
+    if isinstance(value, SearchAnswerProfileStatus):
         return value
-    return BusinessViewStatus(str(value or BusinessViewStatus.ACTIVE.value))
+    return SearchAnswerProfileStatus(str(value or SearchAnswerProfileStatus.ACTIVE.value))
 
 
 def _search_mode(value: object) -> SearchMode:
@@ -11869,22 +11916,22 @@ def _pem_file_is_encrypted(path: Path) -> bool:
     return "BEGIN ENCRYPTED PRIVATE KEY" in text or "PROC-TYPE: 4,ENCRYPTED" in text
 
 
-def oracle_business_view_knowledge_schema_sql(
-    table_name: str = "rag_business_view_knowledge",
+def oracle_search_answer_profile_knowledge_schema_sql(
+    table_name: str = "rag_search_answer_profile_knowledge",
 ) -> str:
-    """業務ビュー単位の知識(ドメインキーワード / Approved FAQ / 用語・ルール)の DDL。
+    """検索・回答プロファイル単位の知識(ドメインキーワード / Approved FAQ / 用語・ルール)の DDL。
 
     rag_poc の JSON payload 形式をそのまま 1 行 1 種別で保持する。
     """
 
     return f"""
 CREATE TABLE {table_name} (
-    business_view_id  VARCHAR2(64) NOT NULL,
+    search_answer_profile_id  VARCHAR2(64) NOT NULL,
     kind              VARCHAR2(32) NOT NULL,
     payload_json      JSON NOT NULL,
     revision          NUMBER(19) DEFAULT 1 NOT NULL,
     updated_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    CONSTRAINT {table_name}_pk PRIMARY KEY (business_view_id, kind),
+    CONSTRAINT {table_name}_pk PRIMARY KEY (search_answer_profile_id, kind),
     CONSTRAINT {table_name}_kind_ck CHECK (
         kind IN ('domain_keywords', 'approved_faq', 'runtime_knowledge')
     )
@@ -11925,7 +11972,7 @@ def oracle_answer_record_schema_sql(
     return f"""
 CREATE TABLE {table_name} (
     trace_id            VARCHAR2(64) PRIMARY KEY,
-    business_view_id    VARCHAR2(64),
+    search_answer_profile_id    VARCHAR2(64),
     surface             VARCHAR2(16) NOT NULL,
     answer_engine       VARCHAR2(32) NOT NULL,
     question            CLOB NOT NULL,
@@ -11941,10 +11988,10 @@ CREATE TABLE {table_name} (
 );
 
 CREATE INDEX {table_name}_view_idx
-    ON {table_name} (business_view_id, created_at DESC);
+    ON {table_name} (search_answer_profile_id, created_at DESC);
 
 CREATE INDEX {table_name}_owner_idx
-    ON {table_name} (user_id_hash, business_view_id, created_at DESC);
+    ON {table_name} (user_id_hash, search_answer_profile_id, created_at DESC);
 """.strip()
 
 
@@ -11953,7 +12000,7 @@ def oracle_query_history_schema_sql(table_name: str = "rag_query_history") -> st
     return f"""
 CREATE TABLE {table_name} (
     query_id              VARCHAR2(64) PRIMARY KEY,
-    business_view_id      VARCHAR2(64) NOT NULL,
+    search_answer_profile_id      VARCHAR2(64) NOT NULL,
     surface               VARCHAR2(16) NOT NULL,
     question              VARCHAR2(2000 CHAR) NOT NULL,
     normalized_question   VARCHAR2(2000 CHAR) NOT NULL,
@@ -11962,7 +12009,7 @@ CREATE TABLE {table_name} (
 );
 
 CREATE INDEX {table_name}_view_idx
-    ON {table_name} (business_view_id, created_at DESC)
+    ON {table_name} (search_answer_profile_id, created_at DESC)
 """.strip()
 
 
@@ -12036,22 +12083,22 @@ CREATE INDEX {membership_table}_tenant_kb_idx
 """.strip()
 
 
-def oracle_business_view_schema_sql(
-    table_name: str = "rag_business_views",
+def oracle_search_answer_profile_schema_sql(
+    table_name: str = "rag_search_answer_profiles",
 ) -> str:
-    """Oracle business view(業務ビュー)table の DDL 例を返す。
+    """Oracle search answer profile(検索・回答プロファイル)table の DDL 例を返す。
 
-    参照 KB は ``view_config`` JSON 内に ID 群として保持する(多対多。link table 不要で
-    DDL を最小化する)。query 上書きと persona も同 JSON へ束ねる。
+    参照 KB は ``profile_config`` JSON 内に ID 群として保持する(多対多。link table 不要で
+    DDL を最小化する)。検索・回答と安全チェックの上書きも同 JSON へ束ねる。
     """
     return f"""
 CREATE TABLE {table_name} (
-    business_view_id   VARCHAR2(64) PRIMARY KEY,
+    search_answer_profile_id   VARCHAR2(64) PRIMARY KEY,
     tenant_id_hash     CHAR(64),
     name               VARCHAR2(256) NOT NULL,
     description        VARCHAR2(2000),
     status             VARCHAR2(32) DEFAULT 'ACTIVE' NOT NULL,
-    view_config        JSON,
+    profile_config        JSON,
     created_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     archived_at        TIMESTAMP WITH TIME ZONE,
@@ -12071,7 +12118,7 @@ CREATE INDEX {table_name}_tenant_status_idx
 
 
 def oracle_role_access_schema_sql() -> str:
-    """ロールに付ける RAG の権限と対象範囲（業務ビュー・ナレッジベース）の DDL（#214）。
+    """ロールに付ける RAG の権限と対象範囲（検索・回答プロファイル・ナレッジベース）の DDL（#214）。
 
     ロール本体は platform の共通認証の `PLATFORM_ROLES`（`apply_platform_auth_schema`）。
     `RAG_ROLE_PERMISSIONS` は製品をまたぐ権限昇格の判定（platform）も読む。
@@ -12087,22 +12134,22 @@ CREATE TABLE rag_role_permissions (
         ON DELETE CASCADE
 );
 
-CREATE TABLE rag_role_business_views (
+CREATE TABLE rag_role_search_answer_profiles (
     role_id           VARCHAR2(36) NOT NULL,
-    business_view_id  VARCHAR2(64) NOT NULL,
-    CONSTRAINT rag_role_business_views_pk PRIMARY KEY (role_id, business_view_id),
-    CONSTRAINT rag_role_business_views_role_fk
+    search_answer_profile_id  VARCHAR2(64) NOT NULL,
+    CONSTRAINT rag_role_search_answer_profiles_pk PRIMARY KEY (role_id, search_answer_profile_id),
+    CONSTRAINT rag_role_search_answer_profiles_role_fk
         FOREIGN KEY (role_id)
         REFERENCES platform_roles (role_id)
         ON DELETE CASCADE,
-    CONSTRAINT rag_role_business_views_view_fk
-        FOREIGN KEY (business_view_id)
-        REFERENCES rag_business_views (business_view_id)
+    CONSTRAINT rag_role_search_answer_profiles_view_fk
+        FOREIGN KEY (search_answer_profile_id)
+        REFERENCES rag_search_answer_profiles (search_answer_profile_id)
         ON DELETE CASCADE
 );
 
-CREATE INDEX rag_role_business_views_view_idx
-    ON rag_role_business_views (business_view_id);
+CREATE INDEX rag_role_search_answer_profiles_view_idx
+    ON rag_role_search_answer_profiles (search_answer_profile_id);
 
 CREATE TABLE rag_role_knowledge_bases (
     role_id            VARCHAR2(36) NOT NULL,
@@ -12125,13 +12172,13 @@ CREATE INDEX rag_role_knowledge_bases_kb_idx
 
 def oracle_conversation_schema_sql(
     table_name: str = "rag_conversations",
-    business_view_table: str = "rag_business_views",
+    search_answer_profile_table: str = "rag_search_answer_profiles",
 ) -> str:
-    """チャット会話(conversation)table の DDL 例を返す。業務ビュー配下に置く。"""
+    """チャット会話(conversation)table の DDL 例を返す。検索・回答プロファイル配下に置く。"""
     return f"""
 CREATE TABLE {table_name} (
     conversation_id    VARCHAR2(64) DEFAULT RAWTOHEX(SYS_GUID()) PRIMARY KEY,
-    business_view_id   VARCHAR2(64) NOT NULL,
+    search_answer_profile_id   VARCHAR2(64) NOT NULL,
     tenant_id_hash     CHAR(64),
     user_id_hash       CHAR(64),
     title              VARCHAR2(400),
@@ -12141,17 +12188,17 @@ CREATE TABLE {table_name} (
     updated_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('ACTIVE', 'ARCHIVED')),
-    CONSTRAINT {table_name}_business_view_fk
-        FOREIGN KEY (business_view_id)
-        REFERENCES {business_view_table} (business_view_id)
+    CONSTRAINT {table_name}_search_answer_profile_fk
+        FOREIGN KEY (search_answer_profile_id)
+        REFERENCES {search_answer_profile_table} (search_answer_profile_id)
         ON DELETE CASCADE
 );
 
 CREATE INDEX {table_name}_tenant_view_updated_idx
-    ON {table_name} (tenant_id_hash, business_view_id, updated_at DESC);
+    ON {table_name} (tenant_id_hash, search_answer_profile_id, updated_at DESC);
 
-CREATE INDEX {table_name}_business_view_idx
-    ON {table_name} (business_view_id);
+CREATE INDEX {table_name}_search_answer_profile_idx
+    ON {table_name} (search_answer_profile_id);
 """.strip()
 
 
@@ -12793,7 +12840,7 @@ def oracle_feedback_schema_sql(table_name: str = "rag_citation_feedback") -> str
 CREATE TABLE {table_name} (
     feedback_id       VARCHAR2(64) DEFAULT RAWTOHEX(SYS_GUID()) PRIMARY KEY,
     trace_id          VARCHAR2(64) NOT NULL,
-    business_view_id  VARCHAR2(64),
+    search_answer_profile_id  VARCHAR2(64),
     target_type       VARCHAR2(16) DEFAULT 'citation' NOT NULL,
     source_surface    VARCHAR2(16),
     document_id       VARCHAR2(64),
@@ -12841,7 +12888,7 @@ CREATE INDEX {table_name}_tenant_created_idx
     ON {table_name} (tenant_id_hash, created_at DESC);
 
 CREATE INDEX rag_feedback_business_created_idx
-    ON {table_name} (tenant_id_hash, business_view_id, created_at DESC);
+    ON {table_name} (tenant_id_hash, search_answer_profile_id, created_at DESC);
 
 CREATE INDEX rag_feedback_user_trace_idx
     ON {table_name} (tenant_id_hash, user_id_hash, trace_id, created_at DESC);
@@ -13164,9 +13211,11 @@ def updated_copy_knowledge_base(
     return replace(knowledge_base, **cast(Any, changes))
 
 
-def _to_business_view_summary(view: StoredBusinessView) -> BusinessViewSummary:
-    config = parse_business_view_config(view.view_config)
-    return BusinessViewSummary(
+def _to_search_answer_profile_summary(
+    view: StoredSearchAnswerProfile,
+) -> SearchAnswerProfileSummary:
+    config = parse_search_answer_profile_config(view.profile_config)
+    return SearchAnswerProfileSummary(
         id=view.id,
         name=view.name,
         description=view.description,
@@ -13178,19 +13227,19 @@ def _to_business_view_summary(view: StoredBusinessView) -> BusinessViewSummary:
     )
 
 
-def _to_business_view_detail(view: StoredBusinessView) -> BusinessViewDetail:
-    config = parse_business_view_config(view.view_config)
-    return BusinessViewDetail(
-        **_to_business_view_summary(view).model_dump(),
+def _to_search_answer_profile_detail(view: StoredSearchAnswerProfile) -> SearchAnswerProfileDetail:
+    config = parse_search_answer_profile_config(view.profile_config)
+    return SearchAnswerProfileDetail(
+        **_to_search_answer_profile_summary(view).model_dump(),
         config=config,
         knowledge_bases=[],
     )
 
 
-def updated_copy_business_view(
-    view: StoredBusinessView,
+def updated_copy_search_answer_profile(
+    view: StoredSearchAnswerProfile,
     **changes: object,
-) -> StoredBusinessView:
+) -> StoredSearchAnswerProfile:
     return replace(view, **cast(Any, changes))
 
 
@@ -13209,7 +13258,7 @@ def _oracle_text_query(query: str, *, settings: Settings | None = None) -> str |
     """質問文から Oracle Text の CONTAINS の query を作る（#588）。
 
     分割は rag_engine の 1 つの方式（Sudachi の C / A を主に、文字種の区切り・漢字の部分語・
-    送り仮名を除いた形を補う。Sudachi が無ければ文字種の区切りだけ）。業務ビューの
+    送り仮名を除いた形を補う。Sudachi が無ければ文字種の区切りだけ）。検索・回答プロファイルの
     ドメインキーワードは 1 語として優先する。語は重み付きの ``ACCUM`` で結ぶ。
     索引の側（WORLD_LEXER）は変えない。
     """

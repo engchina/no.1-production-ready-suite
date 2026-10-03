@@ -12,7 +12,7 @@ export function knowledgeBaseStatusLabel(status: KnowledgeBaseStatus) {
 
 /**
  * ナレッジベース状態のバッジ(一覧・詳細で共有)。
- * 状態は色だけで表さないため、共有の StatusBadge(アイコン + ラベル)で出す。業務ビューの
+ * 状態は色だけで表さないため、共有の StatusBadge(アイコン + ラベル)で出す。検索・回答プロファイルの
  * 状態と同じ対応(有効 = success / アーカイブ済み = neutral)にする(#282)。
  */
 export function KnowledgeBaseStatusPill({ status }: { status: KnowledgeBaseStatus }) {

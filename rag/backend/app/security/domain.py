@@ -1,7 +1,7 @@
 """RAG の認証/RBAC のドメイン型（#214）。
 
 ユーザー・ロール・セッションは platform の `PLATFORM_*`（`pr_system_settings.auth`）。
-ここではロールに RAG の権限と対象範囲（業務ビュー・ナレッジベース）を、利用者に実効の
+ここではロールに RAG の権限と対象範囲（検索・回答プロファイル・ナレッジベース）を、利用者に実効の
 対象範囲を足す。
 """
 
@@ -21,10 +21,10 @@ from pr_system_settings.auth.domain import RoleRecord as PlatformRoleRecord
 
 @dataclass(slots=True)
 class RoleRecord(PlatformRoleRecord):
-    """共通のロールに、RAG の権限と対象範囲（業務ビュー・ナレッジベース）を足す。"""
+    """共通のロールに、RAG の権限と対象範囲（検索・回答プロファイル・ナレッジベース）を足す。"""
 
     permissions: set[str] = field(default_factory=set)
-    business_view_ids: set[str] = field(default_factory=set)
+    search_answer_profile_ids: set[str] = field(default_factory=set)
     knowledge_base_ids: set[str] = field(default_factory=set)
 
 
@@ -36,12 +36,12 @@ class Principal(PlatformPrincipal):
     制限ありのときは、有効なロールに割り当てた対象の和集合。
     """
 
-    allowed_business_view_ids: frozenset[str] | None = None
+    allowed_search_answer_profile_ids: frozenset[str] | None = None
     allowed_knowledge_base_ids: frozenset[str] | None = None
 
-    def can_use_business_view(self, business_view_id: str) -> bool:
-        allowed = self.allowed_business_view_ids
-        return allowed is None or business_view_id in allowed
+    def can_use_search_answer_profile(self, search_answer_profile_id: str) -> bool:
+        allowed = self.allowed_search_answer_profile_ids
+        return allowed is None or search_answer_profile_id in allowed
 
     def can_use_knowledge_base(self, knowledge_base_id: str) -> bool:
         allowed = self.allowed_knowledge_base_ids

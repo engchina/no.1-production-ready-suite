@@ -365,6 +365,24 @@ class RunUsage(BaseModel):
 
 
 class RunState(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_saved_checkpoint(cls, value: object) -> object:
+        from app.features.agent.profile_name_migration import migrate_sdk_checkpoint
+
+        if isinstance(value, dict) and isinstance(value.get("metadata"), dict):
+            metadata = value["metadata"]
+            checkpoint = metadata.get(_BUILTIN_STATE_KEY)
+            if isinstance(checkpoint, str):
+                return {
+                    **value,
+                    "metadata": {
+                        **metadata,
+                        _BUILTIN_STATE_KEY: migrate_sdk_checkpoint(checkpoint),
+                    },
+                }
+        return value
+
     id: str
     goal: str
     agent_id: str

@@ -78,7 +78,7 @@
       "name": "20260619_001_business_views",
       "sha256": "844c09f3e598f772aa867bdff215f95e8786b4c8678203f86b63df1fa4abed0d",
       "statement_count": 1,
-      "table_name": "rag_business_views"
+      "table_name": "rag_search_answer_profiles"
     },
     {
       "name": "20260621_001_chunk_sets",
@@ -150,7 +150,7 @@
       "name": "20260630_002_default_business_view",
       "sha256": "e4f94e38bea44e33f1f323838f209d5289d6e025a11c9f56ce57b35c522f90cb",
       "statement_count": 3,
-      "table_name": "rag_business_views"
+      "table_name": "rag_search_answer_profiles"
     },
     {
       "name": "20260630_003_document_recipes",

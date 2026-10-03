@@ -21,7 +21,7 @@ export function CitationCard({
   chunk,
   index,
   traceId,
-  businessViewId,
+  searchAnswerProfileId,
   sourceSurface = "search",
   messageId = null,
   contentSnapshot = null,
@@ -29,7 +29,7 @@ export function CitationCard({
   chunk: RetrievedChunk;
   index: number;
   traceId?: string | null;
-  businessViewId?: string | null;
+  searchAnswerProfileId?: string | null;
   sourceSurface?: FeedbackSourceSurface;
   messageId?: string | null;
   contentSnapshot?: FeedbackContentSnapshot | null;
@@ -113,10 +113,10 @@ export function CitationCard({
             {t("search.citation.previewOpen")}
           </Button>
         </div>
-        {traceId && businessViewId ? (
+        {traceId && searchAnswerProfileId ? (
           <FeedbackControls
             traceId={traceId}
-            businessViewId={businessViewId}
+            searchAnswerProfileId={searchAnswerProfileId}
             targetType="citation"
             sourceSurface={sourceSurface}
             documentId={chunk.document_id}

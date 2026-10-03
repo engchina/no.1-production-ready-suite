@@ -19,8 +19,8 @@ async function mockApi(page: Page) {
       return;
     }
 
-    if (url.pathname === "/api/business-views") {
-      // 検索ページは業務ビュー選択が前提のため、最低 1 件を返してフィルタを描画する。
+    if (url.pathname === "/api/search-answer-profiles") {
+      // 検索ページは検索・回答プロファイル選択が前提のため、最低 1 件を返してフィルタを描画する。
       await route.fulfill({
         json: {
           data: {

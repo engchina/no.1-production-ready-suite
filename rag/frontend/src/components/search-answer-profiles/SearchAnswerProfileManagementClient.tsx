@@ -57,13 +57,13 @@ import { useAuth } from "@/components/security/AuthProvider";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
-  DEFAULT_BUSINESS_VIEW_NAME,
+  DEFAULT_SEARCH_ANSWER_PROFILE_NAME,
   type AnswerFlowName,
   type QueryStrategyName,
-  type BusinessViewConfig,
-  type BusinessViewDetail,
-  type BusinessViewStatus,
-  type BusinessViewSummary,
+  type SearchAnswerProfileConfig,
+  type SearchAnswerProfileDetail,
+  type SearchAnswerProfileStatus,
+  type SearchAnswerProfileSummary,
   type GuardrailPolicyName,
   type KnowledgeBaseQueryConfig,
 } from "@/lib/api";
@@ -79,16 +79,16 @@ import {
   requiredTextError,
 } from "@/lib/required-fields";
 import {
-  useArchiveBusinessView,
-  useBusinessView,
-  useBusinessViews,
-  useCreateBusinessView,
-  useUpdateBusinessView,
+  useArchiveSearchAnswerProfile,
+  useSearchAnswerProfile,
+  useSearchAnswerProfiles,
+  useCreateSearchAnswerProfile,
+  useUpdateSearchAnswerProfile,
 } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { useWorkspaceState } from "@/lib/workspace-state";
-import { BusinessViewKnowledgePanel } from "./BusinessViewKnowledgePanel";
+import { SearchAnswerProfileKnowledgePanel } from "./SearchAnswerProfileKnowledgePanel";
 
 const LIMIT = DEFAULT_PAGE_SIZE;
 
@@ -96,15 +96,15 @@ const LIMIT = DEFAULT_PAGE_SIZE;
  * 一覧の絞り込み・検索・ページ。編集対象は URL の `?id=` が唯一の情報源なので、ここには持たない（#147）。
  * #132 の保存値に残る `editingId` は読み捨てる。
  */
-interface BusinessViewListView {
-  filter: BusinessViewStatus | "ALL";
+interface SearchAnswerProfileListView {
+  filter: SearchAnswerProfileStatus | "ALL";
   q: string;
   offset: number;
 }
-const INITIAL_VIEW: BusinessViewListView = { filter: "ACTIVE", q: "", offset: 0 };
+const INITIAL_VIEW: SearchAnswerProfileListView = { filter: "ACTIVE", q: "", offset: 0 };
 
-function isBusinessViewListView(value: unknown): value is BusinessViewListView {
-  const view = value as BusinessViewListView;
+function isSearchAnswerProfileListView(value: unknown): value is SearchAnswerProfileListView {
+  const view = value as SearchAnswerProfileListView;
   return (
     typeof view === "object" &&
     view !== null &&
@@ -115,14 +115,14 @@ function isBusinessViewListView(value: unknown): value is BusinessViewListView {
   );
 }
 
-interface BusinessViewDraft {
+interface SearchAnswerProfileDraft {
   name: string;
   description: string;
-  config: BusinessViewConfig;
+  config: SearchAnswerProfileConfig;
 }
 
-function isBusinessViewDraft(value: unknown): value is BusinessViewDraft {
-  const draft = value as BusinessViewDraft;
+function isSearchAnswerProfileDraft(value: unknown): value is SearchAnswerProfileDraft {
+  const draft = value as SearchAnswerProfileDraft;
   return (
     typeof draft === "object" &&
     draft !== null &&
@@ -136,7 +136,7 @@ function isBusinessViewDraft(value: unknown): value is BusinessViewDraft {
 }
 
 /** KB の並び順は意味を持たないため、集合として比べる。 */
-function draftSignature(draft: BusinessViewDraft) {
+function draftSignature(draft: SearchAnswerProfileDraft) {
   return JSON.stringify({
     ...draft,
     name: draft.name.trim(),
@@ -147,9 +147,9 @@ function draftSignature(draft: BusinessViewDraft) {
     },
   });
 }
-const FILTERS: (BusinessViewStatus | "ALL")[] = ["ALL", "ACTIVE", "ARCHIVED"];
-const SCOPE_ERROR_ID = "business-view-scope-error";
-// API（BusinessViewCreateRequest / UpdateRequest）の上限。超えると 422 の英語の検証メッセージに
+const FILTERS: (SearchAnswerProfileStatus | "ALL")[] = ["ALL", "ACTIVE", "ARCHIVED"];
+const SCOPE_ERROR_ID = "search-answer-profile-scope-error";
+// API（SearchAnswerProfileCreateRequest / UpdateRequest）の上限。超えると 422 の英語の検証メッセージに
 // なるため入力で止める。
 const NAME_MAX_LENGTH = 256;
 const DESCRIPTION_MAX_LENGTH = 2000;
@@ -163,10 +163,10 @@ const QUERY_STRATEGY_OPTIONS: SelectFieldOption<QueryStrategyName>[] = (
     "step_back_prompting",
     "hyde",
   ] as const
-).map((value) => ({ value, label: t(`businessViews.queryStrategy.${value}`) }));
+).map((value) => ({ value, label: t(`searchAnswerProfiles.queryStrategy.${value}`) }));
 const ANSWER_FLOW_OPTIONS: SelectFieldOption<AnswerFlowName>[] = [
-  { value: "crag", label: t("businessViews.answerFlow.crag") },
-  { value: "standard_rag", label: t("businessViews.answerFlow.standard_rag") },
+  { value: "crag", label: t("searchAnswerProfiles.answerFlow.crag") },
+  { value: "standard_rag", label: t("searchAnswerProfiles.answerFlow.standard_rag") },
 ];
 // 0〜20(backend の rag_neighbor_child_count と同じ範囲)。SelectField は文字列値を扱う。
 const NEIGHBOR_CHILD_COUNT_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
@@ -184,11 +184,11 @@ function emptyQueryConfig(): KnowledgeBaseQueryConfig {
 }
 
 /** 旧保存 JSON に無い項目は null(継承)で補う。 */
-function normalizeBusinessViewConfig(config: BusinessViewConfig): BusinessViewConfig {
+function normalizeSearchAnswerProfileConfig(config: SearchAnswerProfileConfig): SearchAnswerProfileConfig {
   return { ...config, query: { ...emptyQueryConfig(), ...config.query } };
 }
 
-function emptyConfig(): BusinessViewConfig {
+function emptyConfig(): SearchAnswerProfileConfig {
   return {
     version: 1,
     knowledge_base_ids: [],
@@ -199,18 +199,18 @@ function emptyConfig(): BusinessViewConfig {
 
 
 /**
- * 業務ビュー(Business View)管理。複数 KB を業務視点で束ね、回答の設定と安全チェックを上書きする。
+ * 検索・回答プロファイル(Search Answer Profile)管理。複数 KB を業務視点で束ね、回答の設定と安全チェックを上書きする。
  * A 型（一覧 → 全画面エディタ）。編集対象は URL の `?id=`（なし = 一覧 / `new` = 新規 / `<id>` = 編集）。
  */
-export function BusinessViewManagementClient() {
+export function SearchAnswerProfileManagementClient() {
   const editor = useEditorRoute();
   const { target } = editor;
-  const canManage = useCanManageBusinessViews();
+  const canManage = useCanManageSearchAnswerProfiles();
 
-  // 作成は業務ビュー管理の権限がある利用者だけ（`?id=new` を直接開いても一覧を出す。#214）。
+  // 作成は検索・回答プロファイル管理の権限がある利用者だけ（`?id=new` を直接開いても一覧を出す。#214）。
   if (target.kind === "list" || (target.kind === "new" && !canManage)) {
     return (
-      <BusinessViewList
+      <SearchAnswerProfileList
         onOpen={(id) => editor.openItem(id)}
         itemHref={editor.itemHref}
         onCreate={canManage ? editor.openNew : undefined}
@@ -219,7 +219,7 @@ export function BusinessViewManagementClient() {
   }
   if (target.kind === "new") {
     return (
-      <BusinessViewEditor
+      <SearchAnswerProfileEditor
         key="new"
         onBack={() => editor.backToList()}
         onSaved={(id) => editor.openItem(id, { replace: true })}
@@ -228,7 +228,7 @@ export function BusinessViewManagementClient() {
     );
   }
   return (
-    <BusinessViewEditRoute
+    <SearchAnswerProfileEditRoute
       key={target.id}
       id={target.id}
       onBack={() => editor.backToList()}
@@ -238,101 +238,101 @@ export function BusinessViewManagementClient() {
 }
 
 /**
- * 業務ビュー 1 件の操作。一覧の行（RowActionMenu）とエディタ（ObjectActionBar）で同じ定義を使う
+ * 検索・回答プロファイル 1 件の操作。一覧の行（RowActionMenu）とエディタ（ObjectActionBar）で同じ定義を使う
  * （buttons.md §5.1）。編集は選択の導線なので、名前のボタンと行のクリックに置く。
  */
-/** 業務ビューの作成・アーカイブは `rag.business_views.manage` を持つ利用者だけ（#214）。 */
-function useCanManageBusinessViews(): boolean {
-  return useAuth().hasPermission(CAPABILITY_PERMISSIONS.businessViewsManage);
+/** 検索・回答プロファイルの作成・アーカイブは `rag.search_answer_profiles.manage` を持つ利用者だけ（#214）。 */
+function useCanManageSearchAnswerProfiles(): boolean {
+  return useAuth().hasPermission(CAPABILITY_PERMISSIONS.searchAnswerProfilesManage);
 }
 
-function useBusinessViewActions(onArchived?: (id: string) => void) {
+function useSearchAnswerProfileActions(onArchived?: (id: string) => void) {
   const confirm = useConfirm();
-  const archive = useArchiveBusinessView();
-  const canManage = useCanManageBusinessViews();
+  const archive = useArchiveSearchAnswerProfile();
+  const canManage = useCanManageSearchAnswerProfiles();
 
-  const handleArchive = async (view: BusinessViewSummary) => {
+  const handleArchive = async (view: SearchAnswerProfileSummary) => {
     const ok = await confirm({
-      title: t("businessViews.confirm.archive.title"),
-      description: t("businessViews.confirm.archive.description", { name: view.name }),
-      confirmLabel: t("businessViews.actions.archive"),
+      title: t("searchAnswerProfiles.confirm.archive.title"),
+      description: t("searchAnswerProfiles.confirm.archive.description", { name: view.name }),
+      confirmLabel: t("searchAnswerProfiles.actions.archive"),
       tone: "danger",
       dismissOnOverlay: false,
     });
     if (!ok) return;
     archive.mutate(view.id, {
       onSuccess: () => {
-        toast.success(t("businessViews.toast.archived"));
+        toast.success(t("searchAnswerProfiles.toast.archived"));
         onArchived?.(view.id);
       },
       onError: (error) =>
-        toast.error(error instanceof ApiError ? error.message : t("businessViews.error.archive")),
+        toast.error(error instanceof ApiError ? error.message : t("searchAnswerProfiles.error.archive")),
     });
   };
 
-  return (target: BusinessViewSummary): EntityAction[] => {
-    const isDefault = target.name === DEFAULT_BUSINESS_VIEW_NAME;
+  return (target: SearchAnswerProfileSummary): EntityAction[] => {
+    const isDefault = target.name === DEFAULT_SEARCH_ANSWER_PROFILE_NAME;
     return [
       {
         id: "archive",
-        label: t("businessViews.actions.archive"),
-        ariaLabel: isDefault ? t("businessViews.default.archiveDisabled") : undefined,
+        label: t("searchAnswerProfiles.actions.archive"),
+        ariaLabel: isDefault ? t("searchAnswerProfiles.default.archiveDisabled") : undefined,
         icon: Archive,
         tone: "danger",
         visible: canManage && target.status !== "ARCHIVED",
         disabled: isDefault || archive.isPending,
         loading: archive.isPending && archive.variables === target.id,
-        testId: `business-view-archive-${target.id}`,
+        testId: `search-answer-profile-archive-${target.id}`,
         onSelect: () => handleArchive(target),
       },
     ];
   };
 }
 
-function BusinessViewList({
+function SearchAnswerProfileList({
   onOpen,
   itemHref,
   onCreate,
 }: {
   onOpen: (id: string) => void;
-  /** 業務ビューのエディタの URL（名前のリンク。新しいタブで開ける。#583）。 */
+  /** 検索・回答プロファイルのエディタの URL（名前のリンク。新しいタブで開ける。#583）。 */
   itemHref: (id: string) => string;
-  /** 作成できない利用者（業務ビュー管理の権限なし）では undefined。 */
+  /** 作成できない利用者（検索・回答プロファイル管理の権限なし）では undefined。 */
   onCreate?: () => void;
 }) {
   // 絞り込み・検索・ページは、ページを行き来しても再読込しても残す（workspace-state.md）。
-  const [view, setView] = useWorkspaceState("businessViews.view", INITIAL_VIEW, isBusinessViewListView);
+  const [view, setView] = useWorkspaceState("searchAnswerProfiles.view", INITIAL_VIEW, isSearchAnswerProfileListView);
   const { filter, q, offset } = view;
-  const setFilter = (next: BusinessViewStatus | "ALL") =>
+  const setFilter = (next: SearchAnswerProfileStatus | "ALL") =>
     setView((current) => ({ ...current, filter: next, offset: 0 }));
   const setQ = (next: string) => setView((current) => ({ ...current, q: next, offset: 0 }));
   const setOffset = (next: number) => setView((current) => ({ ...current, offset: next }));
 
   const status = filter === "ALL" ? undefined : filter;
-  const query = useBusinessViews({ status, q: q || undefined, limit: LIMIT, offset });
+  const query = useSearchAnswerProfiles({ status, q: q || undefined, limit: LIMIT, offset });
   const page = query.data;
   const items = useMemo(() => page?.items ?? [], [page?.items]);
-  const actionsFor = useBusinessViewActions();
-  // 参照 KB がアーカイブ・削除されて検索対象から外れている業務ビュー（#302）。
+  const actionsFor = useSearchAnswerProfileActions();
+  // 参照 KB がアーカイブ・削除されて検索対象から外れている検索・回答プロファイル（#302）。
   const hasKnowledgeBaseIssues = items.some(
     (item) => item.status !== "ARCHIVED" && knowledgeBaseIssueCount(item) > 0
   );
   // 新規作成の下書きはエディタを閉じても同じタブに残る。一覧から再開できるようにする。
-  const [newDraft] = useState(() => readEditorDraft("businessViews.draft", "new", isBusinessViewDraft));
+  const [newDraft] = useState(() => readEditorDraft("searchAnswerProfiles.draft", "new", isSearchAnswerProfileDraft));
 
   return (
     <div>
       <PageHeader
         wide
-        title={t("nav.businessViews")}
-        subtitle={t("businessViews.subtitle")}
+        title={t("nav.searchAnswerProfiles")}
+        subtitle={t("searchAnswerProfiles.subtitle")}
         actions={
           onCreate
             ? [
                 {
                   id: "create",
                   kind: "primary",
-                  label: t("businessViews.actions.newView"),
+                  label: t("searchAnswerProfiles.actions.newView"),
                   icon: Plus,
                   onClick: onCreate,
                 },
@@ -350,14 +350,14 @@ function BusinessViewList({
         {hasKnowledgeBaseIssues ? (
           <Banner
             severity="warning"
-            title={t("businessViews.knowledgeBaseIssues.listTitle")}
+            title={t("searchAnswerProfiles.knowledgeBaseIssues.listTitle")}
           >
-            <p>{t("businessViews.knowledgeBaseIssues.listHint")}</p>
+            <p>{t("searchAnswerProfiles.knowledgeBaseIssues.listHint")}</p>
           </Banner>
         ) : null}
 
         {newDraft && onCreate ? (
-          <EditorDraftNotice message={t("businessViews.draftPending")} onOpen={onCreate} />
+          <EditorDraftNotice message={t("searchAnswerProfiles.draftPending")} onOpen={onCreate} />
         ) : null}
 
         {/* 一覧のツールバー: 左に検索、その右に状態の絞り込み（page-archetypes.md「一覧のツールバー」。#600）。
@@ -365,8 +365,8 @@ function BusinessViewList({
         <ListToolbar
           search={
             <SearchField
-              id="business-view-search"
-              label={t("businessViews.search.placeholder")}
+              id="search-answer-profile-search"
+              label={t("searchAnswerProfiles.search.placeholder")}
               labelHidden
               value={q}
               onSearch={(next) => {
@@ -376,41 +376,41 @@ function BusinessViewList({
               resultCountLabel={
                 page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
               }
-              placeholder={t("businessViews.search.placeholder")}
+              placeholder={t("searchAnswerProfiles.search.placeholder")}
             />
           }
           filters={
             <div
               className="flex flex-wrap items-center gap-1"
               role="group"
-              aria-label={t("businessViews.filter.aria")}
+              aria-label={t("searchAnswerProfiles.filter.aria")}
             >
               {FILTERS.map((item) => (
                 <ToggleChip key={item} selected={filter === item} onClick={() => setFilter(item)}>
                   {item === "ALL"
-                    ? t("businessViews.filter.all")
+                    ? t("searchAnswerProfiles.filter.all")
                     : item === "ACTIVE"
-                      ? t("businessViews.filter.active")
-                      : t("businessViews.filter.archived")}
+                      ? t("searchAnswerProfiles.filter.active")
+                      : t("searchAnswerProfiles.filter.archived")}
                 </ToggleChip>
               ))}
             </div>
           }
-          testId="business-view-list-toolbar"
+          testId="search-answer-profile-list-toolbar"
         />
 
         {query.isError ? (
           <ErrorState
             message={
-              query.error instanceof ApiError ? query.error.message : t("businessViews.error.title")
+              query.error instanceof ApiError ? query.error.message : t("searchAnswerProfiles.error.title")
             }
             onRetry={() => void query.refetch()}
           />
         ) : query.isPending ? (
           <TimedLoadingState
-            label={t("businessViews.loading")}
-            operationKey="business-views-load"
-            testId="business-views-loading"
+            label={t("searchAnswerProfiles.loading")}
+            operationKey="search-answer-profiles-load"
+            testId="search-answer-profiles-loading"
           >
             <TableSkeleton columns={5} />
           </TimedLoadingState>
@@ -418,8 +418,8 @@ function BusinessViewList({
           <Card>
             {q ? (
               <EmptyState
-                title={t("businessViews.search.noResultsTitle")}
-                hint={t("businessViews.search.noResultsHint")}
+                title={t("searchAnswerProfiles.search.noResultsTitle")}
+                hint={t("searchAnswerProfiles.search.noResultsHint")}
                 action={
                   <ClearActionButton
                     label={t("common.clearSearch")}
@@ -429,17 +429,17 @@ function BusinessViewList({
               />
             ) : (
               <EmptyState
-                title={t("businessViews.empty.title")}
+                title={t("searchAnswerProfiles.empty.title")}
                 hint={
                   onCreate
-                    ? t("businessViews.empty.description")
-                    : t("businessViews.empty.restrictedDescription")
+                    ? t("searchAnswerProfiles.empty.description")
+                    : t("searchAnswerProfiles.empty.restrictedDescription")
                 }
                 // 空の一覧から次の行動へ進めるよう、作成の入口を空の状態にも置く（ヘッダーの「新規作成」と同じ。#555）。
                 action={
                   onCreate ? (
                     <Button variant="secondary" icon={Plus} onClick={onCreate}>
-                      {t("businessViews.actions.createFirst")}
+                      {t("searchAnswerProfiles.actions.createFirst")}
                     </Button>
                   ) : undefined
                 }
@@ -448,8 +448,8 @@ function BusinessViewList({
           </Card>
         ) : (
           <div className="grid gap-2">
-            <DataTable<BusinessViewSummary>
-              columns={businessViewColumns({ onOpen, itemHref, actionsFor })}
+            <DataTable<SearchAnswerProfileSummary>
+              columns={searchAnswerProfileColumns({ onOpen, itemHref, actionsFor })}
               rows={items}
               getRowKey={(item) => item.id}
               // 行の操作以外の領域のクリックでエディタを開く（page-archetypes.md §0-7）。
@@ -463,19 +463,19 @@ function BusinessViewList({
                   "align-top",
                   item.status === "ARCHIVED" && "cursor-default"
                 ),
-                "data-testid": `business-view-row-${item.id}`,
+                "data-testid": `search-answer-profile-row-${item.id}`,
               })}
               stickyHeader
               visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
-              scrollAriaLabel={t("businessViews.list.scrollLabel")}
-              scrollTestId="business-views-scroll-region"
+              scrollAriaLabel={t("searchAnswerProfiles.list.scrollLabel")}
+              scrollTestId="search-answer-profiles-scroll-region"
               tableClassName="w-full min-w-[51.43rem] text-sm"
-              ariaLabel={t("businessViews.list.aria")}
+              ariaLabel={t("searchAnswerProfiles.list.aria")}
             />
             <ListPagination
               {...offsetPagination({ offset, limit: LIMIT, total: page?.total ?? 0, count: items.length })}
               onPageChange={(next) => setOffset(offsetForPage(next, LIMIT))}
-              testId="business-views-pagination"
+              testId="search-answer-profiles-pagination"
             />
           </div>
         )}
@@ -485,19 +485,19 @@ function BusinessViewList({
 }
 
 /** 一覧の列定義。名前列を行見出しにし、操作列は右寄せにする。 */
-function businessViewColumns({
+function searchAnswerProfileColumns({
   onOpen,
   itemHref,
   actionsFor,
 }: {
   onOpen: (id: string) => void;
   itemHref: (id: string) => string;
-  actionsFor: (view: BusinessViewSummary) => EntityAction[];
-}): DataTableColumn<BusinessViewSummary>[] {
+  actionsFor: (view: SearchAnswerProfileSummary) => EntityAction[];
+}): DataTableColumn<SearchAnswerProfileSummary>[] {
   return [
     {
       key: "name",
-      header: t("businessViews.col.name"),
+      header: t("searchAnswerProfiles.col.name"),
       rowHeader: true,
       className: "max-w-[22rem]",
       render: (view) =>
@@ -512,7 +512,7 @@ function businessViewColumns({
           <RowTitleButton
             title={view.name}
             subtitle={view.description ?? undefined}
-            aria-label={t("businessViews.actions.editNamed", { name: view.name })}
+            aria-label={t("searchAnswerProfiles.actions.editNamed", { name: view.name })}
             href={itemHref(view.id)}
             onClick={() => onOpen(view.id)}
           />
@@ -520,35 +520,35 @@ function businessViewColumns({
     },
     {
       key: "status",
-      header: t("businessViews.col.status"),
+      header: t("searchAnswerProfiles.col.status"),
       render: (view) => (
         <StatusBadge
           variant={view.status === "ARCHIVED" ? "neutral" : "success"}
-          label={t(`businessViews.status.${view.status}` as const)}
+          label={t(`searchAnswerProfiles.status.${view.status}` as const)}
         />
       ),
     },
     {
       key: "knowledgeBases",
-      header: t("businessViews.col.knowledgeBases"),
+      header: t("searchAnswerProfiles.col.knowledgeBases"),
       align: "right",
       className: "tnum text-fg-muted",
       render: (view) => {
         const archived = view.archived_knowledge_base_count ?? 0;
         const missing = view.missing_knowledge_base_count ?? 0;
-        // アーカイブ済みの業務ビューは検索に使われないため、参照 KB の警告は出さない。
+        // アーカイブ済みの検索・回答プロファイルは検索に使われないため、参照 KB の警告は出さない。
         if (view.status === "ARCHIVED" || archived + missing === 0) {
           return formatNumber(view.knowledge_base_count);
         }
         return (
           <span
             className="inline-flex items-center justify-end gap-2"
-            data-testid={`business-view-kb-issues-${view.id}`}
+            data-testid={`search-answer-profile-kb-issues-${view.id}`}
           >
-            <StatusBadge variant="warning" label={t("businessViews.knowledgeBaseIssues.badge")} />
+            <StatusBadge variant="warning" label={t("searchAnswerProfiles.knowledgeBaseIssues.badge")} />
             <span aria-hidden>{formatNumber(view.knowledge_base_count)}</span>
             <span className="sr-only">
-              {t("businessViews.knowledgeBaseIssues.badgeAria", {
+              {t("searchAnswerProfiles.knowledgeBaseIssues.badgeAria", {
                 total: view.knowledge_base_count,
                 archived,
                 missing,
@@ -560,19 +560,19 @@ function businessViewColumns({
     },
     {
       key: "updated",
-      header: t("businessViews.col.updated"),
+      header: t("searchAnswerProfiles.col.updated"),
       className: "tnum whitespace-nowrap text-fg-muted",
       render: (view) => formatDateTime(view.updated_at),
     },
     {
       key: "actions",
-      header: t("businessViews.col.actions"),
+      header: t("searchAnswerProfiles.col.actions"),
       align: "right",
       render: (view) => (
         <RowActionMenu
           actions={actionsFor(view)}
           ariaLabel={t("common.objectActions.aria", { name: view.name })}
-          testId={`business-view-row-actions-${view.id}`}
+          testId={`search-answer-profile-row-actions-${view.id}`}
         />
       ),
     },
@@ -580,7 +580,7 @@ function businessViewColumns({
 }
 
 /** `?id=<id>` の対象を読み込んでエディタを出す。見つからないときは一覧へ戻る導線を出す（別の対象へ置き換えない）。 */
-function BusinessViewEditRoute({
+function SearchAnswerProfileEditRoute({
   id,
   onBack,
   onArchived,
@@ -589,11 +589,11 @@ function BusinessViewEditRoute({
   onBack: () => void;
   onArchived: () => void;
 }) {
-  const detail = useBusinessView(id);
+  const detail = useSearchAnswerProfile(id);
 
   if (detail.data) {
     return (
-      <BusinessViewEditor
+      <SearchAnswerProfileEditor
         initial={detail.data}
         onBack={onBack}
         onSaved={() => undefined}
@@ -605,11 +605,11 @@ function BusinessViewEditRoute({
   return (
     <EditorTargetState
       id={id}
-      listLabel={t("nav.businessViews")}
+      listLabel={t("nav.searchAnswerProfiles")}
       error={detail.error}
-      loadingLabel={t("businessViews.detail.loading")}
-      loadingTestId="business-view-detail-loading"
-      errorFallback={t("businessViews.error.title")}
+      loadingLabel={t("searchAnswerProfiles.detail.loading")}
+      loadingTestId="search-answer-profile-detail-loading"
+      errorFallback={t("searchAnswerProfiles.error.title")}
       skeleton={<FormSkeleton fields={6} />}
       onBack={onBack}
       onRetry={() => void detail.refetch()}
@@ -617,42 +617,42 @@ function BusinessViewEditRoute({
   );
 }
 
-/** 業務ビューの全画面エディタ（新規 / 編集）。上部に 戻る / 保存、エディタの見出しに対象の操作を置く。 */
-function BusinessViewEditor({
+/** 検索・回答プロファイルの全画面エディタ（新規 / 編集）。上部に 戻る / 保存、エディタの見出しに対象の操作を置く。 */
+function SearchAnswerProfileEditor({
   initial,
   onBack,
   onSaved,
   onArchived,
 }: {
-  initial?: BusinessViewDetail;
+  initial?: SearchAnswerProfileDetail;
   onBack: () => void;
   onSaved: (id: string) => void;
   onArchived: () => void;
 }) {
   const mode: "create" | "edit" = initial ? "edit" : "create";
-  const create = useCreateBusinessView();
-  const update = useUpdateBusinessView();
-  const actionsFor = useBusinessViewActions(onArchived);
+  const create = useCreateSearchAnswerProfile();
+  const update = useUpdateSearchAnswerProfile();
+  const actionsFor = useSearchAnswerProfileActions(onArchived);
   const formRef = useRef<HTMLFormElement>(null);
   // 未保存の下書き（`?id=` の値ごと）と離脱の確認は、ナレッジベースのエディタと共有の部品で持つ（#555）。
-  const editor = useEntityEditorDraft<BusinessViewDraft>({
-    field: "businessViews.draft",
+  const editor = useEntityEditorDraft<SearchAnswerProfileDraft>({
+    field: "searchAnswerProfiles.draft",
     scope: initial?.id ?? "new",
     initial: {
       name: initial?.name ?? "",
       description: initial?.description ?? "",
-      config: initial?.config ? normalizeBusinessViewConfig(initial.config) : emptyConfig(),
+      config: initial?.config ? normalizeSearchAnswerProfileConfig(initial.config) : emptyConfig(),
     },
-    isDraft: isBusinessViewDraft,
+    isDraft: isSearchAnswerProfileDraft,
     signature: draftSignature,
-    leaveDescription: t("businessViews.leaveGuard.description"),
+    leaveDescription: t("searchAnswerProfiles.leaveGuard.description"),
   });
   const { draft, setDraft, dirty } = editor;
   const { name, description, config } = draft;
   const setName = (value: string) => setDraft((current) => ({ ...current, name: value }));
   const setDescription = (value: string) =>
     setDraft((current) => ({ ...current, description: value }));
-  const setConfig = (next: BusinessViewConfig | ((current: BusinessViewConfig) => BusinessViewConfig)) =>
+  const setConfig = (next: SearchAnswerProfileConfig | ((current: SearchAnswerProfileConfig) => SearchAnswerProfileConfig)) =>
     setDraft((current) => ({
       ...current,
       config: typeof next === "function" ? next(current.config) : next,
@@ -673,7 +673,7 @@ function BusinessViewEditor({
     setDescriptionTouched(false);
   };
 
-  const isDefault = initial?.name === DEFAULT_BUSINESS_VIEW_NAME;
+  const isDefault = initial?.name === DEFAULT_SEARCH_ANSWER_PROFILE_NAME;
   const isArchived = initial?.status === "ARCHIVED";
   // 選択中（下書きを含む）の参照 KB のうち、アーカイブ済み・見つからないもの（#302）。
   // 範囲外の KB も名前で出せるよう、詳細が返す tenant 内の参照を併せて使う。
@@ -688,16 +688,16 @@ function BusinessViewEditor({
   const saveError = saveMutation.isError
     ? saveMutation.error instanceof ApiError
       ? saveMutation.error.message
-      : t(mode === "edit" ? "businessViews.error.update" : "businessViews.error.create")
+      : t(mode === "edit" ? "searchAnswerProfiles.error.update" : "searchAnswerProfiles.error.create")
     : null;
   // アーカイブ済みは保存できないので、入力できないようにする（入力しても保存できない欄を出さない。#555）。
   const locked = pending || isArchived;
-  const nameError = touched && !isDefault ? validateBusinessViewName(name) : null;
-  // 説明は必須（#521）。説明が空の既存の業務ビュー（DEFAULT を含む）は、保存するときに入力を求める。
-  const descriptionError = descriptionTouched ? validateBusinessViewDescription(description) : null;
+  const nameError = touched && !isDefault ? validateSearchAnswerProfileName(name) : null;
+  // 説明は必須（#521）。説明が空の既存の検索・回答プロファイル（DEFAULT を含む）は、保存するときに入力を求める。
+  const descriptionError = descriptionTouched ? validateSearchAnswerProfileDescription(description) : null;
   const scopeError =
     touched && config.knowledge_base_ids.length === 0
-      ? t("businessViews.knowledgeBasesRequired")
+      ? t("searchAnswerProfiles.knowledgeBasesRequired")
       : null;
 
   const updateQuery = (patch: Partial<KnowledgeBaseQueryConfig>) =>
@@ -709,8 +709,8 @@ function BusinessViewEditor({
     setTouched(true);
     setDescriptionTouched(true);
     const fieldErrors = [
-      ["business-view-name", validateBusinessViewName(name, isDefault)],
-      ["business-view-description", validateBusinessViewDescription(description)],
+      ["search-answer-profile-name", validateSearchAnswerProfileName(name, isDefault)],
+      ["search-answer-profile-description", validateSearchAnswerProfileDescription(description)],
     ] as const;
     if (firstInvalidFieldId(fieldErrors)) {
       focusFirstInvalidField(fieldErrors);
@@ -731,7 +731,7 @@ function BusinessViewEditor({
           onSuccess: (detail) => {
             // 保存した値を基準にして dirty を判定し直す（下書きも消える）。
             editor.markSaved(draft);
-            toast.success(t("businessViews.toast.updated"));
+            toast.success(t("searchAnswerProfiles.toast.updated"));
             onSaved(detail.id);
           },
         }
@@ -743,7 +743,7 @@ function BusinessViewEditor({
       {
         onSuccess: (detail) => {
           editor.markSaved(draft);
-          toast.success(t("businessViews.toast.created"));
+          toast.success(t("searchAnswerProfiles.toast.created"));
           // 作成した対象のエディタへ履歴を積まずに移る（戻るで空の新規フォームへ戻さない）。
           onSaved(detail.id);
         },
@@ -751,7 +751,7 @@ function BusinessViewEditor({
     );
   };
 
-  const title = initial?.name ?? t("businessViews.create.title");
+  const title = initial?.name ?? t("searchAnswerProfiles.create.title");
 
   return (
     <div>
@@ -762,16 +762,16 @@ function BusinessViewEditor({
           initial ? (
             <StatusBadge
               variant={initial.status === "ARCHIVED" ? "neutral" : "success"}
-              label={t(`businessViews.status.${initial.status}` as const)}
+              label={t(`searchAnswerProfiles.status.${initial.status}` as const)}
             />
           ) : undefined
         }
-        subtitle={initial ? initial.description || t("businessViews.subtitle") : t("businessViews.subtitle")}
+        subtitle={initial ? initial.description || t("searchAnswerProfiles.subtitle") : t("searchAnswerProfiles.subtitle")}
         meta={
           initial ? (
-            <span className="tnum flex flex-wrap gap-x-3 gap-y-1" data-testid="business-view-meta">
+            <span className="tnum flex flex-wrap gap-x-3 gap-y-1" data-testid="search-answer-profile-meta">
               <span>
-                {t("businessViews.meta.knowledgeBases", {
+                {t("searchAnswerProfiles.meta.knowledgeBases", {
                   count: formatNumber(initial.knowledge_base_count),
                 })}
               </span>
@@ -782,7 +782,7 @@ function BusinessViewEditor({
         // 一覧へ戻るは左上、保存は右端の primary、変更を破棄はその左（#618）。
         back={{
           label: t("common.backToList"),
-          ariaLabel: t("editor.backToListOf", { list: t("nav.businessViews") }),
+          ariaLabel: t("editor.backToListOf", { list: t("nav.searchAnswerProfiles") }),
           onClick: () => void back(),
           testId: "editor-back",
         }}
@@ -802,7 +802,7 @@ function BusinessViewEditor({
           {
             id: "save",
             kind: "primary",
-            label: mode === "edit" ? t("businessViews.actions.save") : t("businessViews.actions.create"),
+            label: mode === "edit" ? t("searchAnswerProfiles.actions.save") : t("searchAnswerProfiles.actions.create"),
             icon: mode === "edit" ? Save : Sparkles,
             loading: pending,
             disabled: isArchived,
@@ -815,10 +815,10 @@ function BusinessViewEditor({
         <SaveErrorBanner
           message={saveError}
           attemptKey={saveMutation.submittedAt}
-          testId="business-view-save-error"
+          testId="search-answer-profile-save-error"
         />
         {isArchived ? (
-          <Banner severity="warning">{t("businessViews.archivedReadonly")}</Banner>
+          <Banner severity="warning">{t("searchAnswerProfiles.archivedReadonly")}</Banner>
         ) : (
           <KnowledgeBaseIssuesBanner
             health={knowledgeBaseHealth}
@@ -829,14 +829,14 @@ function BusinessViewEditor({
           <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
             <CardTitle className="flex items-center gap-2">
               <Sparkles size={20} className="text-accent-fg" aria-hidden />
-              {t("businessViews.form.title")}
+              {t("searchAnswerProfiles.form.title")}
             </CardTitle>
             {initial ? (
               <ObjectActionBar
                 actions={actionsFor(initial)}
                 ariaLabel={t("common.objectActions.aria", { name: initial.name })}
                 moreLabel={t("common.objectActions.more")}
-                testId="business-view-detail-actions"
+                testId="search-answer-profile-detail-actions"
               />
             ) : null}
           </CardHeader>
@@ -847,31 +847,31 @@ function BusinessViewEditor({
               ) : null}
               <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
                 <TextField
-                  id="business-view-name"
-                  label={t("businessViews.field.name")}
+                  id="search-answer-profile-name"
+                  label={t("searchAnswerProfiles.field.name")}
                   required={!isDefault && !isArchived}
                   value={name}
                   onValueChange={setName}
                   onBlur={() => setTouched(true)}
                   readOnly={isDefault || isArchived}
                   aria-readonly={isDefault || isArchived || undefined}
-                  placeholder={isArchived ? undefined : t("businessViews.field.namePlaceholder")}
-                  helper={isDefault ? t("businessViews.default.nameFixed") : undefined}
+                  placeholder={isArchived ? undefined : t("searchAnswerProfiles.field.namePlaceholder")}
+                  helper={isDefault ? t("searchAnswerProfiles.default.nameFixed") : undefined}
                   error={nameError || undefined}
                   maxLength={NAME_MAX_LENGTH}
                   inputClassName={isDefault || isArchived ? "cursor-default text-fg-muted" : undefined}
                 />
                 <TextField
-                  id="business-view-description"
-                  label={t("businessViews.field.description")}
+                  id="search-answer-profile-description"
+                  label={t("searchAnswerProfiles.field.description")}
                   required={!isArchived}
                   value={description}
                   onValueChange={setDescription}
                   onBlur={() => setDescriptionTouched(true)}
                   readOnly={isArchived}
                   aria-readonly={isArchived || undefined}
-                  placeholder={isArchived ? undefined : t("businessViews.field.descriptionPlaceholder")}
-                  helper={t("businessViews.field.descriptionHelper")}
+                  placeholder={isArchived ? undefined : t("searchAnswerProfiles.field.descriptionPlaceholder")}
+                  helper={t("searchAnswerProfiles.field.descriptionHelper")}
                   error={descriptionError || undefined}
                   maxLength={DESCRIPTION_MAX_LENGTH}
                   inputClassName={isArchived ? "cursor-default text-fg-muted" : undefined}
@@ -885,13 +885,13 @@ function BusinessViewEditor({
                   selectedIds={config.knowledge_base_ids}
                   onChange={(ids) => setConfig((current) => ({ ...current, knowledge_base_ids: ids }))}
                   disabled={locked || isDefault}
-                  label={t("businessViews.field.knowledgeBases")}
+                  label={t("searchAnswerProfiles.field.knowledgeBases")}
                   helper={
                     isDefault
-                      ? t("businessViews.default.knowledgeBaseFixed")
-                      : t("businessViews.field.knowledgeBasesHelper")
+                      ? t("searchAnswerProfiles.default.knowledgeBaseFixed")
+                      : t("searchAnswerProfiles.field.knowledgeBasesHelper")
                   }
-                  emptySelectionText={t("businessViews.knowledgeBasesRequired")}
+                  emptySelectionText={t("searchAnswerProfiles.knowledgeBasesRequired")}
                   required={!isDefault}
                   errorId={scopeError ? SCOPE_ERROR_ID : undefined}
                 />
@@ -900,13 +900,13 @@ function BusinessViewEditor({
 
               <fieldset className="space-y-3 rounded-lg border border-border p-4">
                 <legend className="px-1 text-sm font-semibold text-fg">
-                  {t("businessViews.query.title")}
+                  {t("searchAnswerProfiles.query.title")}
                 </legend>
-                <p className="text-xs text-fg-muted">{t("businessViews.query.helper")}</p>
+                <p className="text-xs text-fg-muted">{t("searchAnswerProfiles.query.helper")}</p>
                 <div className="space-y-3">
                   <QuerySelectRow
-                    id="business-view-query-strategy"
-                    label={t("businessViews.field.queryStrategy")}
+                    id="search-answer-profile-query-strategy"
+                    label={t("searchAnswerProfiles.field.queryStrategy")}
                     value={config.query.query_strategy ?? null}
                     options={QUERY_STRATEGY_OPTIONS}
                     defaultOnOverride="simple_retrieval"
@@ -914,8 +914,8 @@ function BusinessViewEditor({
                     onChange={(value) => updateQuery({ query_strategy: value })}
                   />
                   <QuerySelectRow
-                    id="business-view-answer-flow"
-                    label={t("businessViews.field.answerFlow")}
+                    id="search-answer-profile-answer-flow"
+                    label={t("searchAnswerProfiles.field.answerFlow")}
                     value={config.query.answer_flow ?? null}
                     options={ANSWER_FLOW_OPTIONS}
                     defaultOnOverride="standard_rag"
@@ -923,8 +923,8 @@ function BusinessViewEditor({
                     onChange={(value) => updateQuery({ answer_flow: value })}
                   />
                   <QuerySelectRow
-                    id="business-view-neighbor-child-count"
-                    label={t("businessViews.field.neighborChildCount")}
+                    id="search-answer-profile-neighbor-child-count"
+                    label={t("searchAnswerProfiles.field.neighborChildCount")}
                     value={
                       config.query.neighbor_child_count == null
                         ? null
@@ -941,19 +941,19 @@ function BusinessViewEditor({
                   />
                   <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
                     <h3 className="text-sm font-medium text-fg">
-                      {t("businessViews.field.answerOptions")}
+                      {t("searchAnswerProfiles.field.answerOptions")}
                     </h3>
                     <div className="min-w-0 space-y-2">
                       <QueryToggleRow
-                        label={t("businessViews.field.rerank")}
+                        label={t("searchAnswerProfiles.field.rerank")}
                         value={config.query.rerank_enabled ?? null}
                         disabled={locked}
                         onChange={(value) => updateQuery({ rerank_enabled: value })}
                       />
                       <QueryToggleRow
-                        label={t("businessViews.field.screenLinking")}
-                        description={t("businessViews.field.screenLinkingHelper")}
-                        descriptionId="business-view-screen-linking-helper"
+                        label={t("searchAnswerProfiles.field.screenLinking")}
+                        description={t("searchAnswerProfiles.field.screenLinkingHelper")}
+                        descriptionId="search-answer-profile-screen-linking-helper"
                         value={config.query.screen_linking_enabled ?? null}
                         disabled={locked}
                         onChange={(value) =>
@@ -961,9 +961,9 @@ function BusinessViewEditor({
                         }
                       />
                       <QueryToggleRow
-                        label={t("businessViews.field.autoFieldFilter")}
-                        description={t("businessViews.field.autoFieldFilterHelper")}
-                        descriptionId="business-view-auto-field-filter-helper"
+                        label={t("searchAnswerProfiles.field.autoFieldFilter")}
+                        description={t("searchAnswerProfiles.field.autoFieldFilterHelper")}
+                        descriptionId="search-answer-profile-auto-field-filter-helper"
                         value={config.query.auto_field_filter_enabled ?? null}
                         disabled={locked}
                         onChange={(value) =>
@@ -973,8 +973,8 @@ function BusinessViewEditor({
                     </div>
                   </div>
                   <QuerySelectRow
-                    id="business-view-guardrail"
-                    label={t("businessViews.field.guardrail")}
+                    id="search-answer-profile-guardrail"
+                    label={t("searchAnswerProfiles.field.guardrail")}
                     value={config.query.guardrail_policy}
                     options={GUARDRAIL_OPTIONS}
                     defaultOnOverride="strict"
@@ -987,7 +987,7 @@ function BusinessViewEditor({
           </CardContent>
         </Card>
         {initial ? (
-          <BusinessViewKnowledgePanel key={`knowledge-${initial.id}`} businessViewId={initial.id} />
+          <SearchAnswerProfileKnowledgePanel key={`knowledge-${initial.id}`} searchAnswerProfileId={initial.id} />
         ) : null}
       </PageBody>
     </div>
@@ -995,7 +995,7 @@ function BusinessViewEditor({
 }
 
 /** 参照 KB のうち検索対象にならない件数（一覧の要約）。 */
-function knowledgeBaseIssueCount(view: BusinessViewSummary): number {
+function knowledgeBaseIssueCount(view: SearchAnswerProfileSummary): number {
   return (view.archived_knowledge_base_count ?? 0) + (view.missing_knowledge_base_count ?? 0);
 }
 
@@ -1005,7 +1005,7 @@ const ISSUE_NAMES_LIMIT = 5;
 function issueNames(names: string[]): string {
   const shown = names.slice(0, ISSUE_NAMES_LIMIT).join("、");
   const rest = names.length - ISSUE_NAMES_LIMIT;
-  return rest > 0 ? `${shown}${t("businessViews.knowledgeBaseIssues.more", { count: rest })}` : shown;
+  return rest > 0 ? `${shown}${t("searchAnswerProfiles.knowledgeBaseIssues.more", { count: rest })}` : shown;
 }
 
 /**
@@ -1025,12 +1025,12 @@ function KnowledgeBaseIssuesBanner({
   return (
     <Banner
       severity="warning"
-      title={t("businessViews.knowledgeBaseIssues.title")}
+      title={t("searchAnswerProfiles.knowledgeBaseIssues.title")}
     >
-      <div className="space-y-1" data-testid="business-view-kb-issues">
+      <div className="space-y-1" data-testid="search-answer-profile-kb-issues">
         {archived.length > 0 ? (
           <p className="break-words">
-            {t("businessViews.knowledgeBaseIssues.archived", {
+            {t("searchAnswerProfiles.knowledgeBaseIssues.archived", {
               count: archived.length,
               names: issueNames(archived.map((item) => item.name)),
             })}
@@ -1038,31 +1038,31 @@ function KnowledgeBaseIssuesBanner({
         ) : null}
         {missing.length > 0 ? (
           <p className="break-words">
-            {t("businessViews.knowledgeBaseIssues.missing", {
+            {t("searchAnswerProfiles.knowledgeBaseIssues.missing", {
               count: missing.length,
               names: issueNames(missing.map((item) => item.id)),
             })}
           </p>
         ) : null}
         {allUnavailable ? (
-          <p className="font-medium">{t("businessViews.knowledgeBaseIssues.allUnavailable")}</p>
+          <p className="font-medium">{t("searchAnswerProfiles.knowledgeBaseIssues.allUnavailable")}</p>
         ) : null}
-        <p>{t("businessViews.knowledgeBaseIssues.hint")}</p>
+        <p>{t("searchAnswerProfiles.knowledgeBaseIssues.hint")}</p>
       </div>
     </Banner>
   );
 }
 
 /** 説明の検証（作成・編集で共通。#521）。空・空白だけは入力を求める。 */
-function validateBusinessViewDescription(description: string) {
-  return requiredTextError(description, t("businessViews.descriptionRequired"));
+function validateSearchAnswerProfileDescription(description: string) {
+  return requiredTextError(description, t("searchAnswerProfiles.descriptionRequired"));
 }
 
-function validateBusinessViewName(name: string, allowDefault = false) {
+function validateSearchAnswerProfileName(name: string, allowDefault = false) {
   const cleaned = name.trim();
-  if (!cleaned) return t("businessViews.nameRequired");
-  if (!allowDefault && cleaned.toUpperCase() === DEFAULT_BUSINESS_VIEW_NAME) {
-    return t("businessViews.nameReserved");
+  if (!cleaned) return t("searchAnswerProfiles.nameRequired");
+  if (!allowDefault && cleaned.toUpperCase() === DEFAULT_SEARCH_ANSWER_PROFILE_NAME) {
+    return t("searchAnswerProfiles.nameReserved");
   }
   return null;
 }
@@ -1092,7 +1092,7 @@ function QuerySelectRow<T extends string>({
       <div className="min-w-0 space-y-2">
         <div className="flex flex-wrap gap-1" role="group" aria-label={label}>
           <ToggleChip selected={!overriding} disabled={disabled} onClick={() => onChange(null)}>
-            {t("businessViews.inherit")}
+            {t("searchAnswerProfiles.inherit")}
           </ToggleChip>
           <ToggleChip
             selected={overriding}
@@ -1101,7 +1101,7 @@ function QuerySelectRow<T extends string>({
               if (!overriding) onChange(defaultOnOverride);
             }}
           >
-            {t("businessViews.override")}
+            {t("searchAnswerProfiles.override")}
           </ToggleChip>
         </div>
         {overriding ? (
@@ -1148,7 +1148,7 @@ function QueryToggleRow({
         aria-describedby={describedBy}
       >
         <ToggleChip selected={value === null} disabled={disabled} onClick={() => onChange(null)}>
-          {t("businessViews.inherit")}
+          {t("searchAnswerProfiles.inherit")}
         </ToggleChip>
         <ToggleChip selected={value === true} disabled={disabled} onClick={() => onChange(true)}>
           ON

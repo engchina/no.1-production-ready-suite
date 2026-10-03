@@ -20,7 +20,7 @@ export type ControlSize = "sm" | "md" | "lg";
  * - `xs` 8rem: 数値・件数・短いコード（「DEFAULT」・「10」）
  * - `sm` 12rem: 短い列挙（状態・種類・言語）
  * - `md` 20rem: 名前（ユーザー名・ロール名・表名）
- * - `lg` 28rem: 長めの名前（業務ビュー・ナレッジベース・モデル名）
+ * - `lg` 28rem: 長めの名前（検索・回答プロファイル・ナレッジベース・モデル名）
  * - `full`: 親の幅いっぱい（URL・OCID・パス・文章・検索欄、フォームの grid のセル）
  */
 export type FieldWidth = "xs" | "sm" | "md" | "lg" | "full";

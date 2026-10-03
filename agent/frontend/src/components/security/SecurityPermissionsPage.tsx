@@ -11,7 +11,7 @@ import { useAuth } from "./AuthProvider";
 
 /**
  * 権限管理（「セキュリティ設定」のメニュー。#215 / #658）。画面の実体は platform の共通 RolePermissionsPage（#220）。
- * ロールごとの機能権限と、利用できるエージェントを設定する（業務ビューの判定は RAG。#750）。
+ * ロールごとの機能権限と、利用できるエージェントを設定する（検索・回答プロファイルの判定は RAG。#750）。
  */
 export function SecurityPermissionsPage() {
   const { hasPermission } = useAuth();

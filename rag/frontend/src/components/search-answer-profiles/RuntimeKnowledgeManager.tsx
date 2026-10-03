@@ -48,7 +48,7 @@ function emptyForm(kind: RuntimeKnowledgeKind): FormState {
 
 /** 種類の表示名（タブ・通知の文言に使う。#682）。 */
 export function runtimeKindLabel(kind: RuntimeKnowledgeKind): string {
-  return t(kind === "terms" ? "businessViews.runtime.kind.terms" : "businessViews.runtime.kind.rules");
+  return t(kind === "terms" ? "searchAnswerProfiles.runtime.kind.terms" : "searchAnswerProfiles.runtime.kind.rules");
 }
 
 const ACTIVE_STATUSES = new Set(["", "approved", "stale_review_needed"]);
@@ -104,12 +104,12 @@ const FIELD_IDS: Record<RequiredField, string> = {
  */
 export function runtimeKnowledgeRequiredErrors(form: FormState): RequiredErrors {
   if (form.kind === "terms") {
-    return { name: requiredTextError(form.name, t("businessViews.runtime.error.termRequired")) };
+    return { name: requiredTextError(form.name, t("searchAnswerProfiles.runtime.error.termRequired")) };
   }
   return {
-    name: requiredTextError(form.name, t("businessViews.runtime.error.ruleIdRequired")),
-    title: requiredTextError(form.title, t("businessViews.runtime.error.ruleTitleRequired")),
-    content: requiredTextError(form.content, t("businessViews.runtime.error.ruleContentRequired")),
+    name: requiredTextError(form.name, t("searchAnswerProfiles.runtime.error.ruleIdRequired")),
+    title: requiredTextError(form.title, t("searchAnswerProfiles.runtime.error.ruleTitleRequired")),
+    content: requiredTextError(form.content, t("searchAnswerProfiles.runtime.error.ruleContentRequired")),
   };
 }
 
@@ -118,18 +118,18 @@ function errorMessage(error: unknown, fallback: string) {
 }
 
 /**
- * 業務ビューの用語・同義語（同義語・説明）または回答ルール（照合キーワード・内容）。回答フローで使う。
+ * 検索・回答プロファイルの用語・同義語（同義語・説明）または回答ルール（照合キーワード・内容）。回答フローで使う。
  * 種類ごとにタブを分け、表・追加 / 編集のフォーム・照合テストはその種類だけを扱う（#682）。
  */
 export function RuntimeKnowledgeManager({
-  businessViewId,
+  searchAnswerProfileId,
   kind,
 }: {
-  businessViewId: string;
+  searchAnswerProfileId: string;
   kind: RuntimeKnowledgeKind;
 }) {
-  const query = useRuntimeKnowledge(businessViewId);
-  const save = useEditRuntimeKnowledge(businessViewId);
+  const query = useRuntimeKnowledge(searchAnswerProfileId);
+  const save = useEditRuntimeKnowledge(searchAnswerProfileId);
   const confirm = useConfirm();
   const [form, setForm] = useState<FormState>(() => emptyForm(kind));
   // 読み込んだ行（または空の新規）を基準に、未保存の入力だけを離脱ガードの対象にする。
@@ -180,14 +180,14 @@ export function RuntimeKnowledgeManager({
         onSuccess: () => {
           load(emptyForm(kind));
           toast.success(
-            t(remove ? "businessViews.runtime.deleted" : "businessViews.runtime.saved", {
+            t(remove ? "searchAnswerProfiles.runtime.deleted" : "searchAnswerProfiles.runtime.saved", {
               kind: kindLabel,
             }),
           );
         },
         onError: (error) =>
           toast.error(
-            errorMessage(error, t("businessViews.runtime.saveError", { kind: kindLabel })),
+            errorMessage(error, t("searchAnswerProfiles.runtime.saveError", { kind: kindLabel })),
           ),
       },
     );
@@ -198,11 +198,11 @@ export function RuntimeKnowledgeManager({
 
   const confirmDelete = async () => {
     const ok = await confirm({
-      title: t("businessViews.runtime.deleteConfirm.title", { kind: kindLabel }),
-      description: t("businessViews.runtime.deleteConfirm.description", {
+      title: t("searchAnswerProfiles.runtime.deleteConfirm.title", { kind: kindLabel }),
+      description: t("searchAnswerProfiles.runtime.deleteConfirm.description", {
         name: form.selected ?? "",
       }),
-      confirmLabel: t("businessViews.faq.delete"),
+      confirmLabel: t("searchAnswerProfiles.faq.delete"),
       tone: "danger",
       dismissOnOverlay: false,
     });
@@ -213,10 +213,10 @@ export function RuntimeKnowledgeManager({
     setPreviewing(true);
     try {
       setPreview(
-        await api.previewRuntimeKnowledge(businessViewId, question.trim()),
+        await api.previewRuntimeKnowledge(searchAnswerProfileId, question.trim()),
       );
     } catch (error) {
-      toast.error(errorMessage(error, t("businessViews.runtime.previewError")));
+      toast.error(errorMessage(error, t("searchAnswerProfiles.runtime.previewError")));
     } finally {
       setPreviewing(false);
     }
@@ -225,8 +225,8 @@ export function RuntimeKnowledgeManager({
   const rows = (kind === "terms" ? query.data?.terms : query.data?.rules) ?? [];
   const table = query.isPending ? (
     <TimedLoadingState
-      label={t("businessViews.runtime.loading")}
-      operationKey={`runtime-knowledge-${businessViewId}`}
+      label={t("searchAnswerProfiles.runtime.loading")}
+      operationKey={`runtime-knowledge-${searchAnswerProfileId}`}
       testId="runtime-knowledge-loading"
     >
       <TableSkeleton columns={3} rows={{ base: 3, md: 5 }} />
@@ -238,8 +238,8 @@ export function RuntimeKnowledgeManager({
           key: "name",
           header: t(
             kind === "terms"
-              ? "businessViews.runtime.term"
-              : "businessViews.runtime.ruleTitle",
+              ? "searchAnswerProfiles.runtime.term"
+              : "searchAnswerProfiles.runtime.ruleTitle",
           ),
           rowHeader: true,
           // 名前のボタンと行のクリックで編集フォームへ読み込む（page-archetypes.md §0-7）。
@@ -247,7 +247,7 @@ export function RuntimeKnowledgeManager({
             <RowTitleButton
               title={rowName(kind, row)}
               current={form.selected === rowKey(kind, row)}
-              aria-label={t("businessViews.runtime.editNamed", {
+              aria-label={t("searchAnswerProfiles.runtime.editNamed", {
                 name: rowName(kind, row),
               })}
               onClick={() => load(formFromRow(kind, row))}
@@ -258,8 +258,8 @@ export function RuntimeKnowledgeManager({
           key: "labels",
           header: t(
             kind === "terms"
-              ? "businessViews.runtime.aliases"
-              : "businessViews.runtime.triggers",
+              ? "searchAnswerProfiles.runtime.aliases"
+              : "searchAnswerProfiles.runtime.triggers",
           ),
           render: (row) => (
             <span className="break-words">
@@ -269,17 +269,17 @@ export function RuntimeKnowledgeManager({
         },
         {
           key: "status",
-          header: t("businessViews.runtime.status"),
+          header: t("searchAnswerProfiles.runtime.status"),
           render: (row) =>
             ACTIVE_STATUSES.has(text(row.status)) ? (
               <StatusBadge
                 variant="success"
-                label={t("businessViews.runtime.enabled")}
+                label={t("searchAnswerProfiles.runtime.enabled")}
               />
             ) : (
               <StatusBadge
                 variant="neutral"
-                label={t("businessViews.runtime.disabled")}
+                label={t("searchAnswerProfiles.runtime.disabled")}
               />
             ),
         },
@@ -288,13 +288,13 @@ export function RuntimeKnowledgeManager({
       getRowKey={(row) => rowKey(kind, row)}
       onRowClick={(row) => load(formFromRow(kind, row))}
       selectedRowKey={form.selected}
-      resetKey={businessViewId}
+      resetKey={searchAnswerProfileId}
       dense
-      empty={<EmptyState title={t("businessViews.runtime.empty")} />}
+      empty={<EmptyState title={t("searchAnswerProfiles.runtime.empty")} />}
       scrollAriaLabel={t(
         kind === "terms"
-          ? "businessViews.runtime.termsScrollLabel"
-          : "businessViews.runtime.rulesScrollLabel",
+          ? "searchAnswerProfiles.runtime.termsScrollLabel"
+          : "searchAnswerProfiles.runtime.rulesScrollLabel",
       )}
       scrollTestId={`runtime-knowledge-${kind}-scroll-region`}
       paginationTestId={`runtime-knowledge-${kind}-pagination`}
@@ -304,7 +304,7 @@ export function RuntimeKnowledgeManager({
   return (
     <div className="space-y-5">
       <p className="text-xs leading-relaxed text-fg-muted">
-        {t(kind === "terms" ? "businessViews.runtime.terms.hint" : "businessViews.runtime.rules.hint")}
+        {t(kind === "terms" ? "searchAnswerProfiles.runtime.terms.hint" : "searchAnswerProfiles.runtime.rules.hint")}
       </p>
       {table}
 
@@ -312,15 +312,15 @@ export function RuntimeKnowledgeManager({
         <section className="min-w-0 space-y-3 rounded-md border border-border p-3">
           <h4 className="text-sm font-semibold text-fg">
             {form.selected
-              ? t("businessViews.runtime.editTitle", { name: form.selected })
-              : t("businessViews.runtime.addTitle", { kind: kindLabel })}
+              ? t("searchAnswerProfiles.runtime.editTitle", { name: form.selected })
+              : t("searchAnswerProfiles.runtime.addTitle", { kind: kindLabel })}
           </h4>
           <TextField
             id="runtime-knowledge-name"
             label={t(
               kind === "terms"
-                ? "businessViews.runtime.term"
-                : "businessViews.runtime.ruleId",
+                ? "searchAnswerProfiles.runtime.term"
+                : "searchAnswerProfiles.runtime.ruleId",
             )}
             value={form.name}
             maxLength={160}
@@ -331,7 +331,7 @@ export function RuntimeKnowledgeManager({
           {kind === "rules" ? (
             <TextField
               id="runtime-knowledge-title"
-              label={t("businessViews.runtime.ruleTitle")}
+              label={t("searchAnswerProfiles.runtime.ruleTitle")}
               value={form.title}
               maxLength={160}
               onChange={(event) => update({ title: event.target.value })}
@@ -351,11 +351,11 @@ export function RuntimeKnowledgeManager({
                 label={t(
                   field === "labels"
                     ? kind === "terms"
-                      ? "businessViews.runtime.aliasesInput"
-                      : "businessViews.runtime.triggersInput"
+                      ? "searchAnswerProfiles.runtime.aliasesInput"
+                      : "searchAnswerProfiles.runtime.triggersInput"
                     : kind === "terms"
-                      ? "businessViews.runtime.description"
-                      : "businessViews.runtime.content",
+                      ? "searchAnswerProfiles.runtime.description"
+                      : "searchAnswerProfiles.runtime.content",
                 )}
                 error={error ?? undefined}
                 value={form[field]}
@@ -366,11 +366,11 @@ export function RuntimeKnowledgeManager({
           })}
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm text-fg">
-              {t("businessViews.runtime.enabledLabel")}
+              {t("searchAnswerProfiles.runtime.enabledLabel")}
             </span>
             <Switch
               checked={form.enabled}
-              aria-label={t("businessViews.runtime.enabledLabel")}
+              aria-label={t("searchAnswerProfiles.runtime.enabledLabel")}
               onCheckedChange={(checked) => update({ enabled: checked })}
             />
           </div>
@@ -383,7 +383,7 @@ export function RuntimeKnowledgeManager({
               disabled={deletePending}
               onClick={saveForm}
             >
-              {t("businessViews.runtime.save")}
+              {t("searchAnswerProfiles.runtime.save")}
             </Button>
             {form.selected ? (
               <>
@@ -394,7 +394,7 @@ export function RuntimeKnowledgeManager({
                   disabled={save.isPending}
                   onClick={() => load(emptyForm(kind))}
                 >
-                  {t("businessViews.runtime.cancel")}
+                  {t("searchAnswerProfiles.runtime.cancel")}
                 </Button>
                 {/* 確認ダイアログを開く起点。確定は ConfirmDialog の danger ボタンで行う。
                     保存（主操作）の隣に置かず、操作行の反対の端に ghost + tone="danger" で置く（README §4 カード内の操作行）。 */}
@@ -408,7 +408,7 @@ export function RuntimeKnowledgeManager({
                   disabled={savePending}
                   onClick={() => void confirmDelete()}
                 >
-                  {t("businessViews.faq.delete")}
+                  {t("searchAnswerProfiles.faq.delete")}
                 </Button>
               </>
             ) : null}
@@ -417,14 +417,14 @@ export function RuntimeKnowledgeManager({
 
         <section className="min-w-0 space-y-3 rounded-md border border-border p-3">
           <h4 className="text-sm font-semibold text-fg">
-            {t("businessViews.runtime.previewTitle")}
+            {t("searchAnswerProfiles.runtime.previewTitle")}
           </h4>
           <p className="text-xs leading-relaxed text-fg-muted">
-            {t(kind === "terms" ? "businessViews.runtime.previewHelp.terms" : "businessViews.runtime.previewHelp.rules")}
+            {t(kind === "terms" ? "searchAnswerProfiles.runtime.previewHelp.terms" : "searchAnswerProfiles.runtime.previewHelp.rules")}
           </p>
           <TextField
             id="runtime-knowledge-question"
-            label={t("businessViews.runtime.previewQuestion")}
+            label={t("searchAnswerProfiles.runtime.previewQuestion")}
             value={question}
             maxLength={2000}
             onChange={(event) => setQuestion(event.target.value)}
@@ -438,7 +438,7 @@ export function RuntimeKnowledgeManager({
             disabled={!question.trim()}
             onClick={() => void runPreview()}
           >
-            {t("businessViews.runtime.previewRun")}
+            {t("searchAnswerProfiles.runtime.previewRun")}
           </Button>
           {preview ? (
             <dl className="space-y-1 text-xs">
@@ -446,8 +446,8 @@ export function RuntimeKnowledgeManager({
                 <dt className="font-medium text-fg">
                   {t(
                     kind === "terms"
-                      ? "businessViews.runtime.matchedTerms"
-                      : "businessViews.runtime.matchedRules",
+                      ? "searchAnswerProfiles.runtime.matchedTerms"
+                      : "searchAnswerProfiles.runtime.matchedRules",
                   )}
                 </dt>
                 <dd className="break-words text-fg-muted">
@@ -457,7 +457,7 @@ export function RuntimeKnowledgeManager({
               </div>
               <div>
                 <dt className="font-medium text-fg">
-                  {t("businessViews.runtime.expanded")}
+                  {t("searchAnswerProfiles.runtime.expanded")}
                 </dt>
                 <dd className="break-words text-fg-muted">
                   {preview.expanded_question}
@@ -470,7 +470,7 @@ export function RuntimeKnowledgeManager({
               tone="danger"
               message={errorMessage(
                 save.error,
-                t("businessViews.runtime.saveError"),
+                t("searchAnswerProfiles.runtime.saveError"),
               )}
             />
           ) : null}
@@ -480,7 +480,7 @@ export function RuntimeKnowledgeManager({
       {kind === "rules" && form.selected ? (
         <RuleClarificationEditor
           key={form.selected}
-          businessViewId={businessViewId}
+          searchAnswerProfileId={searchAnswerProfileId}
           ruleId={form.selected}
           stored={storedClarification(
             rows.find((row) => rowKey(kind, row) === form.selected)?.clarification

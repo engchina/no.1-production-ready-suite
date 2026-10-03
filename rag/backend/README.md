@@ -106,9 +106,9 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 - 利用者: 構成管理者 `system_admin`（共通 `.env` の `PLATFORM_ADMIN_LOGIN_USER_ID` / `PLATFORM_ADMIN_LOGIN_USER_PASSWORD`）と、「ユーザーとロール」で作る DB ユーザー（`PLATFORM_USERS` などを NL2SQL / Agent と共有）。
 - セッション: Cookie `rag_session`（HttpOnly）と `rag_csrf`（名前は `RAG_APP_AUTH_SESSION_COOKIE_NAME` / `RAG_APP_AUTH_CSRF_COOKIE_NAME`）。更新系の API は `X-CSRF-Token` header に `rag_csrf` の値が必要です。期限・ロック・パスワード方針・`Secure` 属性は共通 `.env` の `PLATFORM_AUTH_*`。
 - 認可: 全 API は router の dependency で確認し、`app/security/permissions.py` の manifest に登録されていない API は拒否します（公開は `/health`・`/ready`・`/ready/database`・`/auth/login` だけ）。
-- 権限: ロールごとにメニュー権限（`menu.*`）と、`rag.business_views.manage`（全業務ビュー・業務ビューの作成とアーカイブ）、`rag.knowledge_bases.manage`（全ナレッジベース・KB の作成とアーカイブ）、`rag.feedback.manage`（承認 FAQ への反映と、他の利用者の保存済みの回答の表示・評価・削除。#304）、`rag.system_tables.manage`（システムテーブルの初期化・再作成）を付けます。「RAG セキュリティ > 権限管理」で編集し、`RAG_ROLE_PERMISSIONS` / `RAG_ROLE_BUSINESS_VIEWS` / `RAG_ROLE_KNOWLEDGE_BASES` に保存します。
-- 対象範囲: 業務ビュー・ナレッジベースを割り当てたロールの利用者は、その業務ビュー・ナレッジベース（と、そこに属する文書・回答履歴・フィードバック・会話）だけを使えます。範囲外の業務ビューは 404、業務ビューの KB を 1 つも許可されていない検索・チャットは 403（`error_code: RAG_SCOPE_FORBIDDEN`。画面はその場で理由を表示する。#224）です。業務ビューで検索させるには、その業務ビューのナレッジベースも許可してください。
-- 保存済みの回答: 回答履歴（`GET /api/search/answers`。総件数つきのページング）・詳細・評価・削除は、回答を生成した利用者（持ち主）の回答だけが対象です。SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者は全員の回答を扱えます（業務ビューの範囲の制限は別にかかる）。参照するナレッジベースが 0 件の業務ビューでの検索・チャットは 409 です（#304）。
+- 権限: ロールごとにメニュー権限（`menu.*`）と、`rag.search_answer_profiles.manage`（全検索・回答プロファイル・検索・回答プロファイルの作成とアーカイブ）、`rag.knowledge_bases.manage`（全ナレッジベース・KB の作成とアーカイブ）、`rag.feedback.manage`（承認 FAQ への反映と、他の利用者の保存済みの回答の表示・評価・削除。#304）、`rag.system_tables.manage`（システムテーブルの初期化・再作成）を付けます。「RAG セキュリティ > 権限管理」で編集し、`RAG_ROLE_PERMISSIONS` / `RAG_ROLE_SEARCH_ANSWER_PROFILES` / `RAG_ROLE_KNOWLEDGE_BASES` に保存します。
+- 対象範囲: 検索・回答プロファイル・ナレッジベースを割り当てたロールの利用者は、その検索・回答プロファイル・ナレッジベース（と、そこに属する文書・回答履歴・フィードバック・会話）だけを使えます。範囲外の検索・回答プロファイルは 404、検索・回答プロファイルの KB を 1 つも許可されていない検索・チャットは 403（`error_code: RAG_SCOPE_FORBIDDEN`。画面はその場で理由を表示する。#224）です。検索・回答プロファイルで検索させるには、その検索・回答プロファイルのナレッジベースも許可してください。
+- 保存済みの回答: 回答履歴（`GET /api/search/answers`。総件数つきのページング）・詳細・評価・削除は、回答を生成した利用者（持ち主）の回答だけが対象です。SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者は全員の回答を扱えます（検索・回答プロファイルの範囲の制限は別にかかる）。参照するナレッジベースが 0 件の検索・回答プロファイルでの検索・チャットは 409 です（#304）。
 
 ## MCP（Agent からの呼び出し）
 
@@ -120,12 +120,12 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 
 | ツール | 権限 | 内容 |
 |---|---|---|
-| `rag_list_business_views` | `GET /api/business-views` と同じ | 利用者の範囲の ACTIVE な業務ビュー（`query` / `limit`） |
-| `rag_search` | `menu.search` | `POST /api/search` と同じ検索・回答（業務ビュー / KB の範囲、rate limit、`RAG_ANSWER_TIMEOUT_SECONDS`）。根拠 `citations` の本文は先頭 1000 文字 |
+| `rag_list_search_answer_profiles` | `GET /api/search-answer-profiles` と同じ | 利用者の範囲の ACTIVE な検索・回答プロファイル（`query` / `limit`） |
+| `rag_search` | `menu.search` | `POST /api/search` と同じ検索・回答（検索・回答プロファイル / KB の範囲、rate limit、`RAG_ANSWER_TIMEOUT_SECONDS`）。根拠 `citations` の本文は先頭 1000 文字 |
 
-RAG のチャット（会話の作成・送信・取得）は画面の機能で、MCP では提供しません（#787）。MCP で提供するのは検索（`rag_search`）と、その対象を選ぶための業務ビューの一覧だけです。
+RAG のチャット（会話の作成・送信・取得）は画面の機能で、MCP では提供しません（#787）。MCP で提供するのは検索（`rag_search`）と、その対象を選ぶための検索・回答プロファイルの一覧だけです。
 
-ツールの業務エラーは `isError: true` の `structuredContent` に `error_code` / `message` / `status` で返します（例: 範囲外の業務ビューは `status: 404`、KB の範囲外は `error_code: RAG_SCOPE_FORBIDDEN`、タイムアウトは `status: 504`、rate limit は `status: 429`）。
+ツールの業務エラーは `isError: true` の `structuredContent` に `error_code` / `message` / `status` で返します（例: 範囲外の検索・回答プロファイルは `status: 404`、KB の範囲外は `error_code: RAG_SCOPE_FORBIDDEN`、タイムアウトは `status: 504`、rate limit は `status: 429`）。
 
 ## Readiness
 
@@ -216,7 +216,7 @@ Hybrid retrieval は Reciprocal Rank Fusion を使います。`RAG_RRF_K` で RR
 
 旧 standard の回答エンジンの検索前後の処理（業務同義語の query expansion・本文 hash の重複除去・MMR の多様化・同じ group / 前後の chunk の追加・圧縮・context window と、`RAG_QUERY_EXPANSION_*`・`RAG_CONTEXT_WINDOW_CHARS`・`RAG_CONTEXT_DIVERSITY_LAMBDA`・`RAG_CONTEXT_GROUP_EXPANSION_ENABLED`・`RAG_CONTEXT_NEIGHBOR_WINDOW`・`RAG_CONTEXT_COMPRESSION_*` などの設定）は #595 で削除しました。`backend/.env` に残っていても読みません（`docs/deployment.md` の「既存環境の更新手順（#595）」）。
 
-検索レスポンスの `diagnostics` は、`retrieval_strategy`（常に `hybrid`）、`retrieval_strategy_adapter`（`grounded` / `retrieval_only` / `blocked`）、`answer`（回答フローの診断。工程ごとの実行記録 `execution_steps` など）、安全チェックの `guardrail_policy` / `guardrail_backend` / `guardrail_degraded`、filter key、ナレッジベースの件数、適用した KB / 業務ビューの設定、非機密の RAG 設定 fingerprint を返します。query 本文や secret は含めず、評価回帰の原因調査に使います（検索の内訳・候補・context の件数などの旧 standard の診断は #595 で削除しました）。
+検索レスポンスの `diagnostics` は、`retrieval_strategy`（常に `hybrid`）、`retrieval_strategy_adapter`（`grounded` / `retrieval_only` / `blocked`）、`answer`（回答フローの診断。工程ごとの実行記録 `execution_steps` など）、安全チェックの `guardrail_policy` / `guardrail_backend` / `guardrail_degraded`、filter key、ナレッジベースの件数、適用した KB / 検索・回答プロファイルの設定、非機密の RAG 設定 fingerprint を返します。query 本文や secret は含めず、評価回帰の原因調査に使います（検索の内訳・候補・context の件数などの旧 standard の診断は #595 で削除しました）。
 
 `RAG_ANSWER_TIMEOUT_SECONDS`（既定 300 秒、上限 600 秒）で、LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP の `rag_search`・品質評価の 1 ケース）の pipeline 実行時間を制限します（#375 / #383）。回答フローが質問の理解・根拠の評価（CRAG）・回答の生成・監査で LLM を複数回呼ぶためです（以前の検索だけの上限 `RAG_SEARCH_TIMEOUT_SECONDS` は #383 で削除しました）。品質評価はケースの時間切れを工程とともにケースの結果に残して評価を続け、評価全体を job の上限（`RAG_EVALUATION_JOB_TIMEOUT_SECONDS`、既定 3600 秒。同期の API は 600 秒）で打ち切ります（`docs/evaluation-observability-guardrails.md`）。timeout 時は `ApiResponse` 形式の 504（SSE は `error` event、チャットは ERROR の回答として保存）を返し、文言には時間切れになった工程（例: 回答フローの「文書検索（1回目）」）と再試行の案内を含めます。`rag_search_audit` には `outcome=error` / `error_stage=timeout` を残します。
 

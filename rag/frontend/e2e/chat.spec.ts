@@ -5,10 +5,10 @@ import {
   mockDatabaseReady,
   mockLocalAuth,
   openChatHistory,
-  selectBusinessView,
+  selectSearchAnswerProfile,
 } from "./_helpers";
 
-const businessView = {
+const searchAnswerProfile = {
   id: "bv-1",
   name: "経理アシスタント",
   description: "経費の相談",
@@ -107,7 +107,7 @@ function pageEnvelope<T>(items: T[]) {
 function conversationDetail(messages: object[], title: string | null = null) {
   return {
     id: "conv-1",
-    business_view_id: "bv-1",
+    search_answer_profile_id: "bv-1",
     title,
     status: "ACTIVE",
     message_count: messages.length,
@@ -139,8 +139,8 @@ async function mockChat(
 
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
-  await page.route("**/api/business-views**", (route) =>
-    route.fulfill({ json: pageEnvelope([businessView]) })
+  await page.route("**/api/search-answer-profiles**", (route) =>
+    route.fulfill({ json: pageEnvelope([searchAnswerProfile]) })
   );
   await page.route("**/api/chat/models", (route) =>
     route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } })
@@ -283,7 +283,7 @@ async function openPersistedConversation(page: Page, width: number, messages: ob
   await page.setViewportSize({ width, height: width <= 375 ? 812 : 1000 });
   await mockChat(page, "ready", messages);
   await page.goto("/chat");
-  await selectBusinessView(page, "経理アシスタント");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
   const history = await openChatHistory(page);
   await history.getByRole("list", { name: "会話の履歴" }).getByRole("button").filter({ hasText: "件・" }).click();
 }
@@ -320,8 +320,8 @@ for (const viewport of [
     await page.goto("/chat");
     await expect(page.getByRole("heading", { name: "チャット" })).toBeVisible();
 
-    // 業務ビューを選ぶとチャットを始められる。
-    await selectBusinessView(page, "経理アシスタント");
+    // 検索・回答プロファイルを選ぶとチャットを始められる。
+    await selectSearchAnswerProfile(page, "経理アシスタント");
 
     await page.getByRole("button", { name: "新しい会話" }).click();
 
@@ -379,7 +379,7 @@ for (const viewport of [
     ]);
 
     await page.goto("/chat");
-    await selectBusinessView(page, "経理アシスタント");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
     const history = await openChatHistory(page);
     await history.getByRole("button", { name: /^経費の上限は？ 2件/ }).click();
 
@@ -394,7 +394,7 @@ test("送信開始後に永続化された質問を重複表示しない", async
   await mockChat(page, "ready", [], { streamBody: sseStart });
 
   await page.goto("/chat");
-  await selectBusinessView(page, "経理アシスタント");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
   await page.getByRole("button", { name: "新しい会話" }).click();
 
   const detailRefreshed = page.waitForResponse((response) => {
@@ -473,7 +473,7 @@ test("チャット回答の低評価理由を保存し、選択状態を維持�
 
   await expect.poll(() => feedbackPayload).toEqual({
     trace_id: "t1",
-    business_view_id: "bv-1",
+    search_answer_profile_id: "bv-1",
     target_type: "answer",
     source_surface: "chat",
     document_id: null,
@@ -520,13 +520,13 @@ for (const viewport of [
   });
 }
 
-test("業務ビュー未選択ではチャットを促す空状態を出す", async ({ page }) => {
+test("検索・回答プロファイル未選択ではチャットを促す空状態を出す", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await mockChat(page);
 
   await page.goto("/chat");
   await expect(
-    page.getByText("業務ビューを選択するとチャットを始められます。")
+    page.getByText("検索・回答プロファイルを選択するとチャットを始められます。")
   ).toBeVisible();
   await expectNoPageOverflow(page);
 });
@@ -536,7 +536,7 @@ test("会話一覧の読み込み中状態をカード内に表示する", async
   const releaseConversationList = await mockChat(page, "loading");
 
   await page.goto("/chat");
-  await selectBusinessView(page, "経理アシスタント");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
   await expectChatWorkspaceLayout(page, "mobile");
   await openChatHistory(page);
 
@@ -556,7 +556,7 @@ test("会話一覧の読み込み失敗時に再試行可能なエラーを表�
   await mockChat(page, "error");
 
   await page.goto("/chat");
-  await selectBusinessView(page, "経理アシスタント");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
   await openChatHistory(page);
 
   const error = page.getByRole("alert").filter({ hasText: "会話一覧を読み込めませんでした。" });
@@ -573,7 +573,7 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     await mockChat(page, "ready", [userMessage, assistantMessage]);
     await page.goto("/chat");
-    await selectBusinessView(page, "経理アシスタント");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
 
     const sessions = await openChatHistory(page);
     const rename = sessions.getByRole("button", { name: "「経費の上限は？」の名前を変更" });
@@ -603,7 +603,7 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     await mockChat(page, "ready", [userMessage, assistantMessage]);
     await page.goto("/chat");
-    await selectBusinessView(page, "経理アシスタント");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
 
     const sessions = await openChatHistory(page);
     const remove = sessions.getByRole("button", { name: "「経費の上限は？」を削除" });
@@ -629,7 +629,7 @@ test("会話名変更の失敗を入力欄直下へ表示する", async ({ page 
   await page.setViewportSize({ width: 1280, height: 800 });
   await mockChat(page, "ready", [userMessage, assistantMessage], { renameFails: true });
   await page.goto("/chat");
-  await selectBusinessView(page, "経理アシスタント");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
 
   const sessions = await openChatHistory(page);
   await sessions.getByRole("listitem").hover();
@@ -656,7 +656,7 @@ test("未送信の会話があれば新しい会話を増やさず再利用す�
   });
   await mockChat(page);
   await page.goto("/chat");
-  await selectBusinessView(page, "経理アシスタント");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
 
   const newConversation = page.getByRole("button", { name: "新しい会話", exact: true });
   await newConversation.click();
@@ -678,7 +678,7 @@ test("長い日本語の会話名でも一覧が横へはみ出さない", async
     initialTitle: "経費精算と国内外出張に関する承認ルールおよび例外申請の確認".repeat(2),
   });
   await page.goto("/chat");
-  await selectBusinessView(page, "経理アシスタント");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
   await openChatHistory(page);
   await expectNoPageOverflow(page);
 });
@@ -733,7 +733,7 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await mockChat(page, "ready", [], { streamBody });
 
   await page.goto("/chat");
-  await selectBusinessView(page, "経理アシスタント");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
   await page.getByRole("button", { name: "新しい会話" }).click();
   await page.getByRole("textbox").fill(userMessage.content);
   await page.getByRole("button", { name: "送信" }).click();
@@ -781,7 +781,7 @@ test("IME の変換を確定する Enter では送信しない（#459）", async
   });
 
   await page.goto("/chat");
-  await selectBusinessView(page, "経理アシスタント");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
   await page.getByRole("button", { name: "新しい会話" }).click();
 
   const composer = page.getByRole("textbox", { name: "メッセージを入力…（Enter で送信 / Shift+Enter で改行）" });
@@ -810,7 +810,7 @@ test("送信と停止は同じボタンで、生成中の Enter では停止し�
   });
 
   await page.goto("/chat");
-  await selectBusinessView(page, "経理アシスタント");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
   await page.getByRole("button", { name: "新しい会話" }).click();
 
   const composer = page.getByRole("textbox", { name: "メッセージを入力…（Enter で送信 / Shift+Enter で改行）" });
@@ -857,7 +857,7 @@ test("会話の履歴は既定で閉じ、開くとチャットの左に並び�
   await page.setViewportSize({ width: 1280, height: 800 });
   await mockChat(page, "ready", [userMessage, assistantMessage]);
   await page.goto("/chat");
-  await selectBusinessView(page, "経理アシスタント");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
 
   await expectChatWorkspaceLayout(page, "desktop");
   const toggle = page.getByTestId("chat-history-toggle");
@@ -895,7 +895,7 @@ test("375px では会話の履歴をシートで開き、Esc・外側・会話�
   await page.setViewportSize({ width: 375, height: 812 });
   await mockChat(page, "ready", [userMessage, assistantMessage]);
   await page.goto("/chat");
-  await selectBusinessView(page, "経理アシスタント");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
   await expectChatWorkspaceLayout(page, "mobile");
 
   const toggle = page.getByTestId("chat-history-toggle");
@@ -941,7 +941,7 @@ test("会話を選ばずに送信すると会話を作って回答する（#664�
   await page.setViewportSize({ width: 1280, height: 800 });
   await mockChat(page);
   await page.goto("/chat");
-  await selectBusinessView(page, "経理アシスタント");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
 
   await expect(page.getByText("最初のメッセージを送信して会話を始めましょう。")).toBeVisible();
   // 会話を選んでいない間は、上端に会話の名前を出さない。
@@ -979,7 +979,7 @@ for (const viewport of [
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockChat(page);
     const suggestQueries: Record<string, unknown>[] = [];
-    await page.route("**/api/business-views/*/approved-faq/suggest", async (route) => {
+    await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", async (route) => {
       suggestQueries.push(route.request().postDataJSON() as Record<string, unknown>);
       await route.fulfill({
         json: { data: { suggestions: faqSuggestions }, error_messages: [], warning_messages: [] },
@@ -993,7 +993,7 @@ for (const viewport of [
     });
 
     await page.goto("/chat");
-    await selectBusinessView(page, "経理アシスタント");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
     const composer = page.getByRole("textbox", { name: /メッセージを入力/ });
     await composer.fill("経費の上限は？");
     await page.getByRole("button", { name: "送信" }).click();
@@ -1059,7 +1059,7 @@ for (const viewport of [
     await mockChat(page, "ready", [], { streamBody });
 
     await page.goto("/chat");
-    await selectBusinessView(page, "経理アシスタント");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
     await page.getByRole("button", { name: "新しい会話" }).click();
     await page.getByRole("textbox").fill(userMessage.content);
     await page.getByRole("button", { name: "送信" }).click();
@@ -1076,7 +1076,7 @@ for (const viewport of [
   });
 }
 
-// #717: 類似問の後に、業務ビューのルールの確認の質問を出し、選んだ答えを送る。
+// #717: 類似問の後に、検索・回答プロファイルのルールの確認の質問を出し、選んだ答えを送る。
 const clarificationSuggestion = {
   rule_id: "R01",
   rule_title: "期限の確認",
@@ -1116,11 +1116,11 @@ for (const viewport of [
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockChat(page);
-    await page.route("**/api/business-views/*/approved-faq/suggest", (route) =>
+    await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
       route.fulfill({ json: { data: { suggestions: [] }, error_messages: [], warning_messages: [] } })
     );
     const clarifyQueries: Record<string, unknown>[] = [];
-    await page.route("**/api/business-views/*/clarifications/suggest", async (route) => {
+    await page.route("**/api/search-answer-profiles/*/clarifications/suggest", async (route) => {
       clarifyQueries.push(route.request().postDataJSON() as Record<string, unknown>);
       await route.fulfill({
         json: { data: { suggestion: clarificationSuggestion }, error_messages: [], warning_messages: [] },
@@ -1134,7 +1134,7 @@ for (const viewport of [
     });
 
     await page.goto("/chat");
-    await selectBusinessView(page, "経理アシスタント");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
     const composer = page.getByRole("textbox", { name: /メッセージを入力/ });
     await composer.fill("申請の期限は？");
     await page.getByRole("button", { name: "送信" }).click();
@@ -1173,11 +1173,11 @@ for (const viewport of [
 
 test("範囲を絞った回答の下から、範囲を指定せずに同じ質問を送り直せる（#721）", async ({ page }) => {
   await mockChat(page);
-  await page.route("**/api/business-views/*/approved-faq/suggest", (route) =>
+  await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
     route.fulfill({ json: { data: { suggestions: [] }, error_messages: [], warning_messages: [] } })
   );
   const clarifyQueries: unknown[] = [];
-  await page.route("**/api/business-views/*/clarifications/suggest", async (route) => {
+  await page.route("**/api/search-answer-profiles/*/clarifications/suggest", async (route) => {
     clarifyQueries.push(route.request().postDataJSON());
     await route.fulfill({ json: { data: { suggestion: null }, error_messages: [], warning_messages: [] } });
   });
@@ -1198,7 +1198,7 @@ test("範囲を絞った回答の下から、範囲を指定せずに同じ質�
   });
 
   await page.goto("/chat");
-  await selectBusinessView(page, "経理アシスタント");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
   await page.getByRole("textbox", { name: /メッセージを入力/ }).fill("経費の上限は？");
   await page.getByRole("button", { name: "送信" }).click();
   await expect.poll(() => streamBodies.length).toBe(1);

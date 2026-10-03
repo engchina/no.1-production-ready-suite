@@ -201,7 +201,7 @@ def test_production_context_ignores_tenant_header() -> None:
         {"x-tenant-id": "other-tenant", "x-user-id": "spoofed"},
         request_id="req-1",
         user_uuid="user-1",
-        allowed_business_view_ids=None,
+        allowed_search_answer_profile_ids=None,
         allowed_knowledge_base_ids=None,
     )
     assert context.tenant_id_hash is None

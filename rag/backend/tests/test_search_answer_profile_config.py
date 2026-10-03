@@ -1,19 +1,19 @@
-"""業務ビュー(Business View)設定解決の単体テスト(DB 非依存)。"""
+"""検索・回答プロファイル(Search Answer Profile)設定解決の単体テスト(DB 非依存)。"""
 
 from app.config import get_settings
-from app.rag.business_view_config import (
-    BusinessViewConfig,
-    dump_business_view_config,
-    parse_business_view_config,
-    resolve_business_view_settings,
-)
 from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
+from app.rag.search_answer_profile_config import (
+    SearchAnswerProfileConfig,
+    dump_search_answer_profile_config,
+    parse_search_answer_profile_config,
+    resolve_search_answer_profile_settings,
+)
 
 
 def test_empty_config_keeps_global_settings() -> None:
     """空設定はグローバルをそのまま返し、上書きは効かない。"""
     settings = get_settings()
-    merged, applied = resolve_business_view_settings(settings, BusinessViewConfig())
+    merged, applied = resolve_search_answer_profile_settings(settings, SearchAnswerProfileConfig())
     assert applied is False
     assert merged is settings
 
@@ -21,11 +21,11 @@ def test_empty_config_keeps_global_settings() -> None:
 def test_query_overrides_apply() -> None:
     """query 設定(回答の検索と生成・安全チェック)はグローバルへ上書きされる。"""
     settings = get_settings()
-    config = BusinessViewConfig(
+    config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1", "kb-2"],
         query=KnowledgeBaseQueryConfig(query_strategy="rag_fusion", guardrail_policy="strict"),
     )
-    merged, applied = resolve_business_view_settings(settings, config)
+    merged, applied = resolve_search_answer_profile_settings(settings, config)
     assert applied is True
     assert merged.rag_query_strategy == "rag_fusion"
     assert merged.rag_guardrail_policy == "strict"
@@ -36,7 +36,7 @@ def test_query_overrides_apply() -> None:
 def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
     """旧 vector index 値は読めるが、共有索引設定を上書きせず次回保存で除外する。"""
     settings = get_settings()
-    config = parse_business_view_config(
+    config = parse_search_answer_profile_config(
         {
             "query": {
                 "answer_flow": "standard_rag",
@@ -46,19 +46,19 @@ def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
     )
 
     assert config.query.vector_index_profile == "accurate"
-    merged, applied = resolve_business_view_settings(settings, config)
+    merged, applied = resolve_search_answer_profile_settings(settings, config)
     assert applied is True
     assert merged.rag_answer_flow == "standard_rag"
     assert merged.rag_vector_index_profile == settings.rag_vector_index_profile
-    dumped_query = dump_business_view_config(config)["query"]
+    dumped_query = dump_search_answer_profile_config(config)["query"]
     assert isinstance(dumped_query, dict)
     assert "vector_index_profile" not in dumped_query
 
 
 def test_saved_evaluation_suite_is_ignored_on_load_and_dropped_on_save() -> None:
-    """業務ビューは品質評価を上書きしない。保存済みの値は読み込み時に無視し、次回保存で消える(#301)。"""
+    """検索・回答プロファイルは品質評価を上書きしない。保存済みの値は読み込み時に無視し、次回保存で消える(#301)。"""
     settings = get_settings()
-    config = parse_business_view_config(
+    config = parse_search_answer_profile_config(
         {
             "query": {
                 "rerank_enabled": False,
@@ -70,10 +70,10 @@ def test_saved_evaluation_suite_is_ignored_on_load_and_dropped_on_save() -> None
     # 他の上書きは生きたまま、評価スイートだけを捨てる(設定全体を空へ縮退させない)。
     assert config.query.rerank_enabled is False
     assert "evaluation_suite" not in KnowledgeBaseQueryConfig.model_fields
-    merged, applied = resolve_business_view_settings(settings, config)
+    merged, applied = resolve_search_answer_profile_settings(settings, config)
     assert applied is True
     assert merged.rag_evaluation_suite == settings.rag_evaluation_suite
-    dumped_query = dump_business_view_config(config)["query"]
+    dumped_query = dump_search_answer_profile_config(config)["query"]
     assert isinstance(dumped_query, dict)
     assert "evaluation_suite" not in dumped_query
     assert dumped_query["rerank_enabled"] is False
@@ -86,7 +86,7 @@ def test_saved_standard_options_are_ignored_on_load_and_dropped_on_save() -> Non
     他の上書きは生きたまま残す(設定全体を空へ縮退させない)。
     """
     settings = get_settings()
-    config = parse_business_view_config(
+    config = parse_search_answer_profile_config(
         {
             "knowledge_base_ids": ["kb-1"],
             "system_prompt": "あなたは経理規程アシスタントです。",
@@ -107,10 +107,10 @@ def test_saved_standard_options_are_ignored_on_load_and_dropped_on_save() -> Non
 
     assert config.normalized_knowledge_base_ids() == ["kb-1"]
     assert config.query.neighbor_child_count == 5
-    merged, applied = resolve_business_view_settings(settings, config)
+    merged, applied = resolve_search_answer_profile_settings(settings, config)
     assert applied is True
     assert merged.rag_neighbor_child_count == 5
-    dumped = dump_business_view_config(config)
+    dumped = dump_search_answer_profile_config(config)
     assert "system_prompt" not in dumped
     assert "default_language" not in dumped
     dumped_query = dumped["query"]
@@ -131,12 +131,12 @@ def test_saved_standard_options_are_ignored_on_load_and_dropped_on_save() -> Non
 
 def test_dump_parse_roundtrip() -> None:
     """dump -> parse で設定が保たれる。"""
-    config = BusinessViewConfig(
+    config = SearchAnswerProfileConfig(
         knowledge_base_ids=["kb-1", " kb-1 ", "kb-2"],
         query=KnowledgeBaseQueryConfig(screen_linking_enabled=True),
         serving_mode="fused",
     )
-    restored = parse_business_view_config(dump_business_view_config(config))
+    restored = parse_search_answer_profile_config(dump_search_answer_profile_config(config))
     assert restored.query.screen_linking_enabled is True
     assert restored.serving_mode == "fused"
     # 正規化で重複・空白は取り除かれる。
@@ -146,9 +146,9 @@ def test_dump_parse_roundtrip() -> None:
 def test_serving_mode_defaults_to_fused() -> None:
     """全 active レシピ融合が既定で、不要な上書きを作らない。"""
     settings = get_settings()
-    config = BusinessViewConfig()
+    config = SearchAnswerProfileConfig()
     assert config.serving_mode == "fused"
-    merged, applied = resolve_business_view_settings(settings, config)
+    merged, applied = resolve_search_answer_profile_settings(settings, config)
     assert applied is False
     assert merged.rag_serving_mode == "fused"
 
@@ -157,15 +157,15 @@ def test_legacy_single_is_normalized_to_fused() -> None:
     """互換読取した single も runtime と次回保存では fused へ正規化する。"""
     settings = get_settings()
     assert settings.rag_serving_mode == "fused"
-    config = BusinessViewConfig(serving_mode="single")
-    merged, _applied = resolve_business_view_settings(settings, config)
+    config = SearchAnswerProfileConfig(serving_mode="single")
+    merged, _applied = resolve_search_answer_profile_settings(settings, config)
     assert merged.rag_serving_mode == "fused"
-    assert dump_business_view_config(config)["serving_mode"] == "fused"
+    assert dump_search_answer_profile_config(config)["serving_mode"] == "fused"
     assert settings.rag_serving_mode == "fused"
 
 
 def test_parse_tolerates_broken_payload() -> None:
     """壊れた永続値は空設定へ縮退する。"""
-    restored = parse_business_view_config({"query": "not-a-dict"})
+    restored = parse_search_answer_profile_config({"query": "not-a-dict"})
     assert restored.normalized_knowledge_base_ids() == []
     assert restored.query == KnowledgeBaseQueryConfig()

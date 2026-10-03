@@ -450,7 +450,7 @@ async def update_answering_settings(
 ) -> ApiResponse[AnsweringSettingsData]:
     """回答の検索と生成の全体既定を backend/.env と現在プロセスへ反映する(#593)。
 
-    送った項目だけを変える。業務ビューの上書きはそのまま優先する。
+    送った項目だけを変える。検索・回答プロファイルの上書きはそのまま優先する。
     """
     settings = get_settings()
     updates = {

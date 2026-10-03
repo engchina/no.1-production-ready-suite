@@ -36,12 +36,12 @@ export function validateKnowledgeBaseDescription(description: string) {
  * ナレッジベース 1 件に対する操作（buttons.md §5.1）。一覧の行（RowActionMenu）と
  * 詳細（ObjectActionBar）で同じ定義を使う。アーカイブは danger の項目として確認を通す。
  * アーカイブはナレッジベース管理（`rag.knowledge_bases.manage`）の権限がある利用者だけに出す（#214）。
- * 名前・説明は詳細の「基本情報」の欄でそのまま編集する（業務ビューと同じ。#555）ので、「編集」の操作は持たない。
+ * 名前・説明は詳細の「基本情報」の欄でそのまま編集する（検索・回答プロファイルと同じ。#555）ので、「編集」の操作は持たない。
  */
 export function useKnowledgeBaseActions({
   onArchived,
 }: {
-  /** アーカイブに成功したとき（詳細からは一覧へ戻る。業務ビューと同じ。#555）。 */
+  /** アーカイブに成功したとき（詳細からは一覧へ戻る。検索・回答プロファイルと同じ。#555）。 */
   onArchived?: (id: string) => void;
 } = {}) {
   const confirm = useConfirm();

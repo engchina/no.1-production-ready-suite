@@ -21,13 +21,13 @@ from pr_system_settings.auth.errors import (
 )
 from pytest import MonkeyPatch
 
-from app.api.routes import business_views as business_views_route
 from app.api.routes import knowledge_bases as knowledge_bases_route
+from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.config import get_settings
 from app.main import app
 from app.rag.request_context import AuditRequestContext, current_audit_request_context
-from app.schemas.business_view import BusinessViewDetail, BusinessViewStatus
 from app.schemas.knowledge_base import KnowledgeBaseDetail, KnowledgeBaseStatus
+from app.schemas.search_answer_profile import SearchAnswerProfileDetail, SearchAnswerProfileStatus
 from app.security import dependencies as security_dependencies
 from app.security import router as security_router_module
 from app.security.domain import Principal
@@ -61,12 +61,13 @@ HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 
 
 # ---------------------------------------------------------------------------
-# fake: 利用者の対象範囲（監査 context）で絞る業務ビュー・KB
+# fake: 利用者の対象範囲（監査 context）で絞る検索・回答プロファイル・KB
 # ---------------------------------------------------------------------------
 
 
 class ScopedFakeOracle:
-    """Oracle の SQL と同じく、現在の監査 context の対象範囲で業務ビュー・KB を絞る fake。"""
+    """Oracle の SQL と同じく、現在の監査 context"
+    " の対象範囲で検索・回答プロファイル・KB を絞る fake。"""
 
     VIEW_IDS = ("bv-1", "bv-2", "bv-3")
     BASE_IDS = ("kb-1", "kb-2", "kb-3")
@@ -80,7 +81,7 @@ class ScopedFakeOracle:
         return context
 
     def _visible_views(self) -> list[str]:
-        allowed = self._record().allowed_business_view_ids
+        allowed = self._record().allowed_search_answer_profile_ids
         return [item for item in self.VIEW_IDS if allowed is None or item in allowed]
 
     def _visible_bases(self) -> list[str]:
@@ -88,11 +89,11 @@ class ScopedFakeOracle:
         return [item for item in self.BASE_IDS if allowed is None or item in allowed]
 
     @staticmethod
-    def _view(view_id: str) -> BusinessViewDetail:
-        return BusinessViewDetail(
+    def _view(view_id: str) -> SearchAnswerProfileDetail:
+        return SearchAnswerProfileDetail(
             id=view_id,
-            name=f"業務ビュー {view_id}",
-            status=BusinessViewStatus.ACTIVE,
+            name=f"検索・回答プロファイル {view_id}",
+            status=SearchAnswerProfileStatus.ACTIVE,
             created_at=NOW,
             updated_at=NOW,
         )
@@ -107,7 +108,7 @@ class ScopedFakeOracle:
             updated_at=NOW,
         )
 
-    async def ensure_default_business_view(self) -> BusinessViewDetail:
+    async def ensure_default_search_answer_profile(self) -> SearchAnswerProfileDetail:
         return self._view("bv-1")
 
     @staticmethod
@@ -131,30 +132,38 @@ class ScopedFakeOracle:
         start = offset if isinstance(offset, int) else 0
         return values[start : start + limit] if isinstance(limit, int) else values[start:]
 
-    async def list_business_views(self, **kwargs: object) -> list[BusinessViewDetail]:
+    async def list_search_answer_profiles(
+        self, **kwargs: object
+    ) -> list[SearchAnswerProfileDetail]:
         values = self._matching(
             self._visible_views(),
-            name="業務ビュー",
+            name="検索・回答プロファイル",
             query=kwargs.get("query"),
-            selected=kwargs.get("business_view_ids"),
+            selected=kwargs.get("search_answer_profile_ids"),
         )
         return [
             self._view(item)
             for item in self._page(values, kwargs.get("limit"), kwargs.get("offset"))
         ]
 
-    async def count_business_views(self, **kwargs: object) -> int:
+    async def count_search_answer_profiles(self, **kwargs: object) -> int:
         return len(
             self._matching(
                 self._visible_views(),
-                name="業務ビュー",
+                name="検索・回答プロファイル",
                 query=kwargs.get("query"),
-                selected=kwargs.get("business_view_ids"),
+                selected=kwargs.get("search_answer_profile_ids"),
             )
         )
 
-    async def get_business_view(self, business_view_id: str) -> BusinessViewDetail | None:
-        return self._view(business_view_id) if business_view_id in self._visible_views() else None
+    async def get_search_answer_profile(
+        self, search_answer_profile_id: str
+    ) -> SearchAnswerProfileDetail | None:
+        return (
+            self._view(search_answer_profile_id)
+            if search_answer_profile_id in self._visible_views()
+            else None
+        )
 
     async def list_knowledge_bases(self, **kwargs: object) -> list[KnowledgeBaseDetail]:
         values = self._matching(
@@ -184,7 +193,7 @@ class ScopedFakeOracle:
     async def list_access_target_ids(self) -> tuple[set[str], set[str]]:
         # 権限管理の ID 検証は範囲を外して呼ばれる（範囲外は 403、存在しない ID は 400）。
         context = self._record()
-        assert context.allowed_business_view_ids is None
+        assert context.allowed_search_answer_profile_ids is None
         assert context.allowed_knowledge_base_ids is None
         return set(self.VIEW_IDS), set(self.BASE_IDS)
 
@@ -192,7 +201,7 @@ class ScopedFakeOracle:
 @pytest.fixture
 def scoped_oracle(monkeypatch: MonkeyPatch) -> ScopedFakeOracle:
     fake = ScopedFakeOracle()
-    for module in (business_views_route, knowledge_bases_route, security_router_module):
+    for module in (search_answer_profiles_route, knowledge_bases_route, security_router_module):
         monkeypatch.setattr(module, "OracleClient", lambda *_args, **_kwargs: fake)
     return fake
 
@@ -258,7 +267,9 @@ def test_manifest_entries_match_existing_routes_and_known_permissions() -> None:
 
 def test_manifest_denies_unknown_routes_by_default() -> None:
     assert permission_for_route("GET", "/unknown") == frozenset({UNCLASSIFIED_PERMISSION})
-    assert permission_for_route("DELETE", "/business-views") == frozenset({UNCLASSIFIED_PERMISSION})
+    assert permission_for_route("DELETE", "/search-answer-profiles") == frozenset(
+        {UNCLASSIFIED_PERMISSION}
+    )
     assert permission_for_route("POST", "/security/permissions") == frozenset(
         {UNCLASSIFIED_PERMISSION}
     )
@@ -270,11 +281,13 @@ def _perm(method: str, path: str) -> set[str]:
 
 def test_manifest_key_assignments() -> None:
     """作成・アーカイブは manage、利用系の読み取りは複数画面のいずれか。"""
-    assert _perm("POST", "/business-views") == {"rag.business_views.manage"}
-    assert _perm("POST", "/business-views/{business_view_id}/archive") == {
-        "rag.business_views.manage"
+    assert _perm("POST", "/search-answer-profiles") == {"rag.search_answer_profiles.manage"}
+    assert _perm("POST", "/search-answer-profiles/{search_answer_profile_id}/archive") == {
+        "rag.search_answer_profiles.manage"
     }
-    assert _perm("PATCH", "/business-views/{business_view_id}") == {"menu.business_views"}
+    assert _perm("PATCH", "/search-answer-profiles/{search_answer_profile_id}") == {
+        "menu.search_answer_profiles"
+    }
     assert _perm("POST", "/knowledge-bases") == {"rag.knowledge_bases.manage"}
     assert _perm("POST", "/knowledge-bases/{knowledge_base_id}/archive") == {
         "rag.knowledge_bases.manage"
@@ -296,11 +309,11 @@ def test_manifest_key_assignments() -> None:
     assert {"menu.search", "menu.chat", "menu.upload", "menu.file_list"} <= _perm(
         "GET", "/knowledge-bases"
     )
-    assert _perm("GET", "/business-views") == {
+    assert _perm("GET", "/search-answer-profiles") == {
         "menu.search",
         "menu.chat",
         "menu.feedback",
-        "menu.business_views",
+        "menu.search_answer_profiles",
         "menu.evaluation",
     }
     assert _perm("GET", "/security/roles/{role_id}") == {
@@ -319,12 +332,14 @@ def test_manifest_key_assignments() -> None:
 
 
 def test_capabilities_imply_their_menu() -> None:
-    assert "menu.business_views" in expand_permissions({"rag.business_views.manage"})
+    assert "menu.search_answer_profiles" in expand_permissions(
+        {"rag.search_answer_profiles.manage"}
+    )
     assert "menu.knowledge_bases" in expand_permissions({"rag.knowledge_bases.manage"})
     assert "menu.feedback" in expand_permissions({"rag.feedback.manage"})
     assert "menu.settings_system_tables" in expand_permissions({"rag.system_tables.manage"})
     # メニュー権限は capability を暗黙に含まない（昇格しない）。
-    assert expand_permissions({"menu.business_views"}) == {"menu.business_views"}
+    assert expand_permissions({"menu.search_answer_profiles"}) == {"menu.search_answer_profiles"}
     assert expand_permissions({"unknown.code"}) == set()
 
 
@@ -369,7 +384,7 @@ def test_database_user_login_me_and_logout(
     user = auth.user_with_permissions(
         "analyst",
         ["menu.search", "rag.feedback.manage"],
-        business_view_ids=["bv-2"],
+        search_answer_profile_ids=["bv-2"],
         knowledge_base_ids=["kb-1"],
     )
     login_response = client.post(
@@ -381,7 +396,7 @@ def test_database_user_login_me_and_logout(
     assert data["is_system_admin"] is False
     # implies を展開した実効権限。
     assert set(data["permissions"]) == {"menu.search", "rag.feedback.manage", "menu.feedback"}
-    assert data["allowed_business_view_ids"] == ["bv-2"]
+    assert data["allowed_search_answer_profile_ids"] == ["bv-2"]
     assert data["allowed_knowledge_base_ids"] == ["kb-1"]
     assert data["debug_mode"] is False
     assert data["password_change_allowed"] is True
@@ -422,7 +437,7 @@ def test_configured_system_admin_login_has_all_permissions_and_no_scope(
     data = response.json()["data"]
     assert data["is_system_admin"] is True
     assert set(data["permissions"]) == set(ALL_PERMISSION_CODES)
-    assert data["allowed_business_view_ids"] is None
+    assert data["allowed_search_answer_profile_ids"] is None
     assert data["allowed_knowledge_base_ids"] is None
     # 構成管理者の token は RAG 固有の接頭辞（他製品の token と混ざらない）。
     assert str(response.cookies.get("rag_session")).startswith("rag-system-admin-v1.")
@@ -456,7 +471,7 @@ def test_user_without_roles_is_denied_everything_except_auth(
     headers = login(client, "nobody")
     assert client.get("/api/auth/me", headers=headers).status_code == 200
     for method, path in (
-        ("GET", "/api/business-views"),
+        ("GET", "/api/search-answer-profiles"),
         ("GET", "/api/knowledge-bases"),
         ("GET", "/api/security/permissions"),
         ("GET", "/api/security/users"),
@@ -506,7 +521,7 @@ def test_local_mode_uses_all_permissions_without_login() -> None:
     assert data["debug_mode"] is True
     assert data["is_system_admin"] is True
     assert set(data["permissions"]) == set(ALL_PERMISSION_CODES)
-    assert data["allowed_business_view_ids"] is None
+    assert data["allowed_search_answer_profile_ids"] is None
     assert data["allowed_knowledge_base_ids"] is None
     assert data["password_change_allowed"] is False
 
@@ -521,7 +536,7 @@ def test_production_context_comes_from_principal_not_headers(
 ) -> None:
     """production は X-User-ID と x-rag-allowed-* を使わず、利用者から範囲を決める。"""
     user = auth.user_with_permissions(
-        "viewer", ["menu.search"], business_view_ids=["bv-2"], knowledge_base_ids=["kb-3"]
+        "viewer", ["menu.search"], search_answer_profile_ids=["bv-2"], knowledge_base_ids=["kb-3"]
     )
     headers = {
         **login(client, "viewer"),
@@ -529,11 +544,11 @@ def test_production_context_comes_from_principal_not_headers(
         "x-rag-allowed-knowledge-base-ids": "kb-1,kb-2,kb-3",
         "x-rag-allowed-document-ids": "doc-1",
     }
-    response = client.get("/api/business-views", headers=headers)
+    response = client.get("/api/search-answer-profiles", headers=headers)
     assert response.status_code == 200
     assert [item["id"] for item in response.json()["data"]["items"]] == ["bv-2"]
     context = scoped_oracle.contexts[-1]
-    assert context.allowed_business_view_ids == frozenset({"bv-2"})
+    assert context.allowed_search_answer_profile_ids == frozenset({"bv-2"})
     assert context.allowed_knowledge_base_ids == frozenset({"kb-3"})
     assert context.allowed_document_ids is None
     # production は client の X-Tenant-ID を使わない（テストの client は常に送っている。#225）。
@@ -550,7 +565,7 @@ def _principal_context_user_hash(user_uuid: str) -> str | None:
         {},
         request_id="x",
         user_uuid=user_uuid,
-        allowed_business_view_ids=None,
+        allowed_search_answer_profile_ids=None,
         allowed_knowledge_base_ids=None,
     ).user_id_hash
 
@@ -567,23 +582,27 @@ def test_local_mode_keeps_header_scope(scoped_oracle: ScopedFakeOracle) -> None:
     assert context.user_id_hash is not None
 
 
-def test_scope_filters_business_view_list_and_detail(
+def test_scope_filters_search_answer_profile_list_and_detail(
     auth: ProductionAuth, scoped_oracle: ScopedFakeOracle
 ) -> None:
-    """範囲外の業務ビューは一覧に出ず、取得・更新は 404（存在しないものとして扱う）。"""
-    auth.user_with_permissions("viewer", ["menu.business_views"], business_view_ids=["bv-1"])
-    auth.user_with_permissions("view-manager", ["rag.business_views.manage"])
+    """範囲外の検索・回答プロファイルは一覧に出ず、取得・更新は 404（存在しないものとして扱う）。"""
+    auth.user_with_permissions(
+        "viewer", ["menu.search_answer_profiles"], search_answer_profile_ids=["bv-1"]
+    )
+    auth.user_with_permissions("view-manager", ["rag.search_answer_profiles.manage"])
     headers = login(client, "viewer")
-    listed = client.get("/api/business-views", headers=headers)
+    listed = client.get("/api/search-answer-profiles", headers=headers)
     assert [item["id"] for item in listed.json()["data"]["items"]] == ["bv-1"]
     assert listed.json()["data"]["total"] == 1
-    assert client.get("/api/business-views/bv-1", headers=headers).status_code == 200
-    assert client.get("/api/business-views/bv-2", headers=headers).status_code == 404
-    # 作成・アーカイブは rag.business_views.manage が必要。
-    assert client.post("/api/business-views/bv-1/archive", headers=headers).status_code == 403
+    assert client.get("/api/search-answer-profiles/bv-1", headers=headers).status_code == 200
+    assert client.get("/api/search-answer-profiles/bv-2", headers=headers).status_code == 404
+    # 作成・アーカイブは rag.search_answer_profiles.manage が必要。
+    assert (
+        client.post("/api/search-answer-profiles/bv-1/archive", headers=headers).status_code == 403
+    )
 
     manager = login(client, "view-manager")
-    listed = client.get("/api/business-views", headers=manager)
+    listed = client.get("/api/search-answer-profiles", headers=manager)
     assert [item["id"] for item in listed.json()["data"]["items"]] == ["bv-1", "bv-2", "bv-3"]
 
 
@@ -616,7 +635,9 @@ def test_permission_catalog_requires_permission_management(auth: ProductionAuth)
     assert by_code["menu.settings_system_tables"]["group"] == "運用設定"
     assert by_code["menu.security_users"]["group"] == "ユーザーとロール"
     assert by_code["menu.settings_oci"]["group"] == "システム設定"
-    assert by_code["rag.business_views.manage"]["implies"] == ["menu.business_views"]
+    assert by_code["rag.search_answer_profiles.manage"]["implies"] == [
+        "menu.search_answer_profiles"
+    ]
     role_admin = login(client, "role-admin")
     assert client.get("/api/security/permissions", headers=role_admin).status_code == 403
 
@@ -633,28 +654,35 @@ def test_access_targets_are_limited_to_actor_scope(
     auth.user_with_permissions(
         "limited",
         ["menu.security_permissions"],
-        business_view_ids=["bv-1"],
+        search_answer_profile_ids=["bv-1"],
         knowledge_base_ids=["kb-2", "kb-3"],
     )
     auth.user_with_permissions(
-        "view-manager", ["menu.security_permissions", "rag.business_views.manage"]
+        "view-manager", ["menu.security_permissions", "rag.search_answer_profiles.manage"]
     )
     limited_headers = login(client, "limited")
-    limited = client.get("/api/security/access-targets/business-views", headers=limited_headers)
+    limited = client.get(
+        "/api/security/access-targets/search-answer-profiles", headers=limited_headers
+    )
     assert limited.status_code == 200
     data = limited.json()["data"]
     assert data["items"] == [
-        {"id": "bv-1", "name": "業務ビュー bv-1", "status": "ACTIVE", "description": None}
+        {
+            "id": "bv-1",
+            "name": "検索・回答プロファイル bv-1",
+            "status": "ACTIVE",
+            "description": None,
+        }
     ]
     assert data["total"] == 1
     assert _access_target_ids(limited_headers, "knowledge-bases") == ["kb-2", "kb-3"]
 
     manager = login(client, "view-manager")
-    assert _access_target_ids(manager, "business-views") == ["bv-1", "bv-2", "bv-3"]
+    assert _access_target_ids(manager, "search-answer-profiles") == ["bv-1", "bv-2", "bv-3"]
     assert _access_target_ids(manager, "knowledge-bases") == []
 
     admin = login_configured_admin(client)
-    assert len(_access_target_ids(admin, "business-views")) == 3
+    assert len(_access_target_ids(admin, "search-answer-profiles")) == 3
     assert len(_access_target_ids(admin, "knowledge-bases")) == 3
 
 
@@ -674,18 +702,25 @@ def test_access_targets_search_and_page_on_server(
     ).json()["data"]
     assert [item["id"] for item in rest["items"]] == ["kb-3"]
     assert rest["has_next"] is False
-    assert _access_target_ids(admin, "business-views", "?q=bv-2") == ["bv-2"]
-    assert _access_target_ids(admin, "business-views", "?ids=bv-3&ids=bv-1") == ["bv-1", "bv-3"]
+    assert _access_target_ids(admin, "search-answer-profiles", "?q=bv-2") == ["bv-2"]
+    assert _access_target_ids(admin, "search-answer-profiles", "?ids=bv-3&ids=bv-1") == [
+        "bv-1",
+        "bv-3",
+    ]
     # 範囲外の ID を指定しても、利用者の範囲の外の対象は返さない。
-    auth.user_with_permissions("limited", ["menu.security_permissions"], business_view_ids=["bv-1"])
+    auth.user_with_permissions(
+        "limited", ["menu.security_permissions"], search_answer_profile_ids=["bv-1"]
+    )
     limited = login(client, "limited")
-    assert _access_target_ids(limited, "business-views", "?ids=bv-1&ids=bv-2") == ["bv-1"]
+    assert _access_target_ids(limited, "search-answer-profiles", "?ids=bv-1&ids=bv-2") == ["bv-1"]
     too_many = "&".join(f"ids=bv-{index}" for index in range(101))
-    response = client.get(f"/api/security/access-targets/business-views?{too_many}", headers=admin)
+    response = client.get(
+        f"/api/security/access-targets/search-answer-profiles?{too_many}", headers=admin
+    )
     assert response.status_code == 422
     assert (
         client.get(
-            "/api/security/access-targets/business-views?limit=101", headers=admin
+            "/api/security/access-targets/search-answer-profiles?limit=101", headers=admin
         ).status_code
         == 422
     )
@@ -697,7 +732,7 @@ def _put_access(
     *,
     version: int = 1,
     permissions: list[str] | None = None,
-    business_view_ids: list[str] | None = None,
+    search_answer_profile_ids: list[str] | None = None,
     knowledge_base_ids: list[str] | None = None,
 ) -> Any:
     return client.put(
@@ -705,7 +740,7 @@ def _put_access(
         json={
             "version": version,
             "permissions": permissions or [],
-            "business_view_ids": business_view_ids or [],
+            "search_answer_profile_ids": search_answer_profile_ids or [],
             "knowledge_base_ids": knowledge_base_ids or [],
         },
         headers=headers,
@@ -721,18 +756,18 @@ def test_system_admin_updates_role_access(
         headers,
         role.role_id,
         permissions=["menu.search", "menu.chat"],
-        business_view_ids=["bv-1", "bv-2"],
+        search_answer_profile_ids=["bv-1", "bv-2"],
         knowledge_base_ids=["kb-1"],
     )
     assert response.status_code == 200, response.text
     assert response.headers["etag"] == '"2"'
     data = response.json()["data"]
     assert data["permissions"] == ["menu.chat", "menu.search"]
-    assert data["business_view_ids"] == ["bv-1", "bv-2"]
+    assert data["search_answer_profile_ids"] == ["bv-1", "bv-2"]
     assert data["knowledge_base_ids"] == ["kb-1"]
     assert data["version"] == 2
     stored = auth.store.get_role(role.role_id)
-    assert stored is not None and stored.business_view_ids == {"bv-1", "bv-2"}
+    assert stored is not None and stored.search_answer_profile_ids == {"bv-1", "bv-2"}
 
     # 版が古い保存は 409。
     stale = _put_access(headers, role.role_id, version=1, permissions=["menu.search"])
@@ -755,7 +790,7 @@ def test_role_access_update_validates_input(
     unknown_code = _put_access(headers, role.role_id, permissions=["menu.unknown"])
     assert unknown_code.status_code == 400
     assert "menu.unknown" in unknown_code.json()["error_messages"][0]
-    assert _put_access(headers, role.role_id, business_view_ids=["bv-9"]).status_code == 400
+    assert _put_access(headers, role.role_id, search_answer_profile_ids=["bv-9"]).status_code == 400
     assert _put_access(headers, role.role_id, knowledge_base_ids=["kb-9"]).status_code == 400
     assert _put_access(headers, SYSTEM_ADMIN_ROLE_ID).status_code == 409
     assert _put_access(headers, archived.role_id, version=2).status_code == 409
@@ -767,14 +802,14 @@ def test_retired_permission_code_left_in_store_is_ignored(
 ) -> None:
     """DB に残った廃止済みの権限コード（`menu.dashboard`。#261）は、実効権限・権限管理の表示・
     ロールの割り当て・保存のどれでも無視し、エラーにしない（migration の適用前でも壊れない）。"""
-    stale = auth.create_role(["menu.search", "menu.dashboard"], business_view_ids=["bv-1"])
+    stale = auth.create_role(["menu.search", "menu.dashboard"], search_answer_profile_ids=["bv-1"])
     auth.create_user("member", [stale])
     member, _token, _csrf = auth.service.login("member", USER_PASSWORD)
     assert member.permissions == {"menu.search"}
 
     # 範囲の限られた管理者も、古いコードが残ったロールを割り当てられる（昇格とみなさない）。
     auth.user_with_permissions(
-        "user-admin", ["menu.security_users", "menu.search"], business_view_ids=["bv-1"]
+        "user-admin", ["menu.security_users", "menu.search"], search_answer_profile_ids=["bv-1"]
     )
     delegate = login(client, "user-admin")
     assigned = client.post(
@@ -798,7 +833,7 @@ def test_retired_permission_code_left_in_store_is_ignored(
 
     # 権限管理画面は表示したコードをそのまま保存する。保存後は古いコードも消える。
     saved = _put_access(
-        headers, stale.role_id, permissions=["menu.search"], business_view_ids=["bv-1"]
+        headers, stale.role_id, permissions=["menu.search"], search_answer_profile_ids=["bv-1"]
     )
     assert saved.status_code == 200, saved.text
     stored = auth.store.get_role(stale.role_id)
@@ -813,12 +848,12 @@ def test_manage_permission_clears_target_lists(
     response = _put_access(
         login_configured_admin(client),
         role.role_id,
-        permissions=["rag.business_views.manage", "rag.knowledge_bases.manage"],
-        business_view_ids=["bv-1"],
+        permissions=["rag.search_answer_profiles.manage", "rag.knowledge_bases.manage"],
+        search_answer_profile_ids=["bv-1"],
         knowledge_base_ids=["kb-1"],
     )
     assert response.status_code == 200
-    assert response.json()["data"]["business_view_ids"] == []
+    assert response.json()["data"]["search_answer_profile_ids"] == []
     assert response.json()["data"]["knowledge_base_ids"] == []
 
 
@@ -829,31 +864,31 @@ def test_role_access_update_prevents_permission_escalation(
     auth.user_with_permissions(
         "delegate",
         ["menu.security_permissions", "menu.search"],
-        business_view_ids=["bv-1"],
+        search_answer_profile_ids=["bv-1"],
         knowledge_base_ids=["kb-1"],
     )
     headers = login(client, "delegate")
 
     # 自分が持たない権限（メニュー・capability）は足せない。
-    for permissions in (["menu.upload"], ["rag.business_views.manage"]):
+    for permissions in (["menu.upload"], ["rag.search_answer_profiles.manage"]):
         response = _put_access(headers, role.role_id, permissions=permissions)
         assert response.status_code == 403
         assert "権限" in response.json()["error_messages"][0]
         # 権限の付与の制限は経路の権限拒否ではない（その場で理由を表示する。#224）。
         assert response.json()["error_code"] not in ROUTE_FORBIDDEN_CODES
-    # 自分の範囲外の業務ビュー / KB は足せない（存在はする ID）。
-    assert _put_access(headers, role.role_id, business_view_ids=["bv-2"]).status_code == 403
+    # 自分の範囲外の検索・回答プロファイル / KB は足せない（存在はする ID）。
+    assert _put_access(headers, role.role_id, search_answer_profile_ids=["bv-2"]).status_code == 403
     assert _put_access(headers, role.role_id, knowledge_base_ids=["kb-2"]).status_code == 403
     # 自分の権限・範囲の内側なら保存できる。
     allowed = _put_access(
         headers,
         role.role_id,
         permissions=["menu.search"],
-        business_view_ids=["bv-1"],
+        search_answer_profile_ids=["bv-1"],
         knowledge_base_ids=["kb-1"],
     )
     assert allowed.status_code == 200, allowed.text
-    assert allowed.json()["data"]["business_view_ids"] == ["bv-1"]
+    assert allowed.json()["data"]["search_answer_profile_ids"] == ["bv-1"]
 
 
 def test_role_access_update_requires_permission_management(
@@ -869,10 +904,10 @@ def test_restricted_actor_cannot_assign_role_beyond_scope(
     auth: ProductionAuth, scoped_oracle: ScopedFakeOracle
 ) -> None:
     """ユーザー管理でも、自分の範囲外の対象を持つロールは割り当てられない。"""
-    wide = auth.create_role(["menu.search"], business_view_ids=["bv-1", "bv-2"])
-    narrow = auth.create_role(["menu.search"], business_view_ids=["bv-1"])
+    wide = auth.create_role(["menu.search"], search_answer_profile_ids=["bv-1", "bv-2"])
+    narrow = auth.create_role(["menu.search"], search_answer_profile_ids=["bv-1"])
     auth.user_with_permissions(
-        "user-admin", ["menu.security_users", "menu.search"], business_view_ids=["bv-1"]
+        "user-admin", ["menu.security_users", "menu.search"], search_answer_profile_ids=["bv-1"]
     )
     headers = login(client, "user-admin")
 
@@ -899,10 +934,10 @@ def test_restricted_actor_cannot_assign_role_beyond_scope(
 
 def test_principal_scope_is_union_of_active_roles(auth: ProductionAuth) -> None:
     first = auth.create_role(
-        ["menu.search"], business_view_ids=["bv-1"], knowledge_base_ids=["kb-1"]
+        ["menu.search"], search_answer_profile_ids=["bv-1"], knowledge_base_ids=["kb-1"]
     )
-    second = auth.create_role(["menu.chat"], business_view_ids=["bv-2"])
-    archived = auth.create_role(["menu.upload"], business_view_ids=["bv-3"])
+    second = auth.create_role(["menu.chat"], search_answer_profile_ids=["bv-2"])
+    archived = auth.create_role(["menu.upload"], search_answer_profile_ids=["bv-3"])
     auth.create_user("member", [first, second, archived])
     # アーカイブしたロールの権限・対象範囲は実効に含めない。
     auth.store.archive_role(archived.role_id, expected_version=1)
@@ -910,29 +945,33 @@ def test_principal_scope_is_union_of_active_roles(auth: ProductionAuth) -> None:
     principal, _token, _csrf = auth.service.login("member", USER_PASSWORD)
     assert isinstance(principal, Principal)
     assert principal.permissions == {"menu.search", "menu.chat"}
-    assert principal.allowed_business_view_ids == frozenset({"bv-1", "bv-2"})
+    assert principal.allowed_search_answer_profile_ids == frozenset({"bv-1", "bv-2"})
     assert principal.allowed_knowledge_base_ids == frozenset({"kb-1"})
 
 
 def test_principal_scope_is_unrestricted_for_manage_and_system_admin(auth: ProductionAuth) -> None:
-    manager = auth.create_role(["rag.knowledge_bases.manage"], business_view_ids=["bv-1"])
+    manager = auth.create_role(["rag.knowledge_bases.manage"], search_answer_profile_ids=["bv-1"])
     auth.create_user("kb-manager", [manager])
     auth.create_user("root", system_admin=True)
 
     kb_manager, _token, _csrf = auth.service.login("kb-manager", USER_PASSWORD)
     assert kb_manager.allowed_knowledge_base_ids is None
-    assert kb_manager.allowed_business_view_ids == frozenset({"bv-1"})
+    assert kb_manager.allowed_search_answer_profile_ids == frozenset({"bv-1"})
     root, _token, _csrf = auth.service.login("root", USER_PASSWORD)
-    assert root.allowed_business_view_ids is None
+    assert root.allowed_search_answer_profile_ids is None
     assert root.allowed_knowledge_base_ids is None
 
 
 def test_restore_role_rejects_scope_beyond_actor(auth: ProductionAuth) -> None:
-    role = auth.create_role(["menu.search"], business_view_ids=["bv-2"])
+    role = auth.create_role(["menu.search"], search_answer_profile_ids=["bv-2"])
     auth.store.archive_role(role.role_id, expected_version=1)
     auth.create_user(
         "delegate",
-        [auth.create_role(["menu.security_roles", "menu.search"], business_view_ids=["bv-1"])],
+        [
+            auth.create_role(
+                ["menu.security_roles", "menu.search"], search_answer_profile_ids=["bv-1"]
+            )
+        ],
     )
     actor, _token, _csrf = auth.service.login("delegate", USER_PASSWORD)
     with pytest.raises(SecurityApiError) as denied:
@@ -1006,7 +1045,7 @@ def test_oracle_store_reads_role_permissions_and_scope() -> None:
             "SELECT ROLE_ID, PERMISSION_CODE FROM RAG_ROLE_PERMISSIONS": [
                 ("role-1", "menu.search")
             ],
-            "SELECT ROLE_ID, BUSINESS_VIEW_ID FROM RAG_ROLE_BUSINESS_VIEWS": [
+            "SELECT ROLE_ID, SEARCH_ANSWER_PROFILE_ID FROM RAG_ROLE_SEARCH_ANSWER_PROFILES": [
                 ("role-1", "bv-1"),
                 ("role-1", "bv-2"),
             ],
@@ -1016,7 +1055,7 @@ def test_oracle_store_reads_role_permissions_and_scope() -> None:
     role = _oracle_store(connection).get_role("role-1")
     assert role is not None
     assert role.permissions == {"menu.search"}
-    assert role.business_view_ids == {"bv-1", "bv-2"}
+    assert role.search_answer_profile_ids == {"bv-1", "bv-2"}
     assert role.knowledge_base_ids == {"kb-1"}
     assert role.description == ""
 
@@ -1033,7 +1072,9 @@ def test_oracle_store_lists_roles_without_a_query_per_role() -> None:
                 ("role-2", "menu.search"),
                 ("role-2", "menu.chat"),
             ],
-            "SELECT ROLE_ID, BUSINESS_VIEW_ID FROM RAG_ROLE_BUSINESS_VIEWS": [("role-5", "bv-1")],
+            "SELECT ROLE_ID, SEARCH_ANSWER_PROFILE_ID FROM RAG_ROLE_SEARCH_ANSWER_PROFILES": [
+                ("role-5", "bv-1")
+            ],
             "SELECT ROLE_ID, KNOWLEDGE_BASE_ID FROM RAG_ROLE_KNOWLEDGE_BASES": [("role-9", "kb-1")],
         }
     )
@@ -1043,7 +1084,7 @@ def test_oracle_store_lists_roles_without_a_query_per_role() -> None:
     assert len(roles) == 30
     assert len(connection.statements) == 4
     assert roles["role-2"].permissions == {"menu.search", "menu.chat"}
-    assert roles["role-5"].business_view_ids == {"bv-1"}
+    assert roles["role-5"].search_answer_profile_ids == {"bv-1"}
     assert roles["role-9"].knowledge_base_ids == {"kb-1"}
     assert roles["role-0"].permissions == set()
 
@@ -1065,7 +1106,7 @@ def test_oracle_store_replaces_role_access_in_same_transaction() -> None:
             archived=False,
             version=1,
             permissions={"menu.search"},
-            business_view_ids={"bv-1"},
+            search_answer_profile_ids={"bv-1"},
             knowledge_base_ids={"kb-1", "kb-2"},
         ),
         expected_version=1,
@@ -1080,10 +1121,10 @@ def test_oracle_store_replaces_role_access_in_same_transaction() -> None:
         " VERSION_NO = VERSION_NO + 1, UPDATED_AT = SYSTIMESTAMP WHERE ROLE_ID = :role_id AND"
         " VERSION_NO = :expected_version",
         "DELETE FROM RAG_ROLE_PERMISSIONS WHERE ROLE_ID = :role_id",
-        "DELETE FROM RAG_ROLE_BUSINESS_VIEWS WHERE ROLE_ID = :role_id",
+        "DELETE FROM RAG_ROLE_SEARCH_ANSWER_PROFILES WHERE ROLE_ID = :role_id",
         "DELETE FROM RAG_ROLE_KNOWLEDGE_BASES WHERE ROLE_ID = :role_id",
         "INSERT INTO RAG_ROLE_PERMISSIONS",
-        "INSERT INTO RAG_ROLE_BUSINESS_VIEWS",
+        "INSERT INTO RAG_ROLE_SEARCH_ANSWER_PROFILES",
         "INSERT INTO RAG_ROLE_KNOWLEDGE_BASES",
         "INSERT INTO RAG_ROLE_KNOWLEDGE_BASES",
     ]
@@ -1097,7 +1138,7 @@ def test_role_basic_info_update_keeps_rag_access(
 ) -> None:
     """ロール管理（共通画面）の名称変更は、RAG の権限と対象範囲を変えない。"""
     role = auth.create_role(
-        ["menu.search"], business_view_ids=["bv-1"], knowledge_base_ids=["kb-1"]
+        ["menu.search"], search_answer_profile_ids=["bv-1"], knowledge_base_ids=["kb-1"]
     )
     auth.user_with_permissions("role-admin", ["menu.security_roles"])
     headers = login(client, "role-admin")
@@ -1110,7 +1151,7 @@ def test_role_basic_info_update_keeps_rag_access(
     data = response.json()["data"]
     assert data["display_name"] == "新しい名前"
     assert data["permissions"] == ["menu.search"]
-    assert data["business_view_ids"] == ["bv-1"]
+    assert data["search_answer_profile_ids"] == ["bv-1"]
     assert data["knowledge_base_ids"] == ["kb-1"]
 
 

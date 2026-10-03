@@ -22,17 +22,17 @@ test.describe("サイドナビのセクション折りたたみ", () => {
     const ragItem = sidebar.getByText("RAG 検索", { exact: true });
     await expect(ragItem).toBeVisible();
 
-    // 業務ビューセクション見出しへフォーカスして Enter で折りたたむ。
-    const toggle = sidebar.getByRole("button", { name: "業務ビュー を折りたたむ" });
+    // 検索・回答プロファイルセクション見出しへフォーカスして Enter で折りたたむ。
+    const toggle = sidebar.getByRole("button", { name: "検索・回答プロファイル を折りたたむ" });
     await toggle.focus();
     await page.keyboard.press("Enter");
     await expect(ragItem).toBeHidden();
     await expect(
-      sidebar.getByRole("button", { name: "業務ビュー を展開" })
+      sidebar.getByRole("button", { name: "検索・回答プロファイル を展開" })
     ).toHaveAttribute("aria-expanded", "false");
 
     // Space で再展開。
-    await sidebar.getByRole("button", { name: "業務ビュー を展開" }).focus();
+    await sidebar.getByRole("button", { name: "検索・回答プロファイル を展開" }).focus();
     await page.keyboard.press(" ");
     await expect(ragItem).toBeVisible();
   });
@@ -67,9 +67,9 @@ test.describe("サイドナビのセクション折りたたみ", () => {
     const sidebar = await openSidebarNav(page);
     const ragItem = sidebar.getByText("RAG 検索", { exact: true });
     await expect(ragItem).toBeVisible();
-    await sidebar.getByRole("button", { name: "業務ビュー を折りたたむ" }).click();
+    await sidebar.getByRole("button", { name: "検索・回答プロファイル を折りたたむ" }).click();
     await expect(ragItem).toBeHidden();
-    await sidebar.getByRole("button", { name: "業務ビュー を展開" }).click();
+    await sidebar.getByRole("button", { name: "検索・回答プロファイル を展開" }).click();
     await expect(ragItem).toBeVisible();
     await expect(sidebar.getByRole("link", { name: "検索方法" })).toBeVisible();
   });

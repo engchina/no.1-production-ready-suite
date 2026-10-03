@@ -46,11 +46,11 @@ describe("useUiStore", () => {
   });
 
   it("setSectionCollapsed で他セクションを保ったまま明示設定する", () => {
-    useUiStore.getState().setSectionCollapsed("nav.section.rag", true);
+    useUiStore.getState().setSectionCollapsed("nav.section.use", true);
     useUiStore.getState().setSectionCollapsed("nav.section.settings", false);
 
     expect(useUiStore.getState().collapsedSections).toEqual({
-      "nav.section.rag": true,
+      "nav.section.use": true,
       "nav.section.settings": false,
     });
   });

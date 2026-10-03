@@ -44,14 +44,14 @@ describe("権限コードの対応表", () => {
   });
 
   // Issue 399 / 402 / 409（テスト名に「#」付きの番号を書くと、lint が生の hex 色として検出するため、ここに書く）。
-  it("利用の画面はチャット → RAG 検索、業務ビューはナレッジベースの直下、品質評価とフィードバックは「改善・運用」", () => {
+  it("利用の画面はチャット → RAG 検索、検索・回答プロファイルはナレッジベースの直下、品質評価とフィードバックは「改善・運用」", () => {
     const hrefs = (key: string) => NAV_SECTIONS.find((section) => section.titleKey === key)?.items.map((item) => item.href);
-    expect(hrefs("nav.section.rag")).toEqual([APP_ROUTES.chat, APP_ROUTES.search]);
+    expect(hrefs("nav.section.use")).toEqual([APP_ROUTES.chat, APP_ROUTES.search]);
     expect(hrefs("nav.section.ingestion")).toEqual([
       APP_ROUTES.upload,
       APP_ROUTES.fileList,
       APP_ROUTES.knowledgeBases,
-      APP_ROUTES.businessViews,
+      APP_ROUTES.searchAnswerProfiles,
     ]);
     expect(hrefs("nav.section.improve")).toEqual([APP_ROUTES.evaluation, APP_ROUTES.feedback]);
     // NL2SQL と同じ位置: 検索・回答設定（準備）の後、セキュリティ設定の前。
@@ -100,7 +100,7 @@ describe("visibleNavSections", () => {
       allow(MENU_PERMISSIONS.search, MENU_PERMISSIONS.upload, MENU_PERMISSIONS.securityUsers)
     );
     expect(sections.map((section) => section.titleKey)).toEqual([
-      "nav.section.rag",
+      "nav.section.use",
       "nav.section.ingestion",
       "nav.section.userRoles",
     ]);

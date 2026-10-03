@@ -67,11 +67,11 @@ describe("PageHeader の back（一覧へ戻る）", () => {
   it("読み上げ名に戻り先を足せる。disabled も渡せる", () => {
     act(() =>
       root.render(
-        <PageHeader title="x" back={{ label: "一覧へ戻る", ariaLabel: "業務ビューの一覧へ戻る", disabled: true, onClick: noop }} />
+        <PageHeader title="x" back={{ label: "一覧へ戻る", ariaLabel: "検索・回答プロファイルの一覧へ戻る", disabled: true, onClick: noop }} />
       )
     );
     const backButton = host.querySelector<HTMLButtonElement>('[data-page-header-back]')!;
-    expect(backButton.getAttribute("aria-label")).toBe("業務ビューの一覧へ戻る");
+    expect(backButton.getAttribute("aria-label")).toBe("検索・回答プロファイルの一覧へ戻る");
     expect(backButton.disabled).toBe(true);
   });
 });

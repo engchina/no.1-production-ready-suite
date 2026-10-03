@@ -34,7 +34,6 @@ from app.clients.oracle import (
     oracle_vector_schema_sql,
 )
 from app.config import Settings
-from app.rag.business_view_config import BusinessViewConfig, dump_business_view_config
 from app.rag.chunking import Chunk
 from app.rag.graph_index import (
     GraphEntity,
@@ -47,7 +46,10 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
-from app.schemas.business_view import DEFAULT_BUSINESS_VIEW_DESCRIPTION, BusinessViewStatus
+from app.rag.search_answer_profile_config import (
+    SearchAnswerProfileConfig,
+    dump_search_answer_profile_config,
+)
 from app.schemas.document import (
     DocumentProcessingConfig,
     FileStatus,
@@ -59,6 +61,10 @@ from app.schemas.document import (
 from app.schemas.extraction import StructuredExtraction
 from app.schemas.knowledge_base import DEFAULT_KNOWLEDGE_BASE_DESCRIPTION, KnowledgeBaseStatus
 from app.schemas.search import RetrievedChunk, SearchMode
+from app.schemas.search_answer_profile import (
+    DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION,
+    SearchAnswerProfileStatus,
+)
 
 
 def test_close_oracle_pool_force_closes_busy_shared_pool(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -191,7 +197,7 @@ async def test_vector_index_build_params_unknown_without_connection_settings(
 
 
 @pytest.mark.anyio
-async def test_ensure_default_business_view_preserves_settings_and_fixes_scope(
+async def test_ensure_default_search_answer_profile_preserves_settings_and_fixes_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """既存 DEFAULT の検索設定を保持し、DEFAULT KB と有効状態だけを正規化する。"""
@@ -205,14 +211,14 @@ async def test_ensure_default_business_view_preserves_settings_and_fixes_scope(
         created_at=now,
         updated_at=now,
     )
-    existing = oracle_module.StoredBusinessView(
+    existing = oracle_module.StoredSearchAnswerProfile(
         id="bv-default",
         name="DEFAULT",
-        status=BusinessViewStatus.ARCHIVED,
+        status=SearchAnswerProfileStatus.ARCHIVED,
         created_at=now,
         updated_at=now,
-        view_config=dump_business_view_config(
-            BusinessViewConfig(
+        profile_config=dump_search_answer_profile_config(
+            SearchAnswerProfileConfig(
                 knowledge_base_ids=["kb-old"],
                 query={"query_strategy": "rag_fusion"},
             )
@@ -231,22 +237,24 @@ async def test_ensure_default_business_view_preserves_settings_and_fixes_scope(
     )
     monkeypatch.setattr(
         oracle_module,
-        "_select_business_view_by_name",
+        "_select_search_answer_profile_by_name",
         lambda *_: existing,
     )
 
-    detail = await client.ensure_default_business_view()
+    detail = await client.ensure_default_search_answer_profile()
 
-    assert detail.status == BusinessViewStatus.ACTIVE
+    assert detail.status == SearchAnswerProfileStatus.ACTIVE
     assert detail.archived_at is None
     assert detail.config.knowledge_base_ids == ["kb-default"]
     assert detail.config.query.query_strategy == "rag_fusion"
     # 説明が空の既存 DEFAULT には既定の説明を補う（#521）。
-    assert detail.description == DEFAULT_BUSINESS_VIEW_DESCRIPTION
+    assert detail.description == DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION
     assert len(connection.calls) == 1
-    assert "UPDATE rag_business_views" in connection.calls[0].statement
+    assert "UPDATE rag_search_answer_profiles" in connection.calls[0].statement
     assert "description = :description" in connection.calls[0].statement
-    assert connection.calls[0].parameters["description"] == DEFAULT_BUSINESS_VIEW_DESCRIPTION
+    assert (
+        connection.calls[0].parameters["description"] == DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION
+    )
 
 
 @pytest.mark.anyio
@@ -255,12 +263,13 @@ async def test_ensure_default_business_view_preserves_settings_and_fixes_scope(
     [(None, 1), ("   ", 1), ("全社の既定ビュー", 0)],
     ids=["null", "blank", "entered"],
 )
-async def test_ensure_default_business_view_fills_only_empty_description(
+async def test_ensure_default_search_answer_profile_fills_only_empty_description(
     monkeypatch: pytest.MonkeyPatch,
     description: str | None,
     expected_calls: int,
 ) -> None:
-    """DEFAULT 業務ビューの説明は空のときだけ既定の説明で補う（利用者の説明は残す。#521）。"""
+    """DEFAULT 検索・回答プロファイルの説明は空のとき"
+    "だけ既定の説明で補う（利用者の説明は残す。#521）。"""
     client = OracleClient(settings=Settings.model_construct())
     connection = FakeOracleConnection([])
     now = datetime.now(UTC)
@@ -271,15 +280,15 @@ async def test_ensure_default_business_view_fills_only_empty_description(
         created_at=now,
         updated_at=now,
     )
-    existing = oracle_module.StoredBusinessView(
+    existing = oracle_module.StoredSearchAnswerProfile(
         id="bv-default",
         name="DEFAULT",
         description=description,
-        status=BusinessViewStatus.ACTIVE,
+        status=SearchAnswerProfileStatus.ACTIVE,
         created_at=now,
         updated_at=now,
-        view_config=dump_business_view_config(
-            BusinessViewConfig(knowledge_base_ids=["kb-default"])
+        profile_config=dump_search_answer_profile_config(
+            SearchAnswerProfileConfig(knowledge_base_ids=["kb-default"])
         ),
     )
 
@@ -288,13 +297,13 @@ async def test_ensure_default_business_view_fills_only_empty_description(
 
     monkeypatch.setattr(client, "_run_transaction", run_transaction)
     monkeypatch.setattr(oracle_module, "_ensure_default_knowledge_base", lambda *_: knowledge_base)
-    monkeypatch.setattr(oracle_module, "_select_business_view_by_name", lambda *_: existing)
+    monkeypatch.setattr(oracle_module, "_select_search_answer_profile_by_name", lambda *_: existing)
 
-    detail = await client.ensure_default_business_view()
+    detail = await client.ensure_default_search_answer_profile()
 
     assert len(connection.calls) == expected_calls
     if expected_calls:
-        assert detail.description == DEFAULT_BUSINESS_VIEW_DESCRIPTION
+        assert detail.description == DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION
     else:
         assert detail.description == "全社の既定ビュー"
 
@@ -2769,7 +2778,7 @@ def test_oracle_graph_feedback_and_eval_artifact_schema_use_oracle_tables() -> N
     assert "CREATE TABLE rag_citation_feedback" in feedback_ddl
     assert "target_type       VARCHAR2(16)" in feedback_ddl
     assert "source_surface    VARCHAR2(16)" in feedback_ddl
-    assert "business_view_id  VARCHAR2(64)" in feedback_ddl
+    assert "search_answer_profile_id  VARCHAR2(64)" in feedback_ddl
     assert "RAG_FEEDBACK_USER_TRACE_IDX" in feedback_ddl.upper()
     assert "rating = 'helpful' AND reason IS NULL" in feedback_ddl
     assert "target_type = 'answer' AND reason IN" in feedback_ddl
@@ -2801,7 +2810,7 @@ async def test_feedback_write_and_current_read_use_append_only_latest_vote() -> 
                 {
                     "feedback_id": "feedback-2",
                     "trace_id": "trace-1",
-                    "business_view_id": "bv-1",
+                    "search_answer_profile_id": "bv-1",
                     "target_type": "answer",
                     "source_surface": "chat",
                     "document_id": None,
@@ -2826,7 +2835,7 @@ async def test_feedback_write_and_current_read_use_append_only_latest_vote() -> 
             {
                 "feedback_id": "feedback-1",
                 "trace_id": "trace-1",
-                "business_view_id": "bv-1",
+                "search_answer_profile_id": "bv-1",
                 "target_type": "answer",
                 "source_surface": "chat",
                 "rating": "helpful",
@@ -2841,7 +2850,7 @@ async def test_feedback_write_and_current_read_use_append_only_latest_vote() -> 
     assert feedback_id == "feedback-1"
     assert "INSERT INTO rag_citation_feedback" in insert.statement
     assert insert.parameters["target_type"] == "answer"
-    assert insert.parameters["business_view_id"] == "bv-1"
+    assert insert.parameters["search_answer_profile_id"] == "bv-1"
     assert insert.parameters["document_id"] is None
     assert insert.parameters["tenant_id_hash"] == "a" * 64
     assert insert.parameters["user_id_hash"] == "b" * 64
@@ -2892,7 +2901,7 @@ async def test_feedback_details_are_committed_with_the_vote() -> None:
             {
                 "feedback_id": "feedback-1",
                 "trace_id": "trace-1",
-                "business_view_id": "bv-1",
+                "search_answer_profile_id": "bv-1",
                 "target_type": "answer",
                 "source_surface": "search",
                 "rating": "not_helpful",
@@ -2927,7 +2936,7 @@ async def test_feedback_dashboard_filters_tenant_and_aggregates_latest_votes() -
     token = set_audit_request_context(AuditRequestContext(tenant_id_hash="a" * 64))
     try:
         rows, total, groups, previous_groups = await client.list_feedback_dashboard_rows(
-            business_view_id="bv-1",
+            search_answer_profile_id="bv-1",
             target_type="citation",
             rating="not_helpful",
             reason="not_relevant",
@@ -2949,7 +2958,7 @@ async def test_feedback_dashboard_filters_tenant_and_aggregates_latest_votes() -
         assert "latest_feedback" in call.statement
         assert "f.tenant_id_hash = :tenant_id_hash" in call.statement
         assert call.parameters["tenant_id_hash"] == "a" * 64
-        assert call.parameters["business_view_id"] == "bv-1"
+        assert call.parameters["search_answer_profile_id"] == "bv-1"
         assert call.parameters["period_days"] == 30
         assert call.parameters["feedback_query"] == "{規程}"
 

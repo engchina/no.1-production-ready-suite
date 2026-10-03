@@ -120,7 +120,7 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    // Agent 固有のセキュリティ（ロールへの機能権限とエージェント / 業務ビューの対象範囲の付与。#215）。
+    // Agent 固有のセキュリティ（ロールへの機能権限とエージェント / 検索・回答プロファイルの対象範囲の付与。#215）。
     titleKey: "nav.section.security",
     items: [
       {

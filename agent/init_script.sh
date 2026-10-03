@@ -375,7 +375,7 @@ install_backend() {
 
 # 共通認証（PLATFORM_*）と Agent のシステムテーブル（権限・Run の保存先・定義。AGENT_*）は
 # agent_system_schema --initialize が冪等に作る（#215 / #751 / #764。接続は PLATFORM_ORACLE_*）。
-# データを消す migration（旧版の業務ビューの表の削除など）は自動では承認せず、
+# データを消す migration（旧版の検索・回答プロファイルの表の削除など）は自動では承認せず、
 # 運用設定 > システムテーブル で内容を確認して承認する。
 initialize_database_schema() {
   local security_ready=false

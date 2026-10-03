@@ -33,7 +33,7 @@ API: `POST /api/evaluation/jobs/run`・`POST /api/evaluation/jobs/compare`（job
 }
 ```
 
-`cases` は 1 件以上必須です。各ケースは回答エンジン（根拠付き回答）で、業務ビューを使わずに全体の既定の設定で回答し（#301）、回答の記録（引用・根拠・実行記録）から指標を求める（#591）。#594 で回答はこの方式だけになった（#591 では評価だけ回答エンジンを固定していた）。回答の記録は通常の回答と同じく保存し（`trace_id` で確かめられる）、標準回答による評価の結果も同じ回答の記録に保存する。
+`cases` は 1 件以上必須です。各ケースは回答エンジン（根拠付き回答）で、検索・回答プロファイルを使わずに全体の既定の設定で回答し（#301）、回答の記録（引用・根拠・実行記録）から指標を求める（#591）。#594 で回答はこの方式だけになった（#591 では評価だけ回答エンジンを固定していた）。回答の記録は通常の回答と同じく保存し（`trace_id` で確かめられる）、標準回答による評価の結果も同じ回答の記録に保存する。
 
 ### 評価の指標（#591）
 
@@ -71,7 +71,7 @@ CI gate の閾値を毎回インラインで書かずに選べるよう、**Eval
 
 - **解決順**: request の明示 `thresholds` > request の `suite`(任意) > 設定 `rag_evaluation_suite`。`EvaluationMetrics.evaluation_suite`(compare では各 experiment の metrics)に確定した基準を残す。
 - 削除した基準（`request_only` / `retrieval_focused` / `balanced` / `ragas_like` / `strict_ci`）は、保存済みの `RAG_EVALUATION_SUITE` を起動時に後継（`strict_ci` → `strict`、ほか → `standard`）へ寄せる。API では受け付けない。閾値を使わない評価は、request に `thresholds: {}` を書く。
-- 評価の基準はグローバル設定(と request の `suite`)だけで決まり、業務ビューでは上書きしない。保存済みの `view_config.query.evaluation_suite` は読み込み時に無視し、次回保存で消える。
+- 評価の基準はグローバル設定(と request の `suite`)だけで決まり、検索・回答プロファイルでは上書きしない。保存済みの `profile_config.query.evaluation_suite` は読み込み時に無視し、次回保存で消える。
 
 レスポンスには `case_results` も含める。各 case について `case_id`、`trace_id`、`status`、取得 document id、関連 document id、hit document id、case 単位の context recall / reciprocal rank / faithfulness（overlap count）/ citation traceability、回答キーワード命中、拒答したか（`abstained`）とそれが期待どおりか（`refusal_correct`）、標準回答による評価の要約（`answer_evaluation`: status・点・合否・主張の裏付け・必要な項目の対応率）、guardrail warning、diagnostics、elapsed ms、error type・error stage・error message を返す。測れない値は `null`。検索失敗または timeout の case は `status=error` として残し、query 本文や例外 message はレスポンスへ出さない。評価 runner が捕捉した case 失敗は `rag_search_audit` にも残し、timeout は `error_stage=timeout`、その他の case 例外は `error_stage=evaluation` とする。
 
@@ -124,16 +124,16 @@ staging 用の実データ manifest は任意で `staging_dataset_policy` を持
 `python -m app.rag.answer_verify_cli` は、rag_poc の検証スクリプトを移植した手動の検証ツール。`answers` / `regression` は、実行中の backend の API を呼ぶ（`--api-base-url`、既定 `http://localhost:8000`。`--tenant-id` / `--user-id` は `evaluation_cli` と同じ）。1 件ずつ `<out>/<id>.json` に保存し、既にあれば飛ばすので、中断しても同じコマンドで残りを実行できる。最後に `<out>/summary.md` を書く。結果には質問と回答の本文が入るため、`--out` は Git 管理外（`.runs/` 配下）にする。
 
 ```bash
-# QA（id / question / standard_answer）を業務ビューで回答し、標準回答で評価する（評価の基準の指標と閾値。rag_poc の run_answer_eval.py 相当）
-uv run python -m app.rag.answer_verify_cli answers --qa qa.json --business-view <業務ビュー ID> --out .runs/answers/<label>
+# QA（id / question / standard_answer）を検索・回答プロファイルで回答し、標準回答で評価する（評価の基準の指標と閾値。rag_poc の run_answer_eval.py 相当）
+uv run python -m app.rag.answer_verify_cli answers --qa qa.json --search-answer-profile <検索・回答プロファイル ID> --out .runs/answers/<label>
 # rag_poc の cases.json（id / question / expect）で回答を文字列の規則で判定する（rag_poc の run_regression.py）
-uv run python -m app.rag.answer_verify_cli regression --cases cases.json --business-view <業務ビュー ID> --out .runs/regression/<label> --repeat 2
+uv run python -m app.rag.answer_verify_cli regression --cases cases.json --search-answer-profile <検索・回答プロファイル ID> --out .runs/regression/<label> --repeat 2
 # CRAG goldset をオフラインで評価する（--llm-judge で backend のモデル設定の LLM に判定させる）
 uv run python -m app.rag.answer_verify_cli crag-goldset crag_goldset.json
 ```
 
 - `answers` は回答の記録がある回答だけ評価できる（安全ポリシーで止めた質問など、回答フローを通らなかった件はエラーとして記録する。#594 で回答はすべて同じ回答フローになった）。
-- `regression` の判定は rag_poc と同じ規則（`applied_all` / `applied_excludes` / `gap_contains`）で、LLM を使わない。`cases.json` の `run_id` / `pdf` は読み捨てる（業務ビューの KB が検索範囲になる）。
+- `regression` の判定は rag_poc と同じ規則（`applied_all` / `applied_excludes` / `gap_contains`）で、LLM を使わない。`cases.json` の `run_id` / `pdf` は読み捨てる（検索・回答プロファイルの KB が検索範囲になる）。
 - `crag-goldset` の終了コードも rag_poc と同じ（CRAG が標準 RAG より劣れば 1）。
 - rag_poc の `evaluate_crag_grader.py` は、rag_poc 独自の ADB の保存先から候補を組み立てる設計のため移植していない。
 
@@ -171,7 +171,7 @@ RAG 検索レスポンスには `trace_id` を含める。OCI Enterprise AI、Op
 
 検索・取込 pipeline は `app.trace` logger へ `rag_trace_span` イベントも出す。payload は `trace_event` に入り、`trace_id`、`span_name`、`outcome`、`duration_ms`、低 cardinality の attributes、`error_type` だけを含む。検索 stage は `history_rewrite`（チャットの会話履歴による質問の書き換え）、`answer`（回答フロー）、検索だけの経路の `retrieval`、取込 stage は `vlm_extraction`、`chunking`、`embedding`、`indexing` を使う。回答フローの中の工程（質問の理解・文書検索・Rerank・根拠確認など）の時間は、span ではなく `diagnostics.answer.execution_steps` と回答の記録に残る（旧 standard の `embedding`・`rerank`・`context_*`・`generation` などの stage は #595 で削除した）。query 本文、context 本文、OCR 原文、prompt、例外 message、tenant/user id の raw 値は含めない。この構造化ログは OpenTelemetry span や Langfuse trace へ橋渡しするための境界であり、Prometheus の aggregate metrics では追えない単一 request の遅延・失敗箇所を調査するために使う。`RAG_TRACE_EXPORT_HTTP_ENDPOINT` を設定すると、同じ脱機密化済み event を非同期 HTTP JSON で collector / gateway へ送信する。queue が満杯または送信失敗しても request は失敗させず、`rag_trace_export_dropped` / `rag_trace_export_failed` を `app.trace` logger に残す。
 
-検索レスポンスと評価ケース結果には `diagnostics` も含める。これは `retrieval_strategy`（常に `hybrid`）、`retrieval_strategy_adapter`（`grounded` / `retrieval_only` / `blocked`）、`answer`（回答フローの診断。工程ごとの実行記録 `execution_steps`・根拠の構成・信頼度など）、安全チェックの policy / backend / 縮退、filter key、ナレッジベースの件数、適用した KB / 業務ビューの設定、RAG 設定 fingerprint だけで構成し、query 本文や secret は含めない。低召回や設定変更による品質回帰を trace id と合わせて調査するために使う。旧 standard の診断（`top_k`・`rerank_top_n`・query variant 件数・検索 / rerank / 去重 / context の加工の件数・context window・`stream_stage_timings` など）と、検索 UI の「適応展開」「依存昇格」の件数の表示は #595 で削除した。
+検索レスポンスと評価ケース結果には `diagnostics` も含める。これは `retrieval_strategy`（常に `hybrid`）、`retrieval_strategy_adapter`（`grounded` / `retrieval_only` / `blocked`）、`answer`（回答フローの診断。工程ごとの実行記録 `execution_steps`・根拠の構成・信頼度など）、安全チェックの policy / backend / 縮退、filter key、ナレッジベースの件数、適用した KB / 検索・回答プロファイルの設定、RAG 設定 fingerprint だけで構成し、query 本文や secret は含めない。低召回や設定変更による品質回帰を trace id と合わせて調査するために使う。旧 standard の診断（`top_k`・`rerank_top_n`・query variant 件数・検索 / rerank / 去重 / context の加工の件数・context window・`stream_stage_timings` など）と、検索 UI の「適応展開」「依存昇格」の件数の表示は #595 で削除した。
 
 citation の `metadata` には `section_title`、`section_path`、`section_level`、`content_kind`、`chunk_group_id`、`chunk_group_kind`、`chunk_part_index`、`chunk_part_count`、`text_sha256`、`text_chars` と、`retrieval_mode`、`vector_rank`、`keyword_rank`、`vector_score`、`keyword_score`、`rrf_score` を入れられる場合だけ含める。query 本文や OCR 原文は含めず、hybrid 検索で vector 側の召回漏れか keyword 側の語彙不一致か、また複雑文書のどの章節・親要素が根拠を拾ったかを per-case に確認する。
 
