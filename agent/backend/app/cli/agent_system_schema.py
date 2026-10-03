@@ -18,6 +18,8 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
+from pr_backend_core.logging import configure_cli_logging
+
 from app.system_schema import SystemSchemaError, system_schema_manager
 
 
@@ -26,6 +28,7 @@ def _stable_json(value: dict[str, Any]) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    configure_cli_logging("agent")
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("--status", action="store_true", help="状態だけを読む（DDL なし）")

@@ -11,8 +11,10 @@ from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .request_context import (
+    REQUEST_ID_PATTERN,
     access_summary_var,
     generate_request_id,
+    log_context_var,
     request_id_var,
     traceparent_var,
     validated_traceparent,
@@ -77,6 +79,13 @@ class MetricsMiddleware:
         scope.setdefault("state", {})["request_id"] = request_id
         request_token = request_id_var.set(request_id)
         trace_token = traceparent_var.set(validated_traceparent(headers.get("traceparent")))
+        incoming_ids = {
+            key: value
+            for key in ("run_id", "job_id")
+            if (value := headers.get(f"x-correlation-{key.replace('_', '-')}"))
+            and REQUEST_ID_PATTERN.fullmatch(value)
+        }
+        domain_token = log_context_var.set(incoming_ids)
         access_token = access_summary_var.set(True)
         started = perf_counter()
         status = 500
@@ -141,6 +150,7 @@ class MetricsMiddleware:
                             },
                         )
             finally:
+                log_context_var.reset(domain_token)
                 access_summary_var.reset(access_token)
                 traceparent_var.reset(trace_token)
                 request_id_var.reset(request_token)

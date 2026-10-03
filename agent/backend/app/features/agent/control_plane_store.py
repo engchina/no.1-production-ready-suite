@@ -17,14 +17,14 @@ from __future__ import annotations
 import json
 import logging
 import os
-from pr_backend_core.logging import safe_exception_fields
-
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from importlib import import_module
 from pathlib import Path
 from threading import Lock
 from typing import Any, Literal, Protocol, cast
+
+from pr_backend_core.logging import safe_exception_fields
 
 from app.features.agent import storage_backend
 from app.oracle_connection import connect_platform_oracle

@@ -71,16 +71,21 @@ def _safe_text(value: str) -> str:
 
 def safe_exception_fields(error: BaseException) -> dict[str, object]:
     """型・コード・stack の位置だけを残す。例外本文・locals・ソース行は残さない。"""
-    fields: dict[str, object] = {"exception_type": type(error).__name__}
+    fields: dict[str, object] = {"exception_type": type(error).__name__[:128]}
     code = error.__dict__.get("code")
     if isinstance(code, int) or isinstance(code, str) and re.fullmatch(r"[A-Z0-9_:-]{1,64}", code):
         fields["error_code"] = code
+    elif error.args and isinstance(error.args[0], str):
+        # Oracle の既知コードだけを抽出し、例外本文は出力しない。
+        match = re.search(r"\b(?:ORA|DPY|DPI)-[0-9]{4,5}\b", error.args[0][:_MAX_STRING])
+        if match:
+            fields["error_code"] = match[0]
     frames = deque(traceback.walk_tb(error.__traceback__), maxlen=16)
     if frames:
         fields["exception_frames"] = [
             {
-                "file": Path(frame.f_code.co_filename).name,
-                "function": frame.f_code.co_name,
+                "file": Path(frame.f_code.co_filename).name[:128],
+                "function": frame.f_code.co_name[:128],
                 "line": line,
             }
             for frame, line in frames
@@ -90,7 +95,7 @@ def safe_exception_fields(error: BaseException) -> dict[str, object]:
     cause = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
     while cause is not None and id(cause) not in seen and len(causes) < 5:
         seen.add(id(cause))
-        causes.append(type(cause).__name__)
+        causes.append(type(cause).__name__[:128])
         cause = cause.__cause__ or (None if cause.__suppress_context__ else cause.__context__)
     if causes:
         fields["exception_causes"] = causes
@@ -103,7 +108,15 @@ def _safe_value(
     depth: int = 0,
     seen: frozenset[int] = frozenset(),
     truncated: list[bool] | None = None,
+    budget: list[int] | None = None,
 ) -> object:
+    if budget is None:
+        budget = [256]
+    budget[0] -= 1
+    if budget[0] < 0:
+        if truncated is not None:
+            truncated[0] = True
+        return "[truncated]"
     if value is None or isinstance(value, bool | int):
         return value
     if isinstance(value, float):
@@ -125,14 +138,16 @@ def _safe_value(
         return {
             _safe_text(key if isinstance(key, str) else "[key]"): "[REDACTED]"
             if _SENSITIVE.search(key if isinstance(key, str) else "")
-            else _safe_value(item, depth=depth + 1, seen=nested_seen, truncated=truncated)
+            else _safe_value(
+                item, depth=depth + 1, seen=nested_seen, truncated=truncated, budget=budget
+            )
             for key, item in islice(value.items(), _MAX_ITEMS)
         }
     if isinstance(value, list | tuple | set | frozenset):
         if truncated is not None and len(value) > _MAX_ITEMS:
             truncated[0] = True
         return [
-            _safe_value(item, depth=depth + 1, seen=nested_seen, truncated=truncated)
+            _safe_value(item, depth=depth + 1, seen=nested_seen, truncated=truncated, budget=budget)
             for item in islice(value, _MAX_ITEMS)
         ]
     # __str__ は任意コードや SDK response body を返すことがある。
@@ -183,6 +198,7 @@ class StructuredFormatter(jsonlogger.JsonFormatter):
     def format(self, record: logging.LogRecord) -> str:
         try:
             truncated = [False]
+            budget = [256]
             extras = list(
                 islice(
                     (
@@ -197,7 +213,7 @@ class StructuredFormatter(jsonlogger.JsonFormatter):
             fields: dict[str, Any] = {
                 key: "[REDACTED]"
                 if _SENSITIVE.search(key)
-                else _safe_value(value, truncated=truncated)
+                else _safe_value(value, truncated=truncated, budget=budget)
                 for key, value in extras[:_MAX_ITEMS]
             }
             # 既存の trace_id 属性は業務 ID。active な W3C trace と同一視しない。
@@ -207,7 +223,7 @@ class StructuredFormatter(jsonlogger.JsonFormatter):
             if record.exc_info and isinstance(record.exc_info[1], BaseException):
                 fields.update(safe_exception_fields(record.exc_info[1]))
             # メッセージの遅延引数に例外があっても本文へ変換しない。
-            safe_args = _safe_value(record.args, truncated=truncated)
+            safe_args = _safe_value(record.args, truncated=truncated, budget=budget)
             message = str(record.msg) if isinstance(record.msg, str) else "診断イベント"
             if record.args:
                 try:
@@ -237,7 +253,7 @@ class StructuredFormatter(jsonlogger.JsonFormatter):
                 timestamp=datetime.fromtimestamp(record.created, JST).isoformat(
                     timespec="milliseconds"
                 ),
-                level=record.levelname,
+                level=_safe_text(record.levelname)[:32],
                 name=record.name[:128],
                 message=_safe_text(message),
                 process_id=record.process,
@@ -264,7 +280,11 @@ class StructuredFormatter(jsonlogger.JsonFormatter):
                     "trace_id",
                     "parent_span_id",
                 }
-                fields = {key: value for key, value in fields.items() if key in keep}
+                fields = {
+                    key: _safe_text(value)[:128] if isinstance(value, str) else value
+                    for key, value in fields.items()
+                    if key in keep and isinstance(value, str | int | float | bool | type(None))
+                }
                 fields["message"] = str(fields["message"])[:128]
                 fields["truncated"] = True
                 encoded = json.dumps(
@@ -308,7 +328,8 @@ class _DiagnosticHandler(logging.StreamHandler[Any]):
     def handleError(self, record: logging.LogRecord) -> None:
         # logging の既定 handleError は record の未処理 args を stderr に出すため使わない。
         with suppress(Exception):
-            sys.__stderr__.write('{"event":"logging_sink_failed","level":"ERROR"}\n')
+            if sys.__stderr__ is not None:
+                sys.__stderr__.write('{"event":"logging_sink_failed","level":"ERROR"}\n')
 
 
 def configure_logging(
@@ -365,3 +386,16 @@ def configure_http_logging(app: Any, *, service_name: str) -> None:
         component="microservice",
     )
     app.add_middleware(MetricsMiddleware, enable_metrics=False)
+
+
+def configure_cli_logging(product: str) -> None:
+    """offline CLI は settings / DB を初期化せず、診断だけを stderr へ接続する。"""
+    import os
+
+    prefix = product.upper()
+    configure_logging(
+        os.environ.get(f"{prefix}_LOG_LEVEL", "INFO"),
+        service_name=f"production-ready-{product}",
+        environment=os.environ.get(f"{prefix}_ENVIRONMENT", "local"),
+        component="cli",
+    )

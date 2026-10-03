@@ -273,6 +273,9 @@ parse_args() {
 
 # 対象未指定なら 4 unit を既定にする。ファイルだけを指定した場合は unit を追尾しない。
 resolve_sources() {
+  if [ "${RAW}" = true ] && { [ "${JSON_EXPORT}" = true ] || [ -n "${ID_FILTER}" ]; }; then
+    usage_error "--raw は --json / 相関 ID filter と併用できません。"
+  fi
   if [ "${UNIT_SELECTION_MADE}" = false ] && [ "${FILE_SELECTION_MADE}" = false ]; then
     select_all_units
   fi

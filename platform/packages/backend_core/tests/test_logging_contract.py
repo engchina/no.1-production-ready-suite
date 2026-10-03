@@ -122,6 +122,7 @@ def test_bounded_record_cycles_and_malformed_format_keep_logging_alive() -> None
     cyclic.append(cyclic)
     record = logging.LogRecord("app.test", logging.WARNING, __file__, 1, "%d", ("bad",), None)
     record.attributes = {str(index): "日本語" * 1000 for index in range(40)}  # type: ignore[attr-defined]
+    record.expansion = [[[["wide"] * 32] * 32] * 32] * 32  # type: ignore[attr-defined]
     record.cycle = cyclic  # type: ignore[attr-defined]
     wire = formatter(4096).format(record)
     assert len(wire.encode()) <= 4096
@@ -229,3 +230,70 @@ async def test_concurrent_sse_keeps_context_until_body_finished(capsys: Any) -> 
         assert summary["event"] == "http_access" and summary["outcome"] == "success"
         assert summary["duration_ms"] >= summary["headers_duration_ms"]
         assert (b"x-request-id", request.encode()) in sent[request][0]["headers"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stream_and_websocket_restore_all_context(capsys: Any) -> None:
+    configure_logging("INFO")
+
+    async def failing(scope: Any, receive: Any, send: Any) -> None:
+        assert request_id_var.get() == "request-cancel"
+        logging.getLogger("app.cancel").warning("処理を停止しました")
+        raise asyncio.CancelledError()
+
+    async def noop(*args: Any) -> Any:
+        return None
+
+    for kind in ("http", "websocket"):
+        with pytest.raises(asyncio.CancelledError):
+            await MetricsMiddleware(failing, enable_metrics=False)(
+                {
+                    "type": kind,
+                    "path": "/private",
+                    "method": "GET",
+                    "headers": [
+                        (b"x-request-id", b"request-cancel"),
+                        (b"x-correlation-run-id", b"run-1"),
+                    ],
+                },
+                noop,
+                noop,
+            )
+        assert request_id_var.get() is None
+        with bind_log_context():
+            assert "run_id" not in json.loads(
+                formatter().format(logging.LogRecord("app.test", 20, __file__, 1, "検証", (), None))
+            )
+    records = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    summary = [record for record in records if record["event"] == "http_access"]
+    assert len(summary) == 1 and summary[0]["outcome"] == "cancelled"
+    assert summary[0]["run_id"] == "run-1"
+
+
+def test_format_and_sink_fault_do_not_leak_or_hide_business_error(monkeypatch: Any) -> None:
+    import pr_backend_core.logging as module
+
+    record = logging.LogRecord("app.test", 40, __file__, 1, "PRIVATE_SENTINEL", (), None)
+    original = module._safe_value
+    monkeypatch.setattr(
+        module,
+        "_safe_value",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("PRIVATE_SENTINEL")),
+    )
+    wire = formatter().format(record)
+    assert "PRIVATE_SENTINEL" not in wire
+    assert json.loads(wire)["timestamp"].endswith("+09:00")
+    monkeypatch.setattr(module, "_safe_value", original)
+    sink = io.StringIO()
+    monkeypatch.setattr(module.sys, "__stderr__", sink)
+    handler = module._DiagnosticHandler()
+
+    class Broken:
+        def write(self, text: str) -> None:
+            raise OSError("PRIVATE_SENTINEL")
+
+    handler.stream = Broken()  # type: ignore[assignment]
+    handler.setFormatter(formatter())
+    handler.emit(record)
+    assert "PRIVATE_SENTINEL" not in sink.getvalue()
+    assert json.loads(sink.getvalue())["event"] == "logging_sink_failed"

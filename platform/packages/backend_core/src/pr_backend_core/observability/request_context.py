@@ -56,6 +56,10 @@ def outbound_correlation_headers() -> dict[str, str]:
     traceparent = validated_traceparent(traceparent_var.get())
     if traceparent:
         headers["traceparent"] = traceparent
+    for key in ("run_id", "job_id"):
+        value = log_context_var.get().get(key)
+        if value and REQUEST_ID_PATTERN.fullmatch(value):
+            headers[f"X-Correlation-{key.replace('_', '-')}"] = value
     return headers
 
 

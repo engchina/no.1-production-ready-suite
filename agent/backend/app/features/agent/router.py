@@ -12,8 +12,6 @@ import json
 import logging
 import re
 import stat
-from pr_backend_core.logging import safe_exception_fields
-
 from asyncio import sleep, wait_for
 from collections.abc import Callable, Iterable, Mapping
 from csv import DictWriter
@@ -42,6 +40,7 @@ from fastapi import (
 )
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse
+from pr_backend_core.logging import safe_exception_fields
 from pr_backend_core.mcp import mcp_http_response
 from pr_system_settings.database import build_database_router
 from pr_system_settings.database_status import (

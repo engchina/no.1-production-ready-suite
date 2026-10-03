@@ -11,6 +11,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from pr_backend_core.logging import configure_cli_logging
+
 from app.rag.file_processing_evaluation import FILE_PROCESSING_THRESHOLD_DIRECTIONS
 
 DEFAULT_ALLOWED_DROP = 0.02
@@ -69,6 +71,7 @@ class TrendRegression:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint。"""
+    configure_cli_logging("rag")
     parser = argparse.ArgumentParser(
         prog="rag-file-processing-trend",
         description=(
