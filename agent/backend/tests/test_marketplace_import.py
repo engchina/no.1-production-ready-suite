@@ -432,6 +432,8 @@ def test_duplicates_and_invalid_entry_do_not_hide_valid_catalog_entries(
         isinstance(entry, MarketplaceEntry) and entry.unavailable_reason for entry in entries[:5]
     )
     assert isinstance(entries[-1], PluginManifest)
+    assert isinstance(entries[4], MarketplaceEntry)
+    assert entries[4].unavailable_reason == "配布物の URL の形式が不正です。"
 
 
 @pytest.mark.parametrize(

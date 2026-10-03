@@ -9,7 +9,7 @@ from collections import Counter
 from pathlib import PurePosixPath
 from time import monotonic
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import ParseResult, quote, urlparse
 
 import httpx
 from pr_backend_core.internal_http import http_client_options
@@ -74,8 +74,15 @@ def safe_path(value: str, *, allow_root: bool = False) -> str:
     return "" if path == "." else path
 
 
+def _parse_url(value: str) -> ParseResult:
+    try:
+        return urlparse(value)
+    except ValueError as exc:
+        raise ValueError("配布物の URL の形式が不正です。") from exc
+
+
 def github_repository(value: str) -> str:
-    parsed = urlparse(value)
+    parsed = _parse_url(value)
     if parsed.scheme:
         if (
             parsed.scheme != "https"
@@ -94,7 +101,7 @@ def github_repository(value: str) -> str:
 
 
 def catalog_origin(url: str) -> tuple[str, str, str] | None:
-    parsed = urlparse(url)
+    parsed = _parse_url(url)
     if (
         parsed.scheme != "https"
         or parsed.netloc != "raw.githubusercontent.com"
@@ -513,7 +520,7 @@ def _build_manifest(
         for target in re.findall(r"\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)", body):
             if target.startswith("#"):
                 continue
-            if urlparse(target).scheme:
+            if _parse_url(target).scheme:
                 warnings.append(f"{skill.name}: 外部リンクの内容は自動取得しません。")
                 continue
             try:
@@ -578,7 +585,7 @@ def _build_manifest(
         raise ValueError("MCP の配布定義が不正です。")
     for name, config in (mcp or {}).items():
         url = config.get("url") if isinstance(config, dict) else None
-        parsed = urlparse(url) if isinstance(url, str) else None
+        parsed = _parse_url(url) if isinstance(url, str) else None
         if (
             parsed is None
             or not parsed.hostname
