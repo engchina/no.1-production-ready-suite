@@ -37,6 +37,8 @@ from app.features.nl2sql.ontology_models import (
     ColumnQueryPolicy,
     GraphPatch,
     GraphPatchOperation,
+    OntologyEdge,
+    OntologyEdgeKind,
     OntologyNode,
     OntologyNodeKind,
     OntologyProvenance,
@@ -1338,6 +1340,27 @@ def test_rehydrated_revision_is_parent_for_drift_and_preserves_orphan_mapping(
             "payload": business_node,
         }
     )
+    mapping_edge = OntologyEdge(
+        id="order_amount_mapping",
+        revision_id=previous.revision.id,
+        kind=OntologyEdgeKind.MAPS_TO,
+        source_node_id=business_node.id,
+        target_node_id=amount_node.id,
+        relationship_name_ja="金額の物理対応",
+        provenance=business_node.provenance,
+        review_status=OntologyReviewStatus.APPROVED,
+    )
+    store.save_edge(
+        {
+            "revision_id": previous.revision.id,
+            "edge_id": mapping_edge.id,
+            "edge_type": mapping_edge.kind.value,
+            "source_node_id": mapping_edge.source_node_id,
+            "target_node_id": mapping_edge.target_node_id,
+            "review_status": mapping_edge.review_status.value,
+            "payload": mapping_edge,
+        }
+    )
     source_table = legacy.catalog.tables[0]
     legacy.catalog = legacy.catalog.model_copy(
         update={
@@ -1370,6 +1393,20 @@ def test_rehydrated_revision_is_parent_for_drift_and_preserves_orphan_mapping(
     assert migrated_view.table_usages_ja[table_node.id] == "drift 後も保持する用途"
     assert migrated_view.draft_node_overrides[0]["business_name_ja"] == "受注業務"
     assert migrated_view.draft_schema_fingerprint == ""
+    retained_node = next(node for node in drifted.nodes if node.id == amount_node.id)
+    retained_edge = next(edge for edge in drifted.edges if edge.id == mapping_edge.id)
+    assert retained_node.review_status == OntologyReviewStatus.ORPHANED
+    assert retained_edge.review_status == OntologyReviewStatus.ORPHANED
+    assert retained_edge.metadata["orphaned_mapping_node_ids"] == [amount_node.id]
+    # ログの経路と同じ job artifact 取得でも同期は失敗せず、公開版の pin は維持する。
+    snapshot = restarted.profile_scoped_graph_snapshot_for_job(
+        profile=legacy.profile, allowed=AllowedObjects(table_names=["APP.ORDERS"])
+    )
+    assert snapshot["revision_id"] == previous.revision.id
+    restored = OntologyApiRuntime(legacy_service=legacy, store=store).current_ontology()
+    assert restored.revision.id == drifted.revision.id
+    assert next(node for node in restored.nodes if node.id == amount_node.id) == retained_node
+    assert next(edge for edge in restored.edges if edge.id == mapping_edge.id) == retained_edge
 
 
 def test_sync_reuses_registered_revision_instead_of_conflict(
