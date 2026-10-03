@@ -277,7 +277,7 @@ test("管理者はだれの回答にも評価を付けられ、本人の評価�
 
   // Run の詳細でも管理者の評価を付け直せる（付けた評価が選ばれている）。
   await page.keyboard.press("Escape");
-  await page.goto("/runs");
+  await page.goto("/runs?id=run-admin-774");
   const runReview = page.getByTestId("admin-review-run-admin-774");
   await expect(runReview.getByRole("button", { name: "この回答は役に立たなかった" })).toHaveAttribute(
     "aria-pressed",
@@ -485,7 +485,7 @@ test("役に立った回答の詳細には評価ケースへの追加を出さ�
 test("Run の詳細の管理者の評価の下から評価ケースに追加できる", async ({ page, mockApi }) => {
   seedDislikedRun(mockApi);
   seedEvaluationSets(mockApi);
-  await page.goto("/runs");
+  await page.goto("/runs?id=run-dislike-810");
   await page.getByTestId("run-add-case-toggle").click();
   const form = page.getByTestId("run-add-case-form");
   await expect(form.getByLabel("質問")).toHaveValue(DISLIKED_QUESTION);

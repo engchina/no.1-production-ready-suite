@@ -38,7 +38,7 @@ for (const viewport of [
     });
 
     test("Run のゴールは必須で、未入力は欄の下に出してフォーカスする", async ({ page, mockApi }) => {
-      await page.goto("/runs");
+      await page.goto("/runs?id=new");
       const goal = page.locator("#run-goal");
       await expect(goal).toHaveAttribute("aria-required", "true");
       await expect(page.locator('label[for="run-goal"]')).toContainText("必須");

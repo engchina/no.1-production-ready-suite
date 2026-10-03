@@ -159,10 +159,12 @@ for (const viewport of VIEWPORTS) {
       await expect(chips.getByRole("button", { name: "失敗" })).toHaveAttribute("aria-pressed", "true");
       await expect(table.getByTestId("run-row-run-failed")).toBeVisible();
       await expect(table.getByTestId("run-row-run-done")).toHaveCount(0);
-      // 詳細も絞り込んだ一覧から選ぶ。
+      // 絞り込んだ一覧の対象名から全幅の詳細を開く。
+      await page.locator('a[data-run-id="run-failed"]').click();
       await expect(page.getByRole("region", { name: "実行の詳細" })).toContainText("run-failed");
       await page.screenshot({ path: testInfo.outputPath(`runs-filter-${viewport.name}.png`), fullPage: true });
 
+      await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
       await page.locator("#run-search").fill("該当なし");
       await expect(page.getByText("条件に一致する実行がありません")).toBeVisible();
       await page.getByRole("button", { name: "絞り込みをクリア" }).click();
@@ -190,7 +192,7 @@ for (const viewport of VIEWPORTS) {
         posts += 1;
         await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "モデルに接続できません。" }) });
       });
-      await page.goto("/runs");
+      await page.goto("/runs?id=new");
       const submit = page.getByTestId("run-create-submit");
       await submit.click();
       const actions = page.getByRole("group", { name: "実行の作成の操作" }).or(page.getByLabel("実行の作成の操作"));

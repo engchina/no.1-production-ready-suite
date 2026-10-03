@@ -40,7 +40,13 @@ function streamCard(page: Page) {
     .last();
 }
 
+async function openStreamControls(page: Page) {
+  await page.getByRole("tab", { name: "実行の経過", exact: true }).click();
+  await page.locator("summary").filter({ hasText: /^ストリーム/ }).click();
+}
+
 async function useWebSocketMode(page: Page) {
+  await openStreamControls(page);
   await page.getByRole("group", { name: "ストリーム方式" }).getByRole("button", { name: "WebSocket" }).click();
 }
 
@@ -77,7 +83,7 @@ for (const viewport of VIEWPORTS) {
         ws.close({ code: 1008, reason: "forbidden" });
       });
 
-      await page.goto("/runs");
+      await page.goto("/runs?id=run-stream");
       await expect(page.getByText("購読を確認する").first()).toBeVisible();
       await useWebSocketMode(page);
 
@@ -108,7 +114,7 @@ for (const viewport of VIEWPORTS) {
         ws.close({ code: 1008 });
       });
 
-      await page.goto("/runs");
+      await page.goto("/runs?id=run-stream");
       await expect(page.getByText("購読を確認する").first()).toBeVisible();
       await useWebSocketMode(page);
 
@@ -135,7 +141,7 @@ for (const viewport of VIEWPORTS) {
         });
       });
 
-      await page.goto("/runs");
+      await page.goto("/runs?id=run-stream");
       await useWebSocketMode(page);
       await expect(streamCard(page).getByText("接続済み", { exact: true })).toBeVisible();
       // 操作は Run の詳細の ObjectActionBar の 1 か所。購読中は WebSocket で送る（#814）。
@@ -163,7 +169,7 @@ for (const viewport of VIEWPORTS) {
         });
       });
 
-      await page.goto("/runs");
+      await page.goto("/runs?id=run-stream");
       await useWebSocketMode(page);
       await expect(streamCard(page).getByText("接続済み", { exact: true })).toBeVisible();
       // WebSocket 専用のボタン列は無く、操作は ObjectActionBar の 1 か所だけ。
@@ -193,16 +199,17 @@ for (const viewport of VIEWPORTS) {
     });
 
     test("SSE の購読中は Run の操作を REST で送る", async ({ page, mockApi }) => {
-      await page.goto("/runs");
+      await page.goto("/runs?id=run-stream");
       await expect(page.getByText("購読を確認する").first()).toBeVisible();
       await page.getByTestId("run-object-actions").getByRole("button", { name: "再開", exact: true }).click();
       await expect.poll(() => mockApi.lastRequest("POST", "/api/runs/run-stream/resume")).toBeTruthy();
     });
 
     test("SSE の接続が切れたら自動の再接続をやめ、停止を示して再接続できる", async ({ page, mockApi }) => {
-      await page.goto("/runs");
+      await page.goto("/runs?id=run-stream");
       await expect(page.getByText("購読を確認する").first()).toBeVisible();
 
+      await openStreamControls(page);
       // e2e の SSE は空の stream を返して閉じる（fixture）。
       await expect(page.getByTestId("run-stream-stopped")).toContainText("SSE の接続が切れたため");
       const eventRequests = () =>

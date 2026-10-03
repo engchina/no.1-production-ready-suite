@@ -199,7 +199,7 @@ test.describe("AI Agent Control Plane", () => {
 
   test("Run は Agent とゴールだけで作成し、組み込み Runtime が実行する", async ({ page }) => {
     await installControlPlaneApi(page);
-    await page.goto("/runs");
+    await page.goto("/runs?id=new");
     await expect(page.getByLabel("実行先 Binding")).toHaveCount(0);
     const goal = "契約情報を確認する";
     await page.locator("#run-goal").fill(goal);
@@ -208,6 +208,7 @@ test.describe("AI Agent Control Plane", () => {
     await expect(page.getByText("実行を作成しました", { exact: true })).toBeVisible();
     await expect(page.getByText(goal).first()).toBeVisible();
     await expect(runDetail(page).getByText(/実行環境: 組み込みの実行環境/)).toBeVisible();
+    await page.getByRole("tab", { name: "実行の経過", exact: true }).click();
     await expect(page.getByText("run.status_changed").first()).toBeVisible();
     // 実行中の Run は、サーバーの開始時刻からの経過時間を出す（#376）。
     const progress = page.getByTestId("run-progress");
@@ -218,7 +219,7 @@ test.describe("AI Agent Control Plane", () => {
 
   test("モデルが未設定なら、Run の作成の前に理由を知らせる", async ({ page }) => {
     await installControlPlaneApi(page, { notReady: true });
-    await page.goto("/runs");
+    await page.goto("/runs?id=new");
     // 警告（warning の Banner。アイコン付き）で、見出しと理由を出す。
     await expect(page.getByText("業務 Agent を実行できません")).toBeVisible();
     await expect(page.getByText(/既定のテキストモデルを設定してください。/)).toBeVisible();
@@ -275,10 +276,11 @@ test.describe("AI Agent Control Plane", () => {
         },
       ],
     });
-    await page.goto("/runs");
+    await page.goto("/runs?id=new");
     await page.locator("#run-goal").fill("契約情報を確認する");
     await page.getByRole("button", { name: "実行を作成" }).click();
 
+    await page.getByRole("tab", { name: "監査ログ", exact: true }).click();
     const alert = page.getByRole("alert").filter({ hasText: "ツールの実行でエラーが発生しました" });
     await expect(alert).toContainText("RAG に接続できませんでした。");
     const details = alert.locator("details");

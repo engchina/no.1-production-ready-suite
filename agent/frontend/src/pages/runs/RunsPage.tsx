@@ -31,7 +31,7 @@ import {
   useActionPending,
 } from "@engchina/production-ready-ui";
 import { agentApi, type ApprovalRequest, type RunState } from "@/lib/api";
-import { AgentSplitPane } from "@/components/EntityLayout";
+import { MissingEditorTarget } from "@/components/EntityLayout";
 import { PagedDataTable, QueryState } from "@/components/ListViews";
 import {
   FilterChipGroup,
@@ -42,6 +42,7 @@ import {
   useListSearch,
 } from "@/components/ListFilters";
 import { t } from "@/lib/i18n";
+import { useEditorRoute } from "@/lib/editor-route";
 import { useCapabilities } from "@/lib/permissions";
 import { runStatusView } from "@/lib/status-labels";
 import { useEditorLeaveGuard } from "@/lib/leave-guard";
@@ -84,6 +85,7 @@ function runStatusFilterLabel(filter: RunStatusFilter): string {
 }
 
 export function RunsPage() {
+  const editor = useEditorRoute();
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const capabilities = useCapabilities();
@@ -94,14 +96,24 @@ export function RunsPage() {
   });
   // 「表示を更新」は押した取り直しの間だけ回す（定期の取り直し・他の操作の後の invalidate・条件の切り替えでは回さない。#819）。
   const manualRefresh = useActionPending();
-  const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
+  const agents = useQuery({
+    queryKey: ["agents"],
+    queryFn: agentApi.listAgents,
+  });
   // 組み込み Runtime が実行できるか（モデル未設定なら Run は失敗するため、作成の前に知らせる。#754）。
-  const runtimeStatus = useQuery({ queryKey: ["runtime-status"], queryFn: agentApi.getRuntimeStatus });
+  const runtimeStatus = useQuery({
+    queryKey: ["runtime-status"],
+    queryFn: agentApi.getRuntimeStatus,
+  });
   const createRun = useMutation({
     mutationFn: agentApi.createRun,
     onSuccess: (run) => {
       toast.success(t("run.createdToast"));
       setSelectedRunId(run.id);
+      queryClient.setQueryData<{ runs: RunState[] }>(["runs"], (current) => ({
+        runs: [run, ...(current?.runs ?? []).filter((item) => item.id !== run.id)],
+      }));
+      editor.openItem(run.id, { replace: true });
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
     },
   });
@@ -155,7 +167,10 @@ export function RunsPage() {
     isOneOf<RunStreamMode>(["sse", "websocket"])
   );
   // 一時保存に失敗した下書きは、離脱の前に破棄を確認する。
-  useEditorLeaveGuard(!goalSaved && goal !== DEFAULT_RUN_GOAL);
+  const { confirmClose } = useEditorLeaveGuard(
+    editor.target.kind === "new" && !goalSaved && goal !== DEFAULT_RUN_GOAL,
+    createRun.isPending
+  );
 
   const runItems = useMemo(() => runs.data?.runs ?? [], [runs.data?.runs]);
   const agentNames = useMemo(
@@ -165,7 +180,12 @@ export function RunsPage() {
   const agentNameOf = (agentId: string) => agentNames.get(agentId) ?? agentId;
   // 実行履歴の絞り込み（目標・実行 ID・業務 Agent の検索と、状態のチップ。#808）。どちらも作業状態に残す。
   const [runQuery, setRunQuery] = useListSearch("runs");
-  const [runFilter, setRunFilter] = useWorkspaceState("listFilter", "runs", "all" as RunStatusFilter, isRunStatusFilter);
+  const [runFilter, setRunFilter] = useWorkspaceState(
+    "listFilter",
+    "runs",
+    "all" as RunStatusFilter,
+    isRunStatusFilter
+  );
   const visibleRuns = runItems.filter(
     (run) =>
       runMatchesStatusFilter(run, runFilter) &&
@@ -173,8 +193,10 @@ export function RunsPage() {
   );
   const runIds = useMemo(() => runs.data?.runs.map((run) => run.id), [runs.data?.runs]);
   const restoredSelection = useRestoredSelectionCheck(selectedRunId, runIds);
-  // 詳細は絞り込んだ一覧の中から選ぶ（絞り込みで隠れた実行を詳細に出したままにしない）。
-  const selectedRun = visibleRuns.find((run) => run.id === selectedRunId) ?? visibleRuns[0];
+  // 詳細の対象は URL の ID。別の実行へ暗黙に置換しない（#875）。
+  const viewKind = editor.target.kind;
+  const targetRunId = editor.target.kind === "edit" ? editor.target.id : null;
+  const selectedRun = runItems.find((run) => run.id === targetRunId);
   // 利用できるエージェントは backend が絞り込む。既定の Agent を使えない利用者は、使える最初の Agent を選ぶ（#215）。
   // 下書きで実行するのは Agent 管理（admin）だけ（#770）。下書きでなければ公開した版のある Agent だけ選べる。
   const [runDraft, setRunDraft] = useState(false);
@@ -186,13 +208,25 @@ export function RunsPage() {
     runnableAgents.some((agent) => agent.id === agentId) || !runnableAgents.length ? agentId : runnableAgents[0].id;
 
   useEffect(() => {
-    if (!selectedRunId && runItems.length) {
-      setSelectedRunId(runItems[0].id);
+    if (targetRunId) {
+      setSelectedRunId(targetRunId);
     }
-    if (selectedRunId && runItems.length && !runItems.some((run) => run.id === selectedRunId)) {
-      setSelectedRunId(runItems[0].id);
-    }
-  }, [runItems, selectedRunId, setSelectedRunId]);
+    // URL の切替はページ移動として見出しへ、一覧へ戻ると選んだ行へフォーカスを戻す。
+    const frame = requestAnimationFrame(() => {
+      const rowLink =
+        viewKind === "list" && selectedRunId
+          ? document.querySelector<HTMLAnchorElement>(`a[data-run-id="${CSS.escape(selectedRunId)}"]`)
+          : null;
+      const heading = document.querySelector<HTMLElement>("main h1");
+      if (heading) heading.tabIndex = -1;
+      (rowLink ?? heading)?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [viewKind, targetRunId, selectedRunId, setSelectedRunId]);
+
+  async function backToList() {
+    if (!createRun.isPending && (await confirmClose())) editor.backToList();
+  }
 
   const refreshRuntimeEvents = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["runs"] });
@@ -223,7 +257,11 @@ export function RunsPage() {
       focusField("run-goal");
       return;
     }
-    createRun.mutate({ goal, agent_id: selectedAgentId, ...(draftRun ? { draft: true } : {}) });
+    createRun.mutate({
+      goal,
+      agent_id: selectedAgentId,
+      ...(draftRun ? { draft: true } : {}),
+    });
   }
 
   /**
@@ -357,12 +395,28 @@ export function RunsPage() {
     ];
   };
 
+  const isList = editor.target.kind === "list";
   return (
     <>
       <PageHeader
         wide
-        title={t("nav.runs")}
-        subtitle={t("page.runs.subtitle")}
+        title={isList ? t("nav.runs") : editor.target.kind === "new" ? t("run.form.submit") : t("run.detail")}
+        subtitle={
+          isList
+            ? t("page.runs.subtitle")
+            : editor.target.kind === "new"
+              ? t("run.form.runtimeHint")
+              : t("run.detailDescription")
+        }
+        back={
+          !isList
+            ? {
+                label: t("common.backToList"),
+                onClick: () => void backToList(),
+                disabled: createRun.isPending,
+              }
+            : undefined
+        }
         actions={[
           {
             id: "refresh",
@@ -372,16 +426,29 @@ export function RunsPage() {
             loading: manualRefresh.pending,
             onClick: () => void manualRefresh.track(() => runs.refetch()),
           },
+          ...(isList && capabilities.operateRuns
+            ? [
+                {
+                  id: "new-run",
+                  kind: "primary" as const,
+                  label: t("run.form.submit"),
+                  icon: PlayCircle,
+                  onClick: editor.openNew,
+                },
+              ]
+            : []),
         ]}
       />
       <PageBody wide>
         <NonPersistentStorageNotice />
-        <AgentSplitPane
-          splitId="runs-list"
-          left={
-            <div className="min-w-0 space-y-5">
-              {/* Run の作成は Run の実行・操作の権限（operator）がある利用者だけに出す（#215）。 */}
-              {capabilities.operateRuns ? (
+        {editor.target.kind === "new" ? (
+          capabilities.operateRuns ? (
+            <QueryState query={agents} loadingLabel={t("loading.agents")} skeleton={<FormSkeleton fields={2} />}>
+              <QueryState
+                query={runtimeStatus}
+                loadingLabel={t("loading.runtimes")}
+                skeleton={<FormSkeleton fields={2} />}
+              >
                 <Card className="min-w-0">
                   <CardHeader>
                     <CardTitle>{t("run.form.submit")}</CardTitle>
@@ -394,7 +461,10 @@ export function RunsPage() {
                       label={t("run.form.agent")}
                       width="lg"
                       value={selectedAgentId}
-                      options={runnableAgents.map((agent) => ({ value: agent.id, label: agent.name }))}
+                      options={runnableAgents.map((agent) => ({
+                        value: agent.id,
+                        label: agent.name,
+                      }))}
                       onValueChange={onAgentChange}
                     />
                     {capabilities.admin ? (
@@ -425,7 +495,7 @@ export function RunsPage() {
                       onKeyDown={(event) => {
                         if ((event.ctrlKey || event.metaKey) && isSubmitEnter(event)) {
                           event.preventDefault();
-                          if (!createRun.isPending) submitRun();
+                          if (!createRun.isPending && runnableAgents.length && runtimeStatus.data?.ready) submitRun();
                         }
                       }}
                     />
@@ -435,6 +505,7 @@ export function RunsPage() {
                         <p>{runtimeStatus.data.message ?? t("runtime.builtin.notReadyDefault")}</p>
                       </Banner>
                     ) : null}
+                    {!runnableAgents.length ? <Banner severity="warning">{t("run.noRunnableAgents")}</Banner> : null}
                     {!goalSaved ? <Banner severity="warning">{t("workspace.draftNotSaved")}</Banner> : null}
                     {/* 工程を進める主操作は区切り線の下の lg、失敗はその操作の行に出す（buttons.md §5.2.1、messaging.md §3.3）。 */}
                     <FormActionBar
@@ -445,6 +516,7 @@ export function RunsPage() {
                           label: t("run.form.submit"),
                           icon: PlayCircle,
                           loading: createRun.isPending,
+                          disabled: !runnableAgents.length || !runtimeStatus.data?.ready,
                           onClick: submitRun,
                           testId: "run-create-submit",
                         },
@@ -453,20 +525,28 @@ export function RunsPage() {
                         createRun.error ? (
                           <FormStatus
                             tone="danger"
-                            message={t("run.form.failed", { reason: createRun.error.message })}
+                            message={t("run.form.failed", {
+                              reason: createRun.error.message,
+                            })}
                           />
                         ) : null
                       }
                     />
                   </CardContent>
                 </Card>
-              ) : null}
-
-              <QueryState
-                query={runs}
-                loadingLabel={t("loading.runs")}
-                skeleton={<RunHistorySkeleton />}
-              >
+              </QueryState>
+            </QueryState>
+          ) : (
+            <Banner severity="warning">{t("run.createForbidden")}</Banner>
+          )
+        ) : (
+          <QueryState
+            query={runs}
+            loadingLabel={t("loading.runs")}
+            skeleton={isList ? <RunHistorySkeleton /> : <FormSkeleton fields={4} />}
+          >
+            {isList ? (
+              <>
                 {restoredSelection.missing ? (
                   <Banner severity="warning">{t("workspace.selectionMissing")}</Banner>
                 ) : null}
@@ -487,7 +567,11 @@ export function RunsPage() {
                       filters={
                         <FilterChipGroup label={t("run.filter.label")}>
                           {RUN_STATUS_FILTERS.map((filter) => (
-                            <ToggleChip key={filter} selected={runFilter === filter} onClick={() => setRunFilter(filter)}>
+                            <ToggleChip
+                              key={filter}
+                              selected={runFilter === filter}
+                              onClick={() => setRunFilter(filter)}
+                            >
                               {runStatusFilterLabel(filter)}
                             </ToggleChip>
                           ))}
@@ -515,42 +599,36 @@ export function RunsPage() {
                     )
                   }
                   agentNameOf={agentNameOf}
-                  selectedRunId={selectedRun?.id ?? null}
+                  selectedRunId={selectedRunId}
                   actionsFor={runActions}
+                  hrefFor={editor.itemHref}
                   onSelect={(runId) => {
                     restoredSelection.dismiss();
                     setSelectedRunId(runId);
+                    editor.openItem(runId);
                   }}
                 />
-              </QueryState>
-            </div>
-          }
-          right={
-            // 同じ取得の経過時間は実行履歴の側に出し、詳細は形だけにする（messaging.md §3.7）。
-            <QueryState
-              query={runs}
-              loadingLabel={t("loading.runs")}
-              skeleton={<FormSkeleton fields={4} />}
-              skeletonOnly
-              testId="run-detail-loading"
-            >
-              {selectedRun ? (
-                <RunDetail
-                  run={selectedRun}
-                  agentName={agentNameOf(selectedRun.agent_id)}
-                  actions={runActions(selectedRun)}
-                  streamMode={streamMode}
-                  onStreamModeChange={setStreamMode}
-                  websocketState={websocketState}
-                  sseState={sseState}
-                  capabilities={capabilities}
-                />
-              ) : (
-                <EmptyState title={t("common.empty.title")} hint={t("run.selectHint")} />
-              )}
-            </QueryState>
-          }
-        />
+              </>
+            ) : selectedRun ? (
+              <RunDetail
+                key={selectedRun.id}
+                run={selectedRun}
+                agentName={agentNameOf(selectedRun.agent_id)}
+                actions={runActions(selectedRun)}
+                streamMode={streamMode}
+                onStreamModeChange={setStreamMode}
+                websocketState={websocketState}
+                sseState={sseState}
+                capabilities={capabilities}
+              />
+            ) : (
+              <MissingEditorTarget
+                id={editor.target.kind === "edit" ? editor.target.id : ""}
+                onBack={() => void backToList()}
+              />
+            )}
+          </QueryState>
+        )}
       </PageBody>
     </>
   );
@@ -565,6 +643,7 @@ function RunHistoryList({
   onSelect,
   actionsFor,
   agentNameOf,
+  hrefFor,
 }: {
   runs: RunState[];
   /** 検索語・絞り込みが変わったら 1 ページ目へ戻す契機。 */
@@ -577,6 +656,7 @@ function RunHistoryList({
   actionsFor: (run: RunState) => EntityAction[];
   /** 業務 Agent の ID を名前にする（一覧に無い・読めないときは ID のまま）。 */
   agentNameOf: (agentId: string) => string;
+  hrefFor: (id: string) => string;
 }) {
   const columns: DataTableColumn<RunState>[] = [
     {
@@ -586,7 +666,9 @@ function RunHistoryList({
       render: (run) => (
         <RowTitleButton
           title={run.goal}
-          // 長いゴールは 2 行で切り詰め、全文は Tooltip と右の詳細で読む。
+          href={hrefFor(run.id)}
+          data-run-id={run.id}
+          // 長い目標の全文は全幅の詳細で読む。リンクは別タブでも開ける。
           maxLines={2}
           subtitle={`${agentNameOf(run.agent_id)} / ${formatDate(run.created_at)}`}
           current={run.id === selectedRunId}
@@ -630,7 +712,10 @@ function RunHistoryList({
           getRowKey={(run) => run.id}
           selectedRowKey={selectedRunId}
           onRowClick={(run) => onSelect(run.id)}
-          rowProps={(run) => ({ className: "align-top", "data-testid": `run-row-${run.id}` })}
+          rowProps={(run) => ({
+            className: "align-top",
+            "data-testid": `run-row-${run.id}`,
+          })}
           ariaLabel={t("run.history")}
           paginationTestId="run-history-pagination"
           empty={empty}
