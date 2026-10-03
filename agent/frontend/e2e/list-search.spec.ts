@@ -175,11 +175,11 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/approvals");
       const approvalChips = page.getByRole("group", { name: "判断の状態で絞り込み" });
       await expect(approvalChips.getByRole("button", { name: "保留中" })).toHaveAttribute("aria-pressed", "true");
-      const approvals = page.getByRole("table", { name: "承認一覧" });
-      await expect(approvals.getByRole("button", { name: "tool_approval-pending 目標 run-waiting", exact: true })).toBeVisible();
-      await expect(approvals.getByRole("button", { name: "tool_approval-done 目標 run-done", exact: true })).toHaveCount(0);
+      await expect(page.locator('a[data-approval-id="approval-pending"]')).toBeVisible();
+      await expect(page.locator('a[data-approval-id="approval-done"]')).toHaveCount(0);
       await approvalChips.getByRole("button", { name: "判断済み" }).click();
-      await expect(approvals.getByRole("button", { name: "tool_approval-done 目標 run-done", exact: true })).toBeVisible();
+      await expect(page.locator('a[data-approval-id="approval-done"]')).toBeVisible();
+      await page.locator('a[data-approval-id="approval-done"]').click();
       await expect(page.getByRole("region", { name: "承認の詳細" }).getByText("承認済み", { exact: true })).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath(`approvals-filter-${viewport.name}.png`), fullPage: true });
       await expectNoHorizontalOverflow(page);
