@@ -514,7 +514,7 @@ jobs:
         run: >-
           npx playwright test --workers=1
           e2e/card-error-boundary.spec.ts e2e/db-down-degraded.spec.ts e2e/self-hosted-fonts.spec.ts
-          e2e/sidebar-grouping.spec.ts e2e/db-gate.spec.ts
+          e2e/sidebar-grouping.spec.ts e2e/db-gate.spec.ts e2e/scrollbar-stability.spec.ts
 
       - name: Upload Playwright report
         if: failure()
@@ -670,7 +670,7 @@ jobs:
       # 全件は e2e-nightly.yml が毎晩 8 shard で実行する。CI=true で retries 2、負荷対策で 1 worker（#175）。
       - name: Playwright E2E (smoke)
         run: |
-          npx playwright test --workers=1 tests/e2e/header-utilities.spec.ts
+          npx playwright test --workers=1 tests/e2e/header-utilities.spec.ts tests/e2e/scrollbar-stability.spec.ts
           npx playwright test --workers=1 --project=desktop tests/e2e/database-gate.spec.ts
 
       - name: Upload Playwright report
@@ -872,7 +872,7 @@ jobs:
           npx playwright test
           e2e/auth-login.spec.ts e2e/run-stream-auth.spec.ts e2e/agent-runtime-flow.spec.ts
           e2e/security-management.spec.ts e2e/appearance.spec.ts e2e/self-hosted-fonts.spec.ts
-          e2e/permission-catalog.spec.ts e2e/vite-config.spec.ts
+          e2e/permission-catalog.spec.ts e2e/vite-config.spec.ts e2e/scrollbar-stability.spec.ts
 
       - name: Upload Playwright report
         if: failure()

@@ -147,7 +147,7 @@ export function Sidebar({
           </Tooltip>
         )}
       </div>
-      <nav className={cn("flex-1 overflow-y-auto overflow-x-hidden py-3", collapsed ? "px-2" : "px-3", inDrawer && "overscroll-contain")}>
+      <nav className={cn("flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable] py-3", collapsed ? "px-2" : "px-3", inDrawer && "overscroll-contain")}>
         {sections.map((section) => {
           const containsActive = section.items.some((item) => isActive(item.href));
           // セクション開閉は展開幅サイドバーでのみ作用（icon-only 幅は常に全表示）。

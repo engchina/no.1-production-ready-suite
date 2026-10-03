@@ -736,7 +736,7 @@ export function ListPicker({
       <div
         ref={viewportRef}
         className={cn(
-          "relative min-w-0 rounded-md border border-border bg-surface overscroll-contain",
+          "relative min-w-0 rounded-md border border-border bg-surface overscroll-contain [scrollbar-gutter:stable]",
           fixedHeight ? FIXED_VIEWPORT_CLASS : INFORMATION_LIST_SCROLL_CLASS,
           (loading || error || rows.length === 0) && "p-2"
         )}

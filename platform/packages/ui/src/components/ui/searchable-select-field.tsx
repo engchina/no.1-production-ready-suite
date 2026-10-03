@@ -303,7 +303,7 @@ export function SearchableSelectField({
             className={cn(
               // 候補の一覧は自分の高さの上限（bounded-scroll-area）の中でスクロールする。画面の空きが足りないときだけ
               // 全体を縮めてスクロールにする（高さは中身の実寸で測るので、全体は overflow-y-auto にしておく）。
-              "fixed z-[var(--z-dropdown)] w-[min(24rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain rounded-md border border-border bg-surface-raised shadow-[var(--shadow-popover)]",
+              "fixed z-[var(--z-dropdown)] w-[min(24rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain [scrollbar-gutter:stable] rounded-md border border-border bg-surface-raised shadow-[var(--shadow-popover)]",
               !position && "opacity-0"
             )}
             style={{ minWidth: minWidth || undefined, ...(position?.style ?? { left: -9999, top: -9999 }) }}

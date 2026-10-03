@@ -197,7 +197,7 @@ function ConfirmDialog({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={description ? descriptionId : undefined}
-        className="animate-dialog-in max-h-[90dvh] w-full max-w-md overflow-auto rounded-xl border border-border bg-surface-overlay p-5 shadow-[var(--shadow-dialog)]"
+        className="animate-dialog-in max-h-[90dvh] w-full max-w-md overflow-auto [scrollbar-gutter:stable] rounded-xl border border-border bg-surface-overlay p-5 shadow-[var(--shadow-dialog)]"
       >
         <div className="flex items-start gap-3">
           <span

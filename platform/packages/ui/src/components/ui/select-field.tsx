@@ -427,7 +427,7 @@ export function SelectField<T extends string>({
             aria-labelledby={labelId}
             data-floating-menu-placement={position?.placement}
             className={cn(
-              "fixed z-[var(--z-dropdown)] max-h-64 overflow-auto overscroll-contain rounded-md border border-border bg-surface-raised p-1 shadow-[var(--shadow-popover)]",
+              "fixed z-[var(--z-dropdown)] max-h-64 overflow-auto overscroll-contain [scrollbar-gutter:stable] rounded-md border border-border bg-surface-raised p-1 shadow-[var(--shadow-popover)]",
               !position && "opacity-0"
             )}
             style={position?.style ?? { left: -9999, top: -9999 }}
