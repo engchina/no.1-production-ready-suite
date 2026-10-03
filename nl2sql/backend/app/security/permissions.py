@@ -66,6 +66,12 @@ PERSISTENCE_RECOVER_PERMISSION = "nl2sql.persistence.recover"
 # 参照権限・実行権限・管理権限の capability）はメニュー権限の後ろに置く。
 PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(
+        "menu.chat",
+        "AI 活用",
+        "チャット",
+        implies=(QUERY_GENERATE_PERMISSION, PROFILE_READ_PERMISSION, SCHEMA_READ_PERMISSION),
+    ),
+    _menu_permission(
         "menu.query",
         "AI 活用",
         "SQL 生成",
@@ -745,6 +751,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- SQL 生成・実行 ----
     ("POST", "/nl2sql/preview"): _QUERY_GENERATE,
     ("POST", "/nl2sql/jobs"): _QUERY_GENERATE,
+    ("GET", "/nl2sql/chats"): _QUERY_GENERATE,
+    ("GET", "/nl2sql/chats/{conversation_id}"): _QUERY_GENERATE,
     ("GET", "/nl2sql/jobs/{job_id}"): _QUERY_HISTORY_READ,
     ("POST", "/nl2sql/jobs/{job_id}/cancel"): _QUERY_HISTORY_READ,
     ("POST", "/nl2sql/execute"): _SQL_EXECUTE,

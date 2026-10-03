@@ -156,6 +156,8 @@ from .models import (
     SelectAiProfilesImportRequest,
     SimilarHistoryData,
     SimilarHistoryRequest,
+    SqlChatData,
+    SqlChatPage,
     StructureToSqlData,
     StructureToSqlRequest,
     SyntheticDataGenerateRequest,
@@ -480,7 +482,11 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
     """NL2SQL 検索 job を開始する。"""
     principal = getattr(request.state, "principal", None)
     # job は生成に加えて SQL を実行する。manifest（生成）に加えて実行の権限も要求する（#242）。
-    if isinstance(principal, Principal) and not principal.has_permission(SQL_EXECUTE_PERMISSION):
+    if (
+        not req.generation_only
+        and isinstance(principal, Principal)
+        and not principal.has_permission(SQL_EXECUTE_PERMISSION)
+    ):
         raise SecurityApiError(
             403, "この機能を利用する権限がありません。", code=ROUTE_FORBIDDEN_CODE
         )
@@ -494,8 +500,42 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
                 actor_is_system_admin=bool(getattr(principal, "is_system_admin", False)),
             )
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="他の利用者の会話は継続できません。") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/chats", response_model=ApiResponse[SqlChatPage])
+def list_sql_chats(request: Request, cursor: str | None = None) -> ApiResponse[SqlChatPage]:
+    """本人の会話だけを、現在利用できる業務プロファイルの範囲で返す。"""
+    principal = getattr(request.state, "principal", None)
+    try:
+        return ApiResponse(
+            data=nl2sql_service.list_sql_chats(
+                actor=str(getattr(principal, "user_uuid", "")),
+                profile_ids=_allowed_profile_ids_for_request(request),
+                cursor=cursor,
+            )
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.get("/chats/{conversation_id}", response_model=ApiResponse[SqlChatData])
+def get_sql_chat(conversation_id: str, request: Request) -> ApiResponse[SqlChatData]:
+    principal = getattr(request.state, "principal", None)
+    try:
+        data = nl2sql_service.get_sql_chat(
+            conversation_id,
+            actor=str(getattr(principal, "user_uuid", "")),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if data is None:
+        raise HTTPException(status_code=404, detail="会話が見つかりません。")
+    _assert_profile_access(request, data.conversation.profile_id)
+    return ApiResponse(data=data)
 
 
 @router.get("/jobs/{job_id}", response_model=ApiResponse[JobData])
@@ -515,6 +555,8 @@ def get_job(job_id: str, request: Request) -> ApiResponse[JobData]:
         ) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="指定されたジョブが見つかりません。")
+    if job.generation_only:
+        _assert_profile_access(request, job.profile_id)
     return ApiResponse(data=job)
 
 

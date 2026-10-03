@@ -19,7 +19,7 @@ const MAX_VALUE_CHARS = 20_000;
  */
 export const WORKSPACE_FIELDS = {
   // チャット（#768）: 選んだ Agent・会話と、送る前の下書き。
-  chat: ["agentId", "threadId", "draft"],
+  chat: ["agentId", "threadId", "draft", "historyOpen"],
   runs: ["selectedRunId", "streamMode", "goal"],
   // 承認の一覧で選んだ承認（#808）。判断は確認し直すので残さない。
   approvals: ["selectedId"],

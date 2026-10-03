@@ -6,6 +6,7 @@ export const APP_ROUTES = {
   passwordChange: "/password/change",
   forbidden: "/forbidden",
   home: "/",
+  chat: "/chat",
   adminSql: "/admin-sql",
   tableManagement: "/table-management",
   viewManagement: "/view-management",

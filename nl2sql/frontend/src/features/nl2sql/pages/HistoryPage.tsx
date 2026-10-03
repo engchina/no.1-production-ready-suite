@@ -549,7 +549,7 @@ function HistoryDetailPanel({
         <div id="history-detail-panel-overview" role="tabpanel" aria-labelledby="history-detail-tab-overview" className="grid gap-3">
           <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(100%,9rem),1fr))]">
             <HistoryFact icon={Database} label={t("history.profile")} value={profileRecordDisplayLabel(item)} />
-            <HistoryFact icon={Rows3} label={t("history.rows")} value={formatNumber(item.result_row_count)} />
+            <HistoryFact icon={Rows3} label={t("history.rows")} value={item.generation_only ? t("history.notExecuted") : formatNumber(item.result_row_count)} />
             <HistoryFact icon={Columns3} label={t("history.columns")} value={formatNumber(item.result_columns.length)} />
           </div>
           <HistoryTimingBreakdown item={item} />

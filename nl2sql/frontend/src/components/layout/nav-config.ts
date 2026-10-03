@@ -12,6 +12,7 @@ import {
   LockKeyhole,
   MessageSquareCode,
   MessageSquareText,
+  MessagesSquare,
   Network,
   ScrollText,
   Shapes,
@@ -76,6 +77,7 @@ export const NAV_SECTIONS: NavSection[] = [
     titleKey: "nav.section.use",
     initiallyCollapsed: false,
     items: [
+      { href: APP_ROUTES.chat, labelKey: "nav.chat", icon: MessagesSquare, permission: MENU_PERMISSIONS.chat },
       { href: APP_ROUTES.query, labelKey: "nav.query", icon: Sparkles, permission: MENU_PERMISSIONS.query },
       {
         href: APP_ROUTES.directSql,

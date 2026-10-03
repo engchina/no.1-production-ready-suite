@@ -44,7 +44,7 @@ import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-s
 /**
  * 業務利用者のチャット（#768）。使ってよい業務 Agent を選んで会話する。1 往復が 1 Run で、
  * 同じ会話の前の質問と回答は組み込み Runtime がモデルへ渡す。回答の下に出典・使ったツール・
- * 承認待ちを出す。画面の型は RAG のチャットと同じ（左に会話の一覧、右に会話と入力欄）。
+ * 承認待ちを出す。画面の型は RAG と同じ（会話は既定で全幅、履歴は必要なときに開く）。
  */
 
 const ACTIVE_STATUSES = new Set<RunState["status"]>(["queued", "running"]);
@@ -71,7 +71,14 @@ export function ChatPage() {
   const queryClient = useQueryClient();
   const capabilities = useCapabilities();
   const historyInline = useHistoryInline();
+  const [historyPanelOpen, setHistoryPanelOpen] = useWorkspaceState("chat", "historyOpen", false);
   const [historySheetOpen, setHistorySheetOpen] = useState(false);
+  const historyOpen = historyInline ? historyPanelOpen : historySheetOpen;
+  const [previousHistoryInline, setPreviousHistoryInline] = useState(historyInline);
+  if (previousHistoryInline !== historyInline) {
+    setPreviousHistoryInline(historyInline);
+    setHistorySheetOpen(false);
+  }
   const historyToggleRef = useRef<HTMLButtonElement | null>(null);
   const [agentId, setAgentId] = useWorkspaceState("chat", "agentId", "", isString);
   const [threadId, setThreadId] = useWorkspaceState<"chat", string | null>(
@@ -270,16 +277,17 @@ export function ChatPage() {
         {selectedAgentId ? (
           <div
             className={
-              historyInline
+              historyInline && historyPanelOpen
                 ? "grid min-w-0 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,17.5rem)_minmax(0,1fr)]"
-                : "grid min-w-0 gap-4"
+                : "grid min-w-0 gap-4 lg:min-h-0 lg:flex-1"
             }
           >
             {historyInline ? (
               <aside
+                id="chat-history-sheet"
                 aria-label={t("chat.threads.title")}
                 data-testid="chat-history"
-                className="flex min-h-0 min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface px-3 pb-3 pt-2 shadow-sm"
+                className={historyPanelOpen ? "flex min-h-0 min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface px-3 pb-3 pt-2 shadow-sm" : "hidden"}
               >
                 <h2 className="flex min-h-8 items-center px-1 text-sm font-medium text-fg">
                   {t("chat.threads.title")}
@@ -310,15 +318,15 @@ export function ChatPage() {
                   {threadId && runs[0] ? runs[0].goal : t("chat.newConversation")}
                 </h2>
                 <div className="flex shrink-0 items-center gap-2">
-                  {historyInline ? null : (
+                  {(
                     <Button
                       ref={historyToggleRef}
                       variant="secondary"
                       size="sm"
                       icon={History}
                       aria-controls="chat-history-sheet"
-                      aria-expanded={historySheetOpen}
-                      onClick={() => setHistorySheetOpen(true)}
+                      aria-expanded={historyOpen}
+                      onClick={() => historyInline ? setHistoryPanelOpen(!historyPanelOpen) : setHistorySheetOpen(!historySheetOpen)}
                     >
                       {t("chat.threads.open")}
                     </Button>

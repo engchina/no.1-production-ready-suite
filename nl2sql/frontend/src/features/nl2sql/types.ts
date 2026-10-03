@@ -584,6 +584,11 @@ export interface JobCreateData {
 
 export interface JobData {
   job_id: string;
+  question?: string;
+  profile_id?: string;
+  conversation_id?: string;
+  previous_job_id?: string | null;
+  generation_only?: boolean;
   status: JobStatus;
   created_at: string;
   started_at?: string | null;
@@ -599,6 +604,7 @@ export interface JobData {
 }
 
 export interface HistoryItem {
+  generation_only?: boolean;
   id: string;
   question: string;
   engine: Nl2SqlEngine;
