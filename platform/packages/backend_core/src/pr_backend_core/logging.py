@@ -197,6 +197,7 @@ class StructuredFormatter(jsonlogger.JsonFormatter):
 
     def format(self, record: logging.LogRecord) -> str:
         try:
+            logger_name = record.name if isinstance(record.name, str) else "app.unknown"
             truncated = [False]
             budget = [256]
             extras = list(
@@ -236,7 +237,7 @@ class StructuredFormatter(jsonlogger.JsonFormatter):
             if access:
                 fields.update(access)
                 message = str(access["message"])
-            elif not record.name.startswith(_OWNED_PREFIXES + ("uvicorn", "gunicorn")):
+            elif not logger_name.startswith(_OWNED_PREFIXES + ("uvicorn", "gunicorn")):
                 # 外部 SDK の自由形式の本文は通常ログに持ち込まない。
                 message = "外部ライブラリの診断"
                 fields.setdefault("event", "dependency_log")
@@ -254,7 +255,7 @@ class StructuredFormatter(jsonlogger.JsonFormatter):
                     timespec="milliseconds"
                 ),
                 level=_safe_text(record.levelname)[:32],
-                name=record.name[:128],
+                name=logger_name[:128],
                 message=_safe_text(message),
                 process_id=record.process,
                 **self.identity,
