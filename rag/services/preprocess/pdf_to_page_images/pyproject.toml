@@ -4,11 +4,13 @@ version = "0.1.0"
 description = "前処理(Preprocess)microservice: PDF→ページ画像PDF(PyMuPDF ラスタライズ)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "production-ready-backend-core",
     "rag-parser-core[service]",
     "pymupdf>=1.24,<2",
 ]
 
 [tool.uv.sources]
+production-ready-backend-core = { path = "../../../../platform/packages/backend_core", editable = true }
 rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
 
 [build-system]

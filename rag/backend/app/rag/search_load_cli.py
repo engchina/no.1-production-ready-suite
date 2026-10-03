@@ -23,6 +23,7 @@ from typing import Any
 
 import httpx
 from pr_backend_core.internal_http import http_client_options
+from pr_backend_core.logging import configure_cli_logging
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.clients.http_retry import HttpRetryConfig, async_request_with_retry
@@ -121,6 +122,7 @@ class SearchLoadRun:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint。"""
+    configure_cli_logging("rag")
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:

@@ -11,6 +11,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from pr_backend_core.logging import configure_cli_logging
+
 from app.rag.file_processing_evaluation import (
     REQUIRED_FILE_PROCESSING_SOURCE_KINDS,
     FileProcessingContractReport,
@@ -24,6 +26,7 @@ from app.rag.file_processing_evaluation import (
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint。"""
+    configure_cli_logging("rag")
     parser = argparse.ArgumentParser(
         prog="rag-file-processing-golden",
         description=(

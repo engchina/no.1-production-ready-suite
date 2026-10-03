@@ -93,3 +93,7 @@ This deployment keeps the approved architecture:
 - LLM/VLM: OCI Enterprise AI
 - Embedding/rerank: OCI Generative AI
 - Vector search and application state: Oracle AI Database (Oracle AI Vector Search)
+
+## 共通ログ（JST）
+
+API / worker の stderr、Nginx JSON access、共有 tail / export の契約と保持・権限確認は [共通ログ仕様](../platform/docs/logging-standard.md) に従う（#858）。`scripts/tail-logs.sh` で製品の unit を読む。既存 Compute の Nginx は共有 template の反映と `nginx -t` が必要。実ホストの保持値は変更前に確認する。

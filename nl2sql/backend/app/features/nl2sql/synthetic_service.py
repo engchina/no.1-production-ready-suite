@@ -15,6 +15,8 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import HTTPException
+from pr_backend_core.logging import safe_exception_fields
+from pr_backend_core.observability.request_context import bind_log_context
 
 from app.security.domain import Principal
 from app.security.request_actor import actor_scope
@@ -321,75 +323,78 @@ class SyntheticService:
         raise RuntimeError("生成状態の競合により更新できません。")
 
     def execute(self, run_id: str) -> None:
-        try:
-            run = self.store.get(run_id)
-            if not run:
-                return
-            actor = authorize(self.resolve_actor(run.actor_id))
-            if run.context_id != context_id(get_settings()):
-                raise HTTPException(409, "受付時から DB 接続先が変更されました。")
-            req = SyntheticDataGenerateRequest.model_validate(
-                {k: v for k, v in run.request.items() if k != "_object_ids"}
-            )
-            if req.profile_id and not actor.can_use_profile(req.profile_id):
-                raise HTTPException(403, "Profile の利用権限が変更されました。")
-            ids = self.preflight([t.table_name for t in run.targets], req.profile_name)
-            if ids != run.request.get("_object_ids"):
-                raise HTTPException(
-                    409, "受付後に対象テーブルが作り直されました。再確認が必要です。"
+        with bind_log_context(run_id=run_id):
+            try:
+                run = self.store.get(run_id)
+                if not run:
+                    return
+                actor = authorize(self.resolve_actor(run.actor_id))
+                if run.context_id != context_id(get_settings()):
+                    raise HTTPException(409, "受付時から DB 接続先が変更されました。")
+                req = SyntheticDataGenerateRequest.model_validate(
+                    {k: v for k, v in run.request.items() if k != "_object_ids"}
                 )
+                if req.profile_id and not actor.can_use_profile(req.profile_id):
+                    raise HTTPException(403, "Profile の利用権限が変更されました。")
+                ids = self.preflight([t.table_name for t in run.targets], req.profile_name)
+                if ids != run.request.get("_object_ids"):
+                    raise HTTPException(
+                        409, "受付後に対象テーブルが作り直されました。再確認が必要です。"
+                    )
 
-            def record_session(conn: Any) -> None:
-                session = capture_session(conn)
-                self.update(run_id, lambda r: setattr(r, "session", session))
-                # Callback の永続化を確認してから、初めて Oracle の mutation を許可する。
-                stored = self.store.get(run_id)
-                if not stored or stored.session != session or stored.status != "running":
-                    raise RuntimeError("実行セッションの保存を確認できません。")
+                def record_session(conn: Any) -> None:
+                    session = capture_session(conn)
+                    self.update(run_id, lambda r: setattr(r, "session", session))
+                    # Callback の永続化を確認してから、初めて Oracle の mutation を許可する。
+                    stored = self.store.get(run_id)
+                    if not stored or stored.session != session or stored.status != "running":
+                        raise RuntimeError("実行セッションの保存を確認できません。")
 
-            with actor_scope(actor.user_uuid, is_system_admin=actor.is_system_admin):
-                if run.preview:
-                    run.staging = self.preview.plan(run)
+                with actor_scope(actor.user_uuid, is_system_admin=actor.is_system_admin):
+                    if run.preview:
+                        run.staging = self.preview.plan(run)
 
-                    def persist(staging: dict[str, Any]) -> None:
-                        self.update(run_id, lambda r: setattr(r, "staging", staging))
+                        def persist(staging: dict[str, Any]) -> None:
+                            self.update(run_id, lambda r: setattr(r, "staging", staging))
 
-                    persist(run.staging)
-                    self.preview.prepare(run, persist)
-                names = [
-                    run.staging[t.table_name]["name"] if run.preview else t.table_name
-                    for t in run.targets
+                        persist(run.staging)
+                        self.preview.prepare(run, persist)
+                    names = [
+                        run.staging[t.table_name]["name"] if run.preview else t.table_name
+                        for t in run.targets
+                    ]
+                    self.adapter.generate_synthetic_data(
+                        table_name=names[0] if len(names) == 1 else "",
+                        object_list=names if len(names) > 1 else [],
+                        row_count=req.rows_per_table or req.row_count,
+                        profile_name=req.profile_name,
+                        user_prompt="\n".join(p for p in [req.user_prompt, req.extra_prompt] if p),
+                        sample_rows=req.sample_rows,
+                        use_comments=req.use_comments,
+                        on_connection=record_session,
+                        staging=run.preview,
+                    )
+
+                def returned(r: SyntheticRun) -> None:
+                    r.execution_returned = True
+                    r.status = "verifying"
+
+                self.update(run_id, returned)
+            except Exception as exc:
+                message = str(getattr(exc, "detail", getattr(exc, "public_message", str(exc))))[
+                    :2000
                 ]
-                self.adapter.generate_synthetic_data(
-                    table_name=names[0] if len(names) == 1 else "",
-                    object_list=names if len(names) > 1 else [],
-                    row_count=req.rows_per_table or req.row_count,
-                    profile_name=req.profile_name,
-                    user_prompt="\n".join(p for p in [req.user_prompt, req.extra_prompt] if p),
-                    sample_rows=req.sample_rows,
-                    use_comments=req.use_comments,
-                    on_connection=record_session,
-                    staging=run.preview,
-                )
 
-            def returned(r: SyntheticRun) -> None:
-                r.execution_returned = True
-                r.status = "verifying"
+                def failed(r: SyntheticRun) -> None:
+                    r.message = message
+                    r.execution_returned = True
+                    r.status = "unknown" if r.session else "failed"
+                    if not r.session:
+                        r.finished_at = now()
+                        for t in r.targets:
+                            t.status, t.loaded_rows, t.error = "failed", 0, message
 
-            self.update(run_id, returned)
-        except Exception as exc:
-            message = str(getattr(exc, "detail", getattr(exc, "public_message", str(exc))))[:2000]
-
-            def failed(r: SyntheticRun) -> None:
-                r.message = message
-                r.execution_returned = True
-                r.status = "unknown" if r.session else "failed"
-                if not r.session:
-                    r.finished_at = now()
-                    for t in r.targets:
-                        t.status, t.loaded_rows, t.error = "failed", 0, message
-
-            self.update(run_id, failed)
+                self.update(run_id, failed)
 
     def reconcile(self, run: SyntheticRun) -> None:
         if run.status == "pending" or run.status in TERMINAL:
@@ -506,7 +511,7 @@ def worker_loop(stop: threading.Event, tick: Callable[[], None] | None = None) -
                 "synthetic_worker_poll_failed",
                 extra={
                     "error_type": type(exc).__name__,
-                    "error": str(exc)[:300],
+                    **safe_exception_fields(exc),
                     "consecutive_failures": failures,
                 },
             )

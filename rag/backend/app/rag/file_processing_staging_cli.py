@@ -12,6 +12,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from pr_backend_core.logging import configure_cli_logging
+
 from app.config import Settings, get_settings
 from app.rag.chunk_template_scorecard import (
     ChunkTemplateScorecard,
@@ -199,6 +201,7 @@ SENSITIVE_STAGING_PAYLOAD_KEYS = frozenset(
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint。"""
+    configure_cli_logging("rag")
     parser = argparse.ArgumentParser(
         prog="rag-file-processing-staging",
         description=(

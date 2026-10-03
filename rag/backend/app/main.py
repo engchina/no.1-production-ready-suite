@@ -4,13 +4,13 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
-from time import perf_counter
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 
 # 共有 backend インフラ（CORS / request-id / エラー envelope）。
 from pr_backend_core.api.errors import api_error_response, http_exception_messages
+from pr_backend_core.observability.metrics import MetricsMiddleware
 from pr_backend_core.observability.request_context import generate_request_id
 from pr_backend_core.security.cors import configure_cors
 from pr_system_settings.auth.errors import SecurityApiError, SecurityMigrationRequired
@@ -162,10 +162,8 @@ def create_app() -> FastAPI:
         dependency を通らない応答（公開 path・404 など）のための初期値だけを作る。
         production では client の `X-User-ID` と対象範囲の header を使わない。
         """
-        started_at = perf_counter()
-        # request id の検証/採番は共有インフラへ委譲する。
-        request_id = generate_request_id(request.headers.get("x-request-id"))
-        request.state.request_id = request_id
+        # 外側の共通 ASGI middleware が body 完了まで HTTP 相関とメトリクスを持つ。
+        request_id = _response_request_id(request)
         local_mode = settings.local_debug_enabled
         context = audit_request_context_from_headers(
             request.headers,
@@ -176,26 +174,11 @@ def create_app() -> FastAPI:
         )
         context_token = set_audit_request_context(context)
         try:
-            response = await call_next(request)
-        except Exception:
-            record_http_request(
-                method=request.method,
-                path=_route_path(request),
-                status=500,
-                seconds=perf_counter() - started_at,
-            )
-            raise
-        else:
-            response.headers["X-Request-ID"] = request_id
-            record_http_request(
-                method=request.method,
-                path=_route_path(request),
-                status=response.status_code,
-                seconds=perf_counter() - started_at,
-            )
-            return response
+            return await call_next(request)
         finally:
             reset_audit_request_context(context_token)
+
+    app.add_middleware(MetricsMiddleware, record_request=record_http_request)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:

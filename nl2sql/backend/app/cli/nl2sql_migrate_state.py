@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from pr_backend_core.logging import configure_cli_logging
+
 from app.features.nl2sql.incremental_observability import record_outbox_lag
 from app.features.nl2sql.incremental_store import OracleIncrementalNl2SqlRepository
 from app.features.nl2sql.models import Nl2SqlProfile, SchemaCatalog
@@ -314,6 +316,7 @@ def replay_migration_outbox(
 
 
 def main() -> int:
+    configure_cli_logging("nl2sql")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="validate and print counts only")
     parser.add_argument("--apply", action="store_true", help="migrate snapshot data")

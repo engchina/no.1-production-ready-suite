@@ -441,6 +441,12 @@ EOF
 }
 
 configure_nginx() {
+  # log_format は http context に置く。テストでは conf.d の場所も隔離する。
+  local logging_dir="${NGINX_LOGGING_CONF_DIR:-/etc/nginx/conf.d}"
+  local template_dir
+  template_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../platform/templates/nginx" && pwd)"
+  mkdir -p "${logging_dir}"
+  install -m 0644 "${template_dir}/logging.conf" "${logging_dir}/production-ready-logging.conf"
   log "Configuring Nginx on port ${APPLICATION_PORT}."
   cat > "${NGINX_SITES_AVAILABLE_DIR}/production-ready-agent" <<EOF
 server {
@@ -450,7 +456,8 @@ server {
     root ${FRONTEND_DIR}/dist;
     index index.html;
 
-    access_log /var/log/nginx/production-ready-agent-access.log;
+    set \$pr_service_name "production-ready-agent";
+    access_log /var/log/nginx/production-ready-agent-access.log production_ready_json if=\$pr_loggable;
     error_log /var/log/nginx/production-ready-agent-error.log warn;
 
     client_max_body_size 100M;
@@ -469,6 +476,7 @@ server {
         proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$http_host;
+        proxy_set_header X-Request-ID \$pr_request_id;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;

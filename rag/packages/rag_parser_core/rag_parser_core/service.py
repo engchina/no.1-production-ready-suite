@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, UploadFile
+from pr_backend_core.logging import configure_http_logging
 from pydantic import ValidationError
 
 from rag_parser_core.registry import ParserRegistryResult, run_external_adapter
@@ -94,6 +95,7 @@ def create_parse_app(
     app = FastAPI(
         title=title or f"parser-{backend}", docs_url=None, redoc_url=None, openapi_url=None
     )
+    configure_http_logging(app, service_name=app.title)
 
     @app.get("/health", response_model=ParseHealth)
     async def health() -> ParseHealth:
@@ -151,6 +153,7 @@ def create_service_parse_app(
     app = FastAPI(
         title=title or f"parser-{backend}", docs_url=None, redoc_url=None, openapi_url=None
     )
+    configure_http_logging(app, service_name=app.title)
 
     @app.get("/health", response_model=ParseHealth)
     async def health() -> ParseHealth:

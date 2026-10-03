@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Unstructured parser microservice (independent dependency boundary)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "production-ready-backend-core",
     "rag-parser-core[service]",
     "unstructured[all-docs]==0.27.8",
     # unstructured-inference が import する cv2 は、GUI 版ではなく headless 版で入れる(#310)。
@@ -17,6 +18,7 @@ dependencies = [
 exclude-dependencies = ["opencv-python"]
 
 [tool.uv.sources]
+production-ready-backend-core = { path = "../../../../platform/packages/backend_core", editable = true }
 rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
 
 [build-system]

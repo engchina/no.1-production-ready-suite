@@ -34,6 +34,7 @@ from typing import Any
 
 import httpx
 from pr_backend_core.internal_http import http_client_options
+from pr_backend_core.logging import configure_cli_logging
 
 from app.rag.evaluation_cli import _request_headers
 
@@ -420,6 +421,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | None = None) -> int:
+    configure_cli_logging("rag")
     args = _build_parser().parse_args(argv)
     if args.command == "crag-goldset":
         return run_crag_goldset(args.goldset, llm_judge=args.llm_judge)

@@ -7,6 +7,8 @@ import json
 import sys
 from collections.abc import Sequence
 
+from pr_backend_core.logging import configure_cli_logging
+
 from app.rag.system_schema import (
     DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED,
     RECREATE_CONFIRMATION,
@@ -64,6 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    configure_cli_logging("rag")
     args = build_parser().parse_args(argv)
     try:
         if args.command == "status":

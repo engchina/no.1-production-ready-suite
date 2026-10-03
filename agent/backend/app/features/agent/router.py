@@ -40,6 +40,7 @@ from fastapi import (
 )
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse
+from pr_backend_core.logging import safe_exception_fields
 from pr_backend_core.mcp import mcp_http_response
 from pr_system_settings.database import build_database_router
 from pr_system_settings.database_status import (
@@ -3486,7 +3487,7 @@ def _persist(action: Callable[[], None]) -> None:
     try:
         action()
     except ControlPlaneStoreError as exc:
-        logger.warning("agent_control_plane_persist_failed", extra={"reason": str(exc)})
+        logger.warning("agent_control_plane_persist_failed", extra={**safe_exception_fields(exc)})
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 

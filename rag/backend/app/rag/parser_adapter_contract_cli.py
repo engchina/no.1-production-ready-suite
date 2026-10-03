@@ -8,6 +8,8 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from pr_backend_core.logging import configure_cli_logging
+
 from app.config import get_settings
 from app.rag.parser_adapter_contract import (
     parser_adapter_contract_artifact_payload,
@@ -21,6 +23,7 @@ from app.rag.parser_adapter_contract import (
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint。"""
+    configure_cli_logging("rag")
     parser = argparse.ArgumentParser(
         prog="rag-parser-adapter-contract",
         description=(

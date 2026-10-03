@@ -6,6 +6,8 @@ import argparse
 import json
 from typing import Any
 
+from pr_backend_core.logging import configure_cli_logging
+
 from app.features.settings.system_schema import SystemSchemaError, system_schema_manager
 from app.features.settings.system_schema_runtime import reset_system_schema_runtime
 
@@ -15,6 +17,7 @@ def _stable_json(value: dict[str, Any]) -> str:
 
 
 def main() -> int:
+    configure_cli_logging("nl2sql")
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("--status", action="store_true", help="read-only status")

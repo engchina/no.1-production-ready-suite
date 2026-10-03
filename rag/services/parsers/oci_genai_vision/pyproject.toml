@@ -5,10 +5,12 @@ description = "OCI Generative AI (Vision) parser microservice (OCI クラウド�
 requires-python = ">=3.12,<3.13"
 # OCI Generative AI は OpenAI 互換の API キー認証(httpx、oci 署名不要)のため oci SDK は不要。
 dependencies = [
+    "production-ready-backend-core",
     "rag-parser-core[service]",
 ]
 
 [tool.uv.sources]
+production-ready-backend-core = { path = "../../../../platform/packages/backend_core", editable = true }
 rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
 
 [build-system]

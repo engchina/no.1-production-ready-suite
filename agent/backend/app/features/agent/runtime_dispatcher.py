@@ -18,6 +18,9 @@ import os
 import socket
 from uuid import uuid4
 
+from pr_backend_core import configure_logging
+from pr_backend_core.observability.request_context import bind_log_context
+
 from app.features.agent import builtin_runtime
 from app.features.agent.runtime import builtin_resume_pending, runtime_repository
 from app.settings import get_settings
@@ -38,10 +41,11 @@ async def dispatch_once(worker_id: str) -> bool:
     )
     if run is None:
         return False
-    if builtin_resume_pending(run):
-        await builtin_runtime.resume_run(run.id)
-    else:
-        await builtin_runtime.execute_run(run.id)
+    with bind_log_context(run_id=run.id, worker_id=worker_id):
+        if builtin_resume_pending(run):
+            await builtin_runtime.resume_run(run.id)
+        else:
+            await builtin_runtime.execute_run(run.id)
     return True
 
 
@@ -52,7 +56,10 @@ async def run_forever() -> None:
         f"{socket.gethostname()}-{uuid4().hex[:8]}",
     )
     poll_seconds = max(0.1, settings.agent_runtime_dispatch_poll_seconds)
-    logger.info("runtime-dispatcher started: %s", worker_id)
+    logger.info(
+        "実行 dispatcher を開始しました",
+        extra={"event": "runtime_dispatcher_started", "worker_id": worker_id},
+    )
     failures = 0
     while True:
         try:
@@ -73,6 +80,14 @@ async def run_forever() -> None:
 
 
 def main() -> None:
+    settings = get_settings()
+    configure_logging(
+        settings.log_level,
+        service_name=settings.service_name,
+        service_version=settings.app_version,
+        environment=settings.environment,
+        component="runtime_dispatcher",
+    )
     asyncio.run(run_forever())
 
 

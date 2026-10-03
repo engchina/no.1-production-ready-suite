@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import cast
 
+from pr_backend_core.logging import safe_exception_fields
+
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
@@ -476,7 +478,7 @@ class RagPipeline:
         except Exception as exc:  # 保存は補助。回答の返却を止めない。
             logger.warning(
                 "answer record save failed",
-                extra={"trace_id": trace_id, "error": str(exc)},
+                extra={"trace_id": trace_id, **safe_exception_fields(exc)},
             )
 
     async def _read_field_conditions(
@@ -499,7 +501,7 @@ class RagPipeline:
                 else []
             )
         except Exception as exc:  # 読み取りは補助。条件なしで検索を続ける。
-            logger.warning("field definitions load failed", extra={"error": str(exc)})
+            logger.warning("field definitions load failed", extra={**safe_exception_fields(exc)})
             return []
         if not field_sets:
             return []
@@ -547,7 +549,7 @@ class RagPipeline:
                 query, history_text, system_prompt=HISTORY_REWRITE_SYSTEM_PROMPT
             )
         except Exception as exc:  # 書き換えは補助。元の質問で回答を続ける。
-            logger.warning("history rewrite failed", extra={"error": str(exc)})
+            logger.warning("history rewrite failed", extra={**safe_exception_fields(exc)})
             return ""
         rewritten = text.strip().strip("「」\"'").strip()
         rewritten = rewritten.splitlines()[0].strip() if rewritten else ""

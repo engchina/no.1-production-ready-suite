@@ -58,8 +58,7 @@ def create_app(
 
     configure_cors(app, origins=cors_origins)
 
-    if enable_metrics:
-        app.add_middleware(MetricsMiddleware)
+    app.add_middleware(MetricsMiddleware, enable_metrics=enable_metrics)
 
     install_exception_handlers(app, unhandled_message=unhandled_message)
 

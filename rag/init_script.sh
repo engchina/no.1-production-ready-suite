@@ -720,7 +720,7 @@ configure_systemd() {
   write_backend_unit \
     "${SYSTEMD_UNIT_DIR}/${BACKEND_UNIT}" \
     "Production Ready RAG backend" \
-    "${BACKEND_DIR}/.venv/bin/gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind ${BACKEND_HOST}:${BACKEND_PORT} --workers 2 --timeout 60 --graceful-timeout 30 --keep-alive 5 --access-logfile - --error-logfile - --no-control-socket" \
+    "${BACKEND_DIR}/.venv/bin/gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind ${BACKEND_HOST}:${BACKEND_PORT} --workers 2 --timeout 60 --graceful-timeout 30 --keep-alive 5 --error-logfile - --no-control-socket" \
     "Environment=RAG_INGESTION_QUEUE_INPROCESS_WORKER_ENABLED=false
 Environment=RAG_PARSER_READINESS_PROBE_ENABLED=true
 Restart=always
@@ -818,6 +818,12 @@ nginx_client_max_body_size() {
 # RAG の backend は共通認証の login（RAG_AUTH_MODE=production。構成管理者 system_admin と DB ユーザー）で UI と API を保護する。
 # Nginx には認証を置かず、frontend の配信と /api/ の proxy（SSE のため buffering 無効）だけを行う。
 configure_nginx() {
+  # log_format は http context に置く。テストでは conf.d の場所も隔離する。
+  local logging_dir="${NGINX_LOGGING_CONF_DIR:-/etc/nginx/conf.d}"
+  local template_dir
+  template_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../platform/templates/nginx" && pwd)"
+  mkdir -p "${logging_dir}"
+  install -m 0644 "${template_dir}/logging.conf" "${logging_dir}/production-ready-logging.conf"
   local client_max_body_size
   client_max_body_size="$(nginx_client_max_body_size)" || return 1
   log "Configuring Nginx on port ${APPLICATION_PORT} (client_max_body_size ${client_max_body_size})."
@@ -829,7 +835,8 @@ server {
     root ${FRONTEND_DIR}/dist;
     index index.html;
 
-    access_log /var/log/nginx/production-ready-rag-access.log;
+    set \$pr_service_name "production-ready-rag";
+    access_log /var/log/nginx/production-ready-rag-access.log production_ready_json if=\$pr_loggable;
     error_log /var/log/nginx/production-ready-rag-error.log warn;
 
     # backend の RAG_MAX_UPLOAD_BYTES + multipart の余白（Refs #306）。
@@ -853,6 +860,7 @@ server {
         proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
+        proxy_set_header X-Request-ID \$pr_request_id;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
@@ -867,6 +875,7 @@ server {
         proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
+        proxy_set_header X-Request-ID \$pr_request_id;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;

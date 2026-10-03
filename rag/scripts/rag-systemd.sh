@@ -144,7 +144,7 @@ Environment=HOME=${home}
 Environment=PYTHONUNBUFFERED=1
 Environment=PORT=${port}
 ${extra_env}${env_files}EnvironmentFile=-${runtime_env}
-ExecStart=${workdir}/.venv/bin/gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind 127.0.0.1:${port} --workers 1 --timeout ${timeout} --graceful-timeout 30 --access-logfile - --error-logfile -
+ExecStart=${workdir}/.venv/bin/gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind 127.0.0.1:${port} --workers 1 --timeout ${timeout} --graceful-timeout 30 --error-logfile -
 Restart=on-failure
 RestartSec=5
 

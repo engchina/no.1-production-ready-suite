@@ -30,6 +30,7 @@ prepare_case() {
   export RAG_INIT_TEST_MODE=true
   export SYSTEMD_UNIT_DIR="${case_dir}/units"
   export SUDOERS_DIR="${case_dir}/sudoers.d"
+  export NGINX_LOGGING_CONF_DIR="${case_dir}/conf.d"
   export NGINX_SITES_AVAILABLE_DIR="${case_dir}/sites-available"
   export NGINX_SITES_ENABLED_DIR="${case_dir}/sites-enabled"
   export DATA_DIR="${case_dir}/data"
@@ -321,7 +322,7 @@ docling_unit="${units}/production-ready-rag-parser-docling.service"
 vision_unit="${units}/production-ready-rag-parser-oci-genai-vision.service"
 first_log="${TEST_TMP_DIR}/systemd/first-systemctl.log"
 second_log="${TEST_TMP_DIR}/systemd/second-systemctl.log"
-grep -Fqx "ExecStart=${rag_dir}/backend/.venv/bin/gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind 127.0.0.1:8000 --workers 2 --timeout 60 --graceful-timeout 30 --keep-alive 5 --access-logfile - --error-logfile - --no-control-socket" "${backend_unit}" \
+grep -Fqx "ExecStart=${rag_dir}/backend/.venv/bin/gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind 127.0.0.1:8000 --workers 2 --timeout 60 --graceful-timeout 30 --keep-alive 5 --error-logfile - --no-control-socket" "${backend_unit}" \
   || fail "backend が venv の gunicorn で 127.0.0.1:8000 だけに bind していない"
 grep -Fqx "User=${service_user}" "${backend_unit}" || fail "backend が SERVICE_USER で動いていない"
 grep -Fqx 'Environment=RAG_ENVIRONMENT=prod' "${backend_unit}" || fail "backend の RAG_ENVIRONMENT が prod ではない"
@@ -342,7 +343,7 @@ grep -Fqx 'Restart=on-failure' "${worker_unit}" || fail "ingestion-worker の Re
 if grep -Fq 'INPROCESS_WORKER' "${worker_unit}"; then
   fail "ingestion-worker の unit が in-process worker の設定を持っている"
 fi
-grep -Fqx "ExecStart=${rag_dir}/services/parsers/docling/.venv/bin/gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind 127.0.0.1:18020 --workers 1 --timeout 300 --graceful-timeout 30 --access-logfile - --error-logfile -" "${docling_unit}" \
+grep -Fqx "ExecStart=${rag_dir}/services/parsers/docling/.venv/bin/gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind 127.0.0.1:18020 --workers 1 --timeout 300 --graceful-timeout 30 --error-logfile -" "${docling_unit}" \
   || fail "parser-docling が自分の venv で 127.0.0.1:18020 に bind していない"
 grep -Fqx "WorkingDirectory=${rag_dir}/services/parsers/docling" "${docling_unit}" || fail "parser-docling の作業ディレクトリが違う"
 grep -Fqx "EnvironmentFile=-${rag_dir}/backend/service-runtime.env" "${docling_unit}" \
@@ -510,7 +511,7 @@ test -f "${dev_dir}/production-ready-rag-parser-docling.service" || fail "開発
 test ! -e "${dev_dir}/production-ready-rag-parser-asr.service" || fail "開発環境の既定（--cpu）に GPU の parser を含めた"
 test ! -e "${dev_dir}/production-ready-rag-parser-unstructured.service" \
   || fail "開発環境の既定（--cpu）に Unstructured を含めた（Docling が既定。--unstructured で足す）"
-grep -Fqx "ExecStart=${REPO_DIR}/services/parsers/docling/.venv/bin/gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind 127.0.0.1:18020 --workers 1 --timeout 300 --graceful-timeout 30 --access-logfile - --error-logfile -" \
+grep -Fqx "ExecStart=${REPO_DIR}/services/parsers/docling/.venv/bin/gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind 127.0.0.1:18020 --workers 1 --timeout 300 --graceful-timeout 30 --error-logfile -" \
   "${dev_dir}/production-ready-rag-parser-docling.service" || fail "開発環境の unit が本番と同じ起動方法ではない"
 grep -Fqx "User=$(id -un)" "${dev_dir}/production-ready-rag-parser-docling.service" \
   || fail "開発環境の unit が現在のユーザーで動かない"

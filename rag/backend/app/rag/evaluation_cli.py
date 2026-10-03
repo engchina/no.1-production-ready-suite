@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 import httpx
 from pr_backend_core.internal_http import http_client_options
+from pr_backend_core.logging import configure_cli_logging
 from pydantic import ValidationError
 
 from app.clients.http_retry import HttpRetryConfig, request_with_retry
@@ -68,6 +69,7 @@ class GateEvaluation:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint。"""
+    configure_cli_logging("rag")
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:

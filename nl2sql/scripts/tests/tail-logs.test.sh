@@ -189,11 +189,11 @@ app_info='{"_SYSTEMD_UNIT":"'"${BACKEND_UNIT}"'","MESSAGE":"{\"timestamp\":\"202
 plain_line='{"_SYSTEMD_UNIT":"'"${ONTOLOGY_UNIT}"'","MESSAGE":"Traceback (most recent call last):"}'
 
 result="$(format_case "" false "${app_error}")"
-assert_contains "${result}" "15:08:12.123" "整形後にタイムスタンプが出ない"
+assert_contains "${result}" "2026-09-01T00:08:12.123+09:00" "整形後にタイムスタンプが出ない"
 assert_contains "${result}" "ERROR" "整形後に level が出ない"
 assert_contains "${result}" "app.api" "整形後に logger 名が出ない"
 assert_contains "${result}" "boom" "整形後に message が出ない"
-assert_contains "${result}" "request_id=abc" "整形後に追加フィールドが出ない"
+assert_contains "${result}" 'request_id="abc"' "整形後に追加フィールドが出ない"
 assert_not_contains "${result}" '{"timestamp"' "整形されず生の JSON が残っている"
 
 result="$(format_case "" true "${app_error}")"

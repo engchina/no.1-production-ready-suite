@@ -24,6 +24,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Literal, Protocol, cast
 
+from pr_backend_core.logging import safe_exception_fields
+
 from app.features.agent import storage_backend
 from app.oracle_connection import connect_platform_oracle
 from app.secret_box import SecretBoxError, open_secret, seal_secret
@@ -392,7 +394,7 @@ def restore_control_plane() -> dict[str, int]:
                 except Exception as exc:  # noqa: BLE001 - 1 件の不正で起動を止めない
                     logger.warning(
                         "agent_control_plane_restore_failed",
-                        extra={"kind": kind, "item_id": item_id, "reason": str(exc)},
+                        extra={"kind": kind, "item_id": item_id, **safe_exception_fields(exc)},
                     )
                     continue
                 restored[kind] += 1
