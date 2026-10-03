@@ -116,7 +116,7 @@ describe("workspace-state", () => {
 });
 
 
-describe("#860 保存キーの移行", () => {
+describe("Issue 860 保存キーの移行", () => {
   it("選択 ID・草稿・保存時刻を保持し、旧キーだけを消す", () => {
     const record = JSON.stringify({ value: "bv-42", savedAt: Date.now() });
     storage.setItem(`${WORKSPACE_NAMESPACE}search.businessViewId`, record);
