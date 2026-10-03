@@ -60,7 +60,7 @@ class UserUsage(UsageTotals):
 
 
 class ModelUsage(UsageTotals):
-    # 利用量の無い Run は空文字（画面では「記録なし」）。
+    # 利用量が記録済みでモデル名だけが無い場合は空文字。
     model: str
 
 
@@ -148,8 +148,10 @@ def build_usage_report(
             fact.user_uuid,
             UserUsage(user_uuid=fact.user_uuid, display_name=""),
         ).add(fact)
-        model = fact.model or ""
-        by_model.setdefault(model, ModelUsage(model=model)).add(fact)
+        # 欠測をモデルの0利用量として扱わない。記録済みの0回・0 token は内訳に残す。
+        if fact.has_usage:
+            model = fact.model or ""
+            by_model.setdefault(model, ModelUsage(model=model)).add(fact)
         day = created.astimezone(tz).date()
         if day in by_day:
             by_day[day].add(fact)

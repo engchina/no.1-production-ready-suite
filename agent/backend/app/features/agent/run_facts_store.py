@@ -375,9 +375,11 @@ def usage_totals_sql(scope: str) -> str:
 
 def usage_dimension_sql(dimension: str, scope: str) -> str:
     column = USAGE_DIMENSIONS[dimension]
+    # モデル内訳だけは利用量記録済みの実行が対象。他の内訳は全実行数を維持する。
+    usage_filter = " AND REQUESTS IS NOT NULL" if dimension == "model" else ""
     return (
         f"SELECT {column}, MAX(AGENT_NAME), {_USAGE_MEASURES} "  # nosec B608 - 固定の列
-        f"FROM ({usage_source_sql(scope)}) WHERE IN_PERIOD = 1 GROUP BY {column}"
+        f"FROM ({usage_source_sql(scope)}) WHERE IN_PERIOD = 1{usage_filter} GROUP BY {column}"
     )
 
 

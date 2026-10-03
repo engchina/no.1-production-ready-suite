@@ -382,7 +382,10 @@ def test_usage_report_is_aggregated_in_sql() -> None:
                 (ALICE, None, 2, 1, 1, 100, 20, 120),
                 (None, None, 1, 1, 1, 0, 0, 0),
             ],
-            "GROUP BY MODEL": [(None, None, 1, 0, 0, 0, 0, 0)],
+            "GROUP BY MODEL": [
+                ("model-a", None, 1, 1, 1, 100, 20, 120),
+                (None, None, 1, 1, 1, 300, 100, 400),
+            ],
             "GROUP BY RUN_DAY": [
                 ("2026-10-02", None, 2, 2, 2, 400, 120, 520),
                 ("2025-01-01", None, 1, 0, 0, 0, 0, 0),
@@ -410,7 +413,11 @@ def test_usage_report_is_aggregated_in_sql() -> None:
         (ALICE, "Alice"),
         (None, ""),
     ]
-    assert [item.model for item in report.by_model] == [""]
+    # モデル名だけが無い記録の token は保持し、利用量未記録とは区別する。
+    assert [(item.model, item.total_tokens) for item in report.by_model] == [
+        ("", 400),
+        ("model-a", 120),
+    ]
     assert len(report.by_day) == 7
     assert {item.day: item.runs for item in report.by_day}[date(2026, 10, 2)] == 2
     sql, binds = connection.executed[0]
@@ -422,6 +429,11 @@ def test_usage_report_is_aggregated_in_sql() -> None:
     assert binds["until"] == datetime(2026, 10, 2, 3, 0)
     assert {binds["scope_0"], binds["scope_1"]} == {"sales", "default"}
     assert len(connection.executed) == 5
+    model_sql = next(sql for sql, _ in connection.executed if "GROUP BY MODEL" in sql)
+    assert "WHERE IN_PERIOD = 1 AND REQUESTS IS NOT NULL GROUP BY MODEL" in model_sql
+    for statement, _ in connection.executed:
+        if statement != model_sql:
+            assert "AND REQUESTS IS NOT NULL" not in statement
 
 
 def test_usage_report_without_allowed_agents_does_not_query() -> None:
