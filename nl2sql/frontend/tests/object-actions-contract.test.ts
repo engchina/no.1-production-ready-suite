@@ -80,7 +80,7 @@ test("行/詳細の overflow menu は viewport 基準で反転し、狭い時だ
   assert.match(floatingSource, /getBoundingClientRect/u);
   assert.match(floatingSource, /menu\.scrollHeight \+ menuBorderHeight/u);
   assert.match(floatingSource, /constrained \? \{ maxHeight/u);
-  assert.match(floatingSource, /position\?\.constrained && "overflow-y-auto overscroll-contain"/u);
+  assert.match(floatingSource, /position\?\.constrained && "overflow-y-auto overscroll-contain(?: [^"]*)?"/u);
   assert.doesNotMatch(floatingSource, /"fixed[^"]*overflow-y-auto/u);
   assert.match(floatingSource, /addEventListener\("scroll", updatePosition, true\)/u);
   assert.match(source, /menuRef\.current\?\.contains\(target\)/u);
