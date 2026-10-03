@@ -6,7 +6,19 @@ import pytest
 from pydantic import ValidationError
 from test_nl2sql_job_runtime import _FakeEnterpriseAiClient, _repository, _request, _worker
 
-from app.features.nl2sql.models import JobCreateRequest, JobStatus, JobStepStatus, Nl2SqlProfile
+from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlRepository
+from app.features.nl2sql.models import (
+    AllowedObjects,
+    AnalyzeData,
+    JobCreateRequest,
+    JobData,
+    JobStatus,
+    JobStepStatus,
+    Nl2SqlProfile,
+    QueryResults,
+    SafetyReport,
+)
+from app.features.nl2sql.service import Nl2SqlService
 from app.settings import get_settings
 
 
@@ -20,8 +32,11 @@ class RecordingClient(_FakeEnterpriseAiClient):
         return self.text
 
 
+type ChatFixture = tuple[Nl2SqlService, MemoryIncrementalNl2SqlRepository, RecordingClient]
+
+
 @pytest.fixture
-def chat(monkeypatch: pytest.MonkeyPatch):
+def chat(monkeypatch: pytest.MonkeyPatch) -> ChatFixture:
     monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
     repository = _repository()
     client = RecordingClient()
@@ -39,7 +54,7 @@ def request(question: str = "注文一覧", previous: str | None = None) -> JobC
     )
 
 
-def run(service, req: JobCreateRequest, actor: str = "user-1"):
+def run(service: Nl2SqlService, req: JobCreateRequest, actor: str = "user-1") -> JobData:
     created = service.start_job(req, actor_user_uuid=actor, actor_is_system_admin=True)
     assert service.run_next_nl2sql_job(worker_id="chat-test", job_id=created.job_id)
     job = service.get_job(created.job_id, actor_user_uuid=actor)
@@ -47,7 +62,9 @@ def run(service, req: JobCreateRequest, actor: str = "user-1"):
     return job
 
 
-def test_chat_generates_without_execution_and_restores_across_workers(chat, monkeypatch):
+def test_chat_generates_without_execution_and_restores_across_workers(
+    chat: ChatFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     service, repository, client = chat
     monkeypatch.setattr(
         service, "execute_sql", lambda *args, **kwargs: pytest.fail("送信で SQL を実行")
@@ -77,7 +94,7 @@ def test_chat_generates_without_execution_and_restores_across_workers(chat, monk
     assert observer.list_sql_chats(actor="user-1", profile_ids=set()).items == []
 
 
-def test_chat_rejects_other_user_even_system_admin_and_profile_changes(chat):
+def test_chat_rejects_other_user_even_system_admin_and_profile_changes(chat: ChatFixture) -> None:
     service, repository, _ = chat
     first = run(service, request())
     with pytest.raises(PermissionError):
@@ -101,7 +118,7 @@ def test_chat_rejects_other_user_even_system_admin_and_profile_changes(chat):
         )
 
 
-def test_chat_rejects_pending_and_non_chat_parents(chat):
+def test_chat_rejects_pending_and_non_chat_parents(chat: ChatFixture) -> None:
     service, _, _ = chat
     pending = service.start_job(request(), actor_user_uuid="user-1")
     with pytest.raises(ValueError, match="終わるか"):
@@ -114,14 +131,22 @@ def test_chat_rejects_pending_and_non_chat_parents(chat):
         service.start_job(request("続き", "missing"), actor_user_uuid="user-1")
 
 
-def test_existing_jobs_still_execute_by_default(chat, monkeypatch):
+def test_existing_jobs_still_execute_by_default(
+    chat: ChatFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     service, _, _ = chat
     execute = service.execute_sql
-    calls = []
+    calls: list[str] = []
 
-    def record(*args, **kwargs):
-        calls.append(args[0])
-        return execute(*args, **kwargs)
+    def record(
+        sql: str,
+        allowed: AllowedObjects,
+        row_limit: int | None,
+        *,
+        analysis: AnalyzeData | None = None,
+    ) -> tuple[SafetyReport, str, QueryResults]:
+        calls.append(sql)
+        return execute(sql, allowed, row_limit, analysis=analysis)
 
     monkeypatch.setattr(service, "execute_sql", record)
     job = run(service, _request())
@@ -130,7 +155,9 @@ def test_existing_jobs_still_execute_by_default(chat, monkeypatch):
     assert job.conversation_id == ""
 
 
-def test_chat_safety_still_blocks_write_sql(chat, monkeypatch):
+def test_chat_safety_still_blocks_write_sql(
+    chat: ChatFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     service, _, client = chat
     client.text = '{"sql":"DELETE FROM APP.ORDERS","explanation":"削除"}'
     monkeypatch.setattr(
@@ -141,7 +168,7 @@ def test_chat_safety_still_blocks_write_sql(chat, monkeypatch):
     assert job.result is not None and not job.result.safety.is_safe
 
 
-def test_chat_uses_recent_ten_turns_only(chat):
+def test_chat_uses_recent_ten_turns_only(chat: ChatFixture) -> None:
     service, _, client = chat
     previous = None
     for number in range(12):
@@ -154,14 +181,16 @@ def test_chat_uses_recent_ten_turns_only(chat):
     assert "条件-011" in client.prompts[-1]
 
 
-def test_conversation_input_limits():
+def test_conversation_input_limits() -> None:
     with pytest.raises(ValidationError):
         JobCreateRequest(question="続き", previous_job_id="job", generation_only=False)
     with pytest.raises(ValidationError):
         JobCreateRequest(question="あ" * 10001, generation_only=True)
 
 
-def test_chat_route_accepts_generation_capability_without_execution(chat, monkeypatch):
+def test_chat_route_accepts_generation_capability_without_execution(
+    chat: ChatFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from fastapi import HTTPException
     from pr_system_settings.auth.errors import SecurityApiError
     from test_nl2sql_operation_profile_access import _request as api_request
@@ -189,7 +218,7 @@ def test_chat_route_accepts_generation_capability_without_execution(chat, monkey
     assert denied_job.value.status_code == 403
 
 
-def test_stale_conversation_cannot_overwrite_later_turn(chat):
+def test_stale_conversation_cannot_overwrite_later_turn(chat: ChatFixture) -> None:
     service, _, _ = chat
     first = run(service, request())
     run(service, request("追加", first.job_id))
@@ -197,7 +226,7 @@ def test_stale_conversation_cannot_overwrite_later_turn(chat):
         service.start_job(request("古い画面から送信", first.job_id), actor_user_uuid="user-1")
 
 
-def test_chat_history_has_generation_only_marker(chat):
+def test_chat_history_has_generation_only_marker(chat: ChatFixture) -> None:
     service, repository, _ = chat
     job = run(service, request())
     assert job.result is not None
@@ -205,7 +234,7 @@ def test_chat_history_has_generation_only_marker(chat):
     assert history is not None and history["generation_only"] is True
 
 
-def test_chat_rejects_blank_or_autonomous_generation():
+def test_chat_rejects_blank_or_autonomous_generation() -> None:
     from app.features.nl2sql.models import Nl2SqlEngine
 
     with pytest.raises(ValidationError):
