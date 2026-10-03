@@ -24,6 +24,55 @@ async function useTheme(page: Page, theme: "light" | "dark") {
 
 const THREAD_ID = `thread_${"a".repeat(32)}`;
 
+for (const viewport of [...VIEWPORTS, { name: "desktop-wide", width: 1920, height: 1080 }, { name: "desktop-short", width: 1280, height: 480 }]) {
+  for (const theme of ["light", "dark"] as const) {
+    test(`長い会話でもページ外へスクロールせず入力欄へ到達できる (${viewport.width === 375 ? "375px" : viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+      seedThread(mockApi, {
+        status: "running",
+        artifacts: [{ id: "answer-long", kind: "answer", name: "回答", content: { text: "回答の本文。".repeat(1000) } }],
+      });
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await useTheme(page, theme);
+      await page.goto("/chat");
+      await openSeedThread(page);
+      const conversation = page.getByTestId("chat-conversation");
+      await expect.poll(() => conversation.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
+      const dimensions = () => page.evaluate(() => {
+        const main = document.getElementById("pr-main")!;
+        const conversation = document.querySelector('[data-testid="chat-conversation"]')!;
+        return {
+          mainTop: main.scrollTop, mainOverflow: main.scrollHeight - main.clientHeight,
+          documentOverflow: document.documentElement.scrollHeight - window.innerHeight,
+          conversationHeight: conversation.clientHeight,
+        };
+      });
+      let measured = await dimensions();
+      expect(measured.documentOverflow, JSON.stringify(measured)).toBeLessThanOrEqual(1);
+      expect(measured.conversationHeight).toBeLessThan(viewport.height);
+      if (viewport.width >= 1024) {
+        expect(measured.mainTop, JSON.stringify(measured)).toBe(0);
+        expect(measured.mainOverflow, JSON.stringify(measured)).toBeLessThanOrEqual(1);
+      }
+      // 内側の末尾で wheel を続けても document の下に空白を作らない。
+      await conversation.hover();
+      await page.mouse.wheel(0, 10000);
+      const composer = page.getByRole("textbox", { name: "質問" });
+      await composer.focus();
+      await composer.fill("複数行の質問\n追加の条件");
+      await expect(composer).toBeInViewport();
+      await expect(page.getByTestId("chat-send")).toBeInViewport();
+      measured = await dimensions();
+      expect(measured.documentOverflow, JSON.stringify(measured)).toBeLessThanOrEqual(1);
+      if (viewport.width >= 1024) expect(measured.mainTop).toBe(0);
+      // polling で完了へ変わっても外側を動かさない。
+      mockApi.state.runs[0].status = "completed";
+      await expect(page.getByTestId("chat-send")).toHaveAccessibleName("送信");
+      expect((await dimensions()).documentOverflow).toBeLessThanOrEqual(1);
+      await page.screenshot({ path: testInfo.outputPath(`scroll-${viewport.name}-${theme}.png`), fullPage: true });
+    });
+  }
+}
+
 function seedThread(mockApi: MockApi, run: Record<string, unknown>) {
   mockApi.state.runs.push({
     id: "run-chat-seed",

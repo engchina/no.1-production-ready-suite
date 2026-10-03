@@ -678,6 +678,9 @@ import { SearchField } from "@engchina/production-ready-ui";
 
 ### `AppShell`（変更）
 
+- 外枠は `fixed inset-0` で視口に収め、本文は `main#pr-main` の中でスクロールする（#855）。document 側に第2の縦スクロールを作らない。長い一覧・詳細・設定の本文は切り捨てず、main のスクロールを維持する。
+- チャットは会話の内部スクロールと入力欄を分ける。自動移動・引用への移動は会話コンテナの `scrollTo` で行い、祖先まで動かす `scrollIntoView` を使わない。狭い画面では会話の高さを制限し、長い回答でページを無限に伸ばさない。
+
 - **`.pr-skip-link`（本文へスキップ）と `<main id="pr-main" tabIndex={-1}>` を出力。** サイドバーが20項目を超えるため、キーボード利用者が毎ページ全 nav を Tab 通過していました
 - **md 未満（767px 以下）はナビをドロワーにする（#367。2026-09-28 に案 A に決定。案 B「アイコン列を維持」・案 C「下部タブバー」は採らない）。** 3 製品の nav config と `Sidebar` の props は変えず、`AppShell` がモードを切り替えます
   - サイドバーを隠し、画面の上端に反転面（サイドバーと同じ `data-surface="inverted"`）のバーを置く。左端に「メニュー」ボタン（lucide `Menu`、`aria-expanded` / `aria-controls`、44px）、その右に製品名（`Sidebar` の `title`）。バーは本文のスクロールの外にあり、どこまでスクロールしてもメニューに届く
