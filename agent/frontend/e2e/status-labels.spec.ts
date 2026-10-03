@@ -84,9 +84,21 @@ for (const viewport of VIEWPORTS) {
         .toBeGreaterThan(before);
       await page.screenshot({ path: testInfo.outputPath(`runs-status-${viewport.name}.png`), fullPage: true });
 
+      // 承認は全幅のキュー → `?id=` の全幅の詳細（#877）。一覧は詳細を自動で開かないので、
+      // キューの行と、行から開いた詳細の両方で状態を日本語で出すことを確かめる。
       await page.goto("/approvals");
-      await expect(page.getByRole("region", { name: "承認の詳細" }).getByText("保留中", { exact: true })).toBeVisible();
-      await expect(page.getByRole("region", { name: "承認の詳細" })).toContainText("実行の状態: 承認待ち");
+      const approvalRow = page.getByRole("table", { name: "承認一覧" }).getByTestId("approval-row-approval-status-1");
+      await expect(approvalRow.getByText("保留中", { exact: true })).toBeVisible();
+      await expectNoRawEnumBadges(page);
+
+      await approvalRow.locator('a[data-approval-id="approval-status-1"]').click();
+      await expect(page).toHaveURL(/\/approvals\?id=approval-status-1$/);
+      const detail = page.getByRole("region", { name: "承認の詳細" });
+      await expect(detail.getByText("保留中", { exact: true })).toBeVisible();
+      // 関連する実行の状態は「実行の状態」の項目（dt / dd）に日本語のラベルで出す。
+      await expect(
+        detail.locator("dt", { hasText: /^実行の状態$/ }).locator("xpath=following-sibling::dd[1]"),
+      ).toHaveText("承認待ち");
       await expectNoRawEnumBadges(page);
     });
 
