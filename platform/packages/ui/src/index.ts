@@ -300,3 +300,5 @@ export {
   type ToastOptions,
   type ToastAction,
 } from "./store/toast-store";
+
+export { diagnosticTimestamp, logBrowserDiagnostic, type BrowserDiagnostic } from "./lib/diagnostic-log";

@@ -20,6 +20,7 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from pr_backend_core.logging import safe_exception_fields
 from rag_parser_core.asr import TranscriptSegment, build_transcript_extraction
 
 from app.clients.oci_auth import load_oci_config_without_prompt
@@ -93,7 +94,7 @@ class OciSpeechClient:
         try:
             job_id = await asyncio.to_thread(self._submit_job, source_bytes, object_name)
         except Exception as exc:  # noqa: BLE001 - 失敗時は安全に縮退する
-            logger.warning("Speech job 投入に失敗しました。", extra={"error": str(exc)})
+            logger.warning("Speech job 投入に失敗しました。", extra={**safe_exception_fields(exc)})
             return None
         try:
             await self._await_job(job_id)
@@ -101,7 +102,7 @@ class OciSpeechClient:
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Speech job の完了待ち/結果取得に失敗しました。",
-                extra={"error": str(exc), "job_id": job_id},
+                extra={**safe_exception_fields(exc), "job_id": job_id},
             )
             return None
         if result is None:

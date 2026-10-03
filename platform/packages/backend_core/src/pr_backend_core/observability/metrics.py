@@ -1,15 +1,24 @@
 """Prometheus メトリクス + HTTP ミドルウェア（サービス横断で共通）。"""
 
-from collections.abc import Awaitable, Callable
+import asyncio
+import logging
 from time import perf_counter
+from typing import Protocol
 
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, make_asgi_app
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import Headers, MutableHeaders
 from starlette.requests import Request
-from starlette.responses import Response
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .request_context import generate_request_id, request_id_var
+from .request_context import (
+    access_summary_var,
+    generate_request_id,
+    request_id_var,
+    traceparent_var,
+    validated_traceparent,
+)
+
+logger = logging.getLogger("pr_backend_core.http")
 
 HTTP_REQUESTS = Counter(
     "http_requests_total",
@@ -41,47 +50,100 @@ def _route_path(request: Request) -> str:
     return path if isinstance(path, str) else request.url.path
 
 
-class MetricsMiddleware(BaseHTTPMiddleware):
-    """request id 付与 + HTTP メトリクス記録を行う共通ミドルウェア。
+class HttpRecorder(Protocol):
+    def __call__(self, *, method: str, path: str, status: int, seconds: float) -> None: ...
 
-    - 受信 x-request-id を検証/発行し、`request.state.request_id` と contextvar に設定、
-      応答ヘッダ X-Request-ID にも反映する。
-    - route template 単位で件数と処理時間を記録する。
 
-    認証や監査コンテキスト等のサービス固有処理は各サービスのミドルウェアで足す。
-    """
+class MetricsMiddleware:
+    """body / SSE の終了まで相関を保つ ASGI 境界。HTTP summary は1 hopにつき1件。"""
 
-    def __init__(self, app: ASGIApp) -> None:
-        super().__init__(app)
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        enable_metrics: bool = True,
+        record_request: HttpRecorder = record_http_request,
+    ) -> None:
+        self.app = app
+        self.enable_metrics = enable_metrics
+        self.record_request = record_request
 
-    async def dispatch(
-        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
-        started_at = perf_counter()
-        request_id = generate_request_id(request.headers.get("x-request-id"))
-        request.state.request_id = request_id
-        token = request_id_var.set(request_id)
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+        request_id = generate_request_id(headers.get("x-request-id"))
+        scope.setdefault("state", {})["request_id"] = request_id
+        request_token = request_id_var.set(request_id)
+        trace_token = traceparent_var.set(validated_traceparent(headers.get("traceparent")))
+        access_token = access_summary_var.set(True)
+        started = perf_counter()
+        status = 500
+        outcome = "error"
+        headers_ms: float | None = None
+
+        async def send_with_context(message: Message) -> None:
+            nonlocal status, headers_ms, outcome
+            if message["type"] == "http.response.start":
+                status = message["status"]
+                headers_ms = (perf_counter() - started) * 1000
+                MutableHeaders(scope=message)["X-Request-ID"] = request_id
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                outcome = "success" if status < 400 else "error"
+            await send(message)
+
         try:
-            response = await call_next(request)
-        except Exception:
-            record_http_request(
-                method=request.method,
-                path=_route_path(request),
-                status=500,
-                seconds=perf_counter() - started_at,
-            )
+            await self.app(scope, receive, send_with_context)
+        except asyncio.CancelledError:
+            outcome = "cancelled"
             raise
-        else:
-            response.headers["X-Request-ID"] = request_id
-            record_http_request(
-                method=request.method,
-                path=_route_path(request),
-                status=response.status_code,
-                seconds=perf_counter() - started_at,
-            )
-            return response
+        except Exception:
+            outcome = "error"
+            raise
         finally:
-            request_id_var.reset(token)
+            try:
+                if scope["type"] == "http":
+                    elapsed = perf_counter() - started
+                    request = Request(scope)
+                    route = getattr(scope.get("route"), "path", None)
+                    # 未解決 URL の値は利用者入力。route template がなければ原文を出さない。
+                    path = route if isinstance(route, str) else "/unmatched"
+                    if self.enable_metrics:
+                        self.record_request(
+                            method=request.method, path=path, status=status, seconds=elapsed
+                        )
+                    poll_success = (
+                        request.method == "GET"
+                        and 200 <= status < 300
+                        and outcome == "success"
+                        and (path.startswith("/api/services/") and path.endswith("/status"))
+                    )
+                    if not poll_success:
+                        severity = (
+                            logging.ERROR
+                            if status >= 500 or outcome != "success" and status < 400
+                            else (logging.WARNING if status >= 400 else logging.INFO)
+                        )
+                        logger.log(
+                            severity,
+                            "HTTP リクエストが終了しました",
+                            extra={
+                                "event": "http_access",
+                                "http_method": request.method,
+                                "http_route": path,
+                                "http_status": status,
+                                "duration_ms": round(elapsed * 1000, 3),
+                                "headers_duration_ms": round(headers_ms, 3)
+                                if headers_ms is not None
+                                else None,
+                                "outcome": outcome,
+                            },
+                        )
+            finally:
+                access_summary_var.reset(access_token)
+                traceparent_var.reset(trace_token)
+                request_id_var.reset(request_token)
 
 
 __all__ = [

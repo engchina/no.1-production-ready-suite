@@ -5,6 +5,8 @@
 """
 
 import logging
+import re
+from urllib.parse import urlsplit
 
 from pr_backend_core import configure_logging as _configure_logging
 
@@ -23,8 +25,24 @@ class _ServiceStatusAccessFilter(logging.Filter):
     """サービス状態ポーリングの access log だけを落とす。"""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        message = record.getMessage()
-        return not ('"GET /api/services/' in message and "/status HTTP/" in message)
+        if isinstance(record.args, tuple) and len(record.args) == 5:
+            _, method, path, _, status = record.args
+        else:
+            # 旧 server のレコードにも対応するが、status を解釈できない行は落とさない。
+            match = re.search(r'"(\w+) ([^ ]+) HTTP/[^" ]+" (\d{3})(?:\s|$)', record.getMessage())
+            if not match:
+                return True
+            method, path, raw_status = match.groups()
+            status = int(raw_status)
+        if not isinstance(path, str) or not isinstance(status, int):
+            return True
+        route = urlsplit(path).path
+        return not (
+            method == "GET"
+            and route.startswith("/api/services/")
+            and route.endswith("/status")
+            and 200 <= status < 300
+        )
 
 
 def _install_uvicorn_access_filters() -> None:
@@ -34,7 +52,17 @@ def _install_uvicorn_access_filters() -> None:
     access_logger.addFilter(_ServiceStatusAccessFilter())
 
 
-def configure_logging(level: str = "INFO") -> None:
+def configure_logging(level: str = "INFO", *, component: str = "api") -> None:
     """ルートロガーを JSON 形式で構成する（共有実装 + RAG 固有のノイズ抑制）。"""
-    _configure_logging(level, quiet_loggers=_NOISY_LOGGERS)
+    from app.config import get_settings
+
+    settings = get_settings()
+    _configure_logging(
+        level,
+        quiet_loggers=_NOISY_LOGGERS,
+        service_name=settings.service_name,
+        service_version=settings.app_version,
+        environment=settings.environment,
+        component=component,
+    )
     _install_uvicorn_access_filters()

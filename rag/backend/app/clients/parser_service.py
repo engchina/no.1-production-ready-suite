@@ -17,6 +17,8 @@ from typing import cast
 
 import httpx
 from pr_backend_core.internal_http import http_client_options
+from pr_backend_core.logging import safe_exception_fields, safe_url
+from pr_backend_core.observability.request_context import outbound_correlation_headers
 from rag_parser_core.capabilities import supported_modalities
 from rag_parser_core.result import ParseResponse, ParserRegistryResult
 
@@ -191,10 +193,10 @@ class ParserServiceClient:
                 "parser service returned error status",
                 extra={
                     "parser_backend": backend,
-                    "service_url": url,
+                    "service_url": safe_url(url),
                     "status_code": status_code,
                     "attempts": self._retry.attempts,
-                    "error": str(exc),
+                    **safe_exception_fields(exc),
                 },
             )
             if fail_fast:
@@ -211,9 +213,9 @@ class ParserServiceClient:
                 "parser service call timed out",
                 extra={
                     "parser_backend": backend,
-                    "service_url": url,
+                    "service_url": safe_url(url),
                     "attempts": self._retry.attempts,
-                    "error": str(exc),
+                    **safe_exception_fields(exc),
                 },
             )
             if fail_fast:
@@ -229,9 +231,9 @@ class ParserServiceClient:
                 "parser service call failed",
                 extra={
                     "parser_backend": backend,
-                    "service_url": url,
+                    "service_url": safe_url(url),
                     "attempts": self._retry.attempts,
-                    "error": str(exc),
+                    **safe_exception_fields(exc),
                 },
             )
             if fail_fast:
@@ -247,9 +249,9 @@ class ParserServiceClient:
                 "parser service returned invalid JSON",
                 extra={
                     "parser_backend": backend,
-                    "service_url": url,
+                    "service_url": safe_url(url),
                     "attempts": self._retry.attempts,
-                    "error": str(exc),
+                    **safe_exception_fields(exc),
                 },
             )
             if fail_fast:
@@ -267,8 +269,8 @@ class ParserServiceClient:
                 "parser service returned invalid payload",
                 extra={
                     "parser_backend": backend,
-                    "service_url": url,
-                    "error": str(exc),
+                    "service_url": safe_url(url),
+                    **safe_exception_fields(exc),
                 },
             )
             if fail_fast:
@@ -330,10 +332,10 @@ class ParserServiceClient:
                 "parser service returned error status",
                 extra={
                     "parser_backend": backend,
-                    "service_url": url,
+                    "service_url": safe_url(url),
                     "status_code": exc.response.status_code,
                     "attempts": self._retry.attempts,
-                    "error": str(exc),
+                    **safe_exception_fields(exc),
                 },
             )
             return _fallback(backend, f"{backend}_adapter_service_unreachable")
@@ -342,9 +344,9 @@ class ParserServiceClient:
                 "parser service call timed out",
                 extra={
                     "parser_backend": backend,
-                    "service_url": url,
+                    "service_url": safe_url(url),
                     "attempts": self._retry.attempts,
-                    "error": str(exc),
+                    **safe_exception_fields(exc),
                 },
             )
             return _fallback(backend, f"{backend}_adapter_service_unreachable")
@@ -353,9 +355,9 @@ class ParserServiceClient:
                 "parser service call failed",
                 extra={
                     "parser_backend": backend,
-                    "service_url": url,
+                    "service_url": safe_url(url),
                     "attempts": self._retry.attempts,
-                    "error": str(exc),
+                    **safe_exception_fields(exc),
                 },
             )
             return _fallback(backend, f"{backend}_adapter_service_unreachable")
@@ -364,9 +366,9 @@ class ParserServiceClient:
                 "parser service returned invalid JSON",
                 extra={
                     "parser_backend": backend,
-                    "service_url": url,
+                    "service_url": safe_url(url),
                     "attempts": self._retry.attempts,
-                    "error": str(exc),
+                    **safe_exception_fields(exc),
                 },
             )
             return _fallback(backend, f"{backend}_adapter_service_invalid_response")
@@ -377,8 +379,8 @@ class ParserServiceClient:
                 "parser service returned invalid payload",
                 extra={
                     "parser_backend": backend,
-                    "service_url": url,
-                    "error": str(exc),
+                    "service_url": safe_url(url),
+                    **safe_exception_fields(exc),
                 },
             )
             return _fallback(backend, f"{backend}_adapter_service_invalid_response")
@@ -400,8 +402,9 @@ class ParserServiceClient:
                 logger=logger,
                 log_extra={
                     "parser_backend": backend,
-                    "service_url": url,
+                    "service_url": safe_url(url),
                 },
+                headers=outbound_correlation_headers(),
                 files=files,
                 data=data,
             )

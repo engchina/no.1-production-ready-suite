@@ -13,6 +13,7 @@ from pathlib import PurePath
 from time import perf_counter
 from uuid import uuid4
 
+from pr_backend_core.logging import safe_exception_fields
 from pydantic import ValidationError
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
 from rag_parser_core.preprocess import ConvertOutcome, SourceDerivation
@@ -1627,7 +1628,7 @@ class IngestionPipeline:
                     "key": key,
                     "backend": getattr(self._settings, "upload_storage_backend", "unknown"),
                     "error_type": type(exc).__name__,
-                    "error": str(exc),
+                    **safe_exception_fields(exc),
                 },
             )
             return None

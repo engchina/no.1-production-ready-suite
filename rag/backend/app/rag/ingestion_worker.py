@@ -37,6 +37,8 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 
+from pr_backend_core.observability.request_context import bind_log_context
+
 from app.clients.oracle import OracleClient, close_oracle_pool, oracle_error_log_fields
 from app.config import Settings, get_settings
 from app.logging_config import configure_logging
@@ -368,29 +370,30 @@ class IngestionQueueWorker:
         return dispatched
 
     async def _run_job(self, job_id: str) -> None:
-        try:
-            await self._job_runner(job_id)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            if self._stop_event is not None and self._stop_event.is_set():
-                # 停止中に子が止まった(端末の Ctrl+C で子にも signal が届いた等)。失敗にせず、
-                # 停止処理が自分の lease の job として QUEUED に戻す(#357)。
-                logger.warning(
-                    "ingestion_worker_job_interrupted",
-                    extra={"job_id": job_id, "worker_id": self.worker_id},
+        with bind_log_context(job_id=job_id, worker_id=self.worker_id):
+            try:
+                await self._job_runner(job_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if self._stop_event is not None and self._stop_event.is_set():
+                    # 停止中に子が止まった(端末の Ctrl+C で子にも signal が届いた等)。失敗にせず、
+                    # 停止処理が自分の lease の job として QUEUED に戻す(#357)。
+                    logger.warning(
+                        "ingestion_worker_job_interrupted",
+                        extra={"job_id": job_id, "worker_id": self.worker_id},
+                    )
+                    self._interrupted_on_stop = True
+                    return
+                await _mark_running_job_failed(job_id, error=exc, lease_owner=self.worker_id)
+                logger.exception(
+                    "ingestion_worker_job_failed",
+                    extra={"job_id": job_id, **oracle_error_log_fields(exc)},
                 )
-                self._interrupted_on_stop = True
-                return
-            await _mark_running_job_failed(job_id, error=exc, lease_owner=self.worker_id)
-            logger.exception(
-                "ingestion_worker_job_failed",
-                extra={"job_id": job_id, **oracle_error_log_fields(exc)},
-            )
-        finally:
-            self._inflight.discard(job_id)
-            # スロットが空いたので次サイクルを即座に回す。
-            _WAKEUP.set()
+            finally:
+                self._inflight.discard(job_id)
+                # スロットが空いたので次サイクルを即座に回す。
+                _WAKEUP.set()
 
     async def _wait_for_work(self, stop_event: asyncio.Event) -> None:
         """新ジョブ通知・停止・poll interval のいずれかまで待つ。"""
@@ -504,7 +507,7 @@ async def _mark_running_job_failed(
 async def run_worker_process() -> None:
     """別プロセスのエントリポイント。SIGINT/SIGTERM で graceful に停止する。"""
     settings = get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, component="ingestion_worker")
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

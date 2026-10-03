@@ -20,6 +20,8 @@ import logging
 
 import httpx
 from pr_backend_core.internal_http import http_client_options
+from pr_backend_core.logging import safe_exception_fields, safe_url
+from pr_backend_core.observability.request_context import outbound_correlation_headers
 from rag_parser_core.preprocess import ConvertOutcome, ConvertResponse, normalize_preprocess_profile
 
 from app.clients.http_retry import request_with_retry, retry_config_from_settings
@@ -101,8 +103,9 @@ class PreprocessServiceClient:
                     logger=logger,
                     log_extra={
                         "preprocess_profile": profile,
-                        "service_url": url,
+                        "service_url": safe_url(url),
                     },
+                    headers=outbound_correlation_headers(),
                     files=files,
                     data=data,
                 )
@@ -111,7 +114,11 @@ class PreprocessServiceClient:
         except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
             logger.warning(
                 "preprocess service call failed",
-                extra={"preprocess_profile": profile, "service_url": url, "error": str(exc)},
+                extra={
+                    "preprocess_profile": profile,
+                    "service_url": safe_url(url),
+                    **safe_exception_fields(exc),
+                },
             )
             raise PreprocessServiceError(profile, "unreachable", service_url=url) from exc
         try:
@@ -119,7 +126,11 @@ class PreprocessServiceClient:
         except ValueError as exc:
             logger.warning(
                 "preprocess service returned invalid payload",
-                extra={"preprocess_profile": profile, "service_url": url, "error": str(exc)},
+                extra={
+                    "preprocess_profile": profile,
+                    "service_url": safe_url(url),
+                    **safe_exception_fields(exc),
+                },
             )
             raise PreprocessServiceError(profile, "invalid_response", service_url=url) from exc
         derived = convert_response.derived_bytes()

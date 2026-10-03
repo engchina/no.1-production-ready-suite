@@ -7,6 +7,8 @@ import signal
 import socket
 import time
 
+from pr_backend_core import configure_logging
+
 from app.features.nl2sql.service import nl2sql_service
 from app.settings import get_settings
 
@@ -20,8 +22,14 @@ def _stop(_signum: int, _frame: object) -> None:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
     settings = get_settings()
+    configure_logging(
+        settings.log_level,
+        service_name=settings.service_name,
+        service_version=settings.app_version,
+        environment=settings.environment,
+        component="job_worker",
+    )
     worker_id = f"{socket.gethostname()}:nl2sql-job"
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)

@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pr_backend_core.logging import safe_exception_fields
+
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from importlib import import_module
@@ -392,7 +394,7 @@ def restore_control_plane() -> dict[str, int]:
                 except Exception as exc:  # noqa: BLE001 - 1 件の不正で起動を止めない
                     logger.warning(
                         "agent_control_plane_restore_failed",
-                        extra={"kind": kind, "item_id": item_id, "reason": str(exc)},
+                        extra={"kind": kind, "item_id": item_id, **safe_exception_fields(exc)},
                     )
                     continue
                 restored[kind] += 1

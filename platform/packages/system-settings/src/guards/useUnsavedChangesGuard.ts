@@ -1,3 +1,4 @@
+import { logBrowserDiagnostic } from "@engchina/production-ready-ui";
 import { useContext, useEffect, useLayoutEffect, useRef } from "react";
 import {
   UNSAFE_DataRouterContext,
@@ -51,10 +52,9 @@ export function useUnsavedChangesGuard(
     activeGuards.add(confirmLeaveRef);
     if (inDataRouter && mountedBlockers === 0 && !warnedMissingBlocker) {
       warnedMissingBlocker = true;
-      console.warn(
-        "[useUnsavedChangesGuard] UnsavedChangesBlocker が無いため、ブラウザの戻る / 進むを確認できません。" +
-          "data router の root に 1 つだけ置いてください。"
-      );
+      logBrowserDiagnostic("WARNING", {
+        event: "unsaved_changes_blocker_missing", serviceName: "production-ready-platform",
+      });
     }
     return () => {
       activeGuards.delete(confirmLeaveRef);

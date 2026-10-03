@@ -12,6 +12,8 @@ import json
 import logging
 import re
 import stat
+from pr_backend_core.logging import safe_exception_fields
+
 from asyncio import sleep, wait_for
 from collections.abc import Callable, Iterable, Mapping
 from csv import DictWriter
@@ -3486,7 +3488,7 @@ def _persist(action: Callable[[], None]) -> None:
     try:
         action()
     except ControlPlaneStoreError as exc:
-        logger.warning("agent_control_plane_persist_failed", extra={"reason": str(exc)})
+        logger.warning("agent_control_plane_persist_failed", extra={**safe_exception_fields(exc)})
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 

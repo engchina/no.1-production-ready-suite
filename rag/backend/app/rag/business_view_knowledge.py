@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
+from pr_backend_core.logging import safe_exception_fields
 from rag_engine.knowledge.approved_faq import (
     APPROVED_FAQ_APPROVED_STATUS,
     APPROVED_FAQ_IMPORT_MODES,
@@ -335,7 +336,9 @@ async def suggest_approved_faq(
                 )
             query_embedding = (await embed([question], "SEARCH_QUERY"))[0]
         except Exception as exc:  # 意味照合は補助。文字列照合で続ける。
-            logger.warning("approved faq semantic matching failed", extra={"error": str(exc)})
+            logger.warning(
+                "approved faq semantic matching failed", extra={**safe_exception_fields(exc)}
+            )
             semantic_index, query_embedding = None, None
     return suggest_approved_faq_questions(
         question,

@@ -39,6 +39,7 @@ from agents import (
 )
 from agents.tool_context import ToolContext
 from openai import AsyncOpenAI
+from pr_backend_core.observability.request_context import bind_log_context
 from pr_system_settings.model import (
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
@@ -450,67 +451,69 @@ def conversation_input(run_id: str, goal: str) -> str | list[Any]:
 
 async def execute_run(run_id: str) -> None:
     """Run を最初から実行する（作成直後・dispatcher から呼ぶ）。"""
-    from app.features.agent.runtime import runtime_repository
+    with bind_log_context(run_id=run_id):
+        from app.features.agent.runtime import runtime_repository
 
-    started = runtime_repository.begin_builtin_run(run_id)
-    if started is None:
-        return
-    run, agent = started
-    try:
-        sdk_agent = await asyncio.to_thread(
-            build_sdk_agent,
-            run_id,
-            name=agent.name,
-            instructions=agent.instructions,
-            skill_ids=agent.skill_ids,
-            model_id=agent.model_id,
-            agent_id=agent.id,
-            user_uuid=run.created_by_user_uuid,
-        )
-        result = await Runner.run(
-            sdk_agent, conversation_input(run_id, run.goal), max_turns=_max_turns()
-        )
-        result = await _dry_run_approvals(run, sdk_agent, result)
-        _record_usage(run_id, result, agent.model_id)
-        await _finish(run_id, result)
-    except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
-        _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
-        _record_failure(run_id, exc)
+        started = runtime_repository.begin_builtin_run(run_id)
+        if started is None:
+            return
+        run, agent = started
+        try:
+            sdk_agent = await asyncio.to_thread(
+                build_sdk_agent,
+                run_id,
+                name=agent.name,
+                instructions=agent.instructions,
+                skill_ids=agent.skill_ids,
+                model_id=agent.model_id,
+                agent_id=agent.id,
+                user_uuid=run.created_by_user_uuid,
+            )
+            result = await Runner.run(
+                sdk_agent, conversation_input(run_id, run.goal), max_turns=_max_turns()
+            )
+            result = await _dry_run_approvals(run, sdk_agent, result)
+            _record_usage(run_id, result, agent.model_id)
+            await _finish(run_id, result)
+        except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
+            _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
+            _record_failure(run_id, exc)
 
 
 async def resume_run(run_id: str) -> None:
     """承認がすべて決まった Run を、保存した SDK の状態から再開する。"""
-    from app.features.agent.runtime import runtime_repository
+    with bind_log_context(run_id=run_id):
+        from app.features.agent.runtime import runtime_repository
 
-    resumed = runtime_repository.begin_builtin_resume(run_id)
-    if resumed is None:
-        return
-    run, agent, state_text, decisions = resumed
-    try:
-        sdk_agent = await asyncio.to_thread(
-            build_sdk_agent,
-            run_id,
-            name=agent.name,
-            instructions=agent.instructions,
-            skill_ids=agent.skill_ids,
-            model_id=agent.model_id,
-            agent_id=agent.id,
-            user_uuid=run.created_by_user_uuid,
-        )
-        state = await RunState.from_string(sdk_agent, state_text)
-        for item in state.get_interruptions():
-            call_id = str(getattr(item, "call_id", "") or "")
-            if decisions.get(call_id, False):
-                state.approve(item)
-            else:
-                state.reject(item)
-        result = await Runner.run(sdk_agent, state, max_turns=_max_turns())
-        result = await _dry_run_approvals(run, sdk_agent, result)
-        _record_usage(run_id, result, agent.model_id)
-        await _finish(run_id, result)
-    except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
-        _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
-        _record_failure(run_id, exc)
+        resumed = runtime_repository.begin_builtin_resume(run_id)
+        if resumed is None:
+            return
+        run, agent, state_text, decisions = resumed
+        try:
+            sdk_agent = await asyncio.to_thread(
+                build_sdk_agent,
+                run_id,
+                name=agent.name,
+                instructions=agent.instructions,
+                skill_ids=agent.skill_ids,
+                model_id=agent.model_id,
+                agent_id=agent.id,
+                user_uuid=run.created_by_user_uuid,
+            )
+            state = await RunState.from_string(sdk_agent, state_text)
+            for item in state.get_interruptions():
+                call_id = str(getattr(item, "call_id", "") or "")
+                if decisions.get(call_id, False):
+                    state.approve(item)
+                else:
+                    state.reject(item)
+            result = await Runner.run(sdk_agent, state, max_turns=_max_turns())
+            result = await _dry_run_approvals(run, sdk_agent, result)
+            _record_usage(run_id, result, agent.model_id)
+            await _finish(run_id, result)
+        except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
+            _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
+            _record_failure(run_id, exc)
 
 
 async def _dry_run_approvals(run: Any, sdk_agent: Agent[Any], result: Any) -> Any:

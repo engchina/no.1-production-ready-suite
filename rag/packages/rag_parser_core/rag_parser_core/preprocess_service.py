@@ -13,6 +13,7 @@ import json
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, UploadFile
+from pr_backend_core.logging import configure_http_logging
 from pydantic import ValidationError
 
 from rag_parser_core.preprocess import (
@@ -51,6 +52,7 @@ def create_preprocess_app(
     """
     # API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。
     app = FastAPI(title=title or "preprocess", docs_url=None, redoc_url=None, openapi_url=None)
+    configure_http_logging(app, service_name=app.title)
 
     @app.get("/health", response_model=ConvertHealth)
     def health() -> ConvertHealth:

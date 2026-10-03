@@ -22,6 +22,7 @@ from uuid import uuid4
 
 import httpx
 from pr_backend_core.internal_http import http_client_options
+from pr_backend_core.observability.request_context import outbound_correlation_headers
 from pr_system_settings.auth.errors import SecurityApiError
 from pr_system_settings.auth.service_token import issue_service_token
 from pydantic import BaseModel, Field, ValidationError
@@ -516,6 +517,7 @@ class McpSession:
     def _request_headers(self) -> dict[str, str]:
         headers = {
             **self._headers,
+            **outbound_correlation_headers(),
             "Accept": _MCP_ACCEPT,
             "MCP-Protocol-Version": self._protocol_version,
         }

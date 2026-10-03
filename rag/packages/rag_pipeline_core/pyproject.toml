@@ -13,12 +13,14 @@ dependencies = [
 # pipeline ステージマイクロサービスが共通 FastAPI app factory を使うための extra。
 # core 本体の依存は軽量(pydantic + rag-parser-core)に保つ。
 service = [
+    "production-ready-backend-core",
     "fastapi>=0.121,<1.0",
     "uvicorn[standard]>=0.37",
     "gunicorn>=23,<24",
 ]
 
 [tool.uv.sources]
+production-ready-backend-core = { path = "../../../platform/packages/backend_core", editable = true }
 rag-parser-core = { path = "../rag_parser_core", editable = true }
 
 [build-system]

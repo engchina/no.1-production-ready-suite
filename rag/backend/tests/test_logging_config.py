@@ -59,3 +59,29 @@ def test_configure_logging_filters_service_status_access_logs() -> None:
 
     assert not access_filter.filter(status_record)
     assert access_filter.filter(document_record)
+
+
+def test_service_status_failures_are_never_suppressed() -> None:
+    """成功 poll だけを落とし、認証失敗・サービス障害・未知の形式は残す。"""
+    access_filter = _ServiceStatusAccessFilter()
+    for status in (200, 204, 401, 403, 404, 429, 500, 503):
+        record = logging.LogRecord(
+            "uvicorn.access",
+            logging.INFO,
+            __file__,
+            1,
+            '%s - "%s %s HTTP/%s" %d',
+            ("client", "GET", "/api/services/parser/status?probe=1", "1.1", status),
+            None,
+        )
+        assert access_filter.filter(record) == (status >= 300)
+    malformed = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '"GET /api/services/parser/status HTTP/1.1" unknown',
+        (),
+        None,
+    )
+    assert access_filter.filter(malformed)
