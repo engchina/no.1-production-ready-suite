@@ -23,6 +23,7 @@ from app.features.nl2sql.ontology_catalog import (
     retrieve_ontology_nodes,
 )
 from app.features.nl2sql.ontology_models import (
+    OntologyEdge,
     OntologyEdgeKind,
     OntologyNode,
     OntologyNodeKind,
@@ -34,6 +35,7 @@ from app.features.nl2sql.ontology_models import (
     PhysicalMapping,
     PhysicalObjectRef,
 )
+from app.features.nl2sql.ontology_service import OntologyQuerySessionService
 from app.features.nl2sql.ontology_store import stable_ontology_id, stable_physical_id
 
 
@@ -264,6 +266,98 @@ def test_schema_drift_preserves_business_definition_and_marks_column_mapping_orp
     assert preserved.business_name_ja == "顧客"
     assert preserved.review_status == OntologyReviewStatus.ORPHANED
     assert preserved.metadata["orphaned_mapping_node_ids"] == [column_id]
+
+
+@pytest.mark.parametrize("removed", ["column", "table"])
+@pytest.mark.parametrize("kind", [OntologyEdgeKind.MAPS_TO, OntologyEdgeKind.BUSINESS_RELATIONSHIP])
+def test_schema_drift_preserves_missing_edge_endpoints_without_enabling_them(
+    removed: str, kind: OntologyEdgeKind
+) -> None:
+    """参照切れの辺も登録でき、欠落した物理 node は利用範囲に戻らない。"""
+    catalog = SchemaCatalog(
+        refreshed_at="2026-10-03T00:00:00+00:00",
+        tables=[
+            SchemaTable(
+                owner="APP", table_name="ORDERS", logical_name="受注", columns=[_column("ID", "ID")]
+            )
+        ],
+    )
+    previous = build_schema_ontology(catalog)
+    object_node = _node(previous, "APP.ORDERS")
+    target = _node(previous, "APP.ORDERS.ID") if removed == "column" else object_node
+    business = OntologyNode(
+        id="business_orders",
+        revision_id=previous.revision.id,
+        kind=OntologyNodeKind.BUSINESS_ENTITY,
+        technical_name="orders",
+        business_name_ja="受注",
+        physical_mappings=target.physical_mappings,
+        provenance=OntologyProvenance(source_kind=OntologySourceKind.MANUAL),
+        review_status=OntologyReviewStatus.APPROVED,
+    )
+    edges = [
+        OntologyEdge(
+            id=f"mapping_{index}",
+            revision_id=previous.revision.id,
+            kind=kind,
+            source_node_id=business.id if index == 0 else target.id,
+            target_node_id=target.id if index == 0 else business.id,
+            relationship_name_ja="物理対応",
+            provenance=business.provenance,
+            review_status=OntologyReviewStatus.APPROVED,
+        )
+        for index in range(2)
+    ]
+    previous = previous.model_copy(update={"nodes": [*previous.nodes, business], "edges": edges})
+    drifted_catalog = catalog.model_copy(
+        update={
+            "tables": [catalog.tables[0].model_copy(update={"columns": []})]
+            if removed == "column"
+            else []
+        }
+    )
+    current = evolve_schema_ontology(drifted_catalog, previous)
+    sessions = OntologyQuerySessionService()
+    sessions.register_revision(current.revision, nodes=current.nodes, edges=current.edges)
+
+    retained = [node for node in current.nodes if node.id == target.id]
+    assert len(retained) == 1
+    assert retained[0].review_status == OntologyReviewStatus.ORPHANED
+    assert retained[0].revision_id == current.revision.id
+    assert retained[0].metadata["drift_from_revision_id"] == previous.revision.id
+    for edge in current.edges:
+        if edge.id in {item.id for item in edges}:
+            assert edge.review_status == OntologyReviewStatus.ORPHANED
+            assert edge.metadata["orphaned_mapping_node_ids"] == [target.id]
+    assert target.review_status == OntologyReviewStatus.APPROVED
+
+    profile = Nl2SqlProfile(id="sales", name="販売")
+    view = migrate_profile_ontology_view(profile, current)
+    assert target.id not in view.node_ids
+    assert target.id not in {item.node_id for item in view.physical_objects}
+    assert not view.allowed_path_ids
+    assert target.id not in {hit.node_id for hit in retrieve_ontology_nodes("受注", current, view)}
+    assert business.id not in {
+        hit.node_id for hit in retrieve_ontology_nodes("受注", current, view)
+    }
+    # さらに drift しても履歴 node で参照切れを解消した扱いにしない。
+    next_catalog = drifted_catalog.model_copy(
+        update={
+            "tables": [
+                *drifted_catalog.tables,
+                SchemaTable(owner="APP", table_name="OTHER", logical_name="別の表", columns=[]),
+            ]
+        }
+    )
+    next_ontology = evolve_schema_ontology(next_catalog, current)
+    sessions.register_revision(
+        next_ontology.revision, nodes=next_ontology.nodes, edges=next_ontology.edges
+    )
+    assert all(
+        edge.metadata["orphaned_mapping_node_ids"] == [target.id]
+        for edge in next_ontology.edges
+        if edge.id in {item.id for item in edges}
+    )
 
 
 def test_shortest_path_and_interpreter_use_only_approved_profile_whitelist() -> None:

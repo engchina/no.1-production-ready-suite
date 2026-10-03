@@ -698,6 +698,7 @@ def evolve_schema_ontology(
 
     all_nodes = sorted([*current.nodes, *preserved_nodes], key=lambda node: node.id)
     all_node_ids = {node.id for node in all_nodes}
+    missing_endpoint_ids: set[str] = set()
     preserved_edges: list[OntologyEdge] = []
     for edge in previous.edges:
         if edge.kind not in {
@@ -710,6 +711,7 @@ def evolve_schema_ontology(
             for endpoint in (edge.source_node_id, edge.target_node_id)
             if endpoint not in all_node_ids
         )
+        missing_endpoint_ids.update(missing_endpoints)
         missing_join_ids = sorted(
             {
                 ref.node_id
@@ -737,6 +739,26 @@ def evolve_schema_ontology(
             )
         )
 
+    # 参照切れ edge を保持するには端点も必要。旧版の node を履歴として残し、
+    # 最新カタログの物理 scope には戻さない。欠落判定の集合は追加前のままにする。
+    previous_nodes = {node.id: node for node in previous.nodes}
+    for node_id in sorted(missing_endpoint_ids):
+        previous_node = previous_nodes.get(node_id)
+        if previous_node is not None:
+            all_nodes.append(
+                previous_node.model_copy(
+                    deep=True,
+                    update={
+                        "revision_id": current.revision.id,
+                        "review_status": OntologyReviewStatus.ORPHANED,
+                        "metadata": {
+                            **previous_node.metadata,
+                            "drift_from_revision_id": previous.revision.id,
+                        },
+                    },
+                )
+            )
+    all_nodes.sort(key=lambda node: node.id)
     all_edges = sorted([*current.edges, *preserved_edges], key=lambda edge: edge.id)
     revision = current.revision.model_copy(
         update={"etag": _revision_etag(current.revision, all_nodes, all_edges)}
@@ -790,6 +812,7 @@ def migrate_profile_ontology_view(
         node
         for node in ontology.nodes
         if node.kind in {OntologyNodeKind.TABLE, OntologyNodeKind.VIEW}
+        and node.review_status != OntologyReviewStatus.ORPHANED
     ]
     selected_objects: list[OntologyNode] = []
     if not profile.allowed_tables and not profile.allowed_views:
@@ -826,6 +849,7 @@ def migrate_profile_ontology_view(
         node.id
         for node in ontology.nodes
         if node.kind == OntologyNodeKind.COLUMN
+        and node.review_status != OntologyReviewStatus.ORPHANED
         and any(
             mapping.object_ref.node_id in selected_object_ids for mapping in node.physical_mappings
         )
@@ -935,7 +959,12 @@ def retrieve_ontology_nodes(
     if profile_view.ontology_revision_id != ontology.revision.id:
         raise ValueError("Profile view と Ontology revision が一致しません。")
     allowed_ids = set(profile_view.node_ids)
-    candidates = [node for node in ontology.nodes if node.id in allowed_ids]
+    candidates = [
+        node
+        for node in ontology.nodes
+        if node.id in allowed_ids and node.review_status != OntologyReviewStatus.ORPHANED
+    ]
+    allowed_ids = {node.id for node in candidates}
     question_key = _normalized_text(question)
     scores: dict[str, float] = defaultdict(float)
     terms: dict[str, set[str]] = defaultdict(set)
