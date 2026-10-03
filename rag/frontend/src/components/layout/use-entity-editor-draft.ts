@@ -12,7 +12,7 @@ import {
 
 /**
  * A 型の全画面エディタ（一覧 → 作成 / 編集）の未保存の下書き（platform UX 契約 workspace-state.md、
- * RAG の docs/frontend-workspace-state-spec.md）。業務ビューとナレッジベースのエディタで共有する（#555）。
+ * RAG の docs/frontend-workspace-state-spec.md）。検索・回答プロファイルとナレッジベースのエディタで共有する（#555）。
  *
  * - 下書きは同じタブの sessionStorage に、対象ごとの scope（`new` または対象の ID）で残す。
  *   開き直すと復元し、`discard` か保存（`markSaved`）で消す。

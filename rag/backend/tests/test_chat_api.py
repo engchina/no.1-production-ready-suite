@@ -52,8 +52,8 @@ def test_oracle_schema_includes_chat_tables() -> None:
     assert "CREATE TABLE rag_conversations" in sql
     assert "-- section: messages" in sql
     assert "CREATE TABLE rag_messages" in sql
-    # 業務ビュー配下(FK)・状態制約・比較グルーピング列。
-    assert "rag_conversations_business_view_fk" in sql
+    # 検索・回答プロファイル配下(FK)・状態制約・比較グルーピング列。
+    assert "rag_conversations_search_answer_profile_fk" in sql
     assert "CHECK (status IN ('ACTIVE', 'ARCHIVED'))" in sql
     assert "rag_messages_conversation_fk" in sql
     assert "CHECK (role IN ('USER', 'ASSISTANT', 'SYSTEM'))" in sql
@@ -62,10 +62,10 @@ def test_oracle_schema_includes_chat_tables() -> None:
     assert "citations_json       JSON" in sql
 
 
-def test_chat_sections_ordered_after_business_views() -> None:
-    """FK 依存順(business_views → conversations → messages)で並ぶ。"""
+def test_chat_sections_ordered_after_search_answer_profiles() -> None:
+    """FK 依存順(search_answer_profiles → conversations → messages)で並ぶ。"""
     names = [section.name for section in oracle_schema.oracle_schema_sections()]
-    assert names.index("business_views") < names.index("conversations")
+    assert names.index("search_answer_profiles") < names.index("conversations")
     assert names.index("conversations") < names.index("messages")
 
 
@@ -90,20 +90,20 @@ class FakeChatOracle:
     def __init__(self) -> None:
         self.conversations: dict[str, StoredConversation] = {}
         self.messages: dict[str, list[StoredMessage]] = {}
-        self.business_views: dict[str, str] = {"bv-1": "経理アシスタント"}
+        self.search_answer_profiles: dict[str, str] = {"bv-1": "経理アシスタント"}
 
-    async def get_business_view(self, business_view_id: str) -> object | None:
-        if business_view_id not in self.business_views:
+    async def get_search_answer_profile(self, search_answer_profile_id: str) -> object | None:
+        if search_answer_profile_id not in self.search_answer_profiles:
             return None
         return object()
 
     async def create_conversation(
-        self, *, business_view_id: str, title: str | None = None
+        self, *, search_answer_profile_id: str, title: str | None = None
     ) -> StoredConversation:
         now = datetime(2026, 1, 1, tzinfo=UTC)
         conversation = StoredConversation(
             id=f"conv-{uuid4().hex[:8]}",
-            business_view_id=business_view_id,
+            search_answer_profile_id=search_answer_profile_id,
             title=title,
             status="ACTIVE",
             message_count=0,
@@ -115,17 +115,22 @@ class FakeChatOracle:
         return conversation
 
     async def list_conversations(
-        self, *, business_view_id: str | None = None, limit: int | None = None, offset: int = 0
+        self,
+        *,
+        search_answer_profile_id: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[StoredConversation]:
         items = [
             c
             for c in self.conversations.values()
-            if business_view_id is None or c.business_view_id == business_view_id
+            if search_answer_profile_id is None
+            or c.search_answer_profile_id == search_answer_profile_id
         ]
         return items[offset : (offset + limit) if limit is not None else None]
 
-    async def count_conversations(self, *, business_view_id: str | None = None) -> int:
-        return len(await self.list_conversations(business_view_id=business_view_id))
+    async def count_conversations(self, *, search_answer_profile_id: str | None = None) -> int:
+        return len(await self.list_conversations(search_answer_profile_id=search_answer_profile_id))
 
     async def get_conversation(self, conversation_id: str) -> StoredConversation | None:
         return self.conversations.get(conversation_id)
@@ -191,14 +196,14 @@ def fake_oracle(monkeypatch: MonkeyPatch) -> FakeChatOracle:
 
 
 def test_create_and_get_conversation(fake_oracle: FakeChatOracle) -> None:
-    """業務ビュー配下に会話を作り、詳細を取得できる。"""
+    """検索・回答プロファイル配下に会話を作り、詳細を取得できる。"""
     created = client.post(
         "/api/chat/conversations",
-        json={"business_view_id": "bv-1", "title": " 経費精算の相談 "},
+        json={"search_answer_profile_id": "bv-1", "title": " 経費精算の相談 "},
     )
     assert created.status_code == 200
     data = created.json()["data"]
-    assert data["business_view_id"] == "bv-1"
+    assert data["search_answer_profile_id"] == "bv-1"
     assert data["title"] == "経費精算の相談"
     assert data["messages"] == []
 
@@ -207,35 +212,40 @@ def test_create_and_get_conversation(fake_oracle: FakeChatOracle) -> None:
     assert detail.json()["data"]["id"] == data["id"]
 
 
-def test_create_conversation_rejects_unknown_business_view(fake_oracle: FakeChatOracle) -> None:
-    """存在しない業務ビューでは作成できない。"""
-    resp = client.post("/api/chat/conversations", json={"business_view_id": "bv-missing"})
+def test_create_conversation_rejects_unknown_search_answer_profile(
+    fake_oracle: FakeChatOracle,
+) -> None:
+    """存在しない検索・回答プロファイルでは作成できない。"""
+    resp = client.post("/api/chat/conversations", json={"search_answer_profile_id": "bv-missing"})
     assert resp.status_code == 404
 
 
 def test_list_conversations(fake_oracle: FakeChatOracle) -> None:
     """会話を一覧できる。"""
-    client.post("/api/chat/conversations", json={"business_view_id": "bv-1"})
-    page = client.get("/api/chat/conversations?business_view_id=bv-1").json()["data"]
+    client.post("/api/chat/conversations", json={"search_answer_profile_id": "bv-1"})
+    page = client.get("/api/chat/conversations?search_answer_profile_id=bv-1").json()["data"]
     assert page["total"] == 1
 
 
 def test_delete_conversation_removes_it_from_list(fake_oracle: FakeChatOracle) -> None:
     """会話を削除すると一覧・詳細から消え、存在しない会話は 404。"""
-    created = client.post("/api/chat/conversations", json={"business_view_id": "bv-1"}).json()[
-        "data"
-    ]
+    created = client.post(
+        "/api/chat/conversations", json={"search_answer_profile_id": "bv-1"}
+    ).json()["data"]
     deleted = client.delete(f"/api/chat/conversations/{created['id']}")
     assert deleted.status_code == 200
-    assert client.get("/api/chat/conversations?business_view_id=bv-1").json()["data"]["total"] == 0
+    assert (
+        client.get("/api/chat/conversations?search_answer_profile_id=bv-1").json()["data"]["total"]
+        == 0
+    )
     assert client.get(f"/api/chat/conversations/{created['id']}").status_code == 404
     assert client.delete(f"/api/chat/conversations/{created['id']}").status_code == 404
 
 
 def test_rename_conversation_validates_and_updates_title(fake_oracle: FakeChatOracle) -> None:
-    created = client.post("/api/chat/conversations", json={"business_view_id": "bv-1"}).json()[
-        "data"
-    ]
+    created = client.post(
+        "/api/chat/conversations", json={"search_answer_profile_id": "bv-1"}
+    ).json()["data"]
 
     renamed = client.patch(
         f"/api/chat/conversations/{created['id']}", json={"title": " 経費精算の上限 "}
@@ -268,7 +278,7 @@ def test_conversation_scope_adds_user_predicate_only_when_authenticated() -> Non
         AuditRequestContext(tenant_id_hash="tenant-hash", user_id_hash="user-hash")
     )
     try:
-        sql, binds = _oracle_conversation_where(business_view_id="bv-1")
+        sql, binds = _oracle_conversation_where(search_answer_profile_id="bv-1")
     finally:
         reset_audit_request_context(token)
     assert "c.tenant_id_hash = :tenant_id_hash" in sql
@@ -287,7 +297,10 @@ def test_chat_endpoints_return_404_when_disabled(
     monkeypatch.setattr(get_settings(), "rag_chat_enabled", False)
     assert client.get("/api/chat/conversations").status_code == 404
     assert (
-        client.post("/api/chat/conversations", json={"business_view_id": "bv-1"}).status_code == 404
+        client.post(
+            "/api/chat/conversations", json={"search_answer_profile_id": "bv-1"}
+        ).status_code
+        == 404
     )
     assert client.get("/api/chat/models").status_code == 404
 
@@ -469,7 +482,7 @@ def test_stream_message_single_model_persists_and_streams(monkeypatch: MonkeyPat
     fake = FakeChatOracle()
     conv = StoredConversation(
         id="conv-x",
-        business_view_id="bv-1",
+        search_answer_profile_id="bv-1",
         status="ACTIVE",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -502,7 +515,7 @@ def test_stream_message_single_model_persists_and_streams(monkeypatch: MonkeyPat
 def _chat_conversation(fake: FakeChatOracle, conversation_id: str) -> None:
     fake.conversations[conversation_id] = StoredConversation(
         id=conversation_id,
-        business_view_id="bv-1",
+        search_answer_profile_id="bv-1",
         status="ACTIVE",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -620,7 +633,7 @@ def test_stream_message_sanitizes_user_content_before_database_and_sse(
     fake = FakeChatOracle()
     fake.conversations["conv-safe"] = StoredConversation(
         id="conv-safe",
-        business_view_id="bv-1",
+        search_answer_profile_id="bv-1",
         status="ACTIVE",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -647,7 +660,7 @@ def test_stream_message_does_not_persist_or_echo_blocked_attack(
     fake = FakeChatOracle()
     fake.conversations["conv-block"] = StoredConversation(
         id="conv-block",
-        business_view_id="bv-1",
+        search_answer_profile_id="bv-1",
         status="ACTIVE",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -719,7 +732,7 @@ def test_stream_message_multi_model_compares_two_columns(monkeypatch: MonkeyPatc
     fake = FakeChatOracle()
     fake.conversations["conv-y"] = StoredConversation(
         id="conv-y",
-        business_view_id="bv-1",
+        search_answer_profile_id="bv-1",
         status="ACTIVE",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -748,7 +761,7 @@ def test_stream_message_rejects_archived_conversation(monkeypatch: MonkeyPatch) 
     fake = FakeChatOracle()
     fake.conversations["conv-z"] = StoredConversation(
         id="conv-z",
-        business_view_id="bv-1",
+        search_answer_profile_id="bv-1",
         status="ARCHIVED",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -758,24 +771,27 @@ def test_stream_message_rejects_archived_conversation(monkeypatch: MonkeyPatch) 
     assert resp.status_code == 409
 
 
-def test_stream_message_rejects_business_view_without_knowledge_bases(
+def test_stream_message_rejects_search_answer_profile_without_knowledge_bases(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """参照 KB が 0 件の業務ビューではチャットせず、生成の前に理由を 409 で返す（#304）。"""
+    """参照 KB が 0 件の検索・回答プロファイルではチャ
+    ットせず、生成の前に理由を 409 で返す（#304）。"""
     from types import SimpleNamespace
 
     from app.api.routes import search as search_route
-    from app.rag.business_view_config import BusinessViewConfig
+    from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 
     fake = FakeChatOracle()
 
-    async def empty_view(business_view_id: str) -> object:
-        return SimpleNamespace(id=business_view_id, status="ACTIVE", config=BusinessViewConfig())
+    async def empty_view(search_answer_profile_id: str) -> object:
+        return SimpleNamespace(
+            id=search_answer_profile_id, status="ACTIVE", config=SearchAnswerProfileConfig()
+        )
 
-    monkeypatch.setattr(fake, "get_business_view", empty_view)
+    monkeypatch.setattr(fake, "get_search_answer_profile", empty_view)
     fake.conversations["conv-empty"] = StoredConversation(
         id="conv-empty",
-        business_view_id="bv-1",
+        search_answer_profile_id="bv-1",
         status="ACTIVE",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -788,23 +804,26 @@ def test_stream_message_rejects_business_view_without_knowledge_bases(
     )
 
     assert resp.status_code == 409
-    assert resp.json()["error_messages"] == [search_route.BUSINESS_VIEW_NO_KNOWLEDGE_BASES_MESSAGE]
+    assert resp.json()["error_messages"] == [
+        search_route.SEARCH_ANSWER_PROFILE_NO_KNOWLEDGE_BASES_MESSAGE
+    ]
     assert fake.messages["conv-empty"] == []
 
 
 def test_stream_returns_prepare_errors_before_starting_the_stream(
     fake_oracle: FakeChatOracle, monkeypatch: MonkeyPatch
 ) -> None:
-    """準備（業務ビューの解決など）の 409 は、stream を始める前に理由付きで返す（#463）。"""
+    """準備（検索・回答プロファイルの解決など）の 409 は
+    、stream を始める前に理由付きで返す（#463）。"""
     from fastapi import HTTPException
 
     async def conflict(*_args: object, **_kwargs: object) -> None:
         raise HTTPException(status_code=409, detail="回答プロンプトが無効です。")
 
     monkeypatch.setattr(chat_route, "_resolve_query_context", conflict)
-    created = client.post("/api/chat/conversations", json={"business_view_id": "bv-1"}).json()[
-        "data"
-    ]
+    created = client.post(
+        "/api/chat/conversations", json={"search_answer_profile_id": "bv-1"}
+    ).json()["data"]
 
     response = client.post(
         f"/api/chat/conversations/{created['id']}/messages/stream",
@@ -816,16 +835,16 @@ def test_stream_returns_prepare_errors_before_starting_the_stream(
     assert fake_oracle.messages[created["id"]] == []
 
 
-def test_stream_message_passes_selected_approved_faq_from_the_business_view(
+def test_stream_message_passes_selected_approved_faq_from_the_search_answer_profile(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """選んだ類似問は業務ビューの FAQ から引き直して回答の pipeline へ渡す(#684)。"""
+    """選んだ類似問は検索・回答プロファイルの FAQ から引き直して回答の pipeline へ渡す(#684)。"""
     from rag_engine.knowledge.approved_faq import ApprovedFaqRecord
 
     fake = FakeChatOracle()
     fake.conversations["conv-x"] = StoredConversation(
         id="conv-x",
-        business_view_id="bv-1",
+        search_answer_profile_id="bv-1",
         status="ACTIVE",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -838,8 +857,8 @@ def test_stream_message_passes_selected_approved_faq_from_the_business_view(
     )
     looked_up: list[tuple[str, str]] = []
 
-    async def find(_store: object, business_view_id: str, faq_id: str) -> object:
-        looked_up.append((business_view_id, faq_id))
+    async def find(_store: object, search_answer_profile_id: str, faq_id: str) -> object:
+        looked_up.append((search_answer_profile_id, faq_id))
         return record if faq_id == "faq-1" else None
 
     monkeypatch.setattr(chat_route, "find_approved_faq", find)
@@ -852,7 +871,7 @@ def test_stream_message_passes_selected_approved_faq_from_the_business_view(
     # 選ばなかったときは渡さない。
     client.post(url, json={"content": "特典は?"})
     assert _FakePipeline.approved_faqs[-1] is None
-    # 業務ビューに無い(またはオフ)の FAQ は、発話を保存する前に 422 で断る。
+    # 検索・回答プロファイルに無い(またはオフ)の FAQ は、発話を保存する前に 422 で断る。
     saved = len(fake.messages["conv-x"])
     missing = client.post(url, json={"content": "特典は?", "approved_faq_id": "other"})
     assert missing.status_code == 422
@@ -862,13 +881,13 @@ def test_stream_message_passes_selected_approved_faq_from_the_business_view(
 def test_stream_message_resolves_the_clarification_answer_into_scope_and_page_ranges(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """確認の答えは業務ビューのルールから引き直し、章節の範囲と回答の前提にする(#717)。"""
-    from tests.test_business_view_clarification import CLARIFICATION
+    """確認の答えは検索・回答プロファイルのルールから引き直し、章節の範囲と回答の前提にする(#717)。"""
+    from tests.test_search_answer_profile_clarification import CLARIFICATION
 
     fake = FakeChatOracle()
     fake.conversations["conv-x"] = StoredConversation(
         id="conv-x",
-        business_view_id="bv-1",
+        search_answer_profile_id="bv-1",
         status="ACTIVE",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -878,8 +897,8 @@ def test_stream_message_resolves_the_clarification_answer_into_scope_and_page_ra
     monkeypatch.setattr(_FakePipeline, "scopes", [])
     monkeypatch.setattr(_FakePipeline, "filters", [])
 
-    async def payload(_store: object, business_view_id: str) -> dict[str, object]:
-        assert business_view_id == "bv-1"
+    async def payload(_store: object, search_answer_profile_id: str) -> dict[str, object]:
+        assert search_answer_profile_id == "bv-1"
         return {"rules": [{"id": "R01", "clarification": CLARIFICATION}]}
 
     monkeypatch.setattr(chat_route, "load_runtime_knowledge_payload", payload)

@@ -18,7 +18,7 @@ import { securityApi } from "./security-api";
 /**
  * 権限管理画面（共通の RolePermissionsPage）へ渡す Agent の保存 API と「利用できる対象」（#215）。
  * 対象はエージェントだけ。`agent.admin` を持つロールで全件が対象（backend も空に正規化する）。
- * 業務ビューの判定は、RAG が Run の利用者のサービストークンで行う（#750）。
+ * 検索・回答プロファイルの判定は、RAG が Run の利用者のサービストークンで行う（#750）。
  */
 
 /** 対象の key。要素 ID とテスト ID は `security-roles-<key>-*` になる。 */

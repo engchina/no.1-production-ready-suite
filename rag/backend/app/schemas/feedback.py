@@ -125,7 +125,7 @@ class FeedbackRequest(BaseModel):
     """回答または引用に対するフィードバック登録。"""
 
     trace_id: str = Field(..., min_length=1, max_length=64)
-    business_view_id: str = Field(..., min_length=1, max_length=64)
+    search_answer_profile_id: str = Field(..., min_length=1, max_length=64)
     target_type: FeedbackTargetType
     source_surface: FeedbackSourceSurface
     document_id: str | None = Field(default=None, max_length=64)
@@ -137,7 +137,9 @@ class FeedbackRequest(BaseModel):
     comment: str | None = Field(default=None, max_length=1000)
     corrected_answer: str | None = Field(default=None, max_length=CORRECTED_ANSWER_MAX_CHARS)
 
-    @field_validator("trace_id", "business_view_id", "document_id", "chunk_id", "message_id")
+    @field_validator(
+        "trace_id", "search_answer_profile_id", "document_id", "chunk_id", "message_id"
+    )
     @classmethod
     def validate_identifier(cls, value: str | None) -> str | None:
         return _clean_identifier(value)
@@ -198,7 +200,7 @@ class FeedbackSubmissionResponse(BaseModel):
 
     feedback_id: str
     trace_id: str
-    business_view_id: str | None = None
+    search_answer_profile_id: str | None = None
     target_type: FeedbackTargetType
     source_surface: FeedbackSourceSurface | None = None
     document_id: str | None = None
@@ -240,7 +242,7 @@ class FeedbackSummary(BaseModel):
 class FeedbackItem(CurrentFeedbackItem):
     """管理画面に表示するフィードバック明細。"""
 
-    business_view_name: str | None = None
+    search_answer_profile_name: str | None = None
     conversation_id: str | None = None
     conversation_title: str | None = None
     model: str | None = None
@@ -275,9 +277,9 @@ class FeedbackDetail(FeedbackItem):
 
 
 class FeedbackApprovedFaqPromotion(BaseModel):
-    """フィードバックを業務ビューの Approved FAQ へ登録した結果。"""
+    """フィードバックを検索・回答プロファイルの Approved FAQ へ登録した結果。"""
 
-    business_view_id: str
+    search_answer_profile_id: str
     question: str
     inserted_count: int = Field(ge=0)
     deleted_count: int = Field(ge=0)

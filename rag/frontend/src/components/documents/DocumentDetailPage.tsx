@@ -11,11 +11,11 @@ import { DocumentWorkspace } from "./DocumentWorkspace";
 import { documentDisplayStatus, selectDocumentRecipe } from "./DocumentWorkspace.logic";
 
 /**
- * 文書詳細（`/documents/:id`）。見出しはナレッジベース・業務ビューの詳細と同じ構成にする（#581）:
+ * 文書詳細（`/documents/:id`）。見出しはナレッジベース・検索・回答プロファイルの詳細と同じ構成にする（#581）:
  * `PageHeader`（パンくず「文書インデックス › ファイル名」・状態のバッジ・「一覧へ戻る」）→ `PageBody` の本文
  * （`DocumentWorkspace`。処理レシピ・処理の開始 / 承認 / 再試行・プレビューなどは本文のまま）。
  *
- * - 読み込み中・見つからない・取得の失敗は、KB・業務ビューと共有の `EditorTargetState` で、同じ見出しを
+ * - 読み込み中・見つからない・取得の失敗は、KB・検索・回答プロファイルと共有の `EditorTargetState` で、同じ見出しを
  *   先に出して本文だけを切り替える。取得済みの文書があれば、ポーリング中の一時的な失敗で本文を置き換えない
  *   （本文の `DocumentWorkspace` と同じ。#281）。
  * - 状態は本文と同じく、URL の `?recipe=` で選んだレシピの状態（無ければ文書の状態）。

@@ -7,7 +7,7 @@ import { expect, type Page } from "@playwright/test";
 export const MENU_PERMISSION_CODES = [
   "menu.search",
   "menu.chat",
-  "menu.business_views",
+  "menu.search_answer_profiles",
   "menu.evaluation",
   "menu.feedback",
   "menu.upload",
@@ -37,7 +37,7 @@ export const MENU_PERMISSION_CODES = [
 ] as const;
 
 export const CAPABILITY_PERMISSION_CODES = [
-  "rag.business_views.manage",
+  "rag.search_answer_profiles.manage",
   "rag.knowledge_bases.manage",
   "rag.feedback.manage",
   "rag.system_tables.manage",
@@ -57,7 +57,7 @@ export interface CurrentUserPayload {
   role_codes: string[];
   is_system_admin: boolean;
   permissions: string[];
-  allowed_business_view_ids: string[] | null;
+  allowed_search_answer_profile_ids: string[] | null;
   allowed_knowledge_base_ids: string[] | null;
   debug_mode: boolean;
   password_change_allowed: boolean;
@@ -73,7 +73,7 @@ export const LOCAL_CURRENT_USER: CurrentUserPayload = {
   role_codes: ["SYSTEM_ADMIN"],
   is_system_admin: true,
   permissions: ALL_PERMISSION_CODES,
-  allowed_business_view_ids: null,
+  allowed_search_answer_profile_ids: null,
   allowed_knowledge_base_ids: null,
   debug_mode: true,
   password_change_allowed: false,
@@ -107,7 +107,7 @@ export function dbUser(overrides: Partial<CurrentUserPayload> = {}): CurrentUser
     role_codes: ["RAG_USER"],
     is_system_admin: false,
     permissions: [],
-    allowed_business_view_ids: [],
+    allowed_search_answer_profile_ids: [],
     allowed_knowledge_base_ids: [],
     debug_mode: false,
     password_change_allowed: true,
@@ -337,13 +337,13 @@ export async function expectedControlHeight(page: Page, size: keyof typeof CONTR
 }
 
 /**
- * RAG 検索・チャットの「対象の業務ビュー」を 1 つ選ぶ（#635。共有の SearchableSelectField）。
+ * RAG 検索・チャットの「対象の検索・回答プロファイル」を 1 つ選ぶ（#635。共有の SearchableSelectField）。
  * ボタンを押して候補の一覧を開き、候補を選ぶ（選ぶと一覧は閉じてボタンへ戻る）。
  */
-export async function selectBusinessView(page: Page, name: RegExp | string) {
-  await page.getByRole("button", { name: /対象の業務ビュー/ }).click();
-  await page.getByRole("listbox", { name: /対象の業務ビュー/ }).getByRole("option", { name }).click();
-  await expect(page.getByRole("listbox", { name: /対象の業務ビュー/ })).toHaveCount(0);
+export async function selectSearchAnswerProfile(page: Page, name: RegExp | string) {
+  await page.getByRole("button", { name: /検索・回答プロファイル/ }).click();
+  await page.getByRole("listbox", { name: /検索・回答プロファイル/ }).getByRole("option", { name }).click();
+  await expect(page.getByRole("listbox", { name: /検索・回答プロファイル/ })).toHaveCount(0);
 }
 
 /** RAG 検索の「LLM で回答を生成する」をオンにする（既定はオフで、検索結果までを出す。#649）。 */

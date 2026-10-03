@@ -5,7 +5,7 @@ import {
   mockDatabaseReady,
   mockLocalAuth,
   openSidebarNav,
-  selectBusinessView,
+  selectSearchAnswerProfile,
 } from "./_helpers";
 
 // 1x1 透明 PNG。`<img>` で実際に描画できる有効な data URI。
@@ -216,7 +216,7 @@ for (const viewport of [
 test("RAG 検索は文書の分類と基準日を filters に入れて送る", async ({ page }) => {
   let searchBody: Record<string, unknown> | null = null;
   await mockDocumentDetail(page);
-  await page.route("**/api/business-views/*/approved-faq/suggest", (route) =>
+  await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
     route.fulfill({ json: { data: { suggestions: [] }, error_messages: [], warning_messages: [] } })
   );
   await page.route("**/api/search/stream", async (route) => {
@@ -229,7 +229,7 @@ test("RAG 検索は文書の分類と基準日を filters に入れて送る", a
   });
 
   await page.goto("/search");
-  await selectBusinessView(page, /経理ビュー/);
+  await selectSearchAnswerProfile(page, /経理ビュー/);
   await page.getByRole("button", { name: "詳細条件" }).press("Enter");
   await page.getByRole("button", { name: "文書の分類で絞り込む" }).press("Enter");
   await page.getByLabel("大分類").fill("経理");
@@ -267,7 +267,7 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
         data: {
           feedback_id: "feedback-1",
           trace_id: "trace-1",
-          business_view_id: "bv-1",
+          search_answer_profile_id: "bv-1",
           target_type: "citation",
           source_surface: "search",
           document_id: "doc-1",
@@ -282,7 +282,7 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   });
 
   await page.goto("/search");
-  await selectBusinessView(page, /経理ビュー/);
+  await selectSearchAnswerProfile(page, /経理ビュー/);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("料金表を確認");
   await page.getByRole("button", { name: "検索", exact: true }).click();
 
@@ -312,7 +312,7 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await citation.getByRole("button", { name: "この引用は役に立った" }).click();
   await expect.poll(() => feedbackPayload).toMatchObject({
     trace_id: "trace-1",
-    business_view_id: "bv-1",
+    search_answer_profile_id: "bv-1",
     target_type: "citation",
     source_surface: "search",
     document_id: "doc-1",
@@ -548,8 +548,8 @@ async function mockDocumentDetail(
       },
     });
   });
-  await page.route("**/api/business-views**", async (route) => {
-    // 検索ページは業務ビュー選択が前提のため、最低 1 件を返す。
+  await page.route("**/api/search-answer-profiles**", async (route) => {
+    // 検索ページは検索・回答プロファイル選択が前提のため、最低 1 件を返す。
     await route.fulfill({
       json: {
         data: {

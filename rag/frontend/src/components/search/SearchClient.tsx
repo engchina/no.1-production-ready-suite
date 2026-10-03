@@ -33,7 +33,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { BusinessViewSelect, BusinessViewSelectSkeleton } from "@/components/business-views/BusinessViewSelect";
+import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
 import { CitationCard } from "./CitationCard";
 import {
   buildFeedbackContentSnapshot,
@@ -53,7 +53,7 @@ import { isSubmitEnter } from "@/lib/keyboard";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import {
-  useBusinessViews,
+  useSearchAnswerProfiles,
   useSearchAnswerModels,
   useSearchExtractionFields,
 } from "@/lib/queries";
@@ -109,7 +109,7 @@ const TOP_K_SELECT_OPTIONS = TOP_K_OPTIONS.map((option) => ({
  * 「LLM で回答を生成する」をオンにしたときだけ、チャットと同じく回答（CRAG を含む）まで行う（#649）。
  */
 export function SearchClient() {
-  // 入力中の質問・業務ビュー・詳細条件は、ページを行き来しても再読込しても残す（workspace-state.md）。
+  // 入力中の質問・検索・回答プロファイル・詳細条件は、ページを行き来しても再読込しても残す（workspace-state.md）。
   // 回答・引用などの結果は保存せず、戻っただけで検索を送り直さない。
   const [query, setQuery] = useWorkspaceState("search.query", "");
   const [submittedQuery, setSubmittedQuery] = useState("");
@@ -124,7 +124,7 @@ export function SearchClient() {
     isClassificationFilterValues
   );
   const [classificationOpen, setClassificationOpen] = useState(false);
-  // 抽出項目の値の条件（#549）。行は作業状態に残し、項目の型は選んだ業務ビューの KB の定義から引く。
+  // 抽出項目の値の条件（#549）。行は作業状態に残し、項目の型は選んだ検索・回答プロファイルの KB の定義から引く。
   const [extractionRows, setExtractionRows] = useWorkspaceState<ExtractionFieldFilterRow[]>(
     "search.extractionFields",
     [],
@@ -143,17 +143,17 @@ export function SearchClient() {
     ? storedAnswerModelId
     : "";
   const [appliedFilters, setAppliedFilters] = useState<Record<string, string>>({});
-  // 対象の業務ビューは 1 つ（#635）。チャットと同じく ID を 1 つだけ作業状態に残す。
-  const [businessViewId, setBusinessViewId] = useWorkspaceState<string | null>(
-    "search.businessViewId",
+  // 対象の検索・回答プロファイルは 1 つ（#635）。チャットと同じく ID を 1 つだけ作業状態に残す。
+  const [searchAnswerProfileId, setSearchAnswerProfileId] = useWorkspaceState<string | null>(
+    "search.searchAnswerProfileId",
     null,
     isNullableString
   );
   const [scopeError, setScopeError] = useState("");
   const [run, setRun] = useState<SearchRun | null>(null);
-  // 表示中の回答を生成したときの業務ビュー。回答・引用の評価はこの業務ビューへ送る。
+  // 表示中の回答を生成したときの検索・回答プロファイル。回答・引用の評価はこの検索・回答プロファイルへ送る。
   // 検索後に選択を変えても、表示中の回答の評価先は変えない（#285）。
-  const [answerBusinessViewId, setAnswerBusinessViewId] = useState<string | null>(null);
+  const [answerSearchAnswerProfileId, setAnswerSearchAnswerProfileId] = useState<string | null>(null);
   // 直前の送信が類似 FAQ の提示を飛ばしたか。エラーの再試行を同じ操作にする（#285）。
   const [lastSkipFaq, setLastSkipFaq] = useState(false);
   // 質問から読み取った条件のうち、利用者が外した項目（#652）。新しく検索するたびに空に戻す。
@@ -162,27 +162,27 @@ export function SearchClient() {
   const [faqAnswer, setFaqAnswer] = useState<ApprovedFaqSuggestionData | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const navigate = useNavigate();
-  const businessViewsQuery = useBusinessViews({ status: "ACTIVE", limit: 50, offset: 0 });
-  const businessViews = businessViewsQuery.data?.items ?? [];
-  // 復元した業務ビューがアーカイブ・削除されていたら選択を外す（別の対象へ置き換えない）。
-  const businessViewMissing =
-    Boolean(businessViewId) &&
-    Boolean(businessViewsQuery.data) &&
-    !businessViewsQuery.data?.has_next &&
-    !businessViews.some((view) => view.id === businessViewId);
-  // 選んだ業務ビューが参照 KB を持たないなら検索しない（利用者の全 KB を検索しない。#304）。
+  const searchAnswerProfilesQuery = useSearchAnswerProfiles({ status: "ACTIVE", limit: 50, offset: 0 });
+  const searchAnswerProfiles = searchAnswerProfilesQuery.data?.items ?? [];
+  // 復元した検索・回答プロファイルがアーカイブ・削除されていたら選択を外す（別の対象へ置き換えない）。
+  const searchAnswerProfileMissing =
+    Boolean(searchAnswerProfileId) &&
+    Boolean(searchAnswerProfilesQuery.data) &&
+    !searchAnswerProfilesQuery.data?.has_next &&
+    !searchAnswerProfiles.some((view) => view.id === searchAnswerProfileId);
+  // 選んだ検索・回答プロファイルが参照 KB を持たないなら検索しない（利用者の全 KB を検索しない。#304）。
   // backend も 409 で理由を返すが、送信する前にこの場で理由を示す。
-  const selectedBusinessView = businessViews.find((view) => view.id === businessViewId);
-  const selectedWithoutKnowledgeBases = selectedBusinessView?.knowledge_base_count === 0;
+  const selectedSearchAnswerProfile = searchAnswerProfiles.find((view) => view.id === searchAnswerProfileId);
+  const selectedWithoutKnowledgeBases = selectedSearchAnswerProfile?.knowledge_base_count === 0;
   // 画面を離れたら生成中の検索を止める（backend の pipeline と LLM を無駄に動かし続けない。#285）。
   useEffect(() => () => abortRef.current?.abort(), []);
   useEffect(() => {
-    if (businessViewMissing) setBusinessViewId(null);
-  }, [businessViewMissing, setBusinessViewId]);
+    if (searchAnswerProfileMissing) setSearchAnswerProfileId(null);
+  }, [searchAnswerProfileMissing, setSearchAnswerProfileId]);
   const hasClassificationFilters = Object.values(classification).some((value) => value.trim());
   const hasExtractionFieldFilters = extractionRows.some(isActiveExtractionFieldFilterRow);
   const extractionFieldsQuery = useSearchExtractionFields(
-    businessViewId,
+    searchAnswerProfileId,
     extractionOpen || hasExtractionFieldFilters
   );
   const fieldFilter = extractionFieldConditions(
@@ -198,8 +198,8 @@ export function SearchClient() {
   const runSubmit = async (skipFaq: boolean, excludedAutoFields: string[]) => {
     const trimmed = query.trim();
     if (!trimmed || phase === "streaming") return;
-    if (!businessViewId) {
-      setScopeError(t("businessViews.scope.required"));
+    if (!searchAnswerProfileId) {
+      setScopeError(t("searchAnswerProfiles.scope.required"));
       return;
     }
     if (selectedWithoutKnowledgeBases) return;
@@ -218,9 +218,9 @@ export function SearchClient() {
     setFaqSuggestions(null);
     setFaqAnswer(null);
     if (!skipFaq) {
-      // 業務ビューの承認済み FAQ に類似問があれば、回答生成の前に提示する(rag_poc の類似問)。
+      // 検索・回答プロファイルの承認済み FAQ に類似問があれば、回答生成の前に提示する(rag_poc の類似問)。
       try {
-        const faq = await api.suggestApprovedFaq(businessViewId, trimmed);
+        const faq = await api.suggestApprovedFaq(searchAnswerProfileId, trimmed);
         if (faq.suggestions.length > 0) {
           setFaqSuggestions(faq.suggestions);
           return;
@@ -240,7 +240,7 @@ export function SearchClient() {
     setCitations([]);
     setMeta(null);
     setErrorText("");
-    setAnswerBusinessViewId(businessViewId);
+    setAnswerSearchAnswerProfileId(searchAnswerProfileId);
     setRun({
       generateAnswer,
       startedAtMs,
@@ -260,7 +260,7 @@ export function SearchClient() {
         {
           query: trimmed,
           top_k: Number(topK),
-          business_view_id: businessViewId,
+          search_answer_profile_id: searchAnswerProfileId,
           generate_answer: generateAnswer,
           ...(generateAnswer && answerModelId ? { model_id: answerModelId } : {}),
           ...(excludedAutoFields.length ? { auto_field_filter_excluded: excludedAutoFields } : {}),
@@ -362,34 +362,34 @@ export function SearchClient() {
       <PageHeader wide title={t("nav.search")} subtitle={t("search.initial")} />
       <PageBody wide>
         <section className="space-y-6">
-          {businessViewsQuery.isLoading ? (
+          {searchAnswerProfilesQuery.isLoading ? (
             <Card>
               <CardContent className="pt-5">
                 <TimedLoadingState
-                  label={t("search.businessViewLoading")}
-                  operationKey="search-business-views-load"
+                  label={t("search.searchAnswerProfileLoading")}
+                  operationKey="search-search-answer-profiles-load"
                   framed={false}
-                  testId="search-business-views-loading"
+                  testId="search-search-answer-profiles-loading"
                 >
-                  <BusinessViewSelectSkeleton />
+                  <SearchAnswerProfileSelectSkeleton />
                   <Skeleton className="h-[var(--button-height-md)] w-full" />
                 </TimedLoadingState>
               </CardContent>
             </Card>
-          ) : businessViewsQuery.isError ? (
+          ) : searchAnswerProfilesQuery.isError ? (
             <ErrorState
-              message={t("search.businessViewError")}
-              onRetry={() => void businessViewsQuery.refetch()}
+              message={t("search.searchAnswerProfileError")}
+              onRetry={() => void searchAnswerProfilesQuery.refetch()}
             />
-          ) : businessViews.length === 0 ? (
+          ) : searchAnswerProfiles.length === 0 ? (
             <Card>
               <CardContent className="pt-5">
                 <EmptyState
-                  title={t("search.businessViewRequired.title")}
-                  hint={t("search.businessViewRequired.hint")}
+                  title={t("search.searchAnswerProfileRequired.title")}
+                  hint={t("search.searchAnswerProfileRequired.hint")}
                   action={
-                    <Button onClick={() => navigate(`${APP_ROUTES.businessViews}?id=new`)} icon={Plus}>
-                      {t("search.businessViewRequired.cta")}
+                    <Button onClick={() => navigate(`${APP_ROUTES.searchAnswerProfiles}?id=new`)} icon={Plus}>
+                      {t("search.searchAnswerProfileRequired.cta")}
                     </Button>
                   }
                 />
@@ -400,18 +400,18 @@ export function SearchClient() {
           {/* 検索条件 */}
           <Card>
             <CardContent className="space-y-4 pt-4">
-              <BusinessViewSelect
-                id={BUSINESS_VIEW_SCOPE_INPUT_ID}
-                items={businessViews}
-                value={businessViewId}
+              <SearchAnswerProfileSelect
+                id={SEARCH_ANSWER_PROFILE_SCOPE_INPUT_ID}
+                items={searchAnswerProfiles}
+                value={searchAnswerProfileId}
                 onChange={(next) => {
-                  setBusinessViewId(next);
+                  setSearchAnswerProfileId(next);
                   setScopeError("");
                 }}
                 disabled={isStreaming}
                 error={
                   scopeError ||
-                  (selectedWithoutKnowledgeBases ? t("businessViews.scope.noKnowledgeBases") : "")
+                  (selectedWithoutKnowledgeBases ? t("searchAnswerProfiles.scope.noKnowledgeBases") : "")
                 }
               />
 
@@ -510,7 +510,7 @@ export function SearchClient() {
                         <p className="text-xs leading-relaxed text-fg-muted">
                           {t("search.filters.fields.helper")}
                         </p>
-                        {!businessViewId ? (
+                        {!searchAnswerProfileId ? (
                           <p className="text-sm text-fg-muted">{t("search.filters.fields.chooseScope")}</p>
                         ) : (
                           <ExtractionFieldFilters
@@ -639,7 +639,7 @@ export function SearchClient() {
                   />
                 </FieldActionRow>
                 <QuerySuggestions
-                  businessViewId={businessViewId}
+                  searchAnswerProfileId={searchAnswerProfileId}
                   query={query}
                   filters={classificationSuggestionFilters(classification)}
                   disabled={isStreaming}
@@ -740,7 +740,7 @@ export function SearchClient() {
                   {answerMode && meta && phase === "done" ? (
                     <FeedbackControls
                       traceId={meta.trace_id}
-                      businessViewId={answerBusinessViewId}
+                      searchAnswerProfileId={answerSearchAnswerProfileId}
                       targetType="answer"
                       sourceSurface="search"
                       contentSnapshot={feedbackSnapshot}
@@ -789,7 +789,7 @@ export function SearchClient() {
                         chunk={chunk}
                         index={i}
                         traceId={meta?.trace_id}
-                        businessViewId={answerBusinessViewId}
+                        searchAnswerProfileId={answerSearchAnswerProfileId}
                         sourceSurface="search"
                         contentSnapshot={feedbackSnapshot}
                       />
@@ -1110,4 +1110,4 @@ function isClassificationFilterValues(value: unknown): value is ClassificationFi
   );
 }
 
-const BUSINESS_VIEW_SCOPE_INPUT_ID = "search-business-view-scope";
+const SEARCH_ANSWER_PROFILE_SCOPE_INPUT_ID = "search-search-answer-profile-scope";

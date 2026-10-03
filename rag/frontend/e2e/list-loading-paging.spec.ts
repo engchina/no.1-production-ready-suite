@@ -46,30 +46,30 @@ test("文書一覧: 読み込み中は経過時間と表の Skeleton、表の中
   await expect(page.getByRole("link", { name: "doc-11.txt" })).toBeVisible();
 });
 
-test("業務ビュー一覧: 読み込み中は経過時間と表の Skeleton、2 ページ目へ移れる", async ({ page }) => {
-  const release = await mockBusinessViews(page, 12);
+test("検索・回答プロファイル一覧: 読み込み中は経過時間と表の Skeleton、2 ページ目へ移れる", async ({ page }) => {
+  const release = await mockSearchAnswerProfiles(page, 12);
 
-  await page.goto("/business-views");
-  const loading = page.getByTestId("business-views-loading");
+  await page.goto("/search-answer-profiles");
+  const loading = page.getByTestId("search-answer-profiles-loading");
   await expect(loading).toBeVisible();
-  await expect(loading).toContainText("業務ビューを読み込んでいます");
+  await expect(loading).toContainText("検索・回答プロファイルを読み込んでいます");
   await expect(loading.getByRole("timer")).toBeVisible();
   release();
 
   await expect(loading).toHaveCount(0);
-  await expectScrollsInsideTable(page, page.getByTestId("business-views-scroll-region"));
-  const pagination = page.getByTestId("business-views-pagination");
+  await expectScrollsInsideTable(page, page.getByTestId("search-answer-profiles-scroll-region"));
+  const pagination = page.getByTestId("search-answer-profiles-pagination");
   await expect(pagination).toContainText("1 - 10 / 12 件");
   await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(pagination).toContainText("11 - 12 / 12 件");
-  await expect(page.getByTestId("business-view-row-bv-12")).toBeVisible();
+  await expect(page.getByTestId("search-answer-profile-row-bv-12")).toBeVisible();
   await expectNoPageOverflow(page);
 });
 
 test("チャットの会話一覧: 読み込み中は経過時間と行の Skeleton、サーバー側のページングで 2 ページ目へ移れる", async ({ page }) => {
   const { release, requests } = await mockConversations(page, 25);
 
-  await page.goto("/chat?business_view_id=bv-1");
+  await page.goto("/chat?search_answer_profile_id=bv-1");
   // 会話の履歴は既定で閉じている。lg 以上はパネル、lg 未満はシートで開く（#664）。
   const history = await openChatHistory(page);
   const loading = page.getByTestId("chat-conversations-loading");
@@ -180,10 +180,10 @@ async function mockDocuments(page: Page, count: number) {
   return release;
 }
 
-async function mockBusinessViews(page: Page, count: number) {
+async function mockSearchAnswerProfiles(page: Page, count: number) {
   const views = Array.from({ length: count }, (_, index) => ({
     id: `bv-${index + 1}`,
-    name: `業務ビュー ${String(index + 1).padStart(2, "0")}`,
+    name: `検索・回答プロファイル ${String(index + 1).padStart(2, "0")}`,
     description: "",
     status: "ACTIVE",
     knowledge_base_count: 1,
@@ -193,9 +193,9 @@ async function mockBusinessViews(page: Page, count: number) {
   }));
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => (release = resolve));
-  await page.route("**/api/business-views**", async (route) => {
+  await page.route("**/api/search-answer-profiles**", async (route) => {
     const url = new URL(route.request().url());
-    if (route.request().method() !== "GET" || url.pathname !== "/api/business-views") {
+    if (route.request().method() !== "GET" || url.pathname !== "/api/search-answer-profiles") {
       await route.fulfill({ status: 404, json: { detail: "not found" } });
       return;
     }
@@ -222,7 +222,7 @@ function envelope<T>(data: T) {
 async function mockConversations(page: Page, count: number) {
   const conversations = Array.from({ length: count }, (_, index) => ({
     id: `conv-${index + 1}`,
-    business_view_id: "bv-1",
+    search_answer_profile_id: "bv-1",
     title: `会話 ${String(index + 1).padStart(2, "0")}`,
     status: "ACTIVE",
     message_count: 2,
@@ -232,7 +232,7 @@ async function mockConversations(page: Page, count: number) {
   const requests: { limit: number; offset: number }[] = [];
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => (release = resolve));
-  await page.route("**/api/business-views**", (route) =>
+  await page.route("**/api/search-answer-profiles**", (route) =>
     route.fulfill({
       json: envelope({
         items: [

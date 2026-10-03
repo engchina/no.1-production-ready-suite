@@ -2,10 +2,10 @@
   "server": "production-ready-rag",
   "tools": [
     {
-      "name": "rag_list_business_views",
-      "description": "利用できる業務ビュー（ACTIVE）の一覧を返します。",
+      "name": "rag_list_search_answer_profiles",
+      "description": "利用できる検索・回答プロファイル（ACTIVE）の一覧を返します。",
       "inputSchema": {
-        "description": "業務ビュー一覧の条件。",
+        "description": "検索・回答プロファイル一覧の条件。",
         "properties": {
           "query": {
             "anyOf": [
@@ -30,7 +30,7 @@
             "type": "integer"
           }
         },
-        "title": "ListBusinessViewsInput",
+        "title": "ListSearchAnswerProfilesInput",
         "type": "object"
       },
       "annotations": {
@@ -38,7 +38,7 @@
       },
       "outputSchema": {
         "$defs": {
-          "BusinessViewItem": {
+          "SearchAnswerProfileItem": {
             "properties": {
               "id": {
                 "title": "Id",
@@ -75,31 +75,32 @@
               "status",
               "knowledge_base_count"
             ],
-            "title": "BusinessViewItem",
+            "title": "SearchAnswerProfileItem",
             "type": "object"
           }
         },
         "properties": {
-          "business_views": {
+          "search_answer_profiles": {
             "items": {
-              "$ref": "#/$defs/BusinessViewItem"
+              "$ref": "#/$defs/SearchAnswerProfileItem"
             },
-            "title": "Business Views",
+            "title": "Search Answer Profiles",
             "type": "array"
           }
         },
         "required": [
-          "business_views"
+          "search_answer_profiles"
         ],
-        "title": "ListBusinessViewsOutput",
+        "title": "ListSearchAnswerProfilesOutput",
         "type": "object"
       }
     },
     {
       "name": "rag_search",
-      "description": "業務ビューのナレッジベースを検索し、根拠（citations）付きの回答を返します。",
+      "description": "検索・回答プロファイルのナレッジベースを検索し、根拠（citations）付きの回答を返します。",
       "inputSchema": {
-        "description": "検索・回答の条件。",
+        "additionalProperties": false,
+        "description": "検索・回答の条件。旧 scope を含む未定義項目は拒否する。",
         "properties": {
           "query": {
             "description": "質問文。",
@@ -108,7 +109,7 @@
             "title": "Query",
             "type": "string"
           },
-          "business_view_id": {
+          "search_answer_profile_id": {
             "anyOf": [
               {
                 "maxLength": 128,
@@ -119,11 +120,11 @@
               }
             ],
             "default": null,
-            "description": "業務ビューの id。参照するナレッジベースと検索・回答設定を使う。",
-            "title": "Business View Id"
+            "description": "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。",
+            "title": "Search Answer Profile Id"
           },
           "knowledge_base_ids": {
-            "description": "検索するナレッジベースの id（省略時は業務ビューの参照先）。",
+            "description": "検索するナレッジベースの id（省略時は検索・回答プロファイルの参照先）。",
             "items": {
               "type": "string"
             },

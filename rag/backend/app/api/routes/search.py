@@ -25,8 +25,6 @@ from app.config import (
 from app.rag.answer_engine import evaluate_answer_record
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 from app.rag.audit import record_rag_search_audit
-from app.rag.business_view_config import resolve_business_view_settings
-from app.rag.business_view_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.extraction_field_adapter import load_field_schema, resolve_field_definitions
 from app.rag.observability import (
@@ -38,6 +36,8 @@ from app.rag.observability import (
 from app.rag.pipeline import RagPipeline, SearchStageProgress
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
+from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
+from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search import (
     AnswerEvaluationRequest,
@@ -134,7 +134,9 @@ async def stream_search(
 ) -> StreamingResponse:
     """RAG 検索結果を SSE 形式でストリーミングする。"""
     enforce_rate_limit("search", http_request)
-    # 業務ビュー・KB の解決（404 / 403）は stream を始める前に行い、HTTP の status で返す。
+    # 検索・回答プロファイル・KB の解決（404 / 403）は s
+    # tream を始める前に行い、HTTP の status で返す。
+    #
     resolved = await _resolve_query_context(request, get_settings())
     return StreamingResponse(
         _stream_search_events_with_timeout(resolved),
@@ -150,47 +152,47 @@ async def _resolve_query_context(
     request: SearchRequest,
     global_settings: Settings,
 ) -> tuple[SearchRequest, Settings, str | None, str | None]:
-    """検索の有効 request / Settings と適用済みの Business View id を返す。
+    """検索の有効 request / Settings と適用済みの Search Answer Profile id を返す。
 
-    解決順は Business View > グローバル既定。
-    業務ビュー指定時は参照 KB 群を検索対象へ展開し、その回答の設定を適用する。
+    解決順は Search Answer Profile > グローバル既定。
+    検索・回答プロファイル指定時は参照 KB 群を検索対象へ展開し、その回答の設定を適用する。
     KB はナレッジ構築設定だけを持つため、KB query legacy 値は検索 runtime へ反映しない。
-    戻り値は (有効 request, 有効 Settings, 適用 KB id, 適用 Business View id)。
+    戻り値は (有効 request, 有効 Settings, 適用 KB id, 適用 Search Answer Profile id)。
     """
     oracle = OracleClient()
     settings = global_settings
-    if request.business_view_id:
-        business_view_id = request.business_view_id
-        view = await oracle.get_business_view(business_view_id)
+    if request.search_answer_profile_id:
+        search_answer_profile_id = request.search_answer_profile_id
+        view = await oracle.get_search_answer_profile(search_answer_profile_id)
         if view is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"指定した業務ビューが見つかりません: {business_view_id}",
+                detail=f"指定した検索・回答プロファイルが見つかりません: {search_answer_profile_id}",  # noqa: E501
             )
         status = getattr(view, "status", None)
         if getattr(status, "value", status) == "ARCHIVED":
             raise HTTPException(
                 status_code=409,
-                detail=f"アーカイブ済みの業務ビューは検索に使用できません: {business_view_id}",
+                detail=f"アーカイブ済みの検索・回答プロファイルは検索に使用できません: {search_answer_profile_id}",  # noqa: E501
             )
         effective_request = request
         kb_ids = view.config.normalized_knowledge_base_ids()
-        # 参照 KB が 0 件の業務ビューで利用者の全 KB を検索しない（#304）。
+        # 参照 KB が 0 件の検索・回答プロファイルで利用者の全 KB を検索しない（#304）。
         if not request.knowledge_base_ids:
-            ensure_business_view_has_knowledge_bases(kb_ids)
+            ensure_search_answer_profile_has_knowledge_bases(kb_ids)
             # request 明示の KB があればそちらを優先し、無ければ参照 KB 群を展開する。
             effective_request = _with_knowledge_base_ids(request, kb_ids)
         # 利用者の KB 範囲との積集合にする（request で範囲外の KB を読めないようにする）。
         effective_request = _scope_request_knowledge_bases(
-            effective_request, from_business_view=not request.knowledge_base_ids
+            effective_request, from_search_answer_profile=not request.knowledge_base_ids
         )
-        settings, applied = resolve_business_view_settings(settings, view.config)
-        # 業務ビューのドメインキーワードは全文検索で 1 語として優先する。
+        settings, applied = resolve_search_answer_profile_settings(settings, view.config)
+        # 検索・回答プロファイルのドメインキーワードは全文検索で 1 語として優先する。
         domain_keywords = await load_domain_keywords(oracle, view.id)
         if domain_keywords:
             settings = settings.model_copy(update={"rag_domain_keywords": domain_keywords})
         # 用語・ルールは回答エンジンだけが使う。
-        runtime_knowledge = await oracle.get_business_view_knowledge(
+        runtime_knowledge = await oracle.get_search_answer_profile_knowledge(
             view.id, RUNTIME_KNOWLEDGE_KIND
         )
         if runtime_knowledge:
@@ -202,12 +204,13 @@ async def _resolve_query_context(
     return request, settings, None, None
 
 
-BUSINESS_VIEW_NO_KNOWLEDGE_BASES_MESSAGE = (
-    "この業務ビューには参照するナレッジベースがありません。"
-    "業務ビューの設定でナレッジベースを追加してください。"
+SEARCH_ANSWER_PROFILE_NO_KNOWLEDGE_BASES_MESSAGE = (
+    "この検索・回答プロファイルには参照するナレッジベースがありません。"
+    "検索・回答プロファイルの設定でナレッジベースを追加してください。"
 )
-BUSINESS_VIEW_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
-    "この業務ビューのナレッジベースを利用する権限がありません。管理者に権限を依頼してください。"
+SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
+    "この検索・回答プロファイルのナレッジベースを利用す"
+    "る権限がありません。管理者に権限を依頼してください。"
 )
 REQUEST_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE = (
     "指定したナレッジベースを利用する権限がありません。管理者に権限を依頼してください。"
@@ -222,32 +225,39 @@ def permitted_knowledge_base_ids(knowledge_base_ids: Iterable[str]) -> list[str]
     return [item for item in knowledge_base_ids if item in allowed]
 
 
-def ensure_business_view_has_knowledge_bases(knowledge_base_ids: Sequence[str]) -> None:
-    """業務ビューの参照 KB が 0 件なら検索・チャットをしない（409。#304）。
+def ensure_search_answer_profile_has_knowledge_bases(knowledge_base_ids: Sequence[str]) -> None:
+    """検索・回答プロファイルの参照 KB が 0 件なら検索・チャットをしない（409。#304）。
 
     KB を絞らずに検索すると利用者が使える全 KB を検索してしまい、画面の説明（選択した業務
     ビューに紐づく KB を検索する）と合わない。理由を返し、画面はその場で表示する。
     """
     if not knowledge_base_ids:
-        raise HTTPException(status_code=409, detail=BUSINESS_VIEW_NO_KNOWLEDGE_BASES_MESSAGE)
+        raise HTTPException(
+            status_code=409, detail=SEARCH_ANSWER_PROFILE_NO_KNOWLEDGE_BASES_MESSAGE
+        )
 
 
-def ensure_business_view_knowledge_bases_permitted(knowledge_base_ids: Sequence[str]) -> None:
-    """業務ビューの参照 KB が 1 つも利用できないなら 403（黙って 0 件にしない。#214）。"""
+def ensure_search_answer_profile_knowledge_bases_permitted(
+    knowledge_base_ids: Sequence[str],
+) -> None:
+    """検索・回答プロファイルの参照 KB が 1 つも利用で
+    きないなら 403（黙って 0 件にしない。#214）。"""
     permitted = permitted_knowledge_base_ids(knowledge_base_ids)
     if knowledge_base_ids and permitted is not None and not permitted:
         raise SecurityApiError(
-            403, BUSINESS_VIEW_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE, code=SCOPE_FORBIDDEN_CODE
+            403, SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE, code=SCOPE_FORBIDDEN_CODE
         )
 
 
 def _scope_request_knowledge_bases(
-    request: SearchRequest, *, from_business_view: bool = False
+    request: SearchRequest, *, from_search_answer_profile: bool = False
 ) -> SearchRequest:
     """検索対象の KB を、利用者が利用できる KB との積集合にする（#214）。
 
-    業務ビューの参照 KB を展開した後、または request が明示した KB に適用する。一部だけ
-    許可されていれば積集合で検索を続け、積集合が空なら検索しない（403。業務ビューの KB か
+    検索・回答プロファイルの参照 KB を展開した後、または request が明示した KB に適用する。一部だけ
+    許可されていれば積集合で検索を続け、積集合が空なら検
+    索しない（403。検索・回答プロファイルの KB か
+
     request が指定した KB かで文言を分ける）。KB を指定しない検索は、Oracle の検索条件が
     利用できる KB へ絞る。
     """
@@ -260,8 +270,8 @@ def _scope_request_knowledge_bases(
         raise SecurityApiError(
             403,
             (
-                BUSINESS_VIEW_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE
-                if from_business_view
+                SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE
+                if from_search_answer_profile
                 else REQUEST_KNOWLEDGE_BASES_FORBIDDEN_MESSAGE
             ),
             code=SCOPE_FORBIDDEN_CODE,
@@ -273,7 +283,7 @@ def _with_knowledge_base_ids(
     request: SearchRequest,
     knowledge_base_ids: list[str],
 ) -> SearchRequest:
-    """業務ビューの参照 KB 群を検索対象へ展開した request を作る。"""
+    """検索・回答プロファイルの参照 KB 群を検索対象へ展開した request を作る。"""
     payload = request.model_dump()
     payload["knowledge_base_ids"] = knowledge_base_ids
     filters = dict(payload.get("filters") or {})
@@ -303,7 +313,7 @@ async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
         if applied_kb is not None:
             result.diagnostics.kb_adapter_config_applied = applied_kb
         if applied_view is not None:
-            result.diagnostics.business_view_applied = applied_view
+            result.diagnostics.search_answer_profile_applied = applied_view
         return result
     except AnswerTimeoutError as exc:
         elapsed = elapsed_ms(started_at)
@@ -313,7 +323,7 @@ async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
         if applied_kb is not None:
             diagnostics.kb_adapter_config_applied = applied_kb
         if applied_view is not None:
-            diagnostics.business_view_applied = applied_view
+            diagnostics.search_answer_profile_applied = applied_view
         record_rag_request(SEARCH_METRIC_MODE, "error", elapsed / 1000, 0)
         record_rag_search_audit(
             trace_id=trace_id,
@@ -337,7 +347,9 @@ async def _stream_search_events_with_timeout(
 ) -> AsyncIterator[str]:
     """stage progress を即時 SSE で返しながら検索 pipeline を実行する。
 
-    `resolved` は `_resolve_query_context` の結果（有効 request・Settings・適用 KB・業務ビュー）。
+    `resolved` は `_resolve_query_context` の結
+    果（有効 request・Settings・適用 KB・検索・回答プロファイル）。
+
     """
     request, settings, applied_kb, applied_view = resolved
     started_at = perf_counter()
@@ -375,7 +387,7 @@ async def _stream_search_events_with_timeout(
             if applied_kb is not None:
                 result.diagnostics.kb_adapter_config_applied = applied_kb
             if applied_view is not None:
-                result.diagnostics.business_view_applied = applied_view
+                result.diagnostics.search_answer_profile_applied = applied_view
             await queue.put(("result", result))
         except AnswerTimeoutError as exc:
             elapsed = elapsed_ms(started_at)
@@ -385,7 +397,7 @@ async def _stream_search_events_with_timeout(
             if applied_kb is not None:
                 diagnostics.kb_adapter_config_applied = applied_kb
             if applied_view is not None:
-                diagnostics.business_view_applied = applied_view
+                diagnostics.search_answer_profile_applied = applied_view
             record_rag_request(SEARCH_METRIC_MODE, "error", elapsed / 1000, 0)
             record_rag_search_audit(
                 trace_id=trace_id,
@@ -490,19 +502,21 @@ def _sse_event(event: str, data: object) -> str:
 
 @router.get("/extraction-fields", response_model=ApiResponse[SearchExtractionFieldsData])
 async def list_search_extraction_fields(
-    business_view_id: Annotated[str, Query(min_length=1, max_length=128)],
+    search_answer_profile_id: Annotated[str, Query(min_length=1, max_length=128)],
 ) -> ApiResponse[SearchExtractionFieldsData]:
     """検索の絞り込みに使える項目を返す(#549)。
 
-    選んだ業務ビューの参照 KB のうち利用者が使える有効な KB の定義(KB に無ければ全体の既定)の
-    和集合。同じ項目名は先の KB(作成の古い順)の定義を使う。存在しない業務ビューは 404。
+    選んだ検索・回答プロファイルの参照 KB のうち利用者が
+    使える有効な KB の定義(KB に無ければ全体の既定)の
+
+    和集合。同じ項目名は先の KB(作成の古い順)の定義を使う。存在しない検索・回答プロファイルは 404。
     """
     oracle = OracleClient()
-    view = await oracle.get_business_view(business_view_id)
+    view = await oracle.get_search_answer_profile(search_answer_profile_id)
     if view is None:
         raise HTTPException(
             status_code=404,
-            detail=f"指定した業務ビューが見つかりません: {business_view_id}",
+            detail=f"指定した検索・回答プロファイルが見つかりません: {search_answer_profile_id}",
         )
     # 利用者が使えない KB とアーカイブ済みの KB は Oracle の条件で除く。
     field_sets = await oracle.list_knowledge_base_extraction_field_sets(
@@ -522,12 +536,12 @@ ANSWER_TRACE_ID_FILTER_MAX = 100
 
 @router.get("/answers", response_model=ApiResponse[Page[AnswerRecordSummary]])
 async def list_saved_answers(
-    business_view_id: str | None = Query(default=None, max_length=128),
+    search_answer_profile_id: str | None = Query(default=None, max_length=128),
     limit: int = Query(default=10, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     trace_id: Annotated[list[str] | None, Query(max_length=ANSWER_TRACE_ID_FILTER_MAX)] = None,
 ) -> ApiResponse[Page[AnswerRecordSummary]]:
-    """保存された回答(回答の記録)を新しい順に返す(業務ビューで絞り込み可。総件数つき。#304)。
+    """保存された回答(回答の記録)を新しい順に返す(検索・回答プロファイルで絞り込み可。総件数つき。#304)。
 
     持ち主の回答だけを返す（SYSTEM_ADMIN と `rag.feedback.manage` は全件）。`trace_id` を
     繰り返して渡すと、その回答だけにする（チャットが会話の回答の保存有無を引き当てる）。
@@ -535,10 +549,13 @@ async def list_saved_answers(
     trace_ids = _normalize_trace_id_filter(trace_id)
     oracle = OracleClient()
     rows = await oracle.list_answer_records(
-        business_view_id=business_view_id, limit=limit, offset=offset, trace_ids=trace_ids
+        search_answer_profile_id=search_answer_profile_id,
+        limit=limit,
+        offset=offset,
+        trace_ids=trace_ids,
     )
     total = await oracle.count_answer_records(
-        business_view_id=business_view_id, trace_ids=trace_ids
+        search_answer_profile_id=search_answer_profile_id, trace_ids=trace_ids
     )
     return ApiResponse(
         data=Page(

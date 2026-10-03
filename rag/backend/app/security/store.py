@@ -4,7 +4,7 @@
 ここにはロールに付ける RAG のデータだけを置く。
 
 - 権限コード（`RAG_ROLE_PERMISSIONS`。製品をまたぐ権限昇格の判定も読む）
-- 対象範囲の業務ビュー（`RAG_ROLE_BUSINESS_VIEWS`）
+- 対象範囲の検索・回答プロファイル（`RAG_ROLE_SEARCH_ANSWER_PROFILES`）
 - 対象範囲のナレッジベース（`RAG_ROLE_KNOWLEDGE_BASES`）
 """
 
@@ -30,11 +30,11 @@ from pr_system_settings.auth.store import (
 from .domain import RoleRecord, as_role
 
 ROLE_PERMISSIONS_TABLE = "RAG_ROLE_PERMISSIONS"
-ROLE_BUSINESS_VIEWS_TABLE = "RAG_ROLE_BUSINESS_VIEWS"
+ROLE_SEARCH_ANSWER_PROFILES_TABLE = "RAG_ROLE_SEARCH_ANSWER_PROFILES"
 ROLE_KNOWLEDGE_BASES_TABLE = "RAG_ROLE_KNOWLEDGE_BASES"
 RAG_SECURITY_TABLES = (
     ROLE_PERMISSIONS_TABLE,
-    ROLE_BUSINESS_VIEWS_TABLE,
+    ROLE_SEARCH_ANSWER_PROFILES_TABLE,
     ROLE_KNOWLEDGE_BASES_TABLE,
 )
 SECURITY_SCHEMA_OBJECT_NAMES = frozenset(PLATFORM_AUTH_TABLES) | frozenset(RAG_SECURITY_TABLES)
@@ -125,8 +125,10 @@ class OracleSecurityStore(OracleAuthStore):
         permissions = values_by_role_id(
             cursor, "SELECT ROLE_ID, PERMISSION_CODE FROM RAG_ROLE_PERMISSIONS", role_ids
         )
-        business_view_ids = values_by_role_id(
-            cursor, "SELECT ROLE_ID, BUSINESS_VIEW_ID FROM RAG_ROLE_BUSINESS_VIEWS", role_ids
+        search_answer_profile_ids = values_by_role_id(
+            cursor,
+            "SELECT ROLE_ID, SEARCH_ANSWER_PROFILE_ID FROM RAG_ROLE_SEARCH_ANSWER_PROFILES",
+            role_ids,
         )
         knowledge_base_ids = values_by_role_id(
             cursor, "SELECT ROLE_ID, KNOWLEDGE_BASE_ID FROM RAG_ROLE_KNOWLEDGE_BASES", role_ids
@@ -141,7 +143,7 @@ class OracleSecurityStore(OracleAuthStore):
                 archived=role.archived,
                 version=role.version,
                 permissions=permissions.get(role.role_id, set()),
-                business_view_ids=business_view_ids.get(role.role_id, set()),
+                search_answer_profile_ids=search_answer_profile_ids.get(role.role_id, set()),
                 knowledge_base_ids=knowledge_base_ids.get(role.role_id, set()),
             )
             for role in roles
@@ -156,11 +158,11 @@ class OracleSecurityStore(OracleAuthStore):
                 "VALUES (:role_id, :code)",
                 {"role_id": rag_role.role_id, "code": code},
             )
-        for business_view_id in sorted(rag_role.business_view_ids):
+        for search_answer_profile_id in sorted(rag_role.search_answer_profile_ids):
             cursor.execute(
-                "INSERT INTO RAG_ROLE_BUSINESS_VIEWS (ROLE_ID, BUSINESS_VIEW_ID) "
-                "VALUES (:role_id, :business_view_id)",
-                {"role_id": rag_role.role_id, "business_view_id": business_view_id},
+                "INSERT INTO RAG_ROLE_SEARCH_ANSWER_PROFILES (ROLE_ID, SEARCH_ANSWER_PROFILE_ID) "
+                "VALUES (:role_id, :search_answer_profile_id)",
+                {"role_id": rag_role.role_id, "search_answer_profile_id": search_answer_profile_id},
             )
         for knowledge_base_id in sorted(rag_role.knowledge_base_ids):
             cursor.execute(
@@ -177,7 +179,9 @@ class OracleSecurityStore(OracleAuthStore):
     def _delete_role_details(cursor: Any, role_id: str) -> None:
         binds = {"role_id": role_id}
         cursor.execute("DELETE FROM RAG_ROLE_PERMISSIONS WHERE ROLE_ID = :role_id", binds)
-        cursor.execute("DELETE FROM RAG_ROLE_BUSINESS_VIEWS WHERE ROLE_ID = :role_id", binds)
+        cursor.execute(
+            "DELETE FROM RAG_ROLE_SEARCH_ANSWER_PROFILES WHERE ROLE_ID = :role_id", binds
+        )
         cursor.execute("DELETE FROM RAG_ROLE_KNOWLEDGE_BASES WHERE ROLE_ID = :role_id", binds)
 
 

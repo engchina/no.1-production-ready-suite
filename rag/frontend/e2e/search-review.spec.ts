@@ -5,12 +5,12 @@ import {
   expectNoPageOverflow,
   mockDatabaseReady,
   mockLocalAuth,
-  selectBusinessView,
+  selectSearchAnswerProfile,
 } from "./_helpers";
 
 /**
  * RAG 検索のレビューで直した不具合の回帰テスト（#285）。
- * stream の途中の失敗・回答の評価先の業務ビュー・IME の確定の Enter・画面を離れたときの中断・
+ * stream の途中の失敗・回答の評価先の検索・回答プロファイル・IME の確定の Enter・画面を離れたときの中断・
  * 類似 FAQ を飛ばした後の再試行。
  */
 
@@ -49,7 +49,7 @@ async function mockSearchPage(
   page: Page,
   { faqSuggestions = [] as unknown[] }: { faqSuggestions?: unknown[] } = {}
 ) {
-  await page.route("**/api/business-views**", async (route) => {
+  await page.route("**/api/search-answer-profiles**", async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname.endsWith("/approved-faq/suggest")) {
       await route.fulfill(envelope({ suggestions: faqSuggestions }));
@@ -107,7 +107,7 @@ test("stream の途中の timeout は該当なしではなくエラーとして�
   });
 
   await page.goto("/search");
-  await selectBusinessView(page, /経理ビュー/);
+  await selectSearchAnswerProfile(page, /経理ビュー/);
   await search(page, "交通費の上限");
 
   const alert = page.getByRole("alert").filter({ hasText: "タイムアウトしました" });
@@ -131,13 +131,13 @@ test("done を受けずに途切れた stream は途中終了のエラーにす�
   );
 
   await page.goto("/search");
-  await selectBusinessView(page, /経理ビュー/);
+  await selectSearchAnswerProfile(page, /経理ビュー/);
   await search(page, "交通費の上限");
 
   await expect(page.getByRole("alert").filter({ hasText: "回答の受信が途中で途切れました" })).toBeVisible();
 });
 
-test("回答の評価は検索したときの業務ビューへ送る（検索後に選択を変えても変えない）", async ({ page }) => {
+test("回答の評価は検索したときの検索・回答プロファイルへ送る（検索後に選択を変えても変えない）", async ({ page }) => {
   await page.route("**/api/search/stream", (route) =>
     fulfillStream(
       route,
@@ -148,7 +148,7 @@ test("回答の評価は検索したときの業務ビューへ送る（検索�
             trace_id: "t3",
             elapsed_ms: 5,
             guardrail_warnings: [],
-            diagnostics: { business_view_applied: "bv-1" },
+            diagnostics: { search_answer_profile_applied: "bv-1" },
           },
         ],
         ["delta", { text: "上限は 5,000 円です。" }],
@@ -164,7 +164,7 @@ test("回答の評価は検索したときの業務ビューへ送る（検索�
       envelope({
         feedback_id: "f1",
         trace_id: "t3",
-        business_view_id: feedbackBody.business_view_id,
+        search_answer_profile_id: feedbackBody.search_answer_profile_id,
         target_type: "answer",
         source_surface: "search",
         document_id: null,
@@ -179,13 +179,13 @@ test("回答の評価は検索したときの業務ビューへ送る（検索�
   });
 
   await page.goto("/search");
-  await selectBusinessView(page, /経理ビュー/);
+  await selectSearchAnswerProfile(page, /経理ビュー/);
   await search(page, "交通費の上限");
   await expect(page.getByText("上限は 5,000 円です。")).toBeVisible();
-  await selectBusinessView(page, /人事ビュー/);
+  await selectSearchAnswerProfile(page, /人事ビュー/);
 
   await page.getByRole("button", { name: "この回答は役に立った" }).click();
-  await expect.poll(() => feedbackBody?.business_view_id).toBe("bv-1");
+  await expect.poll(() => feedbackBody?.search_answer_profile_id).toBe("bv-1");
 });
 
 test("IME の変換を確定する Enter では検索しない", async ({ page }) => {
@@ -196,7 +196,7 @@ test("IME の変換を確定する Enter では検索しない", async ({ page }
   });
 
   await page.goto("/search");
-  await selectBusinessView(page, /経理ビュー/);
+  await selectSearchAnswerProfile(page, /経理ビュー/);
   const input = page.getByRole("textbox", { name: "RAG 検索" });
   await input.fill("こうつうひ");
   // 変換中の Enter（isComposing=true / keyCode=229）。
@@ -217,13 +217,13 @@ test("回答の生成中に画面を離れたら検索の stream を止める", 
   await page.route("**/api/search/stream", () => new Promise<void>(() => undefined));
 
   await page.goto("/search");
-  await selectBusinessView(page, /経理ビュー/);
+  await selectSearchAnswerProfile(page, /経理ビュー/);
   await search(page, "交通費の上限");
   await expect(page.getByRole("button", { name: "停止" })).toBeVisible();
 
   // SPA 内の遷移（再読み込みではない）。
   await page.evaluate(() => {
-    window.history.pushState({}, "", "/business-views");
+    window.history.pushState({}, "", "/search-answer-profiles");
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
   await expect.poll(() => aborted).toBe(true);
@@ -252,7 +252,7 @@ test("類似 FAQ を使わずに生成した検索の再試行は FAQ を出し�
   });
 
   await page.goto("/search");
-  await selectBusinessView(page, /経理ビュー/);
+  await selectSearchAnswerProfile(page, /経理ビュー/);
   await search(page, "交通費の上限");
   await page.getByRole("button", { name: "類似問を使用しない" }).click();
 
@@ -295,7 +295,7 @@ test("質問から読み取った条件を「自動」のチップで出し、�
   });
 
   await page.goto("/search");
-  await selectBusinessView(page, /経理ビュー/);
+  await selectSearchAnswerProfile(page, /経理ビュー/);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("2025年以降の10万円以上の契約");
   await page.getByRole("button", { name: "検索", exact: true }).click();
 
@@ -316,28 +316,28 @@ test("質問から読み取った条件を「自動」のチップで出し、�
   await expect(page.getByTestId("auto-field-filter-chips")).toHaveCount(0);
 });
 
-test("業務ビューの読み込み中は読み込み中の状態として読み上げる", async ({ page }) => {
+test("検索・回答プロファイルの読み込み中は読み込み中の状態として読み上げる", async ({ page }) => {
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => (release = resolve));
-  await page.route("**/api/business-views?**", async (route) => {
+  await page.route("**/api/search-answer-profiles?**", async (route) => {
     await gate;
     await route.fallback();
   });
 
   await page.goto("/search");
   // 読み込み中は文言と経過時間（TimedLoadingState）を出し、状態として読み上げる（#265）。
-  const loading = page.getByTestId("search-business-views-loading");
+  const loading = page.getByTestId("search-search-answer-profiles-loading");
   await expect(loading).toBeVisible();
   await expect(loading.getByRole("timer")).toBeVisible();
-  await expect(page.getByRole("status").filter({ hasText: "業務ビューを読み込んでいます。" })).toHaveCount(1);
-  await expect(page.getByText("業務ビューを作成してください")).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: "検索・回答プロファイルを読み込んでいます。" })).toHaveCount(1);
+  await expect(page.getByText("検索・回答プロファイルを作成してください")).toHaveCount(0);
   release();
-  await expect(page.getByRole("button", { name: /対象の業務ビュー/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toBeVisible();
 });
 
 test("詳細条件は条件を設定したままでも閉じられ、閉じると「設定中」を出す（#461）", async ({ page }) => {
   await page.goto("/search");
-  await selectBusinessView(page, /経理ビュー/);
+  await selectSearchAnswerProfile(page, /経理ビュー/);
   const advanced = page.getByRole("button", { name: /詳細条件/ });
   await expect(advanced).toHaveAttribute("aria-expanded", "false");
 
@@ -376,7 +376,7 @@ test("検索のボタンは詳細条件の下にあり、実行中は同じ位�
   });
 
   await page.goto("/search");
-  await selectBusinessView(page, /経理ビュー/);
+  await selectSearchAnswerProfile(page, /経理ビュー/);
   const input = page.getByRole("textbox", { name: "RAG 検索" });
   await input.fill("交通費の上限");
 

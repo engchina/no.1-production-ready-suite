@@ -40,13 +40,13 @@ class _ContractInput(BaseModel):
 
 class RagSearchIn(_ContractInput):
     query: str
-    business_view_id: str | None = None
+    search_answer_profile_id: str | None = None
     knowledge_base_ids: list[str] | None = None
     top_k: int | None = Field(default=None, ge=1, le=100)
     filters: dict[str, str] | None = None
 
 
-class RagListBusinessViewsIn(_ContractInput):
+class RagListSearchAnswerProfilesIn(_ContractInput):
     query: str | None = None
     limit: int = Field(default=50, ge=1, le=200)
 
@@ -98,11 +98,11 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "guardrail_warnings": [],
         "citations": [_CITATION],
     },
-    "rag_list_business_views": {
-        "business_views": [
+    "rag_list_search_answer_profiles": {
+        "search_answer_profiles": [
             {
                 "id": "bv-sales",
-                "name": "営業の業務ビュー",
+                "name": "営業の検索・回答プロファイル",
                 "description": "営業部門の文書",
                 "status": "ACTIVE",
                 "knowledge_base_count": 2,
@@ -148,7 +148,7 @@ class FakeProductMcp:
                 version="test",
                 tools=[
                     self._tool("rag_search", RagSearchIn),
-                    self._tool("rag_list_business_views", RagListBusinessViewsIn),
+                    self._tool("rag_list_search_answer_profiles", RagListSearchAnswerProfilesIn),
                 ],
             ),
             "nl2sql": McpServer(

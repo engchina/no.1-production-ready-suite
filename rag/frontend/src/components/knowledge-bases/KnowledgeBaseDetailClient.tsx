@@ -56,7 +56,7 @@ import { KnowledgeBasePipelineCanvas } from "./KnowledgeBasePipelineCanvas";
 import { KnowledgeBaseSearchTestPanel } from "./KnowledgeBaseSearchTestPanel";
 
 /**
- * ナレッジベース詳細ページ（`/knowledge-bases/:id`）。業務ビューのエディタと同じ構成にする（#555）:
+ * ナレッジベース詳細ページ（`/knowledge-bases/:id`）。検索・回答プロファイルのエディタと同じ構成にする（#555）:
  * PageHeader（パンくず・状態・件数・一覧へ戻る・保存する）→ 基本情報（名前・説明）→ 所属文書
  * → 検索テスト → 関係情報 → 抽出する項目 → 構築フロー（文書の追加 → 確認 → 構築設定の順）。
  */
@@ -94,7 +94,7 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
     <KnowledgeBaseEditor
       initial={kb}
       onBack={() => backToList()}
-      // アーカイブした対象へ戻らないよう、一覧へ履歴を積まずに戻る（業務ビューと同じ）。
+      // アーカイブした対象へ戻らないよう、一覧へ履歴を積まずに戻る（検索・回答プロファイルと同じ）。
       onArchived={() => backToList({ replace: true })}
     >
       {/* 所属文書: ツールバー（左に検索、右に「文書を追加」）+ 一覧 + ページ送り（#600）。 */}
@@ -129,7 +129,7 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
           構築の既定パイプライン図だけ参考表示する(per-KB 取込上書き UI は撤去)。 */}
       <KnowledgeBasePipelineCanvas config={kb.effective_adapter_config ?? kb.adapter_config} />
 
-      {/* このナレッジ単体で検索の手応えを確認する(業務ビュー不要)。構築の設定(関係情報・抽出する項目・
+      {/* このナレッジ単体で検索の手応えを確認する(検索・回答プロファイル不要)。構築の設定(関係情報・抽出する項目・
           パイプライン図)を見た後に、最後に検索で確かめる流れにするため、いちばん下に置く(#616)。 */}
       <KnowledgeBaseSearchTestPanel
         knowledgeBaseId={kb.id}

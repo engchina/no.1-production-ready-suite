@@ -4,10 +4,10 @@ import {
   expectNoPageOverflow,
   mockDatabaseReady,
   mockLocalAuth,
-  selectBusinessView,
+  selectSearchAnswerProfile,
 } from "./_helpers";
 
-// rag_poc からの移植: 業務ビューの知識(Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール)、
+// rag_poc からの移植: プロファイルの知識(Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール)、
 // 検索前の類似問提示、回答の根拠パネル。
 
 const envelope = (data: unknown) => ({ data, error_messages: [], warning_messages: [] });
@@ -56,11 +56,11 @@ async function mockCommon(page: Page) {
   );
 }
 
-async function mockBusinessViewApi(
+async function mockSearchAnswerProfileApi(
   page: Page,
   { suggestions = [] as unknown[] }: { suggestions?: unknown[] } = {}
 ) {
-  await page.route("**/api/business-views**", async (route: Route) => {
+  await page.route("**/api/search-answer-profiles**", async (route: Route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (path.endsWith("/domain-keywords/suggest")) {
@@ -74,7 +74,7 @@ async function mockBusinessViewApi(
       });
     }
     if (path.endsWith("/domain-keywords")) {
-      return route.fulfill({ json: envelope({ business_view_id: "bv-1", keywords: ["受注番号"] }) });
+      return route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", keywords: ["受注番号"] }) });
     }
     if (path.endsWith("/approved-faq/suggest")) {
       return route.fulfill({ json: envelope({ suggestions }) });
@@ -82,7 +82,7 @@ async function mockBusinessViewApi(
     if (path.endsWith("/approved-faq")) {
       return route.fulfill({
         json: envelope({
-          business_view_id: "bv-1",
+          search_answer_profile_id: "bv-1",
           records: [
             {
               id: "faq-1",
@@ -98,7 +98,7 @@ async function mockBusinessViewApi(
     if (path.endsWith("/runtime-knowledge")) {
       return route.fulfill({
         json: envelope({
-          business_view_id: "bv-1",
+          search_answer_profile_id: "bv-1",
           terms: [{ term: "受注", aliases: ["オーダー"], description: "注文", status: "approved" }],
           rules: [],
         }),
@@ -117,21 +117,21 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`業務ビューの知識パネルでキーワード・FAQ・用語ルールを管理できる (${viewport.name})`, async ({
+  test(`プロファイルの知識パネルでキーワード・FAQ・用語ルールを管理できる (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockCommon(page);
-    await mockBusinessViewApi(page);
+    await mockSearchAnswerProfileApi(page);
 
-    await page.goto("/business-views");
+    await page.goto("/search-answer-profiles");
     await page.getByRole("link", { name: "受注サポート を編集" }).click();
-    await expect(page).toHaveURL(/\/business-views\?id=bv-1$/);
+    await expect(page).toHaveURL(/\/search-answer-profiles\?id=bv-1$/);
 
-    const panel = page.getByRole("heading", { name: "業務ビューの知識" });
+    const panel = page.getByRole("heading", { name: "プロファイルの知識" });
     await expect(panel).toBeVisible();
     // 先頭・既定のタブは Approved FAQ（#636）。以降は回答フローで使う順（#682）。
-    const tabs = page.getByRole("tablist", { name: "業務ビューの知識" }).getByRole("tab");
+    const tabs = page.getByRole("tablist", { name: "プロファイルの知識" }).getByRole("tab");
     await expect(tabs).toHaveText([
       "Approved FAQ（類似問）",
       "用語・同義語",
@@ -174,9 +174,9 @@ for (const viewport of [
   });
 }
 
-async function selectBusinessViewAndAsk(page: Page, question: string) {
+async function selectSearchAnswerProfileAndAsk(page: Page, question: string) {
   await page.goto("/search");
-  await selectBusinessView(page, /受注サポート/);
+  await selectSearchAnswerProfile(page, /受注サポート/);
   await enableSearchAnswer(page);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill(question);
   await page.getByRole("button", { name: "検索", exact: true }).click();
@@ -184,13 +184,13 @@ async function selectBusinessViewAndAsk(page: Page, question: string) {
 
 test("よく聞かれている質問を入力欄の下に出し、選ぶと質問欄に入る", async ({ page }) => {
   await mockCommon(page);
-  await mockBusinessViewApi(page);
+  await mockSearchAnswerProfileApi(page);
   const requested: string[] = [];
-  await page.route("**/api/business-views/bv-1/query-suggestions**", (route) => {
+  await page.route("**/api/search-answer-profiles/bv-1/query-suggestions**", (route) => {
     requested.push(new URL(route.request().url()).searchParams.get("q") ?? "");
     return route.fulfill({
       json: envelope({
-        business_view_id: "bv-1",
+        search_answer_profile_id: "bv-1",
         enabled: true,
         suggestions: [
           { question: "受注を取り消すには？", count: 5 },
@@ -201,7 +201,7 @@ test("よく聞かれている質問を入力欄の下に出し、選ぶと質�
   });
 
   await page.goto("/search");
-  await selectBusinessView(page, /受注サポート/);
+  await selectSearchAnswerProfile(page, /受注サポート/);
   const input = page.getByRole("textbox", { name: "RAG 検索" });
   await input.fill("受注");
   const suggestions = page.getByRole("list", { name: "よく聞かれている質問" });
@@ -217,14 +217,14 @@ test("よく聞かれている質問を入力欄の下に出し、選ぶと質�
 
 test("類似する承認済み FAQ を提示し、FAQ の回答を LLM なしで表示する", async ({ page }) => {
   await mockCommon(page);
-  await mockBusinessViewApi(page, { suggestions: [faqSuggestion] });
+  await mockSearchAnswerProfileApi(page, { suggestions: [faqSuggestion] });
   let streamed = false;
   await page.route("**/api/search/stream", (route) => {
     streamed = true;
     return route.fulfill({ status: 500 });
   });
 
-  await selectBusinessViewAndAsk(page, "受注を取り消すには？");
+  await selectSearchAnswerProfileAndAsk(page, "受注を取り消すには？");
 
   await expect(page.getByRole("heading", { name: "類似する承認済み FAQ があります" })).toBeVisible();
   await page.getByRole("button", { name: "この FAQ の回答を使う" }).click();
@@ -235,10 +235,10 @@ test("類似する承認済み FAQ を提示し、FAQ の回答を LLM なしで
 
 test("類似問を使わない場合は回答と根拠パネルを表示する", async ({ page }) => {
   await mockCommon(page);
-  await mockBusinessViewApi(page, { suggestions: [faqSuggestion] });
+  await mockSearchAnswerProfileApi(page, { suggestions: [faqSuggestion] });
   await mockAnswerStream(page);
 
-  await selectBusinessViewAndAsk(page, "受注を取り消すには？");
+  await selectSearchAnswerProfileAndAsk(page, "受注を取り消すには？");
   await page.getByRole("button", { name: "類似問を使用しない" }).click();
 
   const panel = page.getByRole("region", { name: "回答の根拠と実行記録" });
@@ -260,7 +260,7 @@ for (const viewport of [
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockCommon(page);
-    await mockBusinessViewApi(page);
+    await mockSearchAnswerProfileApi(page);
     await mockAnswerStream(page);
     let evaluationBody: Record<string, unknown> | null = null;
     await page.route("**/api/search/answers/trace-answer/evaluation", (route) => {
@@ -268,7 +268,7 @@ for (const viewport of [
       return route.fulfill({
         json: envelope({
           trace_id: "trace-answer",
-          business_view_id: "bv-1",
+          search_answer_profile_id: "bv-1",
           surface: "search",
           answer_engine: "grounded",
           question: "受注を取り消すには？",
@@ -308,7 +308,7 @@ for (const viewport of [
       });
     });
 
-    await selectBusinessViewAndAsk(page, "受注を取り消すには？");
+    await selectSearchAnswerProfileAndAsk(page, "受注を取り消すには？");
 
     const evaluation = page.getByRole("region", { name: "標準回答による評価" });
     const run = evaluation.getByRole("button", { name: "標準回答で評価" });
@@ -361,7 +361,7 @@ async function mockAnswerStream(page: Page) {
           trace_id: "trace-answer",
           elapsed_ms: 20,
           guardrail_warnings: [],
-          diagnostics: { business_view_applied: "bv-1", retrieval_strategy: "hybrid", answer: answerDiagnostics },
+          diagnostics: { search_answer_profile_applied: "bv-1", retrieval_strategy: "hybrid", answer: answerDiagnostics },
         })}\n\n`,
         `event: delta\ndata: ${JSON.stringify({ text: "受注一覧で取消を押します。" })}\n\n`,
         `event: citations\ndata: ${JSON.stringify([])}\n\n`,
@@ -375,7 +375,7 @@ async function mockAnswerStream(page: Page) {
 // ルールは backend と同じく「ルール ID」「ルール名」「ルール内容」が必須。
 test("FAQ の追加と回答ルールの保存は、未入力を欄の下に出す", async ({ page }) => {
   await mockCommon(page);
-  await mockBusinessViewApi(page);
+  await mockSearchAnswerProfileApi(page);
   const writes: string[] = [];
   page.on("request", (request) => {
     if (request.method() === "POST" && /approved-faq$|runtime-knowledge\/edit$/.test(request.url())) {
@@ -383,7 +383,7 @@ test("FAQ の追加と回答ルールの保存は、未入力を欄の下に出�
     }
   });
 
-  await page.goto("/business-views?id=bv-1");
+  await page.goto("/search-answer-profiles?id=bv-1");
   await page.getByRole("tab", { name: "Approved FAQ（類似問）" }).click();
   const add = page.getByRole("button", { name: "追加", exact: true });
   await expect(add).toBeEnabled();
@@ -396,7 +396,7 @@ test("FAQ の追加と回答ルールの保存は、未入力を欄の下に出�
   await expect(page.getByRole("heading", { name: "回答ルールを追加" })).toBeVisible();
   await expect(page.locator('label[for="runtime-knowledge-title"]')).toContainText("必須");
   await expect(page.locator('label[for="runtime-knowledge-content"]')).toContainText("必須");
-  // ヘッダーの「保存」（業務ビューの設定。#618）と区別し、回答ルールのタブの中の保存を押す。
+  // ヘッダーの「保存」（検索・回答プロファイルの設定。#618）と区別し、回答ルールのタブの中の保存を押す。
   await page
     .getByRole("tabpanel", { name: "回答ルール" })
     .getByRole("button", { name: "保存", exact: true })
@@ -409,19 +409,19 @@ test("FAQ の追加と回答ルールの保存は、未入力を欄の下に出�
   await expectNoPageOverflow(page);
 });
 
-test("業務ビューごとに類似問の提示をオン / オフできる（既定はオン。#684）", async ({ page }) => {
+test("検索・回答プロファイルごとに類似問の提示をオン / オフできる（既定はオン。#684）", async ({ page }) => {
   await mockCommon(page);
-  await mockBusinessViewApi(page);
+  await mockSearchAnswerProfileApi(page);
   const saved: unknown[] = [];
-  await page.route("**/api/business-views/bv-1/approved-faq/settings", async (route) => {
+  await page.route("**/api/search-answer-profiles/bv-1/approved-faq/settings", async (route) => {
     const body = route.request().postDataJSON() as { enabled: boolean };
     saved.push(body);
     await route.fulfill({
-      json: envelope({ business_view_id: "bv-1", records: [faqSuggestion], enabled: body.enabled }),
+      json: envelope({ search_answer_profile_id: "bv-1", records: [faqSuggestion], enabled: body.enabled }),
     });
   });
 
-  await page.goto("/business-views?id=bv-1");
+  await page.goto("/search-answer-profiles?id=bv-1");
   const toggle = page.getByRole("switch", { name: "回答の前に類似問を提示する" });
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await toggle.click();
@@ -434,11 +434,11 @@ test("業務ビューごとに類似問の提示をオン / オフできる（�
 // #717: 回答ルールに確認の質問と、選択肢が指す章節を設定する。
 test("回答ルールに確認の質問と章節を設定して保存できる", async ({ page }) => {
   await mockCommon(page);
-  await mockBusinessViewApi(page);
-  await page.route("**/api/business-views/bv-1/runtime-knowledge", (route) =>
+  await mockSearchAnswerProfileApi(page);
+  await page.route("**/api/search-answer-profiles/bv-1/runtime-knowledge", (route) =>
     route.fulfill({
       json: envelope({
-        business_view_id: "bv-1",
+        search_answer_profile_id: "bv-1",
         terms: [],
         rules: [
           { id: "R01", title: "期限の確認", triggers: ["期限"], content: "規程ごとに違う", status: "approved" },
@@ -447,9 +447,9 @@ test("回答ルールに確認の質問と章節を設定して保存できる",
     })
   );
   const puts: unknown[] = [];
-  await page.route("**/api/business-views/bv-1/runtime-knowledge/rules/R01/clarification", async (route) => {
+  await page.route("**/api/search-answer-profiles/bv-1/runtime-knowledge/rules/R01/clarification", async (route) => {
     puts.push(route.request().postDataJSON());
-    await route.fulfill({ json: envelope({ business_view_id: "bv-1", terms: [], rules: [] }) });
+    await route.fulfill({ json: envelope({ search_answer_profile_id: "bv-1", terms: [], rules: [] }) });
   });
   await page.route("**/api/documents?**", (route) =>
     route.fulfill({
@@ -480,7 +480,7 @@ test("回答ルールに確認の質問と章節を設定して保存できる",
     })
   );
 
-  await page.goto("/business-views?id=bv-1");
+  await page.goto("/search-answer-profiles?id=bv-1");
   await page.getByRole("tab", { name: "回答ルール" }).click();
   await page.getByRole("button", { name: /期限の確認/ }).first().click();
   const editor = page.getByTestId("rule-clarification-editor");

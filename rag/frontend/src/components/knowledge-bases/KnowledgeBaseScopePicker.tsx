@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * 選択済みの KB を ID で引き、名前・状態（アーカイブ済み / 見つからない）を解決する（#302）。
- * `known` は画面が既に持つ参照（業務ビュー詳細の参照 KB など。利用者の KB 範囲の外も含む）。
+ * `known` は画面が既に持つ参照（検索・回答プロファイル詳細の参照 KB など。利用者の KB 範囲の外も含む）。
  */
 export function useKnowledgeBaseSelectionHealth(
   ids: string[],
@@ -44,7 +44,7 @@ export function useKnowledgeBaseSelectionHealth(
 }
 
 /**
- * 検索・評価・業務ビュー・文書詳細で使うナレッジベースの複数選択スコープ（#578）。
+ * 検索・評価・検索・回答プロファイル・文書詳細で使うナレッジベースの複数選択スコープ（#578）。
  * 候補は `useKnowledgeBaseChoices`: 200 件以下は全件を手元で絞り込み、超えるとサーバー側で名前・説明を検索し、
  * 「さらに表示」で次のページを取る（全件を読まない。#302）。
  */

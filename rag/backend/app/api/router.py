@@ -7,9 +7,8 @@
 
 from fastapi import APIRouter, Depends
 
+from app.api.removed_fields import reject_removed_profile_fields
 from app.api.routes import (
-    business_view_knowledge,
-    business_views,
     chat,
     documents,
     evaluation,
@@ -18,13 +17,17 @@ from app.api.routes import (
     knowledge_bases,
     mcp,
     search,
+    search_answer_profile_knowledge,
+    search_answer_profiles,
     services,
     settings,
 )
 from app.security.dependencies import authorize_api_request
 from app.security.router import router as security_router
 
-api_router = APIRouter(dependencies=[Depends(authorize_api_request)])
+api_router = APIRouter(
+    dependencies=[Depends(authorize_api_request), Depends(reject_removed_profile_fields)]
+)
 api_router.include_router(health.router, tags=["health"])
 # 認証（/auth/*）・ユーザー管理・ロール管理（platform の共通 router）と RAG の権限管理。
 api_router.include_router(security_router)
@@ -35,14 +38,14 @@ api_router.include_router(
     tags=["knowledge-bases"],
 )
 api_router.include_router(
-    business_views.router,
-    prefix="/business-views",
-    tags=["business-views"],
+    search_answer_profiles.router,
+    prefix="/search-answer-profiles",
+    tags=["search-answer-profiles"],
 )
 api_router.include_router(
-    business_view_knowledge.router,
-    prefix="/business-views",
-    tags=["business-views"],
+    search_answer_profile_knowledge.router,
+    prefix="/search-answer-profiles",
+    tags=["search-answer-profiles"],
 )
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(search.router, prefix="/search", tags=["search"])

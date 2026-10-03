@@ -53,13 +53,13 @@
       "id": "business_rag_research",
       "name": "業務 RAG 調査",
       "description": "業務 RAG（MCP 接続 rag）を使って根拠付き情報を検索する。",
-      "instructions": "ユーザーの目的を rag_search の query として扱い、引用と根拠を返す。対象の業務ビューが分からなければ rag_list_business_views で確かめる。",
+      "instructions": "ユーザーの目的を rag_search の query として扱い、引用と根拠を返す。対象の検索・回答プロファイルが分からなければ rag_list_search_answer_profiles で確かめる。",
       "mcp_requirements": [
         {
           "server_id": "rag",
           "tool_names": [
             "rag_search",
-            "rag_list_business_views"
+            "rag_list_search_answer_profiles"
           ]
         }
       ],

@@ -45,7 +45,7 @@ test("ナレッジベース管理で作成、文書追加、文書解除、ア�
 
   await page.goto("/knowledge-bases");
 
-  // 一覧は list 専用(行は詳細ページへのリンク)。作成は業務ビューと同じく PageHeader の「新規作成」から
+  // 一覧は list 専用(行は詳細ページへのリンク)。作成は検索・回答プロファイルと同じく PageHeader の「新規作成」から
   // 作成の画面(`?id=new`)へ移る(#555)。
   await expect(page.getByRole("heading", { name: "ナレッジベース", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "社内規程" })).toBeVisible();
@@ -148,7 +148,7 @@ for (const viewport of [
     await dialog.getByRole("button", { name: "アーカイブ" }).click();
     await expect(page.getByText("ナレッジベースをアーカイブしました。").first()).toBeVisible();
     expect(state.knowledgeBases[0].status).toBe("ARCHIVED");
-    // 業務ビューと同じく、アーカイブしたら一覧へ履歴を積まずに戻る（#555）。
+    // 検索・回答プロファイルと同じく、アーカイブしたら一覧へ履歴を積まずに戻る（#555）。
     await expect(page).toHaveURL(/\/knowledge-bases$/);
     await expectNoPageOverflow(page);
   });
@@ -710,7 +710,7 @@ test("最後のページの KB をアーカイブすると、空の案内では�
   await expect(pagination).toContainText("11 - 20 / 20 件");
 });
 
-// #555: 一覧 → 作成 / 詳細の構成を業務ビューにそろえる（page-archetypes.md §1 A）。
+// #555: 一覧 → 作成 / 詳細の構成を検索・回答プロファイルにそろえる（page-archetypes.md §1 A）。
 test("行のクリックで詳細を開き、詳細の PageHeader に 一覧へ戻る（左上）・状態・件数・変更を破棄・保存 を出す", async ({
   page,
 }) => {

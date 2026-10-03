@@ -2,7 +2,7 @@
 
 ログイン・セッション・CSRF・構成管理者・ユーザー / ロールの共通操作・製品をまたぐ権限昇格の防止は
 platform の `pr_system_settings.auth.service.AuthService`。ここには RAG の実効権限と対象範囲
-（業務ビュー・ナレッジベース）の組み立てと、権限管理（ロールの権限・対象範囲の更新）だけを置く。
+（検索・回答プロファイル・ナレッジベース）の組み立てと、権限管理（ロールの権限・対象範囲の更新）だけを置く。
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ from .permissions import (
     MENU_SECURITY_PERMISSIONS,
     MENU_SECURITY_ROLES,
     expand_permissions,
-    grants_all_business_views,
     grants_all_knowledge_bases,
+    grants_all_search_answer_profiles,
     normalize_permission_codes,
     unknown_permission_codes,
 )
@@ -89,10 +89,10 @@ class SecurityService(AuthService):
         permissions: set[str] = kwargs["permissions"]
         is_system_admin = SYSTEM_ADMIN_ROLE_CODE in kwargs["role_codes"]
         rag_roles = [as_role(role) for role in active_roles if isinstance(role, RoleRecord)]
-        allowed_business_view_ids = (
+        allowed_search_answer_profile_ids = (
             None
-            if is_system_admin or grants_all_business_views(permissions)
-            else frozenset(item for role in rag_roles for item in role.business_view_ids)
+            if is_system_admin or grants_all_search_answer_profiles(permissions)
+            else frozenset(item for role in rag_roles for item in role.search_answer_profile_ids)
         )
         allowed_knowledge_base_ids = (
             None
@@ -101,7 +101,7 @@ class SecurityService(AuthService):
         )
         return Principal(
             **kwargs,
-            allowed_business_view_ids=allowed_business_view_ids,
+            allowed_search_answer_profile_ids=allowed_search_answer_profile_ids,
             allowed_knowledge_base_ids=allowed_knowledge_base_ids,
         )
 
@@ -140,7 +140,7 @@ class SecurityService(AuthService):
         if not expand_permissions(role.permissions).issubset(actor.permissions):
             return False
         return _targets_within(
-            role.business_view_ids, actor.allowed_business_view_ids
+            role.search_answer_profile_ids, actor.allowed_search_answer_profile_ids
         ) and _targets_within(role.knowledge_base_ids, actor.allowed_knowledge_base_ids)
 
     def _assert_actor_can_restore_role(
@@ -160,9 +160,9 @@ class SecurityService(AuthService):
         *,
         expected_version: int,
         permissions: Iterable[str],
-        business_view_ids: Iterable[str],
+        search_answer_profile_ids: Iterable[str],
         knowledge_base_ids: Iterable[str],
-        known_business_view_ids: Collection[str],
+        known_search_answer_profile_ids: Collection[str],
         known_knowledge_base_ids: Collection[str],
         actor: PlatformPrincipal,
         request_id: str = "",
@@ -186,20 +186,20 @@ class SecurityService(AuthService):
         if unknown:
             raise SecurityApiError(400, f"未登録の権限コードです: {', '.join(sorted(unknown))}")
         normalized_permissions = normalize_permission_codes(requested_permissions)
-        next_business_view_ids = _clean_ids(business_view_ids)
+        next_search_answer_profile_ids = _clean_ids(search_answer_profile_ids)
         next_knowledge_base_ids = _clean_ids(knowledge_base_ids)
-        unknown_views = next_business_view_ids - set(known_business_view_ids)
+        unknown_views = next_search_answer_profile_ids - set(known_search_answer_profile_ids)
         if unknown_views:
             raise SecurityApiError(
-                400, f"業務ビューが見つかりません: {', '.join(sorted(unknown_views))}"
+                400, f"検索・回答プロファイルが見つかりません: {', '.join(sorted(unknown_views))}"
             )
         unknown_bases = next_knowledge_base_ids - set(known_knowledge_base_ids)
         if unknown_bases:
             raise SecurityApiError(
                 400, f"ナレッジベースが見つかりません: {', '.join(sorted(unknown_bases))}"
             )
-        if grants_all_business_views(normalized_permissions):
-            next_business_view_ids = set()
+        if grants_all_search_answer_profiles(normalized_permissions):
+            next_search_answer_profile_ids = set()
         if grants_all_knowledge_bases(normalized_permissions):
             next_knowledge_base_ids = set()
         principal = as_principal(actor)
@@ -212,11 +212,12 @@ class SecurityService(AuthService):
                     403, "自分が持たない権限をロールに追加することはできません。"
                 )
             if not _targets_within(
-                next_business_view_ids - current.business_view_ids,
-                principal.allowed_business_view_ids,
+                next_search_answer_profile_ids - current.search_answer_profile_ids,
+                principal.allowed_search_answer_profile_ids,
             ):
                 raise SecurityApiError(
-                    403, "自分が利用できない業務ビューをロールに追加することはできません。"
+                    403,
+                    "自分が利用できない検索・回答プロファイルをロールに追加することはできません。",
                 )
             if not _targets_within(
                 next_knowledge_base_ids - current.knowledge_base_ids,
@@ -234,7 +235,7 @@ class SecurityService(AuthService):
             archived=current.archived,
             version=current.version,
             permissions=normalized_permissions,
-            business_view_ids=next_business_view_ids,
+            search_answer_profile_ids=next_search_answer_profile_ids,
             knowledge_base_ids=next_knowledge_base_ids,
         )
         try:

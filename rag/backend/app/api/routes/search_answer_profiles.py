@@ -1,0 +1,135 @@
+"""検索・回答プロファイル(Search Answer Profile)API。作成・一覧・詳細・更新・アーカイブ。
+
+KB が「文書をどう加工して索引するか」を司るのに対し、検索・回答プロファイルは「どの KB 群を
+どんな検索/生成方針・persona で束ねて回答するか」を司る利用者視点のエンティティ。
+"""
+
+from fastapi import APIRouter, HTTPException, Query
+
+from app.clients.oracle import OracleClient
+from app.config import get_settings
+from app.db_degradation import load_or_degrade
+from app.schemas.common import ApiResponse, Page
+from app.schemas.search_answer_profile import (
+    SearchAnswerProfileCreateRequest,
+    SearchAnswerProfileDetail,
+    SearchAnswerProfileStatus,
+    SearchAnswerProfileSummary,
+    SearchAnswerProfileUpdateRequest,
+)
+
+router = APIRouter()
+
+
+@router.get("", response_model=ApiResponse[Page[SearchAnswerProfileSummary]])
+async def list_search_answer_profiles(
+    status: SearchAnswerProfileStatus | None = None,
+    q: str | None = Query(default=None, min_length=1, max_length=200),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> ApiResponse[Page[SearchAnswerProfileSummary]]:
+    """検索・回答プロファイル一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
+    oracle = OracleClient()
+    settings = get_settings()
+
+    async def _load() -> Page[SearchAnswerProfileSummary]:
+        await oracle.ensure_default_search_answer_profile()
+        items = await oracle.list_search_answer_profiles(
+            status=status, query=q, limit=limit, offset=offset
+        )
+        total = await oracle.count_search_answer_profiles(status=status, query=q)
+        return Page(
+            items=items,
+            total=total,
+            limit=limit,
+            offset=offset,
+            has_next=offset + limit < total,
+        )
+
+    empty_page: Page[SearchAnswerProfileSummary] = Page(
+        items=[], total=0, limit=limit, offset=offset, has_next=False
+    )
+    page, degraded = await load_or_degrade(
+        _load,
+        timeout_seconds=settings.db_read_timeout_seconds,
+        fallback=empty_page,
+        log_label="search_answer_profiles_list",
+    )
+    return ApiResponse(
+        data=page,
+        warning_messages=[degraded.message] if degraded else [],
+    )
+
+
+@router.post("", response_model=ApiResponse[SearchAnswerProfileDetail])
+async def create_search_answer_profile(
+    request: SearchAnswerProfileCreateRequest,
+) -> ApiResponse[SearchAnswerProfileDetail]:
+    """検索・回答プロファイルを作成する。"""
+    oracle = OracleClient()
+    created = await oracle.create_search_answer_profile(
+        name=request.name,
+        description=request.description,
+        config=request.config,
+    )
+    # 参照 KB 名を解決した詳細を返す。
+    detail = await oracle.get_search_answer_profile(created.id)
+    return ApiResponse(data=detail or created)
+
+
+@router.get("/{search_answer_profile_id}", response_model=ApiResponse[SearchAnswerProfileDetail])
+async def get_search_answer_profile(
+    search_answer_profile_id: str,
+) -> ApiResponse[SearchAnswerProfileDetail]:
+    """検索・回答プロファイル詳細を返す。"""
+    detail = await OracleClient().get_search_answer_profile(search_answer_profile_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="検索・回答プロファイルが見つかりません。")
+    return ApiResponse(data=detail)
+
+
+@router.patch("/{search_answer_profile_id}", response_model=ApiResponse[SearchAnswerProfileDetail])
+async def update_search_answer_profile(
+    search_answer_profile_id: str,
+    request: SearchAnswerProfileUpdateRequest,
+) -> ApiResponse[SearchAnswerProfileDetail]:
+    """検索・回答プロファイルを更新する。"""
+    update_fields = set(request.model_fields_set)
+    oracle = OracleClient()
+    try:
+        await oracle.update_search_answer_profile(
+            search_answer_profile_id,
+            name=request.name,
+            description=request.description,
+            config=request.config,
+            update_fields=update_fields,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="検索・回答プロファイルが見つかりません。"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    detail = await oracle.get_search_answer_profile(search_answer_profile_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="検索・回答プロファイルが見つかりません。")
+    return ApiResponse(data=detail)
+
+
+@router.post(
+    "/{search_answer_profile_id}/archive", response_model=ApiResponse[SearchAnswerProfileDetail]
+)
+async def archive_search_answer_profile(
+    search_answer_profile_id: str,
+) -> ApiResponse[SearchAnswerProfileDetail]:
+    """検索・回答プロファイルをアーカイブする。参照 KB・文書は変更しない。"""
+    try:
+        await OracleClient().archive_search_answer_profile(search_answer_profile_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="検索・回答プロファイルが見つかりません。"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    detail = await OracleClient().get_search_answer_profile(search_answer_profile_id)
+    return ApiResponse(data=detail)

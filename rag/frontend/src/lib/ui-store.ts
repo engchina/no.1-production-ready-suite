@@ -9,4 +9,5 @@ export const useUiStore = createUiStore({
   storageKey: UI_STORAGE_KEY,
   legacyCollapsedKey: LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY,
   mobileBreakpoint: 640,
+  sectionKeyMigrations: { "nav.section.rag": "nav.section.use" },
 });

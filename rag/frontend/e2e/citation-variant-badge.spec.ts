@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
 
-const businessView = {
+const searchAnswerProfile = {
   id: "bv-1",
   name: "経理ビュー",
   description: null,
@@ -58,7 +58,7 @@ function searchStreamBody(chunkId: string): string {
         retrieval_strategy_adapter: "grounded",
         filter_keys: ["content_kind", "section_title", "section_path"],
         knowledge_base_count: 1,
-        business_view_applied: "bv-1",
+        search_answer_profile_applied: "bv-1",
         config_fingerprint: "fp-1",
       },
     })}\n\n`,
@@ -70,10 +70,10 @@ function searchStreamBody(chunkId: string): string {
 test("引用カードに variant(chunk_set)バッジが出る", async ({ page }, testInfo) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
-  await page.route("**/api/business-views**", (route) =>
+  await page.route("**/api/search-answer-profiles**", (route) =>
     route.fulfill({
       json: {
-        data: { items: [businessView], total: 1, limit: 50, offset: 0, has_next: false },
+        data: { items: [searchAnswerProfile], total: 1, limit: 50, offset: 0, has_next: false },
         error_messages: [],
         warning_messages: [],
       },
@@ -92,8 +92,8 @@ test("引用カードに variant(chunk_set)バッジが出る", async ({ page },
   });
 
   await page.goto("/search");
-  await selectBusinessView(page, /経理ビュー/);
-  // 業務ビューの一覧は選んでも開いたままなので閉じてから操作する（外側を押すと一覧を閉じるだけになる）。
+  await selectSearchAnswerProfile(page, /経理ビュー/);
+  // 検索・回答プロファイルの一覧は選んでも開いたままなので閉じてから操作する（外側を押すと一覧を閉じるだけになる）。
   await page.keyboard.press("Escape");
 
   await page.getByText("詳細条件", { exact: true }).click();

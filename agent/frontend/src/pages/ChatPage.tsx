@@ -246,7 +246,7 @@ export function ChatPage() {
             ) : usableAgents.length === 0 ? (
               <EmptyState title={t("chat.agent.empty")} />
             ) : (
-              // 画面の対象を決める主な選択欄（RAG の業務ビューと同じく full）。
+              // 画面の対象を決める主な選択欄（RAG の検索・回答プロファイルと同じく full）。
               <SearchableSelectField
                 id="chat-agent"
                 label={t("chat.agent.label")}

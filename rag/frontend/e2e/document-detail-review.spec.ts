@@ -161,7 +161,7 @@ test("存在しない文書は再試行せずにすぐ「見つかりません�
   await page.goto("/documents/missing-doc");
 
   // 見つからないときも見出し（PageHeader）を先に出し、本文だけを「対象が見つかりません」にする
-  // （ナレッジベース・業務ビューと共有の EditorTargetState。#581）。
+  // （ナレッジベース・検索・回答プロファイルと共有の EditorTargetState。#581）。
   await expect(page.getByText("対象が見つかりません")).toBeVisible({ timeout: 2_500 });
   await expect(page.getByText("「missing-doc」は削除されたか、存在しません。")).toBeVisible();
   await expect(page.getByRole("heading", { name: "文書インデックス", level: 1 })).toBeVisible();
@@ -170,7 +170,7 @@ test("存在しない文書は再試行せずにすぐ「見つかりません�
   await expect(page).toHaveURL(/\/file-list$/);
 });
 
-// #581 / #618: 文書詳細の見出しは、ナレッジベース・業務ビューの詳細と同じ PageHeader（左上の一覧へ戻る・状態）。
+// #581 / #618: 文書詳細の見出しは、ナレッジベース・検索・回答プロファイルの詳細と同じ PageHeader（左上の一覧へ戻る・状態）。
 test("文書詳細の見出しは PageHeader に一覧へ戻る（左上）・ファイル名・状態を出す", async ({ page }) => {
   await mockWorkspace(page, "ERROR", "このレシピは処理中または待機中です。");
   await page.route((url) => url.pathname === "/api/documents", (route) =>

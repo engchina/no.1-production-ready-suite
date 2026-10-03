@@ -1,6 +1,8 @@
 """Cookie のセッションの利用者から作る ActorPolicy の絞り込みテスト（#215）。
 
-- Run・監査・承認・成果物・SSE・`GET /agents`・Binding 一覧が、利用者のエージェント・業務ビューで
+- Run・監査・承認・成果物・SSE・`GET /agents`・
+Binding 一覧が、利用者のエージェント・検索・回答プロファイルで
+
   絞られること（header の RBAC 情報は使わない）
 - 承認の決定者（decided_by）が利用者になること（HTTP と WebSocket）
 - WebSocket の Cookie・Origin の検証と、範囲外の Run の close 1008
@@ -43,17 +45,21 @@ APPROVAL_TOOL = "nl2sql__nl2sql_query"
 @dataclass
 class ScopeData:
     run_a1: RunState  # agent A / bv-a（承認待ち）
-    # agent A / bv-b。業務ビューは Agent の対象範囲ではない（RAG が判定する。#750）ため見える。
+    # agent A / bv-b。検索・回答プロファイルは Agen
+    # t の対象範囲ではない（RAG が判定する。#750）ため見える。
+    #
     run_a2: RunState
     run_b: RunState  # agent B / bv-a
-    run_a_no_view: RunState  # agent A / 業務ビューなし
+    run_a_no_view: RunState  # agent A / 検索・回答プロファイルなし
 
 
-def _create_run(agent_id: str, business_view_id: str | None, *, approval: bool) -> RunState:
-    metadata = {"business_view_id": business_view_id} if business_view_id else {}
+def _create_run(agent_id: str, search_answer_profile_id: str | None, *, approval: bool) -> RunState:
+    metadata = (
+        {"search_answer_profile_id": search_answer_profile_id} if search_answer_profile_id else {}
+    )
     run = runtime_repository.create_builtin_run(
         RunCreateRequest(
-            goal=f"scope {agent_id} {business_view_id}",
+            goal=f"scope {agent_id} {search_answer_profile_id}",
             agent_id=agent_id,
             metadata=metadata,
         )
@@ -106,7 +112,9 @@ def test_run_list_and_detail_are_scoped_by_principal(
     auth: ProductionAuth, scope_data: ScopeData
 ) -> None:
     _scoped_user(auth, "scoped-viewer", ["agent.runs.view"])
-    # header の自己申告（全ロール・全業務ビュー）は使わない（header の RBAC は無い。#750）。
+    # header の自己申告（全ロール・全検索・回答プロファイル
+    # ）は使わない（header の RBAC は無い。#750）。
+    #
     headers = {
         **login("scoped-viewer"),
         "X-Agent-Roles": "admin",
@@ -196,7 +204,11 @@ def test_operator_run_creation_is_scoped(auth: ProductionAuth, scope_data: Scope
     headers = login("scoped-operator")
     denied_agent = client.post(
         "/api/runs",
-        json={"goal": "範囲外", "agent_id": AGENT_B, "metadata": {"business_view_id": "bv-a"}},
+        json={
+            "goal": "範囲外",
+            "agent_id": AGENT_B,
+            "metadata": {"search_answer_profile_id": "bv-a"},
+        },
         headers=headers,
     )
     assert denied_agent.status_code == 403
@@ -205,7 +217,7 @@ def test_operator_run_creation_is_scoped(auth: ProductionAuth, scope_data: Scope
         json={
             "goal": "範囲内",
             "agent_id": AGENT_A,
-            "metadata": {"business_view_id": "bv-a"},
+            "metadata": {"search_answer_profile_id": "bv-a"},
         },
         headers=headers,
     )

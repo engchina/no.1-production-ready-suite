@@ -105,7 +105,7 @@ test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
 });
 
-test("KB 詳細の検索テストで業務ビュー無しに回答と引用を確認できる", async ({ page }) => {
+test("KB 詳細の検索テストで検索・回答プロファイル無しに回答と引用を確認できる", async ({ page }) => {
   await mockKbPage(page, 1);
   let streamRequestBody: Record<string, unknown> | null = null;
   await page.route("**/api/search/stream", (route) => {
@@ -130,9 +130,9 @@ test("KB 詳細の検索テストで業務ビュー無しに回答と引用を�
   await expect(page.getByRole("meter", { name: /取得スコア/ })).toHaveCount(0);
   await expect(page.getByRole("meter", { name: "Rerank スコア: 0.820" })).toBeVisible();
 
-  // request は単一 KB scope を明示し、業務ビューは渡さない。回答は作らずに検索だけを頼む（#593）。
+  // request は単一 KB scope を明示し、検索・回答プロファイルは渡さない。回答は作らずに検索だけを頼む（#593）。
   expect(streamRequestBody).toMatchObject({ knowledge_base_ids: ["kb-1"], retrieval_only: true });
-  expect(streamRequestBody).not.toHaveProperty("business_view_id");
+  expect(streamRequestBody).not.toHaveProperty("search_answer_profile_id");
   // 検索の方式は回答エンジンが使わないため送らず、選ぶチップも出さない（#595）。
   expect(streamRequestBody).not.toHaveProperty("mode");
   await expect(page.getByRole("button", { name: "ハイブリッド" })).toHaveCount(0);

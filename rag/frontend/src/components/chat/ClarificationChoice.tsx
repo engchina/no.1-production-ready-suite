@@ -25,7 +25,7 @@ function sectionLabel(section: ClarificationSection): string {
 }
 
 /**
- * 回答の前に出す確認の質問（業務ビューのルール。#717）。選択肢は複数選択（チェック）か 1 つ（ラジオ）で、
+ * 回答の前に出す確認の質問（検索・回答プロファイルのルール。#717）。選択肢は複数選択（チェック）か 1 つ（ラジオ）で、
  * 「その他」の自由入力を併せて書ける。「選ばずに回答する」で確認を使わずに回答する。
  */
 export function ClarificationChoice({

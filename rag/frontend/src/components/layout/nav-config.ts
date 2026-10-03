@@ -77,7 +77,7 @@ const USER_ROLE_MENU_PERMISSIONS = {
 export const NAV_SECTIONS: NavSection[] = [
   {
     // 日常の利用の画面。対話のチャットを先頭に置く（`/` はナビの順で最初に開ける画面へ移るので、既定はチャット。#399）。
-    titleKey: "nav.section.rag",
+    titleKey: "nav.section.use",
     items: [
       { href: APP_ROUTES.chat, labelKey: "nav.chat", icon: MessagesSquare, permission: MENU_PERMISSIONS.chat },
       { href: APP_ROUTES.search, labelKey: "nav.search", icon: FileSearch, permission: MENU_PERMISSIONS.search },
@@ -95,13 +95,13 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       { href: APP_ROUTES.fileList, labelKey: "nav.fileList", icon: FileStack, permission: MENU_PERMISSIONS.fileList },
       { href: APP_ROUTES.knowledgeBases, labelKey: "nav.knowledgeBases", icon: Library, permission: MENU_PERMISSIONS.knowledgeBases },
-      // 業務ビューはナレッジベースの上に検索の範囲を切り出すので、ナレッジベースの直下に置く（#402）。
+      // 検索・回答プロファイルはナレッジベースの上に検索の範囲を切り出すので、ナレッジベースの直下に置く（#402）。
       {
-        href: APP_ROUTES.businessViews,
-        labelKey: "nav.businessViews",
-        sidebarLabelKey: "nav.businessViews.sidebar",
+        href: APP_ROUTES.searchAnswerProfiles,
+        labelKey: "nav.searchAnswerProfiles",
+        sidebarLabelKey: "nav.searchAnswerProfiles.sidebar",
         icon: BriefcaseBusiness,
-        permission: MENU_PERMISSIONS.businessViews,
+        permission: MENU_PERMISSIONS.searchAnswerProfiles,
       },
     ],
   },
@@ -190,7 +190,7 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    // RAG 固有のセキュリティ（ロールへの機能権限と業務ビュー / KB の対象範囲の付与。#214）。
+    // RAG 固有のセキュリティ（ロールへの機能権限と検索・回答プロファイル / KB の対象範囲の付与。#214）。
     titleKey: "nav.section.security",
     items: [
       {

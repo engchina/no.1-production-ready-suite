@@ -100,14 +100,14 @@ describe("401 / 403 の通知", () => {
     expect(events).toEqual(["app-auth-unauthorized", "app-auth-forbidden"]);
   });
 
-  it("業務ビュー / KB の範囲外の 403（検索・stream・セキュリティの更新）は画面を移さず理由を返す", async () => {
+  it("検索・回答プロファイル / KB の範囲外の 403（検索・stream・セキュリティの更新）は画面を移さず理由を返す", async () => {
     const events = stubBrowser();
     // 範囲外は RAG_SCOPE_FORBIDDEN、権限の付与の制限は SECURITY_PERMISSION_DENIED（#224）。
     const forbidden = (url: string) =>
       jsonResponse(
         {
           data: null,
-          error_messages: ["この業務ビューのナレッジベースを利用する権限がありません。"],
+          error_messages: ["この検索・回答プロファイルのナレッジベースを利用する権限がありません。"],
           error_code: url.includes("/security/") ? "SECURITY_PERMISSION_DENIED" : "RAG_SCOPE_FORBIDDEN",
         },
         403
@@ -119,7 +119,7 @@ describe("401 / 403 の通知", () => {
 
     await expect(api.search({ query: "q" } as never)).rejects.toMatchObject({
       status: 403,
-      message: "この業務ビューのナレッジベースを利用する権限がありません。",
+      message: "この検索・回答プロファイルのナレッジベースを利用する権限がありません。",
     });
     await expect(streamSearch({ query: "q" } as never, {})).rejects.toBeInstanceOf(ApiError);
     await expect(
@@ -127,7 +127,7 @@ describe("401 / 403 の通知", () => {
         role_id: "r1",
         version: 1,
         permissions: [],
-        business_view_ids: ["bv-x"],
+        search_answer_profile_ids: ["bv-x"],
         knowledge_base_ids: [],
       })
     ).rejects.toMatchObject({ status: 403 });

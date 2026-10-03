@@ -1,6 +1,6 @@
 """回答フローの回答品質をまとめて確かめる検証 CLI(rag_poc の検証スクリプトの移植)。
 
-- ``answers``: QA を業務ビューで回答し、標準回答で 4 軸評価する
+- ``answers``: QA を検索・回答プロファイルで回答し、標準回答で 4 軸評価する
   (rag_poc の ``scripts/run_answer_eval.py``)。
 - ``regression``: rag_poc の ``cases.json`` の質問に回答し、文字列の規則で判定する
   (rag_poc の ``scripts/regression/run_regression.py``)。
@@ -12,10 +12,10 @@
 残りだけ実行できる。
 結果には質問と回答の本文が入るため、出力先は Git 管理外(既定は ``.runs/``)にする。
 
-    uv run python -m app.rag.answer_verify_cli answers --qa qa.json --business-view <id> \\
+    uv run python -m app.rag.answer_verify_cli answers --qa qa.json --search-answer-profile <id> \\
         --out .runs/answers/<label>
     uv run python -m app.rag.answer_verify_cli regression --cases cases.json \\
-        --business-view <id> --out .runs/regression/<label> --repeat 2
+        --search-answer-profile <id> --out .runs/regression/<label> --repeat 2
     uv run python -m app.rag.answer_verify_cli crag-goldset crag_goldset.json
 """
 
@@ -80,8 +80,10 @@ class RagApi:
     def close(self) -> None:
         self._client.close()
 
-    def search(self, question: str, business_view_id: str) -> dict[str, Any]:
-        return self._post("/api/search", {"query": question, "business_view_id": business_view_id})
+    def search(self, question: str, search_answer_profile_id: str) -> dict[str, Any]:
+        return self._post(
+            "/api/search", {"query": question, "search_answer_profile_id": search_answer_profile_id}
+        )
 
     def evaluate(self, trace_id: str, standard_answer: str) -> dict[str, Any]:
         return self._post(
@@ -114,7 +116,7 @@ def run_answers(
     api: RagApi,
     items: Sequence[Mapping[str, Any]],
     *,
-    business_view_id: str,
+    search_answer_profile_id: str,
     out: Path,
     log: Callable[[str], None] = print,
 ) -> None:
@@ -128,7 +130,7 @@ def run_answers(
         started = time.time()
         record: dict[str, Any] = {"id": item["id"], "question": item["question"]}
         try:
-            answer = api.search(str(item["question"]), business_view_id)
+            answer = api.search(str(item["question"]), search_answer_profile_id)
             record.update(trace_id=answer.get("trace_id"), answer=answer.get("answer", ""))
             # 回答の記録を残すのは根拠付き回答だけ(安全ポリシーで止めた質問は "blocked")。
             answer_path = (answer.get("diagnostics") or {}).get("retrieval_strategy_adapter")
@@ -250,7 +252,7 @@ def run_regression(
     api: RagApi,
     cases: Sequence[Mapping[str, Any]],
     *,
-    business_view_id: str,
+    search_answer_profile_id: str,
     out: Path,
     repeat: int,
     log: Callable[[str], None] = print,
@@ -266,7 +268,7 @@ def run_regression(
             started = time.time()
             record: dict[str, Any]
             try:
-                answer = api.search(str(case["question"]), business_view_id)
+                answer = api.search(str(case["question"]), search_answer_profile_id)
                 details = (answer.get("diagnostics") or {}).get("answer") or {}
                 record = {
                     "trace_id": answer.get("trace_id"),
@@ -394,7 +396,9 @@ def _build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
         sub.add_argument("--tenant-id", default=os.getenv("RAG_EVALUATION_TENANT_ID"))
         sub.add_argument("--user-id", default=os.getenv("RAG_EVALUATION_USER_ID"))
-        sub.add_argument("--business-view", required=True, help="回答に使う業務ビューの ID")
+        sub.add_argument(
+            "--search-answer-profile", required=True, help="回答に使う検索・回答プロファイルの ID"
+        )
         sub.add_argument("--out", type=Path, required=True, help="結果の保存先(再開に使う)")
         sub.add_argument("--only", default="", help="カンマ区切りの id。指定した件だけ実行")
         sub.add_argument("--summary-only", action="store_true", help="実行せず summary.md だけ作る")
@@ -432,7 +436,9 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
         if args.command == "answers":
             items = _only(_load_items(args.qa, "items"), args.only)
             if not args.summary_only:
-                run_answers(api, items, business_view_id=args.business_view, out=args.out)
+                run_answers(
+                    api, items, search_answer_profile_id=args.search_answer_profile, out=args.out
+                )
             print(summarize_answers(items, args.out))
         else:
             cases = _only(_load_items(args.cases, "cases"), args.only)
@@ -440,7 +446,7 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
                 run_regression(
                     api,
                     cases,
-                    business_view_id=args.business_view,
+                    search_answer_profile_id=args.search_answer_profile,
                     out=args.out,
                     repeat=args.repeat,
                 )

@@ -11,7 +11,7 @@ export const APP_ROUTES = {
   upload: "/upload",
   fileList: "/file-list",
   knowledgeBases: "/knowledge-bases",
-  businessViews: "/business-views",
+  searchAnswerProfiles: "/search-answer-profiles",
   documents: "/documents",
   chat: "/chat",
   search: "/search",

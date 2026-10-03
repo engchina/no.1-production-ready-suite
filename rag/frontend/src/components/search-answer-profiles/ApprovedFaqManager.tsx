@@ -33,10 +33,10 @@ import { focusFirstInvalidField, requiredTextError } from "@/lib/required-fields
 import { useApprovedFaq, useApprovedFaqMutation } from "@/lib/queries";
 
 const IMPORT_MODE_OPTIONS: SelectFieldOption<ApprovedFaqImportMode>[] = [
-  { value: "INSERT", label: t("businessViews.faq.importMode.INSERT") },
+  { value: "INSERT", label: t("searchAnswerProfiles.faq.importMode.INSERT") },
   {
     value: "DELETE_THEN_INSERT",
-    label: t("businessViews.faq.importMode.DELETE_THEN_INSERT"),
+    label: t("searchAnswerProfiles.faq.importMode.DELETE_THEN_INSERT"),
   },
 ];
 
@@ -44,29 +44,29 @@ function errorMessage(error: unknown, fallback: string) {
   return error instanceof ApiError ? error.message : fallback;
 }
 
-/** 業務ビューの Approved FAQ(類似問)の一覧・追加・削除・Excel 取込。 */
+/** 検索・回答プロファイルの Approved FAQ(類似問)の一覧・追加・削除・Excel 取込。 */
 export function ApprovedFaqManager({
-  businessViewId,
+  searchAnswerProfileId,
 }: {
-  businessViewId: string;
+  searchAnswerProfileId: string;
 }) {
-  const query = useApprovedFaq(businessViewId);
+  const query = useApprovedFaq(searchAnswerProfileId);
   const records = query.data?.records ?? [];
   const add = useApprovedFaqMutation(
-    businessViewId,
+    searchAnswerProfileId,
     (body: { question: string; answer: string }) =>
-      api.addApprovedFaq(businessViewId, body),
+      api.addApprovedFaq(searchAnswerProfileId, body),
   );
-  const remove = useApprovedFaqMutation(businessViewId, (ids: string[]) =>
-    api.deleteApprovedFaq(businessViewId, ids),
+  const remove = useApprovedFaqMutation(searchAnswerProfileId, (ids: string[]) =>
+    api.deleteApprovedFaq(searchAnswerProfileId, ids),
   );
-  const setEnabled = useApprovedFaqMutation(businessViewId, (enabled: boolean) =>
-    api.setApprovedFaqEnabled(businessViewId, enabled),
+  const setEnabled = useApprovedFaqMutation(searchAnswerProfileId, (enabled: boolean) =>
+    api.setApprovedFaqEnabled(searchAnswerProfileId, enabled),
   );
   const importFaq = useApprovedFaqMutation(
-    businessViewId,
+    searchAnswerProfileId,
     (args: { file: File; mode: ApprovedFaqImportMode }) =>
-      api.importApprovedFaq(businessViewId, args.file, args.mode),
+      api.importApprovedFaq(searchAnswerProfileId, args.file, args.mode),
   );
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
@@ -82,19 +82,19 @@ export function ApprovedFaqManager({
   // FAQ の削除は取り消せないため、行のメニューから確認ダイアログを通す（buttons.md §5.1）。
   const handleDelete = async (row: ApprovedFaqRecordData) => {
     const ok = await confirm({
-      title: t("businessViews.faq.deleteConfirm.title"),
-      description: t("businessViews.faq.deleteConfirm.description", {
+      title: t("searchAnswerProfiles.faq.deleteConfirm.title"),
+      description: t("searchAnswerProfiles.faq.deleteConfirm.description", {
         question: row.question,
       }),
-      confirmLabel: t("businessViews.faq.delete"),
+      confirmLabel: t("searchAnswerProfiles.faq.delete"),
       tone: "danger",
       dismissOnOverlay: false,
     });
     if (!ok) return;
     remove.mutate([row.id], {
-      onSuccess: () => toast.success(t("businessViews.faq.deleted")),
+      onSuccess: () => toast.success(t("searchAnswerProfiles.faq.deleted")),
       onError: (error) =>
-        toast.error(errorMessage(error, t("businessViews.faq.saveError"))),
+        toast.error(errorMessage(error, t("searchAnswerProfiles.faq.saveError"))),
     });
   };
   // 追加前の Q&A 入力があるときだけ離脱を確認する。
@@ -106,22 +106,22 @@ export function ApprovedFaqManager({
     setPreviewError("");
     if (!next) return;
     try {
-      setPreview(await api.previewApprovedFaqImport(businessViewId, next));
+      setPreview(await api.previewApprovedFaqImport(searchAnswerProfileId, next));
     } catch (error) {
-      setPreviewError(errorMessage(error, t("businessViews.faq.previewError")));
+      setPreviewError(errorMessage(error, t("searchAnswerProfiles.faq.previewError")));
     }
   };
 
   return (
     <div className="space-y-5">
-      {/* 類似問の提示のオン / オフ（業務ビューごと。既定はオン。#684）。 */}
+      {/* 類似問の提示のオン / オフ（検索・回答プロファイルごと。既定はオン。#684）。 */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p id="approved-faq-enabled-label" className="text-sm font-medium text-fg">
-            {t("businessViews.faq.enabled.label")}
+            {t("searchAnswerProfiles.faq.enabled.label")}
           </p>
           <p id="approved-faq-enabled-help" className="mt-0.5 text-xs leading-relaxed text-fg-muted">
-            {t("businessViews.faq.enabled.help")}
+            {t("searchAnswerProfiles.faq.enabled.help")}
           </p>
         </div>
         <Switch
@@ -130,7 +130,7 @@ export function ApprovedFaqManager({
           onCheckedChange={(checked) =>
             setEnabled.mutate(checked, {
               onError: (error) =>
-                toast.error(errorMessage(error, t("businessViews.faq.enabled.error"))),
+                toast.error(errorMessage(error, t("searchAnswerProfiles.faq.enabled.error"))),
             })
           }
           aria-labelledby="approved-faq-enabled-label"
@@ -140,8 +140,8 @@ export function ApprovedFaqManager({
       </div>
       {query.isPending ? (
         <TimedLoadingState
-          label={t("businessViews.faq.loading")}
-          operationKey={`approved-faq-${businessViewId}`}
+          label={t("searchAnswerProfiles.faq.loading")}
+          operationKey={`approved-faq-${searchAnswerProfileId}`}
           testId="approved-faq-loading"
         >
           <TableSkeleton columns={3} />
@@ -151,7 +151,7 @@ export function ApprovedFaqManager({
         columns={[
           {
             key: "question",
-            header: t("businessViews.faq.question"),
+            header: t("searchAnswerProfiles.faq.question"),
             rowHeader: true,
             render: (row) => (
               <span className="break-words">{row.question}</span>
@@ -159,7 +159,7 @@ export function ApprovedFaqManager({
           },
           {
             key: "answer",
-            header: t("businessViews.faq.answer"),
+            header: t("searchAnswerProfiles.faq.answer"),
             render: (row) => (
               <span className="line-clamp-3 whitespace-pre-wrap break-words">
                 {row.answer}
@@ -168,14 +168,14 @@ export function ApprovedFaqManager({
           },
           {
             key: "actions",
-            header: t("businessViews.faq.actions"),
+            header: t("searchAnswerProfiles.faq.actions"),
             align: "right",
             render: (row) => (
               <RowActionMenu
                 actions={[
                   {
                     id: "delete",
-                    label: t("businessViews.faq.delete"),
+                    label: t("searchAnswerProfiles.faq.delete"),
                     icon: Trash2,
                     tone: "danger",
                     loading: remove.isPending && remove.variables?.includes(row.id),
@@ -191,16 +191,16 @@ export function ApprovedFaqManager({
         ]}
         rows={records}
         getRowKey={(row) => row.id}
-        resetKey={businessViewId}
+        resetKey={searchAnswerProfileId}
         dense
         empty={
           <EmptyState
-            title={t("businessViews.faq.empty")}
-            hint={t("businessViews.faq.emptyHint")}
+            title={t("searchAnswerProfiles.faq.empty")}
+            hint={t("searchAnswerProfiles.faq.emptyHint")}
           />
         }
-        ariaLabel={t("businessViews.faq.listAria")}
-        scrollAriaLabel={t("businessViews.faq.scrollLabel")}
+        ariaLabel={t("searchAnswerProfiles.faq.listAria")}
+        scrollAriaLabel={t("searchAnswerProfiles.faq.scrollLabel")}
         scrollTestId="approved-faq-scroll-region"
         paginationTestId="approved-faq-pagination"
       />
@@ -209,11 +209,11 @@ export function ApprovedFaqManager({
       <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
         <section className="min-w-0 space-y-3 rounded-md border border-border p-3">
           <h4 className="text-sm font-semibold text-fg">
-            {t("businessViews.faq.addTitle")}
+            {t("searchAnswerProfiles.faq.addTitle")}
           </h4>
           <TextField
             id="approved-faq-question"
-            label={t("businessViews.faq.question")}
+            label={t("searchAnswerProfiles.faq.question")}
             value={question}
             onChange={(event) => {
               setQuestion(event.target.value);
@@ -225,7 +225,7 @@ export function ApprovedFaqManager({
           />
           <TextareaField
             id="approved-faq-answer"
-            label={t("businessViews.faq.answer")}
+            label={t("searchAnswerProfiles.faq.answer")}
             required
             error={addErrors.answer ?? undefined}
             value={answer}
@@ -243,8 +243,8 @@ export function ApprovedFaqManager({
             loading={add.isPending}
             onClick={() => {
               const nextErrors = {
-                question: requiredTextError(question, t("businessViews.faq.error.questionRequired")),
-                answer: requiredTextError(answer, t("businessViews.faq.error.answerRequired")),
+                question: requiredTextError(question, t("searchAnswerProfiles.faq.error.questionRequired")),
+                answer: requiredTextError(answer, t("searchAnswerProfiles.faq.error.answerRequired")),
               };
               setAddErrors(nextErrors);
               if (
@@ -261,32 +261,32 @@ export function ApprovedFaqManager({
                   onSuccess: () => {
                     setQuestion("");
                     setAnswer("");
-                    toast.success(t("businessViews.faq.added"));
+                    toast.success(t("searchAnswerProfiles.faq.added"));
                   },
                   onError: (error) =>
                     toast.error(
-                      errorMessage(error, t("businessViews.faq.saveError")),
+                      errorMessage(error, t("searchAnswerProfiles.faq.saveError")),
                     ),
                 },
               );
             }}
           >
-            {t("businessViews.faq.add")}
+            {t("searchAnswerProfiles.faq.add")}
           </Button>
         </section>
 
         <section className="min-w-0 space-y-3 rounded-md border border-border p-3">
           <h4 className="flex items-center gap-1.5 text-sm font-semibold text-fg">
             <FileSpreadsheet size={16} aria-hidden />
-            {t("businessViews.faq.importTitle")}
+            {t("searchAnswerProfiles.faq.importTitle")}
           </h4>
           <p className="text-xs leading-relaxed text-fg-muted">
-            {t("businessViews.faq.importHelp")}
+            {t("searchAnswerProfiles.faq.importHelp")}
           </p>
           {/* 取込はファイルを選ぶまで実行できない（取込モードは既定値があるので必須にしない） */}
           <FieldLabel
             htmlFor="approved-faq-import-file"
-            label={t("businessViews.faq.importFile")}
+            label={t("searchAnswerProfiles.faq.importFile")}
             required
             className="block"
           />
@@ -302,7 +302,7 @@ export function ApprovedFaqManager({
           />
           <SelectField
             id="approved-faq-import-mode"
-            label={t("businessViews.faq.importModeLabel")}
+            label={t("searchAnswerProfiles.faq.importModeLabel")}
             value={mode}
             options={IMPORT_MODE_OPTIONS}
             onValueChange={(value) => value && setMode(value)}
@@ -314,7 +314,7 @@ export function ApprovedFaqManager({
           {preview ? (
             <div className="space-y-1 text-xs text-fg-muted">
               <p>
-                {t("businessViews.faq.previewCount", { count: preview.total })}
+                {t("searchAnswerProfiles.faq.previewCount", { count: preview.total })}
               </p>
               <ul className="space-y-1">
                 {preview.rows.map((row) => (
@@ -338,25 +338,25 @@ export function ApprovedFaqManager({
                 {
                   onSuccess: (data) =>
                     toast.success(
-                      t("businessViews.faq.imported", {
+                      t("searchAnswerProfiles.faq.imported", {
                         inserted: data.inserted_count,
                         deleted: data.deleted_count,
                       }),
                     ),
                   onError: (error) =>
                     toast.error(
-                      errorMessage(error, t("businessViews.faq.saveError")),
+                      errorMessage(error, t("searchAnswerProfiles.faq.saveError")),
                     ),
                 },
               )
             }
           >
-            {t("businessViews.faq.import")}
+            {t("searchAnswerProfiles.faq.import")}
           </Button>
           {importFaq.isPending ? (
             <ProcessingIndicator
               active
-              label={t("businessViews.faq.importing")}
+              label={t("searchAnswerProfiles.faq.importing")}
               operationKey="approved-faq-import"
               placement="action"
               activityIcon="none"

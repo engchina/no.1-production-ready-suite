@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from app.api.routes import business_view_knowledge as knowledge_route
+from app.api.routes import search_answer_profile_knowledge as knowledge_route
 from app.api.routes import settings as settings_routes
 from app.config import Settings, get_settings
 from app.main import app
@@ -44,9 +44,13 @@ class HistoryStore:
         return 0
 
     async def list_query_history(
-        self, business_view_id: str, *, retention_days: int, limit: int = 5000
+        self, search_answer_profile_id: str, *, retention_days: int, limit: int = 5000
     ) -> list[dict[str, Any]]:
-        return [record for record in self.records if record["business_view_id"] == business_view_id]
+        return [
+            record
+            for record in self.records
+            if record["search_answer_profile_id"] == search_answer_profile_id
+        ]
 
 
 async def _record(
@@ -55,7 +59,7 @@ async def _record(
     await record_query_history(
         store,
         settings,
-        business_view_id=kwargs.get("business_view_id", "bv-1"),
+        search_answer_profile_id=kwargs.get("search_answer_profile_id", "bv-1"),
         question=question,
         surface="search",
         filters=kwargs.get("filters", {}),
@@ -66,7 +70,7 @@ async def test_record_is_disabled_by_default_and_skips_blocklist_and_missing_vie
     store = HistoryStore()
 
     await _record(store, "経費の承認者は？", Settings())
-    await _record(store, "経費の承認者は？", business_view_id=None)
+    await _record(store, "経費の承認者は？", search_answer_profile_id=None)
     await _record(
         store,
         "社員番号 12345 の給与は？",
@@ -109,21 +113,21 @@ async def test_suggestions_follow_rag_poc_rules() -> None:
         await _record(store, "経費の申請方法は？")
     for _ in range(3):  # 分類が違う
         await _record(store, "経費の上限は？", filters={"large_category": "人事"})
-    for _ in range(3):  # 別の業務ビュー
-        await _record(store, "経費の精算先は？", business_view_id="bv-2")
+    for _ in range(3):  # 別の検索・回答プロファイル
+        await _record(store, "経費の精算先は？", search_answer_profile_id="bv-2")
 
     suggestions = await query_history_suggestions(
-        store, ENABLED, business_view_id="bv-1", question="経費", classification={}
+        store, ENABLED, search_answer_profile_id="bv-1", question="経費", classification={}
     )
     filtered = await query_history_suggestions(
         store,
         ENABLED,
-        business_view_id="bv-1",
+        search_answer_profile_id="bv-1",
         question="経費",
         classification={"large_category": "経理"},
     )
     disabled = await query_history_suggestions(
-        store, Settings(), business_view_id="bv-1", question="経費", classification={}
+        store, Settings(), search_answer_profile_id="bv-1", question="経費", classification={}
     )
 
     assert [(item.question, item.count) for item in suggestions] == [
@@ -137,7 +141,7 @@ async def test_suggestions_follow_rag_poc_rules() -> None:
 
 
 async def test_pipeline_records_successful_questions(monkeypatch: pytest.MonkeyPatch) -> None:
-    """回答(回答フロー。#594)に成功した質問を、業務ビューごとに記録する。"""
+    """回答(回答フロー。#594)に成功した質問を、検索・回答プロファイルごとに記録する。"""
     import rag_engine.adapters.oci as engine_oci
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
@@ -160,11 +164,12 @@ async def test_pipeline_records_successful_questions(monkeypatch: pytest.MonkeyP
         settings=Settings(rag_query_history_enabled=True),
     )
 
-    await pipeline.run(SearchRequest(query="受注の登録方法は？", business_view_id="bv-1"))
-    await pipeline.run(SearchRequest(query="業務ビューなしの受注の登録方法は？"))
+    await pipeline.run(SearchRequest(query="受注の登録方法は？", search_answer_profile_id="bv-1"))
+    await pipeline.run(SearchRequest(query="検索・回答プロファイルなしの受注の登録方法は？"))
 
     assert [
-        (item["business_view_id"], item["question"], item["surface"]) for item in oracle.history
+        (item["search_answer_profile_id"], item["question"], item["surface"])
+        for item in oracle.history
     ] == [("bv-1", "受注の登録方法は？", "search")]
 
 
@@ -172,7 +177,7 @@ def test_query_suggestions_api(monkeypatch: pytest.MonkeyPatch) -> None:
     store = HistoryStore()
     store.records = [
         {
-            "business_view_id": "bv-1",
+            "search_answer_profile_id": "bv-1",
             "query_id": f"q{index}",
             "question": "経費の承認者は？",
             "normalized_question": "経費の承認者は?",
@@ -183,8 +188,8 @@ def test_query_suggestions_api(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
     class Oracle(HistoryStore):
-        async def get_business_view(self, business_view_id: str) -> object | None:
-            return object() if business_view_id == "bv-1" else None
+        async def get_search_answer_profile(self, search_answer_profile_id: str) -> object | None:
+            return object() if search_answer_profile_id == "bv-1" else None
 
     oracle = Oracle()
     oracle.records = store.records
@@ -192,12 +197,14 @@ def test_query_suggestions_api(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_query_history_enabled", True)
 
-    response = client.get("/api/business-views/bv-1/query-suggestions", params={"q": "承認"})
-    missing = client.get("/api/business-views/bv-x/query-suggestions")
+    response = client.get(
+        "/api/search-answer-profiles/bv-1/query-suggestions", params={"q": "承認"}
+    )
+    missing = client.get("/api/search-answer-profiles/bv-x/query-suggestions")
 
     assert response.status_code == 200
     assert response.json()["data"] == {
-        "business_view_id": "bv-1",
+        "search_answer_profile_id": "bv-1",
         "enabled": True,
         "suggestions": [{"question": "経費の承認者は？", "count": 3}],
     }
@@ -260,8 +267,11 @@ async def test_query_history_round_trip_on_real_oracle() -> None:
         await oracle._run_transaction(  # noqa: SLF001
             lambda connection: _execute_count(
                 connection,
-                "DELETE FROM rag_query_history WHERE business_view_id = :business_view_id",
-                {"business_view_id": view},
+                (
+                    "DELETE FROM rag_query_history WHERE search_a"
+                    "nswer_profile_id = :search_answer_profile_id"
+                ),
+                {"search_answer_profile_id": view},
             )
         )
 
@@ -269,7 +279,7 @@ async def test_query_history_round_trip_on_real_oracle() -> None:
     for _ in range(3):
         await oracle.append_query_history(
             {
-                "business_view_id": view,
+                "search_answer_profile_id": view,
                 "surface": "search",
                 "question": "経費の承認者は？",
                 "normalized_question": "経費の承認者は?",
@@ -280,7 +290,7 @@ async def test_query_history_round_trip_on_real_oracle() -> None:
     suggestions = await query_history_suggestions(
         oracle,
         ENABLED,
-        business_view_id=view,
+        search_answer_profile_id=view,
         question="承認",
         classification={"large_category": "経理"},
     )

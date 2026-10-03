@@ -1,7 +1,9 @@
 """RAG の MCP サーバー（`POST /api/mcp`。#232）のテスト。
 
 production mode（InMemory の共通認証）で、Agent が作るサービストークンの利用者として呼ぶ。
-Oracle・LLM は既存の fake / スタブ（範囲で絞る fake の業務ビュー）に差し替え、実サービスは呼ばない。
+Oracle・LLM は既存の fake / スタブ（範囲で絞る f
+ake の検索・回答プロファイル）に差し替え、実サービスは呼ばない。
+
 RAG のチャットは MCP で提供しない（#787）。
 """
 
@@ -13,8 +15,8 @@ import pytest
 from pr_system_settings.auth.service_token import issue_service_token
 from pytest import MonkeyPatch
 
-from app.api.routes import business_views as business_views_route
 from app.api.routes import search as search_route
+from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.config import get_settings
 from app.main import app
 from app.rag import request_context
@@ -23,13 +25,13 @@ from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
 from app.security.permissions import SCOPE_FORBIDDEN_CODE, permission_for_route
 from tests.security_support import ProductionAuth, enable_production_auth, login
 from tests.support import AsgiTestClient
-from tests.test_search_business_view import RecordingPipeline
+from tests.test_search_search_answer_profile import RecordingPipeline
 from tests.test_security_api import ScopedFakeOracle
 from tests.test_security_scope import _captured_knowledge_base_ids, _install_search
 
 client = AsgiTestClient(app)
 SECRET = "rag-mcp-test-secret-0123456789abcdef"  # nosec B105 - テスト用
-ALL_TOOLS = ["rag_list_business_views", "rag_search"]
+ALL_TOOLS = ["rag_list_search_answer_profiles", "rag_search"]
 
 
 @pytest.fixture
@@ -120,9 +122,14 @@ def test_initialize_and_tools_list_follow_user_permissions(auth: ProductionAuth)
     server_info = initialized.json()["result"]["serverInfo"]
     assert server_info == {"name": "production-ready-rag", "version": get_settings().app_version}
 
-    assert _tool_names(_token(searcher.user_uuid)) == ["rag_list_business_views", "rag_search"]
-    # チャットは MCP で提供しない（#787）。チャットだけの利用者は業務ビューの一覧だけを使える。
-    assert _tool_names(_token(chatter.user_uuid)) == ["rag_list_business_views"]
+    assert _tool_names(_token(searcher.user_uuid)) == [
+        "rag_list_search_answer_profiles",
+        "rag_search",
+    ]
+    # チャットは MCP で提供しない（#787）。チャット
+    # だけの利用者は検索・回答プロファイルの一覧だけを使える。
+    #
+    assert _tool_names(_token(chatter.user_uuid)) == ["rag_list_search_answer_profiles"]
     assert _tool_names(_token(viewer.user_uuid)) == []
     assert _tool_names(_token(admin.user_uuid)) == ALL_TOOLS
 
@@ -142,31 +149,31 @@ def test_local_mode_uses_local_user_without_token() -> None:
 
 
 # ---------------------------------------------------------------------------
-# rag_list_business_views
+# rag_list_search_answer_profiles
 # ---------------------------------------------------------------------------
 
 
-def test_list_business_views_is_scoped_to_user(
+def test_list_search_answer_profiles_is_scoped_to_user(
     auth: ProductionAuth, monkeypatch: MonkeyPatch
 ) -> None:
     fake = ScopedFakeOracle()
-    monkeypatch.setattr(business_views_route, "OracleClient", lambda *_a, **_k: fake)
+    monkeypatch.setattr(search_answer_profiles_route, "OracleClient", lambda *_a, **_k: fake)
     user = auth.user_with_permissions(
-        "searcher", ["menu.search"], business_view_ids=["bv-1", "bv-3"]
+        "searcher", ["menu.search"], search_answer_profile_ids=["bv-1", "bv-3"]
     )
-    result = _call("rag_list_business_views", {"limit": 10}, _token(user.user_uuid))
+    result = _call("rag_list_search_answer_profiles", {"limit": 10}, _token(user.user_uuid))
     assert result["isError"] is False
-    views = result["structuredContent"]["business_views"]
+    views = result["structuredContent"]["search_answer_profiles"]
     assert [view["id"] for view in views] == ["bv-1", "bv-3"]
     assert views[0] == {
         "id": "bv-1",
-        "name": "業務ビュー bv-1",
+        "name": "検索・回答プロファイル bv-1",
         "description": None,
         "status": "ACTIVE",
         "knowledge_base_count": 0,
     }
 
-    invalid = _call("rag_list_business_views", {"limit": 0}, _token(user.user_uuid))
+    invalid = _call("rag_list_search_answer_profiles", {"limit": 0}, _token(user.user_uuid))
     assert invalid["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
 
 
@@ -175,31 +182,31 @@ def test_list_business_views_is_scoped_to_user(
 # ---------------------------------------------------------------------------
 
 
-def test_search_uses_business_view_and_user_scope(
+def test_search_uses_search_answer_profile_and_user_scope(
     auth: ProductionAuth, monkeypatch: MonkeyPatch
 ) -> None:
     _install_search(monkeypatch)
     user = auth.user_with_permissions(
         "searcher",
         ["menu.search"],
-        business_view_ids=["bv-1", "bv-3"],
+        search_answer_profile_ids=["bv-1", "bv-3"],
         knowledge_base_ids=["kb-1"],
     )
     headers = _token(user.user_uuid)
 
-    ok = _call("rag_search", {"query": "規程", "business_view_id": "bv-1"}, headers)
+    ok = _call("rag_search", {"query": "規程", "search_answer_profile_id": "bv-1"}, headers)
     assert ok["isError"] is False, ok
     assert ok["structuredContent"]["answer"] == "ok"
     assert ok["structuredContent"]["citations"] == []
     assert _captured_knowledge_base_ids() == ["kb-1"]
 
-    # 範囲外の業務ビューは存在しないものとして 404。
+    # 範囲外の検索・回答プロファイルは存在しないものとして 404。
     RecordingPipeline.captured_request = None
-    missing = _call("rag_search", {"query": "規程", "business_view_id": "bv-2"}, headers)
+    missing = _call("rag_search", {"query": "規程", "search_answer_profile_id": "bv-2"}, headers)
     assert missing["isError"] is True
     assert missing["structuredContent"]["status"] == 404
-    # 業務ビューの KB が 1 つも許可されていなければ 403（RAG_SCOPE_FORBIDDEN）。
-    no_kb = _call("rag_search", {"query": "規程", "business_view_id": "bv-3"}, headers)
+    # 検索・回答プロファイルの KB が 1 つも許可されていなければ 403（RAG_SCOPE_FORBIDDEN）。
+    no_kb = _call("rag_search", {"query": "規程", "search_answer_profile_id": "bv-3"}, headers)
     assert no_kb["structuredContent"]["error_code"] == SCOPE_FORBIDDEN_CODE
     assert no_kb["structuredContent"]["status"] == 403
     # 範囲外の KB の明示も 403。
@@ -275,7 +282,7 @@ def test_chat_tools_are_not_provided(auth: ProductionAuth, name: str) -> None:
     admin = auth.create_user("admin", system_admin=True)
     response = _rpc(
         "tools/call",
-        {"name": name, "arguments": {"content": "質問", "business_view_id": "bv-1"}},
+        {"name": name, "arguments": {"content": "質問", "search_answer_profile_id": "bv-1"}},
         headers=_token(admin.user_uuid),
     )
     assert response.status_code == 200, response.text

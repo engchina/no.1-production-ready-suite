@@ -17,7 +17,9 @@ from dataclasses import dataclass
 
 from pr_system_settings.auth.dependencies import UNCLASSIFIED_PERMISSION as UNCLASSIFIED_PERMISSION
 
-# 利用者の範囲（業務ビュー / ナレッジベース）外の対象を指定したときの 403 の error_code（#224）。
+# 利用者の範囲（検索・回答プロファイル / ナレッジベース）外の対
+# 象を指定したときの 403 の error_code（#224）。
+#
 # 経路の権限拒否（SECURITY_ROUTE_FORBIDDEN）と違い、frontend はその場で理由を表示する。
 SCOPE_FORBIDDEN_CODE = "RAG_SCOPE_FORBIDDEN"
 
@@ -51,7 +53,7 @@ def _menu_permission(code: str, group: str, label: str) -> PermissionDefinition:
 
 MENU_SEARCH = "menu.search"
 MENU_CHAT = "menu.chat"
-MENU_BUSINESS_VIEWS = "menu.business_views"
+MENU_SEARCH_ANSWER_PROFILES = "menu.search_answer_profiles"
 MENU_EVALUATION = "menu.evaluation"
 MENU_FEEDBACK = "menu.feedback"
 MENU_UPLOAD = "menu.upload"
@@ -81,7 +83,7 @@ MENU_SECURITY_PERMISSIONS = "menu.security_permissions"
 
 # ---- capability ----
 
-BUSINESS_VIEWS_MANAGE = "rag.business_views.manage"
+SEARCH_ANSWER_PROFILES_MANAGE = "rag.search_answer_profiles.manage"
 KNOWLEDGE_BASES_MANAGE = "rag.knowledge_bases.manage"
 FEEDBACK_MANAGE = "rag.feedback.manage"
 SYSTEM_TABLES_MANAGE = "rag.system_tables.manage"
@@ -89,7 +91,7 @@ SYSTEM_TABLES_MANAGE = "rag.system_tables.manage"
 # グループ・名前・並び順は左のナビ（frontend の nav-config.ts と、i18n の
 # サイドナビの表示名）と同じにする（#567 / #580。一致は
 # tests/test_permission_catalog_nav.py が確かめる）。ナビに無い capability は後ろに置く。
-_GROUP_BUSINESS = "業務ビュー"
+_GROUP_USE = "AI 活用"
 _GROUP_INGESTION = "ナレッジ構築"
 _GROUP_PIPELINE = "検索・回答設定"
 _GROUP_IMPROVE = "改善・運用"
@@ -101,12 +103,12 @@ _GROUP_MANAGE = "管理権限"
 
 
 PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
-    _menu_permission(MENU_CHAT, _GROUP_BUSINESS, "チャット"),
-    _menu_permission(MENU_SEARCH, _GROUP_BUSINESS, "RAG 検索"),
+    _menu_permission(MENU_CHAT, _GROUP_USE, "チャット"),
+    _menu_permission(MENU_SEARCH, _GROUP_USE, "RAG 検索"),
     _menu_permission(MENU_UPLOAD, _GROUP_INGESTION, "アップロード"),
     _menu_permission(MENU_FILE_LIST, _GROUP_INGESTION, "文書インデックス"),
     _menu_permission(MENU_KNOWLEDGE_BASES, _GROUP_INGESTION, "ナレッジベース"),
-    _menu_permission(MENU_BUSINESS_VIEWS, _GROUP_INGESTION, "業務ビュー"),
+    _menu_permission(MENU_SEARCH_ANSWER_PROFILES, _GROUP_INGESTION, "検索・回答プロファイル"),
     _menu_permission(MENU_SETTINGS_PIPELINE, _GROUP_PIPELINE, "設定の概要"),
     _menu_permission(MENU_SETTINGS_PREPROCESS, _GROUP_PIPELINE, "ファイル準備"),
     _menu_permission(MENU_SETTINGS_PARSER_ADAPTERS, _GROUP_PIPELINE, "文書解析"),
@@ -123,7 +125,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         _GROUP_IMPROVE,
         "フィードバック",
         "「フィードバック」の画面を表示し、フィードバックの一覧・詳細の表示と評価ケースの作成が"
-        "できます（自分が送った、利用できる業務ビューのフィードバックだけ。すべての利用者の分を"
+        "できます（自分が送った、利用できる検索・回答プロファイルのフィードバックだけ。すべての利用者の分を"
         "見られるのは SYSTEM_ADMIN だけ）。",
     ),
     # 権限管理は RAG 固有。ユーザー管理・ロール管理は 3 製品共通の画面（#206）。
@@ -141,12 +143,12 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SETTINGS_DATABASE, _GROUP_SETTINGS, "データベース"),
     _menu_permission(MENU_SETTINGS_APPEARANCE, _GROUP_SETTINGS, "外観"),
     _permission(
-        BUSINESS_VIEWS_MANAGE,
+        SEARCH_ANSWER_PROFILES_MANAGE,
         _GROUP_MANAGE,
-        "業務ビュー管理",
-        "業務ビューの作成・アーカイブと、すべての業務ビューの利用ができます"
-        "（業務ビューの対象範囲の制限を受けません）。",
-        implies=(MENU_BUSINESS_VIEWS,),
+        "検索・回答プロファイル管理",
+        "検索・回答プロファイルの作成・アーカイブと、すべての検索・回答プロファイルの利用ができます"
+        "（検索・回答プロファイルの対象範囲の制限を受けません）。",
+        implies=(MENU_SEARCH_ANSWER_PROFILES,),
     ),
     _permission(
         KNOWLEDGE_BASES_MANAGE,
@@ -160,8 +162,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         FEEDBACK_MANAGE,
         _GROUP_MANAGE,
         "フィードバックの承認 FAQ 反映",
-        "フィードバックの回答を業務ビューの承認済み FAQ に登録できます"
-        "（自分が送った、利用できる業務ビューのフィードバックだけ。すべての利用者の分を"
+        "フィードバックの回答を検索・回答プロファイルの承認済み FAQ に登録できます"
+        "（自分が送った、利用できる検索・回答プロファイルのフィードバックだけ。すべての利用者の分を"
         "扱えるのは SYSTEM_ADMIN だけ）。フィードバックの表示と、他の利用者の"
         "保存済みの回答の表示・評価・削除も含みます。",
         implies=(MENU_FEEDBACK,),
@@ -206,9 +208,9 @@ def expand_permissions(codes: Iterable[str]) -> set[str]:
     return expanded
 
 
-def grants_all_business_views(codes: Iterable[str]) -> bool:
-    """業務ビュー管理はすべての業務ビューを利用できる（対象範囲の制限を受けない）。"""
-    return BUSINESS_VIEWS_MANAGE in expand_permissions(codes)
+def grants_all_search_answer_profiles(codes: Iterable[str]) -> bool:
+    """検索・回答プロファイル管理はすべての検索・回答プロファイルを利用できる（対象範囲の制限を受けない）。"""
+    return SEARCH_ANSWER_PROFILES_MANAGE in expand_permissions(codes)
 
 
 def grants_all_knowledge_bases(codes: Iterable[str]) -> bool:
@@ -256,12 +258,12 @@ _KNOWLEDGE_BASE_READ = _any(
     MENU_FILE_LIST,
     MENU_KNOWLEDGE_BASES,
     MENU_EVALUATION,
-    MENU_BUSINESS_VIEWS,
+    MENU_SEARCH_ANSWER_PROFILES,
     MENU_SEARCH,
     MENU_CHAT,
 )
-_BUSINESS_VIEW_READ = _any(
-    MENU_SEARCH, MENU_CHAT, MENU_FEEDBACK, MENU_BUSINESS_VIEWS, MENU_EVALUATION
+_SEARCH_ANSWER_PROFILE_READ = _any(
+    MENU_SEARCH, MENU_CHAT, MENU_FEEDBACK, MENU_SEARCH_ANSWER_PROFILES, MENU_EVALUATION
 )
 _ANSWER_USE = _any(MENU_SEARCH, MENU_CHAT)
 _SECURITY_ROLE_READ = _any(MENU_SECURITY_USERS, MENU_SECURITY_ROLES, MENU_SECURITY_PERMISSIONS)
@@ -269,7 +271,7 @@ _SECURITY_ROLE_READ = _any(MENU_SECURITY_USERS, MENU_SECURITY_ROLES, MENU_SECURI
 _D = "/documents/{document_id}"
 _R = "/documents/{document_id}/recipes/{recipe_id}"
 _KB = "/knowledge-bases/{knowledge_base_id}"
-_BV = "/business-views/{business_view_id}"
+_BV = "/search-answer-profiles/{search_answer_profile_id}"
 
 # (METHOD, route template) → 許可する権限（いずれか）。`/api` は付けない。
 ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
@@ -332,32 +334,36 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", f"{_KB}/archive"): _any(KNOWLEDGE_BASES_MANAGE),
     ("POST", f"{_KB}/documents"): _any(MENU_KNOWLEDGE_BASES),
     ("DELETE", f"{_KB}/documents/{{document_id}}"): _any(MENU_KNOWLEDGE_BASES),
-    # ---- 業務ビュー ----
-    ("GET", "/business-views"): _BUSINESS_VIEW_READ,
-    ("POST", "/business-views"): _any(BUSINESS_VIEWS_MANAGE),
-    ("GET", _BV): _BUSINESS_VIEW_READ,
-    ("PATCH", _BV): _any(MENU_BUSINESS_VIEWS),
-    ("POST", f"{_BV}/archive"): _any(BUSINESS_VIEWS_MANAGE),
-    ("GET", f"{_BV}/domain-keywords"): _any(MENU_BUSINESS_VIEWS),
-    ("PUT", f"{_BV}/domain-keywords"): _any(MENU_BUSINESS_VIEWS),
-    ("POST", f"{_BV}/domain-keywords/suggest"): _any(MENU_BUSINESS_VIEWS),
-    ("GET", f"{_BV}/approved-faq"): _any(MENU_BUSINESS_VIEWS),
-    ("POST", f"{_BV}/approved-faq"): _any(MENU_BUSINESS_VIEWS),
-    ("POST", f"{_BV}/approved-faq/delete"): _any(MENU_BUSINESS_VIEWS),
-    ("POST", f"{_BV}/approved-faq/import/preview"): _any(MENU_BUSINESS_VIEWS),
-    ("POST", f"{_BV}/approved-faq/import"): _any(MENU_BUSINESS_VIEWS),
+    # ---- 検索・回答プロファイル ----
+    ("GET", "/search-answer-profiles"): _SEARCH_ANSWER_PROFILE_READ,
+    ("POST", "/search-answer-profiles"): _any(SEARCH_ANSWER_PROFILES_MANAGE),
+    ("GET", _BV): _SEARCH_ANSWER_PROFILE_READ,
+    ("PATCH", _BV): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/archive"): _any(SEARCH_ANSWER_PROFILES_MANAGE),
+    ("GET", f"{_BV}/domain-keywords"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("PUT", f"{_BV}/domain-keywords"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/domain-keywords/suggest"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("GET", f"{_BV}/approved-faq"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/approved-faq"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/approved-faq/delete"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/approved-faq/import/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/approved-faq/import"): _any(MENU_SEARCH_ANSWER_PROFILES),
     # 回答前に類似の承認済み FAQ を提示する（読み取り）。
-    ("POST", f"{_BV}/approved-faq/suggest"): _any(MENU_SEARCH, MENU_CHAT, MENU_BUSINESS_VIEWS),
+    ("POST", f"{_BV}/approved-faq/suggest"): _any(
+        MENU_SEARCH, MENU_CHAT, MENU_SEARCH_ANSWER_PROFILES
+    ),
     # 類似問の提示のオン / オフ（#684）。
-    ("PUT", f"{_BV}/approved-faq/settings"): _any(MENU_BUSINESS_VIEWS),
-    ("GET", f"{_BV}/runtime-knowledge"): _any(MENU_BUSINESS_VIEWS),
-    ("POST", f"{_BV}/runtime-knowledge/edit"): _any(MENU_BUSINESS_VIEWS),
-    ("POST", f"{_BV}/runtime-knowledge/preview"): _any(MENU_BUSINESS_VIEWS),
+    ("PUT", f"{_BV}/approved-faq/settings"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("GET", f"{_BV}/runtime-knowledge"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/runtime-knowledge/edit"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/runtime-knowledge/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
     # ルールの確認の質問(#717)。確認の判定はチャットが送信のたびに使う。
-    ("PUT", f"{_BV}/runtime-knowledge/rules/{{rule_id}}/clarification"): _any(MENU_BUSINESS_VIEWS),
-    ("POST", f"{_BV}/clarifications/suggest"): _any(MENU_CHAT, MENU_BUSINESS_VIEWS),
+    ("PUT", f"{_BV}/runtime-knowledge/rules/{{rule_id}}/clarification"): _any(
+        MENU_SEARCH_ANSWER_PROFILES
+    ),
+    ("POST", f"{_BV}/clarifications/suggest"): _any(MENU_CHAT, MENU_SEARCH_ANSWER_PROFILES),
     ("GET", f"{_BV}/query-suggestions"): _ANSWER_USE,
-    # ---- 業務ビュー: チャット ----
+    # ---- 検索・回答プロファイル: チャット ----
     ("GET", "/chat/models"): _any(MENU_CHAT),
     ("GET", "/chat/conversations"): _any(MENU_CHAT),
     ("POST", "/chat/conversations"): _any(MENU_CHAT),
@@ -365,12 +371,12 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/chat/conversations/{conversation_id}"): _any(MENU_CHAT),
     ("DELETE", "/chat/conversations/{conversation_id}"): _any(MENU_CHAT),
     ("POST", "/chat/conversations/{conversation_id}/messages/stream"): _any(MENU_CHAT),
-    # ---- 業務ビュー: 検索と回答履歴 ----
+    # ---- 検索・回答プロファイル: 検索と回答履歴 ----
     # 文書ワークスペースのレシピ検索テストも同期検索を使う。
     ("POST", "/search"): _any(MENU_SEARCH, MENU_UPLOAD, MENU_FILE_LIST),
     # KB 詳細の検索テストもストリーム検索を使う。
     ("POST", "/search/stream"): _any(MENU_SEARCH, MENU_KNOWLEDGE_BASES),
-    # 検索の絞り込みに使える項目（業務ビューの KB の項目抽出の定義。#549）。
+    # 検索の絞り込みに使える項目（検索・回答プロファイルの KB の項目抽出の定義。#549）。
     ("GET", "/search/extraction-fields"): _any(MENU_SEARCH),
     # RAG 検索の回答に選べるモデル（既定のテキストモデルと Vision モデル。#675）。
     ("GET", "/search/models"): _any(MENU_SEARCH),
@@ -378,7 +384,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/search/answers/{trace_id}"): _ANSWER_USE,
     ("DELETE", "/search/answers/{trace_id}"): _ANSWER_USE,
     ("POST", "/search/answers/{trace_id}/evaluation"): _ANSWER_USE,
-    # ---- 業務ビュー: 品質評価 ----
+    # ---- 検索・回答プロファイル: 品質評価 ----
     ("POST", "/evaluation/run"): _any(MENU_EVALUATION),
     ("POST", "/evaluation/compare"): _any(MENU_EVALUATION),
     # 品質評価の job（#390）。状態の取得・取り消しは、投入した利用者の job だけ（backend が判定）。
@@ -386,10 +392,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/evaluation/jobs/compare"): _any(MENU_EVALUATION),
     ("GET", "/evaluation/jobs/{job_id}"): _any(MENU_EVALUATION),
     ("POST", "/evaluation/jobs/{job_id}/cancel"): _any(MENU_EVALUATION),
-    # ---- 業務ビュー: フィードバック ----
+    # ---- 検索・回答プロファイル: フィードバック ----
     ("POST", "/feedback"): _ANSWER_USE,
     ("GET", "/feedback/current"): _ANSWER_USE,
-    # 一覧・詳細・評価ケースはフィードバック画面の権限（許可された業務ビューで絞る）。
+    # 一覧・詳細・評価ケースはフィードバック画面の権限（許可された検索・回答プロファイルで絞る）。
     ("GET", "/feedback"): _any(MENU_FEEDBACK),
     ("GET", "/feedback/{feedback_id}"): _any(MENU_FEEDBACK),
     ("GET", "/feedback/{feedback_id}/evaluation-case"): _any(MENU_FEEDBACK),
@@ -513,7 +519,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/security/roles/{role_id}/restore"): _any(MENU_SECURITY_ROLES),
     # ---- セキュリティ設定: 権限管理 ----
     ("GET", "/security/permissions"): _any(MENU_SECURITY_PERMISSIONS),
-    ("GET", "/security/access-targets/business-views"): _any(MENU_SECURITY_PERMISSIONS),
+    ("GET", "/security/access-targets/search-answer-profiles"): _any(MENU_SECURITY_PERMISSIONS),
     ("GET", "/security/access-targets/knowledge-bases"): _any(MENU_SECURITY_PERMISSIONS),
     ("PUT", "/security/roles/{role_id}/access"): _any(MENU_SECURITY_PERMISSIONS),
 }

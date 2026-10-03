@@ -2403,7 +2403,7 @@ const PRODUCTS = {
     },
     sections: [{
       key: "rag",
-      title: "業務ビュー",
+      title: "検索・回答プロファイル",
       items: [{
         href: "/search",
         label: "RAG 検索",
@@ -2413,9 +2413,9 @@ const PRODUCTS = {
         label: "チャット",
         icon: "MessagesSquare"
       }, {
-        href: "/business-views",
-        label: "業務ビュー (Business View)",
-        sidebarLabel: "業務ビュー",
+        href: "/search-answer-profiles",
+        label: "検索・回答プロファイル (Search Answer Profile)",
+        sidebarLabel: "検索・回答プロファイル",
         icon: "LayoutGrid"
       }, {
         href: "/evaluation",

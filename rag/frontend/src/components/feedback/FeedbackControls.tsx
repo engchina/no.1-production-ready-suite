@@ -20,7 +20,7 @@ import {
 
 interface FeedbackControlsProps {
   traceId: string | null | undefined;
-  businessViewId: string | null | undefined;
+  searchAnswerProfileId: string | null | undefined;
   targetType: FeedbackTargetType;
   sourceSurface: FeedbackSourceSurface;
   documentId?: string | null;
@@ -31,12 +31,12 @@ interface FeedbackControlsProps {
 }
 
 /**
- * 回答・引用への評価。見た目と操作は共有の `FeedbackControls`（#805）で、ここは RAG の API（trace・業務ビュー・
+ * 回答・引用への評価。見た目と操作は共有の `FeedbackControls`（#805）で、ここは RAG の API（trace・検索・回答プロファイル・
  * 回答 / 引用・回答の記録）と文言をつなぐだけ。
  */
 export function FeedbackControls({
   traceId,
-  businessViewId,
+  searchAnswerProfileId,
   targetType,
   sourceSurface,
   documentId = null,
@@ -56,7 +56,7 @@ export function FeedbackControls({
   const answer = targetType === "answer";
   const reasons = answer ? FEEDBACK_ANSWER_REASONS : FEEDBACK_CITATION_REASONS;
 
-  if (!traceId || !businessViewId) return null;
+  if (!traceId || !searchAnswerProfileId) return null;
 
   return (
     <SharedFeedbackControls<CitationFeedbackReason>
@@ -101,7 +101,7 @@ export function FeedbackControls({
         await mutation.mutateAsync(
           buildFeedbackPayload({
             trace_id: traceId,
-            business_view_id: businessViewId,
+            search_answer_profile_id: searchAnswerProfileId,
             target_type: targetType,
             source_surface: sourceSurface,
             document_id: answer ? null : documentId,

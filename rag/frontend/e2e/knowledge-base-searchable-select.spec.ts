@@ -245,7 +245,7 @@ for (const theme of ["light", "dark"] as const) {
     await mockKnowledgeBases(page, MANY);
     await mockDocuments(page);
     await mockUploadPage(page);
-    await mockBusinessViews(page);
+    await mockSearchAnswerProfiles(page);
 
     const shoot = async (name: string) => {
       await expectNoPageOverflow(page);
@@ -277,14 +277,14 @@ for (const theme of ["light", "dark"] as const) {
     await expect(page.getByText("1 件のナレッジベースへ登録します。")).toBeVisible();
     await shoot("upload");
 
-    // 業務ビューの参照 KB
-    await page.goto("/business-views?id=new");
-    const businessViewCombo = page.getByRole("combobox", { name: "参照するナレッジベース" });
-    await businessViewCombo.click();
-    await businessViewCombo.fill("-042");
+    // 検索・回答プロファイルの参照 KB
+    await page.goto("/search-answer-profiles?id=new");
+    const searchAnswerProfileCombo = page.getByRole("combobox", { name: "参照するナレッジベース" });
+    await searchAnswerProfileCombo.click();
+    await searchAnswerProfileCombo.fill("-042");
     await page.getByRole("option", { name: /ナレッジベース-042/ }).click();
     await expect(page.getByLabel("ナレッジベース-042 を選択から外す")).toBeVisible();
-    await shoot("business-view");
+    await shoot("search-answer-profile");
   });
 }
 
@@ -389,8 +389,8 @@ async function mockUploadPage(page: Page) {
   );
 }
 
-async function mockBusinessViews(page: Page) {
-  await page.route("**/api/business-views**", (route) =>
+async function mockSearchAnswerProfiles(page: Page) {
+  await page.route("**/api/search-answer-profiles**", (route) =>
     route.fulfill({ json: apiEnvelope({ items: [], total: 0, limit: 50, offset: 0, has_next: false }) })
   );
 }

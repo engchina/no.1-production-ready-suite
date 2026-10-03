@@ -112,8 +112,8 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
 - SYSTEM_ADMIN・構成管理者・`agent.admin` を持つ利用者は制限なし。`agent.admin` を含むロールの対象リストは保存時に空へ正規化します。
 - エージェントを削除すると、全ロールの割り当て（`AGENT_ROLE_AGENTS`）からも外します。後始末に失敗して残った ID は、
   権限管理の保存で黙って外します（新しく足す未知の ID だけ 400。#750）。
-- 業務ビューは Agent の対象範囲にしません（#750）。RAG のツールは Run の利用者を `sub` にしたサービストークンで呼ぶため、
-  業務ビューの判定は RAG の権限管理（`RAG_ROLE_BUSINESS_VIEWS`）がそのまま行います。旧版の `AGENT_ROLE_BUSINESS_VIEWS` は使いません
+- 検索・回答プロファイルは Agent の対象範囲にしません（#750）。RAG のツールは Run の利用者を `sub` にしたサービストークンで呼ぶため、
+  検索・回答プロファイルの判定は RAG の権限管理（`RAG_ROLE_SEARCH_ANSWER_PROFILES`）がそのまま行います。旧版の `AGENT_ROLE_SEARCH_ANSWER_PROFILES` は使いません
   （テーブルの削除はシステムテーブルの Issue #751）。
 - 対象範囲が制限された利用者の `GET /observability/events` は、範囲内の Run の event だけを返します。
 
@@ -160,7 +160,7 @@ API は `(method, route template)` ごとに登録し、登録のない API は�
    ユーザー管理から非 SYSTEM_ADMIN の管理者がそのロールを割り当てるとき、他製品の権限の判定（生のコードで比べる）で 403 になることがあります。
 8. （#750 以降に更新する環境）`backend/.env` の `AGENT_RBAC_*` は読まれないので削除してよい。header / JWT で API を呼んでいた
    クライアントは 401 になるため、画面のログインに移す。local の開発環境も共通 `.env` の `PLATFORM_ORACLE_*` が必要。
-   権限管理で業務ビューを割り当てていたロールは、RAG の権限管理で業務ビューを割り当てる。
+   権限管理で検索・回答プロファイルを割り当てていたロールは、RAG の権限管理で検索・回答プロファイルを割り当てる。
 
 ## 9. 既知の制約
 

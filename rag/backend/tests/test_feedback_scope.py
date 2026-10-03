@@ -40,15 +40,15 @@ def _scope(
     *,
     user_id_hash: str | None = None,
     feedback_all_users: bool = False,
-    business_view_ids: set[str] | None = None,
+    search_answer_profile_ids: set[str] | None = None,
 ) -> Iterator[None]:
     token = set_audit_request_context(
         AuditRequestContext(
             request_id="feedback-scope-test",
             user_id_hash=user_id_hash,
             feedback_all_users=feedback_all_users,
-            allowed_business_view_ids=(
-                None if business_view_ids is None else frozenset(business_view_ids)
+            allowed_search_answer_profile_ids=(
+                None if search_answer_profile_ids is None else frozenset(search_answer_profile_ids)
             ),
         )
     )
@@ -64,7 +64,7 @@ def _client(pool: FakeOraclePool) -> OracleClient:
 
 def _filters() -> tuple[str, dict[str, object]]:
     return _feedback_dashboard_filters(
-        business_view_id=None,
+        search_answer_profile_id=None,
         target_type=None,
         rating=None,
         reason=None,
@@ -77,8 +77,8 @@ def _detail_row(feedback_id: str = "feedback-1") -> dict[str, object]:
     return {
         "feedback_id": feedback_id,
         "trace_id": "trace-1",
-        "business_view_id": "bv-1",
-        "business_view_name": "経理",
+        "search_answer_profile_id": "bv-1",
+        "search_answer_profile_name": "経理",
         "target_type": "answer",
         "source_surface": "search",
         "document_id": None,
@@ -132,12 +132,12 @@ def test_filters_deny_all_when_the_user_is_unknown() -> None:
     assert "feedback_owner_user_id_hash" not in binds
 
 
-def test_filters_keep_business_view_scope_with_owner_scope() -> None:
-    with _scope(user_id_hash="owner-hash", business_view_ids={"bv-1"}):
+def test_filters_keep_search_answer_profile_scope_with_owner_scope() -> None:
+    with _scope(user_id_hash="owner-hash", search_answer_profile_ids={"bv-1"}):
         where_sql, binds = _filters()
-    assert "f.business_view_id IN (:access_business_view_id_0)" in where_sql
+    assert "f.search_answer_profile_id IN (:access_search_answer_profile_id_0)" in where_sql
     assert OWNER_PREDICATE in where_sql
-    assert binds["access_business_view_id_0"] == "bv-1"
+    assert binds["access_search_answer_profile_id_0"] == "bv-1"
 
 
 @pytest.mark.anyio
@@ -146,7 +146,7 @@ async def test_dashboard_list_count_and_summaries_share_the_owner_scope() -> Non
     pool = FakeOraclePool(execute_results=[[], [{"total": 0}], [], []])
     with _scope(user_id_hash="owner-hash"):
         await _client(pool).list_feedback_dashboard_rows(
-            business_view_id=None,
+            search_answer_profile_id=None,
             target_type=None,
             rating=None,
             reason=None,
@@ -166,16 +166,21 @@ async def test_dashboard_list_count_and_summaries_share_the_owner_scope() -> Non
 @pytest.mark.anyio
 async def test_detail_is_limited_to_the_owner_and_exists_check_is_not() -> None:
     pool = FakeOraclePool(execute_results=[[], [{"found": 1}]])
-    with _scope(user_id_hash="owner-hash", business_view_ids={"bv-1"}):
+    with _scope(user_id_hash="owner-hash", search_answer_profile_ids={"bv-1"}):
         oracle = _client(pool)
         assert await oracle.get_feedback_detail("feedback-other") is None
         assert await oracle.feedback_exists("feedback-other") is True
     detail_call, exists_call = pool.connection.calls
     assert OWNER_PREDICATE in detail_call.statement
     assert detail_call.parameters["feedback_owner_user_id_hash"] == "owner-hash"
-    # 存在の確認は送信者で絞らない（403 と 404 を分けるため）が、業務ビューの範囲は守る。
+    # 存在の確認は送信者で絞らない（403 と 404 を
+    # 分けるため）が、検索・回答プロファイルの範囲は守る。
+    #
     assert "user_id_hash" not in exists_call.statement
-    assert "f.business_view_id IN (:access_business_view_id_0)" in exists_call.statement
+    assert (
+        "f.search_answer_profile_id IN (:access_search_answer_profile_id_0)"
+        in exists_call.statement
+    )
 
 
 MESSAGE_OWNER_JOIN = "NVL(am.user_id_hash, '__NONE__') = NVL(f.user_id_hash, '__NONE__')"
@@ -189,7 +194,7 @@ async def test_list_and_detail_join_only_the_senders_conversation_and_audit() ->
     with _scope(user_id_hash="admin-hash", feedback_all_users=True):
         oracle = _client(pool)
         await oracle.list_feedback_dashboard_rows(
-            business_view_id=None,
+            search_answer_profile_id=None,
             target_type=None,
             rating=None,
             reason=None,

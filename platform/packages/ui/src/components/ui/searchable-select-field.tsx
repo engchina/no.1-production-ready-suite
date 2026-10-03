@@ -66,7 +66,7 @@ export interface SearchableSelectFieldProps {
   placeholder?: string;
   /**
    * ボタンの先頭のアイコン（任意。lucide-react のコンポーネント。例: `leadingIcon={Search}`）。16px・読み上げない。
-   * 検索して選ぶ欄であることを、開く前から見せたいときに使う（RAG の対象の業務ビュー。#635）。
+   * 検索して選ぶ欄であることを、開く前から見せたいときに使う（RAG の対象の検索・回答プロファイル。#635）。
    */
   leadingIcon?: LucideIcon;
   disabled?: boolean;

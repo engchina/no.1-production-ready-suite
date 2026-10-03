@@ -1,6 +1,6 @@
 import { expect, type Page, type Route, test } from "@playwright/test";
 
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectBusinessView } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
 
 /**
  * ナレッジベースごとの項目抽出の定義（#548）と、抽出項目の値による検索の絞り込み（#549）。
@@ -140,7 +140,7 @@ const VIEWS = [
 ];
 
 async function mockSearchPage(page: Page) {
-  await page.route("**/api/business-views**", async (route) => {
+  await page.route("**/api/search-answer-profiles**", async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname.endsWith("/approved-faq/suggest") || pathname.endsWith("/query-suggestions")) {
       await route.fulfill(envelope({ suggestions: [] }));
@@ -178,7 +178,7 @@ async function mockSearchPage(page: Page) {
 
 async function openFieldFilters(page: Page) {
   await page.goto("/search");
-  await selectBusinessView(page, /契約ビュー/);
+  await selectSearchAnswerProfile(page, /契約ビュー/);
   await page.getByRole("button", { name: /詳細条件/ }).click();
   await page.getByRole("button", { name: "抽出項目の値で絞り込む" }).click();
 }

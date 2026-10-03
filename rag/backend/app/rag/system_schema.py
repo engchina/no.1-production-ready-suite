@@ -47,6 +47,14 @@ from app.rag.oracle_schema import (
     oracle_schema_sections,
     split_sql_statements,
 )
+from app.rag.search_answer_profile_migration import (
+    INDEX_RENAMES,
+    RENAME_MIGRATION,
+    TABLE_RENAMES,
+    current_schema_sql,
+    historical_sections,
+    legacy_tables_exist,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,11 +111,11 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_DOCUMENT_RECIPES",
     "RAG_KNOWLEDGE_BASES",
     "RAG_DOCUMENT_KNOWLEDGE_BASES",
-    "RAG_BUSINESS_VIEWS",
+    "RAG_SEARCH_ANSWER_PROFILES",
     "RAG_ANSWER_RECORDS",
     "RAG_ANSWER_PROMPTS",
     "RAG_QUERY_HISTORY",
-    "RAG_BUSINESS_VIEW_KNOWLEDGE",
+    "RAG_SEARCH_ANSWER_PROFILE_KNOWLEDGE",
     # 人が修正した文書の章節（#713）。RAG_DOCUMENTS を参照する。
     "RAG_DOCUMENT_SECTIONS",
     "RAG_CONVERSATIONS",
@@ -128,9 +136,9 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_EVALUATION_RUNS",
     # 品質評価の job（#390）。
     "RAG_EVALUATION_JOBS",
-    # ロールの RAG 権限と対象範囲（#214）。PLATFORM_ROLES と業務ビュー・KB を参照する。
+    # ロールの RAG 権限と対象範囲（#214）。PLATFORM_ROLES と検索・回答プロファイル・KB を参照する。
     "RAG_ROLE_PERMISSIONS",
-    "RAG_ROLE_BUSINESS_VIEWS",
+    "RAG_ROLE_SEARCH_ANSWER_PROFILES",
     "RAG_ROLE_KNOWLEDGE_BASES",
 )
 
@@ -139,9 +147,9 @@ MANAGED_TABLES: tuple[str, ...] = (
 PRESERVED_TABLES: tuple[str, ...] = tuple(PLATFORM_AUTH_TABLES)
 
 MANAGED_INDEXES: tuple[str, ...] = (
-    "RAG_ANSWER_RECORDS_VIEW_IDX",
+    "RAG_ANSWER_RECORDS_PROFILE_IDX",
     "RAG_ANSWER_RECORDS_OWNER_IDX",
-    "RAG_QUERY_HISTORY_VIEW_IDX",
+    "RAG_QUERY_HISTORY_PROFILE_IDX",
     "RAG_DOCUMENTS_CONTENT_SHA256_IDX",
     "RAG_DOCUMENTS_STATUS_UPLOADED_IDX",
     "RAG_DOCUMENTS_TENANT_STATUS_UPLOADED_IDX",
@@ -150,10 +158,10 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "RAG_KNOWLEDGE_BASES_TENANT_STATUS_IDX",
     "RAG_DOCUMENT_KNOWLEDGE_BASES_DOCUMENT_IDX",
     "RAG_DOCUMENT_KNOWLEDGE_BASES_TENANT_KB_IDX",
-    "RAG_BUSINESS_VIEWS_TENANT_NAME_UIDX",
-    "RAG_BUSINESS_VIEWS_TENANT_STATUS_IDX",
-    "RAG_CONVERSATIONS_BUSINESS_VIEW_IDX",
-    "RAG_CONVERSATIONS_TENANT_VIEW_UPDATED_IDX",
+    "RAG_SEARCH_ANSWER_PROFILES_TENANT_NAME_UIDX",
+    "RAG_SEARCH_ANSWER_PROFILES_TENANT_STATUS_IDX",
+    "RAG_CONVERSATIONS_SEARCH_ANSWER_PROFILE_IDX",
+    "RAG_CONVERSATIONS_TENANT_PROFILE_UPDATED_IDX",
     "RAG_MESSAGES_CONVERSATION_CREATED_IDX",
     "RAG_MESSAGES_REPLY_TO_IDX",
     "RAG_MESSAGES_TENANT_CREATED_IDX",
@@ -204,7 +212,7 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "RAG_EVALUATION_RUNS_TENANT_CREATED_IDX",
     "RAG_EVALUATION_JOBS_STATUS_IDX",
     "RAG_EVALUATION_JOBS_OWNER_CREATED_IDX",
-    "RAG_ROLE_BUSINESS_VIEWS_VIEW_IDX",
+    "RAG_ROLE_SEARCH_ANSWER_PROFILES_VIEW_IDX",
     "RAG_ROLE_KNOWLEDGE_BASES_KB_IDX",
 )
 
@@ -221,6 +229,8 @@ MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
 
 # 旧 migration が一時的に作成したが、現行 runtime では使用しない object。
 RETIRED_MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
+    *((name, "TABLE") for name in TABLE_RENAMES),
+    *((name, "INDEX") for name in INDEX_RENAMES),
     ("RAG_KB_CHUNK_SET_BINDINGS", "TABLE"),
     ("RAG_KB_CS_BIND_CS_IDX", "INDEX"),
     ("RAG_DOCUMENT_EXTRACTIONS_DOCUMENT_IDX", "INDEX"),
@@ -388,9 +398,55 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             self._assert_no_active_jobs(connection)
             dropped_count += self._drop_managed_objects(connection, owner)
 
+        legacy = legacy_tables_exist(connection) if not recreate else False
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT TABLE_NAME FROM USER_TABLES WHERE TABLE_NAME IN (:n0, :n1, :n2)",
+                {f"n{i}": name for i, name in enumerate(TABLE_RENAMES.values())},
+            )
+            renamed_started = bool(cursor.fetchall())
+        if (
+            legacy
+            and renamed_started
+            and any(name != RENAME_MIGRATION for name in before["pending_versions"])
+        ):
+            raise SystemSchemaError(
+                "PROFILE_RENAME_INCOMPLETE",
+                (
+                    "改名途中の schema に未適用の旧 migratio"
+                    "n があります。バックアップから状態を確認してください。"
+                ),
+            )
+        if legacy and not renamed_started:
+            # 旧版の未適用 migration は旧 schema で完了してから改名する。
+            legacy_base = [
+                statement
+                for section in historical_sections()["base"]
+                for statement in split_sql_statements(section["sql"])
+                if _CREATE_INDEX_PATTERN.match(statement) is None
+            ]
+            self._execute_statements(connection, legacy_base)
+            pending = set(before["pending_versions"])
+            for migration in MIGRATIONS:
+                if migration.name == RENAME_MIGRATION or migration.name not in pending:
+                    continue
+                self._heartbeat(connection, owner)
+                self._execute_statements(connection, split_sql_statements(migration.sql))
+                self._record_migration(connection, migration)
+                applied_names.append(migration.name)
+        # DDL は auto-commit。ledger 未記録の中断後もこの冪等 block を再開する。
+        rename = next(m for m in MIGRATIONS if m.name == RENAME_MIGRATION)
+        if (
+            legacy
+            or before["status"] != "missing"
+            and RENAME_MIGRATION in before["pending_versions"]
+        ):
+            self._apply_migration(connection, rename)
+            applied_names.append(rename.name)
+
         self._heartbeat(connection, owner)
         self._apply_base_non_index_statements(connection)
-        fresh_database = before["status"] == "missing" or recreate
+        fresh_database = before["status"] == "missing" and not legacy or recreate
         if fresh_database:
             for migration in MIGRATIONS:
                 self._record_migration(connection, migration)
@@ -398,7 +454,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         else:
             pending = set(before["pending_versions"])
             for migration in MIGRATIONS:
-                if migration.name not in pending:
+                if migration.name not in pending or migration.name in applied_names:
                     continue
                 self._heartbeat(connection, owner)
                 self._apply_migration(connection, migration)
@@ -597,7 +653,14 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         self._execute_statements(connection, statements)
 
     def _apply_migration(self, connection: Any, migration: MigrationArtifact) -> None:
-        self._execute_statements(connection, split_sql_statements(migration.sql))
+        self._execute_statements(
+            connection,
+            split_sql_statements(
+                migration.sql
+                if migration.name == RENAME_MIGRATION
+                else current_schema_sql(migration.sql)
+            ),
+        )
         self._record_migration(connection, migration)
 
     def _record_migration(self, connection: Any, migration: MigrationArtifact) -> None:

@@ -6,18 +6,18 @@
 ## GitHub 運用・Issue / PR 規約（RAG 固有の追加分）
 
 - 共通ルールは [../AGENTS.md](../AGENTS.md)「開発ワークフロー / GitHub 運用」に従う。Issue には `product:rag` label を付け、PR title の scope は `rag` にする。
-- ユーザー向け概念は `ナレッジ構築` / `業務ビュー` / `検索・回答設定` を使い、`pipeline` / `adapter` / `profile` などの工程語は code identifier を指す場合に限る。
+- ユーザー向け概念は `ナレッジ構築` / `検索・回答プロファイル` / `検索・回答設定` を使い、`pipeline` / `adapter` などの工程語は code identifier を指す場合に限る。
 - 「DocRAG」は rag_poc から移したときの名前で、画面・API のメッセージ・docs の地の文（#598）にも、コードの識別子・設定（env）・API・DB の名前（#599）にも使わない。回答フロー・親子階層（small-to-big）・回答の記録・回答生成のプロンプト・質問の拡張・回答の生成方式（CRAG / 標準 RAG）など RAG の標準の用語・名前で呼ぶ（package は `rag_engine`、回答は `app/rag/answer_engine.py`、分割方式は `small_to_big`、回答の設定は `RAG_QUERY_STRATEGY` など）。旧名は migration（保存値・表の改名）と docs/deployment.md の更新手順にだけ残す。
-- 3 層モデル(文書レシピ / KB スコープ / Business View)に関わる Issue では、どの層の責務かを明記し、責務越境になっていないかを `修正方針` に記載する。
+- 3 層モデル(文書レシピ / KB スコープ / Search Answer Profile)に関わる Issue では、どの層の責務かを明記し、責務越境になっていないかを `修正方針` に記載する。
 - PR の `検証結果` は、backend は `uv run pytest` / `uv run ruff format --check .` / `uv run ruff check .` / `uv run mypy .`、frontend は `npm run lint` / `npm run build` / `npm run test` を基本とする。ローカルでは変更範囲だけを実行し、全件は CI（`RAG / Backend`・`RAG / Frontend`・`RAG / E2E smoke` 等）の job 結果を引用してよい（[../AGENTS.md](../AGENTS.md)「ローカルの検証の範囲」）。
 
 ## プロジェクト概要
 
 **A production-ready RAG reference implementation for enterprise knowledge search, document ingestion, grounding, answer generation, evaluation, observability, and deployment on Oracle / OCI.**
 
-本プロジェクトは、文書とナレッジベースを構築し、業務ごとの **Business View** から検索・回答する RAG システムを本番品質で提供することを目標とする。SQL 専用の自然言語問い合わせプロダクトは同じ monorepo の `../nl2sql/` の責務であり、`rag/` へ機能・UI・設定を混在させない。
+本プロジェクトは、文書とナレッジベースを構築し、業務ごとの **Search Answer Profile** から検索・回答する RAG システムを本番品質で提供することを目標とする。SQL 専用の自然言語問い合わせプロダクトは同じ monorepo の `../nl2sql/` の責務であり、`rag/` へ機能・UI・設定を混在させない。
 
-RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・回答設定** を優先する。`producer / consumer / pipeline / adapter / profile` などの工程語は、コード内部または開発者向け診断に限定する。
+RAG の製品語は **ナレッジ構築**、**検索・回答プロファイル**、**検索・回答設定** を優先する。`producer / consumer / pipeline / adapter` などの工程語は、コード内部または開発者向け診断に限定する。
 
 ## 言語・ローカライズ方針
 
@@ -70,11 +70,11 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 - SaaS / 業務ツールとして、静かで読み取りやすい情報密度、安定したナビゲーション、明確なフォーム状態を優先する。
 - UI/UX 変更ごとに Playwright で実画面を確認し、desktop と 375px 幅を最低限検証する。
 - ナビゲーションは折りたたみ可能なサイドナビを正とし、主要セクションは以下とする。
-  - **ナレッジ構築**: 文書アップロード、文書インデックス、ナレッジベース。
-  - **業務ビュー**: RAG 検索、業務ビュー、品質評価。
+  - **ナレッジ構築**: 文書アップロード、文書インデックス、ナレッジベース、検索・回答プロファイル。
+  - **AI 活用**: チャット、RAG 検索。
   - **検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、関係情報の構築、検索方法、回答プロンプト、安全チェック、評価の基準。
   - **改善・運用**: 品質評価、フィードバック。
-  - **セキュリティ設定**: 権限管理（ロールごとのメニュー権限・業務ビュー・ナレッジベース。RAG 固有。#214。セクション名は 3 製品で同じ。#658）。
+  - **セキュリティ設定**: 権限管理（ロールごとのメニュー権限・検索・回答プロファイル・ナレッジベース。RAG 固有。#214。セクション名は 3 製品で同じ。#658）。
   - **ユーザーとロール**: ユーザー管理、ロール管理（3製品で共通。画面と API は platform の共有パッケージ）。
   - **運用設定**: システムテーブル管理（NL2SQL と同じく先頭。#658）、HuggingFace 設定、サービス管理（RAG 固有の運用項目）。サービス管理の工程の並び・名前・説明は、検索・回答設定のナビの項目と各設定画面の説明から作る（`frontend/src/components/settings/service-stages.ts`。#638）。
   - **システム設定**: OCI 認証、アップロード保存先、モデル、データベース、外観（3製品で共通。画面と API は platform の共有パッケージ）。
@@ -94,8 +94,8 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 
 ## RAG 設定責務
 
-> **3 層モデル(確定)**: 文書 = 処理レシピを持つ / KB = 純スコープ(コレクション)/ Business View → KB。
-> KB は「レシピ」と「検索スコープ」を兼任しない。レシピは文書単位、検索・回答設定は Business View。
+> **3 層モデル(確定)**: 文書 = 処理レシピを持つ / KB = 純スコープ(コレクション)/ Search Answer Profile → KB。
+> KB は「レシピ」と「検索スコープ」を兼任しない。レシピは文書単位、検索・回答設定は Search Answer Profile。
 
 ### 文書(Document)= レシピ
 
@@ -119,17 +119,17 @@ KB は **どの文書を検索対象にするか(membership)だけ**を持つ純
 
 文書の KB 出し入れは `rag_document_knowledge_bases` の行 add/delete **のみ**で、chunk へ波及しない(再プラン/materialize/GC を起こさない)。KB UI から preprocess/parser/chunking・検索方法・安全チェック・品質評価を出さない。KB の legacy adapter/query config は読み取りのみ許容し、runtime では使わず、次回保存で再保存しない。
 
-### Business View
+### Search Answer Profile
 
-Business View は **検索・回答に使う設定だけ**を持つ。
+Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 
 - 参照 KB scope。
 - 検索方法(回答の検索と生成)、安全チェック。
 - feedback 集計。
 
-設定責務は次の通りとし、業務ビューには Sidebar 全項目を複製しない。
+設定責務は次の通りとし、検索・回答プロファイルには Sidebar 全項目を複製しない。
 
-| 設定群 | グローバル既定 | 文書レシピ上書き | Business View 上書き |
+| 設定群 | グローバル既定 | 文書レシピ上書き | Search Answer Profile 上書き |
 |---|---|---|---|
 | ファイル準備 / 文書解析 / 文書分割 / GraphRAG | 可 | 可 | 不可 |
 | 検索インデックス | 可 | 不可 | 不可 |
@@ -137,9 +137,9 @@ Business View は **検索・回答に使う設定だけ**を持つ。
 | 回答プロンプト | 可 | 不可 | 不可 |
 | 品質評価 | 可 | 不可 | 不可 |
 
-関係情報の構築(構築する / しない。文書と章・節の見出しのつながり)は文書レシピで選ぶ(ナレッジベースの関係情報グラフで見るためのもので、回答の検索では使わない。検索時のグラフ拡張は #595、claims / community summary の構築は #621 で削除した)。共有 Oracle 索引の設定は Business View へ保存しない。
+関係情報の構築(構築する / しない。文書と章・節の見出しのつながり)は文書レシピで選ぶ(ナレッジベースの関係情報グラフで見るためのもので、回答の検索では使わない。検索時のグラフ拡張は #595、claims / community summary の構築は #621 で削除した)。共有 Oracle 索引の設定は Search Answer Profile へ保存しない。
 
-検索時の解決順は **request 明示 > Published Business View > global defaults**。KB の legacy query override は使わない。
+検索時の解決順は **request 明示 > Published Search Answer Profile > global defaults**。KB の legacy query override は使わない。
 
 ### 複数レシピ融合(精度向上)
 
@@ -157,15 +157,15 @@ backend/                  FastAPI アプリ
     main.py               エントリ(CORS, ルーター, lifespan)
     config.py             設定(pydantic-settings)
     api/routes/           health / documents / search / knowledge_bases /
-                          business_views / evaluation / settings / services
+                          search_answer_profiles / evaluation / settings / services
     clients/              OCI / Oracle / Object Storage clients
     rag/                  ingestion / parsing / chunking / 回答フロー(answer_engine) /
-                          guardrail / evaluation / business view
-    schemas/              common / search / knowledge_base / business_view / settings
+                          guardrail / evaluation / search answer profile
+    schemas/              common / search / knowledge_base / search_answer_profile / settings
   tests/                  pytest
 frontend/                 Vite + React Router + TypeScript
   src/App.tsx             React Router ルート定義
-  src/components/         layout / search / knowledge-bases / business-views / settings
+  src/components/         layout / search / knowledge-bases / search-answer-profiles / settings
   src/lib/                api / queries / routes / i18n / utils
 services/                 parser / preprocess / pipeline(chunking / graphrag / vector_index / guardrail / evaluation)などのローカル実行単位
 ```
@@ -205,11 +205,13 @@ npm run dev   # /api は BACKEND_URL を明示したときだけ proxy する（
 2. 外部ベクトル DB、別 LLM provider、別 RAG SaaS を導入しない。逸脱が必要な場合は理由を添えてユーザ確認する。
 3. シークレット(OCI 認証・DB 接続・ADB wallet 等)は `.env` 経由。ハードコード禁止、コミットしない。
 4. LLM 出力は Pydantic スキーマで検証してから保存・利用する。
-5. ユーザー向け UI では `ナレッジ構築`、`業務ビュー`、`検索・回答設定` を主概念にする。
+5. ユーザー向け UI では `ナレッジ構築`、`検索・回答プロファイル`、`検索・回答設定` を主概念にする。
 6. `Pipeline / Adapter / Profile / Runtime / Backend` などの技術語は、コード内部または高度な診断パネルに限定する。
-7. `BusinessView` は正式な code/API 名として維持する。ユーザー表示は `業務ビュー` を使う。
+7. `SearchAnswerProfile` は正式な code/API 名として維持する。ユーザー表示は `検索・回答プロファイル` を使う。
 8. KB query legacy config は runtime で無視し、保存時に新規保存しない。
 9. 機能開発では、既存パターン・既存 API・既存 UI コンポーネントを優先する。
 10. UI 作業は `ui-ux-pro-max` skill を使用する。
 11. 変更後は該当 lint・型チェック・テストを実行してから完了する。
 12. `main` へ直接 commit / push しない。Issue → 作業ブランチ → PR → CI/checks → merge の流れと、Issue / PR の記述規約（[../AGENTS.md](../AGENTS.md)「開発ワークフロー / GitHub 運用」）に従う。
+
+「検索・回答プロファイル」は正式な製品語（#860）。parser / source profile 等の工程の技術語とは区別し、KB membership・文書レシピの責務を移さない。

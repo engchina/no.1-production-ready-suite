@@ -9,7 +9,7 @@ import {
 } from "./_helpers";
 
 // ユーザー管理・ロール管理（3製品共通の画面）と RAG の権限管理（#214）。
-// 権限管理は機能権限に加えて、利用できる業務ビュー・ナレッジベースを PUT /api/security/roles/{id}/access で保存する。
+// 権限管理は機能権限に加えて、利用できる検索・回答プロファイル・ナレッジベースを PUT /api/security/roles/{id}/access で保存する。
 
 const SYSTEM_ADMIN_ROLE = {
   role_id: "role-admin",
@@ -20,7 +20,7 @@ const SYSTEM_ADMIN_ROLE = {
   archived: false,
   version: 1,
   permissions: [],
-  business_view_ids: [],
+  search_answer_profile_ids: [],
   knowledge_base_ids: [],
 };
 
@@ -33,7 +33,7 @@ const HR_ROLE = {
   archived: false,
   version: 4,
   permissions: ["menu.search", "menu.chat"],
-  business_view_ids: [],
+  search_answer_profile_ids: [],
   knowledge_base_ids: [],
 };
 
@@ -69,8 +69,8 @@ const USERS = [
 ];
 
 const PERMISSION_CATALOG = [
-  { code: "menu.search", group: "業務ビュー", label: "RAG 検索", description: "RAG 検索を表示します。", implies: [] },
-  { code: "menu.chat", group: "業務ビュー", label: "チャット", description: "チャットを表示します。", implies: [] },
+  { code: "menu.search", group: "検索・回答プロファイル", label: "RAG 検索", description: "RAG 検索を表示します。", implies: [] },
+  { code: "menu.chat", group: "検索・回答プロファイル", label: "チャット", description: "チャットを表示します。", implies: [] },
   {
     code: "menu.knowledge_bases",
     group: "ナレッジ構築",
@@ -88,7 +88,7 @@ const PERMISSION_CATALOG = [
 ];
 
 const ACCESS_TARGETS: AccessTargetsFixture = {
-  business_views: [
+  search_answer_profiles: [
     { id: "bv-hr", name: "人事 FAQ", status: "ACTIVE", description: "人事規程の問い合わせ" },
     { id: "bv-old", name: "旧経理", status: "ARCHIVED", description: null },
   ],
@@ -99,18 +99,18 @@ const ACCESS_TARGETS: AccessTargetsFixture = {
 };
 
 interface AccessTargetsFixture {
-  business_views: { id: string; name: string; status: string; description: string | null }[];
+  search_answer_profiles: { id: string; name: string; status: string; description: string | null }[];
   knowledge_bases: { id: string; name: string; status: string; description: string | null }[];
 }
 
 /**
- * `GET /api/security/access-targets/{business-views,knowledge-bases}` を backend と同じ規則で返す（#608）:
+ * `GET /api/security/access-targets/{search-answer-profiles,knowledge-bases}` を backend と同じ規則で返す（#608）:
  * `q`（名前・説明の部分一致）・`ids`・`limit` / `offset` で絞り、Page（items / total）を返す。
  */
 function fulfillAccessTargets(route: Route, fixture: AccessTargetsFixture) {
   const url = new URL(route.request().url());
   const kind = url.pathname.split("/").pop();
-  const all = kind === "knowledge-bases" ? fixture.knowledge_bases : fixture.business_views;
+  const all = kind === "knowledge-bases" ? fixture.knowledge_bases : fixture.search_answer_profiles;
   const q = (url.searchParams.get("q") ?? "").toLowerCase();
   const ids = url.searchParams.getAll("ids");
   const limit = Number(url.searchParams.get("limit") ?? "50");
@@ -145,7 +145,7 @@ async function mockSecurityApi(page: Page) {
     role_codes: ["SYSTEM_ADMIN"],
     is_system_admin: true,
     permissions: ALL_PERMISSION_CODES,
-    allowed_business_view_ids: null,
+    allowed_search_answer_profile_ids: null,
     allowed_knowledge_base_ids: null,
   });
   await page.route("**/api/security/users**", (route) => route.fulfill({ json: apiEnvelope(USERS) }));
@@ -161,7 +161,7 @@ async function mockSecurityApi(page: Page) {
           ...HR_ROLE,
           version: HR_ROLE.version + 1,
           permissions: body.permissions,
-          business_view_ids: body.business_view_ids,
+          search_answer_profile_ids: body.search_answer_profile_ids,
           knowledge_base_ids: body.knowledge_base_ids,
         }),
       });
@@ -200,7 +200,7 @@ test("ユーザー管理とロール管理を開け、ロールの詳細から�
   await expectNoPageOverflow(page);
 });
 
-test("権限管理で業務ビューと KB を選んで保存し、KB 管理権限では KB が全件対象になる", async ({ page }) => {
+test("権限管理で検索・回答プロファイルと KB を選んで保存し、KB 管理権限では KB が全件対象になる", async ({ page }) => {
   const api = await mockSecurityApi(page);
 
   await page.goto("/settings/security/permissions?role=role-hr");
@@ -215,7 +215,7 @@ test("権限管理で業務ビューと KB を選んで保存し、KB 管理権�
     .poll(() => api.accessTargetRequests.map((url) => `${url.pathname}?${url.searchParams.toString()}`).sort())
     .toEqual(
       expect.arrayContaining([
-        "/api/security/access-targets/business-views?limit=50&offset=0",
+        "/api/security/access-targets/search-answer-profiles?limit=50&offset=0",
         "/api/security/access-targets/knowledge-bases?limit=50&offset=0",
       ])
     );
@@ -223,13 +223,13 @@ test("権限管理で業務ビューと KB を選んで保存し、KB 管理権�
   // 機能の一覧は左のナビと同じグループ・並び順・名前（Issue 567）。backend のカタログが RAG 検索 → チャットの
   // 順でも、ナビの順（チャット → RAG 検索）に並べ、ナビに無い capability は後ろに置く。
   const featureList = page.locator('form[aria-labelledby="security-permissions-form-heading"] fieldset').first();
-  await expect(featureList.locator("h3")).toHaveText(["業務ビュー", "ナレッジ構築", "管理権限"]);
+  await expect(featureList.locator("h3")).toHaveText(["検索・回答プロファイル", "ナレッジ構築", "管理権限"]);
   await expect(featureList.getByRole("checkbox").nth(0)).toHaveAccessibleName(/^チャット/);
   await expect(featureList.getByRole("checkbox").nth(1)).toHaveAccessibleName(/^RAG 検索/);
 
-  const views = page.getByTestId("security-roles-business-view-access-list");
+  const views = page.getByTestId("security-roles-search-answer-profile-access-list");
   const bases = page.getByTestId("security-roles-knowledge-base-access-list");
-  await expect(views).toHaveAccessibleName("利用できる業務ビュー");
+  await expect(views).toHaveAccessibleName("利用できる検索・回答プロファイル");
   await expect(bases).toHaveAccessibleName("利用できるナレッジベース");
   // アーカイブ済みの対象は状態を示す。
   await expect(views.getByText("アーカイブ済み")).toBeVisible();
@@ -245,7 +245,7 @@ test("権限管理で業務ビューと KB を選んで保存し、KB 管理権�
   expect(api.saved[0]).toEqual({
     version: 4,
     permissions: ["menu.search"],
-    business_view_ids: ["bv-hr"],
+    search_answer_profile_ids: ["bv-hr"],
     knowledge_base_ids: ["kb-hr"],
   });
 
@@ -260,7 +260,7 @@ test("権限管理で業務ビューと KB を選んで保存し、KB 管理権�
   await expect.poll(() => api.saved.length).toBe(2);
   expect(api.saved[1]).toMatchObject({
     version: 5,
-    business_view_ids: ["bv-hr"],
+    search_answer_profile_ids: ["bv-hr"],
     knowledge_base_ids: [],
   });
   // implies で付く menu.knowledge_bases は送らない（backend が展開する）。
@@ -269,19 +269,19 @@ test("権限管理で業務ビューと KB を選んで保存し、KB 管理権�
   );
 });
 
-// #521: 業務ビュー・KB の候補の行は名前と説明を出し、内部の ID は出さない。長い説明は 1 行で省略し
+// #521: 検索・回答プロファイル・KB の候補の行は名前と説明を出し、内部の ID は出さない。長い説明は 1 行で省略し
 // （共通の ListPicker の行。#600）、行の高さをそろえて重ねない（375px でも）。ライト / ダークの両方で確かめる。
 const LONG_DESCRIPTION =
-  "人事規程・就業規則・勤怠管理・福利厚生・評価制度・出張旅費・経費精算・情報セキュリティに関する社内の問い合わせにまとめて回答するための業務ビューです。" +
+  "人事規程・就業規則・勤怠管理・福利厚生・評価制度・出張旅費・経費精算・情報セキュリティに関する社内の問い合わせにまとめて回答するための検索・回答プロファイルです。" +
   "説明が長い場合は 2 行で省略し、全文は title で確かめられることを確かめます。";
 const hexId = (index: number) => index.toString(16).padStart(32, "0");
 const MANY_TARGETS: AccessTargetsFixture = {
-  business_views: Array.from({ length: 8 }, (_, index) => ({
+  search_answer_profiles: Array.from({ length: 8 }, (_, index) => ({
     id: hexId(index + 1),
     name:
       index === 1
-        ? "人事と総務と経理をまとめて扱う全社共通の問い合わせ窓口の業務ビュー"
-        : `業務ビュー ${index + 1}`,
+        ? "人事と総務と経理をまとめて扱う全社共通の問い合わせ窓口の検索・回答プロファイル"
+        : `検索・回答プロファイル ${index + 1}`,
     status: index === 3 ? "ARCHIVED" : "ACTIVE",
     description: index % 3 === 0 ? null : index % 3 === 1 ? LONG_DESCRIPTION : "短い説明",
   })),
@@ -304,7 +304,7 @@ async function setTheme(page: Page, theme: "light" | "dark") {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`権限管理の業務ビュー・KB の候補は名前と説明を出し、ID を出さず、行が重ならない (${theme})`, async ({
+  test(`権限管理の検索・回答プロファイル・KB の候補は名前と説明を出し、ID を出さず、行が重ならない (${theme})`, async ({
     page,
   }) => {
     await setTheme(page, theme);
@@ -321,7 +321,7 @@ for (const theme of ["light", "dark"] as const) {
       .click();
 
     for (const [key, targets] of [
-      ["business-view-access", MANY_TARGETS.business_views],
+      ["search-answer-profile-access", MANY_TARGETS.search_answer_profiles],
       ["knowledge-base-access", MANY_TARGETS.knowledge_bases],
     ] as const) {
       const list = page.getByTestId(`security-roles-${key}-list`);
@@ -374,7 +374,7 @@ for (const theme of ["light", "dark"] as const) {
 // #608: 候補が大量（数千件）でも全件を読まない。検索はサーバーの q で絞り、続きは「さらに読み込む」で 50 件ずつ足す。
 // 保存済みの対象の名前は ids で読み、一覧の詳細と「選択中だけ表示」に出す。
 const LARGE_TARGETS: AccessTargetsFixture = {
-  business_views: [],
+  search_answer_profiles: [],
   knowledge_bases: Array.from({ length: 3000 }, (_, index) => ({
     id: `kb-${String(index + 1).padStart(4, "0")}`,
     name: `ナレッジベース ${String(index + 1).padStart(4, "0")}`,

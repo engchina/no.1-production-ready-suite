@@ -11,13 +11,13 @@ describe("feedback URL state", () => {
   it("restores filters, page size and selected feedback", () => {
     const state = parseFeedbackUrl(
       new URLSearchParams(
-        "period=90&business_view=bv-1&target=answer&rating=not_helpful&reason=incorrect&q=規程&sort=oldest&size=100&page=3&feedback=fb-1"
+        "period=90&search_answer_profile=bv-1&target=answer&rating=not_helpful&reason=incorrect&q=規程&sort=oldest&size=100&page=3&feedback=fb-1"
       )
     );
 
     expect(state).toMatchObject({
       periodDays: 90,
-      businessViewId: "bv-1",
+      searchAnswerProfileId: "bv-1",
       targetType: "answer",
       rating: "not_helpful",
       reason: "incorrect",

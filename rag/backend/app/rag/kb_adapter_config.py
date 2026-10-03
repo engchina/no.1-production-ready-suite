@@ -10,12 +10,12 @@
 * KB が持つ正規の上書きは ``ingestion`` のみ。文書取込の瞬間に owning KB の設定で
   確定し(取込時スナップショット)、後から KB を変えても既存チャンクは作り直さない。
 * ``query`` は V1 の互換読み取り用 legacy フィールドとして受け取るが、KB から runtime
-  settings へは反映しない。検索・回答方針は Business View が正本。
+  settings へは反映しない。検索・回答方針は Search Answer Profile が正本。
 * Embedding/Rerank(Cohere v4/1536)・DB・OCI・Object Storage はグローバル固定で
   KB 別にしない(ベクトル次元混在不可など物理制約)。
 * 永続化は既存 ``rag_knowledge_bases.retrieval_config`` JSON カラムを再利用し、
   DDL 変更を避ける。保存形は :func:`dump_adapter_config` 参照。
-* 検索時の解決順は request 明示 > Business View > グローバル既定。KB query 設定は使わない。
+* 検索時の解決順は request 明示 > Search Answer Profile > グローバル既定。KB query 設定は使わない。
 """
 
 from __future__ import annotations
@@ -232,7 +232,7 @@ class KnowledgeBaseIngestionConfig(BaseModel):
 class KnowledgeBaseQueryConfig(BaseModel):
     """検索・回答時の上書き。
 
-    Business View の query 設定として使う。KB 内に残る同形の値は legacy として読み取りは
+    Search Answer Profile の query 設定として使う。KB 内に残る同形の値は legacy として読み取りは
     できるが、KB から検索 runtime へは反映しない。
     """
 
@@ -245,9 +245,13 @@ class KnowledgeBaseQueryConfig(BaseModel):
     vector_index_profile: VectorIndexProfile | None = Field(
         default=None,
         exclude=True,
-        description="legacy 読み取り専用。共有検索インデックスは Business View で上書きしない。",
+        description=(
+            "legacy 読み取り専用。共有検索インデックスは Search Answer Profile で上書きしない。"
+        ),
     )
-    # 品質評価(評価スイート)は業務ビューで上書きしない。評価 API は業務ビューを受け取らず、
+    # 品質評価(評価スイート)は検索・回答プロファイルで上書きし
+    # ない。評価 API は検索・回答プロファイルを受け取らず、
+    #
     # グローバル設定と request の suite だけで決まるため(#301)。保存済みの
     # ``evaluation_suite`` は ``extra=ignore`` で読み込み時に捨て、次回保存で消える。
 
@@ -285,7 +289,7 @@ class KnowledgeBaseAdapterConfig(BaseModel):
     def settings_overrides(self, scope: AdapterConfigScope) -> dict[str, object]:
         """scope の上書きを {Settings フィールド名: 値} へ変換する。"""
         if scope == "query":
-            # KB query は legacy。検索・回答方針は Business View が正本なので反映しない。
+            # KB query は legacy。検索・回答方針は Search Answer Profile が正本なので反映しない。
             return {}
         field_map = _INGESTION_FIELD_MAP if scope == "ingestion" else _QUERY_FIELD_MAP
         overrides = {
@@ -436,7 +440,7 @@ def compose_query_settings(
     global_settings: Settings,
     overlays: Sequence[KnowledgeBaseQueryConfig],
 ) -> tuple[Settings, bool]:
-    """Business View の query 上書きを precedence 順(後勝ち)に重ねた Settings を返す。
+    """Search Answer Profile の query 上書きを precedence 順(後勝ち)に重ねた Settings を返す。
 
     各 overlay の非 None フィールドだけが上位を上書きする(per-field merge)。解決順
     呼び出し側が ``overlays`` を **低優先 → 高優先** の順で渡すことで表現する
@@ -454,7 +458,7 @@ def compose_query_settings(
 
 
 def query_settings_overrides(query: KnowledgeBaseQueryConfig) -> dict[str, object]:
-    """Business View query 設定を {Settings フィールド名: 値} へ変換する。"""
+    """Search Answer Profile query 設定を {Settings フィールド名: 値} へ変換する。"""
     values = {key: value for key, value in query.model_dump().items() if value is not None}
     return {
         settings_field: values[key]

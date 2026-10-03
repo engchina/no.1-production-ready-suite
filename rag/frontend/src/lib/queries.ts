@@ -55,9 +55,9 @@ import {
   type KnowledgeBaseCreateRequest,
   type KnowledgeBaseStatus,
   type KnowledgeBaseUpdateRequest,
-  type BusinessViewCreateRequest,
-  type BusinessViewStatus,
-  type BusinessViewUpdateRequest,
+  type SearchAnswerProfileCreateRequest,
+  type SearchAnswerProfileStatus,
+  type SearchAnswerProfileUpdateRequest,
   type ConversationCreateBody,
   type ConversationUpdateBody,
   type ParserAdapterSettingsUpdate,
@@ -153,17 +153,17 @@ export const queryKeys = {
   knowledgeBaseGraph: (id: string) => ["knowledge-bases", id, "graph"] as const,
   knowledgeBaseExtractionFields: (id: string) =>
     ["knowledge-bases", id, "extraction-fields"] as const,
-  searchExtractionFields: (businessViewId: string) =>
-    ["search", "extraction-fields", businessViewId] as const,
-  businessViews: (params: {
-    status?: BusinessViewStatus;
+  searchExtractionFields: (searchAnswerProfileId: string) =>
+    ["search", "extraction-fields", searchAnswerProfileId] as const,
+  searchAnswerProfiles: (params: {
+    status?: SearchAnswerProfileStatus;
     q?: string;
     limit?: number;
     offset?: number;
-  }) => ["business-views", params] as const,
-  businessView: (id: string) => ["business-views", id] as const,
+  }) => ["search-answer-profiles", params] as const,
+  searchAnswerProfile: (id: string) => ["search-answer-profiles", id] as const,
   conversations: (params: {
-    business_view_id?: string;
+    search_answer_profile_id?: string;
     limit?: number;
     offset?: number;
   }) => ["conversations", params] as const,
@@ -888,7 +888,7 @@ export function useKnowledgeBase(id: string | null) {
     queryKey: queryKeys.knowledgeBase(id ?? ""),
     queryFn: () => api.getKnowledgeBase(id as string),
     enabled: id != null,
-    // URL の対象が無い（404）ときは再試行せず、すぐ「対象が見つかりません」を出す（業務ビューと同じ。#555）。
+    // URL の対象が無い（404）ときは再試行せず、すぐ「対象が見つかりません」を出す（検索・回答プロファイルと同じ。#555）。
     retry: retryUnlessNotFound,
   });
 }
@@ -929,12 +929,12 @@ function useKnowledgeBaseExtractionFieldsSaved(id: string) {
   };
 }
 
-/** 検索の絞り込みに使える項目（選んだ業務ビューの KB の定義の和集合。#549）。 */
-export function useSearchExtractionFields(businessViewId: string | null, enabled = true) {
+/** 検索の絞り込みに使える項目（選んだ検索・回答プロファイルの KB の定義の和集合。#549）。 */
+export function useSearchExtractionFields(searchAnswerProfileId: string | null, enabled = true) {
   return useQuery<SearchExtractionFieldsData>({
-    queryKey: queryKeys.searchExtractionFields(businessViewId ?? ""),
-    queryFn: () => api.getSearchExtractionFields(businessViewId ?? ""),
-    enabled: enabled && Boolean(businessViewId),
+    queryKey: queryKeys.searchExtractionFields(searchAnswerProfileId ?? ""),
+    queryFn: () => api.getSearchExtractionFields(searchAnswerProfileId ?? ""),
+    enabled: enabled && Boolean(searchAnswerProfileId),
     retry: false,
   });
 }
@@ -1113,49 +1113,49 @@ export function useKnowledgeBasesByIds(ids: string[]) {
   });
 }
 
-/** 業務ビュー(Business View)一覧。 */
-export function useBusinessViews(params: {
-  status?: BusinessViewStatus;
+/** 検索・回答プロファイル(Search Answer Profile)一覧。 */
+export function useSearchAnswerProfiles(params: {
+  status?: SearchAnswerProfileStatus;
   q?: string;
   limit?: number;
   offset?: number;
 }) {
   return useQuery({
-    queryKey: queryKeys.businessViews(params),
-    queryFn: () => api.listBusinessViews(params),
+    queryKey: queryKeys.searchAnswerProfiles(params),
+    queryFn: () => api.listSearchAnswerProfiles(params),
     // 検索語・絞り込み・ページを変えている間は、前の一覧を出したまま取り直す（#535。useKnowledgeBases と同じ）。
     placeholderData: keepPreviousData,
   });
 }
 
-/** 業務ビュー詳細(config・参照 KB を含む)。 */
-export function useBusinessView(id: string | null) {
+/** 検索・回答プロファイル詳細(config・参照 KB を含む)。 */
+export function useSearchAnswerProfile(id: string | null) {
   return useQuery({
-    queryKey: queryKeys.businessView(id ?? ""),
-    queryFn: () => api.getBusinessView(id as string),
+    queryKey: queryKeys.searchAnswerProfile(id ?? ""),
+    queryFn: () => api.getSearchAnswerProfile(id as string),
     enabled: id != null,
     // URL の `?id=` の対象が無い（404）ときは再試行せず、すぐ「見つかりません」を出す。
     retry: retryUnlessNotFound,
   });
 }
 
-/** 業務ビューのドメインキーワード。 */
-export function useDomainKeywords(businessViewId: string) {
+/** 検索・回答プロファイルのドメインキーワード。 */
+export function useDomainKeywords(searchAnswerProfileId: string) {
   return useQuery({
-    queryKey: ["business-views", businessViewId, "domain-keywords"],
-    queryFn: () => api.getDomainKeywords(businessViewId),
+    queryKey: ["search-answer-profiles", searchAnswerProfileId, "domain-keywords"],
+    queryFn: () => api.getDomainKeywords(searchAnswerProfileId),
   });
 }
 
 /** ドメインキーワードの保存(全置換)。 */
-export function useSaveDomainKeywords(businessViewId: string) {
+export function useSaveDomainKeywords(searchAnswerProfileId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (keywords: string[]) =>
-      api.saveDomainKeywords(businessViewId, keywords),
+      api.saveDomainKeywords(searchAnswerProfileId, keywords),
     onSuccess: (data) => {
       qc.setQueryData(
-        ["business-views", businessViewId, "domain-keywords"],
+        ["search-answer-profiles", searchAnswerProfileId, "domain-keywords"],
         data,
       );
     },
@@ -1163,51 +1163,51 @@ export function useSaveDomainKeywords(businessViewId: string) {
 }
 
 /** 参照 KB からドメインキーワード候補を生成する(保存しない)。 */
-export function useSuggestDomainKeywords(businessViewId: string) {
+export function useSuggestDomainKeywords(searchAnswerProfileId: string) {
   return useMutation({
-    mutationFn: () => api.suggestDomainKeywords(businessViewId),
+    mutationFn: () => api.suggestDomainKeywords(searchAnswerProfileId),
   });
 }
 
-/** 業務ビューの承認済み FAQ(類似問)。 */
-export function useApprovedFaq(businessViewId: string) {
+/** 検索・回答プロファイルの承認済み FAQ(類似問)。 */
+export function useApprovedFaq(searchAnswerProfileId: string) {
   return useQuery({
-    queryKey: ["business-views", businessViewId, "approved-faq"],
-    queryFn: () => api.getApprovedFaq(businessViewId),
+    queryKey: ["search-answer-profiles", searchAnswerProfileId, "approved-faq"],
+    queryFn: () => api.getApprovedFaq(searchAnswerProfileId),
   });
 }
 
 /** FAQ の追加・削除・取込。成功時は一覧 cache を結果で置き換える。 */
 export function useApprovedFaqMutation<TArgs, TData extends ApprovedFaqListData = ApprovedFaqMutationData>(
-  businessViewId: string,
+  searchAnswerProfileId: string,
   mutationFn: (args: TArgs) => Promise<TData>,
 ) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn,
     onSuccess: (data) => {
-      qc.setQueryData(["business-views", businessViewId, "approved-faq"], data);
+      qc.setQueryData(["search-answer-profiles", searchAnswerProfileId, "approved-faq"], data);
     },
   });
 }
 
-/** 業務ビューの用語・ルール。 */
-export function useRuntimeKnowledge(businessViewId: string) {
+/** 検索・回答プロファイルの用語・ルール。 */
+export function useRuntimeKnowledge(searchAnswerProfileId: string) {
   return useQuery({
-    queryKey: ["business-views", businessViewId, "runtime-knowledge"],
-    queryFn: () => api.getRuntimeKnowledge(businessViewId),
+    queryKey: ["search-answer-profiles", searchAnswerProfileId, "runtime-knowledge"],
+    queryFn: () => api.getRuntimeKnowledge(searchAnswerProfileId),
   });
 }
 
 /** 用語・ルールの 1 行追加・更新・削除。 */
-export function useEditRuntimeKnowledge(businessViewId: string) {
+export function useEditRuntimeKnowledge(searchAnswerProfileId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: RuntimeKnowledgeEditRequest) =>
-      api.editRuntimeKnowledge(businessViewId, body),
+      api.editRuntimeKnowledge(searchAnswerProfileId, body),
     onSuccess: (data) => {
       qc.setQueryData(
-        ["business-views", businessViewId, "runtime-knowledge"],
+        ["search-answer-profiles", searchAnswerProfileId, "runtime-knowledge"],
         data,
       );
     },
@@ -1218,19 +1218,19 @@ export function useEditRuntimeKnowledge(businessViewId: string) {
  * 指定した trace_id のうち、保存された回答があるもの（チャットの会話の回答用。#304）。
  * 開いている会話の回答だけを引き当てる。
  */
-export function useSavedAnswerTraceIds(businessViewId: string | null, traceIds: string[]) {
+export function useSavedAnswerTraceIds(searchAnswerProfileId: string | null, traceIds: string[]) {
   const ids = traceIds.slice(-ANSWER_TRACE_ID_FILTER_MAX);
   return useQuery({
-    queryKey: ["answer-records", businessViewId, "trace-ids", ids],
+    queryKey: ["answer-records", searchAnswerProfileId, "trace-ids", ids],
     queryFn: async () => {
       const page = await api.listAnswerRecords({
-        businessViewId: businessViewId as string,
+        searchAnswerProfileId: searchAnswerProfileId as string,
         limit: ids.length,
         traceIds: ids,
       });
       return new Set(page.items.map((answer) => answer.trace_id));
     },
-    enabled: Boolean(businessViewId) && ids.length > 0,
+    enabled: Boolean(searchAnswerProfileId) && ids.length > 0,
   });
 }
 
@@ -1271,16 +1271,16 @@ export function useUpdateQueryHistorySettings() {
   });
 }
 
-/** 業務ビューでよく聞かれる質問(質問履歴が有効なときだけ候補が返る)。 */
+/** 検索・回答プロファイルでよく聞かれる質問(質問履歴が有効なときだけ候補が返る)。 */
 export function useQuerySuggestions(
-  businessViewId: string | null,
+  searchAnswerProfileId: string | null,
   query: string,
   filters: Record<string, string>
 ) {
   return useQuery({
-    queryKey: ["query-suggestions", businessViewId, query, filters],
-    queryFn: () => api.getQuerySuggestions(businessViewId as string, query, filters),
-    enabled: Boolean(businessViewId),
+    queryKey: ["query-suggestions", searchAnswerProfileId, query, filters],
+    queryFn: () => api.getQuerySuggestions(searchAnswerProfileId as string, query, filters),
+    enabled: Boolean(searchAnswerProfileId),
     staleTime: 30_000,
     placeholderData: (previous) => previous,
   });
@@ -1301,13 +1301,13 @@ export function useSaveAnswerPrompt() {
   });
 }
 
-/** 回答 feedback を業務ビューの Approved FAQ へ登録する(同じ質問は置き換える)。 */
+/** 回答 feedback を検索・回答プロファイルの Approved FAQ へ登録する(同じ質問は置き換える)。 */
 export function usePromoteFeedbackToApprovedFaq() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (feedbackId: string) => api.promoteFeedbackToApprovedFaq(feedbackId),
     onSuccess: (result) => {
-      qc.invalidateQueries({ queryKey: ["business-views", result.business_view_id, "approved-faq"] });
+      qc.invalidateQueries({ queryKey: ["search-answer-profiles", result.search_answer_profile_id, "approved-faq"] });
     },
   });
 }
@@ -1372,20 +1372,20 @@ export function useUpdateAnswerRecordSettings() {
   });
 }
 
-/** 業務ビュー作成。 */
-export function useCreateBusinessView() {
+/** 検索・回答プロファイル作成。 */
+export function useCreateSearchAnswerProfile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: BusinessViewCreateRequest) =>
-      api.createBusinessView(payload),
+    mutationFn: (payload: SearchAnswerProfileCreateRequest) =>
+      api.createSearchAnswerProfile(payload),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["business-views"] });
+      qc.invalidateQueries({ queryKey: ["search-answer-profiles"] });
     },
   });
 }
 
-/** 業務ビュー更新。 */
-export function useUpdateBusinessView() {
+/** 検索・回答プロファイル更新。 */
+export function useUpdateSearchAnswerProfile() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -1393,29 +1393,29 @@ export function useUpdateBusinessView() {
       payload,
     }: {
       id: string;
-      payload: BusinessViewUpdateRequest;
-    }) => api.updateBusinessView(id, payload),
+      payload: SearchAnswerProfileUpdateRequest;
+    }) => api.updateSearchAnswerProfile(id, payload),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["business-views"] });
+      qc.invalidateQueries({ queryKey: ["search-answer-profiles"] });
     },
   });
 }
 
-/** チャット会話一覧(業務ビュー scope)。 */
+/** チャット会話一覧(検索・回答プロファイル scope)。 */
 export function useConversations(params: {
-  business_view_id?: string;
+  search_answer_profile_id?: string;
   limit?: number;
   offset?: number;
 }) {
   return useQuery({
     queryKey: queryKeys.conversations(params),
     queryFn: () => api.listConversations(params),
-    enabled: params.business_view_id != null,
+    enabled: params.search_answer_profile_id != null,
     retry: false,
-    // ページを送る間は前のページを出したままにする（同じ業務ビューの間だけ。#403）。
+    // ページを送る間は前のページを出したままにする（同じ検索・回答プロファイルの間だけ。#403）。
     placeholderData: (previous, previousQuery) =>
-      (previousQuery?.queryKey[1] as { business_view_id?: string } | undefined)?.business_view_id ===
-      params.business_view_id
+      (previousQuery?.queryKey[1] as { search_answer_profile_id?: string } | undefined)?.search_answer_profile_id ===
+      params.search_answer_profile_id
         ? previous
         : undefined,
   });
@@ -1547,13 +1547,13 @@ export function useSearchAnswerModels(enabled = true) {
   });
 }
 
-/** 業務ビューをアーカイブする。 */
-export function useArchiveBusinessView() {
+/** 検索・回答プロファイルをアーカイブする。 */
+export function useArchiveSearchAnswerProfile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.archiveBusinessView(id),
+    mutationFn: (id: string) => api.archiveSearchAnswerProfile(id),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["business-views"] });
+      qc.invalidateQueries({ queryKey: ["search-answer-profiles"] });
     },
   });
 }

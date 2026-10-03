@@ -7,7 +7,6 @@ from pathlib import Path
 from pytest import CaptureFixture
 
 from app.rag import oracle_schema
-from app.schemas.business_view import DEFAULT_BUSINESS_VIEW_DESCRIPTION
 from app.schemas.knowledge_base import DEFAULT_KNOWLEDGE_BASE_DESCRIPTION
 
 
@@ -24,8 +23,8 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "CREATE TABLE rag_knowledge_bases" in sql
     assert "CREATE TABLE rag_document_knowledge_bases" in sql
     assert "extraction_fields     JSON," in sql
-    assert "-- section: business_views" in sql
-    assert "CREATE TABLE rag_business_views" in sql
+    assert "-- section: search_answer_profiles" in sql
+    assert "CREATE TABLE rag_search_answer_profiles" in sql
     # 旧 standard の回答エンジンだけが使っていた表は base schema から外した（#596）。
     assert "CREATE TABLE rag_prompt_versions" not in sql
     assert "CREATE TABLE rag_generation_settings" not in sql
@@ -92,7 +91,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
     assert manifest == oracle_schema.oracle_schema_manifest()
     assert "generated_at" not in manifest
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
-    assert manifest["schema_version"] == "2"
+    assert manifest["schema_version"] == "3"
     assert manifest["vector_contract"] == "VECTOR(1536, FLOAT32)"
     assert manifest["vector_index"] == {
         "distance": "COSINE",
@@ -108,11 +107,11 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "documents",
         "document_recipes",
         "knowledge_bases",
-        "business_views",
+        "search_answer_profiles",
         "answer_records",
         "answer_prompts",
         "query_history",
-        "business_view_knowledge",
+        "search_answer_profile_knowledge",
         "document_sections",
         "conversations",
         "messages",
@@ -325,7 +324,10 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "UPDATE rag_knowledge_bases" in descriptions_migration
     assert "UPDATE rag_business_views" in descriptions_migration
     assert f"'{DEFAULT_KNOWLEDGE_BASE_DESCRIPTION}'" in descriptions_migration
-    assert f"'{DEFAULT_BUSINESS_VIEW_DESCRIPTION}'" in descriptions_migration
+    assert (
+        "'DEFAULT ナレッジベースを検索・回答に使う、既定の業務ビューです。'"
+        in descriptions_migration
+    )
     assert descriptions_migration.count("AND TRIM(description) IS NULL") == 2
     assert "name =" not in descriptions_migration
     # 派生情報レイヤーに、作ったときの入力の指紋の列を足す（#550）。無ければ足す（冪等）。
@@ -399,7 +401,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     # 関係情報グラフが読む表は残す。
     for table in ("rag_graph_entities", "rag_graph_relationships", "rag_graph_entity_chunks"):
         assert table not in graph_migration
-    assert len(statements) == 86
+    assert len(statements) == 87
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -413,9 +415,9 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
 
     assert manifest == oracle_schema.oracle_schema_migration_manifest()
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
-    assert manifest["schema_version"] == "2"
+    assert manifest["schema_version"] == "3"
     assert manifest["artifact_type"] == "migration"
-    assert manifest["migration_artifact_version"] == "20260723_001"
+    assert manifest["migration_artifact_version"] == "20261003_001"
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [migration["name"] for migration in manifest["migrations"]] == [
@@ -473,6 +475,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260930_008_answer_prompts_table",
         "20260930_009_stored_engine_names",
         "20261001_001_document_sections",
+        "20261003_001_search_answer_profiles",
     ]
 
 

@@ -13,8 +13,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("api 業務ビュー(Business View)", () => {
-  it("createBusinessView は config を POST し data を返す", async () => {
+describe("api 検索・回答プロファイル(Search Answer Profile)", () => {
+  it("createSearchAnswerProfile は config を POST し data を返す", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
         data: {
@@ -45,7 +45,7 @@ describe("api 業務ビュー(Business View)", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await api.createBusinessView({
+    const result = await api.createSearchAnswerProfile({
       name: "経理アシスタント",
       config: {
         version: 1,
@@ -62,13 +62,13 @@ describe("api 業務ビュー(Business View)", () => {
     expect(result.knowledge_base_count).toBe(2);
     expect(result.knowledge_bases.map((kb) => kb.name)).toEqual(["社内規程", "製品 FAQ"]);
     const [path, init] = fetchMock.mock.calls[0];
-    expect(path).toBe("/api/business-views");
+    expect(path).toBe("/api/search-answer-profiles");
     expect(init?.method).toBe("POST");
     const body = JSON.parse(String(init?.body));
     expect(body.config.query.query_strategy).toBe("rag_fusion");
   });
 
-  it("listBusinessViews は warning_messages 付きで縮退できる", async () => {
+  it("listSearchAnswerProfiles は warning_messages 付きで縮退できる", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -80,12 +80,12 @@ describe("api 業務ビュー(Business View)", () => {
       )
     );
 
-    const page = await api.listBusinessViews({ status: "ACTIVE" });
+    const page = await api.listSearchAnswerProfiles({ status: "ACTIVE" });
     expect(page.total).toBe(0);
     expect(page.warning_messages).toEqual(["データベースに接続できません。"]);
   });
 
-  it("archiveBusinessView は archive endpoint を POST する", async () => {
+  it("archiveSearchAnswerProfile は archive endpoint を POST する", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
         data: {
@@ -112,10 +112,10 @@ describe("api 業務ビュー(Business View)", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await api.archiveBusinessView("bv-1");
+    const result = await api.archiveSearchAnswerProfile("bv-1");
     expect(result.status).toBe("ARCHIVED");
     const [path, init] = fetchMock.mock.calls[0];
-    expect(path).toBe("/api/business-views/bv-1/archive");
+    expect(path).toBe("/api/search-answer-profiles/bv-1/archive");
     expect(init?.method).toBe("POST");
   });
 });

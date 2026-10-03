@@ -78,7 +78,7 @@ function useCanManageKnowledgeBases(): boolean {
 }
 
 /**
- * ナレッジベース（`/knowledge-bases`）。業務ビューと同じ A 型（一覧 → 全画面エディタ。#555）。
+ * ナレッジベース（`/knowledge-bases`）。検索・回答プロファイルと同じ A 型（一覧 → 全画面エディタ。#555）。
  * `?id=` なし = 一覧 / `new` = 作成の画面。詳細（編集）は既存の URL `/knowledge-bases/:id` のまま
  * （`?id=<id>` で開かれたら詳細の URL へ置き換える）。
  */
@@ -90,7 +90,7 @@ export function KnowledgeBaseManagementClient() {
   const detailPath = (id: string) => `${APP_ROUTES.knowledgeBases}/${encodeURIComponent(id)}`;
 
   if (target.kind === "edit") return <Navigate to={detailPath(target.id)} replace />;
-  // 作成は管理の権限がある利用者だけ（`?id=new` を直接開いても一覧を出す。業務ビューと同じ）。
+  // 作成は管理の権限がある利用者だけ（`?id=new` を直接開いても一覧を出す。検索・回答プロファイルと同じ）。
   if (target.kind === "new" && canManage) {
     return (
       <KnowledgeBaseEditor
@@ -240,7 +240,7 @@ function KnowledgeBaseList({
               columns={knowledgeBaseColumns({ actionsFor: knowledgeBaseActions })}
               rows={items}
               getRowKey={(knowledgeBase) => knowledgeBase.id}
-              // 行の操作以外の領域のクリックで詳細を開く（page-archetypes.md §0-7。業務ビューと同じ）。
+              // 行の操作以外の領域のクリックで詳細を開く（page-archetypes.md §0-7。検索・回答プロファイルと同じ）。
               // キーボードでは先頭セルの名前のリンクで開く。アーカイブ済みも詳細は閲覧できる。
               onRowClick={(knowledgeBase) => onOpen(knowledgeBase.id)}
               rowProps={(knowledgeBase) => ({

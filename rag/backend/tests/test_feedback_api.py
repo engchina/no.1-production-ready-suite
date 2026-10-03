@@ -20,7 +20,7 @@ def test_feedback_request_validates_target_and_reason() -> None:
     with pytest.raises(ValidationError, match="文書 ID とチャンク ID"):
         FeedbackRequest(
             trace_id="trace-1",
-            business_view_id="bv-1",
+            search_answer_profile_id="bv-1",
             target_type="citation",
             source_surface="search",
             rating="not_helpful",
@@ -29,7 +29,7 @@ def test_feedback_request_validates_target_and_reason() -> None:
     with pytest.raises(ValidationError, match="理由を選択"):
         FeedbackRequest(
             trace_id="trace-1",
-            business_view_id="bv-1",
+            search_answer_profile_id="bv-1",
             target_type="answer",
             source_surface="chat",
             rating="not_helpful",
@@ -37,7 +37,7 @@ def test_feedback_request_validates_target_and_reason() -> None:
     with pytest.raises(ValidationError, match="対応していない理由"):
         FeedbackRequest(
             trace_id="trace-1",
-            business_view_id="bv-1",
+            search_answer_profile_id="bv-1",
             target_type="answer",
             source_surface="chat",
             rating="not_helpful",
@@ -51,7 +51,7 @@ def test_feedback_request_validates_content_source_shape() -> None:
     with pytest.raises(ValidationError, match="同時に指定できません"):
         FeedbackRequest(
             trace_id="trace-1",
-            business_view_id="bv-1",
+            search_answer_profile_id="bv-1",
             target_type="answer",
             source_surface="chat",
             message_id="message-1",
@@ -61,7 +61,7 @@ def test_feedback_request_validates_content_source_shape() -> None:
     with pytest.raises(ValidationError, match="RAG 検索の評価だけ"):
         FeedbackRequest(
             trace_id="trace-1",
-            business_view_id="bv-1",
+            search_answer_profile_id="bv-1",
             target_type="answer",
             source_surface="chat",
             content_snapshot=snapshot,
@@ -73,7 +73,7 @@ def test_feedback_request_limits_comment_and_clears_it_for_helpful() -> None:
     """低評価コメントは 1000 文字まで、高評価では保存しない。"""
     helpful = FeedbackRequest(
         trace_id="trace-1",
-        business_view_id="bv-1",
+        search_answer_profile_id="bv-1",
         target_type="answer",
         source_surface="search",
         rating="helpful",
@@ -83,7 +83,7 @@ def test_feedback_request_limits_comment_and_clears_it_for_helpful() -> None:
     with pytest.raises(ValidationError, match="at most 1000"):
         FeedbackRequest(
             trace_id="trace-1",
-            business_view_id="bv-1",
+            search_answer_profile_id="bv-1",
             target_type="answer",
             source_surface="search",
             rating="not_helpful",
@@ -96,7 +96,7 @@ def test_feedback_request_limits_comment_and_clears_it_for_helpful() -> None:
     ("field", "value"),
     [
         ("trace_id", "t" * 65),
-        ("business_view_id", "b" * 65),
+        ("search_answer_profile_id", "b" * 65),
         ("document_id", "d" * 65),
         ("chunk_id", "c" * 129),
     ],
@@ -108,7 +108,7 @@ def test_feedback_request_rejects_ids_longer_than_oracle_columns(
     """ID は保存先の Oracle 列幅を超えて受け付けない。"""
     payload = {
         "trace_id": "trace-1",
-        "business_view_id": "bv-1",
+        "search_answer_profile_id": "bv-1",
         "target_type": "citation",
         "source_surface": "search",
         "document_id": "doc-1",
@@ -130,7 +130,7 @@ def test_submit_feedback_keeps_metadata_compatible(monkeypatch: pytest.MonkeyPat
         "/api/feedback",
         json={
             "trace_id": "trace-1",
-            "business_view_id": "bv-1",
+            "search_answer_profile_id": "bv-1",
             "target_type": "answer",
             "source_surface": "chat",
             "rating": "not_helpful",
@@ -143,7 +143,7 @@ def test_submit_feedback_keeps_metadata_compatible(monkeypatch: pytest.MonkeyPat
     assert fake.saved == [
         {
             "trace_id": "trace-1",
-            "business_view_id": "bv-1",
+            "search_answer_profile_id": "bv-1",
             "target_type": "answer",
             "source_surface": "chat",
             "document_id": None,
@@ -168,7 +168,7 @@ def test_submit_feedback_saves_search_snapshot_and_optional_comment(
         "/api/feedback",
         json={
             "trace_id": "trace-1",
-            "business_view_id": "bv-1",
+            "search_answer_profile_id": "bv-1",
             "target_type": "answer",
             "source_surface": "search",
             "rating": "not_helpful",
@@ -209,7 +209,7 @@ def test_submit_search_snapshot_does_not_depend_on_the_search_audit(
         "/api/feedback",
         json={
             "trace_id": "trace-without-audit",
-            "business_view_id": "bv-1",
+            "search_answer_profile_id": "bv-1",
             "target_type": "answer",
             "source_surface": "search",
             "rating": "helpful",
@@ -238,7 +238,7 @@ def test_submit_feedback_resolves_chat_content_server_side(
         "/api/feedback",
         json={
             "trace_id": "trace-1",
-            "business_view_id": "bv-1",
+            "search_answer_profile_id": "bv-1",
             "target_type": "answer",
             "source_surface": "chat",
             "message_id": "message-1",
@@ -251,7 +251,9 @@ def test_submit_feedback_resolves_chat_content_server_side(
     assert fake.saved_details[0] == {**fake.message_context, "comment_text": None}
 
 
-def test_submit_feedback_rejects_unknown_business_view(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_submit_feedback_rejects_unknown_search_answer_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake = FakeFeedbackClient(view_exists=False)
     monkeypatch.setattr(feedback_route, "OracleClient", lambda: fake)
 
@@ -259,7 +261,7 @@ def test_submit_feedback_rejects_unknown_business_view(monkeypatch: pytest.Monke
         "/api/feedback",
         json={
             "trace_id": "trace-1",
-            "business_view_id": "missing",
+            "search_answer_profile_id": "missing",
             "target_type": "answer",
             "source_surface": "search",
             "rating": "helpful",
@@ -276,7 +278,7 @@ def test_current_feedback_returns_latest_items(monkeypatch: pytest.MonkeyPatch) 
         {
             "feedback_id": "feedback-2",
             "trace_id": "trace-1",
-            "business_view_id": "bv-1",
+            "search_answer_profile_id": "bv-1",
             "target_type": "citation",
             "source_surface": "chat",
             "document_id": "doc-1",
@@ -304,8 +306,8 @@ def test_feedback_dashboard_builds_latest_vote_summary(monkeypatch: pytest.Monke
             {
                 "feedback_id": "feedback-2",
                 "trace_id": "trace-1",
-                "business_view_id": "bv-1",
-                "business_view_name": "経理",
+                "search_answer_profile_id": "bv-1",
+                "search_answer_profile_name": "経理",
                 "target_type": "answer",
                 "source_surface": "chat",
                 "document_id": None,
@@ -364,8 +366,8 @@ def test_feedback_detail_returns_full_context(monkeypatch: pytest.MonkeyPatch) -
     fake.detail = {
         "feedback_id": "feedback-1",
         "trace_id": "trace-1",
-        "business_view_id": "bv-1",
-        "business_view_name": "経理",
+        "search_answer_profile_id": "bv-1",
+        "search_answer_profile_name": "経理",
         "target_type": "answer",
         "source_surface": "search",
         "document_id": None,
@@ -402,11 +404,11 @@ def test_feedback_permissions_split_view_and_approved_faq(
 ) -> None:
     """一覧・詳細・評価ケースは menu.feedback、承認 FAQ への反映だけ rag.feedback.manage。
 
-    一覧は利用者の業務ビューの範囲で絞る（Oracle の条件は test_security_scope で確認）。
+    一覧は利用者の検索・回答プロファイルの範囲で絞る（Oracle の条件は test_security_scope で確認）。
     """
     auth = enable_production_auth(monkeypatch)
     auth.user_with_permissions("searcher", ["menu.search"])
-    auth.user_with_permissions("viewer", ["menu.feedback"], business_view_ids=["bv-1"])
+    auth.user_with_permissions("viewer", ["menu.feedback"], search_answer_profile_ids=["bv-1"])
     auth.user_with_permissions("feedback-manager", ["rag.feedback.manage"])
     contexts: list[object] = []
 
@@ -419,7 +421,7 @@ def test_feedback_permissions_split_view_and_approved_faq(
             list[dict[str, object]],
             list[dict[str, object]],
         ]:
-            contexts.append(current_audit_request_context().allowed_business_view_ids)
+            contexts.append(current_audit_request_context().allowed_search_answer_profile_ids)
             return await super().list_feedback_dashboard_rows(**kwargs)
 
     monkeypatch.setattr(feedback_route, "OracleClient", lambda: ScopeRecordingClient())
@@ -466,7 +468,7 @@ class FakeFeedbackClient:
         self.message_lookup: tuple[str, str] | None = None
         self.detail: dict[str, object] | None = None
 
-    async def get_business_view(self, business_view_id: str) -> object | None:
+    async def get_search_answer_profile(self, search_answer_profile_id: str) -> object | None:
         return object() if self.view_exists else None
 
     async def save_feedback(

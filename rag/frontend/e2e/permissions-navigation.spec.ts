@@ -7,7 +7,7 @@ import {
   mockAuthUser,
   mockDatabaseReady,
   openSidebarNav,
-  selectBusinessView,
+  selectSearchAnswerProfile,
 } from "./_helpers";
 
 // 権限によるナビ・ルート・ページ内操作の出し分け（#214）。
@@ -30,7 +30,7 @@ const KNOWLEDGE_BASE = {
   archived_at: null,
 };
 
-const BUSINESS_VIEW = {
+const SEARCH_ANSWER_PROFILE = {
   id: "bv-1",
   name: "人事 FAQ",
   description: null,
@@ -52,7 +52,7 @@ async function mockApi(page: Page) {
   );
   await mockDatabaseReady(page);
   await page.route("**/api/knowledge-bases**", (route) => route.fulfill({ json: page1([KNOWLEDGE_BASE]) }));
-  await page.route("**/api/business-views**", (route) => route.fulfill({ json: page1([BUSINESS_VIEW]) }));
+  await page.route("**/api/search-answer-profiles**", (route) => route.fulfill({ json: page1([SEARCH_ANSWER_PROFILE]) }));
 }
 
 
@@ -138,11 +138,11 @@ test("API の 403 は権限なしの画面へ移し、調査用の request ID �
   await expect(page.getByText("req-forbidden-1")).toBeVisible();
 });
 
-test("管理権限が無い利用者には、業務ビュー / KB の作成・アーカイブを出さない", async ({ page }) => {
+test("管理権限が無い利用者には、検索・回答プロファイル / KB の作成・アーカイブを出さない", async ({ page }) => {
   await mockApi(page);
   const setUser = await mockAuthUser(page, {
-    permissions: ["menu.business_views", "menu.knowledge_bases"],
-    allowed_business_view_ids: ["bv-1"],
+    permissions: ["menu.search_answer_profiles", "menu.knowledge_bases"],
+    allowed_search_answer_profile_ids: ["bv-1"],
     allowed_knowledge_base_ids: ["kb-1"],
   });
 
@@ -153,16 +153,16 @@ test("管理権限が無い利用者には、業務ビュー / KB の作成・�
   await expect(main.getByRole("button", { name: "新規作成" })).toHaveCount(0);
   // 行の操作はアーカイブだけなので、操作メニューごと出さない。
   await expect(page.getByTestId("knowledge-base-row-actions-kb-1")).toHaveCount(0);
-  // 作成画面の URL を直接開いても一覧を出す（業務ビューと同じ。#555）。
+  // 作成画面の URL を直接開いても一覧を出す（検索・回答プロファイルと同じ。#555）。
   await page.goto("/knowledge-bases?id=new");
   await expect(main.getByText("社内規程")).toBeVisible();
   await expect(main.getByRole("textbox", { name: "名前", exact: true })).toHaveCount(0);
 
-  await page.goto("/business-views");
+  await page.goto("/search-answer-profiles");
   await expect(main.getByText("人事 FAQ")).toBeVisible();
   await expect(main.getByRole("button", { name: "新規作成" })).toHaveCount(0);
   // 作成画面の URL を直接開いても一覧を出す。
-  await page.goto("/business-views?id=new");
+  await page.goto("/search-answer-profiles?id=new");
   await expect(main.getByText("人事 FAQ")).toBeVisible();
   await expect(main.getByRole("button", { name: "新規作成" })).toHaveCount(0);
 
@@ -170,27 +170,27 @@ test("管理権限が無い利用者には、業務ビュー / KB の作成・�
   setUser(
     dbUser({
       permissions: [
-        "menu.business_views",
+        "menu.search_answer_profiles",
         "menu.knowledge_bases",
-        "rag.business_views.manage",
+        "rag.search_answer_profiles.manage",
         "rag.knowledge_bases.manage",
       ],
-      allowed_business_view_ids: null,
+      allowed_search_answer_profile_ids: null,
       allowed_knowledge_base_ids: null,
     })
   );
   await page.goto("/knowledge-bases");
   await expect(main.getByRole("button", { name: "新規作成" })).toBeVisible();
   await expect(page.getByTestId("knowledge-base-row-actions-kb-1")).toBeVisible();
-  await page.goto("/business-views");
+  await page.goto("/search-answer-profiles");
   await expect(main.getByRole("button", { name: "新規作成" })).toBeVisible();
 });
 
-test("業務ビューの KB を利用できない検索の 403 は、画面を移さず理由を検索結果の位置に出す", async ({ page }) => {
+test("検索・回答プロファイルの KB を利用できない検索の 403 は、画面を移さず理由を検索結果の位置に出す", async ({ page }) => {
   await mockApi(page);
   await mockAuthUser(page, {
     permissions: ["menu.search"],
-    allowed_business_view_ids: ["bv-1"],
+    allowed_search_answer_profile_ids: ["bv-1"],
     allowed_knowledge_base_ids: [],
   });
   await page.route("**/api/search/stream", (route) =>
@@ -198,7 +198,7 @@ test("業務ビューの KB を利用できない検索の 403 は、画面を�
       status: 403,
       json: {
         data: null,
-        error_messages: ["この業務ビューのナレッジベースを利用する権限がありません。管理者に権限を依頼してください。"],
+        error_messages: ["この検索・回答プロファイルのナレッジベースを利用する権限がありません。管理者に権限を依頼してください。"],
         warning_messages: [],
         // 範囲外は経路の権限拒否と区別できる error_code で返る（#224）。
         error_code: "RAG_SCOPE_FORBIDDEN",
@@ -207,12 +207,12 @@ test("業務ビューの KB を利用できない検索の 403 は、画面を�
   );
 
   await page.goto("/search");
-  await selectBusinessView(page, /人事 FAQ/);
+  await selectSearchAnswerProfile(page, /人事 FAQ/);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("育休の申請期限");
   await page.getByRole("button", { name: "検索", exact: true }).click();
 
   await expect(
-    page.getByRole("main").getByText("この業務ビューのナレッジベースを利用する権限がありません。管理者に権限を依頼してください。")
+    page.getByRole("main").getByText("この検索・回答プロファイルのナレッジベースを利用する権限がありません。管理者に権限を依頼してください。")
   ).toBeVisible();
   await expect(page).toHaveURL(/\/search$/);
 });

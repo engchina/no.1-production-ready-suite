@@ -86,7 +86,7 @@ describe("RowTitleButton の見た目と属性", () => {
       renderToStaticMarkup(
         <RowTitleButton
           title="経理ビュー"
-          href="/business-views?id=bv-1"
+          href="/search-answer-profiles?id=bv-1"
           aria-label="経理ビュー を編集"
           current
           name="ignored"
@@ -95,7 +95,7 @@ describe("RowTitleButton の見た目と属性", () => {
       )
     );
     expect(tag).toMatch(/^<a /);
-    expect(tag).toContain('href="/business-views?id=bv-1"');
+    expect(tag).toContain('href="/search-answer-profiles?id=bv-1"');
     expect(tag).toContain('aria-label="経理ビュー を編集"');
     expect(tag).toContain('aria-current="true"');
     expect(tag).toContain("data-row-title-button");

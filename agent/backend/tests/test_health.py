@@ -2353,7 +2353,7 @@ def test_runtime_repository_reads_tool_call_audit_from_oracle_projection() -> No
         [
             ToolCall(
                 name="echo",
-                arguments={"projection_audit": True, "business_view_id": "view-oracle"},
+                arguments={"projection_audit": True, "search_answer_profile_id": "view-oracle"},
                 trace_id="trace-oracle-audit",
             )
         ],
@@ -2526,7 +2526,7 @@ def test_global_tool_call_audit_uses_oracle_projection(monkeypatch: MonkeyPatch)
         [
             ToolCall(
                 name="echo",
-                arguments={"projection_api": True, "business_view_id": "view-api"},
+                arguments={"projection_api": True, "search_answer_profile_id": "view-api"},
                 trace_id="trace-api-audit",
             )
         ],

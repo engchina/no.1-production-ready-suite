@@ -58,7 +58,7 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
   "id": "business_rag_research",
   "instructions": "...",
   "mcp_requirements": [
-    {"server_id": "rag", "tool_names": ["rag_search", "rag_list_business_views"]}
+    {"server_id": "rag", "tool_names": ["rag_search", "rag_list_search_answer_profiles"]}
   ],
   "resource_ids": []
 }
@@ -120,11 +120,11 @@ aud は製品名。削除できない）。外部の MCP は画面・`AGENT_EXTE
 
 | ツール（モデルに渡す名前） | readOnlyHint | 既定の policy |
 |---|---|---|
-| `rag__rag_search` / `rag__rag_list_business_views` | true | 承認なし（回答生成に LLM を使う） |
+| `rag__rag_search` / `rag__rag_list_search_answer_profiles` | true | 承認なし（回答生成に LLM を使う） |
 | `nl2sql__nl2sql_list_profiles` / `nl2sql__nl2sql_recommend_profile` / `nl2sql__nl2sql_get_job` | true | 承認なし |
 | `nl2sql__nl2sql_query` | false | 承認が必要（業務 DB へ SQL を実行する） |
 
-RAG のチャットは MCP で提供しない（#787）。RAG の MCP は検索（`rag_search`）と業務ビューの一覧だけを持つ。
+RAG のチャットは MCP で提供しない（#787）。RAG の MCP は検索（`rag_search`）と検索・回答プロファイルの一覧だけを持つ。
 
 ツール権限（`/settings/tool-policy`）は `<接続>__<ツール>` の名前で allow / ask / deny を上書きできる。
 NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_returned_as_audit_only` の警告を残す（実行はしない）。
@@ -287,7 +287,7 @@ Agent の権限（`AGENT_ROLE_PERMISSIONS`）と対象範囲（`AGENT_ROLE_AGENT
 システムテーブル（`app.system_schema`。#751）が作る。capability は従来の viewer / operator / approver / auditor / admin に対応し、
 利用者（Cookie のセッション、local はローカル利用者）から `ActorPolicy` を作って Run・監査・承認・成果物・SSE・WebSocket・
 `GET /agents` の絞り込みに流す。Cookie のないリクエストは 401（#750 で header / JWT / 外部 policy の認可を削除した）。
-業務ビューの判定は RAG が Run の利用者のサービストークンで行うため、Agent は業務ビューの対象範囲を持たない（#750）。
+検索・回答プロファイルの判定は RAG が Run の利用者のサービストークンで行うため、Agent は検索・回答プロファイルの対象範囲を持たない（#750）。
 詳細は [security-rbac.md](security-rbac.md)。
 
 ## 10. Non-goals

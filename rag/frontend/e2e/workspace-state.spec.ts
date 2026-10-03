@@ -1,13 +1,13 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { mockDatabaseReady, mockLocalAuth, openChatHistory, openSidebarNav, selectBusinessView } from "./_helpers";
+import { mockDatabaseReady, mockLocalAuth, openChatHistory, openSidebarNav, selectSearchAnswerProfile } from "./_helpers";
 
 /**
  * #132: 編集画面の離脱ガードと、検索・チャット・一覧の作業状態の保持
  * （platform docs/ux-contracts/workspace-state.md）。desktop / mobile(375px) の両 project で実行する。
  */
 
-const businessView = {
+const searchAnswerProfile = {
   id: "bv-1",
   name: "経理ビュー",
   description: "経費の相談",
@@ -132,11 +132,11 @@ test.describe("未保存変更の離脱ガード", () => {
     await expect(page).toHaveURL(/\/settings\/oci$/);
   });
 
-  test("業務ビューの下書きは確認のうえ移動しても、このタブに戻ると復元される", async ({ page }) => {
-    await page.route("**/api/business-views**", (route) => route.fulfill(pageEnvelope([])));
+  test("検索・回答プロファイルの下書きは確認のうえ移動しても、このタブに戻ると復元される", async ({ page }) => {
+    await page.route("**/api/search-answer-profiles**", (route) => route.fulfill(pageEnvelope([])));
     await page.route("**/api/knowledge-bases**", (route) => route.fulfill(pageEnvelope([])));
-    await page.goto("/business-views?id=new");
-    const name = page.locator("#business-view-name");
+    await page.goto("/search-answer-profiles?id=new");
+    const name = page.locator("#search-answer-profile-name");
     await name.fill("購買アシスタント");
 
     await openFromSidebar(page, "RAG 検索");
@@ -148,20 +148,20 @@ test.describe("未保存変更の離脱ガード", () => {
     await expect(page.getByRole("heading", { name: "RAG 検索", level: 1 })).toBeVisible();
 
     // サイドナビは一覧へ戻る（編集対象は ?id= が唯一の情報源。#147）。新規の下書きは一覧から再開する。
-    await openFromSidebar(page, "業務ビュー (Business View)");
-    await expect(page).toHaveURL(/\/business-views$/);
+    await openFromSidebar(page, "検索・回答プロファイル");
+    await expect(page).toHaveURL(/\/search-answer-profiles$/);
     await page.getByRole("button", { name: "下書きを開く" }).click();
-    await expect(page).toHaveURL(/\/business-views\?id=new$/);
-    await expect(page.locator("#business-view-name")).toHaveValue("購買アシスタント");
+    await expect(page).toHaveURL(/\/search-answer-profiles\?id=new$/);
+    await expect(page.locator("#search-answer-profile-name")).toHaveValue("購買アシスタント");
     await expect(page.getByText("保存していない下書きを復元しました。")).toBeVisible();
   });
 });
 
 test.describe("作業状態の保持", () => {
-  test("RAG 検索の質問・業務ビュー・詳細条件はページ往復と再読込で残り、検索は再送しない", async ({
+  test("RAG 検索の質問・検索・回答プロファイル・詳細条件はページ往復と再読込で残り、検索は再送しない", async ({
     page,
   }) => {
-    await page.route("**/api/business-views**", (route) => route.fulfill(pageEnvelope([businessView])));
+    await page.route("**/api/search-answer-profiles**", (route) => route.fulfill(pageEnvelope([searchAnswerProfile])));
     await page.route("**/api/chat/**", (route) => route.fulfill(pageEnvelope([])));
     let searchRequests = 0;
     await page.route("**/api/search/answers**", (route) =>
@@ -173,7 +173,7 @@ test.describe("作業状態の保持", () => {
     });
 
     await page.goto("/search");
-    await selectBusinessView(page, /経理ビュー/);
+    await selectSearchAnswerProfile(page, /経理ビュー/);
     await page.locator("#search-query").fill("交通費の上限");
     await page.getByText("詳細条件", { exact: true }).click();
     await page.getByRole("combobox", { name: "候補取得数" }).click();
@@ -182,7 +182,7 @@ test.describe("作業状態の保持", () => {
 
     const expectRestored = async () => {
       await expect(page.locator("#search-query")).toHaveValue("交通費の上限");
-      await expect(page.getByRole("button", { name: /対象の業務ビュー/ })).toContainText("経理ビュー");
+      await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("経理ビュー");
       await expect(page.getByRole("combobox", { name: "候補取得数" })).toContainText("50");
       await expect(page.getByRole("switch", { name: "LLM で回答を生成する" })).toHaveAttribute(
         "aria-checked",
@@ -200,8 +200,8 @@ test.describe("作業状態の保持", () => {
     expect(searchRequests).toBe(0);
   });
 
-  test("チャットの業務ビュー・入力中の下書きはページ往復と再読込で残る", async ({ page }) => {
-    await page.route("**/api/business-views**", (route) => route.fulfill(pageEnvelope([businessView])));
+  test("チャットの検索・回答プロファイル・入力中の下書きはページ往復と再読込で残る", async ({ page }) => {
+    await page.route("**/api/search-answer-profiles**", (route) => route.fulfill(pageEnvelope([searchAnswerProfile])));
     await page.route("**/api/chat/models", (route) => route.fulfill(envelope([])));
     await page.route("**/api/chat/conversations**", async (route) => {
       const path = new URL(route.request().url()).pathname;
@@ -210,7 +210,7 @@ test.describe("作業状態の保持", () => {
           pageEnvelope([
             {
               id: "conv-1",
-              business_view_id: "bv-1",
+              search_answer_profile_id: "bv-1",
               title: "経費の相談",
               status: "ACTIVE",
               message_count: 0,
@@ -224,7 +224,7 @@ test.describe("作業状態の保持", () => {
       await route.fulfill(
         envelope({
           id: "conv-1",
-          business_view_id: "bv-1",
+          search_answer_profile_id: "bv-1",
           title: "経費の相談",
           status: "ACTIVE",
           message_count: 0,
@@ -239,14 +239,14 @@ test.describe("作業状態の保持", () => {
   );
 
     await page.goto("/chat");
-    await selectBusinessView(page, "経理ビュー");
+    await selectSearchAnswerProfile(page, "経理ビュー");
     const history = await openChatHistory(page);
     await history.getByRole("list", { name: "会話の履歴" }).getByRole("button").filter({ hasText: "経費の相談" }).click();
     const composer = page.locator("#chat-composer");
     await composer.fill("出張の日当は？");
 
     const expectRestored = async () => {
-      await expect(page.getByRole("button", { name: /対象の業務ビュー/ })).toContainText("経理ビュー");
+      await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("経理ビュー");
       await expect(page.locator("#chat-composer")).toHaveValue("出張の日当は？");
     };
 
@@ -288,7 +288,7 @@ test.describe("作業状態の保持", () => {
         ])
       );
     });
-    await page.route("**/api/business-views**", (route) => route.fulfill(pageEnvelope([businessView])));
+    await page.route("**/api/search-answer-profiles**", (route) => route.fulfill(pageEnvelope([searchAnswerProfile])));
 
     await page.goto("/file-list");
     // 状態の絞り込みは選択の欄（11 種の ToggleChip の折り返しをやめた。#578）。
@@ -317,7 +317,7 @@ test.describe("作業状態の保持", () => {
   });
 
   test("フィードバックの URL の絞り込みは、サイドナビで戻っても復元される", async ({ page }) => {
-    await page.route("**/api/business-views**", (route) => route.fulfill(pageEnvelope([businessView])));
+    await page.route("**/api/search-answer-profiles**", (route) => route.fulfill(pageEnvelope([searchAnswerProfile])));
     await page.route("**/api/feedback**", (route) =>
       route.fulfill({ status: 500, json: { data: null, error_messages: [], warning_messages: [] } })
     );

@@ -470,7 +470,7 @@ app/api/routes/feedback.py:102: error: No overload variant of "int" matches argu
 ```
 
 ### Context
-- Business View 設定変更とは無関係な `backend/app/api/routes/feedback.py` で発生した。
+- Search Answer Profile 設定変更とは無関係な `backend/app/api/routes/feedback.py` で発生した。
 - 当該ファイルは本タスク開始後に別作業から追加されており、変更を上書きしない方針で触れていない。
 
 ### Suggested Fix
@@ -831,7 +831,7 @@ getByRole('link', { name: '品質評価' }) resolved to 2 elements
 
 ### Resolution
 - **Resolved**: 2026-07-02T07:54:39+09:00
-- **Notes**: 時刻を形式正規表現へ変更し、業務ビューの品質評価リンクを `/evaluation` で限定した。
+- **Notes**: 時刻を形式正規表現へ変更し、検索・回答プロファイルの品質評価リンクを `/evaluation` で限定した。
 
 ---
 
@@ -907,7 +907,7 @@ sed: can't read src/index.css: No such file or directory
 **Area**: frontend tests
 
 ### Summary
-業務ビュー作成 E2E で、KB 選択直後の「業務ビューで上書き」クリックが状態を変更しなかった。
+検索・回答プロファイル作成 E2E で、KB 選択直後の「検索・回答プロファイルで上書き」クリックが状態を変更しなかった。
 
 ### Error
 ```text
@@ -924,7 +924,7 @@ Expected aria-pressed="true", received "false"
 
 ### Metadata
 - Reproducible: yes
-- Related Files: frontend/e2e/business-views.spec.ts
+- Related Files: frontend/e2e/search-answer-profiles.spec.ts
 
 ### Resolution
 - **Resolved**: 2026-07-01T23:10:00+09:00
@@ -1011,12 +1011,12 @@ strict mode violation: getByRole('list', { name: '会話' }).getByRole('button')
 
 ### Error
 ```text
-ORA-00904: "BUSINESS_VIEW_ID": invalid identifier
+ORA-00904: "SEARCH_ANSWER_PROFILE_ID": invalid identifier
 ```
 
 ### Context
 - Command attempted: `uv run pytest tests/test_chat_api.py tests/test_oracle_schema_cli.py -q`
-- `tests/_oracle_test_db.py::ensure_schema()` が既存 `rag_citation_feedback` 表へ、未追加の `business_view_id` を含む索引DDLを適用した。
+- `tests/_oracle_test_db.py::ensure_schema()` が既存 `rag_citation_feedback` 表へ、未追加の `search_answer_profile_id` を含む索引DDLを適用した。
 - 会話一覧変更のテスト本体へ入る前の session fixture で再現した。
 
 ### Suggested Fix
@@ -1045,12 +1045,12 @@ general feedback の base-schema 適用を既存表にも冪等に列追加し�
 
 ### Error
 ```text
-ORA-00904: "BUSINESS_VIEW_ID": invalid identifier
+ORA-00904: "SEARCH_ANSWER_PROFILE_ID": invalid identifier
 ```
 
 ### Context
 - `tests/conftest.py` の session fixture が利用可能な実 DB へ自動接続した。
-- 今回の Business View 設定変更より前の schema 初期化段階で全テストが停止した。
+- 今回の Search Answer Profile 設定変更より前の schema 初期化段階で全テストが停止した。
 
 ### Suggested Fix
 外部DBを必要としない対象テストは `ORACLE_DSN=` で決定論モードに固定する。
@@ -1077,11 +1077,11 @@ ORA-00904: "BUSINESS_VIEW_ID": invalid identifier
 
 ### Error
 ```text
-apply_patch verification failed: Failed to find expected lines in backend/app/rag/business_view_config.py
+apply_patch verification failed: Failed to find expected lines in backend/app/rag/search_answer_profile_config.py
 ```
 
 ### Context
-- Business View の legacy 設定互換とテストを一括更新しようとした。
+- Search Answer Profile の legacy 設定互換とテストを一括更新しようとした。
 - 想定は「文書の物理索引方法」、実ファイルは「KB の物理索引方法」だった。
 
 ### Suggested Fix
@@ -1089,7 +1089,7 @@ apply_patch verification failed: Failed to find expected lines in backend/app/ra
 
 ### Metadata
 - Reproducible: yes
-- Related Files: backend/app/rag/business_view_config.py
+- Related Files: backend/app/rag/search_answer_profile_config.py
 
 ### Resolution
 - **Resolved**: 2026-07-01T00:00:00+09:00
@@ -1276,8 +1276,8 @@ E assert False
 ```
 
 ### Context
-- Command attempted: `uv run pytest tests/test_business_views_api.py tests/test_oracle_schema_cli.py -q`
-- DEFAULT 業務ビュー補完 migration は `UPDATE`、`INSERT`、`COMMIT` の3文で構成される。
+- Command attempted: `uv run pytest tests/test_search_answer_profiles_api.py tests/test_oracle_schema_cli.py -q`
+- DEFAULT 検索・回答プロファイル補完 migration は `UPDATE`、`INSERT`、`COMMIT` の3文で構成される。
 - 先頭の `UPDATE` は migration コメントを含むため許可済みだが、2文目の `INSERT` が旧許可リスト外だった。
 
 ### Suggested Fix
@@ -1349,7 +1349,7 @@ apply_patch verification failed: Failed to find expected duplicate lines
 
 ### Metadata
 - Reproducible: yes
-- Related Files: frontend/src/components/business-views/BusinessViewManagementClient.tsx
+- Related Files: frontend/src/components/search-answer-profiles/SearchAnswerProfileManagementClient.tsx
 
 ### Resolution
 - **Resolved**: 2026-06-30T17:05:00+09:00
@@ -1357,7 +1357,7 @@ apply_patch verification failed: Failed to find expected duplicate lines
 
 ---
 
-## [ERR-20260630-010] ruff_import_order_business_view_test
+## [ERR-20260630-010] ruff_import_order_search_answer_profile_test
 
 **Logged**: 2026-06-30T17:08:00+09:00
 **Priority**: low
@@ -1373,7 +1373,7 @@ I001 Import block is un-sorted or un-formatted
 ```
 
 ### Context
-- `app.schemas.business_view` を `app.schemas.document` より後ろへ追加していた。
+- `app.schemas.search_answer_profile` を `app.schemas.document` より後ろへ追加していた。
 
 ### Suggested Fix
 同一 import group はモジュール名の辞書順に維持する。
@@ -1384,7 +1384,7 @@ I001 Import block is un-sorted or un-formatted
 
 ### Resolution
 - **Resolved**: 2026-06-30T17:08:00+09:00
-- **Notes**: business_view import を document import より前へ移動した。
+- **Notes**: search_answer_profile import を document import より前へ移動した。
 
 ---
 
@@ -1396,7 +1396,7 @@ I001 Import block is un-sorted or un-formatted
 **Area**: tests
 
 ### Summary
-Backend 全体 pytest は DEFAULT 業務ビュー対象外の既存環境・処理フロー差分で35件失敗した。
+Backend 全体 pytest は DEFAULT 検索・回答プロファイル対象外の既存環境・処理フロー差分で35件失敗した。
 
 ### Error
 ```text
@@ -1407,7 +1407,7 @@ Backend 全体 pytest は DEFAULT 業務ビュー対象外の既存環境・処�
 - `Settings()` が preprocess service enabled を読み、テスト既定値 `False` と不一致。
 - 多数の RAG flow テストは旧単一パスの `INDEXED` / `EXTRACT` を期待する一方、現行処理は `REVIEW` / `PREPROCESS` で停止した。
 - 実 Oracle テスト1件は既存 extraction 行の status が期待値と不一致だった。
-- 今回変更した business view、Oracle adapter、schema migration の対象テストは全件成功している。
+- 今回変更した search answer profile、Oracle adapter、schema migration の対象テストは全件成功している。
 
 ### Suggested Fix
 全体テストの環境変数隔離と、現行の段階処理フローに合わせた既存期待値を別作業で整合させる。
@@ -3198,7 +3198,7 @@ ESLint と Playwright は直列に実行する。
 **Area**: frontend
 
 ### Summary
-フィードバックへ業務ビューIDを渡す際、nullableな検索 diagnostics を直接参照して型チェックに失敗した。
+フィードバックへ検索・回答プロファイルIDを渡す際、nullableな検索 diagnostics を直接参照して型チェックに失敗した。
 
 ### Error
 ```text
@@ -3210,7 +3210,7 @@ SearchClient.tsx: 'meta.diagnostics' is possibly 'null'.
 - runtime metadata には通常 diagnostics があるが、公開型は null を許容する。
 
 ### Suggested Fix
-検索結果の補助情報は optional access を使い、選択中の業務ビューIDへ安全にfallbackする。
+検索結果の補助情報は optional access を使い、選択中の検索・回答プロファイルIDへ安全にfallbackする。
 
 ### Metadata
 - Reproducible: yes
@@ -3218,7 +3218,7 @@ SearchClient.tsx: 'meta.diagnostics' is possibly 'null'.
 
 ### Resolution
 - **Resolved**: 2026-07-01T23:30:00+09:00
-- **Notes**: optional chaining と既存 businessViewIds fallback に修正した。
+- **Notes**: optional chaining と既存 searchAnswerProfileIds fallback に修正した。
 
 ---
 

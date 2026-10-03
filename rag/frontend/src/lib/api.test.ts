@@ -196,15 +196,15 @@ describe("api.request envelope", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const page = await api.listAnswerRecords({ businessViewId: "bv-1", limit: 10, offset: 20 });
-    await api.listAnswerRecords({ businessViewId: "bv-1", limit: 2, traceIds: ["t-1", "t-2"] });
+    const page = await api.listAnswerRecords({ searchAnswerProfileId: "bv-1", limit: 10, offset: 20 });
+    await api.listAnswerRecords({ searchAnswerProfileId: "bv-1", limit: 2, traceIds: ["t-1", "t-2"] });
 
     expect(page.total).toBe(0);
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/api/search/answers?business_view_id=bv-1&limit=10&offset=20"
+      "/api/search/answers?search_answer_profile_id=bv-1&limit=10&offset=20"
     );
     expect(fetchMock.mock.calls[1][0]).toBe(
-      "/api/search/answers?business_view_id=bv-1&limit=2&offset=0&trace_id=t-1&trace_id=t-2"
+      "/api/search/answers?search_answer_profile_id=bv-1&limit=2&offset=0&trace_id=t-1&trace_id=t-2"
     );
   });
 

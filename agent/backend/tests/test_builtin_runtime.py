@@ -541,7 +541,7 @@ def test_mcp_connection_tools_are_given_to_the_model(
     # Skill が許可したツールだけを渡す（rag は rag_search だけ、nl2sql はすべて）。
     tools = {tool.name: tool for tool in model.calls[0].tools if isinstance(tool, FunctionTool)}
     assert "rag__rag_search" in tools
-    assert "rag__rag_list_business_views" not in tools
+    assert "rag__rag_list_search_answer_profiles" not in tools
     assert {"nl2sql__nl2sql_query", "nl2sql__nl2sql_get_job"} <= set(tools)
     # readOnlyHint の無いツールは承認が必要、読み取り専用のツールは承認なし。
     assert tools["nl2sql__nl2sql_query"].needs_approval is True

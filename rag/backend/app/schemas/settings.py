@@ -639,7 +639,9 @@ class AnswerPromptUpdate(BaseModel):
 class AnsweringSettingsData(BaseModel):
     """回答の検索と生成の全体既定(回答エンジン。#593)。
 
-    業務ビューの「検索・回答設定」で上書きできる。値は backend/.env の `RAG_*`(回答の設定)に
+    検索・回答プロファイルの「検索・回答設定」で上書きできる。値は
+     backend/.env の `RAG_*`(回答の設定)に
+
     保存する。
     """
 

@@ -417,6 +417,19 @@ def _restore_item(kind: ItemKind, document: JsonObject) -> None:
         stored = McpConnectionConfig.model_validate(_opened_secrets(document))
         runtime_config_store.restore_mcp_server(stored)
     elif kind == "tool_policy":
+        from app.features.agent.profile_name_migration import migrate_tool_name
+
+        document = {
+            **document,
+            **{
+                key: [
+                    migrate_tool_name(item) if isinstance(item, str) else item
+                    for item in document.get(key, [])
+                ]
+                for key in ("allow", "ask", "deny")
+                if isinstance(document.get(key), list)
+            },
+        }
         runtime_config_store.patch_tool_policy(
             default_mode=str(document.get("default_mode") or "approval"),
             allow=list(document.get("allow") or []),

@@ -240,7 +240,7 @@ export const CSRF_COOKIE_NAME = "rag_csrf";
  * `allowed_*_ids` が null なら制限なし（SYSTEM_ADMIN・`rag.*.manage`・ローカル DEBUG）。
  */
 export interface CurrentUser extends BaseCurrentUser {
-  allowed_business_view_ids: string[] | null;
+  allowed_search_answer_profile_ids: string[] | null;
   allowed_knowledge_base_ids: string[] | null;
 }
 
@@ -254,11 +254,11 @@ export interface SecurityRole {
   archived: boolean;
   version: number;
   permissions: string[];
-  business_view_ids: string[];
+  search_answer_profile_ids: string[];
   knowledge_base_ids: string[];
 }
 
-/** 権限管理で選べる対象（業務ビュー・ナレッジベース）。 */
+/** 権限管理で選べる対象（検索・回答プロファイル・ナレッジベース）。 */
 export interface AccessTarget {
   id: string;
   name: string;
@@ -267,7 +267,7 @@ export interface AccessTarget {
 }
 
 /** 権限管理の対象の種類（`GET /api/security/access-targets/{kind}`。#608）。 */
-export type AccessTargetKind = "business-views" | "knowledge-bases";
+export type AccessTargetKind = "search-answer-profiles" | "knowledge-bases";
 
 /** 権限管理の対象の候補の 1 ページ（検索とページング。#608）。 */
 export interface AccessTargetPage {
@@ -283,7 +283,7 @@ export interface RoleAccessUpdate {
   role_id: string;
   version: number;
   permissions: string[];
-  business_view_ids: string[];
+  search_answer_profile_ids: string[];
   knowledge_base_ids: string[];
 }
 
@@ -776,7 +776,7 @@ export interface KnowledgeBaseIngestionConfig {
   auto_index_after_chunk_enabled: boolean | null;
 }
 
-/** 検索・回答設定。Business View の query 設定として使う。 */
+/** 検索・回答設定。Search Answer Profile の query 設定として使う。 */
 export interface KnowledgeBaseQueryConfig {
   // 検索モード・検索オプション・根拠確認・回答スタイルは #595 で削除した（保存済みの値は backend が読み捨てる）。
   guardrail_policy: GuardrailPolicyName | null;
@@ -857,11 +857,11 @@ export interface KnowledgeBaseUpdateRequest {
   retrieval_config?: Record<string, unknown> | null;
 }
 
-export type BusinessViewStatus = "ACTIVE" | "ARCHIVED";
+export type SearchAnswerProfileStatus = "ACTIVE" | "ARCHIVED";
 
-export const DEFAULT_BUSINESS_VIEW_NAME = "DEFAULT";
+export const DEFAULT_SEARCH_ANSWER_PROFILE_NAME = "DEFAULT";
 
-export interface BusinessViewRef {
+export interface SearchAnswerProfileRef {
   id: string;
   name: string;
 }
@@ -869,8 +869,8 @@ export interface BusinessViewRef {
 /** 配信モード。1 文書が複数 chunk_set を持つときの検索時配信方法。 */
 export type ServingMode = "single" | "fused" | "routed";
 
-/** Business View の設定一式。query は検索・回答設定。 */
-export interface BusinessViewConfig {
+/** Search Answer Profile の設定一式。query は検索・回答設定。 */
+export interface SearchAnswerProfileConfig {
   version: number;
   knowledge_base_ids: string[];
   query: KnowledgeBaseQueryConfig;
@@ -878,9 +878,9 @@ export interface BusinessViewConfig {
   serving_mode: ServingMode;
 }
 
-export interface BusinessViewSummary extends BusinessViewRef {
+export interface SearchAnswerProfileSummary extends SearchAnswerProfileRef {
   description: string | null;
-  status: BusinessViewStatus;
+  status: SearchAnswerProfileStatus;
   knowledge_base_count: number;
   /** 参照 KB のうちアーカイブ済みの件数（検索対象にならない。#302）。 */
   archived_knowledge_base_count?: number;
@@ -891,28 +891,28 @@ export interface BusinessViewSummary extends BusinessViewRef {
   archived_at: string | null;
 }
 
-/** 業務ビューが参照する KB（アーカイブ済みを含む。status で見分ける）。 */
-export interface BusinessViewKnowledgeBaseRef extends KnowledgeBaseRef {
+/** 検索・回答プロファイルが参照する KB（アーカイブ済みを含む。status で見分ける）。 */
+export interface SearchAnswerProfileKnowledgeBaseRef extends KnowledgeBaseRef {
   status: KnowledgeBaseStatus;
 }
 
-export interface BusinessViewDetail extends BusinessViewSummary {
-  config: BusinessViewConfig;
-  knowledge_bases: BusinessViewKnowledgeBaseRef[];
+export interface SearchAnswerProfileDetail extends SearchAnswerProfileSummary {
+  config: SearchAnswerProfileConfig;
+  knowledge_bases: SearchAnswerProfileKnowledgeBaseRef[];
   /** 参照 KB のうち存在しない ID（#302）。 */
   missing_knowledge_base_ids?: string[];
 }
 
-export interface BusinessViewCreateRequest {
+export interface SearchAnswerProfileCreateRequest {
   name: string;
   description?: string | null;
-  config?: BusinessViewConfig;
+  config?: SearchAnswerProfileConfig;
 }
 
-export interface BusinessViewUpdateRequest {
+export interface SearchAnswerProfileUpdateRequest {
   name?: string | null;
   description?: string | null;
-  config?: BusinessViewConfig;
+  config?: SearchAnswerProfileConfig;
 }
 
 /** 文書の取込設定スナップショット(3 層モデル: 文書単位の単一レシピ)と global 既定とのドリフト状況。 */
@@ -1013,8 +1013,8 @@ export interface SearchRequestBody {
   top_k?: number;
   filters?: Record<string, string>;
   knowledge_base_ids?: string[];
-  /** 検索対象の業務ビュー（1 つ。#635）。 */
-  business_view_id?: string | null;
+  /** 検索対象の検索・回答プロファイル（1 つ。#635）。 */
+  search_answer_profile_id?: string | null;
   /** 回答を作らずに検索だけを行う(LLM を呼ばない。#593)。 */
   retrieval_only?: boolean;
   /** false なら回答を生成しない（RAG 検索の画面。CRAG と回答の LLM を使わない。#649）。 */
@@ -1057,7 +1057,7 @@ export interface ChatMessage {
 
 export interface ConversationSummary {
   id: string;
-  business_view_id: string;
+  search_answer_profile_id: string;
   title: string | null;
   status: ConversationStatus;
   message_count: number;
@@ -1070,7 +1070,7 @@ export interface ConversationDetail extends ConversationSummary {
 }
 
 export interface ConversationCreateBody {
-  business_view_id: string;
+  search_answer_profile_id: string;
   title?: string | null;
 }
 
@@ -1143,7 +1143,7 @@ export interface SearchDiagnostics {
   guardrail_degraded?: boolean;
   filter_keys: string[];
   knowledge_base_count: number;
-  business_view_applied?: string | null;
+  search_answer_profile_applied?: string | null;
   config_fingerprint: string;
   /** 回答エンジンの記録（検索の工程・根拠の評価など）。 */
   answer?: Record<string, JsonValue> | null;
@@ -1162,7 +1162,7 @@ export interface SearchResponse {
 
 export interface FeedbackRequestBody {
   trace_id: string;
-  business_view_id: string;
+  search_answer_profile_id: string;
   target_type: FeedbackTargetType;
   source_surface: FeedbackSourceSurface;
   document_id?: string | null;
@@ -1183,9 +1183,9 @@ export interface FeedbackSubmissionResponse extends Omit<FeedbackRequestBody, "c
 
 export interface CurrentFeedbackItem extends Omit<
   FeedbackSubmissionResponse,
-  "business_view_id" | "source_surface"
+  "search_answer_profile_id" | "source_surface"
 > {
-  business_view_id: string | null;
+  search_answer_profile_id: string | null;
   source_surface: FeedbackSourceSurface | null;
   created_at: string;
 }
@@ -1224,7 +1224,7 @@ export interface FeedbackSummary {
 }
 
 export interface FeedbackItem extends CurrentFeedbackItem {
-  business_view_name: string | null;
+  search_answer_profile_name: string | null;
   conversation_id: string | null;
   conversation_title: string | null;
   message_id: string | null;
@@ -1265,7 +1265,7 @@ export interface QueryHistorySettingsData {
 }
 
 export interface QuerySuggestionsData {
-  business_view_id: string;
+  search_answer_profile_id: string;
   enabled: boolean;
   suggestions: { question: string; count: number }[];
 }
@@ -1289,7 +1289,7 @@ export interface AnswerPromptsData {
 }
 
 export interface FeedbackApprovedFaqPromotion {
-  business_view_id: string;
+  search_answer_profile_id: string;
   question: string;
   inserted_count: number;
   deleted_count: number;
@@ -1302,7 +1302,7 @@ export interface FeedbackDashboard {
 }
 
 export interface FeedbackListParams {
-  business_view_id?: string;
+  search_answer_profile_id?: string;
   target_type?: FeedbackTargetType;
   rating?: CitationFeedbackRating;
   reason?: CitationFeedbackReason;
@@ -1865,7 +1865,7 @@ export interface ChunkingSettingsUpdate {
   chunk_parent_max_children: number;
 }
 
-/** 回答の検索と生成の全体既定(業務ビューで上書きできる。#593)。 */
+/** 回答の検索と生成の全体既定(検索・回答プロファイルで上書きできる。#593)。 */
 export interface AnsweringSettingsData {
   query_strategy: QueryStrategyName;
   answer_flow: AnswerFlowName;
@@ -2114,7 +2114,7 @@ export function withCsrfHeaders(method: string | undefined, headers?: HeadersIni
 
 /**
  * 応答の 401 / 403 を共通の認証イベント（ログインへ / 権限なしの画面へ）として通知する。
- * 403 は error_code が経路の権限拒否のときだけ権限なしの画面へ移し、業務ビュー / KB の範囲外
+ * 403 は error_code が経路の権限拒否のときだけ権限なしの画面へ移し、検索・回答プロファイル / KB の範囲外
  * （`RAG_SCOPE_FORBIDDEN`）や権限の付与の制限などは呼び出した画面がその場で表示する（#224）。
  * 本文を読む前に呼ぶ（本文は消費しない）。
  */
@@ -2671,11 +2671,11 @@ export const api = {
       `/api/knowledge-bases/${encodeURIComponent(id)}/extraction-fields`,
       { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
     ),
-  // 検索の絞り込みに使える項目（選んだ業務ビューの KB の定義の和集合。#549）。
-  getSearchExtractionFields: (businessViewId: string) =>
+  // 検索の絞り込みに使える項目（選んだ検索・回答プロファイルの KB の定義の和集合。#549）。
+  getSearchExtractionFields: (searchAnswerProfileId: string) =>
     request<SearchExtractionFieldsData>(
       `/api/search/extraction-fields?${new URLSearchParams({
-        business_view_id: businessViewId,
+        search_answer_profile_id: searchAnswerProfileId,
       }).toString()}`,
     ),
   createKnowledgeBase: (body: KnowledgeBaseCreateRequest) =>
@@ -2715,10 +2715,10 @@ export const api = {
       { method: "DELETE" },
     ),
 
-  // 業務ビュー(Business View)
-  listBusinessViews: (
+  // 検索・回答プロファイル(Search Answer Profile)
+  listSearchAnswerProfiles: (
     params: {
-      status?: BusinessViewStatus;
+      status?: SearchAnswerProfileStatus;
       q?: string;
       limit?: number;
       offset?: number;
@@ -2730,39 +2730,39 @@ export const api = {
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
-    return requestDegradable<Page<BusinessViewSummary>>(
-      `/api/business-views${qs ? `?${qs}` : ""}`,
+    return requestDegradable<Page<SearchAnswerProfileSummary>>(
+      `/api/search-answer-profiles${qs ? `?${qs}` : ""}`,
     );
   },
-  getBusinessView: (id: string) =>
-    request<BusinessViewDetail>(
-      `/api/business-views/${encodeURIComponent(id)}`,
+  getSearchAnswerProfile: (id: string) =>
+    request<SearchAnswerProfileDetail>(
+      `/api/search-answer-profiles/${encodeURIComponent(id)}`,
     ),
-  createBusinessView: (body: BusinessViewCreateRequest) =>
-    request<BusinessViewDetail>("/api/business-views", jsonBody(body)),
-  updateBusinessView: (id: string, body: BusinessViewUpdateRequest) =>
-    request<BusinessViewDetail>(
-      `/api/business-views/${encodeURIComponent(id)}`,
+  createSearchAnswerProfile: (body: SearchAnswerProfileCreateRequest) =>
+    request<SearchAnswerProfileDetail>("/api/search-answer-profiles", jsonBody(body)),
+  updateSearchAnswerProfile: (id: string, body: SearchAnswerProfileUpdateRequest) =>
+    request<SearchAnswerProfileDetail>(
+      `/api/search-answer-profiles/${encodeURIComponent(id)}`,
       {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       },
     ),
-  archiveBusinessView: (id: string) =>
-    request<BusinessViewDetail>(
-      `/api/business-views/${encodeURIComponent(id)}/archive`,
+  archiveSearchAnswerProfile: (id: string) =>
+    request<SearchAnswerProfileDetail>(
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/archive`,
       {
         method: "POST",
       },
     ),
   getDomainKeywords: (id: string) =>
     request<DomainKeywordsData>(
-      `/api/business-views/${encodeURIComponent(id)}/domain-keywords`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords`,
     ),
   saveDomainKeywords: (id: string, keywords: string[]) =>
     request<DomainKeywordsData>(
-      `/api/business-views/${encodeURIComponent(id)}/domain-keywords`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -2771,23 +2771,23 @@ export const api = {
     ),
   getApprovedFaq: (id: string) =>
     request<ApprovedFaqListData>(
-      `/api/business-views/${encodeURIComponent(id)}/approved-faq`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq`,
     ),
   addApprovedFaq: (id: string, body: { question: string; answer: string }) =>
     request<ApprovedFaqMutationData>(
-      `/api/business-views/${encodeURIComponent(id)}/approved-faq`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq`,
       jsonBody(body),
     ),
   deleteApprovedFaq: (id: string, ids: string[]) =>
     request<ApprovedFaqMutationData>(
-      `/api/business-views/${encodeURIComponent(id)}/approved-faq/delete`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/delete`,
       jsonBody({ ids }),
     ),
   previewApprovedFaqImport: (id: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
     return request<ApprovedFaqImportPreviewData>(
-      `/api/business-views/${encodeURIComponent(id)}/approved-faq/import/preview`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/import/preview`,
       { method: "POST", body: form },
     );
   },
@@ -2796,40 +2796,40 @@ export const api = {
     form.append("file", file);
     form.append("mode", mode);
     return request<ApprovedFaqMutationData>(
-      `/api/business-views/${encodeURIComponent(id)}/approved-faq/import`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/import`,
       { method: "POST", body: form },
     );
   },
   /** purpose="chat" はチャットの提示（一致度の下限が高く、最大 3 件。#684）。 */
   suggestApprovedFaq: (id: string, query: string, purpose: "search" | "chat" = "search") =>
     request<ApprovedFaqSuggestionsData>(
-      `/api/business-views/${encodeURIComponent(id)}/approved-faq/suggest`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/suggest`,
       jsonBody({ query, purpose }),
     ),
   suggestClarification: (id: string, query: string) =>
     request<{ suggestion: ClarificationSuggestionData | null }>(
-      `/api/business-views/${encodeURIComponent(id)}/clarifications/suggest`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/clarifications/suggest`,
       jsonBody({ query }),
     ),
   saveRuleClarification: (id: string, ruleId: string, clarification: RuleClarification | null) =>
     request<RuntimeKnowledgeData>(
-      `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge/rules/${encodeURIComponent(ruleId)}/clarification`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/runtime-knowledge/rules/${encodeURIComponent(ruleId)}/clarification`,
       { ...jsonBody({ clarification }), method: "PUT" },
     ),
   setApprovedFaqEnabled: (id: string, enabled: boolean) =>
     request<ApprovedFaqListData>(
-      `/api/business-views/${encodeURIComponent(id)}/approved-faq/settings`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/settings`,
       { ...jsonBody({ enabled }), method: "PUT" },
     ),
   listAnswerRecords: (params: {
-    businessViewId: string;
+    searchAnswerProfileId: string;
     limit: number;
     offset?: number;
     /** 指定するとその回答だけを返す（チャットが会話の回答の保存有無を引き当てる）。 */
     traceIds?: string[];
   }) => {
     const search = new URLSearchParams({
-      business_view_id: params.businessViewId,
+      search_answer_profile_id: params.searchAnswerProfileId,
       limit: String(params.limit),
       offset: String(params.offset ?? 0),
     });
@@ -2855,31 +2855,31 @@ export const api = {
     ),
   getRuntimeKnowledge: (id: string) =>
     request<RuntimeKnowledgeData>(
-      `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/runtime-knowledge`,
     ),
   editRuntimeKnowledge: (id: string, body: RuntimeKnowledgeEditRequest) =>
     request<RuntimeKnowledgeData>(
-      `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge/edit`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/runtime-knowledge/edit`,
       jsonBody(body),
     ),
   previewRuntimeKnowledge: (id: string, question: string) =>
     request<RuntimeKnowledgePreviewData>(
-      `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge/preview`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/runtime-knowledge/preview`,
       jsonBody({ question }),
     ),
   suggestDomainKeywords: (id: string) =>
     request<DomainKeywordSuggestionData>(
-      `/api/business-views/${encodeURIComponent(id)}/domain-keywords/suggest`,
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords/suggest`,
       { method: "POST" },
     ),
 
   // チャット（会話 / マルチモデル比較）
   listConversations: (
-    params: { business_view_id?: string; limit?: number; offset?: number } = {},
+    params: { search_answer_profile_id?: string; limit?: number; offset?: number } = {},
   ) => {
     const search = new URLSearchParams();
-    if (params.business_view_id)
-      search.set("business_view_id", params.business_view_id);
+    if (params.search_answer_profile_id)
+      search.set("search_answer_profile_id", params.search_answer_profile_id);
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
@@ -2910,7 +2910,7 @@ export const api = {
   listSearchAnswerModels: () => request<CompareModel[]>("/api/search/models"),
 
   // 検索
-  // 業務ビュー / KB の範囲外の 403（RAG_SCOPE_FORBIDDEN）は理由をその場で見せる（#214 / #224）。
+  // 検索・回答プロファイル / KB の範囲外の 403（RAG_SCOPE_FORBIDDEN）は理由をその場で見せる（#214 / #224）。
   search: (body: SearchRequestBody) =>
     request<SearchResponse>("/api/search", jsonBody(body), {
       timeoutMs: ANSWER_GENERATION_TIMEOUT_MS,
@@ -2925,8 +2925,8 @@ export const api = {
   },
   listFeedback: (params: FeedbackListParams = {}) => {
     const search = new URLSearchParams();
-    if (params.business_view_id)
-      search.set("business_view_id", params.business_view_id);
+    if (params.search_answer_profile_id)
+      search.set("search_answer_profile_id", params.search_answer_profile_id);
     if (params.target_type) search.set("target_type", params.target_type);
     if (params.rating) search.set("rating", params.rating);
     if (params.reason) search.set("reason", params.reason);
@@ -2948,9 +2948,9 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  getQuerySuggestions: (businessViewId: string, query: string, filters: Record<string, string>) =>
+  getQuerySuggestions: (searchAnswerProfileId: string, query: string, filters: Record<string, string>) =>
     request<QuerySuggestionsData>(
-      `/api/business-views/${encodeURIComponent(businessViewId)}/query-suggestions?${new URLSearchParams({
+      `/api/search-answer-profiles/${encodeURIComponent(searchAnswerProfileId)}/query-suggestions?${new URLSearchParams({
         q: query,
         ...filters,
       }).toString()}`,
@@ -3225,9 +3225,9 @@ export const api = {
   },
 };
 
-// --- 業務ビューの知識: ドメインキーワード(rag_poc 由来) ---
+// --- 検索・回答プロファイルの知識: ドメインキーワード(rag_poc 由来) ---
 export interface DomainKeywordsData {
-  business_view_id: string;
+  search_answer_profile_id: string;
   keywords: string[];
 }
 
@@ -3244,7 +3244,7 @@ export interface DomainKeywordSuggestionData {
   processed_chunk_count: number;
 }
 
-// --- 業務ビューの知識: Approved FAQ(類似問) ---
+// --- 検索・回答プロファイルの知識: Approved FAQ(類似問) ---
 export type ApprovedFaqImportMode = "INSERT" | "DELETE_THEN_INSERT";
 
 export interface ApprovedFaqRecordData {
@@ -3256,9 +3256,9 @@ export interface ApprovedFaqRecordData {
 }
 
 export interface ApprovedFaqListData {
-  business_view_id: string;
+  search_answer_profile_id: string;
   records: ApprovedFaqRecordData[];
-  /** 回答の前に類似問を提示するか（業務ビューごと。未設定はオン。#684）。 */
+  /** 回答の前に類似問を提示するか（検索・回答プロファイルごと。未設定はオン。#684）。 */
   enabled: boolean;
 }
 
@@ -3320,11 +3320,11 @@ export interface ApprovedFaqSuggestionsData {
   suggestions: ApprovedFaqSuggestionData[];
 }
 
-// --- 業務ビューの知識: 用語・ルール(runtime knowledge) ---
+// --- 検索・回答プロファイルの知識: 用語・ルール(runtime knowledge) ---
 export type RuntimeKnowledgeKind = "terms" | "rules";
 
 export interface RuntimeKnowledgeData {
-  business_view_id: string;
+  search_answer_profile_id: string;
   terms: Record<string, JsonValue>[];
   rules: Record<string, JsonValue>[];
 }
@@ -3350,7 +3350,7 @@ export interface RuntimeKnowledgePreviewData {
 // --- 保存された回答(rag_poc の answer JSON 相当) ---
 export interface AnswerRecordSummary {
   trace_id: string;
-  business_view_id: string | null;
+  search_answer_profile_id: string | null;
   surface: "search" | "chat";
   answer_engine: string;
   question: string;

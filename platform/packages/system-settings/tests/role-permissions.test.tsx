@@ -23,7 +23,7 @@ import {
 const pending = () => new Promise<never>(() => undefined);
 
 interface RagRole extends PermissionRole {
-  business_view_ids: string[];
+  search_answer_profile_ids: string[];
   knowledge_base_ids: string[];
 }
 
@@ -43,14 +43,14 @@ function targetMessages(title: string) {
   };
 }
 
-// RAG の業務ビュー・ナレッジベースを targets として渡す例。
+// RAG の検索・回答プロファイル・ナレッジベースを targets として渡す例。
 const ragTargets: RolePermissionTargetSection<RagRole>[] = [
   {
-    key: "business-views",
-    messages: targetMessages("業務ビュー"),
+    key: "search-answer-profiles",
+    messages: targetMessages("検索・回答プロファイル"),
     query: pending,
-    selectedIds: (role) => role.business_view_ids,
-    grantsAll: (codes) => codes.has("rag.business_views.manage"),
+    selectedIds: (role) => role.search_answer_profile_ids,
+    grantsAll: (codes) => codes.has("rag.search_answer_profiles.manage"),
   },
   {
     key: "knowledge-bases",
@@ -81,7 +81,7 @@ describe("RolePermissionsPage", () => {
     expect(html).toContain('data-testid="security-permissions-loading"');
     expect(html).toContain('data-testid="security-permissions-actions"');
     expect(html).toContain('data-testid="security-permissions-search"');
-    expect(html).toContain("業務ビュー");
+    expect(html).toContain("検索・回答プロファイル");
     expect(html).toContain("ナレッジベース");
   });
 
@@ -149,19 +149,19 @@ describe("候補にない ID の直接入力（allowCustomIds。#215）", () => 
     const agentTargets: RolePermissionTargetSection<RagRole>[] = [
       {
         ...ragTargets[0],
-        key: "business-view-access",
+        key: "search-answer-profile-access",
         allowCustomIds: {
-          label: "業務ビュー ID を直接入力",
+          label: "検索・回答プロファイル ID を直接入力",
           addLabel: "追加",
           pattern: /^[A-Za-z0-9._:-]{1,64}$/,
-          invalidMessage: "業務ビュー ID の形式が正しくありません。",
+          invalidMessage: "検索・回答プロファイル ID の形式が正しくありません。",
           customStatus: "直接入力",
         },
       },
     ];
     const html = render(<RolePermissionsPage api={api} canManage targets={agentTargets} />);
     expect(html).toContain('data-testid="security-permissions-grid"');
-    expect(html).toContain("業務ビュー");
+    expect(html).toContain("検索・回答プロファイル");
   });
 });
 
@@ -214,10 +214,10 @@ describe("選択済みの対象の名前の解決（#608）", () => {
     expect(called).toBe(false);
     expect(none).toEqual({ items: [], warning: "" });
     const partial = await resolveTargetItems(
-      { query: async () => ({ items: [{ id: "sales", name: "営業" }], total: 1, warning: "  RAG の業務ビューを読めませんでした。  " }) },
+      { query: async () => ({ items: [{ id: "sales", name: "営業" }], total: 1, warning: "  RAG の検索・回答プロファイルを読めませんでした。  " }) },
       ["sales"],
       signal,
     );
-    expect(partial).toEqual({ items: [{ id: "sales", name: "営業" }], warning: "RAG の業務ビューを読めませんでした。" });
+    expect(partial).toEqual({ items: [{ id: "sales", name: "営業" }], warning: "RAG の検索・回答プロファイルを読めませんでした。" });
   });
 });

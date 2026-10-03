@@ -1565,9 +1565,9 @@ export type TextFieldProps = {
 import { TextareaField } from "@engchina/production-ready-ui";
 
 <TextareaField
-  id="business-view-system-prompt"
-  label={t("businessViews.field.systemPrompt")}
-  helper={t("businessViews.field.systemPromptHelper")}
+  id="search-answer-profile-system-prompt"
+  label={t("searchAnswerProfiles.field.systemPrompt")}
+  helper={t("searchAnswerProfiles.field.systemPromptHelper")}
   value={prompt}
   onValueChange={setPrompt}
   rows={3}
@@ -1831,7 +1831,7 @@ export interface RowTitleButtonProps
 | `maxLines` の切り詰めは `ResizeObserver` で `scrollHeight > clientHeight` を測り、切り詰めているときだけ `Tooltip`（`describe={false}`）を有効にする。文言は `rowTitleTooltipText`（先頭 120 文字 + 「…」） | 切り詰めていない題名に同じ文言の吹き出しを出さない。読み上げ名は全文なので説明として二重に結び付けない。長い全文の吹き出しで一覧を覆わない |
 | class は `pr-touch-target relative`（タッチ端末の当たり判定）と、題名の `group-hover/row-title:underline` | Button の `--button-height-*` と同じく入力方式で判定し、見た目は変えない |
 
-- 製品の置き換え（#421）: RAG（フィードバック・業務ビューの管理・業務ビューの用語 / ルール）、Agent（エージェント・承認・ツール・メモリ・MCP サーバー・Skill・Plugin・マーケットプレイス・Run）、NL2SQL（プロファイル・DB 管理のオブジェクト一覧・データ管理の対象の選択・フィードバック管理のエントリ）、system-settings（ユーザー・ロール・ロール権限。`SecurityIdentityRowTitleButton`）。
+- 製品の置き換え（#421）: RAG（フィードバック・検索・回答プロファイルの管理・検索・回答プロファイルの用語 / ルール）、Agent（エージェント・承認・ツール・メモリ・MCP サーバー・Skill・Plugin・マーケットプレイス・Run）、NL2SQL（プロファイル・DB 管理のオブジェクト一覧・データ管理の対象の選択・フィードバック管理のエントリ）、system-settings（ユーザー・ロール・ロール権限。`SecurityIdentityRowTitleButton`）。
 - 置き換えないもの: 一覧から別ページへ移るリンク（RAG のナレッジベース・ファイル一覧）、カード全体が 1 つのボタンの履歴（NL2SQL のフィードバック履歴）、listbox の選択肢（NL2SQL の DeepSec の対象）、チェックボックスのラベル。
 - 単体テストは `packages/ui/tests/row-title-button.test.tsx`。実ブラウザは RAG `e2e/feedback.spec.ts`・Agent `e2e/entity-archetypes.spec.ts`・NL2SQL `tests/e2e/profile-archive-reset.spec.ts`（desktop / 375px、Tab・Enter・Space・`aria-current`・タッチ端末の当たり判定・切り詰めの Tooltip）。
 
@@ -1942,28 +1942,28 @@ export type FieldsetProps = {
 ```tsx
 import { ClearActionButton, EmptyState, SearchField } from "@engchina/production-ready-ui";
 
-// サーバー側で絞り込む一覧（RAG の業務ビュー）。q は作業状態に保存した適用中の検索語。
-const [view, setView] = useWorkspaceState("businessViews.view", INITIAL_VIEW, isView);
-const query = useBusinessViews({ q: view.q || undefined, limit, offset: view.offset });
+// サーバー側で絞り込む一覧（RAG の検索・回答プロファイル）。q は作業状態に保存した適用中の検索語。
+const [view, setView] = useWorkspaceState("searchAnswerProfiles.view", INITIAL_VIEW, isView);
+const query = useSearchAnswerProfiles({ q: view.q || undefined, limit, offset: view.offset });
 // ↑ queryKey に q を入れ、placeholderData: keepPreviousData（古い応答で上書きしない・前の一覧を出したまま）
 
 <SearchField
-  id="business-view-search"
-  label={t("businessViews.search.placeholder")}
+  id="search-answer-profile-search"
+  label={t("searchAnswerProfiles.search.placeholder")}
   labelHidden
   value={view.q}
   onSearch={(next) => setView((current) => ({ ...current, q: next, offset: 0 }))} // 変わったら 1 ページ目
   clearLabel={t("common.clearSearch")}
   resultCountLabel={query.data ? t("common.searchResultCount", { count: query.data.total }) : ""}
-  placeholder={t("businessViews.search.placeholder")}
+  placeholder={t("searchAnswerProfiles.search.placeholder")}
   className="w-full sm:w-64"
 />
 
 // 0 件: 空の状態と「検索語をクリア」
 {view.q ? (
   <EmptyState
-    title={t("businessViews.search.noResultsTitle")}
-    hint={t("businessViews.search.noResultsHint")}
+    title={t("searchAnswerProfiles.search.noResultsTitle")}
+    hint={t("searchAnswerProfiles.search.noResultsHint")}
     action={<ClearActionButton label={t("common.clearSearch")} onClick={() => applySearch("")} />}
   />
 ) : null}
@@ -2014,8 +2014,8 @@ export function isSubmitEnter(event: KeyboardEventLike): boolean;  // key === "E
 | 入力欄が外れるときは待っている分を確定する。部品の外の状態（作業状態）が同じ画面に残るとき、消した・入力した検索語が戻らない。画面ごと外れる（別のページへ移る）ときは親の状態も消えるので、残したい e2e は Enter で確定してから移る | 一覧 ⇄ 作成の切り替えで、消したはずの検索語が一覧に戻っていた |
 
 - 単体テストは `packages/ui/tests/search-field.test.tsx`（debounce・Enter・trim・正規化・`formatInput`・IME の `compositionstart` 〜 `compositionend` と確定の Enter・消去・外からの変更・外れるときの確定・件数の読み上げ。fake timers）。
-- 実ブラウザは RAG `e2e/list-search.spec.ts`（業務ビュー・ナレッジベース。ボタンなし・入力に合わせた問い合わせ・IME・0 件の「検索語をクリア」、desktop / 375px、ライト / ダーク）、Agent `e2e/list-search.spec.ts`（メモリ）、NL2SQL `tests/e2e/nl2sql-workflows.spec.ts`（学習候補・アプリ内フィードバック）。IME は `compositionstart` → `isComposing` の `input` → `compositionend` の DOM event を出して確かめる（Playwright の keyboard は IME を通さない）。
-- 製品の置き換え: RAG（ナレッジベース・業務ビュー・文書・フィードバック・ナレッジベース詳細の追加する文書）、NL2SQL（`DbManagementSearchField` / `DbOwnerPrefixFilterField` を使う全一覧・DB 管理のオブジェクト一覧・スキーマ参照・アプリ内フィードバック・学習候補）、Agent（メモリ）、system-settings（`SecuritySearchField`: ユーザー・ロール・権限管理・権限の対象。NL2SQL の Deep Data Security も使う）。
+- 実ブラウザは RAG `e2e/list-search.spec.ts`（検索・回答プロファイル・ナレッジベース。ボタンなし・入力に合わせた問い合わせ・IME・0 件の「検索語をクリア」、desktop / 375px、ライト / ダーク）、Agent `e2e/list-search.spec.ts`（メモリ）、NL2SQL `tests/e2e/nl2sql-workflows.spec.ts`（学習候補・アプリ内フィードバック）。IME は `compositionstart` → `isComposing` の `input` → `compositionend` の DOM event を出して確かめる（Playwright の keyboard は IME を通さない）。
+- 製品の置き換え: RAG（ナレッジベース・検索・回答プロファイル・文書・フィードバック・ナレッジベース詳細の追加する文書）、NL2SQL（`DbManagementSearchField` / `DbOwnerPrefixFilterField` を使う全一覧・DB 管理のオブジェクト一覧・スキーマ参照・アプリ内フィードバック・学習候補）、Agent（メモリ）、system-settings（`SecuritySearchField`: ユーザー・ロール・権限管理・権限の対象。NL2SQL の Deep Data Security も使う）。
 
 ## SearchableSelectField / SearchableMultiSelect — **新規**（#578）
 
@@ -2062,9 +2062,9 @@ import { SearchableMultiSelect, SearchableSelectField } from "@engchina/producti
 | 単一選択の一覧の高さは一覧側（`bounded-scroll-area`）で決め、層全体は実寸で測る | 層に max-height を掛けると実寸の測り直しで高さが揺れる |
 
 - 単体テストは `packages/ui/tests/searchable-select.test.tsx`（300 件の画面側の絞り込み・`remote`・↑↓/Enter/Esc/Tab・IME の `compositionstart`〜`compositionend` と確定の Enter・chip・hideable・件数の読み上げ・ボタンの名前）。
-- 実ブラウザは RAG `e2e/knowledge-base-searchable-select.spec.ts`（モックで 300 件と 120 件。評価・文書インデックス・アップロード・業務ビュー、desktop / 375px、ライト / ダーク）。
-- 製品の置き換え: RAG（文書インデックスの絞り込み、アップロードの登録先、業務ビューの参照 KB、品質評価、文書詳細の所属先、RAG 検索・チャットの対象の業務ビュー（#635 で単一選択の `SearchableSelectField` に統一））。RAG 固有の `MultiSelectCombobox` は削除した。
-- `leadingIcon`（任意。#635）: 単一選択のボタンの先頭に 16px のアイコン（読み上げない）を出す。検索して選ぶ欄であることを開く前から見せたいときに `leadingIcon={Search}` を渡す（RAG の対象の業務ビュー）。
+- 実ブラウザは RAG `e2e/knowledge-base-searchable-select.spec.ts`（モックで 300 件と 120 件。評価・文書インデックス・アップロード・検索・回答プロファイル、desktop / 375px、ライト / ダーク）。
+- 製品の置き換え: RAG（文書インデックスの絞り込み、アップロードの登録先、検索・回答プロファイルの参照 KB、品質評価、文書詳細の所属先、RAG 検索・チャットの対象の検索・回答プロファイル（#635 で単一選択の `SearchableSelectField` に統一））。RAG 固有の `MultiSelectCombobox` は削除した。
+- `leadingIcon`（任意。#635）: 単一選択のボタンの先頭に 16px のアイコン（読み上げない）を出す。検索して選ぶ欄であることを開く前から見せたいときに `leadingIcon={Search}` を渡す（RAG の対象の検索・回答プロファイル）。
 
 ---
 
@@ -2077,7 +2077,7 @@ import { SearchableMultiSelect, SearchableSelectField } from "@engchina/producti
   <SaveErrorBanner
     message={mutation.isError ? (mutation.error instanceof ApiError ? mutation.error.message : t("…error.save")) : null}
     attemptKey={mutation.submittedAt}
-    testId="business-view-save-error"
+    testId="search-answer-profile-save-error"
   />
   {/* 対象の状態の警告 Banner・本文の節 */}
 </PageBody>
@@ -2101,10 +2101,10 @@ type SaveErrorBannerProps = {
 |---|---|
 | 見た目は danger の `Banner`（アイコン付き・`role="alert"`）。閉じる × は付けない | 状態を色だけで示さない。次の保存まで残し、失敗を消して保存し直したように見せない |
 | 失敗が出たら `scrollIntoView({ block: "center" })` で画面に入れる。フォーカスは動かさない | lg 以上のヘッダーは sticky で、長いフォームを下までスクロールしてから保存すると、本文の先頭の Banner は画面の外にある。中央へ寄せると本文の先頭の Banner はページの先頭まで戻り、sticky のヘッダーに隠れない |
-| Toast・フォームの下の `FormStatus` と併用しない | 同じ失敗が 2 か所に出ていた（業務ビューなど）。フォームの下はヘッダーの保存ボタンから遠く、気づけない |
+| Toast・フォームの下の `FormStatus` と併用しない | 同じ失敗が 2 か所に出ていた（検索・回答プロファイルなど）。フォームの下はヘッダーの保存ボタンから遠く、気づけない |
 
 - 単体テストは `packages/ui/tests/save-error-banner.test.tsx`（空のときは描かない・`role="alert"`・失敗と再試行のときだけ画面に入れる）。
-- 使う画面: RAG（業務ビュー・ナレッジベースのエディタ）、Agent（Agent・Skill・MCP 接続・プラグインの導入・マーケットプレイスの追加）。NL2SQL の業務プロファイルは保存ボタンがフォームの中（確認語の欄と並ぶ）なので、ボタンの直下の `FormStatus`（§3.3）。
+- 使う画面: RAG（検索・回答プロファイル・ナレッジベースのエディタ）、Agent（Agent・Skill・MCP 接続・プラグインの導入・マーケットプレイスの追加）。NL2SQL の業務プロファイルは保存ボタンがフォームの中（確認語の欄と並ぶ）なので、ボタンの直下の `FormStatus`（§3.3）。
 
 ---
 
@@ -2156,7 +2156,7 @@ import { ListPicker, ListToolbar, SearchField, FormActionBar } from "@engchina/p
 
 - 単体テストは `packages/ui/tests/list-picker.test.tsx`（読み上げの属性・↑↓ / Home / End / Space / Enter・IME の確定の Enter・グループ間の移動・3,000 件の仮想スクロール・検索欄の IME と件数の読み上げ・0 件・追加読み込みと再試行・一括選択と「選択中だけ表示」・無効・`list-window` の計算）。
 - 実ブラウザは RAG `e2e/knowledge-bases.spec.ts`（モックで 3,000 件から検索して複数を追加、desktop / 375px、ライト / ダーク、キーボード。所属文書の検索とページング）と NL2SQL `tests/e2e/profile-allowed-objects.spec.ts`（許可する表・ビュー）。
-- 製品の置き換え: RAG（ナレッジベースの「文書を追加」、所属文書・ナレッジベース・業務ビュー・文書の一覧のツールバー）、NL2SQL（業務プロファイルの許可する表・ビュー、`DbObjectSelectorFooter`）、system-settings（権限管理の「利用できる対象」。`RolePermissionTargetOption` は削除）。
+- 製品の置き換え: RAG（ナレッジベースの「文書を追加」、所属文書・ナレッジベース・検索・回答プロファイル・文書の一覧のツールバー）、NL2SQL（業務プロファイルの許可する表・ビュー、`DbObjectSelectorFooter`）、system-settings（権限管理の「利用できる対象」。`RolePermissionTargetOption` は削除）。
 
 ## 操作部品の高さと幅: `size` / `width` / `FieldActionRow` / `fieldControlClassName` — **新規**（#613）
 

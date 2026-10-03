@@ -131,7 +131,7 @@ function systemTablesStatus(ready: boolean): Record<string, unknown> {
           {
             name: "20261002_003_retire_role_business_views",
             description:
-              "権限管理でロールに割り当てていた業務ビュー（AGENT_ROLE_BUSINESS_VIEWS）を削除します。#750 から使っていません。",
+              "権限管理でロールに割り当てていた検索・回答プロファイル（AGENT_ROLE_BUSINESS_VIEWS）を削除します。#750 から使っていません。",
           },
         ],
     expected_object_count: objects.length,
@@ -507,7 +507,7 @@ function createState() {
     adbInfo: d.adbInfo as Json,
     uploadStorage: d.uploadStorage as Json,
     ociSettings: d.ociSettings as Json,
-    // システムテーブルの状態（#751）。既定は旧版の DB（業務ビューの表の削除を承認する前）。
+    // システムテーブルの状態（#751）。既定は旧版の DB（検索・回答プロファイルの表の削除を承認する前）。
     systemTables: clone(SYSTEM_TABLES_LEGACY) as Json,
     // DB の状態（`GET /api/ready/database`。DB ゲートが使う。#325）。既定は使える状態。
     databaseStatus: {

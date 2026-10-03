@@ -17,14 +17,14 @@ const MAX_JSON_CHARS = 200_000;
 /** 保存してよい field の allowlist。新しい field はここへ明示登録する。 */
 export type WorkspaceField =
   | "search.query"
-  | "search.businessViewId"
+  | "search.searchAnswerProfileId"
   | "search.classification"
   | "search.extractionFields"
   | "search.topK"
   | "search.advancedOpen"
   | "search.generateAnswer"
   | "search.answerModelId"
-  | "chat.businessViewId"
+  | "chat.searchAnswerProfileId"
   | "chat.conversationId"
   | "chat.composer"
   | "chat.conversationsPage"
@@ -35,8 +35,8 @@ export type WorkspaceField =
   | "knowledgeBases.view"
   | "knowledgeBases.documentsPage"
   | "knowledgeBases.draft"
-  | "businessViews.view"
-  | "businessViews.draft"
+  | "searchAnswerProfiles.view"
+  | "searchAnswerProfiles.draft"
   | "evaluation.requestJson"
   | "evaluation.experimentsJson"
   | "evaluation.rankingMetric"
@@ -53,9 +53,36 @@ interface StoredRecord {
 
 function storage(): Storage | null {
   try {
-    return window.sessionStorage;
+    const store = window.sessionStorage;
+    migrateWorkspaceNames(store);
+    return store;
   } catch {
     return null;
+  }
+}
+
+/** 更新境界にだけ旧名を置き、owner / TTL / scoped ID / 自由入力は変えない。 */
+function migrateWorkspaceNames(store: Storage): void {
+  const migrations: Record<string, string> = {
+    "search.businessViewId": "search.searchAnswerProfileId",
+    "chat.businessViewId": "chat.searchAnswerProfileId",
+    "businessViews.view": "searchAnswerProfiles.view",
+    "businessViews.draft": "searchAnswerProfiles.draft",
+  };
+  const keys: string[] = [];
+  for (let index = 0; index < store.length; index += 1) {
+    const key = store.key(index);
+    if (key) keys.push(key);
+  }
+  for (const key of keys) {
+    for (const [oldField, newField] of Object.entries(migrations)) {
+      const oldPrefix = `${WORKSPACE_NAMESPACE}${oldField}`;
+      if (key !== oldPrefix && !key.startsWith(`${oldPrefix}:`)) continue;
+      const next = `${WORKSPACE_NAMESPACE}${newField}${key.slice(oldPrefix.length)}`;
+      const raw = store.getItem(key);
+      if (raw != null && store.getItem(next) == null) store.setItem(next, raw);
+      store.removeItem(key);
+    }
   }
 }
 

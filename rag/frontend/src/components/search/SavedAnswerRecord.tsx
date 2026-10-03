@@ -21,12 +21,12 @@ import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
 /** 保存された回答 1 件(質問・回答・根拠パネル・引用)。 */
 export function SavedAnswerRecord({
   traceId,
-  businessViewId,
+  searchAnswerProfileId,
   showAnswer = true,
   onDeleted,
 }: {
   traceId: string;
-  businessViewId: string;
+  searchAnswerProfileId: string;
   showAnswer?: boolean;
   onDeleted?: () => void;
 }) {
@@ -122,7 +122,7 @@ export function SavedAnswerRecord({
               chunk={chunk}
               index={index}
               traceId={record.trace_id}
-              businessViewId={businessViewId}
+              searchAnswerProfileId={searchAnswerProfileId}
               sourceSurface={record.surface}
             />
           ))}

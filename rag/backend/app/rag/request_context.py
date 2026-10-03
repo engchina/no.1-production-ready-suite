@@ -35,8 +35,10 @@ class AuditRequestContext:
     allowed_document_ids: frozenset[str] | None = field(default=None, repr=False)
     allowed_category_names: frozenset[str] | None = field(default=None, repr=False)
     allowed_knowledge_base_ids: frozenset[str] | None = field(default=None, repr=False)
-    # 利用できる業務ビュー（None は制限なし）。production では認証済みの利用者から決める（#214）。
-    allowed_business_view_ids: frozenset[str] | None = field(default=None, repr=False)
+    # 利用できる検索・回答プロファイル（None は制限なし）。pr
+    # oduction では認証済みの利用者から決める（#214）。
+    #
+    allowed_search_answer_profile_ids: frozenset[str] | None = field(default=None, repr=False)
     # 保存済みの回答（`rag_answer_records`）を持ち主にかかわらず扱えるか（#304）。False のときは
     # `user_id_hash` の利用者の回答だけ。SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者は True。
     answer_records_unrestricted: bool = False
@@ -110,7 +112,7 @@ def audit_request_context_for_principal(
     *,
     request_id: str,
     user_uuid: str,
-    allowed_business_view_ids: frozenset[str] | None,
+    allowed_search_answer_profile_ids: frozenset[str] | None,
     allowed_knowledge_base_ids: frozenset[str] | None,
     settings: Settings | None = None,
     service_token_claims: Mapping[str, object] | None = None,
@@ -143,7 +145,7 @@ def audit_request_context_for_principal(
         )
     return replace(
         base,
-        allowed_business_view_ids=allowed_business_view_ids,
+        allowed_search_answer_profile_ids=allowed_search_answer_profile_ids,
         allowed_knowledge_base_ids=allowed_knowledge_base_ids,
         answer_records_unrestricted=answer_records_unrestricted,
         feedback_all_users=feedback_all_users,
@@ -157,14 +159,14 @@ def _claim_hash(claims: Mapping[str, object], key: str, settings: Settings) -> s
 
 @contextmanager
 def unrestricted_access_scope() -> Iterator[None]:
-    """業務ビュー・ナレッジベースの対象範囲を一時的に外す（tenant は保つ）。
+    """検索・回答プロファイル・ナレッジベースの対象範囲を一時的に外す（tenant は保つ）。
 
     既定データ（DEFAULT）の存在確認や、権限管理の ID 検証など、利用者の範囲と無関係に
     tenant 内の全件を見る必要がある処理だけで使う。
     """
     current = current_audit_request_context()
     token = set_audit_request_context(
-        replace(current, allowed_business_view_ids=None, allowed_knowledge_base_ids=None)
+        replace(current, allowed_search_answer_profile_ids=None, allowed_knowledge_base_ids=None)
     )
     try:
         yield

@@ -1,7 +1,7 @@
 /**
  * 権限管理（ロールごとの機能権限と利用できる対象）の既定の文言（NL2SQL の文言を基準に移設。#220）。
  * 製品は `messages` prop で一部だけ上書きできる。`{name}` は差し込み。
- * 利用できる対象（業務プロファイル・業務ビューなど）の文言は、対象ごとに `targets[].messages` で渡す。
+ * 利用できる対象（業務プロファイル・検索・回答プロファイルなど）の文言は、対象ごとに `targets[].messages` で渡す。
  */
 export const ROLE_PERMISSIONS_MESSAGES = {
   title: "権限管理",

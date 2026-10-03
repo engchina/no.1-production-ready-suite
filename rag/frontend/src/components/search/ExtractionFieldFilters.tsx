@@ -28,7 +28,7 @@ type FieldsState =
   | { status: "ready"; fields: ExtractionFieldDefinition[] };
 
 /**
- * 検索の詳細条件の「抽出項目の値で絞り込む」（#549）。選んだ業務ビューのナレッジベースで定義された
+ * 検索の詳細条件の「抽出項目の値で絞り込む」（#549）。選んだ検索・回答プロファイルのナレッジベースで定義された
  * 項目を選び、型に合った入力（文字列・真偽値は一致、数値・日付は範囲）で条件を足す。
  */
 export function ExtractionFieldFilters({
@@ -94,7 +94,7 @@ export function ExtractionFieldFilters({
                 value: item.name,
                 label: `${item.name}（${t(`settings.extractionFields.valueType.${item.value_type}`)}）`,
               })),
-              // 業務ビューを変えて候補から消えた項目も、選んだまま見せて誤りを出す。
+              // 検索・回答プロファイルを変えて候補から消えた項目も、選んだまま見せて誤りを出す。
               ...(row.name && !field ? [{ value: row.name, label: row.name }] : []),
             ];
             const rowLabel = t("search.filters.fields.rowLabel", { index: index + 1 });

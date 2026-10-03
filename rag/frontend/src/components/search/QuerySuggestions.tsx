@@ -6,24 +6,24 @@ import { useQuerySuggestions } from "@/lib/queries";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 
 /**
- * 業務ビューでよく聞かれている質問（rag_poc の質問履歴の候補）。質問履歴が有効で候補があるときだけ出す。
+ * 検索・回答プロファイルでよく聞かれている質問（rag_poc の質問履歴の候補）。質問履歴が有効で候補があるときだけ出す。
  * 選ぶと質問欄に入る（送信はしない）。
  */
 export function QuerySuggestions({
-  businessViewId,
+  searchAnswerProfileId,
   query,
   filters,
   disabled,
   onSelect,
 }: {
-  businessViewId: string | null;
+  searchAnswerProfileId: string | null;
   query: string;
   filters: Record<string, string>;
   disabled: boolean;
   onSelect: (question: string) => void;
 }) {
   const debouncedQuery = useDebouncedValue(query.trim(), 300);
-  const suggestions = useQuerySuggestions(businessViewId, debouncedQuery, filters);
+  const suggestions = useQuerySuggestions(searchAnswerProfileId, debouncedQuery, filters);
   const items = (suggestions.data?.suggestions ?? []).filter(
     (item) => item.question !== query.trim()
   );

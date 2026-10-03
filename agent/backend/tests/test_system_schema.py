@@ -373,7 +373,8 @@ def test_initialize_fresh_database_creates_everything_and_is_idempotent() -> Non
 
 
 def test_legacy_database_requires_approval_then_migrates() -> None:
-    """旧 CLI で作った DB は、業務ビューの表の削除（#750 から未使用）を承認してから更新する。"""
+    """旧 CLI で作った DB は、検索・回答プロファイルの
+    表の削除（#750 から未使用）を承認してから更新する。"""
     database = _legacy_database()
     manager = _manager(database)
     status = manager.status()

@@ -4,7 +4,7 @@ import { expect, test } from "./fixtures/mock-api";
 import { openSidebarNav } from "./fixtures/nav";
 
 // 運用設定 > システムテーブル（#751。RAG / NL2SQL と同じ共通のカード）。
-// 旧版の DB（業務ビューの割り当ての表が残る）は、削除される内容を確認ダイアログで承認してから更新する。
+// 旧版の DB（検索・回答プロファイルの割り当ての表が残る）は、削除される内容を確認ダイアログで承認してから更新する。
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 800 },

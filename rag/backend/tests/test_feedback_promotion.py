@@ -17,7 +17,7 @@ client = AsgiTestClient(app)
 
 BASE_REQUEST: dict[str, Any] = {
     "trace_id": "trace-1",
-    "business_view_id": "bv-1",
+    "search_answer_profile_id": "bv-1",
     "target_type": "answer",
     "source_surface": "search",
 }
@@ -91,7 +91,7 @@ def _detail(**overrides: Any) -> dict[str, Any]:
     return {
         "feedback_id": "feedback-1",
         "trace_id": "trace-1",
-        "business_view_id": "bv-1",
+        "search_answer_profile_id": "bv-1",
         "target_type": "answer",
         "source_surface": "search",
         "document_id": None,
@@ -126,7 +126,7 @@ def test_promote_feedback_registers_corrected_answer_as_faq(
 
     assert first.status_code == 200, first.text
     assert first.json()["data"] == {
-        "business_view_id": "bv-1",
+        "search_answer_profile_id": "bv-1",
         "question": "経費の承認者は？",
         "inserted_count": 1,
         "deleted_count": 0,
@@ -253,7 +253,7 @@ class FakePromotionClient:
         self.saved: list[dict[str, object]] = []
         self.saved_details: list[dict[str, object] | None] = []
 
-    async def get_business_view(self, business_view_id: str) -> object | None:
+    async def get_search_answer_profile(self, search_answer_profile_id: str) -> object | None:
         return object()
 
     async def save_feedback(
@@ -269,15 +269,15 @@ class FakePromotionClient:
     async def get_answer_record(self, trace_id: str) -> dict[str, Any] | None:
         return self.answer_record
 
-    async def get_business_view_knowledge(
-        self, business_view_id: str, kind: str
+    async def get_search_answer_profile_knowledge(
+        self, search_answer_profile_id: str, kind: str
     ) -> dict[str, object] | None:
-        return self.knowledge.get(business_view_id)
+        return self.knowledge.get(search_answer_profile_id)
 
-    async def save_business_view_knowledge(
-        self, business_view_id: str, kind: str, payload: dict[str, object]
+    async def save_search_answer_profile_knowledge(
+        self, search_answer_profile_id: str, kind: str, payload: dict[str, object]
     ) -> None:
-        self.knowledge[business_view_id] = payload
+        self.knowledge[search_answer_profile_id] = payload
 
 
 @pytest.mark.usefixtures("oracle_db")

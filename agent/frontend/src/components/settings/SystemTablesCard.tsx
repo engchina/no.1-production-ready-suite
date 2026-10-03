@@ -49,7 +49,7 @@ export function SystemTablesCard() {
           dismissOnOverlay: false,
         })
       }
-      // データを消す未適用の migration（#619。旧版の業務ビューの割り当ての表の削除など）は、
+      // データを消す未適用の migration（#619。旧版の検索・回答プロファイルの割り当ての表の削除など）は、
       // 削除される内容を示す確認ダイアログで承認させてから作成・更新する。
       confirmDestructiveMigrations={(request) => confirm({ ...request, tone: "danger", dismissOnOverlay: false })}
     />

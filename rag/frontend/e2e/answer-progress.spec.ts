@@ -5,7 +5,7 @@ import {
   expectNoPageOverflow,
   mockDatabaseReady,
   mockLocalAuth,
-  selectBusinessView,
+  selectSearchAnswerProfile,
 } from "./_helpers";
 
 /**
@@ -30,7 +30,7 @@ const TIMEOUT_MESSAGE =
   "回答の生成が上限の 5 分以内に終わりませんでした（時間切れになった工程: 文書検索）。" +
   "時間をおいて、もう一度送信してください。";
 
-const businessView = {
+const searchAnswerProfile = {
   id: "bv-1",
   name: "経理ビュー",
   description: null,
@@ -181,10 +181,10 @@ async function streamRequests(page: Page, key: "search" | "chat") {
 async function mockSearchPage(page: Page, scenarios: TimedChunk[][]) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
-  await page.route("**/api/business-views**", (route) =>
+  await page.route("**/api/search-answer-profiles**", (route) =>
     route.fulfill({
       json: {
-        data: { items: [businessView], total: 1, limit: 50, offset: 0, has_next: false },
+        data: { items: [searchAnswerProfile], total: 1, limit: 50, offset: 0, has_next: false },
         error_messages: [],
         warning_messages: [],
       },
@@ -192,7 +192,7 @@ async function mockSearchPage(page: Page, scenarios: TimedChunk[][]) {
   );
   await mockStreams(page, { search: scenarios, chat: [[]] });
   await page.goto("/search");
-  await selectBusinessView(page, /経理ビュー/);
+  await selectSearchAnswerProfile(page, /経理ビュー/);
 }
 
 for (const viewport of [
@@ -378,10 +378,10 @@ const okChatStream: TimedChunk[] = [
 async function mockChatPage(page: Page) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
-  await page.route("**/api/business-views**", (route) =>
+  await page.route("**/api/search-answer-profiles**", (route) =>
     route.fulfill({
       json: {
-        data: { items: [businessView], total: 1, limit: 50, offset: 0, has_next: false },
+        data: { items: [searchAnswerProfile], total: 1, limit: 50, offset: 0, has_next: false },
         error_messages: [],
         warning_messages: [],
       },
@@ -403,7 +403,7 @@ async function mockChatPage(page: Page) {
           : [];
     const detail = {
       id: "conv-1",
-      business_view_id: "bv-1",
+      search_answer_profile_id: "bv-1",
       title: sent ? userMessage.content : null,
       status: "ACTIVE",
       message_count: messages.length,
@@ -443,7 +443,7 @@ for (const viewport of [
     await mockChatPage(page);
 
     await page.goto("/chat");
-    await selectBusinessView(page, "経理ビュー");
+    await selectSearchAnswerProfile(page, "経理ビュー");
     await page.getByRole("button", { name: "新しい会話" }).click();
     await page.getByRole("textbox").fill(userMessage.content);
     await page.getByRole("button", { name: "送信" }).click();

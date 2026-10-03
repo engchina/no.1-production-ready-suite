@@ -1,6 +1,6 @@
 import type { KnowledgeBaseStatus } from "./api";
 
-/** 選択済み KB の解決に使う最小の形（一覧の要約・業務ビューの参照のどちらでもよい）。 */
+/** 選択済み KB の解決に使う最小の形（一覧の要約・検索・回答プロファイルの参照のどちらでもよい）。 */
 export interface KnowledgeBaseRefLike {
   id: string;
   name: string;
@@ -26,7 +26,7 @@ export interface KnowledgeBaseSelectionHealth {
 
 /**
  * 選択済みの KB ID を、ID で引いた結果（`found`。利用者の範囲内の最新）と、画面が既に持つ参照
- * （`known`。例: 業務ビュー詳細の tenant 内の参照 KB）から解決する（#302）。
+ * （`known`。例: 検索・回答プロファイル詳細の tenant 内の参照 KB）から解決する（#302）。
  *
  * - `found` → `known` の順に探す。
  * - どちらにもなく、ID の検索が終わっている（`lookupSettled`）か `knownMissingIds` に含まれる

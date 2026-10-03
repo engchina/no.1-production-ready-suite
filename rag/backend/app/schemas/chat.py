@@ -1,6 +1,6 @@
 """チャット(会話 / マルチモデル比較)関連スキーマ。
 
-会話は業務ビュー(Business View)配下に置く。検索・回答は既存 RAG パイプラインを
+会話は検索・回答プロファイル(Search Answer Profile)配下に置く。検索・回答は既存 RAG パイプラインを
 再利用し、ASSISTANT メッセージは生成モデル・引用・trace を保持する。
 """
 
@@ -9,8 +9,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.business_view_knowledge import ClarificationAnswer
 from app.schemas.search import RetrievedChunk
+from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 
 
 class ConversationStatus(StrEnum):
@@ -56,7 +56,7 @@ class ConversationSummary(BaseModel):
     """会話一覧用の要約。"""
 
     id: str
-    business_view_id: str
+    search_answer_profile_id: str
     title: str | None = None
     status: ConversationStatus = ConversationStatus.ACTIVE
     message_count: int = 0
@@ -73,16 +73,16 @@ class ConversationDetail(ConversationSummary):
 class ConversationCreateRequest(BaseModel):
     """会話作成リクエスト。"""
 
-    business_view_id: str = Field(..., min_length=1, max_length=128)
+    search_answer_profile_id: str = Field(..., min_length=1, max_length=128)
     title: str | None = Field(default=None, max_length=400)
 
-    @field_validator("business_view_id")
+    @field_validator("search_answer_profile_id")
     @classmethod
-    def strip_business_view_id(cls, value: str) -> str:
-        """業務ビュー ID の前後空白を除去する。"""
+    def strip_search_answer_profile_id(cls, value: str) -> str:
+        """検索・回答プロファイル ID の前後空白を除去する。"""
         cleaned = value.strip()
         if not cleaned:
-            raise ValueError("業務ビューを指定してください。")
+            raise ValueError("検索・回答プロファイルを指定してください。")
         return cleaned
 
     @field_validator("title")
@@ -120,10 +120,14 @@ class ChatMessageRequest(BaseModel):
     model_ids: list[str] = Field(default_factory=list, max_length=5)
     # 旧 standard の検索モード(``mode``)は #595 で削除した。送られても読み捨てる。
     top_k: int = Field(default=20, ge=1, le=100)
-    # 利用者が選んだ類似の承認済み FAQ の id(#684)。backend が業務ビューの FAQ から引き直し、
+    # 利用者が選んだ類似の承認済み FAQ の id(#684)。b
+    # ackend が検索・回答プロファイルの FAQ から引き直し、
+    #
     # 質問と一緒に回答の LLM へ渡す。利用者の送った文を FAQ として扱わない。
     approved_faq_id: str | None = Field(default=None, min_length=1, max_length=200)
-    # 利用者が確認の質問に答えた内容(#717)。backend が業務ビューのルールから引き直し、選んだ
+    # 利用者が確認の質問に答えた内容(#717)。backen
+    # d が検索・回答プロファイルのルールから引き直し、選んだ
+    #
     # 章節のページに絞って検索し、選んだ条件を回答の前提にする。
     clarification: ClarificationAnswer | None = None
 

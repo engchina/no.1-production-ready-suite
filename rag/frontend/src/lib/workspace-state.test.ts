@@ -54,12 +54,12 @@ describe("workspace-state", () => {
   });
 
   it("scope ごとに別の値を持ち、削除できる", () => {
-    writeWorkspace("businessViews.draft", { name: "a" }, "bv-1");
-    writeWorkspace("businessViews.draft", { name: "b" }, "new");
-    expect(readWorkspace("businessViews.draft", { name: "" }, undefined, "bv-1")).toEqual({ name: "a" });
-    removeWorkspace("businessViews.draft", "bv-1");
-    expect(readWorkspace("businessViews.draft", { name: "" }, undefined, "bv-1")).toEqual({ name: "" });
-    expect(readWorkspace("businessViews.draft", { name: "" }, undefined, "new")).toEqual({ name: "b" });
+    writeWorkspace("searchAnswerProfiles.draft", { name: "a" }, "bv-1");
+    writeWorkspace("searchAnswerProfiles.draft", { name: "b" }, "new");
+    expect(readWorkspace("searchAnswerProfiles.draft", { name: "" }, undefined, "bv-1")).toEqual({ name: "a" });
+    removeWorkspace("searchAnswerProfiles.draft", "bv-1");
+    expect(readWorkspace("searchAnswerProfiles.draft", { name: "" }, undefined, "bv-1")).toEqual({ name: "" });
+    expect(readWorkspace("searchAnswerProfiles.draft", { name: "" }, undefined, "new")).toEqual({ name: "b" });
   });
 
   it("期限切れの値は初期値に戻して消す", () => {
@@ -76,8 +76,8 @@ describe("workspace-state", () => {
     expect(readWorkspace("search.topK", "20", isOneOf(["5", "10", "20"] as const))).toBe("20");
     storage.setItem(`${WORKSPACE_NAMESPACE}search.query`, "{broken");
     expect(readWorkspace("search.query", "fallback")).toBe("fallback");
-    writeWorkspace("search.businessViewId", ["bv-1", "bv-2"]);
-    expect(readWorkspace("search.businessViewId", null, isNullableString)).toBeNull();
+    writeWorkspace("search.searchAnswerProfileId", ["bv-1", "bv-2"]);
+    expect(readWorkspace("search.searchAnswerProfileId", null, isNullableString)).toBeNull();
   });
 
   it("上限を超える値は保存せず false を返す", () => {
@@ -112,5 +112,31 @@ describe("workspace-state", () => {
     clearWorkspace();
     expect(storage.getItem(`${WORKSPACE_NAMESPACE}fileList.view`)).toBeNull();
     expect(storage.getItem("other-app")).toBe("keep");
+  });
+});
+
+
+describe("Issue 860 保存キーの移行", () => {
+  it("選択 ID・草稿・保存時刻を保持し、旧キーだけを消す", () => {
+    const record = JSON.stringify({ value: "bv-42", savedAt: Date.now() });
+    storage.setItem(`${WORKSPACE_NAMESPACE}search.businessViewId`, record);
+    const draft = { name: "業務ビュー", description: "business_view_id は自由本文" };
+    const raw = JSON.stringify({ value: draft, savedAt: Date.now() });
+    storage.setItem(`${WORKSPACE_NAMESPACE}businessViews.draft:bv-42`, raw);
+    expect(readWorkspace("search.searchAnswerProfileId", null, isNullableString)).toBe("bv-42");
+    expect(storage.getItem(`${WORKSPACE_NAMESPACE}search.searchAnswerProfileId`)).toBe(record);
+    expect(storage.getItem(`${WORKSPACE_NAMESPACE}search.businessViewId`)).toBeNull();
+    expect(readWorkspace("searchAnswerProfiles.draft", draft, undefined, "bv-42")).toEqual(draft);
+    expect(storage.getItem(`${WORKSPACE_NAMESPACE}searchAnswerProfiles.draft:bv-42`)).toBe(raw);
+  });
+  it("現在の選択を優先し、期限と利用者の境界を保持する", () => {
+    bindWorkspaceOwner("user-a");
+    writeWorkspace("chat.searchAnswerProfileId", "new");
+    storage.setItem(`${WORKSPACE_NAMESPACE}chat.businessViewId`, JSON.stringify({ value: "old", savedAt: Date.now() }));
+    expect(readWorkspace("chat.searchAnswerProfileId", null, isNullableString)).toBe("new");
+    storage.setItem(`${WORKSPACE_NAMESPACE}search.businessViewId`, JSON.stringify({ value: "expired", savedAt: Date.now() - WORKSPACE_TTL_MS - 1 }));
+    expect(readWorkspace("search.searchAnswerProfileId", null, isNullableString)).toBeNull();
+    bindWorkspaceOwner("user-b");
+    expect(readWorkspace("chat.searchAnswerProfileId", null, isNullableString)).toBeNull();
   });
 });

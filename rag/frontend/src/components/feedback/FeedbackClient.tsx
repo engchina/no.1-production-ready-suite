@@ -53,7 +53,7 @@ import { formatDateTime, formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import {
-  useBusinessViews,
+  useSearchAnswerProfiles,
   useFeedbackDashboard,
   useFeedbackDetail,
   useFeedbackEvaluationCase,
@@ -86,7 +86,7 @@ export function FeedbackClient() {
   const revealDetailRef = useRef(false);
   const params = useMemo(() => feedbackListParams(urlState), [urlState]);
   const query = useFeedbackDashboard(params);
-  const businessViewsQuery = useBusinessViews({ status: "ACTIVE", limit: 100, offset: 0 });
+  const searchAnswerProfilesQuery = useSearchAnswerProfiles({ status: "ACTIVE", limit: 100, offset: 0 });
   // 見える範囲は backend が決める（SYSTEM_ADMIN は全員の分、ほかのロールは自分が送った分だけ。#408）。
   // 画面はその範囲を案内するだけ。
   const seesAllUsers = useAuth().user?.is_system_admin === true;
@@ -153,9 +153,9 @@ export function FeedbackClient() {
     window.requestAnimationFrame(() => focusRowButton(id));
   }
 
-  const businessViewOptions: SelectFieldOption[] = [
-    { value: "", label: t("feedback.filters.allBusinessViews") },
-    ...(businessViewsQuery.data?.items ?? []).map((view) => ({ value: view.id, label: view.name })),
+  const searchAnswerProfileOptions: SelectFieldOption[] = [
+    { value: "", label: t("feedback.filters.allSearchAnswerProfiles") },
+    ...(searchAnswerProfilesQuery.data?.items ?? []).map((view) => ({ value: view.id, label: view.name })),
   ];
   const targetOptions: SelectFieldOption[] = [
     { value: "", label: t("feedback.filters.allTargets") },
@@ -214,11 +214,11 @@ export function FeedbackClient() {
             {/* 1 行目は選択欄 5 つ、2 行目は検索欄（#405）。DOM の順と見た目の順を同じにし、Tab の順をそろえる。 */}
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
               <SelectField
-                id="feedback-business-view"
-                label={t("feedback.filters.businessView")}
-                value={urlState.businessViewId}
-                options={businessViewOptions}
-                onValueChange={(value) => setParam("business_view", value)}
+                id="feedback-search-answer-profile"
+                label={t("feedback.filters.searchAnswerProfile")}
+                value={urlState.searchAnswerProfileId}
+                options={searchAnswerProfileOptions}
+                onValueChange={(value) => setParam("search_answer_profile", value)}
               />
               <SelectField
                 id="feedback-target"
@@ -371,13 +371,13 @@ function questionSummary(item: FeedbackItem) {
   return item.question_preview ?? item.conversation_title ?? item.comment_preview ?? t("feedback.list.legacyPreview");
 }
 
-/** 問題の概要の補足（評価時間・業務ビュー・コメントの有無）。 */
+/** 問題の概要の補足（評価時間・検索・回答プロファイル・コメントの有無）。 */
 function QuestionMeta({ item }: { item: FeedbackItem }) {
   return (
     <>
       <span className="tabular-nums">{formatDateTime(item.created_at)}</span>
       {" · "}
-      <span>{item.business_view_name ?? t("feedback.list.unknownBusinessView")}</span>
+      <span>{item.search_answer_profile_name ?? t("feedback.list.unknownSearchAnswerProfile")}</span>
       {item.has_comment ? (
         <span className="ml-2 inline-flex items-center gap-1">
           <MessageSquareText size={14} aria-hidden />
@@ -563,7 +563,7 @@ function FeedbackCards({
             </div>
             <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
               <Metadata label={t("feedback.filters.reason")} value={item.reason ? t(FEEDBACK_REASON_LABEL_KEYS[item.reason]) : "—"} />
-              <Metadata label={t("feedback.filters.businessView")} value={item.business_view_name ?? t("feedback.list.unknownBusinessView")} />
+              <Metadata label={t("feedback.filters.searchAnswerProfile")} value={item.search_answer_profile_name ?? t("feedback.list.unknownSearchAnswerProfile")} />
               <Metadata label={t("feedback.table.targetSource")} value={targetSource(item)} />
               <Metadata label={t("feedback.list.model")} value={item.model ?? "—"} />
             </dl>
@@ -829,11 +829,11 @@ function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
 }
 
 function ExecutionTab({ detail }: { detail: FeedbackDetail }) {
-  const chatLink = detail.conversation_id && detail.business_view_id
-    ? `${APP_ROUTES.chat}?business_view_id=${encodeURIComponent(detail.business_view_id)}&conversation_id=${encodeURIComponent(detail.conversation_id)}${detail.message_id ? `#message-${encodeURIComponent(detail.message_id)}` : ""}`
+  const chatLink = detail.conversation_id && detail.search_answer_profile_id
+    ? `${APP_ROUTES.chat}?search_answer_profile_id=${encodeURIComponent(detail.search_answer_profile_id)}&conversation_id=${encodeURIComponent(detail.conversation_id)}${detail.message_id ? `#message-${encodeURIComponent(detail.message_id)}` : ""}`
     : null;
   const rows = [
-    [t("feedback.filters.businessView"), detail.business_view_name ?? "—"],
+    [t("feedback.filters.searchAnswerProfile"), detail.search_answer_profile_name ?? "—"],
     [t("feedback.list.model"), detail.model ?? "—"],
     [t("feedback.list.trace"), detail.trace_id],
     [t("feedback.detail.outcome"), detail.execution.outcome ?? "—"],
@@ -860,7 +860,7 @@ function DetailSummary({ detail }: { detail: FeedbackDetail }) {
     <div className="flex flex-wrap items-center gap-2 rounded-lg bg-surface-sunken p-3">
       <RatingBadge rating={detail.rating} />
       <span className="text-xs text-fg-muted">{formatDateTime(detail.created_at)}</span>
-      <span className="text-xs text-fg-muted">{detail.business_view_name ?? t("feedback.list.unknownBusinessView")}</span>
+      <span className="text-xs text-fg-muted">{detail.search_answer_profile_name ?? t("feedback.list.unknownSearchAnswerProfile")}</span>
     </div>
   );
 }

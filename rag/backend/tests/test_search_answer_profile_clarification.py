@@ -1,19 +1,19 @@
-"""業務ビューのルールの確認の質問(チャットの確認。#717)。"""
+"""検索・回答プロファイルのルールの確認の質問(チャットの確認。#717)。"""
 
 import json
 from typing import Any
 
 import pytest
 
-from app.api.routes import business_view_knowledge as knowledge_route
+from app.api.routes import search_answer_profile_knowledge as knowledge_route
 from app.main import app
-from app.rag.business_view_knowledge import resolve_clarification
-from app.schemas.business_view_knowledge import ClarificationAnswer
+from app.rag.search_answer_profile_knowledge import resolve_clarification
+from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 from tests.support import AsgiTestClient
-from tests.test_business_view_domain_keywords import FakeKnowledgeOracle
+from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
 
 client = AsgiTestClient(app)
-BASE = "/api/business-views/bv-1"
+BASE = "/api/search-answer-profiles/bv-1"
 
 CLARIFICATION: dict[str, Any] = {
     "question": "どの規程についてのご質問ですか？",

@@ -67,7 +67,7 @@ export interface RowTitleButtonProps
   /** 切り詰めたときの Tooltip の全文。`title` が文字列なら省略できる。 */
   fullTitle?: string;
   /**
-   * 開く先の URL（#583。例: `/business-views?id=bv-1`）。渡すと `<a href>` のリンクになり、
+   * 開く先の URL（#583。例: `/search-answer-profiles?id=bv-1`）。渡すと `<a href>` のリンクになり、
    * Ctrl / ⌘ / Shift + クリック・中クリック・コンテキストメニューで新しいタブ・ウィンドウに開ける。
    * 修飾キーの無いクリック（Enter を含む）は既定の遷移を止めて `onClick` を呼ぶ（画面内で開く。
    * 作業中の状態を保つため、ページを読み直さない）。`onClick` が無ければ通常のリンクとして移る。

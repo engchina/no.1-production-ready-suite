@@ -1,6 +1,6 @@
 """質問履歴の記録と、よく聞かれる質問の候補(rag_poc の rag_engine.knowledge.query_history)。
 
-rag_poc は JSONL へ追記したが、rag では業務ビュー単位で `rag_query_history` に保存する。
+rag_poc は JSONL へ追記したが、rag では検索・回答プロファイル単位で `rag_query_history` に保存する。
 候補の規則(保持期間・最小回数・類似度・分類条件・除外リスト)は rag_poc の関数をそのまま使う。
 記録するかどうかは global の設定で、既定は無効(質問の本文を保存するため)。
 """
@@ -42,7 +42,7 @@ class QueryHistoryStore(Protocol):
     async def purge_query_history(self, retention_days: int) -> int: ...
 
     async def list_query_history(
-        self, business_view_id: str, *, retention_days: int, limit: int = 5000
+        self, search_answer_profile_id: str, *, retention_days: int, limit: int = 5000
     ) -> list[dict[str, object]]: ...
 
 
@@ -54,13 +54,13 @@ async def record_query_history(
     store: QueryHistoryStore,
     settings: Settings,
     *,
-    business_view_id: str | None,
+    search_answer_profile_id: str | None,
     question: str,
     surface: str,
     filters: Mapping[str, str],
 ) -> None:
-    """回答に成功した質問を記録する。無効・業務ビューなし・除外語は記録しない。失敗しても例外にしない。"""
-    if not settings.rag_query_history_enabled or not business_view_id:
+    """回答に成功した質問を記録する。無効・検索・回答プロファイルなし・除外語は記録しない。失敗しても例外にしない。"""
+    if not settings.rag_query_history_enabled or not search_answer_profile_id:
         return
     cleaned = clean_question(question)
     if not cleaned or matches_blocklist(cleaned, settings.rag_query_history_blocklist):
@@ -68,7 +68,7 @@ async def record_query_history(
     try:
         await store.append_query_history(
             {
-                "business_view_id": business_view_id,
+                "search_answer_profile_id": search_answer_profile_id,
                 "surface": surface,
                 "question": cleaned,
                 "normalized_question": normalize_question(cleaned),
@@ -85,7 +85,7 @@ async def query_history_suggestions(
     store: QueryHistoryStore,
     settings: Settings,
     *,
-    business_view_id: str,
+    search_answer_profile_id: str,
     question: str,
     classification: Mapping[str, str],
 ) -> list[QueryHistorySuggestion]:
@@ -93,7 +93,7 @@ async def query_history_suggestions(
     if not settings.rag_query_history_enabled:
         return []
     rows = await store.list_query_history(
-        business_view_id, retention_days=settings.rag_query_history_retention_days
+        search_answer_profile_id, retention_days=settings.rag_query_history_retention_days
     )
     records = [_record(row) for row in rows]
     return suggest_query_history_questions(

@@ -37,7 +37,7 @@ class ProductionAuth:
         self,
         permissions: Iterable[str] = (),
         *,
-        business_view_ids: Iterable[str] = (),
+        search_answer_profile_ids: Iterable[str] = (),
         knowledge_base_ids: Iterable[str] = (),
         role_code: str | None = None,
     ) -> RoleRecord:
@@ -51,7 +51,7 @@ class ProductionAuth:
             archived=False,
             version=1,
             permissions=set(permissions),
-            business_view_ids=set(business_view_ids),
+            search_answer_profile_ids=set(search_answer_profile_ids),
             knowledge_base_ids=set(knowledge_base_ids),
         )
         return self.store.create_role(role)
@@ -87,12 +87,12 @@ class ProductionAuth:
         login_user_id: str,
         permissions: Iterable[str],
         *,
-        business_view_ids: Iterable[str] = (),
+        search_answer_profile_ids: Iterable[str] = (),
         knowledge_base_ids: Iterable[str] = (),
     ) -> UserRecord:
         role = self.create_role(
             permissions,
-            business_view_ids=business_view_ids,
+            search_answer_profile_ids=search_answer_profile_ids,
             knowledge_base_ids=knowledge_base_ids,
         )
         return self.create_user(login_user_id, [role])

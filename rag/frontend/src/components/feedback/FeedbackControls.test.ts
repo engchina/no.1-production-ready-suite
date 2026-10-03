@@ -6,7 +6,7 @@ describe("feedback submission payload", () => {
   it("keeps the selected low-rating reason and optional comment", () => {
     const payload = buildFeedbackPayload({
       trace_id: "trace-1",
-      business_view_id: "bv-1",
+      search_answer_profile_id: "bv-1",
       target_type: "answer",
       source_surface: "search",
       rating: "not_helpful",
@@ -24,7 +24,7 @@ describe("feedback submission payload", () => {
   it("removes low-rating fields from a helpful vote", () => {
     const payload = buildFeedbackPayload({
       trace_id: "trace-1",
-      business_view_id: "bv-1",
+      search_answer_profile_id: "bv-1",
       target_type: "answer",
       source_surface: "search",
       rating: "helpful",

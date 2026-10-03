@@ -16,7 +16,7 @@ client = AsgiTestClient(app)
 
 RECORD: dict[str, Any] = {
     "trace_id": "trace-1",
-    "business_view_id": "bv-1",
+    "search_answer_profile_id": "bv-1",
     "surface": "search",
     "answer_engine": "grounded",
     "question": "受注の登録方法は？",
@@ -79,13 +79,15 @@ def fake_oracle(monkeypatch: pytest.MonkeyPatch) -> FakeAnswerOracle:
 
 
 def test_list_and_get_saved_answers(fake_oracle: FakeAnswerOracle) -> None:
-    listed = client.get("/api/search/answers", params={"business_view_id": "bv-1", "limit": 5})
+    listed = client.get(
+        "/api/search/answers", params={"search_answer_profile_id": "bv-1", "limit": 5}
+    )
 
     assert listed.status_code == 200
     page = listed.json()["data"]
     assert page["items"][0]["confidence"] == "high"
     assert fake_oracle.list_calls == [
-        {"business_view_id": "bv-1", "limit": 5, "offset": 0, "trace_ids": None}
+        {"search_answer_profile_id": "bv-1", "limit": 5, "offset": 0, "trace_ids": None}
     ]
 
     detail = client.get("/api/search/answers/trace-1")
@@ -101,7 +103,8 @@ def test_list_saved_answers_returns_total_and_paging(
 ) -> None:
     """回答履歴は総件数とページング（limit / offset / has_next）を返す（#304）。"""
     listed = client.get(
-        "/api/search/answers", params={"business_view_id": "bv-1", "limit": 10, "offset": 10}
+        "/api/search/answers",
+        params={"search_answer_profile_id": "bv-1", "limit": 10, "offset": 10},
     )
 
     assert listed.status_code == 200
@@ -111,9 +114,9 @@ def test_list_saved_answers_returns_total_and_paging(
     assert page["offset"] == 10
     assert page["has_next"] is True
     assert len(page["items"]) == 1
-    assert fake_oracle.count_calls == [{"business_view_id": "bv-1", "trace_ids": None}]
+    assert fake_oracle.count_calls == [{"search_answer_profile_id": "bv-1", "trace_ids": None}]
     # 既定は 1 ページ 10 件（共通の Pagination の既定と同じ）。
-    client.get("/api/search/answers", params={"business_view_id": "bv-1"})
+    client.get("/api/search/answers", params={"search_answer_profile_id": "bv-1"})
     assert fake_oracle.list_calls[-1]["limit"] == 10
 
 
@@ -122,7 +125,7 @@ def test_list_saved_answers_filters_trace_ids(fake_oracle: FakeAnswerOracle) -> 
     listed = client.get(
         "/api/search/answers",
         params=[
-            ("business_view_id", "bv-1"),
+            ("search_answer_profile_id", "bv-1"),
             ("trace_id", " trace-1 "),
             ("trace_id", "trace-2"),
             ("trace_id", "trace-1"),

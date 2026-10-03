@@ -18,7 +18,7 @@ def test_variant_backfill_markdown_describes_v3_artifact_tables() -> None:
     assert "rag_kb_chunk_set_bindings" not in markdown
     assert "is_serving" in markdown
     assert "needs_reingest" in markdown
-    assert "Business View" in markdown
+    assert "Search Answer Profile" in markdown
     assert "Select AI" not in markdown
     assert "NL2SQL" not in markdown
 

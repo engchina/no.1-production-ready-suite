@@ -69,11 +69,11 @@ function clarificationErrors(draft: RuleClarification) {
  * 内容の保存とは別に保存する。
  */
 export function RuleClarificationEditor({
-  businessViewId,
+  searchAnswerProfileId,
   ruleId,
   stored,
 }: {
-  businessViewId: string;
+  searchAnswerProfileId: string;
   ruleId: string;
   stored: RuleClarification | null;
 }) {
@@ -108,9 +108,9 @@ export function RuleClarificationEditor({
     setPendingOperation(operation);
     setError("");
     try {
-      await api.saveRuleClarification(businessViewId, ruleId, value);
+      await api.saveRuleClarification(searchAnswerProfileId, ruleId, value);
       await queryClient.invalidateQueries({
-        queryKey: ["business-views", businessViewId, "runtime-knowledge"],
+        queryKey: ["search-answer-profiles", searchAnswerProfileId, "runtime-knowledge"],
       });
       setDirty(false);
       setSubmitted(false);

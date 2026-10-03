@@ -11,7 +11,7 @@ export const FEEDBACK_PERIODS = [7, 30, 90, null] as const;
 
 export interface FeedbackUrlState {
   periodDays: number | null;
-  businessViewId: string;
+  searchAnswerProfileId: string;
   targetType: FeedbackTargetType | "";
   rating: CitationFeedbackRating | "";
   reason: CitationFeedbackReason | "";
@@ -63,7 +63,7 @@ export function parseFeedbackUrl(params: URLSearchParams): FeedbackUrlState {
   const reason = params.get("reason") ?? "";
   return {
     periodDays,
-    businessViewId: params.get("business_view") ?? "",
+    searchAnswerProfileId: params.get("search_answer_profile") ?? "",
     targetType: TARGETS.has(target as FeedbackTargetType) ? (target as FeedbackTargetType) : "",
     rating: RATINGS.has(rating as CitationFeedbackRating)
       ? (rating as CitationFeedbackRating)
@@ -81,7 +81,7 @@ export function parseFeedbackUrl(params: URLSearchParams): FeedbackUrlState {
 
 export function feedbackListParams(state: FeedbackUrlState): FeedbackListParams {
   return {
-    business_view_id: state.businessViewId || undefined,
+    search_answer_profile_id: state.searchAnswerProfileId || undefined,
     target_type: state.targetType || undefined,
     rating: state.rating || undefined,
     reason: state.reason || undefined,

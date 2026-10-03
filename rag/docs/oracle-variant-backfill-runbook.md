@@ -67,13 +67,13 @@ sqlcl @../artifacts/oracle-schema-migration.sql
 
 ## 4. 検索配信を検証する
 
-Business View 検索が KB の serving chunk_set だけを使っていることを staging で確認します。
+Search Answer Profile 検索が KB の serving chunk_set だけを使っていることを staging で確認します。
 
 ```bash
-uv run pytest tests/test_search_api.py tests/test_knowledge_bases_api.py tests/test_business_views_api.py -q
+uv run pytest tests/test_search_api.py tests/test_knowledge_bases_api.py tests/test_search_answer_profiles_api.py -q
 ```
 
-staging では代表的な Business View で検索し、diagnostics を artifact として保存します。設定解決順は `request 明示 > Business View > global defaults` です。KB に残る legacy query 設定は検索に使いません。
+staging では代表的な Search Answer Profile で検索し、diagnostics を artifact として保存します。設定解決順は `request 明示 > Search Answer Profile > global defaults` です。KB に残る legacy query 設定は検索に使いません。
 
 次の check が 0 であることを確認します。
 
@@ -102,7 +102,7 @@ GraphRAG の builder が未接続の環境では、`planned_only` が残るこ�
 
 ## 6. rollback / 停止条件
 
-次のいずれかに該当する場合は Business View の本番検索配信へ進みません。
+次のいずれかに該当する場合は Search Answer Profile の本番検索配信へ進みません。
 
 - required table / column check が 0 でない。
 - indexed chunk に `chunk_set_id` が無い。

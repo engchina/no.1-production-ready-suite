@@ -322,14 +322,14 @@ describe("SearchableSelectField", () => {
   });
 
   it("leadingIcon はボタンの先頭に読み上げない 16px のアイコンを出し、ボタンの名前を変えない（#635）", () => {
-    const button = mountSingle({ leadingIcon: Search, placeholder: "業務ビューを選択…" });
+    const button = mountSingle({ leadingIcon: Search, placeholder: "検索・回答プロファイルを選択…" });
     const icon = button.querySelector("svg");
     expect(icon?.getAttribute("aria-hidden")).toBe("true");
     expect(icon?.getAttribute("width")).toBe("16");
     // 先頭のアイコンは値の前（最後の svg は開閉の印）。
     expect(button.querySelectorAll("svg")).toHaveLength(2);
     const [, valueId] = button.getAttribute("aria-labelledby")!.split(" ");
-    expect(document.getElementById(valueId)?.textContent).toBe("業務ビューを選択…");
+    expect(document.getElementById(valueId)?.textContent).toBe("検索・回答プロファイルを選択…");
   });
 
   it("選択中が候補（検索結果のページ）に無いときは selectedOption の名前を出す", () => {

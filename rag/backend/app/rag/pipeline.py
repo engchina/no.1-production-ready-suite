@@ -262,7 +262,7 @@ class RagPipeline:
         # 質問に書かれた条件を抽出項目の条件として読み取る(self-query。有効なときだけ。#652)。
         # チャットは会話履歴で書き換えた質問から読む。
         auto_field_conditions: list[ExtractionFieldCondition] = []
-        if self._settings.rag_auto_field_filter_enabled and request.business_view_id:
+        if self._settings.rag_auto_field_filter_enabled and request.search_answer_profile_id:
             auto_field_conditions = await _observe_stage(
                 trace_id,
                 "field_filter",
@@ -435,7 +435,7 @@ class RagPipeline:
         await record_query_history(
             self._oracle,
             self._settings,
-            business_view_id=request.business_view_id,
+            search_answer_profile_id=request.search_answer_profile_id,
             question=question,
             surface="chat" if chat else "search",
             filters=request.filters,
@@ -455,12 +455,12 @@ class RagPipeline:
         evaluation_input: Mapping[str, object] | None = None,
     ) -> None:
         """回答を保存する(rag_poc の answer JSON 保存に相当)。失敗しても回答は返す。"""
-        business_view_id = request.business_view_id
+        search_answer_profile_id = request.search_answer_profile_id
         try:
             await self._oracle.save_answer_record(
                 {
                     "trace_id": trace_id,
-                    "business_view_id": business_view_id,
+                    "search_answer_profile_id": search_answer_profile_id,
                     "surface": surface,
                     "answer_engine": ANSWER_ENGINE,
                     "question": question,
@@ -484,13 +484,15 @@ class RagPipeline:
     async def _read_field_conditions(
         self, request: SearchRequest
     ) -> list[ExtractionFieldCondition]:
-        """業務ビューの KB の抽出項目の定義で、質問から条件を読み取る(#652)。
+        """検索・回答プロファイルの KB の抽出項目の定義で、質問から条件を読み取る(#652)。
 
         定義は検索の絞り込みの項目と同じ(利用者が使える有効な KB の定義の和集合。KB に無ければ
         全体の既定)。定義が無い・読めないときは LLM を呼ばずに空(条件なしで検索を続ける)。
         """
         try:
-            view = await self._oracle.get_business_view(request.business_view_id or "")
+            view = await self._oracle.get_search_answer_profile(
+                request.search_answer_profile_id or ""
+            )
             field_sets = (
                 await self._oracle.list_knowledge_base_extraction_field_sets(
                     view.config.normalized_knowledge_base_ids()

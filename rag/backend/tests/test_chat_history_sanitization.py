@@ -4,9 +4,9 @@ from datetime import UTC, datetime
 
 from app.clients.oracle import StoredConversation, StoredMessage
 from app.config import Settings
-from app.rag.business_view_config import BusinessViewConfig
 from app.rag.chat_history_sanitization import sanitize_chat_history
 from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
+from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 
 
 class FakeMigrationOracle:
@@ -15,7 +15,7 @@ class FakeMigrationOracle:
         self.conversations = [
             StoredConversation(
                 id="c1",
-                business_view_id="bv1",
+                search_answer_profile_id="bv1",
                 created_at=now,
                 updated_at=now,
             )
@@ -56,11 +56,13 @@ class FakeMigrationOracle:
     ) -> list[StoredMessage]:
         return [message for message in self.messages if message.conversation_id == conversation_id]
 
-    async def get_business_view_config_for_guardrail_migration(
-        self, business_view_id: str
-    ) -> BusinessViewConfig | None:
-        assert business_view_id == "bv1"
-        return BusinessViewConfig(query=KnowledgeBaseQueryConfig(guardrail_policy="regulated"))
+    async def get_search_answer_profile_config_for_guardrail_migration(
+        self, search_answer_profile_id: str
+    ) -> SearchAnswerProfileConfig | None:
+        assert search_answer_profile_id == "bv1"
+        return SearchAnswerProfileConfig(
+            query=KnowledgeBaseQueryConfig(guardrail_policy="regulated")
+        )
 
     async def update_message_for_guardrail_migration(self, **kwargs: object) -> None:
         self.updates.append(dict(kwargs))

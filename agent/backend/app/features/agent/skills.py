@@ -11,7 +11,9 @@ from datetime import UTC, datetime
 from threading import Lock
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from app.features.agent.profile_name_migration import migrate_tool_name
 
 JsonObject = dict[str, Any]
 
@@ -29,6 +31,19 @@ class SkillMcpRequirement(BaseModel):
 
     server_id: str
     tool_names: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_saved_names(cls, value: object) -> object:
+        if isinstance(value, dict) and isinstance(value.get("tool_names"), list):
+            return {
+                **value,
+                "tool_names": [
+                    migrate_tool_name(item) if isinstance(item, str) else item
+                    for item in value["tool_names"]
+                ],
+            }
+        return value
 
 
 class AgentSkillDefinition(BaseModel):
@@ -128,12 +143,13 @@ skill_registry.register(
         description="業務 RAG（MCP 接続 rag）を使って根拠付き情報を検索する。",
         instructions=(
             "ユーザーの目的を rag_search の query として扱い、引用と根拠を返す。"
-            "対象の業務ビューが分からなければ rag_list_business_views で確かめる。"
+            "対象の検索・回答プロファイルが分からなければ "
+            "rag_list_search_answer_profiles で確かめる。"
         ),
         mcp_requirements=[
             SkillMcpRequirement(
                 server_id="rag",
-                tool_names=["rag_search", "rag_list_business_views"],
+                tool_names=["rag_search", "rag_list_search_answer_profiles"],
             )
         ],
         tags=["rag", "research", "business-data"],

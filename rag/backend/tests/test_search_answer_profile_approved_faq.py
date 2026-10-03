@@ -1,17 +1,17 @@
-"""業務ビュー単位の Approved FAQ(類似問)API。"""
+"""検索・回答プロファイル単位の Approved FAQ(類似問)API。"""
 
 import io
 
 import pytest
 from openpyxl import Workbook  # type: ignore[import-untyped]
 
-from app.api.routes import business_view_knowledge as knowledge_route
+from app.api.routes import search_answer_profile_knowledge as knowledge_route
 from app.main import app
 from tests.support import AsgiTestClient
-from tests.test_business_view_domain_keywords import FakeKnowledgeOracle
+from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
 
 client = AsgiTestClient(app)
-BASE = "/api/business-views/bv-1/approved-faq"
+BASE = "/api/search-answer-profiles/bv-1/approved-faq"
 
 
 @pytest.fixture
@@ -107,7 +107,7 @@ def test_add_rejects_blank_fields_like_the_screen(
 def test_suggestion_toggle_is_kept_across_faq_edits_and_stops_suggestions(
     fake_oracle: FakeKnowledgeOracle,
 ) -> None:
-    """類似問の提示は業務ビューごとにオン / オフでき、未設定はオン(#684)。"""
+    """類似問の提示は検索・回答プロファイルごとにオン / オフでき、未設定はオン(#684)。"""
     assert client.get(BASE).json()["data"]["enabled"] is True
     client.post(BASE, json={"question": "受注を取り消すには？", "answer": "取消を押します。"})
 
