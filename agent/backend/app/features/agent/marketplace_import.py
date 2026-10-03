@@ -266,18 +266,43 @@ def _public_url(value: Any) -> str | None:
 
 def _catalog_metadata(raw: dict[str, Any]) -> dict[str, Any]:
     """変換に必要な構造だけ保持し、資格情報・command 引数を応答へコピーしない。"""
-    result = {key: raw[key] for key in ("strict", "skills") if key in raw}
+    result: dict[str, Any] = {}
+    if "strict" in raw:
+        if isinstance(raw["strict"], bool):
+            result["strict"] = raw["strict"]
+        else:
+            result["_invalid_component"] = "strict は boolean で指定してください。"
+    if "skills" in raw:
+        try:
+            paths = _paths(raw["skills"])
+            clean_paths = [_public_url(path) for path in paths]
+            if any(path is None for path in clean_paths):
+                raise ValueError("skills に資格情報や query を含む path は指定できません。")
+            result["skills"] = clean_paths if isinstance(raw["skills"], list) else clean_paths[0]
+        except ValueError as exc:
+            result["_invalid_component"] = str(exc)
     for key in COMPONENTS_NOT_RUN:
         if raw.get(key):
             result[key] = True
     mcp = raw.get("mcpServers")
     if isinstance(mcp, str):
-        result["mcpServers"] = mcp
+        clean_mcp = _public_url(mcp)
+        if clean_mcp is None:
+            result["_invalid_component"] = "MCP の定義 path に資格情報や query は指定できません。"
+        else:
+            result["mcpServers"] = clean_mcp
     elif isinstance(mcp, dict):
+        if any(
+            isinstance(config, dict) and not isinstance(config.get("type", "http"), str)
+            for config in mcp.values()
+        ):
+            result["_invalid_component"] = "MCP の type は文字列で指定してください。"
         result["mcpServers"] = {
             name: {
                 "url": _public_url(config.get("url")),
-                "type": config.get("type") or "http",
+                "type": config.get("type", "http")
+                if isinstance(config.get("type", "http"), str)
+                else "unsupported",
                 "command": bool(config.get("command")),
                 "headers": bool(config.get("headers")),
             }
@@ -285,6 +310,8 @@ def _catalog_metadata(raw: dict[str, Any]) -> dict[str, Any]:
             else None
             for name, config in mcp.items()
         }
+    elif mcp is not None:
+        result["_invalid_component"] = "MCP は定義 path または object で指定してください。"
     return result
 
 
@@ -373,13 +400,28 @@ def fetch_catalog(url: str, marketplace_id: str, timeout: float) -> MarketplaceL
                 entry_repository(entry)
             except ValueError as exc:
                 entry.unavailable_reason = str(exc)
+            invalid_component = entry.upstream.pop("_invalid_component", None)
+            if invalid_component is not None:
+                entry.unavailable_reason = str(invalid_component)
             if isinstance(entry.source, dict):
                 # 未対応 source の種類は保ち、資格情報・command 引数は一覧へ出さない。
-                entry.source = {
-                    key: _public_url(value) if key == "url" else value
-                    for key, value in entry.source.items()
-                    if key in ("source", "url", "repo", "path", "package", "ref", "sha")
-                }
+                safe_source: dict[str, Any] = {}
+                for key, value in entry.source.items():
+                    if key not in ("source", "url", "repo", "path", "package", "ref", "sha"):
+                        continue
+                    clean = _public_url(value) if isinstance(value, str) else None
+                    if value is not None and clean is None:
+                        entry.unavailable_reason = entry.unavailable_reason or (
+                            "配布先に資格情報・query または不正な値が含まれています。"
+                            "公開配布物の定義を確認してください。"
+                        )
+                    safe_source[key] = clean
+                entry.source = safe_source
+            elif isinstance(entry.source, str) and _public_url(entry.source) is None:
+                entry.source = None
+                entry.unavailable_reason = (
+                    "配布先の形式が不正です。公開配布物の定義を確認してください。"
+                )
             if pid in used:
                 for previous in plugins:
                     if previous.id == pid and isinstance(previous, MarketplaceEntry):

@@ -780,3 +780,50 @@ def test_missing_explicit_mcp_file_does_not_silently_import_skills(
     with pytest.raises(ValueError, match="明示的な MCP"):
         registry.preview("test-import", entry.id)
     assert not any(s.source == f"plugin:{entry.id}" for s in skill_registry.list())
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"source": "github", "repo": "https://user:private-token@github.com/sample/repo"},
+        "https://user:private-token@github.com/sample/repo",
+        {"source": "github", "repo": "sample/repo", "ref": "main?token=private-token"},
+    ],
+)
+def test_source_credentials_in_repo_path_or_ref_are_not_saved(
+    distribution: dict[str, Any], source: Any
+) -> None:
+    distribution["files"][".claude-plugin/marketplace.json"] = json.dumps(
+        {"plugins": [{"name": "private-source", "source": source}]}
+    )
+    listing = importer.fetch_catalog(CATALOG_URL, "private-source", 10)
+    entry = listing.plugins[0]
+    assert isinstance(entry, MarketplaceEntry) and entry.unavailable_reason
+    assert "private-token" not in listing.model_dump_json()
+    with pytest.raises(ValueError):
+        importer.prepare_import(entry, "private-source")
+
+
+@pytest.mark.parametrize(
+    "component",
+    [
+        {"skills": ["https://user:private-token@github.com/sample/repo"]},
+        {"skills": {"password": "private-token"}},
+        {"mcpServers": "config.json?token=private-token"},
+        {"strict": {"password": "private-token"}},
+        {"mcpServers": {"server": {"type": {"password": "private-token"}}}},
+        {"mcpServers": ["private-token"]},
+    ],
+)
+def test_invalid_component_metadata_is_not_copied_or_downgraded_to_defaults(
+    distribution: dict[str, Any], component: dict[str, Any]
+) -> None:
+    distribution["files"][".claude-plugin/marketplace.json"] = json.dumps(
+        {"plugins": [{"name": "invalid-component", "source": "./plugins/analysis", **component}]}
+    )
+    listing = importer.fetch_catalog(CATALOG_URL, "invalid-component", 10)
+    entry = listing.plugins[0]
+    assert isinstance(entry, MarketplaceEntry) and entry.unavailable_reason
+    assert "private-token" not in listing.model_dump_json()
+    with pytest.raises(ValueError):
+        importer.prepare_import(entry, "invalid-component")
