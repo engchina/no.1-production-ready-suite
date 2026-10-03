@@ -493,8 +493,6 @@ const agentJa = {
   "chat.empty.hint": "同じ会話の中では、前の質問と回答を踏まえて答えます。",
   "chat.composer.label": "質問",
   "chat.composer.placeholder": "質問を入力（Enter で送信、Shift+Enter で改行）",
-  "chat.composer.running": "回答を作成しています。終わるか「停止」を押すと、次の質問を送れます。",
-  "chat.composer.waitingApproval": "承認待ちのツールがあります。判断が済むか「停止」を押すと、次の質問を送れます。",
   "chat.send": "送信",
   "chat.stop": "停止",
   "chat.stopFailed": "回答を停止できませんでした。もう一度「停止」を押してください。",

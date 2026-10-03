@@ -352,7 +352,7 @@ export function ChatPage() {
                 )}
               </div>
 
-              <div className="shrink-0 space-y-2 border-t border-border p-3">
+              <div className="shrink-0 space-y-2 border-t border-border p-3" data-testid="chat-composer-region">
                 {/* 入力欄と送信の行。送信は入力欄の下端にそろえ、375px では下に全幅で置く（#613）。 */}
                 <FieldActionRow
                   actions={
@@ -388,11 +388,6 @@ export function ChatPage() {
                     className="space-y-0"
                   />
                 </FieldActionRow>
-                {composerBlocked ? (
-                  <p className="text-xs text-fg-muted" data-testid="chat-composer-hint">
-                    {waitingApproval ? t("chat.composer.waitingApproval") : t("chat.composer.running")}
-                  </p>
-                ) : null}
                 {send.error ? <Banner severity="danger">{send.error.message}</Banner> : null}
                 {cancel.error ? (
                   <Banner severity="danger" title={t("chat.stopFailed")}>

@@ -191,9 +191,7 @@ test("回答の出典と使ったツールを畳んで出し、承認待ちは�
   await expect(turn.getByText("ツールの実行に承認が必要です")).toBeVisible();
   await expect(turn.getByText("nl2sql__nl2sql_query を実行します。", { exact: false })).toBeVisible();
   // 承認待ちのあいだは次の質問を送れない。
-  await expect(page.getByTestId("chat-composer-hint")).toHaveText(
-    "承認待ちのツールがあります。判断が済むか「停止」を押すと、次の質問を送れます。"
-  );
+  await expect(page.getByTestId("chat-composer-hint")).toHaveCount(0);
   await page.getByRole("textbox", { name: "質問" }).fill("次の質問");
   // 承認待ちの間、送信のボタンは同じ位置で「停止」になる（#805）。
   await expect(page.getByTestId("chat-send")).toHaveAccessibleName("停止");
@@ -232,9 +230,8 @@ for (const viewport of VIEWPORTS) {
       await expect(button).toHaveAccessibleName("停止");
       await expect(button).toHaveAttribute("data-state", "running");
       await expect(button).not.toHaveAttribute("aria-disabled", "true");
-      await expect(page.getByTestId("chat-composer-hint")).toHaveText(
-        "回答を作成しています。終わるか「停止」を押すと、次の質問を送れます。"
-      );
+      await expect(page.getByTestId("chat-composer-hint")).toHaveCount(0);
+      const runningComposerHeight = await page.getByTestId("chat-composer-region").evaluate((element) => element.getBoundingClientRect().height);
 
       // 作成中も次の質問を書ける。入力欄の Enter では送らず、停止もしない。
       const composer = page.getByRole("textbox", { name: "質問" });
@@ -258,7 +255,65 @@ for (const viewport of VIEWPORTS) {
       await expect(turn.getByTestId("chat-answering")).toHaveCount(0);
       await expect(page.getByTestId("chat-composer-hint")).toHaveCount(0);
       await expect(composer).toHaveValue("次の質問");
+      expect(await page.getByTestId("chat-composer-region").evaluate((element) => element.getBoundingClientRect().height)).toBe(runningComposerHeight);
       await page.screenshot({ path: testInfo.outputPath(`chat-stopped-${viewport.name}-${theme}.png`) });
+    });
+  }
+}
+
+// Issue 865: 入力欄の下へ実行中の補足文を追加せず、状態が変わっても入力領域の高さを保つ。
+for (const viewport of VIEWPORTS) {
+  for (const theme of ["light", "dark"] as const) {
+    test(`送信要求・回答作成・承認待ち・完了で入力領域の高さが変わらない (${viewport.name}, ${theme})`, async ({ page, mockApi }) => {
+      let createCalls = 0;
+      let releaseCreate!: () => void;
+      const pendingCreate = new Promise<void>((resolve) => { releaseCreate = resolve; });
+      await page.route("**/api/runs", async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        createCalls += 1;
+        await pendingCreate;
+        seedThread(mockApi, { status: "running", goal: "経費の上限は？" });
+        await route.fulfill({ contentType: "application/json", body: JSON.stringify({ data: mockApi.state.runs[0] }) });
+      });
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await useTheme(page, theme);
+      await page.goto("/chat");
+      const composer = page.getByRole("textbox", { name: "質問" });
+      const region = page.getByTestId("chat-composer-region");
+      const button = page.getByTestId("chat-send");
+      await composer.fill("経費の上限は？");
+      const height = await region.evaluate((element) => element.getBoundingClientRect().height);
+      const expectStableComposer = async () => {
+        await expect(page.getByTestId("chat-composer-hint")).toHaveCount(0);
+        expect(await region.evaluate((element) => element.getBoundingClientRect().height)).toBe(height);
+        await expect(composer).toBeInViewport();
+        await expect(button).toBeInViewport();
+      };
+      await composer.press("Enter");
+      await expect(button).toHaveAccessibleName("停止");
+      await expectStableComposer();
+      releaseCreate();
+      const turn = page.getByTestId("chat-turn-run-chat-seed");
+      await expect(turn.getByTestId("chat-answering")).toBeVisible();
+      await expectStableComposer();
+      mockApi.state.runs[0].status = "waiting_approval";
+      mockApi.state.runs[0].approvals = [{
+        id: "approval-stable", run_id: "run-chat-seed", step_id: "step-stable",
+        tool_call: { name: "nl2sql__nl2sql_query", arguments: { question: "経費の上限は？" } },
+        status: "pending", reason: "承認が必要です。", created_at: MOCK_NOW,
+      }];
+      await expect(turn.getByRole("button", { name: "承認して実行" })).toBeVisible();
+      await expectStableComposer();
+      await composer.fill("次の質問");
+      await composer.press("Enter");
+      await expect(composer).toHaveValue("次の質問");
+      expect(mockApi.lastRequest("POST", "/api/runs/run-chat-seed/cancel")).toBeUndefined();
+      expect(createCalls).toBe(1);
+      // 承認の応答で完了へ進む状態を再現し、承認後の再取得で画面へ反映する。
+      mockApi.state.runs[0].status = "completed";
+      await turn.getByRole("button", { name: "承認して実行" }).click();
+      await expect(button).toHaveAccessibleName("送信");
+      await expectStableComposer();
     });
   }
 }
