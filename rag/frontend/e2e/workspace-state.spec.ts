@@ -148,7 +148,7 @@ test.describe("未保存変更の離脱ガード", () => {
     await expect(page.getByRole("heading", { name: "RAG 検索", level: 1 })).toBeVisible();
 
     // サイドナビは一覧へ戻る（編集対象は ?id= が唯一の情報源。#147）。新規の下書きは一覧から再開する。
-    await openFromSidebar(page, "検索・回答プロファイル (Search Answer Profile)");
+    await openFromSidebar(page, "検索・回答プロファイル");
     await expect(page).toHaveURL(/\/search-answer-profiles$/);
     await page.getByRole("button", { name: "下書きを開く" }).click();
     await expect(page).toHaveURL(/\/search-answer-profiles\?id=new$/);
@@ -182,7 +182,7 @@ test.describe("作業状態の保持", () => {
 
     const expectRestored = async () => {
       await expect(page.locator("#search-query")).toHaveValue("交通費の上限");
-      await expect(page.getByRole("button", { name: /対象の検索・回答プロファイル/ })).toContainText("経理ビュー");
+      await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("経理ビュー");
       await expect(page.getByRole("combobox", { name: "候補取得数" })).toContainText("50");
       await expect(page.getByRole("switch", { name: "LLM で回答を生成する" })).toHaveAttribute(
         "aria-checked",
@@ -246,7 +246,7 @@ test.describe("作業状態の保持", () => {
     await composer.fill("出張の日当は？");
 
     const expectRestored = async () => {
-      await expect(page.getByRole("button", { name: /対象の検索・回答プロファイル/ })).toContainText("経理ビュー");
+      await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("経理ビュー");
       await expect(page.locator("#chat-composer")).toHaveValue("出張の日当は？");
     };
 

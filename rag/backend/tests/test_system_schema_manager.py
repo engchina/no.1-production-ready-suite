@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -55,6 +56,55 @@ class _FakeCursor:
         self.rowcount = 0
         self.database.executed.append(upper)
 
+        if "PROCEDURE RENAME_TABLE" in upper:
+            # dictionary 検査付きの migration 呼び出しを fake Oracle で適用する。
+            for kind, old, new in re.findall(
+                r"RENAME_(TABLE|INDEX|CONSTRAINT)\('([^']+)', '([^']+)'\);", upper
+            ):
+                if kind in {"TABLE", "INDEX"}:
+                    old_key, new_key = (old, kind), (new, kind)
+                    if old_key in self.database.objects and new_key in self.database.objects:
+                        raise RuntimeError("ORA-20060: PROFILE_RENAME_CONFLICT")
+                    if old_key in self.database.objects:
+                        self.database.objects[new_key] = self.database.objects.pop(old_key)
+                if kind == "TABLE":
+                    self.database.foreign_keys = {
+                        key: (
+                            replace(
+                                fk,
+                                table_name=new if fk.table_name == old else fk.table_name,
+                                referenced_table_name=new
+                                if fk.referenced_table_name == old
+                                else fk.referenced_table_name,
+                            ),
+                            valid,
+                        )
+                        for key, (fk, valid) in self.database.foreign_keys.items()
+                    }
+                if kind == "CONSTRAINT" and old in self.database.foreign_keys:
+                    fk, valid = self.database.foreign_keys.pop(old)
+                    self.database.foreign_keys[new] = (replace(fk, name=new), valid)
+            for table, old, new in re.findall(
+                r"RENAME_COLUMN\('([^']+)', '([^']+)', '([^']+)'\);", upper
+            ):
+                self.database.foreign_keys = {
+                    key: (
+                        replace(
+                            fk,
+                            columns=tuple(
+                                new if c == old and fk.table_name == table else c
+                                for c in fk.columns
+                            ),
+                            referenced_columns=tuple(
+                                new if c == old and fk.referenced_table_name == table else c
+                                for c in fk.referenced_columns
+                            ),
+                        ),
+                        valid,
+                    )
+                    for key, (fk, valid) in self.database.foreign_keys.items()
+                }
+            return
         if upper.startswith("SELECT OBJECT_NAME, OBJECT_TYPE, CREATED FROM USER_OBJECTS"):
             names = {str(value).upper() for value in params.values()}
             self.rows = [
@@ -515,6 +565,7 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
         "20260928_001_retire_dashboard_permission",
         _RETIRE_STANDARD_ENGINE_MIGRATION,
         _RETIRE_GRAPH_CLAIMS_MIGRATION,
+        "20261003_001_search_answer_profiles",
     } == marked
     assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)
     # 印は checksum（SQL だけ）に影響しない（適用済みの DB を outdated にしない）。

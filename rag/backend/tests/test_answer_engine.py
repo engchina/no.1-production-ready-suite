@@ -697,7 +697,7 @@ async def test_answer_engine_attaches_cropped_evidence_images_when_vision_enable
     [
         Settings(rag_answer_vision_enabled=False, oci_enterprise_ai_default_vision_model="vlm"),
         # 有効でも既定の Vision モデルが無ければ添付しない(テキストモデルへ画像を送らない。#649)。
-        Settings(rag_answer_vision_enabled=True),
+        Settings(_env_file=None, rag_answer_vision_enabled=True),
     ],
     ids=["disabled", "no-vision-model"],
 )

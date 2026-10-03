@@ -289,8 +289,8 @@ def test_create_search_answer_profile_requires_description(
     fake_oracle: FakeSearchAnswerProfileOracle,
     payload: dict[str, object],
 ) -> None:
-    """検索・回答プロファイルの説明は必須。未指定・空・空白"
-    "だけ・null は 422 で作成しない（#521）。"""
+    """検索・回答プロファイルの説明は必須。未指定・空・空白
+    だけ・null は 422 で作成しない（#521）。"""
     response = client.post("/api/search-answer-profiles", json=payload)
 
     assert response.status_code == 422

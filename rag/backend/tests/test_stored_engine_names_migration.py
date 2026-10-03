@@ -46,8 +46,8 @@ def test_rename_pairs_only_touch_old_names_and_do_not_shadow_each_other() -> Non
 
 
 def test_stored_settings_and_chunk_metadata_are_renamed() -> None:
-    """処理設定・検索・回答プロファイルの設定・chunk の "
-    "metadata・解析結果・回答の診断の旧名を書き換える。"""
+    """処理設定・検索・回答プロファイルの設定・chunk の
+    metadata・解析結果・回答の診断の旧名を書き換える。"""
     processing_config = {
         "chunking_strategy": f"{_OLD}_small_to_big",
         f"{_OLD}_child_target_chars": 600,

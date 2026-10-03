@@ -99,7 +99,8 @@
       "name": "rag_search",
       "description": "検索・回答プロファイルのナレッジベースを検索し、根拠（citations）付きの回答を返します。",
       "inputSchema": {
-        "description": "検索・回答の条件。",
+        "additionalProperties": false,
+        "description": "検索・回答の条件。旧 scope を含む未定義項目は拒否する。",
         "properties": {
           "query": {
             "description": "質問文。",

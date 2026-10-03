@@ -165,7 +165,26 @@ def rename_sql() -> str:
                 USING old_code;
         END IF;
     END;
+    PROCEDURE rename_diagnostics IS
+    BEGIN
+        SELECT COUNT(*) INTO old_count FROM user_tab_columns
+            WHERE table_name = 'RAG_ANSWER_RECORDS' AND column_name = 'DIAGNOSTICS_JSON';
+        IF old_count > 0 THEN
+            EXECUTE IMMEDIATE q'[SELECT COUNT(*) FROM rag_answer_records
+                WHERE JSON_EXISTS(diagnostics_json, '$.business_view_applied')
+                AND JSON_EXISTS(diagnostics_json, '$.search_answer_profile_applied')]'
+                INTO new_count;
+            IF new_count > 0 THEN
+                RAISE_APPLICATION_ERROR(-20060, 'PROFILE_DIAGNOSTICS_RENAME_CONFLICT');
+            END IF;
+            EXECUTE IMMEDIATE q'[UPDATE rag_answer_records
+                SET diagnostics_json = JSON_TRANSFORM(diagnostics_json,
+                    RENAME '$.business_view_applied' = 'search_answer_profile_applied')
+                WHERE JSON_EXISTS(diagnostics_json, '$.business_view_applied')]';
+        END IF;
+    END;
 BEGIN
+    rename_diagnostics;
 """
         + "\n".join(calls)
         + "\nEND;"

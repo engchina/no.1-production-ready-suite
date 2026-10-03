@@ -135,8 +135,8 @@ def test_search_answer_profile_expands_kbs_and_applies_query_config(
 
 @pytest.mark.parametrize("path", ["/api/search", "/api/search/stream"])
 def test_search_answer_profile_ids_is_rejected(monkeypatch: MonkeyPatch, path: str) -> None:
-    """検索・回答プロファイルは 1 つだけ。削除した search_answ"
-    "er_profile_ids は読み捨てず 422 にする（#635）。"""
+    """検索・回答プロファイルは 1 つだけ。削除した search_answ
+    er_profile_ids は読み捨てず 422 にする（#635）。"""
     _install(monkeypatch, {"bv-1": SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"])})
 
     response = client.post(
@@ -222,8 +222,8 @@ def test_request_kb_ids_take_precedence_over_view(monkeypatch: MonkeyPatch) -> N
 def test_search_answer_profile_without_knowledge_bases_is_rejected(
     monkeypatch: MonkeyPatch, path: str
 ) -> None:
-    """参照 KB が 0 件の検索・回答プロファイルでは利用者の"
-    "全 KB を検索せず、理由を 409 で返す（#304）。"""
+    """参照 KB が 0 件の検索・回答プロファイルでは利用者の
+    全 KB を検索せず、理由を 409 で返す（#304）。"""
     _install(monkeypatch, {"bv-empty": SearchAnswerProfileConfig()})
 
     response = client.post(path, json={"query": "上限額", "search_answer_profile_id": "bv-empty"})
@@ -404,8 +404,8 @@ class FakeFieldSetOracle(FakeViewOracle):
 def test_search_extraction_fields_unions_search_answer_profile_knowledge_bases(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """検索の絞り込みの項目は、選んだ検索・回答プロファイル"
-    "の KB の定義(無ければ既定)の和集合(#549)。"""
+    """検索の絞り込みの項目は、選んだ検索・回答プロファイル
+    の KB の定義(無ければ既定)の和集合(#549)。"""
     monkeypatch.setenv(fields_mod.FIELD_SCHEMA_FILE_ENV, str(tmp_path / "fields.json"))
     fields_mod.save_field_schema([FieldDefinition(name="請求書番号")])
     oracle = FakeFieldSetOracle(

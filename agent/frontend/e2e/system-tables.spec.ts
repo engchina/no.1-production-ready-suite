@@ -28,7 +28,7 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByRole("heading", { name: "システムテーブル管理", level: 1 })).toBeVisible();
       await expect(page.getByText("一部不足").first()).toBeVisible();
       await expect(page.getByText("データを削除する更新があります")).toBeVisible();
-      await expect(page.getByText("AGENT_ROLE_SEARCH_ANSWER_PROFILES").first()).toBeVisible();
+      await expect(page.getByText("AGENT_ROLE_BUSINESS_VIEWS").first()).toBeVisible();
       await expectNoPageOverflow(page);
 
       await page.getByRole("button", { name: "作成・更新" }).click();

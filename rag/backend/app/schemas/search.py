@@ -262,8 +262,8 @@ class SearchRequest(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def reject_search_answer_profile_ids(cls, data: object) -> object:
-        """削除した ``search_answer_profile_ids`"
-        "` を黙って読み捨てない(検索・回答プロファイルの外を検索しない)。"""
+        """削除した ``search_answer_profile_ids`
+        ` を黙って読み捨てない(検索・回答プロファイルの外を検索しない)。"""
         if isinstance(data, dict) and any(
             key in data for key in ("business_view_id", "business_view_ids")
         ):

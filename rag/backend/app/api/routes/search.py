@@ -240,8 +240,8 @@ def ensure_search_answer_profile_has_knowledge_bases(knowledge_base_ids: Sequenc
 def ensure_search_answer_profile_knowledge_bases_permitted(
     knowledge_base_ids: Sequence[str],
 ) -> None:
-    """検索・回答プロファイルの参照 KB が 1 つも利用で"
-    "きないなら 403（黙って 0 件にしない。#214）。"""
+    """検索・回答プロファイルの参照 KB が 1 つも利用で
+    きないなら 403（黙って 0 件にしない。#214）。"""
     permitted = permitted_knowledge_base_ids(knowledge_base_ids)
     if knowledge_base_ids and permitted is not None and not permitted:
         raise SecurityApiError(

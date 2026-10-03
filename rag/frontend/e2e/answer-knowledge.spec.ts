@@ -7,7 +7,7 @@ import {
   selectSearchAnswerProfile,
 } from "./_helpers";
 
-// rag_poc からの移植: 検索・回答プロファイルの知識(Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール)、
+// rag_poc からの移植: プロファイルの知識(Approved FAQ / 用語・同義語 / ドメインキーワード / 回答ルール)、
 // 検索前の類似問提示、回答の根拠パネル。
 
 const envelope = (data: unknown) => ({ data, error_messages: [], warning_messages: [] });
@@ -117,7 +117,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`検索・回答プロファイルの知識パネルでキーワード・FAQ・用語ルールを管理できる (${viewport.name})`, async ({
+  test(`プロファイルの知識パネルでキーワード・FAQ・用語ルールを管理できる (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -128,10 +128,10 @@ for (const viewport of [
     await page.getByRole("link", { name: "受注サポート を編集" }).click();
     await expect(page).toHaveURL(/\/search-answer-profiles\?id=bv-1$/);
 
-    const panel = page.getByRole("heading", { name: "検索・回答プロファイルの知識" });
+    const panel = page.getByRole("heading", { name: "プロファイルの知識" });
     await expect(panel).toBeVisible();
     // 先頭・既定のタブは Approved FAQ（#636）。以降は回答フローで使う順（#682）。
-    const tabs = page.getByRole("tablist", { name: "検索・回答プロファイルの知識" }).getByRole("tab");
+    const tabs = page.getByRole("tablist", { name: "プロファイルの知識" }).getByRole("tab");
     await expect(tabs).toHaveText([
       "Approved FAQ（類似問）",
       "用語・同義語",

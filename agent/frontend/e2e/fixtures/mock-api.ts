@@ -131,7 +131,7 @@ function systemTablesStatus(ready: boolean): Record<string, unknown> {
           {
             name: "20261002_003_retire_role_business_views",
             description:
-              "権限管理でロールに割り当てていた検索・回答プロファイル（AGENT_ROLE_SEARCH_ANSWER_PROFILES）を削除します。#750 から使っていません。",
+              "権限管理でロールに割り当てていた検索・回答プロファイル（AGENT_ROLE_BUSINESS_VIEWS）を削除します。#750 から使っていません。",
           },
         ],
     expected_object_count: objects.length,
@@ -139,7 +139,7 @@ function systemTablesStatus(ready: boolean): Record<string, unknown> {
     expected_table_count: 4,
     existing_table_count: objects.filter((item) => item.exists && item.object_type === "TABLE").length,
     missing_objects: objects.filter((item) => !item.exists).map(({ name, object_type }) => ({ name, object_type })),
-    retired_objects: ready ? [] : [{ name: "AGENT_ROLE_SEARCH_ANSWER_PROFILES", object_type: "TABLE" }],
+    retired_objects: ready ? [] : [{ name: "AGENT_ROLE_BUSINESS_VIEWS", object_type: "TABLE" }],
     missing_foreign_keys: [],
     orphaned_foreign_keys: [],
     mismatched_foreign_keys: [],

@@ -268,8 +268,8 @@ async def test_ensure_default_search_answer_profile_fills_only_empty_description
     description: str | None,
     expected_calls: int,
 ) -> None:
-    """DEFAULT 検索・回答プロファイルの説明は空のとき"
-    "だけ既定の説明で補う（利用者の説明は残す。#521）。"""
+    """DEFAULT 検索・回答プロファイルの説明は空のとき
+    だけ既定の説明で補う（利用者の説明は残す。#521）。"""
     client = OracleClient(settings=Settings.model_construct())
     connection = FakeOracleConnection([])
     now = datetime.now(UTC)

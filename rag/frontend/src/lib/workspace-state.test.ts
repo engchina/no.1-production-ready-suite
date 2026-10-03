@@ -114,3 +114,29 @@ describe("workspace-state", () => {
     expect(storage.getItem("other-app")).toBe("keep");
   });
 });
+
+
+describe("#860 保存キーの移行", () => {
+  it("選択 ID・草稿・保存時刻を保持し、旧キーだけを消す", () => {
+    const record = JSON.stringify({ value: "bv-42", savedAt: Date.now() });
+    storage.setItem(`${WORKSPACE_NAMESPACE}search.businessViewId`, record);
+    const draft = { name: "業務ビュー", description: "business_view_id は自由本文" };
+    const raw = JSON.stringify({ value: draft, savedAt: Date.now() });
+    storage.setItem(`${WORKSPACE_NAMESPACE}businessViews.draft:bv-42`, raw);
+    expect(readWorkspace("search.searchAnswerProfileId", null, isNullableString)).toBe("bv-42");
+    expect(storage.getItem(`${WORKSPACE_NAMESPACE}search.searchAnswerProfileId`)).toBe(record);
+    expect(storage.getItem(`${WORKSPACE_NAMESPACE}search.businessViewId`)).toBeNull();
+    expect(readWorkspace("searchAnswerProfiles.draft", draft, undefined, "bv-42")).toEqual(draft);
+    expect(storage.getItem(`${WORKSPACE_NAMESPACE}searchAnswerProfiles.draft:bv-42`)).toBe(raw);
+  });
+  it("現在の選択を優先し、期限と利用者の境界を保持する", () => {
+    bindWorkspaceOwner("user-a");
+    writeWorkspace("chat.searchAnswerProfileId", "new");
+    storage.setItem(`${WORKSPACE_NAMESPACE}chat.businessViewId`, JSON.stringify({ value: "old", savedAt: Date.now() }));
+    expect(readWorkspace("chat.searchAnswerProfileId", null, isNullableString)).toBe("new");
+    storage.setItem(`${WORKSPACE_NAMESPACE}search.businessViewId`, JSON.stringify({ value: "expired", savedAt: Date.now() - WORKSPACE_TTL_MS - 1 }));
+    expect(readWorkspace("search.searchAnswerProfileId", null, isNullableString)).toBeNull();
+    bindWorkspaceOwner("user-b");
+    expect(readWorkspace("chat.searchAnswerProfileId", null, isNullableString)).toBeNull();
+  });
+});

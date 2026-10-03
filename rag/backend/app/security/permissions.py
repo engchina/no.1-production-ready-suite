@@ -91,7 +91,7 @@ SYSTEM_TABLES_MANAGE = "rag.system_tables.manage"
 # グループ・名前・並び順は左のナビ（frontend の nav-config.ts と、i18n の
 # サイドナビの表示名）と同じにする（#567 / #580。一致は
 # tests/test_permission_catalog_nav.py が確かめる）。ナビに無い capability は後ろに置く。
-_GROUP_BUSINESS = "検索・回答プロファイル"
+_GROUP_USE = "AI 活用"
 _GROUP_INGESTION = "ナレッジ構築"
 _GROUP_PIPELINE = "検索・回答設定"
 _GROUP_IMPROVE = "改善・運用"
@@ -103,8 +103,8 @@ _GROUP_MANAGE = "管理権限"
 
 
 PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
-    _menu_permission(MENU_CHAT, _GROUP_BUSINESS, "チャット"),
-    _menu_permission(MENU_SEARCH, _GROUP_BUSINESS, "RAG 検索"),
+    _menu_permission(MENU_CHAT, _GROUP_USE, "チャット"),
+    _menu_permission(MENU_SEARCH, _GROUP_USE, "RAG 検索"),
     _menu_permission(MENU_UPLOAD, _GROUP_INGESTION, "アップロード"),
     _menu_permission(MENU_FILE_LIST, _GROUP_INGESTION, "文書インデックス"),
     _menu_permission(MENU_KNOWLEDGE_BASES, _GROUP_INGESTION, "ナレッジベース"),

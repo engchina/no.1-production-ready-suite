@@ -332,7 +332,7 @@ test("検索・回答プロファイルの読み込み中は読み込み中の�
   await expect(page.getByRole("status").filter({ hasText: "検索・回答プロファイルを読み込んでいます。" })).toHaveCount(1);
   await expect(page.getByText("検索・回答プロファイルを作成してください")).toHaveCount(0);
   release();
-  await expect(page.getByRole("button", { name: /対象の検索・回答プロファイル/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toBeVisible();
 });
 
 test("詳細条件は条件を設定したままでも閉じられ、閉じると「設定中」を出す（#461）", async ({ page }) => {

@@ -90,7 +90,7 @@ test("対象の検索・回答プロファイルは 1 つを選ぶ欄で、検�
   await mockAnswerHistory(page, 0);
   await page.goto("/search");
 
-  const trigger = page.getByRole("button", { name: /対象の検索・回答プロファイル/ });
+  const trigger = page.getByRole("button", { name: /検索・回答プロファイル/ });
   await expect(trigger).toContainText("検索・回答プロファイルを検索して選択…");
   await expect(trigger).toHaveAttribute("aria-required", "true");
   // 欄の下に説明文（helper）は出さない（#664）。
@@ -98,7 +98,7 @@ test("対象の検索・回答プロファイルは 1 つを選ぶ欄で、検�
 
   await trigger.click();
   const search = page.getByRole("combobox", { name: "対象の検索・回答プロファイルを検索" });
-  const listbox = page.getByRole("listbox", { name: /対象の検索・回答プロファイル/ });
+  const listbox = page.getByRole("listbox", { name: /検索・回答プロファイル/ });
   await expect(search).toBeFocused();
   await expect(search).toHaveAttribute("placeholder", "検索・回答プロファイルの名前・説明で検索…");
   // 参照 KB が 0 件の検索・回答プロファイルも隠さず、件数を出して後ろに並べる。
@@ -309,7 +309,7 @@ for (const viewport of [
     await mockChat(page, "bv-1");
 
     const measure = async () => {
-      const trigger = page.getByRole("button", { name: /対象の検索・回答プロファイル/ });
+      const trigger = page.getByRole("button", { name: /検索・回答プロファイル/ });
       await expect(trigger).toBeVisible();
       await expect(trigger).toContainText("検索・回答プロファイルを検索して選択…");
       await expect(trigger).toHaveAttribute("aria-required", "true");
@@ -333,7 +333,7 @@ for (const viewport of [
     expect(Math.abs(search.height - chat.height)).toBeLessThanOrEqual(0.5);
 
     await selectSearchAnswerProfile(page, "経理ビュー");
-    await expect(page.getByRole("button", { name: /対象の検索・回答プロファイル/ })).toContainText("経理ビュー");
+    await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("経理ビュー");
     await expectNoPageOverflow(page);
   });
 }

@@ -8,7 +8,6 @@ from pytest import CaptureFixture
 
 from app.rag import oracle_schema
 from app.schemas.knowledge_base import DEFAULT_KNOWLEDGE_BASE_DESCRIPTION
-from app.schemas.search_answer_profile import DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION
 
 
 def test_oracle_schema_sql_contains_required_rag_tables() -> None:
@@ -92,7 +91,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
     assert manifest == oracle_schema.oracle_schema_manifest()
     assert "generated_at" not in manifest
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
-    assert manifest["schema_version"] == "2"
+    assert manifest["schema_version"] == "3"
     assert manifest["vector_contract"] == "VECTOR(1536, FLOAT32)"
     assert manifest["vector_index"] == {
         "distance": "COSINE",
@@ -204,8 +203,8 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "ALTER TABLE rag_ingestion_jobs DROP CONSTRAINT" in sql
     assert "(phase IN (''PREPROCESS'', ''EXTRACT'', ''CHUNK'', ''INDEX''))" in sql
     assert "-- migration: 20260619_001_business_views" in sql
-    assert "table_name = 'RAG_SEARCH_ANSWER_PROFILES'" in sql
-    assert "rag_search_answer_profiles_status_ck" in sql
+    assert "table_name = 'RAG_BUSINESS_VIEWS'" in sql
+    assert "rag_business_views_status_ck" in sql
     assert "-- migration: 20260621_001_chunk_sets" in sql
     assert "CREATE TABLE rag_chunk_sets" in sql
     assert "RAG_DOCUMENT_EXTRACTIONS_DOCUMENT_IDX" in sql
@@ -253,12 +252,12 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "-- migration: 20260630_002_default_business_view" in sql
     assert "JSON_MERGEPATCH" in sql
     assert "JSON_ARRAY(kb.knowledge_base_id RETURNING JSON)" in sql
-    assert "INSERT INTO rag_search_answer_profiles" in sql
+    assert "INSERT INTO rag_business_views" in sql
     assert "-- migration: 20260630_003_document_recipes" in sql
     assert "CREATE TABLE rag_document_recipes" in sql
     assert "RAG_CHUNK_SETS_RECIPE_ACTIVE_UIDX" in sql
     assert "-- migration: 20260701_001_general_feedback" in sql
-    assert "search_answer_profile_id VARCHAR2(64)" in sql
+    assert "business_view_id VARCHAR2(64)" in sql
     assert "RAG_FEEDBACK_USER_TRACE_IDX" in sql
     assert "column_name IN ('DOCUMENT_ID', 'CHUNK_ID')" in sql
     assert "AND nullable = 'N'" in sql
@@ -318,16 +317,17 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "ON rag_evaluation_jobs (status, heartbeat_at)" in jobs_migration
     assert "index_name = 'RAG_EVALUATION_JOBS_OWNER_CREATED_IDX'" in jobs_migration
     assert "query" not in jobs_migration.split("-- migration: ", 1)[0].lower()
-    # 説明が空の DEFAULT の KB・検索・回答プロファイル
-    # に既定の説明を補う（#521）。利用者の説明は上書きしない。
-    #
+    # 説明が空の DEFAULT の KB・業務ビューに既定の説明を補う（#521）。利用者の説明は上書きしない。
     descriptions_migration = sql.split("-- migration: 20260930_001_default_descriptions", 1)[
         1
     ].split("-- migration: ", 1)[0]
     assert "UPDATE rag_knowledge_bases" in descriptions_migration
-    assert "UPDATE rag_search_answer_profiles" in descriptions_migration
+    assert "UPDATE rag_business_views" in descriptions_migration
     assert f"'{DEFAULT_KNOWLEDGE_BASE_DESCRIPTION}'" in descriptions_migration
-    assert f"'{DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION}'" in descriptions_migration
+    assert (
+        "'DEFAULT ナレッジベースを検索・回答に使う、既定の業務ビューです。'"
+        in descriptions_migration
+    )
     assert descriptions_migration.count("AND TRIM(description) IS NULL") == 2
     assert "name =" not in descriptions_migration
     # 派生情報レイヤーに、作ったときの入力の指紋の列を足す（#550）。無ければ足す（冪等）。
@@ -401,7 +401,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     # 関係情報グラフが読む表は残す。
     for table in ("rag_graph_entities", "rag_graph_relationships", "rag_graph_entity_chunks"):
         assert table not in graph_migration
-    assert len(statements) == 86
+    assert len(statements) == 87
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -415,9 +415,9 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
 
     assert manifest == oracle_schema.oracle_schema_migration_manifest()
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
-    assert manifest["schema_version"] == "2"
+    assert manifest["schema_version"] == "3"
     assert manifest["artifact_type"] == "migration"
-    assert manifest["migration_artifact_version"] == "20260723_001"
+    assert manifest["migration_artifact_version"] == "20261003_001"
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [migration["name"] for migration in manifest["migrations"]] == [
@@ -475,6 +475,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260930_008_answer_prompts_table",
         "20260930_009_stored_engine_names",
         "20261001_001_document_sections",
+        "20261003_001_search_answer_profiles",
     ]
 
 

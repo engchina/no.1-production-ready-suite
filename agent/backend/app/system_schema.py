@@ -321,11 +321,11 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
     ),
     MigrationArtifact(
         "20261002_003_retire_role_business_views",
-        "retire agent role search answer profiles",
-        ("DROP TABLE AGENT_ROLE_SEARCH_ANSWER_PROFILES CASCADE CONSTRAINTS PURGE",),
+        "retire agent role business views",
+        ("DROP TABLE AGENT_ROLE_BUSINESS_VIEWS CASCADE CONSTRAINTS PURGE",),
         destructive_note=(
-            "権限管理でロールに割り当てていた検索・回答プロファイル（AGENT_ROLE_SEARCH_ANSWER_PROFILES）を削除します。"
-            "#750 から使っていません。検索・回答プロファイルの権限は RAG の権限管理で割り当てます。"
+            "権限管理でロールに割り当てていた業務ビュー（AGENT_ROLE_BUSINESS_VIEWS）を削除します。"
+            "#750 から使っていません。業務ビューの権限は RAG の権限管理で割り当てます。"
             "割り当てを控える必要があれば、先にテーブルを書き出してください。"
         ),
     ),
@@ -394,9 +394,9 @@ MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
 )
 # 現行では使わないが既存の DB に残りうる object（作成・更新で削除する）。
 RETIRED_MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
-    # 権限管理の検索・回答プロファイル（#750 で使わなくなった）。更新では migration 003 が消す。
+    # 権限管理の業務ビュー（#750 で使わなくなった）。更新では migration 003 が消す。
     # 全再作成は migration を実行せず記録だけするため、ここにも載せて残さない。
-    ("AGENT_ROLE_SEARCH_ANSWER_PROFILES", "TABLE"),
+    ("AGENT_ROLE_BUSINESS_VIEWS", "TABLE"),
 )
 DOMAIN_TABLES = frozenset(MANAGED_TABLES) - {CONTROL_TABLE, MIGRATION_TABLE}
 # 3 製品共通の認証テーブル。先に作るが管理対象ではないため、全再作成でも削除しない。

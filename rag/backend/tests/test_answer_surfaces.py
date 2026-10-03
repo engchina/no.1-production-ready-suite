@@ -84,8 +84,8 @@ def test_saved_search_answer_profile_answer_engine_is_dropped() -> None:
 def test_search_api_answers_with_answer_engine_for_view_saved_as_standard(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """``answer_engine: "standard"`` "
-    "を保存した検索・回答プロファイルの検索も回答フローで回答する。"""
+    """``answer_engine: "standard"``
+    を保存した検索・回答プロファイルの検索も回答フローで回答する。"""
     query = KnowledgeBaseQueryConfig.model_validate({"answer_engine": "standard"})
     _install_real_pipeline(
         monkeypatch, {"bv-1": SearchAnswerProfileConfig(knowledge_base_ids=["kb-1"], query=query)}

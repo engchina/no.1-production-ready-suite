@@ -11987,7 +11987,7 @@ CREATE TABLE {table_name} (
     CONSTRAINT {table_name}_surface_ck CHECK (surface IN ('search', 'chat'))
 );
 
-CREATE INDEX {table_name}_view_idx
+CREATE INDEX {table_name}_profile_idx
     ON {table_name} (search_answer_profile_id, created_at DESC);
 
 CREATE INDEX {table_name}_owner_idx
@@ -12008,7 +12008,7 @@ CREATE TABLE {table_name} (
     created_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
 );
 
-CREATE INDEX {table_name}_view_idx
+CREATE INDEX {table_name}_profile_idx
     ON {table_name} (search_answer_profile_id, created_at DESC)
 """.strip()
 
@@ -12194,7 +12194,7 @@ CREATE TABLE {table_name} (
         ON DELETE CASCADE
 );
 
-CREATE INDEX {table_name}_tenant_view_updated_idx
+CREATE INDEX {table_name}_tenant_profile_updated_idx
     ON {table_name} (tenant_id_hash, search_answer_profile_id, updated_at DESC);
 
 CREATE INDEX {table_name}_search_answer_profile_idx

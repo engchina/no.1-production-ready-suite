@@ -341,9 +341,9 @@ export async function expectedControlHeight(page: Page, size: keyof typeof CONTR
  * ボタンを押して候補の一覧を開き、候補を選ぶ（選ぶと一覧は閉じてボタンへ戻る）。
  */
 export async function selectSearchAnswerProfile(page: Page, name: RegExp | string) {
-  await page.getByRole("button", { name: /対象の検索・回答プロファイル/ }).click();
-  await page.getByRole("listbox", { name: /対象の検索・回答プロファイル/ }).getByRole("option", { name }).click();
-  await expect(page.getByRole("listbox", { name: /対象の検索・回答プロファイル/ })).toHaveCount(0);
+  await page.getByRole("button", { name: /検索・回答プロファイル/ }).click();
+  await page.getByRole("listbox", { name: /検索・回答プロファイル/ }).getByRole("option", { name }).click();
+  await expect(page.getByRole("listbox", { name: /検索・回答プロファイル/ })).toHaveCount(0);
 }
 
 /** RAG 検索の「LLM で回答を生成する」をオンにする（既定はオフで、検索結果までを出す。#649）。 */

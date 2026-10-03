@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from typing import Any
 
 _OLD_LIST = "rag_list_business_views"
@@ -13,10 +15,27 @@ _FIELDS = {
 }
 
 
+def _function_name(server_id: str, tool_name: str) -> str:
+    raw = f"{server_id}__{tool_name}"
+    name = re.sub(r"[^A-Za-z0-9_-]", "_", raw)
+    if len(name) <= 64:
+        return name
+    digest = hashlib.sha256(raw.encode()).hexdigest()[:8]
+    return f"{name[:55]}_{digest}"
+
+
 def migrate_tool_name(name: str) -> str:
+    if name == _OLD_LIST:
+        return _NEW_LIST
+    # 保存された policy / checkpoint は接続 ID の記号置換・64 文字への短縮を含む。
+    from app.features.agent.config import runtime_config_store
+
+    for config in runtime_config_store.list_mcp_servers():
+        if name == _function_name(config.server_id, _OLD_LIST):
+            return _function_name(config.server_id, _NEW_LIST)
     prefix, separator, base = name.rpartition("__")
     if base == _OLD_LIST:
-        return prefix + separator + _NEW_LIST
+        return _function_name(prefix, _NEW_LIST) if separator else _NEW_LIST
     return name
 
 
@@ -24,13 +43,14 @@ def migrate_rag_call(value: object) -> object:
     if not isinstance(value, dict) or not isinstance(value.get("name"), str):
         return value
     name = value["name"]
-    if name.rsplit("__", 1)[-1] not in {_OLD_LIST, _NEW_LIST, "rag_search"}:
+    migrated_name = migrate_tool_name(name)
+    if migrated_name == name and name.rsplit("__", 1)[-1] not in {_NEW_LIST, "rag_search"}:
         return value
     result = dict(value)
-    result["name"] = migrate_tool_name(name)
+    result["name"] = migrated_name
     arguments = value.get("arguments")
     encoded = isinstance(arguments, str)
-    if encoded:
+    if isinstance(arguments, str):
         try:
             arguments = json.loads(arguments)
         except ValueError:

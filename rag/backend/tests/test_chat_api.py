@@ -774,8 +774,8 @@ def test_stream_message_rejects_archived_conversation(monkeypatch: MonkeyPatch) 
 def test_stream_message_rejects_search_answer_profile_without_knowledge_bases(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """参照 KB が 0 件の検索・回答プロファイルではチャ"
-    "ットせず、生成の前に理由を 409 で返す（#304）。"""
+    """参照 KB が 0 件の検索・回答プロファイルではチャ
+    ットせず、生成の前に理由を 409 で返す（#304）。"""
     from types import SimpleNamespace
 
     from app.api.routes import search as search_route
@@ -813,8 +813,8 @@ def test_stream_message_rejects_search_answer_profile_without_knowledge_bases(
 def test_stream_returns_prepare_errors_before_starting_the_stream(
     fake_oracle: FakeChatOracle, monkeypatch: MonkeyPatch
 ) -> None:
-    """準備（検索・回答プロファイルの解決など）の 409 は"
-    "、stream を始める前に理由付きで返す（#463）。"""
+    """準備（検索・回答プロファイルの解決など）の 409 は
+    、stream を始める前に理由付きで返す（#463）。"""
     from fastapi import HTTPException
 
     async def conflict(*_args: object, **_kwargs: object) -> None:

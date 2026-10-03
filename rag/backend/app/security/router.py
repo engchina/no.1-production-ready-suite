@@ -161,8 +161,8 @@ async def update_role_access(
     request: Request,
     response: Response,
 ) -> ApiResponse[RoleData]:
-    """権限管理画面の保存。ロールの RAG 権限と対象範"
-    "囲（検索・回答プロファイル・KB）だけを置き換える。"""
+    """権限管理画面の保存。ロールの RAG 権限と対象範
+    囲（検索・回答プロファイル・KB）だけを置き換える。"""
     actor = current_principal(request)
     request_id, client_ip = request_context(request)
     # 指定 ID の存在確認は利用者の範囲と無関係に行う（範囲外は 403、存在しない ID は 400）。

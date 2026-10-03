@@ -66,8 +66,8 @@ HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 
 
 class ScopedFakeOracle:
-    """Oracle の SQL と同じく、現在の監査 context"
-    " の対象範囲で検索・回答プロファイル・KB を絞る fake。"""
+    """Oracle の SQL と同じく、現在の監査 context
+    の対象範囲で検索・回答プロファイル・KB を絞る fake。"""
 
     VIEW_IDS = ("bv-1", "bv-2", "bv-3")
     BASE_IDS = ("kb-1", "kb-2", "kb-3")

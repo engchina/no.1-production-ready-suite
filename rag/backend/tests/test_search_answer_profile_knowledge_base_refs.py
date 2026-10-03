@@ -63,8 +63,8 @@ async def test_search_answer_profile_detail_marks_archived_and_missing_knowledge
 
 
 async def test_profile_list_counts_archived_and_missing_references_in_one_lookup() -> None:
-    """一覧はページ内の参照 KB をまとめて 1 回で"
-    "解決し、検索・回答プロファイルごとに件数を数える。"""
+    """一覧はページ内の参照 KB をまとめて 1 回で
+    解決し、検索・回答プロファイルごとに件数を数える。"""
     pool = FakeOraclePool(
         execute_results=[
             [

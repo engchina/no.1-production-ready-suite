@@ -401,7 +401,7 @@ test("RAG 検索は DEFAULT を候補表示するが自動選択しない", asyn
   ]);
   await page.goto("/search");
 
-  await page.getByRole("button", { name: /対象の検索・回答プロファイル/ }).click();
+  await page.getByRole("button", { name: /検索・回答プロファイル/ }).click();
   await expect(page.getByRole("option", { name: /DEFAULT/ })).toBeVisible();
   await page.keyboard.press("Escape");
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("全社規程");
@@ -434,7 +434,7 @@ test("検索・回答プロファイルは行のクリックで ?id= の全画�
   await expect(page.getByRole("heading", { name: "経理ビュー", level: 1 })).toBeVisible();
   await expect(page.getByTestId("editor-back")).toBeVisible();
   await expect(page.getByRole("textbox", { name: "名前", exact: true })).toHaveValue("経理ビュー");
-  await expect(page.getByRole("heading", { name: "検索・回答プロファイルの知識" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "プロファイルの知識" })).toBeVisible();
   await expectNoPageOverflow(page);
 
   await page.reload();
@@ -553,7 +553,7 @@ test("検索・回答プロファイルの保存に失敗すると、理由を�
   await page.goto("/search-answer-profiles?id=bv-1");
   await page.getByRole("textbox", { name: "説明", exact: true }).fill("経費と出張の相談");
   // 長いフォームの下までスクロールしてから、ヘッダーの保存を押す。
-  await page.getByRole("heading", { name: "検索・回答プロファイルの知識" }).scrollIntoViewIfNeeded();
+  await page.getByRole("heading", { name: "プロファイルの知識" }).scrollIntoViewIfNeeded();
   const actions = page.getByRole("group", { name: "ページ操作" });
   const save = actions.getByRole("button", { name: "保存", exact: true });
   if (await save.isVisible()) {

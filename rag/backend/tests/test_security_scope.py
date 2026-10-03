@@ -436,8 +436,8 @@ async def test_default_search_answer_profile_is_checked_without_user_scope() -> 
 
 
 class ScopedViewOracle(FakeViewOracle):
-    """範囲外の検索・回答プロファイルを「存在しない」として返"
-    "す fake（Oracle の SQL と同じ扱い）。"""
+    """範囲外の検索・回答プロファイルを「存在しない」として返
+    す fake（Oracle の SQL と同じ扱い）。"""
 
     async def get_search_answer_profile(
         self, search_answer_profile_id: str
@@ -529,8 +529,8 @@ def test_search_intersects_search_answer_profile_kbs_with_allowed_kbs(
 def test_search_answer_profile_without_permitted_kbs_is_forbidden_not_empty(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """検索・回答プロファイルの KB が 1 つも許可され"
-    "ていない検索は、黙って 0 件にせず 403 にする。"""
+    """検索・回答プロファイルの KB が 1 つも許可され
+    ていない検索は、黙って 0 件にせず 403 にする。"""
     _install_search(monkeypatch)
     auth = enable_production_auth(monkeypatch)
     auth.user_with_permissions(

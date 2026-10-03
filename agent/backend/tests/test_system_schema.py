@@ -270,7 +270,7 @@ def _legacy_database() -> _FakeDatabase:
         *PLATFORM_AUTH_TABLES,
         "AGENT_ROLE_PERMISSIONS",
         "AGENT_ROLE_AGENTS",
-        "AGENT_ROLE_SEARCH_ANSWER_PROFILES",
+        "AGENT_ROLE_BUSINESS_VIEWS",
     ):
         database.table(name)
     # 旧 CLI の CREATE TABLE も同じ FK（ON DELETE CASCADE）を持っていた。
@@ -320,7 +320,7 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     } <= {name for name, kind in MANAGED_OBJECTS if kind == "INDEX"}
     # 共通認証の表は管理対象にしない（全再作成でも RAG / NL2SQL のユーザー・ロールを消さない）。
     assert not set(PLATFORM_AUTH_TABLES) & set(MANAGED_TABLES)
-    assert ("AGENT_ROLE_SEARCH_ANSWER_PROFILES", "TABLE") in RETIRED_MANAGED_OBJECTS
+    assert ("AGENT_ROLE_BUSINESS_VIEWS", "TABLE") in RETIRED_MANAGED_OBJECTS
     assert {fk.name for fk in MANAGED_FOREIGN_KEYS} == {
         "FK_AGENT_ROLE_PERMISSIONS_ROLE",
         "FK_AGENT_ROLE_AGENTS_ROLE",
@@ -373,8 +373,8 @@ def test_initialize_fresh_database_creates_everything_and_is_idempotent() -> Non
 
 
 def test_legacy_database_requires_approval_then_migrates() -> None:
-    """旧 CLI で作った DB は、検索・回答プロファイルの"
-    "表の削除（#750 から未使用）を承認してから更新する。"""
+    """旧 CLI で作った DB は、検索・回答プロファイルの
+    表の削除（#750 から未使用）を承認してから更新する。"""
     database = _legacy_database()
     manager = _manager(database)
     status = manager.status()
@@ -383,18 +383,18 @@ def test_legacy_database_requires_approval_then_migrates() -> None:
         "20261002_003_retire_role_business_views"
     ]
     assert status["retired_objects"] == [
-        {"name": "AGENT_ROLE_SEARCH_ANSWER_PROFILES", "object_type": "TABLE"}
+        {"name": "AGENT_ROLE_BUSINESS_VIEWS", "object_type": "TABLE"}
     ]
 
     with pytest.raises(SystemSchemaError) as refused:
         manager.initialize()
     assert refused.value.code == DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED
-    assert ("AGENT_ROLE_SEARCH_ANSWER_PROFILES", "TABLE") in database.objects
+    assert ("AGENT_ROLE_BUSINESS_VIEWS", "TABLE") in database.objects
 
     result = manager.initialize(allow_destructive=True)
     assert result["operation"] == "migrated"
     assert result["status"] == "ready"
-    assert ("AGENT_ROLE_SEARCH_ANSWER_PROFILES", "TABLE") not in database.objects
+    assert ("AGENT_ROLE_BUSINESS_VIEWS", "TABLE") not in database.objects
     assert ("AGENT_ROLE_AGENTS_AGENT_IDX", "INDEX") in database.objects
     # 廃止した権限コードだけを消す。
     assert database.role_permissions == {("role-a", "menu.runs")}

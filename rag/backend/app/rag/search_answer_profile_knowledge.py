@@ -221,8 +221,8 @@ async def save_approved_faq_enabled(
 async def find_approved_faq(
     store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str, faq_id: str
 ) -> ApprovedFaqRecord | None:
-    """利用者が選んだ類似問を、検索・回答プロファイルの承認"
-    "済み FAQ から引き直す(提示がオンのときだけ)。"""
+    """利用者が選んだ類似問を、検索・回答プロファイルの承認
+    済み FAQ から引き直す(提示がオンのときだけ)。"""
     payload = await store.get_search_answer_profile_knowledge(
         search_answer_profile_id, APPROVED_FAQ_KIND
     )
