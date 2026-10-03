@@ -97,7 +97,8 @@ test("対象の検索・回答プロファイルは 1 つを選ぶ欄で、検�
   await expect(page.getByText("選んだ検索・回答プロファイルが参照するナレッジベースを検索し")).toHaveCount(0);
 
   await trigger.click();
-  const search = page.getByRole("combobox", { name: "対象の検索・回答プロファイルを検索" });
+  // 欄のラベルは RAG 検索・チャットで同じ「検索・回答プロファイル」（#860）。検索欄の名前は「<ラベル>を検索」。
+  const search = page.getByRole("combobox", { name: "検索・回答プロファイルを検索" });
   const listbox = page.getByRole("listbox", { name: /検索・回答プロファイル/ });
   await expect(search).toBeFocused();
   await expect(search).toHaveAttribute("placeholder", "検索・回答プロファイルの名前・説明で検索…");
