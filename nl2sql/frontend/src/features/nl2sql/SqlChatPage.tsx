@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   useInfiniteQuery,
   useMutation,
@@ -7,9 +7,11 @@ import {
 } from "@tanstack/react-query";
 import {
   Copy,
-  History,
   MessageSquarePlus,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
+  Search,
   SendHorizontal,
 } from "lucide-react";
 import {
@@ -28,8 +30,10 @@ import {
   SearchableSelectField,
   SelectField,
   SideSheet,
+  Skeleton,
   StatusBadge,
   TextareaField,
+  TimedLoadingState,
   isSubmitEnter,
   toast,
 } from "@engchina/production-ready-ui";
@@ -73,6 +77,32 @@ const dateFormatter = new Intl.DateTimeFormat("ja-JP", {
   hour: "2-digit",
   minute: "2-digit",
 });
+
+/**
+ * チャットの生成方法（#890）。SQL 生成画面の実行エンジン（`EngineSelector`）と同じ 3 つで、どれも生成と
+ * 安全検査だけを行い SQL を実行しない（Select AI Agent の SQL ツールは SHOWSQL）。
+ */
+const CHAT_ENGINES: ReadonlyArray<{
+  value: Nl2SqlEngine;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "select_ai",
+    label: t("chat.engine.selectAi"),
+    description: t("chat.engine.selectAi.desc"),
+  },
+  {
+    value: "select_ai_agent",
+    label: t("chat.engine.selectAiAgent"),
+    description: t("chat.engine.selectAiAgent.desc"),
+  },
+  {
+    value: "enterprise_ai_direct",
+    label: t("chat.engine.enterprise"),
+    description: t("chat.engine.enterprise.desc"),
+  },
+];
 
 function useInlineHistory() {
   const [inline, setInline] = useState(
@@ -119,6 +149,9 @@ export function SqlChatPage() {
     setHistorySheetOpen(false);
   }
   const historyOpen = inlineHistory ? historyPanelOpen : historySheetOpen;
+  const engineDescriptionId = useId();
+  const engineOption =
+    CHAT_ENGINES.find((option) => option.value === engine) ?? CHAT_ENGINES[0];
   const historyToggleRef = useRef<HTMLButtonElement>(null);
   const conversationRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
@@ -128,6 +161,8 @@ export function SqlChatPage() {
   if (!profileId && !profileSearch && profileOptions[0])
     setProfileId(profileOptions[0].id);
   const selectedProfileId = profileId;
+  // 最初の読み込みの間だけ欄の形の Skeleton を出す（候補の検索中は欄を出したまま一覧の中で示す）。
+  const profilesLoading = profiles.isPending && !profileSearch;
   const detail = useProfileUsageContext(selectedProfileId);
   const selectedProfile =
     detail.data?.profile ??
@@ -225,6 +260,12 @@ export function SqlChatPage() {
     },
   });
   const busy = send.isPending || stop.isPending;
+  // 使える業務プロファイルが無いときは、RAG・Agent のチャットと同じく会話の欄を出さない。
+  const noProfiles =
+    profiles.isSuccess &&
+    profileOptions.length === 0 &&
+    !profileSearch &&
+    !selectedProfile;
   const blocked =
     busy ||
     generating ||
@@ -323,125 +364,158 @@ export function SqlChatPage() {
     <div className="flex h-full min-h-0 flex-1 flex-col">
       <PageHeader wide title={t("nav.chat")} subtitle={t("chat.subtitle")} />
       <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4">
-        <Card>
-          <CardContent className="flex flex-col gap-4 md:flex-row md:items-end">
-            <SearchableSelectField
-              id="sql-chat-profile"
-              label={t("chat.profile")}
-              value={selectedProfileId}
-              width="full"
-              className="min-w-0 flex-1"
-              options={profileOptions.map((profile) => ({
-                value: profile.id,
-                label: profile.name,
-                description: profile.description,
-              }))}
-              selectedOption={
-                selectedProfile
-                  ? { value: selectedProfile.id, label: selectedProfile.name }
-                  : null
-              }
-              onQueryChange={setProfileSearch}
-              remote={{
-                total: profiles.data?.pages[0]?.total ?? 0,
-                searching: profiles.isFetching && !profiles.isFetchingNextPage,
-                hasMore: Boolean(profiles.hasNextPage),
-                loadingMore: profiles.isFetchingNextPage,
-                onLoadMore: () => void profiles.fetchNextPage(),
-              }}
-              disabled={busy}
-              onValueChange={(id) => {
-                setProfileId(id);
-                resetConversation();
-              }}
-              error={
-                profiles.isError || detail.isError
-                  ? errorMessage(
-                      profiles.error || detail.error,
-                      t("profiles.error.load"),
-                    )
-                  : undefined
-              }
-            />
-            <SelectField
-              id="sql-chat-engine"
-              label={t("chat.engine")}
-              value={engine}
-              width="sm"
-              disabled={busy || generating}
-              onValueChange={setEngine}
-              options={[
-                { value: "select_ai", label: t("chat.engine.selectAi") },
-                {
-                  value: "enterprise_ai_direct",
-                  label: t("chat.engine.enterprise"),
-                },
-              ]}
-            />
+        {/* 対象の業務プロファイル（#891）。RAG の検索・回答プロファイル・Agent の業務 Agent と同じく、
+            ページ上部のカードに全幅の SearchableSelectField を 1 つだけ置く（#635）。 */}
+        <Card className="shrink-0">
+          <CardContent className="p-4 sm:p-5">
+            {profilesLoading ? (
+              <TimedLoadingState
+                label={t("chat.profile.loading")}
+                operationKey="sql-chat-profiles-load"
+                framed={false}
+                testId="sql-chat-profiles-loading"
+              >
+                {/* ラベルと欄の寸法を予約する。 */}
+                <div className="space-y-1.5" aria-hidden>
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-[var(--button-height-md)] w-full" />
+                </div>
+              </TimedLoadingState>
+            ) : noProfiles ? (
+              <EmptyState
+                title={t("chat.noProfiles")}
+                hint={t("chat.noProfilesHint")}
+              />
+            ) : (
+              <SearchableSelectField
+                id="sql-chat-profile"
+                label={t("chat.profile")}
+                required
+                value={selectedProfileId}
+                width="full"
+                leadingIcon={Search}
+                placeholder={t("chat.profile.placeholder")}
+                options={profileOptions.map((profile) => ({
+                  value: profile.id,
+                  label: profile.name,
+                  description: profile.description || undefined,
+                  meta: t("chat.profile.objectCount", {
+                    count:
+                      profile.allowed_table_count + profile.allowed_view_count,
+                  }),
+                }))}
+                selectedOption={
+                  selectedProfile
+                    ? { value: selectedProfile.id, label: selectedProfile.name }
+                    : null
+                }
+                onQueryChange={setProfileSearch}
+                remote={{
+                  total: profiles.data?.pages[0]?.total ?? 0,
+                  searching:
+                    profiles.isFetching && !profiles.isFetchingNextPage,
+                  hasMore: Boolean(profiles.hasNextPage),
+                  loadingMore: profiles.isFetchingNextPage,
+                  onLoadMore: () => void profiles.fetchNextPage(),
+                }}
+                disabled={busy}
+                onValueChange={(id) => {
+                  setProfileId(id);
+                  resetConversation();
+                }}
+                labels={{
+                  searchPlaceholder: t("chat.profile.searchPlaceholder"),
+                  clearSearch: t("common.clearSearch"),
+                  count: (shown, total) =>
+                    t("chat.profile.count", { shown, total }),
+                  noMatch: (query) => t("chat.profile.noMatch", { query }),
+                  empty: t("chat.profile.emptyList"),
+                  searching: t("chat.profile.searching"),
+                  loadMore: t("chat.profile.loadMore"),
+                }}
+                error={
+                  profiles.isError || detail.isError
+                    ? errorMessage(
+                        profiles.error || detail.error,
+                        t("profiles.error.load"),
+                      )
+                    : undefined
+                }
+              />
+            )}
           </CardContent>
         </Card>
-        {profiles.isSuccess &&
-        profileOptions.length === 0 &&
-        !profileSearch &&
-        !selectedProfile ? (
-          <EmptyState
-            title={t("chat.noProfiles")}
-            hint={t("chat.noProfilesHint")}
-          />
-        ) : null}
-        <div
-          className={`grid min-h-0 min-w-0 flex-1 gap-4 ${inlineHistory && historyPanelOpen ? "lg:grid-cols-[minmax(0,17.5rem)_minmax(0,1fr)]" : ""}`}
-        >
-          {inlineHistory ? (
-            <aside
-              id="sql-chat-history"
-              aria-label={t("chat.history")}
-              data-testid="sql-chat-history"
-              className={
-                historyPanelOpen
-                  ? "flex min-h-0 min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface p-3 shadow-sm"
-                  : "hidden"
-              }
-            >
-              <h2 className="text-sm font-medium">{t("chat.history")}</h2>
-              {historyContent}
-            </aside>
-          ) : (
-            <SideSheet
-              open={historySheetOpen}
-              onClose={() => setHistorySheetOpen(false)}
-              title={t("chat.history")}
-              closeLabel={t("chat.closeHistory")}
-              id="sql-chat-history"
-              returnFocusRef={historyToggleRef}
-              bodyClassName="gap-3"
-              data-testid="sql-chat-history"
-            >
-              {historyContent}
-            </SideSheet>
-          )}
-          <section
-            aria-label={t("chat.conversation")}
-            className="flex min-h-0 min-w-0 flex-col rounded-lg border border-border bg-surface shadow-sm"
-            data-testid="sql-chat-panel"
+        {noProfiles ? null : (
+          <div
+            className={`grid min-h-0 min-w-0 flex-1 gap-4 ${inlineHistory && historyPanelOpen ? "lg:grid-cols-[minmax(0,17.5rem)_minmax(0,1fr)]" : ""}`}
           >
-            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
-              <h2 className="min-w-0 flex-1 basis-full truncate text-sm font-medium md:basis-auto">
-                {conversation.data?.conversation.title || t("chat.new")}
-              </h2>
-              <div className="flex shrink-0 gap-2">
+            {inlineHistory ? (
+              // lg 以上: 開くとチャットの左に並べ、チャットの幅が縮む。閉じている間も描いて aria-controls の先を保つ。
+              <aside
+                id="sql-chat-history"
+                aria-label={t("chat.history")}
+                data-testid="sql-chat-history"
+                className={
+                  historyPanelOpen
+                    ? "flex min-h-0 min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface px-3 pb-3 pt-2 shadow-sm"
+                    : "hidden"
+                }
+              >
+                {/* 見出しの行はチャットの上端の行と高さをそろえる。 */}
+                <h2 className="flex min-h-8 items-center px-1 text-sm font-medium text-fg">
+                  {t("chat.history")}
+                </h2>
+                {historyContent}
+              </aside>
+            ) : (
+              // lg 未満: 本文の上に重ねるモーダルの side sheet（会話を選ぶ・Esc・scrim・閉じるボタンで閉じる）。
+              <SideSheet
+                open={historySheetOpen}
+                onClose={() => setHistorySheetOpen(false)}
+                title={t("chat.history")}
+                closeLabel={t("chat.closeHistory")}
+                id="sql-chat-history"
+                returnFocusRef={historyToggleRef}
+                bodyClassName="gap-3"
+                data-testid="sql-chat-history"
+              >
+                {historyContent}
+              </SideSheet>
+            )}
+            <section
+              aria-label={t("chat.conversation")}
+              className="flex min-h-0 min-w-0 flex-col rounded-lg border border-border bg-surface shadow-sm"
+              data-testid="sql-chat-panel"
+            >
+              {/* 上端の行: 会話の履歴の開閉（左端）・今の会話の名前・新しい会話（RAG のチャットと同じ。#664 / #889）。 */}
+              <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
                 <Button
                   type="button"
                   ref={historyToggleRef}
-                  variant="secondary"
+                  variant="ghost"
                   size="sm"
-                  icon={History}
+                  iconOnly
+                  icon={historyOpen ? PanelLeftClose : PanelLeftOpen}
+                  aria-label={t("chat.history")}
                   aria-controls="sql-chat-history"
                   aria-expanded={historyOpen}
+                  data-testid="sql-chat-history-toggle"
                   onClick={toggleHistory}
-                >
-                  {t("chat.history")}
-                </Button>
+                />
+                {/* 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。 */}
+                <div className="min-w-0 flex-1">
+                  {!conversationId ? null : conversation.data ? (
+                    <h2
+                      className="truncate text-sm font-medium text-fg"
+                      title={conversation.data.conversation.title}
+                      data-testid="sql-chat-conversation-title"
+                    >
+                      {conversation.data.conversation.title}
+                    </h2>
+                  ) : conversation.isPending ? (
+                    <Skeleton className="h-4 w-40" />
+                  ) : null}
+                </div>
                 <Button
                   type="button"
                   variant="secondary"
@@ -453,111 +527,146 @@ export function SqlChatPage() {
                   {t("chat.new")}
                 </Button>
               </div>
-            </div>
-            <div
-              ref={conversationRef}
-              className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]"
-              data-testid="sql-chat-conversation"
-            >
-              {conversationId && conversation.isPending ? (
-                <ProcessingIndicator
-                  active
-                  label={t("chat.loading")}
-                  placement="panel"
-                />
-              ) : null}
-              {conversationId && conversation.isError ? (
-                <Banner severity="danger">
-                  {errorMessage(conversation.error, t("chat.loadFailed"))}
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    icon={RefreshCw}
-                    onClick={() => void conversation.refetch()}
-                  >
-                    {t("chat.retry")}
-                  </Button>
-                </Banner>
-              ) : null}
-              {!conversationId && !send.isPending ? (
-                <EmptyState
-                  title={t("chat.empty")}
-                  hint={t("chat.emptyHint")}
-                />
-              ) : null}
-              {turns.map((turn) => (
-                <ChatTurn key={turn.job_id} turn={turn} />
-              ))}
-              {send.isPending && submittedQuery ? (
-                <div className="space-y-2">
-                  <div className="ml-auto w-fit max-w-full rounded-md bg-accent-subtle px-3 py-2 break-words">
-                    {submittedQuery}
-                  </div>
+              <div
+                ref={conversationRef}
+                className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]"
+                data-testid="sql-chat-conversation"
+              >
+                {conversationId && conversation.isPending ? (
                   <ProcessingIndicator
                     active
-                    label={t("chat.generating")}
+                    label={t("chat.loading")}
                     placement="panel"
                   />
-                </div>
-              ) : null}
-            </div>
-            <div
-              className="shrink-0 space-y-2 border-t border-border p-3"
-              data-testid="sql-chat-composer-region"
-            >
-              <FieldActionRow
-                actions={
-                  <RunStopButton
-                    running={generating}
-                    onRun={submit}
-                    onStop={() => {
-                      if (!stop.isPending && !conversation.isError)
-                        stop.mutate();
-                    }}
-                    runLabel={t("chat.send")}
-                    stopLabel={t("chat.stop")}
-                    runIcon={SendHorizontal}
-                    runDisabled={!draft.trim() || blocked}
-                    size="lg"
-                    testId="sql-chat-send"
+                ) : null}
+                {conversationId && conversation.isError ? (
+                  <Banner severity="danger">
+                    {errorMessage(conversation.error, t("chat.loadFailed"))}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      icon={RefreshCw}
+                      onClick={() => void conversation.refetch()}
+                    >
+                      {t("chat.retry")}
+                    </Button>
+                  </Banner>
+                ) : null}
+                {!conversationId && !send.isPending ? (
+                  <EmptyState
+                    title={t("chat.empty")}
+                    hint={t("chat.emptyHint")}
                   />
-                }
+                ) : null}
+                {turns.map((turn) => (
+                  <ChatTurn key={turn.job_id} turn={turn} />
+                ))}
+                {send.isPending && submittedQuery ? (
+                  <div className="space-y-2">
+                    <div className="ml-auto w-fit max-w-full rounded-md bg-accent-subtle px-3 py-2 break-words">
+                      {submittedQuery}
+                    </div>
+                    <ProcessingIndicator
+                      active
+                      label={t("chat.generating")}
+                      placement="panel"
+                    />
+                  </div>
+                ) : null}
+              </div>
+              <div
+                className="shrink-0 space-y-2 border-t border-border p-3"
+                data-testid="sql-chat-composer-region"
               >
-                <TextareaField
-                  id="sql-chat-composer"
-                  label={t("chat.query")}
-                  labelHidden
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (isSubmitEnter(event) && !event.shiftKey) {
-                      event.preventDefault();
-                      submit();
-                    }
-                  }}
-                  rows={2}
-                  maxLength={10000}
-                  placeholder={t("chat.placeholder")}
-                  className="space-y-0"
-                />
-              </FieldActionRow>
-              {send.isError ? (
-                <Banner severity="danger">
-                  {errorMessage(send.error, t("chat.sendFailed"))}
-                </Banner>
-              ) : null}
-              {stop.isError ? (
-                <Banner severity="danger">
-                  {errorMessage(stop.error, t("chat.stopFailed"))}
-                </Banner>
-              ) : null}
-              {turns.length >= 50 ? (
-                <Banner severity="info">{t("chat.limit")}</Banner>
-              ) : null}
-            </div>
-          </section>
-        </div>
+                {/* 生成方法（#890）。RAG のチャットの「回答するモデル」と同じく、入力欄の直上の行に
+                    「ラベル・選択・説明」を並べる。ラベルは隣の文言で読めるので欄のラベルは読み上げだけにする。 */}
+                <div
+                  className="flex flex-wrap items-center gap-2"
+                  data-testid="sql-chat-engine-row"
+                >
+                  <span
+                    className="text-xs font-medium text-fg-muted"
+                    aria-hidden="true"
+                  >
+                    {t("chat.engine")}
+                  </span>
+                  <SelectField
+                    id="sql-chat-engine"
+                    label={t("chat.engine")}
+                    labelHidden
+                    value={engine}
+                    size="sm"
+                    width="sm"
+                    disabled={busy || generating}
+                    onValueChange={setEngine}
+                    describedBy={engineDescriptionId}
+                    options={CHAT_ENGINES.map(({ value, label }) => ({
+                      value,
+                      label,
+                    }))}
+                  />
+                  <span
+                    id={engineDescriptionId}
+                    className="text-xs text-fg-muted"
+                    data-testid="sql-chat-engine-description"
+                  >
+                    {engineOption.description}
+                  </span>
+                </div>
+                <FieldActionRow
+                  actions={
+                    <RunStopButton
+                      running={generating}
+                      onRun={submit}
+                      onStop={() => {
+                        if (!stop.isPending && !conversation.isError)
+                          stop.mutate();
+                      }}
+                      runLabel={t("chat.send")}
+                      stopLabel={t("chat.stop")}
+                      runIcon={SendHorizontal}
+                      runDisabled={!draft.trim() || blocked}
+                      size="lg"
+                      testId="sql-chat-send"
+                    />
+                  }
+                >
+                  <TextareaField
+                    id="sql-chat-composer"
+                    label={t("chat.query")}
+                    labelHidden
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (isSubmitEnter(event) && !event.shiftKey) {
+                        event.preventDefault();
+                        submit();
+                      }
+                    }}
+                    rows={2}
+                    maxLength={10000}
+                    placeholder={t("chat.placeholder")}
+                    className="space-y-0"
+                  />
+                </FieldActionRow>
+                {send.isError ? (
+                  <Banner severity="danger">
+                    {errorMessage(send.error, t("chat.sendFailed"))}
+                  </Banner>
+                ) : null}
+                {stop.isError ? (
+                  <Banner severity="danger">
+                    {errorMessage(stop.error, t("chat.stopFailed"))}
+                  </Banner>
+                ) : null}
+                {turns.length >= 50 ? (
+                  <Banner severity="info">{t("chat.limit")}</Banner>
+                ) : null}
+              </div>
+            </section>
+          </div>
+        )}
       </PageBody>
     </div>
   );

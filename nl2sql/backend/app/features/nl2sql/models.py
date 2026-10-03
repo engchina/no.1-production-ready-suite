@@ -1175,6 +1175,7 @@ class JobCreateRequest(BaseModel):
     include_interpretation: bool = False
     include_show_prompt: bool = False
     # チャットは既存の非同期ジョブで生成・安全検査だけを行う。既存 API の既定は実行あり。
+    # 3 つの生成方法とも生成だけで実行しない（Select AI Agent の SQL ツールは SHOWSQL。#890）。
     generation_only: bool = False
     previous_job_id: str | None = Field(default=None, max_length=64)
 
@@ -1183,8 +1184,6 @@ class JobCreateRequest(BaseModel):
         _validate_select_ai_request_overrides(self.engine, self.select_ai_overrides)
         if self.previous_job_id and not self.generation_only:
             raise ValueError("会話の継続は SQL の生成だけのジョブで利用できます。")
-        if self.generation_only and self.engine == Nl2SqlEngine.SELECT_AI_AGENT:
-            raise ValueError("チャットでは Select AI または Enterprise AI を選んでください。")
         if self.generation_only and not self.question.strip():
             raise ValueError("クエリを入力してください。")
         if self.generation_only and len(self.question) > 10000:
