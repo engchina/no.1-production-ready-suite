@@ -789,7 +789,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/nl2sql/db-admin/drop-table"): _allowed("menu.table_management"),
     ("POST", "/nl2sql/db-admin/drop-view"): _allowed("menu.view_management"),
     ("POST", "/nl2sql/db-admin/execute"): _ADMIN_SQL,
-    ("POST", "/nl2sql/db-admin/extract-join-where"): _ADMIN_SQL,
+    # ビュー管理の「JOIN/WHERE 条件抽出」だけが使う。画面と同じ権限にする（#934）。
+    ("POST", "/nl2sql/db-admin/extract-join-where"): _allowed("menu.view_management"),
     ("POST", "/nl2sql/db-admin/import-tabular"): _DB_ADMIN_TABLE_DATA,
     ("GET", "/nl2sql/db-admin/objects"): DATA_PREP_MENUS,
     ("POST", "/nl2sql/db-admin/preview-data"): _DB_ADMIN_PREVIEW,

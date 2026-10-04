@@ -1968,6 +1968,9 @@ def test_every_api_route_is_classified_by_manifest() -> None:
         "POST", "/nl2sql/query-sessions/{session_id}/generate-sql"
     ) == frozenset({QUERY_GENERATE_PERMISSION})
     assert permission_for_route("POST", "/nl2sql/db-admin/execute") == frozenset({"menu.admin_sql"})
+    assert permission_for_route("POST", "/nl2sql/db-admin/extract-join-where") == frozenset(
+        {"menu.view_management"}
+    )
     assert permission_for_route("POST", "/nl2sql/db-admin/statements") == frozenset(
         {
             "menu.admin_sql",
@@ -5563,6 +5566,18 @@ def test_data_preparation_actions_enforce_policy_and_revalidate_roles(
                 allowed = menu in {"table_management", "data_management"}
                 assert response.status_code == (200 if allowed else 403), (menu, response.text)
                 assert len(executed) == before + int(allowed)
+                # JOIN/WHERE 条件抽出はビュー管理の画面だけが使うので、画面と同じ権限（#934）。
+                response = await client.post(
+                    "/api/nl2sql/db-admin/extract-join-where",
+                    headers=headers,
+                    json={
+                        "ddl": "CREATE VIEW V AS SELECT A.ID FROM A JOIN B ON A.ID = B.ID",
+                    },
+                )
+                assert response.status_code == (200 if menu == "view_management" else 403), (
+                    menu,
+                    response.text,
+                )
                 if menu == "comment_management":
                     # 同じ cookie / actor でもロール削除は次の実行から拒否する。
                     security.update_role(
