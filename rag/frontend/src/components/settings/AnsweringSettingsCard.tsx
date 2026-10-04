@@ -1,19 +1,20 @@
 import {
-  Button,
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
+  FormActionBar,
   FormStatus,
   SelectField,
   type SelectFieldOption,
   Skeleton,
   Switch,
 } from "@engchina/production-ready-ui";
-import { MessageSquareText, Save } from "lucide-react";
+import { MessageSquareText, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
 
+import { ApiErrorState } from "@/components/StateViews";
 import {
   ApiError,
   type AnsweringSettingsData,
@@ -77,7 +78,11 @@ export function AnsweringSettingsCard() {
       <CardContent>
         {query.isPending ? <Skeleton className="h-48 w-full" /> : null}
         {query.isError ? (
-          <FormStatus tone="danger" message={t("settings.answering.loadError")} />
+          <ApiErrorState
+            error={query.error}
+            fallback={t("settings.answering.loadError")}
+            onRetry={() => void query.refetch()}
+          />
         ) : null}
         {/* 保存値が変わったら編集欄を作り直す（保存後に保存値へ揃える）。 */}
         {query.data ? <AnsweringForm key={JSON.stringify(query.data)} saved={query.data} /> : null}
@@ -90,11 +95,24 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   const save = useUpdateAnsweringSettings();
   const [form, setForm] = useState<AnsweringDraft>(() => formFromSettings(saved));
   const dirty = JSON.stringify(form) !== JSON.stringify(formFromSettings(saved));
-  useLeaveGuard(dirty);
+  // 保存中は離脱を止め、欄も変えられなくする（保存に成功すると保存値で作り直すため、保存中の変更が消える。#1002）。
+  useLeaveGuard(dirty, save.isPending);
+  const disabled = save.isPending;
 
   function update(patch: Partial<AnsweringDraft>) {
     save.reset();
     setForm((current) => ({ ...current, ...patch }));
+  }
+
+  function resetForm() {
+    save.reset();
+    setForm(formFromSettings(saved));
+  }
+
+  function submit() {
+    if (save.isPending) return;
+    // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
+    save.mutate(form, { onSuccess: () => toast.success(t("settings.answering.saved")) });
   }
 
   return (
@@ -104,6 +122,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
         <SelectField
           id="answering-query-strategy"
           className="min-w-0"
+          disabled={disabled}
           label={t("settings.answering.queryStrategy")}
           helper={t("settings.answering.queryStrategyHint")}
           value={form.query_strategy}
@@ -113,6 +132,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
         <SelectField
           id="answering-answer-flow"
           className="min-w-0"
+          disabled={disabled}
           label={t("settings.answering.answerFlow")}
           helper={t("settings.answering.answerFlowHint")}
           value={form.answer_flow}
@@ -122,6 +142,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
         <SelectField
           id="answering-neighbor-child-count"
           className="min-w-0"
+          disabled={disabled}
           label={t("settings.answering.neighborChildCount")}
           helper={t("settings.answering.neighborChildCountHint")}
           value={String(form.neighbor_child_count)}
@@ -139,7 +160,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           label={t("settings.answering.rerank")}
           description={t("settings.answering.rerankHint")}
           checked={form.rerank_enabled}
-          disabled={save.isPending}
+          disabled={disabled}
           onChange={(checked) => update({ rerank_enabled: checked })}
         />
         <SwitchRow
@@ -147,7 +168,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           label={t("settings.answering.screenLinking")}
           description={t("settings.answering.screenLinkingHint")}
           checked={form.screen_linking_enabled}
-          disabled={save.isPending}
+          disabled={disabled}
           onChange={(checked) => update({ screen_linking_enabled: checked })}
         />
         <SwitchRow
@@ -155,35 +176,44 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           label={t("settings.answering.autoFieldFilter")}
           description={t("settings.answering.autoFieldFilterHint")}
           checked={form.auto_field_filter_enabled}
-          disabled={save.isPending}
+          disabled={disabled}
           onChange={(checked) => update({ auto_field_filter_enabled: checked })}
         />
       </div>
-      <div className="flex flex-wrap items-center gap-3">
-        <Button
-          type="button"
-          size="lg"
-          icon={Save}
-          loading={save.isPending}
-          disabled={!dirty}
-          onClick={() =>
-            save.mutate(form, { onSuccess: () => toast.success(t("settings.answering.saved")) })
-          }
-        >
-          {t("settings.answering.save")}
-        </Button>
-        {dirty && !save.isPending ? (
-          <FormStatus tone="warning" message={t("settings.retrieval.actions.unsaved")} />
-        ) : null}
-        {save.isError ? (
-          <FormStatus
-            tone="danger"
-            message={
-              save.error instanceof ApiError ? save.error.message : t("settings.answering.saveError")
-            }
-          />
-        ) : null}
-      </div>
+      <FormActionBar
+        ariaLabel={t("settings.answering.actions.label")}
+        primaryActions={[
+          {
+            id: "save",
+            label: t("settings.answering.save"),
+            icon: Save,
+            loading: save.isPending,
+            disabled: !dirty,
+            onClick: submit,
+          },
+        ]}
+        secondaryActions={[
+          {
+            id: "reset",
+            label: t("settings.retrieval.actions.reset"),
+            icon: RotateCcw,
+            disabled: !dirty || save.isPending,
+            onClick: resetForm,
+          },
+        ]}
+        status={
+          save.isError ? (
+            <FormStatus
+              tone="danger"
+              message={
+                save.error instanceof ApiError ? save.error.message : t("settings.answering.saveError")
+              }
+            />
+          ) : dirty ? (
+            <FormStatus tone="warning" message={t("settings.retrieval.actions.unsaved")} />
+          ) : null
+        }
+      />
     </div>
   );
 }

@@ -1,6 +1,12 @@
 import { expect, type Locator, type Page, test } from "./fixtures/test";
 
-import { apiEnvelope, expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import {
+  apiEnvelope,
+  expectedControlHeight,
+  expectNoPageOverflow,
+  mockDatabaseReady,
+  mockLocalAuth,
+} from "./_helpers";
 
 // ナレッジベースが数百件でも、検索して選べる（#578）。
 // - 200 件以下は全件を 1 回で読み、画面側で絞り込む。
@@ -129,6 +135,31 @@ test("選んでも一覧は開いたままで、「完了」で閉じて検索�
   await toggle.click();
   await expect(listbox).toHaveCount(0);
   await expectNoPageOverflow(page);
+});
+
+test("検索欄の右の開閉・消去のボタンは検索欄と同じ高さ（md 36px、タッチ端末 44px）", async ({ page }) => {
+  await mockKnowledgeBases(page, MANY);
+  await page.goto("/evaluation");
+
+  const combobox = page.getByRole("combobox", { name: "ナレッジベース" });
+  const toggle = page.getByRole("button", { name: "ナレッジベースの一覧を開閉" });
+  const expected = await expectedControlHeight(page, "md");
+  await expect(combobox).toBeVisible();
+  const heightOf = async (locator: Locator) => Math.round((await locator.boundingBox())?.height ?? 0);
+  expect(await heightOf(combobox)).toBe(expected);
+  expect(await heightOf(toggle)).toBe(expected);
+
+  // 検索語を入れると出る「消去」も同じ高さ。ボタンは検索欄の枠の中に収まる。
+  await combobox.fill("-27");
+  const clear = page.getByRole("button", { name: "検索語をクリア", exact: true });
+  await expect(clear).toBeVisible();
+  expect(await heightOf(clear)).toBe(expected);
+  const field = await combobox.boundingBox();
+  for (const button of [toggle, clear]) {
+    const box = await button.boundingBox();
+    expect(box && field && box.y >= field.y - 0.5 && box.y + box.height <= field.y + field.height + 0.5).toBe(true);
+    expect(box && field && box.x + box.width <= field.x + field.width + 0.5).toBe(true);
+  }
 });
 
 test("キーボードだけで選び、Esc で閉じ、Tab で部品の外へ出ると閉じる", async ({ page }) => {

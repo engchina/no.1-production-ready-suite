@@ -98,7 +98,7 @@ class SkillRegistry:
         """runtime(UI/API)層へ追加・更新する。builtin id は拒否。"""
         with self._lock:
             if skill.id in self._builtin_ids:
-                raise ValueError("builtin skill cannot be overridden")
+                raise ValueError("組み込みのスキルと同じ ID は使えません。")
             stored = skill.model_copy(deep=True, update={"source": "runtime", "updated_at": _now()})
             self._skills[stored.id] = stored
             return stored.model_copy(deep=True)
@@ -110,7 +110,9 @@ class SkillRegistry:
             if skill is None:
                 raise KeyError(skill_id)
             if skill.source != "runtime":
-                raise ValueError(f"{skill.source} skill cannot be removed via API")
+                raise ValueError(
+                    "組み込み・ファイル・環境変数・プラグインのスキルは画面から削除できません。"
+                )
             del self._skills[skill_id]
 
     def export(self, source: str | None = None) -> list[AgentSkillDefinition]:
