@@ -25,6 +25,7 @@ import {
   PageBody,
   RowTitleButton,
   TextareaField,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 import { agentApi, type PluginManifest, type PluginSummary } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
@@ -68,7 +69,7 @@ export function PluginsPage() {
       toast.success(t("plugins.enabledUpdated"));
       void invalidate();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
   const uninstallMutation = useMutation({
     mutationFn: (id: string) => agentApi.uninstallPlugin(id),
@@ -76,7 +77,7 @@ export function PluginsPage() {
       toast.success(t("plugins.uninstalled"));
       void invalidate();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
   const reloadMutation = useMutation({
     mutationFn: () => agentApi.reloadPlugins(),
@@ -84,7 +85,7 @@ export function PluginsPage() {
       toast.success(t("plugins.reloaded"));
       void invalidate();
     },
-    onError: (error) => toast.error(t("plugins.reloadFailed"), { description: error.message }),
+    onError: (error) => toast.error(t("plugins.reloadFailed"), { description: apiErrorMessage(error, t("common.error.retryLater")) }),
   });
 
   async function uninstall(plugin: PluginSummary) {
@@ -309,7 +310,7 @@ function PluginInstallEditor({
       <PageBody wide className="space-y-6">
         {/* 導入の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
         <SaveErrorBanner
-          message={installMutation.error ? (installMutation.error as Error).message : null}
+          message={installMutation.error ? apiErrorMessage(installMutation.error, t("common.error.operation")) : null}
           attemptKey={installMutation.submittedAt}
           testId="plugin-install-error"
         />

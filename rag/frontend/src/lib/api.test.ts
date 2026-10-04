@@ -7,7 +7,18 @@ import {
   ApiError,
   api,
 } from "./api";
-import { t } from "./i18n";
+import {
+  ApiTransportError,
+  DEFAULT_API_TRANSPORT_MESSAGES,
+  presentApiError,
+} from "@engchina/production-ready-ui";
+
+function timeoutMessage(timeoutMs: number): string {
+  return (
+    DEFAULT_API_TRANSPORT_MESSAGES.timeout(Math.ceil(timeoutMs / 1000)) +
+    DEFAULT_API_TRANSPORT_MESSAGES.timeoutAction
+  );
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -23,7 +34,7 @@ afterEach(() => {
 
 describe("api.request envelope", () => {
   it("成功時は data を取り出す", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: { status: "ok", check: "ok", detail: null },
         error_messages: [],
@@ -41,7 +52,7 @@ describe("api.request envelope", () => {
   it("エラー時は error_messages を持つ ApiError を投げる", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
+      vi.fn().mockImplementation(async () =>
         jsonResponse({ data: null, error_messages: ["権限がありません。"], warning_messages: [] }, 403)
       )
     );
@@ -67,9 +78,7 @@ describe("api.request envelope", () => {
 
     const requestPromise = expect(api.getDatabaseStatus()).rejects.toMatchObject({
       status: 408,
-      messages: [
-        t("common.api.timeout", { seconds: Math.ceil(API_REQUEST_TIMEOUT_MS / 1000) }),
-      ],
+      messages: [timeoutMessage(API_REQUEST_TIMEOUT_MS)],
     });
     await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS);
 
@@ -78,6 +87,43 @@ describe("api.request envelope", () => {
       "/api/ready/database",
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
+  });
+
+  it("通信断（TypeError: Failed to fetch）は日本語の文の ApiError にし、英語の文は「詳細」にだけ残す（Issue 906）", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+
+    const error = await api.getDatabaseStatus().catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 0 });
+    expect((error as ApiError).message).toBe(
+      DEFAULT_API_TRANSPORT_MESSAGES.network + DEFAULT_API_TRANSPORT_MESSAGES.networkAction
+    );
+    expect((error as ApiError).cause).toBeInstanceOf(ApiTransportError);
+    const presented = presentApiError(error, "既定");
+    expect(presented.summary).toBe(DEFAULT_API_TRANSPORT_MESSAGES.network);
+    expect(presented.details).toContainEqual({ label: "元のメッセージ", value: "Failed to fetch" });
+    expect(presented.details).toContainEqual({ label: "要求", value: "GET /api/ready/database" });
+  });
+
+  it("本文の読み取り中に接続が切れたら、空の成功にせず通信断の ApiError にする（Issue 906）", async () => {
+    const response = jsonResponse({ data: { status: "ok" } });
+    vi.spyOn(response, "json").mockRejectedValue(new TypeError("network error"));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+    await expect(api.getDatabaseStatus()).rejects.toMatchObject({
+      status: 0,
+      messages: [DEFAULT_API_TRANSPORT_MESSAGES.network + DEFAULT_API_TRANSPORT_MESSAGES.networkAction],
+    });
+  });
+
+  it("利用者の中止（AbortError）は変換せずにそのまま投げる", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new DOMException("The operation was aborted.", "AbortError"))
+    );
+
+    await expect(api.getDatabaseStatus()).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("回答を生成する検索は通常の timeout で打ち切らず、backend の回答生成の上限より長く待つ", async () => {
@@ -132,9 +178,7 @@ describe("api.request envelope", () => {
 
     await expect(requestPromise).resolves.toMatchObject({
       status: 408,
-      messages: [
-        t("common.api.timeout", { seconds: Math.ceil(ANSWER_EVALUATION_TIMEOUT_MS / 1000) }),
-      ],
+      messages: [timeoutMessage(ANSWER_EVALUATION_TIMEOUT_MS)],
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/search/answers/trace-1/evaluation",
@@ -147,7 +191,7 @@ describe("api.request envelope", () => {
     ["submitRunEvaluationJob", "/api/evaluation/jobs/run"],
     ["submitCompareEvaluationJob", "/api/evaluation/jobs/compare"],
   ] as const)("品質評価の job の投入（%s）は job の API に POST する", async (method, path) => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse(
         {
           data: { job_id: "job-1", status: "RUNNING", total_cases: 1, completed_cases: 0 },
@@ -169,7 +213,7 @@ describe("api.request envelope", () => {
   });
 
   it("getEvaluationJob / cancelEvaluationJob は job id を path に入れる", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: { job_id: "job/1", status: "CANCELLED" },
         error_messages: [],
@@ -187,7 +231,7 @@ describe("api.request envelope", () => {
   });
 
   it("listAnswerRecords はページングと trace_id の絞り込みを query string にする", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: { items: [], total: 0, limit: 10, offset: 20, has_next: false },
         error_messages: [],
@@ -209,7 +253,7 @@ describe("api.request envelope", () => {
   });
 
   it("listDocuments は query string を組み立てる", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({ data: { items: [], total: 0, limit: 50, offset: 0, has_next: false }, error_messages: [], warning_messages: [] })
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -233,7 +277,7 @@ describe("api.request envelope", () => {
   it("listDocuments は縮退応答の warning_messages を data へ併設する", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
+      vi.fn().mockImplementation(async () =>
         jsonResponse({
           data: { items: [], total: 0, limit: 50, offset: 0, has_next: false },
           error_messages: [],
@@ -251,7 +295,7 @@ describe("api.request envelope", () => {
   it("正常応答では warning_messages が空配列になる", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
+      vi.fn().mockImplementation(async () =>
         jsonResponse({
           data: { items: [], total: 0, limit: 50, offset: 0, has_next: false },
           error_messages: [],
@@ -266,7 +310,7 @@ describe("api.request envelope", () => {
   });
 
   it("knowledge base API は CRUD endpoint を呼び分ける", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: {
           id: "kb-1",
@@ -304,7 +348,7 @@ describe("api.request envelope", () => {
   });
 
   it("document knowledge base API は所属取得と置換 endpoint を呼ぶ", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: [{ id: "kb-1", name: "社内規程" }],
         error_messages: [],
@@ -327,7 +371,7 @@ describe("api.request envelope", () => {
   });
 
   it("ingestion job API は status filter と queue 操作 endpoint を呼ぶ", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: {
           id: "job-1",
@@ -365,7 +409,7 @@ describe("api.request envelope", () => {
   });
 
   it("document workspace API はレシピの chunk / export と segment endpoint を呼ぶ", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: [],
         error_messages: [],
@@ -403,7 +447,7 @@ describe("api.request envelope", () => {
   });
 
   it("segment retry は recipe 未指定の legacy URL も維持する", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({ data: {}, error_messages: [], warning_messages: [] })
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -416,7 +460,7 @@ describe("api.request envelope", () => {
   });
 
   it("レシピ分割プレビューは一時設定を POST する", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: {
           chunks: [],
@@ -492,7 +536,7 @@ describe("api.request envelope", () => {
         rerank_model: "cohere.rerank-v4.0-fast",
       },
     };
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: { settings: payload, checks: {}, source: "runtime" },
         error_messages: [],
@@ -556,7 +600,7 @@ describe("api.request envelope", () => {
       model_id: "enterprise-llm",
       vision_enabled: false,
     };
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: {
           status: "success",
@@ -594,7 +638,7 @@ describe("api.request envelope", () => {
       dsn: "ragdb_high",
       wallet_dir: "/u01/aipoc/instantclient_23_26/network/admin",
     };
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: {
           status: "failed",
@@ -632,7 +676,7 @@ describe("api.request envelope", () => {
       object_storage_namespace: "example-namespace",
       object_storage_bucket: "rag-originals",
     };
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: {
           ...payload,
@@ -789,7 +833,7 @@ describe("api.request envelope", () => {
       ],
       config_source: "runtime",
     };
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: payload,
         error_messages: [],
@@ -887,7 +931,7 @@ describe("api.request envelope", () => {
       capabilities: [],
       config_source: "runtime",
     };
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: responsePayload,
         error_messages: [],
@@ -915,7 +959,7 @@ describe("api.request envelope", () => {
       profile: "DEFAULT",
       region: "ap-osaka-1",
     };
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: { namespace: "mytenancynamespace" },
         error_messages: [],
@@ -943,7 +987,7 @@ describe("api.request envelope", () => {
       tenancy: "ocid1.tenancy.oc1..example",
       region: "ap-osaka-1",
     };
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: {
           config_file: "~/.oci/config",
@@ -980,7 +1024,7 @@ describe("api.request envelope", () => {
       object_storage_region: "us-chicago-1",
       object_storage_namespace: "mytenancynamespace",
     };
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: {
           backend: "local",
@@ -1012,7 +1056,7 @@ describe("api.request envelope", () => {
   });
 
   it("testOciConfig は保存済み OCI config のテスト API を呼ぶ", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: {
           status: "success",
@@ -1064,7 +1108,7 @@ describe("api.request envelope", () => {
   });
 
   it("uploadOciPrivateKey は秘密鍵ファイルを FormData で送る", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: { key_file: "~/.oci/oci_api_key.pem", saved: true },
         error_messages: [],
@@ -1093,7 +1137,7 @@ describe("api.request envelope", () => {
 
 describe("api.services", () => {
   it("getServiceCatalog は /api/services/catalog からプローブなし一覧を取り出す", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: {
           control_enabled: true,
@@ -1123,7 +1167,7 @@ describe("api.services", () => {
   });
 
   it("getServiceStatus は service_id を URL エンコードして状態を取り出す", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: {
           service_id: "parser-asr",
@@ -1150,7 +1194,7 @@ describe("api.services", () => {
   });
 
   it("getExternalParserStatus は外部解析エンジンの接続状態を取得する", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: {
           backend: "dots_ocr",
@@ -1174,7 +1218,7 @@ describe("api.services", () => {
   });
 
   it("controlService は service_id を URL エンコードして POST する", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: { service_id: "parser-asr", action: "start", status: "running" },
         error_messages: [],
@@ -1193,7 +1237,7 @@ describe("api.services", () => {
   });
 
   it("getServiceLogs は service_id と lines を URL エンコードして取得する", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({
         data: {
           service_id: "parser-docling",
@@ -1424,14 +1468,18 @@ describe("文書アップロードの送信（XHR）", () => {
     );
   });
 
-  it("接続の失敗は ApiError ではない例外にする", async () => {
+  it("接続の失敗は通信断の ApiError（日本語の文）にする（Issue 906）", async () => {
     stubXhr();
 
     const pending = api.uploadDocument(new File(["test"], "policy.txt"));
     lastXhr().failNetwork();
 
     const error = await pending.catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(Error);
-    expect(error).not.toBeInstanceOf(ApiError);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      status: 0,
+      messages: [DEFAULT_API_TRANSPORT_MESSAGES.network + DEFAULT_API_TRANSPORT_MESSAGES.networkAction],
+    });
+    expect((error as ApiError).cause).toBeInstanceOf(ApiTransportError);
   });
 });

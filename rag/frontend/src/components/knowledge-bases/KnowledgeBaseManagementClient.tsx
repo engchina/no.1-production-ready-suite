@@ -30,12 +30,8 @@ import { ListPagination } from "@/components/ListPagination";
 import { EditorDraftNotice } from "@/components/layout/EntityLayout";
 import { readEditorDraft } from "@/components/layout/use-entity-editor-draft";
 import { useAuth } from "@/components/security/AuthProvider";
-import { EmptyState, ErrorState } from "@/components/StateViews";
-import {
-  ApiError,
-  type KnowledgeBaseStatus,
-  type KnowledgeBaseSummary,
-} from "@/lib/api";
+import { EmptyState, ApiErrorState } from "@/components/StateViews";
+import { type KnowledgeBaseStatus, type KnowledgeBaseSummary } from "@/lib/api";
 import { useEditorRoute } from "@/lib/editor-route";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -220,10 +216,9 @@ function KnowledgeBaseList({
         />
 
         {query.isError ? (
-          <ErrorState
-            message={
-              query.error instanceof ApiError ? query.error.message : t("knowledgeBases.error.load")
-            }
+          <ApiErrorState
+            error={query.error}
+            fallback={t("knowledgeBases.error.load")}
             onRetry={() => void query.refetch()}
           />
         ) : query.isPending || movingToLastPage ? (
