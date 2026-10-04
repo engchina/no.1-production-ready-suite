@@ -207,10 +207,19 @@ describe("Autonomous Database の情報の読み込み中", () => {
 
     await act(async () => {
       info.resolve(AVAILABLE);
-      await info.promise;
-      // TanStack Query は結果の通知を次の tick にまとめる。
-      await new Promise((done) => setTimeout(done, 0));
     });
+    // TanStack Query は結果の通知を setTimeout(0) で次の tick に送る。その timer は queryFn の
+    // Promise の解決から数 microtask 後に登録されるため、こちらの setTimeout(0) を 1 回待つだけ
+    // では先に回って通知の前に検査することがある（負荷のある CI で失敗した）。消えるまで tick を
+    // 進める（上限付き）。
+    for (let i = 0; i < 20; i += 1) {
+      if (!host.querySelector('[data-testid="settings-adb-loading"]')) break;
+      await act(async () => {
+        await new Promise((done) => setTimeout(done, 0));
+      });
+    }
     expect(host.querySelector('[data-testid="settings-adb-loading"]')).toBeNull();
+    // 取得した状態（見出しの StatusBadge）へ置き換わる。
+    expect(host.textContent).toContain("起動済み");
   });
 });
