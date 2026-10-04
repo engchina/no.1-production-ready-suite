@@ -212,7 +212,18 @@ PLATFORM_AUTH_IDLE_TIMEOUT_MINUTES=60
 PLATFORM_AUTH_ABSOLUTE_TIMEOUT_HOURS=12
 PLATFORM_AUTH_FAILED_LOGIN_LIMIT=5
 PLATFORM_AUTH_LOCKOUT_MINUTES=15
+PLATFORM_AUTH_LOGIN_ATTEMPT_LIMIT=5
+PLATFORM_AUTH_LOGIN_IP_ATTEMPT_LIMIT=20
+PLATFORM_AUTH_LOGIN_ATTEMPT_WINDOW_MINUTES=15
 ```
+
+ログインの試行は、DB のユーザーのロックとは別に、ログインの入口で回数を制限する（#1087）。
+窓（`PLATFORM_AUTH_LOGIN_ATTEMPT_WINDOW_MINUTES` 分）の中の失敗が、ログイン ID と送信元 IP の組ごとに
+`PLATFORM_AUTH_LOGIN_ATTEMPT_LIMIT` 回、送信元 IP ごとに `PLATFORM_AUTH_LOGIN_IP_ATTEMPT_LIMIT` 回に達すると、
+窓が過ぎるまで `429 SECURITY_RATE_LIMITED`（`Retry-After` 付き）を返す。DB のユーザーではない
+`system_admin` も、存在しないログイン ID も同じ数え方・同じ応答にする。カウンタは backend のプロセスの
+メモリに持つ（worker ごと・再起動で消える）。送信元 IP は Nginx の `X-Forwarded-For` を uvicorn の
+proxy headers（gunicorn の `forwarded_allow_ips` の既定 127.0.0.1 / ::1）が解決した値を使う。
 
 既定では、通常ユーザーの無操作 timeout は 60 分、session の絶対有効期限は 12 時間とする。
 業務端末が管理下にあり、無人端末リスクを組織として受容できる低リスク環境でだけ、

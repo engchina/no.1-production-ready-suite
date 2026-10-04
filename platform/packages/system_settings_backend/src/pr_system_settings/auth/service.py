@@ -40,11 +40,13 @@ from .domain import (
 from .errors import (
     CSRF_INVALID_CODE,
     LoginFailed,
+    LoginRateLimited,
     SecurityApiError,
     SecurityConflict,
     SecurityMigrationRequired,
     SecurityNotFound,
 )
+from .login_throttle import LoginThrottle, LoginThrottleLimits
 from .passwords import hash_password, verify_dummy_password, verify_password
 from .service_token import verify_service_token
 from .store import PLATFORM_AUTH_TABLES, PRODUCT_ROLE_PERMISSION_TABLES, AuthStore
@@ -81,6 +83,9 @@ class AuthSettings(Protocol):
     app_auth_idle_timeout_minutes: int
     app_auth_failed_login_limit: int
     app_auth_lockout_minutes: int
+    app_auth_login_attempt_limit: int
+    app_auth_login_ip_attempt_limit: int
+    app_auth_login_attempt_window_minutes: int
     app_auth_password_min_length: int
     app_auth_password_max_length: int
     app_auth_argon2_time_cost: int
@@ -134,6 +139,8 @@ class AuthService:
         self.settings = settings
         self._bootstrap_lock = threading.Lock()
         self._bootstrap_checked = False
+        # ログインの試行の回数の制限（#1087）。service はプロセスに 1 つで、プロセスの中で一貫する。
+        self.login_throttle = LoginThrottle()
 
     # ---- bootstrap ----
 
@@ -161,7 +168,44 @@ class AuthService:
         request_id: str = "",
         client_ip: str = "",
     ) -> tuple[Principal, str, str]:
+        """ログインする。失敗が多すぎる送信元には 429 を返す（#1087）。
+
+        構成管理者・DB のユーザー・存在しないユーザーのどれでも、同じ数え方と同じ応答にする
+        （ユーザーの有無を分からなくする。#1105）。制限中はパスワードを照合しない。
+        """
         normalized_login_user_id = login_user_id.strip()
+        limits = self._login_throttle_limits()
+        retry_after = self.login_throttle.retry_after_seconds(
+            normalized_login_user_id, client_ip, limits
+        )
+        if retry_after is not None:
+            logger.warning(
+                "auth_login_rate_limited",
+                extra={
+                    "request_id": request_id,
+                    "client_ip": client_ip,
+                    "retry_after_seconds": retry_after,
+                },
+            )
+            raise LoginRateLimited(retry_after)
+        try:
+            result = self._authenticate_login(normalized_login_user_id, password)
+        except LoginFailed:
+            self.login_throttle.record_failure(normalized_login_user_id, client_ip, limits)
+            raise
+        self.login_throttle.record_success(normalized_login_user_id, client_ip)
+        return result
+
+    def _login_throttle_limits(self) -> LoginThrottleLimits:
+        return LoginThrottleLimits(
+            per_login_and_ip=self.settings.app_auth_login_attempt_limit,
+            per_ip=self.settings.app_auth_login_ip_attempt_limit,
+            window_seconds=self.settings.app_auth_login_attempt_window_minutes * 60,
+        )
+
+    def _authenticate_login(
+        self, normalized_login_user_id: str, password: str
+    ) -> tuple[Principal, str, str]:
         if normalized_login_user_id == FIXED_ADMIN_LOGIN_USER_ID:
             _, configured_password = self._ensure_configured_system_admin_ready()
             if constant_time_equal(password, configured_password):

@@ -37,6 +37,7 @@ class SecurityApiError(RuntimeError):
         title: str | None = None,
         retryable: bool = False,
         field_errors: Sequence[Mapping[str, str]] = (),
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(public_message)
         self.status_code = status_code
@@ -45,11 +46,31 @@ class SecurityApiError(RuntimeError):
         self.title = title
         self.retryable = retryable
         self.field_errors = tuple(dict(item) for item in field_errors)
+        # 応答に足す header（例: 429 の `Retry-After`）。製品の handler が応答へ渡す。
+        self.headers = dict(headers or {})
 
 
 class LoginFailed(SecurityApiError):
     def __init__(self) -> None:
         super().__init__(401, "ログインユーザーIDまたはパスワードを確認してください。")
+
+
+LOGIN_RATE_LIMITED_MESSAGE = (
+    "ログインの試行が多すぎます。しばらく待ってから、もう一度お試しください。"
+)
+
+
+class LoginRateLimited(SecurityApiError):
+    """ログインの試行の回数の上限に達した（#1087）。ユーザーの有無に関わらず同じ応答。"""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(
+            429,
+            LOGIN_RATE_LIMITED_MESSAGE,
+            retryable=True,
+            headers={"Retry-After": str(retry_after_seconds)},
+        )
+        self.retry_after_seconds = retry_after_seconds
 
 
 class SecurityStoreError(RuntimeError):

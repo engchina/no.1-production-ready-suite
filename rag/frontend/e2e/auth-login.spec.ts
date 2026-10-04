@@ -35,6 +35,20 @@ async function mockAuthApi(page: Page, initial: CurrentUserPayload | null) {
     if (path === "/api/auth/login") {
       const body = request.postDataJSON() as Record<string, unknown>;
       state.loginCalls.push(body);
+      if (body.password === "TooMany!123") {
+        // 試行の回数の上限（#1087）。backend は 429 と Retry-After を返す。
+        await route.fulfill({
+          status: 429,
+          headers: { "Retry-After": "900", "X-Request-ID": "login-rate-limited" },
+          json: {
+            data: null,
+            error_messages: ["ログインの試行が多すぎます。しばらく待ってから、もう一度お試しください。"],
+            warning_messages: [],
+            error_code: "SECURITY_RATE_LIMITED",
+          },
+        });
+        return;
+      }
       if (body.password === "WrongPass!123") {
         await route.fulfill({
           status: 401,
@@ -136,6 +150,23 @@ test("ログイン失敗は入力ミスの文言だけを出し、ログイン�
   await expect(page.getByText("ログインユーザーIDまたはパスワードを確認してください。")).toBeVisible();
   await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByLabel("ログインユーザーID")).toHaveValue("admin.user");
+});
+
+// desktop と mobile（375px）の project で実行する。
+test("ログインの試行が多すぎるときは 429 の文をそのまま出し、再送しない", async ({ page }) => {
+  const auth = await mockAuthApi(page, null);
+
+  await page.goto("/login");
+  await page.getByLabel("ログインユーザーID").fill("system_admin");
+  await page.getByLabel("パスワード").fill("TooMany!123");
+  await page.getByRole("button", { name: "ログイン" }).click();
+
+  const error = page.getByText("ログインの試行が多すぎます。しばらく待ってから、もう一度お試しください。", { exact: true });
+  await expect(error).toBeVisible();
+  await expect(error).not.toContainText("login-rate-limited");
+  await expect(page).toHaveURL(/\/login$/);
+  expect(auth.loginCalls).toHaveLength(1);
+  await expectNoPageOverflow(page);
 });
 
 test("初回ログインは強制パスワード変更へ移り、変更後は CSRF 付きで送ってログインへ戻る", async ({

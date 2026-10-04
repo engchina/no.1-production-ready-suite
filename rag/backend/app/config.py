@@ -272,6 +272,10 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
     app_auth_absolute_timeout_hours: int = Field(default=12)
     app_auth_failed_login_limit: int = Field(default=5)
     app_auth_lockout_minutes: int = Field(default=15)
+    # ログインの試行の回数の制限（ログイン ID と送信元 IP の組・送信元 IP ごと。0 で無効。#1087）。
+    app_auth_login_attempt_limit: int = Field(default=5)
+    app_auth_login_ip_attempt_limit: int = Field(default=20)
+    app_auth_login_attempt_window_minutes: int = Field(default=15)
     app_auth_password_min_length: int = Field(default=12)
     app_auth_password_max_length: int = Field(default=128)
     app_auth_argon2_time_cost: int = Field(default=3)

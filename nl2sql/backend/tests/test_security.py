@@ -1922,6 +1922,36 @@ def test_login_lockout_is_generic() -> None:
     assert user.locked_until > datetime.now(UTC)
 
 
+def test_login_api_is_rate_limited_with_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
+    """構成管理者のパスワードを何回でも試せない（#1087）。429 の文と Retry-After を返す。"""
+    _configure_memory_api_auth(monkeypatch)
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            for _ in range(5):
+                failed = await client.post(
+                    "/api/auth/login",
+                    json={"login_user_id": "system_admin", "password": "WrongPass12345"},
+                )
+                assert failed.status_code == 401
+            limited = await client.post(
+                "/api/auth/login",
+                json={"login_user_id": "system_admin", "password": "AppAdminPass123"},
+            )
+            assert limited.status_code == 429
+            assert limited.json()["error_messages"] == [
+                "ログインの試行が多すぎます。しばらく待ってから、もう一度お試しください。"
+            ]
+            assert limited.json()["error_code"] == "SECURITY_RATE_LIMITED"
+            assert int(limited.headers["Retry-After"]) > 0
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+
 def test_every_api_route_is_classified_by_manifest() -> None:
     for path, operations in app.openapi()["paths"].items():
         if not path.startswith("/api"):
