@@ -217,9 +217,14 @@ async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPat
     assert "登録ボタン" in response.answer
     # 回答エンジン（検索と LLM の回答生成）も進捗の工程として通知する（#375）。
     assert observed[0] == ("answer", "started")
-    assert observed[-1] == ("answer", "success")
+    # 回答の後に回答側の安全チェックを工程として通知する（#1146）。
+    assert observed[-3:] == [
+        ("answer", "success"),
+        ("answer_guardrail", "started"),
+        ("answer_guardrail", "success"),
+    ]
     # 回答フローの中の各工程は、入れ子の工程として開始と終了を通知する（#593）。
-    inner = observed[1:-1]
+    inner = observed[1:-3]
     assert inner
     assert all(stage.startswith("answer_step:") for stage, _ in inner)
     assert ("answer_step:質問の理解", "started") in inner

@@ -599,6 +599,8 @@ class RuntimeToolCallAuditData(BaseModel):
     offset: int
     limit: int
     records: list[RuntimeToolCallAuditRecord]
+    # 監査に記録されたツール名（絞り込みの条件に依らない。画面のツール名の選択肢。#983）。
+    tool_names: list[str] = Field(default_factory=list)
 
 
 class AgentRuntimeRepositoryContract(Protocol):
@@ -1867,8 +1869,25 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
                 if record is None:
                     continue
                 records.append(record)
+            tool_names = self._projection_tool_names(cursor)
 
-        return RuntimeToolCallAuditData(total=total, offset=offset, limit=limit, records=records)
+        return RuntimeToolCallAuditData(
+            total=total, offset=offset, limit=limit, records=records, tool_names=tool_names
+        )
+
+    def _projection_tool_names(self, cursor: Any) -> list[str]:
+        """監査に記録されたツール名（一覧と同じく Run のある step だけ。#983）。"""
+        tables = self._oracle_projection_tables
+        cursor.execute(
+            f"""
+            SELECT DISTINCT s.tool_name
+            FROM {tables["steps"]} s
+            JOIN {tables["runs"]} r ON r.run_id = s.run_id
+            WHERE s.tool_name IS NOT NULL
+            ORDER BY s.tool_name
+            """
+        )
+        return [str(row[0]) for row in cursor.fetchall() if row[0]]
 
     def _projection_tool_call_rows(
         self,

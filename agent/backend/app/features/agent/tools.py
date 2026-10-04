@@ -28,6 +28,7 @@ from pr_system_settings.auth.service_token import issue_service_token
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.features.agent.config import McpConnectionConfig, runtime_config_store
+from app.features.agent.mcp_url import mask_url_credentials, mask_urls_in_text
 from app.features.agent.profile_name_migration import migrate_rag_call
 from app.features.agent.skills import (
     AgentSkillListOutput,
@@ -846,7 +847,8 @@ def _fetch_mcp_oauth_bearer_token(
             "external_mcp.oauth_timeout",
             f"OAuth のトークンの取得が {timeout_seconds:g} 秒以内に終わりませんでした"
             "（トークン URL のサービスの状態を確認してください）。",
-            {"token_url": token_url},
+            # トークン URL の userinfo・資格情報らしい query は伏せる（#1056）。
+            {"token_url": mask_url_credentials(token_url)},
         ) from exc
     except httpx.HTTPStatusError as exc:
         raise ExternalToolError(
@@ -859,7 +861,7 @@ def _fetch_mcp_oauth_bearer_token(
             "external_mcp.oauth_request_error",
             "OAuth のトークン URL に接続できません（トークン URL が正しいかと、"
             "ネットワークを確認してください）。",
-            {"reason": str(exc)},
+            {"reason": mask_urls_in_text(str(exc))},
         ) from exc
     except ExternalToolError:
         raise

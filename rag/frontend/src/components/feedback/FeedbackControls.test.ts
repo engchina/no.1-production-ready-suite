@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { buildFeedbackContentSnapshot, buildFeedbackPayload } from "./FeedbackControls";
+import {
+  buildFeedbackContentSnapshot,
+  buildFeedbackPayload,
+  feedbackSnapshotFor,
+} from "./FeedbackControls";
 
 describe("feedback submission payload", () => {
   it("keeps the selected low-rating reason and optional comment", () => {
@@ -65,5 +69,17 @@ describe("feedback submission payload", () => {
         },
       ],
     });
+  });
+
+  it("keeps the question for search-only results without an answer", () => {
+    const snapshot = buildFeedbackContentSnapshot(" 経費の上限は？ ", "  ", []);
+    expect(snapshot).toEqual({ question: "経費の上限は？", answer: null, citations: [] });
+    expect(buildFeedbackContentSnapshot("  ", "回答", [])).toBeNull();
+    // 引用の評価は回答が無くても送り、回答の評価は回答の無い snapshot を送らない。
+    expect(feedbackSnapshotFor("citation", null, snapshot)).toBe(snapshot);
+    expect(feedbackSnapshotFor("answer", null, snapshot)).toBeNull();
+    expect(feedbackSnapshotFor("citation", "message-1", snapshot)).toBeNull();
+    const answered = { ...snapshot!, answer: "回答" };
+    expect(feedbackSnapshotFor("answer", null, answered)).toBe(answered);
   });
 });
