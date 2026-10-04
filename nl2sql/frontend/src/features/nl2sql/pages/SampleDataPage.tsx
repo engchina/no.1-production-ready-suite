@@ -340,45 +340,37 @@ export function SampleDataPage() {
     }
   };
 
-  const importSampleData = async () => {
+  // 取込・削除を実行し、結果を出してから状態を取り直す。実行の API の失敗だけを実行のボタンの直下に出し、
+  // 実行が成功した後の取り直しの失敗は読込の失敗としてページ上部の案内（「再読み込み」）に出す。実行が
+  // 失敗したように見せず、backend が投入したスキーマの更新の job は取り直しの成否にかかわらず追う（#948）。
+  const runSampleMutation = async (action: SampleAction) => {
     if (loading || !confirmationMatched || !sampleInfo) return;
     setSampleResult(null);
-    setLoading("sample-import");
+    setLoading(action === "delete" ? "sample-delete" : "sample-import");
     setExecuteError("");
     try {
-      const result = await apiPost<SampleDataMutationData>("/api/nl2sql/sample-data/import", {
-        dataset,
-        step: sampleStep,
-        confirmation: sampleConfirmation.trim(),
-        reason: "ui-sample-import",
-      });
+      let result: SampleDataMutationData;
+      try {
+        result = await apiPost<SampleDataMutationData>(`/api/nl2sql/sample-data/${action}`, {
+          dataset,
+          step: action === "delete" ? "all" : sampleStep,
+          confirmation: sampleConfirmation.trim(),
+          reason: `ui-sample-${action}`,
+        });
+      } catch (err) {
+        setExecuteError(err instanceof Error ? err.message : t("dataTools.error.sample"));
+        return;
+      }
       setSampleResult(result);
-      if (result.executed) await reloadSampleState();
       trackSchemaRefreshResult(result);
-    } catch (err) {
-      setExecuteError(err instanceof Error ? err.message : t("dataTools.error.sample"));
-    } finally {
-      setLoading("");
-    }
-  };
-
-  const deleteSampleData = async () => {
-    if (loading || !confirmationMatched || !sampleInfo) return;
-    setSampleResult(null);
-    setLoading("sample-delete");
-    setExecuteError("");
-    try {
-      const result = await apiPost<SampleDataMutationData>("/api/nl2sql/sample-data/delete", {
-        dataset,
-        step: "all",
-        confirmation: sampleConfirmation.trim(),
-        reason: "ui-sample-delete",
-      });
-      setSampleResult(result);
-      if (result.executed) await reloadSampleState();
-      trackSchemaRefreshResult(result);
-    } catch (err) {
-      setExecuteError(err instanceof Error ? err.message : t("dataTools.error.sample"));
+      if (!result.executed) return;
+      try {
+        await reloadSampleState();
+      } catch (err) {
+        if (!isAbortError(err)) {
+          setMessage(err instanceof Error ? err.message : t("dataTools.error.sample"));
+        }
+      }
     } finally {
       setLoading("");
     }
@@ -562,7 +554,7 @@ export function SampleDataPage() {
                     icon={isDeleteAction ? Trash2 : FileSpreadsheet}
                     loading={loading === (isDeleteAction ? "sample-delete" : "sample-import")}
                     disabled={Boolean(loading) || !confirmationMatched || !sampleInfo}
-                    onClick={() => void (isDeleteAction ? deleteSampleData() : importSampleData())}
+                    onClick={() => void runSampleMutation(activeAction)}
                   >
                     <span>{actionTitle}</span>
                   </Button>

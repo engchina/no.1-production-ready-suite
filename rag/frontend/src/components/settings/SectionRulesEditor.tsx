@@ -17,7 +17,7 @@ import { ArrowDown, ArrowUp, Eye, Plus, RotateCcw, Save, Trash2, Undo2 } from "l
 import { useState } from "react";
 
 import { SECTION_RULES_OPTIONS } from "@/components/documents/DocumentProcessingConfigPanel.values";
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
@@ -89,8 +89,9 @@ export function SectionRulesEditor() {
   }
   if (query.isError) {
     return (
-      <ErrorState
-        message={query.error instanceof ApiError ? query.error.message : t("sectionRules.error.load")}
+      <ApiErrorState
+        error={query.error}
+        fallback={t("sectionRules.error.load")}
         onRetry={() => void query.refetch()}
       />
     );

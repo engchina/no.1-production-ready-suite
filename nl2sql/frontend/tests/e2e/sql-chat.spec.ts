@@ -198,7 +198,7 @@ for (const width of [1280, 375]) {
     });
   });
 }
-test("生成中は停止でき、失敗時も草稿と入力欄を保持する", async ({ page }) => {
+test("生成中は停止でき、失敗時も送った質問を会話に残して再送信できる", async ({ page }) => {
   const state = await setup(page);
   state.pending = true;
   await page.goto("/chat");
@@ -212,12 +212,31 @@ test("生成中は停止でき、失敗時も草稿と入力欄を保持する",
   expect(state.requests).toHaveLength(1);
   await send.click();
   await expect(page.getByText("SQL の生成を停止しました")).toBeVisible();
+  // 停止しても送った質問は会話に残る（#907）。
+  await expect(
+    page.getByTestId("sql-chat-turn").getByText("カテゴリ別売上", { exact: true }),
+  ).toBeVisible();
   await expect(send).toHaveAccessibleName("送信");
   await expect(composer).toHaveValue("次の条件");
   state.failSend = true;
   await send.click();
-  await expect(page.getByText("モデルへ接続できません。")).toBeVisible();
-  await expect(composer).toHaveValue("次の条件");
+  // 送った質問は会話の欄に残し、入力欄は空のまま（#907）。理由と「再送信」は質問の直下に出す。
+  const pendingTurn = page.getByTestId("sql-chat-pending-turn");
+  await expect(pendingTurn.locator('[data-status="failed"]')).toContainText(
+    "次の条件",
+  );
+  await expect(pendingTurn).toContainText("送信できませんでした");
+  await expect(
+    pendingTurn.getByTestId("sql-chat-send-error"),
+  ).toContainText("モデルへ接続できません。");
+  await expect(composer).toHaveValue("");
+  state.failSend = false;
+  state.pending = false;
+  await pendingTurn.getByRole("button", { name: "再送信" }).click();
+  await expect(pendingTurn).toHaveCount(0);
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(2);
+  await expect(page.getByTestId("sql-chat-send-error")).toHaveCount(0);
+  expect(state.requests.at(-1)).toMatchObject({ question: "次の条件" });
 });
 /**
  * ジョブの投入の上限（120 秒）だけを短くする。ほかの要求の上限は変えない（#900）。
@@ -276,20 +295,25 @@ test("送信の応答が上限までに届かないと、英語の signal timed 
   await expect(details).toContainText("120 秒");
   await expect(details).toContainText("TimeoutError");
   await expect(failure.locator("p").first()).not.toContainText("signal");
-  // 送信前に決めた job ID で取り直しを試み、草稿は残す。
+  // 送信前に決めた job ID で取り直しを試みる。送った質問は会話の欄に残す（#907）。
   const clientJobId = String(state.requests[0]?.client_job_id ?? "");
   expect(clientJobId).toMatch(/^[0-9a-f-]{36}$/u);
   expect(recovered).toEqual([`/api/nl2sql/jobs/${clientJobId}`]);
-  await expect(composer).toHaveValue("select * from employee");
+  await expect(composer).toHaveValue("");
   await expect(page.getByTestId("sql-chat-send")).toHaveAccessibleName("送信");
-  // 結果は入力欄の行の直下に、会話の欄の幅で出す（messaging.md §10.1）。
-  const composerBox = (await composer.boundingBox())!;
+  // 結果は送った質問の直下に、会話の欄の幅で出す（messaging.md §10.1 のチャットの扱い。#907）。
+  const question = page
+    .getByTestId("sql-chat-pending-turn")
+    .locator('[data-status="failed"]');
+  await expect(question).toContainText("select * from employee");
+  await expect(failure.getByRole("button", { name: "再送信" })).toBeVisible();
+  const questionBox = (await question.boundingBox())!;
   const failureBox = (await failure.boundingBox())!;
   const regionBox = (await page
-    .getByTestId("sql-chat-composer-region")
+    .getByTestId("sql-chat-conversation")
     .boundingBox())!;
-  expect(failureBox.y).toBeGreaterThan(composerBox.y + composerBox.height - 1);
-  expect(regionBox.width - failureBox.width).toBeLessThan(32);
+  expect(failureBox.y).toBeGreaterThan(questionBox.y + questionBox.height - 1);
+  expect(regionBox.width - failureBox.width).toBeLessThan(48);
   expect(
     await page.evaluate(
       () =>
@@ -371,7 +395,11 @@ test("サーバーに接続できないときは英語の Failed to fetch では
   );
   await expect(failure.locator("details")).toContainText("POST /api/nl2sql/jobs");
   await expect(failure.locator("p").first()).not.toContainText("Failed to fetch");
-  await expect(composer).toHaveValue("select * from employee");
+  // 送った質問は会話の欄に残し、入力欄は空のまま（#907）。
+  await expect(
+    page.getByTestId("sql-chat-pending-turn").locator('[data-status="failed"]'),
+  ).toContainText("select * from employee");
+  await expect(composer).toHaveValue("");
 });
 
 test("AI 活用の先頭のチャットは、生成だけの権限でも利用できる", async ({
@@ -579,4 +607,266 @@ test("生成方法は入力欄の直上で選び、Select AI Agent も送れる"
         document.documentElement.clientWidth,
     ),
   ).toBeLessThanOrEqual(0);
+});
+
+// #907: 送った質問は、ジョブの投入の応答を待たずにすぐ会話の欄の末尾へ出す（楽観的な表示）。
+/** ジョブの投入を止めておき、好きなときに setup の応答へ流す。 */
+async function gateJobSubmit(page: Page) {
+  let open: () => void = () => undefined;
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  await page.route("**/api/nl2sql/jobs", async (route) => {
+    await opened;
+    await route.fallback();
+  });
+  return open;
+}
+
+async function expectConversationScrolledToEnd(page: Page) {
+  await expect
+    .poll(() =>
+      page
+        .getByTestId("sql-chat-conversation")
+        .evaluate(
+          (element) =>
+            element.scrollHeight - element.clientHeight - element.scrollTop,
+        ),
+    )
+    .toBeLessThanOrEqual(2);
+}
+
+test("送った質問はジョブの投入の応答を待たずに会話の欄へ出る（新しい会話。#907）", async ({
+  page,
+}, testInfo) => {
+  await setup(page);
+  const release = await gateJobSubmit(page);
+  await page.goto("/chat");
+  const empty = page.getByText("どのような SQL を生成しますか？");
+  await expect(empty).toBeVisible();
+  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  await composer.fill("カテゴリ別売上");
+  await composer.press("Enter");
+
+  const pendingTurn = page.getByTestId("sql-chat-pending-turn");
+  await expect(pendingTurn.locator('[data-status="sending"]')).toHaveText(
+    "カテゴリ別売上",
+  );
+  await expect(
+    pendingTurn.getByText("SQL を生成しています", { exact: true }).last(),
+  ).toBeVisible();
+  await expect(empty).toHaveCount(0);
+  await expect(page.getByRole("log", { name: "会話" })).toContainText(
+    "カテゴリ別売上",
+  );
+  await expect(composer).toHaveValue("");
+  await expect(composer).toBeFocused();
+  // 処理中の表示は回答の場所の 1 つだけ（messaging.md §3.7）。
+  await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
+  await expect(pendingTurn.locator("svg.animate-spin:visible")).toHaveCount(1);
+  await expectConversationScrolledToEnd(page);
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(0);
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await page.evaluate(
+      (dark) => document.documentElement.classList.toggle("dark", dark),
+      colorScheme === "dark",
+    );
+    await page.getByTestId("sql-chat-panel").screenshot({
+      path: testInfo.outputPath(`chat-sending-${colorScheme}.png`),
+    });
+  }
+
+  // 投入できたら、同じ位置のジョブの表示に置き換える（質問を二重に出さない）。
+  release();
+  await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
+  await expect(pendingTurn).toHaveCount(0);
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+  await expect(
+    page
+      .getByTestId("sql-chat-conversation")
+      .getByText("カテゴリ別売上", { exact: true }),
+  ).toHaveCount(1);
+});
+
+test("続きの会話でも、送った質問は投入の応答を待たずに末尾へ出る（#907）", async ({
+  page,
+}) => {
+  await setup(page);
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  await composer.fill("カテゴリ別売上");
+  await composer.press("Enter");
+  await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
+
+  const release = await gateJobSubmit(page);
+  await composer.fill("多い順にして");
+  await composer.press("Enter");
+  const pendingTurn = page.getByTestId("sql-chat-pending-turn");
+  await expect(pendingTurn.locator('[data-status="sending"]')).toHaveText(
+    "多い順にして",
+  );
+  await expect(composer).toHaveValue("");
+  const text = await page.getByTestId("sql-chat-conversation").innerText();
+  expect(text.indexOf("カテゴリ別売上")).toBeGreaterThanOrEqual(0);
+  expect(text.indexOf("カテゴリ別売上")).toBeLessThan(
+    text.indexOf("多い順にして"),
+  );
+  await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
+  await expectConversationScrolledToEnd(page);
+
+  release();
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(2);
+  await expect(pendingTurn).toHaveCount(0);
+});
+
+/**
+ * 応答だけが届かないジョブの投入（backend はジョブを作り終える）。job ID は画面が決めた client_job_id で、
+ * 同じ ID の再送は作成済みのジョブを返す（backend の `_replay_client_job` と同じ）。
+ */
+async function loseJobSubmitResponse(
+  page: Page,
+  state: Awaited<ReturnType<typeof setup>>,
+) {
+  const control = { lose: true };
+  await page.route("**/api/nl2sql/jobs", (route) => {
+    const body = route.request().postDataJSON();
+    state.requests.push(body);
+    const id = String(body.client_job_id);
+    if (!state.turns.some((turn) => turn.job_id === id))
+      state.turns.push({
+        job_id: id,
+        question: body.question,
+        status: "done",
+        created_at: now,
+        steps: [],
+        result: {
+          generated_sql: "SELECT CATEGORY FROM APP.SALES",
+          original_question: body.question,
+          explanation: "",
+          safety: { is_safe: true },
+        },
+      });
+    if (control.lose) return route.abort("failed");
+    return route.fulfill({
+      json: { data: { job_id: id, status: "done", created_at: now, steps: [] } },
+    });
+  });
+  // 取り直しも届かない（通信が戻る前）。
+  await page.route("**/api/nl2sql/jobs/*", (route) => route.abort("failed"));
+  return control;
+}
+
+test("応答が届かなかった送信のジョブが会話に入っていれば、質問を二重に出さず再送信も出さない (#900 / #907)", async ({
+  page,
+}) => {
+  const state = await setup(page);
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  await composer.fill("カテゴリ別売上");
+  await composer.press("Enter");
+  await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
+
+  await loseJobSubmitResponse(page, state);
+  await composer.fill("多い順にして");
+  await composer.press("Enter");
+  // 失敗の後に取り直した会話に、作成済みのジョブが入る。送った質問は 1 回だけ出す。
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(2);
+  await expect(page.getByTestId("sql-chat-pending-turn")).toHaveCount(0);
+  await expect(
+    page
+      .getByTestId("sql-chat-conversation")
+      .getByText("多い順にして", { exact: true }),
+  ).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "再送信" })).toHaveCount(0);
+  expect(state.requests).toHaveLength(2);
+  expect(state.turns).toHaveLength(2);
+});
+
+test("応答が届かなかった送信の再送信は同じ job ID で送り、作成済みのジョブを二重に生成しない (#900 / #907)", async ({
+  page,
+}) => {
+  const state = await setup(page);
+  const control = await loseJobSubmitResponse(page, state);
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  await composer.fill("カテゴリ別売上");
+  await composer.press("Enter");
+  const failure = page.getByTestId("sql-chat-send-error");
+  await expect(failure).toBeVisible();
+
+  control.lose = false;
+  await failure.getByRole("button", { name: "再送信" }).click();
+  await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
+  await expect(page.getByTestId("sql-chat-pending-turn")).toHaveCount(0);
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+  expect(state.requests).toHaveLength(2);
+  expect(state.requests[1]).toMatchObject({
+    question: "カテゴリ別売上",
+    client_job_id: state.requests[0].client_job_id,
+  });
+  expect(state.turns).toHaveLength(1);
+});
+
+test("会話の履歴と会話の読み込み中は、文言と経過時間を出し内容の形の Skeleton で覆う", async ({
+  page,
+}) => {
+  const state = await setup(page);
+  state.turns.push({
+    job_id: "chat-1",
+    question: "カテゴリ別売上",
+    status: "done",
+    created_at: now,
+    steps: [],
+    result: {
+      generated_sql: "SELECT CATEGORY FROM APP.SALES",
+      original_question: "カテゴリ別売上",
+      explanation: "",
+      safety: { is_safe: true },
+    },
+  });
+  let release: () => void = () => undefined;
+  const opened = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/nl2sql/chats**", async (route) => {
+    await opened;
+    await route.fallback();
+  });
+  await page.goto("/chat");
+  await page.getByRole("button", { name: "会話の履歴", exact: true }).click();
+  const historyLoading = page.getByTestId("sql-chat-history-loading");
+  await expect(historyLoading).toContainText("会話の履歴を読み込んでいます");
+  await expect(historyLoading.locator(".animate-pulse").first()).toBeVisible();
+  release();
+  await page
+    .getByTestId("sql-chat-history")
+    .getByRole("button", { name: /カテゴリ別売上/ })
+    .click();
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+
+  // 再読込で開いている会話を読み込む間（会話の内容の取得を止める）。
+  let releaseConversation: () => void = () => undefined;
+  const conversationOpened = new Promise<void>((resolve) => {
+    releaseConversation = resolve;
+  });
+  await page.route("**/api/nl2sql/chats/*", async (route) => {
+    await conversationOpened;
+    await route.fallback();
+  });
+  await page.reload();
+  const conversationLoading = page.getByTestId("sql-chat-conversation-loading");
+  await expect(conversationLoading).toContainText("会話を読み込んでいます");
+  await expect(
+    conversationLoading.locator(".animate-pulse").first(),
+  ).toBeVisible();
+  releaseConversation();
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+  await expect(conversationLoading).toHaveCount(0);
 });

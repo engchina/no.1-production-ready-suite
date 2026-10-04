@@ -7,6 +7,7 @@
 import {
   ApiError,
   apiErrorFromEnvelope,
+  apiErrorFromFetchFailure,
   notifyResponseAuthStatus,
   withCsrfHeaders,
   type RetrievedChunk,
@@ -46,6 +47,8 @@ interface SearchStreamErrorPayload {
   validation_codes?: string[];
 }
 
+const SEARCH_STREAM_PATH = "/api/search/stream";
+
 /** `error` event の error_type を、同じ失敗を REST（`POST /api/search`）が返す HTTP status に揃える。 */
 const STREAM_ERROR_STATUS: Record<string, number> = {
   TimeoutError: 504,
@@ -63,17 +66,24 @@ export async function streamSearch(
   handlers: SearchStreamHandlers,
   signal?: AbortSignal
 ): Promise<void> {
-  const res = await fetch("/api/search/stream", {
-    method: "POST",
-    // Cookie セッションの CSRF（#214）。
-    headers: withCsrfHeaders("POST", {
-      "Content-Type": "application/json",
-      Accept: "text/event-stream",
-    }),
-    credentials: "same-origin",
-    body: JSON.stringify(body),
-    signal,
-  });
+  const request = { method: "POST", path: SEARCH_STREAM_PATH };
+  let res: Response;
+  try {
+    res = await fetch(SEARCH_STREAM_PATH, {
+      method: "POST",
+      // Cookie セッションの CSRF（#214）。
+      headers: withCsrfHeaders("POST", {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      }),
+      credentials: "same-origin",
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (cause) {
+    // 通信断（`TypeError: Failed to fetch`）は利用者向けの文の ApiError にする。中止はそのまま（#906）。
+    throw apiErrorFromFetchFailure(cause, request) ?? cause;
+  }
 
   if (!res.ok || !res.body) {
     // 401 はログインへ。範囲外の 403（RAG_SCOPE_FORBIDDEN）は検索結果の位置で理由を見せる（#224）。
@@ -94,7 +104,14 @@ export async function streamSearch(
   let outcome: StreamOutcome = null;
 
   while (outcome === null) {
-    const { value, done } = await reader.read();
+    let chunk: ReadableStreamReadResult<Uint8Array>;
+    try {
+      chunk = await reader.read();
+    } catch (cause) {
+      // 受信の途中で接続が切れた（`TypeError: network error` など）。中止はそのまま（#906）。
+      throw apiErrorFromFetchFailure(cause, request) ?? cause;
+    }
+    const { value, done } = chunk;
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     buffer = buffer.replace(/\r\n/g, "\n");

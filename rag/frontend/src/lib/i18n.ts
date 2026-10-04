@@ -58,8 +58,6 @@ export const ja = {
   "common.cardError.description":
     "画面の描画中に問題が発生しました。再試行しても解消しない場合は、ページを再読み込みしてください。他の項目は引き続き利用できます。",
   "common.required": "必須",
-  "common.api.timeout":
-    "API の応答が {seconds} 秒以内に返りませんでした。バックエンドとデータベースの起動状態を確認して再試行してください。",
 
   "settings.preview.copy.copied": "コピーしました",
   "settings.preview.copy.failed": "コピーできませんでした",
@@ -236,11 +234,12 @@ export const ja = {
   "settings.parserAdapters.effectiveOrder": "実行順",
   "settings.parserAdapters.noEffectiveOrder": "外部解析方式なし",
   "settings.parserAdapters.source": "設定元",
-  "settings.parserAdapters.loadError": "文書解析設定を取得できませんでした。",
-  "settings.parserAdapters.saveError": "文書解析設定を保存できませんでした。",
+  "settings.parserAdapters.loadError": "文書解析の設定を取得できませんでした。",
+  "settings.parserAdapters.saveError": "文書解析の設定を保存できませんでした。",
+  "settings.parserAdapters.actions.label": "文書解析の設定の操作",
   "settings.parserAdapters.actions.save": "保存",
-  "settings.parserAdapters.actions.reset": "元に戻す",
-  "settings.parserAdapters.actions.saved": "文書解析設定を保存しました。",
+  "settings.parserAdapters.actions.reset": "変更を破棄",
+  "settings.parserAdapters.actions.saved": "文書解析の設定を保存しました。",
   "settings.parserAdapters.actions.unsaved": "未保存の変更があります。",
   "settings.parserAdapters.postParse.title": "解析後の処理",
   "settings.parserAdapters.postParse.description":
@@ -260,6 +259,7 @@ export const ja = {
     "項目の定義が 0 件で保存されているため、ナレッジベースで項目を定義していない文書からは何も抽出しません。下の項目の定義で項目を追加するか、「標準の項目に戻す」を使ってください。",
   "settings.parserAdapters.postParse.navigationSummary.hint":
     "解析した文書の見出しの階層から章節の木を作り、章節ごとの要約を OCI Enterprise AI で作ります。章節をたどる検索と段階的な表示に使います。章節ごとにモデルの呼び出しがかかります（上限あり）。",
+  "settings.parserAdapters.postParse.actionsLabel": "解析後の処理の操作",
   "settings.parserAdapters.postParse.save": "解析後の処理を保存",
   "settings.parserAdapters.postParse.saved": "解析後の処理を保存しました。",
   "settings.parserAdapters.postParse.saveError": "解析後の処理を保存できませんでした。",
@@ -370,11 +370,12 @@ export const ja = {
   "settings.chunking.params.contextHeaderHint":
     "文書名と章節パスを embedding / キーワード索引へ追加します。表示本文と引用は変わりません。",
   "settings.chunking.actions.save": "保存",
-  "settings.chunking.actions.saved": "文書分割設定を保存しました。",
+  "settings.chunking.actions.label": "文書分割の設定の操作",
+  "settings.chunking.actions.saved": "文書分割の設定を保存しました。",
   "settings.chunking.actions.reset": "変更を破棄",
   "settings.chunking.actions.unsaved": "未保存の変更があります。",
-  "settings.chunking.loadError": "文書分割設定を取得できませんでした。",
-  "settings.chunking.saveError": "文書分割設定を保存できませんでした。",
+  "settings.chunking.loadError": "文書分割の設定を取得できませんでした。",
+  "settings.chunking.saveError": "文書分割の設定を保存できませんでした。",
   "settings.pipeline.subtitle":
     "ファイル準備から回答生成まで、各工程の設定を処理順にまとめて確認・移動できます。",
   "settings.pipeline.phase.ingestion": "ナレッジ構築",
@@ -395,8 +396,9 @@ export const ja = {
     "オフにすると、抽出の後で確認待ちになります。抽出結果を確認してから Chunk 作成へ進めます。",
   "settings.pipeline.flow.gate.auto_index_after_chunk_enabled":
     "オフにすると、Chunk 作成の後で止まります。Embedding / 索引は文書ごとに手動で始めます。",
+  "settings.pipeline.flow.actionsLabel": "工程の自動進行の操作",
   "settings.pipeline.flow.save": "保存",
-  "settings.pipeline.flow.reset": "元に戻す",
+  "settings.pipeline.flow.reset": "変更を破棄",
   "settings.pipeline.flow.saved": "工程の自動進行を保存しました。",
   "settings.pipeline.flow.saveError": "工程の自動進行を保存できませんでした。",
   "settings.pipeline.flow.unsaved": "未保存の変更があります。",
@@ -453,11 +455,12 @@ export const ja = {
   "settings.preprocess.profile.pii_redact.description":
     "テキストの氏名・メールアドレス・電話番号などの個人情報(PII)をマスクしてから解析します。",
   "settings.preprocess.actions.save": "保存",
-  "settings.preprocess.actions.saved": "前処理設定を保存しました。",
+  "settings.preprocess.actions.label": "ファイル準備の設定の操作",
+  "settings.preprocess.actions.saved": "ファイル準備の設定を保存しました。",
   "settings.preprocess.actions.reset": "変更を破棄",
   "settings.preprocess.actions.unsaved": "未保存の変更があります。",
-  "settings.preprocess.loadError": "前処理設定を取得できませんでした。",
-  "settings.preprocess.saveError": "前処理設定を保存できませんでした。",
+  "settings.preprocess.loadError": "ファイル準備の設定を取得できませんでした。",
+  "settings.preprocess.saveError": "ファイル準備の設定を保存できませんでした。",
   "settings.services.subtitle":
     "ファイル準備・文書解析など各工程のサービスの稼働状態を確認し、起動・停止します。",
   "settings.services.overview.title": "マイクロサービス",
@@ -565,7 +568,11 @@ export const ja = {
   "settings.services.toast.stopped": "{service} を停止しました。",
   "settings.services.toast.restarted":
     "{service} を再起動しました。",
-  "settings.services.toast.failed": "{service} の操作に失敗しました。",
+  "settings.services.failure.start": "{service} を起動できませんでした。",
+  "settings.services.failure.stop": "{service} を停止できませんでした。",
+  "settings.services.failure.restart": "{service} を再起動できませんでした。",
+  "settings.services.failure.fallback":
+    "サービスのログと状態を確認してから、もう一度実行してください。",
   "settings.services.item.preprocessOfficeToPdf": "Office→PDF",
   "settings.services.item.preprocessPdfToPageImages": "PDF を画像として読み直す",
   "settings.services.item.preprocessCsvToJson": "CSV→JSON",
@@ -594,7 +601,7 @@ export const ja = {
   "chat.guardrail": "安全チェック",
   "settings.guardrail.overview.title": "安全チェック",
   "settings.guardrail.overview.description":
-    "プロンプト攻撃検知と機微情報マスクは常に独立して適用し、方針では根拠確認の警告・阻止だけを選びます。",
+    "プロンプト攻撃検知と機微情報マスクは常に独立して適用し、方針では根拠確認の警告・阻止だけを選びます。ここで選ぶのは全体の既定で、保存すると次の回答から使います。公開済みの検索・回答プロファイルの「検索・回答設定」で方針を上書きしている場合は、その方針を使います。",
   "settings.guardrail.policy": "根拠チェック方針",
   "settings.guardrail.groundingOverlap": "根拠一致数 下限",
   "settings.guardrail.groundingRatio": "根拠一致率 下限",
@@ -609,7 +616,7 @@ export const ja = {
   "settings.guardrail.promptInjection": "プロンプト攻撃検知",
   "settings.guardrail.piiMask": "機微情報マスク",
   "settings.guardrail.maxQueryChars": "質問の文字数上限",
-  "settings.guardrail.ociReadiness": "OCI readiness",
+  "settings.guardrail.ociReadiness": "OCI Guardrails の準備",
   "settings.guardrail.enabled": "有効（読み取り専用）",
   "settings.guardrail.disabled": "無効（読み取り専用）",
   "settings.guardrail.ready": "利用可能",
@@ -620,12 +627,13 @@ export const ja = {
   "settings.guardrail.policy.standard": "標準",
   "settings.guardrail.policy.standard.description": "既定の一致数・一致率で低根拠を警告",
   "settings.guardrail.policy.strict": "厳格",
-  "settings.guardrail.policy.strict.description": "groundedness 閾値を高め、低根拠を強く警告",
+  "settings.guardrail.policy.strict.description": "根拠の一致数・一致率の下限を高め、低根拠を強く警告",
   "settings.guardrail.policy.lenient": "寛容",
   "settings.guardrail.policy.lenient.description": "一致数・一致率を下げ、低根拠の警告を抑制",
   "settings.guardrail.policy.regulated": "規制対応",
   "settings.guardrail.policy.regulated.description":
     "厳格な一致数・一致率を満たさない回答を阻止",
+  "settings.guardrail.actions.label": "安全チェックの設定の操作",
   "settings.guardrail.actions.save": "保存",
   "settings.guardrail.actions.saved": "安全チェックを保存しました。",
   "settings.guardrail.actions.reset": "変更を破棄",
@@ -663,11 +671,12 @@ export const ja = {
   "settings.vectorIndex.profile.fast": "高速",
   "settings.vectorIndex.profile.fast.description": "target accuracy 85。低レイテンシ",
   "settings.vectorIndex.actions.save": "保存",
-  "settings.vectorIndex.actions.saved": "検索インデックス設定を保存しました。",
+  "settings.vectorIndex.actions.label": "検索インデックスの設定の操作",
+  "settings.vectorIndex.actions.saved": "検索インデックスの設定を保存しました。",
   "settings.vectorIndex.actions.reset": "変更を破棄",
   "settings.vectorIndex.actions.unsaved": "未保存の変更があります。",
-  "settings.vectorIndex.loadError": "検索インデックス設定を取得できませんでした。",
-  "settings.vectorIndex.saveError": "検索インデックス設定を保存できませんでした。",
+  "settings.vectorIndex.loadError": "検索インデックスの設定を取得できませんでした。",
+  "settings.vectorIndex.saveError": "検索インデックスの設定を保存できませんでした。",
   "settings.vectorIndex.reindexSql.title": "索引再作成 SQL",
   "settings.vectorIndex.reindexSql.description":
     "保存中の検索精度の推奨ビルド値で HNSW 索引を再作成する DDL です。backend は実行しません。DBA がレビューのうえ実行してください(再作成中は検索が停止します)。",
@@ -684,12 +693,15 @@ export const ja = {
   "settings.evaluation.suite.standard.description": "日常の確認と毎晩の回帰の判定に使う既定の閾値です。",
   "settings.evaluation.suite.strict": "厳格",
   "settings.evaluation.suite.strict.description": "リリース前の判定に使う高い閾値です。根拠のない主張と拒答の誤りを 1 件も許しません。",
+  "settings.evaluation.applyHint":
+    "変更は次に実行する品質評価から使います。実行済みの評価の合否は変わりません。品質評価の画面で評価の基準を選んで実行した場合は、そちらを使います。",
+  "settings.evaluation.actions.label": "評価の基準の操作",
   "settings.evaluation.actions.save": "保存",
-  "settings.evaluation.actions.saved": "品質評価設定を保存しました。",
+  "settings.evaluation.actions.saved": "評価の基準を保存しました。",
   "settings.evaluation.actions.reset": "変更を破棄",
   "settings.evaluation.actions.unsaved": "未保存の変更があります。",
-  "settings.evaluation.loadError": "品質評価設定を取得できませんでした。",
-  "settings.evaluation.saveError": "品質評価設定を保存できませんでした。",
+  "settings.evaluation.loadError": "評価の基準を取得できませんでした。",
+  "settings.evaluation.saveError": "評価の基準を保存できませんでした。",
   "settings.graph.subtitle":
     "文書を取り込むときに、文書と章・節の見出しのつながり（関係情報）を作るかどうかを選びます。",
   "settings.graph.overview.title": "ナレッジベースの関係情報グラフ",
@@ -703,12 +715,13 @@ export const ja = {
   "settings.graph.profile.entities": "構築する",
   "settings.graph.profile.entities.description":
     "抽出した見出しから作ります。LLM は使わないので、取込の時間とコストはほとんど増えません。",
+  "settings.graph.actions.label": "関係情報の構築の設定の操作",
   "settings.graph.actions.save": "保存",
   "settings.graph.actions.saved": "関係情報の構築設定を保存しました。",
   "settings.graph.actions.reset": "変更を破棄",
   "settings.graph.actions.unsaved": "未保存の変更があります。",
   "settings.graph.rebuildHint":
-    "変更は次の取込から使われます。取込済みの文書に反映するには、文書を再取込してください。",
+    "変更は次に取り込む文書から使われます。取込済みの文書に反映するには、文書の詳細で処理レシピを「再処理」してください。処理レシピで「関係情報の構築」を上書きした文書は、その選択のままです。",
   "settings.graph.loadError": "関係情報の構築設定を取得できませんでした。",
   "settings.graph.saveError": "関係情報の構築設定を保存できませんでした。",
   "settings.uploadStorage.subtitle":
@@ -1053,9 +1066,15 @@ export const ja = {
   "searchAnswerProfiles.actions.newView": "新規作成",
   "searchAnswerProfiles.list.aria": "検索・回答プロファイルの一覧",
   "searchAnswerProfiles.faq.loading": "承認済み FAQ を読み込んでいます",
+  // 知識の読み込みの失敗（応答に理由が無いとき）。空（0 件）と見せずに再試行を出す。
+  "searchAnswerProfiles.faq.loadError": "承認済み FAQ を読み込めませんでした。再試行してください。",
   "searchAnswerProfiles.faq.listAria": "承認済み FAQ の一覧",
   "searchAnswerProfiles.faq.scrollLabel": "承認済み FAQ の一覧。スクロールできます。",
   "searchAnswerProfiles.runtime.loading": "用語・同義語と回答ルールを読み込んでいます",
+  "searchAnswerProfiles.runtime.loadError":
+    "用語・同義語と回答ルールを読み込めませんでした。再試行してください。",
+  "searchAnswerProfiles.domainKeywords.loadError":
+    "ドメインキーワードを読み込めませんでした。再試行してください。",
   "searchAnswerProfiles.runtime.termsScrollLabel": "用語・同義語の一覧。スクロールできます。",
   "searchAnswerProfiles.runtime.rulesScrollLabel": "回答ルールの一覧。スクロールできます。",
   "searchAnswerProfiles.list.scrollLabel": "検索・回答プロファイル一覧。スクロールできます。",
@@ -1225,6 +1244,8 @@ export const ja = {
   "knowledgeBases.edit.defaultNameFixed": "DEFAULT の名前は変更できません。説明だけを編集できます。",
   "knowledgeBases.error.assign":
     "文書の追加に失敗しました。文書とナレッジベースの状態を確認してください。",
+  "knowledgeBases.error.assignPartial":
+    "{total} 件のうち {assigned} 件を追加しました。残りの {remaining} 件は追加できませんでした。{reason}",
   "knowledgeBases.error.remove":
     "文書の所属解除に失敗しました。ナレッジベースの状態を確認してください。",
   "knowledgeBases.error.documents":
@@ -1239,6 +1260,9 @@ export const ja = {
   "knowledgeBases.searchTest.initialHint":
     "質問を入力すると、このナレッジベースから上位の根拠チャンクを取得します。",
   "knowledgeBases.searchTest.needsIndexed": "索引済みの文書がありません。",
+  "knowledgeBases.searchTest.archived": "アーカイブ済みのナレッジベースでは検索テストを行えません。",
+  "knowledgeBases.searchTest.archivedHint":
+    "アーカイブ済みのナレッジベースは検索の対象から外れています。",
   "knowledgeBases.searchTest.needsIndexedHint":
     "先に文書を追加し、索引が完了するとここで検索を試せます。",
   "knowledgeBases.searchTest.error": "検索に失敗しました。再試行してください。",
@@ -1251,7 +1275,7 @@ export const ja = {
     "このナレッジベースの文書と、その章・節の見出しのつながりを図で見られます。",
   "knowledgeBases.graph.empty": "関係情報がまだありません。",
   "knowledgeBases.graph.emptyHint":
-    "設定の「関係情報の構築」で「構築する」を選んで文書を再取込すると、ここにグラフが表示されます。",
+    "設定の「関係情報の構築」で「構築する」を選ぶと、次に取り込む文書からここにグラフが表示されます。取込済みの文書に反映するには、文書の詳細で処理レシピを「再処理」してください。",
   "knowledgeBases.graph.error": "関係情報の取得に失敗しました。再試行してください。",
   "knowledgeBases.graph.truncated": "ノードが多いため一部のみ表示しています。",
 
@@ -1359,6 +1383,7 @@ export const ja = {
   "upload.batch.duplicates": "重複の可能性",
   "upload.batch.failed": "失敗",
   "upload.batch.failedTitle": "一部のファイルをアップロードできませんでした",
+  "upload.batch.allFailedTitle": "ファイルをアップロードできませんでした",
   "upload.batch.failedDetails": "詳細",
   "upload.batch.failedStatusCode": "HTTP {status}",
   "upload.batch.open": "{name} の文書詳細を開く",
@@ -2029,6 +2054,11 @@ export const ja = {
   "chat.error.send": "メッセージの送信に失敗しました。",
   "chat.error.model": "エラーが発生しました。",
   "chat.error.retry": "もう一度送信",
+  "chat.messages.label": "会話",
+  "chat.send.failed": "送信できませんでした",
+  "chat.send.failedHint": "サーバーに届きませんでした。通信の状態を確かめて、再送信してください。",
+  "chat.send.retry": "再送信",
+  "chat.send.stopped": "回答の作成を停止しました。もう一度送ると、新しく回答を作成します。",
 
   "search.error.failed": "検索に失敗しました。再度お試しください。",
   "search.placeholder": "例：社内規程の申請フローは？（Enter で検索 / Shift+Enter で改行）",
@@ -2268,6 +2298,10 @@ export const ja = {
   "settings.answerPrompts.resetTitle": "既定のプロンプトに戻しますか？",
   "settings.answerPrompts.resetDescription": "編集した内容を削除し、コードの既定値を使います。元に戻せません。",
   "settings.answerPrompts.saveError": "プロンプトを保存できませんでした。",
+  "settings.answerPrompts.discard": "変更を破棄",
+  "settings.answerPrompts.unsaved": "未保存の変更があります。",
+  "settings.answerPrompts.actions.label": "編集内容の操作",
+  "settings.answerPrompts.missingPlaceholders": "必須の placeholder がありません: {names}",
   "settings.answerPrompts.loadError": "プロンプトを読み込めませんでした。",
   "settings.answerPrompts.stages.title": "回答フローの各段のプロンプト（読み取り専用）",
   "settings.answerPrompts.stages.description":
@@ -2555,11 +2589,19 @@ export const ja = {
   "evaluation.input.required": "Golden set JSON を入力してください。",
   "evaluation.input.invalidJson": "Golden set JSON は有効な JSON で入力してください。",
   "evaluation.input.noCases": "Golden set JSON の cases を 1 件以上入力してください。",
+  "evaluation.input.caseIdRequired":
+    "Golden set JSON の cases の {index} 件目に id（1〜200 文字）を入力してください。",
+  "evaluation.input.duplicateCaseIds":
+    "Golden set JSON の cases の id が重複しています: {ids}。id はケースごとに変えてください。",
   "evaluation.actions.run": "評価実行",
   "evaluation.actions.running": "評価を実行しています",
   "evaluation.actions.compare": "比較実行",
   "evaluation.actions.comparing": "設定を比較しています",
   "evaluation.actions.loadSample": "サンプルを読み込む",
+  "evaluation.sampleConfirm.title": "サンプルで置き換えますか？",
+  "evaluation.sampleConfirm.description":
+    "編集中の Golden set JSON をサンプルで置き換えます。今の内容は元に戻せません。残す場合は、先に内容をコピーしてください。",
+  "evaluation.sampleConfirm.confirm": "サンプルで置き換える",
   "evaluation.status.passed": "合格",
   "evaluation.status.failed": "要改善",
   "evaluation.result.title": "評価結果",
@@ -2620,8 +2662,12 @@ export const ja = {
   "evaluation.job.cancelConfirm.confirm": "取り消す",
   "evaluation.job.cancelledTitle": "評価を取り消しました。",
   "evaluation.job.failedTitle": "評価を最後まで実行できませんでした。",
+  "evaluation.job.failedDetails": "詳細",
+  "evaluation.job.errorType": "エラー種別",
   "evaluation.job.loading": "評価の状態を読み込んでいます",
   "evaluation.job.loadError": "評価の状態を取得できませんでした。再試行してください。",
+  "evaluation.job.pollError":
+    "評価の実行状況を取得できません。自動で取得し直しています。表示は最後に取得できた状態です。",
   "evaluation.job.notFound":
     "前回の評価の記録が見つかりません。保持期間を過ぎたか、別の利用者の評価です。もう一度実行してください。",
   "evaluation.toast.started": "評価を開始しました。進み具合はこの画面で確認できます。",

@@ -76,7 +76,12 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.concurrency import run_in_threadpool
 
 import app.settings as app_settings
-from app.features.agent import builtin_runtime, control_plane_store, run_facts_store
+from app.features.agent import (
+    builtin_runtime,
+    control_plane_store,
+    plugin_views,
+    run_facts_store,
+)
 from app.features.agent.api_keys import (
     ApiKeyCreated,
     ApiKeyCreateRequest,
@@ -191,6 +196,7 @@ from app.features.agent.runtime import (
     ThreadsData,
     agent_unavailable_reason,
     builtin_resume_pending,
+    reserved_run_metadata_keys,
     runtime_repository,
 )
 from app.features.agent.skills import (
@@ -246,13 +252,24 @@ from app.security.dependencies import (
     permission_route_path,
 )
 from app.security.domain import Principal
-from app.security.permissions import UNCLASSIFIED_PERMISSION, permission_for_route
+from app.security.permissions import (
+    CAPABILITY_ROLES,
+    PERMISSION_CATALOG,
+    UNCLASSIFIED_PERMISSION,
+    permission_for_route,
+)
 from app.security.service import get_security_service
 from app.settings import MODEL_SETTINGS_STORE, get_settings
 from app.system_schema import system_schema_manager
 
 router = APIRouter(tags=["agent-runtime"])
 logger = logging.getLogger(__name__)
+
+# 画面（チャット・実行履歴・承認）がそのまま出す理由。英語・内部の ID を出さない。
+AGENT_NOT_FOUND_MESSAGE = "業務 Agent が見つかりません。"
+AGENT_FORBIDDEN_MESSAGE = "この業務 Agent を利用する権限がありません。"
+RUN_NOT_FOUND_MESSAGE = "実行が見つかりません。"
+APPROVAL_NOT_FOUND_MESSAGE = "承認の依頼が見つかりません。"
 
 PASSPHRASE_CONFIG_KEYS = frozenset({"pass_phrase", "passphrase", "key_password"})
 _WEBSOCKET_COMMAND_DEDUPE_TTL_SECONDS = 300.0
@@ -511,10 +528,9 @@ async def require_system_settings_write(request: Request) -> None:
         or UNCLASSIFIED_PERMISSION in permissions
         or not principal.has_any_permission(set(permissions))
     ):
-        raise HTTPException(
-            status_code=403,
-            detail=f"actor {principal.login_user_id} cannot change system settings",
-        )
+        # 共通の route の権限の拒否と同じ文にする（ログインユーザー ID や英語の内部の文を出さない。
+        # error_code は付けない。#1108）。
+        raise HTTPException(status_code=403, detail="この機能を利用する権限がありません。")
 
 
 # アップロード保存先は3製品共通の実装（platform の pr_system_settings。#97）。
@@ -1067,11 +1083,17 @@ async def import_runtime_snapshot(
             )
         )
     if not validation.valid:
-        raise HTTPException(status_code=400, detail="snapshot validation failed")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"スナップショットに {len(validation.errors)} 件のエラーがあるため置換できません。"
+                "「検証」でエラーの内容を確認してください。"
+            ),
+        )
     if not request.confirm_replace:
         raise HTTPException(
             status_code=400,
-            detail="confirm_replace=true is required when dry_run=false",
+            detail="置換するには確認（confirm_replace=true）が必要です。",
         )
     try:
         runtime_repository.replace_snapshot(request.snapshot)
@@ -1331,7 +1353,7 @@ async def list_plugins(_: None = Depends(require_viewer)) -> ApiResponse[PluginL
     return ApiResponse(data=_plugin_list_response())
 
 
-@router.post("/plugins", response_model=ApiResponse[PluginRecord])
+@router.post("/plugins", response_model=ApiResponse[plugin_views.PluginRecordView])
 async def install_plugin(
     payload: PluginInstallRequest,
     _: None = Depends(require_admin),
@@ -1436,7 +1458,7 @@ async def refresh_plugin_marketplace(
 
 @router.post(
     "/plugins/marketplaces/{marketplace_id}/plugins/{plugin_id}/preview",
-    response_model=ApiResponse[PluginImportPreview],
+    response_model=ApiResponse[plugin_views.PluginImportPreviewView],
 )
 async def preview_marketplace_plugin(
     marketplace_id: str,
@@ -1466,7 +1488,7 @@ async def preview_marketplace_plugin(
 
 @router.get(
     "/plugins/marketplaces/{marketplace_id}/plugins",
-    response_model=ApiResponse[MarketplaceListing],
+    response_model=ApiResponse[plugin_views.MarketplaceListingView],
 )
 async def list_marketplace_plugins(
     marketplace_id: str,
@@ -1494,7 +1516,7 @@ async def delete_plugin_marketplace(
     return ApiResponse(data=MarketplaceSourcesOutput(marketplaces=marketplace_registry.list()))
 
 
-@router.get("/plugins/{plugin_id}", response_model=ApiResponse[PluginRecord])
+@router.get("/plugins/{plugin_id}", response_model=ApiResponse[plugin_views.PluginRecordView])
 async def get_plugin(
     plugin_id: str,
     _: None = Depends(require_viewer),
@@ -1505,7 +1527,7 @@ async def get_plugin(
     return ApiResponse(data=record)
 
 
-@router.patch("/plugins/{plugin_id}", response_model=ApiResponse[PluginRecord])
+@router.patch("/plugins/{plugin_id}", response_model=ApiResponse[plugin_views.PluginRecordView])
 async def patch_plugin(
     plugin_id: str,
     patch: PluginPatch,
@@ -1605,7 +1627,6 @@ async def get_runtime_storage_status() -> ApiResponse[RuntimeStorageStatus]:
     return ApiResponse(data=await run_in_threadpool(runtime_storage_status))
 
 
-RUN_NOT_FOUND_MESSAGE = "実行が見つかりません。"
 # 終了した Run（取り消せない。#911）。
 _TERMINAL_RUN_STATUSES = frozenset({RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED})
 
@@ -1653,6 +1674,16 @@ async def create_run(
 ) -> ApiResponse[RunState]:
     try:
         _require_agent_access(request, run_request.agent_id)
+        # Control Plane の予約の metadata（再開の状態・評価・自動実行・MCP の印）は
+        # 利用者に付けさせない（#1130）。
+        reserved = reserved_run_metadata_keys(run_request.metadata)
+        if reserved:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "metadata に Control Plane が使う項目は指定できません: " + ", ".join(reserved)
+                ),
+            )
         # 旧エンジンの v1 の Run（`X-Agent-API-Version: 1`）は #756 で削除した。
         agent = _control_plane_agent(run_request.agent_id)
         if agent.migration_required:
@@ -1694,9 +1725,21 @@ async def create_run(
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail="会話が見つかりません。") from exc
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="agent not found") from exc
+        raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # repository の内部の文（英語）は本文に出さず、「詳細」（error_details.reason）に残す。
+        logger.warning("run_create_rejected", extra={"agent_id": run_request.agent_id})
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "run_not_created",
+                "message": (
+                    "この業務 Agent では今は実行できません。業務 Agent の状態を確認してから、"
+                    "もう一度実行してください。"
+                ),
+                "reason": str(exc),
+            },
+        ) from exc
 
 
 @router.get("/threads", response_model=ApiResponse[ThreadsData])
@@ -2586,7 +2629,7 @@ async def stream_run_events_websocket(
             {
                 "type": "error",
                 "error_code": "rbac.forbidden",
-                "message": "required role: viewer/operator/approver/auditor/admin",
+                "message": "この実行のイベントを購読する権限がありません。",
             }
         )
         await websocket.close(code=1008)
@@ -2598,7 +2641,7 @@ async def stream_run_events_websocket(
             {
                 "type": "error",
                 "error_code": "run.not_found",
-                "message": "run not found",
+                "message": "実行が見つかりません。",
             }
         )
         await websocket.close(code=1008)
@@ -2608,7 +2651,7 @@ async def stream_run_events_websocket(
             {
                 "type": "error",
                 "error_code": "rbac.agent_forbidden",
-                "message": "agent access denied",
+                "message": "この業務 Agent の実行を参照する権限がありません。",
             }
         )
         await websocket.close(code=1008)
@@ -2725,7 +2768,7 @@ async def replay_run(
             created_by_user_uuid=_run_creator_user_uuid(request),
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="業務 Agent が見つかりません。") from exc
+        raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
         # 確かめた後に Agent が無効・非公開になった（AgentNotPublishedError を含む）。
         raise HTTPException(
@@ -2757,7 +2800,7 @@ async def decide_approval(
         _schedule_builtin_run(decided)
         return ApiResponse(data=decided)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="承認が見つかりません。") from exc
+        raise HTTPException(status_code=404, detail=APPROVAL_NOT_FOUND_MESSAGE) from exc
 
 
 @router.get("/agents", response_model=ApiResponse[AgentsData])
@@ -2769,11 +2812,18 @@ async def list_agents(request: Request) -> ApiResponse[AgentsData]:
     return ApiResponse(data=AgentsData(agents=agents))
 
 
+def _require_agent_name(name: str) -> None:
+    """業務 Agent の名前は必須（画面と同じく空白だけも未入力。#925）。"""
+    if not name.strip():
+        raise HTTPException(status_code=422, detail="業務 Agent の名前を入力してください。")
+
+
 @router.post("/agents", response_model=ApiResponse[AgentProfile])
 async def create_agent(
     agent: AgentProfile,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentProfile]:
+    _require_agent_name(agent.name)
     # 画面・API で作る Agent は下書きから始める（公開するまで利用者の Run には使えない。#770）。
     # 版の項目は送られても使わない。
     draft = agent.model_copy(
@@ -2801,7 +2851,7 @@ async def publish_agent(
             agent_id, note=payload.note, published_by=_actor_display_name(request)
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="agent not found") from exc
+        raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ApiResponse(data=agent)
@@ -2822,7 +2872,7 @@ async def restore_agent_version(
             agent_id, version, published_by=_actor_display_name(request)
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="version not found") from exc
+        raise HTTPException(status_code=404, detail="業務 Agent の版が見つかりません。") from exc
     return ApiResponse(data=agent)
 
 
@@ -2832,10 +2882,12 @@ async def patch_agent(
     patch: AgentProfilePatch,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentProfile]:
+    if patch.name is not None:
+        _require_agent_name(patch.name)
     try:
         return ApiResponse(data=runtime_repository.patch_agent(agent_id, patch))
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="agent not found") from exc
+        raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2850,7 +2902,7 @@ async def delete_agent(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="agent not found") from exc
+        raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
     # 削除したエージェントをロールの対象範囲（AGENT_ROLE_AGENTS）から外す（#750）。
     # 失敗しても削除は成功のまま（権限管理の保存は、削除済みのエージェントを黙って外す）。
     try:
@@ -2894,6 +2946,15 @@ def _mcp_connections_response() -> McpConnectionsData:
         connections=[
             _mcp_connection_settings(config) for config in runtime_config_store.list_mcp_servers()
         ]
+    )
+
+
+def _changes_builtin_auth(current: McpConnectionConfig, patch: McpConnectionPatch) -> bool:
+    """組み込みの接続（RAG / NL2SQL）の認証方式・audience を今と違う値にする変更か。"""
+    if patch.auth_mode is not None and patch.auth_mode != current.effective_auth_mode():
+        return True
+    return patch.service_audience is not None and (
+        (patch.service_audience.strip() or current.server_id) != current.audience()
     )
 
 
@@ -3051,9 +3112,15 @@ async def patch_mcp_connection(
     _: None = Depends(require_admin),
 ) -> ApiResponse[McpConnectionSettings]:
     try:
-        runtime_config_store.get_mcp(server_id)
+        current = runtime_config_store.get_mcp(server_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="MCP 接続が見つかりません。") from exc
+    if current.source == "builtin" and _changes_builtin_auth(current, patch):
+        # RAG / NL2SQL は Run の利用者のサービストークンで呼ぶ（再起動の後の復元も認証方式を戻す）。
+        raise HTTPException(
+            status_code=400,
+            detail="RAG / NL2SQL の接続の認証方式と audience は変えられません。",
+        )
     config = _upsert_mcp_connection(server_id, patch)
     return ApiResponse(data=_mcp_connection_settings(config))
 
@@ -3160,6 +3227,12 @@ def _websocket_heartbeat_payload(run: RunState) -> dict[str, object]:
     }
 
 
+# WebSocket のコマンド・接続の拒否の `message` は、画面が Toast の説明にそのまま出す利用者向けの文
+# （`error_code` は画面・テストの判定に使うため変えない。#1031）。画面の状態が古いと起きる拒否には
+# 再読み込みを案内する。
+_WEBSOCKET_RELOAD_HINT = "画面を再読み込みしてから、もう一度操作してください。"
+
+
 async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
     try:
         message = await wait_for(websocket.receive_json(), timeout=0.01)
@@ -3169,7 +3242,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
         await websocket.send_json(
             _websocket_error_payload(
                 "websocket.invalid_message",
-                "message must be a JSON object",
+                "操作の内容を読み取れませんでした。" + _WEBSOCKET_RELOAD_HINT,
             )
         )
         return
@@ -3192,7 +3265,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "rbac.forbidden",
-                    "cancel requires operator/admin role",
+                    "実行を取り消す権限がありません。",
                     command="cancel",
                     command_id=normalized_command_id,
                 )
@@ -3208,7 +3281,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "websocket.command_id_conflict",
-                    "command_id was already used for another command",
+                    "同じ操作 ID で別の操作が送られています。" + _WEBSOCKET_RELOAD_HINT,
                     command="cancel",
                     command_id=normalized_command_id,
                 )
@@ -3220,7 +3293,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "run.not_found",
-                    "run not found",
+                    "実行が見つかりません。",
                     command="cancel",
                     command_id=normalized_command_id,
                 )
@@ -3233,7 +3306,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "rbac.forbidden",
-                    "resume requires operator/admin role",
+                    "実行を再開する権限がありません。",
                     command="resume",
                     command_id=normalized_command_id,
                 )
@@ -3249,7 +3322,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "websocket.command_id_conflict",
-                    "command_id was already used for another command",
+                    "同じ操作 ID で別の操作が送られています。" + _WEBSOCKET_RELOAD_HINT,
                     command="resume",
                     command_id=normalized_command_id,
                 )
@@ -3264,7 +3337,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "run.not_found",
-                    "run not found",
+                    "実行が見つかりません。",
                     command="resume",
                     command_id=normalized_command_id,
                 )
@@ -3277,7 +3350,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "rbac.forbidden",
-                    "approval_decision requires approver/admin role",
+                    "承認・却下を決める権限がありません。",
                     command="approval_decision",
                     command_id=normalized_command_id,
                 )
@@ -3289,7 +3362,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "websocket.invalid_command",
-                    "approval_decision requires approval_id",
+                    "承認の依頼が指定されていません。" + _WEBSOCKET_RELOAD_HINT,
                     command="approval_decision",
                     command_id=normalized_command_id,
                 )
@@ -3299,7 +3372,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "websocket.invalid_command",
-                    "approval_decision requires boolean approved",
+                    "承認か却下かが指定されていません。" + _WEBSOCKET_RELOAD_HINT,
                     command="approval_decision",
                     command_id=normalized_command_id,
                 )
@@ -3311,7 +3384,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "approval.not_found",
-                    "approval not found",
+                    "承認の依頼が見つかりません。",
                     command="approval_decision",
                     command_id=normalized_command_id,
                 )
@@ -3321,7 +3394,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "approval.run_mismatch",
-                    "approval does not belong to this run",
+                    "この承認の依頼は表示中の実行のものではありません。" + _WEBSOCKET_RELOAD_HINT,
                     command="approval_decision",
                     command_id=normalized_command_id,
                 )
@@ -3345,7 +3418,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "websocket.command_id_conflict",
-                    "command_id was already used for another command",
+                    "同じ操作 ID で別の操作が送られています。" + _WEBSOCKET_RELOAD_HINT,
                     command="approval_decision",
                     command_id=normalized_command_id,
                 )
@@ -3375,7 +3448,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
     await websocket.send_json(
         _websocket_error_payload(
             "websocket.unknown_command",
-            f"unknown command: {command}",
+            f"この操作（{command}）には対応していません。",
             command=str(command) if command is not None else None,
             command_id=normalized_command_id,
         )
@@ -3501,12 +3574,15 @@ def _require_actor_roles(request: Request, allowed_roles: set[str]) -> None:
         raise HTTPException(status_code=401, detail="ログインしてください。")
     if _policy_has_roles(_actor_policy(request), allowed_roles):
         return
-    actor = _actor_display_name(request)
-    required = ", ".join(sorted(allowed_roles | {"admin"}))
-    raise HTTPException(
-        status_code=403,
-        detail=f"actor {actor} requires one of roles: {required}",
-    )
+    # 経路の権限拒否（SECURITY_ROUTE_FORBIDDEN）ではないので error_code を付けない。
+    raise HTTPException(status_code=403, detail=_capability_denied_message(allowed_roles))
+
+
+def _capability_denied_message(allowed_roles: set[str]) -> str:
+    """capability（従来のロール）が足りないときの文。権限の名前は権限管理と同じ（カタログの並び）。"""
+    roles = allowed_roles | {"admin"}
+    labels = [item.label for item in PERMISSION_CATALOG if CAPABILITY_ROLES.get(item.code) in roles]
+    return f"この操作を行う権限がありません。必要な権限（いずれか）: {'、'.join(labels)}"
 
 
 def _run_creator_user_uuid(request: Request) -> str | None:
@@ -3525,7 +3601,7 @@ def _filter_runs_for_actor(request: Request, runs: list[RunState]) -> list[RunSt
 def _require_agent_access(request: Request, agent_id: str) -> None:
     if _agent_allowed(request, agent_id):
         return
-    raise HTTPException(status_code=403, detail="この業務 Agent を使う権限がありません。")
+    raise HTTPException(status_code=403, detail=AGENT_FORBIDDEN_MESSAGE)
 
 
 def _agent_allowed(request: Request, agent_id: str) -> bool:

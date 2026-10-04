@@ -224,9 +224,16 @@ export function OntologyBuildPage() {
     await refreshOntologyView();
   }, [refreshOntologyView]);
 
-  const workspaceFailure = workspaceRequested
+  // 作業領域を ErrorState に置き換えるのは、業務プロファイルをまだ取得できていないときだけ。
+  // 取得済みの後の取り直し（「オントロジーを取得」・タブへ戻ったときの再取得）の失敗で置き換えると、
+  // 実行中の構築の進行・選んだ資料が消えるため、取得済みの内容を残して取得の操作の下に案内を出す。
+  const workspaceFailure = workspaceRequested && !profileDetailQuery.data
     ? classifyOntologyWorkspaceError(profileDetailQuery.error, null)
     : null;
+  const workspaceRefreshFailure =
+    workspaceRequested && profileDetailQuery.data && profileDetailQuery.isError
+      ? classifyOntologyWorkspaceError(profileDetailQuery.error, null)
+      : null;
   const ontologyFailure = classifyOntologyWorkspaceError(
     null,
     workspaceRequested ? ontologyViewQuery.error : null
@@ -252,6 +259,12 @@ export function OntologyBuildPage() {
     : null;
   const workspaceErrorMessage = workspaceErrorPresentation
     ? t(workspaceErrorPresentation.key, workspaceErrorPresentation.params)
+    : "";
+  const workspaceRefreshErrorPresentation = workspaceRefreshFailure
+    ? ontologyWorkspaceErrorPresentation(workspaceRefreshFailure)
+    : null;
+  const workspaceRefreshErrorMessage = workspaceRefreshErrorPresentation
+    ? t(workspaceRefreshErrorPresentation.key, workspaceRefreshErrorPresentation.params)
     : "";
   const publishedGraphMismatch = hasPublishedOntology && !publishedGraphMatches;
   const ontologyErrorMessage = publishedGraphMismatch && !ontologyErrorPresentation
@@ -299,7 +312,9 @@ export function OntologyBuildPage() {
               ariaLabel={t("ontologyBuild.profile.loading")}
               variant="compact"
             />
-          ) : profilesQuery.isError ? (
+          ) : profilesQuery.isError && !profilesQuery.data ? (
+            // 一覧を 1 件も取得できていないときだけ置き換える。追加読み込み（fetchNextPage）の失敗も
+            // isError になるが、そのときは読み込み済みの選択欄を残し、下の追加読み込みの案内で再試行する。
             <ErrorState
               message={t("profiles.error.load")}
               onRetry={() => void profilesQuery.refetch()}
@@ -351,6 +366,27 @@ export function OntologyBuildPage() {
               {profileParam && !selectedProfileId && !profilesQuery.hasNextPage && (
                 <Banner severity="danger">{t("profiles.error.notFound")}</Banner>
               )}
+              {workspaceRefreshErrorMessage ? (
+                <Banner
+                  severity="danger"
+                  action={
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="w-full sm:w-auto"
+                      loading={profileDetailQuery.isFetching && !workspaceButtonLoading}
+                      disabled={workspaceButtonLoading}
+                      onClick={handleWorkspaceRetry}
+                      icon={RefreshCw}
+                    >
+                      <span>{t("common.retry")}</span>
+                    </Button>
+                  }
+                >
+                  {workspaceRefreshErrorMessage}
+                </Banner>
+              ) : null}
               {profileLoadMoreError ? (
                 <div>
                   <Banner
