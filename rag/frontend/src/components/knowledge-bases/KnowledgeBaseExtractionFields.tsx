@@ -12,7 +12,7 @@ import {
 import { CopyPlus, ListChecks, Undo2 } from "lucide-react";
 
 import { ExtractionFieldsForm } from "@/components/settings/ExtractionFieldsEditor";
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { ApiError, type ExtractionFieldDefinition } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -79,12 +79,9 @@ export function KnowledgeBaseExtractionFields({
     );
   } else if (query.isError || !query.data) {
     body = (
-      <ErrorState
-        message={
-          query.error instanceof ApiError
-            ? query.error.message
-            : t("settings.extractionFields.loadError")
-        }
+      <ApiErrorState
+        error={query.error}
+        fallback={t("settings.extractionFields.loadError")}
         onRetry={() => void query.refetch()}
       />
     );

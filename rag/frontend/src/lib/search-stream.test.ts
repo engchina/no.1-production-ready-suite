@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { ApiTransportError, DEFAULT_API_TRANSPORT_MESSAGES } from "@engchina/production-ready-ui";
+
+import { ApiError } from "./api";
 import { streamSearch } from "./search-stream";
 
 function sseResponse(blocks: string[]): Response {
@@ -12,6 +15,44 @@ function sseResponse(blocks: string[]): Response {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("streamSearch", () => {
+  it("接続できない（TypeError: Failed to fetch）ときは日本語の文の ApiError にする（Issue 906）", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+
+    const error = await streamSearch({ query: "q" }, {}).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).message).toBe(
+      DEFAULT_API_TRANSPORT_MESSAGES.network + DEFAULT_API_TRANSPORT_MESSAGES.networkAction
+    );
+    expect((error as ApiError).message).not.toMatch(/Failed to fetch/u);
+    expect((error as ApiError).cause).toBeInstanceOf(ApiTransportError);
+  });
+
+  it("受信の途中で接続が切れたときも通信断の ApiError にする（Issue 906）", async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`event: delta\ndata: ${JSON.stringify({ text: "途中" })}\n\n`));
+        controller.error(new TypeError("network error"));
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+
+    const error = await streamSearch({ query: "q" }, {}).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 0 });
+  });
+
+  it("利用者の中止（AbortError）はそのまま投げる", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new DOMException("The operation was aborted.", "AbortError"))
+    );
+
+    await expect(streamSearch({ query: "q" }, {})).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("metadata/delta/citations/done を順に解析する", async () => {
     const body = [
       `event: stage\ndata: ${JSON.stringify({ trace_id: "t1", stage: "embedding", outcome: "started", elapsed_ms: 0, attributes: { input_count: 1 } })}\n\n`,
