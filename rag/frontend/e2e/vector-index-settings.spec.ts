@@ -53,7 +53,7 @@ test("検索インデックス設定は accurate 選択で索引再作成警告�
 
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("検索インデックス設定を保存しました。")).toBeVisible();
+  await expect(page.getByText("検索インデックスの設定を保存しました。")).toBeVisible();
   expect(saved).toEqual({ profile: "accurate" });
 
   // 保存後(accurate)は profile 反映の再作成 SQL がコピー可能な形で提示される。
@@ -112,9 +112,11 @@ test("検索インデックス設定は現在の索引を確認できないと�
 
 test("検索インデックス設定は未保存選択を裏の再取得で失わない", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
+  let profile = "balanced";
+  let getCount = 0;
   await page.route("**/api/settings/vector-index", async (route) => {
-    // GET は常に balanced を返す(=外部状態は変わらない)。
-    await route.fulfill({ json: vectorIndexEnvelope("balanced") });
+    getCount += 1;
+    await route.fulfill({ json: vectorIndexEnvelope(profile) });
   });
 
   await page.goto("/settings/vector-index");
@@ -123,9 +125,12 @@ test("検索インデックス設定は未保存選択を裏の再取得で失�
   await fast.click();
   await expect(fast).toBeChecked();
 
-  // window focus を起点に TanStack Query の再取得を誘発しても未保存選択は維持される。
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await page.waitForTimeout(200);
+  // タブへ戻ったとき（visibilitychange。TanStack Query v5 の再取得の起点）の再取得で保存値が変わっても、
+  // 未保存の選択は維持される。
+  profile = "accurate";
+  const before = getCount;
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  await expect.poll(() => getCount).toBeGreaterThan(before);
 
   await expect(fast).toBeChecked();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
@@ -226,4 +231,78 @@ async function mockVectorIndex(
 async function expectNoHorizontalOverflow(page: Page) {
   // documentElement と main の双方を検査する共通ヘルパーへ委譲(_helpers.ts)。
   await expectNoPageOverflow(page);
+}
+
+test("検索インデックスの設定は、編集していなければ裏の再取得で変わった保存値にそろえ、未保存にしない（#987）", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  let profile = "balanced";
+  let getCount = 0;
+  await page.route("**/api/settings/vector-index", async (route) => {
+    getCount += 1;
+    await route.fulfill({ json: vectorIndexEnvelope(profile) });
+  });
+
+  await page.goto("/settings/vector-index");
+  await expect(page.getByRole("radio", { name: /バランス/ })).toBeChecked();
+
+  // 別の管理者が高精度に変えた後、タブへ戻ったとき（visibilitychange）の再取得を起こす。
+  profile = "accurate";
+  const before = getCount;
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  await expect.poll(() => getCount).toBeGreaterThan(before);
+
+  await expect(page.getByRole("radio", { name: /高精度/ })).toBeChecked();
+  await expect(page.getByText("未保存の変更があります。")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "保存" })).toBeDisabled();
+});
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`検索インデックスの設定は保存に失敗しても選択を残し、操作の行に失敗を出す（#987, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    let patchCount = 0;
+    await page.route("**/api/settings/vector-index", async (route) => {
+      if (route.request().method() === "PATCH") {
+        patchCount += 1;
+        if (patchCount === 1) {
+          await route.fulfill({
+            status: 500,
+            json: {
+              data: null,
+              error_messages: ["検索インデックス設定を backend/.env へ保存できませんでした。"],
+              warning_messages: [],
+            },
+          });
+          return;
+        }
+        await route.fulfill({ json: vectorIndexEnvelope("fast") });
+        return;
+      }
+      await route.fulfill({ json: vectorIndexEnvelope("balanced") });
+    });
+    await page.goto("/settings/vector-index");
+
+    const fast = page.getByRole("radio", { name: /高速/ });
+    await fast.click();
+    const actions = page.getByRole("group", { name: "検索インデックスの設定の操作" });
+    const saveButton = actions.getByRole("button", { name: "保存" });
+    await saveButton.click();
+
+    await expect(actions).toContainText("検索インデックス設定を backend/.env へ保存できませんでした。");
+    await expect(fast).toBeChecked();
+    await expect(saveButton).toBeEnabled();
+    await expectNoHorizontalOverflow(page);
+
+    await saveButton.click();
+    await expect(page.getByText("検索インデックスの設定を保存しました。")).toBeVisible();
+    await expect(fast).toBeChecked();
+    await expect(saveButton).toBeDisabled();
+    expect(patchCount).toBe(2);
+  });
 }

@@ -37,6 +37,9 @@
 @import "./structure/touch-target.css";
 @import "./structure/tabs.css";
 
+/* 外部ライブラリの配色を意味トークンに結び付ける（React Flow の Controls・帰属表示など）。 */
+@import "./integrations/react-flow.css";
+
 @theme inline {
   /* TIER 2 — 意味トークン（bg-surface / text-fg-muted / border-border-control …）。
      TIER 1（--neutral-* 等の原色）はユーティリティに露出させないため登録しない。 */

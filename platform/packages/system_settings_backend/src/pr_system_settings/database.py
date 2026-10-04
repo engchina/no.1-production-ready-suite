@@ -1111,6 +1111,28 @@ _ADB_FAILURE_RESPONSES: dict[AdbFailureOperation, tuple[str, str]] = {
 }
 
 
+def oci_failure_log_extra(exc: BaseException) -> dict[str, Any]:
+    """OCI の API の失敗を切り分ける項目（例外の種類・HTTP status・OCI の code・request id）。
+
+    OCI SDK の `ServiceError` の属性だけを読み、メッセージ本文や request の内容（Wallet の
+    password 等）は含めない。
+    """
+    extra: dict[str, Any] = {"exception_type": type(exc).__name__}
+    status = getattr(exc, "status", None)
+    if isinstance(status, int):
+        extra["oci_status"] = status
+    for key, attr in (("oci_code", "code"), ("oci_operation", "operation_name")):
+        value = getattr(exc, attr, None)
+        if isinstance(value, str) and value:
+            extra[key] = value
+    headers = getattr(exc, "headers", None)
+    if isinstance(headers, Mapping):
+        request_id = headers.get("opc-request-id")
+        if isinstance(request_id, str) and request_id:
+            extra["opc_request_id"] = request_id
+    return extra
+
+
 def _adb_not_configured(settings: Any) -> AdbInfoData:
     region = _s(settings, "resolved_oracle_adb_region")
     return AdbInfoData(
@@ -1164,9 +1186,9 @@ def _adb_failure_data(
     logger.warning(
         "adb_operation_failed",
         extra={
+            **oci_failure_log_extra(exc),
             "operation": operation,
             "error_code": error_code,
-            "exception_type": type(exc).__name__,
             "region": region,
             "adb_ocid_configured": bool(adb_ocid),
         },
@@ -1386,6 +1408,15 @@ def build_database_router(
                 ),
             ) from exc
         except Exception as exc:
+            # 画面には OCI の応答をそのまま返さないため、切り分けの手がかりはログに残す。
+            logger.warning(
+                "database_wallet_download_failed",
+                extra={
+                    **oci_failure_log_extra(exc),
+                    "wallet_error_code": "WALLET_DOWNLOAD_FAILED",
+                    "region": _s(settings, "resolved_oracle_adb_region") or None,
+                },
+            )
             raise HTTPException(
                 status_code=502,
                 detail=(
@@ -1408,6 +1439,15 @@ def build_database_router(
             raise
         except HTTPException as exc:
             if exc.status_code in {400, 415}:
+                # 検証で落ちた理由（必須ファイルの不足など。自前の文言）をログに残す。
+                logger.warning(
+                    "database_wallet_download_invalid",
+                    extra={
+                        "wallet_error_code": "WALLET_DOWNLOAD_INVALID",
+                        "status_code": exc.status_code,
+                        "reason": exc.detail,
+                    },
+                )
                 raise HTTPException(
                     status_code=502,
                     detail=(

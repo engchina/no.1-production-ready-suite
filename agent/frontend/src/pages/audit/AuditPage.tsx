@@ -28,6 +28,7 @@ import {
   SelectField,
   TextField,
   useActionPending,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 import { agentApi, type ToolCallAuditFilters, type ToolCallAuditRecord } from "@/lib/api";
 import { agentPaginationLabels, listScrollLabel, QueryState } from "@/components/ListViews";
@@ -188,7 +189,7 @@ export function AuditPage() {
       window.setTimeout(() => URL.revokeObjectURL(url), 0);
       toast.success(t("audit.csvDownloaded"));
     },
-    onError: (error) => toast.error(t("audit.csvFailed"), { description: error.message }),
+    onError: (error) => toast.error(t("audit.csvFailed"), { description: apiErrorMessage(error, t("common.error.retryLater")) }),
   });
 
   return (
@@ -318,7 +319,7 @@ export function AuditPage() {
               />
             ) : null}
             <p className="text-xs leading-5 text-fg-muted">{t("audit.csvHint")}</p>
-            {tools.error ? <Banner severity="warning">{tools.error.message}</Banner> : null}
+            {tools.error ? <Banner severity="warning">{apiErrorMessage(tools.error, t("common.error.load"))}</Banner> : null}
           </CardContent>
         </Card>
 

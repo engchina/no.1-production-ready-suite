@@ -1171,6 +1171,36 @@ def test_evaluation_compare_api_rejects_duplicate_experiment_ids() -> None:
 
 
 @pytest.mark.parametrize(
+    "path",
+    ["/api/evaluation/jobs/run", "/api/evaluation/jobs/compare", "/api/evaluation/run"],
+    ids=["jobs-run", "jobs-compare", "run"],
+)
+@pytest.mark.parametrize(
+    ("cases", "expected"),
+    [
+        (
+            [{"id": "same", "query": "A"}, {"id": " same ", "query": "B"}],
+            "評価ケースの id が重複しています: same",
+        ),
+        ([{"id": "  ", "query": "A"}], "評価ケースの id を入力してください。"),
+        ([{"id": "x" * 201, "query": "A"}], "cases.0.id"),
+    ],
+    ids=["duplicate", "blank", "too-long"],
+)
+def test_evaluation_api_rejects_invalid_case_ids(
+    path: str, cases: list[dict[str, str]], expected: str
+) -> None:
+    """結果のケースを id で区別できるよう、重複・空・長すぎる id を投入前に拒否する（#977）。"""
+    body: dict[str, Any] = {"cases": cases}
+    if path.endswith("compare"):
+        body["experiments"] = [{"id": "default"}]
+    response = client.post(path, json=body)
+
+    assert response.status_code == 422
+    assert any(expected in message for message in response.json()["error_messages"])
+
+
+@pytest.mark.parametrize(
     "experiment",
     [
         {"id": "removed-mode", "mode": "keyword"},

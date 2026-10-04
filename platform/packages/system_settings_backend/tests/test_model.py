@@ -445,6 +445,63 @@ def test_patch_without_models_needs_no_vision_model(tmp_path: Path) -> None:
     assert response.status_code == 200
 
 
+def test_patch_rejects_duplicate_model_ids(tmp_path: Path) -> None:
+    """同じモデル ID の 2 行目は使われない（接続もテストも先頭の行）ので保存しない（#1035）。"""
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    models = [
+        *PAYLOAD["enterprise_ai"]["models"],
+        {"model_id": " llm-a ", "display_name": "A2", "vision_enabled": False},
+    ]
+    enterprise = {**PAYLOAD["enterprise_ai"], "models": models}
+    errors = shared_model.validate_model_ids(
+        shared_model.EnterpriseAiModelSettings.model_validate(enterprise)
+    )
+    assert [error.field for error in errors] == ["models.2.model_id"]
+
+    response = make_client(settings, store).patch(
+        "/api/settings/model", json={**PAYLOAD, "enterprise_ai": enterprise}
+    )
+
+    assert response.status_code == 422
+    assert "モデル ID「llm-a」はすでに登録されています。" in response.json()["detail"]
+    assert not (tmp_path / "model-settings.json").exists()
+
+
+def test_saving_other_sections_is_not_blocked_by_saved_duplicate_model_ids(
+    tmp_path: Path,
+) -> None:
+    """保存済みの登録モデルに重複があっても、登録モデルを変えない保存は止めない（#1035）。"""
+    (tmp_path / "model-settings.json").write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "enterprise_ai": {
+                    "models": [
+                        {"model_id": "vlm-b", "vision_enabled": True},
+                        {"model_id": "vlm-b", "vision_enabled": True},
+                    ],
+                    "default_text_model_id": "vlm-b",
+                    "default_vision_model_id": "vlm-b",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    client = make_client(settings, store)
+    current = client.get("/api/settings/model").json()["data"]["settings"]
+
+    current["generative_ai"]["rerank_model"] = "rr-changed"
+    response = client.patch("/api/settings/model", json=current)
+
+    assert response.status_code == 200
+    assert settings.oci_genai_rerank_model == "rr-changed"
+
+
 def test_saving_other_sections_is_not_blocked_by_saved_invalid_defaults(tmp_path: Path) -> None:
     """保存済みの状態に Vision 対応のモデルがなくても、接続情報だけの保存は止めない。"""
     (tmp_path / "model-settings.json").write_text(
