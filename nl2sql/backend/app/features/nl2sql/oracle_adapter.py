@@ -635,18 +635,22 @@ def close_auth_connection_pool() -> None:
 # 接続 pool（#830）。1 回の問い合わせのジョブは状態を数十回読み書きするため、そのたびに
 # Wallet / mTLS の handshake と認証をやり直さない。業務データの SQL・Select AI（`DBMS_CLOUD_AI`）・
 # DeepSec の接続はこの pool に混ぜない（業務データの読み取りと Select AI の生成は下の
-# `nl2sql-runtime` の pool、それ以外は単発の接続 `connection()`）。
+# `nl2sql-runtime-admin` / `nl2sql-runtime-user` の pool、それ以外は単発の接続 `connection()`）。
 _STATE_CONNECTION_POOL = SharedOraclePool(name="nl2sql-state")
 # アプリの接続（DB の利用者は `PLATFORM_ORACLE_USER`）で業務データを読む（SELECT の実行）・
 # Select AI で生成する（`DBMS_CLOUD_AI.GENERATE`）ときに借りる接続 pool（#904）。1 回のジョブで
 # 1〜2 回使い、そのたびに Wallet / mTLS の handshake と認証（遅延の大きいネットワークで約 3 秒）を
 # やり直さない。
 # 使うのは session の状態を変えない処理だけ（`OracleNl2SqlAdapter.runtime_connection`）。
+# - system_admin 用と非 system_admin 用で pool を分け、同じ pool・同じ接続を共有しない
+#   （資格情報は同じアプリの利用者でも、actor の種類の境界を接続で保つ。利用者の要件）
 # - DeepSec の DATA USER の接続（利用者の context を設定する。`OraclePoolManager`）とは別の pool
+#   （DeepSec 有効の非 system_admin はそちらを使い、ここの user 用の pool は使わない）
 # - 状態の保存先の pool（`nl2sql-state`）とも分け、業務データの SQL と状態の読み書きを混ぜない
 # - ALTER SESSION・`DBMS_CLOUD_AI.SET_PROFILE`・DDL / DML・Select AI Agent・オントロジーの操作の
 #   トランザクションは今までどおり単発の接続（`connection()`）
-_RUNTIME_CONNECTION_POOL = SharedOraclePool(name="nl2sql-runtime")
+_RUNTIME_ADMIN_CONNECTION_POOL = SharedOraclePool(name="nl2sql-runtime-admin")
+_RUNTIME_USER_CONNECTION_POOL = SharedOraclePool(name="nl2sql-runtime-user")
 # 同じスレッドが状態の接続を借りたまま、もう 1 本借りようとしたか
 # （pool の上限で自分を待たないため）。
 _STATE_CONNECTION_DEPTH = threading.local()
@@ -658,8 +662,12 @@ def close_state_connection_pool() -> None:
 
 
 def close_runtime_connection_pool() -> None:
-    """業務データの読み取り・Select AI の生成の接続 pool を閉じる（次に借りるときに作り直す）。"""
-    _RUNTIME_CONNECTION_POOL.close()
+    """業務データの読み取り・Select AI の生成の接続 pool（admin 用・user 用）を閉じる。
+
+    次に借りるときに作り直す。
+    """
+    _RUNTIME_ADMIN_CONNECTION_POOL.close()
+    _RUNTIME_USER_CONNECTION_POOL.close()
 
 
 class OracleNl2SqlAdapter:
@@ -884,16 +892,36 @@ class OracleNl2SqlAdapter:
         `connection()` と同じく、呼び出しの timeout は借りるたびに設定し、result cache の無効化は
         pool の session callback が新しい接続ごとに当てる。例外のときと、未確定のトランザクションが
         残っているときは rollback してから返す。
+
+        pool は今の actor（`current_actor_context()`。worker ではジョブの actor の `actor_scope`）で
+        選ぶ。system_admin は `nl2sql-runtime-admin`、それ以外の認証済みの利用者は
+        `nl2sql-runtime-user` で、同じ pool・同じ接続を共有しない。actor が無いとき（システムの
+        処理・認証が無効のとき）は、どちらの actor の接続とも混ぜないよう pool を使わず、
+        今までどおり単発の接続（`connection()`）にする。
         """
+        from app.security.request_actor import current_actor_context
+
+        actor = current_actor_context()
+        if not actor.is_system_admin and not actor.user_uuid:
+            with (
+                self.connection(call_timeout_seconds=call_timeout_seconds)
+                if call_timeout_seconds is not None
+                else self.connection()
+            ) as single:
+                yield single
+            return
+        pool = (
+            _RUNTIME_ADMIN_CONNECTION_POOL
+            if actor.is_system_admin
+            else _RUNTIME_USER_CONNECTION_POOL
+        )
         oracledb = self._load_oracledb()
         self._init_client(oracledb)
         if not self.is_configured():
             raise OracleAdapterError("Oracle 接続情報が不足しています。")
-        _RUNTIME_CONNECTION_POOL.resize(
-            OraclePoolSize.of(1, self.settings.nl2sql_oracle_runtime_pool_max)
-        )
+        pool.resize(OraclePoolSize.of(1, self.settings.nl2sql_oracle_runtime_pool_max))
         try:
-            conn = _RUNTIME_CONNECTION_POOL.acquire(_oracle_connect_kwargs(self.settings))
+            conn = pool.acquire(_oracle_connect_kwargs(self.settings))
         except OracleAdapterError:
             raise
         except Exception as exc:
@@ -906,7 +934,7 @@ class OracleNl2SqlAdapter:
                     **diagnostics,
                     "event": "oracle_connection_failed",
                     "operation": "acquire",
-                    "pool": _RUNTIME_CONNECTION_POOL.name,
+                    "pool": pool.name,
                 },
             )
             raise OracleAdapterError(f"Oracle 接続に失敗しました: {exc}") from exc
@@ -941,7 +969,8 @@ class OracleNl2SqlAdapter:
           `OraclePoolManager.data_connection`）
 
         `read_only=True`（SELECT だけを実行し、トランザクションを残さない）なら、アプリの接続は
-        `runtime_connection()`（`nl2sql-runtime` の pool）から借りる（#904）。DeepSec の
+        `runtime_connection()`（system_admin 用・非 system_admin 用で別の pool）から借りる（#904）。
+        DeepSec の
         DATA USER の接続は `read_only` にかかわらず今までどおり（アプリの接続の pool と
         共有しない）。
         """
@@ -3627,7 +3656,7 @@ class OracleNl2SqlAdapter:
 
         DBMS_CLOUD_AI.GENERATE の属性は環境差があるため、呼び出しは adapter 内に限定する。
         profile は引数で渡し、session の profile（`DBMS_CLOUD_AI.SET_PROFILE`）は変えないため、
-        アプリの接続の pool（`runtime_connection`）から借りる（#904）。
+        アプリの接続の pool（`runtime_connection`。actor の種類ごとに別の pool）から借りる（#904）。
         """
         connection = (
             self.runtime_connection(call_timeout_seconds=call_timeout_seconds)

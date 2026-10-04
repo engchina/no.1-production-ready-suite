@@ -68,6 +68,7 @@ class DbCall:
     plane: str
     op: str
     detail: str = ""
+    connection_id: int = 0
 
 
 @dataclass
@@ -75,9 +76,11 @@ class DbRecorder:
     calls: list[DbCall] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def record(self, plane: str, op: str, detail: str = "") -> None:
+    def record(self, plane: str, op: str, detail: str = "", *, connection_id: int = 0) -> None:
         with self.lock:
-            self.calls.append(DbCall(plane, op, " ".join(detail.split())[:120]))
+            self.calls.append(
+                DbCall(plane, op, " ".join(detail.split())[:120], connection_id=connection_id)
+            )
 
     def mark(self) -> int:
         with self.lock:
@@ -170,7 +173,9 @@ class FakeCursor:
         return None
 
     def _record(self, op: str, detail: str = "") -> None:
-        self.connection.recorder.record(self.connection.plane, op, detail)
+        self.connection.recorder.record(
+            self.connection.plane, op, detail, connection_id=id(self.connection)
+        )
 
     def execute(self, sql: str, binds: Any = None, **kwargs: Any) -> None:
         params = dict(binds or {})
@@ -285,6 +290,7 @@ class FakePool:
         self.idle: list[FakePooledConnection] = []
         self.created: list[FakePooledConnection] = []
         self.dropped: list[FakeConnection] = []
+        self.closed = False
 
     def acquire(self) -> FakePooledConnection:
         recorder = self.fake.recorder
@@ -308,6 +314,7 @@ class FakePool:
 
     def close(self, force: bool = False) -> None:
         del force
+        self.closed = True
 
 
 class FakeOracledb:
@@ -646,7 +653,8 @@ class Harness:
     recorder: DbRecorder
     repository: _ShadowStateRepository
     state: FakeOracledb
-    runtime: FakeOracledb
+    runtime_admin: FakeOracledb
+    runtime_user: FakeOracledb
     deepsec: FakeOracledb
 
     def submit(self, request: JobCreateRequest, *, actor: str, is_system_admin: bool) -> Any:
@@ -685,7 +693,8 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., Harness]]
         recorder = DbRecorder()
         state = FakeOracledb(recorder, "state-pool")
         app = FakeOracledb(recorder, "app-connect", responder=_runtime_responder)
-        runtime = FakeOracledb(recorder, "runtime-pool", responder=_runtime_responder)
+        runtime_admin = FakeOracledb(recorder, "runtime-admin", responder=_runtime_responder)
+        runtime_user = FakeOracledb(recorder, "runtime-user", responder=_runtime_responder)
         deepsec = FakeOracledb(
             recorder,
             "deepsec",
@@ -696,10 +705,13 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., Harness]]
                 else "deepsec-control"
             ),
         )
-        for pool in _shared_pools():
+        for pool, fake in (
+            (oracle_adapter._RUNTIME_ADMIN_CONNECTION_POOL, runtime_admin),  # noqa: SLF001
+            (oracle_adapter._RUNTIME_USER_CONNECTION_POOL, runtime_user),  # noqa: SLF001
+        ):
             pool.close()
             created_pools.append(pool)
-            monkeypatch.setattr(pool, "_oracledb_loader", lambda fake=runtime: fake)
+            monkeypatch.setattr(pool, "_oracledb_loader", lambda fake=fake: fake)
         state_pool = oracle_adapter._STATE_CONNECTION_POOL  # noqa: SLF001
         state_pool.close()
         monkeypatch.setattr(state_pool, "_oracledb_loader", lambda: state)
@@ -746,7 +758,8 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., Harness]]
             recorder=recorder,
             repository=repository,
             state=state,
-            runtime=runtime,
+            runtime_admin=runtime_admin,
+            runtime_user=runtime_user,
             deepsec=deepsec,
         )
 
@@ -756,12 +769,6 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., Harness]]
         oracle_adapter._STATE_CONNECTION_POOL.close()  # noqa: SLF001
         for pool in created_pools:
             pool.close()
-
-
-def _shared_pools() -> list[Any]:
-    """業務データ・Select AI 用の pool（あれば）。状態の保存先・共通認証の pool は含めない。"""
-    pool = getattr(oracle_adapter, "_RUNTIME_CONNECTION_POOL", None)
-    return [pool] if pool is not None else []
 
 
 def _sql_job(engine: Nl2SqlEngine) -> JobCreateRequest:
@@ -816,7 +823,7 @@ def test_sql_generation_job_db_round_trips(
     assert run.total_round_trips <= run_limit
     # 1 回目でも、業務データ・Select AI の新しい接続は pool の 1 本だけ。
     assert cold_run.new_connections.get("app-connect", 0) == 0
-    assert cold_run.new_connections.get("runtime-pool", 0) <= 1
+    assert cold_run.new_connections.get("runtime-admin", 0) <= 1
     calls = h.recorder.window(0)
     # 状態の保存先の JSON CLOB は文字列で受け取る（LOB の read の往復が無い）。
     assert not [c for c in calls if c.op == "lob_read"]
@@ -865,9 +872,9 @@ _CLEAR_CONTEXT = "NL2SQL_DEEPSEC_CTX_PKG.CLEAR_APP_USER"
 @pytest.mark.parametrize(
     ("deepsec_enabled", "is_system_admin", "business_plane"),
     [
-        (False, True, "runtime-pool"),
-        (False, False, "runtime-pool"),
-        (True, True, "runtime-pool"),
+        (False, True, "runtime-admin"),
+        (False, False, "runtime-user"),
+        (True, True, "runtime-admin"),
         (True, False, "deepsec-data"),
     ],
     ids=[
@@ -887,12 +894,17 @@ def test_business_sql_connection_follows_job_actor(
 ) -> None:
     """業務データの SQL の接続は、ジョブの actor（system_admin か・user_uuid）と DeepSec で決まる。
 
-    - DeepSec 無効・DeepSec 有効の system_admin: アプリの接続（`nl2sql-runtime` の pool）
+    - system_admin（DeepSec 有効・無効）: アプリの接続の system_admin 用の pool
+      （`nl2sql-runtime-admin`）
+    - DeepSec 無効の非 system_admin: アプリの接続の非 system_admin 用の pool
+      （`nl2sql-runtime-user`）。資格情報は同じでも、system_admin と pool・接続を共有しない
     - DeepSec 有効の非 system_admin: DeepSec の DATA USER の pool。借りるたびにジョブの利用者の
       context を設定し、SQL の後に消す（別の利用者のジョブに context を残さない）
     - 状態の保存先の SQL は状態の pool だけ。業務データの SQL・Select AI と混ぜない
     """
     h = harness(oracle_deepsec_enabled=deepsec_enabled)
+    app_plane = "runtime-admin" if is_system_admin else "runtime-user"
+    connections_by_kind: dict[bool, set[int]] = {True: set(), False: set()}
     for actor in ("user-a", "user-b"):  # 同じ worker が 2 人の利用者のジョブを続けて処理する
         start = h.recorder.mark()
         h.measure(_sql_job(engine), actor=actor, is_system_admin=is_system_admin)
@@ -900,10 +912,12 @@ def test_business_sql_connection_follows_job_actor(
 
         business = [c for c in calls if c.op == "execute" and c.detail == _BUSINESS_SQL]
         assert [c.plane for c in business] == [business_plane]
+        connections_by_kind[is_system_admin].update(c.connection_id for c in business)
         if engine == Nl2SqlEngine.SELECT_AI:
-            # Select AI の生成は今までどおりアプリの接続（利用者の context を使わない）。
+            # Select AI の生成は今までどおりアプリの接続（利用者の context を使わない）。actor の
+            # 種類ごとに別の pool。
             generate = [c for c in calls if "DBMS_CLOUD_AI.GENERATE" in c.detail]
-            assert [c.plane for c in generate] == ["runtime-pool"]
+            assert [c.plane for c in generate] == [app_plane]
         state_sql = [c for c in calls if c.op == "execute" and "NL2SQL_" in c.detail]
         assert state_sql
         assert {c.plane for c in state_sql} == {"state-pool"}
@@ -921,10 +935,27 @@ def test_business_sql_connection_follows_job_actor(
                 ("execute", _BUSINESS_SQL),
                 ("callproc", _CLEAR_CONTEXT),
             ]
-            # system_admin 用（アプリの接続）の pool では業務データの SQL を実行しない。
-            assert not [c for c in calls if c.plane == "runtime-pool" and c.detail == _BUSINESS_SQL]
+            # アプリの接続の pool（admin 用・user 用）では業務データの SQL を実行しない。
+            assert not [
+                c for c in calls if c.plane.startswith("runtime-") and c.detail == _BUSINESS_SQL
+            ]
         else:
             assert deepsec_calls == []
+
+    # 同じ worker が、続けてもう一方の種類の actor のジョブを処理しても、業務データの SQL の接続は
+    # 交わらない（system_admin 用と非 system_admin 用で同じ接続を使い回さない）。
+    start = h.recorder.mark()
+    h.measure(_sql_job(engine), actor="user-c", is_system_admin=not is_system_admin)
+    other = [c for c in h.recorder.window(start) if c.op == "execute" and c.detail == _BUSINESS_SQL]
+    assert len(other) == 1
+    connections_by_kind[not is_system_admin].update(c.connection_id for c in other)
+    assert connections_by_kind[True]
+    assert connections_by_kind[False]
+    assert connections_by_kind[True].isdisjoint(connections_by_kind[False])
+    admin_ids = {id(c) for c in h.runtime_admin.created_connections()}
+    user_ids = {id(c) for c in h.runtime_user.created_connections()}
+    assert admin_ids.isdisjoint(user_ids)
+    assert connections_by_kind[True] <= admin_ids
 
     if business_plane == "deepsec-data":
         # 2 人の利用者は DATA USER の pool の同じ接続を使い回すが、借りるたびにその人の UUID を
@@ -937,8 +968,14 @@ def test_business_sql_connection_follows_job_actor(
             (_SET_CONTEXT, ["user-b"]),
             (_CLEAR_CONTEXT, []),
         ]
-    # アプリの接続（runtime-pool）では DeepSec の context を一度も設定しない。
-    assert all(not connection.callprocs for connection in h.runtime.created_connections())
+    # アプリの接続の pool では DeepSec の context を一度も設定しない。
+    assert all(
+        not connection.callprocs
+        for connection in [
+            *h.runtime_admin.created_connections(),
+            *h.runtime_user.created_connections(),
+        ]
+    )
 
 
 def test_deepsec_context_that_cannot_be_cleared_drops_the_connection(
@@ -960,19 +997,70 @@ def test_deepsec_context_that_cannot_be_cleared_drops_the_connection(
     assert all(not pool.idle for pool in h.deepsec.pools)
 
 
+@pytest.mark.parametrize(
+    ("is_system_admin", "plane"),
+    [(True, "runtime-admin"), (False, "runtime-user")],
+    ids=["system_admin", "user"],
+)
 def test_runtime_connection_rolls_back_open_transaction_before_returning(
-    harness: Callable[..., Harness],
+    harness: Callable[..., Harness], is_system_admin: bool, plane: str
 ) -> None:
+    from app.security.request_actor import actor_scope
+
     h = harness()
     adapter = h.service._oracle_adapter  # noqa: SLF001
 
-    with adapter.runtime_connection(call_timeout_seconds=300) as connection:
-        assert connection.call_timeout == 300_000
-        connection.transaction_in_progress = True
-    with adapter.runtime_connection() as again:
-        assert again is connection
-        assert again.call_timeout == int(h.settings.nl2sql_oracle_call_timeout_seconds * 1000)
+    with actor_scope("user-a", is_system_admin=is_system_admin):
+        with adapter.runtime_connection(call_timeout_seconds=300) as connection:
+            assert connection.call_timeout == 300_000
+            connection.transaction_in_progress = True
+        with adapter.runtime_connection() as again:
+            assert again is connection
+            assert again.call_timeout == int(h.settings.nl2sql_oracle_call_timeout_seconds * 1000)
 
     ops = [(c.plane, c.op) for c in h.recorder.window(0)]
-    assert ops.count(("runtime-pool", "new_connection")) == 1
-    assert ("runtime-pool", "rollback") in ops
+    assert ops.count((plane, "new_connection")) == 1
+    assert (plane, "rollback") in ops
+    # もう一方の種類の pool は使わない。
+    assert not [op for op in ops if op[0].startswith("runtime-") and op[0] != plane]
+
+
+def test_runtime_connection_without_actor_uses_single_connection(
+    harness: Callable[..., Harness],
+) -> None:
+    """actor の無い処理（システムの処理・認証が無効のとき）は、どちらの pool にも入れない。"""
+    h = harness()
+    adapter = h.service._oracle_adapter  # noqa: SLF001
+
+    rows = adapter.execute_select(_BUSINESS_SQL, 10)
+
+    assert rows.total == 2
+    ops = [(c.plane, c.op) for c in h.recorder.window(0)]
+    assert ("app-connect", "new_connection") in ops
+    assert not [op for op in ops if op[0].startswith("runtime-")]
+    assert h.runtime_admin.pools == []
+    assert h.runtime_user.pools == []
+
+
+def test_close_oracle_pools_closes_both_runtime_pools(
+    harness: Callable[..., Harness], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from functools import lru_cache
+
+    from app.clients.oracle_runtime import close_oracle_pools
+    from app.security.request_actor import actor_scope
+
+    h = harness()
+    # close_oracle_pools は lru_cache の get_oracle_pool_manager を前提にする。
+    manager = oracle_runtime.get_oracle_pool_manager()
+    monkeypatch.setattr(oracle_runtime, "get_oracle_pool_manager", lru_cache(lambda: manager))
+    adapter = h.service._oracle_adapter  # noqa: SLF001
+    for is_system_admin in (True, False):
+        with actor_scope("user-a", is_system_admin=is_system_admin):
+            adapter.execute_select(_BUSINESS_SQL, 10)
+    assert len(h.runtime_admin.pools) == 1
+    assert len(h.runtime_user.pools) == 1
+
+    close_oracle_pools()
+
+    assert all(pool.closed for pool in [*h.runtime_admin.pools, *h.runtime_user.pools])
