@@ -64,6 +64,7 @@ import {
   identitySecondaryName,
   isAbortError,
   mapFieldErrors,
+  nextUserRoleIds,
   securityFilteredCount,
   selectedVisibleKey,
   unmappedErrorMessage,
@@ -465,34 +466,39 @@ export function UserManagementPage({
       focusFirstFieldError(requiredErrors);
       return;
     }
-    const selectedRoleIds = [draft.selectedRoleId];
+    const submittedRoleId = draft.selectedRoleId;
     setBusy(true);
     try {
       if (activeView === "edit") {
         if (!editingUser) return;
+        // 選び直したロールだけを置き換え、選択欄に出ないほかのロールは残す（#1050）。
         const updated = await api.updateUser({
           ...editingUser,
           display_name: draft.displayName,
-          role_ids: selectedRoleIds,
+          role_ids: nextUserRoleIds(editingUser.role_ids, baseline.selectedRoleId, submittedRoleId),
         });
         setUsers((rows) => rows.map((row) => (row.user_uuid === updated.user_uuid ? updated : row)));
         selectUser(updated.user_uuid);
+        // 応答のロールの並びは選んだ順と限らないため、保存したロールが残っていればそれを選択のままにする。
+        const savedRoleId = updated.role_ids.includes(submittedRoleId)
+          ? submittedRoleId
+          : selectKnownRoleId(updated.role_ids);
         setBaseline((current) => ({
           ...current,
           displayName: updated.display_name,
-          selectedRoleId: selectKnownRoleId(updated.role_ids),
+          selectedRoleId: savedRoleId,
         }));
         setDraft((current) => ({
           ...current,
           displayName: updated.display_name,
-          selectedRoleId: selectKnownRoleId(updated.role_ids),
+          selectedRoleId: savedRoleId,
         }));
         toast.success(t("security.common.saved"));
       } else {
         const created = await api.createUser({
           login_user_id: draft.loginUserId,
           display_name: draft.displayName,
-          role_ids: selectedRoleIds,
+          role_ids: [submittedRoleId],
           temporary_password: draft.temporaryPassword || undefined,
         });
         setUsers((rows) => [...rows, created.user]);
@@ -770,6 +776,13 @@ export function UserManagementPage({
   ];
 
   const initialLoadFailed = Boolean(loadError) && users.length === 0 && roles.length === 0;
+  // 編集中のユーザーの、選択欄で選ばれていないほかのロール（保存しても変わらない。#1050）。
+  const otherAssignedRoles =
+    activeView === "edit" && editingUser
+      ? assignedRoles(editingUser).filter(
+          (role) => role.role_id !== baseline.selectedRoleId && role.role_id !== draft.selectedRoleId,
+        )
+      : [];
 
   return (
     <>
@@ -1084,6 +1097,13 @@ export function UserManagementPage({
                     </div>
                   )}
                   <FieldError id="security-users-role-error" message={fieldErrors.selectedRoleId} />
+                  {otherAssignedRoles.length > 0 ? (
+                    <p className="text-sm text-fg-muted" data-testid="security-users-other-roles">
+                      {t("security.users.otherRoles", {
+                        roles: otherAssignedRoles.map(assignedRoleLabel).join(", "),
+                      })}
+                    </p>
+                  ) : null}
                     </fieldset>
               </form>
             </SecurityManagementPanelShell>
