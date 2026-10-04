@@ -1245,9 +1245,14 @@ export function SecurityDeepSecPage() {
     if (dataUserPassword.length < 12 || dataUserPassword.length > 256) {
       return t("security.deepsec.config.passwordLength");
     }
+    // 「${」は backend/.env を読むときに環境変数として展開され、保存した値と変わるので拒否する（backend と同じ。#1000）。
     // 制御文字を含むパスワードを拒否するため、制御文字の範囲指定は意図どおり。
-    // oxlint-disable-next-line no-control-regex
-    if (dataUserPassword.includes("\"") || /[\x00-\x1f\x7f-\x9f]/.test(dataUserPassword)) {
+    if (
+      dataUserPassword.includes("\"") ||
+      dataUserPassword.includes("${") ||
+      // oxlint-disable-next-line no-control-regex
+      /[\x00-\x1f\x7f-\x9f]/.test(dataUserPassword)
+    ) {
       return t("security.deepsec.config.passwordChars");
     }
     return "";

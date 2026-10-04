@@ -30,7 +30,8 @@ for (const viewport of [
     const main = page.getByRole("main");
     await expect(main).toContainText("関係情報グラフ");
     await expect(main).toContainText("回答の検索には使いません");
-    await expect(main).toContainText("再取込");
+    // 取込済みの文書への反映は、文書の詳細の処理レシピの「再処理」（画面の操作の名前）で案内する。
+    await expect(main).toContainText("「再処理」してください");
     for (const term of ["entities", "relationships", "claims", "community", "GraphRAG", "現行挙動"]) {
       await expect(main).not.toContainText(term);
     }
@@ -60,9 +61,13 @@ test("関係情報の構築設定は「構築する」を選んで保存でき�
   await build.click();
   await expect(build).toBeChecked();
 
-  await page.getByRole("button", { name: "保存" }).click();
+  const actions = page.getByRole("group", { name: "関係情報の構築の設定の操作" });
+  await actions.getByRole("button", { name: "保存" }).click();
 
+  // 保存の成功は Toast（messaging.md §10.2）。操作の行に常設の成功の表示を残さない。
   await expect(page.getByText("関係情報の構築設定を保存しました。")).toBeVisible();
+  await expect(actions).not.toContainText("保存しました");
+  await expect(actions.getByRole("button", { name: "変更を破棄" })).toBeDisabled();
   expect(saved).toEqual({ profile: "entities" });
   await expectNoHorizontalOverflow(page);
 });
@@ -88,12 +93,16 @@ test("関係情報の構築設定の保存に失敗しても未保存の選択�
 
   const build = page.getByRole("radio", { name: /構築する/ });
   await build.click();
-  await page.getByRole("button", { name: "保存" }).click();
+  const actions = page.getByRole("group", { name: "関係情報の構築の設定の操作" });
+  await actions.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("関係情報設定を backend/.env へ保存できませんでした。")).toBeVisible();
+  // 失敗は操作の行に出し、選択を残す。変更を破棄で保存値へ戻せる。
+  await expect(actions).toContainText("関係情報設定を backend/.env へ保存できませんでした。");
   await expect(build).toBeChecked();
-  await expect(page.getByText("未保存の変更があります。")).toBeVisible();
-  await expect(page.getByRole("button", { name: "保存" })).toBeEnabled();
+  await expect(actions.getByRole("button", { name: "保存" })).toBeEnabled();
+  await actions.getByRole("button", { name: "変更を破棄" }).click();
+  await expect(page.getByRole("radio", { name: /構築しない/ })).toBeChecked();
+  await expect(actions).not.toContainText("保存できませんでした");
 });
 
 test("関係情報の構築設定取得に失敗したら再試行できる", async ({ page }) => {

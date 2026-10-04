@@ -76,7 +76,12 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.concurrency import run_in_threadpool
 
 import app.settings as app_settings
-from app.features.agent import builtin_runtime, control_plane_store, run_facts_store
+from app.features.agent import (
+    builtin_runtime,
+    control_plane_store,
+    plugin_views,
+    run_facts_store,
+)
 from app.features.agent.api_keys import (
     ApiKeyCreated,
     ApiKeyCreateRequest,
@@ -191,6 +196,7 @@ from app.features.agent.runtime import (
     ThreadsData,
     agent_unavailable_reason,
     builtin_resume_pending,
+    reserved_run_metadata_keys,
     runtime_repository,
 )
 from app.features.agent.skills import (
@@ -246,7 +252,12 @@ from app.security.dependencies import (
     permission_route_path,
 )
 from app.security.domain import Principal
-from app.security.permissions import UNCLASSIFIED_PERMISSION, permission_for_route
+from app.security.permissions import (
+    CAPABILITY_ROLES,
+    PERMISSION_CATALOG,
+    UNCLASSIFIED_PERMISSION,
+    permission_for_route,
+)
 from app.security.service import get_security_service
 from app.settings import MODEL_SETTINGS_STORE, get_settings
 from app.system_schema import system_schema_manager
@@ -517,10 +528,9 @@ async def require_system_settings_write(request: Request) -> None:
         or UNCLASSIFIED_PERMISSION in permissions
         or not principal.has_any_permission(set(permissions))
     ):
-        raise HTTPException(
-            status_code=403,
-            detail=f"actor {principal.login_user_id} cannot change system settings",
-        )
+        # 共通の route の権限の拒否と同じ文にする（ログインユーザー ID や英語の内部の文を出さない。
+        # error_code は付けない。#1108）。
+        raise HTTPException(status_code=403, detail="この機能を利用する権限がありません。")
 
 
 # アップロード保存先は3製品共通の実装（platform の pr_system_settings。#97）。
@@ -1343,7 +1353,7 @@ async def list_plugins(_: None = Depends(require_viewer)) -> ApiResponse[PluginL
     return ApiResponse(data=_plugin_list_response())
 
 
-@router.post("/plugins", response_model=ApiResponse[PluginRecord])
+@router.post("/plugins", response_model=ApiResponse[plugin_views.PluginRecordView])
 async def install_plugin(
     payload: PluginInstallRequest,
     _: None = Depends(require_admin),
@@ -1448,7 +1458,7 @@ async def refresh_plugin_marketplace(
 
 @router.post(
     "/plugins/marketplaces/{marketplace_id}/plugins/{plugin_id}/preview",
-    response_model=ApiResponse[PluginImportPreview],
+    response_model=ApiResponse[plugin_views.PluginImportPreviewView],
 )
 async def preview_marketplace_plugin(
     marketplace_id: str,
@@ -1478,7 +1488,7 @@ async def preview_marketplace_plugin(
 
 @router.get(
     "/plugins/marketplaces/{marketplace_id}/plugins",
-    response_model=ApiResponse[MarketplaceListing],
+    response_model=ApiResponse[plugin_views.MarketplaceListingView],
 )
 async def list_marketplace_plugins(
     marketplace_id: str,
@@ -1506,7 +1516,7 @@ async def delete_plugin_marketplace(
     return ApiResponse(data=MarketplaceSourcesOutput(marketplaces=marketplace_registry.list()))
 
 
-@router.get("/plugins/{plugin_id}", response_model=ApiResponse[PluginRecord])
+@router.get("/plugins/{plugin_id}", response_model=ApiResponse[plugin_views.PluginRecordView])
 async def get_plugin(
     plugin_id: str,
     _: None = Depends(require_viewer),
@@ -1517,7 +1527,7 @@ async def get_plugin(
     return ApiResponse(data=record)
 
 
-@router.patch("/plugins/{plugin_id}", response_model=ApiResponse[PluginRecord])
+@router.patch("/plugins/{plugin_id}", response_model=ApiResponse[plugin_views.PluginRecordView])
 async def patch_plugin(
     plugin_id: str,
     patch: PluginPatch,
@@ -1661,6 +1671,16 @@ async def create_run(
 ) -> ApiResponse[RunState]:
     try:
         _require_agent_access(request, run_request.agent_id)
+        # Control Plane の予約の metadata（再開の状態・評価・自動実行・MCP の印）は
+        # 利用者に付けさせない（#1130）。
+        reserved = reserved_run_metadata_keys(run_request.metadata)
+        if reserved:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "metadata に Control Plane が使う項目は指定できません: " + ", ".join(reserved)
+                ),
+            )
         # 旧エンジンの v1 の Run（`X-Agent-API-Version: 1`）は #756 で削除した。
         agent = _control_plane_agent(run_request.agent_id)
         if agent.migration_required:
@@ -1704,7 +1724,19 @@ async def create_run(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # repository の内部の文（英語）は本文に出さず、「詳細」（error_details.reason）に残す。
+        logger.warning("run_create_rejected", extra={"agent_id": run_request.agent_id})
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "run_not_created",
+                "message": (
+                    "この業務 Agent では今は実行できません。業務 Agent の状態を確認してから、"
+                    "もう一度実行してください。"
+                ),
+                "reason": str(exc),
+            },
+        ) from exc
 
 
 @router.get("/threads", response_model=ApiResponse[ThreadsData])
@@ -3510,12 +3542,15 @@ def _require_actor_roles(request: Request, allowed_roles: set[str]) -> None:
         raise HTTPException(status_code=401, detail="ログインしてください。")
     if _policy_has_roles(_actor_policy(request), allowed_roles):
         return
-    actor = _actor_display_name(request)
-    required = ", ".join(sorted(allowed_roles | {"admin"}))
-    raise HTTPException(
-        status_code=403,
-        detail=f"actor {actor} requires one of roles: {required}",
-    )
+    # 経路の権限拒否（SECURITY_ROUTE_FORBIDDEN）ではないので error_code を付けない。
+    raise HTTPException(status_code=403, detail=_capability_denied_message(allowed_roles))
+
+
+def _capability_denied_message(allowed_roles: set[str]) -> str:
+    """capability（従来のロール）が足りないときの文。権限の名前は権限管理と同じ（カタログの並び）。"""
+    roles = allowed_roles | {"admin"}
+    labels = [item.label for item in PERMISSION_CATALOG if CAPABILITY_ROLES.get(item.code) in roles]
+    return f"この操作を行う権限がありません。必要な権限（いずれか）: {'、'.join(labels)}"
 
 
 def _run_creator_user_uuid(request: Request) -> str | None:

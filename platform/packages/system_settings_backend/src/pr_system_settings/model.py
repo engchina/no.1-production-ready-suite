@@ -682,6 +682,30 @@ def validate_enterprise_ai_connections(
     return errors
 
 
+def validate_model_ids(enterprise: EnterpriseAiModelSettings) -> list[ModelFieldError]:
+    """登録モデルのモデル ID が重複しないかを確かめる（#1035）。
+
+    既定のモデル・接続の解決（`enterprise_ai_connection_for_model`）・接続テストはモデル ID で
+    先頭の行を引くので、同じ ID の 2 行目以降は使われず、その行に選んだ接続も効かない。
+    エラーは 2 回目以降に現れた行に付ける。
+    """
+    seen: set[str] = set()
+    errors: list[ModelFieldError] = []
+    for index, model in enumerate(enterprise.models):
+        if not model.model_id:
+            continue
+        if model.model_id in seen:
+            errors.append(
+                ModelFieldError(
+                    f"models.{index}.model_id",
+                    f"モデル ID「{model.model_id}」はすでに登録されています。"
+                    "同じモデルは 1 行にまとめてください。",
+                )
+            )
+        seen.add(model.model_id)
+    return errors
+
+
 def validate_default_models(enterprise: EnterpriseAiModelSettings) -> list[ModelFieldError]:
     """既定のモデル 2 つが登録モデルと矛盾しないかを確かめる（#499）。
 
@@ -1529,6 +1553,9 @@ def save_model_settings(
         payload.enterprise_ai, api_keys=resolve_api_keys(settings, payload)
     )
     if _default_models_changed(settings, payload.enterprise_ai):
+        # 登録モデルを変える保存だけで確かめる（#1035）。既存の不正な状態で、
+        # 接続・Generative AI の節の保存は止めない。
+        errors += validate_model_ids(payload.enterprise_ai)
         errors += validate_default_models(payload.enterprise_ai)
     if errors:
         raise HTTPException(status_code=422, detail=" ".join(error.message for error in errors))
