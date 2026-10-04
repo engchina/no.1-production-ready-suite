@@ -48,6 +48,19 @@ test("通常ユーザーは付与された権限だけ利用できる", () => {
   assert.equal(currentUserHasPermission(user, MENU_PERMISSIONS.securityUsers), false);
 });
 
+test("コメント・アノテーション・ドメインの管理はスキーマの参照・更新を含む（#972）", () => {
+  for (const menu of [
+    MENU_PERMISSIONS.commentManagement,
+    MENU_PERMISSIONS.annotationManagement,
+    MENU_PERMISSIONS.domainManagement,
+  ]) {
+    const user = currentUser({ permissions: [menu] });
+    assert.equal(currentUserHasPermission(user, CAPABILITY_PERMISSIONS.schemaRead), true, menu);
+    assert.equal(currentUserHasPermission(user, CAPABILITY_PERMISSIONS.schemaRefresh), true, menu);
+    assert.equal(currentUserHasPermission(user, MENU_PERMISSIONS.tableManagement), false, menu);
+  }
+});
+
 test("用語・同義語と共通ルールの権限は業務プロファイル管理と学習素材管理を含まない（#1006）", () => {
   for (const menu of [MENU_PERMISSIONS.glossaryRules, MENU_PERMISSIONS.globalRules]) {
     const user = currentUser({ permissions: [menu] });
