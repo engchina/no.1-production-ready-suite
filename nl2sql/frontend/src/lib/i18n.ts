@@ -2371,6 +2371,8 @@ const nl2sqlJa = {
   "history.empty.hint": "クエリ生成を実行すると、この画面に結果が残ります。",
   "history.noResults.title": "条件に一致する履歴がありません",
   "history.noResults.hint": "検索語または絞り込み条件を変更してください。",
+  "history.unavailable.title": "履歴を表示できません",
+  "history.unavailable.hint": "この条件の履歴を取得できませんでした。上の「履歴更新」で再試行するか、条件を変更してください。",
   "history.status.label": "実行履歴の状態",
   "history.status.visible": "表示件数",
   "history.status.evaluated": "評価済み件数",

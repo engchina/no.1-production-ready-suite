@@ -34,6 +34,7 @@ import {
   SelectField,
 } from "@engchina/production-ready-ui";
 import { useAuth } from "@/features/security/AuthProvider";
+import { canOpenRoute } from "@/features/security/route-permissions";
 
 import { PageNotice } from "@/components/page-notice";
 import { apiGet, isAbortError } from "@/lib/api";
@@ -225,6 +226,7 @@ function HistoryGrid({
   hasMore,
   loadingMore,
   refreshing,
+  unavailable,
   onLoadMore,
 }: {
   items: HistoryItem[];
@@ -246,6 +248,8 @@ function HistoryGrid({
   hasMore: boolean;
   loadingMore: boolean;
   refreshing: boolean;
+  /** 今の絞り込みの結果を取得できなかった（前の条件の一覧は出さない）。 */
+  unavailable: boolean;
   onLoadMore: () => void;
 }) {
   const count = total ?? items.length;
@@ -256,7 +260,7 @@ function HistoryGrid({
         icon={History}
         title={t("history.list.title")}
         description={t("history.list.hint")}
-        action={<StatusBadge icon={false} variant="info" label={t("history.list.count", { count })} />}
+        action={unavailable ? undefined : <StatusBadge icon={false} variant="info" label={t("history.list.count", { count })} />}
       />
 
       <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3">
@@ -294,7 +298,12 @@ function HistoryGrid({
         </div>
       </div>
 
-      {items.length === 0 ? (
+      {unavailable ? (
+        // 取得の失敗を「条件に一致する履歴がありません」（空）と取り違えさせない。再試行はページ上部の通知（#912）。
+        <div className="grid justify-items-center gap-3 rounded-md border border-border bg-surface-sunken p-4" data-testid="history-list-unavailable">
+          <EmptyState title={t("history.unavailable.title")} hint={t("history.unavailable.hint")} />
+        </div>
+      ) : items.length === 0 ? (
         <div className="grid justify-items-center gap-3 rounded-md border border-border bg-surface-sunken p-4">
           <EmptyState title={t("history.noResults.title")} hint={t("history.noResults.hint")} />
           <Button type="button" variant="secondary" size="sm" onClick={onClearFilters}>
@@ -390,7 +399,7 @@ function HistoryGrid({
           </div>
         </div>
       )}
-      <div
+      {!unavailable && <div
         className="flex flex-col gap-2 rounded-md border border-border bg-surface-sunken p-3 sm:flex-row sm:items-center sm:justify-between"
         data-testid="history-load-more"
       >
@@ -404,7 +413,7 @@ function HistoryGrid({
             {t("history.action.loadMore")}
           </Button>
         )}
-      </div>
+      </div>}
     </section>
   );
 }
@@ -467,7 +476,8 @@ function HistoryDetailPanel({
   selectionMissing?: boolean;
   headingRef: RefObject<HTMLHeadingElement | null>;
   onTabChange: (tab: HistoryDetailTab) => void;
-  onRerun: (item: HistoryItem) => void;
+  /** SQL 生成の画面を開けない利用者には渡さない（再実行のボタンを出さない。#912）。 */
+  onRerun?: (item: HistoryItem) => void;
 }) {
   if (!item) {
     return (
@@ -495,14 +505,16 @@ function HistoryDetailPanel({
           >
             {t("history.detail.title")}
           </h2>
-          <Button
-            type="button"
-            variant="primary"
-            size="sm"
-            className="ml-auto w-full shrink-0 whitespace-nowrap sm:w-auto"
-            onClick={() => onRerun(item)} icon={RotateCcw}>
-            <span>{t("history.action.rerun")}</span>
-          </Button>
+          {onRerun && (
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              className="ml-auto w-full shrink-0 whitespace-nowrap sm:w-auto"
+              onClick={() => onRerun(item)} icon={RotateCcw}>
+              <span>{t("history.action.rerun")}</span>
+            </Button>
+          )}
         </div>
         <div className="min-w-0 rounded-md border border-border bg-surface p-3" data-testid="history-detail-question-block">
           <p className="text-xs font-medium text-fg-muted">{t("history.grid.question")}</p>
@@ -670,6 +682,9 @@ function HistoryDetailSection({ title, value, mono = false, testId }: { title: s
 
 export function HistoryPage() {
   const navigate = useNavigate();
+  const { hasPermission } = useAuth();
+  // 再実行は SQL 生成の画面へ質問を引き継ぐ。開けない利用者に出すと権限なしの画面へ移ってしまう（#912）。
+  const canRerun = canOpenRoute(APP_ROUTES.query, hasPermission);
   const detailHeadingRef = useRef<HTMLHeadingElement>(null);
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -802,6 +817,10 @@ export function HistoryPage() {
   // 絞り込みの結果が 0 件のあとの取り直しでも、絞り込みの欄を含む一覧を出したまま処理中の表示にする。
   // スケルトンへ置き換えると、入力中の検索欄や開いている選択欄が作り直されてフォーカスを失う（#739）。
   const initialLoading = loading && !loadedFilters;
+  // 今の絞り込みの結果をまだ取得できていないまま取得が失敗した（初回の失敗・絞り込みを変えた後の失敗）。
+  // 前の条件の一覧・件数を今の条件の結果として出さず、空の案内（履歴はまだありません・条件に一致しない）
+  // とも取り違えさせない。同じ条件の「表示を更新」の失敗は前の内容を残す（messaging §3.6 / §3.7。#912）。
+  const listUnavailable = !loading && Boolean(message) && loadedFilters !== filterSignature;
 
   const toggleSort = (key: HistorySortKey) => {
     setSort((current) => ({
@@ -869,7 +888,7 @@ export function HistoryPage() {
             <HistoryListSkeleton />
             <HistoryDetailSkeleton />
           </DbObjectManagementPanelShell>
-        ) : items.length === 0 && !hasActiveFilters && !loading ? (
+        ) : items.length === 0 && !hasActiveFilters && !loading && !listUnavailable ? (
           <section className="rounded-md border border-border bg-surface p-4 shadow-sm" aria-label={t("history.workspace.label")}>
             <EmptyState title={t("history.empty.title")} hint={t("history.empty.hint")} />
           </section>
@@ -897,7 +916,7 @@ export function HistoryPage() {
             }
           >
             <HistoryGrid
-              items={sortedItems}
+              items={listUnavailable ? [] : sortedItems}
               selectedId={selectedItem?.id ?? ""}
               search={search}
               feedbackFilter={feedbackFilter}
@@ -914,15 +933,16 @@ export function HistoryPage() {
               hasMore={Boolean(nextCursor) && loadedFilters === filterSignature}
               loadingMore={loadingMore}
               refreshing={loading}
+              unavailable={listUnavailable}
               onLoadMore={() => void loadMore()}
             />
             <HistoryDetailPanel
-              item={selectedItem}
-              selectionMissing={Boolean(selectedId) && !selectedItem}
+              item={listUnavailable ? null : selectedItem}
+              selectionMissing={!listUnavailable && Boolean(selectedId) && !selectedItem}
               tab={detailTab}
               headingRef={detailHeadingRef}
               onTabChange={setDetailTab}
-              onRerun={(item) => navigate(historyRerunUrl(item, APP_ROUTES.query))}
+              onRerun={canRerun ? (item) => navigate(historyRerunUrl(item, APP_ROUTES.query)) : undefined}
             />
           </DbObjectManagementPanelShell>
         )}
