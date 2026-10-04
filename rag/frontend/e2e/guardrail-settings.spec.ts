@@ -19,6 +19,14 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "安全チェック", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByRole("radio", { name: /標準/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /規制対応/ })).toBeVisible();
+    // 全体の既定であることと、検索・回答プロファイルの上書きが優先することを案内する（#1024）。
+    const main = page.getByRole("main");
+    await expect(main).toContainText("保存すると次の回答から使います");
+    await expect(main).toContainText("「検索・回答設定」で方針を上書きしている場合は、その方針を使います");
+    // 内部の英語の用語を画面に出さない。
+    for (const term of ["readiness", "groundedness"]) {
+      await expect(main).not.toContainText(term);
+    }
     // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
     await expect((await openSidebarNav(page)).getByRole("link", { name: "安全チェック" })).toHaveAttribute("aria-current", "page");
     await expectNoHorizontalOverflow(page);
@@ -41,13 +49,56 @@ test("安全チェック設定は方針を保存できる", async ({ page }) => 
   const strict = page.locator("#guardrail-policy-strict");
   await page.getByText("厳格", { exact: true }).click();
   await expect(strict).toBeChecked();
-  await expect(page.getByText("未保存の変更があります。")).toBeVisible();
-  await page.getByRole("button", { name: "保存" }).click();
+  const actions = page.getByRole("group", { name: "安全チェックの設定の操作" });
+  await expect(actions).toContainText("未保存の変更があります。");
+  await actions.getByRole("button", { name: "保存" }).click();
 
+  // 保存の成功は Toast（messaging.md §10.2）。操作の行に常設の成功の表示を残さない。
   await expect(page.getByText("安全チェックを保存しました。")).toBeVisible();
+  await expect(actions).not.toContainText("保存しました");
+  await expect(actions.getByRole("button", { name: "変更を破棄" })).toBeDisabled();
   expect(saved).toEqual({ policy: "strict", backend: "local" });
   await expectNoHorizontalOverflow(page);
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 900 },
+]) {
+  test(`安全チェックの保存に失敗しても選択を残して操作の行に出し、変更を破棄で戻せる（#1024, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.route("**/api/settings/guardrail", async (route) => {
+      if (route.request().method() === "PATCH") {
+        await route.fulfill({
+          status: 500,
+          json: {
+            data: null,
+            error_messages: ["安全チェック設定を backend/.env へ保存できませんでした。"],
+            warning_messages: [],
+          },
+        });
+        return;
+      }
+      await route.fulfill({ json: guardrailEnvelope("standard") });
+    });
+
+    await page.goto("/settings/guardrail");
+    const strict = page.locator("#guardrail-policy-strict");
+    await page.getByText("厳格", { exact: true }).click();
+    const actions = page.getByRole("group", { name: "安全チェックの設定の操作" });
+    await actions.getByRole("button", { name: "保存" }).click();
+
+    await expect(actions).toContainText("安全チェック設定を backend/.env へ保存できませんでした。");
+    await expect(strict).toBeChecked();
+    await expect(actions.getByRole("button", { name: "保存" })).toBeEnabled();
+    await expectNoHorizontalOverflow(page);
+    await actions.getByRole("button", { name: "変更を破棄" }).click();
+    await expect(page.locator("#guardrail-policy-standard")).toBeChecked();
+    await expect(actions.getByRole("button", { name: "保存" })).toBeDisabled();
+  });
+}
 
 test("安全チェック設定は OCI 検査方式を保存できる", async ({ page }) => {
   let saved: unknown = null;

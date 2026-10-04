@@ -330,3 +330,15 @@ for (const viewport of [
     }
   });
 }
+
+// #1122: 開いた直後はフォーカスを動かさない。最初の Tab は「本文へスキップ」（一覧 ↔ 詳細の切り替えだけ見出し・行へ移す）。
+for (const path of ["/runs", "/runs?id=run-layout", "/runs?id=new"]) {
+  test(`${path} を開いた直後の最初の Tab で「本文へスキップ」にフォーカスが当たる`, async ({ page, mockApi }) => {
+    seedRun(mockApi);
+    await page.goto(path);
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await expect(page.locator("main h1")).not.toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("link", { name: "本文へスキップ" })).toBeFocused();
+  });
+}

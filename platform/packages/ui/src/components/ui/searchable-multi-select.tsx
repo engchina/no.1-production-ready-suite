@@ -17,6 +17,7 @@ import { cn } from "../../lib/utils";
 import { Button } from "./button";
 import { FieldLabel } from "./field-label";
 import { SearchField } from "./search-field";
+import { TEXT_FIELD_TRAILING_BUTTON_CLASS } from "./text-field";
 import {
   DEFAULT_SEARCHABLE_SELECT_LABELS,
   filterSearchableOptions,
@@ -286,10 +287,11 @@ export function SearchableMultiSelect({
           inputRef.current?.focus();
         }
       }}
+      // 検索欄と同じ高さ（md 36px・タッチ端末 44px。TextField の後置スロットの形）。消去のボタンが右に
+      // 並ぶ（検索語がある）ときは右の角を丸めず、強制カラーモードで消去の左の区切りと二重にしない。
       className={cn(
-        "h-full min-h-0 rounded-none",
-        !draft && "rounded-r-[calc(var(--radius-control)-1px)]",
-        "forced-colors:border-y-[Canvas] forced-colors:border-r-[Canvas]"
+        TEXT_FIELD_TRAILING_BUTTON_CLASS,
+        draft && "rounded-r-none forced-colors:border-r-[Canvas]"
       )}
     />
   );

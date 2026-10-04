@@ -90,6 +90,7 @@ from .logical_steps import (
     build_logical_structure_items,
 )
 from .models import (
+    STORED_JOB_REQUEST_CONTEXT,
     AdminFeedbackReviewData,
     AdminFeedbackReviewRequest,
     AgentConversationCreateData,
@@ -618,6 +619,40 @@ def _graph_with_resolved_table_owners(
 def _safe_oracle_error_code(exc: Exception) -> str:
     match = _ORACLE_ERROR_CODE_RE.search(str(exc))
     return match.group(0).upper() if match else ""
+
+
+# ジョブの失敗の利用者向けの文（1 文目に何が起きたか、次に次の操作）。
+# 例外・Oracle のエラーの元の文は error_detail に分け、画面は「詳細」に畳んで出す
+# （messaging.md §10.3。#1072）。
+_JOB_FAILED_MESSAGE = (
+    "SQL の生成に失敗しました。時間をおいてもう一度実行してください。"
+    "繰り返し失敗するときは、「詳細」の内容を管理者に伝えてください。"
+)
+_SQL_EXECUTION_FAILED_MESSAGE = (
+    "生成した SQL の実行に失敗しました。"
+    "生成した SQL と「詳細」の Oracle のエラーを確認し、クエリを言い換えて実行し直してください。"
+)
+_JOB_FAILURE_DETAIL_MAX_LENGTH = 4000
+
+
+def _job_failure_detail(exc: BaseException) -> str | None:
+    detail = str(exc).strip()
+    if not detail:
+        return type(exc).__name__
+    if len(detail) > _JOB_FAILURE_DETAIL_MAX_LENGTH:
+        return detail[:_JOB_FAILURE_DETAIL_MAX_LENGTH] + "…"
+    return detail
+
+
+def _job_failure_presentation(exc: BaseException) -> tuple[str, str | None]:
+    """失敗したジョブの `(error_message, error_detail)`。
+
+    DB 構造の未取得（SCHEMA_CATALOG_EMPTY）は、例外の文がそのまま利用者向けの文と次の操作なので
+    1 文目に出す。それ以外は例外の文（ORA-… など）を詳細に分ける。
+    """
+    if isinstance(exc, SchemaCatalogEmptyError):
+        return str(exc), None
+    return _JOB_FAILED_MESSAGE, _job_failure_detail(exc)
 
 
 def _job_failure_error_code(exc: BaseException, *, fallback: str) -> str:
@@ -3425,6 +3460,7 @@ class StoredJob:
     result: Nl2SqlResult | None = None
     error_message: str | None = None
     error_code: str | None = None
+    error_detail: str | None = None
     warning_message: str | None = None
     timing: TimingEnvelope | None = None
     steps: list[JobStepData] = field(default_factory=list)
@@ -4632,6 +4668,7 @@ class Nl2SqlService:
             "result": job.result.model_dump(mode="json") if job.result else None,
             "error_message": job.error_message,
             "error_code": job.error_code,
+            "error_detail": job.error_detail,
             "warning_message": job.warning_message,
             "timing": job.timing.model_dump(mode="json") if job.timing else None,
             "steps": [step.model_dump(mode="json") for step in job.steps],
@@ -4754,7 +4791,9 @@ class Nl2SqlService:
         return StoredJob(
             job_id=str(data["job_id"]),
             conversation_id=str(data.get("conversation_id") or ""),
-            request=JobCreateRequest.model_validate(data["request"]),
+            request=JobCreateRequest.model_validate(
+                data["request"], context={STORED_JOB_REQUEST_CONTEXT: True}
+            ),
             business_release_id=str(data.get("business_release_id") or ""),
             actor_user_uuid=str(data.get("actor_user_uuid") or ""),
             actor_is_system_admin=_coerce_bool(data.get("actor_is_system_admin", False)),
@@ -4766,6 +4805,7 @@ class Nl2SqlService:
             result=result,
             error_message=data.get("error_message"),
             error_code=data.get("error_code"),
+            error_detail=data.get("error_detail"),
             warning_message=data.get("warning_message"),
             timing=timing,
             steps=_restore_job_steps(
@@ -7794,6 +7834,7 @@ class Nl2SqlService:
                 result=job.result,
                 error_message=job.error_message,
                 error_code=job.error_code,
+                error_detail=job.error_detail,
                 warning_message=job.warning_message,
                 timing=job.timing,
                 steps=job.steps,
@@ -8645,12 +8686,9 @@ class Nl2SqlService:
             current.profile_id, allowed_profile_ids
         ):
             raise ProfileScopePermissionError(current.profile_id)
-        if (
-            not actor_can_manage
-            and actor_user_uuid
-            and current.actor_user_uuid
-            and current.actor_user_uuid != actor_user_uuid
-        ):
+        # 持ち主の無い行（認証無効の期間・旧 snapshot）も、ジョブと同じく管理の権限が無ければ
+        # 拒否する（#1126。`_assert_job_actor_access`）。
+        if not actor_can_manage and actor_user_uuid and current.actor_user_uuid != actor_user_uuid:
             raise PermissionError(history_id)
         updated = self._patch_history_item(
             current,
@@ -8862,12 +8900,9 @@ class Nl2SqlService:
             current.profile_id, allowed_profile_ids
         ):
             raise ProfileScopePermissionError(current.profile_id)
-        if (
-            not actor_can_manage
-            and actor_user_uuid
-            and current.actor_user_uuid
-            and current.actor_user_uuid != actor_user_uuid
-        ):
+        # 持ち主の無い行（認証無効の期間・旧 snapshot）も、ジョブと同じく管理の権限が無ければ
+        # 拒否する（#1126。`_assert_job_actor_access`）。
+        if not actor_can_manage and actor_user_uuid and current.actor_user_uuid != actor_user_uuid:
             raise PermissionError(history_id)
         self._patch_history_item(
             current,
@@ -19209,7 +19244,7 @@ class Nl2SqlService:
                         job.error_message = str(exc)
                         job.error_code = JOB_CANCELLED_ERROR_CODE
                     else:
-                        job.error_message = f"NL2SQL ジョブに失敗しました: {exc}"
+                        job.error_message, job.error_detail = _job_failure_presentation(exc)
                         job.error_code = (
                             SCHEMA_CATALOG_EMPTY_ERROR_CODE
                             if isinstance(exc, SchemaCatalogEmptyError)
@@ -19641,6 +19676,7 @@ class Nl2SqlService:
         # 含む result と履歴を残したうえで ERROR として公開する。
         execution_error: str | None = None
         execution_error_code: str | None = None
+        execution_error_detail: str | None = None
         if analysis.safety.is_safe and not request.generation_only:
             try:
                 safety, executable, results = self.execute_sql(
@@ -19656,7 +19692,8 @@ class Nl2SqlService:
                         "oracle_error_code": _safe_oracle_error_code(exc),
                     },
                 )
-                execution_error = f"生成した SQL の実行に失敗しました: {exc}"
+                execution_error = _SQL_EXECUTION_FAILED_MESSAGE
+                execution_error_detail = _job_failure_detail(exc)
                 execution_error_code = _job_failure_error_code(
                     exc, fallback=SQL_EXECUTION_FAILED_ERROR_CODE
                 )
@@ -19800,6 +19837,7 @@ class Nl2SqlService:
             JobStatus.DONE if safety.is_safe and execution_error is None else JobStatus.ERROR
         )
         final_error_message = safety.blocked_reason if not safety.is_safe else execution_error
+        final_error_detail = execution_error_detail if safety.is_safe else None
         final_error_code = (
             SQL_BLOCKED_ERROR_CODE
             if not safety.is_safe
@@ -19839,6 +19877,7 @@ class Nl2SqlService:
             status=final_status,
             error_message=final_error_message,
             error_code=final_error_code,
+            error_detail=final_error_detail,
             warning_message=None,
             result=result,
             finished_at=finished,
@@ -19869,6 +19908,7 @@ class Nl2SqlService:
             job.status = final_status
             job.error_message = final_error_message
             job.error_code = final_error_code
+            job.error_detail = final_error_detail
             job.warning_message = persistence_warning
             job.result = result
             job.finished_at = finished

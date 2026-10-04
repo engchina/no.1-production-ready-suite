@@ -471,7 +471,11 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       # 型検査は build の `tsc --noEmit` が兼ねる。Playwright E2E は rag-e2e job（#133）。
-      # lint / audit はローカル検証と PR review で確認する。
+      # デザインシステム遵守ルール（../../platform/docs/design-system/adherence.oxlintrc.json を ESLint に渡す）。
+      # NL2SQL / Agent と同じく CI で実行する（#1099。以前は lint を実行せず、main の失敗を検出できなかった）。
+      - name: Lint
+        run: npm run lint
+
       - name: Unit test
         run: npm test
 
