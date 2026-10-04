@@ -568,7 +568,11 @@ export const ja = {
   "settings.services.toast.stopped": "{service} を停止しました。",
   "settings.services.toast.restarted":
     "{service} を再起動しました。",
-  "settings.services.toast.failed": "{service} の操作に失敗しました。",
+  "settings.services.failure.start": "{service} を起動できませんでした。",
+  "settings.services.failure.stop": "{service} を停止できませんでした。",
+  "settings.services.failure.restart": "{service} を再起動できませんでした。",
+  "settings.services.failure.fallback":
+    "サービスのログと状態を確認してから、もう一度実行してください。",
   "settings.services.item.preprocessOfficeToPdf": "Office→PDF",
   "settings.services.item.preprocessPdfToPageImages": "PDF を画像として読み直す",
   "settings.services.item.preprocessCsvToJson": "CSV→JSON",
@@ -597,7 +601,7 @@ export const ja = {
   "chat.guardrail": "安全チェック",
   "settings.guardrail.overview.title": "安全チェック",
   "settings.guardrail.overview.description":
-    "プロンプト攻撃検知と機微情報マスクは常に独立して適用し、方針では根拠確認の警告・阻止だけを選びます。",
+    "プロンプト攻撃検知と機微情報マスクは常に独立して適用し、方針では根拠確認の警告・阻止だけを選びます。ここで選ぶのは全体の既定で、保存すると次の回答から使います。公開済みの検索・回答プロファイルの「検索・回答設定」で方針を上書きしている場合は、その方針を使います。",
   "settings.guardrail.policy": "根拠チェック方針",
   "settings.guardrail.groundingOverlap": "根拠一致数 下限",
   "settings.guardrail.groundingRatio": "根拠一致率 下限",
@@ -612,7 +616,7 @@ export const ja = {
   "settings.guardrail.promptInjection": "プロンプト攻撃検知",
   "settings.guardrail.piiMask": "機微情報マスク",
   "settings.guardrail.maxQueryChars": "質問の文字数上限",
-  "settings.guardrail.ociReadiness": "OCI readiness",
+  "settings.guardrail.ociReadiness": "OCI Guardrails の準備",
   "settings.guardrail.enabled": "有効（読み取り専用）",
   "settings.guardrail.disabled": "無効（読み取り専用）",
   "settings.guardrail.ready": "利用可能",
@@ -623,12 +627,13 @@ export const ja = {
   "settings.guardrail.policy.standard": "標準",
   "settings.guardrail.policy.standard.description": "既定の一致数・一致率で低根拠を警告",
   "settings.guardrail.policy.strict": "厳格",
-  "settings.guardrail.policy.strict.description": "groundedness 閾値を高め、低根拠を強く警告",
+  "settings.guardrail.policy.strict.description": "根拠の一致数・一致率の下限を高め、低根拠を強く警告",
   "settings.guardrail.policy.lenient": "寛容",
   "settings.guardrail.policy.lenient.description": "一致数・一致率を下げ、低根拠の警告を抑制",
   "settings.guardrail.policy.regulated": "規制対応",
   "settings.guardrail.policy.regulated.description":
     "厳格な一致数・一致率を満たさない回答を阻止",
+  "settings.guardrail.actions.label": "安全チェックの設定の操作",
   "settings.guardrail.actions.save": "保存",
   "settings.guardrail.actions.saved": "安全チェックを保存しました。",
   "settings.guardrail.actions.reset": "変更を破棄",
@@ -688,12 +693,15 @@ export const ja = {
   "settings.evaluation.suite.standard.description": "日常の確認と毎晩の回帰の判定に使う既定の閾値です。",
   "settings.evaluation.suite.strict": "厳格",
   "settings.evaluation.suite.strict.description": "リリース前の判定に使う高い閾値です。根拠のない主張と拒答の誤りを 1 件も許しません。",
+  "settings.evaluation.applyHint":
+    "変更は次に実行する品質評価から使います。実行済みの評価の合否は変わりません。品質評価の画面で評価の基準を選んで実行した場合は、そちらを使います。",
+  "settings.evaluation.actions.label": "評価の基準の操作",
   "settings.evaluation.actions.save": "保存",
-  "settings.evaluation.actions.saved": "品質評価設定を保存しました。",
+  "settings.evaluation.actions.saved": "評価の基準を保存しました。",
   "settings.evaluation.actions.reset": "変更を破棄",
   "settings.evaluation.actions.unsaved": "未保存の変更があります。",
-  "settings.evaluation.loadError": "品質評価設定を取得できませんでした。",
-  "settings.evaluation.saveError": "品質評価設定を保存できませんでした。",
+  "settings.evaluation.loadError": "評価の基準を取得できませんでした。",
+  "settings.evaluation.saveError": "評価の基準を保存できませんでした。",
   "settings.graph.subtitle":
     "文書を取り込むときに、文書と章・節の見出しのつながり（関係情報）を作るかどうかを選びます。",
   "settings.graph.overview.title": "ナレッジベースの関係情報グラフ",
@@ -1236,6 +1244,8 @@ export const ja = {
   "knowledgeBases.edit.defaultNameFixed": "DEFAULT の名前は変更できません。説明だけを編集できます。",
   "knowledgeBases.error.assign":
     "文書の追加に失敗しました。文書とナレッジベースの状態を確認してください。",
+  "knowledgeBases.error.assignPartial":
+    "{total} 件のうち {assigned} 件を追加しました。残りの {remaining} 件は追加できませんでした。{reason}",
   "knowledgeBases.error.remove":
     "文書の所属解除に失敗しました。ナレッジベースの状態を確認してください。",
   "knowledgeBases.error.documents":
@@ -1265,7 +1275,7 @@ export const ja = {
     "このナレッジベースの文書と、その章・節の見出しのつながりを図で見られます。",
   "knowledgeBases.graph.empty": "関係情報がまだありません。",
   "knowledgeBases.graph.emptyHint":
-    "設定の「関係情報の構築」で「構築する」を選んで文書を再取込すると、ここにグラフが表示されます。",
+    "設定の「関係情報の構築」で「構築する」を選ぶと、次に取り込む文書からここにグラフが表示されます。取込済みの文書に反映するには、文書の詳細で処理レシピを「再処理」してください。",
   "knowledgeBases.graph.error": "関係情報の取得に失敗しました。再試行してください。",
   "knowledgeBases.graph.truncated": "ノードが多いため一部のみ表示しています。",
 
@@ -2588,6 +2598,10 @@ export const ja = {
   "evaluation.actions.compare": "比較実行",
   "evaluation.actions.comparing": "設定を比較しています",
   "evaluation.actions.loadSample": "サンプルを読み込む",
+  "evaluation.sampleConfirm.title": "サンプルで置き換えますか？",
+  "evaluation.sampleConfirm.description":
+    "編集中の Golden set JSON をサンプルで置き換えます。今の内容は元に戻せません。残す場合は、先に内容をコピーしてください。",
+  "evaluation.sampleConfirm.confirm": "サンプルで置き換える",
   "evaluation.status.passed": "合格",
   "evaluation.status.failed": "要改善",
   "evaluation.result.title": "評価結果",
@@ -2648,6 +2662,8 @@ export const ja = {
   "evaluation.job.cancelConfirm.confirm": "取り消す",
   "evaluation.job.cancelledTitle": "評価を取り消しました。",
   "evaluation.job.failedTitle": "評価を最後まで実行できませんでした。",
+  "evaluation.job.failedDetails": "詳細",
+  "evaluation.job.errorType": "エラー種別",
   "evaluation.job.loading": "評価の状態を読み込んでいます",
   "evaluation.job.loadError": "評価の状態を取得できませんでした。再試行してください。",
   "evaluation.job.pollError":

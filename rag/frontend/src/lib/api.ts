@@ -2710,8 +2710,9 @@ export const api = {
     request<KnowledgeBaseDetail>(
       `/api/knowledge-bases/${encodeURIComponent(id)}`,
     ),
+  // DB が止まっていると backend は空の図と warning_messages で縮退するため、warning も返す（空と区別する）。
   getKnowledgeBaseGraph: (id: string, limit = 80) =>
-    request<KnowledgeBaseGraphData>(
+    requestDegradable<KnowledgeBaseGraphData>(
       `/api/knowledge-bases/${encodeURIComponent(id)}/graph?limit=${limit}`,
     ),
   // KB ごとの項目抽出の定義（#548）。fields: null で全体の既定に戻す。
