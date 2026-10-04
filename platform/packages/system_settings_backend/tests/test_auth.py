@@ -56,6 +56,9 @@ class _Settings:
     app_auth_idle_timeout_minutes: int = 60
     app_auth_failed_login_limit: int = 3
     app_auth_lockout_minutes: int = 15
+    app_auth_login_attempt_limit: int = 5
+    app_auth_login_ip_attempt_limit: int = 20
+    app_auth_login_attempt_window_minutes: int = 15
     app_auth_password_min_length: int = 12
     app_auth_password_max_length: int = 128
     # テストを速くするため最小のパラメータにする。

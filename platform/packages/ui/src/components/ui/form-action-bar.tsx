@@ -237,7 +237,7 @@ function DangerActionsMenu({
 
   const closeMenu = (restoreFocus = false) => {
     setOpen(false);
-    if (restoreFocus) restoreMenuTriggerFocus(triggerRef, containerRef, menuRef);
+    if (restoreFocus) restoreMenuTriggerFocus(triggerRef, menuRef);
   };
 
   const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {

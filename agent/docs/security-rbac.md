@@ -18,7 +18,8 @@ Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）�
 
 - 構成管理者（ログインユーザー ID は `system_admin` 固定）のパスワードは共通 `.env` の `PLATFORM_ADMIN_LOGIN_USER_PASSWORD`。
   3 製品で同じ値です。最初は構成管理者でログインし、ユーザー管理・ロール管理・権限管理で利用者を作ります。
-- 認証ポリシー（セッションの有効期限・ロック・パスワード長・Argon2 のコスト・`PLATFORM_AUTH_COOKIE_SECURE`）は共通 `.env` の `PLATFORM_AUTH_*`。
+- 認証ポリシー（セッションの有効期限・ロック・ログインの試行の回数の制限・パスワード長・Argon2 のコスト・`PLATFORM_AUTH_COOKIE_SECURE`）は共通 `.env` の `PLATFORM_AUTH_*`。
+  ログインの失敗が多すぎる送信元（ログイン ID と送信元 IP の組・送信元 IP ごと）には、構成管理者を含めて `429 SECURITY_RATE_LIMITED` を返します（#1087。`PLATFORM_AUTH_LOGIN_ATTEMPT_*`）。
 - Cookie 名は製品ごと（`AGENT_APP_AUTH_SESSION_COOKIE_NAME=agent_session` / `AGENT_APP_AUTH_CSRF_COOKIE_NAME=agent_csrf`）。
   同じホストで 3 製品を動かしてもセッションは混ざりません。
 - テーブルは 運用設定 > システムテーブル の「作成・更新」か、`cd agent/backend && uv run python -m app.cli.agent_system_schema --initialize` で作ります（`PLATFORM_ORACLE_*` で接続し、

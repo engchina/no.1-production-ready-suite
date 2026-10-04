@@ -101,6 +101,37 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByLabel("ログインユーザーID")).toHaveValue("admin.user");
     });
 
+    test("ログインの試行が多すぎるときは 429 の文をそのまま出し、再送しない", async ({ page, mockApi }) => {
+      mockApi.setCurrentUser(null);
+      // 試行の回数の上限（#1087）。backend は 429 と Retry-After を返す。
+      let loginCalls = 0;
+      await page.route("**/api/auth/login", async (route) => {
+        loginCalls += 1;
+        await route.fulfill({
+          status: 429,
+          headers: { "Retry-After": "900", "X-Request-ID": "login-rate-limited" },
+          json: {
+            data: null,
+            error_messages: ["ログインの試行が多すぎます。しばらく待ってから、もう一度お試しください。"],
+            warning_messages: [],
+            error_code: "SECURITY_RATE_LIMITED",
+          },
+        });
+      });
+
+      await page.goto("/login");
+      await page.getByLabel("ログインユーザーID").fill("system_admin");
+      await page.getByLabel("パスワード").fill("WrongPass!123");
+      await page.getByRole("button", { name: "ログイン" }).click();
+
+      const error = page.getByText("ログインの試行が多すぎます。しばらく待ってから、もう一度お試しください。", { exact: true });
+      await expect(error).toBeVisible();
+      await expect(error).not.toContainText("login-rate-limited");
+      await expect(page).toHaveURL(/\/login$/);
+      expect(loginCalls).toBe(1);
+      await expectNoPageOverflow(page);
+    });
+
     test("初回ログインは強制パスワード変更へ移り、変更は CSRF header 付きで送ってログインへ戻る", async ({
       page,
       context,
