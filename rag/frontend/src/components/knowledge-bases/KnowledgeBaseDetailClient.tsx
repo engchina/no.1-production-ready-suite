@@ -420,7 +420,8 @@ function KnowledgeBaseDocuments({
               <KnowledgeBaseDocumentRow
                 key={document.id}
                 document={document}
-                onRemove={() => void handleRemove(document)}
+                // アーカイブ済みは文書の追加・解除ができない（案内のとおり、「外す」も出さない）。
+                onRemove={canAssign ? () => void handleRemove(document) : undefined}
                 removing={remove.isPending && remove.variables?.documentId === document.id}
               />
             ))}
@@ -459,7 +460,8 @@ function KnowledgeBaseDocumentRow({
   removing,
 }: {
   document: DocumentSummary;
-  onRemove: () => void;
+  /** 所属から外す。外せない（アーカイブ済みの KB）ときは undefined で、行の操作を出さない。 */
+  onRemove?: () => void;
   removing: boolean;
 }) {
   // 文書の詳細を開けない利用者（KB の権限だけ）には、名前をリンクにしない（#303）。
@@ -480,20 +482,22 @@ function KnowledgeBaseDocumentRow({
           {document.file_name}
         </span>
       )}
-      <RowActionMenu
-        actions={[
-          {
-            id: "remove",
-            label: t("knowledgeBases.actions.remove"),
-            icon: Unlink,
-            loading: removing,
-            onSelect: onRemove,
-          },
-        ]}
-        ariaLabel={t("common.objectActions.aria", { name: document.file_name })}
-        loading={removing}
-        testId={`knowledge-base-document-actions-${document.id}`}
-      />
+      {onRemove ? (
+        <RowActionMenu
+          actions={[
+            {
+              id: "remove",
+              label: t("knowledgeBases.actions.remove"),
+              icon: Unlink,
+              loading: removing,
+              onSelect: onRemove,
+            },
+          ]}
+          ariaLabel={t("common.objectActions.aria", { name: document.file_name })}
+          loading={removing}
+          testId={`knowledge-base-document-actions-${document.id}`}
+        />
+      ) : null}
     </li>
   );
 }

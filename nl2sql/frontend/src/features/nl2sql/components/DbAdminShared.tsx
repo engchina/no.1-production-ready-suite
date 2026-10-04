@@ -387,7 +387,8 @@ export function QueryResultsTable({
   );
 }
 
-function runtimeLabel(runtime: string) {
+/** 実行環境（API の runtime）の表示名。内部値（oracle / deterministic）をそのまま出さない。 */
+export function runtimeLabel(runtime: string) {
   if (runtime === "oracle") return "Oracle";
   if (runtime === "deterministic") return t("dbAdmin.result.runtime.deterministic");
   return runtime;

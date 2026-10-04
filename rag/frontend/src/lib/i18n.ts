@@ -1237,6 +1237,9 @@ export const ja = {
   "knowledgeBases.searchTest.initialHint":
     "質問を入力すると、このナレッジベースから上位の根拠チャンクを取得します。",
   "knowledgeBases.searchTest.needsIndexed": "索引済みの文書がありません。",
+  "knowledgeBases.searchTest.archived": "アーカイブ済みのナレッジベースでは検索テストを行えません。",
+  "knowledgeBases.searchTest.archivedHint":
+    "アーカイブ済みのナレッジベースは検索の対象から外れています。",
   "knowledgeBases.searchTest.needsIndexedHint":
     "先に文書を追加し、索引が完了するとここで検索を試せます。",
   "knowledgeBases.searchTest.error": "検索に失敗しました。再試行してください。",

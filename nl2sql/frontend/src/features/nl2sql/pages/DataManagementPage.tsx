@@ -47,9 +47,11 @@ import { APP_ROUTES } from "@/lib/routes";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import {
+  DbAdminErrorNotice,
   QueryResultsTable,
   downloadBlob,
   fileToBase64,
+  runtimeLabel,
 } from "../components/DbAdminShared";
 import {
   DEFAULT_SQL_ROW_LIMIT,
@@ -68,6 +70,7 @@ import {
   DbObjectSelectorToolbar,
   DbObjectStepIndicator,
   DbSingleObjectPickerList,
+  dbAdminExecuteFailureMessage,
   formatDbObjectName,
   parseDbAdminObjectTarget,
   rowCountLabel,
@@ -697,7 +700,10 @@ export function DataManagementPage() {
         { timeoutMs: API_TIMEOUT_MS.interactiveDetail }
       );
       if (!result.executed) {
-        setTruncateError(result.warnings[0] || t("dataMgmt.truncate.error"));
+        // Oracle のエラーは warnings ではなく文の error_message に入る（部分成功の経路）。
+        // 1 文目に何が起きたか、続けて原因を出す（#936）。
+        const cause = dbAdminExecuteFailureMessage(result, "");
+        setTruncateError(cause ? `${t("dataMgmt.truncate.error")}${cause}` : t("dataMgmt.truncate.error"));
         return;
       }
       setTruncateTargetName("");
@@ -1798,7 +1804,7 @@ function PreviewResultsPanel({
         <div className="grid gap-2">
           {exportError && <ErrorState message={exportError} onRetry={onDownload} />}
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <StatusBadge icon={false} variant="neutral" label={preview.runtime} />
+            <StatusBadge icon={false} variant="neutral" label={runtimeLabel(preview.runtime)} />
             <StatusBadge icon={false} variant="info" label={t("tableMgmt.importWizard.rows", { count: preview.results.total })} />
             <span className="break-all font-mono text-xs text-fg-muted">{preview.sql}</span>
           </div>
@@ -2051,9 +2057,13 @@ function CsvUploadWorkspace({
       {result && (
         <section className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm" aria-label={t("dataMgmt.csv.result")}>
           <div className="flex flex-wrap gap-2">
-            <StatusBadge variant={result.executed ? "success" : "neutral"} label={result.executed ? "executed" : "not executed"} />
-            <StatusBadge icon={false} variant="neutral" label={result.runtime} />
-            <StatusBadge icon={false} variant="neutral" label={result.mode} />
+            {/* 実行の状態・runtime・モードは API の内部値を出さず、文言で出す（#936）。 */}
+            <StatusBadge
+              variant={result.executed ? "success" : "warning"}
+              label={t(result.executed ? "dbAdmin.result.summary.executed" : "dbAdmin.result.summary.notExecuted")}
+            />
+            <StatusBadge icon={false} variant="neutral" label={runtimeLabel(result.runtime)} />
+            <StatusBadge icon={false} variant="neutral" label={csvModeLabel(result.mode)} />
             <StatusBadge icon={false} variant="info" label={t("tableMgmt.importWizard.rows", { count: result.row_count })} />
             {result.executed && (
               <>
@@ -2065,7 +2075,15 @@ function CsvUploadWorkspace({
               </>
             )}
           </div>
-          <WarningsBanner warnings={result.warnings} />
+          {!result.executed && result.warnings.some((warning) => warning.trim()) ? (
+            // 実行されなかった（Oracle のエラー・実行環境）ときは失敗として出す。ORA のコード・Help は
+            // 「詳細ログ」に畳む（messaging.md §10、#936）。
+            <DbAdminErrorNotice
+              error={new Error(`${t("dataMgmt.csv.failedSummary")}${result.warnings.filter((warning) => warning.trim()).join(" ")}`)}
+            />
+          ) : (
+            <WarningsBanner warnings={result.warnings} />
+          )}
           <p className="text-fg">
             {t("dataMgmt.csv.matched")}: <span className="font-mono text-xs">{result.matched_columns.join(", ") || "-"}</span>
           </p>
@@ -2103,6 +2121,12 @@ function CsvUploadWorkspace({
       )}
     </fieldset>
   );
+}
+
+function csvModeLabel(mode: string) {
+  if (mode === "insert") return t("dataMgmt.csv.mode.insert");
+  if (mode === "truncate_insert") return t("dataMgmt.csv.mode.truncateInsert");
+  return mode;
 }
 
 function SyntheticWorkspace({

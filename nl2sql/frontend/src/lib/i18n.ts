@@ -3355,6 +3355,7 @@ const nl2sqlJa = {
   "dataMgmt.csv.success": "成功",
   "dataMgmt.csv.successToast": "表形式データをアップロードしました。",
   "dataMgmt.csv.failed": "失敗",
+  "dataMgmt.csv.failedSummary": "表形式データをアップロードできませんでした。",
   "dataMgmt.csv.rowErrors": "行エラー(先頭5件)",
   "dataMgmt.csv.preview": "プレビュー(先頭5行)",
   "dataMgmt.section.csvHint": "既存テーブルへ CSV / XLSX / XLS を確認語付きで投入します。",
