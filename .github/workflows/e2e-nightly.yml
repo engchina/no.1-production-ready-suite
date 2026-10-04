@@ -1,8 +1,11 @@
 name: E2E Nightly
 
 # RAG / NL2SQL / Agent の Playwright E2E を毎晩 main で全件実行する（#133、Agent は #339）。
-# PR の CI（ci.yml の rag-e2e / nl2sql-e2e / agent-e2e）は約 1 分の smoke だけを実行する（#184 / #339）ので、
-# 全件の回帰や、遅い環境でだけ出る flaky はここで拾う。失敗は ci-failure-issue.yml が Issue にする。
+# PR の CI（ci.yml の rag-e2e / nl2sql-e2e / agent-e2e）は約 1 分の smoke と、差分に影響を受ける spec だけを
+# 実行する（#184 / #339 / #885）ので、全件の回帰や、遅い環境でだけ出る flaky はここで拾う。失敗は
+# ci-failure-issue.yml が Issue にする。
+# 全件の実行で spec ごとの実行範囲（coverage）を記録し、artifact `e2e-impact-<製品>-<shard>` にする（#885）。
+# PR の CI の e2e-impact job が、これを使って差分に影響を受ける spec を選ぶ（platform/scripts/e2e_impact.py）。
 
 on:
   schedule:
@@ -17,7 +20,8 @@ jobs:
     name: ${{ matrix.product }} / E2E nightly (${{ matrix.shard }}/${{ matrix.total }})
     runs-on: ubuntu-latest
     # 実測（2026-09）: RAG 1 shard 約 9 分、NL2SQL 1 shard 8〜15 分、Agent 約 2 分。倍の余裕を持たせる。
-    timeout-minutes: 30
+    # 実行範囲の記録（#885）で遅くなる分を足す。
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -62,6 +66,27 @@ jobs:
 
       - name: Playwright E2E
         run: npx playwright test --shard=${{ matrix.shard }}/${{ matrix.total }} --workers=1
+        env:
+          # テストごとの実行範囲の記録（platform/scripts/e2e-impact/fixture.ts。#885）。
+          E2E_IMPACT_DIR: ${{ runner.temp }}/e2e-impact-records
+
+      # 失敗したテストも記録は有効なので、結果に関わらず集計して保存する。
+      - name: Aggregate impact records
+        if: ${{ !cancelled() }}
+        working-directory: .
+        run: >-
+          python3 platform/scripts/e2e_impact.py aggregate --product ${{ matrix.product }}
+          --records "${{ runner.temp }}/e2e-impact-records" --commit "${{ github.sha }}"
+          --out "${{ runner.temp }}/e2e-impact/${{ matrix.product }}-${{ matrix.shard }}.json"
+
+      - name: Upload impact map
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-impact-${{ matrix.product }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/e2e-impact/${{ matrix.product }}-${{ matrix.shard }}.json
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Upload Playwright report
         if: failure()

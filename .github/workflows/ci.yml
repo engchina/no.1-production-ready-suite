@@ -437,6 +437,10 @@ jobs:
           uvx "ruff@${version}" check rag/services platform/scripts
           uvx "ruff@${version}" format --check rag/services platform/scripts
 
+      # e2e の影響分析の選択の規則（platform/scripts/e2e_impact.py。#885）。標準ライブラリだけで動く。
+      - name: Unit tests (platform/scripts)
+        run: python3 -m unittest discover -s platform/scripts/tests -p 'test_*.py'
+
   rag-frontend:
     name: RAG / Frontend
     needs: changes
@@ -508,7 +512,7 @@ jobs:
         with:
           working-directory: rag/frontend
 
-      # PR では約 1 分の smoke だけを実行する（#184。ユーザー指示：1 回の e2e はおおむね 1 分）。
+      # PR では約 1 分の smoke と、差分に影響を受ける spec（e2e-impact。#885）を実行する（#184。ユーザー指示：1 回の e2e はおおむね 1 分）。
       # 全件は e2e-nightly.yml が毎晩実行する。desktop / mobile の 2 project、CI=true で retries 2。
       - name: Playwright E2E (smoke)
         run: >-
@@ -666,7 +670,7 @@ jobs:
         with:
           working-directory: nl2sql/frontend
 
-      # PR では約 1 分の smoke だけを実行する（#184。ユーザー指示：1 回の e2e はおおむね 1 分）。
+      # PR では約 1 分の smoke と、差分に影響を受ける spec（e2e-impact。#885）を実行する（#184。ユーザー指示：1 回の e2e はおおむね 1 分）。
       # 全件は e2e-nightly.yml が毎晩 8 shard で実行する。CI=true で retries 2、負荷対策で 1 worker（#175）。
       - name: Playwright E2E (smoke)
         run: |
@@ -748,7 +752,7 @@ jobs:
   # ---------------------------------------------------------------- agent
   #
   # 旧 `Agent / Full Checks`（1 job で backend・frontend・Playwright 全件を直列に実行）を 3 job に分けた（#339）。
-  # PR の e2e は RAG / NL2SQL と同じく約 1 分の smoke にし、全件は e2e-nightly.yml が実行する。
+  # PR の e2e は RAG / NL2SQL と同じく約 1 分の smoke と差分に影響を受ける spec（#885）にし、全件は e2e-nightly.yml が実行する。
 
   agent-backend:
     name: Agent / Backend
@@ -864,7 +868,7 @@ jobs:
         with:
           working-directory: agent/frontend
 
-      # PR では約 1 分の smoke だけを実行する（RAG / NL2SQL の #184 と同じ。#339）。
+      # PR では約 1 分の smoke と、差分に影響を受ける spec（e2e-impact。#885）を実行する（RAG / NL2SQL の #184 と同じ。#339）。
       # ログイン・認証・Run の stream・Runtime の主導線・セキュリティ管理・外観・フォント・設定の契約。
       # 全件（約 100 件）は e2e-nightly.yml が毎晩実行する。CI=true で retries 2、1 worker。
       - name: Playwright E2E (smoke)
@@ -879,6 +883,233 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: agent-playwright-smoke
+          path: agent/frontend/test-results
+          retention-days: 7
+
+  # ---------------------------------------------------------------- e2e の影響分析（#885）
+  #
+  # PR の差分に影響を受ける Playwright の spec を選び、製品ごとに shard に分けて実行する。
+  # nightly（e2e-nightly.yml）が全件の実行で記録した spec ごとの実行範囲（artifact `e2e-impact-<製品>-<shard>`）と
+  # 差分の行を突き合わせる（platform/scripts/e2e_impact.py）。記録が無い・判定できない変更は全件にする。
+  # 画面のコードを変えた PR で、その画面を検証する既存の spec が nightly で初めて壊れることを防ぐ。
+
+  e2e-impact:
+    name: E2E impact / 影響を受ける spec の選択
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' && (needs.changes.outputs.rag == 'true'
+      || needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.agent == 'true'
+      || needs.changes.outputs.platform_frontend == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      rag_mode: ${{ steps.select.outputs.rag_mode }}
+      rag_specs: ${{ steps.select.outputs.rag_specs }}
+      rag_shards: ${{ steps.select.outputs.rag_shards }}
+      rag_total: ${{ steps.select.outputs.rag_total }}
+      nl2sql_mode: ${{ steps.select.outputs.nl2sql_mode }}
+      nl2sql_specs: ${{ steps.select.outputs.nl2sql_specs }}
+      nl2sql_shards: ${{ steps.select.outputs.nl2sql_shards }}
+      nl2sql_total: ${{ steps.select.outputs.nl2sql_total }}
+      agent_mode: ${{ steps.select.outputs.agent_mode }}
+      agent_specs: ${{ steps.select.outputs.agent_specs }}
+      agent_shards: ${{ steps.select.outputs.agent_shards }}
+      agent_total: ${{ steps.select.outputs.agent_total }}
+    steps:
+      # base との差分と、nightly の記録の commit（main の履歴）の両方を使うため全履歴を取る。
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # spec が記録の fixture を通る `test` を使っていること（@playwright/test から直接 import しない）。
+      - name: Check e2e imports
+        run: python3 platform/scripts/e2e_impact.py check-imports
+
+      - name: Select affected specs
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: origin/${{ github.base_ref }}
+          RAG: ${{ needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform_frontend == 'true' }}
+          NL2SQL: ${{ needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform_frontend == 'true' }}
+          AGENT: ${{ needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform_frontend == 'true' }}
+        run: |
+          for product in rag nl2sql agent; do
+            flag="$(echo "${product}" | tr '[:lower:]' '[:upper:]')"
+            if [ "${!flag}" = "true" ]; then
+              python3 platform/scripts/e2e_impact.py select --product "${product}" --base "${BASE}" --download
+            else
+              echo "${product}_mode=none" >> "${GITHUB_OUTPUT}"
+              echo "${product}_shards=[]" >> "${GITHUB_OUTPUT}"
+            fi
+          done
+
+  rag-e2e-impact:
+    name: RAG / E2E impact (${{ matrix.shard }}/${{ needs.e2e-impact.outputs.rag_total }})
+    needs: e2e-impact
+    if: needs.e2e-impact.outputs.rag_mode == 'selected' || needs.e2e-impact.outputs.rag_mode == 'full'
+    runs-on: ubuntu-latest
+    # nightly の 1 shard の実測の倍程度（選ぶ shard 数は 1 shard 約 6 分を目安に決める）。
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.e2e-impact.outputs.rag_shards) }}
+    defaults:
+      run:
+        working-directory: rag/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            rag/frontend/package-lock.json
+            platform/package-lock.json
+
+      - name: Build shared UI package
+        uses: ./.github/actions/platform-ui
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Playwright browsers
+        uses: ./.github/actions/playwright-browsers
+        with:
+          working-directory: rag/frontend
+
+      # SPECS が空（全件）なら全 spec。spec のパスは空白区切りで渡す（単語分割を意図している）。
+      - name: Playwright E2E (affected)
+        env:
+          SPECS: ${{ needs.e2e-impact.outputs.rag_specs }}
+          SHARD: ${{ matrix.shard }}/${{ needs.e2e-impact.outputs.rag_total }}
+        run: |
+          # shellcheck disable=SC2086
+          npx playwright test --workers=1 --pass-with-no-tests --shard="$SHARD" $SPECS
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rag-playwright-impact-${{ matrix.shard }}
+          path: rag/frontend/test-results
+          retention-days: 7
+
+  nl2sql-e2e-impact:
+    name: NL2SQL / E2E impact (${{ matrix.shard }}/${{ needs.e2e-impact.outputs.nl2sql_total }})
+    needs: e2e-impact
+    if: needs.e2e-impact.outputs.nl2sql_mode == 'selected' || needs.e2e-impact.outputs.nl2sql_mode == 'full'
+    runs-on: ubuntu-latest
+    # nightly の 1 shard の実測の倍程度（選ぶ shard 数は 1 shard 約 6 分を目安に決める）。
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.e2e-impact.outputs.nl2sql_shards) }}
+    defaults:
+      run:
+        working-directory: nl2sql/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            nl2sql/frontend/package-lock.json
+            platform/package-lock.json
+
+      - name: Build shared UI package
+        uses: ./.github/actions/platform-ui
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Playwright browsers
+        uses: ./.github/actions/playwright-browsers
+        with:
+          working-directory: nl2sql/frontend
+
+      # SPECS が空（全件）なら全 spec。spec のパスは空白区切りで渡す（単語分割を意図している）。
+      - name: Playwright E2E (affected)
+        env:
+          SPECS: ${{ needs.e2e-impact.outputs.nl2sql_specs }}
+          SHARD: ${{ matrix.shard }}/${{ needs.e2e-impact.outputs.nl2sql_total }}
+        run: |
+          # shellcheck disable=SC2086
+          npx playwright test --workers=1 --pass-with-no-tests --shard="$SHARD" $SPECS
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nl2sql-playwright-impact-${{ matrix.shard }}
+          path: nl2sql/frontend/test-results
+          retention-days: 7
+
+  agent-e2e-impact:
+    name: Agent / E2E impact (${{ matrix.shard }}/${{ needs.e2e-impact.outputs.agent_total }})
+    needs: e2e-impact
+    if: needs.e2e-impact.outputs.agent_mode == 'selected' || needs.e2e-impact.outputs.agent_mode == 'full'
+    runs-on: ubuntu-latest
+    # nightly の 1 shard の実測の倍程度（選ぶ shard 数は 1 shard 約 6 分を目安に決める）。
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.e2e-impact.outputs.agent_shards) }}
+    defaults:
+      run:
+        working-directory: agent/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            agent/frontend/package-lock.json
+            platform/package-lock.json
+
+      - name: Build shared UI package
+        uses: ./.github/actions/platform-ui
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Playwright browsers
+        uses: ./.github/actions/playwright-browsers
+        with:
+          working-directory: agent/frontend
+
+      # SPECS が空（全件）なら全 spec。spec のパスは空白区切りで渡す（単語分割を意図している）。
+      - name: Playwright E2E (affected)
+        env:
+          SPECS: ${{ needs.e2e-impact.outputs.agent_specs }}
+          SHARD: ${{ matrix.shard }}/${{ needs.e2e-impact.outputs.agent_total }}
+        run: |
+          # shellcheck disable=SC2086
+          npx playwright test --workers=1 --pass-with-no-tests --shard="$SHARD" $SPECS
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-playwright-impact-${{ matrix.shard }}
           path: agent/frontend/test-results
           retention-days: 7
 
@@ -982,6 +1213,10 @@ jobs:
       - agent-frontend
       - agent-e2e
       - agent-init-script
+      - e2e-impact
+      - rag-e2e-impact
+      - nl2sql-e2e-impact
+      - agent-e2e-impact
       - suite-terraform
     runs-on: ubuntu-latest
     timeout-minutes: 5

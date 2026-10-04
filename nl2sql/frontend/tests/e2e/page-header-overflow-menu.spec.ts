@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "./_helpers/test";
 
 // PageHeader の「その他の操作」メニューが画面の外に切れないこと（#363）。
 // 375px では操作が折り返して「その他の操作」が左端に来る。右端揃え固定だとメニューが左外に切れていた。

@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "./fixtures/test";
 import { mockDatabaseReady, mockLocalAuth, openSidebarNav } from "./_helpers";
 
 // 段階レビュー可能なファイル処理(EXTRACT → CHUNK → INDEX)の REVIEW ゲート UI を検証する。

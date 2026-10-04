@@ -6,7 +6,7 @@ import {
   type Page,
   type Route,
   type TestInfo,
-} from "@playwright/test";
+} from "./_helpers/test";
 import { openSidebarNav } from "./_helpers/sidebar-nav";
 import { mockDatabaseGateReady, profileAccessPage, systemAdminMe } from "./_helpers/database-gate";
 import { expectSplitPaneReservedTrack } from "./_helpers/fixed-split-pane";

@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route, type TestInfo } from "./_helpers/test";
 import { expectedControlHeight } from "./_helpers/control-height";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
