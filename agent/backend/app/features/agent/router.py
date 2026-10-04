@@ -196,6 +196,7 @@ from app.features.agent.runtime import (
     ThreadsData,
     agent_unavailable_reason,
     builtin_resume_pending,
+    reserved_run_metadata_keys,
     runtime_repository,
 )
 from app.features.agent.skills import (
@@ -1670,6 +1671,16 @@ async def create_run(
 ) -> ApiResponse[RunState]:
     try:
         _require_agent_access(request, run_request.agent_id)
+        # Control Plane の予約の metadata（再開の状態・評価・自動実行・MCP の印）は
+        # 利用者に付けさせない（#1130）。
+        reserved = reserved_run_metadata_keys(run_request.metadata)
+        if reserved:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "metadata に Control Plane が使う項目は指定できません: " + ", ".join(reserved)
+                ),
+            )
         # 旧エンジンの v1 の Run（`X-Agent-API-Version: 1`）は #756 で削除した。
         agent = _control_plane_agent(run_request.agent_id)
         if agent.migration_required:
