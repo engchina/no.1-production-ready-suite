@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import logging
 import re
@@ -54,6 +55,9 @@ class OraclePoolManager:
         self._oracledb: Any | None = None
         self._control_pool: Any | None = None
         self._data_pool: Any | None = None
+        # DATA USER の pool を作ったときの認証情報（#1022）。別 worker が DeepSec 画面で
+        # DATA USER の password を保存すると、設定の再読込で値が変わるため、古い pool を作り直す。
+        self._data_pool_identity: tuple[str, str] | None = None
         self._lock = threading.RLock()
         # DATA USER のログインの失敗（時刻・利用者に出す文）。期間内は再接続せずに失敗させる。
         self._data_login_failure: tuple[float, str] | None = None
@@ -168,6 +172,7 @@ class OraclePoolManager:
                     with suppress(Exception):
                         pool.close(force=True)
             self._data_pool = None
+            self._data_pool_identity = None
             self._control_pool = None
             self._data_login_failure = None
 
@@ -205,8 +210,25 @@ class OraclePoolManager:
             },
         )
 
+    def _data_user_identity(self) -> tuple[str, str]:
+        password = self.settings.oracle_deepsec_data_user_password
+        return (
+            self.settings.oracle_deepsec_data_user,
+            hashlib.sha256(password.encode("utf-8")).hexdigest(),
+        )
+
     def _get_pool(self, *, data_plane: bool) -> Any:
         with self._lock:
+            if (
+                data_plane
+                and self._data_pool is not None
+                and self._data_pool_identity != self._data_user_identity()
+            ):
+                stale = self._data_pool
+                self._data_pool = None
+                self._data_pool_identity = None
+                with suppress(Exception):
+                    stale.close(force=True)
             current = self._data_pool if data_plane else self._control_pool
             if current is not None:
                 return current
@@ -235,6 +257,7 @@ class OraclePoolManager:
                 raise
             if data_plane:
                 self._data_pool = pool
+                self._data_pool_identity = self._data_user_identity()
             else:
                 self._control_pool = pool
             return pool

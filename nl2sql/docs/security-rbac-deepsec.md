@@ -228,7 +228,9 @@ timeout に拡張できる。これは production 既定値ではない。
 DeepSec は python-oracledb Thin mode のみ対応する。`NL2SQL_ORACLE_DEEPSEC_ENABLED=true` の場合、
 `PLATFORM_ORACLE_DRIVER_MODE=thick` は起動時の設定 validation、Oracle 接続検証、DeepSec status / V001 適用で
 fail-fast する。DATA USER password は Deep Data Security 画面から保存でき、保存後は API を再起動せずに
-次の適用・検証・data-plane query から使用される。`DATA USER 認証` の保存 / `Oracle へ同期` は
+次の適用・検証・data-plane query から使用される。保存した worker 以外の worker（gunicorn は 2 workers）も、
+次のリクエストで `backend/.env` の更新を検知して `NL2SQL_ORACLE_DEEPSEC_*` の 3 項目を読み直し、
+DATA USER の接続 pool を作り直す（#1022）。環境変数で与えた項目は読み直さない（環境変数が `.env` より優先）。`DATA USER 認証` の保存 / `Oracle へ同期` は
 `DEEPSEC_DATA_USER` が未作成なら `CREATE END USER IF NOT EXISTS ...`、作成済みなら
 `ALTER END USER IF EXISTS ... IDENTIFIED BY ...` で DB 側の password / account unlock / schema association
 も同期する。同期に失敗した場合、`backend/.env`（`NL2SQL_ORACLE_DEEPSEC_*`）と runtime 設定は保存前へ戻す。
@@ -306,7 +308,52 @@ VPD ではない。
 `Data Grant を適用` は UI の現在 draft をアプリ DB へ保存してから Oracle 側を同期する。backend は
 `NL2SQL_DG_%` prefix かつ `NL2SQL_APP_DATA_ROLE` grantee の managed Data Grant を Oracle metadata から
 照合し、アプリ DB の現在 policy に存在しない stale grant は DROP する。stale grant の対象 object に
-現在 policy が 1 件も残らない場合は、DROP 前に `SET USE DATA GRANTS ONLY ... DISABLED` を実行する。
+現在 policy が 1 件も残らない場合は、DB role の SELECT を REVOKE してから DROP し、最後に
+`SET USE DATA GRANTS ONLY ... DISABLED` を実行する。
+
+### 付け外しの順序と途中の失敗（fail-closed、#1022）
+
+DATA USER は `NL2SQL_APP_DATA_ROLE` 経由で `NL2SQL_APP_DB_ROLE` の SELECT（object privilege）を持つ。
+`USE DATA GRANTS ONLY` が無効な表では、この SELECT だけで行の制限なしに読める。DDL は暗黙 commit で
+rollback できないため、どの文で止まっても「SELECT があり、DATA GRANTS ONLY が無効」にならない順序にし、
+失敗した文の後ろは実行しない（`oracle_statement_executor.execute(..., stop_on_error=True)`）。
+
+| 操作 | 順序 |
+|---|---|
+| Data Grant の作成・更新 | `SET USE DATA GRANTS ONLY ... ENABLED` → `DROP DATA GRANT IF EXISTS` → `CREATE OR REPLACE DATA GRANT` → `GRANT SELECT ... TO NL2SQL_APP_DB_ROLE` |
+| 対象を使う最後の Data Grant の削除 | SELECT の REVOKE（REVOKE 後も `DBA_TAB_PRIVS` に残っていたら ORA-20003 で止める）→ `DROP DATA GRANT` → `SET USE DATA GRANTS ONLY ... DISABLED` |
+| DeepSec 構成の解除（`ADMIN_RESET`） | 管理対象の SELECT の REVOKE → DATA GRANTS ONLY の無効化 → Data Grant の DROP → …… → `DROP ROLE NL2SQL_APP_DB_ROLE` |
+
+Data Grant の適用が Oracle の文の途中で止まった場合は、そのロールの保存済み Data Grant を
+`APPLY_STATUS = 'FAILED'`（`APPLY_ERROR_MESSAGE` に失敗の文）にする。predicate は
+`APPLY_STATUS = 'APPLIED'` を条件にしているため、再適用が成功するまで、このロールの Data Grant は行を許可しない。
+応答は 409 で、1 文目は利用者向けの日本語、括弧の中に何番目の文で失敗したかと Oracle の応答（ORA）を入れる。
+Oracle の文を実行する前の検証エラー（400 など）では FAILED にしない。
+
+#1022 より前の版で対象の最後の Data Grant を削除した環境では、`NL2SQL_APP_DB_ROLE` に SELECT が残り、
+DATA GRANTS ONLY が無効のままの表がありうる（DATA USER が全行を読める）。管理者は Data Grant owner で次の SQL
+（参考例。実 Oracle では未検証）を実行し、管理対象の Data Grant が無いのに SELECT が残る表を確認して、
+該当する表の SELECT を REVOKE する（または同じ表に Data Grant を作り直して適用する）。
+
+```sql
+-- NL2SQL_APP_DB_ROLE に SELECT が残り、NL2SQL の管理する Data Grant が無い表
+SELECT p.OWNER, p.TABLE_NAME
+  FROM DBA_TAB_PRIVS p
+ WHERE p.GRANTEE = 'NL2SQL_APP_DB_ROLE'
+   AND p.PRIVILEGE = 'SELECT'
+   AND NOT (p.OWNER = USER
+            AND p.TABLE_NAME IN ('PLATFORM_USER_ROLES', 'PLATFORM_ROLES',
+                                 'NL2SQL_APP_DATA_ENTITLEMENTS'))
+   AND NOT EXISTS (
+         SELECT 1 FROM DBA_DATA_GRANTS g
+          WHERE g.OWNER = USER
+            AND g.GRANT_NAME LIKE 'NL2SQL_DG\_%' ESCAPE '\'
+            AND g.OBJECT_OWNER = p.OWNER
+            AND g.OBJECT_NAME = p.TABLE_NAME);
+
+-- 該当した表ごとに実行する
+REVOKE SELECT ON <OWNER>.<TABLE_NAME> FROM NL2SQL_APP_DB_ROLE;
+```
 
 Data Grant の grantee は標準 DB role ではなく DeepSec の DATA ROLE / END USER を使う。本システムでは
 共有 connection pool END USER の `DEEPSEC_DATA_USER` が direct logon し、Data Grant の grantee は
