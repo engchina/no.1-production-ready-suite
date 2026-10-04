@@ -32,6 +32,7 @@ const nl2sqlJa = {
   "chat.stop": "停止",
   "chat.generating": "SQL を生成しています",
   "chat.loading": "会話を読み込んでいます",
+  "chat.historyLoading": "会話の履歴を読み込んでいます",
   "chat.empty": "どのような SQL を生成しますか？",
   "chat.emptyHint": "例: 商品カテゴリ別の売上合計を求めて。その後「多い順にして」のように追加の条件を送れます。SQL は自動で実行されません。",
   "chat.historyEmpty": "会話はまだありません",
