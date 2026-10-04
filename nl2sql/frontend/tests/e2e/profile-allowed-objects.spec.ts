@@ -1031,7 +1031,10 @@ test("業務プロファイルは表とビューを固定高リストで管理�
       await route.fallback();
       return;
     }
-    savedPayload = route.request().postDataJSON() as Record<string, unknown>;
+    // Oracle 反映の job の終了後に詳細を取り直す（GET。#963）ので、保存の本文は PATCH だけから取る。
+    if (route.request().method() === "PATCH") {
+      savedPayload = route.request().postDataJSON() as Record<string, unknown>;
+    }
     await fulfillJson(route, { ...profiles[0], ...savedPayload, id: "default" });
   });
   await page.route("**/api/nl2sql/profiles/default/oracle-sync-jobs", async (route) => {
@@ -3014,6 +3017,65 @@ test("保存中はプロファイル編集と競合操作を固定し失敗後�
   await page.screenshot({ path: testInfo.outputPath("profile-save-failure-draft.png") });
 });
 
+test("保存の 409（ほかの更新）は文に合わせて「最新の内容を読み込む」を出し、確認の後に最新の版へ置き換える", async ({ page }, testInfo) => {
+  const profile = { ...profiles[0], name: "DEFAULT_PROFILE" };
+  await mockProfileApi(page, { profileItems: [profile] });
+  let serverVersion = 1;
+  const ifMatches: string[] = [];
+  await page.route("**/api/nl2sql/profiles/default", async (route) => {
+    const method = route.request().method();
+    if (method === "GET") {
+      if (serverVersion === 1) return route.fallback();
+      return fulfillJson(route, { ...profile, category: "営業", etag: "etag-default-2" });
+    }
+    if (method !== "PATCH") return route.fallback();
+    ifMatches.push(route.request().headers()["if-match"] ?? "");
+    if (serverVersion === 1) {
+      // ほかの利用者の保存で版が進んだ（ETag の不一致）。
+      serverVersion = 2;
+      return route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "業務 profile が更新されています。再読込してください。" }),
+      });
+    }
+    const payload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, { ...profile, ...payload, id: "default", etag: "etag-default-3" });
+  });
+  await page.goto("/profiles?profile=default");
+  const category = page.getByLabel("カテゴリ");
+  await category.fill("finance");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  const saveError = page.getByTestId("profile-save-error");
+  await expect(saveError.getByRole("alert")).toContainText("ほかの操作でこの業務プロファイルが更新された");
+  const reload = saveError.getByRole("button", { name: "最新の内容を読み込む" });
+  await expect(reload).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("profile-save-conflict.png") });
+
+  // 編集中の内容は破棄されるため、確認を挟む。キャンセルすれば編集を残す。
+  await reload.click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("最新の内容を読み込みますか");
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(category).toHaveValue("finance");
+  await expect(reload).toBeVisible();
+
+  await reload.click();
+  await dialog.getByRole("button", { name: "破棄して読み込む" }).click();
+  await expect(category).toHaveValue("営業");
+  await expect(saveError).toHaveCount(0);
+
+  // 最新の版の ETag で保存し直せる。
+  await category.fill("経理");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => ifMatches.length).toBe(2);
+  expect(ifMatches).toEqual(['"etag-default"', '"etag-default-2"']);
+  await expect(saveError).toHaveCount(0);
+});
+
 test("スキーマ一括選択中は保存と対象切替を固定する", async ({ page }) => {
   await mockProfileApi(page, { profileItems: [{ ...profiles[0], allowed_tables: [], allowed_views: [] }] });
   await page.goto("/profiles?profile=default");
@@ -3056,4 +3118,157 @@ test("プロファイル詳細取得失敗は選択 URL を保持し再試行で
   await page.goto("/profiles?profile=missing");
   await expect(page.getByText("指定された profile が見つかりません。", { exact: true })).toBeVisible({ timeout: 15000 });
   await expect(page).toHaveURL(/profile=missing/);
+});
+
+test("名称を変えた保存の Oracle 反映が終わったら最新の ETag を取り直し、続けて保存できる", async ({ page }) => {
+  await mockProfileApi(page);
+  // backend と同じく、名称の変更の Oracle 反映は旧名の印（previous_profile_name）を消して ETag を進める
+  // （ProfileSyncService._execute → clear_profile_select_ai_previous_name）。
+  let serverProfile: Record<string, unknown> = { ...profiles[0], etag: "etag-default" };
+  const patchIfMatch: string[] = [];
+  await page.route("**/api/nl2sql/profiles/default", async (route) => {
+    const method = route.request().method();
+    if (method === "GET") {
+      await fulfillJson(route, serverProfile);
+      return;
+    }
+    if (method !== "PATCH") {
+      await route.fallback();
+      return;
+    }
+    const ifMatch = (await route.request().headerValue("if-match")) ?? "";
+    patchIfMatch.push(ifMatch);
+    if (ifMatch !== `"${serverProfile.etag as string}"`) {
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "業務 profile が更新されています。再読込してください。" }),
+      });
+      return;
+    }
+    const payload = route.request().postDataJSON() as Record<string, unknown>;
+    const renamed = payload.name !== (serverProfile.name as string);
+    serverProfile = {
+      ...serverProfile,
+      ...payload,
+      select_ai_config: {
+        ...(payload.select_ai_config as Record<string, unknown>),
+        previous_profile_name: renamed ? "NL2SQL_DEFAULT_PROFILE" : "",
+      },
+      etag: `etag-saved-${patchIfMatch.length}`,
+    };
+    await fulfillJson(route, serverProfile);
+  });
+  await page.route("**/api/nl2sql/oracle-sync-jobs/*", async (route) => {
+    serverProfile = {
+      ...serverProfile,
+      select_ai_config: {
+        ...(serverProfile.select_ai_config as Record<string, unknown>),
+        previous_profile_name: "",
+      },
+      etag: "etag-after-sync",
+    };
+    await fulfillJson(route, {
+      job_id: "profile-sync-default",
+      profile_id: "default",
+      profile_etag: "etag-after-sync",
+      original_name: "NL2SQL_DEFAULT_PROFILE",
+      status: "succeeded",
+      phase: "succeeded",
+      rebuild_agent_assets: false,
+      error_code: "",
+      error_message_ja: "",
+      created_at: "2026-07-22T00:00:00Z",
+      finished_at: "2026-07-22T00:00:01Z",
+      oracle_result: {
+        runtime: "oracle",
+        executed: true,
+        status: "saved",
+        profile_name: "SALES_PROFILE",
+        original_name: "NL2SQL_DEFAULT_PROFILE",
+        ddl: [],
+        profile: dbProfiles.profiles[0],
+        warnings: [],
+        engine_meta: {},
+      },
+    });
+  });
+
+  await page.goto("/profiles?profile=default");
+  const confirmationField = page.getByLabel("実行確認語");
+  const saveButton = page.getByRole("button", { name: "保存", exact: true });
+  const progress = page.getByTestId("profile-save-progress");
+  await page.getByLabel("名称").fill("SALES_PROFILE");
+  await confirmationField.fill("ADMIN_EXECUTE");
+  await saveButton.click();
+  await expect(progress).toHaveAttribute("data-job-status", "succeeded");
+
+  // 反映の後に別の項目を直して保存しても、ETag の食い違い（409）にならない。
+  await page.getByLabel("カテゴリ").fill("販売");
+  await confirmationField.fill("ADMIN_EXECUTE");
+  await saveButton.click();
+  await expect.poll(() => patchIfMatch).toEqual(['"etag-default"', '"etag-after-sync"']);
+  await expect(page.getByTestId("profile-save-error")).toHaveCount(0);
+  await expect(progress).toHaveAttribute("data-job-status", "succeeded");
+
+  // 利用者は保存の後に何も変えていないので、一覧へ戻るときに破棄の確認を出さない。
+  await page.getByRole("button", { name: "一覧へ戻る", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page).not.toHaveURL(/profile=/);
+});
+
+test("DBMS_CLOUD_AI Profile の反映後に Agent アセットの再構築だけが失敗したら、反映が済んだことと失敗した工程を示す", async ({ page }) => {
+  await mockProfileApi(page);
+  await page.route("**/api/nl2sql/oracle-sync-jobs/*", (route) =>
+    fulfillJson(route, {
+      job_id: "profile-sync-default",
+      profile_id: "default",
+      profile_etag: "etag-default",
+      status: "failed",
+      phase: "failed",
+      rebuild_agent_assets: true,
+      error_code: "AGENT_ASSETS_REBUILD_FAILED",
+      error_message_ja:
+        "Select AI Agent アセットの再構築に失敗しました。データベース設定と Select AI Agent の構成を確認してから再試行してください。",
+      created_at: "2026-07-22T00:00:00Z",
+      finished_at: "2026-07-22T00:00:01Z",
+      oracle_result: {
+        runtime: "oracle",
+        executed: true,
+        status: "saved",
+        profile_name: "NL2SQL_DEFAULT_PROFILE",
+        original_name: "",
+        ddl: [],
+        profile: dbProfiles.profiles[0],
+        warnings: [],
+        engine_meta: {},
+      },
+      agent_result: null,
+    })
+  );
+
+  await page.goto("/profiles?profile=default");
+  await page.getByLabel("名称").fill("DEFAULT_PROFILE");
+  await page
+    .getByRole("checkbox", { name: "保存時に Select AI Agent アセット(tool / agent / task / team)も再構築する" })
+    .check();
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  const status = page.getByTestId("profile-save-progress");
+  await expect(status).toHaveAttribute("data-job-status", "failed");
+  await expect(page.getByTestId("profile-save-step-sync_oracle_profile")).toHaveAttribute(
+    "data-step-status",
+    "done"
+  );
+  await expect(page.getByTestId("profile-save-step-rebuild_agent_assets")).toHaveAttribute(
+    "data-step-status",
+    "error"
+  );
+  // DBMS_CLOUD_AI Profile は反映済みなので、「Oracle 反映に失敗」とは書かない。
+  await expect(status).not.toContainText("Oracle 反映に失敗しました");
+  await expect(status).not.toContainText("Oracleへの反映を完了できませんでした");
+  await expect(status).toContainText("DBMS_CLOUD_AI Profile への反映は完了しました");
+  await expect(status).toContainText("Select AI Agent アセットの再構築に失敗しました");
+  await expect(status.getByRole("button", { name: "Oracle 反映を再試行" })).toBeVisible();
 });

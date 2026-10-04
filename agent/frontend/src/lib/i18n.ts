@@ -174,6 +174,14 @@ const agentJa = {
   "automation.name": "名前",
   "automation.nameRequired": "名前を入力してください。",
   "automation.agent": "業務 Agent",
+  // #927: 業務 Agent の未選択・保存済みの業務 Agent が使えなくなったとき・タイムゾーンの誤り。
+  "automation.agentRequired": "業務 Agent を選んでください。",
+  "automation.agentPlaceholder": "業務 Agent を選ぶ",
+  "automation.agentNone": "使える業務 Agent がありません。業務 Agent を公開してから作成してください。",
+  "automation.agentUnavailable": "{name}（実行できません）",
+  "automation.agentMissing": "{id}（見つかりません）",
+  "automation.agentUnavailableHint": "この業務 Agent は無効・未公開か、削除されています。別の業務 Agent を選ぶか、自動実行を無効にして保存してください。",
+  "automation.timezoneInvalid": "タイムゾーンが正しくありません。IANA の名前（例: Asia/Tokyo）で入力してください。",
   "automation.goal": "指示",
   "automation.goalHelper": "実行の目標として業務 Agent に渡します。Webhook のときは、受け取ったデータを後ろに添えます。",
   "automation.goalRequired": "指示を入力してください。",
@@ -605,6 +613,8 @@ const agentJa = {
   "apiKeys.create.runAsHelper":
     "キーはこの利用者の権限で動きます。連携用の専用の利用者をユーザー管理で作り、必要なロールだけを付けて選ぶことをおすすめします。選べるのは、有効で初回のパスワード変更が済んだ利用者です。",
   "apiKeys.allAgents": "すべて",
+  // 閲覧者の範囲外か削除済みで、名前を取れない業務 Agent（ID だけでは何か分からないため）。
+  "apiKeys.agentUnavailable": "名前を表示できない業務 Agent（ID: {id}）",
   "apiKeys.noExpiry": "無期限",
   "apiKeys.expired": "期限切れ",
   "apiKeys.active": "有効",
@@ -784,6 +794,12 @@ const agentJa = {
   "validation.json.invalid": "{field}は有効な JSON で入力してください。",
   "validation.json.array": "{field}は JSON の配列で入力してください。",
   "validation.json.object": "{field}は JSON のオブジェクトで入力してください。",
+  // MCP の URL（backend の `_validate_mcp_url`・`mcp_url.py` と同じ文言。#1056）。
+  "validation.mcpUrl.scheme": "MCP の URL は http:// または https:// で始めてください。",
+  "validation.mcpUrl.userinfo":
+    "MCP の URL にユーザー名・パスワード（user:pass@）を含めないでください。資格情報は「認証」の欄（API キー・OAuth）で設定してください。",
+  "validation.mcpUrl.secretQuery":
+    "MCP の URL に資格情報のパラメータ（{names}）を含めないでください。資格情報は「認証」の欄（API キー・OAuth）で設定してください。",
   "common.saved": "設定を保存しました",
   "common.download": "ダウンロード",
   "common.validate": "検証",
@@ -1060,6 +1076,9 @@ const agentJa = {
   "skills.id": "ID",
   "skills.name": "名前",
   "skills.idRequired": "ID を入力してください。",
+  // 作成後は変えられず、URL にも使う（#926。backend の SKILL_ID_PATTERN と同じ）。
+  "skills.idInvalid": "ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。",
+  "skills.idHint": "英数字・_・-・. で入力します（作成後は変更できません）。",
   "skills.nameRequired": "名前を入力してください。",
   "skills.empty": "スキルはまだありません",
   "skills.readOnly": "このスキルは読み取り専用です（ビルトイン / ファイル / env）。",
@@ -1141,6 +1160,10 @@ const agentJa = {
   "marketplaces.importDetails": "配布物の詳細",
   "marketplaces.deleted": "マーケットプレイスを削除しました",
   "marketplaces.idRequired": "ID を入力してください。",
+  // 追加後は変えられず、URL にも使う（#928。backend の MARKETPLACE_ID_PATTERN と同じ）。
+  "marketplaces.idInvalid": "ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。",
+  "marketplaces.idHint": "英数字・_・-・. で入力します（追加後は変更できません）。",
+  "marketplaces.installedBadge": "導入済み",
   "marketplaces.confirmDeleteTitle": "マーケットプレイスを削除しますか?",
   "marketplaces.confirmDeleteMessage": "{id} を削除します。インストール済みのプラグインは残ります。",
   "marketplaces.install": "インストール",
@@ -1344,6 +1367,8 @@ const agentJa = {
   "settings.mcpConnections.oauthSecretShow": "OAuth Client Secret を表示",
   "settings.mcpConnections.oauthSecretHide": "OAuth Client Secret を隠す",
   "settings.mcpConnections.secretKeepHint": "空のまま保存すると、保存済みの値を使い続けます。",
+  "settings.mcpConnections.urlMaskedHint":
+    "保存済みの URL の資格情報は「***」で伏せて表示しています。URL を変えずに保存すると、保存済みの URL を使い続けます。資格情報は「認証」の欄へ移してください。",
   "run.search": "目標・実行 ID・業務 Agent で絞り込み",
   "run.filter.label": "状態で絞り込み",
   "run.filter.all": "すべて",

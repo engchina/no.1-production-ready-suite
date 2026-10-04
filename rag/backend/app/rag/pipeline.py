@@ -300,8 +300,15 @@ class RagPipeline:
             progress_callback=progress_callback,
         )
         if request.generate_answer:
-            answer_guardrail = await asyncio.to_thread(
-                self._guardrails.validate_answer, outcome.answer, outcome.context_text
+            # 回答側の安全チェックも工程として計測し、進捗に出す
+            # (チャットの「回答を確認しています」。#1146)。
+            answer_guardrail = await _observe_stage(
+                trace_id,
+                "answer_guardrail",
+                asyncio.to_thread(
+                    self._guardrails.validate_answer, outcome.answer, outcome.context_text
+                ),
+                progress_callback=progress_callback,
             )
             record_guardrail_findings(
                 "answer",

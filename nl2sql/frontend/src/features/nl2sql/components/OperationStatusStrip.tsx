@@ -3,6 +3,7 @@ import { CircleStop, Database } from "lucide-react";
 import {
   Button,
   Banner,
+  FormStatus,
 } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
@@ -10,6 +11,7 @@ import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
 import { normalizeNl2SqlJobSteps } from "../jobProgressState";
 import type { JobData, JobStatus, JobStepStatus } from "../types";
 import { GeneratedSqlSummary } from "./GeneratedSqlPanel";
+import { JobFailureBody } from "./JobFailureBody";
 import { QuestionText } from "./QuestionText";
 import { WorkflowProgressStrip, type WorkflowProgressStepStatus } from "./WorkflowProgressStrip";
 
@@ -63,6 +65,8 @@ export function OperationStatusStrip({
   previewExecuteLoading = false,
   onCancelJob,
   cancelRequesting = false,
+  cancelAccepted = false,
+  cancelErrorMessage = "",
 }: {
   job: JobData | null;
   profileId?: string;
@@ -78,6 +82,10 @@ export function OperationStatusStrip({
   /** 実行中 job の協調キャンセル要求(POST /jobs/{id}/cancel)。取消可能な処理は同じ領域に置く。 */
   onCancelJob?: () => void;
   cancelRequesting?: boolean;
+  /** 中止の要求を受け付けた。backend が実行中の段階を終えて止まるまで、受付を出して中止を押せなくする（#918）。 */
+  cancelAccepted?: boolean;
+  /** 中止の要求の失敗。中止のボタンの行に出す（messaging §10.1。#918）。 */
+  cancelErrorMessage?: string;
 }) {
   const active = job?.status === "pending" || job?.status === "running";
   const finalElapsed =
@@ -181,12 +189,21 @@ export function OperationStatusStrip({
       footer={
         <>
           {active && onCancelJob && (
-            <div className="mx-4 mb-4 flex justify-end">
+            <div className="mx-4 mb-4 flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+              <div className="mr-auto min-w-0" data-testid="nl2sql-job-cancel-feedback">
+                <FormStatus
+                  tone={cancelAccepted ? "info" : "danger"}
+                  message={cancelAccepted ? t("nl2sql.job.cancelAccepted") : cancelErrorMessage}
+                />
+              </div>
+              {/* 取り消せる停止は赤文字の ghost（buttons.md の Action Button の注）。 */}
               <Button icon={CircleStop}
                 type="button"
                 variant="ghost"
+                tone="danger"
                 size="sm"
                 loading={cancelRequesting}
+                disabled={cancelAccepted}
                 onClick={onCancelJob}
               >
                 {t("nl2sql.job.cancel")}
@@ -226,7 +243,11 @@ export function OperationStatusStrip({
                 </div>
               ) : undefined}
             >
-              {failureMessage}
+              <JobFailureBody
+                message={failureMessage}
+                errorCode={job.error_code}
+                errorDetail={job.error_detail}
+              />
               {job.status === "error" && catalogEmpty && !onImportSample && sampleImportUnavailableHint && (
                 <p className="text-xs text-fg-muted">{sampleImportUnavailableHint}</p>
               )}

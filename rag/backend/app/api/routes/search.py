@@ -182,12 +182,7 @@ async def _resolve_query_context(
                 status_code=404,
                 detail=f"指定した検索・回答プロファイルが見つかりません: {search_answer_profile_id}",  # noqa: E501
             )
-        status = getattr(view, "status", None)
-        if getattr(status, "value", status) == "ARCHIVED":
-            raise HTTPException(
-                status_code=409,
-                detail=f"アーカイブ済みの検索・回答プロファイルは検索に使用できません: {search_answer_profile_id}",  # noqa: E501
-            )
+        ensure_search_answer_profile_not_archived(view, search_answer_profile_id)
         effective_request = request
         kb_ids = view.config.normalized_knowledge_base_ids()
         # 参照 KB が 0 件の検索・回答プロファイルで利用者の全 KB を検索しない（#304）。
@@ -215,6 +210,16 @@ async def _resolve_query_context(
 
     request = _scope_request_knowledge_bases(request)
     return request, settings, None, None
+
+
+def ensure_search_answer_profile_not_archived(view: object, search_answer_profile_id: str) -> None:
+    """アーカイブ済みの検索・回答プロファイルは検索にも検索の絞り込みの項目にも使わない（409）。"""
+    status = getattr(view, "status", None)
+    if getattr(status, "value", status) == "ARCHIVED":
+        raise HTTPException(
+            status_code=409,
+            detail=f"アーカイブ済みの検索・回答プロファイルは検索に使用できません: {search_answer_profile_id}",  # noqa: E501
+        )
 
 
 SEARCH_ANSWER_PROFILE_NO_KNOWLEDGE_BASES_MESSAGE = (
@@ -522,7 +527,8 @@ async def list_search_extraction_fields(
     選んだ検索・回答プロファイルの参照 KB のうち利用者が
     使える有効な KB の定義(KB に無ければ全体の既定)の
 
-    和集合。同じ項目名は先の KB(作成の古い順)の定義を使う。存在しない検索・回答プロファイルは 404。
+    和集合。同じ項目名は先の KB(作成の古い順)の定義を使う。存在しない検索・回答プロファイルは 404、
+    アーカイブ済みは検索と同じく 409。
     """
     oracle = OracleClient()
     view = await oracle.get_search_answer_profile(search_answer_profile_id)
@@ -531,6 +537,8 @@ async def list_search_extraction_fields(
             status_code=404,
             detail=f"指定した検索・回答プロファイルが見つかりません: {search_answer_profile_id}",
         )
+    # 検索と同じく、アーカイブ済みの検索・回答プロファイルは項目を返さない（#961）。
+    ensure_search_answer_profile_not_archived(view, search_answer_profile_id)
     # 利用者が使えない KB とアーカイブ済みの KB は Oracle の条件で除く。
     field_sets = await oracle.list_knowledge_base_extraction_field_sets(
         view.config.normalized_knowledge_base_ids()
