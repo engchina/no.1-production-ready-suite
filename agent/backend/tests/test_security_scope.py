@@ -173,6 +173,29 @@ def test_audit_is_scoped_by_principal(auth: ProductionAuth, scope_data: ScopeDat
     assert scope_data.run_b.id not in csv.text
 
 
+def test_audit_tool_names_are_scoped_by_principal(
+    auth: ProductionAuth, scope_data: ScopeData
+) -> None:
+    """ツール名の選択肢にも、対象範囲の外の業務 Agent の Run のツール名を出さない（#983）。"""
+    other_tool = "scope_b_only__lookup"
+    run = runtime_repository.create_builtin_run(RunCreateRequest(goal="scope b", agent_id=AGENT_B))
+    assert runtime_repository.begin_builtin_run(run.id) is not None
+    runtime_repository.request_builtin_approvals(
+        run.id, [ToolCall(name=other_tool, arguments={}, trace_id="call-b")], state="{}"
+    )
+    _scoped_user(auth, "scoped-auditor-names", ["agent.audit.view"])
+
+    records = client.get("/api/audit/tool-calls", headers=login("scoped-auditor-names"))
+
+    assert records.status_code == 200
+    tool_names = records.json()["data"]["tool_names"]
+    assert APPROVAL_TOOL in tool_names
+    assert other_tool not in tool_names
+    admin = client.get("/api/audit/tool-calls", headers=login_configured_admin())
+    assert other_tool in admin.json()["data"]["tool_names"]
+    del scope_data
+
+
 def test_approval_is_scoped_and_decided_by_principal(
     auth: ProductionAuth, scope_data: ScopeData
 ) -> None:
