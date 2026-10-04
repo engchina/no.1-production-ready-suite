@@ -48,6 +48,8 @@ export interface ApiErrorDetailLabels {
   errorType: string;
   rawMessage: string;
   requestId: string;
+  /** 入力の検証エラー（422）の技術的な原文（位置・メッセージ・種別。#1065）。 */
+  validationErrors: string;
 }
 
 export const DEFAULT_API_ERROR_DETAIL_LABELS: ApiErrorDetailLabels = {
@@ -60,6 +62,7 @@ export const DEFAULT_API_ERROR_DETAIL_LABELS: ApiErrorDetailLabels = {
   errorType: "エラー種別",
   rawMessage: "元のメッセージ",
   requestId: "リクエストID",
+  validationErrors: "入力の検証の原文",
 };
 
 export function isAbortError(cause: unknown): boolean {
@@ -194,8 +197,35 @@ export function apiErrorDetail(label: string, value: string | number | undefined
 }
 
 /**
+ * 入力の欄に結び付く API の問題（problem 契約の `field_errors`）。入力の検証エラー（422）は
+ * 技術的な原文（`raw_location` / `raw_message`）と Pydantic の種別（`code`）も持つ（#1065）。
+ */
+export interface ApiFieldErrorLike {
+  pointer?: string;
+  code?: string;
+  message: string;
+  raw_location?: string;
+  raw_message?: string;
+}
+
+/** 検証エラーの技術的な原文を「詳細」の 1 項目にする（1 件 1 行。原文が無ければ出さない）。 */
+function validationErrorDetail(
+  fieldErrors: readonly ApiFieldErrorLike[] | undefined,
+  label: string,
+): ApiErrorDetail[] {
+  const lines = (fieldErrors ?? []).flatMap((item) => {
+    if (!item.raw_message) return [];
+    const location = item.raw_location ? `${item.raw_location}: ` : "";
+    const code = item.code ? ` (${item.code})` : "";
+    return [`${location}${item.raw_message}${code}`];
+  });
+  return apiErrorDetail(label, lines.join("\n"));
+}
+
+/**
  * 製品の `ApiError`（HTTP の失敗）の要約と「詳細」を作る。`toApiErrorPresentation()` の実装に使う。
- * request ID は本文に重ねず「詳細」に出す。
+ * request ID は本文に重ねず「詳細」に出す。入力の検証エラー（422）の技術的な原文（`fieldErrors` の
+ * `raw_location` / `raw_message` / `code`）も「詳細」に出す（#1065）。
  */
 export function httpApiErrorPresentation(
   error: {
@@ -203,6 +233,7 @@ export function httpApiErrorPresentation(
     messages: readonly string[];
     errorCode?: string | null;
     requestId?: string | null;
+    fieldErrors?: readonly ApiFieldErrorLike[];
   },
   labels: ApiErrorDetailLabels = DEFAULT_API_ERROR_DETAIL_LABELS,
 ): ApiErrorPresentation {
@@ -211,6 +242,7 @@ export function httpApiErrorPresentation(
     details: [
       ...apiErrorDetail(labels.status, error.status),
       ...apiErrorDetail(labels.errorCode, error.errorCode),
+      ...validationErrorDetail(error.fieldErrors, labels.validationErrors),
       ...apiErrorDetail(labels.requestId, error.requestId),
     ],
   };

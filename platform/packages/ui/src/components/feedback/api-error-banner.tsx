@@ -35,7 +35,7 @@ export function ApiErrorDetailList({
         {details.map((item) => (
           <div key={item.label} className="min-w-0">
             <dt className="break-words font-medium text-fg">{item.label}</dt>
-            <dd className="break-all">{item.value}</dd>
+            <dd className="whitespace-pre-line break-all">{item.value}</dd>
           </div>
         ))}
       </dl>

@@ -31,9 +31,13 @@ def test_run_goal_is_required(goal: str) -> None:
 async def test_run_with_empty_goal_is_rejected_with_field_message() -> None:
     response = await _request("POST", "/api/runs", {"goal": " "})
     assert response.status_code == 422
-    assert response.json()["error_messages"] == [
-        "body.goal: Value error, ゴールを入力してください。"
-    ]
+    # 自前の検証の文は位置と `Value error, ` の接頭辞を付けずにそのまま返す（#1065）。
+    body = response.json()
+    assert body["error_messages"] == ["ゴールを入力してください。"]
+    assert body["error_code"] == "REQUEST_VALIDATION_FAILED"
+    (field_error,) = body["problem"]["field_errors"]
+    assert field_error["pointer"] == "/goal"
+    assert field_error["raw_message"] == "Value error, ゴールを入力してください。"
 
 
 @pytest.mark.asyncio

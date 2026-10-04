@@ -1106,6 +1106,10 @@ export interface RoleAccessUpdate {
 export interface ApiFieldError {
   pointer: string;
   message: string;
+  /** 入力の検証エラー（422）の Pydantic の種別と技術的な原文（「詳細」に出す。#1065）。 */
+  code?: string;
+  raw_location?: string;
+  raw_message?: string;
 }
 
 export interface ApiErrorDetails {
@@ -1167,10 +1171,15 @@ function fieldErrorsOf(value: unknown): ApiFieldError[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
     if (!item || typeof item !== "object") return [];
-    const { pointer, message } = item as { pointer?: unknown; message?: unknown };
-    return typeof message === "string"
-      ? [{ pointer: typeof pointer === "string" ? pointer : "", message }]
-      : [];
+    const record = item as Record<string, unknown>;
+    const { pointer, message } = record;
+    if (typeof message !== "string") return [];
+    const fieldError: ApiFieldError = { pointer: typeof pointer === "string" ? pointer : "", message };
+    for (const key of ["code", "raw_location", "raw_message"] as const) {
+      const value = record[key];
+      if (typeof value === "string" && value) fieldError[key] = value;
+    }
+    return [fieldError];
   });
 }
 

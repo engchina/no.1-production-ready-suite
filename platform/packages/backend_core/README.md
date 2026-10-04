@@ -16,6 +16,7 @@ No.1 Production Ready 製品群（**RAG / NL2SQL / Agent**）の backend が共�
 | `logging.configure_logging` | JSON 構造化ログ（サービス固有のノイズロガー抑制を注入可能） |
 | `schemas` | `ApiResponse[T]` / `Page[T]` / `HealthData`（**RAG 実証済み envelope を標準採用**） |
 | `api.errors` | HTTPException / 検証 / 未処理例外 → `ApiResponse` 統一ハンドラ |
+| `api.validation` | 入力の検証エラー（422）の利用者向けの日本語の文・位置（`cases[0].query`）と problem 契約の `field_errors`（技術的な原文は `raw_location` / `raw_message`。#1065） |
 | `api.pagination` | `paginate(...)` |
 | `api.health` | `create_health_router(version_getter, readiness_checks_getter)` |
 | `observability` | `MetricsMiddleware`（request-id 付与 + Prometheus）/ `record_http_request` / `metrics_asgi_app` |

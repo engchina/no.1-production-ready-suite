@@ -118,6 +118,10 @@ export interface ApiFieldProblem {
   pointer: string;
   code: string;
   message: string;
+  /** 入力の検証エラー（422）の、利用者に見せる位置（`cases[0].query`）と技術的な原文（#1065）。 */
+  location?: string;
+  raw_location?: string;
+  raw_message?: string;
 }
 
 export interface ApiProblem {
@@ -671,6 +675,7 @@ export class ApiError extends Error implements ApiErrorPresentable {
         messages: this.baseMessages,
         errorCode: this.errorCode,
         requestId: this.requestId,
+        fieldErrors: this.fieldErrors,
       },
       labels,
     );
