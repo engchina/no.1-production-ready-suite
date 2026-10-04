@@ -1355,6 +1355,7 @@ const nl2sqlJa = {
   "nl2sql.job.storageUnavailable": "実行中のジョブをブラウザに保存できません。処理と結果の取得は継続しています。再読込せずに完了を待ってください。ページを閉じた場合は履歴から結果を確認してください。",
   "nl2sql.job.cancel": "実行を中止",
   "nl2sql.job.cancelFailed": "ジョブの中止要求に失敗しました。",
+  "nl2sql.job.cancelAccepted": "中止を受け付けました。実行中の段階が終わると停止します。",
   "nl2sql.history.refreshFailed":
     "履歴の更新に失敗しました。生成結果は表示されています。時間をおいて履歴を再読込してください。",
   "nl2sql.rewrite.title": "Query Rewrite",
@@ -1814,6 +1815,10 @@ const nl2sqlJa = {
   "profiles.oracle.sync.succeeded": "Oracle Profile の反映が完了しました。",
   "profiles.oracle.sync.failed": "業務 Profile は保存されましたが、Oracle 反映に失敗しました。",
   "profiles.oracle.sync.savedButFailed": "業務 Profile は保存されましたが、Oracle 反映を開始できませんでした。",
+  "profiles.oracle.sync.agentFailed":
+    "DBMS_CLOUD_AI Profile への反映は完了しましたが、Select AI Agent アセットの再構築に失敗しました。",
+  "profiles.oracle.sync.verifyFailed":
+    "DBMS_CLOUD_AI Profile への反映は完了しましたが、反映結果の検証に失敗しました。",
   "profiles.oracle.sync.credentialMissing":
     "現在の Oracle schema に OCI_CRED がありません。データベース設定で Select AI Credential を作成してから、Oracle 反映を再試行してください。",
   "profiles.oracle.sync.openSelectAiCredential": "Select AI Credential を開く",
@@ -1832,6 +1837,10 @@ const nl2sqlJa = {
     "業務プロファイルの保存とOracleへの反映が完了しました。",
   "profiles.oracle.progress.message.failed":
     "業務プロファイルは保存されましたが、Oracleへの反映を完了できませんでした。",
+  "profiles.oracle.progress.message.agentFailed":
+    "業務プロファイルの保存とDBMS_CLOUD_AI Profileへの反映は完了しましたが、Select AI Agentアセットの再構築に失敗しました。",
+  "profiles.oracle.progress.message.verifyFailed":
+    "業務プロファイルの保存とDBMS_CLOUD_AI Profileへの反映は完了しましたが、反映結果の検証に失敗しました。",
   "profiles.oracle.progress.message.cancelled": "Oracleへの反映を中止しました。",
   "profiles.oracle.progress.message.submissionFailed":
     "業務プロファイルは保存されましたが、Oracle反映ジョブを開始できませんでした。",
@@ -2135,6 +2144,7 @@ const nl2sqlJa = {
   "feedbackManagement.appFeedback.adminFeedbackRequired": "「違う」のときは管理者レビューコメントを入力してください。",
   "feedbackManagement.appFeedback.copyUserContent": "利用者コメントを反映",
   "feedbackManagement.appFeedback.registerSelectAi": "Select AI feedback に登録する",
+  "feedbackManagement.appFeedback.registerSelectAiHint": "対象の履歴の業務プロファイルの Select AI profile に登録します。",
   "feedbackManagement.appFeedback.selectAiResponse": "Select AI response SQL",
   "feedbackManagement.appFeedback.selectAiResponsePlaceholder": "Select AI feedback に登録する response SQL",
   "feedbackManagement.appFeedback.openCandidate": "学習候補で確認",
@@ -3300,6 +3310,8 @@ const nl2sqlJa = {
   "viewMgmt.joinWhere.join": "結合条件 (JOIN)",
   "viewMgmt.joinWhere.where": "抽出条件 (WHERE)",
   "viewMgmt.joinWhere.structureResult": "SQL構造解析結果",
+  "viewMgmt.joinWhere.source.ociEnterpriseAi": "OCI Enterprise AI",
+  "viewMgmt.joinWhere.source.deterministic": "規則ベース（AI 未使用）",
   "viewMgmt.joinWhere.empty": "ビューを選択すると JOIN/WHERE 条件を抽出できます。",
   "viewMgmt.error.load": "ビュー一覧の読込に失敗しました。",
   "viewMgmt.error.detail":

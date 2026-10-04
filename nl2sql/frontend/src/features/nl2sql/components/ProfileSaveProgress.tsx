@@ -15,6 +15,7 @@ import { engineLabel } from "../labels";
 import {
   profileSaveProgressPresentation,
   type ProfileSaveProgressStatus,
+  type ProfileSaveProgressStepId,
   type ProfileSaveProgressStepStatus,
 } from "../profileSyncPresentation";
 import type { AssetRefreshData, ProfileSyncJobData } from "../types";
@@ -40,23 +41,42 @@ function stepStatusLabel(status: ProfileSaveProgressStepStatus) {
   return t(`nl2sql.progress.step.${status}`);
 }
 
-function progressMessage(job: ProfileSyncJobData | null, status: ProfileSaveProgressStatus) {
+function progressMessage(
+  job: ProfileSyncJobData | null,
+  status: ProfileSaveProgressStatus,
+  failedStep: ProfileSaveProgressStepId | undefined,
+) {
   if (status === "submission_failed") return t("profiles.oracle.progress.message.submissionFailed");
   if (status === "succeeded") return t("profiles.oracle.progress.message.succeeded");
+  // DBMS_CLOUD_AI Profile の反映は済み、後の工程だけが失敗した「一部の成功」は、済んだことを先に書く。
+  if (status === "failed" && failedStep === "rebuild_agent_assets") {
+    return t("profiles.oracle.progress.message.agentFailed");
+  }
+  if (status === "failed" && failedStep === "verify") {
+    return t("profiles.oracle.progress.message.verifyFailed");
+  }
   if (status === "failed") return t("profiles.oracle.progress.message.failed");
   if (status === "cancelled") return t("profiles.oracle.progress.message.cancelled");
   if (status === "queued") return t("profiles.oracle.progress.message.queued");
   return t(`profiles.oracle.sync.phase.${job?.phase ?? "syncing_oracle_profile"}`);
 }
 
-function failureMessage(job: ProfileSyncJobData | null, submissionError: string) {
+function failureMessage(
+  job: ProfileSyncJobData | null,
+  submissionError: string,
+  failedStep: ProfileSaveProgressStepId | undefined,
+) {
   if (job?.error_code === "SELECT_AI_CREDENTIAL_MISSING") {
     return t("profiles.oracle.sync.credentialMissing");
   }
   const detail = submissionError || job?.error_message_ja || "";
   const summary = submissionError
     ? t("profiles.oracle.sync.savedButFailed")
-    : t("profiles.oracle.sync.failed");
+    : failedStep === "rebuild_agent_assets"
+      ? t("profiles.oracle.sync.agentFailed")
+      : failedStep === "verify"
+        ? t("profiles.oracle.sync.verifyFailed")
+        : t("profiles.oracle.sync.failed");
   return detail ? `${summary} ${detail}` : summary;
 }
 
@@ -124,6 +144,7 @@ export function ProfileSaveProgress({
   if (!presentation) return null;
 
   const failed = presentation.status === "failed" || presentation.status === "submission_failed";
+  const failedStep = presentation.steps.find((step) => step.status === "error")?.id;
   const credentialMissing = job?.error_code === "SELECT_AI_CREDENTIAL_MISSING";
   const shortJobId = job
     ? `${job.job_id.slice(0, 12)}${job.job_id.length > 12 ? "…" : ""}`
@@ -137,7 +158,7 @@ export function ProfileSaveProgress({
       finishedAt={job?.finished_at}
       title={t("profiles.oracle.progress.title")}
       titleId="profile-save-progress-title"
-      message={progressMessage(job, presentation.status)}
+      message={progressMessage(job, presentation.status, failedStep)}
       statusLabel={t(`profiles.oracle.progress.status.${presentation.status}`)}
       statusVariant={statusVariant(presentation.status)}
       tone={progressTone(presentation.status)}
@@ -197,7 +218,7 @@ export function ProfileSaveProgress({
               </div>
             }
           >
-            {failureMessage(job, submissionError)}
+            {failureMessage(job, submissionError, failedStep)}
           </Banner>
         ) : undefined
       }

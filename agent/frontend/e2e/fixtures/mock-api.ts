@@ -572,6 +572,150 @@ class HttpError extends Error {
   }
 }
 
+// ---- backend の権限の判定（#1113）----
+// mock は backend と同じく、API の権限 manifest（`app/security/permissions.py` の `ROUTE_PERMISSIONS`）と、
+// router の capability の判定（`Depends(require_*)`）で 403 を返す。定義は backend のソースから読み、
+// 書き写さない（backend の manifest を変えると mock も追従する）。ローカルの全権限の利用者
+// （システム管理者）は判定しない。
+const BACKEND_APP_DIR = new URL("../../../backend/app/", import.meta.url);
+
+interface BackendRouteRule {
+  method: string;
+  pattern: RegExp;
+  /** 固定の segment の数（`/plugins/marketplaces` を `/plugins/{plugin_id}` より先に選ぶ）。 */
+  staticSegments: number;
+  permissions?: string[];
+  /** router の `require_*` が受け付ける従来のロール（admin は常に通る）。 */
+  roles?: string[];
+}
+
+const REQUIRE_ROLES: Record<string, string[]> = {
+  viewer: ["viewer", "operator", "approver", "auditor"],
+  operator: ["operator"],
+  approver: ["approver"],
+  auditor: ["auditor"],
+  admin: ["admin"],
+};
+
+/** capability → 従来のロール（backend の `CAPABILITY_ROLES`）。 */
+const CAPABILITY_ROLES: Record<string, string> = {
+  "agent.runs.view": "viewer",
+  "agent.runs.operate": "operator",
+  "agent.approvals.decide": "approver",
+  "agent.audit.view": "auditor",
+  "agent.admin": "admin",
+};
+
+function routePattern(template: string): { pattern: RegExp; staticSegments: number } {
+  const segments = template.split("/").filter(Boolean);
+  const source = segments
+    .map((segment) => (/^\{.+\}$/.test(segment) ? "[^/]+" : segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+    .join("/");
+  return {
+    pattern: new RegExp(`^/${source}$`),
+    staticSegments: segments.filter((segment) => !segment.startsWith("{")).length,
+  };
+}
+
+function loadBackendRouteRules(): BackendRouteRule[] {
+  const permissions = readFileSync(new URL("security/permissions.py", BACKEND_APP_DIR), "utf-8");
+  const codes = new Map(
+    [...permissions.matchAll(/^([A-Z][A-Z0-9_]*) = "((?:menu|agent)\.[a-z0-9_.]+)"$/gm)].map((match) => [match[1], match[2]])
+  );
+  const names = (list: string) =>
+    list
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean);
+  const groups = new Map(
+    [...permissions.matchAll(/^(_[A-Z][A-Z0-9_]*) = _any\(([^)]*)\)/gm)].map((match) => [
+      match[1],
+      names(match[2]).map((name) => codes.get(name) ?? name),
+    ])
+  );
+  const paths = new Map([...permissions.matchAll(/^(_[A-Z][A-Z0-9_]*) = "(\/[^"]*)"$/gm)].map((match) => [match[1], match[2]]));
+  const manifest = permissions.slice(permissions.indexOf("ROUTE_PERMISSIONS:"), permissions.indexOf("\n}\n", permissions.indexOf("ROUTE_PERMISSIONS:")));
+  const rules = new Map<string, BackendRouteRule>();
+  const entries = /\(\s*"([A-Z]+)",\s*(?:(f?)"([^"]+)"|(_[A-Z][A-Z0-9_]*))\s*\):\s*(?:_any\(([^)]*)\)|(_[A-Z][A-Z0-9_]*))/g;
+  for (const match of manifest.matchAll(entries)) {
+    const [, method, isFormat, rawPath, pathName, inline, groupName] = match;
+    const path =
+      pathName !== undefined
+        ? (paths.get(pathName) ?? "")
+        : isFormat
+          ? rawPath
+              .replace(/\{(_[A-Z][A-Z0-9_]*)\}/g, (_all, name: string) => paths.get(name) ?? "")
+              .replace(/\{\{|\}\}/g, (brace) => brace[0])
+          : rawPath;
+    const allowed = inline !== undefined ? names(inline).map((name) => codes.get(name) ?? name) : groups.get(groupName) ?? [];
+    rules.set(`${method} ${path}`, { method, ...routePattern(path), permissions: allowed });
+  }
+  const router = readFileSync(new URL("features/agent/router.py", BACKEND_APP_DIR), "utf-8");
+  for (const match of router.matchAll(/@router\.(get|post|put|patch|delete)\(\s*"([^"]+)"[^\n]*\n(?:[^\n]*\n)*?(?:async )?def \w+\(([\s\S]*?)\)\s*->/g)) {
+    const [, rawMethod, path, params] = match;
+    const role = /Depends\(require_(viewer|operator|approver|auditor|admin)\)/.exec(params)?.[1];
+    if (!role) continue;
+    const key = `${rawMethod.toUpperCase()} ${path}`;
+    const rule = rules.get(key) ?? { method: rawMethod.toUpperCase(), ...routePattern(path) };
+    rules.set(key, { ...rule, roles: REQUIRE_ROLES[role] });
+  }
+  return [...rules.values()];
+}
+
+const BACKEND_ROUTE_RULES = loadBackendRouteRules();
+
+function isAllAccess(user: CurrentUserPayload): boolean {
+  return user.is_system_admin;
+}
+
+/** 利用者が使える業務 Agent（null は制限なし。backend の `allowed_agent_ids`。Agent 管理は全対象）。 */
+function agentScope(state: MockApiState): Set<string> | null {
+  const user = state.auth.currentUser;
+  if (!user || isAllAccess(user) || user.allowed_agent_ids === null || user.permissions.includes("agent.admin")) {
+    return null;
+  }
+  return new Set(user.allowed_agent_ids);
+}
+
+function agentAllowed(state: MockApiState, agentId: unknown): boolean {
+  const scope = agentScope(state);
+  return scope === null || scope.has(String(agentId));
+}
+
+/** 業務 Agent の対象範囲の外（backend の `_require_agent_access`）。 */
+function requireAgentAccess(state: MockApiState, agentId: unknown) {
+  if (!agentAllowed(state, agentId)) throw new HttpError(403, "この業務 Agent を使う権限がありません。");
+}
+
+/** capability の不足の文（backend の `_capability_denied_message`。権限管理と同じ名前・並び）。 */
+function capabilityDeniedMessage(roles: string[]): string {
+  const allowed = new Set([...roles, "admin"]);
+  const labels = PERMISSION_CATALOG.filter((item) => allowed.has(CAPABILITY_ROLES[String(item.code)])).map((item) =>
+    String(item.label)
+  );
+  return `この操作を行う権限がありません。必要な権限（いずれか）: ${labels.join("、")}`;
+}
+
+/** API の権限 manifest と router の capability の判定（backend の `authorize_api_request` と `require_*`）。 */
+function enforceBackendPermissions(state: MockApiState, method: string, apiPath: string) {
+  const user = state.auth.currentUser;
+  if (!user || isAllAccess(user)) return;
+  const path = apiPath.replace(/^\/api/, "") || "/";
+  const rule = BACKEND_ROUTE_RULES.filter((candidate) => candidate.method === method && candidate.pattern.test(path)).sort(
+    (left, right) => right.staticSegments - left.staticSegments
+  )[0];
+  if (!rule) return;
+  if (rule.permissions && !rule.permissions.some((code) => user.permissions.includes(code))) {
+    throw new HttpError(403, "この機能を利用する権限がありません。", "SECURITY_ROUTE_FORBIDDEN");
+  }
+  if (rule.roles) {
+    const roles = new Set(user.permissions.map((code) => CAPABILITY_ROLES[code]).filter(Boolean));
+    if (!roles.has("admin") && !rule.roles.some((role) => roles.has(role))) {
+      throw new HttpError(403, capabilityDeniedMessage(rule.roles));
+    }
+  }
+}
+
 function findRole(state: MockApiState, roleId: string): Json {
   return findOr404(state.security.roles, "role_id", roleId, "role");
 }
@@ -860,9 +1004,30 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   if (method === "GET" && at("runtime", "storage")) return state.runtimeStorage;
 
   // --- Run / 承認 / 監査 ---
-  if (method === "GET" && at("runs")) return { runs: state.runs };
+  // 一覧は利用者の対象範囲の業務 Agent の Run だけ（backend の `_filter_runs_for_actor`）。
+  if (method === "GET" && at("runs")) return { runs: state.runs.filter((run) => agentAllowed(state, run.agent_id)) };
   // チャット（#768）。mock の Run はすぐ完了し、質問を引いた回答の成果物を持つ（実行中・承認待ちは spec が state を書き換える）。
   if (method === "POST" && at("runs")) {
+    // backend の create_run と同じ確認（対象範囲・業務 Agent の有無・移行・無効・下書き・公開）。
+    const agentId = String(body.agent_id ?? "default");
+    requireAgentAccess(state, agentId);
+    const agent = state.agents.find((candidate) => candidate.id === agentId);
+    if (!agent) throw new HttpError(404, "業務 Agent が見つかりません。");
+    if (agent.migration_required) {
+      throw new HttpError(409, "Skill を選択して Agent の移行を完了してください。", "agent_migration_required");
+    }
+    if (!agent.enabled) throw new HttpError(409, "無効な業務 Agent は実行できません。", "agent_disabled");
+    const currentUser = state.auth.currentUser;
+    if (body.draft && currentUser && !currentUser.is_system_admin && !currentUser.permissions.includes("agent.admin")) {
+      throw new HttpError(403, "下書きで実行できるのは Agent 管理の権限がある利用者だけです。");
+    }
+    if (!body.draft && (agent.published_version ?? null) === null) {
+      throw new HttpError(
+        409,
+        "公開していない業務 Agent は実行できません。公開するか、下書きで実行してください。",
+        "agent_unpublished"
+      );
+    }
     const threadId = typeof body.thread_id === "string" ? body.thread_id : null;
     if (threadId && !state.runs.some((run) => run.thread_id === threadId)) {
       throw new HttpError(404, "会話が見つかりません。");
@@ -871,7 +1036,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     const run: Json = {
       id,
       goal: String(body.goal ?? ""),
-      agent_id: String(body.agent_id ?? "default"),
+      agent_id: agentId,
       runtime_id: "builtin",
       status: "completed",
       steps: [],
@@ -918,6 +1083,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     for (const run of state.runs) {
       if (typeof run.thread_id !== "string") continue;
       if (agentId && run.agent_id !== agentId) continue;
+      if (!agentAllowed(state, run.agent_id)) continue;
       grouped.set(run.thread_id, [...(grouped.get(run.thread_id) ?? []), run]);
     }
     return {
@@ -939,6 +1105,12 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
   if (head === "runs" && second) {
     const run = findOr404(state.runs, "id", second, "run");
+    // 実行の詳細・操作は利用者の対象範囲の業務 Agent だけ（backend の `_require_agent_access`。
+    // 評価ケースの下書きは範囲外を 404 にする）。
+    if (at("runs", "*", "evaluation-case") && !agentAllowed(state, run.agent_id)) {
+      throw new HttpError(404, "実行が見つかりません。");
+    }
+    requireAgentAccess(state, run.agent_id);
     if (method === "GET" && at("runs", "*", "audit")) {
       return { run_id: run.id, goal: run.goal, status: run.status, records: [] };
     }
@@ -1207,10 +1379,23 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
   }
   // --- 自動実行（#784） ---
+  // 実行できる業務 Agent か（backend の `_require_runnable_agent` / `agent_unavailable_reason`。#927）。
+  const requireRunnableAgent = (agentId: unknown) => {
+    const agent = state.agents.find((candidate) => candidate.id === agentId);
+    if (!agent) throw new HttpError(422, "業務 Agent が見つかりません。");
+    if (!agent.enabled || agent.migration_required) throw new HttpError(422, "この業務 Agent は実行できない状態です。");
+    if (agent.published_version === null) {
+      throw new HttpError(422, "公開していない業務 Agent は実行できません。公開してから使ってください。");
+    }
+  };
   if (method === "GET" && at("automations")) {
-    return { automations: state.automations, persistent: state.automationsPersistent };
+    return {
+      automations: state.automations.filter((item) => agentAllowed(state, item.agent_id)),
+      persistent: state.automationsPersistent,
+    };
   }
   if (method === "POST" && at("automations")) {
+    requireRunnableAgent(body.agent_id);
     const item: Json = {
       ...automationFields(body),
       id: `auto-${state.automations.length + 1}`,
@@ -1234,6 +1419,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return { automation: item, runs: state.automationRuns[String(item.id)] ?? [] };
     }
     if (method === "PUT" && at("automations", "*")) {
+      // 業務 Agent を変えるときと有効のまま保存するときだけ確かめる（無効にする保存は通す）。
+      if (body.agent_id !== item.agent_id || body.enabled) requireRunnableAgent(body.agent_id);
       Object.assign(item, automationFields(body), { updated_at: MOCK_NOW });
       return item;
     }
@@ -1250,9 +1437,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         last_run_id: runId,
         last_trigger: "manual",
         last_result: "created",
-        last_message: "Run を作りました。",
+        last_message: "実行を作りました。",
       });
-      return { run_id: runId, result: "created", message: "Run を作りました。" };
+      return { run_id: runId, result: "created", message: "実行を作りました。" };
     }
     if (method === "POST" && at("automations", "*", "webhook-token")) {
       if (item.trigger !== "webhook") throw new HttpError(409, "Webhook のトリガーではありません。");
@@ -1269,12 +1456,29 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   if (method === "GET" && at("audit", "tool-calls")) {
     const offset = Number(query.get("offset") ?? 0);
     const limit = Number(query.get("limit") ?? 100);
+    // backend の `_audit_record_matches` と同じ絞り込み（完全一致）。
+    const exact: [string, string][] = [
+      ["run_id", "run_id"],
+      ["tool_name", "tool_name"],
+      ["status", "status"],
+      ["approval_status", "approval_status"],
+      ["error_code", "error_code"],
+    ];
+    const warnings = query.get("has_guardrail_warnings");
+    const matched = state.auditRecords.filter(
+      (record) =>
+        exact.every(([param, field]) => !query.has(param) || record[field] === query.get(param)) &&
+        (warnings === null ||
+          ((record.guardrail_warnings as unknown[] | undefined) ?? []).length > 0 === (warnings === "true"))
+    );
     return {
-      total: state.auditRecords.length,
+      total: matched.length,
       offset,
       limit,
-      filters: {},
-      records: state.auditRecords.slice(offset, offset + limit),
+      filters: Object.fromEntries([...query.entries()].filter(([key]) => key !== "offset" && key !== "limit")),
+      records: matched.slice(offset, offset + limit),
+      // 絞り込みに依らない、記録されたツール名（#983）。
+      tool_names: [...new Set(state.auditRecords.map((record) => String(record.tool_name)))].sort(),
     };
   }
   if (method === "GET" && at("tools")) return { tools: state.tools };
@@ -1298,9 +1502,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (!published) return true;
       return VERSIONED.some((field) => JSON.stringify(agent[field] ?? null) !== JSON.stringify(published[field] ?? null));
     };
-    if (method === "GET" && at("agents")) return { agents: state.agents };
+    // 一覧は利用者の対象範囲の業務 Agent だけ（backend の list_agents）。
+    if (method === "GET" && at("agents")) return { agents: state.agents.filter((agent) => agentAllowed(state, agent.id)) };
     if (method === "POST" && at("agents")) {
-      const id = String(body.id ?? `agent-${state.agents.length + 1}`);
+      // backend の create_agent と同じく、送られた ID は URL に置ける形だけを受け付ける（#1033）。
+      const id = String(body.id ?? `agent-${state.agents.length + 1}`).trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(id)) {
+        throw new HttpError(422, "業務 Agent の ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。");
+      }
       if (state.agents.some((agent) => agent.id === id)) {
         throw new HttpError(400, "同じ ID の業務 Agent があります。");
       }
@@ -1315,6 +1524,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         created_at: MOCK_NOW,
         updated_at: MOCK_NOW,
         ...body,
+        id,
         // 画面・API で作る Agent は下書きから始める（#770）。
         versioned: true,
         versions: [],
@@ -1367,9 +1577,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return { skills: state.skills, metadata: { count: state.skills.length } };
     }
     if (method === "POST" && at("skills")) {
-      const id = String(body.id ?? "");
-      if (!id || state.skills.some((skill) => skill.id === id)) {
-        throw new HttpError(409, `skill already exists: ${id}`);
+      // backend の create_agent_skill と同じ検証（#926）。
+      const id = String(body.id ?? "").trim();
+      if (!id) throw new HttpError(400, "スキルの ID を入力してください。");
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(id)) {
+        throw new HttpError(422, "スキルの ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。");
+      }
+      if (state.skills.some((skill) => skill.id === id)) {
+        throw new HttpError(409, "同じ ID のスキルがあります。");
       }
       const skill = skillFromPayload(body, "runtime");
       state.skills.push(skill);
@@ -1377,8 +1592,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     if (at("skills", "*")) {
       const skill = findOr404(state.skills, "id", second, "skill");
-      if (skill.source === "builtin" && method !== "GET") {
-        throw new HttpError(409, `builtin skill cannot be modified: ${second}`);
+      if (skill.source !== "runtime" && method === "PATCH") {
+        throw new HttpError(
+          400,
+          "組み込み・ファイル・環境変数・プラグインのスキルは画面から変更できません。読み込み元の定義を変更してください。"
+        );
+      }
+      if (skill.source !== "runtime" && method === "DELETE") {
+        throw new HttpError(400, "組み込み・ファイル・環境変数・プラグインのスキルは画面から削除できません。");
       }
       if (method === "GET") return skill;
       if (method === "PATCH") {
@@ -1386,6 +1607,21 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         return skill;
       }
       if (method === "DELETE") {
+        // 業務 Agent の下書きか公開中の版が使っていれば断る（backend の delete_agent_skill。#926）。
+        const users = state.agents
+          .filter((agent) => {
+            const published = ((agent.versions as Json[] | undefined) ?? []).find(
+              (item) => item.version === agent.published_version
+            );
+            return [agent.skill_ids, published?.skill_ids].some((ids) => ((ids as string[] | undefined) ?? []).includes(second));
+          })
+          .map((agent) => String(agent.name || agent.id));
+        if (users.length) {
+          throw new HttpError(
+            409,
+            `このスキルは業務 Agent（${users.join("、")}）が使っています。業務 Agent のスキルから外してから削除してください。`
+          );
+        }
         state.skills = state.skills.filter((candidate) => candidate.id !== second);
         return { skills: state.skills, metadata: { count: state.skills.length } };
       }
@@ -1401,6 +1637,18 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (second === "marketplaces") {
       if (method === "GET" && at("plugins", "marketplaces")) return { marketplaces: state.marketplaces };
       if (method === "POST" && at("plugins", "marketplaces")) {
+        // backend の add_plugin_marketplace と同じ検証（#928。同じ ID は上書きせず 409）。
+        const id = String(body.id ?? "").trim();
+        if (!id) throw new HttpError(400, "マーケットプレイスの ID を入力してください。");
+        if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(id)) {
+          throw new HttpError(
+            422,
+            "マーケットプレイスの ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。"
+          );
+        }
+        if (state.marketplaces.some((source) => source.id === id)) {
+          throw new HttpError(409, "同じ ID のマーケットプレイスがあります。");
+        }
         const source = {
           id: body.id,
           name: body.name ?? body.id,
@@ -1441,7 +1689,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       }
       if (!manifest?.id) throw new HttpError(400, "plugin manifest is required");
       if (state.plugins.some((plugin) => plugin.id === manifest.id)) {
-        throw new HttpError(409, `plugin already installed: ${String(manifest.id)}`);
+        throw new HttpError(409, "このプラグインは導入済みです。");
       }
       const record = pluginRecord(manifest, marketplaceId);
       state.plugins.push(record);
@@ -1451,10 +1699,33 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return record;
     }
     if (at("plugins", "*")) {
-      const plugin = findOr404(state.plugins, "id", second, "plugin");
+      const plugin = state.plugins.find((candidate) => candidate.id === second);
+      if (!plugin) throw new HttpError(404, "プラグインが見つかりません。");
       if (method === "GET") return plugin;
+      // 業務 Agent が下書きか公開中の版で使うスキルを含むプラグインは、無効化・削除しない
+      // （backend の PluginRegistry._ensure_not_referenced。#1032）。
+      if ((method === "PATCH" && body.enabled === false) || method === "DELETE") {
+        const manifest = (plugin.manifest as Json | undefined) ?? {};
+        const pluginSkillIds = new Set(((manifest.skills as Json[] | undefined) ?? []).map((skill) => String(skill.id)));
+        const users = state.agents
+          .filter((agent) => {
+            const published = ((agent.versions as Json[] | undefined) ?? []).find(
+              (item) => item.version === agent.published_version
+            );
+            return [agent.skill_ids, published?.skill_ids].some((ids) =>
+              ((ids as string[] | undefined) ?? []).some((id) => pluginSkillIds.has(id))
+            );
+          })
+          .map((agent) => String(agent.name || agent.id));
+        if (users.length) {
+          throw new HttpError(
+            409,
+            `このプラグインのスキルは業務 Agent（${users.join("、")}）が使っています。業務 Agent のスキルから外して公開してから、無効化・削除してください。`
+          );
+        }
+      }
       if (method === "PATCH") {
-        plugin.enabled = Boolean(body.enabled);
+        if (body.enabled !== undefined) plugin.enabled = Boolean(body.enabled);
         return plugin;
       }
       if (method === "DELETE") {
@@ -1691,6 +1962,16 @@ async function fulfillJson(route: Route, status: number, payload: unknown) {
   await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(payload) });
 }
 
+async function fulfillHttpError(route: Route, error: HttpError) {
+  await fulfillJson(route, error.status, {
+    data: null,
+    error_messages: [error.message],
+    warning_messages: [],
+    error_code: error.errorCode ?? null,
+    detail: error.message,
+  });
+}
+
 export async function installMockApi(page: Page): Promise<MockApi> {
   const mockApi: MockApi = {
     state: createState(),
@@ -1723,6 +2004,14 @@ export async function installMockApi(page: Page): Promise<MockApi> {
       body,
       headers: await request.allHeaders(),
     });
+    // backend と同じ権限の判定（manifest と capability。#1113）。
+    try {
+      enforceBackendPermissions(mockApi.state, method, url.pathname);
+    } catch (error) {
+      if (!(error instanceof HttpError)) throw error;
+      await fulfillHttpError(route, error);
+      return;
+    }
     // Run のイベント購読（SSE）。e2e は stream を保てないため空の stream を返して閉じる
     // （画面は購読の停止を示す。#215）。
     // Excel の書き出し・テンプレート（#776）。中身は確かめないため、Excel の形の空のデータを返す。
@@ -1758,13 +2047,7 @@ export async function installMockApi(page: Page): Promise<MockApi> {
       await fulfillJson(route, 200, { data, error_messages: [], warning_messages: [] });
     } catch (error) {
       if (error instanceof HttpError) {
-        await fulfillJson(route, error.status, {
-          data: null,
-          error_messages: [error.message],
-          warning_messages: [],
-          error_code: error.errorCode ?? null,
-          detail: error.message,
-        });
+        await fulfillHttpError(route, error);
         return;
       }
       throw error;
