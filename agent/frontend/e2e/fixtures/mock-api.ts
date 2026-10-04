@@ -1521,6 +1521,15 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (third && at("settings", "mcp-connections", "*")) {
         const connection = findOr404(store.connections, "server_id", third, "MCP 接続");
         if (method === "PATCH") {
+          // RAG / NL2SQL の認証方式・audience は変えられない（backend と同じ 400。#1014）。
+          const builtinAuthChanged =
+            connection.source === "builtin" &&
+            ((body.auth_mode != null && body.auth_mode !== connection.auth_mode) ||
+              (body.service_audience != null &&
+                (String(body.service_audience).trim() || third) !== connection.service_audience));
+          if (builtinAuthChanged) {
+            throw new HttpError(400, "RAG / NL2SQL の接続の認証方式と audience は変えられません。");
+          }
           Object.assign(connection, mcpConnection({ ...body, server_id: third }, connection));
           return connection;
         }

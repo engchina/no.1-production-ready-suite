@@ -2882,6 +2882,15 @@ def _mcp_connections_response() -> McpConnectionsData:
     )
 
 
+def _changes_builtin_auth(current: McpConnectionConfig, patch: McpConnectionPatch) -> bool:
+    """組み込みの接続（RAG / NL2SQL）の認証方式・audience を今と違う値にする変更か。"""
+    if patch.auth_mode is not None and patch.auth_mode != current.effective_auth_mode():
+        return True
+    return patch.service_audience is not None and (
+        (patch.service_audience.strip() or current.server_id) != current.audience()
+    )
+
+
 def _upsert_mcp_connection(server_id: str, payload: McpConnectionPatch) -> McpConnectionConfig:
     config = runtime_config_store.upsert_mcp_server(
         server_id,
@@ -3036,9 +3045,15 @@ async def patch_mcp_connection(
     _: None = Depends(require_admin),
 ) -> ApiResponse[McpConnectionSettings]:
     try:
-        runtime_config_store.get_mcp(server_id)
+        current = runtime_config_store.get_mcp(server_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="MCP 接続が見つかりません。") from exc
+    if current.source == "builtin" and _changes_builtin_auth(current, patch):
+        # RAG / NL2SQL は Run の利用者のサービストークンで呼ぶ（再起動の後の復元も認証方式を戻す）。
+        raise HTTPException(
+            status_code=400,
+            detail="RAG / NL2SQL の接続の認証方式と audience は変えられません。",
+        )
     config = _upsert_mcp_connection(server_id, patch)
     return ApiResponse(data=_mcp_connection_settings(config))
 
