@@ -19,7 +19,8 @@ import { classifyPollFailure } from "./jobPollingPolicy";
 import type { JobCreateData, JobData, Nl2SqlResult } from "./types";
 
 interface UseNl2SqlJobPollingOptions {
-  onResult(result: Nl2SqlResult): void;
+  /** 終わったジョブの結果。`job.status` で SQL を実行して結果を整形したか（`done`）を判定できる（#917）。 */
+  onResult(result: Nl2SqlResult, job: JobData): void;
   /** job 自体の失敗(終端遷移の error_message)。表示は OperationStatusStrip 側が正本。 */
   onJobFailed(message: string): void;
   /** ポーリング通信の断念(連続失敗)/ job 消失(404)。追跡は解除済みで UI ロックは解ける。 */
@@ -103,7 +104,7 @@ export function useNl2SqlJobPolling({
       setJob(data);
       if (isJobTerminal(data.status)) {
         withStorage((storage) => clearActiveJobSnapshot(storage, jobId));
-        if (data.result) onResult(data.result);
+        if (data.result) onResult(data.result, data);
         if (data.error_message) onJobFailed(data.error_message);
         if (signal?.aborted) return data;
         try {
@@ -137,7 +138,18 @@ export function useNl2SqlJobPolling({
     setJobStorageUnavailable(!saved);
     consecutiveFailuresRef.current = 0;
     setJobStartedAt(startedAtMs);
-    setJob({ ...data, result: null, error_message: null, warning_message: null, timing: null });
+    // 投入の応答が届かずに取り直したジョブ（#916）は、既に終わっていることがある。結果・履歴の反映は
+    // ポーリングの経路で 1 回だけ行うため、終わったジョブも取得待ちとして追跡を始める。
+    setJob({
+      job_id: data.job_id,
+      status: isJobInFlight(data.status) ? data.status : "pending",
+      created_at: data.created_at,
+      steps: data.steps,
+      result: null,
+      error_message: null,
+      warning_message: null,
+      timing: null,
+    });
   }, [withStorage]);
 
   const clearTrackedJob = useCallback(() => {

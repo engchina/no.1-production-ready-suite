@@ -186,7 +186,19 @@ test("確認が 10 秒を超えて遅延の案内が出ても、読み込みの�
     if (!box || !card) throw new Error("読み込みの表示が見つかりません");
     return { x: box.x + box.width / 2, y: box.y + box.height / 2, top: card.y, height: card.height };
   };
-  const before = await geometry();
+  // フォント（自己ホストの Noto Sans JP）とレイアウトが確定してから測る。確定の前に測ると、後から当たった
+  // フォントで行の高さが変わり、中央寄せのカードが動いたように見える（遅延の案内とは無関係のずれ）。
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  let before = await geometry();
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await page.waitForTimeout(100);
+    const current = await geometry();
+    const settled = (Object.keys(before) as Array<keyof typeof before>).every(
+      (key) => Math.abs(current[key] - before[key]) < 0.5,
+    );
+    before = current;
+    if (settled) break;
+  }
   await expect(loading).not.toContainText("通常より時間がかかっています");
 
   await page.clock.fastForward(11_000);

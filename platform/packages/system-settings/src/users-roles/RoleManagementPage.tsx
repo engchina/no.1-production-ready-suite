@@ -27,6 +27,7 @@ import {
   Banner,
   ButtonLink,
   EmptyState,
+  ErrorState,
   toast,
   DataTable,
   type DataTableColumn,
@@ -220,6 +221,9 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
         })
       : selectedId;
   const selectedRole = roles.find((role) => role.role_id === visibleSelectedId) ?? null;
+  // 初回の読み込みに失敗してロールが 1 件も無いときは、空の一覧ではなく失敗と再試行を出す（#1038）。
+  // 表示を更新したときの失敗は、前の一覧を残して Banner で出す。
+  const initialLoadFailed = Boolean(loadError) && roles.length === 0;
 
   const load = async (announce = false) => {
     if (mutationBusy) return;
@@ -595,7 +599,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
         actions={
           activeView === "list"
             ? [
-                ...(canManage
+                ...(canManage && !initialLoadFailed
                   ? [
                       {
                         id: "create-role",
@@ -644,10 +648,15 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
         actionsTestId="security-roles-actions"
       />
       <PageBody wide className="grid gap-4">
-        {loadError ? <Banner severity="danger">{loadError}</Banner> : null}
-        {actionError ? <Banner severity="danger">{actionError}</Banner> : null}
+        {loadError && !initialLoadFailed ? <Banner severity="danger">{loadError}</Banner> : null}
+        {/* 編集の画面の操作の失敗は SaveErrorBanner の 1 か所に出す（二重に出さない。#1038）。 */}
+        {activeView === "list" && actionError ? (
+          <Banner severity="danger">{actionError}</Banner>
+        ) : null}
 
-        {activeView === "list" ? (
+        {initialLoadFailed ? (
+          <ErrorState message={loadError} onRetry={() => void load()} />
+        ) : activeView === "list" ? (
           <SecurityManagementPanelShell
             id="security-roles-panel-list"
             idPrefix="security-roles"
