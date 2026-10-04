@@ -1207,10 +1207,20 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
   }
   // --- 自動実行（#784） ---
+  // 実行できる業務 Agent か（backend の `_require_runnable_agent` / `agent_unavailable_reason`。#927）。
+  const requireRunnableAgent = (agentId: unknown) => {
+    const agent = state.agents.find((candidate) => candidate.id === agentId);
+    if (!agent) throw new HttpError(422, "業務 Agent が見つかりません。");
+    if (!agent.enabled || agent.migration_required) throw new HttpError(422, "この業務 Agent は実行できない状態です。");
+    if (agent.published_version === null) {
+      throw new HttpError(422, "公開していない業務 Agent は実行できません。公開してから使ってください。");
+    }
+  };
   if (method === "GET" && at("automations")) {
     return { automations: state.automations, persistent: state.automationsPersistent };
   }
   if (method === "POST" && at("automations")) {
+    requireRunnableAgent(body.agent_id);
     const item: Json = {
       ...automationFields(body),
       id: `auto-${state.automations.length + 1}`,
@@ -1234,6 +1244,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return { automation: item, runs: state.automationRuns[String(item.id)] ?? [] };
     }
     if (method === "PUT" && at("automations", "*")) {
+      // 業務 Agent を変えるときと有効のまま保存するときだけ確かめる（無効にする保存は通す）。
+      if (body.agent_id !== item.agent_id || body.enabled) requireRunnableAgent(body.agent_id);
       Object.assign(item, automationFields(body), { updated_at: MOCK_NOW });
       return item;
     }
@@ -1250,9 +1262,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         last_run_id: runId,
         last_trigger: "manual",
         last_result: "created",
-        last_message: "Run を作りました。",
+        last_message: "実行を作りました。",
       });
-      return { run_id: runId, result: "created", message: "Run を作りました。" };
+      return { run_id: runId, result: "created", message: "実行を作りました。" };
     }
     if (method === "POST" && at("automations", "*", "webhook-token")) {
       if (item.trigger !== "webhook") throw new HttpError(409, "Webhook のトリガーではありません。");
