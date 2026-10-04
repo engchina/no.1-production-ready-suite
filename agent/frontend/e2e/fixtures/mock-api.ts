@@ -234,19 +234,37 @@ function publicJob(job: Json): Json {
   return clone(Object.fromEntries(Object.entries(job).filter(([key]) => key !== "_polls")));
 }
 
-/** 評価セットの入力を保存する形にする（id を省いたケースは `case-<番号>`）。 */
+/**
+ * 評価セットの入力を保存する形にする（backend の `number_cases` と同じ。#965）。
+ * id を省いたケースは使われていない `case-<番号>`（位置の番号から探す）、明示した id の重複は 422。
+ */
 function normalizedSet(body: Json): Json {
+  const cases = (body.cases as Json[] | undefined) ?? [];
+  const explicit = cases.map((item) => String(item.id ?? "").trim()).filter(Boolean);
+  if (new Set(explicit).size !== explicit.length) {
+    throw new HttpError(422, "body.cases: Value error, ケースの id が重複しています。");
+  }
+  const used = new Set(explicit);
   return {
     agent_id: body.agent_id,
     name: body.name,
     description: body.description ?? "",
-    cases: ((body.cases as Json[] | undefined) ?? []).map((item, index) => ({
-      id: (item.id as string | undefined) || `case-${index + 1}`,
-      question: item.question,
-      expected: item.expected,
-      expected_tools: item.expected_tools ?? [],
-      source_run_id: item.source_run_id ?? null,
-    })),
+    cases: cases.map((item, index) => {
+      let id = String(item.id ?? "").trim();
+      if (!id) {
+        let number = index + 1;
+        while (used.has(`case-${number}`)) number += 1;
+        id = `case-${number}`;
+        used.add(id);
+      }
+      return {
+        id,
+        question: item.question,
+        expected: item.expected,
+        expected_tools: item.expected_tools ?? [],
+        source_run_id: item.source_run_id ?? null,
+      };
+    }),
   };
 }
 
@@ -1043,7 +1061,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
   // --- 品質評価（#776） ---
   if (method === "POST" && at("evaluations")) {
-    if (state.evaluations.some((job) => job.status === "running")) {
+    // backend と同じく、待っている（queued）評価も実行中に数える。
+    if (state.evaluations.some((job) => job.status === "running" || job.status === "queued")) {
       throw new HttpError(409, "ほかの評価を実行しています。終わってから始めてください。");
     }
     const evaluationSet = findOr404(state.evaluationSets, "id", String(body.set_id), "evaluation set");
