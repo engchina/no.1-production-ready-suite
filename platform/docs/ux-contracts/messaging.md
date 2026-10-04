@@ -495,7 +495,7 @@ header           : StatusBadge（エンティティの状態の正本 = P1）
 
 - 利用者のメッセージを会話の欄の**末尾**に共有の `ChatUserMessage`（右寄せの吹き出し）で出し、**入力欄を空にし**、会話の欄を最下部までスクロールする（会話の欄のコンテナの `scrollTo`。祖先は動かさない）。
 - 新しい会話の最初の送信も、**会話の作成を待たない**。空の状態（「最初のメッセージを送信して…」など）はすぐ消す。
-- すぐ下に**回答の場所**（作成中の表示。`ProcessingIndicator` と経過時間）を出し、回答が届いたら同じ場所に流し込む（RAG は SSE、NL2SQL はジョブのポーリング、Agent は Run のポーリング）。
+- すぐ下に**回答の場所**（作成中の表示。処理の段階の `ChatProgress`（§11.6）。段階をまだ出せない製品は `ProcessingIndicator` と経過時間）を出し、回答が届いたら同じ場所に流し込む（RAG は SSE、NL2SQL はジョブのポーリング、Agent は Run のポーリング）。
 - 送信中も吹き出しは送信後と同じ見た目にする。**動くスピナーは回答の場所の 1 つだけ**（§3.7）。送信のボタンは同じ位置で「停止」になるか（[buttons.md §3.1](./buttons.md)）、送れない間は押せない。
 - フォーカスは入力欄に残す（Enter で送ったとき）。押したボタンで送ったときはボタンに残す（`RunStopButton`）。入力欄は回答の作成中も書ける。
 
@@ -522,4 +522,18 @@ header           : StatusBadge（エンティティの状態の正本 = P1）
 ### 11.5 実装
 
 - 共有: `ChatUserMessage`（吹き出しと失敗の状態の文）、`createOptimisticChatMessage` / `withOptimisticChatStatus`（仮のメッセージの形。`packages/ui`、[components-reference.md](../design-system/components-reference.md)「ChatUserMessage」）。
+- 回答の場所の処理の段階: `ChatProgress`（§11.6、[components-reference.md](../design-system/components-reference.md)「ChatProgress」）。
 - 製品: RAG `components/chat/ChatClient.tsx`、NL2SQL `features/nl2sql/SqlChatPage.tsx`、Agent `pages/ChatPage.tsx`。Playwright は応答を遅らせ、送信の直後（応答の前）に質問と作成中の表示が出ることを、desktop / 375px・新しい会話と続きの会話・失敗 → 再送信・停止で確かめる。
+
+### 11.6 回答の場所の処理の段階（#1145）
+
+3 製品のチャットは、回答の作成中に backend が今何をしているか（送信・開始待ち・対象の調査・生成・実行・まとめ・ツールの呼び出しなど）を、回答の場所に共有の `ChatProgress` で出す。AG-UI の `STEP_STARTED` / `STEP_FINISHED` / `TOOL_CALL_*` / `RUN_ERROR` に倣った 3 製品共通の段階の形（`ChatProgressStep`: `id` / `label` / `status` / `startedAt` / `finishedAt` / `detail`）を、製品の既存の配信（polling / SSE / WebSocket）で画面に渡す。
+
+- **実行中**: 今の段階の 1 行（スピナー・段階の名前・短い補足・その段階の経過時間）。完了した段階は「✓ N ステップ完了」に畳む（既定は閉じる。開くと段階ごとの状態と所要時間）。
+- **遅延**: 10 秒を超えた段階の行に「通常より時間がかかっています。」を付け、どの段階で時間がかかっているかを示す（§3.7 の slow hint を段階の行に付けたもの）。
+- **完了後**: 回答の上に「処理の経過（N ステップ・M 秒）」の 1 行に畳む（既定は閉じる）。失敗した段階があれば開いて出す。失敗の原因・対処は段階に入れず、回答の場所の danger の `Banner` で出す（§9 / §10）。
+- **送信の応答待ちも段階にする**: 送った質問の確定（§11.2）までは「質問を送信しています」を今の段階にする。送信が遅いとき、生成ではなく送信で待っていることが分かる。job の開始を待つ製品（NL2SQL）は「処理の開始を待っています」を先頭の段階にする。
+- **補足に入れないもの**: SQL 全文・ORA コード・スタックトレース・request ID などの技術的な詳細。補足は対象の表の名前・使ったツール名・件数などの短い語だけ。
+- **読み上げ**: 段階の切り替わりだけを polite で読み上げる（経過時間は読み上げない）。状態はアイコンと文字で示す（色だけに頼らない）。
+- 段階の詳細さは製品の詳細な工程の表示（NL2SQL の SQL 生成の画面の `WorkflowProgressStrip`）より絞る。チャットの回答の場所を工程の一覧で埋めない。
+- 製品の対応: NL2SQL はジョブの `steps`（段階の開始・終了の時刻付き）から `features/nl2sql/chatProgress.ts` で作る。RAG・Agent は同じ形で backend から段階を出してつなぐ（別の Issue）。
