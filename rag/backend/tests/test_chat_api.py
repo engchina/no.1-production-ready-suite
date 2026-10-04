@@ -5,6 +5,7 @@ SSE は pipeline を stub して event 列と永続化を検証する。実 SQL 
 """
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -611,6 +612,133 @@ def test_stream_message_timeout_names_stage_and_saves_error(monkeypatch: MonkeyP
     assert assistant.content == expected
     assert "根拠の検索と回答の生成" in assistant.content
     assert assistant.reply_to_message_id == user.id
+
+
+def _sse_events(text: str, name: str) -> list[dict[str, object]]:
+    """SSE の本文から、名前が ``name`` のイベントの data を順に取り出す。"""
+    events: list[dict[str, object]] = []
+    for block in text.split("\n\n"):
+        lines = block.strip().splitlines()
+        if not lines or lines[0] != f"event: {name}":
+            continue
+        data = "".join(line.removeprefix("data: ") for line in lines[1:])
+        events.append(json.loads(data))
+    return events
+
+
+class _StagedPipeline(_FakePipeline):
+    """回答フローの工程の進捗を送ってから回答する pipeline（#1146）。"""
+
+    async def run(  # type: ignore[no-untyped-def]
+        self,
+        request,
+        trace_id=None,
+        progress_callback=None,
+        token_callback=None,
+        *,
+        history=None,
+        query_guardrail_result=None,
+    ):
+        assert progress_callback is not None
+        for stage, outcome in (
+            ("answer", "started"),
+            ("answer_step:質問の理解", "started"),
+            ("answer_step:質問の理解", "success"),
+            ("answer_step:文書検索", "started"),
+            ("answer_step:Rerank", "started"),
+            ("answer_step:Rerank", "success"),
+            ("answer_step:文書検索", "success"),
+            ("answer_step:回答文の生成と根拠確認（1回目）", "started"),
+            ("answer_step:回答文の生成と根拠確認（1回目）", "success"),
+            ("answer", "success"),
+            ("answer_guardrail", "started"),
+            ("answer_guardrail", "success"),
+        ):
+            await progress_callback(
+                SearchStageProgress(
+                    trace_id=trace_id or "trace",
+                    stage=stage,
+                    outcome=outcome,
+                    elapsed_ms=0.0,
+                    attributes={},
+                )
+            )
+        return await super().run(  # type: ignore[no-untyped-call]
+            request,
+            trace_id,
+            None,
+            token_callback,
+            history=history,
+            query_guardrail_result=query_guardrail_result,
+        )
+
+
+def _step_statuses(event: dict[str, object]) -> dict[str, str]:
+    steps = event["steps"]
+    assert isinstance(steps, list)
+    return {str(step["id"]): str(step["status"]) for step in steps}
+
+
+def test_stream_message_sends_chat_progress_steps(monkeypatch: MonkeyPatch) -> None:
+    """処理の段階（ChatProgressStep）を progress で送り、完了の段階は回答の前に届く（#1146）。"""
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-progress")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    monkeypatch.setattr(chat_route, "RagPipeline", _StagedPipeline)
+    monkeypatch.setattr(get_settings(), "rag_rerank_enabled", True)
+
+    resp = client.post(
+        "/api/chat/conversations/conv-progress/messages/stream", json={"content": "経費の上限は?"}
+    )
+
+    assert resp.status_code == 200
+    events = _sse_events(resp.text, "progress")
+    assert all(event["model_id"] == "m1" for event in events)
+    # 最初は全段階が未開始。段階が変わるたびに全体を送る。
+    assert set(_step_statuses(events[0]).values()) == {"pending"}
+    running = [
+        next(step for step, status in _step_statuses(event).items() if status == "running")
+        for event in events[1:-1]
+    ]
+    assert running == [
+        "rewrite_query",
+        "retrieve",
+        "rerank",
+        "generate_answer",
+        "check_guardrail",
+    ]
+    final = events[-1]
+    assert set(_step_statuses(final).values()) == {"done"}
+    steps = {str(step["id"]): step for step in final["steps"]}  # type: ignore[union-attr]
+    assert steps["retrieve"]["detail"] == "根拠 1 件"
+    assert steps["generate_answer"]["label"] == "回答を作っています"
+    # 完了の段階は回答（delta）の前に届く。
+    assert resp.text.rindex("event: progress") < resp.text.index("event: delta")
+    # 既存の stage イベントは変えない。
+    assert '"stage": "answer_step:文書検索", "outcome": "started"' in resp.text
+
+
+def test_stream_message_progress_marks_running_step_failed_on_timeout(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """時間切れでは実行中の段階を failed にした progress を error の前に送る（#1146）。"""
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-progress-timeout")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    monkeypatch.setattr(chat_route, "RagPipeline", _SlowPlanningPipeline)
+    monkeypatch.setattr(get_settings(), "rag_answer_timeout_seconds", 0.05)
+
+    resp = client.post(
+        "/api/chat/conversations/conv-progress-timeout/messages/stream", json={"content": "得点は?"}
+    )
+
+    text = resp.text
+    final = _sse_events(text, "progress")[-1]
+    statuses = _step_statuses(final)
+    # 最後に始まった段階（質問の整理）を failed にし、始まらなかった段階は未開始のまま。
+    assert statuses["rewrite_query"] == "failed"
+    assert statuses["retrieve"] == "pending"
+    assert text.rindex("event: progress") < text.index("event: error")
 
 
 def test_chat_answer_uses_answer_timeout_not_search_timeout(monkeypatch: MonkeyPatch) -> None:
