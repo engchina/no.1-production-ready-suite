@@ -44,7 +44,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
@@ -167,12 +167,9 @@ export function ServicesManagementClient() {
   if (query.isError) {
     return (
       <PageBody wide>
-        <ErrorState
-          message={
-            query.error instanceof ApiError
-              ? query.error.message
-              : t("settings.services.loadError")
-          }
+        <ApiErrorState
+          error={query.error}
+          fallback={t("settings.services.loadError")}
           onRetry={() => void query.refetch()}
         />
       </PageBody>

@@ -18,7 +18,7 @@ import {
 import { recipeConfigValueLabel } from "@/components/documents/DocumentProcessingConfigPanel.values";
 import { canOpenNavRoute } from "@/components/layout/nav-config";
 import { useAuth } from "@/components/security/AuthProvider";
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import {
   ApiError,
   type PipelineAutoAdvanceField,
@@ -86,10 +86,9 @@ export function PipelineRecipeDefaultsSection() {
           </div>
         </TimedLoadingState>
       ) : query.isError || !query.data ? (
-        <ErrorState
-          message={
-            query.error instanceof ApiError ? query.error.message : t("settings.pipeline.flow.loadError")
-          }
+        <ApiErrorState
+          error={query.error}
+          fallback={t("settings.pipeline.flow.loadError")}
           onRetry={() => void query.refetch()}
         />
       ) : (

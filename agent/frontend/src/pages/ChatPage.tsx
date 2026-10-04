@@ -38,6 +38,8 @@ import {
   toast,
   withOptimisticChatStatus,
   type OptimisticChatMessage,
+  ApiErrorBanner,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -221,7 +223,7 @@ export function ChatPage() {
       toast.success(approved ? t("chat.approval.approved") : t("chat.approval.rejected"));
       void queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
 
   function submit() {
@@ -306,7 +308,7 @@ export function ChatPage() {
                 <Skeleton className="h-10 w-full" />
               </TimedLoadingState>
             ) : agents.isError ? (
-              <Banner severity="danger">{agents.error.message}</Banner>
+              <ApiErrorBanner error={agents.error} fallback={t("common.error.load")} />
             ) : usableAgents.length === 0 ? (
               <EmptyState title={t("chat.agent.empty")} />
             ) : (
@@ -442,7 +444,7 @@ export function ChatPage() {
                 {pending ? (
                   <PendingTurn
                     message={pending}
-                    errorMessage={send.error?.message ?? null}
+                    errorMessage={send.error ? apiErrorMessage(send.error, t("chat.failedUnknown")) : null}
                     resendDisabled={composerBlocked || send.isPending}
                     onResend={resend}
                   />
@@ -488,7 +490,7 @@ export function ChatPage() {
                 </FieldActionRow>
                 {cancel.error ? (
                   <Banner severity="danger" title={t("chat.stopFailed")}>
-                    {cancel.error.message}
+                    {apiErrorMessage(cancel.error, t("common.error.retryLater"))}
                   </Banner>
                 ) : null}
               </div>

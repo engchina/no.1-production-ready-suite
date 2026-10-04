@@ -12,7 +12,6 @@ import {
   DataTable,
   Disclosure,
   EmptyState,
-  ErrorState,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   ListSkeleton,
@@ -33,6 +32,8 @@ import {
   type DataTableColumn,
   type EntityAction,
   type StatusVariant,
+  ApiErrorState,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 
 import { MissingEditorTarget } from "@/components/EntityLayout";
@@ -102,7 +103,7 @@ export function EvaluationPage() {
       toast.success(t("evaluation.form.started"));
       editor.backToList();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
 
   const editorTarget = editor.target;
@@ -257,7 +258,7 @@ function EvaluationOverview({
       void queryClient.invalidateQueries({ queryKey: ["evaluations"] });
       toast.success(t("evaluation.progress.cancelled"));
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
   const removeJob = useMutation({
     mutationFn: (id: string) => agentApi.deleteEvaluation(id),
@@ -267,7 +268,7 @@ function EvaluationOverview({
       void queryClient.invalidateQueries({ queryKey: ["evaluations"] });
       toast.success(t("evaluation.jobs.deleted"));
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
   // 業種テンプレートの評価ケースで評価セットを作る（評価セットの無い、テンプレートから作った業務 Agent。#810）。
   const fromTemplate = useMutation({
@@ -276,7 +277,7 @@ function EvaluationOverview({
       void queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
       toast.success(t("evaluation.sets.fromTemplateCreated", { name: created.name }));
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
   const removeSet = useMutation({
     mutationFn: (id: string) => agentApi.deleteEvaluationSet(id),
@@ -284,7 +285,7 @@ function EvaluationOverview({
       void queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
       toast.success(t("evaluation.set.deleted"));
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
 
   async function confirmDeleteJob(item: EvaluationJobItem) {
@@ -314,7 +315,7 @@ function EvaluationOverview({
     try {
       downloadBlob(await agentApi.downloadEvaluationSetXlsx(item.id), `${item.name}.xlsx`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(apiErrorMessage(error, t("common.error.operation")));
     }
   }
 
@@ -361,7 +362,7 @@ function EvaluationOverview({
               </TimedLoadingState>
             ) : sets.error ? (
               // 取得の失敗を「評価セットがありません」と出さない（messaging.md §3.6。#818）。
-              <ErrorState message={sets.error.message} retryLabel={t("common.retry")} onRetry={() => void sets.refetch()} />
+              <ApiErrorState error={sets.error} fallback={t("common.error.load")} retryLabel={t("common.retry")} onRetry={() => void sets.refetch()} />
             ) : (sets.data?.sets ?? []).length === 0 ? (
               <EmptyState
                 title={t("evaluation.sets.empty")}
@@ -423,7 +424,7 @@ function EvaluationOverview({
                 <ListSkeleton rows={3} />
               </TimedLoadingState>
             ) : jobs.error && !jobs.data ? (
-              <ErrorState message={jobs.error.message} retryLabel={t("common.retry")} onRetry={() => void jobs.refetch()} />
+              <ApiErrorState error={jobs.error} fallback={t("common.error.load")} retryLabel={t("common.retry")} onRetry={() => void jobs.refetch()} />
             ) : !jobs.data || jobs.data.total === 0 ? (
               <EmptyState title={t("evaluation.jobs.empty")} hint={t("evaluation.jobs.emptyHint")} />
             ) : (
