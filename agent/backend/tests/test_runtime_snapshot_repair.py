@@ -265,7 +265,7 @@ def test_unrepairable_runs_are_quarantined_and_kept_on_the_next_save(
     quarantined = {record.id: record for record in repository.export_snapshot().quarantined}
     assert quarantined["run_broken"].raw == broken_schema
     assert quarantined["run_broken"].reasons == ["status: enum"]
-    assert "missing step" in quarantined["run_missing_step"].reasons[0]
+    assert "無いステップ" in quarantined["run_missing_step"].reasons[0]
     # 退避した JSON は、ほかの変更の保存でも消えない。
     repository.persist_control_plane_state()
     stored = store.stored()
