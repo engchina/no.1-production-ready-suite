@@ -517,10 +517,9 @@ async def require_system_settings_write(request: Request) -> None:
         or UNCLASSIFIED_PERMISSION in permissions
         or not principal.has_any_permission(set(permissions))
     ):
-        raise HTTPException(
-            status_code=403,
-            detail=f"actor {principal.login_user_id} cannot change system settings",
-        )
+        # 共通の route の権限の拒否と同じ文にする（ログインユーザー ID や英語の内部の文を出さない。
+        # error_code は付けない。#1108）。
+        raise HTTPException(status_code=403, detail="この機能を利用する権限がありません。")
 
 
 # アップロード保存先は3製品共通の実装（platform の pr_system_settings。#97）。
