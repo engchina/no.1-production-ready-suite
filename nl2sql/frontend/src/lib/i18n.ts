@@ -42,6 +42,9 @@ const nl2sqlJa = {
   "chat.sendTimeout.action":
     "サーバーでは SQL の生成が始まっている可能性があります。少し待ってから会話の履歴を確かめ、見当たらなければもう一度送信してください。",
   "chat.stopFailed": "SQL の生成を停止できませんでした。",
+  "chat.sendFailedStatus": "送信できませんでした",
+  "chat.resend": "再送信",
+  "chat.messages": "会話",
   "chat.retry": "再読み込み",
   "chat.loadMore": "さらに読み込む",
   "chat.copySql": "SQL をコピー",

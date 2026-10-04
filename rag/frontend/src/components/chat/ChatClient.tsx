@@ -21,6 +21,11 @@ import {
   toast,
   useConfirm,
   RunStopButton,
+  ChatUserMessage,
+  createOptimisticChatMessage,
+  withOptimisticChatStatus,
+  type ChatUserMessageStatus,
+  type OptimisticChatMessage,
 } from "@engchina/production-ready-ui";
 import {
   Check,
@@ -31,10 +36,19 @@ import {
   RotateCcw,
   Search,
   SendHorizontal,
+  Square,
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
@@ -132,9 +146,28 @@ interface LiveColumn {
   startedAtMs: number;
 }
 
+/** 送信の条件（再送信で同じ条件のまま送り直す）。 */
+interface DeliverRequest {
+  content: string;
+  approvedFaqId?: string;
+  clarification?: ClarificationAnswer;
+}
+
+/**
+ * 送信中・生成中・失敗・停止の 1 往復（#907）。
+ *
+ * 送信した瞬間に仮の質問（`pending`）で作り、会話の作成・サーバーの `start` を待たずに会話の欄の末尾へ出す。
+ * `start` で保存済みの質問（`user`）が届いたら置き換え、`all_done` で取り直した会話に引き継いで外す
+ * （同じ質問を二重に出さない）。失敗・停止のときは外さずに残す（送った質問を失わない）。
+ */
 interface LiveTurn {
-  user: ChatMessage;
+  pending: OptimisticChatMessage;
+  /** サーバーが保存した質問。`start` が届くまでは null。 */
+  user: ChatMessage | null;
   columns: LiveColumn[];
+  /** 送信できなかった理由（`pending.status` が `failed` のとき）。 */
+  failureMessage: string | null;
+  request: DeliverRequest;
 }
 
 interface Turn {
@@ -303,12 +336,20 @@ function AssistantColumn({
 /** ユーザー発話 + 回答カラム群を 1 ターンとして表示。 */
 function MessageTurn({
   user,
+  userStatus = "sent",
   columns,
   searchAnswerProfileId,
   onRetry,
   onAskUnscoped,
+  footer,
+  testId,
 }: {
-  user: ChatMessage;
+  user: Pick<ChatMessage, "content" | "guardrail_warnings">;
+  /** 質問の状態（送信中・失敗・停止。#907）。保存済みの質問は `sent`。 */
+  userStatus?: ChatUserMessageStatus;
+  /** 回答の後に出す送信の失敗・停止の表示（#907）。 */
+  footer?: ReactNode;
+  testId?: string;
   searchAnswerProfileId: string;
   /** 失敗した回答があるときに同じ質問をもう一度送る（最新のターンだけ渡す）。 */
   onRetry?: () => void;
@@ -337,12 +378,10 @@ function MessageTurn({
       (column) => !column.streaming && !column.errorMessage && column.answer.includes("（対象:")
     );
   return (
-    <div className="space-y-2">
-      <div className="flex justify-end">
-        <div className="max-w-[85%] whitespace-pre-wrap rounded-md bg-accent-subtle px-3 py-2 text-sm text-fg">
-          {user.content}
-        </div>
-      </div>
+    <div className="space-y-2" data-testid={testId}>
+      <ChatUserMessage status={userStatus} failedLabel={t("chat.send.failed")}>
+        {user.content}
+      </ChatUserMessage>
       {user.guardrail_warnings.length > 0 ? (
         <div className="ml-auto max-w-[85%]">
           <Banner severity="warning">
@@ -351,38 +390,41 @@ function MessageTurn({
           </Banner>
         </div>
       ) : null}
-      <div
-        className="grid grid-cols-1 gap-3"
-        style={
-          compare
-            ? { gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 40rem), 1fr))" }
-            : undefined
-        }
-      >
-        {columns.map((column, index) => (
-          <AssistantColumn
-            key={column.key}
-            label={column.label}
-            answer={column.answer}
-            citations={column.citations}
-            traceId={column.traceId}
-            searchAnswerProfileId={searchAnswerProfileId}
-            messageId={column.messageId}
-            streaming={column.streaming}
-            errorMessage={column.errorMessage}
-            guardrailWarnings={column.guardrailWarnings}
-            answerDiagnostics={column.answerDiagnostics}
-            savedAnswer={column.savedAnswer}
-            progress={column.progress}
-            onRetry={column.errorMessage ? onRetry : undefined}
-            className={
-              compare && columns.length % 2 === 1 && index === columns.length - 1
-                ? "col-span-full"
-                : undefined
-            }
-          />
-        ))}
-      </div>
+      {columns.length > 0 ? (
+        <div
+          className="grid grid-cols-1 gap-3"
+          style={
+            compare
+              ? { gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 40rem), 1fr))" }
+              : undefined
+          }
+        >
+          {columns.map((column, index) => (
+            <AssistantColumn
+              key={column.key}
+              label={column.label}
+              answer={column.answer}
+              citations={column.citations}
+              traceId={column.traceId}
+              searchAnswerProfileId={searchAnswerProfileId}
+              messageId={column.messageId}
+              streaming={column.streaming}
+              errorMessage={column.errorMessage}
+              guardrailWarnings={column.guardrailWarnings}
+              answerDiagnostics={column.answerDiagnostics}
+              savedAnswer={column.savedAnswer}
+              progress={column.progress}
+              onRetry={column.errorMessage ? onRetry : undefined}
+              className={
+                compare && columns.length % 2 === 1 && index === columns.length - 1
+                  ? "col-span-full"
+                  : undefined
+              }
+            />
+          ))}
+        </div>
+      ) : null}
+      {footer}
       {scoped ? (
         <div className="flex justify-end">
           <Button type="button" variant="secondary" size="sm" icon={Search} onClick={onAskUnscoped}>
@@ -575,7 +617,7 @@ export function ChatClient() {
     if (titleError && !updateConversation.isPending) titleInputRef.current?.focus();
   }, [titleError, updateConversation.isPending]);
 
-  const liveUserMessageId = liveTurn?.user.message_id;
+  const liveUserMessageId = liveTurn?.user?.message_id;
   const turns = useMemo(
     () =>
       buildTurns(persistedMessages).filter(
@@ -606,6 +648,8 @@ export function ChatClient() {
   async function startNewConversation() {
     if (!searchAnswerProfileId) return;
     setErrorText("");
+    // 送れなかった・止めた質問は、新しい会話に持ち越さない（#907）。
+    if (liveTurn && liveTurn.pending.status !== "sending") setLiveTurn(null);
     const emptyConversation = conversations.find(
       (conversation) => conversation.status === "ACTIVE" && conversation.message_count === 0
     );
@@ -706,8 +750,46 @@ export function ChatClient() {
     });
   }
 
+  /** 回答の場所（作成中の表示）。`start` で列の構成が届くまでは、選んだモデル（無ければ既定のモデル）で仮に作る。 */
+  function placeholderColumns(startedAtMs: number): LiveColumn[] {
+    const modelIds = selectedModelIds.length > 0 ? selectedModelIds : [""];
+    return modelIds.map((modelId) => ({
+      model_id: modelId,
+      label: modelId ? (modelLabels.get(modelId) ?? modelId) : "",
+      answer: "",
+      citations: [],
+      status: "streaming",
+      traceId: null,
+      errorMessage: null,
+      guardrailWarnings: [],
+      answerDiagnostics: null,
+      stages: [],
+      startedAtMs,
+    }));
+  }
+
+  /** 送った質問を、サーバーの応答を待たずに会話の欄の末尾へ出す 1 往復（#907）。 */
+  function newLiveTurn(request: DeliverRequest): LiveTurn {
+    const pending = createOptimisticChatMessage(request.content);
+    return {
+      pending,
+      user: null,
+      columns: placeholderColumns(pending.sentAtMs),
+      failureMessage: null,
+      request,
+    };
+  }
+
+  /** 終わった・止めた送信の後始末（後から始めた送信の状態は変えない）。 */
+  function releaseController(controller: AbortController) {
+    if (abortRef.current !== controller) return;
+    abortRef.current = null;
+    setSending(false);
+  }
+
   /**
    * 送信する。`retryContent` を渡すと、入力欄ではなくその質問（失敗した回答の質問）を送り直す。
+   * 送った質問は、類似問・確認の照会や会話の作成を待たずにすぐ会話の欄へ出し、入力欄を空にする（#907）。
    * 検索・回答プロファイルの類似問の提示がオンで近い承認済み FAQ があれば、回答を作る前に最大 3 件と「どれでもない」を
    * 出し、どれかを選ぶまで送らない（#684）。照会に失敗したときは類似問を使わずに送る。
    */
@@ -716,21 +798,27 @@ export function ChatClient() {
     if (!content || !searchAnswerProfileId || sending || pendingChoice || searchAnswerProfileWithoutKnowledgeBases) {
       return;
     }
+    const controller = new AbortController();
+    abortRef.current = controller;
     setSending(true);
     setErrorText("");
+    if (retryContent === undefined) setComposer("");
+    setLiveTurn(newLiveTurn({ content }));
     let suggestions: ApprovedFaqSuggestionData[] = [];
     try {
       suggestions = (await api.suggestApprovedFaq(searchAnswerProfileId, content, "chat")).suggestions ?? [];
     } catch {
       // 類似問は補助。照会できなくても回答は作る。
     }
+    if (controller.signal.aborted) return;
     if (suggestions.length > 0) {
-      if (retryContent === undefined) setComposer("");
+      // 選ぶまで送らない。質問は類似問の選択と一緒に同じ位置へ出す。
+      setLiveTurn(null);
       setFaqChoice({ content, retryContent, suggestions });
-      setSending(false);
+      releaseController(controller);
       return;
     }
-    await clarifyOrDeliver(content, retryContent);
+    await clarifyOrDeliver(content, controller);
   }
 
   /** 類似問の選択を確定して送る（`faqId` が無ければ「どれでもない」）。 */
@@ -740,14 +828,21 @@ export function ChatClient() {
     setFaqChoice(null);
     setSending(true);
     // 類似問を選ぶと資料を検索しないので、確認の質問は「どれでもない」のときだけ出す（#717）。
-    void (faqId ? deliver(content, retryContent, faqId) : clarifyOrDeliver(content, retryContent));
+    if (faqId) {
+      void deliver({ content, approvedFaqId: faqId });
+      return;
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setLiveTurn(newLiveTurn({ content }));
+    void clarifyOrDeliver(content, controller, retryContent);
   }
 
   /**
    * 質問が検索・回答プロファイルのルールの確認に当たれば、回答の前に確認の質問を出す（#717）。1 つの質問で聞き返すのは
    * 1 回だけ。照会に失敗したときは確認を使わずに送る。
    */
-  async function clarifyOrDeliver(content: string, retryContent?: string) {
+  async function clarifyOrDeliver(content: string, controller: AbortController, retryContent?: string) {
     if (!searchAnswerProfileId) return;
     let suggestion: ClarificationSuggestionData | null = null;
     try {
@@ -755,46 +850,69 @@ export function ChatClient() {
     } catch {
       // 確認は補助。照会できなくても回答は作る。
     }
+    if (controller.signal.aborted) return;
     if (suggestion) {
-      if (retryContent === undefined) setComposer("");
+      setLiveTurn(null);
       setClarifyChoice({ content, retryContent, suggestion });
-      setSending(false);
+      releaseController(controller);
       return;
     }
-    await deliver(content, retryContent);
+    await deliver({ content }, controller);
   }
 
   /** 確認の答えを確定して送る（`answer` が無ければ「選ばずに回答する」）。 */
   function chooseClarification(answer?: ClarificationAnswer) {
     if (!clarifyChoice) return;
-    const { content, retryContent } = clarifyChoice;
+    const { content } = clarifyChoice;
     setClarifyChoice(null);
     setSending(true);
-    void deliver(content, retryContent, undefined, answer);
+    void deliver({ content, clarification: answer });
   }
 
   /** 範囲を指定せずに同じ質問を送る（類似問・確認の質問は出さない。#721）。 */
   function askUnscoped(content: string) {
     setSending(true);
     setErrorText("");
-    void deliver(content, content);
+    void deliver({ content });
   }
 
-  async function deliver(
-    content: string,
-    retryContent?: string,
-    approvedFaqId?: string,
-    clarification?: ClarificationAnswer
-  ) {
+  /** 送信できなかった質問を、同じ条件でもう一度送る（類似問・確認は聞き直さない。#907）。 */
+  function resend() {
+    if (!liveTurn || sending || pendingChoice) return;
+    setSending(true);
+    setErrorText("");
+    // 同じ質問（同じ localId）を送信中に戻す。経過時間は 0 から数え直す。
+    const pending = withOptimisticChatStatus(liveTurn.pending, "sending");
+    setLiveTurn({
+      ...liveTurn,
+      pending,
+      user: null,
+      columns: placeholderColumns(pending.sentAtMs),
+      failureMessage: null,
+    });
+    void deliver(liveTurn.request);
+  }
+
+  async function deliver(request: DeliverRequest, existingController?: AbortController) {
     if (!searchAnswerProfileId) return;
-    if (retryContent === undefined) setComposer("");
-    const controller = new AbortController();
+    const { content, approvedFaqId, clarification } = request;
+    const controller = existingController ?? new AbortController();
     abortRef.current = controller;
+    // 送信の直後に出した質問はそのまま使う。類似問・確認の選択の後は、ここで会話の欄に出す（#907）。
+    setLiveTurn((current) =>
+      current &&
+      current.user === null &&
+      current.pending.status === "sending" &&
+      current.pending.content === content
+        ? { ...current, request }
+        : newLiveTurn(request)
+    );
     let started = false;
     try {
       let conversationId = activeId;
       if (!conversationId) {
         // 会話を選んでいなければ、最初の送信で会話を作る（会話の履歴を開かずに始められる。#664）。
+        // 質問は作成を待たずに出している（#907）。
         const created = await createConversation.mutateAsync({ search_answer_profile_id: searchAnswerProfileId });
         conversationId = created.id;
         // 作った会話の内容（空）を先に入れ、読み込み中の表示で送信中の質問を隠さない。
@@ -817,23 +935,29 @@ export function ChatClient() {
             // 送った会話は一覧の先頭へ移るので、1 ページ目に戻して選択中の行を見せる（#403）。
             setConversationOffset(0);
             void queryClient.invalidateQueries({ queryKey: ["conversations"] });
-            const startedAtMs = Date.now();
-            setLiveTurn({
-              user: user_message,
-              columns: columns.map((column: ChatColumn) => ({
-                model_id: column.model_id,
-                label: column.label,
-                answer: "",
-                citations: [],
-                status: "streaming",
-                traceId: null,
-                errorMessage: null,
-                guardrailWarnings: [],
-                answerDiagnostics: null,
-                stages: [],
-                startedAtMs,
-              })),
-            });
+            // 仮の質問を保存済みの質問に置き換える（取り直した会話の同じ質問は turns から除く）。
+            // 経過時間は送信した時刻から数え続ける。
+            setLiveTurn((current) =>
+              current
+                ? {
+                    ...current,
+                    user: user_message,
+                    columns: columns.map((column: ChatColumn) => ({
+                      model_id: column.model_id,
+                      label: column.label,
+                      answer: "",
+                      citations: [],
+                      status: "streaming",
+                      traceId: null,
+                      errorMessage: null,
+                      guardrailWarnings: [],
+                      answerDiagnostics: null,
+                      stages: [],
+                      startedAtMs: current.pending.sentAtMs,
+                    })),
+                  }
+                : current
+            );
           },
           onStage: ({ model_id, stage, outcome }) => {
             setLiveTurn((current) => {
@@ -873,6 +997,7 @@ export function ChatClient() {
             updateColumn(model_id, { status: "error", errorMessage: message }),
           onAllDone: async () => {
             void queryClient.invalidateQueries({ queryKey: ["answer-records"] });
+            // 取り直した会話に引き継いでから外す（質問と回答を一瞬消したり、二重に出したりしない）。
             await queryClient.invalidateQueries({ queryKey: ["conversations"] });
             setLiveTurn(null);
           },
@@ -881,24 +1006,45 @@ export function ChatClient() {
       );
     } catch (error) {
       if (!controller.signal.aborted) {
-        setErrorText(error instanceof ApiError ? error.messages.join(" / ") : t("chat.error.send"));
-        // 質問を保存する前に失敗したら、入力を戻して送り直せるようにする。
-        // 生成中に書き始めた次の質問は上書きしない。
-        if (!started && retryContent === undefined) {
-          setComposer((current) => (current.trim() ? current : content));
-        }
+        // 送った質問は会話の欄に残し、理由と「再送信」を出す（入力を失わない。#907）。
+        const message =
+          error instanceof ApiError ? error.messages.join(" / ") : t("chat.send.failedHint");
+        setLiveTurn((current) =>
+          current
+            ? {
+                ...current,
+                pending: withOptimisticChatStatus(current.pending, "failed"),
+                // 届いた回答は残し、届いていない回答の場所（作成中の表示）は外す。
+                columns: started ? current.columns.filter((column) => column.status !== "streaming") : [],
+                failureMessage: message,
+              }
+            : current
+        );
+        // 質問を保存した後の失敗は、保存済みの内容を取り直す。
+        if (started) void queryClient.invalidateQueries({ queryKey: ["conversations"] });
       }
-      setLiveTurn(null);
     } finally {
-      setSending(false);
-      abortRef.current = null;
+      releaseController(controller);
     }
   }
 
+  /** 生成を止める。送った質問は会話の欄に残す（#907）。 */
   function stop() {
+    const saved = liveTurn?.user != null;
     abortRef.current?.abort();
+    abortRef.current = null;
     setSending(false);
-    setLiveTurn(null);
+    setLiveTurn((current) =>
+      current
+        ? {
+            ...current,
+            pending: withOptimisticChatStatus(current.pending, "stopped"),
+            columns: [],
+          }
+        : current
+    );
+    // 質問を保存した後に止めたら、保存済みの内容を取り直す。
+    if (saved) void queryClient.invalidateQueries({ queryKey: ["conversations"] });
   }
 
   const searchAnswerProfileLoading = searchAnswerProfilesQuery.isLoading;
@@ -1231,7 +1377,14 @@ export function ChatClient() {
                 {t("chat.sessions.new")}
               </Button>
             </div>
-            <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+            {/* 会話の欄。新しいメッセージを role="log" で知らせる（#907）。 */}
+            <div
+              ref={scrollRef}
+              role="log"
+              aria-label={t("chat.messages.label")}
+              className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4"
+              data-testid="chat-messages"
+            >
               {/* 会話を選んでいない間は新しい会話の下書き。最初の送信で会話を作る（#664）。 */}
               {activeId && conversationQuery.isLoading && !liveTurn ? (
                 <TimedLoadingState
@@ -1291,20 +1444,57 @@ export function ChatClient() {
                     />
                   ))}
                   {liveTurn ? (
+                    // 送った質問はサーバーの応答を待たずに出し、失敗・停止のときも残す（#907）。
                     <MessageTurn
-                      user={liveTurn.user}
+                      user={liveTurn.user ?? { content: liveTurn.pending.content, guardrail_warnings: [] }}
+                      userStatus={
+                        liveTurn.pending.status === "sending"
+                          ? liveTurn.user
+                            ? "sent"
+                            : "sending"
+                          : liveTurn.pending.status
+                      }
                       columns={liveColumns}
                       searchAnswerProfileId={searchAnswerProfileId}
+                      testId="chat-live-turn"
+                      footer={
+                        liveTurn.pending.status === "failed" ? (
+                          <div data-testid="chat-send-failure">
+                            <Banner
+                              severity="danger"
+                              action={
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  icon={RotateCcw}
+                                  disabled={sending || pendingChoice}
+                                  onClick={resend}
+                                >
+                                  {t("chat.send.retry")}
+                                </Button>
+                              }
+                            >
+                              {liveTurn.failureMessage ?? t("chat.send.failedHint")}
+                            </Banner>
+                          </div>
+                        ) : liveTurn.pending.status === "stopped" ? (
+                          // 止めた状態。色だけに頼らず、停止のアイコンを添える（Agent のチャットと同じ）。
+                          <p
+                            className="flex items-center gap-1.5 text-sm text-fg-muted"
+                            data-testid="chat-stopped"
+                          >
+                            <Square size={14} aria-hidden="true" />
+                            {t("chat.send.stopped")}
+                          </p>
+                        ) : null
+                      }
                     />
                   ) : null}
                   {/* 送る前の質問と、選んでから回答する類似問（#684）。質問の吹き出しは送信後と同じ形。 */}
                   {faqChoice ? (
                     <div className="space-y-2" data-testid="chat-approved-faq-choice">
-                      <div className="flex justify-end">
-                        <div className="max-w-[85%] whitespace-pre-wrap rounded-md bg-accent-subtle px-3 py-2 text-sm text-fg">
-                          {faqChoice.content}
-                        </div>
-                      </div>
+                      <ChatUserMessage>{faqChoice.content}</ChatUserMessage>
                       <ApprovedFaqSuggestions
                         mode="chat"
                         suggestions={faqChoice.suggestions}
@@ -1316,11 +1506,7 @@ export function ChatClient() {
                   {/* 類似問の後に出す確認の質問（#717）。 */}
                   {clarifyChoice ? (
                     <div className="space-y-2">
-                      <div className="flex justify-end">
-                        <div className="max-w-[85%] whitespace-pre-wrap rounded-md bg-accent-subtle px-3 py-2 text-sm text-fg">
-                          {clarifyChoice.content}
-                        </div>
-                      </div>
+                      <ChatUserMessage>{clarifyChoice.content}</ChatUserMessage>
                       <ClarificationChoice
                         suggestion={clarifyChoice.suggestion}
                         onAnswer={(answer) => chooseClarification(answer)}

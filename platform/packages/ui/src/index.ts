@@ -17,6 +17,12 @@ export {
 export { isImeComposing, isSubmitEnter, type KeyboardEventLike } from "./lib/keyboard";
 export { isRepeatedActivationKey, runStopClickAction, type RunStopAction } from "./lib/run-stop";
 export { useActionPending, type ActionPending } from "./lib/action-pending";
+export {
+  createOptimisticChatMessage,
+  withOptimisticChatStatus,
+  type OptimisticChatMessage,
+  type OptimisticChatStatus,
+} from "./lib/chat-optimistic";
 
 // --- UI primitives ---
 export { Button, buttonVariants, type ButtonProps, type ButtonVariantToneProps } from "./components/ui/button";
@@ -103,6 +109,11 @@ export {
 } from "./components/ui/searchable-options";
 export { Banner } from "./components/ui/banner";
 export { MessageText, type MessageTextProps } from "./components/ui/message-text";
+export {
+  ChatUserMessage,
+  type ChatUserMessageProps,
+  type ChatUserMessageStatus,
+} from "./components/ui/chat-message";
 export { Toaster, type ToasterProps } from "./components/ui/toast";
 export {
   ConfirmProvider,

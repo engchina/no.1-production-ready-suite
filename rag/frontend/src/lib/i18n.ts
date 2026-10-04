@@ -2027,6 +2027,11 @@ export const ja = {
   "chat.error.send": "メッセージの送信に失敗しました。",
   "chat.error.model": "エラーが発生しました。",
   "chat.error.retry": "もう一度送信",
+  "chat.messages.label": "会話",
+  "chat.send.failed": "送信できませんでした",
+  "chat.send.failedHint": "サーバーに届きませんでした。通信の状態を確かめて、再送信してください。",
+  "chat.send.retry": "再送信",
+  "chat.send.stopped": "回答の作成を停止しました。もう一度送ると、新しく回答を作成します。",
 
   "search.error.failed": "検索に失敗しました。再度お試しください。",
   "search.placeholder": "例：社内規程の申請フローは？（Enter で検索 / Shift+Enter で改行）",
