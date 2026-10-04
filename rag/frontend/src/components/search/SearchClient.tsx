@@ -15,6 +15,7 @@ import {
   SelectField,
   type SelectFieldOption,
   Switch,
+  InfoTip,
   ToggleChip,
   TextField,
   TimedLoadingState,
@@ -581,8 +582,17 @@ export function SearchClient() {
                     1 つだけ選べ、もう一度押すと未選択（既定のテキストモデル）に戻る。 */}
                 {generateAnswer && answerModels.length > 0 ? (
                   <div className="flex flex-wrap items-center gap-2" data-testid="search-answer-model">
-                    <span className="text-xs font-medium text-fg-muted">
-                      {t("search.answerModel.label")}
+                    {/* 説明は常設せず、ラベルの横の info アイコンから出す（#901）。 */}
+                    <span className="inline-flex items-center gap-0.5">
+                      <span className="text-xs font-medium text-fg-muted">
+                        {t("search.answerModel.label")}
+                      </span>
+                      <InfoTip
+                        label={t("search.answerModel.infoLabel")}
+                        content={t(answerModelHelpKey(answerModels, "search.answerModel.help"))}
+                        contentTestId="search-answer-model-help"
+                        data-testid="search-answer-model-info"
+                      />
                     </span>
                     {answerModels.map((model) => (
                       <ToggleChip
@@ -596,11 +606,6 @@ export function SearchClient() {
                         {answerModelLabel(model)}
                       </ToggleChip>
                     ))}
-                    {answerModelId ? null : (
-                      <span className="text-xs text-fg-muted">
-                        {t(answerModelHelpKey(answerModels, "search.answerModel.help"))}
-                      </span>
-                    )}
                   </div>
                 ) : null}
                 <FieldActionRow

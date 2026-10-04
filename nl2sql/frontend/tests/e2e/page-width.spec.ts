@@ -91,7 +91,7 @@ test("AI要件確認の未入力案内は補助テキストで、無効なボタ
   await expect(hint).toBeVisible();
   await expect(hint).not.toHaveAttribute("role", "alert");
   await expect(page.getByRole("alert")).toHaveCount(0);
-  const button = page.getByRole("button", { name: "AI要件確認" });
+  const button = page.getByRole("button", { name: "AI要件確認", exact: true });
   await expect(button).toBeDisabled();
   await expect(button).toHaveAccessibleDescription("AI要件確認を始めるにはクエリを入力してください。");
   const colors = await hint.evaluate((node) => {

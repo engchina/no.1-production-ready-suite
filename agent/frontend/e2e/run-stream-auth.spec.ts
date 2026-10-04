@@ -86,6 +86,14 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/runs?id=run-stream");
       await expect(page.getByText("購読を確認する").first()).toBeVisible();
       await useWebSocketMode(page);
+      // 選んだ方式の説明は常設せず、チップの横の info アイコンから出す（読み上げには結び付く。#901）。
+      const streamInfo = page.getByRole("button", { name: "ストリーム方式の説明", exact: true });
+      await expect(streamInfo).toHaveAccessibleDescription(/WebSocket/);
+      await expect(page.getByTestId("run-stream-description")).toBeHidden();
+      await streamInfo.click();
+      await expect(page.getByTestId("run-stream-description")).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("run-stream-description")).toBeHidden();
 
       await expect(page.getByTestId("run-stream-stopped")).toHaveText("この実行のイベントを購読する権限がありません。");
       await expect(streamCard(page).getByText("停止", { exact: true })).toBeVisible();

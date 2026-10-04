@@ -440,6 +440,54 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 - 中身は短い文だけ。リンク・ボタンなど操作できる要素を入れない（APG: tooltip はフォーカスを受けない）。
 - `disabled` のボタンはフォーカスを受けないので、キーボードでは出ない。使えない理由は画面の文言で示す。
 - アイコン以外の要素（文字のボタン等）に説明を足すときは `<Tooltip content="…"><button …/></Tooltip>` で直接使える。トリガーはフォーカスできる要素 1 つにする（切り詰めた文字の `span` の全文表示には使わない）。
+- 操作・欄の**補足の説明**（文で読むもの）は `Tooltip` ではなく次の `InfoTip` を使う。
+
+### `InfoTip`（新規）— ★ 補足の説明は常設せず、ラベルの横の info アイコンから出す（#901）
+
+チャット・検索の操作の行（RAG の「回答するモデル」、NL2SQL の「生成方法」など）が、操作の補足の説明を常に表示していて、画面を占めて読みにくくなっていました。補足の説明を出す共通の部品が無く、各画面が説明文を常設していたためです。ラベル（または操作）の横に info アイコンを置き、説明は必要なときだけ吹き出しで出します。
+
+**業界の指針**（決めた振る舞いの根拠）
+
+| 出典 | 指針 |
+|---|---|
+| Carbon（Tooltip / Toggletip） | 補足の短い説明は hover / focus で出す Tooltip、押して開閉する（Enter / Space・Esc・外側を押すと閉じる）のが Toggletip。**作業に欠かせない情報・入力に必要な条件は隠さない** |
+| Inclusive Components「Tooltips & Toggletips」 | 説明だけを持つ info アイコンのボタン（Toggletip）。hover だけではタッチ端末で読めない（押している間しか出ない）。Esc と外側のクリックで閉じる |
+| CMS Design System の Tooltip | info アイコンのトリガーで、hover・focus・click のどれでも開き、Esc で閉じる。「作業に必要な情報を吹き出しの操作の裏に隠さない」 |
+| GOV.UK の hint / Material の helper text | 入力に必要な説明（形式・条件）は欄の近くに常設する。吹き出しに入れない |
+| WCAG 1.4.13 / 2.1.1 / 2.5.8 | 出した内容は Esc で消せ、ポインタを移しても消えず、自分で閉じるまで残る。キーボードだけで開ける。当たり判定は 24px 以上 |
+| Apple HIG | タッチ端末にホバーは無い。hover だけに頼った情報はタップで出せるようにする |
+
+**常設の hint と `InfoTip` の使い分け**
+
+| 置き場所 | 書く内容 | 例 |
+|---|---|---|
+| 常設（`TextField` の `helper`・欄の下の hint・`FieldError`・`FormStatus`・`Banner`） | 作業に欠かせない情報: 入力の形式・必須の条件・押せない理由・エラー・結果・保存したときの影響（索引を作り直さない等） | 「1〜100000 の整数」「AI要件確認を始めるにはクエリを入力してください。」 |
+| `InfoTip` | 操作・選択肢がどう振る舞うかの**補足の説明**（知らなくても操作でき、知りたい人だけが読むもの）。とくに、密な操作の行（チップ・選択欄・スイッチの行）のラベルの横 | 回答するモデルの既定の振る舞い、生成方法・購読方式の違い |
+
+- 設定画面のフォームのスイッチ・欄の説明（ラベルの下の helper）は常設のまま（フォームの hint は欄と一緒に読む）。`InfoTip` に移すのは、操作の行のラベルの横に常設していた補足の説明。
+- 説明は 1〜3 文。リンク・ボタンなど操作できる要素は入れない（要るときはダイアログや詳細の画面に置く）。
+
+| 振る舞い | 決めたこと | 理由 |
+|---|---|---|
+| アイコン | `lucide-react` の **`Info`（ⓘ）、16px**、`--color-fg-muted`（ホバー・開いている間は `--color-fg`） | 中身は「この操作の補足の情報」で、使い方の手引き・ヘルプの文書（`CircleHelp` の ? が示すもの）ではない。Carbon の Toggletip も information のアイコン。3 製品で 1 種類にそろえる |
+| ボタン | `<button type="button">`、見た目 24px の円（WCAG 2.5.8）。タッチ端末（`pointer: coarse`）では見た目を変えず当たり判定だけ 44px（`pr-touch-target`、§4「タッチ端末の当たり判定」）。フォーカスは共通の `:focus-visible` の outline（offset 0 で円に沿わせ、隣のラベルに重ねない） | キーボードで届き、押せる。行の高さを変えない |
+| 読み上げ | 名前は `label`（「回答するモデルの説明」など、何の説明か分かる名前）。説明の文は吹き出しを `aria-describedby` で結び付け、**閉じている間も `hidden` で置いておく**（開閉の状態は読み上げない）。`contentId` を渡すと、説明の対象の欄（`SelectField` の `describedBy`）からも同じ説明を結び付けられる | フォーカスした時点で説明が読まれる。開閉のたびに読み上げを足さない |
+| ホバー | ポインタを乗せて **150ms** で出す（Tooltip の 400ms より短い。アイコンは説明を出すためだけにある）。ポインタが離れたら 100ms の猶予の後に閉じ、その間に吹き出しへ移れば消えない | 通り過ぎただけでは出さない。WCAG 1.4.13 hoverable |
+| フォーカス | キーボードのフォーカス（`:focus-visible`）ですぐ出し、フォーカスが外れたら閉じる。マウスで押したときのフォーカスでは出さない | 2.1.1。Tab でたどる利用者も読める |
+| 押す | クリック・タップ・Enter / Space で**開いたまま固定**する（ポインタが離れても閉じない）。もう一度押す・Escape・外側を押す・フォーカスを外すで閉じる。吹き出しの中を押しても閉じない（文を選べる） | タッチ端末にはホバーが無い（タップだけで開く）。Carbon の Toggletip と同じ閉じ方 |
+| タッチ端末 | ホバー・フォーカスでは出さず、タップで開閉する | 指で吹き出しが隠れ、フォーカスとタップが同時に起きる |
+| Escape | 吹き出しだけを閉じ、囲むモーダル・メニューに伝えない。フォーカスは動かさない | `Tooltip` と同じ（1.4.13 dismissible） |
+| 1 つだけ | `Tooltip` と合わせて、画面に出す吹き出しは 1 つだけ（#655） | 吹き出しを重ねない |
+| 見た目 | `Tooltip` と同じ暗い吹き出し（`data-surface="inverted"`・`--color-surface-overlay`・`--shadow-popover`）、12px / **400**・`leading-relaxed`、最大幅 **20rem**（狭い画面は画面幅 − 1rem）。位置・反転・Portal・重なり順も `Tooltip` と同じ | 文で読む説明なので、名前の吹き出し（500・16rem）より広く、行間を空ける |
+
+```tsx
+<span className="inline-flex items-center gap-0.5">
+  <span className="text-xs font-medium text-fg-muted">{t("chat.compare.label")}</span>
+  <InfoTip label={t("chat.compare.infoLabel")} content={t("chat.compare.default")} />
+</span>
+```
+
+- E2E は、閉じている間を `toBeHidden()`、説明を `toHaveAccessibleDescription(...)`、開いた吹き出しを `contentTestId` で確かめる。タッチ端末の project ではホバーの代わりに `tap()` する。info アイコンの名前は「<ラベル>の説明」なので、同じ行のボタンを `getByRole("button", { name: "<ラベル>" })` で引くときは `exact: true` を付ける（部分一致で 2 つに当たる）。
 
 ### フォーカスの表示（新設）— ★ outline に一本化（#355）
 
@@ -934,7 +982,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**67点あります。**
+QA に事前共有してください。**68点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -1005,6 +1053,7 @@ QA に事前共有してください。**67点あります。**
 | 65 | **DB ゲートの案内が、状態（未設定・接続できない・初期化が必要・状態を確認できない）ごとに見出し・アイコン・導線を分け、設定を開けない利用者には導線を出さない**（#820） | 全状態で同じ `Database` のアイコンと「設定を開く」（初期化が必要はシステムテーブル）・再試行を出した。接続できない見出しは「データベースを起動してください」、DB に接続できないのに「データベース接続済み・初期化が必要です」と出ることがあった。権限の無い利用者にも押しても開けない設定へのリンクを出した。リンクは `<Link className={buttonVariants()}>` の子にアイコンを手書き | 見出しとアイコン: 未設定「データベースの接続情報が未設定です」（`Settings`）/ 接続できない「データベースに接続できません」（`Unplug`）、ADB の状態が分かれば「Autonomous Database が停止しています」（`PowerOff`）・「…を起動しています」（`Hourglass`、info）・「…を利用できない状態です」（`ServerOff`）と ADB の状態の `StatusBadge`（「Autonomous Database: 停止済み」）/ 初期化が必要「システムテーブルの作成・更新が必要です」（`Wrench`）/ 状態を確認できない（`ServerCrash`）。導線: 未設定 → データベース設定、接続できない → データベース設定の ADB 管理のカード（ADB が起動済みなら接続情報）、初期化が必要 → システムテーブル、状態を確認できない → 再試行だけ。設定を開けない利用者は「システム管理者に連絡して、…を依頼してください。」とフッターの説明だけで、リンクを出さない（再試行は残す）。リンクは `ButtonLink` | 不通と初期化の不足では直す人と直す場所が違う。押しても開けない導線を出さず、次の行動（管理者への連絡）を示す（UX 契約 messaging §3.4.1） |
 | 66 | **処理中の表示（`ProcessingIndicator` / `TimedLoadingState`）が、10 秒後の遅延の案内で動かない**（#902） | 経過 10 秒で「通常より時間がかかっています。」の行を足し、領域が 1 行高くなっていた。中央寄せの DB ゲートではスピナーごとカードが 12.25px 上へ動き、流れの中では下の内容を押し下げた | 遅延の案内の行を処理の開始から置き、遅延するまでは同じ文言を `::before` の content で見えない状態に描いて高さだけ予約する（狭い画面で折り返しても同じ高さ。textContent・読み上げには入らない）。遅延したら文言を足し、`role="status"` を付けて読み上げる（予約の行は status にしない）。処理中は最初から 1 行ぶん高い | 後から出る内容の場所を先に取り、レイアウトシフト（CLS）を出さない。スピナーの回転そのもの（#395 の全周トラック）は揺れていなかった（角度・DPR・小数の位置ごとの実測で輪郭の中心のずれ 0.17px 以下） |
 | 67 | **通知（Toast）が内容に合わせて広がり、メッセージの本文が文節で折り返す**（#899） | desktop の通知の幅は 22rem 固定で、「Oracle Profile の反映が完了しました。」も「…完了しま / した。」と 2 行に折り返した。Banner・FormStatus なども任意の文字の間で折り返した（「確認 / してから」）→ 通知は内容に合わせて 22〜32rem の間で広がり（短い通知は従来と同じ 22rem、375px は従来どおり画面の幅）、メッセージの部品の本文は `.pr-message-text` で文節で折り返す（Chrome / Edge。Firefox・Safari は従来どおり）。通知は PageHeader のタイトルの側へ最大 10rem 長く伸びる | 短い 1 文は 1 行で読め、折り返すときも語の途中で切らない（§4「`Toaster`」「メッセージの本文の折り返し」、UX 契約 messaging.md §3.1 / §4.1） |
+| 68 | **操作の行の補足の説明が常設されず、ラベルの横の info アイコンから出る**（#901） | RAG のチャット・RAG 検索の「回答するモデル」のチップの後ろ（未選択のときだけ）、NL2SQL のチャットの「生成方法」の選択の右、NL2SQL の SQL 生成の「AI要件確認」の右、Agent の Run の作成の「下書きで実行」の右、Run の詳細の「ストリーム方式」のチップの下に、説明文を常に表示していた → ラベル（または操作）の横に 16px の `Info` アイコン（見た目 24px の円）を置き、ポインタを乗せる（150ms）・キーボードのフォーカス・押す（クリック・タップ・Enter / Space）で暗い吹き出し（12px / 400・最大幅 20rem）に出す。Escape・外側を押す・もう一度押すで閉じる。行の高さが説明の折り返しの分だけ低くなる。RAG の説明は選択の有無にかかわらず出せる | 操作の行を密に保ち、補足は必要なときだけ読む。タッチ端末・キーボード・読み上げでも読める（§4「`InfoTip`」） |
 
 ### API の非互換
 
@@ -1039,6 +1088,7 @@ QA に事前共有してください。**67点あります。**
 | `Toaster`（#411） | `placement` プロップ（`"bottom-left" \| "bottom-right"`）を**削除。** 置き場所は `Toaster` が決める（md 以上は `PageHeader` に重ねてページの操作の左、md 未満は上端のバー）。`PageHeader` の `<header>` に `data-page-header`、ページの操作の並びに `data-page-header-actions` を付ける（`Toaster` が位置を読む）。通知の領域に `data-toast-placement`（`page-header` / `below-page-header` / `top-right` / `top-bar`） |
 | `RowTitleButton`（#421） | **新規 export。** `RowTitleButton` / `RowTitleButtonProps` / `RowTitleButtonMaxLines`。RAG・Agent の `EntityLayout` の `RowTitleButton` は削除（RAG の `ariaLabel` / `dataAttributes` は、標準の `aria-label` / `data-*` をそのまま渡す）。行の中の要素として `data-row-title-button` を持つ |
 | `Tooltip`（#421） | `describe?: boolean` を追加（既定 true）。false で説明として結び付けず、吹き出しを `aria-hidden` にする |
+| `InfoTip` / `Tooltip`（#901） | **新規 export** `InfoTip` / `InfoTipProps` / `INFO_TIP_SHOW_DELAY_MS`。`Tooltip` の props・見た目・振る舞いは変えない（内部の開閉の状態機械に、押して開いたまま固定する `press` / `dismiss` と開いたきっかけ `press` を足し、吹き出しの描画を `InfoTip` と共有した） |
 | `RowTitleButton`（#583） | `href?: string` を追加（渡すと `<a href>` のリンクの形。修飾キーの無いクリックは `onClick`、修飾キー付き・中クリックはブラウザの既定）。`ref` の型は `Ref<HTMLButtonElement \| HTMLAnchorElement>`。E2E で題名を `getByRole("button")` で探している一覧は、`href` を渡すと `getByRole("link")` になる |
 | `TextareaField`（#584） | **新規 export。** `TextareaField` / `TextareaFieldProps` / `defaultTextareaCount`。adherence の lint（`design-system/restricted-syntax`）が製品の JSX の `<textarea>` を検出する |
 | `@engchina/production-ready-system-settings`（#421） | **新規 export** `SecurityIdentityRowTitleButton`（ID と表示名の 2 段表示を `RowTitleButton` に載せたもの） |

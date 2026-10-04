@@ -16,6 +16,7 @@ import {
   ObjectActionBar,
   ProcessingIndicator,
   StatusBadge,
+  InfoTip,
   ToggleChip,
   Tabs,
   TabPanel,
@@ -477,18 +478,23 @@ function RunStreamControls({
       </CardHeader>
       <CardContent className="space-y-4">
         {/* 購読の方式（モード）の切り替え。共有の ToggleChip を使う（buttons.md §6。手書きのセグメントは作らない）。 */}
-        <div className="flex flex-wrap gap-2" role="group" aria-label={t("run.streamMode")}>
-          <ToggleChip selected={mode === "sse"} onClick={() => onModeChange("sse")}>
-            {t("run.stream.sse")}
-          </ToggleChip>
-          <ToggleChip selected={mode === "websocket"} onClick={() => onModeChange("websocket")}>
-            {t("run.stream.websocket")}
-          </ToggleChip>
+        {/* 選んだ方式の説明は常設せず、チップの横の info アイコンから出す（#901）。 */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap gap-2" role="group" aria-label={t("run.streamMode")}>
+            <ToggleChip selected={mode === "sse"} onClick={() => onModeChange("sse")}>
+              {t("run.stream.sse")}
+            </ToggleChip>
+            <ToggleChip selected={mode === "websocket"} onClick={() => onModeChange("websocket")}>
+              {t("run.stream.websocket")}
+            </ToggleChip>
+          </div>
+          <InfoTip
+            label={t("run.streamMode.infoLabel")}
+            content={mode === "websocket" ? t("run.stream.websocketDescription") : t("run.stream.sseDescription")}
+            contentTestId="run-stream-description"
+            data-testid="run-stream-info"
+          />
         </div>
-
-        <p className="text-sm leading-6 text-fg-muted">
-          {mode === "websocket" ? t("run.stream.websocketDescription") : t("run.stream.sseDescription")}
-        </p>
 
         {mode === "websocket" && websocketState.stopReason ? (
           <Banner

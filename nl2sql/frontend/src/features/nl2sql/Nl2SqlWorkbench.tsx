@@ -11,6 +11,7 @@ import {
   TimedLoadingState,
   DisclosureChevron,
   FieldActionRow,
+  InfoTip,
   TextareaField,
   SelectField,
 } from "@engchina/production-ready-ui";
@@ -1285,9 +1286,13 @@ function ExecutableNl2SqlWorkbench() {
                               }} icon={Sparkles}>
                               <span>{t("nl2sql.clarification.start")}</span>
                             </Button>
-                            <span className="text-xs leading-5 text-fg-muted">
-                              {t("nl2sql.clarification.description")}
-                            </span>
+                            {/* 補足の説明は常設せず、ボタンの横の info アイコンから出す（#901）。 */}
+                            <InfoTip
+                              label={t("nl2sql.clarification.infoLabel")}
+                              content={t("nl2sql.clarification.description")}
+                              contentTestId="nl2sql-clarification-description"
+                              data-testid="nl2sql-clarification-info"
+                            />
                           </div>
                         )}
                         {/* 未入力はエラーではなく「ボタンが使えない理由」の案内。操作前に赤字や alert の読み上げで出さない。 */}

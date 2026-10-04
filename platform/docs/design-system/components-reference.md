@@ -1303,6 +1303,59 @@ export interface TooltipProps {
 - E2E で吹き出しを引くときは、`page.locator('[role="tooltip"]:not([hidden])')` で引きます（説明用の吹き出しは閉じている間も `hidden` で body にあり、名前と同じ文言の吹き出しは `aria-hidden` なので `getByRole("tooltip")` では引けません）。説明は `toHaveAccessibleDescription` で確かめます。
 - 単体テストは `packages/ui/tests/tooltip.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/tooltip.spec.ts`（desktop のホバー・キーボード・Escape・反転、mobile-375 のタッチ端末）。
 
+---
+
+## InfoTip — **新規**（#901）
+
+操作・欄の補足の説明を常設せず、ラベル（または操作）の横の info アイコン（lucide `Info`、16px）から吹き出しで出します。振る舞いの表・業界の指針・常設の hint との使い分けは README §4「`InfoTip`」。作業に欠かせない情報（入力の条件・押せない理由・エラー・結果）には使いません。
+
+```tsx
+import { InfoTip, SelectField } from "@engchina/production-ready-ui";
+
+// ラベルの横に置く（ラベルとアイコンは inline-flex でまとめ、行が折り返しても離さない）
+<span className="inline-flex items-center gap-0.5">
+  <span className="text-xs font-medium text-fg-muted">{t("chat.compare.label")}</span>
+  <InfoTip
+    label={t("chat.compare.infoLabel")}          // 「回答するモデルの説明」
+    content={t("chat.compare.default")}
+    contentTestId="chat-default-model"
+  />
+</span>
+
+// 選択欄にも同じ説明を結び付ける（選んだ値ごとに説明が変わるとき）
+const descriptionId = useId();
+<InfoTip label={t("chat.engine.infoLabel")} content={engineOption.description} contentId={descriptionId} />
+<SelectField id="sql-chat-engine" label={t("chat.engine")} labelHidden describedBy={descriptionId} … />
+```
+
+### InfoTip の props
+
+```ts
+export interface InfoTipProps
+  extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children" | "content" | "aria-label" | "type"> {
+  /** 説明の文（翻訳済み。1〜3 文。リンク・ボタンなど操作できる要素は入れない）。 */
+  content: string;
+  /** アイコンのボタンの読み上げ名（翻訳済み）。「<ラベル>の説明」など、何の説明か分かる名前。 */
+  label: string;
+  /** 空きがあれば出す側（既定は上）。入らなければ反転する。 */
+  placement?: "top" | "bottom";
+  /** 吹き出しの id。説明の対象の欄の aria-describedby（SelectField の describedBy）からも結び付けるときに渡す。 */
+  contentId?: string;
+  /** 吹き出しの data-testid（E2E 用）。ボタンの data-testid はそのまま渡す。 */
+  contentTestId?: string;
+}
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 開閉は `Tooltip` と同じ `createTooltipController` に `press`（押して開いたまま固定。固定中はもう一度で閉じる）と `dismiss`（外側を押した）を足して使う。開いたきっかけは `data-tooltip-reason="press"` | 遅延・hoverable・Escape・「画面に 1 つだけ」（#655）を `Tooltip` と共有し、DOM なしの単体テストで確かめる |
+| 吹き出しの描画（Portal・位置・重なり順・Escape）は `Tooltip` と同じ `TooltipBubble`。`InfoTip` は幅（20rem）・余白・太さ（400）・行間だけを足す | 見た目と位置の規則を 1 か所に保つ |
+| 押して開いている間だけ、`document` の `pointerdown`（capture）で外側を押したら閉じる | クリックでフォーカスが移らないブラウザ（Safari）とタッチ端末でも閉じる |
+| ボタンの `data-state` は `open` / `closed`（見た目のホバーの色に使う）。`aria-expanded` は付けない | 説明は `aria-describedby` で閉じていても読めるので、開閉は目で見るためのもの |
+
+- E2E: 閉じている間は `toBeHidden()`、説明は `toHaveAccessibleDescription`、開いた吹き出しは `contentTestId`。タッチ端末の project ではホバーの代わりに `tap()`（ホバー・フォーカスでは開かない）。info アイコンの名前は「<ラベル>の説明」なので、同じ行のボタンは `exact: true` で引く。
+- 単体テストは `packages/ui/tests/info-tip.test.tsx`（`press` / `dismiss`・タッチ端末・Escape・外側・読み上げの結び付け）。実ブラウザは RAG `e2e/search-answers.spec.ts`・NL2SQL `tests/e2e/sql-chat.spec.ts` / `nl2sql-ontology.spec.ts`・Agent `e2e/agent-versions.spec.ts` / `run-stream-auth.spec.ts`（desktop / 375px のタップ・キーボード・Escape）。
+
 ## 読み込み中と一覧の表示密度 — **新規**（#265）
 
 3 製品の一覧・読み込み中の表示を NL2SQL の基準にそろえるための定数と形のある Skeleton です。値は製品で書かず、ここから import します。
