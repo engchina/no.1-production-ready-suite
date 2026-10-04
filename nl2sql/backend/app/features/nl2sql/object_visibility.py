@@ -8,6 +8,13 @@ _SYSTEM_OBJECT_NAME_MARKERS = frozenset({"$", "#"})
 # 3 製品は同じ schema を共有する（#212）。共通基盤（PLATFORM_: 認証テーブルなど）と他製品の
 # テーブル（RAG_ / AGENT_）も業務データではないため、業務ユーザーの対象一覧に出さない。
 _SYSTEM_OBJECT_NAME_PREFIXES = ("NL2SQL_", "PLATFORM_", "RAG_", "AGENT_")
+# 上の判定で拒否したときの文言。NL2SQL の表だけでなく共通基盤・他製品の表と Oracle の内部 object も
+# 対象なので、「NL2SQL のシステム object」とだけ書かない（#933）。
+SYSTEM_OBJECT_BLOCKED_MESSAGE = (
+    "NL2SQL_・PLATFORM_・RAG_・AGENT_ で始まる表/VIEW（NL2SQL・共通基盤・他製品の表）と、"
+    "名前に $ / # を含む Oracle の内部 object は業務データではないため、ここでは扱えません。"
+    "NL2SQL_ の表はシステムテーブル管理から管理します。"
+)
 
 
 def _split_identifier_parts(value: str) -> list[str]:

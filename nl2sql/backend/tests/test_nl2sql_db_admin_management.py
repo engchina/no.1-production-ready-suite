@@ -1552,6 +1552,119 @@ def test_admin_sql_mixed_select_and_dml_stays_blocked_control_plane() -> None:
     assert {item.status for item in result.statements} == {"blocked"}
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM T1 WHERE",
+        "SELECT * FROM T1 AS OF TIMESTAMP SYSTIMESTAMP",
+        "WITH A AS (SELECT ID FROM T1) SELECT * FROM A WHERE",
+    ],
+)
+def test_admin_sql_unverifiable_select_without_confirmation_reports_reason(sql: str) -> None:
+    """画面は確認語の欄を出さないので、確認語待ちにせず理由を返す（#933）。"""
+
+    adapter = _FakeAdminSqlAdapter()
+    service = _OracleRuntimeService(adapter)
+    service._deepsec_enabled = True
+
+    with actor_scope("business-user-id", is_system_admin=False):
+        result = service.execute_db_admin_sql(DbAdminExecuteRequest(sql=sql, row_limit=10))
+
+    # data plane（DeepSec の DATA USER）にも control plane にも流さない。
+    assert adapter.select_calls == []
+    assert adapter.calls == []
+    assert result.executed is False
+    assert result.committed is False
+    assert len(result.statements) == 1
+    statement = result.statements[0]
+    assert statement.status == "error"
+    assert statement.statement_type == "SELECT"
+    assert statement.error_message.startswith(
+        "SELECT 文を読み取り専用として確認できないため実行しませんでした。構文を確認してください。"
+    )
+    assert "confirmation=ADMIN_EXECUTE" not in statement.error_message
+    assert result.warnings == [statement.error_message]
+
+
+def test_admin_sql_select_into_without_confirmation_reports_side_effect_reason() -> None:
+    adapter = _FakeAdminSqlAdapter()
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(sql="SELECT ID INTO V_ID FROM T1", row_limit=10)
+    )
+
+    assert adapter.select_calls == []
+    assert adapter.calls == []
+    assert result.statements[0].status == "error"
+    assert "SELECT INTO または FOR UPDATE/SHARE" in result.statements[0].error_message
+
+
+def test_admin_sql_confirmed_select_for_update_keeps_control_plane_path() -> None:
+    """画面が更新系として確認語を求める FOR UPDATE は、確認語付きなら従来どおり実行する。"""
+
+    adapter = _FakeAdminSqlAdapter(
+        statement_results=[
+            {
+                "index": 1,
+                "statement_type": "SELECT",
+                "status": "success",
+                "sql": "SELECT ID FROM T1 FOR UPDATE",
+            }
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(sql="SELECT ID FROM T1 FOR UPDATE", confirmation="ADMIN_EXECUTE")
+    )
+
+    assert adapter.select_calls == []
+    assert len(adapter.calls) == 1
+    assert result.statements[0].status == "success"
+    assert result.execution_context == "admin_control_plane"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT ID FROM T1 FOR UPDATE",
+        "WITH A AS (SELECT ID FROM T1) UPDATE T1 SET NAME = 'X' WHERE ID IN (SELECT ID FROM A)",
+    ],
+)
+def test_admin_sql_select_head_with_mutating_token_still_requires_confirmation(sql: str) -> None:
+    """画面が更新系の語で確認語の欄を出す文は、確認語なしならエラーにせず確認語を求める（#933）。"""
+
+    adapter = _FakeAdminSqlAdapter()
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_sql(DbAdminExecuteRequest(sql=sql, row_limit=10))
+
+    assert adapter.select_calls == []
+    assert adapter.calls == []
+    assert result.executed is False
+    assert result.statements[0].status == "confirmation_required"
+    assert any("ADMIN_EXECUTE" in warning for warning in result.warnings)
+
+
+@pytest.mark.parametrize("table_name", ["PLATFORM_USERS", "RAG_DOCUMENTS", "AGENT_RUNS"])
+def test_admin_sql_blocks_other_product_tables_with_accurate_message(table_name: str) -> None:
+    adapter = _FakeAdminSqlAdapter()
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(sql=f"SELECT * FROM {table_name}", row_limit=10)
+    )
+
+    assert adapter.select_calls == []
+    assert result.statements[0].status == "blocked"
+    message = result.statements[0].error_message
+    assert message.startswith(f"APP.{table_name}: ")
+    assert "NL2SQL システム object" not in message
+    assert "PLATFORM_・RAG_・AGENT_" in message
+    assert "業務データではない" in message
+
+
 def test_statements_partial_success_commits_and_records_audit() -> None:
     adapter = _FakeStatementsAdapter(
         [

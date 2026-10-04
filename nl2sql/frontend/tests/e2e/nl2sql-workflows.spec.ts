@@ -3435,6 +3435,26 @@ test("SQL 系の必須入力欄は共有の必須バッジと required 属性で
   await expect(adminExecuteButton).toBeEnabled();
 });
 
+test("管理 SQL は SQL ファイルを読み込むと未入力のエラーを消す", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.goto("/admin-sql");
+  const adminSql = page.getByTestId("nl2sql-admin-sql");
+  const sqlInput = adminSqlInput(adminSql);
+  await adminSql.getByRole("button", { name: "SQL 実行" }).click();
+  await expect(sqlInput).toHaveAccessibleDescription("管理 SQL を入力してください。");
+  await expect(sqlInput).toHaveAttribute("aria-invalid", "true");
+
+  // 手入力と同じく、ファイルで SQL を入れたら未入力のエラーは残さない（#933）。
+  await adminSql.getByLabel("SQL ファイル読込 (.sql/.txt)").setInputFiles({
+    name: "select-invoices.sql",
+    mimeType: "text/plain",
+    buffer: Buffer.from("SELECT CUSTOMER_NAME FROM INVOICES"),
+  });
+  await expect(sqlInput).toHaveValue("SELECT CUSTOMER_NAME FROM INVOICES");
+  await expect(sqlInput).not.toHaveAttribute("aria-invalid", "true");
+  await expect(adminSql.getByText("管理 SQL を入力してください。")).toHaveCount(0);
+});
+
 test("スキーマ参照から連続挿入すると各項目が改行区切りになる", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.goto("/query");

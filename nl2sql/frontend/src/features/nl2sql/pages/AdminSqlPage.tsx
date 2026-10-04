@@ -473,6 +473,8 @@ export function AdminSqlPage() {
             disabled={loading}
             onLoad={(text) => {
               setSqlText(text);
+              // 手入力と同じく、読み込んだら未入力のエラーを消す（#933）。
+              setSqlError("");
               setConfirmation("");
               setResult(null);
               setExecutedRowLimit(null);
