@@ -190,6 +190,7 @@ from app.features.agent.runtime import (
     RunsData,
     RunState,
     RunStatus,
+    RunStep,
     RuntimeToolCallAuditData,
     ThreadData,
     ThreadNotFoundError,
@@ -375,6 +376,12 @@ class McpConnectionCreate(McpConnectionPatch):
         return value
 
 
+# 画面・API で作るスキルの ID（URL の path に置くため `/`・空白などを断る。#926）。
+# 宣言（SKILL.md・env・プラグイン）から読み込む既存の ID には当てない。
+SKILL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+SKILL_NOT_FOUND_MESSAGE = "スキルが見つかりません。"
+
+
 class AgentSkillCreate(BaseModel):
     id: str
     name: str
@@ -406,6 +413,11 @@ class PluginInstallRequest(BaseModel):
 
 class PluginPatch(BaseModel):
     enabled: bool | None = None
+
+
+# 画面・API で追加するマーケットプレイスの ID（URL の path に置くため `/`・空白などを断る。#928）。
+MARKETPLACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+MARKETPLACE_NOT_FOUND_MESSAGE = "マーケットプレイスが見つかりません。"
 
 
 class MarketplaceAddRequest(BaseModel):
@@ -472,6 +484,10 @@ class ToolCallAuditData(BaseModel):
     limit: int
     filters: dict[str, object] = Field(default_factory=dict)
     records: list[ToolCallAuditRecord]
+    # 見られる範囲の監査に記録されたツール名（絞り込みの条件に依らない）。
+    # 画面のツール名の選択肢に使う。
+    # MCP 接続のツール（`<接続>__<ツール>`）は `/api/tools` に出ないため（#983）。
+    tool_names: list[str] = Field(default_factory=list)
 
 
 class RuntimeSnapshotImportRequest(BaseModel):
@@ -1231,7 +1247,7 @@ async def get_agent_skill(
     """単一 skill の詳細(instructions / mcp_requirements)を返す(progressive disclosure)。"""
     skill = skill_registry.get(skill_id)
     if skill is None:
-        raise HTTPException(status_code=404, detail="skill not found")
+        raise HTTPException(status_code=404, detail=SKILL_NOT_FOUND_MESSAGE)
     return ApiResponse(data=skill)
 
 
@@ -1242,9 +1258,16 @@ async def create_agent_skill(
 ) -> ApiResponse[AgentSkillDefinition]:
     skill_id = payload.id.strip()
     if not skill_id:
-        raise HTTPException(status_code=400, detail="id is required")
+        raise HTTPException(status_code=400, detail="スキルの ID を入力してください。")
+    if not SKILL_ID_PATTERN.fullmatch(skill_id):
+        raise HTTPException(
+            status_code=422,
+            detail=("スキルの ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。"),
+        )
+    if not payload.name.strip():
+        raise HTTPException(status_code=422, detail="スキルの名前を入力してください。")
     if skill_registry.get(skill_id) is not None:
-        raise HTTPException(status_code=409, detail="skill already exists")
+        raise HTTPException(status_code=409, detail="同じ ID のスキルがあります。")
     skill = AgentSkillDefinition(
         id=skill_id,
         name=payload.name,
@@ -1272,12 +1295,17 @@ async def patch_agent_skill(
 ) -> ApiResponse[AgentSkillDefinition]:
     current = skill_registry.get(skill_id)
     if current is None:
-        raise HTTPException(status_code=404, detail="skill not found")
+        raise HTTPException(status_code=404, detail=SKILL_NOT_FOUND_MESSAGE)
     if current.source != "runtime":
         raise HTTPException(
             status_code=400,
-            detail=f"{current.source} skill is read-only; edit the source definition",
+            detail=(
+                "組み込み・ファイル・環境変数・プラグインのスキルは画面から変更できません。"
+                "読み込み元の定義を変更してください。"
+            ),
         )
+    if patch.name is not None and not patch.name.strip():
+        raise HTTPException(status_code=422, detail="スキルの名前を入力してください。")
     updated = current.model_copy(
         update={
             "name": current.name if patch.name is None else patch.name,
@@ -1312,15 +1340,47 @@ async def delete_agent_skill(
     skill_id: str,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentSkillListOutput]:
+    current = skill_registry.get(skill_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail=SKILL_NOT_FOUND_MESSAGE)
+    if current.source != "runtime":
+        # 組み込み・宣言のスキルは参照の有無にかかわらず消せない（その理由を先に出す）。
+        raise HTTPException(
+            status_code=400,
+            detail="組み込み・ファイル・環境変数・プラグインのスキルは画面から削除できません。",
+        )
+    # 業務 Agent が使っているスキルを消すと、その業務 Agent が保存・公開できなくなり、公開中の版は
+    # スキルを欠いて動く。プラグインの無効化・削除と同じく、使っていれば断る（#926）。
+    users = _agents_using_skill(skill_id)
+    if users:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"このスキルは業務 Agent（{'、'.join(users)}）が使っています。"
+                "業務 Agent のスキルから外してから削除してください。"
+            ),
+        )
     try:
         skill_registry.remove(skill_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="skill not found") from exc
+        raise HTTPException(status_code=404, detail=SKILL_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     _persist(lambda: control_plane_store.delete_skill(skill_id))
     skills = skill_registry.list()
     return ApiResponse(data=AgentSkillListOutput(skills=skills, metadata={"count": len(skills)}))
+
+
+def _agents_using_skill(skill_id: str) -> list[str]:
+    """スキルを下書きか公開中の版で使っている業務 Agent の名前（#926）。"""
+    users: list[str] = []
+    for agent in runtime_repository.list_agents():
+        published = agent.published()
+        if skill_id in agent.skill_ids or (
+            published is not None and skill_id in published.skill_ids
+        ):
+            users.append(agent.name or agent.id)
+    return users
 
 
 def _plugin_summary(record: PluginRecord) -> PluginSummary:
@@ -1362,10 +1422,7 @@ async def install_plugin(
     manifest = payload.manifest
     if manifest is None:
         if not payload.marketplace_id or not payload.plugin_id:
-            raise HTTPException(
-                status_code=400,
-                detail="manifest or (marketplace_id, plugin_id) is required",
-            )
+            raise HTTPException(status_code=400, detail="導入するプラグインを指定してください。")
         entry = marketplace_registry.find_entry(payload.marketplace_id, payload.plugin_id)
         if isinstance(entry, MarketplaceEntry):
             if not payload.preview_digest or not payload.accept_limitations:
@@ -1393,9 +1450,11 @@ async def install_plugin(
         else:
             manifest = entry
         if manifest is None:
-            raise HTTPException(status_code=404, detail="plugin not found in marketplace")
+            raise HTTPException(
+                status_code=404, detail="マーケットプレイスに対象のプラグインがありません。"
+            )
     if plugin_registry.get(manifest.id) is not None:
-        raise HTTPException(status_code=409, detail="plugin already installed")
+        raise HTTPException(status_code=409, detail="このプラグインは導入済みです。")
     try:
         record = plugin_registry.install(
             manifest,
@@ -1425,8 +1484,25 @@ async def add_plugin_marketplace(
     payload: MarketplaceAddRequest,
     _: None = Depends(require_admin),
 ) -> ApiResponse[MarketplaceSource]:
+    marketplace_id = payload.id.strip()
+    if not marketplace_id:
+        raise HTTPException(status_code=400, detail="マーケットプレイスの ID を入力してください。")
+    if not MARKETPLACE_ID_PATTERN.fullmatch(marketplace_id):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "マーケットプレイスの ID は英数字で始め、英数字・_・-・. の 100 文字以内に"
+                "してください。"
+            ),
+        )
+    # `MarketplaceRegistry.add` は env の宣言の再読み込みのために置き換えるため、画面・API からの
+    # 追加はここで重複を断る（前の配布元のプラグイン一覧が新しい配布元に残っていた。#928）。
+    if any(source.id == marketplace_id for source in marketplace_registry.list()):
+        raise HTTPException(status_code=409, detail="同じ ID のマーケットプレイスがあります。")
     try:
-        source = MarketplaceSource(id=payload.id, name=payload.name or payload.id, url=payload.url)
+        source = MarketplaceSource(
+            id=marketplace_id, name=payload.name.strip() or marketplace_id, url=payload.url
+        )
         added = marketplace_registry.add(source, payload.listing)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1451,7 +1527,7 @@ async def refresh_plugin_marketplace(
             data=source, warning_messages=[source.last_error] if source.last_error else []
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="marketplace not found") from exc
+        raise HTTPException(status_code=404, detail=MARKETPLACE_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -1497,7 +1573,7 @@ async def list_marketplace_plugins(
     try:
         return ApiResponse(data=marketplace_registry.get_listing(marketplace_id))
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="marketplace not found") from exc
+        raise HTTPException(status_code=404, detail=MARKETPLACE_NOT_FOUND_MESSAGE) from exc
 
 
 @router.delete(
@@ -1511,7 +1587,7 @@ async def delete_plugin_marketplace(
     try:
         marketplace_registry.remove(marketplace_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="marketplace not found") from exc
+        raise HTTPException(status_code=404, detail=MARKETPLACE_NOT_FOUND_MESSAGE) from exc
     _persist(lambda: control_plane_store.delete_marketplace(marketplace_id))
     return ApiResponse(data=MarketplaceSourcesOutput(marketplaces=marketplace_registry.list()))
 
@@ -1523,7 +1599,7 @@ async def get_plugin(
 ) -> ApiResponse[PluginRecord]:
     record = plugin_registry.get(plugin_id)
     if record is None:
-        raise HTTPException(status_code=404, detail="plugin not found")
+        raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE)
     return ApiResponse(data=record)
 
 
@@ -1536,12 +1612,12 @@ async def patch_plugin(
     if patch.enabled is None:
         record = plugin_registry.get(plugin_id)
         if record is None:
-            raise HTTPException(status_code=404, detail="plugin not found")
+            raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE)
         return ApiResponse(data=record)
     try:
         record = plugin_registry.set_enabled(plugin_id, patch.enabled)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="plugin not found") from exc
+        raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     _persist(lambda: control_plane_store.save_plugin(record))
@@ -1556,7 +1632,7 @@ async def uninstall_plugin(
     try:
         plugin_registry.uninstall(plugin_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="plugin not found") from exc
+        raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     _persist(lambda: control_plane_store.delete_plugin(plugin_id))
@@ -1611,10 +1687,12 @@ class BuiltinRuntimeStatus(BaseModel):
 
 
 @router.get("/runtime/status", response_model=ApiResponse[BuiltinRuntimeStatus])
-async def get_builtin_runtime_status(
-    _: None = Depends(require_viewer),
-) -> ApiResponse[BuiltinRuntimeStatus]:
-    """組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI）の SDK の版と使うモデル。"""
+async def get_builtin_runtime_status() -> ApiResponse[BuiltinRuntimeStatus]:
+    """組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI）の SDK の版と使うモデル。
+
+    権限は manifest（実行環境・業務 Agent のメニュー）だけで判定する。Run のデータ・秘密を
+    含まないため、Run の capability は求めない（「実行環境」をメニュー権限で開ける。#1041）。
+    """
     return ApiResponse(data=BuiltinRuntimeStatus.model_validate(builtin_runtime.runtime_status()))
 
 
@@ -1943,7 +2021,12 @@ async def list_agent_templates() -> ApiResponse[AgentTemplatesData]:
 
 def _require_runnable_agent(agent_id: str) -> None:
     """自動実行の Run は利用者の Run なので、公開した版の無い業務 Agent は選べない（#792）。"""
-    reason = agent_unavailable_reason(_control_plane_agent(agent_id))
+    try:
+        agent: AgentProfile | None = _control_plane_agent(agent_id)
+    except KeyError:
+        # 存在しない（消した）業務 Agent も「見つかりません」の 422 にする（500 にしない。#927）。
+        agent = None
+    reason = agent_unavailable_reason(agent)
     if reason is not None:
         raise HTTPException(
             status_code=422, detail={"code": "agent_unavailable", "message": reason}
@@ -2003,9 +2086,14 @@ async def update_automation(
     _: None = Depends(require_admin),
 ) -> ApiResponse[Automation]:
     item = _automation_for_actor(request, automation_id)
-    if payload.agent_id != item.agent_id:
+    agent_changed = payload.agent_id != item.agent_id
+    if agent_changed:
         _require_agent_access(request, payload.agent_id)
-    _require_runnable_agent(payload.agent_id)
+    # 実行できる業務 Agent かは、業務 Agent を変えるときと有効のまま保存するときだけ確かめる。
+    # 業務 Agent が無効・未公開・削除になった後でも、自動実行を無効にする保存は
+    # できるようにする（#927）。
+    if agent_changed or payload.enabled:
+        _require_runnable_agent(payload.agent_id)
     try:
         updated = automation_store.update(item.id, payload, now=datetime.now(UTC))
     except ControlPlaneStoreError as exc:
@@ -2780,6 +2868,12 @@ async def list_agents(request: Request) -> ApiResponse[AgentsData]:
     return ApiResponse(data=AgentsData(agents=agents))
 
 
+# 画面・API で作る業務 Agent の ID（URL の path に置くため `/`・空白などを断る。#1033）。
+# スキル・マーケットプレイスと同じ形。宣言・スナップショット・プラグインの既存の ID には当てない。
+AGENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+PLUGIN_NOT_FOUND_MESSAGE = "プラグインが見つかりません。"
+
+
 def _require_agent_name(name: str) -> None:
     """業務 Agent の名前は必須（画面と同じく空白だけも未入力。#925）。"""
     if not name.strip():
@@ -2792,10 +2886,26 @@ async def create_agent(
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentProfile]:
     _require_agent_name(agent.name)
+    # ID を送らなければ backend が `agent_<uuid>` を作る（画面の作成）。送られた ID は、その後の
+    # 取得・変更・削除の URL に置ける形だけを受け付ける（#1033）。
+    agent_id = agent.id.strip()
+    if not AGENT_ID_PATTERN.fullmatch(agent_id):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "業務 Agent の ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。"
+            ),
+        )
     # 画面・API で作る Agent は下書きから始める（公開するまで利用者の Run には使えない。#770）。
     # 版の項目は送られても使わない。
     draft = agent.model_copy(
-        update={"versioned": True, "versions": [], "published_version": None, "source": "runtime"}
+        update={
+            "id": agent_id,
+            "versioned": True,
+            "versions": [],
+            "published_version": None,
+            "source": "runtime",
+        }
     )
     # 作成に使った業種テンプレート（#810）。知らないテンプレートは保存しない（400）。
     if draft.template_id and find_template(draft.template_id) is None:
@@ -3655,6 +3765,11 @@ def _normalized_tool_names(tool_names: list[str]) -> list[str]:
     return sorted({name.strip() for name in tool_names if name.strip()})
 
 
+def _step_tool_name(step: RunStep) -> str:
+    """監査の記録のツール名（ツールの呼び出しの無い step は step の種類）。"""
+    return step.tool_call.name if step.tool_call else step.kind
+
+
 def _run_audit_data(run: RunState) -> RunAuditData:
     approvals = {approval.id: approval for approval in run.approvals}
     artifact_ids_by_step: dict[str, list[str]] = {}
@@ -3668,7 +3783,7 @@ def _run_audit_data(run: RunState) -> RunAuditData:
 
     records: list[ToolAuditRecord] = []
     for step in run.steps:
-        tool_name = step.tool_call.name if step.tool_call else step.kind
+        tool_name = _step_tool_name(step)
         result = step.tool_result
         approval = approvals.get(step.approval_id or "")
         definition = tool_registry.get(tool_name)
@@ -3754,12 +3869,15 @@ def _tool_call_audit_data(
                         ToolCallAuditRecord.model_validate(record.model_dump())
                         for record in projection.records
                     ],
+                    tool_names=projection.tool_names,
                 )
         except RuntimeError:
             pass
 
     records: list[ToolCallAuditRecord] = []
+    tool_names: set[str] = set()
     for run in _filter_runs_for_actor(request, runtime_repository.list_runs()):
+        tool_names.update(_step_tool_name(step) for step in run.steps)
         if run_id is not None and run.id != run_id:
             continue
         audit = _run_audit_data(run)
@@ -3789,6 +3907,7 @@ def _tool_call_audit_data(
         limit=limit,
         filters=filters,
         records=records[offset : offset + limit],
+        tool_names=sorted(tool_names),
     )
 
 
@@ -3867,14 +3986,27 @@ def _tool_call_audit_csv(records: list[ToolCallAuditRecord]) -> str:
         "run_updated_at",
     ]
     output = StringIO()
+    # BOM を付ける（日本語の Excel は BOM の無い CSV を Shift_JIS として読み、文字化けする。#983）。
+    output.write("\ufeff")
     writer = DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
     for record in records:
         row = record.model_dump(mode="json")
         row["guardrail_warnings"] = "|".join(record.guardrail_warnings)
         row["artifact_ids"] = "|".join(record.artifact_ids)
-        writer.writerow(row)
+        writer.writerow({key: _csv_cell(value) for key, value in row.items()})
     return output.getvalue()
+
+
+# 表計算ソフトが数式として扱う先頭の文字（OWASP の CSV injection。#983）。
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_cell(value: object) -> object:
+    """利用者の入力（実行の目標・エラーなど）が数式として実行されないよう、先頭に `'` を付ける。"""
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return f"'{value}"
+    return value
 
 
 def _audit_text(metadata: dict[str, object], key: str) -> str | None:

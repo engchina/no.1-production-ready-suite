@@ -2001,6 +2001,10 @@ class ProfileSyncJobData(BaseModel):
     agent_result: AssetRefreshData | None = None
     error_code: str = ""
     error_message_ja: str = ""
+    # 失敗した工程（phase は失敗時に failed へ変わるため別に残す）。
+    # DBMS_CLOUD_AI Profile の反映は済み、Agent アセットの再構築・検証だけが失敗した
+    # 「一部の成功」を画面が見分けるのに使う。
+    failed_phase: ProfileSyncJobPhase | None = None
     retry_of_job_id: str = ""
     created_at: str = ""
     deadline_at: str = ""
