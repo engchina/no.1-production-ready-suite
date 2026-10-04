@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "./fixtures/test";
 
-import { SYSTEM_TABLES_STATUS_OK, mockLocalAuth } from "./_helpers";
+import { SYSTEM_TABLES_STATUS_OK, expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
 type AdbStatus =
   | "success"
@@ -147,6 +147,34 @@ test("ADB 管理パネルが情報を表示し起動操作できる", async ({ p
   await expect(
     page.getByText("データベース 'RAG ADB' の起動を開始しました。")
   ).toBeVisible();
+});
+
+test("ADB の情報を取得している間は経過時間付きの読み込み表示を出す", async ({ page }) => {
+  let release: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await mockDatabaseAndAdb(page, {
+    info: () => adbInfo({ lifecycle_state: "AVAILABLE" }),
+  });
+  // 後から登録した route が先に当たる。ADB の情報の取得だけを止める。
+  await page.route("**/api/settings/database/adb", async (route) => {
+    await released;
+    await route.fallback();
+  });
+
+  await page.goto("/settings/database");
+
+  const loading = page.getByTestId("settings-adb-loading");
+  await expect(loading).toContainText("Autonomous Database の情報を読み込んでいます");
+  await expect(loading).toContainText("経過時間");
+  await expect(page.getByRole("button", { name: "停止", exact: true })).toBeDisabled();
+  await expectNoPageOverflow(page);
+
+  release();
+  await expect(loading).toHaveCount(0);
+  await expect(page.getByText("OCI ADB: 起動済み")).toBeVisible();
+  await expect(page.getByRole("button", { name: "停止", exact: true })).toBeEnabled();
 });
 
 test("ADB 管理パネルで起動前に設定を保存できる", async ({ page }) => {
