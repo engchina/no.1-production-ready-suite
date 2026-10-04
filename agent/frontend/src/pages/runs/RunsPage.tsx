@@ -62,6 +62,7 @@ import {
   useRunEventWebSocket,
 } from "@/pages/runs/run-event-stream";
 import { focusField, formatDate } from "@/pages/shared/page-helpers";
+import { useViewSwitchFocus } from "@/pages/shared/view-switch-focus";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 const DEFAULT_RUN_GOAL = t("run.form.goalDefault");
@@ -102,9 +103,11 @@ export function RunsPage() {
     queryFn: agentApi.listAgents,
   });
   // 組み込み Runtime が実行できるか（モデル未設定なら Run は失敗するため、作成の前に知らせる。#754）。
+  // 作成できる利用者だけが読む（閲覧だけの利用者には API の権限が無く、403 で権限なしの画面へ移るため。#1113）。
   const runtimeStatus = useQuery({
     queryKey: ["runtime-status"],
     queryFn: agentApi.getRuntimeStatus,
+    enabled: capabilities.operateRuns,
   });
   const createRun = useMutation({
     mutationFn: agentApi.createRun,
@@ -223,18 +226,12 @@ export function RunsPage() {
     if (targetRunId) {
       setSelectedRunId(targetRunId);
     }
-    // URL の切替はページ移動として見出しへ、一覧へ戻ると選んだ行へフォーカスを戻す。
-    const frame = requestAnimationFrame(() => {
-      const rowLink =
-        viewKind === "list" && selectedRunId
-          ? document.querySelector<HTMLAnchorElement>(`a[data-run-id="${CSS.escape(selectedRunId)}"]`)
-          : null;
-      const heading = document.querySelector<HTMLElement>("main h1");
-      if (heading) heading.tabIndex = -1;
-      (rowLink ?? heading)?.focus({ preventScroll: true });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [viewKind, targetRunId, selectedRunId, setSelectedRunId]);
+  }, [targetRunId, setSelectedRunId]);
+  // URL の切替はページ移動として見出しへ、一覧へ戻ると選んだ行へフォーカスを戻す（開いた直後は動かさない。#1122）。
+  useViewSwitchFocus(
+    `${viewKind}:${targetRunId ?? ""}`,
+    viewKind === "list" && selectedRunId ? `a[data-run-id="${CSS.escape(selectedRunId)}"]` : null
+  );
 
   async function backToList() {
     if (!createRun.isPending && (await confirmClose())) editor.backToList();

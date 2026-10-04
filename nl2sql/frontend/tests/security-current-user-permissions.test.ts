@@ -60,3 +60,15 @@ test("コメント・アノテーション・ドメインの管理はスキー�
     assert.equal(currentUserHasPermission(user, MENU_PERMISSIONS.tableManagement), false, menu);
   }
 });
+
+test("用語・同義語と共通ルールの権限は業務プロファイル管理と学習素材管理を含まない（#1006）", () => {
+  for (const menu of [MENU_PERMISSIONS.glossaryRules, MENU_PERMISSIONS.globalRules]) {
+    const user = currentUser({ permissions: [menu] });
+
+    assert.equal(currentUserHasPermission(user, menu), true);
+    assert.equal(currentUserHasPermission(user, CAPABILITY_PERMISSIONS.schemaRead), true);
+    assert.equal(currentUserHasPermission(user, CAPABILITY_PERMISSIONS.profilesManage), false);
+    assert.equal(currentUserHasPermission(user, CAPABILITY_PERMISSIONS.learningMaterialManage), false);
+    assert.equal(currentUserHasPermission(user, MENU_PERMISSIONS.profiles), false);
+  }
+});

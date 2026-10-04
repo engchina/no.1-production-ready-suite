@@ -624,6 +624,8 @@ function McpConnectionEditor({
   const [formBaseline, setFormBaseline] = useState<McpConnectionFormState>(() => mcpFormOf(connection));
   const [serverIdError, setServerIdError] = useState<string | null>(null);
   const [timeoutError, setTimeoutError] = useState<string | null>(null);
+  // 保存した回数。保存し直したら、前の設定（秘密を含む）でのツールの取得の結果を消す（messaging.md §10.4。#1014）。
+  const [savedCount, setSavedCount] = useState(0);
   const editingId = connection?.server_id ?? null;
   // RAG / NL2SQL は Run の利用者のサービストークンで呼ぶ接続（認証方式は変えられない）。
   const builtin = connection?.source === "builtin";
@@ -663,6 +665,7 @@ function McpConnectionEditor({
       const next = { ...current, apiKey: "", sessionId: "", oauthClientSecret: "" };
       setForm(next);
       setFormBaseline(next);
+      setSavedCount((count) => count + 1);
       await onSaved(saved.server_id ?? current.serverId.trim());
     },
   });
@@ -928,7 +931,9 @@ function McpConnectionEditor({
           </Section>
         </fieldset>
         {/* 保存した接続だけツールを取得できる（入力中の値ではなく保存済みの設定で呼ぶ）。 */}
-        {connection ? <McpConnectionToolsPanel key={connection.server_id} connection={connection} /> : null}
+        {connection ? (
+          <McpConnectionToolsPanel key={`${connection.server_id}-${savedCount}`} connection={connection} />
+        ) : null}
       </PageBody>
     </>
   );

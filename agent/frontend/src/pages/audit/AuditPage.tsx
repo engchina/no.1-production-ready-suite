@@ -28,6 +28,7 @@ import {
   SelectField,
   TextField,
   useActionPending,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 import { agentApi, type ToolCallAuditFilters, type ToolCallAuditRecord } from "@/lib/api";
 import { agentPaginationLabels, listScrollLabel, QueryState } from "@/components/ListViews";
@@ -153,6 +154,14 @@ export function AuditPage() {
     }
   }, [audit.data?.records.length, auditPage, lastAuditPage, setAuditPage]);
   const { runId, toolName, stepStatus, approvalStatus, errorCode, warnings, limit } = filterForm;
+  // ツール名の選択肢は、登録済みのツール（`/api/tools`）と監査に記録されたツール名を合わせる。
+  // MCP 接続のツール（`<接続>__<ツール>`）は `/api/tools` に出ない（#983）。選択中の値も残す。
+  const auditToolNames = audit.data?.tool_names;
+  const toolNameOptions = useMemo(() => {
+    const names = new Set([...(tools.data?.tools ?? []).map((tool) => tool.name), ...(auditToolNames ?? [])]);
+    if (toolName) names.add(toolName);
+    return [...names].sort().map((name) => ({ value: name, label: name }));
+  }, [tools.data, auditToolNames, toolName]);
 
   function setFilter<K extends keyof AuditFilterForm>(key: K, value: AuditFilterForm[K]) {
     setFilterForm((current) => ({ ...current, [key]: value }));
@@ -188,7 +197,7 @@ export function AuditPage() {
       window.setTimeout(() => URL.revokeObjectURL(url), 0);
       toast.success(t("audit.csvDownloaded"));
     },
-    onError: (error) => toast.error(t("audit.csvFailed"), { description: error.message }),
+    onError: (error) => toast.error(t("audit.csvFailed"), { description: apiErrorMessage(error, t("common.error.retryLater")) }),
   });
 
   return (
@@ -231,10 +240,7 @@ export function AuditPage() {
                 id="audit-tool-name"
                 label={t("audit.toolName")}
                 value={toolName}
-                options={[
-                  { value: "", label: t("common.all") },
-                  ...(tools.data?.tools ?? []).map((tool) => ({ value: tool.name, label: tool.name })),
-                ]}
+                options={[{ value: "", label: t("common.all") }, ...toolNameOptions]}
                 onValueChange={(value) => setFilter("toolName", value)}
               />
               <SelectField
@@ -318,7 +324,7 @@ export function AuditPage() {
               />
             ) : null}
             <p className="text-xs leading-5 text-fg-muted">{t("audit.csvHint")}</p>
-            {tools.error ? <Banner severity="warning">{tools.error.message}</Banner> : null}
+            {tools.error ? <Banner severity="warning">{apiErrorMessage(tools.error, t("common.error.load"))}</Banner> : null}
           </CardContent>
         </Card>
 

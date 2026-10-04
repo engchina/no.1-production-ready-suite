@@ -87,6 +87,8 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.endpointHelpTertiary":
     "OpenAI は https://api.openai.com/v1、OpenAI 互換 API や OCI Enterprise AI はその base URL を指定します。Responses API（/responses）で呼び出します。",
   "settings.model.enterprise.modelId": "モデル ID",
+  "settings.model.enterprise.modelIdDuplicate":
+    "モデル ID「{model}」はすでに登録されています。同じモデルは 1 行にまとめてください。",
   "settings.model.enterprise.models": "登録モデル",
   "settings.model.enterprise.modelsDescription":
     "回答生成と画像の読み取りに使うモデルを登録し、画像入力に対応するかを指定します。画像入力に対応したモデルを、画面では「画像対応モデル」（Vision 対応のモデル）と呼びます。",

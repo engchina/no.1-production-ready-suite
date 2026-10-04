@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "./fixtures/test";
-import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
+import { expectedControlHeight, expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
 type ServiceStatus =
   | "running"
@@ -412,7 +412,13 @@ test("実行コマンドは既定で折りたたまれ、展開すると systemd
   // 既定では閉じている(コマンドは描画されない)。
   await expect(page.getByText(status, { exact: false })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "実行コマンド" }).click();
+  // 開閉の見出しは共有の Disclosure の <summary>。高さは lg 40px・タッチ端末 44px（以前は手書きで 34px。#1135）。
+  const commandsSummary = page.locator("summary", { hasText: "実行コマンド" });
+  await expect(commandsSummary).toBeVisible();
+  expect(Math.round((await commandsSummary.boundingBox())?.height ?? 0)).toBe(
+    await expectedControlHeight(page, "lg")
+  );
+  await commandsSummary.click();
 
   await expect(page.getByText(status, { exact: false }).first()).toBeVisible();
   await expect(
@@ -560,6 +566,84 @@ test("取得に失敗したら再試行できる", async ({ page }) => {
   await expect(page.getByRole("alert")).toContainText("サービス一覧を取得できませんでした。");
   await expect(page.getByRole("button", { name: "再試行" })).toBeVisible();
 });
+
+test("別のサービスの操作を続けて始めても、先の操作の実行中の表示と結果を失わない", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await mockServices(page, { controlEnabled: true });
+  const releases = new Map<string, () => void>();
+  await page.route("**/api/services/*/start", async (route) => {
+    const id = decodeURIComponent(route.request().url().match(/services\/([^/]+)\/start/)?.[1] ?? "");
+    await new Promise<void>((resolve) => releases.set(id, resolve));
+    await route.fallback();
+  });
+
+  await page.goto("/settings/services");
+  await page.getByRole("button", { name: "Docling 起動" }).click();
+  await expect(page.getByTestId("service-processing-parser-docling")).toBeVisible();
+  await page.getByRole("button", { name: "ASR(音声文字起こし) 起動" }).click();
+  await expect(page.getByTestId("service-processing-parser-asr")).toBeVisible();
+  // 先に始めた Docling の起動はまだ終わっていない。
+  await expect(page.getByTestId("service-processing-parser-docling")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Docling 起動" })).toBeDisabled();
+
+  releases.get("parser-docling")?.();
+  await expect(page.getByText("Docling を起動しました。")).toBeVisible();
+  await expect(page.getByTestId("service-processing-parser-docling")).toHaveCount(0);
+  // 後から始めた ASR の起動は続いている。
+  await expect(page.getByTestId("service-processing-parser-asr")).toBeVisible();
+  releases.get("parser-asr")?.();
+  await expect(page.getByText("ASR(音声文字起こし) を起動しました。")).toBeVisible();
+  await expect(page.getByTestId("service-processing-parser-asr")).toHaveCount(0);
+});
+
+// 処理の失敗は Toast ではなく、操作した行の直下に danger の Banner で出し、技術的な詳細は
+// 開いた「詳細」に畳む（UX 契約 messaging.md §10）。次の操作を始めたら消す。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`起動の失敗は操作した行の直下に Banner で出す (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockServices(page, { controlEnabled: true });
+    let fail = true;
+    await page.route("**/api/services/*/start", async (route) => {
+      if (!fail) return route.fallback();
+      await route.fulfill({
+        status: 502,
+        json: {
+          data: null,
+          error_messages: ["systemd の unit を起動できませんでした。ログを確認してください。"],
+          error_code: "service_control_failed",
+          warning_messages: [],
+        },
+      });
+    });
+
+    await page.goto("/settings/services");
+    await page.getByRole("button", { name: "Docling 起動" }).click();
+
+    const row = page.getByTestId("service-row-parser-docling");
+    const failure = row.getByTestId("service-failure-parser-docling");
+    await expect(failure).toBeVisible();
+    await expect(failure).toContainText("Docling を起動できませんでした。");
+    await expect(failure).toContainText("systemd の unit を起動できませんでした。ログを確認してください。");
+    const details = failure.locator("details");
+    await expect(details).toHaveAttribute("open", "");
+    await expect(details).toContainText("502");
+    await expect(details).toContainText("service_control_failed");
+    // 失敗は Toast に出さない（同じ結果を 1 か所に出す）。
+    await expect(page.locator("[data-toast-placement]")).not.toContainText("Docling");
+    // ほかのサービスの行には出さない。
+    await expect(page.getByTestId("service-row-parser-asr").getByTestId("service-failure-parser-asr")).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+
+    // もう一度実行したら前の失敗を消し、成功は Toast で知らせる。
+    fail = false;
+    await page.getByRole("button", { name: "Docling 起動" }).click();
+    await expect(page.getByText("Docling を起動しました。")).toBeVisible();
+    await expect(failure).toHaveCount(0);
+  });
+}
 
 async function expectNoHorizontalOverflow(page: Page) {
   const overflow = await page.evaluate(

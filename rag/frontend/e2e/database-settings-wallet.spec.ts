@@ -117,6 +117,66 @@ test("データベース設定から Wallet ZIP をアップロードできる",
   await expect(walletService).toContainText("ragdb_high");
 });
 
+test("Wallet ZIP をアップロードしたら DB ゲートの状態を確かめ直す", async ({ page }) => {
+  let current = { ...databaseSettings, readiness: "wallet_not_found" };
+  let walletInstalled = false;
+  let statusCalls = 0;
+  await mockDatabaseSettings(page, () => current, async () => {
+    walletInstalled = true;
+    current = {
+      ...current,
+      wallet_uploaded: true,
+      available_services: ["ragdb_high"],
+      readiness: "ok",
+    };
+  });
+  await page.route("**/api/ready/database", async (route) => {
+    statusCalls += 1;
+    await route.fulfill({
+      json: {
+        data: walletInstalled
+          ? { status: "ok", check: "ok", detail: null }
+          : { status: "not_configured", check: "wallet_not_found", detail: null },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/knowledge-bases**", (route) =>
+    route.fulfill({
+      json: {
+        data: { items: [], total: 0, limit: 50, offset: 0, has_next: false },
+        error_messages: [],
+        warning_messages: [],
+      },
+    })
+  );
+
+  await page.goto("/knowledge-bases");
+  const gate = page.locator('section[aria-labelledby="database-unavailable-title"]');
+  await expect(gate.getByRole("heading", { name: "データベースの接続情報が未設定です" })).toBeVisible();
+  const callsBeforeUpload = statusCalls;
+
+  // 案内からデータベース設定へ移り（画面の再読み込みなし）、Wallet を置く。
+  await gate.getByRole("link", { name: "データベース設定を開く" }).click();
+  await expect(page).toHaveURL(/\/settings\/database$/);
+  await page.getByTestId("oracle-wallet-upload-input").setInputFiles({
+    name: "Wallet_RAGDB.zip",
+    mimeType: "application/zip",
+    buffer: Buffer.from("wallet-zip"),
+  });
+  await expect(
+    page.getByText("Wallet ZIP をアップロードしました: Wallet_RAGDB.zip").first()
+  ).toBeVisible();
+
+  // ゲートの cache（15 秒）の間に戻っても、古い「未設定」の案内を出さず、状態を確かめ直す。
+  await page.goBack();
+  await expect(page).toHaveURL(/\/knowledge-bases$/);
+  await expect(page.getByRole("heading", { name: "ナレッジベース", exact: true })).toBeVisible();
+  await expect(gate).toHaveCount(0);
+  expect(statusCalls).toBeGreaterThan(callsBeforeUpload);
+});
+
 test("保存済み DB 認証 secret をチェックボックスで削除できる", async ({ page }) => {
   let savedPayload: Record<string, unknown> | null = null;
   await mockDatabaseSettings(

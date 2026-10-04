@@ -42,7 +42,7 @@ import {
   CAPABILITY_PERMISSIONS,
   MENU_PERMISSIONS,
 } from "@/features/security/menu-permissions";
-import { ApiError, apiGet, apiPost, isAbortError, isTimeoutError } from "@/lib/api";
+import { ApiError, apiGet, apiPost, isAbortError, isTimeoutError, isTransportError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
 import { formatDateTime } from "@/lib/format";
@@ -66,13 +66,14 @@ import {
 } from "./incrementalQueries";
 import { SelectAiFeedbackAddPanel } from "./components/SelectAiFeedbackAddPanel";
 import { isJobInFlight } from "./jobPersistence";
+import { submitNl2SqlJob } from "./jobSubmission";
 import { prefillFromSearchParams } from "./queryPrefillState";
 import { QUESTION_TEMPLATES } from "./questionTemplates";
 import { profileDisplayLabel } from "./profileDisplay";
 import type {
   HistoryData,
   HistoryItem,
-  JobCreateData,
+  JobData,
   Nl2SqlEngine,
   Nl2SqlResult,
   ProfileRecommendationData,
@@ -139,6 +140,8 @@ function messageWithRetryHint(message: string) {
 }
 
 function actionErrorMessage(error: unknown, fallback: string) {
+  // 通信の失敗の文は「何が起きたか + 次にできること」を持つので、再試行の案内を重ねない（#916）。
+  if (isTransportError(error)) return error.message;
   return messageWithRetryHint(messageFromError(error, fallback));
 }
 
@@ -201,6 +204,9 @@ function ExecutableNl2SqlWorkbench() {
   }, [profileId, setQuestion]);
   const [selection, setSelection] = useState<SchemaSelection>(() => emptySelection());
   const [result, setResult] = useState<Nl2SqlResult | null>(null);
+  // 結果の SQL を実行して結果を整形したか（ジョブが done で終わったか）。遮断・実行の失敗のジョブも
+  // 生成 SQL を確かめられるよう空の results を持つ result を返すので、結果の表はこれで出し分ける（#917）。
+  const [resultExecuted, setResultExecuted] = useState(false);
   const [recommendation, setRecommendation] = useState<ProfileRecommendationData | null>(null);
   const [similarHistory, setSimilarHistory] = useState<SimilarHistoryItem[]>([]);
   const [similarHistoryLoading, setSimilarHistoryLoading] = useState(false);
@@ -469,8 +475,9 @@ function ExecutableNl2SqlWorkbench() {
     setHistory(historyData.items);
   }, []);
 
-  const handleJobResult = useCallback((data: Nl2SqlResult) => {
+  const handleJobResult = useCallback((data: Nl2SqlResult, finishedJob: JobData) => {
     setResult(data);
+    setResultExecuted(finishedJob.status === "done");
   }, []);
 
   // job 自体のエラーは OperationStatusStrip（job.error_message）へ一本化して表示する。
@@ -497,15 +504,23 @@ function ExecutableNl2SqlWorkbench() {
     onHistoryRefreshFailed: handleHistoryRefreshFailed,
   });
   // 実行中 job の協調キャンセル要求。停止自体は polling が terminal 遷移で拾う。
+  // backend は実行中の段階が終わってから止めるので、受け付けたジョブを覚えて、止まるまで受付を出し
+  // 「実行を中止」を押せなくする。要求の失敗は中止のボタンの行に出す（messaging §10.1。#918）。
   const [cancelRequesting, setCancelRequesting] = useState(false);
+  const [cancelAcceptedJobId, setCancelAcceptedJobId] = useState("");
+  const [cancelFailure, setCancelFailure] = useState<{ jobId: string; message: string } | null>(null);
   const requestJobCancel = useCallback(async () => {
     if (!job || !isJobInFlight(job.status)) return;
+    const jobId = job.job_id;
     setCancelRequesting(true);
+    setCancelFailure(null);
     try {
-      await apiPost(`/api/nl2sql/jobs/${encodeURIComponent(job.job_id)}/cancel`, {});
+      await apiPost(`/api/nl2sql/jobs/${encodeURIComponent(jobId)}/cancel`, {}, {
+        timeoutMs: API_TIMEOUT_MS.jobControl,
+      });
+      setCancelAcceptedJobId(jobId);
     } catch (err) {
-      setActionError(actionErrorMessage(err, t("nl2sql.job.cancelFailed")));
-      setActionOperationKey((current) => current + 1);
+      setCancelFailure({ jobId, message: actionErrorMessage(err, t("nl2sql.job.cancelFailed")) });
     } finally {
       setCancelRequesting(false);
     }
@@ -945,10 +960,11 @@ function ExecutableNl2SqlWorkbench() {
           question: trimmed,
           profile_id: profileId || null,
           use_glossary: rewriteUseGlossary,
-        });
+        }, { timeoutMs: API_TIMEOUT_MS.interactiveDetail });
         setRewriteData(rewrite);
       }
-      const data = await apiPost<JobCreateData>("/api/nl2sql/jobs", generationRequest);
+      // 送信前に job ID を決め、応答が届かなくても作られたジョブを取り直す（二重に投入しない。#916）。
+      const data = await submitNl2SqlJob(generationRequest);
       // 追跡開始後の取得・リトライ・断念は useNl2SqlJobPolling が担う。
       // ここで初回 poll を await すると、その失敗が「検索開始失敗」と誤表示され
       // 成功した job の追跡まで破棄されるため、try 節は job 作成までとする。
@@ -1675,10 +1691,13 @@ function ExecutableNl2SqlWorkbench() {
           }
           onCancelJob={requestJobCancel}
           cancelRequesting={cancelRequesting}
+          cancelAccepted={Boolean(job) && cancelAcceptedJobId === job?.job_id}
+          cancelErrorMessage={cancelFailure && cancelFailure.jobId === job?.job_id ? cancelFailure.message : ""}
         />
 
         <WorkspaceResultNotice result={result} inputSignature={JSON.stringify(generationRequest)} finishedAt={result?.timing?.finished_at} />
-        <Nl2SqlResultTable results={result?.results ?? null} />
+        {/* 実行していない SQL（遮断・実行の失敗）の空の results を「0 件」と見せない（#917）。 */}
+        <Nl2SqlResultTable results={resultExecuted ? result?.results ?? null : null} />
         <SelectAiFeedbackAddPanel
           result={result}
           history={latestHistory}
