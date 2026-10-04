@@ -1,6 +1,7 @@
 import { WarningsBanner } from "@/components/WarningsBanner";
 import { ErrorState } from "@/components/StateViews";
 import {
+  apiErrorMessage,
   Button,
   buttonVariants,
   Banner,
@@ -156,7 +157,7 @@ export function QuestionClassifierModelsPage() {
   const [message, setMessage] = useState("");
   const [actionError, setActionError] = useState<ActionError>(null);
   const showActionError = (origin: ActionErrorOrigin, err: unknown, fallback: string) =>
-    setActionError({ origin, message: err instanceof Error ? err.message : fallback });
+    setActionError({ origin, message: apiErrorMessage(err, fallback) });
   const actionErrorFor = (origin: ActionErrorOrigin) =>
     actionError?.origin === origin ? actionError.message : "";
   const [editingBaseline, setEditingBaseline] = useState("");
@@ -232,7 +233,7 @@ export function QuestionClassifierModelsPage() {
         if (isAbortError(err)) {
           return;
         }
-        setMessage(err instanceof Error ? err.message : t("qcm.error.load"));
+        setMessage(apiErrorMessage(err, t("qcm.error.load")));
       })
       .finally(() => {
         if (sequence === loadSequence.current) setLoading("");
@@ -311,7 +312,7 @@ export function QuestionClassifierModelsPage() {
       }
     } catch (err) {
       if (sequence !== candidateLoadSequence.current) return;
-      setCandidateError(err instanceof Error ? err.message : t("qcm.candidates.error.load"));
+      setCandidateError(apiErrorMessage(err, t("qcm.candidates.error.load")));
     } finally {
       if (sequence === candidateLoadSequence.current) setLoading("");
     }
@@ -368,7 +369,7 @@ export function QuestionClassifierModelsPage() {
       await loadCandidates();
       toast.success(t("qcm.candidates.added", { count: data.imported_count }));
     } catch (err) {
-      setCandidateActionError(err instanceof Error ? err.message : t("qcm.candidates.error.add"));
+      setCandidateActionError(apiErrorMessage(err, t("qcm.candidates.error.add")));
     } finally {
       setLoading("");
     }
