@@ -475,3 +475,164 @@ test("REVIEW の再処理は確認ダイアログを挟む", async ({ page }) =>
   await dialog.getByRole("button", { name: "キャンセル" }).click();
   await expect(dialog).toHaveCount(0);
 });
+
+test("レシピを切り替えるときは未保存の修正の破棄を確認し、別のレシピへ持ち越さない（#944）", async ({
+  page,
+}) => {
+  const calls = await mockReviewWorkspace(page);
+  // レシピ2（レシピ1の複製。同じ解析なので要素 ID も同じ）も確認待ち。
+  const recipe2 = {
+    ...recipeView(),
+    recipe_id: "recipe-2",
+    slot_no: 2,
+    active_extraction_recipe_id: "er-recipe-2-r1",
+  };
+  await page.route(`**/api/documents/${DOC_ID}/recipes`, (route) =>
+    route.fulfill({ json: { data: [recipeView(), recipe2], error_messages: [], warning_messages: [] } })
+  );
+  let recipe2Saves = 0;
+  await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-2/**`, async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const extraction = reviewDocumentDetail("REVIEW").extraction;
+    if (path.endsWith("/review-edits")) {
+      recipe2Saves += 1;
+      await route.fulfill({ json: { data: recipe2, error_messages: [], warning_messages: [] } });
+    } else if (path.endsWith("/extraction-export")) {
+      // 抽出結果はレシピ1と同じ（保存済みの内容）。
+      await route.fulfill({
+        json: {
+          data: {
+            document_id: DOC_ID,
+            file_name: "policy.txt",
+            format: "json",
+            content_type: "application/json; charset=utf-8",
+            content: JSON.stringify(extraction),
+            payload: extraction,
+            chunks: [],
+            parser_backend: "local_partition",
+            parser_profile: "local_text_structure",
+            page_count: 1,
+            element_count: extraction.elements.length,
+            table_count: extraction.tables.length,
+            asset_count: 0,
+          },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+    } else if (path.endsWith("/content")) {
+      await route.fulfill({ status: 200, contentType: "text/plain", body: extraction.raw_text });
+    } else {
+      await route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } });
+    }
+  });
+  await page.goto(`/documents/${DOC_ID}`);
+
+  await page.getByRole("tab", { name: "構造化要素" }).click();
+  await page.getByRole("button", { name: "構造化要素を修正" }).click();
+  await page.locator("#review-edit-el-0000").fill("レシピ1への修正");
+  // 未保存の修正があるあいだは、レシピの操作の「処理を再開」からも承認させない（本文側の承認と同じ）。
+  await expect(
+    page.getByTestId("document-recipe-actions").getByRole("button", { name: "処理を再開" })
+  ).toBeDisabled();
+
+  const chooseRecipe2 = async () => {
+    if ((page.viewportSize()?.width ?? 0) < 640) {
+      await page.getByRole("combobox", { name: "表示するレシピ" }).click();
+      await page.getByRole("option", { name: /^レシピ2/ }).click();
+    } else {
+      await page.getByRole("button", { name: /^レシピ2/ }).click();
+    }
+  };
+  const dialog = page.getByRole("alertdialog");
+
+  // キャンセルすると、レシピ1と修正をそのまま残す。
+  await chooseRecipe2();
+  await expect(dialog.getByText("未保存の変更を破棄しますか?")).toBeVisible();
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page).toHaveURL(/recipe=recipe-1/);
+  await expect(page.locator("#review-edit-el-0000")).toHaveValue("レシピ1への修正");
+
+  // 破棄すると、レシピ2は保存済みの内容で、修正も未保存の案内も持ち越さない。
+  await chooseRecipe2();
+  await dialog.getByRole("button", { name: "破棄して切り替え" }).click();
+  await expect(page).toHaveURL(/recipe=recipe-2/);
+  await expect(page.getByText("未保存の変更があります。", { exact: false })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "承認して Chunk 作成" })).toBeEnabled();
+  await page.getByRole("tab", { name: "構造化要素" }).click();
+  await page.getByRole("button", { name: "構造化要素を修正" }).click();
+  await expect(page.locator("#review-edit-el-0000")).toHaveValue("経費申請");
+  await expect(page.getByRole("button", { name: "変更を保存" })).toBeDisabled();
+  expect(calls.save).toBe(0);
+  expect(recipe2Saves).toBe(0);
+});
+
+test("処理レシピの操作の失敗は、そのレシピを選んでいるときだけ出す（#944）", async ({ page }) => {
+  await mockReviewWorkspace(page);
+  const recipe2 = { ...recipeView(), recipe_id: "recipe-2", slot_no: 2 };
+  await page.route(`**/api/documents/${DOC_ID}/recipes`, (route) =>
+    route.fulfill({ json: { data: [recipeView(), recipe2], error_messages: [], warning_messages: [] } })
+  );
+  await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1`, (route) =>
+    route.request().method() === "DELETE"
+      ? route.fulfill({
+          status: 409,
+          json: { data: null, error_messages: ["処理中のレシピは削除できません。"], warning_messages: [] },
+        })
+      : route.fallback()
+  );
+  await page.goto(`/documents/${DOC_ID}?recipe=recipe-1`);
+
+  const actions = page.getByTestId("document-recipe-actions");
+  await actions.getByRole("button", { name: "その他の操作" }).click();
+  await page.getByRole("menuitem", { name: "レシピを削除" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "削除" }).click();
+  const failure = page.getByText("処理中のレシピは削除できません。");
+  await expect(failure).toBeVisible();
+
+  const chooseRecipe = async (slot: number) => {
+    if ((page.viewportSize()?.width ?? 0) < 640) {
+      await page.getByRole("combobox", { name: "表示するレシピ" }).click();
+      await page.getByRole("option", { name: new RegExp(`^レシピ${slot}`) }).click();
+    } else {
+      await page.getByRole("button", { name: new RegExp(`^レシピ${slot}`) }).click();
+    }
+  };
+  await chooseRecipe(2);
+  await expect(page).toHaveURL(/recipe=recipe-2/);
+  await expect(failure).toHaveCount(0);
+  await chooseRecipe(1);
+  await expect(failure).toBeVisible();
+});
+
+test("分類の有効期間の終了日が開始日より後でなければ、送らずに欄の下で知らせる（#944）", async ({
+  page,
+}) => {
+  await mockReviewWorkspace(page);
+  let saves = 0;
+  await page.route(`**/api/documents/${DOC_ID}/classification`, async (route) => {
+    saves += 1;
+    await route.fulfill({
+      json: { data: reviewDocumentDetail("REVIEW"), error_messages: [], warning_messages: [] },
+    });
+  });
+  await page.goto(`/documents/${DOC_ID}`);
+
+  const from = page.getByLabel("有効期間の開始日");
+  const to = page.getByLabel("有効期間の終了日");
+  await from.fill("2026-02-01");
+  await to.fill("2026-01-01");
+  await page.getByRole("button", { name: "分類を保存" }).click();
+
+  await expect(page.getByText("終了日は開始日より後の日付にしてください。")).toBeVisible();
+  await expect(to).toHaveAttribute("aria-invalid", "true");
+  await expect(to).toBeFocused();
+  await expect(page.getByText("Value error", { exact: false })).toHaveCount(0);
+  expect(saves).toBe(0);
+
+  // 終了日を直すと理由を消し、保存できる。
+  await to.fill("2026-03-01");
+  await expect(page.getByText("終了日は開始日より後の日付にしてください。")).toHaveCount(0);
+  await page.getByRole("button", { name: "分類を保存" }).click();
+  await expect.poll(() => saves).toBe(1);
+});

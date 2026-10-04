@@ -4,6 +4,7 @@ import {
   followModelChange,
   textModelOptions,
   validateDefaultModels,
+  validateModelIds,
   visionModelOptions,
 } from "../src/model/defaultModels";
 import type { EnterpriseAiConfiguredModel } from "../src/model/types";
@@ -119,6 +120,25 @@ describe("followModelChange", () => {
     );
   });
 
+  it("重複した行の片方の ID を直したときは、残った行を指したまま追従しない（#1035）", () => {
+    const duplicated = [models[0]!, { ...models[0]!, model_id: "llm-a-2" }];
+    expect(
+      followModelChange(
+        defaults,
+        models[0],
+        { ...models[0]!, model_id: "llm-a-2" },
+        duplicated,
+      ),
+    ).toEqual(defaults);
+    // 前の ID の行が残らなければ従来どおり追従する。
+    expect(
+      followModelChange(defaults, models[0], { ...models[0]!, model_id: "llm-x" }, [
+        { ...models[0]!, model_id: "llm-x" },
+        models[1]!,
+      ]),
+    ).toEqual({ default_text_model_id: "llm-x", default_vision_model_id: "vlm-b" });
+  });
+
   it("Vision 対応をオンにしたとき、既定の画像対応モデルが未選択ならそのモデルを選ぶ", () => {
     const empty = { default_text_model_id: "", default_vision_model_id: "" };
     expect(
@@ -131,5 +151,20 @@ describe("followModelChange", () => {
     expect(
       followModelChange(defaults, models[1], { ...models[1]!, vision_enabled: false }),
     ).toEqual(defaults);
+  });
+});
+
+describe("validateModelIds（#1035。backend の validate_model_ids と同じ規則）", () => {
+  it("2 回目以降に現れた行だけをエラーにし、前後の空白と未入力の行は無視する", () => {
+    expect(validateModelIds(models)).toEqual({});
+    expect(
+      validateModelIds([
+        ...models,
+        { model_id: " llm-a ", display_name: "", vision_enabled: false },
+        { model_id: "", display_name: "", vision_enabled: false },
+      ]),
+    ).toEqual({
+      3: "モデル ID「llm-a」はすでに登録されています。同じモデルは 1 行にまとめてください。",
+    });
   });
 });

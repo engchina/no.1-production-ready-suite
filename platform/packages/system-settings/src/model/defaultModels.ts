@@ -34,6 +34,30 @@ export function registeredModels(
     .filter((model) => model.model_id);
 }
 
+/** 登録モデルの行ごとのモデル ID のエラー。key は行の位置。 */
+export type ModelIdErrors = Partial<Record<number, string>>;
+
+/**
+ * 登録モデルのモデル ID の重複（#1035）。既定のモデル・接続・テストはモデル ID で先頭の行を引くので、
+ * 同じ ID の 2 行目以降は使われない。エラーは 2 回目以降に現れた行に付ける
+ * （backend の `validate_model_ids` と同じ）。
+ */
+export function validateModelIds(
+  models: readonly EnterpriseAiConfiguredModel[],
+): ModelIdErrors {
+  const seen = new Set<string>();
+  const errors: ModelIdErrors = {};
+  models.forEach((model, index) => {
+    const modelId = model.model_id.trim();
+    if (!modelId) return;
+    if (seen.has(modelId)) {
+      errors[index] = t("settings.model.enterprise.modelIdDuplicate", { model: modelId });
+    }
+    seen.add(modelId);
+  });
+  return errors;
+}
+
 export function validateDefaultModels(
   enterprise: Pick<
     EnterpriseAiModelSettings,
@@ -105,7 +129,8 @@ function uniqueById(models: EnterpriseAiConfiguredModel[]) {
 
 /**
  * 登録モデルの行を変えたときの既定のモデルの追従。
- * - 既定に選んでいたモデルの ID を書き換えたら、既定も新しい ID にする（消し切ったときは除く）
+ * - 既定に選んでいたモデルの ID を書き換えたら、既定も新しい ID にする（消し切ったときは除く）。
+ *   書き換えた後も同じ ID の行が残る（重複した行の片方を直した。#1035）ときは、既定はその行を指したまま
  * - Vision 対応をオンにしたとき、既定の Vision モデルが未選択ならそのモデルを選ぶ
  * - 削除・Vision 対応のオフは既定を変えない（フィールドのエラーで選び直しを案内する）
  */
@@ -116,13 +141,18 @@ export function followModelChange(
   >,
   previous: EnterpriseAiConfiguredModel | undefined,
   next: EnterpriseAiConfiguredModel,
+  /** 変更した後の登録モデルの一覧（渡せば、前の ID の行が残るかを確かめる）。 */
+  modelsAfter?: readonly EnterpriseAiConfiguredModel[],
 ): Pick<EnterpriseAiModelSettings, "default_text_model_id" | "default_vision_model_id"> {
   const previousId = previous?.model_id.trim() ?? "";
   const nextId = next.model_id.trim();
   let text = enterprise.default_text_model_id;
   let vision = enterprise.default_vision_model_id;
+  const previousIdRemains = Boolean(
+    modelsAfter?.some((model) => model.model_id.trim() === previousId),
+  );
   // ID を消し切ったときは追従しない（同じ ID を打ち直せば選択が戻る）。
-  if (previousId && nextId && previousId !== nextId) {
+  if (previousId && nextId && previousId !== nextId && !previousIdRemains) {
     if (text.trim() === previousId) text = nextId;
     if (vision.trim() === previousId) vision = nextId;
   }

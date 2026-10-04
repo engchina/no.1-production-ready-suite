@@ -598,6 +598,8 @@ export interface JobData {
   error_message?: string | null;
   /** 機械判定用の失敗分類(例: SCHEMA_CATALOG_EMPTY)。表示は error_message が正本。 */
   error_code?: string | null;
+  /** 失敗の技術的な詳細（例外・Oracle のエラーの元の文）。画面は「詳細」に畳んで出す（#1072）。 */
+  error_detail?: string | null;
   warning_message?: string | null;
   timing?: TimingEnvelope | null;
   steps: JobStepData[];
@@ -1030,6 +1032,8 @@ export interface ProfileSyncJobData {
   agent_result?: AssetRefreshData | null;
   error_code: string;
   error_message_ja: string;
+  /** 失敗した工程（失敗時に phase は failed になるため別に持つ）。古い job には無い。 */
+  failed_phase?: ProfileSyncJobPhase | null;
   retry_of_job_id?: string | null;
   created_at: string;
   started_at?: string | null;

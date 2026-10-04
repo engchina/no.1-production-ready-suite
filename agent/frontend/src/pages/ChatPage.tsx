@@ -55,10 +55,12 @@ import {
 } from "@/lib/api";
 import { isRunnableAgent } from "@/lib/agent-availability";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
+import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { runStatusView, stepStatusView } from "@/lib/status-labels";
 import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-state";
+import { isOwnDecision } from "@/pages/shared/approval-decision";
 
 /**
  * 業務利用者のチャット（#768）。使ってよい業務 Agent を選んで会話する。1 往復が 1 Run で、
@@ -89,6 +91,7 @@ function useHistoryInline(): boolean {
 export function ChatPage() {
   const queryClient = useQueryClient();
   const capabilities = useCapabilities();
+  const { user } = useAuth();
   // 会話の履歴は既定で閉じ、チャットを全幅にする（RAG のチャットと同じ型。#664 / #889）。
   // lg 以上のインラインのパネルの開閉は作業状態に残す。lg 未満のモーダルの side sheet は残さない
   // （戻ったとき・再読込で画面を塞がない。workspace-state.md）。
@@ -223,8 +226,14 @@ export function ChatPage() {
   const decide = useMutation({
     mutationFn: ({ approval, approved }: { approval: ApprovalRequest; approved: boolean }) =>
       agentApi.decideApproval(approval.id, { approved }),
-    onSuccess: (_run, { approved }) => {
-      toast.success(approved ? t("chat.approval.approved") : t("chat.approval.rejected"));
+    onSuccess: (updatedRun, { approval, approved }) => {
+      // 押した判断が自分の判断として残ったときだけ成功と案内する。ほかの操作者が先に判断した・実行が先に
+      // 終わった承認は、backend が状態を変えずに 200 で返す（実行履歴・承認の画面と同じ。#1119 / #1138）。
+      if (isOwnDecision(updatedRun, approval.id, approved, user?.login_user_id)) {
+        toast.success(approved ? t("chat.approval.approved") : t("chat.approval.rejected"));
+      } else {
+        toast.info(t("approval.changedDuringReview"));
+      }
       void queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
     },
     onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
