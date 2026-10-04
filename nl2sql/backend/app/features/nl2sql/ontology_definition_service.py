@@ -22,6 +22,12 @@ def definition_fingerprint(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode()).hexdigest()
 
 
+def profile_ontology_session_id(profile_id: str) -> str:
+    """業務プロファイルが所有する成果物の `session_id`。"""
+
+    return f"profile-ontology:{profile_id}"
+
+
 class ProfileOntologyDefinitionService:
     def __init__(self, runtime: Any) -> None:
         self.runtime = runtime
@@ -29,7 +35,7 @@ class ProfileOntologyDefinitionService:
 
     def _session(self, profile_id: str) -> str:
         self.runtime.ensure_profile(profile_id)
-        return f"profile-ontology:{profile_id}"
+        return profile_ontology_session_id(profile_id)
 
     def list_results(self, profile_id: str) -> list[ProfileOntologyBundle]:
         documents = self.store.list_artifacts(self._session(profile_id))
