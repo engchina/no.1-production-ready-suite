@@ -2,6 +2,8 @@
 export const UPLOAD_STORAGE_MESSAGES = {
   loading: "アップロード保存先設定を読み込んでいます。",
   loadError: "アップロード保存先設定の取得に失敗しました。",
+  refetchError:
+    "最新のアップロード保存先設定を取得できませんでした。表示中の値は前回取得した内容です。再試行してください。",
   saveError: "アップロード保存先設定の保存に失敗しました。",
   retry: "再試行",
   destinationTitle: "保存先",
