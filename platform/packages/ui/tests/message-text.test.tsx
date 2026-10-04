@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -56,5 +58,36 @@ describe("MessageText", () => {
     expect(html.match(/data-message-sentence/g)).toHaveLength(2);
     expect(html).toContain("システムテーブルは最新です。</span><span");
     expect(html).toContain("変更はありません。");
+  });
+
+  it("日本語を文節で折り返す指定（.pr-message-text）を本文に付ける（#899）", () => {
+    const html = renderToStaticMarkup(<MessageText text={"Oracle Profile の反映が完了しました。"} />);
+    expect(html).toMatch(/class="pr-message-text[^"]*"[^>]*data-message-text/);
+  });
+});
+
+// #899: 短い 1 文でも語の途中（「完了しま / した。」）で折り返さないよう、メッセージの部品の本文は文節で折り返す。
+describe(".pr-message-text", () => {
+  const read = (path: string) => readFileSync(new URL(`../src/${path}`, import.meta.url), "utf8");
+
+  it("文節での折り返しと、未対応のブラウザ・入りきらない文節の劣化を共有の CSS で決める", () => {
+    const css = read("styles/tokens/base.css");
+    const rule = css.match(/\.pr-message-text \{([^}]*)\}/)?.[1] ?? "";
+    // 未対応のブラウザは auto-phrase を捨てて直前の normal に残る（宣言の順が要る）。
+    expect(rule).toMatch(/word-break: normal;\s*word-break: auto-phrase;/);
+    expect(rule).toContain("overflow-wrap: anywhere;");
+    expect(rule).toContain("text-wrap: pretty;");
+    // 本文（body）全体には入れない（表・チップなどの狭い面で文節がはみ出すため）。
+    expect(css).toMatch(/body \{\s*line-break: strict;\s*word-break: normal;\s*overflow-wrap: normal;\s*\}/);
+  });
+
+  it.each([
+    "components/ui/toast.tsx",
+    "components/ui/banner.tsx",
+    "components/ui/form-status.tsx",
+    "components/feedback/processing-state.tsx",
+    "components/feedback/blocked-page-notice.tsx",
+  ])("%s の本文の面に付ける", (path) => {
+    expect(read(path)).toContain("pr-message-text");
   });
 });

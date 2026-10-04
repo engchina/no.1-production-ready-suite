@@ -17,6 +17,7 @@ import {
   PageHeader,
   RowActionMenu,
   StatusBadge,
+  InfoTip,
   Switch,
   ToggleChip,
   toast,
@@ -468,16 +469,25 @@ export function RunsPage() {
                       onValueChange={onAgentChange}
                     />
                     {capabilities.admin ? (
-                      <label className="flex items-center gap-2 text-sm text-fg">
-                        <Switch
-                          checked={runDraft}
-                          aria-label={t("run.form.draft")}
-                          onCheckedChange={setRunDraft}
-                          data-testid="run-draft"
+                      // 補足の説明は常設せず、ラベルの横の info アイコンから出す（#901）。アイコンのボタンは
+                      // label の外に置く（label の中だと、押したときにスイッチの切り替えと紛れる）。
+                      <div className="flex items-center gap-1">
+                        <label className="flex items-center gap-2 text-sm text-fg">
+                          <Switch
+                            checked={runDraft}
+                            aria-label={t("run.form.draft")}
+                            onCheckedChange={setRunDraft}
+                            data-testid="run-draft"
+                          />
+                          {t("run.form.draft")}
+                        </label>
+                        <InfoTip
+                          label={t("run.form.draftInfoLabel")}
+                          content={t("run.form.draftHint")}
+                          contentTestId="run-draft-hint"
+                          data-testid="run-draft-info"
                         />
-                        {t("run.form.draft")}
-                        <span className="text-xs text-fg-muted">{t("run.form.draftHint")}</span>
-                      </label>
+                      </div>
                     ) : null}
                     <TextareaField
                       id="run-goal"

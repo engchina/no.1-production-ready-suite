@@ -27,7 +27,8 @@ describe("resolveToastPlacement", () => {
     expect(mode).toBe("page-header");
     expect(style.top).toBe("calc(0px + 1rem)");
     expect(style.right).toBe("calc(327px + 1rem)");
-    expect(style.width).toBe("min(22rem, 673px)");
+    expect(style.minWidth).toBe("min(var(--toast-width-min), 673px)");
+    expect(style.maxWidth).toBe("min(var(--toast-width-max), 673px)");
     expect(style.left).toBeUndefined();
     expect(style).not.toHaveProperty("bottom");
   });
@@ -36,7 +37,8 @@ describe("resolveToastPlacement", () => {
     const { mode, style } = resolveToastPlacement({ ...desktop, headerActions: null });
     expect(mode).toBe("page-header");
     expect(style.right).toBe("max(1rem, env(safe-area-inset-right))");
-    expect(style.width).toBe("min(22rem, 1000px)");
+    expect(style.minWidth).toBe("min(var(--toast-width-min), 1000px)");
+    expect(style.maxWidth).toBe("min(var(--toast-width-max), 1000px)");
   });
 
   it("md 以上: ページの操作がタイトルの下へ折り返して左にあるときは、PageHeader の右端に重ねる", () => {
@@ -44,7 +46,8 @@ describe("resolveToastPlacement", () => {
     expect(mode).toBe("page-header");
     expect(style.top).toBe("calc(0px + 1rem)");
     expect(style.right).toBe("max(1rem, env(safe-area-inset-right))");
-    expect(style.width).toBe("min(22rem, 739px)");
+    expect(style.minWidth).toBe("min(var(--toast-width-min), 739px)");
+    expect(style.maxWidth).toBe("min(var(--toast-width-max), 739px)");
   });
 
   it("md 以上: ページの操作の左右のどちらにも 14rem が取れなければ、PageHeader の下端の 1rem 下の右に出す", () => {
@@ -53,6 +56,14 @@ describe("resolveToastPlacement", () => {
     expect(mode).toBe("below-page-header");
     expect(style.top).toBe("calc(107px + 1rem)");
     expect(style.right).toBe("max(1rem, env(safe-area-inset-right))");
+    expect(style.maxWidth).toBe("min(var(--toast-width-max), calc(100vw - 2 * 1rem))");
+  });
+
+  it("md 以上: 幅は固定にせず、内容に合わせて下限〜上限のトークンの間で広がる（#899）", () => {
+    // 固定の 22rem では「Oracle Profile の反映が完了しました。」が「…完了しま / した。」と語の途中で 2 行に折り返した。
+    const { style } = resolveToastPlacement(desktop);
+    expect(style).not.toHaveProperty("width");
+    // トークンの値は tokens-css.test.ts で確かめる。
   });
 
   it("md 以上: lg 未満で PageHeader が一部だけ見えている間は画面の上端に合わせ、見えなくなったら画面の右上", () => {
@@ -73,7 +84,8 @@ describe("resolveToastPlacement", () => {
     expect(withBar.style.top).toBe("max(0.5rem, env(safe-area-inset-top))");
     expect(withBar.style.left).toBe("calc(1rem + var(--control-height-touch))");
     expect(withBar.style.right).toBe("max(1rem, env(safe-area-inset-right))");
-    expect(withBar.style.width).toBeUndefined();
+    expect(withBar.style.minWidth).toBeUndefined();
+    expect(withBar.style.maxWidth).toBeUndefined();
 
     const withoutBar = resolveToastPlacement({ ...desktop, narrow: true, topBar: false, header: null });
     expect(withoutBar.style.left).toBe("max(1rem, env(safe-area-inset-left))");

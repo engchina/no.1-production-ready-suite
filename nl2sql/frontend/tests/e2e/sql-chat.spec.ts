@@ -534,6 +534,7 @@ test("業務プロファイルの欄は RAG の検索・回答プロファイル
 
 test("生成方法は入力欄の直上で選び、Select AI Agent も送れる", async ({
   page,
+  isMobile,
 }) => {
   const state = await setup(page);
   await page.goto("/chat");
@@ -541,16 +542,27 @@ test("生成方法は入力欄の直上で選び、Select AI Agent も送れる"
   const engine = page.getByRole("combobox", { name: "生成方法", exact: true });
   await expect(row).toContainText("生成方法");
   await expectSelectFieldValue(engine, "select_ai");
-  await expect(page.getByTestId("sql-chat-engine-description")).toContainText(
-    "Oracle Select AI",
-  );
+  // 選んだ生成方法の説明は常設せず、ラベルの横の info アイコンから出す（#901）。
+  const description = page.getByTestId("sql-chat-engine-description");
+  const info = row.getByRole("button", { name: "生成方法の説明", exact: true });
+  await expect(description).toBeHidden();
+  await expect(info).toHaveAccessibleDescription(/Oracle Select AI/);
+  // マウスはポインタを乗せると出し、離すと閉じる。タッチ端末（ホバーが無い）はタップで出し、外側のタップで閉じる。
+  if (isMobile) await info.tap();
+  else await info.hover();
+  await expect(description).toBeVisible();
+  await expect(description).toContainText("Oracle Select AI");
+  if (isMobile) await row.getByText("生成方法", { exact: true }).first().tap();
+  else await page.mouse.move(0, 0);
+  await expect(description).toBeHidden();
   // 入力欄の直上の行（RAG のチャットの「回答するモデル」と同じ位置。#890）。
   const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
   const rowBox = (await row.boundingBox())!;
   const composerBox = (await composer.boundingBox())!;
   expect(rowBox.y + rowBox.height).toBeLessThanOrEqual(composerBox.y);
   expect(composerBox.y - (rowBox.y + rowBox.height)).toBeLessThan(24);
-  await expect(engine).toHaveAttribute("aria-describedby", /.+/);
+  // 選択欄にも、選んだ生成方法の説明を結び付ける（閉じている吹き出しの文を読む）。
+  await expect(engine).toHaveAccessibleDescription(/Oracle Select AI/);
   expect((await engine.boundingBox())!.height).toBe(
     await expectedControlHeight(page, "sm"),
   );
@@ -562,9 +574,19 @@ test("生成方法は入力欄の直上で選び、Select AI Agent も送れる"
   ]);
   await page.keyboard.press("Escape");
   await chooseSelectFieldOption(engine, "select_ai_agent");
-  await expect(page.getByTestId("sql-chat-engine-description")).toContainText(
-    "Select AI Agent",
+  // キーボード: 選択欄から Shift+Tab で info アイコンへ戻るとフォーカスで出し、Escape で閉じる（フォーカスは動かさない）。
+  await expect(engine).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(info).toBeFocused();
+  // タッチ端末ではフォーカスだけでは出さないので、Enter で開く（マウス・キーボードの環境はフォーカスで出る）。
+  if (isMobile) await page.keyboard.press("Enter");
+  await expect(description).toBeVisible();
+  await expect(description).toContainText(
+    "Select AI Agent が SQL 生成ツールを呼び出して",
   );
+  await page.keyboard.press("Escape");
+  await expect(description).toBeHidden();
+  await expect(info).toBeFocused();
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
   await expect(page.getByText("安全検査済み・未実行")).toBeVisible();

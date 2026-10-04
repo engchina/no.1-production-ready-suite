@@ -36,6 +36,16 @@ describe("tokens CSS", () => {
     expect(read("tokens.css")).toMatch(/--text-xs:\s*var\(--font-size-xs\);/);
   });
 
+  it("通知（Toast）の幅は 22rem〜32rem のトークンが正本（#899）", () => {
+    const spacing = read("tokens/spacing.css");
+    expect(spacing).toMatch(/--toast-width-min:\s*22rem;/);
+    expect(spacing).toMatch(/--toast-width-max:\s*32rem;/);
+    const placement = readFileSync(new URL("../src/lib/toast-placement.ts", import.meta.url), "utf8");
+    expect(placement).toContain('"var(--toast-width-min)"');
+    expect(placement).toContain('"var(--toast-width-max)"');
+    expect(placement).not.toMatch(/\d+rem, \$\{/);
+  });
+
   it("サイドバー幅はトークンが正本で、日本語のナビ項目名が収まる 18rem（252px）", () => {
     expect(read("tokens/spacing.css")).toMatch(/--sidebar-width:\s*18rem;/);
     const sidebar = readFileSync(new URL("../src/components/app-shell/Sidebar.tsx", import.meta.url), "utf8");

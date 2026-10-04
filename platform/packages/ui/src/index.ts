@@ -28,6 +28,7 @@ export {
 export { Button, buttonVariants, type ButtonProps, type ButtonVariantToneProps } from "./components/ui/button";
 export { ButtonLink, type ButtonLinkComponent, type ButtonLinkProps } from "./components/ui/button-link";
 export { Tooltip, type TooltipProps, type TooltipPlacement } from "./components/ui/tooltip";
+export { InfoTip, INFO_TIP_SHOW_DELAY_MS, type InfoTipProps } from "./components/ui/info-tip";
 export { DEFAULT_TAB_INVALID_LABEL, Tabs, TabPanel, type TabItem, type TabsProps } from "./components/ui/tabs";
 export { TextField, type TextFieldProps, type TextFieldSize } from "./components/ui/text-field";
 export {

@@ -12,6 +12,7 @@ import {
   type PointerEvent,
   type ReactElement,
   type Ref,
+  type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 
@@ -46,7 +47,11 @@ const TOOLTIP_VIEWPORT_PADDING = 8;
 const DEFAULT_POPOVER_Z_INDEX = 200;
 
 export type TooltipPlacement = "top" | "bottom";
-export type TooltipOpenReason = "hover" | "focus";
+/**
+ * 開いたきっかけ。`press` は押して開いたまま固定したもの（`InfoTip` のクリック・タップ・Enter / Space。#901）で、
+ * ポインタが離れても・フォーカスが外れるまでは閉じない。
+ */
+export type TooltipOpenReason = "hover" | "focus" | "press";
 
 type RectLike = Pick<DOMRect, "top" | "bottom" | "left" | "right" | "width">;
 
@@ -143,6 +148,13 @@ export interface TooltipController {
   pointerDown: () => void;
   /** 開いていれば閉じて true を返す（呼び出し側はキーを握りつぶす）。 */
   escape: () => boolean;
+  /**
+   * 押して開閉する（`InfoTip` のクリック・タップ・Enter / Space。#901）。固定して開いていれば閉じ、
+   * それ以外（閉じている・ホバーやフォーカスで開いている）は開いたまま固定する。タッチ端末でも開く。
+   */
+  press: () => void;
+  /** 外側を押したときなどに閉じる（固定も外す）。開いていなければ何もしない。 */
+  dismiss: () => void;
   isOpen: () => boolean;
   dispose: () => void;
 }
@@ -163,6 +175,8 @@ export function createTooltipController({
   let hoveringTrigger = false;
   let hoveringTooltip = false;
   let focused = false;
+  /** 押して開いたまま固定しているか（`press`）。固定中はポインタが離れても閉じない。 */
+  let pinned = false;
   /** 押した・Escape で閉じた後は、ポインタが離れる（または改めてフォーカスする）まで出さない。 */
   let suppressed = false;
   let showTimer: ReturnType<typeof setTimeout> | undefined;
@@ -193,14 +207,15 @@ export function createTooltipController({
   const close = () => {
     clearShow();
     clearHide();
+    pinned = false;
     setOpen(false, null);
   };
   const closeIfIdle = () => {
-    if (!open || hoveringTrigger || hoveringTooltip || focused) return;
+    if (!open || pinned || hoveringTrigger || hoveringTooltip || focused) return;
     clearHide();
     hideTimer = setTimeout(() => {
       hideTimer = undefined;
-      if (!hoveringTrigger && !hoveringTooltip && !focused) setOpen(false, null);
+      if (!pinned && !hoveringTrigger && !hoveringTooltip && !focused) setOpen(false, null);
     }, hideDelayMs);
   };
 
@@ -240,11 +255,14 @@ export function createTooltipController({
       suppressed = false;
       clearShow();
       clearHide();
+      if (pinned) return;
       setOpen(true, open && reason === "hover" ? "hover" : "focus");
     },
     blur() {
       focused = false;
-      if (open && !hoveringTrigger && !hoveringTooltip) close();
+      if (!open || hoveringTooltip) return;
+      // 固定して開いたものも、フォーカスが外へ移ったら閉じる（吹き出しの中を押したときは残す）。
+      if (pinned || !hoveringTrigger) close();
     },
     pointerDown() {
       suppressed = true;
@@ -256,6 +274,24 @@ export function createTooltipController({
       hoveringTooltip = false;
       close();
       return true;
+    },
+    press() {
+      if (open && pinned) {
+        suppressed = true;
+        hoveringTooltip = false;
+        close();
+        return;
+      }
+      suppressed = false;
+      clearShow();
+      clearHide();
+      pinned = true;
+      setOpen(true, "press");
+    },
+    dismiss() {
+      if (!open) return;
+      hoveringTooltip = false;
+      close();
     },
     isOpen: () => open,
     dispose() {
@@ -271,7 +307,7 @@ function subscribeNothing() {
 }
 
 /** ブラウザで描いているか（サーバー描画と Node のテストでは Portal を作らない）。 */
-function useIsClient() {
+export function useIsClient() {
   return useSyncExternalStore(
     subscribeNothing,
     () => typeof document !== "undefined",
@@ -279,7 +315,7 @@ function useIsClient() {
   );
 }
 
-function isCoarsePointer() {
+export function isCoarsePointer() {
   return (
     typeof window !== "undefined" &&
     typeof window.matchMedia === "function" &&
@@ -287,7 +323,7 @@ function isCoarsePointer() {
   );
 }
 
-function isFocusVisible(element: Element) {
+export function isFocusVisible(element: Element) {
   try {
     return element.matches(":focus-visible");
   } catch {
@@ -295,7 +331,7 @@ function isFocusVisible(element: Element) {
   }
 }
 
-function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
+export function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
   if (typeof ref === "function") ref(value);
   else if (ref && typeof ref === "object") (ref as { current: T | null }).current = value;
 }
@@ -330,43 +366,71 @@ export interface TooltipProps {
   describe?: boolean;
 }
 
-/**
- * アイコンだけのボタンなどに、ホバーとキーボードのフォーカスで短い説明を出す。
- * アイコンだけの `Button`（`iconOnly`）は既定で `aria-label` と同じ文言を出すので、通常は直接使わない。
- */
-export function Tooltip({ content, children, placement = "top", disabled = false, describe = true }: TooltipProps) {
-  const id = useId();
-  const isClient = useIsClient();
-  const triggerRef = useRef<HTMLElement | null>(null);
-  const tooltipRef = useRef<HTMLDivElement | null>(null);
-  const [state, setState] = useState<{ open: boolean; reason: TooltipOpenReason | null }>({
-    open: false,
-    reason: null,
-  });
-  const [container, setContainer] = useState<HTMLElement | null>(null);
-  const [layout, setLayout] = useState<(TooltipLayout & { zIndex?: number }) | undefined>();
+export interface TooltipState {
+  open: boolean;
+  reason: TooltipOpenReason | null;
+}
+
+/** 開閉の状態機械を React の状態につなぐ（`Tooltip` と `InfoTip` で共有）。 */
+export function useTooltipController(options: Pick<TooltipControllerOptions, "showDelayMs"> = {}) {
+  const [state, setState] = useState<TooltipState>({ open: false, reason: null });
   const controllerRef = useRef<TooltipController | null>(null);
   if (!controllerRef.current) {
     controllerRef.current = createTooltipController({
       onOpenChange: (open, reason) => setState({ open, reason }),
       isCoarsePointer,
+      ...options,
     });
   }
   const controller = controllerRef.current;
-  const describes = !disabled && describe && tooltipDescribesTrigger(content, children.props["aria-label"]);
-  const open = state.open && !disabled;
-
   useEffect(() => () => controller.dispose(), [controller]);
+  return { controller, state };
+}
 
-  useEffect(() => {
-    if (disabled && controller.isOpen()) controller.escape();
-  }, [controller, disabled]);
+export interface TooltipBubbleProps {
+  id: string;
+  open: boolean;
+  /** 閉じている間も `hidden` で置いておき、`aria-describedby` の先にする。 */
+  describes: boolean;
+  reason: TooltipOpenReason | null;
+  placement: TooltipPlacement;
+  controller: TooltipController;
+  triggerRef: RefObject<HTMLElement | null>;
+  bubbleRef?: RefObject<HTMLDivElement | null>;
+  content: string;
+  /** 見た目の差分（`InfoTip` の長めの説明の幅・行間など）。 */
+  className?: string;
+  "data-testid"?: string;
+}
+
+/**
+ * 吹き出しの本体（`Tooltip` と `InfoTip` で共有）。描く先（モーダルの中ならモーダル、それ以外は body）への
+ * Portal・位置（`computeTooltipLayout`）・重なり順・Escape（吹き出しだけを閉じ、囲むモーダルに伝えない）を持つ。
+ */
+export function TooltipBubble({
+  id,
+  open,
+  describes,
+  reason,
+  placement,
+  controller,
+  triggerRef,
+  bubbleRef,
+  content,
+  className,
+  "data-testid": testId,
+}: TooltipBubbleProps) {
+  const isClient = useIsClient();
+  const ownRef = useRef<HTMLDivElement | null>(null);
+  const tooltipRef = bubbleRef ?? ownRef;
+  const [container, setContainer] = useState<HTMLElement | null>(null);
+  const [layout, setLayout] = useState<(TooltipLayout & { zIndex?: number }) | undefined>();
 
   // 描く先（モーダルの中ならモーダル、それ以外は body）。説明として結び付けるときは閉じていても置いておく。
   useLayoutEffect(() => {
     if (!open && !describes) return;
     setContainer(selectPortalContainer(triggerRef.current));
-  }, [describes, open]);
+  }, [describes, open, triggerRef]);
 
   const updateLayout = useCallback(() => {
     const trigger = triggerRef.current;
@@ -383,7 +447,7 @@ export function Tooltip({ content, children, placement = "top", disabled = false
     });
     const zIndex = resolveFloatingLayerZIndex(trigger, "--z-popover", DEFAULT_POPOVER_Z_INDEX);
     setLayout(zIndex === undefined ? next : { ...next, zIndex });
-  }, [placement]);
+  }, [placement, tooltipRef, triggerRef]);
 
   useLayoutEffect(() => {
     if (!open || !container) {
@@ -412,6 +476,56 @@ export function Tooltip({ content, children, placement = "top", disabled = false
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [controller, open]);
+
+  if (!isClient || !container || !(open || describes)) return null;
+  const style: CSSProperties = layout
+    ? { left: layout.left, top: layout.top, ...(layout.zIndex === undefined ? {} : { zIndex: layout.zIndex }) }
+    : { left: -9999, top: -9999 };
+
+  return createPortal(
+    <div
+      ref={tooltipRef}
+      id={id}
+      role="tooltip"
+      // 読み上げ名と同じ文言は、説明として結び付けず読み上げからも外す（二重に読み上げない）。
+      aria-hidden={describes ? undefined : true}
+      hidden={!open}
+      data-surface="inverted"
+      data-tooltip-placement={layout?.placement}
+      data-tooltip-reason={open ? reason ?? undefined : undefined}
+      data-testid={testId}
+      className={cn(
+        "animate-overlay-in fixed z-[var(--z-popover)] w-max max-w-[16rem] rounded-md border border-border bg-surface-overlay px-2 py-1 text-xs font-medium text-fg shadow-[var(--shadow-popover)] forced-colors:border-[CanvasText]",
+        // ホバー・押して開いたときだけ吹き出しへポインタを移せる（WCAG 1.4.13）。フォーカスで開いたときは下の要素を押せるようにする。
+        reason === "hover" || reason === "press" ? "pointer-events-auto" : "pointer-events-none",
+        !layout && "opacity-0",
+        className
+      )}
+      style={style}
+      onPointerEnter={() => controller.pointerEnterTooltip()}
+      onPointerLeave={() => controller.pointerLeaveTooltip()}
+    >
+      {content}
+    </div>,
+    container
+  );
+}
+
+/**
+ * アイコンだけのボタンなどに、ホバーとキーボードのフォーカスで短い説明を出す。
+ * アイコンだけの `Button`（`iconOnly`）は既定で `aria-label` と同じ文言を出すので、通常は直接使わない。
+ * 操作や欄の補足の説明（文で読むもの）は `InfoTip` を使う（#901）。
+ */
+export function Tooltip({ content, children, placement = "top", disabled = false, describe = true }: TooltipProps) {
+  const id = useId();
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const { controller, state } = useTooltipController();
+  const describes = !disabled && describe && tooltipDescribesTrigger(content, children.props["aria-label"]);
+  const open = state.open && !disabled;
+
+  useEffect(() => {
+    if (disabled && controller.isOpen()) controller.escape();
+  }, [controller, disabled]);
 
   const childProps = children.props;
   const trigger = cloneElement(children, {
@@ -444,41 +558,19 @@ export function Tooltip({ content, children, placement = "top", disabled = false
     },
   });
 
-  const rendered = isClient && container && (open || describes);
-  const style: CSSProperties = layout
-    ? { left: layout.left, top: layout.top, ...(layout.zIndex === undefined ? {} : { zIndex: layout.zIndex }) }
-    : { left: -9999, top: -9999 };
-
   return (
     <>
       {trigger}
-      {rendered
-        ? createPortal(
-            <div
-              ref={tooltipRef}
-              id={id}
-              role="tooltip"
-              // 読み上げ名と同じ文言は、説明として結び付けず読み上げからも外す（二重に読み上げない）。
-              aria-hidden={describes ? undefined : true}
-              hidden={!open}
-              data-surface="inverted"
-              data-tooltip-placement={layout?.placement}
-              data-tooltip-reason={open ? state.reason ?? undefined : undefined}
-              className={cn(
-                "animate-overlay-in fixed z-[var(--z-popover)] w-max max-w-[16rem] rounded-md border border-border bg-surface-overlay px-2 py-1 text-xs font-medium text-fg shadow-[var(--shadow-popover)] forced-colors:border-[CanvasText]",
-                // ホバーで開いたときだけ吹き出しへポインタを移せる（WCAG 1.4.13）。フォーカスで開いたときは下の要素を押せるようにする。
-                state.reason === "hover" ? "pointer-events-auto" : "pointer-events-none",
-                !layout && "opacity-0"
-              )}
-              style={style}
-              onPointerEnter={() => controller.pointerEnterTooltip()}
-              onPointerLeave={() => controller.pointerLeaveTooltip()}
-            >
-              {content}
-            </div>,
-            container
-          )
-        : null}
+      <TooltipBubble
+        id={id}
+        open={open}
+        describes={describes}
+        reason={state.reason}
+        placement={placement}
+        controller={controller}
+        triggerRef={triggerRef}
+        content={content}
+      />
     </>
   );
 }

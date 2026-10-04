@@ -134,7 +134,7 @@ def test_oracle_results_preserve_every_column(names: list[str], expected: list[s
         yield cursor
 
     @contextmanager
-    def connection() -> Iterator[SimpleNamespace]:
+    def connection(**_kwargs: object) -> Iterator[SimpleNamespace]:
         yield SimpleNamespace(cursor=cursor_context)
 
     adapter = OracleNl2SqlAdapter(get_settings())

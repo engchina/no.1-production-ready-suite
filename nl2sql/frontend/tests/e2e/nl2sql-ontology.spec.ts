@@ -1289,13 +1289,18 @@ test("AI要件確認は一問ずつ確認した内容でクエリを置き換え
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/query");
 
-  await expect(
-    page.getByText(
-      "AIによるSQL生成の精度を高めるため、対話を通じてクエリの対象・表示項目・条件を補い、より明確で具体的な内容に整えます。"
-    )
-  ).toBeVisible();
+  // 補足の説明は常設せず、ボタンの横の info アイコンを押すと出す（#901）。
+  const clarificationDescription = page.getByTestId("nl2sql-clarification-description");
+  await expect(clarificationDescription).toBeHidden();
+  await page.getByRole("button", { name: "AI要件確認の説明", exact: true }).click();
+  await expect(clarificationDescription).toHaveText(
+    "AIによるSQL生成の精度を高めるため、対話を通じてクエリの対象・表示項目・条件を補い、より明確で具体的な内容に整えます。"
+  );
+  await expect(clarificationDescription).toBeVisible();
+  await page.locator("#nl2sql-question-input").click();
+  await expect(clarificationDescription).toBeHidden();
   await page.locator("#nl2sql-question-input").fill("受注件数を表示");
-  await page.getByRole("button", { name: "AI要件確認" }).click();
+  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
 
   const panel = page.getByTestId("nl2sql-guided-clarification");
   await expect(panel).toBeVisible();
@@ -1349,7 +1354,7 @@ test("AI要件確認の開始中は実処理に合わせて案内を切り替え
   await page.goto("/query");
 
   await page.locator("#nl2sql-question-input").fill("受注件数を表示");
-  await page.getByRole("button", { name: "AI要件確認" }).click();
+  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
 
   const panel = page.getByTestId("nl2sql-guided-clarification");
   const progress = panel.getByTestId("nl2sql-guided-start-progress");
@@ -1390,7 +1395,7 @@ test("AI要件確認は開始処理の途中でも中止して閉じられる", 
   const originalQuestion = "受注件数を表示";
   const questionInput = page.locator("#nl2sql-question-input");
   await questionInput.fill(originalQuestion);
-  await page.getByRole("button", { name: "AI要件確認" }).click();
+  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
 
   const panel = page.getByTestId("nl2sql-guided-clarification");
   await expect(panel.getByTestId("nl2sql-guided-start-progress")).toBeVisible();
@@ -1414,7 +1419,7 @@ test("AI要件確認は利用者が明示した最大件数を保ったままク
   await page.goto("/query");
 
   await page.locator("#nl2sql-question-input").fill("受注件数を上位 10 件表示");
-  await page.getByRole("button", { name: "AI要件確認" }).click();
+  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
 
   const panel = page.getByTestId("nl2sql-guided-clarification");
   await expect(panel.getByText("確認完了").first()).toBeVisible();
@@ -1439,7 +1444,7 @@ test("AI要件確認は推測した検索対象を利用者へ質問し内部ID�
   await page.goto("/query");
 
   await page.locator("#nl2sql-question-input").fill("一覧を表示");
-  await page.getByRole("button", { name: "AI要件確認" }).click();
+  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
 
   const panel = page.getByTestId("nl2sql-guided-clarification");
   await expect(
@@ -1486,7 +1491,7 @@ test("AI要件確認は内部診断を見せず表示項目を自然なクエリ
   await page.goto("/query");
 
   await page.locator("#nl2sql-question-input").fill("受注情報");
-  await page.getByRole("button", { name: "AI要件確認" }).click();
+  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
 
   const panel = page.getByTestId("nl2sql-guided-clarification");
   await expect(
@@ -1538,7 +1543,7 @@ test("AI要件確認は複数の業務対象をCheckboxで選択できる", asyn
   await page.goto("/query");
 
   await page.locator("#nl2sql-question-input").fill("情報を表示");
-  await page.getByRole("button", { name: "AI要件確認" }).click();
+  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
 
   const panel = page.getByTestId("nl2sql-guided-clarification");
   await expect(
@@ -1568,7 +1573,7 @@ test("AI要件確認の中止は主操作の右側から元のクエリを保っ
   const originalQuestion = "受注件数を表示";
   const questionInput = page.locator("#nl2sql-question-input");
   await questionInput.fill(originalQuestion);
-  await page.getByRole("button", { name: "AI要件確認" }).click();
+  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
 
   const panel = page.getByTestId("nl2sql-guided-clarification");
   const nextButton = panel.getByRole("button", { name: "選んだ内容で次へ" });
@@ -1671,7 +1676,7 @@ test(`ALLの要件確認はProfileとクエリを引き継ぐ（保存不可=${s
   await page.goto("/query");
   await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "all");
   await page.locator("#nl2sql-question-input").fill("受注件数を表示");
-  await page.getByRole("button", { name: "AI要件確認" }).click();
+  await page.getByRole("button", { name: "AI要件確認", exact: true }).click();
 
   const panel = page.getByTestId("nl2sql-guided-clarification");
   await expect(panel.getByRole("group", { name: "どの業務プロファイルで確認しますか？" })).toBeVisible();

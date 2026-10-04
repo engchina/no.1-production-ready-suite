@@ -2823,7 +2823,7 @@ def test_oracle_adapter_execute_select_normalizes_driver_error(
             return _FailingCursor()
 
     @contextmanager
-    def failing_connection() -> Iterator[_FailingConnection]:
+    def failing_connection(**_kwargs: object) -> Iterator[_FailingConnection]:
         yield _FailingConnection()
 
     adapter = OracleNl2SqlAdapter(get_settings())
@@ -2965,7 +2965,7 @@ def test_oracle_adapter_system_admin_select_uses_normal_connection(
 
     settings = get_settings().model_copy(update={"oracle_deepsec_enabled": True})
     adapter = OracleNl2SqlAdapter(settings)
-    monkeypatch.setattr(adapter, "connection", normal_connection)
+    monkeypatch.setattr(adapter, "runtime_connection", normal_connection)
 
     with actor_scope("system-admin", is_system_admin=True):
         result = adapter.execute_select("SELECT ID FROM T1", 100)
@@ -3017,7 +3017,7 @@ def test_oracle_adapter_unbounded_select_fetches_all_rows_in_batches(
         yield _Connection(cursor)
 
     adapter = OracleNl2SqlAdapter(get_settings())
-    monkeypatch.setattr(adapter, "connection", normal_connection)
+    monkeypatch.setattr(adapter, "runtime_connection", normal_connection)
 
     with actor_scope("system-admin", is_system_admin=True):
         result = adapter.execute_select("SELECT ID FROM T1", None)
@@ -3062,7 +3062,7 @@ def test_oracle_adapter_explicit_select_limit_reports_truncation(
         yield _Connection()
 
     adapter = OracleNl2SqlAdapter(get_settings())
-    monkeypatch.setattr(adapter, "connection", normal_connection)
+    monkeypatch.setattr(adapter, "runtime_connection", normal_connection)
 
     with actor_scope("system-admin", is_system_admin=True):
         result = adapter.execute_select("SELECT ID FROM T1", 3)
@@ -3156,7 +3156,7 @@ def test_oracle_adapter_non_admin_select_uses_normal_connection_when_deepsec_dis
 
     settings = get_settings().model_copy(update={"oracle_deepsec_enabled": False})
     adapter = OracleNl2SqlAdapter(settings)
-    monkeypatch.setattr(adapter, "connection", normal_connection)
+    monkeypatch.setattr(adapter, "runtime_connection", normal_connection)
     monkeypatch.setattr(
         "app.clients.oracle_runtime.get_oracle_pool_manager",
         lambda: _PoolManager(),
@@ -3224,7 +3224,7 @@ def test_oracle_adapter_non_admin_select_ai_generation_uses_normal_connection_wh
 
     settings = get_settings().model_copy(update={"oracle_deepsec_enabled": True})
     adapter = OracleNl2SqlAdapter(settings)
-    monkeypatch.setattr(adapter, "connection", normal_connection)
+    monkeypatch.setattr(adapter, "runtime_connection", normal_connection)
     monkeypatch.setattr(
         "app.clients.oracle_runtime.get_oracle_pool_manager",
         lambda: _PoolManager(),
@@ -3252,7 +3252,7 @@ def test_oracle_adapter_non_admin_select_ai_generation_uses_normal_connection_wh
 
     settings = get_settings().model_copy(update={"oracle_deepsec_enabled": False})
     adapter = OracleNl2SqlAdapter(settings)
-    monkeypatch.setattr(adapter, "connection", normal_connection)
+    monkeypatch.setattr(adapter, "runtime_connection", normal_connection)
     monkeypatch.setattr(
         "app.clients.oracle_runtime.get_oracle_pool_manager",
         lambda: _PoolManager(),
@@ -3280,7 +3280,7 @@ def test_oracle_adapter_system_admin_select_ai_generation_uses_normal_connection
 
     settings = get_settings().model_copy(update={"oracle_deepsec_enabled": True})
     adapter = OracleNl2SqlAdapter(settings)
-    monkeypatch.setattr(adapter, "connection", normal_connection)
+    monkeypatch.setattr(adapter, "runtime_connection", normal_connection)
     monkeypatch.setattr(
         "app.clients.oracle_runtime.get_oracle_pool_manager",
         lambda: _PoolManager(),
@@ -5732,7 +5732,7 @@ def test_oracle_adapter_unbounded_select_stops_at_safety_cap(
         yield _Connection(cursor)
 
     adapter = OracleNl2SqlAdapter(get_settings())
-    monkeypatch.setattr(adapter, "connection", normal_connection)
+    monkeypatch.setattr(adapter, "runtime_connection", normal_connection)
     monkeypatch.setattr(adapter.settings, "nl2sql_max_result_rows", 60)
 
     with actor_scope("system-admin", is_system_admin=True):

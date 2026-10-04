@@ -164,7 +164,7 @@ export function ProcessingIndicator({
 
   return (
     <div
-      className={`grid min-w-0 gap-2 ${className}`}
+      className={`pr-message-text grid min-w-0 gap-2 ${className}`}
       aria-busy={timing.active}
       data-processing-placement={placement}
       data-processing-activity-icon={activityIcon}
@@ -210,13 +210,29 @@ export function ProcessingIndicator({
           ) : null}
         </span>
       </div>
-      {showSlowMessage && timing.slow ? (
+      {/*
+        遅延の案内の行は最初から置き、遅延するまでは同じ文言を見えない状態で高さだけ予約する（#902）。
+        後から行を足すと領域が 1 行高くなり、中央寄せの置き場所（DB ゲート）ではスピナーごと上へ動き、
+        流れの中では下の内容を押し下げる。role="status" は遅延してから付ける（予約の行を status に
+        しない。処理中の見出しの status と 2 つにならないよう、従来どおり遅延の案内だけを status にする）。
+      */}
+      {showSlowMessage && timing.active ? (
         <p
           className="text-xs leading-5 text-fg-muted"
-          role={announceSlow ? "status" : undefined}
-          data-testid={testId ? `${testId}-slow` : undefined}
+          role={announceSlow && timing.slow ? "status" : undefined}
+          data-testid={testId && timing.slow ? `${testId}-slow` : undefined}
+          data-processing-slow={timing.slow ? "true" : "false"}
         >
-          {labels.slow}
+          {timing.slow ? (
+            labels.slow
+          ) : (
+            // 予約用の文言は ::before の content で描く（textContent・読み上げに入れない。折り返しは同じ）。
+            <span
+              className="invisible before:content-[attr(data-placeholder)]"
+              aria-hidden="true"
+              data-placeholder={labels.slow}
+            />
+          )}
         </p>
       ) : null}
     </div>

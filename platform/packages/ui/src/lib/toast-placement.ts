@@ -18,6 +18,10 @@
  *   - どちらにも 14rem の幅が取れないときは、PageHeader の下端の 1rem 下の右に出す。
  *   - PageHeader がスクロールで見えない・無いときは、画面の右上（上端・右端から 1rem）。
  * - md 未満: 上端の全幅。上端のバー（メニューのボタンと製品名）に重ね、メニューのボタンは覆わない。
+ *
+ * 幅（#899）: md 以上は内容に合わせて広がり、`--toast-width-min`（22rem）〜`--toast-width-max`（32rem）の間で決まる
+ * （置ける幅がそれより狭ければ置ける幅まで）。固定の幅にすると、短い 1 文でも語の途中で 2 行に折り返していた
+ * （「Oracle Profile の反映が完了しま / した。」）。md 未満は画面の幅（左右の間隔の内側）いっぱい。
  */
 
 /** 画面の端・PageHeader・ページの操作との間隔。 */
@@ -30,8 +34,9 @@ const NARROW_TOP = "0.5rem";
  * ボタンはバーの左の余白（`px-2` = 0.5rem）の後ろに 44px（`--control-height-touch`）。その後ろに 0.5rem 空ける。
  */
 const NARROW_TOP_BAR_LEFT = "calc(1rem + var(--control-height-touch))";
-/** md 以上の幅の上限。 */
-const WIDE_WIDTH = "22rem";
+/** md 以上の幅の下限と上限（`tokens/spacing.css`。#899）。この間で内容に合わせて広がる。 */
+const MIN_WIDTH = "var(--toast-width-min)";
+const MAX_WIDTH = "var(--toast-width-max)";
 /** PageHeader に重ねるときに必要な最小の幅（これより狭ければ PageHeader の下に出す）。 */
 const MIN_HEADER_WIDTH_REM = 14;
 
@@ -58,7 +63,9 @@ export interface ToastPlacement {
     top: string;
     left?: string;
     right: string;
-    width?: string;
+    /** md 以上だけ。内容に合わせた幅（shrink-to-fit）の下限・上限。md 未満は left / right で画面の幅に広げる。 */
+    minWidth?: string;
+    maxWidth?: string;
     maxHeight: string;
   };
 }
@@ -68,6 +75,11 @@ const SAFE_TOP = `max(${EDGE}, env(safe-area-inset-top))`;
 
 function maxHeight(top: string) {
   return `calc(100dvh - ${top} - ${EDGE})`;
+}
+
+/** 置ける幅（`available`）の中で、内容に合わせて下限〜上限の幅に広がる。 */
+function widthRange(available: string) {
+  return { minWidth: `min(${MIN_WIDTH}, ${available})`, maxWidth: `min(${MAX_WIDTH}, ${available})` };
 }
 
 export function resolveToastPlacement({
@@ -91,10 +103,10 @@ export function resolveToastPlacement({
     };
   }
 
-  const width = `min(${WIDE_WIDTH}, calc(100vw - 2 * ${EDGE}))`;
+  const width = widthRange(`calc(100vw - 2 * ${EDGE})`);
   const headerVisible = header !== null && header.bottom > 0;
   if (!headerVisible) {
-    return { mode: "top-right", style: { top: SAFE_TOP, right: SAFE_RIGHT, width, maxHeight: maxHeight(SAFE_TOP) } };
+    return { mode: "top-right", style: { top: SAFE_TOP, right: SAFE_RIGHT, ...width, maxHeight: maxHeight(SAFE_TOP) } };
   }
 
   const headerTop = `calc(${Math.max(0, Math.round(header.top))}px + ${EDGE})`;
@@ -108,7 +120,7 @@ export function resolveToastPlacement({
       style: {
         top: headerTop,
         right: SAFE_RIGHT,
-        width: `min(${WIDE_WIDTH}, ${Math.floor(rightSpace)}px)`,
+        ...widthRange(`${Math.floor(rightSpace)}px`),
         maxHeight: maxHeight(headerTop),
       },
     };
@@ -120,12 +132,12 @@ export function resolveToastPlacement({
     const right = `calc(${Math.round(viewportWidth - headerActions.left)}px + ${EDGE})`;
     return {
       mode: "page-header",
-      style: { top: headerTop, right, width: `min(${WIDE_WIDTH}, ${Math.floor(leftSpace)}px)`, maxHeight: maxHeight(headerTop) },
+      style: { top: headerTop, right, ...widthRange(`${Math.floor(leftSpace)}px`), maxHeight: maxHeight(headerTop) },
     };
   }
 
   const top = `calc(${Math.round(header.bottom)}px + ${EDGE})`;
-  return { mode: "below-page-header", style: { top, right: SAFE_RIGHT, width, maxHeight: maxHeight(top) } };
+  return { mode: "below-page-header", style: { top, right: SAFE_RIGHT, ...width, maxHeight: maxHeight(top) } };
 }
 
 /** PageHeader の目印（`<header data-page-header>`）。 */
