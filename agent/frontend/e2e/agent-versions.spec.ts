@@ -125,6 +125,15 @@ test("公開していない Agent は、管理者が「下書きで実行」に�
   await expect(page.getByRole("option", { name: "経理の Agent" })).toHaveCount(0);
   await page.keyboard.press("Escape");
 
+  // 「下書きで実行」の補足の説明は常設せず、ラベルの横の info アイコンを押すと出す（#901）。
+  const draftHint = page.getByTestId("run-draft-hint");
+  await expect(draftHint).toBeHidden();
+  await page.getByRole("button", { name: "下書きで実行の説明", exact: true }).click();
+  await expect(draftHint).toBeVisible();
+  await expect(draftHint).toHaveText("公開前の下書きの内容で試します（Agent 管理の権限）。");
+  await page.keyboard.press("Escape");
+  await expect(draftHint).toBeHidden();
+
   await page.getByTestId("run-draft").click();
   await agentSelect.click();
   await page.getByRole("option", { name: "経理の Agent" }).click();

@@ -21,6 +21,7 @@ import {
   CardContent,
   EmptyState,
   FieldActionRow,
+  InfoTip,
   ListSkeleton,
   MessageText,
   PageBody,
@@ -580,16 +581,26 @@ export function SqlChatPage() {
                 data-testid="sql-chat-composer-region"
               >
                 {/* 生成方法（#890）。RAG のチャットの「回答するモデル」と同じく、入力欄の直上の行に
-                    「ラベル・選択・説明」を並べる。ラベルは隣の文言で読めるので欄のラベルは読み上げだけにする。 */}
+                    「ラベル・説明のアイコン・選択」を並べる。ラベルは隣の文言で読めるので欄のラベルは読み上げだけにする。
+                    選んだ生成方法の説明は常設せず、ラベルの横の info アイコンから出し、選択欄にも説明として結び付ける（#901）。 */}
                 <div
                   className="flex flex-wrap items-center gap-2"
                   data-testid="sql-chat-engine-row"
                 >
-                  <span
-                    className="text-xs font-medium text-fg-muted"
-                    aria-hidden="true"
-                  >
-                    {t("chat.engine")}
+                  <span className="inline-flex items-center gap-0.5">
+                    <span
+                      className="text-xs font-medium text-fg-muted"
+                      aria-hidden="true"
+                    >
+                      {t("chat.engine")}
+                    </span>
+                    <InfoTip
+                      label={t("chat.engine.infoLabel")}
+                      content={engineOption.description}
+                      contentId={engineDescriptionId}
+                      contentTestId="sql-chat-engine-description"
+                      data-testid="sql-chat-engine-info"
+                    />
                   </span>
                   <SelectField
                     id="sql-chat-engine"
@@ -606,13 +617,6 @@ export function SqlChatPage() {
                       label,
                     }))}
                   />
-                  <span
-                    id={engineDescriptionId}
-                    className="text-xs text-fg-muted"
-                    data-testid="sql-chat-engine-description"
-                  >
-                    {engineOption.description}
-                  </span>
                 </div>
                 <FieldActionRow
                   actions={

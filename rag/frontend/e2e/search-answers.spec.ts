@@ -346,6 +346,7 @@ const ANSWER_MODELS = [
 
 test("回答のモデルは既定のテキストモデルと画像対応モデルだけ。検索は 1 つを選び、チャットは比較できる（#675）", async ({
   page,
+  isMobile,
 }) => {
   const bodies: Record<string, unknown>[] = [];
   await mockAnswerHistory(page, 0);
@@ -361,8 +362,17 @@ test("回答のモデルは既定のテキストモデルと画像対応モデ�
   const modelRow = page.getByTestId("search-answer-model");
   await expect(modelRow).toHaveCount(0);
   await enableSearchAnswer(page);
-  await expect(modelRow.getByRole("button")).toHaveText(["gpt-oss-120b（テキスト）", "grok-4.3（画像対応）"]);
-  await expect(modelRow).toContainText("根拠の図や画像を読むときだけ画像対応モデルを使います");
+  await expect(modelRow.locator("button[aria-pressed]")).toHaveText(["gpt-oss-120b（テキスト）", "grok-4.3（画像対応）"]);
+  // 説明は常設せず、ラベルの横の info アイコンから出す（#901）。マウスはポインタを乗せると出し、
+  // タッチ端末（ホバーが無い）はタップで出す。
+  await expect(modelRow).not.toContainText("根拠の図や画像を読むときだけ画像対応モデルを使います");
+  const modelInfo = modelRow.getByRole("button", { name: "回答するモデルの説明" });
+  if (isMobile) await modelInfo.tap();
+  else await modelInfo.hover();
+  await expect(page.getByTestId("search-answer-model-help")).toBeVisible();
+  await expect(page.getByTestId("search-answer-model-help")).toContainText(
+    "根拠の図や画像を読むときだけ画像対応モデルを使います"
+  );
   const vision = modelRow.getByRole("button", { name: "grok-4.3（画像対応）" });
   await vision.click();
   await expect(vision).toHaveAttribute("aria-pressed", "true");
@@ -385,9 +395,16 @@ test("回答のモデルは既定のテキストモデルと画像対応モデ�
   await selectSearchAnswerProfile(page, "経理ビュー");
   await expect(page.getByRole("button", { name: "gpt-oss-120b（テキスト）" })).toBeVisible();
   await expect(page.getByRole("button", { name: "grok-4.3（画像対応）" })).toBeVisible();
-  await expect(page.getByTestId("chat-default-model")).toHaveText(
+  // 説明は常設せず、ラベルの横の info アイコンを押すと出る（#901）。
+  const help = page.getByTestId("chat-default-model");
+  await expect(help).toBeHidden();
+  await page.getByRole("button", { name: "回答するモデルの説明" }).click();
+  await expect(help).toBeVisible();
+  await expect(help).toHaveText(
     "未選択ならテキストモデルで回答し、根拠の図や画像を読むときだけ画像対応モデルを使います。両方選ぶと回答を並べて比較できます。"
   );
+  await page.keyboard.press("Escape");
+  await expect(help).toBeHidden();
   await expectNoPageOverflow(page);
 });
 
@@ -404,7 +421,7 @@ test("既定のテキストモデルが画像対応モデルも兼ねるとき�
   const chip = page.getByRole("button", { name: "xai.grok-4.3（テキスト・画像対応）" });
   await expect(chip).toBeVisible();
   await expect(page.getByRole("button", { name: "xai.grok-4.3（テキスト）" })).toHaveCount(0);
-  await expect(page.getByTestId("chat-default-model")).toHaveText(
+  await expect(page.getByRole("button", { name: "回答するモデルの説明" })).toHaveAccessibleDescription(
     "このモデルは画像対応モデルも兼ね、根拠の図や画像も読んで回答します。"
   );
   await expectNoPageOverflow(page);
@@ -419,8 +436,11 @@ test("既定のテキストモデルが画像対応モデルも兼ねるとき�
   await selectSearchAnswerProfile(page, /経理ビュー/);
   await enableSearchAnswer(page);
   const modelRow = page.getByTestId("search-answer-model");
-  await expect(modelRow.getByRole("button")).toHaveText(["xai.grok-4.3（テキスト・画像対応）"]);
-  await expect(modelRow).toContainText("このモデルは画像対応モデルも兼ね、根拠の図や画像も読んで回答します。");
+  await expect(modelRow.locator("button[aria-pressed]")).toHaveText(["xai.grok-4.3（テキスト・画像対応）"]);
+  // 説明は info アイコンの説明として読み上げに結び付く（閉じている間も読める。#901）。
+  await expect(modelRow.getByRole("button", { name: "回答するモデルの説明" })).toHaveAccessibleDescription(
+    "このモデルは画像対応モデルも兼ね、根拠の図や画像も読んで回答します。"
+  );
   // 選ぶと、そのモデルで回答する（比較はしない）。
   await modelRow.getByRole("button", { name: "xai.grok-4.3（テキスト・画像対応）" }).click();
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("図の数値は？");

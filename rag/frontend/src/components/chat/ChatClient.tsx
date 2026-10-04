@@ -9,6 +9,7 @@ import {
   FieldActionRow,
   TextareaField,
   TextField,
+  InfoTip,
   ToggleChip,
   TimedLoadingState,
   Skeleton,
@@ -1335,8 +1336,19 @@ export function ChatClient() {
             {/* 比較モデル + composer */}
             <div className="space-y-2 border-t border-border p-3">
               {compareModels.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-medium text-fg-muted">{t("chat.compare.label")}</span>
+                <div className="flex flex-wrap items-center gap-2" data-testid="chat-answer-model">
+                  {/* 候補は既定のテキストモデル（先頭。未選択のときに答える）と既定の画像対応モデル（#675）。
+                      同じモデルなら 1 件で、画像対応モデルも兼ねることを名前と説明で出す（#888）。
+                      説明は常設せず、ラベルの横の info アイコンから出す（#901）。 */}
+                  <span className="inline-flex items-center gap-0.5">
+                    <span className="text-xs font-medium text-fg-muted">{t("chat.compare.label")}</span>
+                    <InfoTip
+                      label={t("chat.compare.infoLabel")}
+                      content={t(answerModelHelpKey(compareModels, "chat.compare.default"))}
+                      contentTestId="chat-default-model"
+                      data-testid="chat-answer-model-info"
+                    />
+                  </span>
                   {compareModels.map((model) => (
                     <ToggleChip
                       key={model.model_id}
@@ -1346,13 +1358,6 @@ export function ChatClient() {
                       {answerModelLabel(model)}
                     </ToggleChip>
                   ))}
-                  {/* 候補は既定のテキストモデル（先頭。未選択のときに答える）と既定の画像対応モデル（#675）。
-                      同じモデルなら 1 件で、画像対応モデルも兼ねることを名前と説明で出す（#888）。 */}
-                  {selectedModelIds.length === 0 ? (
-                    <span className="text-xs text-fg-muted" data-testid="chat-default-model">
-                      {t(answerModelHelpKey(compareModels, "chat.compare.default"))}
-                    </span>
-                  ) : null}
                 </div>
               ) : null}
               {/* 入力欄と送信の行。送信は入力欄の下端にそろえ、375px では下に全幅で置く（#613）。 */}

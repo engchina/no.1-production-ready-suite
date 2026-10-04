@@ -15,6 +15,7 @@ const nl2sqlJa = {
   "chat.profile.searching": "検索しています…",
   "chat.profile.loadMore": "さらに読み込む",
   "chat.engine": "生成方法",
+  "chat.engine.infoLabel": "生成方法の説明",
   "chat.engine.selectAi": "Select AI",
   "chat.engine.selectAiAgent": "Select AI Agent",
   "chat.engine.enterprise": "Enterprise AI",
@@ -1140,6 +1141,7 @@ const nl2sqlJa = {
   "nl2sql.question.template.topn": "上位N件・並び替え",
   "nl2sql.question.template.join": "複数テーブル結合",
   "nl2sql.clarification.start": "AI要件確認",
+  "nl2sql.clarification.infoLabel": "AI要件確認の説明",
   "nl2sql.clarification.title": "AI要件確認",
   "nl2sql.clarification.description":
     "AIによるSQL生成の精度を高めるため、対話を通じてクエリの対象・表示項目・条件を補い、より明確で具体的な内容に整えます。",
