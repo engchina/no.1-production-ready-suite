@@ -47,6 +47,7 @@ from app.schemas.settings import (
     ModelSettingsPayload,
     ParserAdapterSettingsUpdate,
 )
+from app.services.control import service_runtime_env
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -3424,6 +3425,42 @@ def test_update_huggingface_settings_keeps_token_when_blank(
     assert resp.status_code == 200
     assert settings.huggingface_token == ""
     assert resp.json()["data"]["token_configured"] is False
+
+
+def test_update_huggingface_settings_normalizes_runtime_values(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """保存した値は再起動を待たず、起動時の読み込みと同じ正規化で実行中の設定に入る（#1018）。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "huggingface_endpoint", "")
+    monkeypatch.setattr(settings, "huggingface_token", "hf_existing")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch(
+        "/api/settings/huggingface",
+        json={"endpoint": "hf-mirror.com", "token": "  hf_new  "},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["endpoint"] == "https://hf-mirror.com"
+    assert settings.huggingface_endpoint == "https://hf-mirror.com"
+    assert settings.huggingface_token == "hf_new"
+    # サービスの起動 / 再起動で parser へ渡す値も scheme 付き。
+    assert service_runtime_env(settings)["HF_ENDPOINT"] == "https://hf-mirror.com"
+    assert service_runtime_env(settings)["HF_TOKEN"] == "hf_new"
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "RAG_HUGGINGFACE_ENDPOINT=https://hf-mirror.com" in env_text
+    assert "RAG_HUGGINGFACE_TOKEN=hf_new" in env_text
+
+    # 空白だけの token は未入力として扱い、保存済みの token を保持する。
+    resp = client.patch(
+        "/api/settings/huggingface",
+        json={"endpoint": "https://hf-mirror.com", "token": "   "},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["token_configured"] is True
+    assert settings.huggingface_token == "hf_new"
 
 
 def test_update_huggingface_settings_rejects_removed_download_dir() -> None:

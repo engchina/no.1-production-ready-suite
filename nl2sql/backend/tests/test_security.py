@@ -2076,6 +2076,74 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("permissions", "expected_status"),
+    [({"menu.security_deepsec"}, 200), ({"menu.security_permissions"}, 403)],
+    ids=["deepsec", "other-menu"],
+)
+def test_deepsec_target_object_detail_route_uses_registered_permission(
+    monkeypatch: pytest.MonkeyPatch,
+    permissions: set[str],
+    expected_status: int,
+) -> None:
+    """`{object_name:path}` の route も、登録した権限で判定する（常に 403 にしない）。"""
+    service = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+    role = service.create_role(
+        role_code="DEEPSEC_DETAIL_READER",
+        display_name="DeepSec の対象の詳細",
+        description="",
+        permissions=permissions,
+        entitlements=[],
+        actor=admin,
+    )
+    _create_active_user(
+        service,
+        admin,
+        login_user_id="deepsec.detail",
+        display_name="DeepSec 担当",
+        role_ids=[role.role_id],
+        password="DeepSecDetail!8642",
+    )
+    calls: list[tuple[str, str, str]] = []
+
+    class _DeepSecStub:
+        def target_object_detail(
+            self, *, owner: str, object_name: str, object_type: str
+        ) -> dict[str, object]:
+            calls.append((owner, object_name, object_type))
+            return {"name": object_name, "owner": owner, "object_type": "TABLE", "columns": []}
+
+    monkeypatch.setattr("app.security.router.get_deepsec_service", lambda: _DeepSecStub())
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            await _login_api(client, "deepsec.detail", "DeepSecDetail!8642")
+            response = await client.get(
+                "/api/security/deepsec/target-objects/HR/EMPLOYEES",
+                params={"object_type": "TABLE"},
+            )
+            assert response.status_code == expected_status, response.text
+            if expected_status == 200:
+                assert response.json()["data"]["qualified_name"] == "HR.EMPLOYEES"
+                # "/" を含む表名も 1 つの object_name として受ける（`:path`）。
+                slashed = await client.get(
+                    "/api/security/deepsec/target-objects/HR/%22A%2FB%22",
+                )
+                assert slashed.status_code == 200, slashed.text
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+    if expected_status == 200:
+        assert calls == [("HR", "EMPLOYEES", "TABLE"), ("HR", '"A/B"', "")]
+    else:
+        assert calls == []
+
+
 def test_security_audit_permission_and_api_are_removed() -> None:
     catalog_codes = {item.code for item in PERMISSION_CATALOG}
 
@@ -3250,6 +3318,16 @@ def test_deepsec_config_patch_updates_runtime_without_restart(
             )
             assert invalid.status_code == 422
             assert settings.oracle_deepsec_enabled is False
+            assert settings.oracle_deepsec_data_user_password == ""
+            assert closed == []
+
+            # 「${...}」は .env を読み直すと展開されて別の値になるので保存しない。
+            interpolated = await client.patch(
+                "/api/security/deepsec/config",
+                json={"data_user_password": "Abc${HOME}defghij"},
+            )
+            assert interpolated.status_code == 422
+            assert "${HOME}" not in interpolated.text
             assert settings.oracle_deepsec_data_user_password == ""
             assert closed == []
 

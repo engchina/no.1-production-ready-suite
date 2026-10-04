@@ -469,7 +469,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/settings/answer-records"): _any(MENU_SETTINGS_RETRIEVAL),
     ("GET", "/settings/query-history"): _any(MENU_SETTINGS_RETRIEVAL),
     ("PATCH", "/settings/query-history"): _any(MENU_SETTINGS_RETRIEVAL),
-    # 回答生成のプロンプトは回答プロンプトと文書解析（抽出プロンプト）の両画面で編集する。
+    # 編集できるプロンプトは回答プロンプト（回答生成）と文書解析（図・画像の読み取り）の
+    # 画面で編集する。変更（PUT / DELETE）は、route の中で `ANSWER_PROMPT_EDIT_PERMISSIONS`
+    # の key ごとの権限も確かめる。
     ("GET", "/settings/answer-prompts"): _any(MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS),
     ("PUT", "/settings/answer-prompts/{key}"): _any(
         MENU_SETTINGS_PROMPTS, MENU_SETTINGS_PARSER_ADAPTERS
@@ -522,6 +524,14 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/security/access-targets/search-answer-profiles"): _any(MENU_SECURITY_PERMISSIONS),
     ("GET", "/security/access-targets/knowledge-bases"): _any(MENU_SECURITY_PERMISSIONS),
     ("PUT", "/security/roles/{role_id}/access"): _any(MENU_SECURITY_PERMISSIONS),
+}
+
+
+# 編集できるプロンプトの key → 変更に要る権限（#1010）。画面はそれぞれ 1 つのプロンプトだけを
+# 編集するので、片方の画面の権限でもう片方のプロンプトを変えられないようにする。
+ANSWER_PROMPT_EDIT_PERMISSIONS: dict[str, str] = {
+    "vlm_answer": MENU_SETTINGS_PROMPTS,
+    "image_retrieval": MENU_SETTINGS_PARSER_ADAPTERS,
 }
 
 

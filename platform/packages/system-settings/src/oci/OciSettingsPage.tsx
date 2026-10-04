@@ -18,11 +18,13 @@ import {
   CardHeader,
   CardTitle,
   FormActionBar,
+  FormSkeleton,
   FormStatus,
   PageBody,
   ProcessingIndicator,
   SelectField,
   StatusBadge,
+  TimedLoadingState,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 
@@ -74,6 +76,14 @@ const AUTH_PROFILE_FIELDS = [
   "fingerprint",
   "tenancyOcid",
   "keyFile",
+  "region",
+] as const satisfies readonly OciSettingsField[];
+
+/** config から反映で値を読み取る欄（configProfile / keyFile は固定値のため含めない）。 */
+const IMPORTED_CONFIG_FIELDS = [
+  "userOcid",
+  "fingerprint",
+  "tenancyOcid",
   "region",
 ] as const satisfies readonly OciSettingsField[];
 
@@ -133,7 +143,10 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
   const [draft, setDraft] = useState<OciSettingsDraft>(DEFAULT_OCI_SETTINGS);
   const [errors, setErrors] = useState<OciValidationResult>({});
   const [authSaveState, setAuthSaveState] = useState<FeedbackState>("idle");
+  // 保存の失敗の文。検証エラーと API の失敗（理由は API の文）を分けて操作の行に出す（messaging.md §10。#1028）。
+  const [authSaveError, setAuthSaveError] = useState("");
   const [storageSaveState, setStorageSaveState] = useState<FeedbackState>("idle");
+  const [storageSaveError, setStorageSaveError] = useState("");
   const [configImportState, setConfigImportState] = useState<FeedbackState>("idle");
   const [configImportMessage, setConfigImportMessage] = useState("");
   const [keyFileState, setKeyFileState] = useState<FeedbackState>("idle");
@@ -209,6 +222,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
         ...validationErrors,
       }));
       setAuthSaveState("error");
+      setAuthSaveError(t("settings.oci.status.invalid"));
       setConfigTestState({ phase: "idle" });
       focusFirstOciError(validationErrors);
       return;
@@ -233,9 +247,13 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
         })
       );
       setAuthSaveState("idle");
+      setAuthSaveError("");
       toast.success(t("settings.oci.message.saved"));
-    } catch {
+    } catch (error) {
       setAuthSaveState("error");
+      setAuthSaveError(
+        hasApiMessage(error) ? apiMessage(error) : t("settings.oci.status.saveFailed")
+      );
       setConfigTestState({ phase: "idle" });
     }
   }
@@ -266,6 +284,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
         ...validationErrors,
       }));
       setStorageSaveState("error");
+      setStorageSaveError(t("settings.oci.status.invalid"));
       focusFirstOciError(validationErrors);
       return;
     }
@@ -285,9 +304,13 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
         })
       );
       setStorageSaveState("idle");
+      setStorageSaveError("");
       toast.success(t("settings.oci.message.storageSaved"));
-    } catch {
+    } catch (error) {
       setStorageSaveState("error");
+      setStorageSaveError(
+        hasApiMessage(error) ? apiMessage(error) : t("settings.oci.status.storageSaveFailed")
+      );
     }
   }
 
@@ -310,7 +333,9 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
         profile: FIXED_OCI_CONFIG_PROFILE,
       });
       const parsed = ociConfigReadDataToDraft(imported);
-      if (parsed.appliedFields.length <= 1) {
+      // configProfile / keyFile は固定値なので、user / fingerprint / tenancy / region のどれも
+      // 読み取れなければ反映できたものは無い（成功と出さない。#1028）。
+      if (!parsed.appliedFields.some((field) => fieldInGroup(IMPORTED_CONFIG_FIELDS, field))) {
         setConfigImportState("error");
         setConfigImportMessage(t("settings.oci.configContent.applyError"));
         return;
@@ -405,9 +430,17 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
     }
   }
 
-  if (loadState === "loading") return <PageBody wide><div
-    role="status" aria-busy="true" data-testid="settings-oci-loading" className="text-sm text-fg-muted"
-  >{t("settings.oci.loading")}</div></PageBody>;
+  // 読み込み中は経過時間と、2 枚のカード（認証・Object Storage）の形の Skeleton を出す（AGENTS.md。#1028）。
+  if (loadState === "loading") return <PageBody wide>
+    <TimedLoadingState
+      label={t("settings.oci.loading")}
+      operationKey={`oci-settings-${loadAttempt}`}
+      testId="settings-oci-loading"
+    >
+      <FormSkeleton fields={7} />
+      <FormSkeleton fields={2} />
+    </TimedLoadingState>
+  </PageBody>;
   if (loadState === "error") return <PageBody wide><ErrorState
     message={loadError} onRetry={() => setLoadAttempt((current) => current + 1)}
   /></PageBody>;
@@ -522,6 +555,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
               ariaContext={t("nav.settingsOci")}
               busy={busy}
               saveState={authSaveState}
+              saveError={authSaveError}
               saveLabel={t("settings.oci.actions.saveAuth")}
               onSave={() => void saveAuthDraft()}
               testState={configTestState.phase}
@@ -574,6 +608,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
               ariaContext={t("settings.oci.storage.title")}
               busy={busy}
               saveState={storageSaveState}
+              saveError={storageSaveError}
               saveLabel={t("settings.oci.actions.save")}
               onSave={saveStorageDraft}
             />
@@ -592,6 +627,7 @@ function SectionActions({
   ariaContext,
   busy,
   saveState,
+  saveError,
   saveLabel,
   onSave,
   testState,
@@ -602,6 +638,8 @@ function SectionActions({
   /** ページのいずれかの操作の処理中。押したボタン以外を無効にする。 */
   busy: boolean;
   saveState: FeedbackState;
+  /** 保存の失敗の文（検証エラー・API の失敗の理由）。 */
+  saveError: string;
   saveLabel: string;
   onSave: () => void;
   testState?: ConfigTestState["phase"];
@@ -643,7 +681,7 @@ function SectionActions({
       }
       status={
         saveState === "error" ? (
-          <FormStatus tone="danger" message={t("settings.oci.status.invalid")} />
+          <FormStatus tone="danger" message={saveError || t("settings.oci.status.invalid")} />
         ) : null
       }
     />

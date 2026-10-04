@@ -1,9 +1,12 @@
 import {
+  ApiErrorBanner,
+  apiErrorMessage,
   Button,
   Banner,
   DataTable,
   Disclosure,
   EmptyState,
+  FormSkeleton,
   toast,
   StatusBadge,
   PageHeader,
@@ -25,7 +28,7 @@ import {
 } from "@engchina/production-ready-ui";
 import { useEffect, useMemo, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart3,
   CheckCircle2,
@@ -79,6 +82,11 @@ const ACTIVE_STATUSES = new Set<QualityEvaluationStatus>(["pending", "running"])
 const sectionClass = "grid min-w-0 gap-5 rounded-lg border border-border bg-surface p-4 shadow-sm lg:p-5";
 
 type FormErrors = Partial<Record<"profile" | "file" | "engines" | "repeat", string>>;
+/**
+ * job の中止・削除の失敗（progress = 実行状況の「中止」の下、recent = 最近の job の一覧の上。#995）。
+ * 文は共通の API の失敗の表示（messaging.md §10.3.1）で、backend の理由（他の利用者の job・状態の競合など）を出す。
+ */
+type JobActionError = { origin: "progress" | "recent"; error: unknown; fallback: string } | null;
 
 function qualityEvaluationQueryPollingInterval(
   status: QualityEvaluationStatus | undefined,
@@ -112,6 +120,7 @@ export function EvaluationPage() {
   const [resultCursorHistory, setResultCursorHistory] = useState<Array<string | null>>([]);
   // どのボタンが始めたダウンロードか。スピナーは押したボタンだけが出し、もう一方は無効にするだけ（#819）。
   const [downloading, setDownloading] = useState<"template" | "results" | null>(null);
+  const [jobActionError, setJobActionError] = useState<JobActionError>(null);
 
   const capabilitiesQuery = useQuery({
     queryKey: ["quality-evaluations", "capabilities", profileId],
@@ -121,6 +130,9 @@ export function EvaluationPage() {
         `/api/nl2sql/quality-evaluations/capabilities${query}`
       );
     },
+    // 業務プロファイルを切り替えて取り直す間も、前の結果で条件のフォームを出したままにする。以前は取り直しのたびに
+    // フォームが読み込み中の表示に置き換わり、選択欄のフォーカスが外れていた（#995）。
+    placeholderData: keepPreviousData,
   });
   const profilesQuery = useQuery({
     queryKey: ["nl2sql", "profiles", "quality-evaluation"],
@@ -181,6 +193,7 @@ export function EvaluationPage() {
   if (jobChanged) {
     setResultCursor(null);
     setResultCursorHistory([]);
+    if (jobActionError?.origin === "progress") setJobActionError(null);
   }
 
   const currentJobStatus = currentJob?.status;
@@ -237,9 +250,6 @@ export function EvaluationPage() {
       }
       toast.success(t("qualityEvaluation.notice.deleted"));
     },
-    onError: () => {
-      toast.error(t("qualityEvaluation.error.delete"));
-    },
   });
   const cancelJobMutation = useMutation({
     mutationFn: (job: QualityEvaluationJobSummary) =>
@@ -253,9 +263,6 @@ export function EvaluationPage() {
         queryKey: ["quality-evaluations", "results", cancelled.job_id],
       });
       toast.success(t("qualityEvaluation.notice.cancelled"));
-    },
-    onError: () => {
-      toast.error(t("qualityEvaluation.error.cancel"));
     },
   });
 
@@ -278,7 +285,9 @@ export function EvaluationPage() {
   const selectedUnavailable = selectedCapabilities.some((item) => !item.available);
   const running = Boolean(currentJob && ACTIVE_STATUSES.has(currentJob.status));
   const conditionsLocked = running || startMutation.isPending;
-  const pageLoading = capabilitiesQuery.isLoading || profilesQuery.isLoading;
+  // 業務プロファイルの切り替えの取り直しの間（isPlaceholderData）は、前の profile の実行可否で開始させない。
+  const capabilitiesRefreshing = capabilitiesQuery.isPlaceholderData;
+  const pageLoading = capabilitiesQuery.isPending || profilesQuery.isPending;
   const pageError = capabilitiesQuery.error || profilesQuery.error;
 
   const validate = () => {
@@ -340,10 +349,15 @@ export function EvaluationPage() {
       tone: "danger",
     });
     if (!confirmed) return;
-    deleteJobMutation.mutate(job);
+    setJobActionError(null);
+    deleteJobMutation.mutate(job, {
+      // 失敗は Toast ではなく最近の job の一覧の上に、backend の理由とともに残す（messaging.md §10。#995）。
+      onError: (cause) =>
+        setJobActionError({ origin: "recent", error: cause, fallback: t("qualityEvaluation.error.delete") }),
+    });
   };
 
-  const cancelJob = async (job: QualityEvaluationJobSummary) => {
+  const cancelJob = async (job: QualityEvaluationJobSummary, origin: "progress" | "recent") => {
     if (!ACTIVE_STATUSES.has(job.status)) return;
     const confirmed = await confirm({
       title: t("qualityEvaluation.confirm.cancel.title"),
@@ -352,7 +366,11 @@ export function EvaluationPage() {
       tone: "danger",
     });
     if (!confirmed) return;
-    cancelJobMutation.mutate(job);
+    setJobActionError(null);
+    cancelJobMutation.mutate(job, {
+      onError: (cause) =>
+        setJobActionError({ origin, error: cause, fallback: t("qualityEvaluation.error.cancel") }),
+    });
   };
 
   const downloadFile = async (path: string, fallbackName: string, origin: "template" | "results") => {
@@ -397,7 +415,16 @@ export function EvaluationPage() {
             description={t("qualityEvaluation.conditions.description")}
           />
           {pageLoading ? (
-            <LoadingState label={t("common.loading")} placement="panel" />
+            // 読み込み中は条件のフォームの形の Skeleton で領域を予約する（messaging.md §3.6）。
+            <TimedLoadingState
+              label={t("common.loading")}
+              operationKey="quality-evaluation-conditions"
+              placement="panel"
+              framed={false}
+              testId="quality-evaluation-conditions-loading"
+            >
+              <FormSkeleton fields={4} title={false} />
+            </TimedLoadingState>
           ) : pageError ? null : (
             <form
               className="grid min-w-0 gap-5"
@@ -639,6 +666,7 @@ export function EvaluationPage() {
                   disabled={
                     running ||
                     startMutation.isPending ||
+                    capabilitiesRefreshing ||
                     !capabilities?.judge.available ||
                     selectedUnavailable
                   } icon={Play}>
@@ -690,7 +718,12 @@ export function EvaluationPage() {
               ) : (
                 <JobProgress
                   job={currentJob}
-                  onCancel={cancelJob}
+                  onCancel={(job) => cancelJob(job, "progress")}
+                  error={
+                    jobActionError?.origin === "progress"
+                      ? apiErrorMessage(jobActionError.error, jobActionError.fallback)
+                      : ""
+                  }
                   cancelling={
                     cancelJobMutation.isPending &&
                     cancelJobMutation.variables?.job_id === currentJob.job_id
@@ -831,6 +864,13 @@ export function EvaluationPage() {
             title={t("qualityEvaluation.recent.title")}
             description={t("qualityEvaluation.recent.description")}
           />
+          {jobActionError?.origin === "recent" ? (
+            <ApiErrorBanner
+              error={jobActionError.error}
+              fallback={jobActionError.fallback}
+              testId="quality-evaluation-recent-job-action-error"
+            />
+          ) : null}
           <div>
             {recentJobsQuery.isLoading ? (
               <TimedLoadingState
@@ -915,7 +955,7 @@ export function EvaluationPage() {
                                 tone: "danger",
                                 visible: ACTIVE_STATUSES.has(job.status),
                                 disabled: cancelJobMutation.isPending,
-                                onSelect: () => cancelJob(job),
+                                onSelect: () => cancelJob(job, "recent"),
                               },
                               {
                                 id: "delete",
@@ -998,10 +1038,13 @@ function JobProgress({
   job,
   onCancel,
   cancelling = false,
+  error = "",
 }: {
   job: QualityEvaluationJobSummary;
   onCancel?: (job: QualityEvaluationJobSummary) => void | Promise<void>;
   cancelling?: boolean;
+  /** 「中止」の失敗。操作の行の直下に出す（messaging.md §10）。 */
+  error?: string;
 }) {
   const active = ACTIVE_STATUSES.has(job.status);
   const attemptTimeoutSeconds = Math.round(Math.max(1, job.attempt_timeout_seconds || 0));
@@ -1040,6 +1083,7 @@ function JobProgress({
           </Button>
         ) : null}
       </div>
+      <FormStatus tone="danger" message={error} />
       <ProcessingIndicator
         active={active}
         operationKey={job.job_id}

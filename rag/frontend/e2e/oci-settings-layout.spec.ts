@@ -53,6 +53,13 @@ function ociConfigTestFixture(overrides: Record<string, unknown> = {}) {
 }
 
 interface MockApiOptions {
+  /** 指定すると OCI 設定の GET をこの Promise が解決するまで返さない（読み込み中の確認）。 */
+  ociSettingsGate?: Promise<void>;
+  /** 指定すると保存の PATCH をこの status と error_messages で失敗させる。 */
+  ociSettingsUpdateError?: { status: number; message: string };
+  ociObjectStorageUpdateError?: { status: number; message: string };
+  /** config 読込の応答の data（既定は全項目を読み取れた応答）。 */
+  ociConfigReadData?: Record<string, unknown>;
   onOciConfigRead?: (body: unknown) => void;
   onOciSettingsUpdate?: (body: unknown) => void;
   onOciConfigTest?: () => void;
@@ -86,6 +93,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
     }
 
     if (url.pathname === "/api/settings/oci" && method === "GET") {
+      await options.ociSettingsGate;
       await route.fulfill({
         json: {
           data: {
@@ -121,6 +129,17 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         region?: string;
       };
       options.onOciSettingsUpdate?.(body);
+      if (options.ociSettingsUpdateError) {
+        await route.fulfill({
+          status: options.ociSettingsUpdateError.status,
+          json: {
+            data: null,
+            error_messages: [options.ociSettingsUpdateError.message],
+            warning_messages: [],
+          },
+        });
+        return;
+      }
       await route.fulfill({
         json: {
           data: {
@@ -184,6 +203,17 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         object_storage_namespace?: string;
       };
       options.onOciObjectStorageUpdate?.(body);
+      if (options.ociObjectStorageUpdateError) {
+        await route.fulfill({
+          status: options.ociObjectStorageUpdateError.status,
+          json: {
+            data: null,
+            error_messages: [options.ociObjectStorageUpdateError.message],
+            warning_messages: [],
+          },
+        });
+        return;
+      }
       await route.fulfill({
         json: {
           data: {
@@ -207,7 +237,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       options.onOciConfigRead?.(route.request().postDataJSON());
       await route.fulfill({
         json: {
-          data: {
+          data: options.ociConfigReadData ?? {
             profile: "RAG_PROD",
             user: "ocid1.user.oc1..prod",
             fingerprint: "12:34:56:78",
@@ -392,6 +422,97 @@ test("OCI config を読み取れたときは警告を出さない", async ({ pag
 
   await expect(page.getByLabel("ユーザー OCID")).toHaveValue(VALID_AUTH.user);
   await expect(page.getByText("保存済みの値を表示できません")).toHaveCount(0);
+});
+
+// desktop / 375px は playwright.config.ts の project が受け持つ。
+test("OCI 設定の読み込み中は経過時間とフォームの形の Skeleton を出す", async ({ page }) => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await mockApi(page, { ociSettings: VALID_AUTH, ociSettingsGate: gate });
+
+  await page.goto("/settings/oci");
+
+  const loading = page.getByTestId("settings-oci-loading");
+  await expect(loading).toBeVisible();
+  await expect(loading).toContainText("OCI 設定を読み込んでいます");
+  await expect(loading.locator('[data-skeleton="form"]')).toHaveCount(2);
+  await expectNoPageOverflow(page);
+
+  release();
+  await expect(page.getByLabel("ユーザー OCID")).toHaveValue(VALID_AUTH.user);
+  await expect(loading).toHaveCount(0);
+});
+
+test("OCI 設定の保存の API の失敗は理由を操作の行に出す", async ({ page }) => {
+  const authError = "OCI config ファイルをバックエンドの固定 path へ保存できませんでした。";
+  const storageError = "OCI Object Storage 設定を platform/.env へ保存できませんでした。";
+  await mockApi(page, {
+    ociSettings: VALID_AUTH,
+    uploadStorageSettings: { object_storage_region: "ap-osaka-1", object_storage_namespace: "env-namespace" },
+    ociSettingsUpdateError: { status: 500, message: authError },
+    ociObjectStorageUpdateError: { status: 500, message: storageError },
+  });
+
+  await page.goto("/settings/oci");
+  await expect(page.getByLabel("ユーザー OCID")).toHaveValue(VALID_AUTH.user);
+
+  await page.getByRole("button", { name: "OCI 認証設定: OCI 設定を保存" }).click();
+  const authActions = page.getByRole("group", { name: "OCI 認証設定 の操作" });
+  await expect(authActions).toContainText(authError);
+  await expect(authActions).not.toContainText("入力内容を確認してください。");
+
+  await page.getByRole("button", { name: "Object Storage: 保存" }).click();
+  const storageActions = page.getByRole("group", { name: "Object Storage の操作" });
+  await expect(storageActions).toContainText(storageError);
+  // 入力は残り、失敗の文は入力を変えると消える。
+  await expect(page.getByLabel("ユーザー OCID")).toHaveValue(VALID_AUTH.user);
+  await page.getByLabel("ユーザー OCID").fill("ocid1.user.oc1..cccccccc");
+  await expect(authActions).not.toContainText(authError);
+  await expectNoPageOverflow(page);
+});
+
+test("OCI 設定の保存の検証エラーは入力の確認を促し、PATCH を送らない", async ({ page }) => {
+  let patchCount = 0;
+  await mockApi(page, {
+    ociSettings: { ...VALID_AUTH, fingerprint: "" },
+    onOciSettingsUpdate: () => {
+      patchCount += 1;
+    },
+  });
+
+  await page.goto("/settings/oci");
+  await expect(page.getByLabel("ユーザー OCID")).toHaveValue(VALID_AUTH.user);
+  await page.getByRole("button", { name: "OCI 認証設定: OCI 設定を保存" }).click();
+
+  await expect(page.getByRole("group", { name: "OCI 認証設定 の操作" })).toContainText(
+    "入力内容を確認してください。"
+  );
+  expect(patchCount).toBe(0);
+});
+
+test("OCI config から反映で読み取れた認証項目が無ければ成功と出さない", async ({ page }) => {
+  await mockApi(page, {
+    ociSettings: VALID_AUTH,
+    ociConfigReadData: {
+      profile: "DEFAULT",
+      user: "",
+      fingerprint: "",
+      tenancy: "",
+      region: "",
+      key_file: "/home/app/.oci/other.pem",
+      applied_fields: ["key_file"],
+    },
+  });
+
+  await page.goto("/settings/oci");
+  await expect(page.getByLabel("ユーザー OCID")).toHaveValue(VALID_AUTH.user);
+  await page.getByRole("button", { name: /config から反映/ }).click();
+
+  await expect(page.getByText("有効な OCI config 項目を読み取れませんでした。")).toBeVisible();
+  await expect(page.getByText("OCI config を読み込みました。")).toHaveCount(0);
+  await expect(page.getByLabel("ユーザー OCID")).toHaveValue(VALID_AUTH.user);
 });
 
 test("OCI 接続テストの失敗を段階つきで表示する", async ({ page }) => {

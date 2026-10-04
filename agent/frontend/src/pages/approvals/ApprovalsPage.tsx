@@ -44,6 +44,7 @@ import { useCapabilities } from "@/lib/permissions";
 import { approvalStatusView, runStatusView } from "@/lib/status-labels";
 import { isNullableString, isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { JsonPreview } from "@/pages/shared/page-helpers";
+import { useViewSwitchFocus } from "@/pages/shared/view-switch-focus";
 
 type ApprovalRow = { run: RunState; approval: ApprovalRequest };
 const APPROVAL_FILTERS = ["pending", "decided", "all"] as const;
@@ -128,17 +129,12 @@ export function ApprovalsPage() {
 
   useEffect(() => {
     if (targetId) setSelectedId(targetId);
-    const frame = requestAnimationFrame(() => {
-      const link =
-        isList && selectedId
-          ? document.querySelector<HTMLAnchorElement>(`a[data-approval-id="${CSS.escape(selectedId)}"]`)
-          : null;
-      const heading = document.querySelector<HTMLElement>("main h1");
-      if (heading) heading.tabIndex = -1;
-      (link ?? heading)?.focus({ preventScroll: true });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [isList, targetId, selectedId, setSelectedId]);
+  }, [targetId, setSelectedId]);
+  // 詳細を開くと見出しへ、一覧へ戻ると選んだ行へフォーカスを移す（開いた直後は動かさない。#1122）。
+  useViewSwitchFocus(
+    `${isList ? "list" : "detail"}:${targetId ?? ""}`,
+    isList && selectedId ? `a[data-approval-id="${CSS.escape(selectedId)}"]` : null
+  );
 
   function openApproval(id: string) {
     setSelectedId(id);
