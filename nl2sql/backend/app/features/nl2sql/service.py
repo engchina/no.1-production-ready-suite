@@ -2394,10 +2394,11 @@ class _PolicySqlCursor:
             return False
         depth = 0
         for position in range(self.index, len(self.tokens)):
-            token = self.tokens[position]
-            if token == "(":
+            # 変数名を `token` にすると bandit が B105（ハードコードされたパスワード）と誤検知する。
+            lexeme = self.tokens[position]
+            if lexeme == "(":
                 depth += 1
-            elif token == ")":
+            elif lexeme == ")":
                 depth -= 1
                 if depth == 0:
                     self.index = position + 1
