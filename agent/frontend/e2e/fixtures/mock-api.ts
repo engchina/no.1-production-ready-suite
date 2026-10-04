@@ -234,19 +234,37 @@ function publicJob(job: Json): Json {
   return clone(Object.fromEntries(Object.entries(job).filter(([key]) => key !== "_polls")));
 }
 
-/** 評価セットの入力を保存する形にする（id を省いたケースは `case-<番号>`）。 */
+/**
+ * 評価セットの入力を保存する形にする（backend の `number_cases` と同じ。#965）。
+ * id を省いたケースは使われていない `case-<番号>`（位置の番号から探す）、明示した id の重複は 422。
+ */
 function normalizedSet(body: Json): Json {
+  const cases = (body.cases as Json[] | undefined) ?? [];
+  const explicit = cases.map((item) => String(item.id ?? "").trim()).filter(Boolean);
+  if (new Set(explicit).size !== explicit.length) {
+    throw new HttpError(422, "body.cases: Value error, ケースの id が重複しています。");
+  }
+  const used = new Set(explicit);
   return {
     agent_id: body.agent_id,
     name: body.name,
     description: body.description ?? "",
-    cases: ((body.cases as Json[] | undefined) ?? []).map((item, index) => ({
-      id: (item.id as string | undefined) || `case-${index + 1}`,
-      question: item.question,
-      expected: item.expected,
-      expected_tools: item.expected_tools ?? [],
-      source_run_id: item.source_run_id ?? null,
-    })),
+    cases: cases.map((item, index) => {
+      let id = String(item.id ?? "").trim();
+      if (!id) {
+        let number = index + 1;
+        while (used.has(`case-${number}`)) number += 1;
+        id = `case-${number}`;
+        used.add(id);
+      }
+      return {
+        id,
+        question: item.question,
+        expected: item.expected,
+        expected_tools: item.expected_tools ?? [],
+        source_run_id: item.source_run_id ?? null,
+      };
+    }),
   };
 }
 
@@ -1043,7 +1061,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
   // --- 品質評価（#776） ---
   if (method === "POST" && at("evaluations")) {
-    if (state.evaluations.some((job) => job.status === "running")) {
+    // backend と同じく、待っている（queued）評価も実行中に数える。
+    if (state.evaluations.some((job) => job.status === "running" || job.status === "queued")) {
       throw new HttpError(409, "ほかの評価を実行しています。終わってから始めてください。");
     }
     const evaluationSet = findOr404(state.evaluationSets, "id", String(body.set_id), "evaluation set");
@@ -1209,12 +1228,30 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
 
   // --- 業務 Agent ---
   if (head === "agents") {
+    // 版に残す項目（#770）と、登録されていないスキルの検証（backend の `_validate_agent_skills`。#925）。
+    const VERSIONED = ["name", "description", "instructions", "skill_ids", "model_id"] as const;
+    const requireKnownSkills = (skillIds: unknown) => {
+      const known = new Set(state.skills.map((skill) => String(skill.id)));
+      const unknown = [...new Set(((skillIds as string[] | undefined) ?? []).filter((id) => !known.has(id)))].sort();
+      if (unknown.length) {
+        throw new HttpError(400, `登録されていないスキルがあります: ${unknown.join(", ")}。スキルの選択から外してください。`);
+      }
+    };
+    // 公開中の版と下書きの版の項目が違うか（backend の `has_unpublished_changes`）。
+    const unpublishedChanges = (agent: Json) => {
+      const published = ((agent.versions as Json[] | undefined) ?? []).find(
+        (item) => item.version === agent.published_version
+      );
+      if (!published) return true;
+      return VERSIONED.some((field) => JSON.stringify(agent[field] ?? null) !== JSON.stringify(published[field] ?? null));
+    };
     if (method === "GET" && at("agents")) return { agents: state.agents };
     if (method === "POST" && at("agents")) {
       const id = String(body.id ?? `agent-${state.agents.length + 1}`);
       if (state.agents.some((agent) => agent.id === id)) {
-        throw new HttpError(400, `agent already exists: ${id}`);
+        throw new HttpError(400, "同じ ID の業務 Agent があります。");
       }
+      requireKnownSkills(body.skill_ids);
       const agent = {
         id,
         description: "",
@@ -1236,14 +1273,16 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     if (method === "PATCH" && at("agents", "*")) {
       const agent = findOr404(state.agents, "id", second, "agent");
+      if (body.skill_ids !== undefined) requireKnownSkills(body.skill_ids);
       Object.assign(agent, body, { updated_at: MOCK_NOW });
-      agent.unpublished_changes = true;
+      // 有効の切り替えなど版に残さない項目だけの変更は「公開していない変更」にしない（backend と同じ）。
+      agent.unpublished_changes = unpublishedChanges(agent);
       return agent;
     }
     // 下書きを版として公開する・前の版に戻す（#770）。
-    const VERSIONED = ["name", "description", "instructions", "skill_ids", "model_id"] as const;
     if (method === "POST" && at("agents", "*", "publish")) {
       const agent = findOr404(state.agents, "id", second, "agent");
+      requireKnownSkills(agent.skill_ids);
       const versions = (agent.versions as Json[] | undefined) ?? [];
       const version = Math.max(0, ...versions.map((item) => Number(item.version))) + 1;
       const snapshot: Json = { version, note: body.note ?? "", published_at: MOCK_NOW, published_by: "local" };
@@ -1258,7 +1297,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       const target = ((agent.versions as Json[] | undefined) ?? []).find(
         (item) => String(item.version) === segments[3]
       );
-      if (!target) throw new HttpError(404, "version not found");
+      if (!target) throw new HttpError(404, "業務 Agent の版が見つかりません。");
       for (const field of VERSIONED) agent[field] = clone(target[field]);
       agent.published_version = target.version;
       agent.unpublished_changes = false;

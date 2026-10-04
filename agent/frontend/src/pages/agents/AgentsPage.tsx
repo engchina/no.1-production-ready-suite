@@ -2,7 +2,6 @@ import { type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Power, PowerOff, Rocket, RotateCcw } from "lucide-react";
 import {
-  Banner,
   Button,
   DataTable,
   EmptyState,
@@ -19,6 +18,8 @@ import {
   type EntityAction,
   PageBody,
   RowTitleButton,
+  ApiErrorBanner,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 import { agentApi, type AgentProfile, type AgentVersion } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
@@ -53,7 +54,7 @@ export function AgentsPage() {
       toast.success(t("agent.enabledUpdated"));
       void queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
 
   const publishAgent = useMutation({
@@ -62,7 +63,7 @@ export function AgentsPage() {
       toast.success(t("agent.version.published", { version: published.published_version ?? 0 }));
       void queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
 
   async function confirmPublish(agent: AgentProfile) {
@@ -121,7 +122,7 @@ export function AgentsPage() {
         />
         <PageBody wide>
           <NonPersistentStorageNotice />
-          {skills.error ? <Banner severity="danger">{skills.error.message}</Banner> : null}
+          {skills.error ? <ApiErrorBanner error={skills.error} fallback={t("common.error.load")} /> : null}
           <Section title={t("agent.list")}>
             <ListToolbar
               search={
@@ -136,7 +137,7 @@ export function AgentsPage() {
               summary={agents.data ? listCountLabel(visibleAgents.length, agentList.length) : undefined}
               testId="agent-list-toolbar"
             />
-            <QueryState query={agents} loadingLabel={t("loading.agents")} skeleton={<TableSkeleton columns={6} />}>
+            <QueryState query={agents} loadingLabel={t("loading.agents")} skeleton={<TableSkeleton columns={7} />}>
               <AgentTable
                 agents={visibleAgents}
                 resetKey={agentQuery}
@@ -231,7 +232,7 @@ export function AgentVersionsSection({ agent, readOnly }: { agent: AgentProfile;
       toast.success(t("agent.version.restored", { version: restored.published_version ?? 0 }));
       void queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
 
   async function confirmRestore(version: AgentVersion) {

@@ -882,6 +882,40 @@ test("アーカイブ済みの詳細は読み取り専用で、保存できな�
   await expect(page.getByTestId("knowledge-base-detail-actions")).toHaveCount(0);
 });
 
+// アーカイブ済みは文書の追加・解除ができない（案内のとおり、所属文書の行に「外す」を出さない）。
+// 検索テストは索引済みの文書があっても使えないので、理由はアーカイブ済みであることを示す。
+test("アーカイブ済みの詳細は所属文書を外す操作を出さず、検索テストはアーカイブ済みを理由に示す", async ({
+  page,
+}) => {
+  const state = createKnowledgeBaseState();
+  state.knowledgeBases.push(
+    makeKnowledgeBase({
+      id: "kb-old",
+      name: "旧規程",
+      description: "旧版",
+      status: "ARCHIVED",
+      document_count: 1,
+      indexed_document_count: 1,
+    })
+  );
+  state.documents.push(
+    makeDocument({
+      id: "doc-old",
+      file_name: "old-policy.txt",
+      status: "INDEXED",
+      knowledge_bases: [{ id: "kb-old", name: "旧規程" }],
+    })
+  );
+  await mockKnowledgeBaseApi(page, state);
+  await page.goto("/knowledge-bases/kb-old");
+
+  await expect(page.getByTestId("knowledge-base-documents-list")).toContainText("old-policy.txt");
+  await expect(page.getByTestId("knowledge-base-document-actions-doc-old")).toHaveCount(0);
+  await expect(page.getByTestId("knowledge-base-add-documents-toggle")).toHaveCount(0);
+  await expect(page.getByText("アーカイブ済みのナレッジベースでは検索テストを行えません。")).toBeVisible();
+  await expect(page.getByText("索引済みの文書がありません。")).toHaveCount(0);
+});
+
 /** エディタの「一覧へ戻る」。ページの左上（タイトルの上）にあり、375px でもメニューに畳まない（#618）。 */
 async function clickBackToList(page: Page) {
   const back = page.getByTestId("editor-back");

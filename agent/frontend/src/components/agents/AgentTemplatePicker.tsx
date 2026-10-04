@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2 } from "lucide-react";
-import { Banner, ListSkeleton, Section, TimedLoadingState } from "@engchina/production-ready-ui";
+import { ListSkeleton, Section, TimedLoadingState, ApiErrorBanner } from "@engchina/production-ready-ui";
 
 import { agentApi, type AgentTemplate } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -30,7 +30,7 @@ export function AgentTemplatePicker({
           <ListSkeleton rows={4} className="sm:grid-cols-2 xl:grid-cols-4" />
         </TimedLoadingState>
       ) : templates.error ? (
-        <Banner severity="danger">{templates.error.message}</Banner>
+        <ApiErrorBanner error={templates.error} fallback={t("common.error.load")} />
       ) : (
         <div className="space-y-3" data-testid="agent-templates">
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
