@@ -153,6 +153,11 @@ from app.features.agent.feedback import (
     build_feedback_report,
 )
 from app.features.agent.mcp_server import build_agent_mcp_server
+from app.features.agent.mcp_url import (
+    mask_url_credentials,
+    url_credential_error,
+    url_has_credentials,
+)
 from app.features.agent.plugins import (
     MarketplaceEntry,
     MarketplaceListing,
@@ -306,6 +311,10 @@ def _validate_mcp_url(value: str | None) -> str | None:
     value = value.strip()
     if value and not re.match(r"^https?://[^\s/]+", value):
         raise ValueError("MCP の URL は http:// または https:// で始めてください。")
+    # 資格情報は認証の欄（secret として保存し、一覧に出さない）へ。URL に書くと一覧に出る（#1056）。
+    credential_error = url_credential_error(value) if value else None
+    if credential_error:
+        raise ValueError(credential_error)
     return value
 
 
@@ -314,7 +323,11 @@ class McpConnectionSettings(BaseModel):
 
     server_id: str
     label: str | None = None
+    # URL の userinfo・secret らしい query の値は `***` に伏せる（#1056）。
     base_url: str | None = None
+    # 保存した URL に資格情報があり、base_url を伏せて返したか（画面は URL を変えない限り
+    # base_url を送らない）。
+    base_url_masked: bool = False
     auth_mode: McpAuthMode
     service_audience: str | None = None
     timeout_seconds: float
@@ -1705,6 +1718,9 @@ async def get_runtime_storage_status() -> ApiResponse[RuntimeStorageStatus]:
     return ApiResponse(data=await run_in_threadpool(runtime_storage_status))
 
 
+# 終了した Run（取り消せない。#911）。
+_TERMINAL_RUN_STATUSES = frozenset({RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED})
+
 # 実行中の組み込み Runtime の task（GC で消えないよう参照を持つ）。
 _builtin_tasks: set[asyncio.Task[None]] = set()
 
@@ -2667,7 +2683,7 @@ async def get_run_artifact(
         _require_agent_access(request, run.agent_id)
         return ApiResponse(data=runtime_repository.get_artifact(run_id, artifact_id))
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="artifact not found") from exc
+        raise HTTPException(status_code=404, detail="成果物が見つかりません。") from exc
 
 
 @router.get("/runs/{run_id}/events")
@@ -2780,6 +2796,15 @@ async def cancel_run(
     try:
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
+        # 終了した Run は取り消さない（完了の結果を取消済みで上書きしない。#911）。
+        if run.status in _TERMINAL_RUN_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "run_not_cancellable",
+                    "message": "この実行はすでに終了しているため、取り消せません。",
+                },
+            )
         return ApiResponse(data=runtime_repository.cancel_run(run_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
@@ -2818,24 +2843,44 @@ async def replay_run(
 ) -> ApiResponse[RunState]:
     try:
         run = runtime_repository.get_run(run_id)
-        _require_agent_access(request, run.agent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
+    _require_agent_access(request, run.agent_id)
+    # 再実行は利用者の Run（公開中の版で実行する）。`POST /runs` と同じく、無効・移行が要る・
+    # 公開した版の無い業務 Agent は理由を返す（500 にしない。#911）。
+    try:
+        reason = agent_unavailable_reason(_control_plane_agent(run.agent_id))
+    except KeyError:
+        reason = agent_unavailable_reason(None)
+    if reason is not None:
+        raise HTTPException(
+            status_code=409, detail={"code": "agent_unavailable", "message": reason}
+        )
+    try:
         # 同じ Agent・ゴールの新しい Run として組み込み Runtime で実行する
-        # （再実行を指示した利用者として。旧エンジンの Run も同じ）。
+        # （再実行を指示した利用者として。旧エンジンの Run も同じ）。元の Run の起点の印
+        # （品質評価の dry-run・自動実行・MCP など）は引き継がない（#911）。
         replayed = runtime_repository.create_builtin_run(
             RunCreateRequest(
                 goal=run.goal,
                 agent_id=run.agent_id,
-                metadata={
-                    **{k: v for k, v in run.metadata.items() if not k.startswith("_")},
-                    "replayed_from_run_id": run.id,
-                },
+                metadata={"replayed_from_run_id": run.id},
             ),
             created_by_user_uuid=_run_creator_user_uuid(request),
         )
-        _schedule_builtin_run(replayed)
-        return ApiResponse(data=replayed)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
+        raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
+    except ValueError as exc:
+        # 確かめた後に Agent が無効・非公開になった（AgentNotPublishedError を含む）。
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "agent_unavailable",
+                "message": "この業務 Agent は実行できない状態です。",
+            },
+        ) from exc
+    _schedule_builtin_run(replayed)
+    return ApiResponse(data=replayed)
 
 
 @router.post("/approvals/{approval_id}/decision", response_model=ApiResponse[RunState])
@@ -3004,7 +3049,8 @@ def _mcp_connection_settings(config: McpConnectionConfig) -> McpConnectionSettin
     return McpConnectionSettings(
         server_id=config.server_id,
         label=config.label,
-        base_url=config.base_url,
+        base_url=mask_url_credentials(config.base_url),
+        base_url_masked=url_has_credentials(config.base_url),
         auth_mode=mode,
         service_audience=config.audience() if mode == "service_token" else None,
         timeout_seconds=config.timeout_seconds,
@@ -3073,17 +3119,28 @@ async def mcp_endpoint(request: Request) -> Response:
 
 
 @router.get("/settings/api-keys", response_model=ApiResponse[ApiKeysListData])
-async def list_api_keys() -> ApiResponse[ApiKeysListData]:
-    """API キー（#778。秘密と hash は返さない）。"""
+async def list_api_keys(request: Request) -> ApiResponse[ApiKeysListData]:
+    """API キー（#778。秘密と hash は返さない）。
+
+    キーの業務 Agent の名前は、閲覧者が利用できる業務 Agent（`GET /agents` と同じ範囲）だけ返す。
+    業務 Agent の一覧を読む権限が無い閲覧者（API キーのメニューだけ）にも名前で示すため。
+    """
     records = api_key_registry.list()
     people = {record.owner_user_uuid for record in records} | {
         record.created_by_user_uuid for record in records if record.created_by_user_uuid
     }
     names = await run_in_threadpool(user_display_names, sorted(people))
+    key_agent_ids = {agent_id for record in records for agent_id in record.agent_ids or []}
+    agent_names = {
+        agent.id: agent.name
+        for agent in runtime_repository.list_agents()
+        if agent.id in key_agent_ids and _agent_allowed(request, agent.id)
+    }
     return ApiResponse(
         data=ApiKeysListData(
             keys=[key_view(record, names) for record in records],
             persistent=get_control_plane_store().persistent,
+            agent_names=agent_names,
         )
     )
 

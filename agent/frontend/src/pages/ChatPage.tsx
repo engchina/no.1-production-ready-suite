@@ -18,6 +18,7 @@ import {
   Button,
   Card,
   CardContent,
+  ChatProgress,
   ChatUserMessage,
   Disclosure,
   EmptyState,
@@ -26,7 +27,6 @@ import {
   MessageText,
   PageBody,
   PageHeader,
-  ProcessingIndicator,
   RunStopButton,
   SearchableSelectField,
   SideSheet,
@@ -54,6 +54,7 @@ import {
   type ThreadSummary,
 } from "@/lib/api";
 import { isRunnableAgent } from "@/lib/agent-availability";
+import { chatSubmitProgressSteps, runProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
@@ -641,9 +642,11 @@ function ChatTurn({
     <div className="space-y-2" data-testid={`chat-turn-${run.id}`}>
       <ChatUserMessage>{run.goal}</ChatUserMessage>
       <div className="space-y-3 rounded-md border border-border p-3" aria-live="polite">
-        {ACTIVE_STATUSES.has(run.status) ? (
-          <ProcessingIndicator active operationKey={`chat-run-${run.id}`} label={t("chat.answering")} testId="chat-answering" />
-        ) : null}
+        {/*
+          処理の段階（考えている・ツールの呼び出し・承認待ち・回答の作成。#1147）。Run の取り直しで更新し、
+          完了後は回答の上に「処理の経過」の 1 行に畳む（共有の ChatProgress。3 製品で同じ。#1145）。
+        */}
+        <ChatProgress steps={runProgressSteps(run)} active={STOPPABLE_STATUSES.has(run.status)} testId="chat-progress" />
         {answer ? <MessageText text={answer} className="text-sm text-fg" /> : null}
         {failure ? <Banner severity="danger" title={t("chat.failed")}>{failure}</Banner> : null}
         {run.status === "cancelled" ? (
@@ -780,13 +783,8 @@ function PendingTurn({
         </div>
       ) : (
         <div className="space-y-3 rounded-md border border-border p-3">
-          <ProcessingIndicator
-            active
-            operationKey={message.localId}
-            startedAt={message.sentAtMs}
-            label={t("chat.answering")}
-            testId="chat-answering"
-          />
+          {/* Run の作成の応答を待つ間も段階として出す（送信で待っていることが分かる。#1147）。 */}
+          <ChatProgress key={message.localId} steps={chatSubmitProgressSteps(message.sentAtMs)} testId="chat-progress" />
         </div>
       )}
     </div>

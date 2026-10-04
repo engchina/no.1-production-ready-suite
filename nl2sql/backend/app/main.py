@@ -232,6 +232,8 @@ async def security_api_error_handler(
         title=exc.title,
         retryable=exc.retryable,
         field_errors=exc.field_errors,
+        # 429 の `Retry-After` など、エラーが持つ header を足す（#1087）。
+        headers=exc.headers,
     )
 
 

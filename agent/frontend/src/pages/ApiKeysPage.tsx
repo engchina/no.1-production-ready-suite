@@ -65,9 +65,10 @@ export function ApiKeysPage() {
   const canManage = capabilities.admin;
   const keys = useQuery({ queryKey: ["api-keys"], queryFn: agentApi.listApiKeys });
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents, enabled: canManage });
+  // 一覧の業務 Agent の名前は API キーの一覧が返す（業務 Agent の一覧を読めない閲覧者にも名前で示す）。
   const agentNames = useMemo(
-    () => new Map((agents.data?.agents ?? []).map((agent) => [agent.id, agent.name])),
-    [agents.data]
+    () => new Map(Object.entries(keys.data?.agent_names ?? {})),
+    [keys.data]
   );
   const [keyQuery, setKeyQuery] = useListSearch("apiKeys");
   const allKeys = keys.data?.keys ?? [];
@@ -374,7 +375,9 @@ function KeysTable({
       render: (key) =>
         key.agent_ids === null
           ? t("apiKeys.allAgents")
-          : key.agent_ids.map((agentId) => agentNames.get(agentId) ?? agentId).join("、"),
+          : key.agent_ids
+              .map((agentId) => agentNames.get(agentId) ?? t("apiKeys.agentUnavailable", { id: agentId }))
+              .join("、"),
     },
     {
       key: "expires",

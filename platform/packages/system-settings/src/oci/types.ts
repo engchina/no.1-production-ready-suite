@@ -15,6 +15,8 @@ export interface OciSettingsData {
   key_file_exists: boolean;
   config_file_exists: boolean;
   config_source: "runtime";
+  /** config ファイルはあるが読み取れない（形式・文字コード・サイズ・権限）ときの理由。読めたとき・未作成のときは null（#1067）。 */
+  config_error?: string | null;
 }
 
 export interface OciSettingsUpdate {

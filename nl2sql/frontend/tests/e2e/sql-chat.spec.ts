@@ -28,6 +28,7 @@ interface Turn {
   error_code?: string;
   created_at: string;
   steps: unknown[];
+  [key: string]: unknown;
 }
 async function setup(page: Page) {
   await mockDatabaseGateReady(page);
@@ -82,6 +83,7 @@ async function setup(page: Page) {
     const turn: Turn = {
       job_id: id,
       question: body.question,
+      engine: body.engine,
       status: state.pending ? "running" : "done",
       created_at: now,
       steps: [],
@@ -653,7 +655,11 @@ test("送った質問はジョブの投入の応答を待たずに会話の欄�
     "カテゴリ別売上",
   );
   await expect(
-    pendingTurn.getByText("SQL を生成しています", { exact: true }).last(),
+    // 投入の応答を待つ間は、送信の段階を今の段階として出す（#1145）。
+    pendingTurn.getByTestId("sql-chat-progress-current"),
+  ).toContainText("質問を送信しています");
+  await expect(
+    pendingTurn.getByTestId("sql-chat-progress-timer"),
   ).toBeVisible();
   await expect(empty).toHaveCount(0);
   await expect(page.getByRole("log", { name: "会話" })).toContainText(
@@ -869,4 +875,162 @@ test("会話の履歴と会話の読み込み中は、文言と経過時間を�
   releaseConversation();
   await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
   await expect(conversationLoading).toHaveCount(0);
+});
+
+// #1145: 回答の場所に backend の処理の段階を出す（3 製品共通の ChatProgress）。
+const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
+const pendingSteps = () =>
+  ["prepare_context", "generate_sql", "safety_check", "execute_sql", "format_results"].map(
+    (stage) => ({ stage, status: "pending" }),
+  );
+
+async function applyColorScheme(page: Page, colorScheme: "light" | "dark") {
+  await page.emulateMedia({ colorScheme });
+  await page.evaluate(
+    (dark) => document.documentElement.classList.toggle("dark", dark),
+    colorScheme === "dark",
+  );
+}
+
+for (const width of [1280, 375]) {
+  test(`回答の場所に開始待ち・実行中の段階を出し、完了後は「処理の経過」に畳む (#1145, ${width}px)`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    const state = await setup(page);
+    state.pending = true;
+    await page.goto("/chat");
+    const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+    await composer.fill("select * from employee");
+    await composer.press("Enter");
+    const turn = page.getByTestId("sql-chat-turn");
+    const progress = turn.getByTestId("sql-chat-progress");
+    const current = progress.getByTestId("sql-chat-progress-current");
+
+    await expect.poll(() => state.turns.length).toBe(1);
+    // worker が始めていない間は「処理の開始を待っています」（生成ではなく開始で待っていることが分かる）。
+    Object.assign(state.turns[0], {
+      status: "pending",
+      created_at: iso(2_000),
+      steps: pendingSteps(),
+    });
+    await expect(current).toHaveAttribute("data-step-id", "queue");
+    await expect(current).toContainText("処理の開始を待っています");
+    await expect(progress.getByRole("status")).toHaveText("処理の開始を待っています");
+
+    // 実行中: 今の段階 1 行（補足に生成方法）と、完了した段階の畳んだ見出し。遅延の案内は今の段階に付く。
+    Object.assign(state.turns[0], {
+      status: "running",
+      created_at: iso(20_000),
+      started_at: iso(19_000),
+      steps: [
+        { stage: "prepare_context", status: "done", started_at: iso(19_000), finished_at: iso(18_000) },
+        { stage: "generate_sql", status: "running", started_at: iso(18_000) },
+        { stage: "safety_check", status: "pending" },
+        { stage: "execute_sql", status: "skipped" },
+        { stage: "format_results", status: "skipped" },
+      ],
+    });
+    await expect(current).toHaveAttribute("data-step-id", "generate_sql");
+    await expect(current).toContainText("SQL を生成しています（Select AI）");
+    await expect(progress.getByTestId("sql-chat-progress-slow")).toHaveText(
+      "通常より時間がかかっています。",
+    );
+    await expect(progress.getByRole("status")).toHaveText("SQL を生成しています");
+    const completed = progress.getByTestId("sql-chat-progress-completed");
+    await expect(completed).toHaveText("2 ステップ完了");
+    // 動くスピナーは今の段階の 1 つだけ（messaging.md §3.7）。
+    await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
+    await completed.click();
+    const prepared = progress.getByTestId("sql-chat-progress-step-prepare_context");
+    await expect(prepared).toContainText("質問と対象の表を準備しました");
+    await expect(prepared).toContainText("1.0 秒");
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      ),
+    ).toBeLessThanOrEqual(0);
+    for (const colorScheme of ["light", "dark"] as const) {
+      await applyColorScheme(page, colorScheme);
+      await turn.screenshot({
+        path: testInfo.outputPath(`chat-progress-running-${colorScheme}.png`),
+      });
+    }
+    await applyColorScheme(page, "light");
+
+    // 完了: 回答の上に「処理の経過（N ステップ・M 秒）」の 1 行に畳む（既定は閉じる）。
+    Object.assign(state.turns[0], {
+      status: "done",
+      finished_at: iso(0),
+      steps: [
+        { stage: "prepare_context", status: "done", started_at: iso(19_000), finished_at: iso(18_000) },
+        { stage: "generate_sql", status: "done", started_at: iso(18_000), finished_at: iso(1_000) },
+        { stage: "safety_check", status: "done", started_at: iso(1_000), finished_at: iso(0) },
+        { stage: "execute_sql", status: "skipped" },
+        { stage: "format_results", status: "skipped" },
+      ],
+      result: {
+        generated_sql: "SELECT * FROM APP.EMPLOYEE",
+        original_question: "select * from employee",
+        explanation: "",
+        safety: { is_safe: true, referenced_tables: ["APP.EMPLOYEE"] },
+      },
+    });
+    await expect(turn.getByText("安全検査済み・未実行")).toBeVisible();
+    const summary = progress.getByTestId("sql-chat-progress-summary");
+    await expect(summary).toHaveText(/^処理の経過（4 ステップ・2\d 秒）$/);
+    await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
+    await expect(progress.locator("details")).not.toHaveAttribute("open", /.*/);
+    await expect(page.locator("svg.animate-spin:visible")).toHaveCount(0);
+    await summary.click();
+    await expect(progress.getByTestId("sql-chat-progress-step-safety_check")).toContainText(
+      "SQL の安全性を確認しました（APP.EMPLOYEE）",
+    );
+    for (const colorScheme of ["light", "dark"] as const) {
+      await applyColorScheme(page, colorScheme);
+      await turn.screenshot({
+        path: testInfo.outputPath(`chat-progress-done-${colorScheme}.png`),
+      });
+    }
+  });
+}
+
+test("生成に失敗した段階は「処理の経過」を開いて失敗を文字とアイコンで出す (#1145)", async ({
+  page,
+}, testInfo) => {
+  const state = await setup(page);
+  state.pending = true;
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  await composer.fill("select * from employee");
+  await composer.press("Enter");
+  const turn = page.getByTestId("sql-chat-turn");
+  await expect(turn.getByTestId("sql-chat-progress-current")).toBeVisible();
+  Object.assign(state.turns[0], {
+    status: "error",
+    created_at: iso(6_000),
+    started_at: iso(5_000),
+    finished_at: iso(0),
+    error_message: "Select AI で SQL を生成できませんでした。",
+    steps: [
+      { stage: "prepare_context", status: "done", started_at: iso(5_000), finished_at: iso(4_000) },
+      { stage: "generate_sql", status: "error", started_at: iso(4_000), finished_at: iso(0) },
+      { stage: "safety_check", status: "pending" },
+      { stage: "execute_sql", status: "pending" },
+      { stage: "format_results", status: "pending" },
+    ],
+  });
+  const progress = turn.getByTestId("sql-chat-progress");
+  await expect(progress).toHaveAttribute("data-chat-progress-state", "failed");
+  await expect(progress.locator("details")).toHaveAttribute("open", "");
+  const failed = progress.getByTestId("sql-chat-progress-step-generate_sql");
+  await expect(failed).toHaveAttribute("data-status", "failed");
+  await expect(failed).toContainText("SQL を生成できませんでした");
+  await expect(failed).toContainText("失敗");
+  await expect(progress.getByTestId("sql-chat-progress-step-safety_check")).toContainText(
+    "未実行",
+  );
+  await expect(turn.getByText("Select AI で SQL を生成できませんでした。")).toBeVisible();
+  await applyColorScheme(page, "dark");
+  await turn.screenshot({ path: testInfo.outputPath("chat-progress-failed-dark.png") });
 });

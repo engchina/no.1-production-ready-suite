@@ -206,6 +206,7 @@ def create_app() -> FastAPI:
             title=exc.title,
             retryable=exc.retryable,
             field_errors=exc.field_errors,
+            headers=exc.headers,
         )
 
     @app.exception_handler(SecurityMigrationRequired)
@@ -239,11 +240,13 @@ def create_app() -> FastAPI:
         title: str | None,
         retryable: bool,
         field_errors: Sequence[Mapping[str, str]],
+        headers: Mapping[str, str] | None = None,
     ) -> JSONResponse:
         request_id = _response_request_id(request)
         return JSONResponse(
             status_code=status_code,
-            headers={"X-Request-ID": request_id},
+            # 429 の `Retry-After` など、エラーが持つ header を足す（#1087）。
+            headers={**(headers or {}), "X-Request-ID": request_id},
             content={
                 "data": None,
                 "error_messages": [detail],

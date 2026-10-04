@@ -867,6 +867,40 @@ test("ログイン失敗を一般化して表示し、初回パスワード変�
   await expect(page).toHaveURL(/\/login$/);
 });
 
+test("ログインの試行が多すぎるときは 429 の文をそのまま出し、再送しない", async ({ page }) => {
+  let loginAttempts = 0;
+  await page.route("**/api/auth/me", (route) => fulfill(route, "ログインしてください。", 401));
+  await page.route("**/api/auth/login", async (route) => {
+    loginAttempts += 1;
+    // 試行の回数の上限（#1087）。backend は request id と Retry-After 付きの 429 を返す。
+    await route.fulfill({
+      status: 429,
+      contentType: "application/json",
+      headers: { "X-Request-ID": "login-rate-limited", "Retry-After": "900" },
+      body: JSON.stringify(
+        problemEnvelope({
+          status: 429,
+          code: "SECURITY_RATE_LIMITED",
+          title: "リクエストが多すぎます",
+          detail: "ログインの試行が多すぎます。しばらく待ってから、もう一度お試しください。",
+          requestId: "login-rate-limited",
+          retryable: true,
+        })
+      ),
+    });
+  });
+
+  await page.goto("/login");
+  await page.getByLabel("ログインユーザーID").fill("system_admin");
+  await page.getByLabel("パスワード").fill("WrongPass!123");
+  await page.getByRole("button", { name: "ログイン" }).click();
+  const loginError = page.getByText("ログインの試行が多すぎます。しばらく待ってから、もう一度お試しください。", { exact: true });
+  await expect(loginError).toBeVisible();
+  await expect(loginError).not.toContainText("リクエストID");
+  await expect(page).toHaveURL(/\/login$/);
+  expect(loginAttempts).toBe(1);
+});
+
 test("構成管理者はパスワード変更入口を表示し、サイドバー操作は安定した高さを保つ", async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.goto("/query");
