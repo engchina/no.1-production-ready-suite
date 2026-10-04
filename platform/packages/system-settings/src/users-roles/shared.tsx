@@ -61,6 +61,24 @@ export function selectedVisibleKey<T, K extends string | number>(
   return keys[0] ?? null;
 }
 
+/**
+ * ユーザーの編集の保存で送るロール（#1050）。画面はロールを 1 つ選ぶ形のため、編集の開始時に選ばれていた
+ * ロール（baseline）だけを選び直したロールに置き換え、ほかのロール（2 つ目以降・アーカイブ済み・参照できないもの）は
+ * 残す。選び直していなければ今のロールをそのまま返す。重複は 1 つにまとめる。
+ */
+export function nextUserRoleIds(
+  currentRoleIds: readonly string[],
+  baselineRoleId: string,
+  selectedRoleId: string,
+): string[] {
+  if (!selectedRoleId || selectedRoleId === baselineRoleId) return [...currentRoleIds];
+  const next =
+    baselineRoleId && currentRoleIds.includes(baselineRoleId)
+      ? currentRoleIds.map((roleId) => (roleId === baselineRoleId ? selectedRoleId : roleId))
+      : [...currentRoleIds, selectedRoleId];
+  return Array.from(new Set(next));
+}
+
 export function isAbortError(cause: unknown): boolean {
   return cause instanceof Error && cause.name === "AbortError";
 }

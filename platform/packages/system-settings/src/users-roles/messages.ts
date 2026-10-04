@@ -128,6 +128,7 @@ export const USERS_ROLES_MESSAGES = {
   "security.users.noResultsHint": "検索語を変更してください。",
   "security.users.noResultsTitle": "条件に一致するユーザーがありません",
   "security.users.noRole": "利用可能なロールがありません。先にロールを作成してください。",
+  "security.users.otherRoles": "ほかに割り当てられているロール（保存しても変わりません）: {roles}",
   "security.users.noSelectionHint":
     "一覧のユーザーを選ぶと、状態と割り当てロールを確認できます。",
   "security.users.noSelectionTitle": "ユーザーを選択してください",
