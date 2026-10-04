@@ -225,7 +225,7 @@ for (const scheme of ["light", "dark"] as const) {
     }
 
     await card.getByRole("button", { name: "解析後の処理を保存" }).click();
-    await expect(card.getByText("解析後の処理を保存しました。")).toBeVisible();
+    await expect(page.getByText("解析後の処理を保存しました。")).toBeVisible();
     // 解析エンジンの設定は送らない（「解析後の処理」だけを保存する）。
     expect(patches).toEqual([
       { vision_enabled: true, field_extraction_enabled: true, navigation_summary_enabled: false },
@@ -643,7 +643,7 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
 
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
-  await expect(page.getByText("文書解析設定を保存しました。")).toBeVisible();
+  await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
   expect(savedPayload).toEqual({
     adapter_backend: "mineru",
     docling_enabled: false,
@@ -746,10 +746,23 @@ test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", 
   await expect(endpoint).toBeFocused();
   expect(payloads).toHaveLength(0);
 
+  // `http:foo` は URL としては読めるが、backend は `http(s)://host` の形だけを受け付ける（#976）。
+  await endpoint.fill("http:dots.example.com");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(
+    page.getByText(
+      "http または https の Endpoint を入力してください。認証情報、query、fragment は URL に含められません。"
+    )
+  ).toBeVisible();
+  expect(payloads).toHaveLength(0);
+  // 欄の上限は backend と同じ（超える入力で英語の 422 を出さない）。
+  await expect(endpoint).toHaveAttribute("maxlength", "2048");
+  await expect(model).toHaveAttribute("maxlength", "512");
+
   await endpoint.fill("https://dots-new.example.com/v1");
   await model.fill("served-dots");
   await page.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(page.getByText("文書解析設定を保存しました。")).toBeVisible();
+  await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
   const firstConnections = payloads[0].connections as Array<Record<string, unknown>>;
   const firstDots = firstConnections.find((item) => item.backend === "dots_ocr");
   expect(firstDots).toEqual({
@@ -1045,4 +1058,85 @@ function disabledAdapter(backend: "docling" | "unstructured" | "mineru" | "dots_
 async function expectNoHorizontalOverflow(page: Page) {
   // documentElement と main の双方を検査する共通ヘルパーへ委譲(_helpers.ts)。
   await expectNoPageOverflow(page);
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`文書解析の設定は保存に失敗しても選んだエンジンと入力を残し、操作の行に失敗を出す（#976, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockParserServiceStatuses(page);
+    await mockExternalParserStatuses(page);
+    const saved = {
+      adapter_backend: "docling",
+      effective_order: ["docling"],
+      config_source: "runtime",
+      adapters: [
+        { ...disabledAdapter("docling"), enabled: true, selected: true, installed: true, status: "active" },
+        disabledAdapter("unstructured"),
+        disabledAdapter("mineru"),
+        disabledAdapter("dots_ocr"),
+      ],
+    };
+    let patchCount = 0;
+    await page.route("**/api/settings/parser-adapters", async (route) => {
+      if (route.request().method() === "PATCH") {
+        patchCount += 1;
+        if (patchCount === 1) {
+          await route.fulfill({
+            status: 500,
+            json: {
+              data: null,
+              error_messages: ["設定を共有永続化ファイルへ保存できませんでした。"],
+              warning_messages: [],
+            },
+          });
+          return;
+        }
+        await route.fulfill({
+          json: parserAdapterEnvelope({
+            ...saved,
+            adapter_backend: "dots_ocr",
+            effective_order: ["dots_ocr"],
+            adapters: [
+              { ...disabledAdapter("docling"), enabled: true, installed: true, status: "active" },
+              disabledAdapter("unstructured"),
+              disabledAdapter("mineru"),
+              { ...disabledAdapter("dots_ocr"), enabled: true, selected: true, status: "active" },
+            ],
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ json: parserAdapterEnvelope(saved) });
+    });
+    await page.goto("/settings/parser-adapters");
+
+    const dots = page.getByRole("radio", { name: /Dots\.OCR/ });
+    await dots.check();
+    const apiKey = page.locator("#external-parser-dots_ocr-api-key");
+    await apiKey.fill("new-secret");
+    const actions = page.getByRole("group", { name: "文書解析の設定の操作" });
+    const saveButton = actions.getByRole("button", { name: "保存", exact: true });
+    await saveButton.click();
+
+    // 失敗は操作の行に出し、選んだエンジン・入力した API key・保存のボタンを残す。
+    await expect(actions).toContainText("設定を共有永続化ファイルへ保存できませんでした。");
+    await expect(dots).toBeChecked();
+    await expect(apiKey).toHaveValue("new-secret");
+    await expect(saveButton).toBeEnabled();
+    await expect(actions.getByRole("button", { name: "変更を破棄" })).toBeEnabled();
+    await expectNoHorizontalOverflow(page);
+
+    // そのまま再保存できる。
+    await saveButton.click();
+    await expect(page.getByText("文書解析の設定を保存しました。")).toBeVisible();
+    await expect(dots).toBeChecked();
+    await expect(apiKey).toHaveValue("");
+    await expect(saveButton).toBeDisabled();
+    expect(patchCount).toBe(2);
+  });
 }
