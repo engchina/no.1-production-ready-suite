@@ -11,7 +11,7 @@ export function UploadStorageSettingsClient() {
   return (
     <UploadStorageSettingsPage
       api={{
-        get: () => api.getUploadStorageSettings(),
+        get: (options) => api.getUploadStorageSettings(options),
         update: (payload) => api.updateUploadStorageSettings(payload),
       }}
       draftGuardMessages={draftGuardMessages()}

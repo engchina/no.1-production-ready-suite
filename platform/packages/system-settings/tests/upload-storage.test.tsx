@@ -40,7 +40,7 @@ describe("validateUploadStorageForm", () => {
 });
 
 describe("UploadStorageSettingsPage", () => {
-  it("読み込み中は状態表示を出す", () => {
+  it("読み込み中は経過時間の表示とフォームの形の Skeleton を出す（#1047）", () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
         <QueryClientProvider client={new QueryClient()}>
@@ -55,5 +55,7 @@ describe("UploadStorageSettingsPage", () => {
     );
     expect(html).toContain('data-testid="settings-upload-storage-loading"');
     expect(html).toContain("アップロード保存先設定を読み込んでいます。");
+    expect(html).toContain('data-skeleton="form"');
+    expect(html).toContain('data-processing-placement="panel"');
   });
 });

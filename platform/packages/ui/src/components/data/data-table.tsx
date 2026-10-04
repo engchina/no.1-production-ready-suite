@@ -287,7 +287,9 @@ export function DataTable<T>({
       data-testid={scrollTestId}
       style={scrollStyle}
       className={cn(
-        "rounded-md border border-border bg-surface",
+        // relative: 行の中の読み上げ専用のラベル（`sr-only` は position: absolute）の包含ブロックを表のスクロール領域にする。
+        // 無いと包含ブロックが表の外になり、横スクロールで隠れた列のラベルが本文（main）を横にはみ出させる。
+        "relative rounded-md border border-border bg-surface",
         scrollable ? "overflow-auto [scrollbar-gutter:stable]" : "overflow-x-auto",
         scrollAriaLabel && "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
         className

@@ -1406,6 +1406,10 @@ export function DropDbObjectDialog({
   onClose: () => void;
 }) {
   const canExecute = confirmation.trim() === objectName;
+  // 実行中は閉じられない（結果・失敗の理由をダイアログの中に出すため。データの切り詰めと同じ。#1084）。
+  const close = () => {
+    if (!loading) onClose();
+  };
   return (
     <DialogOverlayPortal className="p-3 sm:items-center">
       <section
@@ -1421,7 +1425,7 @@ export function DropDbObjectDialog({
             </h2>
             <p className="mt-1 text-sm text-fg-muted">{labels.subtitle}</p>
           </div>
-          <Button type="button" variant="ghost" size="sm" onClick={onClose} icon={X}>
+          <Button type="button" variant="ghost" size="sm" disabled={loading} onClick={close} icon={X}>
             <span>{labels.close}</span>
           </Button>
         </div>
@@ -1451,7 +1455,7 @@ export function DropDbObjectDialog({
                   <Button type="button" variant="danger" size="lg" loading={loading} disabled={!canExecute} onClick={onExecute} icon={Trash2}>
                     <span>{labels.run}</span>
                   </Button>
-                  <Button type="button" variant="secondary" size="lg" onClick={onClose}>
+                  <Button type="button" variant="secondary" size="lg" disabled={loading} onClick={close}>
                     <span>{labels.cancel}</span>
                   </Button>
                 </>

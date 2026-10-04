@@ -653,6 +653,8 @@ test("検索欄は隣の SelectField と同じ高さで、先頭アイコン・�
   expect(clearBox!.x + clearBox!.width).toBeLessThanOrEqual(filledBox!.x + filledBox!.width);
   expect(clearBox!.y).toBeGreaterThanOrEqual(filledBox!.y);
   expect(clearBox!.y + clearBox!.height).toBeLessThanOrEqual(filledBox!.y + filledBox!.height);
+  // クリアボタンは入力欄と同じ高さ（md 36px・タッチ端末 44px。枠線の内側に置いて 2px 低かった。#1132）。
+  expect(Math.round(clearBox!.height)).toBe(await expectedControlHeight(page));
   const paddingRight = await search.evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingRight));
   expect(paddingRight).toBeGreaterThanOrEqual(clearBox!.width);
   // ブラウザ既定の type=search のクリア（×）は出さない（共有のクリアボタンと二重にしない）。
