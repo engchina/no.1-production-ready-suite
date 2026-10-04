@@ -3451,6 +3451,11 @@ class StoredJob:
     actor_user_uuid: str = ""
     actor_is_system_admin: bool = False
     business_release_id: str = ""
+    # 業務のオントロジーの公開版（business_release_id）を worker がまだ確定していないか。
+    # 投入の要求の中では確定せず（オントロジーの runtime の lock と DB の読み取りで投入を
+    # 塞がない）、worker の prepare_context の段階で確定する。旧版の snapshot（印が無い）は
+    # 投入時に確定済み。
+    business_release_pending: bool = False
     conversation_id: str = ""
     status: JobStatus = JobStatus.PENDING
     created_at: str = field(default_factory=_utc_now)
@@ -3487,6 +3492,37 @@ _NL2SQL_JOB_STAGES = (
 
 def _new_job_steps() -> list[JobStepData]:
     return [JobStepData(stage=stage) for stage in _NL2SQL_JOB_STAGES]
+
+
+def _log_job_stage_started(job_id: str, stage: str, *, attempt: int) -> None:
+    """worker の段階の開始（質問・SQL の本文は出さない）。"""
+
+    logger.info(
+        "nl2sql_job_stage_started",
+        extra={"job_id": job_id, "stage": stage, "attempt": attempt},
+    )
+
+
+def _log_job_stage_finished(
+    job_id: str,
+    stage: str,
+    *,
+    status: JobStepStatus,
+    elapsed_ms: int | None,
+    attempt: int,
+) -> None:
+    """worker の段階の終了と所要時間（質問・SQL の本文は出さない）。"""
+
+    logger.info(
+        "nl2sql_job_stage_finished",
+        extra={
+            "job_id": job_id,
+            "stage": stage,
+            "status": status.value,
+            "elapsed_ms": elapsed_ms,
+            "attempt": attempt,
+        },
+    )
 
 
 def _job_failure_step_index(steps: list[JobStepData]) -> int | None:
@@ -4658,6 +4694,7 @@ class Nl2SqlService:
             "profile_id": job.request.profile_id or "default",
             "request": job.request.model_dump(mode="json"),
             "business_release_id": job.business_release_id,
+            "business_release_pending": job.business_release_pending,
             "actor_user_uuid": job.actor_user_uuid,
             "actor_is_system_admin": job.actor_is_system_admin,
             "status": job.status.value,
@@ -4711,7 +4748,7 @@ class Nl2SqlService:
         failure_index = _job_failure_step_index(job.steps)
         if failure_index is not None:
             job.steps[failure_index] = job.steps[failure_index].model_copy(
-                update={"status": JobStepStatus.ERROR}
+                update={"status": JobStepStatus.ERROR, "finished_at": job.finished_at}
             )
 
     @staticmethod
@@ -4762,6 +4799,13 @@ class Nl2SqlService:
             )
         if document is None:
             return None
+        return self._job_record_from_document(job_id, document, local=local)
+
+    def _job_record_from_document(
+        self, job_id: str, document: dict[str, Any], *, local: StoredJob | None
+    ) -> StoredJob:
+        """読んだ job の文書から job を作り、手元の実行中の job を古い snapshot で置換しない。"""
+
         # 完了結果の保存障害時だけ、同じ実行がまだ有効なら手元の結果と警告を表示する。
         if local is not None and local.warning_message and local.execution_owner:
             worker_id, attempt = local.execution_owner
@@ -4795,6 +4839,7 @@ class Nl2SqlService:
                 data["request"], context={STORED_JOB_REQUEST_CONTEXT: True}
             ),
             business_release_id=str(data.get("business_release_id") or ""),
+            business_release_pending=_coerce_bool(data.get("business_release_pending", False)),
             actor_user_uuid=str(data.get("actor_user_uuid") or ""),
             actor_is_system_admin=_coerce_bool(data.get("actor_is_system_admin", False)),
             status=status,
@@ -7419,14 +7464,25 @@ class Nl2SqlService:
                     "未定義の NL2SQL job stage です: " + ", ".join(sorted(unknown_stages))
                 )
             next_steps: list[JobStepData] = []
+            # 段階の開始・終了の時刻（チャットの段階の表示が今の段階の経過時間に使う。#1145）。
+            now = _utc_now()
             for step in job.steps:
                 if completed_stage and step.stage == completed_stage:
                     step = step.model_copy(
-                        update={"status": completed_status, "elapsed_ms": elapsed_ms}
+                        update={
+                            "status": completed_status,
+                            "elapsed_ms": elapsed_ms,
+                            "finished_at": now,
+                        }
                     )
                 elif running_stage and step.stage == running_stage:
                     step = step.model_copy(
-                        update={"status": JobStepStatus.RUNNING, "elapsed_ms": None}
+                        update={
+                            "status": JobStepStatus.RUNNING,
+                            "elapsed_ms": None,
+                            "started_at": now,
+                            "finished_at": None,
+                        }
                     )
                 next_steps.append(step)
             job.steps = next_steps
@@ -7441,7 +7497,18 @@ class Nl2SqlService:
                     }
                 )
             self._renew_job_lease_locked(job)
+            attempt = job.attempt
         self._persist_job(job_id)
+        if completed_stage is not None:
+            _log_job_stage_finished(
+                job_id,
+                completed_stage,
+                status=completed_status,
+                elapsed_ms=elapsed_ms,
+                attempt=attempt,
+            )
+        if running_stage is not None:
+            _log_job_stage_started(job_id, running_stage, attempt=attempt)
 
     def start_job(
         self,
@@ -7452,6 +7519,7 @@ class Nl2SqlService:
     ) -> JobCreateData:
         # Queue 投入前に profile と request scope を検証し、未知 profile を非同期
         # error へ隠さない。
+        accepted_started = time.monotonic()
         self.get_profile(request.profile_id)
         self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
         if request.client_job_id is not None:
@@ -7481,28 +7549,15 @@ class Nl2SqlService:
             conversation_id = parent.conversation_id if parent else job_id
         if self._deepsec_enabled and not actor_user_uuid:
             raise ValueError("DeepSec 有効時のジョブには認証済み actor が必要です。")
-        business_release_id = ""
-        if request.use_ontology_context:
-            from .ontology_markdown_workspace import MarkdownOntologyWorkspace
-            from .ontology_router import ontology_runtime
-
-            if ontology_runtime.legacy_service is self:
-                business_release_id = str(
-                    MarkdownOntologyWorkspace(ontology_runtime).head(
-                        request.profile_id or "default"
-                    )["snapshot_id"]
-                )
-                if not business_release_id:
-                    state = ontology_runtime.ontology_markdown_state(
-                        request.profile_id or "default"
-                    )
-                    if state.published_revision is not None:
-                        business_release_id = state.published_revision.id
+        # オントロジーの公開版（business_release_id）は worker の prepare_context で確定する。
+        # 確定にはオントロジーの runtime の lock と DB の読み取りが要り、その lock は別の処理
+        # （オントロジーの同期・前のジョブの結果の整形など）が DB I/O の間も持つことがある。投入の
+        # 要求の中で待つと、job ID を返せないまま画面の上限（120 秒）を超える。
         job = StoredJob(
             job_id=job_id,
             request=request,
             conversation_id=conversation_id,
-            business_release_id=business_release_id,
+            business_release_pending=request.use_ontology_context,
             actor_user_uuid=actor_user_uuid,
             actor_is_system_admin=actor_is_system_admin,
             steps=_new_job_steps(),
@@ -7518,7 +7573,21 @@ class Nl2SqlService:
             created_at=job.created_at,
             steps=[step.model_copy() for step in job.steps],
         )
-        self._wake_nl2sql_job_if_needed(job)
+        dispatched = self._wake_nl2sql_job_if_needed(job)
+        # 投入の受付（job ID）。worker の claim（`nl2sql_job_claimed`）・段階のログと job_id で
+        # つなぐ。質問の本文・SQL は出さない。
+        logger.info(
+            "nl2sql_job_accepted",
+            extra={
+                "job_id": job_id,
+                "profile_id": request.profile_id or "default",
+                "engine": request.engine.value,
+                "generation_only": request.generation_only,
+                "conversation_id": conversation_id,
+                "dispatched": dispatched,
+                "elapsed_ms": _elapsed_ms(accepted_started),
+            },
+        )
         return response
 
     def _replay_client_job(
@@ -7811,6 +7880,17 @@ class Nl2SqlService:
         job = self._load_job_record(job_id)
         if job is None:
             return None
+        return self._job_data_for_actor(
+            job, actor_user_uuid=actor_user_uuid, actor_can_manage=actor_can_manage
+        )
+
+    def _job_data_for_actor(
+        self,
+        job: StoredJob,
+        *,
+        actor_user_uuid: str,
+        actor_can_manage: bool,
+    ) -> JobData:
         self._assert_job_actor_access(
             job,
             actor_user_uuid=actor_user_uuid,
@@ -7827,6 +7907,7 @@ class Nl2SqlService:
                 conversation_id=job.conversation_id,
                 previous_job_id=job.request.previous_job_id,
                 generation_only=job.request.generation_only,
+                engine=job.request.engine,
                 created_at=job.created_at,
                 started_at=job.started_at,
                 finished_at=job.finished_at,
@@ -8037,7 +8118,17 @@ class Nl2SqlService:
                     exc=exc,
                     operation_error_code="chat_query_failed",
                 )
-            jobs = [self._job_from_snapshot(document) for document in documents]
+            # 読んだ文書からターンを作り、ターンごとに job を読み直さない（会話の画面は生成中に
+            # 1.5 秒ごとに取り直す。ターンの数だけ DB を往復すると、遅延の大きいネットワークでは
+            # 1 回の取得が数秒になる）。
+            jobs: list[StoredJob] = []
+            for document in documents:
+                job_id = str(document.get("job_id") or "")
+                if not job_id:
+                    continue
+                with self._lock:
+                    local = self._jobs.get(job_id)
+                jobs.append(self._job_record_from_document(job_id, document, local=local))
         else:
             with self._lock:
                 jobs = [
@@ -8046,7 +8137,10 @@ class Nl2SqlService:
                     if job.conversation_id == conversation_id and job.actor_user_uuid == actor
                 ]
         jobs.sort(key=lambda job: (job.created_at, job.job_id))
-        turns = [data for job in jobs if (data := self.get_job(job.job_id, actor_user_uuid=actor))]
+        turns = [
+            self._job_data_for_actor(job, actor_user_uuid=actor, actor_can_manage=False)
+            for job in jobs
+        ]
         return SqlChatData(conversation=self._sql_chat_summary(root), turns=turns)
 
     def preview(self, request: PreviewRequest) -> PreviewData:
@@ -8633,14 +8727,23 @@ class Nl2SqlService:
     ) -> HistoryItem:
         """Query Session 実行を legacy history へ一度だけ投影する。"""
 
-        with self._lock:
-            existing = next(
+        def existing_locked() -> HistoryItem | None:
+            return next(
                 (item for item in self._history if item.session_id == session_id),
                 None,
             )
+
+        with self._lock:
+            existing = existing_locked()
             if existing is not None:
                 return existing.model_copy(deep=True)
-            profile = self.get_profile(profile_id)
+        # 業務プロファイルの読み取り（DB の往復を伴う）は service の lock の外で行う。lock を持った
+        # まま DB を待つと、ジョブの投入・取得など lock を使うほかの要求を全部止める。
+        profile = self.get_profile(profile_id)
+        with self._lock:
+            existing = existing_locked()
+            if existing is not None:
+                return existing.model_copy(deep=True)
             item = HistoryItem(
                 business_release_id=str(ontology_trace_summary.get("business_release_id") or ""),
                 id=str(uuid.uuid4()),
@@ -19258,7 +19361,7 @@ class Nl2SqlService:
                     )
                     if failure_index is not None:
                         job.steps[failure_index] = job.steps[failure_index].model_copy(
-                            update={"status": JobStepStatus.ERROR}
+                            update={"status": JobStepStatus.ERROR, "finished_at": job.finished_at}
                         )
                     request = job.request
                 logger.exception(
@@ -19592,16 +19695,25 @@ class Nl2SqlService:
             job.status = JobStatus.RUNNING
             job.started_at = job.started_at or _utc_now()
             job.timing = TimingEnvelope(created_at=job.created_at, started_at=job.started_at)
-            job.steps[0] = job.steps[0].model_copy(update={"status": JobStepStatus.RUNNING})
+            job.steps[0] = job.steps[0].model_copy(
+                update={
+                    "status": JobStepStatus.RUNNING,
+                    "started_at": _utc_now(),
+                    "finished_at": None,
+                }
+            )
             self._renew_job_lease_locked(job)
             request = job.request
+            attempt = job.attempt
         self._persist_job(job_id)
+        _log_job_stage_started(job_id, _NL2SQL_JOB_STAGES[0], attempt=attempt)
 
         stage_timings: list[StageTiming] = []
         profile = self.get_profile(request.profile_id)
 
         self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
+        business_release_id = self._resolve_job_business_release(job_id, request)
         rewritten = self._rewrite_question_for_generation(
             request.question,
             profile,
@@ -19612,7 +19724,7 @@ class Nl2SqlService:
         ontology_context = self._job_published_ontology_markdown(
             request=request,
             profile=profile,
-            business_release_id=job.business_release_id,
+            business_release_id=business_release_id,
             allowed=allowed,
         )
         stage_elapsed = _elapsed_ms(stage_started)
@@ -19742,8 +19854,8 @@ class Nl2SqlService:
                             profile=profile,
                             allowed=allowed,
                             revision_id=(
-                                job.business_release_id
-                                if job.business_release_id.startswith(
+                                business_release_id
+                                if business_release_id.startswith(
                                     ("ontology_markdown_snapshot_", "ontology_revision_")
                                 )
                                 else ""
@@ -19790,7 +19902,7 @@ class Nl2SqlService:
                 )
         history_id = str(uuid.uuid4())
         result = Nl2SqlResult(
-            business_release_id=job.business_release_id,
+            business_release_id=business_release_id,
             history_id=history_id,
             engine=generated.engine,
             engine_meta=generated.engine_meta,
@@ -19825,7 +19937,11 @@ class Nl2SqlService:
             final_steps = [
                 (
                     step.model_copy(
-                        update={"status": JobStepStatus.DONE, "elapsed_ms": stage_elapsed}
+                        update={
+                            "status": JobStepStatus.DONE,
+                            "elapsed_ms": stage_elapsed,
+                            "finished_at": finished,
+                        }
                     )
                     if step.stage == "format_results"
                     else step
@@ -19847,7 +19963,7 @@ class Nl2SqlService:
         )
         history_item = HistoryItem(
             generation_only=request.generation_only,
-            business_release_id=job.business_release_id,
+            business_release_id=business_release_id,
             id=history_id,
             question=request.question,
             engine=result.engine,
@@ -19917,6 +20033,59 @@ class Nl2SqlService:
             self._clear_job_worker_state_locked(job)
             self._history.append(history_item)
             self._prune_history_locked()
+        _log_job_stage_finished(
+            job_id,
+            "format_results",
+            status=JobStepStatus.DONE,
+            elapsed_ms=stage_elapsed,
+            attempt=attempt,
+        )
+        logger.info(
+            "nl2sql_job_finished",
+            extra={
+                "job_id": job_id,
+                "status": final_status.value,
+                "error_code": final_error_code,
+                "engine": result.engine.value,
+                "profile_id": request.profile_id or "default",
+                "attempt": attempt,
+                "elapsed_ms": timing.elapsed_ms,
+                "persistence_warning": persistence_warning is not None,
+            },
+        )
+
+    def _resolve_job_business_release(self, job_id: str, request: JobCreateRequest) -> str:
+        """業務のオントロジーの公開版（business_release_id）を worker で確定して job に記録する。
+
+        投入の要求では確定しない（オントロジーの runtime の lock と DB の読み取りで投入を
+        塞がない）。確定した版は以降の保存（段階の保存・結果の保存）で job に残り、
+        再実行（lease の接管）でも同じ版を使う。旧版の snapshot（投入時に確定済み）は
+        そのまま使う。
+        """
+
+        with self._lock:
+            job = self._execution_job_locked(job_id)
+            if not job.business_release_pending:
+                return job.business_release_id
+        release_id = ""
+        if request.use_ontology_context:
+            from .ontology_markdown_workspace import MarkdownOntologyWorkspace
+            from .ontology_router import ontology_runtime
+
+            if ontology_runtime.legacy_service is self:
+                profile_id = request.profile_id or "default"
+                release_id = str(
+                    MarkdownOntologyWorkspace(ontology_runtime).head(profile_id)["snapshot_id"]
+                )
+                if not release_id:
+                    state = ontology_runtime.ontology_markdown_state(profile_id)
+                    if state.published_revision is not None:
+                        release_id = state.published_revision.id
+        with self._lock:
+            job = self._execution_job_locked(job_id)
+            job.business_release_id = release_id
+            job.business_release_pending = False
+        return release_id
 
     def _generate_selected_engine(
         self,
