@@ -1281,12 +1281,29 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   if (method === "GET" && at("audit", "tool-calls")) {
     const offset = Number(query.get("offset") ?? 0);
     const limit = Number(query.get("limit") ?? 100);
+    // backend の `_audit_record_matches` と同じ絞り込み（完全一致）。
+    const exact: [string, string][] = [
+      ["run_id", "run_id"],
+      ["tool_name", "tool_name"],
+      ["status", "status"],
+      ["approval_status", "approval_status"],
+      ["error_code", "error_code"],
+    ];
+    const warnings = query.get("has_guardrail_warnings");
+    const matched = state.auditRecords.filter(
+      (record) =>
+        exact.every(([param, field]) => !query.has(param) || record[field] === query.get(param)) &&
+        (warnings === null ||
+          ((record.guardrail_warnings as unknown[] | undefined) ?? []).length > 0 === (warnings === "true"))
+    );
     return {
-      total: state.auditRecords.length,
+      total: matched.length,
       offset,
       limit,
-      filters: {},
-      records: state.auditRecords.slice(offset, offset + limit),
+      filters: Object.fromEntries([...query.entries()].filter(([key]) => key !== "offset" && key !== "limit")),
+      records: matched.slice(offset, offset + limit),
+      // 絞り込みに依らない、記録されたツール名（#983）。
+      tool_names: [...new Set(state.auditRecords.map((record) => String(record.tool_name)))].sort(),
     };
   }
   if (method === "GET" && at("tools")) return { tools: state.tools };
