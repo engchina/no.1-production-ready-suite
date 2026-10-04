@@ -76,7 +76,12 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.concurrency import run_in_threadpool
 
 import app.settings as app_settings
-from app.features.agent import builtin_runtime, control_plane_store, run_facts_store
+from app.features.agent import (
+    builtin_runtime,
+    control_plane_store,
+    plugin_views,
+    run_facts_store,
+)
 from app.features.agent.api_keys import (
     ApiKeyCreated,
     ApiKeyCreateRequest,
@@ -1343,7 +1348,7 @@ async def list_plugins(_: None = Depends(require_viewer)) -> ApiResponse[PluginL
     return ApiResponse(data=_plugin_list_response())
 
 
-@router.post("/plugins", response_model=ApiResponse[PluginRecord])
+@router.post("/plugins", response_model=ApiResponse[plugin_views.PluginRecordView])
 async def install_plugin(
     payload: PluginInstallRequest,
     _: None = Depends(require_admin),
@@ -1448,7 +1453,7 @@ async def refresh_plugin_marketplace(
 
 @router.post(
     "/plugins/marketplaces/{marketplace_id}/plugins/{plugin_id}/preview",
-    response_model=ApiResponse[PluginImportPreview],
+    response_model=ApiResponse[plugin_views.PluginImportPreviewView],
 )
 async def preview_marketplace_plugin(
     marketplace_id: str,
@@ -1478,7 +1483,7 @@ async def preview_marketplace_plugin(
 
 @router.get(
     "/plugins/marketplaces/{marketplace_id}/plugins",
-    response_model=ApiResponse[MarketplaceListing],
+    response_model=ApiResponse[plugin_views.MarketplaceListingView],
 )
 async def list_marketplace_plugins(
     marketplace_id: str,
@@ -1506,7 +1511,7 @@ async def delete_plugin_marketplace(
     return ApiResponse(data=MarketplaceSourcesOutput(marketplaces=marketplace_registry.list()))
 
 
-@router.get("/plugins/{plugin_id}", response_model=ApiResponse[PluginRecord])
+@router.get("/plugins/{plugin_id}", response_model=ApiResponse[plugin_views.PluginRecordView])
 async def get_plugin(
     plugin_id: str,
     _: None = Depends(require_viewer),
@@ -1517,7 +1522,7 @@ async def get_plugin(
     return ApiResponse(data=record)
 
 
-@router.patch("/plugins/{plugin_id}", response_model=ApiResponse[PluginRecord])
+@router.patch("/plugins/{plugin_id}", response_model=ApiResponse[plugin_views.PluginRecordView])
 async def patch_plugin(
     plugin_id: str,
     patch: PluginPatch,

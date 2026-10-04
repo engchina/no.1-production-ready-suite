@@ -117,6 +117,54 @@ def test_patch_rejects_unsafe_object_storage_names(tmp_path: Path) -> None:
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize(
+    "region",
+    [
+        # OCI SDK は region を `https://objectstorage.{region}...` にそのまま入れるため、
+        # 別の host へ署名付きの要求を送れてしまう（#1047）。
+        "evil.example/x#",
+        "ap-tokyo-1.evil.example",
+        "AP-TOKYO-1",
+        "ap tokyo 1",
+    ],
+    ids=["path", "dot", "upper", "space"],
+)
+def test_patch_rejects_unsafe_object_storage_region(tmp_path: Path, region: str) -> None:
+    env_file = tmp_path / ".env"
+    settings = FakeSettings()
+    response = make_client(settings, env_file).patch(
+        "/api/settings/upload-storage",
+        json={
+            "backend": "oci",
+            "object_storage_region": region,
+            "object_storage_namespace": "ns",
+            "object_storage_bucket": "b",
+        },
+    )
+    assert response.status_code == 422
+    assert settings.upload_storage_backend == "local"
+    assert not env_file.exists()
+
+
+@pytest.mark.parametrize(
+    "local_dir",
+    ["/u01/data/x\nPLATFORM_OTHER=1", "/u01/data/\x00x", "/u01/data/x\ry"],
+    ids=["newline", "nul", "cr"],
+)
+def test_patch_rejects_control_characters_in_local_storage_dir(
+    tmp_path: Path, local_dir: str
+) -> None:
+    env_file = tmp_path / ".env"
+    settings = FakeSettings()
+    response = make_client(settings, env_file).patch(
+        "/api/settings/upload-storage",
+        json={"backend": "local", "local_storage_dir": local_dir},
+    )
+    assert response.status_code == 422
+    assert settings.local_storage_dir == "/u01/data/production-ready-test"
+    assert not env_file.exists()
+
+
 def test_patch_keeps_runtime_when_env_write_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
