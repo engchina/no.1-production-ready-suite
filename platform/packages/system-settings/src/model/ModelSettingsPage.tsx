@@ -31,6 +31,7 @@ import {
   Database,
   ListChecks,
   Plus,
+  RefreshCw,
   Save,
   TestTube2,
   Trash2,
@@ -97,6 +98,7 @@ import {
   type ModelSettingsTestRequest,
   type ModelSettingsTestResult,
   type ModelSettingsTestTargetType,
+  type ModelSettingsUpdatePayload,
 } from "./types";
 
 type ModelTestKey = `enterprise:${number}` | "embedding" | "rerank";
@@ -138,7 +140,7 @@ export function ModelSettingsPage({
     queryFn: ({ signal }) => api.getModelSettings({ signal }),
   });
   const updateMutation = useMutation({
-    mutationFn: (payload: ModelSettingsPayload) =>
+    mutationFn: (payload: ModelSettingsUpdatePayload) =>
       api.updateModelSettings(payload),
     onSuccess: () => {
       void queryClient.invalidateQueries({
@@ -181,6 +183,11 @@ export function ModelSettingsPage({
   // モデル ID の入力中（キー入力ごと）には出さない（messaging.md §3.2）。
   const [showDefaultErrors, setShowDefaultErrors] = useState(false);
   const [testingKey, setTestingKey] = useState<ModelTestKey | null>(null);
+  // 保存が競合（409。画面を開いた後にほかの画面で保存された）した節（#1037）。その節の操作の行に
+  // 「最新の設定を読み込む」を出す。読み込むまで残す（入力を変えても競合は解けない）。
+  const [conflictSection, setConflictSection] =
+    useState<ModelSaveSection | null>(null);
+  const [reloading, setReloading] = useState(false);
   const [testResults, setTestResults] = useState<
     Partial<Record<ModelTestKey, ModelSettingsTestResult>>
   >({});
@@ -211,19 +218,16 @@ export function ModelSettingsPage({
 
   const canSubmit = Boolean(draft);
   const saveInProgress = activeSaveSection !== null;
-  const operationBusy = saveInProgress || testingKey !== null;
+  const operationBusy = saveInProgress || testingKey !== null || reloading;
   // タブの切り替え・欄の追加の後は、描画（commit）の後にフォーカスを移す（#542）。
   const scheduleFocus = useFocusAfterCommit(!operationBusy);
-  useSettingsDraftGuard(
-    Boolean(
-      draft &&
-      baselineData &&
-      JSON.stringify(draft) !==
-        JSON.stringify(cloneSettings(baselineData.settings)),
-    ),
-    operationBusy,
-    draftGuardMessages,
+  const dirty = Boolean(
+    draft &&
+    baselineData &&
+    JSON.stringify(draft) !==
+      JSON.stringify(cloneSettings(baselineData.settings)),
   );
+  useSettingsDraftGuard(dirty, operationBusy, draftGuardMessages);
   const legacySecretDetected =
     checkData?.legacy_secret_detected ??
     baselineData?.legacy_secret_detected ??
@@ -560,7 +564,12 @@ export function ModelSettingsPage({
         draft,
         section,
       );
-      const data = await updateMutation.mutateAsync(payload);
+      // 読み込んだ時点の版を送り、ほかの画面で保存されていれば 409 で止める（#1037）。
+      const data = await updateMutation.mutateAsync(
+        baselineData.revision
+          ? { ...payload, base_revision: baselineData.revision }
+          : payload,
+      );
       const saved = cloneSettings(data.settings);
       setDraft((current) =>
         current ? mergeSavedSectionIntoDraft(current, saved, section) : saved,
@@ -569,12 +578,52 @@ export function ModelSettingsPage({
       setCheckData(data);
       toast.success(t(MODEL_SAVE_SUCCESS_KEYS[section]));
     } catch (error) {
+      const conflict = isConflictError(error);
+      if (conflict) setConflictSection(section);
       setSaveErrors((current) => ({
         ...current,
-        [section]: errorMessage?.(error) ?? t("settings.model.saveError"),
+        [section]: conflict
+          ? t("settings.model.conflict.message")
+          : (errorMessage?.(error) ?? t("settings.model.saveError")),
       }));
     } finally {
       setActiveSaveSection(null);
+    }
+  };
+
+  // 保存の競合の後に、保存済みの最新の設定を読み直す（#1037）。保存していない入力は確認してから破棄する。
+  const reloadLatest = async (section: ModelSaveSection) => {
+    if (operationBusy) return;
+    if (dirty) {
+      const ok = await confirm({
+        title: t("settings.model.conflict.confirm.title"),
+        description: t("settings.model.conflict.confirm.description"),
+        confirmLabel: t("settings.model.conflict.confirm.action"),
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
+    setReloading(true);
+    try {
+      const result = await query.refetch();
+      if (result.isError || !result.data) {
+        setSaveErrors((current) => ({
+          ...current,
+          [section]:
+            errorMessage?.(result.error) ?? t("settings.model.loadError"),
+        }));
+        return;
+      }
+      // 下書きを捨てると、読み込みの effect が最新の値から下書き・基準を作り直す。
+      setDraft(null);
+      setConflictSection(null);
+      setSaveErrors({});
+      setTestResults({});
+      setShowConnectionErrors(false);
+      setApiKeyVisible({});
+      toast.success(t("settings.model.conflict.reloaded"));
+    } finally {
+      setReloading(false);
     }
   };
 
@@ -721,6 +770,12 @@ export function ModelSettingsPage({
                 saving={activeSaveSection === "enterprise_connection"}
                 disabled={saveInProgress}
                 errorText={saveErrors.enterprise_connection}
+                onReload={
+                  conflictSection === "enterprise_connection"
+                    ? () => void reloadLatest("enterprise_connection")
+                    : undefined
+                }
+                reloading={reloading}
               />
             </CardContent>
           </Card>
@@ -764,6 +819,12 @@ export function ModelSettingsPage({
                 saving={activeSaveSection === "enterprise_models"}
                 disabled={saveInProgress}
                 errorText={saveErrors.enterprise_models}
+                onReload={
+                  conflictSection === "enterprise_models"
+                    ? () => void reloadLatest("enterprise_models")
+                    : undefined
+                }
+                reloading={reloading}
               />
             </CardContent>
           </Card>
@@ -851,6 +912,12 @@ export function ModelSettingsPage({
                 saving={activeSaveSection === "generative_ai"}
                 disabled={saveInProgress}
                 errorText={saveErrors.generative_ai}
+                onReload={
+                  conflictSection === "generative_ai"
+                    ? () => void reloadLatest("generative_ai")
+                    : undefined
+                }
+                reloading={reloading}
               />
             </CardContent>
           </Card>
@@ -1063,12 +1130,17 @@ function ModelFormActions({
   saving,
   disabled,
   errorText,
+  onReload,
+  reloading = false,
 }: {
   sectionLabel: string;
   canSubmit: boolean;
   saving: boolean;
   disabled: boolean;
   errorText?: string;
+  /** 保存が競合したときだけ渡す。「最新の設定を読み込む」を保存の左に出す（#1037）。 */
+  onReload?: () => void;
+  reloading?: boolean;
 }) {
   const saveLabel = t("settings.model.save");
 
@@ -1086,6 +1158,20 @@ function ModelFormActions({
           disabled: !canSubmit || disabled,
         },
       ]}
+      secondaryActions={
+        onReload
+          ? [
+              {
+                id: "reload-latest",
+                label: t("settings.model.conflict.reload"),
+                icon: RefreshCw,
+                loading: reloading,
+                disabled: disabled || reloading,
+                onClick: onReload,
+              },
+            ]
+          : undefined
+      }
       status={
         errorText ? <FormStatus tone="danger" message={errorText} /> : null
       }
@@ -1528,6 +1614,15 @@ function NumberField({
       onValueChange={(next) => onChange(Number(next))}
       inputClassName={cn("tnum", readOnly && "text-fg-muted")}
     />
+  );
+}
+
+/** 保存の競合（409）か。製品の ApiError はどれも HTTP の状態を `status` に持つ。 */
+function isConflictError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { status?: unknown }).status === 409
   );
 }
 

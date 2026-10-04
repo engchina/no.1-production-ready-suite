@@ -85,7 +85,18 @@ export interface ModelSettingsData {
   source: "runtime";
   secret_source: ModelSettingsSecretSource;
   legacy_secret_detected: boolean;
+  /**
+   * 保存済みのモデル設定の版（#1037）。保存の `base_revision` に返し、画面を開いた後にほかの画面
+   * （別の製品を含む）で保存されていれば、API は 409 にして古い値で上書きしない。
+   * 古い backend は返さない（そのときは送らない）。
+   */
+  revision?: string;
 }
+
+/** 保存（PATCH）の body。`base_revision` は読み込んだ時点の `ModelSettingsData.revision`（#1037）。 */
+export type ModelSettingsUpdatePayload = ModelSettingsPayload & {
+  base_revision?: string;
+};
 
 export interface ModelSettingsTestRequest {
   settings: ModelSettingsPayload;
@@ -113,7 +124,7 @@ export interface ModelSettingsApi {
     signal?: AbortSignal;
   }) => Promise<ModelSettingsData>;
   updateModelSettings: (
-    payload: ModelSettingsPayload,
+    payload: ModelSettingsUpdatePayload,
   ) => Promise<ModelSettingsData>;
   testModelSettings: (
     request: ModelSettingsTestRequest,

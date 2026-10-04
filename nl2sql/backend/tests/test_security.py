@@ -58,6 +58,7 @@ from app.security.permissions import (
     SQL_EXECUTE_PERMISSION,
     SYSTEM_STATUS_READ_PERMISSION,
     UNCLASSIFIED_PERMISSION,
+    grants_all_profile_access,
     permission_for_route,
 )
 from app.security.router import auth_router as security_router
@@ -1968,6 +1969,9 @@ def test_every_api_route_is_classified_by_manifest() -> None:
         "POST", "/nl2sql/query-sessions/{session_id}/generate-sql"
     ) == frozenset({QUERY_GENERATE_PERMISSION})
     assert permission_for_route("POST", "/nl2sql/db-admin/execute") == frozenset({"menu.admin_sql"})
+    assert permission_for_route("POST", "/nl2sql/db-admin/extract-join-where") == frozenset(
+        {"menu.view_management"}
+    )
     assert permission_for_route("POST", "/nl2sql/db-admin/statements") == frozenset(
         {
             "menu.admin_sql",
@@ -2033,7 +2037,7 @@ def test_every_api_route_is_classified_by_manifest() -> None:
         {SELECT_AI_ASSETS_MANAGE_PERMISSION}
     )
     assert permission_for_route("GET", "/nl2sql/legacy-learning-material") == frozenset(
-        {LEARNING_MATERIAL_MANAGE_PERMISSION}
+        {LEARNING_MATERIAL_MANAGE_PERMISSION, "menu.glossary_rules", "menu.global_rules"}
     )
     assert permission_for_route("POST", "/nl2sql/sample-data/import") == frozenset(
         {SAMPLE_DATA_MANAGE_PERMISSION}
@@ -2074,6 +2078,75 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     assert permission_for_route("POST", "/security/deepsec/config/sync-password") == frozenset(
         {"menu.security_deepsec"}
     )
+
+
+@pytest.mark.parametrize(
+    ("menu", "own_kind", "other_kind"),
+    [("menu.glossary_rules", "terms", "rules"), ("menu.global_rules", "rules", "terms")],
+    ids=["glossary", "global-rules"],
+)
+def test_glossary_and_global_rules_menus_only_open_their_own_material(
+    monkeypatch: pytest.MonkeyPatch, menu: str, own_kind: str, other_kind: str
+) -> None:
+    """用語・同義語 / 共通ルールの権限は、業務プロファイル管理ともう一方の取込を含まない。
+
+    #1006。
+    """
+    service = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+    role = service.create_role(
+        role_code="LEARNING_MENU_ONLY",
+        display_name="学習素材のメニューだけ",
+        description="",
+        permissions={menu},
+        entitlements=[],
+        actor=admin,
+    )
+    assert not grants_all_profile_access(role.permissions)
+    user = _create_active_user(
+        service,
+        admin,
+        login_user_id="learning.menu",
+        display_name="学習素材の担当",
+        role_ids=[role.role_id],
+        password="LearningMenu!8642",
+    )
+    principal = service.principal_for_worker(user.user_uuid)
+    assert PROFILE_MANAGE_PERMISSION not in principal.permissions
+    assert LEARNING_MATERIAL_MANAGE_PERMISSION not in principal.permissions
+    assert not principal.can_use_profile("default")
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            _, csrf = await _login_api(client, "learning.menu", "LearningMenu!8642")
+            material = await client.get("/api/nl2sql/legacy-learning-material")
+            assert material.status_code == 200, material.text
+            own = await client.get(f"/api/nl2sql/legacy-learning-material/{own_kind}/export.xlsx")
+            assert own.status_code == 200, own.text
+            other = await client.get(
+                f"/api/nl2sql/legacy-learning-material/{other_kind}/export.xlsx"
+            )
+            assert other.status_code == 403
+            other_import = await client.post(
+                f"/api/nl2sql/legacy-learning-material/{other_kind}/import",
+                headers={"X-CSRF-Token": csrf},
+                files={"file": ("material.xlsx", b"x", "application/octet-stream")},
+            )
+            assert other_import.status_code == 403
+            assert (await client.get("/api/nl2sql/profiles")).status_code == 403
+            assert (
+                await client.post(
+                    "/api/nl2sql/profiles",
+                    headers={"X-CSRF-Token": csrf},
+                    json={"name": "作れない"},
+                )
+            ).status_code == 403
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
 
 
 @pytest.mark.parametrize(
@@ -2432,7 +2505,12 @@ _LEGACY_PREFIX_RULE_RESULTS: tuple[tuple[str, str, set[str]], ...] = (
     ),
     ("GET", "/nl2sql/profiles/{profile_id}/ontology-proposals", {"nl2sql.profiles.manage"}),
     ("DELETE", "/nl2sql/profiles/{profile_id}", {"nl2sql.profiles.manage"}),
-    ("POST", "/nl2sql/legacy-learning-material/rules/import", {"nl2sql.learning_material.manage"}),
+    # 共通ルールの画面の権限でも取り込める（#1006 で追加。用語・同義語の権限では取り込めない）。
+    (
+        "POST",
+        "/nl2sql/legacy-learning-material/rules/import",
+        {"nl2sql.learning_material.manage", "menu.global_rules"},
+    ),
     ("POST", "/nl2sql/ontology/revisions/{revision_id}/publish", {"menu.ontology_build"}),
     ("GET", "/nl2sql/ontology-build/{job_id}", {"menu.ontology_build"}),
     (
@@ -5641,6 +5719,18 @@ def test_data_preparation_actions_enforce_policy_and_revalidate_roles(
                 allowed = menu in {"table_management", "data_management"}
                 assert response.status_code == (200 if allowed else 403), (menu, response.text)
                 assert len(executed) == before + int(allowed)
+                # JOIN/WHERE 条件抽出はビュー管理の画面だけが使うので、画面と同じ権限（#934）。
+                response = await client.post(
+                    "/api/nl2sql/db-admin/extract-join-where",
+                    headers=headers,
+                    json={
+                        "ddl": "CREATE VIEW V AS SELECT A.ID FROM A JOIN B ON A.ID = B.ID",
+                    },
+                )
+                assert response.status_code == (200 if menu == "view_management" else 403), (
+                    menu,
+                    response.text,
+                )
                 if menu == "comment_management":
                     # 同じ cookie / actor でもロール削除は次の実行から拒否する。
                     security.update_role(

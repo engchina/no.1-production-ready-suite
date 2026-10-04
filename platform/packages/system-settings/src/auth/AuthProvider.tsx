@@ -17,6 +17,8 @@ import type { AuthApi, AuthStatus, BaseCurrentUser, HasPermission } from "./type
 export interface AuthContextValue<U extends BaseCurrentUser = BaseCurrentUser> {
   status: AuthStatus;
   user: U | null;
+  /** 直近の `me` の 401 以外の失敗（`status` が `error` のときの理由。成功すると null）。 */
+  error: unknown;
   hasPermission: HasPermission;
   /** ログイン直後など、context にまだ反映されていないユーザーの権限を判定する。 */
   permissionCheckFor: (user: U | null) => HasPermission;
@@ -36,6 +38,15 @@ export function defaultIdentityKey(user: BaseCurrentUser): string {
 
 function isAbortError(cause: unknown): boolean {
   return cause instanceof Error && cause.name === "AbortError";
+}
+
+/** 製品の ApiError（`status` を持つ）の 401。未認証と判断してよいのはこのときだけ（#1061）。 */
+function isUnauthorizedError(cause: unknown): boolean {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    (cause as { status?: unknown }).status === 401
+  );
 }
 
 export interface AuthProviderProps<U extends BaseCurrentUser> {
@@ -96,6 +107,7 @@ export function AuthProvider<U extends BaseCurrentUser>({
   );
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [user, setUser] = useState<U | null>(null);
+  const [error, setError] = useState<unknown>(null);
 
   // state は応答の callback の中だけで更新する（effect から同期的に setState しない）。
   const refresh = useCallback(
@@ -105,17 +117,32 @@ export function AuthProvider<U extends BaseCurrentUser>({
           if (signal?.aborted) return;
           applyIdentity(current);
           setUser(current);
+          setError(null);
           setStatus("authenticated");
         },
         (cause: unknown) => {
           if (isAbortError(cause)) return;
-          applyIdentity(null);
-          setUser(null);
-          setStatus("unauthenticated");
+          if (isUnauthorizedError(cause)) {
+            applyIdentity(null);
+            setUser(null);
+            setError(null);
+            setStatus("unauthenticated");
+            return;
+          }
+          // 5xx・通信断・timeout はログイン済みかどうかが分からない。未認証と扱わず（ログイン画面へ移さず、
+          // 作業状態を消さず）、ログイン済みと分かっていればそのまま、分からなければ error にする（#1061）。
+          setError(cause);
+          setStatus((previous) => (previous === "authenticated" ? previous : "error"));
         },
       ),
     [applyIdentity],
   );
+
+  // 確認の失敗（error）からの再試行は、確認している間を読み込み中の表示に戻す。
+  const recheck = useCallback((): Promise<void> => {
+    setStatus((previous) => (previous === "error" ? "loading" : previous));
+    return refresh();
+  }, [refresh]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -127,6 +154,7 @@ export function AuthProvider<U extends BaseCurrentUser>({
     const handleUnauthorized = () => {
       applyIdentity(null);
       setUser(null);
+      setError(null);
       setStatus("unauthenticated");
     };
     window.addEventListener(AUTH_UNAUTHORIZED_EVENT, handleUnauthorized);
@@ -138,6 +166,7 @@ export function AuthProvider<U extends BaseCurrentUser>({
       const current = await optionsRef.current.api.login(loginUserId, password);
       applyIdentity(current);
       setUser(current);
+      setError(null);
       setStatus("authenticated");
       return current;
     },
@@ -150,6 +179,7 @@ export function AuthProvider<U extends BaseCurrentUser>({
     } finally {
       applyIdentity(null);
       setUser(null);
+      setError(null);
       setStatus("unauthenticated");
     }
   }, [applyIdentity]);
@@ -172,14 +202,15 @@ export function AuthProvider<U extends BaseCurrentUser>({
     () => ({
       status,
       user,
+      error,
       login,
       logout,
-      refresh: () => refresh(),
+      refresh: recheck,
       changePassword,
       permissionCheckFor,
       hasPermission: permissionCheckFor(user),
     }),
-    [changePassword, login, logout, permissionCheckFor, refresh, status, user],
+    [changePassword, error, login, logout, permissionCheckFor, recheck, status, user],
   );
 
   return (

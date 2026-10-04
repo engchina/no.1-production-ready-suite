@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { KeyRound } from "lucide-react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
-import { TimedLoadingState, type SidebarFooterAction } from "@engchina/production-ready-ui";
+import { ApiErrorState, TimedLoadingState, type SidebarFooterAction } from "@engchina/production-ready-ui";
 
 import { useAuth } from "./AuthProvider";
 import { AUTH_MESSAGES, formatMessage, type AuthMessages } from "./messages";
@@ -11,13 +11,13 @@ export interface RequireAuthProps {
   routes: AuthRoutes;
   /** 今の URL を開くのに必要な権限コード（無ければ認証だけを確認する）。 */
   requiredPermission?: string;
-  messages?: Partial<Pick<AuthMessages, "loading">>;
+  messages?: Partial<Pick<AuthMessages, "loading" | "sessionCheckError" | "sessionCheckErrorFallback">>;
   children: ReactNode;
 }
 
 /**
  * 認証が必要な画面の入口（NL2SQL の App から移設。#220）。
- * 確認中は読み込み表示、未認証はログインへ（元の URL を state.from に載せる）、
+ * 確認中は読み込み表示、確認の失敗（5xx・通信断）は失敗と再試行（#1061）、未認証はログインへ（元の URL を state.from に載せる）、
  * 強制パスワード変更中はパスワード変更へ、権限が無ければ権限なしの画面へ移す。
  */
 export function RequireAuth({ routes, requiredPermission, messages, children }: RequireAuthProps) {
@@ -34,6 +34,21 @@ export function RequireAuth({ routes, requiredPermission, messages, children }: 
           placement="page"
           testId="auth-session-loading"
         />
+      </main>
+    );
+  }
+  if (auth.status === "error") {
+    // ログイン済みかどうかが分からないため、ログイン画面へ移さず、失敗と再試行を出す（#1061）。
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-canvas p-4">
+        <div className="grid w-full max-w-lg gap-3" data-testid="auth-session-error">
+          <h1 className="text-base font-semibold text-fg">{m.sessionCheckError}</h1>
+          <ApiErrorState
+            error={auth.error}
+            fallback={m.sessionCheckErrorFallback}
+            onRetry={() => void auth.refresh()}
+          />
+        </div>
       </main>
     );
   }

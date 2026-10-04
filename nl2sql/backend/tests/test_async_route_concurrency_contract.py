@@ -336,7 +336,7 @@ def test_blocked_settings_namespace_route_does_not_block_security_api(
     block = _new_block()
     _enable_local_debug_auth(monkeypatch)
 
-    def blocking_namespace(_payload: object) -> str:
+    def blocking_namespace(_payload: object, **_config: object) -> str:
         _block_until_released(block.entered, block.release)
         return "testnamespace"
 
