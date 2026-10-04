@@ -1060,6 +1060,9 @@ const agentJa = {
   "skills.id": "ID",
   "skills.name": "名前",
   "skills.idRequired": "ID を入力してください。",
+  // 作成後は変えられず、URL にも使う（#926。backend の SKILL_ID_PATTERN と同じ）。
+  "skills.idInvalid": "ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。",
+  "skills.idHint": "英数字・_・-・. で入力します（作成後は変更できません）。",
   "skills.nameRequired": "名前を入力してください。",
   "skills.empty": "スキルはまだありません",
   "skills.readOnly": "このスキルは読み取り専用です（ビルトイン / ファイル / env）。",
