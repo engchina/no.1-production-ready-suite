@@ -254,7 +254,7 @@ def test_list_api_limits_non_admin_roles_to_their_own_feedback(monkeypatch: Monk
         login(client, "admin"),
         login_configured_admin(client),
     ):
-        response = client.get("/api/feedback", headers=headers)
+        response = client.get("/api/feedback?period_days=30", headers=headers)
         assert response.status_code == 200, response.text
 
     calls = pool.connection.calls

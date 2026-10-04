@@ -74,6 +74,18 @@ const TABLE_SCHEMA_REFRESH_HEADER = "table-management-header";
 type ActiveView = "list" | "create" | "import";
 type ImportStep = "file" | "execute";
 
+const IMPORT_MODE_LABEL_KEYS: Record<string, string> = {
+  create: "tableMgmt.importWizard.mode.create",
+  replace: "tableMgmt.importWizard.mode.replace",
+  append: "tableMgmt.importWizard.mode.append",
+  truncate: "tableMgmt.importWizard.mode.truncate",
+};
+
+function importModeLabel(mode: string) {
+  const key = IMPORT_MODE_LABEL_KEYS[mode];
+  return key ? t(key) : mode;
+}
+
 function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
   return (
     <section
@@ -87,9 +99,13 @@ function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
           size="sm"
           data-testid="table-import-result-table-name"
         />
-        <StatusBadge variant={result.executed ? "success" : "neutral"} label={result.executed ? "executed" : "not executed"} />
+        {/* 実行の状態・モードは API の内部値（executed / create）を出さず、文言で出す（#935）。 */}
+        <StatusBadge
+          variant={result.executed ? "success" : "warning"}
+          label={t(result.executed ? "dbAdmin.result.summary.executed" : "dbAdmin.result.summary.notExecuted")}
+        />
         <StatusBadge icon={false} variant="info" label={t("tableMgmt.importWizard.rows", { count: result.row_count })} />
-        <StatusBadge icon={false} variant="neutral" label={result.mode} />
+        <StatusBadge icon={false} variant="neutral" label={importModeLabel(result.mode)} />
       </div>
       <WarningsBanner warnings={result.warnings} />
       <pre className="overflow-auto rounded-md border border-border bg-surface p-3 font-mono text-sm leading-6 text-fg">

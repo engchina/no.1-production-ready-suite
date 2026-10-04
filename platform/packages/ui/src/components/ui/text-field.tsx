@@ -37,6 +37,14 @@ export const TEXT_FIELD_LEADING_PADDING_CLASS = "pl-[calc(var(--space-3)+var(--i
 /** 後置スロットの幅を測る前（SSR・初回の描画）の右の余白。四角の iconOnly ボタン 1 つ分（入力欄の高さ）。 */
 export const TEXT_FIELD_TRAILING_FALLBACK_PADDING_CLASS = "pr-[var(--field-height)]";
 
+/**
+ * 入力欄の右端（`trailing` のスロット）に置く ghost の iconOnly ボタンの形（消去・一覧の開閉）。
+ * スロットは入力欄の枠線まで含めた高さなので、ボタンは入力欄と同じ高さ（md 36px・タッチ端末 44px）の正方形になる。
+ * 地は枠線の内側だけに塗り（bg-clip-padding）、ホバーの地が入力欄の枠線に重ならない。
+ */
+export const TEXT_FIELD_TRAILING_BUTTON_CLASS =
+  "h-full min-h-0 rounded-l-none rounded-r-control bg-clip-padding";
+
 /** 制御された value が空でないか（クリアボタンを出すか）。 */
 export function hasTextValue(value: unknown) {
   if (value == null) return false;
@@ -258,8 +266,9 @@ export function TextField({
           <div
             ref={trailingRef}
             data-text-field-slot="trailing"
-            // 枠線の内側に置く（ボタンのホバーの地が入力欄の枠線に重ならないように）。
-            className="absolute inset-y-px right-px flex items-center"
+            // 入力欄の枠線まで含めた高さに置き、ボタンを入力欄と同じ高さ（md 36px・タッチ端末 44px）にする（SecretField と同じ）。
+            // ボタンの枠線は透明で、地は枠線の内側だけに塗る（bg-clip-padding）ので、ホバーの地は入力欄の枠線に重ならない。
+            className="absolute inset-y-0 right-0 flex items-center"
           >
             {trailing}
             {showClear ? (
@@ -273,10 +282,10 @@ export function TextField({
                 // 押しても入力欄からフォーカスを外さない（blur で確定する検索欄が、消す前の値を確定しないように）。
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => clearTextField(onClear as () => void, inputRef.current)}
-                // 入力欄の高さに合わせた正方形。外側の角だけ入力欄の角丸（枠線の内側なので 1px 小さく）に合わせる。
-                // 強制カラーモードでは Button が輪郭を出すが、入力欄の枠線と二重にならないよう左の区切りだけ残す
-                // （透明の枠線は CanvasText に塗られるため、背景と同じ Canvas にする）。
-                className="h-full min-h-0 rounded-l-none rounded-r-[calc(var(--radius-control)-1px)] forced-colors:border-y-[Canvas] forced-colors:border-r-[Canvas]"
+                // 入力欄の高さに合わせた正方形。外側の角だけ入力欄の角丸に合わせる。
+                // ボタンの上・右・下の枠線は入力欄の枠線にちょうど重なる（強制カラーモードで CanvasText に塗られても
+                // 入力欄の枠線と同じ位置なので二重にならず、左の区切りだけが増える）。
+                className={TEXT_FIELD_TRAILING_BUTTON_CLASS}
               />
             ) : null}
           </div>

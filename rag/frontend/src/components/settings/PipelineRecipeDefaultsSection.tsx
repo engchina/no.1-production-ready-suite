@@ -1,5 +1,5 @@
 import {
-  Button,
+  FormActionBar,
   FormStatus,
   Skeleton,
   Switch,
@@ -18,7 +18,7 @@ import {
 import { recipeConfigValueLabel } from "@/components/documents/DocumentProcessingConfigPanel.values";
 import { canOpenNavRoute } from "@/components/layout/nav-config";
 import { useAuth } from "@/components/security/AuthProvider";
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import {
   ApiError,
   type PipelineAutoAdvanceField,
@@ -28,6 +28,7 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { usePipelineSettings, useUpdatePipelineSettings } from "@/lib/queries";
 import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
+import { toast } from "@/lib/toast";
 
 import { isAutoAdvanceItem, splitGateItems, type AutoAdvanceForm } from "./PipelineRecipeDefaults.logic";
 
@@ -86,10 +87,9 @@ export function PipelineRecipeDefaultsSection() {
           </div>
         </TimedLoadingState>
       ) : query.isError || !query.data ? (
-        <ErrorState
-          message={
-            query.error instanceof ApiError ? query.error.message : t("settings.pipeline.flow.loadError")
-          }
+        <ApiErrorState
+          error={query.error}
+          fallback={t("settings.pipeline.flow.loadError")}
           onRetry={() => void query.refetch()}
         />
       ) : (
@@ -110,7 +110,7 @@ function RecipeDefaultsFlow({ data }: { data: PipelineSettingsData }) {
     if (sameForm(base, form)) setForm(saved);
   }
   const dirty = !sameForm(form, saved);
-  useLeaveGuard(dirty);
+  useLeaveGuard(dirty, save.isPending);
 
   function toggle(field: PipelineAutoAdvanceField, checked: boolean) {
     save.reset();
@@ -118,11 +118,14 @@ function RecipeDefaultsFlow({ data }: { data: PipelineSettingsData }) {
   }
 
   function submit() {
+    if (save.isPending) return;
     save.mutate(form, {
       onSuccess: (next) => {
         const nextForm = formFromSettings(next);
         setBase(nextForm);
         setForm(nextForm);
+        // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2。#992）。
+        toast.success(t("settings.pipeline.flow.saved"));
       },
     });
   }
@@ -152,42 +155,40 @@ function RecipeDefaultsFlow({ data }: { data: PipelineSettingsData }) {
           );
         })}
       </ol>
-      <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:flex-wrap sm:items-center">
-        <Button
-          type="button"
-          icon={Save}
-          loading={save.isPending}
-          disabled={!dirty}
-          onClick={submit}
-          className="w-full sm:w-auto"
-        >
-          {t("settings.pipeline.flow.save")}
-        </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          icon={RotateCcw}
-          disabled={!dirty || save.isPending}
-          onClick={reset}
-          className="w-full sm:w-auto"
-        >
-          {t("settings.pipeline.flow.reset")}
-        </Button>
-        <div className="min-h-6">
-          {dirty ? <FormStatus tone="warning" message={t("settings.pipeline.flow.unsaved")} /> : null}
-          {save.isSuccess && !dirty ? (
-            <FormStatus tone="success" message={t("settings.pipeline.flow.saved")} />
-          ) : null}
-          {save.isError ? (
+      <FormActionBar
+        ariaLabel={t("settings.pipeline.flow.actionsLabel")}
+        primaryActions={[
+          {
+            id: "save",
+            label: t("settings.pipeline.flow.save"),
+            icon: Save,
+            loading: save.isPending,
+            disabled: !dirty,
+            onClick: submit,
+          },
+        ]}
+        secondaryActions={[
+          {
+            id: "reset",
+            label: t("settings.pipeline.flow.reset"),
+            icon: RotateCcw,
+            disabled: !dirty || save.isPending,
+            onClick: reset,
+          },
+        ]}
+        status={
+          save.isError ? (
             <FormStatus
               tone="danger"
               message={
                 save.error instanceof ApiError ? save.error.message : t("settings.pipeline.flow.saveError")
               }
             />
-          ) : null}
-        </div>
-      </div>
+          ) : dirty ? (
+            <FormStatus tone="warning" message={t("settings.pipeline.flow.unsaved")} />
+          ) : null
+        }
+      />
     </div>
   );
 }

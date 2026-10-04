@@ -352,14 +352,23 @@ class PluginRegistry:
 
     @staticmethod
     def _ensure_not_referenced(record: PluginRecord) -> None:
+        """業務 Agent が下書きか公開中の版で使うスキルを含むプラグインは、無効化・削除しない。
+
+        公開中の版だけが使う場合も断る（スキルを欠いた版が利用者の Run で動くため。#1032）。
+        画面はこの文をそのまま出すため、業務 Agent の名前を日本語の文で返す。
+        """
         skill_ids = {skill.id for skill in record.manifest.skills}
-        referenced = [
-            agent.id
-            for agent in runtime_repository.list_agents()
-            if skill_ids.intersection(agent.skill_ids)
-        ]
+        referenced: list[str] = []
+        for agent in runtime_repository.list_agents():
+            published = agent.published()
+            used = set(agent.skill_ids) | set(published.skill_ids if published else [])
+            if skill_ids & used:
+                referenced.append(agent.name or agent.id)
         if referenced:
-            raise ValueError(f"plugin skills are referenced by agents: {', '.join(referenced)}")
+            raise ValueError(
+                f"このプラグインのスキルは業務 Agent（{'、'.join(referenced)}）が使っています。"
+                "業務 Agent のスキルから外して公開してから、無効化・削除してください。"
+            )
 
 
 # --- Marketplace registry -------------------------------------------------
@@ -506,7 +515,12 @@ def _plugins_from_json(raw: str | None) -> list[PluginManifest]:
         try:
             manifests.append(PluginManifest.model_validate(item))
         except ValidationError as exc:
-            logger.warning("宣言 plugin が不正: %s", exc)
+            # 例外の文は入力（MCP の API キー・URL など）を含むため、位置と種類だけを出す（#1081）。
+            problems = ", ".join(
+                f"{'.'.join(str(part) for part in error['loc'])} ({error['type']})"
+                for error in exc.errors(include_input=False, include_url=False)
+            )
+            logger.warning("宣言 plugin が不正: %s", problems)
     return manifests
 
 

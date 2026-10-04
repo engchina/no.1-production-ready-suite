@@ -116,8 +116,30 @@ class SecurityService(AuthService):
         )
 
     def _role_within_actor(self, actor: Principal, role: PlatformRoleRecord) -> bool:  # type: ignore[override]
-        return expand_permissions(set(getattr(role, "permissions", set()))).issubset(
+        """ロールの権限・業務プロファイル利用権限・Data Grant が、操作者の範囲に収まるか（#1090）。
+
+        ロールの割り当て・ユーザーの管理の判定に使う。権限だけを比べると、自分が使えない業務プロファイルや
+        データを含むロールを自分や他人に割り当てられてしまう（RAG / Agent は対象範囲も比べている）。
+        """
+        if not expand_permissions(set(getattr(role, "permissions", set()))).issubset(
             actor.permissions
+        ):
+            return False
+        if not isinstance(role, RoleRecord) or not isinstance(actor, Principal):
+            return False
+        if (
+            role.allowed_profile_ids
+            and not grants_all_profile_access(actor.permissions)
+            and not set(role.allowed_profile_ids).issubset(actor.allowed_profile_ids)
+        ):
+            return False
+        actor_grants = {
+            self._data_entitlement_policy_signature(entitlement)
+            for entitlement in actor.data_entitlements
+        }
+        return all(
+            self._data_entitlement_policy_signature(entitlement) in actor_grants
+            for entitlement in role.entitlements
         )
 
     def _assert_actor_can_restore_role(  # type: ignore[override]

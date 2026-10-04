@@ -451,7 +451,7 @@ def test_menu_without_capability_can_open_page_but_not_read_runs(auth: Productio
     headers = login("menu-only")
     response = client.get("/api/runs", headers=headers)
     assert response.status_code == 403
-    assert "requires one of roles" in response.json()["error_messages"][0]
+    assert response.json()["error_messages"][0].startswith("この操作を行う権限がありません。")
 
 
 def test_user_without_roles_is_denied_everything_except_auth(auth: ProductionAuth) -> None:

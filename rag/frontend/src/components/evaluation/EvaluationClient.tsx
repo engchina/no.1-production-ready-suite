@@ -66,6 +66,7 @@ import {
   isEvaluationJobActive,
   isEvaluationJobId,
 } from "./evaluation-job";
+import { evaluationCaseIdError, sampleOverwriteNeedsConfirm } from "./evaluation-input";
 import {
   EVALUATION_METRIC_NAMES,
   EVALUATION_PERSPECTIVES,
@@ -197,6 +198,23 @@ export function EvaluationClient() {
       ? parsedRequest.value.thresholds
       : null;
 
+  const confirm = useConfirm();
+  // 編集中の Golden set JSON は、上書きの影響を示して確認してからサンプルに置き換える（元に戻せないため）。
+  const loadSampleRequest = async () => {
+    if (sampleOverwriteNeedsConfirm(requestJson, SAMPLE_REQUEST)) {
+      const confirmed = await confirm({
+        title: t("evaluation.sampleConfirm.title"),
+        description: t("evaluation.sampleConfirm.description"),
+        confirmLabel: t("evaluation.sampleConfirm.confirm"),
+        tone: "warning",
+      });
+      if (!confirmed) return;
+    }
+    setRequestJson(SAMPLE_REQUEST);
+    setRequestJsonError(null);
+    setRunError("");
+  };
+
   const runEvaluation = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (runActive) return;
@@ -293,7 +311,6 @@ export function EvaluationClient() {
                     setRequestJsonError(null);
                   }}
                 />
-                {runError ? <ErrorNotice message={runError} /> : null}
                 <div className="flex flex-wrap items-center gap-2">
                   <Button type="submit" loading={runMutation.isPending} disabled={runActive} icon={BarChart3}>
                     {t("evaluation.actions.run")}
@@ -301,15 +318,13 @@ export function EvaluationClient() {
                   <Button
                     type="button"
                     variant="secondary"
-                    onClick={() => {
-                      setRequestJson(SAMPLE_REQUEST);
-                      setRequestJsonError(null);
-                      setRunError("");
-                    }}
+                    onClick={() => void loadSampleRequest()}
                   >
                     {t("evaluation.actions.loadSample")}
                   </Button>
                 </div>
+                {/* 投入の失敗は操作の行の直下に出す（messaging.md §10）。 */}
+                {runError ? <ErrorNotice message={runError} /> : null}
                 {runMutation.isPending ? (
                   // job の投入（検証と作成）の間。ボタンの loading がスピナーを担うので、ここは文言と
                   // 経過時間だけを出す（messaging.md §3.7）。作成後は実行状況（placement="job"）が引き継ぐ。
@@ -356,7 +371,6 @@ export function EvaluationClient() {
                     setExperimentsJsonError(null);
                   }}
                 />
-                {compareError ? <ErrorNotice message={compareError} /> : null}
                 <Button
                   type="submit"
                   className="w-full"
@@ -364,6 +378,7 @@ export function EvaluationClient() {
                   disabled={compareActive} icon={GitCompare}>
                   {t("evaluation.actions.compare")}
                 </Button>
+                {compareError ? <ErrorNotice message={compareError} /> : null}
                 {compareMutation.isPending ? (
                   <ProcessingIndicator
                     active
@@ -505,6 +520,9 @@ function EvaluationJobSection({
     }
     return <EvaluationJobLoading kind={kind} />;
   }
+  // 実行中に状態の取得が失敗したとき（再起動・通信断など）。取得は自動で続けるので、最後に分かっている
+  // 状態のまま、パネルの直下に取得できていないことを出す（取得できたら消える。#977）。
+  const pollError = query.isError && job.status === "RUNNING" ? query.error : null;
   return (
     <>
       <EvaluationJobPanel
@@ -513,6 +531,13 @@ function EvaluationJobSection({
         onCancel={(target) => void state.cancel(target)}
         cancelling={state.cancelling}
       />
+      {pollError ? (
+        <Banner severity="warning">
+          {pollError instanceof ApiError && pollError.status === 404
+            ? t("evaluation.job.notFound")
+            : t("evaluation.job.pollError")}
+        </Banner>
+      ) : null}
       {job.status === "RUNNING" ? <EvaluationResultSkeleton kind={kind} /> : null}
       {job.status === "SUCCEEDED" ? renderResult(job) : null}
     </>
@@ -1047,6 +1072,8 @@ function parseEvaluationRequest(raw: string): ParseResult<EvaluationRunRequestBo
   if (!isRecord(parsed.value) || !Array.isArray(parsed.value.cases) || parsed.value.cases.length < 1) {
     return { ok: false, error: t("evaluation.input.noCases") };
   }
+  const caseIdError = evaluationCaseIdError(parsed.value.cases);
+  if (caseIdError) return { ok: false, error: caseIdError };
   return { ok: true, value: parsed.value as unknown as EvaluationRunRequestBody };
 }
 

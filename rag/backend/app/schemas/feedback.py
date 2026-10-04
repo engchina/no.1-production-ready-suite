@@ -106,19 +106,31 @@ class FeedbackCitationSnapshot(BaseModel):
 
 
 class FeedbackContentSnapshot(BaseModel):
-    """検索画面で利用者が実際に見た質問・回答・根拠の snapshot。"""
+    """検索画面で利用者が実際に見た質問・回答・根拠の snapshot。
+
+    回答を生成しない検索（検索結果だけ）の引用の評価では回答が無いため、回答は任意にする
+    （質問は必須。どの質問への評価かを一覧・詳細に出すため。#978）。回答の評価は
+    `FeedbackRequest` で回答を必須にする。
+    """
 
     question: str = Field(..., min_length=1, max_length=20_000)
-    answer: str = Field(..., min_length=1, max_length=100_000)
+    answer: str | None = Field(default=None, max_length=100_000)
     citations: list[FeedbackCitationSnapshot] = Field(default_factory=list, max_length=50)
 
-    @field_validator("question", "answer")
+    @field_validator("question")
     @classmethod
-    def normalize_text(cls, value: str) -> str:
+    def normalize_question(cls, value: str) -> str:
         cleaned = value.strip()
         if not cleaned:
-            raise ValueError("質問と回答の本文を入力してください。")
+            raise ValueError("質問の本文を入力してください。")
         return cleaned
+
+    @field_validator("answer")
+    @classmethod
+    def normalize_answer(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
 
 
 class FeedbackRequest(BaseModel):
@@ -163,6 +175,12 @@ class FeedbackRequest(BaseModel):
             and self.source_surface != FeedbackSourceSurface.SEARCH
         ):
             raise ValueError("画面 snapshot は RAG 検索の評価だけに指定できます。")
+        if (
+            self.content_snapshot is not None
+            and self.content_snapshot.answer is None
+            and self.target_type == FeedbackTargetType.ANSWER
+        ):
+            raise ValueError("回答の評価には回答の本文を入力してください。")
         if self.target_type == FeedbackTargetType.CITATION:
             if not self.document_id or not self.chunk_id:
                 raise ValueError("引用フィードバックには文書 ID とチャンク ID が必要です。")
