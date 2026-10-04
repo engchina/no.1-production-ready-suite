@@ -18,7 +18,12 @@ test("API helpers propagate cancellation and optional timeout signals", () => {
 
   assert.match(apiSource, /timeoutMs\?: number/u);
   assert.match(apiSource, /AbortSignal\.timeout\(options\.timeoutMs\)/u);
-  assert.match(apiSource, /isAbortError\(cause\) \|\| isTimeoutError\(cause\)/u);
+  // 利用者の取り消しはそのまま、timeout は DB の起動状態の確認をせず利用者向けの失敗にする（#900）。
+  assert.match(apiSource, /if \(isAbortError\(cause\)\) throw cause;/u);
+  assert.match(
+    apiSource,
+    /if \(isTimeoutError\(cause\)\) \{\s*throw new ApiTransportError\(\s*"timeout"/u,
+  );
 
   for (const helper of ["apiGet", "apiGetWithMetadata", "apiPost", "apiPatch", "apiDelete"]) {
     const declaration = new RegExp(
