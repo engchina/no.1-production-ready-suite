@@ -39,6 +39,7 @@ import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { listPickerLabels } from "@/lib/list-picker-labels";
 import {
+  AssignDocumentsPartialError,
   useAssignDocumentsToKnowledgeBase,
   useDocumentCandidates,
   useDocuments,
@@ -207,8 +208,28 @@ function DocumentAssignment({
           toast.success(t("knowledgeBases.toast.assigned"));
           onClose({ assigned: true });
         },
-        onError: (error) =>
-          toast.error(error instanceof ApiError ? error.message : t("knowledgeBases.error.assign")),
+        onError: (error) => {
+          if (error instanceof AssignDocumentsPartialError) {
+            // 追加できた分は選択から外し、追加できなかった残りだけを残す（もう一度追加できる）。
+            setSelected((current) => {
+              const copy = new Map(current);
+              for (const documentId of error.assignedIds) copy.delete(documentId);
+              return copy;
+            });
+            const reason =
+              error.cause instanceof ApiError ? error.cause.message : t("knowledgeBases.error.assign");
+            toast.error(
+              t("knowledgeBases.error.assignPartial", {
+                total: formatNumber(error.total),
+                assigned: formatNumber(error.assignedIds.length),
+                remaining: formatNumber(error.total - error.assignedIds.length),
+                reason,
+              })
+            );
+            return;
+          }
+          toast.error(error instanceof ApiError ? error.message : t("knowledgeBases.error.assign"));
+        },
       }
     );
   };

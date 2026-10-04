@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
   Check,
+  RefreshCw,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -43,6 +44,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import {
+  ApiError,
   agentApi,
   type ApprovalRequest,
   type Artifact,
@@ -53,10 +55,12 @@ import {
 } from "@/lib/api";
 import { isRunnableAgent } from "@/lib/agent-availability";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
+import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { runStatusView, stepStatusView } from "@/lib/status-labels";
 import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-state";
+import { isOwnDecision } from "@/pages/shared/approval-decision";
 
 /**
  * 業務利用者のチャット（#768）。使ってよい業務 Agent を選んで会話する。1 往復が 1 Run で、
@@ -87,6 +91,7 @@ function useHistoryInline(): boolean {
 export function ChatPage() {
   const queryClient = useQueryClient();
   const capabilities = useCapabilities();
+  const { user } = useAuth();
   // 会話の履歴は既定で閉じ、チャットを全幅にする（RAG のチャットと同じ型。#664 / #889）。
   // lg 以上のインラインのパネルの開閉は作業状態に残す。lg 未満のモーダルの side sheet は残さない
   // （戻ったとき・再読込で画面を塞がない。workspace-state.md）。
@@ -141,8 +146,10 @@ export function ChatPage() {
         ? POLL_INTERVAL_MS
         : false,
   });
-  // 選んでいた会話が消えた・別の Agent の会話なら、新しい会話に戻す。
-  const threadMissing = Boolean(threadId) && thread.isError;
+  // 選んでいた会話が消えた（404）・読めなくなった（403）・別の Agent の会話なら、新しい会話に戻す。
+  // 通信断・timeout・5xx などの一時的な失敗では戻さない（回答の作成中の取り直しが 1 回失敗しただけで、
+  // 会話が消えて新しい会話になっていた）。読めていた会話はそのまま出し、取り直しを続ける。
+  const threadMissing = Boolean(threadId) && thread.isError && isThreadGone(thread.error);
   const threadOfOtherAgent =
     thread.data !== undefined && selectedAgentId !== "" && thread.data.agent_id !== selectedAgentId;
   useEffect(() => {
@@ -219,8 +226,14 @@ export function ChatPage() {
   const decide = useMutation({
     mutationFn: ({ approval, approved }: { approval: ApprovalRequest; approved: boolean }) =>
       agentApi.decideApproval(approval.id, { approved }),
-    onSuccess: (_run, { approved }) => {
-      toast.success(approved ? t("chat.approval.approved") : t("chat.approval.rejected"));
+    onSuccess: (updatedRun, { approval, approved }) => {
+      // 押した判断が自分の判断として残ったときだけ成功と案内する。ほかの操作者が先に判断した・実行が先に
+      // 終わった承認は、backend が状態を変えずに 200 で返す（実行履歴・承認の画面と同じ。#1119 / #1138）。
+      if (isOwnDecision(updatedRun, approval.id, approved, user?.login_user_id)) {
+        toast.success(approved ? t("chat.approval.approved") : t("chat.approval.rejected"));
+      } else {
+        toast.info(t("approval.changedDuringReview"));
+      }
       void queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
     },
     onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
@@ -288,6 +301,9 @@ export function ChatPage() {
     <ThreadList
       threads={threads.data?.threads ?? []}
       loading={threads.isLoading}
+      error={threads.isError && !threads.data ? threads.error : null}
+      retrying={threads.isFetching}
+      onRetry={() => void threads.refetch()}
       currentThreadId={currentThreadId}
       onOpen={openThread}
     />
@@ -425,6 +441,25 @@ export function ChatPage() {
                   <TimedLoadingState label={t("chat.loading")} framed={false} testId="chat-thread-loading">
                     <ListSkeleton rows={3} />
                   </TimedLoadingState>
+                ) : threadId && thread.isError && !thread.data && !threadMissing ? (
+                  // 会話を読めなかった（一時的な失敗）。選んだ会話のまま、理由と再試行を出す。
+                  <ApiErrorBanner
+                    error={thread.error}
+                    fallback={t("chat.loadFailed")}
+                    testId="chat-thread-error"
+                    action={
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        icon={RefreshCw}
+                        loading={thread.isFetching}
+                        onClick={() => void thread.refetch()}
+                      >
+                        {t("common.retry")}
+                      </Button>
+                    }
+                  />
                 ) : runs.length === 0 && !pending ? (
                   <EmptyState title={t("chat.empty.title")} hint={t("chat.empty.hint")} />
                 ) : (
@@ -505,11 +540,18 @@ export function ChatPage() {
 function ThreadList({
   threads,
   loading,
+  error,
+  retrying,
+  onRetry,
   currentThreadId,
   onOpen,
 }: {
   threads: ThreadSummary[];
   loading: boolean;
+  /** 一覧を読めなかったときの失敗（読めていない一覧を「まだ会話がありません」と出さない）。 */
+  error: unknown;
+  retrying: boolean;
+  onRetry: () => void;
   currentThreadId: string | null;
   onOpen: (thread: ThreadSummary) => void;
 }) {
@@ -518,6 +560,20 @@ function ThreadList({
       <TimedLoadingState label={t("chat.threads.loading")} framed={false} testId="chat-threads-loading">
         <ListSkeleton rows={4} />
       </TimedLoadingState>
+    );
+  }
+  if (error) {
+    return (
+      <ApiErrorBanner
+        error={error}
+        fallback={t("chat.threads.loadFailed")}
+        testId="chat-threads-error"
+        action={
+          <Button type="button" variant="secondary" size="sm" icon={RefreshCw} loading={retrying} onClick={onRetry}>
+            {t("common.retry")}
+          </Button>
+        }
+      />
     );
   }
   if (threads.length === 0) {
@@ -779,6 +835,11 @@ function runCitations(artifacts: Artifact[]): CitationView[] {
     }
   }
   return citations;
+}
+
+/** 会話が消えた・読めなくなった失敗か（一時的な失敗ではなく、新しい会話に戻すもの）。 */
+function isThreadGone(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 404 || error.status === 403);
 }
 
 function failureMessage(run: RunState): string {

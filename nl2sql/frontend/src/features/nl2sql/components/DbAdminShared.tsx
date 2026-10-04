@@ -457,16 +457,28 @@ function oracleErrorGuidance(code: string | null) {
     };
   }
   if (code === "ORA-01031") {
-    return { cause: "この操作を実行する Oracle 権限がありません。", actions: ["実行ユーザーの権限を管理者に確認してください。"] };
+    return {
+      cause: t("dbAdmin.result.error.ora01031.cause"),
+      actions: [t("dbAdmin.result.error.ora01031.action.privilege")],
+    };
   }
   if (["ORA-01722", "ORA-01843", "ORA-01861", "ORA-12899"].includes(code ?? "")) {
-    return { cause: "取込データまたは SQL の値が対象列のデータ型・長さに一致していません。", actions: ["対象列の型、日付形式、数値形式、文字数を確認してください。"] };
+    return {
+      cause: t("dbAdmin.result.error.dataType.cause"),
+      actions: [t("dbAdmin.result.error.dataType.action.check")],
+    };
   }
   if (["ORA-00001", "ORA-01400", "ORA-02291", "ORA-02292"].includes(code ?? "")) {
-    return { cause: "表の制約条件を満たしていません。", actions: ["重複値、必須値、親子データの関係を確認してください。"] };
+    return {
+      cause: t("dbAdmin.result.error.constraint.cause"),
+      actions: [t("dbAdmin.result.error.constraint.action.check")],
+    };
   }
   if (code === "ORA-00054") {
-    return { cause: "対象が他の処理で使用中です。", actions: ["他の更新処理の完了後に再試行してください。"] };
+    return {
+      cause: t("dbAdmin.result.error.ora00054.cause"),
+      actions: [t("dbAdmin.result.error.ora00054.action.retry")],
+    };
   }
   return {
     cause: t("dbAdmin.result.error.generic.cause"),
