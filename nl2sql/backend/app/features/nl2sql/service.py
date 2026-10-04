@@ -90,6 +90,7 @@ from .logical_steps import (
     build_logical_structure_items,
 )
 from .models import (
+    STORED_JOB_REQUEST_CONTEXT,
     AdminFeedbackReviewData,
     AdminFeedbackReviewRequest,
     AgentConversationCreateData,
@@ -2068,11 +2069,6 @@ _DB_ADMIN_POLICY_LABELS = {
 }
 
 _DOMAIN_DDL_RE = _DB_ADMIN_STATEMENT_POLICIES["domain_sql"][0]
-_DOMAIN_COLUMN_ASSOCIATION_RE = re.compile(
-    rf"^alter\s+table\s+{_SQL_OBJECT_REF}\s+modify\b",
-    re.IGNORECASE,
-)
-_DOMAIN_KEYWORD_RE = re.compile(r"\bdomain\b", re.IGNORECASE)
 
 
 def _is_domain_ddl(statement: str) -> bool:
@@ -2083,11 +2079,9 @@ def _is_domain_ddl(statement: str) -> bool:
 def _domain_statement_error(statement: str) -> str:
     if _DOMAIN_DDL_RE.match(statement):
         return ""
-    # 対象表の判定は元の文で行う(マスクは引用識別子を引用符ごと空白にするため一致しない)。
-    # 列型変更だけの MODIFY を通さないよう、DOMAIN 句の有無はリテラルをマスクした文で見る。
-    if _DOMAIN_COLUMN_ASSOCIATION_RE.match(statement) and _DOMAIN_KEYWORD_RE.search(
-        _mask_sql_literals_and_comments(statement)
-    ):
+    # 表の列への関連付けは、文の形をそのまま照合する。`DOMAIN` の語があるだけでは通さず、同じ文で
+    # 列の型の変更・`DROP COLUMN` などを行う文を拒否する（#940）。
+    if _domain_column_statement_shape_ok(_policy_sql_tokens(statement)):
         return ""
     return f"禁止された操作です。{_DB_ADMIN_POLICY_LABELS['domain_sql']} のみ実行できます。"
 
@@ -2354,19 +2348,199 @@ def _db_admin_dynamic_sql_error(statement: str) -> str:
 
 
 def _annotation_statement_error(statement: str) -> str:
-    norm = re.sub(r"\s+", " ", statement.strip())
-    object_ref = _SQL_OBJECT_REF
-    allowed_patterns = (
-        rf"^alter\s+table\s+{object_ref}\s+annotations\s*\(.+\)\s*$",
-        rf"^alter\s+table\s+{object_ref}\s+modify\s*\(.+\s+annotations\s*\(.+\)\s*\)\s*$",
-        rf"^alter\s+table\s+{object_ref}\s+modify\s+.+\s+annotations\s*\(.+\)\s*$",
-        rf"^alter\s+view\s+{object_ref}\s+annotations\s*\(.+\)\s*$",
-        rf"^alter\s+view\s+{object_ref}\s+modify\s*\(.+\s+annotations\s*\(.+\)\s*\)\s*$",
-        rf"^alter\s+materialized\s+view\s+{object_ref}\s+annotations\s*\(.+\)\s*$",
-    )
-    if any(re.match(pattern, norm, flags=re.IGNORECASE) for pattern in allowed_patterns):
+    if _annotation_statement_shape_ok(_policy_sql_tokens(statement)):
         return _annotation_clause_error(statement)
     return f"禁止された操作です。{_DB_ADMIN_POLICY_LABELS['annotation_sql']} のみ実行できます。"
+
+
+# アノテーション・ドメインの policy の判定に使う字句（#940）。空白・コメントは捨て、引用識別子・
+# 文字列リテラルは 1 つの字句にする。
+_POLICY_SQL_TOKEN_RE = re.compile(
+    r"""\s+|--[^\n]*|/\*.*?\*/|"(?:[^"]|"")*"|'(?:[^']|'')*'|[A-Za-z_][\w$#]*|\S""",
+    re.DOTALL,
+)
+_POLICY_SQL_IDENTIFIER_RE = re.compile(r'"(?:[^"]|"")+"|[A-Za-z_][\w$#]*')
+
+
+def _policy_sql_tokens(statement: str) -> list[str] | None:
+    """文を policy の判定用の字句へ分ける。閉じていない引用・コメントがあれば None（拒否側）。"""
+    tokens: list[str] = []
+    for match in _POLICY_SQL_TOKEN_RE.finditer(statement):
+        token = match.group(0)
+        if token.isspace() or token.startswith("--"):
+            continue
+        if token.startswith("/*"):
+            if not token.endswith("*/") or len(token) < 4:
+                return None
+            continue
+        if token in {'"', "'"}:
+            return None
+        tokens.append(token)
+    if tokens and tokens[-1] == ";":
+        tokens.pop()
+    return tokens
+
+
+class _PolicySqlCursor:
+    """字句の列を先頭から照合する（アノテーション・ドメインの文の形の判定。#940）。"""
+
+    def __init__(self, tokens: list[str]) -> None:
+        self.tokens = tokens
+        self.index = 0
+
+    def at_end(self) -> bool:
+        return self.index == len(self.tokens)
+
+    def peek(self, offset: int = 0) -> str:
+        position = self.index + offset
+        return self.tokens[position] if position < len(self.tokens) else ""
+
+    def word(self, *words: str) -> bool:
+        """次の字句が引用なしの語（大文字小文字を区別しない）なら進める。"""
+        token = self.peek()
+        if token and not token.startswith('"') and token.upper() in words:
+            self.index += 1
+            return True
+        return False
+
+    def symbol(self, value: str) -> bool:
+        if self.peek() == value:
+            self.index += 1
+            return True
+        return False
+
+    def identifier(self) -> bool:
+        token = self.peek()
+        if token and _POLICY_SQL_IDENTIFIER_RE.fullmatch(token):
+            self.index += 1
+            return True
+        return False
+
+    def object_ref(self) -> bool:
+        """`name` / `owner.name`（引用識別子を含む）。"""
+        if not self.identifier():
+            return False
+        if self.peek() == "." and _POLICY_SQL_IDENTIFIER_RE.fullmatch(self.peek(1) or "-"):
+            self.index += 2
+        return True
+
+    def paren_group(self) -> bool:
+        """`(` から対応する `)` までを 1 つとして進める。"""
+        if self.peek() != "(":
+            return False
+        depth = 0
+        for position in range(self.index, len(self.tokens)):
+            # 変数名を `token` にすると bandit が B105（ハードコードされたパスワード）と誤検知する。
+            lexeme = self.tokens[position]
+            if lexeme == "(":
+                depth += 1
+            elif lexeme == ")":
+                depth -= 1
+                if depth == 0:
+                    self.index = position + 1
+                    return True
+        return False
+
+
+def _annotation_statement_shape_ok(tokens: list[str] | None) -> bool:
+    """ANNOTATIONS 句だけを変える ALTER 文か（列の型・制約・他の句を含まない。#940）。
+
+    許す形:
+    - `ALTER TABLE|VIEW|MATERIALIZED VIEW <obj> ANNOTATIONS (...)`
+    - `ALTER TABLE|VIEW <obj> MODIFY (<列> ANNOTATIONS (...)[, <列> ANNOTATIONS (...)]...)`
+    - `ALTER TABLE <obj> MODIFY <列> ANNOTATIONS (...)`
+    """
+    if not tokens:
+        return False
+    cursor = _PolicySqlCursor(tokens)
+    if not cursor.word("ALTER"):
+        return False
+    if cursor.word("TABLE"):
+        kind = "table"
+    elif cursor.word("VIEW"):
+        kind = "view"
+    elif cursor.word("MATERIALIZED") and cursor.word("VIEW"):
+        kind = "materialized_view"
+    else:
+        return False
+    if not cursor.object_ref():
+        return False
+    if cursor.word("ANNOTATIONS"):
+        return cursor.paren_group() and cursor.at_end()
+    if kind == "materialized_view" or not cursor.word("MODIFY"):
+        return False
+    if cursor.symbol("("):
+        while True:
+            if not (cursor.identifier() and cursor.word("ANNOTATIONS") and cursor.paren_group()):
+                return False
+            if cursor.symbol(","):
+                continue
+            return cursor.symbol(")") and cursor.at_end()
+    return (
+        kind == "table"
+        and cursor.identifier()
+        and cursor.word("ANNOTATIONS")
+        and cursor.paren_group()
+        and cursor.at_end()
+    )
+
+
+def _domain_column_statement_shape_ok(tokens: list[str] | None) -> bool:
+    """表の列とドメインの関連付けだけを変える ALTER TABLE 文か（列の型・他の句を含まない。#940）。
+
+    許す形:
+    - `ALTER TABLE <obj> MODIFY (<列>[, <列>]...) ADD DOMAIN <ドメイン> [(<列>[, <列>]...)]`
+    - `ALTER TABLE <obj> MODIFY (<列>[, <列>]...) DROP DOMAIN [PRESERVE <語>]`
+    - `ALTER TABLE <obj> MODIFY (<列> DOMAIN <ドメイン>[, <列> DOMAIN <ドメイン>]...)`
+    - `ALTER TABLE <obj> MODIFY <列> DOMAIN <ドメイン>`
+    """
+    if not tokens:
+        return False
+    cursor = _PolicySqlCursor(tokens)
+    if not (cursor.word("ALTER") and cursor.word("TABLE")):
+        return False
+    if not (cursor.object_ref() and cursor.word("MODIFY")):
+        return False
+    if not cursor.symbol("("):
+        return (
+            cursor.identifier()
+            and cursor.word("DOMAIN")
+            and cursor.object_ref()
+            and cursor.at_end()
+        )
+    if not cursor.identifier():
+        return False
+    if cursor.word("DOMAIN"):
+        if not cursor.object_ref():
+            return False
+        while cursor.symbol(","):
+            if not (cursor.identifier() and cursor.word("DOMAIN") and cursor.object_ref()):
+                return False
+        return cursor.symbol(")") and cursor.at_end()
+    while cursor.symbol(","):
+        if not cursor.identifier():
+            return False
+    if not cursor.symbol(")"):
+        return False
+    if cursor.word("ADD"):
+        if not (cursor.word("DOMAIN") and cursor.object_ref()):
+            return False
+        if cursor.symbol("("):
+            if not cursor.identifier():
+                return False
+            while cursor.symbol(","):
+                if not cursor.identifier():
+                    return False
+            if not cursor.symbol(")"):
+                return False
+        return cursor.at_end()
+    if cursor.word("DROP"):
+        if not cursor.word("DOMAIN"):
+            return False
+        if cursor.word("PRESERVE") and not cursor.identifier():
+            return False
+        return cursor.at_end()
+    return False
 
 
 def _split_annotation_items(value: str) -> list[str]:
@@ -4617,7 +4791,9 @@ class Nl2SqlService:
         return StoredJob(
             job_id=str(data["job_id"]),
             conversation_id=str(data.get("conversation_id") or ""),
-            request=JobCreateRequest.model_validate(data["request"]),
+            request=JobCreateRequest.model_validate(
+                data["request"], context={STORED_JOB_REQUEST_CONTEXT: True}
+            ),
             business_release_id=str(data.get("business_release_id") or ""),
             actor_user_uuid=str(data.get("actor_user_uuid") or ""),
             actor_is_system_admin=_coerce_bool(data.get("actor_is_system_admin", False)),
@@ -8510,12 +8686,9 @@ class Nl2SqlService:
             current.profile_id, allowed_profile_ids
         ):
             raise ProfileScopePermissionError(current.profile_id)
-        if (
-            not actor_can_manage
-            and actor_user_uuid
-            and current.actor_user_uuid
-            and current.actor_user_uuid != actor_user_uuid
-        ):
+        # 持ち主の無い行（認証無効の期間・旧 snapshot）も、ジョブと同じく管理の権限が無ければ
+        # 拒否する（#1126。`_assert_job_actor_access`）。
+        if not actor_can_manage and actor_user_uuid and current.actor_user_uuid != actor_user_uuid:
             raise PermissionError(history_id)
         updated = self._patch_history_item(
             current,
@@ -8727,12 +8900,9 @@ class Nl2SqlService:
             current.profile_id, allowed_profile_ids
         ):
             raise ProfileScopePermissionError(current.profile_id)
-        if (
-            not actor_can_manage
-            and actor_user_uuid
-            and current.actor_user_uuid
-            and current.actor_user_uuid != actor_user_uuid
-        ):
+        # 持ち主の無い行（認証無効の期間・旧 snapshot）も、ジョブと同じく管理の権限が無ければ
+        # 拒否する（#1126。`_assert_job_actor_access`）。
+        if not actor_can_manage and actor_user_uuid and current.actor_user_uuid != actor_user_uuid:
             raise PermissionError(history_id)
         self._patch_history_item(
             current,

@@ -1558,22 +1558,49 @@ export function useArchiveSearchAnswerProfile() {
   });
 }
 
-/** 既存文書をナレッジベースへ追加する。 */
 /** KB へ文書を追加する API の 1 回の上限（backend の `AssignDocumentsRequest.document_ids`）。 */
 const ASSIGN_DOCUMENTS_BATCH_SIZE = 200;
 
+/**
+ * 文書の追加が 2 回目以降の送信で失敗した（それまでの回の文書は追加済み）。
+ * `cause` は失敗した送信の例外、`assignedIds` は追加できた文書の ID。
+ */
+export class AssignDocumentsPartialError extends Error {
+  readonly assignedIds: string[];
+  readonly total: number;
+
+  constructor(cause: unknown, assignedIds: string[], total: number) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "AssignDocumentsPartialError";
+    this.assignedIds = assignedIds;
+    this.total = total;
+  }
+}
+
+/** 既存文書をナレッジベースへ追加する。 */
 export function useAssignDocumentsToKnowledgeBase() {
   const qc = useQueryClient();
   return useMutation({
     // API は 1 回に 200 件まで（`document_ids` の max_length）。それを超える選択は 200 件ずつ順に送る（#600）。
+    // 途中の回で失敗したら、それまでに追加できた文書の ID を `AssignDocumentsPartialError` で返す。
     mutationFn: async ({ id, documentIds }: { id: string; documentIds: string[] }) => {
       for (let start = 0; start < documentIds.length; start += ASSIGN_DOCUMENTS_BATCH_SIZE) {
-        await api.assignDocumentsToKnowledgeBase(id, {
-          document_ids: documentIds.slice(start, start + ASSIGN_DOCUMENTS_BATCH_SIZE),
-        });
+        try {
+          await api.assignDocumentsToKnowledgeBase(id, {
+            document_ids: documentIds.slice(start, start + ASSIGN_DOCUMENTS_BATCH_SIZE),
+          });
+        } catch (error) {
+          if (start === 0) throw error;
+          throw new AssignDocumentsPartialError(
+            error,
+            documentIds.slice(0, start),
+            documentIds.length
+          );
+        }
       }
     },
-    onSuccess: () => {
+    // 途中で失敗しても、それまでの回の分は追加済みなので、成功・失敗のどちらでも一覧を取り直す。
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
       qc.invalidateQueries({ queryKey: ["documents"] });
     },

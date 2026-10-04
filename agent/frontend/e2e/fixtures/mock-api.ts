@@ -582,6 +582,58 @@ function pluginSummary(plugin: Json): Json {
   return summary;
 }
 
+/**
+ * URL の userinfo と資格情報らしい query の値を `***` に伏せる（backend の `mask_url_credentials`。#1081）。
+ * #1078 の `src/lib/mcp-url.ts` の `maskUrlCredentials` と同じ規則。#1078 の merge 後はそちらを使う。
+ */
+function maskPluginMcpUrl(url: unknown): unknown {
+  if (typeof url !== "string" || !url) return url ?? null;
+  const match = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#]*)([^?#]*)(?:\?([^#]*))?(#.*)?$/.exec(url);
+  if (!match) return url;
+  const [, head, authority, rest, query, fragment = ""] = match;
+  const at = authority.lastIndexOf("@");
+  const host = at >= 0 ? `***@${authority.slice(at + 1)}` : authority;
+  const secretWord =
+    /^(key|apikey|token|secret|password|passwd|pwd|auth|authorization|credential|credentials|signature|sig|jwt|bearer)$/;
+  const maskedQuery = (query ?? "")
+    .split("&")
+    .map((part) => {
+      const name = part.split("=", 1)[0];
+      const words = name
+        .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+        .toLowerCase()
+        .split(/[^a-z0-9]+/);
+      return part && words.some((word) => secretWord.test(word)) ? `${name}=***` : part;
+    })
+    .join("&");
+  return `${head}${host}${rest}${query === undefined ? "" : `?${maskedQuery}`}${fragment}`;
+}
+
+/** プラグインの MCP サーバーの応答の形（backend の `PluginMcpServerView`。秘密は返さず設定済みかだけ。#1081）。 */
+function publicPluginMcpServer(server: Json): Json {
+  const oauthReady = Boolean(server.oauth_token_url && server.oauth_client_id && server.oauth_client_secret);
+  return {
+    server_id: server.server_id,
+    label: server.label ?? null,
+    base_url: maskPluginMcpUrl(server.base_url),
+    auth_mode: server.auth_mode ?? (oauthReady ? "oauth_client_credentials" : server.api_key ? "api_key" : "none"),
+    oauth_token_url: maskPluginMcpUrl(server.oauth_token_url),
+    oauth_client_id: server.oauth_client_id ?? null,
+    oauth_scope: server.oauth_scope ?? null,
+    service_audience: server.service_audience ?? null,
+    timeout_seconds: server.timeout_seconds ?? 10,
+    source: server.source ?? "runtime",
+    api_key_configured: Boolean(server.api_key),
+    oauth_client_secret_configured: Boolean(server.oauth_client_secret),
+    session_configured: Boolean(server.session_id),
+  };
+}
+
+function publicPluginManifest(manifest: Json): Json {
+  const mcpServers = (manifest.mcp_servers as Json[] | undefined) ?? [];
+  return { ...manifest, mcp_servers: mcpServers.map(publicPluginMcpServer) };
+}
+
 function pluginRecord(manifest: Json, marketplaceId: string | null): Json {
   const skills = (manifest.skills as Json[] | undefined) ?? [];
   const mcpServers = (manifest.mcp_servers as Json[] | undefined) ?? [];
@@ -599,7 +651,8 @@ function pluginRecord(manifest: Json, marketplaceId: string | null): Json {
     resource_count: resources.length,
     warnings: [],
     agent_count: 0,
-    manifest,
+    // 応答と同じく MCP サーバーの資格情報を持たない形で置く（mock は実際に接続しない）。
+    manifest: publicPluginManifest(manifest),
   };
 }
 
@@ -1154,10 +1207,20 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
   }
   // --- 自動実行（#784） ---
+  // 実行できる業務 Agent か（backend の `_require_runnable_agent` / `agent_unavailable_reason`。#927）。
+  const requireRunnableAgent = (agentId: unknown) => {
+    const agent = state.agents.find((candidate) => candidate.id === agentId);
+    if (!agent) throw new HttpError(422, "業務 Agent が見つかりません。");
+    if (!agent.enabled || agent.migration_required) throw new HttpError(422, "この業務 Agent は実行できない状態です。");
+    if (agent.published_version === null) {
+      throw new HttpError(422, "公開していない業務 Agent は実行できません。公開してから使ってください。");
+    }
+  };
   if (method === "GET" && at("automations")) {
     return { automations: state.automations, persistent: state.automationsPersistent };
   }
   if (method === "POST" && at("automations")) {
+    requireRunnableAgent(body.agent_id);
     const item: Json = {
       ...automationFields(body),
       id: `auto-${state.automations.length + 1}`,
@@ -1181,6 +1244,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return { automation: item, runs: state.automationRuns[String(item.id)] ?? [] };
     }
     if (method === "PUT" && at("automations", "*")) {
+      // 業務 Agent を変えるときと有効のまま保存するときだけ確かめる（無効にする保存は通す）。
+      if (body.agent_id !== item.agent_id || body.enabled) requireRunnableAgent(body.agent_id);
       Object.assign(item, automationFields(body), { updated_at: MOCK_NOW });
       return item;
     }
@@ -1197,9 +1262,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         last_run_id: runId,
         last_trigger: "manual",
         last_result: "created",
-        last_message: "Run を作りました。",
+        last_message: "実行を作りました。",
       });
-      return { run_id: runId, result: "created", message: "Run を作りました。" };
+      return { run_id: runId, result: "created", message: "実行を作りました。" };
     }
     if (method === "POST" && at("automations", "*", "webhook-token")) {
       if (item.trigger !== "webhook") throw new HttpError(409, "Webhook のトリガーではありません。");
@@ -1216,12 +1281,29 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   if (method === "GET" && at("audit", "tool-calls")) {
     const offset = Number(query.get("offset") ?? 0);
     const limit = Number(query.get("limit") ?? 100);
+    // backend の `_audit_record_matches` と同じ絞り込み（完全一致）。
+    const exact: [string, string][] = [
+      ["run_id", "run_id"],
+      ["tool_name", "tool_name"],
+      ["status", "status"],
+      ["approval_status", "approval_status"],
+      ["error_code", "error_code"],
+    ];
+    const warnings = query.get("has_guardrail_warnings");
+    const matched = state.auditRecords.filter(
+      (record) =>
+        exact.every(([param, field]) => !query.has(param) || record[field] === query.get(param)) &&
+        (warnings === null ||
+          ((record.guardrail_warnings as unknown[] | undefined) ?? []).length > 0 === (warnings === "true"))
+    );
     return {
-      total: state.auditRecords.length,
+      total: matched.length,
       offset,
       limit,
-      filters: {},
-      records: state.auditRecords.slice(offset, offset + limit),
+      filters: Object.fromEntries([...query.entries()].filter(([key]) => key !== "offset" && key !== "limit")),
+      records: matched.slice(offset, offset + limit),
+      // 絞り込みに依らない、記録されたツール名（#983）。
+      tool_names: [...new Set(state.auditRecords.map((record) => String(record.tool_name)))].sort(),
     };
   }
   if (method === "GET" && at("tools")) return { tools: state.tools };
@@ -1247,7 +1329,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     };
     if (method === "GET" && at("agents")) return { agents: state.agents };
     if (method === "POST" && at("agents")) {
-      const id = String(body.id ?? `agent-${state.agents.length + 1}`);
+      // backend の create_agent と同じく、送られた ID は URL に置ける形だけを受け付ける（#1033）。
+      const id = String(body.id ?? `agent-${state.agents.length + 1}`).trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(id)) {
+        throw new HttpError(422, "業務 Agent の ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。");
+      }
       if (state.agents.some((agent) => agent.id === id)) {
         throw new HttpError(400, "同じ ID の業務 Agent があります。");
       }
@@ -1262,6 +1348,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         created_at: MOCK_NOW,
         updated_at: MOCK_NOW,
         ...body,
+        id,
         // 画面・API で作る Agent は下書きから始める（#770）。
         versioned: true,
         versions: [],
@@ -1314,9 +1401,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return { skills: state.skills, metadata: { count: state.skills.length } };
     }
     if (method === "POST" && at("skills")) {
-      const id = String(body.id ?? "");
-      if (!id || state.skills.some((skill) => skill.id === id)) {
-        throw new HttpError(409, `skill already exists: ${id}`);
+      // backend の create_agent_skill と同じ検証（#926）。
+      const id = String(body.id ?? "").trim();
+      if (!id) throw new HttpError(400, "スキルの ID を入力してください。");
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(id)) {
+        throw new HttpError(422, "スキルの ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。");
+      }
+      if (state.skills.some((skill) => skill.id === id)) {
+        throw new HttpError(409, "同じ ID のスキルがあります。");
       }
       const skill = skillFromPayload(body, "runtime");
       state.skills.push(skill);
@@ -1324,8 +1416,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     if (at("skills", "*")) {
       const skill = findOr404(state.skills, "id", second, "skill");
-      if (skill.source === "builtin" && method !== "GET") {
-        throw new HttpError(409, `builtin skill cannot be modified: ${second}`);
+      if (skill.source !== "runtime" && method === "PATCH") {
+        throw new HttpError(
+          400,
+          "組み込み・ファイル・環境変数・プラグインのスキルは画面から変更できません。読み込み元の定義を変更してください。"
+        );
+      }
+      if (skill.source !== "runtime" && method === "DELETE") {
+        throw new HttpError(400, "組み込み・ファイル・環境変数・プラグインのスキルは画面から削除できません。");
       }
       if (method === "GET") return skill;
       if (method === "PATCH") {
@@ -1333,6 +1431,21 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         return skill;
       }
       if (method === "DELETE") {
+        // 業務 Agent の下書きか公開中の版が使っていれば断る（backend の delete_agent_skill。#926）。
+        const users = state.agents
+          .filter((agent) => {
+            const published = ((agent.versions as Json[] | undefined) ?? []).find(
+              (item) => item.version === agent.published_version
+            );
+            return [agent.skill_ids, published?.skill_ids].some((ids) => ((ids as string[] | undefined) ?? []).includes(second));
+          })
+          .map((agent) => String(agent.name || agent.id));
+        if (users.length) {
+          throw new HttpError(
+            409,
+            `このスキルは業務 Agent（${users.join("、")}）が使っています。業務 Agent のスキルから外してから削除してください。`
+          );
+        }
         state.skills = state.skills.filter((candidate) => candidate.id !== second);
         return { skills: state.skills, metadata: { count: state.skills.length } };
       }
@@ -1348,6 +1461,18 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (second === "marketplaces") {
       if (method === "GET" && at("plugins", "marketplaces")) return { marketplaces: state.marketplaces };
       if (method === "POST" && at("plugins", "marketplaces")) {
+        // backend の add_plugin_marketplace と同じ検証（#928。同じ ID は上書きせず 409）。
+        const id = String(body.id ?? "").trim();
+        if (!id) throw new HttpError(400, "マーケットプレイスの ID を入力してください。");
+        if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(id)) {
+          throw new HttpError(
+            422,
+            "マーケットプレイスの ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。"
+          );
+        }
+        if (state.marketplaces.some((source) => source.id === id)) {
+          throw new HttpError(409, "同じ ID のマーケットプレイスがあります。");
+        }
         const source = {
           id: body.id,
           name: body.name ?? body.id,
@@ -1365,7 +1490,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       }
       if (third && at("plugins", "marketplaces", "*", "plugins") && method === "GET") {
         const source = findOr404(state.marketplaces, "id", third, "marketplace");
-        return source.plugin_count ? MOCK_MARKETPLACE_LISTING : { name: source.name, plugins: [] };
+        if (!source.plugin_count) return { name: source.name, plugins: [] };
+        return {
+          ...MOCK_MARKETPLACE_LISTING,
+          plugins: MOCK_MARKETPLACE_LISTING.plugins.map(publicPluginManifest),
+        };
       }
       if (third && at("plugins", "marketplaces", "*") && method === "DELETE") {
         findOr404(state.marketplaces, "id", third, "marketplace");
@@ -1384,7 +1513,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       }
       if (!manifest?.id) throw new HttpError(400, "plugin manifest is required");
       if (state.plugins.some((plugin) => plugin.id === manifest.id)) {
-        throw new HttpError(409, `plugin already installed: ${String(manifest.id)}`);
+        throw new HttpError(409, "このプラグインは導入済みです。");
       }
       const record = pluginRecord(manifest, marketplaceId);
       state.plugins.push(record);
@@ -1394,10 +1523,33 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return record;
     }
     if (at("plugins", "*")) {
-      const plugin = findOr404(state.plugins, "id", second, "plugin");
+      const plugin = state.plugins.find((candidate) => candidate.id === second);
+      if (!plugin) throw new HttpError(404, "プラグインが見つかりません。");
       if (method === "GET") return plugin;
+      // 業務 Agent が下書きか公開中の版で使うスキルを含むプラグインは、無効化・削除しない
+      // （backend の PluginRegistry._ensure_not_referenced。#1032）。
+      if ((method === "PATCH" && body.enabled === false) || method === "DELETE") {
+        const manifest = (plugin.manifest as Json | undefined) ?? {};
+        const pluginSkillIds = new Set(((manifest.skills as Json[] | undefined) ?? []).map((skill) => String(skill.id)));
+        const users = state.agents
+          .filter((agent) => {
+            const published = ((agent.versions as Json[] | undefined) ?? []).find(
+              (item) => item.version === agent.published_version
+            );
+            return [agent.skill_ids, published?.skill_ids].some((ids) =>
+              ((ids as string[] | undefined) ?? []).some((id) => pluginSkillIds.has(id))
+            );
+          })
+          .map((agent) => String(agent.name || agent.id));
+        if (users.length) {
+          throw new HttpError(
+            409,
+            `このプラグインのスキルは業務 Agent（${users.join("、")}）が使っています。業務 Agent のスキルから外して公開してから、無効化・削除してください。`
+          );
+        }
+      }
       if (method === "PATCH") {
-        plugin.enabled = Boolean(body.enabled);
+        if (body.enabled !== undefined) plugin.enabled = Boolean(body.enabled);
         return plugin;
       }
       if (method === "DELETE") {
@@ -1521,6 +1673,15 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (third && at("settings", "mcp-connections", "*")) {
         const connection = findOr404(store.connections, "server_id", third, "MCP 接続");
         if (method === "PATCH") {
+          // RAG / NL2SQL の認証方式・audience は変えられない（backend と同じ 400。#1014）。
+          const builtinAuthChanged =
+            connection.source === "builtin" &&
+            ((body.auth_mode != null && body.auth_mode !== connection.auth_mode) ||
+              (body.service_audience != null &&
+                (String(body.service_audience).trim() || third) !== connection.service_audience));
+          if (builtinAuthChanged) {
+            throw new HttpError(400, "RAG / NL2SQL の接続の認証方式と audience は変えられません。");
+          }
           Object.assign(connection, mcpConnection({ ...body, server_id: third }, connection));
           return connection;
         }

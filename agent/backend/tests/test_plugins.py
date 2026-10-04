@@ -47,9 +47,9 @@ def test_plugin_in_use_cannot_be_disabled_or_uninstalled() -> None:
         AgentProfile(id=agent_id, name="referenced", skill_ids=[skill_id])
     )
     try:
-        with pytest.raises(ValueError, match="referenced by agents"):
+        with pytest.raises(ValueError, match=r"業務 Agent（referenced）が使っています"):
             registry.set_enabled(plugin_id, False)
-        with pytest.raises(ValueError, match="referenced by agents"):
+        with pytest.raises(ValueError, match=r"業務 Agent（referenced）が使っています"):
             registry.uninstall(plugin_id)
     finally:
         runtime_repository.delete_agent(agent_id)

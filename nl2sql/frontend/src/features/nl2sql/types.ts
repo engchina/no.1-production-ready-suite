@@ -1032,6 +1032,8 @@ export interface ProfileSyncJobData {
   agent_result?: AssetRefreshData | null;
   error_code: string;
   error_message_ja: string;
+  /** 失敗した工程（失敗時に phase は failed になるため別に持つ）。古い job には無い。 */
+  failed_phase?: ProfileSyncJobPhase | null;
   retry_of_job_id?: string | null;
   created_at: string;
   started_at?: string | null;
