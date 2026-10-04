@@ -4,6 +4,8 @@
  */
 export const AUTH_MESSAGES = {
   loading: "認証状態を確認しています。",
+  sessionCheckError: "ログインの状態を確認できませんでした。",
+  sessionCheckErrorFallback: "サーバーに接続できないか、一時的に利用できません。少し待ってから再試行してください。",
   required: "必須",
   requestId: "リクエストID",
   loginTitle: "システムにログイン",

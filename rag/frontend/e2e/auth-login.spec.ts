@@ -196,6 +196,32 @@ test("ログイン中に API が 401 を返したらログイン画面へ戻す"
   await expect(page.getByRole("heading", { name: "システムにログイン" })).toBeVisible();
 });
 
+test("起動時のログインの確認が 503 ならログイン画面へ移さず、再試行で元の画面を開く（#1061）", async ({ page }) => {
+  await mockAuthApi(page, loginTarget("admin.user"));
+  let unavailable = true;
+  // mockAuthApi の後に登録した route が優先される。
+  await page.route("**/api/auth/me", (route) =>
+    unavailable
+      ? route.fulfill({
+          status: 503,
+          json: { data: null, error_messages: ["一時的に利用できません。"], warning_messages: [] },
+        })
+      : route.fallback()
+  );
+
+  await page.goto("/settings/appearance");
+  const error = page.getByTestId("auth-session-error");
+  await expect(error).toContainText("ログインの状態を確認できませんでした。");
+  await expect(error).toContainText("一時的に利用できません。");
+  await expect(page).toHaveURL(/\/settings\/appearance$/);
+  await expectNoPageOverflow(page);
+
+  unavailable = false;
+  await error.getByRole("button", { name: "再試行" }).click();
+  await expect(page.getByRole("heading", { name: "外観", level: 1 })).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/appearance$/);
+});
+
 test("アカウント欄のパスワード変更とログアウト", async ({ page }) => {
   const auth = await mockAuthApi(page, loginTarget("admin.user"));
 
