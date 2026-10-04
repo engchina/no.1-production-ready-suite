@@ -9,6 +9,7 @@ import {
 import { useEffect, useState } from "react";
 import {
   toast,
+  Banner,
   ErrorState,
   TextField,
   Card,
@@ -151,6 +152,8 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
   const [keyFileState, setKeyFileState] = useState<FeedbackState>("idle");
   const [keyFileMessage, setKeyFileMessage] = useState("");
   const [keyFileExists, setKeyFileExists] = useState<boolean | null>(null);
+  // config はあるが読めないときの理由。欄が空でも「未設定」と見せずに警告する（#1067）。
+  const [configError, setConfigError] = useState<{ path: string; reason: string } | null>(null);
   const [namespaceFetchState, setNamespaceFetchState] = useState<FeedbackState>("idle");
   const [namespaceFetchMessage, setNamespaceFetchMessage] = useState("");
   const [configTestState, setConfigTestState] = useState<ConfigTestState>({ phase: "idle" });
@@ -178,6 +181,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
       setDraft(loaded);
       setBaseline(loaded);
       setKeyFileExists(oci.key_file_exists);
+      setConfigError(configErrorFrom(oci));
       setLoadState("success");
     }).catch((cause: unknown) => {
       if (isAbortError(cause)) return;
@@ -235,6 +239,7 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
       });
       setBaseline((current) => current && normalizeOciSettingsDraft({ ...current, ...runtimeOciSettingsToDraft(saved) }));
       setKeyFileExists(saved.key_file_exists);
+      setConfigError(configErrorFrom(saved));
       setDraft((current) =>
         normalizeOciSettingsDraft({
           ...current,
@@ -455,6 +460,11 @@ export function OciSettingsPage({ api, errorMessage }: OciSettingsPageProps) {
             <CardDescription>{t("settings.oci.auth.cardDescription")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
+            {configError ? (
+              <Banner severity="warning">
+                {t("settings.oci.configError", configError)}
+              </Banner>
+            ) : null}
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <ConfigFileField
                 id="oci-config-file"
@@ -779,6 +789,12 @@ function ConfigTestStages({ stages }: { stages: readonly OciConfigTestStage[] })
       ))}
     </ol>
   );
+}
+
+function configErrorFrom(settings: OciSettingsData): { path: string; reason: string } | null {
+  const reason = settings.config_error?.trim();
+  if (!reason) return null;
+  return { path: settings.config_file || FIXED_OCI_CONFIG_FILE, reason };
 }
 
 function runtimeOciSettingsToDraft(

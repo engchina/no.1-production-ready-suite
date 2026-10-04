@@ -105,6 +105,7 @@ export {
   type ModelSettingsTestResult,
   type ModelSettingsTestStatus,
   type ModelSettingsTestTargetType,
+  type ModelSettingsUpdatePayload,
 } from "./model/types";
 
 // データベース設定（#108）

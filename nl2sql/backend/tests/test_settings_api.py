@@ -479,12 +479,16 @@ def test_read_object_storage_namespace_uses_oci_sdk(
         SimpleNamespace(import_module=fake_import_module),
     )
     config_file = tmp_path / "config"
+    # 取得に使う config は実行中の設定のもの（要求の config_file は使わない。#1067）。
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
 
     resp = client.post(
         "/api/settings/oci/object-storage/namespace",
         json={
-            "config_file": str(config_file),
-            "profile": "DEFAULT",
+            "config_file": str(tmp_path / "other"),
+            "profile": "OTHER",
             "region": "ap-osaka-1",
         },
     )
@@ -647,7 +651,7 @@ def test_update_oci_settings_does_not_write_empty_config_defaults(
     assert "PLATFORM_OCI_REGION" not in env_text
 
 
-def test_read_oci_config_reports_missing_profile(tmp_path: Path) -> None:
+def test_read_oci_config_reports_missing_profile(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
     config_file = tmp_path / "config"
     config_file.write_text(
         "[DEFAULT]\n"
@@ -658,9 +662,14 @@ def test_read_oci_config_reports_missing_profile(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    # 読むのは実行中の設定の config / profile（#1067）。
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "MISSING")
+
     resp = client.post(
         "/api/settings/oci/config/read",
-        json={"config_file": str(config_file), "profile": "MISSING"},
+        json={"config_file": str(config_file), "profile": "DEFAULT"},
     )
 
     assert resp.status_code == 404

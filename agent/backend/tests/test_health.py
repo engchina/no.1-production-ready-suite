@@ -1,6 +1,7 @@
 """health / Agent Runtime の疎通テスト（Oracle 不要）。"""
 
 import base64
+import csv
 import hashlib
 import io
 import json
@@ -292,6 +293,24 @@ class _FakeOracleCursor:
                 (row.get("payload_json"),)
                 for row in self._store.rows_by_table.get("AGENT_RUNTIME_EVENTS", [])
                 if row.get("event_type") == event_type
+            ]
+            return
+        if (
+            normalized.startswith("SELECT DISTINCT S.TOOL_NAME")
+            and "FROM AGENT_RUNTIME_STEPS" in normalized
+        ):
+            run_ids = {
+                row["run_id"] for row in self._store.rows_by_table.get("AGENT_RUNTIME_RUNS", [])
+            }
+            self._rows = [
+                (name,)
+                for name in sorted(
+                    {
+                        row["tool_name"]
+                        for row in self._store.rows_by_table.get("AGENT_RUNTIME_STEPS", [])
+                        if row.get("tool_name") and row["run_id"] in run_ids
+                    }
+                )
             ]
             return
         if normalized.startswith("SELECT COUNT(*)") and "FROM AGENT_RUNTIME_RUNS" in normalized:
@@ -885,6 +904,7 @@ def test_oci_settings_defaults_match_rag_when_credentials_missing(
         "key_file_exists": False,
         "config_file_exists": False,
         "config_source": "runtime",
+        "config_error": None,
     }
 
     storage_resp = client.get("/api/settings/upload-storage")
@@ -897,7 +917,9 @@ def test_oci_settings_defaults_match_rag_when_credentials_missing(
     assert storage["object_storage_bucket"] == ""
 
 
-def test_oci_config_read_parses_default_profile_like_rag(tmp_path: Path) -> None:
+def test_oci_config_read_parses_default_profile_like_rag(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
     config = tmp_path / "config"
     config.write_text(
         "\n".join(
@@ -914,9 +936,16 @@ def test_oci_config_read_parses_default_profile_like_rag(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
+    # 読むのは実行中の設定の config / profile（要求の config_file は使わない。#1067）。
+    monkeypatch.setattr(
+        agent_router,
+        "get_settings",
+        lambda: SimpleNamespace(oci_config_file=str(config), oci_config_profile="DEFAULT"),
+    )
+
     resp = client.post(
         "/api/settings/oci/config/read",
-        json={"config_file": str(config), "profile": "DEFAULT"},
+        json={"config_file": str(tmp_path / "other"), "profile": "OTHER"},
     )
 
     assert resp.status_code == 200
@@ -963,12 +992,18 @@ def test_oci_object_storage_namespace_reads_from_sdk_like_rag(
         raise AssertionError(name)
 
     monkeypatch.setattr(shared_oci, "importlib", SimpleNamespace(import_module=fake_import_module))
+    # 取得に使う config は実行中の設定のもの（要求の config_file は使わない。#1067）。
+    monkeypatch.setattr(
+        agent_router,
+        "get_settings",
+        lambda: SimpleNamespace(oci_config_file=str(config_file), oci_config_profile="DEFAULT"),
+    )
 
     resp = client.post(
         "/api/settings/oci/object-storage/namespace",
         json={
-            "config_file": str(config_file),
-            "profile": "DEFAULT",
+            "config_file": str(tmp_path / "other"),
+            "profile": "OTHER",
             "region": "ap-osaka-1",
         },
     )
@@ -2443,6 +2478,29 @@ def test_oracle_projection_audit_uses_db_side_pagination() -> None:
     )
 
 
+def test_oracle_projection_audit_returns_recorded_tool_names() -> None:
+    """絞り込みに依らず、監査に記録されたツール名（MCP 接続のツールを含む）を返す（#983）。"""
+    store = _FakeOracleStore()
+
+    def connect() -> _FakeOracleConnection:
+        return _FakeOracleConnection(store)
+
+    repository = AgentRuntimeOracleNormalizedRepository(
+        connect_factory=connect,
+    )
+    _seed_run(repository, "Oracle projection tool names", [ToolCall(name="echo", arguments={})])
+    _seed_waiting_run(
+        repository,
+        "Oracle projection MCP tool names",
+        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "tool names"})],
+    )
+
+    data = repository.list_tool_call_audit_projection(tool_name="echo", offset=0, limit=10)
+
+    assert data.total == 1
+    assert data.tool_names == ["echo", "nl2sql__nl2sql_query"]
+
+
 def test_oracle_projection_incremental_mode_upserts_without_full_delete() -> None:
     store = _FakeOracleStore()
 
@@ -2614,9 +2672,9 @@ def test_agent_profile_crud_and_tool_allowlist() -> None:
         json={"agent_id": "agent_echo_only", "goal": "disabled agent を実行する"},
     )
     assert blocked_run.status_code == 409
-    assert blocked_run.json()["error_messages"] == [
-        "agent_disabled: 無効な業務 Agent は実行できません。"
-    ]
+    # 画面に出す文は code を前に付けず、code は `error_code` で返す（#911）。
+    assert blocked_run.json()["error_messages"] == ["無効な業務 Agent は実行できません。"]
+    assert blocked_run.json()["error_code"] == "agent_disabled"
     client.request("DELETE", "/api/agents/agent_echo_only")
 
 
@@ -2893,6 +2951,41 @@ def test_global_tool_call_audit_filters_and_exports_csv() -> None:
     assert "global audit export" in csv_resp.text
 
 
+def test_global_tool_call_audit_lists_recorded_tool_names() -> None:
+    """MCP 接続のツールは `/api/tools` に出ないため、監査に記録されたツール名を返す（#983）。"""
+    _seed_api_run("audit tool names echo", [ToolCall(name="echo", arguments={})])
+    _seed_api_run(
+        "audit tool names mcp",
+        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "tool names"})],
+        approval=True,
+    )
+
+    audit = client.get("/api/audit/tool-calls?tool_name=echo&limit=1")
+
+    assert audit.status_code == 200
+    data = audit.json()["data"]
+    assert {"echo", "nl2sql__nl2sql_query"} <= set(data["tool_names"])
+    assert data["tool_names"] == sorted(data["tool_names"])
+    assert all(record["tool_name"] == "echo" for record in data["records"])
+    tools = client.get("/api/tools").json()["data"]["tools"]
+    assert "nl2sql__nl2sql_query" not in {tool["name"] for tool in tools}
+
+
+def test_global_tool_call_audit_csv_is_excel_safe() -> None:
+    """CSV は BOM 付きで、数式として扱われる値は `'` で始める（#983）。"""
+    goal = '=HYPERLINK("https://example.invalid","監査")'
+    run = _seed_api_run(goal, [ToolCall(name="echo", arguments={})])
+
+    csv_resp = client.get(f"/api/audit/tool-calls.csv?run_id={run['id']}")
+
+    assert csv_resp.status_code == 200
+    assert csv_resp.content.startswith(b"\xef\xbb\xbf")
+    rows = list(csv.DictReader(io.StringIO(csv_resp.content.decode("utf-8-sig"))))
+    assert rows[0]["run_goal"] == f"'{goal}"
+    assert rows[0]["tool_name"] == "echo"
+    assert rows[0]["duration_ms"].isdigit()
+
+
 def test_global_tool_call_audit_filters_guardrail_warnings() -> None:
     run = _seed_api_run(
         "global audit guardrail export",
@@ -3008,6 +3101,70 @@ def test_replay_run_creates_new_builtin_run_with_same_goal(monkeypatch: MonkeyPa
     assert replayed["status"] == "queued"
     assert replayed["steps"] == []
     assert scheduled == [replayed["id"]]
+
+
+def test_replay_run_does_not_inherit_source_markers(monkeypatch: MonkeyPatch) -> None:
+    """再実行は新しい Run。評価の dry-run・自動実行・MCP の印を引き継がない（#911）。"""
+    monkeypatch.setattr(agent_router, "_schedule_builtin_run", lambda run: None)
+    source = runtime_module.runtime_repository.create_builtin_run(
+        RunCreateRequest(
+            goal="評価の Run を再実行する",
+            agent_id="default",
+            metadata={
+                "evaluation_job_id": "job-911",
+                "evaluation_case_id": "case-911",
+                runtime_module.EVALUATION_DRY_RUN_KEY: True,
+                "automation_id": "automation-911",
+                "source": "mcp",
+            },
+        ),
+        created_by_user_uuid=LOCAL_DEBUG_USER_UUID,
+    )
+
+    replay = client.post(f"/api/runs/{source.id}/replay")
+
+    assert replay.status_code == 200, replay.text
+    metadata = replay.json()["data"]["metadata"]
+    assert metadata["replayed_from_run_id"] == source.id
+    inherited = {
+        "evaluation_job_id",
+        "evaluation_case_id",
+        runtime_module.EVALUATION_DRY_RUN_KEY,
+        "automation_id",
+        "source",
+    } & set(metadata)
+    assert inherited == set()
+
+
+def test_cancel_finished_run_keeps_result_and_returns_conflict() -> None:
+    """終了した Run の取消は 409 で、完了の結果を取消済みで上書きしない（#911）。"""
+    run = _seed_api_run("完了した実行は取り消さない")
+    assert run["status"] == "completed"
+
+    response = client.post(f"/api/runs/{run['id']}/cancel")
+
+    assert response.status_code == 409, response.text
+    assert response.json()["error_messages"] == [
+        "この実行はすでに終了しているため、取り消せません。"
+    ]
+    after = client.get(f"/api/runs/{run['id']}").json()["data"]
+    assert after["status"] == "completed"
+    assert after["events"] == run["events"]
+    # 品質評価の取消・WebSocket の取消が通る repository も、終了した Run を変えない。
+    kept = runtime_module.runtime_repository.cancel_run(run["id"])
+    assert kept.status == "completed"
+    assert len(kept.events) == len(run["events"])
+
+
+def test_run_and_approval_not_found_messages_are_japanese() -> None:
+    """実行履歴・承認の画面の Toast に英語の理由を出さない（#911）。"""
+    for path in ("/api/runs/missing-run/cancel", "/api/runs/missing-run/replay"):
+        response = client.post(path)
+        assert response.status_code == 404
+        assert response.json()["error_messages"] == ["実行が見つかりません。"]
+    decision = client.post("/api/approvals/missing-approval/decision", json={"approved": True})
+    assert decision.status_code == 404
+    assert decision.json()["error_messages"] == ["承認の依頼が見つかりません。"]
 
 
 def test_sse_events_returns_recorded_events() -> None:
