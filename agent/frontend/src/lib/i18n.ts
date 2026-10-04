@@ -756,6 +756,11 @@ const agentJa = {
   "common.permission": "権限",
   "common.result": "結果",
   "common.error": "エラー",
+  // API の失敗の文に使える文が無いとき（組み込みの例外など）の既定の文（#906）。timeout・通信断は共通の文になる。
+  "common.error.load": "読み込めませんでした。時間をおいて再試行してください。",
+  "common.error.operation": "操作を完了できませんでした。時間をおいてもう一度実行してください。",
+  "common.error.save": "保存できませんでした。時間をおいてもう一度実行してください。",
+  "common.error.retryLater": "時間をおいてもう一度実行してください。",
   "common.search": "検索",
   "common.clearSearch": "検索語をクリア",
   // 一覧の絞り込みの件数の読み上げ（SearchField の resultCountLabel。#535）。
