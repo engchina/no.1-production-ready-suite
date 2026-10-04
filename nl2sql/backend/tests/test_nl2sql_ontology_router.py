@@ -1199,7 +1199,9 @@ def test_execute_query_session_route_requires_sql_execute_permission(
             question="受注件数を表示",
             profile_id="sales",
             allowed_objects=AllowedObjects(table_names=["APP.ORDERS"]),
-        )
+        ),
+        # 持ち主の無い session は本人以外に開かない（#1126）。route を呼ぶ利用者の session にする。
+        actor_user_uuid="user-1",
     )
     generated = api.generate_sql(created.session.id, _generate_request(created))
     confirmation = _confirmation(generated)
