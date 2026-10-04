@@ -27,7 +27,7 @@ from security_support import (
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from app.features.agent import router as agent_router
+from app.features.agent import builtin_runtime
 from app.features.agent.runtime import (
     AgentProfile,
     RunCreateRequest,
@@ -257,8 +257,8 @@ def test_run_creation_rejects_reserved_metadata(
     async def record(run_id: str) -> None:
         scheduled.append(run_id)
 
-    monkeypatch.setattr(agent_router.builtin_runtime, "resume_run", record)
-    monkeypatch.setattr(agent_router.builtin_runtime, "execute_run", record)
+    monkeypatch.setattr(builtin_runtime, "resume_run", record)
+    monkeypatch.setattr(builtin_runtime, "execute_run", record)
     _scoped_user(auth, "reserved-metadata-operator", ["agent.runs.operate"])
     headers = login("reserved-metadata-operator")
     before = {run.id for run in runtime_repository.list_runs()}
@@ -281,7 +281,7 @@ def test_run_creation_keeps_unreserved_metadata(
     async def record(run_id: str) -> None:
         return None
 
-    monkeypatch.setattr(agent_router.builtin_runtime, "execute_run", record)
+    monkeypatch.setattr(builtin_runtime, "execute_run", record)
     _scoped_user(auth, "unreserved-metadata-operator", ["agent.runs.operate"])
     headers = login("unreserved-metadata-operator")
 
