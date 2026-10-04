@@ -7,6 +7,7 @@ import importlib
 import logging
 import re
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from functools import lru_cache
@@ -26,11 +27,26 @@ from app.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 _ORACLE_INVALID_CREDENTIAL_RE = re.compile(r"\bORA-01017\b", re.IGNORECASE)
+_ORACLE_ACCOUNT_LOCKED_RE = re.compile(r"\bORA-28000\b", re.IGNORECASE)
 DEEPSEC_DATA_USER_INVALID_CREDENTIAL_MESSAGE = (
     "DeepSec DATA USER の Oracle ログインに失敗しました。Deep Data Security 画面で "
     "DATA USER パスワードを保存し直し、Oracle END USER へ同期してください。"
     "解消しない場合は DATA USER 認証の「Oracle へ同期」を再実行してください。"
 )
+DEEPSEC_DATA_USER_LOCKED_MESSAGE = (
+    "DeepSec DATA USER の Oracle アカウントがロックされているため、業務データに接続できません。"
+    "データベース管理者にロックの解除を依頼し、Deep Data Security 画面で DATA USER パスワードを"
+    "保存し直して Oracle END USER へ同期してください。"
+)
+# DATA USER のログインが資格情報・アカウントのロックで失敗したら、この秒数のあいだ再接続しない。
+# 要求のたびにログインを試すと、1 回ごとに接続の確立（遅延の大きいネットワークで約 3 秒）を待ち、
+# 失敗したログインの回数で Oracle がアカウントをロックし続ける。設定の保存（`close_oracle_pools`）で
+# 忘れる。
+DATA_USER_LOGIN_FAILURE_BACKOFF_SECONDS = 60.0
+# 時刻の取得（テストで差し替える）。
+_monotonic = time.monotonic
+# pool が埋まっているときに待つ上限（ミリ秒）。無期限に待たない（`SharedOraclePool` と同じ）。
+_POOL_WAIT_TIMEOUT_MS = 30_000
 
 
 class OraclePoolManager:
@@ -43,6 +59,8 @@ class OraclePoolManager:
         # DATA USER の password を保存すると、設定の再読込で値が変わるため、古い pool を作り直す。
         self._data_pool_identity: tuple[str, str] | None = None
         self._lock = threading.RLock()
+        # DATA USER のログインの失敗（時刻・利用者に出す文）。期間内は再接続せずに失敗させる。
+        self._data_login_failure: tuple[float, str] | None = None
 
     def validate_deepsec_configuration(self) -> None:
         """共有 DATA USER の direct logon に必要な DeepSec 設定を検証する。"""
@@ -125,8 +143,18 @@ class OraclePoolManager:
         self.validate_deepsec_configuration()
         if not self.settings.oracle_deepsec_enabled:
             raise OracleAdapterError("Deep Data Security が有効ではありません。")
-        pool = self._get_pool(data_plane=True)
-        connection = pool.acquire()
+        self._raise_if_data_login_recently_failed()
+        pool: Any | None = None
+        try:
+            pool = self._get_pool(data_plane=True)
+            connection = pool.acquire()
+        except Exception as exc:
+            message = _data_user_login_failure_message(exc)
+            if message is None:
+                raise
+            self._remember_data_login_failure(pool, message, exc)
+            raise OracleAdapterError(message) from exc
+        self._data_login_failure = None
         self._apply_call_timeout(connection)
         try:
             yield connection
@@ -146,6 +174,41 @@ class OraclePoolManager:
             self._data_pool = None
             self._data_pool_identity = None
             self._control_pool = None
+            self._data_login_failure = None
+
+    def _raise_if_data_login_recently_failed(self) -> None:
+        """直前の DATA USER のログインの失敗から間もなければ、接続を試さずに同じ文で失敗させる。"""
+
+        failure = self._data_login_failure
+        if failure is None:
+            return
+        failed_at, message = failure
+        if _monotonic() - failed_at < DATA_USER_LOGIN_FAILURE_BACKOFF_SECONDS:
+            raise OracleAdapterError(message)
+        self._data_login_failure = None
+
+    def _remember_data_login_failure(
+        self, pool: Any | None, message: str, exc: BaseException
+    ) -> None:
+        """ログインの失敗を覚え、作った pool を捨てる（次は新しい pool で 1 回だけ試す）。"""
+
+        self._data_login_failure = (_monotonic(), message)
+        with self._lock:
+            if pool is not None and self._data_pool is pool:
+                self._data_pool = None
+            else:
+                pool = None
+        if pool is not None:
+            with suppress(Exception):
+                pool.close(force=True)
+        logger.warning(
+            "oracle_deepsec_data_user_login_failed",
+            extra={
+                "exception_type": type(exc).__name__,
+                "account_locked": bool(_ORACLE_ACCOUNT_LOCKED_RE.search(str(exc))),
+                "backoff_seconds": DATA_USER_LOGIN_FAILURE_BACKOFF_SECONDS,
+            },
+        )
 
     def _data_user_identity(self) -> tuple[str, str]:
         password = self.settings.oracle_deepsec_data_user_password
@@ -182,6 +245,10 @@ class OraclePoolManager:
                 kwargs = oracle_connect_kwargs(self.settings)
             # result cache を使わない（ADB の内部エラーと接続断を避ける。#333）。
             kwargs.update(min=1, max=4, increment=1, session_callback=init_oracle_session)
+            timed_wait = getattr(oracledb, "POOL_GETMODE_TIMEDWAIT", None)
+            if timed_wait is not None:
+                # 接続を借りる待ちを無期限にしない（要求・worker のスレッドを止め続けない）。
+                kwargs.update(getmode=timed_wait, wait_timeout=_POOL_WAIT_TIMEOUT_MS)
             try:
                 pool = oracledb.create_pool(**kwargs)
             except Exception as exc:
@@ -241,6 +308,20 @@ class OraclePoolManager:
 
 def _is_invalid_data_user_credential_error(exc: Exception) -> bool:
     return bool(_ORACLE_INVALID_CREDENTIAL_RE.search(str(exc)))
+
+
+def _data_user_login_failure_message(exc: BaseException) -> str | None:
+    """DATA USER のログインの失敗（資格情報・アカウントのロック）なら利用者に出す文を返す。"""
+
+    text = str(exc)
+    cause = exc.__cause__
+    if cause is not None:
+        text = f"{text} {cause}"
+    if _ORACLE_ACCOUNT_LOCKED_RE.search(text):
+        return DEEPSEC_DATA_USER_LOCKED_MESSAGE
+    if _ORACLE_INVALID_CREDENTIAL_RE.search(text):
+        return DEEPSEC_DATA_USER_INVALID_CREDENTIAL_MESSAGE
+    return None
 
 
 @lru_cache
