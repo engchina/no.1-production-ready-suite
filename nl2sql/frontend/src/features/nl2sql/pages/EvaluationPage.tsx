@@ -1,4 +1,6 @@
 import {
+  ApiErrorBanner,
+  apiErrorMessage,
   Button,
   Banner,
   DataTable,
@@ -80,13 +82,11 @@ const ACTIVE_STATUSES = new Set<QualityEvaluationStatus>(["pending", "running"])
 const sectionClass = "grid min-w-0 gap-5 rounded-lg border border-border bg-surface p-4 shadow-sm lg:p-5";
 
 type FormErrors = Partial<Record<"profile" | "file" | "engines" | "repeat", string>>;
-/** job の中止・削除の失敗を出す位置（progress = 実行状況の「中止」の下、recent = 最近の job の一覧の上。#995）。 */
-type JobActionError = { origin: "progress" | "recent"; message: string } | null;
-
-/** 中止・削除の失敗の文。backend の理由（他の利用者の job・状態の競合など）があればそれを出す。 */
-function jobActionErrorMessage(cause: unknown, fallback: string) {
-  return cause instanceof ApiError && cause.message ? cause.message : fallback;
-}
+/**
+ * job の中止・削除の失敗（progress = 実行状況の「中止」の下、recent = 最近の job の一覧の上。#995）。
+ * 文は共通の API の失敗の表示（messaging.md §10.3.1）で、backend の理由（他の利用者の job・状態の競合など）を出す。
+ */
+type JobActionError = { origin: "progress" | "recent"; error: unknown; fallback: string } | null;
 
 function qualityEvaluationQueryPollingInterval(
   status: QualityEvaluationStatus | undefined,
@@ -353,10 +353,7 @@ export function EvaluationPage() {
     deleteJobMutation.mutate(job, {
       // 失敗は Toast ではなく最近の job の一覧の上に、backend の理由とともに残す（messaging.md §10。#995）。
       onError: (cause) =>
-        setJobActionError({
-          origin: "recent",
-          message: jobActionErrorMessage(cause, t("qualityEvaluation.error.delete")),
-        }),
+        setJobActionError({ origin: "recent", error: cause, fallback: t("qualityEvaluation.error.delete") }),
     });
   };
 
@@ -372,10 +369,7 @@ export function EvaluationPage() {
     setJobActionError(null);
     cancelJobMutation.mutate(job, {
       onError: (cause) =>
-        setJobActionError({
-          origin,
-          message: jobActionErrorMessage(cause, t("qualityEvaluation.error.cancel")),
-        }),
+        setJobActionError({ origin, error: cause, fallback: t("qualityEvaluation.error.cancel") }),
     });
   };
 
@@ -725,7 +719,11 @@ export function EvaluationPage() {
                 <JobProgress
                   job={currentJob}
                   onCancel={(job) => cancelJob(job, "progress")}
-                  error={jobActionError?.origin === "progress" ? jobActionError.message : ""}
+                  error={
+                    jobActionError?.origin === "progress"
+                      ? apiErrorMessage(jobActionError.error, jobActionError.fallback)
+                      : ""
+                  }
                   cancelling={
                     cancelJobMutation.isPending &&
                     cancelJobMutation.variables?.job_id === currentJob.job_id
@@ -867,7 +865,11 @@ export function EvaluationPage() {
             description={t("qualityEvaluation.recent.description")}
           />
           {jobActionError?.origin === "recent" ? (
-            <Banner severity="danger">{jobActionError.message}</Banner>
+            <ApiErrorBanner
+              error={jobActionError.error}
+              fallback={jobActionError.fallback}
+              testId="quality-evaluation-recent-job-action-error"
+            />
           ) : null}
           <div>
             {recentJobsQuery.isLoading ? (
