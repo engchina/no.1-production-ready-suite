@@ -18,9 +18,7 @@ from app.features.nl2sql.models import (
     SchemaViewDependency,
 )
 from app.features.nl2sql.object_visibility import (
-    HIDDEN_OBJECT_GENERIC_MESSAGE,
     filter_user_visible_catalog,
-    hidden_object_blocked_message,
     is_user_visible_object_name,
     is_user_visible_schema_object,
 )
@@ -305,32 +303,3 @@ def test_shared_platform_and_other_product_tables_are_hidden(name: str) -> None:
     # 接頭辞が一致しない業務テーブルは従来どおり見える。
     assert is_user_visible_object_name("PLATFORMS") is True
     assert is_user_visible_object_name("APP.RAGE_EVENTS") is True
-
-
-def test_hidden_object_blocked_message_matches_object_kind() -> None:
-    """拒否の文は、隠す対象の種類（NL2SQL_・PLATFORM_・RAG_ / AGENT_・Oracle）ごとに変える。"""
-    nl2sql = hidden_object_blocked_message(["APP.NL2SQL_JOBS"])
-    assert nl2sql.startswith("APP.NL2SQL_JOBS: NL2SQL_ で始まる")
-    assert "システムテーブル管理" in nl2sql
-
-    platform = hidden_object_blocked_message(["APP.PLATFORM_USERS"])
-    assert platform.startswith("APP.PLATFORM_USERS: PLATFORM_ で始まる")
-    assert "NL2SQL_" not in platform and "システムテーブル管理" not in platform
-
-    for name in ("APP.RAG_DOCUMENTS", "APP.AGENT_RUNS"):
-        product = hidden_object_blocked_message([name])
-        assert product.startswith(f"{name}: RAG_ / AGENT_ で始まる")
-        assert "NL2SQL_" not in product
-
-    for name in ("V$SESSION", "SYS.USER$", '"A#B"'):
-        oracle = hidden_object_blocked_message([name])
-        assert "Oracle のシステム object" in oracle
-        assert "NL2SQL_" not in oracle
-
-    mixed = hidden_object_blocked_message(["APP.RAG_DOCUMENTS", "APP.NL2SQL_JOBS", "V$SESSION"])
-    assert mixed.index("APP.NL2SQL_JOBS:") < mixed.index("APP.RAG_DOCUMENTS:")
-    assert mixed.index("APP.RAG_DOCUMENTS:") < mixed.index("V$SESSION:")
-
-    assert hidden_object_blocked_message([]) == HIDDEN_OBJECT_GENERIC_MESSAGE
-    for prefix in ("NL2SQL_", "PLATFORM_", "RAG_", "AGENT_"):
-        assert prefix in HIDDEN_OBJECT_GENERIC_MESSAGE

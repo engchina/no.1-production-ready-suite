@@ -82,65 +82,6 @@ def is_user_visible_schema_object(owner: str, object_name: str) -> bool:
     return owner_visible and is_user_visible_object_name(object_name)
 
 
-# 業務データとして扱わない object を対象にしたときの拒否の文（#943）。種類ごとに理由を変える。
-HIDDEN_OBJECT_MESSAGES = {
-    "nl2sql": (
-        "NL2SQL_ で始まる表/VIEW は NL2SQL システム object です。"
-        "システムテーブル管理からのみ管理できます。"
-    ),
-    "platform": (
-        "PLATFORM_ で始まる表/VIEW は 3 製品で共通の基盤（ユーザー・ロールなど）のテーブルです。"
-        "業務データとして参照・変更できません。"
-    ),
-    "product": (
-        "RAG_ / AGENT_ で始まる表/VIEW は他の製品（RAG・Agent）のテーブルです。"
-        "業務データとして参照・変更できません。"
-    ),
-    "oracle": (
-        "名前に $ や # を含む object は Oracle のシステム object です。"
-        "業務データとして参照・変更できません。"
-    ),
-}
-HIDDEN_OBJECT_GENERIC_MESSAGE = (
-    "システムの表/VIEW（NL2SQL_・PLATFORM_・RAG_・AGENT_ で始まるものと、名前に $ や # を含む "
-    "Oracle のシステム object）は業務データとして参照・変更できません。"
-    "NL2SQL_ の表はシステムテーブル管理から管理します。"
-)
-_HIDDEN_OBJECT_KIND_ORDER = ("nl2sql", "platform", "product", "oracle")
-
-
-def hidden_object_kind(name: str) -> str:
-    """業務データとして扱わない object の種類（`HIDDEN_OBJECT_MESSAGES` の key）を返す。"""
-
-    parts = [_normalize_identifier_part(part) for part in _split_identifier_parts(name)]
-    if any(marker in part for part in parts for marker in _SYSTEM_OBJECT_NAME_MARKERS):
-        return "oracle"
-    object_name = parts[-1] if parts else ""
-    if object_name.startswith("NL2SQL_"):
-        return "nl2sql"
-    if object_name.startswith("PLATFORM_"):
-        return "platform"
-    if object_name.startswith(("RAG_", "AGENT_")):
-        return "product"
-    return "oracle"
-
-
-def hidden_object_blocked_message(names: list[str] | tuple[str, ...] | None = None) -> str:
-    """対象名ごとに種類に合った拒否の文を返す（対象名が無ければ全種類を挙げる文）。"""
-
-    unique = sorted({name for name in (names or []) if name})
-    if not unique:
-        return HIDDEN_OBJECT_GENERIC_MESSAGE
-    grouped: dict[str, list[str]] = {}
-    for name in unique:
-        grouped.setdefault(hidden_object_kind(name), []).append(name)
-    return " ".join(
-        f"{', '.join(grouped[kind])}: {HIDDEN_OBJECT_MESSAGES[kind]}"
-        for kind in _HIDDEN_OBJECT_KIND_ORDER
-        if kind in grouped
-    )
-
-
 def filter_user_visible_catalog(catalog: SchemaCatalog) -> SchemaCatalog:
     """过滤旧 snapshot/cache 中残留的系统对象及其依赖。"""
 
