@@ -90,6 +90,7 @@ from .logical_steps import (
     build_logical_structure_items,
 )
 from .models import (
+    STORED_JOB_REQUEST_CONTEXT,
     AdminFeedbackReviewData,
     AdminFeedbackReviewRequest,
     AgentConversationCreateData,
@@ -4581,7 +4582,9 @@ class Nl2SqlService:
         return StoredJob(
             job_id=str(data["job_id"]),
             conversation_id=str(data.get("conversation_id") or ""),
-            request=JobCreateRequest.model_validate(data["request"]),
+            request=JobCreateRequest.model_validate(
+                data["request"], context={STORED_JOB_REQUEST_CONTEXT: True}
+            ),
             business_release_id=str(data.get("business_release_id") or ""),
             actor_user_uuid=str(data.get("actor_user_uuid") or ""),
             actor_is_system_admin=_coerce_bool(data.get("actor_is_system_admin", False)),

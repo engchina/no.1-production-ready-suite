@@ -20,7 +20,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 from pr_backend_core.mcp import McpServer, McpTool, McpToolError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.concurrency import run_sync_io
 from app.features.nl2sql.models import (
@@ -81,12 +81,24 @@ class ListProfilesInput(_Input):
     limit: int = Field(default=20, ge=1, le=100, description="返す件数の上限")
 
 
+def _require_question(value: str) -> str:
+    # 空白だけの質問は画面・API（JobCreateRequest）と同じく拒否する。ジョブの作成で検証に落ちて
+    # ツールの内部エラーにならないよう、引数の誤り（MCP_TOOL_ARGUMENTS_INVALID）にする（#1054）。
+    if not value.strip():
+        raise ValueError("質問を入力してください。")
+    return value
+
+
 class RecommendProfileInput(_Input):
     question: str = Field(min_length=1, max_length=4000, description="利用者の質問（日本語）")
+
+    _validate_question = field_validator("question")(_require_question)
 
 
 class QueryInput(_Input):
     question: str = Field(min_length=1, max_length=4000, description="利用者の質問（日本語）")
+
+    _validate_question = field_validator("question")(_require_question)
     profile_id: str | None = Field(
         default=None,
         max_length=128,
