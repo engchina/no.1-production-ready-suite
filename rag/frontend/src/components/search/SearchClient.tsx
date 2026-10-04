@@ -293,7 +293,7 @@ export function SearchClient() {
               "search",
               controller.signal
             )
-          ).suggestions;
+          ).suggestions ?? [];
         } catch {
           // 類似問の照会に失敗しても通常の回答生成は続ける（停止したときは下で抜ける）。
         }
