@@ -27,10 +27,11 @@ import {
   type ApprovedFaqRecordData,
 } from "@/lib/api";
 import { PagedDataTable } from "@/components/PagedDataTable";
+import { ErrorState } from "@/components/StateViews";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { focusFirstInvalidField, requiredTextError } from "@/lib/required-fields";
-import { useApprovedFaq, useApprovedFaqMutation } from "@/lib/queries";
+import { initialLoadError, useApprovedFaq, useApprovedFaqMutation } from "@/lib/queries";
 
 const IMPORT_MODE_OPTIONS: SelectFieldOption<ApprovedFaqImportMode>[] = [
   { value: "INSERT", label: t("searchAnswerProfiles.faq.importMode.INSERT") },
@@ -52,6 +53,8 @@ export function ApprovedFaqManager({
 }) {
   const query = useApprovedFaq(searchAnswerProfileId);
   const records = query.data?.records ?? [];
+  // 初回の読み込みの失敗は、空（0 件・既定のオン）と見せずに失敗と再試行を出す。
+  const loadError = initialLoadError(query);
   const add = useApprovedFaqMutation(
     searchAnswerProfileId,
     (body: { question: string; answer: string }) =>
@@ -126,7 +129,8 @@ export function ApprovedFaqManager({
         </div>
         <Switch
           checked={query.data?.enabled ?? true}
-          disabled={query.isPending || setEnabled.isPending}
+          // 読み込めていない間（読み込み中・失敗）は今の設定が分からないので切り替えさせない。
+          disabled={!query.data || setEnabled.isPending}
           onCheckedChange={(checked) =>
             setEnabled.mutate(checked, {
               onError: (error) =>
@@ -146,6 +150,11 @@ export function ApprovedFaqManager({
         >
           <TableSkeleton columns={3} />
         </TimedLoadingState>
+      ) : loadError ? (
+        <ErrorState
+          message={errorMessage(loadError, t("searchAnswerProfiles.faq.loadError"))}
+          onRetry={() => void query.refetch()}
+        />
       ) : (
       <PagedDataTable<ApprovedFaqRecordData>
         columns={[

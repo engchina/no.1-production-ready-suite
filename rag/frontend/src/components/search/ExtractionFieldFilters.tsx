@@ -11,8 +11,8 @@ import {
 } from "@engchina/production-ready-ui";
 import { Plus, Trash2 } from "lucide-react";
 
-import { ErrorState } from "@/components/StateViews";
-import { ApiError, type ExtractionFieldDefinition } from "@/lib/api";
+import { ApiErrorState } from "@/components/StateViews";
+import { type ExtractionFieldDefinition } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
 import {
@@ -57,12 +57,9 @@ export function ExtractionFieldFilters({
   }
   if (fieldsState.status === "error") {
     return (
-      <ErrorState
-        message={
-          fieldsState.error instanceof ApiError
-            ? fieldsState.error.message
-            : t("search.filters.fields.loadError")
-        }
+      <ApiErrorState
+        error={fieldsState.error}
+        fallback={t("search.filters.fields.loadError")}
         onRetry={fieldsState.retry}
       />
     );

@@ -432,6 +432,10 @@ test("検索テストと停止は同じボタンで、フォーカスを保っ�
   await expect(button).toHaveAccessibleName("検索テスト");
   await expect(button).toBeFocused();
   await expect.poll(() => aborted).toBe(1);
+  // 停止したことを結果の領域に残す（検索だけで回答の枠が無いときも、何も出さずに空白にしない）。
+  await expect(page.getByTestId("kb-search-test-cancelled")).toHaveText(
+    "検索は途中で停止されました。必要に応じて再検索してください。"
+  );
 
   // 停止の後に再び実行できる。ダブルクリックの 2 回目（実行中に変わった直後の「停止」）では停止しない。
   await button.dblclick();

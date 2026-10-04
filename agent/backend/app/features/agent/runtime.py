@@ -1310,7 +1310,7 @@ class AgentRuntimeRepository:
     def create_agent(self, agent: AgentProfile) -> AgentProfile:
         with self._lock:
             if agent.id in self._agents:
-                raise ValueError("agent already exists")
+                raise ValueError("同じ ID の業務 Agent があります。")
             self._validate_agent_skills(agent.skill_ids)
             self._validate_agent_tools(agent.tool_names)
             now = _now()
@@ -1384,7 +1384,7 @@ class AgentRuntimeRepository:
     def delete_agent(self, agent_id: str) -> None:
         with self._lock:
             if agent_id == "default":
-                raise ValueError("default agent cannot be removed")
+                raise ValueError("既定の業務 Agent は削除できません。")
             if agent_id not in self._agents:
                 raise KeyError(agent_id)
             del self._agents[agent_id]
@@ -1621,7 +1621,11 @@ class AgentRuntimeRepository:
             {skill_id for skill_id in skill_ids if skill_registry.get(skill_id) is None}
         )
         if unknown:
-            raise ValueError(f"unknown skill: {', '.join(unknown)}")
+            # 画面の保存の失敗の帯にそのまま出る（#925）。
+            raise ValueError(
+                f"登録されていないスキルがあります: {', '.join(unknown)}。"
+                "スキルの選択から外してください。"
+            )
 
     @staticmethod
     def _require_step(run: RunState, step_id: str) -> RunStep:
