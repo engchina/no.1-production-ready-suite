@@ -1915,6 +1915,9 @@ export const ja = {
   "flow.review.edit.leaveDescription":
     "このページを離れると未保存の変更は失われます。変更を保存する場合はキャンセルしてください。",
   "flow.review.edit.leaveConfirm": "破棄して移動",
+  "flow.review.edit.switchRecipeDescription":
+    "別のレシピに切り替えると、このレシピの未保存の変更は失われます。変更を保存する場合はキャンセルしてください。",
+  "flow.review.edit.switchRecipeConfirm": "破棄して切り替え",
   "flow.review.edit.elements": "要素テキスト",
   "flow.review.edit.tableCells": "表セル",
   "flow.review.edit.tableCellLabel": "{row} 行 {col} 列のセル",
@@ -1976,6 +1979,7 @@ export const ja = {
   "documents.classification.effective_from": "有効期間の開始日",
   "documents.classification.effective_to": "有効期間の終了日",
   "documents.classification.effectiveToHelper": "この日から期間外になります。",
+  "documents.classification.periodError": "終了日は開始日より後の日付にしてください。",
   "documents.classification.save": "分類を保存",
   "documents.classification.saved": "分類と有効期間を保存しました。",
   "documents.classification.saveError": "分類と有効期間の保存に失敗しました。入力を確認して再試行してください。",
