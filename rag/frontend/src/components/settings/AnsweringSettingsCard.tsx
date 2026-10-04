@@ -14,7 +14,7 @@ import {
 import { MessageSquareText, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
 
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import {
   ApiError,
   type AnsweringSettingsData,
@@ -78,8 +78,9 @@ export function AnsweringSettingsCard() {
       <CardContent>
         {query.isPending ? <Skeleton className="h-48 w-full" /> : null}
         {query.isError ? (
-          <ErrorState
-            message={t("settings.answering.loadError")}
+          <ApiErrorState
+            error={query.error}
+            fallback={t("settings.answering.loadError")}
             onRetry={() => void query.refetch()}
           />
         ) : null}

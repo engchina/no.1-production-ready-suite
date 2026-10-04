@@ -16,7 +16,7 @@ import {
 import { History, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
 
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import { ApiError, type QueryHistorySettingsData } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
@@ -49,8 +49,9 @@ export function QueryHistorySettingsCard() {
       <CardContent>
         {query.isPending ? <Skeleton className="h-24 w-full" /> : null}
         {query.isError ? (
-          <ErrorState
-            message={t("settings.queryHistory.loadError")}
+          <ApiErrorState
+            error={query.error}
+            fallback={t("settings.queryHistory.loadError")}
             onRetry={() => void query.refetch()}
           />
         ) : null}

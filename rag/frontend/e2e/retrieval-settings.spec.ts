@@ -251,7 +251,10 @@ test("回答の検索と生成の既定を読み込めないときは、その�
 
   await page.goto("/settings/retrieval");
 
-  await expect(page.getByText("回答の検索と生成の設定を読み込めませんでした。")).toBeVisible();
+  // 取得の失敗は API の理由と再試行をそのカードに出す（ApiErrorState。#906 / #1002）。
+  const card = page.getByTestId("answering-settings-card");
+  await expect(card.getByRole("alert")).toContainText("読み込めません");
+  await expect(card.getByRole("button", { name: "再試行" })).toBeVisible();
   await expect(page.getByRole("button", { name: "回答の設定を保存" })).toHaveCount(0);
   // ほかのカード（回答の記録・質問履歴）はそのまま使える。
   await expect(page.getByRole("button", { name: "保存期間を保存" })).toBeVisible();
@@ -421,7 +424,7 @@ test("検索方法のカードは読み込みに失敗しても再試行でき�
   });
 
   await page.goto("/settings/retrieval");
-  await expect(page.getByText("質問履歴の設定を読み込めませんでした。")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("alert")).toContainText("読み込めません", { timeout: 15_000 });
   failing = false;
   await page.getByRole("button", { name: "再試行" }).click();
   await expect(page.getByRole("button", { name: "質問履歴の設定を保存" })).toBeVisible();

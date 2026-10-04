@@ -13,7 +13,7 @@ import {
 import { Archive, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
 
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import { retentionOptions, shortensRetention } from "@/components/settings/retrieval-settings.logic";
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -73,8 +73,9 @@ export function AnswerRecordRetentionCard() {
       <CardContent className="space-y-4">
         {query.isPending ? <Skeleton className="h-10 w-full max-w-md" /> : null}
         {query.isError ? (
-          <ErrorState
-            message={t("settings.answerRecords.loadError")}
+          <ApiErrorState
+            error={query.error}
+            fallback={t("settings.answerRecords.loadError")}
             onRetry={() => void query.refetch()}
           />
         ) : null}
