@@ -25,6 +25,7 @@ import {
   expandPermissions,
   type CurrentUserPayload,
 } from "./auth";
+import { maskUrlCredentials, mcpUrlCredentialProblem } from "../../src/lib/mcp-url";
 
 type Json = Record<string, unknown>;
 
@@ -662,6 +663,38 @@ function mcpConnection(payload: Json, current?: Json): Json {
     service_token_configured: Boolean(merged.service_token_configured),
     service_user_configured: Boolean(merged.service_user_configured),
   };
+}
+
+/**
+ * 保存の API の URL の検証（backend の `_validate_mcp_url` と同じ 422。#1056）。
+ * userinfo・資格情報らしい query は拒否する（値は文に含めない）。
+ */
+function validateMcpUrl(body: Json) {
+  if (body.base_url == null) return;
+  const value = String(body.base_url).trim();
+  if (!value) return;
+  const prefix = "body.base_url: Value error, ";
+  if (!/^https?:\/\/[^\s/]+/.test(value)) {
+    throw new HttpError(422, `${prefix}MCP の URL は http:// または https:// で始めてください。`);
+  }
+  const problem = mcpUrlCredentialProblem(value);
+  const guide = "資格情報は「認証」の欄（API キー・OAuth）で設定してください。";
+  if (problem?.kind === "userinfo") {
+    throw new HttpError(422, `${prefix}MCP の URL にユーザー名・パスワード（user:pass@）を含めないでください。${guide}`);
+  }
+  if (problem?.kind === "secretQuery") {
+    throw new HttpError(
+      422,
+      `${prefix}MCP の URL に資格情報のパラメータ（${problem.names.join("・")}）を含めないでください。${guide}`
+    );
+  }
+}
+
+/** 一覧・保存の応答の MCP 接続（保存した URL の資格情報は `***` に伏せる。backend と同じ。#1056）。 */
+function publicMcpConnection(connection: Json): Json {
+  const raw = typeof connection.base_url === "string" ? connection.base_url : null;
+  const masked = raw ? maskUrlCredentials(raw) : raw;
+  return { ...connection, base_url: masked, base_url_masked: Boolean(raw) && masked !== raw };
 }
 
 function validateSnapshot(snapshot: Json) {
@@ -1491,20 +1524,21 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     if (second === "mcp-connections") {
       const store = state.mcpConnections;
-      const listData = () => ({ connections: store.connections });
+      const listData = () => ({ connections: store.connections.map(publicMcpConnection) });
       if (method === "GET" && at("settings", "mcp-connections")) return listData();
       if (method === "POST" && at("settings", "mcp-connections")) {
         const id = String(body.server_id ?? "").trim();
         if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(id) || id.includes("__")) {
           throw new HttpError(422, "接続 ID は英数字で始まる 40 文字以内の英数字・「-」・「_」で入力してください。");
         }
+        validateMcpUrl(body);
         if (store.connections.some((connection) => connection.server_id === id)) {
           throw new HttpError(409, "MCP 接続の ID はすでに使われています。");
         }
         const connection = mcpConnection({ ...body, server_id: id });
         store.connections.push(connection);
         store.connections.sort((left, right) => String(left.server_id).localeCompare(String(right.server_id)));
-        return connection;
+        return publicMcpConnection(connection);
       }
       if (third && at("settings", "mcp-connections", "*", "tools") && method === "GET") {
         const connection = findOr404(store.connections, "server_id", third, "MCP 接続");
@@ -1521,6 +1555,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (third && at("settings", "mcp-connections", "*")) {
         const connection = findOr404(store.connections, "server_id", third, "MCP 接続");
         if (method === "PATCH") {
+          validateMcpUrl(body);
           // RAG / NL2SQL の認証方式・audience は変えられない（backend と同じ 400。#1014）。
           const builtinAuthChanged =
             connection.source === "builtin" &&
@@ -1531,7 +1566,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
             throw new HttpError(400, "RAG / NL2SQL の接続の認証方式と audience は変えられません。");
           }
           Object.assign(connection, mcpConnection({ ...body, server_id: third }, connection));
-          return connection;
+          return publicMcpConnection(connection);
         }
         if (method === "DELETE") {
           if (!connection.removable) {
