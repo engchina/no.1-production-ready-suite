@@ -54,6 +54,12 @@
   --field-width-md: 20rem;
   --field-width-lg: 28rem;
 
+  /* 通知（Toast）の幅（#899）。md 以上は内容に合わせてこの間で広がり、上限までは折り返さない
+     （固定の 22rem では短い 1 文でも語の途中で 2 行になった）。上限は Atlassian の Flag（400px）・
+     Material の Snackbar（344〜672px）の間で、PageHeader のタイトルを覆いすぎない幅。md 未満は画面の幅。 */
+  --toast-width-min: 22rem;          /* 308px。従来の固定幅。短い通知の見た目は変えない */
+  --toast-width-max: 32rem;          /* 448px。本文の 1 行が約 25 字（14px） */
+
   /* アイコン寸法。13/15/16/18/22/24 の 6 値混在を 4 段に統合。
      Lucide は 2px ストロークなので偶数 px 以外はサブピクセルでボケます。 */
   --icon-sm: 14px;    /* 密なセル・パンくず */

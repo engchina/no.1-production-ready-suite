@@ -31,6 +31,9 @@ export interface ToasterProps {
  * - md 未満: 上端の全幅。上端のバーに重ね、メニューのボタンは覆わない。
  * 通知は上から順に積む（新しい通知は下に足す。読み上げ・Tab の順と見た目の順をそろえる）。
  *
+ * 幅（#899）: md 以上は内容に合わせて `--toast-width-min`〜`--toast-width-max`（22〜32rem）の間で広がり、
+ * 積んだ通知は最も広い通知の幅にそろう。本文は `.pr-message-text` で日本語を文節で折り返す（語の途中で切らない）。
+ *
  * 重なり順はモーダルの下（`--z-toast` < `--z-scrim` < `--z-dialog`）。モーダル中はモーダル外を操作できないため、
  * 通知を上に重ねても押せず、確認ダイアログのボタンを覆うだけになる。
  *
@@ -167,7 +170,7 @@ function ToastCard({
       onPointerLeave={() => onEngage(hoverKey, false)}
       onFocus={() => onEngage(focusKey, true)}
       onBlur={handleBlur}
-      className="animate-toast-in pointer-events-auto flex items-start gap-2.5 rounded-lg border border-border bg-surface-raised px-3.5 py-3 shadow-[var(--shadow-toast)]"
+      className="pr-message-text animate-toast-in pointer-events-auto flex items-start gap-2.5 rounded-lg border border-border bg-surface-raised px-3.5 py-3 shadow-[var(--shadow-toast)]"
     >
       <Icon size={16} className={cn("mt-0.5 shrink-0", toneText[item.tone])} aria-hidden />
       <div className="min-w-0 flex-1">

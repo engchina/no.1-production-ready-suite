@@ -626,7 +626,7 @@ test("システムテーブル管理権限だけの利用者は初期化を実�
   await expectNoPageOverflow(page);
 });
 
-test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる操作を統一する", async ({ page }) => {
+test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる操作を統一する", async ({ page }, testInfo) => {
   await page.route("**/api/settings/database/system-tables", (route) =>
     fulfill(route, systemTables("ready"))
   );
@@ -661,7 +661,13 @@ test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる�
   const segmentTops = await sentenceSegments.evaluateAll((nodes) =>
     nodes.map((node) => Math.round(node.getBoundingClientRect().top))
   );
-  expect(segmentTops[1]).toBeGreaterThan(segmentTops[0]);
+  // #899: 通知は内容に合わせて 32rem まで広がるため、desktop では 2 文が 1 行に収まる（以前の 22rem 固定では 2 行）。
+  // 375px では幅が足りず、文の途中ではなく文末（2 文目の前）で折り返す。
+  if (testInfo.project.name === "mobile-375") {
+    expect(segmentTops[1]).toBeGreaterThan(segmentTops[0]);
+  } else {
+    expect(segmentTops[1]).toBe(segmentTops[0]);
+  }
 
   const close = toastStatus.getByRole("button", { name: "閉じる" });
   const closeBox = await close.boundingBox();

@@ -80,19 +80,21 @@ export function segmentMessageText(text: string, locale = "ja"): MessageTextSegm
 
 /**
  * 文全体を atomic inline box として描画し、幅不足時は文末を優先して折り返す。
- * 単独の長文・URL は max-width 内で break-words され、横方向へはみ出さない。
+ * 1 文が 1 行に入らないときは、文の中を文節で折り返す（`.pr-message-text` の `word-break: auto-phrase` /
+ * `text-wrap: pretty`。#899）。単独の長い文節・URL は `overflow-wrap: anywhere` で max-width の中で折り返し、
+ * 横方向へはみ出さない。
  */
 export function MessageText({ text, className }: MessageTextProps) {
   const segments = segmentMessageText(text);
   if (segments.length === 0) return null;
 
   return (
-    <span className={cn("min-w-0 whitespace-normal", className)} data-message-text>
+    <span className={cn("pr-message-text min-w-0 whitespace-normal", className)} data-message-text>
       {segments.map((segment, index) => (
         <Fragment key={`${index}-${segment.text}`}>
           {segment.separatorBefore}
           <span
-            className="inline-block max-w-full break-words align-baseline"
+            className="inline-block max-w-full align-baseline"
             data-message-sentence
           >
             {segment.text}

@@ -1417,12 +1417,13 @@ export function ProfileManagementPage() {
     if (!job) return;
     if (job.status === "done") {
       void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
-      toast.success(
-        t("profiles.dbProfileRefresh.done", {
+      // 1 文目は何が起きたかだけにし、件数は description に分ける（#899）。
+      toast.success(t("profiles.dbProfileRefresh.done"), {
+        description: t("profiles.dbProfileRefresh.doneDetail", {
           changed: job.changed_profiles,
           deleted: job.deleted_profiles,
-        })
-      );
+        }),
+      });
     } else if (job.status === "error") {
       toast.error(dbProfileRefreshRequiredMessage(job.error_code, job.error_message));
     }
@@ -1670,7 +1671,10 @@ export function ProfileManagementPage() {
           setSearchParams({ profile: saved.id }, { replace: true });
         }
       }
-      toast.success(t("profiles.message.saved"));
+      // 1 文目は何が起きたかだけにし、Oracle Profile の反映の続きは description に分ける（#899）。
+      toast.success(t("profiles.message.saved"), {
+        description: t("profiles.message.savedOracleSyncing"),
+      });
     } catch (err) {
       if (isProfileNameConflictError(err)) {
         setNameError("duplicate");

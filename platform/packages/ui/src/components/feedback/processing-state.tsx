@@ -164,7 +164,7 @@ export function ProcessingIndicator({
 
   return (
     <div
-      className={`grid min-w-0 gap-2 ${className}`}
+      className={`pr-message-text grid min-w-0 gap-2 ${className}`}
       aria-busy={timing.active}
       data-processing-placement={placement}
       data-processing-activity-icon={activityIcon}
