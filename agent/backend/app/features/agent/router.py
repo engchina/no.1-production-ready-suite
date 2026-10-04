@@ -251,7 +251,12 @@ from app.security.dependencies import (
     permission_route_path,
 )
 from app.security.domain import Principal
-from app.security.permissions import UNCLASSIFIED_PERMISSION, permission_for_route
+from app.security.permissions import (
+    CAPABILITY_ROLES,
+    PERMISSION_CATALOG,
+    UNCLASSIFIED_PERMISSION,
+    permission_for_route,
+)
 from app.security.service import get_security_service
 from app.settings import MODEL_SETTINGS_STORE, get_settings
 from app.system_schema import system_schema_manager
@@ -1708,7 +1713,19 @@ async def create_run(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # repository の内部の文（英語）は本文に出さず、「詳細」（error_details.reason）に残す。
+        logger.warning("run_create_rejected", extra={"agent_id": run_request.agent_id})
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "run_not_created",
+                "message": (
+                    "この業務 Agent では今は実行できません。業務 Agent の状態を確認してから、"
+                    "もう一度実行してください。"
+                ),
+                "reason": str(exc),
+            },
+        ) from exc
 
 
 @router.get("/threads", response_model=ApiResponse[ThreadsData])
@@ -3514,12 +3531,15 @@ def _require_actor_roles(request: Request, allowed_roles: set[str]) -> None:
         raise HTTPException(status_code=401, detail="ログインしてください。")
     if _policy_has_roles(_actor_policy(request), allowed_roles):
         return
-    actor = _actor_display_name(request)
-    required = ", ".join(sorted(allowed_roles | {"admin"}))
-    raise HTTPException(
-        status_code=403,
-        detail=f"actor {actor} requires one of roles: {required}",
-    )
+    # 経路の権限拒否（SECURITY_ROUTE_FORBIDDEN）ではないので error_code を付けない。
+    raise HTTPException(status_code=403, detail=_capability_denied_message(allowed_roles))
+
+
+def _capability_denied_message(allowed_roles: set[str]) -> str:
+    """capability（従来のロール）が足りないときの文。権限の名前は権限管理と同じ（カタログの並び）。"""
+    roles = allowed_roles | {"admin"}
+    labels = [item.label for item in PERMISSION_CATALOG if CAPABILITY_ROLES.get(item.code) in roles]
+    return f"この操作を行う権限がありません。必要な権限（いずれか）: {'、'.join(labels)}"
 
 
 def _run_creator_user_uuid(request: Request) -> str | None:
