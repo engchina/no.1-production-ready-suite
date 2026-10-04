@@ -41,7 +41,7 @@ import {
 
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { PageNotice, usePageNotice } from "@/components/page-notice";
-import { isAbortError } from "@/lib/api";
+import { isAbortError, isTimeoutError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
@@ -1257,8 +1257,8 @@ export function OntologyBuildSection({
       }
     } catch (err) {
       if (profileIdRef.current !== targetProfileId) return;
-      const timedOut =
-        err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
+      // API の timeout は利用者向けの ApiTransportError（name は TimeoutError）で届く（#900）。
+      const timedOut = isTimeoutError(err) || isAbortError(err);
       showNotice(
         "danger",
         timedOut

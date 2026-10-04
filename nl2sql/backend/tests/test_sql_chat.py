@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 import pytest
 from pydantic import ValidationError
 from test_nl2sql_job_runtime import _FakeEnterpriseAiClient, _repository, _request, _worker
@@ -282,3 +284,77 @@ def test_chat_accepts_select_ai_agent_and_generates_without_execution(
     assert "注文一覧" in question
     assert "SELECT ID FROM APP.ORDERS" in question
     assert "新しい順にして" in question
+
+
+def test_client_job_id_replays_the_created_job_after_lost_response(chat: ChatFixture) -> None:
+    """送信の応答が届かなくても、画面の決めた ID で同じジョブを取り直せる（#900）。"""
+
+    service, repository, _ = chat
+    client_job_id = UUID("6f1c2b0e-4d7a-4c1e-9f3a-2b8d5e7c9a10")
+    first_request = request().model_copy(update={"client_job_id": client_job_id})
+    created = service.start_job(first_request, actor_user_uuid="user-1")
+    assert created.job_id == str(client_job_id)
+    # 同じ送信の再送は、2 つ目のジョブを作らず同じジョブを返す。
+    replayed = service.start_job(first_request, actor_user_uuid="user-1")
+    assert replayed.job_id == str(client_job_id)
+    assert replayed.created_at == created.created_at
+    assert [document["job_id"] for document in repository.list_documents("jobs", limit=10)] == [
+        str(client_job_id)
+    ]
+    job = service.get_job(str(client_job_id), actor_user_uuid="user-1")
+    assert job is not None and job.conversation_id == str(client_job_id)
+    # 会話の続きでも、最後の turn が再送のジョブ自身なので「会話が更新されています」にしない。
+    assert service.run_next_nl2sql_job(worker_id="chat-test", job_id=str(client_job_id))
+    follow_id = UUID("0c9e8d7f-6a5b-4c3d-8e2f-1a0b9c8d7e6f")
+    follow = request("多い順にして", str(client_job_id)).model_copy(
+        update={"client_job_id": follow_id}
+    )
+    assert service.start_job(follow, actor_user_uuid="user-1").job_id == str(follow_id)
+    assert service.start_job(follow, actor_user_uuid="user-1").job_id == str(follow_id)
+
+
+def test_client_job_id_never_overwrites_another_job(chat: ChatFixture) -> None:
+    """画面の決めた ID が別の利用者・別の内容のジョブと重なったら上書きせず拒否する（#900）。"""
+
+    from app.features.nl2sql.service import JobIdConflictError
+
+    service, _, _ = chat
+    client_job_id = UUID("7a2d3c4b-5e6f-4a1b-8c9d-0e1f2a3b4c5d")
+    owned = request().model_copy(update={"client_job_id": client_job_id})
+    service.start_job(owned, actor_user_uuid="user-1")
+    with pytest.raises(JobIdConflictError):
+        service.start_job(owned, actor_user_uuid="other")
+    with pytest.raises(JobIdConflictError):
+        service.start_job(
+            owned.model_copy(update={"question": "別の質問"}), actor_user_uuid="user-1"
+        )
+    job = service.get_job(str(client_job_id), actor_user_uuid="user-1")
+    assert job is not None and job.question == "注文一覧"
+
+
+def test_client_job_id_must_be_a_uuid() -> None:
+    with pytest.raises(ValidationError):
+        JobCreateRequest(question="注文一覧", generation_only=True, client_job_id="job-1")
+
+
+def test_create_job_route_maps_client_job_id_conflict_to_409(
+    chat: ChatFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi import HTTPException
+    from test_nl2sql_operation_profile_access import _request as api_request
+
+    from app.features.nl2sql import router
+    from app.security.permissions import QUERY_GENERATE_PERMISSION
+
+    service, _, _ = chat
+    monkeypatch.setattr(router, "nl2sql_service", service)
+    actor_request = api_request({"orders-profile"}, permissions={QUERY_GENERATE_PERMISSION})
+    owned = request().model_copy(
+        update={"client_job_id": UUID("1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e")}
+    )
+    first = router.create_job(owned, actor_request).data
+    replayed = router.create_job(owned, actor_request).data
+    assert first is not None and replayed is not None and first.job_id == replayed.job_id
+    with pytest.raises(HTTPException) as conflict:
+        router.create_job(owned.model_copy(update={"question": "別の質問"}), actor_request)
+    assert conflict.value.status_code == 409

@@ -10,6 +10,7 @@ import re
 from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import (
     BaseModel,
@@ -1178,6 +1179,9 @@ class JobCreateRequest(BaseModel):
     # 3 つの生成方法とも生成だけで実行しない（Select AI Agent の SQL ツールは SHOWSQL。#890）。
     generation_only: bool = False
     previous_job_id: str | None = Field(default=None, max_length=64)
+    # 画面が送信の前に決める job ID（UUID。#900）。送信の応答が届かなかった（timeout・通信断）
+    # ときも、画面はこの ID でジョブを取り直して表示を続けられる。同じ ID の再送は同じジョブを返す。
+    client_job_id: UUID | None = None
 
     @model_validator(mode="after")
     def validate_select_ai_overrides(self) -> JobCreateRequest:

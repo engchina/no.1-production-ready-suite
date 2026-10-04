@@ -903,6 +903,13 @@ class JobCancelledError(RuntimeError):
         super().__init__("利用者の要求によりジョブをキャンセルしました。")
 
 
+class JobIdConflictError(ValueError):
+    """画面が決めた job ID が、別の利用者・別の内容のジョブで使われている（#900）。"""
+
+    def __init__(self) -> None:
+        super().__init__("このジョブ ID は既に使われています。もう一度送信してください。")
+
+
 class SchemaCatalogEmptyError(ValueError):
     """schema catalog 未整備で SQL 生成できない状態。error_code で機械判定させる。"""
 
@@ -7183,7 +7190,14 @@ class Nl2SqlService:
         # error へ隠さない。
         self.get_profile(request.profile_id)
         self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
-        job_id = str(uuid.uuid4())
+        if request.client_job_id is not None:
+            # 応答が届かなかった送信の再送は、作成済みのジョブを返す（二重に生成しない。#900）。
+            replayed = self._replay_client_job(request, actor_user_uuid=actor_user_uuid)
+            if replayed is not None:
+                return replayed
+            job_id = str(request.client_job_id)
+        else:
+            job_id = str(uuid.uuid4())
         conversation_id = ""
         if request.generation_only:
             if not actor_user_uuid:
@@ -7238,6 +7252,36 @@ class Nl2SqlService:
         )
         self._wake_nl2sql_job_if_needed(job)
         return response
+
+    def _replay_client_job(
+        self, request: JobCreateRequest, *, actor_user_uuid: str
+    ) -> JobCreateData | None:
+        """画面が決めた job ID のジョブが既にあれば、同じ送信の再送としてそのジョブを返す。
+
+        別の利用者のジョブ・内容の違うジョブの ID は上書きせず `JobIdConflictError` にする
+        （画面の ID で他人のジョブを置き換えない）。
+        """
+
+        existing = self._load_job_record(str(request.client_job_id))
+        if existing is None:
+            return None
+        previous = existing.request
+        same_request = (
+            existing.actor_user_uuid == actor_user_uuid
+            and previous.question == request.question
+            and (previous.profile_id or "default") == (request.profile_id or "default")
+            and previous.engine == request.engine
+            and previous.generation_only == request.generation_only
+            and previous.previous_job_id == request.previous_job_id
+        )
+        if not same_request:
+            raise JobIdConflictError()
+        return JobCreateData(
+            job_id=existing.job_id,
+            status=existing.status,
+            created_at=existing.created_at,
+            steps=[step.model_copy() for step in existing.steps],
+        )
 
     @staticmethod
     def _assert_job_actor_access(
