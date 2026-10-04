@@ -17,13 +17,12 @@ export function restoreMenuTriggerFocus(
 ) {
   window.requestAnimationFrame(() => {
     const active = document.activeElement;
-    const trigger = triggerRef.current;
     const focusMovedAway =
       active !== null &&
       active !== document.body &&
-      active !== trigger &&
+      active !== triggerRef.current &&
       !scopeRefs.some((ref) => ref.current?.contains(active));
     if (focusMovedAway) return;
-    trigger?.focus({ preventScroll: true });
+    triggerRef.current?.focus({ preventScroll: true });
   });
 }
