@@ -11,6 +11,7 @@ import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
 import { normalizeNl2SqlJobSteps } from "../jobProgressState";
 import type { JobData, JobStatus, JobStepStatus } from "../types";
 import { GeneratedSqlSummary } from "./GeneratedSqlPanel";
+import { JobFailureBody } from "./JobFailureBody";
 import { QuestionText } from "./QuestionText";
 import { WorkflowProgressStrip, type WorkflowProgressStepStatus } from "./WorkflowProgressStrip";
 
@@ -242,7 +243,11 @@ export function OperationStatusStrip({
                 </div>
               ) : undefined}
             >
-              {failureMessage}
+              <JobFailureBody
+                message={failureMessage}
+                errorCode={job.error_code}
+                errorDetail={job.error_detail}
+              />
               {job.status === "error" && catalogEmpty && !onImportSample && sampleImportUnavailableHint && (
                 <p className="text-xs text-fg-muted">{sampleImportUnavailableHint}</p>
               )}
