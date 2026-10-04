@@ -3264,6 +3264,8 @@ const nl2sqlJa = {
   "viewMgmt.joinWhere.join": "結合条件 (JOIN)",
   "viewMgmt.joinWhere.where": "抽出条件 (WHERE)",
   "viewMgmt.joinWhere.structureResult": "SQL構造解析結果",
+  "viewMgmt.joinWhere.source.ociEnterpriseAi": "OCI Enterprise AI",
+  "viewMgmt.joinWhere.source.deterministic": "規則ベース（AI 未使用）",
   "viewMgmt.joinWhere.empty": "ビューを選択すると JOIN/WHERE 条件を抽出できます。",
   "viewMgmt.error.load": "ビュー一覧の読込に失敗しました。",
   "viewMgmt.error.detail":
