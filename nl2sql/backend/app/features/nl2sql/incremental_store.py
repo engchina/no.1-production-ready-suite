@@ -334,6 +334,48 @@ def _read_lob(value: Any) -> str:
     return str(raw or "")
 
 
+def _payload_filter_predicates(
+    payload_filters: Mapping[str, str] | None, binds: dict[str, Any]
+) -> list[str]:
+    """JSON の payload の値で絞る条件（key は英数字と `_` だけ。値は bind）。
+
+    空の値は条件にしない。
+    """
+    predicates: list[str] = []
+    for index, (key, value) in enumerate((payload_filters or {}).items()):
+        if not value:
+            continue
+        if not key.replace("_", "").isalnum():
+            raise ValueError("payload filter key が不正です。")
+        bind_name = f"payload_filter_{index}"
+        predicates.append(
+            "JSON_VALUE(PAYLOAD_JSON, "
+            f"'$.{key}' RETURNING VARCHAR2(4000) NULL ON ERROR) = :{bind_name}"
+        )
+        binds[bind_name] = value
+    return predicates
+
+
+def _execute_committing(connection: Any, execute: Callable[[], None]) -> None:
+    """最後の文の実行に commit を載せる（commit だけの往復を無くす。#904）。
+
+    python-oracledb は `autocommit` を有効にした接続の execute に commit を同じ往復で載せ、
+    それまでの文を含むトランザクション全体を確定する。実行の後は元の値に戻し、pool に返す接続の
+    設定を変えない。
+    `autocommit` を持たない接続（テストの fake 等）は、今までどおり実行の後に `commit()` を呼ぶ。
+    """
+    previous = getattr(connection, "autocommit", None)
+    if not isinstance(previous, bool):
+        execute()
+        connection.commit()
+        return
+    connection.autocommit = True
+    try:
+        execute()
+    finally:
+        connection.autocommit = previous
+
+
 def _set_clob_bind(cursor: Any, bind_name: str) -> None:
     """大きい JSON 配列を Oracle の SQL VARCHAR2 上限に依存せず bind する。"""
 
@@ -679,6 +721,7 @@ class IncrementalNl2SqlRepository(Protocol):
         limit: int,
         profile_id: str = "",
         status: str = "",
+        payload_filters: Mapping[str, str] | None = None,
     ) -> list[dict[str, Any]]: ...
 
     def list_documents_page(
@@ -1299,7 +1342,9 @@ class MemoryIncrementalNl2SqlRepository:
         limit: int,
         profile_id: str = "",
         status: str = "",
+        payload_filters: Mapping[str, str] | None = None,
     ) -> list[dict[str, Any]]:
+        filters = {key: value for key, value in (payload_filters or {}).items() if value}
         with self._lock:
             values = [
                 value
@@ -1307,6 +1352,10 @@ class MemoryIncrementalNl2SqlRepository:
                 if item_collection == collection
                 and (not profile_id or value.get("_profile_id") == profile_id)
                 and (not status or value.get("_status") == status)
+                and all(
+                    _state_document_filter_value(value.get(key)) == expected
+                    for key, expected in filters.items()
+                )
             ]
             values.sort(
                 key=lambda item: (
@@ -2284,8 +2333,7 @@ class OracleIncrementalNl2SqlRepository:
                             "payload": payload_json,
                         },
                     )
-                    self._bump_token(cursor, STATE_NAMESPACE)
-                    connection.commit()
+                    self._bump_token_and_commit(connection, cursor, STATE_NAMESPACE)
                     return claimed
                 connection.commit()
                 return None
@@ -2340,8 +2388,7 @@ class OracleIncrementalNl2SqlRepository:
                     _write_state_document(
                         cursor, item_collection, item_id, payload, profile_id, item_status
                     )
-                self._bump_token(cursor, STATE_NAMESPACE)
-                connection.commit()
+                self._bump_token_and_commit(connection, cursor, STATE_NAMESPACE)
                 return updated
             except Exception:
                 connection.rollback()
@@ -2378,8 +2425,7 @@ class OracleIncrementalNl2SqlRepository:
                     "payload": payload_json,
                 },
             )
-            self._bump_token(cursor, STATE_NAMESPACE)
-            connection.commit()
+            self._bump_token_and_commit(connection, cursor, STATE_NAMESPACE)
 
     def patch_document(
         self,
@@ -2425,8 +2471,7 @@ class OracleIncrementalNl2SqlRepository:
                         "payload": payload_json,
                     },
                 )
-                self._bump_token(cursor, STATE_NAMESPACE)
-                connection.commit()
+                self._bump_token_and_commit(connection, cursor, STATE_NAMESPACE)
                 return current_payload
             except Exception:
                 connection.rollback()
@@ -2461,8 +2506,7 @@ class OracleIncrementalNl2SqlRepository:
                             "payload": payload_json,
                         },
                     )
-                self._bump_token(cursor, STATE_NAMESPACE)
-                connection.commit()
+                self._bump_token_and_commit(connection, cursor, STATE_NAMESPACE)
             except Exception:
                 connection.rollback()
                 raise
@@ -2521,8 +2565,7 @@ class OracleIncrementalNl2SqlRepository:
                 "AND ENTITY_ID = :entity_id",
                 {"collection": collection, "entity_id": entity_id},
             )
-            self._bump_token(cursor, STATE_NAMESPACE)
-            connection.commit()
+            self._bump_token_and_commit(connection, cursor, STATE_NAMESPACE)
 
     def list_documents(
         self,
@@ -2531,6 +2574,7 @@ class OracleIncrementalNl2SqlRepository:
         limit: int,
         profile_id: str = "",
         status: str = "",
+        payload_filters: Mapping[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         where = ["COLLECTION = :collection"]
         binds: dict[str, Any] = {"collection": collection, "limit": limit}
@@ -2540,6 +2584,7 @@ class OracleIncrementalNl2SqlRepository:
         if status:
             where.append("STATUS = :status")
             binds["status"] = status
+        where.extend(_payload_filter_predicates(payload_filters, binds))
         sql = (
             "SELECT PAYLOAD_JSON FROM NL2SQL_STATE_DOCUMENTS WHERE "  # nosec B608
             + " AND ".join(where)
@@ -2601,17 +2646,7 @@ class OracleIncrementalNl2SqlRepository:
             else:
                 where.append("DBMS_LOB.INSTR(LOWER(PAYLOAD_JSON), LOWER(:query)) > 0")
             filter_binds["query"] = query.strip()
-        for index, (key, value) in enumerate((payload_filters or {}).items()):
-            if not value:
-                continue
-            if not key.replace("_", "").isalnum():
-                raise ValueError("payload filter key が不正です。")
-            bind_name = f"payload_filter_{index}"
-            where.append(
-                "JSON_VALUE(PAYLOAD_JSON, "
-                f"'$.{key}' RETURNING VARCHAR2(4000) NULL ON ERROR) = :{bind_name}"
-            )
-            filter_binds[bind_name] = value
+        where.extend(_payload_filter_predicates(payload_filters, filter_binds))
         count_predicate = " AND ".join(where)
         count_sql = f"SELECT COUNT(*) FROM NL2SQL_STATE_DOCUMENTS WHERE {count_predicate}"  # nosec B608
         page_binds = dict(filter_binds)
@@ -2855,6 +2890,11 @@ class OracleIncrementalNl2SqlRepository:
             "FEW_SHOT_COUNT = :few_shot_count, VERSION_NO = :version, ETAG = :etag, "
             "PAYLOAD_JSON = :payload, UPDATED_AT = :updated_at WHERE PROFILE_ID = :profile_id"
         )
+
+    @classmethod
+    def _bump_token_and_commit(cls, connection: Any, cursor: Any, namespace: str) -> None:
+        """change token を進め、同じ往復でトランザクションを確定する（#904）。"""
+        _execute_committing(connection, lambda: cls._bump_token(cursor, namespace))
 
     @staticmethod
     def _bump_token(cursor: Any, namespace: str) -> None:

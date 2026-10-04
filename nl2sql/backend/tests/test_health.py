@@ -299,6 +299,12 @@ class _FakeRuntimeOracleAdapter(OracleNl2SqlAdapter):
                 self.db.call_timeouts.append(conn.call_timeout)
             yield conn
 
+    @contextmanager
+    def runtime_connection(self, *, call_timeout_seconds: float | None = None) -> Iterator[Any]:
+        # 業務データの読み取り・Select AI の生成の pool（#904）も同じ fake の DB にする。
+        with self.connection(call_timeout_seconds=call_timeout_seconds) as conn:
+            yield conn
+
 
 class _QuestionCaptureOracleAdapter(_FakeRuntimeOracleAdapter):
     def __init__(

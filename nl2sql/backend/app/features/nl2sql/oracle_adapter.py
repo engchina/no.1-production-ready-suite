@@ -54,6 +54,7 @@ from .object_visibility import (
     is_user_visible_owner_name,
     is_user_visible_schema_object,
 )
+from .oracle_lob import configure_clob_fetch_as_text, configure_connection_clob_fetch_as_text
 from .sql_lexing import _tokens as sql_tokens
 
 logger = logging.getLogger(__name__)
@@ -633,9 +634,19 @@ def close_auth_connection_pool() -> None:
 # NL2SQL の状態の保存先（業務プロファイル・ジョブ・履歴・オントロジー・評価。`NL2SQL_*` の表）が使う
 # 接続 pool（#830）。1 回の問い合わせのジョブは状態を数十回読み書きするため、そのたびに
 # Wallet / mTLS の handshake と認証をやり直さない。業務データの SQL・Select AI（`DBMS_CLOUD_AI`）・
-# DeepSec の接続は session の状態を持ち得るため、この pool を使わず今までどおり単発の接続
-# （`connection()`）にする。
+# DeepSec の接続はこの pool に混ぜない（業務データの読み取りと Select AI の生成は下の
+# `nl2sql-runtime` の pool、それ以外は単発の接続 `connection()`）。
 _STATE_CONNECTION_POOL = SharedOraclePool(name="nl2sql-state")
+# アプリの接続（DB の利用者は `PLATFORM_ORACLE_USER`）で業務データを読む（SELECT の実行）・
+# Select AI で生成する（`DBMS_CLOUD_AI.GENERATE`）ときに借りる接続 pool（#904）。1 回のジョブで
+# 1〜2 回使い、そのたびに Wallet / mTLS の handshake と認証（遅延の大きいネットワークで約 3 秒）を
+# やり直さない。
+# 使うのは session の状態を変えない処理だけ（`OracleNl2SqlAdapter.runtime_connection`）。
+# - DeepSec の DATA USER の接続（利用者の context を設定する。`OraclePoolManager`）とは別の pool
+# - 状態の保存先の pool（`nl2sql-state`）とも分け、業務データの SQL と状態の読み書きを混ぜない
+# - ALTER SESSION・`DBMS_CLOUD_AI.SET_PROFILE`・DDL / DML・Select AI Agent・オントロジーの操作の
+#   トランザクションは今までどおり単発の接続（`connection()`）
+_RUNTIME_CONNECTION_POOL = SharedOraclePool(name="nl2sql-runtime")
 # 同じスレッドが状態の接続を借りたまま、もう 1 本借りようとしたか
 # （pool の上限で自分を待たないため）。
 _STATE_CONNECTION_DEPTH = threading.local()
@@ -644,6 +655,11 @@ _STATE_CONNECTION_DEPTH = threading.local()
 def close_state_connection_pool() -> None:
     """状態の保存先の接続 pool を閉じる（次に借りるときに作り直す）。"""
     _STATE_CONNECTION_POOL.close()
+
+
+def close_runtime_connection_pool() -> None:
+    """業務データの読み取り・Select AI の生成の接続 pool を閉じる（次に借りるときに作り直す）。"""
+    _RUNTIME_CONNECTION_POOL.close()
 
 
 class OracleNl2SqlAdapter:
@@ -804,11 +820,13 @@ class OracleNl2SqlAdapter:
         （`init_oracle_session`）は pool の session callback が新しい接続ごとに当てる。
         同じスレッドが借りたまま入れ子で借りるときは、pool の上限で自分を待たないよう単発の接続に
         する。業務データ・Select AI・DeepSec の接続には使わない（session の状態を持ち得る）。
+        CLOB 列は文字列で fetch する（`configure_connection_clob_fetch_as_text`。#904）。
         """
         depth = int(getattr(_STATE_CONNECTION_DEPTH, "value", 0))
         if depth > 0:
             logger.debug("nl2sql_state_connection_nested", extra={"depth": depth})
             with self.connection() as conn:
+                configure_connection_clob_fetch_as_text(conn)
                 yield conn
             return
         oracledb = self._load_oracledb()
@@ -842,6 +860,8 @@ class OracleNl2SqlAdapter:
                 conn.call_timeout = int(
                     max(1.0, float(self.settings.nl2sql_oracle_call_timeout_seconds)) * 1000
                 )
+            # JSON CLOB は行と一緒に文字列で受け取る（行ごとの LOB の read の往復を無くす。#904）。
+            configure_connection_clob_fetch_as_text(conn)
             yield conn
         except BaseException:
             with suppress(Exception):
@@ -854,10 +874,80 @@ class OracleNl2SqlAdapter:
                 conn.close()
 
     @contextmanager
-    def user_data_connection(self) -> Iterator[Any]:
-        """認証済み actor のデータ処理にだけ共有 DeepSec DATA USER を使う。"""
+    def runtime_connection(self, *, call_timeout_seconds: float | None = None) -> Iterator[Any]:
+        """アプリの接続で業務データを読む・Select AI で生成するときに、pool から借りる（#904）。
+
+        DB の利用者は `connection()` と同じアプリの利用者（`PLATFORM_ORACLE_USER`）。使うのは
+        session の状態を変えない処理（SELECT の実行・`DBMS_CLOUD_AI.GENERATE`・類似履歴の
+        ベクトル検索）だけで、DeepSec の DATA USER の接続（利用者の context を設定する）・
+        状態の保存先の pool とは混ぜない。
+        `connection()` と同じく、呼び出しの timeout は借りるたびに設定し、result cache の無効化は
+        pool の session callback が新しい接続ごとに当てる。例外のときと、未確定のトランザクションが
+        残っているときは rollback してから返す。
+        """
+        oracledb = self._load_oracledb()
+        self._init_client(oracledb)
+        if not self.is_configured():
+            raise OracleAdapterError("Oracle 接続情報が不足しています。")
+        _RUNTIME_CONNECTION_POOL.resize(
+            OraclePoolSize.of(1, self.settings.nl2sql_oracle_runtime_pool_max)
+        )
+        try:
+            conn = _RUNTIME_CONNECTION_POOL.acquire(_oracle_connect_kwargs(self.settings))
+        except OracleAdapterError:
+            raise
+        except Exception as exc:
+            diagnostics = oracle_connection_diagnostics(exc)
+            logger.error(
+                "%s %s",
+                diagnostics["summary"],
+                diagnostics["suggested_action"],
+                extra={
+                    **diagnostics,
+                    "event": "oracle_connection_failed",
+                    "operation": "acquire",
+                    "pool": _RUNTIME_CONNECTION_POOL.name,
+                },
+            )
+            raise OracleAdapterError(f"Oracle 接続に失敗しました: {exc}") from exc
+        try:
+            timeout_seconds = (
+                call_timeout_seconds
+                if call_timeout_seconds is not None
+                else self.settings.nl2sql_oracle_call_timeout_seconds
+            )
+            if hasattr(conn, "call_timeout"):
+                conn.call_timeout = int(max(1.0, float(timeout_seconds)) * 1000)
+            yield conn
+            if getattr(conn, "transaction_in_progress", False):
+                conn.rollback()
+        except BaseException:
+            with suppress(Exception):
+                conn.rollback()
+            raise
+        finally:
+            # pool に返す（切れた接続は pool が捨てる）。
+            with suppress(Exception):
+                conn.close()
+
+    @contextmanager
+    def user_data_connection(self, *, read_only: bool = False) -> Iterator[Any]:
+        """認証済み actor のデータ処理にだけ共有 DeepSec DATA USER を使う。
+
+        - DeepSec 無効: 全員がアプリの接続
+        - DeepSec 有効で system_admin: アプリの接続（DeepSec の制限を受けない）
+        - DeepSec 有効で非 system_admin: DeepSec の DATA USER の pool（借りるたびに利用者の
+          context を設定し、返すときに消す。消せなければ捨てる。
+          `OraclePoolManager.data_connection`）
+
+        `read_only=True`（SELECT だけを実行し、トランザクションを残さない）なら、アプリの接続は
+        `runtime_connection()`（`nl2sql-runtime` の pool）から借りる（#904）。DeepSec の
+        DATA USER の接続は `read_only` にかかわらず今までどおり（アプリの接続の pool と
+        共有しない）。
+        """
+        app_connection = self.runtime_connection if read_only else self.connection
         if not self.settings.oracle_deepsec_enabled:
-            with self.connection() as connection:
+            with app_connection() as connection:
                 yield connection
             return
         from app.clients.oracle_runtime import get_oracle_pool_manager
@@ -865,7 +955,7 @@ class OracleNl2SqlAdapter:
 
         actor = current_actor_context()
         if actor.is_system_admin:
-            with self.connection() as connection:
+            with app_connection() as connection:
                 yield connection
             return
         if not actor.user_uuid:
@@ -1609,7 +1699,7 @@ class OracleNl2SqlAdapter:
 
     def execute_select(self, sql: str, max_rows: int | None) -> QueryResults:
         try:
-            with self.user_data_connection() as conn, conn.cursor() as cursor:
+            with self.user_data_connection(read_only=True) as conn, conn.cursor() as cursor:
                 cursor.execute(sql)
                 column_names = [description[0] for description in cursor.description or []]
                 # 既存の一意な名前を予約してから重名列へキーを割り当てる。
@@ -3503,7 +3593,9 @@ class OracleNl2SqlAdapter:
             f"WHERE {where_clause} "
             "ORDER BY DISTANCE FETCH FIRST :limit ROWS ONLY"
         )
-        with self.connection() as conn, conn.cursor() as cursor:
+        with self.runtime_connection() as conn, conn.cursor() as cursor:
+            # QUESTION / GENERATED_SQL の CLOB は行と一緒に文字列で受け取る（#904）。
+            configure_clob_fetch_as_text(cursor)
             cursor.execute(query, binds)
             rows = cursor.fetchall() if hasattr(cursor, "fetchall") else list(cursor)
         results: list[dict[str, Any]] = []
@@ -3534,13 +3626,17 @@ class OracleNl2SqlAdapter:
         """Oracle Select AI profile で DBMS_CLOUD_AI.GENERATE の生テキストを返す。
 
         DBMS_CLOUD_AI.GENERATE の属性は環境差があるため、呼び出しは adapter 内に限定する。
+        profile は引数で渡し、session の profile（`DBMS_CLOUD_AI.SET_PROFILE`）は変えないため、
+        アプリの接続の pool（`runtime_connection`）から借りる（#904）。
         """
         connection = (
-            self.connection(call_timeout_seconds=call_timeout_seconds)
+            self.runtime_connection(call_timeout_seconds=call_timeout_seconds)
             if call_timeout_seconds is not None
-            else self.connection()
+            else self.runtime_connection()
         )
         with connection as conn, conn.cursor() as cursor:
+            # 生成結果の CLOB は行と一緒に文字列で受け取る（LOB の read の往復を無くす。#904）。
+            configure_clob_fetch_as_text(cursor)
             binds: dict[str, str] = {
                 "prompt": question,
                 "profile_name": profile_name,
