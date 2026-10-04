@@ -568,7 +568,11 @@ export const ja = {
   "settings.services.toast.stopped": "{service} を停止しました。",
   "settings.services.toast.restarted":
     "{service} を再起動しました。",
-  "settings.services.toast.failed": "{service} の操作に失敗しました。",
+  "settings.services.failure.start": "{service} を起動できませんでした。",
+  "settings.services.failure.stop": "{service} を停止できませんでした。",
+  "settings.services.failure.restart": "{service} を再起動できませんでした。",
+  "settings.services.failure.fallback":
+    "サービスのログと状態を確認してから、もう一度実行してください。",
   "settings.services.item.preprocessOfficeToPdf": "Office→PDF",
   "settings.services.item.preprocessPdfToPageImages": "PDF を画像として読み直す",
   "settings.services.item.preprocessCsvToJson": "CSV→JSON",
