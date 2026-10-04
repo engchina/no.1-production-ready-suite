@@ -207,6 +207,14 @@ def _actor(request: Request) -> tuple[str, bool]:
     return principal.user_uuid, principal.is_system_admin
 
 
+def _job_error_message(job: JobData) -> str | None:
+    """画面は失敗の文と詳細（例外・ORA-… の元の文）を分けて出す（#1072）。MCP の呼び出し側
+    （Agent）は文を 1 つで受け取るため、原因を判断できるよう詳細を文の後ろに付けて返す。"""
+    if job.error_message and job.error_detail:
+        return f"{job.error_message}\n詳細: {job.error_detail}"
+    return job.error_message
+
+
 def _job_result(job: JobData) -> Nl2SqlJobResult:
     result = job.result
     output = Nl2SqlJobResult(
@@ -216,7 +224,7 @@ def _job_result(job: JobData) -> Nl2SqlJobResult:
         # 旧い snapshot など、error_code を持たない失敗も分類できるようにする（#847）。
         error_code=job.error_code
         or (JOB_FAILED_ERROR_CODE if job.status == JobStatus.ERROR else None),
-        error_message=job.error_message,
+        error_message=_job_error_message(job),
     )
     if result is None:
         return output

@@ -54,6 +54,7 @@ import { t } from "@/lib/i18n";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { randomUuid } from "@/lib/randomUuid";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
+import { JobFailureBody } from "./components/JobFailureBody";
 import {
   useProfileUsageContext,
   useProfileSummaries,
@@ -894,9 +895,15 @@ function ChatTurn({ turn }: { turn: JobData }) {
             <Banner
               severity={turn.error_code === "JOB_CANCELLED" ? "info" : "danger"}
             >
-              {turn.error_code === "JOB_CANCELLED"
-                ? t("chat.cancelled")
-                : turn.error_message}
+              {turn.error_code === "JOB_CANCELLED" ? (
+                t("chat.cancelled")
+              ) : (
+                <JobFailureBody
+                  message={turn.error_message}
+                  errorCode={turn.error_code}
+                  errorDetail={turn.error_detail}
+                />
+              )}
             </Banner>
           ) : null}
           {turn.warning_message ? (
