@@ -58,6 +58,7 @@ from app.security.permissions import (
     SQL_EXECUTE_PERMISSION,
     SYSTEM_STATUS_READ_PERMISSION,
     UNCLASSIFIED_PERMISSION,
+    expand_permissions,
     permission_for_route,
 )
 from app.security.router import auth_router as security_router
@@ -5803,3 +5804,21 @@ def test_profile_access_profiles_search_and_page_on_server(
     assert ids_of(q="試験会計")[0] == ["p5"]
     # 選択済みの名前の解決（ids）は検索語と関係なく ID で引く。
     assert ids_of(ids=["p4", "p2", "missing"])[0] == ["p2", "p4"]
+
+
+@pytest.mark.parametrize(
+    "menu", ["menu.comment_management", "menu.annotation_management", "menu.domain_management"]
+)
+def test_metadata_menus_imply_schema_read_and_refresh(menu: str) -> None:
+    """画面の「スキーマを更新」と実行後の job の追跡の API を、同じメニュー権限で通す（#972）。"""
+    effective = expand_permissions({menu})
+    assert {SCHEMA_READ_PERMISSION, SCHEMA_REFRESH_PERMISSION} <= effective
+    for method, path in (
+        ("POST", "/schema/refresh-jobs"),
+        ("GET", "/schema/refresh-jobs/{job_id}"),
+        ("GET", "/schema/refresh-jobs/active"),
+    ):
+        assert permission_for_route(method, path) & effective, (method, path)
+    # テーブル・ビュー・データの管理の操作権限は含めない。
+    assert "menu.table_management" not in effective
+    assert "menu.admin_sql" not in effective
