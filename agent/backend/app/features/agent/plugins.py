@@ -515,7 +515,12 @@ def _plugins_from_json(raw: str | None) -> list[PluginManifest]:
         try:
             manifests.append(PluginManifest.model_validate(item))
         except ValidationError as exc:
-            logger.warning("宣言 plugin が不正: %s", exc)
+            # 例外の文は入力（MCP の API キー・URL など）を含むため、位置と種類だけを出す（#1081）。
+            problems = ", ".join(
+                f"{'.'.join(str(part) for part in error['loc'])} ({error['type']})"
+                for error in exc.errors(include_input=False, include_url=False)
+            )
+            logger.warning("宣言 plugin が不正: %s", problems)
     return manifests
 
 

@@ -83,3 +83,21 @@ export function evaluationCaseErrorSummary(
     message: result.error_message || result.error_type || t("evaluation.case.errorUnknown"),
   };
 }
+
+export interface EvaluationJobFailure {
+  /** 原因と対処（利用者向けの文）。 */
+  message: string;
+  /** 例外の種別（技術的な詳細。「詳細」に畳む）。無ければ null。 */
+  errorType: string | null;
+}
+
+/**
+ * job の失敗の文から、backend が末尾に付けた「エラー種別: …」（例外のクラス名）を分ける。
+ * 本文は原因と対処だけにし、エラー種別は「詳細」に出す（UX 契約 messaging.md §10.3）。
+ */
+export function splitEvaluationJobFailure(message: string | null | undefined): EvaluationJobFailure {
+  const text = (message ?? "").trim();
+  const match = /\s*エラー種別:\s*([\w.]+)\s*$/.exec(text);
+  if (!match) return { message: text, errorType: null };
+  return { message: text.slice(0, match.index).trim(), errorType: match[1] ?? null };
+}

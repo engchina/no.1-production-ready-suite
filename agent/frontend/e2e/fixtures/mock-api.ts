@@ -582,6 +582,58 @@ function pluginSummary(plugin: Json): Json {
   return summary;
 }
 
+/**
+ * URL の userinfo と資格情報らしい query の値を `***` に伏せる（backend の `mask_url_credentials`。#1081）。
+ * #1078 の `src/lib/mcp-url.ts` の `maskUrlCredentials` と同じ規則。#1078 の merge 後はそちらを使う。
+ */
+function maskPluginMcpUrl(url: unknown): unknown {
+  if (typeof url !== "string" || !url) return url ?? null;
+  const match = /^([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#]*)([^?#]*)(?:\?([^#]*))?(#.*)?$/.exec(url);
+  if (!match) return url;
+  const [, head, authority, rest, query, fragment = ""] = match;
+  const at = authority.lastIndexOf("@");
+  const host = at >= 0 ? `***@${authority.slice(at + 1)}` : authority;
+  const secretWord =
+    /^(key|apikey|token|secret|password|passwd|pwd|auth|authorization|credential|credentials|signature|sig|jwt|bearer)$/;
+  const maskedQuery = (query ?? "")
+    .split("&")
+    .map((part) => {
+      const name = part.split("=", 1)[0];
+      const words = name
+        .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+        .toLowerCase()
+        .split(/[^a-z0-9]+/);
+      return part && words.some((word) => secretWord.test(word)) ? `${name}=***` : part;
+    })
+    .join("&");
+  return `${head}${host}${rest}${query === undefined ? "" : `?${maskedQuery}`}${fragment}`;
+}
+
+/** プラグインの MCP サーバーの応答の形（backend の `PluginMcpServerView`。秘密は返さず設定済みかだけ。#1081）。 */
+function publicPluginMcpServer(server: Json): Json {
+  const oauthReady = Boolean(server.oauth_token_url && server.oauth_client_id && server.oauth_client_secret);
+  return {
+    server_id: server.server_id,
+    label: server.label ?? null,
+    base_url: maskPluginMcpUrl(server.base_url),
+    auth_mode: server.auth_mode ?? (oauthReady ? "oauth_client_credentials" : server.api_key ? "api_key" : "none"),
+    oauth_token_url: maskPluginMcpUrl(server.oauth_token_url),
+    oauth_client_id: server.oauth_client_id ?? null,
+    oauth_scope: server.oauth_scope ?? null,
+    service_audience: server.service_audience ?? null,
+    timeout_seconds: server.timeout_seconds ?? 10,
+    source: server.source ?? "runtime",
+    api_key_configured: Boolean(server.api_key),
+    oauth_client_secret_configured: Boolean(server.oauth_client_secret),
+    session_configured: Boolean(server.session_id),
+  };
+}
+
+function publicPluginManifest(manifest: Json): Json {
+  const mcpServers = (manifest.mcp_servers as Json[] | undefined) ?? [];
+  return { ...manifest, mcp_servers: mcpServers.map(publicPluginMcpServer) };
+}
+
 function pluginRecord(manifest: Json, marketplaceId: string | null): Json {
   const skills = (manifest.skills as Json[] | undefined) ?? [];
   const mcpServers = (manifest.mcp_servers as Json[] | undefined) ?? [];
@@ -599,7 +651,8 @@ function pluginRecord(manifest: Json, marketplaceId: string | null): Json {
     resource_count: resources.length,
     warnings: [],
     agent_count: 0,
-    manifest,
+    // 応答と同じく MCP サーバーの資格情報を持たない形で置く（mock は実際に接続しない）。
+    manifest: publicPluginManifest(manifest),
   };
 }
 
@@ -674,7 +727,7 @@ function validateSnapshot(snapshot: Json) {
       String(snapshot.version)
     )
   ) {
-    errors.push(`unsupported snapshot version: ${String(snapshot.version)}`);
+    errors.push(`未対応のスナップショットの版です: ${String(snapshot.version)}`);
   }
   const duplicates = (label: string, ids: unknown[]) => {
     const seen = new Set<unknown>();
@@ -683,12 +736,12 @@ function validateSnapshot(snapshot: Json) {
       if (seen.has(id)) dup.add(String(id));
       seen.add(id);
     }
-    if (dup.size) errors.push(`duplicate ${label} id: ${[...dup].sort().join(", ")}`);
+    if (dup.size) errors.push(`ID が重複している${label}${/[ -~]$/.test(label) ? " " : ""}があります: ${[...dup].sort().join(", ")}`);
   };
-  duplicates("run", runs.map((run) => run.id));
-  duplicates("agent", agents.map((agent) => agent.id));
+  duplicates("実行", runs.map((run) => run.id));
+  duplicates("業務 Agent", agents.map((agent) => agent.id));
   if (!agents.some((agent) => agent.id === "default")) {
-    warnings.push("default agent is missing and will be recreated");
+    warnings.push("既定の業務 Agent（default）がありません。置換すると作り直します。");
   }
   return {
     valid: errors.length === 0,
@@ -1370,7 +1423,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       }
       if (third && at("plugins", "marketplaces", "*", "plugins") && method === "GET") {
         const source = findOr404(state.marketplaces, "id", third, "marketplace");
-        return source.plugin_count ? MOCK_MARKETPLACE_LISTING : { name: source.name, plugins: [] };
+        if (!source.plugin_count) return { name: source.name, plugins: [] };
+        return {
+          ...MOCK_MARKETPLACE_LISTING,
+          plugins: MOCK_MARKETPLACE_LISTING.plugins.map(publicPluginManifest),
+        };
       }
       if (third && at("plugins", "marketplaces", "*") && method === "DELETE") {
         findOr404(state.marketplaces, "id", third, "marketplace");
@@ -1451,7 +1508,20 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (body.dry_run) {
       return { imported: false, dry_run: true, validation, reason: body.reason ?? null };
     }
-    throw new HttpError(400, "e2e mock はスナップショットの置換を実装していません");
+    // backend と同じく、無効なスナップショットと確認の無い置換は 400（#1027）。
+    if (!validation.valid) {
+      throw new HttpError(
+        400,
+        `スナップショットに ${validation.errors.length} 件のエラーがあるため置換できません。「検証」でエラーの内容を確認してください。`
+      );
+    }
+    if (body.confirm_replace !== true) {
+      throw new HttpError(400, "置換するには確認（confirm_replace=true）が必要です。");
+    }
+    const replaced = body.snapshot as Json;
+    state.runs = clone((replaced.runs as Json[] | undefined) ?? []);
+    state.agents = clone((replaced.agents as Json[] | undefined) ?? []);
+    return { imported: true, dry_run: false, validation, reason: body.reason ?? null };
   }
 
   // --- 設定 ---
@@ -1536,6 +1606,15 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (third && at("settings", "mcp-connections", "*")) {
         const connection = findOr404(store.connections, "server_id", third, "MCP 接続");
         if (method === "PATCH") {
+          // RAG / NL2SQL の認証方式・audience は変えられない（backend と同じ 400。#1014）。
+          const builtinAuthChanged =
+            connection.source === "builtin" &&
+            ((body.auth_mode != null && body.auth_mode !== connection.auth_mode) ||
+              (body.service_audience != null &&
+                (String(body.service_audience).trim() || third) !== connection.service_audience));
+          if (builtinAuthChanged) {
+            throw new HttpError(400, "RAG / NL2SQL の接続の認証方式と audience は変えられません。");
+          }
           Object.assign(connection, mcpConnection({ ...body, server_id: third }, connection));
           return connection;
         }

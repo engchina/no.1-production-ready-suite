@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import copy
 import functools
 import os
 import threading
@@ -84,6 +85,28 @@ _install_test_threadpool_for_asgi_tests()
 
 
 @pytest.fixture(autouse=True)
+def _restore_settings_singleton() -> Iterator[None]:
+    """Settings の singleton の値を、テストの後にテストの前の値へ戻す。
+
+    システム設定の API（データベース設定の PATCH など）は singleton の属性をその場で書き換える。
+    monkeypatch で先に退避していない属性（`oracle_user` など）は次のテストに残り、
+    実行の順序や xdist の振り分けで結果が変わっていた（例: 現在の schema owner が `ADMIN`）。
+    ほかの autouse の fixture（monkeypatch を使うもの）より先に定義し、最後に戻す。
+    """
+    from app.settings import _settings_singleton
+
+    settings = _settings_singleton()
+    saved_fields = copy.deepcopy(settings.__dict__)
+    saved_private = copy.deepcopy(settings.__pydantic_private__)
+    saved_fields_set = set(settings.__pydantic_fields_set__)
+    yield
+    settings.__dict__.clear()
+    settings.__dict__.update(saved_fields)
+    object.__setattr__(settings, "__pydantic_private__", saved_private)
+    object.__setattr__(settings, "__pydantic_fields_set__", saved_fields_set)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_model_secret_env_file(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """設定の読み書きを、開発者の backend/.env と共通 .env から切り離す（#103 / #211）。
 
@@ -95,6 +118,21 @@ def _isolate_model_secret_env_file(tmp_path: Any, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(app_settings, "BACKEND_ENV_FILE", tmp_path / "backend.env")
     monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", tmp_path / "platform.env")
     monkeypatch.setattr(deepsec_module, "_BACKEND_ENV_FILE", tmp_path / "backend.env")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_nl2sql_service_state() -> None:
+    """module の singleton `nl2sql_service` の状態をテストごとに初期状態へ戻す。
+
+    テストの singleton は memory store で動き、catalog・プロファイル・ジョブ・履歴を process の
+    中で持ち続ける。API を通すテスト（サンプルの取り込み・catalog の作り直しなど）の書き込みが
+    同じ process の後のテストに残り、実行の順序や xdist の振り分けで結果が変わっていた。
+    router・MCP・quality evaluation などが同じ object を import しているため、module の属性は
+    差し替えず、新しく作った service の状態で中身だけを置き換える（`__dict__` の代入 1 回）。
+    """
+    from app.features.nl2sql.service import Nl2SqlService, nl2sql_service
+
+    nl2sql_service.__dict__ = Nl2SqlService().__dict__
 
 
 @pytest.fixture(autouse=True)
