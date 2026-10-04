@@ -904,6 +904,7 @@ def test_oci_settings_defaults_match_rag_when_credentials_missing(
         "key_file_exists": False,
         "config_file_exists": False,
         "config_source": "runtime",
+        "config_error": None,
     }
 
     storage_resp = client.get("/api/settings/upload-storage")
@@ -916,7 +917,9 @@ def test_oci_settings_defaults_match_rag_when_credentials_missing(
     assert storage["object_storage_bucket"] == ""
 
 
-def test_oci_config_read_parses_default_profile_like_rag(tmp_path: Path) -> None:
+def test_oci_config_read_parses_default_profile_like_rag(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
     config = tmp_path / "config"
     config.write_text(
         "\n".join(
@@ -933,9 +936,16 @@ def test_oci_config_read_parses_default_profile_like_rag(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
+    # 読むのは実行中の設定の config / profile（要求の config_file は使わない。#1067）。
+    monkeypatch.setattr(
+        agent_router,
+        "get_settings",
+        lambda: SimpleNamespace(oci_config_file=str(config), oci_config_profile="DEFAULT"),
+    )
+
     resp = client.post(
         "/api/settings/oci/config/read",
-        json={"config_file": str(config), "profile": "DEFAULT"},
+        json={"config_file": str(tmp_path / "other"), "profile": "OTHER"},
     )
 
     assert resp.status_code == 200
@@ -982,12 +992,18 @@ def test_oci_object_storage_namespace_reads_from_sdk_like_rag(
         raise AssertionError(name)
 
     monkeypatch.setattr(shared_oci, "importlib", SimpleNamespace(import_module=fake_import_module))
+    # 取得に使う config は実行中の設定のもの（要求の config_file は使わない。#1067）。
+    monkeypatch.setattr(
+        agent_router,
+        "get_settings",
+        lambda: SimpleNamespace(oci_config_file=str(config_file), oci_config_profile="DEFAULT"),
+    )
 
     resp = client.post(
         "/api/settings/oci/object-storage/namespace",
         json={
-            "config_file": str(config_file),
-            "profile": "DEFAULT",
+            "config_file": str(tmp_path / "other"),
+            "profile": "OTHER",
             "region": "ap-osaka-1",
         },
     )
