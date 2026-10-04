@@ -19,6 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, Response
 
 from app.api.router import api_router
+from app.api.validation_messages import validation_error_messages
 from app.clients.oracle import close_oracle_pool
 from app.config import Settings, get_settings
 from app.logging_config import configure_logging
@@ -264,11 +265,8 @@ def create_app() -> FastAPI:
     async def validation_exception_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        """リクエスト検証エラーを ApiResponse 形式へ統一する。"""
-        messages = [
-            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
-            for error in exc.errors()
-        ]
+        """リクエスト検証エラーを ApiResponse 形式へ統一する（文は日本語にする。#979）。"""
+        messages = validation_error_messages(exc.errors())
         return api_error_response(
             422,
             messages or ["リクエストの形式が不正です。"],
