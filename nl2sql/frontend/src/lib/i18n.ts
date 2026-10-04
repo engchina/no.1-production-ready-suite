@@ -1340,6 +1340,7 @@ const nl2sqlJa = {
   "nl2sql.job.storageUnavailable": "実行中のジョブをブラウザに保存できません。処理と結果の取得は継続しています。再読込せずに完了を待ってください。ページを閉じた場合は履歴から結果を確認してください。",
   "nl2sql.job.cancel": "実行を中止",
   "nl2sql.job.cancelFailed": "ジョブの中止要求に失敗しました。",
+  "nl2sql.job.cancelAccepted": "中止を受け付けました。実行中の段階が終わると停止します。",
   "nl2sql.history.refreshFailed":
     "履歴の更新に失敗しました。生成結果は表示されています。時間をおいて履歴を再読込してください。",
   "nl2sql.rewrite.title": "Query Rewrite",
