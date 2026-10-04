@@ -1203,7 +1203,8 @@ export interface FeedbackCitationSnapshot {
 
 export interface FeedbackContentSnapshot {
   question: string;
-  answer: string;
+  /** 回答を生成しない検索（検索結果だけ）では null（#978）。 */
+  answer: string | null;
   citations: FeedbackCitationSnapshot[];
 }
 
