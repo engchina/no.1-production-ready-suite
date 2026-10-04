@@ -11467,6 +11467,31 @@ test("metadata SQL regeneration resets the edited execution SQL", async ({ page 
   await expect(sqlTextarea).toHaveValue(generatedSql);
 });
 
+for (const metadata of [
+  { mode: "comment", path: "comments", source: "deterministic", label: "規則ベース（AI 未使用）" },
+  { mode: "annotation", path: "annotations", source: "oci_enterprise_ai", label: "OCI Enterprise AI" },
+  { mode: "domain", path: "domains", source: "deterministic", label: "規則ベース（AI 未使用）" },
+] as const) {
+  test(`${metadata.mode}-management は SQL の生成方式を内部値ではなく文言で出す`, async ({ page }) => {
+    // #962: generated.source（oci_enterprise_ai / deterministic）を英語の内部値のまま出さない。
+    await mockNl2SqlApi(page);
+    await page.unroute(`**/api/nl2sql/${metadata.path}/generate-sql`);
+    await page.route(`**/api/nl2sql/${metadata.path}/generate-sql`, (route) =>
+      fulfillJson(route, { sql: "COMMENT ON TABLE INVOICES IS '請求';", source: metadata.source, warnings: [], timing })
+    );
+    await page.goto(`/${metadata.mode}-management`);
+    await page.getByRole("option", { name: /INVOICES/ }).check();
+    await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+    const inputPanel = page.locator(`#${metadata.mode}-management-panel-input`);
+    await expect(inputPanel.getByRole("button", { name: "SQL 生成" })).toBeEnabled();
+    await inputPanel.getByRole("button", { name: "SQL 生成" }).click();
+    const executePanel = page.locator(`#${metadata.mode}-management-panel-execute`);
+    await expect(executePanel.getByText(metadata.label, { exact: true })).toBeVisible();
+    await expect(executePanel.getByText(metadata.source, { exact: true })).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+  });
+}
+
 test("ドメイン管理は SQL 実行後に構造と既存ドメインを取り直す", async ({ page }) => {
   // 実行前の関連付けのまま更新/削除を生成しないよう、実行後に inventory を再取得する。
   const api = await mockNl2SqlApi(page);
