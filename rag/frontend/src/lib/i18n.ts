@@ -2573,6 +2573,7 @@ export const ja = {
   "search.stage.historyRewrite": "会話を踏まえた質問の書き換え",
   "search.stage.fieldFilter": "検索条件の読み取り",
   "search.stage.answer": "根拠の検索と回答の生成",
+  "search.stage.answerGuardrail": "回答の安全チェック",
   "search.stage.retrieval": "検索",
   "answer.progress.label": "回答を生成しています（{stage}）",
   "answer.progress.searchLabel": "検索しています（{stage}）",
