@@ -239,6 +239,60 @@ test("途中のまとまりが失敗しても、保存できたファイルの�
   await expect(page.getByText("送信サイズが上限を超えたため、アップロードできませんでした。", { exact: false })).toBeVisible();
 });
 
+test("複数のファイルがすべて失敗したときは、選択を残して送り直せる（#931）", async ({ page }) => {
+  await mockLocalAuth(page);
+  await mockUploadPage(page);
+  let calls = 0;
+  await page.route("**/api/documents/batch-upload", async (route) => {
+    calls += 1;
+    if (calls === 1) {
+      await route.fulfill({
+        json: apiEnvelope({
+          items: [],
+          failed_items: ["a.txt", "b.txt"].map((name) => ({
+            file_name: name,
+            status_code: 503,
+            message: "保存先に保存できませんでした。",
+            source_profile: null,
+          })),
+          total_count: 2,
+          uploaded_count: 0,
+          failed_count: 2,
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      json: apiEnvelope({
+        items: [uploadResult("a.txt"), uploadResult("b.txt")],
+        failed_items: [],
+        total_count: 2,
+        uploaded_count: 2,
+        failed_count: 0,
+      }),
+    });
+  });
+
+  await page.goto("/upload");
+  await page.locator('input[type="file"]').setInputFiles([textFile("a.txt", 8), textFile("b.txt", 8)]);
+  await page.getByRole("button", { name: "アップロードを開始（2 件）" }).click();
+
+  // 1 件も保存できなかった: 「一部の…」ではなく失敗として示し、選んだファイルは残す。
+  const failure = page.getByRole("alert").filter({ hasText: "ファイルをアップロードできませんでした" });
+  await expect(failure).toBeVisible();
+  await expect(failure).not.toContainText("一部");
+  await expect(failure).toContainText("a.txt");
+  await expect(page.getByTestId("upload-selection")).toContainText("選んだファイル（2 件）");
+  await expect(page.getByRole("heading", { name: "アップロード結果" })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+
+  // 同じ選択のまま送り直せる。成功したら結果へ進み、失敗の表示は消える。
+  await page.getByRole("button", { name: "アップロードを開始（2 件）" }).click();
+  await expect(page.getByRole("heading", { name: "アップロード結果" })).toBeVisible();
+  await expect(page.getByText("ファイルをアップロードできませんでした")).toHaveCount(0);
+  expect(calls).toBe(2);
+});
+
 test("送信中は経過時間を示し、KB 一覧の読み込み中は Skeleton で領域を確保する", async ({ page }) => {
   await mockLocalAuth(page);
   let releaseKnowledgeBases: () => void = () => undefined;

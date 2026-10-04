@@ -116,6 +116,9 @@ export function SqlToQuestionPage() {
   const requestReferenceData = useCallback(async () => {
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
+    // 業務プロファイルを選んだときは、続く詳細の読込（下の effect）が読込中の表示を終える。
+    // ここで先に終えると、詳細の読込の前に「参照できる表がありません」が一瞬出る。
+    let detailPending = false;
     try {
       // 失敗の表示は catch の callback で行う（effect から呼んでも同期の setState にしない）。
       await runScopedRequest(async (signal) => {
@@ -125,9 +128,15 @@ export function SqlToQuestionPage() {
         );
         if (signal.aborted || sequence !== loadSequence.current) return;
         setProfiles(profilePage.items);
+        // 保存した業務プロファイルが一覧（この画面の選択肢）に無い（削除・アーカイブ・利用権限の解除）ときは、
+        // 先頭のプロファイルへ切り替える。残すと usage-context が 404 / 403 になり、再読込でも抜けられない（#913）。
         setSelectedProfileId((current) =>
-          current || profilePage.items[0]?.id || ""
+          current && profilePage.items.some((profile) => profile.id === current)
+            ? current
+            : profilePage.items[0]?.id || ""
         );
+        // 一覧が空でなければ、必ずどれかを選ぶ（詳細の読込が続く）。
+        detailPending = profilePage.items.length > 0;
         setReferenceRefreshVersion((current) => current + 1);
       }).catch((err: unknown) => {
         if (isAbortError(err)) {
@@ -136,7 +145,7 @@ export function SqlToQuestionPage() {
         setLoadError(actionableError(err, t("sqlToQuestion.error.load")));
       });
     } finally {
-      if (sequence === loadSequence.current) setLoading(false);
+      if (sequence === loadSequence.current && !detailPending) setLoading(false);
     }
   }, [runScopedRequest, setSelectedProfileId]);
   const loadReferenceData = useCallback((origin: "header" | "notice" | null) => {
@@ -153,7 +162,8 @@ export function SqlToQuestionPage() {
   }
 
   useEffect(() => {
-    if (!selectedProfileId) return;
+    // 業務プロファイルの一覧で選択を確かめてから詳細を読む（一覧の読込前は、保存した ID が今も使えるか分からない。#913）。
+    if (!selectedProfileId || referenceRefreshVersion === 0) return;
     const sequence = detailSequence.current + 1;
     detailSequence.current = sequence;
     void runScopedRequest(async (signal) => {

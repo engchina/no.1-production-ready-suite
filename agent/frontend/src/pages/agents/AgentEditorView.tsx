@@ -23,6 +23,8 @@ import {
   TextField,
   type ListPickerItem,
   type SelectFieldOption,
+  ApiErrorBanner,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 import {
   agentApi,
@@ -166,7 +168,7 @@ export function AgentEditorView({
           toast.success(t("evaluation.sets.fromTemplateCreated", { name: evaluationSet.name }));
         } catch (error) {
           toast.error(t("agent.template.evaluationSetFailed"), {
-            description: error instanceof Error ? error.message : undefined,
+            description: apiErrorMessage(error, t("common.error.retryLater")),
           });
         }
       }
@@ -257,10 +259,34 @@ export function AgentEditorView({
       </span>
     ),
   });
-  const skillItems = availableSkills
-    .filter((skill) => matchesSearch(skillSearch, [skill.name, skill.id, skill.description]))
-    .map(skillItem);
-  const selectedSkillItems = availableSkills.filter((skill) => skillIds.includes(skill.id)).map(skillItem);
+  // 割り当て済みで登録から消えたスキル（スキルの削除・プラグインの外し方による）。選択の一覧に出さないと
+  // 外せず、保存・公開が「登録されていないスキル」で断られ続けるため、ID を名前にした行で出す（#925）。
+  const knownSkillIds = new Set(availableSkills.map((skill) => skill.id));
+  const missingSkillIds = skillsLoading || skillsError ? [] : skillIds.filter((skillId) => !knownSkillIds.has(skillId));
+  const missingSkillItem = (skillId: string): ListPickerItem => ({
+    key: skillId,
+    label: skillId,
+    textValue: skillId,
+    description: t("agent.skillPicker.missingDescription", { id: skillId }),
+    meta: <StatusBadge variant="danger" label={t("agent.skillPicker.missing")} />,
+  });
+  const missingSkillItems = missingSkillIds.map(missingSkillItem);
+  const skillItems = [
+    ...missingSkillItems.filter((item) => matchesSearch(skillSearch, [item.key])),
+    ...availableSkills
+      .filter((skill) => matchesSearch(skillSearch, [skill.name, skill.id, skill.description]))
+      .map(skillItem),
+  ];
+  const selectedSkillItems = [
+    ...missingSkillItems,
+    ...availableSkills.filter((skill) => skillIds.includes(skill.id)).map(skillItem),
+  ];
+  // 公開は保存済みの下書きを版にする。画面の入力と違う内容を公開しないよう、未保存の変更があるあいだは
+  // 押せなくする（自動実行の「今すぐ実行」と同じ。#925）。
+  const publishBlocked = formDirty && actions.some((action) => action.id === "publish" && action.visible !== false);
+  const editorActions = actions.map((action) =>
+    action.id === "publish" ? { ...action, disabled: Boolean(action.disabled) || formDirty } : action
+  );
 
   function saveAgent() {
     setNameError(null);
@@ -327,7 +353,7 @@ export function AgentEditorView({
       <PageBody wide className="space-y-6">
         {/* 保存の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
         <SaveErrorBanner
-          message={error?.message ?? null}
+          message={error ? apiErrorMessage(error, t("common.error.save")) : null}
           attemptKey={saveAttemptKey}
           testId="agent-save-error"
         />
@@ -347,7 +373,7 @@ export function AgentEditorView({
             title={t("editor.overview")}
             actions={
               <ObjectActionBar
-                actions={actions}
+                actions={editorActions}
                 ariaLabel={t("common.entityActions", { name: agent.name })}
                 moreLabel={t("common.moreActions")}
                 testId="agent-object-actions"
@@ -362,6 +388,11 @@ export function AgentEditorView({
               <AgentVersionBadges agent={agent} />
               <span className="text-xs text-fg-muted">{`${t("common.updatedAt")}: ${formatDate(agent.updated_at)}`}</span>
             </div>
+            {publishBlocked ? (
+              <p className="text-xs text-fg-muted" data-testid="agent-save-before-publish">
+                {t("agent.version.saveBeforePublish")}
+              </p>
+            ) : null}
             {agent.migration_required ? <Banner severity="warning">{t("agent.migrationRequired")}</Banner> : null}
             {agent.published_version === null ? (
               // 公開するまで利用者のチャット・Run には使えない（管理者は Run の画面の「下書きで実行」で試せる）。
@@ -428,12 +459,17 @@ export function AgentEditorView({
             </Card>
           </Section>
           <Section title={t("agent.skills")}>
-            {skillsError ? <Banner severity="danger">{skillsError.message}</Banner> : null}
+            {skillsError ? <ApiErrorBanner error={skillsError} fallback={t("common.error.load")} /> : null}
+            {missingSkillIds.length ? (
+              <Banner severity="warning">
+                {t("agent.skillPicker.missingBanner", { skills: missingSkillIds.join("、") })}
+              </Banner>
+            ) : null}
             {skillsLoading ? (
               <TimedLoadingState label={t("loading.skills")} testId="agent-skills-loading">
                 <ListSkeleton rows={4} />
               </TimedLoadingState>
-            ) : availableSkills.length ? (
+            ) : availableSkills.length || missingSkillIds.length ? (
               <ListPicker
                 id={`${fieldId}-agent-skills`}
                 label={t("agent.skillPicker.label")}

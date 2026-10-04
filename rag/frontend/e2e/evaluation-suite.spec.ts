@@ -147,11 +147,24 @@ test("再読込しても実行中の評価の job の状態を表示し、失敗
   await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 2 件（0%）");
   expect(jobs.runPayloads).toHaveLength(1);
 
-  jobs.fail("run", "品質評価の実行に失敗しました（RuntimeError）。");
+  jobs.fail(
+    "run",
+    "品質評価の実行中に予期しないエラーが発生したため、評価を中断しました。サーバーのログを確認して、もう一度実行してください。 エラー種別: RuntimeError"
+  );
   const panel = page.getByTestId("evaluation-run-job");
   await expect(panel.locator("[data-status-variant]")).toHaveText("失敗");
   await expect(panel.getByText("評価を最後まで実行できませんでした。")).toBeVisible();
-  await expect(panel.getByText("品質評価の実行に失敗しました（RuntimeError）。")).toBeVisible();
+  // 本文は原因と対処だけにし、例外の種別は開いた「詳細」に出す（messaging.md §10.3）。
+  await expect(
+    panel.getByText(
+      "品質評価の実行中に予期しないエラーが発生したため、評価を中断しました。サーバーのログを確認して、もう一度実行してください。",
+      { exact: true }
+    )
+  ).toBeVisible();
+  const details = panel.locator("details").filter({ hasText: "詳細" });
+  await expect(details).toHaveAttribute("open", "");
+  await expect(details).toContainText("エラー種別");
+  await expect(details).toContainText("RuntimeError");
 });
 
 test("基準を選ぶと閾値プレビューを更新し suite を送る", async ({ page }) => {
@@ -179,6 +192,56 @@ test("基準を選ぶと閾値プレビューを更新し suite を送る", asyn
   await expect.poll(() => jobs.runPayloads[0]?.suite).toBe("strict");
   await expect(page.getByText("評価の基準: 厳格")).toBeVisible();
   await expectNoPageOverflow(page);
+});
+
+// #977: 状態の取得が retry を使い切って失敗しても、実行中の job の状態の取得を止めない（止めると「実行中」のまま）。
+test("実行中の評価の状態の取得が一時的に失敗しても、取得を続けて完了を出す", async ({ page }) => {
+  test.setTimeout(60_000);
+  const jobs = await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("standard") });
+  await page.goto("/evaluation");
+  await page.getByRole("button", { name: "評価実行" }).click();
+  await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 2 件（0%）");
+
+  let failing = true;
+  let failures = 0;
+  await page.route("**/api/evaluation/jobs/jobrun*", async (route) => {
+    if (failing && route.request().method() === "GET") {
+      failures += 1;
+      await route.fulfill({ status: 503, json: { data: null, error_messages: ["一時的に利用できません。"] } });
+      return;
+    }
+    await route.fallback();
+  });
+  // 1 回の取得の retry（3 回）を使い切ると、パネルの直下に取得できていないことを出す。
+  const warning = page.getByText("評価の実行状況を取得できません。自動で取得し直しています。", { exact: false });
+  await expect(warning).toBeVisible({ timeout: 20_000 });
+  const panel = page.getByTestId("evaluation-run-job");
+  await expect(panel.locator("[data-status-variant]")).toHaveText("実行中");
+  await expectNoPageOverflow(page);
+
+  failing = false;
+  jobs.complete("run");
+  await expect(panel.locator("[data-status-variant]")).toHaveText("完了", { timeout: 15_000 });
+  await expect(warning).toHaveCount(0);
+  await expect(page.getByTestId("evaluation-perspective-retrieval")).toBeVisible();
+});
+
+test("cases の id が空・重複していると、実行せずに Golden set JSON の欄の直下に出す", async ({ page }) => {
+  const jobs = await mockEvaluationJobs(page, { autoComplete: true });
+  await page.goto("/evaluation");
+  const request = page.getByLabel("Golden set JSON");
+  const run = page.getByRole("button", { name: "評価実行" });
+
+  await request.fill(JSON.stringify({ cases: [{ id: "a", query: "q1" }, { id: "a", query: "q2" }] }));
+  await run.click();
+  await expect(request).toHaveAccessibleDescription(/cases の id が重複しています: a。/);
+  await expect(request).toBeFocused();
+
+  await request.fill(JSON.stringify({ cases: [{ id: "a", query: "q1" }, { query: "q2" }] }));
+  await page.getByRole("button", { name: "比較実行" }).click();
+  await expect(request).toHaveAccessibleDescription(/cases の 2 件目に id/);
+  expect(jobs.runPayloads).toHaveLength(0);
+  expect(jobs.comparePayloads).toHaveLength(0);
 });
 
 async function mockKnowledgeBases(page: Page) {
@@ -379,7 +442,9 @@ test("評価の JSON のエラーは欄の直下に出し、その欄へフォ�
   await run.click();
   await expect(request).toHaveAccessibleDescription(/Golden set JSON の cases を 1 件以上入力してください。/);
 
+  // 編集中の Golden set JSON は確認してからサンプルに置き換える。
   await page.getByRole("button", { name: "サンプルを読み込む" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "サンプルで置き換える" }).click();
   const experiments = page.getByLabel("Experiments JSON");
   await experiments.fill("");
   await page.getByRole("button", { name: "比較実行" }).click();
@@ -393,6 +458,37 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
+  test(`サンプルを読み込むは編集中の Golden set JSON を確認してから置き換える (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/evaluation");
+    const request = page.getByLabel("Golden set JSON");
+    const sample = await request.inputValue();
+    const loadSample = page.getByRole("button", { name: "サンプルを読み込む" });
+
+    // サンプルのままなら確認しない。
+    await loadSample.click();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+
+    const edited = '{"cases": [{"id": "my-case", "query": "編集中の質問"}]}';
+    await request.fill(edited);
+    await loadSample.click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("サンプルで置き換えますか？");
+    await expect(dialog).toContainText("今の内容は元に戻せません。");
+    await expectNoPageOverflow(page);
+
+    // やめたら編集中の内容を残す。
+    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(request).toHaveValue(edited);
+
+    await loadSample.click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "サンプルで置き換える" }).click();
+    await expect(request).toHaveValue(sample);
+  });
+
   test(`評価結果は検索・根拠・回答の観点ごとに 9 つの指標とケースの判定を出す (${viewport.name})`, async ({
     page,
   }) => {

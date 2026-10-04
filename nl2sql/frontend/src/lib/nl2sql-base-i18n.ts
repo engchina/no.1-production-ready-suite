@@ -72,6 +72,7 @@ export const ja = {
     "Select AI（DBMS_CLOUD_AI）が OCI を呼び出すための Credential を、データベースに作成・更新します。",
   "settings.database.loading": "データベース設定を読み込んでいます。",
   "settings.database.selectAiCredential.title": "Select AI Credential",
+  "settings.database.selectAiCredential.loading": "Select AI Credential の状態を読み込んでいます",
   "settings.database.selectAiCredential.description":
     "Oracle DBMS_CLOUD_AI が OCI を呼び出すための署名鍵 Credential を、現在のデータベースユーザーに作成します。秘密鍵はブラウザへ返しません。",
   "settings.database.selectAiCredential.status.created": "作成済み",
