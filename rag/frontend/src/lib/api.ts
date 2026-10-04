@@ -7,6 +7,16 @@
  */
 
 import { t } from "./i18n";
+import {
+  ApiTransportError,
+  httpApiErrorPresentation,
+  isAbortError,
+  toApiTransportError,
+  type ApiErrorDetailLabels,
+  type ApiErrorPresentable,
+  type ApiErrorPresentation,
+  type ApiTransportRequest,
+} from "@engchina/production-ready-ui";
 // Cookie セッションの CSRF と 401 / 403 の通知は3製品共通（platform の共有パッケージ。#220 / #214）。
 import { csrfHeader, notifyAuthResponse, notifyAuthStatus } from "@engchina/production-ready-system-settings";
 import type { BaseCurrentUser } from "@engchina/production-ready-system-settings";
@@ -2041,9 +2051,11 @@ export interface ApiErrorDetails {
   errorCode?: string;
   fieldErrors?: ApiFieldError[];
   requestId?: string;
+  /** 応答が届かなかった失敗（timeout・通信断）の `ApiTransportError`（#906）。 */
+  cause?: ApiTransportError;
 }
 
-export class ApiError extends Error {
+export class ApiError extends Error implements ApiErrorPresentable {
   readonly status: number;
   readonly messages: string[];
   readonly errorCode?: string;
@@ -2057,7 +2069,7 @@ export class ApiError extends Error {
     const resolved = isFallbackMessage
       ? [t("common.apiError", { status })]
       : messages;
-    super(resolved[0]);
+    super(resolved[0], details.cause ? { cause: details.cause } : undefined);
     this.name = "ApiError";
     this.status = status;
     this.messages = resolved;
@@ -2066,6 +2078,38 @@ export class ApiError extends Error {
     this.fieldErrors = details.fieldErrors ?? [];
     this.requestId = details.requestId;
   }
+
+  /** 失敗の面の要約と「詳細」（共通の `ApiErrorBanner` / `presentApiError`。#906）。 */
+  toApiErrorPresentation(labels?: ApiErrorDetailLabels): ApiErrorPresentation {
+    return httpApiErrorPresentation(this, labels);
+  }
+}
+
+/**
+ * 応答が届かなかった失敗（timeout・通信断）を `ApiError` にする（#906）。
+ *
+ * 画面の多くは `error instanceof ApiError ? error.message : 既定の文` で失敗を出すため、`message` を
+ * 利用者向けの日本語（何が起きたか + 次の操作）にした `ApiError` で投げる。ブラウザの英語の文
+ * （`Failed to fetch` など）は `cause` の `ApiTransportError` に残し、`ApiErrorBanner` の「詳細」にだけ出す。
+ * status は timeout が 408、通信断が 0（応答なし）。
+ */
+export function apiErrorFromTransport(transport: ApiTransportError): ApiError {
+  return new ApiError(transport.kind === "timeout" ? 408 : 0, [transport.message], {
+    cause: transport,
+  });
+}
+
+/**
+ * fetch・本文の読み取りが投げた例外が timeout・通信断なら、利用者向けの `ApiError` を返す。
+ * 利用者の中止（`AbortError`）などは `null` を返し、呼び出し側はそのまま投げる。stream の直接 fetch も使う。
+ */
+export function apiErrorFromFetchFailure(
+  cause: unknown,
+  request: ApiTransportRequest,
+): ApiError | null {
+  if (cause instanceof ApiError) return cause;
+  const transport = toApiTransportError(cause, request);
+  return transport ? apiErrorFromTransport(transport) : null;
 }
 
 interface ErrorEnvelope {
@@ -2137,14 +2181,12 @@ function runtimeApiTimeoutOverrideMs(): number | null {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
-function timeoutMessage(timeoutMs: number): string {
-  return t("common.api.timeout", { seconds: Math.ceil(timeoutMs / 1000) });
-}
-
 async function parseEnvelope<T>(res: Response): Promise<ApiResponse<T>> {
   try {
     return (await res.json()) as ApiResponse<T>;
-  } catch {
+  } catch (cause) {
+    // 本文の読み取り中の中止・timeout・通信断は、空の成功にせず呼び出し側で失敗にする（#906）。
+    if (cause instanceof Error && cause.name !== "SyntaxError") throw cause;
     return { data: null, error_messages: [], warning_messages: [] };
   }
 }
@@ -2206,10 +2248,13 @@ async function requestEnvelope<T>(
     }
     return envelope;
   } catch (error) {
+    if (error instanceof ApiError) throw error;
+    const request = { method: (init?.method ?? "GET").toUpperCase(), path, timeoutMs };
     if (timedOut) {
-      throw new ApiError(408, [timeoutMessage(timeoutMs)]);
+      throw apiErrorFromTransport(new ApiTransportError("timeout", request, error));
     }
-    throw error;
+    if (isAbortError(error)) throw error;
+    throw apiErrorFromFetchFailure(error, request) ?? error;
   } finally {
     if (timeoutId !== undefined) clearTimeout(timeoutId);
     externalSignal?.removeEventListener("abort", abortFromExternal);
@@ -2294,8 +2339,18 @@ function requestUpload<T>(
       }
       resolve(envelope.data as T);
     });
-    // 接続の失敗は fetch と同じく ApiError ではない例外にする（画面は既定の失敗文言を出す）。
-    xhr.addEventListener("error", () => reject(new TypeError("upload request failed")));
+    // 接続の失敗は fetch の通信断と同じく、利用者向けの文の ApiError にする（#906）。
+    xhr.addEventListener("error", () =>
+      reject(
+        apiErrorFromTransport(
+          new ApiTransportError(
+            "network",
+            { method: "POST", path },
+            new TypeError("upload request failed"),
+          ),
+        ),
+      ),
+    );
     xhr.addEventListener("abort", () => reject(new DOMException("upload aborted", "AbortError")));
     xhr.send(body);
   });

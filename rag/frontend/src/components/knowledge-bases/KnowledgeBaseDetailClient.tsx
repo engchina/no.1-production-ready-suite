@@ -5,7 +5,7 @@ import { useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { ListPagination } from "@/components/ListPagination";
-import { EmptyState, ErrorState } from "@/components/StateViews";
+import { EmptyState, ApiErrorState } from "@/components/StateViews";
 import { StatusBadge } from "@/components/StatusBadge";
 import { EditorTargetState } from "@/components/layout/EntityLayout";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -402,12 +402,9 @@ function KnowledgeBaseDocuments({
         <DocumentAssignment id="knowledge-base-add-documents" knowledgeBase={knowledgeBase} onClose={closeAssignment} />
       ) : null}
       {documents.isError ? (
-        <ErrorState
-          message={
-            documents.error instanceof ApiError
-              ? documents.error.message
-              : t("knowledgeBases.error.documents")
-          }
+        <ApiErrorState
+          error={documents.error}
+          fallback={t("knowledgeBases.error.documents")}
           onRetry={() => void documents.refetch()}
         />
       ) : documents.isPending || movingToLastPage ? (
