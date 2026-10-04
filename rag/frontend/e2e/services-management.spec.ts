@@ -561,6 +561,35 @@ test("取得に失敗したら再試行できる", async ({ page }) => {
   await expect(page.getByRole("button", { name: "再試行" })).toBeVisible();
 });
 
+test("別のサービスの操作を続けて始めても、先の操作の実行中の表示と結果を失わない", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await mockServices(page, { controlEnabled: true });
+  const releases = new Map<string, () => void>();
+  await page.route("**/api/services/*/start", async (route) => {
+    const id = decodeURIComponent(route.request().url().match(/services\/([^/]+)\/start/)?.[1] ?? "");
+    await new Promise<void>((resolve) => releases.set(id, resolve));
+    await route.fallback();
+  });
+
+  await page.goto("/settings/services");
+  await page.getByRole("button", { name: "Docling 起動" }).click();
+  await expect(page.getByTestId("service-processing-parser-docling")).toBeVisible();
+  await page.getByRole("button", { name: "ASR(音声文字起こし) 起動" }).click();
+  await expect(page.getByTestId("service-processing-parser-asr")).toBeVisible();
+  // 先に始めた Docling の起動はまだ終わっていない。
+  await expect(page.getByTestId("service-processing-parser-docling")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Docling 起動" })).toBeDisabled();
+
+  releases.get("parser-docling")?.();
+  await expect(page.getByText("Docling を起動しました。")).toBeVisible();
+  await expect(page.getByTestId("service-processing-parser-docling")).toHaveCount(0);
+  // 後から始めた ASR の起動は続いている。
+  await expect(page.getByTestId("service-processing-parser-asr")).toBeVisible();
+  releases.get("parser-asr")?.();
+  await expect(page.getByText("ASR(音声文字起こし) を起動しました。")).toBeVisible();
+  await expect(page.getByTestId("service-processing-parser-asr")).toHaveCount(0);
+});
+
 async function expectNoHorizontalOverflow(page: Page) {
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth

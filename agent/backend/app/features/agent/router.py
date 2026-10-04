@@ -1067,11 +1067,17 @@ async def import_runtime_snapshot(
             )
         )
     if not validation.valid:
-        raise HTTPException(status_code=400, detail="snapshot validation failed")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"スナップショットに {len(validation.errors)} 件のエラーがあるため置換できません。"
+                "「検証」でエラーの内容を確認してください。"
+            ),
+        )
     if not request.confirm_replace:
         raise HTTPException(
             status_code=400,
-            detail="confirm_replace=true is required when dry_run=false",
+            detail="置換するには確認（confirm_replace=true）が必要です。",
         )
     try:
         runtime_repository.replace_snapshot(request.snapshot)
@@ -2582,7 +2588,7 @@ async def stream_run_events_websocket(
             {
                 "type": "error",
                 "error_code": "rbac.forbidden",
-                "message": "required role: viewer/operator/approver/auditor/admin",
+                "message": "この実行のイベントを購読する権限がありません。",
             }
         )
         await websocket.close(code=1008)
@@ -2594,7 +2600,7 @@ async def stream_run_events_websocket(
             {
                 "type": "error",
                 "error_code": "run.not_found",
-                "message": "run not found",
+                "message": "実行が見つかりません。",
             }
         )
         await websocket.close(code=1008)
@@ -2604,7 +2610,7 @@ async def stream_run_events_websocket(
             {
                 "type": "error",
                 "error_code": "rbac.agent_forbidden",
-                "message": "agent access denied",
+                "message": "この業務 Agent の実行を参照する権限がありません。",
             }
         )
         await websocket.close(code=1008)
@@ -2876,6 +2882,15 @@ def _mcp_connections_response() -> McpConnectionsData:
     )
 
 
+def _changes_builtin_auth(current: McpConnectionConfig, patch: McpConnectionPatch) -> bool:
+    """組み込みの接続（RAG / NL2SQL）の認証方式・audience を今と違う値にする変更か。"""
+    if patch.auth_mode is not None and patch.auth_mode != current.effective_auth_mode():
+        return True
+    return patch.service_audience is not None and (
+        (patch.service_audience.strip() or current.server_id) != current.audience()
+    )
+
+
 def _upsert_mcp_connection(server_id: str, payload: McpConnectionPatch) -> McpConnectionConfig:
     config = runtime_config_store.upsert_mcp_server(
         server_id,
@@ -3030,9 +3045,15 @@ async def patch_mcp_connection(
     _: None = Depends(require_admin),
 ) -> ApiResponse[McpConnectionSettings]:
     try:
-        runtime_config_store.get_mcp(server_id)
+        current = runtime_config_store.get_mcp(server_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="MCP 接続が見つかりません。") from exc
+    if current.source == "builtin" and _changes_builtin_auth(current, patch):
+        # RAG / NL2SQL は Run の利用者のサービストークンで呼ぶ（再起動の後の復元も認証方式を戻す）。
+        raise HTTPException(
+            status_code=400,
+            detail="RAG / NL2SQL の接続の認証方式と audience は変えられません。",
+        )
     config = _upsert_mcp_connection(server_id, patch)
     return ApiResponse(data=_mcp_connection_settings(config))
 
@@ -3139,6 +3160,12 @@ def _websocket_heartbeat_payload(run: RunState) -> dict[str, object]:
     }
 
 
+# WebSocket のコマンド・接続の拒否の `message` は、画面が Toast の説明にそのまま出す利用者向けの文
+# （`error_code` は画面・テストの判定に使うため変えない。#1031）。画面の状態が古いと起きる拒否には
+# 再読み込みを案内する。
+_WEBSOCKET_RELOAD_HINT = "画面を再読み込みしてから、もう一度操作してください。"
+
+
 async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
     try:
         message = await wait_for(websocket.receive_json(), timeout=0.01)
@@ -3148,7 +3175,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
         await websocket.send_json(
             _websocket_error_payload(
                 "websocket.invalid_message",
-                "message must be a JSON object",
+                "操作の内容を読み取れませんでした。" + _WEBSOCKET_RELOAD_HINT,
             )
         )
         return
@@ -3171,7 +3198,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "rbac.forbidden",
-                    "cancel requires operator/admin role",
+                    "実行を取り消す権限がありません。",
                     command="cancel",
                     command_id=normalized_command_id,
                 )
@@ -3187,7 +3214,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "websocket.command_id_conflict",
-                    "command_id was already used for another command",
+                    "同じ操作 ID で別の操作が送られています。" + _WEBSOCKET_RELOAD_HINT,
                     command="cancel",
                     command_id=normalized_command_id,
                 )
@@ -3199,7 +3226,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "run.not_found",
-                    "run not found",
+                    "実行が見つかりません。",
                     command="cancel",
                     command_id=normalized_command_id,
                 )
@@ -3212,7 +3239,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "rbac.forbidden",
-                    "resume requires operator/admin role",
+                    "実行を再開する権限がありません。",
                     command="resume",
                     command_id=normalized_command_id,
                 )
@@ -3228,7 +3255,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "websocket.command_id_conflict",
-                    "command_id was already used for another command",
+                    "同じ操作 ID で別の操作が送られています。" + _WEBSOCKET_RELOAD_HINT,
                     command="resume",
                     command_id=normalized_command_id,
                 )
@@ -3243,7 +3270,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "run.not_found",
-                    "run not found",
+                    "実行が見つかりません。",
                     command="resume",
                     command_id=normalized_command_id,
                 )
@@ -3256,7 +3283,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "rbac.forbidden",
-                    "approval_decision requires approver/admin role",
+                    "承認・却下を決める権限がありません。",
                     command="approval_decision",
                     command_id=normalized_command_id,
                 )
@@ -3268,7 +3295,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "websocket.invalid_command",
-                    "approval_decision requires approval_id",
+                    "承認の依頼が指定されていません。" + _WEBSOCKET_RELOAD_HINT,
                     command="approval_decision",
                     command_id=normalized_command_id,
                 )
@@ -3278,7 +3305,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "websocket.invalid_command",
-                    "approval_decision requires boolean approved",
+                    "承認か却下かが指定されていません。" + _WEBSOCKET_RELOAD_HINT,
                     command="approval_decision",
                     command_id=normalized_command_id,
                 )
@@ -3290,7 +3317,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "approval.not_found",
-                    "approval not found",
+                    "承認の依頼が見つかりません。",
                     command="approval_decision",
                     command_id=normalized_command_id,
                 )
@@ -3300,7 +3327,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "approval.run_mismatch",
-                    "approval does not belong to this run",
+                    "この承認の依頼は表示中の実行のものではありません。" + _WEBSOCKET_RELOAD_HINT,
                     command="approval_decision",
                     command_id=normalized_command_id,
                 )
@@ -3324,7 +3351,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
             await websocket.send_json(
                 _websocket_error_payload(
                     "websocket.command_id_conflict",
-                    "command_id was already used for another command",
+                    "同じ操作 ID で別の操作が送られています。" + _WEBSOCKET_RELOAD_HINT,
                     command="approval_decision",
                     command_id=normalized_command_id,
                 )
@@ -3354,7 +3381,7 @@ async def _handle_websocket_command(websocket: WebSocket, run_id: str) -> None:
     await websocket.send_json(
         _websocket_error_payload(
             "websocket.unknown_command",
-            f"unknown command: {command}",
+            f"この操作（{command}）には対応していません。",
             command=str(command) if command is not None else None,
             command_id=normalized_command_id,
         )
