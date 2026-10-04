@@ -15044,6 +15044,10 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect.poll(() => api.extractJoinWherePayload?.prompt_profile).toBe("sql_structure");
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveValue(/EMPLOYEE.*DEPARTMENT/);
   await expect(page.getByLabel("抽出条件 (WHERE)")).toHaveValue("EMPLOYEE(e).STATUS = 'A'");
+  // 抽出の方式は API の内部値（deterministic）を出さず、文言で出す（#934）。
+  const joinWhereResult = page.getByRole("region", { name: "JOIN/WHERE 条件抽出結果" });
+  await expect(joinWhereResult.getByText("規則ベース（AI 未使用）", { exact: true })).toBeVisible();
+  await expect(joinWhereResult.getByText("deterministic", { exact: true })).toHaveCount(0);
   await page.getByText("SQL構造解析結果").click();
   await expect(page.getByText("## SQL構造分析")).toBeVisible();
 
