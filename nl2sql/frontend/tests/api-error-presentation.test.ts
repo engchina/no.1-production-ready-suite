@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ApiError, ApiTransportError } from "../src/lib/api.ts";
-import { presentApiError } from "../src/lib/api-error-presentation.ts";
+import { presentApiError } from "@engchina/production-ready-ui";
 
 test("timeout は日本語の要約・次の操作と、英語の元の文を含む詳細に分ける (#900)", () => {
   const cause = new DOMException("signal timed out", "TimeoutError");
@@ -42,7 +42,7 @@ test("通信断は接続の確認を案内する (#900)", () => {
   );
 });
 
-test("backend の失敗は request ID を本文に重ねず詳細に出す", () => {
+test("NL2SQL の ApiError は request ID を本文に重ねず詳細に出す（共通の presentApiError。#906）", () => {
   const presented = presentApiError(
     new ApiError(503, ["モデルへ接続できません。"], "MODEL_UNAVAILABLE", undefined, undefined, "req-1"),
     "SQL の生成を開始できませんでした。",

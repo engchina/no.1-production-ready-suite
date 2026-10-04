@@ -40,7 +40,7 @@ import { useMemo, useRef, useState, type FormEvent } from "react";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { ListPagination } from "@/components/ListPagination";
-import { EmptyState, ErrorState } from "@/components/StateViews";
+import { EmptyState, ApiErrorState } from "@/components/StateViews";
 import {
   KnowledgeBaseScopePicker,
   useKnowledgeBaseSelectionHealth,
@@ -400,10 +400,9 @@ function SearchAnswerProfileList({
         />
 
         {query.isError ? (
-          <ErrorState
-            message={
-              query.error instanceof ApiError ? query.error.message : t("searchAnswerProfiles.error.title")
-            }
+          <ApiErrorState
+            error={query.error}
+            fallback={t("searchAnswerProfiles.error.title")}
             onRetry={() => void query.refetch()}
           />
         ) : query.isPending ? (

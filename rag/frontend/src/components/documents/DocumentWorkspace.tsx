@@ -82,6 +82,7 @@ import {
   Tabs,
   TextField,
   TimedLoadingState,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import {
@@ -1111,7 +1112,8 @@ export function DocumentWorkspace({
     phase: t(phaseLabelKey(failedSubmissionPhase)),
   });
   const submissionErrorDetail =
-    enqueueIngestion.error instanceof Error ? enqueueIngestion.error.message.trim() : "";
+    // 組み込みの例外（英語の文）は出さない（#906）。timeout・通信断は利用者向けの文の ApiError で届く。
+    apiErrorMessage(enqueueIngestion.error, "").trim();
   const submissionErrorMessage =
     submissionErrorDetail && submissionErrorDetail !== phaseStartFailedMessage
       ? `${phaseStartFailedMessage} ${submissionErrorDetail}`

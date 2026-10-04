@@ -19,6 +19,7 @@ import {
   useConfirm,
   usePagination,
   type EntityAction,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 
 import { agentPaginationLabels } from "@/components/ListViews";
@@ -193,7 +194,7 @@ export function EvaluationSetEditor({
   });
   const importCases = useMutation({
     mutationFn: (file: File) => agentApi.parseEvaluationCasesXlsx(file),
-    onError: (error) => toast.error(t("evaluation.set.importFailed"), { description: error.message }),
+    onError: (error) => toast.error(t("evaluation.set.importFailed"), { description: apiErrorMessage(error, t("common.error.retryLater")) }),
   });
   const remove = useMutation({
     mutationFn: (id: string) => agentApi.deleteEvaluationSet(id),
@@ -202,7 +203,7 @@ export function EvaluationSetEditor({
       await queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
       onDeleted();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
   const { confirmClose } = useEditorLeaveGuard(dirty, save.isPending);
 
@@ -281,7 +282,7 @@ export function EvaluationSetEditor({
     try {
       downloadBlob(await agentApi.downloadEvaluationTemplate(), "evaluation-cases-template.xlsx");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(apiErrorMessage(error, t("common.error.operation")));
     }
   }
 
@@ -289,7 +290,7 @@ export function EvaluationSetEditor({
     try {
       downloadBlob(await agentApi.downloadEvaluationSetXlsx(set.id), `${set.name}.xlsx`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(apiErrorMessage(error, t("common.error.operation")));
     }
   }
 
@@ -364,7 +365,7 @@ export function EvaluationSetEditor({
       />
       <PageBody wide className="space-y-6">
         <SaveErrorBanner
-          message={save.error?.message ?? null}
+          message={save.error ? apiErrorMessage(save.error, t("common.error.save")) : null}
           attemptKey={save.submittedAt}
           testId="evaluation-set-save-error"
         />

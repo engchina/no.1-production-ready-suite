@@ -16,6 +16,7 @@ import {
   SendHorizontal,
 } from "lucide-react";
 import {
+  ApiErrorBanner,
   Banner,
   Button,
   Card,
@@ -48,7 +49,6 @@ import {
   useWorkspaceIdentity,
   useWorkspaceState,
 } from "@/components/WorkspaceState";
-import { ApiErrorBanner } from "@/components/ApiErrorBanner";
 import { apiGet, apiPost, isTransportError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { copyTextToClipboard } from "@/lib/clipboard";
