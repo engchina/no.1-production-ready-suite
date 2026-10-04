@@ -98,6 +98,22 @@ interface SearchRun {
   stages: SearchStageEvent[];
 }
 
+/**
+ * 検索 1 回の条件。「検索」は入力欄・選択から作り、表示中の結果への操作（再試行・類似問を使用しない・
+ * 「自動」の条件を外す）はこの条件で送り直す（入力欄を書き換えていても前の質問を送る。#914）。
+ */
+interface SearchRequestSnapshot {
+  query: string;
+  searchAnswerProfileId: string;
+  generateAnswer: boolean;
+  /** 回答のモデル（空は既定のテキストモデル）。 */
+  answerModelId: string;
+  topK: TopKOption;
+  filters: Record<string, string>;
+  /** 質問から読み取った条件のうち、利用者が外した項目（#652）。 */
+  excludedAutoFields: string[];
+}
+
 const TOP_K_OPTIONS = ["5", "10", "20", "50"] as const;
 const DEFAULT_TOP_K = "20";
 type TopKOption = (typeof TOP_K_OPTIONS)[number];
@@ -158,8 +174,9 @@ export function SearchClient() {
   const [answerSearchAnswerProfileId, setAnswerSearchAnswerProfileId] = useState<string | null>(null);
   // 直前の送信が類似 FAQ の提示を飛ばしたか。エラーの再試行を同じ操作にする（#285）。
   const [lastSkipFaq, setLastSkipFaq] = useState(false);
-  // 質問から読み取った条件のうち、利用者が外した項目（#652）。新しく検索するたびに空に戻す。
-  const [autoFieldExcluded, setAutoFieldExcluded] = useState<string[]>([]);
+  // 直前に送った検索の条件。再試行・類似問を使用しない・「自動」の条件を外すはこれで送り直す（#914）。
+  // 外した「自動」の条件（#652）もここに持ち、入力欄から新しく検索するたびに空に戻す。
+  const [lastRequest, setLastRequest] = useState<SearchRequestSnapshot | null>(null);
   const [faqSuggestions, setFaqSuggestions] = useState<ApprovedFaqSuggestionData[] | null>(null);
   const [faqAnswer, setFaqAnswer] = useState<ApprovedFaqSuggestionData | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -197,7 +214,8 @@ export function SearchClient() {
   const hasSearchTuning = topK !== DEFAULT_TOP_K;
   const hasAdvancedSettings = hasFilters || hasSearchTuning;
 
-  const runSubmit = async (skipFaq: boolean, excludedAutoFields: string[]) => {
+  /** 入力欄・選択から検索の条件を作って送る（「検索」ボタンと Enter）。 */
+  const runSubmit = async () => {
     const trimmed = query.trim();
     if (!trimmed || phase === "streaming") return;
     if (!searchAnswerProfileId) {
@@ -214,37 +232,48 @@ export function SearchClient() {
       return;
     }
     setScopeError("");
-    setSubmittedQuery(trimmed);
-    setLastSkipFaq(skipFaq);
-    setAutoFieldExcluded(excludedAutoFields);
-    setFaqSuggestions(null);
-    setFaqAnswer(null);
-    if (!skipFaq) {
-      // 検索・回答プロファイルの承認済み FAQ に類似問があれば、回答生成の前に提示する(rag_poc の類似問)。
-      try {
-        const faq = await api.suggestApprovedFaq(searchAnswerProfileId, trimmed);
-        if (faq.suggestions.length > 0) {
-          setFaqSuggestions(faq.suggestions);
-          return;
-        }
-      } catch {
-        // 類似問の照会に失敗しても通常の回答生成は続ける。
-      }
-    }
+    await runRequest(
+      {
+        query: trimmed,
+        searchAnswerProfileId,
+        generateAnswer,
+        answerModelId: generateAnswer ? answerModelId : "",
+        topK,
+        filters: buildSearchFilters({
+          classification,
+          extractionFields: extractionFieldFilterValue(fieldFilter.conditions),
+        }),
+        excludedAutoFields: [],
+      },
+      false
+    );
+  };
 
+  /**
+   * 検索の条件で、類似 FAQ の照会と検索の stream を行う。押した時点で実行中にし、照会の間も「停止」と
+   * 進行を出す（照会は embedding を呼ぶことがあり時間がかかる。#915）。
+   */
+  const runRequest = async (request: SearchRequestSnapshot, skipFaq: boolean) => {
+    if (phase === "streaming") return;
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-    const startedAtMs = Date.now();
+    const startedAtMs = runStartedAtMs();
 
+    setLastRequest(request);
+    setSubmittedQuery(request.query);
+    setLastSkipFaq(skipFaq);
+    setFaqSuggestions(null);
+    setFaqAnswer(null);
     setPhase("streaming");
     setAnswer("");
     setCitations([]);
     setMeta(null);
     setErrorText("");
-    setAnswerSearchAnswerProfileId(searchAnswerProfileId);
+    setAnswerSearchAnswerProfileId(request.searchAnswerProfileId);
+    setAppliedFilters(request.filters);
     setRun({
-      generateAnswer,
+      generateAnswer: request.generateAnswer,
       startedAtMs,
       startedAtIso: new Date(startedAtMs).toISOString(),
       endedAtMs: null,
@@ -253,20 +282,44 @@ export function SearchClient() {
     });
 
     try {
-      const filters = buildSearchFilters({
-        classification,
-        extractionFields: extractionFieldFilterValue(fieldFilter.conditions),
-      });
-      setAppliedFilters(filters);
+      if (!skipFaq) {
+        // 検索・回答プロファイルの承認済み FAQ に類似問があれば、回答生成の前に提示する(rag_poc の類似問)。
+        let suggestions: ApprovedFaqSuggestionData[] = [];
+        try {
+          suggestions = (
+            await api.suggestApprovedFaq(
+              request.searchAnswerProfileId,
+              request.query,
+              "search",
+              controller.signal
+            )
+          ).suggestions;
+        } catch {
+          // 類似問の照会に失敗しても通常の回答生成は続ける（停止したときは下で抜ける）。
+        }
+        if (controller.signal.aborted) return;
+        if (suggestions.length > 0) {
+          // 選ぶまで検索しない。実行の表示を消して FAQ の提示を出す。
+          setFaqSuggestions(suggestions);
+          setRun(null);
+          setPhase("idle");
+          return;
+        }
+      }
+
       await streamSearch(
         {
-          query: trimmed,
-          top_k: Number(topK),
-          search_answer_profile_id: searchAnswerProfileId,
-          generate_answer: generateAnswer,
-          ...(generateAnswer && answerModelId ? { model_id: answerModelId } : {}),
-          ...(excludedAutoFields.length ? { auto_field_filter_excluded: excludedAutoFields } : {}),
-          ...(Object.keys(filters).length ? { filters } : {}),
+          query: request.query,
+          top_k: Number(request.topK),
+          search_answer_profile_id: request.searchAnswerProfileId,
+          generate_answer: request.generateAnswer,
+          ...(request.generateAnswer && request.answerModelId
+            ? { model_id: request.answerModelId }
+            : {}),
+          ...(request.excludedAutoFields.length
+            ? { auto_field_filter_excluded: request.excludedAutoFields }
+            : {}),
+          ...(Object.keys(request.filters).length ? { filters: request.filters } : {}),
         },
         {
           onStage: (stage) =>
@@ -323,15 +376,28 @@ export function SearchClient() {
 
   // pointerdown と click の両方から呼ばれる。類似問の照会を await する間も二重送信しないよう ref で守る。
   const submittingRef = useRef(false);
-  const submit = async (skipFaq = false, excludedAutoFields: string[] = []) => {
+  const guardSubmit = async (run: () => Promise<void>) => {
     if (submittingRef.current) return;
     submittingRef.current = true;
     try {
-      await runSubmit(skipFaq, excludedAutoFields);
+      await run();
     } finally {
       submittingRef.current = false;
     }
   };
+  const submit = () => guardSubmit(runSubmit);
+  /**
+   * 表示中の結果（エラー・類似 FAQ の提示）を出した検索を、同じ条件で送り直す。入力欄・選択を書き換えて
+   * いても使わない（#914）。`excludedAutoFields` を渡すと、外した「自動」の条件を差し替える。
+   */
+  const resubmit = (skipFaq: boolean, excludedAutoFields?: string[]) =>
+    guardSubmit(async () => {
+      if (!lastRequest) return;
+      await runRequest(
+        excludedAutoFields ? { ...lastRequest, excludedAutoFields } : lastRequest,
+        skipFaq
+      );
+    });
 
   const cancel = () => {
     abortRef.current?.abort();
@@ -659,7 +725,7 @@ export function SearchClient() {
                 setFaqSuggestions(null);
                 setFaqAnswer(suggestion);
               }}
-              onSkip={() => void submit(true)}
+              onSkip={() => void resubmit(true)}
             />
           ) : faqAnswer ? (
             <ApprovedFaqAnswer suggestion={faqAnswer} />
@@ -672,7 +738,7 @@ export function SearchClient() {
           ) : phase === "error" ? (
             <ErrorState
               message={errorText}
-              onRetry={() => void submit(lastSkipFaq, autoFieldExcluded)}
+              onRetry={() => void resubmit(lastSkipFaq)}
             />
           ) : (
             <>
@@ -716,7 +782,9 @@ export function SearchClient() {
                       diagnostics={meta.diagnostics?.answer}
                       disabled={isStreaming}
                       // 外した項目を読み取らずに検索し直す（類似 FAQ は出し直さない）。
-                      onRemove={(name) => void submit(true, [...autoFieldExcluded, name])}
+                      onRemove={(name) =>
+                        void resubmit(true, [...(lastRequest?.excludedAutoFields ?? []), name])
+                      }
                     />
                   ) : null}
                   {answerMode ? (
@@ -807,6 +875,14 @@ export function SearchClient() {
       </PageBody>
     </div>
   );
+}
+
+/**
+ * 実行を始めた時刻。`runRequest` はイベントの処理（検索・再試行など）からだけ呼ばれるが、await の前で
+ * 時刻を取るため、React Compiler の lint が描画中の呼び出しと見なさないよう関数に分ける。
+ */
+function runStartedAtMs(): number {
+  return Date.now();
 }
 
 function SearchRunPanel({

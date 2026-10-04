@@ -2801,11 +2801,19 @@ export const api = {
       { method: "POST", body: form },
     );
   },
-  /** purpose="chat" はチャットの提示（一致度の下限が高く、最大 3 件。#684）。 */
-  suggestApprovedFaq: (id: string, query: string, purpose: "search" | "chat" = "search") =>
+  /**
+   * purpose="chat" はチャットの提示（一致度の下限が高く、最大 3 件。#684）。
+   * `signal` は RAG 検索の「停止」で照会を止めるのに使う（#915）。
+   */
+  suggestApprovedFaq: (
+    id: string,
+    query: string,
+    purpose: "search" | "chat" = "search",
+    signal?: AbortSignal,
+  ) =>
     request<ApprovedFaqSuggestionsData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/suggest`,
-      jsonBody({ query, purpose }),
+      { ...jsonBody({ query, purpose }), signal },
     ),
   suggestClarification: (id: string, query: string) =>
     request<{ suggestion: ClarificationSuggestionData | null }>(
