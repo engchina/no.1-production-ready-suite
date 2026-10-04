@@ -157,6 +157,7 @@ class _FakeNl2SqlService:
             result=job.result,
             error_code=job.error_code,
             error_message=job.error_message,
+            error_detail=job.error_detail,
         )
 
 
@@ -556,7 +557,8 @@ def test_failed_job_returns_error_code(
     job = fake_service.jobs[content["job_id"]]
     job.status = JobStatus.ERROR
     job.error_code = stored_code
-    job.error_message = "NL2SQL ジョブに失敗しました: ORA-04027"
+    job.error_message = "SQL の生成に失敗しました。"
+    job.error_detail = "ORA-04027: self-deadlock"
 
     is_error, content = _structured(
         _run(_call("nl2sql_get_job", {"job_id": job.job_id}), token=token)
@@ -564,7 +566,8 @@ def test_failed_job_returns_error_code(
     assert is_error is False
     assert content["status"] == "error"
     assert content["error_code"] == expected
-    assert content["error_message"] == "NL2SQL ジョブに失敗しました: ORA-04027"
+    # 画面では「詳細」に分ける元の文も、MCP では文の後ろに付けて返す（#1072）。
+    assert content["error_message"] == "SQL の生成に失敗しました。\n詳細: ORA-04027: self-deadlock"
 
 
 def test_get_job_hides_other_users_jobs(users: _Users, fake_service: _FakeNl2SqlService) -> None:
