@@ -44,6 +44,8 @@ import { useCapabilities } from "@/lib/permissions";
 import { approvalStatusView, runStatusView } from "@/lib/status-labels";
 import { isNullableString, isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { JsonPreview } from "@/pages/shared/page-helpers";
+import { isOwnDecision } from "@/pages/shared/approval-decision";
+import { useAuth } from "@/components/security/AuthProvider";
 
 type ApprovalRow = { run: RunState; approval: ApprovalRequest };
 const APPROVAL_FILTERS = ["pending", "decided", "all"] as const;
@@ -74,16 +76,18 @@ export function ApprovalsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const capabilities = useCapabilities();
+  const { user } = useAuth();
   const manualRefresh = useActionPending();
   const runs = useQuery({ queryKey: ["runs"], queryFn: agentApi.listRuns, refetchInterval: 5000 });
   const decide = useMutation({
     mutationFn: ({ approval, approved }: { approval: ApprovalRequest; approved: boolean }) =>
       // 決定者はログイン中の利用者から server が決める（#215）。
       agentApi.decideApproval(approval.id, { approved }),
-    onSuccess: (updatedRun, { approval }) => {
-      const outcome = updatedRun.approvals.find((item) => item.id === approval.id)?.status;
-      if (outcome === "approved" || outcome === "rejected") {
-        toast.success(outcome === "approved" ? t("approval.decided") : t("approval.rejected"));
+    onSuccess: (updatedRun, { approval, approved }) => {
+      // 押した判断が自分の判断として残ったときだけ成功と案内する（ほかの操作者が先に判断した承認は、backend が
+      // 状態を変えずに 200 で返す。#1119）。
+      if (isOwnDecision(updatedRun, approval.id, approved, user?.login_user_id)) {
+        toast.success(approved ? t("approval.decided") : t("approval.rejected"));
       } else {
         toast.info(t("approval.changedDuringReview"));
       }
