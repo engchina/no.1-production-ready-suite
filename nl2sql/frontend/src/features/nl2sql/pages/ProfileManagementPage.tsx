@@ -21,6 +21,7 @@ import {
   PageHeader,
   PageBody,
   useConfirm,
+  apiErrorMessage,
   SelectField,
   TextField,
   type SelectFieldOption,
@@ -792,6 +793,9 @@ function ProfileEditor({
   oracleSyncJob,
   oracleSyncSubmissionError,
   saveError,
+  saveConflict,
+  reloadingLatest,
+  onReloadLatest,
   retryingOracleSync,
   deleting,
   onObjectFilterChange,
@@ -842,6 +846,10 @@ function ProfileEditor({
   oracleSyncSubmissionError: string;
   /** プロファイルの保存（PATCH / POST）の失敗。保存ボタンの直下だけに出す（messaging.md §3.3.1。#585）。 */
   saveError: string;
+  /** 保存の失敗がほかの更新との競合（409）。失敗の文の下に「最新の内容を読み込む」を出す（#1111）。 */
+  saveConflict: boolean;
+  reloadingLatest: boolean;
+  onReloadLatest: () => void;
   retryingOracleSync: boolean;
   deleting: boolean;
   onObjectFilterChange: (value: string) => void;
@@ -1076,8 +1084,19 @@ function ProfileEditor({
       {/* 保存ボタンはフォームの中（確認語と並ぶ）なので、欄に結び付かない保存の失敗はボタンの直下の
           FormStatus の 1 か所だけに出す（Toast に重ねない。messaging.md §3.3.1。#585）。 */}
       {saveError ? (
-        <div data-testid="profile-save-error">
+        <div data-testid="profile-save-error" className="grid justify-items-start gap-2">
           <FormStatus tone="danger" message={saveError} />
+          {saveConflict ? (
+            <Button
+              type="button"
+              variant="secondary"
+              icon={RefreshCw}
+              loading={reloadingLatest}
+              onClick={onReloadLatest}
+            >
+              {t("profiles.conflict.reload")}
+            </Button>
+          ) : null}
         </div>
       ) : null}
       <ProfileSaveResultRegion
@@ -1187,6 +1206,8 @@ export function ProfileManagementPage() {
   const [refreshError, setRefreshError] = useState("");
   const [nameError, setNameError] = useState<ProfileNameError>(null);
   const [requiredErrors, setRequiredErrors] = useState<ProfileRequiredErrors>({});
+  // 保存の失敗がほかの更新との競合（ETag の不一致の 409）か。文に合わせて「最新の内容を読み込む」を出す（#1111）。
+  const [profileSaveConflict, setProfileSaveConflict] = useState(false);
 
   // ?profile= が唯一の情報源: null=一覧 / "new"=新規 / <id>=編集
   const profileParam = searchParams.get("profile");
@@ -1566,6 +1587,7 @@ export function ProfileManagementPage() {
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
     setProfileSaveError("");
+    setProfileSaveConflict(false);
     lastOracleConfirmationRef.current = "";
     setReportedOracleSyncJobId("");
     setSearchParams({ profile: "new" });
@@ -1661,6 +1683,7 @@ export function ProfileManagementPage() {
     setOracleSyncJobId("");
     setOracleSyncSubmissionError("");
     setProfileSaveError("");
+    setProfileSaveConflict(false);
     setReportedOracleSyncJobId("");
     mutationBusyRef.current = true;
     setLoading("save");
@@ -1702,7 +1725,16 @@ export function ProfileManagementPage() {
         return;
       }
       if (editTargetRef.current === target) {
-        setProfileSaveError(err instanceof Error && err.message ? err.message : t("profiles.error.save"));
+        // 既存の業務プロファイルの更新で、名称の重複以外の 409 は、ほかの保存で版（ETag）が進んだ競合。
+        const conflict = Boolean(selectedProfile) && err instanceof ApiError && err.status === 409;
+        setProfileSaveConflict(conflict);
+        setProfileSaveError(
+          conflict
+            ? t("profiles.error.saveConflict")
+            : err instanceof Error && err.message
+              ? err.message
+              : t("profiles.error.save")
+        );
       }
       setLoading("");
       return;
@@ -1735,6 +1767,38 @@ export function ProfileManagementPage() {
       setOracleSyncSubmissionError(
         err instanceof Error ? err.message : t("profiles.oracle.sync.failed")
       );
+    } finally {
+      setLoading("");
+    }
+  };
+
+  // 競合した保存の後に、最新の版を読み直して編集の内容を置き換える（未保存の変更は確認の後に破棄する）。
+  const reloadLatestProfile = async () => {
+    if (mutationBusyRef.current || !selectedProfile) return;
+    const target = profileParam;
+    const ok = await confirm({
+      title: t("profiles.conflict.reload.confirm.title"),
+      description: t("profiles.conflict.reload.confirm.description"),
+      confirmLabel: t("profiles.conflict.reload.confirm.confirm"),
+      tone: "danger",
+      dismissOnOverlay: false,
+    });
+    if (!ok || editTargetRef.current !== target) return;
+    mutationBusyRef.current = true;
+    setLoading("reload-latest");
+    try {
+      const latest = await profileDetailQuery.refetch();
+      if (editTargetRef.current !== target) return;
+      if (latest.isError || !latest.data) {
+        setProfileSaveError(apiErrorMessage(latest.error, t("profiles.error.load")));
+        return;
+      }
+      setForm(profileToForm(latest.data.profile));
+      setOracleConfirmation("");
+      setNameError(null);
+      setRequiredErrors({});
+      setProfileSaveError("");
+      setProfileSaveConflict(false);
     } finally {
       setLoading("");
     }
@@ -1901,6 +1965,9 @@ export function ProfileManagementPage() {
       oracleSyncJob={oracleSyncJob}
       oracleSyncSubmissionError={oracleSyncSubmissionError}
       saveError={profileSaveError}
+      saveConflict={profileSaveConflict}
+      reloadingLatest={loading === "reload-latest"}
+      onReloadLatest={() => void reloadLatestProfile()}
       retryingOracleSync={loading === "retry-oracle-sync"}
       deleting={selectedProfile ? loading === `delete-profile-${selectedProfile.id}` : false}
       onObjectFilterChange={setObjectFilter}

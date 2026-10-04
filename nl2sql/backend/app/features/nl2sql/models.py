@@ -1240,6 +1240,9 @@ class JobData(BaseModel):
     error_message: str | None = None
     # 機械判定用の失敗分類(例: SCHEMA_CATALOG_EMPTY)。表示文言は error_message が正本。
     error_code: str | None = None
+    # 失敗の技術的な詳細（例外・Oracle のエラーの元の文）。error_message は利用者向けの 1 文目と
+    # 次の操作だけにし、画面はこれを「詳細」に畳んで出す（messaging.md §10.3。#1072）。
+    error_detail: str | None = None
     warning_message: str | None = None
     timing: TimingEnvelope | None = None
     steps: list[JobStepData] = Field(default_factory=list)
