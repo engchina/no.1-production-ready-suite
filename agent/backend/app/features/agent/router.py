@@ -2736,11 +2736,21 @@ async def list_agents(request: Request) -> ApiResponse[AgentsData]:
     return ApiResponse(data=AgentsData(agents=agents))
 
 
+AGENT_NOT_FOUND_MESSAGE = "業務 Agent が見つかりません。"
+
+
+def _require_agent_name(name: str) -> None:
+    """業務 Agent の名前は必須（画面と同じく空白だけも未入力。#925）。"""
+    if not name.strip():
+        raise HTTPException(status_code=422, detail="業務 Agent の名前を入力してください。")
+
+
 @router.post("/agents", response_model=ApiResponse[AgentProfile])
 async def create_agent(
     agent: AgentProfile,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentProfile]:
+    _require_agent_name(agent.name)
     # 画面・API で作る Agent は下書きから始める（公開するまで利用者の Run には使えない。#770）。
     # 版の項目は送られても使わない。
     draft = agent.model_copy(
@@ -2768,7 +2778,7 @@ async def publish_agent(
             agent_id, note=payload.note, published_by=_actor_display_name(request)
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="agent not found") from exc
+        raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ApiResponse(data=agent)
@@ -2789,7 +2799,7 @@ async def restore_agent_version(
             agent_id, version, published_by=_actor_display_name(request)
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="version not found") from exc
+        raise HTTPException(status_code=404, detail="業務 Agent の版が見つかりません。") from exc
     return ApiResponse(data=agent)
 
 
@@ -2799,10 +2809,12 @@ async def patch_agent(
     patch: AgentProfilePatch,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentProfile]:
+    if patch.name is not None:
+        _require_agent_name(patch.name)
     try:
         return ApiResponse(data=runtime_repository.patch_agent(agent_id, patch))
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="agent not found") from exc
+        raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2817,7 +2829,7 @@ async def delete_agent(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="agent not found") from exc
+        raise HTTPException(status_code=404, detail=AGENT_NOT_FOUND_MESSAGE) from exc
     # 削除したエージェントをロールの対象範囲（AGENT_ROLE_AGENTS）から外す（#750）。
     # 失敗しても削除は成功のまま（権限管理の保存は、削除済みのエージェントを黙って外す）。
     try:
