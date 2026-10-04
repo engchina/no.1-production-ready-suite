@@ -153,3 +153,23 @@ def test_draft_runs_need_agent_admin(auth: ProductionAuth, scheduled: list[str])
 
     assert response.status_code == 403
     assert "Agent 管理" in response.json()["error_messages"][0]
+
+
+def test_replay_refuses_unavailable_agent_with_reason(scheduled: list[str]) -> None:
+    """再実行は利用者の Run。公開していない・無効の Agent は 500 にせず理由を返す（#911）。"""
+    client.post("/api/agents", json={"id": AGENT_ID, "name": "経理", "instructions": "v1 の指示"})
+    draft = client.post("/api/runs", json={"goal": "試す", "agent_id": AGENT_ID, "draft": True})
+    assert draft.status_code == 200, draft.text
+    source_id = draft.json()["data"]["id"]
+
+    unpublished = client.post(f"/api/runs/{source_id}/replay")
+    assert unpublished.status_code == 409, unpublished.text
+    assert "公開していない業務 Agent" in unpublished.json()["error_messages"][0]
+
+    assert client.post(f"/api/agents/{AGENT_ID}/publish", json={"note": "公開"}).status_code == 200
+    assert client.patch(f"/api/agents/{AGENT_ID}", json={"enabled": False}).status_code == 200
+    disabled = client.post(f"/api/runs/{source_id}/replay")
+    assert disabled.status_code == 409, disabled.text
+    assert disabled.json()["error_messages"][0] == "この業務 Agent は実行できない状態です。"
+    # 断った再実行は Run を作らない。
+    assert scheduled == [source_id]

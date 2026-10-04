@@ -484,7 +484,12 @@ def test_execute_sql_oracle_error_keeps_generated_sql_result_and_history(
 
     assert job is not None
     assert job.status == JobStatus.ERROR
-    assert job.error_message is not None and "ORA-00904" in job.error_message
+    # 1 文目は利用者の言葉にし、Oracle のエラーの元の文は詳細に分ける（messaging.md §10.3。#1072）。
+    assert job.error_message is not None and job.error_message.startswith(
+        "生成した SQL の実行に失敗しました。"
+    )
+    assert "ORA-" not in job.error_message
+    assert job.error_detail == 'ORA-00904: "ORDER_NAME2": invalid identifier'
     assert job.result is not None
     assert job.result.generated_sql == "SELECT ID FROM APP.ORDERS"
     assert job.result.safety.is_safe is True
@@ -502,6 +507,7 @@ def test_execute_sql_oracle_error_keeps_generated_sql_result_and_history(
     persisted = repository.get_document("jobs", created.job_id)
     assert persisted is not None
     assert persisted["error_code"] == "ORA-00904"
+    assert persisted["error_detail"] == 'ORA-00904: "ORDER_NAME2": invalid identifier'
 
 
 def _run_owned_job(monkeypatch: pytest.MonkeyPatch, owner: Nl2SqlService) -> Any:
@@ -556,8 +562,26 @@ def test_failed_job_always_has_error_code(
 
     assert job.status == JobStatus.ERROR
     assert job.error_code == expected
+    # 例外の文（英語・ORA-…）は 1 文目に出さず、詳細に分ける（#1072）。
+    assert job.error_message is not None and job.error_message.startswith(
+        "SQL の生成に失敗しました。"
+    )
+    assert str(error) not in job.error_message
+    assert job.error_detail == str(error)
     steps = {step.stage: step.status for step in job.steps}
     assert steps["generate_sql"] == JobStepStatus.ERROR
+
+
+def test_long_failure_detail_is_truncated(monkeypatch: pytest.MonkeyPatch) -> None:
+    owner = _worker(_repository())
+
+    def failing_generate(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("x" * 5000)
+
+    monkeypatch.setattr(owner, "_generate_selected_engine", failing_generate)
+    job = _run_owned_job(monkeypatch, owner)
+
+    assert job.error_detail == "x" * 4000 + "…"
 
 
 def test_blocked_sql_job_has_error_code(monkeypatch: pytest.MonkeyPatch) -> None:

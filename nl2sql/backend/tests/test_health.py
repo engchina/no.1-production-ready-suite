@@ -637,7 +637,9 @@ def test_job_on_empty_catalog_sets_schema_empty_error_code() -> None:
     assert job is not None
     assert job.status == JobStatus.ERROR
     assert job.error_code == "SCHEMA_CATALOG_EMPTY"
-    assert "Schema catalog が空です" in (job.error_message or "")
+    # 例外の文が利用者向けの文と次の操作なので、詳細に分けず 1 文目に出す（#1072）。
+    assert (job.error_message or "").startswith("Schema catalog が空です")
+    assert job.error_detail is None
 
 
 async def test_sample_import_enables_preview_and_delete() -> None:
@@ -814,7 +816,10 @@ def test_select_ai_job_failure_is_logged_with_stage_metadata(
     assert job.status == JobStatus.ERROR
     assert job.error_message is not None
     assert job.warning_message is None
-    assert '"DBMS_CLOUD_AI"."GENERATE"' in job.error_message
+    # 例外の文は 1 文目に出さず、詳細に分ける（#1072）。
+    assert '"DBMS_CLOUD_AI"."GENERATE"' not in job.error_message
+    assert job.error_detail is not None
+    assert '"DBMS_CLOUD_AI"."GENERATE"' in job.error_detail
     assert matching_records
     record = matching_records[-1]
     assert record.exc_info is not None

@@ -1,34 +1,35 @@
 import {
-  Button,
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
+  FormActionBar,
   FormStatus,
   SelectField,
-  type SelectFieldOption,
   Skeleton,
   Switch,
   TextareaField,
   TextField,
+  useConfirm,
 } from "@engchina/production-ready-ui";
-import { History, Save } from "lucide-react";
+import { History, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
 
+import { ApiErrorState } from "@/components/StateViews";
 import { ApiError, type QueryHistorySettingsData } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { useQueryHistorySettings, useUpdateQueryHistorySettings } from "@/lib/queries";
+import { focusFirstInvalidField } from "@/lib/required-fields";
+import {
+  QUERY_HISTORY_FIELD_IDS,
+  blocklistFromText,
+  queryHistoryErrors,
+  retentionOptions,
+  shortensRetention,
+} from "@/components/settings/retrieval-settings.logic";
 import { toast } from "@/lib/toast";
-
-const RETENTION_OPTIONS: SelectFieldOption<string>[] = [
-  ...[30, 90, 180, 365].map((days) => ({
-    value: String(days),
-    label: t("settings.answerRecords.days", { days }),
-  })),
-  { value: "0", label: t("settings.answerRecords.unlimited") },
-];
 
 /**
  * 質問履歴（rag_poc の QUERY_HISTORY_*）。全体設定で、既定は無効（質問の本文を保存するため）。
@@ -48,7 +49,11 @@ export function QueryHistorySettingsCard() {
       <CardContent>
         {query.isPending ? <Skeleton className="h-24 w-full" /> : null}
         {query.isError ? (
-          <FormStatus tone="danger" message={t("settings.queryHistory.loadError")} />
+          <ApiErrorState
+            error={query.error}
+            fallback={t("settings.queryHistory.loadError")}
+            onRetry={() => void query.refetch()}
+          />
         ) : null}
         {/* 保存値が変わったら編集欄を作り直す（保存後に保存値へ揃える）。 */}
         {query.data ? <QueryHistoryForm key={JSON.stringify(query.data)} saved={query.data} /> : null}
@@ -57,17 +62,85 @@ export function QueryHistorySettingsCard() {
   );
 }
 
+/** 編集中の値。数値の欄は空を 0 にしないよう文字列で持つ（#1002）。 */
+type QueryHistoryDraft = {
+  enabled: boolean;
+  retentionDays: string;
+  minCount: string;
+  suggestionLimit: string;
+  blocklistText: string;
+};
+
+function draftFromSettings(saved: QueryHistorySettingsData): QueryHistoryDraft {
+  return {
+    enabled: saved.enabled,
+    retentionDays: String(saved.retention_days),
+    minCount: String(saved.min_count),
+    suggestionLimit: String(saved.suggestion_limit),
+    blocklistText: saved.blocklist.join("\n"),
+  };
+}
+
 function QueryHistoryForm({ saved }: { saved: QueryHistorySettingsData }) {
   const save = useUpdateQueryHistorySettings();
-  const [form, setForm] = useState(saved);
-  const [blocklistText, setBlocklistText] = useState(saved.blocklist.join("\n"));
-  const next: QueryHistorySettingsData = {
-    ...form,
-    blocklist: blocklistText.split("\n").map((item) => item.trim()).filter(Boolean),
-  };
-  const dirty = JSON.stringify(next) !== JSON.stringify(saved);
-  useLeaveGuard(dirty);
-  const validNumbers = next.min_count >= 1 && next.suggestion_limit >= 1 && next.suggestion_limit <= 20;
+  const confirm = useConfirm();
+  const [draft, setDraft] = useState<QueryHistoryDraft>(() => draftFromSettings(saved));
+  // 保存を押した後だけ欄のエラーを出す（直すと消える）。
+  const [showErrors, setShowErrors] = useState(false);
+  const errors = queryHistoryErrors(draft);
+  const visibleErrors = showErrors ? errors : {};
+  // 除外する語は保存する形（空白・空行・重複を除く）で比べる。
+  const dirty =
+    JSON.stringify({ ...draft, blocklistText: blocklistFromText(draft.blocklistText) }) !==
+    JSON.stringify({ ...draftFromSettings(saved), blocklistText: saved.blocklist });
+  useLeaveGuard(dirty, save.isPending);
+  const disabled = save.isPending;
+
+  function update(patch: Partial<QueryHistoryDraft>) {
+    save.reset();
+    setDraft((current) => ({ ...current, ...patch }));
+  }
+
+  function resetForm() {
+    save.reset();
+    setShowErrors(false);
+    setDraft(draftFromSettings(saved));
+  }
+
+  async function submit() {
+    if (save.isPending) return;
+    setShowErrors(true);
+    if (
+      focusFirstInvalidField([
+        [QUERY_HISTORY_FIELD_IDS.minCount, errors.minCount],
+        [QUERY_HISTORY_FIELD_IDS.suggestionLimit, errors.suggestionLimit],
+        [QUERY_HISTORY_FIELD_IDS.blocklist, errors.blocklist],
+      ])
+    ) {
+      return;
+    }
+    const retentionDays = Number(draft.retentionDays);
+    // 保存期間を短くすると、backend は保存の時に期限を過ぎた履歴を削除する（元に戻せない）。
+    if (shortensRetention(saved.retention_days, retentionDays)) {
+      const confirmed = await confirm({
+        title: t("settings.queryHistory.shortenTitle"),
+        description: t("settings.queryHistory.shortenDescription", { days: retentionDays }),
+        confirmLabel: t("settings.queryHistory.shortenConfirm"),
+        tone: "danger",
+      });
+      if (!confirmed) return;
+    }
+    save.mutate(
+      {
+        enabled: draft.enabled,
+        retention_days: retentionDays,
+        min_count: Number(draft.minCount),
+        suggestion_limit: Number(draft.suggestionLimit),
+        blocklist: blocklistFromText(draft.blocklistText),
+      },
+      { onSuccess: () => toast.success(t("settings.queryHistory.saved")) }
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -79,77 +152,98 @@ function QueryHistoryForm({ saved }: { saved: QueryHistorySettingsData }) {
           </p>
         </div>
         <Switch
-          checked={form.enabled}
-          disabled={save.isPending}
+          checked={draft.enabled}
+          disabled={disabled}
           aria-label={t("settings.queryHistory.enabled")}
-          onCheckedChange={(checked) => setForm((current) => ({ ...current, enabled: checked }))}
+          onCheckedChange={(checked) => update({ enabled: checked })}
         />
       </div>
       <div className="grid gap-3 md:grid-cols-3">
         <SelectField
           id="query-history-retention"
+          className="min-w-0"
           label={t("settings.queryHistory.retention")}
-          value={String(form.retention_days)}
-          options={RETENTION_OPTIONS}
-          onValueChange={(value) =>
-            setForm((current) => ({ ...current, retention_days: Number(value) }))
-          }
+          value={draft.retentionDays}
+          options={retentionOptions(saved.retention_days)}
+          disabled={disabled}
+          onValueChange={(value) => update({ retentionDays: value })}
         />
         <TextField
-          id="query-history-min-count"
+          id={QUERY_HISTORY_FIELD_IDS.minCount}
+          className="min-w-0"
           type="number"
+          inputMode="numeric"
           min={1}
           max={1000}
           label={t("settings.queryHistory.minCount")}
           helper={t("settings.queryHistory.minCountHint")}
+          error={visibleErrors.minCount ?? undefined}
           required
-          value={String(form.min_count)}
-          onValueChange={(value) => setForm((current) => ({ ...current, min_count: Number(value) }))}
+          disabled={disabled}
+          value={draft.minCount}
+          onValueChange={(value) => update({ minCount: value })}
         />
         <TextField
-          id="query-history-limit"
+          id={QUERY_HISTORY_FIELD_IDS.suggestionLimit}
+          className="min-w-0"
           type="number"
+          inputMode="numeric"
           min={1}
           max={20}
           label={t("settings.queryHistory.limit")}
+          error={visibleErrors.suggestionLimit ?? undefined}
           required
-          value={String(form.suggestion_limit)}
-          onValueChange={(value) =>
-            setForm((current) => ({ ...current, suggestion_limit: Number(value) }))
-          }
+          disabled={disabled}
+          value={draft.suggestionLimit}
+          onValueChange={(value) => update({ suggestionLimit: value })}
         />
       </div>
       <TextareaField
-        id="query-history-blocklist"
+        id={QUERY_HISTORY_FIELD_IDS.blocklist}
         label={t("settings.queryHistory.blocklist")}
         helper={t("settings.queryHistory.blocklistHint")}
-        value={blocklistText}
+        error={visibleErrors.blocklist ?? undefined}
+        value={draft.blocklistText}
         rows={3}
-        disabled={save.isPending}
-        onChange={(event) => setBlocklistText(event.target.value)}
+        disabled={disabled}
+        onChange={(event) => update({ blocklistText: event.target.value })}
       />
-      <div className="flex flex-wrap items-center gap-3">
-        <Button
-          type="button"
-          size="lg"
-          icon={Save}
-          loading={save.isPending}
-          disabled={!dirty || !validNumbers}
-          onClick={() =>
-            save.mutate(next, { onSuccess: () => toast.success(t("settings.queryHistory.saved")) })
-          }
-        >
-          {t("settings.queryHistory.save")}
-        </Button>
-        {save.isError ? (
-          <FormStatus
-            tone="danger"
-            message={
-              save.error instanceof ApiError ? save.error.message : t("settings.queryHistory.saveError")
-            }
-          />
-        ) : null}
-      </div>
+      <FormActionBar
+        ariaLabel={t("settings.queryHistory.actions.label")}
+        primaryActions={[
+          {
+            id: "save",
+            label: t("settings.queryHistory.save"),
+            icon: Save,
+            loading: save.isPending,
+            disabled: !dirty,
+            onClick: () => void submit(),
+          },
+        ]}
+        secondaryActions={[
+          {
+            id: "reset",
+            label: t("settings.retrieval.actions.reset"),
+            icon: RotateCcw,
+            disabled: !dirty || save.isPending,
+            onClick: resetForm,
+          },
+        ]}
+        status={
+          save.isError ? (
+            <FormStatus
+              tone="danger"
+              message={
+                save.error instanceof ApiError
+                  ? save.error.message
+                  : t("settings.queryHistory.saveError")
+              }
+            />
+          ) : dirty ? (
+            <FormStatus tone="warning" message={t("settings.retrieval.actions.unsaved")} />
+          ) : null
+        }
+      />
     </div>
   );
 }

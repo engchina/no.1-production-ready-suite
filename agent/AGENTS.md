@@ -40,7 +40,7 @@ Approval・Audit を 1 つの製品で持つ。再設計案（2026-10-02。Agent
 - 保存先（#764）: Run・業務 Agent と、画面・API で変えた定義（Skill・プラグイン・マーケットプレイス・MCP 接続・ツール権限）は
   `AGENT_RUNTIME_REPOSITORY_BACKEND` に従い、Oracle では共通の `PLATFORM_ORACLE_*` で `AGENT_RUNTIME_*` /
   `AGENT_CONTROL_PLANE_ITEMS` に保存する（テーブルはシステムテーブルが作る。アプリは DDL を実行しない）。
-  MCP 接続の秘密は `app.secret_box` で暗号化する。`.env` の宣言は保存しない。
+  MCP 接続とプラグインの manifest の MCP サーバーの秘密は `app.secret_box` で暗号化する（#1101）。`.env` の宣言は保存しない。
   既定の `auto` は、DB の設定がそろっていれば `oracle_checkpoint`、無ければ `memory`（保存しない。再起動で消える）を起動時に選ぶ
   （`storage_backend`。#839）。保存先の 1 件の Run の不整合では起動を止めず、Run 単位で直す・退避する（`quarantined`）。
   起動時の DB の接続のエラーは上限付きで再試行する（#853。docs/agent-control-plane-design.md §5.1.1）。

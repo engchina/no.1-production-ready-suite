@@ -64,8 +64,17 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
 
 
 def test_stage_labels_cover_answer_stages() -> None:
-    """進捗の工程は回答の工程 2 つと検索だけの工程(旧 standard の工程は #595 で削除)。"""
-    assert set(ANSWER_STAGE_LABELS) == {"retrieval", "history_rewrite", "field_filter", "answer"}
+    """進捗の工程は回答の工程・回答側の安全チェック(#1146)と検索だけの工程。
+
+    旧 standard の工程は #595 で削除した。
+    """
+    assert set(ANSWER_STAGE_LABELS) == {
+        "retrieval",
+        "history_rewrite",
+        "field_filter",
+        "answer",
+        "answer_guardrail",
+    }
 
 
 async def test_stage_tracker_follows_nested_stages() -> None:

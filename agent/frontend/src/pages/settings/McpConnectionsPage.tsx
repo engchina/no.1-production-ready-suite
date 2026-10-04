@@ -61,6 +61,7 @@ import {
 import { useEditorRoute } from "@/lib/editor-route";
 import { focusFirstInvalidField, numberFieldError } from "@/lib/field-validation";
 import { formatNumber } from "@/lib/format";
+import { mcpUrlCredentialProblem } from "@/lib/mcp-url";
 import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
@@ -433,6 +434,21 @@ const EMPTY_MCP_FORM: McpConnectionFormState = {
   oauthScope: "",
 };
 
+/**
+ * MCP の URL の検証（backend の `_validate_mcp_url` と同じ規則・文言）。空は未設定として保存できる。
+ * 資格情報（userinfo・資格情報らしい query）は「認証」の欄へ案内する（#1056）。
+ */
+function mcpUrlError(raw: string): string | null {
+  const value = raw.trim();
+  if (!value) return null;
+  if (!/^https?:\/\/[^\s/]+/.test(value)) return t("validation.mcpUrl.scheme");
+  const problem = mcpUrlCredentialProblem(value);
+  if (!problem) return null;
+  return problem.kind === "userinfo"
+    ? t("validation.mcpUrl.userinfo")
+    : t("validation.mcpUrl.secretQuery", { names: problem.names.join("・") });
+}
+
 function mcpFormOf(connection: McpConnectionSettings | undefined): McpConnectionFormState {
   if (!connection) return EMPTY_MCP_FORM;
   return {
@@ -623,7 +639,10 @@ function McpConnectionEditor({
   const [form, setForm] = useState<McpConnectionFormState>(() => mcpFormOf(connection));
   const [formBaseline, setFormBaseline] = useState<McpConnectionFormState>(() => mcpFormOf(connection));
   const [serverIdError, setServerIdError] = useState<string | null>(null);
+  const [baseUrlError, setBaseUrlError] = useState<string | null>(null);
   const [timeoutError, setTimeoutError] = useState<string | null>(null);
+  // 保存した回数。保存し直したら、前の設定（秘密を含む）でのツールの取得の結果を消す（messaging.md §10.4。#1014）。
+  const [savedCount, setSavedCount] = useState(0);
   const editingId = connection?.server_id ?? null;
   // RAG / NL2SQL は Run の利用者のサービストークンで呼ぶ接続（認証方式は変えられない）。
   const builtin = connection?.source === "builtin";
@@ -633,10 +652,14 @@ function McpConnectionEditor({
     mutationFn: (current: McpConnectionFormState) => {
       const payload: McpConnectionWritePayload = {
         label: current.label || null,
-        base_url: current.baseUrl.trim(),
         timeout_seconds: Number(current.timeoutSeconds),
         session_id: current.sessionId || undefined,
       };
+      // URL は変えたときだけ送る。保存済みの URL の資格情報は伏せて返るため、そのまま送り返すと
+      // 伏せた値で上書きしてしまう（#1056）。
+      if (baseUrlChanged(current)) {
+        payload.base_url = current.baseUrl.trim();
+      }
       if (!builtin) {
         payload.auth_mode = current.authMode;
       }
@@ -663,6 +686,7 @@ function McpConnectionEditor({
       const next = { ...current, apiKey: "", sessionId: "", oauthClientSecret: "" };
       setForm(next);
       setFormBaseline(next);
+      setSavedCount((count) => count + 1);
       await onSaved(saved.server_id ?? current.serverId.trim());
     },
   });
@@ -675,9 +699,15 @@ function McpConnectionEditor({
     if (await confirmClose()) onBack();
   }
 
+  function baseUrlChanged(current: McpConnectionFormState): boolean {
+    return !editingId || current.baseUrl.trim() !== formBaseline.baseUrl.trim();
+  }
+
   function save() {
     const nextServerIdError =
       !editingId && !form.serverId.trim() ? t("settings.mcpServers.idRequired") : null;
+    // 保存済みの（伏せて表示している）URL のままなら検証しない（変えた URL だけを送る）。
+    const nextBaseUrlError = baseUrlChanged(form) ? mcpUrlError(form.baseUrl) : null;
     // 空のタイムアウトを 0 として保存しない。規則は backend（McpConnectionCreate / Patch）と同じ（#540）。
     const nextTimeoutError = numberFieldError(form.timeoutSeconds, {
       label: t("settings.timeout"),
@@ -686,10 +716,12 @@ function McpConnectionEditor({
       max: MCP_TIMEOUT_MAX_SECONDS,
     });
     setServerIdError(nextServerIdError);
+    setBaseUrlError(nextBaseUrlError);
     setTimeoutError(nextTimeoutError);
     if (
       focusFirstInvalidField([
         ["mcp-server-id", nextServerIdError],
+        ["mcp-server-base-url", nextBaseUrlError],
         ["mcp-server-timeout", nextTimeoutError],
       ])
     ) {
@@ -728,6 +760,7 @@ function McpConnectionEditor({
                   onClick: () => {
                     setForm(formBaseline);
                     setServerIdError(null);
+                    setBaseUrlError(null);
                     setTimeoutError(null);
                   },
                 },
@@ -807,9 +840,18 @@ function McpConnectionEditor({
                   <TextField
                     id="mcp-server-base-url"
                     label={t("settings.mcpConnections.url")}
-                    helper={builtin ? t("settings.mcpConnections.urlHintBuiltin") : t("settings.mcpConnections.urlHint")}
+                    helper={[
+                      builtin ? t("settings.mcpConnections.urlHintBuiltin") : t("settings.mcpConnections.urlHint"),
+                      connection?.base_url_masked ? t("settings.mcpConnections.urlMaskedHint") : null,
+                    ]
+                      .filter(Boolean)
+                      .join("")}
+                    error={baseUrlError ?? undefined}
                     value={form.baseUrl}
-                    onValueChange={(value) => setForm({ ...form, baseUrl: value })}
+                    onValueChange={(value) => {
+                      setForm({ ...form, baseUrl: value });
+                      setBaseUrlError(null);
+                    }}
                   />
                 </div>
                 <TextField
@@ -928,7 +970,9 @@ function McpConnectionEditor({
           </Section>
         </fieldset>
         {/* 保存した接続だけツールを取得できる（入力中の値ではなく保存済みの設定で呼ぶ）。 */}
-        {connection ? <McpConnectionToolsPanel key={connection.server_id} connection={connection} /> : null}
+        {connection ? (
+          <McpConnectionToolsPanel key={`${connection.server_id}-${savedCount}`} connection={connection} />
+        ) : null}
       </PageBody>
     </>
   );

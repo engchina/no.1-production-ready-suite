@@ -7,7 +7,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  Button,
+  FormActionBar,
   FormStatus,
   TimedLoadingState,
   FormSkeleton,
@@ -27,6 +27,7 @@ import {
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useUpdateVectorIndexSettings, useVectorIndexSettings } from "@/lib/queries";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 const PROFILE_ORDER: VectorIndexProfileName[] = ["balanced", "accurate", "fast"];
@@ -36,16 +37,21 @@ export function VectorIndexSettingsClient() {
   const query = useVectorIndexSettings();
   const save = useUpdateVectorIndexSettings();
   const [profile, setProfile] = useState<VectorIndexProfileName | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-
-  // ponytail: 初回ハイドレーションのみ render 中に同期。未保存選択を裏の refetch で上書きしない。
-  // 保存後の再同期は submit/onSuccess・resetForm が担う(外部更新の取り込みは remount 時)。
-  if (query.data && !save.isPending && profile === null) {
-    setProfile(query.data.profile);
+  // 直前に取り込んだ server 値。server 値が変わったレンダーだけ、未編集なら選択をそろえる。
+  // 編集中の選択は裏の再取得で上書きせず、編集していなければ今の保存値を出す（#987）。
+  // 保存の開始・終了（isPending）では選択を戻さない（失敗しても選択を残す）。
+  const [base, setBase] = useState<VectorIndexProfileName | null>(null);
+  const serverProfile = query.data?.profile ?? null;
+  if (serverProfile !== null && serverProfile !== base) {
+    setBase(serverProfile);
+    if (profile === null || profile === base) setProfile(serverProfile);
   }
 
-  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
-  useLeaveGuard(Boolean(query.data && profile !== null && profile !== query.data.profile));
+  // 未保存の選択があるときは離脱を確認し、保存中は離脱を止める。
+  useLeaveGuard(
+    Boolean(query.data && profile !== null && profile !== query.data.profile),
+    save.isPending
+  );
 
   if (query.isPending) {
     return (
@@ -85,26 +91,25 @@ export function VectorIndexSettingsClient() {
 
   function selectProfile(next: VectorIndexProfileName) {
     save.reset();
-    setSuccessMessage(null);
     setProfile(next);
   }
 
   function resetForm() {
     save.reset();
-    setSuccessMessage(null);
     setProfile(settings.profile);
   }
 
   function submit() {
-    if (!profile) return;
+    if (!profile || save.isPending) return;
     save.mutate(
       { profile },
       {
         onSuccess: (data) => {
+          setBase(data.profile);
           setProfile(data.profile);
-          setSuccessMessage(t("settings.vectorIndex.actions.saved"));
+          // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
+          toast.success(t("settings.vectorIndex.actions.saved"));
         },
-        onError: () => setSuccessMessage(null),
       }
     );
   }
@@ -193,33 +198,35 @@ export function VectorIndexSettingsClient() {
             />
           </dl>
           {reprovision ? <FormStatus tone={reprovision.tone} message={t(reprovision.key)} /> : null}
-          <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
-            <div className="min-h-6">
-              {dirty ? (
+          <FormActionBar
+            ariaLabel={t("settings.vectorIndex.actions.label")}
+            primaryActions={[
+              {
+                id: "save",
+                label: t("settings.vectorIndex.actions.save"),
+                icon: Save,
+                loading: save.isPending,
+                disabled: !dirty,
+                onClick: submit,
+              },
+            ]}
+            secondaryActions={[
+              {
+                id: "reset",
+                label: t("settings.vectorIndex.actions.reset"),
+                icon: RotateCcw,
+                disabled: !dirty || save.isPending,
+                onClick: resetForm,
+              },
+            ]}
+            status={
+              save.isError ? (
+                <FormStatus tone="danger" message={saveError} />
+              ) : dirty ? (
                 <FormStatus tone="warning" message={t("settings.vectorIndex.actions.unsaved")} />
-              ) : null}
-              {successMessage ? <FormStatus tone="success" message={successMessage} /> : null}
-              {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={resetForm}
-                disabled={!dirty || save.isPending}
-                aria-label={t("settings.vectorIndex.actions.reset")} icon={RotateCcw}>
-                {t("settings.vectorIndex.actions.reset")}
-              </Button>
-              <Button
-                type="button"
-                loading={save.isPending}
-                disabled={!dirty}
-                onClick={submit}
-                aria-label={t("settings.vectorIndex.actions.save")} icon={Save}>
-                {t("settings.vectorIndex.actions.save")}
-              </Button>
-            </div>
-          </div>
+              ) : null
+            }
+          />
         </CardContent>
       </Card>
       {showReindexSql(settings) ? (

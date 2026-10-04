@@ -33,7 +33,11 @@ export interface AuthApi<U extends BaseCurrentUser = BaseCurrentUser> {
   changePassword: (currentPassword: string, newPassword: string) => Promise<unknown>;
 }
 
-export type AuthStatus = "loading" | "authenticated" | "unauthenticated";
+/**
+ * 認証の状態。`error` は起動時の確認（`me`）が 401 以外（5xx・通信断・timeout）で失敗し、ログイン済みかどうかが
+ * 分からない状態（未認証と扱ってログイン画面へ移したり、作業状態を消したりしない。#1061）。
+ */
+export type AuthStatus = "loading" | "authenticated" | "unauthenticated" | "error";
 
 export type HasPermission = (permission: string) => boolean;
 

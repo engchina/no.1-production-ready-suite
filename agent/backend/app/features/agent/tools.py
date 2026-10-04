@@ -28,6 +28,7 @@ from pr_system_settings.auth.service_token import issue_service_token
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.features.agent.config import McpConnectionConfig, runtime_config_store
+from app.features.agent.mcp_url import mask_url_credentials, mask_urls_in_text
 from app.features.agent.profile_name_migration import migrate_rag_call
 from app.features.agent.skills import (
     AgentSkillListOutput,
@@ -707,7 +708,7 @@ def _response_json_object(
     if not isinstance(data, dict):
         raise ExternalToolError(
             f"{service_code}.invalid_json",
-            f"{service_label} response body must be a JSON object",
+            f"{service_label}の応答が JSON の object ではありません。",
             {"attempt": attempt},
         )
     return data
@@ -747,7 +748,8 @@ def _mcp_jsonrpc_response(payload: JsonObject) -> JsonRpcResponse:
     except ValidationError as exc:
         raise ExternalToolError(
             "external_mcp.invalid_response",
-            "external MCP response schema is invalid",
+            "MCP の応答が JSON-RPC の形式ではありません（接続の URL が MCP のエンドポイントかを"
+            "確認してください）。",
             {"errors": _validation_errors(exc)},
         ) from exc
 
@@ -779,7 +781,8 @@ def _mcp_oauth_bearer_token(
     if not token_url or not client_id or not client_secret:
         raise ExternalToolError(
             "external_mcp.oauth_not_configured",
-            "external MCP OAuth client credentials are incomplete",
+            "OAuth の資格情報（トークン URL・クライアント ID・クライアントシークレット）が"
+            "そろっていません。MCP 接続の認証の設定を確認してください。",
             {
                 "token_url_configured": bool(token_url),
                 "client_id_configured": bool(client_id),
@@ -836,45 +839,62 @@ def _fetch_mcp_oauth_bearer_token(
             data = _response_json_object(
                 response,
                 service_code="external_mcp",
-                service_label="external MCP OAuth token endpoint",
+                service_label="OAuth のトークン URL",
                 attempt=1,
             )
     except httpx.TimeoutException as exc:
         raise ExternalToolError(
             "external_mcp.oauth_timeout",
-            "external MCP OAuth token request timed out",
-            {"token_url": token_url},
+            f"OAuth のトークンの取得が {timeout_seconds:g} 秒以内に終わりませんでした"
+            "（トークン URL のサービスの状態を確認してください）。",
+            # トークン URL の userinfo・資格情報らしい query は伏せる（#1056）。
+            {"token_url": mask_url_credentials(token_url)},
         ) from exc
     except httpx.HTTPStatusError as exc:
         raise ExternalToolError(
             "external_mcp.oauth_http_error",
-            f"external MCP OAuth token endpoint returned HTTP {exc.response.status_code}",
+            _oauth_http_error_message(exc.response.status_code),
             {"status_code": exc.response.status_code, "body": _response_text(exc.response)},
         ) from exc
     except httpx.RequestError as exc:
         raise ExternalToolError(
             "external_mcp.oauth_request_error",
-            "external MCP OAuth token request failed",
-            {"reason": str(exc)},
+            "OAuth のトークン URL に接続できません（トークン URL が正しいかと、"
+            "ネットワークを確認してください）。",
+            {"reason": mask_urls_in_text(str(exc))},
         ) from exc
     except ExternalToolError:
         raise
     except ValueError as exc:
         raise ExternalToolError(
             "external_mcp.oauth_invalid_response",
-            "external MCP OAuth token response is not valid JSON",
+            "OAuth のトークン URL の応答が JSON ではありません"
+            "（トークン URL を確認してください）。",
         ) from exc
 
     access_token = data.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         raise ExternalToolError(
             "external_mcp.oauth_invalid_response",
-            "external MCP OAuth token response is missing access_token",
+            "OAuth のトークン URL の応答に access_token がありません"
+            "（トークン URL と scope を確認してください）。",
         )
     expires_in = data.get("expires_in", 300)
     ttl_seconds = float(expires_in) if isinstance(expires_in, int | float) else 300.0
     expires_at = monotonic() + max(0.0, ttl_seconds - _MCP_OAUTH_TOKEN_SKEW_SECONDS)
     return access_token, expires_at
+
+
+def _oauth_http_error_message(status_code: int) -> str:
+    """OAuth のトークンの取得の HTTP エラーの利用者向けの 1 文（直し方を添える）。"""
+    prefix = f"OAuth のトークン URL が HTTP {status_code} を返しました"
+    if status_code in {400, 401, 403}:
+        return f"{prefix}（クライアント ID・クライアントシークレット・scope を確認してください）。"
+    if status_code == 404:
+        return f"{prefix}（トークン URL が正しいかを確認してください）。"
+    if status_code >= 500:
+        return f"{prefix}（認証サービスが一時的に利用できない可能性があります）。"
+    return f"{prefix}。"
 
 
 def _schema(model: type[BaseModel]) -> JsonObject:

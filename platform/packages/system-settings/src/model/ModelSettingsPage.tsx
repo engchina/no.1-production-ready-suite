@@ -9,17 +9,18 @@ import {
   EmptyState,
   ErrorState,
   FormActionBar,
+  FormSkeleton,
   FormStatus,
   PageBody,
   ProcessingIndicator,
   RequiredBadge,
   SecretField,
   SelectField,
-  Skeleton,
   Switch,
   TabPanel,
   Tabs,
   TextField,
+  TimedLoadingState,
   cn,
   toast,
   useConfirm,
@@ -30,6 +31,7 @@ import {
   Database,
   ListChecks,
   Plus,
+  RefreshCw,
   Save,
   TestTube2,
   Trash2,
@@ -75,9 +77,11 @@ import {
   followModelChange,
   textModelOptions,
   validateDefaultModels,
+  validateModelIds,
   visionModelOptions,
   type DefaultModelErrors,
   type DefaultModelField,
+  type ModelIdErrors,
 } from "./defaultModels";
 import { t } from "./messages";
 import {
@@ -94,6 +98,7 @@ import {
   type ModelSettingsTestRequest,
   type ModelSettingsTestResult,
   type ModelSettingsTestTargetType,
+  type ModelSettingsUpdatePayload,
 } from "./types";
 
 type ModelTestKey = `enterprise:${number}` | "embedding" | "rerank";
@@ -135,7 +140,7 @@ export function ModelSettingsPage({
     queryFn: ({ signal }) => api.getModelSettings({ signal }),
   });
   const updateMutation = useMutation({
-    mutationFn: (payload: ModelSettingsPayload) =>
+    mutationFn: (payload: ModelSettingsUpdatePayload) =>
       api.updateModelSettings(payload),
     onSuccess: () => {
       void queryClient.invalidateQueries({
@@ -172,10 +177,17 @@ export function ModelSettingsPage({
   // 登録モデルの「接続」のエラーは、接続を選んだ・削除した・保存の操作の後から出す（#533）。
   const [showModelConnectionErrors, setShowModelConnectionErrors] =
     useState(false);
+  // 登録モデルのモデル ID の重複のエラー（#1035）も、入力中ではなく保存の操作の後から出す。
+  const [showModelIdErrors, setShowModelIdErrors] = useState(false);
   // 既定のモデルのエラーは、関係する操作（選択・Vision 対応の切替・削除・保存）の後から出す。
   // モデル ID の入力中（キー入力ごと）には出さない（messaging.md §3.2）。
   const [showDefaultErrors, setShowDefaultErrors] = useState(false);
   const [testingKey, setTestingKey] = useState<ModelTestKey | null>(null);
+  // 保存が競合（409。画面を開いた後にほかの画面で保存された）した節（#1037）。その節の操作の行に
+  // 「最新の設定を読み込む」を出す。読み込むまで残す（入力を変えても競合は解けない）。
+  const [conflictSection, setConflictSection] =
+    useState<ModelSaveSection | null>(null);
+  const [reloading, setReloading] = useState(false);
   const [testResults, setTestResults] = useState<
     Partial<Record<ModelTestKey, ModelSettingsTestResult>>
   >({});
@@ -197,25 +209,25 @@ export function ModelSettingsPage({
         ),
       ).length > 0,
     );
+    setShowModelIdErrors(
+      Object.keys(validateModelIds(loaded.enterprise_ai.models)).length > 0,
+    );
     setBaselineData(query.data);
     setCheckData(query.data);
   }, [draft, query.data]);
 
   const canSubmit = Boolean(draft);
   const saveInProgress = activeSaveSection !== null;
-  const operationBusy = saveInProgress || testingKey !== null;
+  const operationBusy = saveInProgress || testingKey !== null || reloading;
   // タブの切り替え・欄の追加の後は、描画（commit）の後にフォーカスを移す（#542）。
   const scheduleFocus = useFocusAfterCommit(!operationBusy);
-  useSettingsDraftGuard(
-    Boolean(
-      draft &&
-      baselineData &&
-      JSON.stringify(draft) !==
-        JSON.stringify(cloneSettings(baselineData.settings)),
-    ),
-    operationBusy,
-    draftGuardMessages,
+  const dirty = Boolean(
+    draft &&
+    baselineData &&
+    JSON.stringify(draft) !==
+      JSON.stringify(cloneSettings(baselineData.settings)),
   );
+  useSettingsDraftGuard(dirty, operationBusy, draftGuardMessages);
   const legacySecretDetected =
     checkData?.legacy_secret_detected ??
     baselineData?.legacy_secret_detected ??
@@ -384,7 +396,7 @@ export function ModelSettingsPage({
           ...current.enterprise_ai,
           models,
           ...(next
-            ? followModelChange(current.enterprise_ai, previous, next)
+            ? followModelChange(current.enterprise_ai, previous, next, models)
             : {}),
         },
       };
@@ -520,20 +532,25 @@ export function ModelSettingsPage({
         draft.enterprise_ai.connections,
         savedConnectionIds(baselineData.settings),
       );
+      const idErrors = validateModelIds(draft.enterprise_ai.models);
+      // 行の順に、行の中は欄の並び（モデル ID → 接続）で最初のエラーの欄を探す。
       const invalidRow = draft.enterprise_ai.models.findIndex(
-        (_, index) => connectionErrors[index],
+        (_, index) => idErrors[index] || connectionErrors[index],
       );
       const errors = validateDefaultModels(draft.enterprise_ai);
       const firstInvalid = DEFAULT_MODEL_FIELD_ORDER.find(
         (field) => errors[field],
       );
       if (invalidRow >= 0 || firstInvalid) {
+        setShowModelIdErrors(true);
         setShowModelConnectionErrors(true);
         setShowDefaultErrors(true);
         document
           .getElementById(
             invalidRow >= 0
-              ? modelConnectionFieldId(invalidRow)
+              ? idErrors[invalidRow]
+                ? modelIdFieldId(invalidRow)
+                : modelConnectionFieldId(invalidRow)
               : DEFAULT_MODEL_FIELD_IDS[firstInvalid!],
           )
           ?.focus();
@@ -547,7 +564,12 @@ export function ModelSettingsPage({
         draft,
         section,
       );
-      const data = await updateMutation.mutateAsync(payload);
+      // 読み込んだ時点の版を送り、ほかの画面で保存されていれば 409 で止める（#1037）。
+      const data = await updateMutation.mutateAsync(
+        baselineData.revision
+          ? { ...payload, base_revision: baselineData.revision }
+          : payload,
+      );
       const saved = cloneSettings(data.settings);
       setDraft((current) =>
         current ? mergeSavedSectionIntoDraft(current, saved, section) : saved,
@@ -556,12 +578,52 @@ export function ModelSettingsPage({
       setCheckData(data);
       toast.success(t(MODEL_SAVE_SUCCESS_KEYS[section]));
     } catch (error) {
+      const conflict = isConflictError(error);
+      if (conflict) setConflictSection(section);
       setSaveErrors((current) => ({
         ...current,
-        [section]: errorMessage?.(error) ?? t("settings.model.saveError"),
+        [section]: conflict
+          ? t("settings.model.conflict.message")
+          : (errorMessage?.(error) ?? t("settings.model.saveError")),
       }));
     } finally {
       setActiveSaveSection(null);
+    }
+  };
+
+  // 保存の競合の後に、保存済みの最新の設定を読み直す（#1037）。保存していない入力は確認してから破棄する。
+  const reloadLatest = async (section: ModelSaveSection) => {
+    if (operationBusy) return;
+    if (dirty) {
+      const ok = await confirm({
+        title: t("settings.model.conflict.confirm.title"),
+        description: t("settings.model.conflict.confirm.description"),
+        confirmLabel: t("settings.model.conflict.confirm.action"),
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
+    setReloading(true);
+    try {
+      const result = await query.refetch();
+      if (result.isError || !result.data) {
+        setSaveErrors((current) => ({
+          ...current,
+          [section]:
+            errorMessage?.(result.error) ?? t("settings.model.loadError"),
+        }));
+        return;
+      }
+      // 下書きを捨てると、読み込みの effect が最新の値から下書き・基準を作り直す。
+      setDraft(null);
+      setConflictSection(null);
+      setSaveErrors({});
+      setTestResults({});
+      setShowConnectionErrors(false);
+      setApiKeyVisible({});
+      toast.success(t("settings.model.conflict.reloaded"));
+    } finally {
+      setReloading(false);
     }
   };
 
@@ -587,8 +649,13 @@ export function ModelSettingsPage({
           savedConnectionIds(baselineData.settings),
         )
       : {};
+  const modelIdErrors: ModelIdErrors =
+    draft && showModelIdErrors ? validateModelIds(draft.enterprise_ai.models) : {};
 
-  if (query.isError) {
+  // 取得の失敗を出すのは、下書きがまだない（初回の取得が失敗した）ときだけ（#1036）。
+  // 画面は初回の取得の後は下書きを使うので、裏の再取得（画面への復帰・保存の後）が失敗しても
+  // 編集中のフォームを取得失敗の表示に置き換えない。
+  if (query.isError && !draft) {
     return (
       <PageBody wide>
         <ErrorState
@@ -602,17 +669,18 @@ export function ModelSettingsPage({
   if (query.isPending || !draft) {
     return (
       <PageBody wide>
-        <div
-          role="status"
-          aria-busy="true"
-          className="space-y-4"
-          data-testid="settings-model-loading"
+        {/* 読み込み中は経過時間と、3 枚のカード（接続 / 登録モデル / Generative AI）の形の Skeleton
+            （UX 契約 messaging.md §3.6。#1036）。 */}
+        <TimedLoadingState
+          label={t("settings.model.loading")}
+          operationKey="settings-model"
+          placement="panel"
+          testId="settings-model-loading"
         >
-          <p className="text-sm text-fg-muted">{t("settings.model.loading")}</p>
-          <Skeleton className="h-28 w-full rounded-lg" />
-          <Skeleton className="h-72 w-full rounded-lg" />
-          <Skeleton className="h-44 w-full rounded-lg" />
-        </div>
+          <FormSkeleton fields={3} />
+          <FormSkeleton fields={4} />
+          <FormSkeleton fields={3} />
+        </TimedLoadingState>
       </PageBody>
     );
   }
@@ -702,6 +770,12 @@ export function ModelSettingsPage({
                 saving={activeSaveSection === "enterprise_connection"}
                 disabled={saveInProgress}
                 errorText={saveErrors.enterprise_connection}
+                onReload={
+                  conflictSection === "enterprise_connection"
+                    ? () => void reloadLatest("enterprise_connection")
+                    : undefined
+                }
+                reloading={reloading}
               />
             </CardContent>
           </Card>
@@ -725,6 +799,7 @@ export function ModelSettingsPage({
                 models={draft.enterprise_ai.models}
                 connections={draft.enterprise_ai.connections}
                 connectionErrors={modelConnectionErrors}
+                modelIdErrors={modelIdErrors}
                 testingKey={testingKey}
                 testResults={testResults}
                 onModelChange={updateEnterpriseModel}
@@ -744,6 +819,12 @@ export function ModelSettingsPage({
                 saving={activeSaveSection === "enterprise_models"}
                 disabled={saveInProgress}
                 errorText={saveErrors.enterprise_models}
+                onReload={
+                  conflictSection === "enterprise_models"
+                    ? () => void reloadLatest("enterprise_models")
+                    : undefined
+                }
+                reloading={reloading}
               />
             </CardContent>
           </Card>
@@ -831,6 +912,12 @@ export function ModelSettingsPage({
                 saving={activeSaveSection === "generative_ai"}
                 disabled={saveInProgress}
                 errorText={saveErrors.generative_ai}
+                onReload={
+                  conflictSection === "generative_ai"
+                    ? () => void reloadLatest("generative_ai")
+                    : undefined
+                }
+                reloading={reloading}
               />
             </CardContent>
           </Card>
@@ -838,6 +925,11 @@ export function ModelSettingsPage({
       </fieldset>
     </PageBody>
   );
+}
+
+/** 登録モデルの行のモデル ID の欄の id（保存前の検証で最初の不正な欄へフォーカスする）。 */
+function modelIdFieldId(index: number): string {
+  return `enterprise-model-${index}-model-id`;
 }
 
 /** 接続のタブの id の接頭辞（同じ画面のほかの Tabs と分ける）。 */
@@ -1038,12 +1130,17 @@ function ModelFormActions({
   saving,
   disabled,
   errorText,
+  onReload,
+  reloading = false,
 }: {
   sectionLabel: string;
   canSubmit: boolean;
   saving: boolean;
   disabled: boolean;
   errorText?: string;
+  /** 保存が競合したときだけ渡す。「最新の設定を読み込む」を保存の左に出す（#1037）。 */
+  onReload?: () => void;
+  reloading?: boolean;
 }) {
   const saveLabel = t("settings.model.save");
 
@@ -1061,6 +1158,20 @@ function ModelFormActions({
           disabled: !canSubmit || disabled,
         },
       ]}
+      secondaryActions={
+        onReload
+          ? [
+              {
+                id: "reload-latest",
+                label: t("settings.model.conflict.reload"),
+                icon: RefreshCw,
+                loading: reloading,
+                disabled: disabled || reloading,
+                onClick: onReload,
+              },
+            ]
+          : undefined
+      }
       status={
         errorText ? <FormStatus tone="danger" message={errorText} /> : null
       }
@@ -1072,6 +1183,7 @@ function ModelCatalogEditor({
   models,
   connections,
   connectionErrors,
+  modelIdErrors,
   testingKey,
   testResults,
   onModelChange,
@@ -1083,6 +1195,7 @@ function ModelCatalogEditor({
   models: EnterpriseAiConfiguredModel[];
   connections: EnterpriseAiConnectionSettings[];
   connectionErrors: ModelConnectionErrors;
+  modelIdErrors: ModelIdErrors;
   testingKey: ModelTestKey | null;
   testResults: Partial<Record<ModelTestKey, ModelSettingsTestResult>>;
   onModelChange: (
@@ -1161,10 +1274,11 @@ function ModelCatalogEditor({
               )}
             >
               <CompactTextInput
-                id={`enterprise-model-${index}-model-id`}
+                id={modelIdFieldId(index)}
                 label={`${t("settings.model.enterprise.modelId")} ${modelNumber}`}
                 value={model.model_id}
                 placeholder={t("settings.model.placeholder.modelId")}
+                error={modelIdErrors[index]}
                 onChange={(value) => onModelChange(index, { model_id: value })}
               />
               <CompactTextInput
@@ -1206,7 +1320,8 @@ function ModelCatalogEditor({
                 />
               </div>
               <div className="flex min-h-[var(--control-height-md)] items-center">
-                <span className="mr-2 text-xs font-medium text-fg-muted lg:sr-only">
+                {/* 375px でラベルが「テス / ト」と折り返さないよう、ボタンに幅を譲らせる。 */}
+                <span className="mr-2 shrink-0 whitespace-nowrap text-xs font-medium text-fg-muted lg:sr-only">
                   {t("settings.model.test.action")}
                 </span>
                 <TestButton
@@ -1317,12 +1432,14 @@ function CompactTextInput({
   label,
   value,
   placeholder,
+  error,
   onChange,
 }: {
   id: string;
   label: string;
   value: string;
   placeholder?: string;
+  error?: string;
   onChange: (value: string) => void;
 }) {
   return (
@@ -1331,6 +1448,7 @@ function CompactTextInput({
       label={label}
       value={value}
       placeholder={placeholder}
+      error={error}
       onValueChange={onChange}
       // 広い画面では表頭が見出しになるので、欄のラベルは読み上げだけにする。狭い画面のラベルは
       // 同じ行の選択欄（接続）と同じ小さい文字にする（#631 でネイティブの input から置き換えた）。
@@ -1496,6 +1614,15 @@ function NumberField({
       onValueChange={(next) => onChange(Number(next))}
       inputClassName={cn("tnum", readOnly && "text-fg-muted")}
     />
+  );
+}
+
+/** 保存の競合（409）か。製品の ApiError はどれも HTTP の状態を `status` に持つ。 */
+function isConflictError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { status?: unknown }).status === 409
   );
 }
 
