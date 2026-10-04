@@ -414,6 +414,11 @@ class PluginPatch(BaseModel):
     enabled: bool | None = None
 
 
+# 画面・API で追加するマーケットプレイスの ID（URL の path に置くため `/`・空白などを断る。#928）。
+MARKETPLACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+MARKETPLACE_NOT_FOUND_MESSAGE = "マーケットプレイスが見つかりません。"
+
+
 class MarketplaceAddRequest(BaseModel):
     id: str
     name: str = ""
@@ -1412,10 +1417,7 @@ async def install_plugin(
     manifest = payload.manifest
     if manifest is None:
         if not payload.marketplace_id or not payload.plugin_id:
-            raise HTTPException(
-                status_code=400,
-                detail="manifest or (marketplace_id, plugin_id) is required",
-            )
+            raise HTTPException(status_code=400, detail="導入するプラグインを指定してください。")
         entry = marketplace_registry.find_entry(payload.marketplace_id, payload.plugin_id)
         if isinstance(entry, MarketplaceEntry):
             if not payload.preview_digest or not payload.accept_limitations:
@@ -1443,9 +1445,11 @@ async def install_plugin(
         else:
             manifest = entry
         if manifest is None:
-            raise HTTPException(status_code=404, detail="plugin not found in marketplace")
+            raise HTTPException(
+                status_code=404, detail="マーケットプレイスに対象のプラグインがありません。"
+            )
     if plugin_registry.get(manifest.id) is not None:
-        raise HTTPException(status_code=409, detail="plugin already installed")
+        raise HTTPException(status_code=409, detail="このプラグインは導入済みです。")
     try:
         record = plugin_registry.install(
             manifest,
@@ -1475,8 +1479,25 @@ async def add_plugin_marketplace(
     payload: MarketplaceAddRequest,
     _: None = Depends(require_admin),
 ) -> ApiResponse[MarketplaceSource]:
+    marketplace_id = payload.id.strip()
+    if not marketplace_id:
+        raise HTTPException(status_code=400, detail="マーケットプレイスの ID を入力してください。")
+    if not MARKETPLACE_ID_PATTERN.fullmatch(marketplace_id):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "マーケットプレイスの ID は英数字で始め、英数字・_・-・. の 100 文字以内に"
+                "してください。"
+            ),
+        )
+    # `MarketplaceRegistry.add` は env の宣言の再読み込みのために置き換えるため、画面・API からの
+    # 追加はここで重複を断る（前の配布元のプラグイン一覧が新しい配布元に残っていた。#928）。
+    if any(source.id == marketplace_id for source in marketplace_registry.list()):
+        raise HTTPException(status_code=409, detail="同じ ID のマーケットプレイスがあります。")
     try:
-        source = MarketplaceSource(id=payload.id, name=payload.name or payload.id, url=payload.url)
+        source = MarketplaceSource(
+            id=marketplace_id, name=payload.name.strip() or marketplace_id, url=payload.url
+        )
         added = marketplace_registry.add(source, payload.listing)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1501,7 +1522,7 @@ async def refresh_plugin_marketplace(
             data=source, warning_messages=[source.last_error] if source.last_error else []
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="marketplace not found") from exc
+        raise HTTPException(status_code=404, detail=MARKETPLACE_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -1547,7 +1568,7 @@ async def list_marketplace_plugins(
     try:
         return ApiResponse(data=marketplace_registry.get_listing(marketplace_id))
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="marketplace not found") from exc
+        raise HTTPException(status_code=404, detail=MARKETPLACE_NOT_FOUND_MESSAGE) from exc
 
 
 @router.delete(
@@ -1561,7 +1582,7 @@ async def delete_plugin_marketplace(
     try:
         marketplace_registry.remove(marketplace_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="marketplace not found") from exc
+        raise HTTPException(status_code=404, detail=MARKETPLACE_NOT_FOUND_MESSAGE) from exc
     _persist(lambda: control_plane_store.delete_marketplace(marketplace_id))
     return ApiResponse(data=MarketplaceSourcesOutput(marketplaces=marketplace_registry.list()))
 
