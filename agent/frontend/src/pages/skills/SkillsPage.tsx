@@ -58,6 +58,15 @@ interface SkillFormState {
   resourceIdsJson: string;
 }
 
+/** 作るスキルの ID（URL の path にも使う。backend の `SKILL_ID_PATTERN` と同じ。#926）。 */
+const SKILL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/;
+
+function skillIdError(value: string): string | undefined {
+  const id = value.trim();
+  if (!id) return t("skills.idRequired");
+  return SKILL_ID_PATTERN.test(id) ? undefined : t("skills.idInvalid");
+}
+
 const EMPTY_SKILL_FORM: SkillFormState = {
   id: "",
   name: "",
@@ -332,7 +341,7 @@ function SkillEditor({
       expect: "array",
     });
     const errors: SkillFieldErrors = {
-      id: !editingId && !form.id.trim() ? t("skills.idRequired") : undefined,
+      id: editingId ? undefined : skillIdError(form.id),
       name: form.name.trim() ? undefined : t("skills.nameRequired"),
       mcpRequirements: mcpRequirements.ok ? undefined : mcpRequirements.error,
       resourceIds: resourceIds.ok ? undefined : resourceIds.error,
@@ -430,6 +439,7 @@ function SkillEditor({
                     id="skill-id"
                     label={t("skills.id")}
                     required={!editingId}
+                    helper={editingId ? undefined : t("skills.idHint")}
                     error={fieldErrors.id}
                     value={form.id}
                     disabled={Boolean(editingId)}

@@ -1,4 +1,5 @@
 import {
+  ChatProgress,
   Disclosure,
   PageBody,
   PageHeader,
@@ -27,6 +28,7 @@ import {
   withOptimisticChatStatus,
   type ChatUserMessageStatus,
   type OptimisticChatMessage,
+  type ChatProgressStep,
 } from "@engchina/production-ready-ui";
 import {
   Check,
@@ -56,7 +58,6 @@ import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { ListPagination } from "@/components/ListPagination";
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
 import { CitationCard } from "@/components/search/CitationCard";
-import { AnswerProgress } from "@/components/search/AnswerProgress";
 import { SavedAnswerRecord } from "@/components/search/SavedAnswerRecord";
 import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
@@ -74,7 +75,7 @@ import type {
 import { api, ApiError } from "@/lib/api";
 import { ApprovedFaqSuggestions } from "@/components/search/ApprovedFaqSuggestions";
 import { ClarificationChoice } from "./ClarificationChoice";
-import type { AnswerStageEvent } from "@/lib/answer-progress";
+import { chatSubmitProgressSteps } from "@/lib/chat-progress";
 import { streamChatMessage, type ChatColumn } from "@/lib/chat-stream";
 import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { formatDateTime } from "@/lib/format";
@@ -142,8 +143,8 @@ interface LiveColumn {
   guardrailWarnings: string[];
   /** 回答の根拠・実行記録(無い回答では null)。 */
   answerDiagnostics: unknown;
-  /** 回答生成の工程の進捗（#375）。 */
-  stages: AnswerStageEvent[];
+  /** 処理の段階（3 製品共通の ChatProgressStep。#1146）。最初の `progress` が届くまでは空。 */
+  progressSteps: ChatProgressStep[];
   startedAtMs: number;
 }
 
@@ -220,8 +221,11 @@ function AssistantColumn({
   answerDiagnostics?: unknown;
   /** 保存された回答がある(trace_id から根拠と実行記録を開ける)。 */
   savedAnswer?: boolean;
-  /** 生成中の工程と開始時刻（#375）。回答の本文が届くまで経過時間と今の工程を出す。 */
-  progress?: { stages: AnswerStageEvent[]; startedAtMs: number } | null;
+  /**
+   * 処理の段階（#1146）。生成中は今の段階と経過時間、完了後は回答の上に「処理の経過」の 1 行を出す。
+   * 段階がまだ届いていない（送信の応答待ち）ときは `steps` を空にし、「質問を送信しています」を出す。
+   */
+  progress?: { steps: ChatProgressStep[]; startedAtMs: number } | null;
   /** 失敗した回答をもう一度送信する（最新の質問だけ）。 */
   onRetry?: () => void;
   className?: string;
@@ -244,6 +248,14 @@ function AssistantColumn({
           {t("chat.column.model", { name: label })}
         </h3>
       ) : null}
+      {progress ? (
+        // 処理の段階（3 製品共通の ChatProgress。#1145 / #1146）。回答の本文は生成と検査が終わってから
+        // まとめて届くので、それまでは今の段階と経過時間を出す。失敗の原因は段階ではなく下の Banner に出す。
+        <ChatProgress
+          steps={progress.steps.length > 0 ? progress.steps : chatSubmitProgressSteps(progress.startedAtMs)}
+          testId="chat-answer-progress"
+        />
+      ) : null}
       {errorMessage ? (
         <Banner
           severity="danger"
@@ -263,15 +275,7 @@ function AssistantColumn({
         >
           {errorMessage}
         </Banner>
-      ) : waitingForAnswer && progress ? (
-        // 回答の本文は生成と検査が終わってからまとめて届く。それまでは今の工程と経過時間を出す。
-        <AnswerProgress
-          active
-          stages={progress.stages}
-          startedAtMs={progress.startedAtMs}
-          testId="chat-answer-progress"
-        />
-      ) : (
+      ) : waitingForAnswer ? null : (
         <AnswerText
           text={answer}
           streaming={streaming}
@@ -368,7 +372,7 @@ function MessageTurn({
     guardrailWarnings: string[];
     answerDiagnostics?: unknown;
     savedAnswer?: boolean;
-    progress?: { stages: AnswerStageEvent[]; startedAtMs: number } | null;
+    progress?: { steps: ChatProgressStep[]; startedAtMs: number } | null;
   }[];
 }) {
   const compare = columns.length > 1;
@@ -565,6 +569,9 @@ export function ChatClient() {
   const historyToggleRef = useRef<HTMLButtonElement>(null);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [liveTurn, setLiveTurn] = useState<LiveTurn | null>(null);
+  // この画面で送って保存された回答の処理の段階（message_id → 段階。#1146）。段階は保存しないので、
+  // 会話を取り直した後も、この画面を開いている間は回答の上に「処理の経過」を残す。
+  const [finishedProgress, setFinishedProgress] = useState<Record<string, ChatProgressStep[]>>({});
   const [sending, setSending] = useState(false);
   const [errorText, setErrorText] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -769,7 +776,7 @@ export function ChatClient() {
       errorMessage: null,
       guardrailWarnings: [],
       answerDiagnostics: null,
-      stages: [],
+      progressSteps: [],
       startedAtMs,
     }));
   }
@@ -925,6 +932,8 @@ export function ChatClient() {
         : newLiveTurn(request)
     );
     let started = false;
+    // モデルごとの最新の処理の段階（完了した回答の上に残すため。#1146）。
+    const latestProgress = new Map<string, ChatProgressStep[]>();
     try {
       let conversationId = activeId;
       if (!conversationId) {
@@ -969,25 +978,16 @@ export function ChatClient() {
                       errorMessage: null,
                       guardrailWarnings: [],
                       answerDiagnostics: null,
-                      stages: [],
+                      progressSteps: [],
                       startedAtMs: current.pending.sentAtMs,
                     })),
                   }
                 : current
             );
           },
-          onStage: ({ model_id, stage, outcome }) => {
-            setLiveTurn((current) => {
-              if (!current) return current;
-              return {
-                ...current,
-                columns: current.columns.map((column) =>
-                  column.model_id === model_id
-                    ? { ...column, stages: [...column.stages, { stage, outcome }] }
-                    : column
-                ),
-              };
-            });
+          onProgress: (modelId, steps) => {
+            latestProgress.set(modelId, steps);
+            updateColumn(modelId, { progressSteps: steps });
           },
           onDelta: (modelId, text) => {
             setLiveTurn((current) => {
@@ -1009,7 +1009,14 @@ export function ChatClient() {
               answerDiagnostics: answer_diagnostics ?? null,
             }),
           onCitations: (modelId, citations) => updateColumn(modelId, { citations }),
-          onModelDone: ({ model_id }) => updateColumn(model_id, { status: "done" }),
+          onModelDone: ({ model_id, message_id }) => {
+            updateColumn(model_id, { status: "done" });
+            // 取り直した会話（保存した回答）でも、この画面の間は処理の経過を回答の上に残す（#1146）。
+            const steps = latestProgress.get(model_id);
+            if (message_id && steps?.length) {
+              setFinishedProgress((current) => ({ ...current, [message_id]: steps }));
+            }
+          },
           onModelError: ({ model_id, message }) =>
             updateColumn(model_id, { status: "error", errorMessage: message }),
           onAllDone: async () => {
@@ -1078,7 +1085,7 @@ export function ChatClient() {
         errorMessage: column.errorMessage,
         guardrailWarnings: column.guardrailWarnings,
         answerDiagnostics: column.answerDiagnostics,
-        progress: { stages: column.stages, startedAtMs: column.startedAtMs },
+        progress: { steps: column.progressSteps, startedAtMs: column.startedAtMs },
       }))
     : [];
   const lastTurnId = turns.length ? turns[turns.length - 1].user.message_id : null;
@@ -1457,6 +1464,10 @@ export function ChatClient() {
                         savedAnswer: Boolean(
                           reply.trace_id && answerTraceIds.has(reply.trace_id)
                         ),
+                        // この画面で送った回答は、処理の経過を回答の上に残す（#1146）。
+                        progress: finishedProgress[reply.message_id]
+                          ? { steps: finishedProgress[reply.message_id], startedAtMs: 0 }
+                          : null,
                       }))}
                     />
                   ))}

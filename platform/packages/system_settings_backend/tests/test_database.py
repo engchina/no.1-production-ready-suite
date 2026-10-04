@@ -124,6 +124,42 @@ def test_patch_failure_keeps_runtime(tmp_path: Path) -> None:
     assert h.saved == []
 
 
+def test_patch_rejects_other_wallet_dir_so_wallet_install_cannot_replace_it(
+    tmp_path: Path,
+) -> None:
+    """API から別の Wallet の保存先を保存させない（Wallet の設置はそこを置き換えて削除する）。"""
+    h = Harness(tmp_path)
+    other = tmp_path / "important"
+    other.mkdir()
+    (other / "keep.txt").write_text("keep")
+
+    resp = h.client.patch(
+        "/api/settings/database",
+        json={"user": "app", "dsn": "ragdb_high", "wallet_dir": str(other)},
+    )
+    assert resp.status_code == 422
+    assert "PLATFORM_ORACLE_WALLET_DIR" in resp.json()["detail"]
+    assert h.settings.oracle_wallet_dir == str(tmp_path / "wallet")
+    assert not h.env_file.exists()
+    test = h.client.post(
+        "/api/settings/database/test",
+        json={"user": "app", "dsn": "ragdb_high", "wallet_dir": str(other)},
+    )
+    assert test.status_code == 422
+
+    assert h.upload(wallet_zip()).status_code == 200
+    assert (other / "keep.txt").read_text() == "keep"
+
+    # 今の保存先（画面が送る値）と空欄は受け取る。
+    for wallet_dir in (str(tmp_path / "wallet"), str(tmp_path / "x" / ".." / "wallet"), ""):
+        resp = h.client.patch(
+            "/api/settings/database",
+            json={"user": "app", "dsn": "ragdb_high", "wallet_dir": wallet_dir},
+        )
+        assert resp.status_code == 200
+    assert dotenv_values(h.env_file)["PLATFORM_ORACLE_WALLET_DIR"] == str(tmp_path / "wallet")
+
+
 def test_connection_security_is_ignored_unless_enabled(tmp_path: Path) -> None:
     disabled = Harness(tmp_path / "a")
     disabled.client.patch(

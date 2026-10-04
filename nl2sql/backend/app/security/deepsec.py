@@ -6,6 +6,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Mapping
 from contextlib import suppress
@@ -48,6 +49,8 @@ from .service import (
     SecurityService,
     get_security_service,
 )
+
+logger = logging.getLogger(__name__)
 
 PLAN_VERSION = "V001"
 PASSWORD_PLACEHOLDER = "<secret:NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD>"  # nosec B105
@@ -324,6 +327,19 @@ class DataEntitlementSyncPlan:
             *self.cleanup_statements,
             *(statement for entry in self.entries for statement in entry.statements),
         )
+
+
+def _statement_failure_message(lead: str, error: Mapping[str, object]) -> str:
+    """Oracle の文の失敗を、利用者向けの日本語の 1 文目と Oracle の応答に分けて返す（#1022）。
+
+    以前は Oracle の文（ORA-...）だけ、空なら英語の "SQL execution failed" を返していた。
+    """
+
+    detail = str(error.get("error_message") or "").strip()
+    index = error.get("index")
+    position = f"{index} 番目の文で失敗しました。" if isinstance(index, int) else ""
+    oracle_detail = f"Oracle の応答: {detail}" if detail else "Oracle の応答はありません。"
+    return f"{lead}（{position}{oracle_detail}）"
 
 
 def _sql_literal(value: str) -> str:
@@ -616,6 +632,48 @@ def _disable_data_grants_only_statement(target_owner: str, target_object: str) -
     )
 
 
+def _revoke_target_select_statement(target_owner: str, target_object: str) -> str:
+    """対象の SELECT を DATA USER の DB role から外し、外れたことを確かめる（#1022）。
+
+    `USE DATA GRANTS ONLY` を無効にした表では、DB role の SELECT（object privilege）だけで
+    DATA USER が全行を読める。無効にする前にこの文を実行し、SELECT が残っていたら
+    （別の grantor の grant など）エラーで止めて、無効化へ進ませない（fail-closed）。
+    """
+
+    target = _qualified(target_owner, target_object)
+    return _single_quoted_identifier_sql(
+        """
+        DECLARE
+          v_count NUMBER;
+        BEGIN
+          SELECT COUNT(*) INTO v_count FROM DBA_TAB_PRIVS
+           WHERE OWNER = '{target_owner}'
+             AND TABLE_NAME = '{target_object}'
+             AND GRANTEE = '{db_role}'
+             AND PRIVILEGE = 'SELECT';
+          IF v_count > 0 THEN
+            EXECUTE IMMEDIATE 'REVOKE SELECT ON {target} FROM {db_role}';
+            SELECT COUNT(*) INTO v_count FROM DBA_TAB_PRIVS
+             WHERE OWNER = '{target_owner}'
+               AND TABLE_NAME = '{target_object}'
+               AND GRANTEE = '{db_role}'
+               AND PRIVILEGE = 'SELECT';
+            IF v_count > 0 THEN
+              RAISE_APPLICATION_ERROR(
+                -20003,
+                'SELECT on {target} is still granted to {db_role}'
+              );
+            END IF;
+          END IF;
+        END;
+        """,
+        target_owner=_identifier_name(target_owner),
+        target_object=_identifier_name(target_object),
+        target=target,
+        db_role=DEEPSEC_DB_ROLE,
+    )
+
+
 def _data_grant_checksum(statements: tuple[str, ...]) -> str:
     payload = "\n-- statement --\n".join(statement.strip() for statement in statements)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -728,8 +786,11 @@ def build_data_entitlement_statements(
             400,
             "Data Grant predicate は Oracle の上限 4000 文字以内にしてください。",
         )
+    # 順序は fail-closed にする（#1022）。先に `USE DATA GRANTS ONLY` を有効にしてから
+    # Data Grant を作り、DB role の SELECT は最後に付ける。途中で止まっても、DATA USER が
+    # 行の制限なしに読める状態（SELECT があり、DATA GRANTS ONLY が無効）を作らない。
     return (
-        f"GRANT SELECT ON {target} TO {DEEPSEC_DB_ROLE}",
+        f"SET USE DATA GRANTS ONLY ON {target} ENABLED",
         f"DROP DATA GRANT IF EXISTS {grant}",
         f"""
         CREATE OR REPLACE DATA GRANT {grant}
@@ -738,7 +799,7 @@ def build_data_entitlement_statements(
           WHERE {predicate.strip()}
           TO {data_grant_grantee}
         """,
-        f"SET USE DATA GRANTS ONLY ON {target} ENABLED",
+        f"GRANT SELECT ON {target} TO {DEEPSEC_DB_ROLE}",
     )
 
 
@@ -944,6 +1005,7 @@ def build_v001_reset_statements(
     data_role = DEEPSEC_DATA_ROLE
     probe = f"{owner}.NL2SQL_DEEPSEC_PROBE"
     managed_targets: list[tuple[str, str, str]] = []
+    managed_target_tokens: list[tuple[str, str]] = []
     managed_grants: list[str] = []
     seen_targets: set[tuple[str, str]] = set()
     seen_grants: set[str] = set()
@@ -955,6 +1017,7 @@ def build_v001_reset_statements(
         target_key = (target_owner, target_object)
         if target_key not in seen_targets:
             seen_targets.add(target_key)
+            managed_target_tokens.append(target_key)
             managed_targets.append(
                 (
                     _identifier_name(target_owner),
@@ -987,6 +1050,12 @@ def build_v001_reset_statements(
             target=target,
         )
         for target_owner, target_object, target in managed_targets
+    )
+    # 解除の途中で止まっても DATA USER が全行を読めないよう、DATA GRANTS ONLY を無効にする前に
+    # 対象の SELECT を DB role から外す（#1022）。DB role 自体は最後に DROP する。
+    managed_revoke_statements = tuple(
+        _revoke_target_select_statement(target_owner, target_object)
+        for target_owner, target_object in managed_target_tokens
     )
     managed_drop_statements = tuple(
         f"DROP DATA GRANT IF EXISTS {owner}.{grant_name}" for grant_name in managed_grants
@@ -1063,6 +1132,7 @@ def build_v001_reset_statements(
         role=role,
     )
     return (
+        *managed_revoke_statements,
         *managed_disable_statements,
         *managed_drop_statements,
         disable_probe_data_grants_only,
@@ -1481,22 +1551,35 @@ class DeepSecService:
             raise SecurityApiError(409, "NL2SQL_ORACLE_DEEPSEC_ENABLED=true を設定してください。")
         role = self._editable_data_entitlement_role(role_id, expected_version=expected_version)
         self.pools.validate_deepsec_control_configuration()
+        oracle_started = False
         try:
             with self.pools.control_connection() as conn, conn.cursor() as cursor:
                 plan = self._build_data_entitlement_sync_plan(role, entitlements, cursor=cursor)
             results: list[dict[str, object]] = []
             if plan.statements:
+                oracle_started = True
                 with self.pools.control_connection() as conn:
+                    # 失敗した文の後ろは実行しない（#1022）。DDL は rollback できないため、
+                    # 途中で止まった状態が fail-closed になる順序（REVOKE → DROP → 無効化、
+                    # 有効化 → Data Grant → GRANT）で文を並べている。
                     results = oracle_statement_executor.execute(
                         conn,
                         plan.statements,
                         atomic=False,
                         include_sql=False,
+                        stop_on_error=True,
                     )
             errors = [item for item in results if item["status"] == "error"]
             if errors:
                 raise SecurityApiError(
-                    409, str(errors[0].get("error_message") or "SQL execution failed")
+                    409,
+                    _statement_failure_message(
+                        "Data Grant の適用が途中で止まりました。"
+                        "DATA USER が行の制限なしに読める状態にはしていません。"
+                        "このロールの Data Grant は失敗として記録したため、"
+                        "原因を解消してから、もう一度適用してください。",
+                        errors[0],
+                    ),
                 )
             applied_at = datetime.now(UTC)
             applied_entitlements = [
@@ -1525,9 +1608,38 @@ class DeepSecService:
             }
         except Exception as exc:
             safe_error = self._safe_error(exc)
+            if oracle_started:
+                self._mark_role_data_entitlements_failed(
+                    role,
+                    str(exc.public_message if isinstance(exc, SecurityApiError) else safe_error),
+                )
             if isinstance(exc, SecurityApiError):
                 raise
             raise SecurityApiError(500, f"Data Grant の適用に失敗しました: {safe_error}") from exc
+
+    def _mark_role_data_entitlements_failed(self, role: RoleRecord, message: str) -> None:
+        """Oracle への同期が途中で止まったロールの保存済み Data Grant を FAILED にする（#1022）。
+
+        Oracle 側は一部の文だけが実行された状態のため、保存済みの APPLIED は事実と合わない。
+        Data Grant の predicate は `APPLY_STATUS = 'APPLIED'` を条件にしているので、FAILED に
+        すると、このロールの Data Grant は再適用が成功するまで行を許可しない（fail-closed）。
+        記録できなくても、元の失敗の応答を優先する。
+        """
+        for entitlement in role.entitlements:
+            if not _is_real_data_entitlement(entitlement):
+                continue
+            try:
+                self.security.store.set_deepsec_entitlement_apply_state(
+                    entitlement.entitlement_id,
+                    status="FAILED",
+                    error_message=self._safe_error(Exception(message)),
+                )
+            except Exception:
+                logger.warning(
+                    "deepsec_data_entitlement_failed_state_not_recorded",
+                    extra={"entitlement_id": entitlement.entitlement_id},
+                    exc_info=True,
+                )
 
     def _editable_data_entitlement_role(
         self,
@@ -1674,7 +1786,12 @@ class DeepSecService:
             if _is_real_data_entitlement(entitlement)
         )
         owner = _strict_identifier(self.settings.oracle_user)
-        statements: list[str] = []
+        # 対象を使う最後の Data Grant を消すときは、SELECT の REVOKE → Data Grant の DROP →
+        # `USE DATA GRANTS ONLY` の無効化の順にする（#1022）。以前は無効化を先に行い、
+        # SELECT を外さなかったため、DATA USER が DB role の SELECT で全行を読めた（fail-open）。
+        revoke_statements: list[str] = []
+        drop_statements: list[str] = []
+        disable_statements: list[str] = []
         disabled_targets: set[tuple[str, str]] = set()
         dropped_grants: set[str] = set()
         current_entitlements = sorted(
@@ -1700,12 +1817,13 @@ class DeepSecService:
                 _identifier_token(entitlement.target_object),
             )
             if target not in desired_targets and target not in disabled_targets:
-                statements.append(_disable_data_grants_only_statement(*target))
+                revoke_statements.append(_revoke_target_select_statement(*target))
+                disable_statements.append(_disable_data_grants_only_statement(*target))
                 disabled_targets.add(target)
             if grant_name not in dropped_grants:
-                statements.append(f"DROP DATA GRANT IF EXISTS {owner}.{grant_name}")
+                drop_statements.append(f"DROP DATA GRANT IF EXISTS {owner}.{grant_name}")
                 dropped_grants.add(grant_name)
-        return tuple(statements)
+        return (*revoke_statements, *drop_statements, *disable_statements)
 
     @staticmethod
     def _data_entitlement_sync_payload(
@@ -2050,7 +2168,12 @@ class DeepSecService:
             errors = [item for item in results if item["status"] == "error"]
             if errors:
                 raise SecurityApiError(
-                    409, str(errors[0].get("error_message") or "SQL execution failed")
+                    409,
+                    _statement_failure_message(
+                        f"DeepSec の手順 {step.step_no}「{step.title}」の適用に失敗しました。"
+                        "原因を解消してから、この手順をもう一度適用してください。",
+                        errors[0],
+                    ),
                 )
             self.security.store.set_deepsec_state(
                 version=PLAN_VERSION,
@@ -2107,16 +2230,24 @@ class DeepSecService:
         ]
         try:
             with self.pools.control_connection() as conn:
+                # 失敗した文の後ろは実行しない（#1022）。SELECT の REVOKE より後ろの
+                # DATA GRANTS ONLY の無効化へ、REVOKE の失敗を越えて進ませない。
                 results = oracle_statement_executor.execute(
                     conn,
                     statements,
                     atomic=False,
                     include_sql=False,
+                    stop_on_error=True,
                 )
             errors = [item for item in results if item["status"] == "error"]
             if errors:
                 raise SecurityApiError(
-                    409, str(errors[0].get("error_message") or "SQL execution failed")
+                    409,
+                    _statement_failure_message(
+                        "DeepSec 構成の解除が途中で止まりました。"
+                        "原因を解消してから、もう一度解除してください。",
+                        errors[0],
+                    ),
                 )
             step_numbers = [1, 2, 3, 4]
             self.security.store.clear_deepsec_states(

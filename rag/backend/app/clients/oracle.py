@@ -323,6 +323,9 @@ KNOWLEDGE_BASE_NAME_CONFLICT_MESSAGE = (
 DEFAULT_ONLY_MEMBERSHIP_REMOVE_MESSAGE = (
     "DEFAULT にだけ所属する文書は外せません。先に別のナレッジベースへ追加してください。"
 )
+ARCHIVED_SEARCH_ANSWER_PROFILE_UPDATE_MESSAGE = (
+    "アーカイブ済みの検索・回答プロファイルは変更できません。"
+)
 
 
 class DocumentSectionsConflictError(ValueError):
@@ -5349,9 +5352,8 @@ class OracleClient:
         }
 
         def operation(connection: OracleConnectionProtocol) -> KnowledgeBaseDetail:
-            existing = _select_knowledge_base(connection, knowledge_base_id)
-            if existing is None:
-                raise KeyError(f"knowledge_base_id={knowledge_base_id} は存在しません。")
+            # アーカイブ済みの KB は名前・説明も変えない（画面の読み取り専用と同じ。#961）。
+            existing = _require_active_knowledge_base(connection, knowledge_base_id)
             if (
                 "name" in fields
                 and name is not None
@@ -5606,6 +5608,9 @@ class OracleClient:
                 raise KeyError(
                     f"search_answer_profile_id={search_answer_profile_id} は存在しません。"
                 )
+            if existing.status != SearchAnswerProfileStatus.ACTIVE:
+                # アーカイブ済みは編集・保存しない（画面の読み取り専用と同じ。#961）。
+                raise ValueError(ARCHIVED_SEARCH_ANSWER_PROFILE_UPDATE_MESSAGE)
             is_default = existing.name.casefold() == DEFAULT_SEARCH_ANSWER_PROFILE_NAME.casefold()
             if is_default and "name" in fields:
                 raise ValueError("DEFAULT 検索・回答プロファイルの名前は変更できません。")
@@ -5794,9 +5799,8 @@ class OracleClient:
         """Oracle membership table から文書所属を削除する。"""
 
         def operation(connection: OracleConnectionProtocol) -> KnowledgeBaseDetail:
-            knowledge_base = _select_knowledge_base(connection, knowledge_base_id)
-            if knowledge_base is None:
-                raise KeyError(f"knowledge_base_id={knowledge_base_id} は存在しません。")
+            # アーカイブ済みの KB は所属の追加と同じく解除もしない（#961）。
+            knowledge_base = _require_active_knowledge_base(connection, knowledge_base_id)
             if _select_document_state(connection, document_id) is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
             # 文書は 1 つ以上の KB に所属させる（knowledge-base-management.md §6.2）。

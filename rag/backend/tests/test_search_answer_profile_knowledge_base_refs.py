@@ -7,6 +7,8 @@
 import json
 from datetime import UTC, datetime
 
+import pytest
+
 from app.clients.oracle import OracleClient, _oracle_knowledge_base_where
 from app.schemas.knowledge_base import KnowledgeBaseStatus
 from tests.test_oracle_adapter import FakeOraclePool, _oci_settings, _run_inline
@@ -124,3 +126,20 @@ def test_knowledge_base_where_filters_by_ids() -> None:
 
     unfiltered_sql, _ = _oracle_knowledge_base_where()
     assert "knowledge_base_id IN" not in unfiltered_sql
+
+
+async def test_update_archived_search_answer_profile_is_rejected() -> None:
+    """アーカイブ済みの検索・回答プロファイルは更新しない（画面の読み取り専用と同じ。#961）。"""
+    row = _search_answer_profile_row("bv-old", ["kb-1"]) | {"status": "ARCHIVED"}
+    pool = FakeOraclePool(execute_results=[[row]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    with pytest.raises(ValueError, match="アーカイブ済みの検索・回答プロファイルは変更できません"):
+        await client.update_search_answer_profile(
+            "bv-old", description="新しい説明", update_fields={"description"}
+        )
+
+    assert not any(
+        "UPDATE rag_search_answer_profiles" in call.statement for call in pool.connection.calls
+    )
+    assert pool.connection.commits == 0

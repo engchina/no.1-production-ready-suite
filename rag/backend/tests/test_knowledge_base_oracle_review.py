@@ -162,3 +162,39 @@ async def test_remove_default_only_membership_is_rejected() -> None:
         for call in pool.connection.calls
     )
     assert pool.connection.commits == 0
+
+
+def _archived_knowledge_base_row(knowledge_base_id: str, name: str) -> dict[str, object]:
+    row = _oracle_knowledge_base_row(name=name, status="ARCHIVED")
+    row["knowledge_base_id"] = knowledge_base_id
+    return row
+
+
+async def test_remove_membership_from_archived_knowledge_base_is_rejected() -> None:
+    """アーカイブ済みの KB からは所属を外さない（追加と同じく 409 用の例外。#961）。"""
+    pool = FakeOraclePool(execute_results=[[_archived_knowledge_base_row("kb-old", "旧規程")]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    with pytest.raises(ValueError, match="アーカイブ済み"):
+        await client.remove_document_from_knowledge_base("kb-old", "doc-1")
+
+    assert not pool.connection.many_calls
+    assert not any(
+        "DELETE FROM rag_document_knowledge_bases" in call.statement
+        for call in pool.connection.calls
+    )
+    assert pool.connection.commits == 0
+
+
+async def test_update_archived_knowledge_base_is_rejected() -> None:
+    """アーカイブ済みの KB は名前・説明を変えない（画面の読み取り専用と同じ。#961）。"""
+    pool = FakeOraclePool(execute_results=[[_archived_knowledge_base_row("kb-old", "旧規程")]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    with pytest.raises(ValueError, match="アーカイブ済み"):
+        await client.update_knowledge_base(
+            "kb-old", description="新しい説明", update_fields={"description"}
+        )
+
+    assert not any("UPDATE rag_knowledge_bases" in call.statement for call in pool.connection.calls)
+    assert pool.connection.commits == 0

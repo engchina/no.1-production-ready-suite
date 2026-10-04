@@ -74,6 +74,7 @@ interface MockApiOptions {
     tenancy?: string;
     region?: string;
     key_file_exists?: boolean;
+    config_error?: string | null;
   };
   uploadStorageSettings?: {
     object_storage_region?: string;
@@ -111,6 +112,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
                 options.ociSettings?.region
             ),
             config_source: "runtime",
+            config_error: options.ociSettings?.config_error ?? null,
           },
           error_messages: [],
           warning_messages: [],
@@ -395,6 +397,31 @@ test("OCI config から認証項目を反映できる", async ({ page }) => {
 
   await expect.poll(() => requested).toMatchObject({ config_file: "~/.oci/config", profile: "DEFAULT" });
   await expect(page.getByLabel("ユーザー OCID")).not.toHaveValue("");
+});
+
+test("OCI config を読み取れないときは空の欄を未設定と見せず、理由を警告する", async ({ page }) => {
+  await mockApi(page, {
+    ociSettings: { key_file_exists: true, config_error: "OCI config ファイルの形式を確認してください。" },
+  });
+
+  await page.goto("/settings/oci");
+
+  const warning = page
+    .getByRole("status")
+    .filter({ hasText: "サーバーの OCI config（~/.oci/config）を読み取れないため、保存済みの値を表示できません。" });
+  await expect(warning).toBeVisible();
+  await expect(warning).toContainText("OCI config ファイルの形式を確認してください。");
+  await expect(page.getByLabel("ユーザー OCID")).toHaveValue("");
+  await expectNoPageOverflow(page);
+});
+
+test("OCI config を読み取れたときは警告を出さない", async ({ page }) => {
+  await mockApi(page, { ociSettings: VALID_AUTH });
+
+  await page.goto("/settings/oci");
+
+  await expect(page.getByLabel("ユーザー OCID")).toHaveValue(VALID_AUTH.user);
+  await expect(page.getByText("保存済みの値を表示できません")).toHaveCount(0);
 });
 
 // desktop / 375px は playwright.config.ts の project が受け持つ。
