@@ -1442,7 +1442,15 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   // --- 設定 ---
   if (head === "settings" && second === "api-keys") {
     if (method === "GET" && at("settings", "api-keys")) {
-      return { keys: state.apiKeys, persistent: state.apiKeysPersistent };
+      // キーの業務 Agent の名前は、閲覧者が利用できる業務 Agent だけ（backend の list_api_keys と同じ）。
+      const scope = state.auth.currentUser?.allowed_agent_ids ?? null;
+      const keyAgentIds = new Set(state.apiKeys.flatMap((key) => (key.agent_ids as string[] | null) ?? []));
+      const agentNames = Object.fromEntries(
+        state.agents
+          .filter((agent) => keyAgentIds.has(String(agent.id)) && (scope === null || scope.includes(String(agent.id))))
+          .map((agent) => [agent.id, agent.name])
+      );
+      return { keys: state.apiKeys, persistent: state.apiKeysPersistent, agent_names: agentNames };
     }
     if (method === "POST" && at("settings", "api-keys")) {
       const id = `${(state.apiKeys.length + 1).toString(16).padStart(16, "0")}`;

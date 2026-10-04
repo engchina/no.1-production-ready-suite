@@ -2928,17 +2928,28 @@ async def mcp_endpoint(request: Request) -> Response:
 
 
 @router.get("/settings/api-keys", response_model=ApiResponse[ApiKeysListData])
-async def list_api_keys() -> ApiResponse[ApiKeysListData]:
-    """API キー（#778。秘密と hash は返さない）。"""
+async def list_api_keys(request: Request) -> ApiResponse[ApiKeysListData]:
+    """API キー（#778。秘密と hash は返さない）。
+
+    キーの業務 Agent の名前は、閲覧者が利用できる業務 Agent（`GET /agents` と同じ範囲）だけ返す。
+    業務 Agent の一覧を読む権限が無い閲覧者（API キーのメニューだけ）にも名前で示すため。
+    """
     records = api_key_registry.list()
     people = {record.owner_user_uuid for record in records} | {
         record.created_by_user_uuid for record in records if record.created_by_user_uuid
     }
     names = await run_in_threadpool(user_display_names, sorted(people))
+    key_agent_ids = {agent_id for record in records for agent_id in record.agent_ids or []}
+    agent_names = {
+        agent.id: agent.name
+        for agent in runtime_repository.list_agents()
+        if agent.id in key_agent_ids and _agent_allowed(request, agent.id)
+    }
     return ApiResponse(
         data=ApiKeysListData(
             keys=[key_view(record, names) for record in records],
             persistent=get_control_plane_store().persistent,
+            agent_names=agent_names,
         )
     )
 

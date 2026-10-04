@@ -392,6 +392,8 @@ export interface ApiKey {
 
 export interface ApiKeysData {
   keys: ApiKey[];
+  /** キーの業務 Agent の ID → 名前（閲覧者が利用できる業務 Agent だけ。範囲外・削除済みは無い）。 */
+  agent_names: Record<string, string>;
   /** false はキーの保存先（Oracle）が無い（再起動で消える）。 */
   persistent: boolean;
 }
