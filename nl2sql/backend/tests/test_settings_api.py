@@ -184,6 +184,43 @@ def test_select_ai_credential_create_and_recreate_persist_safe_settings(
     assert secret_body not in caplog.text
 
 
+def test_select_ai_credential_create_succeeds_when_final_status_read_fails(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """作成後の状態の読み直しが失敗しても、作成済みとして 200 を返す（失敗として見せない）。"""
+    settings, _key_file, _key_content = _write_oci_signing_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        settings, "nl2sql_select_ai_credential_name", settings.nl2sql_select_ai_credential_name
+    )
+    monkeypatch.setattr(settings, "nl2sql_select_ai_region", settings.nl2sql_select_ai_region)
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+
+    class _FlakyStatusAdapter(_FakeSelectAiCredentialAdapter):
+        def get_select_ai_credential_status(self, credential_name: str) -> tuple[str, bool]:
+            if self.calls:
+                raise RuntimeError("ORA-03113: end-of-file on communication channel")
+            return super().get_select_ai_credential_status(credential_name)
+
+    fake_adapter = _FlakyStatusAdapter(exists=False)
+    monkeypatch.setattr(app_settings, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(settings_router, "OracleNl2SqlAdapter", lambda settings: fake_adapter)
+
+    response = client.post(
+        "/api/settings/database/select-ai-credential",
+        json={"region": "ap-osaka-1", "confirmation": "ADMIN_EXECUTE", "recreate": False},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["operation"] == "created"
+    assert data["exists"] is True
+    assert data["schema_name"] == "ADMIN"
+    assert data["region"] == "ap-osaka-1"
+    assert "ORA-03113" not in response.text
+
+
 def test_select_ai_credential_status_failure_returns_problem_contract(
     monkeypatch: MonkeyPatch,
     caplog: pytest.LogCaptureFixture,

@@ -15,7 +15,10 @@ from app.features.nl2sql.models import (
     DbAdminExecuteRequest,
     ExecuteRequest,
     FeedbackRequest,
+    JobCreateRequest,
 )
+from app.features.nl2sql.service import Nl2SqlService, StoredJob
+from app.features.nl2sql.store import MemoryNl2SqlStore
 
 
 def _problems(exc: pytest.ExceptionInfo[ValidationError]) -> list[tuple[str, str]]:
@@ -68,3 +71,39 @@ def test_sql_row_limit_omitted_keeps_api_contract() -> None:
     """API で省略した取得件数上限は「上限なし」のまま（画面は常に明示する）。"""
     assert ExecuteRequest(sql="SELECT 1 FROM DUAL").row_limit is None
     assert ExecuteRequest(sql="SELECT 1 FROM DUAL", row_limit=100000).row_limit == 100000
+
+
+@pytest.mark.parametrize("generation_only", [False, True], ids=["job", "chat"])
+@pytest.mark.parametrize(
+    ("question", "message"),
+    [
+        ("", "クエリを入力してください。"),
+        ("   \n\t", "クエリを入力してください。"),
+        ("a" * 10001, "クエリは 10000 文字以内で入力してください。"),
+    ],
+    ids=["empty", "blank", "too-long"],
+)
+def test_job_question_is_validated_for_every_job(
+    generation_only: bool, question: str, message: str
+) -> None:
+    """SQL 生成画面・API・MCP のジョブも、チャットと同じ規則・文言で欄を指して拒否する（#1054）。"""
+    with pytest.raises(ValidationError) as exc:
+        JobCreateRequest(question=question, generation_only=generation_only)
+    assert _problems(exc) == [("/question", message)]
+
+
+def test_job_question_accepts_the_upper_limit() -> None:
+    assert len(JobCreateRequest(question="a" * 10000).question) == 10000
+
+
+@pytest.mark.parametrize("question", ["   ", "a" * 20000], ids=["blank", "too-long"])
+def test_stored_job_snapshot_keeps_questions_accepted_before(question: str) -> None:
+    """以前の規則で受け付けて保存したジョブは、読み戻しで新しい検証に掛けない（#1054）。"""
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    request = JobCreateRequest.model_construct(**JobCreateRequest(question="件数").__dict__)
+    request.question = question
+    snapshot = service._job_to_snapshot(StoredJob(job_id="legacy", request=request))  # noqa: SLF001
+
+    restored = service._job_from_snapshot(snapshot)  # noqa: SLF001
+
+    assert restored.request.question == question

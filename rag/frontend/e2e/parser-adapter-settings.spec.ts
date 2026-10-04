@@ -540,7 +540,8 @@ test("図・画像の読み取りプロンプトは Vision の項目の中で編
   await visionItem.getByLabel("プロンプト").fill("図の要点を短く {{image_metadata}}");
   await visionItem.getByRole("button", { name: "プロンプトを保存" }).click();
   await expect.poll(() => saved).toEqual({ content: "図の要点を短く {{image_metadata}}" });
-  await expect(visionItem.getByText("プロンプトを保存しました。")).toBeVisible();
+  // 保存の成功は Toast（messaging.md §10.2。#1010）。
+  await expect(page.getByText("プロンプトを保存しました。")).toBeVisible();
   await expect(visionItem.getByText(/^編集済み/)).toBeVisible();
 });
 
