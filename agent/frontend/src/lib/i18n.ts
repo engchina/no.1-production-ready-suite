@@ -534,6 +534,7 @@ const agentJa = {
   "agent.version.publish": "公開",
   "agent.version.publishTitle": "v{version} として公開しますか?",
   "agent.version.publishMessage": "保存した下書きの内容が、利用者のチャット・実行で使われるようになります。",
+  "agent.version.saveBeforePublish": "保存していない変更があります。公開するには先に保存してください（公開するのは保存した下書きです）。",
   "agent.version.published": "v{version} として公開しました",
   "agent.version.publishedBadge": "公開中 v{version}",
   "agent.version.unpublished": "未公開",
@@ -1313,6 +1314,10 @@ const agentJa = {
   "agent.skillPicker.noMatch": "検索に一致するスキルがありません",
   "agent.skillPicker.selectedEmpty": "選んだスキルはありません",
   "agent.skillPicker.count": "{visible} / {total} 件を表示、選択 {selected} 件",
+  // 割り当て済みで登録から消えたスキル（#925）。外さないと保存・公開できない。
+  "agent.skillPicker.missing": "見つかりません",
+  "agent.skillPicker.missingDescription": "登録されていないスキルです（{id}）。選択を外して保存してください。",
+  "agent.skillPicker.missingBanner": "登録されていないスキルが割り当てられています（{skills}）。選択を外してから保存・公開してください。",
   "skills.search": "名前・ID・タグで絞り込み",
   "skills.emptyHint": "「スキルを追加」から、業務 Agent に割り当てる指示と使うツールを登録します。",
   "skills.noMatch": "検索に一致するスキルがありません",
