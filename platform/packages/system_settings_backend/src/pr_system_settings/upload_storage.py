@@ -23,6 +23,12 @@ UploadStorageBackend = Literal["local", "oci"]
 
 ENV_SECTION_COMMENT = "# アップロード保存先"
 _OBJECT_STORAGE_NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
+# OCI の region identifier（`ap-tokyo-1` など）。OCI SDK は region を endpoint の host
+# （`https://objectstorage.{region}.oraclecloud.com`）へそのまま入れるため、
+# `.` `/` `#` などを許すと別の host へ署名付きの要求を送れてしまう（#1047）。
+# `pr_system_settings.oci` の `_REGION_RE` と同じ規則。
+_REGION_RE = re.compile(r"[a-z0-9-]+")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class UploadStorageSettingsData(BaseModel):
@@ -58,6 +64,22 @@ class UploadStorageSettingsUpdate(BaseModel):
     def strip_optional_text(cls, value: str | None) -> str | None:
         """省略時は既存の OCI Object Storage 設定を保持する。"""
         return value.strip() if value is not None else None
+
+    @field_validator("local_storage_dir")
+    @classmethod
+    def validate_local_storage_dir(cls, value: str) -> str:
+        """改行・NUL などの制御文字を含む path を拒否する（`.env` と path の解決を壊さない）。"""
+        if _CONTROL_CHAR_RE.search(value):
+            raise ValueError("ローカル保存ディレクトリに改行などの制御文字は使用できません。")
+        return value
+
+    @field_validator("object_storage_region")
+    @classmethod
+    def validate_region(cls, value: str | None) -> str | None:
+        """Object Storage の region は OCI の region identifier に限る。"""
+        if value and not _REGION_RE.fullmatch(value):
+            raise ValueError("リージョンは英小文字、数字、ハイフンで入力してください。")
+        return value
 
     @field_validator("object_storage_namespace", "object_storage_bucket")
     @classmethod

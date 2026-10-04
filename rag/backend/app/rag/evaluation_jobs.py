@@ -78,10 +78,15 @@ EVALUATION_JOB_ALREADY_FINISHED_MESSAGE = "この品質評価は既に終わっ�
 
 
 def evaluation_job_failed_message(error: BaseException) -> str:
-    """評価が例外で止まったときの文言。例外の本文（query などを含みうる）は出さない。"""
+    """評価が例外で止まったときの文言。例外の本文（query などを含みうる）は出さない。
+
+    1 文目は利用者の言葉で何が起きたかと対処にし、例外のクラス名は技術的な詳細として末尾の
+    「エラー種別: …」に分ける（画面は「詳細」に畳む。UX 契約 messaging.md §10.3）。
+    """
     return (
-        f"品質評価の実行に失敗しました（{type(error).__name__}）。"
+        "品質評価の実行中に予期しないエラーが発生したため、評価を中断しました。"
         "サーバーのログを確認して、もう一度実行してください。"
+        f" エラー種別: {type(error).__name__}"
     )
 
 
