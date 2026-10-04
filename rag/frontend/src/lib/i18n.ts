@@ -368,11 +368,12 @@ export const ja = {
   "settings.chunking.params.contextHeaderHint":
     "文書名と章節パスを embedding / キーワード索引へ追加します。表示本文と引用は変わりません。",
   "settings.chunking.actions.save": "保存",
-  "settings.chunking.actions.saved": "文書分割設定を保存しました。",
+  "settings.chunking.actions.label": "文書分割の設定の操作",
+  "settings.chunking.actions.saved": "文書分割の設定を保存しました。",
   "settings.chunking.actions.reset": "変更を破棄",
   "settings.chunking.actions.unsaved": "未保存の変更があります。",
-  "settings.chunking.loadError": "文書分割設定を取得できませんでした。",
-  "settings.chunking.saveError": "文書分割設定を保存できませんでした。",
+  "settings.chunking.loadError": "文書分割の設定を取得できませんでした。",
+  "settings.chunking.saveError": "文書分割の設定を保存できませんでした。",
   "settings.pipeline.subtitle":
     "ファイル準備から回答生成まで、各工程の設定を処理順にまとめて確認・移動できます。",
   "settings.pipeline.phase.ingestion": "ナレッジ構築",
