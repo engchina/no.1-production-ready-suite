@@ -1,4 +1,5 @@
 import {
+  type ChangeEvent,
   useEffect,
   useId,
   useLayoutEffect,
@@ -558,7 +559,9 @@ export function FeedbackManagementPage() {
         feedback_content: trimmedAdminFeedbackContent,
         register_select_ai_feedback: registerSelectAiFeedback,
         select_ai_response: selectAiResponse.trim(),
-        select_ai_profile_name: profileName.trim(),
+        // 登録先は対象の履歴の業務プロファイルの Select AI profile（空なら backend が履歴から決める）。
+        // 「Select AI feedback」タブの profile の選択は、このタブに表示も選択欄も無いので使わない（#968）。
+        select_ai_profile_name: "",
       });
       reviewDirtyRef.current = false;
       setSavedReview(reviewSignature);
@@ -734,7 +737,13 @@ export function FeedbackManagementPage() {
       />
 
       <PageBody wide>
-        <fieldset disabled={Boolean(loading)} className="m-0 grid min-w-0 gap-4 border-0 p-0">
+        {/* 絞り込み・ページ送りの読み込み（app-feedback-load）では外側を無効にしない。無効にすると入力中の
+            履歴検索の欄からフォーカスが外れ、続けて打った文字が入らない（#968）。その間は一覧の行・ページ送り・
+            編集欄だけを内側の fieldset で無効にする。 */}
+        <fieldset
+          disabled={Boolean(loading) && !(loading === "app-feedback-load" && activeView === "appFeedback")}
+          className="m-0 grid min-w-0 gap-4 border-0 p-0"
+        >
         <PageNotice
           notice={message ? { tone: "danger", message } : null}
           action={
@@ -1072,6 +1081,10 @@ export function FeedbackManagementPage() {
                 />
               ) : null}
               <ActionResultBanner result={actionResultFor("appFeedbackList")} />
+              <fieldset
+                disabled={loading === "app-feedback-load"}
+                className="m-0 grid min-w-0 gap-4 border-0 p-0"
+              >
               <div className="grid min-w-0 gap-2" aria-busy={loading === "app-feedback-load"}>
                 {appFeedbackItems.length > 0 ? (
                   appFeedbackItems.map((item) => (
@@ -1112,6 +1125,7 @@ export function FeedbackManagementPage() {
                 ariaLabel={t("feedbackManagement.appFeedback.pagination.label")}
                 testId="app-feedback-pagination"
               />
+              </fieldset>
             </section>
 
             <section className="grid min-w-0 content-start gap-4" data-testid="app-feedback-editor-pane">
@@ -1120,6 +1134,11 @@ export function FeedbackManagementPage() {
                 description={t("feedbackManagement.appFeedback.hint")}
                 icon={MessageSquareText}
               />
+              {/* 一覧の読み込み中は編集欄も無効にする（読み込みの後に対象の履歴が変わることがあるため）。 */}
+              <fieldset
+                disabled={loading === "app-feedback-load"}
+                className="m-0 grid min-w-0 content-start gap-4 border-0 p-0"
+              >
               {history.length > 0 && selectedAppFeedback ? (
                 <>
                   <SelectField
@@ -1254,9 +1273,19 @@ export function FeedbackManagementPage() {
                       type="checkbox"
                       checked={registerSelectAiFeedback}
                       onChange={(event) => setRegisterSelectAiFeedback(event.currentTarget.checked)}
+                      aria-describedby="app-feedback-register-select-ai-hint"
                       className="h-4 w-4 shrink-0 accent-accent-emphasis"
                     />
-                    <span>{t("feedbackManagement.appFeedback.registerSelectAi")}</span>
+                    <span className="grid min-w-0 gap-0.5">
+                      <span>{t("feedbackManagement.appFeedback.registerSelectAi")}</span>
+                      {/* 登録先を明示する（「Select AI feedback」タブの profile の選択とは関係しない。#968）。 */}
+                      <span
+                        id="app-feedback-register-select-ai-hint"
+                        className="text-xs font-normal leading-5 text-fg-muted"
+                      >
+                        {t("feedbackManagement.appFeedback.registerSelectAiHint")}
+                      </span>
+                    </span>
                   </label>
                   {registerSelectAiFeedback && (
                     // Select AI feedback に登録するときは response SQL が必須（saveAppFeedback のガード）。
@@ -1320,6 +1349,7 @@ export function FeedbackManagementPage() {
                   hint={t("feedbackManagement.appFeedback.emptyHint")}
                 />
               )}
+              </fieldset>
             </section>
 
           </DbObjectManagementPanelShell>
@@ -1747,6 +1777,30 @@ function FeedbackHistoryRow({
   );
 }
 
+/**
+ * 数値欄の入力中の文字列を欄の中だけで持つ（#968）。打鍵ごとに範囲へ丸めて表示を上書きすると、
+ * 途中の文字列（空・`0`・`0.`）が最小値に置き換わり、`0.5` のような値をキーボードで入力できない。
+ * 範囲内の数として読めたときだけ親の値を変え、欄を離れたら確定した値の表示に戻す。
+ */
+function useNumberDraft(
+  value: number,
+  min: number,
+  max: number,
+  onChange: (value: number) => void
+) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return {
+    value: draft ?? String(value),
+    onChange: (event: ChangeEvent<HTMLInputElement>) => {
+      const text = event.currentTarget.value;
+      setDraft(text);
+      const next = Number(text);
+      if (text.trim() !== "" && Number.isFinite(next) && next >= min && next <= max) onChange(next);
+    },
+    onBlur: () => setDraft(null),
+  };
+}
+
 function SimilarityConfigField({
   id,
   label,
@@ -1767,6 +1821,7 @@ function SimilarityConfigField({
   onChange: (value: number) => void;
 }) {
   const hintId = `${id}-hint`;
+  const numberDraft = useNumberDraft(value, min, max, onChange);
   return (
     <fieldset className="grid gap-2 text-sm font-medium text-fg">
       <legend className="mb-1">{label}</legend>
@@ -1792,11 +1847,7 @@ function SimilarityConfigField({
         step={step}
         inputMode="decimal"
         aria-describedby={hintId}
-        value={value}
-        onChange={(event) => {
-          const nextValue = Number(event.currentTarget.value);
-          if (!Number.isNaN(nextValue)) onChange(nextValue);
-        }}
+        {...numberDraft}
       />
       <span id={hintId} className="text-xs font-normal leading-5 text-fg-muted">
         {hint}
@@ -1821,6 +1872,7 @@ function SliderNumberField({
   onChange: (value: number) => void;
 }) {
   const id = useId();
+  const numberDraft = useNumberDraft(value, min, max, onChange);
   return (
     <fieldset className="grid gap-3 rounded-md border border-border bg-surface-sunken p-4 text-sm font-medium text-fg">
       <legend className="px-1">{label}</legend>
@@ -1843,8 +1895,7 @@ function SliderNumberField({
         min={min}
         max={max}
         step={step}
-        value={value}
-        onChange={(event) => onChange(Number(event.currentTarget.value))}
+        {...numberDraft}
       />
     </fieldset>
   );
