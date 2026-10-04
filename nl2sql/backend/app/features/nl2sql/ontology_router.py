@@ -785,12 +785,13 @@ class OntologyApiRuntime:
         return None
 
     def _profile_markdown_artifacts(self, profile_id: str) -> list[dict[str, Any]]:
+        # 種類で絞って読む。全成果物（公開の snapshot・Turtle など。共有の DB で約 12 MB）を
+        # 読んでから絞らない（#1155）。並びは使わない（版の番号は作成の順で決める）。
         return [
             document
-            for document in self.store.list_documents("artifacts")
-            if document.get("artifact_type")
-            in {_MARKDOWN_DRAFT_ARTIFACT_TYPE, _MARKDOWN_PUBLISHED_ARTIFACT_TYPE}
-            and self._artifact_profile_id(document) == profile_id
+            for artifact_type in (_MARKDOWN_DRAFT_ARTIFACT_TYPE, _MARKDOWN_PUBLISHED_ARTIFACT_TYPE)
+            for document in self.store.list_documents("artifacts", {"artifact_type": artifact_type})
+            if self._artifact_profile_id(document) == profile_id
         ]
 
     def _profile_markdown_revision_versions(self, profile_id: str) -> dict[str, int]:
@@ -981,6 +982,59 @@ class OntologyApiRuntime:
             else None
         )
 
+    def published_release_id(self, profile_id: str) -> str:
+        """SQL の生成のジョブが固定する、業務プロファイルの公開版の ID（無ければ空）。
+
+        `ontology_markdown_state` の公開版（Markdown の公開の snapshot、無ければ公開中の版の
+        Markdown）と同じ版を選ぶ。ただし下書き・診断・版のグラフ（nodes / edges / embedding。
+        1 版で数千行）を読まず、成果物と版の header だけを読む。runtime の lock も取らない
+        （キャッシュに触れず、store を読むだけ）。ジョブの準備の段階が、版のグラフの読み込みと、
+        lock を持ったまま DB を読む別の処理を待たないため（#1155）。
+        """
+
+        from .ontology_markdown_workspace import MarkdownOntologyWorkspace
+
+        snapshot_id = MarkdownOntologyWorkspace(self).published_snapshot_id(profile_id)
+        if snapshot_id:
+            return snapshot_id
+        self._ensure_store()
+        published = {
+            header.id: header
+            for header in (
+                OntologyRevision.model_validate(
+                    self._stored_payload(document, collection="revision")
+                )
+                for document in self.store.list_documents(
+                    "revisions", {"status": OntologyRevisionStatus.PUBLISHED.value}
+                )
+            )
+        }
+        if not published:
+            return ""
+        candidates = [
+            (document, published[revision_id])
+            for document in self.store.list_documents(
+                "artifacts", {"artifact_type": _MARKDOWN_PUBLISHED_ARTIFACT_TYPE}
+            )
+            if self._artifact_profile_id(document) == profile_id
+            and (revision_id := self._artifact_revision_id(document)) in published
+        ]
+        if not candidates:
+            return ""
+        if len({revision.id for _document, revision in candidates}) == 1:
+            return candidates[0][1].id
+        # 公開中の版は所有者ごとに 1 つのため、複数になるのは旧共有版と業務プロファイルの版が
+        # 両方公開中のときだけ。`_latest_profile_markdown_artifact` と同じ順で選ぶ。
+        profile_versions = self._profile_markdown_revision_versions(profile_id)
+        return max(
+            candidates,
+            key=lambda item: (
+                profile_versions.get(item[1].id, item[1].version),
+                str(item[0].get("updated_at") or item[0].get("created_at") or ""),
+                item[1].id,
+            ),
+        )[1].id
+
     def ontology_markdown_state(self, profile_id: str) -> OntologyMarkdownState:
         with self._lock:
             self._ensure_store()
@@ -1083,63 +1137,68 @@ class OntologyApiRuntime:
             return self.ontology_markdown_state(profile_id)
 
     def published_markdown_for_revision(self, revision_id: str, *, profile_id: str = "") -> str:
-        with self._lock:
-            self._ensure_store()
-            snapshot_doc = self.store.get_artifact(revision_id)
-            if snapshot_doc and snapshot_doc.get("artifact_type") == "ontology_markdown_snapshot":
-                if profile_id and snapshot_doc.get("profile_id") != profile_id:
-                    return ""
-                return str(json.loads(snapshot_doc["content"])["markdown"])
-            if profile_id:
-                published_document = self._markdown_artifact_for_revision(
-                    profile_id=profile_id,
-                    revision_id=revision_id,
-                    artifact_type=_MARKDOWN_PUBLISHED_ARTIFACT_TYPE,
-                )
-                markdown = self._artifact_content(published_document)
-                if markdown:
-                    return markdown
-            artifacts = self.store.list_artifacts(revision_id)
-            if profile_id:
-                # 他 profile の published markdown を fallback で返さない
-                # (cross-profile リーク防止)。
-                # profile 非依存(profile_id 空)の artifact のみ fallback を許す。
-                artifacts = [
-                    document
-                    for document in artifacts
-                    if self._artifact_profile_id(document) in ("", profile_id)
-                ]
-            published_documents = [
+        """公開版の Markdown を返す（store を読むだけ。runtime の lock を取らない）。
+
+        SQL の生成のジョブの準備の段階が使う。lock を持ったまま DB を読む別の処理を
+        待たない（#1155）。
+        """
+
+        self._ensure_store()
+        snapshot_doc = self.store.get_artifact(revision_id)
+        if snapshot_doc and snapshot_doc.get("artifact_type") == "ontology_markdown_snapshot":
+            if profile_id and snapshot_doc.get("profile_id") != profile_id:
+                return ""
+            return str(json.loads(snapshot_doc["content"])["markdown"])
+        if profile_id:
+            published_document = self._markdown_artifact_for_revision(
+                profile_id=profile_id,
+                revision_id=revision_id,
+                artifact_type=_MARKDOWN_PUBLISHED_ARTIFACT_TYPE,
+            )
+            markdown = self._artifact_content(published_document)
+            if markdown:
+                return markdown
+        artifacts = self.store.list_artifacts(revision_id)
+        if profile_id:
+            # 他 profile の published markdown を fallback で返さない
+            # (cross-profile リーク防止)。
+            # profile 非依存(profile_id 空)の artifact のみ fallback を許す。
+            artifacts = [
                 document
                 for document in artifacts
-                if document.get("artifact_type") == _MARKDOWN_PUBLISHED_ARTIFACT_TYPE
+                if self._artifact_profile_id(document) in ("", profile_id)
             ]
-            if published_documents:
-                return self._artifact_content(
-                    max(
-                        published_documents,
-                        key=lambda item: (
-                            str(item.get("updated_at") or item.get("created_at") or ""),
-                            str(item.get("artifact_id") or ""),
-                        ),
-                    )
+        published_documents = [
+            document
+            for document in artifacts
+            if document.get("artifact_type") == _MARKDOWN_PUBLISHED_ARTIFACT_TYPE
+        ]
+        if published_documents:
+            return self._artifact_content(
+                max(
+                    published_documents,
+                    key=lambda item: (
+                        str(item.get("updated_at") or item.get("created_at") or ""),
+                        str(item.get("artifact_id") or ""),
+                    ),
                 )
-            fallback_documents = [
-                document
-                for document in artifacts
-                if document.get("artifact_type") == _MARKDOWN_LLM_ARTIFACT_TYPE
-            ]
-            if fallback_documents:
-                return self._artifact_content(
-                    max(
-                        fallback_documents,
-                        key=lambda item: (
-                            str(item.get("updated_at") or item.get("created_at") or ""),
-                            str(item.get("artifact_id") or ""),
-                        ),
-                    )
+            )
+        fallback_documents = [
+            document
+            for document in artifacts
+            if document.get("artifact_type") == _MARKDOWN_LLM_ARTIFACT_TYPE
+        ]
+        if fallback_documents:
+            return self._artifact_content(
+                max(
+                    fallback_documents,
+                    key=lambda item: (
+                        str(item.get("updated_at") or item.get("created_at") or ""),
+                        str(item.get("artifact_id") or ""),
+                    ),
                 )
-            return ""
+            )
+        return ""
 
     def draft_markdown_for_revision(self, revision_id: str, *, profile_id: str = "") -> str:
         with self._lock:
@@ -1907,10 +1966,13 @@ class OntologyApiRuntime:
             )
 
     def ensure_profile(self, profile_id: str) -> Nl2SqlProfile:
-        """profile の存在検証のみ(オントロジー同期を伴わない軽量チェック)。"""
+        """profile の存在検証のみ(オントロジー同期を伴わない軽量チェック)。
 
-        with self._lock:
-            return self._strict_profile(profile_id)
+        runtime の lock を取らない（業務プロファイルを読むだけで、runtime のキャッシュに触れない）。
+        ジョブの準備の段階が、lock を持ったまま DB を読む別の処理を待たないため（#1155）。
+        """
+
+        return self._strict_profile(profile_id)
 
     def profile_view(self, profile_id: str) -> tuple[ProfileOntologyView, SchemaOntology]:
         with self._lock:
@@ -1948,12 +2010,16 @@ class OntologyApiRuntime:
         ]
 
     def prepare_build_schema_context(self, profile_id: str) -> Any:
-        """AI 構築 input は Ontology ではなく Profile + DB schema catalog から作る。"""
+        """AI 構築 input は Ontology ではなく Profile + DB schema catalog から作る。
 
-        with self._lock:
-            profile = self._strict_profile(profile_id)
-            catalog = self.legacy_service.get_catalog()
-            return build_schema_context_from_catalog(profile, catalog)
+        runtime の lock を取らない（業務プロファイルとカタログを読むだけで、runtime のキャッシュに
+        触れない）。ジョブの準備の段階（公開版の業務定義を prompt に絞る）が、lock を持ったまま
+        DB を読む別の処理を待たないため（#1155）。
+        """
+
+        profile = self._strict_profile(profile_id)
+        catalog = self.legacy_service.get_catalog()
+        return build_schema_context_from_catalog(profile, catalog)
 
     def build_proposal_scope(
         self,
