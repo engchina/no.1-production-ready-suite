@@ -23,7 +23,8 @@ const columns: DataTableColumn<Row>[] = [
 describe("DataTable の既定出力", () => {
   it("新しい props を渡さなければ、スクロール領域・選択・sticky の属性を出さない", () => {
     const html = renderToStaticMarkup(<DataTable columns={columns} rows={rows} getRowKey={(row) => row.id} />);
-    expect(html).toMatch(/^<div class="rounded-md border border-border bg-surface overflow-x-auto">/);
+    // relative: 行の中の sr-only（absolute）のラベルを表のスクロール領域の中に閉じ込める（#1116）。
+    expect(html).toMatch(/^<div class="relative rounded-md border border-border bg-surface overflow-x-auto">/);
     expect(html).not.toContain('role="region"');
     expect(html).not.toContain("data-selected");
     expect(html).not.toContain("aria-current");
