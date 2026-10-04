@@ -190,6 +190,7 @@ from app.features.agent.runtime import (
     RunsData,
     RunState,
     RunStatus,
+    RunStep,
     RuntimeToolCallAuditData,
     ThreadData,
     ThreadNotFoundError,
@@ -483,6 +484,10 @@ class ToolCallAuditData(BaseModel):
     limit: int
     filters: dict[str, object] = Field(default_factory=dict)
     records: list[ToolCallAuditRecord]
+    # 見られる範囲の監査に記録されたツール名（絞り込みの条件に依らない）。
+    # 画面のツール名の選択肢に使う。
+    # MCP 接続のツール（`<接続>__<ツール>`）は `/api/tools` に出ないため（#983）。
+    tool_names: list[str] = Field(default_factory=list)
 
 
 class RuntimeSnapshotImportRequest(BaseModel):
@@ -3758,6 +3763,11 @@ def _normalized_tool_names(tool_names: list[str]) -> list[str]:
     return sorted({name.strip() for name in tool_names if name.strip()})
 
 
+def _step_tool_name(step: RunStep) -> str:
+    """監査の記録のツール名（ツールの呼び出しの無い step は step の種類）。"""
+    return step.tool_call.name if step.tool_call else step.kind
+
+
 def _run_audit_data(run: RunState) -> RunAuditData:
     approvals = {approval.id: approval for approval in run.approvals}
     artifact_ids_by_step: dict[str, list[str]] = {}
@@ -3771,7 +3781,7 @@ def _run_audit_data(run: RunState) -> RunAuditData:
 
     records: list[ToolAuditRecord] = []
     for step in run.steps:
-        tool_name = step.tool_call.name if step.tool_call else step.kind
+        tool_name = _step_tool_name(step)
         result = step.tool_result
         approval = approvals.get(step.approval_id or "")
         definition = tool_registry.get(tool_name)
@@ -3857,12 +3867,15 @@ def _tool_call_audit_data(
                         ToolCallAuditRecord.model_validate(record.model_dump())
                         for record in projection.records
                     ],
+                    tool_names=projection.tool_names,
                 )
         except RuntimeError:
             pass
 
     records: list[ToolCallAuditRecord] = []
+    tool_names: set[str] = set()
     for run in _filter_runs_for_actor(request, runtime_repository.list_runs()):
+        tool_names.update(_step_tool_name(step) for step in run.steps)
         if run_id is not None and run.id != run_id:
             continue
         audit = _run_audit_data(run)
@@ -3892,6 +3905,7 @@ def _tool_call_audit_data(
         limit=limit,
         filters=filters,
         records=records[offset : offset + limit],
+        tool_names=sorted(tool_names),
     )
 
 
@@ -3970,14 +3984,27 @@ def _tool_call_audit_csv(records: list[ToolCallAuditRecord]) -> str:
         "run_updated_at",
     ]
     output = StringIO()
+    # BOM を付ける（日本語の Excel は BOM の無い CSV を Shift_JIS として読み、文字化けする。#983）。
+    output.write("\ufeff")
     writer = DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
     for record in records:
         row = record.model_dump(mode="json")
         row["guardrail_warnings"] = "|".join(record.guardrail_warnings)
         row["artifact_ids"] = "|".join(record.artifact_ids)
-        writer.writerow(row)
+        writer.writerow({key: _csv_cell(value) for key, value in row.items()})
     return output.getvalue()
+
+
+# 表計算ソフトが数式として扱う先頭の文字（OWASP の CSV injection。#983）。
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_cell(value: object) -> object:
+    """利用者の入力（実行の目標・エラーなど）が数式として実行されないよう、先頭に `'` を付ける。"""
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return f"'{value}"
+    return value
 
 
 def _audit_text(metadata: dict[str, object], key: str) -> str | None:
