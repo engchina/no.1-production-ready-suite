@@ -195,6 +195,7 @@ from .models import (
     MetadataSqlGenerateRequest,
     MetadataSqlSampleData,
     MetadataSqlSampleRequest,
+    MetadataSqlTarget,
     Nl2SqlEngine,
     Nl2SqlInterpretationArtifact,
     Nl2SqlLogicalStep,
@@ -12089,6 +12090,8 @@ class Nl2SqlService:
 
     def get_metadata_samples(self, request: MetadataSqlSampleRequest) -> MetadataSqlSampleData:
         """コメント/アノテーション SQL 生成に使う列代表値を取得する。"""
+        # システム・共通基盤・他製品の表は、Oracle に問い合わせる前に拒否する（#943）。
+        self._require_visible_metadata_targets(request.targets)
         if request.sample_limit == 0:
             runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
             return MetadataSqlSampleData(runtime=runtime)
@@ -12116,6 +12119,11 @@ class Nl2SqlService:
             runtime=runtime,
             warnings=warnings,
         )
+
+    def _require_visible_metadata_targets(self, targets: Sequence[MetadataSqlTarget]) -> None:
+        """業務データとして扱わない表（NL2SQL_・PLATFORM_ など）を含めば ValueError。"""
+        for target in targets:
+            self._db_admin_object_identity(target.object_name, target.owner)
 
     def _metadata_samples_from_catalog(
         self, request: MetadataSqlSampleRequest
@@ -12300,6 +12308,8 @@ class Nl2SqlService:
 
     def get_domain_inventory(self, request: DomainInventoryRequest) -> DomainInventoryData:
         """対象表の列に付いた既存ドメインを dictionary から集め、LLM 向けテキストも返す。"""
+        # システム・共通基盤・他製品の表は、Oracle に問い合わせる前に拒否する（#943）。
+        self._require_visible_metadata_targets(request.targets)
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
         warnings: list[str] = []
         domains: list[DomainDefinition] = []
