@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, KeyRound, Pencil, Play, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import {
-  Banner,
   Button,
   Card,
   CardContent,
@@ -30,6 +29,8 @@ import {
   type DataTableColumn,
   type EntityAction,
   type StatusVariant,
+  ApiErrorBanner,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 
 import { MissingEditorTarget } from "@/components/EntityLayout";
@@ -48,6 +49,7 @@ import {
 } from "@/lib/api";
 import { isRunnableAgent } from "@/lib/agent-availability";
 import { useEditorRoute } from "@/lib/editor-route";
+import { focusFirstInvalidField } from "@/lib/field-validation";
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
@@ -66,6 +68,18 @@ function browserTimezone(): string {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Tokyo";
   } catch {
     return "Asia/Tokyo";
+  }
+}
+
+/** IANA のタイムゾーンか（空は backend が既定の Asia/Tokyo にする）。#927 */
+function isValidTimezone(value: string): boolean {
+  const timezone = value.trim();
+  if (!timezone) return true;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -118,10 +132,13 @@ export function AutomationsPage() {
     retry: false,
   });
 
+  const allAgents = agents.data?.agents ?? [];
   if (target.kind === "new") {
     return (
       <AutomationEditor
         agents={usableAgents}
+        allAgents={allAgents}
+        agentsLoading={agents.isLoading}
         readOnly={!canManage}
         onBack={() => editor.backToList()}
         onCreated={(item) => editor.openItem(item.id, { replace: true })}
@@ -148,6 +165,8 @@ export function AutomationsPage() {
         automation={detail.data.automation}
         runs={detail.data.runs}
         agents={usableAgents}
+        allAgents={allAgents}
+        agentsLoading={agents.isLoading}
         readOnly={!canManage}
         onBack={() => editor.backToList()}
         onCreated={() => undefined}
@@ -176,9 +195,9 @@ function useRunNow() {
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
       if (fired.result === "created") toast.success(t("automation.ranNow"));
       else if (fired.result === "skipped") toast.warning(t("automation.skippedNow"));
-      else toast.error(fired.message);
+      else toast.error(apiErrorMessage(fired, t("common.error.operation")));
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
 }
 
@@ -192,7 +211,7 @@ function useDeleteAutomation(onDeleted?: () => void) {
       toast.success(t("automation.deleted"));
       onDeleted?.();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
   return async (item: Automation) => {
     const ok = await confirm({
@@ -318,7 +337,7 @@ function AutomationList({
                 <TableSkeleton columns={5} />
               </TimedLoadingState>
             ) : list.error ? (
-              <Banner severity="danger">{list.error.message}</Banner>
+              <ApiErrorBanner error={list.error} fallback={t("common.error.load")} />
             ) : allItems.length === 0 ? (
               <EmptyState
                 title={t("automation.list.empty")}
@@ -400,6 +419,8 @@ function AutomationEditor({
   automation,
   runs = [],
   agents,
+  allAgents,
+  agentsLoading,
   readOnly,
   onBack,
   onCreated,
@@ -407,7 +428,11 @@ function AutomationEditor({
 }: {
   automation?: Automation;
   runs?: AutomationRun[];
+  /** 自動実行に選べる（実行できる）業務 Agent。 */
   agents: AgentProfile[];
+  /** すべての業務 Agent（保存済みの業務 Agent が実行できなくなったときの表示名に使う）。 */
+  allAgents: AgentProfile[];
+  agentsLoading: boolean;
   readOnly: boolean;
   onBack: () => void;
   onCreated: (item: Automation) => void;
@@ -417,6 +442,13 @@ function AutomationEditor({
   const confirm = useConfirm();
   const [baseline, setBaseline] = useState<AutomationDraft>(() => draftOf(automation, agents));
   const [draft, setDraft] = useState<AutomationDraft>(baseline);
+  // 新規で業務 Agent の一覧が後から届いたら（`?id=new` を直接開いたとき）、まだ選んでいない下書きを先頭の候補で埋める。
+  // 基準も同じにして、未保存の変更として扱わない（#927）。
+  if (!automation && !baseline.agentId && agents.length) {
+    const firstAgentId = agents[0].id;
+    setBaseline((current) => ({ ...current, agentId: firstAgentId }));
+    setDraft((current) => (current.agentId ? current : { ...current, agentId: firstAgentId }));
+  }
   const [submitted, setSubmitted] = useState(false);
   const [token, setToken] = useState<string | null>(null);
   const dirty = !sameDraft(draft, baseline);
@@ -443,16 +475,39 @@ function AutomationEditor({
       setToken(result.token);
       void queryClient.invalidateQueries({ queryKey: ["automation", result.automation.id] });
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
   const { confirmClose } = useEditorLeaveGuard(dirty, save.isPending);
 
   const nameError = submitted && !draft.name.trim() ? t("automation.nameRequired") : undefined;
   const goalError = submitted && !draft.goal.trim() ? t("automation.goalRequired") : undefined;
+  const agentError = submitted && !draft.agentId ? t("automation.agentRequired") : undefined;
+  const timezoneError =
+    submitted && draft.trigger === "schedule" && !isValidTimezone(draft.schedule.timezone)
+      ? t("automation.timezoneInvalid")
+      : undefined;
   const weekdaysError =
     submitted && draft.trigger === "schedule" && draft.schedule.frequency === "weekly" && draft.schedule.weekdays.length === 0
       ? t("automation.weekdaysRequired")
       : undefined;
+  // 保存済みの業務 Agent が実行できなくなっても（無効・未公開・削除）、候補に残して何が選ばれているかを見せる。
+  // 無効にする保存はそのまま通る（backend の update_automation。#927）。
+  const savedAgentId = automation?.agent_id ?? "";
+  const savedAgentUnavailable = Boolean(savedAgentId) && !agents.some((agent) => agent.id === savedAgentId);
+  const savedAgent = allAgents.find((agent) => agent.id === savedAgentId);
+  const agentOptions = [
+    ...agents.map((agent) => ({ value: agent.id, label: agent.name })),
+    ...(savedAgentUnavailable && !agentsLoading
+      ? [
+          {
+            value: savedAgentId,
+            label: savedAgent
+              ? t("automation.agentUnavailable", { name: savedAgent.name })
+              : t("automation.agentMissing", { id: savedAgentId }),
+          },
+        ]
+      : []),
+  ];
 
   function setField<K extends keyof AutomationDraft>(key: K, value: AutomationDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -473,7 +528,19 @@ function AutomationEditor({
 
   function submit() {
     setSubmitted(true);
-    if (!draft.name.trim() || !draft.goal.trim() || weekdaysErrorNow(draft)) return;
+    const scheduled = draft.trigger === "schedule";
+    // 画面の並び順で最初のエラーの欄へフォーカスする（#531 / #541）。
+    if (
+      focusFirstInvalidField([
+        ["automation-name", draft.name.trim() ? undefined : "name"],
+        ["automation-agent", draft.agentId ? undefined : "agent"],
+        ["automation-goal", draft.goal.trim() ? undefined : "goal"],
+        ["automation-timezone", scheduled && !isValidTimezone(draft.schedule.timezone) ? "timezone" : undefined],
+      ]) ||
+      weekdaysErrorNow(draft)
+    ) {
+      return;
+    }
     save.mutate(toPayload(draft));
   }
 
@@ -548,7 +615,7 @@ function AutomationEditor({
         moreActionsLabel={t("common.moreActions")}
       />
       <PageBody wide className="space-y-6">
-        <SaveErrorBanner message={save.error?.message ?? null} attemptKey={save.submittedAt} testId="automation-save-error" />
+        <SaveErrorBanner message={save.error ? apiErrorMessage(save.error, t("common.error.save")) : null} attemptKey={save.submittedAt} testId="automation-save-error" />
         <fieldset disabled={readOnly} className="min-w-0 space-y-6">
           <Section
             title={t("automation.basic")}
@@ -587,8 +654,19 @@ function AutomationEditor({
                   <SelectField<string>
                     id="automation-agent"
                     label={t("automation.agent")}
+                    required
+                    placeholder={t("automation.agentPlaceholder")}
                     value={draft.agentId}
-                    options={agents.map((agent) => ({ value: agent.id, label: agent.name }))}
+                    options={agentOptions}
+                    error={agentError}
+                    helper={
+                      !agentsLoading && agents.length === 0
+                        ? t("automation.agentNone")
+                        : draft.agentId && draft.agentId === savedAgentId && savedAgentUnavailable
+                          ? t("automation.agentUnavailableHint")
+                          : undefined
+                    }
+                    disabled={agentsLoading}
                     onValueChange={(value) => setField("agentId", value)}
                   />
                 </div>
@@ -671,6 +749,7 @@ function AutomationEditor({
                         id="automation-timezone"
                         label={t("automation.timezone")}
                         helper={t("automation.timezoneHelper")}
+                        error={timezoneError}
                         value={draft.schedule.timezone}
                         onValueChange={(value) => setSchedule({ timezone: value })}
                       />

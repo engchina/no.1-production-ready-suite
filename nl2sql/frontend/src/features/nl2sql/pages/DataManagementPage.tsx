@@ -47,9 +47,11 @@ import { APP_ROUTES } from "@/lib/routes";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import {
+  DbAdminErrorNotice,
   QueryResultsTable,
   downloadBlob,
   fileToBase64,
+  runtimeLabel,
 } from "../components/DbAdminShared";
 import {
   DEFAULT_SQL_ROW_LIMIT,
@@ -68,6 +70,7 @@ import {
   DbObjectSelectorToolbar,
   DbObjectStepIndicator,
   DbSingleObjectPickerList,
+  dbAdminExecuteFailureMessage,
   formatDbObjectName,
   parseDbAdminObjectTarget,
   rowCountLabel,
@@ -93,6 +96,7 @@ import {
   useStartSelectAiDbProfileRefresh,
 } from "../incrementalQueries";
 import { dbAdminObjectCountsFromPage, type DbAdminObjectCounts } from "../dbAdminObjectCounts";
+import { useNumberDraft } from "../useNumberDraft";
 import type {
   DbAdminCsvUploadData,
   DbAdminDataPreviewData,
@@ -697,7 +701,10 @@ export function DataManagementPage() {
         { timeoutMs: API_TIMEOUT_MS.interactiveDetail }
       );
       if (!result.executed) {
-        setTruncateError(result.warnings[0] || t("dataMgmt.truncate.error"));
+        // Oracle のエラーは warnings ではなく文の error_message に入る（部分成功の経路）。
+        // 1 文目に何が起きたか、続けて原因を出す（#936）。
+        const cause = dbAdminExecuteFailureMessage(result, "");
+        setTruncateError(cause ? `${t("dataMgmt.truncate.error")}${cause}` : t("dataMgmt.truncate.error"));
         return;
       }
       setTruncateTargetName("");
@@ -1798,7 +1805,7 @@ function PreviewResultsPanel({
         <div className="grid gap-2">
           {exportError && <ErrorState message={exportError} onRetry={onDownload} />}
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <StatusBadge icon={false} variant="neutral" label={preview.runtime} />
+            <StatusBadge icon={false} variant="neutral" label={runtimeLabel(preview.runtime)} />
             <StatusBadge icon={false} variant="info" label={t("tableMgmt.importWizard.rows", { count: preview.results.total })} />
             <span className="break-all font-mono text-xs text-fg-muted">{preview.sql}</span>
           </div>
@@ -2051,9 +2058,13 @@ function CsvUploadWorkspace({
       {result && (
         <section className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm" aria-label={t("dataMgmt.csv.result")}>
           <div className="flex flex-wrap gap-2">
-            <StatusBadge variant={result.executed ? "success" : "neutral"} label={result.executed ? "executed" : "not executed"} />
-            <StatusBadge icon={false} variant="neutral" label={result.runtime} />
-            <StatusBadge icon={false} variant="neutral" label={result.mode} />
+            {/* 実行の状態・runtime・モードは API の内部値を出さず、文言で出す（#936）。 */}
+            <StatusBadge
+              variant={result.executed ? "success" : "warning"}
+              label={t(result.executed ? "dbAdmin.result.summary.executed" : "dbAdmin.result.summary.notExecuted")}
+            />
+            <StatusBadge icon={false} variant="neutral" label={runtimeLabel(result.runtime)} />
+            <StatusBadge icon={false} variant="neutral" label={csvModeLabel(result.mode)} />
             <StatusBadge icon={false} variant="info" label={t("tableMgmt.importWizard.rows", { count: result.row_count })} />
             {result.executed && (
               <>
@@ -2065,7 +2076,15 @@ function CsvUploadWorkspace({
               </>
             )}
           </div>
-          <WarningsBanner warnings={result.warnings} />
+          {!result.executed && result.warnings.some((warning) => warning.trim()) ? (
+            // 実行されなかった（Oracle のエラー・実行環境）ときは失敗として出す。ORA のコード・Help は
+            // 「詳細ログ」に畳む（messaging.md §10、#936）。
+            <DbAdminErrorNotice
+              error={new Error(`${t("dataMgmt.csv.failedSummary")}${result.warnings.filter((warning) => warning.trim()).join(" ")}`)}
+            />
+          ) : (
+            <WarningsBanner warnings={result.warnings} />
+          )}
           <p className="text-fg">
             {t("dataMgmt.csv.matched")}: <span className="font-mono text-xs">{result.matched_columns.join(", ") || "-"}</span>
           </p>
@@ -2103,6 +2122,12 @@ function CsvUploadWorkspace({
       )}
     </fieldset>
   );
+}
+
+function csvModeLabel(mode: string) {
+  if (mode === "insert") return t("dataMgmt.csv.mode.insert");
+  if (mode === "truncate_insert") return t("dataMgmt.csv.mode.truncateInsert");
+  return mode;
 }
 
 function SyntheticWorkspace({
@@ -2210,6 +2235,19 @@ function SyntheticWorkspace({
   const generationSucceeded = syntheticData !== null && isSyntheticDataExecuted(syntheticData);
   const activeStep = generationSucceeded || syntheticDataResults ? 1 : 0;
   const [syntheticTableSearch, setSyntheticTableSearch] = useState("");
+  // 件数の欄は入力中の文字を欄で持ち、範囲内の整数のときだけ値を変える（空にしても即 1 / 0 にしない。#1103）。
+  const syntheticRowsDraft = useNumberDraft(syntheticRows, {
+    min: 1,
+    max: 100,
+    integer: true,
+    onChange: onSyntheticRowsChange,
+  });
+  const syntheticSampleRowsDraft = useNumberDraft(syntheticSampleRows, {
+    min: 0,
+    max: 100,
+    integer: true,
+    onChange: onSyntheticSampleRowsChange,
+  });
   // 親の syntheticDataConfirmed と同じ規則(単一テーブル=対象名 / 複数=ADMIN_EXECUTE)。
   const syntheticExpectedConfirmation =
     syntheticSelectedTables.length === 1 ? syntheticSelectedTables[0] : "ADMIN_EXECUTE";
@@ -2291,8 +2329,7 @@ function SyntheticWorkspace({
             type="number"
             min={1}
             max={100}
-            value={syntheticRows}
-            onChange={(event) => onSyntheticRowsChange(Number(event.currentTarget.value) || 1)}
+            {...syntheticRowsDraft}
             className="min-w-0"
           />
         </div>
@@ -2395,8 +2432,7 @@ function SyntheticWorkspace({
               type="number"
               min={0}
               max={100}
-              value={syntheticSampleRows}
-              onChange={(event) => onSyntheticSampleRowsChange(Number(event.currentTarget.value) || 0)}
+              {...syntheticSampleRowsDraft}
             />
             <label className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm font-medium text-fg">
               <input

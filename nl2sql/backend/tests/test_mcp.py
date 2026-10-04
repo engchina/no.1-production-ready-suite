@@ -429,6 +429,32 @@ def test_recommend_profile_respects_scope_and_threshold(
     assert content["recommended_profile_id"] is None
 
 
+@pytest.mark.parametrize("tool", ["nl2sql_query", "nl2sql_recommend_profile"])
+def test_blank_question_is_invalid_arguments(
+    users: _Users, fake_service: _FakeNl2SqlService, tool: str
+) -> None:
+    """空白だけの質問は引数の誤りにする（ジョブを作らず、内部エラーにもしない。#1054）。"""
+    user = users.create("mcp.query", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+
+    is_error, content = _structured(
+        _run(
+            _call(
+                tool,
+                {"question": " \n\t", "profile_id": "sales"}
+                if tool == "nl2sql_query"
+                else {"question": " \n\t"},
+            ),
+            token=_token(user.user_uuid),
+        )
+    )
+
+    assert is_error is True, content
+    assert content["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
+    assert [error["loc"] for error in content["details"]["errors"]] == ["question"]
+    assert "質問を入力してください。" in content["details"]["errors"][0]["message"]
+    assert fake_service.started == []
+
+
 def test_query_rejects_profile_outside_scope(
     users: _Users, fake_service: _FakeNl2SqlService
 ) -> None:

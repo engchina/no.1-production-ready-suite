@@ -25,6 +25,7 @@ import {
   PageBody,
   RowTitleButton,
   TextField,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 import {
   agentApi,
@@ -46,6 +47,8 @@ import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 import { JsonPreview } from "@/pages/shared/page-helpers";
 
 const EMPTY_MARKETPLACE_FORM = { id: "", name: "", url: "" };
+/** 追加するマーケットプレイスの ID（URL の path にも使う。backend の `MARKETPLACE_ID_PATTERN` と同じ。#928）。 */
+const MARKETPLACE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/;
 
 export function PluginMarketplacesPage() {
   const queryClient = useQueryClient();
@@ -70,7 +73,7 @@ export function PluginMarketplacesPage() {
       void invalidate();
       void queryClient.invalidateQueries({ queryKey: ["marketplace-plugins", id] });
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
   const deleteMutation = useMutation({
     mutationFn: (id: string) => agentApi.deletePluginMarketplace(id),
@@ -78,7 +81,7 @@ export function PluginMarketplacesPage() {
       toast.success(t("marketplaces.deleted"));
       void invalidate();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
 
   async function remove(source: MarketplaceSource) {
@@ -266,8 +269,9 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
 
   function add() {
     setIdError(null);
-    if (!form.id.trim()) {
-      setIdError(t("marketplaces.idRequired"));
+    const id = form.id.trim();
+    if (!id || !MARKETPLACE_ID_PATTERN.test(id)) {
+      setIdError(id ? t("marketplaces.idInvalid") : t("marketplaces.idRequired"));
       focusField("mkt-id");
       return;
     }
@@ -314,7 +318,7 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
       <PageBody wide className="space-y-6">
         {/* 追加の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
         <SaveErrorBanner
-          message={addMutation.error ? (addMutation.error as Error).message : null}
+          message={addMutation.error ? apiErrorMessage(addMutation.error, t("common.error.operation")) : null}
           attemptKey={addMutation.submittedAt}
           testId="marketplace-add-error"
         />
@@ -326,6 +330,7 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
                 id="mkt-id"
                 label={t("marketplaces.id")}
                 required
+                helper={t("marketplaces.idHint")}
                 error={idError ?? undefined}
                 value={form.id}
                 onValueChange={(value) => {
@@ -489,12 +494,15 @@ function MarketplaceDetail({
     onMutate: () => setReview(null),
     mutationFn: (pluginId: string) => agentApi.previewMarketplacePlugin(source.id, pluginId),
     onSuccess: (preview, pluginId) => setReview({ marketplaceId: source.id, pluginId, preview }),
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
   const listing = useQuery({
     queryKey: ["marketplace-plugins", source.id],
     queryFn: () => agentApi.listMarketplacePlugins(source.id),
   });
+  // 導入済みのプラグイン（同じ ID は導入し直せない。backend は 409。#928）。行に「導入済み」を出し、導入の操作を出さない。
+  const installedPlugins = useQuery({ queryKey: ["plugins"], queryFn: agentApi.listPlugins });
+  const installedIds = new Set((installedPlugins.data?.plugins ?? []).map((plugin) => plugin.id));
   const installMutation = useMutation({
     mutationFn: (request: { pluginId: string; preview?: PluginImportPreview }) =>
       agentApi.installPlugin({
@@ -510,7 +518,7 @@ function MarketplaceDetail({
       void listing.refetch();
     },
     onError: (error) => {
-      toast.error((error as Error).message);
+      toast.error(apiErrorMessage(error, t("common.error.operation")));
       if (error instanceof ApiError && error.status === 409) setReview(null);
     },
   });
@@ -541,7 +549,12 @@ function MarketplaceDetail({
       rowHeader: true,
       render: (manifest) => (
         <div className="min-w-0">
-          <p className="text-sm font-medium text-fg">{manifest.name}</p>
+          <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-fg">
+            {manifest.name}
+            {installedIds.has(manifest.id) ? (
+              <StatusBadge variant="success" label={t("marketplaces.installedBadge")} />
+            ) : null}
+          </p>
           <p className="font-mono text-xs text-fg-muted">
             {manifest.id}
             {manifest.version ? ` · v${manifest.version}` : ""}
@@ -573,7 +586,7 @@ function MarketplaceDetail({
               id: "install",
               label: "catalog_entry" in manifest ? t("marketplaces.review") : t("marketplaces.install"),
               icon: "catalog_entry" in manifest ? Eye : Download,
-              visible: canInstall,
+              visible: canInstall && !installedIds.has(manifest.id),
               disabled:
                 refreshing ||
                 installMutation.isPending ||

@@ -10,7 +10,7 @@ import type { UseMutationResult } from "@tanstack/react-query";
 import { Plus, RotateCcw, Save, Trash2, Undo2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { ApiError, type ExtractionFieldDefinition, type ExtractionFieldValueType } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -80,10 +80,9 @@ export function ExtractionFieldsEditor() {
   if (query.isPending) return <FormSkeleton fields={2} />;
   if (query.isError || !query.data) {
     return (
-      <ErrorState
-        message={
-          query.error instanceof ApiError ? query.error.message : t("settings.extractionFields.loadError")
-        }
+      <ApiErrorState
+        error={query.error}
+        fallback={t("settings.extractionFields.loadError")}
         onRetry={() => void query.refetch()}
       />
     );
