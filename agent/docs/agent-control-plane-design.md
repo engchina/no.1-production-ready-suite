@@ -242,9 +242,16 @@ memory backend は process 間共有されないため production dispatcher に
 - 定義は API の変更の後に保存し（`control_plane_store.save_*`）、起動時（`app.main` の lifespan）に
   `restore_control_plane()` で `.env` の宣言の後に重ねる。RAG / NL2SQL の接続は画面で変えた URL・タイムアウトだけを
   上書きする（認証方式は変えない）。`.env` の宣言・組み込みの定義は保存しない。
-- MCP 接続の API キー・OAuth の client secret は、`PLATFORM_SERVICE_TOKEN_SECRET` から HKDF-SHA256 で導いた鍵の
-  Fernet で暗号化して保存する（`app.secret_box`。`enc:v1:...`）。署名鍵を変えると復号できないため、その接続の秘密は
-  画面で入れ直す。署名鍵が無いと秘密を含む接続は保存できない（503）。
+- MCP 接続の API キー・OAuth の client secret・セッション ID は、`PLATFORM_SERVICE_TOKEN_SECRET` から HKDF-SHA256 で
+  導いた鍵の Fernet で暗号化して保存する（`app.secret_box`。`enc:v1:...`）。署名鍵を変えると復号できないため、その接続の
+  秘密は画面で入れ直す。署名鍵が無いと秘密を含む接続は保存できない（503）。
+  - プラグインの manifest（`manifest.mcp_servers[]`）とマーケットプレイスの一覧の native manifest
+    （`listing.plugins[].mcp_servers[]`）の MCP サーバーも同じ項目を同じ方法で暗号化し、復元で復号する（#1101）。
+    メモリ上の manifest と実際の接続は復号した値を使う。導入時の確認の digest は取得した manifest（メモリ）から
+    計算するので、保存の暗号化では変わらない。
+  - #1101 より前に平文で保存した行も読める（`enc:v1:` で始まらない値は平文として扱う）。起動時の復元で平文の秘密を
+    見つけたら、その行を暗号化して保存し直す（暗号化済みの値は作り直さない。署名鍵が無い・保存できないときは平文のまま
+    読み続け、起動は止めない）。
 - 1 worker・`in_process` の前提は変えない（checkpoint は process 内の状態を丸ごと書くため）。
 
 ### 5.1.1 起動時の読み込みと再試行（#853）
