@@ -40,7 +40,7 @@ import { useMemo, useRef, useState, type FormEvent } from "react";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { ListPagination } from "@/components/ListPagination";
-import { EmptyState, ErrorState } from "@/components/StateViews";
+import { EmptyState, ApiErrorState } from "@/components/StateViews";
 import {
   KnowledgeBaseScopePicker,
   useKnowledgeBaseSelectionHealth,
@@ -320,6 +320,13 @@ function SearchAnswerProfileList({
   // 新規作成の下書きはエディタを閉じても同じタブに残る。一覧から再開できるようにする。
   const [newDraft] = useState(() => readEditorDraft("searchAnswerProfiles.draft", "new", isSearchAnswerProfileDraft));
 
+  // アーカイブなどで件数が減り、保存したページが範囲外になったら最後のページへ戻す（ナレッジベースの一覧と同じ）。
+  // 範囲外のまま「検索・回答プロファイルがありません」を出さない。
+  const outOfRange = Boolean(page && page.offset === offset && items.length === 0 && offset > 0);
+  const lastPageOffset = page && page.total > 0 ? Math.floor((page.total - 1) / LIMIT) * LIMIT : 0;
+  const movingToLastPage = outOfRange && lastPageOffset !== offset;
+  if (movingToLastPage) setOffset(lastPageOffset);
+
   return (
     <div>
       <PageHeader
@@ -400,13 +407,12 @@ function SearchAnswerProfileList({
         />
 
         {query.isError ? (
-          <ErrorState
-            message={
-              query.error instanceof ApiError ? query.error.message : t("searchAnswerProfiles.error.title")
-            }
+          <ApiErrorState
+            error={query.error}
+            fallback={t("searchAnswerProfiles.error.title")}
             onRetry={() => void query.refetch()}
           />
-        ) : query.isPending ? (
+        ) : query.isPending || movingToLastPage ? (
           <TimedLoadingState
             label={t("searchAnswerProfiles.loading")}
             operationKey="search-answer-profiles-load"
@@ -1111,6 +1117,9 @@ function QuerySelectRow<T extends string>({
             value={value}
             options={options}
             onValueChange={(next) => onChange(next)}
+            // 継承 / 上書きの切り替えと同じく、保存中・アーカイブ済みは値も変えられないようにする
+            // （読み取り専用の画面で未保存の変更を作らない）。
+            disabled={disabled}
             className="[&>label]:sr-only"
           />
         ) : null}

@@ -262,6 +262,7 @@ const agentJa = {
   "evaluation.set.removeCase": "ケース {number} を削除",
   "evaluation.set.questionRequired": "質問を入力してください。",
   "evaluation.set.expectedRequired": "期待する回答の要点を入力してください。",
+  "evaluation.set.caseIdDuplicate": "ほかのケースと同じ ID です。",
   "evaluation.set.expectedTools": "期待するツール",
   "evaluation.set.expectedToolsHelper": "任意。カンマ区切り（例: rag_search, nl2sql_query）。MCP 接続の名前は省けます。",
   "evaluation.summary.description": "{set}（{agent}・{version}）・{started} に開始。合格率は「正しい」と判定したケースの割合です（評価できなかったケースは不合格に数えます）。",
@@ -756,6 +757,11 @@ const agentJa = {
   "common.permission": "権限",
   "common.result": "結果",
   "common.error": "エラー",
+  // API の失敗の文に使える文が無いとき（組み込みの例外など）の既定の文（#906）。timeout・通信断は共通の文になる。
+  "common.error.load": "読み込めませんでした。時間をおいて再試行してください。",
+  "common.error.operation": "操作を完了できませんでした。時間をおいてもう一度実行してください。",
+  "common.error.save": "保存できませんでした。時間をおいてもう一度実行してください。",
+  "common.error.retryLater": "時間をおいてもう一度実行してください。",
   "common.search": "検索",
   "common.clearSearch": "検索語をクリア",
   // 一覧の絞り込みの件数の読み上げ（SearchField の resultCountLabel。#535）。

@@ -58,8 +58,6 @@ export const ja = {
   "common.cardError.description":
     "画面の描画中に問題が発生しました。再試行しても解消しない場合は、ページを再読み込みしてください。他の項目は引き続き利用できます。",
   "common.required": "必須",
-  "common.api.timeout":
-    "API の応答が {seconds} 秒以内に返りませんでした。バックエンドとデータベースの起動状態を確認して再試行してください。",
 
   "settings.preview.copy.copied": "コピーしました",
   "settings.preview.copy.failed": "コピーできませんでした",
@@ -454,11 +452,12 @@ export const ja = {
   "settings.preprocess.profile.pii_redact.description":
     "テキストの氏名・メールアドレス・電話番号などの個人情報(PII)をマスクしてから解析します。",
   "settings.preprocess.actions.save": "保存",
-  "settings.preprocess.actions.saved": "前処理設定を保存しました。",
+  "settings.preprocess.actions.label": "ファイル準備の設定の操作",
+  "settings.preprocess.actions.saved": "ファイル準備の設定を保存しました。",
   "settings.preprocess.actions.reset": "変更を破棄",
   "settings.preprocess.actions.unsaved": "未保存の変更があります。",
-  "settings.preprocess.loadError": "前処理設定を取得できませんでした。",
-  "settings.preprocess.saveError": "前処理設定を保存できませんでした。",
+  "settings.preprocess.loadError": "ファイル準備の設定を取得できませんでした。",
+  "settings.preprocess.saveError": "ファイル準備の設定を保存できませんでした。",
   "settings.services.subtitle":
     "ファイル準備・文書解析など各工程のサービスの稼働状態を確認し、起動・停止します。",
   "settings.services.overview.title": "マイクロサービス",
@@ -1054,9 +1053,15 @@ export const ja = {
   "searchAnswerProfiles.actions.newView": "新規作成",
   "searchAnswerProfiles.list.aria": "検索・回答プロファイルの一覧",
   "searchAnswerProfiles.faq.loading": "承認済み FAQ を読み込んでいます",
+  // 知識の読み込みの失敗（応答に理由が無いとき）。空（0 件）と見せずに再試行を出す。
+  "searchAnswerProfiles.faq.loadError": "承認済み FAQ を読み込めませんでした。再試行してください。",
   "searchAnswerProfiles.faq.listAria": "承認済み FAQ の一覧",
   "searchAnswerProfiles.faq.scrollLabel": "承認済み FAQ の一覧。スクロールできます。",
   "searchAnswerProfiles.runtime.loading": "用語・同義語と回答ルールを読み込んでいます",
+  "searchAnswerProfiles.runtime.loadError":
+    "用語・同義語と回答ルールを読み込めませんでした。再試行してください。",
+  "searchAnswerProfiles.domainKeywords.loadError":
+    "ドメインキーワードを読み込めませんでした。再試行してください。",
   "searchAnswerProfiles.runtime.termsScrollLabel": "用語・同義語の一覧。スクロールできます。",
   "searchAnswerProfiles.runtime.rulesScrollLabel": "回答ルールの一覧。スクロールできます。",
   "searchAnswerProfiles.list.scrollLabel": "検索・回答プロファイル一覧。スクロールできます。",
@@ -1240,6 +1245,9 @@ export const ja = {
   "knowledgeBases.searchTest.initialHint":
     "質問を入力すると、このナレッジベースから上位の根拠チャンクを取得します。",
   "knowledgeBases.searchTest.needsIndexed": "索引済みの文書がありません。",
+  "knowledgeBases.searchTest.archived": "アーカイブ済みのナレッジベースでは検索テストを行えません。",
+  "knowledgeBases.searchTest.archivedHint":
+    "アーカイブ済みのナレッジベースは検索の対象から外れています。",
   "knowledgeBases.searchTest.needsIndexedHint":
     "先に文書を追加し、索引が完了するとここで検索を試せます。",
   "knowledgeBases.searchTest.error": "検索に失敗しました。再試行してください。",
@@ -2562,6 +2570,10 @@ export const ja = {
   "evaluation.input.required": "Golden set JSON を入力してください。",
   "evaluation.input.invalidJson": "Golden set JSON は有効な JSON で入力してください。",
   "evaluation.input.noCases": "Golden set JSON の cases を 1 件以上入力してください。",
+  "evaluation.input.caseIdRequired":
+    "Golden set JSON の cases の {index} 件目に id（1〜200 文字）を入力してください。",
+  "evaluation.input.duplicateCaseIds":
+    "Golden set JSON の cases の id が重複しています: {ids}。id はケースごとに変えてください。",
   "evaluation.actions.run": "評価実行",
   "evaluation.actions.running": "評価を実行しています",
   "evaluation.actions.compare": "比較実行",
@@ -2629,6 +2641,8 @@ export const ja = {
   "evaluation.job.failedTitle": "評価を最後まで実行できませんでした。",
   "evaluation.job.loading": "評価の状態を読み込んでいます",
   "evaluation.job.loadError": "評価の状態を取得できませんでした。再試行してください。",
+  "evaluation.job.pollError":
+    "評価の実行状況を取得できません。自動で取得し直しています。表示は最後に取得できた状態です。",
   "evaluation.job.notFound":
     "前回の評価の記録が見つかりません。保持期間を過ぎたか、別の利用者の評価です。もう一度実行してください。",
   "evaluation.toast.started": "評価を開始しました。進み具合はこの画面で確認できます。",
