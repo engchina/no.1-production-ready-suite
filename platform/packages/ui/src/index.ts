@@ -136,6 +136,7 @@ export {
   type ApiErrorDetailLabels,
   type ApiErrorPresentable,
   type ApiErrorPresentation,
+  type ApiFieldErrorLike,
   type ApiTransportFailureKind,
   type ApiTransportMessages,
   type ApiTransportRequest,

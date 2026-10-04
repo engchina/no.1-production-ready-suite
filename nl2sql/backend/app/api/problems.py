@@ -6,17 +6,29 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from fastapi import Request
+from pr_backend_core.api.validation import validation_field_errors
 from pr_backend_core.observability import generate_request_id
 from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 
 
+def _is_none(value: object) -> bool:
+    return value is None
+
+
 class ApiFieldProblem(BaseModel):
-    """入力 payload 上の問題。pointer は RFC 6901 JSON Pointer。"""
+    """入力 payload 上の問題。pointer は RFC 6901 JSON Pointer。
+
+    入力の検証エラー（422）は、利用者に見せる位置（`location`）と技術的な原文
+    （`raw_location` / `raw_message`）も持つ（#1065）。無いときは応答に出さない。
+    """
 
     pointer: str
     code: str
     message: str
+    location: str | None = Field(default=None, exclude_if=_is_none)
+    raw_location: str | None = Field(default=None, exclude_if=_is_none)
+    raw_message: str | None = Field(default=None, exclude_if=_is_none)
 
 
 class ApiProblem(BaseModel):
@@ -139,40 +151,10 @@ def api_problem_response(
 
 
 def validation_field_problems(errors: Sequence[Mapping[str, Any]]) -> list[ApiFieldProblem]:
-    """Pydantic/FastAPI validation errors を安全な日本語 field error へ変換する。"""
+    """Pydantic/FastAPI validation errors を安全な日本語 field error へ変換する。
 
-    return [
-        ApiFieldProblem(
-            pointer=_json_pointer(error.get("loc", ())),
-            code=str(error.get("type") or "invalid"),
-            message=_validation_message(error),
-        )
-        for error in errors
-    ]
+    文と位置は 3 製品共通の整形（`pr_backend_core.api.validation`。#1065）に任せ、
+    技術的な原文（`raw_location` / `raw_message`）は画面の「詳細」用に残す。
+    """
 
-
-def _json_pointer(location: object) -> str:
-    parts = list(location) if isinstance(location, (list, tuple)) else []
-    if parts and parts[0] in {"body", "query", "path", "header", "cookie"}:
-        parts = parts[1:]
-    escaped = [str(part).replace("~", "~0").replace("/", "~1") for part in parts]
-    return "/" + "/".join(escaped) if escaped else "/"
-
-
-def _validation_message(error: Mapping[str, Any]) -> str:
-    error_type = str(error.get("type") or "")
-    raw_message = str(error.get("msg") or "").strip()
-    if raw_message.startswith("Value error, "):
-        value_message = raw_message.removeprefix("Value error, ").strip()
-        if value_message:
-            return value_message
-    messages = {
-        "missing": "必須項目を入力してください。",
-        "string_too_short": "入力文字数が不足しています。",
-        "string_too_long": "入力文字数が上限を超えています。",
-        "string_pattern_mismatch": "入力形式を確認してください。",
-        "greater_than_equal": "指定できる最小値を確認してください。",
-        "less_than_equal": "指定できる最大値を確認してください。",
-        "list_too_short": "必要な項目を選択してください。",
-    }
-    return messages.get(error_type, "入力内容を確認してください。")
+    return [ApiFieldProblem.model_validate(item) for item in validation_field_errors(errors)]

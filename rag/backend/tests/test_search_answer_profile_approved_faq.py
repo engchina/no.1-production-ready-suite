@@ -90,8 +90,8 @@ def test_excel_preview_and_import_modes(fake_oracle: FakeKnowledgeOracle) -> Non
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
-        ({"question": "  ", "answer": "a"}, "body.question: Value error, 質問を入力してください。"),
-        ({"question": "q", "answer": ""}, "body.answer: Value error, 回答を入力してください。"),
+        ({"question": "  ", "answer": "a"}, "質問を入力してください。"),
+        ({"question": "q", "answer": ""}, "回答を入力してください。"),
     ],
     ids=["question", "answer"],
 )

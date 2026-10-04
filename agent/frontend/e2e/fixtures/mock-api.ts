@@ -242,7 +242,7 @@ function normalizedSet(body: Json): Json {
   const cases = (body.cases as Json[] | undefined) ?? [];
   const explicit = cases.map((item) => String(item.id ?? "").trim()).filter(Boolean);
   if (new Set(explicit).size !== explicit.length) {
-    throw new HttpError(422, "body.cases: Value error, ケースの id が重複しています。");
+    throw new HttpError(422, "ケースの id が重複しています。");
   }
   const used = new Set(explicit);
   return {

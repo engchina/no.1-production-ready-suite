@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 
 # 共有 backend インフラ（CORS / request-id / エラー envelope）。
 from pr_backend_core.api.errors import api_error_response, http_exception_messages
+from pr_backend_core.api.validation import validation_error_response
 from pr_backend_core.observability.metrics import MetricsMiddleware
 from pr_backend_core.observability.request_context import generate_request_id
 from pr_backend_core.security.cors import configure_cors
@@ -264,16 +265,8 @@ def create_app() -> FastAPI:
     async def validation_exception_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        """リクエスト検証エラーを ApiResponse 形式へ統一する。"""
-        messages = [
-            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
-            for error in exc.errors()
-        ]
-        return api_error_response(
-            422,
-            messages or ["リクエストの形式が不正です。"],
-            request_id=_response_request_id(request),
-        )
+        """リクエスト検証エラーを、3 製品共通の日本語の文と problem 契約で返す（#1065）。"""
+        return validation_error_response(exc.errors(), request_id=_response_request_id(request))
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
