@@ -153,6 +153,11 @@ from app.features.agent.feedback import (
     build_feedback_report,
 )
 from app.features.agent.mcp_server import build_agent_mcp_server
+from app.features.agent.mcp_url import (
+    mask_url_credentials,
+    url_credential_error,
+    url_has_credentials,
+)
 from app.features.agent.plugins import (
     MarketplaceEntry,
     MarketplaceListing,
@@ -306,6 +311,10 @@ def _validate_mcp_url(value: str | None) -> str | None:
     value = value.strip()
     if value and not re.match(r"^https?://[^\s/]+", value):
         raise ValueError("MCP の URL は http:// または https:// で始めてください。")
+    # 資格情報は認証の欄（secret として保存し、一覧に出さない）へ。URL に書くと一覧に出る（#1056）。
+    credential_error = url_credential_error(value) if value else None
+    if credential_error:
+        raise ValueError(credential_error)
     return value
 
 
@@ -314,7 +323,11 @@ class McpConnectionSettings(BaseModel):
 
     server_id: str
     label: str | None = None
+    # URL の userinfo・secret らしい query の値は `***` に伏せる（#1056）。
     base_url: str | None = None
+    # 保存した URL に資格情報があり、base_url を伏せて返したか（画面は URL を変えない限り
+    # base_url を送らない）。
+    base_url_masked: bool = False
     auth_mode: McpAuthMode
     service_audience: str | None = None
     timeout_seconds: float
@@ -3004,7 +3017,8 @@ def _mcp_connection_settings(config: McpConnectionConfig) -> McpConnectionSettin
     return McpConnectionSettings(
         server_id=config.server_id,
         label=config.label,
-        base_url=config.base_url,
+        base_url=mask_url_credentials(config.base_url),
+        base_url_masked=url_has_credentials(config.base_url),
         auth_mode=mode,
         service_audience=config.audience() if mode == "service_token" else None,
         timeout_seconds=config.timeout_seconds,

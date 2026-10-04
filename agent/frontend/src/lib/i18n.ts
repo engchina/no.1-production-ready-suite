@@ -794,6 +794,12 @@ const agentJa = {
   "validation.json.invalid": "{field}は有効な JSON で入力してください。",
   "validation.json.array": "{field}は JSON の配列で入力してください。",
   "validation.json.object": "{field}は JSON のオブジェクトで入力してください。",
+  // MCP の URL（backend の `_validate_mcp_url`・`mcp_url.py` と同じ文言。#1056）。
+  "validation.mcpUrl.scheme": "MCP の URL は http:// または https:// で始めてください。",
+  "validation.mcpUrl.userinfo":
+    "MCP の URL にユーザー名・パスワード（user:pass@）を含めないでください。資格情報は「認証」の欄（API キー・OAuth）で設定してください。",
+  "validation.mcpUrl.secretQuery":
+    "MCP の URL に資格情報のパラメータ（{names}）を含めないでください。資格情報は「認証」の欄（API キー・OAuth）で設定してください。",
   "common.saved": "設定を保存しました",
   "common.download": "ダウンロード",
   "common.validate": "検証",
@@ -1361,6 +1367,8 @@ const agentJa = {
   "settings.mcpConnections.oauthSecretShow": "OAuth Client Secret を表示",
   "settings.mcpConnections.oauthSecretHide": "OAuth Client Secret を隠す",
   "settings.mcpConnections.secretKeepHint": "空のまま保存すると、保存済みの値を使い続けます。",
+  "settings.mcpConnections.urlMaskedHint":
+    "保存済みの URL の資格情報は「***」で伏せて表示しています。URL を変えずに保存すると、保存済みの URL を使い続けます。資格情報は「認証」の欄へ移してください。",
   "run.search": "目標・実行 ID・業務 Agent で絞り込み",
   "run.filter.label": "状態で絞り込み",
   "run.filter.all": "すべて",

@@ -636,7 +636,10 @@ export type McpAuthMode = "none" | "api_key" | "oauth_client_credentials" | "ser
 export interface McpConnectionSettings {
   server_id: string;
   label?: string | null;
+  /** URL の userinfo・資格情報らしい query の値は `***` に伏せて返る（#1056）。 */
   base_url?: string | null;
+  /** 保存済みの URL に資格情報があり、base_url を伏せて返したか。 */
+  base_url_masked?: boolean;
   auth_mode: McpAuthMode;
   /** サービストークンの aud（呼び先の製品名）。service_token のときだけ。 */
   service_audience?: string | null;
