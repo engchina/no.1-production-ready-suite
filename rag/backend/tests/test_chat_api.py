@@ -709,7 +709,9 @@ def test_stream_message_sends_chat_progress_steps(monkeypatch: MonkeyPatch) -> N
     ]
     final = events[-1]
     assert set(_step_statuses(final).values()) == {"done"}
-    steps = {str(step["id"]): step for step in final["steps"]}  # type: ignore[union-attr]
+    final_steps = final["steps"]
+    assert isinstance(final_steps, list)
+    steps = {str(step["id"]): step for step in final_steps}
     assert steps["retrieve"]["detail"] == "根拠 1 件"
     assert steps["generate_answer"]["label"] == "回答を作っています"
     # 完了の段階は回答（delta）の前に届く。
