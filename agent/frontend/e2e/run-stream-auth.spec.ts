@@ -79,7 +79,7 @@ for (const viewport of VIEWPORTS) {
       const connections: WebSocketRoute[] = [];
       await page.routeWebSocket(WS_URL, (ws) => {
         connections.push(ws);
-        ws.send(JSON.stringify({ type: "error", error_code: "rbac.agent_forbidden", message: "agent access denied" }));
+        ws.send(JSON.stringify({ type: "error", error_code: "rbac.agent_forbidden", message: "この業務 Agent の実行を参照する権限がありません。" }));
         ws.close({ code: 1008, reason: "forbidden" });
       });
 
@@ -141,7 +141,7 @@ for (const viewport of VIEWPORTS) {
             JSON.stringify({
               type: "error",
               error_code: "rbac.forbidden",
-              message: "cancel requires operator/admin role",
+              message: "実行を取り消す権限がありません。",
               command: command.type,
               command_id: command.command_id,
             })
@@ -162,6 +162,41 @@ for (const viewport of VIEWPORTS) {
       await expect(streamCard(page).getByText("接続済み", { exact: true })).toBeVisible();
       await expect(page.getByTestId("run-stream-stopped")).toHaveCount(0);
       expect(connections).toBe(1);
+    });
+
+    test("権限以外のコマンドの拒否は backend の日本語の文を出し、文が無ければ error code ではなく既定の文を出す", async ({
+      page,
+    }) => {
+      // backend の `_handle_websocket_command` と同じ形の拒否（#1031）。1 回目は文あり、2 回目は文なし。
+      const replies = [
+        { error_code: "run.not_found", message: "実行が見つかりません。" },
+        { error_code: "websocket.command_id_conflict" },
+      ];
+      await page.routeWebSocket(WS_URL, (ws) => {
+        ws.onMessage((message) => {
+          const command = JSON.parse(String(message)) as { type: string; command_id: string };
+          const reply = replies.shift();
+          ws.send(JSON.stringify({ type: "error", ...reply, command: command.type, command_id: command.command_id }));
+        });
+      });
+
+      await page.goto("/runs?id=run-stream");
+      await useWebSocketMode(page);
+      await expect(streamCard(page).getByText("接続済み", { exact: true })).toBeVisible();
+      const resume = page.getByTestId("run-object-actions").getByRole("button", { name: "再開", exact: true });
+
+      await resume.click();
+      const toasts = page.locator("[data-toast-placement]");
+      await expect(toasts).toContainText("実行の操作を送れませんでした");
+      await expect(toasts).toContainText("実行が見つかりません。");
+      await expect(resume).not.toHaveAttribute("aria-busy", "true");
+
+      await resume.click();
+      await expect(toasts).toContainText("サーバーが操作を受け付けませんでした。");
+      // error code（技術情報）は Toast に出さない。
+      await expect(toasts).not.toContainText("websocket.command_id_conflict");
+      await expect(streamCard(page).getByText("接続済み", { exact: true })).toBeVisible();
+      await expectNoPageOverflow(page);
     });
 
     test("WebSocket の購読中は Run の操作をその接続で送り、押した操作だけが受付まで処理中になる", async ({
