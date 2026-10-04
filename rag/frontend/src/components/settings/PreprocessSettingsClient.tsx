@@ -15,7 +15,7 @@ import {
 import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, Shuffle } from "lucide-react";
 
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import {
   ApiError,
   type PreprocessProfileName,
@@ -76,12 +76,9 @@ export function PreprocessSettingsClient() {
   if (query.isError) {
     return (
       <PageBody wide>
-        <ErrorState
-          message={
-            query.error instanceof ApiError
-              ? query.error.message
-              : t("settings.preprocess.loadError")
-          }
+        <ApiErrorState
+          error={query.error}
+          fallback={t("settings.preprocess.loadError")}
           onRetry={() => void query.refetch()}
         />
       </PageBody>

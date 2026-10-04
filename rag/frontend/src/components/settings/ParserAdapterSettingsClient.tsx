@@ -27,7 +27,7 @@ import {
   Save,
 } from "lucide-react";
 
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import {
   SERVICE_PROFILE_ORDER,
   ServiceProfileBadge,
@@ -161,12 +161,9 @@ export function ParserAdapterSettingsClient() {
   if (query.isError) {
     return (
       <PageBody wide>
-        <ErrorState
-          message={
-            query.error instanceof ApiError
-              ? query.error.message
-              : t("settings.parserAdapters.loadError")
-          }
+        <ApiErrorState
+          error={query.error}
+          fallback={t("settings.parserAdapters.loadError")}
           onRetry={() => void query.refetch()}
         />
       </PageBody>

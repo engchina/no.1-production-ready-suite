@@ -9,7 +9,6 @@ import {
   CardHeader,
   CardTitle,
   EmptyState,
-  ErrorState,
   Fieldset,
   FormActionBar,
   FormStatus,
@@ -27,6 +26,8 @@ import {
   toast,
   useConfirm,
   type DataTableColumn,
+  ApiErrorState,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 
 import { ListSearchField, listCountLabel, matchesSearch, NoMatchState, useListSearch } from "@/components/ListFilters";
@@ -120,7 +121,7 @@ export function ApiKeysPage() {
       void queryClient.invalidateQueries({ queryKey: ["api-keys"] });
       toast.success(t("apiKeys.deleted"));
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
 
   function submit() {
@@ -260,7 +261,7 @@ export function ApiKeysPage() {
                     testId: "api-key-create",
                   },
                 ]}
-                status={create.error ? <FormStatus tone="danger" message={create.error.message} /> : null}
+                status={create.error ? <FormStatus tone="danger" message={apiErrorMessage(create.error, t("common.error.operation"))} /> : null}
               />
               {/* 作成の結果（秘密）は起点の「作成」の行の直下・カードの全幅に出す（messaging.md §10.1。#790）。 */}
               {created ? <CreatedKey key={created.token} created={created} onDone={() => setCreated(null)} /> : null}
@@ -279,8 +280,9 @@ export function ApiKeysPage() {
               </TimedLoadingState>
             ) : keys.error ? (
               // 一覧の読み込みの失敗は再試行付きの ErrorState（messaging.md §3.6。#808）。
-              <ErrorState
-                message={keys.error.message}
+              <ApiErrorState
+                error={keys.error}
+                fallback={t("common.error.load")}
                 retryLabel={t("common.retry")}
                 onRetry={() => void keys.refetch()}
               />

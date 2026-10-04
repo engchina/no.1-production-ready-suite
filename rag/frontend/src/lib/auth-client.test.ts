@@ -40,7 +40,7 @@ afterEach(() => {
 describe("CSRF header", () => {
   it("状態を変える method では rag_csrf の値を X-CSRF-Token で送る", async () => {
     stubBrowser(`other=1; ${CSRF_COOKIE_NAME}=token-123`);
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(OK));
+    const fetchMock = vi.fn().mockImplementation(async () =>jsonResponse(OK));
     vi.stubGlobal("fetch", fetchMock);
 
     await api.archiveKnowledgeBase("kb-1");
@@ -53,7 +53,7 @@ describe("CSRF header", () => {
 
   it("GET では送らない", async () => {
     stubBrowser(`${CSRF_COOKIE_NAME}=token-123`);
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...OK, data: { status: "ok", check: "ok", detail: null } }));
+    const fetchMock = vi.fn().mockImplementation(async () =>jsonResponse({ ...OK, data: { status: "ok", check: "ok", detail: null } }));
     vi.stubGlobal("fetch", fetchMock);
 
     await api.getDatabaseStatus();
@@ -160,7 +160,7 @@ describe("401 / 403 の通知", () => {
     const events = stubBrowser();
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ data: null, error_messages: ["ログインが必要です。"] }, 401))
+      vi.fn().mockImplementation(async () =>jsonResponse({ data: null, error_messages: ["ログインが必要です。"] }, 401))
     );
 
     await expect(streamSearch({ query: "q" } as never, {})).rejects.toMatchObject({ status: 401 });
@@ -173,7 +173,7 @@ describe("ApiError と describeSecurityApiError", () => {
     stubBrowser();
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
+      vi.fn().mockImplementation(async () =>
         jsonResponse(
           {
             data: null,
@@ -212,7 +212,7 @@ describe("ApiError と describeSecurityApiError", () => {
 
   it("ログイン API は login_user_id と password を送る", async () => {
     stubBrowser();
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...OK, data: { user_uuid: "u1" } }));
+    const fetchMock = vi.fn().mockImplementation(async () =>jsonResponse({ ...OK, data: { user_uuid: "u1" } }));
     vi.stubGlobal("fetch", fetchMock);
 
     await securityApi.login("admin", "secret");

@@ -38,6 +38,13 @@ async function closeSelectFieldOptions(combobox: Locator) {
   await expect(combobox).toHaveAttribute("aria-expanded", "false");
 }
 
+/** 用語・同義語 / 共通ルールの取込（全置換）の確認ダイアログで「置き換えて取り込む」を押す（#953）。 */
+async function confirmMaterialReplace(page: Page) {
+  const dialog = page.getByRole("alertdialog");
+  await dialog.getByRole("button", { name: "置き換えて取り込む", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+}
+
 async function readActiveJobState(page: Page) {
   return page.evaluate((keys) => ({ jobId: sessionStorage.getItem(keys.id), startedAt: sessionStorage.getItem(keys.startedAt) }), jobSnapshotKeys);
 }
@@ -10720,6 +10727,9 @@ test("glossary page manages global terms only", async ({ page }) => {
       content: "mock",
     },
   ]);
+  // 取込は登録済みの 21 件を置き換えるので、件数とファイル名を示して確認する（#953）。
+  await expect(page.getByRole("alertdialog")).toContainText("登録済みの用語・同義語 21 件を、terms.xlsx の内容ですべて置き換えます。");
+  await confirmMaterialReplace(page);
   await expect(page.getByText("用語・同義語を 1 件取り込みました。")).toBeVisible();
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "粗利" })).toBeVisible();
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "INVOICES.PROFIT" })).toBeVisible();
@@ -10819,6 +10829,49 @@ test("glossary global data shows empty, loading, and server error states", async
   await expectNoHorizontalScroll(page);
 });
 
+test("glossary and global rules do not show an empty list when the first load fails", async ({ page }) => {
+  // #953: 取得の失敗を「データがありません」（空）と取り違えさせず、取込（全置換）は件数が分からない旨を示して確認する。
+  await mockNl2SqlApi(page);
+  let fail = true;
+  let imports = 0;
+  await page.route("**/api/nl2sql/legacy-learning-material", (route) => {
+    if (fail) {
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "読込エラー" }) });
+    }
+    return fulfillJson(route, { glossary: { 売上: "INVOICES.TOTAL_AMOUNT" }, rules: ["SELECT のみ"] });
+  });
+  page.on("request", (request) => {
+    if (/\/legacy-learning-material\/(terms|rules)\/import$/u.test(new URL(request.url()).pathname)) imports += 1;
+  });
+
+  for (const material of [
+    { path: "/glossary-rules", unavailable: "glossary-terms-unavailable", title: "用語・同義語を表示できません", empty: "データがありません。", count: /^用語・同義語 \d+$/u, dropzone: "glossary-rules-panel-heading-file-dropzone", preview: "glossary-terms-preview", previewText: "売上" },
+    { path: "/global-rules", unavailable: "global-rules-unavailable", title: "共通ルールを表示できません", empty: "共通ルールがありません。", count: /^ルール \d+$/u, dropzone: "global-rules-file-dropzone", preview: "global-rules-preview", previewText: "SELECT のみ" },
+  ]) {
+    fail = true;
+    await page.goto(material.path);
+    await expect(page.getByRole("alert")).toContainText("読込エラー");
+    await expect(page.getByTestId(material.unavailable)).toContainText(material.title);
+    await expect(page.getByText(material.empty, { exact: true })).toHaveCount(0);
+    await expect(page.getByText(material.count)).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+
+    await dropFiles(page, page.getByTestId(material.dropzone), [
+      { name: "replace.xlsx", type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content: "mock" },
+    ]);
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("今の登録内容を取得できていないため、件数を確認できません。");
+    await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(imports).toBe(0);
+
+    fail = false;
+    await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+    await expect(page.getByTestId(material.preview)).toContainText(material.previewText);
+    await expect(page.getByTestId(material.unavailable)).toHaveCount(0);
+  }
+});
+
 test("glossary and global rules imports use stable errors for non JSON responses", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.unroute("**/api/nl2sql/legacy-learning-material/terms/import");
@@ -10839,6 +10892,7 @@ test("glossary and global rules imports use stable errors for non JSON responses
       content: "mock",
     },
   ]);
+  await confirmMaterialReplace(page);
   const glossaryAlert = page.getByRole("alert");
   await expect(glossaryAlert).toContainText("用語・同義語データの取込に失敗しました。");
   await expect(glossaryAlert).not.toContainText("Unexpected");
@@ -10861,6 +10915,7 @@ test("glossary and global rules imports use stable errors for non JSON responses
       content: "mock rules",
     },
   ]);
+  await confirmMaterialReplace(page);
   const rulesAlert = page.getByRole("alert");
   await expect(rulesAlert).toContainText("共通ルールの取込に失敗しました。");
   await expect(rulesAlert).not.toContainText("Unexpected");
@@ -12564,14 +12619,29 @@ test("glossary and global rules use an initial list skeleton and preserve fetche
     },
   ]);
   await expect(page.getByText(".XLSX ファイルを選択してください")).toBeVisible();
-  await dropFiles(page, page.getByTestId("global-rules-file-dropzone"), [
+  let ruleImports = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/legacy-learning-material/rules/import")) ruleImports += 1;
+  });
+  const rulesWorkbook = [
     {
       name: "rules.xlsx",
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       content: "mock rules",
     },
-  ]);
+  ];
+  // 取込は登録済みのルールを置き換えるので確認する。キャンセルなら送らない（#953）。
+  await dropFiles(page, page.getByTestId("global-rules-file-dropzone"), rulesWorkbook);
+  const replaceDialog = page.getByRole("alertdialog");
+  await expect(replaceDialog).toContainText("登録済みの共通ルール 1 件を、rules.xlsx の内容ですべて置き換えます。");
+  await replaceDialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+  await expect(replaceDialog).toHaveCount(0);
+  await expect(page.getByTestId("global-rules-preview").getByText("SELECT のみ")).toBeVisible();
+  expect(ruleImports).toBe(0);
+  await dropFiles(page, page.getByTestId("global-rules-file-dropzone"), rulesWorkbook);
+  await confirmMaterialReplace(page);
   await expect(page.getByText(/共通ルールを取り込みました/)).toBeVisible();
+  expect(ruleImports).toBe(1);
   await expectNoHorizontalScroll(page);
 
   await page.setViewportSize({ width: 375, height: 900 });
@@ -12762,6 +12832,51 @@ test("サンプルの種類変更中・取得失敗時は旧 SQL を実行でき
   await expect(page.getByLabel("実行確認語")).toHaveValue("");
   expect(mutations).toBe(0);
   await expectNoHorizontalScroll(page);
+});
+
+test("サンプルの取込が成功した後の取り直しの失敗は、実行の失敗として出さずスキーマの更新を追う", async ({ page }) => {
+  // #948: 取り直しの失敗を実行のボタンの直下に出すと、成功した取込が失敗したように見え、再実行を招く。
+  await mockNl2SqlApi(page);
+  let infoFails = false;
+  const jobRequests: string[] = [];
+  await page.route("**/api/nl2sql/sample-data?dataset=sales", (route) => {
+    if (infoFails) {
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "サンプルの状態を取得できませんでした。" }) });
+    }
+    return fulfillJson(route, { dataset: "sales", runtime: "oracle", profile_id: "", confirmation: "ADMIN_EXECUTE",
+      objects: ["SALES_ORDER"], imported_objects: jobRequests.length > 0 ? ["SALES_ORDER"] : [], warnings: [],
+      sql: { tables: ["CREATE TABLE SALES_ORDER (ID NUMBER)"], views: [], data: [], delete: ["DROP TABLE SALES_ORDER"] } });
+  });
+  await page.route("**/api/nl2sql/sample-data/import", (route) => {
+    infoFails = true;
+    return fulfillJson(route, { dataset: "sales", operation: "import", step: "all", runtime: "oracle", executed: true,
+      objects: ["SALES_ORDER"], profile_id: "", timing, warnings: [], schema_refresh_job_id: "schema-refresh-948",
+      statements: [{ index: 1, statement_type: "CREATE", status: "success", sql: "CREATE TABLE SALES_ORDER (ID NUMBER)", error_message: "" }] });
+  });
+  await page.route("**/api/schema/refresh-jobs/schema-refresh-948", (route) => {
+    jobRequests.push(route.request().url());
+    return fulfillJson(route, { job_id: "schema-refresh-948", status: "done", created_at: "2026-10-04T00:00:00.000Z",
+      scanned_objects: 1, changed_objects: 1, deleted_objects: 0, catalog_version: 2, error_code: "" });
+  });
+  await page.goto("/sample-data");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "サンプルデータの種類" }), "sales");
+  await expect(page.locator("pre")).toContainText("SALES_ORDER");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "取り込み実行", exact: true }).click();
+
+  const actionSection = page.locator('section[aria-labelledby="sample-data-action-heading"]');
+  await expect(page.getByText("サンプルの状態を取得できませんでした。", { exact: true })).toBeVisible();
+  // 実行のボタンの直下（実行の失敗の場所）には出さない。読込の失敗としてページ上部の案内に出す。
+  await expect(actionSection.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByText("実行済み", { exact: true }).first()).toBeVisible();
+  // 取り直しに失敗しても、backend が投入したスキーマの更新の job は追う。
+  await expect.poll(() => jobRequests.length).toBeGreaterThan(0);
+  await expectNoHorizontalScroll(page);
+
+  infoFails = false;
+  await clickPageHeaderAction(page, "sample-data-actions", "表示を更新");
+  await expect(page.getByText("サンプルの状態を取得できませんでした。", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("sample-data-imported-count")).toHaveText("1");
 });
 
 test("同名の既存オブジェクトと衝突するサンプルは警告し、旧名の残存を案内する", async ({ page }) => {
@@ -12986,6 +13101,9 @@ test("sample data and data management run imported workflows", async ({ page }) 
   expect(currentPreviewDataPayload()?.owner).toBe("APP");
   expect(currentPreviewDataPayload()?.limit).toBe(100);
   expect(currentPreviewDataPayload()?.where_clause).toBe("");
+  // runtime は API の内部値（deterministic）を出さず、文言で出す（#936）。
+  await expect(dataPreviewPanel.getByText("決定論", { exact: true })).toBeVisible();
+  await expect(dataPreviewPanel.getByText("deterministic", { exact: true })).toHaveCount(0);
   const tableDownloadPromise = page.waitForEvent("download");
   await previewExportButton.click();
   const tableDownload = await tableDownloadPromise;
@@ -16395,6 +16513,12 @@ test("テーブル取込中は対象とファイルの変更を停止し失敗�
   await execute.press("Enter");
   // 取込先の表は所有者付きの修飾名で表示する（#556）。
   await expect(panel.getByTestId("table-import-result-table-name")).toHaveText("APP.IMPORTED_ORDERS");
+  // 実行の状態・モードは API の内部値（executed / create）を出さず、文言で出す（#935）。
+  const importResult = panel.getByTestId("table-import-result-panel");
+  await expect(importResult.getByText("実行済み", { exact: true })).toBeVisible();
+  await expect(importResult.getByText("新規テーブルを作成", { exact: true })).toBeVisible();
+  await expect(importResult.getByText("executed", { exact: true })).toHaveCount(0);
+  await expect(importResult.getByText("create", { exact: true })).toHaveCount(0);
   expect(api.importTabularPayload).toBeNull();
 });
 
@@ -16478,7 +16602,103 @@ test("データ取込中は対象・ファイル・モードを固定し失敗�
   });
   await execute.press("Enter");
   await expect.poll(() => retryPayload).toMatchObject({ table_name: "INVOICES", owner: "APP", mode: "insert", confirmation: "APP.INVOICES", filename: "orders.csv" });
-  await expect(panel.getByText("executed", { exact: true })).toBeVisible();
+  // 実行の状態・runtime・モードは API の内部値を出さず、文言で出す（#936）。
+  const uploadResult = panel.getByRole("region", { name: "表形式アップロード結果" });
+  await expect(uploadResult.getByText("実行済み", { exact: true })).toBeVisible();
+  await expect(uploadResult.getByText("Oracle", { exact: true })).toBeVisible();
+  await expect(uploadResult.getByText("INSERT(追記)", { exact: true })).toBeVisible();
+  await expect(uploadResult.getByText(/^(executed|oracle|insert)$/)).toHaveCount(0);
+});
+
+test("データの管理は CSV アップロードの失敗を danger の表示で原因とともに出す", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.unroute("**/api/nl2sql/db-admin/upload-csv");
+  // upload-csv は Oracle のエラーを例外にせず、executed: false と warnings で返す。
+  await page.route("**/api/nl2sql/db-admin/upload-csv", (route) =>
+    fulfillJson(route, {
+      table_name: "APP.INVOICES",
+      filename: "orders.csv",
+      mode: "truncate_insert",
+      matched_columns: ["ID"],
+      unmatched_csv_columns: [],
+      row_count: 1,
+      success_count: 0,
+      error_count: 0,
+      row_errors: [],
+      hint: "",
+      executed: false,
+      runtime: "oracle",
+      sample_rows: [{ ID: "1" }],
+      warnings: ["ORA-00942: table or view does not exist Help: https://docs.oracle.com/error-help/db/ora-00942/"],
+      timing,
+    })
+  );
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)" }).click();
+  const panel = page.locator("#data-management-panel-csv");
+  await expect(panel.getByTestId("data-csv-table-list").getByText("APP.INVOICES", { exact: true })).toBeVisible();
+  await panel.getByTestId("data-csv-file-field-input").setInputFiles({
+    name: "orders.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from("ID\n1\n"),
+  });
+  await panel.getByLabel("実行確認語").fill("APP.INVOICES");
+  await panel.getByRole("button", { name: "アップロード実行", exact: true }).click();
+
+  const uploadResult = panel.getByRole("region", { name: "表形式アップロード結果" });
+  await expect(uploadResult.getByText("未実行", { exact: true })).toBeVisible();
+  await expect(uploadResult.getByText("DELETE & INSERT(全置換)", { exact: true })).toBeVisible();
+  await expect(uploadResult.getByText(/^(not executed|oracle|truncate_insert)$/)).toHaveCount(0);
+  // 失敗は warning ではなく danger の Banner で、1 文目に何が起きたか・原因・次の操作を出す（messaging.md §10）。
+  const failure = uploadResult.getByRole("alert").filter({ hasText: "表形式データをアップロードできませんでした。" });
+  await expect(failure).toBeVisible();
+  await expect(failure).toContainText("ORA-00942: table or view does not exist");
+  await expect(failure).toContainText("参照先のテーブルまたはビューが存在しない");
+  await expect(failure.getByRole("link", { name: "Oracle エラーヘルプを開く" })).toBeHidden();
+  await expectNoHorizontalScroll(page);
+  await uploadResult.screenshot({ path: test.info().outputPath("csv-upload-failure.png") });
+});
+
+test("データの管理は切り詰めの Oracle のエラーの原因をダイアログに出す", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.unroute("**/api/nl2sql/db-admin/truncate-table");
+  // 切り詰めは部分成功の経路で実行し、Oracle のエラーは文の error_message にだけ入る（warnings は空）。
+  await page.route("**/api/nl2sql/db-admin/truncate-table", (route) =>
+    fulfillJson(route, {
+      executed: false,
+      runtime: "oracle",
+      execution_context: "admin_control_plane",
+      select_result: null,
+      statements: [
+        {
+          index: 1,
+          statement_type: "TRUNCATE",
+          status: "error",
+          sql: 'TRUNCATE TABLE "APP"."INVOICES"',
+          row_count: null,
+          message: "",
+          elapsed_ms: 0,
+          error_message: "ORA-02266: 表には有効な外部キーによって参照される一意キー/主キーが含まれています",
+        },
+      ],
+      committed: false,
+      rolled_back: true,
+      warnings: [],
+      timing,
+    })
+  );
+  await page.goto("/data-management");
+  const preview = page.locator("#data-management-panel-preview");
+  await preview.getByRole("button", { name: "APP.INVOICES を選択" }).click();
+  await expect(preview.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveAttribute("aria-current", "true");
+  await clickObjectDetailAction(page, "data-preview-results-actions", "APP.INVOICES のデータを空にする");
+  const dialog = page.getByRole("dialog", { name: "TRUNCATE TABLE の確認" });
+  await dialog.getByLabel("実行確認語").fill("APP.INVOICES");
+  await dialog.getByRole("button", { name: "データを空にする" }).click();
+  await expect(dialog.getByRole("alert")).toContainText(
+    "データを空にできませんでした。ORA-02266: 表には有効な外部キーによって参照される一意キー/主キーが含まれています"
+  );
+  await expect(dialog.getByLabel("実行確認語")).toHaveValue("APP.INVOICES");
 });
 
 for (const mode of ["comment", "annotation"] as const) {
@@ -16552,6 +16772,7 @@ for (const material of [
     });
     const workbook = { name: "replacement.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from("fixture") };
     await file.setInputFiles(workbook);
+    await confirmMaterialReplace(page);
     try {
       await expect(refresh).toBeDisabled();
       await expect(file).toBeDisabled();
@@ -16563,6 +16784,7 @@ for (const material of [
     await expect(file).toBeEnabled();
     await expect(page.getByText("取込を再試行してください", { exact: true })).toBeVisible();
     await file.setInputFiles(workbook);
+    await confirmMaterialReplace(page);
     await expect(page.getByTestId(material.preview)).toContainText("新しい");
     await expect(page.getByTestId(material.preview)).not.toContainText("古い");
     await expect(refresh).toBeEnabled();
