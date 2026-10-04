@@ -3461,6 +3461,8 @@ const nl2sqlJa = {
   "metadataSql.input.extra": "追加入力",
   "metadataSql.execute.title": "SQL実行",
   "metadataSql.execute.hint": "生成された SQL を確認し、ADMIN_EXECUTE 入力後に Oracle へ適用します。",
+  "metadataSql.source.ociEnterpriseAi": "OCI Enterprise AI",
+  "metadataSql.source.deterministic": "規則ベース（AI 未使用）",
   "metadataSql.execute.loading": "生成結果を読み込んでいます",
   "metadataSql.execute.emptyTitle": "生成済み SQL がありません",
   "metadataSql.execute.emptyHint": "入力確認・SQL生成で SQL を生成すると、ここで確認できます。",
