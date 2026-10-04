@@ -10,6 +10,11 @@ from dataclasses import dataclass
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from pr_backend_core import configure_logging, create_app
+from pr_backend_core.api.validation import (
+    DEFAULT_VALIDATION_MESSAGE,
+    VALIDATION_ERROR_CODE,
+    validation_error_messages,
+)
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
@@ -295,14 +300,21 @@ async def request_validation_error_handler(
     request: Request,
     exc: RequestValidationError,
 ) -> JSONResponse:
-    """FastAPI/Pydantic の入力エラーを field pointer 付きで返す。"""
+    """FastAPI/Pydantic の入力エラーを field pointer 付きで返す。
 
+    `error_messages` は 3 製品共通の利用者向けの日本語の文（位置 + 文。自前の検証の文は
+    そのまま）、`problem.field_errors` は欄ごとの文と技術的な原文（#1065）。
+    """
+
+    errors = exc.errors()
+    messages = validation_error_messages(errors) or [DEFAULT_VALIDATION_MESSAGE]
     return api_problem_response(
         request,
         status_code=422,
-        detail="入力内容に誤りがあります。該当項目を確認してください。",
-        code="REQUEST_VALIDATION_FAILED",
-        field_errors=validation_field_problems(exc.errors()),
+        detail="\n".join(messages),
+        code=VALIDATION_ERROR_CODE,
+        field_errors=validation_field_problems(errors),
+        extra={"error_messages": messages},
     )
 
 

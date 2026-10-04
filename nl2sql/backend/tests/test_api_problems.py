@@ -141,4 +141,7 @@ def test_validation_error_uses_json_pointer_for_nested_array() -> None:
     )
 
     assert problems[0].pointer == "/items/1/name"
-    assert problems[0].message == "必須項目を入力してください。"
+    assert problems[0].message == "必須の項目です。入力してください。"
+    assert problems[0].location == "items[1].name"
+    assert problems[0].raw_location == "body.items.1.name"
+    assert problems[0].raw_message == "Field required"

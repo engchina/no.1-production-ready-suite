@@ -7,6 +7,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Literal, Self
 
+from pr_backend_core.api.validation import validation_error_messages
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -164,10 +165,9 @@ def parse_extraction_field_filter(value: str) -> list[ExtractionFieldCondition]:
     try:
         conditions = _EXTRACTION_FIELD_CONDITIONS.validate_json(value)
     except ValidationError as exc:
-        messages = [str(error.get("msg", "")) for error in exc.errors()]
-        raise ValueError(
-            "項目の条件の形式が不正です: " + "; ".join(message for message in messages if message)
-        ) from exc
+        # Pydantic の英語の文は出さず、条件の位置と日本語の文にする（#1065）。
+        messages = validation_error_messages(exc.errors(include_input=False))
+        raise ValueError("項目の条件の形式が不正です: " + " ".join(messages)) from exc
     if len(conditions) > MAX_EXTRACTION_FIELD_CONDITIONS:
         raise ValueError(f"項目の条件は {MAX_EXTRACTION_FIELD_CONDITIONS} 件までです。")
     return conditions

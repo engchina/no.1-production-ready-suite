@@ -1183,7 +1183,7 @@ def test_evaluation_compare_api_rejects_duplicate_experiment_ids() -> None:
             "評価ケースの id が重複しています: same",
         ),
         ([{"id": "  ", "query": "A"}], "評価ケースの id を入力してください。"),
-        ([{"id": "x" * 201, "query": "A"}], "cases.0.id"),
+        ([{"id": "x" * 201, "query": "A"}], "cases[0].id: 200 文字以内で入力してください。"),
     ],
     ids=["duplicate", "blank", "too-long"],
 )
