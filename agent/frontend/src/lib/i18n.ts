@@ -262,6 +262,7 @@ const agentJa = {
   "evaluation.set.removeCase": "ケース {number} を削除",
   "evaluation.set.questionRequired": "質問を入力してください。",
   "evaluation.set.expectedRequired": "期待する回答の要点を入力してください。",
+  "evaluation.set.caseIdDuplicate": "ほかのケースと同じ ID です。",
   "evaluation.set.expectedTools": "期待するツール",
   "evaluation.set.expectedToolsHelper": "任意。カンマ区切り（例: rag_search, nl2sql_query）。MCP 接続の名前は省けます。",
   "evaluation.summary.description": "{set}（{agent}・{version}）・{started} に開始。合格率は「正しい」と判定したケースの割合です（評価できなかったケースは不合格に数えます）。",

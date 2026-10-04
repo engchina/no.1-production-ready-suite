@@ -889,12 +889,18 @@ def _huggingface_settings_candidate(
     base: Settings,
     payload: HuggingFaceSettingsUpdate,
 ) -> Settings:
-    """更新 payload を適用した一時 Settings を作る。"""
+    """更新 payload を適用した一時 Settings を作る。
+
+    `model_copy` は validator を実行しないため、起動時の読み込みと同じ正規化（scheme の補完）を
+    ここで行う。正規化しないと、backend を再起動するまで scheme なしの endpoint が実行中の設定と
+    サービスの `HF_ENDPOINT` に渡り、モデルの DL が失敗する（#1018）。token は前後の空白を除き、
+    空白だけなら未入力（保存済みの値を保持）とする。
+    """
     updates = {
-        "huggingface_endpoint": payload.endpoint,
+        "huggingface_endpoint": Settings.normalize_huggingface_endpoint(payload.endpoint),
         "huggingface_token": _secret_value(
             current=base.huggingface_token,
-            update=payload.token,
+            update=None if payload.token is None else payload.token.strip(),
             clear=payload.clear_token,
         ),
     }
