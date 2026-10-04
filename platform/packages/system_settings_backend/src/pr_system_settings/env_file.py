@@ -77,14 +77,28 @@ def env_assignment_key(line: str) -> str | None:
     return match.group(1) if match else None
 
 
+# python-dotenv（pydantic-settings の `env_file` も同じ）は引用符の種類によらず `${NAME}` /
+# `${NAME:-既定値}` を展開し、`$` のエスケープを持たない。名前が空の `${:-$}` は
+# （名前が空の変数は無いので）常に既定値の `$` に展開されるため、値の `${` を `${:-$}{` と
+# 書けば、読み戻すと `${` に戻る（#1112）。
+_DOLLAR_BRACE = "${"
+_LITERAL_DOLLAR_BRACE = "${:-$}{"
+# 二重引用符の中で python-dotenv が元に戻すエスケープ（`\\` `\"` `\n` `\r`）。
+_DOUBLE_QUOTE_ESCAPES = str.maketrans({"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r"})
+
+
 def format_env_value(value: str) -> str:
-    """python-dotenv と shell の両方で読みやすい .env value へ整形する。"""
-    normalized = value.strip()
-    if not normalized:
+    """値を変えずに `.env` の 1 行へ書ける形にする（python-dotenv で読み戻すと同じ値になる）。
+
+    secret（パスワード・API キー）の前後の空白も値として残す。前後の空白を除くべき項目は、
+    呼び出し側（API の入力の検証）で除く。
+    """
+    if not value:
         return ""
-    if re.search(r"[\s#\"']", normalized):
-        return '"' + normalized.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return normalized
+    escaped = value.replace(_DOLLAR_BRACE, _LITERAL_DOLLAR_BRACE)
+    if re.search(r"[\s#\"'\\]", value):
+        return '"' + escaped.translate(_DOUBLE_QUOTE_ESCAPES) + '"'
+    return escaped
 
 
 def write_env_values(

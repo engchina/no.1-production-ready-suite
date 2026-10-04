@@ -220,7 +220,11 @@ async def test_job_failure_hides_exception_text(
     failed = await service.get(submitted.job_id)
     assert failed.status == "FAILED"
     assert failed.error_message is not None
-    assert "RuntimeError" in failed.error_message
+    # 例外のクラス名は 1 文目に入れず、末尾の「エラー種別: …」に分ける（画面は「詳細」に畳む）。
+    assert failed.error_message == (
+        "品質評価の実行中に予期しないエラーが発生したため、評価を中断しました。"
+        "サーバーのログを確認して、もう一度実行してください。 エラー種別: RuntimeError"
+    )
     assert "機密" not in failed.error_message
 
 

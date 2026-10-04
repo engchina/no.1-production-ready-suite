@@ -220,7 +220,9 @@ for (const scheme of ["light", "dark"] as const) {
     }
 
     await flow.getByRole("button", { name: "保存", exact: true }).click();
-    await expect(flow.getByText("工程の自動進行を保存しました。")).toBeVisible();
+    // 保存の成功は Toast（操作の行に常設の成功の表示を残さない。#992）。
+    await expect(page.getByText("工程の自動進行を保存しました。")).toBeVisible();
+    await expect(flow.getByText("工程の自動進行を保存しました。")).toHaveCount(0);
     expect(patches).toEqual([
       {
         auto_parse_after_preprocess_enabled: true,
@@ -263,3 +265,45 @@ test("権限のない設定画面へのリンクは出さない", async ({ page 
     items.getByRole("link", { name: "文書分割 を設定する画面を開く" })
   ).toHaveAttribute("href", "/settings/chunking");
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`工程の自動進行の保存に失敗したら、スイッチを残して操作の行に失敗を出す（#992, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockPipelineSettings(page);
+    await page.route("**/api/settings/pipeline", async (route) => {
+      if (route.request().method() !== "PATCH") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 500,
+        json: {
+          data: null,
+          error_messages: ["工程の自動進行の設定を backend/.env へ保存できませんでした。"],
+          warning_messages: [],
+        },
+      });
+    });
+    await page.goto("/settings/pipeline");
+
+    const items = page.getByTestId("pipeline-recipe-defaults");
+    const indexGate = items.getByRole("switch", { name: "Chunk 後に Embedding / 索引へ進む" });
+    await indexGate.click();
+    const actions = page.getByRole("group", { name: "工程の自動進行の操作" });
+    await expect(actions).toContainText("未保存の変更があります。");
+    await actions.getByRole("button", { name: "保存", exact: true }).click();
+
+    await expect(actions).toContainText("工程の自動進行の設定を backend/.env へ保存できませんでした。");
+    await expect(indexGate).toHaveAttribute("aria-checked", "false");
+    await expect(actions.getByRole("button", { name: "保存", exact: true })).toBeEnabled();
+    // 取消は「変更を破棄」で、保存値へ戻す。
+    await actions.getByRole("button", { name: "変更を破棄" }).click();
+    await expect(indexGate).toHaveAttribute("aria-checked", "true");
+    await expectNoPageOverflow(page);
+  });
+}

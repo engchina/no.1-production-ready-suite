@@ -49,6 +49,7 @@ import { StatementRunnerCard } from "../components/DbAdminShared";
 import { buildMetadataInputTexts } from "../metadataSql";
 import { useDbAdminObjects, useSchemaRefreshJob } from "../incrementalQueries";
 import { dbAdminObjectCountsFromPage } from "../dbAdminObjectCounts";
+import { useNumberDraft } from "../useNumberDraft";
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
 import {
   SchemaRefreshHeaderStatus,
@@ -1070,6 +1071,13 @@ function MetadataInputPanel({
   onExtraTextChange: (value: string) => void;
   onGenerate: () => void;
 }) {
+  // 入力中の文字を欄で持ち、0〜100 の整数のときだけ値を変える（空にしても即 0 にしない。#1103）。
+  const sampleLimitDraft = useNumberDraft(sampleLimit, {
+    min: 0,
+    max: 100,
+    integer: true,
+    onChange: onSampleLimitChange,
+  });
   return (
     <div className="grid gap-4">
       <DbObjectPanelHeader
@@ -1115,11 +1123,7 @@ function MetadataInputPanel({
                 type="number"
                 min={0}
                 max={100}
-                value={sampleLimit}
-                onChange={(event) => {
-                  const value = Number(event.currentTarget.value);
-                  onSampleLimitChange(Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0);
-                }}
+                {...sampleLimitDraft}
                 width="xs"
                 className="min-w-0"
               />

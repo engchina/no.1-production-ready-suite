@@ -104,7 +104,12 @@ app = create_app(
 async def project_http_exception_handler(
     request: Request, exc: StarletteHTTPException
 ) -> JSONResponse:
-    """Control Plane error code を envelope のまま機械可読に保つ。"""
+    """Control Plane error code を envelope のまま機械可読に保つ。
+
+    error code は `error_code` に分けて返し、`error_messages` は利用者に見せる文だけにする
+    （画面は `error_messages` をそのまま出すため、`agent_unpublished: …` のような code を
+    前に付けない。#911）。
+    """
     detail = exc.detail
     error_code: str | None = None
     error_details: dict[str, object] = {}
@@ -112,10 +117,7 @@ async def project_http_exception_handler(
         raw_code = detail.get("code")
         raw_message = detail.get("message")
         error_code = raw_code if isinstance(raw_code, str) else None
-        if isinstance(raw_message, str) and error_code:
-            messages = [f"{error_code}: {raw_message}"]
-        else:
-            messages = [raw_message] if isinstance(raw_message, str) else [str(detail)]
+        messages = [raw_message] if isinstance(raw_message, str) else [str(detail)]
         error_details = {
             str(key): value for key, value in detail.items() if key not in {"code", "message"}
         }

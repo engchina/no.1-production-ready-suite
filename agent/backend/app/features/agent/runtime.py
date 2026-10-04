@@ -13,7 +13,7 @@ import os
 import re
 import secrets
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import suppress
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -352,6 +352,30 @@ EVALUATION_DRY_RUN_MESSAGE = (
 )
 # 評価の Run の印（`metadata`）。組み込み Runtime は承認が要るツールを実行せずに続ける。
 EVALUATION_DRY_RUN_KEY = "evaluation_dry_run"
+# Control Plane が Run の `metadata` に付ける予約の key（#1130）。利用者が `POST /api/runs` で
+# 付けると、再開の状態（`_builtin_sdk_state`）・評価の dry-run・自動実行や MCP の出所を偽れる
+# ため、API の入口で拒否する。`_` で始まる key もすべて予約とする。品質評価・自動実行・MCP・
+# 再実行は `create_builtin_run` を直接呼ぶので付けられる。
+RESERVED_RUN_METADATA_KEYS = frozenset(
+    {
+        "agent_version",
+        EVALUATION_DRY_RUN_KEY,
+        "evaluation_job_id",
+        "evaluation_case_id",
+        "automation_id",
+        "automation_trigger",
+        "source",
+        "mcp_session",
+        "replayed_from_run_id",
+    }
+)
+
+
+def reserved_run_metadata_keys(metadata: Mapping[str, object]) -> list[str]:
+    """利用者が付けた `metadata` のうち、Control Plane の予約の key（並びは安定させる）。"""
+    return sorted(
+        key for key in metadata if key.startswith("_") or key in RESERVED_RUN_METADATA_KEYS
+    )
 
 
 class RunUsage(BaseModel):
@@ -575,6 +599,8 @@ class RuntimeToolCallAuditData(BaseModel):
     offset: int
     limit: int
     records: list[RuntimeToolCallAuditRecord]
+    # 監査に記録されたツール名（絞り込みの条件に依らない。画面のツール名の選択肢。#983）。
+    tool_names: list[str] = Field(default_factory=list)
 
 
 class AgentRuntimeRepositoryContract(Protocol):
@@ -791,6 +817,11 @@ class AgentRuntimeRepository:
     def cancel_run(self, run_id: str) -> RunState:
         with self._lock:
             run = self._require_run(run_id)
+            if _is_terminal(run.status):
+                # 終了した Run（完了・失敗・取消済み）は変えない。一覧の再取得の前に取消を
+                # 送った、品質評価の取消と完了が重なった、などで来ても、完了の結果を
+                # 取消済みで上書きしない（#911）。
+                return run.model_copy(deep=True)
             cancelled_approval_ids: list[str] = []
             run.status = RunStatus.CANCELLED
             run.updated_at = _now()
@@ -1838,8 +1869,25 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
                 if record is None:
                     continue
                 records.append(record)
+            tool_names = self._projection_tool_names(cursor)
 
-        return RuntimeToolCallAuditData(total=total, offset=offset, limit=limit, records=records)
+        return RuntimeToolCallAuditData(
+            total=total, offset=offset, limit=limit, records=records, tool_names=tool_names
+        )
+
+    def _projection_tool_names(self, cursor: Any) -> list[str]:
+        """監査に記録されたツール名（一覧と同じく Run のある step だけ。#983）。"""
+        tables = self._oracle_projection_tables
+        cursor.execute(
+            f"""
+            SELECT DISTINCT s.tool_name
+            FROM {tables["steps"]} s
+            JOIN {tables["runs"]} r ON r.run_id = s.run_id
+            WHERE s.tool_name IS NOT NULL
+            ORDER BY s.tool_name
+            """
+        )
+        return [str(row[0]) for row in cursor.fetchall() if row[0]]
 
     def _projection_tool_call_rows(
         self,
