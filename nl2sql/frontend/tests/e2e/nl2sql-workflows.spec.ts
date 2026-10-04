@@ -15207,6 +15207,69 @@ test("table and view management show DROP failures in the confirmation dialog", 
   await expect(dropViewDialog).toBeVisible();
 });
 
+test("テーブル・ビューの削除のダイアログは、実行中は閉じられない（データの切り詰めとそろえる）", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  const pending: Array<() => void> = [];
+  const holdUntilReleased = (path: string, sql: string) =>
+    page.route(path, async (route) => {
+      await new Promise<void>((resolve) => pending.push(resolve));
+      await fulfillJson(route, {
+        executed: false,
+        runtime: "oracle",
+        select_result: null,
+        statements: [
+          {
+            index: 1,
+            statement_type: "DROP",
+            status: "error",
+            sql,
+            row_count: null,
+            message: "",
+            elapsed_ms: 0,
+            error_message: "ORA-00054: リソース・ビジー",
+          },
+        ],
+        committed: false,
+        rolled_back: true,
+        warnings: [],
+        timing,
+      });
+    });
+  await holdUntilReleased("**/api/nl2sql/db-admin/drop-table", 'DROP TABLE "APP"."INVOICES" PURGE');
+  await holdUntilReleased("**/api/nl2sql/db-admin/drop-view", 'DROP VIEW "APP"."V_EMP_DEPT"');
+
+  const cases = [
+    { path: "/table-management", grid: "table-management-grid", target: "APP.INVOICES", actions: "table-management-detail-actions", dialogName: "DROP TABLE の確認" },
+    { path: "/view-management", grid: "view-management-grid", target: "APP.V_EMP_DEPT", actions: "view-management-detail-actions", dialogName: "DROP VIEW の確認" },
+  ];
+  for (const item of cases) {
+    await page.goto(item.path);
+    await expect(page.getByTestId(item.grid)).toBeVisible();
+    await page.getByRole("button", { name: `${item.target} を表示` }).click();
+    await clickObjectDetailAction(page, item.actions, "削除");
+    const dialog = page.getByRole("dialog", { name: item.dialogName });
+    await dialog.getByLabel("実行確認語").fill(item.target);
+    await dialog.getByRole("button", { name: "Drop 実行" }).click();
+    await expect.poll(() => pending.length).toBe(1);
+
+    // 実行中は「閉じる」「キャンセル」を押せず、ダイアログは開いたまま（結果を見失わない）。
+    const close = dialog.getByRole("button", { name: "閉じる" });
+    const cancel = dialog.getByRole("button", { name: "キャンセル" });
+    await expect(close).toBeDisabled();
+    await expect(cancel).toBeDisabled();
+    await close.click({ force: true });
+    await cancel.click({ force: true });
+    await expect(dialog).toBeVisible();
+
+    pending.shift()!();
+    await expect(dialog.getByText(/ORA-00054/)).toBeVisible();
+    await expect(close).toBeEnabled();
+    await cancel.click();
+    await expect(dialog).toHaveCount(0);
+  }
+});
+
 test("annotation management explains ORA-11548 before Oracle execution", async ({ page }) => {
   const api = await mockNl2SqlApi(page);
   await page.setViewportSize({ width: 1280, height: 900 });
