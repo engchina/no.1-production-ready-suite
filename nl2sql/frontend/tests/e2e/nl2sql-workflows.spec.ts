@@ -12764,6 +12764,51 @@ test("サンプルの種類変更中・取得失敗時は旧 SQL を実行でき
   await expectNoHorizontalScroll(page);
 });
 
+test("サンプルの取込が成功した後の取り直しの失敗は、実行の失敗として出さずスキーマの更新を追う", async ({ page }) => {
+  // #948: 取り直しの失敗を実行のボタンの直下に出すと、成功した取込が失敗したように見え、再実行を招く。
+  await mockNl2SqlApi(page);
+  let infoFails = false;
+  const jobRequests: string[] = [];
+  await page.route("**/api/nl2sql/sample-data?dataset=sales", (route) => {
+    if (infoFails) {
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "サンプルの状態を取得できませんでした。" }) });
+    }
+    return fulfillJson(route, { dataset: "sales", runtime: "oracle", profile_id: "", confirmation: "ADMIN_EXECUTE",
+      objects: ["SALES_ORDER"], imported_objects: jobRequests.length > 0 ? ["SALES_ORDER"] : [], warnings: [],
+      sql: { tables: ["CREATE TABLE SALES_ORDER (ID NUMBER)"], views: [], data: [], delete: ["DROP TABLE SALES_ORDER"] } });
+  });
+  await page.route("**/api/nl2sql/sample-data/import", (route) => {
+    infoFails = true;
+    return fulfillJson(route, { dataset: "sales", operation: "import", step: "all", runtime: "oracle", executed: true,
+      objects: ["SALES_ORDER"], profile_id: "", timing, warnings: [], schema_refresh_job_id: "schema-refresh-948",
+      statements: [{ index: 1, statement_type: "CREATE", status: "success", sql: "CREATE TABLE SALES_ORDER (ID NUMBER)", error_message: "" }] });
+  });
+  await page.route("**/api/schema/refresh-jobs/schema-refresh-948", (route) => {
+    jobRequests.push(route.request().url());
+    return fulfillJson(route, { job_id: "schema-refresh-948", status: "done", created_at: "2026-10-04T00:00:00.000Z",
+      scanned_objects: 1, changed_objects: 1, deleted_objects: 0, catalog_version: 2, error_code: "" });
+  });
+  await page.goto("/sample-data");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "サンプルデータの種類" }), "sales");
+  await expect(page.locator("pre")).toContainText("SALES_ORDER");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "取り込み実行", exact: true }).click();
+
+  const actionSection = page.locator('section[aria-labelledby="sample-data-action-heading"]');
+  await expect(page.getByText("サンプルの状態を取得できませんでした。", { exact: true })).toBeVisible();
+  // 実行のボタンの直下（実行の失敗の場所）には出さない。読込の失敗としてページ上部の案内に出す。
+  await expect(actionSection.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByText("実行済み", { exact: true }).first()).toBeVisible();
+  // 取り直しに失敗しても、backend が投入したスキーマの更新の job は追う。
+  await expect.poll(() => jobRequests.length).toBeGreaterThan(0);
+  await expectNoHorizontalScroll(page);
+
+  infoFails = false;
+  await clickPageHeaderAction(page, "sample-data-actions", "表示を更新");
+  await expect(page.getByText("サンプルの状態を取得できませんでした。", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("sample-data-imported-count")).toHaveText("1");
+});
+
 test("同名の既存オブジェクトと衝突するサンプルは警告し、旧名の残存を案内する", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.route("**/api/nl2sql/sample-data?dataset=sales", (route) => fulfillJson(route, {
