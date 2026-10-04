@@ -2095,6 +2095,7 @@ const nl2sqlJa = {
   "feedbackManagement.appFeedback.adminFeedbackRequired": "「違う」のときは管理者レビューコメントを入力してください。",
   "feedbackManagement.appFeedback.copyUserContent": "利用者コメントを反映",
   "feedbackManagement.appFeedback.registerSelectAi": "Select AI feedback に登録する",
+  "feedbackManagement.appFeedback.registerSelectAiHint": "対象の履歴の業務プロファイルの Select AI profile に登録します。",
   "feedbackManagement.appFeedback.selectAiResponse": "Select AI response SQL",
   "feedbackManagement.appFeedback.selectAiResponsePlaceholder": "Select AI feedback に登録する response SQL",
   "feedbackManagement.appFeedback.openCandidate": "学習候補で確認",
