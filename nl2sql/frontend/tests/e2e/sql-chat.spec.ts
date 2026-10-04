@@ -725,3 +725,148 @@ test("続きの会話でも、送った質問は投入の応答を待たずに�
   await expect(page.getByTestId("sql-chat-turn")).toHaveCount(2);
   await expect(pendingTurn).toHaveCount(0);
 });
+
+/**
+ * 応答だけが届かないジョブの投入（backend はジョブを作り終える）。job ID は画面が決めた client_job_id で、
+ * 同じ ID の再送は作成済みのジョブを返す（backend の `_replay_client_job` と同じ）。
+ */
+async function loseJobSubmitResponse(
+  page: Page,
+  state: Awaited<ReturnType<typeof setup>>,
+) {
+  const control = { lose: true };
+  await page.route("**/api/nl2sql/jobs", (route) => {
+    const body = route.request().postDataJSON();
+    state.requests.push(body);
+    const id = String(body.client_job_id);
+    if (!state.turns.some((turn) => turn.job_id === id))
+      state.turns.push({
+        job_id: id,
+        question: body.question,
+        status: "done",
+        created_at: now,
+        steps: [],
+        result: {
+          generated_sql: "SELECT CATEGORY FROM APP.SALES",
+          original_question: body.question,
+          explanation: "",
+          safety: { is_safe: true },
+        },
+      });
+    if (control.lose) return route.abort("failed");
+    return route.fulfill({
+      json: { data: { job_id: id, status: "done", created_at: now, steps: [] } },
+    });
+  });
+  // 取り直しも届かない（通信が戻る前）。
+  await page.route("**/api/nl2sql/jobs/*", (route) => route.abort("failed"));
+  return control;
+}
+
+test("応答が届かなかった送信のジョブが会話に入っていれば、質問を二重に出さず再送信も出さない (#900 / #907)", async ({
+  page,
+}) => {
+  const state = await setup(page);
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  await composer.fill("カテゴリ別売上");
+  await composer.press("Enter");
+  await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
+
+  await loseJobSubmitResponse(page, state);
+  await composer.fill("多い順にして");
+  await composer.press("Enter");
+  // 失敗の後に取り直した会話に、作成済みのジョブが入る。送った質問は 1 回だけ出す。
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(2);
+  await expect(page.getByTestId("sql-chat-pending-turn")).toHaveCount(0);
+  await expect(
+    page
+      .getByTestId("sql-chat-conversation")
+      .getByText("多い順にして", { exact: true }),
+  ).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "再送信" })).toHaveCount(0);
+  expect(state.requests).toHaveLength(2);
+  expect(state.turns).toHaveLength(2);
+});
+
+test("応答が届かなかった送信の再送信は同じ job ID で送り、作成済みのジョブを二重に生成しない (#900 / #907)", async ({
+  page,
+}) => {
+  const state = await setup(page);
+  const control = await loseJobSubmitResponse(page, state);
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  await composer.fill("カテゴリ別売上");
+  await composer.press("Enter");
+  const failure = page.getByTestId("sql-chat-send-error");
+  await expect(failure).toBeVisible();
+
+  control.lose = false;
+  await failure.getByRole("button", { name: "再送信" }).click();
+  await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
+  await expect(page.getByTestId("sql-chat-pending-turn")).toHaveCount(0);
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+  expect(state.requests).toHaveLength(2);
+  expect(state.requests[1]).toMatchObject({
+    question: "カテゴリ別売上",
+    client_job_id: state.requests[0].client_job_id,
+  });
+  expect(state.turns).toHaveLength(1);
+});
+
+test("会話の履歴と会話の読み込み中は、文言と経過時間を出し内容の形の Skeleton で覆う", async ({
+  page,
+}) => {
+  const state = await setup(page);
+  state.turns.push({
+    job_id: "chat-1",
+    question: "カテゴリ別売上",
+    status: "done",
+    created_at: now,
+    steps: [],
+    result: {
+      generated_sql: "SELECT CATEGORY FROM APP.SALES",
+      original_question: "カテゴリ別売上",
+      explanation: "",
+      safety: { is_safe: true },
+    },
+  });
+  let release: () => void = () => undefined;
+  const opened = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/nl2sql/chats**", async (route) => {
+    await opened;
+    await route.fallback();
+  });
+  await page.goto("/chat");
+  await page.getByRole("button", { name: "会話の履歴", exact: true }).click();
+  const historyLoading = page.getByTestId("sql-chat-history-loading");
+  await expect(historyLoading).toContainText("会話の履歴を読み込んでいます");
+  await expect(historyLoading.locator(".animate-pulse").first()).toBeVisible();
+  release();
+  await page
+    .getByTestId("sql-chat-history")
+    .getByRole("button", { name: /カテゴリ別売上/ })
+    .click();
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+
+  // 再読込で開いている会話を読み込む間（会話の内容の取得を止める）。
+  let releaseConversation: () => void = () => undefined;
+  const conversationOpened = new Promise<void>((resolve) => {
+    releaseConversation = resolve;
+  });
+  await page.route("**/api/nl2sql/chats/*", async (route) => {
+    await conversationOpened;
+    await route.fallback();
+  });
+  await page.reload();
+  const conversationLoading = page.getByTestId("sql-chat-conversation-loading");
+  await expect(conversationLoading).toContainText("会話を読み込んでいます");
+  await expect(
+    conversationLoading.locator(".animate-pulse").first(),
+  ).toBeVisible();
+  releaseConversation();
+  await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
+  await expect(conversationLoading).toHaveCount(0);
+});

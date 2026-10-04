@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Literal
 
@@ -33,6 +33,7 @@ from app.features.agent.config import runtime_config_store
 from app.features.agent.skills import skill_registry
 from app.features.agent.tools import (
     ExternalMcpToolInfo,
+    ExternalToolError,
     ToolCall,
     ToolInvocationContext,
     ToolPolicy,
@@ -715,3 +716,128 @@ def test_connection_tools_endpoint_uses_logged_in_user(
     assert "rag_search" in names
     assert mcp.requests[-1]["method"] == "tools/list"
     assert mcp.requests[-1]["claims"]["sub"] == viewer.user_uuid
+
+
+# ---------------------------------------------------------------------------
+# 利用者向けの失敗の文（#1014）と、組み込みの接続の認証方式
+# ---------------------------------------------------------------------------
+
+
+def _oauth_transport(
+    monkeypatch: MonkeyPatch, handle: Callable[[httpx.Request], httpx.Response]
+) -> None:
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        "app.features.agent.tools.httpx.Client",
+        lambda timeout, **_kwargs: real_client(
+            transport=httpx.MockTransport(handle), timeout=timeout
+        ),
+    )
+
+
+def _raise_timeout(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("timed out", request=request)
+
+
+def _raise_connect_error(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("connection refused", request=request)
+
+
+def _unauthorized(_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(401, json={"error": "invalid_client"})
+
+
+def _html(_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, text="<html>")
+
+
+def _no_access_token(_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json={"token_type": "bearer"})
+
+
+@pytest.mark.parametrize(
+    ("handle", "expected"),
+    [
+        (_unauthorized, "HTTP 401"),
+        (_html, "JSON ではありません"),
+        (_no_access_token, "access_token"),
+        (_raise_timeout, "秒以内に終わりませんでした"),
+        (_raise_connect_error, "接続できません"),
+    ],
+    ids=["http-401", "not-json", "no-access-token", "timeout", "unreachable"],
+)
+def test_oauth_token_failures_are_japanese(
+    monkeypatch: MonkeyPatch,
+    handle: Callable[[httpx.Request], httpx.Response],
+    expected: str,
+) -> None:
+    _oauth_transport(monkeypatch, handle)
+    monkeypatch.setattr(tools_module, "_mcp_oauth_token_cache", {})
+
+    with pytest.raises(ExternalToolError) as caught:
+        tools_module._mcp_oauth_bearer_token(
+            token_url="https://idp.example.test/token",
+            client_id="client-1014",
+            client_secret="secret-1014",  # nosec B106 - テスト用
+            scope=None,
+            timeout_seconds=3,
+        )
+
+    message = caught.value.message
+    assert expected in message
+    assert "OAuth" in message
+    assert "external MCP" not in message
+    # 秘密は文にも details にも出さない。
+    assert "secret-1014" not in message
+    assert "secret-1014" not in json.dumps(caught.value.details, ensure_ascii=False)
+
+
+def test_incomplete_oauth_credentials_are_japanese() -> None:
+    with pytest.raises(ExternalToolError) as caught:
+        tools_module._mcp_oauth_bearer_token(
+            token_url="https://idp.example.test/token",
+            client_id="client-1014",
+            client_secret=None,
+            scope=None,
+            timeout_seconds=3,
+        )
+    assert "そろっていません" in caught.value.message
+    assert "external MCP" not in caught.value.message
+
+
+def test_invalid_mcp_responses_are_japanese() -> None:
+    with pytest.raises(ExternalToolError) as schema_error:
+        tools_module._mcp_jsonrpc_response({"jsonrpc": "2.0", "id": 1, "result": "ok"})
+    assert "JSON-RPC の形式ではありません" in schema_error.value.message
+
+    response = httpx.Response(200, json=["not", "an", "object"])
+    with pytest.raises(ExternalToolError) as body_error:
+        tools_module._response_json_object(
+            response, service_code="mcp", service_label="MCP 接続「erp」", attempt=1
+        )
+    assert body_error.value.message == "MCP 接続「erp」の応答が JSON の object ではありません。"
+
+
+def test_builtin_connection_auth_mode_cannot_be_changed() -> None:
+    before = runtime_config_store.get_mcp("rag")
+
+    changed = client.patch("/api/settings/mcp-connections/rag", json={"auth_mode": "none"})
+    audience = client.patch(
+        "/api/settings/mcp-connections/rag", json={"service_audience": "other-product"}
+    )
+    # 今と同じ値は受け付ける（画面は組み込みの接続に認証方式を送らない）。
+    same = client.patch(
+        "/api/settings/mcp-connections/rag",
+        json={"auth_mode": "service_token", "service_audience": "rag", "timeout_seconds": 9},
+    )
+
+    try:
+        assert changed.status_code == 400
+        assert "認証方式" in changed.json()["error_messages"][0]
+        assert audience.status_code == 400
+        assert same.status_code == 200, same.text
+        after = runtime_config_store.get_mcp("rag")
+        assert after.effective_auth_mode() == "service_token"
+        assert after.audience() == "rag"
+    finally:
+        runtime_config_store.upsert_mcp_server("rag", timeout_seconds=before.timeout_seconds)

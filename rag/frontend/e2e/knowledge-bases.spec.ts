@@ -582,6 +582,65 @@ for (const viewport of [
   });
 }
 
+// 200 件を超える追加は 200 件ずつ送る。2 回目以降で失敗しても、それまでの分は追加済みなので、
+// 所属文書の一覧を取り直し、何件まで追加できたかを出して、残りだけを選択に残す。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`文書の追加が途中で失敗しても、追加できた分を一覧に出し件数を知らせる (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const state = createKnowledgeBaseState();
+    addCandidateDocuments(state, 300);
+    await mockKnowledgeBaseApi(page, state);
+    const batches: number[] = [];
+    // 2 回目の送信（201 件目以降）だけ失敗させる。1 回目は通常の mock（所属を追加する）へ渡す。
+    await page.route("**/api/knowledge-bases/kb-1/documents", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      const payload = route.request().postDataJSON() as { document_ids: string[] };
+      batches.push(payload.document_ids.length);
+      if (batches.length === 1) return route.fallback();
+      await route.fulfill({
+        status: 503,
+        json: { data: null, error_messages: ["一時的に利用できません。"], warning_messages: [] },
+      });
+    });
+
+    await page.goto("/knowledge-bases/kb-1");
+    const pagination = page.getByTestId("knowledge-base-documents-pagination");
+    const toggle = page.getByRole("button", { name: "文書を追加", exact: true });
+    await toggle.click();
+    const picker = page.getByTestId("knowledge-base-add-documents");
+    const footer = picker.getByTestId("knowledge-base-add-documents-footer");
+    await expect(footer).toContainText("100 / 302 件を表示");
+    await picker.getByRole("button", { name: "さらに読み込む" }).click();
+    await expect(footer).toContainText("200 / 302 件を表示");
+    await picker.getByRole("button", { name: "さらに読み込む" }).click();
+    await expect(footer).toContainText("300 / 302 件を表示");
+    await picker.getByRole("button", { name: "表示中をすべて選択" }).click();
+    // policy.txt は追加済みで選べないため 299 件。
+    await expect(footer).toContainText("選択 299 件");
+
+    await picker.getByRole("button", { name: "選択した 299 件を追加" }).click();
+    await expect
+      .poll(() => batches)
+      .toEqual([200, 99]);
+    await expect(
+      page.getByText("299 件のうち 200 件を追加しました。残りの 99 件は追加できませんでした。").first()
+    ).toBeVisible();
+    await expect(page.getByText("一時的に利用できません。").first()).toBeVisible();
+    // 追加できた分は所属文書の一覧に出る（失敗しても一覧を取り直す）。
+    await expect(pagination).toContainText("/ 201 件");
+    // 追加できなかった残りだけを選択に残し、もう一度追加できる。
+    await expect(picker).toBeVisible();
+    await expect(footer).toContainText("選択 99 件");
+    await expect(picker.getByRole("button", { name: "選択した 99 件を追加" })).toBeEnabled();
+    await expectNoPageOverflow(page);
+  });
+}
+
 test("所属文書は一覧の中を検索でき、検索語を変えると 1 ページ目に戻る", async ({ page }) => {
   const state = createKnowledgeBaseState();
   const kb = state.knowledgeBases[0];
@@ -880,6 +939,40 @@ test("アーカイブ済みの詳細は読み取り専用で、保存できな�
   await expect(page.locator("[data-page-header-actions]").getByRole("button", { name: "保存", exact: true })).toBeDisabled();
   // アーカイブ済みには出せる操作がないため、操作のバーごと出さない。
   await expect(page.getByTestId("knowledge-base-detail-actions")).toHaveCount(0);
+});
+
+// アーカイブ済みは文書の追加・解除ができない（案内のとおり、所属文書の行に「外す」を出さない）。
+// 検索テストは索引済みの文書があっても使えないので、理由はアーカイブ済みであることを示す。
+test("アーカイブ済みの詳細は所属文書を外す操作を出さず、検索テストはアーカイブ済みを理由に示す", async ({
+  page,
+}) => {
+  const state = createKnowledgeBaseState();
+  state.knowledgeBases.push(
+    makeKnowledgeBase({
+      id: "kb-old",
+      name: "旧規程",
+      description: "旧版",
+      status: "ARCHIVED",
+      document_count: 1,
+      indexed_document_count: 1,
+    })
+  );
+  state.documents.push(
+    makeDocument({
+      id: "doc-old",
+      file_name: "old-policy.txt",
+      status: "INDEXED",
+      knowledge_bases: [{ id: "kb-old", name: "旧規程" }],
+    })
+  );
+  await mockKnowledgeBaseApi(page, state);
+  await page.goto("/knowledge-bases/kb-old");
+
+  await expect(page.getByTestId("knowledge-base-documents-list")).toContainText("old-policy.txt");
+  await expect(page.getByTestId("knowledge-base-document-actions-doc-old")).toHaveCount(0);
+  await expect(page.getByTestId("knowledge-base-add-documents-toggle")).toHaveCount(0);
+  await expect(page.getByText("アーカイブ済みのナレッジベースでは検索テストを行えません。")).toBeVisible();
+  await expect(page.getByText("索引済みの文書がありません。")).toHaveCount(0);
 });
 
 /** エディタの「一覧へ戻る」。ページの左上（タイトルの上）にあり、375px でもメニューに畳まない（#618）。 */

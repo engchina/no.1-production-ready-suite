@@ -13,6 +13,7 @@ import {
   ProcessingIndicator,
   Skeleton,
   SelectField,
+  TimedLoadingState,
   type SelectFieldOption,
   ExecutionConfirmationField,
   useActionPending,
@@ -143,10 +144,19 @@ export function SelectAiCredentialCard() {
       </CardHeader>
       <CardContent className="space-y-5 p-6">
         {status.isPending ? (
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Skeleton className="h-20 w-full rounded-md" />
-            <Skeleton className="h-20 w-full rounded-md" />
-          </div>
+          // 読み込み中は経過時間と、要約・リージョン・確認語の行の形の Skeleton を出す（UX 契約 messaging.md §3.6）。
+          <TimedLoadingState
+            label={t("settings.database.selectAiCredential.loading")}
+            operationKey="select-ai-credential-status"
+            placement="panel"
+            testId="select-ai-credential-loading"
+          >
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Skeleton className="h-20 w-full rounded-md" />
+              <Skeleton className="h-20 w-full rounded-md" />
+            </div>
+            <Skeleton className="h-24 w-full rounded-md" />
+          </TimedLoadingState>
         ) : !data ? (
           <ErrorState
             message={statusError}

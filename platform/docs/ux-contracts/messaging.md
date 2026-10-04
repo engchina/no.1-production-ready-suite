@@ -464,6 +464,18 @@ header           : StatusBadge（エンティティの状態の正本 = P1）
 3. **技術的な詳細**（API の key/value、エラーコード、エラー種別、request ID）は「詳細」（`Disclosure`）に畳む。**失敗のときだけ開いて**出し、成功のときは閉じる（§9 P3）。backend が本文の末尾に付けた「エラーコード: …」も本文から分けて「詳細」に出す。
 4. 同じ値を、要約と詳細で二重に出さない。
 
+#### 10.3.1 API の失敗（応答が届かなかった失敗を含む。#900 / #906）
+
+- 画面は `error.message` を直接出さない。API の失敗は `packages/ui` の部品と関数で出す。
+  - 失敗の面（Banner）: `ApiErrorBanner`（要約・次の操作・開いた「詳細」）。
+  - 領域の取得の失敗（§3.6）: `ApiErrorState`（`ErrorState` に「詳細」を足したもの。再試行付き）。
+  - 1 つの文しか出せない所（Toast・`FormStatus`・`SaveErrorBanner`）: `apiErrorMessage(error, 既定の文)`。
+  - 要約・次の操作・詳細を自分で並べる所: `presentApiError(error, 既定の文)`。
+- **応答が届かなかった失敗**（画面側の待ち時間の上限を超えた timeout・サーバーに接続できない通信断）は、各製品の API のラッパー（fetch を直接呼ぶ stream の client を含む）が `ApiTransportError` にする。要約は「サーバーの応答が N 秒以内に返りませんでした。」「サーバーに接続できませんでした。」、次の操作は「画面を更新して結果を確かめ…」「ネットワークの接続とサーバーの起動状態を確かめてから…」。ブラウザの英語の文（`Failed to fetch`・`signal timed out`・`NetworkError when attempting to fetch resource.` など）は「詳細」の「元のメッセージ」にだけ出す。利用者の中止（`AbortError`）は変換しない。
+  - RAG は画面の多くが `error instanceof ApiError` で分けるため、`ApiTransportError` を `cause` に包んだ `ApiError`（timeout は 408、通信断は 0）で投げる。NL2SQL・Agent は `ApiTransportError` をそのまま投げる。どちらも `presentApiError` が同じ形で出す。
+- **backend の失敗**は、製品の `ApiError` が `toApiErrorPresentation()`（`httpApiErrorPresentation`）で、backend の利用者向けの文を要約に、HTTP ステータス・エラーコード・request ID を「詳細」に分ける。
+- JavaScript の組み込みの例外（`TypeError` / `SyntaxError` など。文が英語）は、画面の既定の文（「〜を読み込めませんでした。」）にし、元の文は「詳細」に出す。
+
 ### 10.4 消す時期
 
 - 結果は次の実行まで、または**関係する入力を変えるまで**残す（入力を変えたら、その入力の結果を消す）。数秒で自動的に消さない（読み終える前に消えるため）。
