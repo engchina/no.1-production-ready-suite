@@ -25,6 +25,7 @@ import {
   PageBody,
   RowTitleButton,
   TextField,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 import {
   agentApi,
@@ -70,7 +71,7 @@ export function PluginMarketplacesPage() {
       void invalidate();
       void queryClient.invalidateQueries({ queryKey: ["marketplace-plugins", id] });
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
   const deleteMutation = useMutation({
     mutationFn: (id: string) => agentApi.deletePluginMarketplace(id),
@@ -78,7 +79,7 @@ export function PluginMarketplacesPage() {
       toast.success(t("marketplaces.deleted"));
       void invalidate();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
 
   async function remove(source: MarketplaceSource) {
@@ -314,7 +315,7 @@ function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded
       <PageBody wide className="space-y-6">
         {/* 追加の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
         <SaveErrorBanner
-          message={addMutation.error ? (addMutation.error as Error).message : null}
+          message={addMutation.error ? apiErrorMessage(addMutation.error, t("common.error.operation")) : null}
           attemptKey={addMutation.submittedAt}
           testId="marketplace-add-error"
         />
@@ -489,7 +490,7 @@ function MarketplaceDetail({
     onMutate: () => setReview(null),
     mutationFn: (pluginId: string) => agentApi.previewMarketplacePlugin(source.id, pluginId),
     onSuccess: (preview, pluginId) => setReview({ marketplaceId: source.id, pluginId, preview }),
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
   const listing = useQuery({
     queryKey: ["marketplace-plugins", source.id],
@@ -510,7 +511,7 @@ function MarketplaceDetail({
       void listing.refetch();
     },
     onError: (error) => {
-      toast.error((error as Error).message);
+      toast.error(apiErrorMessage(error, t("common.error.operation")));
       if (error instanceof ApiError && error.status === 409) setReview(null);
     },
   });

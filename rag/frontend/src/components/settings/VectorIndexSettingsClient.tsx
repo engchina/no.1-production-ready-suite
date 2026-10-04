@@ -15,7 +15,7 @@ import {
 import { useState } from "react";
 import { Boxes, CheckCircle2, Database, RotateCcw, Save } from "lucide-react";
 
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import { SettingsPreviewCard } from "@/components/settings/SettingsPreviewPanels";
 import {
   ApiError,
@@ -71,12 +71,9 @@ export function VectorIndexSettingsClient() {
   if (query.isError) {
     return (
       <PageBody wide>
-        <ErrorState
-          message={
-            query.error instanceof ApiError
-              ? query.error.message
-              : t("settings.vectorIndex.loadError")
-          }
+        <ApiErrorState
+          error={query.error}
+          fallback={t("settings.vectorIndex.loadError")}
           onRetry={() => void query.refetch()}
         />
       </PageBody>

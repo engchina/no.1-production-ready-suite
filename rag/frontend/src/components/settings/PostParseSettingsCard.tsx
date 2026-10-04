@@ -1,11 +1,11 @@
 import {
-  Button,
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
   Disclosure,
+  FormActionBar,
   FormStatus,
   StatusBadge,
   Switch,
@@ -22,6 +22,7 @@ import { useLeaveGuard } from "@/lib/leave-guard";
 import { useExtractionFieldsSettings, useUpdateParserAdapterSettings } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
+import { toast } from "@/lib/toast";
 
 import { AnswerPromptPanel } from "./AnswerPromptEditor";
 import { ExtractionFieldsEditor } from "./ExtractionFieldsEditor";
@@ -85,7 +86,7 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
     if (sameForm(base, form)) setForm(saved);
   }
   const dirty = !sameForm(form, saved);
-  useLeaveGuard(dirty);
+  useLeaveGuard(dirty, save.isPending);
   const fieldsQuery = useExtractionFieldsSettings();
   const fieldCount = fieldsQuery.data?.fields.length;
   const usesStandardFields = fieldsQuery.data?.uses_standard === true;
@@ -96,11 +97,14 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
   }
 
   function submit() {
+    if (save.isPending) return;
     save.mutate(form, {
       onSuccess: (data) => {
         const next = formFromSettings(data);
         setBase(next);
         setForm(next);
+        // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
+        toast.success(t("settings.parserAdapters.postParse.saved"));
       },
     });
   }
@@ -206,35 +210,29 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
             );
           })}
         </ol>
-        <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:flex-wrap sm:items-center">
-          <Button
-            type="button"
-            icon={Save}
-            loading={save.isPending}
-            disabled={!dirty}
-            onClick={submit}
-            className="w-full sm:w-auto"
-          >
-            {t("settings.parserAdapters.postParse.save")}
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            icon={RotateCcw}
-            disabled={!dirty || save.isPending}
-            onClick={reset}
-            className="w-full sm:w-auto"
-          >
-            {t("settings.parserAdapters.actions.reset")}
-          </Button>
-          <div className="min-h-6">
-            {dirty ? (
-              <FormStatus tone="warning" message={t("settings.parserAdapters.actions.unsaved")} />
-            ) : null}
-            {save.isSuccess && !dirty ? (
-              <FormStatus tone="success" message={t("settings.parserAdapters.postParse.saved")} />
-            ) : null}
-            {save.isError ? (
+        <FormActionBar
+          ariaLabel={t("settings.parserAdapters.postParse.actionsLabel")}
+          primaryActions={[
+            {
+              id: "save",
+              label: t("settings.parserAdapters.postParse.save"),
+              icon: Save,
+              loading: save.isPending,
+              disabled: !dirty,
+              onClick: submit,
+            },
+          ]}
+          secondaryActions={[
+            {
+              id: "reset",
+              label: t("settings.parserAdapters.actions.reset"),
+              icon: RotateCcw,
+              disabled: !dirty || save.isPending,
+              onClick: reset,
+            },
+          ]}
+          status={
+            save.isError ? (
               <FormStatus
                 tone="danger"
                 message={
@@ -243,9 +241,11 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
                     : t("settings.parserAdapters.postParse.saveError")
                 }
               />
-            ) : null}
-          </div>
-        </div>
+            ) : dirty ? (
+              <FormStatus tone="warning" message={t("settings.parserAdapters.actions.unsaved")} />
+            ) : null
+          }
+        />
       </CardContent>
     </Card>
   );

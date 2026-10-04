@@ -58,8 +58,6 @@ export const ja = {
   "common.cardError.description":
     "画面の描画中に問題が発生しました。再試行しても解消しない場合は、ページを再読み込みしてください。他の項目は引き続き利用できます。",
   "common.required": "必須",
-  "common.api.timeout":
-    "API の応答が {seconds} 秒以内に返りませんでした。バックエンドとデータベースの起動状態を確認して再試行してください。",
 
   "settings.preview.copy.copied": "コピーしました",
   "settings.preview.copy.failed": "コピーできませんでした",
@@ -236,11 +234,12 @@ export const ja = {
   "settings.parserAdapters.effectiveOrder": "実行順",
   "settings.parserAdapters.noEffectiveOrder": "外部解析方式なし",
   "settings.parserAdapters.source": "設定元",
-  "settings.parserAdapters.loadError": "文書解析設定を取得できませんでした。",
-  "settings.parserAdapters.saveError": "文書解析設定を保存できませんでした。",
+  "settings.parserAdapters.loadError": "文書解析の設定を取得できませんでした。",
+  "settings.parserAdapters.saveError": "文書解析の設定を保存できませんでした。",
+  "settings.parserAdapters.actions.label": "文書解析の設定の操作",
   "settings.parserAdapters.actions.save": "保存",
-  "settings.parserAdapters.actions.reset": "元に戻す",
-  "settings.parserAdapters.actions.saved": "文書解析設定を保存しました。",
+  "settings.parserAdapters.actions.reset": "変更を破棄",
+  "settings.parserAdapters.actions.saved": "文書解析の設定を保存しました。",
   "settings.parserAdapters.actions.unsaved": "未保存の変更があります。",
   "settings.parserAdapters.postParse.title": "解析後の処理",
   "settings.parserAdapters.postParse.description":
@@ -260,6 +259,7 @@ export const ja = {
     "項目の定義が 0 件で保存されているため、ナレッジベースで項目を定義していない文書からは何も抽出しません。下の項目の定義で項目を追加するか、「標準の項目に戻す」を使ってください。",
   "settings.parserAdapters.postParse.navigationSummary.hint":
     "解析した文書の見出しの階層から章節の木を作り、章節ごとの要約を OCI Enterprise AI で作ります。章節をたどる検索と段階的な表示に使います。章節ごとにモデルの呼び出しがかかります（上限あり）。",
+  "settings.parserAdapters.postParse.actionsLabel": "解析後の処理の操作",
   "settings.parserAdapters.postParse.save": "解析後の処理を保存",
   "settings.parserAdapters.postParse.saved": "解析後の処理を保存しました。",
   "settings.parserAdapters.postParse.saveError": "解析後の処理を保存できませんでした。",
@@ -370,11 +370,12 @@ export const ja = {
   "settings.chunking.params.contextHeaderHint":
     "文書名と章節パスを embedding / キーワード索引へ追加します。表示本文と引用は変わりません。",
   "settings.chunking.actions.save": "保存",
-  "settings.chunking.actions.saved": "文書分割設定を保存しました。",
+  "settings.chunking.actions.label": "文書分割の設定の操作",
+  "settings.chunking.actions.saved": "文書分割の設定を保存しました。",
   "settings.chunking.actions.reset": "変更を破棄",
   "settings.chunking.actions.unsaved": "未保存の変更があります。",
-  "settings.chunking.loadError": "文書分割設定を取得できませんでした。",
-  "settings.chunking.saveError": "文書分割設定を保存できませんでした。",
+  "settings.chunking.loadError": "文書分割の設定を取得できませんでした。",
+  "settings.chunking.saveError": "文書分割の設定を保存できませんでした。",
   "settings.pipeline.subtitle":
     "ファイル準備から回答生成まで、各工程の設定を処理順にまとめて確認・移動できます。",
   "settings.pipeline.phase.ingestion": "ナレッジ構築",
@@ -453,11 +454,12 @@ export const ja = {
   "settings.preprocess.profile.pii_redact.description":
     "テキストの氏名・メールアドレス・電話番号などの個人情報(PII)をマスクしてから解析します。",
   "settings.preprocess.actions.save": "保存",
-  "settings.preprocess.actions.saved": "前処理設定を保存しました。",
+  "settings.preprocess.actions.label": "ファイル準備の設定の操作",
+  "settings.preprocess.actions.saved": "ファイル準備の設定を保存しました。",
   "settings.preprocess.actions.reset": "変更を破棄",
   "settings.preprocess.actions.unsaved": "未保存の変更があります。",
-  "settings.preprocess.loadError": "前処理設定を取得できませんでした。",
-  "settings.preprocess.saveError": "前処理設定を保存できませんでした。",
+  "settings.preprocess.loadError": "ファイル準備の設定を取得できませんでした。",
+  "settings.preprocess.saveError": "ファイル準備の設定を保存できませんでした。",
   "settings.services.subtitle":
     "ファイル準備・文書解析など各工程のサービスの稼働状態を確認し、起動・停止します。",
   "settings.services.overview.title": "マイクロサービス",
@@ -1054,9 +1056,15 @@ export const ja = {
   "searchAnswerProfiles.actions.newView": "新規作成",
   "searchAnswerProfiles.list.aria": "検索・回答プロファイルの一覧",
   "searchAnswerProfiles.faq.loading": "承認済み FAQ を読み込んでいます",
+  // 知識の読み込みの失敗（応答に理由が無いとき）。空（0 件）と見せずに再試行を出す。
+  "searchAnswerProfiles.faq.loadError": "承認済み FAQ を読み込めませんでした。再試行してください。",
   "searchAnswerProfiles.faq.listAria": "承認済み FAQ の一覧",
   "searchAnswerProfiles.faq.scrollLabel": "承認済み FAQ の一覧。スクロールできます。",
   "searchAnswerProfiles.runtime.loading": "用語・同義語と回答ルールを読み込んでいます",
+  "searchAnswerProfiles.runtime.loadError":
+    "用語・同義語と回答ルールを読み込めませんでした。再試行してください。",
+  "searchAnswerProfiles.domainKeywords.loadError":
+    "ドメインキーワードを読み込めませんでした。再試行してください。",
   "searchAnswerProfiles.runtime.termsScrollLabel": "用語・同義語の一覧。スクロールできます。",
   "searchAnswerProfiles.runtime.rulesScrollLabel": "回答ルールの一覧。スクロールできます。",
   "searchAnswerProfiles.list.scrollLabel": "検索・回答プロファイル一覧。スクロールできます。",
@@ -2565,6 +2573,10 @@ export const ja = {
   "evaluation.input.required": "Golden set JSON を入力してください。",
   "evaluation.input.invalidJson": "Golden set JSON は有効な JSON で入力してください。",
   "evaluation.input.noCases": "Golden set JSON の cases を 1 件以上入力してください。",
+  "evaluation.input.caseIdRequired":
+    "Golden set JSON の cases の {index} 件目に id（1〜200 文字）を入力してください。",
+  "evaluation.input.duplicateCaseIds":
+    "Golden set JSON の cases の id が重複しています: {ids}。id はケースごとに変えてください。",
   "evaluation.actions.run": "評価実行",
   "evaluation.actions.running": "評価を実行しています",
   "evaluation.actions.compare": "比較実行",
@@ -2632,6 +2644,8 @@ export const ja = {
   "evaluation.job.failedTitle": "評価を最後まで実行できませんでした。",
   "evaluation.job.loading": "評価の状態を読み込んでいます",
   "evaluation.job.loadError": "評価の状態を取得できませんでした。再試行してください。",
+  "evaluation.job.pollError":
+    "評価の実行状況を取得できません。自動で取得し直しています。表示は最後に取得できた状態です。",
   "evaluation.job.notFound":
     "前回の評価の記録が見つかりません。保持期間を過ぎたか、別の利用者の評価です。もう一度実行してください。",
   "evaluation.toast.started": "評価を開始しました。進み具合はこの画面で確認できます。",

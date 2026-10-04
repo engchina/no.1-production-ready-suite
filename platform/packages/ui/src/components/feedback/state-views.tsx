@@ -27,10 +27,13 @@ export function ErrorState({
   message,
   onRetry,
   retryLabel = "再試行",
+  details,
 }: {
   message: string;
   onRetry?: () => void;
   retryLabel?: string;
+  /** 技術的な詳細（`ApiErrorDetailList`）。本文の下に、左揃えで全幅に出す（messaging.md §10.3。#906）。 */
+  details?: ReactNode;
 }) {
   return (
     <div
@@ -41,6 +44,7 @@ export function ErrorState({
       <p className="text-sm leading-relaxed text-fg">
         <MessageText text={message} />
       </p>
+      {details ? <div className="w-full min-w-0 text-left">{details}</div> : null}
       {onRetry ? (
         <Button type="button" variant="secondary" size="sm" icon={RefreshCw} onClick={onRetry}>
           <span>{retryLabel}</span>
