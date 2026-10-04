@@ -15438,6 +15438,52 @@ test("metadata sample limit zero omits samples and reports retrieval errors", as
   await expect(page.getByRole("alert")).toBeVisible();
 });
 
+test("件数の数値の欄は、空にしても入力中の文字を残し、範囲内の整数になったときだけ値を変える", async ({ page }) => {
+  const api = await mockNl2SqlApi(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+
+  // コメント管理のサンプル件数（0〜100）。空にしても即 0 にせず、範囲外は欄を離れると直前の値に戻す。
+  await page.goto("/comment-management");
+  await page.getByRole("option", { name: /INVOICES/ }).check();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+  const sampleLimit = page.getByLabel("サンプル件数");
+  await sampleLimit.fill("");
+  await expect(sampleLimit).toHaveValue("");
+  await sampleLimit.pressSequentially("25");
+  await expect(sampleLimit).toHaveValue("25");
+  await sampleLimit.fill("150");
+  await expect(sampleLimit).toHaveValue("150");
+  await sampleLimit.blur();
+  await expect(sampleLimit).toHaveValue("25");
+  await page.locator("#comment-management-panel-input").getByRole("button", { name: "SQL 生成" }).click();
+  await expect.poll(() => api.metadataSamplesPayload?.sample_limit).toBe(25);
+
+  // 合成データ生成の生成件数（1〜100）とサンプル行数（0〜100）。
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "合成データ生成" }).click();
+  const workspace = page.locator("#data-management-panel-synthetic");
+  await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
+  await workspace.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
+  const rows = workspace.getByLabel("各テーブルの生成件数");
+  await rows.fill("");
+  await expect(rows).toHaveValue("");
+  await rows.pressSequentially("50");
+  await expect(rows).toHaveValue("50");
+  await rows.fill("2.5");
+  await rows.blur();
+  await expect(rows).toHaveValue("50");
+  const sampleRows = workspace.getByLabel("サンプル行数(sample_rows)");
+  await sampleRows.fill("");
+  await expect(sampleRows).toHaveValue("");
+  await sampleRows.pressSequentially("7");
+  await sampleRows.blur();
+  await expect(sampleRows).toHaveValue("7");
+  await workspace.getByLabel("実行確認語").fill("APP.INVOICES");
+  await workspace.getByRole("button", { name: "生成開始" }).click();
+  await expect.poll(() => api.syntheticDataPayload?.row_count).toBe(50);
+  expect(api.syntheticDataPayload?.sample_rows).toBe(7);
+});
+
 test("legacy model-learning URL opens Select AI settings and preserves asset refresh", async ({ page }) => {
   const api = await mockNl2SqlApi(page);
   let legacySyncPhase:
