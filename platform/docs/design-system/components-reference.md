@@ -1017,13 +1017,15 @@ toast.success(t("…deleted"), { action: { label: t("common.undo"), onClick: und
 
 | 決めたこと | 理由 |
 |---|---|
-| md 以上は `PageHeader` に重ね、ページの操作のすぐ左に右端をそろえる（上端は `PageHeader` の上端 + 1rem、幅 22rem まで）。操作が無い・タイトルの下へ折り返したときは右端から 1rem、操作の左右に 14rem が取れなければ `PageHeader` の下端 + 1rem の右、`PageHeader` が見えなければ画面の右上 | `PageHeader` のタイトルの面には操作が無い。ページの操作、内容の面の右上の操作（`ObjectActionBar` / `ContentActionBar`）、ページの末尾の操作（スクロールしきると画面の下端に来る）のどれからも離れる |
+| md 以上は `PageHeader` に重ね、ページの操作のすぐ左に右端をそろえる（上端は `PageHeader` の上端 + 1rem。幅は内容に合わせて `--toast-width-min` 22rem〜`--toast-width-max` 32rem。#899）。操作が無い・タイトルの下へ折り返したときは右端から 1rem、操作の左右に 14rem が取れなければ `PageHeader` の下端 + 1rem の右、`PageHeader` が見えなければ画面の右上 | `PageHeader` のタイトルの面には操作が無い。ページの操作、内容の面の右上の操作（`ObjectActionBar` / `ContentActionBar`）、ページの末尾の操作（スクロールしきると画面の下端に来る）のどれからも離れる |
 | md 未満は上端の全幅。上端のバーに重ねて上端から 0.5rem、左はメニューのボタンの後ろ（`calc(1rem + var(--control-height-touch))`） | 375px では末尾の操作が全幅になり、下端の通知は必ず覆う。上端のバーの製品名には操作が無い |
 | `PageHeader` の `<header>` に `data-page-header`、ページの操作の並びに `data-page-header-actions` を付け、`Toaster` はその位置を読む。通知が出ている間だけ、スクロール・リサイズ・`PageHeader` の大きさの変化に追従する | lg 未満の `PageHeader` は本文と一緒にスクロールする。画面を移ると `PageHeader` が差し替わる |
 | 通知の領域に `data-toast-placement`（`page-header` / `below-page-header` / `top-right` / `top-bar`） | E2E と目視で、どの規則で置いたかを確かめられる |
 | 新しい通知は下に足し、上から降りてくる（`toast-in`） | 読み上げ・Tab の順と見た目の順をそろえる。上端から出るものは上から現れる |
 
 E2E は NL2SQL の `tests/e2e/_helpers/toast.ts` の `expectToastStackAtTop`（ページの操作・メニューのボタンと重ならない、規則どおりの上端）で確かめます。通知を閉じてから押す回避（`dismissToasts`）は要りません。
+
+メッセージの部品（`Toast`・`Banner`・`FormStatus`・`ProcessingIndicator`・`BlockedPageNotice` の面と `MessageText`）は、共有の CSS の `.pr-message-text`（`word-break: auto-phrase`・`overflow-wrap: anywhere`・`text-wrap: pretty`）で日本語を文節で折り返します（#899。README §4「メッセージの本文の折り返し」）。製品でメッセージに `word-break` などを書かないでください。語の途中で折り返さないことは NL2SQL の `tests/e2e/message-wrapping.spec.ts`（文字ごとの描画位置から折り返しの位置を求め、`Intl.Segmenter` の語の境界と比べる）で確かめます。
 
 ### toast の API
 

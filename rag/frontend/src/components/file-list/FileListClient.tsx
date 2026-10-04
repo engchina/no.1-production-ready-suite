@@ -594,13 +594,18 @@ function notifyRowEnqueued(doc: DocumentSummary, job: IngestionJob) {
     });
     return;
   }
-  toast.info(t("fileList.ingest.toast.queued", { name: doc.file_name }));
+  // 1 文目は何が起きたかだけにし、補足は description に分ける（#899）。
+  toast.info(t("fileList.ingest.toast.queued", { name: doc.file_name }), {
+    description: t("fileList.queue.toast.statusHint"),
+  });
 }
 
 /** 一括投入の結果を 1 回だけ知らせる。部分失敗・スキップを成功として黙らせない。 */
 function notifyBulkEnqueued(summary: ReturnType<typeof summarizeEnqueueOutcomes>, total: number) {
   if (summary.skipped === 0 && summary.failed === 0) {
-    toast.info(t("fileList.bulkQueue.toast.queued", { count: summary.queued }));
+    toast.info(t("fileList.bulkQueue.toast.queued", { count: summary.queued }), {
+      description: t("fileList.queue.toast.statusHint"),
+    });
     return;
   }
   const reason =

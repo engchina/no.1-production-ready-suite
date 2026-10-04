@@ -53,7 +53,7 @@ export function BlockedPageNotice({
   return (
     <div className={cn("grid min-h-dvh place-items-center p-4 sm:p-6", className)} data-testid={testId}>
       <section
-        className="w-full max-w-lg rounded-xl border border-border bg-surface p-6 text-center shadow-sm sm:p-8"
+        className="pr-message-text w-full max-w-lg rounded-xl border border-border bg-surface p-6 text-center shadow-sm sm:p-8"
         aria-labelledby={titleId}
       >
         <div
