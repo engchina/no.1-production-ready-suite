@@ -3,9 +3,10 @@
 - 状態の保存先（業務プロファイル・ジョブ・履歴・オントロジー・評価）は、読み書きのたびに新しい接続を
   張らず、`nl2sql-state` の pool から借りる。1 回のジョブで新しい接続を張る回数は、状態の読み書きの
   回数に比例しない
-- 業務データ・Select AI の接続（`connection()`）は今までどおり単発の接続のまま（session の状態を
-  持ち得るため pool に混ぜない）
-- stage の境界の実行所有権とキャンセル要求は 1 回の往復で読む
+- 業務データ・Select AI の接続は状態の保存先の pool に混ぜない（`connection()` の単発の接続、
+  または業務データの読み取り・Select AI の生成の `nl2sql-runtime` の pool。#904）
+- stage の境界の実行所有権とキャンセル要求は、直前の stage の保存で読んだ job の文書で確かめる
+  （#830 で 1 回の往復にし、#904 で保存と同じ往復にした）
 """
 
 from __future__ import annotations
@@ -364,9 +365,10 @@ def test_query_jobs_do_not_open_a_connection_per_state_operation(
     assert fake_oracledb.acquisitions - acquisitions_after_first == sum(second.values())
     # 2 回目のジョブも状態の操作の回数は増えない（キャッシュの分だけ減る）。
     assert sum(second.values()) <= sum(first.values())
-    # stage の境界（6 回）の実行所有権とキャンセル要求は 1 回の往復で読み、stage の保存
-    # （fence 付きの更新。開始・4 つの stage・結果の 6 回）の前に job を読み直さない。
-    assert second["get_documents"] == 6
+    # stage の境界（6 回）の実行所有権とキャンセル要求は、直前の stage の保存（fence 付きの更新。
+    # 開始・4 つの stage・結果の 6 回）が読んだ job の文書で確かめ、別に読むのは結果の保存の前の
+    # 1 回だけ（#904。#830 では境界ごとに 1 回読んでいた）。保存の前に job を読み直さない。
+    assert second["get_documents"] == 1
     assert second["patch_document_if_current"] == 6
     assert second["get_document"] <= 3
 

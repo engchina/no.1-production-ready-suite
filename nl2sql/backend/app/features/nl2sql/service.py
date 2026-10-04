@@ -891,6 +891,12 @@ _FEEDBACK_INDEX_OPERATION_LOCK = threading.RLock()
 # 別プロセス(gunicorn worker)からのキャンセル要求を伝える repository 上の専用 collection。
 # owner の _persist_job が job 本体を丸ごと上書きしても失われない別ドキュメントにする。
 _JOB_CANCEL_COLLECTION = "job_cancel_requests"
+# キャンセル要求の印（job の文書の key）。stage の保存（fence 付きの更新）が返す job の文書で、
+# キャンセル要求を別の往復なしに読む（#904）。
+_JOB_CANCEL_MARK = "cancel_requested"
+# stage の保存で読んだキャンセル要求を、直後の stage の境界の確認に使ってよい時間（秒）。
+# これより古ければ、今までどおり DB で実行所有権とキャンセル要求を読み直す（#904）。
+_JOB_PROBE_REUSE_SECONDS = 2.0
 _IN_FLIGHT_JOB_STATUSES = frozenset({JobStatus.PENDING, JobStatus.RUNNING})
 JOB_INTERRUPTED_ERROR_CODE = "JOB_INTERRUPTED"
 _JOB_INTERRUPTED_MESSAGE = "サーバ再起動前に完了しなかったため、ジョブを終了扱いにしました。"
@@ -4381,6 +4387,26 @@ class Nl2SqlService:
             )
         if saved is None:
             raise JobExecutionLost(job.job_id)
+        # fence 付きの保存は、実行所有権（worker・attempt・lease）を確かめたうえで job の文書を
+        # 読む。その文書のキャンセル要求の印を、直後の stage の境界の確認に使う（往復を省く。
+        # #904）。
+        self._remember_job_probe(job.job_id, bool(saved.get(_JOB_CANCEL_MARK)))
+
+    def _remember_job_probe(self, job_id: str, cancel_requested: bool) -> None:
+        probes: dict[str, tuple[float, bool]] = getattr(self._job_execution_context, "probes", {})
+        probes[job_id] = (time.monotonic(), cancel_requested)
+        self._job_execution_context.probes = probes
+
+    def _take_job_probe(self, job_id: str) -> bool | None:
+        """この worker のスレッドが直前の保存で読んだキャンセル要求（なければ None）。
+
+        1 回だけ使う。古ければ（`_JOB_PROBE_REUSE_SECONDS` を超えたら）使わない。
+        """
+        probes: dict[str, tuple[float, bool]] = getattr(self._job_execution_context, "probes", {})
+        probe = probes.pop(job_id, None)
+        if probe is None or time.monotonic() - probe[0] > _JOB_PROBE_REUSE_SECONDS:
+            return None
+        return probe[1]
 
     def _persist_job(self, job_id: str) -> None:
         with self._lock:
@@ -7203,13 +7229,17 @@ class Nl2SqlService:
             if not actor_user_uuid:
                 raise PermissionError("会話には認証済みの利用者が必要です。")
             parent = self._chat_parent(request, actor_user_uuid)
+            known: dict[str, StoredJob] = {}
             if parent:
-                conversation = self.get_sql_chat(parent.conversation_id, actor=actor_user_uuid)
-                if conversation and len(conversation.turns) >= 50:
+                # 会話のジョブは 1 回の問い合わせでまとめて読み、ターンごとに読み直さない（#904）。
+                turn_ids, known = self._chat_conversation_turns(
+                    parent.conversation_id, actor_user_uuid
+                )
+                if turn_ids is not None and len(turn_ids) >= 50:
                     raise ValueError("会話が長すぎます。新しい会話を始めてください。")
-                if conversation and conversation.turns[-1].job_id != parent.job_id:
+                if turn_ids and turn_ids[-1] != parent.job_id:
                     raise ValueError("会話が更新されています。再読み込みしてから送信してください。")
-            self._chat_generation_question(request, actor_user_uuid)
+            self._chat_generation_question(request, actor_user_uuid, known=known)
             conversation_id = parent.conversation_id if parent else job_id
         if self._deepsec_enabled and not actor_user_uuid:
             raise ValueError("DeepSec 有効時のジョブには認証済み actor が必要です。")
@@ -7457,8 +7487,11 @@ class Nl2SqlService:
         確認できないまま次の外部呼び出しへ進めない。
         """
 
-        # 実行所有権とキャンセル要求は 1 回の往復で読む（#830）。
-        cancel_requested = self._assert_job_execution(job_id, probe_cancel=True)
+        # 実行所有権とキャンセル要求は 1 回の往復で読む（#830）。直前の stage の保存（fence 付きの
+        # 更新）で両方を確かめていれば、その結果を使い、往復しない（#904）。
+        cancel_requested = self._take_job_probe(job_id)
+        if cancel_requested is None:
+            cancel_requested = self._assert_job_execution(job_id, probe_cancel=True)
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
@@ -7511,6 +7544,19 @@ class Nl2SqlService:
                     )
                 ]
             )
+            # job の文書にも印を付ける。worker は stage の保存で読む job の文書からキャンセル要求を
+            # 知り、stage の境界ごとの確認の往復を省く（#904）。worker の保存は job の文書へ差分を
+            # 重ねる（fence 付きの更新）ため、この印は消えない。
+            try:
+                self._incremental_repository.patch_document(
+                    "jobs", job_id, {_JOB_CANCEL_MARK: True}
+                )
+            except Exception as exc:
+                self._raise_incremental_repository_failure(
+                    operation="job_cancel",
+                    exc=exc,
+                    operation_error_code="incremental_document_save_failed",
+                )
         return self.get_job(
             job_id,
             actor_user_uuid=actor_user_uuid,
@@ -7555,10 +7601,65 @@ class Nl2SqlService:
                 steps=job.steps,
             )
 
-    def _chat_parent(self, request: JobCreateRequest, actor: str) -> StoredJob | None:
+    def _chat_conversation_turns(
+        self, conversation_id: str, actor: str
+    ) -> tuple[list[str] | None, dict[str, StoredJob]]:
+        """会話のターン（ジョブ ID、作成順）と、読んだジョブを返す（#904）。
+
+        `get_sql_chat` と同じ範囲（本人のジョブ、会話の root がチャットの最初のターン）を、
+        ターンごとに読み直さず 1 回の問い合わせで読む。root が会話でなければターンは None
+        （`get_sql_chat` が None を返すときと同じく、ターン数の確認をしない）。
+        """
+        jobs = self._chat_conversation_jobs(conversation_id, actor)
+        by_id = {job.job_id: job for job in jobs}
+        root = by_id.get(conversation_id)
+        if root is None:
+            # 本人の会話の中に root が無い（別の利用者の root など）ときは今までどおり確かめる。
+            conversation = self.get_sql_chat(conversation_id, actor=actor)
+            if conversation is None:
+                return None, by_id
+            return [turn.job_id for turn in conversation.turns], by_id
+        if not root.request.generation_only or root.request.previous_job_id:
+            return None, by_id
+        jobs.sort(key=lambda job: (job.created_at, job.job_id))
+        return [job.job_id for job in jobs], by_id
+
+    def _chat_conversation_jobs(self, conversation_id: str, actor: str) -> list[StoredJob]:
+        """本人の会話のジョブを 1 回の問い合わせで読む（`get_sql_chat` と同じ上限 100 件）。"""
+        repository = self._incremental_repository
+        if repository is None:
+            with self._lock:
+                return [
+                    job
+                    for job in self._jobs.values()
+                    if job.conversation_id == conversation_id and job.actor_user_uuid == actor
+                ]
+        try:
+            documents = repository.list_documents(
+                "jobs",
+                limit=100,
+                payload_filters={"actor_user_uuid": actor, "conversation_id": conversation_id},
+            )
+        except Exception as exc:
+            self._raise_incremental_repository_failure(
+                operation="chat_load",
+                exc=exc,
+                operation_error_code="chat_query_failed",
+            )
+        return [self._job_from_snapshot(document) for document in documents]
+
+    def _chat_parent(
+        self,
+        request: JobCreateRequest,
+        actor: str,
+        *,
+        known: Mapping[str, StoredJob] | None = None,
+    ) -> StoredJob | None:
         if not request.previous_job_id:
             return None
-        parent = self._load_job_record(request.previous_job_id)
+        parent = (known or {}).get(request.previous_job_id) or self._load_job_record(
+            request.previous_job_id
+        )
         if parent is None:
             raise ValueError("前の会話が見つかりません。新しい会話を始めてください。")
         if parent.actor_user_uuid != actor:
@@ -7571,12 +7672,28 @@ class Nl2SqlService:
             raise ValueError("前の SQL の生成が終わるか、停止してから送信してください。")
         return parent
 
-    def _chat_generation_question(self, request: JobCreateRequest, actor: str) -> str:
+    def _chat_generation_question(
+        self,
+        request: JobCreateRequest,
+        actor: str,
+        *,
+        known: Mapping[str, StoredJob] | None = None,
+        conversation_id: str = "",
+    ) -> str:
+        """会話の履歴を付けた生成の質問を作る。
+
+        `known`（読んだ会話のジョブ）か `conversation_id`（会話をまとめて 1 回で読む）があれば、
+        前のターンを 1 件ずつ読み直さない（#904）。無いターンだけ個別に読む。
+        """
         if not request.previous_job_id:
             return request.question
+        if known is None and conversation_id:
+            known = {
+                job.job_id: job for job in self._chat_conversation_jobs(conversation_id, actor)
+            }
         turns: list[dict[str, str]] = []
         seen: set[str] = set()
-        current = self._chat_parent(request, actor)
+        current = self._chat_parent(request, actor, known=known)
         while current is not None:
             if current.job_id in seen or len(seen) >= 50:
                 raise ValueError("会話が長すぎます。新しい会話を始めてください。")
@@ -7590,7 +7707,7 @@ class Nl2SqlService:
                         "status": current.status.value,
                     }
                 )
-            current = self._chat_parent(current.request, actor)
+            current = self._chat_parent(current.request, actor, known=known)
         turns.reverse()
         while len(turns) > 1 and len(json.dumps(turns, ensure_ascii=False)) > 32000:
             turns.pop(0)
@@ -18928,6 +19045,8 @@ class Nl2SqlService:
             finally:
                 owners = getattr(self._job_execution_context, "owners", {})
                 owners.pop(job_id, None)
+                probes = getattr(self._job_execution_context, "probes", {})
+                probes.pop(job_id, None)
 
     def _build_interpretation_artifact(
         self,
@@ -19266,7 +19385,9 @@ class Nl2SqlService:
         self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
         generated = self._generate_selected_engine(
-            question=self._chat_generation_question(request, job.actor_user_uuid),
+            question=self._chat_generation_question(
+                request, job.actor_user_uuid, conversation_id=job.conversation_id
+            ),
             engine=request.engine,
             profile=profile,
             allowed=allowed,
