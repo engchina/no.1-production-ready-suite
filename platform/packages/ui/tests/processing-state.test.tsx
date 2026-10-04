@@ -51,6 +51,31 @@ describe("ProcessingIndicator", () => {
     expect(html).not.toContain('aria-busy="true"');
   });
 
+  it("遅延の案内の行は最初から高さを予約し、文言は遅延してから中身に出す（#902）", () => {
+    const before = renderToStaticMarkup(<ProcessingIndicator active label="x" testId="p" />);
+    expect(before).toContain('data-processing-slow="false"');
+    expect(before).toContain('role="status"');
+    // 予約の文言は ::before の content（属性）だけにあり、textContent・読み上げには入らない。
+    expect(before).toContain('data-placeholder="通常より時間がかかっています。"');
+    expect(before.replace(/data-placeholder="[^"]*"/g, "")).not.toContain("通常より時間がかかっています。");
+    expect(before).not.toContain('data-testid="p-slow"');
+
+    const startedAt = new Date(Date.now() - 11_000).toISOString();
+    const slow = renderToStaticMarkup(<ProcessingIndicator active label="x" testId="p" startedAt={startedAt} />);
+    expect(slow).toContain('data-processing-slow="true"');
+    expect(slow).toContain('data-testid="p-slow"');
+    expect(slow).toContain(">通常より時間がかかっています。<");
+  });
+
+  it("showSlowMessage=false と完了後は遅延の案内の行を置かない", () => {
+    expect(renderToStaticMarkup(<ProcessingIndicator active label="x" showSlowMessage={false} />)).not.toContain(
+      "data-processing-slow"
+    );
+    expect(renderToStaticMarkup(<ProcessingIndicator active={false} label="x" />)).not.toContain(
+      "data-processing-slow"
+    );
+  });
+
   it("activityIcon=none では動くスピナーを出さない", () => {
     const html = renderToStaticMarkup(<ProcessingIndicator active label="x" activityIcon="none" />);
     expect(html).toContain('data-processing-activity-icon="none"');
