@@ -9,9 +9,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pr_backend_core.logging import safe_exception_fields
+from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
 from pr_system_settings.database import build_database_router
 from pr_system_settings.model import build_model_router, model_payload
 from pr_system_settings.model_test_input import (
@@ -167,6 +168,7 @@ from app.schemas.settings import (
     VectorIndexSettingsData,
     VectorIndexSettingsUpdate,
 )
+from app.security.permissions import ANSWER_PROMPT_EDIT_PERMISSIONS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -588,9 +590,10 @@ async def get_answer_prompts() -> ApiResponse[AnswerPromptsData]:
 
 @router.put("/answer-prompts/{key}", response_model=ApiResponse[AnswerPromptsData])
 async def put_answer_prompt(
-    key: str, payload: AnswerPromptUpdate
+    key: str, payload: AnswerPromptUpdate, request: Request
 ) -> ApiResponse[AnswerPromptsData]:
     """編集できるプロンプトを保存する(次の回答・次の解析から使う)。"""
+    _require_answer_prompt_permission(request, key)
     try:
         validate_answer_prompt(key, payload.content)
     except KeyError as exc:
@@ -603,13 +606,30 @@ async def put_answer_prompt(
 
 
 @router.delete("/answer-prompts/{key}", response_model=ApiResponse[AnswerPromptsData])
-async def reset_answer_prompt(key: str) -> ApiResponse[AnswerPromptsData]:
+async def reset_answer_prompt(key: str, request: Request) -> ApiResponse[AnswerPromptsData]:
     """保存したプロンプトを消して既定値へ戻す。"""
+    _require_answer_prompt_permission(request, key)
     if key not in EDITABLE_PROMPT_KEYS:
         raise HTTPException(status_code=404, detail="プロンプトが見つかりません。")
     oracle = OracleClient()
     await oracle.delete_answer_prompt(key)
     return ApiResponse(data=_answer_prompts_data(await oracle.list_answer_prompts()))
+
+
+def _require_answer_prompt_permission(request: Request, key: str) -> None:
+    """プロンプトを編集する画面の権限を確かめる(#1010)。
+
+    route の manifest は回答プロンプト・文書解析のどちらかの権限で通すので、ここで key ごとに
+    その画面の権限を求める。知らない key はこの後の 404 に任せる。
+    """
+    permission = ANSWER_PROMPT_EDIT_PERMISSIONS.get(key)
+    if permission is None:
+        return
+    principal = getattr(request.state, "principal", None)
+    if principal is None or not principal.has_permission(permission):
+        raise SecurityApiError(
+            403, "この機能を利用する権限がありません。", code=ROUTE_FORBIDDEN_CODE
+        )
 
 
 def _answer_prompts_data(saved: dict[str, dict[str, object]]) -> AnswerPromptsData:

@@ -2275,6 +2275,10 @@ export const ja = {
   "settings.answerPrompts.resetTitle": "既定のプロンプトに戻しますか？",
   "settings.answerPrompts.resetDescription": "編集した内容を削除し、コードの既定値を使います。元に戻せません。",
   "settings.answerPrompts.saveError": "プロンプトを保存できませんでした。",
+  "settings.answerPrompts.discard": "変更を破棄",
+  "settings.answerPrompts.unsaved": "未保存の変更があります。",
+  "settings.answerPrompts.actions.label": "編集内容の操作",
+  "settings.answerPrompts.missingPlaceholders": "必須の placeholder がありません: {names}",
   "settings.answerPrompts.loadError": "プロンプトを読み込めませんでした。",
   "settings.answerPrompts.stages.title": "回答フローの各段のプロンプト（読み取り専用）",
   "settings.answerPrompts.stages.description":
