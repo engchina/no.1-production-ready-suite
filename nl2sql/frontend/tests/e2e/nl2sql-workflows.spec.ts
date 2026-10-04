@@ -38,6 +38,13 @@ async function closeSelectFieldOptions(combobox: Locator) {
   await expect(combobox).toHaveAttribute("aria-expanded", "false");
 }
 
+/** 用語・同義語 / 共通ルールの取込（全置換）の確認ダイアログで「置き換えて取り込む」を押す（#953）。 */
+async function confirmMaterialReplace(page: Page) {
+  const dialog = page.getByRole("alertdialog");
+  await dialog.getByRole("button", { name: "置き換えて取り込む", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+}
+
 async function readActiveJobState(page: Page) {
   return page.evaluate((keys) => ({ jobId: sessionStorage.getItem(keys.id), startedAt: sessionStorage.getItem(keys.startedAt) }), jobSnapshotKeys);
 }
@@ -10720,6 +10727,9 @@ test("glossary page manages global terms only", async ({ page }) => {
       content: "mock",
     },
   ]);
+  // 取込は登録済みの 21 件を置き換えるので、件数とファイル名を示して確認する（#953）。
+  await expect(page.getByRole("alertdialog")).toContainText("登録済みの用語・同義語 21 件を、terms.xlsx の内容ですべて置き換えます。");
+  await confirmMaterialReplace(page);
   await expect(page.getByText("用語・同義語を 1 件取り込みました。")).toBeVisible();
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "粗利" })).toBeVisible();
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "INVOICES.PROFIT" })).toBeVisible();
@@ -10819,6 +10829,49 @@ test("glossary global data shows empty, loading, and server error states", async
   await expectNoHorizontalScroll(page);
 });
 
+test("glossary and global rules do not show an empty list when the first load fails", async ({ page }) => {
+  // #953: 取得の失敗を「データがありません」（空）と取り違えさせず、取込（全置換）は件数が分からない旨を示して確認する。
+  await mockNl2SqlApi(page);
+  let fail = true;
+  let imports = 0;
+  await page.route("**/api/nl2sql/legacy-learning-material", (route) => {
+    if (fail) {
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "読込エラー" }) });
+    }
+    return fulfillJson(route, { glossary: { 売上: "INVOICES.TOTAL_AMOUNT" }, rules: ["SELECT のみ"] });
+  });
+  page.on("request", (request) => {
+    if (/\/legacy-learning-material\/(terms|rules)\/import$/u.test(new URL(request.url()).pathname)) imports += 1;
+  });
+
+  for (const material of [
+    { path: "/glossary-rules", unavailable: "glossary-terms-unavailable", title: "用語・同義語を表示できません", empty: "データがありません。", count: /^用語・同義語 \d+$/u, dropzone: "glossary-rules-panel-heading-file-dropzone", preview: "glossary-terms-preview", previewText: "売上" },
+    { path: "/global-rules", unavailable: "global-rules-unavailable", title: "共通ルールを表示できません", empty: "共通ルールがありません。", count: /^ルール \d+$/u, dropzone: "global-rules-file-dropzone", preview: "global-rules-preview", previewText: "SELECT のみ" },
+  ]) {
+    fail = true;
+    await page.goto(material.path);
+    await expect(page.getByRole("alert")).toContainText("読込エラー");
+    await expect(page.getByTestId(material.unavailable)).toContainText(material.title);
+    await expect(page.getByText(material.empty, { exact: true })).toHaveCount(0);
+    await expect(page.getByText(material.count)).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+
+    await dropFiles(page, page.getByTestId(material.dropzone), [
+      { name: "replace.xlsx", type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content: "mock" },
+    ]);
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("今の登録内容を取得できていないため、件数を確認できません。");
+    await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(imports).toBe(0);
+
+    fail = false;
+    await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+    await expect(page.getByTestId(material.preview)).toContainText(material.previewText);
+    await expect(page.getByTestId(material.unavailable)).toHaveCount(0);
+  }
+});
+
 test("glossary and global rules imports use stable errors for non JSON responses", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.unroute("**/api/nl2sql/legacy-learning-material/terms/import");
@@ -10839,6 +10892,7 @@ test("glossary and global rules imports use stable errors for non JSON responses
       content: "mock",
     },
   ]);
+  await confirmMaterialReplace(page);
   const glossaryAlert = page.getByRole("alert");
   await expect(glossaryAlert).toContainText("用語・同義語データの取込に失敗しました。");
   await expect(glossaryAlert).not.toContainText("Unexpected");
@@ -10861,6 +10915,7 @@ test("glossary and global rules imports use stable errors for non JSON responses
       content: "mock rules",
     },
   ]);
+  await confirmMaterialReplace(page);
   const rulesAlert = page.getByRole("alert");
   await expect(rulesAlert).toContainText("共通ルールの取込に失敗しました。");
   await expect(rulesAlert).not.toContainText("Unexpected");
@@ -11466,6 +11521,31 @@ test("metadata SQL regeneration resets the edited execution SQL", async ({ page 
   await expect.poll(() => generationCount).toBe(2);
   await expect(sqlTextarea).toHaveValue(generatedSql);
 });
+
+for (const metadata of [
+  { mode: "comment", path: "comments", source: "deterministic", label: "規則ベース（AI 未使用）" },
+  { mode: "annotation", path: "annotations", source: "oci_enterprise_ai", label: "OCI Enterprise AI" },
+  { mode: "domain", path: "domains", source: "deterministic", label: "規則ベース（AI 未使用）" },
+] as const) {
+  test(`${metadata.mode}-management は SQL の生成方式を内部値ではなく文言で出す`, async ({ page }) => {
+    // #962: generated.source（oci_enterprise_ai / deterministic）を英語の内部値のまま出さない。
+    await mockNl2SqlApi(page);
+    await page.unroute(`**/api/nl2sql/${metadata.path}/generate-sql`);
+    await page.route(`**/api/nl2sql/${metadata.path}/generate-sql`, (route) =>
+      fulfillJson(route, { sql: "COMMENT ON TABLE INVOICES IS '請求';", source: metadata.source, warnings: [], timing })
+    );
+    await page.goto(`/${metadata.mode}-management`);
+    await page.getByRole("option", { name: /INVOICES/ }).check();
+    await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+    const inputPanel = page.locator(`#${metadata.mode}-management-panel-input`);
+    await expect(inputPanel.getByRole("button", { name: "SQL 生成" })).toBeEnabled();
+    await inputPanel.getByRole("button", { name: "SQL 生成" }).click();
+    const executePanel = page.locator(`#${metadata.mode}-management-panel-execute`);
+    await expect(executePanel.getByText(metadata.label, { exact: true })).toBeVisible();
+    await expect(executePanel.getByText(metadata.source, { exact: true })).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+  });
+}
 
 test("ドメイン管理は SQL 実行後に構造と既存ドメインを取り直す", async ({ page }) => {
   // 実行前の関連付けのまま更新/削除を生成しないよう、実行後に inventory を再取得する。
@@ -12564,14 +12644,29 @@ test("glossary and global rules use an initial list skeleton and preserve fetche
     },
   ]);
   await expect(page.getByText(".XLSX ファイルを選択してください")).toBeVisible();
-  await dropFiles(page, page.getByTestId("global-rules-file-dropzone"), [
+  let ruleImports = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/legacy-learning-material/rules/import")) ruleImports += 1;
+  });
+  const rulesWorkbook = [
     {
       name: "rules.xlsx",
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       content: "mock rules",
     },
-  ]);
+  ];
+  // 取込は登録済みのルールを置き換えるので確認する。キャンセルなら送らない（#953）。
+  await dropFiles(page, page.getByTestId("global-rules-file-dropzone"), rulesWorkbook);
+  const replaceDialog = page.getByRole("alertdialog");
+  await expect(replaceDialog).toContainText("登録済みの共通ルール 1 件を、rules.xlsx の内容ですべて置き換えます。");
+  await replaceDialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+  await expect(replaceDialog).toHaveCount(0);
+  await expect(page.getByTestId("global-rules-preview").getByText("SELECT のみ")).toBeVisible();
+  expect(ruleImports).toBe(0);
+  await dropFiles(page, page.getByTestId("global-rules-file-dropzone"), rulesWorkbook);
+  await confirmMaterialReplace(page);
   await expect(page.getByText(/共通ルールを取り込みました/)).toBeVisible();
+  expect(ruleImports).toBe(1);
   await expectNoHorizontalScroll(page);
 
   await page.setViewportSize({ width: 375, height: 900 });
@@ -12762,6 +12857,51 @@ test("サンプルの種類変更中・取得失敗時は旧 SQL を実行でき
   await expect(page.getByLabel("実行確認語")).toHaveValue("");
   expect(mutations).toBe(0);
   await expectNoHorizontalScroll(page);
+});
+
+test("サンプルの取込が成功した後の取り直しの失敗は、実行の失敗として出さずスキーマの更新を追う", async ({ page }) => {
+  // #948: 取り直しの失敗を実行のボタンの直下に出すと、成功した取込が失敗したように見え、再実行を招く。
+  await mockNl2SqlApi(page);
+  let infoFails = false;
+  const jobRequests: string[] = [];
+  await page.route("**/api/nl2sql/sample-data?dataset=sales", (route) => {
+    if (infoFails) {
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "サンプルの状態を取得できませんでした。" }) });
+    }
+    return fulfillJson(route, { dataset: "sales", runtime: "oracle", profile_id: "", confirmation: "ADMIN_EXECUTE",
+      objects: ["SALES_ORDER"], imported_objects: jobRequests.length > 0 ? ["SALES_ORDER"] : [], warnings: [],
+      sql: { tables: ["CREATE TABLE SALES_ORDER (ID NUMBER)"], views: [], data: [], delete: ["DROP TABLE SALES_ORDER"] } });
+  });
+  await page.route("**/api/nl2sql/sample-data/import", (route) => {
+    infoFails = true;
+    return fulfillJson(route, { dataset: "sales", operation: "import", step: "all", runtime: "oracle", executed: true,
+      objects: ["SALES_ORDER"], profile_id: "", timing, warnings: [], schema_refresh_job_id: "schema-refresh-948",
+      statements: [{ index: 1, statement_type: "CREATE", status: "success", sql: "CREATE TABLE SALES_ORDER (ID NUMBER)", error_message: "" }] });
+  });
+  await page.route("**/api/schema/refresh-jobs/schema-refresh-948", (route) => {
+    jobRequests.push(route.request().url());
+    return fulfillJson(route, { job_id: "schema-refresh-948", status: "done", created_at: "2026-10-04T00:00:00.000Z",
+      scanned_objects: 1, changed_objects: 1, deleted_objects: 0, catalog_version: 2, error_code: "" });
+  });
+  await page.goto("/sample-data");
+  await chooseSelectFieldOption(page.getByRole("combobox", { name: "サンプルデータの種類" }), "sales");
+  await expect(page.locator("pre")).toContainText("SALES_ORDER");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "取り込み実行", exact: true }).click();
+
+  const actionSection = page.locator('section[aria-labelledby="sample-data-action-heading"]');
+  await expect(page.getByText("サンプルの状態を取得できませんでした。", { exact: true })).toBeVisible();
+  // 実行のボタンの直下（実行の失敗の場所）には出さない。読込の失敗としてページ上部の案内に出す。
+  await expect(actionSection.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByText("実行済み", { exact: true }).first()).toBeVisible();
+  // 取り直しに失敗しても、backend が投入したスキーマの更新の job は追う。
+  await expect.poll(() => jobRequests.length).toBeGreaterThan(0);
+  await expectNoHorizontalScroll(page);
+
+  infoFails = false;
+  await clickPageHeaderAction(page, "sample-data-actions", "表示を更新");
+  await expect(page.getByText("サンプルの状態を取得できませんでした。", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("sample-data-imported-count")).toHaveText("1");
 });
 
 test("同名の既存オブジェクトと衝突するサンプルは警告し、旧名の残存を案内する", async ({ page }) => {
@@ -14904,6 +15044,10 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect.poll(() => api.extractJoinWherePayload?.prompt_profile).toBe("sql_structure");
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveValue(/EMPLOYEE.*DEPARTMENT/);
   await expect(page.getByLabel("抽出条件 (WHERE)")).toHaveValue("EMPLOYEE(e).STATUS = 'A'");
+  // 抽出の方式は API の内部値（deterministic）を出さず、文言で出す（#934）。
+  const joinWhereResult = page.getByRole("region", { name: "JOIN/WHERE 条件抽出結果" });
+  await expect(joinWhereResult.getByText("規則ベース（AI 未使用）", { exact: true })).toBeVisible();
+  await expect(joinWhereResult.getByText("deterministic", { exact: true })).toHaveCount(0);
   await page.getByText("SQL構造解析結果").click();
   await expect(page.getByText("## SQL構造分析")).toBeVisible();
 
@@ -15065,6 +15209,69 @@ test("table and view management show DROP failures in the confirmation dialog", 
   await expect.poll(() => api.dropViewPayload?.confirmation).toBe("APP.V_EMP_DEPT");
   await expect(dropViewDialog.getByText(/ORA-04043/)).toBeVisible();
   await expect(dropViewDialog).toBeVisible();
+});
+
+test("テーブル・ビューの削除のダイアログは、実行中は閉じられない（データの切り詰めとそろえる）", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  const pending: Array<() => void> = [];
+  const holdUntilReleased = (path: string, sql: string) =>
+    page.route(path, async (route) => {
+      await new Promise<void>((resolve) => pending.push(resolve));
+      await fulfillJson(route, {
+        executed: false,
+        runtime: "oracle",
+        select_result: null,
+        statements: [
+          {
+            index: 1,
+            statement_type: "DROP",
+            status: "error",
+            sql,
+            row_count: null,
+            message: "",
+            elapsed_ms: 0,
+            error_message: "ORA-00054: リソース・ビジー",
+          },
+        ],
+        committed: false,
+        rolled_back: true,
+        warnings: [],
+        timing,
+      });
+    });
+  await holdUntilReleased("**/api/nl2sql/db-admin/drop-table", 'DROP TABLE "APP"."INVOICES" PURGE');
+  await holdUntilReleased("**/api/nl2sql/db-admin/drop-view", 'DROP VIEW "APP"."V_EMP_DEPT"');
+
+  const cases = [
+    { path: "/table-management", grid: "table-management-grid", target: "APP.INVOICES", actions: "table-management-detail-actions", dialogName: "DROP TABLE の確認" },
+    { path: "/view-management", grid: "view-management-grid", target: "APP.V_EMP_DEPT", actions: "view-management-detail-actions", dialogName: "DROP VIEW の確認" },
+  ];
+  for (const item of cases) {
+    await page.goto(item.path);
+    await expect(page.getByTestId(item.grid)).toBeVisible();
+    await page.getByRole("button", { name: `${item.target} を表示` }).click();
+    await clickObjectDetailAction(page, item.actions, "削除");
+    const dialog = page.getByRole("dialog", { name: item.dialogName });
+    await dialog.getByLabel("実行確認語").fill(item.target);
+    await dialog.getByRole("button", { name: "Drop 実行" }).click();
+    await expect.poll(() => pending.length).toBe(1);
+
+    // 実行中は「閉じる」「キャンセル」を押せず、ダイアログは開いたまま（結果を見失わない）。
+    const close = dialog.getByRole("button", { name: "閉じる" });
+    const cancel = dialog.getByRole("button", { name: "キャンセル" });
+    await expect(close).toBeDisabled();
+    await expect(cancel).toBeDisabled();
+    await close.click({ force: true });
+    await cancel.click({ force: true });
+    await expect(dialog).toBeVisible();
+
+    pending.shift()!();
+    await expect(dialog.getByText(/ORA-00054/)).toBeVisible();
+    await expect(close).toBeEnabled();
+    await cancel.click();
+    await expect(dialog).toHaveCount(0);
+  }
 });
 
 test("annotation management explains ORA-11548 before Oracle execution", async ({ page }) => {
@@ -15233,6 +15440,52 @@ test("metadata sample limit zero omits samples and reports retrieval errors", as
   await expect(annotationInputPanel).toBeVisible();
   await annotationInputPanel.getByRole("button", { name: "SQL 生成" }).click();
   await expect(page.getByRole("alert")).toBeVisible();
+});
+
+test("件数の数値の欄は、空にしても入力中の文字を残し、範囲内の整数になったときだけ値を変える", async ({ page }) => {
+  const api = await mockNl2SqlApi(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+
+  // コメント管理のサンプル件数（0〜100）。空にしても即 0 にせず、範囲外は欄を離れると直前の値に戻す。
+  await page.goto("/comment-management");
+  await page.getByRole("option", { name: /INVOICES/ }).check();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+  const sampleLimit = page.getByLabel("サンプル件数");
+  await sampleLimit.fill("");
+  await expect(sampleLimit).toHaveValue("");
+  await sampleLimit.pressSequentially("25");
+  await expect(sampleLimit).toHaveValue("25");
+  await sampleLimit.fill("150");
+  await expect(sampleLimit).toHaveValue("150");
+  await sampleLimit.blur();
+  await expect(sampleLimit).toHaveValue("25");
+  await page.locator("#comment-management-panel-input").getByRole("button", { name: "SQL 生成" }).click();
+  await expect.poll(() => api.metadataSamplesPayload?.sample_limit).toBe(25);
+
+  // 合成データ生成の生成件数（1〜100）とサンプル行数（0〜100）。
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "合成データ生成" }).click();
+  const workspace = page.locator("#data-management-panel-synthetic");
+  await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
+  await workspace.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
+  const rows = workspace.getByLabel("各テーブルの生成件数");
+  await rows.fill("");
+  await expect(rows).toHaveValue("");
+  await rows.pressSequentially("50");
+  await expect(rows).toHaveValue("50");
+  await rows.fill("2.5");
+  await rows.blur();
+  await expect(rows).toHaveValue("50");
+  const sampleRows = workspace.getByLabel("サンプル行数(sample_rows)");
+  await sampleRows.fill("");
+  await expect(sampleRows).toHaveValue("");
+  await sampleRows.pressSequentially("7");
+  await sampleRows.blur();
+  await expect(sampleRows).toHaveValue("7");
+  await workspace.getByLabel("実行確認語").fill("APP.INVOICES");
+  await workspace.getByRole("button", { name: "生成開始" }).click();
+  await expect.poll(() => api.syntheticDataPayload?.row_count).toBe(50);
+  expect(api.syntheticDataPayload?.sample_rows).toBe(7);
 });
 
 test("legacy model-learning URL opens Select AI settings and preserves asset refresh", async ({ page }) => {
@@ -16657,6 +16910,7 @@ for (const material of [
     });
     const workbook = { name: "replacement.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from("fixture") };
     await file.setInputFiles(workbook);
+    await confirmMaterialReplace(page);
     try {
       await expect(refresh).toBeDisabled();
       await expect(file).toBeDisabled();
@@ -16668,6 +16922,7 @@ for (const material of [
     await expect(file).toBeEnabled();
     await expect(page.getByText("取込を再試行してください", { exact: true })).toBeVisible();
     await file.setInputFiles(workbook);
+    await confirmMaterialReplace(page);
     await expect(page.getByTestId(material.preview)).toContainText("新しい");
     await expect(page.getByTestId(material.preview)).not.toContainText("古い");
     await expect(refresh).toBeEnabled();

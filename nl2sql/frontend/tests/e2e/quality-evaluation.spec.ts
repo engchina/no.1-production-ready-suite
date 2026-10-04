@@ -1244,3 +1244,101 @@ test("evaluation submission locks conditions and preserves them after rejection"
   await expect(start).toBeEnabled();
   await page.screenshot({ path: testInfo.outputPath("evaluation-submission-recovery.png"), fullPage: true });
 });
+
+test("業務プロファイルを切り替えても評価条件のフォームを出したままにし、取り直しの間は開始させない (#995)", async ({
+  page,
+}) => {
+  await mockQualityApi(page);
+  const profile = (id: string, name: string) => ({ id, name, category: "SQL生成評価", description: "", archived: false });
+  await page.route("**/api/nl2sql/profiles/search**", (route) =>
+    envelope(route, {
+      items: [profile("default", "標準プロファイル"), profile("sales", "売上プロファイル")],
+      next_cursor: null,
+      total: 2,
+    })
+  );
+  const salesGate = createRequestGate();
+  await page.route("**/api/nl2sql/quality-evaluations/capabilities**", async (route) => {
+    if (new URL(route.request().url()).searchParams.get("profile_id") === "sales") await salesGate.promise;
+    return envelope(route, capabilities);
+  });
+  await page.goto("/evaluation");
+
+  const inputRow = page.getByTestId("quality-evaluation-input-row");
+  const profileSelect = page.getByTestId("quality-evaluation-profile-field").getByRole("combobox");
+  await expect(inputRow).toBeVisible();
+  await dropFiles(page, page.getByTestId("quality-evaluation-file-dropzone"), [{
+    name: "cases.xlsx",
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    content: "mock xlsx",
+  }]);
+  await page.getByTestId("quality-evaluation-engine-fieldset").getByRole("checkbox").first().check();
+  const start = page.getByRole("button", { name: "評価を開始", exact: true });
+  await expect(start).toBeEnabled();
+
+  await profileSelect.click();
+  await page.getByRole("option", { name: /売上プロファイル/ }).click();
+  // 取り直しの間もフォームを出したまま（読み込み中の表示に置き換えない）。前の profile の実行可否では開始させない。
+  await expect(inputRow).toBeVisible();
+  await expect(page.getByTestId("quality-evaluation-conditions-loading")).toHaveCount(0);
+  await expect(profileSelect).toBeFocused();
+  await expect(start).toBeDisabled();
+
+  salesGate.release();
+  await expect(start).toBeEnabled();
+  await expect(page.getByText("cases.xlsx", { exact: false }).first()).toBeVisible();
+  await expect(page.getByTestId("quality-evaluation-engine-fieldset").getByRole("checkbox").first()).toBeChecked();
+});
+
+test("job の削除・中止の失敗は backend の理由を起点の近くに残す (#995)", async ({ page }, testInfo) => {
+  await mockQualityApi(page, {
+    currentJob: job("running", { job_id: "job-001", profile_name: "実行中の job" }),
+    recentJobs: [
+      job("completed", {
+        job_id: "other-user-job",
+        profile_name: "他の利用者の job",
+        created_at: "2026-07-22T08:01:00Z",
+      }),
+    ],
+  });
+  // backend の problem 応答（app/api/problems.py）と同じ形。403 は経路の権限拒否ではない error_code。
+  const apiFailure = (route: Route, status: number, code: string, message: string) =>
+    route.fulfill({
+      status,
+      contentType: "application/json",
+      body: JSON.stringify({ data: null, error_messages: [message], warning_messages: [], error_code: code }),
+    });
+  await page.route("**/api/nl2sql/quality-evaluations/other-user-job", (route) =>
+    route.request().method() === "DELETE"
+      ? apiFailure(route, 403, "FORBIDDEN", "他のユーザーのSQL生成評価 job を操作する権限がありません。")
+      : route.fallback()
+  );
+  await page.route("**/api/nl2sql/quality-evaluations/job-001/cancel", (route) =>
+    apiFailure(route, 409, "CONFLICT", "SQL生成評価 job はすでに完了しています。")
+  );
+  await page.goto("/evaluation?job=job-001");
+
+  await (await openJobActions(page, "other-user-job"))
+    .getByRole("menuitem", { name: /他の利用者の job.*を削除/ })
+    .click();
+  await page
+    .getByRole("alertdialog", { name: "SQL生成評価 job を削除しますか" })
+    .getByRole("button", { name: "削除" })
+    .click();
+  const recentSection = page.locator("section[aria-labelledby='quality-evaluation-recent']");
+  await expect(
+    recentSection.getByText("他のユーザーのSQL生成評価 job を操作する権限がありません。")
+  ).toBeVisible();
+  await expect(page.getByText("SQL生成評価 job を削除できませんでした。", { exact: false })).toHaveCount(0);
+
+  const progress = page.locator("section[aria-labelledby='quality-evaluation-progress']");
+  await progress.getByRole("button", { name: "中止" }).click();
+  await page
+    .getByRole("alertdialog", { name: "SQL生成評価 job を中止しますか" })
+    .getByRole("button", { name: "job を中止" })
+    .click();
+  await expect(progress.getByText("SQL生成評価 job はすでに完了しています。")).toBeVisible();
+  // 次の操作を始めたので、一覧の削除の失敗は消す。
+  await expect(page.getByText("他のユーザーのSQL生成評価 job を操作する権限がありません。")).toHaveCount(0);
+  await progress.screenshot({ path: testInfo.outputPath("evaluation-cancel-failure.png") });
+});
