@@ -7,13 +7,13 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  Button,
+  FormActionBar,
   FormStatus,
   StatusBadge,
   TimedLoadingState,
   FormSkeleton,
 } from "@engchina/production-ready-ui";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { CheckCircle2, ClipboardCheck, RotateCcw, Save } from "lucide-react";
 
 import {
@@ -37,6 +37,7 @@ import {
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { t } from "@/lib/i18n";
 import { useEvaluationSettings, useUpdateEvaluationSettings } from "@/lib/queries";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 /**
@@ -49,21 +50,21 @@ export function EvaluationSettingsClient() {
   const query = useEvaluationSettings();
   const save = useUpdateEvaluationSettings();
   const [suite, setSuite] = useState<EvaluationSuiteName | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const lastServerSuite = useRef<EvaluationSuiteName | null>(null);
+  // 直前に取り込んだ server の suite。server の suite が変わったレンダーで、未編集なら選択をそろえる。
+  // 背景再取得で同じ値が返っても未保存の選択を上書きしない。effect ではなくレンダー中にそろえ、
+  // 取得の直後に中身の無いレンダー（Skeleton と本文の間の空白）を挟まない（#1029）。
+  const [base, setBase] = useState<EvaluationSuiteName | null>(null);
+  const serverSuite = query.data?.suite ?? null;
+  if (serverSuite !== null && serverSuite !== base) {
+    setBase(serverSuite);
+    if (suite === null || suite === base) setSuite(serverSuite);
+  }
 
-  // サーバの suite が実際に変わったときだけ local 選択へ同期する。
-  // 背景再取得で同じ値が返っても未保存の選択を上書きしない。
-  useEffect(() => {
-    const serverSuite = query.data?.suite ?? null;
-    if (serverSuite && serverSuite !== lastServerSuite.current) {
-      lastServerSuite.current = serverSuite;
-      setSuite(serverSuite);
-    }
-  }, [query.data]);
-
-  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
-  useLeaveGuard(Boolean(query.data && suite !== null && suite !== query.data.suite));
+  // 未保存の選択があるときは離脱を確認し、保存中は離脱を止める。
+  useLeaveGuard(
+    Boolean(query.data && suite !== null && suite !== query.data.suite),
+    save.isPending
+  );
 
   if (query.isPending) {
     return (
@@ -103,26 +104,25 @@ export function EvaluationSettingsClient() {
 
   function selectSuite(next: EvaluationSuiteName) {
     save.reset();
-    setSuccessMessage(null);
     setSuite(next);
   }
 
   function resetForm() {
     save.reset();
-    setSuccessMessage(null);
     setSuite(settings.suite);
   }
 
   function submit() {
-    if (!suite) return;
+    if (!suite || save.isPending) return;
     save.mutate(
       { suite },
       {
         onSuccess: (data) => {
+          setBase(data.suite);
           setSuite(data.suite);
-          setSuccessMessage(t("settings.evaluation.actions.saved"));
+          // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
+          toast.success(t("settings.evaluation.actions.saved"));
         },
-        onError: () => setSuccessMessage(null),
       }
     );
   }
@@ -190,35 +190,37 @@ export function EvaluationSettingsClient() {
             </div>
           </div>
           <SuiteMetrics suite={selectedSuite ?? null} />
-          <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
-            <div className="min-h-6">
-              {dirty ? (
+          {/* 変更が実行済みの評価に効かないことと、実行ごとの指定が優先することを案内する（#1029）。 */}
+          <FormStatus tone="info" message={t("settings.evaluation.applyHint")} />
+          <FormActionBar
+            ariaLabel={t("settings.evaluation.actions.label")}
+            primaryActions={[
+              {
+                id: "save",
+                label: t("settings.evaluation.actions.save"),
+                icon: Save,
+                loading: save.isPending,
+                disabled: !dirty,
+                onClick: submit,
+              },
+            ]}
+            secondaryActions={[
+              {
+                id: "reset",
+                label: t("settings.evaluation.actions.reset"),
+                icon: RotateCcw,
+                disabled: !dirty || save.isPending,
+                onClick: resetForm,
+              },
+            ]}
+            status={
+              save.isError ? (
+                <FormStatus tone="danger" message={saveError} />
+              ) : dirty ? (
                 <FormStatus tone="warning" message={t("settings.evaluation.actions.unsaved")} />
-              ) : null}
-              {successMessage ? <FormStatus tone="success" message={successMessage} /> : null}
-              {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={resetForm}
-                disabled={!dirty || save.isPending}
-                icon={RotateCcw}
-              >
-                {t("settings.evaluation.actions.reset")}
-              </Button>
-              <Button
-                type="button"
-                loading={save.isPending}
-                disabled={!dirty}
-                onClick={submit}
-                icon={Save}
-              >
-                {t("settings.evaluation.actions.save")}
-              </Button>
-            </div>
-          </div>
+              ) : null
+            }
+          />
         </CardContent>
       </Card>
     </PageBody>

@@ -4351,6 +4351,15 @@ test("DeepSec は DATA USER password をページから保存し再起動なし�
   }
   await expectNoPageHorizontalScroll(page);
 
+  // 「${...}」は backend/.env を読み直すと環境変数として展開されるので、送らずに入力の誤りを示す。
+  await password.fill("Abc${HOME}defghij");
+  await saveButton.click();
+  await expect(
+    page.getByText("DATA USER パスワードに二重引用符、「${」、改行、制御文字は使用できません。", { exact: true }),
+  ).toBeVisible();
+  expect(savedPassword).toBe("");
+  await password.fill("DeepSecret!789");
+
   await saveButton.focus();
   await expect(saveButton).toBeFocused();
   await saveButton.press("Enter");

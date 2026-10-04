@@ -34,6 +34,8 @@ for (const viewport of [
     await expect(
       page.getByTestId("settings-evaluation-metric-answer_pass_rate")
     ).toContainText("標準回答が必要");
+    // 変更が実行済みの評価に効かないことを案内する（#1029）。
+    await expect(page.getByRole("main")).toContainText("実行済みの評価の合否は変わりません");
     // 375px ではナビがドロワー（#367）。開いて現在地を確かめる。
     await expect(
       (await openSidebarNav(page))
@@ -66,12 +68,55 @@ test("評価の基準は厳格を選んで閾値を表示し保存できる", as
     "閾値 100%"
   );
 
-  await page.getByRole("button", { name: "保存" }).click();
+  const actions = page.getByRole("group", { name: "評価の基準の操作" });
+  await actions.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("品質評価設定を保存しました。")).toBeVisible();
+  // 保存の成功は Toast（messaging.md §10.2）。操作の行に常設の成功の表示を残さない。
+  await expect(page.getByText("評価の基準を保存しました。")).toBeVisible();
+  await expect(actions).not.toContainText("保存しました");
+  await expect(actions.getByRole("button", { name: "変更を破棄" })).toBeDisabled();
   expect(saved).toEqual({ suite: "strict" });
   await expectNoHorizontalOverflow(page);
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 900 },
+]) {
+  test(`評価の基準の保存に失敗しても選択を残して操作の行に出し、変更を破棄で戻せる（#1029, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.route("**/api/settings/evaluation-suite", async (route) => {
+      if (route.request().method() === "PATCH") {
+        await route.fulfill({
+          status: 500,
+          json: {
+            data: null,
+            error_messages: ["品質評価設定を backend/.env へ保存できませんでした。"],
+            warning_messages: [],
+          },
+        });
+        return;
+      }
+      await route.fulfill({ json: evaluationEnvelope("standard") });
+    });
+
+    await page.goto("/settings/evaluation");
+    const strict = page.getByRole("radio", { name: /厳格/ });
+    await strict.click();
+    const actions = page.getByRole("group", { name: "評価の基準の操作" });
+    await actions.getByRole("button", { name: "保存" }).click();
+
+    await expect(actions).toContainText("品質評価設定を backend/.env へ保存できませんでした。");
+    await expect(strict).toBeChecked();
+    await expect(actions.getByRole("button", { name: "保存" })).toBeEnabled();
+    await expectNoHorizontalOverflow(page);
+    await actions.getByRole("button", { name: "変更を破棄" }).click();
+    await expect(page.getByRole("radio", { name: /標準/ })).toBeChecked();
+    await expect(actions.getByRole("button", { name: "保存" })).toBeDisabled();
+  });
+}
 
 test("品質評価設定取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
