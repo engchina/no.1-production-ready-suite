@@ -682,12 +682,15 @@ export const ja = {
   "settings.evaluation.suite.standard.description": "日常の確認と毎晩の回帰の判定に使う既定の閾値です。",
   "settings.evaluation.suite.strict": "厳格",
   "settings.evaluation.suite.strict.description": "リリース前の判定に使う高い閾値です。根拠のない主張と拒答の誤りを 1 件も許しません。",
+  "settings.evaluation.applyHint":
+    "変更は次に実行する品質評価から使います。実行済みの評価の合否は変わりません。品質評価の画面で評価の基準を選んで実行した場合は、そちらを使います。",
+  "settings.evaluation.actions.label": "評価の基準の操作",
   "settings.evaluation.actions.save": "保存",
-  "settings.evaluation.actions.saved": "品質評価設定を保存しました。",
+  "settings.evaluation.actions.saved": "評価の基準を保存しました。",
   "settings.evaluation.actions.reset": "変更を破棄",
   "settings.evaluation.actions.unsaved": "未保存の変更があります。",
-  "settings.evaluation.loadError": "品質評価設定を取得できませんでした。",
-  "settings.evaluation.saveError": "品質評価設定を保存できませんでした。",
+  "settings.evaluation.loadError": "評価の基準を取得できませんでした。",
+  "settings.evaluation.saveError": "評価の基準を保存できませんでした。",
   "settings.graph.subtitle":
     "文書を取り込むときに、文書と章・節の見出しのつながり（関係情報）を作るかどうかを選びます。",
   "settings.graph.overview.title": "ナレッジベースの関係情報グラフ",
