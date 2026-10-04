@@ -1559,6 +1559,14 @@ export const agentApi = {
     ),
 };
 
+/**
+ * 共通のシステム設定の取得の options。共有の画面は TanStack Query の `signal` を渡し、
+ * 画面を離れたら取得を止める（#1117）。
+ */
+export interface SettingsRequestOptions {
+  signal?: AbortSignal;
+}
+
 export const api = {
   // DB の状態（画面の DB ゲートが使う。3製品共通の判定と契約。ログイン不要。#325）。
   getDatabaseStatus: (options?: { signal?: AbortSignal }) =>
@@ -1570,7 +1578,8 @@ export const api = {
   initializeSystemTables: (body: SystemTablesInitializeRequest) =>
     request<SystemTablesOperationData>("/api/settings/database/system-tables/initialize", jsonBody(body)),
 
-  getModelSettings: () => request<ModelSettingsData>("/api/settings/model"),
+  getModelSettings: (options: SettingsRequestOptions = {}) =>
+    request<ModelSettingsData>("/api/settings/model", { signal: options.signal }),
   updateModelSettings: (body: ModelSettingsPayload) =>
     request<ModelSettingsData>("/api/settings/model", {
       method: "PATCH",
@@ -1583,8 +1592,8 @@ export const api = {
       jsonBody(body),
     ),
 
-  getDatabaseSettings: () =>
-    request<DatabaseSettingsData>("/api/settings/database"),
+  getDatabaseSettings: (options: SettingsRequestOptions = {}) =>
+    request<DatabaseSettingsData>("/api/settings/database", { signal: options.signal }),
   updateDatabaseSettings: (body: DatabaseSettingsUpdate) =>
     request<DatabaseSettingsData>("/api/settings/database", {
       method: "PATCH",
@@ -1612,7 +1621,8 @@ export const api = {
       jsonBody(body),
     ),
 
-  getAdbInfo: () => request<AdbInfoData>("/api/settings/database/adb"),
+  getAdbInfo: (options: SettingsRequestOptions = {}) =>
+    request<AdbInfoData>("/api/settings/database/adb", { signal: options.signal }),
   updateAdbSettings: (body: AdbSettingsUpdate) =>
     request<AdbInfoData>("/api/settings/database/adb/settings", jsonBody(body)),
   startAdb: () =>
@@ -1622,8 +1632,10 @@ export const api = {
   stopAdb: () =>
     request<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
 
-  getUploadStorageSettings: () =>
-    request<UploadStorageSettingsData>("/api/settings/upload-storage"),
+  getUploadStorageSettings: (options: SettingsRequestOptions = {}) =>
+    request<UploadStorageSettingsData>("/api/settings/upload-storage", {
+      signal: options.signal,
+    }),
   updateUploadStorageSettings: (body: UploadStorageSettingsUpdate) =>
     request<UploadStorageSettingsData>("/api/settings/upload-storage", {
       method: "PATCH",
@@ -1631,7 +1643,8 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  getOciSettings: () => request<OciSettingsData>("/api/settings/oci"),
+  getOciSettings: (options: SettingsRequestOptions = {}) =>
+    request<OciSettingsData>("/api/settings/oci", { signal: options.signal }),
   updateOciSettings: (body: OciSettingsUpdate) =>
     request<OciSettingsData>("/api/settings/oci", {
       method: "PATCH",
