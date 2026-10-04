@@ -7,6 +7,7 @@ import csv
 import importlib
 import io
 import json
+import re
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -2510,6 +2511,45 @@ def test_metadata_samples_use_requested_limit_and_generation_context() -> None:
     assert empty.sample_text == ""
     assert empty.sample_count == 0
     assert len(adapter.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "object_name", ["PLATFORM_USERS", "RAG_DOCUMENTS", "AGENT_RUNS", "NL2SQL_JOBS", "V$SESSION"]
+)
+def test_metadata_samples_and_domain_inventory_reject_hidden_targets_before_oracle(
+    monkeypatch: pytest.MonkeyPatch, object_name: str
+) -> None:
+    """システム・共通基盤・他製品の表は、Oracle に問い合わせる前に 400 にする（#943）。"""
+    samples_adapter = _FakeMetadataSamplesAdapter()
+    samples_service = _OracleRuntimeService(samples_adapter)
+    with pytest.raises(ValueError, match=re.escape(object_name)):
+        samples_service.get_metadata_samples(
+            MetadataSqlSampleRequest(
+                targets=[
+                    {"object_name": "EMPLOYEE", "object_type": "table", "columns": []},
+                    {"object_name": object_name, "object_type": "table", "columns": ["X"]},
+                ],
+                sample_limit=5,
+            )
+        )
+    assert samples_adapter.calls == []
+
+    domain_adapter = _FakeDomainInventoryAdapter(([], []))
+    domain_service = _OracleRuntimeService(domain_adapter)
+    with pytest.raises(ValueError, match=re.escape(object_name)):
+        domain_service.get_domain_inventory(
+            DomainInventoryRequest(targets=[{"object_name": object_name, "object_type": "table"}])
+        )
+    assert domain_adapter.calls == []
+
+    router = importlib.import_module("app.features.nl2sql.router")
+    monkeypatch.setattr(router, "nl2sql_service", domain_service)
+    with pytest.raises(HTTPException) as exc_info:
+        router.domain_inventory(
+            DomainInventoryRequest(targets=[{"object_name": object_name, "object_type": "table"}])
+        )
+    assert exc_info.value.status_code == 400
+    assert domain_adapter.calls == []
 
 
 def test_metadata_samples_fall_back_to_catalog_when_oracle_fails() -> None:

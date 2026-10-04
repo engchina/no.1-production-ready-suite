@@ -855,8 +855,9 @@ test.describe("Agent Runtime settings", () => {
     await page.getByRole("button", { name: "検証" }).click();
     await expect(result).toHaveAttribute("data-tone", "danger");
     await expect(result).toContainText(/スナップショットに問題が \d+ 件あります。直すまで置換できません。/);
-    await expect(result.getByText(/unsupported snapshot version/)).toBeVisible();
-    await expect(result.getByText(/duplicate agent id/)).toBeVisible();
+    // エラーは利用者が直せるよう日本語で対象の ID を示す（#1027）。
+    await expect(result.getByText("未対応のスナップショットの版です: unsupported")).toBeVisible();
+    await expect(result.getByText(/^ID が重複している業務 Agent があります: /)).toBeVisible();
     // 失敗のときは「詳細」を開いて出す。
     await expect(result.locator("details")).toHaveAttribute("open", "");
 
@@ -876,6 +877,14 @@ test.describe("Agent Runtime settings", () => {
     await expect(confirmation.getByText("確認済み", { exact: true })).toBeVisible();
     await expect(confirmInput).not.toHaveAttribute("aria-invalid", "true");
     await expect(replace).toBeEnabled();
+    // 無効なスナップショットの置換の失敗は、置換の行の直下に日本語の理由で出す（#1027）。
+    await replace.click();
+    await page.getByRole("alertdialog").or(page.getByRole("dialog")).getByRole("button", { name: "置換" }).click();
+    await expect(
+      page.getByText(
+        "スナップショットで置き換えられませんでした。スナップショットに 2 件のエラーがあるため置換できません。「検証」でエラーの内容を確認してください。"
+      )
+    ).toBeVisible();
     await confirmInput.fill("");
     await expect(replace).toBeDisabled();
 

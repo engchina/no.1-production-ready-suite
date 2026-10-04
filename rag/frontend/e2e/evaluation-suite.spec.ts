@@ -181,6 +181,56 @@ test("基準を選ぶと閾値プレビューを更新し suite を送る", asyn
   await expectNoPageOverflow(page);
 });
 
+// #977: 状態の取得が retry を使い切って失敗しても、実行中の job の状態の取得を止めない（止めると「実行中」のまま）。
+test("実行中の評価の状態の取得が一時的に失敗しても、取得を続けて完了を出す", async ({ page }) => {
+  test.setTimeout(60_000);
+  const jobs = await mockEvaluationJobs(page, { runResult: () => evaluationMetrics("standard") });
+  await page.goto("/evaluation");
+  await page.getByRole("button", { name: "評価実行" }).click();
+  await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 2 件（0%）");
+
+  let failing = true;
+  let failures = 0;
+  await page.route("**/api/evaluation/jobs/jobrun*", async (route) => {
+    if (failing && route.request().method() === "GET") {
+      failures += 1;
+      await route.fulfill({ status: 503, json: { data: null, error_messages: ["一時的に利用できません。"] } });
+      return;
+    }
+    await route.fallback();
+  });
+  // 1 回の取得の retry（3 回）を使い切ると、パネルの直下に取得できていないことを出す。
+  const warning = page.getByText("評価の実行状況を取得できません。自動で取得し直しています。", { exact: false });
+  await expect(warning).toBeVisible({ timeout: 20_000 });
+  const panel = page.getByTestId("evaluation-run-job");
+  await expect(panel.locator("[data-status-variant]")).toHaveText("実行中");
+  await expectNoPageOverflow(page);
+
+  failing = false;
+  jobs.complete("run");
+  await expect(panel.locator("[data-status-variant]")).toHaveText("完了", { timeout: 15_000 });
+  await expect(warning).toHaveCount(0);
+  await expect(page.getByTestId("evaluation-perspective-retrieval")).toBeVisible();
+});
+
+test("cases の id が空・重複していると、実行せずに Golden set JSON の欄の直下に出す", async ({ page }) => {
+  const jobs = await mockEvaluationJobs(page, { autoComplete: true });
+  await page.goto("/evaluation");
+  const request = page.getByLabel("Golden set JSON");
+  const run = page.getByRole("button", { name: "評価実行" });
+
+  await request.fill(JSON.stringify({ cases: [{ id: "a", query: "q1" }, { id: "a", query: "q2" }] }));
+  await run.click();
+  await expect(request).toHaveAccessibleDescription(/cases の id が重複しています: a。/);
+  await expect(request).toBeFocused();
+
+  await request.fill(JSON.stringify({ cases: [{ id: "a", query: "q1" }, { query: "q2" }] }));
+  await page.getByRole("button", { name: "比較実行" }).click();
+  await expect(request).toHaveAccessibleDescription(/cases の 2 件目に id/);
+  expect(jobs.runPayloads).toHaveLength(0);
+  expect(jobs.comparePayloads).toHaveLength(0);
+});
+
 async function mockKnowledgeBases(page: Page) {
   await page.route("**/api/knowledge-bases**", async (route) => {
     await route.fulfill({
