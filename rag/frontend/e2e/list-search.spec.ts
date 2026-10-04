@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "./fixtures/test";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 // #535: 一覧の絞り込みの検索は 3 製品で同じ部品（SearchField）と規則で動く。

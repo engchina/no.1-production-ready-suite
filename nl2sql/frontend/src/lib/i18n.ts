@@ -38,6 +38,9 @@ const nl2sqlJa = {
   "chat.noProfilesHint": "業務プロファイルの設定と利用権限を確認してください。",
   "chat.loadFailed": "会話を読み込めませんでした。",
   "chat.sendFailed": "SQL の生成を開始できませんでした。",
+  "chat.sendTimeout": "送信の応答が {seconds} 秒以内に返りませんでした。",
+  "chat.sendTimeout.action":
+    "サーバーでは SQL の生成が始まっている可能性があります。少し待ってから会話の履歴を確かめ、見当たらなければもう一度送信してください。",
   "chat.stopFailed": "SQL の生成を停止できませんでした。",
   "chat.retry": "再読み込み",
   "chat.loadMore": "さらに読み込む",
@@ -135,6 +138,22 @@ const nl2sqlJa = {
   "common.backToList": "一覧へ戻る",
   "common.errorWithRequestId": "{message}（リクエストID: {requestId}）",
   "common.requestId": "リクエストID",
+  // 応答が届かなかった API 呼び出し（timeout・通信断）の利用者向けの文（#900）。
+  "api.transport.timeout": "サーバーの応答が {seconds} 秒以内に返りませんでした。",
+  "api.transport.timeoutUnknownLimit": "サーバーの応答が規定の時間内に返りませんでした。",
+  "api.transport.timeout.action":
+    "サーバーでは処理が続いている可能性があります。少し待ってから画面を更新して結果を確かめ、反映されていなければもう一度実行してください。",
+  "api.transport.network": "サーバーに接続できませんでした。",
+  "api.transport.network.action":
+    "ネットワークの接続とサーバーの起動状態を確かめてから、もう一度実行してください。",
+  "api.error.details": "詳細",
+  "api.error.details.request": "要求",
+  "api.error.details.limit": "待ち時間の上限",
+  "api.error.details.limitSeconds": "{seconds} 秒",
+  "api.error.details.status": "HTTP ステータス",
+  "api.error.details.errorCode": "エラーコード",
+  "api.error.details.errorType": "エラー種別",
+  "api.error.details.rawMessage": "元のメッセージ",
   "common.clearSearch": "検索語をクリア",
   "common.clearInput": "入力をクリア",
   "common.processing.elapsed": "経過時間",

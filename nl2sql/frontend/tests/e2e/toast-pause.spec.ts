@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./_helpers/test";
 
 // #351: 通知はホバー・フォーカス中に消えず、離れたら残り時間から再開する。danger は閉じるまで残る。
 // タイマーは page.clock で止めて進め、実時間に依存しない。

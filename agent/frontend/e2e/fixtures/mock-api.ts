@@ -12,7 +12,7 @@
  *   `route.continue()`（ネットワークへ流す）は使わない。
  * - どの handler も扱わなかった /api は 404 で終端し、テスト終了時に失敗させる。
  */
-import { expect, test as base, type Page, type Route } from "@playwright/test";
+import { expect, test as base, type Page, type Route } from "./test";
 import { readFileSync } from "node:fs";
 
 import {

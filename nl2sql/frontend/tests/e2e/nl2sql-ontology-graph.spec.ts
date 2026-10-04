@@ -1,5 +1,5 @@
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
-import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
 import { chooseSelectFieldOption } from "./_helpers/select-field";

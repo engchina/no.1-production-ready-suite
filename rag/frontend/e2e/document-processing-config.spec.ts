@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "./fixtures/test";
 
 import type { DocumentProcessingConfig, DocumentRecipeStep } from "../src/lib/api";
 import { expectNoPageOverflow, mockAuthUser, mockDatabaseReady, mockLocalAuth } from "./_helpers";

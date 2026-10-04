@@ -148,12 +148,95 @@ export function isTimeoutError(cause: unknown): boolean {
   return cause instanceof Error && cause.name === "TimeoutError";
 }
 
+export type ApiTransportFailureKind = "timeout" | "network";
+
+/**
+ * 応答が届かなかった API 呼び出し（待ち時間の上限を超えた・サーバーに接続できない。#900）。
+ *
+ * `message` は利用者向けの日本語（何が起きたか + 次にできること）にし、ブラウザの英語の文
+ * （`signal timed out` / `Failed to fetch`）は `causeMessage` に分けて「詳細」に出す。
+ * timeout の `name` は `TimeoutError` のままにし、既存の `isTimeoutError` の判定を変えない。
+ */
+export class ApiTransportError extends Error {
+  readonly kind: ApiTransportFailureKind;
+  /** 何が起きたか（1 文目）。 */
+  readonly summary: string;
+  /** 次にできること。 */
+  readonly nextAction: string;
+  readonly method: string;
+  readonly path: string;
+  readonly timeoutMs?: number;
+  readonly causeName: string;
+  readonly causeMessage: string;
+
+  constructor(
+    kind: ApiTransportFailureKind,
+    request: { method: string; path: string; timeoutMs?: number },
+    cause: unknown,
+  ) {
+    const summary =
+      kind === "network"
+        ? t("api.transport.network")
+        : request.timeoutMs
+          ? t("api.transport.timeout", {
+              seconds: Math.ceil(request.timeoutMs / 1000),
+            })
+          : t("api.transport.timeoutUnknownLimit");
+    const nextAction = t(
+      kind === "network"
+        ? "api.transport.network.action"
+        : "api.transport.timeout.action",
+    );
+    super(`${summary}${nextAction}`, { cause });
+    this.name = kind === "timeout" ? "TimeoutError" : "NetworkError";
+    this.kind = kind;
+    this.summary = summary;
+    this.nextAction = nextAction;
+    this.method = request.method;
+    this.path = request.path;
+    this.timeoutMs = request.timeoutMs;
+    this.causeName = cause instanceof Error ? cause.name : typeof cause;
+    this.causeMessage = cause instanceof Error ? cause.message : String(cause);
+  }
+}
+
+export function isTransportError(cause: unknown): cause is ApiTransportError {
+  return cause instanceof ApiTransportError;
+}
+
+/** fetch が投げる通信の失敗（ブラウザごとに文が違う TypeError。`Failed to fetch` など）。 */
+function isNetworkFailure(cause: unknown): boolean {
+  return cause instanceof TypeError;
+}
+
+/** requestSignal が付けた待ち時間の上限（timeout の文に秒数を出すため）。 */
+const signalTimeouts = new WeakMap<AbortSignal, number>();
+
 function requestSignal(options: ApiRequestOptions): AbortSignal | undefined {
   if (!options.timeoutMs || options.timeoutMs <= 0) return options.signal;
   const timeoutSignal = AbortSignal.timeout(options.timeoutMs);
-  return options.signal
+  const signal = options.signal
     ? AbortSignal.any([options.signal, timeoutSignal])
     : timeoutSignal;
+  signalTimeouts.set(signal, options.timeoutMs);
+  return signal;
+}
+
+type TransportRequest = { method: string; path: string; timeoutMs?: number };
+
+/** 応答の本文を読むときの失敗に、要求（method・path・上限）を添えるため。 */
+const responseRequests = new WeakMap<Response, TransportRequest>();
+
+function transportRequest(
+  method: string,
+  path: string,
+  signal?: AbortSignal | null,
+): TransportRequest {
+  return {
+    method,
+    path: path.split("?")[0] ?? path,
+    timeoutMs: signal ? signalTimeouts.get(signal) : undefined,
+  };
 }
 
 let inFlightPersistenceRecovery: Promise<boolean> | null = null;
@@ -241,7 +324,14 @@ export async function apiFetch(
   try {
     response = await fetch(path, requestInit);
   } catch (cause) {
-    if (isAbortError(cause) || isTimeoutError(cause)) throw cause;
+    if (isAbortError(cause)) throw cause;
+    if (isTimeoutError(cause)) {
+      throw new ApiTransportError(
+        "timeout",
+        transportRequest(method, path, init.signal),
+        cause,
+      );
+    }
     if (!isDatabaseReadinessRequest(path)) {
       let failure: DatabaseOperationalFailure | null = null;
       await confirmDatabaseUnavailable(fetch, (next) => {
@@ -259,8 +349,16 @@ export async function apiFetch(
       }
       if (failure) reportDatabaseOperationalFailure(failure);
     }
+    if (isNetworkFailure(cause)) {
+      throw new ApiTransportError(
+        "network",
+        transportRequest(method, path, init.signal),
+        cause,
+      );
+    }
     throw cause;
   }
+  responseRequests.set(response, transportRequest(method, path, init.signal));
   notifyResponseAuthStatus(response);
   if (shouldConfirmDatabaseUnavailable(path, response.status)) {
     let failure: DatabaseOperationalFailure | null = null;
@@ -282,8 +380,20 @@ export async function apiFetch(
   return response;
 }
 
+/** 本文の読み取り中に待ち時間の上限を超えた・接続が切れたときも、利用者向けの失敗にする（#900）。 */
+async function readJsonBody(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch (cause) {
+    const request = responseRequests.get(response) ?? { method: "", path: "" };
+    if (isTimeoutError(cause)) throw new ApiTransportError("timeout", request, cause);
+    if (isNetworkFailure(cause)) throw new ApiTransportError("network", request, cause);
+    throw cause;
+  }
+}
+
 async function parseJson<T>(response: Response): Promise<T> {
-  const payload = (await response.json()) as ApiEnvelope<T> & {
+  const payload = (await readJsonBody(response)) as ApiEnvelope<T> & {
     error_messages?: unknown;
     detail?: unknown;
     error_details?: ApiErrorDetails;

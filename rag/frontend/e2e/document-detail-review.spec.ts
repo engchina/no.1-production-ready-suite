@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "./fixtures/test";
 import { mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 // Issue 281: 文書の詳細（DocumentWorkspace）の不具合の回帰。

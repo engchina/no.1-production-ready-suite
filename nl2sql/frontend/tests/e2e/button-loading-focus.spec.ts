@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./_helpers/test";
 
 // #355: 共有 Button は loading 中もフォーカスを保ち（ネイティブの disabled ではなく aria-disabled）、
 // クリック・Enter / Space・form の暗黙の送信による二重送信を止める。

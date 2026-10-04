@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./_helpers/test";
 import { expectCompactSortHeaders } from "./_helpers/sort-header";
 
 for (const theme of ["light", "dark"]) {

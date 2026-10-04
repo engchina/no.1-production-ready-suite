@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Page, type Route } from "./_helpers/test";
 import { closeSidebarNav, openSidebarNav } from "./_helpers/sidebar-nav";
 
 import { systemAdminMe } from "./_helpers/database-gate";

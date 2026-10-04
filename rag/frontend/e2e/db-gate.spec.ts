@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./fixtures/test";
 import {
   SYSTEM_TABLES_STATUS_OK,
   expectNoPageOverflow,
@@ -167,6 +167,36 @@ test("状態の確認中は経過時間付きの読み込み表示を出す", as
   release();
   await expect(loading).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "データベースに接続できません" })).toBeVisible();
+});
+
+test("確認が 10 秒を超えて遅延の案内が出ても、読み込みのカードとスピナーは動かない（#902）", async ({ page }) => {
+  await page.clock.install();
+  await routeAuth(page);
+  await page.route("**/api/ready/database", () => new Promise<void>(() => undefined));
+
+  await page.goto("/file-list");
+
+  const loading = page.getByTestId("database-gate-loading");
+  const spinner = loading.locator("svg.animate-spin").first();
+  await expect(spinner).toBeVisible();
+  // 回転の角度によらない中心と、カードの位置・高さ。
+  const geometry = async () => {
+    const box = await spinner.boundingBox();
+    const card = await loading.boundingBox();
+    if (!box || !card) throw new Error("読み込みの表示が見つかりません");
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2, top: card.y, height: card.height };
+  };
+  const before = await geometry();
+  await expect(loading).not.toContainText("通常より時間がかかっています");
+
+  await page.clock.fastForward(11_000);
+  await expect(loading).toContainText("通常より時間がかかっています");
+  const after = await geometry();
+  // 遅延の案内の行は最初から高さを予約しているので、中央寄せのカードもスピナーも動かない。
+  expect(Math.abs(after.x - before.x)).toBeLessThan(0.5);
+  expect(Math.abs(after.y - before.y)).toBeLessThan(0.5);
+  expect(Math.abs(after.top - before.top)).toBeLessThan(0.5);
+  expect(Math.abs(after.height - before.height)).toBeLessThan(0.5);
 });
 
 test("システム設定の 5 画面は DB が無くてもゲートを通さずに開ける", async ({ page }) => {

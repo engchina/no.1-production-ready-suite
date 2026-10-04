@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./fixtures/test";
 import { apiEnvelope, expectNoPageOverflow, mockAuthUser, mockLocalAuth, openSidebarNav } from "./_helpers";
 
 // 検索方法の画面（#595）。回答の検索と生成・回答の記録の保存期間・質問履歴の 3 つのカードだけを持つ。

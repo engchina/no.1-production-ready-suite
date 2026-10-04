@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { openSidebarNav, closeSidebarNav } from "./_helpers/sidebar-nav";
 import {
@@ -219,6 +219,161 @@ test("生成中は停止でき、失敗時も草稿と入力欄を保持する",
   await expect(page.getByText("モデルへ接続できません。")).toBeVisible();
   await expect(composer).toHaveValue("次の条件");
 });
+/**
+ * ジョブの投入の上限（120 秒）だけを短くする。ほかの要求の上限は変えない（#900）。
+ */
+async function shortenJobSubmitTimeout(page: Page) {
+  await page.addInitScript(() => {
+    const original = AbortSignal.timeout.bind(AbortSignal);
+    AbortSignal.timeout = (ms: number) => original(ms === 120_000 ? 300 : ms);
+  });
+}
+
+/** 応答を返さないジョブの投入。テストの終わりに abort して後始末する。 */
+async function holdJobSubmit(page: Page, state: { requests: Record<string, unknown>[] }) {
+  const held: import("@playwright/test").Route[] = [];
+  await page.route("**/api/nl2sql/jobs", (route) => {
+    state.requests.push(route.request().postDataJSON());
+    held.push(route);
+  });
+  return async () => {
+    await Promise.all(held.map((route) => route.abort().catch(() => undefined)));
+  };
+}
+
+test("送信の応答が上限までに届かないと、英語の signal timed out ではなく日本語の案内と詳細を出す (#900)", async ({
+  page,
+}, testInfo) => {
+  const state = await setup(page);
+  await shortenJobSubmitTimeout(page);
+  const release = await holdJobSubmit(page, state);
+  const recovered: string[] = [];
+  // backend はジョブを作り終えていない（取り直しは 404）。
+  await page.route("**/api/nl2sql/jobs/*", (route) => {
+    recovered.push(new URL(route.request().url()).pathname);
+    return route.fulfill({
+      status: 404,
+      json: { error: "指定されたジョブが見つかりません。" },
+    });
+  });
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  await composer.fill("select * from employee");
+  await composer.press("Enter");
+  const failure = page.getByTestId("sql-chat-send-error");
+  await expect(failure).toBeVisible();
+  const banner = failure.getByRole("alert");
+  await expect(banner).toContainText(
+    "送信の応答が 120 秒以内に返りませんでした。",
+  );
+  await expect(banner).toContainText(
+    "少し待ってから会話の履歴を確かめ、見当たらなければもう一度送信してください。",
+  );
+  // ブラウザの英語の文は「詳細」にだけ出す（失敗なので開いて出す）。
+  const details = failure.locator("details");
+  await expect(details).toHaveAttribute("open", "");
+  await expect(details).toContainText("POST /api/nl2sql/jobs");
+  await expect(details).toContainText("120 秒");
+  await expect(details).toContainText("TimeoutError");
+  await expect(failure.locator("p").first()).not.toContainText("signal");
+  // 送信前に決めた job ID で取り直しを試み、草稿は残す。
+  const clientJobId = String(state.requests[0]?.client_job_id ?? "");
+  expect(clientJobId).toMatch(/^[0-9a-f-]{36}$/u);
+  expect(recovered).toEqual([`/api/nl2sql/jobs/${clientJobId}`]);
+  await expect(composer).toHaveValue("select * from employee");
+  await expect(page.getByTestId("sql-chat-send")).toHaveAccessibleName("送信");
+  // 結果は入力欄の行の直下に、会話の欄の幅で出す（messaging.md §10.1）。
+  const composerBox = (await composer.boundingBox())!;
+  const failureBox = (await failure.boundingBox())!;
+  const regionBox = (await page
+    .getByTestId("sql-chat-composer-region")
+    .boundingBox())!;
+  expect(failureBox.y).toBeGreaterThan(composerBox.y + composerBox.height - 1);
+  expect(regionBox.width - failureBox.width).toBeLessThan(32);
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(0);
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await page.evaluate(
+      (dark) => document.documentElement.classList.toggle("dark", dark),
+      colorScheme === "dark",
+    );
+    await failure.screenshot({
+      path: testInfo.outputPath(`chat-send-timeout-${colorScheme}.png`),
+    });
+  }
+  await release();
+});
+
+test("送信の応答が届かなくても、作成済みのジョブを取り直して生成の結果を表示する (#900)", async ({
+  page,
+}) => {
+  const state = await setup(page);
+  await shortenJobSubmitTimeout(page);
+  const release = await holdJobSubmit(page, state);
+  await page.route("**/api/nl2sql/jobs/*", (route) => {
+    const jobId = new URL(route.request().url()).pathname.split("/").at(-1)!;
+    const turn: Turn = {
+      job_id: jobId,
+      question: "select * from employee",
+      status: "done",
+      created_at: now,
+      steps: [],
+      result: {
+        generated_sql: "SELECT * FROM APP.EMPLOYEE",
+        original_question: "select * from employee",
+        explanation: "",
+        safety: { is_safe: true },
+      },
+    };
+    if (!state.turns.some((item) => item.job_id === jobId))
+      state.turns.push(turn);
+    return route.fulfill({ json: { data: turn } });
+  });
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  await composer.fill("select * from employee");
+  await composer.press("Enter");
+  await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
+  await expect(page.locator("pre").last()).toContainText(
+    "SELECT * FROM APP.EMPLOYEE",
+  );
+  await expect(page.getByTestId("sql-chat-send-error")).toHaveCount(0);
+  await expect(composer).toHaveValue("");
+  expect(state.requests).toHaveLength(1);
+  await release();
+});
+
+test("サーバーに接続できないときは英語の Failed to fetch ではなく日本語で案内する (#900)", async ({
+  page,
+}) => {
+  const state = await setup(page);
+  await page.route("**/api/nl2sql/jobs", (route) => {
+    state.requests.push(route.request().postDataJSON());
+    return route.abort("failed");
+  });
+  await page.route("**/api/nl2sql/jobs/*", (route) => route.abort("failed"));
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  await composer.fill("select * from employee");
+  await composer.press("Enter");
+  const failure = page.getByTestId("sql-chat-send-error");
+  await expect(failure.getByRole("alert")).toContainText(
+    "サーバーに接続できませんでした。",
+  );
+  await expect(failure.getByRole("alert")).toContainText(
+    "ネットワークの接続とサーバーの起動状態を確かめてから、もう一度実行してください。",
+  );
+  await expect(failure.locator("details")).toContainText("POST /api/nl2sql/jobs");
+  await expect(failure.locator("p").first()).not.toContainText("Failed to fetch");
+  await expect(composer).toHaveValue("select * from employee");
+});
+
 test("AI 活用の先頭のチャットは、生成だけの権限でも利用できる", async ({
   page,
 }) => {

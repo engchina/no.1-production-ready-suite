@@ -187,6 +187,7 @@ from .quality_evaluation_service import (
 )
 from .service import (
     _SCHEMA_EMPTY_MESSAGE,
+    JobIdConflictError,
     ProfileNameConflict,
     ProfileOracleCleanupFailed,
     ProfileScopePermissionError,
@@ -502,6 +503,8 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail="他の利用者の会話は継続できません。") from exc
+    except JobIdConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
