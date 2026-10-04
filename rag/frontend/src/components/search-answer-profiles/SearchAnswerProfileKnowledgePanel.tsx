@@ -17,11 +17,13 @@ import {
   TimedLoadingState,
 } from "@engchina/production-ready-ui";
 
+import { ErrorState } from "@/components/StateViews";
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { useValuesChanged } from "@/lib/render-sync";
 import {
+  initialLoadError,
   useDomainKeywords,
   useSaveDomainKeywords,
   useSuggestDomainKeywords,
@@ -128,6 +130,21 @@ function DomainKeywordsEditor({ searchAnswerProfileId }: { searchAnswerProfileId
       >
         <Skeleton className="h-40 w-full" />
       </TimedLoadingState>
+    );
+  }
+
+  // 初回の読み込みに失敗したら、空の編集欄を出さない（保存は全置換なので、空から保存すると登録済みの語を消す）。
+  const loadError = initialLoadError(query);
+  if (loadError) {
+    return (
+      <ErrorState
+        message={
+          loadError instanceof ApiError
+            ? loadError.message
+            : t("searchAnswerProfiles.domainKeywords.loadError")
+        }
+        onRetry={() => void query.refetch()}
+      />
     );
   }
 

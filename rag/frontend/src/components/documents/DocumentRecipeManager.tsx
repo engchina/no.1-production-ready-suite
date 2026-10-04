@@ -104,6 +104,7 @@ export function DocumentRecipeManager({
   onRetry,
   chunkSets,
   sourceModality = null,
+  approveBlocked = false,
 }: {
   documentId: string;
   recipes: DocumentRecipeView[];
@@ -114,6 +115,8 @@ export function DocumentRecipeManager({
   onRetry: () => void;
   chunkSets?: DocumentChunkSet[];
   sourceModality?: string | null;
+  /** 選んでいるレシピの承認を止める（抽出確認の未保存の修正がある。#944）。 */
+  approveBlocked?: boolean;
 }) {
   const selected = resolveSelectedRecipe(recipes, selectedRecipeId);
   const createRecipe = useCreateDocumentRecipe();
@@ -175,6 +178,7 @@ export function DocumentRecipeManager({
   const handleProcess = () => {
     if (!selected || active) return;
     if (["PREPROCESSED", "REVIEW", "CHUNKED"].includes(selected.status)) {
+      if (approveBlocked) return;
       approve.mutate({ id: documentId, recipeId: selected.recipe_id });
       return;
     }
@@ -228,9 +232,13 @@ export function DocumentRecipeManager({
   const deletePending =
     deleteRecipe.isPending && deleteRecipe.variables?.recipeId === selected.recipe_id;
   const recipeOperationPending = enqueue.isPending || approve.isPending || deleteRecipe.isPending;
-  const processError = enqueue.error ?? approve.error;
+  // 失敗は、失敗した操作のレシピを選んでいるときだけ出す（別のレシピの失敗として見せない。#944）。
+  const processError =
+    (enqueue.variables?.recipeId === selected.recipe_id ? enqueue.error : null) ??
+    (approve.variables?.recipeId === selected.recipe_id ? approve.error : null);
   // 削除の失敗（処理中・最少 1 件など）も操作の近くに出す。以前は確認ダイアログを閉じた後に何も出なかった（#281）。
-  const deleteError = deleteRecipe.error;
+  const deleteError =
+    deleteRecipe.variables?.recipeId === selected.recipe_id ? deleteRecipe.error : null;
   const layerStatuses = recipeLayerStatuses(selected, chunkSets);
   const layerRebuild = recipeLayerRebuildSummary(layerStatuses);
   // 選択中のレシピの操作（buttons.md §5.1）。処理は非破壊の高頻度操作として表示し、
@@ -241,7 +249,10 @@ export function DocumentRecipeManager({
       label: processButtonLabel(selected),
       icon: selected.status === "ERROR" ? RotateCcw : Play,
       loading: processPending,
-      disabled: active || (recipeOperationPending && !processPending),
+      disabled:
+        active ||
+        (recipeOperationPending && !processPending) ||
+        (approveBlocked && ["PREPROCESSED", "REVIEW", "CHUNKED"].includes(selected.status)),
       onSelect: handleProcess,
     },
     {

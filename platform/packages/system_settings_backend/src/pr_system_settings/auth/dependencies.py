@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Collection
 from contextlib import asynccontextmanager
 from functools import partial
@@ -25,6 +26,9 @@ from .service import AuthService
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 UNCLASSIFIED_PERMISSION = "__unclassified__"
+# path の変換指定（`{object_name:path}` の `:path`）。権限の manifest と OpenAPI は変換指定のない
+# `{object_name}` で書くので、照合の前に除く（#998）。
+_PATH_CONVERTER_RE = re.compile(r"\{([^{}:]+):[^{}]+\}")
 
 
 class AuthRequestSettings(Protocol):
@@ -42,7 +46,10 @@ RunSync = Callable[..., Awaitable[Any]]
 
 
 def permission_route_path(request: Request, *, api_prefix: str = "/api") -> str:
-    """多重 include の prefix を含む、ルーターが照合済みの template を使用する。"""
+    """多重 include の prefix を含む、ルーターが照合済みの template を使用する。
+
+    path の変換指定（`{name:path}` など）は除き、OpenAPI・権限の manifest と同じ `{name}` にする。
+    """
     # FastAPI の遅延 include では scope['route'] は元の APIRoute のまま。
     # OpenAPI と同じ完全な path は effective route context に保存される。
     fastapi_scope = request.scope.get("fastapi")
@@ -53,7 +60,7 @@ def permission_route_path(request: Request, *, api_prefix: str = "/api") -> str:
     if not isinstance(path, str):
         route = request.scope.get("route")
         path = str(getattr(route, "path", request.url.path))
-    return path.removeprefix(api_prefix)
+    return _PATH_CONVERTER_RE.sub(r"{\1}", path).removeprefix(api_prefix)
 
 
 @asynccontextmanager

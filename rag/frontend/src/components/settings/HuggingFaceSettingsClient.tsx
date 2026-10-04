@@ -17,7 +17,7 @@ import {
 import { HardDriveDownload, Save } from "lucide-react";
 import { useState } from "react";
 
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import {
   ApiError,
   type HuggingFaceSettingsData,
@@ -98,12 +98,9 @@ export function HuggingFaceSettingsClient() {
     if (query.isError) {
       return (
         <PageBody wide>
-          <ErrorState
-            message={
-              query.error instanceof ApiError
-                ? query.error.message
-                : t("settings.huggingface.loadError")
-            }
+          <ApiErrorState
+            error={query.error}
+            fallback={t("settings.huggingface.loadError")}
             onRetry={() => void query.refetch()}
           />
         </PageBody>

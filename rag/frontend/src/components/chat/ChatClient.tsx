@@ -580,7 +580,10 @@ export function ChatClient() {
   useEffect(() => {
     if (previousSearchAnswerProfileIdRef.current === searchAnswerProfileId) return;
     previousSearchAnswerProfileIdRef.current = searchAnswerProfileId;
+    // 送信・生成を打ち切り、送信中の状態も解く（cancelSending と同じ。照会の応答を待たない）。
     abortRef.current?.abort();
+    abortRef.current = null;
+    setSending(false);
     setActiveId(null);
     setLiveTurn(null);
     setFaqChoice(null);
@@ -636,7 +639,7 @@ export function ChatClient() {
     // lg 未満のシートは、会話を選んだら閉じる（開閉ボタンへフォーカスを戻す）。
     setHistorySheetOpen(false);
     if (id === activeId) return;
-    abortRef.current?.abort();
+    cancelSending();
     setLiveTurn(null);
     setErrorText("");
     setActiveId(id);
@@ -663,6 +666,8 @@ export function ChatClient() {
       const created = await createConversation.mutateAsync({ search_answer_profile_id: searchAnswerProfileId });
       // 新しい会話は一覧の先頭（更新日時の新しい順）に入るので、1 ページ目に戻して見せる。
       setConversationOffset(0);
+      // 前の会話への送信・生成は、別の会話を選んだときと同じく止める（新しい会話を送信中のままにしない）。
+      cancelSending();
       setActiveId(created.id);
       setLiveTurn(null);
       focusComposer();
@@ -717,7 +722,7 @@ export function ChatClient() {
     if (!ok) return;
     try {
       if (conversation.id === activeId) {
-        abortRef.current?.abort();
+        cancelSending();
         setLiveTurn(null);
         setErrorText("");
         setActiveId(null);
@@ -779,6 +784,17 @@ export function ChatClient() {
       failureMessage: null,
       request,
     };
+  }
+
+  /**
+   * 送信・生成を打ち切り、送信中の状態をすぐ解く（別の会話・検索・回答プロファイルに移るとき）。
+   * 類似問・確認の照会は中止できず、応答を待つ間は後始末（`releaseController`）に届かないため、
+   * ここで `sending` を戻す（戻さないと移った先でも「停止」のままになり送信できない）。
+   */
+  function cancelSending() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setSending(false);
   }
 
   /** 終わった・止めた送信の後始末（後から始めた送信の状態は変えない）。 */

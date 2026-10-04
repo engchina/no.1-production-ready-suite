@@ -89,11 +89,13 @@ describe("TextField のクリア（onClear）と後置スロット（trailing）
     expect(button).toContain('aria-controls="q"');
     // Tab 順は入力欄 → クリアボタン（DOM の順）。
     expect(html.indexOf("<input")).toBeLessThan(html.indexOf("<button"));
-    // 枠線の内側の右端。入力欄の高さの正方形で、外側の角だけ入力欄の角丸に合わせる。
+    // 枠線まで含めた右端。入力欄と同じ高さ（md 36px・タッチ端末 44px）の正方形で、外側の角だけ入力欄の角丸に合わせる。
+    // 地は枠線の内側だけに塗る（ホバーの地を入力欄の枠線に重ねない）。
     const slot = openingTag(html, /data-text-field-slot="trailing"/);
-    expect(classesOf(slot)).toEqual(expect.arrayContaining(["absolute", "inset-y-px", "right-px"]));
+    expect(classesOf(slot)).toEqual(expect.arrayContaining(["absolute", "inset-y-0", "right-0"]));
+    expect(classesOf(slot)).not.toContain("inset-y-px");
     expect(classesOf(button)).toEqual(
-      expect.arrayContaining(["h-full", "min-h-0", "aspect-square", "rounded-l-none", "rounded-r-[calc(var(--radius-control)-1px)]"])
+      expect.arrayContaining(["h-full", "min-h-0", "aspect-square", "rounded-l-none", "rounded-r-control", "bg-clip-padding"])
     );
     expect(classesOf(input(html))).toContain(TEXT_FIELD_TRAILING_FALLBACK_PADDING_CLASS);
   });
