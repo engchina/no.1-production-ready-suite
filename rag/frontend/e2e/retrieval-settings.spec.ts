@@ -258,6 +258,175 @@ test("回答の検索と生成の既定を読み込めないときは、その�
   await expect(page.getByRole("button", { name: "質問履歴の設定を保存" })).toBeVisible();
 });
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 1000, collapse: false },
+  { name: "mobile", width: 375, height: 900, collapse: true },
+]) {
+  test(`質問履歴の数値の欄は空・範囲外を保存の前に欄の下で知らせ、backend の英語の 422 を出さない（#1002, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    if (viewport.collapse) await collapseSidebar(page);
+    await mockRetrievalCards(page);
+    const saved: unknown[] = [];
+    const initial = { ...QUERY_HISTORY, retention_days: 60 };
+    await page.route("**/api/settings/query-history", async (route) => {
+      if (route.request().method() === "PATCH") {
+        const body = route.request().postDataJSON();
+        saved.push(body);
+        await route.fulfill({ json: apiEnvelope(body) });
+        return;
+      }
+      await route.fulfill({ json: apiEnvelope(initial) });
+    });
+
+    await page.goto("/settings/retrieval");
+    // .env で決めた選択肢に無い保存期間も「N 日」と出す。
+    await expect(page.getByRole("combobox", { name: "履歴の保存期間", exact: true })).toHaveText(/60 日/);
+    const minCount = page.getByRole("spinbutton", { name: "候補にする最小回数" });
+    const actions = page.getByRole("group", { name: "質問履歴の設定の操作" });
+    const save = actions.getByRole("button", { name: "質問履歴の設定を保存" });
+
+    // 空にしても 0 に戻さない。保存を押すと欄の下に理由を出し、その欄へ移る。
+    await minCount.fill("");
+    await expect(minCount).toHaveValue("");
+    await save.click();
+    await expect(page.getByText("候補にする最小回数を入力してください。")).toBeVisible();
+    await expect(minCount).toBeFocused();
+
+    await minCount.fill("1001");
+    await expect(
+      page.getByText("候補にする最小回数は 1 以上 1,000 以下の整数を入力してください。")
+    ).toBeVisible();
+    await save.click();
+    await expect(minCount).toBeFocused();
+    expect(saved).toEqual([]);
+    await expectNoPageOverflow(page);
+
+    // 変更を破棄で保存値へ戻る。
+    await actions.getByRole("button", { name: "変更を破棄" }).click();
+    await expect(minCount).toHaveValue("3");
+    await expect(save).toBeDisabled();
+
+    await minCount.fill("5");
+    await save.click();
+    await expect(page.getByText("質問履歴の設定を保存しました。")).toBeVisible();
+    expect(saved).toEqual([{ ...initial, min_count: 5 }]);
+  });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900, collapse: false },
+  { name: "mobile", width: 375, height: 900, collapse: true },
+]) {
+  test(`回答の記録の保存期間を短くするときは、すぐに削除することを確認してから保存する（#1002, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    if (viewport.collapse) await collapseSidebar(page);
+    await mockRetrievalCards(page);
+    const saved: unknown[] = [];
+    await page.route("**/api/settings/answer-records", async (route) => {
+      if (route.request().method() === "PATCH") {
+        const body = route.request().postDataJSON() as { retention_days: number };
+        saved.push(body);
+        await route.fulfill({ json: apiEnvelope({ ...body, config_source: "runtime" }) });
+        return;
+      }
+      await route.fulfill({ json: apiEnvelope(ANSWER_RECORDS) });
+    });
+
+    await page.goto("/settings/retrieval");
+    const actions = page.getByRole("group", { name: "回答の記録の保存期間の操作" });
+    await page.getByRole("combobox", { name: "保存期間", exact: true }).click();
+    await page.getByRole("option", { name: "30 日" }).click();
+    await actions.getByRole("button", { name: "保存期間を保存" }).click();
+
+    const dialog = page.getByRole("alertdialog", { name: "回答の記録の保存期間を短くしますか？" });
+    await expect(dialog).toContainText("30 日より前の回答の記録");
+    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    // 取り消すと送らず、選んだ値と未保存の表示を残す。
+    expect(saved).toEqual([]);
+    await expect(page.getByRole("combobox", { name: "保存期間", exact: true })).toHaveText(/30 日/);
+    await expect(actions).toContainText("未保存の変更があります。");
+
+    await actions.getByRole("button", { name: "保存期間を保存" }).click();
+    await page
+      .getByRole("alertdialog", { name: "回答の記録の保存期間を短くしますか？" })
+      .getByRole("button", { name: "短くして保存" })
+      .click();
+    await expect(page.getByText("保存期間を保存しました。")).toBeVisible();
+    expect(saved).toEqual([{ retention_days: 30 }]);
+    await expect(actions.getByRole("button", { name: "保存期間を保存" })).toBeDisabled();
+    await expectNoPageOverflow(page);
+  });
+}
+
+test("回答の検索と生成の保存に失敗しても入力を残して操作の行に出し、変更を破棄で保存値へ戻せる（#1002）", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockRetrievalCards(page);
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/settings/answering", async (route) => {
+    if (route.request().method() === "PATCH") {
+      await gate;
+      await route.fulfill({
+        status: 500,
+        json: {
+          data: null,
+          error_messages: ["回答の検索と生成の設定を backend/.env へ保存できませんでした。"],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+    await route.fulfill({ json: apiEnvelope(ANSWERING_SETTINGS) });
+  });
+
+  await page.goto("/settings/retrieval");
+  const actions = page.getByRole("group", { name: "回答の検索と生成の設定の操作" });
+  const strategy = page.getByRole("combobox", { name: "質問の拡張", exact: true });
+  await strategy.click();
+  await page.getByRole("option", { name: /RAG フュージョン/ }).click();
+  await actions.getByRole("button", { name: "回答の設定を保存" }).click();
+  // 保存中は欄を変えられない（保存の後に保存値で作り直すため、保存中の変更は消える）。
+  await expect(strategy).toBeDisabled();
+  release();
+
+  await expect(actions).toContainText("回答の検索と生成の設定を backend/.env へ保存できませんでした。");
+  await expect(strategy).toContainText("RAG フュージョン");
+  await expect(strategy).toBeEnabled();
+  await actions.getByRole("button", { name: "変更を破棄" }).click();
+  await expect(strategy).toContainText("自動ルーティング");
+  await expect(actions.getByRole("button", { name: "回答の設定を保存" })).toBeDisabled();
+});
+
+test("検索方法のカードは読み込みに失敗しても再試行できる（#1002）", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockRetrievalCards(page);
+  let failing = true;
+  await page.route("**/api/settings/query-history", async (route) => {
+    if (failing) {
+      await route.fulfill({
+        status: 503,
+        json: { data: null, error_messages: ["読み込めません"], warning_messages: [] },
+      });
+      return;
+    }
+    await route.fulfill({ json: apiEnvelope(QUERY_HISTORY) });
+  });
+
+  await page.goto("/settings/retrieval");
+  await expect(page.getByText("質問履歴の設定を読み込めませんでした。")).toBeVisible({ timeout: 15_000 });
+  failing = false;
+  await page.getByRole("button", { name: "再試行" }).click();
+  await expect(page.getByRole("button", { name: "質問履歴の設定を保存" })).toBeVisible();
+});
+
 async function collapseSidebar(page: Page) {
   await page.addInitScript(() => {
     window.localStorage.setItem(

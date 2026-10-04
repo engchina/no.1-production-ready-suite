@@ -587,6 +587,7 @@ export const ja = {
   "settings.retrieval.subtitle":
     "回答の検索と生成の全体の既定（検索・回答プロファイルで上書きできます）と、回答の記録の保存期間・質問履歴を設定します。",
   "settings.retrieval.actions.unsaved": "未保存の変更があります。",
+  "settings.retrieval.actions.reset": "変更を破棄",
   "settings.prompts.subtitle":
     "回答を作るときに回答モデルへ渡す指示のテンプレートを編集します。回答の各工程も確認できます。",
   "settings.guardrail.subtitle":
@@ -2302,6 +2303,13 @@ export const ja = {
   "settings.queryHistory.limit": "候補の最大件数",
   "settings.queryHistory.blocklist": "保存・表示しない語",
   "settings.queryHistory.blocklistHint": "1 行に 1 語。この語を含む質問は保存も表示もしません。",
+  "settings.queryHistory.blocklistTooMany":
+    "保存・表示しない語は {max} 語までです（今は {count} 語）。",
+  "settings.queryHistory.actions.label": "質問履歴の設定の操作",
+  "settings.queryHistory.shortenTitle": "履歴の保存期間を短くしますか？",
+  "settings.queryHistory.shortenDescription":
+    "保存すると、{days} 日より前の質問履歴をすぐに削除します。削除した履歴は元に戻せません。",
+  "settings.queryHistory.shortenConfirm": "短くして保存",
   "settings.queryHistory.save": "質問履歴の設定を保存",
   "settings.queryHistory.saved": "質問履歴の設定を保存しました。",
   "settings.queryHistory.saveError": "質問履歴の設定を保存できませんでした。",
@@ -2337,6 +2345,7 @@ export const ja = {
   "settings.answering.saved": "回答の検索と生成の設定を保存しました。",
   "settings.answering.saveError": "回答の検索と生成の設定を保存できませんでした。",
   "settings.answering.loadError": "回答の検索と生成の設定を読み込めませんでした。",
+  "settings.answering.actions.label": "回答の検索と生成の設定の操作",
   "settings.answerRecords.field": "保存期間",
   "settings.answerRecords.days": "{days} 日",
   "settings.answerRecords.unlimited": "無期限（手動で削除）",
@@ -2344,6 +2353,11 @@ export const ja = {
   "settings.answerRecords.saved": "保存期間を保存しました。",
   "settings.answerRecords.saveError": "保存期間を保存できませんでした。",
   "settings.answerRecords.loadError": "保存期間を読み込めませんでした。",
+  "settings.answerRecords.actions.label": "回答の記録の保存期間の操作",
+  "settings.answerRecords.shortenTitle": "回答の記録の保存期間を短くしますか？",
+  "settings.answerRecords.shortenDescription":
+    "保存すると、{days} 日より前の回答の記録（質問・回答・根拠・実行記録）をすぐに削除します。削除した記録は元に戻せません。",
+  "settings.answerRecords.shortenConfirm": "短くして保存",
   "search.answerDetails.rewritten": "会話の流れから補った質問: {question}",
   "search.answerDetails.insufficient": "根拠が不足している点: {reason}",
   "search.answerDetails.evidence": "根拠の構成",
