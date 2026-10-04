@@ -1269,7 +1269,7 @@ export const ja = {
     "このナレッジベースの文書と、その章・節の見出しのつながりを図で見られます。",
   "knowledgeBases.graph.empty": "関係情報がまだありません。",
   "knowledgeBases.graph.emptyHint":
-    "設定の「関係情報の構築」で「構築する」を選んで文書を再取込すると、ここにグラフが表示されます。",
+    "設定の「関係情報の構築」で「構築する」を選ぶと、次に取り込む文書からここにグラフが表示されます。取込済みの文書に反映するには、文書の詳細で処理レシピを「再処理」してください。",
   "knowledgeBases.graph.error": "関係情報の取得に失敗しました。再試行してください。",
   "knowledgeBases.graph.truncated": "ノードが多いため一部のみ表示しています。",
 
@@ -2592,6 +2592,10 @@ export const ja = {
   "evaluation.actions.compare": "比較実行",
   "evaluation.actions.comparing": "設定を比較しています",
   "evaluation.actions.loadSample": "サンプルを読み込む",
+  "evaluation.sampleConfirm.title": "サンプルで置き換えますか？",
+  "evaluation.sampleConfirm.description":
+    "編集中の Golden set JSON をサンプルで置き換えます。今の内容は元に戻せません。残す場合は、先に内容をコピーしてください。",
+  "evaluation.sampleConfirm.confirm": "サンプルで置き換える",
   "evaluation.status.passed": "合格",
   "evaluation.status.failed": "要改善",
   "evaluation.result.title": "評価結果",
@@ -2652,6 +2656,8 @@ export const ja = {
   "evaluation.job.cancelConfirm.confirm": "取り消す",
   "evaluation.job.cancelledTitle": "評価を取り消しました。",
   "evaluation.job.failedTitle": "評価を最後まで実行できませんでした。",
+  "evaluation.job.failedDetails": "詳細",
+  "evaluation.job.errorType": "エラー種別",
   "evaluation.job.loading": "評価の状態を読み込んでいます",
   "evaluation.job.loadError": "評価の状態を取得できませんでした。再試行してください。",
   "evaluation.job.pollError":
