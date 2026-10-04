@@ -7,7 +7,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  Button,
+  FormActionBar,
   FormStatus,
   TimedLoadingState,
   FormSkeleton,
@@ -21,6 +21,7 @@ import { useLeaveGuard } from "@/lib/leave-guard";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useGraphSettings, useUpdateGraphSettings } from "@/lib/queries";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 const PROFILE_ORDER: GraphProfileName[] = ["off", "entities"];
@@ -35,7 +36,6 @@ export function GraphSettingsClient() {
   const query = useGraphSettings();
   const save = useUpdateGraphSettings();
   const [profile, setProfile] = useState<GraphProfileName | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // server 値が変わったレンダー(初回取得・保存成功)でだけ、選択を server 値に戻す。
   // 保存中フラグを条件に入れると、保存に失敗したときも未保存の選択が消えてしまう(#274)。
@@ -44,8 +44,11 @@ export function GraphSettingsClient() {
     setProfile(query.data.profile);
   }
 
-  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
-  useLeaveGuard(Boolean(query.data && profile !== null && profile !== query.data.profile));
+  // 未保存の選択があるときは離脱を確認し、保存中は離脱を止める。
+  useLeaveGuard(
+    Boolean(query.data && profile !== null && profile !== query.data.profile),
+    save.isPending
+  );
 
   if (query.isPending) {
     return (
@@ -84,26 +87,24 @@ export function GraphSettingsClient() {
 
   function selectProfile(next: GraphProfileName) {
     save.reset();
-    setSuccessMessage(null);
     setProfile(next);
   }
 
   function resetForm() {
     save.reset();
-    setSuccessMessage(null);
     setProfile(settings.profile);
   }
 
   function submit() {
-    if (!profile) return;
+    if (!profile || save.isPending) return;
     save.mutate(
       { profile },
       {
         onSuccess: (data) => {
           setProfile(data.profile);
-          setSuccessMessage(t("settings.graph.actions.saved"));
+          // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
+          toast.success(t("settings.graph.actions.saved"));
         },
-        onError: () => setSuccessMessage(null),
       }
     );
   }
@@ -178,36 +179,35 @@ export function GraphSettingsClient() {
             </div>
           </div>
           <FormStatus tone="info" message={t("settings.graph.rebuildHint")} />
-          <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
-            <div className="min-h-6">
-              {dirty ? (
+          <FormActionBar
+            ariaLabel={t("settings.graph.actions.label")}
+            primaryActions={[
+              {
+                id: "save",
+                label: t("settings.graph.actions.save"),
+                icon: Save,
+                loading: save.isPending,
+                disabled: !dirty,
+                onClick: submit,
+              },
+            ]}
+            secondaryActions={[
+              {
+                id: "reset",
+                label: t("settings.graph.actions.reset"),
+                icon: RotateCcw,
+                disabled: !dirty || save.isPending,
+                onClick: resetForm,
+              },
+            ]}
+            status={
+              save.isError ? (
+                <FormStatus tone="danger" message={saveError} />
+              ) : dirty ? (
                 <FormStatus tone="warning" message={t("settings.graph.actions.unsaved")} />
-              ) : null}
-              {successMessage ? <FormStatus tone="success" message={successMessage} /> : null}
-              {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
-            </div>
-            {/* カードの末尾の操作行: 保存は右端の primary、変更を破棄はその左（#618）。フォームの末尾なので lg（#613）。 */}
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                size="lg"
-                onClick={resetForm}
-                disabled={!dirty || save.isPending}
-                aria-label={t("settings.graph.actions.reset")} icon={RotateCcw}>
-                {t("settings.graph.actions.reset")}
-              </Button>
-              <Button
-                type="button"
-                size="lg"
-                loading={save.isPending}
-                disabled={!dirty}
-                onClick={submit}
-                aria-label={t("settings.graph.actions.save")} icon={Save}>
-                {t("settings.graph.actions.save")}
-              </Button>
-            </div>
-          </div>
+              ) : null
+            }
+          />
         </CardContent>
       </Card>
     </PageBody>
