@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "./fixtures/test";
+import { expect, type Locator, type Page, test } from "./fixtures/test";
 
 import {
   expectNoPageOverflow,
@@ -1213,4 +1213,260 @@ test("範囲を絞った回答の下から、範囲を指定せずに同じ質�
   expect(streamBodies[1]).not.toHaveProperty("clarification");
   expect(streamBodies[1]).not.toHaveProperty("approved_faq_id");
   expect(clarifyQueries).toHaveLength(suggestCalls);
+});
+
+// #907: 送った質問は、会話の作成・回答（start）を待たずにすぐ会話の欄の末尾へ出す（楽観的な表示）。
+// 失敗・停止のときも質問を残し、失敗は「送信できませんでした」と「再送信」を出す。
+
+/** テストの中で応答を止めておき、好きなときに返す。 */
+function gate() {
+  let open: () => void = () => undefined;
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { open, opened };
+}
+
+/** 回答の作成中の表示だけが回る（動くスピナーは 1 つ。messaging.md §3.7）。 */
+async function expectSingleChatSpinner(page: Page) {
+  await expect(page.getByTestId("chat-messages").locator("svg.animate-spin:visible")).toHaveCount(1);
+  await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
+}
+
+async function expectChatScrolledToEnd(page: Page) {
+  await expect
+    .poll(() =>
+      page
+        .getByTestId("chat-messages")
+        .evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)
+    )
+    .toBeLessThanOrEqual(2);
+}
+
+const chatComposer = (page: Page) => page.getByRole("textbox", { name: /メッセージを入力/ });
+
+async function screenshotBothThemes(page: Page, target: Locator, path: (theme: string) => string) {
+  for (const theme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    await page.evaluate((value) => {
+      document.documentElement.dataset.theme = value;
+    }, theme);
+    await target.screenshot({ path: path(theme) });
+  }
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`送った質問は会話の作成と回答を待たずにすぐ会話の欄へ出る（#907） (${viewport.name})`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockChat(page);
+    const create = gate();
+    const stream = gate();
+    await page.route("**/api/chat/conversations", async (route) => {
+      if (route.request().method() === "POST") await create.opened;
+      await route.fallback();
+    });
+    await page.route("**/api/chat/conversations/*/messages/stream", async (route) => {
+      await stream.opened;
+      await route.fallback();
+    });
+
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+    const empty = page.getByText("最初のメッセージを送信して会話を始めましょう。");
+    await expect(empty).toBeVisible();
+
+    const composer = chatComposer(page);
+    await composer.fill("経費の上限は？");
+    await composer.press("Enter");
+
+    // 会話の作成の応答の前に、質問と回答の作成中の表示が出る。空の状態はすぐ消える。
+    const live = page.getByTestId("chat-live-turn");
+    await expect(live.locator('[data-status="sending"]')).toHaveText("経費の上限は？");
+    await expect(live.getByTestId("chat-answer-progress")).toBeVisible();
+    await expect(empty).toHaveCount(0);
+    await expect(page.getByRole("log", { name: "会話" })).toContainText("経費の上限は？");
+    await expect(composer).toHaveValue("");
+    await expect(composer).toBeFocused();
+    await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("停止");
+    await expectSingleChatSpinner(page);
+    await expectChatScrolledToEnd(page);
+    await expectNoPageOverflow(page);
+    await screenshotBothThemes(page, page.getByRole("region", { name: "チャット" }), (theme) =>
+      testInfo.outputPath(`chat-sending-${viewport.name}-${theme}.png`)
+    );
+
+    // 会話ができても回答（start）の前は、同じ質問を出し続ける。
+    create.open();
+    await expect(page.getByTestId("chat-conversation-title")).toBeVisible();
+    await expect(live.locator('[data-status="sending"]')).toHaveText("経費の上限は？");
+
+    // 回答が届いたら同じ場所に流し込み、取り直した会話でも質問を二重に出さない。
+    stream.open();
+    await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
+    await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
+    const messages = page.getByTestId("chat-messages");
+    await expect(messages.getByText("経費の上限は？", { exact: true })).toHaveCount(1);
+    await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("送信");
+  });
+
+  test(`続きの会話でも、送った質問は回答を待たずに末尾へ出る（#907） (${viewport.name})`, async ({ page }) => {
+    await openPersistedConversation(page, viewport.width, [userMessage, assistantMessage]);
+    if (viewport.width < 1024) await page.keyboard.press("Escape");
+    await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
+    await page.route("**/api/chat/conversations/*/messages/stream", () => new Promise<void>(() => undefined));
+
+    const composer = chatComposer(page);
+    await composer.fill("交通費も含まれますか？");
+    await composer.press("Enter");
+
+    const live = page.getByTestId("chat-live-turn");
+    await expect(live.locator('[data-status="sending"]')).toHaveText("交通費も含まれますか？");
+    await expect(live.getByTestId("chat-answer-progress")).toBeVisible();
+    // 前の質問と回答の後（末尾）に出る。
+    const text = await page.getByTestId("chat-messages").innerText();
+    expect(text.indexOf("経費の上限は 10 万円です。")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("経費の上限は 10 万円です。")).toBeLessThan(text.indexOf("交通費も含まれますか？"));
+    await expect(composer).toHaveValue("");
+    await expectSingleChatSpinner(page);
+    await expectChatScrolledToEnd(page);
+    await expectNoPageOverflow(page);
+  });
+
+  test(`送信できなかった質問は残し、再送信できる（#907） (${viewport.name})`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockChat(page);
+    let streamCalls = 0;
+    await page.route("**/api/chat/conversations/*/messages/stream", async (route) => {
+      streamCalls += 1;
+      if (streamCalls === 1) {
+        await route.fulfill({
+          status: 503,
+          json: {
+            data: null,
+            error_messages: ["回答を作成できませんでした。時間をおいて再送信してください。"],
+            warning_messages: [],
+          },
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+    const composer = chatComposer(page);
+    await composer.fill("経費の上限は？");
+    await composer.press("Enter");
+
+    const live = page.getByTestId("chat-live-turn");
+    const failed = live.locator('[data-status="failed"]');
+    await expect(failed).toContainText("経費の上限は？");
+    await expect(failed).toContainText("送信できませんでした");
+    const failure = page.getByTestId("chat-send-failure");
+    await expect(failure.getByRole("alert")).toContainText(
+      "回答を作成できませんでした。時間をおいて再送信してください。"
+    );
+    // 入力欄には戻さない（質問は会話の欄に残っている）。処理中の表示は消える。
+    await expect(composer).toHaveValue("");
+    await expect(live.getByTestId("chat-answer-progress")).toHaveCount(0);
+    await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("送信");
+    await expectNoPageOverflow(page);
+    await screenshotBothThemes(page, live, (theme) =>
+      testInfo.outputPath(`chat-failed-${viewport.name}-${theme}.png`)
+    );
+
+    await failure.getByRole("button", { name: "再送信" }).click();
+    await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
+    await expect(page.getByTestId("chat-send-failure")).toHaveCount(0);
+    await expect(page.getByTestId("chat-messages").getByText("経費の上限は？", { exact: true })).toHaveCount(1);
+    expect(streamCalls).toBe(2);
+  });
+
+  test(`停止しても送った質問は会話の欄に残る（#907） (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockChat(page);
+    await page.route("**/api/chat/conversations/*/messages/stream", () => new Promise<void>(() => undefined));
+
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+    const composer = chatComposer(page);
+    await composer.fill("経費の上限は？");
+    await composer.press("Enter");
+    const live = page.getByTestId("chat-live-turn");
+    await expect(live.getByTestId("chat-answer-progress")).toBeVisible();
+
+    const button = page.getByTestId("chat-run-stop");
+    await button.click();
+    await expect(button).toHaveAccessibleName("送信");
+    await expect(live.locator('[data-status="stopped"]')).toHaveText("経費の上限は？");
+    await expect(live.getByTestId("chat-stopped")).toHaveText(
+      "回答の作成を停止しました。もう一度送ると、新しく回答を作成します。"
+    );
+    await expect(live.getByTestId("chat-answer-progress")).toHaveCount(0);
+    await expect(page.locator("svg.animate-spin:visible")).toHaveCount(0);
+    await expect(composer).toHaveValue("");
+    await expectNoPageOverflow(page);
+
+    // 止めた質問は新しい会話に持ち越さない。
+    await page.getByRole("button", { name: "新しい会話" }).click();
+    await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
+    await expect(page.getByText("最初のメッセージを送信して会話を始めましょう。")).toBeVisible();
+  });
+}
+
+// 別の会話・検索・回答プロファイルへ移ったら前の送信を打ち切り、「送信」に戻す（移った先で送れなくしない）。
+test("類似問の照会中に別の会話を選んでも、送信中のまま残らず送信できる", async ({ page }) => {
+  await mockChat(page, "ready", [userMessage, assistantMessage]);
+  // 類似問の照会は中止できないので、応答しないまま別の会話へ移る。
+  await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", () => new Promise<void>(() => undefined));
+
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  const composer = chatComposer(page);
+  await composer.fill("交通費の上限は？");
+  await composer.press("Enter");
+  const button = page.getByTestId("chat-run-stop");
+  await expect(button).toHaveAccessibleName("停止");
+
+  const history = await openChatHistory(page);
+  await history.getByRole("list", { name: "会話の履歴" }).getByRole("button").filter({ hasText: "件・" }).click();
+  await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
+  await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
+  await expect(button).toHaveAccessibleName("送信");
+  await composer.fill("日当は？");
+  await expect(button).toBeEnabled();
+});
+
+test("生成中に新しい会話を作ると、前の会話の生成を止めて新しい会話で送信できる", async ({ page }) => {
+  await openPersistedConversation(page, 1280, [userMessage, assistantMessage]);
+  await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
+  let streamAborted = false;
+  page.on("requestfailed", (request) => {
+    if (request.url().endsWith("/messages/stream")) streamAborted = true;
+  });
+  await page.route("**/api/chat/conversations/*/messages/stream", () => new Promise<void>(() => undefined));
+  const created = { ...conversationDetail([], null), id: "conv-2" };
+  await page.route("**/api/chat/conversations", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await route.fulfill({ json: { data: created, error_messages: [], warning_messages: [] } });
+  });
+  await page.route("**/api/chat/conversations/conv-2", (route) =>
+    route.fulfill({ json: { data: created, error_messages: [], warning_messages: [] } })
+  );
+
+  const composer = chatComposer(page);
+  await composer.fill("交通費の上限は？");
+  await composer.press("Enter");
+  await expect(page.getByTestId("chat-live-turn").getByTestId("chat-answer-progress")).toBeVisible();
+
+  await page.getByRole("button", { name: "新しい会話" }).click();
+  await expect(page.getByText("最初のメッセージを送信して会話を始めましょう。")).toBeVisible();
+  await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
+  await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("送信");
+  await expect.poll(() => streamAborted).toBe(true);
 });

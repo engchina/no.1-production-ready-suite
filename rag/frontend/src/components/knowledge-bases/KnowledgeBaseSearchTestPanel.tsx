@@ -131,7 +131,13 @@ export function KnowledgeBaseSearchTestPanel({
       <CardContent className="space-y-4">
         <p className="text-sm text-fg-muted">{t("knowledgeBases.searchTest.description")}</p>
 
-        {!ready ? (
+        {disabled ? (
+          // アーカイブ済みは索引済みの文書があっても検索されない。索引の不足と取り違えない理由を出す。
+          <EmptyState
+            title={t("knowledgeBases.searchTest.archived")}
+            hint={t("knowledgeBases.searchTest.archivedHint")}
+          />
+        ) : !ready ? (
           <EmptyState
             title={t("knowledgeBases.searchTest.needsIndexed")}
             hint={t("knowledgeBases.searchTest.needsIndexedHint")}
@@ -204,6 +210,12 @@ export function KnowledgeBaseSearchTestPanel({
                       </p>
                     ) : null}
                   </div>
+                ) : null}
+                {/* 検索だけ（回答の枠が無い）で停止したときも、停止したことを結果の領域に残す。 */}
+                {phase === "cancelled" && !answer ? (
+                  <p className="text-sm text-fg-muted" data-testid="kb-search-test-cancelled">
+                    {t("search.cancelledHint")}
+                  </p>
                 ) : null}
                 {/* 検索だけのとき（回答が無い）は、件数と時間を引用の上に出す（#593）。 */}
                 {!answer && resultMeta ? (

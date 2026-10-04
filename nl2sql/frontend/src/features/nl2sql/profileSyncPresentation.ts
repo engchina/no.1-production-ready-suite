@@ -95,6 +95,22 @@ export function profileSaveProgressPresentation(
   }
 
   if (job.status === "failed") {
+    // backend が失敗した工程を残していれば、それを正とする（結果の有無からの推定より確か）。
+    if (job.failed_phase === "rebuilding_agent_assets" && rebuildAgentAssets) {
+      steps = updateStep(steps, "sync_oracle_profile", "done");
+      steps = updateStep(steps, "rebuild_agent_assets", "error");
+      return { active: false, status: job.status, steps };
+    }
+    if (job.failed_phase === "verifying") {
+      steps = updateStep(steps, "sync_oracle_profile", "done");
+      if (rebuildAgentAssets) steps = updateStep(steps, "rebuild_agent_assets", "done");
+      steps = updateStep(steps, "verify", "error");
+      return { active: false, status: job.status, steps };
+    }
+    if (job.failed_phase === "queued" || job.failed_phase === "syncing_oracle_profile") {
+      steps = updateStep(steps, "sync_oracle_profile", "error");
+      return { active: false, status: job.status, steps };
+    }
     if (!job.oracle_result) {
       steps = updateStep(steps, "sync_oracle_profile", "error");
     } else if (rebuildAgentAssets && !job.agent_result) {

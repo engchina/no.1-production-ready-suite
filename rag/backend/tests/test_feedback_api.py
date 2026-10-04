@@ -198,6 +198,63 @@ def test_submit_feedback_saves_search_snapshot_and_optional_comment(
     ]
 
 
+def test_submit_citation_feedback_from_search_without_answer_keeps_the_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回答を生成しない検索の引用の評価でも、質問と根拠を保存する（#978）。"""
+    fake = FakeFeedbackClient()
+    monkeypatch.setattr(feedback_route, "OracleClient", lambda: fake)
+
+    response = client.post(
+        "/api/feedback",
+        json={
+            "trace_id": "trace-search-only",
+            "search_answer_profile_id": "bv-1",
+            "target_type": "citation",
+            "source_surface": "search",
+            "document_id": "doc-1",
+            "chunk_id": "chunk-1",
+            "rating": "helpful",
+            "content_snapshot": {
+                "question": " 経費の上限は？ ",
+                "answer": "  ",
+                "citations": [{"document_id": "doc-1", "chunk_id": "chunk-1"}],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    details = fake.saved_details[0]
+    assert details is not None
+    assert details["question_text"] == "経費の上限は？"
+    assert details["answer_text"] is None
+    assert details["citations"][0]["chunk_id"] == "chunk-1"  # type: ignore[index]
+
+
+def test_answer_feedback_snapshot_still_requires_the_answer() -> None:
+    """回答の評価の snapshot は回答の本文が必須のまま（#978）。"""
+    with pytest.raises(ValidationError, match="回答の本文を入力してください"):
+        FeedbackRequest(
+            trace_id="trace-1",
+            search_answer_profile_id="bv-1",
+            target_type="answer",
+            source_surface="search",
+            content_snapshot={"question": "質問", "answer": None, "citations": []},
+            rating="helpful",
+        )
+    with pytest.raises(ValidationError, match="質問の本文を入力してください"):
+        FeedbackRequest(
+            trace_id="trace-1",
+            search_answer_profile_id="bv-1",
+            target_type="citation",
+            source_surface="search",
+            document_id="doc-1",
+            chunk_id="chunk-1",
+            content_snapshot={"question": " ", "citations": []},
+            rating="helpful",
+        )
+
+
 def test_submit_search_snapshot_does_not_depend_on_the_search_audit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -359,6 +416,37 @@ def test_feedback_dashboard_builds_latest_vote_summary(monkeypatch: pytest.Monke
     }
     assert data["previous_summary"]["total"] == 0
     assert data["items"]["total"] == 3
+
+
+def test_feedback_dashboard_without_period_covers_all_periods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """期間「すべて」（period_days を省略）は期間で絞らず、前期間比も返さない（#978）。"""
+    seen: dict[str, object] = {}
+
+    class RecordingClient(FakeFeedbackClient):
+        async def list_feedback_dashboard_rows(
+            self, **kwargs: object
+        ) -> tuple[
+            list[dict[str, object]],
+            int,
+            list[dict[str, object]],
+            list[dict[str, object]],
+        ]:
+            seen.update(kwargs)
+            return self.dashboard
+
+    monkeypatch.setattr(feedback_route, "OracleClient", lambda: RecordingClient())
+
+    response = client.get("/api/feedback?sort_order=newest&limit=50&offset=0")
+
+    assert response.status_code == 200
+    assert seen["period_days"] is None
+    assert response.json()["data"]["previous_summary"] is None
+
+    response = client.get("/api/feedback?period_days=7")
+    assert seen["period_days"] == 7
+    assert response.json()["data"]["previous_summary"] is not None
 
 
 def test_feedback_detail_returns_full_context(monkeypatch: pytest.MonkeyPatch) -> None:

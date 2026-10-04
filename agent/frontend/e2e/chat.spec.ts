@@ -336,31 +336,64 @@ test("送信の要求中に停止を押すと、作られた Run をすぐ止め
   await expect(button).toHaveAccessibleName("停止");
   // 送ったら入力欄は空になり、次の質問を書ける。
   await expect(composer).toHaveValue("");
+  // Run ができる前から、送った質問と作成中の表示を出す（#907）。
+  await expect(page.getByTestId("chat-pending-turn").locator('[data-status="sending"]')).toHaveText("今月の売上は？");
   await button.click();
 
   await expect.poll(() => mockApi.lastRequest("POST", "/api/runs/run-chat-1/cancel")).toBeTruthy();
   await expect(page.getByTestId("chat-turn-run-chat-1").getByTestId("chat-cancelled")).toBeVisible();
+  // 止めても送った質問は会話に残る（#907）。
+  await expect(page.getByTestId("chat-turn-run-chat-1").getByText("今月の売上は？", { exact: true })).toBeVisible();
   await expect(button).toHaveAccessibleName("送信");
 });
 
-test("送れなかった質問は入力欄に戻す（#805）", async ({ page, mockApi }) => {
-  await page.route("**/api/runs", async (route) => {
-    if (route.request().method() !== "POST") return route.fallback();
-    await route.fulfill({
-      status: 503,
-      contentType: "application/json",
-      body: JSON.stringify({ detail: "実行環境に接続できません。" }),
+// #907: 送れなかった質問は入力欄に戻さず、会話の欄に残して「送信できませんでした」と「再送信」を出す（#805 の入力欄に戻す動きを置き換えた）。
+for (const viewport of VIEWPORTS) {
+  test(`送れなかった質問は会話の欄に残し、再送信できる（#907） (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    let createCalls = 0;
+    await page.route("**/api/runs", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      createCalls += 1;
+      if (createCalls > 1) return route.fallback();
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "実行環境に接続できません。" }),
+      });
     });
+    await page.goto("/chat");
+    const composer = page.getByRole("textbox", { name: "質問" });
+    await composer.fill("今月の売上は？");
+    await composer.press("Enter");
+
+    const pendingTurn = page.getByTestId("chat-pending-turn");
+    const failed = pendingTurn.locator('[data-status="failed"]');
+    await expect(failed).toContainText("今月の売上は？");
+    await expect(failed).toContainText("送信できませんでした");
+    const failure = page.getByTestId("chat-send-failure");
+    await expect(failure.getByRole("alert")).toContainText("実行環境に接続できません。");
+    await expect(composer).toHaveValue("");
+    await expect(page.getByTestId("chat-send")).toHaveAccessibleName("送信");
+    await expect(pendingTurn.getByTestId("chat-answering")).toHaveCount(0);
+    expect(mockApi.lastRequest("POST", "/api/runs/run-chat-1/cancel")).toBeUndefined();
+    await expectNoHorizontalOverflow(page);
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.evaluate((value) => {
+        document.documentElement.dataset.theme = value;
+      }, theme);
+      await pendingTurn.screenshot({ path: testInfo.outputPath(`chat-failed-${viewport.name}-${theme}.png`) });
+    }
+
+    await failure.getByRole("button", { name: "再送信" }).click();
+    const conversation = page.getByTestId("chat-conversation");
+    await expect(conversation.getByText("「今月の売上は？」への回答です。")).toBeVisible();
+    await expect(pendingTurn).toHaveCount(0);
+    await expect(conversation.getByText("今月の売上は？", { exact: true })).toHaveCount(1);
+    expect(createCalls).toBe(2);
   });
-  await page.goto("/chat");
-  const composer = page.getByRole("textbox", { name: "質問" });
-  await composer.fill("今月の売上は？");
-  await composer.press("Enter");
-  await expect(page.getByText("実行環境に接続できません。")).toBeVisible();
-  await expect(composer).toHaveValue("今月の売上は？");
-  await expect(page.getByTestId("chat-send")).toHaveAccessibleName("送信");
-  expect(mockApi.lastRequest("POST", "/api/runs/run-chat-1/cancel")).toBeUndefined();
-});
+}
 
 test("実行に失敗した回答は理由を出す", async ({ page, mockApi }) => {
   seedThread(mockApi, {
@@ -546,4 +579,180 @@ test("375px では会話の履歴をシートで開き、Esc・外側・会話�
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect(sheet).toBeHidden();
   await expectNoHorizontalOverflow(page);
+});
+
+// #907: 送った質問は、Run の作成の応答を待たずにすぐ会話の欄の末尾へ出す（楽観的な表示）。
+/** Run の作成（POST /api/runs）を 1 件ずつ止めておき、`release` で mock の応答へ流す。 */
+async function gateRunCreate(page: Page) {
+  let allowed = 0;
+  const waiters: Array<() => void> = [];
+  await page.route("**/api/runs", async (route) => {
+    if (route.request().method() === "POST") {
+      if (allowed > 0) allowed -= 1;
+      else await new Promise<void>((resolve) => waiters.push(resolve));
+    }
+    await route.fallback();
+  });
+  return () => {
+    const waiter = waiters.shift();
+    if (waiter) waiter();
+    else allowed += 1;
+  };
+}
+
+async function expectConversationScrolledToEnd(page: Page) {
+  await expect
+    .poll(() =>
+      page
+        .getByTestId("chat-conversation")
+        .evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)
+    )
+    .toBeLessThanOrEqual(2);
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`送った質問は Run の作成を待たずに会話の欄へ出る（新しい会話・続きの会話。#907） (${viewport.name})`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const release = await gateRunCreate(page);
+    await page.goto("/chat");
+    const empty = page.getByText("質問を入力して会話を始めます");
+    await expect(empty).toBeVisible();
+    const composer = page.getByRole("textbox", { name: "質問" });
+    await composer.fill("今月の売上は？");
+    await composer.press("Enter");
+
+    // 新しい会話: Run の作成の応答の前に、質問と回答の作成中の表示が出る。空の状態はすぐ消える。
+    const pendingTurn = page.getByTestId("chat-pending-turn");
+    await expect(pendingTurn.locator('[data-status="sending"]')).toHaveText("今月の売上は？");
+    await expect(pendingTurn.getByTestId("chat-answering")).toBeVisible();
+    await expect(empty).toHaveCount(0);
+    await expect(page.getByRole("log", { name: "会話" })).toContainText("今月の売上は？");
+    await expect(composer).toHaveValue("");
+    await expect(composer).toBeFocused();
+    await expect(page.getByTestId("chat-send")).toHaveAccessibleName("停止");
+    // 処理中の表示は回答の場所の 1 つだけ（messaging.md §3.7）。
+    await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
+    await expectConversationScrolledToEnd(page);
+    await expectNoHorizontalOverflow(page);
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.evaluate((value) => {
+        document.documentElement.dataset.theme = value;
+      }, theme);
+      await page.getByRole("region", { name: "会話" }).screenshot({
+        path: testInfo.outputPath(`chat-sending-${viewport.name}-${theme}.png`),
+      });
+    }
+
+    // Run ができたら同じ位置の回答に置き換え、質問を二重に出さない。
+    release();
+    const conversation = page.getByTestId("chat-conversation");
+    await expect(conversation.getByText("「今月の売上は？」への回答です。")).toBeVisible();
+    await expect(pendingTurn).toHaveCount(0);
+    await expect(conversation.getByText("今月の売上は？", { exact: true })).toHaveCount(1);
+
+    // 続きの会話: 前の質問と回答の後（末尾）に出る。
+    await composer.fill("先月と比べると？");
+    await composer.press("Enter");
+    await expect(pendingTurn.locator('[data-status="sending"]')).toHaveText("先月と比べると？");
+    const text = await conversation.innerText();
+    expect(text.indexOf("「今月の売上は？」への回答です。")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("「今月の売上は？」への回答です。")).toBeLessThan(text.indexOf("先月と比べると？"));
+    await expect(composer).toHaveValue("");
+    await expectConversationScrolledToEnd(page);
+    release();
+    await expect(conversation.getByText("「先月と比べると？」への回答です。")).toBeVisible();
+    await expect(pendingTurn).toHaveCount(0);
+  });
+}
+
+test("回答の作成中に会話の取り直しが一時的に失敗しても、会話を外さず取り直しを続ける", async ({ page, mockApi }) => {
+  seedThread(mockApi, { status: "running" });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/chat");
+  await openSeedThread(page);
+  const conversation = page.getByTestId("chat-conversation");
+  await expect(conversation.getByText("契約の更新条件は？")).toBeVisible();
+
+  // 取り直し（1.5 秒ごと）が 1 回だけ 503 になる。
+  let failures = 0;
+  await page.route(`**/api/threads/${THREAD_ID}`, async (route) => {
+    if (failures === 0) {
+      failures += 1;
+      await route.fulfill({ status: 503, json: { error_messages: ["一時的に利用できません。"] } });
+      return;
+    }
+    await route.fallback();
+  });
+  await expect.poll(() => failures).toBe(1);
+  // 会話はそのまま出し、新しい会話（空の案内）に戻さない。取り直しは続き、完了を出す。
+  await expect(page.getByText("質問を入力して会話を始めます")).toHaveCount(0);
+  await expect(conversation.getByText("契約の更新条件は？")).toBeVisible();
+  await expect(page.getByTestId("chat-conversation-title")).toHaveText("契約の更新条件は？");
+  mockApi.state.runs[0].status = "completed";
+  mockApi.state.runs[0].artifacts = [
+    { id: "answer-done", kind: "answer", name: "回答", content: { text: "更新は 1 年ごとです。" } },
+  ];
+  await expect(conversation.getByText("更新は 1 年ごとです。")).toBeVisible();
+  await expect(page.getByTestId("chat-send")).toHaveAccessibleName("送信");
+});
+
+test("会話を開くときの読み込みに失敗したら、選んだ会話のまま理由と再試行を出す。消えた会話は新しい会話に戻す", async ({
+  page,
+  mockApi,
+}) => {
+  seedThread(mockApi, { status: "completed" });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  let fail = true;
+  await page.route(`**/api/threads/${THREAD_ID}`, async (route) => {
+    if (fail) {
+      await route.fulfill({ status: 500, json: { error_messages: ["会話を読み込めませんでした。"] } });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto("/chat");
+  await openSeedThread(page);
+  const error = page.getByTestId("chat-thread-error");
+  await expect(error).toContainText("会話を読み込めませんでした。");
+  await expect(page.getByText("質問を入力して会話を始めます")).toHaveCount(0);
+  fail = false;
+  await error.getByRole("button", { name: "再試行" }).click();
+  await expect(page.getByTestId("chat-conversation").getByText("契約の更新条件は？")).toBeVisible();
+  await expect(error).toHaveCount(0);
+
+  // 会話が消えた（404）ときは、今までどおり新しい会話に戻す。
+  mockApi.state.runs.length = 0;
+  await page.reload();
+  await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
+  await expect(page.getByTestId("chat-thread-error")).toHaveCount(0);
+});
+
+test("会話の履歴の読み込みに失敗したら「まだ会話がありません」ではなく理由と再試行を出す", async ({
+  page,
+  mockApi,
+}) => {
+  seedThread(mockApi, { status: "completed" });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  let fail = true;
+  await page.route("**/api/threads?*", async (route) => {
+    if (fail) {
+      await route.fulfill({ status: 500, json: { error_messages: ["会話の一覧を読み込めませんでした。"] } });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto("/chat");
+  await page.getByTestId("chat-history-toggle").click();
+  const history = page.getByTestId("chat-history");
+  // 一覧の取得は既定の再試行（3 回）の後に失敗になる。
+  const error = history.getByTestId("chat-threads-error");
+  await expect(error).toContainText("会話の一覧を読み込めませんでした。", { timeout: 15_000 });
+  await expect(history.getByText("まだ会話がありません")).toHaveCount(0);
+  fail = false;
+  await error.getByRole("button", { name: "再試行" }).click();
+  await expect(history.getByRole("button", { name: /契約の更新条件は？/ })).toBeVisible();
+  await expect(error).toHaveCount(0);
 });

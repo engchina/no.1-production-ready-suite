@@ -17,6 +17,12 @@ export {
 export { isImeComposing, isSubmitEnter, type KeyboardEventLike } from "./lib/keyboard";
 export { isRepeatedActivationKey, runStopClickAction, type RunStopAction } from "./lib/run-stop";
 export { useActionPending, type ActionPending } from "./lib/action-pending";
+export {
+  createOptimisticChatMessage,
+  withOptimisticChatStatus,
+  type OptimisticChatMessage,
+  type OptimisticChatStatus,
+} from "./lib/chat-optimistic";
 
 // --- UI primitives ---
 export { Button, buttonVariants, type ButtonProps, type ButtonVariantToneProps } from "./components/ui/button";
@@ -103,7 +109,43 @@ export {
   type SearchableMultiSelectLabels,
 } from "./components/ui/searchable-options";
 export { Banner } from "./components/ui/banner";
+export {
+  ApiErrorBanner,
+  ApiErrorDetailList,
+  ApiErrorState,
+  type ApiErrorBannerProps,
+  type ApiErrorDetailListProps,
+  type ApiErrorStateProps,
+} from "./components/feedback/api-error-banner";
+export {
+  ApiTransportError,
+  DEFAULT_API_ERROR_DETAIL_LABELS,
+  DEFAULT_API_TRANSPORT_MESSAGES,
+  apiErrorDetail,
+  apiErrorMessage,
+  apiRequestPath,
+  httpApiErrorPresentation,
+  isAbortError,
+  isNetworkFailure,
+  isTimeoutError,
+  isTransportError,
+  presentApiError,
+  toApiTransportError,
+  transportErrorOf,
+  type ApiErrorDetail,
+  type ApiErrorDetailLabels,
+  type ApiErrorPresentable,
+  type ApiErrorPresentation,
+  type ApiTransportFailureKind,
+  type ApiTransportMessages,
+  type ApiTransportRequest,
+} from "./lib/api-error";
 export { MessageText, type MessageTextProps } from "./components/ui/message-text";
+export {
+  ChatUserMessage,
+  type ChatUserMessageProps,
+  type ChatUserMessageStatus,
+} from "./components/ui/chat-message";
 export { Toaster, type ToasterProps } from "./components/ui/toast";
 export {
   ConfirmProvider,

@@ -3,11 +3,21 @@ import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "./fixtures/mock-api";
 import { chooseSelectFieldOption } from "./fixtures/select-field";
 
+/**
+ * ページ全体（documentElement）と本文（`<main>`）が横にはみ出さないこと。
+ * main は overflow-y-auto で横のはみ出しも吸収するため、documentElement だけでは見逃す
+ * （表の行の中の読み上げ専用ラベルが表の外へはみ出した #1116）。
+ */
 async function expectNoHorizontalOverflow(page: Page) {
-  const hasNoOverflow = await page.evaluate(() => {
-    return document.documentElement.scrollWidth <= document.documentElement.clientWidth;
-  });
-  expect(hasNoOverflow).toBe(true);
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const root = document.documentElement;
+        const main = document.querySelector("main");
+        return Math.max(root.scrollWidth - root.clientWidth, main ? main.scrollWidth - main.clientWidth : 0);
+      })
+    )
+    .toBeLessThanOrEqual(1);
 }
 
 /**
@@ -465,6 +475,45 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByRole("button", { name: "crm の操作" })).toHaveCount(0);
   });
 
+  test("ツールの取得に失敗した後に API キーを保存し直すと、前の設定での結果を消す（#1014）", async ({ page, mockApi }) => {
+    mockApi.state.mcpConnections.connections.push({
+      server_id: "crm",
+      label: "CRM Gateway",
+      base_url: "http://mcp.example.test/jsonrpc",
+      auth_mode: "api_key",
+      service_audience: null,
+      timeout_seconds: 10,
+      source: "runtime",
+      removable: true,
+      configured: true,
+      api_key_configured: true,
+      oauth_configured: false,
+      session_configured: false,
+      service_token_configured: false,
+      service_user_configured: false,
+    });
+    await page.route("**/api/settings/mcp-connections/crm/tools", (route) =>
+      route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "MCP 接続「CRM Gateway」が HTTP 401 を返しました（認証・権限の設定を確認してください）。" }),
+      })
+    );
+    await page.goto("/settings/mcp-connections?id=crm");
+    await page.getByRole("button", { name: "ツールを取得" }).click();
+    const toolsResult = page.getByTestId("mcp-tools-result");
+    await expect(toolsResult).toHaveAttribute("data-tone", "danger");
+    await expect(toolsResult).toContainText("HTTP 401");
+
+    // 新しい API キーを保存したら、前のキーでの失敗は消える（URL・認証方式は変わらない。messaging.md §10.4）。
+    await page.locator("#mcp-server-api-key").fill("new-secret");
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(page.getByText("MCP 接続を保存しました")).toBeVisible();
+    expect(mockApi.lastRequest("PATCH", "/api/settings/mcp-connections/crm")?.body).toMatchObject({ api_key: "new-secret" });
+    await expect(toolsResult).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "ツールを取得" })).toBeEnabled();
+  });
+
   test("RAG / NL2SQL の接続は URL を保存し、サービストークンの準備の状態を表示する", async ({ page, mockApi }) => {
     await page.goto("/settings/mcp-connections?id=rag");
 
@@ -816,8 +865,9 @@ test.describe("Agent Runtime settings", () => {
     await page.getByRole("button", { name: "検証" }).click();
     await expect(result).toHaveAttribute("data-tone", "danger");
     await expect(result).toContainText(/スナップショットに問題が \d+ 件あります。直すまで置換できません。/);
-    await expect(result.getByText(/unsupported snapshot version/)).toBeVisible();
-    await expect(result.getByText(/duplicate agent id/)).toBeVisible();
+    // エラーは利用者が直せるよう日本語で対象の ID を示す（#1027）。
+    await expect(result.getByText("未対応のスナップショットの版です: unsupported")).toBeVisible();
+    await expect(result.getByText(/^ID が重複している業務 Agent があります: /)).toBeVisible();
     // 失敗のときは「詳細」を開いて出す。
     await expect(result.locator("details")).toHaveAttribute("open", "");
 
@@ -837,6 +887,14 @@ test.describe("Agent Runtime settings", () => {
     await expect(confirmation.getByText("確認済み", { exact: true })).toBeVisible();
     await expect(confirmInput).not.toHaveAttribute("aria-invalid", "true");
     await expect(replace).toBeEnabled();
+    // 無効なスナップショットの置換の失敗は、置換の行の直下に日本語の理由で出す（#1027）。
+    await replace.click();
+    await page.getByRole("alertdialog").or(page.getByRole("dialog")).getByRole("button", { name: "置換" }).click();
+    await expect(
+      page.getByText(
+        "スナップショットで置き換えられませんでした。スナップショットに 2 件のエラーがあるため置換できません。「検証」でエラーの内容を確認してください。"
+      )
+    ).toBeVisible();
     await confirmInput.fill("");
     await expect(replace).toBeDisabled();
 

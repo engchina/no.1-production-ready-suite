@@ -440,3 +440,35 @@ def test_search_extraction_fields_without_knowledge_bases_and_missing_view(
     assert empty.json()["data"]["fields"] == []
     missing = client.get("/api/search/extraction-fields?search_answer_profile_id=bv-missing")
     assert missing.status_code == 404
+
+
+class ArchivedFieldSetOracle(FakeFieldSetOracle):
+    """検索・回答プロファイルをアーカイブ済みとして返す。"""
+
+    async def get_search_answer_profile(
+        self, search_answer_profile_id: str
+    ) -> SearchAnswerProfileDetail | None:
+        detail = await super().get_search_answer_profile(search_answer_profile_id)
+        if detail is None:
+            return None
+        return detail.model_copy(update={"status": SearchAnswerProfileStatus.ARCHIVED})
+
+
+def test_search_extraction_fields_rejects_archived_search_answer_profile(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """アーカイブ済みの検索・回答プロファイルは、検索と同じく項目も返さない（409。#961）。"""
+    oracle = ArchivedFieldSetOracle(
+        {"bv-old": SearchAnswerProfileConfig(knowledge_base_ids=["kb-contract"])},
+        {"kb-contract": [FieldDefinition(name="契約日", value_type="date")]},
+    )
+    monkeypatch.setattr(search_route, "OracleClient", lambda *_args, **_kwargs: oracle)
+
+    response = client.get("/api/search/extraction-fields?search_answer_profile_id=bv-old")
+
+    assert response.status_code == 409
+    assert (
+        "アーカイブ済みの検索・回答プロファイルは検索に使用できません"
+        in (response.json()["error_messages"][0])
+    )
+    assert oracle.requested_kb_ids == []

@@ -11,14 +11,17 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
+  RotateCcw,
   Search,
   SendHorizontal,
 } from "lucide-react";
 import {
+  ApiErrorBanner,
   Banner,
   Button,
   Card,
   CardContent,
+  ChatUserMessage,
   EmptyState,
   FieldActionRow,
   InfoTip,
@@ -35,15 +38,17 @@ import {
   StatusBadge,
   TextareaField,
   TimedLoadingState,
+  createOptimisticChatMessage,
   isSubmitEnter,
   toast,
+  withOptimisticChatStatus,
+  type OptimisticChatMessage,
 } from "@engchina/production-ready-ui";
 import {
   useWorkspaceActive,
   useWorkspaceIdentity,
   useWorkspaceState,
 } from "@/components/WorkspaceState";
-import { ApiErrorBanner } from "@/components/ApiErrorBanner";
 import { apiGet, apiPost, isTransportError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { copyTextToClipboard } from "@/lib/clipboard";
@@ -74,20 +79,37 @@ const inFlight = (job: JobData | undefined) =>
 const errorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
 
+/** チャットの 1 回の送信の内容。再送信は同じ内容（同じ job ID）で送り直す。 */
+interface ChatJobRequest {
+  question: string;
+  profile_id: string;
+  engine: Nl2SqlEngine;
+  previous_job_id: string | null;
+  /** 送信の前に画面が決める job ID（#900）。 */
+  client_job_id: string;
+}
+
+/** 送った質問（#907）と、その送信の内容。 */
+interface PendingSend {
+  message: OptimisticChatMessage;
+  request: ChatJobRequest;
+}
+
 /**
  * SQL の生成のジョブを投入する。job ID は送信の前に画面が決める（#900）。
  *
  * 投入の応答が上限までに届かない（timeout・通信断）ときも、backend はジョブを作り終えていることが
  * ある。そのときは同じ ID でジョブを取り直し、会話に表示して生成の完了を待つ（二重に送らない）。
+ * 再送信も同じ ID で送るので、backend が作り終えていれば作成済みのジョブが返る（二重に生成しない）。
  */
 async function submitChatJob(
-  body: Record<string, unknown>,
+  request: ChatJobRequest,
 ): Promise<JobCreateData | JobData> {
-  const clientJobId = randomUuid();
+  const clientJobId = request.client_job_id;
   try {
     return await apiPost<JobCreateData>(
       "/api/nl2sql/jobs",
-      { ...body, client_job_id: clientJobId },
+      { ...request, generation_only: true, use_ontology_context: true },
       { timeoutMs: API_TIMEOUT_MS.jobSubmit },
     );
   } catch (cause) {
@@ -185,7 +207,10 @@ export function SqlChatPage() {
   );
   const [historySheetOpen, setHistorySheetOpen] = useState(false);
   const [profileSearch, setProfileSearch] = useState("");
-  const [submittedQuery, setSubmittedQuery] = useState("");
+  // 送った質問（#907）。ジョブの投入の応答を待たずに会話の欄の末尾へ出し、投入できたら会話のジョブに置き換える。
+  // 投入できなかったときは残して「再送信」を出す。
+  const [pendingSend, setPendingSend] = useState<PendingSend | null>(null);
+  const pending = pendingSend?.message ?? null;
   const inlineHistory = useInlineHistory();
   const [previousInline, setPreviousInline] = useState(inlineHistory);
   if (previousInline !== inlineHistory) {
@@ -243,23 +268,23 @@ export function SqlChatPage() {
   const turns = conversation.data?.turns ?? [];
   const latest = turns.at(-1);
   const generating = turns.some(inFlight);
+  // 応答が届かなかった送信のジョブが、取り直した会話に入っていたら（backend は作り終えていた）、
+  // 送った質問の表示を外す（質問を二重に出さず、再送信で二重に生成しない）。
+  if (
+    pendingSend &&
+    turns.some((turn) => turn.job_id === pendingSend.request.client_job_id)
+  )
+    setPendingSend(null);
   const send = useMutation({
-    mutationFn: (question: string) =>
-      submitChatJob({
-        question,
-        profile_id: selectedProfileId,
-        engine,
-        generation_only: true,
-        previous_job_id: latest?.job_id ?? null,
-        use_ontology_context: true,
-      }),
-    onSuccess: async (job, question) => {
+    mutationFn: (request: ChatJobRequest) => submitChatJob(request),
+    onSuccess: async (job, { question }) => {
       const id = conversationId || job.job_id;
       // 応答の本文は保存しない。会話 ID と未送信の草稿だけを一時保存する。
+      // 草稿は送信の時点で空にしている（投入中に書き始めた次の質問は消さない。#907）。
       setProfileId(selectedProfileId);
       setConversationId(id);
-      setDraft("");
-      setSubmittedQuery("");
+      // 送った質問を、投入できたジョブ（job ID はサーバーと同じ client_job_id）に置き換える。二重に出さない。
+      setPendingSend(null);
       queryClient.setQueryData<ConversationData>(
         [...chatKey, id],
         (previous) => ({
@@ -284,12 +309,20 @@ export function SqlChatPage() {
       await queryClient.invalidateQueries({ queryKey: chatKey });
     },
     onError: () => {
+      // 送った質問は残し、理由と「再送信」を出す（入力を失わない。#907）。
+      setPendingSend((current) =>
+        current
+          ? {
+              ...current,
+              message: withOptimisticChatStatus(current.message, "failed"),
+            }
+          : current,
+      );
       // 応答が届かなくてもジョブが作られていることがある。履歴と会話を取り直して表示に反映する。
       void queryClient.invalidateQueries({ queryKey: chatKey });
     },
     onSettled: () => {
       sendingRef.current = false;
-      setSubmittedQuery("");
     },
   });
   const stop = useMutation({
@@ -322,13 +355,35 @@ export function SqlChatPage() {
     const question = draft.trim();
     if (!question || blocked || sendingRef.current) return;
     sendingRef.current = true;
-    setSubmittedQuery(question);
-    send.mutate(question);
+    const request: ChatJobRequest = {
+      question,
+      profile_id: selectedProfileId,
+      engine,
+      previous_job_id: latest?.job_id ?? null,
+      client_job_id: randomUuid(),
+    };
+    // 送った質問はすぐ会話の欄に出し、入力欄を空にする（#907）。
+    setPendingSend({ message: createOptimisticChatMessage(question), request });
+    setDraft("");
+    send.mutate(request);
+  }
+  /**
+   * 送信できなかった質問を、そのままもう一度送る（#907）。同じ job ID・同じ内容で送るので、
+   * 応答が届かなかっただけで backend がジョブを作り終えていれば、作成済みのジョブが返る（#900）。
+   */
+  function resend() {
+    if (!pendingSend || blocked || sendingRef.current) return;
+    sendingRef.current = true;
+    setPendingSend({
+      ...pendingSend,
+      message: withOptimisticChatStatus(pendingSend.message, "sending"),
+    });
+    send.mutate(pendingSend.request);
   }
   function resetConversation() {
     if (busy) return;
     setConversationId("");
-    setSubmittedQuery("");
+    setPendingSend(null);
     send.reset();
     stop.reset();
   }
@@ -337,6 +392,7 @@ export function SqlChatPage() {
     setProfileId(item.profile_id);
     setConversationId(item.id);
     setHistorySheetOpen(false);
+    setPendingSend(null);
     send.reset();
     stop.reset();
   }
@@ -347,10 +403,20 @@ export function SqlChatPage() {
   useEffect(() => {
     if (active && conversationRef.current)
       conversationRef.current.scrollTop = conversationRef.current.scrollHeight;
-  }, [active, conversationId, turns.length, latest?.status, send.isPending]);
+  }, [active, conversationId, turns.length, latest?.status, pending]);
   const historyContent = (
     <>
-      {history.isPending ? <ListSkeleton rows={3} /> : null}
+      {history.isPending ? (
+        // 読み込み中は文言と経過時間を出し、一覧の形の Skeleton で寸法を予約する（messaging.md §3.6）。
+        <TimedLoadingState
+          label={t("chat.historyLoading")}
+          operationKey="sql-chat-history-load"
+          framed={false}
+          testId="sql-chat-history-loading"
+        >
+          <ListSkeleton rows={3} />
+        </TimedLoadingState>
+      ) : null}
       {history.isError ? (
         <ApiErrorBanner
           error={history.error}
@@ -574,17 +640,27 @@ export function SqlChatPage() {
                   {t("chat.new")}
                 </Button>
               </div>
+              {/* 会話の欄。新しいメッセージを role="log" で知らせる（#907）。 */}
               <div
                 ref={conversationRef}
+                role="log"
+                aria-label={t("chat.messages")}
                 className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]"
                 data-testid="sql-chat-conversation"
               >
-                {conversationId && conversation.isPending ? (
-                  <ProcessingIndicator
-                    active
+                {conversationId && conversation.isPending && !pending ? (
+                  // 読み込み中は文言と経過時間を出し、質問と回答の吹き出しの形の Skeleton で寸法を予約する
+                  // （RAG のチャットと同じ。messaging.md §3.6）。
+                  <TimedLoadingState
                     label={t("chat.loading")}
-                    placement="panel"
-                  />
+                    operationKey="sql-chat-conversation-load"
+                    framed={false}
+                    testId="sql-chat-conversation-loading"
+                  >
+                    <Skeleton className="ml-auto h-12 w-2/3" />
+                    <Skeleton className="h-32 w-5/6" />
+                    <Skeleton className="ml-auto h-12 w-1/2" />
+                  </TimedLoadingState>
                 ) : null}
                 {conversationId && conversation.isError ? (
                   <ApiErrorBanner
@@ -603,7 +679,7 @@ export function SqlChatPage() {
                     }
                   />
                 ) : null}
-                {!conversationId && !send.isPending ? (
+                {!conversationId && !pending ? (
                   <EmptyState
                     title={t("chat.empty")}
                     hint={t("chat.emptyHint")}
@@ -612,17 +688,52 @@ export function SqlChatPage() {
                 {turns.map((turn) => (
                   <ChatTurn key={turn.job_id} turn={turn} />
                 ))}
-                {send.isPending && submittedQuery ? (
-                  <div className="space-y-2">
-                    <div className="ml-auto w-fit max-w-full rounded-md bg-accent-subtle px-3 py-2 break-words">
-                      {submittedQuery}
-                    </div>
-                    <ProcessingIndicator
-                      active
-                      label={t("chat.generating")}
-                      placement="panel"
-                    />
-                  </div>
+                {pending ? (
+                  // 送った質問はジョブの投入の応答を待たずに出す。失敗しても残す（#907）。
+                  <article
+                    className="space-y-2"
+                    data-testid="sql-chat-pending-turn"
+                  >
+                    <ChatUserMessage
+                      status={pending.status}
+                      failedLabel={t("chat.sendFailedStatus")}
+                    >
+                      {pending.content}
+                    </ChatUserMessage>
+                    {pending.status === "failed" && send.isError ? (
+                      // 失敗の理由は送った質問の直下（会話の中）に出す（messaging.md §10.1 のチャットの扱い）。
+                      <ApiErrorBanner
+                        error={send.error}
+                        fallback={t("chat.sendFailed")}
+                        testId="sql-chat-send-error"
+                        {...sendFailureText(send.error)}
+                        action={
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            icon={RotateCcw}
+                            disabled={blocked}
+                            onClick={resend}
+                          >
+                            {t("chat.resend")}
+                          </Button>
+                        }
+                      />
+                    ) : pending.status === "sending" ? (
+                      <Card>
+                        <CardContent className="space-y-3">
+                          <ProcessingIndicator
+                            active
+                            label={t("chat.generating")}
+                            operationKey={pending.localId}
+                            startedAt={pending.sentAtMs}
+                            placement="panel"
+                          />
+                        </CardContent>
+                      </Card>
+                    ) : null}
+                  </article>
                 ) : null}
               </div>
               <div
@@ -703,14 +814,6 @@ export function SqlChatPage() {
                     className="space-y-0"
                   />
                 </FieldActionRow>
-                {send.isError ? (
-                  <ApiErrorBanner
-                    error={send.error}
-                    fallback={t("chat.sendFailed")}
-                    testId="sql-chat-send-error"
-                    {...sendFailureText(send.error)}
-                  />
-                ) : null}
                 {stop.isError ? (
                   <ApiErrorBanner
                     error={stop.error}
@@ -734,9 +837,7 @@ function ChatTurn({ turn }: { turn: JobData }) {
   const result = turn.result;
   return (
     <article className="space-y-2" data-testid="sql-chat-turn">
-      <div className="ml-auto w-fit max-w-full rounded-md bg-accent-subtle px-3 py-2 break-words">
-        {turn.question || result?.original_question}
-      </div>
+      <ChatUserMessage>{turn.question || result?.original_question}</ChatUserMessage>
       <Card>
         <CardContent className="space-y-3">
           {inFlight(turn) ? (

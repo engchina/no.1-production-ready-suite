@@ -443,6 +443,7 @@ header           : StatusBadge（エンティティの状態の正本 = P1）
 - 結果は**起点の操作の直下**に出す。起点は、操作の行（`FormActionBar`）・表の行・入力欄の行（入力欄の横のテスト・取得のボタン）。ページの先頭や別のカードへ送らない。
 - 幅は**そのカード・表の全幅**にする。入力欄が段組みの grid の 1 列にあっても、結果はその列の中に描かず、grid の下（grid の中なら `col-span-full`）に出す。同じカードの中で結果の幅をそろえる。
 - 同じ起点の結果は 1 か所だけに出す（Toast と面を重ねない。§4.2）。
+- チャットの送信の結果は、送った質問（会話の欄の末尾の吹き出し）の直下に出す（§11）。送信の結果は「会話の中に質問が加わったか」なので、起点は入力欄の行ではなく送った質問とする。
 
 ### 10.2 部品
 
@@ -463,6 +464,18 @@ header           : StatusBadge（エンティティの状態の正本 = P1）
 3. **技術的な詳細**（API の key/value、エラーコード、エラー種別、request ID）は「詳細」（`Disclosure`）に畳む。**失敗のときだけ開いて**出し、成功のときは閉じる（§9 P3）。backend が本文の末尾に付けた「エラーコード: …」も本文から分けて「詳細」に出す。
 4. 同じ値を、要約と詳細で二重に出さない。
 
+#### 10.3.1 API の失敗（応答が届かなかった失敗を含む。#900 / #906）
+
+- 画面は `error.message` を直接出さない。API の失敗は `packages/ui` の部品と関数で出す。
+  - 失敗の面（Banner）: `ApiErrorBanner`（要約・次の操作・開いた「詳細」）。
+  - 領域の取得の失敗（§3.6）: `ApiErrorState`（`ErrorState` に「詳細」を足したもの。再試行付き）。
+  - 1 つの文しか出せない所（Toast・`FormStatus`・`SaveErrorBanner`）: `apiErrorMessage(error, 既定の文)`。
+  - 要約・次の操作・詳細を自分で並べる所: `presentApiError(error, 既定の文)`。
+- **応答が届かなかった失敗**（画面側の待ち時間の上限を超えた timeout・サーバーに接続できない通信断）は、各製品の API のラッパー（fetch を直接呼ぶ stream の client を含む）が `ApiTransportError` にする。要約は「サーバーの応答が N 秒以内に返りませんでした。」「サーバーに接続できませんでした。」、次の操作は「画面を更新して結果を確かめ…」「ネットワークの接続とサーバーの起動状態を確かめてから…」。ブラウザの英語の文（`Failed to fetch`・`signal timed out`・`NetworkError when attempting to fetch resource.` など）は「詳細」の「元のメッセージ」にだけ出す。利用者の中止（`AbortError`）は変換しない。
+  - RAG は画面の多くが `error instanceof ApiError` で分けるため、`ApiTransportError` を `cause` に包んだ `ApiError`（timeout は 408、通信断は 0）で投げる。NL2SQL・Agent は `ApiTransportError` をそのまま投げる。どちらも `presentApiError` が同じ形で出す。
+- **backend の失敗**は、製品の `ApiError` が `toApiErrorPresentation()`（`httpApiErrorPresentation`）で、backend の利用者向けの文を要約に、HTTP ステータス・エラーコード・request ID を「詳細」に分ける。
+- JavaScript の組み込みの例外（`TypeError` / `SyntaxError` など。文が英語）は、画面の既定の文（「〜を読み込めませんでした。」）にし、元の文は「詳細」に出す。
+
 ### 10.4 消す時期
 
 - 結果は次の実行まで、または**関係する入力を変えるまで**残す（入力を変えたら、その入力の結果を消す）。数秒で自動的に消さない（読み終える前に消えるため）。
@@ -471,3 +484,42 @@ header           : StatusBadge（エンティティの状態の正本 = P1）
 ### 10.5 移行
 
 既存の画面の棚卸しと残りの移行は #705 に一覧を残し、画面を触るときに直す。新しい画面・部品は最初からこの節に従う。
+
+---
+
+## 11. チャットの送信（楽観的な表示。#907）
+
+3 製品のチャット（RAG・NL2SQL・Agent）は、送ったメッセージをサーバーの応答を待たずに会話の欄へ出す（optimistic UI）。ChatGPT・Claude・Gemini・Microsoft Copilot・Slack と同じ振る舞いにし、送ったことがすぐ分かり、待ちの間に空の画面や前の状態を見せないようにする。
+
+### 11.1 送信の瞬間
+
+- 利用者のメッセージを会話の欄の**末尾**に共有の `ChatUserMessage`（右寄せの吹き出し）で出し、**入力欄を空にし**、会話の欄を最下部までスクロールする（会話の欄のコンテナの `scrollTo`。祖先は動かさない）。
+- 新しい会話の最初の送信も、**会話の作成を待たない**。空の状態（「最初のメッセージを送信して…」など）はすぐ消す。
+- すぐ下に**回答の場所**（作成中の表示。`ProcessingIndicator` と経過時間）を出し、回答が届いたら同じ場所に流し込む（RAG は SSE、NL2SQL はジョブのポーリング、Agent は Run のポーリング）。
+- 送信中も吹き出しは送信後と同じ見た目にする。**動くスピナーは回答の場所の 1 つだけ**（§3.7）。送信のボタンは同じ位置で「停止」になるか（[buttons.md §3.1](./buttons.md)）、送れない間は押せない。
+- フォーカスは入力欄に残す（Enter で送ったとき）。押したボタンで送ったときはボタンに残す（`RunStopButton`）。入力欄は回答の作成中も書ける。
+
+### 11.2 確定（置き換え）
+
+- サーバーの応答で ID・時刻が決まったら、表示中の仮のメッセージを確定したメッセージに**置き換え**、二重に出さない。
+  - RAG: SSE の `start` の保存済みの質問に置き換え、`all_done` の後に取り直した会話へ引き継ぐ（取り直しが終わってから仮の表示を外す）。
+  - NL2SQL: 画面が決めた `client_job_id`（#900）のジョブを会話のキャッシュに入れてから外す。
+  - Agent: 作られた Run を会話（`thread`）のキャッシュに入れてから外す。新しい会話は Run の `thread_id` で会話のキャッシュを作る。
+- TanStack Query のキャッシュは、サーバーが返した値（作られた Run・ジョブ・会話）だけを入れ、確定したら取り直す（invalidate）。仮のメッセージはキャッシュに入れず画面の state に持つ（失敗時にキャッシュを戻す必要がない）。
+
+### 11.3 失敗と停止
+
+- 送れなかったときは、**吹き出しを残したまま**下に「送信できませんでした」（`AlertCircle`）を出し、その下（回答の場所）に原因の danger の `Banner` と「再送信」を出す。**入力欄には戻さない**（質問は会話の欄に残っているので、入力欄に書き始めた次の質問を上書きしない）。
+  - 「再送信」は同じ本文・同じ条件で送り直す（RAG は選んだ類似問・確認の答えも同じにし、類似問・確認は聞き直さない）。
+  - 原因の文は §3.3 / §10.3 に従う（NL2SQL は `ApiErrorBanner` で、timeout は「応答が N 秒以内に返りませんでした」と確かめ方、技術的な詳細は「詳細」）。
+- 停止したときも、送った質問は会話の欄に残す。RAG は吹き出しの下に「回答の作成を停止しました。…」（`Square`）を出す。NL2SQL・Agent はサーバーの中止の後のジョブ・Run の状態（停止しました）を出す。
+- 別の会話を開く・新しい会話にする・対象（検索・回答プロファイル / 業務プロファイル / 業務 Agent）を変えると、確定していない仮のメッセージは外す。
+
+### 11.4 読み上げ
+
+- 会話の欄は `role="log"`（名前は「会話」）にし、新しいメッセージを polite で知らせる。回答の場所の作成中の表示は `role="status"`、失敗の `Banner` は `role="alert"`（§2）。
+
+### 11.5 実装
+
+- 共有: `ChatUserMessage`（吹き出しと失敗の状態の文）、`createOptimisticChatMessage` / `withOptimisticChatStatus`（仮のメッセージの形。`packages/ui`、[components-reference.md](../design-system/components-reference.md)「ChatUserMessage」）。
+- 製品: RAG `components/chat/ChatClient.tsx`、NL2SQL `features/nl2sql/SqlChatPage.tsx`、Agent `pages/ChatPage.tsx`。Playwright は応答を遅らせ、送信の直後（応答の前）に質問と作成中の表示が出ることを、desktop / 375px・新しい会話と続きの会話・失敗 → 再送信・停止で確かめる。

@@ -1,5 +1,15 @@
 import { Menu } from "lucide-react";
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -45,6 +55,7 @@ export function AppShell({
   const drawerId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
   const wasOpen = useRef(false);
 
   const closeDrawer = useCallback(() => setOpen(false), []);
@@ -76,6 +87,19 @@ export function AppShell({
     else items[action.index]?.focus({ preventScroll: true });
   };
 
+  // 本文へスキップ: URL に #pr-main を付けず（履歴を増やさず）、本文へフォーカスを移す。
+  // 既定のページ内リンクの移動は履歴の項目を足し、ブラウザの popstate を React Router が POP の画面遷移として
+  // 扱う（離脱ガードの blocker が「router の作っていない POP」の警告を出し、戻るで同じ画面に留まる）。
+  // Enter でもリンクの click が届くので、キーボードも同じ動きになる。
+  const onSkipLinkClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    // 新しいタブで開く等（修飾キー・中ボタン）はブラウザに任せる。
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const main = mainRef.current;
+    if (!main) return;
+    event.preventDefault();
+    main.focus();
+  };
+
   const context = useMemo(
     () => ({ drawer, open, closeDrawer, labels: navDrawerLabels, setBrand }),
     [drawer, open, closeDrawer, navDrawerLabels]
@@ -88,7 +112,7 @@ export function AppShell({
         className={cn("fixed inset-0 flex w-full overflow-hidden bg-canvas text-fg", drawer && "flex-col", className)}
         data-nav-mode={drawer ? "drawer" : undefined}
       >
-        <a className="pr-skip-link" href="#pr-main" inert={backgroundInert}>
+        <a className="pr-skip-link" href="#pr-main" inert={backgroundInert} onClick={onSkipLinkClick}>
           {skipLinkLabel}
         </a>
         {drawer ? (
@@ -124,6 +148,7 @@ export function AppShell({
           sidebar
         )}
         <main
+          ref={mainRef}
           id="pr-main"
           tabIndex={-1}
           inert={backgroundInert}

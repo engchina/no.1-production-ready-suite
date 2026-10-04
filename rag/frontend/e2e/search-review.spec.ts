@@ -443,3 +443,190 @@ test("検索のボタンは詳細条件の下にあり、実行中は同じ位�
   expect(aborted).toBe(1);
   await expectNoPageOverflow(page);
 });
+
+test.describe("送り直す操作は、表示中の結果を出した検索の条件で送る（#914）", () => {
+  const AUTO_ANSWER = {
+    execution_steps: [],
+    evidence_tree: [],
+    auto_field_filter: {
+      conditions: [{ name: "金額", value_type: "number", op: "gte", value: "100000" }],
+      relaxed: false,
+    },
+  };
+
+  test("「自動」の条件を外すと、入力欄を書き換えた後でも前の質問・検索・回答プロファイルで検索し直す", async ({
+    page,
+  }) => {
+    const requests: Array<Record<string, unknown>> = [];
+    await page.route("**/api/search/stream", (route) => {
+      requests.push(route.request().postDataJSON() as Record<string, unknown>);
+      const traceId = `t${requests.length}`;
+      return fulfillStream(
+        route,
+        sse([
+          ["metadata", { trace_id: traceId, elapsed_ms: 5, guardrail_warnings: [], diagnostics: { answer: AUTO_ANSWER } }],
+          ["citations", []],
+          ["done", { trace_id: traceId }],
+        ])
+      );
+    });
+
+    await page.goto("/search");
+    await selectSearchAnswerProfile(page, /経理ビュー/);
+    const input = page.getByRole("textbox", { name: "RAG 検索" });
+    await input.fill("10万円以上の契約");
+    await page.getByRole("button", { name: "検索", exact: true }).click();
+    const chips = page.getByTestId("auto-field-filter-chips");
+    await expect(chips).toBeVisible();
+
+    // 次の質問を書きかけ、検索・回答プロファイルも変えてから、表示中の結果のチップを外す。
+    await input.fill("全く別の質問");
+    await selectSearchAnswerProfile(page, /人事ビュー/);
+    await chips.getByRole("button", { name: "金額 ≥ 100000 を外して検索し直す" }).click();
+
+    await expect.poll(() => requests.length).toBe(2);
+    expect(requests[1]).toMatchObject({
+      query: "10万円以上の契約",
+      search_answer_profile_id: "bv-1",
+      auto_field_filter_excluded: ["金額"],
+    });
+    // 書きかけの入力と選択は消さない。
+    await expect(input).toHaveValue("全く別の質問");
+    await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("人事ビュー");
+  });
+
+  test("エラーの再試行は、入力欄を書き換えた後でも失敗した質問を送り直す", async ({ page }) => {
+    const requests: Array<Record<string, unknown>> = [];
+    await page.route("**/api/search/stream", (route) => {
+      requests.push(route.request().postDataJSON() as Record<string, unknown>);
+      return route.fulfill({
+        status: 503,
+        json: { data: null, error_messages: ["一時的に利用できません。"], warning_messages: [] },
+      });
+    });
+
+    await page.goto("/search");
+    await selectSearchAnswerProfile(page, /経理ビュー/);
+    await search(page, "最初の質問");
+    const alert = page.getByRole("alert").filter({ hasText: "一時的に利用できません" });
+    await expect(alert).toBeVisible();
+
+    await page.getByRole("textbox", { name: "RAG 検索" }).fill("書きかけ");
+    await alert.getByRole("button", { name: "再試行" }).click();
+
+    await expect.poll(() => requests.length).toBe(2);
+    expect(requests[1]).toMatchObject({
+      query: "最初の質問",
+      search_answer_profile_id: "bv-1",
+      generate_answer: true,
+    });
+  });
+
+  test("「類似問を使用しない」は、類似 FAQ を確かめた質問を送る", async ({ page }) => {
+    await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
+      route.fulfill(
+        envelope({
+          suggestions: [
+            { id: "faq-1", question: "交通費の上限は？", answer: "5,000 円です。", score: 0.8, direct: false },
+          ],
+        })
+      )
+    );
+    const requests: Array<Record<string, unknown>> = [];
+    await page.route("**/api/search/stream", (route) => {
+      requests.push(route.request().postDataJSON() as Record<string, unknown>);
+      return fulfillStream(
+        route,
+        sse([
+          ["metadata", { trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], diagnostics: {} }],
+          ["citations", []],
+          ["done", { trace_id: "t1" }],
+        ])
+      );
+    });
+
+    await page.goto("/search");
+    await selectSearchAnswerProfile(page, /経理ビュー/);
+    await search(page, "交通費の上限");
+    await expect(page.getByText("類似する承認済み FAQ があります")).toBeVisible();
+
+    await page.getByRole("textbox", { name: "RAG 検索" }).fill("書きかけ");
+    await page.getByRole("button", { name: "類似問を使用しない" }).click();
+
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0]).toMatchObject({ query: "交通費の上限", search_answer_profile_id: "bv-1" });
+  });
+});
+
+test.describe("類似 FAQ の照会中も、検索を始めたことを示す（#915）", () => {
+  test("押した直後に「停止」と進行を出し、FAQ があれば提示する", async ({ page }) => {
+    let releaseFaq: () => void = () => undefined;
+    await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", async (route) => {
+      await new Promise<void>((resolve) => {
+        releaseFaq = resolve;
+      });
+      await route.fulfill(
+        envelope({
+          suggestions: [
+            { id: "faq-1", question: "交通費の上限は？", answer: "5,000 円です。", score: 0.8, direct: false },
+          ],
+        })
+      );
+    });
+    let streamCalls = 0;
+    await page.route("**/api/search/stream", (route) => {
+      streamCalls += 1;
+      return route.abort();
+    });
+
+    await page.goto("/search");
+    await selectSearchAnswerProfile(page, /経理ビュー/);
+    await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限");
+    const button = page.getByTestId("search-run-stop");
+    await button.click();
+
+    // 照会の応答を待つ間も実行中（停止できる・進行を出す・条件を変えられない）。
+    await expect(button).toHaveAccessibleName("停止");
+    await expect(page.getByTestId("search-run-progress")).toBeVisible();
+    await expect(page.getByRole("switch", { name: "LLM で回答を生成する" })).toBeDisabled();
+    await expectNoPageOverflow(page);
+
+    releaseFaq();
+    await expect(page.getByText("類似する承認済み FAQ があります")).toBeVisible();
+    await expect(button).toHaveAccessibleName("検索");
+    await expect(page.getByTestId("search-run-progress")).toHaveCount(0);
+    expect(streamCalls).toBe(0);
+  });
+
+  test("照会中に停止したら、照会の結果を捨てて検索を送らない", async ({ page }) => {
+    let releaseFaq: () => void = () => undefined;
+    await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", async (route) => {
+      await new Promise<void>((resolve) => {
+        releaseFaq = resolve;
+      });
+      await route.fulfill(envelope({ suggestions: [] }));
+    });
+    let streamCalls = 0;
+    await page.route("**/api/search/stream", (route) => {
+      streamCalls += 1;
+      return route.abort();
+    });
+
+    await page.goto("/search");
+    await selectSearchAnswerProfile(page, /経理ビュー/);
+    await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限");
+    const button = page.getByTestId("search-run-stop");
+    await button.click();
+    await expect(button).toHaveAccessibleName("停止");
+    // ダブルクリックの 2 回目として無視されないよう、間を空けて押す。
+    await page.waitForTimeout(600);
+    await button.click();
+
+    await expect(button).toHaveAccessibleName("検索");
+    await expect(page.getByText("検索ストリームを停止しました。")).toBeVisible();
+    releaseFaq();
+    await page.waitForTimeout(300);
+    expect(streamCalls).toBe(0);
+    await expect(button).toHaveAccessibleName("検索");
+  });
+});

@@ -1580,9 +1580,10 @@ export type TextFieldProps = {
 | 決めたこと | 理由 |
 |---|---|
 | 入力欄を常に `div.relative` で包み、先頭アイコンは入力欄の**後ろ**（DOM 上）に置いて `peer-disabled:` で色を変える | クリアボタンの出し入れで入力欄が作り直されない（フォーカスと IME の変換を失わない）。`peer` は前の兄弟にしか効かない |
-| 後置スロットは枠線の内側（`inset-y-px right-px`）。幅は `ResizeObserver` で測り、入力欄の `padding-right` にする。測る前（SSR・初回）は `pr-[var(--field-height)]`（四角のボタン 1 つ分） | 幅の決まらない要素でも文字と重ならない |
+| 後置スロットは枠線まで含めた右端（`inset-y-0 right-0`。`SecretField` の表示切替と同じ）。幅は `ResizeObserver` で測り、入力欄の `padding-right` にする。測る前（SSR・初回）は `pr-[var(--field-height)]`（四角のボタン 1 つ分） | 幅の決まらない要素でも文字と重ならない。スロットのボタン（クリア・`SearchableMultiSelect` の一覧の開閉）が入力欄と同じ高さ（md 36px・タッチ端末 44px）になる。以前の枠線の内側（`inset-y-px right-px`）では 2px 低かった（#1132） |
+| スロットのボタンは `TEXT_FIELD_TRAILING_BUTTON_CLASS`（`h-full` の正方形・外側の角だけ `rounded-r-control`・`bg-clip-padding`） | 枠線は透明のまま地を枠線の内側だけに塗るので、ホバーの地が入力欄の枠線に重ならず、見た目は枠線の内側に収まる |
 | クリアボタンは `aria-controls` で入力欄を指し、`mousedown` を止める。押したら `onClear()` の後に入力欄へ `focus()` | ボタンが消えてもフォーカスが body に落ちない。blur で確定する検索欄が消す前の値を確定しない |
-| 強制カラーモードでは、クリアボタンの輪郭のうち上・右・下を `Canvas` にし、左の区切りだけ残す | Button は強制カラーモードで輪郭を出すが、入力欄の枠線と二重の線にしない |
+| 強制カラーモードでは、スロットのボタンの輪郭の上・右・下が入力欄の枠線とちょうど重なり、左の区切りだけが増える（クリアの左に並ぶ一覧の開閉は、右を `Canvas` にする） | Button は強制カラーモードで輪郭を出すが、入力欄の枠線と二重の線にしない |
 | `type="search"` の `::-webkit-search-cancel-button` / `::-webkit-search-decoration` を `appearance: none` | 共有のクリアと二重にしない（README §7 #33） |
 
 - 純粋関数 `hasTextValue` / `shouldClearOnEscape` / `clearTextField` と class の組み立ては `packages/ui/tests/text-field-slots.test.tsx` が確かめます（パッケージのルートからは export しません）。実ブラウザは RAG の `e2e/feedback.spec.ts`（desktop / 375px の高さ・角丸・アイコン・クリア・Tab 順・Escape、強制カラーモードのタブ）。
@@ -2123,6 +2124,34 @@ import { SearchableMultiSelect, SearchableSelectField } from "@engchina/producti
 
 ---
 
+## ApiErrorBanner / ApiErrorState / presentApiError — **新規**（#900 / #906）
+
+API の失敗を、**利用者向けの要約（何が起きたか）・次の操作・「詳細」（技術的な情報）**に分けて出す部品と関数（UX 契約 messaging.md §10.3.1）。NL2SQL の #900 の仕組みを platform に移し、3 製品で使う。
+
+```tsx
+// 失敗の面（Banner）。要約・次の操作・開いた「詳細」（要求・待ち時間の上限・エラー種別・元の文・HTTP ステータス・request ID）
+<ApiErrorBanner error={query.error} fallback={t("…loadError")} testId="…-error" />
+
+// 領域の取得の失敗（ErrorState + 「詳細」。再試行付き）
+<ApiErrorState error={query.error} fallback={t("…loadError")} onRetry={() => void query.refetch()} retryLabel={t("common.retry")} />
+
+// 1 つの文しか出せない所（Toast・FormStatus・SaveErrorBanner）
+toast.error(apiErrorMessage(error, t("…failed")));
+```
+
+| 関数・型 | 役割 |
+|---|---|
+| `ApiTransportError` / `toApiTransportError(cause, request)` | fetch・本文の読み取りが投げた timeout（`TimeoutError`）・通信断（`TypeError`）を、日本語の要約 + 次の操作の例外にする。英語の元の文は `causeMessage`。`AbortError` は `null`（変換しない） |
+| `transportErrorOf(error)` | `ApiTransportError` か、製品の `ApiError` が `cause` に包んだものを取り出す（RAG） |
+| `ApiErrorPresentable` / `httpApiErrorPresentation` | 製品の `ApiError` が `toApiErrorPresentation()` を実装し、backend の文を要約に、HTTP ステータス・エラーコード・request ID を詳細に分ける |
+| `presentApiError(error, fallback)` | 要約・次の操作・詳細を返す。組み込みの例外（英語の文）は既定の文にし、元の文は詳細へ |
+| `apiErrorMessage(error, fallback)` | 1 つの文。timeout・通信断は要約 + 次の操作、組み込みの例外は既定の文、それ以外は `message` のまま |
+
+- 既定の文言（`DEFAULT_API_TRANSPORT_MESSAGES` / `DEFAULT_API_ERROR_DETAIL_LABELS`）は日本語。`ApiErrorDetailList` は「詳細」の折りたたみ（`Disclosure`）だけを出す。`ErrorState` は `details` で同じ折りたたみを本文の下に置ける。
+- 単体テストは `packages/ui/tests/api-error.test.tsx`。製品の確認は各製品の API のラッパーのテストと e2e（`route.abort` で通信断）。
+
+---
+
 ## SaveErrorBanner — **新規**（#585）
 
 ヘッダー（`PageHeader`）に保存がある全画面のエディタで、**欄に結び付かない保存の失敗**を 1 か所に出す部品。UX 契約 messaging.md §3.3.1 の実装で、`PageBody` の最初の子に置く。欄に結び付く失敗は欄の直下（`FieldError`）に出し、この部品にも Toast にも重ねない。
@@ -2502,3 +2531,54 @@ const manualRefresh = useActionPending();
 
 - 単体テストは `packages/ui/tests/action-pending.test.tsx`。
 - 使う所: system-settings の `SystemTablesCard`（状態を再取得）、RAG のサービスのログの「再取得」、Agent の「表示を更新」（Runtime・実行履歴・監査・Snapshot・フィードバック・利用状況）と監査の「フィルター適用」、NL2SQL の一覧の「表示を更新」など。
+
+## ChatUserMessage / createOptimisticChatMessage — **新規**（#907）
+
+チャットの利用者のメッセージ（右寄せの吹き出し）と、送った質問を楽観的に出すための仮のメッセージの形。振る舞いの規則は UX 契約 messaging.md §11「チャットの送信」。送信・置き換えの API は製品ごとに違う（RAG は SSE、NL2SQL はジョブ、Agent は Run）ので、部品は形と状態だけを持つ。
+
+```tsx
+import {
+  ChatUserMessage,
+  createOptimisticChatMessage,
+  withOptimisticChatStatus,
+  type OptimisticChatMessage,
+} from "@engchina/production-ready-ui";
+
+const [pending, setPending] = useState<OptimisticChatMessage | null>(null);
+
+function submit() {
+  setPending(createOptimisticChatMessage(draft.trim()));   // status: "sending"、localId は画面の中だけの ID
+  setDraft("");
+  send.mutate(draft.trim(), {
+    onSuccess: (created) => { putIntoConversationCache(created); setPending(null); },   // 確定したものに置き換える
+    onError: () => setPending((p) => (p ? withOptimisticChatStatus(p, "failed") : p)),  // 残して再送信を出す
+  });
+}
+
+{pending ? (
+  <>
+    <ChatUserMessage status={pending.status} failedLabel={t("chat.sendFailed")} testId="chat-pending">
+      {pending.content}
+    </ChatUserMessage>
+    {pending.status === "failed" ? (
+      <Banner severity="danger" action={<Button variant="secondary" size="sm" icon={RotateCcw} onClick={resend}>{t("chat.resend")}</Button>}>
+        {reason}
+      </Banner>
+    ) : (
+      <ProcessingIndicator active operationKey={pending.localId} startedAt={pending.sentAtMs} label={t("chat.answering")} />
+    )}
+  </>
+) : null}
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 送信中（`sending`）も吹き出しの見た目は送信後と同じ（薄くしない・スピナーを付けない） | ChatGPT・Claude・Gemini と同じ。待ちの表示は回答の場所の 1 つだけにする（messaging.md §3.7 の単一スピナー） |
+| 失敗（`failed`）は吹き出しの下に `failedLabel` を `AlertCircle` 付きで出す。原因と「再送信」は製品が Banner で出す | 質問の状態（送れていない）と原因・対処を分ける（messaging.md §9 P1 / P2）。色だけに頼らない |
+| 状態は `data-status`（`sending` / `sent` / `failed` / `stopped`）に出す | e2e で状態を確かめる |
+| 仮の ID は `crypto.randomUUID` を使わず時刻と連番で作る | http の IP 直打ちなど安全でない文脈で `randomUUID` が無い |
+| `withOptimisticChatStatus(m, "sending")` は送信の時刻を数え直す。失敗・停止は送信の時刻を保つ | 再送信の経過時間を 0 から出す |
+
+- 単体テストは `packages/ui/tests/chat-message.test.tsx`。
+- 実ブラウザは RAG `e2e/chat.spec.ts`・NL2SQL `tests/e2e/sql-chat.spec.ts`・Agent `e2e/chat.spec.ts` の「#907」のテスト（応答を遅らせて、送信の直後に質問と作成中の表示が出ること、新しい会話・続きの会話、失敗 → 再送信、停止。desktop / 375px、ライト / ダーク）。
+- 使う所: RAG の `components/chat/ChatClient.tsx`、NL2SQL の `features/nl2sql/SqlChatPage.tsx`、Agent の `pages/ChatPage.tsx`（保存済みの質問の吹き出しも同じ部品）。

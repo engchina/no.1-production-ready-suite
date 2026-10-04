@@ -26,6 +26,7 @@ import {
   RowTitleButton,
   TextareaField,
   TextField,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 import { agentApi, type AgentSkill } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
@@ -55,6 +56,15 @@ interface SkillFormState {
   enabled: boolean;
   mcpRequirementsJson: string;
   resourceIdsJson: string;
+}
+
+/** 作るスキルの ID（URL の path にも使う。backend の `SKILL_ID_PATTERN` と同じ。#926）。 */
+const SKILL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/;
+
+function skillIdError(value: string): string | undefined {
+  const id = value.trim();
+  if (!id) return t("skills.idRequired");
+  return SKILL_ID_PATTERN.test(id) ? undefined : t("skills.idInvalid");
 }
 
 const EMPTY_SKILL_FORM: SkillFormState = {
@@ -100,7 +110,7 @@ export function SkillsPage() {
       toast.success(t("skills.deleted"));
       void invalidate();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
 
   const reloadMutation = useMutation({
@@ -110,7 +120,7 @@ export function SkillsPage() {
       void invalidate();
     },
     // ヘッダーの操作で固定の面が無いため、失敗は danger の Toast（messaging.md §1「失敗を黙って捨てない」）。
-    onError: (error) => toast.error(t("skills.reloadFailed"), { description: error.message }),
+    onError: (error) => toast.error(t("skills.reloadFailed"), { description: apiErrorMessage(error, t("common.error.retryLater")) }),
   });
 
   async function remove(skill: AgentSkill) {
@@ -331,7 +341,7 @@ function SkillEditor({
       expect: "array",
     });
     const errors: SkillFieldErrors = {
-      id: !editingId && !form.id.trim() ? t("skills.idRequired") : undefined,
+      id: editingId ? undefined : skillIdError(form.id),
       name: form.name.trim() ? undefined : t("skills.nameRequired"),
       mcpRequirements: mcpRequirements.ok ? undefined : mcpRequirements.error,
       resourceIds: resourceIds.ok ? undefined : resourceIds.error,
@@ -389,7 +399,7 @@ function SkillEditor({
       <PageBody wide className="space-y-6">
         {/* 保存の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
         <SaveErrorBanner
-          message={saveMutation.error ? (saveMutation.error as Error).message : null}
+          message={saveMutation.error ? apiErrorMessage(saveMutation.error, t("common.error.operation")) : null}
           attemptKey={saveMutation.submittedAt}
           testId="skill-save-error"
         />
@@ -429,6 +439,7 @@ function SkillEditor({
                     id="skill-id"
                     label={t("skills.id")}
                     required={!editingId}
+                    helper={editingId ? undefined : t("skills.idHint")}
                     error={fieldErrors.id}
                     value={form.id}
                     disabled={Boolean(editingId)}

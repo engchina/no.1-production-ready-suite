@@ -40,8 +40,27 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _profile_sync_public_error(exc: Exception) -> tuple[str, str]:
-    """既知 Oracle 例外を復旧可能な日本語へ変換し、PL/SQL stack を公開しない。"""
+def _profile_sync_public_error(
+    exc: Exception,
+    phase: ProfileSyncJobPhase = ProfileSyncJobPhase.SYNCING_ORACLE_PROFILE,
+) -> tuple[str, str]:
+    """既知 Oracle 例外を復旧可能な日本語へ変換し、PL/SQL stack を公開しない。
+
+    Agent アセットの再構築で失敗したときは、DBMS_CLOUD_AI Profile の反映は済んでいるため
+    「Oracle Profile の反映に失敗」とは書かず、失敗した工程を示す。
+    """
+    if phase == ProfileSyncJobPhase.REBUILDING_AGENT_ASSETS:
+        message = "Select AI Agent アセットを再構築できませんでした。"
+        if isinstance(exc, OracleAdapterError) or _ORACLE_ERROR_CODE_RE.search(str(exc)):
+            return (
+                "AGENT_ASSETS_REBUILD_FAILED",
+                f"{message}データベース設定と Select AI Agent の構成を確認してから"
+                "再試行してください。",
+            )
+        detail = str(exc).strip()
+        if detail:
+            message = f"{message} {detail[:500]}"
+        return "AGENT_ASSETS_REBUILD_FAILED", f"{message} 再試行してください。"
     if isinstance(exc, SelectAiCredentialMissingError):
         return (
             exc.code,
@@ -284,6 +303,7 @@ class ProfileSyncService:
                 update={
                     "status": ProfileSyncJobStatus.FAILED,
                     "phase": ProfileSyncJobPhase.FAILED,
+                    "failed_phase": job.phase,
                     "error_code": code,
                     "error_message_ja": message,
                     "finished_at": _now(),
@@ -461,7 +481,7 @@ class ProfileSyncService:
                 "中断または競合後の Oracle 反映結果を破棄しました。", extra={"job_id": job_id}
             )
         except Exception as exc:
-            code, message = _profile_sync_public_error(exc)
+            code, message = _profile_sync_public_error(exc, running.phase)
             oracle_code_match = _ORACLE_ERROR_CODE_RE.search(str(exc))
             logger.warning(
                 "Oracle Profile の反映に失敗しました。",
@@ -480,6 +500,7 @@ class ProfileSyncService:
                 update={
                     "status": ProfileSyncJobStatus.FAILED,
                     "phase": ProfileSyncJobPhase.FAILED,
+                    "failed_phase": running.phase,
                     "error_code": code,
                     "error_message_ja": message,
                     "finished_at": _now(),
