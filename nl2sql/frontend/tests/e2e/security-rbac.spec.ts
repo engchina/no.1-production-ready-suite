@@ -2113,6 +2113,10 @@ test("ユーザー一覧と詳細のパスワードリセット結果を編集�
   await salesDetailActions.getByRole("button", { name: "その他の操作" }).click();
   await expect(page.getByRole("menuitem", { name: "無効化" })).toBeFocused();
   await page.keyboard.press("Escape");
+  // Escape の後、メニューは次の frame でトリガーへ focus を戻す（restoreMenuTriggerFocus）。
+  // 戻る前に同じ操作の行の「パスワードをリセット」へ移すと、戻す処理に奪い返され、
+  // 続く Enter が「その他の操作」のメニューを開き直す。戻ったのを待ってから移す（#1141）。
+  await expect(salesDetailActions.getByRole("button", { name: "その他の操作" })).toBeFocused();
   await salesResetButton.focus();
   await page.keyboard.press("Enter");
   await page
@@ -6397,7 +6401,7 @@ test("DeepSec 条件グループ: OR・括弧・関連条件・草稿復元と�
   });
   await page.goto("/settings/security/deepsec");
   await page.getByRole("tab", { name: "データ権限", exact: true }).click();
-  await chooseSelectFieldOption(page.locator("#deepsec-entitlement-scope-mode-0"), "FILTERS");
+  await chooseFiltersScopeMode(page);
   const root = page.getByTestId("scope-group-0");
   await chooseSelectFieldOption(root.getByLabel("条件の組み合わせ"), "OR");
   const first = page.getByTestId("security-deepsec-scope-filter-0-0");
@@ -6462,7 +6466,7 @@ test("DeepSec 関連条件: 候補の読込・失敗再試行と手動複合キ�
   });
   await page.goto("/settings/security/deepsec");
   await page.getByRole("tab", { name: "データ権限", exact: true }).click();
-  await chooseSelectFieldOption(page.locator("#deepsec-entitlement-scope-mode-0"), "FILTERS");
+  await chooseFiltersScopeMode(page);
   await chooseSelectFieldOption(page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類"), "LOGIN_USER_ID");
   const addRelated = page.getByRole("button", { name: "関連テーブル条件を追加", exact: true });
   await addRelated.focus();
@@ -6601,7 +6605,7 @@ test("DeepSec 修正回帰: 関連 VIEW と TABLE の実種別で列と送信内
   });
   await page.goto("/settings/security/deepsec");
   await page.getByRole("tab", { name: "データ権限", exact: true }).click();
-  await chooseSelectFieldOption(page.locator("#deepsec-entitlement-scope-mode-0"), "FILTERS");
+  await chooseFiltersScopeMode(page);
   await chooseSelectFieldOption(page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類"), "LOGIN_USER_ID");
   await page.getByRole("button", { name: "関連テーブル条件を追加", exact: true }).click();
   const related = page.getByTestId("scope-related-0-1");
@@ -6651,10 +6655,20 @@ test("DeepSec 未選択へ戻す: 任意の選択欄は先頭の「未選択」�
   await expectNoPageHorizontalScroll(page);
 });
 
+// 行 scope を「条件で制限」に切り替える。最初の条件の列は、対象の列の一覧（許可列の checkbox と同じ取得）の
+// 先頭の列で埋まる（blankScopeFilter）。一覧の取得が終わる前に切り替えると列が空のまま残り、検証エラーで
+// SQL プレビューを生成できないため、許可列の checkbox が出てから切り替える（#1141）。
+async function chooseFiltersScopeMode(page: Page) {
+  await expect(
+    page.getByRole("group", { name: /^許可列/ }).getByRole("checkbox").first()
+  ).toBeVisible();
+  await chooseSelectFieldOption(page.locator("#deepsec-entitlement-scope-mode-0"), "FILTERS");
+}
+
 async function openReviewedRelatedCondition(page: Page) {
   await page.goto("/settings/security/deepsec");
   await page.getByRole("tab", { name: "データ権限", exact: true }).click();
-  await chooseSelectFieldOption(page.locator("#deepsec-entitlement-scope-mode-0"), "FILTERS");
+  await chooseFiltersScopeMode(page);
   await chooseSelectFieldOption(page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類"), "LOGIN_USER_ID");
   await page.getByRole("button", { name: "関連テーブル条件を追加", exact: true }).click();
   const related = page.getByTestId("scope-related-0-1");
@@ -6748,7 +6762,7 @@ test("DeepSec フォーカス修正: 条件・入れ子グループ・関連カ�
   await mockRefreshableRelatedMetadata(page);
   await page.goto("/settings/security/deepsec");
   await page.getByRole("tab", { name: "データ権限", exact: true }).click();
-  await chooseSelectFieldOption(page.locator("#deepsec-entitlement-scope-mode-0"), "FILTERS");
+  await chooseFiltersScopeMode(page);
   const root = page.getByTestId("scope-group-0");
   const actions = root.locator(":scope > div").last();
   const add = async (container: Locator, name: string) => {
@@ -7108,7 +7122,7 @@ test("DeepSec 関連テーブル条件は引用名の表を Profile の候補か
 
   await page.goto("/settings/security/deepsec");
   await page.getByRole("tab", { name: "データ権限", exact: true }).click();
-  await chooseSelectFieldOption(page.locator("#deepsec-entitlement-scope-mode-0"), "FILTERS");
+  await chooseFiltersScopeMode(page);
   await chooseSelectFieldOption(page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類"), "LOGIN_USER_ID");
   await page.getByRole("button", { name: "関連テーブル条件を追加", exact: true }).click();
   const related = page.getByTestId("scope-related-0-1");

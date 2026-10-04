@@ -322,7 +322,17 @@ _DECIDE = _any(APPROVALS_DECIDE, ADMIN)
 # 画面の読み取り（メニュー権限。capability は関連メニューを暗黙に含む）。
 _RUN_LIST = _any(MENU_RUNS, MENU_APPROVALS)
 _RUN_DETAIL = _any(MENU_RUNS, MENU_APPROVALS, MENU_AUDIT)
-_AGENT_READ = _any(MENU_AGENTS, MENU_RUNS, MENU_CHAT, MENU_SETTINGS_RUNTIME_SNAPSHOT)
+# 業務 Agent を選ぶ・名前で示す画面（自動実行・品質評価・フィードバックの絞り込み）も読む。
+# 読めないと開いた直後の 403（経路の権限拒否）で権限なしの画面へ移る（#1113。対象範囲で絞る）。
+_AGENT_READ = _any(
+    MENU_AGENTS,
+    MENU_RUNS,
+    MENU_CHAT,
+    MENU_SETTINGS_RUNTIME_SNAPSHOT,
+    MENU_AUTOMATIONS,
+    MENU_EVALUATION,
+    MENU_FEEDBACK,
+)
 _TOOL_READ = _any(MENU_AUDIT, ADMIN)
 _PLUGIN_READ = _any(MENU_PLUGIN_MARKETPLACES)
 # 保存先の状態（#839）を出す画面のメニュー（業務 Agent・スキル・プラグイン・実行・自動実行・
@@ -377,7 +387,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- Control Plane: 組み込み Runtime の状態 ----
     # ---- Control Plane: Run・承認・監査 ----
     # 組み込み Runtime の状態（#754）。
-    ("GET", "/runtime/status"): _any(MENU_RUNTIMES, MENU_AGENTS),
+    # 実行履歴の「実行を作成」も、実行できる状態か（モデル未設定）を作成の前に確かめる（#1113）。
+    ("GET", "/runtime/status"): _any(MENU_RUNTIMES, MENU_AGENTS, RUNS_OPERATE),
     # 保存先の状態（#839）。再起動で消えることを、定義・実行を作る画面と運用設定の画面が出す。
     ("GET", "/runtime/storage"): _RUNTIME_STORAGE_READ,
     ("GET", "/runs"): _RUN_LIST,
