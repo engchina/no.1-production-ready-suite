@@ -27,6 +27,7 @@ from security_support import (
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from app.features.agent import builtin_runtime
 from app.features.agent.runtime import (
     AgentProfile,
     RunCreateRequest,
@@ -173,6 +174,29 @@ def test_audit_is_scoped_by_principal(auth: ProductionAuth, scope_data: ScopeDat
     assert scope_data.run_b.id not in csv.text
 
 
+def test_audit_tool_names_are_scoped_by_principal(
+    auth: ProductionAuth, scope_data: ScopeData
+) -> None:
+    """ツール名の選択肢にも、対象範囲の外の業務 Agent の Run のツール名を出さない（#983）。"""
+    other_tool = "scope_b_only__lookup"
+    run = runtime_repository.create_builtin_run(RunCreateRequest(goal="scope b", agent_id=AGENT_B))
+    assert runtime_repository.begin_builtin_run(run.id) is not None
+    runtime_repository.request_builtin_approvals(
+        run.id, [ToolCall(name=other_tool, arguments={}, trace_id="call-b")], state="{}"
+    )
+    _scoped_user(auth, "scoped-auditor-names", ["agent.audit.view"])
+
+    records = client.get("/api/audit/tool-calls", headers=login("scoped-auditor-names"))
+
+    assert records.status_code == 200
+    tool_names = records.json()["data"]["tool_names"]
+    assert APPROVAL_TOOL in tool_names
+    assert other_tool not in tool_names
+    admin = client.get("/api/audit/tool-calls", headers=login_configured_admin())
+    assert other_tool in admin.json()["data"]["tool_names"]
+    del scope_data
+
+
 def test_approval_is_scoped_and_decided_by_principal(
     auth: ProductionAuth, scope_data: ScopeData
 ) -> None:
@@ -230,6 +254,74 @@ def test_operator_run_creation_is_scoped(auth: ProductionAuth, scope_data: Scope
         headers=headers,
     )
     assert created.status_code == 200, created.text
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        # 承認待ちから再開する SDK の状態。偽ると、最初からの実行ではなく再開になる（#1130）。
+        {"_builtin_sdk_state": "{}"},
+        {"_runtime_dispatch_lease": {"owner": "x"}},
+        {"evaluation_dry_run": True},
+        {"automation_id": "automation-of-another-user"},
+        {"source": "mcp", "search_answer_profile_id": "bv-a"},
+    ],
+    ids=["sdk-state", "dispatch-lease", "evaluation-dry-run", "automation-id", "source"],
+)
+def test_run_creation_rejects_reserved_metadata(
+    auth: ProductionAuth,
+    scope_data: ScopeData,
+    monkeypatch: MonkeyPatch,
+    metadata: dict[str, object],
+) -> None:
+    """利用者は Control Plane の予約の metadata を付けて Run を作れない（#1130）。"""
+    scheduled: list[str] = []
+
+    async def record(run_id: str) -> None:
+        scheduled.append(run_id)
+
+    monkeypatch.setattr(builtin_runtime, "resume_run", record)
+    monkeypatch.setattr(builtin_runtime, "execute_run", record)
+    _scoped_user(auth, "reserved-metadata-operator", ["agent.runs.operate"])
+    headers = login("reserved-metadata-operator")
+    before = {run.id for run in runtime_repository.list_runs()}
+
+    response = client.post(
+        "/api/runs",
+        json={"goal": "予約の metadata", "agent_id": AGENT_A, "metadata": metadata},
+        headers=headers,
+    )
+
+    assert response.status_code == 422, response.text
+    assert "metadata" in response.json()["error_messages"][0]
+    assert {run.id for run in runtime_repository.list_runs()} == before
+    assert scheduled == []
+
+
+def test_run_creation_keeps_unreserved_metadata(
+    auth: ProductionAuth, scope_data: ScopeData, monkeypatch: MonkeyPatch
+) -> None:
+    async def record(run_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(builtin_runtime, "execute_run", record)
+    _scoped_user(auth, "unreserved-metadata-operator", ["agent.runs.operate"])
+    headers = login("unreserved-metadata-operator")
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "goal": "予約していない metadata",
+            "agent_id": AGENT_A,
+            "metadata": {"search_answer_profile_id": "bv-a", "ticket": "T-1"},
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    metadata = response.json()["data"]["metadata"]
+    assert metadata["search_answer_profile_id"] == "bv-a"
+    assert metadata["ticket"] == "T-1"
 
 
 def test_agent_list_is_scoped(auth: ProductionAuth, scope_data: ScopeData) -> None:

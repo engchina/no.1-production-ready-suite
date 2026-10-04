@@ -88,7 +88,13 @@ def _validate_region(value: str) -> str:
 
 
 class OciConfigReadRequest(BaseModel):
-    """OCI config file の profile 読み取り request。"""
+    """OCI config file の profile 読み取り request。
+
+    `config_file` / `profile` は互換のために受け取るが使わない。読むのは実行中の設定
+    （`PLATFORM_OCI_CONFIG_FILE` / `PLATFORM_OCI_CONFIG_PROFILE`）の config で、
+    保存・接続テストと同じファイルにそろえる
+    （要求の path でサーバーの任意のファイルを読ませない。#1067）。
+    """
 
     config_file: str = Field(default="~/.oci/config", max_length=1024)
     profile: str = Field(default="DEFAULT", max_length=128)
@@ -176,6 +182,9 @@ class OciSettingsData(BaseModel):
     key_file_exists: bool
     config_file_exists: bool
     config_source: Literal["runtime"]
+    # config ファイルはあるが読み取れない（形式・文字コード・サイズ・権限）ときの理由。
+    # 画面は欄を空のまま「未設定」と見せず、この理由を警告に出す（#1067）。
+    config_error: str | None = None
 
 
 class OciObjectStorageSettingsUpdate(BaseModel):
@@ -248,7 +257,11 @@ class OciConfigTestResult(BaseModel):
 
 
 class OciObjectStorageNamespaceRequest(BaseModel):
-    """Object Storage namespace 取得 request。"""
+    """Object Storage namespace 取得 request。
+
+    `config_file` / `profile` は互換のために受け取るが使わない
+    （実行中の設定の config で取得する。#1067）。
+    """
 
     config_file: str = Field(default="~/.oci/config", max_length=1024)
     profile: str = Field(default="DEFAULT", max_length=128)
@@ -290,7 +303,7 @@ class OciPrivateKeyUploadData(BaseModel):
 def _oci_settings_data(settings: Any) -> OciSettingsData:
     config_file = _oci_config_file(settings)
     profile = _oci_profile(settings)
-    parsed = _read_runtime_oci_config(config_file, profile)
+    parsed, config_error = _read_runtime_oci_config_for_display(config_file, profile)
     key_file = OCI_PRIVATE_KEY_FILE
     return OciSettingsData(
         config_file=config_file,
@@ -303,6 +316,7 @@ def _oci_settings_data(settings: Any) -> OciSettingsData:
         key_file_exists=_expand(key_file).exists(),
         config_file_exists=_expand(config_file).exists(),
         config_source="runtime",
+        config_error=config_error,
     )
 
 
@@ -325,6 +339,38 @@ def _read_runtime_oci_config(config_file: str, profile: str) -> OciConfigReadDat
         return _parse_oci_config(content, profile)
     except HTTPException:
         return None
+
+
+def _read_runtime_oci_config_for_display(
+    config_file: str, profile: str
+) -> tuple[OciConfigReadData | None, str | None]:
+    """画面に出す OCI config を読む。読めない理由を、未設定と区別して返す。
+
+    - ファイルが無い・profile が無い・profile に項目が無い: 未設定（理由は None）
+    - ファイルはあるが読めない（形式・UTF-8・サイズ・権限）: 理由を返す
+    """
+    if not _expand(config_file).exists():
+        return None, None
+    try:
+        content = _read_oci_config_text(config_file)
+        return _parse_oci_config(content, profile), None
+    except HTTPException as exc:
+        if (
+            exc.status_code in {404, 422}
+            and _expand(config_file).is_file()
+            and _is_readable(config_file)
+        ):
+            # profile が無い・項目が無い（まだ保存していない profile）は未設定として扱う。
+            return None, None
+        return None, str(exc.detail)
+
+
+def _is_readable(config_file: str) -> bool:
+    try:
+        with _expand(config_file).open("rb"):
+            return True
+    except OSError:
+        return False
 
 
 def _expand(path: str) -> Path:
@@ -865,15 +911,17 @@ def _elapsed_ms(started: float) -> int:
     return max(0, round((time.perf_counter() - started) * 1000))
 
 
-def _read_object_storage_namespace(payload: OciObjectStorageNamespaceRequest) -> str:
-    """OCI SDK で Object Storage namespace を取得する。"""
+def _read_object_storage_namespace(
+    payload: OciObjectStorageNamespaceRequest, *, config_file: str, profile: str
+) -> str:
+    """OCI SDK で Object Storage namespace を取得する。config は実行中の設定のもの（#1067）。"""
     try:
         oci_config = importlib.import_module("oci.config")
         object_storage = importlib.import_module("oci.object_storage")
         config = load_oci_config_without_prompt(
             oci_config,
-            payload.config_file,
-            payload.profile,
+            config_file,
+            profile,
             region=payload.region,
         )
         response = object_storage.ObjectStorageClient(config).get_namespace()
@@ -1014,8 +1062,11 @@ def build_oci_router(
         "/oci/config/read", response_model=ApiResponse[OciConfigReadData], dependencies=action
     )
     def read_oci_config(payload: OciConfigReadRequest) -> ApiResponse[OciConfigReadData]:
-        content = _read_oci_config_text(payload.config_file)
-        return ApiResponse(data=_parse_oci_config(content, payload.profile))
+        # 要求の config_file / profile は使わない（#1067）。
+        del payload
+        settings = get_settings()
+        content = _read_oci_config_text(_oci_config_file(settings))
+        return ApiResponse(data=_parse_oci_config(content, _oci_profile(settings)))
 
     @router.post(
         "/oci/config/test", response_model=ApiResponse[OciConfigTestResult], dependencies=action
@@ -1031,8 +1082,15 @@ def build_oci_router(
     def read_oci_object_storage_namespace(
         payload: OciObjectStorageNamespaceRequest,
     ) -> ApiResponse[OciObjectStorageNamespaceData]:
+        settings = get_settings()
         return ApiResponse(
-            data=OciObjectStorageNamespaceData(namespace=_read_object_storage_namespace(payload))
+            data=OciObjectStorageNamespaceData(
+                namespace=_read_object_storage_namespace(
+                    payload,
+                    config_file=_oci_config_file(settings),
+                    profile=_safe_oci_profile_name(_oci_profile(settings)),
+                )
+            )
         )
 
     @router.post(

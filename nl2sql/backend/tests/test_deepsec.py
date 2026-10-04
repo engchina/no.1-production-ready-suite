@@ -13,6 +13,7 @@ import pytest
 from pr_backend_core.oracle_session import init_oracle_session
 from pydantic import ValidationError
 
+from app.clients import oracle_runtime
 from app.clients.oracle_runtime import OraclePoolManager
 from app.features.nl2sql.oracle_adapter import OracleAdapterError
 from app.security.deepsec import (
@@ -710,7 +711,8 @@ def test_data_entitlement_sql_targets_real_object_with_role_predicate() -> None:
     statements = build_data_entitlement_statements(settings, entitlement)
     sql = "\n".join(statements)
 
-    assert statements[0] == "GRANT SELECT ON HR.EMPLOYEES TO NL2SQL_APP_DB_ROLE"
+    # #1022: DATA GRANTS ONLY を先に有効にし、DB role の SELECT は最後に付ける（fail-closed）。
+    assert statements[0] == "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES ENABLED"
     assert "CREATE OR REPLACE DATA GRANT APP_OWNER.NL2SQL_DG_" in sql
     assert "AS SELECT (EMPLOYEE_ID, DISPLAY_NAME)" in sql
     assert "ON HR.EMPLOYEES" in sql
@@ -725,7 +727,7 @@ def test_data_entitlement_sql_targets_real_object_with_role_predicate() -> None:
     assert "e.CAPABILITY = 'SELECT'" in sql
     assert "e.APPLY_STATUS = 'APPLIED'" in sql
     assert "HR.EMPLOYEES.DEPARTMENT_CODE = e.SCOPE_CODE" in sql
-    assert statements[-1] == "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES ENABLED"
+    assert statements[-1] == "GRANT SELECT ON HR.EMPLOYEES TO NL2SQL_APP_DB_ROLE"
 
 
 def test_data_entitlement_sql_builds_structured_scope_filters() -> None:
@@ -949,7 +951,9 @@ def test_data_entitlement_sql_accepts_materialized_view_target() -> None:
     assert "CREATE OR REPLACE DATA GRANT APP_OWNER.NL2SQL_DG_" in sql
     assert "AS SELECT (REGION_CODE, TOTAL_AMOUNT)" in sql
     assert "ON DW.SALES_SUMMARY_MV" in sql
-    assert statements[-1] == "SET USE DATA GRANTS ONLY ON DW.SALES_SUMMARY_MV ENABLED"
+    # #1022: DATA GRANTS ONLY を先に有効にし、DB role の SELECT は最後に付ける（fail-closed）。
+    assert statements[0] == "SET USE DATA GRANTS ONLY ON DW.SALES_SUMMARY_MV ENABLED"
+    assert statements[-1] == "GRANT SELECT ON DW.SALES_SUMMARY_MV TO NL2SQL_APP_DB_ROLE"
 
 
 def test_data_entitlement_validation_accepts_mview_with_table_dictionary_row() -> None:
@@ -1137,6 +1141,55 @@ def test_data_entitlement_validation_rejects_app_user_id_without_eq() -> None:
 
     with pytest.raises(SecurityApiError, match="ログインユーザーID"):
         service._validate_data_entitlement(FakeCursor(), entitlement)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("owner", "object_name", "allowlist"),
+    [
+        ("APP_OWNER", "RAG_DOCUMENTS", []),
+        ("APP_OWNER", "AGENT_RUNS", []),
+        ("APP_OWNER", "NL2SQL_PROFILES", []),
+        ("HR", "PLATFORM_USERS", []),
+        ("FINANCE", "LEDGER", ["HR"]),
+    ],
+    ids=["rag", "agent", "nl2sql-state", "platform", "owner-not-allowed"],
+)
+def test_data_entitlement_validation_rejects_targets_outside_picker(
+    owner: str, object_name: str, allowlist: list[str]
+) -> None:
+    """API を直接呼んでも、対象の選択欄に出ない表へ Data Grant を作らない。"""
+    executed: list[str] = []
+
+    class FakeCursor:
+        def execute(self, sql: str, _params: dict[str, str]) -> None:
+            executed.append(sql)
+
+        def fetchall(self) -> list[tuple[str, ...]]:
+            return [("TABLE",)]
+
+    entitlement = DataEntitlementRecord(
+        entitlement_id="entitlement-outside",
+        role_id="role-sales",
+        resource_code=f"{owner}.{object_name}",
+        scope_code="*",
+        capability="SELECT",
+        target_owner=owner,
+        target_object=object_name,
+        target_type="TABLE",
+        column_names=["ID"],
+    )
+    settings = _settings()
+    settings.nl2sql_schema_owner_allowlist = allowlist
+    service = DeepSecService(
+        settings,
+        SecurityService(InMemorySecurityStore(), settings),
+        OraclePoolManager(settings),
+    )
+
+    with pytest.raises(SecurityApiError, match="Data Grant の対象にできません") as error:
+        service._validate_data_entitlement(FakeCursor(), entitlement)  # noqa: SLF001
+    assert error.value.status_code == 400
+    assert executed == []
 
 
 def test_data_entitlement_apply_rejects_predicate_over_4000_before_oracle(
@@ -1371,13 +1424,14 @@ def test_data_entitlement_apply_executes_generated_sql_and_marks_applied(
     assert stored.apply_status == "APPLIED"
     assert stored.data_grant_name.startswith("NL2SQL_DG_")
     assert stored.sql_checksum
-    assert executed[0] == "GRANT SELECT ON HR.EMPLOYEES TO NL2SQL_APP_DB_ROLE"
+    # #1022: DATA GRANTS ONLY を先に有効にし、DB role の SELECT は最後に付ける（fail-closed）。
+    assert executed[0] == "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES ENABLED"
     assert executed[1] == f"DROP DATA GRANT IF EXISTS APP_OWNER.{stored.data_grant_name}"
     assert "CREATE OR REPLACE DATA GRANT APP_OWNER.NL2SQL_DG_" in executed[2]
     assert "TO NL2SQL_APP_DATA_ROLE" in executed[2]
     assert "TO DEEPSEC_DATA_USER" not in executed[2]
     assert "e.ROLE_ID = 'role-sales'" in executed[2]
-    assert executed[3] == "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES ENABLED"
+    assert executed[3] == "GRANT SELECT ON HR.EMPLOYEES TO NL2SQL_APP_DB_ROLE"
 
 
 def test_data_entitlement_apply_allows_empty_policy_sync_without_sql(
@@ -1454,9 +1508,12 @@ def test_data_entitlement_apply_all_deleted_drops_stale_grants_and_disables_targ
 
     assert result["status"] == "APPLIED"
     assert result["applied_count"] == 0
-    assert result["cleanup_count"] == 2
-    assert "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES DISABLED" in executed[0]
+    # #1022: 以前は DISABLED → DROP の順で、DB role の SELECT を外さなかった（DATA USER が
+    # 全行を読める fail-open）。SELECT の REVOKE → DROP → DISABLED の順にする。
+    assert result["cleanup_count"] == 3
+    assert "REVOKE SELECT ON HR.EMPLOYEES FROM NL2SQL_APP_DB_ROLE" in executed[0]
     assert executed[1] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_OLD"
+    assert "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES DISABLED" in executed[2]
     assert store.get_role("role-sales").entitlements == []  # type: ignore[union-attr]
 
 
@@ -1500,10 +1557,11 @@ def test_data_entitlement_apply_replaces_deleted_grant_with_new_grant_on_same_ta
     assert result["applied_count"] == 1
     assert result["cleanup_count"] == 1
     assert executed[0] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_OLD"
-    assert executed[1] == "GRANT SELECT ON HR.EMPLOYEES TO NL2SQL_APP_DB_ROLE"
+    # #1022: DATA GRANTS ONLY を先に有効にし、DB role の SELECT は最後に付ける（fail-closed）。
+    assert executed[1] == "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES ENABLED"
     assert "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_" in executed[2]
     assert "CREATE OR REPLACE DATA GRANT APP_OWNER.NL2SQL_DG_" in executed[3]
-    assert executed[4] == "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES ENABLED"
+    assert executed[4] == "GRANT SELECT ON HR.EMPLOYEES TO NL2SQL_APP_DB_ROLE"
 
 
 def test_data_entitlement_preview_and_apply_cover_all_role_grants(
@@ -2136,17 +2194,19 @@ def test_reset_executes_fixed_teardown_and_clears_states_without_data_password(
     assert len(executed) == len(
         build_v001_reset_statements(settings, store.get_role("role-sales").entitlements)  # type: ignore[union-attr]
     )
-    assert "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES DISABLED" in executed[0]
-    assert executed[1] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_MANAGED"
-    assert "SET USE DATA GRANTS ONLY ON APP_OWNER.NL2SQL_DEEPSEC_PROBE DISABLED" in executed[2]
-    assert executed[3] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DEEPSEC_PROBE_SENSITIVE"
-    assert executed[4] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DEEPSEC_PROBE_ROWS"
-    assert "DROP TABLE APP_OWNER.NL2SQL_DEEPSEC_PROBE CASCADE CONSTRAINTS PURGE" in executed[5]
-    assert "DROP CONTEXT NL2SQL_APP_USER_CTX" in executed[6]
-    assert "DROP PACKAGE APP_OWNER.NL2SQL_DEEPSEC_CTX_PKG" in executed[7]
-    assert executed[8] == "DROP END USER IF EXISTS DEEPSEC_DATA_USER"
-    assert executed[9] == "DROP DATA ROLE IF EXISTS NL2SQL_APP_DATA_ROLE"
-    assert "DROP ROLE NL2SQL_APP_DB_ROLE" in executed[10]
+    # #1022: DATA GRANTS ONLY を無効にする前に、対象の SELECT を DB role から外す。
+    assert "REVOKE SELECT ON HR.EMPLOYEES FROM NL2SQL_APP_DB_ROLE" in executed[0]
+    assert "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES DISABLED" in executed[1]
+    assert executed[2] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_MANAGED"
+    assert "SET USE DATA GRANTS ONLY ON APP_OWNER.NL2SQL_DEEPSEC_PROBE DISABLED" in executed[3]
+    assert executed[4] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DEEPSEC_PROBE_SENSITIVE"
+    assert executed[5] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DEEPSEC_PROBE_ROWS"
+    assert "DROP TABLE APP_OWNER.NL2SQL_DEEPSEC_PROBE CASCADE CONSTRAINTS PURGE" in executed[6]
+    assert "DROP CONTEXT NL2SQL_APP_USER_CTX" in executed[7]
+    assert "DROP PACKAGE APP_OWNER.NL2SQL_DEEPSEC_CTX_PKG" in executed[8]
+    assert executed[9] == "DROP END USER IF EXISTS DEEPSEC_DATA_USER"
+    assert executed[10] == "DROP DATA ROLE IF EXISTS NL2SQL_APP_DATA_ROLE"
+    assert "DROP ROLE NL2SQL_APP_DB_ROLE" in executed[11]
     assert store.get_deepsec_states() == {}
     assert store.get_role("role-sales").entitlements[0].apply_status == "PENDING"  # type: ignore[union-attr]
     assert settings.oracle_deepsec_enabled is True
@@ -2211,6 +2271,13 @@ def test_update_config_persists_runtime_settings_and_closes_pools(
     security = SecurityService(InMemorySecurityStore(), settings)
     security.bootstrap()
     service = DeepSecService(settings, security, OraclePoolManager(settings))
+
+    # 「${...}」は .env を読み直すと環境変数として展開されるので保存しない。
+    with pytest.raises(SecurityApiError) as interpolated:
+        service.update_config("Abc${HOME}defghij")
+    assert interpolated.value.status_code == 400
+    assert settings.oracle_deepsec_enabled is False
+    assert closed == []
 
     status = service.update_config("DeepSecret!456")
 
@@ -2857,6 +2924,8 @@ class _FakePool:
 
 
 class _FakeOracleDb:
+    POOL_GETMODE_TIMEDWAIT = 3
+
     def __init__(self) -> None:
         self.thin_mode = True
         self.init_calls: list[str] = []
@@ -2949,6 +3018,8 @@ def test_data_pool_uses_thin_driver_and_data_user_credentials() -> None:
             "max": 4,
             "increment": 1,
             "session_callback": init_oracle_session,
+            "getmode": 3,
+            "wait_timeout": 30_000,
         }
     ]
 
@@ -3005,6 +3076,8 @@ def test_thick_control_pool_initializes_oracle_client_when_deepsec_disabled() ->
             "max": 4,
             "increment": 1,
             "session_callback": init_oracle_session,
+            "getmode": 3,
+            "wait_timeout": 30_000,
         }
     ]
 
@@ -3036,6 +3109,8 @@ def test_control_and_data_pools_share_wallet_mtls_network_settings(tmp_path: Pat
             "max": 4,
             "increment": 1,
             "session_callback": init_oracle_session,
+            "getmode": 3,
+            "wait_timeout": 30_000,
         },
         {
             "user": "DEEPSEC_DATA_USER",
@@ -3049,6 +3124,8 @@ def test_control_and_data_pools_share_wallet_mtls_network_settings(tmp_path: Pat
             "max": 4,
             "increment": 1,
             "session_callback": init_oracle_session,
+            "getmode": 3,
+            "wait_timeout": 30_000,
         },
     ]
 
@@ -3145,3 +3222,93 @@ def test_data_connection_close_failure_after_success_drops_without_failing_reque
     ]
     assert pool.dropped == [connection]
     assert connection.closed == 1
+
+
+@pytest.mark.parametrize(
+    ("oracle_error", "expected_message"),
+    [
+        ("ORA-28000: The account is locked.", oracle_runtime.DEEPSEC_DATA_USER_LOCKED_MESSAGE),
+        (
+            "ORA-01017: invalid credential or not authorized; logon denied",
+            oracle_runtime.DEEPSEC_DATA_USER_INVALID_CREDENTIAL_MESSAGE,
+        ),
+    ],
+    ids=["account_locked", "invalid_credential"],
+)
+def test_data_user_login_failure_fails_fast_without_retrying_login(
+    monkeypatch: pytest.MonkeyPatch, oracle_error: str, expected_message: str
+) -> None:
+    """DATA USER のログインの失敗は日本語の文で返し、期間内は要求ごとにログインし直さない。"""
+
+    class LockedPool(_FakePool):
+        def __init__(self) -> None:
+            super().__init__(_FakeConnection([]))
+            self.acquired = 0
+
+        def acquire(self) -> _FakeConnection:
+            self.acquired += 1
+            raise RuntimeError(oracle_error)
+
+    class LockedOracleDb(_FakeOracleDb):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pools: list[LockedPool] = []
+
+        def create_pool(self, **kwargs: object) -> LockedPool:
+            self.pool_kwargs.append(kwargs)
+            pool = LockedPool()
+            self.pools.append(pool)
+            return pool
+
+    clock = [1_000.0]
+    monkeypatch.setattr(oracle_runtime, "_monotonic", lambda: clock[0])
+    manager = OraclePoolManager(_settings())
+    fake_oracledb = LockedOracleDb()
+    manager._oracledb = fake_oracledb
+
+    with pytest.raises(OracleAdapterError) as first, manager.data_connection("user-a"):
+        pass
+    assert str(first.value) == expected_message
+    assert "DeepSecret" not in str(first.value)
+    # 失敗した pool は捨てる（次は新しい pool で試す）。
+    assert fake_oracledb.pools[0].closed_force_values == [True]
+    assert manager._data_pool is None
+
+    # 期間内の要求は、接続を試さずにすぐ同じ文で失敗する（ログインの失敗の回数を増やさない）。
+    clock[0] += oracle_runtime.DATA_USER_LOGIN_FAILURE_BACKOFF_SECONDS - 1
+    with (
+        pytest.raises(OracleAdapterError, match="DeepSec DATA USER"),
+        manager.data_connection("user-b"),
+    ):
+        pass
+    assert len(fake_oracledb.pools) == 1
+    assert fake_oracledb.pools[0].acquired == 1
+
+    # 期間を過ぎたら 1 回だけ試し直す。
+    clock[0] += 2
+    with (
+        pytest.raises(OracleAdapterError, match="DeepSec DATA USER"),
+        manager.data_connection("user-a"),
+    ):
+        pass
+    assert len(fake_oracledb.pools) == 2
+    assert fake_oracledb.pools[1].acquired == 1
+
+    # DeepSec の設定の保存（`close_oracle_pools` → `close`）で忘れる。
+    manager.close()
+    assert manager._data_login_failure is None
+
+
+def test_data_connection_other_errors_are_not_remembered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ログイン以外の失敗（pool の待ちの timeout 等）は覚えず、次の要求で普通に試す。"""
+
+    class BusyPool(_FakePool):
+        def acquire(self) -> _FakeConnection:
+            raise RuntimeError("DPY-4005: timed out waiting for the connection pool")
+
+    manager = OraclePoolManager(_settings())
+    monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: BusyPool(_FakeConnection([])))
+
+    with pytest.raises(RuntimeError, match="DPY-4005"), manager.data_connection("user-a"):
+        pass
+    assert manager._data_login_failure is None

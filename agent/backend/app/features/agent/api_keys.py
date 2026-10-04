@@ -80,6 +80,8 @@ class ApiKeyView(BaseModel):
 
 class ApiKeysListData(BaseModel):
     keys: list[ApiKeyView] = Field(default_factory=list)
+    # キーの業務 Agent の ID → 名前。閲覧者が利用できる業務 Agent だけ（範囲外・削除済みは無し）。
+    agent_names: dict[str, str] = Field(default_factory=dict)
     # False はキーの保存先（Oracle）が無い（再起動で消える）。
     persistent: bool = True
 

@@ -147,11 +147,24 @@ test("再読込しても実行中の評価の job の状態を表示し、失敗
   await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 2 件（0%）");
   expect(jobs.runPayloads).toHaveLength(1);
 
-  jobs.fail("run", "品質評価の実行に失敗しました（RuntimeError）。");
+  jobs.fail(
+    "run",
+    "品質評価の実行中に予期しないエラーが発生したため、評価を中断しました。サーバーのログを確認して、もう一度実行してください。 エラー種別: RuntimeError"
+  );
   const panel = page.getByTestId("evaluation-run-job");
   await expect(panel.locator("[data-status-variant]")).toHaveText("失敗");
   await expect(panel.getByText("評価を最後まで実行できませんでした。")).toBeVisible();
-  await expect(panel.getByText("品質評価の実行に失敗しました（RuntimeError）。")).toBeVisible();
+  // 本文は原因と対処だけにし、例外の種別は開いた「詳細」に出す（messaging.md §10.3）。
+  await expect(
+    panel.getByText(
+      "品質評価の実行中に予期しないエラーが発生したため、評価を中断しました。サーバーのログを確認して、もう一度実行してください。",
+      { exact: true }
+    )
+  ).toBeVisible();
+  const details = panel.locator("details").filter({ hasText: "詳細" });
+  await expect(details).toHaveAttribute("open", "");
+  await expect(details).toContainText("エラー種別");
+  await expect(details).toContainText("RuntimeError");
 });
 
 test("基準を選ぶと閾値プレビューを更新し suite を送る", async ({ page }) => {
@@ -429,7 +442,9 @@ test("評価の JSON のエラーは欄の直下に出し、その欄へフォ�
   await run.click();
   await expect(request).toHaveAccessibleDescription(/Golden set JSON の cases を 1 件以上入力してください。/);
 
+  // 編集中の Golden set JSON は確認してからサンプルに置き換える。
   await page.getByRole("button", { name: "サンプルを読み込む" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "サンプルで置き換える" }).click();
   const experiments = page.getByLabel("Experiments JSON");
   await experiments.fill("");
   await page.getByRole("button", { name: "比較実行" }).click();
@@ -443,6 +458,37 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
+  test(`サンプルを読み込むは編集中の Golden set JSON を確認してから置き換える (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/evaluation");
+    const request = page.getByLabel("Golden set JSON");
+    const sample = await request.inputValue();
+    const loadSample = page.getByRole("button", { name: "サンプルを読み込む" });
+
+    // サンプルのままなら確認しない。
+    await loadSample.click();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+
+    const edited = '{"cases": [{"id": "my-case", "query": "編集中の質問"}]}';
+    await request.fill(edited);
+    await loadSample.click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("サンプルで置き換えますか？");
+    await expect(dialog).toContainText("今の内容は元に戻せません。");
+    await expectNoPageOverflow(page);
+
+    // やめたら編集中の内容を残す。
+    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(request).toHaveValue(edited);
+
+    await loadSample.click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "サンプルで置き換える" }).click();
+    await expect(request).toHaveValue(sample);
+  });
+
   test(`評価結果は検索・根拠・回答の観点ごとに 9 つの指標とケースの判定を出す (${viewport.name})`, async ({
     page,
   }) => {
