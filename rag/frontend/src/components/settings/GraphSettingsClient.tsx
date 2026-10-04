@@ -15,7 +15,7 @@ import {
 import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, Share2 } from "lucide-react";
 
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import { ApiError, type GraphProfileName, type GraphProfileStatusData } from "@/lib/api";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { useValuesChanged } from "@/lib/render-sync";
@@ -65,10 +65,9 @@ export function GraphSettingsClient() {
   if (query.isError) {
     return (
       <PageBody wide>
-        <ErrorState
-          message={
-            query.error instanceof ApiError ? query.error.message : t("settings.graph.loadError")
-          }
+        <ApiErrorState
+          error={query.error}
+          fallback={t("settings.graph.loadError")}
           onRetry={() => void query.refetch()}
         />
       </PageBody>

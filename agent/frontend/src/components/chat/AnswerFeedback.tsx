@@ -1,4 +1,4 @@
-import { FeedbackControls, toast } from "@engchina/production-ready-ui";
+import { apiErrorMessage, FeedbackControls, toast } from "@engchina/production-ready-ui";
 
 import {
   agentApi,
@@ -66,7 +66,7 @@ export function AnswerFeedback({
         retry: t("common.retry"),
         saveError: t("chat.feedback.saveFailed"),
       }}
-      getErrorMessage={(error) => (error instanceof Error ? error.message : null)}
+      getErrorMessage={(error) => apiErrorMessage(error, t("chat.feedback.saveFailed"))}
       onSubmit={(submission) =>
         save(
           submission.rating === "helpful"
