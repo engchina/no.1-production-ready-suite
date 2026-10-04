@@ -710,7 +710,8 @@ def test_data_entitlement_sql_targets_real_object_with_role_predicate() -> None:
     statements = build_data_entitlement_statements(settings, entitlement)
     sql = "\n".join(statements)
 
-    assert statements[0] == "GRANT SELECT ON HR.EMPLOYEES TO NL2SQL_APP_DB_ROLE"
+    # #1022: DATA GRANTS ONLY を先に有効にし、DB role の SELECT は最後に付ける（fail-closed）。
+    assert statements[0] == "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES ENABLED"
     assert "CREATE OR REPLACE DATA GRANT APP_OWNER.NL2SQL_DG_" in sql
     assert "AS SELECT (EMPLOYEE_ID, DISPLAY_NAME)" in sql
     assert "ON HR.EMPLOYEES" in sql
@@ -725,7 +726,7 @@ def test_data_entitlement_sql_targets_real_object_with_role_predicate() -> None:
     assert "e.CAPABILITY = 'SELECT'" in sql
     assert "e.APPLY_STATUS = 'APPLIED'" in sql
     assert "HR.EMPLOYEES.DEPARTMENT_CODE = e.SCOPE_CODE" in sql
-    assert statements[-1] == "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES ENABLED"
+    assert statements[-1] == "GRANT SELECT ON HR.EMPLOYEES TO NL2SQL_APP_DB_ROLE"
 
 
 def test_data_entitlement_sql_builds_structured_scope_filters() -> None:
@@ -949,7 +950,9 @@ def test_data_entitlement_sql_accepts_materialized_view_target() -> None:
     assert "CREATE OR REPLACE DATA GRANT APP_OWNER.NL2SQL_DG_" in sql
     assert "AS SELECT (REGION_CODE, TOTAL_AMOUNT)" in sql
     assert "ON DW.SALES_SUMMARY_MV" in sql
-    assert statements[-1] == "SET USE DATA GRANTS ONLY ON DW.SALES_SUMMARY_MV ENABLED"
+    # #1022: DATA GRANTS ONLY を先に有効にし、DB role の SELECT は最後に付ける（fail-closed）。
+    assert statements[0] == "SET USE DATA GRANTS ONLY ON DW.SALES_SUMMARY_MV ENABLED"
+    assert statements[-1] == "GRANT SELECT ON DW.SALES_SUMMARY_MV TO NL2SQL_APP_DB_ROLE"
 
 
 def test_data_entitlement_validation_accepts_mview_with_table_dictionary_row() -> None:
@@ -1420,13 +1423,14 @@ def test_data_entitlement_apply_executes_generated_sql_and_marks_applied(
     assert stored.apply_status == "APPLIED"
     assert stored.data_grant_name.startswith("NL2SQL_DG_")
     assert stored.sql_checksum
-    assert executed[0] == "GRANT SELECT ON HR.EMPLOYEES TO NL2SQL_APP_DB_ROLE"
+    # #1022: DATA GRANTS ONLY を先に有効にし、DB role の SELECT は最後に付ける（fail-closed）。
+    assert executed[0] == "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES ENABLED"
     assert executed[1] == f"DROP DATA GRANT IF EXISTS APP_OWNER.{stored.data_grant_name}"
     assert "CREATE OR REPLACE DATA GRANT APP_OWNER.NL2SQL_DG_" in executed[2]
     assert "TO NL2SQL_APP_DATA_ROLE" in executed[2]
     assert "TO DEEPSEC_DATA_USER" not in executed[2]
     assert "e.ROLE_ID = 'role-sales'" in executed[2]
-    assert executed[3] == "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES ENABLED"
+    assert executed[3] == "GRANT SELECT ON HR.EMPLOYEES TO NL2SQL_APP_DB_ROLE"
 
 
 def test_data_entitlement_apply_allows_empty_policy_sync_without_sql(
@@ -1503,9 +1507,12 @@ def test_data_entitlement_apply_all_deleted_drops_stale_grants_and_disables_targ
 
     assert result["status"] == "APPLIED"
     assert result["applied_count"] == 0
-    assert result["cleanup_count"] == 2
-    assert "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES DISABLED" in executed[0]
+    # #1022: 以前は DISABLED → DROP の順で、DB role の SELECT を外さなかった（DATA USER が
+    # 全行を読める fail-open）。SELECT の REVOKE → DROP → DISABLED の順にする。
+    assert result["cleanup_count"] == 3
+    assert "REVOKE SELECT ON HR.EMPLOYEES FROM NL2SQL_APP_DB_ROLE" in executed[0]
     assert executed[1] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_OLD"
+    assert "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES DISABLED" in executed[2]
     assert store.get_role("role-sales").entitlements == []  # type: ignore[union-attr]
 
 
@@ -1549,10 +1556,11 @@ def test_data_entitlement_apply_replaces_deleted_grant_with_new_grant_on_same_ta
     assert result["applied_count"] == 1
     assert result["cleanup_count"] == 1
     assert executed[0] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_OLD"
-    assert executed[1] == "GRANT SELECT ON HR.EMPLOYEES TO NL2SQL_APP_DB_ROLE"
+    # #1022: DATA GRANTS ONLY を先に有効にし、DB role の SELECT は最後に付ける（fail-closed）。
+    assert executed[1] == "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES ENABLED"
     assert "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_" in executed[2]
     assert "CREATE OR REPLACE DATA GRANT APP_OWNER.NL2SQL_DG_" in executed[3]
-    assert executed[4] == "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES ENABLED"
+    assert executed[4] == "GRANT SELECT ON HR.EMPLOYEES TO NL2SQL_APP_DB_ROLE"
 
 
 def test_data_entitlement_preview_and_apply_cover_all_role_grants(
@@ -2185,17 +2193,19 @@ def test_reset_executes_fixed_teardown_and_clears_states_without_data_password(
     assert len(executed) == len(
         build_v001_reset_statements(settings, store.get_role("role-sales").entitlements)  # type: ignore[union-attr]
     )
-    assert "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES DISABLED" in executed[0]
-    assert executed[1] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_MANAGED"
-    assert "SET USE DATA GRANTS ONLY ON APP_OWNER.NL2SQL_DEEPSEC_PROBE DISABLED" in executed[2]
-    assert executed[3] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DEEPSEC_PROBE_SENSITIVE"
-    assert executed[4] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DEEPSEC_PROBE_ROWS"
-    assert "DROP TABLE APP_OWNER.NL2SQL_DEEPSEC_PROBE CASCADE CONSTRAINTS PURGE" in executed[5]
-    assert "DROP CONTEXT NL2SQL_APP_USER_CTX" in executed[6]
-    assert "DROP PACKAGE APP_OWNER.NL2SQL_DEEPSEC_CTX_PKG" in executed[7]
-    assert executed[8] == "DROP END USER IF EXISTS DEEPSEC_DATA_USER"
-    assert executed[9] == "DROP DATA ROLE IF EXISTS NL2SQL_APP_DATA_ROLE"
-    assert "DROP ROLE NL2SQL_APP_DB_ROLE" in executed[10]
+    # #1022: DATA GRANTS ONLY を無効にする前に、対象の SELECT を DB role から外す。
+    assert "REVOKE SELECT ON HR.EMPLOYEES FROM NL2SQL_APP_DB_ROLE" in executed[0]
+    assert "SET USE DATA GRANTS ONLY ON HR.EMPLOYEES DISABLED" in executed[1]
+    assert executed[2] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DG_MANAGED"
+    assert "SET USE DATA GRANTS ONLY ON APP_OWNER.NL2SQL_DEEPSEC_PROBE DISABLED" in executed[3]
+    assert executed[4] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DEEPSEC_PROBE_SENSITIVE"
+    assert executed[5] == "DROP DATA GRANT IF EXISTS APP_OWNER.NL2SQL_DEEPSEC_PROBE_ROWS"
+    assert "DROP TABLE APP_OWNER.NL2SQL_DEEPSEC_PROBE CASCADE CONSTRAINTS PURGE" in executed[6]
+    assert "DROP CONTEXT NL2SQL_APP_USER_CTX" in executed[7]
+    assert "DROP PACKAGE APP_OWNER.NL2SQL_DEEPSEC_CTX_PKG" in executed[8]
+    assert executed[9] == "DROP END USER IF EXISTS DEEPSEC_DATA_USER"
+    assert executed[10] == "DROP DATA ROLE IF EXISTS NL2SQL_APP_DATA_ROLE"
+    assert "DROP ROLE NL2SQL_APP_DB_ROLE" in executed[11]
     assert store.get_deepsec_states() == {}
     assert store.get_role("role-sales").entitlements[0].apply_status == "PENDING"  # type: ignore[union-attr]
     assert settings.oracle_deepsec_enabled is True
