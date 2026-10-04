@@ -52,7 +52,7 @@ function MessageWrapping() {
               {BANNER_BODY}
             </Banner>
             <FormStatus tone="danger" message={FORM_STATUS} />
-            <ProcessingIndicator label="Oracle Profile の反映を待っています" startedAt={Date.now()} />
+            <ProcessingIndicator active label="Oracle Profile の反映を待っています" startedAt={Date.now()} />
           </div>
         </Section>
       </PageBody>
