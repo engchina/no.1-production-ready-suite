@@ -25,10 +25,16 @@ from app.features.agent.mcp_url import (
     mask_urls_in_text,
     url_credential_error,
 )
-from app.features.agent.tools import ToolInvocationContext, list_mcp_connection_tools
+from app.features.agent.tools import (
+    ExternalToolError,
+    ToolInvocationContext,
+    _fetch_mcp_oauth_bearer_token,
+    list_mcp_connection_tools,
+)
 
 LEGACY_URL = "https://svc-user:pa55-1056@erp.example.test/mcp?tenant=t1&api_key=k-1056"
 MASKED_LEGACY_URL = "https://***@erp.example.test/mcp?tenant=t1&api_key=***"
+TOKEN_URL = "https://idp:tp-1056@idp.example.test/token?client_secret=tk-1056"
 
 
 @pytest.mark.parametrize(
@@ -243,3 +249,42 @@ def test_connection_uses_saved_url(monkeypatch: MonkeyPatch, legacy_connection: 
 
     assert data.tools == []
     assert urls and all("api_key=k-1056" in url for url in urls)
+
+
+# ---------------------------------------------------------------------------
+# エラーの詳細（OAuth のトークン URL）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (httpx.ReadTimeout("timed out"), "external_mcp.oauth_timeout"),
+        (httpx.ConnectError(f"cannot reach {TOKEN_URL}"), "external_mcp.oauth_request_error"),
+    ],
+    ids=["timeout", "request-error"],
+)
+def test_oauth_error_details_mask_token_url(
+    monkeypatch: MonkeyPatch, error: httpx.HTTPError, code: str
+) -> None:
+    def handle(_request: httpx.Request) -> httpx.Response:
+        raise error
+
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        "app.features.agent.tools.httpx.Client",
+        lambda timeout, **_: real_client(transport=httpx.MockTransport(handle), timeout=timeout),
+    )
+
+    with pytest.raises(ExternalToolError) as raised:
+        _fetch_mcp_oauth_bearer_token(
+            token_url=TOKEN_URL,
+            client_id="client-1056",
+            client_secret="secret-1056",  # nosec B106 - テスト用
+            scope=None,
+            timeout_seconds=1,
+        )
+
+    assert raised.value.code == code
+    rendered = json.dumps(raised.value.details, ensure_ascii=False) + raised.value.message
+    assert "tp-1056" not in rendered and "tk-1056" not in rendered
