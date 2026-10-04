@@ -8,6 +8,7 @@ import {
   CardHeader,
   CardTitle,
   Button,
+  FormActionBar,
   FormStatus,
   ProcessingIndicator,
   TimedLoadingState,
@@ -50,7 +51,6 @@ import {
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { useLeaveGuard } from "@/lib/leave-guard";
-import { useValuesChanged } from "@/lib/render-sync";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
   findParserCapability,
@@ -63,6 +63,7 @@ import {
   useServiceStatusQueries,
   useUpdateParserAdapterSettings,
 } from "@/lib/queries";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { PostParseSettingsCard } from "./PostParseSettingsCard";
 
@@ -87,6 +88,9 @@ type ParserAdapterFlagField = Exclude<
 type ConnectionFieldErrors = Record<string, string>;
 
 const EXTERNAL_BACKENDS: ExternalParserBackendName[] = ["mineru", "dots_ocr"];
+
+/** 外部 GPU 接続の欄の上限（backend の ExternalParserConnectionUpdate の max_length と同じ。#976）。 */
+const EXTERNAL_CONNECTION_MAX_LENGTH = { endpoint: 2048, model: 512, apiKey: 4096 } as const;
 
 const ADAPTER_FLAG_FIELDS: Record<ParserAdapterBackendName, ParserAdapterFlagField> = {
   docling: "docling_enabled",
@@ -129,18 +133,19 @@ export function ParserAdapterSettingsClient() {
   const save = useUpdateParserAdapterSettings();
   const [form, setForm] = useState<ParserAdapterForm | null>(null);
   const [connectionErrors, setConnectionErrors] = useState<ConnectionFieldErrors>({});
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-
-  // 解析エンジンの server 値か保存中フラグが変わったレンダーで、フォームを server 値に戻す。
+  // 直前に取り込んだ解析エンジンの server 値。server 値が変わったレンダーだけ、未編集ならフォームをそろえる。
   // 「解析後の処理」の保存でも query.data は変わるため、解析エンジンの部分だけを比べる（#528）。
-  const serverForm = query.data ? serializeForm(formFromSettings(query.data)) : null;
-  const serverChanged = useValuesChanged([serverForm, save.isPending]);
-  if (serverChanged && query.data && !save.isPending) {
-    setForm(formFromSettings(query.data));
+  // 保存の開始・終了（isPending）ではフォームを戻さない（失敗しても入力を残す。#976）。
+  const [base, setBase] = useState<string | null>(null);
+  const serverForm = query.data ? formFromSettings(query.data) : null;
+  const serverKey = serverForm ? serializeForm(serverForm) : null;
+  if (serverForm && serverKey !== base) {
+    setBase(serverKey);
+    if (form === null || serializeForm(form) === base) setForm(serverForm);
   }
 
-  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
-  useLeaveGuard(Boolean(query.data && form && serializeForm(form) !== serializeForm(formFromSettings(query.data))));
+  // 未保存の変更があるときは離脱を確認し、保存中は離脱を止める。
+  useLeaveGuard(Boolean(serverKey && form && serializeForm(form) !== serverKey), save.isPending);
 
   if (query.isPending) {
     return (
@@ -182,7 +187,6 @@ export function ParserAdapterSettingsClient() {
 
   function updateForm(update: Partial<ParserAdapterForm>) {
     save.reset();
-    setSuccessMessage(null);
     setForm((current) => (current ? { ...current, ...update } : current));
   }
 
@@ -194,7 +198,6 @@ export function ParserAdapterSettingsClient() {
   function resetForm() {
     save.reset();
     setConnectionErrors({});
-    setSuccessMessage(null);
     setForm(formFromSettings(settings));
   }
 
@@ -203,7 +206,6 @@ export function ParserAdapterSettingsClient() {
     update: Partial<ExternalParserConnectionForm>
   ) {
     save.reset();
-    setSuccessMessage(null);
     setConnectionErrors((current) => {
       const next = { ...current };
       for (const field of Object.keys(update)) delete next[`${backend}.${field}`];
@@ -223,7 +225,7 @@ export function ParserAdapterSettingsClient() {
   }
 
   function submit() {
-    if (!form) return;
+    if (!form || save.isPending) return;
     const errors = validateConnections(form);
     setConnectionErrors(errors);
     const firstError = Object.keys(errors)[0];
@@ -233,11 +235,11 @@ export function ParserAdapterSettingsClient() {
     }
     save.mutate(parserSettingsUpdate(form), {
       onSuccess: (data) => {
-        setForm(formFromSettings(data));
-        setSuccessMessage(t("settings.parserAdapters.actions.saved"));
-      },
-      onError: () => {
-        setSuccessMessage(null);
+        const next = formFromSettings(data);
+        setBase(serializeForm(next));
+        setForm(next);
+        // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
+        toast.success(t("settings.parserAdapters.actions.saved"));
       },
     });
   }
@@ -249,7 +251,6 @@ export function ParserAdapterSettingsClient() {
         form={form}
         settings={settings}
         saving={save.isPending}
-        successMessage={successMessage}
         errorMessage={save.isError ? saveError : null}
         connectionErrors={connectionErrors}
         onBackendChange={selectBackend}
@@ -268,7 +269,6 @@ function OverviewCard({
   form,
   settings,
   saving,
-  successMessage,
   errorMessage,
   connectionErrors,
   onBackendChange,
@@ -280,7 +280,6 @@ function OverviewCard({
   form: ParserAdapterForm;
   settings: ParserAdapterSettingsData;
   saving: boolean;
-  successMessage: string | null;
   errorMessage: string | null;
   connectionErrors: ConnectionFieldErrors;
   onBackendChange: (backend: ParserAdapterBackend) => void;
@@ -488,33 +487,35 @@ function OverviewCard({
             value={configSourceLabel(settings.config_source)}
           />
         </dl>
-        <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
-          <div className="min-h-6">
-            {dirty ? (
+        <FormActionBar
+          ariaLabel={t("settings.parserAdapters.actions.label")}
+          primaryActions={[
+            {
+              id: "save",
+              label: t("settings.parserAdapters.actions.save"),
+              icon: Save,
+              loading: saving,
+              disabled: !dirty,
+              onClick: onSubmit,
+            },
+          ]}
+          secondaryActions={[
+            {
+              id: "reset",
+              label: t("settings.parserAdapters.actions.reset"),
+              icon: RotateCcw,
+              disabled: !dirty || saving,
+              onClick: onReset,
+            },
+          ]}
+          status={
+            errorMessage ? (
+              <FormStatus tone="danger" message={errorMessage} />
+            ) : dirty ? (
               <FormStatus tone="warning" message={t("settings.parserAdapters.actions.unsaved")} />
-            ) : null}
-            {successMessage ? <FormStatus tone="success" message={successMessage} /> : null}
-            {errorMessage ? <FormStatus tone="danger" message={errorMessage} /> : null}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              loading={saving}
-              disabled={!dirty}
-              onClick={onSubmit}
-              aria-label={t("settings.parserAdapters.actions.save")} icon={Save}>
-              {t("settings.parserAdapters.actions.save")}
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={onReset}
-              disabled={!dirty || saving}
-              aria-label={t("settings.parserAdapters.actions.reset")} icon={RotateCcw}>
-              {t("settings.parserAdapters.actions.reset")}
-            </Button>
-          </div>
-        </div>
+            ) : null
+          }
+        />
       </CardContent>
     </Card>
   );
@@ -573,6 +574,7 @@ function ExternalConnectionCard({
           id={endpointId}
           label={t("settings.parserAdapters.connection.endpoint")}
           type="url"
+          maxLength={EXTERNAL_CONNECTION_MAX_LENGTH.endpoint}
           value={value.endpoint}
           placeholder={externalEndpointPlaceholder(backend)}
           error={endpointError}
@@ -582,6 +584,7 @@ function ExternalConnectionCard({
         <ConnectionTextField
           id={modelId}
           label={t("settings.parserAdapters.connection.model")}
+          maxLength={EXTERNAL_CONNECTION_MAX_LENGTH.model}
           value={modelSupported ? value.model : t("settings.parserAdapters.connection.nativeModel")}
           placeholder={modelSupported ? "model-id" : undefined}
           // Endpoint を入力したときだけ Model が要る（validateConnections と同じ条件。#531）
@@ -594,6 +597,7 @@ function ExternalConnectionCard({
           id={apiKeyId}
           label={t("settings.parserAdapters.connection.apiKey")}
           type="password"
+          maxLength={EXTERNAL_CONNECTION_MAX_LENGTH.apiKey}
           value={value.api_key}
           // 任意の欄は placeholder で「任意」と示さない（#531）。保存済みのときだけ保持の説明を出す。
           placeholder={
@@ -668,6 +672,7 @@ function ConnectionTextField({
   label,
   value,
   type = "text",
+  maxLength,
   placeholder,
   required = false,
   error,
@@ -678,6 +683,8 @@ function ConnectionTextField({
   label: string;
   value: string;
   type?: "text" | "url" | "password";
+  /** backend（ExternalParserConnectionUpdate）と同じ上限（#976）。 */
+  maxLength: number;
   placeholder?: string;
   required?: boolean;
   error?: string;
@@ -690,6 +697,7 @@ function ConnectionTextField({
       className="min-w-0"
       label={label}
       type={type}
+      maxLength={maxLength}
       value={value}
       placeholder={placeholder}
       required={required}
@@ -938,6 +946,9 @@ function validateConnections(form: ParserAdapterForm): ConnectionFieldErrors {
       try {
         const parsed = new URL(endpoint);
         if (
+          // backend（ExternalParserConnectionUpdate）と同じく `http(s)://host` の形だけを受け付ける。
+          // `new URL("http:foo")` は `http://foo/` として通るため、書き方も確かめる（#976）。
+          !/^https?:\/\/[^/?#]/i.test(endpoint) ||
           !["http:", "https:"].includes(parsed.protocol) ||
           parsed.username ||
           parsed.password ||
