@@ -315,7 +315,20 @@ def create_select_ai_credential(
             ),
         )
 
-    schema_name, exists = adapter.get_select_ai_credential_status(SELECT_AI_CREDENTIAL_NAME)
+    # 作成は確定している。読み直しが失敗しても失敗の応答にせず、作成済みとして返す
+    # （画面は次の状態の取得で実際の状態に合わせる）。
+    try:
+        schema_name, exists = adapter.get_select_ai_credential_status(SELECT_AI_CREDENTIAL_NAME)
+    except Exception as exc:
+        logger.warning(
+            "select_ai_credential_status_after_change_failed",
+            exc_info=True,
+            extra={
+                **oracle_connection_diagnostics(exc),
+                "credential_name": SELECT_AI_CREDENTIAL_NAME,
+            },
+        )
+        schema_name, exists = "", True
     logger.info(
         "select_ai_credential_changed",
         extra={
