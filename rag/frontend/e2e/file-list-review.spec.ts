@@ -4,7 +4,7 @@ import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpe
 // Issue 281: 文書インデックスの不具合（範囲外のページ・投入結果の通知・検索欄の blur・状態の絞り込み・
 // 削除の後始末の警告）の回帰。desktop / mobile の両 project で動く。
 
-type FileStatus = "UPLOADED" | "PREPROCESSED" | "INDEXED" | "ERROR";
+type FileStatus = "UPLOADED" | "PREPROCESSED" | "INGESTING" | "INDEXED" | "ERROR";
 
 interface DocumentSummary {
   id: string;
@@ -203,6 +203,51 @@ test("削除の後始末に失敗した警告を成功として黙らせない",
   await expect(
     page.getByText("原本ファイルの削除に失敗しました。保存先を確認してください。").first()
   ).toBeVisible();
+});
+
+test("自動更新の失敗では一覧と選択を残し、失敗を知らせて再試行できる（#938）", async ({ page }) => {
+  // ポーリング（4 秒）と TanStack Query の再試行（1・2・4 秒）を待たずに進める。
+  await page.clock.install();
+  const documents = [
+    documentSummary("doc-1", "running.txt", "INGESTING"),
+    documentSummary("doc-2", "policy.txt", "UPLOADED"),
+  ];
+  await mockFileListApi(page, documents);
+  let failing = false;
+  // 後から登録した route が先に当たる。一覧の取得だけを失敗させる。
+  await page.route("**/api/documents?**", async (route) => {
+    if (!failing) {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 500,
+      json: { data: null, error_messages: ["DB に接続できません。"], warning_messages: [] },
+    });
+  });
+
+  await page.goto("/file-list");
+  await expect(page.getByRole("link", { name: "policy.txt" })).toBeVisible();
+  await page.getByRole("checkbox", { name: "この行を選択" }).nth(1).check();
+  await expect(page.getByTestId("file-list-bulk-actions")).toContainText("1 件選択中");
+
+  failing = true;
+  await page.clock.runFor(30_000);
+
+  // 前回取得した一覧と選択は残し、全面のエラーに置き換えない。
+  const warning = page.getByTestId("file-list-refresh-error");
+  await expect(warning).toContainText("最新の状態を取得できませんでした");
+  await expect(warning).toContainText("DB に接続できません。");
+  await expect(page.getByRole("link", { name: "policy.txt" })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "この行を選択" }).nth(1)).toBeChecked();
+  await expect(page.getByTestId("file-list-bulk-actions")).toContainText("1 件選択中");
+  await expectNoPageOverflow(page);
+
+  // 取得が戻ったら、再試行で失敗の表示を消す。
+  failing = false;
+  await warning.getByRole("button", { name: "再試行" }).click();
+  await expect(warning).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "policy.txt" })).toBeVisible();
 });
 
 async function mockFileListApi(

@@ -4,7 +4,6 @@ import { Archive, Database, HardDrive, RefreshCw, Server, SlidersHorizontal } fr
 import {
   Banner,
   ButtonLink,
-  buttonVariants,
   Card,
   CardContent,
   CardDescription,
@@ -97,14 +96,15 @@ export function RuntimesPage() {
                     <div className="space-y-3">
                       <p>{data.message ?? t("runtime.builtin.notReadyDefault")}</p>
                       {hasPermission(MENU_PERMISSIONS.settingsModel) ? (
-                        <Link
+                        <ButtonLink
                           to={APP_ROUTES.settingsModel}
-                          className={buttonVariants({ variant: "secondary", size: "sm" })}
-                          data-testid="builtin-runtime-open-model-settings"
+                          linkComponent={Link}
+                          size="sm"
+                          icon={SlidersHorizontal}
+                          testId="builtin-runtime-open-model-settings"
                         >
-                          <SlidersHorizontal size={16} aria-hidden="true" />
-                          <span>{t("runtime.builtin.openModelSettings")}</span>
-                        </Link>
+                          {t("runtime.builtin.openModelSettings")}
+                        </ButtonLink>
                       ) : (
                         <p className="text-fg-muted">{t("runtime.builtin.askAdmin")}</p>
                       )}

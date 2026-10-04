@@ -431,9 +431,15 @@ class DeepSecConfigUpdate(BaseModel):
     @field_validator("data_user_password")
     @classmethod
     def validate_data_user_password(cls, value: str) -> str:
-        if '"' in value or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
+        # 「${」は backend/.env を読むとき（python-dotenv）に引用符の種類によらず環境変数として
+        # 展開され、Oracle に設定した値と変わるので受け付けない（#1000）。
+        if (
+            '"' in value
+            or "${" in value
+            or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value)
+        ):
             raise ValueError(
-                "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD は二重引用符と制御文字を"
+                "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD は二重引用符・「${」・制御文字を"
                 "含めずに指定してください。"
             )
         return value

@@ -62,6 +62,9 @@ import {
   useRunEventWebSocket,
 } from "@/pages/runs/run-event-stream";
 import { focusField, formatDate } from "@/pages/shared/page-helpers";
+import { isOwnDecision } from "@/pages/shared/approval-decision";
+import { useAuth } from "@/components/security/AuthProvider";
+import { useViewSwitchFocus } from "@/pages/shared/view-switch-focus";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
 const DEFAULT_RUN_GOAL = t("run.form.goalDefault");
@@ -90,6 +93,7 @@ export function RunsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const capabilities = useCapabilities();
+  const { user } = useAuth();
   const runs = useQuery({
     queryKey: ["runs"],
     queryFn: agentApi.listRuns,
@@ -102,9 +106,11 @@ export function RunsPage() {
     queryFn: agentApi.listAgents,
   });
   // 組み込み Runtime が実行できるか（モデル未設定なら Run は失敗するため、作成の前に知らせる。#754）。
+  // 作成できる利用者だけが読む（閲覧だけの利用者には API の権限が無く、403 で権限なしの画面へ移るため。#1113）。
   const runtimeStatus = useQuery({
     queryKey: ["runtime-status"],
     queryFn: agentApi.getRuntimeStatus,
+    enabled: capabilities.operateRuns,
   });
   const createRun = useMutation({
     mutationFn: agentApi.createRun,
@@ -146,10 +152,10 @@ export function RunsPage() {
       agentApi.decideApproval(approval.id, { approved }),
     // 判断の結果は返却値の承認の状態で確かめる。先に取り消された・他の操作者が判断した承認は、backend が
     // 状態を変えずに 200 で返すため、成功と案内しない（承認の画面と同じ。#877 / #919）。
-    onSuccess: (updatedRun, { approval }) => {
-      const outcome = updatedRun.approvals.find((item) => item.id === approval.id)?.status;
-      if (outcome === "approved" || outcome === "rejected") {
-        toast.success(outcome === "approved" ? t("approval.decided") : t("approval.rejected"));
+    onSuccess: (updatedRun, { approval, approved }) => {
+      // 押した判断が自分の判断として残ったときだけ成功と案内する（#1119）。
+      if (isOwnDecision(updatedRun, approval.id, approved, user?.login_user_id)) {
+        toast.success(approved ? t("approval.decided") : t("approval.rejected"));
       } else {
         toast.info(t("approval.changedDuringReview"));
       }
@@ -223,18 +229,12 @@ export function RunsPage() {
     if (targetRunId) {
       setSelectedRunId(targetRunId);
     }
-    // URL の切替はページ移動として見出しへ、一覧へ戻ると選んだ行へフォーカスを戻す。
-    const frame = requestAnimationFrame(() => {
-      const rowLink =
-        viewKind === "list" && selectedRunId
-          ? document.querySelector<HTMLAnchorElement>(`a[data-run-id="${CSS.escape(selectedRunId)}"]`)
-          : null;
-      const heading = document.querySelector<HTMLElement>("main h1");
-      if (heading) heading.tabIndex = -1;
-      (rowLink ?? heading)?.focus({ preventScroll: true });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [viewKind, targetRunId, selectedRunId, setSelectedRunId]);
+  }, [targetRunId, setSelectedRunId]);
+  // URL の切替はページ移動として見出しへ、一覧へ戻ると選んだ行へフォーカスを戻す（開いた直後は動かさない。#1122）。
+  useViewSwitchFocus(
+    `${viewKind}:${targetRunId ?? ""}`,
+    viewKind === "list" && selectedRunId ? `a[data-run-id="${CSS.escape(selectedRunId)}"]` : null
+  );
 
   async function backToList() {
     if (!createRun.isPending && (await confirmClose())) editor.backToList();

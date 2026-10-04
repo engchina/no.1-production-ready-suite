@@ -157,6 +157,7 @@ class _FakeNl2SqlService:
             result=job.result,
             error_code=job.error_code,
             error_message=job.error_message,
+            error_detail=job.error_detail,
         )
 
 
@@ -429,6 +430,32 @@ def test_recommend_profile_respects_scope_and_threshold(
     assert content["recommended_profile_id"] is None
 
 
+@pytest.mark.parametrize("tool", ["nl2sql_query", "nl2sql_recommend_profile"])
+def test_blank_question_is_invalid_arguments(
+    users: _Users, fake_service: _FakeNl2SqlService, tool: str
+) -> None:
+    """空白だけの質問は引数の誤りにする（ジョブを作らず、内部エラーにもしない。#1054）。"""
+    user = users.create("mcp.query", permissions={"menu.query"}, allowed_profile_ids={"sales"})
+
+    is_error, content = _structured(
+        _run(
+            _call(
+                tool,
+                {"question": " \n\t", "profile_id": "sales"}
+                if tool == "nl2sql_query"
+                else {"question": " \n\t"},
+            ),
+            token=_token(user.user_uuid),
+        )
+    )
+
+    assert is_error is True, content
+    assert content["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
+    assert [error["loc"] for error in content["details"]["errors"]] == ["question"]
+    assert "質問を入力してください。" in content["details"]["errors"][0]["message"]
+    assert fake_service.started == []
+
+
 def test_query_rejects_profile_outside_scope(
     users: _Users, fake_service: _FakeNl2SqlService
 ) -> None:
@@ -556,7 +583,8 @@ def test_failed_job_returns_error_code(
     job = fake_service.jobs[content["job_id"]]
     job.status = JobStatus.ERROR
     job.error_code = stored_code
-    job.error_message = "NL2SQL ジョブに失敗しました: ORA-04027"
+    job.error_message = "SQL の生成に失敗しました。"
+    job.error_detail = "ORA-04027: self-deadlock"
 
     is_error, content = _structured(
         _run(_call("nl2sql_get_job", {"job_id": job.job_id}), token=token)
@@ -564,7 +592,8 @@ def test_failed_job_returns_error_code(
     assert is_error is False
     assert content["status"] == "error"
     assert content["error_code"] == expected
-    assert content["error_message"] == "NL2SQL ジョブに失敗しました: ORA-04027"
+    # 画面では「詳細」に分ける元の文も、MCP では文の後ろに付けて返す（#1072）。
+    assert content["error_message"] == "SQL の生成に失敗しました。\n詳細: ORA-04027: self-deadlock"
 
 
 def test_get_job_hides_other_users_jobs(users: _Users, fake_service: _FakeNl2SqlService) -> None:

@@ -1,18 +1,18 @@
 import {
-  Button,
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
   Disclosure,
+  FormActionBar,
   FormStatus,
   Skeleton,
   StatusBadge,
   TextareaField,
   useConfirm,
 } from "@engchina/production-ready-ui";
-import { RotateCcw, Save } from "lucide-react";
+import { History, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
 
 import { ErrorState } from "@/components/StateViews";
@@ -21,6 +21,10 @@ import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { useAnswerPrompts, useSaveAnswerPrompt } from "@/lib/queries";
+import { focusFirstInvalidField } from "@/lib/required-fields";
+import { toast } from "@/lib/toast";
+
+import { answerPromptError } from "./answer-prompt.logic";
 
 const PROMPT_MAX = 50000;
 
@@ -87,8 +91,32 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
     if (content === baseContent) setContent(prompt.content);
   }
   const dirty = content !== prompt.content;
-  useLeaveGuard(dirty);
+  // 保存を押した後だけ欄のエラーを出す（直すと消える）。
+  const [showError, setShowError] = useState(false);
+  const fieldLabel = t(`settings.answerPrompts.${prompt.key}.field`);
+  const error = answerPromptError(content, fieldLabel, prompt.required_placeholders);
+  // 保存中は離脱を止める。
+  useLeaveGuard(dirty, save.isPending);
   const inputId = `answer-prompt-${prompt.key}`;
+  const resetting = save.isPending && save.variables?.content === null;
+
+  function submit() {
+    if (save.isPending) return;
+    // 空・必須の placeholder の欠けは送る前に欄の下へ出す（backend の validate_prompt と同じ規則。#1010）。
+    setShowError(true);
+    if (focusFirstInvalidField([[inputId, error]])) return;
+    save.mutate(
+      { key: prompt.key, content },
+      // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
+      { onSuccess: () => toast.success(t("settings.answerPrompts.saved")) }
+    );
+  }
+
+  function discard() {
+    save.reset();
+    setShowError(false);
+    setContent(prompt.content);
+  }
 
   async function reset() {
     const confirmed = await confirm({
@@ -105,6 +133,8 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
         onSuccess: (data) => {
           const restored = data.prompts.find((item) => item.key === prompt.key);
           if (restored) setContent(restored.content);
+          setShowError(false);
+          toast.success(t("settings.answerPrompts.resetDone"));
         },
       }
     );
@@ -115,72 +145,78 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
       {/* 空のままでは保存できない（既定へ戻すのは「既定に戻す」）ので必須（#531）。 */}
       <TextareaField
         id={inputId}
-        label={t(`settings.answerPrompts.${prompt.key}.field`)}
+        label={fieldLabel}
         required
         helper={t("settings.answerPrompts.placeholders", {
           names: prompt.required_placeholders.map((name) => `{{${name}}}`).join("、"),
         })}
+        error={showError ? (error ?? undefined) : undefined}
         value={content}
         maxLength={PROMPT_MAX}
         rows={16}
         spellCheck={false}
         monospace
         disabled={save.isPending}
-        onChange={(event) => setContent(event.target.value)}
+        onChange={(event) => {
+          save.reset();
+          setContent(event.target.value);
+        }}
       />
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          size="md"
-          icon={Save}
-          loading={save.isPending && save.variables?.content !== null}
-          // 「既定に戻す」の処理中は押せないだけにする（スピナーは押した側だけ。#819）。
-          disabled={!dirty || !content.trim() || (save.isPending && save.variables?.content === null)}
-          onClick={() => save.mutate({ key: prompt.key, content })}
-        >
-          {t("settings.answerPrompts.save")}
-        </Button>
-        <Button
-          type="button"
-          size="md"
-          variant="secondary"
-          icon={RotateCcw}
-          loading={save.isPending && save.variables?.content === null}
-          disabled={!prompt.customized || save.isPending}
-          onClick={() => void reset()}
-        >
-          {t("settings.answerPrompts.reset")}
-        </Button>
-        {/* 既定値か変更済みか。ラベルは文字列だけを持つため、「既定に戻す」の隣に置く（#584）。 */}
-        <StatusBadge
-          variant={prompt.customized ? "info" : "neutral"}
-          label={
-            prompt.customized
-              ? t("settings.answerPrompts.customized", {
-                  value: prompt.updated_at ? formatDateTime(prompt.updated_at) : "—",
-                })
-              : t("settings.answerPrompts.default")
-          }
-        />
-        {save.isSuccess && !dirty ? (
-          <FormStatus
-            tone="success"
-            message={t(
-              save.variables?.content === null
-                ? "settings.answerPrompts.resetDone"
-                : "settings.answerPrompts.saved"
-            )}
-          />
-        ) : null}
-        {save.isError ? (
-          <FormStatus
-            tone="danger"
-            message={
-              save.error instanceof ApiError ? save.error.message : t("settings.answerPrompts.saveError")
-            }
-          />
-        ) : null}
-      </div>
+      <FormActionBar
+        ariaLabel={t("settings.answerPrompts.actions.label")}
+        primaryActions={[
+          {
+            id: "save",
+            label: t("settings.answerPrompts.save"),
+            icon: Save,
+            loading: save.isPending && !resetting,
+            // 「既定に戻す」の処理中は押せないだけにする（スピナーは押した側だけ。#819）。
+            disabled: !dirty || resetting,
+            onClick: submit,
+          },
+        ]}
+        secondaryActions={[
+          {
+            id: "discard",
+            label: t("settings.answerPrompts.discard"),
+            icon: RotateCcw,
+            disabled: !dirty || save.isPending,
+            onClick: discard,
+          },
+          {
+            id: "reset",
+            label: t("settings.answerPrompts.reset"),
+            icon: History,
+            loading: resetting,
+            disabled: !prompt.customized || (save.isPending && !resetting),
+            onClick: () => void reset(),
+          },
+        ]}
+        status={
+          save.isError ? (
+            <FormStatus
+              tone="danger"
+              message={
+                save.error instanceof ApiError ? save.error.message : t("settings.answerPrompts.saveError")
+              }
+            />
+          ) : dirty ? (
+            <FormStatus tone="warning" message={t("settings.answerPrompts.unsaved")} />
+          ) : (
+            // 保存値が既定値か変更済みか（#584）。
+            <StatusBadge
+              variant={prompt.customized ? "info" : "neutral"}
+              label={
+                prompt.customized
+                  ? t("settings.answerPrompts.customized", {
+                      value: prompt.updated_at ? formatDateTime(prompt.updated_at) : "—",
+                    })
+                  : t("settings.answerPrompts.default")
+              }
+            />
+          )
+        }
+      />
     </div>
   );
 }

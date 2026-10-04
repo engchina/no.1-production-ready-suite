@@ -194,11 +194,13 @@ def _quoted_password(value: str) -> str:
 
 
 def _validate_data_user_password(value: str) -> str:
-    if len(value) < 12 or len(value) > 256 or _has_forbidden_password_char(value):
+    # 「${」は backend/.env を読むとき（python-dotenv）に環境変数として展開され、
+    # Oracle に設定した値と再起動後に読む値が変わるので受け付けない（#1000）。
+    if len(value) < 12 or len(value) > 256 or _has_forbidden_password_char(value) or "${" in value:
         raise SecurityApiError(
             400,
             "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD は12〜256文字で、"
-            "二重引用符と制御文字を含めずに指定してください。",
+            "二重引用符・「${」・制御文字を含めずに指定してください。",
         )
     return value
 
@@ -1486,12 +1488,20 @@ class DeepSecService:
             "warnings": [],
         }
 
-    def _target_object_owner_filter(self, column_sql: str) -> tuple[str, dict[str, str]]:
-        owners = {
+    def _target_owner_allowlist(self) -> set[str]:
+        return {
             owner.strip().upper()
             for owner in getattr(self.settings, "nl2sql_schema_owner_allowlist", [])
             if owner.strip()
         }
+
+    def _target_owner_allowed(self, owner: str) -> bool:
+        """`_target_object_owner_filter` と同じ判定（allowlist が空なら全 schema）。"""
+        owners = self._target_owner_allowlist()
+        return not owners or owner in owners
+
+    def _target_object_owner_filter(self, column_sql: str) -> tuple[str, dict[str, str]]:
+        owners = self._target_owner_allowlist()
         if not owners:
             return "1 = 1", {}
         binds = {f"owner_{index}": owner for index, owner in enumerate(sorted(owners))}
@@ -2382,6 +2392,15 @@ class DeepSecService:
             _DEEPSEC_INTERNAL_OBJECT_PREFIXES
         ):
             raise SecurityApiError(400, "NL2SQL の内部/security object は管理対象にできません。")
+        # 対象の選択欄（target_objects / target_object_detail）と同じ範囲だけを受け付ける。
+        # API を直接呼んでも、他製品・共通基盤の表（RAG_ / AGENT_ / PLATFORM_ / NL2SQL_）や、
+        # 許可していない schema の表に Data Grant を作らない（#999）。
+        if not _deepsec_target_visible(
+            target_owner, target_object
+        ) or not self._target_owner_allowed(target_owner):
+            raise SecurityApiError(
+                400, "この table/view は Data Grant の対象にできません。対象を選び直してください。"
+            )
         if entitlement.capability != "SELECT":
             raise SecurityApiError(400, "V1 の Data Grant は SELECT のみ対応しています。")
         scope_mode = entitlement.scope_mode.strip().upper() or "ALL"
