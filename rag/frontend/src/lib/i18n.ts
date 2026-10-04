@@ -2578,6 +2578,10 @@ export const ja = {
   "evaluation.actions.compare": "比較実行",
   "evaluation.actions.comparing": "設定を比較しています",
   "evaluation.actions.loadSample": "サンプルを読み込む",
+  "evaluation.sampleConfirm.title": "サンプルで置き換えますか？",
+  "evaluation.sampleConfirm.description":
+    "編集中の Golden set JSON をサンプルで置き換えます。今の内容は元に戻せません。残す場合は、先に内容をコピーしてください。",
+  "evaluation.sampleConfirm.confirm": "サンプルで置き換える",
   "evaluation.status.passed": "合格",
   "evaluation.status.failed": "要改善",
   "evaluation.result.title": "評価結果",
@@ -2638,6 +2642,8 @@ export const ja = {
   "evaluation.job.cancelConfirm.confirm": "取り消す",
   "evaluation.job.cancelledTitle": "評価を取り消しました。",
   "evaluation.job.failedTitle": "評価を最後まで実行できませんでした。",
+  "evaluation.job.failedDetails": "詳細",
+  "evaluation.job.errorType": "エラー種別",
   "evaluation.job.loading": "評価の状態を読み込んでいます",
   "evaluation.job.loadError": "評価の状態を取得できませんでした。再試行してください。",
   "evaluation.job.pollError":

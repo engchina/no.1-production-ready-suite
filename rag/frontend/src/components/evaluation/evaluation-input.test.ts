@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ApiError, type EvaluationJob } from "@/lib/api";
 import { evaluationJobRefetchInterval } from "@/lib/queries";
 
-import { evaluationCaseIdError } from "./evaluation-input";
+import { evaluationCaseIdError, sampleOverwriteNeedsConfirm } from "./evaluation-input";
 
 describe("evaluationCaseIdError", () => {
   it("id がそろっていれば null", () => {
@@ -35,5 +35,21 @@ describe("evaluationJobRefetchInterval", () => {
     expect(evaluationJobRefetchInterval(running, new ApiError(404, ["x"]))).toBe(false);
     expect(evaluationJobRefetchInterval({ status: "SUCCEEDED" } as EvaluationJob)).toBe(false);
     expect(evaluationJobRefetchInterval(undefined)).toBe(false);
+  });
+});
+
+describe("sampleOverwriteNeedsConfirm", () => {
+  const sample = '{\n  "cases": []\n}';
+
+  it("編集中の内容（空でなく、サンプルと違う）があるときだけ確認する", () => {
+    expect(sampleOverwriteNeedsConfirm('{"cases": [{"id": "mine"}]}', sample)).toBe(true);
+    expect(sampleOverwriteNeedsConfirm("{", sample)).toBe(true);
+  });
+
+  it("空・サンプルのまま（前後の空白の違いを含む）なら確認しない", () => {
+    expect(sampleOverwriteNeedsConfirm("", sample)).toBe(false);
+    expect(sampleOverwriteNeedsConfirm("  \n", sample)).toBe(false);
+    expect(sampleOverwriteNeedsConfirm(sample, sample)).toBe(false);
+    expect(sampleOverwriteNeedsConfirm(`\n${sample}\n`, sample)).toBe(false);
   });
 });
