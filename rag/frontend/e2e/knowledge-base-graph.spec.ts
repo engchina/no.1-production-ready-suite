@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "./fixtures/test";
-import { mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectedControlHeight, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 function ok(json: unknown) {
   return { data: json, error_messages: [], warning_messages: [] };
@@ -75,6 +75,11 @@ async function mockKb(page: Page, graph: unknown): Promise<void> {
   );
 }
 
+// 関係情報グラフ・パイプライン図の開閉の見出し（共有の Disclosure の <summary>。#1135）。
+function disclosureSummary(page: Page, name: string) {
+  return page.locator("summary", { hasText: name });
+}
+
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
@@ -92,7 +97,7 @@ test("関係情報グラフを展開して entity ノードを表示する", asy
   });
 
   await page.goto("/knowledge-bases/kb-1");
-  await page.getByRole("button", { name: "関係情報グラフを表示" }).click();
+  await disclosureSummary(page, "関係情報グラフを表示").click();
 
   const graph = page.getByRole("region", { name: "関係情報グラフ" });
   await expect(graph).toBeVisible();
@@ -106,7 +111,7 @@ test("関係情報グラフを展開して entity ノードを表示する", asy
   await page.mouse.wheel(0, -600);
   await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeLessThan(mainScrollTop);
 
-  await page.getByRole("button", { name: "パイプライン図を表示" }).click();
+  await disclosureSummary(page, "パイプライン図を表示").click();
   const pipeline = page.getByRole("region", { name: "構築パイプライン図(高度な診断)" });
   await pipeline.scrollIntoViewIfNeeded();
   const mainScrollTopAtPipeline = await main.evaluate((element) => element.scrollTop);
@@ -121,7 +126,31 @@ test("関係情報が無い KB は空状態を出す", async ({ page }) => {
   await mockKb(page, { status: "empty", nodes: [], edges: [], truncated: false });
 
   await page.goto("/knowledge-bases/kb-1");
-  await page.getByRole("button", { name: "関係情報グラフを表示" }).click();
+  await disclosureSummary(page, "関係情報グラフを表示").click();
 
   await expect(page.getByText("関係情報がまだありません。")).toBeVisible();
+});
+
+// 開閉の見出しは共有の Disclosure の高さ（lg 40px・タッチ端末 44px）。以前は手書きの min-h-11 で 38.5px（#1135）。
+test("関係情報グラフ・パイプライン図の開閉の見出しは Disclosure の高さで、開閉の状態を持つ", async ({ page }) => {
+  await mockKb(page, { status: "empty", nodes: [], edges: [], truncated: false });
+  await page.goto("/knowledge-bases/kb-1");
+
+  const expected = await expectedControlHeight(page, "lg");
+  for (const name of ["関係情報グラフを表示", "パイプライン図を表示"]) {
+    const summary = disclosureSummary(page, name);
+    await expect(summary).toBeVisible();
+    expect(Math.round((await summary.boundingBox())?.height ?? 0)).toBe(expected);
+  }
+
+  // キーボード（Enter）で開閉でき、開くと見出しの文言が「隠す」になる。
+  const graph = disclosureSummary(page, "関係情報グラフを表示");
+  await graph.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("details").filter({ has: page.locator("#knowledge-base-graph") })).toHaveAttribute("open", "");
+  await expect(page.getByText("関係情報がまだありません。")).toBeVisible();
+  await expect(disclosureSummary(page, "関係情報グラフを隠す")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#knowledge-base-graph")).toHaveCount(0);
+  await expect(disclosureSummary(page, "関係情報グラフを表示")).toBeVisible();
 });
