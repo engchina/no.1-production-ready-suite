@@ -544,6 +544,8 @@ export interface ToolCallAuditData {
   limit: number;
   filters: Record<string, unknown>;
   records: ToolCallAuditRecord[];
+  /** 見られる範囲の監査に記録されたツール名（絞り込みに依らない。MCP 接続のツールを含む。#983）。 */
+  tool_names?: string[];
 }
 
 export interface ToolCallAuditFilters {
