@@ -23,6 +23,8 @@ import {
   TextField,
   type ListPickerItem,
   type SelectFieldOption,
+  ApiErrorBanner,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 import {
   agentApi,
@@ -166,7 +168,7 @@ export function AgentEditorView({
           toast.success(t("evaluation.sets.fromTemplateCreated", { name: evaluationSet.name }));
         } catch (error) {
           toast.error(t("agent.template.evaluationSetFailed"), {
-            description: error instanceof Error ? error.message : undefined,
+            description: apiErrorMessage(error, t("common.error.retryLater")),
           });
         }
       }
@@ -351,7 +353,7 @@ export function AgentEditorView({
       <PageBody wide className="space-y-6">
         {/* 保存の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
         <SaveErrorBanner
-          message={error?.message ?? null}
+          message={error ? apiErrorMessage(error, t("common.error.save")) : null}
           attemptKey={saveAttemptKey}
           testId="agent-save-error"
         />
@@ -457,7 +459,7 @@ export function AgentEditorView({
             </Card>
           </Section>
           <Section title={t("agent.skills")}>
-            {skillsError ? <Banner severity="danger">{skillsError.message}</Banner> : null}
+            {skillsError ? <ApiErrorBanner error={skillsError} fallback={t("common.error.load")} /> : null}
             {missingSkillIds.length ? (
               <Banner severity="warning">
                 {t("agent.skillPicker.missingBanner", { skills: missingSkillIds.join("、") })}

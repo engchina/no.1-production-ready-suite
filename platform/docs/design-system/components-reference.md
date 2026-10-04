@@ -2123,6 +2123,34 @@ import { SearchableMultiSelect, SearchableSelectField } from "@engchina/producti
 
 ---
 
+## ApiErrorBanner / ApiErrorState / presentApiError — **新規**（#900 / #906）
+
+API の失敗を、**利用者向けの要約（何が起きたか）・次の操作・「詳細」（技術的な情報）**に分けて出す部品と関数（UX 契約 messaging.md §10.3.1）。NL2SQL の #900 の仕組みを platform に移し、3 製品で使う。
+
+```tsx
+// 失敗の面（Banner）。要約・次の操作・開いた「詳細」（要求・待ち時間の上限・エラー種別・元の文・HTTP ステータス・request ID）
+<ApiErrorBanner error={query.error} fallback={t("…loadError")} testId="…-error" />
+
+// 領域の取得の失敗（ErrorState + 「詳細」。再試行付き）
+<ApiErrorState error={query.error} fallback={t("…loadError")} onRetry={() => void query.refetch()} retryLabel={t("common.retry")} />
+
+// 1 つの文しか出せない所（Toast・FormStatus・SaveErrorBanner）
+toast.error(apiErrorMessage(error, t("…failed")));
+```
+
+| 関数・型 | 役割 |
+|---|---|
+| `ApiTransportError` / `toApiTransportError(cause, request)` | fetch・本文の読み取りが投げた timeout（`TimeoutError`）・通信断（`TypeError`）を、日本語の要約 + 次の操作の例外にする。英語の元の文は `causeMessage`。`AbortError` は `null`（変換しない） |
+| `transportErrorOf(error)` | `ApiTransportError` か、製品の `ApiError` が `cause` に包んだものを取り出す（RAG） |
+| `ApiErrorPresentable` / `httpApiErrorPresentation` | 製品の `ApiError` が `toApiErrorPresentation()` を実装し、backend の文を要約に、HTTP ステータス・エラーコード・request ID を詳細に分ける |
+| `presentApiError(error, fallback)` | 要約・次の操作・詳細を返す。組み込みの例外（英語の文）は既定の文にし、元の文は詳細へ |
+| `apiErrorMessage(error, fallback)` | 1 つの文。timeout・通信断は要約 + 次の操作、組み込みの例外は既定の文、それ以外は `message` のまま |
+
+- 既定の文言（`DEFAULT_API_TRANSPORT_MESSAGES` / `DEFAULT_API_ERROR_DETAIL_LABELS`）は日本語。`ApiErrorDetailList` は「詳細」の折りたたみ（`Disclosure`）だけを出す。`ErrorState` は `details` で同じ折りたたみを本文の下に置ける。
+- 単体テストは `packages/ui/tests/api-error.test.tsx`。製品の確認は各製品の API のラッパーのテストと e2e（`route.abort` で通信断）。
+
+---
+
 ## SaveErrorBanner — **新規**（#585）
 
 ヘッダー（`PageHeader`）に保存がある全画面のエディタで、**欄に結び付かない保存の失敗**を 1 か所に出す部品。UX 契約 messaging.md §3.3.1 の実装で、`PageBody` の最初の子に置く。欄に結び付く失敗は欄の直下（`FieldError`）に出し、この部品にも Toast にも重ねない。
