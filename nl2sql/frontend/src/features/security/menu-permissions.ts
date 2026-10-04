@@ -97,16 +97,9 @@ const PERMISSION_IMPLIES: Record<string, string[]> = {
     CAPABILITY_PERMISSIONS.selectAiAssetsRead,
     CAPABILITY_PERMISSIONS.selectAiAssetsRefresh,
   ],
-  [MENU_PERMISSIONS.glossaryRules]: [
-    CAPABILITY_PERMISSIONS.profilesManage,
-    CAPABILITY_PERMISSIONS.learningMaterialManage,
-    CAPABILITY_PERMISSIONS.schemaRead,
-  ],
-  [MENU_PERMISSIONS.globalRules]: [
-    CAPABILITY_PERMISSIONS.profilesManage,
-    CAPABILITY_PERMISSIONS.learningMaterialManage,
-    CAPABILITY_PERMISSIONS.schemaRead,
-  ],
+  // 業務プロファイル管理と学習素材管理は含めない（backend の PERMISSION_CATALOG と同じ。#1006）。
+  [MENU_PERMISSIONS.glossaryRules]: [CAPABILITY_PERMISSIONS.schemaRead],
+  [MENU_PERMISSIONS.globalRules]: [CAPABILITY_PERMISSIONS.schemaRead],
   [MENU_PERMISSIONS.sampleData]: [
     CAPABILITY_PERMISSIONS.sampleDataManage,
     CAPABILITY_PERMISSIONS.schemaRead,

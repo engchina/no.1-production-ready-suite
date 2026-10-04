@@ -1207,10 +1207,20 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
   }
   // --- 自動実行（#784） ---
+  // 実行できる業務 Agent か（backend の `_require_runnable_agent` / `agent_unavailable_reason`。#927）。
+  const requireRunnableAgent = (agentId: unknown) => {
+    const agent = state.agents.find((candidate) => candidate.id === agentId);
+    if (!agent) throw new HttpError(422, "業務 Agent が見つかりません。");
+    if (!agent.enabled || agent.migration_required) throw new HttpError(422, "この業務 Agent は実行できない状態です。");
+    if (agent.published_version === null) {
+      throw new HttpError(422, "公開していない業務 Agent は実行できません。公開してから使ってください。");
+    }
+  };
   if (method === "GET" && at("automations")) {
     return { automations: state.automations, persistent: state.automationsPersistent };
   }
   if (method === "POST" && at("automations")) {
+    requireRunnableAgent(body.agent_id);
     const item: Json = {
       ...automationFields(body),
       id: `auto-${state.automations.length + 1}`,
@@ -1234,6 +1244,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return { automation: item, runs: state.automationRuns[String(item.id)] ?? [] };
     }
     if (method === "PUT" && at("automations", "*")) {
+      // 業務 Agent を変えるときと有効のまま保存するときだけ確かめる（無効にする保存は通す）。
+      if (body.agent_id !== item.agent_id || body.enabled) requireRunnableAgent(body.agent_id);
       Object.assign(item, automationFields(body), { updated_at: MOCK_NOW });
       return item;
     }
@@ -1250,9 +1262,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         last_run_id: runId,
         last_trigger: "manual",
         last_result: "created",
-        last_message: "Run を作りました。",
+        last_message: "実行を作りました。",
       });
-      return { run_id: runId, result: "created", message: "Run を作りました。" };
+      return { run_id: runId, result: "created", message: "実行を作りました。" };
     }
     if (method === "POST" && at("automations", "*", "webhook-token")) {
       if (item.trigger !== "webhook") throw new HttpError(409, "Webhook のトリガーではありません。");
@@ -1372,9 +1384,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return { skills: state.skills, metadata: { count: state.skills.length } };
     }
     if (method === "POST" && at("skills")) {
-      const id = String(body.id ?? "");
-      if (!id || state.skills.some((skill) => skill.id === id)) {
-        throw new HttpError(409, `skill already exists: ${id}`);
+      // backend の create_agent_skill と同じ検証（#926）。
+      const id = String(body.id ?? "").trim();
+      if (!id) throw new HttpError(400, "スキルの ID を入力してください。");
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(id)) {
+        throw new HttpError(422, "スキルの ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。");
+      }
+      if (state.skills.some((skill) => skill.id === id)) {
+        throw new HttpError(409, "同じ ID のスキルがあります。");
       }
       const skill = skillFromPayload(body, "runtime");
       state.skills.push(skill);
@@ -1382,8 +1399,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     if (at("skills", "*")) {
       const skill = findOr404(state.skills, "id", second, "skill");
-      if (skill.source === "builtin" && method !== "GET") {
-        throw new HttpError(409, `builtin skill cannot be modified: ${second}`);
+      if (skill.source !== "runtime" && method === "PATCH") {
+        throw new HttpError(
+          400,
+          "組み込み・ファイル・環境変数・プラグインのスキルは画面から変更できません。読み込み元の定義を変更してください。"
+        );
+      }
+      if (skill.source !== "runtime" && method === "DELETE") {
+        throw new HttpError(400, "組み込み・ファイル・環境変数・プラグインのスキルは画面から削除できません。");
       }
       if (method === "GET") return skill;
       if (method === "PATCH") {
@@ -1391,6 +1414,21 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         return skill;
       }
       if (method === "DELETE") {
+        // 業務 Agent の下書きか公開中の版が使っていれば断る（backend の delete_agent_skill。#926）。
+        const users = state.agents
+          .filter((agent) => {
+            const published = ((agent.versions as Json[] | undefined) ?? []).find(
+              (item) => item.version === agent.published_version
+            );
+            return [agent.skill_ids, published?.skill_ids].some((ids) => ((ids as string[] | undefined) ?? []).includes(second));
+          })
+          .map((agent) => String(agent.name || agent.id));
+        if (users.length) {
+          throw new HttpError(
+            409,
+            `このスキルは業務 Agent（${users.join("、")}）が使っています。業務 Agent のスキルから外してから削除してください。`
+          );
+        }
         state.skills = state.skills.filter((candidate) => candidate.id !== second);
         return { skills: state.skills, metadata: { count: state.skills.length } };
       }

@@ -182,7 +182,7 @@ export const ja = {
     "文書解析に使う方式を選び、必要な解析エンジンの現在状態を確認します。",
   "settings.parserAdapters.overview.title": "文書解析の現在の設定",
   "settings.parserAdapters.overview.description":
-    "文書解析に使うエンジンを選び、現在の可用性だけを確認します。",
+    "文書解析に使うエンジンを選び、現在の可用性を確認します。保存したエンジンは、文書のレシピで上書きしていない文書に、次の取込と再処理から使います。取込済みの文書は、文書の詳細で再処理するまで今の解析結果のまま検索されます。",
   "settings.parserAdapters.backend": "使用エンジン",
   "settings.parserAdapters.backend.local": "Local(廃止)",
   "settings.parserAdapters.backend.local.description": "旧 in-process 解析。既定の Docling へ正規化",
@@ -296,7 +296,7 @@ export const ja = {
     "文書を検索しやすい単位へ分ける方式と分割サイズを設定します。",
   "settings.chunking.overview.title": "文書分割方式",
   "settings.chunking.overview.description":
-    "業界の代表的な chunking 手法を OCI / Oracle スタックへ再マップし、backend 内処理または pipeline-chunking へ渡す方式として選択できます。",
+    "文書を検索の単位（chunk）に分ける方式を選びます。保存した方式とパラメータは、文書のレシピで上書きしていない文書に、次の取込と再処理から使います。取込済みの文書の chunk は、文書の詳細で再処理するまで変わりません。",
   "settings.chunking.serviceNote":
     "ここで選ぶ 7 個は分割方式です。親子階層（small-to-big）は backend 内で実行します。それ以外は pipeline-chunking が稼働中なら遠隔実行し、未起動なら backend 内処理で実行します。",
   "settings.chunking.strategy": "分割方式",
@@ -420,7 +420,7 @@ export const ja = {
     "文書解析の前に原本を一度だけ整えるファイル準備方式を選択します。",
   "settings.preprocess.overview.title": "ファイル準備方式",
   "settings.preprocess.overview.description":
-    "ファイルの種類や状態に合わせて、解析の前に原本を読み取りやすい形へ変換します。原本はそのまま残し、処理後ファイルとの対応を記録します。",
+    "ファイルの種類や状態に合わせて、解析の前に原本を読み取りやすい形へ変換します。原本はそのまま残し、処理後ファイルとの対応を記録します。保存した方式は、文書のレシピで上書きしていない文書に、次の取込と再処理から使います。取込済みの文書は、文書の詳細で再処理するまで今の結果のまま検索されます。",
   "settings.preprocess.profile": "変換方式",
   "settings.preprocess.source": "設定元",
   "settings.preprocess.inProcess": "サービス不要",

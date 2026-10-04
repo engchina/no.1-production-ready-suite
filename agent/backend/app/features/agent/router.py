@@ -375,6 +375,12 @@ class McpConnectionCreate(McpConnectionPatch):
         return value
 
 
+# 画面・API で作るスキルの ID（URL の path に置くため `/`・空白などを断る。#926）。
+# 宣言（SKILL.md・env・プラグイン）から読み込む既存の ID には当てない。
+SKILL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+SKILL_NOT_FOUND_MESSAGE = "スキルが見つかりません。"
+
+
 class AgentSkillCreate(BaseModel):
     id: str
     name: str
@@ -1231,7 +1237,7 @@ async def get_agent_skill(
     """単一 skill の詳細(instructions / mcp_requirements)を返す(progressive disclosure)。"""
     skill = skill_registry.get(skill_id)
     if skill is None:
-        raise HTTPException(status_code=404, detail="skill not found")
+        raise HTTPException(status_code=404, detail=SKILL_NOT_FOUND_MESSAGE)
     return ApiResponse(data=skill)
 
 
@@ -1242,9 +1248,16 @@ async def create_agent_skill(
 ) -> ApiResponse[AgentSkillDefinition]:
     skill_id = payload.id.strip()
     if not skill_id:
-        raise HTTPException(status_code=400, detail="id is required")
+        raise HTTPException(status_code=400, detail="スキルの ID を入力してください。")
+    if not SKILL_ID_PATTERN.fullmatch(skill_id):
+        raise HTTPException(
+            status_code=422,
+            detail=("スキルの ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。"),
+        )
+    if not payload.name.strip():
+        raise HTTPException(status_code=422, detail="スキルの名前を入力してください。")
     if skill_registry.get(skill_id) is not None:
-        raise HTTPException(status_code=409, detail="skill already exists")
+        raise HTTPException(status_code=409, detail="同じ ID のスキルがあります。")
     skill = AgentSkillDefinition(
         id=skill_id,
         name=payload.name,
@@ -1272,12 +1285,17 @@ async def patch_agent_skill(
 ) -> ApiResponse[AgentSkillDefinition]:
     current = skill_registry.get(skill_id)
     if current is None:
-        raise HTTPException(status_code=404, detail="skill not found")
+        raise HTTPException(status_code=404, detail=SKILL_NOT_FOUND_MESSAGE)
     if current.source != "runtime":
         raise HTTPException(
             status_code=400,
-            detail=f"{current.source} skill is read-only; edit the source definition",
+            detail=(
+                "組み込み・ファイル・環境変数・プラグインのスキルは画面から変更できません。"
+                "読み込み元の定義を変更してください。"
+            ),
         )
+    if patch.name is not None and not patch.name.strip():
+        raise HTTPException(status_code=422, detail="スキルの名前を入力してください。")
     updated = current.model_copy(
         update={
             "name": current.name if patch.name is None else patch.name,
@@ -1312,15 +1330,47 @@ async def delete_agent_skill(
     skill_id: str,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentSkillListOutput]:
+    current = skill_registry.get(skill_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail=SKILL_NOT_FOUND_MESSAGE)
+    if current.source != "runtime":
+        # 組み込み・宣言のスキルは参照の有無にかかわらず消せない（その理由を先に出す）。
+        raise HTTPException(
+            status_code=400,
+            detail="組み込み・ファイル・環境変数・プラグインのスキルは画面から削除できません。",
+        )
+    # 業務 Agent が使っているスキルを消すと、その業務 Agent が保存・公開できなくなり、公開中の版は
+    # スキルを欠いて動く。プラグインの無効化・削除と同じく、使っていれば断る（#926）。
+    users = _agents_using_skill(skill_id)
+    if users:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"このスキルは業務 Agent（{'、'.join(users)}）が使っています。"
+                "業務 Agent のスキルから外してから削除してください。"
+            ),
+        )
     try:
         skill_registry.remove(skill_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="skill not found") from exc
+        raise HTTPException(status_code=404, detail=SKILL_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     _persist(lambda: control_plane_store.delete_skill(skill_id))
     skills = skill_registry.list()
     return ApiResponse(data=AgentSkillListOutput(skills=skills, metadata={"count": len(skills)}))
+
+
+def _agents_using_skill(skill_id: str) -> list[str]:
+    """スキルを下書きか公開中の版で使っている業務 Agent の名前（#926）。"""
+    users: list[str] = []
+    for agent in runtime_repository.list_agents():
+        published = agent.published()
+        if skill_id in agent.skill_ids or (
+            published is not None and skill_id in published.skill_ids
+        ):
+            users.append(agent.name or agent.id)
+    return users
 
 
 def _plugin_summary(record: PluginRecord) -> PluginSummary:
@@ -1943,7 +1993,12 @@ async def list_agent_templates() -> ApiResponse[AgentTemplatesData]:
 
 def _require_runnable_agent(agent_id: str) -> None:
     """自動実行の Run は利用者の Run なので、公開した版の無い業務 Agent は選べない（#792）。"""
-    reason = agent_unavailable_reason(_control_plane_agent(agent_id))
+    try:
+        agent: AgentProfile | None = _control_plane_agent(agent_id)
+    except KeyError:
+        # 存在しない（消した）業務 Agent も「見つかりません」の 422 にする（500 にしない。#927）。
+        agent = None
+    reason = agent_unavailable_reason(agent)
     if reason is not None:
         raise HTTPException(
             status_code=422, detail={"code": "agent_unavailable", "message": reason}
@@ -2003,9 +2058,14 @@ async def update_automation(
     _: None = Depends(require_admin),
 ) -> ApiResponse[Automation]:
     item = _automation_for_actor(request, automation_id)
-    if payload.agent_id != item.agent_id:
+    agent_changed = payload.agent_id != item.agent_id
+    if agent_changed:
         _require_agent_access(request, payload.agent_id)
-    _require_runnable_agent(payload.agent_id)
+    # 実行できる業務 Agent かは、業務 Agent を変えるときと有効のまま保存するときだけ確かめる。
+    # 業務 Agent が無効・未公開・削除になった後でも、自動実行を無効にする保存は
+    # できるようにする（#927）。
+    if agent_changed or payload.enabled:
+        _require_runnable_agent(payload.agent_id)
     try:
         updated = automation_store.update(item.id, payload, now=datetime.now(UTC))
     except ControlPlaneStoreError as exc:
