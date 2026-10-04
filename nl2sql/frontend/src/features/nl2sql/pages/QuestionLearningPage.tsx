@@ -51,7 +51,7 @@ import { PageNotice } from "@/components/page-notice";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { formatDateTime, formatNumber } from "@/lib/format";
-import { apiDelete, apiFetch, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, apiPostForm, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
@@ -562,7 +562,12 @@ export function QuestionClassifierModelsPage() {
         ]}
       />
       <PageBody wide>
-        <fieldset disabled={Boolean(loading)} className="m-0 grid min-w-0 gap-4 border-0 p-0">
+        {/* 学習候補の絞り込みの読み込み（candidates-load）では無効にしない。無効にすると入力中の候補検索の欄から
+            フォーカスが外れ、続けて打った文字が入らない（#984）。その間、候補の一覧は Skeleton に置き換わる。 */}
+        <fieldset
+          disabled={Boolean(loading) && !(loading === "candidates-load" && activeView === "candidates")}
+          className="m-0 grid min-w-0 gap-4 border-0 p-0"
+        >
         <PageNotice
           notice={message ? { tone: "danger", message } : null}
           action={
@@ -854,7 +859,7 @@ function TrainingDataPanel({
         {listError ? <Banner severity="danger">{listError}</Banner> : null}
         <TrainingDataTable
           examples={examples}
-          hasFilter={Boolean(search.trim())}
+          search={search}
           profiles={profiles}
           loading={loading}
           editingExampleId={editingExampleId}
@@ -874,7 +879,7 @@ function TrainingDataPanel({
 
 function TrainingDataTable({
   examples,
-  hasFilter,
+  search,
   profiles,
   loading,
   editingExampleId,
@@ -888,7 +893,7 @@ function TrainingDataTable({
   onDelete,
 }: {
   examples: ClassifierTrainingExample[];
-  hasFilter: boolean;
+  search: string;
   profiles: ProfileSummary[];
   loading: string;
   editingExampleId: string;
@@ -907,7 +912,12 @@ function TrainingDataTable({
     totalPages,
     pageItems: visibleExamples,
     range,
-  } = usePagination(examples, TRAINING_DATA_PAGE_SIZE);
+  } = usePagination(examples, TRAINING_DATA_PAGE_SIZE, {
+    // 1 ページ目へ戻すのは検索語を変えたときだけ。行の編集・削除・再読み込みで一覧を取り直しても
+    // 今のページに留まる（既定では一覧の配列が変わるたびに 1 ページ目へ戻っていた。#984）。
+    resetKey: search.trim(),
+  });
+  const hasFilter = Boolean(search.trim());
 
   if (examples.length === 0) {
     return (
@@ -1620,17 +1630,7 @@ async function uploadClassifierTrainingFile(file: File, replace: boolean): Promi
   const form = new FormData();
   form.append("file", file);
   form.append("replace", String(replace));
-  const response = await apiFetch("/api/nl2sql/classifier/training-data/import", {
-    method: "POST",
-    body: form,
-  });
-  const payload = (await response.json().catch(() => ({}))) as {
-    data?: ClassifierImportData;
-    detail?: string;
-    error?: string;
-  };
-  if (!response.ok || !payload.data) {
-    throw new Error(payload.error || payload.detail || t("learning.error.classifier"));
-  }
-  return payload.data;
+  // 失敗の理由（ApiResponse の error_messages）は共通の apiPostForm が読む。以前は error / detail だけを見ていて、
+  // backend の理由（列の不足など）が捨てられ「Classifier 操作に失敗しました。」だけになっていた（#984）。
+  return apiPostForm<ClassifierImportData>("/api/nl2sql/classifier/training-data/import", form);
 }
