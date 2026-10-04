@@ -13,6 +13,7 @@ import pytest
 from pr_backend_core.oracle_session import init_oracle_session
 from pydantic import ValidationError
 
+from app.clients import oracle_runtime
 from app.clients.oracle_runtime import OraclePoolManager
 from app.features.nl2sql.oracle_adapter import OracleAdapterError
 from app.security.deepsec import (
@@ -2913,6 +2914,8 @@ class _FakePool:
 
 
 class _FakeOracleDb:
+    POOL_GETMODE_TIMEDWAIT = 3
+
     def __init__(self) -> None:
         self.thin_mode = True
         self.init_calls: list[str] = []
@@ -3005,6 +3008,8 @@ def test_data_pool_uses_thin_driver_and_data_user_credentials() -> None:
             "max": 4,
             "increment": 1,
             "session_callback": init_oracle_session,
+            "getmode": 3,
+            "wait_timeout": 30_000,
         }
     ]
 
@@ -3061,6 +3066,8 @@ def test_thick_control_pool_initializes_oracle_client_when_deepsec_disabled() ->
             "max": 4,
             "increment": 1,
             "session_callback": init_oracle_session,
+            "getmode": 3,
+            "wait_timeout": 30_000,
         }
     ]
 
@@ -3092,6 +3099,8 @@ def test_control_and_data_pools_share_wallet_mtls_network_settings(tmp_path: Pat
             "max": 4,
             "increment": 1,
             "session_callback": init_oracle_session,
+            "getmode": 3,
+            "wait_timeout": 30_000,
         },
         {
             "user": "DEEPSEC_DATA_USER",
@@ -3105,6 +3114,8 @@ def test_control_and_data_pools_share_wallet_mtls_network_settings(tmp_path: Pat
             "max": 4,
             "increment": 1,
             "session_callback": init_oracle_session,
+            "getmode": 3,
+            "wait_timeout": 30_000,
         },
     ]
 
@@ -3201,3 +3212,93 @@ def test_data_connection_close_failure_after_success_drops_without_failing_reque
     ]
     assert pool.dropped == [connection]
     assert connection.closed == 1
+
+
+@pytest.mark.parametrize(
+    ("oracle_error", "expected_message"),
+    [
+        ("ORA-28000: The account is locked.", oracle_runtime.DEEPSEC_DATA_USER_LOCKED_MESSAGE),
+        (
+            "ORA-01017: invalid credential or not authorized; logon denied",
+            oracle_runtime.DEEPSEC_DATA_USER_INVALID_CREDENTIAL_MESSAGE,
+        ),
+    ],
+    ids=["account_locked", "invalid_credential"],
+)
+def test_data_user_login_failure_fails_fast_without_retrying_login(
+    monkeypatch: pytest.MonkeyPatch, oracle_error: str, expected_message: str
+) -> None:
+    """DATA USER のログインの失敗は日本語の文で返し、期間内は要求ごとにログインし直さない。"""
+
+    class LockedPool(_FakePool):
+        def __init__(self) -> None:
+            super().__init__(_FakeConnection([]))
+            self.acquired = 0
+
+        def acquire(self) -> _FakeConnection:
+            self.acquired += 1
+            raise RuntimeError(oracle_error)
+
+    class LockedOracleDb(_FakeOracleDb):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pools: list[LockedPool] = []
+
+        def create_pool(self, **kwargs: object) -> LockedPool:
+            self.pool_kwargs.append(kwargs)
+            pool = LockedPool()
+            self.pools.append(pool)
+            return pool
+
+    clock = [1_000.0]
+    monkeypatch.setattr(oracle_runtime, "_monotonic", lambda: clock[0])
+    manager = OraclePoolManager(_settings())
+    fake_oracledb = LockedOracleDb()
+    manager._oracledb = fake_oracledb
+
+    with pytest.raises(OracleAdapterError) as first, manager.data_connection("user-a"):
+        pass
+    assert str(first.value) == expected_message
+    assert "DeepSecret" not in str(first.value)
+    # 失敗した pool は捨てる（次は新しい pool で試す）。
+    assert fake_oracledb.pools[0].closed_force_values == [True]
+    assert manager._data_pool is None
+
+    # 期間内の要求は、接続を試さずにすぐ同じ文で失敗する（ログインの失敗の回数を増やさない）。
+    clock[0] += oracle_runtime.DATA_USER_LOGIN_FAILURE_BACKOFF_SECONDS - 1
+    with (
+        pytest.raises(OracleAdapterError, match="DeepSec DATA USER"),
+        manager.data_connection("user-b"),
+    ):
+        pass
+    assert len(fake_oracledb.pools) == 1
+    assert fake_oracledb.pools[0].acquired == 1
+
+    # 期間を過ぎたら 1 回だけ試し直す。
+    clock[0] += 2
+    with (
+        pytest.raises(OracleAdapterError, match="DeepSec DATA USER"),
+        manager.data_connection("user-a"),
+    ):
+        pass
+    assert len(fake_oracledb.pools) == 2
+    assert fake_oracledb.pools[1].acquired == 1
+
+    # DeepSec の設定の保存（`close_oracle_pools` → `close`）で忘れる。
+    manager.close()
+    assert manager._data_login_failure is None
+
+
+def test_data_connection_other_errors_are_not_remembered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ログイン以外の失敗（pool の待ちの timeout 等）は覚えず、次の要求で普通に試す。"""
+
+    class BusyPool(_FakePool):
+        def acquire(self) -> _FakeConnection:
+            raise RuntimeError("DPY-4005: timed out waiting for the connection pool")
+
+    manager = OraclePoolManager(_settings())
+    monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: BusyPool(_FakeConnection([])))
+
+    with pytest.raises(RuntimeError, match="DPY-4005"), manager.data_connection("user-a"):
+        pass
+    assert manager._data_login_failure is None
