@@ -3,11 +3,21 @@ import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "./fixtures/mock-api";
 import { chooseSelectFieldOption } from "./fixtures/select-field";
 
+/**
+ * ページ全体（documentElement）と本文（`<main>`）が横にはみ出さないこと。
+ * main は overflow-y-auto で横のはみ出しも吸収するため、documentElement だけでは見逃す
+ * （表の行の中の読み上げ専用ラベルが表の外へはみ出した #1116）。
+ */
 async function expectNoHorizontalOverflow(page: Page) {
-  const hasNoOverflow = await page.evaluate(() => {
-    return document.documentElement.scrollWidth <= document.documentElement.clientWidth;
-  });
-  expect(hasNoOverflow).toBe(true);
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const root = document.documentElement;
+        const main = document.querySelector("main");
+        return Math.max(root.scrollWidth - root.clientWidth, main ? main.scrollWidth - main.clientWidth : 0);
+      })
+    )
+    .toBeLessThanOrEqual(1);
 }
 
 /**
