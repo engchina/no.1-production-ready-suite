@@ -28,7 +28,7 @@ import {
   suiteDescription,
   suiteLabel,
 } from "@/components/evaluation/evaluation-metrics";
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import {
   ApiError,
   type EvaluationSuiteName,
@@ -83,12 +83,9 @@ export function EvaluationSettingsClient() {
   if (query.isError) {
     return (
       <PageBody wide>
-        <ErrorState
-          message={
-            query.error instanceof ApiError
-              ? query.error.message
-              : t("settings.evaluation.loadError")
-          }
+        <ApiErrorState
+          error={query.error}
+          fallback={t("settings.evaluation.loadError")}
           onRetry={() => void query.refetch()}
         />
       </PageBody>

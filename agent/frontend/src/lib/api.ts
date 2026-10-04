@@ -1,3 +1,12 @@
+import {
+  httpApiErrorPresentation,
+  isAbortError,
+  toApiTransportError,
+  type ApiErrorDetailLabels,
+  type ApiErrorPresentable,
+  type ApiErrorPresentation,
+} from "@engchina/production-ready-ui";
+
 // OCI 認証 API の型は platform の共有パッケージが正本（#100）。
 // モデル設定の API 型は3製品共通（platform の共有パッケージ。#103）。
 // データベース設定の API 型は3製品共通（platform の共有パッケージ。#108）。
@@ -1097,7 +1106,7 @@ export interface ApiErrorDetails {
   requestId?: string;
 }
 
-export class ApiError extends Error {
+export class ApiError extends Error implements ApiErrorPresentable {
   readonly status: number;
   readonly messages: string[];
   readonly errorCode?: string;
@@ -1112,6 +1121,11 @@ export class ApiError extends Error {
     this.errorCode = details.errorCode;
     this.fieldErrors = details.fieldErrors ?? [];
     this.requestId = details.requestId;
+  }
+
+  /** 失敗の面の要約と「詳細」（共通の `ApiErrorBanner` / `presentApiError`。#906）。 */
+  toApiErrorPresentation(labels?: ApiErrorDetailLabels): ApiErrorPresentation {
+    return httpApiErrorPresentation(this, labels);
   }
 }
 
@@ -1143,7 +1157,9 @@ function fieldErrorsOf(value: unknown): ApiFieldError[] {
 
 /** エラー応答（ApiResponse envelope / FastAPI の detail）から ApiError を作る。 */
 async function apiErrorFrom(response: Response): Promise<ApiError> {
-  let detail = response.statusText;
+  // 本文が無い・JSON でない応答（前段の proxy の 502 / 504 など）は、英語の statusText（`Bad Gateway` 等）を
+  // 出さず、ApiError の既定の文にする（#906）。
+  let detail = "";
   let body: ErrorBody = {};
   try {
     body = ((await response.json()) ?? {}) as ErrorBody;
@@ -1188,15 +1204,29 @@ async function fetchWithSession(path: string, init: RequestInit = {}): Promise<R
   const isFormData = init.body instanceof FormData;
   const headers = new Headers(isFormData ? undefined : { "Content-Type": "application/json" });
   new Headers(init.headers).forEach((value, name) => headers.set(name, value));
-  const response = await fetch(path, {
-    ...init,
-    credentials: "same-origin",
-    headers: withCsrfHeaders(init.method, headers),
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...init,
+      credentials: "same-origin",
+      headers: withCsrfHeaders(init.method, headers),
+    });
+  } catch (cause) {
+    throw transportFailure(cause, path, init.method);
+  }
   // 403 は error_code が経路の権限拒否のときだけ権限なしの画面へ移す。権限の付与の制限などは
   // 呼び出した画面がその場で理由を表示する（#224）。本文は消費しない。
   if (!response.ok) void notifyAuthResponse(response);
   return response;
+}
+
+/**
+ * fetch・本文の読み取りが投げた例外のうち、timeout・通信断（`TypeError: Failed to fetch` など）を利用者向けの
+ * `ApiTransportError`（日本語の文 + 次の操作。英語の元の文は「詳細」に出す）にする。中止などはそのまま返す（#906）。
+ */
+function transportFailure(cause: unknown, path: string, method: string | undefined): unknown {
+  if (isAbortError(cause)) return cause;
+  return toApiTransportError(cause, { method: (method ?? "GET").toUpperCase(), path }) ?? cause;
 }
 
 /** ApiResponse を展開し data のみ返す。エラー時は ApiError を投げる。 */
@@ -1205,7 +1235,12 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     throw await apiErrorFrom(response);
   }
-  const json = (await response.json()) as ApiResponse<T>;
+  let json: ApiResponse<T>;
+  try {
+    json = (await response.json()) as ApiResponse<T>;
+  } catch (cause) {
+    throw transportFailure(cause, path, init?.method);
+  }
   return json.data;
 }
 
@@ -1215,7 +1250,11 @@ async function requestBlob(path: string): Promise<Blob> {
   if (!response.ok) {
     throw await apiErrorFrom(response);
   }
-  return response.blob();
+  try {
+    return await response.blob();
+  } catch (cause) {
+    throw transportFailure(cause, path, "GET");
+  }
 }
 
 function auditQuery(filters: ToolCallAuditFilters): string {
