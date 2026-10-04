@@ -397,7 +397,7 @@ const nl2sqlJa = {
   "security.deepsec.config.synced": "保存済み DATA USER パスワードを Oracle END USER へ同期しました。",
   "security.deepsec.config.syncMissing": "保存済み DATA USER パスワードがありません。",
   "security.deepsec.config.passwordLength": "DATA USER パスワードは12〜256文字で入力してください。",
-  "security.deepsec.config.passwordChars": "DATA USER パスワードに二重引用符、改行、制御文字は使用できません。",
+  "security.deepsec.config.passwordChars": "DATA USER パスワードに二重引用符、「${」、改行、制御文字は使用できません。",
   "security.deepsec.checksum": "SHA-256 チェックサム",
   "security.deepsec.sqlDetails": "SQL とチェックサムを表示",
   "security.deepsec.sqlReadonly": "SQL は読み取り専用です。環境の秘密値はプレースホルダーで表示します。",
