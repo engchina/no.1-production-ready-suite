@@ -1031,7 +1031,10 @@ test("業務プロファイルは表とビューを固定高リストで管理�
       await route.fallback();
       return;
     }
-    savedPayload = route.request().postDataJSON() as Record<string, unknown>;
+    // Oracle 反映の job の終了後に詳細を取り直す（GET。#963）ので、保存の本文は PATCH だけから取る。
+    if (route.request().method() === "PATCH") {
+      savedPayload = route.request().postDataJSON() as Record<string, unknown>;
+    }
     await fulfillJson(route, { ...profiles[0], ...savedPayload, id: "default" });
   });
   await page.route("**/api/nl2sql/profiles/default/oracle-sync-jobs", async (route) => {
