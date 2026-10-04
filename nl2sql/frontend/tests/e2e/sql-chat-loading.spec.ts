@@ -143,7 +143,10 @@ test("業務プロファイルの一覧を読めなかったときは、空の�
   );
   await page.goto("/chat");
   const error = page.getByTestId("sql-chat-profiles-error");
-  await expect(error).toContainText("データベースに接続できません。");
+  // 取得は TanStack Query の既定の再試行（3 回・1 + 2 + 4 秒）の後に失敗になる。
+  await expect(error).toContainText("データベースに接続できません。", {
+    timeout: 20_000,
+  });
   // 会話の欄（空の状態・入力欄）は出さない。
   await expect(page.getByTestId("sql-chat-panel")).toHaveCount(0);
   await expect(
