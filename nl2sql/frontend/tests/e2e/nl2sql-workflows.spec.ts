@@ -1652,7 +1652,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
             runtime: "oracle",
             executed: true,
             status: "added",
-            profile_name: state.adminFeedbackPayload.select_ai_profile_name ?? "NL2SQL_DEFAULT_PROFILE",
+            profile_name: state.adminFeedbackPayload.select_ai_profile_name || "NL2SQL_DEFAULT_PROFILE",
             index_name: "NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX",
             table_name: "NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX$VECTAB",
             sql_text: "select ai showsql 請求金額を一覧で見たい",
@@ -9388,7 +9388,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     feedback_content: "SQL は期待通りです",
     register_select_ai_feedback: false,
     select_ai_response: historySql,
-    select_ai_profile_name: "NL2SQL_DEFAULT_PROFILE",
+    select_ai_profile_name: "",
   });
   expect(api.selectAiFeedbackAddPayload).toBeNull();
   await expect(registerSelectAiCheckbox).not.toBeChecked();
@@ -9409,7 +9409,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     feedback_content: "SQL は期待通りです",
     register_select_ai_feedback: false,
     select_ai_response: historySql,
-    select_ai_profile_name: "NL2SQL_DEFAULT_PROFILE",
+    select_ai_profile_name: "",
   });
 
   await registerSelectAiCheckbox.check();
@@ -9423,7 +9423,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     feedback_content: "Select AI 登録用の管理者確認メモ",
     register_select_ai_feedback: true,
     select_ai_response: historySql,
-    select_ai_profile_name: "NL2SQL_DEFAULT_PROFILE",
+    select_ai_profile_name: "",
   });
   await expectSelectFieldValue(page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }), "bad");
   await expect(registerSelectAiCheckbox).toBeChecked();
