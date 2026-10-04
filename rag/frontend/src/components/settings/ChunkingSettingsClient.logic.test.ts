@@ -18,7 +18,7 @@ const SAVED: ChunkingSettingsUpdate = {
   chunk_parent_max_children: 12,
 };
 
-describe("chunkingPayload（#966）", () => {
+describe("chunkingPayload（Issue 966）", () => {
   it("選んだ方式で出していない欄の空・範囲外は保存済みの値で送る", () => {
     const payload = chunkingPayload(
       {
