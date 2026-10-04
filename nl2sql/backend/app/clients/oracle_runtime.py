@@ -16,6 +16,7 @@ from pr_backend_core.oracle_session import init_oracle_session
 from app.features.nl2sql.oracle_adapter import (
     OracleAdapterError,
     close_auth_connection_pool,
+    close_runtime_connection_pool,
     close_state_connection_pool,
     ensure_deepsec_thin_mode,
     oracle_connect_kwargs,
@@ -232,3 +233,5 @@ def close_oracle_pools() -> None:
     close_auth_connection_pool()
     # 状態の保存先の接続 pool も閉じる（#830）。
     close_state_connection_pool()
+    # 業務データの読み取り・Select AI の生成の接続 pool も閉じる（#904）。
+    close_runtime_connection_pool()
