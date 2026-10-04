@@ -879,3 +879,143 @@ function searchStreamBody(answer = "上限額を確認しました。"): string 
     `event: done\ndata: ${JSON.stringify({ trace_id: "trace-bv" })}\n\n`,
   ].join("");
 }
+
+// アーカイブ済みは読み取り専用。上書き中の項目の選択欄も操作できず、未保存の変更を作らない。
+test("アーカイブ済みの検索・回答プロファイルは上書き中の項目の選択欄も変更できない", async ({ page }) => {
+  const archived = {
+    ...accountingView,
+    id: "bv-old",
+    name: "旧ビュー",
+    status: "ARCHIVED",
+    archived_at: "2026-06-20T00:00:00Z",
+    config: {
+      version: 1,
+      knowledge_base_ids: ["kb-1"],
+      query: { guardrail_policy: "strict", query_strategy: "hyde" },
+      serving_mode: "fused",
+    },
+    knowledge_bases: [{ id: "kb-1", name: "社内規程", status: "ACTIVE" }],
+  };
+  await page.route("**/api/search-answer-profiles**", async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    const envelope = (data: unknown) => ({ json: { data, error_messages: [], warning_messages: [] } });
+    if (pathname.endsWith("/domain-keywords")) {
+      await route.fulfill(envelope({ search_answer_profile_id: "bv-old", keywords: [] }));
+      return;
+    }
+    if (pathname.endsWith("/approved-faq")) {
+      await route.fulfill(envelope({ search_answer_profile_id: "bv-old", records: [] }));
+      return;
+    }
+    if (pathname.endsWith("/runtime-knowledge")) {
+      await route.fulfill(envelope({ search_answer_profile_id: "bv-old", terms: [], rules: [] }));
+      return;
+    }
+    await route.fulfill(envelope(archived));
+  });
+
+  await page.goto("/search-answer-profiles?id=bv-old");
+  await expect(page.getByText("アーカイブ済みの検索・回答プロファイルは編集・保存できません。")).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "安全チェック" })).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "質問の拡張" })).toBeDisabled();
+});
+
+// 知識（承認済み FAQ・用語・ドメインキーワード・ルール）の読み込みに失敗したら、空（0 件）と見せずに
+// 失敗と再試行を出す。空の一覧・既定のオンのスイッチ・空の編集欄を出すと、保存済みの知識が無いと誤解する。
+test("検索・回答プロファイルの知識の読み込みに失敗すると、空ではなく失敗と再試行を出す", async ({ page }) => {
+  // 取得ごとに既定の再試行（3 回）を待つため長めにする。
+  test.setTimeout(60_000);
+  await mockSearchAnswerProfiles(page, [accountingView]);
+  let failures = true;
+  const failOrEmpty = (empty: unknown) => async (route: import("@playwright/test").Route) => {
+    if (failures) {
+      await route.fulfill({
+        status: 500,
+        json: { data: null, error_messages: ["知識を読み込めませんでした。"], warning_messages: [] },
+      });
+      return;
+    }
+    await route.fulfill({ json: { data: empty, error_messages: [], warning_messages: [] } });
+  };
+  await page.route(
+    "**/api/search-answer-profiles/bv-1/approved-faq",
+    failOrEmpty({ search_answer_profile_id: "bv-1", enabled: true, records: [] })
+  );
+  await page.route(
+    "**/api/search-answer-profiles/bv-1/runtime-knowledge",
+    failOrEmpty({ search_answer_profile_id: "bv-1", terms: [], rules: [] })
+  );
+  await page.route(
+    "**/api/search-answer-profiles/bv-1/domain-keywords",
+    failOrEmpty({ search_answer_profile_id: "bv-1", keywords: [] })
+  );
+
+  await page.goto("/search-answer-profiles?id=bv-1");
+  const panel = page.getByRole("tabpanel");
+  // 既定の再試行（3 回）の後に失敗を出す。
+  await expect(panel.getByText("知識を読み込めませんでした。")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("approved-faq-enabled")).toBeDisabled();
+  await expect(panel.getByText("承認済み FAQ はまだありません")).toHaveCount(0);
+
+  // 用語・同義語と回答ルールは同じ取得・同じ部品なので、用語・同義語で確かめる。
+  await page.getByRole("tab", { name: "用語・同義語" }).click();
+  await expect(panel.getByText("知識を読み込めませんでした。")).toBeVisible({ timeout: 15_000 });
+  // ドメインキーワードの保存は全置換なので、読めていない空の編集欄を出さない。
+  await page.getByRole("tab", { name: "ドメインキーワード" }).click();
+  await expect(panel.getByText("知識を読み込めませんでした。")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("textbox", { name: /登録キーワード/ })).toHaveCount(0);
+
+  // 再試行で読み直せる。
+  failures = false;
+  await panel.getByRole("button", { name: "再試行" }).click();
+  await expect(panel.getByText("知識を読み込めませんでした。")).toHaveCount(0);
+});
+
+// アーカイブで件数が減り、保存したページが範囲外になったら最後のページへ戻す（ナレッジベースの一覧と同じ）。
+test("検索・回答プロファイルの一覧は最後のページの行をアーカイブすると前のページへ戻り、空の案内を出さない", async ({
+  page,
+}) => {
+  const profiles = Array.from({ length: 11 }, (_, index) => ({
+    ...accountingView,
+    id: `bv-${index + 1}`,
+    name: `ビュー ${String(index + 1).padStart(2, "0")}`,
+  }));
+  let active = profiles;
+  await page.route("**/api/search-answer-profiles**", async (route) => {
+    const url = new URL(route.request().url());
+    const envelope = (data: unknown) => ({ json: { data, error_messages: [], warning_messages: [] } });
+    if (url.pathname.endsWith("/archive")) {
+      const id = url.pathname.split("/")[3];
+      active = active.filter((item) => item.id !== id);
+      await route.fulfill(envelope({ ...profiles.find((item) => item.id === id), status: "ARCHIVED" }));
+      return;
+    }
+    const limit = Number(url.searchParams.get("limit") ?? 50);
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    await route.fulfill(
+      envelope({
+        items: active.slice(offset, offset + limit),
+        total: active.length,
+        limit,
+        offset,
+        has_next: offset + limit < active.length,
+      })
+    );
+  });
+
+  await page.goto("/search-answer-profiles");
+  const pagination = page.getByTestId("search-answer-profiles-pagination");
+  await pagination.getByRole("button", { name: "次へ" }).click();
+  await expect(page.locator("tbody tr")).toHaveCount(1);
+  await page.getByRole("button", { name: "ビュー 11 の操作" }).click();
+  await page.getByRole("menuitem", { name: "アーカイブ" }).click();
+  await page
+    .getByRole("alertdialog", { name: "検索・回答プロファイルをアーカイブしますか?" })
+    .getByRole("button", { name: "アーカイブ" })
+    .click();
+
+  await expect(page.locator("tbody tr")).toHaveCount(10);
+  await expect(page.getByText("検索・回答プロファイルがありません")).toHaveCount(0);
+  // 1 ページだけになったのでページ送りは出さない。
+  await expect(pagination).toHaveCount(0);
+});
