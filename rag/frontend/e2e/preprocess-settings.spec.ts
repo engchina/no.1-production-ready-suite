@@ -87,7 +87,8 @@ test("前処理設定はファイル準備方式を保存できる", async ({ pa
 
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("前処理設定を保存しました。")).toBeVisible();
+  await expect(page.getByText("ファイル準備の設定を保存しました。")).toBeVisible();
+  await expect(page.getByText("未保存の変更があります。")).toHaveCount(0);
   expect(savedPayload).toEqual({ profile: "office_to_pdf" });
   await expectNoHorizontalOverflow(page);
 });
@@ -164,4 +165,56 @@ async function mockPreprocessSettings(page: Page) {
 
 async function expectNoHorizontalOverflow(page: Page) {
   await expectNoPageOverflow(page);
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`ファイル準備の設定は保存に失敗しても選んだ方式を残し、操作の行に失敗を出す（#956, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    let patchCount = 0;
+    await page.route("**/api/settings/preprocess", async (route) => {
+      if (route.request().method() === "PATCH") {
+        patchCount += 1;
+        if (patchCount === 1) {
+          await route.fulfill({
+            status: 500,
+            json: {
+              data: null,
+              error_messages: ["ファイル準備設定を backend/.env へ保存できませんでした。"],
+              warning_messages: [],
+            },
+          });
+          return;
+        }
+        await route.fulfill({ json: preprocessEnvelope({ profile: "office_to_pdf" }) });
+        return;
+      }
+      await route.fulfill({ json: preprocessEnvelope() });
+    });
+    await page.goto("/settings/preprocess");
+
+    const office = page.getByRole("radio", { name: /Office 文書を PDF にしてから解析/ });
+    await office.click();
+    const actions = page.getByRole("group", { name: "ファイル準備の設定の操作" });
+    const saveButton = actions.getByRole("button", { name: "保存" });
+    await saveButton.click();
+
+    // 失敗は操作の行に出し、選んだ方式・未保存の状態・保存のボタンを残す。
+    await expect(actions).toContainText("ファイル準備設定を backend/.env へ保存できませんでした。");
+    await expect(office).toBeChecked();
+    await expect(saveButton).toBeEnabled();
+    await expect(actions.getByRole("button", { name: "変更を破棄" })).toBeEnabled();
+    await expectNoHorizontalOverflow(page);
+
+    // そのまま再保存できる。
+    await saveButton.click();
+    await expect(page.getByText("ファイル準備の設定を保存しました。")).toBeVisible();
+    await expect(office).toBeChecked();
+    await expect(saveButton).toBeDisabled();
+    expect(patchCount).toBe(2);
+  });
 }
