@@ -7,6 +7,16 @@ import {
   type DatabaseOperationalFailure,
 } from "./database-load-error.ts";
 import { t } from "./i18n";
+import {
+  ApiTransportError,
+  httpApiErrorPresentation,
+  isAbortError,
+  isNetworkFailure,
+  isTimeoutError,
+  type ApiErrorDetailLabels,
+  type ApiErrorPresentable,
+  type ApiErrorPresentation,
+} from "@engchina/production-ready-ui";
 // Cookie セッションの CSRF と 401 / 403 の通知は3製品共通（platform の共有パッケージ。#220）。
 import {
   csrfHeader,
@@ -140,74 +150,14 @@ export interface ApiRequestOptions {
 /** NL2SQL の CSRF Cookie 名（backend の `nl2sql_csrf`）。 */
 const CSRF_COOKIE_NAME = "nl2sql_csrf";
 
-export function isAbortError(cause: unknown): boolean {
-  return cause instanceof Error && cause.name === "AbortError";
-}
-
-export function isTimeoutError(cause: unknown): boolean {
-  return cause instanceof Error && cause.name === "TimeoutError";
-}
-
-export type ApiTransportFailureKind = "timeout" | "network";
-
-/**
- * 応答が届かなかった API 呼び出し（待ち時間の上限を超えた・サーバーに接続できない。#900）。
- *
- * `message` は利用者向けの日本語（何が起きたか + 次にできること）にし、ブラウザの英語の文
- * （`signal timed out` / `Failed to fetch`）は `causeMessage` に分けて「詳細」に出す。
- * timeout の `name` は `TimeoutError` のままにし、既存の `isTimeoutError` の判定を変えない。
- */
-export class ApiTransportError extends Error {
-  readonly kind: ApiTransportFailureKind;
-  /** 何が起きたか（1 文目）。 */
-  readonly summary: string;
-  /** 次にできること。 */
-  readonly nextAction: string;
-  readonly method: string;
-  readonly path: string;
-  readonly timeoutMs?: number;
-  readonly causeName: string;
-  readonly causeMessage: string;
-
-  constructor(
-    kind: ApiTransportFailureKind,
-    request: { method: string; path: string; timeoutMs?: number },
-    cause: unknown,
-  ) {
-    const summary =
-      kind === "network"
-        ? t("api.transport.network")
-        : request.timeoutMs
-          ? t("api.transport.timeout", {
-              seconds: Math.ceil(request.timeoutMs / 1000),
-            })
-          : t("api.transport.timeoutUnknownLimit");
-    const nextAction = t(
-      kind === "network"
-        ? "api.transport.network.action"
-        : "api.transport.timeout.action",
-    );
-    super(`${summary}${nextAction}`, { cause });
-    this.name = kind === "timeout" ? "TimeoutError" : "NetworkError";
-    this.kind = kind;
-    this.summary = summary;
-    this.nextAction = nextAction;
-    this.method = request.method;
-    this.path = request.path;
-    this.timeoutMs = request.timeoutMs;
-    this.causeName = cause instanceof Error ? cause.name : typeof cause;
-    this.causeMessage = cause instanceof Error ? cause.message : String(cause);
-  }
-}
-
-export function isTransportError(cause: unknown): cause is ApiTransportError {
-  return cause instanceof ApiTransportError;
-}
-
-/** fetch が投げる通信の失敗（ブラウザごとに文が違う TypeError。`Failed to fetch` など）。 */
-function isNetworkFailure(cause: unknown): boolean {
-  return cause instanceof TypeError;
-}
+// 応答が届かなかった API 呼び出し（timeout・通信断）の利用者向けの失敗は3製品共通（platform の共有パッケージ。#900 / #906）。
+export {
+  ApiTransportError,
+  isAbortError,
+  isTimeoutError,
+  isTransportError,
+  type ApiTransportFailureKind,
+} from "@engchina/production-ready-ui";
 
 /** requestSignal が付けた待ち時間の上限（timeout の文に秒数を出すため）。 */
 const signalTimeouts = new WeakMap<AbortSignal, number>();
@@ -671,7 +621,7 @@ export interface SchemaOwnersData {
 }
 
 /** API 由来のエラー。`messages` は日本語のユーザー向け文言。 */
-export class ApiError extends Error {
+export class ApiError extends Error implements ApiErrorPresentable {
   readonly status: number;
   /** 表示用メッセージ。認証・rate limit・5xx・migration 未適用では request ID を付与する */
   readonly messages: string[];
@@ -711,6 +661,19 @@ export class ApiError extends Error {
     this.fieldErrors = problem?.field_errors ?? [];
     this.requestId = problem?.request_id || requestId;
     this.retryable = problem?.retryable ?? false;
+  }
+
+  /** 失敗の面の要約（request ID を重ねない元の文）と「詳細」（共通の `ApiErrorBanner`。#900 / #906）。 */
+  toApiErrorPresentation(labels?: ApiErrorDetailLabels): ApiErrorPresentation {
+    return httpApiErrorPresentation(
+      {
+        status: this.status,
+        messages: this.baseMessages,
+        errorCode: this.errorCode,
+        requestId: this.requestId,
+      },
+      labels,
+    );
   }
 }
 

@@ -26,7 +26,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { ApiError, type DocumentSection } from "@/lib/api";
 import {
@@ -207,8 +207,9 @@ export function DocumentSectionsPanel({
           <ListSkeleton rows={4} />
         </TimedLoadingState>
       ) : query.isError ? (
-        <ErrorState
-          message={query.error instanceof ApiError ? query.error.message : t("sections.error.load")}
+        <ApiErrorState
+          error={query.error}
+          fallback={t("sections.error.load")}
           onRetry={() => void query.refetch()}
         />
       ) : draft === null ? (

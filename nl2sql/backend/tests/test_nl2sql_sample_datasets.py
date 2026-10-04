@@ -235,6 +235,13 @@ def test_oracle_uses_selected_sql_status_scope_and_refresh_targets(
     targets = sync.call_args.kwargs["target_objects"]
     assert {t.object_name for t in targets} == set(definition.objects)
     assert all(t.expected_state == "absent" for t in targets)
+    # 削除（DROP）も取り込みと同じく実行の監査を残す（#948）。
+    delete_audit = audit.call_args.kwargs
+    assert delete_audit["operation"] == "sample_data_delete"
+    assert delete_audit["executed"] is True
+    assert delete_audit["detail"]["dataset"] == dataset.value
+    assert delete_audit["detail"]["success_count"] == len(info.sql["delete"])
+    assert set(definition.objects) <= set(delete_audit["target"].split(","))
 
 
 @pytest.mark.parametrize("operation", ["import_sample_data", "delete_sample_data"])
