@@ -308,6 +308,39 @@ function chatStage(stage: string, outcome: string, elapsed_ms = 0) {
   return sse("stage", { model_id: "m1", trace_id: "t1", stage, outcome, elapsed_ms });
 }
 
+/** ライト・ダークの両方の画面を残す（処理の段階の色は共有のトークン。#1146）。 */
+async function screenshotBothThemes(page: Page, path: (theme: string) => string) {
+  for (const theme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    await page.evaluate((value) => {
+      document.documentElement.dataset.theme = value;
+    }, theme);
+    await page.screenshot({ path: path(theme), fullPage: false });
+  }
+}
+
+const CHAT_STEP_IDS = ["rewrite_query", "retrieve", "rerank", "generate_answer", "check_guardrail"] as const;
+
+/** 処理の段階（3 製品共通の ChatProgressStep。#1146）。`statuses` に無い段階は未開始。 */
+function chatProgress(statuses: Partial<Record<(typeof CHAT_STEP_IDS)[number], string>>) {
+  const now = new Date().toISOString();
+  return sse("progress", {
+    model_id: "m1",
+    steps: CHAT_STEP_IDS.map((id) => {
+      const status = statuses[id] ?? "pending";
+      return {
+        id,
+        // 画面は段階の id と状態から名前を付ける（backend の名前は未知の段階だけに使う）。
+        label: `backend の名前 ${id}`,
+        status,
+        ...(status === "pending" || status === "skipped" ? {} : { startedAt: now }),
+        ...(status === "done" || status === "failed" ? { finishedAt: now } : {}),
+        ...(id === "retrieve" && status === "done" ? { detail: "根拠 1 件" } : {}),
+      };
+    }),
+  });
+}
+
 const timedOutChatStream: TimedChunk[] = [
   {
     afterMs: 0,
@@ -317,8 +350,10 @@ const timedOutChatStream: TimedChunk[] = [
         user_message: userMessage,
         columns: [{ model_id: "m1", label: "MODEL 1" }],
       }),
+      chatProgress({}),
       chatStage("answer", "started"),
       chatStage("answer_step:質問の理解", "started"),
+      chatProgress({ rewrite_query: "running" }),
     ].join(""),
   },
   {
@@ -326,6 +361,7 @@ const timedOutChatStream: TimedChunk[] = [
     text: [
       chatStage("answer_step:質問の理解", "success", 1500),
       chatStage("answer_step:文書検索", "started"),
+      chatProgress({ rewrite_query: "done", retrieve: "running" }),
     ].join(""),
   },
   {
@@ -333,14 +369,19 @@ const timedOutChatStream: TimedChunk[] = [
     text: [
       chatStage("answer_step:文書検索", "cancelled", 1500),
       chatStage("answer", "cancelled", 1500),
+      chatProgress({ rewrite_query: "done", retrieve: "failed" }),
       sse("error", {
         model_id: "m1",
         message: TIMEOUT_MESSAGE,
         error_type: "AnswerTimeoutError",
         stage: "answer_step:文書検索",
       }),
-      sse("all_done", { conversation_id: "conv-1" }),
     ].join(""),
+  },
+  {
+    // 失敗した段階を確かめる間をとってから、会話を取り直す。
+    afterMs: 1500,
+    text: sse("all_done", { conversation_id: "conv-1" }),
   },
 ];
 
@@ -354,12 +395,20 @@ const okChatStream: TimedChunk[] = [
         columns: [{ model_id: "m1", label: "MODEL 1" }],
       }),
       chatStage("answer", "started"),
+      chatProgress({ rewrite_query: "running" }),
     ].join(""),
   },
   {
     afterMs: 500,
     text: [
       chatStage("answer", "success", 500),
+      chatProgress({
+        rewrite_query: "done",
+        retrieve: "done",
+        rerank: "done",
+        generate_answer: "done",
+        check_guardrail: "done",
+      }),
       sse("metadata", {
         model_id: "m1",
         message_id: "a2",
@@ -448,14 +497,17 @@ for (const viewport of [
     await page.getByRole("textbox").fill(userMessage.content);
     await page.getByRole("button", { name: "送信" }).click();
 
+    // 処理の段階（3 製品共通の ChatProgress。#1146）。今の段階を 1 行で出し、段階が進むと入れ替わる。
     const progress = page.getByTestId("chat-answer-progress");
+    const current = page.getByTestId("chat-answer-progress-current");
     const timer = page.getByTestId("chat-answer-progress-timer");
-    await expect(progress).toContainText("回答を生成しています（質問の理解）");
+    await expect(current).toContainText("質問を整理しています");
     await expect(timer).toContainText("経過時間");
     const firstElapsed = await timer.textContent();
-    await expect(progress).toContainText("回答を生成しています（文書検索）", {
+    await expect(current).toContainText("関係する文書を探しています", {
       timeout: 4_000,
     });
+    await expect(page.getByTestId("chat-answer-progress-completed")).toHaveText("1 ステップ完了");
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
     await progress.scrollIntoViewIfNeeded();
     await page.screenshot({
@@ -466,7 +518,16 @@ for (const viewport of [
     // 時間切れの文言（工程と再試行の案内）は ERROR の回答として残り、同じ質問を送り直せる。
     const error = page.getByRole("alert").filter({ hasText: "時間切れになった工程: 文書検索" });
     await expect(error).toBeVisible({ timeout: 5_000 });
+    // 止まった段階を開いて出す（原因は段階ではなく Banner に出す）。
+    await expect(progress).toHaveAttribute("data-chat-progress-state", "failed");
+    await expect(page.getByTestId("chat-answer-progress-step-retrieve")).toContainText(
+      "関係する文書を探せませんでした"
+    );
+    await progress.scrollIntoViewIfNeeded();
+    await screenshotBothThemes(page, (theme) => `test-results/answer-progress-chat-failed-${viewport.name}-${theme}.png`);
+    // 会話を取り直すと保存した失敗の回答に置き換わる（段階は保存しない）。
     await expect(progress).toHaveCount(0);
+    await expect(error).toBeVisible();
     await error.scrollIntoViewIfNeeded();
     await page.screenshot({
       path: `test-results/answer-progress-chat-timeout-${viewport.name}.png`,
@@ -476,6 +537,17 @@ for (const viewport of [
 
     await error.getByRole("button", { name: "もう一度送信" }).click();
     await expect(page.getByText(okReply.content).first()).toBeVisible({ timeout: 5_000 });
+    // 完了した回答の上に「処理の経過」の 1 行を残す（既定は閉じる。#1146）。
+    const summary = page.getByTestId("chat-answer-progress-summary");
+    await expect(summary).toContainText("処理の経過（5 ステップ・");
+    await expect(page.getByTestId("chat-answer-progress-step-retrieve")).toBeHidden();
+    await summary.click();
+    await expect(page.getByTestId("chat-answer-progress-step-retrieve")).toContainText(
+      "関係する文書を探しました（根拠 1 件）"
+    );
+    await summary.scrollIntoViewIfNeeded();
+    await screenshotBothThemes(page, (theme) => `test-results/answer-progress-chat-done-${viewport.name}-${theme}.png`);
+    await expectNoPageOverflow(page);
     const requests = await streamRequests(page, "chat");
     expect(requests).toHaveLength(2);
     expect(requests[1].body).toMatchObject({ content: userMessage.content });
