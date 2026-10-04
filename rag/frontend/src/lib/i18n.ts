@@ -851,6 +851,7 @@ export const ja = {
   "fileList.loading": "文書一覧を読み込んでいます",
   "fileList.scrollLabel": "文書一覧。スクロールできます。",
   "fileList.loadError": "文書の一覧を取得できませんでした。接続を確認して再試行してください。",
+  "fileList.refreshError": "最新の状態を取得できませんでした。表示は前回取得した内容です。",
   "fileList.ingest.toast.queued": "「{name}」のファイル準備を開始しました。",
   "fileList.queue.toast.statusHint": "状態は一覧に反映されます。",
   "fileList.ingest.toast.skipped": "「{name}」はファイル準備をスキップしました。",

@@ -48,6 +48,7 @@ import {
 import {
   useDeleteDocument,
   useDocuments,
+  initialLoadError,
   useEnqueueDocumentIngestionJob,
   useKnowledgeBaseChoices,
   useKnowledgeBasesByIds,
@@ -155,6 +156,18 @@ export function FileListClient() {
 
   const page = query.data;
   const items = page?.items ?? [];
+  // 全面のエラーは初回の取得（一覧が無い）の失敗だけ。一覧があるときの再取得の失敗は一覧の上に出す（#938）。
+  const loadError = initialLoadError(query);
+  const refreshError = query.isError && !loadError ? query.error : null;
+  const [manualRetrying, setManualRetrying] = useState(false);
+  const retryList = async () => {
+    setManualRetrying(true);
+    try {
+      await query.refetch();
+    } finally {
+      setManualRetrying(false);
+    }
+  };
   const pageIds = items.map((d) => d.id);
   // 再取得で一覧から消えた行（他の画面で削除・状態の絞り込みから外れた）は選択に数えない。
   const selectedDocuments = items.filter((d) => selection.isSelected(d.id));
@@ -459,6 +472,32 @@ export function FileListClient() {
           </Banner>
         ) : null}
 
+        {/* 前回取得した一覧があるときの再取得（自動更新を含む）の失敗は、一覧と選択を残して知らせる
+            （全面のエラーにすると、見えない選択行の一括操作だけが残る。messaging.md §3.6・#311・#938）。 */}
+        {refreshError ? (
+          <div data-testid="file-list-refresh-error">
+            <Banner
+              severity="warning"
+              title={t("fileList.refreshError")}
+              action={
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  icon={RefreshCw}
+                  // 自動更新・自動の再試行の間も押せるよう、押した再試行の間だけ loading にする。
+                  loading={manualRetrying}
+                  onClick={() => void retryList()}
+                >
+                  {t("common.retry")}
+                </Button>
+              }
+            >
+              <p>{loadErrorMessage(refreshError)}</p>
+            </Banner>
+          </div>
+        ) : null}
+
         {/* 一括操作バー。選択で出し入れせず常に出し、選択が無いときは操作を無効にする（表の位置を
             動かさず、一括操作があることを先に見せる。buttons.md §5.1・#699）。 */}
         {items.length > 0 || bulkBusy ? (
@@ -513,11 +552,8 @@ export function FileListClient() {
           </div>
         ) : null}
 
-        {query.isError ? (
-          <ErrorState
-            message={query.error instanceof ApiError ? query.error.message : t("fileList.loadError")}
-            onRetry={() => void query.refetch()}
-          />
+        {loadError ? (
+          <ErrorState message={loadErrorMessage(loadError)} onRetry={() => void query.refetch()} />
         ) : query.isPending ? (
           <TimedLoadingState
             label={t("fileList.loading")}
@@ -583,6 +619,11 @@ export function FileListClient() {
       </PageBody>
     </div>
   );
+}
+
+/** 一覧の取得の失敗の文。backend の理由（ApiError）があればそれを出す。 */
+function loadErrorMessage(error: unknown): string {
+  return error instanceof ApiError ? error.message : t("fileList.loadError");
 }
 
 /** 行の「ファイル準備を実行」の結果を知らせる。SKIPPED は状態が変わらないため理由を出す。 */
