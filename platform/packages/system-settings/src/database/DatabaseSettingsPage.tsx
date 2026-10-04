@@ -15,6 +15,7 @@ import {
   Skeleton,
   StatusBadge,
   TextField,
+  TimedLoadingState,
   toast,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
@@ -154,7 +155,7 @@ export function DatabaseSettingsPage({
 }: DatabaseSettingsPageProps) {
   const query = useDatabaseSettings(api);
   const save = useUpdateDatabaseSettings(api, onDatabaseChanged);
-  const walletUpload = useUploadDatabaseWallet(api);
+  const walletUpload = useUploadDatabaseWallet(api, onDatabaseChanged);
   const walletDownload = useDownloadDatabaseWallet(api, onDatabaseChanged);
   const passwordReveal = useRevealDatabasePassword(api);
   const test = useTestDatabaseSettings(api);
@@ -397,18 +398,17 @@ export function DatabaseSettingsPage({
     return (
       <PageBody wide>
         {loadingFallback ?? (
-          <div
-            role="status"
-            aria-busy="true"
-            className="space-y-4"
-            data-testid="settings-database-loading"
+          // 読み込み中は経過時間付きの表示と、カードの形の Skeleton で覆う（AGENTS.md「読み込み中」。
+          // NL2SQL が渡していた表示を既定にした）。
+          <TimedLoadingState
+            label={t("settings.database.loading")}
+            operationKey="settings-database-load"
+            placement="page"
+            testId="settings-database-loading"
           >
-            <p className="text-sm text-fg-muted">
-              {t("settings.database.loading")}
-            </p>
             <Skeleton className="h-20 w-full rounded-lg" />
-            <Skeleton className="h-[460px] w-full rounded-lg" />
-          </div>
+            <Skeleton className="h-[33rem] w-full rounded-lg" />
+          </TimedLoadingState>
         )}
       </PageBody>
     );
@@ -1036,6 +1036,18 @@ function AdbManagementCard({
             placement="action"
             activityIcon="none"
             testId="settings-adb-processing"
+          />
+        ) : null}
+
+        {infoQuery.isPending ? (
+          // ADB の状態（見出しの StatusBadge）と起動・停止の可否は OCI から取得する。取得の間は
+          // 経過時間付きで示す（起動・停止が押せない理由を空白にしない。AGENTS.md「読み込み中」）。
+          <ProcessingIndicator
+            active
+            label={t("settings.adb.loading")}
+            operationKey="settings-adb-info"
+            placement="panel"
+            testId="settings-adb-loading"
           />
         ) : null}
 

@@ -379,11 +379,8 @@ def _quality_evaluation_job_for_access(
     _assert_profile_access(request, job_for_access.profile_id)
     if require_actor_owner:
         access = _actor_access_args(request, manage_permission=PROFILE_MANAGE_PERMISSION)
-        if (
-            not access.actor_can_manage
-            and job_for_access.actor_user_uuid
-            and job_for_access.actor_user_uuid != access.actor_user_uuid
-        ):
+        # 持ち主の無い job も、管理の権限が無ければ本人の物とみなさない（#1126）。
+        if not access.actor_can_manage and job_for_access.actor_user_uuid != access.actor_user_uuid:
             raise HTTPException(
                 status_code=403,
                 detail="他のユーザーのSQL生成評価 job を操作する権限がありません。",

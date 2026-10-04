@@ -537,12 +537,39 @@ def _timeout_details(settings: Any) -> dict[str, str | int | float | bool | None
 # --------------------------------------------------------------------------- persistence
 
 
+def _same_path(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
+
+
+def _requested_wallet_dir(base: Any, payload: DatabaseSettingsUpdate) -> str:
+    """payload の Wallet の保存先は、今の保存先と同じときだけ受け取る。
+
+    Wallet の設置（アップロード・OCI からの取得）は保存先の既存のディレクトリを置き換えて削除する
+    ため、API から任意の path を保存させない（画面は今の保存先を送るだけで、変更する欄は無い）。
+    保存先は platform/.env の PLATFORM_ORACLE_WALLET_DIR（Thick は CLIENT_LIB_DIR）で決める。
+    """
+    requested = payload.wallet_dir.strip()
+    current = _s(base, "oracle_wallet_dir").strip()
+    resolved = _s(base, "resolved_oracle_wallet_dir").strip()
+    if not requested or _same_path(requested, current):
+        return current or resolved
+    if _same_path(requested, resolved):
+        return resolved
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "Wallet の保存先は画面・API からは変更できません。"
+            "platform/.env の PLATFORM_ORACLE_WALLET_DIR で設定してください。"
+        ),
+    )
+
+
 def database_settings_candidate(
     base: Any, payload: DatabaseSettingsUpdate, *, connection_security_enabled: bool
 ) -> Any:
-    wallet_dir = payload.wallet_dir.strip() or _s(base, "oracle_wallet_dir").strip()
-    if not wallet_dir:
-        wallet_dir = _s(base, "resolved_oracle_wallet_dir")
+    wallet_dir = _requested_wallet_dir(base, payload)
     updates: dict[str, Any] = {
         "oracle_user": payload.user.strip(),
         "oracle_dsn": payload.dsn.strip(),
@@ -1111,6 +1138,28 @@ _ADB_FAILURE_RESPONSES: dict[AdbFailureOperation, tuple[str, str]] = {
 }
 
 
+def oci_failure_log_extra(exc: BaseException) -> dict[str, Any]:
+    """OCI の API の失敗を切り分ける項目（例外の種類・HTTP status・OCI の code・request id）。
+
+    OCI SDK の `ServiceError` の属性だけを読み、メッセージ本文や request の内容（Wallet の
+    password 等）は含めない。
+    """
+    extra: dict[str, Any] = {"exception_type": type(exc).__name__}
+    status = getattr(exc, "status", None)
+    if isinstance(status, int):
+        extra["oci_status"] = status
+    for key, attr in (("oci_code", "code"), ("oci_operation", "operation_name")):
+        value = getattr(exc, attr, None)
+        if isinstance(value, str) and value:
+            extra[key] = value
+    headers = getattr(exc, "headers", None)
+    if isinstance(headers, Mapping):
+        request_id = headers.get("opc-request-id")
+        if isinstance(request_id, str) and request_id:
+            extra["opc_request_id"] = request_id
+    return extra
+
+
 def _adb_not_configured(settings: Any) -> AdbInfoData:
     region = _s(settings, "resolved_oracle_adb_region")
     return AdbInfoData(
@@ -1164,9 +1213,9 @@ def _adb_failure_data(
     logger.warning(
         "adb_operation_failed",
         extra={
+            **oci_failure_log_extra(exc),
             "operation": operation,
             "error_code": error_code,
-            "exception_type": type(exc).__name__,
             "region": region,
             "adb_ocid_configured": bool(adb_ocid),
         },
@@ -1386,6 +1435,15 @@ def build_database_router(
                 ),
             ) from exc
         except Exception as exc:
+            # 画面には OCI の応答をそのまま返さないため、切り分けの手がかりはログに残す。
+            logger.warning(
+                "database_wallet_download_failed",
+                extra={
+                    **oci_failure_log_extra(exc),
+                    "wallet_error_code": "WALLET_DOWNLOAD_FAILED",
+                    "region": _s(settings, "resolved_oracle_adb_region") or None,
+                },
+            )
             raise HTTPException(
                 status_code=502,
                 detail=(
@@ -1408,6 +1466,15 @@ def build_database_router(
             raise
         except HTTPException as exc:
             if exc.status_code in {400, 415}:
+                # 検証で落ちた理由（必須ファイルの不足など。自前の文言）をログに残す。
+                logger.warning(
+                    "database_wallet_download_invalid",
+                    extra={
+                        "wallet_error_code": "WALLET_DOWNLOAD_INVALID",
+                        "status_code": exc.status_code,
+                        "reason": exc.detail,
+                    },
+                )
                 raise HTTPException(
                     status_code=502,
                     detail=(

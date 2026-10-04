@@ -124,6 +124,42 @@ def test_patch_failure_keeps_runtime(tmp_path: Path) -> None:
     assert h.saved == []
 
 
+def test_patch_rejects_other_wallet_dir_so_wallet_install_cannot_replace_it(
+    tmp_path: Path,
+) -> None:
+    """API から別の Wallet の保存先を保存させない（Wallet の設置はそこを置き換えて削除する）。"""
+    h = Harness(tmp_path)
+    other = tmp_path / "important"
+    other.mkdir()
+    (other / "keep.txt").write_text("keep")
+
+    resp = h.client.patch(
+        "/api/settings/database",
+        json={"user": "app", "dsn": "ragdb_high", "wallet_dir": str(other)},
+    )
+    assert resp.status_code == 422
+    assert "PLATFORM_ORACLE_WALLET_DIR" in resp.json()["detail"]
+    assert h.settings.oracle_wallet_dir == str(tmp_path / "wallet")
+    assert not h.env_file.exists()
+    test = h.client.post(
+        "/api/settings/database/test",
+        json={"user": "app", "dsn": "ragdb_high", "wallet_dir": str(other)},
+    )
+    assert test.status_code == 422
+
+    assert h.upload(wallet_zip()).status_code == 200
+    assert (other / "keep.txt").read_text() == "keep"
+
+    # 今の保存先（画面が送る値）と空欄は受け取る。
+    for wallet_dir in (str(tmp_path / "wallet"), str(tmp_path / "x" / ".." / "wallet"), ""):
+        resp = h.client.patch(
+            "/api/settings/database",
+            json={"user": "app", "dsn": "ragdb_high", "wallet_dir": wallet_dir},
+        )
+        assert resp.status_code == 200
+    assert dotenv_values(h.env_file)["PLATFORM_ORACLE_WALLET_DIR"] == str(tmp_path / "wallet")
+
+
 def test_connection_security_is_ignored_unless_enabled(tmp_path: Path) -> None:
     disabled = Harness(tmp_path / "a")
     disabled.client.patch(
@@ -301,3 +337,106 @@ def test_adb_settings_start_stop_and_hidden_errors(
         FakeOciDatabaseClient.fail = False
     assert failed["error_code"] == "ADB_INFO_UNAVAILABLE"
     assert "secret-looking" not in failed["message"]
+
+
+class FakeOciServiceError(Exception):
+    """oci.exceptions.ServiceError と同じ属性を持つ失敗（SDK を import しない）。"""
+
+    def __init__(self) -> None:
+        super().__init__("Authorization failed: wallet-password-must-not-be-logged")
+        self.status = 404
+        self.code = "NotAuthorizedOrNotFound"
+        self.operation_name = "generate_autonomous_database_wallet"
+        self.headers = {"opc-request-id": "req-123"}
+
+
+def _log_extra(record: Any, key: str) -> Any:
+    return getattr(record, key, None)
+
+
+def _no_wallet_precheck(*_args: Any, **_kwargs: Any) -> None:
+    """OCI 認証設定の確認を省き、OCI からの取得へ進める。"""
+    return None
+
+
+def test_wallet_download_failure_is_logged_without_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """OCI からの Wallet の取得の失敗は、画面には一般的な文言、ログには切り分けの項目を出す。"""
+
+    class FailingWalletClient(FakeOciDatabaseClient):
+        async def download_autonomous_database_wallet(self, *args: Any) -> bytes:
+            raise FakeOciServiceError()
+
+    monkeypatch.setattr(shared_db, "OciDatabaseClient", FailingWalletClient)
+    monkeypatch.setattr(shared_db, "prepare_database_wallet_download", _no_wallet_precheck)
+    h = Harness(tmp_path)
+    h.settings.oracle_adb_ocid = "ocid1.autonomousdatabase.oc1..x"
+    h.settings.oracle_adb_region = "ap-osaka-1"
+    h.settings.oracle_password = "db-secret-Pass1"
+
+    with caplog.at_level("WARNING", logger=shared_db.logger.name):
+        resp = h.client.post("/api/settings/database/wallet/download")
+
+    assert resp.status_code == 502
+    assert "NotAuthorizedOrNotFound" not in resp.text
+    records = [r for r in caplog.records if r.getMessage() == "database_wallet_download_failed"]
+    assert len(records) == 1
+    record = records[0]
+    assert _log_extra(record, "exception_type") == "FakeOciServiceError"
+    assert _log_extra(record, "oci_status") == 404
+    assert _log_extra(record, "oci_code") == "NotAuthorizedOrNotFound"
+    assert _log_extra(record, "oci_operation") == "generate_autonomous_database_wallet"
+    assert _log_extra(record, "opc_request_id") == "req-123"
+    assert _log_extra(record, "region") == "ap-osaka-1"
+    logged = " ".join(f"{key}={value}" for key, value in vars(record).items())
+    assert "db-secret-Pass1" not in logged
+    assert "wallet-password-must-not-be-logged" not in logged
+
+
+def test_wallet_download_invalid_zip_is_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """OCI から取得した Wallet が検証で落ちた理由（自前の文言）をログに残す。"""
+
+    class BrokenWalletClient(FakeOciDatabaseClient):
+        async def download_autonomous_database_wallet(self, *args: Any) -> bytes:
+            return wallet_zip({"README": "x"})
+
+    monkeypatch.setattr(shared_db, "OciDatabaseClient", BrokenWalletClient)
+    monkeypatch.setattr(shared_db, "prepare_database_wallet_download", _no_wallet_precheck)
+    h = Harness(tmp_path)
+    h.settings.oracle_adb_ocid = "ocid1.autonomousdatabase.oc1..x"
+    h.settings.oracle_password = "db-secret-Pass1"
+
+    with caplog.at_level("WARNING", logger=shared_db.logger.name):
+        resp = h.client.post("/api/settings/database/wallet/download")
+
+    assert resp.status_code == 502
+    records = [r for r in caplog.records if r.getMessage() == "database_wallet_download_invalid"]
+    assert len(records) == 1
+    assert _log_extra(records[0], "status_code") == 400
+    assert "Wallet ZIP" in _log_extra(records[0], "reason")
+
+
+def test_adb_failure_log_has_oci_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """ADB の情報取得・起動・停止の失敗のログに OCI の status / code / request id を入れる。"""
+
+    class FailingInfoClient(FakeOciDatabaseClient):
+        async def get_autonomous_database(self, adb_ocid: str) -> AutonomousDatabaseInfo:
+            raise FakeOciServiceError()
+
+    monkeypatch.setattr(shared_db, "OciDatabaseClient", FailingInfoClient)
+    h = Harness(tmp_path)
+    h.settings.oracle_adb_ocid = "ocid1.autonomousdatabase.oc1..x"
+
+    with caplog.at_level("WARNING", logger=shared_db.logger.name):
+        data = h.client.get("/api/settings/database/adb").json()["data"]
+
+    assert data["error_code"] == "ADB_INFO_UNAVAILABLE"
+    record = next(r for r in caplog.records if r.getMessage() == "adb_operation_failed")
+    assert _log_extra(record, "oci_status") == 404
+    assert _log_extra(record, "oci_code") == "NotAuthorizedOrNotFound"
+    assert _log_extra(record, "opc_request_id") == "req-123"

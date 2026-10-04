@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -265,6 +266,18 @@ class ModelSettingsPayload(BaseModel):
     generative_ai: GenerativeAiModelSettings
 
 
+class ModelSettingsUpdateRequest(ModelSettingsPayload):
+    """モデル設定の保存（PATCH）の request（#1037）。
+
+    `base_revision` は画面が読み込んだ時点の `ModelSettingsData.revision`。送られたときは、
+    保存の直前の `revision` と違えば 409 にして保存しない（別の製品・タブの保存を古い値で
+    上書きしない）。
+    送らない呼び出しは従来どおり保存する。
+    """
+
+    base_revision: str | None = Field(default=None, max_length=128)
+
+
 class ModelSettingsData(BaseModel):
     """モデル設定 API のレスポンス data。"""
 
@@ -273,6 +286,8 @@ class ModelSettingsData(BaseModel):
     source: Literal["runtime"]
     secret_source: ModelSettingsSecretSource
     legacy_secret_detected: bool = False
+    # 保存済みのモデル設定の版（#1037）。保存の `base_revision` に返す。
+    revision: str = ""
 
 
 class ModelSettingsTestRequest(BaseModel):
@@ -682,6 +697,30 @@ def validate_enterprise_ai_connections(
     return errors
 
 
+def validate_model_ids(enterprise: EnterpriseAiModelSettings) -> list[ModelFieldError]:
+    """登録モデルのモデル ID が重複しないかを確かめる（#1035）。
+
+    既定のモデル・接続の解決（`enterprise_ai_connection_for_model`）・接続テストはモデル ID で
+    先頭の行を引くので、同じ ID の 2 行目以降は使われず、その行に選んだ接続も効かない。
+    エラーは 2 回目以降に現れた行に付ける。
+    """
+    seen: set[str] = set()
+    errors: list[ModelFieldError] = []
+    for index, model in enumerate(enterprise.models):
+        if not model.model_id:
+            continue
+        if model.model_id in seen:
+            errors.append(
+                ModelFieldError(
+                    f"models.{index}.model_id",
+                    f"モデル ID「{model.model_id}」はすでに登録されています。"
+                    "同じモデルは 1 行にまとめてください。",
+                )
+            )
+        seen.add(model.model_id)
+    return errors
+
+
 def validate_default_models(enterprise: EnterpriseAiModelSettings) -> list[ModelFieldError]:
     """既定のモデル 2 つが登録モデルと矛盾しないかを確かめる（#499）。
 
@@ -853,14 +892,30 @@ def resolve_api_key(settings: Any, payload: ModelSettingsPayload) -> str:
     return resolve_api_keys(settings, payload)[ENTERPRISE_AI_PRIMARY_CONNECTION_ID]
 
 
+def model_settings_revision(settings: Any) -> str:
+    """保存済みのモデル設定の版（#1037）。
+
+    画面に返す値（secret は含めず、API key は有無だけ）の hash。3 製品が同じ
+    `model-settings.json` と共通 `.env` を読むので、どの製品・worker でも同じ状態なら同じ値になる。
+    """
+    return _payload_revision(model_payload(settings))
+
+
+def _payload_revision(payload: ModelSettingsPayload) -> str:
+    document = payload.model_dump_json()
+    return hashlib.sha256(document.encode("utf-8")).hexdigest()[:32]
+
+
 def model_settings_data(settings: Any) -> ModelSettingsData:
     """現在の Settings を API data へ変換する（secret を含めない）。"""
+    payload = model_payload(settings)
     return ModelSettingsData(
-        settings=model_payload(settings),
+        settings=payload,
         model_settings_file=settings.model_settings_file,
         source="runtime",
         secret_source=settings.model_secret_source,
         legacy_secret_detected=settings.legacy_model_secret_detected,
+        revision=_payload_revision(payload),
     )
 
 
@@ -1511,8 +1566,18 @@ def _elapsed_ms(started: float) -> int:
 RunModelTest = Callable[[Any, ModelSettingsTestRequest], Awaitable[ModelTestDetails]]
 
 
+MODEL_SETTINGS_CONFLICT_MESSAGE: Final = (
+    "モデル設定は、この画面を開いた後にほかの画面（別の製品を含む）で更新されました。"
+    "最新の設定を読み込んでから、保存し直してください。"
+)
+
+
 def save_model_settings(
-    settings: Any, store: ModelSettingsStore, payload: ModelSettingsPayload
+    settings: Any,
+    store: ModelSettingsStore,
+    payload: ModelSettingsPayload,
+    *,
+    base_revision: str | None = None,
 ) -> None:
     """保存が成功してから runtime へ反映する。
 
@@ -1520,6 +1585,8 @@ def save_model_settings(
     変えない保存（接続情報・Generative AI の節だけの保存）は、保存済みの状態が不正でも止めない。
     接続（セカンダリ接続・ターシャリ接続の必須の欄。#542 / #786）と、登録モデルが指す接続は
     毎回検証する（#533）。
+    `base_revision`（画面が読み込んだ時点の版。#1037）を渡したときは、lock の中で読み直した後の版と
+    違えば HTTPException(409) にして保存しない。
     永続化の失敗は HTTPException(500)。
     """
     # 接続（#533）は毎回確かめる。直す欄は同じ画面にあるので、保存済みの状態が不正でも止める。
@@ -1529,12 +1596,17 @@ def save_model_settings(
         payload.enterprise_ai, api_keys=resolve_api_keys(settings, payload)
     )
     if _default_models_changed(settings, payload.enterprise_ai):
+        # 登録モデルを変える保存だけで確かめる（#1035）。既存の不正な状態で、
+        # 接続・Generative AI の節の保存は止めない。
+        errors += validate_model_ids(payload.enterprise_ai)
         errors += validate_default_models(payload.enterprise_ai)
     if errors:
         raise HTTPException(status_code=422, detail=" ".join(error.message for error in errors))
     try:
         with store.lock(settings):
             store.reload_if_changed(settings)
+            if base_revision is not None and base_revision != model_settings_revision(settings):
+                raise HTTPException(status_code=409, detail=MODEL_SETTINGS_CONFLICT_MESSAGE)
             keys = resolve_api_keys(settings, payload)
             store.save(
                 settings,
@@ -1590,9 +1662,12 @@ def build_model_router(
         response_model=ApiResponse[ModelSettingsData],
         dependencies=list(write_dependencies),
     )
-    def update_model_settings(payload: ModelSettingsPayload) -> ApiResponse[ModelSettingsData]:
+    def update_model_settings(
+        request: ModelSettingsUpdateRequest,
+    ) -> ApiResponse[ModelSettingsData]:
         settings = get_settings()
-        save_model_settings(settings, store, payload)
+        payload = ModelSettingsPayload.model_validate(request.model_dump(exclude={"base_revision"}))
+        save_model_settings(settings, store, payload, base_revision=request.base_revision)
         return ApiResponse(data=model_settings_data(settings))
 
     @router.post(

@@ -87,6 +87,8 @@ export const MODEL_MESSAGES = {
   "settings.model.enterprise.endpointHelpTertiary":
     "OpenAI は https://api.openai.com/v1、OpenAI 互換 API や OCI Enterprise AI はその base URL を指定します。Responses API（/responses）で呼び出します。",
   "settings.model.enterprise.modelId": "モデル ID",
+  "settings.model.enterprise.modelIdDuplicate":
+    "モデル ID「{model}」はすでに登録されています。同じモデルは 1 行にまとめてください。",
   "settings.model.enterprise.models": "登録モデル",
   "settings.model.enterprise.modelsDescription":
     "回答生成と画像の読み取りに使うモデルを登録し、画像入力に対応するかを指定します。画像入力に対応したモデルを、画面では「画像対応モデル」（Vision 対応のモデル）と呼びます。",
@@ -133,6 +135,14 @@ export const MODEL_MESSAGES = {
   "settings.model.placeholder.rerankModel": "cohere.rerank-v4.0-fast",
   "settings.model.requiredInOci": "OCI 運用時必須",
   "settings.model.save": "保存",
+  "settings.model.conflict.message":
+    "モデル設定は、この画面を開いた後にほかの画面（別の製品を含む）で更新されました。最新の設定を読み込んでから、保存し直してください。",
+  "settings.model.conflict.reload": "最新の設定を読み込む",
+  "settings.model.conflict.confirm.title": "最新の設定を読み込みますか？",
+  "settings.model.conflict.confirm.description":
+    "保存していない入力は破棄され、保存済みの最新のモデル設定を表示します。",
+  "settings.model.conflict.confirm.action": "読み込む",
+  "settings.model.conflict.reloaded": "最新のモデル設定を読み込みました。",
   "settings.model.saveError":
     "モデル設定を保存できませんでした。入力内容とバックエンド接続を確認して再試行してください。",
   "settings.model.subtitle":

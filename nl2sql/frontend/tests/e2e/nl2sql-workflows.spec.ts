@@ -1652,7 +1652,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
             runtime: "oracle",
             executed: true,
             status: "added",
-            profile_name: state.adminFeedbackPayload.select_ai_profile_name ?? "NL2SQL_DEFAULT_PROFILE",
+            profile_name: state.adminFeedbackPayload.select_ai_profile_name || "NL2SQL_DEFAULT_PROFILE",
             index_name: "NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX",
             table_name: "NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX$VECTAB",
             sql_text: "select ai showsql 請求金額を一覧で見たい",
@@ -4581,6 +4581,8 @@ test("query workbench shows job action errors below the execution buttons", asyn
 test("実行中の job は「実行を中止」でキャンセルでき、警告トーンで表示して UI を解放する", async ({ page }) => {
   await mockNl2SqlApi(page);
   let cancelRequested = false;
+  // backend は実行中の段階が終わってから止まる。テストが受付の表示を確かめてから止める。
+  let stopped = false;
   await page.route("**/api/nl2sql/jobs/job-default-001/cancel", (route) => {
     cancelRequested = true;
     return fulfillJson(route, {
@@ -4594,7 +4596,7 @@ test("実行中の job は「実行を中止」でキャンセルでき、警告
   await page.route("**/api/nl2sql/jobs/job-default-001", (route) =>
     fulfillJson(
       route,
-      cancelRequested
+      stopped
         ? {
             job_id: "job-default-001",
             status: "error",
@@ -4628,6 +4630,14 @@ test("実行中の job は「実行を中止」でキャンセルでき、警告
   await cancelButton.click();
   await expect.poll(() => cancelRequested).toBe(true);
 
+  // 受け付けた中止は、止まるまでボタンの行に受付を出し、もう一度押せなくする（#918）。
+  await expect(page.getByTestId("nl2sql-job-cancel-feedback")).toContainText(
+    "中止を受け付けました。実行中の段階が終わると停止します。"
+  );
+  await expect(cancelButton).toBeDisabled();
+  await expect(page.getByTestId("nl2sql-action-feedback-error")).toHaveCount(0);
+  stopped = true;
+
   // キャンセルは失敗ではなく警告トーンの固定面で表示し、UI ロックを解除する。
   await expect(page.getByTestId("nl2sql-job-cancelled")).toContainText(
     "利用者の要求によりジョブをキャンセルしました。"
@@ -4635,6 +4645,46 @@ test("実行中の job は「実行を中止」でキャンセルでき、警告
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "error");
   await expect(runButton).toBeEnabled();
   await expect(cancelButton).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+});
+
+test("「実行を中止」の要求の失敗は中止のボタンの行に出し、もう一度押せる", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let cancelPosts = 0;
+  await page.route("**/api/nl2sql/jobs/job-default-001/cancel", (route) => {
+    cancelPosts += 1;
+    return route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "ジョブの状態を保存できませんでした。" }),
+    });
+  });
+  await page.unroute("**/api/nl2sql/jobs/job-default-001");
+  await page.route("**/api/nl2sql/jobs/job-default-001", (route) =>
+    fulfillJson(route, {
+      job_id: "job-default-001",
+      status: "running",
+      created_at: "2026-06-21T10:00:00.000Z",
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "running", elapsed_ms: null },
+      ],
+    })
+  );
+
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
+  const cancelButton = page.getByRole("button", { name: "実行を中止" });
+  await cancelButton.click();
+
+  const feedback = page.getByTestId("nl2sql-job-cancel-feedback");
+  await expect(feedback.getByRole("alert")).toContainText("ジョブの状態を保存できませんでした。");
+  // 実行のボタンの下（別の起点）には出さない。
+  await expect(page.getByTestId("nl2sql-action-feedback-error")).toHaveCount(0);
+  await expect(cancelButton).toBeEnabled();
+  await cancelButton.click();
+  await expect.poll(() => cancelPosts).toBe(2);
 });
 
 test("job ポーリングの通信断が続くと追跡を停止しエラー表示と UI ロック解除を行う", async ({ page }) => {
@@ -4660,6 +4710,171 @@ test("job ポーリングの通信断が続くと追跡を停止しエラー表�
   // 追跡解除後は sessionStorage の snapshot も消え、リロードで復元されない。
   expect((await readActiveJobState(page)).jobId).toBeNull();
 });
+
+test("ジョブの投入の応答が届かなくても、作られたジョブを取り直して二重に投入しない", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  const submitted: Array<Record<string, unknown>> = [];
+  await page.route("**/api/nl2sql/jobs", (route) => {
+    // backend はジョブを作り終えたが、応答が画面に届かなかった（proxy の切断・通信断）。
+    submitted.push(route.request().postDataJSON() as Record<string, unknown>);
+    return route.abort("failed");
+  });
+  await page.route(/\/api\/nl2sql\/jobs\/[^/]+$/, (route) => {
+    const jobId = new URL(route.request().url()).pathname.split("/").pop() ?? "";
+    const created = submitted.find((payload) => payload.client_job_id === jobId);
+    if (!created) {
+      return route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "指定されたジョブが見つかりません。" }),
+      });
+    }
+    return fulfillJson(route, {
+      job_id: jobId,
+      status: "done",
+      created_at: "2026-06-21T10:00:00.000Z",
+      finished_at: "2026-06-21T10:00:00.050Z",
+      elapsed_ms: 50,
+      error_message: null,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "done", elapsed_ms: 20 },
+        { stage: "safety_check", status: "done", elapsed_ms: 4 },
+        { stage: "execute_sql", status: "done", elapsed_ms: 12 },
+        { stage: "format_results", status: "done", elapsed_ms: 6 },
+      ],
+      timing: null,
+      result: {
+        history_id: "hist-001",
+        engine: "select_ai",
+        engine_meta: {},
+        fallback_reason: "",
+        original_question: String(created.question),
+        rewritten_question: String(created.question),
+        generated_sql: "SELECT CUSTOMER_NAME FROM INVOICES",
+        executable_sql: "SELECT CUSTOMER_NAME FROM INVOICES",
+        explanation: "",
+        safety,
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: { columns: ["CUSTOMER_NAME"], rows: [{ CUSTOMER_NAME: "架空商事" }], total: 1 },
+        timing,
+      },
+    });
+  });
+
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
+
+  // 送信前に決めた job ID で作られたジョブを取り直し、進行と結果を出す（失敗にしない）。
+  await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "done");
+  await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
+  await expect(page.getByTestId("nl2sql-action-feedback-error")).toHaveCount(0);
+  expect(submitted).toHaveLength(1);
+  expect(String(submitted[0]?.client_job_id ?? "")).toMatch(/^[0-9a-f-]{36}$/);
+});
+
+test("ジョブの投入の通信断でジョブが作られていなければ、日本語の案内を出して再実行できる", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let posts = 0;
+  await page.route("**/api/nl2sql/jobs", (route) => {
+    posts += 1;
+    return route.abort("failed");
+  });
+  await page.route(/\/api\/nl2sql\/jobs\/[^/]+$/, (route) =>
+    route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "指定されたジョブが見つかりません。" }),
+    })
+  );
+
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  const runButton = page.getByRole("button", { name: "SQL を生成して実行" });
+  await runButton.click();
+
+  const actionError = page.getByTestId("nl2sql-action-feedback-error");
+  await expect(actionError).toContainText("サーバーに接続できませんでした。");
+  await expect(actionError).not.toContainText("Failed to fetch");
+  await expect(actionError).not.toContainText("見つかりません");
+  await expect(runButton).toBeEnabled();
+  expect(posts).toBe(1);
+});
+
+for (const failure of [
+  {
+    name: "生成した SQL の実行の失敗",
+    errorCode: "SQL_EXECUTION_FAILED",
+    errorMessage: "生成した SQL の実行に失敗しました: ORA-00904: \"TOTAL\": 無効な識別子です。",
+    safety,
+    executeStatus: "error",
+  },
+  {
+    name: "安全検査での遮断",
+    errorCode: "SQL_BLOCKED",
+    errorMessage: "許可されていない表を参照しています。",
+    safety: { ...safety, is_safe: false, blocked_reason: "許可されていない表を参照しています。" },
+    executeStatus: "skipped",
+  },
+]) {
+  test(`${failure.name}では、実行していない SQL の結果を「0 件」と表示しない`, async ({ page }) => {
+    await mockNl2SqlApi(page);
+    await page.route("**/api/nl2sql/jobs/job-default-001", (route) =>
+      fulfillJson(route, {
+        job_id: "job-default-001",
+        status: "error",
+        created_at: "2026-06-21T10:00:00.000Z",
+        finished_at: "2026-06-21T10:00:00.050Z",
+        elapsed_ms: 50,
+        error_message: failure.errorMessage,
+        error_code: failure.errorCode,
+        steps: [
+          { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+          { stage: "generate_sql", status: "done", elapsed_ms: 20 },
+          { stage: "safety_check", status: failure.executeStatus === "skipped" ? "error" : "done", elapsed_ms: 4 },
+          { stage: "execute_sql", status: failure.executeStatus, elapsed_ms: 12 },
+          { stage: "format_results", status: "done", elapsed_ms: 6 },
+        ],
+        timing: null,
+        result: {
+          history_id: "hist-001",
+          engine: "select_ai",
+          engine_meta: {},
+          fallback_reason: "",
+          original_question: "請求金額を一覧で見たい",
+          rewritten_question: "請求金額を一覧で見たい",
+          generated_sql: "SELECT TOTAL FROM INVOICES",
+          executable_sql: "SELECT TOTAL FROM INVOICES",
+          explanation: "",
+          safety: failure.safety,
+          recommendations: [],
+          repaired_sql: "",
+          optimization_hints: [],
+          results: { columns: [], rows: [], total: 0 },
+          timing,
+        },
+      })
+    );
+
+    await page.goto("/query");
+    await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+    await page.getByRole("button", { name: "SQL を生成して実行" }).click();
+
+    const progress = page.getByTestId("nl2sql-job-progress");
+    await expect(progress).toHaveAttribute("data-job-status", "error");
+    await expect(progress).toContainText(failure.errorMessage);
+    // 生成した SQL は確かめられる（フィードバックにも使える）が、実行していない結果の表は出さない。
+    await expect(page.getByTestId("nl2sql-job-step-generate_sql").getByRole("code")).toContainText(
+      "SELECT TOTAL FROM INVOICES"
+    );
+    await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
+    await expect(page.getByText("検索結果（0件）")).toHaveCount(0);
+    await expect(page.getByText("該当するデータがありません。")).toHaveCount(0);
+  });
+}
 
 test("job が 404 のときは即座に追跡を解除して案内を表示する", async ({ page }) => {
   await mockNl2SqlApi(page);
@@ -9388,7 +9603,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     feedback_content: "SQL は期待通りです",
     register_select_ai_feedback: false,
     select_ai_response: historySql,
-    select_ai_profile_name: "NL2SQL_DEFAULT_PROFILE",
+    select_ai_profile_name: "",
   });
   expect(api.selectAiFeedbackAddPayload).toBeNull();
   await expect(registerSelectAiCheckbox).not.toBeChecked();
@@ -9409,7 +9624,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     feedback_content: "SQL は期待通りです",
     register_select_ai_feedback: false,
     select_ai_response: historySql,
-    select_ai_profile_name: "NL2SQL_DEFAULT_PROFILE",
+    select_ai_profile_name: "",
   });
 
   await registerSelectAiCheckbox.check();
@@ -9423,7 +9638,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     feedback_content: "Select AI 登録用の管理者確認メモ",
     register_select_ai_feedback: true,
     select_ai_response: historySql,
-    select_ai_profile_name: "NL2SQL_DEFAULT_PROFILE",
+    select_ai_profile_name: "",
   });
   await expectSelectFieldValue(page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }), "bad");
   await expect(registerSelectAiCheckbox).toBeChecked();
@@ -15044,6 +15259,10 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect.poll(() => api.extractJoinWherePayload?.prompt_profile).toBe("sql_structure");
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveValue(/EMPLOYEE.*DEPARTMENT/);
   await expect(page.getByLabel("抽出条件 (WHERE)")).toHaveValue("EMPLOYEE(e).STATUS = 'A'");
+  // 抽出の方式は API の内部値（deterministic）を出さず、文言で出す（#934）。
+  const joinWhereResult = page.getByRole("region", { name: "JOIN/WHERE 条件抽出結果" });
+  await expect(joinWhereResult.getByText("規則ベース（AI 未使用）", { exact: true })).toBeVisible();
+  await expect(joinWhereResult.getByText("deterministic", { exact: true })).toHaveCount(0);
   await page.getByText("SQL構造解析結果").click();
   await expect(page.getByText("## SQL構造分析")).toBeVisible();
 
@@ -15205,6 +15424,69 @@ test("table and view management show DROP failures in the confirmation dialog", 
   await expect.poll(() => api.dropViewPayload?.confirmation).toBe("APP.V_EMP_DEPT");
   await expect(dropViewDialog.getByText(/ORA-04043/)).toBeVisible();
   await expect(dropViewDialog).toBeVisible();
+});
+
+test("テーブル・ビューの削除のダイアログは、実行中は閉じられない（データの切り詰めとそろえる）", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  const pending: Array<() => void> = [];
+  const holdUntilReleased = (path: string, sql: string) =>
+    page.route(path, async (route) => {
+      await new Promise<void>((resolve) => pending.push(resolve));
+      await fulfillJson(route, {
+        executed: false,
+        runtime: "oracle",
+        select_result: null,
+        statements: [
+          {
+            index: 1,
+            statement_type: "DROP",
+            status: "error",
+            sql,
+            row_count: null,
+            message: "",
+            elapsed_ms: 0,
+            error_message: "ORA-00054: リソース・ビジー",
+          },
+        ],
+        committed: false,
+        rolled_back: true,
+        warnings: [],
+        timing,
+      });
+    });
+  await holdUntilReleased("**/api/nl2sql/db-admin/drop-table", 'DROP TABLE "APP"."INVOICES" PURGE');
+  await holdUntilReleased("**/api/nl2sql/db-admin/drop-view", 'DROP VIEW "APP"."V_EMP_DEPT"');
+
+  const cases = [
+    { path: "/table-management", grid: "table-management-grid", target: "APP.INVOICES", actions: "table-management-detail-actions", dialogName: "DROP TABLE の確認" },
+    { path: "/view-management", grid: "view-management-grid", target: "APP.V_EMP_DEPT", actions: "view-management-detail-actions", dialogName: "DROP VIEW の確認" },
+  ];
+  for (const item of cases) {
+    await page.goto(item.path);
+    await expect(page.getByTestId(item.grid)).toBeVisible();
+    await page.getByRole("button", { name: `${item.target} を表示` }).click();
+    await clickObjectDetailAction(page, item.actions, "削除");
+    const dialog = page.getByRole("dialog", { name: item.dialogName });
+    await dialog.getByLabel("実行確認語").fill(item.target);
+    await dialog.getByRole("button", { name: "Drop 実行" }).click();
+    await expect.poll(() => pending.length).toBe(1);
+
+    // 実行中は「閉じる」「キャンセル」を押せず、ダイアログは開いたまま（結果を見失わない）。
+    const close = dialog.getByRole("button", { name: "閉じる" });
+    const cancel = dialog.getByRole("button", { name: "キャンセル" });
+    await expect(close).toBeDisabled();
+    await expect(cancel).toBeDisabled();
+    await close.click({ force: true });
+    await cancel.click({ force: true });
+    await expect(dialog).toBeVisible();
+
+    pending.shift()!();
+    await expect(dialog.getByText(/ORA-00054/)).toBeVisible();
+    await expect(close).toBeEnabled();
+    await cancel.click();
+    await expect(dialog).toHaveCount(0);
+  }
 });
 
 test("annotation management explains ORA-11548 before Oracle execution", async ({ page }) => {
@@ -15373,6 +15655,52 @@ test("metadata sample limit zero omits samples and reports retrieval errors", as
   await expect(annotationInputPanel).toBeVisible();
   await annotationInputPanel.getByRole("button", { name: "SQL 生成" }).click();
   await expect(page.getByRole("alert")).toBeVisible();
+});
+
+test("件数の数値の欄は、空にしても入力中の文字を残し、範囲内の整数になったときだけ値を変える", async ({ page }) => {
+  const api = await mockNl2SqlApi(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+
+  // コメント管理のサンプル件数（0〜100）。空にしても即 0 にせず、範囲外は欄を離れると直前の値に戻す。
+  await page.goto("/comment-management");
+  await page.getByRole("option", { name: /INVOICES/ }).check();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+  const sampleLimit = page.getByLabel("サンプル件数");
+  await sampleLimit.fill("");
+  await expect(sampleLimit).toHaveValue("");
+  await sampleLimit.pressSequentially("25");
+  await expect(sampleLimit).toHaveValue("25");
+  await sampleLimit.fill("150");
+  await expect(sampleLimit).toHaveValue("150");
+  await sampleLimit.blur();
+  await expect(sampleLimit).toHaveValue("25");
+  await page.locator("#comment-management-panel-input").getByRole("button", { name: "SQL 生成" }).click();
+  await expect.poll(() => api.metadataSamplesPayload?.sample_limit).toBe(25);
+
+  // 合成データ生成の生成件数（1〜100）とサンプル行数（0〜100）。
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "合成データ生成" }).click();
+  const workspace = page.locator("#data-management-panel-synthetic");
+  await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
+  await workspace.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
+  const rows = workspace.getByLabel("各テーブルの生成件数");
+  await rows.fill("");
+  await expect(rows).toHaveValue("");
+  await rows.pressSequentially("50");
+  await expect(rows).toHaveValue("50");
+  await rows.fill("2.5");
+  await rows.blur();
+  await expect(rows).toHaveValue("50");
+  const sampleRows = workspace.getByLabel("サンプル行数(sample_rows)");
+  await sampleRows.fill("");
+  await expect(sampleRows).toHaveValue("");
+  await sampleRows.pressSequentially("7");
+  await sampleRows.blur();
+  await expect(sampleRows).toHaveValue("7");
+  await workspace.getByLabel("実行確認語").fill("APP.INVOICES");
+  await workspace.getByRole("button", { name: "生成開始" }).click();
+  await expect.poll(() => api.syntheticDataPayload?.row_count).toBe(50);
+  expect(api.syntheticDataPayload?.sample_rows).toBe(7);
 });
 
 test("legacy model-learning URL opens Select AI settings and preserves asset refresh", async ({ page }) => {

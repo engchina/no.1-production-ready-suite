@@ -1,4 +1,6 @@
 import {
+  DEFAULT_API_ERROR_DETAIL_LABELS,
+  apiErrorDetail,
   httpApiErrorPresentation,
   isAbortError,
   toApiTransportError,
@@ -392,6 +394,8 @@ export interface ApiKey {
 
 export interface ApiKeysData {
   keys: ApiKey[];
+  /** キーの業務 Agent の ID → 名前（閲覧者が利用できる業務 Agent だけ。範囲外・削除済みは無い）。 */
+  agent_names: Record<string, string>;
   /** false はキーの保存先（Oracle）が無い（再起動で消える）。 */
   persistent: boolean;
 }
@@ -553,6 +557,8 @@ export interface ToolCallAuditData {
   limit: number;
   filters: Record<string, unknown>;
   records: ToolCallAuditRecord[];
+  /** 見られる範囲の監査に記録されたツール名（絞り込みに依らない。MCP 接続のツールを含む。#983）。 */
+  tool_names?: string[];
 }
 
 export interface ToolCallAuditFilters {
@@ -630,7 +636,10 @@ export type McpAuthMode = "none" | "api_key" | "oauth_client_credentials" | "ser
 export interface McpConnectionSettings {
   server_id: string;
   label?: string | null;
+  /** URL の userinfo・資格情報らしい query の値は `***` に伏せて返る（#1056）。 */
   base_url?: string | null;
+  /** 保存済みの URL に資格情報があり、base_url を伏せて返したか。 */
+  base_url_masked?: boolean;
   auth_mode: McpAuthMode;
   /** サービストークンの aud（呼び先の製品名）。service_token のときだけ。 */
   service_audience?: string | null;
@@ -1104,6 +1113,8 @@ export interface ApiErrorDetails {
   errorCode?: string;
   fieldErrors?: ApiFieldError[];
   requestId?: string;
+  /** backend の内部の文（英語・技術的な原文）。本文には出さず「詳細」の「元のメッセージ」に出す。 */
+  rawMessage?: string;
 }
 
 export class ApiError extends Error implements ApiErrorPresentable {
@@ -1112,6 +1123,7 @@ export class ApiError extends Error implements ApiErrorPresentable {
   readonly errorCode?: string;
   readonly fieldErrors: ApiFieldError[];
   readonly requestId?: string;
+  readonly rawMessage?: string;
 
   constructor(status: number, messages: string[], details: ApiErrorDetails = {}) {
     super(messages[0] ?? `APIエラー (${status})`);
@@ -1121,11 +1133,16 @@ export class ApiError extends Error implements ApiErrorPresentable {
     this.errorCode = details.errorCode;
     this.fieldErrors = details.fieldErrors ?? [];
     this.requestId = details.requestId;
+    this.rawMessage = details.rawMessage;
   }
 
   /** 失敗の面の要約と「詳細」（共通の `ApiErrorBanner` / `presentApiError`。#906）。 */
-  toApiErrorPresentation(labels?: ApiErrorDetailLabels): ApiErrorPresentation {
-    return httpApiErrorPresentation(this, labels);
+  toApiErrorPresentation(labels: ApiErrorDetailLabels = DEFAULT_API_ERROR_DETAIL_LABELS): ApiErrorPresentation {
+    const presentation = httpApiErrorPresentation(this, labels);
+    return {
+      ...presentation,
+      details: [...presentation.details, ...apiErrorDetail(labels.rawMessage, this.rawMessage)],
+    };
   }
 }
 
@@ -1141,6 +1158,8 @@ interface ErrorBody {
   detail?: unknown;
   error_messages?: unknown;
   error_code?: unknown;
+  /** Control Plane の error code の付いたエラーの補足（`reason` は内部の原文）。 */
+  error_details?: { reason?: unknown } | null;
   problem?: { field_errors?: unknown; request_id?: unknown } | null;
 }
 
@@ -1184,6 +1203,7 @@ async function apiErrorFrom(response: Response): Promise<ApiError> {
     errorCode: typeof body.error_code === "string" ? body.error_code : undefined,
     fieldErrors: fieldErrorsOf(body.problem?.field_errors),
     requestId: response.headers.get("X-Request-ID") || problemRequestId,
+    rawMessage: typeof body.error_details?.reason === "string" ? body.error_details.reason : undefined,
   });
 }
 
@@ -1559,6 +1579,14 @@ export const agentApi = {
     ),
 };
 
+/**
+ * 共通のシステム設定の取得の options。共有の画面は TanStack Query の `signal` を渡し、
+ * 画面を離れたら取得を止める（#1117）。
+ */
+export interface SettingsRequestOptions {
+  signal?: AbortSignal;
+}
+
 export const api = {
   // DB の状態（画面の DB ゲートが使う。3製品共通の判定と契約。ログイン不要。#325）。
   getDatabaseStatus: (options?: { signal?: AbortSignal }) =>
@@ -1570,7 +1598,8 @@ export const api = {
   initializeSystemTables: (body: SystemTablesInitializeRequest) =>
     request<SystemTablesOperationData>("/api/settings/database/system-tables/initialize", jsonBody(body)),
 
-  getModelSettings: () => request<ModelSettingsData>("/api/settings/model"),
+  getModelSettings: (options: SettingsRequestOptions = {}) =>
+    request<ModelSettingsData>("/api/settings/model", { signal: options.signal }),
   updateModelSettings: (body: ModelSettingsPayload) =>
     request<ModelSettingsData>("/api/settings/model", {
       method: "PATCH",
@@ -1583,8 +1612,8 @@ export const api = {
       jsonBody(body),
     ),
 
-  getDatabaseSettings: () =>
-    request<DatabaseSettingsData>("/api/settings/database"),
+  getDatabaseSettings: (options: SettingsRequestOptions = {}) =>
+    request<DatabaseSettingsData>("/api/settings/database", { signal: options.signal }),
   updateDatabaseSettings: (body: DatabaseSettingsUpdate) =>
     request<DatabaseSettingsData>("/api/settings/database", {
       method: "PATCH",
@@ -1612,7 +1641,8 @@ export const api = {
       jsonBody(body),
     ),
 
-  getAdbInfo: () => request<AdbInfoData>("/api/settings/database/adb"),
+  getAdbInfo: (options: SettingsRequestOptions = {}) =>
+    request<AdbInfoData>("/api/settings/database/adb", { signal: options.signal }),
   updateAdbSettings: (body: AdbSettingsUpdate) =>
     request<AdbInfoData>("/api/settings/database/adb/settings", jsonBody(body)),
   startAdb: () =>
@@ -1622,8 +1652,10 @@ export const api = {
   stopAdb: () =>
     request<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
 
-  getUploadStorageSettings: () =>
-    request<UploadStorageSettingsData>("/api/settings/upload-storage"),
+  getUploadStorageSettings: (options: SettingsRequestOptions = {}) =>
+    request<UploadStorageSettingsData>("/api/settings/upload-storage", {
+      signal: options.signal,
+    }),
   updateUploadStorageSettings: (body: UploadStorageSettingsUpdate) =>
     request<UploadStorageSettingsData>("/api/settings/upload-storage", {
       method: "PATCH",
@@ -1631,7 +1663,8 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  getOciSettings: () => request<OciSettingsData>("/api/settings/oci"),
+  getOciSettings: (options: SettingsRequestOptions = {}) =>
+    request<OciSettingsData>("/api/settings/oci", { signal: options.signal }),
   updateOciSettings: (body: OciSettingsUpdate) =>
     request<OciSettingsData>("/api/settings/oci", {
       method: "PATCH",

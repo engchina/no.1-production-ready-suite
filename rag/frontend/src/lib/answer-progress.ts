@@ -2,7 +2,8 @@
  * 回答生成（RAG 検索・チャット）の進捗の工程の名前と、今の工程の判定（#375）。
  *
  * backend は SSE の `stage` で、会話を踏まえた質問の書き換え（`history_rewrite`）・根拠の検索と
- * 回答の生成（`answer`。中の各工程は `answer_step:` で入れ子に送る）・検索だけのとき（`retrieval`）を送る。
+ * 回答の生成（`answer`。中の各工程は `answer_step:` で入れ子に送る）・回答側の安全チェック（`answer_guardrail`）・
+ * 検索だけのとき（`retrieval`）を送る。
  * 工程の名前は backend の時間切れの文言（`app/rag/answer_timeout.py` の `ANSWER_STAGE_LABELS`）と揃える。
  */
 
@@ -18,6 +19,8 @@ export const ANSWER_STAGE_LABEL: Record<string, I18nKey> = {
   history_rewrite: "search.stage.historyRewrite",
   field_filter: "search.stage.fieldFilter",
   answer: "search.stage.answer",
+  // 回答側の安全チェック（#1146）
+  answer_guardrail: "search.stage.answerGuardrail",
 };
 
 /**

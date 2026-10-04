@@ -3572,3 +3572,113 @@ test("公開確認は標準の折りたたみ・フォーム・状態表示を�
   await summary.press("Enter");
   await expect(input).toBeHidden();
 });
+
+test("取得済みの業務プロファイルの再取得が失敗しても、構築の作業領域と選んだ資料を残す", async ({ page }, testInfo) => {
+  await mockApi(page);
+  await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>
+    fulfillJson(route, { jobs: [buildJob("running", "running").job] })
+  );
+  await page.route("**/api/nl2sql/ontology-build/*", (route) =>
+    fulfillJson(route, buildJob("running", "running"))
+  );
+  let failProfileDetail = false;
+  await page.route(/\/api\/nl2sql\/profiles\/[^/?]+$/, async (route) => {
+    if (failProfileDetail) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ data: null, error_messages: ["一時的な接続エラー"] }),
+      });
+      return;
+    }
+    await fulfillJson(route, profiles[0]);
+  });
+
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+  await expect(page.getByTestId("ontology-build-steps")).toHaveAttribute("data-job-status", "running");
+  await dropFiles(page, page.getByTestId("ontology-build-source-files-dropzone"), [
+    { name: "rules.md", type: "text/markdown", content: "# 受注ルール", lastModified: 1_700_000_000_000 },
+  ]);
+  const selectedFiles = page.getByRole("list", { name: "選択した構築資料" });
+  await expect(selectedFiles).toContainText("rules.md");
+
+  // 「オントロジーを取得」での取り直しが一時的に失敗する。
+  failProfileDetail = true;
+  await page.getByTestId("ontology-view-fetch").click();
+  await expect(page.getByText("一時的な接続エラー", { exact: false }).first()).toBeVisible();
+
+  // 構築の作業領域（実行中の job の進行・選んだ資料）は消さない。
+  await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
+  await expect(page.getByTestId("ontology-build-steps")).toHaveAttribute("data-job-status", "running");
+  await expect(selectedFiles).toContainText("rules.md");
+  // 案内は取得の操作（対象プロファイルの欄）の中に出す（messaging.md §10）。
+  const profilePanel = page.getByRole("region", { name: "対象プロファイル" });
+  await expect(profilePanel.getByText("一時的な接続エラー", { exact: false })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("ontology-profile-refresh-failed.png") });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+  // 失敗の案内の「再試行」で取り直せる。
+  failProfileDetail = false;
+  await profilePanel.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(page.getByText("一時的な接続エラー", { exact: false })).toHaveCount(0);
+  await expect(selectedFiles).toContainText("rules.md");
+});
+
+test("業務プロファイルの追加読み込みが失敗しても、選択欄を残して追加読み込みだけを再試行できる", async ({ page }) => {
+  await mockApi(page);
+  const secondPageProfile = { ...profiles[0], id: "sales", name: "SALES_PROFILE", category: "販売" };
+  let failNextPage = true;
+  await page.unroute("**/api/nl2sql/profiles/search?*");
+  await page.route("**/api/nl2sql/profiles/search?*", async (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    const summary = (profile: typeof profiles[number]) => ({
+      id: profile.id,
+      name: profile.name,
+      category: profile.category,
+      description: profile.description,
+      archived: false,
+      allowed_table_count: profile.allowed_tables.length,
+      allowed_view_count: profile.allowed_views.length,
+      glossary_count: 0,
+      few_shot_count: 0,
+      version: 1,
+      etag: `etag-${profile.id}`,
+      updated_at: "2026-07-12T00:00:00Z",
+    });
+    if (!cursor) {
+      await fulfillJson(route, {
+        items: [summary(profiles[0])],
+        next_cursor: "page-2",
+        total: 2,
+        change_token: 1,
+      });
+      return;
+    }
+    if (failNextPage) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ data: null, error_messages: ["一時的な接続エラー"] }),
+      });
+      return;
+    }
+    await fulfillJson(route, { items: [summary(secondPageProfile)], next_cursor: null, total: 2, change_token: 1 });
+  });
+
+  await page.goto("/ontology-build?profile=default");
+  const profilePanel = page.getByRole("region", { name: "対象プロファイル" });
+  await expect(page.getByTestId("ontology-build-profile-select")).toBeVisible();
+  await profilePanel.getByRole("button", { name: "さらに読み込む", exact: true }).click();
+
+  // 追加読み込みの失敗は、読み込み済みの選択欄を残し、追加読み込みの位置に出す。
+  await expect(profilePanel.getByText("一時的な接続エラー", { exact: false })).toBeVisible();
+  await expect(page.getByTestId("ontology-build-profile-select")).toBeVisible();
+  await expect(page.getByTestId("ontology-view-fetch")).toBeVisible();
+
+  failNextPage = false;
+  await profilePanel.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(profilePanel.getByText("一時的な接続エラー", { exact: false })).toHaveCount(0);
+  await chooseSelectFieldOption(page.getByTestId("ontology-build-profile-select"), "sales");
+  await expect(page).toHaveURL(/profile=sales/);
+});
