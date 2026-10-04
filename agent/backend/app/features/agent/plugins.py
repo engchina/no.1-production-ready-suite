@@ -165,7 +165,7 @@ class PluginResourceRegistry:
             for resource in resources:
                 existing = self._resources.get(resource.id)
                 if existing is not None and existing.source != source:
-                    raise ValueError(f"resource id already exists: {resource.id}")
+                    raise ValueError(f"同じ ID の参照文書が既にあります: {resource.id}")
                 self._resources[resource.id] = resource.model_copy(
                     deep=True, update={"source": source}
                 )
@@ -191,7 +191,7 @@ def _normalize_manifest(manifest: PluginManifest) -> tuple[PluginManifest, list[
     for agent in manifest.agents:
         resource_id = f"{manifest.id}.agent-template.{agent.id}"
         if resource_id in existing_ids:
-            raise ValueError(f"resource id already exists: {resource_id}")
+            raise ValueError(f"同じ ID の参照文書が既にあります: {resource_id}")
         existing_ids.add(resource_id)
         resources.append(
             PluginResource(
@@ -307,7 +307,7 @@ class PluginRegistry:
 
     def _validate_install(self, manifest: PluginManifest) -> None:
         if manifest.id in self._plugins:
-            raise ValueError("plugin already exists")
+            raise ValueError("このプラグインは導入済みです。")
         skill_ids = [item.id for item in manifest.skills]
         mcp_ids = [item.server_id for item in manifest.mcp_servers]
         resource_ids = [item.id for item in manifest.resources]
@@ -322,33 +322,33 @@ class PluginRegistry:
         manifest_resource_ids = set(resource_ids)
         for resource_id in resource_ids:
             if plugin_resource_registry.get(resource_id) is not None:
-                raise ValueError(f"resource id already exists: {resource_id}")
+                raise ValueError(f"同じ ID の参照文書が既にあります: {resource_id}")
         for skill in manifest.skills:
             existing = skill_registry.get(skill.id)
             if existing is not None:
-                raise ValueError(f"skill id already exists: {skill.id}")
+                raise ValueError(f"同じ ID のスキルが既にあります: {skill.id}")
             for resource_id in skill.resource_ids:
                 if resource_id not in manifest_resource_ids and (
                     plugin_resource_registry.get(resource_id) is None
                 ):
-                    raise ValueError(f"unknown resource: {resource_id}")
+                    raise ValueError(f"プラグインに無い参照文書を指しています: {resource_id}")
         existing_mcp = {item.server_id for item in runtime_config_store.list_mcp_servers()}
         for server in manifest.mcp_servers:
             if server.server_id in existing_mcp:
-                raise ValueError(f"MCP server id already exists: {server.server_id}")
+                raise ValueError(f"同じ ID の MCP 接続が既にあります: {server.server_id}")
 
     @staticmethod
     def _validate_reenable(manifest: PluginManifest) -> None:
         for skill in manifest.skills:
             if skill_registry.get(skill.id) is not None:
-                raise ValueError(f"skill id already exists: {skill.id}")
+                raise ValueError(f"同じ ID のスキルが既にあります: {skill.id}")
         existing_mcp = {item.server_id for item in runtime_config_store.list_mcp_servers()}
         for server in manifest.mcp_servers:
             if server.server_id in existing_mcp:
-                raise ValueError(f"MCP server id already exists: {server.server_id}")
+                raise ValueError(f"同じ ID の MCP 接続が既にあります: {server.server_id}")
         for resource in manifest.resources:
             if plugin_resource_registry.get(resource.id) is not None:
-                raise ValueError(f"resource id already exists: {resource.id}")
+                raise ValueError(f"同じ ID の参照文書が既にあります: {resource.id}")
 
     @staticmethod
     def _ensure_not_referenced(record: PluginRecord) -> None:
@@ -390,7 +390,7 @@ class MarketplaceRegistry:
     ) -> MarketplaceSource:
         sid = source.id.strip()
         if not sid:
-            raise ValueError("marketplace id is required")
+            raise ValueError("マーケットプレイスの ID を入力してください。")
         with self._lock:
             stored = source.model_copy(deep=True, update={"id": sid})
             if listing is not None:

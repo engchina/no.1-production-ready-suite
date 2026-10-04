@@ -1132,6 +1132,10 @@ const agentJa = {
   "marketplaces.importDetails": "配布物の詳細",
   "marketplaces.deleted": "マーケットプレイスを削除しました",
   "marketplaces.idRequired": "ID を入力してください。",
+  // 追加後は変えられず、URL にも使う（#928。backend の MARKETPLACE_ID_PATTERN と同じ）。
+  "marketplaces.idInvalid": "ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。",
+  "marketplaces.idHint": "英数字・_・-・. で入力します（追加後は変更できません）。",
+  "marketplaces.installedBadge": "導入済み",
   "marketplaces.confirmDeleteTitle": "マーケットプレイスを削除しますか?",
   "marketplaces.confirmDeleteMessage": "{id} を削除します。インストール済みのプラグインは残ります。",
   "marketplaces.install": "インストール",

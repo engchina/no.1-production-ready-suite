@@ -1309,6 +1309,18 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (second === "marketplaces") {
       if (method === "GET" && at("plugins", "marketplaces")) return { marketplaces: state.marketplaces };
       if (method === "POST" && at("plugins", "marketplaces")) {
+        // backend の add_plugin_marketplace と同じ検証（#928。同じ ID は上書きせず 409）。
+        const id = String(body.id ?? "").trim();
+        if (!id) throw new HttpError(400, "マーケットプレイスの ID を入力してください。");
+        if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(id)) {
+          throw new HttpError(
+            422,
+            "マーケットプレイスの ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。"
+          );
+        }
+        if (state.marketplaces.some((source) => source.id === id)) {
+          throw new HttpError(409, "同じ ID のマーケットプレイスがあります。");
+        }
         const source = {
           id: body.id,
           name: body.name ?? body.id,
@@ -1345,7 +1357,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       }
       if (!manifest?.id) throw new HttpError(400, "plugin manifest is required");
       if (state.plugins.some((plugin) => plugin.id === manifest.id)) {
-        throw new HttpError(409, `plugin already installed: ${String(manifest.id)}`);
+        throw new HttpError(409, "このプラグインは導入済みです。");
       }
       const record = pluginRecord(manifest, marketplaceId);
       state.plugins.push(record);
