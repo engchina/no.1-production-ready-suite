@@ -176,6 +176,10 @@ const nl2sqlJa = {
   "workspace.refresh": "最新情報を取得",
   "workspace.clearInput": "入力をクリア",
   "workspace.discardTitle": "未保存の入力を破棄しますか？",
+  // 共通のシステム設定の画面（モデル・データベース・アップロード保存先）の離脱の確認（#1118）
+  "settings.leaveGuard.title": "変更を破棄しますか",
+  "settings.leaveGuard.description": "保存されていない変更があります。移動すると編集内容は破棄されます。",
+  "settings.leaveGuard.confirm": "破棄して移動",
   "executionActivity.title": "今回の実行",
   "executionActivity.status.running": "実行中",
   "executionActivity.status.success": "完了",
