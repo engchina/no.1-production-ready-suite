@@ -396,8 +396,9 @@ export const ja = {
     "オフにすると、抽出の後で確認待ちになります。抽出結果を確認してから Chunk 作成へ進めます。",
   "settings.pipeline.flow.gate.auto_index_after_chunk_enabled":
     "オフにすると、Chunk 作成の後で止まります。Embedding / 索引は文書ごとに手動で始めます。",
+  "settings.pipeline.flow.actionsLabel": "工程の自動進行の操作",
   "settings.pipeline.flow.save": "保存",
-  "settings.pipeline.flow.reset": "元に戻す",
+  "settings.pipeline.flow.reset": "変更を破棄",
   "settings.pipeline.flow.saved": "工程の自動進行を保存しました。",
   "settings.pipeline.flow.saveError": "工程の自動進行を保存できませんでした。",
   "settings.pipeline.flow.unsaved": "未保存の変更があります。",
