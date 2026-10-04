@@ -1,12 +1,12 @@
 import { useEffect, type ReactNode } from "react";
 import {
-  ErrorState,
   offsetPagination,
   PagedDataTable as SharedPagedDataTable,
   Pagination,
   TimedLoadingState,
   type PagedDataTableProps as SharedPagedDataTableProps,
   type PaginationLabels,
+  ApiErrorState,
 } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
@@ -121,8 +121,9 @@ export function QueryState<T>({
     // 取得の失敗は領域だけを占め、再試行を出す（messaging.md §3.6）。
     const refetch = query.refetch;
     return (
-      <ErrorState
-        message={query.error.message}
+      <ApiErrorState
+        error={query.error}
+        fallback={t("common.error.load")}
         retryLabel={t("common.retry")}
         onRetry={refetch ? () => void refetch() : undefined}
       />

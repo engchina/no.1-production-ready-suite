@@ -12986,6 +12986,9 @@ test("sample data and data management run imported workflows", async ({ page }) 
   expect(currentPreviewDataPayload()?.owner).toBe("APP");
   expect(currentPreviewDataPayload()?.limit).toBe(100);
   expect(currentPreviewDataPayload()?.where_clause).toBe("");
+  // runtime は API の内部値（deterministic）を出さず、文言で出す（#936）。
+  await expect(dataPreviewPanel.getByText("決定論", { exact: true })).toBeVisible();
+  await expect(dataPreviewPanel.getByText("deterministic", { exact: true })).toHaveCount(0);
   const tableDownloadPromise = page.waitForEvent("download");
   await previewExportButton.click();
   const tableDownload = await tableDownloadPromise;
@@ -16484,7 +16487,103 @@ test("データ取込中は対象・ファイル・モードを固定し失敗�
   });
   await execute.press("Enter");
   await expect.poll(() => retryPayload).toMatchObject({ table_name: "INVOICES", owner: "APP", mode: "insert", confirmation: "APP.INVOICES", filename: "orders.csv" });
-  await expect(panel.getByText("executed", { exact: true })).toBeVisible();
+  // 実行の状態・runtime・モードは API の内部値を出さず、文言で出す（#936）。
+  const uploadResult = panel.getByRole("region", { name: "表形式アップロード結果" });
+  await expect(uploadResult.getByText("実行済み", { exact: true })).toBeVisible();
+  await expect(uploadResult.getByText("Oracle", { exact: true })).toBeVisible();
+  await expect(uploadResult.getByText("INSERT(追記)", { exact: true })).toBeVisible();
+  await expect(uploadResult.getByText(/^(executed|oracle|insert)$/)).toHaveCount(0);
+});
+
+test("データの管理は CSV アップロードの失敗を danger の表示で原因とともに出す", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.unroute("**/api/nl2sql/db-admin/upload-csv");
+  // upload-csv は Oracle のエラーを例外にせず、executed: false と warnings で返す。
+  await page.route("**/api/nl2sql/db-admin/upload-csv", (route) =>
+    fulfillJson(route, {
+      table_name: "APP.INVOICES",
+      filename: "orders.csv",
+      mode: "truncate_insert",
+      matched_columns: ["ID"],
+      unmatched_csv_columns: [],
+      row_count: 1,
+      success_count: 0,
+      error_count: 0,
+      row_errors: [],
+      hint: "",
+      executed: false,
+      runtime: "oracle",
+      sample_rows: [{ ID: "1" }],
+      warnings: ["ORA-00942: table or view does not exist Help: https://docs.oracle.com/error-help/db/ora-00942/"],
+      timing,
+    })
+  );
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)" }).click();
+  const panel = page.locator("#data-management-panel-csv");
+  await expect(panel.getByTestId("data-csv-table-list").getByText("APP.INVOICES", { exact: true })).toBeVisible();
+  await panel.getByTestId("data-csv-file-field-input").setInputFiles({
+    name: "orders.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from("ID\n1\n"),
+  });
+  await panel.getByLabel("実行確認語").fill("APP.INVOICES");
+  await panel.getByRole("button", { name: "アップロード実行", exact: true }).click();
+
+  const uploadResult = panel.getByRole("region", { name: "表形式アップロード結果" });
+  await expect(uploadResult.getByText("未実行", { exact: true })).toBeVisible();
+  await expect(uploadResult.getByText("DELETE & INSERT(全置換)", { exact: true })).toBeVisible();
+  await expect(uploadResult.getByText(/^(not executed|oracle|truncate_insert)$/)).toHaveCount(0);
+  // 失敗は warning ではなく danger の Banner で、1 文目に何が起きたか・原因・次の操作を出す（messaging.md §10）。
+  const failure = uploadResult.getByRole("alert").filter({ hasText: "表形式データをアップロードできませんでした。" });
+  await expect(failure).toBeVisible();
+  await expect(failure).toContainText("ORA-00942: table or view does not exist");
+  await expect(failure).toContainText("参照先のテーブルまたはビューが存在しない");
+  await expect(failure.getByRole("link", { name: "Oracle エラーヘルプを開く" })).toBeHidden();
+  await expectNoHorizontalScroll(page);
+  await uploadResult.screenshot({ path: test.info().outputPath("csv-upload-failure.png") });
+});
+
+test("データの管理は切り詰めの Oracle のエラーの原因をダイアログに出す", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.unroute("**/api/nl2sql/db-admin/truncate-table");
+  // 切り詰めは部分成功の経路で実行し、Oracle のエラーは文の error_message にだけ入る（warnings は空）。
+  await page.route("**/api/nl2sql/db-admin/truncate-table", (route) =>
+    fulfillJson(route, {
+      executed: false,
+      runtime: "oracle",
+      execution_context: "admin_control_plane",
+      select_result: null,
+      statements: [
+        {
+          index: 1,
+          statement_type: "TRUNCATE",
+          status: "error",
+          sql: 'TRUNCATE TABLE "APP"."INVOICES"',
+          row_count: null,
+          message: "",
+          elapsed_ms: 0,
+          error_message: "ORA-02266: 表には有効な外部キーによって参照される一意キー/主キーが含まれています",
+        },
+      ],
+      committed: false,
+      rolled_back: true,
+      warnings: [],
+      timing,
+    })
+  );
+  await page.goto("/data-management");
+  const preview = page.locator("#data-management-panel-preview");
+  await preview.getByRole("button", { name: "APP.INVOICES を選択" }).click();
+  await expect(preview.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveAttribute("aria-current", "true");
+  await clickObjectDetailAction(page, "data-preview-results-actions", "APP.INVOICES のデータを空にする");
+  const dialog = page.getByRole("dialog", { name: "TRUNCATE TABLE の確認" });
+  await dialog.getByLabel("実行確認語").fill("APP.INVOICES");
+  await dialog.getByRole("button", { name: "データを空にする" }).click();
+  await expect(dialog.getByRole("alert")).toContainText(
+    "データを空にできませんでした。ORA-02266: 表には有効な外部キーによって参照される一意キー/主キーが含まれています"
+  );
+  await expect(dialog.getByLabel("実行確認語")).toHaveValue("APP.INVOICES");
 });
 
 for (const mode of ["comment", "annotation"] as const) {

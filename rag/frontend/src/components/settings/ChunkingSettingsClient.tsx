@@ -24,7 +24,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import {
   ApiError,
   type ChunkingSettingsData,
@@ -120,10 +120,9 @@ export function ChunkingSettingsClient() {
   if (query.isError) {
     return (
       <PageBody wide>
-        <ErrorState
-          message={
-            query.error instanceof ApiError ? query.error.message : t("settings.chunking.loadError")
-          }
+        <ApiErrorState
+          error={query.error}
+          fallback={t("settings.chunking.loadError")}
           onRetry={() => void query.refetch()}
         />
       </PageBody>

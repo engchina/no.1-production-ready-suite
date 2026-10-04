@@ -5,7 +5,7 @@ import { useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { ListPagination } from "@/components/ListPagination";
-import { EmptyState, ErrorState } from "@/components/StateViews";
+import { EmptyState, ApiErrorState } from "@/components/StateViews";
 import { StatusBadge } from "@/components/StatusBadge";
 import { EditorTargetState } from "@/components/layout/EntityLayout";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -402,12 +402,9 @@ function KnowledgeBaseDocuments({
         <DocumentAssignment id="knowledge-base-add-documents" knowledgeBase={knowledgeBase} onClose={closeAssignment} />
       ) : null}
       {documents.isError ? (
-        <ErrorState
-          message={
-            documents.error instanceof ApiError
-              ? documents.error.message
-              : t("knowledgeBases.error.documents")
-          }
+        <ApiErrorState
+          error={documents.error}
+          fallback={t("knowledgeBases.error.documents")}
           onRetry={() => void documents.refetch()}
         />
       ) : documents.isPending || movingToLastPage ? (
@@ -423,7 +420,8 @@ function KnowledgeBaseDocuments({
               <KnowledgeBaseDocumentRow
                 key={document.id}
                 document={document}
-                onRemove={() => void handleRemove(document)}
+                // アーカイブ済みは文書の追加・解除ができない（案内のとおり、「外す」も出さない）。
+                onRemove={canAssign ? () => void handleRemove(document) : undefined}
                 removing={remove.isPending && remove.variables?.documentId === document.id}
               />
             ))}
@@ -462,7 +460,8 @@ function KnowledgeBaseDocumentRow({
   removing,
 }: {
   document: DocumentSummary;
-  onRemove: () => void;
+  /** 所属から外す。外せない（アーカイブ済みの KB）ときは undefined で、行の操作を出さない。 */
+  onRemove?: () => void;
   removing: boolean;
 }) {
   // 文書の詳細を開けない利用者（KB の権限だけ）には、名前をリンクにしない（#303）。
@@ -483,20 +482,22 @@ function KnowledgeBaseDocumentRow({
           {document.file_name}
         </span>
       )}
-      <RowActionMenu
-        actions={[
-          {
-            id: "remove",
-            label: t("knowledgeBases.actions.remove"),
-            icon: Unlink,
-            loading: removing,
-            onSelect: onRemove,
-          },
-        ]}
-        ariaLabel={t("common.objectActions.aria", { name: document.file_name })}
-        loading={removing}
-        testId={`knowledge-base-document-actions-${document.id}`}
-      />
+      {onRemove ? (
+        <RowActionMenu
+          actions={[
+            {
+              id: "remove",
+              label: t("knowledgeBases.actions.remove"),
+              icon: Unlink,
+              loading: removing,
+              onSelect: onRemove,
+            },
+          ]}
+          ariaLabel={t("common.objectActions.aria", { name: document.file_name })}
+          loading={removing}
+          testId={`knowledge-base-document-actions-${document.id}`}
+        />
+      ) : null}
     </li>
   );
 }

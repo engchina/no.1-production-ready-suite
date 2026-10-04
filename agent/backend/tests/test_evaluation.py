@@ -481,6 +481,41 @@ def test_invalid_sets_are_rejected(agent: None, cases: list[dict[str, Any]]) -> 
     assert response.status_code == 422
 
 
+def test_cases_without_id_get_an_unused_id_after_a_case_is_removed(agent: None) -> None:
+    """ケースを削除して足しても、id を省いたケースに使われていない id を付けて保存する（#965）。"""
+    del agent
+    body = {
+        **SET_BODY,
+        "cases": [{"question": f"質問 {index}", "expected": "要点"} for index in range(1, 4)],
+    }
+    created = client.post("/api/evaluation-sets", json=body).json()["data"]
+    assert [case["id"] for case in created["cases"]] == ["case-1", "case-2", "case-3"]
+
+    # 1 件目を削除し、id を省いたケースを末尾に足す（位置の番号は 3 で、残った case-3 と重なる）。
+    cases = [*created["cases"][1:], {"question": "質問 4", "expected": "要点"}]
+    updated = client.put(f"/api/evaluation-sets/{created['id']}", json={**body, "cases": cases})
+    assert updated.status_code == 200, updated.text
+    assert [case["id"] for case in updated.json()["data"]["cases"]] == [
+        "case-2",
+        "case-3",
+        "case-4",
+    ]
+
+    # 後ろのケースが明示した id（case-1）も、前の省いたケースには付けない。
+    numbered = client.post(
+        "/api/evaluation-sets",
+        json={
+            **body,
+            "cases": [
+                {"question": "質問 a", "expected": "要点"},
+                {"id": "case-1", "question": "質問 b", "expected": "要点"},
+            ],
+        },
+    )
+    assert numbered.status_code == 200, numbered.text
+    assert [case["id"] for case in numbered.json()["data"]["cases"]] == ["case-2", "case-1"]
+
+
 @pytest.fixture
 def auth(monkeypatch: MonkeyPatch) -> Iterator[ProductionAuth]:
     yield enable_production_auth(monkeypatch)
