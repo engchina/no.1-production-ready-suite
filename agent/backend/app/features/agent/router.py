@@ -1687,10 +1687,12 @@ class BuiltinRuntimeStatus(BaseModel):
 
 
 @router.get("/runtime/status", response_model=ApiResponse[BuiltinRuntimeStatus])
-async def get_builtin_runtime_status(
-    _: None = Depends(require_viewer),
-) -> ApiResponse[BuiltinRuntimeStatus]:
-    """組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI）の SDK の版と使うモデル。"""
+async def get_builtin_runtime_status() -> ApiResponse[BuiltinRuntimeStatus]:
+    """組み込み Runtime（OpenAI Agents SDK + OCI Enterprise AI）の SDK の版と使うモデル。
+
+    権限は manifest（実行環境・業務 Agent のメニュー）だけで判定する。Run のデータ・秘密を
+    含まないため、Run の capability は求めない（「実行環境」をメニュー権限で開ける。#1041）。
+    """
     return ApiResponse(data=BuiltinRuntimeStatus.model_validate(builtin_runtime.runtime_status()))
 
 

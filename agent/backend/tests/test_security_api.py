@@ -253,7 +253,7 @@ def test_manifest_key_assignments() -> None:
     # 外部 Runtime の Binding の MCP は #754 で削除した（公開 path に残さない）。
     assert "/mcp/{binding_id}" not in PUBLIC_API_PATHS
     assert permission_for_route("GET", "/runtime/status") == frozenset(
-        {"menu.runtimes", "menu.agents"}
+        {"menu.runtimes", "menu.agents", "agent.runs.operate"}
     )
 
 
@@ -452,6 +452,18 @@ def test_menu_without_capability_can_open_page_but_not_read_runs(auth: Productio
     response = client.get("/api/runs", headers=headers)
     assert response.status_code == 403
     assert response.json()["error_messages"][0].startswith("この操作を行う権限がありません。")
+
+
+def test_runtime_status_is_readable_with_the_runtimes_menu(auth: ProductionAuth) -> None:
+    """実行環境の状態は Run のデータではないので、メニュー権限だけで読める（#1041）。"""
+    auth.user_with_permissions("runtime-ops", ["menu.runtimes"])
+    auth.user_with_permissions("tables-only", ["menu.settings_system_tables"])
+    ops = login("runtime-ops")
+    assert client.get("/api/runtime/status", headers=ops).status_code == 200
+    assert client.get("/api/runtime/storage", headers=ops).status_code == 200
+    # Run の実データは従来どおり capability が要る。
+    assert client.get("/api/runs", headers=ops).status_code == 403
+    assert client.get("/api/runtime/status", headers=login("tables-only")).status_code == 403
 
 
 def test_user_without_roles_is_denied_everything_except_auth(auth: ProductionAuth) -> None:
