@@ -111,6 +111,10 @@ class JobStepData(BaseModel):
     stage: str
     status: JobStepStatus = JobStepStatus.PENDING
     elapsed_ms: int | None = None
+    # 段階の開始・終了の時刻（ISO 8601。チャットの段階の表示が使う。#1145。
+    # 古い snapshot には無い）。
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 class TimingEnvelope(BaseModel):
@@ -1232,6 +1236,8 @@ class JobData(BaseModel):
     conversation_id: str = ""
     previous_job_id: str | None = None
     generation_only: bool = False
+    # 生成方法（チャットの段階の補足に出す。#1145）。
+    engine: Nl2SqlEngine | None = None
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
@@ -1240,6 +1246,9 @@ class JobData(BaseModel):
     error_message: str | None = None
     # 機械判定用の失敗分類(例: SCHEMA_CATALOG_EMPTY)。表示文言は error_message が正本。
     error_code: str | None = None
+    # 失敗の技術的な詳細（例外・Oracle のエラーの元の文）。error_message は利用者向けの 1 文目と
+    # 次の操作だけにし、画面はこれを「詳細」に畳んで出す（messaging.md §10.3。#1072）。
+    error_detail: str | None = None
     warning_message: str | None = None
     timing: TimingEnvelope | None = None
     steps: list[JobStepData] = Field(default_factory=list)
@@ -2001,6 +2010,10 @@ class ProfileSyncJobData(BaseModel):
     agent_result: AssetRefreshData | None = None
     error_code: str = ""
     error_message_ja: str = ""
+    # 失敗した工程（phase は失敗時に failed へ変わるため別に残す）。
+    # DBMS_CLOUD_AI Profile の反映は済み、Agent アセットの再構築・検証だけが失敗した
+    # 「一部の成功」を画面が見分けるのに使う。
+    failed_phase: ProfileSyncJobPhase | None = None
     retry_of_job_id: str = ""
     created_at: str = ""
     deadline_at: str = ""

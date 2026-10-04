@@ -2582,3 +2582,77 @@ function submit() {
 - 単体テストは `packages/ui/tests/chat-message.test.tsx`。
 - 実ブラウザは RAG `e2e/chat.spec.ts`・NL2SQL `tests/e2e/sql-chat.spec.ts`・Agent `e2e/chat.spec.ts` の「#907」のテスト（応答を遅らせて、送信の直後に質問と作成中の表示が出ること、新しい会話・続きの会話、失敗 → 再送信、停止。desktop / 375px、ライト / ダーク）。
 - 使う所: RAG の `components/chat/ChatClient.tsx`、NL2SQL の `features/nl2sql/SqlChatPage.tsx`、Agent の `pages/ChatPage.tsx`（保存済みの質問の吹き出しも同じ部品）。
+
+## ChatProgress — **新規**（#1145）
+
+チャットの回答の場所（アシスタントの吹き出しの中、回答の上）に置く、backend の処理の段階の控えめな表示。3 製品（RAG・NL2SQL・Agent）のチャットで同じ部品・同じ段階の形を使う。SQL 生成の画面の工程の表示（NL2SQL の `WorkflowProgressStrip`）より情報を絞る。
+
+### 段階の形（3 製品共通の契約）
+
+AG-UI の `STEP_STARTED` / `STEP_FINISHED` / `TOOL_CALL_*` / `RUN_ERROR` に倣う。backend は製品の既存の配信（polling / SSE / WebSocket）で、この形の一覧を画面へ渡す（画面が backend の値からこの形を作ってもよい。NL2SQL はジョブの `steps` から作る）。
+
+```ts
+import type { ChatProgressStep } from "@engchina/production-ready-ui";
+
+type ChatProgressStep = {
+  id: string;                 // 段階の識別子（例: "classify" / "schema" / "generate_sql" / "execute" / "summarize" / "tool:<name>"）
+  label: string;              // 利用者向けの日本語（翻訳済み。例:「SQL を生成しています」）
+  status: "pending" | "running" | "done" | "failed" | "skipped";
+  startedAt?: string;         // ISO 8601
+  finishedAt?: string;        // ISO 8601
+  detail?: string;            // 任意の短い補足（対象の表・ツール名・件数）。SQL 全文・ORA コード等の技術的な詳細は入れない
+};
+```
+
+- `label` は状態に合わせて製品が言い換えてよい（実行中「〜しています」、完了「〜しました」、失敗「〜できませんでした」、未実行は名詞）。
+- 失敗の原因・対処は段階に入れず、回答の場所の danger の `Banner`（`ApiErrorBanner`）で出す（messaging.md §9 / §10）。
+
+### 使い方
+
+```tsx
+import { ChatProgress } from "@engchina/production-ready-ui";
+
+<Card>
+  <CardContent className="space-y-3">
+    <ChatProgress
+      steps={steps}                 // ChatProgressStep[]
+      active={inFlight}             // 省略時は段階から決める（running がある / 失敗が無く pending が残る）
+      elapsedMs={totalMs}           // 完了後の全体の所要時間。省略時は段階の最初の開始から最後の終了まで
+      labels={{ status: { ...DEFAULT_CHAT_PROGRESS_LABELS.status, skipped: "未実行" } }}
+      testId="chat-progress"
+    />
+    {answer}
+  </CardContent>
+</Card>
+```
+
+### ChatProgress の props
+
+| prop | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `steps` | `ChatProgressStep[]` | — | 段階の一覧（表示の順）。空なら何も出さない |
+| `active` | `boolean` | 段階から決める | 処理中か。回答の本文の受信中など、段階の外で処理が続くときは明示する |
+| `elapsedMs` | `number \| null` | 段階の時刻から | 完了後の 1 行の全体の所要時間 |
+| `slowAfterMs` | `number` | `10000` | この時間を超えた今の段階に遅延の案内を付ける |
+| `defaultOpen` | `boolean` | 失敗があれば `true` | 完了後の 1 行を最初から開くか |
+| `labels` | `Partial<ChatProgressLabels>` | `DEFAULT_CHAT_PROGRESS_LABELS` | 文言（`completedSteps(count)` / `summary(count, duration)` / `steps` / `elapsed` / `slow` / `status` / `formatDuration(ms)`） |
+| `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id` / `data-slow`）・`-timer`・`-slow`・`-completed`（実行中の畳んだ見出し）・`-summary`（完了後の 1 行）・`-step-<id>`（一覧の行。`data-status`）を付ける |
+
+根の要素は `data-chat-progress-state`（`running` / `done` / `failed`）と `aria-busy` を持つ。
+
+| 決めたこと | 理由 |
+|---|---|
+| 実行中は今の段階の 1 行だけを出し、完了した段階は「✓ N ステップ完了」に畳む（既定は閉じる） | チャットの回答の場所を工程の一覧で埋めない（ChatGPT・Claude・Perplexity の「考えています / 検索しています」と同じ密度）。何をしているかは 1 行で分かり、詳しく見たい利用者だけが開く |
+| 経過時間は今の段階の開始から数え、遅延の案内も今の段階の行に付ける | どの段階で時間がかかっているか（送信・開始待ち・生成など）が分かる。全体の時間は完了後の 1 行に出す |
+| 遅延の案内の行は最初から高さを予約する（`ProcessingIndicator` の #902 と同じ） | 10 秒後に行が足されてスピナーの行が動かない |
+| 今の段階の行を上に、完了した段階の畳んだ見出しを下に置く | 段階が完了して見出しが現れても、スピナーの行の位置が変わらない |
+| 完了後は「処理の経過（N ステップ・M 秒）」の 1 行に畳む。失敗した段階があれば開いて出す | 回答を読む邪魔をしない。失敗はどこで止まったかを最初から見せる |
+| 状態はアイコン（`CheckCircle2` / `XCircle` / `MinusCircle` / `Circle` / `Spinner`）と文字（失敗・スキップは見える文字、完了は読み上げの文字）で示す | 色だけに頼らない |
+| 段階の切り替わりだけを `role="status"` で読み上げる。経過時間は `role="timer"` + `aria-live="off"` | 毎秒の更新を読み上げない。完了後は読み上げの文を空にする（回答は会話の欄の `role="log"` が知らせる） |
+| 動くスピナーは今の段階の 1 つだけ。スピナーは reduced-motion でも回す（#440） | 同じ処理のスピナーは 1 つ（messaging.md §3.7）。開閉の Chevron は `Disclosure` が reduced-motion で回転を止める |
+| 所要時間の表記は「0.4 秒」（10 秒未満は 0.1 秒単位）・「12 秒」・「1 分 5 秒」（`formatChatProgressDuration`） | 1 秒未満の段階が多く、「0 秒」と出すと情報が無い |
+| `ProcessingIndicator` / `WorkflowProgressStrip` を拡張せず、新しい部品にした | `ProcessingIndicator` は 1 つの処理の 1 行（段階を持たない）で、設定・一覧の読み込みなど多くの所で使う。`WorkflowProgressStrip` は NL2SQL の SQL 生成の画面だけの工程の帯（工程ごとの説明・結果の中身・中止を持つ）。チャットの段階は両者の間の密度で、3 製品が使うため `packages/ui` に置く。経過時間の計算は `useOperationTiming`、開閉は `Disclosure`、スピナーは `Spinner` を使い回す |
+
+- 単体テストは `packages/ui/tests/chat-progress.test.tsx`。
+- 実ブラウザは NL2SQL `tests/e2e/sql-chat.spec.ts` の「#1145」のテスト（応答を遅らせて、送信・開始待ち・実行中・完了・失敗の段階を desktop / 375px・light / dark で確かめる）。
+- 使う所: NL2SQL の `features/nl2sql/SqlChatPage.tsx`（段階は `features/nl2sql/chatProgress.ts` がジョブの `steps` から作る）。RAG・Agent のチャットは別の Issue で同じ部品につなぐ。

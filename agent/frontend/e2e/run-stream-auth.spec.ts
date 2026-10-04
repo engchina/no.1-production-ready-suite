@@ -18,14 +18,15 @@ function seedRunningRun(mockApi: MockApi) {
     id: "run-stream",
     goal: "購読を確認する",
     agent_id: "default",
-    runtime_id: "legacy-native",
-    status: "running",
+    // 「再開」を出す Run（承認が決まり、保存した SDK の状態から再開を待つ組み込み Runtime の Run。#1119）。
+    runtime_id: "builtin",
+    status: "queued",
     steps: [],
     events: [],
     approvals: [],
     artifacts: [],
     pending_tool_calls: [],
-    metadata: {},
+    metadata: { _builtin_sdk_state: "{}" },
     created_at: MOCK_NOW,
     updated_at: MOCK_NOW,
   });

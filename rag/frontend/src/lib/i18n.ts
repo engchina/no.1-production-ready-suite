@@ -182,7 +182,7 @@ export const ja = {
     "文書解析に使う方式を選び、必要な解析エンジンの現在状態を確認します。",
   "settings.parserAdapters.overview.title": "文書解析の現在の設定",
   "settings.parserAdapters.overview.description":
-    "文書解析に使うエンジンを選び、現在の可用性だけを確認します。",
+    "文書解析に使うエンジンを選び、現在の可用性を確認します。保存したエンジンは、文書のレシピで上書きしていない文書に、次の取込と再処理から使います。取込済みの文書は、文書の詳細で再処理するまで今の解析結果のまま検索されます。",
   "settings.parserAdapters.backend": "使用エンジン",
   "settings.parserAdapters.backend.local": "Local(廃止)",
   "settings.parserAdapters.backend.local.description": "旧 in-process 解析。既定の Docling へ正規化",
@@ -296,7 +296,7 @@ export const ja = {
     "文書を検索しやすい単位へ分ける方式と分割サイズを設定します。",
   "settings.chunking.overview.title": "文書分割方式",
   "settings.chunking.overview.description":
-    "業界の代表的な chunking 手法を OCI / Oracle スタックへ再マップし、backend 内処理または pipeline-chunking へ渡す方式として選択できます。",
+    "文書を検索の単位（chunk）に分ける方式を選びます。保存した方式とパラメータは、文書のレシピで上書きしていない文書に、次の取込と再処理から使います。取込済みの文書の chunk は、文書の詳細で再処理するまで変わりません。",
   "settings.chunking.serviceNote":
     "ここで選ぶ 7 個は分割方式です。親子階層（small-to-big）は backend 内で実行します。それ以外は pipeline-chunking が稼働中なら遠隔実行し、未起動なら backend 内処理で実行します。",
   "settings.chunking.strategy": "分割方式",
@@ -420,7 +420,7 @@ export const ja = {
     "文書解析の前に原本を一度だけ整えるファイル準備方式を選択します。",
   "settings.preprocess.overview.title": "ファイル準備方式",
   "settings.preprocess.overview.description":
-    "ファイルの種類や状態に合わせて、解析の前に原本を読み取りやすい形へ変換します。原本はそのまま残し、処理後ファイルとの対応を記録します。",
+    "ファイルの種類や状態に合わせて、解析の前に原本を読み取りやすい形へ変換します。原本はそのまま残し、処理後ファイルとの対応を記録します。保存した方式は、文書のレシピで上書きしていない文書に、次の取込と再処理から使います。取込済みの文書は、文書の詳細で再処理するまで今の結果のまま検索されます。",
   "settings.preprocess.profile": "変換方式",
   "settings.preprocess.source": "設定元",
   "settings.preprocess.inProcess": "サービス不要",
@@ -865,6 +865,7 @@ export const ja = {
   "fileList.loading": "文書一覧を読み込んでいます",
   "fileList.scrollLabel": "文書一覧。スクロールできます。",
   "fileList.loadError": "文書の一覧を取得できませんでした。接続を確認して再試行してください。",
+  "fileList.refreshError": "最新の状態を取得できませんでした。表示は前回取得した内容です。",
   "fileList.ingest.toast.queued": "「{name}」のファイル準備を開始しました。",
   "fileList.queue.toast.statusHint": "状態は一覧に反映されます。",
   "fileList.ingest.toast.skipped": "「{name}」はファイル準備をスキップしました。",
@@ -1941,6 +1942,9 @@ export const ja = {
   "flow.review.edit.leaveDescription":
     "このページを離れると未保存の変更は失われます。変更を保存する場合はキャンセルしてください。",
   "flow.review.edit.leaveConfirm": "破棄して移動",
+  "flow.review.edit.switchRecipeDescription":
+    "別のレシピに切り替えると、このレシピの未保存の変更は失われます。変更を保存する場合はキャンセルしてください。",
+  "flow.review.edit.switchRecipeConfirm": "破棄して切り替え",
   "flow.review.edit.elements": "要素テキスト",
   "flow.review.edit.tableCells": "表セル",
   "flow.review.edit.tableCellLabel": "{row} 行 {col} 列のセル",
@@ -2002,6 +2006,7 @@ export const ja = {
   "documents.classification.effective_from": "有効期間の開始日",
   "documents.classification.effective_to": "有効期間の終了日",
   "documents.classification.effectiveToHelper": "この日から期間外になります。",
+  "documents.classification.periodError": "終了日は開始日より後の日付にしてください。",
   "documents.classification.save": "分類を保存",
   "documents.classification.saved": "分類と有効期間を保存しました。",
   "documents.classification.saveError": "分類と有効期間の保存に失敗しました。入力を確認して再試行してください。",
@@ -2568,6 +2573,7 @@ export const ja = {
   "search.stage.historyRewrite": "会話を踏まえた質問の書き換え",
   "search.stage.fieldFilter": "検索条件の読み取り",
   "search.stage.answer": "根拠の検索と回答の生成",
+  "search.stage.answerGuardrail": "回答の安全チェック",
   "search.stage.retrieval": "検索",
   "answer.progress.label": "回答を生成しています（{stage}）",
   "answer.progress.searchLabel": "検索しています（{stage}）",

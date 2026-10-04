@@ -61,11 +61,14 @@ export function runCapabilities(run: RunState): {
   canCancel: boolean;
   canResume: boolean;
 } {
-  // 組み込み Runtime（#754）は承認がすべて決まると自動で再開する。手動の再開は使わない。
-  const isBuiltin = run.runtime_id === "builtin";
+  // 組み込み Runtime（#754）は承認がすべて決まると自動で再開する。手動の再開は、承認が決まり SDK の状態を
+  // 保存したまま止まっている Run（待ち）を起動し直すときだけ使う（backend の `builtin_resume_pending`。
+  // 旧エンジンの Run の再開は backend が必ず断る。#1119）。
+  const resumePending =
+    run.runtime_id === "builtin" && run.status === "queued" && typeof run.metadata?._builtin_sdk_state === "string";
   return {
     canCancel: ["queued", "running", "waiting_approval"].includes(run.status),
-    canResume: !isBuiltin && ["running", "waiting_approval"].includes(run.status),
+    canResume: resumePending,
   };
 }
 

@@ -214,6 +214,75 @@ test("モデル設定は節ごとに保存し、画面にない項目は保存�
   ).toHaveValue("https://unsaved.example");
 });
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 720 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`画面を開いた後にほかの製品が保存していたら、保存は競合を案内し、最新の設定を読み直せる (#1037, ${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    // サーバーの状態と版（revision）。PATCH は読み込んだ時点の版（base_revision）が違えば 409。
+    let current = { ...createModelSettings(), revision: "rev-1" };
+    const patches: Array<{ base_revision?: string }> = [];
+    await page.route("**/api/settings/model", async (route) => {
+      const request = route.request();
+      if (request.method() === "PATCH") {
+        const { base_revision, ...settings } = request.postDataJSON();
+        patches.push({ base_revision });
+        if (base_revision !== current.revision) {
+          await route.fulfill({
+            status: 409,
+            json: {
+              detail:
+                "モデル設定は、この画面を開いた後にほかの画面（別の製品を含む）で更新されました。最新の設定を読み込んでから、保存し直してください。",
+            },
+          });
+          return;
+        }
+        current = { ...current, settings, revision: `${current.revision}+` };
+      }
+      await route.fulfill({ json: { data: current, error_messages: [], warning_messages: [] } });
+    });
+    await page.goto("/settings/model");
+    const rerank = page.getByRole("textbox", { name: "リランクモデル ID" });
+    await expect(rerank).toHaveValue("cohere.rerank-v4.0-fast");
+
+    // ほかの製品がセカンダリ接続とリランクモデルを保存した。
+    const other = createModelSettings({ secondary: true });
+    other.settings.generative_ai.rerank_model = "rerank-from-nl2sql";
+    current = { ...other, revision: "rev-2" };
+
+    await rerank.fill("rerank-mine");
+    await page.getByRole("button", { name: "OCI Generative AI: 保存" }).click();
+
+    await expect(page.getByText("この画面を開いた後にほかの画面（別の製品を含む）で更新されました。")).toBeVisible();
+    expect(patches).toEqual([{ base_revision: "rev-1" }]);
+    await expect(rerank).toHaveValue("rerank-mine");
+    const reload = page.getByRole("button", { name: "最新の設定を読み込む" });
+    await expect(reload).toHaveCount(1);
+    await expectActionInsideCard(page, "OCI Generative AI", reload);
+    await expectNoPageOverflow(page);
+    await page.screenshot({
+      path: test.info().outputPath(`model-settings-conflict-${viewport.name}.png`),
+      fullPage: true,
+    });
+
+    await reload.click();
+    const dialog = page.getByRole("alertdialog", { name: "最新の設定を読み込みますか？" });
+    await dialog.getByRole("button", { name: "読み込む" }).click();
+
+    await expect(rerank).toHaveValue("rerank-from-nl2sql");
+    await expect(page.getByRole("tab", { name: /セカンダリ接続/ })).toBeVisible();
+    await expect(reload).toHaveCount(0);
+
+    await rerank.fill("rerank-mine");
+    await page.getByRole("button", { name: "OCI Generative AI: 保存" }).click();
+    await expect(page.getByText("OCI Generative AI 設定を保存しました。").first()).toBeVisible();
+    expect(patches.at(-1)).toEqual({ base_revision: "rev-2" });
+  });
+}
+
 for (const scheme of ["light", "dark"] as const) {
   test(`既定のモデルは Vision 対応のモデルだけを選べ、不正な選択は保存前にフィールドで止める (${scheme})`, async ({
     page,
