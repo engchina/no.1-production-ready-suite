@@ -126,6 +126,8 @@ export function serviceCanRestart(status: DisplayRuntimeStatus): boolean {
 }
 
 type ServiceControlAction = "start" | "stop" | "restart";
+/** 実行中の操作（サービス ID → 操作）。 */
+type ServicePendingActions = Partial<Record<string, ServiceControlAction>>;
 
 const SERVICE_PROCESSING_LABEL_KEYS = {
   start: "settings.services.processing.start",
@@ -140,8 +142,10 @@ export function ServicesManagementClient() {
   const statusQueries = useServiceStatusQueries(serviceIds);
   const control = useControlService();
   const confirm = useConfirm();
-  // クリックした行・操作だけにスピナーを出すための識別子(`${serviceId}:${action}`)。
-  const [pending, setPending] = useState<string | null>(null);
+  // 実行中の操作（サービス ID → 操作）。クリックした行・操作だけにスピナーを出す。
+  // 別のサービスの操作は並行して実行できるので、サービスごとに持つ（1 つの値にすると、後から始めた
+  // 操作が先の操作の実行中の表示を消し、先のサービスのボタンが押せるようになる）。
+  const [pending, setPending] = useState<ServicePendingActions>({});
   const [logsServiceId, setLogsServiceId] = useState<string | null>(null);
   // 「更新」を押した再取得の間だけボタンを回す。5 秒ごとの状態の polling では回さない（静かな polling は
   // 処理中を出さない。同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
@@ -227,31 +231,26 @@ export function ServicesManagementClient() {
       });
       if (!ok) return;
     }
-    setPending(`${service.service_id}:${action}`);
-    control.mutate(
-      { serviceId: service.service_id, action },
-      {
-        onSuccess: () => {
-          const toastKey: I18nKey =
-            action === "start"
-              ? "settings.services.toast.started"
-              : action === "restart"
-                ? "settings.services.toast.restarted"
-                : "settings.services.toast.stopped";
-          toast.success(t(toastKey, { service: serviceLabel(service) }));
-        },
-        onError: (error) => {
-          toast.error(
-            t("settings.services.toast.failed", { service: serviceLabel(service) }),
-            {
-              description:
-                error instanceof ApiError ? error.message : undefined,
-            }
-          );
-        },
-        onSettled: () => setPending(null),
-      }
-    );
+    const serviceId = service.service_id;
+    setPending((current) => ({ ...current, [serviceId]: action }));
+    // `mutate` に渡すコールバックは最後に呼んだ操作の分しか呼ばれないため、操作ごとの promise で
+    // 結果を受け取る（別のサービスの操作を続けて始めても、先の操作の結果を出し、実行中の表示を外す）。
+    try {
+      await control.mutateAsync({ serviceId, action });
+      const toastKey: I18nKey =
+        action === "start"
+          ? "settings.services.toast.started"
+          : action === "restart"
+            ? "settings.services.toast.restarted"
+            : "settings.services.toast.stopped";
+      toast.success(t(toastKey, { service: serviceLabel(service) }));
+    } catch (error) {
+      toast.error(t("settings.services.toast.failed", { service: serviceLabel(service) }), {
+        description: error instanceof ApiError ? error.message : undefined,
+      });
+    } finally {
+      setPending(({ [serviceId]: _done, ...rest }) => rest);
+    }
   }
 
   const latestStatusUpdatedAt = Math.max(
@@ -471,7 +470,7 @@ function ServiceGroup({
   note?: string;
   services: DisplayServiceData[];
   controlEnabled: boolean;
-  pending: string | null;
+  pending: ServicePendingActions;
   logsServiceId: string | null;
   logsQuery: UseQueryResult<ServiceLogsData>;
   onAct: (service: DisplayServiceData, action: ServiceControlAction) => void;
@@ -516,7 +515,7 @@ function ServiceRow({
 }: {
   service: DisplayServiceData;
   controlEnabled: boolean;
-  pending: string | null;
+  pending: ServicePendingActions;
   logsOpen: boolean;
   logsQuery: UseQueryResult<ServiceLogsData>;
   onAct: (service: DisplayServiceData, action: ServiceControlAction) => void;
@@ -530,9 +529,10 @@ function ServiceRow({
   const stoppedHintKey = stopped ? serviceStoppedHintKey(service.execution_policy) : null;
   const notInstalled = service.status === "not_installed";
   const failed = service.status === "failed";
-  const startPending = pending === `${service.service_id}:start`;
-  const stopPending = pending === `${service.service_id}:stop`;
-  const restartPending = pending === `${service.service_id}:restart`;
+  const pendingAction = pending[service.service_id];
+  const startPending = pendingAction === "start";
+  const stopPending = pendingAction === "stop";
+  const restartPending = pendingAction === "restart";
   // ponytail: このサービス自身の操作中だけ自分の起動/停止/再起動を排他する(他サービスは無関係)
   const thisPending = startPending || stopPending || restartPending;
   let controlHint: string | undefined;
@@ -644,10 +644,10 @@ function ServiceRow({
         // スピナーは操作したボタン（または行メニュー）の loading が担う（messaging.md §3.7）。
         <ProcessingIndicator
           active
-          label={t(SERVICE_PROCESSING_LABEL_KEYS[startPending ? "start" : stopPending ? "stop" : "restart"], {
+          label={t(SERVICE_PROCESSING_LABEL_KEYS[pendingAction ?? "restart"], {
             service: serviceLabel(service),
           })}
-          operationKey={pending}
+          operationKey={`${service.service_id}:${pendingAction}`}
           placement="action"
           activityIcon="none"
           className="mt-3 rounded-md border border-border bg-surface-sunken px-3 py-2"

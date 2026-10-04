@@ -1179,6 +1179,42 @@ def test_statement_policy_comment_and_annotation_sql() -> None:
     assert annotation_ng.statements[0].error_code == "DB_ADMIN_ANNOTATION_SQL_POLICY_VIOLATION"
 
 
+def test_annotation_policy_allows_only_annotation_clauses() -> None:
+    """アノテーションの policy は、列の型・削除などを同じ文に含む ALTER を通さない（#940）。"""
+    adapter = _FakeStatementsAdapter([])
+    service = _OracleRuntimeService(adapter)
+    allowed = service.execute_db_admin_statements(
+        DbAdminStatementsRequest(
+            sql=(
+                'ALTER TABLE "APP"."T1" ANNOTATIONS (ADD OR REPLACE "DESCRIPTION" \'a (b), c\');\n'
+                "ALTER TABLE APP.T1 MODIFY (ID ANNOTATIONS (ADD \"ALIASES\" 'id'), "
+                "NAME ANNOTATIONS (ADD \"DESCRIPTION\" 'name'));\n"
+                '/* 生成 */ ALTER VIEW V1 MODIFY ("Amt" ANNOTATIONS (ADD "UNITS" \'JPY\'))'
+            ),
+            policy="annotation_sql",
+        )
+    )
+    assert [item.status for item in allowed.statements] == ["confirmation_required"] * 3
+
+    for sql in (
+        "ALTER TABLE T MODIFY (SALARY VARCHAR2(1) ANNOTATIONS (ADD \"X\" 'y'))",
+        "ALTER TABLE T MODIFY (C NUMBER) DROP COLUMN D MODIFY (E ANNOTATIONS (ADD \"X\" 'y'))",
+        "ALTER TABLE T ANNOTATIONS (ADD \"A\" 'x') DROP (SALARY)",
+        "ALTER TABLE T MODIFY (E ANNOTATIONS (ADD \"X\" 'y')) DROP COLUMN D",
+        "ALTER TABLE T MODIFY (E NOT NULL ANNOTATIONS (ADD \"X\" 'y'))",
+        "ALTER VIEW V MODIFY E ANNOTATIONS (ADD \"X\" 'y')",
+        "ALTER MATERIALIZED VIEW MV MODIFY (E ANNOTATIONS (ADD \"X\" 'y'))",
+        'ALTER TABLE T ANNOTATIONS (ADD "X" \'unterminated)',
+    ):
+        blocked = service.execute_db_admin_statements(
+            DbAdminStatementsRequest(sql=sql, policy="annotation_sql", confirmation="ADMIN_EXECUTE")
+        )
+        assert blocked.executed is False, sql
+        assert blocked.statements[0].status == "blocked", sql
+        assert blocked.statements[0].error_code == "DB_ADMIN_ANNOTATION_SQL_POLICY_VIOLATION", sql
+    assert adapter.calls == []
+
+
 @pytest.mark.parametrize("oracle_runtime", [False, True])
 def test_comment_policy_error_code_survives_api_without_executing_batch(
     monkeypatch: pytest.MonkeyPatch, oracle_runtime: bool
@@ -5299,6 +5335,13 @@ def test_statement_policy_domain_sql() -> None:
         'ALTER TABLE "APP"."SALES" MODIFY ("DOMAIN" VARCHAR2(40))',
         "ALTER TABLE SALES ADD (NOTE VARCHAR2(10) DOMAIN NOTE_DOM)",
         "ALTER TABLE SALES DROP COLUMN STATUS",
+        # DOMAIN の語があっても、同じ文の列の型の変更・列の削除は通さない（#940）。
+        "ALTER TABLE SALES MODIFY (STATUS VARCHAR2(1) DOMAIN STATUS_DOM)",
+        "ALTER TABLE SALES MODIFY (CUSTOMER_ID DOMAIN CUSTOMER_ID_DOM) DROP COLUMN STATUS",
+        "ALTER TABLE SALES MODIFY (CUSTOMER_ID) ADD DOMAIN CUSTOMER_ID_DOM DROP COLUMN STATUS",
+        "ALTER TABLE SALES MODIFY (CUSTOMER_ID) DROP DOMAIN DROP COLUMN STATUS",
+        "ALTER TABLE SALES DROP COLUMN STATUS MODIFY (CUSTOMER_ID) ADD DOMAIN CUSTOMER_ID_DOM",
+        "ALTER TABLE SALES MODIFY CUSTOMER_ID NUMBER DOMAIN CUSTOMER_ID_DOM",
         "CREATE TABLE SALES (ID NUMBER)",
         "DROP TABLE SALES",
     ):
