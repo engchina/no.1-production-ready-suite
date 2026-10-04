@@ -717,6 +717,13 @@ def test_thread_api_lists_and_continues_conversation(
     )
     assert unknown.status_code == 404
     assert unknown.json()["error_messages"] == ["会話が見つかりません。"]
+    # チャットの送信・停止の失敗にそのまま出る理由は日本語（英語・内部の ID を出さない）。
+    no_agent = client.post("/api/runs", json={"goal": "x", "agent_id": "agent-missing"})
+    assert no_agent.status_code == 404
+    assert no_agent.json()["error_messages"] == ["業務 Agent が見つかりません。"]
+    no_run = client.post("/api/runs/run-missing/cancel")
+    assert no_run.status_code == 404
+    assert no_run.json()["error_messages"] == ["実行が見つかりません。"]
     assert (
         client.post(
             "/api/runs", json={"goal": "x", "agent_id": AGENT_ID, "thread_id": "bad"}

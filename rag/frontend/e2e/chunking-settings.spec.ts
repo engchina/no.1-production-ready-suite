@@ -172,7 +172,7 @@ test("文書分割設定は親子階層（small-to-big）のパラメータを�
 
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("文書分割設定を保存しました。")).toBeVisible();
+  await expect(page.getByText("文書分割の設定を保存しました。")).toBeVisible();
   expect(savedPayload).toEqual({
     strategy: "small_to_big",
     chunk_size: 800,
@@ -226,7 +226,7 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
 
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("文書分割設定を保存しました。")).toBeVisible();
+  await expect(page.getByText("文書分割の設定を保存しました。")).toBeVisible();
   expect(savedPayload).toEqual({
     strategy: "recursive_character",
     chunk_size: 1000,
@@ -261,7 +261,7 @@ test("文書分割設定は固定分割符を保存できる", async ({ page }) 
   await page.getByLabel("固定分割符文字列").fill("---SECTION---");
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("文書分割設定を保存しました。")).toBeVisible();
+  await expect(page.getByText("文書分割の設定を保存しました。")).toBeVisible();
   expect(savedPayload).toEqual({
     strategy: "fixed_delimiter",
     chunk_size: 800,
@@ -394,3 +394,82 @@ async function expectNoHorizontalOverflow(page: Page) {
   // documentElement と main の双方を検査する共通ヘルパーへ委譲(_helpers.ts)。
   await expectNoPageOverflow(page);
 }
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`文書分割の設定は保存に失敗しても入力を残し、操作の行に失敗を出す（#966, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    let patchCount = 0;
+    await page.route("**/api/settings/chunking", async (route) => {
+      if (route.request().method() === "PATCH") {
+        patchCount += 1;
+        if (patchCount === 1) {
+          await route.fulfill({
+            status: 500,
+            json: {
+              data: null,
+              error_messages: ["文書分割設定を backend/.env へ保存できませんでした。"],
+              warning_messages: [],
+            },
+          });
+          return;
+        }
+        await route.fulfill({
+          json: chunkingEnvelope({ strategy: "recursive_character", chunk_size: 1000 }),
+        });
+        return;
+      }
+      await route.fulfill({ json: chunkingEnvelope() });
+    });
+    await page.goto("/settings/chunking");
+
+    const recursive = page.getByRole("radio", { name: /再帰文字分割/ });
+    await recursive.click();
+    const chunkSize = page.getByRole("spinbutton", { name: "chunk サイズ(文字)", exact: true });
+    await chunkSize.fill("1000");
+    const actions = page.getByRole("group", { name: "文書分割の設定の操作" });
+    const saveButton = actions.getByRole("button", { name: "保存" });
+    await saveButton.click();
+
+    // 失敗は操作の行に出し、選んだ方式・入力・保存のボタンを残す。
+    await expect(actions).toContainText("文書分割設定を backend/.env へ保存できませんでした。");
+    await expect(recursive).toBeChecked();
+    await expect(chunkSize).toHaveValue("1000");
+    await expect(saveButton).toBeEnabled();
+    await expectNoHorizontalOverflow(page);
+
+    // そのまま再保存できる。
+    await saveButton.click();
+    await expect(page.getByText("文書分割の設定を保存しました。")).toBeVisible();
+    await expect(recursive).toBeChecked();
+    await expect(saveButton).toBeDisabled();
+    expect(patchCount).toBe(2);
+  });
+}
+
+test("文書分割の設定は、方式を切り替えて隠れた欄の不正な値を送らない（#966）", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  let savedPayload: Record<string, unknown> | null = null;
+  await page.route("**/api/settings/chunking", async (route) => {
+    if (route.request().method() === "PATCH") {
+      savedPayload = route.request().postDataJSON();
+      await route.fulfill({ json: chunkingEnvelope({ strategy: "small_to_big" }) });
+      return;
+    }
+    await route.fulfill({ json: chunkingEnvelope() });
+  });
+  await page.goto("/settings/chunking");
+
+  // 構造認識で最小 chunk 文字数を空にしてから、その欄の無い親子階層へ切り替えて保存する。
+  await page.getByLabel("最小 chunk 文字数").fill("");
+  await page.getByRole("radio", { name: /親子階層/ }).click();
+  await page.getByRole("button", { name: "保存" }).click();
+
+  await expect(page.getByText("文書分割の設定を保存しました。")).toBeVisible();
+  // 隠れた欄は保存済みの値で送る（空を null として送ると backend が英語の 422 を返す）。
+  expect(savedPayload).toMatchObject({ strategy: "small_to_big", min_chars: 120 });
+});
