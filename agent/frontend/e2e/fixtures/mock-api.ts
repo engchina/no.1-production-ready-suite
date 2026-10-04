@@ -1300,7 +1300,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     };
     if (method === "GET" && at("agents")) return { agents: state.agents };
     if (method === "POST" && at("agents")) {
-      const id = String(body.id ?? `agent-${state.agents.length + 1}`);
+      // backend の create_agent と同じく、送られた ID は URL に置ける形だけを受け付ける（#1033）。
+      const id = String(body.id ?? `agent-${state.agents.length + 1}`).trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(id)) {
+        throw new HttpError(422, "業務 Agent の ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。");
+      }
       if (state.agents.some((agent) => agent.id === id)) {
         throw new HttpError(400, "同じ ID の業務 Agent があります。");
       }
@@ -1315,6 +1319,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         created_at: MOCK_NOW,
         updated_at: MOCK_NOW,
         ...body,
+        id,
         // 画面・API で作る Agent は下書きから始める（#770）。
         versioned: true,
         versions: [],
@@ -1451,10 +1456,33 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return record;
     }
     if (at("plugins", "*")) {
-      const plugin = findOr404(state.plugins, "id", second, "plugin");
+      const plugin = state.plugins.find((candidate) => candidate.id === second);
+      if (!plugin) throw new HttpError(404, "プラグインが見つかりません。");
       if (method === "GET") return plugin;
+      // 業務 Agent が下書きか公開中の版で使うスキルを含むプラグインは、無効化・削除しない
+      // （backend の PluginRegistry._ensure_not_referenced。#1032）。
+      if ((method === "PATCH" && body.enabled === false) || method === "DELETE") {
+        const manifest = (plugin.manifest as Json | undefined) ?? {};
+        const pluginSkillIds = new Set(((manifest.skills as Json[] | undefined) ?? []).map((skill) => String(skill.id)));
+        const users = state.agents
+          .filter((agent) => {
+            const published = ((agent.versions as Json[] | undefined) ?? []).find(
+              (item) => item.version === agent.published_version
+            );
+            return [agent.skill_ids, published?.skill_ids].some((ids) =>
+              ((ids as string[] | undefined) ?? []).some((id) => pluginSkillIds.has(id))
+            );
+          })
+          .map((agent) => String(agent.name || agent.id));
+        if (users.length) {
+          throw new HttpError(
+            409,
+            `このプラグインのスキルは業務 Agent（${users.join("、")}）が使っています。業務 Agent のスキルから外して公開してから、無効化・削除してください。`
+          );
+        }
+      }
       if (method === "PATCH") {
-        plugin.enabled = Boolean(body.enabled);
+        if (body.enabled !== undefined) plugin.enabled = Boolean(body.enabled);
         return plugin;
       }
       if (method === "DELETE") {
