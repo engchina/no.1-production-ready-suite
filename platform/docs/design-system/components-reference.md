@@ -2502,3 +2502,54 @@ const manualRefresh = useActionPending();
 
 - 単体テストは `packages/ui/tests/action-pending.test.tsx`。
 - 使う所: system-settings の `SystemTablesCard`（状態を再取得）、RAG のサービスのログの「再取得」、Agent の「表示を更新」（Runtime・実行履歴・監査・Snapshot・フィードバック・利用状況）と監査の「フィルター適用」、NL2SQL の一覧の「表示を更新」など。
+
+## ChatUserMessage / createOptimisticChatMessage — **新規**（#907）
+
+チャットの利用者のメッセージ（右寄せの吹き出し）と、送った質問を楽観的に出すための仮のメッセージの形。振る舞いの規則は UX 契約 messaging.md §11「チャットの送信」。送信・置き換えの API は製品ごとに違う（RAG は SSE、NL2SQL はジョブ、Agent は Run）ので、部品は形と状態だけを持つ。
+
+```tsx
+import {
+  ChatUserMessage,
+  createOptimisticChatMessage,
+  withOptimisticChatStatus,
+  type OptimisticChatMessage,
+} from "@engchina/production-ready-ui";
+
+const [pending, setPending] = useState<OptimisticChatMessage | null>(null);
+
+function submit() {
+  setPending(createOptimisticChatMessage(draft.trim()));   // status: "sending"、localId は画面の中だけの ID
+  setDraft("");
+  send.mutate(draft.trim(), {
+    onSuccess: (created) => { putIntoConversationCache(created); setPending(null); },   // 確定したものに置き換える
+    onError: () => setPending((p) => (p ? withOptimisticChatStatus(p, "failed") : p)),  // 残して再送信を出す
+  });
+}
+
+{pending ? (
+  <>
+    <ChatUserMessage status={pending.status} failedLabel={t("chat.sendFailed")} testId="chat-pending">
+      {pending.content}
+    </ChatUserMessage>
+    {pending.status === "failed" ? (
+      <Banner severity="danger" action={<Button variant="secondary" size="sm" icon={RotateCcw} onClick={resend}>{t("chat.resend")}</Button>}>
+        {reason}
+      </Banner>
+    ) : (
+      <ProcessingIndicator active operationKey={pending.localId} startedAt={pending.sentAtMs} label={t("chat.answering")} />
+    )}
+  </>
+) : null}
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 送信中（`sending`）も吹き出しの見た目は送信後と同じ（薄くしない・スピナーを付けない） | ChatGPT・Claude・Gemini と同じ。待ちの表示は回答の場所の 1 つだけにする（messaging.md §3.7 の単一スピナー） |
+| 失敗（`failed`）は吹き出しの下に `failedLabel` を `AlertCircle` 付きで出す。原因と「再送信」は製品が Banner で出す | 質問の状態（送れていない）と原因・対処を分ける（messaging.md §9 P1 / P2）。色だけに頼らない |
+| 状態は `data-status`（`sending` / `sent` / `failed` / `stopped`）に出す | e2e で状態を確かめる |
+| 仮の ID は `crypto.randomUUID` を使わず時刻と連番で作る | http の IP 直打ちなど安全でない文脈で `randomUUID` が無い |
+| `withOptimisticChatStatus(m, "sending")` は送信の時刻を数え直す。失敗・停止は送信の時刻を保つ | 再送信の経過時間を 0 から出す |
+
+- 単体テストは `packages/ui/tests/chat-message.test.tsx`。
+- 実ブラウザは RAG `e2e/chat.spec.ts`・NL2SQL `tests/e2e/sql-chat.spec.ts`・Agent `e2e/chat.spec.ts` の「#907」のテスト（応答を遅らせて、送信の直後に質問と作成中の表示が出ること、新しい会話・続きの会話、失敗 → 再送信、停止。desktop / 375px、ライト / ダーク）。
+- 使う所: RAG の `components/chat/ChatClient.tsx`、NL2SQL の `features/nl2sql/SqlChatPage.tsx`、Agent の `pages/ChatPage.tsx`（保存済みの質問の吹き出しも同じ部品）。

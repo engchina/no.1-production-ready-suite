@@ -11,6 +11,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
+  RotateCcw,
   Search,
   SendHorizontal,
 } from "lucide-react";
@@ -19,6 +20,7 @@ import {
   Button,
   Card,
   CardContent,
+  ChatUserMessage,
   EmptyState,
   FieldActionRow,
   InfoTip,
@@ -35,8 +37,11 @@ import {
   StatusBadge,
   TextareaField,
   TimedLoadingState,
+  createOptimisticChatMessage,
   isSubmitEnter,
   toast,
+  withOptimisticChatStatus,
+  type OptimisticChatMessage,
 } from "@engchina/production-ready-ui";
 import {
   useWorkspaceActive,
@@ -185,7 +190,9 @@ export function SqlChatPage() {
   );
   const [historySheetOpen, setHistorySheetOpen] = useState(false);
   const [profileSearch, setProfileSearch] = useState("");
-  const [submittedQuery, setSubmittedQuery] = useState("");
+  // 送った質問（#907）。ジョブの投入の応答を待たずに会話の欄の末尾へ出し、投入できたら会話のジョブに置き換える。
+  // 投入できなかったときは残して「再送信」を出す。
+  const [pending, setPending] = useState<OptimisticChatMessage | null>(null);
   const inlineHistory = useInlineHistory();
   const [previousInline, setPreviousInline] = useState(inlineHistory);
   if (previousInline !== inlineHistory) {
@@ -256,10 +263,11 @@ export function SqlChatPage() {
     onSuccess: async (job, question) => {
       const id = conversationId || job.job_id;
       // 応答の本文は保存しない。会話 ID と未送信の草稿だけを一時保存する。
+      // 草稿は送信の時点で空にしている（投入中に書き始めた次の質問は消さない。#907）。
       setProfileId(selectedProfileId);
       setConversationId(id);
-      setDraft("");
-      setSubmittedQuery("");
+      // 送った質問を、投入できたジョブ（job ID はサーバーと同じ client_job_id）に置き換える。二重に出さない。
+      setPending(null);
       queryClient.setQueryData<ConversationData>(
         [...chatKey, id],
         (previous) => ({
@@ -284,12 +292,15 @@ export function SqlChatPage() {
       await queryClient.invalidateQueries({ queryKey: chatKey });
     },
     onError: () => {
+      // 送った質問は残し、理由と「再送信」を出す（入力を失わない。#907）。
+      setPending((current) =>
+        current ? withOptimisticChatStatus(current, "failed") : current,
+      );
       // 応答が届かなくてもジョブが作られていることがある。履歴と会話を取り直して表示に反映する。
       void queryClient.invalidateQueries({ queryKey: chatKey });
     },
     onSettled: () => {
       sendingRef.current = false;
-      setSubmittedQuery("");
     },
   });
   const stop = useMutation({
@@ -322,13 +333,22 @@ export function SqlChatPage() {
     const question = draft.trim();
     if (!question || blocked || sendingRef.current) return;
     sendingRef.current = true;
-    setSubmittedQuery(question);
+    // 送った質問はすぐ会話の欄に出し、入力欄を空にする（#907）。
+    setPending(createOptimisticChatMessage(question));
+    setDraft("");
     send.mutate(question);
+  }
+  /** 送信できなかった質問を、そのままもう一度送る（#907）。 */
+  function resend() {
+    if (!pending || blocked || sendingRef.current) return;
+    sendingRef.current = true;
+    setPending(withOptimisticChatStatus(pending, "sending"));
+    send.mutate(pending.content);
   }
   function resetConversation() {
     if (busy) return;
     setConversationId("");
-    setSubmittedQuery("");
+    setPending(null);
     send.reset();
     stop.reset();
   }
@@ -337,6 +357,7 @@ export function SqlChatPage() {
     setProfileId(item.profile_id);
     setConversationId(item.id);
     setHistorySheetOpen(false);
+    setPending(null);
     send.reset();
     stop.reset();
   }
@@ -347,7 +368,7 @@ export function SqlChatPage() {
   useEffect(() => {
     if (active && conversationRef.current)
       conversationRef.current.scrollTop = conversationRef.current.scrollHeight;
-  }, [active, conversationId, turns.length, latest?.status, send.isPending]);
+  }, [active, conversationId, turns.length, latest?.status, pending]);
   const historyContent = (
     <>
       {history.isPending ? <ListSkeleton rows={3} /> : null}
@@ -574,12 +595,15 @@ export function SqlChatPage() {
                   {t("chat.new")}
                 </Button>
               </div>
+              {/* 会話の欄。新しいメッセージを role="log" で知らせる（#907）。 */}
               <div
                 ref={conversationRef}
+                role="log"
+                aria-label={t("chat.messages")}
                 className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]"
                 data-testid="sql-chat-conversation"
               >
-                {conversationId && conversation.isPending ? (
+                {conversationId && conversation.isPending && !pending ? (
                   <ProcessingIndicator
                     active
                     label={t("chat.loading")}
@@ -603,7 +627,7 @@ export function SqlChatPage() {
                     }
                   />
                 ) : null}
-                {!conversationId && !send.isPending ? (
+                {!conversationId && !pending ? (
                   <EmptyState
                     title={t("chat.empty")}
                     hint={t("chat.emptyHint")}
@@ -612,17 +636,52 @@ export function SqlChatPage() {
                 {turns.map((turn) => (
                   <ChatTurn key={turn.job_id} turn={turn} />
                 ))}
-                {send.isPending && submittedQuery ? (
-                  <div className="space-y-2">
-                    <div className="ml-auto w-fit max-w-full rounded-md bg-accent-subtle px-3 py-2 break-words">
-                      {submittedQuery}
-                    </div>
-                    <ProcessingIndicator
-                      active
-                      label={t("chat.generating")}
-                      placement="panel"
-                    />
-                  </div>
+                {pending ? (
+                  // 送った質問はジョブの投入の応答を待たずに出す。失敗しても残す（#907）。
+                  <article
+                    className="space-y-2"
+                    data-testid="sql-chat-pending-turn"
+                  >
+                    <ChatUserMessage
+                      status={pending.status}
+                      failedLabel={t("chat.sendFailedStatus")}
+                    >
+                      {pending.content}
+                    </ChatUserMessage>
+                    {pending.status === "failed" && send.isError ? (
+                      // 失敗の理由は送った質問の直下（会話の中）に出す（messaging.md §10.1 のチャットの扱い）。
+                      <ApiErrorBanner
+                        error={send.error}
+                        fallback={t("chat.sendFailed")}
+                        testId="sql-chat-send-error"
+                        {...sendFailureText(send.error)}
+                        action={
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            icon={RotateCcw}
+                            disabled={blocked}
+                            onClick={resend}
+                          >
+                            {t("chat.resend")}
+                          </Button>
+                        }
+                      />
+                    ) : pending.status === "sending" ? (
+                      <Card>
+                        <CardContent className="space-y-3">
+                          <ProcessingIndicator
+                            active
+                            label={t("chat.generating")}
+                            operationKey={pending.localId}
+                            startedAt={pending.sentAtMs}
+                            placement="panel"
+                          />
+                        </CardContent>
+                      </Card>
+                    ) : null}
+                  </article>
                 ) : null}
               </div>
               <div
@@ -703,14 +762,6 @@ export function SqlChatPage() {
                     className="space-y-0"
                   />
                 </FieldActionRow>
-                {send.isError ? (
-                  <ApiErrorBanner
-                    error={send.error}
-                    fallback={t("chat.sendFailed")}
-                    testId="sql-chat-send-error"
-                    {...sendFailureText(send.error)}
-                  />
-                ) : null}
                 {stop.isError ? (
                   <ApiErrorBanner
                     error={stop.error}
@@ -734,9 +785,7 @@ function ChatTurn({ turn }: { turn: JobData }) {
   const result = turn.result;
   return (
     <article className="space-y-2" data-testid="sql-chat-turn">
-      <div className="ml-auto w-fit max-w-full rounded-md bg-accent-subtle px-3 py-2 break-words">
-        {turn.question || result?.original_question}
-      </div>
+      <ChatUserMessage>{turn.question || result?.original_question}</ChatUserMessage>
       <Card>
         <CardContent className="space-y-3">
           {inFlight(turn) ? (

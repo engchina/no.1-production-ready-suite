@@ -1,11 +1,23 @@
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, PanelLeftClose, PanelLeftOpen, Plus, SendHorizontal, Square, Wrench, X } from "lucide-react";
+import {
+  BookOpen,
+  Check,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  RotateCcw,
+  SendHorizontal,
+  Square,
+  Wrench,
+  X,
+} from "lucide-react";
 import {
   Banner,
   Button,
   Card,
   CardContent,
+  ChatUserMessage,
   Disclosure,
   EmptyState,
   FieldActionRow,
@@ -21,8 +33,11 @@ import {
   StatusBadge,
   TextareaField,
   TimedLoadingState,
+  createOptimisticChatMessage,
   isSubmitEnter,
   toast,
+  withOptimisticChatStatus,
+  type OptimisticChatMessage,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -94,6 +109,9 @@ export function ChatPage() {
     isNullableString
   );
   const [draft, setDraft] = useWorkspaceState("chat", "draft", "", isString);
+  // 送った質問（#907）。Run の作成の応答を待たずに会話の欄の末尾へ出し、作られた Run に置き換える。
+  // 作れなかったときは残して「再送信」を出す（入力を失わない）。
+  const [pending, setPending] = useState<OptimisticChatMessage | null>(null);
   const conversationRef = useRef<HTMLDivElement | null>(null);
 
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
@@ -140,7 +158,7 @@ export function ChatPage() {
     // 祖先（ページ・document）を動かさず、会話だけを末尾へ移動する。
     const conversation = conversationRef.current;
     conversation?.scrollTo({ top: conversation.scrollHeight });
-  }, [lastRunId, lastRunStatus]);
+  }, [lastRunId, lastRunStatus, pending?.localId, pending?.status]);
 
   // 評価を保存した Run を、会話の取り直しを待たずに差し替える（#774）。
   function replaceRun(updated: RunState) {
@@ -171,7 +189,17 @@ export function ChatPage() {
         thread_id: threadId ?? undefined,
       }),
     onSuccess: (run) => {
-      if (run.thread_id) setThreadId(run.thread_id);
+      if (run.thread_id) {
+        // 作られた Run を会話に入れてから、送った質問（仮）を外す。取り直しを待たず、二重にも出さない（#907）。
+        const createdThreadId = run.thread_id;
+        queryClient.setQueryData<ThreadData>(["thread", createdThreadId], (current) => ({
+          thread_id: createdThreadId,
+          agent_id: current?.agent_id ?? run.agent_id,
+          runs: [...(current?.runs ?? []).filter((item) => item.id !== run.id), run],
+        }));
+        setThreadId(createdThreadId);
+      }
+      setPending(null);
       void queryClient.invalidateQueries({ queryKey: ["thread", run.thread_id] });
       void queryClient.invalidateQueries({ queryKey: ["threads"] });
       if (stopAfterCreateRef.current) {
@@ -179,10 +207,10 @@ export function ChatPage() {
         cancel.mutate(run.id);
       }
     },
-    onError: (_error, goal) => {
+    onError: () => {
       stopAfterCreateRef.current = false;
-      // 送れなかった質問を入力欄に戻す。送信の後に書き始めた次の質問は上書きしない（RAG のチャットと同じ）。
-      setDraft((current) => (current.trim() ? current : goal));
+      // 送れなかった質問は会話の欄に残し、理由と「再送信」を出す（入力欄には戻さない。#907）。
+      setPending((current) => (current ? withOptimisticChatStatus(current, "failed") : current));
     },
   });
 
@@ -201,10 +229,19 @@ export function ChatPage() {
     // 実行中・承認待ちのあいだは次の質問を送らない（前の回答を会話の履歴に含めるため）。
     // 実行中の Enter でも停止しない（停止はボタンだけ。buttons.md §3.1）。
     if (!goal || !selectedAgentId || running || waitingApproval || send.isPending) return;
-    // 送ったら入力欄を空にし、回答の作成中も次の質問を書けるようにする（RAG のチャットと同じ）。
+    // 送った質問はすぐ会話の欄に出し、入力欄を空にする。回答の作成中も次の質問を書ける（#907）。
+    setPending(createOptimisticChatMessage(goal));
     setDraft("");
     cancel.reset();
     send.mutate(goal);
+  }
+
+  /** 送れなかった質問を、そのままもう一度送る（#907）。 */
+  function resend() {
+    if (!pending || !selectedAgentId || running || waitingApproval || send.isPending) return;
+    setPending(withOptimisticChatStatus(pending, "sending"));
+    cancel.reset();
+    send.mutate(pending.content);
   }
 
   function stop() {
@@ -223,6 +260,7 @@ export function ChatPage() {
 
   function startNewThread() {
     setThreadId(null);
+    setPending(null);
     send.reset();
     cancel.reset();
     // 新しい会話はすぐ書き始められるよう、入力欄へフォーカスする（RAG と同じ）。
@@ -233,6 +271,7 @@ export function ChatPage() {
     // lg 未満のシートは、会話を選んだら閉じる（SideSheet が開閉ボタンへフォーカスを戻す）。
     setHistorySheetOpen(false);
     setThreadId(item.thread_id);
+    setPending(null);
     send.reset();
     cancel.reset();
   }
@@ -284,6 +323,7 @@ export function ChatPage() {
                 onValueChange={(value) => {
                   setAgentId(value);
                   setThreadId(null);
+                  setPending(null);
                   send.reset();
                 }}
                 width="full"
@@ -371,12 +411,19 @@ export function ChatPage() {
                 </Button>
               </div>
 
-              <div ref={conversationRef} className="min-h-0 flex-1 space-y-6 overflow-y-auto p-4" data-testid="chat-conversation">
-                {threadId && thread.isLoading ? (
+              {/* 会話の欄。新しいメッセージを role="log" で知らせる（#907）。 */}
+              <div
+                ref={conversationRef}
+                role="log"
+                aria-label={t("chat.messages")}
+                className="min-h-0 flex-1 space-y-6 overflow-y-auto p-4"
+                data-testid="chat-conversation"
+              >
+                {threadId && thread.isLoading && !pending ? (
                   <TimedLoadingState label={t("chat.loading")} framed={false} testId="chat-thread-loading">
                     <ListSkeleton rows={3} />
                   </TimedLoadingState>
-                ) : runs.length === 0 ? (
+                ) : runs.length === 0 && !pending ? (
                   <EmptyState title={t("chat.empty.title")} hint={t("chat.empty.hint")} />
                 ) : (
                   runs.map((run) => (
@@ -392,6 +439,14 @@ export function ChatPage() {
                     />
                   ))
                 )}
+                {pending ? (
+                  <PendingTurn
+                    message={pending}
+                    errorMessage={send.error?.message ?? null}
+                    resendDisabled={composerBlocked || send.isPending}
+                    onResend={resend}
+                  />
+                ) : null}
               </div>
 
               <div className="shrink-0 space-y-2 border-t border-border p-3" data-testid="chat-composer-region">
@@ -431,7 +486,6 @@ export function ChatPage() {
                     className="space-y-0"
                   />
                 </FieldActionRow>
-                {send.error ? <Banner severity="danger">{send.error.message}</Banner> : null}
                 {cancel.error ? (
                   <Banner severity="danger" title={t("chat.stopFailed")}>
                     {cancel.error.message}
@@ -527,11 +581,7 @@ function ChatTurn({
 
   return (
     <div className="space-y-2" data-testid={`chat-turn-${run.id}`}>
-      <div className="flex justify-end">
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-md bg-accent-subtle px-3 py-2 text-sm text-fg">
-          {run.goal}
-        </div>
-      </div>
+      <ChatUserMessage>{run.goal}</ChatUserMessage>
       <div className="space-y-3 rounded-md border border-border p-3" aria-live="polite">
         {ACTIVE_STATUSES.has(run.status) ? (
           <ProcessingIndicator active operationKey={`chat-run-${run.id}`} label={t("chat.answering")} testId="chat-answering" />
@@ -626,6 +676,61 @@ function ChatTurn({
           <AnswerFeedback runId={run.id} current={run.feedback ?? null} onSaved={onFeedbackSaved} />
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 送った質問（Run の作成の応答の前・作れなかったとき。#907）。作成中の表示は Run の回答の場所と同じ形にし、
+ * Run ができたら同じ位置の `ChatTurn` に置き換わる。作れなかったときは質問を残し、理由と「再送信」を出す。
+ */
+function PendingTurn({
+  message,
+  errorMessage,
+  resendDisabled,
+  onResend,
+}: {
+  message: OptimisticChatMessage;
+  errorMessage: string | null;
+  resendDisabled: boolean;
+  onResend: () => void;
+}) {
+  return (
+    <div className="space-y-2" data-testid="chat-pending-turn">
+      <ChatUserMessage status={message.status} failedLabel={t("chat.sendFailed")}>
+        {message.content}
+      </ChatUserMessage>
+      {message.status === "failed" ? (
+        <div data-testid="chat-send-failure">
+          <Banner
+            severity="danger"
+            action={
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                icon={RotateCcw}
+                disabled={resendDisabled}
+                onClick={onResend}
+              >
+                {t("chat.resend")}
+              </Button>
+            }
+          >
+            {errorMessage || t("chat.sendFailedHint")}
+          </Banner>
+        </div>
+      ) : (
+        <div className="space-y-3 rounded-md border border-border p-3">
+          <ProcessingIndicator
+            active
+            operationKey={message.localId}
+            startedAt={message.sentAtMs}
+            label={t("chat.answering")}
+            testId="chat-answering"
+          />
+        </div>
+      )}
     </div>
   );
 }
