@@ -107,7 +107,7 @@ export function FeedbackControls({
             document_id: answer ? null : documentId,
             chunk_id: answer ? null : chunkId,
             message_id: messageId,
-            content_snapshot: messageId ? null : contentSnapshot,
+            content_snapshot: feedbackSnapshotFor(targetType, messageId, contentSnapshot),
             rating: submission.rating,
             reason: submission.reason,
             comment: submission.rating === "not_helpful" ? submission.comment : null,
@@ -121,17 +121,20 @@ export function FeedbackControls({
   );
 }
 
+/**
+ * 利用者が見た質問・回答・根拠の snapshot。回答を生成しない検索（検索結果だけ）でも、引用の評価が
+ * どの質問への評価か分かるよう、質問があれば作る（回答は null。#978）。質問が無ければ null。
+ */
 export function buildFeedbackContentSnapshot(
   question: string,
   answer: string,
   citations: RetrievedChunk[]
 ): FeedbackContentSnapshot | null {
   const normalizedQuestion = question.trim();
-  const normalizedAnswer = answer.trim();
-  if (!normalizedQuestion || !normalizedAnswer) return null;
+  if (!normalizedQuestion) return null;
   return {
     question: normalizedQuestion,
-    answer: normalizedAnswer,
+    answer: answer.trim() || null,
     citations: citations.slice(0, 50).map((chunk) => ({
       document_id: chunk.document_id,
       chunk_id: chunk.chunk_id,
@@ -142,6 +145,20 @@ export function buildFeedbackContentSnapshot(
       rerank_score: chunk.rerank_score,
     })),
   };
+}
+
+/**
+ * 送る snapshot。チャット（message id）はサーバーの記録を使うので送らない。回答の評価は回答の本文が
+ * 必須（backend が 422 にする）なので、回答の無い snapshot は送らない。
+ */
+export function feedbackSnapshotFor(
+  targetType: FeedbackTargetType,
+  messageId: string | null,
+  snapshot: FeedbackContentSnapshot | null
+): FeedbackContentSnapshot | null {
+  if (messageId || !snapshot) return null;
+  if (targetType === "answer" && !snapshot.answer) return null;
+  return snapshot;
 }
 
 export function buildFeedbackPayload(payload: FeedbackRequestBody): FeedbackRequestBody {

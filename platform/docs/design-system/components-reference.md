@@ -1580,9 +1580,10 @@ export type TextFieldProps = {
 | 決めたこと | 理由 |
 |---|---|
 | 入力欄を常に `div.relative` で包み、先頭アイコンは入力欄の**後ろ**（DOM 上）に置いて `peer-disabled:` で色を変える | クリアボタンの出し入れで入力欄が作り直されない（フォーカスと IME の変換を失わない）。`peer` は前の兄弟にしか効かない |
-| 後置スロットは枠線の内側（`inset-y-px right-px`）。幅は `ResizeObserver` で測り、入力欄の `padding-right` にする。測る前（SSR・初回）は `pr-[var(--field-height)]`（四角のボタン 1 つ分） | 幅の決まらない要素でも文字と重ならない |
+| 後置スロットは枠線まで含めた右端（`inset-y-0 right-0`。`SecretField` の表示切替と同じ）。幅は `ResizeObserver` で測り、入力欄の `padding-right` にする。測る前（SSR・初回）は `pr-[var(--field-height)]`（四角のボタン 1 つ分） | 幅の決まらない要素でも文字と重ならない。スロットのボタン（クリア・`SearchableMultiSelect` の一覧の開閉）が入力欄と同じ高さ（md 36px・タッチ端末 44px）になる。以前の枠線の内側（`inset-y-px right-px`）では 2px 低かった（#1132） |
+| スロットのボタンは `TEXT_FIELD_TRAILING_BUTTON_CLASS`（`h-full` の正方形・外側の角だけ `rounded-r-control`・`bg-clip-padding`） | 枠線は透明のまま地を枠線の内側だけに塗るので、ホバーの地が入力欄の枠線に重ならず、見た目は枠線の内側に収まる |
 | クリアボタンは `aria-controls` で入力欄を指し、`mousedown` を止める。押したら `onClear()` の後に入力欄へ `focus()` | ボタンが消えてもフォーカスが body に落ちない。blur で確定する検索欄が消す前の値を確定しない |
-| 強制カラーモードでは、クリアボタンの輪郭のうち上・右・下を `Canvas` にし、左の区切りだけ残す | Button は強制カラーモードで輪郭を出すが、入力欄の枠線と二重の線にしない |
+| 強制カラーモードでは、スロットのボタンの輪郭の上・右・下が入力欄の枠線とちょうど重なり、左の区切りだけが増える（クリアの左に並ぶ一覧の開閉は、右を `Canvas` にする） | Button は強制カラーモードで輪郭を出すが、入力欄の枠線と二重の線にしない |
 | `type="search"` の `::-webkit-search-cancel-button` / `::-webkit-search-decoration` を `appearance: none` | 共有のクリアと二重にしない（README §7 #33） |
 
 - 純粋関数 `hasTextValue` / `shouldClearOnEscape` / `clearTextField` と class の組み立ては `packages/ui/tests/text-field-slots.test.tsx` が確かめます（パッケージのルートからは export しません）。実ブラウザは RAG の `e2e/feedback.spec.ts`（desktop / 375px の高さ・角丸・アイコン・クリア・Tab 順・Escape、強制カラーモードのタブ）。
@@ -2120,6 +2121,34 @@ import { SearchableMultiSelect, SearchableSelectField } from "@engchina/producti
 - 実ブラウザは RAG `e2e/knowledge-base-searchable-select.spec.ts`（モックで 300 件と 120 件。評価・文書インデックス・アップロード・検索・回答プロファイル、desktop / 375px、ライト / ダーク）。
 - 製品の置き換え: RAG（文書インデックスの絞り込み、アップロードの登録先、検索・回答プロファイルの参照 KB、品質評価、文書詳細の所属先、RAG 検索・チャットの対象の検索・回答プロファイル（#635 で単一選択の `SearchableSelectField` に統一））。RAG 固有の `MultiSelectCombobox` は削除した。
 - `leadingIcon`（任意。#635）: 単一選択のボタンの先頭に 16px のアイコン（読み上げない）を出す。検索して選ぶ欄であることを開く前から見せたいときに `leadingIcon={Search}` を渡す（RAG の対象の検索・回答プロファイル）。
+
+---
+
+## ApiErrorBanner / ApiErrorState / presentApiError — **新規**（#900 / #906）
+
+API の失敗を、**利用者向けの要約（何が起きたか）・次の操作・「詳細」（技術的な情報）**に分けて出す部品と関数（UX 契約 messaging.md §10.3.1）。NL2SQL の #900 の仕組みを platform に移し、3 製品で使う。
+
+```tsx
+// 失敗の面（Banner）。要約・次の操作・開いた「詳細」（要求・待ち時間の上限・エラー種別・元の文・HTTP ステータス・request ID）
+<ApiErrorBanner error={query.error} fallback={t("…loadError")} testId="…-error" />
+
+// 領域の取得の失敗（ErrorState + 「詳細」。再試行付き）
+<ApiErrorState error={query.error} fallback={t("…loadError")} onRetry={() => void query.refetch()} retryLabel={t("common.retry")} />
+
+// 1 つの文しか出せない所（Toast・FormStatus・SaveErrorBanner）
+toast.error(apiErrorMessage(error, t("…failed")));
+```
+
+| 関数・型 | 役割 |
+|---|---|
+| `ApiTransportError` / `toApiTransportError(cause, request)` | fetch・本文の読み取りが投げた timeout（`TimeoutError`）・通信断（`TypeError`）を、日本語の要約 + 次の操作の例外にする。英語の元の文は `causeMessage`。`AbortError` は `null`（変換しない） |
+| `transportErrorOf(error)` | `ApiTransportError` か、製品の `ApiError` が `cause` に包んだものを取り出す（RAG） |
+| `ApiErrorPresentable` / `httpApiErrorPresentation` | 製品の `ApiError` が `toApiErrorPresentation()` を実装し、backend の文を要約に、HTTP ステータス・エラーコード・request ID を詳細に分ける |
+| `presentApiError(error, fallback)` | 要約・次の操作・詳細を返す。組み込みの例外（英語の文）は既定の文にし、元の文は詳細へ |
+| `apiErrorMessage(error, fallback)` | 1 つの文。timeout・通信断は要約 + 次の操作、組み込みの例外は既定の文、それ以外は `message` のまま |
+
+- 既定の文言（`DEFAULT_API_TRANSPORT_MESSAGES` / `DEFAULT_API_ERROR_DETAIL_LABELS`）は日本語。`ApiErrorDetailList` は「詳細」の折りたたみ（`Disclosure`）だけを出す。`ErrorState` は `details` で同じ折りたたみを本文の下に置ける。
+- 単体テストは `packages/ui/tests/api-error.test.tsx`。製品の確認は各製品の API のラッパーのテストと e2e（`route.abort` で通信断）。
 
 ---
 

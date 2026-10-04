@@ -83,7 +83,8 @@ async def list_feedback(
     target_type: FeedbackTargetType | None = None,
     rating: FeedbackRating | None = None,
     reason: FeedbackReason | None = None,
-    period_days: int | None = Query(default=30, ge=1, le=3650),
+    # 省略したときは期間で絞らない（全期間）。画面は「すべて」のとき送らない（#978）。
+    period_days: int | None = Query(default=None, ge=1, le=3650),
     q: str | None = Query(default=None, max_length=200),
     sort_order: FeedbackSortOrder = FeedbackSortOrder.NEWEST,
     limit: int = Query(default=50, ge=1, le=100),
