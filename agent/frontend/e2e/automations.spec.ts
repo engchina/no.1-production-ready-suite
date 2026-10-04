@@ -158,6 +158,8 @@ test("一覧から今すぐ実行し、実行履歴に出す。未保存の離�
 test("Agent 管理の権限が無い利用者は閲覧だけ", async ({ page, mockApi }) => {
   seedAutomation(mockApi, { last_result: "skipped", last_run_at: MOCK_NOW, last_message: "前回の Run が終わっていないため、この回は実行しませんでした。" });
   mockApi.setCurrentUser(dbUser({ permissions: ["menu.automations"] }));
+  // 自動実行の一覧は利用者の対象範囲の業務 Agent のものだけ（backend の list_automations。#1113）。
+  mockApi.state.auth.currentUser!.allowed_agent_ids = ["default"];
   await page.goto("/automations");
   await expect(page.getByRole("button", { name: "自動実行を作成" })).toHaveCount(0);
   const row = page.getByRole("table", { name: "自動実行の一覧" }).getByRole("row", { name: /毎朝の売上の要約/ });
