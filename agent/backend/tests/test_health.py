@@ -1,6 +1,7 @@
 """health / Agent Runtime の疎通テスト（Oracle 不要）。"""
 
 import base64
+import csv
 import hashlib
 import io
 import json
@@ -292,6 +293,24 @@ class _FakeOracleCursor:
                 (row.get("payload_json"),)
                 for row in self._store.rows_by_table.get("AGENT_RUNTIME_EVENTS", [])
                 if row.get("event_type") == event_type
+            ]
+            return
+        if (
+            normalized.startswith("SELECT DISTINCT S.TOOL_NAME")
+            and "FROM AGENT_RUNTIME_STEPS" in normalized
+        ):
+            run_ids = {
+                row["run_id"] for row in self._store.rows_by_table.get("AGENT_RUNTIME_RUNS", [])
+            }
+            self._rows = [
+                (name,)
+                for name in sorted(
+                    {
+                        row["tool_name"]
+                        for row in self._store.rows_by_table.get("AGENT_RUNTIME_STEPS", [])
+                        if row.get("tool_name") and row["run_id"] in run_ids
+                    }
+                )
             ]
             return
         if normalized.startswith("SELECT COUNT(*)") and "FROM AGENT_RUNTIME_RUNS" in normalized:
@@ -2157,8 +2176,11 @@ def test_runtime_snapshot_import_dry_run_reports_validation_errors() -> None:
     assert data["imported"] is False
     assert data["dry_run"] is True
     assert data["validation"]["valid"] is False
-    assert any("unsupported snapshot version" in error for error in data["validation"]["errors"])
-    assert any("duplicate run id" in error for error in data["validation"]["errors"])
+    errors = data["validation"]["errors"]
+    assert any("未対応のスナップショットの版です: unsupported" in error for error in errors)
+    assert any("ID が重複している実行があります" in error for error in errors)
+    # 画面にそのまま出すので、英語だけの文にしない（#1027）。
+    assert not any(error.isascii() for error in errors)
 
 
 def test_runtime_snapshot_import_requires_explicit_confirmation() -> None:
@@ -2170,7 +2192,34 @@ def test_runtime_snapshot_import_requires_explicit_confirmation() -> None:
     )
 
     assert resp.status_code == 400
-    assert "confirm_replace=true" in resp.json()["error_messages"][0]
+    assert "置換するには確認" in resp.json()["error_messages"][0]
+
+
+def test_runtime_snapshot_invalid_replace_and_warnings_are_japanese() -> None:
+    snapshot = client.get("/api/runtime/snapshot").json()["data"]
+    without_default = deepcopy(snapshot)
+    without_default["agents"] = [
+        agent for agent in without_default["agents"] if agent["id"] != "default"
+    ]
+    checked = client.post(
+        "/api/runtime/snapshot/import",
+        json={"snapshot": without_default, "dry_run": True},
+    ).json()["data"]["validation"]
+    missing_default = "既定の業務 Agent（default）がありません。置換すると作り直します。"
+    assert missing_default in checked["warnings"]
+
+    invalid = deepcopy(snapshot)
+    invalid["version"] = "unsupported"
+    resp = client.post(
+        "/api/runtime/snapshot/import",
+        json={"snapshot": invalid, "dry_run": False, "confirm_replace": True},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error_messages"][0] == (
+        "スナップショットに 1 件のエラーがあるため置換できません。"
+        "「検証」でエラーの内容を確認してください。"
+    )
 
 
 def test_runtime_snapshot_import_replaces_state_and_can_restore() -> None:
@@ -2411,6 +2460,29 @@ def test_oracle_projection_audit_uses_db_side_pagination() -> None:
         "OFFSET :OFFSET ROWS FETCH NEXT :LIMIT ROWS ONLY" in statement
         for statement in store.executed_statements
     )
+
+
+def test_oracle_projection_audit_returns_recorded_tool_names() -> None:
+    """絞り込みに依らず、監査に記録されたツール名（MCP 接続のツールを含む）を返す（#983）。"""
+    store = _FakeOracleStore()
+
+    def connect() -> _FakeOracleConnection:
+        return _FakeOracleConnection(store)
+
+    repository = AgentRuntimeOracleNormalizedRepository(
+        connect_factory=connect,
+    )
+    _seed_run(repository, "Oracle projection tool names", [ToolCall(name="echo", arguments={})])
+    _seed_waiting_run(
+        repository,
+        "Oracle projection MCP tool names",
+        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "tool names"})],
+    )
+
+    data = repository.list_tool_call_audit_projection(tool_name="echo", offset=0, limit=10)
+
+    assert data.total == 1
+    assert data.tool_names == ["echo", "nl2sql__nl2sql_query"]
 
 
 def test_oracle_projection_incremental_mode_upserts_without_full_delete() -> None:
@@ -2861,6 +2933,41 @@ def test_global_tool_call_audit_filters_and_exports_csv() -> None:
     assert "run_id,run_goal,run_status" in csv_resp.text
     assert run["id"] in csv_resp.text
     assert "global audit export" in csv_resp.text
+
+
+def test_global_tool_call_audit_lists_recorded_tool_names() -> None:
+    """MCP 接続のツールは `/api/tools` に出ないため、監査に記録されたツール名を返す（#983）。"""
+    _seed_api_run("audit tool names echo", [ToolCall(name="echo", arguments={})])
+    _seed_api_run(
+        "audit tool names mcp",
+        [ToolCall(name="nl2sql__nl2sql_query", arguments={"question": "tool names"})],
+        approval=True,
+    )
+
+    audit = client.get("/api/audit/tool-calls?tool_name=echo&limit=1")
+
+    assert audit.status_code == 200
+    data = audit.json()["data"]
+    assert {"echo", "nl2sql__nl2sql_query"} <= set(data["tool_names"])
+    assert data["tool_names"] == sorted(data["tool_names"])
+    assert all(record["tool_name"] == "echo" for record in data["records"])
+    tools = client.get("/api/tools").json()["data"]["tools"]
+    assert "nl2sql__nl2sql_query" not in {tool["name"] for tool in tools}
+
+
+def test_global_tool_call_audit_csv_is_excel_safe() -> None:
+    """CSV は BOM 付きで、数式として扱われる値は `'` で始める（#983）。"""
+    goal = '=HYPERLINK("https://example.invalid","監査")'
+    run = _seed_api_run(goal, [ToolCall(name="echo", arguments={})])
+
+    csv_resp = client.get(f"/api/audit/tool-calls.csv?run_id={run['id']}")
+
+    assert csv_resp.status_code == 200
+    assert csv_resp.content.startswith(b"\xef\xbb\xbf")
+    rows = list(csv.DictReader(io.StringIO(csv_resp.content.decode("utf-8-sig"))))
+    assert rows[0]["run_goal"] == f"'{goal}"
+    assert rows[0]["tool_name"] == "echo"
+    assert rows[0]["duration_ms"].isdigit()
 
 
 def test_global_tool_call_audit_filters_guardrail_warnings() -> None:

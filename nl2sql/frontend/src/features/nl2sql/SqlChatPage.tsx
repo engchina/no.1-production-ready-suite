@@ -79,20 +79,37 @@ const inFlight = (job: JobData | undefined) =>
 const errorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
 
+/** チャットの 1 回の送信の内容。再送信は同じ内容（同じ job ID）で送り直す。 */
+interface ChatJobRequest {
+  question: string;
+  profile_id: string;
+  engine: Nl2SqlEngine;
+  previous_job_id: string | null;
+  /** 送信の前に画面が決める job ID（#900）。 */
+  client_job_id: string;
+}
+
+/** 送った質問（#907）と、その送信の内容。 */
+interface PendingSend {
+  message: OptimisticChatMessage;
+  request: ChatJobRequest;
+}
+
 /**
  * SQL の生成のジョブを投入する。job ID は送信の前に画面が決める（#900）。
  *
  * 投入の応答が上限までに届かない（timeout・通信断）ときも、backend はジョブを作り終えていることが
  * ある。そのときは同じ ID でジョブを取り直し、会話に表示して生成の完了を待つ（二重に送らない）。
+ * 再送信も同じ ID で送るので、backend が作り終えていれば作成済みのジョブが返る（二重に生成しない）。
  */
 async function submitChatJob(
-  body: Record<string, unknown>,
+  request: ChatJobRequest,
 ): Promise<JobCreateData | JobData> {
-  const clientJobId = randomUuid();
+  const clientJobId = request.client_job_id;
   try {
     return await apiPost<JobCreateData>(
       "/api/nl2sql/jobs",
-      { ...body, client_job_id: clientJobId },
+      { ...request, generation_only: true, use_ontology_context: true },
       { timeoutMs: API_TIMEOUT_MS.jobSubmit },
     );
   } catch (cause) {
@@ -192,7 +209,8 @@ export function SqlChatPage() {
   const [profileSearch, setProfileSearch] = useState("");
   // 送った質問（#907）。ジョブの投入の応答を待たずに会話の欄の末尾へ出し、投入できたら会話のジョブに置き換える。
   // 投入できなかったときは残して「再送信」を出す。
-  const [pending, setPending] = useState<OptimisticChatMessage | null>(null);
+  const [pendingSend, setPendingSend] = useState<PendingSend | null>(null);
+  const pending = pendingSend?.message ?? null;
   const inlineHistory = useInlineHistory();
   const [previousInline, setPreviousInline] = useState(inlineHistory);
   if (previousInline !== inlineHistory) {
@@ -250,24 +268,23 @@ export function SqlChatPage() {
   const turns = conversation.data?.turns ?? [];
   const latest = turns.at(-1);
   const generating = turns.some(inFlight);
+  // 応答が届かなかった送信のジョブが、取り直した会話に入っていたら（backend は作り終えていた）、
+  // 送った質問の表示を外す（質問を二重に出さず、再送信で二重に生成しない）。
+  if (
+    pendingSend &&
+    turns.some((turn) => turn.job_id === pendingSend.request.client_job_id)
+  )
+    setPendingSend(null);
   const send = useMutation({
-    mutationFn: (question: string) =>
-      submitChatJob({
-        question,
-        profile_id: selectedProfileId,
-        engine,
-        generation_only: true,
-        previous_job_id: latest?.job_id ?? null,
-        use_ontology_context: true,
-      }),
-    onSuccess: async (job, question) => {
+    mutationFn: (request: ChatJobRequest) => submitChatJob(request),
+    onSuccess: async (job, { question }) => {
       const id = conversationId || job.job_id;
       // 応答の本文は保存しない。会話 ID と未送信の草稿だけを一時保存する。
       // 草稿は送信の時点で空にしている（投入中に書き始めた次の質問は消さない。#907）。
       setProfileId(selectedProfileId);
       setConversationId(id);
       // 送った質問を、投入できたジョブ（job ID はサーバーと同じ client_job_id）に置き換える。二重に出さない。
-      setPending(null);
+      setPendingSend(null);
       queryClient.setQueryData<ConversationData>(
         [...chatKey, id],
         (previous) => ({
@@ -293,8 +310,13 @@ export function SqlChatPage() {
     },
     onError: () => {
       // 送った質問は残し、理由と「再送信」を出す（入力を失わない。#907）。
-      setPending((current) =>
-        current ? withOptimisticChatStatus(current, "failed") : current,
+      setPendingSend((current) =>
+        current
+          ? {
+              ...current,
+              message: withOptimisticChatStatus(current.message, "failed"),
+            }
+          : current,
       );
       // 応答が届かなくてもジョブが作られていることがある。履歴と会話を取り直して表示に反映する。
       void queryClient.invalidateQueries({ queryKey: chatKey });
@@ -333,22 +355,35 @@ export function SqlChatPage() {
     const question = draft.trim();
     if (!question || blocked || sendingRef.current) return;
     sendingRef.current = true;
+    const request: ChatJobRequest = {
+      question,
+      profile_id: selectedProfileId,
+      engine,
+      previous_job_id: latest?.job_id ?? null,
+      client_job_id: randomUuid(),
+    };
     // 送った質問はすぐ会話の欄に出し、入力欄を空にする（#907）。
-    setPending(createOptimisticChatMessage(question));
+    setPendingSend({ message: createOptimisticChatMessage(question), request });
     setDraft("");
-    send.mutate(question);
+    send.mutate(request);
   }
-  /** 送信できなかった質問を、そのままもう一度送る（#907）。 */
+  /**
+   * 送信できなかった質問を、そのままもう一度送る（#907）。同じ job ID・同じ内容で送るので、
+   * 応答が届かなかっただけで backend がジョブを作り終えていれば、作成済みのジョブが返る（#900）。
+   */
   function resend() {
-    if (!pending || blocked || sendingRef.current) return;
+    if (!pendingSend || blocked || sendingRef.current) return;
     sendingRef.current = true;
-    setPending(withOptimisticChatStatus(pending, "sending"));
-    send.mutate(pending.content);
+    setPendingSend({
+      ...pendingSend,
+      message: withOptimisticChatStatus(pendingSend.message, "sending"),
+    });
+    send.mutate(pendingSend.request);
   }
   function resetConversation() {
     if (busy) return;
     setConversationId("");
-    setPending(null);
+    setPendingSend(null);
     send.reset();
     stop.reset();
   }
@@ -357,7 +392,7 @@ export function SqlChatPage() {
     setProfileId(item.profile_id);
     setConversationId(item.id);
     setHistorySheetOpen(false);
-    setPending(null);
+    setPendingSend(null);
     send.reset();
     stop.reset();
   }
@@ -371,7 +406,17 @@ export function SqlChatPage() {
   }, [active, conversationId, turns.length, latest?.status, pending]);
   const historyContent = (
     <>
-      {history.isPending ? <ListSkeleton rows={3} /> : null}
+      {history.isPending ? (
+        // 読み込み中は文言と経過時間を出し、一覧の形の Skeleton で寸法を予約する（messaging.md §3.6）。
+        <TimedLoadingState
+          label={t("chat.historyLoading")}
+          operationKey="sql-chat-history-load"
+          framed={false}
+          testId="sql-chat-history-loading"
+        >
+          <ListSkeleton rows={3} />
+        </TimedLoadingState>
+      ) : null}
       {history.isError ? (
         <ApiErrorBanner
           error={history.error}
@@ -604,11 +649,18 @@ export function SqlChatPage() {
                 data-testid="sql-chat-conversation"
               >
                 {conversationId && conversation.isPending && !pending ? (
-                  <ProcessingIndicator
-                    active
+                  // 読み込み中は文言と経過時間を出し、質問と回答の吹き出しの形の Skeleton で寸法を予約する
+                  // （RAG のチャットと同じ。messaging.md §3.6）。
+                  <TimedLoadingState
                     label={t("chat.loading")}
-                    placement="panel"
-                  />
+                    operationKey="sql-chat-conversation-load"
+                    framed={false}
+                    testId="sql-chat-conversation-loading"
+                  >
+                    <Skeleton className="ml-auto h-12 w-2/3" />
+                    <Skeleton className="h-32 w-5/6" />
+                    <Skeleton className="ml-auto h-12 w-1/2" />
+                  </TimedLoadingState>
                 ) : null}
                 {conversationId && conversation.isError ? (
                   <ApiErrorBanner

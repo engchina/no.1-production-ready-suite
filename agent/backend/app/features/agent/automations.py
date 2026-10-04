@@ -372,7 +372,7 @@ def check_owner(item: Automation) -> str | None:
                 "実行する利用者の権限を確認できません（無効・削除・初回のパスワード変更が未了）。"
             )
     if not principal.has_any_permission({RUNS_OPERATE, ADMIN}):
-        return "実行する利用者に Run の実行権限がありません。"
+        return "実行する利用者に実行の権限がありません。"
     if not principal.can_use_agent(item.agent_id):
         return "実行する利用者はこの業務 Agent を使えません。"
     return None
@@ -435,9 +435,7 @@ def fire(
         except KeyError:
             previous = None
         if previous is not None and previous.status in _ACTIVE_RUN_STATUSES:
-            return record(
-                "skipped", "前回の Run が終わっていないため、この回は実行しませんでした。"
-            )
+            return record("skipped", "前回の実行が終わっていないため、この回は実行しませんでした。")
     problem = owner_check(item)
     if problem:
         logger.warning("agent_automation_owner_rejected", extra={"automation_id": item.id})
@@ -455,7 +453,7 @@ def fire(
         created_by_user_uuid=item.run_as_user_uuid,
     )
     _schedule_execution(run)
-    return record("created", "Run を作りました。", run.id)
+    return record("created", "実行を作りました。", run.id)
 
 
 def scheduler_tick(now: datetime | None = None) -> list[AutomationFired]:

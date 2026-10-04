@@ -1580,9 +1580,10 @@ export type TextFieldProps = {
 | 決めたこと | 理由 |
 |---|---|
 | 入力欄を常に `div.relative` で包み、先頭アイコンは入力欄の**後ろ**（DOM 上）に置いて `peer-disabled:` で色を変える | クリアボタンの出し入れで入力欄が作り直されない（フォーカスと IME の変換を失わない）。`peer` は前の兄弟にしか効かない |
-| 後置スロットは枠線の内側（`inset-y-px right-px`）。幅は `ResizeObserver` で測り、入力欄の `padding-right` にする。測る前（SSR・初回）は `pr-[var(--field-height)]`（四角のボタン 1 つ分） | 幅の決まらない要素でも文字と重ならない |
+| 後置スロットは枠線まで含めた右端（`inset-y-0 right-0`。`SecretField` の表示切替と同じ）。幅は `ResizeObserver` で測り、入力欄の `padding-right` にする。測る前（SSR・初回）は `pr-[var(--field-height)]`（四角のボタン 1 つ分） | 幅の決まらない要素でも文字と重ならない。スロットのボタン（クリア・`SearchableMultiSelect` の一覧の開閉）が入力欄と同じ高さ（md 36px・タッチ端末 44px）になる。以前の枠線の内側（`inset-y-px right-px`）では 2px 低かった（#1132） |
+| スロットのボタンは `TEXT_FIELD_TRAILING_BUTTON_CLASS`（`h-full` の正方形・外側の角だけ `rounded-r-control`・`bg-clip-padding`） | 枠線は透明のまま地を枠線の内側だけに塗るので、ホバーの地が入力欄の枠線に重ならず、見た目は枠線の内側に収まる |
 | クリアボタンは `aria-controls` で入力欄を指し、`mousedown` を止める。押したら `onClear()` の後に入力欄へ `focus()` | ボタンが消えてもフォーカスが body に落ちない。blur で確定する検索欄が消す前の値を確定しない |
-| 強制カラーモードでは、クリアボタンの輪郭のうち上・右・下を `Canvas` にし、左の区切りだけ残す | Button は強制カラーモードで輪郭を出すが、入力欄の枠線と二重の線にしない |
+| 強制カラーモードでは、スロットのボタンの輪郭の上・右・下が入力欄の枠線とちょうど重なり、左の区切りだけが増える（クリアの左に並ぶ一覧の開閉は、右を `Canvas` にする） | Button は強制カラーモードで輪郭を出すが、入力欄の枠線と二重の線にしない |
 | `type="search"` の `::-webkit-search-cancel-button` / `::-webkit-search-decoration` を `appearance: none` | 共有のクリアと二重にしない（README §7 #33） |
 
 - 純粋関数 `hasTextValue` / `shouldClearOnEscape` / `clearTextField` と class の組み立ては `packages/ui/tests/text-field-slots.test.tsx` が確かめます（パッケージのルートからは export しません）。実ブラウザは RAG の `e2e/feedback.spec.ts`（desktop / 375px の高さ・角丸・アイコン・クリア・Tab 順・Escape、強制カラーモードのタブ）。

@@ -32,6 +32,7 @@ export const DATABASE_MESSAGES = {
   "settings.adb.lifecycle.UNAVAILABLE": "利用不可",
   "settings.adb.lifecycle.UPDATING": "更新中",
   "settings.adb.lifecycle.UPGRADING": "アップグレード中",
+  "settings.adb.loading": "Autonomous Database の情報を読み込んでいます",
   "settings.adb.notify.actionFailed": "ADB の操作に失敗しました。",
   "settings.adb.notify.infoFailed":
     "ADB 情報を取得できませんでした。OCI 認証、リージョン、ADB OCID を確認して再試行してください。",
