@@ -35,7 +35,7 @@ import { DegradedBanner } from "@/components/DegradedBanner";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { ListPagination } from "@/components/ListPagination";
-import { EmptyState, ErrorState } from "@/components/StateViews";
+import { EmptyState, ApiErrorState } from "@/components/StateViews";
 import {
   api,
   ApiError,
@@ -514,8 +514,9 @@ export function FileListClient() {
         ) : null}
 
         {query.isError ? (
-          <ErrorState
-            message={query.error instanceof ApiError ? query.error.message : t("fileList.loadError")}
+          <ApiErrorState
+            error={query.error}
+            fallback={t("fileList.loadError")}
             onRetry={() => void query.refetch()}
           />
         ) : query.isPending ? (
