@@ -3014,6 +3014,65 @@ test("保存中はプロファイル編集と競合操作を固定し失敗後�
   await page.screenshot({ path: testInfo.outputPath("profile-save-failure-draft.png") });
 });
 
+test("保存の 409（ほかの更新）は文に合わせて「最新の内容を読み込む」を出し、確認の後に最新の版へ置き換える", async ({ page }, testInfo) => {
+  const profile = { ...profiles[0], name: "DEFAULT_PROFILE" };
+  await mockProfileApi(page, { profileItems: [profile] });
+  let serverVersion = 1;
+  const ifMatches: string[] = [];
+  await page.route("**/api/nl2sql/profiles/default", async (route) => {
+    const method = route.request().method();
+    if (method === "GET") {
+      if (serverVersion === 1) return route.fallback();
+      return fulfillJson(route, { ...profile, category: "営業", etag: "etag-default-2" });
+    }
+    if (method !== "PATCH") return route.fallback();
+    ifMatches.push(route.request().headers()["if-match"] ?? "");
+    if (serverVersion === 1) {
+      // ほかの利用者の保存で版が進んだ（ETag の不一致）。
+      serverVersion = 2;
+      return route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "業務 profile が更新されています。再読込してください。" }),
+      });
+    }
+    const payload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, { ...profile, ...payload, id: "default", etag: "etag-default-3" });
+  });
+  await page.goto("/profiles?profile=default");
+  const category = page.getByLabel("カテゴリ");
+  await category.fill("finance");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  const saveError = page.getByTestId("profile-save-error");
+  await expect(saveError.getByRole("alert")).toContainText("ほかの操作でこの業務プロファイルが更新された");
+  const reload = saveError.getByRole("button", { name: "最新の内容を読み込む" });
+  await expect(reload).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("profile-save-conflict.png") });
+
+  // 編集中の内容は破棄されるため、確認を挟む。キャンセルすれば編集を残す。
+  await reload.click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("最新の内容を読み込みますか");
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(category).toHaveValue("finance");
+  await expect(reload).toBeVisible();
+
+  await reload.click();
+  await dialog.getByRole("button", { name: "破棄して読み込む" }).click();
+  await expect(category).toHaveValue("営業");
+  await expect(saveError).toHaveCount(0);
+
+  // 最新の版の ETag で保存し直せる。
+  await category.fill("経理");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => ifMatches.length).toBe(2);
+  expect(ifMatches).toEqual(['"etag-default"', '"etag-default-2"']);
+  await expect(saveError).toHaveCount(0);
+});
+
 test("スキーマ一括選択中は保存と対象切替を固定する", async ({ page }) => {
   await mockProfileApi(page, { profileItems: [{ ...profiles[0], allowed_tables: [], allowed_views: [] }] });
   await page.goto("/profiles?profile=default");
