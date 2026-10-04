@@ -135,6 +135,14 @@ export const MODEL_MESSAGES = {
   "settings.model.placeholder.rerankModel": "cohere.rerank-v4.0-fast",
   "settings.model.requiredInOci": "OCI 運用時必須",
   "settings.model.save": "保存",
+  "settings.model.conflict.message":
+    "モデル設定は、この画面を開いた後にほかの画面（別の製品を含む）で更新されました。最新の設定を読み込んでから、保存し直してください。",
+  "settings.model.conflict.reload": "最新の設定を読み込む",
+  "settings.model.conflict.confirm.title": "最新の設定を読み込みますか？",
+  "settings.model.conflict.confirm.description":
+    "保存していない入力は破棄され、保存済みの最新のモデル設定を表示します。",
+  "settings.model.conflict.confirm.action": "読み込む",
+  "settings.model.conflict.reloaded": "最新のモデル設定を読み込みました。",
   "settings.model.saveError":
     "モデル設定を保存できませんでした。入力内容とバックエンド接続を確認して再試行してください。",
   "settings.model.subtitle":
