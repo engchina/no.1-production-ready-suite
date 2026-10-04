@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ClipboardPlus } from "lucide-react";
 import {
   Disclosure,
-  ErrorState,
   FormActionBar,
   FormSkeleton,
   FormStatus,
@@ -12,6 +11,8 @@ import {
   TextField,
   TimedLoadingState,
   toast,
+  ApiErrorState,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 import { useAuth } from "@engchina/production-ready-system-settings";
 import { useNavigate } from "react-router-dom";
@@ -78,8 +79,9 @@ function AddToEvaluationForm({ runId, testId, onDone }: { runId: string; testId:
   const error = draft.error ?? sets.error;
   if (error || !draft.data) {
     return (
-      <ErrorState
-        message={error?.message ?? t("evaluation.add.loadError")}
+      <ApiErrorState
+        error={error}
+        fallback={t("evaluation.add.loadError")}
         onRetry={() => void (draft.error ? draft.refetch() : sets.refetch())}
         retryLabel={t("common.retry")}
       />
@@ -267,7 +269,7 @@ function CaseForm({
           },
         ]}
         secondaryActions={[{ id: "cancel", label: t("common.cancel"), onClick: onDone }]}
-        status={<FormStatus tone="danger" message={add.error?.message ?? null} />}
+        status={<FormStatus tone="danger" message={add.error ? apiErrorMessage(add.error, t("common.error.save")) : null} />}
         testId={`${testId}-actions`}
       />
     </form>

@@ -1,7 +1,8 @@
 "use client";
 
 import {
-  DisclosureChevron,
+  ApiErrorBanner,
+  Disclosure,
   PageBody,
   Button,
   Card,
@@ -18,6 +19,7 @@ import {
   type StatusVariant,
   TimedLoadingState,
   ListSkeleton,
+  presentApiError,
   useActionPending,
 } from "@engchina/production-ready-ui";
 import { Fragment, useState } from "react";
@@ -44,7 +46,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
@@ -126,6 +128,19 @@ export function serviceCanRestart(status: DisplayRuntimeStatus): boolean {
 }
 
 type ServiceControlAction = "start" | "stop" | "restart";
+/** 実行中の操作（サービス ID → 操作）。 */
+type ServicePendingActions = Partial<Record<string, ServiceControlAction>>;
+
+/** 失敗した操作（サービス ID → 操作と例外）。次にそのサービスの操作を始めるまで行に残す。 */
+type ServiceActionFailures = Partial<
+  Record<string, { action: ServiceControlAction; error: unknown }>
+>;
+
+const SERVICE_FAILURE_TITLE_KEYS = {
+  start: "settings.services.failure.start",
+  stop: "settings.services.failure.stop",
+  restart: "settings.services.failure.restart",
+} as const satisfies Record<ServiceControlAction, I18nKey>;
 
 const SERVICE_PROCESSING_LABEL_KEYS = {
   start: "settings.services.processing.start",
@@ -140,8 +155,12 @@ export function ServicesManagementClient() {
   const statusQueries = useServiceStatusQueries(serviceIds);
   const control = useControlService();
   const confirm = useConfirm();
-  // クリックした行・操作だけにスピナーを出すための識別子(`${serviceId}:${action}`)。
-  const [pending, setPending] = useState<string | null>(null);
+  // 実行中の操作（サービス ID → 操作）。クリックした行・操作だけにスピナーを出す。
+  // 別のサービスの操作は並行して実行できるので、サービスごとに持つ（1 つの値にすると、後から始めた
+  // 操作が先の操作の実行中の表示を消し、先のサービスのボタンが押せるようになる）。
+  const [pending, setPending] = useState<ServicePendingActions>({});
+  // 操作の失敗は Toast ではなく、操作した行の直下に出す（messaging.md §10）。サービスごとに持つ。
+  const [failures, setFailures] = useState<ServiceActionFailures>({});
   const [logsServiceId, setLogsServiceId] = useState<string | null>(null);
   // 「更新」を押した再取得の間だけボタンを回す。5 秒ごとの状態の polling では回さない（静かな polling は
   // 処理中を出さない。同じ処理のスピナーは 1 つ。messaging §3.7、#416）。
@@ -167,12 +186,9 @@ export function ServicesManagementClient() {
   if (query.isError) {
     return (
       <PageBody wide>
-        <ErrorState
-          message={
-            query.error instanceof ApiError
-              ? query.error.message
-              : t("settings.services.loadError")
-          }
+        <ApiErrorState
+          error={query.error}
+          fallback={t("settings.services.loadError")}
           onRetry={() => void query.refetch()}
         />
       </PageBody>
@@ -230,31 +246,26 @@ export function ServicesManagementClient() {
       });
       if (!ok) return;
     }
-    setPending(`${service.service_id}:${action}`);
-    control.mutate(
-      { serviceId: service.service_id, action },
-      {
-        onSuccess: () => {
-          const toastKey: I18nKey =
-            action === "start"
-              ? "settings.services.toast.started"
-              : action === "restart"
-                ? "settings.services.toast.restarted"
-                : "settings.services.toast.stopped";
-          toast.success(t(toastKey, { service: serviceLabel(service) }));
-        },
-        onError: (error) => {
-          toast.error(
-            t("settings.services.toast.failed", { service: serviceLabel(service) }),
-            {
-              description:
-                error instanceof ApiError ? error.message : undefined,
-            }
-          );
-        },
-        onSettled: () => setPending(null),
-      }
-    );
+    const serviceId = service.service_id;
+    setPending((current) => ({ ...current, [serviceId]: action }));
+    // 次の操作を始めたら、そのサービスの前の失敗を消す（messaging.md §10.4）。
+    setFailures(({ [serviceId]: _previous, ...rest }) => rest);
+    // `mutate` に渡すコールバックは最後に呼んだ操作の分しか呼ばれないため、操作ごとの promise で
+    // 結果を受け取る（別のサービスの操作を続けて始めても、先の操作の結果を出し、実行中の表示を外す）。
+    try {
+      await control.mutateAsync({ serviceId, action });
+      const toastKey: I18nKey =
+        action === "start"
+          ? "settings.services.toast.started"
+          : action === "restart"
+            ? "settings.services.toast.restarted"
+            : "settings.services.toast.stopped";
+      toast.success(t(toastKey, { service: serviceLabel(service) }));
+    } catch (error) {
+      setFailures((current) => ({ ...current, [serviceId]: { action, error } }));
+    } finally {
+      setPending(({ [serviceId]: _done, ...rest }) => rest);
+    }
   }
 
   const latestStatusUpdatedAt = Math.max(
@@ -355,6 +366,7 @@ export function ServicesManagementClient() {
                 services={g.services}
                 controlEnabled={controlEnabled}
                 pending={pending}
+                failures={failures}
                 logsServiceId={logsServiceId}
                 logsQuery={logsQuery}
                 onAct={act}
@@ -397,20 +409,17 @@ function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
       : []),
   ];
   return (
-    <div className="rounded-md border border-border bg-surface-sunken">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls="service-commands"
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-2 text-left text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-      >
-        <SlidersHorizontal size={14} className="text-accent-fg" aria-hidden />
-        {t("settings.services.commands.title")}
-        <DisclosureChevron expanded={open} size={14} className="ml-auto text-fg-muted" />
-      </button>
+    // 共有の Disclosure（card・sunken）。見出しの高さは 40px・タッチ端末 44px（#1135）。
+    // コマンドは開いたときだけ描く（閉じている間はページ内検索・読み上げに出さない）。
+    <Disclosure
+      summary={t("settings.services.commands.title")}
+      icon={SlidersHorizontal}
+      surface="sunken"
+      open={open}
+      onOpenChange={setOpen}
+    >
       {open ? (
-        <div id="service-commands" className="space-y-2 border-t border-border p-3">
+        <div id="service-commands" className="space-y-2">
           <p className="text-xs leading-relaxed text-fg-muted">
             {t("settings.services.commands.description")}
           </p>
@@ -419,7 +428,7 @@ function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
           ))}
         </div>
       ) : null}
-    </div>
+    </Disclosure>
   );
 }
 
@@ -464,6 +473,7 @@ function ServiceGroup({
   services,
   controlEnabled,
   pending,
+  failures,
   logsServiceId,
   logsQuery,
   onAct,
@@ -474,7 +484,8 @@ function ServiceGroup({
   note?: string;
   services: DisplayServiceData[];
   controlEnabled: boolean;
-  pending: string | null;
+  pending: ServicePendingActions;
+  failures: ServiceActionFailures;
   logsServiceId: string | null;
   logsQuery: UseQueryResult<ServiceLogsData>;
   onAct: (service: DisplayServiceData, action: ServiceControlAction) => void;
@@ -496,6 +507,7 @@ function ServiceGroup({
               service={service}
               controlEnabled={controlEnabled}
               pending={pending}
+              failure={failures[service.service_id]}
               logsOpen={logsServiceId === service.service_id}
               logsQuery={logsQuery}
               onAct={onAct}
@@ -512,6 +524,7 @@ function ServiceRow({
   service,
   controlEnabled,
   pending,
+  failure,
   logsOpen,
   logsQuery,
   onAct,
@@ -519,7 +532,8 @@ function ServiceRow({
 }: {
   service: DisplayServiceData;
   controlEnabled: boolean;
-  pending: string | null;
+  pending: ServicePendingActions;
+  failure?: ServiceActionFailures[string];
   logsOpen: boolean;
   logsQuery: UseQueryResult<ServiceLogsData>;
   onAct: (service: DisplayServiceData, action: ServiceControlAction) => void;
@@ -533,9 +547,10 @@ function ServiceRow({
   const stoppedHintKey = stopped ? serviceStoppedHintKey(service.execution_policy) : null;
   const notInstalled = service.status === "not_installed";
   const failed = service.status === "failed";
-  const startPending = pending === `${service.service_id}:start`;
-  const stopPending = pending === `${service.service_id}:stop`;
-  const restartPending = pending === `${service.service_id}:restart`;
+  const pendingAction = pending[service.service_id];
+  const startPending = pendingAction === "start";
+  const stopPending = pendingAction === "stop";
+  const restartPending = pendingAction === "restart";
   // ponytail: このサービス自身の操作中だけ自分の起動/停止/再起動を排他する(他サービスは無関係)
   const thisPending = startPending || stopPending || restartPending;
   let controlHint: string | undefined;
@@ -647,20 +662,45 @@ function ServiceRow({
         // スピナーは操作したボタン（または行メニュー）の loading が担う（messaging.md §3.7）。
         <ProcessingIndicator
           active
-          label={t(SERVICE_PROCESSING_LABEL_KEYS[startPending ? "start" : stopPending ? "stop" : "restart"], {
+          label={t(SERVICE_PROCESSING_LABEL_KEYS[pendingAction ?? "restart"], {
             service: serviceLabel(service),
           })}
-          operationKey={pending}
+          operationKey={`${service.service_id}:${pendingAction}`}
           placement="action"
           activityIcon="none"
           className="mt-3 rounded-md border border-border bg-surface-sunken px-3 py-2"
           testId={`service-processing-${service.service_id}`}
         />
       ) : null}
+      {failure && !thisPending ? <ServiceActionFailure service={service} failure={failure} /> : null}
       {logsOpen ? (
         <ServiceLogPanel id={logsPanelId} service={service} logsQuery={logsQuery} />
       ) : null}
     </li>
+  );
+}
+
+/**
+ * 起動・停止・再起動の失敗（処理の失敗）。操作した行の直下に danger の Banner で出す（messaging.md §10）。
+ * 見出しに何が起きたか、本文に backend の原因と対処、HTTP ステータス・エラーコードなどは開いた「詳細」に出す。
+ */
+function ServiceActionFailure({
+  service,
+  failure,
+}: {
+  service: DisplayServiceData;
+  failure: NonNullable<ServiceActionFailures[string]>;
+}) {
+  const presentation = presentApiError(failure.error, t("settings.services.failure.fallback"));
+  return (
+    <ApiErrorBanner
+      error={failure.error}
+      fallback={t("settings.services.failure.fallback")}
+      summary={t(SERVICE_FAILURE_TITLE_KEYS[failure.action], { service: serviceLabel(service) })}
+      nextAction={[presentation.summary, presentation.nextAction].filter(Boolean).join("")}
+      className="mt-3"
+      testId={`service-failure-${service.service_id}`}
+    />
   );
 }
 

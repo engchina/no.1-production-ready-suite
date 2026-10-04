@@ -2157,8 +2157,11 @@ def test_runtime_snapshot_import_dry_run_reports_validation_errors() -> None:
     assert data["imported"] is False
     assert data["dry_run"] is True
     assert data["validation"]["valid"] is False
-    assert any("unsupported snapshot version" in error for error in data["validation"]["errors"])
-    assert any("duplicate run id" in error for error in data["validation"]["errors"])
+    errors = data["validation"]["errors"]
+    assert any("未対応のスナップショットの版です: unsupported" in error for error in errors)
+    assert any("ID が重複している実行があります" in error for error in errors)
+    # 画面にそのまま出すので、英語だけの文にしない（#1027）。
+    assert not any(error.isascii() for error in errors)
 
 
 def test_runtime_snapshot_import_requires_explicit_confirmation() -> None:
@@ -2170,7 +2173,34 @@ def test_runtime_snapshot_import_requires_explicit_confirmation() -> None:
     )
 
     assert resp.status_code == 400
-    assert "confirm_replace=true" in resp.json()["error_messages"][0]
+    assert "置換するには確認" in resp.json()["error_messages"][0]
+
+
+def test_runtime_snapshot_invalid_replace_and_warnings_are_japanese() -> None:
+    snapshot = client.get("/api/runtime/snapshot").json()["data"]
+    without_default = deepcopy(snapshot)
+    without_default["agents"] = [
+        agent for agent in without_default["agents"] if agent["id"] != "default"
+    ]
+    checked = client.post(
+        "/api/runtime/snapshot/import",
+        json={"snapshot": without_default, "dry_run": True},
+    ).json()["data"]["validation"]
+    missing_default = "既定の業務 Agent（default）がありません。置換すると作り直します。"
+    assert missing_default in checked["warnings"]
+
+    invalid = deepcopy(snapshot)
+    invalid["version"] = "unsupported"
+    resp = client.post(
+        "/api/runtime/snapshot/import",
+        json={"snapshot": invalid, "dry_run": False, "confirm_replace": True},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error_messages"][0] == (
+        "スナップショットに 1 件のエラーがあるため置換できません。"
+        "「検証」でエラーの内容を確認してください。"
+    )
 
 
 def test_runtime_snapshot_import_replaces_state_and_can_restore() -> None:
