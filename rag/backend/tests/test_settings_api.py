@@ -47,6 +47,7 @@ from app.schemas.settings import (
     ModelSettingsPayload,
     ParserAdapterSettingsUpdate,
 )
+from app.services.control import service_runtime_env
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -1756,9 +1757,11 @@ def test_model_settings_rejects_non_1536_embedding_dim() -> None:
     assert body["error_messages"]
 
 
-def test_read_oci_config_uses_requested_profile_from_backend_path(
+def test_read_oci_config_uses_runtime_config_and_profile(
+    monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """読むのは実行中の設定の config / profile（要求の path は使わない。#1067）。"""
     config_file = tmp_path / "config"
     config_file.write_text(
         "\n".join(
@@ -1777,9 +1780,13 @@ def test_read_oci_config_uses_requested_profile_from_backend_path(
         encoding="utf-8",
     )
 
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "RAG_PROD")
+
     resp = client.post(
         "/api/settings/oci/config/read",
-        json={"config_file": str(config_file), "profile": "RAG_PROD"},
+        json={"config_file": str(tmp_path / "other"), "profile": "DEFAULT"},
     )
 
     assert resp.status_code == 200
@@ -1846,6 +1853,7 @@ def test_get_oci_settings_returns_runtime_and_config_values(
         "key_file_exists": True,
         "config_file_exists": True,
         "config_source": "runtime",
+        "config_error": None,
     }
 
 
@@ -2229,12 +2237,17 @@ def test_test_oci_config_reports_encrypted_private_key_without_pass_phrase(
     assert "暗号化されています" in body["message"]
 
 
-def test_read_oci_config_rejects_missing_requested_profile(tmp_path: Path) -> None:
+def test_read_oci_config_rejects_missing_requested_profile(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
     config_file = tmp_path / "config"
     config_file.write_text(
         "[DEFAULT]\nuser=ocid1.user.oc1..default\n",
         encoding="utf-8",
     )
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "RAG_PROD")
 
     resp = client.post(
         "/api/settings/oci/config/read",
@@ -2272,12 +2285,16 @@ def test_read_object_storage_namespace_uses_oci_sdk(
 
     monkeypatch.setattr("pr_system_settings.oci.importlib.import_module", fake_import_module)
     config_file = tmp_path / "config"
+    # 取得に使う config は実行中の設定のもの（要求の config_file は使わない。#1067）。
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
 
     resp = client.post(
         "/api/settings/oci/object-storage/namespace",
         json={
-            "config_file": str(config_file),
-            "profile": "DEFAULT",
+            "config_file": str(tmp_path / "other"),
+            "profile": "OTHER",
             "region": "ap-osaka-1",
         },
     )
@@ -3408,6 +3425,42 @@ def test_update_huggingface_settings_keeps_token_when_blank(
     assert resp.status_code == 200
     assert settings.huggingface_token == ""
     assert resp.json()["data"]["token_configured"] is False
+
+
+def test_update_huggingface_settings_normalizes_runtime_values(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """保存した値は再起動を待たず、起動時の読み込みと同じ正規化で実行中の設定に入る（#1018）。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "huggingface_endpoint", "")
+    monkeypatch.setattr(settings, "huggingface_token", "hf_existing")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch(
+        "/api/settings/huggingface",
+        json={"endpoint": "hf-mirror.com", "token": "  hf_new  "},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["endpoint"] == "https://hf-mirror.com"
+    assert settings.huggingface_endpoint == "https://hf-mirror.com"
+    assert settings.huggingface_token == "hf_new"
+    # サービスの起動 / 再起動で parser へ渡す値も scheme 付き。
+    assert service_runtime_env(settings)["HF_ENDPOINT"] == "https://hf-mirror.com"
+    assert service_runtime_env(settings)["HF_TOKEN"] == "hf_new"
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "RAG_HUGGINGFACE_ENDPOINT=https://hf-mirror.com" in env_text
+    assert "RAG_HUGGINGFACE_TOKEN=hf_new" in env_text
+
+    # 空白だけの token は未入力として扱い、保存済みの token を保持する。
+    resp = client.patch(
+        "/api/settings/huggingface",
+        json={"endpoint": "https://hf-mirror.com", "token": "   "},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["token_configured"] is True
+    assert settings.huggingface_token == "hf_new"
 
 
 def test_update_huggingface_settings_rejects_removed_download_dir() -> None:

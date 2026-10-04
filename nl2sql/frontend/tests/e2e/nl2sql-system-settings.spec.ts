@@ -2709,6 +2709,38 @@ test("OCI 認証材料不足を 375px で案内し、作成操作を無効化す
   await expectNoHorizontalOverflow(page);
 });
 
+test("Select AI Credential 状態の取得中は経過時間付きの読み込み表示と Skeleton を出す", async ({
+  page,
+}) => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.unroute("**/api/settings/database/select-ai-credential");
+  await page.route("**/api/settings/database/select-ai-credential", async (route) => {
+    await pending;
+    await fulfillJson(route, {
+      credential_name: "OCI_CRED",
+      schema_name: "ADMIN",
+      exists: false,
+      region: "us-chicago-1",
+      oci_auth_ready: true,
+      missing_fields: [],
+      operation: null,
+    });
+  });
+
+  await page.goto("/settings/select-ai-credential");
+  const card = page.getByTestId("select-ai-credential-card");
+  const loading = card.getByRole("region", { name: "Select AI Credential の状態を読み込んでいます" });
+  await expect(loading).toBeVisible();
+  await expect(loading.getByRole("timer")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  release();
+  await expect(loading).toHaveCount(0);
+  await expect(card.getByText("OCI_CRED", { exact: true })).toBeVisible();
+});
+
 test("Select AI Credential 状態の初回取得失敗は標準 ErrorState で再取得できる", async ({
   page,
 }) => {

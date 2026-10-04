@@ -287,13 +287,14 @@ def test_data_grant_sql_quotes_only_identifiers_that_need_quotes() -> None:
     )
     sql = "\n".join(statements)
 
-    assert statements[0] == 'GRANT SELECT ON SALES."Mixed_Case" TO NL2SQL_APP_DB_ROLE'
+    # #1022: DATA GRANTS ONLY を先に有効にし、DB role の SELECT は最後に付ける（fail-closed）。
+    assert statements[0] == 'SET USE DATA GRANTS ONLY ON SALES."Mixed_Case" ENABLED'
     assert 'AS SELECT ("Amount", ORDER_ID)' in sql
     assert 'ON SALES."Mixed_Case"' in sql
     assert 'SALES."Mixed_Case"."Region" = \'EAST\'' in sql
     assert 'SALES."Mixed_Case".ORDER_ID > 10' in sql
     assert "MIXED_CASE" not in sql
-    assert statements[-1] == 'SET USE DATA GRANTS ONLY ON SALES."Mixed_Case" ENABLED'
+    assert statements[-1] == 'GRANT SELECT ON SALES."Mixed_Case" TO NL2SQL_APP_DB_ROLE'
 
 
 def test_data_grant_sql_rejects_unvalidated_identifier() -> None:

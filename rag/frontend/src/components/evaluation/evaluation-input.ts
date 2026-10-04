@@ -27,3 +27,12 @@ export function evaluationCaseIdError(cases: readonly unknown[]): string | null 
     ? t("evaluation.input.duplicateCaseIds", { ids: duplicates.join("、") })
     : null;
 }
+
+/**
+ * 「サンプルを読み込む」の前に確認が要るか。編集中の Golden set JSON（空でなく、サンプルと違う）を
+ * 確認なしで上書きしない（元に戻せないため）。前後の空白だけの違いは編集とみなさない。
+ */
+export function sampleOverwriteNeedsConfirm(current: string, sample: string): boolean {
+  const text = current.trim();
+  return text !== "" && text !== sample.trim();
+}

@@ -163,6 +163,8 @@ test.describe("作業状態の保持", () => {
   }) => {
     await page.route("**/api/search-answer-profiles**", (route) => route.fulfill(pageEnvelope([searchAnswerProfile])));
     await page.route("**/api/chat/**", (route) => route.fulfill(pageEnvelope([])));
+    // 回答するモデルの一覧は配列で返す（ページの形で返すとチャットの描画が落ちる）。
+    await page.route("**/api/chat/models", (route) => route.fulfill(envelope([])));
     let searchRequests = 0;
     await page.route("**/api/search/answers**", (route) =>
     route.fulfill(envelope({ items: [], total: 0, limit: 10, offset: 0, has_next: false }))

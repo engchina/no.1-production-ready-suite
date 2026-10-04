@@ -13,7 +13,7 @@ import os
 import re
 import secrets
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import suppress
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -352,6 +352,30 @@ EVALUATION_DRY_RUN_MESSAGE = (
 )
 # 評価の Run の印（`metadata`）。組み込み Runtime は承認が要るツールを実行せずに続ける。
 EVALUATION_DRY_RUN_KEY = "evaluation_dry_run"
+# Control Plane が Run の `metadata` に付ける予約の key（#1130）。利用者が `POST /api/runs` で
+# 付けると、再開の状態（`_builtin_sdk_state`）・評価の dry-run・自動実行や MCP の出所を偽れる
+# ため、API の入口で拒否する。`_` で始まる key もすべて予約とする。品質評価・自動実行・MCP・
+# 再実行は `create_builtin_run` を直接呼ぶので付けられる。
+RESERVED_RUN_METADATA_KEYS = frozenset(
+    {
+        "agent_version",
+        EVALUATION_DRY_RUN_KEY,
+        "evaluation_job_id",
+        "evaluation_case_id",
+        "automation_id",
+        "automation_trigger",
+        "source",
+        "mcp_session",
+        "replayed_from_run_id",
+    }
+)
+
+
+def reserved_run_metadata_keys(metadata: Mapping[str, object]) -> list[str]:
+    """利用者が付けた `metadata` のうち、Control Plane の予約の key（並びは安定させる）。"""
+    return sorted(
+        key for key in metadata if key.startswith("_") or key in RESERVED_RUN_METADATA_KEYS
+    )
 
 
 class RunUsage(BaseModel):
@@ -575,6 +599,8 @@ class RuntimeToolCallAuditData(BaseModel):
     offset: int
     limit: int
     records: list[RuntimeToolCallAuditRecord]
+    # 監査に記録されたツール名（絞り込みの条件に依らない。画面のツール名の選択肢。#983）。
+    tool_names: list[str] = Field(default_factory=list)
 
 
 class AgentRuntimeRepositoryContract(Protocol):
@@ -791,6 +817,11 @@ class AgentRuntimeRepository:
     def cancel_run(self, run_id: str) -> RunState:
         with self._lock:
             run = self._require_run(run_id)
+            if _is_terminal(run.status):
+                # 終了した Run（完了・失敗・取消済み）は変えない。一覧の再取得の前に取消を
+                # 送った、品質評価の取消と完了が重なった、などで来ても、完了の結果を
+                # 取消済みで上書きしない（#911）。
+                return run.model_copy(deep=True)
             cancelled_approval_ids: list[str] = []
             run.status = RunStatus.CANCELLED
             run.updated_at = _now()
@@ -1838,8 +1869,25 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
                 if record is None:
                     continue
                 records.append(record)
+            tool_names = self._projection_tool_names(cursor)
 
-        return RuntimeToolCallAuditData(total=total, offset=offset, limit=limit, records=records)
+        return RuntimeToolCallAuditData(
+            total=total, offset=offset, limit=limit, records=records, tool_names=tool_names
+        )
+
+    def _projection_tool_names(self, cursor: Any) -> list[str]:
+        """監査に記録されたツール名（一覧と同じく Run のある step だけ。#983）。"""
+        tables = self._oracle_projection_tables
+        cursor.execute(
+            f"""
+            SELECT DISTINCT s.tool_name
+            FROM {tables["steps"]} s
+            JOIN {tables["runs"]} r ON r.run_id = s.run_id
+            WHERE s.tool_name IS NOT NULL
+            ORDER BY s.tool_name
+            """
+        )
+        return [str(row[0]) for row in cursor.fetchall() if row[0]]
 
     def _projection_tool_call_rows(
         self,
@@ -2782,19 +2830,22 @@ def _validate_snapshot(snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshotVa
         "agent-runtime.snapshot.v1",
         "agent-control-plane.snapshot.v2",
     }:
-        errors.append(f"unsupported snapshot version: {snapshot.version}")
+        errors.append(f"未対応のスナップショットの版です: {snapshot.version}")
     elif snapshot.version == "agent-runtime.snapshot.v1":
-        warnings.append("legacy snapshot will be migrated to agent-control-plane.snapshot.v2")
+        warnings.append(
+            "旧版（agent-runtime.snapshot.v1）のスナップショットです。"
+            "置換すると現在の版（agent-control-plane.snapshot.v2）へ移行します。"
+        )
 
-    _append_duplicate_errors("run", [run.id for run in snapshot.runs], errors)
-    _append_duplicate_errors("agent", [agent.id for agent in snapshot.agents], errors)
+    _append_duplicate_errors("実行", [run.id for run in snapshot.runs], errors)
+    _append_duplicate_errors("業務 Agent", [agent.id for agent in snapshot.agents], errors)
     event_ids = [event.id for run in snapshot.runs for event in run.events]
     artifact_ids = [artifact.id for run in snapshot.runs for artifact in run.artifacts]
-    _append_duplicate_errors("event", event_ids, errors)
-    _append_duplicate_errors("artifact", artifact_ids, errors)
+    _append_duplicate_errors("イベント", event_ids, errors)
+    _append_duplicate_errors("成果物", artifact_ids, errors)
 
     if not any(agent.id == "default" for agent in snapshot.agents):
-        warnings.append("default agent is missing and will be recreated")
+        warnings.append("既定の業務 Agent（default）がありません。置換すると作り直します。")
 
     for agent in snapshot.agents:
         _validate_agent_snapshot(agent, errors)
@@ -3037,7 +3088,10 @@ def _append_duplicate_errors(label: str, values: list[str], errors: list[str]) -
             continue
         seen.add(value)
     if duplicates:
-        errors.append(f"duplicate {label} id: {', '.join(sorted(duplicates))}")
+        separator = " " if label[-1:].isascii() else ""
+        errors.append(
+            f"ID が重複している{label}{separator}があります: {', '.join(sorted(duplicates))}"
+        )
 
 
 def _validate_agent_snapshot(
@@ -3045,7 +3099,7 @@ def _validate_agent_snapshot(
     errors: list[str],
 ) -> None:
     if not agent.id:
-        errors.append("agent id must not be empty")
+        errors.append("ID が空の業務 Agent があります。")
 
 
 def _validate_run_snapshot(
@@ -3054,17 +3108,20 @@ def _validate_run_snapshot(
     warnings: list[str],
 ) -> None:
     if not run.id:
-        errors.append("run id must not be empty")
+        errors.append("ID が空の実行があります。")
     step_ids = [step.id for step in run.steps]
     approval_ids = [approval.id for approval in run.approvals]
     step_id_set = set(step_ids)
     approval_id_set = set(approval_ids)
-    _append_duplicate_errors(f"step id in run {run.id}", step_ids, errors)
-    _append_duplicate_errors(f"approval id in run {run.id}", approval_ids, errors)
+    _append_duplicate_errors(f"実行 {run.id} のステップ", step_ids, errors)
+    _append_duplicate_errors(f"実行 {run.id} の承認", approval_ids, errors)
 
     for event in run.events:
         if event.run_id != run.id:
-            errors.append(f"event {event.id} belongs to {event.run_id}, expected {run.id}")
+            errors.append(
+                f"イベント {event.id} の実行 ID（{event.run_id}）が、"
+                f"含まれている実行（{run.id}）と違います。"
+            )
     for step in run.steps:
         _validate_step_snapshot(run, step, approval_id_set, errors)
     for approval in run.approvals:
@@ -3075,12 +3132,12 @@ def _validate_run_snapshot(
     ]
     if _is_terminal(run.status) and pending_approvals:
         errors.append(
-            f"terminal run {run.id} has pending approvals: {', '.join(pending_approvals)}"
+            f"終了した実行 {run.id} に承認待ちの承認があります: {', '.join(pending_approvals)}"
         )
     if run.status == RunStatus.WAITING_APPROVAL and not pending_approvals:
-        errors.append(f"run {run.id} is waiting_approval without pending approvals")
+        errors.append(f"実行 {run.id} は承認待ちですが、承認待ちの承認がありません。")
     if run.status == RunStatus.RUNNING:
-        warnings.append(f"run {run.id} is running and will resume as imported state")
+        warnings.append(f"実行 {run.id} は実行中です。置換すると、取り込んだ状態から再開します。")
 
 
 def _validate_step_snapshot(
@@ -3090,9 +3147,12 @@ def _validate_step_snapshot(
     errors: list[str],
 ) -> None:
     if step.run_id != run.id:
-        errors.append(f"step {step.id} belongs to {step.run_id}, expected {run.id}")
+        errors.append(
+            f"ステップ {step.id} の実行 ID（{step.run_id}）が、"
+            f"含まれている実行（{run.id}）と違います。"
+        )
     if step.approval_id is not None and step.approval_id not in approval_ids:
-        errors.append(f"step {step.id} references missing approval {step.approval_id}")
+        errors.append(f"ステップ {step.id} が、無い承認 {step.approval_id} を参照しています。")
 
 
 def _validate_approval_snapshot(
@@ -3102,9 +3162,12 @@ def _validate_approval_snapshot(
     errors: list[str],
 ) -> None:
     if approval.run_id != run.id:
-        errors.append(f"approval {approval.id} belongs to {approval.run_id}, expected {run.id}")
+        errors.append(
+            f"承認 {approval.id} の実行 ID（{approval.run_id}）が、"
+            f"含まれている実行（{run.id}）と違います。"
+        )
     if approval.step_id not in step_ids:
-        errors.append(f"approval {approval.id} references missing step {approval.step_id}")
+        errors.append(f"承認 {approval.id} が、無いステップ {approval.step_id} を参照しています。")
 
 
 def _default_agent() -> AgentProfile:
