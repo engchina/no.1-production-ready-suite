@@ -3,6 +3,7 @@ from __future__ import annotations
 import configparser
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -155,3 +156,110 @@ def test_static_config_test_does_not_call_oci(
     )
     assert result.status == "failed"
     assert calls == []
+
+
+def test_get_oci_reports_unreadable_config_instead_of_empty_values(
+    oci_home: Path, tmp_path: Path
+) -> None:
+    """config はあるが読めないとき、空の値を「未設定」として返さず理由を返す（#1067）。"""
+    oci_home.mkdir()
+    config = oci_home / "config"
+    config.write_text("user=ocid1.user.oc1..no-section\n", encoding="utf-8")
+    settings = FakeSettings(oci_config_file=str(config))
+
+    data = make_client(settings, tmp_path / ".env").get("/api/settings/oci").json()["data"]
+
+    assert data["user"] == ""
+    assert data["config_file_exists"] is True
+    assert data["config_error"] == "OCI config ファイルの形式を確認してください。"
+
+
+@pytest.mark.parametrize(
+    ("content", "profile"),
+    [
+        (None, "DEFAULT"),
+        ("[DEFAULT]\nuser=ocid1.user.oc1..a\n", "RAG_PROD"),
+        ("[OTHER]\nuser=ocid1.user.oc1..a\n", "DEFAULT"),
+    ],
+    ids=["no-file", "no-profile", "empty-profile"],
+)
+def test_get_oci_treats_missing_config_or_profile_as_unset(
+    oci_home: Path, tmp_path: Path, content: str | None, profile: str
+) -> None:
+    oci_home.mkdir()
+    config = oci_home / "config"
+    if content is not None:
+        config.write_text(content, encoding="utf-8")
+    settings = FakeSettings(oci_config_file=str(config), oci_config_profile=profile)
+
+    data = make_client(settings, tmp_path / ".env").get("/api/settings/oci").json()["data"]
+
+    assert data["config_error"] is None
+
+
+def test_read_oci_config_uses_runtime_config_not_requested_path(
+    oci_home: Path, tmp_path: Path
+) -> None:
+    """要求の config_file / profile でサーバーの別のファイルを読ませない（#1067）。"""
+    oci_home.mkdir()
+    config = oci_home / "config"
+    config.write_text("[DEFAULT]\nuser=ocid1.user.oc1..runtime\n", encoding="utf-8")
+    other = tmp_path / "other.ini"
+    other.write_text("[DEFAULT]\nuser=ocid1.user.oc1..other\n", encoding="utf-8")
+    settings = FakeSettings(oci_config_file=str(config))
+
+    response = make_client(settings, tmp_path / ".env").post(
+        "/api/settings/oci/config/read",
+        json={"config_file": str(other), "profile": "OTHER"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["user"] == "ocid1.user.oc1..runtime"
+    assert response.json()["data"]["profile"] == "DEFAULT"
+
+
+def test_read_namespace_uses_runtime_config_not_requested_path(
+    oci_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        data = "runtime-ns"
+
+    class FakeClient:
+        def __init__(self, config: dict[str, object]) -> None:
+            captured["config"] = config
+
+        def get_namespace(self) -> FakeResponse:
+            return FakeResponse()
+
+    def from_file(path: str, profile: str) -> dict[str, object]:
+        captured["path"] = path
+        captured["profile"] = profile
+        return {}
+
+    def import_module(name: str) -> object:
+        if name == "oci.config":
+            return SimpleNamespace(from_file=from_file)
+        if name == "oci.object_storage":
+            return SimpleNamespace(ObjectStorageClient=FakeClient)
+        raise AssertionError(name)
+
+    monkeypatch.setattr(shared_oci.importlib, "import_module", import_module)
+    config = oci_home / "config"
+    settings = FakeSettings(oci_config_file=str(config), oci_config_profile="RUNTIME")
+
+    response = make_client(settings, tmp_path / ".env").post(
+        "/api/settings/oci/object-storage/namespace",
+        json={
+            "config_file": str(tmp_path / "other.ini"),
+            "profile": "OTHER",
+            "region": "ap-osaka-1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"namespace": "runtime-ns"}
+    assert captured["path"] == str(config)
+    assert captured["profile"] == "RUNTIME"
+    assert captured["config"] == {"region": "ap-osaka-1"}

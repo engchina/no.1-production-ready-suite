@@ -27,6 +27,8 @@ export const OCI_MESSAGES = {
   "settings.oci.auth.cardDescription": "API 署名キーで OCI に認証するための config・ユーザー・テナンシ・fingerprint・リージョン・秘密鍵を設定します。",
   "settings.oci.auth.cardTitle": "OCI 認証設定",
   "settings.oci.configContent.applyError": "有効な OCI config 項目を読み取れませんでした。",
+  "settings.oci.configError":
+    "サーバーの OCI config（{path}）を読み取れないため、保存済みの値を表示できません。{reason} ファイルの内容と権限を確認してください。",
   "settings.oci.configTest.apiError": "{message} バックエンドの起動状態と OCI 認証ファイルを確認して再試行してください。",
   "settings.oci.configTest.error": "OCI config の保存または確認に失敗しました。",
   "settings.oci.configTest.missingField": "不足項目: {field}",
