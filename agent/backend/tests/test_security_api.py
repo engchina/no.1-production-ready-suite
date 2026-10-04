@@ -253,7 +253,7 @@ def test_manifest_key_assignments() -> None:
     # 外部 Runtime の Binding の MCP は #754 で削除した（公開 path に残さない）。
     assert "/mcp/{binding_id}" not in PUBLIC_API_PATHS
     assert permission_for_route("GET", "/runtime/status") == frozenset(
-        {"menu.runtimes", "menu.agents"}
+        {"menu.runtimes", "menu.agents", "agent.runs.operate"}
     )
 
 
