@@ -1,4 +1,6 @@
 import {
+  DEFAULT_API_ERROR_DETAIL_LABELS,
+  apiErrorDetail,
   httpApiErrorPresentation,
   isAbortError,
   toApiTransportError,
@@ -1104,6 +1106,8 @@ export interface ApiErrorDetails {
   errorCode?: string;
   fieldErrors?: ApiFieldError[];
   requestId?: string;
+  /** backend の内部の文（英語・技術的な原文）。本文には出さず「詳細」の「元のメッセージ」に出す。 */
+  rawMessage?: string;
 }
 
 export class ApiError extends Error implements ApiErrorPresentable {
@@ -1112,6 +1116,7 @@ export class ApiError extends Error implements ApiErrorPresentable {
   readonly errorCode?: string;
   readonly fieldErrors: ApiFieldError[];
   readonly requestId?: string;
+  readonly rawMessage?: string;
 
   constructor(status: number, messages: string[], details: ApiErrorDetails = {}) {
     super(messages[0] ?? `APIエラー (${status})`);
@@ -1121,11 +1126,16 @@ export class ApiError extends Error implements ApiErrorPresentable {
     this.errorCode = details.errorCode;
     this.fieldErrors = details.fieldErrors ?? [];
     this.requestId = details.requestId;
+    this.rawMessage = details.rawMessage;
   }
 
   /** 失敗の面の要約と「詳細」（共通の `ApiErrorBanner` / `presentApiError`。#906）。 */
-  toApiErrorPresentation(labels?: ApiErrorDetailLabels): ApiErrorPresentation {
-    return httpApiErrorPresentation(this, labels);
+  toApiErrorPresentation(labels: ApiErrorDetailLabels = DEFAULT_API_ERROR_DETAIL_LABELS): ApiErrorPresentation {
+    const presentation = httpApiErrorPresentation(this, labels);
+    return {
+      ...presentation,
+      details: [...presentation.details, ...apiErrorDetail(labels.rawMessage, this.rawMessage)],
+    };
   }
 }
 
@@ -1141,6 +1151,8 @@ interface ErrorBody {
   detail?: unknown;
   error_messages?: unknown;
   error_code?: unknown;
+  /** Control Plane の error code の付いたエラーの補足（`reason` は内部の原文）。 */
+  error_details?: { reason?: unknown } | null;
   problem?: { field_errors?: unknown; request_id?: unknown } | null;
 }
 
@@ -1184,6 +1196,7 @@ async function apiErrorFrom(response: Response): Promise<ApiError> {
     errorCode: typeof body.error_code === "string" ? body.error_code : undefined,
     fieldErrors: fieldErrorsOf(body.problem?.field_errors),
     requestId: response.headers.get("X-Request-ID") || problemRequestId,
+    rawMessage: typeof body.error_details?.reason === "string" ? body.error_details.reason : undefined,
   });
 }
 
