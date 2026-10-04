@@ -44,6 +44,8 @@ export interface ChatProgressLabels {
   elapsed: string;
   /** 今の段階の遅延の案内。 */
   slow: string;
+  /** 更新が途絶え、状態を取り直している間の案内（#1160。遅延の案内より優先する）。 */
+  reconnecting: string;
   /** 段階の状態（アイコンに添える。色だけに頼らない）。 */
   status: Record<ChatProgressStepStatus, string>;
   /** 所要時間の表記。 */
@@ -67,6 +69,7 @@ export const DEFAULT_CHAT_PROGRESS_LABELS: ChatProgressLabels = {
   steps: "処理の段階",
   elapsed: "経過時間",
   slow: "通常より時間がかかっています。",
+  reconnecting: "接続を確認しています。",
   status: {
     pending: "待機中",
     running: "処理中",
@@ -90,6 +93,11 @@ export interface ChatProgressProps {
   slowAfterMs?: number;
   /** 完了後の 1 行を最初から開くか。既定は失敗した段階があるときだけ開く。 */
   defaultOpen?: boolean;
+  /**
+   * 更新が途絶え、状態を取り直している（#1160）。今の段階の行に「接続を確認しています」を出す。
+   * 製品は `useChatProgressTracker` の結果（`progressProps`）をそのまま渡す。
+   */
+  reconnecting?: boolean;
   labels?: Partial<ChatProgressLabels>;
   className?: string;
   testId?: string;
@@ -97,7 +105,10 @@ export interface ChatProgressProps {
 
 type ProgressState = "running" | "done" | "failed";
 
-function isActive(steps: ChatProgressStep[]): boolean {
+/**
+ * 段階から処理中かを決める（実行中の段階がある、または失敗が無く待機中の段階が残る）。3 製品共通の終端の判定。
+ */
+export function isChatProgressActive(steps: readonly ChatProgressStep[]): boolean {
   if (steps.some((step) => step.status === "running")) return true;
   if (steps.some((step) => step.status === "failed")) return false;
   return steps.some((step) => step.status === "pending");
@@ -191,11 +202,13 @@ function StepList({
 function CurrentStep({
   step,
   slowAfterMs,
+  reconnecting,
   labels,
   testId,
 }: {
   step: ChatProgressStep;
   slowAfterMs: number;
+  reconnecting: boolean;
   labels: ChatProgressLabels;
   testId?: string;
 }) {
@@ -211,6 +224,7 @@ function CurrentStep({
       data-testid={testId ? `${testId}-current` : undefined}
       data-step-id={step.id}
       data-slow={timing.slow ? "true" : "false"}
+      data-reconnecting={reconnecting ? "true" : "false"}
     >
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-fg">
@@ -240,9 +254,14 @@ function CurrentStep({
       */}
       <p
         className="pl-6 text-xs leading-5 text-fg-muted"
-        data-testid={testId && timing.slow ? `${testId}-slow` : undefined}
+        data-testid={
+          testId && reconnecting ? `${testId}-reconnecting` : testId && timing.slow ? `${testId}-slow` : undefined
+        }
       >
-        {timing.slow ? (
+        {/* 取り直している間は、遅延の案内の代わりに「接続を確認しています」を出す（#1160）。 */}
+        {reconnecting ? (
+          labels.reconnecting
+        ) : timing.slow ? (
           labels.slow
         ) : (
           <span
@@ -273,12 +292,13 @@ export function ChatProgress({
   elapsedMs,
   slowAfterMs = DEFAULT_SLOW_AFTER_MS,
   defaultOpen,
+  reconnecting = false,
   labels: labelOverrides,
   className,
   testId,
 }: ChatProgressProps) {
   const labels = { ...DEFAULT_CHAT_PROGRESS_LABELS, ...labelOverrides };
-  const active = activeProp ?? isActive(steps);
+  const active = activeProp ?? isChatProgressActive(steps);
   const failed = steps.some((step) => step.status === "failed");
   const state: ProgressState = active ? "running" : failed ? "failed" : "done";
   // 実行中の段階が無い（段階の間・開始前）ときは、次に進む段階を今の段階として出す。
@@ -290,7 +310,8 @@ export function ChatProgress({
   const [summaryOpen, setSummaryOpen] = useState<boolean | null>(null);
   const summaryIsOpen = summaryOpen ?? defaultOpen ?? failed;
   const total = elapsedMs ?? totalDurationMs(steps);
-  const announcement = current ? current.label : "";
+  // 段階の切り替わりと、取り直しの開始を読み上げる。
+  const announcement = current ? (reconnecting ? `${current.label} ${labels.reconnecting}` : current.label) : "";
 
   if (steps.length === 0) return null;
 
@@ -307,7 +328,15 @@ export function ChatProgress({
       </span>
       {active ? (
         <>
-          {current ? <CurrentStep step={current} slowAfterMs={slowAfterMs} labels={labels} testId={testId} /> : null}
+          {current ? (
+            <CurrentStep
+              step={current}
+              slowAfterMs={slowAfterMs}
+              reconnecting={reconnecting}
+              labels={labels}
+              testId={testId}
+            />
+          ) : null}
           {finished.length > 0 ? (
             <Disclosure
               variant="plain"

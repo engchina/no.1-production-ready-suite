@@ -39,6 +39,7 @@ import {
   TextareaField,
   TimedLoadingState,
   createOptimisticChatMessage,
+  useChatProgressTracker,
   isSubmitEnter,
   toast,
   withOptimisticChatStatus,
@@ -83,6 +84,13 @@ interface ConversationData {
 }
 const inFlight = (job: JobData | undefined) =>
   job?.status === "pending" || job?.status === "running";
+/** 会話の取り直しの間隔。 */
+const CHAT_POLL_INTERVAL_MS = 1500;
+/**
+ * 会話の取り直しが成功しないまま、この時間が過ぎたら取り直し直す（#1160）。取り直しは
+ * {@link CHAT_POLL_INTERVAL_MS} ごとなので、その数回分。応答しない取得を打ち切って新しく取り直す。
+ */
+const CHAT_PROGRESS_STALE_AFTER_MS = 10_000;
 const errorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
 
@@ -270,8 +278,14 @@ export function SqlChatPage() {
         { signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail },
       ),
     refetchInterval: (query) =>
-      active && query.state.data?.turns.some(inFlight) ? 1500 : false,
+      active && query.state.data?.turns.some(inFlight)
+        ? CHAT_POLL_INTERVAL_MS
+        : false,
   });
+  // 処理の経過の取り直し（#1160）。応答しない取得（取得中は interval が次を始めない）を打ち切って取り直す。
+  const refetchConversation = conversation.refetch;
+  const refreshConversation = () =>
+    refetchConversation({ cancelRefetch: true, throwOnError: false });
   const turns = conversation.data?.turns ?? [];
   const latest = turns.at(-1);
   const generating = turns.some(inFlight);
@@ -693,7 +707,13 @@ export function SqlChatPage() {
                   />
                 ) : null}
                 {turns.map((turn) => (
-                  <ChatTurn key={turn.job_id} turn={turn} />
+                  <ChatTurn
+                    key={turn.job_id}
+                    turn={turn}
+                    tracking={active}
+                    receivedAt={conversation.dataUpdatedAt}
+                    refresh={refreshConversation}
+                  />
                 ))}
                 {pending ? (
                   // 送った質問はジョブの投入の応答を待たずに出す。失敗しても残す（#907）。
@@ -840,9 +860,33 @@ export function SqlChatPage() {
     </div>
   );
 }
-function ChatTurn({ turn }: { turn: JobData }) {
+function ChatTurn({
+  turn,
+  tracking,
+  receivedAt,
+  refresh,
+}: {
+  turn: JobData;
+  /** 画面が表示されている（keep-alive で隠れていない）。 */
+  tracking: boolean;
+  /** 会話を最後に取得できた時刻（TanStack Query の dataUpdatedAt）。 */
+  receivedAt: number;
+  /** 会話を取り直す（応答しない取得は打ち切る）。 */
+  refresh: () => Promise<unknown>;
+}) {
   const [copyError, setCopyError] = useState("");
   const result = turn.result;
+  // 処理の経過の状態を追う（3 製品共通。#1160）。会話の取得が途絶えたら取り直し、終端まで追う。
+  const progress = useChatProgressTracker({
+    key: turn.job_id,
+    steps: chatJobProgressSteps(turn, turn.engine),
+    active: inFlight(turn),
+    elapsedMs: chatJobElapsedMs(turn),
+    receivedAt,
+    refresh,
+    staleAfterMs: CHAT_PROGRESS_STALE_AFTER_MS,
+    enabled: tracking,
+  });
   return (
     <article className="space-y-2" data-testid="sql-chat-turn">
       <ChatUserMessage>{turn.question || result?.original_question}</ChatUserMessage>
@@ -850,9 +894,7 @@ function ChatTurn({ turn }: { turn: JobData }) {
         <CardContent className="space-y-3">
           {/* 処理の段階（#1145）。実行中は今の段階、完了後は回答の上に「処理の経過」の 1 行に畳む。 */}
           <ChatProgress
-            steps={chatJobProgressSteps(turn, turn.engine)}
-            active={inFlight(turn)}
-            elapsedMs={chatJobElapsedMs(turn)}
+            {...progress.progressProps}
             labels={CHAT_PROGRESS_LABELS}
             testId="sql-chat-progress"
           />

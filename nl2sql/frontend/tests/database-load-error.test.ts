@@ -164,3 +164,35 @@ test("再試行開始前の古い probe 結果は通知しない", async () => {
   assert.equal(await pending, null);
   assert.equal(reported, false);
 });
+
+test("応答しない DB の状態の確認は上限で打ち切り、元の失敗のまま返す（#1160）", async () => {
+  supersedeDatabaseUnavailableProbe();
+  let reported = false;
+  const signals: (AbortSignal | null | undefined)[] = [];
+  const started = Date.now();
+  const confirmed = await confirmDatabaseUnavailable(
+    (_input, init) => {
+      signals.push(init?.signal);
+      // signal を見ない（応答しない）fetch でも、上限で打ち切る。
+      return new Promise<Response>(() => undefined);
+    },
+    () => {
+      reported = true;
+    },
+    50
+  );
+
+  assert.equal(confirmed, null);
+  assert.equal(reported, false);
+  assert.ok(Date.now() - started < 5_000);
+  assert.ok(signals[0] instanceof AbortSignal);
+  assert.equal(signals[0]?.aborted, true);
+  // 打ち切った確認は残さない（次の失敗で確認し直す）。
+  let probes = 0;
+  await confirmDatabaseUnavailable(async () => {
+    probes += 1;
+    return readinessResponse("ok");
+  });
+  // readiness と persistence の 2 回（打ち切った確認を返さず、新しく確認した）。
+  assert.equal(probes, 2);
+});

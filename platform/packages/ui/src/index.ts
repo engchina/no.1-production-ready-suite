@@ -218,11 +218,22 @@ export {
   ChatProgress,
   DEFAULT_CHAT_PROGRESS_LABELS,
   formatChatProgressDuration,
+  isChatProgressActive,
   type ChatProgressLabels,
   type ChatProgressProps,
   type ChatProgressStep,
   type ChatProgressStepStatus,
 } from "./components/feedback/chat-progress";
+export {
+  useChatProgressTracker,
+  chatProgressBackoffMs,
+  DEFAULT_CHAT_PROGRESS_STALE_AFTER_MS,
+  DEFAULT_CHAT_PROGRESS_REFRESH_TIMEOUT_MS,
+  DEFAULT_CHAT_PROGRESS_MAX_BACKOFF_MS,
+  type ChatProgressTracker,
+  type ChatProgressTrackerOptions,
+  type ChatProgressTrackerProps,
+} from "./components/feedback/chat-progress-tracker";
 export {
   operationTimestampMs,
   elapsedMsSince,

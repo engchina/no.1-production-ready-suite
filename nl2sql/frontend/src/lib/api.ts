@@ -256,6 +256,52 @@ async function recoverAndRetrySafeRequest(
   }
 }
 
+/** 要求の signal（待ち時間の上限・中止）が先に来たら、promise を待たずにその理由で終える。 */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal | null | undefined): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (cause: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(cause);
+      },
+    );
+  });
+}
+
+/**
+ * 失敗が DB の未到達によるものかを確かめる。確認は要求の signal（待ち時間の上限・中止）でも打ち切る（#1160）。
+ * 確認が返らない間に要求の上限を過ぎたら、要求の timeout として失敗にする（取り直しを止めたままにしない）。
+ */
+async function confirmDatabaseUnavailableFor(
+  method: string,
+  path: string,
+  signal: AbortSignal | null | undefined,
+): Promise<DatabaseOperationalFailure | null> {
+  let failure: DatabaseOperationalFailure | null = null;
+  try {
+    await untilAborted(
+      confirmDatabaseUnavailable(fetch, (next) => {
+        failure = next;
+      }),
+      signal,
+    );
+  } catch (cause) {
+    if (isTimeoutError(cause)) {
+      throw new ApiTransportError("timeout", transportRequest(method, path, signal), cause);
+    }
+    throw cause;
+  }
+  return failure;
+}
+
 /**
  * アプリ全体の API 境界。Cookie セッション、CSRF、認証状態イベントを一箇所で扱う。
  */
@@ -287,10 +333,7 @@ export async function apiFetch(
       );
     }
     if (!isDatabaseReadinessRequest(path)) {
-      let failure: DatabaseOperationalFailure | null = null;
-      await confirmDatabaseUnavailable(fetch, (next) => {
-        failure = next;
-      });
+      const failure = await confirmDatabaseUnavailableFor(method, path, init.signal);
       const retried = await recoverAndRetrySafeRequest(
         path,
         method,
@@ -315,10 +358,7 @@ export async function apiFetch(
   responseRequests.set(response, transportRequest(method, path, init.signal));
   notifyResponseAuthStatus(response);
   if (shouldConfirmDatabaseUnavailable(path, response.status)) {
-    let failure: DatabaseOperationalFailure | null = null;
-    await confirmDatabaseUnavailable(fetch, (next) => {
-      failure = next;
-    });
+    const failure = await confirmDatabaseUnavailableFor(method, path, init.signal);
     const retried = await recoverAndRetrySafeRequest(
       path,
       method,
