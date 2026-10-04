@@ -1,4 +1,5 @@
 import {
+  ChatLayout,
   ChatProgress,
   ChatSkeleton,
   Disclosure,
@@ -14,9 +15,7 @@ import {
   InfoTip,
   ToggleChip,
   TimedLoadingState,
-  Skeleton,
   ListSkeleton,
-  SideSheet,
   DEFAULT_PAGE_SIZE,
   INFORMATION_LIST_ROW_CLASS,
   offsetForPage,
@@ -31,13 +30,11 @@ import {
   type ChatUserMessageStatus,
   type OptimisticChatMessage,
   type ChatProgressStep,
+  useChatHistoryPanel,
 } from "@engchina/production-ready-ui";
 import {
   Check,
-  PanelLeftClose,
-  PanelLeftOpen,
   Pencil,
-  Plus,
   RotateCcw,
   Search,
   SendHorizontal,
@@ -47,12 +44,10 @@ import {
 } from "lucide-react";
 import {
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
@@ -116,21 +111,6 @@ function stampNow(ref: { current: number | null }) {
   ref.current = Date.now();
 }
 const EMPTY_TRACE_IDS: ReadonlySet<string> = new Set();
-
-/** 会話の履歴を本文の横にインラインで出す幅（Tailwind の lg）。未満はモーダルの side sheet で開く（#664）。 */
-const HISTORY_INLINE_QUERY = "(min-width: 1024px)";
-
-function useHistoryInline(): boolean {
-  return useSyncExternalStore(
-    (onChange) => {
-      const query = window.matchMedia(HISTORY_INLINE_QUERY);
-      query.addEventListener("change", onChange);
-      return () => query.removeEventListener("change", onChange);
-    },
-    () => window.matchMedia(HISTORY_INLINE_QUERY).matches,
-    () => true
-  );
-}
 
 /** 会話一覧のページ（検索・回答プロファイルごと。#403）。別の検索・回答プロファイルに移ったら 1 ページ目から。 */
 interface ConversationsPage {
@@ -579,18 +559,12 @@ export function ChatClient() {
   // 会話の履歴は既定で閉じる（ChatGPT・Claude・Gemini・Copilot と同じ。多くの利用者は履歴を使わないので、
   // チャットに面積を渡す。#664）。lg 以上のインラインのパネルの開閉は作業状態に残す。
   // lg 未満のモーダルの side sheet は残さない（戻ったとき・再読込で画面を塞がない。workspace-state.md）。
-  const historyInline = useHistoryInline();
+  // 開閉の判定・シートの開閉は共通の useChatHistoryPanel（3 製品共通。#1161）。
   const [historyPanelOpen, setHistoryPanelOpen] = useWorkspaceState("chat.historyOpen", false);
-  const [historySheetOpen, setHistorySheetOpen] = useState(false);
-  // lg 以上に広げたらモーダルのシートを閉じる（インラインのパネルは作業状態のまま）。
-  const [previousHistoryInline, setPreviousHistoryInline] = useState(historyInline);
-  if (previousHistoryInline !== historyInline) {
-    setPreviousHistoryInline(historyInline);
-    if (historyInline) setHistorySheetOpen(false);
-  }
-  const historyOpen = historyInline ? historyPanelOpen : historySheetOpen;
-  const historyId = useId();
-  const historyToggleRef = useRef<HTMLButtonElement>(null);
+  const history = useChatHistoryPanel({
+    inlineOpen: historyPanelOpen,
+    onInlineOpenChange: setHistoryPanelOpen,
+  });
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [liveTurn, setLiveTurn] = useState<LiveTurn | null>(null);
   // この画面で送って保存された回答の処理の段階（message_id → 段階。#1146）。段階は保存しないので、
@@ -732,14 +706,9 @@ export function ChatClient() {
     [persistedMessages, liveUserMessageId]
   );
 
-  function toggleHistory() {
-    if (historyInline) setHistoryPanelOpen(!historyPanelOpen);
-    else setHistorySheetOpen((open) => !open);
-  }
-
   function selectConversation(id: string) {
     // lg 未満のシートは、会話を選んだら閉じる（開閉ボタンへフォーカスを戻す）。
-    setHistorySheetOpen(false);
+    history.closeSheet();
     if (id === activeId) return;
     cancelSending();
     setLiveTurn(null);
@@ -1459,321 +1428,246 @@ export function ChatClient() {
             </CardContent>
           </Card>
         ) : (
-          <div
-            className={cn(
-              "grid min-w-0 gap-4 lg:min-h-0 lg:flex-1",
-              historyInline && historyPanelOpen && "lg:grid-cols-[280px_minmax(0,1fr)]"
-            )}
-          >
-            {historyInline ? (
-              // lg 以上: 開くとチャットの左に並べ、チャットの幅が縮む。閉じている間も描いて aria-controls の先を保つ。
-              <aside
-                id={historyId}
-                aria-label={t("chat.sessions.title")}
-                data-testid="chat-history"
-                className={cn(
-                  "min-h-0 min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface px-3 pb-3 pt-2 shadow-sm",
-                  historyPanelOpen ? "flex" : "hidden"
-                )}
-              >
-                {/* 見出しの行はチャットの上端の行と高さをそろえる。 */}
-                <h2 className="flex min-h-8 items-center px-1 text-sm font-medium text-fg">
-                  {t("chat.sessions.title")}
-                </h2>
-                {historyContent}
-              </aside>
-            ) : (
-              // lg 未満: 本文の上に重ねるモーダルの side sheet（会話を選ぶ・Esc・scrim・閉じるボタンで閉じる）。
-              <SideSheet
-                open={historySheetOpen}
-                onClose={() => setHistorySheetOpen(false)}
-                title={t("chat.sessions.title")}
-                closeLabel={t("chat.sessions.close")}
-                id={historyId}
-                returnFocusRef={historyToggleRef}
-                bodyClassName="gap-3"
-                data-testid="chat-history"
-              >
-                {historyContent}
-              </SideSheet>
-            )}
-
-            {/* 会話エリア */}
-            <section
-              aria-label={t("chat.title")}
-              className="flex h-[70dvh] min-h-[28rem] min-w-0 flex-col gap-3 overflow-hidden rounded-lg border border-border bg-surface shadow-sm lg:h-auto lg:min-h-0"
-            >
-            {/* 上端の行: 会話の履歴の開閉・今の会話の名前・新しい会話（履歴を閉じていても使える。#664）。 */}
-            <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-              <Button
-                ref={historyToggleRef}
-                type="button"
-                variant="ghost"
-                size="sm"
-                iconOnly
-                icon={historyOpen ? PanelLeftClose : PanelLeftOpen}
-                aria-label={t("chat.sessions.title")}
-                aria-expanded={historyOpen}
-                aria-controls={historyId}
-                data-testid="chat-history-toggle"
-                disabled={searchAnswerProfileLoading}
-                onClick={toggleHistory}
-              />
-              {/* 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。 */}
-              <div className="min-w-0 flex-1">
-                {!activeId ? null : activeConversation ? (
-                  <h2
-                    className="truncate text-sm font-medium text-fg"
-                    title={activeTitle}
-                    data-testid="chat-conversation-title"
-                  >
-                    {activeTitle}
-                  </h2>
-                ) : (
-                  <Skeleton className="h-4 w-40" />
-                )}
-              </div>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                icon={Plus}
-                onClick={() => void startNewConversation()}
-                disabled={createConversation.isPending || searchAnswerProfileLoading}
-              >
-                {t("chat.sessions.new")}
-              </Button>
-            </div>
-            {/* 会話の欄。新しいメッセージを role="log" で知らせる（#907）。 */}
-            <div
-              ref={scrollRef}
-              role="log"
-              aria-label={t("chat.messages.label")}
-              className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4"
-              data-testid="chat-messages"
-            >
-              {/* 会話を選んでいない間は新しい会話の下書き。最初の送信で会話を作る（#664）。 */}
-              {conversationLoading && !liveTurn ? (
-                <TimedLoadingState
-                  label={t("chat.messages.loading")}
-                  operationKey="chat-conversation-load"
-                  framed={false}
-                  testId="chat-messages-loading"
+          // 骨格（履歴のパネル・シート、会話の領域の上端の行・会話の欄・入力欄の領域）は 3 製品共通の ChatLayout（#1161）。
+          <ChatLayout
+            history={history}
+            historyTitle={t("chat.sessions.title")}
+            historyCloseLabel={t("chat.sessions.close")}
+            historyContent={historyContent}
+            historyToggleDisabled={searchAnswerProfileLoading}
+            label={t("chat.title")}
+            // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。
+            conversationTitle={activeId && activeConversation ? activeTitle : null}
+            conversationTitleLoading={Boolean(activeId) && !activeConversation}
+            newConversation={{
+              label: t("chat.sessions.new"),
+              onClick: () => void startNewConversation(),
+              disabled: createConversation.isPending || searchAnswerProfileLoading,
+            }}
+            logLabel={t("chat.messages.label")}
+            logRef={scrollRef}
+            testIds={{ log: "chat-messages" }}
+            composer={
+              <>
+                {compareModels.length > 0 ? (
+                  <div className="flex flex-wrap items-center gap-2" data-testid="chat-answer-model">
+                    {/* 候補は既定のテキストモデル（先頭。未選択のときに答える）と既定の画像対応モデル（#675）。
+                        同じモデルなら 1 件で、画像対応モデルも兼ねることを名前と説明で出す（#888）。
+                        説明は常設せず、ラベルの横の info アイコンから出す（#901）。 */}
+                    <span className="inline-flex items-center gap-0.5">
+                      <span className="text-xs font-medium text-fg-muted">{t("chat.compare.label")}</span>
+                      <InfoTip
+                        label={t("chat.compare.infoLabel")}
+                        content={t(answerModelHelpKey(compareModels, "chat.compare.default"))}
+                        contentTestId="chat-default-model"
+                        data-testid="chat-answer-model-info"
+                      />
+                    </span>
+                    {compareModels.map((model) => (
+                      <ToggleChip
+                        key={model.model_id}
+                        selected={selectedModelIds.includes(model.model_id)}
+                        onClick={() => toggleModel(model.model_id)}
+                      >
+                        {answerModelLabel(model)}
+                      </ToggleChip>
+                    ))}
+                  </div>
+                ) : null}
+                {/* 入力欄と送信の行。送信は入力欄の下端にそろえ、375px では下に全幅で置く（#613）。 */}
+                <FieldActionRow
+                  actions={
+                    // 送信と停止は同じボタン。生成中は同じ位置で「停止」になる（buttons.md §3.1、#413）。
+                    // 主な問い合わせの入力の行なので lg（README §4「操作部品の高さと幅」）。
+                    <RunStopButton
+                      running={sending}
+                      onRun={() => void send()}
+                      onStop={stop}
+                      runLabel={t("chat.composer.send")}
+                      stopLabel={t("chat.composer.stop")}
+                      runIcon={SendHorizontal}
+                      runDisabled={
+                        composer.trim().length === 0 ||
+                        searchAnswerProfileWithoutKnowledgeBases ||
+                        pendingChoice ||
+                        prerequisitesLoading ||
+                        conversationFailed
+                      }
+                      size="lg"
+                      testId="chat-run-stop"
+                    />
+                  }
                 >
-                  {/* 質問と回答の吹き出しの寸法を予約する（3 製品で同じ形。#1153）。 */}
-                  <ChatSkeleton />
-                </TimedLoadingState>
-              ) : searchAnswerProfileLoading ? (
-                // 検索・回答プロファイルの読み込み中は空の状態を出さず、会話の形の Skeleton だけを出す。
-                // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
-                <ChatSkeleton testId="chat-messages-skeleton" />
-              ) : activeId && conversationQuery.isError ? (
-                <ErrorState
-                  message={t("chat.messages.error")}
-                  onRetry={() => void conversationQuery.refetch()}
-                />
-              ) : turns.length === 0 && !liveTurn && !pendingChoice ? (
-                <EmptyState title={t("chat.messages.empty")} />
-              ) : (
-                <>
-                  {turns.map((turn) => (
-                    <MessageTurn
-                      key={turn.user.message_id}
-                      user={turn.user}
-                      searchAnswerProfileId={searchAnswerProfileId ?? ""}
-                      onRetry={
-                        // 最新の質問の失敗（時間切れなど）だけ、同じ質問をもう一度送れる（#375）。
-                        turn.user.message_id === lastTurnId &&
-                        turn.user.status !== "ERROR" &&
-                        !liveTurn &&
-                        !sending
-                          ? () => void send(turn.user.content)
-                          : undefined
+                  <TextareaField
+                    ref={composerRef}
+                    id="chat-composer"
+                    label={t("chat.composer.placeholder")}
+                    labelHidden
+                    value={composer}
+                    onChange={(event) => setComposer(event.target.value)}
+                    onKeyDown={(event) => {
+                      // IME の変換を確定する Enter では送信しない（#459）。
+                      if (isSubmitEnter(event) && !event.shiftKey) {
+                        event.preventDefault();
+                        void send();
                       }
-                      onAskUnscoped={
-                        turn.user.message_id === lastTurnId && !liveTurn && !sending && !pendingChoice
-                          ? () => askUnscoped(turn.user.content)
-                          : undefined
-                      }
-                      columns={turn.replies.map((reply) => ({
-                        key: reply.message_id,
-                        // 保存した回答は model_id を持つ。生成中と同じ表示名に引き直す（#649）。
-                        label: reply.model ? (modelLabels.get(reply.model) ?? reply.model) : null,
-                        answer: reply.content,
-                        citations: reply.citations,
-                        traceId: reply.trace_id,
-                        messageId: reply.message_id,
-                        streaming: false,
-                        errorMessage: reply.status === "ERROR" ? reply.content : null,
-                        guardrailWarnings: reply.guardrail_warnings,
-                        savedAnswer: Boolean(
-                          reply.trace_id && answerTraceIds.has(reply.trace_id)
-                        ),
-                        // この画面で送った回答は、処理の経過を回答の上に残す（#1146）。
-                        progress: finishedProgress[reply.message_id]
-                          ? { steps: finishedProgress[reply.message_id], startedAtMs: 0 }
-                          : null,
-                      }))}
-                    />
-                  ))}
-                  {liveTurn ? (
-                    // 送った質問はサーバーの応答を待たずに出し、失敗・停止のときも残す（#907）。
-                    <MessageTurn
-                      user={liveTurn.user ?? { content: liveTurn.pending.content, guardrail_warnings: [] }}
-                      userStatus={
-                        liveTurn.pending.status === "sending"
-                          ? liveTurn.user
-                            ? "sent"
-                            : "sending"
-                          : liveTurn.pending.status
-                      }
-                      columns={liveColumns}
-                      searchAnswerProfileId={searchAnswerProfileId ?? ""}
-                      testId="chat-live-turn"
-                      footer={
-                        liveTurn.pending.status === "failed" ? (
-                          <div data-testid="chat-send-failure">
-                            <Banner
-                              severity="danger"
-                              action={
-                                <Button
-                                  type="button"
-                                  variant="secondary"
-                                  size="sm"
-                                  icon={RotateCcw}
-                                  disabled={sending || pendingChoice}
-                                  onClick={resend}
-                                >
-                                  {t("chat.send.retry")}
-                                </Button>
-                              }
-                            >
-                              {liveTurn.failureMessage ?? t("chat.send.failedHint")}
-                            </Banner>
-                          </div>
-                        ) : liveTurn.pending.status === "stopped" ? (
-                          // 止めた状態。色だけに頼らず、停止のアイコンを添える（Agent のチャットと同じ）。
-                          <p
-                            className="flex items-center gap-1.5 text-sm text-fg-muted"
-                            data-testid="chat-stopped"
-                          >
-                            <Square size={14} aria-hidden="true" />
-                            {t("chat.send.stopped")}
-                          </p>
-                        ) : null
-                      }
-                    />
-                  ) : null}
-                  {/* 送る前の質問と、選んでから回答する類似問（#684）。質問の吹き出しは送信後と同じ形。 */}
-                  {faqChoice ? (
-                    <div className="space-y-2" data-testid="chat-approved-faq-choice">
-                      <ChatUserMessage>{faqChoice.content}</ChatUserMessage>
-                      <ApprovedFaqSuggestions
-                        mode="chat"
-                        suggestions={faqChoice.suggestions}
-                        onUse={(suggestion) => chooseFaq(suggestion.id)}
-                        onSkip={() => chooseFaq()}
-                      />
-                    </div>
-                  ) : null}
-                  {/* 類似問の後に出す確認の質問（#717）。 */}
-                  {clarifyChoice ? (
-                    <div className="space-y-2">
-                      <ChatUserMessage>{clarifyChoice.content}</ChatUserMessage>
-                      <ClarificationChoice
-                        suggestion={clarifyChoice.suggestion}
-                        onAnswer={(answer) => chooseClarification(answer)}
-                        onSkip={() => chooseClarification()}
-                      />
-                    </div>
-                  ) : null}
-                </>
-              )}
-            </div>
-
-            {/* 比較モデル + composer */}
-            <div className="space-y-2 border-t border-border p-3">
-              {compareModels.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-2" data-testid="chat-answer-model">
-                  {/* 候補は既定のテキストモデル（先頭。未選択のときに答える）と既定の画像対応モデル（#675）。
-                      同じモデルなら 1 件で、画像対応モデルも兼ねることを名前と説明で出す（#888）。
-                      説明は常設せず、ラベルの横の info アイコンから出す（#901）。 */}
-                  <span className="inline-flex items-center gap-0.5">
-                    <span className="text-xs font-medium text-fg-muted">{t("chat.compare.label")}</span>
-                    <InfoTip
-                      label={t("chat.compare.infoLabel")}
-                      content={t(answerModelHelpKey(compareModels, "chat.compare.default"))}
-                      contentTestId="chat-default-model"
-                      data-testid="chat-answer-model-info"
-                    />
-                  </span>
-                  {compareModels.map((model) => (
-                    <ToggleChip
-                      key={model.model_id}
-                      selected={selectedModelIds.includes(model.model_id)}
-                      onClick={() => toggleModel(model.model_id)}
-                    >
-                      {answerModelLabel(model)}
-                    </ToggleChip>
-                  ))}
-                </div>
-              ) : null}
-              {/* 入力欄と送信の行。送信は入力欄の下端にそろえ、375px では下に全幅で置く（#613）。 */}
-              <FieldActionRow
-                actions={
-                  // 送信と停止は同じボタン。生成中は同じ位置で「停止」になる（buttons.md §3.1、#413）。
-                  // 主な問い合わせの入力の行なので lg（README §4「操作部品の高さと幅」）。
-                  <RunStopButton
-                    running={sending}
-                    onRun={() => void send()}
-                    onStop={stop}
-                    runLabel={t("chat.composer.send")}
-                    stopLabel={t("chat.composer.stop")}
-                    runIcon={SendHorizontal}
-                    runDisabled={
-                      composer.trim().length === 0 ||
-                      searchAnswerProfileWithoutKnowledgeBases ||
-                      pendingChoice ||
-                      prerequisitesLoading ||
-                      conversationFailed
-                    }
-                    size="lg"
-                    testId="chat-run-stop"
+                    }}
+                    rows={2}
+                    placeholder={t("chat.composer.placeholder")}
+                    // 前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
+                    disabled={prerequisitesLoading}
+                    // 生成中も入力できる（次の質問を書ける）。生成中の Enter は send が無視し、停止しない（#413）。
+                    // 会話を選んでいなくても入力でき、最初の送信で会話を作る（#664）。
+                    // ラベルは読み上げだけ（sr-only）なので、欄の上に余白を空けない。
+                    className="space-y-0"
                   />
-                }
+                </FieldActionRow>
+                {errorText ? (
+                  <p className="text-sm text-danger-fg" role="alert">
+                    {errorText}
+                  </p>
+                ) : null}
+              </>
+            }
+          >
+            {/* 会話を選んでいない間は新しい会話の下書き。最初の送信で会話を作る（#664）。 */}
+            {conversationLoading && !liveTurn ? (
+              <TimedLoadingState
+                label={t("chat.messages.loading")}
+                operationKey="chat-conversation-load"
+                framed={false}
+                testId="chat-messages-loading"
               >
-                <TextareaField
-                  ref={composerRef}
-                  id="chat-composer"
-                  label={t("chat.composer.placeholder")}
-                  labelHidden
-                  value={composer}
-                  onChange={(event) => setComposer(event.target.value)}
-                  onKeyDown={(event) => {
-                    // IME の変換を確定する Enter では送信しない（#459）。
-                    if (isSubmitEnter(event) && !event.shiftKey) {
-                      event.preventDefault();
-                      void send();
+                {/* 質問と回答の吹き出しの寸法を予約する（3 製品で同じ形。#1153）。 */}
+                <ChatSkeleton />
+              </TimedLoadingState>
+            ) : searchAnswerProfileLoading ? (
+              // 検索・回答プロファイルの読み込み中は空の状態を出さず、会話の形の Skeleton だけを出す。
+              // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
+              <ChatSkeleton testId="chat-messages-skeleton" />
+            ) : activeId && conversationQuery.isError ? (
+              <ErrorState
+                message={t("chat.messages.error")}
+                onRetry={() => void conversationQuery.refetch()}
+              />
+            ) : turns.length === 0 && !liveTurn && !pendingChoice ? (
+              <EmptyState title={t("chat.messages.empty")} />
+            ) : (
+              <>
+                {turns.map((turn) => (
+                  <MessageTurn
+                    key={turn.user.message_id}
+                    user={turn.user}
+                    searchAnswerProfileId={searchAnswerProfileId ?? ""}
+                    onRetry={
+                      // 最新の質問の失敗（時間切れなど）だけ、同じ質問をもう一度送れる（#375）。
+                      turn.user.message_id === lastTurnId &&
+                      turn.user.status !== "ERROR" &&
+                      !liveTurn &&
+                      !sending
+                        ? () => void send(turn.user.content)
+                        : undefined
                     }
-                  }}
-                  rows={2}
-                  placeholder={t("chat.composer.placeholder")}
-                  // 前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
-                  disabled={prerequisitesLoading}
-                  // 生成中も入力できる（次の質問を書ける）。生成中の Enter は send が無視し、停止しない（#413）。
-                  // 会話を選んでいなくても入力でき、最初の送信で会話を作る（#664）。
-                  // ラベルは読み上げだけ（sr-only）なので、欄の上に余白を空けない。
-                  className="space-y-0"
-                />
-              </FieldActionRow>
-              {errorText ? (
-                <p className="text-sm text-danger-fg" role="alert">
-                  {errorText}
-                </p>
-              ) : null}
-            </div>
-            </section>
-          </div>
+                    onAskUnscoped={
+                      turn.user.message_id === lastTurnId && !liveTurn && !sending && !pendingChoice
+                        ? () => askUnscoped(turn.user.content)
+                        : undefined
+                    }
+                    columns={turn.replies.map((reply) => ({
+                      key: reply.message_id,
+                      // 保存した回答は model_id を持つ。生成中と同じ表示名に引き直す（#649）。
+                      label: reply.model ? (modelLabels.get(reply.model) ?? reply.model) : null,
+                      answer: reply.content,
+                      citations: reply.citations,
+                      traceId: reply.trace_id,
+                      messageId: reply.message_id,
+                      streaming: false,
+                      errorMessage: reply.status === "ERROR" ? reply.content : null,
+                      guardrailWarnings: reply.guardrail_warnings,
+                      savedAnswer: Boolean(
+                        reply.trace_id && answerTraceIds.has(reply.trace_id)
+                      ),
+                      // この画面で送った回答は、処理の経過を回答の上に残す（#1146）。
+                      progress: finishedProgress[reply.message_id]
+                        ? { steps: finishedProgress[reply.message_id], startedAtMs: 0 }
+                        : null,
+                    }))}
+                  />
+                ))}
+                {liveTurn ? (
+                  // 送った質問はサーバーの応答を待たずに出し、失敗・停止のときも残す（#907）。
+                  <MessageTurn
+                    user={liveTurn.user ?? { content: liveTurn.pending.content, guardrail_warnings: [] }}
+                    userStatus={
+                      liveTurn.pending.status === "sending"
+                        ? liveTurn.user
+                          ? "sent"
+                          : "sending"
+                        : liveTurn.pending.status
+                    }
+                    columns={liveColumns}
+                    searchAnswerProfileId={searchAnswerProfileId ?? ""}
+                    testId="chat-live-turn"
+                    footer={
+                      liveTurn.pending.status === "failed" ? (
+                        <div data-testid="chat-send-failure">
+                          <Banner
+                            severity="danger"
+                            action={
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                icon={RotateCcw}
+                                disabled={sending || pendingChoice}
+                                onClick={resend}
+                              >
+                                {t("chat.send.retry")}
+                              </Button>
+                            }
+                          >
+                            {liveTurn.failureMessage ?? t("chat.send.failedHint")}
+                          </Banner>
+                        </div>
+                      ) : liveTurn.pending.status === "stopped" ? (
+                        // 止めた状態。色だけに頼らず、停止のアイコンを添える（Agent のチャットと同じ）。
+                        <p
+                          className="flex items-center gap-1.5 text-sm text-fg-muted"
+                          data-testid="chat-stopped"
+                        >
+                          <Square size={14} aria-hidden="true" />
+                          {t("chat.send.stopped")}
+                        </p>
+                      ) : null
+                    }
+                  />
+                ) : null}
+                {/* 送る前の質問と、選んでから回答する類似問（#684）。質問の吹き出しは送信後と同じ形。 */}
+                {faqChoice ? (
+                  <div className="space-y-2" data-testid="chat-approved-faq-choice">
+                    <ChatUserMessage>{faqChoice.content}</ChatUserMessage>
+                    <ApprovedFaqSuggestions
+                      mode="chat"
+                      suggestions={faqChoice.suggestions}
+                      onUse={(suggestion) => chooseFaq(suggestion.id)}
+                      onSkip={() => chooseFaq()}
+                    />
+                  </div>
+                ) : null}
+                {/* 類似問の後に出す確認の質問（#717）。 */}
+                {clarifyChoice ? (
+                  <div className="space-y-2">
+                    <ChatUserMessage>{clarifyChoice.content}</ChatUserMessage>
+                    <ClarificationChoice
+                      suggestion={clarifyChoice.suggestion}
+                      onAnswer={(answer) => chooseClarification(answer)}
+                      onSkip={() => chooseClarification()}
+                    />
+                  </div>
+                ) : null}
+              </>
+            )}
+          </ChatLayout>
         )}
       </PageBody>
     </div>
