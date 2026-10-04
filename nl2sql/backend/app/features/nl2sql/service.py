@@ -8645,12 +8645,9 @@ class Nl2SqlService:
             current.profile_id, allowed_profile_ids
         ):
             raise ProfileScopePermissionError(current.profile_id)
-        if (
-            not actor_can_manage
-            and actor_user_uuid
-            and current.actor_user_uuid
-            and current.actor_user_uuid != actor_user_uuid
-        ):
+        # 持ち主の無い行（認証無効の期間・旧 snapshot）も、ジョブと同じく管理の権限が無ければ
+        # 拒否する（#1126。`_assert_job_actor_access`）。
+        if not actor_can_manage and actor_user_uuid and current.actor_user_uuid != actor_user_uuid:
             raise PermissionError(history_id)
         updated = self._patch_history_item(
             current,
@@ -8862,12 +8859,9 @@ class Nl2SqlService:
             current.profile_id, allowed_profile_ids
         ):
             raise ProfileScopePermissionError(current.profile_id)
-        if (
-            not actor_can_manage
-            and actor_user_uuid
-            and current.actor_user_uuid
-            and current.actor_user_uuid != actor_user_uuid
-        ):
+        # 持ち主の無い行（認証無効の期間・旧 snapshot）も、ジョブと同じく管理の権限が無ければ
+        # 拒否する（#1126。`_assert_job_actor_access`）。
+        if not actor_can_manage and actor_user_uuid and current.actor_user_uuid != actor_user_uuid:
             raise PermissionError(history_id)
         self._patch_history_item(
             current,
