@@ -50,6 +50,7 @@ from .object_identity import (
 )
 from .object_visibility import (
     filter_user_visible_catalog,
+    hidden_object_blocked_message,
     is_user_visible_object_name,
     is_user_visible_owner_name,
     is_user_visible_schema_object,
@@ -1257,10 +1258,7 @@ class OracleNl2SqlAdapter:
         if requested_owner and identity.owner != requested_owner:
             raise OracleAdapterError("owner と object_name の owner 指定が一致しません。")
         if not is_user_visible_schema_object(identity.owner, identity.object_name):
-            raise OracleAdapterError(
-                "NL2SQL_ で始まる表/VIEW は NL2SQL システム object です。"
-                "システムテーブル管理からのみ管理できます。"
-            )
+            raise OracleAdapterError(hidden_object_blocked_message([identity.qualified_name]))
         return identity
 
     def _load_constraints(

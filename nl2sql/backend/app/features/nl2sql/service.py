@@ -195,6 +195,7 @@ from .models import (
     MetadataSqlGenerateRequest,
     MetadataSqlSampleData,
     MetadataSqlSampleRequest,
+    MetadataSqlTarget,
     Nl2SqlEngine,
     Nl2SqlInterpretationArtifact,
     Nl2SqlLogicalStep,
@@ -300,8 +301,10 @@ from .object_identity import (
     sql_identifier_token,
 )
 from .object_visibility import (
+    HIDDEN_OBJECT_GENERIC_MESSAGE,
     filter_user_visible_catalog,
     filter_user_visible_object_page,
+    hidden_object_blocked_message,
     is_user_visible_object_name,
     is_user_visible_schema_object,
 )
@@ -1052,10 +1055,9 @@ def _question_with_empty_filter_guard(question: str) -> str:
     return f"{cleaned}\n\n=== NL2SQL Guard ===\n{_EMPTY_FILTER_GENERATION_INSTRUCTION}"
 
 
-_SYSTEM_OBJECT_BLOCKED_MESSAGE = (
-    "NL2SQL_ で始まる表/VIEW は NL2SQL システム object です。"
-    "システムテーブル管理からのみ管理できます。"
-)
+# 対象名の無い要約の文。対象名がある拒否は `_system_object_blocked_message` が
+# 種類ごとの文にする（#943）。
+_SYSTEM_OBJECT_BLOCKED_MESSAGE = HIDDEN_OBJECT_GENERIC_MESSAGE
 _PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE = (
     "PL/SQL の動的 SQL は管理 SQL 実行では使用できません。"
     "DDL/DML を個別の SQL statement として実行してください。"
@@ -1897,10 +1899,8 @@ def _schema_refresh_targets_for_statements(
 
 
 def _system_object_blocked_message(object_names: Sequence[str] | None = None) -> str:
-    names = sorted({name for name in (object_names or []) if name})
-    if not names:
-        return _SYSTEM_OBJECT_BLOCKED_MESSAGE
-    return f"{', '.join(names)}: {_SYSTEM_OBJECT_BLOCKED_MESSAGE}"
+    """対象名ごとに、種類（NL2SQL_・PLATFORM_・RAG_ / AGENT_・Oracle）に合った拒否の文を返す。"""
+    return hidden_object_blocked_message(list(object_names or []))
 
 
 def _hidden_schema_object_names(values: Sequence[str], *, current_owner: str) -> list[str]:
@@ -12089,6 +12089,8 @@ class Nl2SqlService:
 
     def get_metadata_samples(self, request: MetadataSqlSampleRequest) -> MetadataSqlSampleData:
         """コメント/アノテーション SQL 生成に使う列代表値を取得する。"""
+        # システム・共通基盤・他製品の表は、Oracle に問い合わせる前に拒否する（#943）。
+        self._require_visible_metadata_targets(request.targets)
         if request.sample_limit == 0:
             runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
             return MetadataSqlSampleData(runtime=runtime)
@@ -12116,6 +12118,11 @@ class Nl2SqlService:
             runtime=runtime,
             warnings=warnings,
         )
+
+    def _require_visible_metadata_targets(self, targets: Sequence[MetadataSqlTarget]) -> None:
+        """業務データとして扱わない表（NL2SQL_・PLATFORM_ など）を含めば ValueError。"""
+        for target in targets:
+            self._db_admin_object_identity(target.object_name, target.owner)
 
     def _metadata_samples_from_catalog(
         self, request: MetadataSqlSampleRequest
@@ -12300,6 +12307,8 @@ class Nl2SqlService:
 
     def get_domain_inventory(self, request: DomainInventoryRequest) -> DomainInventoryData:
         """対象表の列に付いた既存ドメインを dictionary から集め、LLM 向けテキストも返す。"""
+        # システム・共通基盤・他製品の表は、Oracle に問い合わせる前に拒否する（#943）。
+        self._require_visible_metadata_targets(request.targets)
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
         warnings: list[str] = []
         domains: list[DomainDefinition] = []

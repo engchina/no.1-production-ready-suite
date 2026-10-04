@@ -1122,8 +1122,10 @@ def test_db_admin_execute_blocks_nl2sql_select_dml_and_plsql_before_oracle() -> 
     assert [item.status for item in grant_result.statements] == ["blocked"]
     assert [item.status for item in revoke_result.statements] == ["blocked"]
     assert "システムテーブル管理" in select_result.statements[0].error_message
-    assert "システムテーブル管理" in grant_result.statements[0].error_message
-    assert "システムテーブル管理" in revoke_result.statements[0].error_message
+    # 共通基盤（PLATFORM_）の表は、NL2SQL のシステムテーブルの文ではなく種類に合った文にする（#943）。
+    assert "PLATFORM_ で始まる" in grant_result.statements[0].error_message
+    assert "PLATFORM_ で始まる" in revoke_result.statements[0].error_message
+    assert "システムテーブル管理" not in grant_result.statements[0].error_message
     assert adapter.select_calls == []
     assert adapter.calls == []
 
@@ -2512,6 +2514,53 @@ def test_metadata_samples_use_requested_limit_and_generation_context() -> None:
     assert len(adapter.calls) == 1
 
 
+@pytest.mark.parametrize(
+    ("object_name", "expected"),
+    [
+        ("PLATFORM_USERS", "PLATFORM_ で始まる"),
+        ("RAG_DOCUMENTS", "RAG_ / AGENT_ で始まる"),
+        ("AGENT_RUNS", "RAG_ / AGENT_ で始まる"),
+        ("NL2SQL_JOBS", "NL2SQL_ で始まる"),
+        ("V$SESSION", "Oracle のシステム object"),
+    ],
+)
+def test_metadata_samples_and_domain_inventory_reject_hidden_targets_before_oracle(
+    monkeypatch: pytest.MonkeyPatch, object_name: str, expected: str
+) -> None:
+    """システム・共通基盤・他製品の表は、Oracle に問い合わせる前に 400 にする（#943）。"""
+    samples_adapter = _FakeMetadataSamplesAdapter()
+    samples_service = _OracleRuntimeService(samples_adapter)
+    with pytest.raises(ValueError, match=expected):
+        samples_service.get_metadata_samples(
+            MetadataSqlSampleRequest(
+                targets=[
+                    {"object_name": "EMPLOYEE", "object_type": "table", "columns": []},
+                    {"object_name": object_name, "object_type": "table", "columns": ["X"]},
+                ],
+                sample_limit=5,
+            )
+        )
+    assert samples_adapter.calls == []
+
+    domain_adapter = _FakeDomainInventoryAdapter(([], []))
+    domain_service = _OracleRuntimeService(domain_adapter)
+    with pytest.raises(ValueError, match=expected):
+        domain_service.get_domain_inventory(
+            DomainInventoryRequest(targets=[{"object_name": object_name, "object_type": "table"}])
+        )
+    assert domain_adapter.calls == []
+
+    router = importlib.import_module("app.features.nl2sql.router")
+    monkeypatch.setattr(router, "nl2sql_service", domain_service)
+    with pytest.raises(HTTPException) as exc_info:
+        router.domain_inventory(
+            DomainInventoryRequest(targets=[{"object_name": object_name, "object_type": "table"}])
+        )
+    assert exc_info.value.status_code == 400
+    if not object_name.startswith("NL2SQL_"):
+        assert "NL2SQL システム object" not in str(exc_info.value.detail)
+
+
 def test_metadata_samples_fall_back_to_catalog_when_oracle_fails() -> None:
     service = _OracleRuntimeService(_FakeMetadataSamplesAdapter(fail=True))
     service._catalog = SchemaCatalog(
@@ -2768,7 +2817,7 @@ def test_preview_data_builds_guarded_select() -> None:
     assert "WHERE WHERE" not in normalized.sql
 
     # システム object は import 用 sanitizer で別名化せず、preview 前に止める。
-    with pytest.raises(ValueError, match="システムテーブル管理"):
+    with pytest.raises(ValueError, match="Oracle のシステム object"):
         service.preview_db_admin_data(
             DbAdminDataPreviewRequest(object_name="DBTOOLS$EXECUTION_HISTORY")
         )
