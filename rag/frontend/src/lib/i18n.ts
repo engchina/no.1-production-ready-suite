@@ -1235,6 +1235,8 @@ export const ja = {
   "knowledgeBases.edit.defaultNameFixed": "DEFAULT の名前は変更できません。説明だけを編集できます。",
   "knowledgeBases.error.assign":
     "文書の追加に失敗しました。文書とナレッジベースの状態を確認してください。",
+  "knowledgeBases.error.assignPartial":
+    "{total} 件のうち {assigned} 件を追加しました。残りの {remaining} 件は追加できませんでした。{reason}",
   "knowledgeBases.error.remove":
     "文書の所属解除に失敗しました。ナレッジベースの状態を確認してください。",
   "knowledgeBases.error.documents":
