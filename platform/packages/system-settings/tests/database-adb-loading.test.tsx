@@ -183,3 +183,34 @@ describe("Autonomous Database 管理の操作のスピナー（#819）", () => {
     expect(host.querySelectorAll('button[aria-busy="true"]')).toHaveLength(1);
   });
 });
+
+describe("Autonomous Database の情報の読み込み中", () => {
+  it("ADB の情報を取得している間は経過時間付きで示し、取得後は消す", async () => {
+    const info = deferred<AdbInfoData>();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(DATABASE_SETTINGS_QUERY_KEY, SETTINGS);
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <QueryClientProvider client={client}>
+            <ConfirmProvider>
+              <DatabaseSettingsPage api={{ ...apiWith(never), getAdbInfo: () => info.promise }} />
+            </ConfirmProvider>
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+
+    const loading = host.querySelector('[data-testid="settings-adb-loading"]');
+    expect(loading?.textContent).toContain("Autonomous Database の情報を読み込んでいます");
+    expect(loading?.textContent).toContain("経過時間");
+
+    await act(async () => {
+      info.resolve(AVAILABLE);
+      await info.promise;
+      // TanStack Query は結果の通知を次の tick にまとめる。
+      await new Promise((done) => setTimeout(done, 0));
+    });
+    expect(host.querySelector('[data-testid="settings-adb-loading"]')).toBeNull();
+  });
+});
