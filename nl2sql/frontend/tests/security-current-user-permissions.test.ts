@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CAPABILITY_PERMISSIONS,
   MENU_PERMISSIONS,
   currentUserHasPermission,
 } from "../src/features/security/menu-permissions.ts";
@@ -45,4 +46,17 @@ test("通常ユーザーは付与された権限だけ利用できる", () => {
 
   assert.equal(currentUserHasPermission(user, MENU_PERMISSIONS.query), true);
   assert.equal(currentUserHasPermission(user, MENU_PERMISSIONS.securityUsers), false);
+});
+
+test("コメント・アノテーション・ドメインの管理はスキーマの参照・更新を含む（#972）", () => {
+  for (const menu of [
+    MENU_PERMISSIONS.commentManagement,
+    MENU_PERMISSIONS.annotationManagement,
+    MENU_PERMISSIONS.domainManagement,
+  ]) {
+    const user = currentUser({ permissions: [menu] });
+    assert.equal(currentUserHasPermission(user, CAPABILITY_PERMISSIONS.schemaRead), true, menu);
+    assert.equal(currentUserHasPermission(user, CAPABILITY_PERMISSIONS.schemaRefresh), true, menu);
+    assert.equal(currentUserHasPermission(user, MENU_PERMISSIONS.tableManagement), false, menu);
+  }
 });

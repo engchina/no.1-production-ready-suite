@@ -97,6 +97,19 @@ const PERMISSION_IMPLIES: Record<string, string[]> = {
     CAPABILITY_PERMISSIONS.selectAiAssetsRead,
     CAPABILITY_PERMISSIONS.selectAiAssetsRefresh,
   ],
+  // コメント・アノテーション・ドメインの管理も DDL を実行し、「スキーマを更新」と実行後の job の追跡を使う（#972）。
+  [MENU_PERMISSIONS.commentManagement]: [
+    CAPABILITY_PERMISSIONS.schemaRead,
+    CAPABILITY_PERMISSIONS.schemaRefresh,
+  ],
+  [MENU_PERMISSIONS.annotationManagement]: [
+    CAPABILITY_PERMISSIONS.schemaRead,
+    CAPABILITY_PERMISSIONS.schemaRefresh,
+  ],
+  [MENU_PERMISSIONS.domainManagement]: [
+    CAPABILITY_PERMISSIONS.schemaRead,
+    CAPABILITY_PERMISSIONS.schemaRefresh,
+  ],
   [MENU_PERMISSIONS.glossaryRules]: [
     CAPABILITY_PERMISSIONS.profilesManage,
     CAPABILITY_PERMISSIONS.learningMaterialManage,
