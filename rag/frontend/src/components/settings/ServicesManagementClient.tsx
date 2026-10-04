@@ -2,7 +2,7 @@
 
 import {
   ApiErrorBanner,
-  DisclosureChevron,
+  Disclosure,
   PageBody,
   Button,
   Card,
@@ -409,20 +409,17 @@ function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
       : []),
   ];
   return (
-    <div className="rounded-md border border-border bg-surface-sunken">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls="service-commands"
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-2 text-left text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-      >
-        <SlidersHorizontal size={14} className="text-accent-fg" aria-hidden />
-        {t("settings.services.commands.title")}
-        <DisclosureChevron expanded={open} size={14} className="ml-auto text-fg-muted" />
-      </button>
+    // 共有の Disclosure（card・sunken）。見出しの高さは 40px・タッチ端末 44px（#1135）。
+    // コマンドは開いたときだけ描く（閉じている間はページ内検索・読み上げに出さない）。
+    <Disclosure
+      summary={t("settings.services.commands.title")}
+      icon={SlidersHorizontal}
+      surface="sunken"
+      open={open}
+      onOpenChange={setOpen}
+    >
       {open ? (
-        <div id="service-commands" className="space-y-2 border-t border-border p-3">
+        <div id="service-commands" className="space-y-2">
           <p className="text-xs leading-relaxed text-fg-muted">
             {t("settings.services.commands.description")}
           </p>
@@ -431,7 +428,7 @@ function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
           ))}
         </div>
       ) : null}
-    </div>
+    </Disclosure>
   );
 }
 
