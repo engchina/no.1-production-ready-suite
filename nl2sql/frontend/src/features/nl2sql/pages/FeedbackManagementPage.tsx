@@ -20,6 +20,7 @@ import {
 import { useSearchParams } from "react-router-dom";
 
 import {
+  apiErrorMessage,
   Button,
   Banner,
   EmptyState,
@@ -212,7 +213,7 @@ export function FeedbackManagementPage() {
   const [message, setMessage] = useState("");
   const [actionResult, setActionResult] = useState<ActionResult>(null);
   const showActionError = (origin: ActionResultOrigin, err: unknown, fallback: string) =>
-    setActionResult({ origin, tone: "danger", message: err instanceof Error ? err.message : fallback });
+    setActionResult({ origin, tone: "danger", message: apiErrorMessage(err, fallback) });
   const actionResultFor = (origin: ActionResultOrigin) =>
     actionResult?.origin === origin ? actionResult : null;
   const loadSequence = useRef(0);
@@ -385,7 +386,7 @@ export function FeedbackManagementPage() {
       if (isAbortError(err)) {
         return;
       }
-      setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.load"));
+      setMessage(apiErrorMessage(err, t("feedbackManagement.error.load")));
     } finally {
       if (sequence === loadSequence.current) setLoading("");
     }
