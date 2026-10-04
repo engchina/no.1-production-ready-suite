@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "./fixtures/test";
-import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
+import { expectedControlHeight, expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
 type ServiceStatus =
   | "running"
@@ -412,7 +412,13 @@ test("実行コマンドは既定で折りたたまれ、展開すると systemd
   // 既定では閉じている(コマンドは描画されない)。
   await expect(page.getByText(status, { exact: false })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "実行コマンド" }).click();
+  // 開閉の見出しは共有の Disclosure の <summary>。高さは lg 40px・タッチ端末 44px（以前は手書きで 34px。#1135）。
+  const commandsSummary = page.locator("summary", { hasText: "実行コマンド" });
+  await expect(commandsSummary).toBeVisible();
+  expect(Math.round((await commandsSummary.boundingBox())?.height ?? 0)).toBe(
+    await expectedControlHeight(page, "lg")
+  );
+  await commandsSummary.click();
 
   await expect(page.getByText(status, { exact: false }).first()).toBeVisible();
   await expect(
