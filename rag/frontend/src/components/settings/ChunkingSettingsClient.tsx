@@ -7,8 +7,8 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  Button,
   Disclosure,
+  FormActionBar,
   FormStatus,
   Switch,
   TextField,
@@ -45,9 +45,9 @@ import {
 } from "@/lib/chunking";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { focusFirstInvalidField, numberRangeError } from "@/lib/required-fields";
-import { useValuesChanged } from "@/lib/render-sync";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useChunkingSettings, useUpdateChunkingSettings } from "@/lib/queries";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 type ChunkingForm = ChunkingSettingsUpdate;
@@ -89,17 +89,22 @@ export function ChunkingSettingsClient() {
   const query = useChunkingSettings();
   const save = useUpdateChunkingSettings();
   const [form, setForm] = useState<ChunkingForm | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<ChunkingFieldErrors>({});
-
-  // server 値か保存中フラグが変わったレンダーで、フォームを server 値に戻す。
-  const serverChanged = useValuesChanged([query.data, save.isPending]);
-  if (serverChanged && query.data && !save.isPending) {
-    setForm(formFromSettings(query.data));
+  // 直前に取り込んだ server 値。server 値が変わったレンダーだけ、未編集ならフォームをそろえる。
+  // 保存の開始・終了（isPending）ではフォームを戻さない（失敗しても入力を残す。#966）。
+  const [base, setBase] = useState<string | null>(null);
+  const serverForm = query.data ? formFromSettings(query.data) : null;
+  const serverKey = serverForm ? serializeForm(serverForm) : null;
+  if (serverForm && serverKey !== base) {
+    setBase(serverKey);
+    if (form === null || serializeForm(form) === base) setForm(serverForm);
   }
 
-  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
-  useLeaveGuard(Boolean(query.data && form && serializeForm(form) !== serializeForm(formFromSettings(query.data))));
+  // 未保存の変更があるときは離脱を確認し、保存中は離脱を止める。
+  useLeaveGuard(
+    Boolean(serverKey && form && serializeForm(form) !== serverKey),
+    save.isPending
+  );
 
   if (query.isPending) {
     return (
@@ -140,7 +145,6 @@ export function ChunkingSettingsClient() {
 
   function updateForm(update: Partial<ChunkingForm>) {
     save.reset();
-    setSuccessMessage(null);
     setForm((current) => (current ? { ...current, ...update } : current));
     // 直した欄のエラーだけを消す。分割方式を変えたときは欄が入れ替わるので全部消す。
     setFieldErrors((current) =>
@@ -152,26 +156,26 @@ export function ChunkingSettingsClient() {
 
   function resetForm() {
     save.reset();
-    setSuccessMessage(null);
     setForm(formFromSettings(settings));
     setFieldErrors({});
   }
 
   function submit() {
-    if (!form) return;
+    if (!form || save.isPending) return;
     // 保存を押したときに欄ごとに検証し、欄の直下に出して最初のエラーの欄へ移す（#541）。
     const errors = validateForm(form);
     setFieldErrors(errors);
     if (focusFirstInvalidField(chunkingFieldOrder(form).map((field) => [chunkingFieldId(field), errors[field]] as const))) {
       return;
     }
-    save.mutate(form, {
+    // 選んだ方式で出していない欄は検証していないので、不正な値は保存済みの値で送る（#966）。
+    save.mutate(chunkingPayload(form, formFromSettings(settings)), {
       onSuccess: (data) => {
-        setForm(formFromSettings(data));
-        setSuccessMessage(t("settings.chunking.actions.saved"));
-      },
-      onError: () => {
-        setSuccessMessage(null);
+        const next = formFromSettings(data);
+        setBase(serializeForm(next));
+        setForm(next);
+        // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
+        toast.success(t("settings.chunking.actions.saved"));
       },
     });
   }
@@ -184,7 +188,6 @@ export function ChunkingSettingsClient() {
         strategies={strategies}
         saving={save.isPending}
         hasFieldErrors={Object.values(fieldErrors).some(Boolean)}
-        successMessage={successMessage}
         errorMessage={save.isError ? saveError : null}
         onStrategyChange={(strategy) => {
           const preset = chunkingStrategyPreset(strategy);
@@ -213,7 +216,6 @@ function OverviewCard({
   strategies,
   saving,
   hasFieldErrors,
-  successMessage,
   errorMessage,
   onStrategyChange,
   onReset,
@@ -225,7 +227,6 @@ function OverviewCard({
   saving: boolean;
   /** 欄のエラーがあるか（内容は欄の直下に出す。ここでは未保存の表示を控えるだけ）。 */
   hasFieldErrors: boolean;
-  successMessage: string | null;
   errorMessage: string | null;
   onStrategyChange: (strategy: ChunkingStrategyName) => void;
   onReset: () => void;
@@ -320,33 +321,35 @@ function OverviewCard({
             value={t("settings.common.currentConfig")}
           />
         </dl>
-        <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
-          <div className="min-h-6">
-            {!hasFieldErrors && dirty ? (
+        <FormActionBar
+          ariaLabel={t("settings.chunking.actions.label")}
+          primaryActions={[
+            {
+              id: "save",
+              label: t("settings.chunking.actions.save"),
+              icon: Save,
+              loading: saving,
+              disabled: !dirty,
+              onClick: onSubmit,
+            },
+          ]}
+          secondaryActions={[
+            {
+              id: "reset",
+              label: t("settings.chunking.actions.reset"),
+              icon: RotateCcw,
+              disabled: !dirty || saving,
+              onClick: onReset,
+            },
+          ]}
+          status={
+            errorMessage ? (
+              <FormStatus tone="danger" message={errorMessage} />
+            ) : !hasFieldErrors && dirty ? (
               <FormStatus tone="warning" message={t("settings.chunking.actions.unsaved")} />
-            ) : null}
-            {successMessage ? <FormStatus tone="success" message={successMessage} /> : null}
-            {errorMessage ? <FormStatus tone="danger" message={errorMessage} /> : null}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={onReset}
-              disabled={!dirty || saving}
-              aria-label={t("settings.chunking.actions.reset")} icon={RotateCcw}>
-              {t("settings.chunking.actions.reset")}
-            </Button>
-            <Button
-              type="button"
-              loading={saving}
-              disabled={!dirty}
-              onClick={onSubmit}
-              aria-label={t("settings.chunking.actions.save")} icon={Save}>
-              {t("settings.chunking.actions.save")}
-            </Button>
-          </div>
-        </div>
+            ) : null
+          }
+        />
       </CardContent>
     </Card>
   );
@@ -812,6 +815,24 @@ function validateForm(form: ChunkingForm): ChunkingFieldErrors {
         : null);
   }
   return errors;
+}
+
+/** 選んだ方式で画面に出していない欄が不正なら、`saved`（保存済みの値）で置き換えた payload（#966）。 */
+export function chunkingPayload(form: ChunkingForm, saved: ChunkingForm): ChunkingSettingsUpdate {
+  const shown = new Set<ChunkingParamField>(STRATEGY_PARAM_FIELDS[form.strategy]);
+  const payload: ChunkingForm = { ...form };
+  const keep = <K extends keyof ChunkingForm>(field: K, valid: (value: ChunkingForm[K]) => boolean) => {
+    if (shown.has(field as ChunkingParamField) || valid(payload[field])) return;
+    payload[field] = saved[field];
+  };
+  const inRange = (min: number, max: number) => (value: number) =>
+    Number.isInteger(value) && value >= min && value <= max;
+  keep("chunk_size", inRange(CHUNK_SIZE_MIN_CHARS, CHUNK_SIZE_MAX_CHARS));
+  keep("overlap", inRange(0, CHUNK_OVERLAP_MAX_CHARS));
+  keep("min_chars", inRange(0, 2000));
+  keep("delimiter", (value) => value.trim().length > 0);
+  for (const spec of SMALL_TO_BIG_PARAMS) keep(spec.field, inRange(spec.min, spec.max));
+  return payload;
 }
 
 function formFromSettings(settings: ChunkingSettingsData): ChunkingForm {
