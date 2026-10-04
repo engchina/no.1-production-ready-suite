@@ -537,12 +537,39 @@ def _timeout_details(settings: Any) -> dict[str, str | int | float | bool | None
 # --------------------------------------------------------------------------- persistence
 
 
+def _same_path(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
+
+
+def _requested_wallet_dir(base: Any, payload: DatabaseSettingsUpdate) -> str:
+    """payload の Wallet の保存先は、今の保存先と同じときだけ受け取る。
+
+    Wallet の設置（アップロード・OCI からの取得）は保存先の既存のディレクトリを置き換えて削除する
+    ため、API から任意の path を保存させない（画面は今の保存先を送るだけで、変更する欄は無い）。
+    保存先は platform/.env の PLATFORM_ORACLE_WALLET_DIR（Thick は CLIENT_LIB_DIR）で決める。
+    """
+    requested = payload.wallet_dir.strip()
+    current = _s(base, "oracle_wallet_dir").strip()
+    resolved = _s(base, "resolved_oracle_wallet_dir").strip()
+    if not requested or _same_path(requested, current):
+        return current or resolved
+    if _same_path(requested, resolved):
+        return resolved
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "Wallet の保存先は画面・API からは変更できません。"
+            "platform/.env の PLATFORM_ORACLE_WALLET_DIR で設定してください。"
+        ),
+    )
+
+
 def database_settings_candidate(
     base: Any, payload: DatabaseSettingsUpdate, *, connection_security_enabled: bool
 ) -> Any:
-    wallet_dir = payload.wallet_dir.strip() or _s(base, "oracle_wallet_dir").strip()
-    if not wallet_dir:
-        wallet_dir = _s(base, "resolved_oracle_wallet_dir")
+    wallet_dir = _requested_wallet_dir(base, payload)
     updates: dict[str, Any] = {
         "oracle_user": payload.user.strip(),
         "oracle_dsn": payload.dsn.strip(),
