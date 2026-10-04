@@ -1275,9 +1275,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return { skills: state.skills, metadata: { count: state.skills.length } };
     }
     if (method === "POST" && at("skills")) {
-      const id = String(body.id ?? "");
-      if (!id || state.skills.some((skill) => skill.id === id)) {
-        throw new HttpError(409, `skill already exists: ${id}`);
+      // backend の create_agent_skill と同じ検証（#926）。
+      const id = String(body.id ?? "").trim();
+      if (!id) throw new HttpError(400, "スキルの ID を入力してください。");
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(id)) {
+        throw new HttpError(422, "スキルの ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。");
+      }
+      if (state.skills.some((skill) => skill.id === id)) {
+        throw new HttpError(409, "同じ ID のスキルがあります。");
       }
       const skill = skillFromPayload(body, "runtime");
       state.skills.push(skill);
@@ -1285,8 +1290,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     if (at("skills", "*")) {
       const skill = findOr404(state.skills, "id", second, "skill");
-      if (skill.source === "builtin" && method !== "GET") {
-        throw new HttpError(409, `builtin skill cannot be modified: ${second}`);
+      if (skill.source !== "runtime" && method === "PATCH") {
+        throw new HttpError(
+          400,
+          "組み込み・ファイル・環境変数・プラグインのスキルは画面から変更できません。読み込み元の定義を変更してください。"
+        );
+      }
+      if (skill.source !== "runtime" && method === "DELETE") {
+        throw new HttpError(400, "組み込み・ファイル・環境変数・プラグインのスキルは画面から削除できません。");
       }
       if (method === "GET") return skill;
       if (method === "PATCH") {
@@ -1294,6 +1305,21 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         return skill;
       }
       if (method === "DELETE") {
+        // 業務 Agent の下書きか公開中の版が使っていれば断る（backend の delete_agent_skill。#926）。
+        const users = state.agents
+          .filter((agent) => {
+            const published = ((agent.versions as Json[] | undefined) ?? []).find(
+              (item) => item.version === agent.published_version
+            );
+            return [agent.skill_ids, published?.skill_ids].some((ids) => ((ids as string[] | undefined) ?? []).includes(second));
+          })
+          .map((agent) => String(agent.name || agent.id));
+        if (users.length) {
+          throw new HttpError(
+            409,
+            `このスキルは業務 Agent（${users.join("、")}）が使っています。業務 Agent のスキルから外してから削除してください。`
+          );
+        }
         state.skills = state.skills.filter((candidate) => candidate.id !== second);
         return { skills: state.skills, metadata: { count: state.skills.length } };
       }
