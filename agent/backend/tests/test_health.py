@@ -2672,9 +2672,9 @@ def test_agent_profile_crud_and_tool_allowlist() -> None:
         json={"agent_id": "agent_echo_only", "goal": "disabled agent を実行する"},
     )
     assert blocked_run.status_code == 409
-    assert blocked_run.json()["error_messages"] == [
-        "agent_disabled: 無効な業務 Agent は実行できません。"
-    ]
+    # 画面に出す文は code を前に付けず、code は `error_code` で返す（#911）。
+    assert blocked_run.json()["error_messages"] == ["無効な業務 Agent は実行できません。"]
+    assert blocked_run.json()["error_code"] == "agent_disabled"
     client.request("DELETE", "/api/agents/agent_echo_only")
 
 
@@ -3101,6 +3101,70 @@ def test_replay_run_creates_new_builtin_run_with_same_goal(monkeypatch: MonkeyPa
     assert replayed["status"] == "queued"
     assert replayed["steps"] == []
     assert scheduled == [replayed["id"]]
+
+
+def test_replay_run_does_not_inherit_source_markers(monkeypatch: MonkeyPatch) -> None:
+    """再実行は新しい Run。評価の dry-run・自動実行・MCP の印を引き継がない（#911）。"""
+    monkeypatch.setattr(agent_router, "_schedule_builtin_run", lambda run: None)
+    source = runtime_module.runtime_repository.create_builtin_run(
+        RunCreateRequest(
+            goal="評価の Run を再実行する",
+            agent_id="default",
+            metadata={
+                "evaluation_job_id": "job-911",
+                "evaluation_case_id": "case-911",
+                runtime_module.EVALUATION_DRY_RUN_KEY: True,
+                "automation_id": "automation-911",
+                "source": "mcp",
+            },
+        ),
+        created_by_user_uuid=LOCAL_DEBUG_USER_UUID,
+    )
+
+    replay = client.post(f"/api/runs/{source.id}/replay")
+
+    assert replay.status_code == 200, replay.text
+    metadata = replay.json()["data"]["metadata"]
+    assert metadata["replayed_from_run_id"] == source.id
+    inherited = {
+        "evaluation_job_id",
+        "evaluation_case_id",
+        runtime_module.EVALUATION_DRY_RUN_KEY,
+        "automation_id",
+        "source",
+    } & set(metadata)
+    assert inherited == set()
+
+
+def test_cancel_finished_run_keeps_result_and_returns_conflict() -> None:
+    """終了した Run の取消は 409 で、完了の結果を取消済みで上書きしない（#911）。"""
+    run = _seed_api_run("完了した実行は取り消さない")
+    assert run["status"] == "completed"
+
+    response = client.post(f"/api/runs/{run['id']}/cancel")
+
+    assert response.status_code == 409, response.text
+    assert response.json()["error_messages"] == [
+        "この実行はすでに終了しているため、取り消せません。"
+    ]
+    after = client.get(f"/api/runs/{run['id']}").json()["data"]
+    assert after["status"] == "completed"
+    assert after["events"] == run["events"]
+    # 品質評価の取消・WebSocket の取消が通る repository も、終了した Run を変えない。
+    kept = runtime_module.runtime_repository.cancel_run(run["id"])
+    assert kept.status == "completed"
+    assert len(kept.events) == len(run["events"])
+
+
+def test_run_and_approval_not_found_messages_are_japanese() -> None:
+    """実行履歴・承認の画面の Toast に英語の理由を出さない（#911）。"""
+    for path in ("/api/runs/missing-run/cancel", "/api/runs/missing-run/replay"):
+        response = client.post(path)
+        assert response.status_code == 404
+        assert response.json()["error_messages"] == ["実行が見つかりません。"]
+    decision = client.post("/api/approvals/missing-approval/decision", json={"approved": True})
+    assert decision.status_code == 404
+    assert decision.json()["error_messages"] == ["承認の依頼が見つかりません。"]
 
 
 def test_sse_events_returns_recorded_events() -> None:
