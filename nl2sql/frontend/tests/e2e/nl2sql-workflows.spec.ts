@@ -16398,6 +16398,12 @@ test("テーブル取込中は対象とファイルの変更を停止し失敗�
   await execute.press("Enter");
   // 取込先の表は所有者付きの修飾名で表示する（#556）。
   await expect(panel.getByTestId("table-import-result-table-name")).toHaveText("APP.IMPORTED_ORDERS");
+  // 実行の状態・モードは API の内部値（executed / create）を出さず、文言で出す（#935）。
+  const importResult = panel.getByTestId("table-import-result-panel");
+  await expect(importResult.getByText("実行済み", { exact: true })).toBeVisible();
+  await expect(importResult.getByText("新規テーブルを作成", { exact: true })).toBeVisible();
+  await expect(importResult.getByText("executed", { exact: true })).toHaveCount(0);
+  await expect(importResult.getByText("create", { exact: true })).toHaveCount(0);
   expect(api.importTabularPayload).toBeNull();
 });
 
