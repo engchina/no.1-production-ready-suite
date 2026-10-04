@@ -1899,7 +1899,12 @@ async def list_agent_templates() -> ApiResponse[AgentTemplatesData]:
 
 def _require_runnable_agent(agent_id: str) -> None:
     """自動実行の Run は利用者の Run なので、公開した版の無い業務 Agent は選べない（#792）。"""
-    reason = agent_unavailable_reason(_control_plane_agent(agent_id))
+    try:
+        agent: AgentProfile | None = _control_plane_agent(agent_id)
+    except KeyError:
+        # 存在しない（消した）業務 Agent も「見つかりません」の 422 にする（500 にしない。#927）。
+        agent = None
+    reason = agent_unavailable_reason(agent)
     if reason is not None:
         raise HTTPException(
             status_code=422, detail={"code": "agent_unavailable", "message": reason}
@@ -1959,9 +1964,14 @@ async def update_automation(
     _: None = Depends(require_admin),
 ) -> ApiResponse[Automation]:
     item = _automation_for_actor(request, automation_id)
-    if payload.agent_id != item.agent_id:
+    agent_changed = payload.agent_id != item.agent_id
+    if agent_changed:
         _require_agent_access(request, payload.agent_id)
-    _require_runnable_agent(payload.agent_id)
+    # 実行できる業務 Agent かは、業務 Agent を変えるときと有効のまま保存するときだけ確かめる。
+    # 業務 Agent が無効・未公開・削除になった後でも、自動実行を無効にする保存は
+    # できるようにする（#927）。
+    if agent_changed or payload.enabled:
+        _require_runnable_agent(payload.agent_id)
     try:
         updated = automation_store.update(item.id, payload, now=datetime.now(UTC))
     except ControlPlaneStoreError as exc:
