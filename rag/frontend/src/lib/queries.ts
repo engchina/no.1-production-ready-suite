@@ -1646,8 +1646,16 @@ export function useSubmitCompareEvaluationJob() {
   });
 }
 
-/** 実行中の品質評価の job は状態を取得し続け、終わったら止める。 */
-export function evaluationJobRefetchInterval(job: EvaluationJob | undefined): number | false {
+/**
+ * 実行中の品質評価の job は状態を取得し続け、終わったら止める。
+ * 取得の失敗（再起動・502 / 503・通信断）では止めず、最後に分かっている状態が実行中なら取得を続ける
+ * （止めると、回復しても画面が「実行中」のまま変わらない。#977）。見つからない job（404）だけは止める。
+ */
+export function evaluationJobRefetchInterval(
+  job: EvaluationJob | undefined,
+  error: unknown = null
+): number | false {
+  if (error instanceof ApiError && error.status === 404) return false;
   return job?.status === "RUNNING" ? EVALUATION_JOB_POLL_INTERVAL_MS : false;
 }
 
@@ -1663,7 +1671,7 @@ export function useEvaluationJob(jobId: string | null) {
     retry: (failureCount, error) =>
       !(error instanceof ApiError && error.status === 404) && failureCount < 3,
     refetchInterval: (query) =>
-      query.state.error ? false : evaluationJobRefetchInterval(query.state.data),
+      evaluationJobRefetchInterval(query.state.data, query.state.error),
   });
 }
 
