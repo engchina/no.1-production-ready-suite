@@ -111,6 +111,21 @@ test("バックアップと復元には、書き出すと復元できる範囲�
   await expectNoPageOverflow(page);
 });
 
+test("実行環境のメニュー権限だけの運用担当も、保存先の案内から実行環境を開いて直し方を見られる（#1041）", async ({ page, mockApi }) => {
+  mockApi.state.runtimeStorage = { ...RUNTIME_STORAGE_MEMORY };
+  mockApi.setCurrentUser(
+    dbUser({ login_user_id: "ops.user", permissions: ["menu.runtimes", "menu.settings_system_tables"] })
+  );
+  await page.goto("/settings/system-tables");
+  await page.getByTestId("storage-notice-open-runtime").click();
+  await expect(page).toHaveURL(/\/runtimes$/);
+  await expect(page.getByRole("heading", { name: "実行環境", level: 1 })).toBeVisible();
+  await expect(page.getByTestId("builtin-runtime-card")).toBeVisible();
+  await expect(page.getByTestId("runtime-storage-fix")).toContainText("保存先にメモリを指定しています");
+  await expect(page.getByText("この画面のデータを表示する権限がありません")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
 test("実行環境を開けない利用者には、管理者への依頼を出す（リンクは出さない）", async ({ page, mockApi }) => {
   mockApi.state.runtimeStorage = { ...RUNTIME_STORAGE_MEMORY };
   mockApi.setCurrentUser(

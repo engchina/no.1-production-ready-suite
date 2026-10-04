@@ -1652,7 +1652,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
             runtime: "oracle",
             executed: true,
             status: "added",
-            profile_name: state.adminFeedbackPayload.select_ai_profile_name ?? "NL2SQL_DEFAULT_PROFILE",
+            profile_name: state.adminFeedbackPayload.select_ai_profile_name || "NL2SQL_DEFAULT_PROFILE",
             index_name: "NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX",
             table_name: "NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX$VECTAB",
             sql_text: "select ai showsql 請求金額を一覧で見たい",
@@ -9388,7 +9388,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     feedback_content: "SQL は期待通りです",
     register_select_ai_feedback: false,
     select_ai_response: historySql,
-    select_ai_profile_name: "NL2SQL_DEFAULT_PROFILE",
+    select_ai_profile_name: "",
   });
   expect(api.selectAiFeedbackAddPayload).toBeNull();
   await expect(registerSelectAiCheckbox).not.toBeChecked();
@@ -9409,7 +9409,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     feedback_content: "SQL は期待通りです",
     register_select_ai_feedback: false,
     select_ai_response: historySql,
-    select_ai_profile_name: "NL2SQL_DEFAULT_PROFILE",
+    select_ai_profile_name: "",
   });
 
   await registerSelectAiCheckbox.check();
@@ -9423,7 +9423,7 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     feedback_content: "Select AI 登録用の管理者確認メモ",
     register_select_ai_feedback: true,
     select_ai_response: historySql,
-    select_ai_profile_name: "NL2SQL_DEFAULT_PROFILE",
+    select_ai_profile_name: "",
   });
   await expectSelectFieldValue(page.getByRole("combobox", { name: "管理者レビュー結果", exact: true }), "bad");
   await expect(registerSelectAiCheckbox).toBeChecked();
@@ -15044,6 +15044,10 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect.poll(() => api.extractJoinWherePayload?.prompt_profile).toBe("sql_structure");
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveValue(/EMPLOYEE.*DEPARTMENT/);
   await expect(page.getByLabel("抽出条件 (WHERE)")).toHaveValue("EMPLOYEE(e).STATUS = 'A'");
+  // 抽出の方式は API の内部値（deterministic）を出さず、文言で出す（#934）。
+  const joinWhereResult = page.getByRole("region", { name: "JOIN/WHERE 条件抽出結果" });
+  await expect(joinWhereResult.getByText("規則ベース（AI 未使用）", { exact: true })).toBeVisible();
+  await expect(joinWhereResult.getByText("deterministic", { exact: true })).toHaveCount(0);
   await page.getByText("SQL構造解析結果").click();
   await expect(page.getByText("## SQL構造分析")).toBeVisible();
 
@@ -15205,6 +15209,69 @@ test("table and view management show DROP failures in the confirmation dialog", 
   await expect.poll(() => api.dropViewPayload?.confirmation).toBe("APP.V_EMP_DEPT");
   await expect(dropViewDialog.getByText(/ORA-04043/)).toBeVisible();
   await expect(dropViewDialog).toBeVisible();
+});
+
+test("テーブル・ビューの削除のダイアログは、実行中は閉じられない（データの切り詰めとそろえる）", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  const pending: Array<() => void> = [];
+  const holdUntilReleased = (path: string, sql: string) =>
+    page.route(path, async (route) => {
+      await new Promise<void>((resolve) => pending.push(resolve));
+      await fulfillJson(route, {
+        executed: false,
+        runtime: "oracle",
+        select_result: null,
+        statements: [
+          {
+            index: 1,
+            statement_type: "DROP",
+            status: "error",
+            sql,
+            row_count: null,
+            message: "",
+            elapsed_ms: 0,
+            error_message: "ORA-00054: リソース・ビジー",
+          },
+        ],
+        committed: false,
+        rolled_back: true,
+        warnings: [],
+        timing,
+      });
+    });
+  await holdUntilReleased("**/api/nl2sql/db-admin/drop-table", 'DROP TABLE "APP"."INVOICES" PURGE');
+  await holdUntilReleased("**/api/nl2sql/db-admin/drop-view", 'DROP VIEW "APP"."V_EMP_DEPT"');
+
+  const cases = [
+    { path: "/table-management", grid: "table-management-grid", target: "APP.INVOICES", actions: "table-management-detail-actions", dialogName: "DROP TABLE の確認" },
+    { path: "/view-management", grid: "view-management-grid", target: "APP.V_EMP_DEPT", actions: "view-management-detail-actions", dialogName: "DROP VIEW の確認" },
+  ];
+  for (const item of cases) {
+    await page.goto(item.path);
+    await expect(page.getByTestId(item.grid)).toBeVisible();
+    await page.getByRole("button", { name: `${item.target} を表示` }).click();
+    await clickObjectDetailAction(page, item.actions, "削除");
+    const dialog = page.getByRole("dialog", { name: item.dialogName });
+    await dialog.getByLabel("実行確認語").fill(item.target);
+    await dialog.getByRole("button", { name: "Drop 実行" }).click();
+    await expect.poll(() => pending.length).toBe(1);
+
+    // 実行中は「閉じる」「キャンセル」を押せず、ダイアログは開いたまま（結果を見失わない）。
+    const close = dialog.getByRole("button", { name: "閉じる" });
+    const cancel = dialog.getByRole("button", { name: "キャンセル" });
+    await expect(close).toBeDisabled();
+    await expect(cancel).toBeDisabled();
+    await close.click({ force: true });
+    await cancel.click({ force: true });
+    await expect(dialog).toBeVisible();
+
+    pending.shift()!();
+    await expect(dialog.getByText(/ORA-00054/)).toBeVisible();
+    await expect(close).toBeEnabled();
+    await cancel.click();
+    await expect(dialog).toHaveCount(0);
+  }
 });
 
 test("annotation management explains ORA-11548 before Oracle execution", async ({ page }) => {
@@ -15373,6 +15440,52 @@ test("metadata sample limit zero omits samples and reports retrieval errors", as
   await expect(annotationInputPanel).toBeVisible();
   await annotationInputPanel.getByRole("button", { name: "SQL 生成" }).click();
   await expect(page.getByRole("alert")).toBeVisible();
+});
+
+test("件数の数値の欄は、空にしても入力中の文字を残し、範囲内の整数になったときだけ値を変える", async ({ page }) => {
+  const api = await mockNl2SqlApi(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+
+  // コメント管理のサンプル件数（0〜100）。空にしても即 0 にせず、範囲外は欄を離れると直前の値に戻す。
+  await page.goto("/comment-management");
+  await page.getByRole("option", { name: /INVOICES/ }).check();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+  const sampleLimit = page.getByLabel("サンプル件数");
+  await sampleLimit.fill("");
+  await expect(sampleLimit).toHaveValue("");
+  await sampleLimit.pressSequentially("25");
+  await expect(sampleLimit).toHaveValue("25");
+  await sampleLimit.fill("150");
+  await expect(sampleLimit).toHaveValue("150");
+  await sampleLimit.blur();
+  await expect(sampleLimit).toHaveValue("25");
+  await page.locator("#comment-management-panel-input").getByRole("button", { name: "SQL 生成" }).click();
+  await expect.poll(() => api.metadataSamplesPayload?.sample_limit).toBe(25);
+
+  // 合成データ生成の生成件数（1〜100）とサンプル行数（0〜100）。
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "合成データ生成" }).click();
+  const workspace = page.locator("#data-management-panel-synthetic");
+  await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
+  await workspace.getByTestId("data-synthetic-table").getByRole("option", { name: "APP.INVOICES", exact: true }).check();
+  const rows = workspace.getByLabel("各テーブルの生成件数");
+  await rows.fill("");
+  await expect(rows).toHaveValue("");
+  await rows.pressSequentially("50");
+  await expect(rows).toHaveValue("50");
+  await rows.fill("2.5");
+  await rows.blur();
+  await expect(rows).toHaveValue("50");
+  const sampleRows = workspace.getByLabel("サンプル行数(sample_rows)");
+  await sampleRows.fill("");
+  await expect(sampleRows).toHaveValue("");
+  await sampleRows.pressSequentially("7");
+  await sampleRows.blur();
+  await expect(sampleRows).toHaveValue("7");
+  await workspace.getByLabel("実行確認語").fill("APP.INVOICES");
+  await workspace.getByRole("button", { name: "生成開始" }).click();
+  await expect.poll(() => api.syntheticDataPayload?.row_count).toBe(50);
+  expect(api.syntheticDataPayload?.sample_rows).toBe(7);
 });
 
 test("legacy model-learning URL opens Select AI settings and preserves asset refresh", async ({ page }) => {

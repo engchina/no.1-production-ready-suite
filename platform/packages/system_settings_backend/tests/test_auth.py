@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from pr_system_settings.auth import service as auth_service
-from pr_system_settings.auth.dependencies import authorize_request
+from pr_system_settings.auth.dependencies import authorize_request, permission_route_path
 from pr_system_settings.auth.domain import (
     CONFIGURED_SYSTEM_ADMIN_USER_UUID,
     SYSTEM_ADMIN_ROLE_ID,
@@ -404,6 +404,26 @@ def _authorize_app(
         }
 
     return TestClient(app)
+
+
+def test_permission_route_path_drops_path_converter() -> None:
+    """`{name:path}` の route も、manifest・OpenAPI と同じ `{name}` の template で照合する。"""
+    seen: list[str] = []
+
+    async def capture(request: Request) -> None:
+        seen.append(permission_route_path(request))
+
+    app = FastAPI()
+
+    @app.get("/api/items/{owner}/{name:path}", dependencies=[Depends(capture)])
+    def item(owner: str, name: str) -> dict[str, str]:
+        return {"owner": owner, "name": name}
+
+    response = TestClient(app).get("/api/items/HR/A/B")
+
+    assert response.json() == {"owner": "HR", "name": "A/B"}
+    assert seen == ["/items/{owner}/{name}"]
+    assert "/api/items/{owner}/{name}" in app.openapi()["paths"]
 
 
 def test_authorize_request_keeps_route_error_codes() -> None:

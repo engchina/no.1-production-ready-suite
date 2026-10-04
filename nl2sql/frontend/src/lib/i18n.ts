@@ -32,6 +32,7 @@ const nl2sqlJa = {
   "chat.stop": "停止",
   "chat.generating": "SQL を生成しています",
   "chat.loading": "会話を読み込んでいます",
+  "chat.historyLoading": "会話の履歴を読み込んでいます",
   "chat.empty": "どのような SQL を生成しますか？",
   "chat.emptyHint": "例: 商品カテゴリ別の売上合計を求めて。その後「多い順にして」のように追加の条件を送れます。SQL は自動で実行されません。",
   "chat.historyEmpty": "会話はまだありません",
@@ -175,6 +176,10 @@ const nl2sqlJa = {
   "workspace.refresh": "最新情報を取得",
   "workspace.clearInput": "入力をクリア",
   "workspace.discardTitle": "未保存の入力を破棄しますか？",
+  // 共通のシステム設定の画面（モデル・データベース・アップロード保存先）の離脱の確認（#1118）
+  "settings.leaveGuard.title": "変更を破棄しますか",
+  "settings.leaveGuard.description": "保存されていない変更があります。移動すると編集内容は破棄されます。",
+  "settings.leaveGuard.confirm": "破棄して移動",
   "executionActivity.title": "今回の実行",
   "executionActivity.status.running": "実行中",
   "executionActivity.status.success": "完了",
@@ -381,7 +386,7 @@ const nl2sqlJa = {
   "security.deepsec.config.synced": "保存済み DATA USER パスワードを Oracle END USER へ同期しました。",
   "security.deepsec.config.syncMissing": "保存済み DATA USER パスワードがありません。",
   "security.deepsec.config.passwordLength": "DATA USER パスワードは12〜256文字で入力してください。",
-  "security.deepsec.config.passwordChars": "DATA USER パスワードに二重引用符、改行、制御文字は使用できません。",
+  "security.deepsec.config.passwordChars": "DATA USER パスワードに二重引用符、「${」、改行、制御文字は使用できません。",
   "security.deepsec.checksum": "SHA-256 チェックサム",
   "security.deepsec.sqlDetails": "SQL とチェックサムを表示",
   "security.deepsec.sqlReadonly": "SQL は読み取り専用です。環境の秘密値はプレースホルダーで表示します。",
@@ -1786,6 +1791,10 @@ const nl2sqlJa = {
   "profiles.oracle.sync.succeeded": "Oracle Profile の反映が完了しました。",
   "profiles.oracle.sync.failed": "業務 Profile は保存されましたが、Oracle 反映に失敗しました。",
   "profiles.oracle.sync.savedButFailed": "業務 Profile は保存されましたが、Oracle 反映を開始できませんでした。",
+  "profiles.oracle.sync.agentFailed":
+    "DBMS_CLOUD_AI Profile への反映は完了しましたが、Select AI Agent アセットの再構築に失敗しました。",
+  "profiles.oracle.sync.verifyFailed":
+    "DBMS_CLOUD_AI Profile への反映は完了しましたが、反映結果の検証に失敗しました。",
   "profiles.oracle.sync.credentialMissing":
     "現在の Oracle schema に OCI_CRED がありません。データベース設定で Select AI Credential を作成してから、Oracle 反映を再試行してください。",
   "profiles.oracle.sync.openSelectAiCredential": "Select AI Credential を開く",
@@ -1804,6 +1813,10 @@ const nl2sqlJa = {
     "業務プロファイルの保存とOracleへの反映が完了しました。",
   "profiles.oracle.progress.message.failed":
     "業務プロファイルは保存されましたが、Oracleへの反映を完了できませんでした。",
+  "profiles.oracle.progress.message.agentFailed":
+    "業務プロファイルの保存とDBMS_CLOUD_AI Profileへの反映は完了しましたが、Select AI Agentアセットの再構築に失敗しました。",
+  "profiles.oracle.progress.message.verifyFailed":
+    "業務プロファイルの保存とDBMS_CLOUD_AI Profileへの反映は完了しましたが、反映結果の検証に失敗しました。",
   "profiles.oracle.progress.message.cancelled": "Oracleへの反映を中止しました。",
   "profiles.oracle.progress.message.submissionFailed":
     "業務プロファイルは保存されましたが、Oracle反映ジョブを開始できませんでした。",
@@ -2107,6 +2120,7 @@ const nl2sqlJa = {
   "feedbackManagement.appFeedback.adminFeedbackRequired": "「違う」のときは管理者レビューコメントを入力してください。",
   "feedbackManagement.appFeedback.copyUserContent": "利用者コメントを反映",
   "feedbackManagement.appFeedback.registerSelectAi": "Select AI feedback に登録する",
+  "feedbackManagement.appFeedback.registerSelectAiHint": "対象の履歴の業務プロファイルの Select AI profile に登録します。",
   "feedbackManagement.appFeedback.selectAiResponse": "Select AI response SQL",
   "feedbackManagement.appFeedback.selectAiResponsePlaceholder": "Select AI feedback に登録する response SQL",
   "feedbackManagement.appFeedback.openCandidate": "学習候補で確認",
@@ -3047,6 +3061,14 @@ const nl2sqlJa = {
   "dbAdmin.result.error.ora11548.action.name": "説明用の annotation 名は \"DESCRIPTION\" に変更してください。",
   "dbAdmin.result.error.ora11548.action.quote": "予約語を意図的な annotation 名にする場合は、\"COMMENT\" のように二重引用符で囲んでください。",
   "dbAdmin.result.error.ora11548.action.regenerate": "アノテーション管理の入力確認画面へ戻り、SQL を再生成してください。",
+  "dbAdmin.result.error.ora01031.cause": "この操作を実行する Oracle 権限がありません。",
+  "dbAdmin.result.error.ora01031.action.privilege": "実行ユーザーの権限を管理者に確認してください。",
+  "dbAdmin.result.error.dataType.cause": "取込データまたは SQL の値が対象列のデータ型・長さに一致していません。",
+  "dbAdmin.result.error.dataType.action.check": "対象列の型、日付形式、数値形式、文字数を確認してください。",
+  "dbAdmin.result.error.constraint.cause": "表の制約条件を満たしていません。",
+  "dbAdmin.result.error.constraint.action.check": "重複値、必須値、親子データの関係を確認してください。",
+  "dbAdmin.result.error.ora00054.cause": "対象が他の処理で使用中です。",
+  "dbAdmin.result.error.ora00054.action.retry": "他の更新処理の完了後に再試行してください。",
   "dbAdmin.confirmation.adminHelper": "ADMIN_EXECUTE を入力すると実行できます。",
   "dbAdmin.confirmation.helper.execute": "{phrase} を入力すると実行できます。",
   "dbAdmin.confirmation.helper.danger": "この操作は取り消せません。{phrase} を入力して実行してください。",
@@ -3264,6 +3286,8 @@ const nl2sqlJa = {
   "viewMgmt.joinWhere.join": "結合条件 (JOIN)",
   "viewMgmt.joinWhere.where": "抽出条件 (WHERE)",
   "viewMgmt.joinWhere.structureResult": "SQL構造解析結果",
+  "viewMgmt.joinWhere.source.ociEnterpriseAi": "OCI Enterprise AI",
+  "viewMgmt.joinWhere.source.deterministic": "規則ベース（AI 未使用）",
   "viewMgmt.joinWhere.empty": "ビューを選択すると JOIN/WHERE 条件を抽出できます。",
   "viewMgmt.error.load": "ビュー一覧の読込に失敗しました。",
   "viewMgmt.error.detail":

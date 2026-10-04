@@ -133,25 +133,20 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission("menu.comment_management", "データ準備", "コメント管理"),
     _menu_permission("menu.annotation_management", "データ準備", "アノテーション管理"),
     _menu_permission("menu.domain_management", "データ準備", "ドメイン管理"),
+    # 用語・同義語と共通ルールの画面は、それぞれ全体の用語集・共通ルールの取込・出力だけを使う。
+    # 業務プロファイル管理（全業務プロファイルの利用を含む）と、もう一方の取込を許す
+    # 学習素材管理は含めない（route は menu 権限で判定する。#1006）。
     _menu_permission(
         "menu.glossary_rules",
         "データ準備",
         "用語・同義語",
-        implies=(
-            PROFILE_MANAGE_PERMISSION,
-            LEARNING_MATERIAL_MANAGE_PERMISSION,
-            SCHEMA_READ_PERMISSION,
-        ),
+        implies=(SCHEMA_READ_PERMISSION,),
     ),
     _menu_permission(
         "menu.global_rules",
         "データ準備",
         "共通ルール",
-        implies=(
-            PROFILE_MANAGE_PERMISSION,
-            LEARNING_MATERIAL_MANAGE_PERMISSION,
-            SCHEMA_READ_PERMISSION,
-        ),
+        implies=(SCHEMA_READ_PERMISSION,),
     ),
     _menu_permission(
         "menu.sample_data",
@@ -617,7 +612,9 @@ _ANNOTATION_MANAGEMENT = _allowed("menu.annotation_management")
 _COMMENT_MANAGEMENT = _allowed("menu.comment_management")
 _EVALUATION = _allowed("menu.evaluation")
 _FEEDBACK_MANAGE = _allowed(FEEDBACK_MANAGE_PERMISSION)
-_LEARNING_MATERIAL_MANAGE = _allowed(LEARNING_MATERIAL_MANAGE_PERMISSION)
+_GLOSSARY_RULES = _allowed("menu.glossary_rules", LEARNING_MATERIAL_MANAGE_PERMISSION)
+_GLOBAL_RULES = _allowed("menu.global_rules", LEARNING_MATERIAL_MANAGE_PERMISSION)
+_LEGACY_LEARNING_MATERIAL_READ = _GLOSSARY_RULES | _GLOBAL_RULES
 _ONTOLOGY_BUILD = _allowed("menu.ontology_build")
 _PROFILE_MANAGE = _allowed(PROFILE_MANAGE_PERMISSION)
 _QUERY_GENERATE = _allowed(QUERY_GENERATE_PERMISSION)
@@ -789,7 +786,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/nl2sql/db-admin/drop-table"): _allowed("menu.table_management"),
     ("POST", "/nl2sql/db-admin/drop-view"): _allowed("menu.view_management"),
     ("POST", "/nl2sql/db-admin/execute"): _ADMIN_SQL,
-    ("POST", "/nl2sql/db-admin/extract-join-where"): _ADMIN_SQL,
+    # ビュー管理の「JOIN/WHERE 条件抽出」だけが使う。画面と同じ権限にする（#934）。
+    ("POST", "/nl2sql/db-admin/extract-join-where"): _allowed("menu.view_management"),
     ("POST", "/nl2sql/db-admin/import-tabular"): _DB_ADMIN_TABLE_DATA,
     ("GET", "/nl2sql/db-admin/objects"): DATA_PREP_MENUS,
     ("POST", "/nl2sql/db-admin/preview-data"): _DB_ADMIN_PREVIEW,
@@ -938,12 +936,13 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/nl2sql/profiles/{profile_id}/restore"): _PROFILE_MANAGE,
     ("POST", "/nl2sql/profiles/{profile_id}/select-ai-profile"): _PROFILE_MANAGE,
     ("GET", "/nl2sql/profiles/{profile_id}/usage-context"): _allowed(PROFILE_READ_PERMISSION),
-    # ---- 学習素材（旧形式）・デモ学習 ----
-    ("GET", "/nl2sql/legacy-learning-material"): _LEARNING_MATERIAL_MANAGE,
-    ("GET", "/nl2sql/legacy-learning-material/rules/export.xlsx"): _LEARNING_MATERIAL_MANAGE,
-    ("POST", "/nl2sql/legacy-learning-material/rules/import"): _LEARNING_MATERIAL_MANAGE,
-    ("GET", "/nl2sql/legacy-learning-material/terms/export.xlsx"): _LEARNING_MATERIAL_MANAGE,
-    ("POST", "/nl2sql/legacy-learning-material/terms/import"): _LEARNING_MATERIAL_MANAGE,
+    # ---- 学習素材（旧形式。全体の用語集・共通ルール）・デモ学習 ----
+    # 用語・同義語は用語集だけ、共通ルールはルールだけを取り込める（#1006）。
+    ("GET", "/nl2sql/legacy-learning-material"): _LEGACY_LEARNING_MATERIAL_READ,
+    ("GET", "/nl2sql/legacy-learning-material/rules/export.xlsx"): _GLOBAL_RULES,
+    ("POST", "/nl2sql/legacy-learning-material/rules/import"): _GLOBAL_RULES,
+    ("GET", "/nl2sql/legacy-learning-material/terms/export.xlsx"): _GLOSSARY_RULES,
+    ("POST", "/nl2sql/legacy-learning-material/terms/import"): _GLOSSARY_RULES,
     ("POST", "/nl2sql/demo/learning"): _allowed(
         FEEDBACK_MANAGE_PERMISSION, LEARNING_MATERIAL_MANAGE_PERMISSION
     ),

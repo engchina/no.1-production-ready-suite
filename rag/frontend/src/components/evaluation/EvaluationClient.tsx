@@ -66,7 +66,7 @@ import {
   isEvaluationJobActive,
   isEvaluationJobId,
 } from "./evaluation-job";
-import { evaluationCaseIdError } from "./evaluation-input";
+import { evaluationCaseIdError, sampleOverwriteNeedsConfirm } from "./evaluation-input";
 import {
   EVALUATION_METRIC_NAMES,
   EVALUATION_PERSPECTIVES,
@@ -198,6 +198,23 @@ export function EvaluationClient() {
       ? parsedRequest.value.thresholds
       : null;
 
+  const confirm = useConfirm();
+  // 編集中の Golden set JSON は、上書きの影響を示して確認してからサンプルに置き換える（元に戻せないため）。
+  const loadSampleRequest = async () => {
+    if (sampleOverwriteNeedsConfirm(requestJson, SAMPLE_REQUEST)) {
+      const confirmed = await confirm({
+        title: t("evaluation.sampleConfirm.title"),
+        description: t("evaluation.sampleConfirm.description"),
+        confirmLabel: t("evaluation.sampleConfirm.confirm"),
+        tone: "warning",
+      });
+      if (!confirmed) return;
+    }
+    setRequestJson(SAMPLE_REQUEST);
+    setRequestJsonError(null);
+    setRunError("");
+  };
+
   const runEvaluation = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (runActive) return;
@@ -301,11 +318,7 @@ export function EvaluationClient() {
                   <Button
                     type="button"
                     variant="secondary"
-                    onClick={() => {
-                      setRequestJson(SAMPLE_REQUEST);
-                      setRequestJsonError(null);
-                      setRunError("");
-                    }}
+                    onClick={() => void loadSampleRequest()}
                   >
                     {t("evaluation.actions.loadSample")}
                   </Button>
