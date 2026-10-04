@@ -145,13 +145,17 @@ def _security_error_response(
     title: str | None,
     retryable: bool,
     field_errors: Sequence[Mapping[str, str]],
+    headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
     """認証・認可のエラー。
 
     共通画面が使う `error_code` と `problem` を足す（NL2SQL / RAG と同じ形）。
+    `headers` は 429 の `Retry-After` など、エラーが持つ header（#1087）。
     """
     request_id = getattr(request.state, "request_id", None)
-    headers = {"X-Request-ID": request_id} if isinstance(request_id, str) else {}
+    response_headers = dict(headers or {})
+    if isinstance(request_id, str):
+        response_headers["X-Request-ID"] = request_id
     body = ApiResponse[object](data=None, error_messages=[detail]).model_dump(mode="json")
     body["error_code"] = code
     body["problem"] = {
@@ -163,7 +167,7 @@ def _security_error_response(
         "retryable": retryable,
         "field_errors": [dict(item) for item in field_errors],
     }
-    return JSONResponse(status_code=status_code, content=body, headers=headers)
+    return JSONResponse(status_code=status_code, content=body, headers=response_headers)
 
 
 @app.exception_handler(SecurityApiError)
@@ -177,6 +181,7 @@ async def security_api_error_handler(request: Request, exc: SecurityApiError) ->
         title=exc.title,
         retryable=exc.retryable,
         field_errors=exc.field_errors,
+        headers=exc.headers,
     )
 
 
