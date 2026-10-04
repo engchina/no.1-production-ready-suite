@@ -1,4 +1,5 @@
 import {
+  ApiErrorState as UiApiErrorState,
   LoadingState,
   EmptyState,
   ErrorState as UiErrorState,
@@ -20,4 +21,27 @@ export function ErrorState({
   onRetry?: () => void;
 }) {
   return <UiErrorState message={message} onRetry={onRetry} retryLabel={t("common.retry")} />;
+}
+
+/**
+ * 取得の失敗（API の失敗）のエラー状態。要約と次の操作を本文に、技術的な詳細（HTTP ステータス・request ID・
+ * 通信断のときのブラウザの英語の文など）を「詳細」に出す（UX 契約 messaging.md §10.3。#906）。
+ */
+export function ApiErrorState({
+  error,
+  fallback,
+  onRetry,
+}: {
+  error: unknown;
+  fallback: string;
+  onRetry?: () => void;
+}) {
+  return (
+    <UiApiErrorState
+      error={error}
+      fallback={fallback}
+      onRetry={onRetry}
+      retryLabel={t("common.retry")}
+    />
+  );
 }

@@ -16,7 +16,7 @@ import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, ShieldAlert } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import { ErrorState } from "@/components/StateViews";
+import { ApiErrorState } from "@/components/StateViews";
 import {
   ApiError,
   type GuardrailBackend,
@@ -73,10 +73,9 @@ export function GuardrailSettingsClient() {
   if (query.isError) {
     return (
       <PageBody wide>
-        <ErrorState
-          message={
-            query.error instanceof ApiError ? query.error.message : t("settings.guardrail.loadError")
-          }
+        <ApiErrorState
+          error={query.error}
+          fallback={t("settings.guardrail.loadError")}
           onRetry={() => void query.refetch()}
         />
       </PageBody>

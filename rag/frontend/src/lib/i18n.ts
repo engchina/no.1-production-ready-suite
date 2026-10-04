@@ -58,8 +58,6 @@ export const ja = {
   "common.cardError.description":
     "画面の描画中に問題が発生しました。再試行しても解消しない場合は、ページを再読み込みしてください。他の項目は引き続き利用できます。",
   "common.required": "必須",
-  "common.api.timeout":
-    "API の応答が {seconds} 秒以内に返りませんでした。バックエンドとデータベースの起動状態を確認して再試行してください。",
 
   "settings.preview.copy.copied": "コピーしました",
   "settings.preview.copy.failed": "コピーできませんでした",
