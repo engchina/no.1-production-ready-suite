@@ -21,6 +21,7 @@ import {
   Button,
   Card,
   CardContent,
+  ChatProgress,
   ChatUserMessage,
   EmptyState,
   FieldActionRow,
@@ -29,7 +30,6 @@ import {
   MessageText,
   PageBody,
   PageHeader,
-  ProcessingIndicator,
   RunStopButton,
   SearchableSelectField,
   SelectField,
@@ -58,6 +58,12 @@ import {
   useProfileUsageContext,
   useProfileSummaries,
 } from "./incrementalQueries";
+import {
+  CHAT_PROGRESS_LABELS,
+  chatJobElapsedMs,
+  chatJobProgressSteps,
+  chatSubmitProgressSteps,
+} from "./chatProgress";
 import type { JobCreateData, JobData, Nl2SqlEngine } from "./types";
 
 interface Conversation {
@@ -721,14 +727,15 @@ export function SqlChatPage() {
                         }
                       />
                     ) : pending.status === "sending" ? (
+                      // 送信の応答（ジョブの投入）を待つ間も段階として出す。投入が遅いと、この段階に
+                      // 遅延の案内が付き、生成ではなく送信で待っていることが分かる（#1145）。
                       <Card>
                         <CardContent className="space-y-3">
-                          <ProcessingIndicator
-                            active
-                            label={t("chat.generating")}
-                            operationKey={pending.localId}
-                            startedAt={pending.sentAtMs}
-                            placement="panel"
+                          <ChatProgress
+                            key={pending.localId}
+                            steps={chatSubmitProgressSteps(pending.sentAtMs)}
+                            labels={CHAT_PROGRESS_LABELS}
+                            testId="sql-chat-progress"
                           />
                         </CardContent>
                       </Card>
@@ -840,15 +847,14 @@ function ChatTurn({ turn }: { turn: JobData }) {
       <ChatUserMessage>{turn.question || result?.original_question}</ChatUserMessage>
       <Card>
         <CardContent className="space-y-3">
-          {inFlight(turn) ? (
-            <ProcessingIndicator
-              active
-              label={t("chat.generating")}
-              operationKey={turn.job_id}
-              startedAt={turn.started_at || turn.created_at}
-              placement="panel"
-            />
-          ) : null}
+          {/* 処理の段階（#1145）。実行中は今の段階、完了後は回答の上に「処理の経過」の 1 行に畳む。 */}
+          <ChatProgress
+            steps={chatJobProgressSteps(turn, turn.engine)}
+            active={inFlight(turn)}
+            elapsedMs={chatJobElapsedMs(turn)}
+            labels={CHAT_PROGRESS_LABELS}
+            testId="sql-chat-progress"
+          />
           {result ? (
             <>
               <div className="flex flex-wrap items-center justify-between gap-2">

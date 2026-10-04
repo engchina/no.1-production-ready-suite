@@ -9,6 +9,9 @@ export interface JobStepData {
   stage: string;
   status: JobStepStatus;
   elapsed_ms?: number | null;
+  /** 段階の開始・終了の時刻（ISO 8601。#1145。古いジョブには無い）。 */
+  started_at?: string | null;
+  finished_at?: string | null;
 }
 
 export interface StageTiming {
@@ -589,6 +592,8 @@ export interface JobData {
   conversation_id?: string;
   previous_job_id?: string | null;
   generation_only?: boolean;
+  /** 生成方法（#1145。チャットの段階の補足に出す）。 */
+  engine?: Nl2SqlEngine;
   status: JobStatus;
   created_at: string;
   started_at?: string | null;
