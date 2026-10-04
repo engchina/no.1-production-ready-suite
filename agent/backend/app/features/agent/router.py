@@ -1501,7 +1501,7 @@ async def get_plugin(
 ) -> ApiResponse[PluginRecord]:
     record = plugin_registry.get(plugin_id)
     if record is None:
-        raise HTTPException(status_code=404, detail="plugin not found")
+        raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE)
     return ApiResponse(data=record)
 
 
@@ -1514,12 +1514,12 @@ async def patch_plugin(
     if patch.enabled is None:
         record = plugin_registry.get(plugin_id)
         if record is None:
-            raise HTTPException(status_code=404, detail="plugin not found")
+            raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE)
         return ApiResponse(data=record)
     try:
         record = plugin_registry.set_enabled(plugin_id, patch.enabled)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="plugin not found") from exc
+        raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     _persist(lambda: control_plane_store.save_plugin(record))
@@ -1534,7 +1534,7 @@ async def uninstall_plugin(
     try:
         plugin_registry.uninstall(plugin_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="plugin not found") from exc
+        raise HTTPException(status_code=404, detail=PLUGIN_NOT_FOUND_MESSAGE) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     _persist(lambda: control_plane_store.delete_plugin(plugin_id))
@@ -2739,6 +2739,12 @@ async def list_agents(request: Request) -> ApiResponse[AgentsData]:
 AGENT_NOT_FOUND_MESSAGE = "業務 Agent が見つかりません。"
 
 
+# 画面・API で作る業務 Agent の ID（URL の path に置くため `/`・空白などを断る。#1033）。
+# スキル・マーケットプレイスと同じ形。宣言・スナップショット・プラグインの既存の ID には当てない。
+AGENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+PLUGIN_NOT_FOUND_MESSAGE = "プラグインが見つかりません。"
+
+
 def _require_agent_name(name: str) -> None:
     """業務 Agent の名前は必須（画面と同じく空白だけも未入力。#925）。"""
     if not name.strip():
@@ -2751,10 +2757,26 @@ async def create_agent(
     _: None = Depends(require_admin),
 ) -> ApiResponse[AgentProfile]:
     _require_agent_name(agent.name)
+    # ID を送らなければ backend が `agent_<uuid>` を作る（画面の作成）。送られた ID は、その後の
+    # 取得・変更・削除の URL に置ける形だけを受け付ける（#1033）。
+    agent_id = agent.id.strip()
+    if not AGENT_ID_PATTERN.fullmatch(agent_id):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "業務 Agent の ID は英数字で始め、英数字・_・-・. の 100 文字以内にしてください。"
+            ),
+        )
     # 画面・API で作る Agent は下書きから始める（公開するまで利用者の Run には使えない。#770）。
     # 版の項目は送られても使わない。
     draft = agent.model_copy(
-        update={"versioned": True, "versions": [], "published_version": None, "source": "runtime"}
+        update={
+            "id": agent_id,
+            "versioned": True,
+            "versions": [],
+            "published_version": None,
+            "source": "runtime",
+        }
     )
     # 作成に使った業種テンプレート（#810）。知らないテンプレートは保存しない（400）。
     if draft.template_id and find_template(draft.template_id) is None:
