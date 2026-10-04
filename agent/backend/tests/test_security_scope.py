@@ -185,6 +185,12 @@ def test_approval_is_scoped_and_decided_by_principal(
         headers=headers,
     )
     assert denied.status_code == 403
+    assert denied.json()["error_messages"] == ["この業務 Agent を利用する権限がありません。"]
+    missing = client.post(
+        "/api/approvals/approval-missing/decision", json={"approved": True}, headers=headers
+    )
+    assert missing.status_code == 404
+    assert missing.json()["error_messages"] == ["承認の依頼が見つかりません。"]
     approval_id = scope_data.run_a1.approvals[0].id
     decided = client.post(
         f"/api/approvals/{approval_id}/decision",
@@ -212,6 +218,8 @@ def test_operator_run_creation_is_scoped(auth: ProductionAuth, scope_data: Scope
         headers=headers,
     )
     assert denied_agent.status_code == 403
+    # チャットの送信の失敗にそのまま出るので、英語・内部の ID を出さない。
+    assert denied_agent.json()["error_messages"] == ["この業務 Agent を利用する権限がありません。"]
     created = client.post(
         "/api/runs",
         json={
