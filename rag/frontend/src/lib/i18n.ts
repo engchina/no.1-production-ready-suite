@@ -1053,9 +1053,15 @@ export const ja = {
   "searchAnswerProfiles.actions.newView": "新規作成",
   "searchAnswerProfiles.list.aria": "検索・回答プロファイルの一覧",
   "searchAnswerProfiles.faq.loading": "承認済み FAQ を読み込んでいます",
+  // 知識の読み込みの失敗（応答に理由が無いとき）。空（0 件）と見せずに再試行を出す。
+  "searchAnswerProfiles.faq.loadError": "承認済み FAQ を読み込めませんでした。再試行してください。",
   "searchAnswerProfiles.faq.listAria": "承認済み FAQ の一覧",
   "searchAnswerProfiles.faq.scrollLabel": "承認済み FAQ の一覧。スクロールできます。",
   "searchAnswerProfiles.runtime.loading": "用語・同義語と回答ルールを読み込んでいます",
+  "searchAnswerProfiles.runtime.loadError":
+    "用語・同義語と回答ルールを読み込めませんでした。再試行してください。",
+  "searchAnswerProfiles.domainKeywords.loadError":
+    "ドメインキーワードを読み込めませんでした。再試行してください。",
   "searchAnswerProfiles.runtime.termsScrollLabel": "用語・同義語の一覧。スクロールできます。",
   "searchAnswerProfiles.runtime.rulesScrollLabel": "回答ルールの一覧。スクロールできます。",
   "searchAnswerProfiles.list.scrollLabel": "検索・回答プロファイル一覧。スクロールできます。",
