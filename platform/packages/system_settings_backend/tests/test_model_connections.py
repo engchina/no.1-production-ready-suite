@@ -656,3 +656,79 @@ def test_tertiary_connection_requires_api_key(tmp_path: Path) -> None:
     )
     assert response.status_code == 422
     assert response.json()["detail"] == "ターシャリ接続の API key を入力してください。"
+
+
+# --------------------------------------------------------------------------- 保存の競合（#1037）
+
+
+def test_stale_save_from_other_product_is_rejected_and_keeps_secondary_connection(
+    tmp_path: Path,
+) -> None:
+    """画面を開いた後に別の製品が保存していたら、古い値での保存は 409 にして上書きしない。"""
+    store_a, store_b = make_store(tmp_path), make_store(tmp_path)
+    product_a, product_b = FakeSettings(), FakeSettings()
+    store_a.load(product_a)
+    store_b.load(product_b)
+    client_a, client_b = make_client(product_a, store_a), make_client(product_b, store_b)
+
+    # 製品 A の画面を開く（セカンダリ接続はまだない）。
+    opened = client_a.get("/api/settings/model").json()["data"]
+    assert opened["revision"]
+    # 製品 B がセカンダリ接続を設定して保存する。
+    assert client_b.patch("/api/settings/model", json=two_connection_payload()).status_code == 200
+
+    # 製品 A の画面は、開いた時点の値に Generative AI の変更を重ねて保存する。
+    stale = opened["settings"]
+    stale["generative_ai"]["rerank_model"] = "rr-a"
+    response = client_a.patch(
+        "/api/settings/model", json={**stale, "base_revision": opened["revision"]}
+    )
+
+    assert response.status_code == 409
+    assert "ほかの画面" in response.json()["detail"]
+    env = dotenv_values(tmp_path / ".env")
+    assert env[ENTERPRISE_AI_SECONDARY_API_KEY_ENV] == "sk-secondary"
+    assert [item.connection_id for item in enterprise_ai_connections(product_a)] == [
+        "primary",
+        "secondary",
+    ]
+    assert product_a.oci_genai_rerank_model == "rr"
+
+    # 最新の設定を読み直せば、その版で保存できる（セカンダリ接続は残る）。
+    latest = client_a.get("/api/settings/model").json()["data"]
+    assert latest["revision"] != opened["revision"]
+    latest["settings"]["generative_ai"]["rerank_model"] = "rr-a"
+    saved = client_a.patch(
+        "/api/settings/model",
+        json={**latest["settings"], "base_revision": latest["revision"]},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["data"]["revision"] not in {opened["revision"], latest["revision"]}
+    assert dotenv_values(tmp_path / ".env")[ENTERPRISE_AI_SECONDARY_API_KEY_ENV] == "sk-secondary"
+    assert product_a.oci_genai_rerank_model == "rr-a"
+
+
+def test_revision_is_same_across_workers_and_save_without_base_revision_is_allowed(
+    tmp_path: Path,
+) -> None:
+    """版は同じ状態ならどの worker でも同じ。`base_revision` を送らない保存は従来どおり通る。"""
+    store_a, store_b = make_store(tmp_path), make_store(tmp_path)
+    worker_a, worker_b = FakeSettings(), FakeSettings()
+    store_a.load(worker_a)
+    store_b.load(worker_b)
+    client_a, client_b = make_client(worker_a, store_a), make_client(worker_b, store_b)
+
+    saved = client_a.patch("/api/settings/model", json=two_connection_payload()).json()["data"]
+    assert client_b.get("/api/settings/model").json()["data"]["revision"] == saved["revision"]
+    # 同じ版なら、別の worker でも保存できる。
+    again = client_b.patch(
+        "/api/settings/model",
+        json={**saved["settings"], "base_revision": saved["revision"]},
+    )
+    assert again.status_code == 200
+    # API key の値は版にも応答にも入らない（有無だけ）。同じ内容の保存なら版は変わらない。
+    assert again.json()["data"]["revision"] == saved["revision"]
+    assert "sk-secondary" not in json.dumps(again.json())
+
+    legacy = client_a.patch("/api/settings/model", json=saved["settings"])
+    assert legacy.status_code == 200
