@@ -234,19 +234,37 @@ function publicJob(job: Json): Json {
   return clone(Object.fromEntries(Object.entries(job).filter(([key]) => key !== "_polls")));
 }
 
-/** 評価セットの入力を保存する形にする（id を省いたケースは `case-<番号>`）。 */
+/**
+ * 評価セットの入力を保存する形にする（backend の `number_cases` と同じ。#965）。
+ * id を省いたケースは使われていない `case-<番号>`（位置の番号から探す）、明示した id の重複は 422。
+ */
 function normalizedSet(body: Json): Json {
+  const cases = (body.cases as Json[] | undefined) ?? [];
+  const explicit = cases.map((item) => String(item.id ?? "").trim()).filter(Boolean);
+  if (new Set(explicit).size !== explicit.length) {
+    throw new HttpError(422, "body.cases: Value error, ケースの id が重複しています。");
+  }
+  const used = new Set(explicit);
   return {
     agent_id: body.agent_id,
     name: body.name,
     description: body.description ?? "",
-    cases: ((body.cases as Json[] | undefined) ?? []).map((item, index) => ({
-      id: (item.id as string | undefined) || `case-${index + 1}`,
-      question: item.question,
-      expected: item.expected,
-      expected_tools: item.expected_tools ?? [],
-      source_run_id: item.source_run_id ?? null,
-    })),
+    cases: cases.map((item, index) => {
+      let id = String(item.id ?? "").trim();
+      if (!id) {
+        let number = index + 1;
+        while (used.has(`case-${number}`)) number += 1;
+        id = `case-${number}`;
+        used.add(id);
+      }
+      return {
+        id,
+        question: item.question,
+        expected: item.expected,
+        expected_tools: item.expected_tools ?? [],
+        source_run_id: item.source_run_id ?? null,
+      };
+    }),
   };
 }
 
@@ -656,7 +674,7 @@ function validateSnapshot(snapshot: Json) {
       String(snapshot.version)
     )
   ) {
-    errors.push(`unsupported snapshot version: ${String(snapshot.version)}`);
+    errors.push(`未対応のスナップショットの版です: ${String(snapshot.version)}`);
   }
   const duplicates = (label: string, ids: unknown[]) => {
     const seen = new Set<unknown>();
@@ -665,12 +683,12 @@ function validateSnapshot(snapshot: Json) {
       if (seen.has(id)) dup.add(String(id));
       seen.add(id);
     }
-    if (dup.size) errors.push(`duplicate ${label} id: ${[...dup].sort().join(", ")}`);
+    if (dup.size) errors.push(`ID が重複している${label}${/[ -~]$/.test(label) ? " " : ""}があります: ${[...dup].sort().join(", ")}`);
   };
-  duplicates("run", runs.map((run) => run.id));
-  duplicates("agent", agents.map((agent) => agent.id));
+  duplicates("実行", runs.map((run) => run.id));
+  duplicates("業務 Agent", agents.map((agent) => agent.id));
   if (!agents.some((agent) => agent.id === "default")) {
-    warnings.push("default agent is missing and will be recreated");
+    warnings.push("既定の業務 Agent（default）がありません。置換すると作り直します。");
   }
   return {
     valid: errors.length === 0,
@@ -1043,7 +1061,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   }
   // --- 品質評価（#776） ---
   if (method === "POST" && at("evaluations")) {
-    if (state.evaluations.some((job) => job.status === "running")) {
+    // backend と同じく、待っている（queued）評価も実行中に数える。
+    if (state.evaluations.some((job) => job.status === "running" || job.status === "queued")) {
       throw new HttpError(409, "ほかの評価を実行しています。終わってから始めてください。");
     }
     const evaluationSet = findOr404(state.evaluationSets, "id", String(body.set_id), "evaluation set");
@@ -1404,7 +1423,20 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (body.dry_run) {
       return { imported: false, dry_run: true, validation, reason: body.reason ?? null };
     }
-    throw new HttpError(400, "e2e mock はスナップショットの置換を実装していません");
+    // backend と同じく、無効なスナップショットと確認の無い置換は 400（#1027）。
+    if (!validation.valid) {
+      throw new HttpError(
+        400,
+        `スナップショットに ${validation.errors.length} 件のエラーがあるため置換できません。「検証」でエラーの内容を確認してください。`
+      );
+    }
+    if (body.confirm_replace !== true) {
+      throw new HttpError(400, "置換するには確認（confirm_replace=true）が必要です。");
+    }
+    const replaced = body.snapshot as Json;
+    state.runs = clone((replaced.runs as Json[] | undefined) ?? []);
+    state.agents = clone((replaced.agents as Json[] | undefined) ?? []);
+    return { imported: true, dry_run: false, validation, reason: body.reason ?? null };
   }
 
   // --- 設定 ---

@@ -394,3 +394,79 @@ for (const viewport of VIEWPORTS) {
     ).toContainText("1");
   });
 }
+
+// #965: ケースの削除と追加・別のページの未入力・前の評価の表示中の最新の評価の終わり。
+test("ケースを削除して足しても保存でき、ID の重複は欄で知らせる", async ({ page, mockApi }) => {
+  mockApi.state.evaluationSets.push({
+    ...structuredClone(SET),
+    id: "evset-auto",
+    cases: [1, 2, 3].map((number) => ({
+      id: `case-${number}`,
+      question: `質問 ${number}`,
+      expected: "要点",
+      expected_tools: [],
+    })),
+  });
+  await page.goto("/evaluation?id=evset-auto");
+  await page.getByRole("button", { name: "ケース 1 を削除" }).click();
+  await page.getByRole("button", { name: "ケースを追加" }).click();
+  const added = page.getByTestId("evaluation-case-3");
+  // 空のまま保存すると付く ID（残ったケースの case-3 と重ならない）を placeholder に出す。
+  await expect(added.getByLabel("ケース ID")).toHaveAttribute("placeholder", "case-4");
+  await added.getByLabel("質問").fill("質問 4");
+  await added.getByLabel("期待する回答の要点").fill("要点");
+
+  // 明示した ID の重複は、送らずに欄で知らせる。
+  await page.getByTestId("evaluation-case-1").getByLabel("ケース ID").fill("case-3");
+  await page.getByRole("button", { name: "保存", exact: true }).first().click();
+  await expect(page.getByText("ほかのケースと同じ ID です。")).toHaveCount(2);
+  expect(mockApi.requests.filter((request) => request.method === "PUT")).toHaveLength(0);
+
+  await page.getByTestId("evaluation-case-1").getByLabel("ケース ID").fill("case-2");
+  await page.getByRole("button", { name: "保存", exact: true }).first().click();
+  await expect(page.getByText("評価セットを保存しました")).toBeVisible();
+  const saved = mockApi.state.evaluationSets.find((item) => item.id === "evset-auto");
+  expect((saved?.cases as { id: string }[]).map((item) => item.id)).toEqual(["case-2", "case-3", "case-4"]);
+});
+
+test("別のページのケースが未入力なら、保存でそのページへ移ってエラーを出す", async ({ page, mockApi }) => {
+  mockApi.state.evaluationSets.push({
+    ...structuredClone(SET),
+    id: "evset-many",
+    cases: Array.from({ length: 11 }, (_, index) => ({
+      id: `case-${index + 1}`,
+      question: `質問 ${index + 1}`,
+      expected: "要点",
+      expected_tools: [],
+    })),
+  });
+  await page.goto("/evaluation?id=evset-many");
+  await page.getByTestId("evaluation-case-1").getByLabel("質問").fill("");
+  const pager = page.getByTestId("evaluation-cases-pagination");
+  await pager.getByRole("button", { name: "次へ" }).click();
+  await expect(page.getByTestId("evaluation-case-11")).toBeVisible();
+
+  await page.getByRole("button", { name: "保存", exact: true }).first().click();
+  await expect(page.getByTestId("evaluation-case-1")).toContainText("質問を入力してください。");
+  await expect(pager).toContainText("1 - 10 / 11 件");
+  expect(mockApi.requests.filter((request) => request.method === "PUT")).toHaveLength(0);
+});
+
+test("前の評価を表示している間に最新の評価が終わると、評価を開始できるようになる", async ({ page, mockApi }) => {
+  seedFinishedJobs(mockApi);
+  const [latest] = mockApi.state.evaluations;
+  mockApi.state.evaluations.unshift({ ...structuredClone(latest), id: "eval-running", status: "running", finished_at: null });
+  // mock は詳細の取得の回数で評価を終わらせるため、この評価は詳細を取り直しても終わらないようにする。
+  mockApi.state.evaluationPollsUntilDone = 1_000;
+  await page.goto("/evaluation");
+  await page.getByTestId("evaluation-row-actions-eval-previous").click();
+  await page.getByRole("menuitem", { name: "結果を表示" }).click();
+  const busy = page.getByText("ほかの評価を実行しています。終わってから始めてください。");
+  await expect(busy).toBeVisible();
+
+  mockApi.state.evaluations[0].status = "completed";
+  mockApi.state.evaluations[0].finished_at = MOCK_NOW;
+  await expect(busy).toBeHidden();
+  await page.getByTestId("evaluation-set-row-actions-evset-seeded").click();
+  await expect(page.getByTestId("evaluation-set-start-evset-seeded")).toBeEnabled();
+});
