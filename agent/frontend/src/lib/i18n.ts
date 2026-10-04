@@ -613,6 +613,8 @@ const agentJa = {
   "apiKeys.create.runAsHelper":
     "キーはこの利用者の権限で動きます。連携用の専用の利用者をユーザー管理で作り、必要なロールだけを付けて選ぶことをおすすめします。選べるのは、有効で初回のパスワード変更が済んだ利用者です。",
   "apiKeys.allAgents": "すべて",
+  // 閲覧者の範囲外か削除済みで、名前を取れない業務 Agent（ID だけでは何か分からないため）。
+  "apiKeys.agentUnavailable": "名前を表示できない業務 Agent（ID: {id}）",
   "apiKeys.noExpiry": "無期限",
   "apiKeys.expired": "期限切れ",
   "apiKeys.active": "有効",
