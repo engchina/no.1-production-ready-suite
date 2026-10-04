@@ -24,7 +24,7 @@ export function FormStatus({
     <p
       role={toneRole(tone)}
       className={cn(
-        "inline-flex min-w-0 items-start gap-1.5 text-sm font-medium leading-relaxed",
+        "pr-message-text inline-flex min-w-0 items-start gap-1.5 text-sm font-medium leading-relaxed",
         toneText[tone],
         className
       )}

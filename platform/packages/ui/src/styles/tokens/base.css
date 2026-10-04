@@ -30,6 +30,24 @@ body {
   word-break: break-word;
 }
 
+/*
+ * メッセージの本文（Toast・Banner・FormStatus・FieldError・結果パネル・処理中の表示・状態ビュー・確認ダイアログ。#899）。
+ * - word-break: auto-phrase: 日本語を文節（「完了しました。」の前など）で折り返し、語の途中で切らない
+ *   （Chrome / Edge 119+。<html lang="ja"> のときだけ効く）。未対応のブラウザ（Firefox・Safari）は宣言を捨て、
+ *   直前の normal（body と同じ、禁則処理つきの任意の文字での折り返し）のまま。
+ * - text-wrap: pretty: 最後の行に 1〜2 文字だけ残す折り返し（「した。」だけの行）を避ける。未対応なら通常の折り返し。
+ * - overflow-wrap: anywhere: 文節や URL・ID が 1 行に入らないときだけ、その中で折り返して横にはみ出さない。
+ *   auto-phrase は文節を分けない単位にするため、これが無いと狭い面で文節が枠の外へ出る。
+ * 本文（body）全体には入れない: 表のセル・チップ・バッジ・ナビなどの狭い面で文節の幅が最小幅になり、列が広がる・
+ * はみ出す（body は overflow-wrap: normal）。pretty は長い文章で描画が遅くなる。短い文章のメッセージだけに使う。
+ */
+.pr-message-text {
+  word-break: normal;
+  word-break: auto-phrase;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
 .sidebar-shell {
   contain: paint;
 }

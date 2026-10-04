@@ -41,7 +41,7 @@ export function Banner({
     <div
       role={toneRole(severity)}
       className={cn(
-        "flex items-start gap-2.5 rounded-lg border px-3.5 py-3 text-sm",
+        "pr-message-text flex items-start gap-2.5 rounded-lg border px-3.5 py-3 text-sm",
         toneSurface[severity],
         className
       )}

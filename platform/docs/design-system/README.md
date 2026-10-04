@@ -764,16 +764,41 @@ import { SearchField } from "@engchina/production-ready-ui";
 
 | 幅 | 置き場所（`data-toast-placement`） |
 |---|---|
-| md 以上 | `page-header`: `PageHeader`（`<header data-page-header>`）に重ね、ページの操作（`[data-page-header-actions]`）のすぐ左に右端をそろえる（間 1rem）。上端は `PageHeader` の上端 + 1rem、幅は `min(22rem, 操作の左の幅)`。ページの操作が無い、または操作がタイトルの下へ折り返して左にある（lg 未満）ときは、画面の右端から 1rem |
+| md 以上 | `page-header`: `PageHeader`（`<header data-page-header>`）に重ね、ページの操作（`[data-page-header-actions]`）のすぐ左に右端をそろえる（間 1rem）。上端は `PageHeader` の上端 + 1rem。幅は内容に合わせて `--toast-width-min`（22rem）〜`--toast-width-max`（32rem）の間で広がる（置ける幅がそれより狭ければ置ける幅まで。#899）。ページの操作が無い、または操作がタイトルの下へ折り返して左にある（lg 未満）ときは、画面の右端から 1rem |
 | md 以上（狭い） | `below-page-header`: ページの操作の左右のどちらにも 14rem が取れないときは、`PageHeader` の下端 + 1rem の右 |
 | md 以上（見出しなし） | `top-right`: `PageHeader` がスクロールで見えない（lg 未満）・無い画面は、画面の右上（上端・右端から 1rem） |
 | md 未満 | `top-bar`: 上端の全幅（右 1rem）。上端のバーに重ねて上端から 0.5rem。左はメニューのボタン（左の余白 0.5rem + 44px）の後ろ `calc(1rem + var(--control-height-touch))` から（上端のバーが無い画面は 1rem） |
 
 - **下端・右上（`PageHeader` の下）に置かない。** 操作は `PageHeader` の右端、内容の面の右上（`ObjectActionBar` / `ContentActionBar`。`PageHeader` のすぐ下に来やすい）、内容の末尾（`FormActionBar`。ページの末尾の操作は必ず画面の下端に来る）に集まる。右下の通知は末尾の操作を覆い、ポインタが乗ると一時停止（#351）で消えなくなり、閉じるまで押せなかった（#391 / #411）。`PageHeader` の下の右上は、内容の面の右上の操作を覆う（Agent の連携機能の詳細の「その他の操作」で確認）。`PageHeader` のタイトルの面と上端のバーの製品名には操作が無い
 - 一時停止（ホバー・フォーカス中はすべての通知の自動消滅を止める）と表示時間は変えない
+- **幅は内容に合わせる（#899）**: md 以上は `min-width: min(var(--toast-width-min), 置ける幅)`・`max-width: min(var(--toast-width-max), 置ける幅)` の shrink-to-fit。上限（32rem = 448px、本文の 1 行が約 25 字）までは折り返さない。積んだ通知は最も広い通知の幅にそろう。md 未満は画面の幅（左右の間隔の内側）。以前の固定の 22rem では、短い 1 文（「Oracle Profile の反映が完了しました。」）でも「…完了しま / した。」と語の途中で 2 行になった。上限は Material の Snackbar（344〜672px）・Atlassian の Flag（400px）の間で、PageHeader のタイトルを覆いすぎない幅。Carbon の Toast（288px 固定）より広いのは、日本語の 1 文が英語より横に長いため
 - 位置は通知が出ている間だけ、スクロール（祖先のどれでも）・リサイズ・`PageHeader` の大きさの変化に追従する（`requestAnimationFrame` でまとめる）。計算は `lib/toast-placement.ts` の `resolveToastPlacement`
 - 新しい通知は下に足す（DOM の順 = 読み上げ・Tab の順 = 見た目の順）。登場は上から降りる（`toast-in`: `translateY(-0.5rem)` → 0、200ms、reduced-motion では動かさない）
 - それでも覆いうるもの: 2 件以上積んだときの下の通知（本文の先頭。desktop は右寄り、375px は `PageHeader`）、lg 未満で `PageHeader` の「その他の操作」のメニューが左へ広がったときのメニューの上端、desktop のページのタイトル（一時的）
+
+### メッセージの本文の折り返し（新設）— ★ 日本語を文節で折り返し、語の途中で切らない（#899）
+
+メッセージの部品（`Toast`・`Banner`（`SettingsTestResultPanel`・`SaveErrorBanner` を含む）・`FormStatus`・`FieldError`・`ProcessingIndicator`・`BlockedPageNotice`・`ErrorState` / `EmptyState`・`ConfirmDialog`）の本文は、共有の CSS の `.pr-message-text` で折り返す。`MessageText` が自分に付けるので、`MessageText` で描く文字列はすべて対象になる。部品の面にも付けるので、`Banner` の子に渡した ReactNode も対象になる。
+
+```css
+.pr-message-text {
+  word-break: normal;
+  word-break: auto-phrase;   /* 文節で折り返す。Chrome / Edge 119+、<html lang="ja"> のときだけ */
+  overflow-wrap: anywhere;   /* 1 行に入らない文節・URL・ID だけ、その中で折り返す */
+  text-wrap: pretty;         /* 最後の行に 1〜2 文字だけ残さない */
+}
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 1 文が 1 行に入るなら折り返さない。入らないときは文末（`MessageText` の文ごとの inline box）→ 文節の順に折り返す | 「完了しま / した。」のような語の途中の改行は、読み手が語を組み立て直す負担になる（W3C の日本語組版の要件 JLReq、Chrome の `auto-phrase` の説明） |
+| 未対応のブラウザ（Firefox・Safari）は `auto-phrase` の宣言を捨て、直前の `normal`（`body` と同じ禁則処理つきの折り返し）に残る。`text-wrap: pretty` も未対応なら通常の折り返し | 機能の検出（`@supports`）を書かなくても、CSS の宣言の上書きで同じ劣化になる。見た目が崩れることはない |
+| `overflow-wrap: anywhere` を必ず併せる | `auto-phrase` は文節を分けない単位にするため、狭い面（375px の Toast・表の中の `FormStatus`）で文節や URL が枠の外へ出る。最小幅（min-content）も文字単位になり、flex の中で面を押し広げない |
+| 本文（`body`）全体には入れない | 表のセル・チップ・バッジ・ナビ・grid の狭い列では文節の幅が最小幅になり、列が広がる・はみ出す（`body` は `overflow-wrap: normal`）。`text-wrap: pretty` は長い文章で描画が遅くなる（MDN）。短い文章のメッセージだけに使う |
+| 片仮名の複合語は、構成する語の間（「バック｜グラウンド」）で折り返すことがある | Chrome の `auto-phrase` の文節の判定。語の途中（「バックグ｜ラウンド」）では切らない |
+
+- 文言は短くする: 1 文目は「何が起きたか」だけにし、補足は Toast の `description`、技術的な詳細は「詳細」（`Disclosure`）に分ける（UX 契約 messaging.md §3.1・§10.3）。幅を広げても、長い文は折り返す。
+- 製品で `word-break` / `text-wrap` / `overflow-wrap` をメッセージに書かない（部品が持つ）。ID・パス・SQL は従来どおり `.pr-break-anywhere`。
 
 ### 削除
 
@@ -942,6 +967,8 @@ dialog（24dp）は snackbar（6dp）より上です。モーダルが開いて�
 ```css
 body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 .pr-break-anywhere { overflow-wrap: anywhere; }   /* ID・パス・SQL だけに付ける */
+.pr-message-text { word-break: normal; word-break: auto-phrase; overflow-wrap: anywhere; text-wrap: pretty; }
+                                                  /* メッセージの部品の本文だけ（§4「メッセージの本文の折り返し」。#899） */
 ```
 
 旧構成は規定が無く、`DataTable` のセルが `word-break: break-word` だったため **「デー／タベース」のように任意の文字で分断**され、禁則処理も効かず **行頭に 、。ー っ ゃ** が来ていました。Japanese-first を掲げるシステムとしては致命的な欠落でした。
@@ -955,7 +982,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**66点あります。**
+QA に事前共有してください。**68点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -1024,7 +1051,9 @@ QA に事前共有してください。**66点あります。**
 | 63 | **Agent のチャットの送信が、回答の作成中は同じ位置で「停止」になる**（#805） | 回答の作成中・承認待ちは送信のボタンが `disabled`（`loading` のスピナー）になり、止める手段が無かった → RAG と同じ共有の `RunStopButton` で、同じボタンが `secondary` の「停止」（`Square`）になり、押すと Run を中止する。止めた回答は会話に停止のアイコン付きの文で出す。RAG の検索・チャット・検索テストの見た目と、回答の評価（RAG・Agent とも共有の `FeedbackControls` に置き換え）の見た目は変えない | UX 契約 buttons.md §3.1。ChatGPT・Copilot・Gemini と同じ、入力欄の送信と停止の 1 つのボタン |
 | 64 | **生の色・型のスケールの外の文字・アイコンの寸法・`min-h-*` で決めた複数行の欄の高さを、トークンと `rows` にそろえる**（#800） | RAG の文書の原本プレビューの bbox の縁取りが `rgba(255,255,255,0.9)` の白（ダークテーマで白い線が浮く）。ナレッジベースの処理の流れ・関係情報の図のラベルが 10 / 11px、余白・角丸が数値の px。アイコンに 10 / 11 / 28px。NL2SQL の複数行の欄の高さを `rows` と `textareaClassName="min-h-*"` の両方で決め、多くは `min-h-*` が無効（`rows` の方が高い）、一部（`rows={2}` の欄など）は `min-h-*` が勝っていた。設定のプレビューは `h-44` / `h-56` の固定。NL2SQL の読込スケルトンが `h-[64px]` / `h-[40px]` / `h-[288px]` の px。ロールの詳細の「権限管理で設定」が枠の中の枠 | 縁取りは `ring-1 ring-surface/90`（面の色。ライトは白・ダークは面の暗い色）。図のラベルは `--font-size-xs`（12px）、余白・角丸は `--space-*` / `--radius-*`。アイコンは 14 / 24px。複数行の欄の高さは `rows` だけで決める（`rows={2}` の欄は 70px → 約 64px。プレビューは 7 / 9 行）。スケルトンは rem（`h-18` / `h-11.5` / `h-82`、約 63 / 40 / 287px）。権限の導線は詳細の区切り線の下に置き、`ButtonLink` で出す | トークンの外の値はテーマ・密度の変更に追従しない。adherence の lint が `<table>`・`PageHeader` の `actions` の JSX・`rgba()` などの色の関数・数値の文字サイズと余白・`textareaClassName` の高さを検出するようにした（#800） |
 | 65 | **DB ゲートの案内が、状態（未設定・接続できない・初期化が必要・状態を確認できない）ごとに見出し・アイコン・導線を分け、設定を開けない利用者には導線を出さない**（#820） | 全状態で同じ `Database` のアイコンと「設定を開く」（初期化が必要はシステムテーブル）・再試行を出した。接続できない見出しは「データベースを起動してください」、DB に接続できないのに「データベース接続済み・初期化が必要です」と出ることがあった。権限の無い利用者にも押しても開けない設定へのリンクを出した。リンクは `<Link className={buttonVariants()}>` の子にアイコンを手書き | 見出しとアイコン: 未設定「データベースの接続情報が未設定です」（`Settings`）/ 接続できない「データベースに接続できません」（`Unplug`）、ADB の状態が分かれば「Autonomous Database が停止しています」（`PowerOff`）・「…を起動しています」（`Hourglass`、info）・「…を利用できない状態です」（`ServerOff`）と ADB の状態の `StatusBadge`（「Autonomous Database: 停止済み」）/ 初期化が必要「システムテーブルの作成・更新が必要です」（`Wrench`）/ 状態を確認できない（`ServerCrash`）。導線: 未設定 → データベース設定、接続できない → データベース設定の ADB 管理のカード（ADB が起動済みなら接続情報）、初期化が必要 → システムテーブル、状態を確認できない → 再試行だけ。設定を開けない利用者は「システム管理者に連絡して、…を依頼してください。」とフッターの説明だけで、リンクを出さない（再試行は残す）。リンクは `ButtonLink` | 不通と初期化の不足では直す人と直す場所が違う。押しても開けない導線を出さず、次の行動（管理者への連絡）を示す（UX 契約 messaging §3.4.1） |
-| 66 | **操作の行の補足の説明が常設されず、ラベルの横の info アイコンから出る**（#901） | RAG のチャット・RAG 検索の「回答するモデル」のチップの後ろ（未選択のときだけ）、NL2SQL のチャットの「生成方法」の選択の右、NL2SQL の SQL 生成の「AI要件確認」の右、Agent の Run の作成の「下書きで実行」の右、Run の詳細の「ストリーム方式」のチップの下に、説明文を常に表示していた → ラベル（または操作）の横に 16px の `Info` アイコン（見た目 24px の円）を置き、ポインタを乗せる（150ms）・キーボードのフォーカス・押す（クリック・タップ・Enter / Space）で暗い吹き出し（12px / 400・最大幅 20rem）に出す。Escape・外側を押す・もう一度押すで閉じる。行の高さが説明の折り返しの分だけ低くなる。RAG の説明は選択の有無にかかわらず出せる | 操作の行を密に保ち、補足は必要なときだけ読む。タッチ端末・キーボード・読み上げでも読める（§4「`InfoTip`」） |
+| 66 | **処理中の表示（`ProcessingIndicator` / `TimedLoadingState`）が、10 秒後の遅延の案内で動かない**（#902） | 経過 10 秒で「通常より時間がかかっています。」の行を足し、領域が 1 行高くなっていた。中央寄せの DB ゲートではスピナーごとカードが 12.25px 上へ動き、流れの中では下の内容を押し下げた | 遅延の案内の行を処理の開始から置き、遅延するまでは同じ文言を `::before` の content で見えない状態に描いて高さだけ予約する（狭い画面で折り返しても同じ高さ。textContent・読み上げには入らない）。遅延したら文言を足し、`role="status"` を付けて読み上げる（予約の行は status にしない）。処理中は最初から 1 行ぶん高い | 後から出る内容の場所を先に取り、レイアウトシフト（CLS）を出さない。スピナーの回転そのもの（#395 の全周トラック）は揺れていなかった（角度・DPR・小数の位置ごとの実測で輪郭の中心のずれ 0.17px 以下） |
+| 67 | **通知（Toast）が内容に合わせて広がり、メッセージの本文が文節で折り返す**（#899） | desktop の通知の幅は 22rem 固定で、「Oracle Profile の反映が完了しました。」も「…完了しま / した。」と 2 行に折り返した。Banner・FormStatus なども任意の文字の間で折り返した（「確認 / してから」）→ 通知は内容に合わせて 22〜32rem の間で広がり（短い通知は従来と同じ 22rem、375px は従来どおり画面の幅）、メッセージの部品の本文は `.pr-message-text` で文節で折り返す（Chrome / Edge。Firefox・Safari は従来どおり）。通知は PageHeader のタイトルの側へ最大 10rem 長く伸びる | 短い 1 文は 1 行で読め、折り返すときも語の途中で切らない（§4「`Toaster`」「メッセージの本文の折り返し」、UX 契約 messaging.md §3.1 / §4.1） |
+| 68 | **操作の行の補足の説明が常設されず、ラベルの横の info アイコンから出る**（#901） | RAG のチャット・RAG 検索の「回答するモデル」のチップの後ろ（未選択のときだけ）、NL2SQL のチャットの「生成方法」の選択の右、NL2SQL の SQL 生成の「AI要件確認」の右、Agent の Run の作成の「下書きで実行」の右、Run の詳細の「ストリーム方式」のチップの下に、説明文を常に表示していた → ラベル（または操作）の横に 16px の `Info` アイコン（見た目 24px の円）を置き、ポインタを乗せる（150ms）・キーボードのフォーカス・押す（クリック・タップ・Enter / Space）で暗い吹き出し（12px / 400・最大幅 20rem）に出す。Escape・外側を押す・もう一度押すで閉じる。行の高さが説明の折り返しの分だけ低くなる。RAG の説明は選択の有無にかかわらず出せる | 操作の行を密に保ち、補足は必要なときだけ読む。タッチ端末・キーボード・読み上げでも読める（§4「`InfoTip`」） |
 
 ### API の非互換
 

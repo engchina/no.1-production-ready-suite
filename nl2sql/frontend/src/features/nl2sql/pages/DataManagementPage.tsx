@@ -530,12 +530,13 @@ export function DataManagementPage() {
     if (reportedDbProfileRefreshJob?.status !== "done") return;
     void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
     void refetchSelectAiProfiles();
-    toast.success(
-      t("profiles.dbProfileRefresh.done", {
+    // 1 文目は何が起きたかだけにし、件数は description に分ける（#899）。
+    toast.success(t("profiles.dbProfileRefresh.done"), {
+      description: t("profiles.dbProfileRefresh.doneDetail", {
         changed: reportedDbProfileRefreshJob.changed_profiles,
         deleted: reportedDbProfileRefreshJob.deleted_profiles,
-      })
-    );
+      }),
+    });
   }, [reportedDbProfileRefreshJob, queryClient, refetchSelectAiProfiles]);
 
   // job の取得に失敗したレンダーで、error 表示を直す（effect で setState しない）。
