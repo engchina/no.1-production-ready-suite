@@ -300,6 +300,7 @@ from .object_identity import (
     sql_identifier_token,
 )
 from .object_visibility import (
+    SYSTEM_OBJECT_BLOCKED_MESSAGE,
     filter_user_visible_catalog,
     filter_user_visible_object_page,
     is_user_visible_object_name,
@@ -1052,10 +1053,7 @@ def _question_with_empty_filter_guard(question: str) -> str:
     return f"{cleaned}\n\n=== NL2SQL Guard ===\n{_EMPTY_FILTER_GENERATION_INSTRUCTION}"
 
 
-_SYSTEM_OBJECT_BLOCKED_MESSAGE = (
-    "NL2SQL_ で始まる表/VIEW は NL2SQL システム object です。"
-    "システムテーブル管理からのみ管理できます。"
-)
+_SYSTEM_OBJECT_BLOCKED_MESSAGE = SYSTEM_OBJECT_BLOCKED_MESSAGE
 _PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE = (
     "PL/SQL の動的 SQL は管理 SQL 実行では使用できません。"
     "DDL/DML を個別の SQL statement として実行してください。"
@@ -2307,6 +2305,18 @@ def _db_admin_policy_error(statement: str, policy: str) -> str:
 def _db_admin_system_object_error(statement: str, *, current_owner: str) -> str:
     hidden = _admin_statement_hidden_object_names(statement, current_owner=current_owner)
     return _system_object_blocked_message(hidden) if hidden else ""
+
+
+def _admin_select_not_read_only_message(statement: str) -> str:
+    """読み取り専用と確かめられない SELECT/WITH を、確認語待ちにせず止めるときの理由（#933）。"""
+
+    stripped = _strip_leading_sql_comments(statement).strip()
+    findings = parse_oracle_sql(stripped).validation.findings
+    detail = findings[0].message_ja if findings else ""
+    message = (
+        "SELECT 文を読み取り専用として確認できないため実行しませんでした。構文を確認してください。"
+    )
+    return f"{message}（{detail}）" if detail else message
 
 
 def _db_admin_dynamic_sql_error(statement: str) -> str:
@@ -14918,6 +14928,37 @@ class Nl2SqlService:
                         error_message="複数 statement 実行に SELECT は含められません。",
                     )
                     for index, kind in enumerate(statement_types)
+                ],
+                warnings=warnings,
+                timing=self._timing(created_at, started, "db_admin_execute"),
+            )
+        # 画面は先頭語と更新系の語で SELECT を判定し、確認語の欄を出さない。sqlglot で読み取り専用と
+        # 確かめられない SELECT/WITH（構文の誤り・解析器が読めない構文・SELECT INTO）を確認語なしで
+        # 受けたら、確認語待ちにせず理由を返す（画面に確認語の欄が無く先へ進めないため。#933）。
+        # 確認語付き（画面が更新系として確認語を求めた FOR UPDATE など）は従来どおり下の経路で扱う。
+        if (
+            len(statements) == 1
+            and statement_types == ["SELECT"]
+            and select_only_flags == [False]
+            and self._admin_confirmation_error(
+                confirmation=request.confirmation,
+                target="ADMIN_EXECUTE",
+            )
+        ):
+            reason = _admin_select_not_read_only_message(statements[0])
+            warnings.append(reason)
+            return DbAdminExecuteData(
+                executed=False,
+                runtime=runtime,
+                execution_context="admin_control_plane",
+                statements=[
+                    DbAdminStatementResult(
+                        index=1,
+                        statement_type="SELECT",
+                        status="error",
+                        sql=statements[0],
+                        error_message=reason,
+                    )
                 ],
                 warnings=warnings,
                 timing=self._timing(created_at, started, "db_admin_execute"),
