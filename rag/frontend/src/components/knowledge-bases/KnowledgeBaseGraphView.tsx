@@ -5,6 +5,7 @@ import { Background, Controls, ReactFlow, type Edge, type Node } from "@xyflow/r
 import "@xyflow/react/dist/style.css";
 import { Share2 } from "lucide-react";
 
+import { DegradedBanner } from "@/components/DegradedBanner";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { DisclosureChevron, Skeleton, TimedLoadingState } from "@engchina/production-ready-ui";
 import type { KnowledgeBaseGraphData } from "@/lib/api";
@@ -55,6 +56,10 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
     () => (query.data ? toFlow(query.data) : { nodes: [], edges: [] }),
     [query.data]
   );
+  // DB が止まっていると backend は空の図と warning_messages を返す。取得できなかったことを
+  // 「関係情報がまだありません」と区別して出す（空の案内は、取得できて本当に空のときだけ）。
+  const warnings = query.data?.warning_messages ?? [];
+  const degraded = warnings.length > 0;
   const isEmpty = query.data && (query.data.status === "empty" || query.data.nodes.length === 0);
 
   return (
@@ -83,6 +88,12 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
             </TimedLoadingState>
           ) : query.isError ? (
             <ErrorState message={t("knowledgeBases.graph.error")} onRetry={() => void query.refetch()} />
+          ) : degraded ? (
+            <DegradedBanner
+              messages={warnings}
+              onRetry={() => void query.refetch()}
+              isRetrying={query.isFetching}
+            />
           ) : isEmpty ? (
             <EmptyState
               title={t("knowledgeBases.graph.empty")}
