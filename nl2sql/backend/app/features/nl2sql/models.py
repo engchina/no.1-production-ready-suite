@@ -111,6 +111,10 @@ class JobStepData(BaseModel):
     stage: str
     status: JobStepStatus = JobStepStatus.PENDING
     elapsed_ms: int | None = None
+    # 段階の開始・終了の時刻（ISO 8601。チャットの段階の表示が使う。#1145。
+    # 古い snapshot には無い）。
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 class TimingEnvelope(BaseModel):
@@ -1232,6 +1236,8 @@ class JobData(BaseModel):
     conversation_id: str = ""
     previous_job_id: str | None = None
     generation_only: bool = False
+    # 生成方法（チャットの段階の補足に出す。#1145）。
+    engine: Nl2SqlEngine | None = None
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
