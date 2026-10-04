@@ -25,7 +25,7 @@ for (const viewport of [
 
     await expect(page.getByRole("heading", { name: "文書分割方式" })).toBeVisible();
     await expect(
-      page.getByText("backend 内処理または pipeline-chunking へ渡す方式")
+      page.getByText("取込済みの文書の chunk は、文書の詳細で再処理するまで変わりません。", { exact: false })
     ).toBeVisible();
     await expect(page.getByText("ここで選ぶ 7 個は分割方式です。", { exact: false })).toBeVisible();
     // 画面の文言に移植元の呼び名（DocRAG）を出さない（#598）。
