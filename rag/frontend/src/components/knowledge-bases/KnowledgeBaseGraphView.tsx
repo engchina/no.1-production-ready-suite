@@ -7,7 +7,7 @@ import { Share2 } from "lucide-react";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { DisclosureChevron, Skeleton, TimedLoadingState } from "@engchina/production-ready-ui";
+import { Disclosure, Skeleton, TimedLoadingState } from "@engchina/production-ready-ui";
 import type { KnowledgeBaseGraphData } from "@/lib/api";
 import { useKnowledgeBaseGraph } from "@/lib/queries";
 import { t } from "@/lib/i18n";
@@ -63,20 +63,15 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
   const isEmpty = query.data && (query.data.status === "empty" || query.data.nodes.length === 0);
 
   return (
-    <section className="rounded-md border border-border bg-surface">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls="knowledge-base-graph"
-        onClick={() => setOpen((value) => !value)}
-        className="flex min-h-11 w-full cursor-pointer items-center gap-2 px-4 text-sm font-semibold text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-      >
-        <Share2 size={16} className="text-accent-fg" aria-hidden />
-        {open ? t("knowledgeBases.graph.hide") : t("knowledgeBases.graph.show")}
-        <DisclosureChevron expanded={open} size={16} className="ml-auto text-fg-muted" />
-      </button>
+    // 共有の Disclosure（card）。見出しの高さは 40px・タッチ端末 44px（#1135）。関係情報は開いたときだけ取得して描く。
+    <Disclosure
+      summary={open ? t("knowledgeBases.graph.hide") : t("knowledgeBases.graph.show")}
+      icon={Share2}
+      open={open}
+      onOpenChange={setOpen}
+    >
       {open ? (
-        <div id="knowledge-base-graph" className="space-y-2 px-4 pb-4">
+        <div id="knowledge-base-graph" className="space-y-2">
           <p className="text-xs text-fg-muted">{t("knowledgeBases.graph.hint")}</p>
           {query.isPending ? (
             <TimedLoadingState
@@ -127,6 +122,6 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
           )}
         </div>
       ) : null}
-    </section>
+    </Disclosure>
   );
 }
