@@ -8,17 +8,18 @@ import {
   CardTitle,
   ErrorState,
   FormActionBar,
+  FormSkeleton,
   FormStatus,
   PageBody,
   SelectField,
-  Skeleton,
   TextField,
+  TimedLoadingState,
   cn,
   toast,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cloud, HardDrive, Save, Settings2 } from "lucide-react";
+import { Cloud, HardDrive, RefreshCw, Save, Settings2 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useSettingsDraftGuard, type DraftGuardMessages } from "../guards/useSettingsDraftGuard";
@@ -165,23 +166,23 @@ export function UploadStorageSettingsPage({
   }
 
   if (query.isPending) {
+    // 読み込み中は経過時間と、保存先のカードの形の Skeleton を出す（AGENTS.md「読み込み中」。#1047）。
     return (
       <PageBody wide>
-        <div
-          role="status"
-          aria-busy="true"
-          className="space-y-4"
-          data-testid="settings-upload-storage-loading"
+        <TimedLoadingState
+          label={m.loading}
+          operationKey="upload-storage-settings"
+          testId="settings-upload-storage-loading"
         >
-          <p className="text-sm text-fg-muted">{m.loading}</p>
-          <Skeleton className="h-64 w-full rounded-lg" />
-          <Skeleton className="h-72 w-full rounded-lg" />
-        </div>
+          <FormSkeleton fields={3} />
+        </TimedLoadingState>
       </PageBody>
     );
   }
 
-  if (query.isError) {
+  // 初回の取得に失敗したときだけ再試行を出して編集させない。取得済みの値がある再取得の失敗
+  // （保存後・画面に戻ったときの再取得）では、入力中のフォームを隠さず、上に警告を出す（#1047）。
+  if (query.isError && !query.data) {
     return (
       <PageBody wide>
         <ErrorState
@@ -200,6 +201,26 @@ export function UploadStorageSettingsPage({
 
   return (
     <PageBody wide>
+      {query.isError ? (
+        <Banner
+          severity="warning"
+          className="mb-5"
+          action={
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              icon={RefreshCw}
+              loading={query.isFetching}
+              onClick={() => void query.refetch()}
+            >
+              {m.retry}
+            </Button>
+          }
+        >
+          {m.refetchError}
+        </Banner>
+      ) : null}
       <form
         className="space-y-5"
         onSubmit={(event) => {
