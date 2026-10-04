@@ -1756,9 +1756,11 @@ def test_model_settings_rejects_non_1536_embedding_dim() -> None:
     assert body["error_messages"]
 
 
-def test_read_oci_config_uses_requested_profile_from_backend_path(
+def test_read_oci_config_uses_runtime_config_and_profile(
+    monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """読むのは実行中の設定の config / profile（要求の path は使わない。#1067）。"""
     config_file = tmp_path / "config"
     config_file.write_text(
         "\n".join(
@@ -1777,9 +1779,13 @@ def test_read_oci_config_uses_requested_profile_from_backend_path(
         encoding="utf-8",
     )
 
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "RAG_PROD")
+
     resp = client.post(
         "/api/settings/oci/config/read",
-        json={"config_file": str(config_file), "profile": "RAG_PROD"},
+        json={"config_file": str(tmp_path / "other"), "profile": "DEFAULT"},
     )
 
     assert resp.status_code == 200
@@ -1846,6 +1852,7 @@ def test_get_oci_settings_returns_runtime_and_config_values(
         "key_file_exists": True,
         "config_file_exists": True,
         "config_source": "runtime",
+        "config_error": None,
     }
 
 
@@ -2229,12 +2236,17 @@ def test_test_oci_config_reports_encrypted_private_key_without_pass_phrase(
     assert "暗号化されています" in body["message"]
 
 
-def test_read_oci_config_rejects_missing_requested_profile(tmp_path: Path) -> None:
+def test_read_oci_config_rejects_missing_requested_profile(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
     config_file = tmp_path / "config"
     config_file.write_text(
         "[DEFAULT]\nuser=ocid1.user.oc1..default\n",
         encoding="utf-8",
     )
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "RAG_PROD")
 
     resp = client.post(
         "/api/settings/oci/config/read",
@@ -2272,12 +2284,16 @@ def test_read_object_storage_namespace_uses_oci_sdk(
 
     monkeypatch.setattr("pr_system_settings.oci.importlib.import_module", fake_import_module)
     config_file = tmp_path / "config"
+    # 取得に使う config は実行中の設定のもの（要求の config_file は使わない。#1067）。
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
 
     resp = client.post(
         "/api/settings/oci/object-storage/namespace",
         json={
-            "config_file": str(config_file),
-            "profile": "DEFAULT",
+            "config_file": str(tmp_path / "other"),
+            "profile": "OTHER",
             "region": "ap-osaka-1",
         },
     )
