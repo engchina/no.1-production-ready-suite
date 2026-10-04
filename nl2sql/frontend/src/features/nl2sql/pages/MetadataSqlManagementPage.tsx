@@ -1207,7 +1207,7 @@ function MetadataExecutePanel({
         description={t("metadataSql.execute.hint")}
         action={
           generated ? (
-            <StatusBadge icon={false} variant={generated.source === "oci_enterprise_ai" ? "success" : "neutral"} label={generated.source} />
+            <StatusBadge icon={false} variant={generated.source === "oci_enterprise_ai" ? "success" : "neutral"} label={metadataSourceLabel(generated.source)} />
           ) : null
         }
       />
@@ -1243,6 +1243,13 @@ function MetadataExecutePanel({
       )}
     </div>
   );
+}
+
+/** SQL を生成した方式（API の内部値）を利用者向けの文言にする（#962。ビュー管理の #949 と同じ）。 */
+function metadataSourceLabel(source: string) {
+  return source === "oci_enterprise_ai"
+    ? t("metadataSql.source.ociEnterpriseAi")
+    : t("metadataSql.source.deterministic");
 }
 
 function MetadataTextarea({ label, value, rows }: { label: string; value: string; rows: number }) {

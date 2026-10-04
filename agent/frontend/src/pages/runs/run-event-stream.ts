@@ -1,6 +1,6 @@
 // Run のイベントの購読（SSE / WebSocket）と WebSocket のコマンド（#215 / #814。旧 AgentRuntimePages.tsx から分けた。#818）。
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { type StatusVariant } from "@engchina/production-ready-ui";
+import { apiErrorMessage, type StatusVariant } from "@engchina/production-ready-ui";
 import { type RunEvent, type RunState } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { securityApi } from "@/lib/security-api";
@@ -264,9 +264,11 @@ export function useRunEventWebSocket(
           const code = message.error_code ?? null;
           if (message.command) {
             // コマンド単位の拒否（権限のない取消など）は接続を保ったまま、操作の失敗として返す。
+            // 権限以外は backend の利用者向けの文（日本語）を出し、文が無ければ既定の文にする。
+            // error code（技術情報）は Toast に出さず「接続の詳細」だけに残す（#1031）。
             const reason = code?.startsWith("rbac.")
               ? t("run.stream.commandForbidden")
-              : message.message ?? code ?? t("run.stream.commandFailedDefault");
+              : apiErrorMessage(new Error(message.message ?? ""), t("run.stream.commandFailedDefault"));
             setLastError(`${message.command}: ${code ?? reason}`);
             setPendingCommand(null);
             onCommandErrorRef.current(reason);

@@ -13,6 +13,7 @@ import {
   PageBody,
   ProcessingIndicator,
   Pagination,
+  useConfirm,
 } from "@engchina/production-ready-ui";
 
 import { PageNotice } from "@/components/page-notice";
@@ -43,6 +44,9 @@ export function GlossaryRulesPage() {
   // danger（原因+対処）のみ Banner で常設表示。成功の「瞬間」は toast で 1 回通知する（messaging-spec §9 P1）。
   const [errorText, setErrorText] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState("");
+  // 読込に失敗したか。一度も取得できていないときは、件数 0・空の案内を出さない（取得の失敗を空と取り違えさせない。#953）。
+  const [loadFailed, setLoadFailed] = useState(false);
+  const confirm = useConfirm();
   const [legacyTermsFilename, setLegacyTermsFilename] = useState("");
   const loadSequence = useRef(0);
   const loadControllerRef = useRef<AbortController | null>(null);
@@ -75,6 +79,7 @@ export function GlossaryRulesPage() {
       if (controller.signal.aborted || sequence !== loadSequence.current) return;
       setLegacyMaterial(legacyData);
       setLastLoadedAt(new Date().toISOString());
+      setLoadFailed(false);
       if (announce) {
         toast.success(t("glossary.message.serverLoaded"));
       }
@@ -82,6 +87,7 @@ export function GlossaryRulesPage() {
       if (isAbortError(err) || controller.signal.aborted || sequence !== loadSequence.current) {
         return;
       }
+      setLoadFailed(true);
       setErrorText(err instanceof Error ? err.message : t("glossary.error.load"));
     } finally {
       if (loadControllerRef.current === controller) loadControllerRef.current = null;
@@ -112,8 +118,24 @@ export function GlossaryRulesPage() {
     };
   }, []);
 
+  const unavailable = loadFailed && !lastLoadedAt;
+
   const importLegacyTerms = async (file: File) => {
     if (loading || legacyBusy) return;
+    // 取込は登録済みの用語・同義語をすべて置き換える。0 件と分かっているとき以外は確認する
+    // （上書きは確認ダイアログ。messaging.md §3、#953）。
+    if (unavailable || legacyTerms.length > 0) {
+      const ok = await confirm({
+        title: t("glossary.importConfirm.title"),
+        description: unavailable
+          ? t("glossary.importConfirm.descriptionUnknown", { filename: file.name })
+          : t("glossary.importConfirm.description", { count: legacyTerms.length, filename: file.name }),
+        confirmLabel: t("glossary.importConfirm.confirm"),
+        tone: "danger",
+        dismissOnOverlay: false,
+      });
+      if (!ok) return;
+    }
     loadSequence.current += 1;
     loadControllerRef.current?.abort();
     setLegacyTermsFilename(file.name);
@@ -123,6 +145,7 @@ export function GlossaryRulesPage() {
       const data = await uploadLegacyLearningMaterialFile(file);
       setLegacyMaterial(data);
       setLastLoadedAt(new Date().toISOString());
+      setLoadFailed(false);
       toast.success(t("glossary.message.legacyImported", { terms: Object.keys(data.glossary).length }));
     } catch (err) {
       setErrorText(err instanceof Error ? err.message : t("glossary.error.importMaterial"));
@@ -200,6 +223,7 @@ export function GlossaryRulesPage() {
             busyAction={legacyBusyAction}
             disabled={loading || legacyBusy}
             loading={loading && !lastLoadedAt}
+            unavailable={unavailable}
             rows={legacyTerms}
             onImport={(file) => void importLegacyTerms(file)}
             onExport={() => void exportLegacyTerms()}
@@ -254,6 +278,7 @@ function GlobalMaterialPanel({
   busyAction,
   disabled,
   loading,
+  unavailable,
   rows,
   onImport,
   onExport,
@@ -268,6 +293,8 @@ function GlobalMaterialPanel({
   busyAction: LegacyBusyAction;
   disabled: boolean;
   loading: boolean;
+  /** 一度も取得できないまま読込に失敗した（件数・空の案内を出さない）。 */
+  unavailable: boolean;
   rows: Array<{ term: string; definition: string }>;
   onImport: (file: File) => void;
   onExport: () => void;
@@ -279,7 +306,7 @@ function GlobalMaterialPanel({
         title={title}
         description={description}
         icon={BookOpen}
-        action={<StatusBadge icon={false} variant="neutral" label={countLabel} />}
+        action={unavailable ? undefined : <StatusBadge icon={false} variant="neutral" label={countLabel} />}
       />
       <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
         <FileDropzone
@@ -318,6 +345,11 @@ function GlobalMaterialPanel({
           // messaging §3.7、#416）。
           activityIcon="none"
         />
+      ) : unavailable ? (
+        // 取得の失敗を「データがありません」（空）と取り違えさせない。再試行はヘッダーの「表示を更新」（#953）。
+        <div className="rounded-md border border-border bg-surface p-4" data-testid="glossary-terms-unavailable">
+          <EmptyState title={t("glossary.unavailable.title")} hint={t("glossary.unavailable.hint")} />
+        </div>
       ) : (
         <GlobalPreviewTable rows={rows} />
       )}
