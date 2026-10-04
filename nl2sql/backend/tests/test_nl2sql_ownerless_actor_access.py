@@ -63,7 +63,9 @@ def test_feedback_rejects_history_not_owned_by_actor(owner: str) -> None:
     with pytest.raises(PermissionError):
         service.clear_feedback("history-1", actor_user_uuid="user-b")
 
-    assert service._history_by_id("history-1").feedback_rating is None  # noqa: SLF001
+    history = service._history_by_id("history-1")  # noqa: SLF001
+    assert history is not None
+    assert history.feedback_rating is None
 
 
 def test_feedback_keeps_owner_manager_and_auth_disabled_access() -> None:
