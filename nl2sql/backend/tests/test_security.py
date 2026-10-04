@@ -4467,6 +4467,176 @@ def test_user_manager_can_assign_subset_role_and_runtime_access_matches(
         reset_security_service()
 
 
+def test_user_manager_cannot_assign_profile_access_or_data_grant_beyond_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ロールの割り当てで、自分が持たない業務プロファイル利用権限・Data Grant を与えない（#986）。
+
+    自分のユーザーへの割り当てでも同じ。
+    """
+    service = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+    sales_grant = DataEntitlementRecord(
+        entitlement_id="",
+        role_id="",
+        resource_code="SALES",
+        scope_code="*",
+        capability="SELECT",
+        target_owner="APP",
+        target_object="SALES",
+    )
+    manager_role = service.create_role(
+        role_code="ASSIGN_SCOPE_MANAGER",
+        display_name="ユーザー管理（p1）",
+        description="",
+        permissions={"menu.security_users", "menu.query"},
+        entitlements=[replace(sales_grant)],
+        allowed_profile_ids={"p1"},
+        actor=admin,
+    )
+    same_scope = service.create_role(
+        role_code="ASSIGN_SAME_SCOPE",
+        display_name="同じ範囲",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[replace(sales_grant)],
+        allowed_profile_ids={"p1"},
+        actor=admin,
+    )
+    other_profile = service.create_role(
+        role_code="ASSIGN_OTHER_PROFILE",
+        display_name="別の業務プロファイル",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        allowed_profile_ids={"p2"},
+        actor=admin,
+    )
+    other_grant = service.create_role(
+        role_code="ASSIGN_OTHER_GRANT",
+        display_name="別の Data Grant",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[replace(sales_grant, target_object="SALARY")],
+        allowed_profile_ids={"p1"},
+        actor=admin,
+    )
+    manager_user = _create_active_user(
+        service,
+        admin,
+        login_user_id="assign.scope.manager",
+        display_name="範囲付きユーザー管理者",
+        role_ids=[manager_role.role_id],
+        password="ScopeManager!8642",
+    )
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            _, csrf = await _login_api(client, "assign.scope.manager", "ScopeManager!8642")
+
+            roles_response = await client.get("/api/security/roles")
+            assert roles_response.status_code == 200
+            role_codes = {item["role_code"] for item in roles_response.json()["data"]}
+            assert {"ASSIGN_SCOPE_MANAGER", "ASSIGN_SAME_SCOPE"} <= role_codes
+            assert not role_codes & {"ASSIGN_OTHER_PROFILE", "ASSIGN_OTHER_GRANT"}
+
+            for role in [other_profile, other_grant]:
+                denied_create = await client.post(
+                    "/api/security/users",
+                    headers={"X-CSRF-Token": csrf},
+                    json={
+                        "login_user_id": f"blocked.{role.role_code.lower()}",
+                        "display_name": "割り当て不可",
+                        "temporary_password": "BlockedAssign!8642",
+                        "role_ids": [role.role_id],
+                    },
+                )
+                assert denied_create.status_code == 403
+                # 自分自身への割り当てでも範囲を広げられない。
+                current = service.store.get_user(manager_user.user_uuid)
+                assert current is not None
+                denied_self = await client.patch(
+                    f"/api/security/users/{manager_user.user_uuid}",
+                    headers={"X-CSRF-Token": csrf},
+                    json={
+                        "version": current.version,
+                        "display_name": current.display_name,
+                        "status": current.status,
+                        "role_ids": [manager_role.role_id, role.role_id],
+                    },
+                )
+                assert denied_self.status_code == 403
+
+            allowed = await client.post(
+                "/api/security/users",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "login_user_id": "allowed.same.scope",
+                    "display_name": "同じ範囲の利用者",
+                    "temporary_password": "AllowedAssign!8642",
+                    "role_ids": [same_scope.role_id],
+                },
+            )
+            assert allowed.status_code == 200, allowed.text
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+    actor = service.principal_for_worker(manager_user.user_uuid)
+    assert actor.allowed_profile_ids == {"p1"}
+    assert len(actor.data_entitlements) == 1
+    # SYSTEM_ADMIN は従来どおり割り当てられる。
+    service.create_user(
+        login_user_id="admin.assigned.other",
+        display_name="管理者が割り当て",
+        role_ids=[other_profile.role_id, other_grant.role_id],
+        temporary_password="AdminAssign!8642",
+        actor=admin,
+    )
+
+
+def test_role_restore_rejects_data_grant_beyond_own() -> None:
+    """Data Grant 付きのロールは、それを持たない非 SYSTEM_ADMIN が復元できない（#986）。"""
+    service = _service()
+    admin, _, _ = _login(service)
+    manager_role = service.create_role(
+        role_code="RESTORE_GRANT_MANAGER",
+        display_name="ロール管理",
+        description="",
+        permissions={"menu.security_roles", "menu.query"},
+        entitlements=[],
+        actor=admin,
+    )
+    target = service.create_role(
+        role_code="RESTORE_GRANT_TARGET",
+        display_name="Data Grant 付き",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[("SALES", "*", "SELECT")],
+        actor=admin,
+    )
+    user, password = service.create_user(
+        login_user_id="restore.grant.manager",
+        display_name="ロール管理者",
+        role_ids=[manager_role.role_id],
+        temporary_password="RestoreGrant!8642",
+        actor=admin,
+    )
+    manager, _, _ = service.login(user.login_user_id, password)
+    archived = service.archive_role(target.role_id, expected_version=target.version, actor=admin)
+
+    with pytest.raises(SecurityApiError) as error:
+        service.restore_role(target.role_id, expected_version=archived.version, actor=manager)
+    assert error.value.status_code == 403
+    assert service.store.get_role(target.role_id) == archived
+
+    restored = service.restore_role(target.role_id, expected_version=archived.version, actor=admin)
+    assert not restored.archived
+
+
 def test_role_manager_can_add_profile_manage_to_role_with_explicit_profiles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
