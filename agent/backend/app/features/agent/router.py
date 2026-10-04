@@ -1605,6 +1605,10 @@ async def get_runtime_storage_status() -> ApiResponse[RuntimeStorageStatus]:
     return ApiResponse(data=await run_in_threadpool(runtime_storage_status))
 
 
+RUN_NOT_FOUND_MESSAGE = "実行が見つかりません。"
+# 終了した Run（取り消せない。#911）。
+_TERMINAL_RUN_STATUSES = frozenset({RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED})
+
 # 実行中の組み込み Runtime の task（GC で消えないよう参照を持つ）。
 _builtin_tasks: set[asyncio.Task[None]] = set()
 
@@ -1737,7 +1741,7 @@ async def put_run_feedback(
     try:
         run = runtime_repository.get_run(run_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="run not found") from exc
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
     _require_agent_access(request, run.agent_id)
     user_uuid = _run_creator_user_uuid(request)
     if run.created_by_user_uuid is None or run.created_by_user_uuid != user_uuid:
@@ -1772,7 +1776,7 @@ async def put_run_admin_review(
     try:
         run = runtime_repository.get_run(run_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="run not found") from exc
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
     _require_agent_access(request, run.agent_id)
     try:
         updated = runtime_repository.set_run_feedback(
@@ -1872,7 +1876,7 @@ async def get_run(
     try:
         run = runtime_repository.get_run(run_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="run not found") from exc
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
     _require_agent_access(request, run.agent_id)
     return ApiResponse(data=run)
 
@@ -1886,7 +1890,7 @@ async def get_run_audit(
     try:
         run = runtime_repository.get_run(run_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="run not found") from exc
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
     _require_agent_access(request, run.agent_id)
     return ApiResponse(data=_run_audit_data(run))
 
@@ -2518,7 +2522,7 @@ async def list_run_artifacts(
         run = runtime_repository.get_run(run_id)
         artifacts = runtime_repository.list_artifacts(run_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="run not found") from exc
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
     _require_agent_access(request, run.agent_id)
     return ApiResponse(data=ArtifactsData(artifacts=artifacts))
 
@@ -2535,7 +2539,7 @@ async def get_run_artifact(
         _require_agent_access(request, run.agent_id)
         return ApiResponse(data=runtime_repository.get_artifact(run_id, artifact_id))
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="artifact not found") from exc
+        raise HTTPException(status_code=404, detail="成果物が見つかりません。") from exc
 
 
 @router.get("/runs/{run_id}/events")
@@ -2555,7 +2559,7 @@ async def stream_run_events(
             follow=follow,
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="run not found") from exc
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
     if not follow:
         return Response("".join(_sse_events(events)), media_type="text/event-stream")
     return StreamingResponse(_sse_events(events), media_type="text/event-stream")
@@ -2648,9 +2652,18 @@ async def cancel_run(
     try:
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
+        # 終了した Run は取り消さない（完了の結果を取消済みで上書きしない。#911）。
+        if run.status in _TERMINAL_RUN_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "run_not_cancellable",
+                    "message": "この実行はすでに終了しているため、取り消せません。",
+                },
+            )
         return ApiResponse(data=runtime_repository.cancel_run(run_id))
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="run not found") from exc
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
 
 
 @router.post("/runs/{run_id}/resume", response_model=ApiResponse[RunState])
@@ -2675,7 +2688,7 @@ async def resume_run(
         _schedule_builtin_run(run)
         return ApiResponse(data=run)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="run not found") from exc
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
 
 
 @router.post("/runs/{run_id}/replay", response_model=ApiResponse[RunState])
@@ -2686,24 +2699,44 @@ async def replay_run(
 ) -> ApiResponse[RunState]:
     try:
         run = runtime_repository.get_run(run_id)
-        _require_agent_access(request, run.agent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
+    _require_agent_access(request, run.agent_id)
+    # 再実行は利用者の Run（公開中の版で実行する）。`POST /runs` と同じく、無効・移行が要る・
+    # 公開した版の無い業務 Agent は理由を返す（500 にしない。#911）。
+    try:
+        reason = agent_unavailable_reason(_control_plane_agent(run.agent_id))
+    except KeyError:
+        reason = agent_unavailable_reason(None)
+    if reason is not None:
+        raise HTTPException(
+            status_code=409, detail={"code": "agent_unavailable", "message": reason}
+        )
+    try:
         # 同じ Agent・ゴールの新しい Run として組み込み Runtime で実行する
-        # （再実行を指示した利用者として。旧エンジンの Run も同じ）。
+        # （再実行を指示した利用者として。旧エンジンの Run も同じ）。元の Run の起点の印
+        # （品質評価の dry-run・自動実行・MCP など）は引き継がない（#911）。
         replayed = runtime_repository.create_builtin_run(
             RunCreateRequest(
                 goal=run.goal,
                 agent_id=run.agent_id,
-                metadata={
-                    **{k: v for k, v in run.metadata.items() if not k.startswith("_")},
-                    "replayed_from_run_id": run.id,
-                },
+                metadata={"replayed_from_run_id": run.id},
             ),
             created_by_user_uuid=_run_creator_user_uuid(request),
         )
-        _schedule_builtin_run(replayed)
-        return ApiResponse(data=replayed)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="run not found") from exc
+        raise HTTPException(status_code=404, detail="業務 Agent が見つかりません。") from exc
+    except ValueError as exc:
+        # 確かめた後に Agent が無効・非公開になった（AgentNotPublishedError を含む）。
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "agent_unavailable",
+                "message": "この業務 Agent は実行できない状態です。",
+            },
+        ) from exc
+    _schedule_builtin_run(replayed)
+    return ApiResponse(data=replayed)
 
 
 @router.post("/approvals/{approval_id}/decision", response_model=ApiResponse[RunState])
@@ -2724,7 +2757,7 @@ async def decide_approval(
         _schedule_builtin_run(decided)
         return ApiResponse(data=decided)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="approval not found") from exc
+        raise HTTPException(status_code=404, detail="承認が見つかりません。") from exc
 
 
 @router.get("/agents", response_model=ApiResponse[AgentsData])
@@ -3492,11 +3525,7 @@ def _filter_runs_for_actor(request: Request, runs: list[RunState]) -> list[RunSt
 def _require_agent_access(request: Request, agent_id: str) -> None:
     if _agent_allowed(request, agent_id):
         return
-    actor = _actor_display_name(request)
-    raise HTTPException(
-        status_code=403,
-        detail=f"actor {actor} cannot access agent_id={agent_id}",
-    )
+    raise HTTPException(status_code=403, detail="この業務 Agent を使う権限がありません。")
 
 
 def _agent_allowed(request: Request, agent_id: str) -> bool:

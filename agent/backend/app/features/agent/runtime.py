@@ -791,6 +791,11 @@ class AgentRuntimeRepository:
     def cancel_run(self, run_id: str) -> RunState:
         with self._lock:
             run = self._require_run(run_id)
+            if _is_terminal(run.status):
+                # 終了した Run（完了・失敗・取消済み）は変えない。一覧の再取得の前に取消を
+                # 送った、品質評価の取消と完了が重なった、などで来ても、完了の結果を
+                # 取消済みで上書きしない（#911）。
+                return run.model_copy(deep=True)
             cancelled_approval_ids: list[str] = []
             run.status = RunStatus.CANCELLED
             run.updated_at = _now()
