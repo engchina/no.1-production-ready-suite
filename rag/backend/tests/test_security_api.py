@@ -452,6 +452,26 @@ def test_configured_admin_rejects_wrong_password(auth: ProductionAuth) -> None:
     assert response.status_code == 401
 
 
+def test_login_is_rate_limited_with_retry_after(auth: ProductionAuth) -> None:
+    """構成管理者のパスワードを何回でも試せない（#1087）。429 の文と Retry-After を返す。"""
+    for _ in range(5):
+        response = client.post(
+            "/api/auth/login", json={"login_user_id": "system_admin", "password": "WrongPass12345"}
+        )
+        assert response.status_code == 401
+    response = client.post(
+        "/api/auth/login",
+        json={"login_user_id": "system_admin", "password": CONFIGURED_ADMIN_PASSWORD},
+    )
+    assert response.status_code == 429
+    assert response.json()["error_messages"] == [
+        "ログインの試行が多すぎます。しばらく待ってから、もう一度お試しください。"
+    ]
+    assert response.json()["error_code"] == "SECURITY_RATE_LIMITED"
+    assert int(response.headers["Retry-After"]) > 0
+    assert response.headers["X-Request-ID"]
+
+
 def test_permission_denied_returns_403(auth: ProductionAuth) -> None:
     auth.user_with_permissions("searcher", ["menu.search"])
     auth.user_with_permissions("builder", ["menu.security_permissions"])

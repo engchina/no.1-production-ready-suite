@@ -129,6 +129,17 @@ in-process へ縮退せず、MCP の `rag_search` が止まった）。
 
 `X-Request-ID` ヘッダを常に付与（受信値を検証し、無ければ発行）。フロントの共通エラーハンドリングはこの形を前提にできる。
 
+### 入力の検証エラー（422）の文（#1065）
+
+FastAPI / Pydantic の検証エラー（`RequestValidationError`）は、3 製品とも `pr_backend_core.api.validation` で整形する（共通の handler は `install_exception_handlers`。RAG は `validation_error_response`、NL2SQL は problem 契約の `api_problem_response` から同じ関数を使う）。
+
+- `error_messages` は利用者向けの日本語の文だけにする。
+  - 自前の検証（`ValueError` / `assert` / `PydanticCustomError`）の日本語の文は、位置も `Value error, ` の接頭辞も付けずにそのまま出す。欄の名前は文に書く（例「ケースの id が重複しています。」）。英語の文の `ValueError` は利用者に見せず、位置と「入力内容を確認してください。」にする。
+  - Pydantic の組み込みのエラーは `type` ごとの日本語の文に、利用者が書いた JSON の位置（`cases[0].query`。`body` / `query` などの出どころと union の候補の型の名前は外す）を前に付ける（例 `cases[0].query: 必須の項目です。入力してください。`）。
+- `error_code` は `REQUEST_VALIDATION_FAILED`、`problem` は NL2SQL の problem 契約と同じ形（`title` / `status` / `detail` / `code` / `request_id` / `retryable` / `field_errors`）。
+- `problem.field_errors[]` は欄ごとに `pointer`（JSON Pointer）・`code`（Pydantic の type）・`message`（位置を含まない文）・`location`・`raw_location`（`body.cases.0.query`）・`raw_message`（Pydantic の原文）を持つ。画面は `message` を欄の横に、`raw_*` を「詳細」（`ApiErrorBanner`）に出す。入力値（`input`）は応答に含めない。
+- MCP のツールの引数の誤り（`MCP_TOOL_ARGUMENTS_INVALID`）の `details.errors[]` も同じ整形（`loc` / `message` / `type` / `raw_message`）にする。
+
 ## 依存方法（dev は path source）
 
 各 backend の `pyproject.toml`:

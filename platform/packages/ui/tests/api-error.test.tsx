@@ -126,6 +126,48 @@ describe("presentApiError", () => {
     });
   });
 
+  it("入力の検証エラー（422）は利用者向けの文を要約にし、技術的な原文は詳細に出す（#1065）", () => {
+    const presented = httpApiErrorPresentation({
+      status: 422,
+      messages: ["cases[0].query: 必須の項目です。入力してください。", "ケースの id が重複しています。"],
+      errorCode: "REQUEST_VALIDATION_FAILED",
+      requestId: "req-422",
+      fieldErrors: [
+        {
+          pointer: "/cases/0/query",
+          code: "missing",
+          message: "必須の項目です。入力してください。",
+          raw_location: "body.cases.0.query",
+          raw_message: "Field required",
+        },
+        {
+          pointer: "/cases",
+          code: "value_error",
+          message: "ケースの id が重複しています。",
+          raw_location: "body.cases",
+          raw_message: "Value error, ケースの id が重複しています。",
+        },
+        // 原文の無い field error（業務の 409 / 422 など）は詳細に出さない。
+        { pointer: "/name", code: "conflict", message: "同じ名前があります。" },
+      ],
+    });
+    expect(presented).toEqual({
+      summary: "cases[0].query: 必須の項目です。入力してください。\nケースの id が重複しています。",
+      details: [
+        { label: "HTTP ステータス", value: "422" },
+        { label: "エラーコード", value: "REQUEST_VALIDATION_FAILED" },
+        {
+          label: "入力の検証の原文",
+          value:
+            "body.cases.0.query: Field required (missing)\nbody.cases: Value error, ケースの id が重複しています。 (value_error)",
+        },
+        { label: "リクエストID", value: "req-422" },
+      ],
+    });
+    const html = renderToStaticMarkup(<ApiErrorDetailList details={presented.details} />);
+    expect(html).toContain("whitespace-pre-line");
+  });
+
   it("組み込みの例外（英語の文）は既定の文にし、元の文は詳細に出す", () => {
     const presented = presentApiError(new SyntaxError("Unexpected token '<'"), "読み込めませんでした。");
     expect(presented.summary).toBe("読み込めませんでした。");

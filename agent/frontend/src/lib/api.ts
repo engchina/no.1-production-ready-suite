@@ -394,6 +394,8 @@ export interface ApiKey {
 
 export interface ApiKeysData {
   keys: ApiKey[];
+  /** キーの業務 Agent の ID → 名前（閲覧者が利用できる業務 Agent だけ。範囲外・削除済みは無い）。 */
+  agent_names: Record<string, string>;
   /** false はキーの保存先（Oracle）が無い（再起動で消える）。 */
   persistent: boolean;
 }
@@ -634,7 +636,10 @@ export type McpAuthMode = "none" | "api_key" | "oauth_client_credentials" | "ser
 export interface McpConnectionSettings {
   server_id: string;
   label?: string | null;
+  /** URL の userinfo・資格情報らしい query の値は `***` に伏せて返る（#1056）。 */
   base_url?: string | null;
+  /** 保存済みの URL に資格情報があり、base_url を伏せて返したか。 */
+  base_url_masked?: boolean;
   auth_mode: McpAuthMode;
   /** サービストークンの aud（呼び先の製品名）。service_token のときだけ。 */
   service_audience?: string | null;
@@ -1101,6 +1106,10 @@ export interface RoleAccessUpdate {
 export interface ApiFieldError {
   pointer: string;
   message: string;
+  /** 入力の検証エラー（422）の Pydantic の種別と技術的な原文（「詳細」に出す。#1065）。 */
+  code?: string;
+  raw_location?: string;
+  raw_message?: string;
 }
 
 export interface ApiErrorDetails {
@@ -1162,10 +1171,15 @@ function fieldErrorsOf(value: unknown): ApiFieldError[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
     if (!item || typeof item !== "object") return [];
-    const { pointer, message } = item as { pointer?: unknown; message?: unknown };
-    return typeof message === "string"
-      ? [{ pointer: typeof pointer === "string" ? pointer : "", message }]
-      : [];
+    const record = item as Record<string, unknown>;
+    const { pointer, message } = record;
+    if (typeof message !== "string") return [];
+    const fieldError: ApiFieldError = { pointer: typeof pointer === "string" ? pointer : "", message };
+    for (const key of ["code", "raw_location", "raw_message"] as const) {
+      const value = record[key];
+      if (typeof value === "string" && value) fieldError[key] = value;
+    }
+    return [fieldError];
   });
 }
 

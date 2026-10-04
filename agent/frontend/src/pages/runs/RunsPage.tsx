@@ -62,6 +62,8 @@ import {
   useRunEventWebSocket,
 } from "@/pages/runs/run-event-stream";
 import { focusField, formatDate } from "@/pages/shared/page-helpers";
+import { isOwnDecision } from "@/pages/shared/approval-decision";
+import { useAuth } from "@/components/security/AuthProvider";
 import { useViewSwitchFocus } from "@/pages/shared/view-switch-focus";
 import { NonPersistentStorageNotice } from "@/components/system/StorageNotice";
 
@@ -91,6 +93,7 @@ export function RunsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const capabilities = useCapabilities();
+  const { user } = useAuth();
   const runs = useQuery({
     queryKey: ["runs"],
     queryFn: agentApi.listRuns,
@@ -149,10 +152,10 @@ export function RunsPage() {
       agentApi.decideApproval(approval.id, { approved }),
     // 判断の結果は返却値の承認の状態で確かめる。先に取り消された・他の操作者が判断した承認は、backend が
     // 状態を変えずに 200 で返すため、成功と案内しない（承認の画面と同じ。#877 / #919）。
-    onSuccess: (updatedRun, { approval }) => {
-      const outcome = updatedRun.approvals.find((item) => item.id === approval.id)?.status;
-      if (outcome === "approved" || outcome === "rejected") {
-        toast.success(outcome === "approved" ? t("approval.decided") : t("approval.rejected"));
+    onSuccess: (updatedRun, { approval, approved }) => {
+      // 押した判断が自分の判断として残ったときだけ成功と案内する（#1119）。
+      if (isOwnDecision(updatedRun, approval.id, approved, user?.login_user_id)) {
+        toast.success(approved ? t("approval.decided") : t("approval.rejected"));
       } else {
         toast.info(t("approval.changedDuringReview"));
       }

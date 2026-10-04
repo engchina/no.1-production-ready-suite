@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -231,6 +233,10 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     app_auth_absolute_timeout_hours: int = 12
     app_auth_failed_login_limit: int = 5
     app_auth_lockout_minutes: int = 15
+    # ログインの試行の回数の制限（ログイン ID と送信元 IP の組・送信元 IP ごと。0 で無効。#1087）。
+    app_auth_login_attempt_limit: int = 5
+    app_auth_login_ip_attempt_limit: int = 20
+    app_auth_login_attempt_window_minutes: int = 15
     app_auth_password_min_length: int = 12
     app_auth_password_max_length: int = 128
     app_auth_argon2_time_cost: int = 3
@@ -320,6 +326,7 @@ def _settings_singleton() -> Settings:
     """設定シングルトン。"""
     settings = Settings()
     load_persisted_model_settings(settings)
+    _DEEPSEC_ENV_RELOADER.mark_loaded()
     return settings
 
 
@@ -327,6 +334,7 @@ def get_settings() -> Settings:
     """設定のシングルトンを返す。永続化ファイルの更新があれば再読込する。"""
     settings = _settings_singleton()
     reload_persisted_model_settings_if_changed(settings)
+    reload_deepsec_settings_if_changed(settings)
     return settings
 
 
@@ -334,6 +342,69 @@ def reset_settings_cache() -> None:
     """テストや明示的な再初期化のため Settings singleton を破棄する。"""
     _settings_singleton.cache_clear()
     MODEL_SETTINGS_STORE.reset()
+    _DEEPSEC_ENV_RELOADER.reset()
+
+
+# Deep Data Security の画面が backend/.env に書く設定（#1022）。gunicorn の別の worker が
+# 保存した値を、再起動なしで次のリクエストから使う（モデル設定の再読込と同じ考え方）。
+_DEEPSEC_RELOADED_FIELDS = (
+    ("oracle_deepsec_enabled", "NL2SQL_ORACLE_DEEPSEC_ENABLED"),
+    ("oracle_deepsec_data_user", "NL2SQL_ORACLE_DEEPSEC_DATA_USER"),
+    ("oracle_deepsec_data_user_password", "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD"),
+)
+
+
+class _DeepSecEnvReloader:
+    """backend/.env の更新（mtime・size）を見て、DeepSec の 3 項目だけを読み直す。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._loaded: tuple[str, int, int] | None = None
+
+    @staticmethod
+    def _signature() -> tuple[str, int, int] | None:
+        # テストが差し替えられるよう、呼び出しのたびに module の値を引く。
+        path = BACKEND_ENV_FILE
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        return (str(path), stat.st_mtime_ns, stat.st_size)
+
+    def mark_loaded(self) -> None:
+        with self._lock:
+            self._loaded = self._signature()
+
+    def reset(self) -> None:
+        with self._lock:
+            self._loaded = None
+
+    def reload_if_changed(self, settings: Settings) -> None:
+        signature = self._signature()
+        with self._lock:
+            if signature == self._loaded:
+                return
+            self._loaded = signature
+            try:
+                # 環境変数は .env より優先されるため、環境変数で与えた項目は読み直さない。
+                fresh = Settings(_env_file=(PLATFORM_ENV_FILE, BACKEND_ENV_FILE))
+            except Exception:
+                logger.warning("deepsec_settings_reload_failed", exc_info=True)
+                return
+            for attribute, env_name in _DEEPSEC_RELOADED_FIELDS:
+                if env_name in os.environ:
+                    continue
+                value = getattr(fresh, attribute)
+                if getattr(settings, attribute) != value:
+                    setattr(settings, attribute, value)
+
+
+_DEEPSEC_ENV_RELOADER = _DeepSecEnvReloader()
+
+
+def reload_deepsec_settings_if_changed(settings: Settings) -> None:
+    """別 worker が Deep Data Security 画面で保存した設定を次回リクエストで取り込む。"""
+    _DEEPSEC_ENV_RELOADER.reload_if_changed(settings)
 
 
 def resolve_model_settings_file(path_value: str) -> Path:

@@ -25,6 +25,7 @@ import {
   expandPermissions,
   type CurrentUserPayload,
 } from "./auth";
+import { maskUrlCredentials, mcpUrlCredentialProblem } from "../../src/lib/mcp-url";
 
 type Json = Record<string, unknown>;
 
@@ -242,7 +243,7 @@ function normalizedSet(body: Json): Json {
   const cases = (body.cases as Json[] | undefined) ?? [];
   const explicit = cases.map((item) => String(item.id ?? "").trim()).filter(Boolean);
   if (new Set(explicit).size !== explicit.length) {
-    throw new HttpError(422, "body.cases: Value error, ケースの id が重複しています。");
+    throw new HttpError(422, "ケースの id が重複しています。");
   }
   const used = new Set(explicit);
   return {
@@ -861,6 +862,38 @@ function mcpConnection(payload: Json, current?: Json): Json {
   };
 }
 
+/**
+ * 保存の API の URL の検証（backend の `_validate_mcp_url` と同じ 422。#1056）。
+ * userinfo・資格情報らしい query は拒否する（値は文に含めない）。
+ */
+function validateMcpUrl(body: Json) {
+  if (body.base_url == null) return;
+  const value = String(body.base_url).trim();
+  if (!value) return;
+  const prefix = "body.base_url: Value error, ";
+  if (!/^https?:\/\/[^\s/]+/.test(value)) {
+    throw new HttpError(422, `${prefix}MCP の URL は http:// または https:// で始めてください。`);
+  }
+  const problem = mcpUrlCredentialProblem(value);
+  const guide = "資格情報は「認証」の欄（API キー・OAuth）で設定してください。";
+  if (problem?.kind === "userinfo") {
+    throw new HttpError(422, `${prefix}MCP の URL にユーザー名・パスワード（user:pass@）を含めないでください。${guide}`);
+  }
+  if (problem?.kind === "secretQuery") {
+    throw new HttpError(
+      422,
+      `${prefix}MCP の URL に資格情報のパラメータ（${problem.names.join("・")}）を含めないでください。${guide}`
+    );
+  }
+}
+
+/** 一覧・保存の応答の MCP 接続（保存した URL の資格情報は `***` に伏せる。backend と同じ。#1056）。 */
+function publicMcpConnection(connection: Json): Json {
+  const raw = typeof connection.base_url === "string" ? connection.base_url : null;
+  const masked = raw ? maskUrlCredentials(raw) : raw;
+  return { ...connection, base_url: masked, base_url_masked: Boolean(raw) && masked !== raw };
+}
+
 function validateSnapshot(snapshot: Json) {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -972,14 +1005,54 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     if (method === "PUT" && at("security", "roles", "*", "access")) {
       const role = findRole(state, third);
-      if (body.version !== role.version) throw new HttpError(409, "ロールが更新されています。再読み込みしてください。");
-      const grantsAll = expandPermissions((body.permissions as string[]) ?? []).includes("agent.admin");
-      Object.assign(role, {
-        version: (role.version as number) + 1,
-        permissions: [...((body.permissions as string[]) ?? [])].sort(),
-        // agent.admin を含むロールは対象を空に正規化する（backend と同じ）。
-        agent_ids: grantsAll ? [] : [...((body.agent_ids as string[]) ?? [])].sort(),
-      });
+      // backend の SecurityService.update_role_access と同じ順の確認。
+      if (role.is_built_in) {
+        throw new HttpError(409, "組み込み SYSTEM_ADMIN ロールは変更できません。", "SECURITY_STATE_CONFLICT");
+      }
+      if (role.archived) throw new HttpError(409, "アーカイブ済みロールは変更できません。", "SECURITY_STATE_CONFLICT");
+      const catalog = new Set(PERMISSION_CATALOG.map((item) => String(item.code)));
+      const requested = ((body.permissions as string[] | undefined) ?? []).map((code) => code.trim()).filter(Boolean);
+      const unknownCodes = [...new Set(requested.filter((code) => !catalog.has(code)))].sort();
+      if (unknownCodes.length) {
+        throw new HttpError(400, `未登録の権限コードです: ${unknownCodes.join(", ")}`, "SECURITY_REQUEST_INVALID");
+      }
+      const permissions = [...new Set(requested)].sort();
+      // 業務 Agent の存在は Runtime の業務 Agent（mock は state.agents と権限管理の対象の候補）で確かめる。
+      const knownAgents = new Set(
+        [...state.agents, ...state.security.accessTargets.agents].map((agent) => String(agent.id))
+      );
+      const currentAgents = new Set(((role.agent_ids as string[] | undefined) ?? []).map(String));
+      const requestedAgents = [
+        ...new Set(((body.agent_ids as string[] | undefined) ?? []).map((id) => id.trim()).filter(Boolean)),
+      ];
+      const unknownAgents = requestedAgents.filter((id) => !knownAgents.has(id) && !currentAgents.has(id)).sort();
+      if (unknownAgents.length) {
+        throw new HttpError(400, `エージェントが見つかりません: ${unknownAgents.join(", ")}`, "SECURITY_REQUEST_INVALID");
+      }
+      const grantsAll = expandPermissions(permissions).includes("agent.admin");
+      // agent.admin を含むロールは対象を空に正規化する（backend と同じ）。
+      const agentIds = grantsAll ? [] : requestedAgents.filter((id) => knownAgents.has(id)).sort();
+      const actor = state.auth.currentUser;
+      if (actor && !actor.is_system_admin) {
+        // 自分が持たない権限・自分の範囲外の業務 Agent を足すと 403（権限の昇格を防ぐ）。
+        const before = new Set(expandPermissions((role.permissions as string[] | undefined) ?? []));
+        const added = expandPermissions(permissions).filter((code) => !before.has(code));
+        if (!added.every((code) => actor.permissions.includes(code))) {
+          throw new HttpError(403, "自分が持たない権限をロールに追加することはできません。", "SECURITY_PERMISSION_DENIED");
+        }
+        const scope = actor.allowed_agent_ids;
+        if (scope !== null && agentIds.some((id) => !currentAgents.has(id) && !scope.includes(id))) {
+          throw new HttpError(
+            403,
+            "自分が利用できないエージェントをロールに追加することはできません。",
+            "SECURITY_PERMISSION_DENIED"
+          );
+        }
+      }
+      if (body.version !== role.version) {
+        throw new HttpError(409, "ロールが別の操作で更新されています。", "SECURITY_STATE_CONFLICT");
+      }
+      Object.assign(role, { version: (role.version as number) + 1, permissions, agent_ids: agentIds });
       return role;
     }
   }
@@ -1144,7 +1217,17 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       run.status = "cancelled";
       return run;
     }
-    if (method === "POST" && at("runs", "*", "resume")) return run;
+    if (method === "POST" && at("runs", "*", "resume")) {
+      // 承認がすべて決まり、保存した SDK の状態から再開を待つ組み込み Runtime の Run だけ（`builtin_resume_pending`）。
+      const resumable =
+        run.runtime_id === "builtin" &&
+        run.status === "queued" &&
+        typeof (run.metadata as Json | undefined)?._builtin_sdk_state === "string";
+      if (!resumable) {
+        throw new HttpError(409, "承認待ちが残っているか、再開できる状態ではありません。", "run_not_resumable");
+      }
+      return run;
+    }
     // チャットの回答への評価（#774）。役に立たなかったときは理由が必須。役に立った評価は理由・コメントを残さない。
     // 管理者の評価（#774）。本人の評価とは別に残す。
     if (method === "PUT" && at("runs", "*", "admin-review")) {
@@ -1174,7 +1257,26 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return run;
     }
     if (method === "POST" && at("runs", "*", "replay")) {
-      const replay = { ...clone(run), id: `${String(run.id)}-replay-${state.runs.length}`, status: "completed" };
+      // backend の replay_run と同じく、同じ業務 Agent・ゴールの新しい Run（待ち）を作る。元の Run の成果物・
+      // 経過・承認・評価・会話は引き継がない。
+      const replayId = `${String(run.id)}-replay-${state.runs.length}`;
+      const replay: Json = {
+        id: replayId,
+        goal: run.goal,
+        agent_id: run.agent_id,
+        runtime_id: "builtin",
+        status: "queued",
+        steps: [],
+        events: [],
+        approvals: [],
+        artifacts: [],
+        pending_tool_calls: [],
+        metadata: { replayed_from_run_id: run.id },
+        created_by_user_uuid: state.auth.currentUser?.user_uuid ?? null,
+        thread_id: `thread_${String(state.runs.length + 1).padStart(32, "0")}`,
+        created_at: MOCK_NOW,
+        updated_at: MOCK_NOW,
+      };
       state.runs.unshift(replay);
       return replay;
     }
@@ -1183,10 +1285,25 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     for (const run of state.runs) {
       const approval = ((run.approvals as Json[] | undefined) ?? []).find((candidate) => candidate.id === second);
       if (approval) {
-        if (approval.status !== "pending") throw new HttpError(409, "この承認への判断は終了しています。");
+        const decidedBy = state.auth.currentUser?.login_user_id ?? "local";
+        // backend の decide_approval と同じく、終了した Run の保留中の承認は取り消し、判断済みの承認
+        // （ほかの操作者が先に判断した）は変えずに 200 で返す。
+        if (["completed", "failed", "cancelled"].includes(String(run.status))) {
+          if (approval.status === "pending") {
+            Object.assign(approval, { status: "cancelled", decided_by: decidedBy, decided_at: MOCK_NOW });
+          }
+          return run;
+        }
+        if (approval.status !== "pending") return run;
         approval.status = body.approved ? "approved" : "rejected";
-        approval.decided_by = state.auth.currentUser?.login_user_id ?? "local";
+        approval.decided_by = decidedBy;
         approval.decided_at = MOCK_NOW;
+        // 組み込み Runtime の Run は、承認待ちが残らなければ再開を待つ状態（queued）にする。
+        const pending = ((run.approvals as Json[] | undefined) ?? []).some((item) => item.status === "pending");
+        if (run.runtime_id === "builtin" && !pending) {
+          run.status = "queued";
+          run.updated_at = MOCK_NOW;
+        }
         return run;
       }
     }
@@ -1276,10 +1393,14 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return item;
     }
     if (method === "PUT" && at("evaluation-sets", "*")) {
+      if (body.agent_id !== item.agent_id) throw new HttpError(422, "評価セットの業務 Agent は変えられません。");
       Object.assign(item, normalizedSet(body), { updated_at: MOCK_NOW });
       return item;
     }
     if (method === "DELETE" && at("evaluation-sets", "*")) {
+      if (state.evaluations.some((job) => job.set_id === item.id && (job.status === "running" || job.status === "queued"))) {
+        throw new HttpError(409, "この評価セットで評価を実行しています。終わってから削除してください。");
+      }
       state.evaluationSets = state.evaluationSets.filter((candidate) => candidate !== item);
       return null;
     }
@@ -1291,6 +1412,12 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       throw new HttpError(409, "ほかの評価を実行しています。終わってから始めてください。");
     }
     const evaluationSet = findOr404(state.evaluationSets, "id", String(body.set_id), "evaluation set");
+    // 無効・移行が要る業務 Agent は評価しない（backend の create_evaluation）。
+    const evaluatedAgent = state.agents.find((agent) => agent.id === evaluationSet.agent_id);
+    if (!evaluatedAgent) throw new HttpError(404, "業務 Agent が見つかりません。");
+    if (!evaluatedAgent.enabled || evaluatedAgent.migration_required) {
+      throw new HttpError(409, "この業務 Agent は実行できない状態です。");
+    }
     const cases = evaluationSet.cases as Json[];
     const job: Json = {
       id: `eval-${state.evaluations.length + 1}`,
@@ -1365,6 +1492,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return publicJob(job);
     }
     if (method === "POST" && at("evaluations", "*", "cancel")) {
+      // 終わった評価は変えない（backend の EvaluationStore.cancel は実行中・待ちの評価だけを取り消す）。
+      if (job.status !== "running" && job.status !== "queued") return publicJob(job);
       job.status = "cancelled";
       for (const result of job.results as Json[]) {
         if (result.status === "pending" || result.status === "running") result.status = "cancelled";
@@ -1373,7 +1502,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return publicJob(job);
     }
     if (method === "DELETE" && at("evaluations", "*")) {
-      if (job.status === "running") throw new HttpError(409, "実行中の評価は削除できません。");
+      if (job.status === "running" || job.status === "queued") {
+        throw new HttpError(409, "実行中の評価は削除できません。取り消してから削除してください。");
+      }
       state.evaluations = state.evaluations.filter((item) => item !== job);
       return null;
     }
@@ -1513,6 +1644,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (state.agents.some((agent) => agent.id === id)) {
         throw new HttpError(400, "同じ ID の業務 Agent があります。");
       }
+      // backend の `_require_agent_name` と、知らない業種テンプレートの 400（#810 / #925）。
+      if (!String(body.name ?? "").trim()) throw new HttpError(422, "業務 Agent の名前を入力してください。");
+      if (body.template_id && !state.agentTemplates.some((template) => template.id === body.template_id)) {
+        throw new HttpError(400, "業種テンプレートが見つかりません。");
+      }
       requireKnownSkills(body.skill_ids);
       const agent = {
         id,
@@ -1536,8 +1672,18 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     if (method === "PATCH" && at("agents", "*")) {
       const agent = findOr404(state.agents, "id", second, "agent");
+      if (body.name !== undefined && body.name !== null && !String(body.name).trim()) {
+        throw new HttpError(422, "業務 Agent の名前を入力してください。");
+      }
       if (body.skill_ids !== undefined) requireKnownSkills(body.skill_ids);
-      Object.assign(agent, body, { updated_at: MOCK_NOW });
+      // 変えられるのは AgentProfilePatch の項目だけ（版・由来などは送られても変えない）。
+      const patchable = ["name", "description", "instructions", "skill_ids", "model_id", "tool_names", "enabled"];
+      const patch = Object.fromEntries(
+        Object.entries(body).filter(([key, value]) => patchable.includes(key) && value !== null && value !== undefined)
+      );
+      Object.assign(agent, patch, { updated_at: MOCK_NOW });
+      // スキルを選び直すと移行が済む（backend の patch_agent）。
+      if (Array.isArray(body.skill_ids)) agent.migration_required = false;
       // 有効の切り替えなど版に残さない項目だけの変更は「公開していない変更」にしない（backend と同じ）。
       agent.unpublished_changes = unpublishedChanges(agent);
       return agent;
@@ -1770,9 +1916,30 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   // --- 設定 ---
   if (head === "settings" && second === "api-keys") {
     if (method === "GET" && at("settings", "api-keys")) {
-      return { keys: state.apiKeys, persistent: state.apiKeysPersistent };
+      // キーの業務 Agent の名前は、閲覧者が利用できる業務 Agent だけ（backend の list_api_keys と同じ）。
+      const scope = state.auth.currentUser?.allowed_agent_ids ?? null;
+      const keyAgentIds = new Set(state.apiKeys.flatMap((key) => (key.agent_ids as string[] | null) ?? []));
+      const agentNames = Object.fromEntries(
+        state.agents
+          .filter((agent) => keyAgentIds.has(String(agent.id)) && (scope === null || scope.includes(String(agent.id))))
+          .map((agent) => [agent.id, agent.name])
+      );
+      return { keys: state.apiKeys, persistent: state.apiKeysPersistent, agent_names: agentNames };
     }
     if (method === "POST" && at("settings", "api-keys")) {
+      // backend と同じ確認: 空の業務 Agent の選択は 422、ほかの利用者として動くキーはシステム管理者だけ、
+      // 知らない業務 Agent は 422。
+      if (Array.isArray(body.agent_ids) && !(body.agent_ids as string[]).some((id) => id.trim())) {
+        throw new HttpError(422, "body.agent_ids: Value error, 業務 Agent を 1 つ以上選ぶか、すべてにしてください。");
+      }
+      const creator = state.auth.currentUser;
+      if (body.run_as_user_uuid && creator && body.run_as_user_uuid !== creator.user_uuid && !creator.is_system_admin) {
+        throw new HttpError(403, "ほかの利用者として動くキーは、システム管理者だけが作れます。");
+      }
+      const unknownAgents = ((body.agent_ids as string[] | null | undefined) ?? [])
+        .filter((agentId) => !state.agents.some((agent) => agent.id === agentId))
+        .sort();
+      if (unknownAgents.length) throw new HttpError(422, `業務 Agent が見つかりません: ${unknownAgents.join(", ")}`);
       const id = `${(state.apiKeys.length + 1).toString(16).padStart(16, "0")}`;
       const token = `prak_${id}_${"x".repeat(43)}`;
       const days = body.expires_in_days as number | null;
@@ -1819,20 +1986,21 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     if (second === "mcp-connections") {
       const store = state.mcpConnections;
-      const listData = () => ({ connections: store.connections });
+      const listData = () => ({ connections: store.connections.map(publicMcpConnection) });
       if (method === "GET" && at("settings", "mcp-connections")) return listData();
       if (method === "POST" && at("settings", "mcp-connections")) {
         const id = String(body.server_id ?? "").trim();
         if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(id) || id.includes("__")) {
           throw new HttpError(422, "接続 ID は英数字で始まる 40 文字以内の英数字・「-」・「_」で入力してください。");
         }
+        validateMcpUrl(body);
         if (store.connections.some((connection) => connection.server_id === id)) {
           throw new HttpError(409, "MCP 接続の ID はすでに使われています。");
         }
         const connection = mcpConnection({ ...body, server_id: id });
         store.connections.push(connection);
         store.connections.sort((left, right) => String(left.server_id).localeCompare(String(right.server_id)));
-        return connection;
+        return publicMcpConnection(connection);
       }
       if (third && at("settings", "mcp-connections", "*", "tools") && method === "GET") {
         const connection = findOr404(store.connections, "server_id", third, "MCP 接続");
@@ -1849,6 +2017,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (third && at("settings", "mcp-connections", "*")) {
         const connection = findOr404(store.connections, "server_id", third, "MCP 接続");
         if (method === "PATCH") {
+          validateMcpUrl(body);
           // RAG / NL2SQL の認証方式・audience は変えられない（backend と同じ 400。#1014）。
           const builtinAuthChanged =
             connection.source === "builtin" &&
@@ -1859,7 +2028,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
             throw new HttpError(400, "RAG / NL2SQL の接続の認証方式と audience は変えられません。");
           }
           Object.assign(connection, mcpConnection({ ...body, server_id: third }, connection));
-          return connection;
+          return publicMcpConnection(connection);
         }
         if (method === "DELETE") {
           if (!connection.removable) {

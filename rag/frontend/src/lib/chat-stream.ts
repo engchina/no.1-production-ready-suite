@@ -2,10 +2,14 @@
  * チャットメッセージの SSE ストリーミングクライアント
  * （POST /api/chat/conversations/{id}/messages/stream）。
  *
- * バックエンドは start → (stage / delta / metadata / citations / done)×モデル → all_done を送る。
+ * バックエンドは start → (stage / progress / delta / metadata / citations / done)×モデル → all_done を送る。
+ * `progress` は処理の段階（3 製品共通の ChatProgressStep。#1146）の一覧を、段階が変わるたびに全体で送る。
  * マルチモデル比較では各イベントに model_id が付き、フロントがカラムへ振り分ける。
  */
 
+import type { ChatProgressStep } from "@engchina/production-ready-ui";
+
+import { chatProgressStepsFromEvent } from "./chat-progress";
 import { t } from "./i18n";
 import {
   ApiError,
@@ -32,6 +36,8 @@ export interface ChatStreamHandlers {
     outcome: "started" | "success" | "error" | "cancelled";
     elapsed_ms: number;
   }) => void;
+  /** 処理の段階（#1146）。段階が変わるたびに一覧の全体が届く。 */
+  onProgress?: (modelId: string, steps: ChatProgressStep[]) => void;
   onDelta?: (modelId: string, text: string) => void;
   onMetadata?: (payload: {
     model_id: string;
@@ -152,6 +158,9 @@ function dispatchEvent(block: string, handlers: ChatStreamHandlers): void {
       break;
     case "stage":
       handlers.onStage?.(payload as Parameters<NonNullable<ChatStreamHandlers["onStage"]>>[0]);
+      break;
+    case "progress":
+      handlers.onProgress?.(String(payload.model_id ?? ""), chatProgressStepsFromEvent(payload.steps));
       break;
     case "delta":
       handlers.onDelta?.(String(payload.model_id ?? ""), String(payload.text ?? ""));

@@ -24,6 +24,8 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from .api.validation import validation_tool_errors
+
 logger = logging.getLogger(__name__)
 
 LATEST_PROTOCOL_VERSION = "2025-06-18"
@@ -161,10 +163,8 @@ class McpServer:
         try:
             validated = tool.input_model.model_validate(arguments)
         except ValidationError as exc:
-            errors = [
-                {"loc": ".".join(str(part) for part in err["loc"]), "message": err["msg"]}
-                for err in exc.errors(include_url=False, include_input=False)
-            ]
+            # 位置は cases[0].query の形、文は日本語にする（原文は type / raw_message。#1065）。
+            errors = validation_tool_errors(exc.errors(include_url=False, include_input=False))
             return _result(
                 request_id,
                 tool_error(

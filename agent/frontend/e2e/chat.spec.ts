@@ -203,7 +203,7 @@ test("回答の出典と使ったツールを畳んで出し、承認待ちは�
   await turn.getByText("出典（1）").click();
   await expect(turn.getByText("1. 契約書.pdf")).toBeVisible();
   await turn.getByText("使ったツール（2）").click();
-  await expect(turn.getByText("rag__rag_search")).toBeVisible();
+  await expect(turn.getByText("rag__rag_search", { exact: true })).toBeVisible();
 
   await turn.getByRole("button", { name: "承認して実行" }).click();
   await expect(page.getByText("承認しました")).toBeVisible();
@@ -229,7 +229,7 @@ for (const viewport of VIEWPORTS) {
       }
 
       const turn = page.getByTestId("chat-turn-run-chat-seed");
-      await expect(turn.getByTestId("chat-answering")).toBeVisible();
+      await expect(turn.getByTestId("chat-progress")).toHaveAttribute("data-chat-progress-state", "running");
       const button = page.getByTestId("chat-send");
       await expect(button).toHaveAccessibleName("停止");
       await expect(button).toHaveAttribute("data-state", "running");
@@ -256,7 +256,9 @@ for (const viewport of VIEWPORTS) {
       await expect(turn.getByTestId("chat-cancelled")).toHaveText(
         "回答の作成を停止しました。もう一度送ると、新しく回答を作成します。"
       );
-      await expect(turn.getByTestId("chat-answering")).toHaveCount(0);
+      // 処理の段階は止めた時点で終わり、「処理の経過」の 1 行に畳む（#1147）。
+      await expect(turn.getByTestId("chat-progress")).toHaveAttribute("data-chat-progress-state", "done");
+      await expect(turn.getByTestId("chat-progress-current")).toHaveCount(0);
       await expect(page.getByTestId("chat-composer-hint")).toHaveCount(0);
       await expect(composer).toHaveValue("次の質問");
       expect(await page.getByTestId("chat-composer-region").evaluate((element) => element.getBoundingClientRect().height)).toBe(runningComposerHeight);
@@ -298,7 +300,7 @@ for (const viewport of VIEWPORTS) {
       await expectStableComposer();
       releaseCreate();
       const turn = page.getByTestId("chat-turn-run-chat-seed");
-      await expect(turn.getByTestId("chat-answering")).toBeVisible();
+      await expect(turn.getByTestId("chat-progress")).toHaveAttribute("data-chat-progress-state", "running");
       await expectStableComposer();
       mockApi.state.runs[0].status = "waiting_approval";
       mockApi.state.runs[0].approvals = [{
@@ -375,7 +377,7 @@ for (const viewport of VIEWPORTS) {
     await expect(failure.getByRole("alert")).toContainText("実行環境に接続できません。");
     await expect(composer).toHaveValue("");
     await expect(page.getByTestId("chat-send")).toHaveAccessibleName("送信");
-    await expect(pendingTurn.getByTestId("chat-answering")).toHaveCount(0);
+    await expect(pendingTurn.getByTestId("chat-progress")).toHaveCount(0);
     expect(mockApi.lastRequest("POST", "/api/runs/run-chat-1/cancel")).toBeUndefined();
     await expectNoHorizontalOverflow(page);
     for (const theme of ["light", "dark"] as const) {
@@ -626,7 +628,8 @@ for (const viewport of VIEWPORTS) {
     // 新しい会話: Run の作成の応答の前に、質問と回答の作成中の表示が出る。空の状態はすぐ消える。
     const pendingTurn = page.getByTestId("chat-pending-turn");
     await expect(pendingTurn.locator('[data-status="sending"]')).toHaveText("今月の売上は？");
-    await expect(pendingTurn.getByTestId("chat-answering")).toBeVisible();
+    // 回答の場所は「質問を送信しています」の段階（Run の作成の応答を待っている。#1147）。
+    await expect(pendingTurn.getByTestId("chat-progress-current")).toContainText("質問を送信しています");
     await expect(empty).toHaveCount(0);
     await expect(page.getByRole("log", { name: "会話" })).toContainText("今月の売上は？");
     await expect(composer).toHaveValue("");

@@ -1757,9 +1757,11 @@ def test_model_settings_rejects_non_1536_embedding_dim() -> None:
     assert body["error_messages"]
 
 
-def test_read_oci_config_uses_requested_profile_from_backend_path(
+def test_read_oci_config_uses_runtime_config_and_profile(
+    monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """読むのは実行中の設定の config / profile（要求の path は使わない。#1067）。"""
     config_file = tmp_path / "config"
     config_file.write_text(
         "\n".join(
@@ -1778,9 +1780,13 @@ def test_read_oci_config_uses_requested_profile_from_backend_path(
         encoding="utf-8",
     )
 
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "RAG_PROD")
+
     resp = client.post(
         "/api/settings/oci/config/read",
-        json={"config_file": str(config_file), "profile": "RAG_PROD"},
+        json={"config_file": str(tmp_path / "other"), "profile": "DEFAULT"},
     )
 
     assert resp.status_code == 200
@@ -1847,6 +1853,7 @@ def test_get_oci_settings_returns_runtime_and_config_values(
         "key_file_exists": True,
         "config_file_exists": True,
         "config_source": "runtime",
+        "config_error": None,
     }
 
 
@@ -2230,12 +2237,17 @@ def test_test_oci_config_reports_encrypted_private_key_without_pass_phrase(
     assert "暗号化されています" in body["message"]
 
 
-def test_read_oci_config_rejects_missing_requested_profile(tmp_path: Path) -> None:
+def test_read_oci_config_rejects_missing_requested_profile(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
     config_file = tmp_path / "config"
     config_file.write_text(
         "[DEFAULT]\nuser=ocid1.user.oc1..default\n",
         encoding="utf-8",
     )
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "RAG_PROD")
 
     resp = client.post(
         "/api/settings/oci/config/read",
@@ -2273,12 +2285,16 @@ def test_read_object_storage_namespace_uses_oci_sdk(
 
     monkeypatch.setattr("pr_system_settings.oci.importlib.import_module", fake_import_module)
     config_file = tmp_path / "config"
+    # 取得に使う config は実行中の設定のもの（要求の config_file は使わない。#1067）。
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
 
     resp = client.post(
         "/api/settings/oci/object-storage/namespace",
         json={
-            "config_file": str(config_file),
-            "profile": "DEFAULT",
+            "config_file": str(tmp_path / "other"),
+            "profile": "OTHER",
             "region": "ap-osaka-1",
         },
     )
@@ -2465,7 +2481,8 @@ def test_update_database_settings_mutates_runtime_without_echoing_secret(
         ),
     )
 
-    resp = client.patch(
+    # 別の Wallet の保存先は受け取らない（Wallet の設置がその場所を置き換えるため）。
+    rejected = client.patch(
         "/api/settings/database",
         json={
             "user": "rag_app",
@@ -2473,13 +2490,24 @@ def test_update_database_settings_mutates_runtime_without_echoing_secret(
             "wallet_dir": "/opt/oracle/wallet",
         },
     )
+    assert rejected.status_code == 422
+    assert "PLATFORM_ORACLE_WALLET_DIR" in rejected.text
+
+    # 画面は今の保存先（resolved_oracle_wallet_dir）を送る。
+    resp = client.patch(
+        "/api/settings/database",
+        json={
+            "user": "rag_app",
+            "dsn": "adb.example.com/rag",
+            "wallet_dir": "/opt/oracle/instantclient_23_26/network/admin",
+        },
+    )
 
     assert resp.status_code == 200
     assert settings.oracle_user == "rag_app"
     assert settings.oracle_dsn == "adb.example.com/rag"
-    # 画面から送られた Wallet 保存先を保存する（NL2SQL と同じ。#108）。
     # RAG が実際に使う保存先は PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin のまま変わらない。
-    assert settings.oracle_wallet_dir == "/opt/oracle/wallet"
+    assert settings.oracle_wallet_dir == "/opt/oracle/instantclient_23_26/network/admin"
     assert settings.resolved_oracle_wallet_dir == "/opt/oracle/instantclient_23_26/network/admin"
     assert settings.oracle_password == "old-secret"
     assert resp.json()["data"]["wallet_dir"] == settings.resolved_oracle_wallet_dir
@@ -2512,7 +2540,7 @@ def test_update_database_settings_does_not_mutate_runtime_when_env_write_fails(
         json={
             "user": "rag_app",
             "dsn": "adb.example.com/rag",
-            "wallet_dir": "/opt/oracle/wallet",
+            "wallet_dir": "",
             "password": "new-secret",
             "wallet_password": "new-wallet-secret",
         },

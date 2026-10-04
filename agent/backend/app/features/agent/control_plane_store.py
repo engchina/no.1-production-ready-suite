@@ -8,7 +8,10 @@
   決める）に合わせる。`oracle_*` は
   `AGENT_CONTROL_PLANE_ITEMS`（共通の `PLATFORM_ORACLE_*`。テーブルはシステムテーブルが作る）、
   `file` は snapshot の隣の JSON ファイル、`memory` は保存しない（従来どおりプロセス内だけ）。
-- MCP 接続の API キー・OAuth の client secret は `app.secret_box` で暗号化して保存する。
+- MCP 接続の API キー・OAuth の client secret・セッション ID は `app.secret_box` で暗号化して
+  保存する。プラグインの manifest とマーケットプレイスの一覧の native manifest の
+  `mcp_servers[]` も同じ（#1101）。読み込みでは暗号文と平文（#1101 より前の行）の両方を
+  受け付け、起動時の復元で平文の秘密を見つけたら暗号化して保存し直す。
 - 起動時（`app.main` の startup）に `restore_control_plane()` で読み込み、宣言の後に重ねる。
 """
 
@@ -28,7 +31,7 @@ from pr_backend_core.logging import safe_exception_fields
 
 from app.features.agent import storage_backend
 from app.oracle_connection import connect_platform_oracle
-from app.secret_box import SecretBoxError, open_secret, seal_secret
+from app.secret_box import SEALED_PREFIX, SecretBoxError, open_secret, seal_secret
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -61,7 +64,11 @@ ITEM_KINDS: tuple[ItemKind, ...] = (
 )
 _EVALUATION_KINDS = {"evaluation_set", "evaluation_job"}
 ITEMS_TABLE = "AGENT_CONTROL_PLANE_ITEMS"
-_SECRET_FIELDS = ("api_key", "oauth_client_secret")
+# MCP 接続の構成（`McpConnectionConfig`）のうち暗号化して保存する項目。プラグインの manifest の
+# `mcp_servers[]` にも当てる（#1101）。
+_SECRET_FIELDS = ("api_key", "oauth_client_secret", "session_id")
+# 秘密を持ちうる（MCP 接続の構成を含む）保存の種類。
+_SECRET_KINDS: frozenset[ItemKind] = frozenset({"mcp_connection", "plugin", "marketplace"})
 
 
 class ControlPlaneStoreError(RuntimeError):
@@ -294,15 +301,12 @@ def delete_skill(skill_id: str) -> None:
 
 
 def save_plugin(record: Any) -> None:
-    _put(
-        "plugin",
-        record.id,
-        {
-            "manifest": record.manifest.model_dump(mode="json"),
-            "enabled": record.enabled,
-            "marketplace_id": record.marketplace_id,
-        },
-    )
+    document: JsonObject = {
+        "manifest": record.manifest.model_dump(mode="json"),
+        "enabled": record.enabled,
+        "marketplace_id": record.marketplace_id,
+    }
+    _put("plugin", record.id, _with_secrets("plugin", document, _sealed_secrets))
 
 
 def delete_plugin(plugin_id: str) -> None:
@@ -314,7 +318,7 @@ def save_marketplace(source: Any, listing: Any | None = None) -> None:
     # 前回の一覧・固定 revision と失敗状態を URL のある配布元も再起動後に保つ（#862）。
     if listing is not None:
         document["listing"] = listing.model_dump(mode="json")
-    _put("marketplace", source.id, document)
+    _put("marketplace", source.id, _with_secrets("marketplace", document, _sealed_secrets))
 
 
 def delete_marketplace(marketplace_id: str) -> None:
@@ -323,14 +327,11 @@ def delete_marketplace(marketplace_id: str) -> None:
 
 def save_mcp_connection(config: Any) -> None:
     document = config.model_dump(mode="json")
-    for field in _SECRET_FIELDS:
-        value = document.get(field)
-        if value and get_control_plane_store().persistent:
-            try:
-                document[field] = seal_secret(str(value))
-            except SecretBoxError as exc:
-                raise ControlPlaneStoreError(str(exc)) from exc
-    _put("mcp_connection", config.server_id, document)
+    _put(
+        "mcp_connection",
+        config.server_id,
+        _with_secrets("mcp_connection", document, _sealed_secrets),
+    )
 
 
 def delete_mcp_connection(server_id: str) -> None:
@@ -398,7 +399,30 @@ def restore_control_plane() -> dict[str, int]:
                     )
                     continue
                 restored[kind] += 1
+                _reseal_plaintext_secrets(kind, item_id, document)
     return restored
+
+
+def _reseal_plaintext_secrets(kind: ItemKind, item_id: str, document: JsonObject) -> None:
+    """平文で保存した秘密（#1101 より前の行）を暗号化して保存し直す（1 回だけの移行）。
+
+    暗号化済みの値は変えない（暗号文を作り直さない）ので、移行の済んだ行は書き換えない。
+    署名鍵が無い・保存できないときは平文のまま読み続け、起動は止めない（次の保存で暗号化する）。
+    """
+    if kind not in _SECRET_KINDS:
+        return
+    store = get_control_plane_store()
+    if not store.persistent:
+        return
+    try:
+        resealed = _with_secrets(kind, document, _sealed_plaintext_secrets)
+        if resealed != document:
+            store.put(kind, item_id, resealed)
+    except Exception as exc:  # noqa: BLE001 - 移行の失敗で起動を止めない
+        logger.warning(
+            "agent_control_plane_secret_reseal_failed",
+            extra={"kind": kind, "item_id": item_id, **safe_exception_fields(exc)},
+        )
 
 
 def _restore_item(kind: ItemKind, document: JsonObject) -> None:
@@ -413,8 +437,9 @@ def _restore_item(kind: ItemKind, document: JsonObject) -> None:
     )
     from app.features.agent.skills import AgentSkillDefinition, skill_registry
 
+    document = _with_secrets(kind, document, _opened_secrets)
     if kind == "mcp_connection":
-        stored = McpConnectionConfig.model_validate(_opened_secrets(document))
+        stored = McpConnectionConfig.model_validate(document)
         runtime_config_store.restore_mcp_server(stored)
     elif kind == "tool_policy":
         from app.features.agent.profile_name_migration import migrate_tool_name
@@ -469,7 +494,75 @@ def _restore_item(kind: ItemKind, document: JsonObject) -> None:
             plugin_registry.set_enabled(record.id, False)
 
 
+# ---- 秘密の暗号化・復号 ------------------------------------------------------------
+
+SecretTransform = Callable[[JsonObject], JsonObject]
+
+
+def _with_secrets(kind: ItemKind, document: JsonObject, transform: SecretTransform) -> JsonObject:
+    """保存する文書の中の MCP 接続の構成に `transform`（暗号化・復号）を当てた写し。
+
+    - `mcp_connection`: 文書そのもの
+    - `plugin`: `manifest.mcp_servers[]`
+    - `marketplace`: `listing.plugins[].mcp_servers[]`（native manifest。外部カタログの項目は
+      持たない）
+    """
+    if kind == "mcp_connection":
+        return transform(document)
+    if kind == "plugin":
+        manifest = document.get("manifest")
+        if isinstance(manifest, dict):
+            return {**document, "manifest": _manifest_with_secrets(manifest, transform)}
+    elif kind == "marketplace":
+        listing = document.get("listing")
+        if isinstance(listing, dict) and isinstance(listing.get("plugins"), list):
+            plugins = [
+                _manifest_with_secrets(item, transform) if isinstance(item, dict) else item
+                for item in listing["plugins"]
+            ]
+            return {**document, "listing": {**listing, "plugins": plugins}}
+    return document
+
+
+def _manifest_with_secrets(manifest: JsonObject, transform: SecretTransform) -> JsonObject:
+    servers = manifest.get("mcp_servers")
+    if not isinstance(servers, list) or not servers:
+        return manifest
+    return {
+        **manifest,
+        "mcp_servers": [
+            transform(server) if isinstance(server, dict) else server for server in servers
+        ],
+    }
+
+
+def _sealed_secrets(document: JsonObject, *, only_plaintext: bool = False) -> JsonObject:
+    """秘密を暗号化した写し。保存しない構成（`memory`）では平文のまま（どこにも書かない）。
+
+    暗号化の鍵（`PLATFORM_SERVICE_TOKEN_SECRET`）が無ければ保存しない（平文を残さない）。
+    """
+    if not get_control_plane_store().persistent:
+        return document
+    sealed = dict(document)
+    for field in _SECRET_FIELDS:
+        value = sealed.get(field)
+        if not value:
+            continue
+        if only_plaintext and isinstance(value, str) and value.startswith(SEALED_PREFIX):
+            continue
+        try:
+            sealed[field] = seal_secret(str(value))
+        except SecretBoxError as exc:
+            raise ControlPlaneStoreError(str(exc)) from exc
+    return sealed
+
+
+def _sealed_plaintext_secrets(document: JsonObject) -> JsonObject:
+    return _sealed_secrets(document, only_plaintext=True)
+
+
 def _opened_secrets(document: JsonObject) -> JsonObject:
+    """保存した秘密を平文に戻した写し（平文の値はそのまま。復号できない値は None）。"""
     opened = dict(document)
     for field in _SECRET_FIELDS:
         value = opened.get(field)

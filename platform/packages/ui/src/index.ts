@@ -136,6 +136,7 @@ export {
   type ApiErrorDetailLabels,
   type ApiErrorPresentable,
   type ApiErrorPresentation,
+  type ApiFieldErrorLike,
   type ApiTransportFailureKind,
   type ApiTransportMessages,
   type ApiTransportRequest,
@@ -213,6 +214,15 @@ export {
   type UseOperationTimingOptions,
   type OperationTiming,
 } from "./components/feedback/processing-state";
+export {
+  ChatProgress,
+  DEFAULT_CHAT_PROGRESS_LABELS,
+  formatChatProgressDuration,
+  type ChatProgressLabels,
+  type ChatProgressProps,
+  type ChatProgressStep,
+  type ChatProgressStepStatus,
+} from "./components/feedback/chat-progress";
 export {
   operationTimestampMs,
   elapsedMsSince,

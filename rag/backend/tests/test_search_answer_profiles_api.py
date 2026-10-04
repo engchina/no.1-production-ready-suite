@@ -11,7 +11,7 @@ from app.rag.search_answer_profile_config import (
     SearchAnswerProfileConfig,
     parse_search_answer_profile_config,
 )
-from app.schemas.knowledge_base import KnowledgeBaseStatus
+from app.schemas.knowledge_base import DESCRIPTION_REQUIRED_MESSAGE, KnowledgeBaseStatus
 from app.schemas.search_answer_profile import (
     DEFAULT_SEARCH_ANSWER_PROFILE_DESCRIPTION,
     DEFAULT_SEARCH_ANSWER_PROFILE_NAME,
@@ -294,7 +294,11 @@ def test_create_search_answer_profile_requires_description(
     response = client.post("/api/search-answer-profiles", json=payload)
 
     assert response.status_code == 422
-    assert any("description" in message for message in response.json()["error_messages"])
+    # 未指定は欄の位置付きの日本語、空・空白は自前の検証の文（#979 / #1065）。
+    assert any(
+        message.startswith("description: ") or message == DESCRIPTION_REQUIRED_MESSAGE
+        for message in response.json()["error_messages"]
+    )
     assert fake_oracle.views == {}
 
 

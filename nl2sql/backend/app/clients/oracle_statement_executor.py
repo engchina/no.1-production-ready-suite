@@ -28,7 +28,14 @@ class OracleStatementExecutor:
         output_reader: Callable[[Any], str] | None = None,
         success_message: Callable[[str, int | None], str] | None = None,
         ignored_error_codes: frozenset[str] = frozenset(),
+        stop_on_error: bool = False,
     ) -> list[dict[str, Any]]:
+        """statement 群を順に実行する。
+
+        `stop_on_error=True` なら最初の error で止め、後続の statement を実行しない。
+        DDL は暗黙 commit で rollback できないため、順序で安全を保つ処理（DeepSec の
+        Data Grant の付け外しなど）は、失敗した工程の後ろを実行してはならない（#1022）。
+        """
         results: list[dict[str, Any]] = []
         all_ok = True
         success_count = 0
@@ -77,6 +84,8 @@ class OracleStatementExecutor:
                         )
                 result["elapsed_ms"] = int((datetime.now(UTC) - started).total_seconds() * 1000)
                 results.append(result)
+                if stop_on_error and result["status"] == "error":
+                    break
             should_commit = all_ok if atomic else success_count > 0
             if should_commit:
                 connection.commit()

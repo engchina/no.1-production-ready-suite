@@ -36,6 +36,7 @@ from app.config import (
 from app.db_degradation import load_or_degrade
 from app.rag.answer_engine import AnswerScope
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
+from app.rag.chat_progress import ChatProgressTracker
 from app.rag.document_sections_service import document_sections
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import new_trace_id
@@ -554,6 +555,13 @@ async def _stream_chat_events(
 
     async def run_model(column: dict[str, str]) -> None:
         model_id = column["model_id"]
+        # 利用者向けの処理の段階（3 製品共通の ChatProgressStep。#1146）。
+        tracker = ChatProgressTracker(
+            rerank_enabled=turn.settings.rag_rerank_enabled, model_id=model_id
+        )
+
+        async def emit_steps() -> None:
+            await queue.put(("progress", {"model_id": model_id, "steps": tracker.snapshot()}))
 
         async def emit_progress(progress: SearchStageProgress) -> None:
             await queue.put(
@@ -568,11 +576,16 @@ async def _stream_chat_events(
                     },
                 )
             )
+            if tracker.observe(progress):
+                await emit_steps()
 
+        await emit_steps()
         try:
             assistant, result = await _generate_chat_answer(
                 oracle, turn, model_id, progress_callback=emit_progress
             )
+            tracker.finish(citation_count=len(result.citations))
+            await emit_steps()
             await queue.put(
                 (
                     "result",
@@ -593,6 +606,8 @@ async def _stream_chat_events(
             )
         except Exception as exc:
             # SSE では例外を error event へ落とし、ストリームを正常終了させる。
+            tracker.fail()
+            await emit_steps()
             await queue.put(
                 (
                     "error",

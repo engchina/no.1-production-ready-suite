@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import HTTPException, Request
+from pr_backend_core.api.validation import validation_tool_errors
 from pr_backend_core.mcp import (
     TOOL_ARGUMENTS_INVALID_CODE,
     McpServer,
@@ -155,10 +156,7 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
     try:
         return SearchRequest.model_validate(payload)
     except ValidationError as exc:
-        errors = [
-            {"loc": ".".join(str(part) for part in err["loc"]), "message": err["msg"]}
-            for err in exc.errors(include_url=False, include_input=False)
-        ]
+        errors = validation_tool_errors(exc.errors(include_url=False, include_input=False))
         raise McpToolError(
             TOOL_ARGUMENTS_INVALID_CODE,
             "検索条件が正しくありません。",

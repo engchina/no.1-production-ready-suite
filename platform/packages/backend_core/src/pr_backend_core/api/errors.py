@@ -10,13 +10,24 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
 
 from ..schemas import ApiResponse
+from .validation import DEFAULT_VALIDATION_MESSAGE, validation_error_response
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_UNHANDLED_MESSAGE = "サーバー内部でエラーが発生しました。時間をおいて再度お試しください。"
 DEFAULT_NOT_FOUND_MESSAGE = "リソースが見つかりません。"
 DEFAULT_METHOD_NOT_ALLOWED_MESSAGE = "許可されていない HTTP メソッドです。"
-DEFAULT_VALIDATION_MESSAGE = "リクエストの形式が不正です。"
+
+# DEFAULT_VALIDATION_MESSAGE は検証エラーの整形（`.validation`）へ移した。互換のため再公開する。
+__all__ = [
+    "DEFAULT_METHOD_NOT_ALLOWED_MESSAGE",
+    "DEFAULT_NOT_FOUND_MESSAGE",
+    "DEFAULT_UNHANDLED_MESSAGE",
+    "DEFAULT_VALIDATION_MESSAGE",
+    "api_error_response",
+    "http_exception_messages",
+    "install_exception_handlers",
+]
 
 
 def api_error_response(
@@ -91,15 +102,8 @@ def install_exception_handlers(
     async def _validation_exception_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        messages = [
-            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
-            for error in exc.errors()
-        ]
-        return api_error_response(
-            422,
-            messages or [DEFAULT_VALIDATION_MESSAGE],
-            request_id=request_id_getter(request),
-        )
+        # 利用者向けの日本語の文と位置にし、技術的な原文は problem.field_errors に残す（#1065）。
+        return validation_error_response(exc.errors(), request_id=request_id_getter(request))
 
     @app.exception_handler(Exception)
     async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:

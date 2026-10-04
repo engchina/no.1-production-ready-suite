@@ -130,9 +130,26 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
             SELECT_AI_ASSETS_REFRESH_PERMISSION,
         ),
     ),
-    _menu_permission("menu.comment_management", "データ準備", "コメント管理"),
-    _menu_permission("menu.annotation_management", "データ準備", "アノテーション管理"),
-    _menu_permission("menu.domain_management", "データ準備", "ドメイン管理"),
+    # コメント・アノテーション・ドメインの管理も DDL を実行し、画面の「スキーマを更新」と実行後の
+    # job の追跡を使うので、テーブルの管理と同じくスキーマの参照・更新を含める（#972）。
+    _menu_permission(
+        "menu.comment_management",
+        "データ準備",
+        "コメント管理",
+        implies=(SCHEMA_READ_PERMISSION, SCHEMA_REFRESH_PERMISSION),
+    ),
+    _menu_permission(
+        "menu.annotation_management",
+        "データ準備",
+        "アノテーション管理",
+        implies=(SCHEMA_READ_PERMISSION, SCHEMA_REFRESH_PERMISSION),
+    ),
+    _menu_permission(
+        "menu.domain_management",
+        "データ準備",
+        "ドメイン管理",
+        implies=(SCHEMA_READ_PERMISSION, SCHEMA_REFRESH_PERMISSION),
+    ),
     # 用語・同義語と共通ルールの画面は、それぞれ全体の用語集・共通ルールの取込・出力だけを使う。
     # 業務プロファイル管理（全業務プロファイルの利用を含む）と、もう一方の取込を許す
     # 学習素材管理は含めない（route は menu 権限で判定する。#1006）。
