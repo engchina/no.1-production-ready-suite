@@ -35,6 +35,7 @@ import {
   type ProgressUnit,
   chunkPreviewForm,
   chunkPreviewValidationError,
+  classificationPeriodIsValid,
   ingestConflictBannerIsStale,
   isIndexedTransition,
   phaseForDocumentStatus,
@@ -306,7 +307,18 @@ export function DocumentWorkspace({
     next.set("recipe", selectedRecipeId);
     setSearchParams(next, { replace: true });
   }, [requestedRecipeId, searchParams, selectedRecipeId, setSearchParams]);
-  const selectRecipe = (recipeId: string) => {
+  const selectRecipe = async (recipeId: string) => {
+    // 抽出確認の未保存の修正は、そのレシピの抽出結果への修正。別のレシピへ持ち越さないよう、
+    // 切り替える前に破棄を確認する（同じ解析の複製レシピは要素 ID が同じで、そのまま保存できてしまう。#944）。
+    if (recipeId !== selectedRecipeId && hasReviewEdits) {
+      const confirmed = await confirm({
+        title: t("flow.review.edit.discardTitle"),
+        description: t("flow.review.edit.switchRecipeDescription"),
+        confirmLabel: t("flow.review.edit.switchRecipeConfirm"),
+        tone: "warning",
+      });
+      if (!confirmed) return;
+    }
     const next = new URLSearchParams(searchParams);
     next.set("recipe", recipeId);
     next.delete("chunk_id");
@@ -318,6 +330,7 @@ export function DocumentWorkspace({
     enqueueIngestion.reset();
     approveDocument.reset();
     retryFailedSegments.reset();
+    saveReviewEdits.reset();
   };
   const chunksQuery = useDocumentRecipeChunks(documentId, selectedRecipeId);
   const chunkPreview = usePreviewDocumentRecipeChunks();
@@ -380,6 +393,12 @@ export function DocumentWorkspace({
   const hasReviewEdits =
     (reviewEdits.element_edits?.length ?? 0) > 0 ||
     (reviewEdits.table_cell_edits?.length ?? 0) > 0;
+  // 選んでいるレシピが変わったら（切り替え・削除後の切り替え・URL の変更）、抽出確認の編集を閉じて修正を捨てる（#944）。
+  const reviewRecipeChanged = useValuesChanged([selectedRecipeId]);
+  if (reviewRecipeChanged && (editingReview || hasReviewEdits)) {
+    setEditingReview(false);
+    setReviewEdits(emptyReviewEdits());
+  }
   // 抽出確認の未保存編集は共有の離脱ガードで守る（内部リンク・サイドナビ・再読込・タブを閉じる）。
   useCustomLeaveGuard(hasReviewEdits, () =>
     confirm({
@@ -1167,6 +1186,8 @@ export function DocumentWorkspace({
           onRetry={() => void recipesQuery.refetch()}
           chunkSets={chunkSetsQuery.data}
           sourceModality={sourceProfile?.modality ?? null}
+          // 未保存の抽出確認の修正があるあいだは、レシピの操作からも承認させない（本文側の承認と同じ。#944）。
+          approveBlocked={status === "REVIEW" && hasReviewEdits}
         />
         {/* 状態メッセージ単一スロット(messaging-spec §9): 失敗原因 > 実行中 > ゲート案内 を 1 本だけ表示する。 */}
         {statusMessageSlot?.kind === "failure" ? (
@@ -3049,10 +3070,19 @@ function DocumentClassificationEditor({
 
   const isDirty = JSON.stringify(form) !== savedKey;
   useLeaveGuard(isDirty);
-  const update = (key: keyof DocumentClassification, value: string) =>
+  // 期間の誤りは送る前に終了日の欄の直下で知らせる。backend の 422 は技術的な形（`body: Value error, …`）で返るため（#944）。
+  const [periodError, setPeriodError] = useState<string | null>(null);
+  const update = (key: keyof DocumentClassification, value: string) => {
     setForm((current) => ({ ...current, [key]: value || null }));
+    if (key === "effective_from" || key === "effective_to") setPeriodError(null);
+  };
   const onSave = () => {
     if (!isDirty) return;
+    if (!classificationPeriodIsValid(form)) {
+      setPeriodError(t("documents.classification.periodError"));
+      document.getElementById("document-classification-effective_to")?.focus();
+      return;
+    }
     save.mutate({ id: documentId, payload: form });
   };
 
@@ -3089,6 +3119,7 @@ function DocumentClassificationEditor({
             type="date"
             label={t(`documents.classification.${key}`)}
             helper={key === "effective_to" ? t("documents.classification.effectiveToHelper") : undefined}
+            error={key === "effective_to" ? (periodError ?? undefined) : undefined}
             value={form[key] ?? ""}
             disabled={save.isPending}
             onValueChange={(value) => update(key, value)}
