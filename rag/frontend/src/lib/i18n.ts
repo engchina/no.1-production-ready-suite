@@ -2564,6 +2564,10 @@ export const ja = {
   "evaluation.input.required": "Golden set JSON を入力してください。",
   "evaluation.input.invalidJson": "Golden set JSON は有効な JSON で入力してください。",
   "evaluation.input.noCases": "Golden set JSON の cases を 1 件以上入力してください。",
+  "evaluation.input.caseIdRequired":
+    "Golden set JSON の cases の {index} 件目に id（1〜200 文字）を入力してください。",
+  "evaluation.input.duplicateCaseIds":
+    "Golden set JSON の cases の id が重複しています: {ids}。id はケースごとに変えてください。",
   "evaluation.actions.run": "評価実行",
   "evaluation.actions.running": "評価を実行しています",
   "evaluation.actions.compare": "比較実行",
@@ -2631,6 +2635,8 @@ export const ja = {
   "evaluation.job.failedTitle": "評価を最後まで実行できませんでした。",
   "evaluation.job.loading": "評価の状態を読み込んでいます",
   "evaluation.job.loadError": "評価の状態を取得できませんでした。再試行してください。",
+  "evaluation.job.pollError":
+    "評価の実行状況を取得できません。自動で取得し直しています。表示は最後に取得できた状態です。",
   "evaluation.job.notFound":
     "前回の評価の記録が見つかりません。保持期間を過ぎたか、別の利用者の評価です。もう一度実行してください。",
   "evaluation.toast.started": "評価を開始しました。進み具合はこの画面で確認できます。",
