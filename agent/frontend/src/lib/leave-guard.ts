@@ -17,7 +17,8 @@ import { t } from "@/lib/i18n";
  * Agent の i18n 文言で包む。dirty でないときは何も妨げない。
  */
 
-function leaveMessages(): DraftGuardMessages {
+/** 離脱の確認の文言。共通のシステム設定の画面（`draftGuardMessages`）にも渡す（RAG と同じ。#1118）。 */
+export function draftGuardMessages(): DraftGuardMessages {
   return {
     discardTitle: t("guard.discardTitle"),
     discardDescription: t("guard.discardDescription"),
@@ -33,7 +34,7 @@ export const confirmPendingLeave = confirmUnsavedChanges;
 
 /** 設定画面（1 画面 = 1 フォーム）の離脱ガード。保存中の離脱も止める。 */
 export function useSettingsLeaveGuard(isDirty: boolean, busy = false): () => Promise<boolean> {
-  return useSettingsDraftGuard(isDirty, busy, leaveMessages());
+  return useSettingsDraftGuard(isDirty, busy, draftGuardMessages());
 }
 
 /**
@@ -46,7 +47,7 @@ export function useEditorLeaveGuard(isDirty: boolean, busy = false): { confirmCl
   const confirmLeave = useCallback(async () => {
     if (busy) return false;
     if (!isDirty) return true;
-    const messages = leaveMessages();
+    const messages = draftGuardMessages();
     return confirm({
       title: messages.discardTitle,
       description: messages.discardDescription,

@@ -1162,10 +1162,17 @@ class ExecuteRequest(BaseModel):
         return _validate_sql_row_limit(value)
 
 
+# クエリの長さの上限（チャットの入力欄の maxLength と同じ）。
+JOB_QUESTION_MAX_LENGTH = 10000
+# 永続化したジョブの snapshot を読み戻すときの validation context の key。以前の規則で受け付けて
+# 保存したクエリ（空白だけ・上限超え）でも読めるように、入力の検証を掛けない（#1054）。
+STORED_JOB_REQUEST_CONTEXT = "stored_job_request"
+
+
 class JobCreateRequest(BaseModel):
     """非同期 NL2SQL job create request."""
 
-    question: str = Field(min_length=1)
+    question: str
     engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
     profile_id: str | None = None
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
@@ -1183,15 +1190,24 @@ class JobCreateRequest(BaseModel):
     # ときも、画面はこの ID でジョブを取り直して表示を続けられる。同じ ID の再送は同じジョブを返す。
     client_job_id: UUID | None = None
 
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, value: str, info: ValidationInfo) -> str:
+        # チャット（generation_only）だけでなく、SQL 生成画面・API・MCP のジョブも同じ規則で拒否する
+        # （#1054）。保存済みの snapshot の読み戻しは、以前の規則で受け付けた値を残す。
+        if isinstance(info.context, Mapping) and info.context.get(STORED_JOB_REQUEST_CONTEXT):
+            return value
+        if not value.strip():
+            raise ValueError("クエリを入力してください。")
+        if len(value) > JOB_QUESTION_MAX_LENGTH:
+            raise ValueError(f"クエリは {JOB_QUESTION_MAX_LENGTH} 文字以内で入力してください。")
+        return value
+
     @model_validator(mode="after")
     def validate_select_ai_overrides(self) -> JobCreateRequest:
         _validate_select_ai_request_overrides(self.engine, self.select_ai_overrides)
         if self.previous_job_id and not self.generation_only:
             raise ValueError("会話の継続は SQL の生成だけのジョブで利用できます。")
-        if self.generation_only and not self.question.strip():
-            raise ValueError("クエリを入力してください。")
-        if self.generation_only and len(self.question) > 10000:
-            raise ValueError("クエリは 10000 文字以内で入力してください。")
         return self
 
 
@@ -1224,6 +1240,9 @@ class JobData(BaseModel):
     error_message: str | None = None
     # 機械判定用の失敗分類(例: SCHEMA_CATALOG_EMPTY)。表示文言は error_message が正本。
     error_code: str | None = None
+    # 失敗の技術的な詳細（例外・Oracle のエラーの元の文）。error_message は利用者向けの 1 文目と
+    # 次の操作だけにし、画面はこれを「詳細」に畳んで出す（messaging.md §10.3。#1072）。
+    error_detail: str | None = None
     warning_message: str | None = None
     timing: TimingEnvelope | None = None
     steps: list[JobStepData] = Field(default_factory=list)
@@ -1985,6 +2004,10 @@ class ProfileSyncJobData(BaseModel):
     agent_result: AssetRefreshData | None = None
     error_code: str = ""
     error_message_ja: str = ""
+    # 失敗した工程（phase は失敗時に failed へ変わるため別に残す）。
+    # DBMS_CLOUD_AI Profile の反映は済み、Agent アセットの再構築・検証だけが失敗した
+    # 「一部の成功」を画面が見分けるのに使う。
+    failed_phase: ProfileSyncJobPhase | None = None
     retry_of_job_id: str = ""
     created_at: str = ""
     deadline_at: str = ""

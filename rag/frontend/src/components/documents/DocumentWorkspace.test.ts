@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   chunkPreviewForm,
   chunkPreviewValidationError,
+  classificationPeriodIsValid,
   documentDisplayStatus,
   ingestConflictBannerIsStale,
   isIndexedTransition,
@@ -777,5 +778,20 @@ describe("isIndexedTransition(索引完了 toast)", () => {
         { recipeId: "r1", status: "INDEXED" }
       )
     ).toBe(false);
+  });
+});
+
+// 分類の有効期間の確認（Issue 944）。
+describe("classificationPeriodIsValid", () => {
+  it("終了日が開始日より後なら有効", () => {
+    expect(classificationPeriodIsValid({ effective_from: "2026-01-01", effective_to: "2026-01-02" })).toBe(true);
+  });
+  it("終了日が開始日と同じか前なら無効（終了日は排他的）", () => {
+    expect(classificationPeriodIsValid({ effective_from: "2026-01-01", effective_to: "2026-01-01" })).toBe(false);
+    expect(classificationPeriodIsValid({ effective_from: "2026-02-01", effective_to: "2026-01-01" })).toBe(false);
+  });
+  it("どちらかが未入力なら比べない", () => {
+    expect(classificationPeriodIsValid({ effective_from: null, effective_to: "2026-01-01" })).toBe(true);
+    expect(classificationPeriodIsValid({ effective_from: "2026-01-01", effective_to: null })).toBe(true);
   });
 });

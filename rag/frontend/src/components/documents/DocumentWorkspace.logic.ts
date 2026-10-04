@@ -538,3 +538,12 @@ export function shouldShowProcessingWatchBanner({
     !["REVIEW", "CHUNKED", "INDEXED", "ERROR"].includes(documentStatus ?? "")
   );
 }
+
+/** 有効期間の終了日は開始日より後（終了日は排他的。backend の DocumentClassification と同じ規則）。 */
+export function classificationPeriodIsValid(
+  classification: { effective_from: string | null; effective_to: string | null }
+): boolean {
+  const { effective_from: from, effective_to: to } = classification;
+  // date の入力は YYYY-MM-DD なので文字列で比べられる。
+  return !from || !to || from < to;
+}

@@ -196,6 +196,42 @@ describe("AppShell（md 以上）は従来どおり", () => {
   });
 });
 
+describe("AppShell の本文へスキップ", () => {
+  beforeEach(() => mockViewport(false));
+
+  it("押すと URL に #pr-main を付けず（既定の移動を止め）、本文の <main> へフォーカスを移す", () => {
+    render(<Shell />);
+    const link = $<HTMLAnchorElement>(".pr-skip-link")!;
+    const main = $<HTMLElement>("main#pr-main")!;
+    expect(link.getAttribute("href")).toBe("#pr-main");
+    expect(main.getAttribute("tabindex")).toBe("-1");
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 });
+    act(() => {
+      link.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(main);
+  });
+
+  it("修飾キー付きのクリック（新しいタブで開く等）はブラウザに任せる", () => {
+    render(<Shell />);
+    const link = $<HTMLAnchorElement>(".pr-skip-link")!;
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, ctrlKey: true });
+    // happy-dom がリンクの既定の移動をしないよう、document で止める前に defaultPrevented を読む。
+    let prevented: boolean | undefined;
+    const listener = (current: Event) => {
+      prevented = current.defaultPrevented;
+      current.preventDefault();
+    };
+    document.addEventListener("click", listener);
+    act(() => {
+      link.dispatchEvent(event);
+    });
+    document.removeEventListener("click", listener);
+    expect(prevented).toBe(false);
+  });
+});
+
 describe("navDrawerKeyAction / closesNavDrawer", () => {
   it("Escape は閉じる。Tab は末尾で先頭へ、Shift+Tab は先頭で末尾へ回し、途中は既定の移動に任せる", () => {
     expect(navDrawerKeyAction("Escape", false, 2, 5)).toEqual({ type: "close" });

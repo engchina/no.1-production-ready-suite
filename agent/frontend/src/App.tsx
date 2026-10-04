@@ -125,14 +125,8 @@ export function App() {
             </Capability>
           }
         />
-        <Route
-          path={APP_ROUTES.runtimes}
-          element={
-            <Capability need="viewRuns" titleKey="nav.runtimes">
-              <RuntimesPage />
-            </Capability>
-          }
-        />
+        {/* 実行環境の状態は Run のデータではないので、メニュー権限（route の保護）だけで開ける（#1041）。 */}
+        <Route path={APP_ROUTES.runtimes} element={<RuntimesPage />} />
         <Route
           path={APP_ROUTES.chat}
           element={

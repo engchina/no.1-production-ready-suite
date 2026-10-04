@@ -152,17 +152,22 @@ test("Agent 管理の権限が無い利用者は一覧だけを見る", async ({
     owner_display_name: "山田 太郎",
     created_by_user_uuid: "u-admin",
     created_by_display_name: "管理 太郎",
-    agent_ids: ["default"],
+    agent_ids: ["default", "finance"],
     token_prefix: "prak_00000000000000aa_abcd",
     created_at: MOCK_NOW,
     expires_at: MOCK_NOW,
     last_used_at: MOCK_NOW,
     expired: true,
   });
-  mockApi.setCurrentUser(dbUser({ permissions: ["menu.settings_api_keys"] }));
+  mockApi.state.agents.push({ ...mockApi.state.agents[0], id: "finance", name: "経理 Agent" });
+  // 業務 Agent の一覧は読めない（API キーのメニューだけ）。範囲は default だけ。
+  mockApi.setCurrentUser(dbUser({ permissions: ["menu.settings_api_keys"], allowed_agent_ids: ["default"] }));
   await page.goto("/settings/api-keys");
   const row = page.getByRole("table", { name: "API キーの一覧" }).getByRole("row", { name: /既存のキー/ });
   await expect(row).toContainText("期限切れ");
+  // 利用できる業務 Agent は名前で、範囲外の業務 Agent は名前を出さず、ID だけでは無いことが分かる表示にする。
+  await expect(row).toContainText("汎用業務 Agent、名前を表示できない業務 Agent（ID: finance）");
+  await expect(row).not.toContainText("経理 Agent");
   await expect(row).toContainText("山田 太郎");
   await expect(page.getByRole("heading", { name: "API キーの作成" })).toHaveCount(0);
   await expect(page.getByTestId("api-key-row-actions-00000000000000aa")).toHaveCount(0);
