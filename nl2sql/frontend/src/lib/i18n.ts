@@ -1791,6 +1791,10 @@ const nl2sqlJa = {
   "profiles.oracle.sync.succeeded": "Oracle Profile の反映が完了しました。",
   "profiles.oracle.sync.failed": "業務 Profile は保存されましたが、Oracle 反映に失敗しました。",
   "profiles.oracle.sync.savedButFailed": "業務 Profile は保存されましたが、Oracle 反映を開始できませんでした。",
+  "profiles.oracle.sync.agentFailed":
+    "DBMS_CLOUD_AI Profile への反映は完了しましたが、Select AI Agent アセットの再構築に失敗しました。",
+  "profiles.oracle.sync.verifyFailed":
+    "DBMS_CLOUD_AI Profile への反映は完了しましたが、反映結果の検証に失敗しました。",
   "profiles.oracle.sync.credentialMissing":
     "現在の Oracle schema に OCI_CRED がありません。データベース設定で Select AI Credential を作成してから、Oracle 反映を再試行してください。",
   "profiles.oracle.sync.openSelectAiCredential": "Select AI Credential を開く",
@@ -1809,6 +1813,10 @@ const nl2sqlJa = {
     "業務プロファイルの保存とOracleへの反映が完了しました。",
   "profiles.oracle.progress.message.failed":
     "業務プロファイルは保存されましたが、Oracleへの反映を完了できませんでした。",
+  "profiles.oracle.progress.message.agentFailed":
+    "業務プロファイルの保存とDBMS_CLOUD_AI Profileへの反映は完了しましたが、Select AI Agentアセットの再構築に失敗しました。",
+  "profiles.oracle.progress.message.verifyFailed":
+    "業務プロファイルの保存とDBMS_CLOUD_AI Profileへの反映は完了しましたが、反映結果の検証に失敗しました。",
   "profiles.oracle.progress.message.cancelled": "Oracleへの反映を中止しました。",
   "profiles.oracle.progress.message.submissionFailed":
     "業務プロファイルは保存されましたが、Oracle反映ジョブを開始できませんでした。",
