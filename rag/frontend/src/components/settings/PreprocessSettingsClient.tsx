@@ -7,7 +7,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  Button,
+  FormActionBar,
   FormStatus,
   TimedLoadingState,
   FormSkeleton,
@@ -22,9 +22,9 @@ import {
   type PreprocessProfileStatusData,
 } from "@/lib/api";
 import { useLeaveGuard } from "@/lib/leave-guard";
-import { useValuesChanged } from "@/lib/render-sync";
 import { t, type I18nKey } from "@/lib/i18n";
 import { usePreprocessSettings, useUpdatePreprocessSettings } from "@/lib/queries";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 const PROFILE_ORDER: PreprocessProfileName[] = [
@@ -43,16 +43,20 @@ export function PreprocessSettingsClient() {
   const query = usePreprocessSettings();
   const save = useUpdatePreprocessSettings();
   const [profile, setProfile] = useState<PreprocessProfileName | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-
-  // server 値か保存中フラグが変わったレンダーで、選択を server 値に戻す。
-  const serverChanged = useValuesChanged([query.data, save.isPending]);
-  if (serverChanged && query.data && !save.isPending) {
-    setProfile(query.data.profile);
+  // 直前に取り込んだ server 値。server 値が変わったレンダーだけ、未編集なら選択をそろえる。
+  // 保存の開始・終了（isPending）では選択を戻さない（失敗しても選択を残す。#956）。
+  const [base, setBase] = useState<PreprocessProfileName | null>(null);
+  const serverProfile = query.data?.profile ?? null;
+  if (serverProfile !== null && serverProfile !== base) {
+    setBase(serverProfile);
+    if (profile === null || profile === base) setProfile(serverProfile);
   }
 
-  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
-  useLeaveGuard(Boolean(query.data && profile !== null && profile !== query.data.profile));
+  // 未保存の選択があるときは離脱を確認し、保存中は離脱を止める。
+  useLeaveGuard(
+    Boolean(query.data && profile !== null && profile !== query.data.profile),
+    save.isPending
+  );
 
   if (query.isPending) {
     return (
@@ -94,26 +98,25 @@ export function PreprocessSettingsClient() {
 
   function choose(next: PreprocessProfileName) {
     save.reset();
-    setSuccessMessage(null);
     setProfile(next);
   }
 
   function resetForm() {
     save.reset();
-    setSuccessMessage(null);
     setProfile(settings.profile);
   }
 
   function submit() {
-    if (!profile) return;
+    if (!profile || save.isPending) return;
     save.mutate(
       { profile },
       {
         onSuccess: (data) => {
+          setBase(data.profile);
           setProfile(data.profile);
-          setSuccessMessage(t("settings.preprocess.actions.saved"));
+          // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
+          toast.success(t("settings.preprocess.actions.saved"));
         },
-        onError: () => setSuccessMessage(null),
       }
     );
   }
@@ -209,33 +212,35 @@ export function PreprocessSettingsClient() {
               value={t("settings.common.currentConfig")}
             />
           </dl>
-          <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
-            <div className="min-h-6">
-              {dirty ? (
+          <FormActionBar
+            ariaLabel={t("settings.preprocess.actions.label")}
+            primaryActions={[
+              {
+                id: "save",
+                label: t("settings.preprocess.actions.save"),
+                icon: Save,
+                loading: save.isPending,
+                disabled: !dirty,
+                onClick: submit,
+              },
+            ]}
+            secondaryActions={[
+              {
+                id: "reset",
+                label: t("settings.preprocess.actions.reset"),
+                icon: RotateCcw,
+                disabled: !dirty || save.isPending,
+                onClick: resetForm,
+              },
+            ]}
+            status={
+              save.isError ? (
+                <FormStatus tone="danger" message={saveError} />
+              ) : dirty ? (
                 <FormStatus tone="warning" message={t("settings.preprocess.actions.unsaved")} />
-              ) : null}
-              {successMessage ? <FormStatus tone="success" message={successMessage} /> : null}
-              {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={resetForm}
-                disabled={!dirty || save.isPending}
-                aria-label={t("settings.preprocess.actions.reset")} icon={RotateCcw}>
-                {t("settings.preprocess.actions.reset")}
-              </Button>
-              <Button
-                type="button"
-                loading={save.isPending}
-                disabled={!dirty}
-                onClick={submit}
-                aria-label={t("settings.preprocess.actions.save")} icon={Save}>
-                {t("settings.preprocess.actions.save")}
-              </Button>
-            </div>
-          </div>
+              ) : null
+            }
+          />
         </CardContent>
       </Card>
     </PageBody>

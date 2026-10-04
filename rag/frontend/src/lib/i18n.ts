@@ -453,11 +453,12 @@ export const ja = {
   "settings.preprocess.profile.pii_redact.description":
     "テキストの氏名・メールアドレス・電話番号などの個人情報(PII)をマスクしてから解析します。",
   "settings.preprocess.actions.save": "保存",
-  "settings.preprocess.actions.saved": "前処理設定を保存しました。",
+  "settings.preprocess.actions.label": "ファイル準備の設定の操作",
+  "settings.preprocess.actions.saved": "ファイル準備の設定を保存しました。",
   "settings.preprocess.actions.reset": "変更を破棄",
   "settings.preprocess.actions.unsaved": "未保存の変更があります。",
-  "settings.preprocess.loadError": "前処理設定を取得できませんでした。",
-  "settings.preprocess.saveError": "前処理設定を保存できませんでした。",
+  "settings.preprocess.loadError": "ファイル準備の設定を取得できませんでした。",
+  "settings.preprocess.saveError": "ファイル準備の設定を保存できませんでした。",
   "settings.services.subtitle":
     "ファイル準備・文書解析など各工程のサービスの稼働状態を確認し、起動・停止します。",
   "settings.services.overview.title": "マイクロサービス",
