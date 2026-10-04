@@ -8710,6 +8710,58 @@ test("sql to question page reverse-generates a business question with one primar
   await expectNoHorizontalScroll(page);
 });
 
+test("SQL から質問は保存した業務プロファイルが一覧に無ければ先頭のプロファイルへ切り替える (#913)", async ({ page }) => {
+  const api = await mockNl2SqlApi(page);
+  const usageContextIds: string[] = [];
+  // 削除・アーカイブ・利用権限の解除で一覧から消えたプロファイルは、usage-context が 404 になる。
+  await page.route("**/api/nl2sql/profiles/*/usage-context", async (route) => {
+    const profileId = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-2) ?? "");
+    usageContextIds.push(profileId);
+    if (profileId === "deleted-profile") {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "業務プロファイルが見つかりません。" }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  // 前回の訪問で選んだ業務プロファイル（作業状態）が、今は一覧に無い。
+  await page.addInitScript(
+    ({ ownerKey, profileKey, sqlKey, owner }) => {
+      if (sessionStorage.getItem("e2e-seeded")) return;
+      sessionStorage.setItem("e2e-seeded", "1");
+      sessionStorage.setItem(ownerKey, owner);
+      sessionStorage.setItem(profileKey, JSON.stringify({ at: Date.now(), value: "deleted-profile" }));
+      sessionStorage.setItem(sqlKey, JSON.stringify({ at: Date.now(), value: "SELECT 1 FROM OLD_TABLE" }));
+    },
+    {
+      ownerKey: `${WORKSPACE_DRAFT_PREFIX}owner`,
+      profileKey: draftKey(systemAdminMe.user_uuid, "legacy", "/sql-to-question", "selectedProfileId"),
+      sqlKey: draftKey(systemAdminMe.user_uuid, "legacy", "/sql-to-question", "sql:deleted-profile"),
+      owner: systemAdminMe.user_uuid,
+    }
+  );
+
+  await page.goto("/sql-to-question");
+  await expectSelectFieldValue(page.getByRole("combobox", { name: "業務プロファイル" }), "default");
+  await expect(page.getByTestId("sql-to-question-table-count")).toHaveText("参照表 1");
+  await expect(page.getByText("業務プロファイルが見つかりません。")).toHaveCount(0);
+  expect(usageContextIds).not.toContain("deleted-profile");
+  // 消えたプロファイルの下書きは使わず、切り替え先の下書き（空）を出す。
+  await expect(sqlToQuestionInput(page)).toHaveValue("");
+
+  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await page.getByRole("button", { name: "SQL 分析・質問生成" }).click();
+  await expect.poll(() => api.reverseDeepPayload).toEqual({
+    sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
+    profile_id: "default",
+    use_glossary: false,
+  });
+  await expectNoHorizontalScroll(page);
+});
+
 test("sql to question page uses shared tabs, panel styling and a step indicator", async ({ page }) => {
   await mockNl2SqlApi(page);
 
