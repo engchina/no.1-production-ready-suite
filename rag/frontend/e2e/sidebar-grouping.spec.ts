@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./fixtures/test";
 import { DB_STATUS_OK, LOCAL_AUTH_ME } from "./_helpers";
 
 async function mockApi(page: Page) {

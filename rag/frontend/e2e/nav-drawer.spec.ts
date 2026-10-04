@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./fixtures/test";
 import { LOCAL_AUTH_ME } from "./_helpers";
 
 // md 未満のナビのドロワー（#367。platform の AppShell）。desktop は従来のサイドバーのまま。

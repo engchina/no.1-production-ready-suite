@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "./fixtures/test";
 
 import { expectedControlHeight, expectNoPageOverflow, SYSTEM_TABLES_STATUS_OK, LOCAL_AUTH_ME } from "./_helpers";
 

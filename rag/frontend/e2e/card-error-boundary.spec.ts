@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/test";
 
 import { SYSTEM_TABLES_STATUS_OK, mockLocalAuth } from "./_helpers";
 

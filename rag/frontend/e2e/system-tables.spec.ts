@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./fixtures/test";
 import { mockAuthUser, mockLocalAuth } from "./_helpers";
 
 type SchemaStatus = "missing" | "partial" | "outdated" | "ready";

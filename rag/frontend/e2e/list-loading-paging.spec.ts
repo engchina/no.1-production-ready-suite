@@ -1,4 +1,4 @@
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "./fixtures/test";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth, openChatHistory } from "./_helpers";
 
 // Issue 265: 読み込み中・一覧の縦スクロール・ページングを NL2SQL の基準にそろえる。

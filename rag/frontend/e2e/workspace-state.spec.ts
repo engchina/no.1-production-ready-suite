@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "./fixtures/test";
 
 import { mockDatabaseReady, mockLocalAuth, openChatHistory, openSidebarNav, selectSearchAnswerProfile } from "./_helpers";
 

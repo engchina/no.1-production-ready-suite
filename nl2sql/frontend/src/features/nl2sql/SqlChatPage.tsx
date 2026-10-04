@@ -43,9 +43,11 @@ import {
   useWorkspaceIdentity,
   useWorkspaceState,
 } from "@/components/WorkspaceState";
-import { apiGet, apiPost } from "@/lib/api";
+import { ApiErrorBanner } from "@/components/ApiErrorBanner";
+import { apiGet, apiPost, isTransportError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { randomUuid } from "@/lib/randomUuid";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import {
   useProfileUsageContext,
@@ -71,6 +73,47 @@ const inFlight = (job: JobData | undefined) =>
   job?.status === "pending" || job?.status === "running";
 const errorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
+
+/**
+ * SQL の生成のジョブを投入する。job ID は送信の前に画面が決める（#900）。
+ *
+ * 投入の応答が上限までに届かない（timeout・通信断）ときも、backend はジョブを作り終えていることが
+ * ある。そのときは同じ ID でジョブを取り直し、会話に表示して生成の完了を待つ（二重に送らない）。
+ */
+async function submitChatJob(
+  body: Record<string, unknown>,
+): Promise<JobCreateData | JobData> {
+  const clientJobId = randomUuid();
+  try {
+    return await apiPost<JobCreateData>(
+      "/api/nl2sql/jobs",
+      { ...body, client_job_id: clientJobId },
+      { timeoutMs: API_TIMEOUT_MS.jobSubmit },
+    );
+  } catch (cause) {
+    if (!isTransportError(cause)) throw cause;
+    try {
+      return await apiGet<JobData>(
+        `/api/nl2sql/jobs/${encodeURIComponent(clientJobId)}`,
+        { timeoutMs: API_TIMEOUT_MS.interactiveDetail },
+      );
+    } catch {
+      throw cause;
+    }
+  }
+}
+
+/** 送信の応答が届かなかったときは、ジョブが作られている可能性と確かめ方を出す。 */
+function sendFailureText(error: unknown) {
+  if (!isTransportError(error) || error.kind !== "timeout" || !error.timeoutMs)
+    return {};
+  return {
+    summary: t("chat.sendTimeout", {
+      seconds: Math.ceil(error.timeoutMs / 1000),
+    }),
+    nextAction: t("chat.sendTimeout.action"),
+  };
+}
 const dateFormatter = new Intl.DateTimeFormat("ja-JP", {
   timeZone: "Asia/Tokyo",
   month: "numeric",
@@ -202,18 +245,14 @@ export function SqlChatPage() {
   const generating = turns.some(inFlight);
   const send = useMutation({
     mutationFn: (question: string) =>
-      apiPost<JobCreateData>(
-        "/api/nl2sql/jobs",
-        {
-          question,
-          profile_id: selectedProfileId,
-          engine,
-          generation_only: true,
-          previous_job_id: latest?.job_id ?? null,
-          use_ontology_context: true,
-        },
-        { timeoutMs: API_TIMEOUT_MS.interactiveDetail },
-      ),
+      submitChatJob({
+        question,
+        profile_id: selectedProfileId,
+        engine,
+        generation_only: true,
+        previous_job_id: latest?.job_id ?? null,
+        use_ontology_context: true,
+      }),
     onSuccess: async (job, question) => {
       const id = conversationId || job.job_id;
       // 応答の本文は保存しない。会話 ID と未送信の草稿だけを一時保存する。
@@ -243,6 +282,10 @@ export function SqlChatPage() {
         }),
       );
       await queryClient.invalidateQueries({ queryKey: chatKey });
+    },
+    onError: () => {
+      // 応答が届かなくてもジョブが作られていることがある。履歴と会話を取り直して表示に反映する。
+      void queryClient.invalidateQueries({ queryKey: chatKey });
     },
     onSettled: () => {
       sendingRef.current = false;
@@ -309,18 +352,21 @@ export function SqlChatPage() {
     <>
       {history.isPending ? <ListSkeleton rows={3} /> : null}
       {history.isError ? (
-        <Banner severity="danger">
-          {errorMessage(history.error, t("chat.loadFailed"))}
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            icon={RefreshCw}
-            onClick={() => void history.refetch()}
-          >
-            {t("chat.retry")}
-          </Button>
-        </Banner>
+        <ApiErrorBanner
+          error={history.error}
+          fallback={t("chat.loadFailed")}
+          action={
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              icon={RefreshCw}
+              onClick={() => void history.refetch()}
+            >
+              {t("chat.retry")}
+            </Button>
+          }
+        />
       ) : null}
       {history.isSuccess &&
       !history.data.pages.some((page) => page.items.length) ? (
@@ -541,18 +587,21 @@ export function SqlChatPage() {
                   />
                 ) : null}
                 {conversationId && conversation.isError ? (
-                  <Banner severity="danger">
-                    {errorMessage(conversation.error, t("chat.loadFailed"))}
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      icon={RefreshCw}
-                      onClick={() => void conversation.refetch()}
-                    >
-                      {t("chat.retry")}
-                    </Button>
-                  </Banner>
+                  <ApiErrorBanner
+                    error={conversation.error}
+                    fallback={t("chat.loadFailed")}
+                    action={
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        icon={RefreshCw}
+                        onClick={() => void conversation.refetch()}
+                      >
+                        {t("chat.retry")}
+                      </Button>
+                    }
+                  />
                 ) : null}
                 {!conversationId && !send.isPending ? (
                   <EmptyState
@@ -655,14 +704,19 @@ export function SqlChatPage() {
                   />
                 </FieldActionRow>
                 {send.isError ? (
-                  <Banner severity="danger">
-                    {errorMessage(send.error, t("chat.sendFailed"))}
-                  </Banner>
+                  <ApiErrorBanner
+                    error={send.error}
+                    fallback={t("chat.sendFailed")}
+                    testId="sql-chat-send-error"
+                    {...sendFailureText(send.error)}
+                  />
                 ) : null}
                 {stop.isError ? (
-                  <Banner severity="danger">
-                    {errorMessage(stop.error, t("chat.stopFailed"))}
-                  </Banner>
+                  <ApiErrorBanner
+                    error={stop.error}
+                    fallback={t("chat.stopFailed")}
+                    testId="sql-chat-stop-error"
+                  />
                 ) : null}
                 {turns.length >= 50 ? (
                   <Banner severity="info">{t("chat.limit")}</Banner>
