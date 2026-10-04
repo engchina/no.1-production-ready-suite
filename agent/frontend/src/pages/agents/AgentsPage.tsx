@@ -137,7 +137,7 @@ export function AgentsPage() {
               summary={agents.data ? listCountLabel(visibleAgents.length, agentList.length) : undefined}
               testId="agent-list-toolbar"
             />
-            <QueryState query={agents} loadingLabel={t("loading.agents")} skeleton={<TableSkeleton columns={6} />}>
+            <QueryState query={agents} loadingLabel={t("loading.agents")} skeleton={<TableSkeleton columns={7} />}>
               <AgentTable
                 agents={visibleAgents}
                 resetKey={agentQuery}

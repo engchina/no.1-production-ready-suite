@@ -353,6 +353,20 @@ test("一般ユーザーには管理者向けの実行ユーザー情報を表�
   await expect(historyRows(page)).toHaveCount(3);
   await expect(page.getByTestId("history-executor")).toHaveCount(0);
   await expect(page.getByText(/他ユーザー|other-login/)).toHaveCount(0);
+  // SQL 生成（menu.query）を開けない利用者には、遷移先が権限なしになる「この質問で再実行」を出さない（#912）。
+  await expect(page.getByTestId("history-detail")).toBeVisible();
+  await expect(page.getByRole("button", { name: "この質問で再実行" })).toHaveCount(0);
+});
+
+test("SQL 生成を使える利用者は履歴から質問を引き継いで再実行できる (#912)", async ({ page }) => {
+  await page.route("**/api/auth/me", (route) => fulfillJson(route, {
+    ...systemAdminMe, is_system_admin: false, role_codes: ["ANALYST"], permissions: ["menu.history", "menu.query"],
+  }));
+  await mockHistory(page);
+  await page.goto("/history");
+  await page.getByRole("button", { name: "この質問で再実行" }).click();
+  await expect(page).toHaveURL(/\/query\?question=/);
+  expect(new URL(page.url()).searchParams.get("question")).toBe(historyItems[0].question);
 });
 
 test("実行履歴の安全とブロックの定義は操作なしで読めて履歴選択でも参照できる", async ({ page }, testInfo) => {
@@ -780,9 +794,51 @@ test("実行履歴は読込失敗を既存データなしでも再試行でき�
   await expect(alert).toContainText("履歴サービスを利用できません。");
   await expect(alert).toContainText("通信状態を確認して再試行してください。");
   await expect(page.getByRole("region", { name: "安全状態の見方" })).toBeVisible();
+  // 取得できなかったことを「履歴はまだありません」（空）と取り違えさせない（#912）。
+  await expect(page.getByTestId("history-list-unavailable")).toContainText("履歴を表示できません");
+  await expect(page.getByText("履歴はまだありません")).toHaveCount(0);
+  await expect(page.getByText("条件に一致する履歴がありません")).toHaveCount(0);
   shouldFail = false;
   await alert.getByRole("button", { name: "履歴更新" }).click();
   await expect(historyRows(page)).toHaveCount(3);
+});
+
+test("絞り込みの取得が失敗したら前の条件の一覧を新しい条件の結果として出さない (#912)", async ({ page }) => {
+  let failBad = true;
+  await page.route("**/api/nl2sql/history**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("rating") === "bad" && failBad) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "履歴サービスを利用できません。" }),
+      });
+      return;
+    }
+    const filtered = historyItemsForRequest(url, historyItems);
+    await fulfillJson(route, { items: filtered, next_cursor: "", total: filtered.length });
+  });
+  await page.goto("/history");
+  await expect(historyRows(page)).toHaveCount(3);
+
+  const feedback = page.getByRole("combobox", { name: "利用者評価フィルター", exact: true });
+  await chooseSelectFieldOption(feedback, "bad");
+  await expect(page.getByRole("alert")).toContainText("履歴サービスを利用できません。");
+  // 「違う」の条件で、前の条件（すべて）の行・件数を出さない。絞り込みの欄は残して条件を変えられる。
+  await expect(historyRows(page)).toHaveCount(0);
+  await expect(page.getByTestId("history-list-unavailable")).toContainText("履歴を表示できません");
+  await expect(page.getByText("条件に一致する履歴がありません")).toHaveCount(0);
+  await expect(page.getByTestId("history-load-more")).toHaveCount(0);
+  await expect(page.getByTestId("history-filter-grid")).toBeVisible();
+  await expect(page.getByTestId("history-detail")).toHaveCount(0);
+
+  // 再試行で今の条件の結果に置き換わる。
+  failBad = false;
+  await page.getByRole("alert").getByRole("button", { name: "履歴更新" }).click();
+  // historyItems のうち利用者評価が「違う」（bad）は「請求金額を確認」の 1 件。
+  await expect(historyRows(page)).toHaveCount(1);
+  await expect(historyRows(page).first()).toContainText("請求金額を確認");
+  await expect(page.getByTestId("history-list-unavailable")).toHaveCount(0);
 });
 
 test("実行履歴は続きがあるとき「さらに読み込む」で追加取得する", async ({ page }) => {

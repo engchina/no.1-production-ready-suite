@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 import { dbUser } from "./fixtures/auth";
 
@@ -203,6 +204,67 @@ test("承認待ちの判断は結果と経過のどちらでも見つかる", as
   await expect(bar.getByRole("button", { name: "承認", exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "実行の経過", exact: true }).click();
   await expect(bar.getByRole("button", { name: "承認", exact: true })).toBeVisible();
+});
+
+function seedPendingApproval(mockApi: MockApi) {
+  seedRun(mockApi, "run-layout", "waiting_approval");
+  const approval: Record<string, unknown> = {
+    id: "approval-layout",
+    run_id: "run-layout",
+    step_id: "step-query",
+    status: "pending",
+    tool_call: { name: "nl2sql__nl2sql_query", arguments: {} },
+    reason: "承認が必要",
+    created_at: MOCK_NOW,
+  };
+  mockApi.state.runs[0].approvals = [approval];
+  return approval;
+}
+
+const CHANGED_DURING_REVIEW = "この承認の状態が変わりました。最新の内容を確認してください。";
+
+/** 詳細の操作（狭い幅では「その他の操作」に入る）を押す。 */
+async function detailAction(page: Page, name: string) {
+  const bar = page.getByTestId("run-object-actions");
+  await expect(bar).toBeVisible();
+  const direct = bar.getByRole("button", { name, exact: true });
+  if (await direct.count()) return direct.click();
+  await bar.getByRole("button", { name: /その他の操作/ }).click();
+  await page.getByRole("menuitem", { name, exact: true }).click();
+}
+
+// #919: 承認の画面（#877）と同じく、判断の結果は返却値で確かめる。
+test("判断の返却値が判断済みでなければ、承認の成功と案内しない", async ({ page, mockApi }) => {
+  const approval = seedPendingApproval(mockApi);
+  await page.route("**/api/approvals/approval-layout/decision", async (route) => {
+    // 送る前に実行が取り消された（backend は 200 で、承認を cancelled にした Run を返す）。
+    approval.status = "cancelled";
+    mockApi.state.runs[0].status = "cancelled";
+    await route.fulfill({ json: { data: mockApi.state.runs[0], error_messages: [], warning_messages: [] } });
+  });
+  await page.goto("/runs?id=run-layout");
+  await detailAction(page, "承認");
+  await page.getByRole("alertdialog").getByRole("button", { name: "承認", exact: true }).click();
+  await expect(page.getByText(CHANGED_DURING_REVIEW, { exact: true })).toBeVisible();
+  await expect(page.getByText("ツールの実行を承認しました", { exact: true })).toHaveCount(0);
+  // 返却値（取消済み）を反映し、承認待ちの表示を消す。
+  await expect(page.getByText("承認待ち", { exact: true })).toHaveCount(0);
+});
+
+test("確認中に他の操作者が判断した承認には、古い状態で判断を送らない", async ({ page, mockApi }) => {
+  const approval = seedPendingApproval(mockApi);
+  await page.goto("/runs?id=run-layout");
+  await detailAction(page, "却下");
+  const requestCount = mockApi.requests.filter((item) => item.path === "/api/runs").length;
+  approval.status = "approved";
+  approval.decided_by = "another.reviewer";
+  approval.decided_at = MOCK_NOW;
+  await expect
+    .poll(() => mockApi.requests.filter((item) => item.path === "/api/runs").length, { timeout: 8_000 })
+    .toBeGreaterThan(requestCount);
+  await page.getByRole("alertdialog").getByRole("button", { name: "却下", exact: true }).click();
+  await expect(page.getByText(CHANGED_DURING_REVIEW, { exact: true })).toBeVisible();
+  expect(mockApi.lastRequest("POST", "/api/approvals/approval-layout/decision")).toBeUndefined();
 });
 
 test("一覧の2ページ目から詳細を開いて戻ると、同じページと行に戻る", async ({ page, mockApi }) => {

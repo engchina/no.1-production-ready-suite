@@ -144,8 +144,19 @@ export function RunsPage() {
     mutationFn: ({ approval, approved }: { approval: ApprovalRequest; approved: boolean }) =>
       // 決定者はログイン中の利用者から server が決める（#215）。
       agentApi.decideApproval(approval.id, { approved }),
-    onSuccess: (_data, { approved }) => {
-      toast.success(approved ? t("approval.decided") : t("approval.rejected"));
+    // 判断の結果は返却値の承認の状態で確かめる。先に取り消された・他の操作者が判断した承認は、backend が
+    // 状態を変えずに 200 で返すため、成功と案内しない（承認の画面と同じ。#877 / #919）。
+    onSuccess: (updatedRun, { approval }) => {
+      const outcome = updatedRun.approvals.find((item) => item.id === approval.id)?.status;
+      if (outcome === "approved" || outcome === "rejected") {
+        toast.success(outcome === "approved" ? t("approval.decided") : t("approval.rejected"));
+      } else {
+        toast.info(t("approval.changedDuringReview"));
+      }
+      // 返却値を先に反映し、再取得を待つ間の二重判断を防ぐ。
+      queryClient.setQueryData<{ runs: RunState[] }>(["runs"], (current) => ({
+        runs: (current?.runs ?? []).map((run) => (run.id === updatedRun.id ? updatedRun : run)),
+      }));
       refreshRunQueries();
     },
     onError: (error) => toast.error(t("run.decideFailed"), { description: error.message }),
@@ -305,10 +316,19 @@ export function RunsPage() {
       tone: approved ? "info" : "danger",
     });
     if (!ok) return;
+    // 確認中に再取得で状態が変わっていたら（他の操作者の判断・実行の取消）、古い状態で送らない（#919）。
+    const latest = queryClient
+      .getQueryData<{ runs: RunState[] }>(["runs"])
+      ?.runs.find((item) => item.id === run.id)
+      ?.approvals.find((item) => item.id === approval.id);
+    if (!latest || latest.status !== "pending") {
+      toast.info(t("approval.changedDuringReview"));
+      return;
+    }
     if (viaWebSocket(run)) {
-      websocketState.sendApprovalDecision(approval.id, approved);
+      websocketState.sendApprovalDecision(latest.id, approved);
     } else {
-      decideApproval.mutate({ approval, approved });
+      decideApproval.mutate({ approval: latest, approved });
     }
   }
 
