@@ -7,7 +7,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  Button,
+  FormActionBar,
   FormStatus,
   TimedLoadingState,
   FormSkeleton,
@@ -28,6 +28,7 @@ import { useValuesChanged } from "@/lib/render-sync";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useGuardrailSettings, useUpdateGuardrailSettings } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 const POLICY_ORDER: GuardrailPolicyName[] = ["standard", "strict", "lenient", "regulated"];
@@ -38,7 +39,6 @@ export function GuardrailSettingsClient() {
   const save = useUpdateGuardrailSettings();
   const [policy, setPolicy] = useState<GuardrailPolicyName | null>(null);
   const [backend, setBackend] = useState<GuardrailBackend | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // server 値が変わったレンダーで、選択を server 値に戻す。
   const serverChanged = useValuesChanged([query.data]);
@@ -47,13 +47,16 @@ export function GuardrailSettingsClient() {
     setBackend(query.data.backend);
   }
 
-  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
-  useLeaveGuard(Boolean(
+  // 未保存の選択があるときは離脱を確認し、保存中は離脱を止める。
+  useLeaveGuard(
+    Boolean(
       query.data &&
         policy !== null &&
         backend !== null &&
         (policy !== query.data.policy || backend !== query.data.backend)
-    ));
+    ),
+    save.isPending
+  );
 
   if (query.isPending) {
     return (
@@ -103,34 +106,31 @@ export function GuardrailSettingsClient() {
 
   function selectPolicy(next: GuardrailPolicyName) {
     save.reset();
-    setSuccessMessage(null);
     setPolicy(next);
   }
 
   function selectBackend(next: GuardrailBackend) {
     save.reset();
-    setSuccessMessage(null);
     setBackend(next);
   }
 
   function resetForm() {
     save.reset();
-    setSuccessMessage(null);
     setPolicy(settings.policy);
     setBackend(settings.backend);
   }
 
   function submit() {
-    if (!policy || !backend) return;
+    if (!policy || !backend || save.isPending) return;
     save.mutate(
       { policy, backend },
       {
         onSuccess: (data) => {
           setPolicy(data.policy);
           setBackend(data.backend);
-          setSuccessMessage(t("settings.guardrail.actions.saved"));
+          // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
+          toast.success(t("settings.guardrail.actions.saved"));
         },
-        onError: () => setSuccessMessage(null),
       }
     );
   }
@@ -291,33 +291,35 @@ export function GuardrailSettingsClient() {
           <p className="text-xs leading-relaxed text-fg-muted">
             {t("settings.guardrail.capabilityNote")}
           </p>
-          <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
-            <div className="min-h-6">
-              {dirty ? (
+          <FormActionBar
+            ariaLabel={t("settings.guardrail.actions.label")}
+            primaryActions={[
+              {
+                id: "save",
+                label: t("settings.guardrail.actions.save"),
+                icon: Save,
+                loading: save.isPending,
+                disabled: !dirty,
+                onClick: submit,
+              },
+            ]}
+            secondaryActions={[
+              {
+                id: "reset",
+                label: t("settings.guardrail.actions.reset"),
+                icon: RotateCcw,
+                disabled: !dirty || save.isPending,
+                onClick: resetForm,
+              },
+            ]}
+            status={
+              save.isError ? (
+                <FormStatus tone="danger" message={saveError} />
+              ) : dirty ? (
                 <FormStatus tone="warning" message={t("settings.guardrail.actions.unsaved")} />
-              ) : null}
-              {successMessage ? <FormStatus tone="success" message={successMessage} /> : null}
-              {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={resetForm}
-                disabled={!dirty || save.isPending}
-                aria-label={t("settings.guardrail.actions.reset")} icon={RotateCcw}>
-                {t("settings.guardrail.actions.reset")}
-              </Button>
-              <Button
-                type="button"
-                loading={save.isPending}
-                disabled={!dirty}
-                onClick={submit}
-                aria-label={t("settings.guardrail.actions.save")} icon={Save}>
-                {t("settings.guardrail.actions.save")}
-              </Button>
-            </div>
-          </div>
+              ) : null
+            }
+          />
         </CardContent>
       </Card>
     </PageBody>
