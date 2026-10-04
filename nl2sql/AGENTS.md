@@ -180,7 +180,8 @@ npx playwright test tests/e2e/<対象>.spec.ts               # e2e（関係す�
 ### role の権限昇格の防止
 
 - `SYSTEM_ADMIN` 以外が role を更新するとき、追加される実効権限 `expand_permissions(new) - expand_permissions(current)` は actor 自身の実効権限の部分集合でなければならず、違反は `403` で拒否する。暗黙 permission と `grants_all_profile_access` 相当の profile 管理権限も展開後に評価し、自分・他人いずれの role 経由でも権限昇格を許可しない。未保持の既存権限を削除する操作は妨げない。
-- role 作成は未割当のため現行どおり許可できるが、user への role 割当では既存の実効権限部分集合 check を必須とする。role/assignment 変更が次 request から再計算される前提で、変更直後の許可・拒否まで API 回帰テストに含める。
+- role 作成は未割当のため現行どおり許可できるが、user への role 割当では既存の実効権限部分集合 check を必須とする。
+- role の割当（自分のユーザーへの割当を含む）と復元では、機能権限に加えて、role の業務プロファイル利用権限（全業務プロファイル対象でなければ各 ID を actor が利用できること）と Data Grant（同じ条件の Data Grant を actor の有効な role が持つこと）も actor の範囲に収まることを求める（#986。`SecurityService._role_within_actor`）。role/assignment 変更が次 request から再計算される前提で、変更直後の許可・拒否まで API 回帰テストに含める。
 
 ### 状態保持の実装範囲（Issue #298）
 

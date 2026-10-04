@@ -116,8 +116,47 @@ class SecurityService(AuthService):
         )
 
     def _role_within_actor(self, actor: Principal, role: PlatformRoleRecord) -> bool:  # type: ignore[override]
-        return expand_permissions(set(getattr(role, "permissions", set()))).issubset(
+        """ロールを割り当てても、操作者が持たない権限・業務プロファイル・Data Grant が増えないか。
+
+        ロールの割り当て（ユーザー管理）は、機能権限だけでなく、ロールに付いた
+        業務プロファイル利用権限と Data Grant（DeepSec の行の絞り込み）も利用者に与える。
+        操作者は自分のユーザーにも割り当てられるため、3 つとも操作者の範囲に収まる
+        ロールだけを割り当て可能にする（#986）。
+        """
+        if not expand_permissions(set(getattr(role, "permissions", set()))).issubset(
             actor.permissions
+        ):
+            return False
+        if not isinstance(role, RoleRecord):
+            return True
+        return self._role_profile_access_within_actor(
+            actor, role
+        ) and self._role_data_entitlements_within_actor(actor, role)
+
+    @staticmethod
+    def _role_profile_access_within_actor(actor: PlatformPrincipal, role: RoleRecord) -> bool:
+        """ロールの業務プロファイル利用権限が、操作者の利用できる業務プロファイルに収まるか。
+
+        全業務プロファイルを対象にする権限（業務プロファイル管理）は、機能権限の判定で確かめ済み。
+        """
+        if grants_all_profile_access(role.permissions) or not role.allowed_profile_ids:
+            return True
+        if not isinstance(actor, Principal):
+            return actor.is_system_admin
+        return all(actor.can_use_profile(profile_id) for profile_id in role.allowed_profile_ids)
+
+    @classmethod
+    def _role_data_entitlements_within_actor(
+        cls, actor: PlatformPrincipal, role: RoleRecord
+    ) -> bool:
+        """ロールの Data Grant が、操作者の有効なロールの Data Grant と同じ条件のものだけか。"""
+        if not role.entitlements or actor.is_system_admin:
+            return True
+        if not isinstance(actor, Principal):
+            return False
+        held = {cls._data_entitlement_policy_signature(item) for item in actor.data_entitlements}
+        return all(
+            cls._data_entitlement_policy_signature(item) in held for item in role.entitlements
         )
 
     def _assert_actor_can_restore_role(  # type: ignore[override]
@@ -131,6 +170,11 @@ class SecurityService(AuthService):
             raise SecurityApiError(403, "自分が持たない権限を含むロールは復元できません。")
         if role.allowed_profile_ids:
             self._assert_actor_can_manage_profile_access(actor)
+        # 復元すると、割り当て済みの利用者に Data Grant が戻る（#986）。
+        if not self._role_data_entitlements_within_actor(actor, role):
+            raise SecurityApiError(
+                403, "自分が持たないデータ権限（Data Grant）を含むロールは復元できません。"
+            )
 
     def _assert_role_deletable(self, role: PlatformRoleRecord) -> None:
         if isinstance(role, RoleRecord) and role.entitlements:
