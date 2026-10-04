@@ -10,6 +10,7 @@ import { t } from "./i18n";
 import {
   ApiError,
   apiErrorFromEnvelope,
+  apiErrorFromFetchFailure,
   notifyResponseAuthStatus,
   withCsrfHeaders,
   type ChatMessage,
@@ -54,9 +55,11 @@ export async function streamChatMessage(
   handlers: ChatStreamHandlers,
   signal?: AbortSignal
 ): Promise<void> {
-  const res = await fetch(
-    `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/stream`,
-    {
+  const path = `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/stream`;
+  const request = { method: "POST", path };
+  let res: Response;
+  try {
+    res = await fetch(path, {
       method: "POST",
       // Cookie セッションの CSRF（#214）。
       headers: withCsrfHeaders("POST", {
@@ -66,8 +69,11 @@ export async function streamChatMessage(
       credentials: "same-origin",
       body: JSON.stringify(body),
       signal,
-    }
-  );
+    });
+  } catch (cause) {
+    // 通信断（`TypeError: Failed to fetch`）は利用者向けの文の ApiError にする。中止はそのまま（#906）。
+    throw apiErrorFromFetchFailure(cause, request) ?? cause;
+  }
 
   if (!res.ok || !res.body) {
     // 401 はログインへ。範囲外の 403（RAG_SCOPE_FORBIDDEN）はチャット内で理由を見せる（#224）。
@@ -94,7 +100,14 @@ export async function streamChatMessage(
   let buffer = "";
 
   while (true) {
-    const { value, done } = await reader.read();
+    let chunk: ReadableStreamReadResult<Uint8Array>;
+    try {
+      chunk = await reader.read();
+    } catch (cause) {
+      // 受信の途中で接続が切れた（`TypeError: network error` など）。中止はそのまま（#906）。
+      throw apiErrorFromFetchFailure(cause, request) ?? cause;
+    }
+    const { value, done } = chunk;
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     buffer = buffer.replace(/\r\n/g, "\n");

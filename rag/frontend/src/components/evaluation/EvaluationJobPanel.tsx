@@ -1,4 +1,5 @@
 import {
+  ApiErrorDetailList,
   Banner,
   Button,
   Card,
@@ -24,6 +25,7 @@ import {
   evaluationJobStatusLabel,
   evaluationJobTimeLimitLabel,
   isEvaluationJobActive,
+  splitEvaluationJobFailure,
 } from "./evaluation-job";
 
 /**
@@ -112,7 +114,7 @@ export function EvaluationJobPanel({
         {active ? <p className="text-xs text-fg-muted">{t("evaluation.job.timeLimitHint")}</p> : null}
         {job.status === "FAILED" ? (
           <Banner severity="danger" title={t("evaluation.job.failedTitle")}>
-            {job.error_message ?? ""}
+            <EvaluationJobFailureMessage message={job.error_message} />
           </Banner>
         ) : null}
         {job.status === "CANCELLED" ? (
@@ -120,6 +122,25 @@ export function EvaluationJobPanel({
         ) : null}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * job の失敗の本文。原因と対処を本文に出し、例外の種別（技術的な詳細）は「詳細」に畳んで、
+ * 失敗なので開いて出す（UX 契約 messaging.md §10.3）。
+ */
+function EvaluationJobFailureMessage({ message }: { message: string | null }) {
+  const failure = splitEvaluationJobFailure(message);
+  return (
+    <div className="space-y-2">
+      {failure.message ? <p className="break-words">{failure.message}</p> : null}
+      {failure.errorType ? (
+        <ApiErrorDetailList
+          label={t("evaluation.job.failedDetails")}
+          details={[{ label: t("evaluation.job.errorType"), value: failure.errorType }]}
+        />
+      ) : null}
+    </div>
   );
 }
 

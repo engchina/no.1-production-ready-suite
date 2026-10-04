@@ -3,6 +3,7 @@ import { DatabaseSettingsPage } from "@engchina/production-ready-system-settings
 import { useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, api } from "@/lib/api";
+import { draftGuardMessages } from "@/lib/draft-guard-messages";
 import { t } from "@/lib/i18n";
 import { queryKeys } from "@/lib/queries";
 
@@ -15,6 +16,7 @@ export function DatabaseSettingsClient() {
   return (
     <DatabaseSettingsPage
       api={api}
+      draftGuardMessages={draftGuardMessages()}
       errorMessage={(error) =>
         error instanceof ApiError ? error.message : undefined
       }
