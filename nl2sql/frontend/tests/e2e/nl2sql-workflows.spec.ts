@@ -38,6 +38,13 @@ async function closeSelectFieldOptions(combobox: Locator) {
   await expect(combobox).toHaveAttribute("aria-expanded", "false");
 }
 
+/** 用語・同義語 / 共通ルールの取込（全置換）の確認ダイアログで「置き換えて取り込む」を押す（#953）。 */
+async function confirmMaterialReplace(page: Page) {
+  const dialog = page.getByRole("alertdialog");
+  await dialog.getByRole("button", { name: "置き換えて取り込む", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+}
+
 async function readActiveJobState(page: Page) {
   return page.evaluate((keys) => ({ jobId: sessionStorage.getItem(keys.id), startedAt: sessionStorage.getItem(keys.startedAt) }), jobSnapshotKeys);
 }
@@ -10720,6 +10727,9 @@ test("glossary page manages global terms only", async ({ page }) => {
       content: "mock",
     },
   ]);
+  // 取込は登録済みの 21 件を置き換えるので、件数とファイル名を示して確認する（#953）。
+  await expect(page.getByRole("alertdialog")).toContainText("登録済みの用語・同義語 21 件を、terms.xlsx の内容ですべて置き換えます。");
+  await confirmMaterialReplace(page);
   await expect(page.getByText("用語・同義語を 1 件取り込みました。")).toBeVisible();
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "粗利" })).toBeVisible();
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "INVOICES.PROFIT" })).toBeVisible();
@@ -10819,6 +10829,49 @@ test("glossary global data shows empty, loading, and server error states", async
   await expectNoHorizontalScroll(page);
 });
 
+test("glossary and global rules do not show an empty list when the first load fails", async ({ page }) => {
+  // #953: 取得の失敗を「データがありません」（空）と取り違えさせず、取込（全置換）は件数が分からない旨を示して確認する。
+  await mockNl2SqlApi(page);
+  let fail = true;
+  let imports = 0;
+  await page.route("**/api/nl2sql/legacy-learning-material", (route) => {
+    if (fail) {
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "読込エラー" }) });
+    }
+    return fulfillJson(route, { glossary: { 売上: "INVOICES.TOTAL_AMOUNT" }, rules: ["SELECT のみ"] });
+  });
+  page.on("request", (request) => {
+    if (/\/legacy-learning-material\/(terms|rules)\/import$/u.test(new URL(request.url()).pathname)) imports += 1;
+  });
+
+  for (const material of [
+    { path: "/glossary-rules", unavailable: "glossary-terms-unavailable", title: "用語・同義語を表示できません", empty: "データがありません。", count: /^用語・同義語 \d+$/u, dropzone: "glossary-rules-panel-heading-file-dropzone", preview: "glossary-terms-preview", previewText: "売上" },
+    { path: "/global-rules", unavailable: "global-rules-unavailable", title: "共通ルールを表示できません", empty: "共通ルールがありません。", count: /^ルール \d+$/u, dropzone: "global-rules-file-dropzone", preview: "global-rules-preview", previewText: "SELECT のみ" },
+  ]) {
+    fail = true;
+    await page.goto(material.path);
+    await expect(page.getByRole("alert")).toContainText("読込エラー");
+    await expect(page.getByTestId(material.unavailable)).toContainText(material.title);
+    await expect(page.getByText(material.empty, { exact: true })).toHaveCount(0);
+    await expect(page.getByText(material.count)).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+
+    await dropFiles(page, page.getByTestId(material.dropzone), [
+      { name: "replace.xlsx", type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content: "mock" },
+    ]);
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("今の登録内容を取得できていないため、件数を確認できません。");
+    await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(imports).toBe(0);
+
+    fail = false;
+    await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+    await expect(page.getByTestId(material.preview)).toContainText(material.previewText);
+    await expect(page.getByTestId(material.unavailable)).toHaveCount(0);
+  }
+});
+
 test("glossary and global rules imports use stable errors for non JSON responses", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.unroute("**/api/nl2sql/legacy-learning-material/terms/import");
@@ -10839,6 +10892,7 @@ test("glossary and global rules imports use stable errors for non JSON responses
       content: "mock",
     },
   ]);
+  await confirmMaterialReplace(page);
   const glossaryAlert = page.getByRole("alert");
   await expect(glossaryAlert).toContainText("用語・同義語データの取込に失敗しました。");
   await expect(glossaryAlert).not.toContainText("Unexpected");
@@ -10861,6 +10915,7 @@ test("glossary and global rules imports use stable errors for non JSON responses
       content: "mock rules",
     },
   ]);
+  await confirmMaterialReplace(page);
   const rulesAlert = page.getByRole("alert");
   await expect(rulesAlert).toContainText("共通ルールの取込に失敗しました。");
   await expect(rulesAlert).not.toContainText("Unexpected");
@@ -12564,14 +12619,29 @@ test("glossary and global rules use an initial list skeleton and preserve fetche
     },
   ]);
   await expect(page.getByText(".XLSX ファイルを選択してください")).toBeVisible();
-  await dropFiles(page, page.getByTestId("global-rules-file-dropzone"), [
+  let ruleImports = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/legacy-learning-material/rules/import")) ruleImports += 1;
+  });
+  const rulesWorkbook = [
     {
       name: "rules.xlsx",
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       content: "mock rules",
     },
-  ]);
+  ];
+  // 取込は登録済みのルールを置き換えるので確認する。キャンセルなら送らない（#953）。
+  await dropFiles(page, page.getByTestId("global-rules-file-dropzone"), rulesWorkbook);
+  const replaceDialog = page.getByRole("alertdialog");
+  await expect(replaceDialog).toContainText("登録済みの共通ルール 1 件を、rules.xlsx の内容ですべて置き換えます。");
+  await replaceDialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+  await expect(replaceDialog).toHaveCount(0);
+  await expect(page.getByTestId("global-rules-preview").getByText("SELECT のみ")).toBeVisible();
+  expect(ruleImports).toBe(0);
+  await dropFiles(page, page.getByTestId("global-rules-file-dropzone"), rulesWorkbook);
+  await confirmMaterialReplace(page);
   await expect(page.getByText(/共通ルールを取り込みました/)).toBeVisible();
+  expect(ruleImports).toBe(1);
   await expectNoHorizontalScroll(page);
 
   await page.setViewportSize({ width: 375, height: 900 });
@@ -16702,6 +16772,7 @@ for (const material of [
     });
     const workbook = { name: "replacement.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from("fixture") };
     await file.setInputFiles(workbook);
+    await confirmMaterialReplace(page);
     try {
       await expect(refresh).toBeDisabled();
       await expect(file).toBeDisabled();
@@ -16713,6 +16784,7 @@ for (const material of [
     await expect(file).toBeEnabled();
     await expect(page.getByText("取込を再試行してください", { exact: true })).toBeVisible();
     await file.setInputFiles(workbook);
+    await confirmMaterialReplace(page);
     await expect(page.getByTestId(material.preview)).toContainText("新しい");
     await expect(page.getByTestId(material.preview)).not.toContainText("古い");
     await expect(refresh).toBeEnabled();
