@@ -26,6 +26,7 @@ import {
   RowTitleButton,
   TextareaField,
   TextField,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 import { agentApi, type AgentSkill } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
@@ -100,7 +101,7 @@ export function SkillsPage() {
       toast.success(t("skills.deleted"));
       void invalidate();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
 
   const reloadMutation = useMutation({
@@ -110,7 +111,7 @@ export function SkillsPage() {
       void invalidate();
     },
     // ヘッダーの操作で固定の面が無いため、失敗は danger の Toast（messaging.md §1「失敗を黙って捨てない」）。
-    onError: (error) => toast.error(t("skills.reloadFailed"), { description: error.message }),
+    onError: (error) => toast.error(t("skills.reloadFailed"), { description: apiErrorMessage(error, t("common.error.retryLater")) }),
   });
 
   async function remove(skill: AgentSkill) {
@@ -389,7 +390,7 @@ function SkillEditor({
       <PageBody wide className="space-y-6">
         {/* 保存の失敗はヘッダーの直下の 1 か所だけ（messaging.md §3.3.1。#585）。 */}
         <SaveErrorBanner
-          message={saveMutation.error ? (saveMutation.error as Error).message : null}
+          message={saveMutation.error ? apiErrorMessage(saveMutation.error, t("common.error.operation")) : null}
           attemptKey={saveMutation.submittedAt}
           testId="skill-save-error"
         />

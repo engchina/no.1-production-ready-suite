@@ -17,6 +17,9 @@ from app.schemas.search import (
 
 EvaluationSuiteName = EvaluationSuite
 
+# 評価ケースの id の長さの上限(文字)。job の `current_case_id` の列(VARCHAR2(200 CHAR))。
+EVALUATION_CASE_ID_MAX_CHARS = 200
+
 # 標準回答の長さの上限(文字)。標準回答による評価の入力の予算(48,000 bytes)に収まる長さにする。
 STANDARD_ANSWER_MAX_CHARS = 8000
 
@@ -72,7 +75,9 @@ class EvaluationCase(BaseModel):
     #591)は、既存の golden set を読めるように無視する。
     """
 
-    id: str
+    # 結果の表・job の実行中のケース（`rag_evaluation_jobs.current_case_id` は 200 文字）で
+    # ケースを区別するため、空でない 200 文字までにする（#977）。
+    id: str = Field(..., min_length=1, max_length=EVALUATION_CASE_ID_MAX_CHARS)
     query: str = Field(..., min_length=1)
     relevant_document_ids: list[str] = Field(default_factory=list)
     expected_answer_keywords: list[str] = Field(default_factory=list)
@@ -87,6 +92,15 @@ class EvaluationCase(BaseModel):
         return bool(
             self.relevant_document_ids or self.expected_answer_keywords or self.standard_answer
         )
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        """前後の空白を除き、空の id を拒否する。"""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("評価ケースの id を入力してください。")
+        return cleaned
 
     @field_validator("query")
     @classmethod
@@ -305,6 +319,14 @@ class EvaluationCompareResponse(BaseModel):
         return {**data, "results": results}
 
 
+def _reject_duplicate_case_ids(cases: list[EvaluationCase]) -> None:
+    """結果のケースを id で区別できるよう、ケースの id の重複を拒否する(#977)。"""
+    ids = [case.id for case in cases]
+    duplicates = sorted({case_id for case_id in ids if ids.count(case_id) > 1})
+    if duplicates:
+        raise ValueError(f"評価ケースの id が重複しています: {', '.join(duplicates)}")
+
+
 class EvaluationCompareRequest(BaseModel):
     """複数の回答設定の比較実行リクエスト。"""
 
@@ -316,7 +338,8 @@ class EvaluationCompareRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_unique_experiment_ids(self) -> Self:
-        """比較結果の識別を安定させるため experiment id の重複を拒否する。"""
+        """比較結果の識別を安定させるため experiment id とケースの id の重複を拒否する。"""
+        _reject_duplicate_case_ids(self.cases)
         ids = [experiment.id for experiment in self.experiments]
         duplicates = sorted(
             {experiment_id for experiment_id in ids if ids.count(experiment_id) > 1}
@@ -356,7 +379,8 @@ class EvaluationRunRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_search_options(self) -> Self:
-        """SearchRequest と同じ KB 指定制約を適用する。"""
+        """SearchRequest と同じ KB 指定制約を適用し、ケースの id の重複を拒否する。"""
+        _reject_duplicate_case_ids(self.cases)
         self.filters, self.knowledge_base_ids = _sync_knowledge_base_filter(
             self.filters,
             self.knowledge_base_ids,

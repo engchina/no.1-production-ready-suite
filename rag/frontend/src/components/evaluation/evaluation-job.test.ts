@@ -12,6 +12,7 @@ import {
   evaluationJobTimeLimitLabel,
   isEvaluationJobActive,
   isEvaluationJobId,
+  splitEvaluationJobFailure,
 } from "./evaluation-job";
 
 function job(overrides: Partial<EvaluationJob> = {}): EvaluationJob {
@@ -102,5 +103,26 @@ describe("評価 job の表示（Issue 390）", () => {
         error_message: null,
       })
     ).toBeNull();
+  });
+});
+
+describe("評価 job の失敗の文", () => {
+  it("末尾のエラー種別は本文から分ける（「詳細」に出す）", () => {
+    expect(
+      splitEvaluationJobFailure(
+        "品質評価の実行中に予期しないエラーが発生したため、評価を中断しました。もう一度実行してください。 エラー種別: TimeoutError"
+      )
+    ).toEqual({
+      message: "品質評価の実行中に予期しないエラーが発生したため、評価を中断しました。もう一度実行してください。",
+      errorType: "TimeoutError",
+    });
+  });
+
+  it("エラー種別の無い文（中断・取り消しなど）はそのまま出す", () => {
+    expect(splitEvaluationJobFailure("サービスの停止・再起動で品質評価を中断しました。")).toEqual({
+      message: "サービスの停止・再起動で品質評価を中断しました。",
+      errorType: null,
+    });
+    expect(splitEvaluationJobFailure(null)).toEqual({ message: "", errorType: null });
   });
 });

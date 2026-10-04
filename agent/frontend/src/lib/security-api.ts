@@ -6,6 +6,7 @@
  * 通信（Cookie セッション・CSRF・401 / 403 の通知・エラー形式）は `request`（lib/api.ts）が持つ。
  */
 
+import { apiErrorMessage } from "@engchina/production-ready-ui";
 import {
   rolePermissionTargetSearchParams,
   type AuthApi,
@@ -174,13 +175,15 @@ export function normalizeRole(role: SecurityRole): SecurityRole {
 }
 
 /** 共通のユーザー管理・ロール管理画面へ、入力項目のエラーとエラーコードを渡す。 */
-export const describeSecurityApiError: DescribeApiError = (error) =>
-  error instanceof ApiError
-    ? {
-        message: error.message,
-        code: error.errorCode,
-        fieldErrors: error.fieldErrors.map(({ pointer, message }) => ({ pointer, message })),
-      }
-    : error instanceof Error
-      ? { message: error.message }
-      : undefined;
+export const describeSecurityApiError: DescribeApiError = (error) => {
+  if (error instanceof ApiError) {
+    return {
+      message: error.message,
+      code: error.errorCode,
+      fieldErrors: error.fieldErrors.map(({ pointer, message }) => ({ pointer, message })),
+    };
+  }
+  // timeout・通信断は利用者向けの文、組み込みの例外（英語の文）は共通画面の既定の文にする（#906）。
+  const message = apiErrorMessage(error, "");
+  return message ? { message } : undefined;
+};

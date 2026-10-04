@@ -5608,8 +5608,8 @@ def _ensure_query_session_access(data: QuerySessionData, request: Request) -> Qu
     if principal is None or principal.is_system_admin:
         return data
     assert_profile_access(request, data.session.profile_id)
-    owner = data.session.actor_user_uuid.strip()
-    if not owner or owner == principal.user_uuid:
+    # 持ち主の無い session（認証無効の期間に作ったもの）も本人の物とみなさない（#1126）。
+    if data.session.actor_user_uuid.strip() == principal.user_uuid:
         return data
     raise HTTPException(
         status_code=403,

@@ -1418,3 +1418,55 @@ for (const viewport of [
     await expect(page.getByText("最初のメッセージを送信して会話を始めましょう。")).toBeVisible();
   });
 }
+
+// 別の会話・検索・回答プロファイルへ移ったら前の送信を打ち切り、「送信」に戻す（移った先で送れなくしない）。
+test("類似問の照会中に別の会話を選んでも、送信中のまま残らず送信できる", async ({ page }) => {
+  await mockChat(page, "ready", [userMessage, assistantMessage]);
+  // 類似問の照会は中止できないので、応答しないまま別の会話へ移る。
+  await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", () => new Promise<void>(() => undefined));
+
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  const composer = chatComposer(page);
+  await composer.fill("交通費の上限は？");
+  await composer.press("Enter");
+  const button = page.getByTestId("chat-run-stop");
+  await expect(button).toHaveAccessibleName("停止");
+
+  const history = await openChatHistory(page);
+  await history.getByRole("list", { name: "会話の履歴" }).getByRole("button").filter({ hasText: "件・" }).click();
+  await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
+  await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
+  await expect(button).toHaveAccessibleName("送信");
+  await composer.fill("日当は？");
+  await expect(button).toBeEnabled();
+});
+
+test("生成中に新しい会話を作ると、前の会話の生成を止めて新しい会話で送信できる", async ({ page }) => {
+  await openPersistedConversation(page, 1280, [userMessage, assistantMessage]);
+  await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
+  let streamAborted = false;
+  page.on("requestfailed", (request) => {
+    if (request.url().endsWith("/messages/stream")) streamAborted = true;
+  });
+  await page.route("**/api/chat/conversations/*/messages/stream", () => new Promise<void>(() => undefined));
+  const created = { ...conversationDetail([], null), id: "conv-2" };
+  await page.route("**/api/chat/conversations", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await route.fulfill({ json: { data: created, error_messages: [], warning_messages: [] } });
+  });
+  await page.route("**/api/chat/conversations/conv-2", (route) =>
+    route.fulfill({ json: { data: created, error_messages: [], warning_messages: [] } })
+  );
+
+  const composer = chatComposer(page);
+  await composer.fill("交通費の上限は？");
+  await composer.press("Enter");
+  await expect(page.getByTestId("chat-live-turn").getByTestId("chat-answer-progress")).toBeVisible();
+
+  await page.getByRole("button", { name: "新しい会話" }).click();
+  await expect(page.getByText("最初のメッセージを送信して会話を始めましょう。")).toBeVisible();
+  await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
+  await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("送信");
+  await expect.poll(() => streamAborted).toBe(true);
+});
