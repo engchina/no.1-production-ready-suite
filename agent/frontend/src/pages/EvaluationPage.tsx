@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ClipboardList, Download, Eye, FlaskConical, Pencil, Plus, Trash2 } from "lucide-react";
 import {
@@ -220,6 +220,13 @@ function EvaluationOverview({
   const latest = useQuery({
     queryKey: ["evaluations", 1],
     queryFn: () => agentApi.listEvaluations({ offset: 0, limit: JOBS_PAGE_SIZE }),
+    // 表示していない実行中の評価（前の評価を表示している間の最新の評価）は、ここで終わりを待つ。
+    // 表示中の評価は `job` が取り直す（#965）。
+    refetchInterval: (query) => {
+      const items = query.state.data?.jobs ?? [];
+      const shown = jobId ?? items[0]?.id;
+      return items.some((item) => ACTIVE.has(item.status) && item.id !== shown) ? POLL_INTERVAL_MS : false;
+    },
   });
   const jobs = useQuery({
     queryKey: ["evaluations", jobsPage],
@@ -248,7 +255,17 @@ function EvaluationOverview({
       void queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
     }
   }, [shownStatus, queryClient]);
-  const running = (latest.data?.jobs ?? []).some((item) => ACTIVE.has(item.status)) || (job.data ? ACTIVE.has(job.data.status) : false);
+  // 最新の一覧の実行中の評価が終わったら、評価セット（前回の結果）と最近の評価の他のページも取り直す（#965）。
+  const latestActive = (latest.data?.jobs ?? []).some((item) => ACTIVE.has(item.status));
+  const wasLatestActive = useRef(latestActive);
+  useEffect(() => {
+    if (wasLatestActive.current && !latestActive) {
+      void queryClient.invalidateQueries({ queryKey: ["evaluations"] });
+      void queryClient.invalidateQueries({ queryKey: ["evaluation-sets"] });
+    }
+    wasLatestActive.current = latestActive;
+  }, [latestActive, queryClient]);
+  const running = latestActive || (job.data ? ACTIVE.has(job.data.status) : false);
 
   const cancel = useMutation({
     mutationFn: (id: string) => agentApi.cancelEvaluation(id),

@@ -35,6 +35,8 @@ import { t } from "@/lib/i18n";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 
 export const EVALUATION_MAX_CASES = 50;
+/** 評価ケースの 1 ページの件数。 */
+const CASES_PAGE_SIZE = 10;
 
 /** 画面で編集するケース（期待するツールはカンマ区切りの文字で持つ）。 */
 interface CaseDraft {
@@ -78,6 +80,36 @@ function draftOf(set: EvaluationSet | undefined, agentId: string): SetDraft {
     description: set?.description ?? "",
     cases: set ? set.cases.map((item) => caseDraft(item)) : [caseDraft()],
   };
+}
+
+/**
+ * 保存で付く ID（ID を省いたケースは、使われていない `case-<番号>` を位置の番号から探す）。
+ * backend の `number_cases` と同じ付け方で、ID の欄の placeholder に出す（#965）。
+ */
+function assignedCaseIds(cases: CaseDraft[]): string[] {
+  const used = new Set(cases.map((item) => item.id.trim()).filter(Boolean));
+  return cases.map((item, index) => {
+    const id = item.id.trim();
+    if (id) return id;
+    let number = index + 1;
+    while (used.has(`case-${number}`)) number += 1;
+    used.add(`case-${number}`);
+    return `case-${number}`;
+  });
+}
+
+/** 明示した ID が、ほかのケースの明示した ID と重なるケースの key（保存すると 422 になる。#965）。 */
+function duplicateIdKeys(cases: CaseDraft[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const item of cases) {
+    const id = item.id.trim();
+    if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  return new Set(cases.filter((item) => (counts.get(item.id.trim()) ?? 0) > 1).map((item) => item.key));
+}
+
+function caseInvalid(item: CaseDraft, duplicates: Set<string>): boolean {
+  return !item.question.trim() || !item.expected.trim() || duplicates.has(item.key);
 }
 
 /** 比べるときは画面だけの key を外す。 */
@@ -174,11 +206,13 @@ export function EvaluationSetEditor({
   });
   const { confirmClose } = useEditorLeaveGuard(dirty, save.isPending);
 
-  const pagination = usePagination(draft.cases, 10, { resetKey: evaluationSet?.id ?? "new" });
+  const pagination = usePagination(draft.cases, CASES_PAGE_SIZE, { resetKey: evaluationSet?.id ?? "new" });
   const labels = agentPaginationLabels();
 
   const nameError = submitted && !draft.name.trim() ? t("evaluation.set.nameRequired") : undefined;
   const tooMany = draft.cases.length > EVALUATION_MAX_CASES;
+  const caseIds = assignedCaseIds(draft.cases);
+  const duplicateIds = duplicateIdKeys(draft.cases);
 
   function setField<K extends keyof SetDraft>(key: K, value: SetDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -194,7 +228,7 @@ export function EvaluationSetEditor({
   function addCase() {
     setDraft((current) => ({ ...current, cases: [...current.cases, caseDraft()] }));
     // 追加したケースが見えるページへ移る。
-    pagination.setPage(Math.ceil((draft.cases.length + 1) / 10));
+    pagination.setPage(Math.ceil((draft.cases.length + 1) / CASES_PAGE_SIZE));
   }
 
   function removeCase(key: string) {
@@ -212,11 +246,10 @@ export function EvaluationSetEditor({
 
   function submit() {
     setSubmitted(true);
-    const invalid =
-      !draft.name.trim() ||
-      draft.cases.length === 0 ||
-      tooMany ||
-      draft.cases.some((item) => !item.question.trim() || !item.expected.trim());
+    // エラーのケースが別のページにあると、押しても何も見えないため、最初のエラーのページへ移る（#965）。
+    const firstInvalid = draft.cases.findIndex((item) => caseInvalid(item, duplicateIds));
+    if (firstInvalid >= 0) pagination.setPage(Math.floor(firstInvalid / CASES_PAGE_SIZE) + 1);
+    const invalid = !draft.name.trim() || draft.cases.length === 0 || tooMany || firstInvalid >= 0;
     if (invalid) return;
     save.mutate(toPayload(draft));
   }
@@ -434,7 +467,8 @@ export function EvaluationSetEditor({
           ) : (
             <div className="space-y-3">
               {pagination.pageItems.map((item) => {
-                const number = draft.cases.indexOf(item) + 1;
+                const index = draft.cases.indexOf(item);
+                const number = index + 1;
                 return (
                   <Card key={item.key} data-testid={`evaluation-case-${number}`}>
                     <CardContent className="space-y-3 pt-4">
@@ -453,8 +487,10 @@ export function EvaluationSetEditor({
                             label={t("evaluation.set.caseId")}
                             width="sm"
                             maxLength={100}
-                            placeholder={`case-${number}`}
+                            // 空のまま保存すると付く ID（#965）。
+                            placeholder={caseIds[index]}
                             value={item.id}
+                            error={submitted && duplicateIds.has(item.key) ? t("evaluation.set.caseIdDuplicate") : undefined}
                             onValueChange={(value) => updateCase(item.key, { id: value })}
                           />
                           <Button
