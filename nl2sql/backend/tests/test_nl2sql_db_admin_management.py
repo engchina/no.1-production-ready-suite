@@ -1625,6 +1625,28 @@ def test_admin_sql_confirmed_select_for_update_keeps_control_plane_path() -> Non
     assert result.execution_context == "admin_control_plane"
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT ID FROM T1 FOR UPDATE",
+        "WITH A AS (SELECT ID FROM T1) UPDATE T1 SET NAME = 'X' WHERE ID IN (SELECT ID FROM A)",
+    ],
+)
+def test_admin_sql_select_head_with_mutating_token_still_requires_confirmation(sql: str) -> None:
+    """画面が更新系の語で確認語の欄を出す文は、確認語なしならエラーにせず確認語を求める（#933）。"""
+
+    adapter = _FakeAdminSqlAdapter()
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_sql(DbAdminExecuteRequest(sql=sql, row_limit=10))
+
+    assert adapter.select_calls == []
+    assert adapter.calls == []
+    assert result.executed is False
+    assert result.statements[0].status == "confirmation_required"
+    assert any("ADMIN_EXECUTE" in warning for warning in result.warnings)
+
+
 @pytest.mark.parametrize("table_name", ["PLATFORM_USERS", "RAG_DOCUMENTS", "AGENT_RUNS"])
 def test_admin_sql_blocks_other_product_tables_with_accurate_message(table_name: str) -> None:
     adapter = _FakeAdminSqlAdapter()

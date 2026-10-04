@@ -2314,6 +2314,22 @@ def _admin_select_not_read_only_message(statement: str) -> str:
     return f"{message}（{detail}）" if detail else message
 
 
+# 管理 SQL の画面（AdminSqlPage の `MUTATING_SQL_TOKEN`）が、確認語の欄を出す更新系の語。
+# 先頭が SELECT/WITH でもこれらの語を含む文（`WITH ... UPDATE` や `FOR UPDATE`）には、画面が
+# 確認語の欄を出すので、確認語待ちの経路に残す（#933）。
+_ADMIN_SCREEN_MUTATING_TOKEN = re.compile(
+    r"\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|begin|declare|call)\b",
+    re.IGNORECASE,
+)
+
+
+def _admin_screen_treats_as_select(statement: str) -> bool:
+    """画面が SELECT と判定し確認語の欄を出さない文か（画面の `isSingleSelectSql` と同じ判定）。"""
+
+    masked = _mask_sql_literals_and_comments(_strip_leading_sql_comments(statement))
+    return not _ADMIN_SCREEN_MUTATING_TOKEN.search(masked)
+
+
 def _db_admin_dynamic_sql_error(statement: str) -> str:
     if _admin_statement_type(statement) not in {"PLSQL", "UNKNOWN"}:
         return ""
@@ -15139,11 +15155,13 @@ class Nl2SqlService:
         # 画面は先頭語と更新系の語で SELECT を判定し、確認語の欄を出さない。sqlglot で読み取り専用と
         # 確かめられない SELECT/WITH（構文の誤り・解析器が読めない構文・SELECT INTO）を確認語なしで
         # 受けたら、確認語待ちにせず理由を返す（画面に確認語の欄が無く先へ進めないため。#933）。
-        # 確認語付き（画面が更新系として確認語を求めた FOR UPDATE など）は従来どおり下の経路で扱う。
+        # 画面が更新系の語で確認語を求める文（`WITH ... UPDATE`・FOR UPDATE など）と、確認語付きの
+        # 文は、従来どおり下の確認語の経路で扱う。
         if (
             len(statements) == 1
             and statement_types == ["SELECT"]
             and select_only_flags == [False]
+            and _admin_screen_treats_as_select(statements[0])
             and self._admin_confirmation_error(
                 confirmation=request.confirmation,
                 target="ADMIN_EXECUTE",
