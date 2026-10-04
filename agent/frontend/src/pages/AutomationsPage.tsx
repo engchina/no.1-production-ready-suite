@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, KeyRound, Pencil, Play, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import {
-  Banner,
   Button,
   Card,
   CardContent,
@@ -30,6 +29,8 @@ import {
   type DataTableColumn,
   type EntityAction,
   type StatusVariant,
+  ApiErrorBanner,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 
 import { MissingEditorTarget } from "@/components/EntityLayout";
@@ -194,9 +195,9 @@ function useRunNow() {
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
       if (fired.result === "created") toast.success(t("automation.ranNow"));
       else if (fired.result === "skipped") toast.warning(t("automation.skippedNow"));
-      else toast.error(fired.message);
+      else toast.error(apiErrorMessage(fired, t("common.error.operation")));
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
 }
 
@@ -210,7 +211,7 @@ function useDeleteAutomation(onDeleted?: () => void) {
       toast.success(t("automation.deleted"));
       onDeleted?.();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
   return async (item: Automation) => {
     const ok = await confirm({
@@ -336,7 +337,7 @@ function AutomationList({
                 <TableSkeleton columns={5} />
               </TimedLoadingState>
             ) : list.error ? (
-              <Banner severity="danger">{list.error.message}</Banner>
+              <ApiErrorBanner error={list.error} fallback={t("common.error.load")} />
             ) : allItems.length === 0 ? (
               <EmptyState
                 title={t("automation.list.empty")}
@@ -474,7 +475,7 @@ function AutomationEditor({
       setToken(result.token);
       void queryClient.invalidateQueries({ queryKey: ["automation", result.automation.id] });
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => toast.error(apiErrorMessage(error, t("common.error.operation"))),
   });
   const { confirmClose } = useEditorLeaveGuard(dirty, save.isPending);
 
@@ -614,7 +615,7 @@ function AutomationEditor({
         moreActionsLabel={t("common.moreActions")}
       />
       <PageBody wide className="space-y-6">
-        <SaveErrorBanner message={save.error?.message ?? null} attemptKey={save.submittedAt} testId="automation-save-error" />
+        <SaveErrorBanner message={save.error ? apiErrorMessage(save.error, t("common.error.save")) : null} attemptKey={save.submittedAt} testId="automation-save-error" />
         <fieldset disabled={readOnly} className="min-w-0 space-y-6">
           <Section
             title={t("automation.basic")}

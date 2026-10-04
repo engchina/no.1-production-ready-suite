@@ -97,6 +97,72 @@ test("アップロード保存先は OCI の未設定項目があると保存前
   expect(patchCount).toBe(0);
 });
 
+test("アップロード保存先の読み込み中は経過時間とフォームの形の Skeleton を出す", async ({ page }) => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/settings/upload-storage", async (route) => {
+    await gate;
+    await route.fulfill({
+      json: { data: localStorageSettings, error_messages: [], warning_messages: [] },
+    });
+  });
+
+  await page.goto("/settings/upload-storage");
+
+  const loading = page.getByTestId("settings-upload-storage-loading");
+  await expect(loading).toBeVisible();
+  await expect(loading).toContainText("アップロード保存先設定を読み込んでいます。");
+  await expect(loading.locator('[data-skeleton="form"]')).toHaveCount(1);
+
+  release();
+  await expect(page.locator("#upload-storage-local-dir")).toHaveValue(
+    localStorageSettings.local_storage_dir
+  );
+  await expect(loading).toHaveCount(0);
+});
+
+test("保存の後の再取得に失敗してもフォームを残し、警告と再試行を出す", async ({ page }) => {
+  let current: UploadStorageSettingsData = { ...localStorageSettings };
+  let failGet = false;
+  await page.route("**/api/settings/upload-storage", async (route) => {
+    const request = route.request();
+    if (request.method() === "PATCH") {
+      current = { ...current, ...(request.postDataJSON() as Partial<UploadStorageSettingsData>) };
+      // 保存の応答の後の再取得（invalidate）から失敗させる。
+      failGet = true;
+    } else if (failGet) {
+      await route.fulfill({
+        status: 503,
+        json: { data: null, error_messages: ["一時的に利用できません。"], warning_messages: [] },
+      });
+      return;
+    }
+    await route.fulfill({ json: { data: current, error_messages: [], warning_messages: [] } });
+  });
+
+  await page.goto("/settings/upload-storage");
+  const localDir = page.locator("#upload-storage-local-dir");
+  await expect(localDir).toHaveValue(localStorageSettings.local_storage_dir);
+  await localDir.fill("/u01/data/changed");
+  await page.getByRole("button", { name: "保存" }).click();
+  await expect(page.getByText("保存しました")).toBeVisible();
+
+  // React Query の再試行（既定 3 回）の後に失敗になる。
+  const warning = page.getByText(
+    "最新のアップロード保存先設定を取得できませんでした。表示中の値は前回取得した内容です。再試行してください。"
+  );
+  await expect(warning).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("アップロード保存先設定の取得に失敗しました。")).toHaveCount(0);
+  await expect(localDir).toHaveValue("/u01/data/changed");
+
+  failGet = false;
+  await page.getByRole("button", { name: "再試行" }).click();
+  await expect(warning).toHaveCount(0);
+  await expect(localDir).toHaveValue("/u01/data/changed");
+});
+
 test("アップロード画面から現在の保存先と設定導線を確認できる", async ({ page }) => {
   await mockUploadStorageSettings(page, () => ({
     ...localStorageSettings,

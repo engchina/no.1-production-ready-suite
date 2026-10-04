@@ -2076,6 +2076,74 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("permissions", "expected_status"),
+    [({"menu.security_deepsec"}, 200), ({"menu.security_permissions"}, 403)],
+    ids=["deepsec", "other-menu"],
+)
+def test_deepsec_target_object_detail_route_uses_registered_permission(
+    monkeypatch: pytest.MonkeyPatch,
+    permissions: set[str],
+    expected_status: int,
+) -> None:
+    """`{object_name:path}` の route も、登録した権限で判定する（常に 403 にしない）。"""
+    service = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+    role = service.create_role(
+        role_code="DEEPSEC_DETAIL_READER",
+        display_name="DeepSec の対象の詳細",
+        description="",
+        permissions=permissions,
+        entitlements=[],
+        actor=admin,
+    )
+    _create_active_user(
+        service,
+        admin,
+        login_user_id="deepsec.detail",
+        display_name="DeepSec 担当",
+        role_ids=[role.role_id],
+        password="DeepSecDetail!8642",
+    )
+    calls: list[tuple[str, str, str]] = []
+
+    class _DeepSecStub:
+        def target_object_detail(
+            self, *, owner: str, object_name: str, object_type: str
+        ) -> dict[str, object]:
+            calls.append((owner, object_name, object_type))
+            return {"name": object_name, "owner": owner, "object_type": "TABLE", "columns": []}
+
+    monkeypatch.setattr("app.security.router.get_deepsec_service", lambda: _DeepSecStub())
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            await _login_api(client, "deepsec.detail", "DeepSecDetail!8642")
+            response = await client.get(
+                "/api/security/deepsec/target-objects/HR/EMPLOYEES",
+                params={"object_type": "TABLE"},
+            )
+            assert response.status_code == expected_status, response.text
+            if expected_status == 200:
+                assert response.json()["data"]["qualified_name"] == "HR.EMPLOYEES"
+                # "/" を含む表名も 1 つの object_name として受ける（`:path`）。
+                slashed = await client.get(
+                    "/api/security/deepsec/target-objects/HR/%22A%2FB%22",
+                )
+                assert slashed.status_code == 200, slashed.text
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+    if expected_status == 200:
+        assert calls == [("HR", "EMPLOYEES", "TABLE"), ("HR", '"A/B"', "")]
+    else:
+        assert calls == []
+
+
 def test_security_audit_permission_and_api_are_removed() -> None:
     catalog_codes = {item.code for item in PERMISSION_CATALOG}
 
@@ -3250,6 +3318,16 @@ def test_deepsec_config_patch_updates_runtime_without_restart(
             )
             assert invalid.status_code == 422
             assert settings.oracle_deepsec_enabled is False
+            assert settings.oracle_deepsec_data_user_password == ""
+            assert closed == []
+
+            # 「${...}」は .env を読み直すと展開されて別の値になるので保存しない。
+            interpolated = await client.patch(
+                "/api/security/deepsec/config",
+                json={"data_user_password": "Abc${HOME}defghij"},
+            )
+            assert interpolated.status_code == 422
+            assert "${HOME}" not in interpolated.text
             assert settings.oracle_deepsec_data_user_password == ""
             assert closed == []
 
@@ -5803,3 +5881,100 @@ def test_profile_access_profiles_search_and_page_on_server(
     assert ids_of(q="試験会計")[0] == ["p5"]
     # 選択済みの名前の解決（ids）は検索語と関係なく ID で引く。
     assert ids_of(ids=["p4", "p2", "missing"])[0] == ["p2", "p4"]
+
+
+def test_user_manager_cannot_assign_role_with_profiles_or_data_grants_outside_own_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """権限が収まっても、自分が使えない業務プロファイル・Data Grant を含むロールは割り当てられない。
+
+    #1090。
+    """
+    service = _configure_memory_api_auth(monkeypatch)
+    try:
+        admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+        manager_role = service.create_role(
+            role_code="SCOPED_USER_MANAGER",
+            display_name="ユーザー管理（P1 と SALES）",
+            description="",
+            permissions={"menu.security_users", "menu.query"},
+            entitlements=[("HR.EMPLOYEES", "SALES", "SELECT")],
+            allowed_profile_ids={"P1"},
+            actor=admin,
+        )
+        other_profile_role = service.create_role(
+            role_code="QUERY_P2",
+            display_name="P2 の SQL 生成",
+            description="",
+            permissions={"menu.query"},
+            entitlements=[],
+            allowed_profile_ids={"P2"},
+            actor=admin,
+        )
+        other_grant_role = service.create_role(
+            role_code="QUERY_HR_GRANT",
+            display_name="HR の Data Grant",
+            description="",
+            permissions={"menu.query"},
+            entitlements=[("HR.EMPLOYEES", "HR", "SELECT")],
+            actor=admin,
+        )
+        subset_role = service.create_role(
+            role_code="QUERY_P1_SALES",
+            display_name="P1 と SALES の SQL 生成",
+            description="",
+            permissions={"menu.query"},
+            entitlements=[("HR.EMPLOYEES", "SALES", "SELECT")],
+            allowed_profile_ids={"P1"},
+            actor=admin,
+        )
+        manager_user = _create_active_user(
+            service,
+            admin,
+            login_user_id="scoped.manager",
+            display_name="範囲付きのユーザー管理者",
+            role_ids=[manager_role.role_id],
+            password="ScopedManagerPass!123",
+        )
+        manager, _, _ = service.login("scoped.manager", "ScopedManagerPass!123")
+        assert manager.allowed_profile_ids == {"P1"}
+
+        # 自分自身への割り当て（権限の昇格）を拒否する。新しいユーザーへの割り当ても同じ。
+        for role in (other_profile_role, other_grant_role):
+            with pytest.raises(SecurityApiError, match="割り当てる権限がありません") as error:
+                service.update_user(
+                    manager_user.user_uuid,
+                    expected_version=manager_user.version,
+                    display_name=manager_user.display_name,
+                    status="ACTIVE",
+                    role_ids=[manager_role.role_id, role.role_id],
+                    actor=manager,
+                )
+            assert error.value.status_code == 403
+            with pytest.raises(SecurityApiError, match="割り当てる権限がありません"):
+                service.create_user(
+                    login_user_id=f"new.{role.role_code.lower()}",
+                    display_name="新しいユーザー",
+                    role_ids=[role.role_id],
+                    temporary_password="NewUserStartPass!123",
+                    actor=manager,
+                )
+        again, _, _ = service.login("scoped.manager", "ScopedManagerPass!123")
+        assert again.allowed_profile_ids == {"P1"}
+        assert {item.scope_code for item in again.data_entitlements} == {"SALES"}
+
+        # 範囲外のロールは割り当ての候補にも出さない。範囲内のロールは今までどおり割り当てられる。
+        candidate_codes = {role.role_code for role in service.list_roles_for_actor(manager)}
+        assert "QUERY_P2" not in candidate_codes
+        assert "QUERY_HR_GRANT" not in candidate_codes
+        assert "QUERY_P1_SALES" in candidate_codes
+        created, _ = service.create_user(
+            login_user_id="subset.user",
+            display_name="範囲内の利用者",
+            role_ids=[subset_role.role_id],
+            temporary_password="SubsetStartPass!123",
+            actor=manager,
+        )
+        assert created.role_ids == [subset_role.role_id]
+    finally:
+        reset_security_service()

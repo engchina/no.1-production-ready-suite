@@ -33,6 +33,7 @@ import {
   SaveErrorBanner,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  apiErrorMessage,
 } from "@engchina/production-ready-ui";
 
 import { formatMessage } from "../auth/messages";
@@ -422,7 +423,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
               .catch((cause: unknown) => {
                 if (isAbortError(cause)) throw cause;
                 const message =
-                  cause instanceof Error && cause.message.trim() ? cause.message : m.loadError;
+                  apiErrorMessage(cause, m.loadError);
                 return {
                   key: target.key,
                   rows: [] as RolePermissionTargetItem[],
@@ -449,7 +450,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
       }
     } catch (cause) {
       if (isAbortError(cause)) return;
-      const nextError = cause instanceof Error && cause.message.trim() ? cause.message : m.loadError;
+      const nextError = apiErrorMessage(cause, m.loadError);
       if (sequence === loadSequence.current) setLoadError(nextError);
     } finally {
       if (sequence === loadSequence.current) setLoading(false);
@@ -528,7 +529,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
       startEdit(updated);
       toast.success(m.saved);
     } catch (cause) {
-      setFormError(cause instanceof Error && cause.message.trim() ? cause.message : m.saveError);
+      setFormError(apiErrorMessage(cause, m.saveError));
     } finally {
       setBusy(false);
     }
@@ -1092,7 +1093,7 @@ function TargetPicker<R extends PermissionRole>({
       if (warning) onWarning(target.key, warning);
     } catch (cause) {
       if (isAbortError(cause) || requestSequence !== sequence.current) return;
-      const message = cause instanceof Error && cause.message.trim() ? cause.message : m.loadError;
+      const message = apiErrorMessage(cause, m.loadError);
       if (append) setLoadMoreError(message);
       else setError(message);
     } finally {

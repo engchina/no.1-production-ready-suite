@@ -12,7 +12,7 @@ import {
   type FixedSplitWidePane,
 } from "@engchina/production-ready-ui";
 
-import { EmptyState, ErrorState } from "@/components/StateViews";
+import { EmptyState, ApiErrorState } from "@/components/StateViews";
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
@@ -97,8 +97,9 @@ export function EditorTargetState({
             <MissingEditorTarget id={id} onBack={onBack} />
           </Card>
         ) : (
-          <ErrorState
-            message={error instanceof ApiError ? error.message : errorFallback}
+          <ApiErrorState
+            error={error}
+            fallback={errorFallback}
             onRetry={onRetry}
           />
         )}

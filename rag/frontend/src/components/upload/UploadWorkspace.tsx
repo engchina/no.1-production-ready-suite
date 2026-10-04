@@ -5,7 +5,7 @@ import {
   PageHeader,
   Button,
   Banner,
-  buttonVariants,
+  ButtonLink,
   Card,
   CardContent,
   CardHeader,
@@ -150,10 +150,13 @@ export function UploadWorkspace() {
       { files, knowledgeBaseIds, maxUploadBytes, onProgress: setSendProgress },
       {
         onSuccess: (result) => {
+          setBatchFailedItems(result.failed_items);
+          // 1 件も保存できなかったときは、1 ファイルの失敗と同じく選択を残し、そのまま送り直せるようにする
+          // （結果の画面へ移らないので、選択を消すと選び直す手段が無くなる。#931）。
+          if (result.items.length === 0) return;
           setSelectedFiles([]);
           setBatchItems(result.items);
-          setBatchFailedItems(result.failed_items);
-          setUploaded(result.items[0] ?? null);
+          setUploaded(result.items[0]);
         },
       }
     );
@@ -200,8 +203,9 @@ export function UploadWorkspace() {
               />
             ) : null}
             {mutationError ? <ErrorState message={uploadErrorMessage(mutationError)} /> : null}
+            {/* 選択の画面に失敗が残るのは、1 件も保存できなかったときだけ（#931）。 */}
             {batchFailedItems.length > 0 ? (
-              <BatchUploadFailureList failedItems={batchFailedItems} />
+              <BatchUploadFailureList failedItems={batchFailedItems} allFailed />
             ) : null}
           </>
         ) : (
@@ -228,10 +232,9 @@ export function UploadWorkspace() {
               <Button variant="secondary" icon={Upload} onClick={reset}>
                 {t("upload.uploadAnother")}
               </Button>
-              <Link to={APP_ROUTES.fileList} className={buttonVariants({ variant: "secondary" })}>
-                <List size={16} aria-hidden />
+              <ButtonLink to={APP_ROUTES.fileList} linkComponent={Link} icon={List}>
                 {t("upload.openFileList")}
-              </Link>
+              </ButtonLink>
             </div>
           </>
         )}
@@ -290,14 +293,15 @@ function BatchUploadSummary({
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-2">
-                  <Link
+                  <ButtonLink
                     to={`${APP_ROUTES.documents}/${encodeURIComponent(item.id)}`}
-                    className={buttonVariants({ variant: "secondary", size: "sm" })}
+                    linkComponent={Link}
+                    size="sm"
+                    icon={FileText}
                     aria-label={t("upload.batch.open", { name: item.file_name })}
                   >
-                    <FileText size={14} aria-hidden />
                     {t("upload.batch.openShort")}
-                  </Link>
+                  </ButtonLink>
                 </div>
               </div>
             );
@@ -311,11 +315,17 @@ function BatchUploadSummary({
 
 function BatchUploadFailureList({
   failedItems,
+  allFailed = false,
 }: {
   failedItems: BatchUploadFailedItem[];
+  /** 1 件も保存できなかった（処理の失敗として danger で示す。messaging.md §10.2。#931）。 */
+  allFailed?: boolean;
 }) {
   return (
-    <Banner severity="warning" title={t("upload.batch.failedTitle")}>
+    <Banner
+      severity={allFailed ? "danger" : "warning"}
+      title={t(allFailed ? "upload.batch.allFailedTitle" : "upload.batch.failedTitle")}
+    >
       <ul className="bounded-scroll-area space-y-2 pr-1 text-sm">
         {failedItems.map((item, index) => (
           // 同じ名前・同じ理由で失敗したファイルが並んでも key が重ならないよう、位置を含める。
@@ -471,13 +481,14 @@ function UploadKnowledgeBasePicker({
           <div className="flex flex-col gap-3 rounded-md border border-border bg-surface-sunken p-4 text-sm text-fg-muted sm:flex-row sm:items-center sm:justify-between">
             <span>{t("upload.knowledgeBases.emptyHint")}</span>
             {canManageKnowledgeBases ? (
-              <Link
+              <ButtonLink
                 to={APP_ROUTES.knowledgeBases}
-                className={buttonVariants({ variant: "secondary", size: "sm" })}
+                linkComponent={Link}
+                size="sm"
+                icon={Database}
               >
-                <Database size={14} aria-hidden />
-                <span>{t("upload.knowledgeBases.manage")}</span>
-              </Link>
+                {t("upload.knowledgeBases.manage")}
+              </ButtonLink>
             ) : null}
           </div>
         )}
@@ -529,13 +540,14 @@ function UploadStorageNotice({ canOpenSettings }: { canOpenSettings: boolean }) 
       </div>
       {/* 保存先の設定画面を開けない利用者（アップロードだけ許可）には導線を出さない。 */}
       {canOpenSettings ? (
-        <Link
+        <ButtonLink
           to={APP_ROUTES.settingsUploadStorage}
-          className={buttonVariants({ variant: "secondary", size: "sm" })}
+          linkComponent={Link}
+          size="sm"
+          icon={Settings}
         >
-          <Settings size={14} aria-hidden />
-          <span>{t("upload.storageNotice.settings")}</span>
-        </Link>
+          {t("upload.storageNotice.settings")}
+        </ButtonLink>
       ) : null}
     </div>
   );

@@ -118,15 +118,26 @@ def next_case_id(cases: list[EvaluationCase]) -> str:
 
 
 def number_cases(cases: list[EvaluationCase]) -> list[EvaluationCase]:
-    """id を省いたケースに `case-<番号>` を付け、重複を断る。"""
-    numbered = [
-        case if case.id.strip() else case.model_copy(update={"id": f"case-{index}"})
-        for index, case in enumerate(cases, start=1)
-    ]
-    ids = [case.id.strip() for case in numbered]
-    if len(set(ids)) != len(ids):
+    """id を省いたケースに使われていない `case-<番号>` を付け、明示した id の重複を断る。
+
+    番号は位置の番号から探す。ケースを削除して足したとき（`case-2`, `case-3`, 省略）に、
+    位置の番号（`case-3`）が残ったケースの id と重なっても保存できるようにする（#965）。
+    """
+    ids = [case.id.strip() for case in cases]
+    explicit = [case_id for case_id in ids if case_id]
+    if len(set(explicit)) != len(explicit):
         raise ValueError("ケースの id が重複しています。")
-    return [case.model_copy(update={"id": case.id.strip()}) for case in numbered]
+    used = set(explicit)
+    numbered: list[EvaluationCase] = []
+    for index, (case, case_id) in enumerate(zip(cases, ids, strict=True), start=1):
+        if not case_id:
+            number = index
+            while f"case-{number}" in used:
+                number += 1
+            case_id = f"case-{number}"
+            used.add(case_id)
+        numbered.append(case.model_copy(update={"id": case_id}))
+    return numbered
 
 
 class EvaluationSetInput(BaseModel):

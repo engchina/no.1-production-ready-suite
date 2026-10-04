@@ -25,10 +25,11 @@ import {
   type RuntimeKnowledgePreviewData,
 } from "@/lib/api";
 import { PagedDataTable } from "@/components/PagedDataTable";
+import { ErrorState } from "@/components/StateViews";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { focusFirstInvalidField, requiredTextError } from "@/lib/required-fields";
-import { useEditRuntimeKnowledge, useRuntimeKnowledge } from "@/lib/queries";
+import { initialLoadError, useEditRuntimeKnowledge, useRuntimeKnowledge } from "@/lib/queries";
 
 type Row = Record<string, JsonValue>;
 
@@ -223,6 +224,7 @@ export function RuntimeKnowledgeManager({
   };
 
   const rows = (kind === "terms" ? query.data?.terms : query.data?.rules) ?? [];
+  const loadError = initialLoadError(query);
   const table = query.isPending ? (
     <TimedLoadingState
       label={t("searchAnswerProfiles.runtime.loading")}
@@ -231,6 +233,12 @@ export function RuntimeKnowledgeManager({
     >
       <TableSkeleton columns={3} rows={{ base: 3, md: 5 }} />
     </TimedLoadingState>
+  ) : loadError ? (
+    // 初回の読み込みの失敗は、空（0 件）と見せずに失敗と再試行を出す。
+    <ErrorState
+      message={errorMessage(loadError, t("searchAnswerProfiles.runtime.loadError"))}
+      onRetry={() => void query.refetch()}
+    />
   ) : (
     <PagedDataTable<Row>
       columns={[

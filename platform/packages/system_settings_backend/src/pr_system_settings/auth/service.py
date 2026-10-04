@@ -45,7 +45,7 @@ from .errors import (
     SecurityMigrationRequired,
     SecurityNotFound,
 )
-from .passwords import hash_password, verify_password
+from .passwords import hash_password, verify_dummy_password, verify_password
 from .service_token import verify_service_token
 from .store import PLATFORM_AUTH_TABLES, PRODUCT_ROLE_PERMISSION_TABLES, AuthStore
 
@@ -175,11 +175,14 @@ class AuthService:
             self._raise_security_migration_if_needed(exc)
             raise
         now = _now()
-        if user is None:
-            raise LoginFailed()
-        if user.status != "ACTIVE" or (
-            user.locked_until is not None and _aware(user.locked_until) > now
+        if (
+            user is None
+            or user.status != "ACTIVE"
+            or (user.locked_until is not None and _aware(user.locked_until) > now)
         ):
+            # 存在しない・無効・ロック中でも同じ重さの照合をしてから同じ 401 を返し、
+            # 応答時間でユーザーの有無・状態を分からなくする（OWASP。#1105）。
+            self._verify_dummy_password(password)
             raise LoginFailed()
         verified, updated_hash = self._verify_password(password, user.password_hash)
         if not verified:
@@ -1063,6 +1066,14 @@ class AuthService:
         return verify_password(
             password,
             password_hash,
+            time_cost=self.settings.app_auth_argon2_time_cost,
+            memory_kib=self.settings.app_auth_argon2_memory_kib,
+            parallelism=self.settings.app_auth_argon2_parallelism,
+        )
+
+    def _verify_dummy_password(self, password: str) -> None:
+        verify_dummy_password(
+            password,
             time_cost=self.settings.app_auth_argon2_time_cost,
             memory_kib=self.settings.app_auth_argon2_memory_kib,
             parallelism=self.settings.app_auth_argon2_parallelism,

@@ -17,8 +17,15 @@ from app.clients.parser_service import ParserServiceClient
 from app.config import Settings
 from app.main import app
 from app.rag.answer_engine import AnswerEngine
-from app.rag.answer_prompts import default_prompt, prompt_overrides, validate_prompt
+from app.rag.answer_prompts import (
+    EDITABLE_PROMPT_KEYS,
+    default_prompt,
+    prompt_overrides,
+    validate_prompt,
+)
 from app.schemas.search import SearchRequest
+from app.security.permissions import ANSWER_PROMPT_EDIT_PERMISSIONS
+from tests.security_support import enable_production_auth, login
 from tests.support import AsgiTestClient
 from tests.test_answer_engine import FakeGenAi, FakeOracle
 
@@ -99,6 +106,54 @@ def test_answer_prompts_api_saves_validates_and_resets(monkeypatch: pytest.Monke
     assert "{{images}}" in invalid.json()["error_messages"][0]
     assert unknown.status_code == 404
     assert _prompt(reset.json()["data"], VLM_ANSWER_PROMPT_KEY)["customized"] is False
+    assert fake.saved == {}
+
+
+def test_answer_prompt_edit_requires_the_screen_permission_of_each_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回答生成のプロンプトは「回答プロンプト」、図・画像の読み取りは「文書解析」の権限で変える。
+
+    画面はそれぞれ 1 つのプロンプトだけを編集するので、API も同じ範囲にする（片方の権限で
+    もう片方のプロンプトを変えられない）。読むのはどちらの権限でもよい。
+    """
+    # 編集できるプロンプトはすべて、変更に要る権限を持つ。
+    assert set(ANSWER_PROMPT_EDIT_PERMISSIONS) == set(EDITABLE_PROMPT_KEYS)
+    fake = FakePromptOracle()
+    monkeypatch.setattr(settings_routes, "OracleClient", lambda: fake)
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("prompt-admin", ["menu.settings_prompts"])
+    auth.user_with_permissions("parser-admin", ["menu.settings_parser_adapters"])
+    image_prompt = "独自 {{image_metadata}}"
+
+    prompt_admin = login(client, "prompt-admin")
+    parser_admin = login(client, "parser-admin")
+    for headers in (prompt_admin, parser_admin):
+        assert client.get("/api/settings/answer-prompts", headers=headers).status_code == 200
+
+    answer_path = f"/api/settings/answer-prompts/{VLM_ANSWER_PROMPT_KEY}"
+    image_path = f"/api/settings/answer-prompts/{IMAGE_RETRIEVAL_PROMPT_KEY}"
+    forbidden = [
+        client.put(answer_path, json={"content": CUSTOM_ANSWER}, headers=parser_admin),
+        client.delete(answer_path, headers=parser_admin),
+        client.put(image_path, json={"content": image_prompt}, headers=prompt_admin),
+        client.delete(image_path, headers=prompt_admin),
+    ]
+    assert [response.status_code for response in forbidden] == [403, 403, 403, 403]
+    assert forbidden[0].json()["error_messages"] == ["この機能を利用する権限がありません。"]
+    assert fake.saved == {}
+
+    assert (
+        client.put(answer_path, json={"content": CUSTOM_ANSWER}, headers=prompt_admin).status_code
+        == 200
+    )
+    assert (
+        client.put(image_path, json={"content": image_prompt}, headers=parser_admin).status_code
+        == 200
+    )
+    assert set(fake.saved) == {VLM_ANSWER_PROMPT_KEY, IMAGE_RETRIEVAL_PROMPT_KEY}
+    assert client.delete(answer_path, headers=prompt_admin).status_code == 200
+    assert client.delete(image_path, headers=parser_admin).status_code == 200
     assert fake.saved == {}
 
 
