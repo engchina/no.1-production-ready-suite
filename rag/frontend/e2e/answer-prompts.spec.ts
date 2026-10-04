@@ -103,7 +103,9 @@ for (const viewport of [
     await expect(page.getByRole("button", { name: "既定に戻す" })).toBeDisabled();
     await field.fill("質問だけ {{question}}");
     await save.click();
+    // 必須の placeholder の欠けは送る前に欄の下へ出し、欄へフォーカスを移す（#1010）。
     await expect(page.getByText("必須の placeholder がありません: {{images}}")).toBeVisible();
+    await expect(field).toBeFocused();
 
     await field.fill("独自 {{question}} {{images}}");
     await save.click();
@@ -114,10 +116,47 @@ for (const viewport of [
     await page.getByRole("alertdialog", { name: "既定のプロンプトに戻しますか？" }).getByRole("button", { name: "既定に戻す" }).click();
     await expect(page.getByText("既定のプロンプトに戻しました。")).toBeVisible();
     await expect(field).toHaveValue("既定のテンプレート {{question}} {{images}}");
-    expect(requests.map((request) => request.method)).toEqual(["PUT", "PUT", "DELETE"]);
+    expect(requests.map((request) => request.method)).toEqual(["PUT", "DELETE"]);
 
     await page.getByText("5. 回答の監査").click();
     await expect(page.getByText("監査の system")).toBeVisible();
+    await expectNoPageOverflow(page);
+  });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 900 },
+]) {
+  test(`回答生成のプロンプトは空を送る前に止め、変更を破棄で保存値へ戻せる（#1010, ${viewport.name}）`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const requests: string[] = [];
+    await page.route("**/api/settings/answer-prompts**", async (route) => {
+      if (route.request().method() !== "GET") requests.push(route.request().method());
+      await route.fulfill({ json: answerPromptsEnvelope("保存版 {{question}} {{images}}", true) });
+    });
+
+    await page.goto("/settings/prompts");
+    const field = page.getByRole("textbox", { name: "テンプレート", exact: true });
+    const actions = page.getByRole("group", { name: "編集内容の操作" });
+    const save = actions.getByRole("button", { name: "プロンプトを保存" });
+    const discard = actions.getByRole("button", { name: "変更を破棄" });
+    await expect(discard).toBeDisabled();
+
+    await field.fill("   ");
+    await expect(actions).toContainText("未保存の変更があります。");
+    await save.click();
+    await expect(page.getByText("テンプレートを入力してください。")).toBeVisible();
+    await expect(field).toBeFocused();
+    expect(requests).toEqual([]);
+
+    await discard.click();
+    await expect(field).toHaveValue("保存版 {{question}} {{images}}");
+    await expect(page.getByText("テンプレートを入力してください。")).toHaveCount(0);
+    await expect(save).toBeDisabled();
+    await expect(actions.getByText(/^編集済み/)).toBeVisible();
     await expectNoPageOverflow(page);
   });
 }
