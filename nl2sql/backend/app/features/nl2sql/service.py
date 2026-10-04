@@ -5605,6 +5605,30 @@ class Nl2SqlService:
                     item.status in {"success", "skipped_missing_object"} for item in results
                 )
                 if successful_drop:
+                    # 表・ビューを DROP したので、取り込みと同じく実行の監査を残す（#948）。
+                    try:
+                        self._record_admin_audit(
+                            operation="sample_data_delete",
+                            target=",".join([*legacy, *SAMPLE_DATASETS[dataset].objects]),
+                            executed=True,
+                            reason=request.reason or "sql-assist-sample-delete",
+                            detail={
+                                "step": SampleDataStep.ALL.value,
+                                "dataset": dataset.value,
+                                "statement_count": len(statements),
+                                "success_count": sum(
+                                    1 for item in results if item.status == "success"
+                                ),
+                                "skipped_count": sum(
+                                    1 for item in results if item.status == "skipped_missing_object"
+                                ),
+                            },
+                        )
+                    except (
+                        Nl2SqlPersistenceUnavailable,
+                        Nl2SqlRepositoryOperationFailed,
+                    ) as exc:
+                        warnings.append(f"Sample data delete の監査保存に失敗しました: {exc}")
                     (
                         schema_refresh_job_id,
                         schema_refresh_required,
