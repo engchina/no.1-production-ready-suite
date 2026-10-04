@@ -346,6 +346,72 @@ def test_profile_sync_credential_missing_uses_recoverable_code_without_oracle_st
     assert retried.retry_of_job_id == failed.job_id
 
 
+def test_profile_sync_agent_rebuild_failure_keeps_oracle_result_and_failed_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DBMS_CLOUD_AI Profile の反映後に Agent の再構築だけが失敗したら、一部の成功として残す。"""
+
+    class AgentFailureService(_FakeProfileService):
+        def refresh_select_ai_agent_assets(
+            self,
+            profile_id: str,
+            *,
+            profile_already_synced: bool = False,
+        ) -> AssetRefreshData:
+            assert profile_already_synced is True
+            self.agent_calls += 1
+            return AssetRefreshData(
+                engine=Nl2SqlEngine.SELECT_AI_AGENT,
+                refreshed=False,
+                status="error",
+                warning="ORA-20051: Agent team の作成に失敗 at line 12 private stack",
+            )
+
+    monkeypatch.setattr("app.features.nl2sql.profile_sync.get_settings", _settings)
+    store = InMemoryOntologyStore()
+    service = AgentFailureService()
+    sync = ProfileSyncService(service=service, store_provider=lambda: store)  # type: ignore[arg-type]
+    started = sync.start(
+        "profile-1",
+        ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE", rebuild_agent_assets=True),
+        idempotency_key="agent-failure",
+    )
+
+    failed = sync.run_persisted(started.job_id)
+
+    assert failed.status == ProfileSyncJobStatus.FAILED
+    assert failed.failed_phase == "rebuilding_agent_assets"
+    assert failed.oracle_result is not None and failed.oracle_result.executed is True
+    assert failed.error_code == "AGENT_ASSETS_REBUILD_FAILED"
+    assert "Select AI Agent アセットを再構築できませんでした" in failed.error_message_ja
+    assert "Oracle Profile の反映に失敗" not in failed.error_message_ja
+    assert "ORA-" not in failed.error_message_ja
+    assert service.oracle_calls == 1
+    assert service.agent_calls == 1
+
+
+def test_profile_sync_oracle_failure_records_failed_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.features.nl2sql.profile_sync.get_settings", _settings)
+    store = InMemoryOntologyStore()
+    service = _FakeProfileService()
+    service.fail_oracle = True
+    sync = ProfileSyncService(service=service, store_provider=lambda: store)  # type: ignore[arg-type]
+    started = sync.start(
+        "profile-1",
+        ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE", rebuild_agent_assets=True),
+        idempotency_key="oracle-failure-phase",
+    )
+
+    failed = sync.run_persisted(started.job_id)
+
+    assert failed.failed_phase == "syncing_oracle_profile"
+    assert failed.oracle_result is None
+    assert failed.error_code == "PROFILE_SYNC_FAILED"
+    assert service.agent_calls == 0
+
+
 def test_profile_sync_can_be_cancelled_before_worker_claim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

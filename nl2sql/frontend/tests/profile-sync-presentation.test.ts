@@ -239,3 +239,65 @@ test("profile save progress marks unfinished cancellation steps skipped and rese
     verify: "pending",
   });
 });
+
+test("failed_phase identifies the failed step even when results alone are ambiguous", () => {
+  // 名称の変更の後始末（旧名の印の消去）で失敗した: Oracle は反映済みだが Agent は未着手。
+  assert.deepEqual(
+    statuses(
+      profileSaveProgressPresentation(
+        job({
+          status: "failed",
+          phase: "failed",
+          failed_phase: "syncing_oracle_profile",
+          oracle_result: oracleResult,
+        }),
+        { rebuildAgentAssets: true },
+      ),
+    ),
+    {
+      save_profile: "done",
+      sync_oracle_profile: "error",
+      rebuild_agent_assets: "pending",
+      verify: "pending",
+    },
+  );
+  assert.deepEqual(
+    statuses(
+      profileSaveProgressPresentation(
+        job({
+          status: "failed",
+          phase: "failed",
+          failed_phase: "rebuilding_agent_assets",
+          oracle_result: oracleResult,
+        }),
+        { rebuildAgentAssets: true },
+      ),
+    ),
+    {
+      save_profile: "done",
+      sync_oracle_profile: "done",
+      rebuild_agent_assets: "error",
+      verify: "pending",
+    },
+  );
+  assert.deepEqual(
+    statuses(
+      profileSaveProgressPresentation(
+        job({
+          status: "failed",
+          phase: "failed",
+          failed_phase: "verifying",
+          rebuild_agent_assets: false,
+          oracle_result: oracleResult,
+        }),
+        { rebuildAgentAssets: false },
+      ),
+    ),
+    {
+      save_profile: "done",
+      sync_oracle_profile: "done",
+      rebuild_agent_assets: "skipped",
+      verify: "error",
+    },
+  );
+});

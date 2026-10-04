@@ -267,13 +267,17 @@ function normalizeProfile(profile: Nl2SqlProfile): Nl2SqlProfile {
 
 function profileToForm(profile: Nl2SqlProfile): ProfileFormState {
   const normalized = normalizeProfile(profile);
-  const selectAiConfig = {
+  const selectAiConfig: ProfileSelectAiConfig = {
     ...normalized.select_ai_config,
     additional_instructions: mergeAdditionalInstructions(
       normalized.select_ai_config.additional_instructions,
       normalized.sql_rules
     ),
   };
+  // 旧名の印（previous_profile_name）は名称の変更の Oracle 反映のために backend が付け外しする値で、
+  // 利用者は編集しない（PATCH も受け付けない）。フォームに持つと、反映の job が印を消した後の
+  // 最新版と比べて「未保存の変更」に見えるため、フォームと未保存の判定から外す。
+  delete selectAiConfig.previous_profile_name;
   return {
     name: normalized.name,
     category: normalized.category ?? "",
@@ -1161,8 +1165,13 @@ export function ProfileManagementPage() {
   const [profileSaveError, setProfileSaveError] = useState("");
   // 完了を通知済みの Oracle 同期 job ID。render 中に比べるため state で持つ。
   const [reportedOracleSyncJobId, setReportedOracleSyncJobId] = useState("");
-  // 成功を通知する Oracle 同期 job（通知と再取得は effect で行う）。
-  const [succeededOracleSyncJob, setSucceededOracleSyncJob] = useState<{ jobId: string; invalidate: boolean } | null>(null);
+  // 終了した Oracle 同期 job（成功の通知と再取得は effect で行う）。
+  const [finishedOracleSyncJob, setFinishedOracleSyncJob] = useState<{
+    jobId: string;
+    profileId: string;
+    succeeded: boolean;
+    invalidateSelectAi: boolean;
+  } | null>(null);
   const lastOracleConfirmationRef = useRef("");
   const [dbProfileRefreshJobId, setDbProfileRefreshJobId] = useState("");
   const [dbProfileRefreshError, setDbProfileRefreshError] = useState("");
@@ -1461,19 +1470,29 @@ export function ProfileManagementPage() {
       reportedOracleSyncJobId !== job.job_id
     ) {
       setReportedOracleSyncJobId(job.job_id);
-      if (job.status === "succeeded") {
-        const trackingRefresh = trackDbProfileRefreshSignal(job.oracle_result);
-        setSucceededOracleSyncJob({ jobId: job.job_id, invalidate: !trackingRefresh });
-      }
+      const succeeded = job.status === "succeeded";
+      const trackingRefresh = succeeded ? trackDbProfileRefreshSignal(job.oracle_result) : false;
+      setFinishedOracleSyncJob({
+        jobId: job.job_id,
+        profileId: job.profile_id,
+        succeeded,
+        invalidateSelectAi: succeeded && !trackingRefresh,
+      });
     }
   }
   useEffect(() => {
-    if (!succeededOracleSyncJob) return;
-    if (succeededOracleSyncJob.invalidate) {
+    if (!finishedOracleSyncJob) return;
+    // 反映の job は名称の変更の後始末で業務プロファイルを更新し、ETag を進める（旧名の印の消去）。
+    // 成功・失敗のどちらでも最新版を取り直し、次の保存の If-Match が古い ETag で 409 にならないようにする。
+    void queryClient.invalidateQueries({
+      queryKey: nl2sqlIncrementalKeys.profile(finishedOracleSyncJob.profileId),
+    });
+    if (!finishedOracleSyncJob.succeeded) return;
+    if (finishedOracleSyncJob.invalidateSelectAi) {
       void queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
     }
     toast.success(t("profiles.oracle.sync.succeeded"));
-  }, [succeededOracleSyncJob, queryClient]);
+  }, [finishedOracleSyncJob, queryClient]);
 
 
 
