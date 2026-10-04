@@ -1067,11 +1067,17 @@ async def import_runtime_snapshot(
             )
         )
     if not validation.valid:
-        raise HTTPException(status_code=400, detail="snapshot validation failed")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"スナップショットに {len(validation.errors)} 件のエラーがあるため置換できません。"
+                "「検証」でエラーの内容を確認してください。"
+            ),
+        )
     if not request.confirm_replace:
         raise HTTPException(
             status_code=400,
-            detail="confirm_replace=true is required when dry_run=false",
+            detail="置換するには確認（confirm_replace=true）が必要です。",
         )
     try:
         runtime_repository.replace_snapshot(request.snapshot)

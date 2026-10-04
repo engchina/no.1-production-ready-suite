@@ -674,7 +674,7 @@ function validateSnapshot(snapshot: Json) {
       String(snapshot.version)
     )
   ) {
-    errors.push(`unsupported snapshot version: ${String(snapshot.version)}`);
+    errors.push(`未対応のスナップショットの版です: ${String(snapshot.version)}`);
   }
   const duplicates = (label: string, ids: unknown[]) => {
     const seen = new Set<unknown>();
@@ -683,12 +683,12 @@ function validateSnapshot(snapshot: Json) {
       if (seen.has(id)) dup.add(String(id));
       seen.add(id);
     }
-    if (dup.size) errors.push(`duplicate ${label} id: ${[...dup].sort().join(", ")}`);
+    if (dup.size) errors.push(`ID が重複している${label}${/[ -~]$/.test(label) ? " " : ""}があります: ${[...dup].sort().join(", ")}`);
   };
-  duplicates("run", runs.map((run) => run.id));
-  duplicates("agent", agents.map((agent) => agent.id));
+  duplicates("実行", runs.map((run) => run.id));
+  duplicates("業務 Agent", agents.map((agent) => agent.id));
   if (!agents.some((agent) => agent.id === "default")) {
-    warnings.push("default agent is missing and will be recreated");
+    warnings.push("既定の業務 Agent（default）がありません。置換すると作り直します。");
   }
   return {
     valid: errors.length === 0,
@@ -1423,7 +1423,20 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     if (body.dry_run) {
       return { imported: false, dry_run: true, validation, reason: body.reason ?? null };
     }
-    throw new HttpError(400, "e2e mock はスナップショットの置換を実装していません");
+    // backend と同じく、無効なスナップショットと確認の無い置換は 400（#1027）。
+    if (!validation.valid) {
+      throw new HttpError(
+        400,
+        `スナップショットに ${validation.errors.length} 件のエラーがあるため置換できません。「検証」でエラーの内容を確認してください。`
+      );
+    }
+    if (body.confirm_replace !== true) {
+      throw new HttpError(400, "置換するには確認（confirm_replace=true）が必要です。");
+    }
+    const replaced = body.snapshot as Json;
+    state.runs = clone((replaced.runs as Json[] | undefined) ?? []);
+    state.agents = clone((replaced.agents as Json[] | undefined) ?? []);
+    return { imported: true, dry_run: false, validation, reason: body.reason ?? null };
   }
 
   // --- 設定 ---
