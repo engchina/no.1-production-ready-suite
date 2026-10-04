@@ -707,12 +707,13 @@ export const ja = {
   "settings.graph.profile.entities": "構築する",
   "settings.graph.profile.entities.description":
     "抽出した見出しから作ります。LLM は使わないので、取込の時間とコストはほとんど増えません。",
+  "settings.graph.actions.label": "関係情報の構築の設定の操作",
   "settings.graph.actions.save": "保存",
   "settings.graph.actions.saved": "関係情報の構築設定を保存しました。",
   "settings.graph.actions.reset": "変更を破棄",
   "settings.graph.actions.unsaved": "未保存の変更があります。",
   "settings.graph.rebuildHint":
-    "変更は次の取込から使われます。取込済みの文書に反映するには、文書を再取込してください。",
+    "変更は次に取り込む文書から使われます。取込済みの文書に反映するには、文書の詳細で処理レシピを「再処理」してください。処理レシピで「関係情報の構築」を上書きした文書は、その選択のままです。",
   "settings.graph.loadError": "関係情報の構築設定を取得できませんでした。",
   "settings.graph.saveError": "関係情報の構築設定を保存できませんでした。",
   "settings.uploadStorage.subtitle":
