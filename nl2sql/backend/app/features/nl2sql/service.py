@@ -207,6 +207,7 @@ from .models import (
     Nl2SqlResult,
     Nl2SqlShowPromptArtifact,
     Nl2SqlSqlInterpretation,
+    OntologyGroundingSkipReason,
     PersistenceStatusData,
     PreviewData,
     PreviewRequest,
@@ -3552,23 +3553,25 @@ def _log_job_stage_finished(
 
 
 def _log_job_stage_step_finished(
-    job_id: str, stage: str, step: str, *, started: float, attempt: int
+    job_id: str, stage: str, step: str, *, started: float, attempt: int, skip_reason: str = ""
 ) -> None:
     """段階の中の処理ごとの所要時間（どの処理が遅いかを追う。#1155）。
 
-    質問・SQL の本文は出さない。
+    処理を飛ばしたときは `skipped` と `skip_reason` を付ける（例: 公開されたオントロジーが無い
+    ため接地確認をしない `no_published_ontology`。#1168）。質問・SQL の本文は出さない。
     """
 
-    logger.info(
-        "nl2sql_job_stage_step_finished",
-        extra={
-            "job_id": job_id,
-            "stage": stage,
-            "step": step,
-            "elapsed_ms": _elapsed_ms(started),
-            "attempt": attempt,
-        },
-    )
+    extra: dict[str, Any] = {
+        "job_id": job_id,
+        "stage": stage,
+        "step": step,
+        "elapsed_ms": _elapsed_ms(started),
+        "attempt": attempt,
+    }
+    if skip_reason:
+        extra["skipped"] = True
+        extra["skip_reason"] = skip_reason
+    logger.info("nl2sql_job_stage_step_finished", extra=extra)
 
 
 def _job_failure_step_index(steps: list[JobStepData]) -> int | None:
@@ -19487,6 +19490,7 @@ class Nl2SqlService:
         ontology_graph_warnings: list[str] | None = None,
         include_logical_steps: bool = True,
         ontology_grounding_enabled: bool = True,
+        ontology_grounding_skip_reason: OntologyGroundingSkipReason = "",
     ) -> Nl2SqlInterpretationArtifact:
         try:
             sql_for_analysis = executable_sql or generated_sql
@@ -19592,6 +19596,7 @@ class Nl2SqlService:
                 sql=sql_interpretation,
                 ontology_graph=ontology_graph,
                 ontology_grounding_enabled=ontology_grounding_enabled,
+                ontology_grounding_skip_reason=ontology_grounding_skip_reason,
                 warnings=warnings,
             )
         except Exception as exc:  # pragma: no cover - artifact must never fail the job
@@ -19606,16 +19611,21 @@ class Nl2SqlService:
         *,
         profile: Nl2SqlProfile,
         allowed: AllowedObjects,
-        revision_id: str = "",
+        release_id: str,
     ) -> tuple[Nl2SqlOntologyGraphSnapshot | None, list[str]]:
+        """job が確定した公開版（release_id）のグラフで、接地確認の snapshot を作る。
+
+        公開版が無い job では呼ばない（その場でオントロジーを同期・構築しない。#1168）。
+        """
+
         try:
             # ontology_router imports nl2sql_service at module load time, so keep this lazy.
             from app.features.nl2sql.ontology_router import ontology_runtime
 
-            snapshot = ontology_runtime.profile_scoped_graph_snapshot_for_job(
+            snapshot = ontology_runtime.published_graph_snapshot_for_job(
                 profile=profile,
                 allowed=allowed,
-                revision_id=revision_id,
+                release_id=release_id,
             )
             return Nl2SqlOntologyGraphSnapshot.model_validate(snapshot), []
         except Exception as exc:  # pragma: no cover - artifact must never fail the job
@@ -19947,27 +19957,29 @@ class Nl2SqlService:
             try:
                 ontology_graph: Nl2SqlOntologyGraphSnapshot | None = None
                 ontology_graph_warnings: list[str] = []
+                grounding_skip_reason: OntologyGroundingSkipReason = ""
                 if request.use_ontology_context:
                     step_started = time.monotonic()
-                    ontology_graph, ontology_graph_warnings = (
-                        self._build_interpretation_ontology_graph_snapshot(
-                            profile=profile,
-                            allowed=allowed,
-                            revision_id=(
-                                business_release_id
-                                if business_release_id.startswith(
-                                    ("ontology_markdown_snapshot_", "ontology_revision_")
-                                )
-                                else ""
-                            ),
+                    if business_release_id:
+                        # 準備の段階で確定した公開版だけで接地確認する（#1168）。
+                        ontology_graph, ontology_graph_warnings = (
+                            self._build_interpretation_ontology_graph_snapshot(
+                                profile=profile,
+                                allowed=allowed,
+                                release_id=business_release_id,
+                            )
                         )
-                    )
+                    else:
+                        # 公開されたオントロジーが無い。その場でカタログから同期・構築しない
+                        # （prompt の文脈と同じ規則。#1168）。
+                        grounding_skip_reason = "no_published_ontology"
                     _log_job_stage_step_finished(
                         job_id,
                         "format_results",
                         "ontology_graph",
                         started=step_started,
                         attempt=attempt,
+                        skip_reason=grounding_skip_reason,
                     )
                 interpretation = self._build_interpretation_artifact(
                     request=request,
@@ -19982,6 +19994,7 @@ class Nl2SqlService:
                     ontology_graph_warnings=ontology_graph_warnings,
                     include_logical_steps=request.include_interpretation,
                     ontology_grounding_enabled=request.use_ontology_context,
+                    ontology_grounding_skip_reason=grounding_skip_reason,
                 )
             except Exception as exc:  # pragma: no cover - defensive artifact boundary
                 logger.warning("nl2sql_interpretation_artifact_boundary_failed", exc_info=True)

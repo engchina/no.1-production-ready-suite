@@ -82,6 +82,9 @@ test("generated SQL summary renders ontology grounding and show prompt artifact 
   assert.match(generatedSqlPanelSource, /nl2sql\.logicalSteps\.title/);
   // 「Ontology を使う」OFF のとき接地確認を出さない(backend echo で判定)。
   assert.match(generatedSqlPanelSource, /ontology_grounding_enabled !== false/);
+  // 公開されたオントロジーが無い job は接地確認をしない。失敗(graphLoadFailed)ではなく情報で出す(#1168)。
+  assert.match(generatedSqlPanelSource, /ontology_grounding_skip_reason === "no_published_ontology"/);
+  assert.match(generatedSqlPanelSource, /nl2sql\.interpretation\.graphNotPublished/);
   assert.match(
     generatedSqlPanelSource,
     /<InterpretationArtifactPanel[\s\S]*?\/>\s*<SqlLogicalStepsPanel[\s\S]*?\/>\s*<ShowPromptArtifactPanel/

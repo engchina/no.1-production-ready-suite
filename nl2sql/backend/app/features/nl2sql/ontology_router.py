@@ -567,6 +567,12 @@ class OntologyApiRuntime:
         self._business_name_cache: OrderedDict[tuple[str, str], dict[str, str]] = OrderedDict()
         self._business_name_cache_max_objects = 512
         self._business_name_cache_generation = 0
+        # SQL の生成のジョブの接地確認が読む公開版のグラフ（版は不変）。全量 graph の `_lock` と
+        # 分け、lock を持ったまま DB を読む別の処理をジョブが待たない（#1168）。
+        # 値は（所有する業務プロファイルの ID。旧方式の共有の版は空、グラフ）。
+        self._release_graph_lock = RLock()
+        self._release_graph_cache: OrderedDict[str, tuple[str, SchemaOntology]] = OrderedDict()
+        self._release_graph_cache_generation = 0
         self._store_ready = False
         self._published_revision_loaded = False
         self._revision_headers_loaded = False
@@ -615,6 +621,9 @@ class OntologyApiRuntime:
         with self._business_name_lock:
             self._business_name_cache.clear()
             self._business_name_cache_generation += 1
+        with self._release_graph_lock:
+            self._release_graph_cache.clear()
+            self._release_graph_cache_generation += 1
 
     @staticmethod
     def _default_store(legacy_service: Any) -> OntologyStore:
@@ -2987,22 +2996,37 @@ class OntologyApiRuntime:
             lambda: self.generate_sql(session_id, request),
         )
 
-    def profile_scoped_graph_snapshot_for_job(
+    def published_graph_snapshot_for_job(
         self,
         *,
         profile: Nl2SqlProfile,
         allowed: AllowedObjects,
-        revision_id: str = "",
+        release_id: str,
     ) -> dict[str, Any]:
-        """通常 NL2SQL job 結果に同梱する profile/request scope の graph snapshot。"""
+        """SQL の生成のジョブの接地確認に同梱する、公開版のグラフ（業務プロファイル・要求の範囲）。
 
-        with self._lock, observe_stage("job_profile_ontology_graph_snapshot"):
-            ontology = (
-                self.ontology_revision(revision_id)
-                if revision_id
-                else self._query_ontology(profile.id)
+        ジョブが準備の段階で確定した公開版（`release_id`。Markdown の公開の snapshot、または
+        旧方式の公開中の版）だけを読む。公開版が無いジョブの接地確認はしない（カタログから
+        グラフをその場で同期・構築しない。prompt の文脈と同じ規則。#1168）。
+
+        runtime の lock を取らない。公開版のグラフは専用のキャッシュ（短い lock）に置き、
+        版のキャッシュ・profile view のキャッシュ・query session には触れない。lock を
+        持ったまま DB を読む別の処理（オントロジーの画面の同期など）を待たないため。
+        範囲の絞り込みは `_base_profile_view` と同じ `migrate_profile_ontology_view` で行う
+        （保存済みの profile view の上書きは用途・列の方針・下書きだけで、ノード・辺の範囲を
+        変えない）。
+        """
+
+        if not release_id:
+            raise OntologyNotFoundError(
+                "ONTOLOGY_RELEASE_NOT_PUBLISHED",
+                "業務プロファイルに公開されたオントロジーがありません。",
             )
-            base_view = self._base_profile_view(profile, ontology)
+        with observe_stage("job_profile_ontology_graph_snapshot"):
+            ontology = self._published_release_graph(release_id, profile_id=profile.id)
+            base_view = migrate_profile_ontology_view(
+                self._profile_view_migration_profile(profile), ontology, strict=False
+            )
             view = self._narrow_profile_view(base_view, ontology, allowed)
             node_ids = set(view.node_ids)
             edge_ids = set(view.edge_ids)
@@ -3016,6 +3040,60 @@ class OntologyApiRuntime:
                     edge.model_dump(mode="json") for edge in ontology.edges if edge.id in edge_ids
                 ],
             }
+
+    def _published_release_graph(self, release_id: str, *, profile_id: str) -> SchemaOntology:
+        """公開版のグラフ（版は不変なのでキャッシュする。runtime の lock は取らない）。"""
+
+        with self._release_graph_lock:
+            cached = self._release_graph_cache.get(release_id)
+            if cached is not None:
+                self._release_graph_cache.move_to_end(release_id)
+            generation = self._release_graph_cache_generation
+        if cached is None:
+            cached = self._read_published_release_graph(release_id, profile_id=profile_id)
+            with self._release_graph_lock:
+                if generation == self._release_graph_cache_generation:
+                    self._release_graph_cache[release_id] = cached
+                    self._release_graph_cache.move_to_end(release_id)
+                    while len(self._release_graph_cache) > self._ontology_cache_max_revisions:
+                        self._release_graph_cache.popitem(last=False)
+        owner_profile_id, ontology = cached
+        # Markdown の公開の snapshot は業務プロファイルの所有物。別の業務プロファイルの ID では
+        # キャッシュにあっても使わない（旧方式の版は業務プロファイル間で共有する）。
+        if owner_profile_id and owner_profile_id != profile_id:
+            raise OntologyNotFoundError("ONTOLOGY_ARTIFACT_NOT_FOUND", "成果物が見つかりません。")
+        return ontology
+
+    def _read_published_release_graph(
+        self, release_id: str, *, profile_id: str
+    ) -> tuple[str, SchemaOntology]:
+        """store から公開版のグラフを読む（所有する業務プロファイルの ID と組で返す）。"""
+
+        from .ontology_markdown_workspace import SNAPSHOT, MarkdownOntologyWorkspace
+
+        self._ensure_store()
+        record = self.store.get_artifact(release_id)
+        if record and record.get("artifact_type") == SNAPSHOT:
+            snapshot = MarkdownOntologyWorkspace(self).snapshot_from_record(profile_id, record)
+            return profile_id, SchemaOntology.model_validate(snapshot["graph"])
+        document = self.store.get_document("revisions", {"revision_id": release_id})
+        if document is None:
+            raise OntologyNotFoundError(
+                "ONTOLOGY_REVISION_NOT_FOUND",
+                "指定された Ontology revision が見つかりません。",
+            )
+        header = OntologyRevision.model_validate(
+            self._stored_payload(document, collection="revision")
+        )
+        nodes = [
+            OntologyNode.model_validate(self._stored_payload(item, collection="node"))
+            for item in self.store.list_documents("nodes", {"revision_id": release_id})
+        ]
+        edges = [
+            OntologyEdge.model_validate(self._stored_payload(item, collection="edge"))
+            for item in self.store.list_documents("edges", {"revision_id": release_id})
+        ]
+        return "", SchemaOntology(revision=header, nodes=nodes, edges=edges)
 
     def confirm_sql_idempotent(
         self,
@@ -4796,22 +4874,9 @@ class OntologyApiRuntime:
                     self._stored_payload(document, collection="profile view")
                 )
                 self._profile_view_overrides[view_key] = restored
-        migration_profile = profile
-        if not profile.allowed_tables and not profile.allowed_views:
-            tables = self.legacy_service.get_catalog().tables
-            migration_profile = profile.model_copy(
-                update={
-                    "allowed_tables": [
-                        table.table_name
-                        for table in tables
-                        if "view" not in table.table_type.lower()
-                    ],
-                    "allowed_views": [
-                        table.table_name for table in tables if "view" in table.table_type.lower()
-                    ],
-                }
-            )
-        view = migrate_profile_ontology_view(migration_profile, ontology, strict=False)
+        view = migrate_profile_ontology_view(
+            self._profile_view_migration_profile(profile), ontology, strict=False
+        )
         override = self._profile_view_overrides.get(view_key)
         if override is not None:
             current_node_by_id = {node.id: node for node in ontology.nodes}
@@ -4878,6 +4943,23 @@ class OntologyApiRuntime:
         self.sessions.register_profile_view(view)
         # Read path is pure. Profile mutation / publish paths persist materialized views.
         return view
+
+    def _profile_view_migration_profile(self, profile: Nl2SqlProfile) -> Nl2SqlProfile:
+        """対象の表・ビューを持たない業務プロファイルは、カタログの全体を範囲にする。"""
+
+        if profile.allowed_tables or profile.allowed_views:
+            return profile
+        tables = self.legacy_service.get_catalog().tables
+        return profile.model_copy(
+            update={
+                "allowed_tables": [
+                    table.table_name for table in tables if "view" not in table.table_type.lower()
+                ],
+                "allowed_views": [
+                    table.table_name for table in tables if "view" in table.table_type.lower()
+                ],
+            }
+        )
 
     @staticmethod
     def _narrow_profile_view(

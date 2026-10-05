@@ -6938,6 +6938,178 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
   await expect(stepsPanel).toContainText("SQL の処理手順");
 });
 
+test("公開されたオントロジーが無い業務プロファイルでは、接地確認をしていないことを失敗と区別して示す", async ({
+  page,
+}, testInfo) => {
+  // #1168: 公開版が無い job はその場でオントロジーを同期・構築せず、接地確認をしない。
+  await mockNl2SqlApi(page);
+  const questionText = "従業員の一覧を表示";
+  const generatedSql = 'SELECT "EMP"."EMPLOYEE_NAME" AS "EMPLOYEE_NAME" FROM "ADMIN"."EMPLOYEE" "EMP"';
+  const sqlGraph = {
+    dialect: "oracle",
+    statement_type: "SELECT",
+    raw_sql: generatedSql,
+    ctes: [],
+    tables: [
+      {
+        id: "table-employee",
+        scope_id: "scope_1",
+        owner: "ADMIN",
+        name: "EMPLOYEE",
+        alias: "EMP",
+        qualified_name: "ADMIN.EMPLOYEE",
+        source_sql: '"ADMIN"."EMPLOYEE" "EMP"',
+      },
+    ],
+    columns: [
+      {
+        id: "column-EMPLOYEE_NAME",
+        scope_id: "scope_1",
+        owner: "ADMIN",
+        table: "EMPLOYEE",
+        name: "EMPLOYEE_NAME",
+        clause: "select",
+        expression_sql: '"EMP"."EMPLOYEE_NAME"',
+      },
+    ],
+    projections: [],
+    joins: [],
+    filters: [],
+    aggregates: [],
+    groups: [],
+    having: [],
+    orders: [],
+    windows: [],
+    limit: null,
+  };
+  const jobId = "job-grounding-not-published-001";
+  const steps = [
+    { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+    { stage: "generate_sql", status: "done", elapsed_ms: 20 },
+    { stage: "safety_check", status: "done", elapsed_ms: 4 },
+    { stage: "execute_sql", status: "done", elapsed_ms: 12 },
+    { stage: "format_results", status: "done", elapsed_ms: 6 },
+  ];
+
+  await page.unroute("**/api/nl2sql/jobs");
+  await page.route("**/api/nl2sql/jobs", (route) =>
+    fulfillJson(route, {
+      job_id: jobId,
+      status: "running",
+      created_at: "2026-06-21T10:00:00.000Z",
+      steps: steps.map((step) => ({ ...step, status: "pending", elapsed_ms: null })),
+    })
+  );
+  await page.route(`**/api/nl2sql/jobs/${jobId}`, (route) =>
+    fulfillJson(route, {
+      job_id: jobId,
+      status: "done",
+      business_release_id: "",
+      created_at: "2026-06-21T10:00:00.000Z",
+      started_at: "2026-06-21T10:00:00.000Z",
+      finished_at: "2026-06-21T10:00:00.050Z",
+      elapsed_ms: 50,
+      error_message: null,
+      steps,
+      timing: null,
+      result: {
+        history_id: "hist-grounding-not-published-001",
+        engine: "select_ai",
+        engine_meta: { profile: "mock_agent_profile" },
+        fallback_reason: "",
+        original_question: questionText,
+        rewritten_question: questionText,
+        generated_sql: generatedSql,
+        executable_sql: generatedSql,
+        explanation: "従業員の氏名を取得します。",
+        safety: {
+          ...safety,
+          referenced_tables: ["ADMIN.EMPLOYEE"],
+          referenced_columns: ["ADMIN.EMPLOYEE.EMPLOYEE_NAME"],
+        },
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: { columns: ["EMPLOYEE_NAME"], rows: [{ EMPLOYEE_NAME: "山田太郎" }], total: 1 },
+        timing,
+        interpretation: {
+          available: true,
+          question: {
+            available: true,
+            source: "deterministic",
+            original_question: questionText,
+            rewritten_question: questionText,
+            profile_id: "default",
+            profile_name: "PROFILE_ALL",
+            profile_category: "HR_ALL",
+            target_objects: ["ADMIN.EMPLOYEE"],
+            filters: [],
+            group_by: [],
+            order_by: [],
+            aggregations: [],
+            row_limit: null,
+            confidence: 0.9,
+            warnings: [],
+          },
+          sql: {
+            available: true,
+            source: "sql_semantics",
+            summary: "ADMIN.EMPLOYEE を参照し、SELECT 操作を行います。",
+            statement_type: "SELECT",
+            tables: ["ADMIN.EMPLOYEE"],
+            columns: ["ADMIN.EMPLOYEE.EMPLOYEE_NAME"],
+            joins: [],
+            filters: [],
+            aggregations: [],
+            group_by: [],
+            order_by: [],
+            limit: null,
+            logical_steps: [],
+            semantic_graph: sqlGraph,
+            warnings: [],
+          },
+          ontology_graph: null,
+          ontology_grounding_enabled: true,
+          ontology_grounding_skip_reason: "no_published_ontology",
+          warnings: [],
+        },
+        show_prompt: null,
+      },
+    })
+  );
+
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill(questionText);
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
+
+  const panel = page.getByTestId("nl2sql-sql-grounding-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("公開版なし");
+  await expect(panel).toContainText(
+    "この業務プロファイルには公開されたオントロジーが無いため、接地確認をしていません。"
+  );
+  // 失敗・空のグラフ・未接地には見せない。
+  await expect(panel).not.toContainText("オントロジーグラフを読み込めませんでした");
+  await expect(panel).not.toContainText("公開済みオントロジーグラフがありません");
+  await expect(panel).not.toContainText("未接地");
+  await expect(panel).not.toContainText("未取得");
+  await expect(panel.getByTestId("nl2sql-sql-grounding-graph")).toHaveCount(0);
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  await panel.screenshot({ path: testInfo.outputPath("sql-grounding-not-published.png") });
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(panel.getByText("公開版なし")).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  await panel.screenshot({ path: testInfo.outputPath("sql-grounding-not-published-375.png") });
+
+  // ダークテーマでも情報の面とバッジが読める（色だけに頼らずアイコンと文言で示す）。
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.evaluate(() => document.documentElement.classList.add("dark"));
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await expect(panel.getByText("公開版なし")).toBeVisible();
+  await panel.screenshot({ path: testInfo.outputPath("sql-grounding-not-published-dark.png") });
+});
+
 test("未修飾列の単一表 SELECT は FROM 句の表だけを接地する", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   const questionText = "従業員の一覧を表示";
