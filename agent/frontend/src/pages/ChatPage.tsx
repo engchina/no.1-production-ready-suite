@@ -20,7 +20,9 @@ import {
   ChatProgress,
   ChatSkeleton,
   useChatProgressTracker,
-  ChatUserMessage,
+  ChatAnswer,
+  ChatPendingTurn,
+  ChatTurn,
   Disclosure,
   EmptyState,
   MessageText,
@@ -487,7 +489,7 @@ export function ChatPage() {
               <EmptyState title={t("chat.empty.title")} hint={t("chat.empty.hint")} />
             ) : (
               runs.map((run) => (
-                <ChatTurn
+                <RunChatTurn
                   key={run.id}
                   run={run}
                   canDecide={capabilities.decideApprovals}
@@ -516,7 +518,7 @@ export function ChatPage() {
   );
 }
 
-function ChatTurn({
+function RunChatTurn({
   run,
   canDecide,
   canRate,
@@ -556,9 +558,9 @@ function ChatTurn({
   });
 
   return (
-    <div className="space-y-2" data-testid={`chat-turn-${run.id}`}>
-      <ChatUserMessage>{run.goal}</ChatUserMessage>
-      <div className="space-y-3 rounded-md border border-border p-3" aria-live="polite">
+    // 1 往復の入れ物（質問の吹き出し・回答の枠）は 3 製品共通の ChatTurn / ChatAnswer（#1161）。
+    <ChatTurn question={run.goal} testId={`chat-turn-${run.id}`}>
+      <ChatAnswer live>
         {/*
           処理の段階（考えている・ツールの呼び出し・承認待ち・回答の作成。#1147）。Run の取り直しで更新し、
           完了後は回答の上に「処理の経過」の 1 行に畳む（共有の ChatProgress。3 製品で同じ。#1145）。
@@ -670,8 +672,8 @@ function ChatTurn({
         {canRate && run.status === "completed" && answer ? (
           <AnswerFeedback runId={run.id} current={run.feedback ?? null} onSaved={onFeedbackSaved} />
         ) : null}
-      </div>
-    </div>
+      </ChatAnswer>
+    </ChatTurn>
   );
 }
 
@@ -691,11 +693,14 @@ function PendingTurn({
   onResend: () => void;
 }) {
   return (
-    <div className="space-y-2" data-testid="chat-pending-turn">
-      <ChatUserMessage status={message.status} failedLabel={t("chat.sendFailed")}>
-        {message.content}
-      </ChatUserMessage>
-      {message.status === "failed" ? (
+    // 1 往復の入れ物・送信中の回答の場所・失敗の出し方は 3 製品共通の ChatPendingTurn（#1161）。
+    <ChatPendingTurn
+      message={message}
+      failedLabel={t("chat.sendFailed")}
+      testId="chat-pending-turn"
+      // Run の作成の応答を待つ間も段階として出す（送信で待っていることが分かる。#1147）。
+      progress={<ChatProgress key={message.localId} steps={chatSubmitProgressSteps(message.sentAtMs)} testId="chat-progress" />}
+      failure={
         <div data-testid="chat-send-failure">
           <Banner
             severity="danger"
@@ -715,13 +720,8 @@ function PendingTurn({
             {errorMessage || t("chat.sendFailedHint")}
           </Banner>
         </div>
-      ) : (
-        <div className="space-y-3 rounded-md border border-border p-3">
-          {/* Run の作成の応答を待つ間も段階として出す（送信で待っていることが分かる。#1147）。 */}
-          <ChatProgress key={message.localId} steps={chatSubmitProgressSteps(message.sentAtMs)} testId="chat-progress" />
-        </div>
-      )}
-    </div>
+      }
+    />
   );
 }
 

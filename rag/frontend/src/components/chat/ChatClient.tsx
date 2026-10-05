@@ -1,8 +1,10 @@
 import {
   ChatComposer,
   ChatComposerOption,
+  ChatAnswer,
   ChatHistoryList,
   ChatLayout,
+  ChatTurn,
   ChatProgress,
   ChatSkeleton,
   Disclosure,
@@ -264,13 +266,8 @@ function AssistantColumn({
   const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
   const finished = !streaming && !errorMessage && !stoppedMessage;
   return (
-    <div
-      id={messageId ? `message-${messageId}` : undefined}
-      className={cn(
-        "flex h-full min-w-0 flex-col gap-2 rounded-md border border-border bg-surface p-3",
-        className
-      )}
-    >
+    // 回答の枠は 3 製品共通の ChatAnswer（#1161）。比較（複数モデル）では列ごとに 1 つの枠にし、列の高さをそろえる。
+    <ChatAnswer id={messageId ? `message-${messageId}` : undefined} className={cn("h-full", className)}>
       {label ? (
         // 1 列（既定のモデル）でも、どのモデルの回答かを出す（#649）。
         <h3
@@ -375,7 +372,7 @@ function AssistantColumn({
           </ul>
         </Disclosure>
       ) : null}
-    </div>
+    </ChatAnswer>
   );
 }
 
@@ -425,10 +422,8 @@ function MessageTurn({
       (column) => !column.streaming && !column.errorMessage && column.answer.includes("（対象:")
     );
   return (
-    <div className="space-y-2" data-testid={testId}>
-      <ChatUserMessage status={userStatus} failedLabel={t("chat.send.failed")}>
-        {user.content}
-      </ChatUserMessage>
+    // 1 往復の入れ物（質問の吹き出し）は 3 製品共通の ChatTurn（#1161）。
+    <ChatTurn question={user.content} questionStatus={userStatus} failedLabel={t("chat.send.failed")} testId={testId}>
       {user.guardrail_warnings.length > 0 ? (
         <div className="ml-auto max-w-[85%]">
           <Banner severity="warning">
@@ -480,7 +475,7 @@ function MessageTurn({
           </Button>
         </div>
       ) : null}
-    </div>
+    </ChatTurn>
   );
 }
 

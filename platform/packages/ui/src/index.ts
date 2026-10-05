@@ -178,6 +178,14 @@ export {
   type ChatHistoryListTestIds,
 } from "./components/chat/chat-history-list";
 export {
+  ChatAnswer,
+  ChatPendingTurn,
+  ChatTurn,
+  type ChatAnswerProps,
+  type ChatPendingTurnProps,
+  type ChatTurnProps,
+} from "./components/chat/chat-turn";
+export {
   CHAT_HISTORY_INLINE_QUERY,
   useChatHistoryPanel,
   useMediaQuery,

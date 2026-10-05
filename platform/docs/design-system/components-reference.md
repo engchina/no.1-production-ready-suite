@@ -2967,3 +2967,38 @@ function submit() {
 
 - 単体テストは `packages/ui/tests/chat-auto-scroll.test.tsx`。実ブラウザは NL2SQL `tests/e2e/sql-chat.spec.ts` の「#1161」。
 - 会話の欄の中の特定の位置へ動かすとき（RAG の `#message-{id}` の回答へ移る）は、`logElementRef` の `scrollTo` を使う。
+
+## ChatTurn / ChatAnswer / ChatPendingTurn — **新規**（#1161）
+
+チャットの 1 往復の入れ物（3 製品共通）。質問の吹き出し（`ChatUserMessage`）と回答の枠を `<article>` にまとめる。回答の中身（処理の段階 `ChatProgress`・本文・引用・SQL・ツール・承認・評価）は製品が子要素で渡す。
+
+```tsx
+import { ChatAnswer, ChatPendingTurn, ChatTurn } from "@engchina/production-ready-ui";
+
+// 確定した往復
+<ChatTurn question={turn.question} testId="sql-chat-turn">
+  <ChatAnswer live>                       {/* 回答が後から届く製品は live（polite） */}
+    <ChatProgress … />
+    <AnswerBody … />
+  </ChatAnswer>
+</ChatTurn>
+
+// 送った質問（サーバーの応答の前・送れなかったとき。messaging.md §11）
+<ChatPendingTurn
+  message={pending}                       // createOptimisticChatMessage の仮のメッセージ
+  failedLabel={t("chat.sendFailed")}      // 「送信できませんでした」
+  progress={<ChatProgress steps={chatSubmitProgressSteps(pending.sentAtMs)} … />}
+  failure={<ApiErrorBanner error={sendError} fallback={…} action={<Button icon={RotateCcw}>再送信</Button>} />}
+  testId="chat-pending-turn"
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 1 往復は `<article>`（質問と回答の間 0.5rem）。往復の間は会話の欄（`ChatLayout`）が 1.25rem を空ける | 3 製品で `div` / `article` と間隔が違っていた。往復のまとまりを読み上げでも区切る |
+| 回答の枠は `rounded-md`・`border`・`bg-surface`・`p-3`、中は縦に 0.75rem 間隔（`ChatAnswer`） | NL2SQL は `Card`（影・角丸 lg）、RAG・Agent は枠線の箱で、余白も違っていた。会話の欄の中で影を重ねない |
+| 送信中は回答の枠に処理の段階だけを出し、送れなかったら枠を出さずに原因と「再送信」を出す（`ChatPendingTurn`） | 送れなかった質問を残し、入力欄に戻さない（messaging.md §11.3）。動くスピナーは回答の場所の 1 つだけ |
+| 複数モデルの比較（RAG）は `ChatAnswer` を列にして並べる（`className` で `h-full`） | 比較の列も同じ枠にする |
+
+- 単体テストは `packages/ui/tests/chat-turn.test.tsx`。
+- 使う所: RAG `MessageTurn` / `AssistantColumn`、NL2SQL `SqlChatTurn` と送信中の往復、Agent `RunChatTurn` / `PendingTurn`。
