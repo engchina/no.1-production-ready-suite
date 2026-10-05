@@ -73,6 +73,7 @@ const nl2sqlJa = {
   "chat.noProfiles": "利用できる業務プロファイルがありません",
   "chat.noProfilesHint": "業務プロファイルの設定と利用権限を確認してください。",
   "chat.loadFailed": "会話を読み込めませんでした。",
+  "chat.historyLoadFailed": "会話の履歴を読み込めませんでした。",
   "chat.sendFailed": "SQL の生成を開始できませんでした。",
   "chat.sendTimeout": "送信の応答が {seconds} 秒以内に返りませんでした。",
   "chat.sendTimeout.action":

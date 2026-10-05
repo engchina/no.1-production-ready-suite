@@ -15,6 +15,7 @@ import {
   Card,
   CardContent,
   ChatComposer,
+  ChatHistoryList,
   ChatLayout,
   ChatProgress,
   ChatSkeleton,
@@ -22,7 +23,6 @@ import {
   ChatUserMessage,
   Disclosure,
   EmptyState,
-  ListSkeleton,
   MessageText,
   PageBody,
   PageHeader,
@@ -299,16 +299,42 @@ export function ChatPage() {
     ? (threads.data?.threads.find((item) => item.thread_id === currentThreadId)?.title ?? runs[0]?.goal)
     : undefined;
 
+  // 一覧の行・読み込み中・失敗・0 件は 3 製品共通の ChatHistoryList（#1161）。
   const historyContent = (
-    <ThreadList
-      threads={threads.data?.threads ?? []}
-      loading={threads.isLoading}
+    <ChatHistoryList
+      items={(threads.data?.threads ?? []).map((item) => ({
+        id: item.thread_id,
+        title: item.title,
+        meta: `${formatTime(item.updated_at)}・${t("chat.threads.turns", { count: item.run_count })}`,
+        badge:
+          item.last_status === "completed" ? undefined : (
+            <StatusBadge variant={runStatusView(item.last_status).variant} label={t(`chat.status.${item.last_status}`)} />
+          ),
+      }))}
+      currentId={currentThreadId}
+      onSelect={(item) => {
+        const thread = threads.data?.threads.find((candidate) => candidate.thread_id === item.id);
+        if (thread) openThread(thread);
+      }}
+      // 業務 Agent の一覧の読み込み中は会話の一覧をまだ取得できない。一覧の形だけを出す（#1153）。
       waiting={agentsLoading}
+      loading={threads.isLoading}
       error={threads.isError && !threads.data ? threads.error : null}
-      retrying={threads.isFetching}
       onRetry={() => void threads.refetch()}
-      currentThreadId={currentThreadId}
-      onOpen={openThread}
+      retrying={threads.isFetching}
+      labels={{
+        list: t("chat.threads.title"),
+        loading: t("chat.threads.loading"),
+        error: t("chat.threads.loadFailed"),
+        retry: t("common.retry"),
+        empty: t("chat.threads.empty"),
+      }}
+      testIds={{
+        skeleton: "chat-threads-skeleton",
+        loading: "chat-threads-loading",
+        error: "chat-threads-error",
+        list: "chat-thread-list",
+      }}
     />
   );
 
@@ -479,92 +505,6 @@ export function ChatPage() {
         ) : null}
       </PageBody>
     </div>
-  );
-}
-
-function ThreadList({
-  threads,
-  loading,
-  error,
-  retrying,
-  onRetry,
-  currentThreadId,
-  onOpen,
-  waiting,
-}: {
-  threads: ThreadSummary[];
-  loading: boolean;
-  /**
-   * 業務 Agent の一覧を読み込んでいて、会話の一覧をまだ取得できない（#1153）。「まだ会話がありません」と出さず、
-   * 一覧の形の Skeleton だけを出す（経過時間は業務 Agent のカードが出しているので重ねない）。
-   */
-  waiting: boolean;
-  /** 一覧を読めなかったときの失敗（読めていない一覧を「まだ会話がありません」と出さない）。 */
-  error: unknown;
-  retrying: boolean;
-  onRetry: () => void;
-  currentThreadId: string | null;
-  onOpen: (thread: ThreadSummary) => void;
-}) {
-  if (waiting) return <ListSkeleton rows={4} testId="chat-threads-skeleton" />;
-  if (loading) {
-    return (
-      <TimedLoadingState label={t("chat.threads.loading")} framed={false} testId="chat-threads-loading">
-        <ListSkeleton rows={4} />
-      </TimedLoadingState>
-    );
-  }
-  if (error) {
-    return (
-      <ApiErrorBanner
-        error={error}
-        fallback={t("chat.threads.loadFailed")}
-        testId="chat-threads-error"
-        action={
-          <Button type="button" variant="secondary" size="sm" icon={RefreshCw} loading={retrying} onClick={onRetry}>
-            {t("common.retry")}
-          </Button>
-        }
-      />
-    );
-  }
-  if (threads.length === 0) {
-    // 「新しい会話」はチャットの上端の行の 1 か所だけに置く（RAG と同じ。#889）。
-    return <p className="px-1 text-sm text-fg-muted">{t("chat.threads.empty")}</p>;
-  }
-  return (
-    <ul
-      // パネル（lg 以上）・シート（lg 未満）の高さまで伸ばし、超えたら中をスクロールする（RAG と同じ。#664）。
-      className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain"
-      aria-label={t("chat.threads.title")}
-    >
-      {threads.map((item) => {
-        const current = item.thread_id === currentThreadId;
-        return (
-          <li key={item.thread_id}>
-            <button
-              type="button"
-              onClick={() => onOpen(item)}
-              aria-current={current ? "true" : undefined}
-              className={
-                current
-                  ? "flex w-full flex-col gap-1 rounded-md bg-accent-subtle px-2 py-2 text-left"
-                  : "flex w-full flex-col gap-1 rounded-md px-2 py-2 text-left hover:bg-surface-hover"
-              }
-            >
-              <span className="line-clamp-2 break-words text-sm text-fg">{item.title}</span>
-              <span className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
-                <span>{formatTime(item.updated_at)}</span>
-                <span>{t("chat.threads.turns", { count: item.run_count })}</span>
-                {item.last_status === "completed" ? null : (
-                  <StatusBadge variant={runStatusView(item.last_status).variant} label={t(`chat.status.${item.last_status}`)} />
-                )}
-              </span>
-            </button>
-          </li>
-        );
-      })}
-    </ul>
   );
 }
 

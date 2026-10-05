@@ -20,12 +20,12 @@ import {
   CardContent,
   ChatComposer,
   ChatComposerOption,
+  ChatHistoryList,
   ChatLayout,
   ChatProgress,
   ChatSkeleton,
   ChatUserMessage,
   EmptyState,
-  ListSkeleton,
   MessageText,
   PageBody,
   PageHeader,
@@ -438,62 +438,43 @@ export function SqlChatPage() {
     if (active && conversationRef.current)
       conversationRef.current.scrollTop = conversationRef.current.scrollHeight;
   }, [active, conversationId, turns.length, latest?.status, pending]);
+  // 一覧の行・読み込み中・失敗・0 件は 3 製品共通の ChatHistoryList（#1161）。カーソルの API なので「さらに読み込む」。
   const historyContent = (
-    <>
-      {history.isPending ? (
-        // 読み込み中は文言と経過時間を出し、一覧の形の Skeleton で寸法を予約する（messaging.md §3.6）。
-        <TimedLoadingState
-          label={t("chat.historyLoading")}
-          operationKey="sql-chat-history-load"
-          framed={false}
-          testId="sql-chat-history-loading"
-        >
-          <ListSkeleton rows={3} />
-        </TimedLoadingState>
-      ) : null}
-      {history.isError ? (
-        <ApiErrorBanner
-          error={history.error}
-          fallback={t("chat.loadFailed")}
-          action={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              icon={RefreshCw}
-              onClick={() => void history.refetch()}
-            >
-              {t("chat.retry")}
-            </Button>
-          }
-        />
-      ) : null}
-      {history.isSuccess &&
-      !history.data.pages.some((page) => page.items.length) ? (
-        <EmptyState title={t("chat.historyEmpty")} />
-      ) : null}
-      <div className="min-h-0 space-y-2 overflow-y-auto [scrollbar-gutter:stable]">
-        {history.data?.pages
+    <ChatHistoryList
+      items={(history.data?.pages ?? [])
+        .flatMap((page) => page.items)
+        .map((item) => ({
+          id: item.id,
+          title: item.title,
+          meta: dateFormatter.format(new Date(item.created_at)),
+        }))}
+      currentId={conversationId || null}
+      onSelect={(item) => {
+        const conversationItem = history.data?.pages
           .flatMap((page) => page.items)
-          .map((item) => (
-            <Button
-              type="button"
-              key={item.id}
-              variant="ghost"
-              aria-current={item.id === conversationId ? "true" : undefined}
-              className="w-full justify-start whitespace-normal text-left"
-              disabled={busy}
-              onClick={() => openConversation(item)}
-            >
-              <span className="min-w-0">
-                <span className="block break-words">{item.title}</span>
-                <span className="block text-xs text-fg-muted">
-                  {dateFormatter.format(new Date(item.created_at))}
-                </span>
-              </span>
-            </Button>
-          ))}
-        {history.hasNextPage ? (
+          .find((candidate) => candidate.id === item.id);
+        if (conversationItem) openConversation(conversationItem);
+      }}
+      disabled={busy}
+      loading={history.isPending}
+      error={history.isError ? history.error : null}
+      onRetry={() => void history.refetch()}
+      retrying={history.isFetching}
+      labels={{
+        list: t("chat.history"),
+        loading: t("chat.historyLoading"),
+        error: t("chat.historyLoadFailed"),
+        retry: t("chat.retry"),
+        empty: t("chat.historyEmpty"),
+      }}
+      operationKey="sql-chat-history-load"
+      testIds={{
+        loading: "sql-chat-history-loading",
+        error: "sql-chat-history-error",
+        list: "sql-chat-history-list",
+      }}
+      footer={
+        history.hasNextPage ? (
           <Button
             type="button"
             variant="secondary"
@@ -503,9 +484,9 @@ export function SqlChatPage() {
           >
             {t("chat.loadMore")}
           </Button>
-        ) : null}
-      </div>
-    </>
+        ) : null
+      }
+    />
   );
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
