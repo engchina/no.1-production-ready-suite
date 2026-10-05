@@ -56,6 +56,8 @@ Q/A の補助的な `DUAL` / `SYS.DUAL` 参照は SQL の名前解決に限っ�
 
 通常生成、非同期 job、引導式 session、サーバー接地検索は Profile の同じ公開 snapshot を使用する。job / session の `business_release_id` は snapshot ID を保持する。以前の独立 release を新しい生成へ重ねない。過去の release / job の読み取りは互換性のため残す。
 
+SQL 生成・チャットの job（同じ `_run_job`）は、公開版があればその公開版だけを使い、無ければ使わない。job の中でオントロジーをその場で構築・同期しない。準備の段階の prompt の文脈も、結果の整形の段階の接地確認（`interpretation.ontology_graph`）も、job が確定した `business_release_id` の公開版（snapshot、旧方式は公開中の版）だけを読む。公開版が無い job は接地確認をせず、`interpretation.ontology_grounding_skip_reason` を `no_published_ontology` にする。SQL 生成の画面はこれを失敗ではなく「公開版なし」と情報の Banner で示す（#1168）。
+
 引導式生成の正式指標には `expression_sql` と指標固有の `filter_sql` を渡す。絞り込み条件はその指標の集計対象だけに適用し、他の指標の全体 WHERE 条件へ流用しない。過去の読み取り投影に条件がない場合は、同じ snapshot の完全な型付き定義から復元する。保存済み artifact は書き換えない。
 
 Interface の接地は下位の継承・実装を辿る。子 Interface の検索で上位だけを実装する object や兄弟 Interface の実装へ広げず、上位 Interface の検索では配下の実装を含める。Profile の node / edge 範囲は各段階で守る。

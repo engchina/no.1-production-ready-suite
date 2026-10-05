@@ -1064,6 +1064,10 @@ class Nl2SqlOntologyGraphSnapshot(BaseModel):
     edges: list[dict[str, Any]] = Field(default_factory=list)
 
 
+# 接地確認を有効にしたが行わなかった理由（空は行った、または無効）。#1168
+OntologyGroundingSkipReason = Literal["", "no_published_ontology"]
+
+
 class Nl2SqlInterpretationArtifact(BaseModel):
     """質問解釈と SQL 意味グラフの表示用 artifact。"""
 
@@ -1074,6 +1078,10 @@ class Nl2SqlInterpretationArtifact(BaseModel):
     # use_ontology_context のエコー。False のとき UI は Ontology 接地確認を表示しない。
     # 既存永続 job(フィールド無し)は従来挙動を保つため default True。
     ontology_grounding_enabled: bool = True
+    # 接地確認を有効にしたが行わなかった理由。"no_published_ontology" は、業務プロファイルに
+    # 公開されたオントロジーが無いこと（ジョブの中でその場で同期・構築しない。#1168）。
+    # 空は接地確認をした（または無効）こと。失敗はこの項目でなく warnings に出す。
+    ontology_grounding_skip_reason: OntologyGroundingSkipReason = ""
     warnings: list[str] = Field(default_factory=list)
 
 

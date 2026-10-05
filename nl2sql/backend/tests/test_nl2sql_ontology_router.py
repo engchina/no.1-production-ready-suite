@@ -430,7 +430,7 @@ def test_initial_profile_view_persists_graph_in_collection_batches() -> None:
     )
 
 
-def test_profile_scoped_graph_snapshot_for_job_narrows_to_allowed_objects(
+def test_published_graph_snapshot_for_job_narrows_to_allowed_objects(
     runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
     api, _store, legacy = runtime
@@ -457,9 +457,16 @@ def test_profile_scoped_graph_snapshot_for_job_narrows_to_allowed_objects(
         )
     )
 
-    snapshot = api.profile_scoped_graph_snapshot_for_job(
+    draft = api.current_ontology()
+    published = api.publish_ontology_revision(
+        draft.revision.id,
+        OntologyPublishRequest(etag=draft.revision.etag),
+    )
+
+    snapshot = api.published_graph_snapshot_for_job(
         profile=legacy.profile,
         allowed=AllowedObjects(table_names=["APP.ORDERS"], enforce_table_scope=True),
+        release_id=published.revision.id,
     )
 
     assert snapshot["revision_id"] == snapshot["revision"]["id"]
@@ -1400,9 +1407,11 @@ def test_rehydrated_revision_is_parent_for_drift_and_preserves_orphan_mapping(
     assert retained_node.review_status == OntologyReviewStatus.ORPHANED
     assert retained_edge.review_status == OntologyReviewStatus.ORPHANED
     assert retained_edge.metadata["orphaned_mapping_node_ids"] == [amount_node.id]
-    # ログの経路と同じ job artifact 取得でも同期は失敗せず、公開版の pin は維持する。
-    snapshot = restarted.profile_scoped_graph_snapshot_for_job(
-        profile=legacy.profile, allowed=AllowedObjects(table_names=["APP.ORDERS"])
+    # job の接地確認は、drift の後も job が確定した公開版だけを読む（同期しない。#1168）。
+    snapshot = restarted.published_graph_snapshot_for_job(
+        profile=legacy.profile,
+        allowed=AllowedObjects(table_names=["APP.ORDERS"]),
+        release_id=previous.revision.id,
     )
     assert snapshot["revision_id"] == previous.revision.id
     restored = OntologyApiRuntime(legacy_service=legacy, store=store).current_ontology()
