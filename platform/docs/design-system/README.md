@@ -331,13 +331,14 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 - 確定の前の起点（確認ダイアログを開くボタン）や、取り消せる停止・拒否（処理中のジョブのキャンセル、承認の拒否、Run のキャンセル）は、`secondary` / `ghost` + `tone="danger"`（赤文字）にするか、「その他の操作」メニューに入れる。
 - `variant="danger"` と `tone="danger"` は**型で同時に指定できない**（赤地に赤文字になり読めない）。
 
-### `Spinner`（変更）— ★ 線の実寸・トラック・reduced-motion（#395）
+### `Spinner`（変更）— ★ 線の実寸・トラック・reduced-motion（#395）、対称のアーク・固定の箱（#1180）
 
-処理中を示す回転アイコンは共有の `Spinner` 1 つだけ（`Button` の `loading`、`ProcessingIndicator` / `TimedLoadingState`、製品の状態バッジ）。lucide の `Loader2` / `RefreshCw` などに `animate-spin` を付けて回さない（adherence の lint が検出する）。
+処理中を示す回転アイコンは共有の `Spinner` 1 つだけ（`Button` の `loading`、`ProcessingIndicator` / `TimedLoadingState`、`ChatProgress`、`LoadMoreFooter`、製品の状態バッジ）。lucide の `Loader2` / `RefreshCw` などに `animate-spin` を付けて回さない・回転用の lucide のアイコン（`Loader` / `Loader2` / `LoaderCircle` / `LoaderPinwheel`）を使わない（adherence の lint が検出する）。
 
 | 項目 | 決定 | 理由 |
 |---|---|---|
-| 形 | 全周のトラック + 270 度のアーク。外形は大きさによらず直径 20/24 | 欠けた円弧だけだとインクの重心が回転で動き、中心がずれて見える |
+| 形 | 全周のトラック + **180 度対称の 2 本のアーク（90 度 × 2。12 時→3 時と 6 時→9 時）**。外形は大きさによらず直径 20/24 | 濃いアークの重心が回転角によらず中心に残る。欠けた円弧（`Loader2`）や 1 本のアーク（#395 の 270 度）は重心が中心から外れ、回転でその重心が中心のまわりを回るため「上下・左右に揺れる」と見えた（16px で 1.8px。トラックは薄く、揺れを打ち消さない。#1180） |
+| 箱 | 回転しない固定の正方形（`span.pr-spinner`。`contain: strict`・`display: inline-block`・`flex: none`・`line-height: 0`・`vertical-align: middle`）の中で、内側の svg（`display: block`）だけが回る。`className`（色）は箱に付け、svg は `currentColor` で受ける | 回転した正方形の外接矩形（最大 1.41 倍）が周りの行の位置・高さ・スクロールの領域に入らない。文の中でもベースライン・行の高さに乗らない |
 | 線の太さ | **実寸 2px**（14 / 16 / 20 / 24px で viewBox 上 3.429 / 3 / 2.4 / 2）。太くした分は円の半径を内側へ寄せる | 旧実装は viewBox 24 に線幅 2 固定で、16px では 1.33px、14px では 1.17px まで細り、等倍の画面でかすれていた。GitHub Primer・Fluent 2 の 16〜28px のスピナーも 2px |
 | トラックの色 | `--color-spinner-track`: アークと同じ色（`currentColor`）をライト 30% / ダーク 35% で透かす。強制カラーモードは `GrayText` | アーク対トラックの境目 3:1 以上を保つ上限の濃さ（下の実測）。トラックを 3:1 の `--color-border-control` にすると、アーク（`--color-accent-fg`）との差がライト 1.58:1 / ダーク 2.43:1 になり、回っている部分が見分けにくくなる |
 | 回転 | `transform` の等速（linear 1s）だけ | 合成スレッドで回るので、メインスレッドが詰まっても（回答の描画・SSE の解析中）止まらない。弧長の伸縮（`stroke-dasharray`）はメインスレッドで描き直すため詰まると止まり、加減速は 1 周ごとに遅くなる区間が「止まりかけ」に見える |
@@ -1083,6 +1084,7 @@ QA に事前共有してください。**71点あります。**
 | 75 | **3 製品のチャットの骨格が共通の `ChatLayout` になり、細部がそろう**（#1161） | 履歴のパネルの幅は RAG 280px・NL2SQL 17.5rem・Agent 20rem → 3 製品とも 20rem。NL2SQL の会話の領域は lg 未満でも高さの指定が無かった → 3 製品とも lg 未満は 70dvh（最小 28rem）。会話の欄の往復の間は RAG 1rem・NL2SQL 1.25rem・Agent 1.5rem → 1.25rem（`scrollbar-gutter: stable`）。「新しい会話」のアイコンは RAG・Agent が `Plus`、NL2SQL が `MessageSquarePlus` → `MessageSquarePlus`。RAG の会話の領域は 3 段（上端の行・会話の欄・入力欄）の間に 0.75rem の隙間があった → 隙間なし（区切り線だけ） | 骨格を 3 製品で書き写していて、写すたびに細部がずれていた（UX 契約 page-archetypes.md §6）。「新しい会話」は作成の汎用の `Plus` と分け、会話を足す操作と分かるアイコンにする |
 | 76 | **NL2SQL の画面のデータの結果（SQL 生成・SELECT SQL・管理 SQL の実行、テーブル・ビュー・メタデータ SQL の文の実行、データの表示、CSV 取り込みのプレビュー、合成データの結果、テーブルの取り込みのサンプル行）が、チャットの結果と同じ `ResultTable` で出る**（#1178） | SQL 生成・SELECT SQL は「取得件数 N 件」「取得上限 N 件」「上限到達」のバッジの下に 10 件/ページの表（`Nl2SqlResultTable`）。管理 SQL・データの表示などは同じバッジの下に、表頭の固定・表の中のスクロールの無い表と 10 件/ページ（`QueryResultsTable`）で、NULL は空のセル・数値は左寄せ。全行を広く見る手段・CSV は無かった（データの表示は XLSX だけ） → 要約の 1 行（「100 行・5 列」、打ち切りは「先頭の 100 行を取得しました（さらに行があります）」と info の案内）と「取得上限 N 件」・実行した接続のバッジ、先頭 50 行のプレビュー（表頭固定・表の中で縦横スクロール）、「すべての行を見る」（広い `SideSheet`・10 / 50 / 100 行/ページ）・「CSV をダウンロード」（取得した行だけ）。NULL は「NULL」、数値の列は右寄せ。データの表示の XLSX（サーバーの出力）は残す | 利用者の評価が高いチャットの結果の形に、同じデータの結果をそろえる（UX 契約 page-archetypes.md「データの結果の型」）。行の操作・選択のある一覧は変えない |
 | 77 | **3 製品のチャットの入力欄が共通の `ChatComposer` になり、名前と placeholder がそろう**（#1161） | 入力欄の名前（読み上げ）は RAG「メッセージを入力…（Enter で送信 / Shift+Enter で改行）」・NL2SQL「クエリ」・Agent「質問」 → 3 製品とも「質問」。placeholder は RAG「メッセージを入力…（Enter で送信 / Shift+Enter で改行）」・NL2SQL「クエリを入力（…）」 → 「質問を入力（Enter で送信、Shift+Enter で改行）」。Agent の停止の失敗は見出し付きの `Banner` → NL2SQL と同じ `ApiErrorBanner` | 同じ入力欄を 3 製品で書き写し、名前と文言が製品ごとに違っていた。チャットの 1 往復は利用者の「質問」と回答（UX 契約 page-archetypes.md §6） |
+| 78 | **処理中のスピナーが回転しても上下・左右に揺れない**（#1180。`Spinner`） | 全周のトラック + 270 度の 1 本のアーク。濃いアークの重心が中心から外れ、回転で重心が中心のまわりを回るため、DB のゲートの「データベースの状態を確認しています…」をはじめ全画面のスピナーが上下・左右に揺れて見えた（角度ごとの見た目の重心のずれ 16px で 1.74〜1.85px）。回転する svg そのものがレイアウトの箱で、外接矩形が 16〜22.6px で毎フレーム変わった → 全周のトラック + **180 度対称の 2 本のアーク（90 度 × 2）**（ずれ 0.05〜0.20px）。回転しない固定の正方形の箱（`span.pr-spinner`。`contain: strict`）の中で svg だけが回る。色・寸法・線の実寸・速さ・置き場所は同じ | 旧 NL2SQL の `StableLoadingIcon`（180 度対称のアーク）で直していた揺れが、共有の `Spinner` への移行（旧 NL2SQL #529）で戻っていた。回転で重心も周りの行も動かさない（§4「Spinner」）。adherence の lint が回転用の lucide のアイコン・`animate-[spin…]`・inline style の `spin` も検出し、3 製品の e2e（`expectSpinnerStable`）が見た目の重心を測る |
 
 ### API の非互換
 

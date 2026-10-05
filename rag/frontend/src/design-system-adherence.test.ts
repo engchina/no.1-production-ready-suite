@@ -26,6 +26,9 @@ const RAW_COLOR_FUNCTION = "rgba() / rgb() / hsl() などの生の色を書か�
 const NUMERIC_TYPE = "文字サイズ・行間・字間を数値";
 const NUMERIC_SPACING = "inline style の余白・角丸を数値";
 const TEXTAREA_HEIGHT = "複数行の入力欄（TextareaField）の高さを";
+const HANDWRITTEN_SPIN = "回転するアイコンを手書きしない";
+const LOADER_ICON = "回転用の lucide のアイコン";
+const INLINE_SPIN = "inline style の animation で回転";
 
 async function lint(code: string) {
   const eslint = new ESLint({
@@ -339,5 +342,37 @@ const d = <TextareaField id="d" label="d" rows={6} textareaClassName="max-h-[16.
 const e = <TextareaField id="e" label="e" rows={9} monospace />;
 `);
     expect(linesWith(messages, TEXTAREA_HEIGHT)).toEqual([2, 3, 4]);
+  });
+});
+
+describe("adherence: 回転するアイコンは共有の Spinner だけ（#395 / #1180）", () => {
+  it("animate-spin（変種・任意値・テンプレートを含む）・回転用の lucide のアイコン・inline style の spin を検出する", async () => {
+    const messages = await lint(`
+import { Loader2, LoaderCircle as Busy, Loader2Icon, LucideLoader, LoaderPinwheel, RefreshCw } from "lucide-react";
+const a = <RefreshCw className="h-4 w-4 animate-spin" />;
+const b = <RefreshCw className="motion-safe:animate-spin" />;
+const c = <span className={\`\${busy ? "animate-spin" : ""} text-fg\`} />;
+const d = <span className="animate-[spin_2s_linear_infinite]" />;
+const e = <span style={{ animation: "spin 1s linear infinite" }} />;
+const f = <span style={{ animationName: "spin" }} />;
+`);
+    expect(linesWith(messages, LOADER_ICON)).toEqual([2, 2, 2, 2, 2]);
+    expect(linesWith(messages, HANDWRITTEN_SPIN)).toEqual([3, 4, 5, 6]);
+    expect(linesWith(messages, INLINE_SPIN)).toEqual([7, 8]);
+  });
+
+  it("共有の Spinner・loading・回さないアイコン・spin を含む別の語は許す", async () => {
+    const messages = await lint(`
+import { RefreshCw, RotateCcw, Clock3 } from "lucide-react";
+import { Spinner, Button } from "@engchina/production-ready-ui";
+import { Loader2 } from "./local-loader";
+const a = <Spinner size={14} className="text-accent-fg" />;
+const b = <Button loading={busy} icon={RefreshCw}>再読み込み</Button>;
+const c = <RotateCcw size={16} aria-hidden />;
+const d = <span className="animate-pulse spinner-like" />;
+const e = <span style={{ animation: "toast-in 200ms ease-out" }} />;
+const f = { label: "spin" };
+`);
+    expect(messages).toEqual([]);
   });
 });

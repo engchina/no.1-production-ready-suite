@@ -25,17 +25,61 @@ function attr(html: string, marker: string, name: string) {
   return tag.match(new RegExp(`${name}="([^"]*)"`))?.[1];
 }
 
+/**
+ * `d` の円弧（`M x y a r r 0 0 1 dx dy` の繰り返し）を中心 (12, 12) の円の上で細かく分け、点の列にする。
+ * 線の太さは一様なので、点の重心＝アーク（濃い筆画）の見た目の重心。
+ */
+function arcPoints(d: string) {
+  const points: { x: number; y: number }[] = [];
+  const re = /M([\d.-]+) ([\d.-]+)a([\d.]+) [\d.]+ 0 0 1 ?(-?[\d.]+) ?(-?[\d.]+)/g;
+  for (const match of d.matchAll(re)) {
+    const [x0, y0, r, dx, dy] = match.slice(1).map(Number);
+    const start = Math.atan2(y0 - 12, x0 - 12);
+    let end = Math.atan2(y0 + dy - 12, x0 + dx - 12);
+    // sweep-flag 1 は SVG の座標で角度が増える向き（画面では時計回り）
+    while (end <= start) end += 2 * Math.PI;
+    for (let index = 0; index <= 360; index += 1) {
+      const angle = start + ((end - start) * index) / 360;
+      points.push({ x: 12 + r * Math.cos(angle), y: 12 + r * Math.sin(angle) });
+    }
+  }
+  return points;
+}
+
 describe("Spinner", () => {
-  it("全周トラックと 270 度アークで構成し、回転してもシルエットが変わらない", () => {
+  it("全周トラックと 180 度対称の 2 本のアーク（90 度 × 2）で構成する", () => {
     const html = renderToStaticMarkup(<Spinner />);
-    // 閉じた円のトラック（これが無いと欠けた円弧のインク重心が回転で動き、中心ぶれに見える）
+    // 閉じた円のトラック（回転しても外形が変わらない）
     expect(html).toContain('<circle class="pr-spinner-track" cx="12" cy="12" r="8.5"');
     // 固定の opacity ではなく、トークン（--color-spinner-track）で色を付ける
     expect(html).not.toContain("opacity=");
-    // 回転を知覚させる 270 度アーク（3 時から反時計回りに 6 時まで）
-    expect(html).toContain('class="pr-spinner-arc" d="M20.5 12a8.5 8.5 0 1 0-8.5 8.5"');
+    // 12 時→3 時と 6 時→9 時の 2 本（1 つの path）。#1180
+    expect(html).toContain('class="pr-spinner-arc" d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5M12 20.5a8.5 8.5 0 0 1-8.5-8.5"');
     expect(html).toContain('viewBox="0 0 24 24"');
   });
+
+  it.each([14, 16, 20, 24])(
+    "%ipx でもアークの見た目の重心は中心にあり、回転角によらず動かない（#1180）",
+    (size) => {
+      const html = renderToStaticMarkup(<Spinner size={size} />);
+      const d = attr(html, '<path class="pr-spinner-arc"', "d") ?? "";
+      const points = arcPoints(d);
+      const { radius } = spinnerGeometry(size);
+      // 2 本 × 90 度（解析の確認: 点はすべて半径 radius の円の上）
+      expect(points).toHaveLength(2 * 361);
+      for (const point of points) {
+        expect(Math.hypot(point.x - 12, point.y - 12)).toBeCloseTo(radius, 3);
+      }
+      const centroid = {
+        x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+        y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+      };
+      // 重心が中心なら、回転した点の列の重心も中心のまま（回転は中心のまわりの線形変換）。
+      // 旧形（270 度の 1 本）は中心から 2.55（viewBox 単位）＝16px で 1.7px 外れ、回転で上下・左右に揺れて見えた。
+      expect(Math.abs(centroid.x - 12)).toBeLessThan(0.01);
+      expect(Math.abs(centroid.y - 12)).toBeLessThan(0.01);
+    }
+  );
 
   it.each([
     [14, 3.429, 8.286],
@@ -51,7 +95,24 @@ describe("Spinner", () => {
     const html = renderToStaticMarkup(<Spinner size={size} />);
     expect(attr(html, "<svg", "stroke-width")).toBe(String(strokeWidth));
     expect(attr(html, "<circle", "r")).toBe(String(radius));
-    expect(html).toContain(`a${radius} ${radius} 0 1 0-${radius} ${radius}`);
+    expect(html).toContain(`a${radius} ${radius} 0 0 1 ${radius} ${radius}`);
+    expect(html).toContain(`a${radius} ${radius} 0 0 1-${radius}-${radius}`);
+  });
+
+  it("回転しない固定の正方形の箱の中で、内側の svg だけを回す（#1180）", () => {
+    const html = renderToStaticMarkup(<Spinner size={14} />);
+    // 外側の箱: 寸法を固定し、回転は内側の svg だけ
+    expect(html.startsWith("<span")).toBe(true);
+    const box = classesOf(html, "<span");
+    expect(box).toContain("pr-spinner");
+    expect(box).not.toContain("animate-spin");
+    expect(attr(html, "<span", "style")).toBe("width:14px;height:14px");
+    expect(attr(html, "<span", "aria-hidden")).toBe("true");
+    // 内側の svg: 回る
+    expect(classesOf(html, "<svg")).toContain("animate-spin");
+    expect(attr(html, "<svg", "width")).toBe("14");
+    expect(attr(html, "<svg", "height")).toBe("14");
+    expect(html.match(/<svg/g)).toHaveLength(1);
   });
 
   it("既定 16px・animate-spin・motion-reduce でも回転を止めない（#440）", () => {
@@ -61,15 +122,14 @@ describe("Spinner", () => {
     const classes = classesOf(html, "<svg");
     expect(classes).toContain("animate-spin");
     expect(classes).not.toContain("motion-reduce:animate-none");
-    // flex 内で長いラベルに押されて縮まない
-    expect(classes).toContain("shrink-0");
     expect(html).toContain('aria-hidden="true"');
   });
 
-  it("size と className を上書きできる", () => {
+  it("size と className を上書きできる（className は箱に付け、色は currentColor で svg に伝わる）", () => {
     const html = renderToStaticMarkup(<Spinner size={14} className="text-accent-fg" />);
     expect(html).toContain('width="14"');
-    expect(classesOf(html, "<svg")).toContain("text-accent-fg");
+    expect(classesOf(html, "<span")).toContain("text-accent-fg");
+    expect(attr(html, "<svg", "stroke")).toBe("currentColor");
   });
 });
 
@@ -90,6 +150,17 @@ describe("Spinner の CSS（トークン・reduced-motion）", () => {
     const reduced = baseCss.slice(baseCss.indexOf("@media (prefers-reduced-motion: reduce)"));
     expect(reduced).toMatch(/svg\.animate-spin\s*\{\s*animation-duration: 1s !important;/);
     expect(baseCss).not.toContain("pr-spinner-breathe");
+  });
+
+  it("base.css: 箱は固定の正方形で、回転を周りのレイアウト・スクロールの領域に出さない（#1180）", () => {
+    const rule = baseCss.match(/\.pr-spinner\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(rule).toMatch(/display:\s*inline-block/);
+    expect(rule).toMatch(/flex:\s*none/);
+    expect(rule).toMatch(/line-height:\s*0/);
+    expect(rule).toMatch(/vertical-align:\s*middle/);
+    // 寸法・レイアウト・描画を箱の中に閉じる（回転した正方形の角が外へ出ない）
+    expect(rule).toMatch(/contain:\s*strict/);
+    expect(baseCss).toMatch(/\.pr-spinner\s*>\s*svg\s*\{[^}]*display:\s*block/);
   });
 
   it("base.css が回転原点を図形中心へ固定し合成レイヤーで回す", () => {
@@ -129,7 +200,7 @@ describe("Button loading spinner", () => {
         実行
       </Button>
     );
-    expect(classesOf(html, "<svg")).toContain("text-fg-muted");
+    expect(classesOf(html, '<span class="pr-spinner')).toContain("text-fg-muted");
   });
 
   it("loading 中は children 側の先頭アイコンを隠して無効化する", () => {

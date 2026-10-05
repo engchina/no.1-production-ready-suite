@@ -75,8 +75,16 @@
             "message": "アイコン付きの入力欄（検索欄）を手書きしない（絶対配置のアイコン + input の pl-*）。TextField の leadingIcon / trailing / onClear を使う（docs/design-system/README.md §4「TextField」）。"
           },
           {
-            "selector": ":matches(Literal[value=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*animate-spin(?![\\w-])/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*animate-spin(?![\\w-])/])",
-            "message": "回転するアイコンを手書きしない（lucide の Loader2 / RefreshCw 等に animate-spin を付けない）。共有の Spinner（全周トラック・線の実寸 2px・reduced-motion 対応）を使い、ボタンは loading を使う（docs/design-system/README.md §4「Spinner」）。"
+            "selector": ":matches(Literal[value=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*animate-(?:spin(?![\\w-])|\\[spin)/], TemplateElement[value.raw=/(?:^|\\s)(?:[\\w\\[\\]-]+:)*animate-(?:spin(?![\\w-])|\\[spin)/])",
+            "message": "回転するアイコンを手書きしない（lucide の Loader2 / RefreshCw 等に animate-spin / animate-[spin_…] を付けない）。共有の Spinner（固定の正方形の箱の中で 180 度対称のアークだけが回り、回転で周りの行の位置・高さを変えない）を使い、ボタンは loading を使う（docs/design-system/README.md §4「Spinner」、#1180）。"
+          },
+          {
+            "selector": "ImportDeclaration[source.value='lucide-react'] > ImportSpecifier[imported.name=/^(?:Lucide)?Loader(?:2|Circle|Pinwheel)?(?:Icon)?$/]",
+            "message": "回転用の lucide のアイコン（Loader / Loader2 / LoaderCircle / LoaderPinwheel）を使わない。欠けた円弧は回すと重心が動いて上下に揺れて見える。処理中の表示は共有の Spinner、ボタンは loading、領域は ProcessingIndicator / TimedLoadingState を使う（docs/design-system/README.md §4「Spinner」、#1180）。"
+          },
+          {
+            "selector": "Property[key.name=/^animation(?:Name)?$/] :matches(Literal[value=/(?:^|[\\s,])spin(?![\\w-])/], TemplateElement[value.raw=/(?:^|[\\s,])spin(?![\\w-])/])",
+            "message": "inline style の animation で回転（spin）を書かない。処理中の表示は共有の Spinner、ボタンは loading を使う（docs/design-system/README.md §4「Spinner」、#1180）。"
           },
           {
             "selector": "JSXOpeningElement[name.name=/^(?:TextField|input)$/]:has(> JSXAttribute[name.name='type'][value.value='search'])",

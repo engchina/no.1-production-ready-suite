@@ -5,6 +5,7 @@ import {
   mockAuthUser,
   mockLocalAuth,
 } from "./_helpers";
+import { expectSpinnerStable } from "./_spinner-stability";
 
 /**
  * DB ゲート（3製品共通の部品。#325）: システム設定の 5 画面以外は、DB 接続不可/未設定のとき
@@ -210,6 +211,29 @@ test("確認が 10 秒を超えて遅延の案内が出ても、読み込みの�
   expect(Math.abs(after.top - before.top)).toBeLessThan(0.5);
   expect(Math.abs(after.height - before.height)).toBeLessThan(0.5);
 });
+
+for (const theme of ["light", "dark"] as const) {
+  test(`確認中のスピナーは回転しても見た目の重心が上下・左右に動かず、カードと行も動かない（#1180、${theme}）`, async ({ page }, testInfo) => {
+    await routeAuth(page);
+    // アプリの外観の設定（localStorage）でテーマを切り替える。
+    await page.addInitScript((value) => {
+      window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+    }, theme);
+    await page.route("**/api/ready/database", () => new Promise<void>(() => undefined));
+
+    await page.goto("/file-list");
+
+    const loading = page.getByTestId("database-gate-loading");
+    await expect(loading).toContainText("データベースの状態を確認しています");
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
+    const card = await loading.boundingBox();
+    // 共有の Spinner（固定の正方形の箱の中で 180 度対称のアークだけが回る）。旧形（270 度の 1 本）は
+    // 見た目の重心が 1 回転で上下・左右に 1.8px 動き、揺れて見えた。
+    await expectSpinnerStable(loading.locator(".pr-spinner"));
+    expect(await loading.boundingBox()).toEqual(card);
+    await page.screenshot({ path: testInfo.outputPath(`db-gate-checking-${theme}.png`) });
+  });
+}
 
 test("システム設定の 5 画面は DB が無くてもゲートを通さずに開ける", async ({ page }) => {
   await routeAuth(page);
