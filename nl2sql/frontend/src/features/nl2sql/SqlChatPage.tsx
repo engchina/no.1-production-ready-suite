@@ -10,6 +10,7 @@ import {
   MessageSquarePlus,
   PanelLeftClose,
   PanelLeftOpen,
+  Play,
   RefreshCw,
   RotateCcw,
   Search,
@@ -54,6 +55,15 @@ import { t } from "@/lib/i18n";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { randomUuid } from "@/lib/randomUuid";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
+import { useAuth } from "@/features/security/AuthProvider";
+import {
+  CAPABILITY_PERMISSIONS,
+  MENU_PERMISSIONS,
+} from "@/features/security/menu-permissions";
+import {
+  ChatSqlExecutionResult,
+  useChatSqlExecution,
+} from "./components/ChatSqlExecution";
 import { JobFailureBody } from "./components/JobFailureBody";
 import {
   useProfileUsageContext,
@@ -193,6 +203,10 @@ function useInlineHistory() {
 /** 1 往復を永続ジョブにし、前文はサーバーで復元する。送信では SQL を実行しない。 */
 export function SqlChatPage() {
   const active = useWorkspaceActive();
+  const { hasPermission } = useAuth();
+  // 生成した SQL の実行（#1154）は SQL 生成の画面・SELECT SQL の実行と同じ実行の権限が要る。
+  const canExecuteSql = hasPermission(CAPABILITY_PERMISSIONS.sqlExecute);
+  const canOpenDirectSql = hasPermission(MENU_PERMISSIONS.directSql);
   const identity = useWorkspaceIdentity();
   const queryClient = useQueryClient();
   const [profileId, setProfileId] = useWorkspaceState("profileId", "");
@@ -693,7 +707,12 @@ export function SqlChatPage() {
                   />
                 ) : null}
                 {turns.map((turn) => (
-                  <ChatTurn key={turn.job_id} turn={turn} />
+                  <ChatTurn
+                    key={turn.job_id}
+                    turn={turn}
+                    canExecuteSql={canExecuteSql}
+                    canOpenDirectSql={canOpenDirectSql}
+                  />
                 ))}
                 {pending ? (
                   // 送った質問はジョブの投入の応答を待たずに出す。失敗しても残す（#907）。
@@ -840,9 +859,25 @@ export function SqlChatPage() {
     </div>
   );
 }
-function ChatTurn({ turn }: { turn: JobData }) {
+function ChatTurn({
+  turn,
+  canExecuteSql,
+  canOpenDirectSql,
+}: {
+  turn: JobData;
+  canExecuteSql: boolean;
+  canOpenDirectSql: boolean;
+}) {
   const [copyError, setCopyError] = useState("");
   const result = turn.result;
+  // 実行は明示の操作（送信では実行しない）。安全検査を通った生成 SQL だけを実行できる（#1154）。
+  const execution = useChatSqlExecution(turn.job_id);
+  const executable = Boolean(
+    turn.status === "done" &&
+      result?.safety.is_safe &&
+      result.generated_sql.trim(),
+  );
+  const executed = Boolean(execution.data || turn.last_execution);
   return (
     <article className="space-y-2" data-testid="sql-chat-turn">
       <ChatUserMessage>{turn.question || result?.original_question}</ChatUserMessage>
@@ -862,32 +897,64 @@ function ChatTurn({ turn }: { turn: JobData }) {
                 <StatusBadge
                   variant={result.safety.is_safe ? "success" : "danger"}
                   label={
-                    result.safety.is_safe ? t("chat.safe") : t("chat.blocked")
+                    !result.safety.is_safe
+                      ? t("chat.blocked")
+                      : executed
+                        ? t("chat.safeExecuted")
+                        : t("chat.safe")
                   }
                 />
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  icon={Copy}
-                  onClick={() => {
-                    void copyTextToClipboard(result.generated_sql).then(
-                      () => {
-                        setCopyError("");
-                        toast.success(t("common.action.copied"));
-                      },
-                      () => setCopyError(t("chat.copyFailed")),
-                    );
-                  }}
-                >
-                  {t("chat.copySql")}
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={Copy}
+                    onClick={() => {
+                      void copyTextToClipboard(result.generated_sql).then(
+                        () => {
+                          setCopyError("");
+                          toast.success(t("common.action.copied"));
+                        },
+                        () => setCopyError(t("chat.copyFailed")),
+                      );
+                    }}
+                  >
+                    {t("chat.copySql")}
+                  </Button>
+                  {executable && canExecuteSql ? (
+                    // 吹き出しの中の操作なので secondary。実行中はラベルを変えず、アイコンがスピナーになる。
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      icon={Play}
+                      loading={execution.running}
+                      onClick={execution.run}
+                      data-testid="sql-chat-execute"
+                    >
+                      {executed ? t("chat.execute.again") : t("chat.execute")}
+                    </Button>
+                  ) : null}
+                </div>
               </div>
               <pre className="max-w-full overflow-x-auto rounded-md border border-border bg-canvas p-3 text-sm [scrollbar-gutter:stable]">
                 <code>{result.generated_sql}</code>
               </pre>
               {result.explanation ? (
                 <MessageText text={result.explanation} />
+              ) : null}
+              {executable && !canExecuteSql ? (
+                <p className="text-xs text-fg-muted">
+                  {t("chat.execute.permissionRequired")}
+                </p>
+              ) : null}
+              {executable ? (
+                <ChatSqlExecutionResult
+                  turn={turn}
+                  execution={execution}
+                  canOpenDirectSql={canOpenDirectSql}
+                />
               ) : null}
             </>
           ) : null}

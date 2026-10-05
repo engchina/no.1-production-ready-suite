@@ -30,6 +30,11 @@ export interface SideSheetProps {
   closeLabel: string;
   /** 出す側（既定は左）。 */
   side?: "left" | "right";
+  /**
+   * 幅（#1154）。`default` は 22rem（画面幅 − 3.5rem まで。会話の履歴などの一覧）。`wide` は表など横に広い
+   * 内容を見る大きなパネルで、sm 以上は 64rem（画面幅 − 3.5rem まで）、sm 未満は全画面。
+   */
+  size?: "default" | "wide";
   /** シートの要素の id（開くボタンの `aria-controls` に渡す）。 */
   id?: string;
   /** 閉じたときにフォーカスを戻す先。省略時は開く前にフォーカスがあった要素。 */
@@ -48,6 +53,7 @@ export function SideSheet({
   title,
   closeLabel,
   side = "left",
+  size = "default",
   id,
   returnFocusRef,
   headerActions,
@@ -122,7 +128,10 @@ export function SideSheet({
         data-state={open ? "open" : "closed"}
         data-testid={testId}
         className={cn(
-          "fixed inset-y-0 z-[var(--z-dialog)] flex w-[22rem] max-w-[calc(100vw-3.5rem)] flex-col bg-surface-overlay text-fg shadow-[var(--shadow-dialog)] outline-none",
+          "fixed inset-y-0 z-[var(--z-dialog)] flex flex-col bg-surface-overlay text-fg shadow-[var(--shadow-dialog)] outline-none",
+          size === "wide"
+            ? "w-full max-w-full sm:w-[64rem] sm:max-w-[calc(100vw-3.5rem)]"
+            : "w-[22rem] max-w-[calc(100vw-3.5rem)]",
           left ? "left-0 border-r border-border" : "right-0 border-l border-border",
           "duration-200 ease-out motion-reduce:transition-none",
           // 開くときは visibility を即座に visible にする（遷移させると開いた瞬間にフォーカスを移せない）。
