@@ -542,6 +542,13 @@ async def _generate_chat_answer(
     return assistant, result
 
 
+# 段階の間に event が無い間（回答の作成など）も、この間隔で SSE のコメントを送る（#1160）。
+# 画面は配信が途絶えた（接続が切れた・止まった）かを、届いたバイトで判定する。中継（Nginx など）の
+# 無通信の打ち切りも防ぐ。
+SSE_HEARTBEAT_SECONDS = 10.0
+SSE_HEARTBEAT = ": keepalive\n\n"
+
+
 async def _stream_chat_events(
     turn: PreparedChatTurn,
     request: ChatMessageRequest,
@@ -637,7 +644,11 @@ async def _stream_chat_events(
     remaining = len(columns)
     try:
         while remaining > 0:
-            event = await queue.get()
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SECONDS)
+            except TimeoutError:
+                yield SSE_HEARTBEAT
+                continue
             if event is None:
                 break
             name, payload = event

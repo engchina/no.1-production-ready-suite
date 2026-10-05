@@ -673,6 +673,53 @@ class _StagedPipeline(_FakePipeline):
         )
 
 
+class _SlowPipeline(_FakePipeline):
+    """回答の作成に時間がかかる（段階の間に event が無い）pipeline（#1160）。"""
+
+    async def run(  # type: ignore[no-untyped-def]
+        self,
+        request,
+        trace_id=None,
+        progress_callback=None,
+        token_callback=None,
+        *,
+        history=None,
+        query_guardrail_result=None,
+    ):
+        await asyncio.sleep(0.25)
+        return await super().run(  # type: ignore[no-untyped-call]
+            request,
+            trace_id,
+            None,
+            token_callback,
+            history=history,
+            query_guardrail_result=query_guardrail_result,
+        )
+
+
+def test_stream_message_sends_heartbeat_while_waiting(monkeypatch: MonkeyPatch) -> None:
+    """event の無い間も heartbeat（SSE のコメント）を送る（画面が途絶えを判定できる。#1160）。"""
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-heartbeat")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    monkeypatch.setattr(chat_route, "RagPipeline", _SlowPipeline)
+    monkeypatch.setattr(chat_route, "SSE_HEARTBEAT_SECONDS", 0.05)
+
+    resp = client.post(
+        "/api/chat/conversations/conv-heartbeat/messages/stream", json={"content": "経費の上限は?"}
+    )
+
+    assert resp.status_code == 200
+    text = resp.text
+    assert text.count(chat_route.SSE_HEARTBEAT) >= 2
+    # heartbeat は回答の作成の間に届き、event の解析を壊さない（回答と all_done はそのまま届く）。
+    assert text.index(chat_route.SSE_HEARTBEAT) < text.index("event: delta")
+    assert text.rstrip().endswith('"conversation_id": "conv-heartbeat"}')
+    assert "event: all_done" in text
+    roles = [m.role for m in fake.messages["conv-heartbeat"]]
+    assert roles == ["USER", "ASSISTANT"]
+
+
 def _step_statuses(event: dict[str, object]) -> dict[str, str]:
     steps = event["steps"]
     assert isinstance(steps, list)

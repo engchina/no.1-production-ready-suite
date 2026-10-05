@@ -93,6 +93,7 @@ describe("useChatProgressTracker", () => {
     expect(q("progress-reconnecting")?.textContent).toBe("接続を確認しています。");
     expect(q("progress-current")?.getAttribute("data-reconnecting")).toBe("true");
 
+    await advance(10);
     render({ ...base, receivedAt: Date.now() });
     expect(latest.reconnecting).toBe(false);
     expect(q("progress-reconnecting")).toBeNull();
@@ -148,16 +149,31 @@ describe("useChatProgressTracker", () => {
     await advance(5_000);
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(latest.reconnecting).toBe(true);
+    await advance(10);
     act(() => latest.touch());
     expect(latest.reconnecting).toBe(false);
   });
 
-  it("refreshNow() は待たずに取り直す（配信が終端の前に終わったとき）", async () => {
+  it("refreshNow() は待たずに取り直し、配信が届くまで backoff して続ける（配信が終端の前に終わったとき）", async () => {
     const refresh = vi.fn();
     render({ key: "stream-1", steps: running, refresh, staleAfterMs: 30_000 });
+    // 直前まで配信は届いていた（途絶えの時間には満たない）。
+    await advance(1_000);
+    act(() => latest.touch());
     act(() => latest.refreshNow());
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(latest.reconnecting).toBe(true);
+    // 取り直しても配信が届かなければ、途絶えの時間を待たずに 1 秒・2 秒 … で続ける。
+    await advance(1_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    await advance(2_000);
+    expect(refresh).toHaveBeenCalledTimes(3);
+    // 配信が届いたら止め、途絶えの判定に戻る。
+    await advance(10);
+    act(() => latest.touch());
+    expect(latest.reconnecting).toBe(false);
+    await advance(29_000);
+    expect(refresh).toHaveBeenCalledTimes(3);
   });
 
   it("タブが非表示の間は取り直さず、表示に戻ったら待たずに取り直す", async () => {

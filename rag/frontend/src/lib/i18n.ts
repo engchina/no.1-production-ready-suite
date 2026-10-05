@@ -2087,6 +2087,7 @@ export const ja = {
   "chat.send.failed": "送信できませんでした",
   "chat.send.failedHint": "サーバーに届きませんでした。通信の状態を確かめて、再送信してください。",
   "chat.send.retry": "再送信",
+  "chat.stream.lost": "回答を受け取る途中で接続が切れ、回答を確かめられませんでした。通信の状態を確かめて、再送信してください。",
   "chat.send.stopped": "回答の作成を停止しました。もう一度送ると、新しく回答を作成します。",
 
   "search.error.failed": "検索に失敗しました。再度お試しください。",

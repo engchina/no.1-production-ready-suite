@@ -109,6 +109,48 @@ describe("streamChatMessage", () => {
     expect(errorMessage).toBe("失敗しました。");
   });
 
+  it("all_done まで届いたら completed、届く前に終わったら completed: false を返す（接続が切れた）", async () => {
+    const start = `event: start\ndata: ${JSON.stringify({
+      conversation_id: "c1",
+      user_message: { message_id: "u1", role: "USER", content: "質問" },
+      columns: [{ model_id: "m1", label: "MODEL 1" }],
+    })}\n\n`;
+    const allDone = `event: all_done\ndata: ${JSON.stringify({ conversation_id: "c1" })}\n\n`;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sseResponse([start, allDone])));
+    await expect(streamChatMessage("c1", { content: "質問" }, {})).resolves.toEqual({ completed: true });
+
+    // 接続が切れた（all_done の前に本文が終わった）。
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sseResponse([start])));
+    await expect(streamChatMessage("c1", { content: "質問" }, {})).resolves.toEqual({ completed: false });
+  });
+
+  it("heartbeat のコメントも含め、届いたバイトごとに onActivity を呼ぶ（event としては扱わない）", async () => {
+    const encoder = new TextEncoder();
+    const chunks = [
+      ": keepalive\n\n",
+      `event: progress\ndata: ${JSON.stringify({ model_id: "m1", steps: [] })}\n\n`,
+      ": keepalive\n\n",
+      `event: all_done\ndata: ${JSON.stringify({ conversation_id: "c1" })}\n\n`,
+    ];
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }))
+    );
+    const onActivity = vi.fn();
+    const onProgress = vi.fn();
+    const outcome = await streamChatMessage("c1", { content: "質問" }, { onActivity, onProgress });
+    expect(outcome).toEqual({ completed: true });
+    // 応答の受け取り（1 回）と、届いたバイトごと。
+    expect(onActivity.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(onProgress).toHaveBeenCalledTimes(1);
+  });
+
   it("非 2xx は ApiError を投げる", async () => {
     vi.stubGlobal(
       "fetch",

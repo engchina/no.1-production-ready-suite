@@ -146,8 +146,9 @@ export function useChatProgressTracker({
   const touch = useCallback(() => {
     const now = Date.now();
     lastActivityRef.current = Math.max(lastActivityRef.current, now);
-    // 取り直している間に届いたときだけ描画する（SSE の delta ごとに描画し直さない）。
-    if (stallRef.current && touchedAtRef.current < stallRef.current.at) {
+    // 取り直しを始めた後に初めて届いたときだけ描画する（SSE の delta ごとに描画し直さない）。
+    const current = stallRef.current;
+    if (current && now > current.at && touchedAtRef.current <= current.at) {
       touchedAtRef.current = now;
       setTouchedAt(now);
     }
@@ -167,7 +168,8 @@ export function useChatProgressTracker({
     let controller: AbortController | null = null;
     let refreshing = false;
     let failures = 0;
-    let forced = false;
+    /** `refreshNow()` の時刻。これより後に配信が届くまでは、時間に関係なく途絶えとして取り直す。 */
+    let forcedAt: number | null = null;
 
     const wait = (ms: number) => {
       if (timer !== undefined) clearTimeout(timer);
@@ -197,7 +199,7 @@ export function useChatProgressTracker({
         refreshing = false;
       }
       if (disposed) return;
-      if (lastActivityRef.current >= startedAt) {
+      if (lastActivityRef.current > startedAt) {
         // 取り直しで配信が届いた。途絶えの判定を初めから数える。
         failures = 0;
         check();
@@ -209,20 +211,20 @@ export function useChatProgressTracker({
 
     function check() {
       if (disposed || refreshing) return;
+      if (forcedAt !== null && lastActivityRef.current > forcedAt) forcedAt = null;
       const idle = Date.now() - lastActivityRef.current;
-      if (!forced && idle < staleAfterMs) {
+      if (forcedAt === null && idle < staleAfterMs) {
         failures = 0;
         wait(staleAfterMs - idle);
         return;
       }
       // タブが非表示の間は取り直さない（表示に戻ったら visibilitychange で確かめる）。
       if (documentHidden()) return;
-      forced = false;
       void attempt();
     }
 
     checkNowRef.current = () => {
-      forced = true;
+      forcedAt = Date.now();
       if (timer !== undefined) clearTimeout(timer);
       check();
     };
@@ -244,7 +246,7 @@ export function useChatProgressTracker({
 
   // 取り直しを始めた後に配信が届いていなければ「接続を確認しています」。
   const lastSeen = Math.max(receivedAt ?? 0, touchedAt);
-  const reconnecting = tracking && stall !== null && stall.key === key && lastSeen < stall.at;
+  const reconnecting = tracking && stall !== null && stall.key === key && lastSeen <= stall.at;
 
   return {
     active,
