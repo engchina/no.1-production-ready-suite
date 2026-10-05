@@ -2700,7 +2700,7 @@ const progress = useChatProgressTracker({
 | 案内は遅延の案内と同じ予約した行に出す | 案内が出ても今の段階の行・経過時間は動かない |
 
 - 単体テストは `packages/ui/tests/chat-progress-tracker.test.tsx`。
-- 製品のアダプタ: NL2SQL（会話の polling。`refresh` は応答しない取得を打ち切る `refetch({ cancelRefetch: true })`）、RAG（SSE。`touch()` は受け取ったバイトごと、`all_done` の前に終わったら `refreshNow()`。`refresh` は保存済みの会話から回答を取り直す。backend は event の無い間 10 秒ごとに heartbeat を送る）、Agent（Run の polling。`waiting_approval` の間は `enabled: false`）。
+- 製品のアダプタ: NL2SQL（会話の polling。`refresh` は応答しない取得を打ち切る `refetch({ cancelRefetch: true })`）、RAG（SSE。`touch()` は受け取ったバイトごと、`all_done` の前に終わったら `refreshNow()` で「接続を確認しています。」を出し、最後に受け取った event の連番から続きを購読し直す。`refresh` は途絶えた接続を閉じて張り直させる。続きを購読できなければ保存済みの作成中の回答に引き継ぎ、会話の polling で完了を待つ（#1175。作成は接続が切れても続く）。backend は event の無い間 10 秒ごとに heartbeat を送る）、Agent（Run の polling。`waiting_approval` の間は `enabled: false`）。
 - 実ブラウザは NL2SQL `tests/e2e/sql-chat-progress-refresh.spec.ts`・RAG `e2e/chat-progress-refresh.spec.ts`・Agent `e2e/chat-progress-refresh.spec.ts`。
 
 ## ResultTable — **新規**（#1154 / #1178。旧名 ChatResultTable）

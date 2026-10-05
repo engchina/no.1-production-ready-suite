@@ -286,6 +286,12 @@ class StoredMessage:
     elapsed_ms: float | None = None
     tenant_id_hash: str | None = None
     user_id_hash: str | None = None
+    # 回答の処理の段階（3 製品共通の ChatProgressStep の一覧。#1146 / #1175）。作成中は今の段階、
+    # 終わった後は処理の経過。段階の無いメッセージ（USER・#1175 より前の回答）は None。
+    progress: list[dict[str, Any]] | None = None
+    # 作成中（STREAMING）の回答を作っているプロセスと、その最後の heartbeat（#1175）。
+    lease_owner: str | None = None
+    heartbeat_at: datetime | None = None
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
@@ -3047,6 +3053,8 @@ class OracleClient:
             tenant_id_hash=_current_tenant_id_hash(),
             user_id_hash=current_audit_request_context().user_id_hash,
             created_at=message.created_at or now,
+            progress=message.progress,
+            lease_owner=message.lease_owner,
         )
 
         def operation(connection: OracleConnectionProtocol) -> StoredMessage:
@@ -3069,6 +3077,9 @@ class OracleClient:
                     trace_id,
                     status,
                     elapsed_ms,
+                    progress_json,
+                    lease_owner,
+                    heartbeat_at,
                     created_at
                 ) VALUES (
                     :message_id,
@@ -3084,6 +3095,9 @@ class OracleClient:
                     :trace_id,
                     :status,
                     :elapsed_ms,
+                    :progress_json,
+                    :lease_owner,
+                    CASE WHEN :lease_owner IS NULL THEN NULL ELSE SYSTIMESTAMP END,
                     :created_at
                 )
                 """,
@@ -3161,6 +3175,9 @@ class OracleClient:
                 m.trace_id,
                 m.status,
                 m.elapsed_ms,
+                m.progress_json,
+                m.lease_owner,
+                m.heartbeat_at,
                 m.created_at
             FROM rag_messages m
             JOIN rag_conversations c
@@ -3176,6 +3193,167 @@ class OracleClient:
             _with_conversation_access_bind(binds),
         )
         return [_stored_message_from_row(row) for row in rows]
+
+    async def update_chat_message_progress(
+        self, message_id: str, *, lease_owner: str, progress: list[dict[str, Any]]
+    ) -> bool:
+        """作成中の回答の段階を保存し、heartbeat を進める(#1175)。
+
+        このプロセスが作っている ``STREAMING`` の行だけを更新する。取消・中断で
+        ``STREAMING`` でなくなっていたら False(作成を止める合図)。
+        """
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                """
+                UPDATE rag_messages
+                SET progress_json = :progress_json,
+                    heartbeat_at = SYSTIMESTAMP
+                WHERE message_id = :message_id
+                  AND status = 'STREAMING'
+                  AND lease_owner = :lease_owner
+                """,
+                {
+                    "message_id": message_id,
+                    "lease_owner": lease_owner,
+                    "progress_json": _json_dumps(progress),
+                },
+            )
+
+        return await self._run_transaction(operation) > 0
+
+    async def heartbeat_chat_message(self, message_id: str, *, lease_owner: str) -> bool:
+        """作成中の回答の heartbeat を DB の時刻で書く(#1175)。
+
+        ``STREAMING`` でなくなっていたら(別のプロセスへの取消・中断)False。
+        """
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                """
+                UPDATE rag_messages
+                SET heartbeat_at = SYSTIMESTAMP
+                WHERE message_id = :message_id
+                  AND status = 'STREAMING'
+                  AND lease_owner = :lease_owner
+                """,
+                {"message_id": message_id, "lease_owner": lease_owner},
+            )
+
+        return await self._run_transaction(operation) > 0
+
+    async def finish_chat_message(self, message: StoredMessage, *, lease_owner: str) -> bool:
+        """作成中の回答に最終の状態(回答・失敗)を書く(#1175)。
+
+        このプロセスが作っている ``STREAMING`` の行だけを更新する。取消・中断の後なら書かずに
+        False を返す(利用者の停止・中断の判定を上書きしない)。
+        """
+        binds = {
+            **_message_binds(message),
+            "lease_owner": lease_owner,
+            "updated_at": datetime.now(UTC),
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            updated = _execute_count(
+                connection,
+                """
+                UPDATE rag_messages
+                SET content = :content,
+                    model = :model,
+                    citations_json = :citations_json,
+                    guardrail_warnings = :guardrail_warnings,
+                    trace_id = :trace_id,
+                    status = :status,
+                    elapsed_ms = :elapsed_ms,
+                    progress_json = :progress_json,
+                    heartbeat_at = SYSTIMESTAMP
+                WHERE message_id = :message_id
+                  AND status = 'STREAMING'
+                  AND lease_owner = :lease_owner
+                """,
+                binds,
+            )
+            if updated:
+                _execute(
+                    connection,
+                    _render_sql(
+                        """
+                    UPDATE rag_conversations
+                    SET updated_at = :updated_at
+                    WHERE conversation_id = :conversation_id
+                      AND {access_sql}
+                    """,
+                        access_sql=_oracle_conversation_access_predicate_sql(),
+                    ),
+                    _with_conversation_access_bind(binds),
+                )
+            return updated
+
+        return await self._run_transaction(operation) > 0
+
+    async def close_streaming_chat_message(
+        self,
+        message_id: str,
+        *,
+        status: str,
+        content: str,
+        lease_owner: str | None = None,
+        stale_seconds: float | None = None,
+        scoped: bool = True,
+    ) -> bool:
+        """作成中(``STREAMING``)の回答を停止(``CANCELLED``)・中断(``ERROR``)にする(#1175)。
+
+        - ``lease_owner`` だけ: そのプロセスが作っている行だけ(作成の task の後始末)。
+        - ``lease_owner`` と ``stale_seconds``: そのプロセスの行か、heartbeat が DB の時刻で
+          ``stale_seconds`` を超えて途絶えた行だけ(会話の取得のときの中断の判定)。
+        - どちらも無し: ``STREAMING`` の行(利用者の停止)。
+        ``scoped`` のときは会話の範囲(tenant・作成した利用者・検索・回答プロファイル)に閉じる。
+        """
+        if status not in {"CANCELLED", "ERROR"}:
+            raise ValueError(f"status={status} では閉じられません。")
+        conditions = ["m.message_id = :message_id", "m.status = 'STREAMING'"]
+        binds: dict[str, object] = {
+            "message_id": message_id,
+            "status": status,
+            "content": content,
+        }
+        if lease_owner is not None and stale_seconds is not None:
+            conditions.append(
+                "(m.lease_owner = :lease_owner OR m.heartbeat_at IS NULL "
+                "OR m.heartbeat_at < SYSTIMESTAMP - NUMTODSINTERVAL(:stale_seconds, 'SECOND'))"
+            )
+            binds["lease_owner"] = lease_owner
+            binds["stale_seconds"] = float(stale_seconds)
+        elif lease_owner is not None:
+            conditions.append("m.lease_owner = :lease_owner")
+            binds["lease_owner"] = lease_owner
+        if scoped:
+            conditions.append(
+                _render_sql(
+                    """
+                EXISTS (
+                    SELECT 1
+                    FROM rag_conversations c
+                    WHERE c.conversation_id = m.conversation_id
+                      AND {access_sql}
+                )
+                """,
+                    access_sql=_oracle_conversation_access_predicate_sql(alias="c"),
+                )
+            )
+            binds = _with_conversation_access_bind(binds)
+        statement = (
+            "UPDATE rag_messages m SET m.status = :status, m.content = :content WHERE "
+            + " AND ".join(conditions)
+        )
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(connection, statement, binds)
+
+        return await self._run_transaction(operation) > 0
 
     async def list_conversations_for_guardrail_migration(
         self, *, limit: int, offset: int
@@ -11057,6 +11235,8 @@ def _message_binds(message: StoredMessage) -> dict[str, object]:
         "trace_id": message.trace_id,
         "status": message.status,
         "elapsed_ms": message.elapsed_ms,
+        "progress_json": None if message.progress is None else _json_dumps(message.progress),
+        "lease_owner": message.lease_owner,
         "created_at": message.created_at,
     }
 
@@ -11214,6 +11394,17 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
         status=str(row.get("status") or "COMPLETE"),
         elapsed_ms=_optional_float(row.get("elapsed_ms")),
         created_at=_datetime_value(row.get("created_at")),
+        progress=(
+            _json_object_list(row.get("progress_json"))
+            if row.get("progress_json") is not None
+            else None
+        ),
+        lease_owner=_optional_str(row.get("lease_owner")),
+        heartbeat_at=(
+            _datetime_value(row.get("heartbeat_at"))
+            if row.get("heartbeat_at") is not None
+            else None
+        ),
     )
 
 
@@ -12213,6 +12404,8 @@ def oracle_message_schema_sql(
     """チャットメッセージ(message)table の DDL 例を返す。
 
     比較カラムのグルーピングに ``reply_to_message_id``(ASSISTANT→対応する USER)を使う。
+    作成中の回答(``STREAMING``)は段階(``progress_json``)・作成しているプロセス(``lease_owner``)・
+    heartbeat(``heartbeat_at``)を持つ(#1175)。利用者の停止は ``CANCELLED``。
     """
     return f"""
 CREATE TABLE {table_name} (
@@ -12229,11 +12422,14 @@ CREATE TABLE {table_name} (
     trace_id             VARCHAR2(64),
     status               VARCHAR2(16) DEFAULT 'COMPLETE' NOT NULL,
     elapsed_ms           NUMBER(12, 3),
+    progress_json        JSON,
+    lease_owner          VARCHAR2(128),
+    heartbeat_at         TIMESTAMP WITH TIME ZONE,
     created_at           TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT {table_name}_role_ck
         CHECK (role IN ('USER', 'ASSISTANT', 'SYSTEM')),
     CONSTRAINT {table_name}_status_ck
-        CHECK (status IN ('STREAMING', 'COMPLETE', 'ERROR')),
+        CHECK (status IN ('STREAMING', 'COMPLETE', 'ERROR', 'CANCELLED')),
     CONSTRAINT {table_name}_conversation_fk
         FOREIGN KEY (conversation_id)
         REFERENCES {conversation_table} (conversation_id)

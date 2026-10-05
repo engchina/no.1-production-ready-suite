@@ -42,7 +42,7 @@ from app.rag.search_answer_profile_migration import rename_sql as search_answer_
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "3"
-MIGRATION_ARTIFACT_VERSION = "20261003_001"
+MIGRATION_ARTIFACT_VERSION = "20261005_001"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -307,7 +307,49 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             ),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261005_001_message_answer_runs",
+            table_name="rag_messages",
+            sql=message_answer_runs_migration_sql(),
+        )
+    )
     return sections
+
+
+def message_answer_runs_migration_sql() -> str:
+    """作成中の回答の段階・プロセス・heartbeat の列と、停止（CANCELLED）の状態を足す（#1175）。"""
+    columns = (
+        ("PROGRESS_JSON", "progress_json JSON"),
+        ("LEASE_OWNER", "lease_owner VARCHAR2(128)"),
+        ("HEARTBEAT_AT", "heartbeat_at TIMESTAMP WITH TIME ZONE"),
+    )
+    column_blocks = "\n".join(
+        f"""    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_MESSAGES' AND column_name = '{name}';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_messages ADD ({definition})';
+    END IF;
+"""
+        for name, definition in columns
+    )
+    return f"""DECLARE
+    v_count NUMBER;
+BEGIN
+{column_blocks}
+    SELECT COUNT(*) INTO v_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_MESSAGES'
+      AND constraint_name = 'RAG_MESSAGES_STATUS_CK';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_messages DROP CONSTRAINT rag_messages_status_ck';
+    END IF;
+    EXECUTE IMMEDIATE
+        'ALTER TABLE rag_messages ADD CONSTRAINT rag_messages_status_ck CHECK '
+        || '(status IN (''STREAMING'', ''COMPLETE'', ''ERROR'', ''CANCELLED''))';
+END;
+/"""
 
 
 def oracle_schema_migration_sql(

@@ -1422,11 +1422,23 @@ export function useConversations(params: {
 }
 
 /** チャット会話詳細(メッセージ列を含む)。 */
-export function useConversation(id: string | null) {
+/** 作成中（STREAMING）の回答がある会話を取り直す間隔（#1175）。 */
+export const CONVERSATION_STREAMING_POLL_MS = 2_000;
+
+/**
+ * チャット会話の詳細。`pollStreaming` のときは、作成中（STREAMING）の回答がある間だけ取り直す（再読込の後・
+ * 配信を購読し直せないとき、保存済みの作成中の回答が完了に変わるまで。#1175）。
+ */
+export function useConversation(id: string | null, options: { pollStreaming?: boolean } = {}) {
+  const pollStreaming = options.pollStreaming ?? false;
   return useQuery({
     queryKey: queryKeys.conversation(id ?? ""),
     queryFn: () => api.getConversation(id as string),
     enabled: id != null,
+    refetchInterval: (query) =>
+      pollStreaming && query.state.data?.messages.some((message) => message.status === "STREAMING")
+        ? CONVERSATION_STREAMING_POLL_MS
+        : false,
   });
 }
 

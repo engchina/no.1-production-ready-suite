@@ -8,13 +8,14 @@ file)配下に置く。メッセージ送信は既存 RAG パイプラインを
 """
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.routes.search import (
@@ -36,12 +37,21 @@ from app.config import (
 from app.db_degradation import load_or_degrade
 from app.rag.answer_engine import AnswerScope
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
+from app.rag.chat_answer_runs import (
+    CHAT_ANSWER_CANCELLED_MESSAGE,
+    CHAT_ANSWER_INTERRUPTED_MESSAGE,
+    CHAT_ANSWER_TIMEOUT_MARGIN_SECONDS,
+    ChatAnswerLimitError,
+    ChatAnswerRun,
+    get_chat_answer_run_service,
+)
 from app.rag.chat_progress import ChatProgressTracker
 from app.rag.document_sections_service import document_sections
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
 from app.rag.observability import new_trace_id
 from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgress
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.request_context import current_audit_request_context
 from app.rag.search_answer_profile_knowledge import (
     clarification_document_ids,
     find_approved_faq,
@@ -49,6 +59,7 @@ from app.rag.search_answer_profile_knowledge import (
     resolve_clarification,
 )
 from app.schemas.chat import (
+    ChatAnswerCancelResult,
     ChatMessage,
     ChatMessageRequest,
     ConversationCreateRequest,
@@ -63,12 +74,17 @@ from app.schemas.common import ApiResponse, Page
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 CHAT_DISABLED_MESSAGE = "チャット機能は現在無効です。"
 CONVERSATION_NOT_FOUND_MESSAGE = "会話が見つかりません。"
 SEARCH_ANSWER_PROFILE_NOT_FOUND_MESSAGE = "検索・回答プロファイルが見つかりません。"
 HISTORY_PROMPT_LIMIT = 40
 BLOCKED_MESSAGE_PLACEHOLDER = "安全ポリシーにより内容を保存しませんでした。"
+ANSWER_STREAM_NOT_FOUND_MESSAGE = (
+    "回答の配信を再開できません。保存済みの会話から回答を取り直してください。"
+)
+DUPLICATE_MESSAGE_ID_MESSAGE = "同じ質問を既に送信しています。会話を読み込み直してください。"
 
 
 def _require_chat_enabled(settings: Settings) -> None:
@@ -112,6 +128,7 @@ def _to_chat_message(message: StoredMessage) -> ChatMessage:
         status=MessageStatus(message.status),
         reply_to_message_id=message.reply_to_message_id,
         created_at=message.created_at,
+        progress=message.progress,
     )
 
 
@@ -198,6 +215,9 @@ async def get_conversation(conversation_id: str) -> ApiResponse[ConversationDeta
     if conversation is None:
         raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE)
     messages = await oracle.list_messages(conversation_id)
+    # 作成していたプロセスが止まった作成中の回答は、中断の失敗にしてから返す（#1175）。
+    if await _close_interrupted_answers(oracle, messages):
+        messages = await oracle.list_messages(conversation_id)
     detail = ConversationDetail(
         **_to_conversation_summary(conversation).model_dump(),
         messages=[_to_chat_message(message) for message in messages],
@@ -238,23 +258,38 @@ async def stream_message(
     request: ChatMessageRequest,
     http_request: Request,
 ) -> StreamingResponse:
-    """メッセージを送信し、回答(マルチモデルは N 系統)を SSE でストリーミングする。"""
+    """メッセージを送信し、回答(マルチモデルは N 系統)を SSE でストリーミングする。
+
+    回答の作成は接続から切り離した task で進める（#1175）。接続が切れても作成は続き、最終の
+    回答は会話のメッセージに保存される。画面は `GET .../messages/{質問の id}/stream` で続きを
+    購読し直すか、保存済みの会話を取り直す。停止は `POST .../messages/{質問の id}/cancel`。
+    """
     settings = get_settings()
     _require_chat_enabled(settings)
     enforce_rate_limit("search", http_request)
     oracle = OracleClient()
     conversation = await _load_sendable_conversation(oracle, conversation_id)
-    # 検索・回答プロファイルの解決・発話の検査・USER
-    #  の保存は、応答を始める前に行う。応答を始めた後の
-    #
-    # HTTPException（409 / 404）や DB の例外は、利用者に理由を返せず stream が途切れるため（#463）。
+    context = current_audit_request_context()
+    try:
+        get_chat_answer_run_service().ensure_capacity(
+            tenant_id_hash=context.tenant_id_hash,
+            user_id_hash=context.user_id_hash,
+            limit=settings.rag_chat_max_active_answers_per_user,
+        )
+    except ChatAnswerLimitError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    # 検索・回答プロファイルの解決・発話の検査・USER と作成中の ASSISTANT の保存は、応答を始める
+    # 前に行う。応答を始めた後の HTTPException（409 / 404）や DB の例外は、利用者に理由を返せず
+    # stream が途切れるため（#463）。
     turn = await _prepare_chat_turn(
         oracle, conversation_id, conversation.search_answer_profile_id, request, settings
     )
+    columns = _resolve_compare_models(request, turn.settings)
+    run = await _start_answer_run(oracle, turn, columns)
     return StreamingResponse(
-        _stream_chat_events(turn, request),
+        _subscribe_events(run, after=0),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=SSE_HEADERS,
     )
 
 
@@ -433,11 +468,16 @@ async def _prepare_chat_turn(
     query_guardrail = await asyncio.to_thread(guardrails.validate_query, request.content)
     # 履歴は今回のユーザー発話を保存する前に読む(自分自身を含めない)。
     prior_messages = await oracle.list_messages(conversation_id)
+    if request.client_message_id and any(
+        message.id == request.client_message_id for message in prior_messages
+    ):
+        raise HTTPException(status_code=409, detail=DUPLICATE_MESSAGE_ID_MESSAGE)
     history = await _build_safe_history(prior_messages, guardrails)
     now = datetime.now(UTC)
     user_message = await oracle.append_message(
         StoredMessage(
-            id=uuid4().hex,
+            # 画面が決めた id（#1175）。送信の直後の停止をこの id で取り消せる。
+            id=request.client_message_id or uuid4().hex,
             conversation_id=conversation_id,
             role="USER",
             content=(
@@ -474,14 +514,18 @@ async def _generate_chat_answer(
     oracle: OracleClient,
     turn: PreparedChatTurn,
     model_id: str,
+    message_id: str,
     *,
+    lease_owner: str,
     progress_callback: Callable[[SearchStageProgress], Awaitable[None]] | None = None,
+    tracker: ChatProgressTracker | None = None,
 ) -> tuple[StoredMessage, SearchResponse]:
-    """1 モデル分の回答を生成し、ASSISTANT メッセージを保存する。
+    """1 モデル分の回答を生成し、作成中の ASSISTANT メッセージに最終の状態を書く(#1175)。
 
     生成は回答生成の上限（`rag_answer_timeout_seconds`。#375）で打ち切る。時間切れは
     最後の工程を持つ `AnswerTimeoutError` になる。
-    失敗したら ERROR の ASSISTANT メッセージを保存してから例外をそのまま送出する。
+    失敗したら ERROR を保存してから例外をそのまま送出する。保存は作成中（STREAMING）の行だけに
+    当たる（利用者の停止・中断の後は書かない）。処理の段階（`tracker`）は終端にして一緒に保存する。
     """
     trace_id = new_trace_id()
     try:
@@ -497,37 +541,41 @@ async def _generate_chat_answer(
             scope=turn.scope,
         )
         result = await run_answer_with_timeout(
-            lambda tracker: pipeline.run(
+            lambda progress_tracker: pipeline.run(
                 turn.request,
                 trace_id=trace_id,
-                progress_callback=tracker,
+                progress_callback=progress_tracker,
                 history=turn.history,
                 query_guardrail_result=turn.query_guardrail,
             ),
             turn.settings,
             progress_callback,
         )
-        assistant = await oracle.append_message(
-            StoredMessage(
-                id=uuid4().hex,
-                conversation_id=turn.conversation_id,
-                reply_to_message_id=turn.user_message.id,
-                role="ASSISTANT",
-                model=model_id or None,
-                content=result.answer,
-                citations=[citation.model_dump(mode="json") for citation in result.citations],
-                guardrail_warnings=result.guardrail_warnings,
-                trace_id=result.trace_id,
-                status="COMPLETE",
-                elapsed_ms=result.elapsed_ms,
-                created_at=datetime.now(UTC),
-            )
+        if tracker is not None:
+            tracker.finish(citation_count=len(result.citations))
+        assistant = StoredMessage(
+            id=message_id,
+            conversation_id=turn.conversation_id,
+            reply_to_message_id=turn.user_message.id,
+            role="ASSISTANT",
+            model=model_id or None,
+            content=result.answer,
+            citations=[citation.model_dump(mode="json") for citation in result.citations],
+            guardrail_warnings=result.guardrail_warnings,
+            trace_id=result.trace_id,
+            status="COMPLETE",
+            elapsed_ms=result.elapsed_ms,
+            created_at=datetime.now(UTC),
+            progress=tracker.snapshot() if tracker is not None else None,
         )
+        await oracle.finish_chat_message(assistant, lease_owner=lease_owner)
     except Exception as exc:
+        if tracker is not None:
+            tracker.fail()
         with suppress(Exception):
-            await oracle.append_message(
+            await oracle.finish_chat_message(
                 StoredMessage(
-                    id=uuid4().hex,
+                    id=message_id,
                     conversation_id=turn.conversation_id,
                     reply_to_message_id=turn.user_message.id,
                     role="ASSISTANT",
@@ -536,7 +584,9 @@ async def _generate_chat_answer(
                     trace_id=trace_id,
                     status="ERROR",
                     created_at=datetime.now(UTC),
-                )
+                    progress=tracker.snapshot() if tracker is not None else None,
+                ),
+                lease_owner=lease_owner,
             )
         raise
     return assistant, result
@@ -547,142 +597,317 @@ async def _generate_chat_answer(
 # 無通信の打ち切りも防ぐ。
 SSE_HEARTBEAT_SECONDS = 10.0
 SSE_HEARTBEAT = ": keepalive\n\n"
+SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 
-async def _stream_chat_events(
+async def _start_answer_run(
+    oracle: OracleClient,
     turn: PreparedChatTurn,
-    request: ChatMessageRequest,
-) -> AsyncIterator[str]:
-    """各モデルへ fan-out 生成 → ASSISTANT 永続化 を SSE で流す（USER は保存済み）。"""
-    oracle = OracleClient()
-    conversation_id = turn.conversation_id
-    user_message = turn.user_message
-    columns = _resolve_compare_models(request, turn.settings)
-    queue: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
+    columns: list[dict[str, str]],
+) -> ChatAnswerRun:
+    """作成中の ASSISTANT メッセージを保存し、回答の作成を接続から切り離した task で始める(#1175)。
 
-    async def run_model(column: dict[str, str]) -> None:
-        model_id = column["model_id"]
-        # 利用者向けの処理の段階（3 製品共通の ChatProgressStep。#1146）。
-        tracker = ChatProgressTracker(
-            rerank_enabled=turn.settings.rag_rerank_enabled, model_id=model_id
+    最初に `start` の event（保存済みの質問・比較の列・列ごとの作成中のメッセージ）を記録する。
+    """
+    service = get_chat_answer_run_service()
+    context = current_audit_request_context()
+    run = service.register(
+        run_id=turn.user_message.id,
+        conversation_id=turn.conversation_id,
+        tenant_id_hash=context.tenant_id_hash,
+        user_id_hash=context.user_id_hash,
+        store=oracle,
+    )
+    # 利用者向けの処理の段階（3 製品共通の ChatProgressStep。#1146）。
+    trackers = {
+        column["model_id"]: ChatProgressTracker(
+            rerank_enabled=turn.settings.rag_rerank_enabled, model_id=column["model_id"]
         )
-
-        async def emit_steps() -> None:
-            await queue.put(("progress", {"model_id": model_id, "steps": tracker.snapshot()}))
-
-        async def emit_progress(progress: SearchStageProgress) -> None:
-            await queue.put(
-                (
-                    "stage",
-                    {
-                        "model_id": model_id,
-                        "trace_id": progress.trace_id,
-                        "stage": progress.stage,
-                        "outcome": progress.outcome,
-                        "elapsed_ms": progress.elapsed_ms,
-                    },
+        for column in columns
+    }
+    try:
+        for column in columns:
+            model_id = column["model_id"]
+            placeholder = await oracle.append_message(
+                StoredMessage(
+                    id=uuid4().hex,
+                    conversation_id=turn.conversation_id,
+                    reply_to_message_id=turn.user_message.id,
+                    role="ASSISTANT",
+                    model=model_id or None,
+                    content="",
+                    status="STREAMING",
+                    created_at=datetime.now(UTC),
+                    progress=trackers[model_id].snapshot(),
+                    lease_owner=service.worker_id,
                 )
             )
-            if tracker.observe(progress):
-                await emit_steps()
-
-        await emit_steps()
-        try:
-            assistant, result = await _generate_chat_answer(
-                oracle, turn, model_id, progress_callback=emit_progress
-            )
-            tracker.finish(citation_count=len(result.citations))
-            await emit_steps()
-            await queue.put(
-                (
-                    "result",
-                    {
-                        "model_id": model_id,
-                        "message_id": assistant.id,
-                        "trace_id": result.trace_id,
-                        "answer": result.answer,
-                        "guardrail_warnings": result.guardrail_warnings,
-                        "elapsed_ms": result.elapsed_ms,
-                        # 回答エンジンの根拠・実行記録(無いときは None)。
-                        "answer_diagnostics": result.diagnostics.answer,
-                        "citations": [
-                            citation.model_dump(mode="json") for citation in result.citations
-                        ],
-                    },
-                )
-            )
-        except Exception as exc:
-            # SSE では例外を error event へ落とし、ストリームを正常終了させる。
-            tracker.fail()
-            await emit_steps()
-            await queue.put(
-                (
-                    "error",
-                    {
-                        "model_id": model_id,
-                        "message": _chat_error_message(exc),
-                        "error_type": type(exc).__name__,
-                        # 時間切れになった工程（#375）。画面は文言をそのまま出し、工程は記録に使う。
-                        "stage": exc.stage if isinstance(exc, AnswerTimeoutError) else None,
-                    },
-                )
-            )
-        finally:
-            await queue.put(("model_done", {"model_id": model_id}))
-
-    # 先頭に会話の枠組み(永続化済みユーザー発話 + 比較カラム)を 1 回送る。
-    yield _sse_event(
+            run.message_ids[model_id] = placeholder.id
+    except Exception:
+        service.discard(run)
+        raise
+    run.publish(
         "start",
         {
-            "conversation_id": conversation_id,
-            "user_message": _to_chat_message(user_message).model_dump(mode="json"),
-            "columns": [{"model_id": c["model_id"], "label": c["label"]} for c in columns],
+            "conversation_id": turn.conversation_id,
+            "user_message": _to_chat_message(turn.user_message).model_dump(mode="json"),
+            "columns": [
+                {
+                    "model_id": column["model_id"],
+                    "label": column["label"],
+                    "message_id": run.message_ids[column["model_id"]],
+                }
+                for column in columns
+            ],
         },
     )
 
-    tasks = [asyncio.create_task(run_model(column)) for column in columns]
-    remaining = len(columns)
-    try:
-        while remaining > 0:
+    async def execute(current: ChatAnswerRun) -> None:
+        await _answer_turn(current, oracle, turn, columns, trackers, service.worker_id)
+
+    service.start(
+        run,
+        execute,
+        timeout_seconds=turn.settings.rag_answer_timeout_seconds
+        + CHAT_ANSWER_TIMEOUT_MARGIN_SECONDS,
+    )
+    return run
+
+
+async def _answer_turn(
+    run: ChatAnswerRun,
+    oracle: OracleClient,
+    turn: PreparedChatTurn,
+    columns: list[dict[str, str]],
+    trackers: dict[str, ChatProgressTracker],
+    lease_owner: str,
+) -> None:
+    """各モデルへ fan-out して回答を作り、event を記録する（購読の有無に関係なく最後まで進む）。"""
+
+    async def run_model(column: dict[str, str]) -> None:
+        model_id = column["model_id"]
+        message_id = run.message_ids[model_id]
+        tracker = trackers[model_id]
+
+        async def emit_steps(*, persist: bool) -> None:
+            steps = tracker.snapshot()
+            run.publish("progress", {"model_id": model_id, "steps": steps})
+            if not persist:
+                return
+            # 段階を保存する（再読込・別の worker から作成中の段階を見せる。#1175）。保存は補助。
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SECONDS)
-            except TimeoutError:
-                yield SSE_HEARTBEAT
-                continue
-            if event is None:
-                break
-            name, payload = event
-            if name == "model_done":
-                remaining -= 1
-                continue
-            if name == "result" and isinstance(payload, dict):
-                model_id = str(payload["model_id"])
-                yield _sse_event(
-                    "metadata",
-                    {
-                        "model_id": model_id,
-                        "message_id": payload["message_id"],
-                        "trace_id": payload["trace_id"],
-                        "elapsed_ms": payload["elapsed_ms"],
-                        "guardrail_warnings": payload["guardrail_warnings"],
-                        "answer_diagnostics": payload.get("answer_diagnostics"),
-                    },
+                await oracle.update_chat_message_progress(
+                    message_id, lease_owner=lease_owner, progress=steps
                 )
-                for chunk in _answer_chunks(str(payload["answer"])):
-                    yield _sse_event("delta", {"model_id": model_id, "text": chunk})
-                yield _sse_event(
-                    "citations", {"model_id": model_id, "citations": payload["citations"]}
+            except Exception as exc:  # noqa: BLE001 - 段階の保存に失敗しても作成は続ける
+                logger.warning(
+                    "chat_answer_progress_save_failed",
+                    extra={"run_id": run.run_id, "error_type": type(exc).__name__},
                 )
-                yield _sse_event(
-                    "done", {"model_id": model_id, "message_id": payload["message_id"]}
+
+        async def emit_progress(progress: SearchStageProgress) -> None:
+            run.publish(
+                "stage",
+                {
+                    "model_id": model_id,
+                    "trace_id": progress.trace_id,
+                    "stage": progress.stage,
+                    "outcome": progress.outcome,
+                    "elapsed_ms": progress.elapsed_ms,
+                },
+            )
+            if tracker.observe(progress):
+                await emit_steps(persist=True)
+
+        await emit_steps(persist=False)
+        try:
+            assistant, result = await _generate_chat_answer(
+                oracle,
+                turn,
+                model_id,
+                message_id,
+                lease_owner=lease_owner,
+                progress_callback=emit_progress,
+                tracker=tracker,
+            )
+        except Exception as exc:
+            run.mark_closed(message_id)
+            # SSE では例外を error event へ落とす（段階は失敗にしてから送る）。
+            await emit_steps(persist=False)
+            run.publish(
+                "error",
+                {
+                    "model_id": model_id,
+                    "message_id": message_id,
+                    "message": _chat_error_message(exc),
+                    "error_type": type(exc).__name__,
+                    # 時間切れになった工程（#375）。画面は文言をそのまま出し、工程は記録に使う。
+                    "stage": exc.stage if isinstance(exc, AnswerTimeoutError) else None,
+                },
+            )
+            return
+        run.mark_closed(message_id)
+        await emit_steps(persist=False)
+        run.publish(
+            "metadata",
+            {
+                "model_id": model_id,
+                "message_id": assistant.id,
+                "trace_id": result.trace_id,
+                "elapsed_ms": result.elapsed_ms,
+                "guardrail_warnings": result.guardrail_warnings,
+                # 回答エンジンの根拠・実行記録(無いときは None)。
+                "answer_diagnostics": result.diagnostics.answer,
+            },
+        )
+        for chunk in _answer_chunks(result.answer):
+            run.publish("delta", {"model_id": model_id, "text": chunk})
+        run.publish(
+            "citations",
+            {
+                "model_id": model_id,
+                "citations": [citation.model_dump(mode="json") for citation in result.citations],
+            },
+        )
+        run.publish("done", {"model_id": model_id, "message_id": assistant.id})
+
+    await asyncio.gather(*(run_model(column) for column in columns))
+
+
+async def _subscribe_events(run: ChatAnswerRun, *, after: int) -> AsyncIterator[str]:
+    """回答の作成の event を SSE で流す（`id:` は再購読で続きを指す連番）。
+
+    接続が切れて generator が止まっても、作成の task は止めない(#1175)。
+    """
+    async for event in run.subscribe(after=after, heartbeat_seconds=SSE_HEARTBEAT_SECONDS):
+        if event is None:
+            yield SSE_HEARTBEAT
+            continue
+        yield f"id: {event.seq}\n" + _sse_event(event.name, event.payload)
+
+
+def _last_event_id(header: str | None, after: int | None) -> int:
+    """再購読の続きの位置（`after` を優先し、無ければ `Last-Event-ID`。読めなければ最初から）。"""
+    if after is not None:
+        return after
+    if header is None:
+        return 0
+    try:
+        return max(0, int(header.strip()))
+    except ValueError:
+        return 0
+
+
+def _run_belongs_to_caller(run: ChatAnswerRun, conversation_id: str) -> bool:
+    """run が、この会話の・この利用者（tenant と利用者）のものか。"""
+    context = current_audit_request_context()
+    return (
+        run.conversation_id == conversation_id
+        and run.tenant_id_hash == context.tenant_id_hash
+        and run.user_id_hash == context.user_id_hash
+    )
+
+
+@router.get("/conversations/{conversation_id}/messages/{message_id}/stream")
+async def resume_message_stream(
+    conversation_id: str,
+    message_id: str,
+    after: int | None = Query(default=None, ge=0),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+) -> StreamingResponse:
+    """作成中の回答の配信を、続き（`Last-Event-ID` / `after` の次の event）から購読し直す(#1175)。
+
+    `message_id` は質問（USER のメッセージ）の id。このプロセスで作成していない（別の worker・
+    再起動の後・作成の記録を残す時間を過ぎた）ときは 404。画面は保存済みの会話を取り直す。
+    """
+    settings = get_settings()
+    _require_chat_enabled(settings)
+    oracle = OracleClient()
+    if await oracle.get_conversation(conversation_id) is None:
+        raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE)
+    run = get_chat_answer_run_service().get(message_id)
+    if run is None or not _run_belongs_to_caller(run, conversation_id):
+        raise HTTPException(status_code=404, detail=ANSWER_STREAM_NOT_FOUND_MESSAGE)
+    return StreamingResponse(
+        _subscribe_events(run, after=_last_event_id(last_event_id, after)),
+        media_type="text/event-stream",
+        headers=SSE_HEADERS,
+    )
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/cancel",
+    response_model=ApiResponse[ChatAnswerCancelResult],
+)
+async def cancel_message_answer(
+    conversation_id: str, message_id: str
+) -> ApiResponse[ChatAnswerCancelResult]:
+    """質問（`message_id`）への回答の作成を止め、作成中の回答を停止（CANCELLED）にする(#1175)。
+
+    接続の切断では作成を止めないので、利用者の「停止」はこの API で取り消す。
+    - このプロセスで作成中: task を止め、停止を保存するまで待つ。
+    - 別のプロセスで作成中: 作成中の回答を停止にする（そのプロセスは次の heartbeat で止まる）。
+    - まだ作成を始めていない（送信の直後）: 取消を覚えておき、始まったら停止として保存する。
+    """
+    settings = get_settings()
+    _require_chat_enabled(settings)
+    oracle = OracleClient()
+    if await oracle.get_conversation(conversation_id) is None:
+        raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE)
+    service = get_chat_answer_run_service()
+    run = service.get(message_id)
+    if run is not None and _run_belongs_to_caller(run, conversation_id):
+        if run.done:
+            return ApiResponse(data=ChatAnswerCancelResult(cancelled=False))
+        await service.cancel(run)
+        return ApiResponse(data=ChatAnswerCancelResult(cancelled=True))
+    messages = await oracle.list_messages(conversation_id)
+    if not any(message.id == message_id for message in messages):
+        service.remember_early_cancel(message_id)
+        return ApiResponse(data=ChatAnswerCancelResult(cancelled=True))
+    cancelled = False
+    for message in messages:
+        if (
+            message.role == "ASSISTANT"
+            and message.reply_to_message_id == message_id
+            and message.status == "STREAMING"
+        ):
+            cancelled = (
+                await oracle.close_streaming_chat_message(
+                    message.id, status="CANCELLED", content=CHAT_ANSWER_CANCELLED_MESSAGE
                 )
-                continue
-            yield _sse_event(name, payload)
-        yield _sse_event("all_done", {"conversation_id": conversation_id})
-    finally:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        for task in tasks:
-            with suppress(asyncio.CancelledError, Exception):
-                await task
+                or cancelled
+            )
+    return ApiResponse(data=ChatAnswerCancelResult(cancelled=cancelled))
+
+
+async def _close_interrupted_answers(oracle: OracleClient, messages: list[StoredMessage]) -> bool:
+    """作成していたプロセスが止まった作成中の回答を、中断の失敗にする(#1175)。
+
+    このプロセスで作成中のものは除く。このプロセスが作っていたのに動いていないもの（task が
+    後始末の前に終わった）と、heartbeat が途絶えたもの（別のプロセスの停止・再起動）だけを、
+    DB の時刻で判定して閉じる（永遠に作成中にしない）。閉じたら True。
+    """
+    service = get_chat_answer_run_service()
+    closed = False
+    for message in messages:
+        if message.role != "ASSISTANT" or message.status != "STREAMING":
+            continue
+        if service.is_running(message.reply_to_message_id):
+            continue
+        try:
+            closed = (
+                await oracle.close_streaming_chat_message(
+                    message.id,
+                    status="ERROR",
+                    content=CHAT_ANSWER_INTERRUPTED_MESSAGE,
+                    lease_owner=service.worker_id,
+                    stale_seconds=service.stale_seconds,
+                )
+                or closed
+            )
+        except Exception as exc:  # noqa: BLE001 - 判定できなければ作成中のまま返す
+            logger.warning(
+                "chat_answer_interrupt_check_failed", extra={"error_type": type(exc).__name__}
+            )
+    return closed

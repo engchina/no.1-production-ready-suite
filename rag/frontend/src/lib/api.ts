@@ -1049,7 +1049,11 @@ export interface RetrievedChunk {
 // --- チャット（会話 / マルチモデル比較）---
 export type ConversationStatus = "ACTIVE" | "ARCHIVED";
 export type MessageRole = "USER" | "ASSISTANT" | "SYSTEM";
-export type MessageStatus = "STREAMING" | "COMPLETE" | "ERROR";
+/**
+ * メッセージの状態。回答は作成を始めた時点で `STREAMING`（作成中）で保存され、終わったら `COMPLETE`・
+ * `ERROR`（失敗・中断）・`CANCELLED`（利用者の停止）になる（#1175）。
+ */
+export type MessageStatus = "STREAMING" | "COMPLETE" | "ERROR" | "CANCELLED";
 
 export interface ChatMessage {
   message_id: string;
@@ -1063,6 +1067,11 @@ export interface ChatMessage {
   status: MessageStatus;
   reply_to_message_id: string | null;
   created_at: string;
+  /**
+   * 回答の処理の段階（3 製品共通の ChatProgressStep の形。#1175）。作成中は今の段階、終わった後は処理の経過。
+   * 未検証の入力として `chatProgressStepsFromEvent` で読む。段階を保存していない回答は null / 未指定。
+   */
+  progress?: unknown[] | null;
 }
 
 export interface ConversationSummary {
@@ -1096,6 +1105,8 @@ export interface ChatMessageRequestBody {
   approved_faq_id?: string;
   /** 利用者が確認の質問に答えた内容（#717）。backend がルールから引き直す。 */
   clarification?: ClarificationAnswer;
+  /** 画面が決めた質問の id（32 桁の 16 進。#1175）。送信の直後（`start` の前）の停止もこの id で取り消せる。 */
+  client_message_id?: string;
 }
 
 /** ルールの確認の質問（チャットの確認。#717）。 */
@@ -2989,6 +3000,15 @@ export const api = {
     request<null>(`/api/chat/conversations/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
+  /**
+   * 質問（`messageId`）への回答の作成を止める（#1175）。接続を切っても作成は止まらないので、「停止」はこの API で
+   * 取り消す。作成中の回答は `CANCELLED` で保存される。
+   */
+  cancelChatAnswer: (conversationId: string, messageId: string) =>
+    request<{ cancelled: boolean }>(
+      `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/cancel`,
+      { method: "POST" },
+    ),
   listCompareModels: () => request<CompareModel[]>("/api/chat/models"),
   listSearchAnswerModels: () => request<CompareModel[]>("/api/search/models"),
 
