@@ -285,6 +285,8 @@ function AssistantColumn({
         // まとめて届くので、それまでは今の段階と経過時間を出す。失敗の原因は段階ではなく下の Banner に出す。
         <ChatProgress
           steps={progress.steps.length > 0 ? progress.steps : chatSubmitProgressSteps(progress.startedAtMs)}
+          // 経過時間は送信から数え続ける（段階ごとに 0 に戻さない。#1176）。完了した回答は 0（段階の時刻）。
+          startedAt={progress.startedAtMs || undefined}
           reconnecting={progress.reconnecting}
           testId="chat-answer-progress"
         />

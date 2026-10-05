@@ -113,12 +113,12 @@ def test_reclaim_between_final_check_and_commit_cannot_add_old_history(
     original = old._persist_job_snapshot
     completed: dict[str, Any] = {}
 
-    def persist(snapshot: StoredJob, history: HistoryItem | None = None) -> None:
+    def persist(snapshot: StoredJob, history: HistoryItem | None = None, **kwargs: Any) -> None:
         if history is not None:
             expire(repo, job.job_id)
             assert new.run_next_nl2sql_job(job_id=job.job_id, worker_id="new")
             completed.update(repo.get_document("jobs", job.job_id) or {})
-        original(snapshot, history)
+        original(snapshot, history, **kwargs)
 
     monkeypatch.setattr(old, "_persist_job_snapshot", persist)
     assert old.run_next_nl2sql_job(job_id=job.job_id, worker_id="old")

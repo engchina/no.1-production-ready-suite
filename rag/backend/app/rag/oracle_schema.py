@@ -318,9 +318,14 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
 
 
 def message_answer_runs_migration_sql() -> str:
-    """作成中の回答の段階・プロセス・heartbeat の列と、停止（CANCELLED）の状態を足す（#1175）。"""
+    """作成中の回答の段階・プロセス・heartbeat の列と、停止（CANCELLED）の状態を足す（#1175）。
+
+    既存の rag_messages は created_at を含む index を 2 つ持ち、どちらも同じ式
+    SYS_EXTRACT_UTC("CREATED_AT") の隠し列を作る。その表に JSON の列を足すと ORA-54015 になるため、
+    JSON の列が無いときだけ conversation_created_idx を一時的に消し、列を足してから
+    同じ定義で作り直す（#1193）。
+    """
     columns = (
-        ("PROGRESS_JSON", "progress_json JSON"),
         ("LEASE_OWNER", "lease_owner VARCHAR2(128)"),
         ("HEARTBEAT_AT", "heartbeat_at TIMESTAMP WITH TIME ZONE"),
     )
@@ -336,7 +341,23 @@ def message_answer_runs_migration_sql() -> str:
     )
     return f"""DECLARE
     v_count NUMBER;
+    v_index_count NUMBER;
 BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_MESSAGES' AND column_name = 'PROGRESS_JSON';
+    IF v_count = 0 THEN
+        SELECT COUNT(*) INTO v_index_count
+        FROM user_indexes
+        WHERE index_name = 'RAG_MESSAGES_CONVERSATION_CREATED_IDX';
+        IF v_index_count > 0 THEN
+            EXECUTE IMMEDIATE 'DROP INDEX rag_messages_conversation_created_idx';
+        END IF;
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_messages ADD (progress_json JSON)';
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_messages_conversation_created_idx '
+            || 'ON rag_messages (conversation_id, created_at)';
+    END IF;
 {column_blocks}
     SELECT COUNT(*) INTO v_count
     FROM user_constraints

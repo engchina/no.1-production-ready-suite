@@ -558,7 +558,8 @@ function ChatTurn({
           処理の段階（考えている・ツールの呼び出し・承認待ち・回答の作成。#1147）。Run の取り直しで更新し、
           完了後は回答の上に「処理の経過」の 1 行に畳む（共有の ChatProgress。3 製品で同じ。#1145）。
         */}
-        <ChatProgress {...progress.progressProps} testId="chat-progress" />
+        {/* 経過時間は Run の作成（送信の受付）から数え続ける（段階ごとに 0 に戻さない。#1176）。 */}
+        <ChatProgress {...progress.progressProps} startedAt={run.created_at} testId="chat-progress" />
         {answer ? (
           // 回答の Markdown の表と、表の形のツールの結果（NL2SQL の SQL の実行の結果など）は、NL2SQL のチャットと
           // 同じ共通の結果の表で出す（#1158）。表でない部分・表でない結果は今までどおり。
