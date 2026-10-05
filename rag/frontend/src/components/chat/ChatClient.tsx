@@ -1,4 +1,6 @@
 import {
+  ChatComposer,
+  ChatComposerOption,
   ChatLayout,
   ChatProgress,
   ChatSkeleton,
@@ -9,10 +11,7 @@ import {
   Banner,
   Card,
   CardContent,
-  FieldActionRow,
-  TextareaField,
   TextField,
-  InfoTip,
   ToggleChip,
   TimedLoadingState,
   ListSkeleton,
@@ -22,7 +21,6 @@ import {
   offsetPagination,
   toast,
   useConfirm,
-  RunStopButton,
   ChatUserMessage,
   createOptimisticChatMessage,
   useChatProgressTracker,
@@ -37,7 +35,6 @@ import {
   Pencil,
   RotateCcw,
   Search,
-  SendHorizontal,
   Square,
   Trash2,
   X,
@@ -1449,79 +1446,54 @@ export function ChatClient() {
             testIds={{ log: "chat-messages" }}
             composer={
               <>
-                {compareModels.length > 0 ? (
-                  <div className="flex flex-wrap items-center gap-2" data-testid="chat-answer-model">
-                    {/* 候補は既定のテキストモデル（先頭。未選択のときに答える）と既定の画像対応モデル（#675）。
-                        同じモデルなら 1 件で、画像対応モデルも兼ねることを名前と説明で出す（#888）。
-                        説明は常設せず、ラベルの横の info アイコンから出す（#901）。 */}
-                    <span className="inline-flex items-center gap-0.5">
-                      <span className="text-xs font-medium text-fg-muted">{t("chat.compare.label")}</span>
-                      <InfoTip
-                        label={t("chat.compare.infoLabel")}
-                        content={t(answerModelHelpKey(compareModels, "chat.compare.default"))}
-                        contentTestId="chat-default-model"
-                        data-testid="chat-answer-model-info"
-                      />
-                    </span>
-                    {compareModels.map((model) => (
-                      <ToggleChip
-                        key={model.model_id}
-                        selected={selectedModelIds.includes(model.model_id)}
-                        onClick={() => toggleModel(model.model_id)}
+                {/* 入力欄の領域（設定の行・入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。
+                    送信と停止は同じボタンで、生成中は同じ位置で「停止」になる（buttons.md §3.1、#413）。
+                    生成中も入力できる（次の質問を書ける）。生成中の Enter は送らず、停止もしない（#413）。
+                    IME の変換を確定する Enter では送信しない（#459）。会話を選んでいなくても入力でき、最初の送信で会話を作る（#664）。
+                    前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。 */}
+                <ChatComposer
+                  id="chat-composer"
+                  textareaRef={composerRef}
+                  value={composer}
+                  onValueChange={setComposer}
+                  onSubmit={() => void send()}
+                  onStop={stop}
+                  running={sending}
+                  submitBlocked={searchAnswerProfileWithoutKnowledgeBases || pendingChoice || conversationFailed}
+                  disabled={prerequisitesLoading}
+                  label={t("chat.composer.label")}
+                  placeholder={t("chat.composer.placeholder")}
+                  sendLabel={t("chat.composer.send")}
+                  stopLabel={t("chat.composer.stop")}
+                  sendTestId="chat-run-stop"
+                  options={
+                    compareModels.length > 0 ? (
+                      // 候補は既定のテキストモデル（先頭。未選択のときに答える）と既定の画像対応モデル（#675）。
+                      // 同じモデルなら 1 件で、画像対応モデルも兼ねることを名前と説明で出す（#888）。
+                      // 説明は常設せず、ラベルの横の info アイコンから出す（#901）。
+                      <ChatComposerOption
+                        label={t("chat.compare.label")}
+                        info={{
+                          label: t("chat.compare.infoLabel"),
+                          content: t(answerModelHelpKey(compareModels, "chat.compare.default")),
+                          contentTestId: "chat-default-model",
+                          testId: "chat-answer-model-info",
+                        }}
+                        testId="chat-answer-model"
                       >
-                        {answerModelLabel(model)}
-                      </ToggleChip>
-                    ))}
-                  </div>
-                ) : null}
-                {/* 入力欄と送信の行。送信は入力欄の下端にそろえ、375px では下に全幅で置く（#613）。 */}
-                <FieldActionRow
-                  actions={
-                    // 送信と停止は同じボタン。生成中は同じ位置で「停止」になる（buttons.md §3.1、#413）。
-                    // 主な問い合わせの入力の行なので lg（README §4「操作部品の高さと幅」）。
-                    <RunStopButton
-                      running={sending}
-                      onRun={() => void send()}
-                      onStop={stop}
-                      runLabel={t("chat.composer.send")}
-                      stopLabel={t("chat.composer.stop")}
-                      runIcon={SendHorizontal}
-                      runDisabled={
-                        composer.trim().length === 0 ||
-                        searchAnswerProfileWithoutKnowledgeBases ||
-                        pendingChoice ||
-                        prerequisitesLoading ||
-                        conversationFailed
-                      }
-                      size="lg"
-                      testId="chat-run-stop"
-                    />
+                        {compareModels.map((model) => (
+                          <ToggleChip
+                            key={model.model_id}
+                            selected={selectedModelIds.includes(model.model_id)}
+                            onClick={() => toggleModel(model.model_id)}
+                          >
+                            {answerModelLabel(model)}
+                          </ToggleChip>
+                        ))}
+                      </ChatComposerOption>
+                    ) : null
                   }
-                >
-                  <TextareaField
-                    ref={composerRef}
-                    id="chat-composer"
-                    label={t("chat.composer.placeholder")}
-                    labelHidden
-                    value={composer}
-                    onChange={(event) => setComposer(event.target.value)}
-                    onKeyDown={(event) => {
-                      // IME の変換を確定する Enter では送信しない（#459）。
-                      if (isSubmitEnter(event) && !event.shiftKey) {
-                        event.preventDefault();
-                        void send();
-                      }
-                    }}
-                    rows={2}
-                    placeholder={t("chat.composer.placeholder")}
-                    // 前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
-                    disabled={prerequisitesLoading}
-                    // 生成中も入力できる（次の質問を書ける）。生成中の Enter は send が無視し、停止しない（#413）。
-                    // 会話を選んでいなくても入力でき、最初の送信で会話を作る（#664）。
-                    // ラベルは読み上げだけ（sr-only）なので、欄の上に余白を空けない。
-                    className="space-y-0"
-                  />
-                </FieldActionRow>
+                />
                 {errorText ? (
                   <p className="text-sm text-danger-fg" role="alert">
                     {errorText}
