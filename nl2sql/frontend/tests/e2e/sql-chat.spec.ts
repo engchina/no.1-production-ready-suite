@@ -1075,3 +1075,51 @@ test("生成に失敗した段階は「処理の経過」を開いて失敗を�
   await applyColorScheme(page, "dark");
   await turn.screenshot({ path: testInfo.outputPath("chat-progress-failed-dark.png") });
 });
+
+test("上を読んでいる間に回答が届いても引き戻さず「最新のメッセージへ」を出し、押すと末尾へ戻る (#1161)", async ({
+  page,
+}) => {
+  const state = await setup(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/chat");
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
+  const log = page.getByRole("log", { name: "会話" });
+  const distanceFromBottom = () =>
+    log.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+  // 会話の欄がスクロールするだけの往復を作る。
+  for (const question of ["売上", "地域別", "月別", "商品別", "前年比"]) {
+    await composer.fill(question);
+    await composer.press("Enter");
+    await expect(page.getByTestId("sql-chat-turn")).toHaveCount(state.turns.length);
+  }
+  state.pending = true;
+  await composer.fill("担当者別");
+  await composer.press("Enter");
+  await expect(page.getByTestId("sql-chat-send")).toHaveAccessibleName("停止");
+  // 送った直後は末尾にいる。
+  await expect.poll(distanceFromBottom).toBeLessThan(48);
+  const latest = page.getByTestId("sql-chat-latest");
+  await expect(latest).toHaveCount(0);
+
+  // 上を読んでいる間に回答が届く（ポーリングで状態が変わる）。
+  await log.evaluate((el) => el.scrollTo({ top: 0 }));
+  const running = state.turns.at(-1)!;
+  Object.assign(running, {
+    status: "done",
+    result: {
+      generated_sql: "SELECT OWNER, SUM(AMOUNT) FROM APP.SALES GROUP BY OWNER",
+      original_question: running.question,
+      explanation: "担当者ごとの売上合計です。",
+      safety: { is_safe: true },
+    },
+  });
+  await expect(page.getByTestId("sql-chat-send")).toHaveAccessibleName("送信");
+  await expect(latest).toBeVisible();
+  await expect(latest).toHaveAccessibleName("最新のメッセージへ");
+  // 引き戻さない。
+  expect(await log.evaluate((el) => el.scrollTop)).toBeLessThan(48);
+
+  await latest.click();
+  await expect.poll(distanceFromBottom).toBeLessThan(48);
+  await expect(latest).toHaveCount(0);
+});

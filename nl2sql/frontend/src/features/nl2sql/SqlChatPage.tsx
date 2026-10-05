@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import {
   useInfiniteQuery,
   useMutation,
@@ -39,6 +39,7 @@ import {
   toast,
   withOptimisticChatStatus,
   type OptimisticChatMessage,
+  useChatAutoScroll,
   useChatHistoryPanel,
 } from "@engchina/production-ready-ui";
 import {
@@ -240,7 +241,6 @@ export function SqlChatPage() {
   const engineDescriptionId = useId();
   const engineOption =
     CHAT_ENGINES.find((option) => option.value === engine) ?? CHAT_ENGINES[0];
-  const conversationRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
   const profiles = useProfileSummaries(profileSearch);
   const profileOptions =
@@ -403,6 +403,8 @@ export function SqlChatPage() {
     setSentAtByJob((current) => ({ ...current, [request.client_job_id]: message.sentAtMs }));
     setPendingSend({ message, request });
     setDraft("");
+    // 送った質問は会話の欄の末尾に出す。上を読んでいても末尾へ戻る（messaging.md §11.1）。
+    autoScroll.scrollToLatest();
     send.mutate(request);
   }
   /**
@@ -434,10 +436,13 @@ export function SqlChatPage() {
     send.reset();
     stop.reset();
   }
-  useEffect(() => {
-    if (active && conversationRef.current)
-      conversationRef.current.scrollTop = conversationRef.current.scrollHeight;
-  }, [active, conversationId, turns.length, latest?.status, pending]);
+  // 会話の欄の自動スクロール（3 製品共通の useChatAutoScroll。#1161）。keep-alive で隠れている間は動かさない。
+  // 末尾を見ている間は新しいジョブ・状態の変化に合わせて末尾へ追い、上を読んでいる間は「最新へ」を出す。
+  const autoScroll = useChatAutoScroll({
+    contentKey: `${turns.length}:${latest?.status ?? ""}:${pending?.localId ?? ""}:${pending?.status ?? ""}`,
+    resetKey: `${selectedProfileId}:${conversationId}`,
+    enabled: active,
+  });
   // 一覧の行・読み込み中・失敗・0 件は 3 製品共通の ChatHistoryList（#1161）。カーソルの API なので「さらに読み込む」。
   const historyContent = (
     <ChatHistoryList
@@ -613,7 +618,12 @@ export function SqlChatPage() {
               disabled: busy || profilesLoading,
             }}
             logLabel={t("chat.messages")}
-            logRef={conversationRef}
+            logRef={autoScroll.logRef}
+            latest={{
+              visible: autoScroll.showLatest,
+              label: t("chat.latest"),
+              onClick: () => autoScroll.scrollToLatest("smooth"),
+            }}
             testIdPrefix="sql-chat"
             composer={
               <>

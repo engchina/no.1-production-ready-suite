@@ -160,6 +160,36 @@ describe("ChatLayout", () => {
     expect($('section [aria-hidden="true"].animate-pulse')).toBeNull();
   });
 
+  it("「最新へ」は届いたときだけ会話の欄の外（log の外）に出て、押すと末尾へ戻す", () => {
+    const onClick = vi.fn();
+    function WithLatest({ visible }: { visible: boolean }) {
+      const history = useChatHistoryPanel({ inlineOpen: false, onInlineOpenChange: () => undefined });
+      return (
+        <ChatLayout
+          history={history}
+          historyTitle="会話の履歴"
+          historyCloseLabel="会話の履歴を閉じる"
+          historyContent={null}
+          label="チャット"
+          newConversation={{ label: "新しい会話", onClick: () => undefined }}
+          logLabel="会話"
+          latest={{ visible, label: "最新のメッセージへ", onClick }}
+          composer={null}
+        >
+          <p>回答</p>
+        </ChatLayout>
+      );
+    }
+    act(() => root.render(<WithLatest visible={false} />));
+    expect($('[data-testid="chat-latest"]')).toBeNull();
+    act(() => root.render(<WithLatest visible />));
+    const button = $<HTMLButtonElement>('[data-testid="chat-latest"]')!;
+    expect(button.textContent).toBe("最新のメッセージへ");
+    expect($('[role="log"]')!.contains(button)).toBe(false);
+    click(button);
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
   it("「新しい会話」は上端の行の右端の 1 か所", () => {
     const onNew = vi.fn();
     act(() => root.render(<Harness onNew={onNew} />));
