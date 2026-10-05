@@ -114,19 +114,19 @@ def test_submit_does_not_read_the_ontology_and_worker_pins_the_release(
 
     calls: list[str] = []
 
-    def head(_self: MarkdownOntologyWorkspace, profile_id: str) -> dict[str, Any]:
+    def snapshot_id(_self: MarkdownOntologyWorkspace, profile_id: str) -> str:
         calls.append(threading.current_thread().name)
-        return {"snapshot_id": "", "etag": ""}
+        return ""
 
-    monkeypatch.setattr(MarkdownOntologyWorkspace, "head", head)
+    monkeypatch.setattr(MarkdownOntologyWorkspace, "published_snapshot_id", snapshot_id)
     published: list[str] = []
-    original_state = runtime.ontology_markdown_state
+    original_release = runtime.published_release_id
 
-    def markdown_state(profile_id: str) -> Any:
+    def release_id(profile_id: str) -> str:
         published.append(profile_id)
-        return original_state(profile_id)
+        return original_release(profile_id)
 
-    monkeypatch.setattr(runtime, "ontology_markdown_state", markdown_state)
+    monkeypatch.setattr(runtime, "published_release_id", release_id)
 
     created = service.start_job(_chat_request(), actor_user_uuid="user-1")
     assert calls == [], "投入の要求の中でオントロジーの公開版を読んだ"
@@ -151,8 +151,8 @@ def test_worker_uses_release_published_before_processing(
 
     monkeypatch.setattr(
         MarkdownOntologyWorkspace,
-        "head",
-        lambda _self, _profile_id: {"snapshot_id": "ontology_markdown_snapshot_v1", "etag": "e"},
+        "published_snapshot_id",
+        lambda _self, _profile_id: "ontology_markdown_snapshot_v1",
     )
     seen: list[str | None] = []
 

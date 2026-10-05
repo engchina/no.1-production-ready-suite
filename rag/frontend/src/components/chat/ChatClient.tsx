@@ -1,5 +1,6 @@
 import {
   ChatProgress,
+  ChatSkeleton,
   Disclosure,
   PageBody,
   PageHeader,
@@ -64,7 +65,7 @@ import { SavedAnswerRecord } from "@/components/search/SavedAnswerRecord";
 import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
 import { useAuth } from "@/components/security/AuthProvider";
-import { EmptyState, ErrorState } from "@/components/StateViews";
+import { ApiErrorState, EmptyState, ErrorState } from "@/components/StateViews";
 import { isSubmitEnter } from "@/lib/keyboard";
 import type {
   ApprovedFaqSuggestionData,
@@ -530,6 +531,12 @@ export function ChatClient() {
     urlConversationId ?? (urlSearchAnswerProfileId ? null : undefined)
   );
   const conversationQuery = useConversation(activeId);
+  // 画面の前提（検索・回答プロファイルの一覧・開いている会話の内容）が揃うまでは、会話の欄に空の状態を出さず
+  // 会話の形の Skeleton で覆い、入力欄・送信・新しい会話・履歴の開閉を無効にする（messaging.md §11.7、#1153）。
+  // 会話の内容を読めなかったときも送信しない（内容の分からない会話に続けて送らない）。
+  const conversationLoading = Boolean(activeId) && conversationQuery.isLoading;
+  const conversationFailed = Boolean(activeId) && conversationQuery.isError && !conversationQuery.data;
+  const prerequisitesLoading = searchAnswerProfilesQuery.isLoading || conversationLoading;
   const persistedMessages = useMemo(
     () => conversationQuery.data?.messages ?? [],
     [conversationQuery.data]
@@ -907,7 +914,15 @@ export function ChatClient() {
    */
   async function send(retryContent?: string) {
     const content = (retryContent ?? composer).trim();
-    if (!content || !searchAnswerProfileId || sending || pendingChoice || searchAnswerProfileWithoutKnowledgeBases) {
+    if (
+      !content ||
+      !searchAnswerProfileId ||
+      sending ||
+      pendingChoice ||
+      searchAnswerProfileWithoutKnowledgeBases ||
+      prerequisitesLoading ||
+      conversationFailed
+    ) {
       return;
     }
     const controller = new AbortController();
@@ -1178,7 +1193,10 @@ export function ChatClient() {
   }
 
   const searchAnswerProfileLoading = searchAnswerProfilesQuery.isLoading;
-  const noSearchAnswerProfiles = !searchAnswerProfileLoading && searchAnswerProfiles.length === 0;
+  // 一覧を読めなかったときは「0 件」と同じに扱わない（空の状態を出さず、失敗と再試行を出す。#1153）。
+  const searchAnswerProfilesFailed = searchAnswerProfilesQuery.isError && !searchAnswerProfilesQuery.data;
+  const noSearchAnswerProfiles =
+    !searchAnswerProfileLoading && !searchAnswerProfilesFailed && searchAnswerProfiles.length === 0;
   const liveColumns = liveTurn
     ? liveTurn.columns.map((column) => ({
         key: column.model_id || "default",
@@ -1205,7 +1223,11 @@ export function ChatClient() {
   // lg 未満はモーダルの side sheet に入れる（どちらか一方だけを描く）。
   const historyContent = (
     <>
-      {conversationsQuery.isLoading ? (
+      {searchAnswerProfileLoading ? (
+        // 検索・回答プロファイルの読み込み中は会話の一覧をまだ取得できない。「まだ会話がありません」と出さず、
+        // 一覧の形だけを出す（経過時間は上のカードが出しているので重ねない。#1153）。
+        <ListSkeleton rows={3} rowClassName="h-12" testId="chat-conversations-skeleton" />
+      ) : conversationsQuery.isLoading ? (
         <TimedLoadingState
           label={t("chat.sessions.loading")}
           operationKey="chat-conversations-load"
@@ -1376,6 +1398,12 @@ export function ChatClient() {
               >
                 <SearchAnswerProfileSelectSkeleton />
               </TimedLoadingState>
+            ) : searchAnswerProfilesFailed ? (
+              <ApiErrorState
+                error={searchAnswerProfilesQuery.error}
+                fallback={t("chat.searchAnswerProfile.error")}
+                onRetry={() => void searchAnswerProfilesQuery.refetch()}
+              />
             ) : noSearchAnswerProfiles ? (
               <EmptyState
                 title={t("chat.searchAnswerProfile.empty")}
@@ -1421,7 +1449,10 @@ export function ChatClient() {
           </CardContent>
         </Card>
 
-        {searchAnswerProfileLoading || noSearchAnswerProfiles ? null : !searchAnswerProfileId ? (
+        {/* 検索・回答プロファイルの読み込み中も会話の領域を描き（寸法を予約し、読み込み後に現れて押し下げない）、
+            空の状態の代わりに会話の形の Skeleton を出す（messaging.md §11.7、#1153）。 */}
+        {searchAnswerProfilesFailed || noSearchAnswerProfiles ? null : !searchAnswerProfileLoading &&
+          !searchAnswerProfileId ? (
           <Card className="min-h-0 flex-1">
             <CardContent className="p-4 sm:p-5">
               <EmptyState title={t("chat.searchAnswerProfile.required")} />
@@ -1485,6 +1516,7 @@ export function ChatClient() {
                 aria-expanded={historyOpen}
                 aria-controls={historyId}
                 data-testid="chat-history-toggle"
+                disabled={searchAnswerProfileLoading}
                 onClick={toggleHistory}
               />
               {/* 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。 */}
@@ -1507,7 +1539,7 @@ export function ChatClient() {
                 size="sm"
                 icon={Plus}
                 onClick={() => void startNewConversation()}
-                disabled={createConversation.isPending}
+                disabled={createConversation.isPending || searchAnswerProfileLoading}
               >
                 {t("chat.sessions.new")}
               </Button>
@@ -1521,18 +1553,20 @@ export function ChatClient() {
               data-testid="chat-messages"
             >
               {/* 会話を選んでいない間は新しい会話の下書き。最初の送信で会話を作る（#664）。 */}
-              {activeId && conversationQuery.isLoading && !liveTurn ? (
+              {conversationLoading && !liveTurn ? (
                 <TimedLoadingState
                   label={t("chat.messages.loading")}
                   operationKey="chat-conversation-load"
                   framed={false}
                   testId="chat-messages-loading"
                 >
-                  {/* 質問と回答の吹き出しの寸法を予約する。 */}
-                  <Skeleton className="ml-auto h-12 w-2/3" />
-                  <Skeleton className="h-32 w-5/6" />
-                  <Skeleton className="ml-auto h-12 w-1/2" />
+                  {/* 質問と回答の吹き出しの寸法を予約する（3 製品で同じ形。#1153）。 */}
+                  <ChatSkeleton />
                 </TimedLoadingState>
+              ) : searchAnswerProfileLoading ? (
+                // 検索・回答プロファイルの読み込み中は空の状態を出さず、会話の形の Skeleton だけを出す。
+                // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
+                <ChatSkeleton testId="chat-messages-skeleton" />
               ) : activeId && conversationQuery.isError ? (
                 <ErrorState
                   message={t("chat.messages.error")}
@@ -1546,7 +1580,7 @@ export function ChatClient() {
                     <MessageTurn
                       key={turn.user.message_id}
                       user={turn.user}
-                      searchAnswerProfileId={searchAnswerProfileId}
+                      searchAnswerProfileId={searchAnswerProfileId ?? ""}
                       onRetry={
                         // 最新の質問の失敗（時間切れなど）だけ、同じ質問をもう一度送れる（#375）。
                         turn.user.message_id === lastTurnId &&
@@ -1594,7 +1628,7 @@ export function ChatClient() {
                           : liveTurn.pending.status
                       }
                       columns={liveColumns}
-                      searchAnswerProfileId={searchAnswerProfileId}
+                      searchAnswerProfileId={searchAnswerProfileId ?? ""}
                       testId="chat-live-turn"
                       footer={
                         liveTurn.pending.status === "failed" ? (
@@ -1699,7 +1733,9 @@ export function ChatClient() {
                     runDisabled={
                       composer.trim().length === 0 ||
                       searchAnswerProfileWithoutKnowledgeBases ||
-                      pendingChoice
+                      pendingChoice ||
+                      prerequisitesLoading ||
+                      conversationFailed
                     }
                     size="lg"
                     testId="chat-run-stop"
@@ -1722,6 +1758,8 @@ export function ChatClient() {
                   }}
                   rows={2}
                   placeholder={t("chat.composer.placeholder")}
+                  // 前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
+                  disabled={prerequisitesLoading}
                   // 生成中も入力できる（次の質問を書ける）。生成中の Enter は send が無視し、停止しない（#413）。
                   // 会話を選んでいなくても入力でき、最初の送信で会話を作る（#664）。
                   // ラベルは読み上げだけ（sr-only）なので、欄の上に余白を空けない。
