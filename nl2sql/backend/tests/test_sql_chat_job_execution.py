@@ -267,7 +267,8 @@ def test_chat_route_without_execute_permission_generates_only(
         service, "execute_sql", lambda *args, **kwargs: pytest.fail("権限が無いのに実行")
     )
 
-    # 実行の権限が無い利用者のチャットは生成だけ（拒否しない）。SQL 生成の画面のジョブは今までどおり 403。
+    # 実行の権限が無い利用者のチャットは生成だけ（拒否しない）。
+    # SQL 生成の画面のジョブは今までどおり 403。
     generate_only = api_request({"orders-profile"}, permissions={QUERY_GENERATE_PERMISSION})
     created = router.create_job(chat_turn(), generate_only).data
     assert created is not None

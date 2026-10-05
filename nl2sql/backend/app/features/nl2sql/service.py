@@ -3651,7 +3651,8 @@ def _log_job_stage_step_finished(
     """段階の中の処理ごとの所要時間（どの処理が遅いかを追う。#1155）。
 
     処理を飛ばしたときは `skipped` と `skip_reason` を付ける（例: 公開されたオントロジーが無い
-    ため接地確認をしない `no_published_ontology`。#1168）。質問・SQL の本文は出さない。
+    ため接地確認をしない `no_published_ontology`。#1168。要求が接地確認を求めない
+    `grounding_not_requested`。#1172）。質問・SQL の本文は出さない。
     """
 
     extra: dict[str, Any] = {
@@ -20392,14 +20393,26 @@ class Nl2SqlService:
             stage_timings=stage_timings,
         )
         interpretation: Nl2SqlInterpretationArtifact | None = None
-        # include_interpretation は処理手順、use_ontology_context は Ontology 接地確認を担う。
-        # どちらかが要る場合に artifact を構築し、不要な部分は空にする。
-        if request.include_interpretation or request.use_ontology_context:
+        # include_interpretation は処理手順、ontology_grounding_requested は Ontology
+        # 接地確認を担う。どちらかが要る場合に artifact を構築し、不要な部分は空にする。
+        grounding_requested = request.ontology_grounding_requested
+        if request.use_ontology_context and not grounding_requested:
+            # 生成の文脈には公開版を使うが、生成後の接地確認は求められていない（接地確認を表示
+            # しないチャット。#1172）。グラフを読まない。
+            _log_job_stage_step_finished(
+                job_id,
+                "format_results",
+                "ontology_graph",
+                started=time.monotonic(),
+                attempt=attempt,
+                skip_reason="grounding_not_requested",
+            )
+        if request.include_interpretation or grounding_requested:
             try:
                 ontology_graph: Nl2SqlOntologyGraphSnapshot | None = None
                 ontology_graph_warnings: list[str] = []
                 grounding_skip_reason: OntologyGroundingSkipReason = ""
-                if request.use_ontology_context:
+                if grounding_requested:
                     step_started = time.monotonic()
                     if business_release_id:
                         # 準備の段階で確定した公開版だけで接地確認する（#1168）。
@@ -20434,7 +20447,7 @@ class Nl2SqlService:
                     ontology_graph=ontology_graph,
                     ontology_graph_warnings=ontology_graph_warnings,
                     include_logical_steps=request.include_interpretation,
-                    ontology_grounding_enabled=request.use_ontology_context,
+                    ontology_grounding_enabled=grounding_requested,
                     ontology_grounding_skip_reason=grounding_skip_reason,
                 )
             except Exception as exc:  # pragma: no cover - defensive artifact boundary

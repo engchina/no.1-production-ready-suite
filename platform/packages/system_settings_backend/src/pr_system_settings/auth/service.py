@@ -49,7 +49,12 @@ from .errors import (
 from .login_throttle import LoginThrottle, LoginThrottleLimits
 from .passwords import hash_password, verify_dummy_password, verify_password
 from .service_token import verify_service_token
-from .store import PLATFORM_AUTH_TABLES, PRODUCT_ROLE_PERMISSION_TABLES, AuthStore
+from .store import (
+    PLATFORM_AUTH_TABLES,
+    PRODUCT_ROLE_PERMISSION_TABLES,
+    AuthStore,
+    OracleAuthStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -139,8 +144,15 @@ class AuthService:
         self.settings = settings
         self._bootstrap_lock = threading.Lock()
         self._bootstrap_checked = False
-        # ログインの試行の回数の制限（#1087）。service はプロセスに 1 つで、プロセスの中で一貫する。
-        self.login_throttle = LoginThrottle()
+        # ログインの試行の回数の制限（#1087）。DB の store なら記録を `PLATFORM_LOGIN_ATTEMPTS` に
+        # 置き、3 製品・全 worker で共有して数える（#1173）。鍵は共通の secret から導く。
+        # 表が無い・DB の停止中はプロセス内で数える（構成管理者は DB なしでログインできる）。
+        self.login_throttle = LoginThrottle(
+            shared_store=store.login_attempt_store()
+            if isinstance(store, OracleAuthStore)
+            else None,
+            key_secret=str(getattr(settings, "app_service_token_secret", "") or ""),
+        )
 
     # ---- bootstrap ----
 
@@ -174,26 +186,30 @@ class AuthService:
         （ユーザーの有無を分からなくする。#1105）。制限中はパスワードを照合しない。
         """
         normalized_login_user_id = login_user_id.strip()
-        limits = self._login_throttle_limits()
-        retry_after = self.login_throttle.retry_after_seconds(
-            normalized_login_user_id, client_ip, limits
+        # 照合の前に試行を記録してから数える（同時の試行で上限を超えない。#1173）。
+        attempt = self.login_throttle.begin(
+            normalized_login_user_id, client_ip, self._login_throttle_limits()
         )
-        if retry_after is not None:
+        if attempt.retry_after_seconds is not None:
             logger.warning(
                 "auth_login_rate_limited",
                 extra={
                     "request_id": request_id,
                     "client_ip": client_ip,
-                    "retry_after_seconds": retry_after,
+                    "retry_after_seconds": attempt.retry_after_seconds,
                 },
             )
-            raise LoginRateLimited(retry_after)
+            raise LoginRateLimited(attempt.retry_after_seconds)
         try:
             result = self._authenticate_login(normalized_login_user_id, password)
         except LoginFailed:
-            self.login_throttle.record_failure(normalized_login_user_id, client_ip, limits)
+            self.login_throttle.record_failure(attempt)
             raise
-        self.login_throttle.record_success(normalized_login_user_id, client_ip)
+        except BaseException:
+            # 照合の結果が出なかった（DB のエラーなど）。失敗として数えない。
+            self.login_throttle.cancel(attempt)
+            raise
+        self.login_throttle.record_success(attempt)
         return result
 
     def _login_throttle_limits(self) -> LoginThrottleLimits:

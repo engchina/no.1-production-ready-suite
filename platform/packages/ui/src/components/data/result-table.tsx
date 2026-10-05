@@ -14,21 +14,24 @@ import { PagedDataTable } from "./paged-data-table";
 import { DEFAULT_PAGE_SIZE, type PaginationRange } from "./pagination";
 
 /**
- * ChatResultTable（#1154）— チャットの回答の吹き出しの中に、SQL・ツールの実行の結果の表を出す部品。
+ * ResultTable（#1154 / #1178）— データの結果（読み取りだけの行と列）を出す部品。チャットの回答の吹き出しの中の
+ * SQL・ツールの実行の結果と、画面のクエリの結果・テーブルのデータの表示・取り込みのサンプル行に使う。
  *
  * 業界の例（ChatGPT の Advanced Data Analysis・Databricks Genie・Snowflake Cortex Analyst・Amazon Q in
- * QuickSight・BigQuery の結果の表）に倣い、吹き出しの中は「要約の 1 行 → 先頭の行のプレビュー（表の中で
- * 縦横にスクロール）」に絞り、すべての行は広いシート（ページ送り）と CSV で見る。上限で打ち切った結果は
- * 黙って隠さず、要約と案内で明示する。製品は列・行（取得済みの行）・打ち切りの有無を渡すだけにする。
+ * QuickSight・BigQuery の結果の表）に倣い、「要約の 1 行 → 先頭の行のプレビュー（表の中で縦横にスクロール）」に
+ * 絞り、すべての行は広いシート（ページ送り）と CSV で見る。上限で打ち切った結果は黙って隠さず、要約と案内で
+ * 明示する。製品は列・行（取得済みの行）・打ち切りの有無を渡すだけにする。行の操作・選択・編集のある一覧は
+ * この部品ではなく従来の一覧の型（`DataTable` / `PagedDataTable`）にする（UX 契約 `page-archetypes.md`）。
+ * 以前の名前 `ChatResultTable` は別名として残す（ファイルの末尾）。
  */
 
 /** 結果の列。`type` が `number` の列（または NULL を除く値がすべて数値の列）は右寄せにする。 */
-export interface ChatResultTableColumn {
+export interface ResultTableColumn {
   name: string;
   type?: string;
 }
 
-export interface ChatResultTableLabels {
+export interface ResultTableLabels {
   /** 要約: 行数（例「12 行」）。 */
   rows: (count: string) => string;
   /** 要約: 取得の上限で打ち切ったときの行数（例「先頭の 1,000 行を取得しました（さらに行があります）」）。 */
@@ -72,7 +75,7 @@ export interface ChatResultTableLabels {
 
 const countFormatter = new Intl.NumberFormat("ja-JP");
 
-export const DEFAULT_CHAT_RESULT_TABLE_LABELS: ChatResultTableLabels = {
+export const DEFAULT_RESULT_TABLE_LABELS: ResultTableLabels = {
   rows: (count) => `${count} 行`,
   truncatedRows: (count) => `先頭の ${count} 行を取得しました（さらに行があります）`,
   truncatedRowsOfTotal: (count, total) => `先頭の ${count} 行を取得しました（全 ${total} 行）`,
@@ -107,15 +110,15 @@ export const DEFAULT_CHAT_RESULT_TABLE_LABELS: ChatResultTableLabels = {
 };
 
 /** 吹き出しの中のプレビューに描く行の上限（それより多い行は「すべての行を見る」で見る）。 */
-export const CHAT_RESULT_PREVIEW_ROWS = 50;
+export const RESULT_PREVIEW_ROWS = 50;
 /** 「すべての行を見る」の 1 ページの行数の選択肢（既定は共通の 10 件）。 */
-export const CHAT_RESULT_PAGE_SIZES = [DEFAULT_PAGE_SIZE, 50, 100] as const;
+export const RESULT_PAGE_SIZES = [DEFAULT_PAGE_SIZE, 50, 100] as const;
 
 /**
  * 全件の取得の導線（上限を超える行が要るとき）。`href` と `label` があれば製品の画面へのリンクを出す。
  * リンクを出せない（移動先の画面の権限が無い）ときは `hint` だけを渡す。
  */
-export interface ChatResultFullResultLink {
+export interface ResultFullResultLink {
   href?: string;
   label?: string;
   /** 画面の中の移動（react-router の `Link` など。SQL を履歴の state で渡す等）。 */
@@ -124,8 +127,8 @@ export interface ChatResultFullResultLink {
   hint?: string;
 }
 
-export interface ChatResultTableProps {
-  columns: readonly ChatResultTableColumn[];
+export interface ResultTableProps {
+  columns: readonly ResultTableColumn[];
   /** 取得した行（列の順の値の配列）。NULL は `null`。 */
   rows: readonly (readonly unknown[])[];
   /** 取得の上限（行数・応答の大きさ）で打ち切ったか（さらに行がある）。 */
@@ -154,10 +157,15 @@ export interface ChatResultTableProps {
   /** CSV をダウンロードした後（Toast など）。 */
   onCsvDownloaded?: () => void;
   /** 上限を超える全件の取得の導線（打ち切ったときだけ出す）。 */
-  fullResult?: ChatResultFullResultLink;
+  fullResult?: ResultFullResultLink;
   /** 要約の行の右に足す製品の操作。 */
   actions?: ReactNode;
-  labels?: Partial<ChatResultTableLabels>;
+  /**
+   * 要約の文の右に足す画面固有の補足（実行した接続の `StatusBadge` など。#1178）。行数・列数・打ち切りは
+   * 部品の要約が出すので、ここで重ねて出さない。
+   */
+  meta?: ReactNode;
+  labels?: Partial<ResultTableLabels>;
   className?: string;
   testId?: string;
 }
@@ -203,7 +211,7 @@ function csvField(value: unknown): string {
 
 /** 取得した行を CSV（RFC 4180・CRLF・先頭に BOM。NULL は空の欄）にする。 */
 export function resultRowsToCsv(
-  columns: readonly ChatResultTableColumn[],
+  columns: readonly ResultTableColumn[],
   rows: readonly (readonly unknown[])[]
 ): string {
   const lines = [columns.map((column) => csvField(column.name)).join(",")];
@@ -218,7 +226,7 @@ const LONG_VALUE_CHARS = 40;
 export function ResultCell({
   value,
   variant = "full",
-  nullLabel = DEFAULT_CHAT_RESULT_TABLE_LABELS.nullValue,
+  nullLabel = DEFAULT_RESULT_TABLE_LABELS.nullValue,
 }: {
   value: unknown;
   variant?: "preview" | "full";
@@ -248,7 +256,7 @@ export function ResultCell({
 type IndexedRow = { index: number; values: readonly unknown[] };
 
 function resultColumns(
-  columns: readonly ChatResultTableColumn[],
+  columns: readonly ResultTableColumn[],
   rows: readonly (readonly unknown[])[],
   variant: "preview" | "full",
   nullLabel: string
@@ -279,7 +287,7 @@ function downloadText(filename: string, text: string) {
 /**
  * 要約の 1 行目の文（例「12 行・5 列・0.8 秒」「先頭の 1,000 行を取得しました（さらに行があります）・8 列・1.2 秒」）。
  */
-export function chatResultSummaryText({
+export function resultSummaryText({
   rowCount,
   columnCount,
   truncated,
@@ -292,9 +300,9 @@ export function chatResultSummaryText({
   truncated?: boolean;
   totalRowCount?: number | null;
   elapsedMs?: number | null;
-  labels?: Partial<ChatResultTableLabels>;
+  labels?: Partial<ResultTableLabels>;
 }): string {
-  const labels = { ...DEFAULT_CHAT_RESULT_TABLE_LABELS, ...overrides };
+  const labels = { ...DEFAULT_RESULT_TABLE_LABELS, ...overrides };
   const count = labels.formatCount(rowCount);
   const parts = [
     rowCount === 0
@@ -310,7 +318,7 @@ export function chatResultSummaryText({
   return parts.join(labels.separator);
 }
 
-export function ChatResultTable({
+export function ResultTable({
   columns,
   rows,
   truncated = false,
@@ -319,18 +327,19 @@ export function ChatResultTable({
   cellsTruncated = false,
   maxCellChars,
   elapsedMs,
-  previewRows = CHAT_RESULT_PREVIEW_ROWS,
-  pageSizeOptions = CHAT_RESULT_PAGE_SIZES,
+  previewRows = RESULT_PREVIEW_ROWS,
+  pageSizeOptions = RESULT_PAGE_SIZES,
   csvFilename = "result.csv",
   onDownloadCsv,
   onCsvDownloaded,
   fullResult,
   actions,
+  meta,
   labels: labelOverrides,
   className,
   testId,
-}: ChatResultTableProps) {
-  const labels = { ...DEFAULT_CHAT_RESULT_TABLE_LABELS, ...labelOverrides };
+}: ResultTableProps) {
+  const labels = { ...DEFAULT_RESULT_TABLE_LABELS, ...labelOverrides };
   const [sheetOpen, setSheetOpen] = useState(false);
   const [pageSize, setPageSize] = useState<number>(pageSizeOptions[0] ?? DEFAULT_PAGE_SIZE);
   const viewAllRef = useRef<HTMLButtonElement>(null);
@@ -345,7 +354,7 @@ export function ChatResultTable({
     [columns, rows, labels.nullValue]
   );
   const rowCount = rows.length;
-  const summary = chatResultSummaryText({
+  const summary = resultSummaryText({
     rowCount,
     columnCount: columns.length,
     truncated,
@@ -360,14 +369,15 @@ export function ChatResultTable({
     else downloadText(csvFilename, csv);
     onCsvDownloaded?.();
   };
-  const csvButton = (
+  // 吹き出し・画面の中とシートの見出しの 2 か所に出すので、testid は場所ごとに分ける（#1178）。
+  const csvButton = (suffix: "csv" | "all-csv") => (
     <Button
       type="button"
       variant="secondary"
       size="sm"
       icon={Download}
       onClick={downloadCsv}
-      data-testid={testIdOf("csv")}
+      data-testid={testIdOf(suffix)}
     >
       {labels.downloadCsv}
     </Button>
@@ -380,9 +390,12 @@ export function ChatResultTable({
   return (
     <div className={cn("grid min-w-0 gap-3", className)} data-testid={testId}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm font-medium text-fg" role="status" data-testid={testIdOf("summary")}>
-          {summary}
-        </p>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <p className="text-sm font-medium text-fg" role="status" data-testid={testIdOf("summary")}>
+            {summary}
+          </p>
+          {meta}
+        </div>
         {rowCount > 0 || actions ? (
           <div className="flex flex-wrap items-center gap-2">
             {rowCount > 0 ? (
@@ -400,7 +413,7 @@ export function ChatResultTable({
                 >
                   {labels.viewAll}
                 </Button>
-                {csvButton}
+                {csvButton("csv")}
               </>
             ) : null}
             {actions}
@@ -463,7 +476,7 @@ export function ChatResultTable({
           side="right"
           size="wide"
           returnFocusRef={viewAllRef}
-          headerActions={csvButton}
+          headerActions={csvButton("all-csv")}
           bodyClassName="gap-3"
           data-testid={testIdOf("sheet")}
         >
@@ -514,3 +527,26 @@ export function ChatResultTable({
     </div>
   );
 }
+
+/*
+ * 以前の名前（#1154）。チャットの回答の中の結果の表として作ったが、画面のデータの結果にも使うので
+ * `ResultTable` にした（#1178）。既存のコードのために別名を残す。新しいコードは `ResultTable` を使う。
+ */
+/** @deprecated `ResultTable` を使う。 */
+export const ChatResultTable = ResultTable;
+/** @deprecated `ResultTableColumn` を使う。 */
+export type ChatResultTableColumn = ResultTableColumn;
+/** @deprecated `ResultTableLabels` を使う。 */
+export type ChatResultTableLabels = ResultTableLabels;
+/** @deprecated `ResultTableProps` を使う。 */
+export type ChatResultTableProps = ResultTableProps;
+/** @deprecated `ResultFullResultLink` を使う。 */
+export type ChatResultFullResultLink = ResultFullResultLink;
+/** @deprecated `DEFAULT_RESULT_TABLE_LABELS` を使う。 */
+export const DEFAULT_CHAT_RESULT_TABLE_LABELS = DEFAULT_RESULT_TABLE_LABELS;
+/** @deprecated `RESULT_PREVIEW_ROWS` を使う。 */
+export const CHAT_RESULT_PREVIEW_ROWS = RESULT_PREVIEW_ROWS;
+/** @deprecated `RESULT_PAGE_SIZES` を使う。 */
+export const CHAT_RESULT_PAGE_SIZES = RESULT_PAGE_SIZES;
+/** @deprecated `resultSummaryText` を使う。 */
+export const chatResultSummaryText = resultSummaryText;

@@ -175,6 +175,53 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u ubuntu /usr/l
   - どちらの場合も、apply 前に Resource Manager の plan で置き換えになる resource を確認してください。
   旧名の `AGENT_EXTERNAL_RAG_BASE_URL` / `AGENT_EXTERNAL_RAG_API_KEY`（NL2SQL も同じ）は読まれないので削除してください。
 
+### ログインの試行の回数の共有（#1173）
+
+ログインの試行の回数の制限（#1087。`PLATFORM_AUTH_LOGIN_*`）は、失敗の記録を共通のテーブル `PLATFORM_LOGIN_ATTEMPTS` に置き、
+3 製品・gunicorn の全 worker・再起動をまたいで同じ回数を数えます（構成管理者 `system_admin` のパスワードを、製品・worker の数だけ
+多く試せないようにする）。
+
+- テーブル: `KEY_HASH`（`VARCHAR2(64)`）・`ATTEMPT_ID`（`VARCHAR2(36)`）・`ATTEMPTED_AT`（`TIMESTAMP`、DB の UTC）。主キー `PK_PLATFORM_LOGIN_ATTEMPTS`
+  （`KEY_HASH, ATTEMPT_ID`）と index `IX_PLATFORM_LOGIN_ATTEMPTS_AT`（`ATTEMPTED_AT`）。ログイン ID と送信元 IP は保存せず、共通 `.env` の
+  `PLATFORM_SERVICE_TOKEN_SECRET` から導いた鍵の HMAC-SHA256 だけを保存します（テーブルを読めても利用者の ID・IP は分からない）。
+  `PLATFORM_SERVICE_TOKEN_SECRET` が空（32 文字未満）のときは DB に記録せず、従来どおりプロセス内だけで数えます（起動時にログ
+  `auth_login_throttle_shared_store_disabled`）。
+- 1 回の失敗で 2 行（ログイン ID＋送信元 IP・送信元 IP）を足します。窓（`PLATFORM_AUTH_LOGIN_ATTEMPT_WINDOW_MINUTES`）を過ぎた行は、
+  失敗を記録するついでに 1 回 1,000 行まで消すので、テーブルには窓の中の失敗の分しか残りません。成功した試行・429 で拒否した試行は残しません。
+- DB が使えない（接続できない・テーブルが無い）ときは、プロセス内の記録に自動で切り替えて制限を続け、ログ
+  `auth_login_throttle_shared_store_unavailable`（`error_code`・`hint` 付き）を出します。30 秒ごとに DB を試し直し、戻れば DB で数えます
+  （停止中にプロセス内で数えた失敗も、窓の中なら合わせて数える）。ログインは止まりません（構成管理者は DB の停止中もログインできる）。
+- テーブルは各製品のシステムテーブルの初期化（RAG `app.rag.system_schema_cli initialize`・NL2SQL `app.cli.app_security_migrate --apply`・
+  Agent `app.cli.agent_system_schema --initialize`。どれも `init_script.sh` が実行する）が、`PLATFORM_USERS` などと一緒に冪等に作ります。
+- Nginx: 3 製品の Nginx（`init_script.sh` が書く）は、`/api/auth/login` だけに送信元 IP ごとの緩い上限（1 秒あたり 1 回、burst 30。
+  zone は `/etc/nginx/conf.d/production-ready-login-rate-limit.conf`）を掛けます。回数の制限の正本は backend で、Nginx の上限は 1 つの送信元からの
+  大量の要求（429 の連打を含む）を照合・DB の前で止めるためのものです。超えたときは backend と同じ形の JSON（`error_code`
+  `SECURITY_RATE_LIMITED`）と `Retry-After: 60` の 429 を返します。backend の 429 はそのまま返します。Compute の前にロードバランサーなどの
+  proxy を置く場合は、Nginx が利用者の IP を見られるように（`real_ip` など）してください（見られないと、全員が 1 つの送信元として数えられる）。
+
+既存環境の更新（3 製品は同じ schema を共有するので、テーブルの作成はどれか 1 つの製品で行えばよい）:
+
+1. 各 Compute のコードを更新し、backend を再起動します。テーブルを作るまでは、プロセス内で数えてログに上の警告が出ます。
+2. テーブルを作ります（冪等。既存の `PLATFORM_*` は変えません）。
+
+   ```bash
+   # RAG の Compute
+   cd /u01/aipoc/no.1-production-ready-suite/rag/backend
+   sudo -u ragsvc HOME=/var/lib/production-ready-rag .venv/bin/python -m app.rag.system_schema_cli initialize
+   # NL2SQL の Compute
+   cd /u01/aipoc/no.1-production-ready-suite/nl2sql/backend
+   sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
+   # Agent の Compute
+   cd /u01/aipoc/no.1-production-ready-suite/agent/backend
+   sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.agent_system_schema --initialize
+   ```
+
+3. Nginx のログインの API の上限は、各製品の `init_script.sh` の再実行で入ります。手で入れる場合は、`platform/templates/nginx/login-rate-limit.conf`
+   を `/etc/nginx/conf.d/production-ready-login-rate-limit.conf` に置き、`init_script.sh` の `configure_nginx` と同じ
+   `location = /api/auth/login` と `location @pr_login_rate_limited` を site に足して、`sudo nginx -t && sudo systemctl reload nginx` を実行します。
+4. 確認: backend のログに `auth_login_throttle_shared_store_unavailable` が出ないこと。存在しないログイン ID で 1 回ログインに失敗すると、
+   `SELECT COUNT(*) FROM PLATFORM_LOGIN_ATTEMPTS` が 2 増えること（窓を過ぎると、次の失敗のときに消える）。
+
 ## パッケージと検証
 
 monorepo root から実行します。

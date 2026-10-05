@@ -586,11 +586,12 @@ jobs:
           bash scripts/tests/tail-logs.test.sh
           bash ../platform/scripts/tests/log-viewer.test.sh
 
-      - name: Verify Nginx logging contract
+      - name: Verify Nginx logging and login rate limit contracts
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends nginx
           bash ../platform/scripts/tests/nginx-logging.test.sh
+          bash ../platform/scripts/tests/nginx-login-limit.test.sh
           bash scripts/tests/start-frontend.test.sh
           bash scripts/tests/start-frontend.test.sh ../rag/scripts/start-frontend.sh
           bash scripts/tests/start-frontend.test.sh ../agent/scripts/start-frontend.sh

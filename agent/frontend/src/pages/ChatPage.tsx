@@ -1,12 +1,9 @@
-import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
   Check,
   RefreshCw,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Plus,
   RotateCcw,
   SendHorizontal,
   Square,
@@ -18,6 +15,7 @@ import {
   Button,
   Card,
   CardContent,
+  ChatLayout,
   ChatProgress,
   ChatSkeleton,
   useChatProgressTracker,
@@ -31,7 +29,6 @@ import {
   PageHeader,
   RunStopButton,
   SearchableSelectField,
-  SideSheet,
   Skeleton,
   StatusBadge,
   TextareaField,
@@ -41,6 +38,7 @@ import {
   toast,
   withOptimisticChatStatus,
   type OptimisticChatMessage,
+  useChatHistoryPanel,
   ApiErrorBanner,
   apiErrorMessage,
 } from "@engchina/production-ready-ui";
@@ -85,21 +83,6 @@ const CHAT_PROGRESS_STALE_AFTER_MS = 10_000;
 /** 会話の 1 回の取得の上限（応答が返らない取得で取り直しを止めない。#1160）。 */
 const THREAD_FETCH_TIMEOUT_MS = 30_000;
 
-/** 会話の履歴を本文の横にインラインで出す幅（Tailwind の lg）。未満はモーダルの side sheet で開く（RAG と同じ。#664 / #889）。 */
-const HISTORY_INLINE_QUERY = "(min-width: 1024px)";
-
-function useHistoryInline(): boolean {
-  return useSyncExternalStore(
-    (onChange) => {
-      const query = window.matchMedia(HISTORY_INLINE_QUERY);
-      query.addEventListener("change", onChange);
-      return () => query.removeEventListener("change", onChange);
-    },
-    () => window.matchMedia(HISTORY_INLINE_QUERY).matches,
-    () => true
-  );
-}
-
 export function ChatPage() {
   const queryClient = useQueryClient();
   const capabilities = useCapabilities();
@@ -107,18 +90,12 @@ export function ChatPage() {
   // 会話の履歴は既定で閉じ、チャットを全幅にする（RAG のチャットと同じ型。#664 / #889）。
   // lg 以上のインラインのパネルの開閉は作業状態に残す。lg 未満のモーダルの side sheet は残さない
   // （戻ったとき・再読込で画面を塞がない。workspace-state.md）。
-  const historyInline = useHistoryInline();
+  // 開閉の判定・シートの開閉は共通の useChatHistoryPanel（3 製品共通。#1161）。
   const [historyPanelOpen, setHistoryPanelOpen] = useWorkspaceState("chat", "historyOpen", false);
-  const [historySheetOpen, setHistorySheetOpen] = useState(false);
-  // lg 以上に広げたらモーダルのシートを閉じる（インラインのパネルは作業状態のまま）。
-  const [previousHistoryInline, setPreviousHistoryInline] = useState(historyInline);
-  if (previousHistoryInline !== historyInline) {
-    setPreviousHistoryInline(historyInline);
-    if (historyInline) setHistorySheetOpen(false);
-  }
-  const historyOpen = historyInline ? historyPanelOpen : historySheetOpen;
-  const historyId = useId();
-  const historyToggleRef = useRef<HTMLButtonElement | null>(null);
+  const history = useChatHistoryPanel({
+    inlineOpen: historyPanelOpen,
+    onInlineOpenChange: setHistoryPanelOpen,
+  });
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const [agentId, setAgentId] = useWorkspaceState("chat", "agentId", "", isString);
   const [threadId, setThreadId] = useWorkspaceState<"chat", string | null>(
@@ -302,11 +279,6 @@ export function ChatPage() {
     if (stoppableRun) cancel.mutate(stoppableRun.id);
   }
 
-  function toggleHistory() {
-    if (historyInline) setHistoryPanelOpen(!historyPanelOpen);
-    else setHistorySheetOpen((open) => !open);
-  }
-
   function startNewThread() {
     setThreadId(null);
     setPending(null);
@@ -318,7 +290,7 @@ export function ChatPage() {
 
   function openThread(item: ThreadSummary) {
     // lg 未満のシートは、会話を選んだら閉じる（SideSheet が開閉ボタンへフォーカスを戻す）。
-    setHistorySheetOpen(false);
+    history.closeSheet();
     setThreadId(item.thread_id);
     setPending(null);
     send.reset();
@@ -408,157 +380,22 @@ export function ChatPage() {
 
         {/* 業務 Agent の読み込み中も会話の領域を描く（寸法を予約し、読み込み後に現れて押し下げない。#1153）。 */}
         {agentsLoading || selectedAgentId ? (
-          <div
-            className={
-              historyInline && historyPanelOpen
-                ? "grid min-w-0 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[20rem_minmax(0,1fr)]"
-                : "grid min-w-0 gap-4 lg:min-h-0 lg:flex-1"
-            }
-          >
-            {historyInline ? (
-              // lg 以上: 開くとチャットの左に並べ、チャットの幅が縮む。閉じている間も描いて aria-controls の先を保つ。
-              <aside
-                id={historyId}
-                aria-label={t("chat.threads.title")}
-                data-testid="chat-history"
-                className={
-                  historyPanelOpen
-                    ? "flex min-h-0 min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface px-3 pb-3 pt-2 shadow-sm"
-                    : "hidden"
-                }
-              >
-                {/* 見出しの行はチャットの上端の行と高さをそろえる。 */}
-                <h2 className="flex min-h-8 items-center px-1 text-sm font-medium text-fg">
-                  {t("chat.threads.title")}
-                </h2>
-                {historyContent}
-              </aside>
-            ) : (
-              // lg 未満: 本文の上に重ねるモーダルの side sheet（会話を選ぶ・Esc・scrim・閉じるボタンで閉じる）。
-              <SideSheet
-                open={historySheetOpen}
-                onClose={() => setHistorySheetOpen(false)}
-                title={t("chat.threads.title")}
-                closeLabel={t("chat.threads.close")}
-                id={historyId}
-                returnFocusRef={historyToggleRef}
-                bodyClassName="gap-3"
-                data-testid="chat-history"
-              >
-                {historyContent}
-              </SideSheet>
-            )}
-
-            <section
-              aria-label={t("chat.conversation")}
-              className="flex h-[70dvh] min-h-[28rem] min-w-0 flex-col rounded-lg border border-border bg-surface shadow-sm lg:h-auto lg:min-h-0"
-            >
-              {/* 上端の行: 会話の履歴の開閉・今の会話の名前・新しい会話（履歴を閉じていても使える。RAG と同じ。#664 / #889）。 */}
-              <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-                <Button
-                  ref={historyToggleRef}
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  iconOnly
-                  icon={historyOpen ? PanelLeftClose : PanelLeftOpen}
-                  aria-label={t("chat.threads.title")}
-                  aria-expanded={historyOpen}
-                  aria-controls={historyId}
-                  data-testid="chat-history-toggle"
-                  disabled={agentsLoading}
-                  onClick={toggleHistory}
-                />
-                <div className="min-w-0 flex-1">
-                  {!currentThreadId ? null : currentThreadTitle ? (
-                    <h2
-                      className="truncate text-sm font-medium text-fg"
-                      title={currentThreadTitle}
-                      data-testid="chat-conversation-title"
-                    >
-                      {currentThreadTitle}
-                    </h2>
-                  ) : (
-                    <Skeleton className="h-4 w-40" />
-                  )}
-                </div>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  icon={Plus}
-                  disabled={agentsLoading}
-                  onClick={startNewThread}
-                >
-                  {t("chat.threads.new")}
-                </Button>
-              </div>
-
-              {/* 会話の欄。新しいメッセージを role="log" で知らせる（#907）。 */}
-              <div
-                ref={conversationRef}
-                role="log"
-                aria-label={t("chat.messages")}
-                className="min-h-0 flex-1 space-y-6 overflow-y-auto p-4"
-                data-testid="chat-conversation"
-              >
-                {threadLoading && !pending ? (
-                  // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する（3 製品で同じ。#1153）。
-                  <TimedLoadingState label={t("chat.loading")} framed={false} testId="chat-thread-loading">
-                    <ChatSkeleton />
-                  </TimedLoadingState>
-                ) : agentsLoading ? (
-                  // 業務 Agent の一覧の読み込み中は空の状態を出さず、会話の形の Skeleton だけを出す。
-                  // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
-                  <ChatSkeleton testId="chat-conversation-skeleton" />
-                ) : threadFailed ? (
-                  // 会話を読めなかった（一時的な失敗）。選んだ会話のまま、理由と再試行を出す。
-                  <ApiErrorBanner
-                    error={thread.error}
-                    fallback={t("chat.loadFailed")}
-                    testId="chat-thread-error"
-                    action={
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        icon={RefreshCw}
-                        loading={thread.isFetching}
-                        onClick={() => void thread.refetch()}
-                      >
-                        {t("common.retry")}
-                      </Button>
-                    }
-                  />
-                ) : runs.length === 0 && !pending ? (
-                  <EmptyState title={t("chat.empty.title")} hint={t("chat.empty.hint")} />
-                ) : (
-                  runs.map((run) => (
-                    <ChatTurn
-                      key={run.id}
-                      run={run}
-                      canDecide={capabilities.decideApprovals}
-                      // 評価は会話をした本人だけ（会話の一覧は本人の会話だけ。backend も作成者を確かめる。#774）。
-                      canRate={capabilities.operateRuns}
-                      deciding={decide.isPending}
-                      onDecide={(approval, approved) => decide.mutate({ approval, approved })}
-                      onFeedbackSaved={replaceRun}
-                      receivedAt={thread.dataUpdatedAt}
-                      refresh={refreshThread}
-                    />
-                  ))
-                )}
-                {pending ? (
-                  <PendingTurn
-                    message={pending}
-                    errorMessage={send.error ? apiErrorMessage(send.error, t("chat.failedUnknown")) : null}
-                    resendDisabled={composerBlocked || send.isPending}
-                    onResend={resend}
-                  />
-                ) : null}
-              </div>
-
-              <div className="shrink-0 space-y-2 border-t border-border p-3" data-testid="chat-composer-region">
+          // 骨格（履歴のパネル・シート、会話の領域の上端の行・会話の欄・入力欄の領域）は 3 製品共通の ChatLayout（#1161）。
+          <ChatLayout
+            history={history}
+            historyTitle={t("chat.threads.title")}
+            historyCloseLabel={t("chat.threads.close")}
+            historyContent={historyContent}
+            historyToggleDisabled={agentsLoading}
+            label={t("chat.conversation")}
+            // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す（RAG と同じ。#664）。
+            conversationTitle={currentThreadId ? currentThreadTitle : null}
+            conversationTitleLoading={Boolean(currentThreadId)}
+            newConversation={{ label: t("chat.threads.new"), onClick: startNewThread, disabled: agentsLoading }}
+            logLabel={t("chat.messages")}
+            logRef={conversationRef}
+            composer={
+              <>
                 {/* 入力欄と送信の行。送信は入力欄の下端にそろえ、375px では下に全幅で置く（#613）。 */}
                 <FieldActionRow
                   actions={
@@ -602,9 +439,64 @@ export function ChatPage() {
                     {apiErrorMessage(cancel.error, t("common.error.retryLater"))}
                   </Banner>
                 ) : null}
-              </div>
-            </section>
-          </div>
+              </>
+            }
+          >
+            {threadLoading && !pending ? (
+              // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する（3 製品で同じ。#1153）。
+              <TimedLoadingState label={t("chat.loading")} framed={false} testId="chat-thread-loading">
+                <ChatSkeleton />
+              </TimedLoadingState>
+            ) : agentsLoading ? (
+              // 業務 Agent の一覧の読み込み中は空の状態を出さず、会話の形の Skeleton だけを出す。
+              // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
+              <ChatSkeleton testId="chat-conversation-skeleton" />
+            ) : threadFailed ? (
+              // 会話を読めなかった（一時的な失敗）。選んだ会話のまま、理由と再試行を出す。
+              <ApiErrorBanner
+                error={thread.error}
+                fallback={t("chat.loadFailed")}
+                testId="chat-thread-error"
+                action={
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={RefreshCw}
+                    loading={thread.isFetching}
+                    onClick={() => void thread.refetch()}
+                  >
+                    {t("common.retry")}
+                  </Button>
+                }
+              />
+            ) : runs.length === 0 && !pending ? (
+              <EmptyState title={t("chat.empty.title")} hint={t("chat.empty.hint")} />
+            ) : (
+              runs.map((run) => (
+                <ChatTurn
+                  key={run.id}
+                  run={run}
+                  canDecide={capabilities.decideApprovals}
+                  // 評価は会話をした本人だけ（会話の一覧は本人の会話だけ。backend も作成者を確かめる。#774）。
+                  canRate={capabilities.operateRuns}
+                  deciding={decide.isPending}
+                  onDecide={(approval, approved) => decide.mutate({ approval, approved })}
+                  onFeedbackSaved={replaceRun}
+                  receivedAt={thread.dataUpdatedAt}
+                  refresh={refreshThread}
+                />
+              ))
+            )}
+            {pending ? (
+              <PendingTurn
+                message={pending}
+                errorMessage={send.error ? apiErrorMessage(send.error, t("chat.failedUnknown")) : null}
+                resendDisabled={composerBlocked || send.isPending}
+                onResend={resend}
+              />
+            ) : null}
+          </ChatLayout>
         ) : null}
       </PageBody>
     </div>

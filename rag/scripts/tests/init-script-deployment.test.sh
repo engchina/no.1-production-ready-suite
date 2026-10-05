@@ -481,6 +481,11 @@ fi
 test -L "${TEST_TMP_DIR}/nginx/sites-enabled/production-ready-rag" || fail "site が有効化されていない"
 test ! -e "${TEST_TMP_DIR}/nginx/sites-enabled/default" || fail "default site が残っている"
 grep -q '^nginx -t$' "${TEST_TMP_DIR}/nginx/systemctl.log" || fail "nginx -t が実行されていない"
+# ログインの API だけの送信元 IP ごとの緩い上限（#1173。実 HTTP の確認は platform/scripts/tests/nginx-login-limit.test.sh）。
+test -f "${TEST_TMP_DIR}/nginx/conf.d/production-ready-login-rate-limit.conf" \
+  || fail "ログインの上限の zone（login-rate-limit.conf）が置かれていない"
+awk '/location = \/api\/auth\/login \{/,/\}/' "${site}" | grep -Fq 'limit_req zone=pr_login burst=30 nodelay;' \
+  || fail "/api/auth/login に limit_req が掛かっていない"
 
 # --- 静的な不変条件 ---
 init_script="${REPO_DIR}/init_script.sh"

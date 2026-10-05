@@ -1,9 +1,9 @@
 import { Fragment, type ReactNode } from "react";
 import { Table2 } from "lucide-react";
 import {
-  ChatResultTable,
+  ResultTable as SharedResultTable,
   splitMarkdownTables,
-  type ChatResultTableLabels,
+  type ResultTableLabels,
   type TabularData,
 } from "@engchina/production-ready-ui";
 
@@ -11,11 +11,11 @@ import { t } from "@/lib/i18n";
 
 /**
  * Agent のデータの表（#1158）。ツールの結果・成果物・回答の Markdown の表を、NL2SQL のチャットと同じ共通の
- * 結果の表（`ChatResultTable`。#1154）で出す。表の見た目と振る舞い（要約・表の中のスクロール・すべての行・CSV・
+ * 結果の表（`ResultTable`。#1154 / #1178）で出す。表の見た目と振る舞い（要約・表の中のスクロール・すべての行・CSV・
  * NULL の表示）は部品が持ち、ここは何の表か（表の名前）だけを渡す。
  */
 
-function tableLabels(name: string): Partial<ChatResultTableLabels> {
+function tableLabels(name: string): Partial<ResultTableLabels> {
   return {
     tableLabel: name,
     scrollLabel: t("resultTable.scrollLabel", { name }),
@@ -27,7 +27,7 @@ function tableLabels(name: string): Partial<ChatResultTableLabels> {
 /** 表の形の結果（ツールの結果・成果物）。 */
 export function ResultTable({ data, name, testId }: { data: TabularData; name: string; testId?: string }) {
   return (
-    <ChatResultTable
+    <SharedResultTable
       columns={data.columns}
       rows={data.rows}
       truncated={data.truncated}

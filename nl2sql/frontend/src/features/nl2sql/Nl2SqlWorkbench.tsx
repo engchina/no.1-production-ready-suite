@@ -51,7 +51,7 @@ import { DbObjectPanelHeader } from "./components/DbObjectManagementShared";
 import { EngineSelector } from "./components/EngineSelector";
 import { GuidedClarificationPanel } from "./components/GuidedClarificationPanel";
 import { Nl2SqlExecutionOptionsPanel } from "./components/Nl2SqlExecutionOptionsPanel";
-import { Nl2SqlResultTable } from "./components/Nl2SqlResultTable";
+import { QueryResultCard } from "./components/QueryResultTable";
 import { OperationStatusStrip } from "./components/OperationStatusStrip";
 import { QuestionText } from "./components/QuestionText";
 import { SchemaReferencePanel } from "./components/SchemaReferencePanel";
@@ -1697,7 +1697,7 @@ function ExecutableNl2SqlWorkbench() {
 
         <WorkspaceResultNotice result={result} inputSignature={JSON.stringify(generationRequest)} finishedAt={result?.timing?.finished_at} />
         {/* 実行していない SQL（遮断・実行の失敗）の空の results を「0 件」と見せない（#917）。 */}
-        <Nl2SqlResultTable results={resultExecuted ? result?.results ?? null : null} />
+        <QueryResultCard results={resultExecuted ? result?.results ?? null : null} csvFilePrefix="nl2sql-sql-generation-result" />
         <SelectAiFeedbackAddPanel
           result={result}
           history={latestHistory}
