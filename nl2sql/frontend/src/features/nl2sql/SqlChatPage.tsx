@@ -24,7 +24,9 @@ import {
   ChatLayout,
   ChatProgress,
   ChatSkeleton,
-  ChatUserMessage,
+  ChatAnswer,
+  ChatPendingTurn,
+  ChatTurn,
   EmptyState,
   MessageText,
   PageBody,
@@ -739,7 +741,7 @@ export function SqlChatPage() {
               />
             ) : null}
             {turns.map((turn) => (
-              <ChatTurn
+              <SqlChatTurn
                 key={turn.job_id}
                 turn={turn}
                 canExecuteSql={canExecuteSql}
@@ -752,51 +754,45 @@ export function SqlChatPage() {
             ))}
             {pending ? (
               // 送った質問はジョブの投入の応答を待たずに出す。失敗しても残す（#907）。
-              <article
-                className="space-y-2"
-                data-testid="sql-chat-pending-turn"
-              >
-                <ChatUserMessage
-                  status={pending.status}
-                  failedLabel={t("chat.sendFailedStatus")}
-                >
-                  {pending.content}
-                </ChatUserMessage>
-                {pending.status === "failed" && send.isError ? (
-                  // 失敗の理由は送った質問の直下（会話の中）に出す（messaging.md §10.1 のチャットの扱い）。
-                  <ApiErrorBanner
-                    error={send.error}
-                    fallback={t("chat.sendFailed")}
-                    testId="sql-chat-send-error"
-                    {...sendFailureText(send.error)}
-                    action={
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        icon={RotateCcw}
-                        disabled={blocked}
-                        onClick={resend}
-                      >
-                        {t("chat.resend")}
-                      </Button>
-                    }
+              // 1 往復の入れ物・送信中の回答の場所・失敗の出し方は 3 製品共通の ChatPendingTurn（#1161）。
+              <ChatPendingTurn
+                message={pending}
+                failedLabel={t("chat.sendFailedStatus")}
+                testId="sql-chat-pending-turn"
+                // 送信の応答（ジョブの投入）を待つ間も段階として出す。投入が遅いと、この段階に
+                // 遅延の案内が付き、生成ではなく送信で待っていることが分かる（#1145）。
+                progress={
+                  <ChatProgress
+                    key={pending.localId}
+                    steps={chatSubmitProgressSteps(pending.sentAtMs)}
+                    labels={CHAT_PROGRESS_LABELS}
+                    testId="sql-chat-progress"
                   />
-                ) : pending.status === "sending" ? (
-                  // 送信の応答（ジョブの投入）を待つ間も段階として出す。投入が遅いと、この段階に
-                  // 遅延の案内が付き、生成ではなく送信で待っていることが分かる（#1145）。
-                  <Card>
-                    <CardContent className="space-y-3">
-                      <ChatProgress
-                        key={pending.localId}
-                        steps={chatSubmitProgressSteps(pending.sentAtMs)}
-                        labels={CHAT_PROGRESS_LABELS}
-                        testId="sql-chat-progress"
-                      />
-                    </CardContent>
-                  </Card>
-                ) : null}
-              </article>
+                }
+                failure={
+                  send.isError ? (
+                    // 失敗の理由は送った質問の直下（会話の中）に出す（messaging.md §10.1 のチャットの扱い）。
+                    <ApiErrorBanner
+                      error={send.error}
+                      fallback={t("chat.sendFailed")}
+                      testId="sql-chat-send-error"
+                      {...sendFailureText(send.error)}
+                      action={
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          icon={RotateCcw}
+                          disabled={blocked}
+                          onClick={resend}
+                        >
+                          {t("chat.resend")}
+                        </Button>
+                      }
+                    />
+                  ) : null
+                }
+              />
             ) : null}
           </ChatLayout>
         )}
@@ -804,7 +800,7 @@ export function SqlChatPage() {
     </div>
   );
 }
-function ChatTurn({
+function SqlChatTurn({
   turn,
   canExecuteSql,
   canOpenDirectSql,
@@ -853,10 +849,9 @@ function ChatTurn({
   );
   const executed = Boolean(execution.data || turn.last_execution);
   return (
-    <article className="space-y-2" data-testid="sql-chat-turn">
-      <ChatUserMessage>{turn.question || result?.original_question}</ChatUserMessage>
-      <Card>
-        <CardContent className="space-y-3">
+    // 1 往復の入れ物（質問の吹き出し・回答の枠）は 3 製品共通の ChatTurn / ChatAnswer（#1161）。
+    <ChatTurn question={turn.question || result?.original_question} testId="sql-chat-turn">
+      <ChatAnswer>
           {/* 処理の段階（#1145）。実行中は今の段階、完了後は回答の上に「処理の経過」の 1 行に畳む。 */}
           <ChatProgress
             {...progress.progressProps}
@@ -950,8 +945,7 @@ function ChatTurn({
             <Banner severity="warning">{turn.warning_message}</Banner>
           ) : null}
           {copyError ? <Banner severity="danger">{copyError}</Banner> : null}
-        </CardContent>
-      </Card>
-    </article>
+      </ChatAnswer>
+    </ChatTurn>
   );
 }
