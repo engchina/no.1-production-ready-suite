@@ -133,10 +133,13 @@ function SqlOntologyGroundingPanel({
   sqlGraph,
   profileId,
   ontologyGraph,
+  notPublished = false,
 }: {
   sqlGraph: SqlSemanticGraph | null;
   profileId: string;
   ontologyGraph?: OntologyGraph | null;
+  /** 業務プロファイルに公開されたオントロジーが無く、接地確認をしていない(失敗ではない。#1168)。 */
+  notPublished?: boolean;
 }) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
@@ -165,22 +168,33 @@ function SqlOntologyGroundingPanel({
             {t("nl2sql.interpretation.graphTitle")}
           </h4>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <GroundingStatusBadge result={grounding} />
+        {notPublished ? (
           <StatusBadge
-            icon={false}
             variant="neutral"
-            label={t("nl2sql.interpretation.graphMatchedCount", {
-              count:
-                grounding.matchedTables.length +
-                grounding.matchedColumns.length +
-                grounding.matchedJoins.length,
-            })}
+            label={t("nl2sql.interpretation.graphStatus.notPublished")}
           />
-        </div>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            <GroundingStatusBadge result={grounding} />
+            <StatusBadge
+              icon={false}
+              variant="neutral"
+              label={t("nl2sql.interpretation.graphMatchedCount", {
+                count:
+                  grounding.matchedTables.length +
+                  grounding.matchedColumns.length +
+                  grounding.matchedJoins.length,
+              })}
+            />
+          </div>
+        )}
       </div>
 
-      {!profileId ? (
+      {notPublished ? (
+        <Banner severity="info">
+          {t("nl2sql.interpretation.graphNotPublished")}
+        </Banner>
+      ) : !profileId ? (
         <Banner severity="info">{t("nl2sql.interpretation.graphNoProfile")}</Banner>
       ) : !ontologyGraph ? (
         <Banner severity="warning">{t("nl2sql.interpretation.graphLoadFailed")}</Banner>
@@ -287,6 +301,7 @@ function InterpretationArtifactPanel({
           sqlGraph={sqlGraph}
           profileId={effectiveProfileId}
           ontologyGraph={artifact.ontology_graph ?? null}
+          notPublished={artifact.ontology_grounding_skip_reason === "no_published_ontology"}
         />
       )}
     </div>

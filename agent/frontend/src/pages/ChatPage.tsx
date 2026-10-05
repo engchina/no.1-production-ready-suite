@@ -58,9 +58,11 @@ import {
 import { isRunnableAgent } from "@/lib/agent-availability";
 import { chatSubmitProgressSteps, runProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
+import { AnswerBody, ToolResultTable } from "@/components/chat/ResultTables";
 import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
+import { runToolResultTables } from "@/lib/run-tables";
 import { runStatusView, stepStatusView } from "@/lib/status-labels";
 import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-state";
 import { isOwnDecision } from "@/pages/shared/approval-decision";
@@ -719,6 +721,7 @@ function ChatTurn({
   const answer = answerText(run.artifacts);
   const citations = runCitations(run.artifacts);
   const toolSteps = run.steps.filter((step) => step.tool_call);
+  const toolTables = runToolResultTables(run);
   const pendingApprovals = run.approvals.filter((approval) => approval.status === "pending");
   const failure = run.status === "failed" ? failureMessage(run) : null;
   // 処理の経過の状態を追う（3 製品共通。#1160）。回答の作成中（取り直している間）に会話の取得が途絶えたら
@@ -742,7 +745,23 @@ function ChatTurn({
           完了後は回答の上に「処理の経過」の 1 行に畳む（共有の ChatProgress。3 製品で同じ。#1145）。
         */}
         <ChatProgress {...progress.progressProps} testId="chat-progress" />
-        {answer ? <MessageText text={answer} className="text-sm text-fg" /> : null}
+        {answer ? (
+          // 回答の Markdown の表と、表の形のツールの結果（NL2SQL の SQL の実行の結果など）は、NL2SQL のチャットと
+          // 同じ共通の結果の表で出す（#1158）。表でない部分・表でない結果は今までどおり。
+          <AnswerBody
+            text={answer}
+            renderText={(text) => <MessageText text={text} className="block text-sm text-fg" />}
+            testId={`chat-answer-${run.id}`}
+          />
+        ) : null}
+        {toolTables.map((table) => (
+          <ToolResultTable
+            key={table.stepId}
+            data={table.data}
+            toolName={table.toolName}
+            testId={`chat-tool-table-${table.stepId}`}
+          />
+        ))}
         {failure ? <Banner severity="danger" title={t("chat.failed")}>{failure}</Banner> : null}
         {run.status === "cancelled" ? (
           // 止めた回答の状態（途中までの回答は上に残す）。色だけに頼らず、停止のアイコンを添える（#805）。

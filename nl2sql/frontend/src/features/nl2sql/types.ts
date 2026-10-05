@@ -513,6 +513,11 @@ export interface Nl2SqlInterpretationArtifact {
   ontology_graph?: OntologyGraph | null;
   /** use_ontology_context のエコー。false のとき Ontology 接地確認を表示しない(未指定は互換で表示)。 */
   ontology_grounding_enabled?: boolean;
+  /**
+   * 接地確認を有効にしたが行わなかった理由。"no_published_ontology" は業務プロファイルに公開された
+   * オントロジーが無いこと(ジョブはその場で同期・構築しない。#1168)。空・未指定は接地確認をした。
+   */
+  ontology_grounding_skip_reason?: "" | "no_published_ontology";
   warnings: string[];
 }
 
