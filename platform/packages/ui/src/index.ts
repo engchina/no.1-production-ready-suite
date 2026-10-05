@@ -78,11 +78,13 @@ export {
   TableSkeleton,
   ListSkeleton,
   FormSkeleton,
+  ChatSkeleton,
   SKELETON_CLASS,
   type SkeletonRows,
   type TableSkeletonProps,
   type ListSkeletonProps,
   type FormSkeletonProps,
+  type ChatSkeletonProps,
 } from "./components/ui/skeleton";
 export { Switch, type SwitchProps } from "./components/ui/switch";
 export { ToggleChip } from "./components/ui/toggle-chip";
@@ -273,6 +275,22 @@ export {
   type PagedDataTableProps,
   type PaginationLabels,
 } from "./components/data/paged-data-table";
+export {
+  ChatResultTable,
+  ResultCell,
+  CHAT_RESULT_PAGE_SIZES,
+  CHAT_RESULT_PREVIEW_ROWS,
+  DEFAULT_CHAT_RESULT_TABLE_LABELS,
+  chatResultSummaryText,
+  isNullResultValue,
+  isNumericResultColumn,
+  resultRowsToCsv,
+  resultValueText,
+  type ChatResultFullResultLink,
+  type ChatResultTableColumn,
+  type ChatResultTableLabels,
+  type ChatResultTableProps,
+} from "./components/data/chat-result-table";
 export {
   RowTitleButton,
   type RowTitleButtonProps,

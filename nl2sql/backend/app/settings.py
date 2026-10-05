@@ -214,6 +214,14 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     nl2sql_csv_import_max_rows: int = 5000
     # 件数未指定の SELECT 実行で読み込む行数の安全上限(超えた分は読まず truncated にする)。
     nl2sql_max_result_rows: int = Field(default=100000, ge=1)
+    # チャットで生成した SQL の実行（#1154）の上限。行は 1 回の実行で取得する行数（超えた分は読まず
+    # 「さらに行があります」にする）、セルの文字数（超えた文字は切る）、応答の行のバイト数（超えた
+    # 行は返さず打ち切りにする）。時間は SQL 生成のジョブと同じ call timeout
+    # （nl2sql_oracle_call_timeout_seconds）。全件が要るときは SQL 生成・SELECT SQL の実行の
+    # 画面で実行する。
+    nl2sql_chat_result_max_rows: int = Field(default=1000, ge=1, le=5000)
+    nl2sql_chat_result_max_cell_chars: int = Field(default=2000, ge=100, le=100000)
+    nl2sql_chat_result_max_bytes: int = Field(default=2_000_000, ge=10_000, le=20_000_000)
     # SELECT 実行で使ってよい利用者定義・package 関数(カンマ区切り)。
     # 例: APP.FMT_CODE,UTIL_PKG.LABEL
     nl2sql_allowed_user_functions: str = ""

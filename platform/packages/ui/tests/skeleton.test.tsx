@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { DataTable } from "../src/components/data/data-table";
 import { LoadingState } from "../src/components/feedback/state-views";
-import { FormSkeleton, ListSkeleton, SKELETON_CLASS, Skeleton, TableSkeleton } from "../src/components/ui/skeleton";
+import { ChatSkeleton, FormSkeleton, ListSkeleton, SKELETON_CLASS, Skeleton, TableSkeleton } from "../src/components/ui/skeleton";
 import * as ui from "../src/index";
 import {
   INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS,
@@ -135,6 +135,28 @@ describe("FormSkeleton", () => {
     expect(html).not.toContain('data-skeleton-part="title"');
     expect(html).not.toContain('data-skeleton-part="actions"');
     expect(count(html, /data-skeleton-part="field"/g)).toBe(2);
+  });
+});
+
+describe("ChatSkeleton（#1153）", () => {
+  it("既定は質問（右寄せ）と回答の組を 2 つ。読み上げない", () => {
+    const html = renderToStaticMarkup(<ChatSkeleton testId="c" />);
+    expect(html).toMatch(/^<div class="grid gap-4" aria-hidden="true" data-testid="c" data-skeleton="chat">/);
+    expect(count(html, /data-skeleton-part="turn"/g)).toBe(2);
+    expect(count(html, /ml-auto h-12 max-w-\[85%\] w-2\/3" data-skeleton-part="question"/g)).toBe(1);
+    expect(count(html, /ml-auto h-12 max-w-\[85%\] w-1\/2" data-skeleton-part="question"/g)).toBe(1);
+    expect(count(html, /data-skeleton-part="answer"/g)).toBe(2);
+    expect(count(html, /bg-surface-hover motion-reduce:animate-none/g)).toBe(4);
+    expect(html).not.toContain('role="status"');
+  });
+
+  it("turns で組の数を変えられる（1 未満でも 1 組は出す）", () => {
+    expect(count(renderToStaticMarkup(<ChatSkeleton turns={3} />), /data-skeleton-part="turn"/g)).toBe(3);
+    expect(count(renderToStaticMarkup(<ChatSkeleton turns={0} />), /data-skeleton-part="turn"/g)).toBe(1);
+  });
+
+  it("パッケージのルートから export される", () => {
+    expect(ui.ChatSkeleton).toBe(ChatSkeleton);
   });
 });
 
