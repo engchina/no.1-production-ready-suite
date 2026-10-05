@@ -514,6 +514,28 @@ def test_message_schema_and_migration_add_answer_run_columns() -> None:
     assert "''CANCELLED''" in migration.sql
 
 
+def test_message_migration_rebuilds_created_index_around_json_column() -> None:
+    """既存の rag_messages に JSON の列を足す前に、created_at の index を 1 つ消し、後で作り直す。
+
+    #1193。
+
+    created_at を含む 2 つの index が同じ式 SYS_EXTRACT_UTC("CREATED_AT") の隠し列を持つ表では、
+    JSON の列の追加が ORA-54015 になる。
+    """
+    from app.rag import oracle_schema
+
+    sql = oracle_schema.message_answer_runs_migration_sql()
+    drop = sql.index("DROP INDEX rag_messages_conversation_created_idx")
+    add_json = sql.index("ADD (progress_json JSON)")
+    create = sql.index("'CREATE INDEX rag_messages_conversation_created_idx '")
+    assert drop < add_json < create
+    # 作り直す index は CREATE TABLE と同じ定義にする。
+    assert "'ON rag_messages (conversation_id, created_at)'" in sql[create:]
+    # 列がある（適用済み・新規作成）ときは index に触らない。
+    guard = sql.index("column_name = 'PROGRESS_JSON'")
+    assert guard < drop
+
+
 def test_close_streaming_sql_only_touches_streaming_rows(monkeypatch: MonkeyPatch) -> None:
     """閉じる更新は STREAMING の行だけに当て、中断の判定は DB の時刻の heartbeat で行う。"""
     from collections.abc import Mapping
