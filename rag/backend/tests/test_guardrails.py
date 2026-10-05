@@ -1,8 +1,11 @@
 """RAG guardrail policy のテスト。"""
 
+import pytest
+
 from app.clients.oci_guardrails import GuardrailInspection, PiiSpan
 from app.config import Settings
 from app.rag.guardrails import GuardrailPolicy, evaluate_groundedness
+from app.schemas.search import normalize_query_text
 
 
 def test_validate_answer_blocks_secret_leakage() -> None:
@@ -311,3 +314,19 @@ def test_validate_answer_blocks_fullwidth_secret_leakage() -> None:
     )
     assert result.allowed is False
     assert [finding.code for finding in result.findings] == ["secret_leakage"]
+
+
+def test_validate_query_rejects_too_long_question_in_user_terms() -> None:
+    """長すぎる入力は、利用者の言葉（「質問」）で拒否の理由を返す（#1183）。"""
+    result = GuardrailPolicy(Settings(guardrail_max_query_chars=100)).validate_query("あ" * 101)
+
+    assert result.allowed is False
+    assert [(finding.code, finding.message) for finding in result.findings] == [
+        ("query_too_long", "質問が長すぎるため処理できません。")
+    ]
+
+
+def test_normalize_query_text_rejects_blank_question_in_user_terms() -> None:
+    """空の入力は、利用者の言葉（「質問」）で入力を求める（#1183）。"""
+    with pytest.raises(ValueError, match="^質問を入力してください。$"):
+        normalize_query_text("  \n")
