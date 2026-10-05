@@ -158,3 +158,44 @@ export function FormSkeleton({ fields = 4, title = true, actions = true, classNa
     </div>
   );
 }
+
+export interface ChatSkeletonProps {
+  /** 質問と回答の組の数（既定 2。1 未満でも 1 組は出す）。 */
+  turns?: number;
+  className?: string;
+  testId?: string;
+}
+
+/** 質問（右寄せの吹き出し）と回答（左の塊）の幅。組ごとにずらして同じ長さを縦に並べない。 */
+const CHAT_QUESTION_WIDTHS = ["w-2/3", "w-1/2"] as const;
+const CHAT_ANSWER_WIDTHS = ["w-5/6", "w-3/4"] as const;
+
+/**
+ * チャットの会話の形のスケルトン（#1153）。右寄せの質問の吹き出し（`ChatUserMessage` の形）と、
+ * 左の回答の塊を交互に並べる。3 製品のチャットの会話の欄で、画面の前提（対象の一覧・開いている会話の内容）を
+ * 読み込んでいる間に、空の状態（はじめの案内）の代わりに出す（UX 契約 messaging.md §11.7）。
+ * 会話の内容を取得している間は `TimedLoadingState` の子に置く。対象の一覧の経過時間を上のカードが出している間は、
+ * 経過時間を重ねず、このスケルトンだけを出す。
+ */
+export function ChatSkeleton({ turns = 2, className, testId }: ChatSkeletonProps) {
+  return (
+    <div className={cn("grid gap-4", className)} aria-hidden="true" data-testid={testId} data-skeleton="chat">
+      {Array.from({ length: Math.max(1, turns) }, (_, turn) => (
+        <div key={turn} className="grid gap-2" data-skeleton-part="turn">
+          <div
+            className={cn(
+              SKELETON_CLASS,
+              "ml-auto h-12 max-w-[85%]",
+              CHAT_QUESTION_WIDTHS[turn % CHAT_QUESTION_WIDTHS.length]
+            )}
+            data-skeleton-part="question"
+          />
+          <div
+            className={cn(SKELETON_CLASS, "h-32", CHAT_ANSWER_WIDTHS[turn % CHAT_ANSWER_WIDTHS.length])}
+            data-skeleton-part="answer"
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
