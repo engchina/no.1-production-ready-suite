@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { draftKey, WORKSPACE_DRAFT_PREFIX } from "../../src/lib/workspace-drafts";
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "./_helpers/test";
@@ -571,7 +572,7 @@ const overflowSchemaCatalog = {
       owner: "APP",
       table_type: "TABLE",
       comment:
-        "コメントも長い日本語文として表示され、右側の NL2SQL 検索ワークベンチへ重ならないことを確認します。",
+        "コメントも長い日本語文として表示され、右側の「質問から SQL を生成して実行」へ重ならないことを確認します。",
       row_count: 266,
       constraints: ["PK_DENPYO_ACTIVITY_LOG_WITH_AN_INTENTIONALLY_LONG_NAME"],
       columns: [
@@ -3059,7 +3060,7 @@ async function useOverflowSchemaCatalog(page: Page) {
 }
 
 async function openSchemaPicker(page: Page) {
-  // スキーマ参照はクエリの右に常時表示（トグルなし）。可視確認のみ行う。
+  // スキーマ参照は質問の右に常時表示（トグルなし）。可視確認のみ行う。
   await expect(page.getByTestId("nl2sql-schema-reference")).toBeVisible();
 }
 
@@ -3069,7 +3070,7 @@ async function expectQuerySingleColumnLayout(page: Page) {
   const shell = page.getByTestId("nl2sql-workspace-shell");
   await expect(shell).toBeVisible();
 
-  // スキーマ参照はクエリ直下の折りたたみ補助ツール。開いて内容を検証。
+  // スキーマ参照は質問の直下の折りたたみ補助ツール。開いて内容を検証。
   await openSchemaPicker(page);
   const schema = page.getByTestId("nl2sql-schema-reference");
   const firstTable = page.getByTestId("nl2sql-schema-table-item").first();
@@ -3390,7 +3391,7 @@ test("SQL 系の必須入力欄は共有の必須バッジと required 属性で
   // 業務プロファイルは空にできない選択欄で、API で省略しても backend が既定を使うので「必須」を付けない（#540）。
   await expect(page.locator('label[for="nl2sql-profile-select"]')).not.toContainText("必須");
   await expect(page.locator("#nl2sql-profile-select")).not.toHaveAttribute("aria-required", "true");
-  await expectRequiredTextarea(page, "nl2sql-question-input", "クエリ");
+  await expectRequiredTextarea(page, "nl2sql-question-input", "質問");
   const runQueryButton = page.getByRole("button", { name: "SQL を生成して実行" });
   await expect(runQueryButton).toBeDisabled();
   await nl2sqlQuestionInput(page).fill("未入金の請求を確認したい");
@@ -3505,7 +3506,7 @@ for (const theme of ["light", "dark"]) {
       ];
       for (const [label, body] of templates) {
         await question.fill(original);
-        // 選択範囲の有無によらず、クエリ全体をテンプレートで置き換える。
+        // 選択範囲の有無によらず、質問の全体をテンプレートで置き換える。
         await question.focus();
         await question.press("ControlOrMeta+A");
         await page.getByRole("button", { name: label, exact: true }).click();
@@ -3624,8 +3625,8 @@ test("クエリとスキーマ参照は desktop で左右並置、mobile で縦�
   const question = nl2sqlQuestionInput(page);
   const picker = page.getByTestId("nl2sql-schema-reference");
   await expect(question).toBeVisible();
-  await expect(question).toHaveAttribute("placeholder", "確認したい内容を日本語で入力してください");
-  await expect(question).toHaveAccessibleName("クエリ");
+  await expect(question).toHaveAttribute("placeholder", "質問を入力");
+  await expect(question).toHaveAccessibleName("質問");
   await expect(question).toHaveValue("");
   await expect(picker).toBeVisible();
 
@@ -4480,7 +4481,7 @@ test("query workbench generates SQL through the job flow and shows results", asy
     "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
   );
 
-  await expect(page.getByText("検索結果（1件）")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "実行結果（1 行）" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "1200000" })).toBeVisible();
   // 生成 SQL の pre(role=region「生成 SQL コード」)と区別するため textbox を明示する。
@@ -4716,7 +4717,7 @@ test("job ポーリングの通信断が続くと追跡を停止しエラー表�
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
   const runButton = page.getByRole("button", { name: "SQL を生成して実行" });
-  const resetButton = page.getByRole("button", { name: "新しいクエリを開始", exact: true });
+  const resetButton = page.getByRole("button", { name: "新しい質問を開始", exact: true });
   await runButton.click();
 
   // 2.5s 間隔 × 連続 3 回失敗(即時 tick 含む)で追跡を断念する。
@@ -4891,8 +4892,8 @@ for (const failure of [
       "SELECT TOTAL FROM INVOICES"
     );
     await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
-    await expect(page.getByText("検索結果（0件）")).toHaveCount(0);
-    await expect(page.getByText("該当するデータがありません。")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "実行結果（0 行）" })).toHaveCount(0);
+    await expect(page.getByTestId("query-results")).toHaveCount(0);
   });
 }
 
@@ -4962,7 +4963,7 @@ test("TTL を超えた job スナップショットは復元ポーリング自�
   expect((await readActiveJobState(page)).jobId).toBeNull();
 });
 
-test("履歴更新の失敗は warning に留め、成功した検索結果を失敗表示に変えない", async ({ page }) => {
+test("履歴更新の失敗は warning に留め、成功した実行結果を失敗表示に変えない", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.route("**/api/nl2sql/history", (route) =>
     route.fulfill({
@@ -4980,7 +4981,7 @@ test("履歴更新の失敗は warning に留め、成功した検索結果を�
   await expect(page.getByTestId("nl2sql-job-progress")).toContainText(
     "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES"
   );
-  await expect(page.getByText("検索結果（1件）")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "実行結果（1 行）" })).toBeVisible();
   await expect(page.getByTestId("nl2sql-action-feedback-error")).toHaveCount(0);
   // 履歴の失敗は warning toast 1 回のみ(messaging spec: 固定面の正本と二重にしない)。
   const toastRegion = page.getByRole("region", { name: "通知" });
@@ -5029,7 +5030,7 @@ test("Enterprise AI Direct job does not show schema-empty when schema reference 
   await expectNoHorizontalScroll(page);
 });
 
-test("検索実行開始時に前回の生成 SQL・実行結果を先に消す", async ({ page }) => {
+test("SQL の生成と実行の開始時に前回の生成 SQL・実行結果を先に消す", async ({ page }) => {
   await mockNl2SqlApi(page);
 
   await page.goto("/query");
@@ -5039,7 +5040,7 @@ test("検索実行開始時に前回の生成 SQL・実行結果を先に消す"
   await expect(page.getByTestId("nl2sql-job-progress")).toContainText(
     "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES"
   );
-  await expect(page.getByText("検索結果（1件）")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "実行結果（1 行）" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
 
   const jobsGate = createRequestGate();
@@ -5096,7 +5097,7 @@ test("検索実行開始時に前回の生成 SQL・実行結果を先に消す"
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
-  await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "実行結果（1 行）" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toHaveCount(0);
   await expect(question).toHaveValue("請求金額だけを確認したい");
 
@@ -5104,17 +5105,17 @@ test("検索実行開始時に前回の生成 SQL・実行結果を先に消す"
   await expect(page.getByTestId("nl2sql-job-progress")).toContainText(
     "SELECT TOTAL_AMOUNT FROM INVOICES"
   );
-  await expect(page.getByText("検索結果（1件）")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "実行結果（1 行）" })).toBeVisible();
 });
 
-test("検索実行開始時に前回の結果表を先に消す", async ({ page }) => {
+test("SQL の生成と実行の開始時に前回の結果表を先に消す", async ({ page }) => {
   await mockNl2SqlApi(page);
 
   await page.goto("/query");
   const question = nl2sqlQuestionInput(page);
   await question.fill("請求金額を一覧で見たい");
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
-  await expect(page.getByText("検索結果（1件）")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "実行結果（1 行）" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
 
   const createdAt = "2026-06-21T10:00:00.000Z";
@@ -5182,7 +5183,7 @@ test("検索実行開始時に前回の結果表を先に消す", async ({ page 
   // 用語・同義語は既定 off なので、入力そのままの質問で job を作る。
   await expect.poll(() => jobPayload?.question).toBe("請求件数を数えたい");
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
-  await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "実行結果（1 行）" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toHaveCount(0);
   await expect(question).toHaveValue("請求件数を数えたい");
 
@@ -5194,14 +5195,14 @@ test("検索実行開始時に前回の結果表を先に消す", async ({ page 
   await expect(page.getByRole("cell", { name: "2" })).toBeVisible();
 });
 
-test("検索実行開始時に前回の生成結果を先に消し、現在の質問で job を作成できる", async ({ page }) => {
+test("SQL の生成と実行の開始時に前回の生成結果を先に消し、現在の質問で job を作成できる", async ({ page }) => {
   await mockNl2SqlApi(page);
 
   await page.goto("/query");
   const question = nl2sqlQuestionInput(page);
   await question.fill("請求金額を一覧で見たい");
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
-  await expect(page.getByText("検索結果（1件）")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "実行結果（1 行）" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
 
   const jobsGate = createRequestGate();
@@ -5264,7 +5265,7 @@ test("検索実行開始時に前回の生成結果を先に消し、現在の�
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
-  await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "実行結果（1 行）" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toHaveCount(0);
   await expect(question).toHaveValue("請求金額を業務用語で解釈したい");
   // 用語・同義語は既定 off なので、入力そのままの質問で job を作る。
@@ -5640,7 +5641,7 @@ test("参考履歴は管理者レビュー結果が良い履歴だけを表示�
   await expectNoElementHorizontalOverflow(similarQuestion);
 });
 
-test("検索結果は 10 件ごとにページングする", async ({ page }) => {
+test("実行結果は要約・表の中のスクロールのプレビューと、すべての行のシート（10 件ごとのページ送り）・CSV で出す（#1178）", async ({ page }) => {
   await mockNl2SqlApi(page);
   // 実行結果を 12 件へ上書き（後勝ちルートで mockNl2SqlApi の job result を差し替える）
   const rows = Array.from({ length: 12 }, (_, index) => ({
@@ -5685,31 +5686,45 @@ test("検索結果は 10 件ごとにページングする", async ({ page }) =>
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
-  await expect(page.getByText("検索結果（12件）")).toBeVisible();
-  // 1 ページ目 = 先頭 10 件。11 件目以降は次ページ。
-  await expect(page.getByRole("cell", { name: "顧客01" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "顧客10" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
-
-  // 表頭を固定し、md 未満 5 行・md 以上 8 行で表の中を縦スクロールにする（#265）。
-  const resultRegion = page.getByRole("region", { name: "検索結果。スクロールできます。" });
+  await expect(page.getByRole("heading", { name: "実行結果（12 行）" })).toBeVisible();
+  // 要約の 1 行（行数・列数）。共通の結果の表（ResultTable。#1178）。
+  await expect(page.getByTestId("query-results-summary")).toHaveText("12 行・2 列");
+  // プレビューは先頭の行（50 行まで）を表頭固定・表の中の縦スクロールで出す（ページ全体を伸ばさない）。
+  const resultRegion = page.getByRole("region", { name: "実行結果の表。スクロールできます。" });
   await expect(resultRegion).toBeVisible();
   await expect(resultRegion.locator("thead")).toHaveCSS("position", "sticky");
+  await expect(resultRegion.locator("tbody tr")).toHaveCount(12);
   expect(await resultRegion.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  // 数値の列は右寄せ。
+  await expect(resultRegion.getByRole("cell", { name: "3000", exact: true })).toHaveCSS("text-align", "right");
+  // CSV は取得した行（ヘッダー + 12 行）を、画面の接頭辞と時刻の名前でダウンロードする。
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByTestId("query-results-csv").click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/^nl2sql-sql-generation-result-\d{8}-\d{6}\.csv$/u);
+  const csv = await readFile((await download.path())!, "utf8");
+  expect(csv.trimEnd().split("\r\n")).toHaveLength(13);
 
-  const pagination = page.getByTestId("nl2sql-result-pagination");
+  // すべての行は広いシートで 10 件ごとにページを送る。
+  await page.getByTestId("query-results-view-all").click();
+  const sheet = page.getByRole("dialog", { name: "実行結果（12 行）" });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole("button", { name: "CSV をダウンロード" })).toBeVisible();
+  const pagination = page.getByTestId("query-results-all-pagination");
   await expect(pagination).toContainText("1-10 / 12 件");
   await expect(pagination).toContainText("1 / 2 ページ");
+  const allTable = page.getByTestId("query-results-all-table");
+  await expect(allTable.getByRole("cell", { name: "顧客10" })).toBeVisible();
+  await expect(allTable.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
 
   await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(pagination).toContainText("11-12 / 12 件");
-  await expect(page.getByRole("cell", { name: "顧客11" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "顧客12" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "顧客01" })).toHaveCount(0);
+  await expect(allTable.getByRole("cell", { name: "顧客12" })).toBeVisible();
+  await expect(allTable.getByRole("cell", { name: "顧客01" })).toHaveCount(0);
 
-  await pagination.getByRole("button", { name: "前へ" }).click();
-  await expect(pagination).toContainText("1-10 / 12 件");
-  await expect(page.getByRole("cell", { name: "顧客01" })).toBeVisible();
+  await sheet.getByRole("button", { name: "実行結果を閉じる" }).click();
+  await expect(sheet).toBeHidden();
+  await expect(page.getByTestId("query-results-view-all")).toBeFocused();
 });
 
 test("プロファイルの読み込み中に入力した質問は、プロファイルの確定後も残り実行できる（#168）", async ({ page }) => {
@@ -6045,7 +6060,11 @@ test("結果整形が完了した job は SQL 実行ステップを処理中の�
   await expect(executeStep.locator("svg.animate-spin")).toHaveCount(0);
   await expect(executeStep).toContainText("完了");
   await expect(formatStep).toHaveAttribute("data-step-status", "done");
-  await expect(page.getByText("検索結果（0件）")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "実行結果（0 行）" })).toBeVisible();
+  // 0 行は要約だけ（表・すべての行・CSV は出さない。#1178）。
+  await expect(page.getByTestId("query-results-summary")).toContainText("該当する行はありません");
+  await expect(page.getByTestId("query-results-view-all")).toHaveCount(0);
+  await expect(page.getByTestId("query-results-csv")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 });
 
@@ -6134,7 +6153,7 @@ test("保存警告がある完了 job は結果を表示し、赤エラーでは
   await expectNoHorizontalScroll(page);
 });
 
-test("検索ジョブの失敗段階を示し、入力を保持して再実行できる", async ({ page }) => {
+test("SQL の生成と実行のジョブの失敗段階を示し、入力を保持して再実行できる", async ({ page }) => {
   await mockNl2SqlApi(page);
   const questionText = "未入金の請求を確認したい";
   const createdAt = "2026-06-21T10:00:00.000Z";
@@ -6201,7 +6220,7 @@ test("Query Rewrite の用語・同義語は既定 off で、Schema オプショ
   await expect(page.getByLabel("用語・同義語を使う")).not.toBeChecked();
   await expect(page.getByLabel("Schema を使う")).toHaveCount(0);
 
-  // 独立した「質問を書き換え」ボタンは廃止済み（検索実行時に統合）
+  // 独立した「質問を書き換え」ボタンは廃止済み（「SQL を生成して実行」に統合）
   await expect(page.getByRole("button", { name: "質問を書き換え" })).toHaveCount(0);
 
   // default プロファイル（allowed_tables=["INVOICES"]）で対象表に絞り込まれる
@@ -6938,6 +6957,178 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
   await expect(stepsPanel).toContainText("SQL の処理手順");
 });
 
+test("公開されたオントロジーが無い業務プロファイルでは、接地確認をしていないことを失敗と区別して示す", async ({
+  page,
+}, testInfo) => {
+  // #1168: 公開版が無い job はその場でオントロジーを同期・構築せず、接地確認をしない。
+  await mockNl2SqlApi(page);
+  const questionText = "従業員の一覧を表示";
+  const generatedSql = 'SELECT "EMP"."EMPLOYEE_NAME" AS "EMPLOYEE_NAME" FROM "ADMIN"."EMPLOYEE" "EMP"';
+  const sqlGraph = {
+    dialect: "oracle",
+    statement_type: "SELECT",
+    raw_sql: generatedSql,
+    ctes: [],
+    tables: [
+      {
+        id: "table-employee",
+        scope_id: "scope_1",
+        owner: "ADMIN",
+        name: "EMPLOYEE",
+        alias: "EMP",
+        qualified_name: "ADMIN.EMPLOYEE",
+        source_sql: '"ADMIN"."EMPLOYEE" "EMP"',
+      },
+    ],
+    columns: [
+      {
+        id: "column-EMPLOYEE_NAME",
+        scope_id: "scope_1",
+        owner: "ADMIN",
+        table: "EMPLOYEE",
+        name: "EMPLOYEE_NAME",
+        clause: "select",
+        expression_sql: '"EMP"."EMPLOYEE_NAME"',
+      },
+    ],
+    projections: [],
+    joins: [],
+    filters: [],
+    aggregates: [],
+    groups: [],
+    having: [],
+    orders: [],
+    windows: [],
+    limit: null,
+  };
+  const jobId = "job-grounding-not-published-001";
+  const steps = [
+    { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+    { stage: "generate_sql", status: "done", elapsed_ms: 20 },
+    { stage: "safety_check", status: "done", elapsed_ms: 4 },
+    { stage: "execute_sql", status: "done", elapsed_ms: 12 },
+    { stage: "format_results", status: "done", elapsed_ms: 6 },
+  ];
+
+  await page.unroute("**/api/nl2sql/jobs");
+  await page.route("**/api/nl2sql/jobs", (route) =>
+    fulfillJson(route, {
+      job_id: jobId,
+      status: "running",
+      created_at: "2026-06-21T10:00:00.000Z",
+      steps: steps.map((step) => ({ ...step, status: "pending", elapsed_ms: null })),
+    })
+  );
+  await page.route(`**/api/nl2sql/jobs/${jobId}`, (route) =>
+    fulfillJson(route, {
+      job_id: jobId,
+      status: "done",
+      business_release_id: "",
+      created_at: "2026-06-21T10:00:00.000Z",
+      started_at: "2026-06-21T10:00:00.000Z",
+      finished_at: "2026-06-21T10:00:00.050Z",
+      elapsed_ms: 50,
+      error_message: null,
+      steps,
+      timing: null,
+      result: {
+        history_id: "hist-grounding-not-published-001",
+        engine: "select_ai",
+        engine_meta: { profile: "mock_agent_profile" },
+        fallback_reason: "",
+        original_question: questionText,
+        rewritten_question: questionText,
+        generated_sql: generatedSql,
+        executable_sql: generatedSql,
+        explanation: "従業員の氏名を取得します。",
+        safety: {
+          ...safety,
+          referenced_tables: ["ADMIN.EMPLOYEE"],
+          referenced_columns: ["ADMIN.EMPLOYEE.EMPLOYEE_NAME"],
+        },
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: { columns: ["EMPLOYEE_NAME"], rows: [{ EMPLOYEE_NAME: "山田太郎" }], total: 1 },
+        timing,
+        interpretation: {
+          available: true,
+          question: {
+            available: true,
+            source: "deterministic",
+            original_question: questionText,
+            rewritten_question: questionText,
+            profile_id: "default",
+            profile_name: "PROFILE_ALL",
+            profile_category: "HR_ALL",
+            target_objects: ["ADMIN.EMPLOYEE"],
+            filters: [],
+            group_by: [],
+            order_by: [],
+            aggregations: [],
+            row_limit: null,
+            confidence: 0.9,
+            warnings: [],
+          },
+          sql: {
+            available: true,
+            source: "sql_semantics",
+            summary: "ADMIN.EMPLOYEE を参照し、SELECT 操作を行います。",
+            statement_type: "SELECT",
+            tables: ["ADMIN.EMPLOYEE"],
+            columns: ["ADMIN.EMPLOYEE.EMPLOYEE_NAME"],
+            joins: [],
+            filters: [],
+            aggregations: [],
+            group_by: [],
+            order_by: [],
+            limit: null,
+            logical_steps: [],
+            semantic_graph: sqlGraph,
+            warnings: [],
+          },
+          ontology_graph: null,
+          ontology_grounding_enabled: true,
+          ontology_grounding_skip_reason: "no_published_ontology",
+          warnings: [],
+        },
+        show_prompt: null,
+      },
+    })
+  );
+
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill(questionText);
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
+
+  const panel = page.getByTestId("nl2sql-sql-grounding-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("公開版なし");
+  await expect(panel).toContainText(
+    "この業務プロファイルには公開されたオントロジーが無いため、接地確認をしていません。"
+  );
+  // 失敗・空のグラフ・未接地には見せない。
+  await expect(panel).not.toContainText("オントロジーグラフを読み込めませんでした");
+  await expect(panel).not.toContainText("公開済みオントロジーグラフがありません");
+  await expect(panel).not.toContainText("未接地");
+  await expect(panel).not.toContainText("未取得");
+  await expect(panel.getByTestId("nl2sql-sql-grounding-graph")).toHaveCount(0);
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  await panel.screenshot({ path: testInfo.outputPath("sql-grounding-not-published.png") });
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(panel.getByText("公開版なし")).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  await panel.screenshot({ path: testInfo.outputPath("sql-grounding-not-published-375.png") });
+
+  // ダークテーマでも情報の面とバッジが読める（色だけに頼らずアイコンと文言で示す）。
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.evaluate(() => document.documentElement.classList.add("dark"));
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await expect(panel.getByText("公開版なし")).toBeVisible();
+  await panel.screenshot({ path: testInfo.outputPath("sql-grounding-not-published-dark.png") });
+});
+
 test("未修飾列の単一表 SELECT は FROM 句の表だけを接地する", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   const questionText = "従業員の一覧を表示";
@@ -7532,7 +7723,7 @@ test("schema catalog が空のとき、ジョブ失敗からサンプルデー�
   );
   await page.unroute("**/api/nl2sql/sample-data/import");
   await page.route("**/api/nl2sql/sample-data/import", (route) => {
-    // クエリ画面からのワンクリック投入も、サンプルデータ管理と同じ確認語で送る。
+    // SQL 生成の画面からのワンクリック投入も、サンプルデータ管理と同じ確認語で送る。
     if (route.request().postDataJSON()?.confirmation !== "ADMIN_EXECUTE") {
       return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ detail: "unexpected confirmation" }) });
     }
@@ -7758,8 +7949,8 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
     },
   });
 
-  await page.getByRole("button", { name: "新しいクエリを開始", exact: true }).click();
-  await page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" }).getByRole("button", { name: "新しいクエリを開始" }).click();
+  await page.getByRole("button", { name: "新しい質問を開始", exact: true }).click();
+  await page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" }).getByRole("button", { name: "新しい質問を開始" }).click();
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
   await disclosure.click();
   await expect(page.getByLabel("今回の追加条件")).toHaveValue("");
@@ -7794,10 +7985,13 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
         }),
       });
     }
+    // 取得の上限が 1 行のときは、backend と同じく上限 + 1 行目があることを has_more で返す。
+    const rowLimit = Number(api.executePayload.row_limit ?? 0);
     return fulfillJson(route, {
       columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
       rows: [{ CUSTOMER_NAME: "架空商事", TOTAL_AMOUNT: 1200000 }],
       total: 1,
+      has_more: rowLimit === 1,
     });
   });
 
@@ -7848,9 +8042,10 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await expect(directSql.getByRole("alert")).toHaveCount(0);
   await page.getByRole("button", { name: "SQL 実行" }).click();
 
-  await expect(page.getByText("検索結果（1件）")).toBeVisible();
-  await expect(directSql.getByTestId("query-result-summary")).toContainText("取得件数 1 件");
-  await expect(directSql.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
+  await expect(page.getByRole("heading", { name: "実行結果（1 行）" })).toBeVisible();
+  await expect(directSql.getByTestId("query-results-summary")).toHaveText("1 行・2 列");
+  await expect(directSql.getByTestId("query-results-meta")).toContainText("取得上限 100 件");
+  await expect(directSql.getByTestId("query-results-truncated")).toHaveCount(0);
   await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
   expect(api.executePayload).toEqual({
     sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
@@ -7867,7 +8062,7 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await expect(sqlInput).toHaveValue("");
   await expect(rowLimitInput).toHaveValue("100");
   await expect(clearButton).toBeDisabled();
-  await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "実行結果（1 行）" })).toHaveCount(0);
   await expect(directSql.getByTestId("direct-sql-execution-activity")).toHaveCount(0);
 
   // この画面は直接 SQL 実行のため、利用者が取得上限を明示してから /api/nl2sql/execute へ送る。
@@ -7889,11 +8084,13 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await rowLimitInput.fill("1");
   await sqlInput.fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
   await page.getByRole("button", { name: "SQL 実行" }).click();
-  await expect(directSql.getByTestId("query-result-summary")).toContainText("上限到達");
+  // 上限で打ち切った結果は、要約と案内で明示する（#1164 の規則。#1178）。
+  await expect(directSql.getByTestId("query-results-summary")).toContainText("先頭の 1 行を取得しました（さらに行があります）");
+  await expect(directSql.getByTestId("query-results-truncated")).toContainText("1 回に取得するのは先頭の 1 行までです。");
   await expectBoundedRowLimit(rowLimitInput, directSql.getByRole("button", { name: "SQL 実行" }));
   await rowLimitInput.fill("100000");
   await directSql.getByRole("button", { name: "SQL 実行" }).click();
-  await expect(directSql.getByTestId("query-result-summary")).toContainText("取得上限 100000 件");
+  await expect(directSql.getByTestId("query-results-meta")).toContainText("取得上限 100000 件");
 
   await clearButton.click();
   await rowLimitInput.fill("100");
@@ -7963,7 +8160,7 @@ test("SQL 実行中は主ボタンだけが動的 spinner を表示する", asyn
   } finally {
     directGate.release();
   }
-  await expect(directSql.getByText("検索結果（1件）")).toBeVisible();
+  await expect(directSql.getByRole("heading", { name: "実行結果（1 行）" })).toBeVisible();
   await expect(directSql.getByTestId("direct-sql-execution-activity").getByRole("timer")).toHaveAccessibleName(
     /処理時間 \d{2}:\d{2}/
   );
@@ -8056,7 +8253,7 @@ test("SQL 再実行は main スクロールを先頭へ戻さず結果領域を�
   await directSql.getByLabel("取得件数上限").fill("100");
   const directExecuteButton = directSql.getByRole("button", { name: "SQL 実行" });
   await directExecuteButton.click();
-  await expect(directSql.getByText("検索結果（16件）")).toBeVisible();
+  await expect(directSql.getByRole("heading", { name: "実行結果（16 行）" })).toBeVisible();
 
   await directExecuteButton.scrollIntoViewIfNeeded();
   await expectMainScrolledBelowTop(page);
@@ -8069,7 +8266,7 @@ test("SQL 再実行は main スクロールを先頭へ戻さず結果領域を�
   } finally {
     directGate.release();
   }
-  await expect(directSql.getByText("検索結果（16件）")).toBeVisible();
+  await expect(directSql.getByRole("heading", { name: "実行結果（16 行）" })).toBeVisible();
   await expectMainScrolledBelowTop(page);
 
   await page.unroute("**/api/nl2sql/db-admin/execute");
@@ -8146,8 +8343,8 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
   ).toHaveCount(0);
   await adminSql.getByRole("button", { name: "SQL 実行" }).click();
   await expect(adminSql.getByTestId("query-results-table")).toBeVisible();
-  await expect(adminSql.getByTestId("query-result-summary")).toContainText("取得件数 1 件");
-  await expect(adminSql.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
+  await expect(adminSql.getByTestId("query-results-summary")).toContainText("1 行・");
+  await expect(adminSql.getByTestId("query-results-meta")).toContainText("取得上限 100 件");
   await expect(adminSql.getByRole("cell", { name: "架空商事" })).toBeVisible();
   await expect(
     adminSql.locator("code").filter({ hasText: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES" })
@@ -8168,7 +8365,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
   await expectBoundedRowLimit(rowLimitInput, adminSql.getByRole("button", { name: "SQL 実行" }));
   await rowLimitInput.fill("100000");
   await adminSql.getByRole("button", { name: "SQL 実行" }).click();
-  await expect(adminSql.getByTestId("query-result-summary")).toContainText("取得上限 100000 件");
+  await expect(adminSql.getByTestId("query-results-meta")).toContainText("取得上限 100000 件");
   expect(api.adminExecutePayload).toEqual({
     sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
     row_limit: 100000,
@@ -8185,7 +8382,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
   await expect(rowLimitInput).toBeVisible();
   await rowLimitInput.fill("250");
   await adminSql.getByRole("button", { name: "SQL 実行" }).click();
-  await expect(adminSql.getByTestId("query-result-summary")).toContainText("取得上限 250 件");
+  await expect(adminSql.getByTestId("query-results-meta")).toContainText("取得上限 250 件");
   expect(api.adminExecutePayload).toEqual({
     sql: literalSelectSql,
     row_limit: 250,
@@ -8720,7 +8917,7 @@ test("AI 活用の 4 画面はナビ切替で入力を保持し、リセット�
   const api = await mockNl2SqlApi(page);
   await page.goto("/query");
 
-  // SQL 生成にクエリを入力する。
+  // SQL 生成に質問を入力する。
   const question = nl2sqlQuestionInput(page);
   await question.fill("保持テスト: 未入金の請求金額を確認したい");
 
@@ -8745,18 +8942,18 @@ test("AI 活用の 4 画面はナビ切替で入力を保持し、リセット�
   await expect(directSqlInput(page)).toHaveValue("");
 
   await (await openSidebarNav(page)).getByRole("link", { name: /SQL 生成/ }).first().click();
-  const newQueryButton = page.getByRole("button", { name: "新しいクエリを開始", exact: true });
+  const newQueryButton = page.getByRole("button", { name: "新しい質問を開始", exact: true });
   await expectLargeActionButton(newQueryButton);
   await newQueryButton.focus();
   await page.keyboard.press("Enter");
   const discardDialog = page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" });
-  await expect(discardDialog).toContainText("入力したクエリと表示中の結果をクリアし、今回の生成条件・実行オプションを初期値に戻します。");
+  await expect(discardDialog).toContainText("入力した質問と表示中の結果をクリアし、今回の生成条件・実行オプションを初期値に戻します。");
   await page.keyboard.press("Escape");
   await expect(discardDialog).toBeHidden();
   await expect(nl2sqlQuestionInput(page)).toHaveValue("保持テスト: 未入金の請求金額を確認したい");
   await expect(newQueryButton).toBeFocused();
   await page.keyboard.press("Enter");
-  await discardDialog.getByRole("button", { name: "新しいクエリを開始" }).click();
+  await discardDialog.getByRole("button", { name: "新しい質問を開始" }).click();
   await expect(nl2sqlQuestionInput(page)).toHaveValue("");
   expect(api.jobPayload).toBeNull();
   expect(api.executePayload).toBeNull();
@@ -8802,7 +8999,7 @@ test("root route opens SQL generation and sidebar exposes feature surfaces", asy
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/query$/);
-  await expect(page.getByRole("heading", { name: "NL2SQL 検索ワークベンチ" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "質問から SQL を生成して実行", exact: true })).toBeVisible();
   // 375px ではナビがドロワー（#367）。開いてから読む（背面は inert のため、以降のリンクはサイドナビのもの）。
   await openSidebarNav(page);
   await expect(page.getByText("データ準備", { exact: true }).first()).toBeVisible();
@@ -8855,7 +9052,7 @@ test("dark theme keeps the SQL workbench text, controls and active states legibl
   await page.goto("/query");
   await expect(page.locator("html")).toHaveClass(/\bdark\b/);
 
-  const heading = page.getByRole("heading", { name: "NL2SQL 検索ワークベンチ" });
+  const heading = page.getByRole("heading", { name: "質問から SQL を生成して実行", exact: true });
   const question = nl2sqlQuestionInput(page);
   const selectedEngine = page.getByRole("button", {
     name: /^Select AI 質問に表や項目/u,
@@ -8900,7 +9097,7 @@ test("SQL 確認・修復 surface is removed and legacy URL falls back", async (
 
   await page.goto("/sql-analysis");
   await expect(page).toHaveURL(/\/query$/);
-  await expect(page.getByRole("heading", { name: "NL2SQL 検索ワークベンチ" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "質問から SQL を生成して実行", exact: true })).toBeVisible();
   await expect(page.locator("#sql-analysis-panel-analysis")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "SQL を分析" })).toHaveCount(0);
   await expectNoHorizontalScroll(page);
@@ -12561,8 +12758,8 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   expect(syntheticResultsRequests[0].searchParams.get("limit")).toBe("100000");
   resultsGate.release();
   await expect(syntheticPanel.getByRole("cell", { name: "synthetic-loading-customer" })).toBeVisible();
-  await expect(syntheticPanel.getByTestId("query-result-summary")).toContainText("取得件数 1 件");
-  await expect(syntheticPanel.getByTestId("query-result-summary")).toContainText("取得上限 100000 件");
+  await expect(syntheticPanel.getByTestId("query-results-summary")).toContainText("1 行・");
+  await expect(syntheticPanel.getByTestId("query-results-meta")).toContainText("取得上限 100000 件");
   await expect(page.getByRole("region", { name: "通知" })).toContainText("「APP.INVOICES」の生成結果データを表示しました。");
   await expectNoHorizontalScroll(page);
 
@@ -13341,13 +13538,22 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await previewShowButton.click();
   await expect(previewExportButton).toBeVisible();
   await expect(previewMoreButton).toBeVisible();
-  await expect(dataPreviewPanel.getByTestId("query-result-summary")).toContainText("取得件数 100 件");
-  await expect(dataPreviewPanel.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
-  await expect(dataPreviewPanel.getByTestId("query-results-pagination")).toContainText("1-10 / 100 件");
-  await expect(dataPreviewPanel.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
-  await dataPreviewPanel.getByRole("button", { name: "次へ" }).click();
-  await expect(dataPreviewPanel.getByRole("cell", { name: "顧客11" })).toBeVisible();
-  await dataPreviewPanel.getByRole("button", { name: "前へ" }).click();
+  await expect(dataPreviewPanel.getByTestId("query-results-summary")).toContainText("100 行・");
+  await expect(dataPreviewPanel.getByTestId("query-results-meta")).toContainText("取得上限 100 件");
+  // 表示結果は共通の結果の表（#1178）: 先頭 50 行のプレビューを表の中のスクロールで出し、すべての行はシートで送る。
+  await expect(dataPreviewPanel.getByTestId("query-results-table").locator("tbody tr")).toHaveCount(50);
+  await expect(dataPreviewPanel.getByTestId("query-results-preview-note")).toContainText("先頭の 50 行");
+  await expect(dataPreviewPanel.getByTestId("query-results-csv")).toBeVisible();
+  await dataPreviewPanel.getByTestId("query-results-view-all").click();
+  const previewSheet = page.getByRole("dialog", { name: "表示結果（100 行）" });
+  await expect(previewSheet).toBeVisible();
+  const previewSheetPagination = page.getByTestId("query-results-all-pagination");
+  await expect(previewSheetPagination).toContainText("1-10 / 100 件");
+  await expect(previewSheet.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
+  await previewSheetPagination.getByRole("button", { name: "次へ" }).click();
+  await expect(previewSheet.getByRole("cell", { name: "顧客11" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(previewSheet).toBeHidden();
   await previewClearButton.click();
   await expect(previewRowLimitInput).toHaveValue("100");
   await expect(dataPreviewPanel.getByText("データ未表示")).toBeVisible();
@@ -13436,9 +13642,11 @@ test("sample data and data management run imported workflows", async ({ page }) 
   api.previewDataPayload = null;
   await previewShowButton.click();
   await expect(page.getByRole("cell", { name: "顧客01" })).toBeVisible();
-  await expect(dataPreviewPanel.getByTestId("query-result-summary")).toContainText("取得上限 25 件");
-  await expect(page.getByTestId("query-results-pagination")).toContainText("1-10 / 25 件");
-  await expect(page.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
+  await expect(dataPreviewPanel.getByTestId("query-results-meta")).toContainText("取得上限 25 件");
+  await expect(dataPreviewPanel.getByTestId("query-results-summary")).toContainText("25 行・");
+  // 50 行以下はプレビューにすべての行を出す（補足の文は出さない）。
+  await expect(dataPreviewPanel.getByTestId("query-results-table").locator("tbody tr")).toHaveCount(25);
+  await expect(dataPreviewPanel.getByTestId("query-results-preview-note")).toHaveCount(0);
   await expect.poll(() => currentPreviewDataPayload()?.object_name).toBe("V_EMP_DEPT");
   expect(currentPreviewDataPayload()?.owner).toBe("APP");
   expect(currentPreviewDataPayload()?.limit).toBe(25);
@@ -16720,7 +16928,7 @@ test("SELECT SQL の上限だけの入力をクリアでき、上限変更は未
   await expect(activity).toHaveAttribute("data-execution-activity-status", "success");
   await limit.fill("200");
   await expect(activity).toContainText("現在の入力は未実行です");
-  await expect(page.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
+  await expect(page.getByTestId("query-results-meta")).toContainText("取得上限 100 件");
   await activity.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("direct-sql-limit-changed.png") });
   await limit.fill("100");
@@ -16747,7 +16955,7 @@ test("自動判定中はクエリの競合操作を停止し、失敗後に再�
     await expect(page.getByRole("button", { name: "AI要件確認", exact: true })).toBeDisabled();
     await expect(page.locator("#nl2sql-profile-select")).toBeDisabled();
     await expect(page.getByRole("button", { name: "SQL を生成して実行", exact: true })).toBeDisabled();
-    await expect(page.getByRole("button", { name: "新しいクエリを開始", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "新しい質問を開始", exact: true })).toBeDisabled();
   } finally { release(); }
   await expect(input).toBeEnabled();
   await expect(input).toHaveValue("従業員一覧を取得");
@@ -16832,7 +17040,7 @@ test("管理 SQL の上限変更はクリアでき前回結果の条件と区別
   await expect(activity).toHaveAttribute("data-execution-activity-status", "success");
   await limit.fill("200");
   await expect(activity).toContainText("現在の入力は未実行です");
-  await expect(scope.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
+  await expect(scope.getByTestId("query-results-meta")).toContainText("取得上限 100 件");
   await activity.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("admin-limit-changed.png") });
   await limit.fill("100");

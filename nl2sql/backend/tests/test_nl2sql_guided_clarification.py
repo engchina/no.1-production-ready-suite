@@ -441,7 +441,7 @@ def test_inferred_summary_requires_an_explicit_answer_before_ready() -> None:
     assert pending.can_generate_sql is False
     assert pending.current_question is not None
     assert pending.current_question.summary_key == "entities"
-    assert pending.current_question.prompt_ja == "検索対象は「受注」で合っていますか？"
+    assert pending.current_question.prompt_ja == "対象は「受注」で合っていますか？"
     assert pending.current_question.options[0].label_ja == "はい、この内容で進める"
     assert pending.current_question.options[0].evidence_ja == ""
     summary = next(item for item in pending.intent_summary if item.key == "entities")
@@ -601,12 +601,12 @@ def test_embedding_column_ambiguity_is_presented_as_business_output_selection() 
     assert question is not None
     assert question.category == ClarificationCategory.OUTPUT
     assert question.answer_kind == ClarificationAnswerKind.MULTI_SELECT
-    assert question.prompt_ja == "検索結果に表示する項目を選んでください。"
+    assert question.prompt_ja == "結果に表示する項目を選んでください。"
     assert "必要な項目をすべて選んでください" in question.reason_ja
     assert state.missing_required == [question.prompt_ja]
     assert "Embedding" not in f"{question.prompt_ja}{question.reason_ja}{state.missing_required}"
     assert {option.label_ja for option in question.options} == {"受注状態", "受注ID"}
-    assert all("検索結果に" in option.description_ja for option in question.options)
+    assert all("結果に" in option.description_ja for option in question.options)
     assert all("主キー" not in option.description_ja for option in question.options)
     assert {option.evidence_ja for option in question.options} == {
         "APP.ORDERS.STATUS",
@@ -625,7 +625,7 @@ def test_embedding_column_ambiguity_is_presented_as_business_output_selection() 
 
     assert {item.name_ja for item in updated_intent.dimensions} == {"受注状態", "受注ID"}
     assert updated_intent.question_effective == (
-        "受注を対象に、検索結果には受注状態、受注IDを表示してください。"
+        "受注を対象に、結果には受注状態、受注IDを表示してください。"
     )
     assert "確認事項" not in updated_intent.question_effective
 
@@ -660,7 +660,7 @@ def test_business_target_ambiguity_accepts_multiple_ontology_concepts() -> None:
         IntentAmbiguity(
             id="business-targets",
             code="business_meaning_required",
-            message_ja="検索対象を確認してください。",
+            message_ja="対象を確認してください。",
             options=[node.technical_name for node in candidates],
             blocking=True,
         )
@@ -708,7 +708,7 @@ def test_guided_output_answer_replaces_quoted_fragment_with_natural_query() -> N
         update={
             "question_original": '"部署情報"',
             "question_effective": (
-                '"部署情報"\n確認事項（検索結果に表示する項目を選んでください。）：部署名'
+                '"部署情報"\n確認事項（結果に表示する項目を選んでください。）：部署名'
             ),
             "entities": [IntentEntity(id="department", name_ja="部署")],
             "metrics": [],
@@ -718,7 +718,7 @@ def test_guided_output_answer_replaces_quoted_fragment_with_natural_query() -> N
     question = ClarificationQuestion(
         id="question-all-columns",
         category=ClarificationCategory.OUTPUT,
-        prompt_ja="検索結果に表示する項目を選んでください。",
+        prompt_ja="結果に表示する項目を選んでください。",
         answer_kind=ClarificationAnswerKind.SINGLE_SELECT,
         options=[ClarificationOption(id="option-all-columns", label_ja="すべての列")],
     )
@@ -733,11 +733,9 @@ def test_guided_output_answer_replaces_quoted_fragment_with_natural_query() -> N
         ontology,
     )
 
-    assert updated.question_effective == (
-        "部署を対象に、検索結果にはすべての列を表示してください。"
-    )
+    assert updated.question_effective == ("部署を対象に、結果にはすべての列を表示してください。")
     assert "確認事項" not in updated.question_effective
-    assert "検索結果に表示する項目を選んでください" not in updated.question_effective
+    assert "結果に表示する項目を選んでください" not in updated.question_effective
 
 
 def test_guided_answer_rebuilds_complete_user_friendly_query_from_intent() -> None:
@@ -804,7 +802,7 @@ def test_guided_answer_rebuilds_complete_user_friendly_query_from_intent() -> No
     assert updated.time_range == IntentTimeRange(label_ja="受注日", relative_expression="今月")
     assert updated.question_effective == (
         "受注のうち、受注日が今月、かつ受注状態が「確定」のデータを対象に、"
-        "検索結果には顧客名、売上金額の合計を表示してください。"
+        "結果には顧客名、売上金額の合計を表示してください。"
         "集計単位は月別です。"
         "表示結果は売上金額の降順で並べ、上位10件を取得してください。"
     )
@@ -843,7 +841,7 @@ def test_guided_metric_confirmation_keeps_metric_in_output_not_target() -> None:
         ontology,
     )
 
-    assert updated.question_effective == ("受注を対象に、検索結果には受注件数を表示してください。")
+    assert updated.question_effective == ("受注を対象に、結果には受注件数を表示してください。")
     assert "受注と受注件数を対象" not in updated.question_effective
 
 
@@ -881,7 +879,7 @@ def test_free_text_reinterpretation_rebuilds_query_without_duplicate_condition()
     )
 
     assert updated.question_effective == (
-        "受注のうち、受注状態が「確定」のデータを対象に、検索結果には受注件数を表示してください。"
+        "受注のうち、受注状態が「確定」のデータを対象に、結果には受注件数を表示してください。"
     )
     assert updated.question_effective.count("受注状態") == 1
 
@@ -995,7 +993,7 @@ async def test_guided_output_multi_select_accepts_frontend_idempotency_key_over_
         ("filter_value_required", "どの条件で絞り込みますか？"),
         ("time_range_required", "どの期間を対象にしますか？"),
         ("granularity_required", "どの単位で集計しますか？"),
-        ("output_format_required", "検索結果に何を表示しますか？"),
+        ("output_format_required", "結果に何を表示しますか？"),
     ],
 )
 def test_clarification_categories_use_answerable_business_copy(
@@ -1071,7 +1069,7 @@ def test_guided_answer_is_idempotent_and_rejects_stale_version() -> None:
     assert first.session.current_intent_version == 2
     assert replay.session.current_intent_version == 2
     assert first.session.intents[-1].question_effective == (
-        "今月の受注を対象に、検索結果には受注件数を表示してください。"
+        "今月の受注を対象に、結果には受注件数を表示してください。"
     )
     assert "確認事項" not in first.session.intents[-1].question_effective
     assert runtime.store.list_documents("idempotency")[0]["idempotency_key"] == "answer-1"

@@ -769,6 +769,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/nl2sql/chats/{conversation_id}"): _QUERY_GENERATE,
     ("GET", "/nl2sql/jobs/{job_id}"): _QUERY_HISTORY_READ,
     ("POST", "/nl2sql/jobs/{job_id}/cancel"): _QUERY_HISTORY_READ,
+    # チャットのターンの SQL の実行（#1154）。SQL 生成のジョブ・SELECT SQL の実行と同じ実行の権限。
+    ("POST", "/nl2sql/jobs/{job_id}/execute"): _SQL_EXECUTE,
+    # チャットのジョブの中で実行した結果の行の受け取り（#1176）。実行と同じ権限。
+    ("POST", "/nl2sql/jobs/{job_id}/execution-result"): _SQL_EXECUTE,
     ("POST", "/nl2sql/execute"): _SQL_EXECUTE,
     ("POST", "/nl2sql/analyze"): _SQL_EXECUTE,
     ("POST", "/nl2sql/rewrite"): _QUERY_GENERATE,

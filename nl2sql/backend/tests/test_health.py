@@ -1544,6 +1544,23 @@ def test_ontology_generation_context_prompt_includes_qa_sql_examples() -> None:
     assert "汎用的な構造として読み" in prompt
 
 
+def _pin_published_ontology_release(
+    monkeypatch: pytest.MonkeyPatch, service: Nl2SqlService, release_id: str
+) -> None:
+    """準備の段階で業務プロファイルの公開版のオントロジーを確定したことにする。
+
+    接地確認は公開版がある job だけで行う（公開版が無ければグラフを作らない。#1168）。
+    この版は架空のため、prompt の文脈（公開版の Markdown）は読まない。
+    """
+
+    monkeypatch.setattr(
+        service,
+        "_resolve_job_business_release",
+        lambda _job_id, request: release_id if request.use_ontology_context else "",
+    )
+    monkeypatch.setattr(service, "_job_published_ontology_markdown", lambda **_kwargs: None)
+
+
 def test_select_ai_job_returns_interpretation_and_showprompt_artifacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1574,6 +1591,7 @@ def test_select_ai_job_returns_interpretation_and_showprompt_artifacts(
         "_build_interpretation_ontology_graph_snapshot",
         lambda **_kwargs: (ontology_graph, []),
     )
+    _pin_published_ontology_release(monkeypatch, service, "revision-artifact")
 
     created = service.start_job(
         JobCreateRequest(
@@ -1638,6 +1656,7 @@ def test_interpretation_flags_split_logical_steps_and_ontology_grounding(
         "_build_interpretation_ontology_graph_snapshot",
         _fake_snapshot,
     )
+    _pin_published_ontology_release(monkeypatch, service, "revision-flags")
 
     # Ontology OFF + 処理手順 ON: 接地確認は無効・snapshot 未構築、steps は同梱。
     created = service.start_job(
@@ -1709,6 +1728,7 @@ def test_interpretation_ontology_graph_failure_keeps_job_done(
         "_build_interpretation_ontology_graph_snapshot",
         lambda **_kwargs: (None, ["Ontology グラフ artifact の生成に失敗しました: graph boom"]),
     )
+    _pin_published_ontology_release(monkeypatch, service, "revision-graph-failure")
 
     created = service.start_job(
         JobCreateRequest(

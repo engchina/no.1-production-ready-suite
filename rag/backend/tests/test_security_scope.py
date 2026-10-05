@@ -585,7 +585,7 @@ def test_chat_stream_without_permitted_kbs_is_forbidden(monkeypatch: MonkeyPatch
     def fail_stream(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("stream は始めない")
 
-    monkeypatch.setattr(chat_route, "_stream_chat_events", fail_stream)
+    monkeypatch.setattr(chat_route, "_start_answer_run", fail_stream)
     auth = enable_production_auth(monkeypatch)
     auth.user_with_permissions(
         "chatter",
@@ -643,6 +643,8 @@ def test_preserved_platform_tables_are_not_managed() -> None:
         "PLATFORM_ROLES",
         "PLATFORM_USER_ROLES",
         "PLATFORM_AUTH_SESSIONS",
+        # ログインの試行の記録（3 製品で共有。#1173）。
+        "PLATFORM_LOGIN_ATTEMPTS",
     }
     assert set(PRESERVED_TABLES).isdisjoint(MANAGED_TABLES)
     assert {

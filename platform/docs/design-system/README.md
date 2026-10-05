@@ -331,13 +331,14 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 - 確定の前の起点（確認ダイアログを開くボタン）や、取り消せる停止・拒否（処理中のジョブのキャンセル、承認の拒否、Run のキャンセル）は、`secondary` / `ghost` + `tone="danger"`（赤文字）にするか、「その他の操作」メニューに入れる。
 - `variant="danger"` と `tone="danger"` は**型で同時に指定できない**（赤地に赤文字になり読めない）。
 
-### `Spinner`（変更）— ★ 線の実寸・トラック・reduced-motion（#395）
+### `Spinner`（変更）— ★ 線の実寸・トラック・reduced-motion（#395）、対称のアーク・固定の箱（#1180）
 
-処理中を示す回転アイコンは共有の `Spinner` 1 つだけ（`Button` の `loading`、`ProcessingIndicator` / `TimedLoadingState`、製品の状態バッジ）。lucide の `Loader2` / `RefreshCw` などに `animate-spin` を付けて回さない（adherence の lint が検出する）。
+処理中を示す回転アイコンは共有の `Spinner` 1 つだけ（`Button` の `loading`、`ProcessingIndicator` / `TimedLoadingState`、`ChatProgress`、`LoadMoreFooter`、製品の状態バッジ）。lucide の `Loader2` / `RefreshCw` などに `animate-spin` を付けて回さない・回転用の lucide のアイコン（`Loader` / `Loader2` / `LoaderCircle` / `LoaderPinwheel`）を使わない（adherence の lint が検出する）。
 
 | 項目 | 決定 | 理由 |
 |---|---|---|
-| 形 | 全周のトラック + 270 度のアーク。外形は大きさによらず直径 20/24 | 欠けた円弧だけだとインクの重心が回転で動き、中心がずれて見える |
+| 形 | 全周のトラック + **180 度対称の 2 本のアーク（90 度 × 2。12 時→3 時と 6 時→9 時）**。外形は大きさによらず直径 20/24 | 濃いアークの重心が回転角によらず中心に残る。欠けた円弧（`Loader2`）や 1 本のアーク（#395 の 270 度）は重心が中心から外れ、回転でその重心が中心のまわりを回るため「上下・左右に揺れる」と見えた（16px で 1.8px。トラックは薄く、揺れを打ち消さない。#1180） |
+| 箱 | 回転しない固定の正方形（`span.pr-spinner`。`contain: strict`・`display: inline-block`・`flex: none`・`line-height: 0`・`vertical-align: middle`）の中で、内側の svg（`display: block`）だけが回る。`className`（色）は箱に付け、svg は `currentColor` で受ける | 回転した正方形の外接矩形（最大 1.41 倍）が周りの行の位置・高さ・スクロールの領域に入らない。文の中でもベースライン・行の高さに乗らない |
 | 線の太さ | **実寸 2px**（14 / 16 / 20 / 24px で viewBox 上 3.429 / 3 / 2.4 / 2）。太くした分は円の半径を内側へ寄せる | 旧実装は viewBox 24 に線幅 2 固定で、16px では 1.33px、14px では 1.17px まで細り、等倍の画面でかすれていた。GitHub Primer・Fluent 2 の 16〜28px のスピナーも 2px |
 | トラックの色 | `--color-spinner-track`: アークと同じ色（`currentColor`）をライト 30% / ダーク 35% で透かす。強制カラーモードは `GrayText` | アーク対トラックの境目 3:1 以上を保つ上限の濃さ（下の実測）。トラックを 3:1 の `--color-border-control` にすると、アーク（`--color-accent-fg`）との差がライト 1.58:1 / ダーク 2.43:1 になり、回っている部分が見分けにくくなる |
 | 回転 | `transform` の等速（linear 1s）だけ | 合成スレッドで回るので、メインスレッドが詰まっても（回答の描画・SSE の解析中）止まらない。弧長の伸縮（`stroke-dasharray`）はメインスレッドで描き直すため詰まると止まり、加減速は 1 周ごとに遅くなる区間が「止まりかけ」に見える |
@@ -461,7 +462,7 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 
 | 置き場所 | 書く内容 | 例 |
 |---|---|---|
-| 常設（`TextField` の `helper`・欄の下の hint・`FieldError`・`FormStatus`・`Banner`） | 作業に欠かせない情報: 入力の形式・必須の条件・押せない理由・エラー・結果・保存したときの影響（索引を作り直さない等） | 「1〜100000 の整数」「AI要件確認を始めるにはクエリを入力してください。」 |
+| 常設（`TextField` の `helper`・欄の下の hint・`FieldError`・`FormStatus`・`Banner`） | 作業に欠かせない情報: 入力の形式・必須の条件・押せない理由・エラー・結果・保存したときの影響（索引を作り直さない等） | 「1〜100000 の整数」「AI要件確認を始めるには質問を入力してください。」 |
 | `InfoTip` | 操作・選択肢がどう振る舞うかの**補足の説明**（知らなくても操作でき、知りたい人だけが読むもの）。とくに、密な操作の行（チップ・選択欄・スイッチの行）のラベルの横 | 回答するモデルの既定の振る舞い、生成方法・購読方式の違い |
 
 - 設定画面のフォームのスイッチ・欄の説明（ラベルの下の helper）は常設のまま（フォームの hint は欄と一緒に読む）。`InfoTip` に移すのは、操作の行のラベルの横に常設していた補足の説明。
@@ -758,6 +759,26 @@ import { SearchField } from "@engchina/production-ready-ui";
 
 - 文言（`title` / `closeLabel`）は翻訳済みを渡す。開閉ボタンは製品の画面に置き、`aria-expanded`・`aria-controls`（`id` に渡した値）を付ける。Playwright では `data-testid`（シート）と `<testId>-scrim`、または role（`dialog` の名前）で操作する。
 
+- `size="wide"`（#1154）: 表など横に広い内容を見る大きなパネル。sm 以上は 64rem（画面幅 − 3.5rem まで）、sm 未満は全画面。データの結果の「すべての行を見る」（`ResultTable`）が使う。既定（`default`）は 22rem のまま。
+
+### `ResultTable`（新規。旧名 `ChatResultTable`）— ★ データの結果の表（#1154 / #1178）
+
+データの結果（読み取りだけの行と列）は、どの画面でもこの部品で出します。チャットで SQL・ツールを実行した結果（回答の吹き出しの中、SQL の下）と、画面のクエリの結果・テーブルのデータの表示・取り込みのサンプル行が同じ形になります（#1178。どの画面が合うかの基準は UX 契約 [page-archetypes.md「データの結果の型」](../ux-contracts/page-archetypes.md#データの結果の型resulttable1178)）。ChatGPT の Advanced Data Analysis・Databricks Genie・Snowflake Cortex Analyst・Amazon Q in QuickSight・BigQuery の結果の表に倣い、その場は要約とプレビューに絞り、すべての行は別の面で見ます。製品で結果の表・ページング・CSV を組み立てない。行の操作・選択・編集のある一覧は対象外（`DataTable` / `PagedDataTable` の一覧の型）。
+
+- 旧名 `ChatResultTable` / `ChatResultTableProps` / `ChatResultTableColumn` / `ChatResultTableLabels` / `ChatResultFullResultLink` / `DEFAULT_CHAT_RESULT_TABLE_LABELS` / `CHAT_RESULT_PREVIEW_ROWS` / `CHAT_RESULT_PAGE_SIZES` / `chatResultSummaryText` は別名として残す（非推奨。新しいコードは `ResultTable` などの新しい名前）。
+
+| 決めたこと | 理由 |
+|---|---|
+| 1 行目に要約（「12 行・5 列・0.8 秒」。打ち切りは「先頭の 1,000 行を取得しました（さらに行があります）」、総件数が分かれば「（全 1,234 行）」、0 行は「該当する行はありません」） | 結果の大きさと完全さを最初に伝える。打ち切りを黙って隠さない（Genie・Cortex Analyst・BigQuery と同じ） |
+| プレビューは先頭の 50 行（`RESULT_PREVIEW_ROWS`）を `DataTable` の `stickyHeader` + `visibleRows`（md 未満 5 行・md 以上 8 行）で描き、それを超える行と横に広い列は**表の中で**縦横にスクロールする | 吹き出し・会話の欄・画面のカードを伸ばさず、会話・作業の流れを保つ。列名は固定 |
+| NULL は斜体・淡色の「NULL」（空文字と区別。色だけに頼らない）。数値の列は右寄せ・`tabular-nums`。プレビューの長い値は 1 行で省略し title に全文、全行の表は折り返して 6 行で省略（最小幅 16rem、title に全文） | 値の種類を見分ける。長い値で列が潰れ行が極端に高くならない |
+| 「すべての行を見る」は `SideSheet` の `size="wide"`（sm 未満は全画面）で、`PagedDataTable`（既定 10 件/ページ、10 / 50 / 100 を選べる）。閉じている間は表を描かない | 取得の上限（NL2SQL は 1,000 行）までの行を、描く行をページで絞って見る。仮想化はしない（読み上げ・ブラウザの検索・既存の一覧の基準と同じ） |
+| 「CSV をダウンロード」は取得した行だけ（BOM・CRLF・RFC 4180、`=` `+` `-` `@` で始まる文字列に `'` を付ける）。打ち切ったときは案内（info の `Banner`）に「表示と CSV は取得した行だけ」と、製品が渡す全件の導線（`fullResult`）を出す | チャットで無制限に取得しない。全件は製品の実行の画面で（CSV injection は OWASP の推奨） |
+| 実行中・失敗・実行の操作は部品の外（製品が `ProcessingIndicator`・danger の `Banner`・`Button` で出す） | 実行の仕組み（同期の API・ジョブ）は製品ごとに違う |
+| 「CSV をダウンロード」は要約の行と、シートの見出しの右の 2 か所に出す（testid は `<testId>-csv` と `<testId>-all-csv`。#1178） | シートを開かなくても、開いた後でも出力できる |
+| 要約の文の右に、画面固有の補足を `meta` で置ける（NL2SQL の「取得上限 100 件」・実行した接続の `StatusBadge`。#1178）。行数・列数・打ち切りは部品の要約が出すので `meta` で重ねない | 画面で指定した条件は結果と並べて見せる。同じ数を 2 か所に出さない |
+| 表の形の JSON（ツールの結果・成果物）と回答の本文の Markdown の表は、`toTabularData` / `splitMarkdownTables` で列と行にしてから渡す（#1158）。表とみなすのは `{ columns, rows }`・`{ rows }`・オブジェクトの配列で、セルは文字列・数値・真偽値・null だけ。表でない値（入れ子の値・列の分からない 0 行など）は `null` で、製品は今の表示（JSON・本文）のまま出す。Markdown の表の値がすべて数の列は `type: "number"`（右寄せ） | 判定を製品ごとに書くと、同じ JSON が製品で表になったりならなかったりする。入れ子の値を 1 つのセルの JSON にすると読めないので、表にしない |
+
 ### `Toaster`（変更）— ★ 置き場所は上端の見出しの面（#411）
 
 通知（Toast）は**主操作を覆わない位置**に出します。置き場所は `Toaster` が決め、製品では変えません（`placement` プロップは削除）。規則の正本は UX 契約 [messaging.md §3.1](../ux-contracts/messaging.md#31-toast)。考え方は「画面の上端の見出しの面（`PageHeader` / 上端のバー）に重ね、その面の操作は覆わない」です。
@@ -982,7 +1003,7 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 
 ## 7. 意図的な見た目の変更（回帰ではありません）
 
-QA に事前共有してください。**71点あります。**
+QA に事前共有してください。**80点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -1057,6 +1078,17 @@ QA に事前共有してください。**71点あります。**
 | 69 | **3 製品のチャットで、送った質問がサーバーの応答を待たずに会話の欄に出る**（#907） | RAG: 送信しても会話の作成と回答の開始（SSE の `start`）までは会話の欄が空（新しい会話は「最初のメッセージを送信して会話を始めましょう。」のまま）、失敗は入力欄の下の赤い文と入力欄への書き戻し、停止で質問ごと消える。NL2SQL: 入力欄はジョブの投入の応答まで空にならず、失敗は入力欄の下の Banner で質問の表示は消える。Agent: Run の作成と会話の取り直しまで空の状態のまま、失敗は入力欄の下の Banner と入力欄への書き戻し → 送信の瞬間に共有の `ChatUserMessage`（右寄せの吹き出し。3 製品で同じ形）を末尾に出し、すぐ下に回答の作成中の表示（スピナーはこの 1 つ）、入力欄は空。サーバーの応答で確定した質問に置き換える。送れなかったときは吹き出しを残し、その下に「送信できませんでした」（`AlertCircle`）、原因の danger の Banner と「再送信」を会話の中に出す（入力欄には戻さない）。RAG は停止しても吹き出しを残し「回答の作成を停止しました。…」（`Square`）を出す。会話の欄は `role="log"` | ChatGPT・Claude・Gemini・Copilot・Slack と同じ楽観的な表示。送ったことがすぐ分かり、待ちの間に空の画面を見せない。失敗しても入力を失わず、その場で送り直せる（UX 契約 messaging.md §11） |
 | 70 | **React Flow の図（RAG の関係情報グラフ・パイプライン図など）の操作・帰属表示・辺がテーマの面の色になる**（#1137） | React Flow の既定の配色のまま（`colorMode` を渡しておらず、ダークでも light）。ダークテーマで Controls（＋ − 全体表示）の地が白（`#fefefe`）でアイコンがほぼ白、帰属表示「React Flow」の地が半透明の白・文字 `#999`、辺のラベルの地が白、辺 `#b1b1b7`・背景の点 `#91919a`・handle `#1a192b` | `packages/ui` の `integrations/react-flow.css` が React Flow の `--xy-*` 変数をトークンに結び付ける: Controls の地 `--color-surface-raised`（hover `--color-surface-hover`）・アイコン `--color-fg`・区切り `--color-border`・影 `--shadow-sm`、帰属表示の地 `--color-surface-raised`・文字 `--color-fg-muted`（帰属表示は消さない）、辺 `--color-border-control`（3:1）、辺のラベルの地 `--color-surface`・文字 `--color-fg-muted`、背景の点 `--color-border-strong`、既定のノード `--color-surface` / `--color-fg` / `--color-border-strong`、handle `--color-fg-muted`、MiniMap の地 `--color-surface`。ライトでも辺が少し濃く、背景の点が少し薄くなる。製品が props で渡した色（NL2SQL のオントロジーの辺・背景・MiniMap）はそのまま | light / dark / auto のどれでも `<html>` のテーマに追従し、製品は `colorMode` を渡さず、配色を製品にコピーしない（`colorMode="system"` は OS の設定に従い、外観の設定と食い違う） |
 | 71 | **チャットの回答の場所に、backend の処理の段階が出る**（#1145。`ChatProgress`） | NL2SQL のチャットの回答の場所は「SQL を生成しています」・スピナー・経過時間の 1 行（`ProcessingIndicator`）だけで、完了後は消える → 実行中は今の段階の 1 行（スピナー・段階の名前・補足（生成方法など）・その段階の経過時間）。10 秒を超えた段階の行に「通常より時間がかかっています。」（行は最初から予約し、スピナーの行は動かない）。完了した段階は「✓ N ステップ完了」に畳み、開くと段階ごとの状態（アイコンと文字）と所要時間。完了後は回答の上に「処理の経過（N ステップ・M 秒）」の 1 行（既定は閉じる。失敗した段階があれば開き、失敗を danger の色・`XCircle`・「失敗」の文字で出す） | 送信の応答待ち・開始待ち・準備・生成・安全性の確認のどこで待っているかが分からず、1 分以上止まって見えた。AG-UI の STEP_STARTED / STEP_FINISHED / RUN_ERROR に倣った 3 製品共通の段階の形（`ChatProgressStep`）にし、RAG・Agent のチャットも同じ部品にそろえる。SQL 生成の画面の工程の表示（`WorkflowProgressStrip`）より情報を絞り、そちらは変えない |
+| 72 | **チャットで生成した SQL を実行でき、結果が回答の吹き出しの中に表で出る。SQL 生成・SELECT SQL の実行の結果の表で NULL が「NULL」、数値の列が右寄せになる**（#1154。`ChatResultTable` / `ResultCell`） | NL2SQL のチャットは SQL を生成して「安全検査済み・未実行」と出すだけで、結果を見るには SQL をコピーして別の画面で実行した。結果の表の NULL は空のセル、数値は左寄せ → 回答の吹き出しの「実行」（secondary）で実行し、SQL の下に要約・先頭 50 行のプレビュー（表の中で縦横スクロール）・打ち切りの案内・「すべての行を見る」（広い side sheet）・「CSV をダウンロード」。結果の表の NULL は斜体・淡色の「NULL」、数値の列は右寄せ | 業界のチャットの結果の出し方（ChatGPT・Databricks Genie・Snowflake Cortex Analyst・Amazon Q in QuickSight）にそろえ、3 製品で共通の部品にする。NULL と空文字、数値と文字を見分ける |
+| 73 | **Agent のチャットと実行履歴の詳細で、表の形のツールの結果（NL2SQL の SQL の実行の結果など）と回答の Markdown の表が `ChatResultTable` で出る**（#1158。`toTabularData` / `splitMarkdownTables`） | チャットは使ったツールの名前と状態だけで結果の行を出さず、回答の Markdown の表は `\|` の並んだ 1 行の文になった。実行履歴の詳細は表の形の結果も JSON（16rem の `<pre>`）で、「構造化データ」のカードは NL2SQL の MCP の出力（列名の文字列の配列）で列が 0 個になった → チャットは回答の下（同じ吹き出しの中）に、詳細は成果物・実行の経過のツールの結果の位置に `ChatResultTable`、元の JSON は「元の JSON」に畳む | 3 製品でデータの表を同じ見た目・振る舞いにする（NL2SQL のチャットと同じ部品）。表でない結果は今の表示のまま |
+| 74 | **チャットの回答の作成中に更新が途絶えると、今の段階の行に「接続を確認しています。」が出る**（#1160。`ChatProgress` の `reconnecting`・`useChatProgressTracker`） | 取得・配信が止まると、今の段階と経過時間が進み続けるだけで画面が更新されず、読み込み直すまで完了が出なかった → 配信が一定時間届かなければ取り直し、遅延の案内の行（最初から予約した行）に「接続を確認しています。」を出す。配信が届いたら消える。取り直しは終端まで backoff して続ける | 利用者が「止まっている」のか「待てばよい」のかを判断でき、完了した結果は読み込み直さずに出る。行を予約しているので、案内が出てもスピナーの行は動かない |
+| 75 | **3 製品のチャットの骨格が共通の `ChatLayout` になり、細部がそろう**（#1161） | 履歴のパネルの幅は RAG 280px・NL2SQL 17.5rem・Agent 20rem → 3 製品とも 20rem。NL2SQL の会話の領域は lg 未満でも高さの指定が無かった → 3 製品とも lg 未満は 70dvh（最小 28rem）。会話の欄の往復の間は RAG 1rem・NL2SQL 1.25rem・Agent 1.5rem → 1.25rem（`scrollbar-gutter: stable`）。「新しい会話」のアイコンは RAG・Agent が `Plus`、NL2SQL が `MessageSquarePlus` → `MessageSquarePlus`。RAG の会話の領域は 3 段（上端の行・会話の欄・入力欄）の間に 0.75rem の隙間があった → 隙間なし（区切り線だけ） | 骨格を 3 製品で書き写していて、写すたびに細部がずれていた（UX 契約 page-archetypes.md §6）。「新しい会話」は作成の汎用の `Plus` と分け、会話を足す操作と分かるアイコンにする |
+| 76 | **NL2SQL の画面のデータの結果（SQL 生成・SELECT SQL・管理 SQL の実行、テーブル・ビュー・メタデータ SQL の文の実行、データの表示、CSV 取り込みのプレビュー、合成データの結果、テーブルの取り込みのサンプル行）が、チャットの結果と同じ `ResultTable` で出る**（#1178） | SQL 生成・SELECT SQL は「取得件数 N 件」「取得上限 N 件」「上限到達」のバッジの下に 10 件/ページの表（`Nl2SqlResultTable`）。管理 SQL・データの表示などは同じバッジの下に、表頭の固定・表の中のスクロールの無い表と 10 件/ページ（`QueryResultsTable`）で、NULL は空のセル・数値は左寄せ。全行を広く見る手段・CSV は無かった（データの表示は XLSX だけ） → 要約の 1 行（「100 行・5 列」、打ち切りは「先頭の 100 行を取得しました（さらに行があります）」と info の案内）と「取得上限 N 件」・実行した接続のバッジ、先頭 50 行のプレビュー（表頭固定・表の中で縦横スクロール）、「すべての行を見る」（広い `SideSheet`・10 / 50 / 100 行/ページ）・「CSV をダウンロード」（取得した行だけ）。NULL は「NULL」、数値の列は右寄せ。データの表示の XLSX（サーバーの出力）は残す | 利用者の評価が高いチャットの結果の形に、同じデータの結果をそろえる（UX 契約 page-archetypes.md「データの結果の型」）。行の操作・選択のある一覧は変えない |
+| 77 | **3 製品のチャットの入力欄が共通の `ChatComposer` になり、名前と placeholder がそろう**（#1161） | 入力欄の名前（読み上げ）は RAG「メッセージを入力…（Enter で送信 / Shift+Enter で改行）」・NL2SQL「クエリ」・Agent「質問」 → 3 製品とも「質問」。placeholder は RAG「メッセージを入力…（Enter で送信 / Shift+Enter で改行）」・NL2SQL「クエリを入力（…）」 → 「質問を入力（Enter で送信、Shift+Enter で改行）」。Agent の停止の失敗は見出し付きの `Banner` → NL2SQL と同じ `ApiErrorBanner` | 同じ入力欄を 3 製品で書き写し、名前と文言が製品ごとに違っていた。チャットの 1 往復は利用者の「質問」と回答（UX 契約 page-archetypes.md §6） |
+| 78 | **処理中のスピナーが回転しても上下・左右に揺れない**（#1180。`Spinner`） | 全周のトラック + 270 度の 1 本のアーク。濃いアークの重心が中心から外れ、回転で重心が中心のまわりを回るため、DB のゲートの「データベースの状態を確認しています…」をはじめ全画面のスピナーが上下・左右に揺れて見えた（角度ごとの見た目の重心のずれ 16px で 1.74〜1.85px）。回転する svg そのものがレイアウトの箱で、外接矩形が 16〜22.6px で毎フレーム変わった → 全周のトラック + **180 度対称の 2 本のアーク（90 度 × 2）**（ずれ 0.05〜0.20px）。回転しない固定の正方形の箱（`span.pr-spinner`。`contain: strict`）の中で svg だけが回る。色・寸法・線の実寸・速さ・置き場所は同じ | 旧 NL2SQL の `StableLoadingIcon`（180 度対称のアーク）で直していた揺れが、共有の `Spinner` への移行（旧 NL2SQL #529）で戻っていた。回転で重心も周りの行も動かさない（§4「Spinner」）。adherence の lint が回転用の lucide のアイコン・`animate-[spin…]`・inline style の `spin` も検出し、3 製品の e2e（`expectSpinnerStable`）が見た目の重心を測る |
+| 79 | **3 製品のチャットの会話の履歴の一覧が共通の `ChatHistoryList` になる**（#1161） | NL2SQL: 行は ghost のボタン（名前は折り返し・作成日時）、0 件は `EmptyState`、失敗の文は「会話を読み込めませんでした。」。Agent: 名前は 2 行まで。RAG: 失敗は `ErrorState` → 3 製品とも RAG の行の形（名前 1 行・補足・行の高さ 3.5rem 以上・開いている会話は地の色）、0 件は短い文、失敗は `ApiErrorBanner`（NL2SQL の文は「会話の履歴を読み込めませんでした。」） | 同じ一覧を 3 製品で書き写していた。一覧の読み込み中・失敗・空の出し方を 3 製品でそろえる（messaging.md §3.6 / §10.3） |
+| 80 | **チャットの処理の段階の経過時間が、処理全体の経過時間になる。終端まで今の行が必ず出る**（#1176。`ChatProgress` の `startedAt`・`labels.working`） | 今の段階の行の右の「経過時間」が段階ごとに 0 から数え直していた。backend の段階を写し漏らした間は「N ステップ完了」だけが出て、今の行・経過時間が消えていた → 経過時間は処理全体（最初の段階の開始）から数え、段階が変わっても戻さない。段階ごとの所要時間は完了した段階の行に出す。遅延の案内は今の段階の経過時間で判断する（今までどおり）。終端でないのに実行中・待機中の段階が無いときは「処理を続けています」とスピナー・経過時間を出す | 利用者には待った時間がリセットされたように見えた（NL2SQL のチャットの指摘）。待った時間は 1 か所、段階の内訳は一覧と役割を分ける。止まったのか続いているのか分からない状態を作らない |
+| 81 | **チャットで上の回答を読んでいる間は引き戻されず、「最新のメッセージへ」が出る**（#1161。`useChatAutoScroll`） | 3 製品とも、回答の受信・処理の段階の更新・状態の変化のたびに会話の欄を末尾へ動かしていた（上を読んでいても引き戻される）→ 末尾を見ている間だけ追い、上を読んでいる間に新しい内容が届いたら会話の欄の下端の中央に「最新のメッセージへ」（`ArrowDown`）を出す。押すと末尾へ戻り、ボタンは消える。会話を開いたとき・送信の瞬間は従来どおり末尾へ | 長い回答の受信中に前の回答を読めなかった。ChatGPT・Claude・Slack と同じ振る舞い |
+| 82 | **3 製品のチャットの 1 往復と回答の枠が共通の `ChatTurn` / `ChatAnswer` になる**（#1161） | NL2SQL の回答は `Card`（影・角丸 lg・`CardContent` の余白）、RAG・Agent は枠線の箱（RAG は中の間隔 0.5rem、Agent は地の色なし）。1 往復は RAG・Agent が `div`、NL2SQL が `article` → 3 製品とも 1 往復は `article`、回答は枠線の箱（`rounded-md`・`border`・`bg-surface`・`p-3`、中の間隔 0.75rem、影なし） | 同じ入れ物を 3 製品で書き写していて、回答の枠の見た目が製品ごとに違っていた |
 
 ### API の非互換
 
@@ -1074,6 +1106,9 @@ QA に事前共有してください。**71点あります。**
 | `Button`（#372） | `tooltip`（`string \| false`）/ `tooltipPlacement` プロップ新設。`iconOnly` は既定で `aria-label` と同じ文言の Tooltip を出す。Tooltip を出すときは `title` を無視する |
 | `Tooltip` | **新規 export。** `Tooltip` / `TooltipProps` / `TooltipPlacement` |
 | `SideSheet`（#664） | **新規 export。** `SideSheet` / `SideSheetProps`。既存の部品の props は変えない |
+| `ChatResultTable`（#1154） | **新規 export。** `ChatResultTable` / `ChatResultTableProps` / `ChatResultTableColumn` / `ChatResultTableLabels` / `ChatResultFullResultLink` / `DEFAULT_CHAT_RESULT_TABLE_LABELS` / `ResultCell` / `isNumericResultColumn` / `isNullResultValue` / `resultValueText` / `resultRowsToCsv` / `chatResultSummaryText` / `CHAT_RESULT_PREVIEW_ROWS` / `CHAT_RESULT_PAGE_SIZES`。`SideSheet` に `size`（`"default" \| "wide"`）を追加（既定は今までどおり） |
+| `ResultTable`（#1178） | **新規 export（改名）。** `ResultTable` / `ResultTableProps` / `ResultTableColumn` / `ResultTableLabels` / `ResultFullResultLink` / `DEFAULT_RESULT_TABLE_LABELS` / `RESULT_PREVIEW_ROWS` / `RESULT_PAGE_SIZES` / `resultSummaryText`。`ChatResultTable` などの旧名は別名として残す（非推奨）。`meta`（要約の右の補足）を追加。シートの見出しの CSV のボタンの testid を `<testId>-all-csv` に分けた（以前は 2 つとも `<testId>-csv`） |
+| 表の形の判定（#1158） | **新規 export。** `toTabularData` / `splitMarkdownTables` / `TabularData` / `TabularColumn`（= `ResultTableColumn`）/ `TabularCellValue` / `MarkdownTableSegment` |
 | `AppShell`（#367） | `navDrawerLabels` プロップ新設（md 未満のドロワーの文言）。md 未満では `sidebar` をドロワーの中に描く。新規 export `useSidebarCollapsed`（サイドバーの `footer` の部品がドロワーの中で展開して描くためのフック）・`DEFAULT_NAV_DRAWER_LABELS`・`NAV_DRAWER_QUERY` |
 | `PagedDataTable`（#265） | **新規 export。** `PagedDataTable` / `PagedDataTableProps` / `PaginationLabels`。クライアント側で全件を持つ一覧の標準形（`stickyHeader` + `visibleRows` + 10 件/ページの `Pagination`）。文言は `paginationLabels` で渡す |
 | `@engchina/production-ready-system-settings`（#265） | `SECURITY_TABLE_VISIBLE_ROWS` / `SECURITY_TABLE_ROW_CLASS` / `SECURITY_LIST_SCROLL_CLASS` / `SECURITY_LIST_FOCUS_CLASS` の export を**削除。** 同じ値の `INFORMATION_TABLE_VISIBLE_ROWS` / `INFORMATION_TABLE_ROW_CLASS` / `INFORMATION_LIST_SCROLL_CLASS` / `INFORMATION_TABLE_FOCUS_CLASS`（`@engchina/production-ready-ui`）を使う |

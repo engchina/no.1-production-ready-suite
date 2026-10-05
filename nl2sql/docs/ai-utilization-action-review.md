@@ -28,7 +28,7 @@
 | プロファイル追加読込／再試行 | cursor による追加取得と再試行 handler を確認 |
 | プロファイル新規作成の案内 | profile がない場合に生成を止め、管理画面へ遷移 |
 | プロファイル自動判定 | 成功・同じ profile・低信頼度・失敗を確認。判定中の競合操作を停止 |
-| 推薦プロファイル適用 | クエリを移動先 profile の草稿へ渡し、許可表選択を再構築 |
+| 推薦プロファイル適用 | 質問を移動先 profile の草稿へ渡し、許可表選択を再構築 |
 | Select AI / Select AI Agent / Enterprise AI Direct | 選択値が job の engine と一致。使用できない個別 override は案内 |
 | 自由入力 | テンプレートを解除して入力を空へ戻す |
 | 項目抽出 | 対象・項目・条件のテンプレートで全置換し、入力へフォーカス |
@@ -37,7 +37,7 @@
 | 複数テーブル結合 | 結合用テンプレートで全置換 |
 | AI 要件確認を開く | 現在の質問・profile で確認を開始し、通常生成と競合しない |
 | 推薦 profile 確定／回答送信 | 選択回答・自由回答・手動回答から次の確認状態へ遷移 |
-| 確認内容をクエリへ反映 | 草稿へ反映し、通常の生成ボタンへ戻る。自動 SQL 実行はしない |
+| 確認内容を質問に反映 | 草稿へ反映し、通常の生成ボタンへ戻る。自動 SQL 実行はしない |
 | AI 要件確認を閉じる | 確認パネルの終了と入力編集への復帰 |
 | 今回だけの生成条件・役割の開閉 | 折りたたみ、override payload、リセットを確認 |
 | スキーマ検索 | 名前・項目検索と profile の許可範囲を確認 |
@@ -47,11 +47,11 @@
 | 実行オプション開閉 | Enter 操作、aria-expanded、mobile での操作性 |
 | 用語・同義語を使う | 既定 off、ON 時の rewrite と job flag。変更がなければ不要なカードを出さない |
 | 公開版オントロジー／処理手順／Show Prompt | 各 flag と結果表示を確認。Show Prompt は既定 off |
-| 書換えた質問を適用 | 現在のクエリへ明示反映し、再編集で旧 rewrite を解除 |
+| 書換えた質問を適用 | 現在の質問へ明示反映し、再編集で旧 rewrite を解除 |
 | 参考履歴を開閉 | 件数・空状態・許可されるレビュー済み履歴・実行終了後の表示を確認 |
 | SQL を生成して実行 | job payload、段階別進捗、安全性判定、結果表を確認。二重操作と旧成功結果の混同を防止 |
 | 実行を中止 | cancel 要求・中止状態・入力操作の復帰。404／通信断／TTL 失効も確認 |
-| 新しいクエリを開始／取消 | 草稿破棄の確認とリセット、取消で保持。ナビ往復では草稿を維持 |
+| 新しい質問を開始／取消 | 草稿破棄の確認とリセット、取消で保持。ナビ往復では草稿を維持 |
 | サンプルデータ投入 | catalog 空の回復。executed=false は成功として扱わない |
 | SQL をコピー／通知を閉じる | clipboard 正常・fallback・拒否を確認。失敗を成功通知にしない |
 | 処理手順の技術詳細／Show Prompt 開閉 | 詳細と SQL の対応、遅延取得と空・失敗状態を確認 |
@@ -128,7 +128,7 @@ UV_CACHE_DIR=/tmp/nl2sql-uv-cache uv run --no-sync pytest \
 
 ```bash
 cd frontend
-npm run test:e2e -- tests/e2e/nl2sql-workflows.spec.ts tests/e2e/nl2sql-execution-options.spec.ts tests/e2e/history-management.spec.ts --grep 'nl2sql-execution-options|history-management|query workbench|クエリ|スキーマ参照|スキーマピッカー|実行エンジン|必須入力欄|プロファイル削除|自動判定|推薦適用|job|検索実行開始|参考履歴|検索結果|SQL を生成|検索ジョブ|Query Rewrite|抽出条件|Ontology グラフ|未修飾列|サンプルデータ投入|今回だけの生成条件|AI 活用|SQL 実行中|SQL 再実行|SQL ファイル入力|history rerun|dark theme|sql to question|論理構造|フィードバック保存成功|SELECT SQL の遅延|スキーマ参照は別 owner|AI要件'
+npm run test:e2e -- tests/e2e/nl2sql-workflows.spec.ts tests/e2e/nl2sql-execution-options.spec.ts tests/e2e/history-management.spec.ts --grep 'nl2sql-execution-options|history-management|query workbench|クエリ|スキーマ参照|スキーマピッカー|実行エンジン|必須入力欄|プロファイル削除|自動判定|推薦適用|job|SQL の生成と実行の開始時|参考履歴|実行結果|SQL を生成|SQL の生成と実行のジョブ|Query Rewrite|抽出条件|Ontology グラフ|未修飾列|サンプルデータ投入|今回だけの生成条件|AI 活用|SQL 実行中|SQL 再実行|SQL ファイル入力|history rerun|dark theme|sql to question|論理構造|フィードバック保存成功|SELECT SQL の遅延|スキーマ参照は別 owner|AI要件'
 ```
 
 ### 画面記録

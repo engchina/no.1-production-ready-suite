@@ -23,6 +23,14 @@ export {
   type OptimisticChatMessage,
   type OptimisticChatStatus,
 } from "./lib/chat-optimistic";
+export {
+  splitMarkdownTables,
+  toTabularData,
+  type MarkdownTableSegment,
+  type TabularCellValue,
+  type TabularColumn,
+  type TabularData,
+} from "./lib/tabular-data";
 
 // --- UI primitives ---
 export { Button, buttonVariants, type ButtonProps, type ButtonVariantToneProps } from "./components/ui/button";
@@ -78,11 +86,13 @@ export {
   TableSkeleton,
   ListSkeleton,
   FormSkeleton,
+  ChatSkeleton,
   SKELETON_CLASS,
   type SkeletonRows,
   type TableSkeletonProps,
   type ListSkeletonProps,
   type FormSkeletonProps,
+  type ChatSkeletonProps,
 } from "./components/ui/skeleton";
 export { Switch, type SwitchProps } from "./components/ui/switch";
 export { ToggleChip } from "./components/ui/toggle-chip";
@@ -147,6 +157,47 @@ export {
   type ChatUserMessageProps,
   type ChatUserMessageStatus,
 } from "./components/ui/chat-message";
+export {
+  ChatLayout,
+  type ChatLayoutLatest,
+  type ChatLayoutNewConversation,
+  type ChatLayoutProps,
+  type ChatLayoutTestIds,
+} from "./components/chat/chat-layout";
+export {
+  ChatComposer,
+  ChatComposerOption,
+  type ChatComposerOptionProps,
+  type ChatComposerProps,
+} from "./components/chat/chat-composer";
+export {
+  ChatHistoryList,
+  type ChatHistoryItem,
+  type ChatHistoryListLabels,
+  type ChatHistoryListProps,
+  type ChatHistoryListTestIds,
+} from "./components/chat/chat-history-list";
+export {
+  ChatAnswer,
+  ChatPendingTurn,
+  ChatTurn,
+  type ChatAnswerProps,
+  type ChatPendingTurnProps,
+  type ChatTurnProps,
+} from "./components/chat/chat-turn";
+export {
+  CHAT_HISTORY_INLINE_QUERY,
+  useChatHistoryPanel,
+  useMediaQuery,
+  type ChatHistoryPanel,
+  type UseChatHistoryPanelOptions,
+} from "./components/chat/use-chat-history-panel";
+export {
+  CHAT_AUTO_SCROLL_THRESHOLD_PX,
+  useChatAutoScroll,
+  type ChatAutoScroll,
+  type UseChatAutoScrollOptions,
+} from "./components/chat/use-chat-auto-scroll";
 export { Toaster, type ToasterProps } from "./components/ui/toast";
 export {
   ConfirmProvider,
@@ -218,11 +269,22 @@ export {
   ChatProgress,
   DEFAULT_CHAT_PROGRESS_LABELS,
   formatChatProgressDuration,
+  isChatProgressActive,
   type ChatProgressLabels,
   type ChatProgressProps,
   type ChatProgressStep,
   type ChatProgressStepStatus,
 } from "./components/feedback/chat-progress";
+export {
+  useChatProgressTracker,
+  chatProgressBackoffMs,
+  DEFAULT_CHAT_PROGRESS_STALE_AFTER_MS,
+  DEFAULT_CHAT_PROGRESS_REFRESH_TIMEOUT_MS,
+  DEFAULT_CHAT_PROGRESS_MAX_BACKOFF_MS,
+  type ChatProgressTracker,
+  type ChatProgressTrackerOptions,
+  type ChatProgressTrackerProps,
+} from "./components/feedback/chat-progress-tracker";
 export {
   operationTimestampMs,
   elapsedMsSince,
@@ -273,6 +335,32 @@ export {
   type PagedDataTableProps,
   type PaginationLabels,
 } from "./components/data/paged-data-table";
+export {
+  ResultTable,
+  ResultCell,
+  RESULT_PAGE_SIZES,
+  RESULT_PREVIEW_ROWS,
+  DEFAULT_RESULT_TABLE_LABELS,
+  resultSummaryText,
+  isNullResultValue,
+  isNumericResultColumn,
+  resultRowsToCsv,
+  resultValueText,
+  type ResultFullResultLink,
+  type ResultTableColumn,
+  type ResultTableLabels,
+  type ResultTableProps,
+  // 以前の名前（#1154。後方互換の別名。#1178）
+  ChatResultTable,
+  CHAT_RESULT_PAGE_SIZES,
+  CHAT_RESULT_PREVIEW_ROWS,
+  DEFAULT_CHAT_RESULT_TABLE_LABELS,
+  chatResultSummaryText,
+  type ChatResultFullResultLink,
+  type ChatResultTableColumn,
+  type ChatResultTableLabels,
+  type ChatResultTableProps,
+} from "./components/data/result-table";
 export {
   RowTitleButton,
   type RowTitleButtonProps,

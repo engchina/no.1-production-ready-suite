@@ -1385,6 +1385,10 @@ export function ListSkeleton({ rows, rowClassName = "h-[3.5rem]", className, tes
 
 /** 設定カード・エディタの形。見出し → ラベル + 入力欄（--button-height-md）× fields → 右寄せの操作行。 */
 export function FormSkeleton({ fields = 4, title = true, actions = true, className, testId }: FormSkeletonProps);
+
+/** チャットの会話の形（#1153）。右寄せの質問の吹き出し（h-12・最大 85%）と左の回答の塊（h-32）を turns 組。
+ *  3 製品のチャットの会話の欄で、前提の読み込み中に空の状態の代わりに出す（UX 契約 messaging.md §11.7）。 */
+export function ChatSkeleton({ turns = 2, className, testId }: ChatSkeletonProps);
 ```
 
 - 形のある Skeleton は `aria-hidden` です。**読み込み中の文言と経過時間は `TimedLoadingState` が出す**ので、必ずその子に置きます（UX 契約 messaging.md §3.6 / §3.7）。
@@ -2341,6 +2345,8 @@ export interface SideSheetProps {
   closeLabel: string;
   /** 出す側（既定は左）。 */
   side?: "left" | "right";
+  /** 幅（#1154）。default は 22rem、wide は sm 以上 64rem（画面幅 − 3.5rem まで）・sm 未満は全画面。 */
+  size?: "default" | "wide";
   /** シートの要素の id（開くボタンの aria-controls に渡す）。 */
   id?: string;
   /** 閉じたときにフォーカスを戻す先。省略時は開く前にフォーカスがあった要素。 */
@@ -2618,6 +2624,7 @@ import { ChatProgress } from "@engchina/production-ready-ui";
       steps={steps}                 // ChatProgressStep[]
       active={inFlight}             // 省略時は段階から決める（running がある / 失敗が無く pending が残る）
       elapsedMs={totalMs}           // 完了後の全体の所要時間。省略時は段階の最初の開始から最後の終了まで
+      startedAt={job.created_at}    // 実行中の経過時間の起点（処理全体の開始）。省略時は段階の最初の開始
       labels={{ status: { ...DEFAULT_CHAT_PROGRESS_LABELS.status, skipped: "未実行" } }}
       testId="chat-progress"
     />
@@ -2633,17 +2640,21 @@ import { ChatProgress } from "@engchina/production-ready-ui";
 | `steps` | `ChatProgressStep[]` | — | 段階の一覧（表示の順）。空なら何も出さない |
 | `active` | `boolean` | 段階から決める | 処理中か。回答の本文の受信中など、段階の外で処理が続くときは明示する |
 | `elapsedMs` | `number \| null` | 段階の時刻から | 完了後の 1 行の全体の所要時間 |
-| `slowAfterMs` | `number` | `10000` | この時間を超えた今の段階に遅延の案内を付ける |
+| `startedAt` | `string \| number \| null` | 段階の最初の開始 | 実行中の経過時間の起点（処理全体の開始。#1176）。どちらも無いときは表示が処理中になった時刻から数える |
+| `slowAfterMs` | `number` | `10000` | 今の段階がこの時間を超えたら、今の段階の行に遅延の案内を付ける（全体の経過時間では判断しない。#1176） |
 | `defaultOpen` | `boolean` | 失敗があれば `true` | 完了後の 1 行を最初から開くか |
-| `labels` | `Partial<ChatProgressLabels>` | `DEFAULT_CHAT_PROGRESS_LABELS` | 文言（`completedSteps(count)` / `summary(count, duration)` / `steps` / `elapsed` / `slow` / `status` / `formatDuration(ms)`） |
-| `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id` / `data-slow`）・`-timer`・`-slow`・`-completed`（実行中の畳んだ見出し）・`-summary`（完了後の 1 行）・`-step-<id>`（一覧の行。`data-status`）を付ける |
+| `reconnecting` | `boolean` | `false` | 更新が途絶え、状態を取り直している（#1160）。今の段階の行の予約した行に、遅延の案内の代わりに「接続を確認しています。」を出す。`useChatProgressTracker` の `progressProps` で渡す |
+| `labels` | `Partial<ChatProgressLabels>` | `DEFAULT_CHAT_PROGRESS_LABELS` | 文言（`completedSteps(count)` / `summary(count, duration)` / `steps` / `elapsed` / `slow` / `working` / `reconnecting` / `status` / `formatDuration(ms)`） |
+| `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id`（段階の外で処理が続くときは空）/ `data-slow` / `data-reconnecting`）・`-timer`・`-slow`・`-reconnecting`・`-completed`（実行中の畳んだ見出し）・`-summary`（完了後の 1 行）・`-step-<id>`（一覧の行。`data-status`）を付ける |
 
 根の要素は `data-chat-progress-state`（`running` / `done` / `failed`）と `aria-busy` を持つ。
 
 | 決めたこと | 理由 |
 |---|---|
 | 実行中は今の段階の 1 行だけを出し、完了した段階は「✓ N ステップ完了」に畳む（既定は閉じる） | チャットの回答の場所を工程の一覧で埋めない（ChatGPT・Claude・Perplexity の「考えています / 検索しています」と同じ密度）。何をしているかは 1 行で分かり、詳しく見たい利用者だけが開く |
-| 経過時間は今の段階の開始から数え、遅延の案内も今の段階の行に付ける | どの段階で時間がかかっているか（送信・開始待ち・生成など）が分かる。全体の時間は完了後の 1 行に出す |
+| 実行中の経過時間は**処理全体**（`startedAt`、省略時は最初の段階の開始）から数え、今の段階の行の右の 1 か所に出し続ける。段階が変わっても 0 に戻さない。段階ごとの所要時間は完了した段階の行に出す（#1176） | 段階ごとに 0 から数え直すと、利用者には待った時間がリセットされたように見える（#1176 の指摘）。待った時間は全体の 1 つ、段階の内訳は一覧、と役割を分ける |
+| 遅延の案内は**今の段階**の経過時間（`slowAfterMs`、既定 10 秒）で判断し、今の段階の行に付ける（#1176） | どの段階で時間がかかっているか（送信・開始待ち・生成など）が分かる。LLM を使う処理は全体が 10 秒を超えるのが普通で、全体で判断すると毎回出て意味を失う |
+| 終端でない（`active`）のに実行中・待機中の段階が無いときも、今の行（スピナー・「処理を続けています」・全体の経過時間）を出す（#1176） | 「N ステップ完了」だけが出て、止まったのか続いているのか分からない状態を作らない。製品は backend の段階を写し漏らさない（NL2SQL はジョブの全段階を写す）。これは写し漏れの最後の備え |
 | 遅延の案内の行は最初から高さを予約する（`ProcessingIndicator` の #902 と同じ） | 10 秒後に行が足されてスピナーの行が動かない |
 | 今の段階の行を上に、完了した段階の畳んだ見出しを下に置く | 段階が完了して見出しが現れても、スピナーの行の位置が変わらない |
 | 完了後は「処理の経過（N ステップ・M 秒）」の 1 行に畳む。失敗した段階があれば開いて出す | 回答を読む邪魔をしない。失敗はどこで止まったかを最初から見せる |
@@ -2655,4 +2666,340 @@ import { ChatProgress } from "@engchina/production-ready-ui";
 
 - 単体テストは `packages/ui/tests/chat-progress.test.tsx`。
 - 実ブラウザは NL2SQL `tests/e2e/sql-chat.spec.ts` の「#1145」のテスト（応答を遅らせて、送信・開始待ち・実行中・完了・失敗の段階を desktop / 375px・light / dark で確かめる）。
-- 使う所: NL2SQL の `features/nl2sql/SqlChatPage.tsx`（段階は `features/nl2sql/chatProgress.ts` がジョブの `steps` から作る）。RAG・Agent のチャットは別の Issue で同じ部品につなぐ。
+- 使う所: NL2SQL の `features/nl2sql/SqlChatPage.tsx`（段階は `features/nl2sql/chatProgress.ts` がジョブの `steps` から作る）、RAG の `components/chat/ChatClient.tsx`（SSE の `progress`）、Agent の `pages/ChatPage.tsx`（Run から `lib/chat-progress.ts`）。
+
+### useChatProgressTracker — 処理の経過の状態を追う（#1160）
+
+3 製品のチャットが「処理の経過」の状態を追う処理を 1 つにした hook。表示は `ChatProgress`、終端の判定と、配信が途絶えたときの取り直しはこの hook が持つ。製品は自分の配信を hook の入力に合わせる薄いアダプタだけを持つ。
+
+```tsx
+import { ChatProgress, useChatProgressTracker } from "@engchina/production-ready-ui";
+
+const progress = useChatProgressTracker({
+  key: job.id,                      // 追う対象（ジョブ ID・Run ID・保存した質問の ID）。変わったら数え直す
+  steps,                            // 今の段階（ChatProgressStep[]）
+  active: inFlight(job),            // 省略時は段階から（isChatProgressActive）。false で取り直しをやめる
+  elapsedMs,                        // 完了後の全体の所要時間
+  receivedAt: query.dataUpdatedAt, // polling: 最後に取得できた時刻。push の配信は progress.touch() を呼ぶ
+  refresh: () => query.refetch({ cancelRefetch: true, throwOnError: false }),
+  staleAfterMs: 10_000,             // 既定 15 秒
+});
+
+<ChatProgress {...progress.progressProps} labels={labels} testId="chat-progress" />;
+```
+
+| 入力 / 戻り値 | 説明 |
+|---|---|
+| `refresh(signal)` | 状態を取り直す。配信が `staleAfterMs` 届かなければ呼び、`refreshTimeoutMs`（既定 15 秒）で打ち切る（signal を見ない関数・終わらない promise も打ち切る）。失敗・時間切れは 1 秒・2 秒・4 秒 … `maxBackoffMs`（既定 30 秒）の間隔で続け、終端（`active` が false）か対象が変わるまで止めない |
+| `enabled` | false の間は追わない（keep-alive で画面が隠れている・承認待ちなど取り直さない状態） |
+| `touch()` | push の配信（SSE の event・heartbeat、WebSocket のメッセージ）を受け取ったときに呼ぶ。取り直している間に届いたときだけ描画する |
+| `refreshNow()` | 待たずに取り直す（配信が終端の前に終わった・切れたと分かったとき）。次に配信が届くまで、途絶えの時間に関係なく backoff して取り直し続ける |
+| `reconnecting` | 取り直しを始めた後に配信が届いていない。`progressProps.reconnecting` で `ChatProgress` に「接続を確認しています。」を出す |
+
+| 決めたこと | 理由 |
+|---|---|
+| 「途絶え」は段階が進まないことではなく、配信（取得の成功・SSE のバイト）が届かないこと | 準備・生成が数分かかるのは正常（#1155）。応答が返らない取得・切れた接続だけを取り直す |
+| 取り直しは backoff して終端まで続け、あきらめない（あきらめる条件は製品のアダプタが持つ） | NL2SQL のチャットで、応答の返らない取得を待ったまま 12 分更新が止まった（#1160）。終わった結果が画面に出ないまま止まる経路を残さない |
+| タブが非表示の間は取り直さず、表示に戻ったら待たずに確かめる | polling もタブが非表示の間は止まる。戻ったときに古い状態を見せ続けない |
+| 案内は遅延の案内と同じ予約した行に出す | 案内が出ても今の段階の行・経過時間は動かない |
+
+- 単体テストは `packages/ui/tests/chat-progress-tracker.test.tsx`。
+- 製品のアダプタ: NL2SQL（会話の polling。`refresh` は応答しない取得を打ち切る `refetch({ cancelRefetch: true })`）、RAG（SSE。`touch()` は受け取ったバイトごと、`all_done` の前に終わったら `refreshNow()` で「接続を確認しています。」を出し、最後に受け取った event の連番から続きを購読し直す。`refresh` は途絶えた接続を閉じて張り直させる。続きを購読できなければ保存済みの作成中の回答に引き継ぎ、会話の polling で完了を待つ（#1175。作成は接続が切れても続く）。backend は event の無い間 10 秒ごとに heartbeat を送る）、Agent（Run の polling。`waiting_approval` の間は `enabled: false`）。
+- 実ブラウザは NL2SQL `tests/e2e/sql-chat-progress-refresh.spec.ts`・RAG `e2e/chat-progress-refresh.spec.ts`・Agent `e2e/chat-progress-refresh.spec.ts`。
+
+## ResultTable — **新規**（#1154 / #1178。旧名 ChatResultTable）
+
+データの結果（読み取りだけの行と列）を出す部品です（3 製品で共通）。チャットの回答の吹き出しの中の SQL・ツールの実行の結果と、画面のクエリの結果・テーブルのデータの表示・取り込みのサンプル行に使います（#1178。合う画面の基準は UX 契約 `page-archetypes.md`「データの結果の型」）。振る舞いの表は README §4「`ResultTable`」。旧名 `ChatResultTable` などは別名として残しています（非推奨）。製品は列・取得した行・打ち切りの有無を渡すだけで、要約・プレビュー・打ち切りの明示・すべての行・CSV・NULL・数値の右寄せは部品が持ちます。実行中（`ProcessingIndicator`）・失敗（danger の `Banner`）・実行の操作（`Button`）は製品が部品の外に置きます。
+
+```tsx
+import { ResultTable, toast } from "@engchina/production-ready-ui";
+
+<ResultTable
+  columns={[{ name: "CATEGORY" }, { name: "AMOUNT", type: "number" }]}
+  rows={[["家電", 1200], ["食品", null]]}      // 列の順の値の配列。NULL は null
+  truncated={result.has_more}                  // 取得の上限で打ち切った
+  rowLimit={1000}                              // 打ち切りの案内に出す上限
+  elapsedMs={800}
+  csvFilename="nl2sql-chat-result-20261005-140312.csv"
+  onCsvDownloaded={() => toast.success(t("common.action.downloaded"))}
+  fullResult={{                                 // 上限を超える全件の導線（製品の画面）
+    href: "/direct-sql",
+    label: "SELECT SQL を実行で開く",
+    linkComponent: DirectSqlLink,               // react-router の Link（state で SQL を渡す等）
+    hint: "すべての行が必要なときは、…で実行してください。",
+  }}
+  testId="sql-chat-result"
+/>
+```
+
+### ResultTable の props
+
+```ts
+export interface ResultTableColumn { name: string; type?: string }   // type が number 等なら右寄せ
+export interface ResultTableProps {
+  columns: readonly ResultTableColumn[];
+  rows: readonly (readonly unknown[])[];       // 取得した行（列の順）。NULL は null
+  truncated?: boolean;                         // 上限（行数・応答の大きさ）で打ち切った
+  totalRowCount?: number | null;               // 総件数が分かるときだけ（「全 N 行」）
+  rowLimit?: number | null;                    // 1 回の取得の上限（案内に出す）
+  cellsTruncated?: boolean;                    // セルの文字数の上限で値を切った
+  maxCellChars?: number | null;
+  elapsedMs?: number | null;
+  previewRows?: number;                        // プレビューに描く行（既定 50 = RESULT_PREVIEW_ROWS）
+  pageSizeOptions?: readonly number[];         // すべての行の 1 ページの行数（既定 10 / 50 / 100）
+  csvFilename?: string;                        // 既定 result.csv
+  onDownloadCsv?: (csv: string, filename: string) => void;  // 省略時は部品がダウンロード
+  onCsvDownloaded?: () => void;
+  fullResult?: { href?: string; label?: string; linkComponent?: ButtonLinkComponent; hint?: string };
+  actions?: React.ReactNode;                   // 要約の行の右に足す製品の操作
+  meta?: React.ReactNode;                      // 要約の文の右の画面固有の補足（取得上限・接続の StatusBadge。#1178）
+  labels?: Partial<ResultTableLabels>;     // 既定は DEFAULT_RESULT_TABLE_LABELS（日本語）
+  className?: string;
+  testId?: string;  // <testId>-summary / -table / -scroll / -preview-note / -truncated / -cells-truncated / -view-all / -csv / -sheet / -all-csv / -all-table / -all-scroll / -all-pagination
+}
+```
+
+- あわせて export: `ResultCell`（セルの表示。結果の画面の表も同じ表示にする）、`isNumericResultColumn`、`isNullResultValue`、`resultValueText`、`resultRowsToCsv`（BOM・CRLF・RFC 4180・式の無害化）、`resultSummaryText`、`RESULT_PREVIEW_ROWS`、`RESULT_PAGE_SIZES`、`DEFAULT_RESULT_TABLE_LABELS`。
+- 画面での使い方（#1178）: NL2SQL は API の形（列名をキーにした行）を `features/nl2sql/queryResultTable.ts` の `toResultTableData` で変換し、`components/QueryResultTable.tsx`（表の名前・取得上限と接続の `meta`・CSV のファイル名を渡す薄いラッパー）から出す。製品で `DataTable` + `Pagination` の結果の表を書かない。
+- 単体テストは `packages/ui/tests/result-table.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/sql-chat-execution.spec.ts`（チャット。desktop / 375px、プレビューの表の中の縦横のスクロール、打ち切り、シートのページ送り、CSV）と `tests/e2e/nl2sql-workflows.spec.ts`（SQL 生成・SELECT SQL・管理 SQL・データの表示）。
+
+### 表の形の判定（`toTabularData` / `splitMarkdownTables`。#1158）
+
+ツールの結果・成果物の JSON と、回答の本文の Markdown の表を `ResultTable` の列と行にします。製品に依存しない規則なので、製品で判定を書かず、この関数を通します（使う所: Agent のチャットと実行履歴の詳細）。
+
+```tsx
+import { MessageText, ResultTable, splitMarkdownTables, toTabularData } from "@engchina/production-ready-ui";
+
+// JSON: 表の形なら列と行、そうでなければ null（今の JSON の表示のまま）。
+const table = toTabularData(step.tool_result.output);
+{table ? (
+  <ResultTable
+    columns={table.columns}
+    rows={table.rows}
+    truncated={table.truncated}        // truncated / has_more
+    totalRowCount={table.totalRowCount} // total / total_row_count / row_count
+    elapsedMs={table.elapsedMs}         // elapsed_ms
+  />
+) : (
+  <JsonPreview value={step.tool_result.output} />
+)}
+
+// 回答の本文: 表とそれ以外の文に分ける（コードブロックの中の表は表にしない）。
+splitMarkdownTables(answer).map((segment) =>
+  segment.kind === "table" ? <ResultTable {...segment.data} /> : <MessageText text={segment.text} />
+);
+```
+
+- 表とみなす形: `{ columns, rows }`（`columns` は列名の文字列か `{ name, label?, type? }`、`rows` はオブジェクトか配列の配列。列の指定があれば 0 行も表）、`{ rows }`（オブジェクトの配列。1 行以上）、オブジェクトの配列（1 行以上。key の和集合を列にする）。行に無い値は `null`。
+- セルは文字列・数値・真偽値・null だけ。入れ子のオブジェクト・配列を持つ値、列の分からない 0 行、`columns: []` の 0 行（実行中のジョブ）は表にしない（`null`）。
+- Markdown の表は GFM の表頭・区切りの行・本文の行。セルの足りない行は空の文字列、`\|` は `|`、`**` と `` ` `` は除く。値がすべて数（桁区切り・小数・%）の列は `type: "number"`（右寄せ）。
+- 単体テストは `packages/ui/tests/tabular-data.test.ts`、実ブラウザは Agent の `e2e/run-result-tables.spec.ts`（チャットと実行履歴の詳細、desktop / 375px、light / dark、60 行・0 行・打ち切り・表でない JSON）。
+
+## ChatLayout / useChatHistoryPanel — **新規**（#1161）
+
+チャットの骨格（3 製品共通）。会話の履歴（lg 以上は本文の横の `<aside>`、未満はモーダルの `SideSheet`）と、会話の領域（上端の行・`role="log"` の会話の欄・入力欄の領域）を 1 つの部品で描く。画面の型は UX 契約 [page-archetypes.md §6](../ux-contracts/page-archetypes.md#6-チャット会話の画面1161)。製品は履歴の中身・往復の表示・入力欄・文言を渡す。
+
+```tsx
+import { ChatLayout, useChatHistoryPanel } from "@engchina/production-ready-ui";
+
+// lg 以上のインラインの開閉は製品の作業状態に残す（lg 未満のシートは残さない）。
+const [historyOpen, setHistoryOpen] = useWorkspaceState("chat.historyOpen", false);
+const history = useChatHistoryPanel({ inlineOpen: historyOpen, onInlineOpenChange: setHistoryOpen });
+
+<ChatLayout
+  history={history}
+  historyTitle={t("chat.history")}            // 「会話の履歴」
+  historyCloseLabel={t("chat.closeHistory")}  // 「会話の履歴を閉じる」
+  historyContent={<ConversationList onSelect={(id) => { history.closeSheet(); open(id); }} />}
+  label={t("chat.title")}
+  conversationTitle={conversation?.title}
+  conversationTitleLoading={Boolean(conversationId) && conversationQuery.isPending}
+  newConversation={{ label: t("chat.new"), onClick: startNew }}
+  logLabel={t("chat.messages")}               // 「会話」
+  logRef={logRef}                             // 自動スクロールはこの要素の scrollTo
+  composer={<FieldActionRow actions={<RunStopButton … />}><TextareaField … /></FieldActionRow>}
+  testIdPrefix="chat"
+>
+  {turns}
+</ChatLayout>
+```
+
+### ChatLayout の props
+
+| prop | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `history` | `ChatHistoryPanel` | — | `useChatHistoryPanel` の戻り値 |
+| `historyTitle` / `historyCloseLabel` | `string` | — | 履歴の見出し・名前（開閉ボタンの名前にも使う）と、シートを閉じるボタンの名前 |
+| `historyContent` | `ReactNode` | — | 履歴の中身（一覧・読み込み中・失敗・空・ページング） |
+| `label` | `string` | — | 会話の領域（`<section>`）の名前 |
+| `conversationTitle` / `conversationTitleLoading` | `string \| null` / `boolean` | — / `false` | 上端の行の会話の名前。名前が無く読み込み中なら `Skeleton`、どちらでもなければ何も出さない |
+| `newConversation` | `{ label, onClick, disabled? }` | — | 上端の行の右端の「新しい会話」（`MessageSquarePlus`） |
+| `historyToggleDisabled` | `boolean` | `false` | 履歴の開閉を押せない間（対象の一覧の読み込み中など。#1153） |
+| `logLabel` / `logRef` | `string` / `Ref<HTMLDivElement>` | — | 会話の欄（`role="log"`）の名前と要素 |
+| `children` | `ReactNode` | — | 会話の欄の中身 |
+| `composer` | `ReactNode` | — | 入力欄の領域の中身（設定の行・入力欄と送信・通知） |
+| `testIdPrefix` / `testIds` | `string` / `ChatLayoutTestIds` | `"chat"` | testid。既定は `<prefix>-history`・`-history-toggle`・`-panel`・`-conversation-title`・`-conversation`・`-composer-region`。シートの scrim は `<history>-scrim` |
+
+### useChatHistoryPanel
+
+`useChatHistoryPanel({ inlineOpen, onInlineOpenChange, id? })` → `{ inline, open, inlineOpen, sheetOpen, toggle, closeSheet, id, toggleRef }`。幅の判定は `useMediaQuery(CHAT_HISTORY_INLINE_QUERY)`（`(min-width: 1024px)`）。
+
+| 決めたこと | 理由 |
+|---|---|
+| 履歴は既定で閉じ、lg 以上は開くと 20rem の列で会話の左に並べる。閉じている間も `<aside hidden>` を描く | 多くの利用者は履歴を使わないので会話に面積を渡す（#664）。開閉ボタンの `aria-controls` の先を常に保つ |
+| lg 未満はモーダルの `SideSheet`。開閉は作業状態に残さず、幅が lg を越えたら閉じる | 戻ったとき・再読込でモーダルが画面を塞がない（workspace-state.md）。広げたときにモーダルが残らない |
+| 会話の領域は lg 未満で高さ 70dvh（最小 28rem）、lg 以上で残りの高さ。会話の欄だけがスクロールする | 長い会話でページを伸ばさず、入力欄を常に会話の領域の下に置く（README §4「AppShell」） |
+| 上端の行に履歴の開閉（左端）・会話の名前・「新しい会話」（右端）の 3 つだけを置く | 履歴を閉じていても会話の切り替え・新しい会話に届く。「新しい会話」は 1 か所（#889） |
+| 文言は翻訳済みを受け、往復の表示・入力欄・履歴の中身は持たない | 業務の語彙と API（SSE・ジョブ・Run）は製品ごとに違う（page-archetypes.md §6.2） |
+
+- 単体テストは `packages/ui/tests/chat-layout.test.tsx`。
+- 実ブラウザは RAG `e2e/chat.spec.ts`（#664 の履歴の開閉・375px のシート）、NL2SQL `tests/e2e/sql-chat.spec.ts`、Agent `e2e/chat.spec.ts`。
+- 使う所: RAG `components/chat/ChatClient.tsx`、NL2SQL `features/nl2sql/SqlChatPage.tsx`、Agent `pages/ChatPage.tsx`。
+
+## ChatComposer / ChatComposerOption — **新規**（#1161）
+
+チャットの入力欄の領域（3 製品共通）。`ChatLayout` の `composer` に渡す。入力欄（`TextareaField`、2 行）と送信 / 停止（`RunStopButton`、lg）を `FieldActionRow` で並べ、上に設定の行（`ChatComposerOption`）、下に通知を置く。
+
+```tsx
+import { ChatComposer, ChatComposerOption } from "@engchina/production-ready-ui";
+
+<ChatComposer
+  id="chat-composer"
+  textareaRef={composerRef}
+  value={draft}                       // 下書きは製品の作業状態
+  onValueChange={setDraft}
+  onSubmit={submit}
+  onStop={stop}
+  running={sending}                   // 送信の要求中・回答の作成中（同じボタンが「停止」）
+  submitBlocked={!target || waitingChoice || conversationLoading}
+  disabled={targetsLoading}            // 対象の一覧の読み込み中は書けない（#1153。書いた文字は残す）。
+                                      // 会話の内容の読み込み中は書けて、送信だけ止める（submitBlocked。#1188）
+  label={t("chat.composer.label")}    // 「質問」（読み上げだけ）
+  placeholder={t("chat.composer.placeholder")}  // 「質問を入力（Enter で送信、Shift+Enter で改行）」
+  sendLabel={t("chat.send")}
+  stopLabel={t("chat.stop")}
+  sendTestId="chat-send"
+  options={
+    <ChatComposerOption
+      label={t("chat.engine")}        // 「生成方法」
+      labelDecorative                 // 中の SelectField が同じ名前を labelHidden で持つ
+      info={{ label: t("chat.engine.infoLabel"), content: description, contentId }}
+    >
+      <SelectField id="engine" label={t("chat.engine")} labelHidden size="sm" width="sm" … />
+    </ChatComposerOption>
+  }
+  footer={stopError ? <ApiErrorBanner error={stopError} fallback={t("chat.stopFailed")} /> : null}
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| Enter で送信、Shift+Enter で改行、IME の変換を確定する Enter では送らない（`isSubmitEnter`） | 日本語の入力で変換の確定が送信にならない（#459） |
+| 実行中・送れない間（入力が空・`submitBlocked`）の Enter は何もしない。停止はボタンだけ | Enter の押し間違いで回答を止めない（buttons.md §3.1） |
+| 入力欄は回答の作成中も書ける。書けないのは前提（対象の一覧・会話の内容）の読み込み中（`disabled`）だけ。送れない間の送信のボタンは `aria-disabled`（フォーカスを受ける） | 次の質問を書ける（messaging.md §11.1）。送信の後に入力欄が空になってもフォーカスが外れない（#355） |
+| 入力欄の名前は「質問」に 3 製品でそろえ、画面には出さない（placeholder で目的を示す） | 製品ごとに「メッセージを入力…」「クエリ」「質問」と違っていた。目的は会話の領域から分かる |
+| 設定の行は「名前・info アイコン・選択」。説明は常設しない | 入力欄の上を説明の文で埋めない（#901） |
+| 停止の失敗などの通知は `footer`（入力欄の下）に出す | 起点の操作（送信 / 停止のボタン）の直下（messaging.md §10） |
+
+- 単体テストは `packages/ui/tests/chat-composer.test.tsx`。
+- 使う所: RAG（設定の行は「回答するモデル」の `ToggleChip`）、NL2SQL（「生成方法」の `SelectField`、上限 10,000 文字）、Agent（設定の行なし）。
+
+## ChatHistoryList — **新規**（#1161）
+
+チャットの会話の履歴の一覧（3 製品共通）。`ChatLayout` の `historyContent` に渡す。製品は会話・スレッドの型を `ChatHistoryItem`（`{ id, title, meta?, badge? }`）に写す。
+
+```tsx
+<ChatHistoryList
+  items={conversations.map((c) => ({ id: c.id, title: c.title, meta: formatMeta(c), badge: statusBadge(c) }))}
+  currentId={conversationId}
+  onSelect={(item) => { history.closeSheet(); open(item.id); }}
+  waiting={targetsLoading}                 // 対象の一覧の読み込み中は形だけ（経過時間は対象のカード。#1153）
+  loading={query.isLoading}
+  error={query.isError ? query.error : null}
+  onRetry={() => void query.refetch()}
+  labels={{ list: "会話の履歴", loading: "会話を読み込んでいます", error: "会話の履歴を読み込めませんでした。", retry: "再試行", empty: "まだ会話がありません" }}
+  renderActions={(item) => <><Button iconOnly icon={Pencil} … /><Button iconOnly tone="danger" icon={Trash2} … /></>}  // API がある製品だけ
+  renderEditor={(item) => (editingId === item.id ? <TitleEditor … /> : null)}
+  footer={<Pagination … />}                                  // offset の API は Pagination、カーソルは「さらに読み込む」
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 行は名前（1 行で省略し `title` で全文）・補足・状態のバッジ。高さは `INFORMATION_LIST_ROW_CLASS`（3.5rem 以上）。開いている会話は `bg-accent-subtle` と `aria-current="true"` | 3 製品で行の形・選択の示し方が違っていた（RAG は 1 行の名前と補足、NL2SQL は ghost のボタン、Agent は 2 行の名前） |
+| 行の操作（名前の変更・削除）は sm 以上ではホバー・フォーカスの間と開いている会話で出し、sm 未満は常に出す | 一覧を読みやすくし、タッチ端末ではホバーが無い |
+| 読み込み中は `TimedLoadingState` + 行の形の `ListSkeleton`、失敗は `ApiErrorBanner`（要約は `labels.error`）と再試行、0 件は短い文 | 読めていない一覧を 0 件と出さない（messaging.md §3.6）。失敗の詳細は「詳細」に畳む（§10.3） |
+| 「新しい会話」は一覧に置かない | 会話の領域の上端の行の 1 か所（#889） |
+| ページングは `footer` で製品が選ぶ | API に合わせる（page-archetypes.md「一覧の型と、基準から外す例外」） |
+
+- 単体テストは `packages/ui/tests/chat-history-list.test.tsx`。
+- 使う所: RAG（名前の変更・削除・`Pagination`）、NL2SQL（「さらに読み込む」）、Agent（状態のバッジ）。
+
+## useChatAutoScroll — **新規**（#1161）
+
+チャットの会話の欄の自動スクロールと「最新へ」（3 製品共通）。`ChatLayout` の `logRef` と `latest` につなぐ。
+
+```tsx
+const autoScroll = useChatAutoScroll({
+  contentKey: `${turns.length}:${lastStatus}:${pending?.localId ?? ""}`,  // 内容が変わったことを表す値
+  resetKey: `${targetId}:${conversationId}`,                              // 会話が変わったら末尾から
+  enabled: active,                                                         // keep-alive で隠れている間は止める
+});
+
+function submit() {
+  setPending(createOptimisticChatMessage(draft));
+  autoScroll.scrollToLatest();          // 送信の瞬間は、上を読んでいても末尾へ（messaging.md §11.1）
+}
+
+<ChatLayout
+  logRef={autoScroll.logRef}
+  latest={{ visible: autoScroll.showLatest, label: t("chat.latest"), onClick: () => autoScroll.scrollToLatest("smooth") }}
+  …
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 末尾（48px 以内）を見ている間だけ、新しい内容に合わせて末尾へ追う | 3 製品とも内容が変わるたびに末尾へ動かしていて、回答の受信中・処理の段階の更新で、上の回答を読んでいる利用者が引き戻されていた |
+| 上を読んでいる間に新しい内容が届いたら、会話の欄の下端の中央に「最新のメッセージへ」（`ArrowDown`、secondary・sm）を重ねる。末尾まで戻ると消す | ChatGPT・Claude・Slack と同じ。新しい内容に気付けて、読む位置は利用者が決める |
+| ボタンは `role="log"` の外に置く | 会話の読み上げにボタンの文言を混ぜない |
+| 会話を開いた・変えた（`resetKey`）・画面に戻ったときと送信の瞬間は、上を読んでいても末尾へ | 新しい会話は最新から読む。送った質問がすぐ見える（messaging.md §11.1） |
+| 動かすのは会話の欄の `scrollTo` だけ | 祖先（ページ）を動かさない（README §4「AppShell」） |
+
+- 単体テストは `packages/ui/tests/chat-auto-scroll.test.tsx`。実ブラウザは NL2SQL `tests/e2e/sql-chat.spec.ts` の「#1161」。
+- 会話の欄の中の特定の位置へ動かすとき（RAG の `#message-{id}` の回答へ移る）は、`logElementRef` の `scrollTo` を使う。
+
+## ChatTurn / ChatAnswer / ChatPendingTurn — **新規**（#1161）
+
+チャットの 1 往復の入れ物（3 製品共通）。質問の吹き出し（`ChatUserMessage`）と回答の枠を `<article>` にまとめる。回答の中身（処理の段階 `ChatProgress`・本文・引用・SQL・ツール・承認・評価）は製品が子要素で渡す。
+
+```tsx
+import { ChatAnswer, ChatPendingTurn, ChatTurn } from "@engchina/production-ready-ui";
+
+// 確定した往復
+<ChatTurn question={turn.question} testId="sql-chat-turn">
+  <ChatAnswer live>                       {/* 回答が後から届く製品は live（polite） */}
+    <ChatProgress … />
+    <AnswerBody … />
+  </ChatAnswer>
+</ChatTurn>
+
+// 送った質問（サーバーの応答の前・送れなかったとき。messaging.md §11）
+<ChatPendingTurn
+  message={pending}                       // createOptimisticChatMessage の仮のメッセージ
+  failedLabel={t("chat.sendFailed")}      // 「送信できませんでした」
+  progress={<ChatProgress steps={chatSubmitProgressSteps(pending.sentAtMs)} … />}
+  failure={<ApiErrorBanner error={sendError} fallback={…} action={<Button icon={RotateCcw}>再送信</Button>} />}
+  testId="chat-pending-turn"
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 1 往復は `<article>`（質問と回答の間 0.5rem）。往復の間は会話の欄（`ChatLayout`）が 1.25rem を空ける | 3 製品で `div` / `article` と間隔が違っていた。往復のまとまりを読み上げでも区切る |
+| 回答の枠は `rounded-md`・`border`・`bg-surface`・`p-3`、中は縦に 0.75rem 間隔（`ChatAnswer`） | NL2SQL は `Card`（影・角丸 lg）、RAG・Agent は枠線の箱で、余白も違っていた。会話の欄の中で影を重ねない |
+| 送信中は回答の枠に処理の段階だけを出し、送れなかったら枠を出さずに原因と「再送信」を出す（`ChatPendingTurn`） | 送れなかった質問を残し、入力欄に戻さない（messaging.md §11.3）。動くスピナーは回答の場所の 1 つだけ |
+| 複数モデルの比較（RAG）は `ChatAnswer` を列にして並べる（`className` で `h-full`） | 比較の列も同じ枠にする |
+
+- 単体テストは `packages/ui/tests/chat-turn.test.tsx`。
+- 使う所: RAG `MessageTurn` / `AssistantColumn`、NL2SQL `SqlChatTurn` と送信中の往復、Agent `RunChatTurn` / `PendingTurn`。

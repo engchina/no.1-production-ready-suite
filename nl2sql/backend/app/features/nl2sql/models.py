@@ -66,7 +66,7 @@ class JobStepStatus(StrEnum):
 
 
 class FeedbackRating(StrEnum):
-    """検索結果へのフィードバック。"""
+    """実行結果へのフィードバック。"""
 
     GOOD = "good"
     BAD = "bad"
@@ -997,7 +997,7 @@ class Nl2SqlResult(BaseModel):
 
 
 class Nl2SqlQuestionInterpretation(BaseModel):
-    """検索質問を業務実行向けに解釈した表示用 artifact。"""
+    """質問を業務実行向けに解釈した表示用 artifact。"""
 
     available: bool = False
     source: str = "deterministic"
@@ -1064,6 +1064,10 @@ class Nl2SqlOntologyGraphSnapshot(BaseModel):
     edges: list[dict[str, Any]] = Field(default_factory=list)
 
 
+# 接地確認を有効にしたが行わなかった理由（空は行った、または無効）。#1168
+OntologyGroundingSkipReason = Literal["", "no_published_ontology"]
+
+
 class Nl2SqlInterpretationArtifact(BaseModel):
     """質問解釈と SQL 意味グラフの表示用 artifact。"""
 
@@ -1071,9 +1075,14 @@ class Nl2SqlInterpretationArtifact(BaseModel):
     question: Nl2SqlQuestionInterpretation = Field(default_factory=Nl2SqlQuestionInterpretation)
     sql: Nl2SqlSqlInterpretation = Field(default_factory=Nl2SqlSqlInterpretation)
     ontology_graph: Nl2SqlOntologyGraphSnapshot | None = None
-    # use_ontology_context のエコー。False のとき UI は Ontology 接地確認を表示しない。
+    # 接地確認をしたか（JobCreateRequest.ontology_grounding_requested のエコー。#1172）。
+    # False のとき UI は Ontology 接地確認を表示しない。
     # 既存永続 job(フィールド無し)は従来挙動を保つため default True。
     ontology_grounding_enabled: bool = True
+    # 接地確認を有効にしたが行わなかった理由。"no_published_ontology" は、業務プロファイルに
+    # 公開されたオントロジーが無いこと（ジョブの中でその場で同期・構築しない。#1168）。
+    # 空は接地確認をした（または無効）こと。失敗はこの項目でなく warnings に出す。
+    ontology_grounding_skip_reason: OntologyGroundingSkipReason = ""
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -1166,10 +1175,10 @@ class ExecuteRequest(BaseModel):
         return _validate_sql_row_limit(value)
 
 
-# クエリの長さの上限（チャットの入力欄の maxLength と同じ）。
+# 質問の長さの上限（チャットの入力欄の maxLength と同じ）。
 JOB_QUESTION_MAX_LENGTH = 10000
 # 永続化したジョブの snapshot を読み戻すときの validation context の key。以前の規則で受け付けて
-# 保存したクエリ（空白だけ・上限超え）でも読めるように、入力の検証を掛けない（#1054）。
+# 保存した質問（空白だけ・上限超え）でも読めるように、入力の検証を掛けない（#1054）。
 STORED_JOB_REQUEST_CONTEXT = "stored_job_request"
 
 
@@ -1183,12 +1192,23 @@ class JobCreateRequest(BaseModel):
     row_limit: int | None = Field(default=None, ge=1, le=5000)
     select_ai_overrides: SelectAiRequestOverrides | None = None
     use_glossary: bool = False
+    # SQL の生成の prompt に公開版のオントロジーの文脈を入れる（公開版の確定もこれで決まる）。
     use_ontology_context: bool = True
+    # 生成後の接地確認（結果の整形の段階で公開版のグラフを読み、`interpretation.ontology_graph`
+    # を作る）の要否。未指定（None）は `use_ontology_context` に従う（SQL 生成の画面・MCP の既定）。
+    # 接地確認を表示しないチャットは false を送り、生成の文脈だけを使う（#1172）。
+    # 公開版の確定が前提のため、`use_ontology_context` が false なら指定にかかわらず行わない。
+    include_ontology_grounding: bool | None = None
     include_interpretation: bool = False
     include_show_prompt: bool = False
-    # チャットは既存の非同期ジョブで生成・安全検査だけを行う。既存 API の既定は実行あり。
-    # 3 つの生成方法とも生成だけで実行しない（Select AI Agent の SQL ツールは SHOWSQL。#890）。
+    # 生成と安全検査だけを行い、SQL を実行しない（実行の段階は SKIPPED）。既定は実行あり。
+    # チャットのターンは、SQL 生成の画面と同じく生成した SQL を同じジョブで実行する（#1176）。
+    # 実行の権限（`nl2sql.sql.execute`）が無い利用者のチャットは、route がこれを true にする。
+    # 旧版のチャット（#1176 より前）はこれだけでチャットのターンを表していた（`is_chat_turn`）。
     generation_only: bool = False
+    # チャット（会話）のターン（#1176）。会話の継続・本人だけの参照・会話の一覧・ターンの
+    # SQL の実行の対象になる。実行は `generation_only` で決める（SQL 生成のジョブと同じ）。
+    chat: bool = False
     previous_job_id: str | None = Field(default=None, max_length=64)
     # 画面が送信の前に決める job ID（UUID。#900）。送信の応答が届かなかった（timeout・通信断）
     # ときも、画面はこの ID でジョブを取り直して表示を続けられる。同じ ID の再送は同じジョブを返す。
@@ -1202,17 +1222,28 @@ class JobCreateRequest(BaseModel):
         if isinstance(info.context, Mapping) and info.context.get(STORED_JOB_REQUEST_CONTEXT):
             return value
         if not value.strip():
-            raise ValueError("クエリを入力してください。")
+            raise ValueError("質問を入力してください。")
         if len(value) > JOB_QUESTION_MAX_LENGTH:
-            raise ValueError(f"クエリは {JOB_QUESTION_MAX_LENGTH} 文字以内で入力してください。")
+            raise ValueError(f"質問は {JOB_QUESTION_MAX_LENGTH} 文字以内で入力してください。")
         return value
 
     @model_validator(mode="after")
     def validate_select_ai_overrides(self) -> JobCreateRequest:
         _validate_select_ai_request_overrides(self.engine, self.select_ai_overrides)
-        if self.previous_job_id and not self.generation_only:
-            raise ValueError("会話の継続は SQL の生成だけのジョブで利用できます。")
+        if self.previous_job_id and not self.is_chat_turn:
+            raise ValueError("会話の継続はチャットのジョブで利用できます。")
         return self
+
+    @property
+    def is_chat_turn(self) -> bool:
+        """チャット（会話）のターンか（旧版のチャットは `generation_only` だけ。#1176）。"""
+        return self.chat or self.generation_only
+
+    @property
+    def ontology_grounding_requested(self) -> bool:
+        """生成後の接地確認をするか（#1172）。"""
+
+        return self.use_ontology_context and self.include_ontology_grounding is not False
 
 
 class JobCreateData(BaseModel):
@@ -1222,6 +1253,53 @@ class JobCreateData(BaseModel):
     status: JobStatus
     created_at: str
     steps: list[JobStepData] = Field(default_factory=list)
+
+
+class SqlChatExecutionSummary(BaseModel):
+    """チャットのターンの SQL を最後に実行したときの要約（#1154）。
+
+    結果の行は保存しない（会話は長く残るため、業務データの行を会話に残さない）。会話を開き直した
+    画面は、この要約と「もう一度実行」を出す。
+    """
+
+    status: Literal["done", "error"]
+    executed_at: str
+    elapsed_ms: int = 0
+    row_count: int = 0
+    column_count: int = 0
+    has_more: bool = False
+    error_code: str | None = None
+    # 実行を記録した実行履歴（監査）の ID。
+    history_id: str = ""
+    # ジョブの中で実行したとき（#1176）、結果の行を受け取れる期限（ISO 8601）。行は会話に残さず、
+    # 画面が 1 回だけ受け取る（`POST /jobs/{job_id}/execution-result`）。明示の実行（`/execute`）は
+    # 応答で行を返すので None。
+    result_expires_at: str | None = None
+
+
+class SqlChatExecuteData(BaseModel):
+    """チャットのターンの SQL の実行の結果（#1154）。
+
+    実行の失敗（Oracle のエラー・実行の時点の安全検査の不合格）は 200 で `status="error"` にし、
+    SQL 生成のジョブと同じく `error_message`（利用者向け）・`error_code`・`error_detail`（技術的な
+    詳細）に分ける。
+    """
+
+    job_id: str
+    status: Literal["done", "error"]
+    executed_at: str
+    elapsed_ms: int = 0
+    executable_sql: str = ""
+    results: QueryResults
+    # 1 回の実行で取得する行数の上限・セルの文字数の上限（設定値。画面の打ち切りの文言に使う）。
+    row_limit: int
+    max_cell_chars: int
+    # セルの文字数の上限で文字を切ったセルがあるか。
+    cells_truncated: bool = False
+    error_message: str | None = None
+    error_code: str | None = None
+    error_detail: str | None = None
+    history_id: str = ""
 
 
 class JobData(BaseModel):
@@ -1236,6 +1314,8 @@ class JobData(BaseModel):
     conversation_id: str = ""
     previous_job_id: str | None = None
     generation_only: bool = False
+    # チャット（会話）のターンか（#1176。旧版のチャットは generation_only だけで表す）。
+    chat: bool = False
     # 生成方法（チャットの段階の補足に出す。#1145）。
     engine: Nl2SqlEngine | None = None
     created_at: str
@@ -1252,6 +1332,8 @@ class JobData(BaseModel):
     warning_message: str | None = None
     timing: TimingEnvelope | None = None
     steps: list[JobStepData] = Field(default_factory=list)
+    # チャットのターンの SQL を最後に実行したときの要約（行は持たない。#1154）。
+    last_execution: SqlChatExecutionSummary | None = None
 
 
 class SqlChatSummary(BaseModel):
@@ -1274,7 +1356,7 @@ class SqlChatData(BaseModel):
 
 
 class HistoryItem(BaseModel):
-    """検索履歴。"""
+    """実行履歴。"""
 
     generation_only: bool = False
 
@@ -1324,7 +1406,7 @@ class HistoryItem(BaseModel):
 
 
 class HistoryData(BaseModel):
-    """検索履歴 response(cursor pagination)。"""
+    """実行履歴 response(cursor pagination)。"""
 
     items: list[HistoryItem]
     # 続きがあるときだけ非空。UI は「さらに読み込む」でこの cursor を渡す。
@@ -1334,7 +1416,7 @@ class HistoryData(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    """検索結果への feedback request."""
+    """実行結果への feedback request."""
 
     history_id: str
     rating: FeedbackRating

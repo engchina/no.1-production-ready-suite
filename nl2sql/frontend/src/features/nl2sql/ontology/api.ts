@@ -106,7 +106,7 @@ function payloadMessage(payload: ApiEnvelope<unknown>, status: number): string {
     const message = payload.detail.message_ja ?? payload.detail.message ?? payload.detail.error;
     if (typeof message === "string") return message;
   }
-  return `クエリセッション API の呼び出しに失敗しました（HTTP ${status}）。`;
+  return `質問の解釈を処理できませんでした（HTTP ${status}）。`;
 }
 
 function conflictDetails(payload: ApiEnvelope<unknown>): {

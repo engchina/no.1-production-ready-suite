@@ -145,7 +145,8 @@ test("データ管理プレビューは取得件数上限を指定でき、詳�
   assert.match(dataManagementSource, /size="lg"[\s\S]*?\{t\("dataMgmt\.preview\.clear"\)\}/u);
   assert.match(dataManagementSource, /onSelectPreviewObject=\{\(objectName\) => selectPreviewObject\(objectName, \{ manualSelection: true \}\)\}/u);
   assert.match(dataManagementSource, /setPreviewRowLimitInput\(String\(DEFAULT_DATA_PREVIEW_ROW_LIMIT\)\)/u);
-  assert.match(dataManagementSource, /<QueryResultsTable results=\{preview\.results\} rowLimit=\{executedRowLimit\} \/>/u);
+  // 表示結果は共通の結果の表（要約・プレビュー・すべての行のシート・CSV。#1178）。
+  assert.match(dataManagementSource, /<QueryResultTable\s+results=\{preview\.results\}\s+rowLimit=\{executedRowLimit\}/u);
   assert.match(dataManagementSource, /where_clause: ""/u);
   assert.equal(t("queryResults.rowLimit.helper"), "1〜100000 の整数。取得上限を明示してください。");
   assert.equal(t("dataMgmt.preview.clear"), "表示件数・結果をリセット");

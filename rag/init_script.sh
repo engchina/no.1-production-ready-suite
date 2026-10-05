@@ -824,6 +824,8 @@ configure_nginx() {
   template_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../platform/templates/nginx" && pwd)"
   mkdir -p "${logging_dir}"
   install -m 0644 "${template_dir}/logging.conf" "${logging_dir}/production-ready-logging.conf"
+  # ログインの API の送信元 IP ごとの緩い上限（limit_req_zone。#1173）。
+  install -m 0644 "${template_dir}/login-rate-limit.conf" "${logging_dir}/production-ready-login-rate-limit.conf"
   local client_max_body_size
   client_max_body_size="$(nginx_client_max_body_size)" || return 1
   log "Configuring Nginx on port ${APPLICATION_PORT} (client_max_body_size ${client_max_body_size})."
@@ -853,10 +855,10 @@ server {
     # 600 秒）と画面の timeout（630 秒）より長くし、backend の 504 と理由を画面に届ける。
     # - 保存済みの回答の評価（標準回答による評価。#304）: 画面が失敗を出した後で評価を保存しない。
     # - チャット・RAG 検索の回答生成（RAG_ANSWER_TIMEOUT_SECONDS。上限 600 秒。#375）と、
-    #   同じ回答生成を呼ぶ MCP（rag_search）。
+    #   同じ回答生成を呼ぶ MCP（rag_search）。チャットの作成中の回答の再購読（#1175）も同じ。
     # - 品質評価（golden set。/api/evaluation/run・/compare。#383）: backend は評価全体を 600 秒で
     #   打ち切り、残りのケースを失敗として結果を返す。
-    location ~ ^/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|mcp)\$ {
+    location ~ ^/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|chat/conversations/[^/]+/messages/[^/]+/stream|mcp)\$ {
         proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
@@ -869,6 +871,31 @@ server {
         proxy_cache off;
         proxy_send_timeout 660s;
         proxy_read_timeout 660s;
+    }
+
+    # ログインの API だけ、送信元 IP ごとに緩く上限を掛ける（#1173。zone は
+    # platform/templates/nginx/login-rate-limit.conf）。回数の制限の正本は backend
+    # （PLATFORM_AUTH_LOGIN_*）で、ここは大量の要求を照合・DB の前で止める。backend の 429 はそのまま返す。
+    location = /api/auth/login {
+        limit_req zone=pr_login burst=30 nodelay;
+        limit_req_status 429;
+        error_page 429 = @pr_login_rate_limited;
+        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Request-ID \$pr_request_id;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+    }
+
+    location @pr_login_rate_limited {
+        default_type application/json;
+        add_header Retry-After 60 always;
+        return 429 '{"success":false,"data":null,"error_code":"SECURITY_RATE_LIMITED","error_messages":["ログインの試行が多すぎます。しばらく待ってから、もう一度お試しください。"]}';
     }
 
     location /api/ {

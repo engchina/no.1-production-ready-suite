@@ -205,7 +205,7 @@ async function mockChat(
       if (conversationListMode === "error") {
         await route.fulfill({
           status: 500,
-          json: { data: null, error_messages: ["test error"], warning_messages: [] },
+          json: { data: null, error_messages: ["会話一覧を読み込めませんでした。"], warning_messages: [] },
         });
         return;
       }
@@ -325,7 +325,7 @@ for (const viewport of [
 
     await page.getByRole("button", { name: "新しい会話" }).click();
 
-    await expect(page.getByText("最初のメッセージを送信して会話を始めましょう。")).toBeVisible();
+    await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
     await expectChatWorkspaceLayout(page, viewport.name as "desktop" | "mobile");
 
     const composer = page.getByRole("textbox");
@@ -667,7 +667,7 @@ test("未送信の会話があれば新しい会話を増やさず再利用す�
   await history.getByRole("button", { name: "会話の履歴を閉じる" }).click();
   await expect(history).toBeHidden();
   await newConversation.click();
-  await expect(page.getByRole("textbox", { name: "メッセージを入力…（Enter で送信 / Shift+Enter で改行）" })).toBeFocused();
+  await expect(page.getByRole("textbox", { name: "質問", exact: true })).toBeFocused();
   expect(createRequests).toBe(1);
   await expectNoPageOverflow(page);
 });
@@ -784,7 +784,7 @@ test("IME の変換を確定する Enter では送信しない（#459）", async
   await selectSearchAnswerProfile(page, "経理アシスタント");
   await page.getByRole("button", { name: "新しい会話" }).click();
 
-  const composer = page.getByRole("textbox", { name: "メッセージを入力…（Enter で送信 / Shift+Enter で改行）" });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("けいひのじょうげん");
   // 変換中の keydown（isComposing=true）は送信しない。
   await composer.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true, bubbles: true });
@@ -813,7 +813,7 @@ test("送信と停止は同じボタンで、生成中の Enter では停止し�
   await selectSearchAnswerProfile(page, "経理アシスタント");
   await page.getByRole("button", { name: "新しい会話" }).click();
 
-  const composer = page.getByRole("textbox", { name: "メッセージを入力…（Enter で送信 / Shift+Enter で改行）" });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   const button = page.getByTestId("chat-run-stop");
   await expect(button).toHaveAccessibleName("送信");
   // 入力が空の間は送信できない（フォーカスは受ける）。
@@ -943,14 +943,14 @@ test("会話を選ばずに送信すると会話を作って回答する（#664�
   await page.goto("/chat");
   await selectSearchAnswerProfile(page, "経理アシスタント");
 
-  await expect(page.getByText("最初のメッセージを送信して会話を始めましょう。")).toBeVisible();
+  await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
   // 会話を選んでいない間は、上端に会話の名前を出さない。
   await expect(page.getByTestId("chat-conversation-title")).toHaveCount(0);
   const created = page.waitForRequest(
     (request) =>
       request.method() === "POST" && new URL(request.url()).pathname === "/api/chat/conversations"
   );
-  const composer = page.getByRole("textbox", { name: /メッセージを入力/ });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await expect(composer).toBeEnabled();
   await composer.fill("経費の上限は？");
   await page.getByRole("button", { name: "送信" }).click();
@@ -994,7 +994,7 @@ for (const viewport of [
 
     await page.goto("/chat");
     await selectSearchAnswerProfile(page, "経理アシスタント");
-    const composer = page.getByRole("textbox", { name: /メッセージを入力/ });
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
     await composer.fill("経費の上限は？");
     await page.getByRole("button", { name: "送信" }).click();
 
@@ -1135,7 +1135,7 @@ for (const viewport of [
 
     await page.goto("/chat");
     await selectSearchAnswerProfile(page, "経理アシスタント");
-    const composer = page.getByRole("textbox", { name: /メッセージを入力/ });
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
     await composer.fill("申請の期限は？");
     await page.getByRole("button", { name: "送信" }).click();
 
@@ -1199,7 +1199,7 @@ test("範囲を絞った回答の下から、範囲を指定せずに同じ質�
 
   await page.goto("/chat");
   await selectSearchAnswerProfile(page, "経理アシスタント");
-  await page.getByRole("textbox", { name: /メッセージを入力/ }).fill("経費の上限は？");
+  await page.getByRole("textbox", { name: "質問", exact: true }).fill("経費の上限は？");
   await page.getByRole("button", { name: "送信" }).click();
   await expect.poll(() => streamBodies.length).toBe(1);
 
@@ -1243,7 +1243,7 @@ async function expectChatScrolledToEnd(page: Page) {
     .toBeLessThanOrEqual(2);
 }
 
-const chatComposer = (page: Page) => page.getByRole("textbox", { name: /メッセージを入力/ });
+const chatComposer = (page: Page) => page.getByRole("textbox", { name: "質問", exact: true });
 
 async function screenshotBothThemes(page: Page, target: Locator, path: (theme: string) => string) {
   for (const theme of ["light", "dark"] as const) {
@@ -1277,7 +1277,7 @@ for (const viewport of [
 
     await page.goto("/chat");
     await selectSearchAnswerProfile(page, "経理アシスタント");
-    const empty = page.getByText("最初のメッセージを送信して会話を始めましょう。");
+    const empty = page.getByText("質問を入力して会話を始めます");
     await expect(empty).toBeVisible();
 
     const composer = chatComposer(page);
@@ -1415,7 +1415,7 @@ for (const viewport of [
     // 止めた質問は新しい会話に持ち越さない。
     await page.getByRole("button", { name: "新しい会話" }).click();
     await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
-    await expect(page.getByText("最初のメッセージを送信して会話を始めましょう。")).toBeVisible();
+    await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
   });
 }
 
@@ -1465,7 +1465,7 @@ test("生成中に新しい会話を作ると、前の会話の生成を止め�
   await expect(page.getByTestId("chat-live-turn").getByTestId("chat-answer-progress")).toBeVisible();
 
   await page.getByRole("button", { name: "新しい会話" }).click();
-  await expect(page.getByText("最初のメッセージを送信して会話を始めましょう。")).toBeVisible();
+  await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
   await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
   await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("送信");
   await expect.poll(() => streamAborted).toBe(true);

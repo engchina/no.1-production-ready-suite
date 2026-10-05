@@ -231,7 +231,7 @@ test("チャットは参照 KB が 0 件の検索・回答プロファイルで�
   await expect(banner.getByRole("button", { name: "検索・回答プロファイルの設定を開く" })).toBeVisible();
   const conversations = await openChatHistory(page);
   await conversations.getByRole("list", { name: "会話の履歴" }).getByRole("button").first().click();
-  await page.getByRole("textbox", { name: /メッセージ/ }).fill("経費の上限は？");
+  await page.getByRole("textbox", { name: "質問", exact: true }).fill("経費の上限は？");
   await expect(page.getByRole("button", { name: "送信" })).toBeDisabled();
   await expectNoPageOverflow(page);
 });

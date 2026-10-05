@@ -513,6 +513,11 @@ export interface Nl2SqlInterpretationArtifact {
   ontology_graph?: OntologyGraph | null;
   /** use_ontology_context のエコー。false のとき Ontology 接地確認を表示しない(未指定は互換で表示)。 */
   ontology_grounding_enabled?: boolean;
+  /**
+   * 接地確認を有効にしたが行わなかった理由。"no_published_ontology" は業務プロファイルに公開された
+   * オントロジーが無いこと(ジョブはその場で同期・構築しない。#1168)。空・未指定は接地確認をした。
+   */
+  ontology_grounding_skip_reason?: "" | "no_published_ontology";
   warnings: string[];
 }
 
@@ -591,7 +596,10 @@ export interface JobData {
   profile_id?: string;
   conversation_id?: string;
   previous_job_id?: string | null;
+  /** 生成と安全検査だけで実行しない（実行の権限が無い利用者のチャット・#1176 より前のチャット）。 */
   generation_only?: boolean;
+  /** チャット（会話）のターンか（#1176）。 */
+  chat?: boolean;
   /** 生成方法（#1145。チャットの段階の補足に出す）。 */
   engine?: Nl2SqlEngine;
   status: JobStatus;
@@ -608,6 +616,48 @@ export interface JobData {
   warning_message?: string | null;
   timing?: TimingEnvelope | null;
   steps: JobStepData[];
+  /** チャットのターンの SQL を最後に実行したときの要約（行は保存しない。#1154）。 */
+  last_execution?: SqlChatExecutionSummary | null;
+}
+
+/** チャットのターンの SQL を最後に実行したときの要約（#1154）。 */
+export interface SqlChatExecutionSummary {
+  status: "done" | "error";
+  executed_at: string;
+  elapsed_ms: number;
+  row_count: number;
+  column_count: number;
+  has_more: boolean;
+  error_code?: string | null;
+  history_id: string;
+  /**
+   * ジョブの中で実行したとき（#1176）、結果の行を受け取れる期限（ISO 8601）。行は会話に残さず、
+   * 画面が `POST /api/nl2sql/jobs/{job_id}/execution-result` で 1 回だけ受け取る。
+   */
+  result_expires_at?: string | null;
+}
+
+/**
+ * `POST /api/nl2sql/jobs/{job_id}/execute`（#1154）と
+ * `POST /api/nl2sql/jobs/{job_id}/execution-result`（#1176）の応答。
+ */
+export interface SqlChatExecuteData {
+  job_id: string;
+  status: "done" | "error";
+  executed_at: string;
+  elapsed_ms: number;
+  executable_sql: string;
+  results: QueryResults;
+  /** 1 回の実行で取得する行数の上限（設定値）。 */
+  row_limit: number;
+  /** セルの文字数の上限（設定値）。 */
+  max_cell_chars: number;
+  /** 文字数の上限で文字を切ったセルがあるか。 */
+  cells_truncated: boolean;
+  error_message?: string | null;
+  error_code?: string | null;
+  error_detail?: string | null;
+  history_id: string;
 }
 
 export interface HistoryItem {

@@ -6,6 +6,12 @@ export { DATABASE_UNAVAILABLE_EVENT };
 export const DATABASE_READINESS_PATH = "/api/ready/database";
 export const PERSISTENCE_STATUS_PATH = "/api/nl2sql/persistence";
 export const PERSISTENCE_RECOVERY_PATH = "/api/nl2sql/persistence/recover";
+/**
+ * DB の状態の確認（readiness → persistence）全体の待ち時間の上限（#1160）。
+ * backend が詰まっている間は確認も返らず（Nginx の上限は 600 秒）、確認を待つ API 呼び出し（チャットの
+ * ジョブの取り直しなど）が止まったままになっていた。超えたら確認できなかったものとして元の失敗を返す。
+ */
+export const DATABASE_PROBE_TIMEOUT_MS = 10_000;
 
 export type DatabaseReadinessStatus =
   | "ok"
@@ -91,18 +97,22 @@ export function shouldConfirmDatabaseUnavailable(path: string, status: number): 
  */
 export function confirmDatabaseUnavailable(
   fetchReadiness: FetchDatabaseReadiness = fetch,
-  report: ReportDatabaseUnavailable = reportDatabaseOperationalFailure
+  report: ReportDatabaseUnavailable = reportDatabaseOperationalFailure,
+  timeoutMs: number = DATABASE_PROBE_TIMEOUT_MS
 ): Promise<DatabaseOperationalFailure | null> {
   if (inFlightProbe) return inFlightProbe;
 
   const generation = ++probeGeneration;
+  // 確認の全体（2 回の要求と本文の読み取り）に上限を付ける。fetch が signal を見ない場合も上限で打ち切る。
+  const signal = AbortSignal.timeout(timeoutMs);
   let probe: Promise<DatabaseOperationalFailure | null>;
-  probe = (async () => {
+  const checked = (async () => {
     try {
       const response = await fetchReadiness(DATABASE_READINESS_PATH, {
         method: "GET",
         headers: { Accept: "application/json" },
         credentials: "include",
+        signal,
       });
       if (!response.ok) return null;
 
@@ -121,6 +131,7 @@ export function confirmDatabaseUnavailable(
         method: "GET",
         headers: { Accept: "application/json" },
         credentials: "include",
+        signal,
       });
       if (!persistenceResponse.ok) return null;
       const persistencePayload = (await persistenceResponse.json()) as { data?: unknown };
@@ -142,7 +153,12 @@ export function confirmDatabaseUnavailable(
       // readiness 自体を確認できない場合は、元の画面固有エラーを維持する。
       return null;
     }
-  })().finally(() => {
+  })();
+  const timedOut = new Promise<null>((resolve) => {
+    if (signal.aborted) resolve(null);
+    else signal.addEventListener("abort", () => resolve(null), { once: true });
+  });
+  probe = Promise.race([checked, timedOut]).finally(() => {
     if (inFlightProbe === probe) inFlightProbe = null;
   });
 

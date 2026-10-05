@@ -27,12 +27,12 @@ import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import {
-  QueryResultsTable,
   StatementRunnerCard,
   DbAdminErrorNotice,
   downloadBlob,
   fileToBase64,
 } from "../components/DbAdminShared";
+import { QueryResultTable } from "../components/QueryResultTable";
 import {
   DbObjectDetailPanel,
   DbObjectGrid,
@@ -112,12 +112,15 @@ function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
         <code>{`${result.ddl}\n\n${result.insert_sql}`}</code>
       </pre>
       {result.sample_rows.length > 0 && (
-        <QueryResultsTable
+        <QueryResultTable
           results={{
             columns: Object.keys(result.sample_rows[0] ?? {}),
             rows: result.sample_rows,
             total: result.sample_rows.length,
           }}
+          name={t("queryResults.name.importPreview")}
+          csvFilePrefix="nl2sql-table-import-preview"
+          testId="table-import-preview"
         />
       )}
     </section>

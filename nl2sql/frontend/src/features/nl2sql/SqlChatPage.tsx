@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import {
   useInfiniteQuery,
   useMutation,
@@ -7,13 +7,10 @@ import {
 } from "@tanstack/react-query";
 import {
   Copy,
-  MessageSquarePlus,
-  PanelLeftClose,
-  PanelLeftOpen,
+  Play,
   RefreshCw,
   RotateCcw,
   Search,
-  SendHorizontal,
 } from "lucide-react";
 import {
   ApiErrorBanner,
@@ -21,28 +18,31 @@ import {
   Button,
   Card,
   CardContent,
+  ChatComposer,
+  ChatComposerOption,
+  ChatHistoryList,
+  ChatLayout,
   ChatProgress,
-  ChatUserMessage,
+  ChatSkeleton,
+  ChatAnswer,
+  ChatPendingTurn,
+  ChatTurn,
   EmptyState,
-  FieldActionRow,
-  InfoTip,
-  ListSkeleton,
   MessageText,
   PageBody,
   PageHeader,
-  RunStopButton,
   SearchableSelectField,
   SelectField,
-  SideSheet,
   Skeleton,
   StatusBadge,
-  TextareaField,
   TimedLoadingState,
   createOptimisticChatMessage,
-  isSubmitEnter,
+  useChatProgressTracker,
   toast,
   withOptimisticChatStatus,
   type OptimisticChatMessage,
+  useChatAutoScroll,
+  useChatHistoryPanel,
 } from "@engchina/production-ready-ui";
 import {
   useWorkspaceActive,
@@ -54,6 +54,15 @@ import { t } from "@/lib/i18n";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { randomUuid } from "@/lib/randomUuid";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
+import { useAuth } from "@/features/security/AuthProvider";
+import {
+  CAPABILITY_PERMISSIONS,
+  MENU_PERMISSIONS,
+} from "@/features/security/menu-permissions";
+import {
+  ChatSqlExecutionResult,
+  useChatSqlExecution,
+} from "./components/ChatSqlExecution";
 import { JobFailureBody } from "./components/JobFailureBody";
 import {
   useProfileUsageContext,
@@ -83,6 +92,13 @@ interface ConversationData {
 }
 const inFlight = (job: JobData | undefined) =>
   job?.status === "pending" || job?.status === "running";
+/** 会話の取り直しの間隔。 */
+const CHAT_POLL_INTERVAL_MS = 1500;
+/**
+ * 会話の取り直しが成功しないまま、この時間が過ぎたら取り直し直す（#1160）。取り直しは
+ * {@link CHAT_POLL_INTERVAL_MS} ごとなので、その数回分。応答しない取得を打ち切って新しく取り直す。
+ */
+const CHAT_PROGRESS_STALE_AFTER_MS = 10_000;
 const errorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
 
@@ -116,7 +132,10 @@ async function submitChatJob(
   try {
     return await apiPost<JobCreateData>(
       "/api/nl2sql/jobs",
-      { ...request, generation_only: true, use_ontology_context: true },
+      // チャットも SQL 生成の画面と同じく、生成した SQL を同じジョブで実行する（#1176）。実行の権限が
+      // 無い利用者は backend が生成だけにする。生成の prompt には公開版のオントロジーを使い、画面に出さない
+      // 生成後の接地確認は求めない（#1172）。
+      { ...request, chat: true, use_ontology_context: true, include_ontology_grounding: false },
       { timeoutMs: API_TIMEOUT_MS.jobSubmit },
     );
   } catch (cause) {
@@ -152,8 +171,9 @@ const dateFormatter = new Intl.DateTimeFormat("ja-JP", {
 });
 
 /**
- * チャットの生成方法（#890）。SQL 生成画面の実行エンジン（`EngineSelector`）と同じ 3 つで、どれも生成と
- * 安全検査だけを行い SQL を実行しない（Select AI Agent の SQL ツールは SHOWSQL）。
+ * チャットの生成方法（#890）。SQL 生成画面の実行エンジン（`EngineSelector`）と同じ 3 つ。どれも SQL の
+ * 生成だけを生成方法が行い（Select AI Agent の SQL ツールは SHOWSQL）、安全検査と実行は SQL 生成の画面と
+ * 同じ backend の経路が行う（#1176）。
  */
 const CHAT_ENGINES: ReadonlyArray<{
   value: Nl2SqlEngine;
@@ -177,22 +197,16 @@ const CHAT_ENGINES: ReadonlyArray<{
   },
 ];
 
-function useInlineHistory() {
-  const [inline, setInline] = useState(
-    () => window.matchMedia("(min-width: 1024px)").matches,
-  );
-  useEffect(() => {
-    const media = window.matchMedia("(min-width: 1024px)");
-    const update = () => setInline(media.matches);
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-  return inline;
-}
-
-/** 1 往復を永続ジョブにし、前文はサーバーで復元する。送信では SQL を実行しない。 */
+/**
+ * 1 往復を永続ジョブにし、前文はサーバーで復元する。SQL 生成の画面と同じく、送信のジョブが生成・安全性の
+ * 確認・実行まで行う（#1176）。結果の行は会話に残さず、画面が 1 回だけ受け取る。
+ */
 export function SqlChatPage() {
   const active = useWorkspaceActive();
+  const { hasPermission } = useAuth();
+  // 生成した SQL の実行（#1154）は SQL 生成の画面・SELECT SQL の実行と同じ実行の権限が要る。
+  const canExecuteSql = hasPermission(CAPABILITY_PERMISSIONS.sqlExecute);
+  const canOpenDirectSql = hasPermission(MENU_PERMISSIONS.directSql);
   const identity = useWorkspaceIdentity();
   const queryClient = useQueryClient();
   const [profileId, setProfileId] = useWorkspaceState("profileId", "");
@@ -212,24 +226,23 @@ export function SqlChatPage() {
     "historyOpen",
     false,
   );
-  const [historySheetOpen, setHistorySheetOpen] = useState(false);
+  // 開閉の判定・シートの開閉は共通の useChatHistoryPanel（3 製品共通。#1161）。
+  const historyPanel = useChatHistoryPanel({
+    inlineOpen: historyPanelOpen,
+    onInlineOpenChange: setHistoryPanelOpen,
+    id: "sql-chat-history",
+  });
   const [profileSearch, setProfileSearch] = useState("");
   // 送った質問（#907）。ジョブの投入の応答を待たずに会話の欄の末尾へ出し、投入できたら会話のジョブに置き換える。
   // 投入できなかったときは残して「再送信」を出す。
   const [pendingSend, setPendingSend] = useState<PendingSend | null>(null);
+  // 送信した時刻（job ID ごと）。処理の経過の経過時間を、送信から数え続ける（#1176。送信の応答の後に
+  // ジョブの作成の時刻から数え直さない）。画面を開き直したときはジョブの作成の時刻から数える。
+  const [sentAtByJob, setSentAtByJob] = useState<Record<string, number>>({});
   const pending = pendingSend?.message ?? null;
-  const inlineHistory = useInlineHistory();
-  const [previousInline, setPreviousInline] = useState(inlineHistory);
-  if (previousInline !== inlineHistory) {
-    setPreviousInline(inlineHistory);
-    setHistorySheetOpen(false);
-  }
-  const historyOpen = inlineHistory ? historyPanelOpen : historySheetOpen;
   const engineDescriptionId = useId();
   const engineOption =
     CHAT_ENGINES.find((option) => option.value === engine) ?? CHAT_ENGINES[0];
-  const historyToggleRef = useRef<HTMLButtonElement>(null);
-  const conversationRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
   const profiles = useProfileSummaries(profileSearch);
   const profileOptions =
@@ -270,8 +283,14 @@ export function SqlChatPage() {
         { signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail },
       ),
     refetchInterval: (query) =>
-      active && query.state.data?.turns.some(inFlight) ? 1500 : false,
+      active && query.state.data?.turns.some(inFlight)
+        ? CHAT_POLL_INTERVAL_MS
+        : false,
   });
+  // 処理の経過の取り直し（#1160）。応答しない取得（取得中は interval が次を始めない）を打ち切って取り直す。
+  const refetchConversation = conversation.refetch;
+  const refreshConversation = () =>
+    refetchConversation({ cancelRefetch: true, throwOnError: false });
   const turns = conversation.data?.turns ?? [];
   const latest = turns.at(-1);
   const generating = turns.some(inFlight);
@@ -308,7 +327,8 @@ export function SqlChatPage() {
               question,
               profile_id: selectedProfileId,
               conversation_id: id,
-              generation_only: true,
+              chat: true,
+              generation_only: !canExecuteSql,
             },
           ],
         }),
@@ -350,9 +370,21 @@ export function SqlChatPage() {
     profileOptions.length === 0 &&
     !profileSearch &&
     !selectedProfile;
+  // 業務プロファイルの一覧を読めなかった（最初の読み込み）。上のカードに失敗と再試行を出し、会話の欄は出さない
+  // （空の状態を出さない。messaging.md §11.7、#1153）。候補の検索の失敗は欄の中で示す。
+  const profilesFailed =
+    profiles.isError && !profiles.data && !profileSearch && !selectedProfile;
+  // 開いている会話の内容を読み込んでいる（送った質問を出している間は除く）。
+  const conversationLoading =
+    Boolean(conversationId) && conversation.isPending && !pending;
+  // 画面の前提（業務プロファイルの一覧・開いている会話の内容）が揃うまでは、会話の欄に空の状態を出さず
+  // 会話の形の Skeleton で覆い、送信を止める（`blocked`。#1153）。入力欄・生成方法・新しい会話・履歴の開閉を
+  // 無効にするのは業務プロファイルの一覧の読み込み中だけ。会話の内容の読み込み中は入力欄に書ける
+  // （書いている途中で無効にしてフォーカスと入力を失わせない。messaging.md §11.7、#1188）。
   const blocked =
     busy ||
     generating ||
+    profilesLoading ||
     !selectedProfile ||
     detail.isError ||
     (Boolean(conversationId) &&
@@ -370,8 +402,12 @@ export function SqlChatPage() {
       client_job_id: randomUuid(),
     };
     // 送った質問はすぐ会話の欄に出し、入力欄を空にする（#907）。
-    setPendingSend({ message: createOptimisticChatMessage(question), request });
+    const message = createOptimisticChatMessage(question);
+    setSentAtByJob((current) => ({ ...current, [request.client_job_id]: message.sentAtMs }));
+    setPendingSend({ message, request });
     setDraft("");
+    // 送った質問は会話の欄の末尾に出す。上を読んでいても末尾へ戻る（messaging.md §11.1）。
+    autoScroll.scrollToLatest();
     send.mutate(request);
   }
   /**
@@ -398,75 +434,55 @@ export function SqlChatPage() {
     if (busy) return;
     setProfileId(item.profile_id);
     setConversationId(item.id);
-    setHistorySheetOpen(false);
+    historyPanel.closeSheet();
     setPendingSend(null);
     send.reset();
     stop.reset();
   }
-  function toggleHistory() {
-    if (inlineHistory) setHistoryPanelOpen(!historyPanelOpen);
-    else setHistorySheetOpen(!historySheetOpen);
-  }
-  useEffect(() => {
-    if (active && conversationRef.current)
-      conversationRef.current.scrollTop = conversationRef.current.scrollHeight;
-  }, [active, conversationId, turns.length, latest?.status, pending]);
+  // 会話の欄の自動スクロール（3 製品共通の useChatAutoScroll。#1161）。keep-alive で隠れている間は動かさない。
+  // 末尾を見ている間は新しいジョブ・状態の変化に合わせて末尾へ追い、上を読んでいる間は「最新へ」を出す。
+  const autoScroll = useChatAutoScroll({
+    contentKey: `${turns.length}:${latest?.status ?? ""}:${pending?.localId ?? ""}:${pending?.status ?? ""}`,
+    resetKey: `${selectedProfileId}:${conversationId}`,
+    enabled: active,
+  });
+  // 一覧の行・読み込み中・失敗・0 件は 3 製品共通の ChatHistoryList（#1161）。カーソルの API なので「さらに読み込む」。
   const historyContent = (
-    <>
-      {history.isPending ? (
-        // 読み込み中は文言と経過時間を出し、一覧の形の Skeleton で寸法を予約する（messaging.md §3.6）。
-        <TimedLoadingState
-          label={t("chat.historyLoading")}
-          operationKey="sql-chat-history-load"
-          framed={false}
-          testId="sql-chat-history-loading"
-        >
-          <ListSkeleton rows={3} />
-        </TimedLoadingState>
-      ) : null}
-      {history.isError ? (
-        <ApiErrorBanner
-          error={history.error}
-          fallback={t("chat.loadFailed")}
-          action={
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              icon={RefreshCw}
-              onClick={() => void history.refetch()}
-            >
-              {t("chat.retry")}
-            </Button>
-          }
-        />
-      ) : null}
-      {history.isSuccess &&
-      !history.data.pages.some((page) => page.items.length) ? (
-        <EmptyState title={t("chat.historyEmpty")} />
-      ) : null}
-      <div className="min-h-0 space-y-2 overflow-y-auto [scrollbar-gutter:stable]">
-        {history.data?.pages
+    <ChatHistoryList
+      items={(history.data?.pages ?? [])
+        .flatMap((page) => page.items)
+        .map((item) => ({
+          id: item.id,
+          title: item.title,
+          meta: dateFormatter.format(new Date(item.created_at)),
+        }))}
+      currentId={conversationId || null}
+      onSelect={(item) => {
+        const conversationItem = history.data?.pages
           .flatMap((page) => page.items)
-          .map((item) => (
-            <Button
-              type="button"
-              key={item.id}
-              variant="ghost"
-              aria-current={item.id === conversationId ? "true" : undefined}
-              className="w-full justify-start whitespace-normal text-left"
-              disabled={busy}
-              onClick={() => openConversation(item)}
-            >
-              <span className="min-w-0">
-                <span className="block break-words">{item.title}</span>
-                <span className="block text-xs text-fg-muted">
-                  {dateFormatter.format(new Date(item.created_at))}
-                </span>
-              </span>
-            </Button>
-          ))}
-        {history.hasNextPage ? (
+          .find((candidate) => candidate.id === item.id);
+        if (conversationItem) openConversation(conversationItem);
+      }}
+      disabled={busy}
+      loading={history.isPending}
+      error={history.isError ? history.error : null}
+      onRetry={() => void history.refetch()}
+      retrying={history.isFetching}
+      labels={{
+        list: t("chat.history"),
+        loading: t("chat.historyLoading"),
+        error: t("chat.historyLoadFailed"),
+        retry: t("chat.retry"),
+        empty: t("chat.historyEmpty"),
+      }}
+      operationKey="sql-chat-history-load"
+      testIds={{
+        loading: "sql-chat-history-loading",
+        error: "sql-chat-history-error",
+        list: "sql-chat-history-list",
+      }}
+      footer={
+        history.hasNextPage ? (
           <Button
             type="button"
             variant="secondary"
@@ -476,9 +492,9 @@ export function SqlChatPage() {
           >
             {t("chat.loadMore")}
           </Button>
-        ) : null}
-      </div>
-    </>
+        ) : null
+      }
+    />
   );
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
@@ -501,6 +517,24 @@ export function SqlChatPage() {
                   <Skeleton className="h-[var(--button-height-md)] w-full" />
                 </div>
               </TimedLoadingState>
+            ) : profilesFailed ? (
+              <ApiErrorBanner
+                error={profiles.error}
+                fallback={t("chat.profile.loadFailed")}
+                testId="sql-chat-profiles-error"
+                action={
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={RefreshCw}
+                    loading={profiles.isFetching}
+                    onClick={() => void profiles.refetch()}
+                  >
+                    {t("chat.retry")}
+                  </Button>
+                }
+              />
             ) : noProfiles ? (
               <EmptyState
                 title={t("chat.noProfiles")}
@@ -565,294 +599,263 @@ export function SqlChatPage() {
             )}
           </CardContent>
         </Card>
-        {noProfiles ? null : (
-          <div
-            className={`grid min-h-0 min-w-0 flex-1 gap-4 ${inlineHistory && historyPanelOpen ? "lg:grid-cols-[minmax(0,17.5rem)_minmax(0,1fr)]" : ""}`}
-          >
-            {inlineHistory ? (
-              // lg 以上: 開くとチャットの左に並べ、チャットの幅が縮む。閉じている間も描いて aria-controls の先を保つ。
-              <aside
-                id="sql-chat-history"
-                aria-label={t("chat.history")}
-                data-testid="sql-chat-history"
-                className={
-                  historyPanelOpen
-                    ? "flex min-h-0 min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface px-3 pb-3 pt-2 shadow-sm"
-                    : "hidden"
-                }
-              >
-                {/* 見出しの行はチャットの上端の行と高さをそろえる。 */}
-                <h2 className="flex min-h-8 items-center px-1 text-sm font-medium text-fg">
-                  {t("chat.history")}
-                </h2>
-                {historyContent}
-              </aside>
-            ) : (
-              // lg 未満: 本文の上に重ねるモーダルの side sheet（会話を選ぶ・Esc・scrim・閉じるボタンで閉じる）。
-              <SideSheet
-                open={historySheetOpen}
-                onClose={() => setHistorySheetOpen(false)}
-                title={t("chat.history")}
-                closeLabel={t("chat.closeHistory")}
-                id="sql-chat-history"
-                returnFocusRef={historyToggleRef}
-                bodyClassName="gap-3"
-                data-testid="sql-chat-history"
-              >
-                {historyContent}
-              </SideSheet>
-            )}
-            <section
-              aria-label={t("chat.conversation")}
-              className="flex min-h-0 min-w-0 flex-col rounded-lg border border-border bg-surface shadow-sm"
-              data-testid="sql-chat-panel"
-            >
-              {/* 上端の行: 会話の履歴の開閉（左端）・今の会話の名前・新しい会話（RAG のチャットと同じ。#664 / #889）。 */}
-              <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-                <Button
-                  type="button"
-                  ref={historyToggleRef}
-                  variant="ghost"
-                  size="sm"
-                  iconOnly
-                  icon={historyOpen ? PanelLeftClose : PanelLeftOpen}
-                  aria-label={t("chat.history")}
-                  aria-controls="sql-chat-history"
-                  aria-expanded={historyOpen}
-                  data-testid="sql-chat-history-toggle"
-                  onClick={toggleHistory}
-                />
-                {/* 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。 */}
-                <div className="min-w-0 flex-1">
-                  {!conversationId ? null : conversation.data ? (
-                    <h2
-                      className="truncate text-sm font-medium text-fg"
-                      title={conversation.data.conversation.title}
-                      data-testid="sql-chat-conversation-title"
-                    >
-                      {conversation.data.conversation.title}
-                    </h2>
-                  ) : conversation.isPending ? (
-                    <Skeleton className="h-4 w-40" />
-                  ) : null}
-                </div>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  icon={MessageSquarePlus}
-                  disabled={busy}
-                  onClick={resetConversation}
-                >
-                  {t("chat.new")}
-                </Button>
-              </div>
-              {/* 会話の欄。新しいメッセージを role="log" で知らせる（#907）。 */}
-              <div
-                ref={conversationRef}
-                role="log"
-                aria-label={t("chat.messages")}
-                className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]"
-                data-testid="sql-chat-conversation"
-              >
-                {conversationId && conversation.isPending && !pending ? (
-                  // 読み込み中は文言と経過時間を出し、質問と回答の吹き出しの形の Skeleton で寸法を予約する
-                  // （RAG のチャットと同じ。messaging.md §3.6）。
-                  <TimedLoadingState
-                    label={t("chat.loading")}
-                    operationKey="sql-chat-conversation-load"
-                    framed={false}
-                    testId="sql-chat-conversation-loading"
-                  >
-                    <Skeleton className="ml-auto h-12 w-2/3" />
-                    <Skeleton className="h-32 w-5/6" />
-                    <Skeleton className="ml-auto h-12 w-1/2" />
-                  </TimedLoadingState>
-                ) : null}
-                {conversationId && conversation.isError ? (
-                  <ApiErrorBanner
-                    error={conversation.error}
-                    fallback={t("chat.loadFailed")}
-                    action={
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        icon={RefreshCw}
-                        onClick={() => void conversation.refetch()}
-                      >
-                        {t("chat.retry")}
-                      </Button>
-                    }
-                  />
-                ) : null}
-                {!conversationId && !pending ? (
-                  <EmptyState
-                    title={t("chat.empty")}
-                    hint={t("chat.emptyHint")}
-                  />
-                ) : null}
-                {turns.map((turn) => (
-                  <ChatTurn key={turn.job_id} turn={turn} />
-                ))}
-                {pending ? (
-                  // 送った質問はジョブの投入の応答を待たずに出す。失敗しても残す（#907）。
-                  <article
-                    className="space-y-2"
-                    data-testid="sql-chat-pending-turn"
-                  >
-                    <ChatUserMessage
-                      status={pending.status}
-                      failedLabel={t("chat.sendFailedStatus")}
-                    >
-                      {pending.content}
-                    </ChatUserMessage>
-                    {pending.status === "failed" && send.isError ? (
-                      // 失敗の理由は送った質問の直下（会話の中）に出す（messaging.md §10.1 のチャットの扱い）。
-                      <ApiErrorBanner
-                        error={send.error}
-                        fallback={t("chat.sendFailed")}
-                        testId="sql-chat-send-error"
-                        {...sendFailureText(send.error)}
-                        action={
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            icon={RotateCcw}
-                            disabled={blocked}
-                            onClick={resend}
-                          >
-                            {t("chat.resend")}
-                          </Button>
-                        }
-                      />
-                    ) : pending.status === "sending" ? (
-                      // 送信の応答（ジョブの投入）を待つ間も段階として出す。投入が遅いと、この段階に
-                      // 遅延の案内が付き、生成ではなく送信で待っていることが分かる（#1145）。
-                      <Card>
-                        <CardContent className="space-y-3">
-                          <ChatProgress
-                            key={pending.localId}
-                            steps={chatSubmitProgressSteps(pending.sentAtMs)}
-                            labels={CHAT_PROGRESS_LABELS}
-                            testId="sql-chat-progress"
-                          />
-                        </CardContent>
-                      </Card>
-                    ) : null}
-                  </article>
-                ) : null}
-              </div>
-              <div
-                className="shrink-0 space-y-2 border-t border-border p-3"
-                data-testid="sql-chat-composer-region"
-              >
-                {/* 生成方法（#890）。RAG のチャットの「回答するモデル」と同じく、入力欄の直上の行に
-                    「ラベル・説明のアイコン・選択」を並べる。ラベルは隣の文言で読めるので欄のラベルは読み上げだけにする。
-                    選んだ生成方法の説明は常設せず、ラベルの横の info アイコンから出し、選択欄にも説明として結び付ける（#901）。 */}
-                <div
-                  className="flex flex-wrap items-center gap-2"
-                  data-testid="sql-chat-engine-row"
-                >
-                  <span className="inline-flex items-center gap-0.5">
-                    <span
-                      className="text-xs font-medium text-fg-muted"
-                      aria-hidden="true"
-                    >
-                      {t("chat.engine")}
-                    </span>
-                    <InfoTip
-                      label={t("chat.engine.infoLabel")}
-                      content={engineOption.description}
-                      contentId={engineDescriptionId}
-                      contentTestId="sql-chat-engine-description"
-                      data-testid="sql-chat-engine-info"
-                    />
-                  </span>
-                  <SelectField
-                    id="sql-chat-engine"
-                    label={t("chat.engine")}
-                    labelHidden
-                    value={engine}
-                    size="sm"
-                    width="sm"
-                    disabled={busy || generating}
-                    onValueChange={setEngine}
-                    describedBy={engineDescriptionId}
-                    options={CHAT_ENGINES.map(({ value, label }) => ({
-                      value,
-                      label,
-                    }))}
-                  />
-                </div>
-                <FieldActionRow
-                  actions={
-                    <RunStopButton
-                      running={generating}
-                      onRun={submit}
-                      onStop={() => {
-                        if (!stop.isPending && !conversation.isError)
-                          stop.mutate();
+        {noProfiles || profilesFailed ? null : (
+          // 骨格（履歴のパネル・シート、会話の領域の上端の行・会話の欄・入力欄の領域）は 3 製品共通の ChatLayout（#1161）。
+          <ChatLayout
+            history={historyPanel}
+            historyTitle={t("chat.history")}
+            historyCloseLabel={t("chat.closeHistory")}
+            historyContent={historyContent}
+            historyToggleDisabled={profilesLoading}
+            label={t("chat.conversation")}
+            // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。
+            conversationTitle={
+              conversationId ? conversation.data?.conversation.title : null
+            }
+            conversationTitleLoading={
+              Boolean(conversationId) && conversation.isPending
+            }
+            newConversation={{
+              label: t("chat.new"),
+              onClick: resetConversation,
+              disabled: busy || profilesLoading,
+            }}
+            logLabel={t("chat.messages")}
+            logRef={autoScroll.logRef}
+            latest={{
+              visible: autoScroll.showLatest,
+              label: t("chat.latest"),
+              onClick: () => autoScroll.scrollToLatest("smooth"),
+            }}
+            testIdPrefix="sql-chat"
+            composer={
+              <>
+                {/* 入力欄の領域（設定の行・入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。
+                    業務プロファイルの一覧の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
+                    会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
+                <ChatComposer
+                  id="sql-chat-composer"
+                  value={draft}
+                  onValueChange={setDraft}
+                  onSubmit={submit}
+                  onStop={() => {
+                    if (!stop.isPending && !conversation.isError) stop.mutate();
+                  }}
+                  running={generating}
+                  submitBlocked={blocked}
+                  disabled={profilesLoading}
+                  label={t("chat.query")}
+                  placeholder={t("chat.placeholder")}
+                  sendLabel={t("chat.send")}
+                  stopLabel={t("chat.stop")}
+                  maxLength={10000}
+                  sendTestId="sql-chat-send"
+                  options={
+                    // 生成方法（#890）。RAG のチャットの「回答するモデル」と同じく、入力欄の直上の行に
+                    // 「ラベル・説明のアイコン・選択」を並べる。ラベルは隣の文言で読めるので欄のラベルは読み上げだけにする。
+                    // 選んだ生成方法の説明は常設せず、ラベルの横の info アイコンから出し、選択欄にも説明として結び付ける（#901）。
+                    <ChatComposerOption
+                      label={t("chat.engine")}
+                      labelDecorative
+                      info={{
+                        label: t("chat.engine.infoLabel"),
+                        content: engineOption.description,
+                        contentId: engineDescriptionId,
+                        contentTestId: "sql-chat-engine-description",
+                        testId: "sql-chat-engine-info",
                       }}
-                      runLabel={t("chat.send")}
-                      stopLabel={t("chat.stop")}
-                      runIcon={SendHorizontal}
-                      runDisabled={!draft.trim() || blocked}
-                      size="lg"
-                      testId="sql-chat-send"
-                    />
+                      testId="sql-chat-engine-row"
+                    >
+                      <SelectField
+                        id="sql-chat-engine"
+                        label={t("chat.engine")}
+                        labelHidden
+                        value={engine}
+                        size="sm"
+                        width="sm"
+                        disabled={busy || generating || profilesLoading}
+                        onValueChange={setEngine}
+                        describedBy={engineDescriptionId}
+                        options={CHAT_ENGINES.map(({ value, label }) => ({
+                          value,
+                          label,
+                        }))}
+                      />
+                    </ChatComposerOption>
                   }
-                >
-                  <TextareaField
-                    id="sql-chat-composer"
-                    label={t("chat.query")}
-                    labelHidden
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (isSubmitEnter(event) && !event.shiftKey) {
-                        event.preventDefault();
-                        submit();
+                  footer={
+                    <>
+                      {stop.isError ? (
+                        <ApiErrorBanner
+                          error={stop.error}
+                          fallback={t("chat.stopFailed")}
+                          testId="sql-chat-stop-error"
+                        />
+                      ) : null}
+                      {turns.length >= 50 ? (
+                        <Banner severity="info">{t("chat.limit")}</Banner>
+                      ) : null}
+                    </>
+                  }
+                />
+              </>
+            }
+          >
+            {conversationLoading ? (
+              // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する
+              // （3 製品で同じ。messaging.md §3.6 / §11.7）。
+              <TimedLoadingState
+                label={t("chat.loading")}
+                operationKey="sql-chat-conversation-load"
+                framed={false}
+                testId="sql-chat-conversation-loading"
+              >
+                <ChatSkeleton />
+              </TimedLoadingState>
+            ) : profilesLoading ? (
+              // 業務プロファイルの一覧の読み込み中は、空の状態（はじめの案内）を出さず会話の形の Skeleton で覆う。
+              // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
+              <ChatSkeleton testId="sql-chat-conversation-skeleton" />
+            ) : null}
+            {conversationId && conversation.isError ? (
+              <ApiErrorBanner
+                error={conversation.error}
+                fallback={t("chat.loadFailed")}
+                action={
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={RefreshCw}
+                    onClick={() => void conversation.refetch()}
+                  >
+                    {t("chat.retry")}
+                  </Button>
+                }
+              />
+            ) : null}
+            {!conversationId && !pending && !profilesLoading ? (
+              <EmptyState
+                title={t("chat.empty")}
+                hint={t("chat.emptyHint")}
+              />
+            ) : null}
+            {turns.map((turn) => (
+              <SqlChatTurn
+                key={turn.job_id}
+                turn={turn}
+                canExecuteSql={canExecuteSql}
+                canOpenDirectSql={canOpenDirectSql}
+                sentAtMs={sentAtByJob[turn.job_id]}
+                tracking={active}
+                receivedAt={conversation.dataUpdatedAt}
+                refresh={refreshConversation}
+              />
+            ))}
+            {pending ? (
+              // 送った質問はジョブの投入の応答を待たずに出す。失敗しても残す（#907）。
+              // 1 往復の入れ物・送信中の回答の場所・失敗の出し方は 3 製品共通の ChatPendingTurn（#1161）。
+              <ChatPendingTurn
+                message={pending}
+                failedLabel={t("chat.sendFailedStatus")}
+                testId="sql-chat-pending-turn"
+                // 送信の応答（ジョブの投入）を待つ間も段階として出す。投入が遅いと、この段階に
+                // 遅延の案内が付き、生成ではなく送信で待っていることが分かる（#1145）。
+                progress={
+                  <ChatProgress
+                    key={pending.localId}
+                    steps={chatSubmitProgressSteps(pending.sentAtMs)}
+                    labels={CHAT_PROGRESS_LABELS}
+                    testId="sql-chat-progress"
+                  />
+                }
+                failure={
+                  send.isError ? (
+                    // 失敗の理由は送った質問の直下（会話の中）に出す（messaging.md §10.1 のチャットの扱い）。
+                    <ApiErrorBanner
+                      error={send.error}
+                      fallback={t("chat.sendFailed")}
+                      testId="sql-chat-send-error"
+                      {...sendFailureText(send.error)}
+                      action={
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          icon={RotateCcw}
+                          disabled={blocked}
+                          onClick={resend}
+                        >
+                          {t("chat.resend")}
+                        </Button>
                       }
-                    }}
-                    rows={2}
-                    maxLength={10000}
-                    placeholder={t("chat.placeholder")}
-                    className="space-y-0"
-                  />
-                </FieldActionRow>
-                {stop.isError ? (
-                  <ApiErrorBanner
-                    error={stop.error}
-                    fallback={t("chat.stopFailed")}
-                    testId="sql-chat-stop-error"
-                  />
-                ) : null}
-                {turns.length >= 50 ? (
-                  <Banner severity="info">{t("chat.limit")}</Banner>
-                ) : null}
-              </div>
-            </section>
-          </div>
+                    />
+                  ) : null
+                }
+              />
+            ) : null}
+          </ChatLayout>
         )}
       </PageBody>
     </div>
   );
 }
-function ChatTurn({ turn }: { turn: JobData }) {
+function SqlChatTurn({
+  turn,
+  canExecuteSql,
+  canOpenDirectSql,
+  sentAtMs,
+  tracking,
+  receivedAt,
+  refresh,
+}: {
+  turn: JobData;
+  canExecuteSql: boolean;
+  canOpenDirectSql: boolean;
+  /** この画面で送信した時刻（処理の経過の経過時間の起点。#1176）。開き直した会話には無い。 */
+  sentAtMs?: number;
+  /** 画面が表示されている（keep-alive で隠れていない）。 */
+  tracking: boolean;
+  /** 会話を最後に取得できた時刻（TanStack Query の dataUpdatedAt）。 */
+  receivedAt: number;
+  /** 会話を取り直す（応答しない取得は打ち切る）。 */
+  refresh: () => Promise<unknown>;
+}) {
   const [copyError, setCopyError] = useState("");
   const result = turn.result;
+  // 処理の経過の状態を追う（3 製品共通。#1160）。会話の取得が途絶えたら取り直し、終端まで追う。
+  const progress = useChatProgressTracker({
+    key: turn.job_id,
+    steps: chatJobProgressSteps(turn, turn.engine),
+    active: inFlight(turn),
+    elapsedMs: chatJobElapsedMs(turn),
+    receivedAt,
+    refresh,
+    staleAfterMs: CHAT_PROGRESS_STALE_AFTER_MS,
+    enabled: tracking,
+  });
+  // 送信のジョブが実行まで行い（#1176）、結果の行はここで 1 回だけ受け取る。「もう一度実行」は明示の
+  // 操作（#1154）。安全検査を通った生成 SQL だけを実行できる。
+  const execution = useChatSqlExecution(
+    turn.job_id,
+    turn.status === "done" && canExecuteSql
+      ? turn.last_execution?.result_expires_at
+      : null,
+  );
+  const executable = Boolean(
+    turn.status === "done" &&
+      result?.safety.is_safe &&
+      result.generated_sql.trim(),
+  );
+  const executed = Boolean(execution.data || turn.last_execution);
   return (
-    <article className="space-y-2" data-testid="sql-chat-turn">
-      <ChatUserMessage>{turn.question || result?.original_question}</ChatUserMessage>
-      <Card>
-        <CardContent className="space-y-3">
+    // 1 往復の入れ物（質問の吹き出し・回答の枠）は 3 製品共通の ChatTurn / ChatAnswer（#1161）。
+    <ChatTurn question={turn.question || result?.original_question} testId="sql-chat-turn">
+      <ChatAnswer>
           {/* 処理の段階（#1145）。実行中は今の段階、完了後は回答の上に「処理の経過」の 1 行に畳む。 */}
           <ChatProgress
-            steps={chatJobProgressSteps(turn, turn.engine)}
-            active={inFlight(turn)}
-            elapsedMs={chatJobElapsedMs(turn)}
+            {...progress.progressProps}
+            startedAt={sentAtMs}
             labels={CHAT_PROGRESS_LABELS}
             testId="sql-chat-progress"
           />
@@ -862,32 +865,64 @@ function ChatTurn({ turn }: { turn: JobData }) {
                 <StatusBadge
                   variant={result.safety.is_safe ? "success" : "danger"}
                   label={
-                    result.safety.is_safe ? t("chat.safe") : t("chat.blocked")
+                    !result.safety.is_safe
+                      ? t("chat.blocked")
+                      : executed
+                        ? t("chat.safeExecuted")
+                        : t("chat.safe")
                   }
                 />
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  icon={Copy}
-                  onClick={() => {
-                    void copyTextToClipboard(result.generated_sql).then(
-                      () => {
-                        setCopyError("");
-                        toast.success(t("common.action.copied"));
-                      },
-                      () => setCopyError(t("chat.copyFailed")),
-                    );
-                  }}
-                >
-                  {t("chat.copySql")}
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={Copy}
+                    onClick={() => {
+                      void copyTextToClipboard(result.generated_sql).then(
+                        () => {
+                          setCopyError("");
+                          toast.success(t("common.action.copied"));
+                        },
+                        () => setCopyError(t("chat.copyFailed")),
+                      );
+                    }}
+                  >
+                    {t("chat.copySql")}
+                  </Button>
+                  {executable && canExecuteSql ? (
+                    // 吹き出しの中の操作なので secondary。実行中はラベルを変えず、アイコンがスピナーになる。
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      icon={Play}
+                      loading={execution.running}
+                      onClick={execution.run}
+                      data-testid="sql-chat-execute"
+                    >
+                      {executed ? t("chat.execute.again") : t("chat.execute")}
+                    </Button>
+                  ) : null}
+                </div>
               </div>
               <pre className="max-w-full overflow-x-auto rounded-md border border-border bg-canvas p-3 text-sm [scrollbar-gutter:stable]">
                 <code>{result.generated_sql}</code>
               </pre>
               {result.explanation ? (
                 <MessageText text={result.explanation} />
+              ) : null}
+              {executable && !canExecuteSql ? (
+                <p className="text-xs text-fg-muted">
+                  {t("chat.execute.permissionRequired")}
+                </p>
+              ) : null}
+              {executable ? (
+                <ChatSqlExecutionResult
+                  turn={turn}
+                  execution={execution}
+                  canOpenDirectSql={canOpenDirectSql}
+                />
               ) : null}
             </>
           ) : null}
@@ -910,8 +945,7 @@ function ChatTurn({ turn }: { turn: JobData }) {
             <Banner severity="warning">{turn.warning_message}</Banner>
           ) : null}
           {copyError ? <Banner severity="danger">{copyError}</Banner> : null}
-        </CardContent>
-      </Card>
-    </article>
+      </ChatAnswer>
+    </ChatTurn>
   );
 }

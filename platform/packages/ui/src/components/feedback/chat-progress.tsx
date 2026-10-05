@@ -40,10 +40,17 @@ export interface ChatProgressLabels {
   summary: (count: number, duration: string) => string;
   /** 段階の一覧の読み上げの名前。 */
   steps: string;
-  /** 今の段階の経過時間の見出し。 */
+  /** 処理全体の経過時間の見出し（今の段階の行の右に出す。#1176）。 */
   elapsed: string;
-  /** 今の段階の遅延の案内。 */
+  /** 今の段階の遅延の案内（今の段階の経過時間で判断する。#1176）。 */
   slow: string;
+  /**
+   * 終端でないのに実行中・待機中の段階が無い（段階の外で処理が続いている）ときの今の行（#1176）。
+   * 製品は段階を写し漏らさないようにし、これは最後の備えにする。
+   */
+  working: string;
+  /** 更新が途絶え、状態を取り直している間の案内（#1160。遅延の案内より優先する）。 */
+  reconnecting: string;
   /** 段階の状態（アイコンに添える。色だけに頼らない）。 */
   status: Record<ChatProgressStepStatus, string>;
   /** 所要時間の表記。 */
@@ -67,6 +74,8 @@ export const DEFAULT_CHAT_PROGRESS_LABELS: ChatProgressLabels = {
   steps: "処理の段階",
   elapsed: "経過時間",
   slow: "通常より時間がかかっています。",
+  working: "処理を続けています",
+  reconnecting: "接続を確認しています。",
   status: {
     pending: "待機中",
     running: "処理中",
@@ -86,10 +95,24 @@ export interface ChatProgressProps {
   active?: boolean;
   /** 全体の所要時間（完了後の 1 行）。省略時は段階の最初の開始から最後の終了まで。 */
   elapsedMs?: number | null;
-  /** この時間を超えた段階に遅延の案内を付ける。既定 10 秒（ProcessingIndicator と同じ）。 */
+  /**
+   * 処理全体の開始（ISO 8601 か epoch ms）。実行中の経過時間をここから数える（#1176）。
+   * 省略時は段階の最初の開始。どちらも無いときは、この表示が処理中になった時刻から数える。
+   */
+  startedAt?: string | number | null;
+  /**
+   * 今の段階がこの時間を超えたら、今の段階の行に遅延の案内を付ける。既定 10 秒（ProcessingIndicator と同じ）。
+   * 全体の経過時間ではなく今の段階で判断する（どの段階で時間がかかっているかを示す。LLM を使う処理は全体が
+   * 10 秒を超えるのが普通で、全体で判断すると毎回出る。#1176）。
+   */
   slowAfterMs?: number;
   /** 完了後の 1 行を最初から開くか。既定は失敗した段階があるときだけ開く。 */
   defaultOpen?: boolean;
+  /**
+   * 更新が途絶え、状態を取り直している（#1160）。今の段階の行に「接続を確認しています」を出す。
+   * 製品は `useChatProgressTracker` の結果（`progressProps`）をそのまま渡す。
+   */
+  reconnecting?: boolean;
   labels?: Partial<ChatProgressLabels>;
   className?: string;
   testId?: string;
@@ -97,7 +120,10 @@ export interface ChatProgressProps {
 
 type ProgressState = "running" | "done" | "failed";
 
-function isActive(steps: ChatProgressStep[]): boolean {
+/**
+ * 段階から処理中かを決める（実行中の段階がある、または失敗が無く待機中の段階が残る）。3 製品共通の終端の判定。
+ */
+export function isChatProgressActive(steps: readonly ChatProgressStep[]): boolean {
   if (steps.some((step) => step.status === "running")) return true;
   if (steps.some((step) => step.status === "failed")) return false;
   return steps.some((step) => step.status === "pending");
@@ -108,6 +134,12 @@ function stepDurationMs(step: ChatProgressStep): number | null {
   const end = operationTimestampMs(step.finishedAt);
   if (start === null || end === null) return null;
   return Math.max(0, end - start);
+}
+
+/** 段階の最初の開始（処理全体の開始）。 */
+function firstStartedAtMs(steps: readonly ChatProgressStep[]): number | null {
+  const starts = steps.map((step) => operationTimestampMs(step.startedAt)).filter((v): v is number => v !== null);
+  return starts.length > 0 ? Math.min(...starts) : null;
 }
 
 function totalDurationMs(steps: ChatProgressStep[]): number | null {
@@ -187,37 +219,56 @@ function StepList({
   );
 }
 
-/** 実行中の段階の 1 行（スピナー・段階・その段階の経過時間・遅延の案内）。 */
+/**
+ * 実行中の 1 行（スピナー・今の段階・処理全体の経過時間・遅延の案内）。
+ *
+ * 経過時間は処理全体（最初の段階の開始）から数え、段階が変わっても 0 に戻さない（#1176）。段階ごとの所要時間は
+ * 完了した段階の行に出す。遅延の案内は今の段階の経過時間で判断する。
+ */
 function CurrentStep({
   step,
+  startedAt,
   slowAfterMs,
+  reconnecting,
   labels,
   testId,
 }: {
-  step: ChatProgressStep;
+  /** 今の段階。終端でないのに実行中・待機中の段階が無いときは null（「処理を続けています」を出す）。 */
+  step: ChatProgressStep | null;
+  startedAt: number | null;
   slowAfterMs: number;
+  reconnecting: boolean;
   labels: ChatProgressLabels;
   testId?: string;
 }) {
-  const timing = useOperationTiming({
+  // 処理全体の経過時間。key を固定し、段階が変わっても数え直さない（開始の時刻が無いときは表示の開始から数える）。
+  const total = useOperationTiming({
     active: true,
-    operationKey: step.id,
-    startedAt: step.startedAt,
+    operationKey: "chat-progress-total",
+    startedAt: startedAt ?? undefined,
+  });
+  // 今の段階の経過時間（遅延の案内の判断だけに使う。段階が変わったら数え直す）。
+  const current = useOperationTiming({
+    active: true,
+    operationKey: step ? `step:${step.id}` : "step:working",
+    startedAt: step?.startedAt,
     slowAfterMs,
   });
+  const label = step ? step.label : labels.working;
   return (
     <div
       className="grid min-w-0 gap-1"
       data-testid={testId ? `${testId}-current` : undefined}
-      data-step-id={step.id}
-      data-slow={timing.slow ? "true" : "false"}
+      data-step-id={step?.id ?? ""}
+      data-slow={current.slow ? "true" : "false"}
+      data-reconnecting={reconnecting ? "true" : "false"}
     >
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-fg">
           <Spinner size={16} className="text-accent-fg" />
           <span className="min-w-0 break-words">
-            {step.label}
-            {step.detail ? (
+            {label}
+            {step?.detail ? (
               <span className="font-normal text-fg-muted">{`（${step.detail}）`}</span>
             ) : null}
           </span>
@@ -226,12 +277,12 @@ function CurrentStep({
           className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-fg-muted"
           role="timer"
           aria-live="off"
-          aria-label={`${labels.elapsed} ${timing.elapsedClock}`}
+          aria-label={`${labels.elapsed} ${total.elapsedClock}`}
           data-testid={testId ? `${testId}-timer` : undefined}
         >
           <Clock3 size={14} aria-hidden="true" />
           <span>{labels.elapsed}</span>
-          <span className="min-w-[3.25rem] text-right tabular-nums text-fg">{timing.elapsedClock}</span>
+          <span className="min-w-[3.25rem] text-right tabular-nums text-fg">{total.elapsedClock}</span>
         </span>
       </div>
       {/*
@@ -240,9 +291,14 @@ function CurrentStep({
       */}
       <p
         className="pl-6 text-xs leading-5 text-fg-muted"
-        data-testid={testId && timing.slow ? `${testId}-slow` : undefined}
+        data-testid={
+          testId && reconnecting ? `${testId}-reconnecting` : testId && current.slow ? `${testId}-slow` : undefined
+        }
       >
-        {timing.slow ? (
+        {/* 取り直している間は、遅延の案内の代わりに「接続を確認しています」を出す（#1160）。 */}
+        {reconnecting ? (
+          labels.reconnecting
+        ) : current.slow ? (
           labels.slow
         ) : (
           <span
@@ -259,8 +315,10 @@ function CurrentStep({
 /**
  * チャットの回答の処理の段階（#1145）。アシスタントの吹き出しの中、回答の上に置く控えめな表示。
  *
- * - 実行中: 今の段階の 1 行（スピナー・段階の名前・その段階の経過時間・遅延の案内）。完了した段階は
- *   「✓ N ステップ完了」に畳み、開くと段階ごとの完了 / 失敗 / スキップと所要時間を出す。
+ * - 実行中: 今の段階の 1 行（スピナー・段階の名前・処理全体の経過時間・今の段階の遅延の案内）。経過時間は
+ *   段階が変わっても 0 に戻さない（#1176）。完了した段階は「✓ N ステップ完了」に畳み、開くと段階ごとの
+ *   完了 / 失敗 / スキップと所要時間を出す。終端でないのに実行中・待機中の段階が無いときも、今の行
+ *   （「処理を続けています」）を出し、「N ステップ完了」だけにしない。
  * - 完了後: 「処理の経過（N ステップ・M 秒）」の 1 行に畳む（既定は閉じる）。失敗した段階があれば開いて出す。
  * - 段階の切り替わりは polite で読み上げる（経過時間の毎秒の更新は読み上げない）。状態はアイコンと文字で示す。
  * - 動くスピナーは今の段階の 1 つだけ（同じ処理のスピナーは 1 つ。messaging.md §3.7）。
@@ -271,14 +329,16 @@ export function ChatProgress({
   steps,
   active: activeProp,
   elapsedMs,
+  startedAt,
   slowAfterMs = DEFAULT_SLOW_AFTER_MS,
   defaultOpen,
+  reconnecting = false,
   labels: labelOverrides,
   className,
   testId,
 }: ChatProgressProps) {
   const labels = { ...DEFAULT_CHAT_PROGRESS_LABELS, ...labelOverrides };
-  const active = activeProp ?? isActive(steps);
+  const active = activeProp ?? isChatProgressActive(steps);
   const failed = steps.some((step) => step.status === "failed");
   const state: ProgressState = active ? "running" : failed ? "failed" : "done";
   // 実行中の段階が無い（段階の間・開始前）ときは、次に進む段階を今の段階として出す。
@@ -290,7 +350,10 @@ export function ChatProgress({
   const [summaryOpen, setSummaryOpen] = useState<boolean | null>(null);
   const summaryIsOpen = summaryOpen ?? defaultOpen ?? failed;
   const total = elapsedMs ?? totalDurationMs(steps);
-  const announcement = current ? current.label : "";
+  const overallStartedAt = operationTimestampMs(startedAt) ?? firstStartedAtMs(steps);
+  // 段階の切り替わりと、取り直しの開始を読み上げる。
+  const currentLabel = active ? (current?.label ?? labels.working) : "";
+  const announcement = currentLabel && reconnecting ? `${currentLabel} ${labels.reconnecting}` : currentLabel;
 
   if (steps.length === 0) return null;
 
@@ -307,7 +370,15 @@ export function ChatProgress({
       </span>
       {active ? (
         <>
-          {current ? <CurrentStep step={current} slowAfterMs={slowAfterMs} labels={labels} testId={testId} /> : null}
+          {/* 終端になるまで今の行を必ず出す（段階の外で処理が続くときは「処理を続けています」。#1176）。 */}
+          <CurrentStep
+            step={current ?? null}
+            startedAt={overallStartedAt}
+            slowAfterMs={slowAfterMs}
+            reconnecting={reconnecting}
+            labels={labels}
+            testId={testId}
+          />
           {finished.length > 0 ? (
             <Disclosure
               variant="plain"

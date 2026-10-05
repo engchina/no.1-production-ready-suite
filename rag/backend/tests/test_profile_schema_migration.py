@@ -97,7 +97,8 @@ def test_historical_sql_checksums_stay_immutable_and_current_names_are_complete(
 
     archived = historical_sections()["migrations"]
     assert len(archived) == 54
-    for section, migration in zip(archived, MIGRATIONS[:-1], strict=True):
+    # archive の後に足した migration（#860 の改名・#1175 など）は除いて照合する。
+    for section, migration in zip(archived, MIGRATIONS[: len(archived)], strict=True):
         assert migration.name == section["name"]
         assert migration.checksum == hashlib.sha256(section["sql"].encode()).hexdigest()
     assert set(COLUMN_RENAMES) >= {

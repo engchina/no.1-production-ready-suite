@@ -1,5 +1,12 @@
 import {
+  ChatComposer,
+  ChatComposerOption,
+  ChatAnswer,
+  ChatHistoryList,
+  ChatLayout,
+  ChatTurn,
   ChatProgress,
+  ChatSkeleton,
   Disclosure,
   PageBody,
   PageHeader,
@@ -7,49 +14,39 @@ import {
   Banner,
   Card,
   CardContent,
-  FieldActionRow,
-  TextareaField,
   TextField,
-  InfoTip,
   ToggleChip,
   TimedLoadingState,
-  Skeleton,
-  ListSkeleton,
-  SideSheet,
   DEFAULT_PAGE_SIZE,
-  INFORMATION_LIST_ROW_CLASS,
   offsetForPage,
   offsetPagination,
   toast,
   useConfirm,
-  RunStopButton,
   ChatUserMessage,
   createOptimisticChatMessage,
+  useChatProgressTracker,
   withOptimisticChatStatus,
   type ChatUserMessageStatus,
   type OptimisticChatMessage,
   type ChatProgressStep,
+  useChatAutoScroll,
+  useChatHistoryPanel,
 } from "@engchina/production-ready-ui";
 import {
   Check,
-  PanelLeftClose,
-  PanelLeftOpen,
   Pencil,
-  Plus,
   RotateCcw,
   Search,
-  SendHorizontal,
   Square,
   Trash2,
   X,
 } from "lucide-react";
 import {
   useEffect,
-  useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
@@ -62,21 +59,29 @@ import { SavedAnswerRecord } from "@/components/search/SavedAnswerRecord";
 import { AnswerDetailsPanel } from "@/components/search/AnswerDetailsPanel";
 import { AnswerText } from "@/components/search/AnswerText";
 import { useAuth } from "@/components/security/AuthProvider";
-import { EmptyState, ErrorState } from "@/components/StateViews";
+import { ApiErrorState, EmptyState, ErrorState } from "@/components/StateViews";
 import { isSubmitEnter } from "@/lib/keyboard";
 import type {
   ApprovedFaqSuggestionData,
   ClarificationAnswer,
   ClarificationSuggestionData,
   ChatMessage,
+  ConversationDetail,
   ConversationSummary,
   RetrievedChunk,
 } from "@/lib/api";
 import { api, ApiError } from "@/lib/api";
 import { ApprovedFaqSuggestions } from "@/components/search/ApprovedFaqSuggestions";
 import { ClarificationChoice } from "./ClarificationChoice";
-import { chatSubmitProgressSteps } from "@/lib/chat-progress";
-import { streamChatMessage, type ChatColumn } from "@/lib/chat-stream";
+import { chatProgressStepsFromEvent, chatSubmitProgressSteps } from "@/lib/chat-progress";
+import {
+  isChatStreamGone,
+  newChatClientMessageId,
+  resumeChatStream,
+  streamChatMessage,
+  type ChatColumn,
+  type ChatStreamHandlers,
+} from "@/lib/chat-stream";
 import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -98,22 +103,42 @@ import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 const COMPARE_MAX = 3;
-const EMPTY_TRACE_IDS: ReadonlySet<string> = new Set();
+/**
+ * 回答の作成中に、配信（event・heartbeat）がこの時間届かなければ途絶えたとみなし、接続を張り直す（#1160 /
+ * #1175）。backend は event の無い間も 10 秒ごとに heartbeat を送るので、その数回分。
+ */
+const CHAT_STREAM_STALE_AFTER_MS = 30_000;
+/**
+ * 接続が切れたときに続きを購読し直す回数の上限（#1175）。event を受け取れたら数え直す。超えたら、保存済みの
+ * 会話（作成中の回答）に引き継いで polling で待つ。待ちは 1 秒・2 秒・4 秒 … `CHAT_STREAM_RESUME_MAX_DELAY_MS`。
+ */
+const CHAT_STREAM_RESUME_ATTEMPTS = 6;
+const CHAT_STREAM_RESUME_MAX_DELAY_MS = 15_000;
 
-/** 会話の履歴を本文の横にインラインで出す幅（Tailwind の lg）。未満はモーダルの side sheet で開く（#664）。 */
-const HISTORY_INLINE_QUERY = "(min-width: 1024px)";
-
-function useHistoryInline(): boolean {
-  return useSyncExternalStore(
-    (onChange) => {
-      const query = window.matchMedia(HISTORY_INLINE_QUERY);
-      query.addEventListener("change", onChange);
-      return () => query.removeEventListener("change", onChange);
-    },
-    () => window.matchMedia(HISTORY_INLINE_QUERY).matches,
-    () => true
-  );
+/** signal が中止されるか `ms` が過ぎるまで待つ（中止なら false）。 */
+function waitOrAbort(ms: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      resolve(false);
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
+
+/** ref に今の時刻を入れる（送信・配信の event の処理から呼ぶ。描画中には呼ばない）。 */
+function stampNow(ref: { current: number | null }) {
+  ref.current = Date.now();
+}
+const EMPTY_TRACE_IDS: ReadonlySet<string> = new Set();
 
 /** 会話一覧のページ（検索・回答プロファイルごと。#403）。別の検索・回答プロファイルに移ったら 1 ページ目から。 */
 interface ConversationsPage {
@@ -137,7 +162,8 @@ interface LiveColumn {
   label: string;
   answer: string;
   citations: RetrievedChunk[];
-  status: "streaming" | "done" | "error";
+  /** `stopped` は利用者の停止（別の画面・タブからの停止を含む。#1175）。 */
+  status: "streaming" | "done" | "error" | "stopped";
   traceId: string | null;
   errorMessage: string | null;
   guardrailWarnings: string[];
@@ -164,6 +190,11 @@ interface DeliverRequest {
  */
 interface LiveTurn {
   pending: OptimisticChatMessage;
+  /**
+   * 画面が決めた質問の id（#1175）。サーバーは同じ id で質問を保存する。`start` の前の停止（取消の API）・
+   * 接続が切れた後の再購読に使う。送り直すたびに新しくする。
+   */
+  clientMessageId: string;
   /** サーバーが保存した質問。`start` が届くまでは null。 */
   user: ChatMessage | null;
   columns: LiveColumn[];
@@ -206,6 +237,7 @@ function AssistantColumn({
   answerDiagnostics = null,
   savedAnswer = false,
   progress = null,
+  stoppedMessage = null,
   onRetry,
   className,
 }: {
@@ -225,20 +257,18 @@ function AssistantColumn({
    * 処理の段階（#1146）。生成中は今の段階と経過時間、完了後は回答の上に「処理の経過」の 1 行を出す。
    * 段階がまだ届いていない（送信の応答待ち）ときは `steps` を空にし、「質問を送信しています」を出す。
    */
-  progress?: { steps: ChatProgressStep[]; startedAtMs: number } | null;
+  progress?: { steps: ChatProgressStep[]; startedAtMs: number; reconnecting?: boolean } | null;
+  /** 停止した回答の文（利用者の停止。#1175）。失敗の Banner ではなく、停止の 1 行で出す。 */
+  stoppedMessage?: string | null;
   /** 失敗した回答をもう一度送信する（最新の質問だけ）。 */
   onRetry?: () => void;
   className?: string;
 }) {
   const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
+  const finished = !streaming && !errorMessage && !stoppedMessage;
   return (
-    <div
-      id={messageId ? `message-${messageId}` : undefined}
-      className={cn(
-        "flex h-full min-w-0 flex-col gap-2 rounded-md border border-border bg-surface p-3",
-        className
-      )}
-    >
+    // 回答の枠は 3 製品共通の ChatAnswer（#1161）。比較（複数モデル）では列ごとに 1 つの枠にし、列の高さをそろえる。
+    <ChatAnswer id={messageId ? `message-${messageId}` : undefined} className={cn("h-full", className)}>
       {label ? (
         // 1 列（既定のモデル）でも、どのモデルの回答かを出す（#649）。
         <h3
@@ -253,10 +283,19 @@ function AssistantColumn({
         // まとめて届くので、それまでは今の段階と経過時間を出す。失敗の原因は段階ではなく下の Banner に出す。
         <ChatProgress
           steps={progress.steps.length > 0 ? progress.steps : chatSubmitProgressSteps(progress.startedAtMs)}
+          // 経過時間は送信から数え続ける（段階ごとに 0 に戻さない。#1176）。完了した回答は 0（段階の時刻）。
+          startedAt={progress.startedAtMs || undefined}
+          reconnecting={progress.reconnecting}
           testId="chat-answer-progress"
         />
       ) : null}
-      {errorMessage ? (
+      {stoppedMessage ? (
+        // 停止した回答（保存済み）。色だけに頼らず、停止のアイコンを添える（送信中の停止と同じ形）。
+        <p className="flex items-center gap-1.5 text-sm text-fg-muted" data-testid="chat-answer-stopped">
+          <Square size={14} aria-hidden="true" />
+          {stoppedMessage}
+        </p>
+      ) : errorMessage ? (
         <Banner
           severity="danger"
           action={
@@ -294,8 +333,8 @@ function AssistantColumn({
           {guardrailWarnings.join(" / ")}
         </Banner>
       ) : null}
-      {!streaming && !errorMessage && answerDiagnostics ? <AnswerDetailsPanel diagnostics={answerDiagnostics} traceId={traceId} /> : null}
-      {!streaming && !errorMessage && !answerDiagnostics && savedAnswer && traceId ? (
+      {finished && answerDiagnostics ? <AnswerDetailsPanel diagnostics={answerDiagnostics} traceId={traceId} /> : null}
+      {finished && !answerDiagnostics && savedAnswer && traceId ? (
         <Disclosure
           variant="plain"
           summary={t("chat.answerDetails.open")}
@@ -304,7 +343,7 @@ function AssistantColumn({
           <SavedAnswerRecord traceId={traceId} searchAnswerProfileId={searchAnswerProfileId} showAnswer={false} />
         </Disclosure>
       ) : null}
-      {!streaming && !errorMessage ? (
+      {finished ? (
         <FeedbackControls
           traceId={traceId}
           searchAnswerProfileId={searchAnswerProfileId}
@@ -334,7 +373,7 @@ function AssistantColumn({
           </ul>
         </Disclosure>
       ) : null}
-    </div>
+    </ChatAnswer>
   );
 }
 
@@ -372,7 +411,8 @@ function MessageTurn({
     guardrailWarnings: string[];
     answerDiagnostics?: unknown;
     savedAnswer?: boolean;
-    progress?: { steps: ChatProgressStep[]; startedAtMs: number } | null;
+    progress?: { steps: ChatProgressStep[]; startedAtMs: number; reconnecting?: boolean } | null;
+    stoppedMessage?: string | null;
   }[];
 }) {
   const compare = columns.length > 1;
@@ -383,10 +423,8 @@ function MessageTurn({
       (column) => !column.streaming && !column.errorMessage && column.answer.includes("（対象:")
     );
   return (
-    <div className="space-y-2" data-testid={testId}>
-      <ChatUserMessage status={userStatus} failedLabel={t("chat.send.failed")}>
-        {user.content}
-      </ChatUserMessage>
+    // 1 往復の入れ物（質問の吹き出し）は 3 製品共通の ChatTurn（#1161）。
+    <ChatTurn question={user.content} questionStatus={userStatus} failedLabel={t("chat.send.failed")} testId={testId}>
       {user.guardrail_warnings.length > 0 ? (
         <div className="ml-auto max-w-[85%]">
           <Banner severity="warning">
@@ -419,6 +457,7 @@ function MessageTurn({
               answerDiagnostics={column.answerDiagnostics}
               savedAnswer={column.savedAnswer}
               progress={column.progress}
+              stoppedMessage={column.stoppedMessage}
               onRetry={column.errorMessage ? onRetry : undefined}
               className={
                 compare && columns.length % 2 === 1 && index === columns.length - 1
@@ -437,7 +476,7 @@ function MessageTurn({
           </Button>
         </div>
       ) : null}
-    </div>
+    </ChatTurn>
   );
 }
 
@@ -512,7 +551,18 @@ export function ChatClient() {
     isNullableString,
     urlConversationId ?? (urlSearchAnswerProfileId ? null : undefined)
   );
-  const conversationQuery = useConversation(activeId);
+  const [sending, setSending] = useState(false);
+  // 作成中（STREAMING）の回答は、この画面の配信（SSE）で受け取っていない間（再読込の後・購読し直せないとき）だけ
+  // 保存済みの会話を取り直して完了を待つ（#1175）。
+  const conversationQuery = useConversation(activeId, { pollStreaming: !sending });
+  // 画面の前提（検索・回答プロファイルの一覧・開いている会話の内容）が揃うまでは、会話の欄に空の状態を出さず
+  // 会話の形の Skeleton で覆い、送信を止める（messaging.md §11.7、#1153）。入力欄・新しい会話・履歴の開閉を
+  // 無効にするのは検索・回答プロファイルの一覧の読み込み中だけ。会話の内容の読み込み中は入力欄に書ける
+  // （書いている途中で無効にしてフォーカスと入力を失わせない。#1188）。
+  // 会話の内容を読めなかったときも送信しない（内容の分からない会話に続けて送らない）。
+  const conversationLoading = Boolean(activeId) && conversationQuery.isLoading;
+  const conversationFailed = Boolean(activeId) && conversationQuery.isError && !conversationQuery.data;
+  const prerequisitesLoading = searchAnswerProfilesQuery.isLoading || conversationLoading;
   const persistedMessages = useMemo(
     () => conversationQuery.data?.messages ?? [],
     [conversationQuery.data]
@@ -555,30 +605,22 @@ export function ChatClient() {
   // 会話の履歴は既定で閉じる（ChatGPT・Claude・Gemini・Copilot と同じ。多くの利用者は履歴を使わないので、
   // チャットに面積を渡す。#664）。lg 以上のインラインのパネルの開閉は作業状態に残す。
   // lg 未満のモーダルの side sheet は残さない（戻ったとき・再読込で画面を塞がない。workspace-state.md）。
-  const historyInline = useHistoryInline();
+  // 開閉の判定・シートの開閉は共通の useChatHistoryPanel（3 製品共通。#1161）。
   const [historyPanelOpen, setHistoryPanelOpen] = useWorkspaceState("chat.historyOpen", false);
-  const [historySheetOpen, setHistorySheetOpen] = useState(false);
-  // lg 以上に広げたらモーダルのシートを閉じる（インラインのパネルは作業状態のまま）。
-  const [previousHistoryInline, setPreviousHistoryInline] = useState(historyInline);
-  if (previousHistoryInline !== historyInline) {
-    setPreviousHistoryInline(historyInline);
-    if (historyInline) setHistorySheetOpen(false);
-  }
-  const historyOpen = historyInline ? historyPanelOpen : historySheetOpen;
-  const historyId = useId();
-  const historyToggleRef = useRef<HTMLButtonElement>(null);
+  const history = useChatHistoryPanel({
+    inlineOpen: historyPanelOpen,
+    onInlineOpenChange: setHistoryPanelOpen,
+  });
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [liveTurn, setLiveTurn] = useState<LiveTurn | null>(null);
   // この画面で送って保存された回答の処理の段階（message_id → 段階。#1146）。段階は保存しないので、
   // 会話を取り直した後も、この画面を開いている間は回答の上に「処理の経過」を残す。
   const [finishedProgress, setFinishedProgress] = useState<Record<string, ChatProgressStep[]>>({});
-  const [sending, setSending] = useState(false);
   const [errorText, setErrorText] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
   const [titleError, setTitleError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const previousSearchAnswerProfileIdRef = useRef(searchAnswerProfileId);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -600,25 +642,108 @@ export function ChatClient() {
     setTitleError("");
   }, [searchAnswerProfileId, setActiveId, setFaqChoice, setClarifyChoice]);
 
-  // メッセージが増えたら末尾までスクロールする。
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [persistedMessages.length, liveTurn, faqChoice, clarifyChoice]);
+  // 会話の欄の自動スクロール（3 製品共通の useChatAutoScroll。#1161）。末尾を見ている間は新しいメッセージ・受信中の回答に
+  // 合わせて末尾へ追い、上を読んでいる間は引き戻さず「最新へ」を出す。会話を開いたら末尾から読み始める。
+  const scrollContentKey = useMemo(
+    () => ({}),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 変わったことだけを知らせる値（中身は使わない）
+    [persistedMessages.length, liveTurn, faqChoice, clarifyChoice]
+  );
+  const autoScroll = useChatAutoScroll({
+    contentKey: scrollContentKey,
+    resetKey: `${searchAnswerProfileId ?? ""}:${activeId ?? ""}`,
+  });
 
   useEffect(() => {
     const targetId = location.hash.slice(1);
     if (!targetId || !persistedMessages.length) return;
     const animationFrame = window.requestAnimationFrame(() => {
-      const container = scrollRef.current;
+      const container = autoScroll.logElementRef.current;
       const target = document.getElementById(targetId);
       if (!container || !target || !container.contains(target)) return;
       const offset = target.getBoundingClientRect().top - container.getBoundingClientRect().top;
       container.scrollTo({ top: container.scrollTop + offset - (container.clientHeight - target.clientHeight) / 2 });
     });
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [location.hash, persistedMessages.length]);
+  }, [location.hash, persistedMessages.length, autoScroll.logElementRef]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // 回答の配信（SSE）の状態を追う（3 製品共通の useChatProgressTracker。#1160）。質問が保存された（start）後に
+  // 配信が途絶えたら接続を張り直し、切れたら続きから購読し直す（#1175。回答の作成は接続が切れても続く）。
+  const liveTurnRef = useRef<LiveTurn | null>(liveTurn);
+  const activeIdRef = useRef(activeId);
+  useLayoutEffect(() => {
+    liveTurnRef.current = liveTurn;
+    activeIdRef.current = activeId;
+  });
+  /** 今の配信の接続（張り直すときに閉じる）。送信・停止の中止（`abortRef`）とは別。 */
+  const connectionRef = useRef<AbortController | null>(null);
+  /** 最後に配信のバイト（event・heartbeat）が届いた時刻。 */
+  const streamActivityAtRef = useRef(0);
+  const streamTracker = useChatProgressTracker({
+    key: liveTurn?.user?.message_id ?? null,
+    steps: liveTurn?.columns[0]?.progressSteps ?? [],
+    active: sending && liveTurn?.user != null && liveTurn.pending.status === "sending",
+    refresh: reconnectStalledStream,
+    staleAfterMs: CHAT_STREAM_STALE_AFTER_MS,
+  });
+
+  /** 配信を閉じて送信中の状態を解く（回答がそろった・保存済みの会話に引き継いだとき）。 */
+  function finishStream() {
+    const controller = abortRef.current;
+    abortRef.current = null;
+    controller?.abort();
+    setSending(false);
+    void queryClient.invalidateQueries({ queryKey: ["answer-records"] });
+    void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+  }
+
+  /**
+   * 配信が途絶えた（接続は開いたまま、event・heartbeat が届かない）ときに、今の接続を閉じる。送信の処理
+   * （`deliver`）が続きから購読し直す（#1175）。接続を張り直している間（応答を待つ・次の試行を待つ）は何もしない。
+   */
+  function reconnectStalledStream() {
+    const connection = connectionRef.current;
+    if (!connection) return;
+    if (Date.now() - streamActivityAtRef.current < CHAT_STREAM_STALE_AFTER_MS) return;
+    connection.abort();
+  }
+
+  /**
+   * 続きを購読できない（別の worker・再起動の後・続けて失敗した）ときに、保存済みの会話（作成中の回答）へ
+   * 引き継ぐ（#1175）。作成中の回答は会話の欄に「作成中」で出て、会話の取り直し（polling）で完了に変わる。
+   * 会話を取り直せなければ、理由と「再送信」を出す。
+   */
+  async function handOffToSavedAnswer(conversationId: string, userMessageId: string) {
+    let saved = false;
+    try {
+      // 取り直せなかったときに会話の欄を「読み込めませんでした」にしない（下の理由と「再送信」を出す）よう、
+      // キャッシュの取得ではなく直接取り、取れたときだけキャッシュに入れる。
+      const detail = await api.getConversation(conversationId);
+      queryClient.setQueryData(queryKeys.conversation(conversationId), detail);
+      saved = detail.messages.some((message) => message.message_id === userMessageId);
+    } catch {
+      // 会話を取り直せない（通信が戻らない）。下で理由と「再送信」を出す。
+    }
+    // 取り直している間に別の送信・停止に移っていたら何もしない。
+    if (liveTurnRef.current?.user?.message_id !== userMessageId || abortRef.current === null) return;
+    finishStream();
+    if (saved) {
+      setLiveTurn(null);
+      return;
+    }
+    setLiveTurn((current) =>
+      current
+        ? {
+            ...current,
+            pending: withOptimisticChatStatus(current.pending, "failed"),
+            columns: current.columns.filter((column) => column.status !== "streaming"),
+            failureMessage: t("chat.stream.lost"),
+          }
+        : current
+    );
+  }
 
   useEffect(() => {
     if (editingId) titleInputRef.current?.focus();
@@ -628,7 +753,8 @@ export function ChatClient() {
     if (titleError && !updateConversation.isPending) titleInputRef.current?.focus();
   }, [titleError, updateConversation.isPending]);
 
-  const liveUserMessageId = liveTurn?.user?.message_id;
+  // 送信中・停止した質問は、保存済みの会話の同じ質問を出さない（画面が決めた id で `start` の前から除く。#1175）。
+  const liveUserMessageId = liveTurn ? (liveTurn.user?.message_id ?? liveTurn.clientMessageId) : undefined;
   const turns = useMemo(
     () =>
       buildTurns(persistedMessages).filter(
@@ -636,15 +762,15 @@ export function ChatClient() {
       ),
     [persistedMessages, liveUserMessageId]
   );
-
-  function toggleHistory() {
-    if (historyInline) setHistoryPanelOpen(!historyPanelOpen);
-    else setHistorySheetOpen((open) => !open);
-  }
+  // 保存済みの作成中の回答がある質問（再読込の後・配信を購読し直せなかったとき。#1175）。完了まで送信を止め、
+  // 送信のボタンは「停止」（取消の API）にする。
+  const savedStreamingUserId =
+    turns.find((turn) => turn.replies.some((reply) => reply.status === "STREAMING"))?.user.message_id ?? null;
+  const answerInProgress = sending || savedStreamingUserId !== null;
 
   function selectConversation(id: string) {
     // lg 未満のシートは、会話を選んだら閉じる（開閉ボタンへフォーカスを戻す）。
-    setHistorySheetOpen(false);
+    history.closeSheet();
     if (id === activeId) return;
     cancelSending();
     setLiveTurn(null);
@@ -665,12 +791,22 @@ export function ChatClient() {
       (conversation) => conversation.status === "ACTIVE" && conversation.message_count === 0
     );
     if (emptyConversation) {
+      // 空と分かっている会話なので、内容（空）を先に入れて読み込み中にしない（#1188）。
+      if (!queryClient.getQueryData(queryKeys.conversation(emptyConversation.id))) {
+        queryClient.setQueryData<ConversationDetail>(queryKeys.conversation(emptyConversation.id), {
+          ...emptyConversation,
+          messages: [],
+        });
+      }
       selectConversation(emptyConversation.id);
       focusComposer();
       return;
     }
     try {
       const created = await createConversation.mutateAsync({ search_answer_profile_id: searchAnswerProfileId });
+      // 作った会話の内容（空）を先に入れる。読み込み中の間だけ入力欄が無効になり、その間に書いた文字が
+      // 入らない（#413 の e2e の不安定の原因）ことを防ぐ（最初の送信で会話を作るときと同じ。#664）。
+      queryClient.setQueryData(queryKeys.conversation(created.id), created);
       // 新しい会話は一覧の先頭（更新日時の新しい順）に入るので、1 ページ目に戻して見せる。
       setConversationOffset(0);
       // 前の会話への送信・生成は、別の会話を選んだときと同じく止める（新しい会話を送信中のままにしない）。
@@ -782,10 +918,11 @@ export function ChatClient() {
   }
 
   /** 送った質問を、サーバーの応答を待たずに会話の欄の末尾へ出す 1 往復（#907）。 */
-  function newLiveTurn(request: DeliverRequest): LiveTurn {
+  function newLiveTurn(request: DeliverRequest, clientMessageId = newChatClientMessageId()): LiveTurn {
     const pending = createOptimisticChatMessage(request.content);
     return {
       pending,
+      clientMessageId,
       user: null,
       columns: placeholderColumns(pending.sentAtMs),
       failureMessage: null,
@@ -819,7 +956,15 @@ export function ChatClient() {
    */
   async function send(retryContent?: string) {
     const content = (retryContent ?? composer).trim();
-    if (!content || !searchAnswerProfileId || sending || pendingChoice || searchAnswerProfileWithoutKnowledgeBases) {
+    if (
+      !content ||
+      !searchAnswerProfileId ||
+      answerInProgress ||
+      pendingChoice ||
+      searchAnswerProfileWithoutKnowledgeBases ||
+      prerequisitesLoading ||
+      conversationFailed
+    ) {
       return;
     }
     const controller = new AbortController();
@@ -828,6 +973,8 @@ export function ChatClient() {
     setErrorText("");
     if (retryContent === undefined) setComposer("");
     setLiveTurn(newLiveTurn({ content }));
+    // 送った質問は会話の欄の末尾に出す。上を読んでいても末尾へ戻る（messaging.md §11.1）。
+    autoScroll.scrollToLatest();
     let suggestions: ApprovedFaqSuggestionData[] = [];
     try {
       suggestions = (await api.suggestApprovedFaq(searchAnswerProfileId, content, "chat")).suggestions ?? [];
@@ -922,20 +1069,107 @@ export function ChatClient() {
     const { content, approvedFaqId, clarification } = request;
     const controller = existingController ?? new AbortController();
     abortRef.current = controller;
+    // 質問の id は画面が決める（#1175）。送り直すたびに新しくする（同じ id の二重の保存は 409）。
+    const clientMessageId = newChatClientMessageId();
     // 送信の直後に出した質問はそのまま使う。類似問・確認の選択の後は、ここで会話の欄に出す（#907）。
     setLiveTurn((current) =>
       current &&
       current.user === null &&
       current.pending.status === "sending" &&
       current.pending.content === content
-        ? { ...current, request }
-        : newLiveTurn(request)
+        ? { ...current, request, clientMessageId }
+        : newLiveTurn(request, clientMessageId)
     );
     let started = false;
+    // 最後に処理した event の連番（再購読はこの次から。#1175）と、今の接続で受け取った event の数。
+    let lastEventId = 0;
+    let eventsOnConnection = 0;
+    stampNow(streamActivityAtRef);
     // モデルごとの最新の処理の段階（完了した回答の上に残すため。#1146）。
     const latestProgress = new Map<string, ChatProgressStep[]>();
+    const handlers: ChatStreamHandlers = {
+      onStart: ({ user_message, columns }) => {
+        started = true;
+        // 送った会話は一覧の先頭へ移るので、1 ページ目に戻して選択中の行を見せる（#403）。
+        setConversationOffset(0);
+        void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+        // 仮の質問を保存済みの質問に置き換える（取り直した会話の同じ質問は turns から除く）。
+        // 経過時間は送信した時刻から数え続ける。
+        setLiveTurn((current) =>
+          current
+            ? {
+                ...current,
+                user: user_message,
+                columns: columns.map((column: ChatColumn) => ({
+                  model_id: column.model_id,
+                  label: column.label,
+                  answer: "",
+                  citations: [],
+                  status: "streaming",
+                  traceId: null,
+                  errorMessage: null,
+                  guardrailWarnings: [],
+                  answerDiagnostics: null,
+                  progressSteps: [],
+                  startedAtMs: current.pending.sentAtMs,
+                })),
+              }
+            : current
+        );
+      },
+      onProgress: (modelId, steps) => {
+        latestProgress.set(modelId, steps);
+        updateColumn(modelId, { progressSteps: steps });
+      },
+      onDelta: (modelId, text) => {
+        setLiveTurn((current) => {
+          if (!current) return current;
+          return {
+            ...current,
+            columns: current.columns.map((column) =>
+              column.model_id === modelId ? { ...column, answer: column.answer + text } : column
+            ),
+          };
+        });
+      },
+      onMetadata: ({ model_id, trace_id, guardrail_warnings, answer_diagnostics }) =>
+        updateColumn(model_id, {
+          traceId: trace_id,
+          guardrailWarnings: guardrail_warnings,
+          answerDiagnostics: answer_diagnostics ?? null,
+        }),
+      onCitations: (modelId, citations) => updateColumn(modelId, { citations }),
+      onModelDone: ({ model_id, message_id }) => {
+        updateColumn(model_id, { status: "done" });
+        // 取り直した会話（保存した回答）でも、この画面の間は処理の経過を回答の上に残す（#1146）。
+        const steps = latestProgress.get(model_id);
+        if (message_id && steps?.length) {
+          setFinishedProgress((current) => ({ ...current, [message_id]: steps }));
+        }
+      },
+      onModelError: ({ model_id, message, cancelled }) =>
+        updateColumn(
+          model_id,
+          cancelled ? { status: "stopped", errorMessage: message } : { status: "error", errorMessage: message }
+        ),
+      onAllDone: async () => {
+        void queryClient.invalidateQueries({ queryKey: ["answer-records"] });
+        // 取り直した会話に引き継いでから外す（質問と回答を一瞬消したり、二重に出したりしない）。
+        await queryClient.invalidateQueries({ queryKey: ["conversations"] });
+        setLiveTurn(null);
+      },
+      onActivity: () => {
+        stampNow(streamActivityAtRef);
+        streamTracker.touch();
+      },
+      onEventId: (id) => {
+        lastEventId = id;
+        eventsOnConnection += 1;
+      },
+    };
+    let conversationId = activeId;
+    let resumeFailures = 0;
     try {
-      let conversationId = activeId;
       if (!conversationId) {
         // 会話を選んでいなければ、最初の送信で会話を作る（会話の履歴を開かずに始められる。#664）。
         // 質問は作成を待たずに出している（#907）。
@@ -947,87 +1181,48 @@ export function ChatClient() {
         setActiveId(created.id);
         if (controller.signal.aborted) return;
       }
-      await streamChatMessage(
-        conversationId,
-        {
-          content,
-          model_ids: selectedModelIds,
-          ...(approvedFaqId ? { approved_faq_id: approvedFaqId } : {}),
-          ...(clarification ? { clarification } : {}),
-        },
-        {
-          onStart: ({ user_message, columns }) => {
-            started = true;
-            // 送った会話は一覧の先頭へ移るので、1 ページ目に戻して選択中の行を見せる（#403）。
-            setConversationOffset(0);
-            void queryClient.invalidateQueries({ queryKey: ["conversations"] });
-            // 仮の質問を保存済みの質問に置き換える（取り直した会話の同じ質問は turns から除く）。
-            // 経過時間は送信した時刻から数え続ける。
-            setLiveTurn((current) =>
-              current
-                ? {
-                    ...current,
-                    user: user_message,
-                    columns: columns.map((column: ChatColumn) => ({
-                      model_id: column.model_id,
-                      label: column.label,
-                      answer: "",
-                      citations: [],
-                      status: "streaming",
-                      traceId: null,
-                      errorMessage: null,
-                      guardrailWarnings: [],
-                      answerDiagnostics: null,
-                      progressSteps: [],
-                      startedAtMs: current.pending.sentAtMs,
-                    })),
-                  }
-                : current
-            );
-          },
-          onProgress: (modelId, steps) => {
-            latestProgress.set(modelId, steps);
-            updateColumn(modelId, { progressSteps: steps });
-          },
-          onDelta: (modelId, text) => {
-            setLiveTurn((current) => {
-              if (!current) return current;
-              return {
-                ...current,
-                columns: current.columns.map((column) =>
-                  column.model_id === modelId
-                    ? { ...column, answer: column.answer + text }
-                    : column
-                ),
-              };
-            });
-          },
-          onMetadata: ({ model_id, trace_id, guardrail_warnings, answer_diagnostics }) =>
-            updateColumn(model_id, {
-              traceId: trace_id,
-              guardrailWarnings: guardrail_warnings,
-              answerDiagnostics: answer_diagnostics ?? null,
-            }),
-          onCitations: (modelId, citations) => updateColumn(modelId, { citations }),
-          onModelDone: ({ model_id, message_id }) => {
-            updateColumn(model_id, { status: "done" });
-            // 取り直した会話（保存した回答）でも、この画面の間は処理の経過を回答の上に残す（#1146）。
-            const steps = latestProgress.get(model_id);
-            if (message_id && steps?.length) {
-              setFinishedProgress((current) => ({ ...current, [message_id]: steps }));
-            }
-          },
-          onModelError: ({ model_id, message }) =>
-            updateColumn(model_id, { status: "error", errorMessage: message }),
-          onAllDone: async () => {
-            void queryClient.invalidateQueries({ queryKey: ["answer-records"] });
-            // 取り直した会話に引き継いでから外す（質問と回答を一瞬消したり、二重に出したりしない）。
-            await queryClient.invalidateQueries({ queryKey: ["conversations"] });
-            setLiveTurn(null);
-          },
-        },
-        controller.signal
-      );
+      const body = {
+        content,
+        model_ids: selectedModelIds,
+        client_message_id: clientMessageId,
+        ...(approvedFaqId ? { approved_faq_id: approvedFaqId } : {}),
+        ...(clarification ? { clarification } : {}),
+      };
+      // 回答の作成は接続から切り離されている（#1175）。`all_done` の前に接続が切れたら、続きから購読し直す。
+      while (!controller.signal.aborted) {
+        const connection = new AbortController();
+        const closeConnection = () => connection.abort();
+        controller.signal.addEventListener("abort", closeConnection, { once: true });
+        connectionRef.current = connection;
+        eventsOnConnection = 0;
+        let gone = false;
+        try {
+          const outcome = started
+            ? await resumeChatStream(conversationId, clientMessageId, lastEventId, handlers, connection.signal)
+            : await streamChatMessage(conversationId, body, handlers, connection.signal);
+          if (outcome.completed) return;
+          // `all_done` の前に配信が終わった。質問の保存の前なら送信の失敗として扱う。
+          if (!started) throw new Error("chat stream ended before start");
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          // 質問の保存の前の失敗は、送信の失敗（理由と「再送信」）。
+          if (!started) throw error;
+          gone = isChatStreamGone(error);
+        } finally {
+          controller.signal.removeEventListener("abort", closeConnection);
+          if (connectionRef.current === connection) connectionRef.current = null;
+        }
+        // 質問の保存の後に接続が切れた。回答の作成は続いているので、「接続を確認しています」を出して購読し直す。
+        streamTracker.refreshNow();
+        resumeFailures = eventsOnConnection > 0 ? 1 : resumeFailures + 1;
+        if (gone || resumeFailures > CHAT_STREAM_RESUME_ATTEMPTS) {
+          // この接続先では続きを購読できない。保存済みの会話（作成中の回答）に引き継いで polling で待つ。
+          await handOffToSavedAnswer(conversationId, clientMessageId);
+          return;
+        }
+        const delay = Math.min(CHAT_STREAM_RESUME_MAX_DELAY_MS, 1_000 * 2 ** (resumeFailures - 1));
+        if (!(await waitOrAbort(delay, controller.signal))) return;
+      }
     } catch (error) {
       if (!controller.signal.aborted) {
         // 送った質問は会話の欄に残し、理由と「再送信」を出す（入力を失わない。#907）。
@@ -1038,23 +1233,30 @@ export function ChatClient() {
             ? {
                 ...current,
                 pending: withOptimisticChatStatus(current.pending, "failed"),
-                // 届いた回答は残し、届いていない回答の場所（作成中の表示）は外す。
-                columns: started ? current.columns.filter((column) => column.status !== "streaming") : [],
+                // 質問の保存の前の失敗なので、回答の場所（作成中の表示）は外す。
+                columns: [],
                 failureMessage: message,
               }
             : current
         );
-        // 質問を保存した後の失敗は、保存済みの内容を取り直す。
-        if (started) void queryClient.invalidateQueries({ queryKey: ["conversations"] });
       }
     } finally {
       releaseController(controller);
     }
   }
 
-  /** 生成を止める。送った質問は会話の欄に残す（#907）。 */
+  /**
+   * 生成を止める。送った質問は会話の欄に残す（#907）。接続を切っても回答の作成は止まらないので、取消の API で
+   * 止める（#1175）。質問の保存の前（`start` の前）でも、画面が決めた質問の id で取り消せる。
+   */
   function stop() {
-    const saved = liveTurn?.user != null;
+    if (!liveTurn && savedStreamingUserId && activeId) {
+      // 保存済みの作成中の回答（再読込の後など）を止める。
+      void cancelAnswer(activeId, savedStreamingUserId);
+      return;
+    }
+    const conversationId = activeIdRef.current;
+    const messageId = liveTurn?.user?.message_id ?? liveTurn?.clientMessageId ?? null;
     abortRef.current?.abort();
     abortRef.current = null;
     setSending(false);
@@ -1067,12 +1269,24 @@ export function ChatClient() {
           }
         : current
     );
-    // 質問を保存した後に止めたら、保存済みの内容を取り直す。
-    if (saved) void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    if (conversationId && messageId) void cancelAnswer(conversationId, messageId);
+  }
+
+  /** 回答の作成を取り消し、保存済みの内容（停止した回答）を取り直す。 */
+  async function cancelAnswer(conversationId: string, messageId: string) {
+    try {
+      await api.cancelChatAnswer(conversationId, messageId);
+    } catch {
+      // 取消に失敗しても、作成は上限の時間で終わる。会話の取り直しで今の状態を出す。
+    }
+    void queryClient.invalidateQueries({ queryKey: ["conversations"] });
   }
 
   const searchAnswerProfileLoading = searchAnswerProfilesQuery.isLoading;
-  const noSearchAnswerProfiles = !searchAnswerProfileLoading && searchAnswerProfiles.length === 0;
+  // 一覧を読めなかったときは「0 件」と同じに扱わない（空の状態を出さず、失敗と再試行を出す。#1153）。
+  const searchAnswerProfilesFailed = searchAnswerProfilesQuery.isError && !searchAnswerProfilesQuery.data;
+  const noSearchAnswerProfiles =
+    !searchAnswerProfileLoading && !searchAnswerProfilesFailed && searchAnswerProfiles.length === 0;
   const liveColumns = liveTurn
     ? liveTurn.columns.map((column) => ({
         key: column.model_id || "default",
@@ -1082,151 +1296,135 @@ export function ChatClient() {
         traceId: column.traceId,
         messageId: null,
         streaming: column.status === "streaming",
-        errorMessage: column.errorMessage,
+        errorMessage: column.status === "error" ? column.errorMessage : null,
+        stoppedMessage: column.status === "stopped" ? column.errorMessage : null,
         guardrailWarnings: column.guardrailWarnings,
         answerDiagnostics: column.answerDiagnostics,
-        progress: { steps: column.progressSteps, startedAtMs: column.startedAtMs },
+        progress: {
+          steps: column.progressSteps,
+          startedAtMs: column.startedAtMs,
+          // 配信が途絶え、保存済みの回答を取り直している間は「接続を確認しています」（#1160）。
+          reconnecting: streamTracker.reconnecting && column.status === "streaming",
+        },
       }))
     : [];
   const lastTurnId = turns.length ? turns[turns.length - 1].user.message_id : null;
 
   // 会話の履歴の中身（読み込み中・失敗・0 件・一覧・ページ送り）。lg 以上はインラインのパネル、
   // lg 未満はモーダルの side sheet に入れる（どちらか一方だけを描く）。
+  const conversationById = new Map(conversations.map((conversation) => [conversation.id, conversation]));
   const historyContent = (
-    <>
-      {conversationsQuery.isLoading ? (
-        <TimedLoadingState
-          label={t("chat.sessions.loading")}
-          operationKey="chat-conversations-load"
-          framed={false}
-          testId="chat-conversations-loading"
-        >
-          <ListSkeleton rows={3} rowClassName="h-12" />
-        </TimedLoadingState>
-      ) : conversationsQuery.isError ? (
-        <ErrorState
-          message={t("chat.sessions.error")}
-          onRetry={() => void conversationsQuery.refetch()}
-        />
-      ) : conversations.length === 0 ? (
-        <p className="px-1 text-sm text-fg-muted">{t("chat.sessions.empty")}</p>
-      ) : (
-        <>
-        <ul
-          // パネル（lg 以上）・シート（lg 未満）の高さまで伸ばし、超えたら中をスクロールする。
-          // ページ送りは一覧の下に常に見せる（#403 / #664）。
-          className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain"
-          aria-label={t("chat.sessions.title")}
-          data-testid="chat-conversation-list"
-        >
-          {conversations.map((conversation) => {
-            const title = conversation.title ?? t("chat.sessions.untitled");
-            return (
-              <li key={conversation.id} className="group">
-                {editingId === conversation.id ? (
-                  <div className="rounded-md bg-accent-subtle p-2">
-                    <div className="flex items-start gap-1">
-                      <TextField
-                        ref={titleInputRef}
-                        id={`conversation-title-${conversation.id}`}
-                        label={t("chat.sessions.renameLabel")}
-                        labelHidden
-                        className="min-w-0 flex-1"
-                        value={titleDraft}
-                        maxLength={80}
-                        required
-                        disabled={updateConversation.isPending}
-                        error={titleError || undefined}
-                        onValueChange={setTitleDraft}
-                        onKeyDown={(event) => {
-                          if (isSubmitEnter(event)) {
-                            event.preventDefault();
-                            void saveRename();
-                          } else if (event.key === "Escape") {
-                            event.preventDefault();
-                            cancelRename();
-                          }
-                        }}
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="md"
-                        iconOnly
-                        disabled={updateConversation.isPending}
-                        aria-label={t("chat.sessions.renameSave")}
-                        onClick={() => void saveRename()} icon={Check}>
-                        </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="md"
-                        iconOnly
-                        disabled={updateConversation.isPending}
-                        aria-label={t("chat.sessions.renameCancel")}
-                        onClick={cancelRename} icon={X}>
-                        </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div
-                    className={cn(
-                      "grid grid-cols-[minmax(0,1fr)_auto_auto] rounded-md transition-colors",
-                      INFORMATION_LIST_ROW_CLASS,
-                      conversation.id === activeId
-                        ? "bg-accent-subtle text-fg"
-                        : "text-fg-muted hover:bg-surface-hover hover:text-fg"
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => selectConversation(conversation.id)}
-                      aria-current={conversation.id === activeId}
-                      className="flex min-w-0 flex-col gap-0.5 rounded-md px-3 py-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus-ring"
-                    >
-                      <span className="truncate font-medium" title={title}>
-                        {title}
-                      </span>
-                      <span className="text-xs tabular-nums text-fg-muted">
-                        {t("chat.sessions.metadata", {
-                          count: conversation.message_count,
-                          updatedAt: formatDateTime(conversation.updated_at),
-                        })}
-                      </span>
-                    </button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="md"
-                      iconOnly
-                      className={cn(
-                        "mr-1 self-center transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100",
-                        conversation.id === activeId && "sm:opacity-100"
-                      )}
-                      aria-label={t("chat.sessions.rename", { title })}
-                      onClick={() => startRename(conversation)} icon={Pencil}>
-                      </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="md"
-                      tone="danger"
-                      iconOnly
-                      className={cn(
-                        "mr-1 self-center transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100",
-                        conversation.id === activeId && "sm:opacity-100"
-                      )}
-                      disabled={deleteConversation.isPending}
-                      aria-label={t("chat.sessions.delete", { title })}
-                      onClick={() => void removeConversation(conversation)} icon={Trash2}>
-                      </Button>
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-        {conversationsData ? (
+    // 一覧の行・読み込み中・失敗・0 件は 3 製品共通の ChatHistoryList（#1161）。名前の変更・削除は RAG だけ（API がある）。
+    <ChatHistoryList
+      items={conversations.map((conversation) => ({
+        id: conversation.id,
+        title: conversation.title ?? t("chat.sessions.untitled"),
+        meta: t("chat.sessions.metadata", {
+          count: conversation.message_count,
+          updatedAt: formatDateTime(conversation.updated_at),
+        }),
+      }))}
+      currentId={activeId}
+      onSelect={(item) => selectConversation(item.id)}
+      // 検索・回答プロファイルの読み込み中は会話の一覧をまだ取得できない。「まだ会話がありません」と出さず、
+      // 一覧の形だけを出す（経過時間は上のカードが出しているので重ねない。#1153）。
+      waiting={searchAnswerProfileLoading}
+      loading={conversationsQuery.isLoading}
+      error={conversationsQuery.isError ? conversationsQuery.error : null}
+      onRetry={() => void conversationsQuery.refetch()}
+      retrying={conversationsQuery.isFetching}
+      labels={{
+        list: t("chat.sessions.title"),
+        loading: t("chat.sessions.loading"),
+        error: t("chat.sessions.error"),
+        retry: t("common.retry"),
+        empty: t("chat.sessions.empty"),
+      }}
+      operationKey="chat-conversations-load"
+      testIds={{
+        skeleton: "chat-conversations-skeleton",
+        loading: "chat-conversations-loading",
+        error: "chat-conversations-error",
+        list: "chat-conversation-list",
+      }}
+      renderEditor={(item) =>
+        editingId === item.id ? (
+          <div className="flex items-start gap-1">
+            <TextField
+              ref={titleInputRef}
+              id={`conversation-title-${item.id}`}
+              label={t("chat.sessions.renameLabel")}
+              labelHidden
+              className="min-w-0 flex-1"
+              value={titleDraft}
+              maxLength={80}
+              required
+              disabled={updateConversation.isPending}
+              error={titleError || undefined}
+              onValueChange={setTitleDraft}
+              onKeyDown={(event) => {
+                if (isSubmitEnter(event)) {
+                  event.preventDefault();
+                  void saveRename();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  cancelRename();
+                }
+              }}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="md"
+              iconOnly
+              disabled={updateConversation.isPending}
+              aria-label={t("chat.sessions.renameSave")}
+              onClick={() => void saveRename()}
+              icon={Check}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="md"
+              iconOnly
+              disabled={updateConversation.isPending}
+              aria-label={t("chat.sessions.renameCancel")}
+              onClick={cancelRename}
+              icon={X}
+            />
+          </div>
+        ) : null
+      }
+      renderActions={(item) => {
+        const conversation = conversationById.get(item.id);
+        if (!conversation) return null;
+        return (
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="md"
+              iconOnly
+              aria-label={t("chat.sessions.rename", { title: item.title })}
+              onClick={() => startRename(conversation)}
+              icon={Pencil}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="md"
+              tone="danger"
+              iconOnly
+              disabled={deleteConversation.isPending}
+              aria-label={t("chat.sessions.delete", { title: item.title })}
+              onClick={() => void removeConversation(conversation)}
+              icon={Trash2}
+            />
+          </>
+        );
+      }}
+      footer={
+        conversationsData && conversations.length > 0 ? (
           <ListPagination
             {...offsetPagination({
               // 次のページを取得している間は、表示中のページ（前のページ）の範囲を出す。
@@ -1239,10 +1437,9 @@ export function ChatClient() {
             ariaLabel={t("chat.sessions.pagination")}
             testId="chat-conversations-pagination"
           />
-        ) : null}
-        </>
-      )}
-    </>
+        ) : null
+      }
+    />
   );
   const activeConversation =
     conversationQuery.data ?? conversations.find((conversation) => conversation.id === activeId);
@@ -1265,6 +1462,12 @@ export function ChatClient() {
               >
                 <SearchAnswerProfileSelectSkeleton />
               </TimedLoadingState>
+            ) : searchAnswerProfilesFailed ? (
+              <ApiErrorState
+                error={searchAnswerProfilesQuery.error}
+                fallback={t("chat.searchAnswerProfile.error")}
+                onRetry={() => void searchAnswerProfilesQuery.refetch()}
+              />
             ) : noSearchAnswerProfiles ? (
               <EmptyState
                 title={t("chat.searchAnswerProfile.empty")}
@@ -1310,321 +1513,255 @@ export function ChatClient() {
           </CardContent>
         </Card>
 
-        {searchAnswerProfileLoading || noSearchAnswerProfiles ? null : !searchAnswerProfileId ? (
+        {/* 検索・回答プロファイルの読み込み中も会話の領域を描き（寸法を予約し、読み込み後に現れて押し下げない）、
+            空の状態の代わりに会話の形の Skeleton を出す（messaging.md §11.7、#1153）。 */}
+        {searchAnswerProfilesFailed || noSearchAnswerProfiles ? null : !searchAnswerProfileLoading &&
+          !searchAnswerProfileId ? (
           <Card className="min-h-0 flex-1">
             <CardContent className="p-4 sm:p-5">
               <EmptyState title={t("chat.searchAnswerProfile.required")} />
             </CardContent>
           </Card>
         ) : (
-          <div
-            className={cn(
-              "grid min-w-0 gap-4 lg:min-h-0 lg:flex-1",
-              historyInline && historyPanelOpen && "lg:grid-cols-[280px_minmax(0,1fr)]"
-            )}
-          >
-            {historyInline ? (
-              // lg 以上: 開くとチャットの左に並べ、チャットの幅が縮む。閉じている間も描いて aria-controls の先を保つ。
-              <aside
-                id={historyId}
-                aria-label={t("chat.sessions.title")}
-                data-testid="chat-history"
-                className={cn(
-                  "min-h-0 min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface px-3 pb-3 pt-2 shadow-sm",
-                  historyPanelOpen ? "flex" : "hidden"
-                )}
-              >
-                {/* 見出しの行はチャットの上端の行と高さをそろえる。 */}
-                <h2 className="flex min-h-8 items-center px-1 text-sm font-medium text-fg">
-                  {t("chat.sessions.title")}
-                </h2>
-                {historyContent}
-              </aside>
-            ) : (
-              // lg 未満: 本文の上に重ねるモーダルの side sheet（会話を選ぶ・Esc・scrim・閉じるボタンで閉じる）。
-              <SideSheet
-                open={historySheetOpen}
-                onClose={() => setHistorySheetOpen(false)}
-                title={t("chat.sessions.title")}
-                closeLabel={t("chat.sessions.close")}
-                id={historyId}
-                returnFocusRef={historyToggleRef}
-                bodyClassName="gap-3"
-                data-testid="chat-history"
-              >
-                {historyContent}
-              </SideSheet>
-            )}
-
-            {/* 会話エリア */}
-            <section
-              aria-label={t("chat.title")}
-              className="flex h-[70dvh] min-h-[28rem] min-w-0 flex-col gap-3 overflow-hidden rounded-lg border border-border bg-surface shadow-sm lg:h-auto lg:min-h-0"
-            >
-            {/* 上端の行: 会話の履歴の開閉・今の会話の名前・新しい会話（履歴を閉じていても使える。#664）。 */}
-            <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-              <Button
-                ref={historyToggleRef}
-                type="button"
-                variant="ghost"
-                size="sm"
-                iconOnly
-                icon={historyOpen ? PanelLeftClose : PanelLeftOpen}
-                aria-label={t("chat.sessions.title")}
-                aria-expanded={historyOpen}
-                aria-controls={historyId}
-                data-testid="chat-history-toggle"
-                onClick={toggleHistory}
-              />
-              {/* 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。 */}
-              <div className="min-w-0 flex-1">
-                {!activeId ? null : activeConversation ? (
-                  <h2
-                    className="truncate text-sm font-medium text-fg"
-                    title={activeTitle}
-                    data-testid="chat-conversation-title"
-                  >
-                    {activeTitle}
-                  </h2>
-                ) : (
-                  <Skeleton className="h-4 w-40" />
-                )}
-              </div>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                icon={Plus}
-                onClick={() => void startNewConversation()}
-                disabled={createConversation.isPending}
-              >
-                {t("chat.sessions.new")}
-              </Button>
-            </div>
-            {/* 会話の欄。新しいメッセージを role="log" で知らせる（#907）。 */}
-            <div
-              ref={scrollRef}
-              role="log"
-              aria-label={t("chat.messages.label")}
-              className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4"
-              data-testid="chat-messages"
-            >
-              {/* 会話を選んでいない間は新しい会話の下書き。最初の送信で会話を作る（#664）。 */}
-              {activeId && conversationQuery.isLoading && !liveTurn ? (
-                <TimedLoadingState
-                  label={t("chat.messages.loading")}
-                  operationKey="chat-conversation-load"
-                  framed={false}
-                  testId="chat-messages-loading"
-                >
-                  {/* 質問と回答の吹き出しの寸法を予約する。 */}
-                  <Skeleton className="ml-auto h-12 w-2/3" />
-                  <Skeleton className="h-32 w-5/6" />
-                  <Skeleton className="ml-auto h-12 w-1/2" />
-                </TimedLoadingState>
-              ) : activeId && conversationQuery.isError ? (
-                <ErrorState
-                  message={t("chat.messages.error")}
-                  onRetry={() => void conversationQuery.refetch()}
+          // 骨格（履歴のパネル・シート、会話の領域の上端の行・会話の欄・入力欄の領域）は 3 製品共通の ChatLayout（#1161）。
+          <ChatLayout
+            history={history}
+            historyTitle={t("chat.sessions.title")}
+            historyCloseLabel={t("chat.sessions.close")}
+            historyContent={historyContent}
+            historyToggleDisabled={searchAnswerProfileLoading}
+            label={t("chat.title")}
+            // 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。
+            conversationTitle={activeId && activeConversation ? activeTitle : null}
+            conversationTitleLoading={Boolean(activeId) && !activeConversation}
+            newConversation={{
+              label: t("chat.sessions.new"),
+              onClick: () => void startNewConversation(),
+              disabled: createConversation.isPending || searchAnswerProfileLoading,
+            }}
+            logLabel={t("chat.messages.label")}
+            logRef={autoScroll.logRef}
+            latest={{
+              visible: autoScroll.showLatest,
+              label: t("chat.messages.latest"),
+              onClick: () => autoScroll.scrollToLatest("smooth"),
+            }}
+            testIds={{ log: "chat-messages" }}
+            composer={
+              <>
+                {/* 入力欄の領域（設定の行・入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。
+                    送信と停止は同じボタンで、生成中は同じ位置で「停止」になる（buttons.md §3.1、#413）。
+                    生成中も入力できる（次の質問を書ける）。生成中の Enter は送らず、停止もしない（#413）。
+                    IME の変換を確定する Enter では送信しない（#459）。会話を選んでいなくても入力でき、最初の送信で会話を作る（#664）。
+                    検索・回答プロファイルの一覧の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
+                    会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
+                <ChatComposer
+                  id="chat-composer"
+                  textareaRef={composerRef}
+                  value={composer}
+                  onValueChange={setComposer}
+                  onSubmit={() => void send()}
+                  onStop={stop}
+                  // 保存済みの作成中の回答（再読込の後など）がある間も「停止」（取消の API）にする（#1175）。
+                  running={answerInProgress}
+                  submitBlocked={
+                    searchAnswerProfileWithoutKnowledgeBases ||
+                    pendingChoice ||
+                    conversationLoading ||
+                    conversationFailed
+                  }
+                  disabled={searchAnswerProfileLoading}
+                  label={t("chat.composer.label")}
+                  placeholder={t("chat.composer.placeholder")}
+                  sendLabel={t("chat.composer.send")}
+                  stopLabel={t("chat.composer.stop")}
+                  sendTestId="chat-run-stop"
+                  options={
+                    compareModels.length > 0 ? (
+                      // 候補は既定のテキストモデル（先頭。未選択のときに答える）と既定の画像対応モデル（#675）。
+                      // 同じモデルなら 1 件で、画像対応モデルも兼ねることを名前と説明で出す（#888）。
+                      // 説明は常設せず、ラベルの横の info アイコンから出す（#901）。
+                      <ChatComposerOption
+                        label={t("chat.compare.label")}
+                        info={{
+                          label: t("chat.compare.infoLabel"),
+                          content: t(answerModelHelpKey(compareModels, "chat.compare.default")),
+                          contentTestId: "chat-default-model",
+                          testId: "chat-answer-model-info",
+                        }}
+                        testId="chat-answer-model"
+                      >
+                        {compareModels.map((model) => (
+                          <ToggleChip
+                            key={model.model_id}
+                            selected={selectedModelIds.includes(model.model_id)}
+                            onClick={() => toggleModel(model.model_id)}
+                          >
+                            {answerModelLabel(model)}
+                          </ToggleChip>
+                        ))}
+                      </ChatComposerOption>
+                    ) : null
+                  }
                 />
-              ) : turns.length === 0 && !liveTurn && !pendingChoice ? (
-                <EmptyState title={t("chat.messages.empty")} />
-              ) : (
-                <>
-                  {turns.map((turn) => (
-                    <MessageTurn
-                      key={turn.user.message_id}
-                      user={turn.user}
-                      searchAnswerProfileId={searchAnswerProfileId}
-                      onRetry={
-                        // 最新の質問の失敗（時間切れなど）だけ、同じ質問をもう一度送れる（#375）。
-                        turn.user.message_id === lastTurnId &&
-                        turn.user.status !== "ERROR" &&
-                        !liveTurn &&
-                        !sending
-                          ? () => void send(turn.user.content)
-                          : undefined
-                      }
-                      onAskUnscoped={
-                        turn.user.message_id === lastTurnId && !liveTurn && !sending && !pendingChoice
-                          ? () => askUnscoped(turn.user.content)
-                          : undefined
-                      }
-                      columns={turn.replies.map((reply) => ({
+                {errorText ? (
+                  <p className="text-sm text-danger-fg" role="alert">
+                    {errorText}
+                  </p>
+                ) : null}
+              </>
+            }
+          >
+            {/* 会話を選んでいない間は新しい会話の下書き。最初の送信で会話を作る（#664）。 */}
+            {conversationLoading && !liveTurn ? (
+              <TimedLoadingState
+                label={t("chat.messages.loading")}
+                operationKey="chat-conversation-load"
+                framed={false}
+                testId="chat-messages-loading"
+              >
+                {/* 質問と回答の吹き出しの寸法を予約する（3 製品で同じ形。#1153）。 */}
+                <ChatSkeleton />
+              </TimedLoadingState>
+            ) : searchAnswerProfileLoading ? (
+              // 検索・回答プロファイルの読み込み中は空の状態を出さず、会話の形の Skeleton だけを出す。
+              // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
+              <ChatSkeleton testId="chat-messages-skeleton" />
+            ) : activeId && conversationQuery.isError ? (
+              <ErrorState
+                message={t("chat.messages.error")}
+                onRetry={() => void conversationQuery.refetch()}
+              />
+            ) : turns.length === 0 && !liveTurn && !pendingChoice ? (
+              <EmptyState title={t("chat.messages.empty")} hint={t("chat.messages.emptyHint")} />
+            ) : (
+              <>
+                {turns.map((turn) => (
+                  <MessageTurn
+                    key={turn.user.message_id}
+                    user={turn.user}
+                    searchAnswerProfileId={searchAnswerProfileId ?? ""}
+                    onRetry={
+                      // 最新の質問の失敗（時間切れなど）だけ、同じ質問をもう一度送れる（#375）。
+                      turn.user.message_id === lastTurnId &&
+                      turn.user.status !== "ERROR" &&
+                      !liveTurn &&
+                      !answerInProgress
+                        ? () => void send(turn.user.content)
+                        : undefined
+                    }
+                    onAskUnscoped={
+                      turn.user.message_id === lastTurnId && !liveTurn && !answerInProgress && !pendingChoice
+                        ? () => askUnscoped(turn.user.content)
+                        : undefined
+                    }
+                    testId={turn.user.message_id === savedStreamingUserId ? "chat-saved-streaming-turn" : undefined}
+                    columns={turn.replies.map((reply) => {
+                      // 保存した処理の段階（#1175）。無ければ、この画面で受け取った段階（#1146）。
+                      const savedSteps = chatProgressStepsFromEvent(reply.progress);
+                      const steps = savedSteps.length > 0 ? savedSteps : finishedProgress[reply.message_id];
+                      const streaming = reply.status === "STREAMING";
+                      return {
                         key: reply.message_id,
                         // 保存した回答は model_id を持つ。生成中と同じ表示名に引き直す（#649）。
                         label: reply.model ? (modelLabels.get(reply.model) ?? reply.model) : null,
-                        answer: reply.content,
+                        answer: streaming ? "" : reply.content,
                         citations: reply.citations,
                         traceId: reply.trace_id,
                         messageId: reply.message_id,
-                        streaming: false,
+                        // 作成中の回答（再読込の後など）は「作成中」で出し、会話の取り直しで完了に変わる（#1175）。
+                        streaming,
                         errorMessage: reply.status === "ERROR" ? reply.content : null,
+                        stoppedMessage: reply.status === "CANCELLED" ? reply.content : null,
                         guardrailWarnings: reply.guardrail_warnings,
                         savedAnswer: Boolean(
                           reply.trace_id && answerTraceIds.has(reply.trace_id)
                         ),
-                        // この画面で送った回答は、処理の経過を回答の上に残す（#1146）。
-                        progress: finishedProgress[reply.message_id]
-                          ? { steps: finishedProgress[reply.message_id], startedAtMs: 0 }
-                          : null,
-                      }))}
-                    />
-                  ))}
-                  {liveTurn ? (
-                    // 送った質問はサーバーの応答を待たずに出し、失敗・停止のときも残す（#907）。
-                    <MessageTurn
-                      user={liveTurn.user ?? { content: liveTurn.pending.content, guardrail_warnings: [] }}
-                      userStatus={
-                        liveTurn.pending.status === "sending"
-                          ? liveTurn.user
-                            ? "sent"
-                            : "sending"
-                          : liveTurn.pending.status
-                      }
-                      columns={liveColumns}
-                      searchAnswerProfileId={searchAnswerProfileId}
-                      testId="chat-live-turn"
-                      footer={
-                        liveTurn.pending.status === "failed" ? (
-                          <div data-testid="chat-send-failure">
-                            <Banner
-                              severity="danger"
-                              action={
-                                <Button
-                                  type="button"
-                                  variant="secondary"
-                                  size="sm"
-                                  icon={RotateCcw}
-                                  disabled={sending || pendingChoice}
-                                  onClick={resend}
-                                >
-                                  {t("chat.send.retry")}
-                                </Button>
+                        progress:
+                          streaming || steps?.length
+                            ? {
+                                steps: steps ?? [],
+                                startedAtMs: Date.parse(reply.created_at) || Date.now(),
                               }
-                            >
-                              {liveTurn.failureMessage ?? t("chat.send.failedHint")}
-                            </Banner>
-                          </div>
-                        ) : liveTurn.pending.status === "stopped" ? (
-                          // 止めた状態。色だけに頼らず、停止のアイコンを添える（Agent のチャットと同じ）。
-                          <p
-                            className="flex items-center gap-1.5 text-sm text-fg-muted"
-                            data-testid="chat-stopped"
-                          >
-                            <Square size={14} aria-hidden="true" />
-                            {t("chat.send.stopped")}
-                          </p>
-                        ) : null
-                      }
-                    />
-                  ) : null}
-                  {/* 送る前の質問と、選んでから回答する類似問（#684）。質問の吹き出しは送信後と同じ形。 */}
-                  {faqChoice ? (
-                    <div className="space-y-2" data-testid="chat-approved-faq-choice">
-                      <ChatUserMessage>{faqChoice.content}</ChatUserMessage>
-                      <ApprovedFaqSuggestions
-                        mode="chat"
-                        suggestions={faqChoice.suggestions}
-                        onUse={(suggestion) => chooseFaq(suggestion.id)}
-                        onSkip={() => chooseFaq()}
-                      />
-                    </div>
-                  ) : null}
-                  {/* 類似問の後に出す確認の質問（#717）。 */}
-                  {clarifyChoice ? (
-                    <div className="space-y-2">
-                      <ChatUserMessage>{clarifyChoice.content}</ChatUserMessage>
-                      <ClarificationChoice
-                        suggestion={clarifyChoice.suggestion}
-                        onAnswer={(answer) => chooseClarification(answer)}
-                        onSkip={() => chooseClarification()}
-                      />
-                    </div>
-                  ) : null}
-                </>
-              )}
-            </div>
-
-            {/* 比較モデル + composer */}
-            <div className="space-y-2 border-t border-border p-3">
-              {compareModels.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-2" data-testid="chat-answer-model">
-                  {/* 候補は既定のテキストモデル（先頭。未選択のときに答える）と既定の画像対応モデル（#675）。
-                      同じモデルなら 1 件で、画像対応モデルも兼ねることを名前と説明で出す（#888）。
-                      説明は常設せず、ラベルの横の info アイコンから出す（#901）。 */}
-                  <span className="inline-flex items-center gap-0.5">
-                    <span className="text-xs font-medium text-fg-muted">{t("chat.compare.label")}</span>
-                    <InfoTip
-                      label={t("chat.compare.infoLabel")}
-                      content={t(answerModelHelpKey(compareModels, "chat.compare.default"))}
-                      contentTestId="chat-default-model"
-                      data-testid="chat-answer-model-info"
-                    />
-                  </span>
-                  {compareModels.map((model) => (
-                    <ToggleChip
-                      key={model.model_id}
-                      selected={selectedModelIds.includes(model.model_id)}
-                      onClick={() => toggleModel(model.model_id)}
-                    >
-                      {answerModelLabel(model)}
-                    </ToggleChip>
-                  ))}
-                </div>
-              ) : null}
-              {/* 入力欄と送信の行。送信は入力欄の下端にそろえ、375px では下に全幅で置く（#613）。 */}
-              <FieldActionRow
-                actions={
-                  // 送信と停止は同じボタン。生成中は同じ位置で「停止」になる（buttons.md §3.1、#413）。
-                  // 主な問い合わせの入力の行なので lg（README §4「操作部品の高さと幅」）。
-                  <RunStopButton
-                    running={sending}
-                    onRun={() => void send()}
-                    onStop={stop}
-                    runLabel={t("chat.composer.send")}
-                    stopLabel={t("chat.composer.stop")}
-                    runIcon={SendHorizontal}
-                    runDisabled={
-                      composer.trim().length === 0 ||
-                      searchAnswerProfileWithoutKnowledgeBases ||
-                      pendingChoice
-                    }
-                    size="lg"
-                    testId="chat-run-stop"
+                            : null,
+                      };
+                    })}
                   />
-                }
-              >
-                <TextareaField
-                  ref={composerRef}
-                  id="chat-composer"
-                  label={t("chat.composer.placeholder")}
-                  labelHidden
-                  value={composer}
-                  onChange={(event) => setComposer(event.target.value)}
-                  onKeyDown={(event) => {
-                    // IME の変換を確定する Enter では送信しない（#459）。
-                    if (isSubmitEnter(event) && !event.shiftKey) {
-                      event.preventDefault();
-                      void send();
+                ))}
+                {liveTurn ? (
+                  // 送った質問はサーバーの応答を待たずに出し、失敗・停止のときも残す（#907）。
+                  <MessageTurn
+                    user={liveTurn.user ?? { content: liveTurn.pending.content, guardrail_warnings: [] }}
+                    userStatus={
+                      liveTurn.pending.status === "sending"
+                        ? liveTurn.user
+                          ? "sent"
+                          : "sending"
+                        : liveTurn.pending.status
                     }
-                  }}
-                  rows={2}
-                  placeholder={t("chat.composer.placeholder")}
-                  // 生成中も入力できる（次の質問を書ける）。生成中の Enter は send が無視し、停止しない（#413）。
-                  // 会話を選んでいなくても入力でき、最初の送信で会話を作る（#664）。
-                  // ラベルは読み上げだけ（sr-only）なので、欄の上に余白を空けない。
-                  className="space-y-0"
-                />
-              </FieldActionRow>
-              {errorText ? (
-                <p className="text-sm text-danger-fg" role="alert">
-                  {errorText}
-                </p>
-              ) : null}
-            </div>
-            </section>
-          </div>
+                    columns={liveColumns}
+                    searchAnswerProfileId={searchAnswerProfileId ?? ""}
+                    testId="chat-live-turn"
+                    footer={
+                      liveTurn.pending.status === "failed" ? (
+                        <div data-testid="chat-send-failure">
+                          <Banner
+                            severity="danger"
+                            action={
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                icon={RotateCcw}
+                                disabled={sending || pendingChoice}
+                                onClick={resend}
+                              >
+                                {t("chat.send.retry")}
+                              </Button>
+                            }
+                          >
+                            {liveTurn.failureMessage ?? t("chat.send.failedHint")}
+                          </Banner>
+                        </div>
+                      ) : liveTurn.pending.status === "stopped" ? (
+                        // 止めた状態。色だけに頼らず、停止のアイコンを添える（Agent のチャットと同じ）。
+                        <p
+                          className="flex items-center gap-1.5 text-sm text-fg-muted"
+                          data-testid="chat-stopped"
+                        >
+                          <Square size={14} aria-hidden="true" />
+                          {t("chat.send.stopped")}
+                        </p>
+                      ) : null
+                    }
+                  />
+                ) : null}
+                {/* 送る前の質問と、選んでから回答する類似問（#684）。質問の吹き出しは送信後と同じ形。 */}
+                {faqChoice ? (
+                  <div className="space-y-2" data-testid="chat-approved-faq-choice">
+                    <ChatUserMessage>{faqChoice.content}</ChatUserMessage>
+                    <ApprovedFaqSuggestions
+                      mode="chat"
+                      suggestions={faqChoice.suggestions}
+                      onUse={(suggestion) => chooseFaq(suggestion.id)}
+                      onSkip={() => chooseFaq()}
+                    />
+                  </div>
+                ) : null}
+                {/* 類似問の後に出す確認の質問（#717）。 */}
+                {clarifyChoice ? (
+                  <div className="space-y-2">
+                    <ChatUserMessage>{clarifyChoice.content}</ChatUserMessage>
+                    <ClarificationChoice
+                      suggestion={clarifyChoice.suggestion}
+                      onAnswer={(answer) => chooseClarification(answer)}
+                      onSkip={() => chooseClarification()}
+                    />
+                  </div>
+                ) : null}
+              </>
+            )}
+          </ChatLayout>
         )}
       </PageBody>
     </div>

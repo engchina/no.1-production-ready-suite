@@ -1,10 +1,12 @@
-import type { SVGProps } from "react";
+import type { CSSProperties, SVGProps } from "react";
 
 import { cn } from "../../lib/utils";
 
-export interface SpinnerProps extends Omit<SVGProps<SVGSVGElement>, "width" | "height"> {
+export interface SpinnerProps extends Omit<SVGProps<SVGSVGElement>, "width" | "height" | "style"> {
   /** アイコン寸法(px)。周囲のアイコンと揃える(14 / 16 / 20 / 24)。既定は 16px。 */
   size?: number;
+  /** 外側の箱(`span.pr-spinner`)の style。寸法は `size` が決める。 */
+  style?: CSSProperties;
 }
 
 /** 線の実寸(px)。大きさによらず 2px にそろえる(#395)。 */
@@ -30,43 +32,56 @@ export function spinnerGeometry(size: number) {
 }
 
 /**
- * 読み込み中スピナー。
+ * 2 本のアーク（90 度 × 2。12 時→3 時と、180 度回した 6 時→9 時）の `d`。
+ * 180 度の回転対称なので、アーク（濃い筆画）の見た目の重心は常に図形の中心にある。
+ */
+export function spinnerArcPath(radius: number) {
+  const c = VIEWBOX / 2;
+  const r = round(radius);
+  return `M${c} ${round(c - r)}a${r} ${r} 0 0 1 ${r} ${r}M${c} ${round(c + r)}a${r} ${r} 0 0 1-${r}-${r}`;
+}
+
+/**
+ * 読み込み中スピナー（処理中を示す回転アイコンは 3 製品でこれ 1 つ。#395 / #1180）。
  *
- * lucide の `Loader2`(loader-circle)は 288 度の欠けた円弧だけを描くため、回転すると
- * インクの重心と外形シルエットが角度ごとに動き、「中心がずれて上下に揺れている」ように見える。
- * ここでは **常に閉じた円のトラック** を敷き、その上を 270 度のアークが回る構成にすることで、
- * シルエットを回転角によらず一定に保ち、純粋な回転として知覚されるようにする。
- *
+ * - **形**: 全周のトラックの上を、180 度対称の 2 本のアーク（90 度 × 2）が回る。
+ *   lucide の `Loader2`（288 度の欠けた円弧）や旧形（270 度の 1 本のアーク）は、濃い筆画の重心が中心から外れ、
+ *   回転するとその重心が中心のまわりを回るため「上下・左右に揺れている」ように見えた（16px で 1.8px。#1180）。
+ *   対称の 2 本なら重心は回転角によらず中心に残る（NL2SQL の旧 `StableLoadingIcon` と同じ考え方）。
+ * - **箱**: 回転しない固定の正方形（`span.pr-spinner`。`base.css`）の中で、内側の svg だけを回す。箱は
+ *   寸法・レイアウト・描画を閉じ込める（`contain: strict`）ので、回転した正方形の外接矩形（最大 1.41 倍）が
+ *   周りの行の位置・高さ・スクロールの領域に入らない。`className`（色など）は箱に付け、svg は `currentColor` で受ける。
  * - トラックの色は `--color-spinner-track`(`currentColor` をライト 30% / ダーク 35% で透かす)。
  *   アークとトラックの境目の 3:1 を保つ上限の濃さ(README §4「Spinner」)。
  * - 回転は `transform` だけ(合成スレッドで回るので、メインスレッドが詰まっても止まらない)。等速(linear)。
  * - `prefers-reduced-motion` でも回転を止めない(#440。`base.css`)。その場で回るだけの小さな動きで処理中を伝える
  *   本質的な表示のため(OS 標準の処理中表示も止まらない)。止めると処理が固まったように見える。
  */
-export function Spinner({ size = 16, className, ...props }: SpinnerProps) {
+export function Spinner({ size = 16, className, style, ...props }: SpinnerProps) {
   const { strokeWidth, radius } = spinnerGeometry(size);
   const center = VIEWBOX / 2;
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox={`0 0 ${VIEWBOX} ${VIEWBOX}`}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={strokeWidth}
+    <span
+      className={cn("pr-spinner", className)}
+      style={{ ...style, width: size, height: size }}
       aria-hidden="true"
-      // flex item の既定 flex-shrink: 1 で長いラベルに押されて縮まないよう shrink-0。
-      className={cn("shrink-0 animate-spin", className)}
-      {...props}
     >
-      {/* シルエットを一定に保つトラック(全周) */}
-      <circle className="pr-spinner-track" cx={center} cy={center} r={radius} />
-      {/* 回転を知覚させるアーク(270 度)。旧 Loader2(288 度)に近い視覚的な重みを保つ */}
-      <path
-        className="pr-spinner-arc"
-        d={`M${round(center + radius)} ${center}a${radius} ${radius} 0 1 0-${radius} ${radius}`}
-        strokeLinecap="round"
-      />
-    </svg>
+      <svg
+        width={size}
+        height={size}
+        viewBox={`0 0 ${VIEWBOX} ${VIEWBOX}`}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={strokeWidth}
+        aria-hidden="true"
+        className="animate-spin"
+        {...props}
+      >
+        {/* シルエットを一定に保つトラック(全周) */}
+        <circle className="pr-spinner-track" cx={center} cy={center} r={radius} />
+        {/* 回転を知覚させる 2 本のアーク(180 度対称。重心が中心から動かない) */}
+        <path className="pr-spinner-arc" d={spinnerArcPath(radius)} strokeLinecap="round" />
+      </svg>
+    </span>
   );
 }

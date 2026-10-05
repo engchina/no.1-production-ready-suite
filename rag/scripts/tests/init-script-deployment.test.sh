@@ -424,8 +424,9 @@ grep -Fq 'listen 8080;' "${site}" || fail "application port で listen してい
 grep -Fq 'proxy_pass http://127.0.0.1:8000;' "${site}" || fail "/api/ が backend 8000 へ proxy されていない"
 grep -Fq '/rag/frontend/dist;' "${site}" || fail "rag/frontend/dist を配信していない"
 awk '/location \/api\/ \{/,/\}/' "${site}" | grep -Fq 'proxy_buffering off;' || fail "SSE のため proxy buffering を無効にしていない"
-# LLM を複数回呼ぶ処理（評価 #304・チャット / 検索の回答生成と MCP #375・品質評価 #383）の待ち時間。
-llm_location_line='    location ~ ^/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|mcp)$ {'
+# LLM を複数回呼ぶ処理（評価 #304・チャット / 検索の回答生成と MCP #375・品質評価 #383・チャットの作成中の回答の
+# 再購読 #1175）の待ち時間。
+llm_location_line='    location ~ ^/api/(search|search/stream|search/answers/[^/]+/evaluation|evaluation/run|evaluation/compare|chat/conversations/[^/]+/messages/stream|chat/conversations/[^/]+/messages/[^/]+/stream|mcp)$ {'
 grep -Fqx "${llm_location_line}" "${site}" \
   || fail "評価・回答生成・MCP の待ち時間を延ばす location がない"
 evaluation_location="$(awk -v start="${llm_location_line}" '$0 == start {found = 1} found {print} found && /^ *\}$/ {exit}' "${site}")"
@@ -481,6 +482,11 @@ fi
 test -L "${TEST_TMP_DIR}/nginx/sites-enabled/production-ready-rag" || fail "site が有効化されていない"
 test ! -e "${TEST_TMP_DIR}/nginx/sites-enabled/default" || fail "default site が残っている"
 grep -q '^nginx -t$' "${TEST_TMP_DIR}/nginx/systemctl.log" || fail "nginx -t が実行されていない"
+# ログインの API だけの送信元 IP ごとの緩い上限（#1173。実 HTTP の確認は platform/scripts/tests/nginx-login-limit.test.sh）。
+test -f "${TEST_TMP_DIR}/nginx/conf.d/production-ready-login-rate-limit.conf" \
+  || fail "ログインの上限の zone（login-rate-limit.conf）が置かれていない"
+awk '/location = \/api\/auth\/login \{/,/\}/' "${site}" | grep -Fq 'limit_req zone=pr_login burst=30 nodelay;' \
+  || fail "/api/auth/login に limit_req が掛かっていない"
 
 # --- 静的な不変条件 ---
 init_script="${REPO_DIR}/init_script.sh"

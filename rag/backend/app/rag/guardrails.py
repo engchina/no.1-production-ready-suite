@@ -172,7 +172,7 @@ class GuardrailPolicy:
                     GuardrailFinding(
                         code="query_too_long",
                         severity="error",
-                        message="クエリが長すぎるため処理できません。",
+                        message="質問が長すぎるため処理できません。",
                     ),
                 ],
             )
