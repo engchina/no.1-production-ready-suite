@@ -325,7 +325,7 @@ for (const viewport of [
 
     await page.getByRole("button", { name: "新しい会話" }).click();
 
-    await expect(page.getByText("最初のメッセージを送信して会話を始めましょう。")).toBeVisible();
+    await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
     await expectChatWorkspaceLayout(page, viewport.name as "desktop" | "mobile");
 
     const composer = page.getByRole("textbox");
@@ -943,7 +943,7 @@ test("会話を選ばずに送信すると会話を作って回答する（#664�
   await page.goto("/chat");
   await selectSearchAnswerProfile(page, "経理アシスタント");
 
-  await expect(page.getByText("最初のメッセージを送信して会話を始めましょう。")).toBeVisible();
+  await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
   // 会話を選んでいない間は、上端に会話の名前を出さない。
   await expect(page.getByTestId("chat-conversation-title")).toHaveCount(0);
   const created = page.waitForRequest(
@@ -1277,7 +1277,7 @@ for (const viewport of [
 
     await page.goto("/chat");
     await selectSearchAnswerProfile(page, "経理アシスタント");
-    const empty = page.getByText("最初のメッセージを送信して会話を始めましょう。");
+    const empty = page.getByText("質問を入力して会話を始めます");
     await expect(empty).toBeVisible();
 
     const composer = chatComposer(page);
@@ -1415,7 +1415,7 @@ for (const viewport of [
     // 止めた質問は新しい会話に持ち越さない。
     await page.getByRole("button", { name: "新しい会話" }).click();
     await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
-    await expect(page.getByText("最初のメッセージを送信して会話を始めましょう。")).toBeVisible();
+    await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
   });
 }
 
@@ -1465,7 +1465,7 @@ test("生成中に新しい会話を作ると、前の会話の生成を止め�
   await expect(page.getByTestId("chat-live-turn").getByTestId("chat-answer-progress")).toBeVisible();
 
   await page.getByRole("button", { name: "新しい会話" }).click();
-  await expect(page.getByText("最初のメッセージを送信して会話を始めましょう。")).toBeVisible();
+  await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
   await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
   await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("送信");
   await expect.poll(() => streamAborted).toBe(true);

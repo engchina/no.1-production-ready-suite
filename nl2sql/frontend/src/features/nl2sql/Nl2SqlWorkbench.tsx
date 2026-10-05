@@ -966,7 +966,7 @@ function ExecutableNl2SqlWorkbench() {
       // 送信前に job ID を決め、応答が届かなくても作られたジョブを取り直す（二重に投入しない。#916）。
       const data = await submitNl2SqlJob(generationRequest);
       // 追跡開始後の取得・リトライ・断念は useNl2SqlJobPolling が担う。
-      // ここで初回 poll を await すると、その失敗が「検索開始失敗」と誤表示され
+      // ここで初回 poll を await すると、その失敗が「SQL の生成と実行の開始の失敗」と誤表示され
       // 成功した job の追跡まで破棄されるため、try 節は job 作成までとする。
       trackJob(data, startedAt);
     } catch (err) {

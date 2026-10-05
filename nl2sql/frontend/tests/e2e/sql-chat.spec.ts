@@ -172,7 +172,7 @@ for (const width of [1280, 375]) {
     } else await history.click();
     await page.getByRole("button", { name: "新しい会話", exact: true }).click();
     await expect(
-      page.getByText("どのような SQL を生成しますか？"),
+      page.getByText("質問を入力して会話を始めます"),
     ).toBeVisible();
     await history.click();
     await page
@@ -650,7 +650,7 @@ test("送った質問はジョブの投入の応答を待たずに会話の欄�
   await setup(page);
   const release = await gateJobSubmit(page);
   await page.goto("/chat");
-  const empty = page.getByText("どのような SQL を生成しますか？");
+  const empty = page.getByText("質問を入力して会話を始めます");
   await expect(empty).toBeVisible();
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");

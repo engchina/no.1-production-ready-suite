@@ -48,7 +48,7 @@ export function EngineSelector({
         {ENGINE_OPTIONS.map((option) => {
           const selected = option.value === value;
           return (
-            /* 排他選択の segmented control。primary は画面の主 CTA(検索実行)専用なので
+            /* 排他選択の segmented control。primary は画面の主 CTA(SQL を生成して実行)専用なので
                (button spec §0.2/§6)、選択状態は枠線 + チェックアイコンで表現する。
                説明文を含むカード型の選択肢なので、操作部品の高さの段（#613）ではなく内容の高さにする。 */
             // oxlint-disable-next-line design-system/restricted-syntax

@@ -699,7 +699,7 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expectNoHorizontalOverflow(page);
 });
 
-test("AI要件確認は確認内容をクエリへ反映し、通常の検索実行へ戻す", async ({ page }) => {
+test("AI要件確認は確認内容を質問へ反映し、通常の SQL の生成と実行へ戻す", async ({ page }) => {
   const api = await mockNl2SqlWorkbenchApi(page);
   const calls: Record<string, Record<string, unknown> | null> = {
     recommendationPayload: null,

@@ -35,7 +35,7 @@ export function QueryResultTable({
   results: QueryResults;
   /** 実行に使った取得の上限（打ち切りの案内に出す。0 は上限なし）。 */
   rowLimit?: number | null;
-  /** 表の名前（読み上げ・シートの見出し。例「検索結果」「表示結果」）。 */
+  /** 表の名前（読み上げ・シートの見出し。例「実行結果」「表示結果」）。 */
   name?: string;
   /** CSV のファイル名の接頭辞（後ろに時刻を付ける）。 */
   csvFilePrefix?: string;
@@ -94,7 +94,7 @@ export function QueryResultTable({
 }
 
 /**
- * SQL 生成・「SELECT SQL を実行」の画面の結果のカード（見出し「検索結果（N件）」）。中身は `QueryResultTable`。
+ * SQL 生成・「SELECT SQL を実行」の画面の結果のカード（見出し「実行結果（N 行）」。行のシートの見出しとそろえる。#1189）。中身は `QueryResultTable`。
  * 実行していない（`results` が無い）ときは何も出さない。
  */
 export function QueryResultCard({
@@ -116,7 +116,6 @@ export function QueryResultCard({
         <QueryResultTable
           results={results}
           rowLimit={rowLimit}
-          name={t("queryResults.name.search")}
           csvFilePrefix={csvFilePrefix}
         />
       </CardContent>
