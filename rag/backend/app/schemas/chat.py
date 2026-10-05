@@ -29,11 +29,16 @@ class MessageRole(StrEnum):
 
 
 class MessageStatus(StrEnum):
-    """メッセージの確定状態。"""
+    """メッセージの確定状態。
+
+    回答は作成を始めた時点で ``STREAMING`` で保存し、終わったら ``COMPLETE``・``ERROR``（失敗・
+    中断）・``CANCELLED``（利用者の停止）にする（#1175）。
+    """
 
     STREAMING = "STREAMING"
     COMPLETE = "COMPLETE"
     ERROR = "ERROR"
+    CANCELLED = "CANCELLED"
 
 
 class ChatMessage(BaseModel):
@@ -50,6 +55,15 @@ class ChatMessage(BaseModel):
     status: MessageStatus = MessageStatus.COMPLETE
     reply_to_message_id: str | None = None
     created_at: datetime
+    # 回答の処理の段階（3 製品共通の ChatProgressStep。#1146 / #1175）。
+    # 作成中（STREAMING）は今の段階、終わった後は処理の経過。段階を保存していないメッセージは None。
+    progress: list[dict[str, object]] | None = None
+
+
+class ChatAnswerCancelResult(BaseModel):
+    """回答の作成の取消の結果(#1175)。作成中の回答を止めた・止める予定なら True。"""
+
+    cancelled: bool
 
 
 class ConversationSummary(BaseModel):
@@ -130,6 +144,9 @@ class ChatMessageRequest(BaseModel):
     #
     # 章節のページに絞って検索し、選んだ条件を回答の前提にする。
     clarification: ClarificationAnswer | None = None
+    # 画面が決めた質問（USER のメッセージ）の id（#1175）。送信の直後（`start` の前）の停止でも、
+    # この id で回答の作成を取り消せる（NL2SQL の `client_job_id`（#900）と同じ考え方）。
+    client_message_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
 
     @field_validator("content")
     @classmethod

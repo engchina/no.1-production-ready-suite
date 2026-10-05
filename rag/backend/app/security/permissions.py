@@ -371,6 +371,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", "/chat/conversations/{conversation_id}"): _any(MENU_CHAT),
     ("DELETE", "/chat/conversations/{conversation_id}"): _any(MENU_CHAT),
     ("POST", "/chat/conversations/{conversation_id}/messages/stream"): _any(MENU_CHAT),
+    # 作成中の回答の再購読と停止（#1175）。
+    ("GET", "/chat/conversations/{conversation_id}/messages/{message_id}/stream"): _any(MENU_CHAT),
+    ("POST", "/chat/conversations/{conversation_id}/messages/{message_id}/cancel"): _any(MENU_CHAT),
     # ---- 検索・回答プロファイル: 検索と回答履歴 ----
     # 文書ワークスペースのレシピ検索テストも同期検索を使う。
     ("POST", "/search"): _any(MENU_SEARCH, MENU_UPLOAD, MENU_FILE_LIST),
