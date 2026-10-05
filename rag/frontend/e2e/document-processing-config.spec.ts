@@ -487,7 +487,7 @@ test("レシピ比較で空の引用を理由付きの状態として表示す�
   await page.goto("/documents/doc-1");
 
   await page.getByRole("button", { name: "検索結果を横並びで比較" }).click();
-  await page.getByLabel("比較用の検索クエリ").fill("承認条件を教えて");
+  await page.getByLabel("比較する質問").fill("承認条件を教えて");
   await page.getByRole("button", { name: "比較", exact: true }).click();
 
   await expect(page.getByText("一致する根拠が見つかりませんでした。")).toHaveCount(2);
@@ -536,7 +536,7 @@ test("レシピ比較の引用も共有 score layout で表示する", async ({ 
   await page.goto("/documents/doc-1");
 
   await page.getByRole("button", { name: "検索結果を横並びで比較" }).click();
-  await page.getByLabel("比較用の検索クエリ").fill("承認条件を教えて");
+  await page.getByLabel("比較する質問").fill("承認条件を教えて");
   await page.getByRole("button", { name: "比較", exact: true }).click();
 
   await expect(page.getByTestId("citation-score-panel")).toHaveCount(2);

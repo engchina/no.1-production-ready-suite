@@ -1175,10 +1175,10 @@ class ExecuteRequest(BaseModel):
         return _validate_sql_row_limit(value)
 
 
-# クエリの長さの上限（チャットの入力欄の maxLength と同じ）。
+# 質問の長さの上限（チャットの入力欄の maxLength と同じ）。
 JOB_QUESTION_MAX_LENGTH = 10000
 # 永続化したジョブの snapshot を読み戻すときの validation context の key。以前の規則で受け付けて
-# 保存したクエリ（空白だけ・上限超え）でも読めるように、入力の検証を掛けない（#1054）。
+# 保存した質問（空白だけ・上限超え）でも読めるように、入力の検証を掛けない（#1054）。
 STORED_JOB_REQUEST_CONTEXT = "stored_job_request"
 
 
@@ -1222,9 +1222,9 @@ class JobCreateRequest(BaseModel):
         if isinstance(info.context, Mapping) and info.context.get(STORED_JOB_REQUEST_CONTEXT):
             return value
         if not value.strip():
-            raise ValueError("クエリを入力してください。")
+            raise ValueError("質問を入力してください。")
         if len(value) > JOB_QUESTION_MAX_LENGTH:
-            raise ValueError(f"クエリは {JOB_QUESTION_MAX_LENGTH} 文字以内で入力してください。")
+            raise ValueError(f"質問は {JOB_QUESTION_MAX_LENGTH} 文字以内で入力してください。")
         return value
 
     @model_validator(mode="after")

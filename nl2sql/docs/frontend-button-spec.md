@@ -32,7 +32,7 @@ Issue #435 のユーザー指定により、`OntologyGraphCanvas` の操作部�
 ## 7. 命名（NL2SQL 固有）
 
 - **SQL 生成の主操作**: 自然言語から SQL を生成し、安全確認後に実行まで進むボタンは `SQL を生成して実行` とする。ボタンを参照する案内文も同じ名称に揃え、SQL 入力を直接実行する `SQL 実行` と区別する。
-- **新しい作業**: SQL 生成は `新しいクエリを開始` とする。破棄確認はクエリ・結果の消去と生成条件・実行オプションの初期化を説明し、確定ボタンも起点と同じ文言にする。
+- **新しい作業**: SQL 生成は `新しい質問を開始` とする。破棄確認は質問・結果の消去と生成条件・実行オプションの初期化を説明し、確定ボタンも起点と同じ文言にする。
 
 | 対象 | ラベル | 押下時の範囲 / 保持されるもの |
 |---|---|---|
@@ -58,7 +58,7 @@ Issue #435 のユーザー指定により、`OntologyGraphCanvas` の操作部�
 
 ## 12. 適用範囲・検証
 
-適用: PageHeader / ObjectActions / FormActionBar / ContentActionBar / BulkSelectionActions、確認ダイアログ、入力横、ログイン、各設定、クエリ・生成 SQL・結果、データ/テーブル/ビュー、Profile、学習・履歴・評価、権限、グラフ操作、ページング、エラー再試行、通知内操作。共有パッケージの状態 hook/store はそのまま使い、アクションを含む Pagination / ErrorState / Toaster の表示はアプリ共通 Button を使う。
+適用: PageHeader / ObjectActions / FormActionBar / ContentActionBar / BulkSelectionActions、確認ダイアログ、入力横、ログイン、各設定、質問・生成 SQL・結果、データ/テーブル/ビュー、Profile、学習・履歴・評価、権限、グラフ操作、ページング、エラー再試行、通知内操作。共有パッケージの状態 hook/store はそのまま使い、アクションを含む Pagination / ErrorState / Toaster の表示はアプリ共通 Button を使う。
 
 `tests/e2e/button-standards.spec.ts` は実 React 部品を使って light/dark × desktop/mobile-375 の寸法・状態・操作・focus・danger 確認・overflow・ページング・再試行を検証する。各機能の既存 Playwright spec はユーザーフローの回帰を担当する。
 

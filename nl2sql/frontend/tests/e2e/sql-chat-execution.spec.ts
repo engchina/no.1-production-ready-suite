@@ -203,7 +203,7 @@ async function setup(
 
 async function sendQuestion(page: Page, question = "売上の明細", badge = "安全検査済み・実行済み") {
   await page.goto("/chat");
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill(question);
   await composer.press("Enter");
   await expect(page.getByText(badge)).toBeVisible();
@@ -398,7 +398,7 @@ test("0 行は「該当する行はありません」、実行の失敗は吹き
         status: "error",
         results: { columns: [], rows: [], total: 0 },
         error_message:
-          "生成した SQL の実行に失敗しました。生成した SQL と「詳細」の Oracle のエラーを確認し、クエリを言い換えて実行し直してください。",
+          "生成した SQL の実行に失敗しました。生成した SQL と「詳細」の Oracle のエラーを確認し、質問を言い換えて実行し直してください。",
         error_code: "ORA-00942",
         error_detail: "SELECT の実行に失敗しました: ORA-00942: table or view does not exist",
       }),
@@ -431,7 +431,7 @@ test("送信のジョブの中の実行が失敗しても、生成した SQL と
       status: "error",
       results: { columns: [], rows: [], total: 0 },
       error_message:
-        "生成した SQL の実行に失敗しました。生成した SQL と「詳細」の Oracle のエラーを確認し、クエリを言い換えて実行し直してください。",
+        "生成した SQL の実行に失敗しました。生成した SQL と「詳細」の Oracle のエラーを確認し、質問を言い換えて実行し直してください。",
       error_code: "ORA-00942",
       error_detail: "SELECT の実行に失敗しました: ORA-00942: table or view does not exist",
     });
@@ -448,7 +448,7 @@ test("安全検査で遮断した SQL（DML）は実行しない（SQL 生成の
 }) => {
   const state = await setup(page, { safe: false });
   await page.goto("/chat");
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("売上を消して");
   await composer.press("Enter");
   const turn = page.getByTestId("sql-chat-turn").last();
