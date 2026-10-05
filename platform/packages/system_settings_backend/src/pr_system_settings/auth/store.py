@@ -31,12 +31,19 @@ from .errors import (
     SecurityStoreError,
     missing_security_migration_object,
 )
+from .login_throttle import LOGIN_ATTEMPTS_TABLE, OracleLoginAttemptStore
 
 USERS_TABLE = "PLATFORM_USERS"
 ROLES_TABLE = "PLATFORM_ROLES"
 USER_ROLES_TABLE = "PLATFORM_USER_ROLES"
 SESSIONS_TABLE = "PLATFORM_AUTH_SESSIONS"
-PLATFORM_AUTH_TABLES = (USERS_TABLE, ROLES_TABLE, USER_ROLES_TABLE, SESSIONS_TABLE)
+PLATFORM_AUTH_TABLES = (
+    USERS_TABLE,
+    ROLES_TABLE,
+    USER_ROLES_TABLE,
+    SESSIONS_TABLE,
+    LOGIN_ATTEMPTS_TABLE,
+)
 
 # 製品ごとの「ロールに付けた権限コード」テーブル（ROLE_ID, PERMISSION_CODE の形）。
 # 製品をまたぐ権限昇格の判定で使う。未配備の製品のテーブルは空として扱う。
@@ -506,6 +513,10 @@ class OracleAuthStore:
 
     def __init__(self, connection_factory: ConnectionFactory) -> None:
         self._connection_factory = connection_factory
+
+    def login_attempt_store(self) -> OracleLoginAttemptStore:
+        """ログインの試行の記録（`PLATFORM_LOGIN_ATTEMPTS`。3 製品・全 worker で共有。#1173）。"""
+        return OracleLoginAttemptStore(self._connection_factory)
 
     @contextmanager
     def connection(self, migration_object: str | None = None) -> Iterator[Any]:

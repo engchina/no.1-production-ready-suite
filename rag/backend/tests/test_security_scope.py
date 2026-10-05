@@ -643,6 +643,8 @@ def test_preserved_platform_tables_are_not_managed() -> None:
         "PLATFORM_ROLES",
         "PLATFORM_USER_ROLES",
         "PLATFORM_AUTH_SESSIONS",
+        # ログインの試行の記録（3 製品で共有。#1173）。
+        "PLATFORM_LOGIN_ATTEMPTS",
     }
     assert set(PRESERVED_TABLES).isdisjoint(MANAGED_TABLES)
     assert {
