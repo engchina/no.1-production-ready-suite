@@ -130,8 +130,10 @@ async function submitChatJob(
   try {
     return await apiPost<JobCreateData>(
       "/api/nl2sql/jobs",
-      // 生成の prompt には公開版のオントロジーを使い、画面に出さない生成後の接地確認は求めない（#1172）。
-      { ...request, generation_only: true, use_ontology_context: true, include_ontology_grounding: false },
+      // チャットも SQL 生成の画面と同じく、生成した SQL を同じジョブで実行する（#1176）。実行の権限が
+      // 無い利用者は backend が生成だけにする。生成の prompt には公開版のオントロジーを使い、画面に出さない
+      // 生成後の接地確認は求めない（#1172）。
+      { ...request, chat: true, use_ontology_context: true, include_ontology_grounding: false },
       { timeoutMs: API_TIMEOUT_MS.jobSubmit },
     );
   } catch (cause) {
@@ -167,8 +169,9 @@ const dateFormatter = new Intl.DateTimeFormat("ja-JP", {
 });
 
 /**
- * チャットの生成方法（#890）。SQL 生成画面の実行エンジン（`EngineSelector`）と同じ 3 つで、どれも生成と
- * 安全検査だけを行い SQL を実行しない（Select AI Agent の SQL ツールは SHOWSQL）。
+ * チャットの生成方法（#890）。SQL 生成画面の実行エンジン（`EngineSelector`）と同じ 3 つ。どれも SQL の
+ * 生成だけを生成方法が行い（Select AI Agent の SQL ツールは SHOWSQL）、安全検査と実行は SQL 生成の画面と
+ * 同じ backend の経路が行う（#1176）。
  */
 const CHAT_ENGINES: ReadonlyArray<{
   value: Nl2SqlEngine;
@@ -192,7 +195,10 @@ const CHAT_ENGINES: ReadonlyArray<{
   },
 ];
 
-/** 1 往復を永続ジョブにし、前文はサーバーで復元する。送信では SQL を実行しない。 */
+/**
+ * 1 往復を永続ジョブにし、前文はサーバーで復元する。SQL 生成の画面と同じく、送信のジョブが生成・安全性の
+ * 確認・実行まで行う（#1176）。結果の行は会話に残さず、画面が 1 回だけ受け取る。
+ */
 export function SqlChatPage() {
   const active = useWorkspaceActive();
   const { hasPermission } = useAuth();
@@ -228,6 +234,9 @@ export function SqlChatPage() {
   // 送った質問（#907）。ジョブの投入の応答を待たずに会話の欄の末尾へ出し、投入できたら会話のジョブに置き換える。
   // 投入できなかったときは残して「再送信」を出す。
   const [pendingSend, setPendingSend] = useState<PendingSend | null>(null);
+  // 送信した時刻（job ID ごと）。処理の経過の経過時間を、送信から数え続ける（#1176。送信の応答の後に
+  // ジョブの作成の時刻から数え直さない）。画面を開き直したときはジョブの作成の時刻から数える。
+  const [sentAtByJob, setSentAtByJob] = useState<Record<string, number>>({});
   const pending = pendingSend?.message ?? null;
   const engineDescriptionId = useId();
   const engineOption =
@@ -316,7 +325,8 @@ export function SqlChatPage() {
               question,
               profile_id: selectedProfileId,
               conversation_id: id,
-              generation_only: true,
+              chat: true,
+              generation_only: !canExecuteSql,
             },
           ],
         }),
@@ -389,7 +399,9 @@ export function SqlChatPage() {
       client_job_id: randomUuid(),
     };
     // 送った質問はすぐ会話の欄に出し、入力欄を空にする（#907）。
-    setPendingSend({ message: createOptimisticChatMessage(question), request });
+    const message = createOptimisticChatMessage(question);
+    setSentAtByJob((current) => ({ ...current, [request.client_job_id]: message.sentAtMs }));
+    setPendingSend({ message, request });
     setDraft("");
     // 送った質問は会話の欄の末尾に出す。上を読んでいても末尾へ戻る（messaging.md §11.1）。
     autoScroll.scrollToLatest();
@@ -730,6 +742,7 @@ export function SqlChatPage() {
                 turn={turn}
                 canExecuteSql={canExecuteSql}
                 canOpenDirectSql={canOpenDirectSql}
+                sentAtMs={sentAtByJob[turn.job_id]}
                 tracking={active}
                 receivedAt={conversation.dataUpdatedAt}
                 refresh={refreshConversation}
@@ -793,6 +806,7 @@ function ChatTurn({
   turn,
   canExecuteSql,
   canOpenDirectSql,
+  sentAtMs,
   tracking,
   receivedAt,
   refresh,
@@ -800,6 +814,8 @@ function ChatTurn({
   turn: JobData;
   canExecuteSql: boolean;
   canOpenDirectSql: boolean;
+  /** この画面で送信した時刻（処理の経過の経過時間の起点。#1176）。開き直した会話には無い。 */
+  sentAtMs?: number;
   /** 画面が表示されている（keep-alive で隠れていない）。 */
   tracking: boolean;
   /** 会話を最後に取得できた時刻（TanStack Query の dataUpdatedAt）。 */
@@ -820,8 +836,14 @@ function ChatTurn({
     staleAfterMs: CHAT_PROGRESS_STALE_AFTER_MS,
     enabled: tracking,
   });
-  // 実行は明示の操作（送信では実行しない）。安全検査を通った生成 SQL だけを実行できる（#1154）。
-  const execution = useChatSqlExecution(turn.job_id);
+  // 送信のジョブが実行まで行い（#1176）、結果の行はここで 1 回だけ受け取る。「もう一度実行」は明示の
+  // 操作（#1154）。安全検査を通った生成 SQL だけを実行できる。
+  const execution = useChatSqlExecution(
+    turn.job_id,
+    turn.status === "done" && canExecuteSql
+      ? turn.last_execution?.result_expires_at
+      : null,
+  );
   const executable = Boolean(
     turn.status === "done" &&
       result?.safety.is_safe &&
@@ -836,6 +858,7 @@ function ChatTurn({
           {/* 処理の段階（#1145）。実行中は今の段階、完了後は回答の上に「処理の経過」の 1 行に畳む。 */}
           <ChatProgress
             {...progress.progressProps}
+            startedAt={sentAtMs}
             labels={CHAT_PROGRESS_LABELS}
             testId="sql-chat-progress"
           />

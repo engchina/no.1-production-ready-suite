@@ -407,7 +407,7 @@ function guidedSessionData(
   done = false
 ) {
   const clarifiedQuestion =
-    "今月の受注を対象に、検索結果には受注件数を表示してください。";
+    "今月の受注を対象に、結果には受注件数を表示してください。";
   const data: ReturnType<typeof sessionData> & { clarification?: unknown; preview?: unknown } = sessionData(
     ready ? (withSql ? "awaiting_sql_confirmation" : "awaiting_intent_confirmation") : "awaiting_intent_confirmation",
     withSql,
@@ -523,7 +523,7 @@ function guidedOutputSessionData(ready: boolean) {
   const data = guidedSessionData(ready);
   const originalQuestion = "受注情報";
   const clarifiedQuestion =
-    "受注を対象に、検索結果には受注状態、受注IDを表示してください。";
+    "受注を対象に、結果には受注状態、受注IDを表示してください。";
   data.session.original_question = originalQuestion;
   data.session.intents = data.session.intents.map((item) => ({
     ...item,
@@ -534,7 +534,7 @@ function guidedOutputSessionData(ready: boolean) {
     id: "question-output-columns",
     ambiguity_id: "ambiguity-output-columns",
     category: "output",
-    prompt_ja: "検索結果に表示する項目を選んでください。",
+    prompt_ja: "結果に表示する項目を選んでください。",
     reason_ja:
       "質問だけでは必要な表示項目を絞れませんでした。必要な項目をすべて選んでください。",
     answer_kind: "multi_select",
@@ -542,14 +542,14 @@ function guidedOutputSessionData(ready: boolean) {
       {
         id: "option-order-status",
         label_ja: "受注状態",
-        description_ja: "検索結果に「受注状態」を表示します。",
+        description_ja: "結果に「受注状態」を表示します。",
         source: "ontology",
         evidence_ja: "APP.ORDERS.STATUS",
       },
       {
         id: "option-order-id",
         label_ja: "受注ID",
-        description_ja: "検索結果に「受注ID」を表示します。",
+        description_ja: "結果に「受注ID」を表示します。",
         source: "ontology",
         evidence_ja: "APP.ORDERS.ORDER_ID",
       },
@@ -611,20 +611,20 @@ function guidedBusinessTargetSessionData(ready: boolean) {
     ambiguity_id: "ambiguity-business-targets",
     category: "business_meaning",
     prompt_ja: "どの業務対象について調べますか？",
-    reason_ja: "検索対象の候補が複数あるため、意図した対象をすべて選んでください。",
+    reason_ja: "対象の候補が複数あるため、意図した対象をすべて選んでください。",
     answer_kind: "multi_select",
     options: [
       {
         id: "option-orders",
         label_ja: "受注",
-        description_ja: "「受注」を検索対象として扱います。",
+        description_ja: "「受注」を対象として扱います。",
         source: "ontology",
         evidence_ja: "APP.ORDERS",
       },
       {
         id: "option-customers",
         label_ja: "顧客",
-        description_ja: "「顧客」を検索対象として扱います。",
+        description_ja: "「顧客」を対象として扱います。",
         source: "ontology",
         evidence_ja: "APP.CUSTOMERS",
       },
@@ -659,7 +659,7 @@ function guidedInferredTargetSessionData(ready: boolean) {
     id: "question-confirm-inferred-target",
     summary_key: "entities",
     category: "business_meaning",
-    prompt_ja: "検索対象は「部署」で合っていますか？",
+    prompt_ja: "対象は「部署」で合っていますか？",
     reason_ja:
       "AI が質問から補った解釈です。内容を確認し、異なる場合は正しい条件を入力してください。",
     answer_kind: "single_select",
@@ -1263,7 +1263,7 @@ test("SQL を生成して実行すると公開済みオントロジー context �
   });
 });
 
-test("検索実行は明示操作後だけ現在の質問とオントロジー利用設定を送信する", async ({ page }, testInfo) => {
+test("SQL の生成と実行は明示操作後だけ現在の質問とオントロジー利用設定を送信する", async ({ page }, testInfo) => {
   const payloads = await mockApi(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/query");
@@ -1322,7 +1322,7 @@ test("AI要件確認は一問ずつ確認した内容でクエリを置き換え
   await panel.getByRole("button", { name: "確認内容を質問に反映" }).click();
 
   const clarifiedQuestion =
-    "今月の受注を対象に、検索結果には受注件数を表示してください。";
+    "今月の受注を対象に、結果には受注件数を表示してください。";
   const questionInput = page.locator("#nl2sql-question-input");
   await expect(panel).toHaveCount(0);
   await expect(questionInput).toHaveValue(clarifiedQuestion);
@@ -1438,7 +1438,7 @@ test("AI要件確認は利用者が明示した最大件数を保ったままク
   });
 });
 
-test("AI要件確認は推測した検索対象を利用者へ質問し内部IDを表示しない", async ({ page }, testInfo) => {
+test("AI要件確認は推測した対象を利用者へ質問し内部IDを表示しない", async ({ page }, testInfo) => {
   const payloads = await mockApi(page, "inferred");
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/query");
@@ -1448,7 +1448,7 @@ test("AI要件確認は推測した検索対象を利用者へ質問し内部ID�
 
   const panel = page.getByTestId("nl2sql-guided-clarification");
   await expect(
-    panel.getByRole("heading", { name: "検索対象は「部署」で合っていますか？" })
+    panel.getByRole("heading", { name: "対象は「部署」で合っていますか？" })
   ).toBeFocused();
   await expect(panel.getByRole("heading", { name: "確認した質問の内容" })).toHaveCount(0);
   await expect(panel.getByText("対象", { exact: true })).toHaveCount(0);
@@ -1495,7 +1495,7 @@ test("AI要件確認は内部診断を見せず表示項目を自然なクエリ
 
   const panel = page.getByTestId("nl2sql-guided-clarification");
   await expect(
-    panel.getByRole("heading", { name: "検索結果に表示する項目を選んでください。" })
+    panel.getByRole("heading", { name: "結果に表示する項目を選んでください。" })
   ).toBeFocused();
   await expect(panel.getByText(/Embedding|Ontology|Schema/)).toHaveCount(0);
   await expect(panel.getByRole("heading", { name: "確認した質問の内容" })).toBeVisible();
@@ -1525,7 +1525,7 @@ test("AI要件確認は内部診断を見せず表示項目を自然なクエリ
   await page.screenshot({ path: testInfo.outputPath("guided-output-selection.png"), fullPage: true });
   await panel.getByRole("button", { name: "確認内容を質問に反映" }).click();
   const clarifiedQuestion =
-    "受注を対象に、検索結果には受注状態、受注IDを表示してください。";
+    "受注を対象に、結果には受注状態、受注IDを表示してください。";
   const questionInput = page.locator("#nl2sql-question-input");
   await expect(questionInput).toHaveValue(clarifiedQuestion);
   await questionInput.scrollIntoViewIfNeeded();
@@ -1707,7 +1707,7 @@ test(`ALLの要件確認はProfileとクエリを引き継ぐ（保存不可=${s
     return;
   }
   await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "default");
-  const clarified = "今月の受注を対象に、検索結果には受注件数を表示してください。";
+  const clarified = "今月の受注を対象に、結果には受注件数を表示してください。";
   await expect(page.locator("#nl2sql-question-input")).toHaveValue(clarified);
   await expect(page.locator("#nl2sql-question-input")).toBeFocused();
   expect(payloads.job).toBeUndefined();

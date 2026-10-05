@@ -222,6 +222,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     nl2sql_chat_result_max_rows: int = Field(default=1000, ge=1, le=5000)
     nl2sql_chat_result_max_cell_chars: int = Field(default=2000, ge=100, le=100000)
     nl2sql_chat_result_max_bytes: int = Field(default=2_000_000, ge=10_000, le=20_000_000)
+    # チャットのジョブの中で実行した結果の行を、画面が受け取るまで置いておく上限（秒。#1176）。
+    # 行は会話に残さない（受け取ったら消す。期限を過ぎたら要約と「もう一度実行」を出す）。
+    nl2sql_chat_result_retention_seconds: int = Field(default=600, ge=30, le=86_400)
     # SELECT 実行で使ってよい利用者定義・package 関数(カンマ区切り)。
     # 例: APP.FMT_CODE,UTIL_PKG.LABEL
     nl2sql_allowed_user_functions: str = ""

@@ -2624,6 +2624,7 @@ import { ChatProgress } from "@engchina/production-ready-ui";
       steps={steps}                 // ChatProgressStep[]
       active={inFlight}             // 省略時は段階から決める（running がある / 失敗が無く pending が残る）
       elapsedMs={totalMs}           // 完了後の全体の所要時間。省略時は段階の最初の開始から最後の終了まで
+      startedAt={job.created_at}    // 実行中の経過時間の起点（処理全体の開始）。省略時は段階の最初の開始
       labels={{ status: { ...DEFAULT_CHAT_PROGRESS_LABELS.status, skipped: "未実行" } }}
       testId="chat-progress"
     />
@@ -2639,18 +2640,21 @@ import { ChatProgress } from "@engchina/production-ready-ui";
 | `steps` | `ChatProgressStep[]` | — | 段階の一覧（表示の順）。空なら何も出さない |
 | `active` | `boolean` | 段階から決める | 処理中か。回答の本文の受信中など、段階の外で処理が続くときは明示する |
 | `elapsedMs` | `number \| null` | 段階の時刻から | 完了後の 1 行の全体の所要時間 |
-| `slowAfterMs` | `number` | `10000` | この時間を超えた今の段階に遅延の案内を付ける |
+| `startedAt` | `string \| number \| null` | 段階の最初の開始 | 実行中の経過時間の起点（処理全体の開始。#1176）。どちらも無いときは表示が処理中になった時刻から数える |
+| `slowAfterMs` | `number` | `10000` | 今の段階がこの時間を超えたら、今の段階の行に遅延の案内を付ける（全体の経過時間では判断しない。#1176） |
 | `defaultOpen` | `boolean` | 失敗があれば `true` | 完了後の 1 行を最初から開くか |
 | `reconnecting` | `boolean` | `false` | 更新が途絶え、状態を取り直している（#1160）。今の段階の行の予約した行に、遅延の案内の代わりに「接続を確認しています。」を出す。`useChatProgressTracker` の `progressProps` で渡す |
-| `labels` | `Partial<ChatProgressLabels>` | `DEFAULT_CHAT_PROGRESS_LABELS` | 文言（`completedSteps(count)` / `summary(count, duration)` / `steps` / `elapsed` / `slow` / `reconnecting` / `status` / `formatDuration(ms)`） |
-| `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id` / `data-slow` / `data-reconnecting`）・`-timer`・`-slow`・`-reconnecting`・`-completed`（実行中の畳んだ見出し）・`-summary`（完了後の 1 行）・`-step-<id>`（一覧の行。`data-status`）を付ける |
+| `labels` | `Partial<ChatProgressLabels>` | `DEFAULT_CHAT_PROGRESS_LABELS` | 文言（`completedSteps(count)` / `summary(count, duration)` / `steps` / `elapsed` / `slow` / `working` / `reconnecting` / `status` / `formatDuration(ms)`） |
+| `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id`（段階の外で処理が続くときは空）/ `data-slow` / `data-reconnecting`）・`-timer`・`-slow`・`-reconnecting`・`-completed`（実行中の畳んだ見出し）・`-summary`（完了後の 1 行）・`-step-<id>`（一覧の行。`data-status`）を付ける |
 
 根の要素は `data-chat-progress-state`（`running` / `done` / `failed`）と `aria-busy` を持つ。
 
 | 決めたこと | 理由 |
 |---|---|
 | 実行中は今の段階の 1 行だけを出し、完了した段階は「✓ N ステップ完了」に畳む（既定は閉じる） | チャットの回答の場所を工程の一覧で埋めない（ChatGPT・Claude・Perplexity の「考えています / 検索しています」と同じ密度）。何をしているかは 1 行で分かり、詳しく見たい利用者だけが開く |
-| 経過時間は今の段階の開始から数え、遅延の案内も今の段階の行に付ける | どの段階で時間がかかっているか（送信・開始待ち・生成など）が分かる。全体の時間は完了後の 1 行に出す |
+| 実行中の経過時間は**処理全体**（`startedAt`、省略時は最初の段階の開始）から数え、今の段階の行の右の 1 か所に出し続ける。段階が変わっても 0 に戻さない。段階ごとの所要時間は完了した段階の行に出す（#1176） | 段階ごとに 0 から数え直すと、利用者には待った時間がリセットされたように見える（#1176 の指摘）。待った時間は全体の 1 つ、段階の内訳は一覧、と役割を分ける |
+| 遅延の案内は**今の段階**の経過時間（`slowAfterMs`、既定 10 秒）で判断し、今の段階の行に付ける（#1176） | どの段階で時間がかかっているか（送信・開始待ち・生成など）が分かる。LLM を使う処理は全体が 10 秒を超えるのが普通で、全体で判断すると毎回出て意味を失う |
+| 終端でない（`active`）のに実行中・待機中の段階が無いときも、今の行（スピナー・「処理を続けています」・全体の経過時間）を出す（#1176） | 「N ステップ完了」だけが出て、止まったのか続いているのか分からない状態を作らない。製品は backend の段階を写し漏らさない（NL2SQL はジョブの全段階を写す）。これは写し漏れの最後の備え |
 | 遅延の案内の行は最初から高さを予約する（`ProcessingIndicator` の #902 と同じ） | 10 秒後に行が足されてスピナーの行が動かない |
 | 今の段階の行を上に、完了した段階の畳んだ見出しを下に置く | 段階が完了して見出しが現れても、スピナーの行の位置が変わらない |
 | 完了後は「処理の経過（N ステップ・M 秒）」の 1 行に畳む。失敗した段階があれば開いて出す | 回答を読む邪魔をしない。失敗はどこで止まったかを最初から見せる |

@@ -885,12 +885,15 @@ _CLEAR_CONTEXT = "NL2SQL_DEEPSEC_CTX_PKG.CLEAR_APP_USER"
     ],
 )
 @pytest.mark.parametrize("engine", list(_SQL_JOB_LIMITS), ids=_ENGINE_IDS)
+# チャットのターンも SQL 生成のジョブと同じくジョブの中で実行する（#1176）。接続の分離も同じ。
+@pytest.mark.parametrize("chat", [False, True], ids=["sql_job", "chat_turn"])
 def test_business_sql_connection_follows_job_actor(
     harness: Callable[..., Harness],
     engine: Nl2SqlEngine,
     deepsec_enabled: bool,
     is_system_admin: bool,
     business_plane: str,
+    chat: bool,
 ) -> None:
     """業務データの SQL の接続は、ジョブの actor（system_admin か・user_uuid）と DeepSec で決まる。
 
@@ -905,9 +908,10 @@ def test_business_sql_connection_follows_job_actor(
     h = harness(oracle_deepsec_enabled=deepsec_enabled)
     app_plane = "runtime-admin" if is_system_admin else "runtime-user"
     connections_by_kind: dict[bool, set[int]] = {True: set(), False: set()}
+    job = _sql_job(engine).model_copy(update={"chat": True}) if chat else _sql_job(engine)
     for actor in ("user-a", "user-b"):  # 同じ worker が 2 人の利用者のジョブを続けて処理する
         start = h.recorder.mark()
-        h.measure(_sql_job(engine), actor=actor, is_system_admin=is_system_admin)
+        h.measure(job, actor=actor, is_system_admin=is_system_admin)
         calls = h.recorder.window(start)
 
         business = [c for c in calls if c.op == "execute" and c.detail == _BUSINESS_SQL]
@@ -945,7 +949,7 @@ def test_business_sql_connection_follows_job_actor(
     # 同じ worker が、続けてもう一方の種類の actor のジョブを処理しても、業務データの SQL の接続は
     # 交わらない（system_admin 用と非 system_admin 用で同じ接続を使い回さない）。
     start = h.recorder.mark()
-    h.measure(_sql_job(engine), actor="user-c", is_system_admin=not is_system_admin)
+    h.measure(job, actor="user-c", is_system_admin=not is_system_admin)
     other = [c for c in h.recorder.window(start) if c.op == "execute" and c.detail == _BUSINESS_SQL]
     assert len(other) == 1
     connections_by_kind[not is_system_admin].update(c.connection_id for c in other)

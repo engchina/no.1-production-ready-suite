@@ -1,7 +1,9 @@
 // チャットのジョブの段階を、3 製品共通の段階の形（ChatProgressStep）にする（#1145）。
 //
-// SQL 生成の画面の工程の表示（WorkflowProgressStrip）より情報を絞り、チャットが送るだけで実行しない
-// （generation_only）ジョブの段階（開始待ち・準備・生成・安全性の確認）だけを出す。
+// SQL 生成の画面の工程の表示（WorkflowProgressStrip）より情報を絞る。チャットも SQL 生成の画面と同じく
+// 生成した SQL を同じジョブで実行するので（#1176）、ジョブの全段階（開始待ち・準備・生成・安全性の確認・
+// 実行・結果の整形）を写す。写し漏らした段階の間は、今の段階の行が消えて「N ステップ完了」だけになる
+// （#1176 の指摘）。実行の権限が無い利用者のターン・#1176 より前のターンは、実行を「未実行」にする。
 import type {
   ChatProgressLabels,
   ChatProgressStep,
@@ -13,10 +15,21 @@ import { t } from "../../lib/i18n";
 import { normalizeNl2SqlJobSteps } from "./jobProgressState";
 import type { JobData, JobStepStatus, Nl2SqlEngine } from "./types";
 
-type ChatStage = "prepare_context" | "generate_sql" | "safety_check";
+type ChatStage =
+  | "prepare_context"
+  | "generate_sql"
+  | "safety_check"
+  | "execute_sql"
+  | "format_results";
 
-/** チャットで出す工程（実行と整形はチャットでは行わない）。 */
-const CHAT_STAGES: readonly ChatStage[] = ["prepare_context", "generate_sql", "safety_check"];
+/** チャットで出す工程（backend のジョブの段階 `_NL2SQL_JOB_STAGES` と同じ。#1176）。 */
+const CHAT_STAGES: readonly ChatStage[] = [
+  "prepare_context",
+  "generate_sql",
+  "safety_check",
+  "execute_sql",
+  "format_results",
+];
 
 /** 段階の名前（実行中・完了・失敗・未実行）。i18n の key は静的に書く（辞書の検査が key を見つけられるように）。 */
 const STAGE_LABELS: Record<ChatStage | "queue", Record<"running" | "done" | "failed" | "idle", string>> = {
@@ -44,6 +57,18 @@ const STAGE_LABELS: Record<ChatStage | "queue", Record<"running" | "done" | "fai
     failed: t("chat.progress.safety_check.failed"),
     idle: t("chat.progress.safety_check.idle"),
   },
+  execute_sql: {
+    running: t("chat.progress.execute_sql.running"),
+    done: t("chat.progress.execute_sql.done"),
+    failed: t("chat.progress.execute_sql.failed"),
+    idle: t("chat.progress.execute_sql.idle"),
+  },
+  format_results: {
+    running: t("chat.progress.format_results.running"),
+    done: t("chat.progress.format_results.done"),
+    failed: t("chat.progress.format_results.failed"),
+    idle: t("chat.progress.format_results.idle"),
+  },
 };
 
 const ENGINE_LABELS: Record<Nl2SqlEngine, string> = {
@@ -54,6 +79,7 @@ const ENGINE_LABELS: Record<Nl2SqlEngine, string> = {
 
 /** 共通の部品の文言のうち、NL2SQL の語にそろえるもの（スキップは SQL 生成の画面と同じ「未実行」）。 */
 export const CHAT_PROGRESS_LABELS: Partial<ChatProgressLabels> = {
+  working: t("chat.progress.working"),
   completedSteps: (count) => t("chat.progress.completed", { count }),
   summary: (count, duration) => t("chat.progress.summary", { count, duration }),
   steps: t("chat.progress.steps"),
@@ -153,6 +179,9 @@ export function chatJobProgressSteps(job: JobData, engine?: Nl2SqlEngine): ChatP
     if (!detail && stage === "generate_sql" && engine) detail = ENGINE_LABELS[engine];
     if (!detail && stage === "safety_check" && status === "done")
       detail = tablesDetail(job.result?.safety.referenced_tables);
+    // 実行で取得した行数（ジョブの中の実行の要約。#1176）。
+    if (!detail && stage === "execute_sql" && status === "done" && job.last_execution)
+      detail = t("chat.progress.rows", { count: job.last_execution.row_count.toLocaleString("ja-JP") });
     const timing = reported.get(stage);
     steps.push({
       id: stage,
@@ -162,6 +191,18 @@ export function chatJobProgressSteps(job: JobData, engine?: Nl2SqlEngine): ChatP
       finishedAt: status === "running" ? undefined : (timing?.finished_at ?? undefined),
       detail,
     });
+  }
+  // 終端でないのに実行中・待機中の段階が無い（最後の段階を終えた後、結果の保存の間など）ときは、
+  // 最後の段階（結果の整形）を今の段階として続ける。終端でないのに全段階が完了に見える状態を作らない（#1176）。
+  if (!terminal && !steps.some((step) => step.status === "running" || step.status === "pending")) {
+    const last = steps.length - 1;
+    const stage = steps[last].id as ChatStage;
+    steps[last] = {
+      ...steps[last],
+      status: "running",
+      label: labelFor(stage, "running"),
+      finishedAt: undefined,
+    };
   }
   return steps;
 }

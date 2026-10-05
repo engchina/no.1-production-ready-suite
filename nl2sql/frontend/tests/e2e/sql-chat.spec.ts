@@ -6,6 +6,10 @@ import {
   expectSelectFieldValue,
 } from "./_helpers/select-field";
 import { expectedControlHeight } from "./_helpers/control-height";
+import {
+  expectProgressTimerMonotonic,
+  startProgressTimerSampler,
+} from "./_helpers/progress-timer";
 
 const profile = {
   id: "sales",
@@ -85,14 +89,15 @@ async function setup(page: Page) {
       question: body.question,
       engine: body.engine,
       status: state.pending ? "running" : "done",
-      created_at: now,
+      // 実行中のジョブは今の時刻に作る（処理の経過の経過時間はジョブの作成から数える）。
+      created_at: state.pending ? new Date().toISOString() : now,
       steps: [],
       result: state.pending ? null : result,
     };
     state.turns.push(turn);
     return route.fulfill({
       json: {
-        data: { job_id: id, status: turn.status, created_at: now, steps: [] },
+        data: { job_id: id, status: turn.status, created_at: turn.created_at, steps: [] },
       },
     });
   });
@@ -107,7 +112,7 @@ async function setup(page: Page) {
   return state;
 }
 for (const width of [1280, 375]) {
-  test(`SQL を実行せず多輪生成し、履歴とリロードで復元する (${width}px)`, async ({
+  test(`多輪で SQL を生成し、履歴とリロードで復元する (${width}px)`, async ({
     page,
   }, testInfo) => {
     const state = await setup(page);
@@ -142,17 +147,18 @@ for (const width of [1280, 375]) {
     await expect(page.locator("pre").last()).toContainText(
       "ORDER BY SUM(AMOUNT) DESC",
     );
+    // チャットのターンとして送る（実行するかは backend が権限で決める。#1176）。
     // 生成の prompt には公開版のオントロジーの文脈を使い、画面に出さない生成後の接地確認は
     // 求めない（#1172）。
     expect(state.requests[0]).toMatchObject({
-      generation_only: true,
+      chat: true,
       profile_id: "sales",
       previous_job_id: null,
       use_ontology_context: true,
       include_ontology_grounding: false,
     });
     expect(state.requests[1]).toMatchObject({
-      generation_only: true,
+      chat: true,
       previous_job_id: "chat-1",
       question: "多い順にして",
       use_ontology_context: true,
@@ -172,7 +178,7 @@ for (const width of [1280, 375]) {
     } else await history.click();
     await page.getByRole("button", { name: "新しい会話", exact: true }).click();
     await expect(
-      page.getByText("どのような SQL を生成しますか？"),
+      page.getByText("質問を入力して会話を始めます"),
     ).toBeVisible();
     await history.click();
     await page
@@ -600,7 +606,7 @@ test("生成方法は入力欄の直上で選び、Select AI Agent も送れる"
   await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
   expect(state.requests[0]).toMatchObject({
     engine: "select_ai_agent",
-    generation_only: true,
+    chat: true,
   });
   // 生成方法は作業状態に残る。
   await page.reload();
@@ -650,7 +656,7 @@ test("送った質問はジョブの投入の応答を待たずに会話の欄�
   await setup(page);
   const release = await gateJobSubmit(page);
   await page.goto("/chat");
-  const empty = page.getByText("どのような SQL を生成しますか？");
+  const empty = page.getByText("質問を入力して会話を始めます");
   await expect(empty).toBeVisible();
   const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");
@@ -906,6 +912,8 @@ for (const width of [1280, 375]) {
     const state = await setup(page);
     state.pending = true;
     await page.goto("/chat");
+    // #1176: 段階が進む間、右上の経過時間（処理全体の通算）が減らないことを記録する。
+    await startProgressTimerSampler(page, "sql-chat-progress");
     const composer = page.getByRole("textbox", { name: "質問", exact: true });
     await composer.fill("select * from employee");
     await composer.press("Enter");
@@ -933,8 +941,8 @@ for (const width of [1280, 375]) {
         { stage: "prepare_context", status: "done", started_at: iso(19_000), finished_at: iso(18_000) },
         { stage: "generate_sql", status: "running", started_at: iso(18_000) },
         { stage: "safety_check", status: "pending" },
-        { stage: "execute_sql", status: "skipped" },
-        { stage: "format_results", status: "skipped" },
+        { stage: "execute_sql", status: "pending" },
+        { stage: "format_results", status: "pending" },
       ],
     });
     await expect(current).toHaveAttribute("data-step-id", "generate_sql");
@@ -964,16 +972,43 @@ for (const width of [1280, 375]) {
     }
     await applyColorScheme(page, "light");
 
+    // #1176: 経過時間は処理全体（送信）から数え、段階が変わっても 0 に戻さない。安全性の確認の後
+    // （実行・結果の整形）も今の段階の行を出す（「N ステップ完了」だけにしない）。
+    const timer = progress.getByTestId("sql-chat-progress-timer");
+    await expect(timer).toHaveAttribute("aria-label", /経過時間 00:(0[2-9]|[1-5]\d)/);
+    const seconds = async () =>
+      Number((await timer.getAttribute("aria-label"))!.match(/(\d+):(\d+)$/)!.slice(1).reduce(
+        (total, part) => total * 60 + Number(part),
+        0,
+      ));
+    const before = await seconds();
+    Object.assign(state.turns[0], {
+      steps: [
+        { stage: "prepare_context", status: "done", started_at: iso(19_000), finished_at: iso(18_000) },
+        { stage: "generate_sql", status: "done", started_at: iso(18_000), finished_at: iso(2_000) },
+        { stage: "safety_check", status: "done", started_at: iso(2_000), finished_at: iso(1_000) },
+        { stage: "execute_sql", status: "done", started_at: iso(1_000), finished_at: iso(0) },
+        { stage: "format_results", status: "running", started_at: iso(0) },
+      ],
+    });
+    await expect(current).toHaveAttribute("data-step-id", "format_results");
+    await expect(current).toContainText("結果をまとめています");
+    await expect(completed).toHaveText("5 ステップ完了");
+    expect(await seconds()).toBeGreaterThanOrEqual(before);
+    await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
+    // 送信・開始待ち・生成・結果の整形の段階を通る間、経過時間は減らない。
+    await expectProgressTimerMonotonic(page, 3);
+
     // 完了: 回答の上に「処理の経過（N ステップ・M 秒）」の 1 行に畳む（既定は閉じる）。
     Object.assign(state.turns[0], {
       status: "done",
       finished_at: iso(0),
       steps: [
         { stage: "prepare_context", status: "done", started_at: iso(19_000), finished_at: iso(18_000) },
-        { stage: "generate_sql", status: "done", started_at: iso(18_000), finished_at: iso(1_000) },
-        { stage: "safety_check", status: "done", started_at: iso(1_000), finished_at: iso(0) },
-        { stage: "execute_sql", status: "skipped" },
-        { stage: "format_results", status: "skipped" },
+        { stage: "generate_sql", status: "done", started_at: iso(18_000), finished_at: iso(2_000) },
+        { stage: "safety_check", status: "done", started_at: iso(2_000), finished_at: iso(1_000) },
+        { stage: "execute_sql", status: "done", started_at: iso(1_000), finished_at: iso(500) },
+        { stage: "format_results", status: "done", started_at: iso(500), finished_at: iso(0) },
       ],
       result: {
         generated_sql: "SELECT * FROM APP.EMPLOYEE",
@@ -984,7 +1019,7 @@ for (const width of [1280, 375]) {
     });
     await expect(turn.getByText("安全検査済み・未実行")).toBeVisible();
     const summary = progress.getByTestId("sql-chat-progress-summary");
-    await expect(summary).toHaveText(/^処理の経過（4 ステップ・2\d 秒）$/);
+    await expect(summary).toHaveText(/^処理の経過（6 ステップ・2\d 秒）$/);
     await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
     await expect(progress.locator("details")).not.toHaveAttribute("open", /.*/);
     await expect(page.locator("svg.animate-spin:visible")).toHaveCount(0);

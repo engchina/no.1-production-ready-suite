@@ -714,6 +714,10 @@ class IncrementalNl2SqlRepository(Protocol):
 
     def delete_document(self, collection: str, entity_id: str) -> None: ...
 
+    def delete_documents_older_than(self, collection: str, *, seconds: int) -> None:
+        """最後の更新から `seconds` 秒を過ぎた文書を消す（期限付きの一時の文書の掃除。#1176）。"""
+        ...
+
     def list_documents(
         self,
         collection: str,
@@ -1334,6 +1338,18 @@ class MemoryIncrementalNl2SqlRepository:
         with self._lock:
             self._documents.pop((collection, entity_id), None)
             self._tokens[STATE_NAMESPACE] += 1
+
+    def delete_documents_older_than(self, collection: str, *, seconds: int) -> None:
+        cutoff = datetime.now(UTC).timestamp() - seconds
+        with self._lock:
+            for key in [
+                key
+                for key, value in self._documents.items()
+                if key[0] == collection
+                and datetime.fromisoformat(str(value.get("_updated_at") or _utc_now())).timestamp()
+                < cutoff
+            ]:
+                self._documents.pop(key, None)
 
     def list_documents(
         self,
@@ -2566,6 +2582,19 @@ class OracleIncrementalNl2SqlRepository:
                 {"collection": collection, "entity_id": entity_id},
             )
             self._bump_token_and_commit(connection, cursor, STATE_NAMESPACE)
+
+    def delete_documents_older_than(self, collection: str, *, seconds: int) -> None:
+        # 一時の文書（チャットの実行の結果の行など）は他の画面のキャッシュに関わらないので、
+        # change token を進めない。期限は DB の時刻で判断する（アプリの時計のずれに左右されない）。
+        with self._connection_factory() as connection, connection.cursor() as cursor:
+            _execute_committing(
+                connection,
+                lambda: cursor.execute(
+                    "DELETE FROM NL2SQL_STATE_DOCUMENTS WHERE COLLECTION = :collection "
+                    "AND UPDATED_AT < SYSTIMESTAMP - NUMTODSINTERVAL(:seconds, 'SECOND')",
+                    {"collection": collection, "seconds": seconds},
+                ),
+            )
 
     def list_documents(
         self,

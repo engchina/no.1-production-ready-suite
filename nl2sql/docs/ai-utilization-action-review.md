@@ -128,7 +128,7 @@ UV_CACHE_DIR=/tmp/nl2sql-uv-cache uv run --no-sync pytest \
 
 ```bash
 cd frontend
-npm run test:e2e -- tests/e2e/nl2sql-workflows.spec.ts tests/e2e/nl2sql-execution-options.spec.ts tests/e2e/history-management.spec.ts --grep 'nl2sql-execution-options|history-management|query workbench|クエリ|スキーマ参照|スキーマピッカー|実行エンジン|必須入力欄|プロファイル削除|自動判定|推薦適用|job|検索実行開始|参考履歴|検索結果|SQL を生成|検索ジョブ|Query Rewrite|抽出条件|Ontology グラフ|未修飾列|サンプルデータ投入|今回だけの生成条件|AI 活用|SQL 実行中|SQL 再実行|SQL ファイル入力|history rerun|dark theme|sql to question|論理構造|フィードバック保存成功|SELECT SQL の遅延|スキーマ参照は別 owner|AI要件'
+npm run test:e2e -- tests/e2e/nl2sql-workflows.spec.ts tests/e2e/nl2sql-execution-options.spec.ts tests/e2e/history-management.spec.ts --grep 'nl2sql-execution-options|history-management|query workbench|クエリ|スキーマ参照|スキーマピッカー|実行エンジン|必須入力欄|プロファイル削除|自動判定|推薦適用|job|SQL の生成と実行の開始時|参考履歴|実行結果|SQL を生成|SQL の生成と実行のジョブ|Query Rewrite|抽出条件|Ontology グラフ|未修飾列|サンプルデータ投入|今回だけの生成条件|AI 活用|SQL 実行中|SQL 再実行|SQL ファイル入力|history rerun|dark theme|sql to question|論理構造|フィードバック保存成功|SELECT SQL の遅延|スキーマ参照は別 owner|AI要件'
 ```
 
 ### 画面記録
