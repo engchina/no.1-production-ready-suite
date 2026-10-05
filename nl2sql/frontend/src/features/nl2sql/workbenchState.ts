@@ -87,7 +87,7 @@ export function buildSchemaSqlIdentifierText(table: SchemaTable, column: SchemaC
   return `${quoteSqlIdentifier(table.owner)}.${quoteSqlIdentifier(table.table_name)}.${quoteSqlIdentifier(column.column_name)}`;
 }
 
-/** 表名の挿入テキスト（論理名・クエリ向け）。 */
+/** 表名の挿入テキスト（論理名・質問向け）。 */
 export function buildTableInsertText(table: SchemaTable) {
   return `"${table.logical_name}"`;
 }

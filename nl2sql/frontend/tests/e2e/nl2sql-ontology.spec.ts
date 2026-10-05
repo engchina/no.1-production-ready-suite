@@ -536,7 +536,7 @@ function guidedOutputSessionData(ready: boolean) {
     category: "output",
     prompt_ja: "検索結果に表示する項目を選んでください。",
     reason_ja:
-      "クエリだけでは必要な表示項目を絞れませんでした。必要な項目をすべて選んでください。",
+      "質問だけでは必要な表示項目を絞れませんでした。必要な項目をすべて選んでください。",
     answer_kind: "multi_select",
     options: [
       {
@@ -661,7 +661,7 @@ function guidedInferredTargetSessionData(ready: boolean) {
     category: "business_meaning",
     prompt_ja: "検索対象は「部署」で合っていますか？",
     reason_ja:
-      "AI がクエリから補った解釈です。内容を確認し、異なる場合は正しい条件を入力してください。",
+      "AI が質問から補った解釈です。内容を確認し、異なる場合は正しい条件を入力してください。",
     answer_kind: "single_select",
     options: [
       {
@@ -1294,7 +1294,7 @@ test("AI要件確認は一問ずつ確認した内容でクエリを置き換え
   await expect(clarificationDescription).toBeHidden();
   await page.getByRole("button", { name: "AI要件確認の説明", exact: true }).click();
   await expect(clarificationDescription).toHaveText(
-    "AIによるSQL生成の精度を高めるため、対話を通じてクエリの対象・表示項目・条件を補い、より明確で具体的な内容に整えます。"
+    "AIによるSQL生成の精度を高めるため、対話を通じて質問の対象・表示項目・条件を補い、より明確で具体的な内容に整えます。"
   );
   await expect(clarificationDescription).toBeVisible();
   await page.locator("#nl2sql-question-input").click();
@@ -1315,11 +1315,11 @@ test("AI要件確認は一問ずつ確認した内容でクエリを置き換え
   await nextButton.click();
 
   await expect(panel.getByText("確認完了").first()).toBeVisible();
-  await expect(panel.getByRole("heading", { name: "確認したクエリ内容" })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "確認した質問の内容" })).toBeVisible();
   await expect(panel.getByText("今月", { exact: true })).toBeVisible();
   await expect(panel.getByText("最大件数")).toHaveCount(0);
   await expect(panel.getByText("結果は最大 100 件に制限します。")).toHaveCount(0);
-  await panel.getByRole("button", { name: "確認内容をクエリに反映" }).click();
+  await panel.getByRole("button", { name: "確認内容を質問に反映" }).click();
 
   const clarifiedQuestion =
     "今月の受注を対象に、検索結果には受注件数を表示してください。";
@@ -1327,7 +1327,7 @@ test("AI要件確認は一問ずつ確認した内容でクエリを置き換え
   await expect(panel).toHaveCount(0);
   await expect(questionInput).toHaveValue(clarifiedQuestion);
   await expect(questionInput).toBeFocused();
-  await expect(page.getByText("確認内容をクエリに反映しました。内容を確認して「SQL を生成して実行」を押してください。")).toBeVisible();
+  await expect(page.getByText("確認内容を質問に反映しました。内容を確認して「SQL を生成して実行」を押してください。")).toBeVisible();
   expect(payloads.generate).toBeUndefined();
   expect(payloads.confirm).toBeUndefined();
   expect(payloads.execute).toBeUndefined();
@@ -1375,7 +1375,7 @@ test("AI要件確認の開始中は実処理に合わせて案内を切り替え
 
   await expect(timer).toContainText(/00:0[1-9]/);
   await expect(visibleProgressLabel).toHaveText("利用する業務プロファイルを確定しています");
-  await expect(visibleProgressLabel).toHaveText("クエリの確認項目を整理しています");
+  await expect(visibleProgressLabel).toHaveText("質問の確認項目を整理しています");
   await expect(timer).toContainText(/00:0[2-9]/);
   await page.screenshot({
     path: testInfo.outputPath("guided-clarification-progress.png"),
@@ -1426,7 +1426,7 @@ test("AI要件確認は利用者が明示した最大件数を保ったままク
   await expect(panel.getByText("最大件数")).toBeVisible();
   await expect(panel.getByText("10 件", { exact: true })).toBeVisible();
   await expect(panel.getByText("結果は最大 100 件に制限します。")).toHaveCount(0);
-  await panel.getByRole("button", { name: "確認内容をクエリに反映" }).click();
+  await panel.getByRole("button", { name: "確認内容を質問に反映" }).click();
   await expect(page.locator("#nl2sql-question-input")).toHaveValue("受注件数を上位 10 件表示");
   expect(payloads.generate).toBeUndefined();
   expect(payloads.confirm).toBeUndefined();
@@ -1450,11 +1450,11 @@ test("AI要件確認は推測した検索対象を利用者へ質問し内部ID�
   await expect(
     panel.getByRole("heading", { name: "検索対象は「部署」で合っていますか？" })
   ).toBeFocused();
-  await expect(panel.getByRole("heading", { name: "確認したクエリ内容" })).toHaveCount(0);
+  await expect(panel.getByRole("heading", { name: "確認した質問の内容" })).toHaveCount(0);
   await expect(panel.getByText("対象", { exact: true })).toHaveCount(0);
   await expect(panel.getByText(/要確認|AIの推定/)).toHaveCount(0);
   await expect(panel.getByText("確認完了")).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: "確認内容をクエリに反映" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "確認内容を質問に反映" })).toHaveCount(0);
   await expect(panel.getByText(/business_entity_|physical_/)).toHaveCount(0);
   await expect(panel.getByText("データ項目の詳細")).toHaveCount(0);
   await expect(panel.getByText("管理者・開発者向け")).toHaveCount(0);
@@ -1467,12 +1467,12 @@ test("AI要件確認は推測した検索対象を利用者へ質問し内部ID�
   await panel.getByRole("button", { name: "選んだ内容で次へ" }).click();
 
   await expect(panel.getByText("確認完了").first()).toBeVisible();
-  await expect(panel.getByRole("heading", { name: "確認したクエリ内容" })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "確認した質問の内容" })).toBeVisible();
   await expect(panel.getByText("対象", { exact: true })).toBeVisible();
   await expect(panel.getByText("部署", { exact: true })).toBeVisible();
   await expect(panel.getByText("確認済み", { exact: true }).first()).toBeVisible();
   await expect(panel.getByText(/要確認|AIの推定|business_entity_|physical_/)).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: "確認内容をクエリに反映" })).toBeEnabled();
+  await expect(panel.getByRole("button", { name: "確認内容を質問に反映" })).toBeEnabled();
   expect(payloads.clarificationAnswer).toMatchObject({
     question_id: "question-confirm-inferred-target",
     selected_option_ids: ["option-confirm-inferred-target"],
@@ -1498,7 +1498,7 @@ test("AI要件確認は内部診断を見せず表示項目を自然なクエリ
     panel.getByRole("heading", { name: "検索結果に表示する項目を選んでください。" })
   ).toBeFocused();
   await expect(panel.getByText(/Embedding|Ontology|Schema/)).toHaveCount(0);
-  await expect(panel.getByRole("heading", { name: "確認したクエリ内容" })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "確認した質問の内容" })).toBeVisible();
   await expect(panel.getByText("確認済み", { exact: true })).toBeVisible();
 
   await panel.getByRole("checkbox", { name: /受注状態/ }).check();
@@ -1523,7 +1523,7 @@ test("AI要件確認は内部診断を見せず表示項目を自然なクエリ
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflow).toBe(false);
   await page.screenshot({ path: testInfo.outputPath("guided-output-selection.png"), fullPage: true });
-  await panel.getByRole("button", { name: "確認内容をクエリに反映" }).click();
+  await panel.getByRole("button", { name: "確認内容を質問に反映" }).click();
   const clarifiedQuestion =
     "受注を対象に、検索結果には受注状態、受注IDを表示してください。";
   const questionInput = page.locator("#nl2sql-question-input");
@@ -1696,13 +1696,13 @@ test(`ALLの要件確認はProfileとクエリを引き継ぐ（保存不可=${s
       };
     });
   }
-  await panel.getByRole("button", { name: "確認内容をクエリに反映" }).click();
+  await panel.getByRole("button", { name: "確認内容を質問に反映" }).click();
   if (storageBlocked) {
     await expect(panel).toBeVisible();
     await expectSelectFieldValue(page.locator("#nl2sql-profile-select"), "all");
     await expect(page.locator("#nl2sql-question-input")).toHaveValue("受注件数を表示");
     expect(payloads.job).toBeUndefined();
-    await expect(page.getByText("確認内容をクエリに反映しました。内容を確認して検索を実行してください。")).toHaveCount(0);
+    await expect(page.getByText("確認内容を質問に反映しました。内容を確認して検索を実行してください。")).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("guided-profile-storage-error.png"), fullPage: true });
     return;
   }
@@ -1711,7 +1711,7 @@ test(`ALLの要件確認はProfileとクエリを引き継ぐ（保存不可=${s
   await expect(page.locator("#nl2sql-question-input")).toHaveValue(clarified);
   await expect(page.locator("#nl2sql-question-input")).toBeFocused();
   expect(payloads.job).toBeUndefined();
-  // Profile ごとの草稿を維持し、確認した Profile のクエリを再読込でも復元する。
+  // Profile ごとの草稿を維持し、確認した Profile の質問を再読込でも復元する。
   await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "all");
   await expect(page.locator("#nl2sql-question-input")).toHaveValue("受注件数を表示");
   await chooseSelectFieldOption(page.locator("#nl2sql-profile-select"), "default");

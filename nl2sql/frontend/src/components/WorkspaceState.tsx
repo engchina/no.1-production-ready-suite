@@ -109,7 +109,7 @@ export function useWorkspaceActivation(onActivate: () => void) {
   }, [active]);
 }
 
-/** Profile の推薦を明示適用するときだけ、そのクエリを移動先の草稿へ引き継ぐ。 */
+/** Profile の推薦を明示適用するときだけ、その質問を移動先の草稿へ引き継ぐ。 */
 export function useWorkspaceDraftWriter() {
   const { user } = useAuth();
   const context = useContext(WorkspaceContext);

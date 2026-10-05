@@ -3059,7 +3059,7 @@ async function useOverflowSchemaCatalog(page: Page) {
 }
 
 async function openSchemaPicker(page: Page) {
-  // スキーマ参照はクエリの右に常時表示（トグルなし）。可視確認のみ行う。
+  // スキーマ参照は質問の右に常時表示（トグルなし）。可視確認のみ行う。
   await expect(page.getByTestId("nl2sql-schema-reference")).toBeVisible();
 }
 
@@ -3069,7 +3069,7 @@ async function expectQuerySingleColumnLayout(page: Page) {
   const shell = page.getByTestId("nl2sql-workspace-shell");
   await expect(shell).toBeVisible();
 
-  // スキーマ参照はクエリ直下の折りたたみ補助ツール。開いて内容を検証。
+  // スキーマ参照は質問の直下の折りたたみ補助ツール。開いて内容を検証。
   await openSchemaPicker(page);
   const schema = page.getByTestId("nl2sql-schema-reference");
   const firstTable = page.getByTestId("nl2sql-schema-table-item").first();
@@ -3390,7 +3390,7 @@ test("SQL 系の必須入力欄は共有の必須バッジと required 属性で
   // 業務プロファイルは空にできない選択欄で、API で省略しても backend が既定を使うので「必須」を付けない（#540）。
   await expect(page.locator('label[for="nl2sql-profile-select"]')).not.toContainText("必須");
   await expect(page.locator("#nl2sql-profile-select")).not.toHaveAttribute("aria-required", "true");
-  await expectRequiredTextarea(page, "nl2sql-question-input", "クエリ");
+  await expectRequiredTextarea(page, "nl2sql-question-input", "質問");
   const runQueryButton = page.getByRole("button", { name: "SQL を生成して実行" });
   await expect(runQueryButton).toBeDisabled();
   await nl2sqlQuestionInput(page).fill("未入金の請求を確認したい");
@@ -3505,7 +3505,7 @@ for (const theme of ["light", "dark"]) {
       ];
       for (const [label, body] of templates) {
         await question.fill(original);
-        // 選択範囲の有無によらず、クエリ全体をテンプレートで置き換える。
+        // 選択範囲の有無によらず、質問の全体をテンプレートで置き換える。
         await question.focus();
         await question.press("ControlOrMeta+A");
         await page.getByRole("button", { name: label, exact: true }).click();
@@ -3625,7 +3625,7 @@ test("クエリとスキーマ参照は desktop で左右並置、mobile で縦�
   const picker = page.getByTestId("nl2sql-schema-reference");
   await expect(question).toBeVisible();
   await expect(question).toHaveAttribute("placeholder", "確認したい内容を日本語で入力してください");
-  await expect(question).toHaveAccessibleName("クエリ");
+  await expect(question).toHaveAccessibleName("質問");
   await expect(question).toHaveValue("");
   await expect(picker).toBeVisible();
 
@@ -4716,7 +4716,7 @@ test("job ポーリングの通信断が続くと追跡を停止しエラー表�
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
   const runButton = page.getByRole("button", { name: "SQL を生成して実行" });
-  const resetButton = page.getByRole("button", { name: "新しいクエリを開始", exact: true });
+  const resetButton = page.getByRole("button", { name: "新しい質問を開始", exact: true });
   await runButton.click();
 
   // 2.5s 間隔 × 連続 3 回失敗(即時 tick 含む)で追跡を断念する。
@@ -7704,7 +7704,7 @@ test("schema catalog が空のとき、ジョブ失敗からサンプルデー�
   );
   await page.unroute("**/api/nl2sql/sample-data/import");
   await page.route("**/api/nl2sql/sample-data/import", (route) => {
-    // クエリ画面からのワンクリック投入も、サンプルデータ管理と同じ確認語で送る。
+    // SQL 生成の画面からのワンクリック投入も、サンプルデータ管理と同じ確認語で送る。
     if (route.request().postDataJSON()?.confirmation !== "ADMIN_EXECUTE") {
       return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ detail: "unexpected confirmation" }) });
     }
@@ -7930,8 +7930,8 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
     },
   });
 
-  await page.getByRole("button", { name: "新しいクエリを開始", exact: true }).click();
-  await page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" }).getByRole("button", { name: "新しいクエリを開始" }).click();
+  await page.getByRole("button", { name: "新しい質問を開始", exact: true }).click();
+  await page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" }).getByRole("button", { name: "新しい質問を開始" }).click();
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
   await disclosure.click();
   await expect(page.getByLabel("今回の追加条件")).toHaveValue("");
@@ -8892,7 +8892,7 @@ test("AI 活用の 4 画面はナビ切替で入力を保持し、リセット�
   const api = await mockNl2SqlApi(page);
   await page.goto("/query");
 
-  // SQL 生成にクエリを入力する。
+  // SQL 生成に質問を入力する。
   const question = nl2sqlQuestionInput(page);
   await question.fill("保持テスト: 未入金の請求金額を確認したい");
 
@@ -8917,18 +8917,18 @@ test("AI 活用の 4 画面はナビ切替で入力を保持し、リセット�
   await expect(directSqlInput(page)).toHaveValue("");
 
   await (await openSidebarNav(page)).getByRole("link", { name: /SQL 生成/ }).first().click();
-  const newQueryButton = page.getByRole("button", { name: "新しいクエリを開始", exact: true });
+  const newQueryButton = page.getByRole("button", { name: "新しい質問を開始", exact: true });
   await expectLargeActionButton(newQueryButton);
   await newQueryButton.focus();
   await page.keyboard.press("Enter");
   const discardDialog = page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" });
-  await expect(discardDialog).toContainText("入力したクエリと表示中の結果をクリアし、今回の生成条件・実行オプションを初期値に戻します。");
+  await expect(discardDialog).toContainText("入力した質問と表示中の結果をクリアし、今回の生成条件・実行オプションを初期値に戻します。");
   await page.keyboard.press("Escape");
   await expect(discardDialog).toBeHidden();
   await expect(nl2sqlQuestionInput(page)).toHaveValue("保持テスト: 未入金の請求金額を確認したい");
   await expect(newQueryButton).toBeFocused();
   await page.keyboard.press("Enter");
-  await discardDialog.getByRole("button", { name: "新しいクエリを開始" }).click();
+  await discardDialog.getByRole("button", { name: "新しい質問を開始" }).click();
   await expect(nl2sqlQuestionInput(page)).toHaveValue("");
   expect(api.jobPayload).toBeNull();
   expect(api.executePayload).toBeNull();
@@ -16919,7 +16919,7 @@ test("自動判定中はクエリの競合操作を停止し、失敗後に再�
     await expect(page.getByRole("button", { name: "AI要件確認", exact: true })).toBeDisabled();
     await expect(page.locator("#nl2sql-profile-select")).toBeDisabled();
     await expect(page.getByRole("button", { name: "SQL を生成して実行", exact: true })).toBeDisabled();
-    await expect(page.getByRole("button", { name: "新しいクエリを開始", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "新しい質問を開始", exact: true })).toBeDisabled();
   } finally { release(); }
   await expect(input).toBeEnabled();
   await expect(input).toHaveValue("従業員一覧を取得");

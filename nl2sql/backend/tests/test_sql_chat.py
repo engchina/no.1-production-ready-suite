@@ -279,11 +279,12 @@ def test_chat_accepts_select_ai_agent_and_generates_without_execution(
     second = run(service, request("新しい順にして", first.job_id).model_copy(update=agent))
     assert second.status == JobStatus.DONE, second.error_message
     assert second.conversation_id == first.job_id
-    # 継続のターンは、前のクエリと生成 SQL を Agent への依頼文に含める。
+    # 継続のターンは、前の質問と生成 SQL を Agent への依頼文に含める。
     question = str(calls[-1]["question"])
     assert "注文一覧" in question
     assert "SELECT ID FROM APP.ORDERS" in question
-    assert "新しい順にして" in question
+    # 利用者の自然言語の入力は「質問」と呼ぶ（#1183）。
+    assert "最新の質問: 新しい順にして" in question
 
 
 def test_client_job_id_replays_the_created_job_after_lost_response(chat: ChatFixture) -> None:

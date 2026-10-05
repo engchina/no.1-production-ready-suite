@@ -679,8 +679,7 @@ def _confirmation_question(item: IntentSummaryItem) -> ClarificationQuestion:
         category=category,
         prompt_ja=prompt,
         reason_ja=(
-            "AI がクエリから補った解釈です。内容を確認し、"
-            "異なる場合は正しい条件を入力してください。"
+            "AI が質問から補った解釈です。内容を確認し、異なる場合は正しい条件を入力してください。"
         ),
         answer_kind=ClarificationAnswerKind.SINGLE_SELECT,
         options=[
@@ -811,7 +810,7 @@ def _question_copy(
         if candidate_nodes:
             return (
                 "検索結果に表示する項目を選んでください。",
-                "クエリだけでは必要な表示項目を絞れませんでした。必要な項目をすべて選んでください。",
+                "質問だけでは必要な表示項目を絞れませんでした。必要な項目をすべて選んでください。",
                 ClarificationAnswerKind.MULTI_SELECT,
             )
         return (
@@ -841,7 +840,7 @@ def _question_copy(
         )
     return (
         "検索対象として意図しているものを選んでください。",
-        "クエリだけでは必要な候補を絞れなかったため、意図したものをすべて選んでください。",
+        "質問だけでは必要な候補を絞れなかったため、意図したものをすべて選んでください。",
         ClarificationAnswerKind.MULTI_SELECT,
     )
 
