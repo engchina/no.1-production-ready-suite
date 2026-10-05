@@ -5,15 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ChatResultTable,
-  chatResultSummaryText,
+  ResultTable,
+  resultSummaryText,
   isNumericResultColumn,
   resultRowsToCsv,
-  type ChatResultTableColumn,
-} from "../src/components/data/chat-result-table";
+  type ResultTableColumn,
+} from "../src/components/data/result-table";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const columns: ChatResultTableColumn[] = [
+const columns: ResultTableColumn[] = [
   { name: "ID" },
   { name: "NAME" },
   { name: "AMOUNT", type: "number" },
@@ -53,16 +54,16 @@ afterEach(() => {
 
 const $ = (selector: string) => document.querySelector<HTMLElement>(selector);
 
-describe("chatResultSummaryText", () => {
+describe("resultSummaryText", () => {
   it("行数・列数・所要時間を 1 行にし、打ち切り・総件数・0 行を区別する", () => {
-    expect(chatResultSummaryText({ rowCount: 12, columnCount: 5, elapsedMs: 800 })).toBe("12 行・5 列・0.8 秒");
-    expect(chatResultSummaryText({ rowCount: 1000, columnCount: 8, truncated: true, elapsedMs: 1200 })).toBe(
+    expect(resultSummaryText({ rowCount: 12, columnCount: 5, elapsedMs: 800 })).toBe("12 行・5 列・0.8 秒");
+    expect(resultSummaryText({ rowCount: 1000, columnCount: 8, truncated: true, elapsedMs: 1200 })).toBe(
       "先頭の 1,000 行を取得しました（さらに行があります）・8 列・1.2 秒"
     );
-    expect(chatResultSummaryText({ rowCount: 1000, columnCount: 8, truncated: true, totalRowCount: 1234 })).toBe(
+    expect(resultSummaryText({ rowCount: 1000, columnCount: 8, truncated: true, totalRowCount: 1234 })).toBe(
       "先頭の 1,000 行を取得しました（全 1,234 行）・8 列"
     );
-    expect(chatResultSummaryText({ rowCount: 0, columnCount: 3, elapsedMs: 300 })).toBe(
+    expect(resultSummaryText({ rowCount: 0, columnCount: 3, elapsedMs: 300 })).toBe(
       "該当する行はありません・3 列・0.3 秒"
     );
   });
@@ -93,10 +94,10 @@ describe("isNumericResultColumn / resultRowsToCsv", () => {
   });
 });
 
-describe("ChatResultTable", () => {
+describe("ResultTable", () => {
   it("要約・先頭の行のプレビュー（表頭固定・表の中のスクロール）・NULL・右寄せ・省略を出す", () => {
     act(() =>
-      root.render(<ChatResultTable columns={columns} rows={rows(60)} elapsedMs={800} testId="result" />)
+      root.render(<ResultTable columns={columns} rows={rows(60)} elapsedMs={800} testId="result" />)
     );
     expect($('[data-testid="result-summary"]')?.textContent).toBe("60 行・4 列・0.8 秒");
     const table = $('[data-testid="result-table"]')!;
@@ -117,7 +118,7 @@ describe("ChatResultTable", () => {
   it("打ち切ったら要約と案内で明示し、全件の導線を出す", () => {
     act(() =>
       root.render(
-        <ChatResultTable
+        <ResultTable
           columns={columns}
           rows={rows(1000)}
           truncated
@@ -140,7 +141,7 @@ describe("ChatResultTable", () => {
   });
 
   it("0 行は要約だけで、表・すべての行・CSV を出さない", () => {
-    act(() => root.render(<ChatResultTable columns={columns} rows={[]} elapsedMs={300} testId="result" />));
+    act(() => root.render(<ResultTable columns={columns} rows={[]} elapsedMs={300} testId="result" />));
     expect($('[data-testid="result-summary"]')?.textContent).toBe("該当する行はありません・4 列・0.3 秒");
     expect($('[data-testid="result-table"]')).toBeNull();
     expect($('[data-testid="result-view-all"]')).toBeNull();
@@ -152,7 +153,7 @@ describe("ChatResultTable", () => {
     const onCsvDownloaded = vi.fn();
     act(() =>
       root.render(
-        <ChatResultTable
+        <ResultTable
           columns={columns}
           rows={rows(60)}
           csvFilename="out.csv"
@@ -178,6 +179,9 @@ describe("ChatResultTable", () => {
     expect(fullCell.querySelector("span")?.className).toContain("line-clamp-6");
     expect(fullCell.querySelector("span")?.getAttribute("title")).toBe("x".repeat(300));
 
+    // シートの見出しの CSV は別の testid（同じ testid を 2 つ出さない。#1178）。
+    expect(document.querySelectorAll('[data-testid="result-csv"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-testid="result-all-csv"]')).toHaveLength(1);
     act(() => $('[data-testid="result-csv"]')!.click());
     expect(onDownloadCsv).toHaveBeenCalledTimes(1);
     const [csv, filename] = onDownloadCsv.mock.calls[0];
@@ -189,7 +193,7 @@ describe("ChatResultTable", () => {
   it("文言は製品から上書きできる", () => {
     act(() =>
       root.render(
-        <ChatResultTable
+        <ResultTable
           columns={columns}
           rows={rows(2)}
           labels={{ rows: (count) => `${count} rows`, columns: (count) => `${count} cols`, separator: " / " }}
@@ -198,5 +202,26 @@ describe("ChatResultTable", () => {
       )
     );
     expect($('[data-testid="result-summary"]')?.textContent).toBe("2 rows / 4 cols");
+  });
+
+  it("要約の右に画面固有の補足（meta）を置き、0 行でも出す（#1178）", () => {
+    act(() =>
+      root.render(
+        <ResultTable
+          columns={columns}
+          rows={[]}
+          meta={<span data-testid="result-meta">管理接続</span>}
+          testId="result"
+        />
+      )
+    );
+    const meta = $('[data-testid="result-meta"]')!;
+    expect(meta.textContent).toBe("管理接続");
+    // 要約の文と同じ行（要約の親）に置く。
+    expect(meta.parentElement).toBe($('[data-testid="result-summary"]')!.parentElement);
+  });
+
+  it("以前の名前 ChatResultTable は ResultTable の別名（#1178）", () => {
+    expect(ChatResultTable).toBe(ResultTable);
   });
 });
