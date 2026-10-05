@@ -758,6 +758,21 @@ import { SearchField } from "@engchina/production-ready-ui";
 
 - 文言（`title` / `closeLabel`）は翻訳済みを渡す。開閉ボタンは製品の画面に置き、`aria-expanded`・`aria-controls`（`id` に渡した値）を付ける。Playwright では `data-testid`（シート）と `<testId>-scrim`、または role（`dialog` の名前）で操作する。
 
+- `size="wide"`（#1154）: 表など横に広い内容を見る大きなパネル。sm 以上は 64rem（画面幅 − 3.5rem まで）、sm 未満は全画面。チャットの結果の「すべての行を見る」（`ChatResultTable`）が使う。既定（`default`）は 22rem のまま。
+
+### `ChatResultTable`（新規）— ★ チャットの回答の中の結果の表（#1154）
+
+チャットで SQL・ツールを実行した結果は、回答の吹き出しの中、SQL の下に出します。ChatGPT の Advanced Data Analysis・Databricks Genie・Snowflake Cortex Analyst・Amazon Q in QuickSight・BigQuery の結果の表に倣い、吹き出しの中は要約とプレビューに絞り、すべての行は別の面で見ます。製品で結果の表を組み立てない。
+
+| 決めたこと | 理由 |
+|---|---|
+| 1 行目に要約（「12 行・5 列・0.8 秒」。打ち切りは「先頭の 1,000 行を取得しました（さらに行があります）」、総件数が分かれば「（全 1,234 行）」、0 行は「該当する行はありません」） | 結果の大きさと完全さを最初に伝える。打ち切りを黙って隠さない（Genie・Cortex Analyst・BigQuery と同じ） |
+| プレビューは先頭の 50 行（`CHAT_RESULT_PREVIEW_ROWS`）を `DataTable` の `stickyHeader` + `visibleRows`（md 未満 5 行・md 以上 8 行）で描き、それを超える行と横に広い列は**表の中で**縦横にスクロールする | 吹き出し・会話の欄を伸ばさず、会話の流れを保つ。列名は固定 |
+| NULL は斜体・淡色の「NULL」（空文字と区別。色だけに頼らない）。数値の列は右寄せ・`tabular-nums`。プレビューの長い値は 1 行で省略し title に全文、全行の表は折り返して 6 行で省略（最小幅 16rem、title に全文） | 値の種類を見分ける。長い値で列が潰れ行が極端に高くならない |
+| 「すべての行を見る」は `SideSheet` の `size="wide"`（sm 未満は全画面）で、`PagedDataTable`（既定 10 件/ページ、10 / 50 / 100 を選べる）。閉じている間は表を描かない | 取得の上限（NL2SQL は 1,000 行）までの行を、描く行をページで絞って見る。仮想化はしない（読み上げ・ブラウザの検索・既存の一覧の基準と同じ） |
+| 「CSV をダウンロード」は取得した行だけ（BOM・CRLF・RFC 4180、`=` `+` `-` `@` で始まる文字列に `'` を付ける）。打ち切ったときは案内（info の `Banner`）に「表示と CSV は取得した行だけ」と、製品が渡す全件の導線（`fullResult`）を出す | チャットで無制限に取得しない。全件は製品の実行の画面で（CSV injection は OWASP の推奨） |
+| 実行中・失敗・実行の操作は部品の外（製品が `ProcessingIndicator`・danger の `Banner`・`Button` で出す） | 実行の仕組み（同期の API・ジョブ）は製品ごとに違う |
+
 ### `Toaster`（変更）— ★ 置き場所は上端の見出しの面（#411）
 
 通知（Toast）は**主操作を覆わない位置**に出します。置き場所は `Toaster` が決め、製品では変えません（`placement` プロップは削除）。規則の正本は UX 契約 [messaging.md §3.1](../ux-contracts/messaging.md#31-toast)。考え方は「画面の上端の見出しの面（`PageHeader` / 上端のバー）に重ね、その面の操作は覆わない」です。
@@ -1057,7 +1072,8 @@ QA に事前共有してください。**71点あります。**
 | 69 | **3 製品のチャットで、送った質問がサーバーの応答を待たずに会話の欄に出る**（#907） | RAG: 送信しても会話の作成と回答の開始（SSE の `start`）までは会話の欄が空（新しい会話は「最初のメッセージを送信して会話を始めましょう。」のまま）、失敗は入力欄の下の赤い文と入力欄への書き戻し、停止で質問ごと消える。NL2SQL: 入力欄はジョブの投入の応答まで空にならず、失敗は入力欄の下の Banner で質問の表示は消える。Agent: Run の作成と会話の取り直しまで空の状態のまま、失敗は入力欄の下の Banner と入力欄への書き戻し → 送信の瞬間に共有の `ChatUserMessage`（右寄せの吹き出し。3 製品で同じ形）を末尾に出し、すぐ下に回答の作成中の表示（スピナーはこの 1 つ）、入力欄は空。サーバーの応答で確定した質問に置き換える。送れなかったときは吹き出しを残し、その下に「送信できませんでした」（`AlertCircle`）、原因の danger の Banner と「再送信」を会話の中に出す（入力欄には戻さない）。RAG は停止しても吹き出しを残し「回答の作成を停止しました。…」（`Square`）を出す。会話の欄は `role="log"` | ChatGPT・Claude・Gemini・Copilot・Slack と同じ楽観的な表示。送ったことがすぐ分かり、待ちの間に空の画面を見せない。失敗しても入力を失わず、その場で送り直せる（UX 契約 messaging.md §11） |
 | 70 | **React Flow の図（RAG の関係情報グラフ・パイプライン図など）の操作・帰属表示・辺がテーマの面の色になる**（#1137） | React Flow の既定の配色のまま（`colorMode` を渡しておらず、ダークでも light）。ダークテーマで Controls（＋ − 全体表示）の地が白（`#fefefe`）でアイコンがほぼ白、帰属表示「React Flow」の地が半透明の白・文字 `#999`、辺のラベルの地が白、辺 `#b1b1b7`・背景の点 `#91919a`・handle `#1a192b` | `packages/ui` の `integrations/react-flow.css` が React Flow の `--xy-*` 変数をトークンに結び付ける: Controls の地 `--color-surface-raised`（hover `--color-surface-hover`）・アイコン `--color-fg`・区切り `--color-border`・影 `--shadow-sm`、帰属表示の地 `--color-surface-raised`・文字 `--color-fg-muted`（帰属表示は消さない）、辺 `--color-border-control`（3:1）、辺のラベルの地 `--color-surface`・文字 `--color-fg-muted`、背景の点 `--color-border-strong`、既定のノード `--color-surface` / `--color-fg` / `--color-border-strong`、handle `--color-fg-muted`、MiniMap の地 `--color-surface`。ライトでも辺が少し濃く、背景の点が少し薄くなる。製品が props で渡した色（NL2SQL のオントロジーの辺・背景・MiniMap）はそのまま | light / dark / auto のどれでも `<html>` のテーマに追従し、製品は `colorMode` を渡さず、配色を製品にコピーしない（`colorMode="system"` は OS の設定に従い、外観の設定と食い違う） |
 | 71 | **チャットの回答の場所に、backend の処理の段階が出る**（#1145。`ChatProgress`） | NL2SQL のチャットの回答の場所は「SQL を生成しています」・スピナー・経過時間の 1 行（`ProcessingIndicator`）だけで、完了後は消える → 実行中は今の段階の 1 行（スピナー・段階の名前・補足（生成方法など）・その段階の経過時間）。10 秒を超えた段階の行に「通常より時間がかかっています。」（行は最初から予約し、スピナーの行は動かない）。完了した段階は「✓ N ステップ完了」に畳み、開くと段階ごとの状態（アイコンと文字）と所要時間。完了後は回答の上に「処理の経過（N ステップ・M 秒）」の 1 行（既定は閉じる。失敗した段階があれば開き、失敗を danger の色・`XCircle`・「失敗」の文字で出す） | 送信の応答待ち・開始待ち・準備・生成・安全性の確認のどこで待っているかが分からず、1 分以上止まって見えた。AG-UI の STEP_STARTED / STEP_FINISHED / RUN_ERROR に倣った 3 製品共通の段階の形（`ChatProgressStep`）にし、RAG・Agent のチャットも同じ部品にそろえる。SQL 生成の画面の工程の表示（`WorkflowProgressStrip`）より情報を絞り、そちらは変えない |
-| 72 | **チャットの回答の作成中に更新が途絶えると、今の段階の行に「接続を確認しています。」が出る**（#1160。`ChatProgress` の `reconnecting`・`useChatProgressTracker`） | 取得・配信が止まると、今の段階と経過時間が進み続けるだけで画面が更新されず、読み込み直すまで完了が出なかった → 配信が一定時間届かなければ取り直し、遅延の案内の行（最初から予約した行）に「接続を確認しています。」を出す。配信が届いたら消える。取り直しは終端まで backoff して続ける | 利用者が「止まっている」のか「待てばよい」のかを判断でき、完了した結果は読み込み直さずに出る。行を予約しているので、案内が出てもスピナーの行は動かない |
+| 72 | **チャットで生成した SQL を実行でき、結果が回答の吹き出しの中に表で出る。SQL 生成・SELECT SQL の実行の結果の表で NULL が「NULL」、数値の列が右寄せになる**（#1154。`ChatResultTable` / `ResultCell`） | NL2SQL のチャットは SQL を生成して「安全検査済み・未実行」と出すだけで、結果を見るには SQL をコピーして別の画面で実行した。結果の表の NULL は空のセル、数値は左寄せ → 回答の吹き出しの「実行」（secondary）で実行し、SQL の下に要約・先頭 50 行のプレビュー（表の中で縦横スクロール）・打ち切りの案内・「すべての行を見る」（広い side sheet）・「CSV をダウンロード」。結果の表の NULL は斜体・淡色の「NULL」、数値の列は右寄せ | 業界のチャットの結果の出し方（ChatGPT・Databricks Genie・Snowflake Cortex Analyst・Amazon Q in QuickSight）にそろえ、3 製品で共通の部品にする。NULL と空文字、数値と文字を見分ける |
+| 73 | **チャットの回答の作成中に更新が途絶えると、今の段階の行に「接続を確認しています。」が出る**（#1160。`ChatProgress` の `reconnecting`・`useChatProgressTracker`） | 取得・配信が止まると、今の段階と経過時間が進み続けるだけで画面が更新されず、読み込み直すまで完了が出なかった → 配信が一定時間届かなければ取り直し、遅延の案内の行（最初から予約した行）に「接続を確認しています。」を出す。配信が届いたら消える。取り直しは終端まで backoff して続ける | 利用者が「止まっている」のか「待てばよい」のかを判断でき、完了した結果は読み込み直さずに出る。行を予約しているので、案内が出てもスピナーの行は動かない |
 
 ### API の非互換
 
@@ -1075,6 +1091,7 @@ QA に事前共有してください。**71点あります。**
 | `Button`（#372） | `tooltip`（`string \| false`）/ `tooltipPlacement` プロップ新設。`iconOnly` は既定で `aria-label` と同じ文言の Tooltip を出す。Tooltip を出すときは `title` を無視する |
 | `Tooltip` | **新規 export。** `Tooltip` / `TooltipProps` / `TooltipPlacement` |
 | `SideSheet`（#664） | **新規 export。** `SideSheet` / `SideSheetProps`。既存の部品の props は変えない |
+| `ChatResultTable`（#1154） | **新規 export。** `ChatResultTable` / `ChatResultTableProps` / `ChatResultTableColumn` / `ChatResultTableLabels` / `ChatResultFullResultLink` / `DEFAULT_CHAT_RESULT_TABLE_LABELS` / `ResultCell` / `isNumericResultColumn` / `isNullResultValue` / `resultValueText` / `resultRowsToCsv` / `chatResultSummaryText` / `CHAT_RESULT_PREVIEW_ROWS` / `CHAT_RESULT_PAGE_SIZES`。`SideSheet` に `size`（`"default" \| "wide"`）を追加（既定は今までどおり） |
 | `AppShell`（#367） | `navDrawerLabels` プロップ新設（md 未満のドロワーの文言）。md 未満では `sidebar` をドロワーの中に描く。新規 export `useSidebarCollapsed`（サイドバーの `footer` の部品がドロワーの中で展開して描くためのフック）・`DEFAULT_NAV_DRAWER_LABELS`・`NAV_DRAWER_QUERY` |
 | `PagedDataTable`（#265） | **新規 export。** `PagedDataTable` / `PagedDataTableProps` / `PaginationLabels`。クライアント側で全件を持つ一覧の標準形（`stickyHeader` + `visibleRows` + 10 件/ページの `Pagination`）。文言は `paginationLabels` で渡す |
 | `@engchina/production-ready-system-settings`（#265） | `SECURITY_TABLE_VISIBLE_ROWS` / `SECURITY_TABLE_ROW_CLASS` / `SECURITY_LIST_SCROLL_CLASS` / `SECURITY_LIST_FOCUS_CLASS` の export を**削除。** 同じ値の `INFORMATION_TABLE_VISIBLE_ROWS` / `INFORMATION_TABLE_ROW_CLASS` / `INFORMATION_LIST_SCROLL_CLASS` / `INFORMATION_TABLE_FOCUS_CLASS`（`@engchina/production-ready-ui`）を使う |

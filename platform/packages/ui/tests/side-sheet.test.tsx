@@ -128,4 +128,24 @@ describe("SideSheet（#664）", () => {
     key(input, { key: "Escape" });
     expect(sheet().hasAttribute("inert")).toBe(false);
   });
+
+  it("size の既定は 22rem、wide は sm 以上 64rem・sm 未満は全画面の幅のクラスを持つ（#1154）", () => {
+    act(() =>
+      root.render(
+        <>
+          <SideSheet open={false} onClose={() => {}} title="既定" closeLabel="閉じる" data-testid="default-sheet">
+            <p>既定</p>
+          </SideSheet>
+          <SideSheet open={false} onClose={() => {}} title="結果" closeLabel="閉じる" size="wide" side="right" data-testid="wide-sheet">
+            <p>結果</p>
+          </SideSheet>
+        </>
+      )
+    );
+    const defaultClasses = $('[data-testid="default-sheet"]').className.split(/\s+/);
+    expect(defaultClasses).toContain("w-[22rem]");
+    const wideClasses = $('[data-testid="wide-sheet"]').className.split(/\s+/);
+    expect(wideClasses).toEqual(expect.arrayContaining(["w-full", "max-w-full", "sm:w-[64rem]", "sm:max-w-[calc(100vw-3.5rem)]"]));
+    expect(wideClasses).not.toContain("w-[22rem]");
+  });
 });

@@ -608,6 +608,40 @@ export interface JobData {
   warning_message?: string | null;
   timing?: TimingEnvelope | null;
   steps: JobStepData[];
+  /** チャットのターンの SQL を最後に実行したときの要約（行は保存しない。#1154）。 */
+  last_execution?: SqlChatExecutionSummary | null;
+}
+
+/** チャットのターンの SQL を最後に実行したときの要約（#1154）。 */
+export interface SqlChatExecutionSummary {
+  status: "done" | "error";
+  executed_at: string;
+  elapsed_ms: number;
+  row_count: number;
+  column_count: number;
+  has_more: boolean;
+  error_code?: string | null;
+  history_id: string;
+}
+
+/** `POST /api/nl2sql/jobs/{job_id}/execute` の応答（#1154）。 */
+export interface SqlChatExecuteData {
+  job_id: string;
+  status: "done" | "error";
+  executed_at: string;
+  elapsed_ms: number;
+  executable_sql: string;
+  results: QueryResults;
+  /** 1 回の実行で取得する行数の上限（設定値）。 */
+  row_limit: number;
+  /** セルの文字数の上限（設定値）。 */
+  max_cell_chars: number;
+  /** 文字数の上限で文字を切ったセルがあるか。 */
+  cells_truncated: boolean;
+  error_message?: string | null;
+  error_code?: string | null;
+  error_detail?: string | null;
+  history_id: string;
 }
 
 export interface HistoryItem {

@@ -287,6 +287,22 @@ export {
   type PaginationLabels,
 } from "./components/data/paged-data-table";
 export {
+  ChatResultTable,
+  ResultCell,
+  CHAT_RESULT_PAGE_SIZES,
+  CHAT_RESULT_PREVIEW_ROWS,
+  DEFAULT_CHAT_RESULT_TABLE_LABELS,
+  chatResultSummaryText,
+  isNullResultValue,
+  isNumericResultColumn,
+  resultRowsToCsv,
+  resultValueText,
+  type ChatResultFullResultLink,
+  type ChatResultTableColumn,
+  type ChatResultTableLabels,
+  type ChatResultTableProps,
+} from "./components/data/chat-result-table";
+export {
   RowTitleButton,
   type RowTitleButtonProps,
   type RowTitleButtonMaxLines,

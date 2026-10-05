@@ -9,6 +9,11 @@ export const API_TIMEOUT_MS = {
    * 打ち切っても backend はジョブを作り終えるので、画面は送信前に決めた job ID で取り直す。
    */
   jobSubmit: 120_000,
+  /**
+   * チャットのターンの SQL の実行（`POST /api/nl2sql/jobs/{job_id}/execute`。#1154）。backend は SQL 生成の
+   * ジョブと同じ Oracle の call timeout（既定 120 秒）で打ち切るので、それより少し長く待つ。
+   */
+  sqlExecute: 150_000,
   longRunningJob: 65 * 60_000,
 } as const;
 

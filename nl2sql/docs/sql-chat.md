@@ -12,7 +12,23 @@
 
 ## 生成と実行の境界
 
-送信は SQL の生成と既存の AST・スキーマ・対象範囲の安全検査だけを行い、生成した SQL は実行しない。成功結果は「安全検査済み・未実行」と表示し、実行履歴でも取得件数を「未実行」とする。SQL をコピーして確認・実行する場合は既存の SQL 実行画面を利用する。
+送信は SQL の生成と既存の AST・スキーマ・対象範囲の安全検査だけを行い、生成した SQL は実行しない。成功結果は「安全検査済み・未実行」と表示し、実行履歴でも取得件数を「未実行」とする。空の状態の案内（「SQL は自動で実行されません」）もそのまま。
+
+## 生成した SQL の実行（#1154）
+
+実行は明示の操作にする（ChatGPT の Advanced Data Analysis・Databricks Genie・Snowflake Cortex Analyst・Amazon Q in QuickSight と同じく、利用者が SQL を確かめてから実行する）。
+
+- 回答の吹き出しの SQL の行の右に「実行」（secondary・`Play`。実行中はラベルを変えずアイコンがスピナー）。実行した後は「もう一度実行」、バッジは「安全検査済み・実行済み」。安全検査を通っていない SQL（DML など）には出さない。実行の権限（`nl2sql.sql.execute`。`menu.query` / `menu.direct_sql` が含む。`menu.chat` は含まない）が無い利用者には出さず、理由を吹き出しの中に出す。SELECT だけを実行するので確認語は使わない（確認語は管理 SQL の書き込み・削除だけ）。
+- 結果は同じ吹き出しの SQL の下に、3 製品で共通の `ChatResultTable`（`@engchina/production-ready-ui`）で出す: 1 行目に要約（「12 行・5 列・0.8 秒」）、先頭 50 行のプレビュー（表頭固定・表の中で縦横スクロール・md 未満 5 行・md 以上 8 行）、「すべての行を見る」（広い side sheet・10 / 50 / 100 行/ページ）、「CSV をダウンロード」（取得した行だけ）。NULL は「NULL」、数値の列は右寄せ（SQL 生成・SELECT SQL の実行の画面の結果の表も同じ `ResultCell`）。
+- 実行中は結果の位置に経過時間（`ProcessingIndicator`。スピナーは「実行」のボタンだけ）。実行の失敗は danger の `Banner` で、1 文目は SQL 生成のジョブと同じ利用者向けの文、ORA のコード・元の文は「詳細」。要求の失敗（権限・通信）は `ApiErrorBanner`。
+- 上限: 1 回の取得は `NL2SQL_CHAT_RESULT_MAX_ROWS`（既定 1,000 行）、セルの文字数は `NL2SQL_CHAT_RESULT_MAX_CELL_CHARS`（既定 2,000 文字）、応答の行の大きさは `NL2SQL_CHAT_RESULT_MAX_BYTES`（既定 2,000,000 バイト）、時間は SQL 生成のジョブと同じ Oracle の call timeout（`NL2SQL_ORACLE_CALL_TIMEOUT_SECONDS`）。総件数の COUNT は別に取らない（SQL 生成の画面と同じく「さらに行があります」）。打ち切ったら要約と案内で明示し、すべての行は「SELECT SQL を実行」（SQL を履歴の state で渡し、URL に載せない）で取得件数上限を指定して実行する。
+
+### API と保存
+
+- `POST /api/nl2sql/jobs/{job_id}/execute`（権限 `nl2sql.sql.execute`）。SQL は画面から受け取らず、ターンのジョブに保存した生成 SQL を使う。本人の会話のターン（管理の権限でも他の利用者の会話は不可）、ターンの業務プロファイルの利用権限を確かめる。
+- 実行は SQL 生成のジョブの実行の段階と同じ経路（`Nl2SqlService._execute_generated_sql`）: 業務プロファイルの範囲（`_resolve_allowed_objects`）→ 安全検査（`analyze_sql`。生成の後に範囲が変わっていれば `SQL_BLOCKED`）→ `execute_sql`（`OracleNl2SqlAdapter.user_data_connection(read_only=True)`）。actor は要求の利用者を `actor_scope` で明示し、system_admin と非 system_admin で別の接続 pool、DeepSec 有効時の非 system_admin は DATA USER の pool（借りるたびに利用者の context を設定・消去。#904）。
+- 監査: 実行ごとに実行履歴（`HistoryItem`。`generation_only=false`・`session_id` は会話 ID・件数と列）を残し、構造化ログ `nl2sql_chat_sql_executed`（SQL の本文・行の値は出さない）を出す。
+- 結果の行は保存しない。ターンのジョブに要約（`last_execution`: 状態・時刻・行数・列数・打ち切り・実行履歴の ID）だけを残し、会話を開き直したら「前回の実行（…）: 12 行・5 列。…」と「もう一度実行」を出す。理由: SQL 生成のジョブの永続の記録である実行履歴も件数と列だけで、会話は長く残るため業務データの行を会話に残さない（後で DeepSec・業務プロファイルの権限が変わっても古い行を見せない）。画面の中では結果をメモリ（TanStack Query のキャッシュ）にだけ持つ。
 
 生成方法は SQL 生成画面の実行エンジンと同じ Select AI / Select AI Agent / OCI Enterprise AI（#890）。Select AI Agent は業務プロファイルの Agent の資産（SQL ツール・Agent・Task・Team）を使い、SQL ツールは `SHOWSQL` で SQL を作るだけで実行しない（`enable_human_tool` も無効）。返った SQL はほかの生成方法と同じ安全検査だけを通し、実行しない。Agent の資産が未同期・Oracle の接続が無いなど前提が整っていないときは、SQL 生成画面と同じくそのターンが失敗し、理由を会話の中に出す。従来の SQL 生成画面と MCP のジョブは既定の生成・実行を維持する。
 
@@ -33,4 +49,4 @@ Oracle の既存 `NL2SQL_STATE_DOCUMENTS` の `jobs` を正本にする。新し
 
 ## 検証
 
-`backend/tests/test_sql_chat.py` が生成のみ（Select AI Agent を含む）、文脈、別 worker での復元、所有者・プロファイル、古い会話、元の実行動作と安全検査を確認する。`frontend/tests/e2e/sql-chat.spec.ts` が desktop / 375px の多輪送信・履歴開閉・復元・停止・失敗・生成だけの権限・生成方法の選択と送る値・業務プロファイルの欄の形を確認する。実 Oracle / OCI 接続の動作確認と、決定論スタブによる CI の確認を区別する。
+`backend/tests/test_sql_chat_execute.py`・`test_nl2sql_db_roundtrips.py` の `test_chat_execution_connection_follows_requesting_actor` がチャットの実行（同じ経路・権限・上限・失敗・接続の種類・要約の保存）を、`frontend/tests/e2e/sql-chat-execution.spec.ts` が実行の画面（実行中・成功・0 行・打ち切り・失敗・DML・権限・開き直し）を確認する。`backend/tests/test_sql_chat.py` が生成のみ（Select AI Agent を含む）、文脈、別 worker での復元、所有者・プロファイル、古い会話、元の実行動作と安全検査を確認する。`frontend/tests/e2e/sql-chat.spec.ts` が desktop / 375px の多輪送信・履歴開閉・復元・停止・失敗・生成だけの権限・生成方法の選択と送る値・業務プロファイルの欄の形を確認する。実 Oracle / OCI 接続の動作確認と、決定論スタブによる CI の確認を区別する。

@@ -14,12 +14,7 @@ import {
 import { t } from "@/lib/i18n";
 import type { QueryResults } from "../types";
 import { QueryResultSummary } from "./SqlRowLimitControls";
-
-function formatCell(value: unknown) {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-}
+import { resultTableColumns } from "./resultTableColumns";
 
 // ponytail: hooks 順を保つため guard 前に無条件呼び出し。空配列は安定参照にして usePagination の再初期化ループを避ける
 const EMPTY_ROWS: Record<string, unknown>[] = [];
@@ -54,11 +49,8 @@ export function Nl2SqlResultTable({
         ) : (
           <div className="grid gap-2">
             <DataTable
-              columns={results.columns.map((column) => ({
-                key: column,
-                header: column,
-                render: (row: Record<string, unknown>) => formatCell(row[column]),
-              }))}
+              // セルの表示（NULL・数値の右寄せ）はチャットの結果の表と共通（#1154）。
+              columns={resultTableColumns(results)}
               rows={pageItems}
               getRowKey={(_, index) => (range.start === 0 ? 0 : range.start - 1) + index}
               rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}

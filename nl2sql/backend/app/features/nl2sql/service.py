@@ -275,6 +275,8 @@ from .models import (
     SimilarHistoryPublishData,
     SimilarHistoryRequest,
     SqlChatData,
+    SqlChatExecuteData,
+    SqlChatExecutionSummary,
     SqlChatPage,
     SqlChatSummary,
     StageTiming,
@@ -664,6 +666,48 @@ def _job_failure_error_code(exc: BaseException, *, fallback: str) -> str:
     """
     codes = oracle_error_codes(exc)
     return codes[0] if codes else fallback
+
+
+def _cap_chat_results(
+    results: QueryResults, *, max_cell_chars: int, max_bytes: int
+) -> tuple[QueryResults, bool]:
+    """チャットの実行の結果をセルの文字数と応答のバイト数の上限で切る（#1154）。
+
+    文字数の上限を超えたセルは先頭だけにして末尾に「…」を付ける。行の JSON の合計が `max_bytes` を
+    超えたら、その行から後ろは返さず打ち切り（`has_more` / `truncated`）にする。返り値の 2 つ目は
+    文字を切ったセルがあるか。
+    """
+
+    cells_truncated = False
+    rows: list[dict[str, Any]] = []
+    used = 0
+    bytes_truncated = False
+    for row in results.rows:
+        capped: dict[str, Any] = {}
+        for key, value in row.items():
+            if isinstance(value, str) and len(value) > max_cell_chars:
+                value = value[:max_cell_chars] + "…"
+                cells_truncated = True
+            capped[key] = value
+        size = len(json.dumps(capped, ensure_ascii=False, default=str).encode("utf-8")) + 1
+        if used + size > max_bytes:
+            bytes_truncated = True
+            break
+        used += size
+        rows.append(capped)
+    incomplete = bool(results.has_more or results.truncated or bytes_truncated)
+    return (
+        results.model_copy(
+            update={
+                "rows": rows,
+                "total": len(rows),
+                "returned_count": len(rows),
+                "has_more": incomplete,
+                "truncated": incomplete,
+            }
+        ),
+        cells_truncated,
+    )
 
 
 _TEMPLATE_XLSX_UPLOAD_MESSAGE = (
@@ -3505,6 +3549,23 @@ class StoredJob:
     # snapshot 由来で、in-flight の間は repository を正本として読み直す(永続化しない)。
     owned: bool = False
     execution_owner: tuple[str, int] | None = None
+    # チャットのターンの SQL を最後に実行したときの要約（行は持たない。#1154）。
+    last_execution: SqlChatExecutionSummary | None = None
+
+
+@dataclass(frozen=True)
+class GeneratedSqlExecution:
+    """生成した SQL の実行の結果（SQL 生成のジョブの実行の段階とチャットの実行で共通。#1154）。
+
+    Oracle のエラーは例外にせず、SQL 生成のジョブと同じ利用者向けの文・エラーコード・詳細に分ける。
+    """
+
+    safety: SafetyReport
+    executable_sql: str
+    results: QueryResults
+    error_message: str | None = None
+    error_code: str | None = None
+    error_detail: str | None = None
 
 
 _NL2SQL_JOB_STAGES = (
@@ -4755,6 +4816,9 @@ class Nl2SqlService:
             "warning_message": job.warning_message,
             "timing": job.timing.model_dump(mode="json") if job.timing else None,
             "steps": [step.model_dump(mode="json") for step in job.steps],
+            "last_execution": job.last_execution.model_dump(mode="json")
+            if job.last_execution
+            else None,
             "worker_id": job.worker_id,
             "heartbeat_at": job.heartbeat_at,
             "lease_expires_at": job.lease_expires_at,
@@ -4909,6 +4973,11 @@ class Nl2SqlService:
             heartbeat_at=data.get("heartbeat_at"),
             lease_expires_at=data.get("lease_expires_at"),
             attempt=attempt,
+            last_execution=(
+                SqlChatExecutionSummary.model_validate(data["last_execution"])
+                if data.get("last_execution")
+                else None
+            ),
         )
 
     def get_catalog(self) -> SchemaCatalog:
@@ -7965,6 +8034,7 @@ class Nl2SqlService:
                 warning_message=job.warning_message,
                 timing=job.timing,
                 steps=job.steps,
+                last_execution=job.last_execution,
             )
 
     def _chat_conversation_turns(
@@ -8189,6 +8259,178 @@ class Nl2SqlService:
         ]
         return SqlChatData(conversation=self._sql_chat_summary(root), turns=turns)
 
+    def execute_chat_turn(
+        self,
+        job_id: str,
+        *,
+        actor_user_uuid: str,
+        actor_is_system_admin: bool,
+    ) -> SqlChatExecuteData:
+        """チャットのターンで生成した SQL を実行する（#1154）。
+
+        SQL は画面から受け取らず、ターンのジョブに保存した生成 SQL を使う。実行は SQL 生成のジョブの
+        実行の段階と同じ経路にする: 業務プロファイルの範囲（`_resolve_allowed_objects`）→ 安全検査
+        （`analyze_sql`。SELECT だけ。生成の後に範囲が変わっていれば拒否する）→ `execute_sql`
+        （`OracleNl2SqlAdapter.user_data_connection(read_only=True)`。system_admin と
+        非 system_admin で別の接続、DeepSec 有効時の非 system_admin は DATA USER の pool。#904）
+        → 実行履歴（監査）。actor は要求の利用者を `actor_scope` で明示する（ジョブの worker の
+        `_run_job_safely` と同じ）。
+
+        結果の行は保存しない。ターンのジョブには件数・列数などの要約だけを残し、会話を開き直した画面は
+        「もう一度実行」を出す。
+
+        - 他の利用者のターン: `PermissionError`（system_admin・管理の権限でも、他の利用者の会話は
+          扱わない）
+        - ターンが無い: `LookupError`
+        - チャットのターンでない・生成が終わっていない・生成の安全検査を通っていない: `ValueError`
+        """
+
+        if not actor_user_uuid:
+            raise PermissionError("会話には認証済みの利用者が必要です。")
+        job = self._load_job_record(job_id)
+        if job is None:
+            raise LookupError(job_id)
+        self._assert_job_actor_access(job, actor_user_uuid=actor_user_uuid, actor_can_manage=False)
+        if not job.request.generation_only:
+            raise ValueError("チャットで生成した SQL だけを実行できます。")
+        result = job.result
+        if result is not None and not result.safety.is_safe:
+            # 安全検査で遮断したターン（DML など）はジョブが ERROR で終わる。
+            raise ValueError(
+                "安全検査を通っていない SQL は実行できません。"
+                "クエリを言い換えて SQL を生成し直してください。"
+            )
+        if job.status != JobStatus.DONE or result is None or not result.generated_sql.strip():
+            raise ValueError("SQL の生成が完了していないため実行できません。")
+        settings = get_settings()
+        row_limit = min(
+            int(settings.nl2sql_chat_result_max_rows), int(settings.nl2sql_max_result_rows)
+        )
+        max_cell_chars = int(settings.nl2sql_chat_result_max_cell_chars)
+        started = time.monotonic()
+        profile = self.get_profile(job.request.profile_id)
+        allowed = self._resolve_allowed_objects(job.request.profile_id, job.request.allowed_objects)
+        with actor_scope(actor_user_uuid, is_system_admin=actor_is_system_admin):
+            analysis = self.analyze_sql(result.generated_sql, allowed, row_limit)
+            analysis = self._apply_empty_filter_generation_guard(
+                result.rewritten_question or job.request.question, analysis
+            )
+            if analysis.safety.is_safe:
+                execution = self._execute_generated_sql(
+                    result.generated_sql,
+                    allowed,
+                    row_limit,
+                    analysis=analysis,
+                    log_event="nl2sql_chat_execute_sql_failed",
+                    log_extra={
+                        "job_id": job.job_id,
+                        "conversation_id": job.conversation_id,
+                        "profile_id": job.request.profile_id or "",
+                    },
+                )
+            else:
+                # 生成の後に業務プロファイルの範囲が変わったなど。SQL 生成のジョブの遮断と同じ扱い。
+                execution = GeneratedSqlExecution(
+                    safety=analysis.safety,
+                    executable_sql=analysis.executable_sql,
+                    results=QueryResults(columns=[], rows=[], total=0),
+                    error_message=analysis.safety.blocked_reason
+                    or "安全検査を通らなかったため実行しませんでした。",
+                    error_code=SQL_BLOCKED_ERROR_CODE,
+                )
+        results, cells_truncated = _cap_chat_results(
+            execution.results,
+            max_cell_chars=max_cell_chars,
+            max_bytes=int(settings.nl2sql_chat_result_max_bytes),
+        )
+        elapsed_ms = _elapsed_ms(started)
+        executed_at = _utc_now()
+        status: Literal["done", "error"] = "error" if execution.error_message else "done"
+        history_item = HistoryItem(
+            generation_only=False,
+            business_release_id=job.business_release_id,
+            id=str(uuid.uuid4()),
+            question=job.request.question,
+            engine=result.engine,
+            generated_sql=result.generated_sql,
+            created_at=executed_at,
+            elapsed_ms=elapsed_ms,
+            stage_timings=[StageTiming(stage="execute_sql", elapsed_ms=elapsed_ms)],
+            profile_id=profile.id,
+            profile_name=profile.name,
+            profile_category=profile.category,
+            rewritten_question=result.rewritten_question,
+            executable_sql=execution.executable_sql,
+            safety_is_safe=execution.safety.is_safe,
+            result_row_count=results.total,
+            result_columns=results.columns,
+            actor_user_uuid=actor_user_uuid,
+            session_id=job.conversation_id,
+        )
+        summary = SqlChatExecutionSummary(
+            status=status,
+            executed_at=executed_at,
+            elapsed_ms=elapsed_ms,
+            row_count=results.total,
+            column_count=len(results.columns),
+            has_more=bool(results.has_more or results.truncated),
+            error_code=execution.error_code,
+            history_id=history_item.id,
+        )
+        with self._lock:
+            stored = self._jobs.get(job.job_id) or job
+            stored.last_execution = summary
+            self._jobs[job.job_id] = stored
+            snapshot = self._job_to_snapshot(stored)
+            self._history.append(history_item)
+            self._prune_history_locked()
+        try:
+            self._persist_entities(
+                [
+                    ("jobs", job.job_id, snapshot),
+                    ("history", history_item.id, history_item.model_dump(mode="json")),
+                ]
+            )
+        except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed):
+            # 実行の結果は返す（要約・実行履歴の保存の失敗で、実行した結果を捨てない）。
+            logger.exception(
+                "nl2sql_chat_execution_persist_failed",
+                extra={"job_id": job.job_id, "history_id": history_item.id},
+            )
+        # 実行の記録（監査）。SQL の本文・行の値は出さない。
+        logger.info(
+            "nl2sql_chat_sql_executed",
+            extra={
+                "job_id": job.job_id,
+                "conversation_id": job.conversation_id,
+                "profile_id": job.request.profile_id or "default",
+                "history_id": history_item.id,
+                "status": status,
+                "error_code": execution.error_code,
+                "row_count": results.total,
+                "has_more": summary.has_more,
+                "cells_truncated": cells_truncated,
+                "execution_context": results.execution_context,
+                "vpd_context_enforced": results.vpd_context_enforced,
+                "elapsed_ms": elapsed_ms,
+            },
+        )
+        return SqlChatExecuteData(
+            job_id=job.job_id,
+            status=status,
+            executed_at=executed_at,
+            elapsed_ms=elapsed_ms,
+            executable_sql=execution.executable_sql,
+            results=results,
+            row_limit=row_limit,
+            max_cell_chars=max_cell_chars,
+            cells_truncated=cells_truncated,
+            error_message=execution.error_message,
+            error_code=execution.error_code,
+            error_detail=execution.error_detail,
+            history_id=history_item.id,
+        )
+
     def preview(self, request: PreviewRequest) -> PreviewData:
         started = time.monotonic()
         created_at = _utc_now()
@@ -8240,6 +8482,41 @@ class Nl2SqlService:
             optimization_hints=analysis.optimization_hints,
             timing=timing,
         )
+
+    def _execute_generated_sql(
+        self,
+        sql: str,
+        allowed: AllowedObjects,
+        row_limit: int | None,
+        *,
+        analysis: AnalyzeData,
+        log_extra: Mapping[str, Any],
+        log_event: str = "nl2sql_job_execute_sql_failed",
+    ) -> GeneratedSqlExecution:
+        """安全検査を通った生成 SQL を実行する（SQL 生成のジョブとチャットで共通。#1154）。
+
+        生成 SQL の実行時エラー（ORA-00904 等）は例外にせず、利用者向けの文・エラーコード・詳細
+        （Oracle のエラーの元の文）に分けて返す。呼び出し側は生成 SQL と safety を残して公開する。
+        """
+
+        try:
+            safety, executable, results = self.execute_sql(
+                sql, allowed, row_limit, analysis=analysis
+            )
+        except OracleAdapterError as exc:
+            logger.warning(
+                log_event,
+                extra={**log_extra, "oracle_error_code": _safe_oracle_error_code(exc)},
+            )
+            return GeneratedSqlExecution(
+                safety=analysis.safety,
+                executable_sql=analysis.executable_sql,
+                results=QueryResults(columns=[], rows=[], total=0),
+                error_message=_SQL_EXECUTION_FAILED_MESSAGE,
+                error_code=_job_failure_error_code(exc, fallback=SQL_EXECUTION_FAILED_ERROR_CODE),
+                error_detail=_job_failure_detail(exc),
+            )
+        return GeneratedSqlExecution(safety=safety, executable_sql=executable, results=results)
 
     def execute_sql(
         self,
@@ -19889,28 +20166,23 @@ class Nl2SqlService:
         execution_error_code: str | None = None
         execution_error_detail: str | None = None
         if analysis.safety.is_safe and not request.generation_only:
-            try:
-                safety, executable, results = self.execute_sql(
-                    generated.generated_sql, allowed, row_limit, analysis=analysis
-                )
-            except OracleAdapterError as exc:
-                logger.warning(
-                    "nl2sql_job_execute_sql_failed",
-                    extra={
-                        "job_id": job_id,
-                        "engine": request.engine.value,
-                        "profile_id": request.profile_id or "",
-                        "oracle_error_code": _safe_oracle_error_code(exc),
-                    },
-                )
-                execution_error = _SQL_EXECUTION_FAILED_MESSAGE
-                execution_error_detail = _job_failure_detail(exc)
-                execution_error_code = _job_failure_error_code(
-                    exc, fallback=SQL_EXECUTION_FAILED_ERROR_CODE
-                )
-                safety = analysis.safety
-                executable = analysis.executable_sql
-                results = QueryResults(columns=[], rows=[], total=0)
+            execution = self._execute_generated_sql(
+                generated.generated_sql,
+                allowed,
+                row_limit,
+                analysis=analysis,
+                log_extra={
+                    "job_id": job_id,
+                    "engine": request.engine.value,
+                    "profile_id": request.profile_id or "",
+                },
+            )
+            safety = execution.safety
+            executable = execution.executable_sql
+            results = execution.results
+            execution_error = execution.error_message
+            execution_error_code = execution.error_code
+            execution_error_detail = execution.error_detail
         else:
             safety = analysis.safety
             executable = analysis.executable_sql

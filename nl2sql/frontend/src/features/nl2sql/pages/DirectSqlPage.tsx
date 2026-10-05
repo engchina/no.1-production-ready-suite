@@ -1,5 +1,6 @@
 import { useWorkspaceState, useWorkspaceRevalidation } from "@/components/WorkspaceState";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Play, X } from "lucide-react";
 
 import {
@@ -22,6 +23,7 @@ import { t } from "@/lib/i18n";
 import { SqlFileInput } from "../components/DbAdminShared";
 import { Nl2SqlResultTable } from "../components/Nl2SqlResultTable";
 import { DEFAULT_SQL_ROW_LIMIT, RowLimitField, parseSqlRowLimit } from "../components/SqlRowLimitControls";
+import { directSqlPrefill } from "../chatSqlExecution";
 import { sqlExecutePayload } from "../previewState";
 import type { QueryResults } from "../types";
 import { emptySelection, toAllowedObjects } from "../workbenchState";
@@ -73,6 +75,15 @@ function ExecutableDirectSqlPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [sqlError, setSqlError] = useState("");
+  const location = useLocation();
+  const navigate = useNavigate();
+  const prefillSql = directSqlPrefill(location.state);
+  // 渡された SQL は入力欄に入れて実行は利用者に任せ、履歴の state から外す（戻る・再読込で入れ直さない）。
+  useEffect(() => {
+    if (!prefillSql) return;
+    setSqlText(prefillSql);
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [prefillSql, location.pathname, location.search, navigate, setSqlText]);
   const rowLimit = parseSqlRowLimit(rowLimitInput);
   const rowLimitError =
     rowLimit === null ? t("queryResults.rowLimit.error") : "";
