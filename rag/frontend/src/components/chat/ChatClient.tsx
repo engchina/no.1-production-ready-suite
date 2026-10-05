@@ -1,6 +1,7 @@
 import {
   ChatComposer,
   ChatComposerOption,
+  ChatHistoryList,
   ChatLayout,
   ChatProgress,
   ChatSkeleton,
@@ -14,9 +15,7 @@ import {
   TextField,
   ToggleChip,
   TimedLoadingState,
-  ListSkeleton,
   DEFAULT_PAGE_SIZE,
-  INFORMATION_LIST_ROW_CLASS,
   offsetForPage,
   offsetPagination,
   toast,
@@ -1187,145 +1186,119 @@ export function ChatClient() {
 
   // 会話の履歴の中身（読み込み中・失敗・0 件・一覧・ページ送り）。lg 以上はインラインのパネル、
   // lg 未満はモーダルの side sheet に入れる（どちらか一方だけを描く）。
+  const conversationById = new Map(conversations.map((conversation) => [conversation.id, conversation]));
   const historyContent = (
-    <>
-      {searchAnswerProfileLoading ? (
-        // 検索・回答プロファイルの読み込み中は会話の一覧をまだ取得できない。「まだ会話がありません」と出さず、
-        // 一覧の形だけを出す（経過時間は上のカードが出しているので重ねない。#1153）。
-        <ListSkeleton rows={3} rowClassName="h-12" testId="chat-conversations-skeleton" />
-      ) : conversationsQuery.isLoading ? (
-        <TimedLoadingState
-          label={t("chat.sessions.loading")}
-          operationKey="chat-conversations-load"
-          framed={false}
-          testId="chat-conversations-loading"
-        >
-          <ListSkeleton rows={3} rowClassName="h-12" />
-        </TimedLoadingState>
-      ) : conversationsQuery.isError ? (
-        <ErrorState
-          message={t("chat.sessions.error")}
-          onRetry={() => void conversationsQuery.refetch()}
-        />
-      ) : conversations.length === 0 ? (
-        <p className="px-1 text-sm text-fg-muted">{t("chat.sessions.empty")}</p>
-      ) : (
-        <>
-        <ul
-          // パネル（lg 以上）・シート（lg 未満）の高さまで伸ばし、超えたら中をスクロールする。
-          // ページ送りは一覧の下に常に見せる（#403 / #664）。
-          className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain"
-          aria-label={t("chat.sessions.title")}
-          data-testid="chat-conversation-list"
-        >
-          {conversations.map((conversation) => {
-            const title = conversation.title ?? t("chat.sessions.untitled");
-            return (
-              <li key={conversation.id} className="group">
-                {editingId === conversation.id ? (
-                  <div className="rounded-md bg-accent-subtle p-2">
-                    <div className="flex items-start gap-1">
-                      <TextField
-                        ref={titleInputRef}
-                        id={`conversation-title-${conversation.id}`}
-                        label={t("chat.sessions.renameLabel")}
-                        labelHidden
-                        className="min-w-0 flex-1"
-                        value={titleDraft}
-                        maxLength={80}
-                        required
-                        disabled={updateConversation.isPending}
-                        error={titleError || undefined}
-                        onValueChange={setTitleDraft}
-                        onKeyDown={(event) => {
-                          if (isSubmitEnter(event)) {
-                            event.preventDefault();
-                            void saveRename();
-                          } else if (event.key === "Escape") {
-                            event.preventDefault();
-                            cancelRename();
-                          }
-                        }}
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="md"
-                        iconOnly
-                        disabled={updateConversation.isPending}
-                        aria-label={t("chat.sessions.renameSave")}
-                        onClick={() => void saveRename()} icon={Check}>
-                        </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="md"
-                        iconOnly
-                        disabled={updateConversation.isPending}
-                        aria-label={t("chat.sessions.renameCancel")}
-                        onClick={cancelRename} icon={X}>
-                        </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div
-                    className={cn(
-                      "grid grid-cols-[minmax(0,1fr)_auto_auto] rounded-md transition-colors",
-                      INFORMATION_LIST_ROW_CLASS,
-                      conversation.id === activeId
-                        ? "bg-accent-subtle text-fg"
-                        : "text-fg-muted hover:bg-surface-hover hover:text-fg"
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => selectConversation(conversation.id)}
-                      aria-current={conversation.id === activeId}
-                      className="flex min-w-0 flex-col gap-0.5 rounded-md px-3 py-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus-ring"
-                    >
-                      <span className="truncate font-medium" title={title}>
-                        {title}
-                      </span>
-                      <span className="text-xs tabular-nums text-fg-muted">
-                        {t("chat.sessions.metadata", {
-                          count: conversation.message_count,
-                          updatedAt: formatDateTime(conversation.updated_at),
-                        })}
-                      </span>
-                    </button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="md"
-                      iconOnly
-                      className={cn(
-                        "mr-1 self-center transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100",
-                        conversation.id === activeId && "sm:opacity-100"
-                      )}
-                      aria-label={t("chat.sessions.rename", { title })}
-                      onClick={() => startRename(conversation)} icon={Pencil}>
-                      </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="md"
-                      tone="danger"
-                      iconOnly
-                      className={cn(
-                        "mr-1 self-center transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100",
-                        conversation.id === activeId && "sm:opacity-100"
-                      )}
-                      disabled={deleteConversation.isPending}
-                      aria-label={t("chat.sessions.delete", { title })}
-                      onClick={() => void removeConversation(conversation)} icon={Trash2}>
-                      </Button>
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-        {conversationsData ? (
+    // 一覧の行・読み込み中・失敗・0 件は 3 製品共通の ChatHistoryList（#1161）。名前の変更・削除は RAG だけ（API がある）。
+    <ChatHistoryList
+      items={conversations.map((conversation) => ({
+        id: conversation.id,
+        title: conversation.title ?? t("chat.sessions.untitled"),
+        meta: t("chat.sessions.metadata", {
+          count: conversation.message_count,
+          updatedAt: formatDateTime(conversation.updated_at),
+        }),
+      }))}
+      currentId={activeId}
+      onSelect={(item) => selectConversation(item.id)}
+      // 検索・回答プロファイルの読み込み中は会話の一覧をまだ取得できない。「まだ会話がありません」と出さず、
+      // 一覧の形だけを出す（経過時間は上のカードが出しているので重ねない。#1153）。
+      waiting={searchAnswerProfileLoading}
+      loading={conversationsQuery.isLoading}
+      error={conversationsQuery.isError ? conversationsQuery.error : null}
+      onRetry={() => void conversationsQuery.refetch()}
+      retrying={conversationsQuery.isFetching}
+      labels={{
+        list: t("chat.sessions.title"),
+        loading: t("chat.sessions.loading"),
+        error: t("chat.sessions.error"),
+        retry: t("common.retry"),
+        empty: t("chat.sessions.empty"),
+      }}
+      operationKey="chat-conversations-load"
+      testIds={{
+        skeleton: "chat-conversations-skeleton",
+        loading: "chat-conversations-loading",
+        error: "chat-conversations-error",
+        list: "chat-conversation-list",
+      }}
+      renderEditor={(item) =>
+        editingId === item.id ? (
+          <div className="flex items-start gap-1">
+            <TextField
+              ref={titleInputRef}
+              id={`conversation-title-${item.id}`}
+              label={t("chat.sessions.renameLabel")}
+              labelHidden
+              className="min-w-0 flex-1"
+              value={titleDraft}
+              maxLength={80}
+              required
+              disabled={updateConversation.isPending}
+              error={titleError || undefined}
+              onValueChange={setTitleDraft}
+              onKeyDown={(event) => {
+                if (isSubmitEnter(event)) {
+                  event.preventDefault();
+                  void saveRename();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  cancelRename();
+                }
+              }}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="md"
+              iconOnly
+              disabled={updateConversation.isPending}
+              aria-label={t("chat.sessions.renameSave")}
+              onClick={() => void saveRename()}
+              icon={Check}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="md"
+              iconOnly
+              disabled={updateConversation.isPending}
+              aria-label={t("chat.sessions.renameCancel")}
+              onClick={cancelRename}
+              icon={X}
+            />
+          </div>
+        ) : null
+      }
+      renderActions={(item) => {
+        const conversation = conversationById.get(item.id);
+        if (!conversation) return null;
+        return (
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="md"
+              iconOnly
+              aria-label={t("chat.sessions.rename", { title: item.title })}
+              onClick={() => startRename(conversation)}
+              icon={Pencil}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="md"
+              tone="danger"
+              iconOnly
+              disabled={deleteConversation.isPending}
+              aria-label={t("chat.sessions.delete", { title: item.title })}
+              onClick={() => void removeConversation(conversation)}
+              icon={Trash2}
+            />
+          </>
+        );
+      }}
+      footer={
+        conversationsData && conversations.length > 0 ? (
           <ListPagination
             {...offsetPagination({
               // 次のページを取得している間は、表示中のページ（前のページ）の範囲を出す。
@@ -1338,10 +1311,9 @@ export function ChatClient() {
             ariaLabel={t("chat.sessions.pagination")}
             testId="chat-conversations-pagination"
           />
-        ) : null}
-        </>
-      )}
-    </>
+        ) : null
+      }
+    />
   );
   const activeConversation =
     conversationQuery.data ?? conversations.find((conversation) => conversation.id === activeId);
