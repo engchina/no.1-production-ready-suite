@@ -2641,8 +2641,9 @@ import { ChatProgress } from "@engchina/production-ready-ui";
 | `elapsedMs` | `number \| null` | 段階の時刻から | 完了後の 1 行の全体の所要時間 |
 | `slowAfterMs` | `number` | `10000` | この時間を超えた今の段階に遅延の案内を付ける |
 | `defaultOpen` | `boolean` | 失敗があれば `true` | 完了後の 1 行を最初から開くか |
-| `labels` | `Partial<ChatProgressLabels>` | `DEFAULT_CHAT_PROGRESS_LABELS` | 文言（`completedSteps(count)` / `summary(count, duration)` / `steps` / `elapsed` / `slow` / `status` / `formatDuration(ms)`） |
-| `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id` / `data-slow`）・`-timer`・`-slow`・`-completed`（実行中の畳んだ見出し）・`-summary`（完了後の 1 行）・`-step-<id>`（一覧の行。`data-status`）を付ける |
+| `reconnecting` | `boolean` | `false` | 更新が途絶え、状態を取り直している（#1160）。今の段階の行の予約した行に、遅延の案内の代わりに「接続を確認しています。」を出す。`useChatProgressTracker` の `progressProps` で渡す |
+| `labels` | `Partial<ChatProgressLabels>` | `DEFAULT_CHAT_PROGRESS_LABELS` | 文言（`completedSteps(count)` / `summary(count, duration)` / `steps` / `elapsed` / `slow` / `reconnecting` / `status` / `formatDuration(ms)`） |
+| `testId` | `string` | — | 根に `data-testid`。`-current`（今の段階。`data-step-id` / `data-slow` / `data-reconnecting`）・`-timer`・`-slow`・`-reconnecting`・`-completed`（実行中の畳んだ見出し）・`-summary`（完了後の 1 行）・`-step-<id>`（一覧の行。`data-status`）を付ける |
 
 根の要素は `data-chat-progress-state`（`running` / `done` / `failed`）と `aria-busy` を持つ。
 
@@ -2661,7 +2662,46 @@ import { ChatProgress } from "@engchina/production-ready-ui";
 
 - 単体テストは `packages/ui/tests/chat-progress.test.tsx`。
 - 実ブラウザは NL2SQL `tests/e2e/sql-chat.spec.ts` の「#1145」のテスト（応答を遅らせて、送信・開始待ち・実行中・完了・失敗の段階を desktop / 375px・light / dark で確かめる）。
-- 使う所: NL2SQL の `features/nl2sql/SqlChatPage.tsx`（段階は `features/nl2sql/chatProgress.ts` がジョブの `steps` から作る）。RAG・Agent のチャットは別の Issue で同じ部品につなぐ。
+- 使う所: NL2SQL の `features/nl2sql/SqlChatPage.tsx`（段階は `features/nl2sql/chatProgress.ts` がジョブの `steps` から作る）、RAG の `components/chat/ChatClient.tsx`（SSE の `progress`）、Agent の `pages/ChatPage.tsx`（Run から `lib/chat-progress.ts`）。
+
+### useChatProgressTracker — 処理の経過の状態を追う（#1160）
+
+3 製品のチャットが「処理の経過」の状態を追う処理を 1 つにした hook。表示は `ChatProgress`、終端の判定と、配信が途絶えたときの取り直しはこの hook が持つ。製品は自分の配信を hook の入力に合わせる薄いアダプタだけを持つ。
+
+```tsx
+import { ChatProgress, useChatProgressTracker } from "@engchina/production-ready-ui";
+
+const progress = useChatProgressTracker({
+  key: job.id,                      // 追う対象（ジョブ ID・Run ID・保存した質問の ID）。変わったら数え直す
+  steps,                            // 今の段階（ChatProgressStep[]）
+  active: inFlight(job),            // 省略時は段階から（isChatProgressActive）。false で取り直しをやめる
+  elapsedMs,                        // 完了後の全体の所要時間
+  receivedAt: query.dataUpdatedAt, // polling: 最後に取得できた時刻。push の配信は progress.touch() を呼ぶ
+  refresh: () => query.refetch({ cancelRefetch: true, throwOnError: false }),
+  staleAfterMs: 10_000,             // 既定 15 秒
+});
+
+<ChatProgress {...progress.progressProps} labels={labels} testId="chat-progress" />;
+```
+
+| 入力 / 戻り値 | 説明 |
+|---|---|
+| `refresh(signal)` | 状態を取り直す。配信が `staleAfterMs` 届かなければ呼び、`refreshTimeoutMs`（既定 15 秒）で打ち切る（signal を見ない関数・終わらない promise も打ち切る）。失敗・時間切れは 1 秒・2 秒・4 秒 … `maxBackoffMs`（既定 30 秒）の間隔で続け、終端（`active` が false）か対象が変わるまで止めない |
+| `enabled` | false の間は追わない（keep-alive で画面が隠れている・承認待ちなど取り直さない状態） |
+| `touch()` | push の配信（SSE の event・heartbeat、WebSocket のメッセージ）を受け取ったときに呼ぶ。取り直している間に届いたときだけ描画する |
+| `refreshNow()` | 待たずに取り直す（配信が終端の前に終わった・切れたと分かったとき）。次に配信が届くまで、途絶えの時間に関係なく backoff して取り直し続ける |
+| `reconnecting` | 取り直しを始めた後に配信が届いていない。`progressProps.reconnecting` で `ChatProgress` に「接続を確認しています。」を出す |
+
+| 決めたこと | 理由 |
+|---|---|
+| 「途絶え」は段階が進まないことではなく、配信（取得の成功・SSE のバイト）が届かないこと | 準備・生成が数分かかるのは正常（#1155）。応答が返らない取得・切れた接続だけを取り直す |
+| 取り直しは backoff して終端まで続け、あきらめない（あきらめる条件は製品のアダプタが持つ） | NL2SQL のチャットで、応答の返らない取得を待ったまま 12 分更新が止まった（#1160）。終わった結果が画面に出ないまま止まる経路を残さない |
+| タブが非表示の間は取り直さず、表示に戻ったら待たずに確かめる | polling もタブが非表示の間は止まる。戻ったときに古い状態を見せ続けない |
+| 案内は遅延の案内と同じ予約した行に出す | 案内が出ても今の段階の行・経過時間は動かない |
+
+- 単体テストは `packages/ui/tests/chat-progress-tracker.test.tsx`。
+- 製品のアダプタ: NL2SQL（会話の polling。`refresh` は応答しない取得を打ち切る `refetch({ cancelRefetch: true })`）、RAG（SSE。`touch()` は受け取ったバイトごと、`all_done` の前に終わったら `refreshNow()`。`refresh` は保存済みの会話から回答を取り直す。backend は event の無い間 10 秒ごとに heartbeat を送る）、Agent（Run の polling。`waiting_approval` の間は `enabled: false`）。
+- 実ブラウザは NL2SQL `tests/e2e/sql-chat-progress-refresh.spec.ts`・RAG `e2e/chat-progress-refresh.spec.ts`・Agent `e2e/chat-progress-refresh.spec.ts`。
 
 ## ChatResultTable — **新規**（#1154）
 

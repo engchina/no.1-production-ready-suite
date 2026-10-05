@@ -1339,8 +1339,9 @@ export const agentApi = {
     if (filters.limit) query.set("limit", String(filters.limit));
     return request<FeedbackReport>(`/api/feedback?${query.toString()}`);
   },
-  getThread: (threadId: string) =>
-    request<ThreadData>(`/api/threads/${encodeURIComponent(threadId)}`),
+  /** 会話（Run の一覧）。チャットは取り直しの `signal`（中止・待ち時間の上限）を渡す（#1160）。 */
+  getThread: (threadId: string, options: { signal?: AbortSignal } = {}) =>
+    request<ThreadData>(`/api/threads/${encodeURIComponent(threadId)}`, { signal: options.signal }),
   createRun: (payload: CreateRunPayload) =>
     request<RunState>("/api/runs", {
       method: "POST",

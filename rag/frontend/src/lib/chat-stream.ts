@@ -3,6 +3,7 @@
  * （POST /api/chat/conversations/{id}/messages/stream）。
  *
  * バックエンドは start → (stage / progress / delta / metadata / citations / done)×モデル → all_done を送る。
+ * event の無い間は heartbeat（`: keepalive` のコメント）を送る（#1160）。
  * `progress` は処理の段階（3 製品共通の ChatProgressStep。#1146）の一覧を、段階が変わるたびに全体で送る。
  * マルチモデル比較では各イベントに model_id が付き、フロントがカラムへ振り分ける。
  */
@@ -52,6 +53,16 @@ export interface ChatStreamHandlers {
   onModelDone?: (payload: { model_id: string; message_id: string }) => void;
   onModelError?: (payload: { model_id: string; message: string }) => void;
   onAllDone?: () => void;
+  /**
+   * 配信のバイト（event・heartbeat のコメント）を受け取るたびに呼ぶ（#1160）。画面は、これが一定時間
+   * 届かなければ配信が途絶えたとみなし、保存済みの会話を取り直す（`useChatProgressTracker` の `touch()`）。
+   */
+  onActivity?: () => void;
+}
+
+/** 配信の終わり方。`completed` が false なら、`all_done` の前に接続が切れた（#1160）。 */
+export interface ChatStreamOutcome {
+  completed: boolean;
 }
 
 /** SSE の `event:`/`data:` ブロックを解析しながらハンドラへ流す。 */
@@ -60,7 +71,7 @@ export async function streamChatMessage(
   body: ChatMessageRequestBody,
   handlers: ChatStreamHandlers,
   signal?: AbortSignal
-): Promise<void> {
+): Promise<ChatStreamOutcome> {
   const path = `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/stream`;
   const request = { method: "POST", path };
   let res: Response;
@@ -104,6 +115,11 @@ export async function streamChatMessage(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let completed = false;
+  const dispatch = (block: string) => {
+    if (dispatchEvent(block, handlers) === "all_done") completed = true;
+  };
+  handlers.onActivity?.();
 
   while (true) {
     let chunk: ReadableStreamReadResult<Uint8Array>;
@@ -115,6 +131,7 @@ export async function streamChatMessage(
     }
     const { value, done } = chunk;
     if (done) break;
+    handlers.onActivity?.();
     buffer += decoder.decode(value, { stream: true });
     buffer = buffer.replace(/\r\n/g, "\n");
 
@@ -122,31 +139,33 @@ export async function streamChatMessage(
     while ((separator = buffer.indexOf("\n\n")) !== -1) {
       const block = buffer.slice(0, separator);
       buffer = buffer.slice(separator + 2);
-      dispatchEvent(block, handlers);
+      dispatch(block);
     }
   }
 
   buffer += decoder.decode();
   buffer = buffer.replace(/\r\n/g, "\n").trim();
   if (buffer) {
-    dispatchEvent(buffer, handlers);
+    dispatch(buffer);
   }
+  return { completed };
 }
 
-function dispatchEvent(block: string, handlers: ChatStreamHandlers): void {
+/** 1 つの event を解析してハンドラへ渡し、event 名を返す（コメント・空の data は null）。 */
+function dispatchEvent(block: string, handlers: ChatStreamHandlers): string | null {
   let event = "message";
   const dataLines: string[] = [];
   for (const line of block.split("\n")) {
     if (line.startsWith("event:")) event = line.slice(6).trim();
     else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
   }
-  if (dataLines.length === 0) return;
+  if (dataLines.length === 0) return null;
 
   let payload: Record<string, unknown>;
   try {
     payload = JSON.parse(dataLines.join("\n"));
   } catch {
-    return;
+    return null;
   }
 
   switch (event) {
@@ -192,4 +211,5 @@ function dispatchEvent(block: string, handlers: ChatStreamHandlers): void {
       handlers.onAllDone?.();
       break;
   }
+  return event;
 }

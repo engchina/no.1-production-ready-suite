@@ -20,6 +20,7 @@ import {
   CardContent,
   ChatProgress,
   ChatSkeleton,
+  useChatProgressTracker,
   ChatUserMessage,
   Disclosure,
   EmptyState,
@@ -76,6 +77,13 @@ const ACTIVE_STATUSES = new Set<RunState["status"]>(["queued", "running"]);
 /** 「停止」で止められる Run（回答の作成中と、ツールの承認待ち。#805）。 */
 const STOPPABLE_STATUSES = new Set<RunState["status"]>(["queued", "running", "waiting_approval"]);
 const POLL_INTERVAL_MS = 1500;
+/**
+ * 会話の取り直しが成功しないまま、この時間が過ぎたら取り直し直す（#1160）。取り直しは
+ * {@link POLL_INTERVAL_MS} ごとなので、その数回分。応答しない取得を打ち切って新しく取り直す。
+ */
+const CHAT_PROGRESS_STALE_AFTER_MS = 10_000;
+/** 会話の 1 回の取得の上限（応答が返らない取得で取り直しを止めない。#1160）。 */
+const THREAD_FETCH_TIMEOUT_MS = 30_000;
 
 /** 会話の履歴を本文の横にインラインで出す幅（Tailwind の lg）。未満はモーダルの side sheet で開く（RAG と同じ。#664 / #889）。 */
 const HISTORY_INLINE_QUERY = "(min-width: 1024px)";
@@ -141,7 +149,10 @@ export function ChatPage() {
   });
   const thread = useQuery({
     queryKey: ["thread", threadId],
-    queryFn: () => agentApi.getThread(threadId ?? ""),
+    queryFn: ({ signal }) =>
+      agentApi.getThread(threadId ?? "", {
+        signal: AbortSignal.any([signal, AbortSignal.timeout(THREAD_FETCH_TIMEOUT_MS)]),
+      }),
     enabled: Boolean(threadId),
     retry: false,
     // 実行中の Run があるあいだだけ取り直す（終わったら止める）。
@@ -168,6 +179,9 @@ export function ChatPage() {
   const threadFailed = Boolean(threadId) && thread.isError && !thread.data && !threadMissing;
   const prerequisitesLoading = agentsLoading || threadLoading;
   const runs = threadId && !threadOfOtherAgent ? (thread.data?.runs ?? []) : [];
+  // 処理の経過の取り直し（#1160）。応答しない取得（取得中は interval が次を始めない）を打ち切って取り直す。
+  const refetchThread = thread.refetch;
+  const refreshThread = () => refetchThread({ cancelRefetch: true, throwOnError: false });
   const running = runs.some((run) => ACTIVE_STATUSES.has(run.status));
   const waitingApproval = runs.some((run) => run.status === "waiting_approval");
   const stoppableRun = [...runs].reverse().find((run) => STOPPABLE_STATUSES.has(run.status));
@@ -529,6 +543,8 @@ export function ChatPage() {
                       deciding={decide.isPending}
                       onDecide={(approval, approved) => decide.mutate({ approval, approved })}
                       onFeedbackSaved={replaceRun}
+                      receivedAt={thread.dataUpdatedAt}
+                      refresh={refreshThread}
                     />
                   ))
                 )}
@@ -688,6 +704,8 @@ function ChatTurn({
   deciding,
   onDecide,
   onFeedbackSaved,
+  receivedAt,
+  refresh,
 }: {
   run: RunState;
   canDecide: boolean;
@@ -695,6 +713,10 @@ function ChatTurn({
   deciding: boolean;
   onDecide: (approval: ApprovalRequest, approved: boolean) => void;
   onFeedbackSaved: (run: RunState) => void;
+  /** 会話を最後に取得できた時刻（TanStack Query の dataUpdatedAt）。 */
+  receivedAt: number;
+  /** 会話を取り直す（応答しない取得は打ち切る）。 */
+  refresh: () => Promise<unknown>;
 }) {
   const answer = answerText(run.artifacts);
   const citations = runCitations(run.artifacts);
@@ -702,6 +724,17 @@ function ChatTurn({
   const toolTables = runToolResultTables(run);
   const pendingApprovals = run.approvals.filter((approval) => approval.status === "pending");
   const failure = run.status === "failed" ? failureMessage(run) : null;
+  // 処理の経過の状態を追う（3 製品共通。#1160）。回答の作成中（取り直している間）に会話の取得が途絶えたら
+  // 取り直し、終端まで追う。承認待ちは利用者の判断を待つ間なので取り直さない。
+  const progress = useChatProgressTracker({
+    key: run.id,
+    steps: runProgressSteps(run),
+    active: STOPPABLE_STATUSES.has(run.status),
+    receivedAt,
+    refresh,
+    staleAfterMs: CHAT_PROGRESS_STALE_AFTER_MS,
+    enabled: ACTIVE_STATUSES.has(run.status),
+  });
 
   return (
     <div className="space-y-2" data-testid={`chat-turn-${run.id}`}>
@@ -711,7 +744,7 @@ function ChatTurn({
           処理の段階（考えている・ツールの呼び出し・承認待ち・回答の作成。#1147）。Run の取り直しで更新し、
           完了後は回答の上に「処理の経過」の 1 行に畳む（共有の ChatProgress。3 製品で同じ。#1145）。
         */}
-        <ChatProgress steps={runProgressSteps(run)} active={STOPPABLE_STATUSES.has(run.status)} testId="chat-progress" />
+        <ChatProgress {...progress.progressProps} testId="chat-progress" />
         {answer ? (
           // 回答の Markdown の表と、表の形のツールの結果（NL2SQL の SQL の実行の結果など）は、NL2SQL のチャットと
           // 同じ共通の結果の表で出す（#1158）。表でない部分・表でない結果は今までどおり。
