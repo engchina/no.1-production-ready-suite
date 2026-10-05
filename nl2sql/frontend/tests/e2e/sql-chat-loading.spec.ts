@@ -77,7 +77,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await expect(page.getByRole("timer")).toHaveCount(1);
     // 入力欄・生成方法・送信・新しい会話・履歴の開閉は無効。
     await expect(
-      page.getByRole("textbox", { name: "クエリ", exact: true }),
+      page.getByRole("textbox", { name: "質問", exact: true }),
     ).toBeDisabled();
     await expect(page.locator("#sql-chat-engine")).toBeDisabled();
     await expect(page.getByTestId("sql-chat-send")).toBeDisabled();
@@ -96,7 +96,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await expect(
       page.getByText("どのような SQL を生成しますか？", { exact: true }),
     ).toBeVisible();
-    const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
     await expect(composer).toBeEnabled();
     await expect(page.locator("#sql-chat-engine")).toBeEnabled();
     await expect(
@@ -114,7 +114,7 @@ test("読み込み中も入力欄に書いた文字は残す（作業状態）",
     route.fulfill(profilePage),
   );
   await page.goto("/chat");
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("書きかけのクエリ");
 
   await page.unroute("**/api/nl2sql/profiles/search**");

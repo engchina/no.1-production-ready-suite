@@ -2849,3 +2849,50 @@ const history = useChatHistoryPanel({ inlineOpen: historyOpen, onInlineOpenChang
 - 単体テストは `packages/ui/tests/chat-layout.test.tsx`。
 - 実ブラウザは RAG `e2e/chat.spec.ts`（#664 の履歴の開閉・375px のシート）、NL2SQL `tests/e2e/sql-chat.spec.ts`、Agent `e2e/chat.spec.ts`。
 - 使う所: RAG `components/chat/ChatClient.tsx`、NL2SQL `features/nl2sql/SqlChatPage.tsx`、Agent `pages/ChatPage.tsx`。
+
+## ChatComposer / ChatComposerOption — **新規**（#1161）
+
+チャットの入力欄の領域（3 製品共通）。`ChatLayout` の `composer` に渡す。入力欄（`TextareaField`、2 行）と送信 / 停止（`RunStopButton`、lg）を `FieldActionRow` で並べ、上に設定の行（`ChatComposerOption`）、下に通知を置く。
+
+```tsx
+import { ChatComposer, ChatComposerOption } from "@engchina/production-ready-ui";
+
+<ChatComposer
+  id="chat-composer"
+  textareaRef={composerRef}
+  value={draft}                       // 下書きは製品の作業状態
+  onValueChange={setDraft}
+  onSubmit={submit}
+  onStop={stop}
+  running={sending}                   // 送信の要求中・回答の作成中（同じボタンが「停止」）
+  submitBlocked={!target || waitingChoice}
+  disabled={prerequisitesLoading}       // 前提の読み込み中は書けない（#1153。書いた文字は残す）
+  label={t("chat.composer.label")}    // 「質問」（読み上げだけ）
+  placeholder={t("chat.composer.placeholder")}  // 「質問を入力（Enter で送信、Shift+Enter で改行）」
+  sendLabel={t("chat.send")}
+  stopLabel={t("chat.stop")}
+  sendTestId="chat-send"
+  options={
+    <ChatComposerOption
+      label={t("chat.engine")}        // 「生成方法」
+      labelDecorative                 // 中の SelectField が同じ名前を labelHidden で持つ
+      info={{ label: t("chat.engine.infoLabel"), content: description, contentId }}
+    >
+      <SelectField id="engine" label={t("chat.engine")} labelHidden size="sm" width="sm" … />
+    </ChatComposerOption>
+  }
+  footer={stopError ? <ApiErrorBanner error={stopError} fallback={t("chat.stopFailed")} /> : null}
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| Enter で送信、Shift+Enter で改行、IME の変換を確定する Enter では送らない（`isSubmitEnter`） | 日本語の入力で変換の確定が送信にならない（#459） |
+| 実行中・送れない間（入力が空・`submitBlocked`）の Enter は何もしない。停止はボタンだけ | Enter の押し間違いで回答を止めない（buttons.md §3.1） |
+| 入力欄は回答の作成中も書ける。書けないのは前提（対象の一覧・会話の内容）の読み込み中（`disabled`）だけ。送れない間の送信のボタンは `aria-disabled`（フォーカスを受ける） | 次の質問を書ける（messaging.md §11.1）。送信の後に入力欄が空になってもフォーカスが外れない（#355） |
+| 入力欄の名前は「質問」に 3 製品でそろえ、画面には出さない（placeholder で目的を示す） | 製品ごとに「メッセージを入力…」「クエリ」「質問」と違っていた。目的は会話の領域から分かる |
+| 設定の行は「名前・info アイコン・選択」。説明は常設しない | 入力欄の上を説明の文で埋めない（#901） |
+| 停止の失敗などの通知は `footer`（入力欄の下）に出す | 起点の操作（送信 / 停止のボタン）の直下（messaging.md §10） |
+
+- 単体テストは `packages/ui/tests/chat-composer.test.tsx`。
+- 使う所: RAG（設定の行は「回答するモデル」の `ToggleChip`）、NL2SQL（「生成方法」の `SelectField`、上限 10,000 文字）、Agent（設定の行なし）。

@@ -132,7 +132,7 @@ for (const width of [1280, 375]) {
     const panelBox = (await page.getByTestId("sql-chat-panel").boundingBox())!;
     expect(toggleBox.x - panelBox.x).toBeLessThan(24);
     expect(toggleBox.x).toBeLessThan(newButtonBox.x);
-    const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
     await composer.fill("カテゴリ別売上");
     await composer.press("Enter");
     await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
@@ -210,7 +210,7 @@ test("生成中は停止でき、失敗時も送った質問を会話に残し�
   const state = await setup(page);
   state.pending = true;
   await page.goto("/chat");
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
   const send = page.getByTestId("sql-chat-send");
@@ -284,7 +284,7 @@ test("送信の応答が上限までに届かないと、英語の signal timed 
     });
   });
   await page.goto("/chat");
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("select * from employee");
   await composer.press("Enter");
   const failure = page.getByTestId("sql-chat-send-error");
@@ -368,7 +368,7 @@ test("送信の応答が届かなくても、作成済みのジョブを取り�
     return route.fulfill({ json: { data: turn } });
   });
   await page.goto("/chat");
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("select * from employee");
   await composer.press("Enter");
   await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
@@ -391,7 +391,7 @@ test("サーバーに接続できないときは英語の Failed to fetch では
   });
   await page.route("**/api/nl2sql/jobs/*", (route) => route.abort("failed"));
   await page.goto("/chat");
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("select * from employee");
   await composer.press("Enter");
   const failure = page.getByTestId("sql-chat-send-error");
@@ -437,7 +437,7 @@ test("AI 活用の先頭のチャットは、生成だけの権限でも利用�
   ).toHaveCount(0);
   await closeSidebarNav(page);
   await page
-    .getByRole("textbox", { name: "クエリ", exact: true })
+    .getByRole("textbox", { name: "質問", exact: true })
     .fill("カテゴリ別売上");
   await page.getByTestId("sql-chat-send").click();
   await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
@@ -494,7 +494,7 @@ test("利用できるプロファイルがないと会話の欄を出さず送�
   await expect(page.locator("#sql-chat-profile")).toHaveCount(0);
   await expect(page.getByTestId("sql-chat-panel")).toHaveCount(0);
   await expect(
-    page.getByRole("textbox", { name: "クエリ", exact: true }),
+    page.getByRole("textbox", { name: "質問", exact: true }),
   ).toHaveCount(0);
   expect(state.requests).toHaveLength(0);
 });
@@ -564,7 +564,7 @@ test("生成方法は入力欄の直上で選び、Select AI Agent も送れる"
   else await page.mouse.move(0, 0);
   await expect(description).toBeHidden();
   // 入力欄の直上の行（RAG のチャットの「回答するモデル」と同じ位置。#890）。
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   const rowBox = (await row.boundingBox())!;
   const composerBox = (await composer.boundingBox())!;
   expect(rowBox.y + rowBox.height).toBeLessThanOrEqual(composerBox.y);
@@ -652,7 +652,7 @@ test("送った質問はジョブの投入の応答を待たずに会話の欄�
   await page.goto("/chat");
   const empty = page.getByText("どのような SQL を生成しますか？");
   await expect(empty).toBeVisible();
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
 
@@ -712,7 +712,7 @@ test("続きの会話でも、送った質問は投入の応答を待たずに�
 }) => {
   await setup(page);
   await page.goto("/chat");
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
   await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
@@ -780,7 +780,7 @@ test("応答が届かなかった送信のジョブが会話に入っていれ�
 }) => {
   const state = await setup(page);
   await page.goto("/chat");
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
   await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
@@ -807,7 +807,7 @@ test("応答が届かなかった送信の再送信は同じ job ID で送り、
   const state = await setup(page);
   const control = await loseJobSubmitResponse(page, state);
   await page.goto("/chat");
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("カテゴリ別売上");
   await composer.press("Enter");
   const failure = page.getByTestId("sql-chat-send-error");
@@ -906,7 +906,7 @@ for (const width of [1280, 375]) {
     const state = await setup(page);
     state.pending = true;
     await page.goto("/chat");
-    const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+    const composer = page.getByRole("textbox", { name: "質問", exact: true });
     await composer.fill("select * from employee");
     await composer.press("Enter");
     const turn = page.getByTestId("sql-chat-turn");
@@ -1007,7 +1007,7 @@ test("生成に失敗した段階は「処理の経過」を開いて失敗を�
   const state = await setup(page);
   state.pending = true;
   await page.goto("/chat");
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("select * from employee");
   await composer.press("Enter");
   const turn = page.getByTestId("sql-chat-turn");

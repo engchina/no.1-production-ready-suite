@@ -27,8 +27,8 @@ const nl2sqlJa = {
   "chat.closeHistory": "会話の履歴を閉じる",
   "chat.new": "新しい会話",
   "chat.conversation": "SQL 生成の会話",
-  "chat.query": "クエリ",
-  "chat.placeholder": "クエリを入力（Enter で送信、Shift+Enter で改行）",
+  "chat.query": "質問",
+  "chat.placeholder": "質問を入力（Enter で送信、Shift+Enter で改行）",
   "chat.send": "送信",
   "chat.stop": "停止",
   // 回答の場所の処理の段階（#1145）。実行中は「〜しています」、完了は「〜しました」、未実行は名詞。

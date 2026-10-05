@@ -34,7 +34,7 @@ const conversation = {
 };
 
 const EMPTY_TEXT = "最初のメッセージを送信して会話を始めましょう。";
-const COMPOSER = "メッセージを入力…（Enter で送信 / Shift+Enter で改行）";
+const COMPOSER = "質問";
 /** 取得の失敗は TanStack Query の既定の再試行（3 回・1 + 2 + 4 秒）の後に出る。 */
 const RETRY_TIMEOUT = 20_000;
 
@@ -88,7 +88,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await page.goto("/chat");
     await selectSearchAnswerProfile(page, /経理アシスタント/);
     await expect(page.getByText(EMPTY_TEXT, { exact: true })).toBeVisible();
-    const composer = page.getByRole("textbox", { name: COMPOSER });
+    const composer = page.getByRole("textbox", { name: COMPOSER, exact: true });
     await composer.fill("書きかけの質問");
 
     // 再読込: 選んだ検索・回答プロファイルと書きかけの質問は作業状態から戻る。一覧の応答を止める。
@@ -144,7 +144,7 @@ test("検索・回答プロファイルの一覧を読めなかったときは�
   await expect(page.getByText("データベースに接続できません。")).toBeVisible({ timeout: RETRY_TIMEOUT });
   await expect(page.getByText(/公開済みの検索・回答プロファイルがありません/)).toHaveCount(0);
   // 会話の領域（空の状態・入力欄）は出さない。
-  await expect(page.getByRole("textbox", { name: COMPOSER })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: COMPOSER, exact: true })).toHaveCount(0);
   await expect(page.getByText(EMPTY_TEXT, { exact: true })).toHaveCount(0);
 
   fail = false;
@@ -159,7 +159,7 @@ test("開いている会話の内容を読めなかったときは、失敗を�
   await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
   await expect(page.getByText("会話を読み込めませんでした。")).toBeVisible({ timeout: RETRY_TIMEOUT });
   await expect(page.getByText(EMPTY_TEXT, { exact: true })).toHaveCount(0);
-  const composer = page.getByRole("textbox", { name: COMPOSER });
+  const composer = page.getByRole("textbox", { name: COMPOSER, exact: true });
   await composer.fill("続きの質問");
   await expect(page.getByTestId("chat-run-stop")).toBeDisabled();
   await composer.press("Enter");

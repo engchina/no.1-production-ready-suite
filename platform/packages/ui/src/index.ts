@@ -164,6 +164,12 @@ export {
   type ChatLayoutTestIds,
 } from "./components/chat/chat-layout";
 export {
+  ChatComposer,
+  ChatComposerOption,
+  type ChatComposerOptionProps,
+  type ChatComposerProps,
+} from "./components/chat/chat-composer";
+export {
   CHAT_HISTORY_INLINE_QUERY,
   useChatHistoryPanel,
   useMediaQuery,
