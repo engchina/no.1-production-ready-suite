@@ -7,13 +7,11 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
-  DEFAULT_PAGE_SIZE,
   DataTable,
   Disclosure,
   EmptyState,
   toast,
   type DataTableColumn,
-  usePagination,
   StatusBadge,
   Tabs,
   SearchField,
@@ -24,7 +22,6 @@ import {
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
-  Pagination,
   ExecutionConfirmationField,
   TextareaField,
 } from "@engchina/production-ready-ui";
@@ -64,10 +61,9 @@ import type {
   DbAdminObjectSummary,
   DbAdminStatementResult,
   DbAdminStatementPolicy,
-  QueryResults,
   SchemaCatalog,
 } from "../types";
-import { QueryResultSummary } from "./SqlRowLimitControls";
+import { QueryResultTable } from "./QueryResultTable";
 import { dbAdminErrorRecovery } from "../dbAdminErrorRecovery";
 
 /** テキストファイルを SQL としてダウンロードする。 */
@@ -341,52 +337,6 @@ export function DbObjectColumnsTable({
   );
 }
 
-export function QueryResultsTable({
-  results,
-  rowLimit,
-}: {
-  results: QueryResults;
-  rowLimit?: number | null;
-}) {
-  const { page, setPage, totalPages, pageItems, range } = usePagination(results.rows, DEFAULT_PAGE_SIZE);
-  const paginationSummary = t("queryResults.pageSummary", { start: range.start, end: range.end, total: range.total });
-  const pageIndicator = t("queryResults.page", { page, total: totalPages });
-
-  return (
-    <div className="grid gap-2">
-      <QueryResultSummary results={results} rowLimit={rowLimit} />
-      <DataTable
-        testId="query-results-table"
-        columns={results.columns.map((column) => ({
-          key: column,
-          header: column,
-          className: "max-w-56",
-          render: (row: Record<string, unknown>) => String(row[column] ?? ""),
-        }))}
-        rows={pageItems}
-        getRowKey={(_, index) => (range.start === 0 ? 0 : range.start - 1) + index}
-        empty={t("queryResults.emptyRows")}
-      />
-      {totalPages > 1 ? (
-        <Pagination
-          page={page}
-          totalPages={totalPages}
-          onPageChange={setPage}
-          summary={paginationSummary}
-          pageIndicator={pageIndicator}
-          prevLabel={t("queryResults.prev")}
-          nextLabel={t("queryResults.next")}
-          testId="query-results-pagination"
-        />
-      ) : (
-        <nav className="text-xs text-fg-muted" aria-label={pageIndicator} data-testid="query-results-pagination">
-          <span className="tnum">{paginationSummary}</span>
-        </nav>
-      )}
-    </div>
-  );
-}
-
 /** 実行環境（API の runtime）の表示名。内部値（oracle / deterministic）をそのまま出さない。 */
 export function runtimeLabel(runtime: string) {
   if (runtime === "oracle") return "Oracle";
@@ -639,7 +589,9 @@ export function DbAdminExecutionResult({
           {warning}
         </Banner>
       ))}
-      {result.select_result && <QueryResultsTable results={result.select_result} rowLimit={rowLimit} />}
+      {result.select_result && (
+        <QueryResultTable results={result.select_result} rowLimit={rowLimit} csvFilePrefix="nl2sql-admin-sql-result" />
+      )}
       {showStatementDetails ? (
         <div className="grid max-h-[32rem] gap-2 overflow-y-auto">
           {result.statements.map((statement) => (

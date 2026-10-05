@@ -553,6 +553,8 @@ configure_nginx() {
   template_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../platform/templates/nginx" && pwd)"
   mkdir -p "${logging_dir}"
   install -m 0644 "${template_dir}/logging.conf" "${logging_dir}/production-ready-logging.conf"
+  # ログインの API の送信元 IP ごとの緩い上限（limit_req_zone。#1173）。
+  install -m 0644 "${template_dir}/login-rate-limit.conf" "${logging_dir}/production-ready-login-rate-limit.conf"
   log "Configuring Nginx on port ${APPLICATION_PORT}."
   cat > /etc/nginx/sites-available/production-ready-nl2sql <<EOF
 server {
@@ -573,6 +575,32 @@ server {
 
     location = /api {
         return 308 /api/;
+    }
+
+    # ログインの API だけ、送信元 IP ごとに緩く上限を掛ける（#1173。zone は
+    # platform/templates/nginx/login-rate-limit.conf）。回数の制限の正本は backend
+    # （PLATFORM_AUTH_LOGIN_*）で、ここは大量の要求を照合・DB の前で止める。backend の 429 はそのまま返す。
+    location = /api/auth/login {
+        limit_req zone=pr_login burst=30 nodelay;
+        limit_req_status 429;
+        error_page 429 = @pr_login_rate_limited;
+        proxy_pass http://${BACKEND_HOST}:${BACKEND_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Request-ID \$pr_request_id;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_buffering off;
+        proxy_cache off;
+    }
+
+    location @pr_login_rate_limited {
+        default_type application/json;
+        add_header Retry-After 60 always;
+        return 429 '{"success":false,"data":null,"error_code":"SECURITY_RATE_LIMITED","error_messages":["ログインの試行が多すぎます。しばらく待ってから、もう一度お試しください。"]}';
     }
 
     location /api/ {

@@ -1,16 +1,16 @@
 /**
  * 表の形のデータの判定（#1158）。ツールの結果の JSON・回答の本文の Markdown の表から、結果の表の部品
- * （`ChatResultTable`。#1154）へ渡す列と行を作る。製品に依存しない（NL2SQL の MCP の出力・Agent のツールの結果・
+ * （`ResultTable`。#1154 / #1178）へ渡す列と行を作る。製品に依存しない（NL2SQL の MCP の出力・Agent のツールの結果・
  * LLM の Markdown の表を同じ規則で扱う）。表とみなさない値は null を返し、画面は今の表示（JSON・本文）のまま出す。
  */
 
-import type { ChatResultTableColumn } from "../components/data/chat-result-table";
+import type { ResultTableColumn } from "../components/data/result-table";
 
 /** セルの値。null は「値が無い」（NULL）で、空の文字列と区別する。 */
 export type TabularCellValue = string | number | boolean | null;
 
-/** 列（`ChatResultTable` の列。`name` を表頭に出し、`type` が number 等なら右寄せ）。 */
-export type TabularColumn = ChatResultTableColumn;
+/** 列（`ResultTable` の列。`name` を表頭に出し、`type` が number 等なら右寄せ）。 */
+export type TabularColumn = ResultTableColumn;
 
 export interface TabularData {
   columns: TabularColumn[];

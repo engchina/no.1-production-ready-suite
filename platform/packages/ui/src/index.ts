@@ -157,6 +157,19 @@ export {
   type ChatUserMessageProps,
   type ChatUserMessageStatus,
 } from "./components/ui/chat-message";
+export {
+  ChatLayout,
+  type ChatLayoutNewConversation,
+  type ChatLayoutProps,
+  type ChatLayoutTestIds,
+} from "./components/chat/chat-layout";
+export {
+  CHAT_HISTORY_INLINE_QUERY,
+  useChatHistoryPanel,
+  useMediaQuery,
+  type ChatHistoryPanel,
+  type UseChatHistoryPanelOptions,
+} from "./components/chat/use-chat-history-panel";
 export { Toaster, type ToasterProps } from "./components/ui/toast";
 export {
   ConfirmProvider,
@@ -295,21 +308,31 @@ export {
   type PaginationLabels,
 } from "./components/data/paged-data-table";
 export {
-  ChatResultTable,
+  ResultTable,
   ResultCell,
-  CHAT_RESULT_PAGE_SIZES,
-  CHAT_RESULT_PREVIEW_ROWS,
-  DEFAULT_CHAT_RESULT_TABLE_LABELS,
-  chatResultSummaryText,
+  RESULT_PAGE_SIZES,
+  RESULT_PREVIEW_ROWS,
+  DEFAULT_RESULT_TABLE_LABELS,
+  resultSummaryText,
   isNullResultValue,
   isNumericResultColumn,
   resultRowsToCsv,
   resultValueText,
+  type ResultFullResultLink,
+  type ResultTableColumn,
+  type ResultTableLabels,
+  type ResultTableProps,
+  // 以前の名前（#1154。後方互換の別名。#1178）
+  ChatResultTable,
+  CHAT_RESULT_PAGE_SIZES,
+  CHAT_RESULT_PREVIEW_ROWS,
+  DEFAULT_CHAT_RESULT_TABLE_LABELS,
+  chatResultSummaryText,
   type ChatResultFullResultLink,
   type ChatResultTableColumn,
   type ChatResultTableLabels,
   type ChatResultTableProps,
-} from "./components/data/chat-result-table";
+} from "./components/data/result-table";
 export {
   RowTitleButton,
   type RowTitleButtonProps,

@@ -21,7 +21,7 @@ import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
 import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { SqlFileInput } from "../components/DbAdminShared";
-import { Nl2SqlResultTable } from "../components/Nl2SqlResultTable";
+import { QueryResultCard } from "../components/QueryResultTable";
 import { DEFAULT_SQL_ROW_LIMIT, RowLimitField, parseSqlRowLimit } from "../components/SqlRowLimitControls";
 import { directSqlPrefill } from "../chatSqlExecution";
 import { sqlExecutePayload } from "../previewState";
@@ -233,7 +233,7 @@ function ExecutableDirectSqlPage() {
             testId="direct-sql-processing"
           >
             {results ? (
-              <Nl2SqlResultTable results={results} rowLimit={executedRowLimit} />
+              <QueryResultCard results={results} rowLimit={executedRowLimit} csvFilePrefix="nl2sql-direct-sql-result" />
             ) : null}
           </ActionResultRegion>
         </section>
