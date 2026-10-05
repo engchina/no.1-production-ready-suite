@@ -3,7 +3,7 @@ import type { Locator, Page } from "@playwright/test";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 
 // #1158: チャットと実行履歴の詳細で、表の形のツールの結果・成果物・回答の Markdown の表を、NL2SQL のチャットと
-// 同じ共通の結果の表（ChatResultTable。#1154）で出す。表でない結果は今までどおり（チャットは出さない・詳細は JSON）。
+// 同じ共通の結果の表（ResultTable。#1154 / #1178）で出す。表でない結果は今までどおり（チャットは出さない・詳細は JSON）。
 
 const THREAD_ID = `thread_${"b".repeat(32)}`;
 const RUN_ID = "run-result-tables";

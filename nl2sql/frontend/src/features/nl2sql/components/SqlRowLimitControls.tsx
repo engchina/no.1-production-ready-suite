@@ -1,8 +1,7 @@
 import { useId } from "react";
 
-import { FieldError, StatusBadge, TextField } from "@engchina/production-ready-ui";
+import { FieldError, TextField } from "@engchina/production-ready-ui";
 import { t } from "@/lib/i18n";
-import type { QueryResults } from "../types";
 
 export const DEFAULT_SQL_ROW_LIMIT = 100;
 export const MAX_SQL_ROW_LIMIT = 100000;
@@ -61,55 +60,6 @@ export function RowLimitField({
         {helper}
       </p>
       <FieldError id={errorId} message={error} />
-    </div>
-  );
-}
-
-export function QueryResultSummary({
-  results,
-  rowLimit,
-}: {
-  results: QueryResults;
-  rowLimit?: number | null;
-}) {
-  const hasRowLimit = typeof rowLimit === "number";
-  const returnedCount =
-    typeof results.returned_count === "number" ? results.returned_count : results.total;
-  const hasIncompleteResults = Boolean(results.has_more || results.truncated);
-  const reachedRowLimit =
-    hasRowLimit && rowLimit > 0 && (hasIncompleteResults || returnedCount === rowLimit);
-  const hasMoreWithoutLimit = hasIncompleteResults && !reachedRowLimit;
-  const executionContext = results.execution_context ?? "deterministic";
-  const showExecutionContext =
-    executionContext !== "deterministic" || Boolean(results.vpd_context_enforced);
-
-  return (
-    <div className="flex flex-wrap items-center gap-2" data-testid="query-result-summary">
-      <StatusBadge icon={false} variant="neutral" label={t("queryResults.fetchedCount", { count: returnedCount })} />
-      {showExecutionContext ? (
-        <StatusBadge
-          icon={false}
-          variant={results.vpd_context_enforced ? "info" : "neutral"}
-          label={t(`queryResults.executionContext.${executionContext}`)}
-        />
-      ) : null}
-      {hasRowLimit && (
-        <StatusBadge
-          icon={false}
-          variant="neutral"
-          label={
-            rowLimit === 0
-              ? t("queryResults.rowLimit.unlimited")
-              : t("queryResults.rowLimit.value", { count: rowLimit })
-          }
-        />
-      )}
-      {reachedRowLimit && (
-        <StatusBadge variant="warning" label={t("queryResults.rowLimit.reached")} />
-      )}
-      {hasMoreWithoutLimit && (
-        <StatusBadge variant="warning" label={t("queryResults.rowLimit.partial")} />
-      )}
     </div>
   );
 }
