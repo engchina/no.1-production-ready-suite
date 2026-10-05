@@ -69,8 +69,8 @@ describe("ChatProgress", () => {
     expect(current.dataset.stepId).toBe("generate_sql");
     expect(current.textContent).toContain("SQL を生成しています");
     expect(current.textContent).toContain("（Select AI）");
-    // 経過時間はその段階の開始（2 秒）から数える（5 - 2 = 3 秒）。
-    expect(q("p-timer")!.getAttribute("aria-label")).toBe("経過時間 00:03");
+    // 経過時間は処理全体（最初の段階の開始 0 秒）から数える（#1176。段階ごとに 0 へ戻さない）。
+    expect(q("p-timer")!.getAttribute("aria-label")).toBe("経過時間 00:05");
     expect(q("p-timer")!.getAttribute("aria-live")).toBe("off");
     // 動くスピナーは今の段階の 1 つだけ。
     expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(1);
@@ -108,6 +108,92 @@ describe("ChatProgress", () => {
     expect(host.querySelector('[data-placeholder="通常より時間がかかっています。"]')).not.toBeNull();
     act(() => {
       vi.setSystemTime(Date.parse(at(13)));
+      vi.advanceTimersByTime(1000);
+    });
+    expect(q("p-current")!.dataset.slow).toBe("true");
+    expect(q("p-slow")!.textContent).toBe("通常より時間がかかっています。");
+  });
+
+  it("段階が変わっても、処理全体の経過時間は 0 に戻らない（#1176）", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse(at(5)));
+    render(<ChatProgress steps={runningSteps} testId="p" />);
+    expect(q("p-timer")!.getAttribute("aria-label")).toBe("経過時間 00:05");
+    // 次の段階へ進む（安全性の確認の開始 20 秒・今 21 秒）。
+    act(() => {
+      vi.setSystemTime(Date.parse(at(20)));
+      vi.advanceTimersByTime(1000);
+    });
+    render(
+      <ChatProgress
+        steps={[
+          ...runningSteps.slice(0, 2),
+          { ...runningSteps[2]!, status: "done", label: "SQL を生成しました", finishedAt: at(20) },
+          { id: "safety", label: "安全性を確認しています", status: "running", startedAt: at(20) },
+        ]}
+        testId="p"
+      />
+    );
+    expect(q("p-current")!.dataset.stepId).toBe("safety");
+    expect(q("p-timer")!.getAttribute("aria-label")).toBe("経過時間 00:21");
+    // 段階ごとの所要時間は、完了した段階の行に出す。
+    act(() => {
+      q("p-completed")!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    expect(q("p-step-generate_sql")!.textContent).toContain("18 秒");
+  });
+
+  it("開始の時刻を渡すと、その時刻から数える（段階に時刻が無いときも全体で数える）", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse(at(70)));
+    render(
+      <ChatProgress
+        startedAt={at(4)}
+        steps={[{ id: "queue", label: "開始を待っています", status: "running" }]}
+        testId="p"
+      />
+    );
+    expect(q("p-timer")!.getAttribute("aria-label")).toBe("経過時間 01:06");
+  });
+
+  it("終端でないのに今の段階が無い（すべて完了）ときも、今の行（スピナー・「処理を続けています」・経過時間）を出す", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse(at(30)));
+    render(
+      <ChatProgress
+        active
+        steps={[
+          { id: "a", label: "受け付けました", status: "done", startedAt: at(0), finishedAt: at(1) },
+          { id: "b", label: "SQL を生成しました", status: "done", startedAt: at(1), finishedAt: at(12) },
+        ]}
+        testId="p"
+      />
+    );
+    const current = q("p-current")!;
+    expect(current.dataset.stepId).toBe("");
+    expect(current.textContent).toContain("処理を続けています");
+    expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(1);
+    expect(q("p-timer")!.getAttribute("aria-label")).toBe("経過時間 00:30");
+    expect(q("p-completed")!.textContent).toContain("2 ステップ完了");
+    expect(host.querySelector('[role="status"]')!.textContent).toBe("処理を続けています");
+  });
+
+  it("遅延の案内は今の段階の経過時間で決める（全体が長くても、始まったばかりの段階には付けない）", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse(at(31)));
+    render(
+      <ChatProgress
+        steps={[
+          { id: "a", label: "SQL を生成しました", status: "done", startedAt: at(0), finishedAt: at(30) },
+          { id: "b", label: "安全性を確認しています", status: "running", startedAt: at(30) },
+        ]}
+        testId="p"
+      />
+    );
+    expect(q("p-timer")!.getAttribute("aria-label")).toBe("経過時間 00:31");
+    expect(q("p-current")!.dataset.slow).toBe("false");
+    act(() => {
+      vi.setSystemTime(Date.parse(at(41)));
       vi.advanceTimersByTime(1000);
     });
     expect(q("p-current")!.dataset.slow).toBe("true");

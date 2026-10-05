@@ -596,7 +596,10 @@ export interface JobData {
   profile_id?: string;
   conversation_id?: string;
   previous_job_id?: string | null;
+  /** 生成と安全検査だけで実行しない（実行の権限が無い利用者のチャット・#1176 より前のチャット）。 */
   generation_only?: boolean;
+  /** チャット（会話）のターンか（#1176）。 */
+  chat?: boolean;
   /** 生成方法（#1145。チャットの段階の補足に出す）。 */
   engine?: Nl2SqlEngine;
   status: JobStatus;
@@ -627,9 +630,17 @@ export interface SqlChatExecutionSummary {
   has_more: boolean;
   error_code?: string | null;
   history_id: string;
+  /**
+   * ジョブの中で実行したとき（#1176）、結果の行を受け取れる期限（ISO 8601）。行は会話に残さず、
+   * 画面が `POST /api/nl2sql/jobs/{job_id}/execution-result` で 1 回だけ受け取る。
+   */
+  result_expires_at?: string | null;
 }
 
-/** `POST /api/nl2sql/jobs/{job_id}/execute` の応答（#1154）。 */
+/**
+ * `POST /api/nl2sql/jobs/{job_id}/execute`（#1154）と
+ * `POST /api/nl2sql/jobs/{job_id}/execution-result`（#1176）の応答。
+ */
 export interface SqlChatExecuteData {
   job_id: string;
   status: "done" | "error";

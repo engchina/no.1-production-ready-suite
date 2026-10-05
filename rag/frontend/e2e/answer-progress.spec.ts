@@ -7,6 +7,7 @@ import {
   mockLocalAuth,
   selectSearchAnswerProfile,
 } from "./_helpers";
+import { expectProgressTimerMonotonic, startProgressTimerSampler } from "./_progress-timer";
 
 /**
  * 回答生成の進捗（今の工程と経過時間）と時間切れの表示（#375）。
@@ -155,7 +156,8 @@ async function mockStreams(page: Page, scenarios: StreamScenarios): Promise<void
               controller.error(new DOMException("aborted", "AbortError"));
               return;
             }
-            controller.enqueue(encoder.encode(chunk.text));
+            // 段階の時刻（`__NOW__`）は送った時刻にする（段階の時刻で経過時間を数え直すと減ることを確かめる。#1176）。
+            controller.enqueue(encoder.encode(chunk.text.replaceAll("__NOW__", new Date().toISOString())));
           }
           controller.close();
         },
@@ -323,7 +325,8 @@ const CHAT_STEP_IDS = ["rewrite_query", "retrieve", "rerank", "generate_answer",
 
 /** 処理の段階（3 製品共通の ChatProgressStep。#1146）。`statuses` に無い段階は未開始。 */
 function chatProgress(statuses: Partial<Record<(typeof CHAT_STEP_IDS)[number], string>>) {
-  const now = new Date().toISOString();
+  // 配信した時刻に置き換える（mockStreams）。
+  const now = "__NOW__";
   return sse("progress", {
     model_id: "m1",
     steps: CHAT_STEP_IDS.map((id) => {
@@ -495,6 +498,8 @@ for (const viewport of [
     await selectSearchAnswerProfile(page, "経理ビュー");
     await page.getByRole("button", { name: "新しい会話" }).click();
     await page.getByRole("textbox").fill(userMessage.content);
+    // #1176: 段階が進む間、右上の経過時間（送信からの通算）が減らないことを記録する。
+    await startProgressTimerSampler(page, "chat-answer-progress");
     await page.getByRole("button", { name: "送信" }).click();
 
     // 処理の段階（3 製品共通の ChatProgress。#1146）。今の段階を 1 行で出し、段階が進むと入れ替わる。
@@ -518,6 +523,8 @@ for (const viewport of [
     // 時間切れの文言（工程と再試行の案内）は ERROR の回答として残り、同じ質問を送り直せる。
     const error = page.getByRole("alert").filter({ hasText: "時間切れになった工程: 文書検索" });
     await expect(error).toBeVisible({ timeout: 5_000 });
+    // 質問の整理・文書の検索の段階を通る間、経過時間は減らない（段階ごとに 0 に戻さない。#1176）。
+    await expectProgressTimerMonotonic(page, 2);
     // 止まった段階を開いて出す（原因は段階ではなく Banner に出す）。
     await expect(progress).toHaveAttribute("data-chat-progress-state", "failed");
     await expect(page.getByTestId("chat-answer-progress-step-retrieve")).toContainText(

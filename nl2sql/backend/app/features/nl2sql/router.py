@@ -486,9 +486,12 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
         and isinstance(principal, Principal)
         and not principal.has_permission(SQL_EXECUTE_PERMISSION)
     ):
-        raise SecurityApiError(
-            403, "この機能を利用する権限がありません。", code=ROUTE_FORBIDDEN_CODE
-        )
+        if not req.chat:
+            raise SecurityApiError(
+                403, "この機能を利用する権限がありません。", code=ROUTE_FORBIDDEN_CODE
+            )
+        # チャットは実行の権限が無ければ生成だけにする（画面は実行しない理由を出す。#1176）。
+        req = req.model_copy(update={"generation_only": True})
     _assert_profile_access(request, req.profile_id, default_profile=True)
     try:
         actor_user_uuid = str(getattr(principal, "user_uuid", ""))
@@ -545,6 +548,35 @@ def execute_chat_turn(job_id: str, request: Request) -> ApiResponse[SqlChatExecu
     return ApiResponse(data=data)
 
 
+@router.post("/jobs/{job_id}/execution-result", response_model=ApiResponse[SqlChatExecuteData])
+def take_chat_execution_result(job_id: str, request: Request) -> ApiResponse[SqlChatExecuteData]:
+    """チャットのジョブの中で実行した結果（行を含む）を 1 回だけ受け取る（#1176）。
+
+    行は会話に残さず、受け取ったら消す。期限を過ぎた・受け取り済みの結果は 404（画面は要約と
+    「もう一度実行」を出す）。権限は SQL の実行（route の権限）、本人の会話、ターンの
+    業務プロファイルの利用権限（`/execute` と同じ）。
+    """
+    principal = getattr(request.state, "principal", None)
+    actor_user_uuid = str(getattr(principal, "user_uuid", ""))
+    try:
+        job = nl2sql_service.get_job(job_id, actor_user_uuid=actor_user_uuid)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="他の利用者の会話は参照できません。") from exc
+    if job is None:
+        raise HTTPException(status_code=404, detail="指定された会話のターンが見つかりません。")
+    _assert_profile_access(request, job.profile_id)
+    try:
+        data = nl2sql_service.take_chat_execution_result(job_id, actor_user_uuid=actor_user_uuid)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="他の利用者の会話は参照できません。") from exc
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="実行の結果はもう受け取れません。もう一度実行してください。",
+        ) from exc
+    return ApiResponse(data=data)
+
+
 @router.get("/chats", response_model=ApiResponse[SqlChatPage])
 def list_sql_chats(request: Request, cursor: str | None = None) -> ApiResponse[SqlChatPage]:
     """本人の会話だけを、現在利用できる業務プロファイルの範囲で返す。"""
@@ -594,7 +626,7 @@ def get_job(job_id: str, request: Request) -> ApiResponse[JobData]:
         ) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="指定されたジョブが見つかりません。")
-    if job.generation_only:
+    if job.chat:
         _assert_profile_access(request, job.profile_id)
     return ApiResponse(data=job)
 
