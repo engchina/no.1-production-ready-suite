@@ -6,6 +6,7 @@ const nl2sqlJa = {
   "chat.subtitle": "自然言語で SQL を生成し、会話を続けながら条件や集計を調整する",
   "chat.profile": "業務プロファイル",
   "chat.profile.loading": "業務プロファイルを読み込んでいます",
+  "chat.profile.loadFailed": "業務プロファイルを読み込めませんでした。",
   "chat.profile.placeholder": "業務プロファイルを検索して選択…",
   "chat.profile.searchPlaceholder": "業務プロファイルの名前・説明で検索…",
   "chat.profile.count": "{shown} / {total} 件",

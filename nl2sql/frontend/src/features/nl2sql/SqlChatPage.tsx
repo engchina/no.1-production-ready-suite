@@ -23,6 +23,7 @@ import {
   Card,
   CardContent,
   ChatProgress,
+  ChatSkeleton,
   ChatUserMessage,
   EmptyState,
   FieldActionRow,
@@ -364,9 +365,20 @@ export function SqlChatPage() {
     profileOptions.length === 0 &&
     !profileSearch &&
     !selectedProfile;
+  // 業務プロファイルの一覧を読めなかった（最初の読み込み）。上のカードに失敗と再試行を出し、会話の欄は出さない
+  // （空の状態を出さない。messaging.md §11.7、#1153）。候補の検索の失敗は欄の中で示す。
+  const profilesFailed =
+    profiles.isError && !profiles.data && !profileSearch && !selectedProfile;
+  // 開いている会話の内容を読み込んでいる（送った質問を出している間は除く）。
+  const conversationLoading =
+    Boolean(conversationId) && conversation.isPending && !pending;
+  // 画面の前提（業務プロファイルの一覧・開いている会話の内容）が揃うまでは、会話の欄に空の状態を出さず
+  // 会話の形の Skeleton で覆い、入力欄・生成方法・送信・新しい会話・履歴の開閉を無効にする（#1153）。
+  const prerequisitesLoading = profilesLoading || conversationLoading;
   const blocked =
     busy ||
     generating ||
+    profilesLoading ||
     !selectedProfile ||
     detail.isError ||
     (Boolean(conversationId) &&
@@ -515,6 +527,24 @@ export function SqlChatPage() {
                   <Skeleton className="h-[var(--button-height-md)] w-full" />
                 </div>
               </TimedLoadingState>
+            ) : profilesFailed ? (
+              <ApiErrorBanner
+                error={profiles.error}
+                fallback={t("chat.profile.loadFailed")}
+                testId="sql-chat-profiles-error"
+                action={
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={RefreshCw}
+                    loading={profiles.isFetching}
+                    onClick={() => void profiles.refetch()}
+                  >
+                    {t("chat.retry")}
+                  </Button>
+                }
+              />
             ) : noProfiles ? (
               <EmptyState
                 title={t("chat.noProfiles")}
@@ -579,7 +609,7 @@ export function SqlChatPage() {
             )}
           </CardContent>
         </Card>
-        {noProfiles ? null : (
+        {noProfiles || profilesFailed ? null : (
           <div
             className={`grid min-h-0 min-w-0 flex-1 gap-4 ${inlineHistory && historyPanelOpen ? "lg:grid-cols-[minmax(0,17.5rem)_minmax(0,1fr)]" : ""}`}
           >
@@ -634,6 +664,7 @@ export function SqlChatPage() {
                   aria-controls="sql-chat-history"
                   aria-expanded={historyOpen}
                   data-testid="sql-chat-history-toggle"
+                  disabled={profilesLoading}
                   onClick={toggleHistory}
                 />
                 {/* 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。 */}
@@ -655,7 +686,7 @@ export function SqlChatPage() {
                   variant="secondary"
                   size="sm"
                   icon={MessageSquarePlus}
-                  disabled={busy}
+                  disabled={busy || profilesLoading}
                   onClick={resetConversation}
                 >
                   {t("chat.new")}
@@ -669,19 +700,21 @@ export function SqlChatPage() {
                 className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]"
                 data-testid="sql-chat-conversation"
               >
-                {conversationId && conversation.isPending && !pending ? (
-                  // 読み込み中は文言と経過時間を出し、質問と回答の吹き出しの形の Skeleton で寸法を予約する
-                  // （RAG のチャットと同じ。messaging.md §3.6）。
+                {conversationLoading ? (
+                  // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する
+                  // （3 製品で同じ。messaging.md §3.6 / §11.7）。
                   <TimedLoadingState
                     label={t("chat.loading")}
                     operationKey="sql-chat-conversation-load"
                     framed={false}
                     testId="sql-chat-conversation-loading"
                   >
-                    <Skeleton className="ml-auto h-12 w-2/3" />
-                    <Skeleton className="h-32 w-5/6" />
-                    <Skeleton className="ml-auto h-12 w-1/2" />
+                    <ChatSkeleton />
                   </TimedLoadingState>
+                ) : profilesLoading ? (
+                  // 業務プロファイルの一覧の読み込み中は、空の状態（はじめの案内）を出さず会話の形の Skeleton で覆う。
+                  // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
+                  <ChatSkeleton testId="sql-chat-conversation-skeleton" />
                 ) : null}
                 {conversationId && conversation.isError ? (
                   <ApiErrorBanner
@@ -700,7 +733,7 @@ export function SqlChatPage() {
                     }
                   />
                 ) : null}
-                {!conversationId && !pending ? (
+                {!conversationId && !pending && !profilesLoading ? (
                   <EmptyState
                     title={t("chat.empty")}
                     hint={t("chat.emptyHint")}
@@ -796,7 +829,7 @@ export function SqlChatPage() {
                     value={engine}
                     size="sm"
                     width="sm"
-                    disabled={busy || generating}
+                    disabled={busy || generating || prerequisitesLoading}
                     onValueChange={setEngine}
                     describedBy={engineDescriptionId}
                     options={CHAT_ENGINES.map(({ value, label }) => ({
@@ -838,6 +871,8 @@ export function SqlChatPage() {
                     rows={2}
                     maxLength={10000}
                     placeholder={t("chat.placeholder")}
+                    // 前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
+                    disabled={prerequisitesLoading}
                     className="space-y-0"
                   />
                 </FieldActionRow>

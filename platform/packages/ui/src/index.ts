@@ -78,11 +78,13 @@ export {
   TableSkeleton,
   ListSkeleton,
   FormSkeleton,
+  ChatSkeleton,
   SKELETON_CLASS,
   type SkeletonRows,
   type TableSkeletonProps,
   type ListSkeletonProps,
   type FormSkeletonProps,
+  type ChatSkeletonProps,
 } from "./components/ui/skeleton";
 export { Switch, type SwitchProps } from "./components/ui/switch";
 export { ToggleChip } from "./components/ui/toggle-chip";
