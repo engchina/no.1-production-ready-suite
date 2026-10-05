@@ -15,7 +15,7 @@ from app.security.permissions import SQL_EXECUTE_PERMISSION
 from app.security.request_actor import actor_scope
 from app.settings import get_settings
 
-from .ontology_definition_service import definition_fingerprint
+from .ontology_definition_service import definition_fingerprint, profile_ontology_session_id
 from .ontology_definition_workspace import (
     ProfileOntologyWorkspaceService,
     authorize_definition_operation,
@@ -130,6 +130,25 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
         value = json.loads(self.document(profile_id, record["artifact_id"], HEAD)["content"])
         return {**value, "etag": record["etag"]}
 
+    def published_snapshot_id(self, profile_id: str) -> str:
+        """公開中の snapshot の ID（無ければ空）。`head` と同じ検証で、成果物を 1 回だけ読む。
+
+        ジョブの準備の段階（公開版の確定）が使う。`head` は業務プロファイルの存在をオントロジーの
+        runtime の lock の中で確かめ、同じ成果物をもう一度読むため、lock を持ったまま DB を読む
+        別の処理を待つ（#1155）。業務プロファイルの存在は、ジョブが先に確かめている。
+        """
+
+        record = self.store.get_artifact(stable_ontology_id(HEAD, profile_id))
+        if not record:
+            return ""
+        if (
+            record.get("session_id") != profile_ontology_session_id(profile_id)
+            or record.get("profile_id") != profile_id
+            or record.get("artifact_type") != HEAD
+        ):
+            raise OntologyNotFoundError("ONTOLOGY_ARTIFACT_NOT_FOUND", "成果物が見つかりません。")
+        return str(json.loads(record["content"]).get("snapshot_id") or "")
+
     def snapshot(self, profile_id: str, snapshot_id: str = "") -> dict[str, Any] | None:
         identity = snapshot_id or self.head(profile_id)["snapshot_id"]
         if not identity:
@@ -158,8 +177,20 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             "data_report": source.get("data_report"),
         }
 
+    def snapshot_from_record(self, profile_id: str, record: dict[str, Any]) -> dict[str, Any]:
+        """読み済みの snapshot の成果物を、`snapshot` と同じ検証で値にする（同じ行を読み直さない）。
+
+        公開の snapshot は大きい（共有の DB で約 12 MB、読み取りに約 5 秒）。ジョブの準備の段階が
+        種類の判定と本文で 2 回読まないため（#1155）。
+        """
+
+        return self._value(self.checked_document(profile_id, record, SNAPSHOT))
+
     def _read(self, profile_id: str, identity: str, kind: str) -> dict[str, Any]:
-        record = self.document(profile_id, identity, kind)
+        return self._value(self.document(profile_id, identity, kind))
+
+    @staticmethod
+    def _value(record: dict[str, Any]) -> dict[str, Any]:
         value = dict(json.loads(record["content"]))
         if definition_fingerprint(value) != record["content_hash"]:
             raise OntologyGateBlockedError(

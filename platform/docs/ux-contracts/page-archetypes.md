@@ -8,7 +8,7 @@
 
 ## 0. 設計原則
 
-1. 各ページは **4 つの型のどれか** に属する（§1）。独自のレイアウトを勝手に増やさない。
+1. 各ページは **4 つの型のどれか** に属する（§1）。例外はチャット（会話の画面。§6）だけ。独自のレイアウトを勝手に増やさない。
 2. 共通の骨格 = `PageHeader`（+ 必要なら状態バー）+ 共有プリミティブ。新しい CSS / UI を作らない。
 3. 色は**意味のトークン**だけ（[デザインシステム README §5 / §6](../design-system/README.md)）。生のパレットの class（`slate-` / `sky-` / `red-` …）を足さない。
 4. 一覧・結果の表は共有 `DataTable` + `Pagination`、詳細の併置は `FixedSplitPane`、確認は `useConfirm`、通知は [messaging.md](./messaging.md) の 6 チャネル。
@@ -264,3 +264,48 @@ Carbon・Material は「表への操作が主で、検索は操作の 1 つ」�
 5. 製品の lint / build / Vitest を通す。
 6. **Playwright**：主な導線・375px / desktop・空 / 読込 / エラー・キーボード / `Esc` / フォーカスの戻り・Pagination・分割ペインの divider。
 7. `ui-ux-pro-max` のチェックリストで自己レビューする。
+
+---
+
+## 6. チャット（会話の画面。#1161）
+
+3 製品のチャット（RAG `/chat`・NL2SQL `/chat`・Agent `/chat`）は §1 の 4 つの型の外の、会話の画面の型にする。入力 → 回答を会話として積み、送信は「その場で結果を待つ操作」（[buttons.md §3.1](./buttons.md)）。送信の振る舞い（楽観的な表示・失敗と再送信・停止・読み上げ・処理の段階）は [messaging.md §11](./messaging.md#11-チャットの送信楽観的な表示907) が正本で、この節は画面の骨格と、共通の部品と製品の分担を決める。
+
+### 6.1 骨格
+
+```text
+PageHeader wide（タイトル・説明。操作は置かない）
+PageBody wide
+├─ 対象の選択のカード（Card。画面の対象を決める主な選択欄を 1 つ、width="full"。#635）
+└─ grid（lg 以上で履歴を開くと「履歴 20rem | 会話」の 2 列）
+   ├─ 会話の履歴（lg 以上: 本文の横の <aside>。lg 未満: SideSheet。既定で閉じる。#664）
+   └─ 会話の領域（<section>。lg 未満は高さ 70dvh・最小 28rem、lg 以上は残りの高さ）
+      ├─ 上端の行: 履歴の開閉（左端）・今の会話の名前・「新しい会話」（右端）
+      ├─ 会話の欄（role="log"「会話」。中だけスクロールする）
+      │   └─ 1 往復 = 利用者の吹き出し（ChatUserMessage）+ 回答の入れ物（処理の段階 ChatProgress → 回答の本文 → 回答の操作）
+      └─ 入力欄の領域: 設定の行（任意。ラベル + InfoTip + 選択）→ 入力欄と送信 / 停止（FieldActionRow + RunStopButton、lg）→ 通知（停止の失敗など）
+```
+
+- 対象（検索・回答プロファイル / 業務プロファイル / 業務 Agent）を選ぶまで、会話の領域は出さない（または空の状態だけを出す）。対象を変えたら、開いている会話と確定していない仮のメッセージを外す（messaging.md §11.3）。
+- 会話の履歴は「会話の履歴」（`complementary` / `dialog` の名前）。開閉ボタンは会話の領域の上端の行の左端に 1 つだけ置き、`aria-expanded`・`aria-controls` を付ける。lg 以上のインラインの開閉は作業状態に残し、lg 未満のシートの開閉は残さない（[design-system README §4「SideSheet」](../design-system/README.md)、[workspace-state.md](./workspace-state.md)）。画面の幅が lg を越えたらシートを閉じる。
+- 「新しい会話」は上端の行の 1 か所だけに置く（履歴の一覧の中に重ねて置かない。#889）。会話を選んでいる間は、履歴を閉じていても上端の行に会話の名前を出す。
+- 会話の欄は会話の領域の中だけでスクロールし、自動の移動は会話の欄の `scrollTo` で行う（祖先を動かす `scrollIntoView` を使わない。design-system README §4「AppShell」）。
+- 入力欄は回答の作成中も書ける。Enter で送信、Shift+Enter で改行、IME の変換中の Enter では送らない（`isSubmitEnter`。#459）。実行中の Enter では停止しない（buttons.md §3.1）。
+- 読み込み中・失敗・空は、履歴の一覧・会話の欄・対象の選択のそれぞれの領域の中で出す（messaging.md §3.6。前提の読み込み中に空の状態や使える入力欄を出さない。#1153）。
+
+### 6.2 共通の部品と製品の分担
+
+| 共通（`packages/ui`） | 製品 |
+|---|---|
+| 骨格（履歴のパネルとシート・会話の領域・上端の行・会話の欄・入力欄の領域）、履歴の開閉の判定、1 往復の入れ物と回答の入れ物、仮の質問と失敗・再送信の表示、入力欄の行と Enter / IME の判定、自動スクロール、処理の段階（`ChatProgress`）、評価（`FeedbackControls`） | データの取得（会話の一覧・会話・ポーリング / SSE）、送信・置き換え・停止の API、作業状態の保存（下書き・対象・会話・履歴の開閉）、対象の選択の中身、回答の本文と回答に付く操作（RAG の引用・複数モデル・類似問・確認、NL2SQL の SQL と実行、Agent のツール・承認・出典）、処理の段階の組み立て、文言 |
+
+- 共通の部品は業務の語彙を知らない。文言は翻訳済みを props で受け、会話・メッセージのデータは製品が自分の API の型から写して渡す。回答の本文は子要素（スロット）で渡す。
+- 製品でチャットの骨格を書き写さない。足りない振る舞いは `packages/ui` の部品に足し、3 製品で同時に受け取る（[design-system ARCHITECTURE.md §7](../design-system/ARCHITECTURE.md)）。
+- 骨格を共通の部品へ移す作業は #1161 で、部品ごとに 3 製品をそろえて進める。移し終えるまでの実装は RAG `components/chat/ChatClient.tsx`、NL2SQL `features/nl2sql/SqlChatPage.tsx`、Agent `pages/ChatPage.tsx`。
+
+### 6.3 製品ごとの違いとして残すもの
+
+- 対象の種類と選択の欄（RAG は検索・回答プロファイルの専用の欄、NL2SQL・Agent は `SearchableSelectField`）。
+- 入力欄の上の設定の行の中身（RAG「回答するモデル」、NL2SQL「生成方法」、Agent はなし）。
+- 履歴の一覧のページング（API に合わせる。offset の API は `Pagination`、カーソルの API は「さらに読み込む」、件数の少ない全件の API はページングなし。§2「一覧の型と、基準から外す例外」）と、名前の変更・削除（API がある製品だけ）。
+- 停止の方法（RAG は request の中断、NL2SQL・Agent はジョブ・Run の中止の API）。
