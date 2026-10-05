@@ -1,4 +1,4 @@
-import { MessageSquarePlus, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { ArrowDown, MessageSquarePlus, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { ReactNode, Ref } from "react";
 
 import { cn } from "../../lib/utils";
@@ -21,6 +21,8 @@ export interface ChatLayoutTestIds {
   log?: string;
   /** 入力欄の領域（既定 `<prefix>-composer-region`）。 */
   composer?: string;
+  /** 「最新へ」（既定 `<prefix>-latest`）。 */
+  latest?: string;
 }
 
 export interface ChatLayoutNewConversation {
@@ -28,6 +30,15 @@ export interface ChatLayoutNewConversation {
   label: string;
   onClick: () => void;
   disabled?: boolean;
+}
+
+export interface ChatLayoutLatest {
+  /** 上を読んでいる間に新しい内容が届いた（`useChatAutoScroll` の `showLatest`）。 */
+  visible: boolean;
+  /** 「最新へ」のボタンの文言（翻訳済み）。 */
+  label: string;
+  /** 会話の欄を末尾へ動かす（`useChatAutoScroll` の `scrollToLatest`）。 */
+  onClick: () => void;
 }
 
 export interface ChatLayoutProps {
@@ -53,6 +64,8 @@ export interface ChatLayoutProps {
   logLabel: string;
   /** 会話の欄の要素（自動スクロール・引用への移動は、この要素の `scrollTo` で行う）。 */
   logRef?: Ref<HTMLDivElement>;
+  /** 上を読んでいる間に新しい内容が届いたときの「最新へ」（会話の欄の下端の中央に重ねる）。 */
+  latest?: ChatLayoutLatest;
   /** 会話の欄の中身（往復の一覧・読み込み中・失敗・空）。 */
   children: ReactNode;
   /** 入力欄の領域の中身（設定の行・入力欄と送信・通知）。 */
@@ -83,6 +96,7 @@ export function ChatLayout({
   historyToggleDisabled = false,
   logLabel,
   logRef,
+  latest,
   children,
   composer,
   testIdPrefix = "chat",
@@ -95,6 +109,7 @@ export function ChatLayout({
     title: testIds?.title ?? `${testIdPrefix}-conversation-title`,
     log: testIds?.log ?? `${testIdPrefix}-conversation`,
     composer: testIds?.composer ?? `${testIdPrefix}-composer-region`,
+    latest: testIds?.latest ?? `${testIdPrefix}-latest`,
   };
   return (
     <div
@@ -176,14 +191,32 @@ export function ChatLayout({
         </div>
 
         {/* 会話の欄。新しいメッセージを role="log" で知らせる（messaging.md §11.4）。 */}
-        <div
-          ref={logRef}
-          role="log"
-          aria-label={logLabel}
-          data-testid={ids.log}
-          className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]"
-        >
-          {children}
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div
+            ref={logRef}
+            role="log"
+            aria-label={logLabel}
+            data-testid={ids.log}
+            className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]"
+          >
+            {children}
+          </div>
+          {latest?.visible ? (
+            // 上を読んでいる間に届いた新しい内容へ戻る（引き戻さない。#1161）。会話の欄の外に置き、読み上げの log に混ぜない。
+            <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                icon={ArrowDown}
+                className="pointer-events-auto shadow-[var(--shadow-popover)]"
+                data-testid={ids.latest}
+                onClick={latest.onClick}
+              >
+                {latest.label}
+              </Button>
+            </div>
+          ) : null}
         </div>
 
         <div className="shrink-0 space-y-2 border-t border-border p-3" data-testid={ids.composer}>

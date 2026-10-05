@@ -27,6 +27,7 @@ import {
   type ChatUserMessageStatus,
   type OptimisticChatMessage,
   type ChatProgressStep,
+  useChatAutoScroll,
   useChatHistoryPanel,
 } from "@engchina/production-ready-ui";
 import {
@@ -625,7 +626,6 @@ export function ChatClient() {
   const [titleDraft, setTitleDraft] = useState("");
   const [titleError, setTitleError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const previousSearchAnswerProfileIdRef = useRef(searchAnswerProfileId);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -647,23 +647,30 @@ export function ChatClient() {
     setTitleError("");
   }, [searchAnswerProfileId, setActiveId, setFaqChoice, setClarifyChoice]);
 
-  // メッセージが増えたら末尾までスクロールする。
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [persistedMessages.length, liveTurn, faqChoice, clarifyChoice]);
+  // 会話の欄の自動スクロール（3 製品共通の useChatAutoScroll。#1161）。末尾を見ている間は新しいメッセージ・受信中の回答に
+  // 合わせて末尾へ追い、上を読んでいる間は引き戻さず「最新へ」を出す。会話を開いたら末尾から読み始める。
+  const scrollContentKey = useMemo(
+    () => ({}),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 変わったことだけを知らせる値（中身は使わない）
+    [persistedMessages.length, liveTurn, faqChoice, clarifyChoice]
+  );
+  const autoScroll = useChatAutoScroll({
+    contentKey: scrollContentKey,
+    resetKey: `${searchAnswerProfileId ?? ""}:${activeId ?? ""}`,
+  });
 
   useEffect(() => {
     const targetId = location.hash.slice(1);
     if (!targetId || !persistedMessages.length) return;
     const animationFrame = window.requestAnimationFrame(() => {
-      const container = scrollRef.current;
+      const container = autoScroll.logElementRef.current;
       const target = document.getElementById(targetId);
       if (!container || !target || !container.contains(target)) return;
       const offset = target.getBoundingClientRect().top - container.getBoundingClientRect().top;
       container.scrollTo({ top: container.scrollTop + offset - (container.clientHeight - target.clientHeight) / 2 });
     });
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [location.hash, persistedMessages.length]);
+  }, [location.hash, persistedMessages.length, autoScroll.logElementRef]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -971,6 +978,8 @@ export function ChatClient() {
     setErrorText("");
     if (retryContent === undefined) setComposer("");
     setLiveTurn(newLiveTurn({ content }));
+    // 送った質問は会話の欄の末尾に出す。上を読んでいても末尾へ戻る（messaging.md §11.1）。
+    autoScroll.scrollToLatest();
     let suggestions: ApprovedFaqSuggestionData[] = [];
     try {
       suggestions = (await api.suggestApprovedFaq(searchAnswerProfileId, content, "chat")).suggestions ?? [];
@@ -1536,7 +1545,12 @@ export function ChatClient() {
               disabled: createConversation.isPending || searchAnswerProfileLoading,
             }}
             logLabel={t("chat.messages.label")}
-            logRef={scrollRef}
+            logRef={autoScroll.logRef}
+            latest={{
+              visible: autoScroll.showLatest,
+              label: t("chat.messages.latest"),
+              onClick: () => autoScroll.scrollToLatest("smooth"),
+            }}
             testIds={{ log: "chat-messages" }}
             composer={
               <>

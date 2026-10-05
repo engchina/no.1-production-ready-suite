@@ -34,6 +34,7 @@ import {
   toast,
   withOptimisticChatStatus,
   type OptimisticChatMessage,
+  useChatAutoScroll,
   useChatHistoryPanel,
   ApiErrorBanner,
   apiErrorMessage,
@@ -104,7 +105,6 @@ export function ChatPage() {
   // 送った質問（#907）。Run の作成の応答を待たずに会話の欄の末尾へ出し、作られた Run に置き換える。
   // 作れなかったときは残して「再送信」を出す（入力を失わない）。
   const [pending, setPending] = useState<OptimisticChatMessage | null>(null);
-  const conversationRef = useRef<HTMLDivElement | null>(null);
 
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const usableAgents = useMemo(
@@ -163,11 +163,12 @@ export function ChatPage() {
   const lastRunId = runs.at(-1)?.id;
   const lastRunStatus = runs.at(-1)?.status;
 
-  useEffect(() => {
-    // 祖先（ページ・document）を動かさず、会話だけを末尾へ移動する。
-    const conversation = conversationRef.current;
-    conversation?.scrollTo({ top: conversation.scrollHeight });
-  }, [lastRunId, lastRunStatus, pending?.localId, pending?.status]);
+  // 会話の欄の自動スクロール（3 製品共通の useChatAutoScroll。#1161）。祖先（ページ・document）は動かさない。
+  // 末尾を見ている間は新しい Run・状態の変化に合わせて末尾へ追い、上を読んでいる間は「最新へ」を出す。
+  const autoScroll = useChatAutoScroll({
+    contentKey: `${lastRunId ?? ""}:${lastRunStatus ?? ""}:${runs.at(-1)?.steps.length ?? 0}:${pending?.localId ?? ""}:${pending?.status ?? ""}`,
+    resetKey: `${selectedAgentId}:${threadId ?? ""}`,
+  });
 
   // 評価を保存した Run を、会話の取り直しを待たずに差し替える（#774）。
   function replaceRun(updated: RunState) {
@@ -256,6 +257,8 @@ export function ChatPage() {
     // 送った質問はすぐ会話の欄に出し、入力欄を空にする。回答の作成中も次の質問を書ける（#907）。
     setPending(createOptimisticChatMessage(goal));
     setDraft("");
+    // 送った質問は会話の欄の末尾に出す。上を読んでいても末尾へ戻る（messaging.md §11.1）。
+    autoScroll.scrollToLatest();
     cancel.reset();
     send.mutate(goal);
   }
@@ -417,7 +420,12 @@ export function ChatPage() {
             conversationTitleLoading={Boolean(currentThreadId)}
             newConversation={{ label: t("chat.threads.new"), onClick: startNewThread, disabled: agentsLoading }}
             logLabel={t("chat.messages")}
-            logRef={conversationRef}
+            logRef={autoScroll.logRef}
+            latest={{
+              visible: autoScroll.showLatest,
+              label: t("chat.latest"),
+              onClick: () => autoScroll.scrollToLatest("smooth"),
+            }}
             composer={
               <>
                 {/* 入力欄の領域（入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。送信と停止は同じボタンで、
