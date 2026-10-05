@@ -54,19 +54,14 @@ test("会話を開き直したときは前回の実行の要約と「もう一�
 
 test("CSV のファイル名と「SELECT SQL を実行」への受け渡し（URL に SQL を載せない）", () => {
   assert.match(chatResultCsvFilename("2026-10-05T05:03:12Z"), /^nl2sql-chat-result-\d{8}-\d{6}\.csv$/u);
-  assert.equal(chatResultCsvFilename("invalid"), "nl2sql-chat-result-result.csv");
+  assert.equal(chatResultCsvFilename("invalid"), "nl2sql-chat-result.csv");
   assert.equal(directSqlPrefill(directSqlPrefillState(" SELECT 1 FROM DUAL ")), "SELECT 1 FROM DUAL");
   assert.equal(directSqlPrefill(null), "");
   assert.equal(directSqlPrefill({ prefillSql: 1 }), "");
 });
 
-test("チャットは共通の ChatResultTable、SQL 生成・SELECT SQL の実行の表は同じセルの表示を使う", () => {
-  // 同じ結果が画面ごとに違って見えない（NULL・数値の右寄せ）ように、セルの表示を共通の部品にする（#1154）。
+test("チャットは共通の結果の表（ResultTable。旧名 ChatResultTable）を使う", () => {
+  // 画面のデータの結果も同じ部品（components/QueryResultTable.tsx。tests/query-result-table.test.ts、#1178）。
   const chat = readFileSync(resolve(sourceRoot, "components/ChatSqlExecution.tsx"), "utf8");
-  assert.match(chat, /<ChatResultTable\b/u);
-  const columns = readFileSync(resolve(sourceRoot, "components/resultTableColumns.tsx"), "utf8");
-  assert.match(columns, /<ResultCell\b/u);
-  assert.match(columns, /isNumericResultColumn\(/u);
-  const table = readFileSync(resolve(sourceRoot, "components/Nl2SqlResultTable.tsx"), "utf8");
-  assert.match(table, /resultTableColumns\(results\)/u);
+  assert.match(chat, /<(?:Chat)?ResultTable\b/u);
 });
