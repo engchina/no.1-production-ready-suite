@@ -9,6 +9,7 @@
 import type { Page, Route } from "@playwright/test";
 
 import { expect, MOCK_NOW, test, type MockApi } from "./fixtures/mock-api";
+import { expectSpinnerStable } from "./fixtures/spinner-stability";
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 800, visibleRows: 8 },
@@ -126,6 +127,8 @@ for (const viewport of VIEWPORTS) {
       await expect(loading.locator('[data-skeleton="table"]')).toBeVisible();
       // 見出しは隠さない（messaging.md §3.7）。
       await expect(page.getByRole("heading", { name: "業務 Agent 一覧" })).toBeVisible();
+      // 読み込み中のスピナーは回転しても見た目の重心も箱・行も動かない（#1180）。
+      await expectSpinnerStable(loading.locator(".pr-spinner"));
 
       releaseAgents();
       await expect(page.getByTestId("agent-row-default")).toBeVisible();
