@@ -33,7 +33,7 @@ const conversation = {
   updated_at: "2026-01-01T00:00:02Z",
 };
 
-const EMPTY_TEXT = "最初のメッセージを送信して会話を始めましょう。";
+const EMPTY_TEXT = "質問を入力して会話を始めます";
 const COMPOSER = "質問";
 /** 取得の失敗は TanStack Query の既定の再試行（3 回・1 + 2 + 4 秒）の後に出る。 */
 const RETRY_TIMEOUT = 20_000;

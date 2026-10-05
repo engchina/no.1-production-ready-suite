@@ -9161,7 +9161,7 @@ class Nl2SqlService:
         safety: str = "all",
         query: str = "",
     ) -> HistoryData:
-        """検索履歴を新しい順に cursor page で返す(actor 制限は呼び出し側が決める)。"""
+        """実行履歴を新しい順に cursor page で返す(actor 制限は呼び出し側が決める)。"""
 
         if rating not in {"all", "good", "bad", "unrated"}:
             raise ValueError("rating が不正です。")

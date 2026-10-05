@@ -66,7 +66,7 @@ src/main.tsx                         <ConfirmProvider labels navigationKey> + <T
 - ⏳ 今後の新規画面・機能は本 spec の 6 チャネルに従う。以下は **意図的に対象外**(spec の例外):
   - **状態可視化**(`StatusBadge` / `StatusPill` / `FlowStepper` のステップ表示)— 通知ではなくデータ表示。
   - **OCI 構成テストの結果パネル**(タイトル + 詳細リスト + モードチップの複合)— 専用パネルとして維持。
-  - **中立の `role="status"` 軽量テキスト**(検索キャンセル通知など)。
+  - **中立の `role="status"` 軽量テキスト**(SQL の生成と実行のキャンセル通知など)。
 
 ### Markdown オントロジーの公開（Issue #491）
 

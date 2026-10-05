@@ -708,6 +708,25 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    - Cookie 名が `production_ready_rag_session` から `rag_session` / `rag_csrf` に変わるため、利用者は一度ログインし直す。
    - 評価・負荷試験の CLI（`app.rag.evaluation_cli` など）が `RAG_AUTH_MODE=production` の API を呼ぶ場合は、ログインしたセッションが必要になる。
 
+## 既存環境の更新手順（#1175 チャットの回答の作成を接続から切り離す）
+
+チャットの回答の作成を、SSE の接続から切り離した（接続が切れても作成を続け、再接続・再読込で回答を受け取れる）。
+作成中の回答は `rag_messages` に `STREAMING` で保存し、段階・作成しているプロセス・heartbeat を持つ。
+
+1. システムテーブルを更新する（migration `20261005_001_message_answer_runs`。`rag_messages` に列 `progress_json`・
+   `lease_owner`・`heartbeat_at` を無ければ足し、状態の制約 `rag_messages_status_ck` に `CANCELLED`（利用者の停止）を足す。
+   データを削除しないので承認は要らない）。更新するまで、チャットの送信は列が無いためエラーになる。
+2. backend を再起動する。同じ利用者が同時に作成できる回答の数を変える場合は `backend/.env` の
+   `RAG_CHAT_MAX_ACTIVE_ANSWERS_PER_USER`（既定 3。backend のプロセスごと）を設定する。
+3. Nginx の設定を `init_script.sh` で作り直す（再購読の `GET /api/chat/conversations/{id}/messages/{質問の id}/stream` を、
+   送信の SSE と同じ長い待ち時間・buffering なしの location に入れた）。作り直さなくても、heartbeat（10 秒ごと）が
+   流れる間は既定の location でも購読できる。
+
+- 作成はリクエストを受けた backend のプロセスの中で動く。Gunicorn の worker が複数のとき、再購読が別の worker に届くと
+  404 になり、画面は保存済みの会話の取り直し（2 秒ごと）に切り替えて完了を待つ。
+- backend の停止・再起動では、そのプロセスで作成中の回答を「中断しました」の失敗として保存する。保存できずに残った
+  作成中の回答も、会話を開いたときに heartbeat の途絶え（60 秒）で失敗にし、画面は「再送信」を出す。
+
 ## 既存環境の更新手順（#390 品質評価の job）
 
 品質評価（評価・比較）を job にした。画面と評価 CLI（nightly を含む）は job の API を使う。

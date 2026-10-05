@@ -1434,6 +1434,15 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         le=5,
         description="マルチモデル比較で同時に回答生成する OCI モデルの最大数。",
     )
+    rag_chat_max_active_answers_per_user: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description=(
+            "同じ利用者が同時に作成できるチャットの回答の数（backend のプロセスごと。#1175）。"
+            "回答の作成は SSE の接続が切れても続くので、送信を重ねて LLM を使い過ぎないよう抑える。"
+        ),
+    )
 
     # --- レート制限（高コスト API の保護）---
     rate_limit_enabled: bool = Field(default=True)

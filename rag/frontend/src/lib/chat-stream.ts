@@ -1,11 +1,14 @@
 /**
  * チャットメッセージの SSE ストリーミングクライアント
- * （POST /api/chat/conversations/{id}/messages/stream）。
+ * （POST /api/chat/conversations/{id}/messages/stream、再購読は GET .../messages/{質問の id}/stream）。
  *
  * バックエンドは start → (stage / progress / delta / metadata / citations / done)×モデル → all_done を送る。
  * event の無い間は heartbeat（`: keepalive` のコメント）を送る（#1160）。
  * `progress` は処理の段階（3 製品共通の ChatProgressStep。#1146）の一覧を、段階が変わるたびに全体で送る。
  * マルチモデル比較では各イベントに model_id が付き、フロントがカラムへ振り分ける。
+ *
+ * 回答の作成は接続から切り離されている（#1175）。接続が切れても backend は作成を続けるので、画面は最後に
+ * 受け取った event の連番（`id:`）から `resumeChatStream` で続きを購読し直す。
  */
 
 import type { ChatProgressStep } from "@engchina/production-ready-ui";
@@ -26,6 +29,8 @@ import {
 export interface ChatColumn {
   model_id: string;
   label: string;
+  /** 作成中の回答（保存済み・STREAMING）の id（#1175）。 */
+  message_id?: string;
 }
 
 export interface ChatStreamHandlers {
@@ -51,18 +56,37 @@ export interface ChatStreamHandlers {
   }) => void;
   onCitations?: (modelId: string, citations: RetrievedChunk[]) => void;
   onModelDone?: (payload: { model_id: string; message_id: string }) => void;
-  onModelError?: (payload: { model_id: string; message: string }) => void;
+  /** 回答の失敗。`cancelled` は利用者の停止（#1175）。 */
+  onModelError?: (payload: { model_id: string; message: string; cancelled: boolean }) => void;
   onAllDone?: () => void;
   /**
    * 配信のバイト（event・heartbeat のコメント）を受け取るたびに呼ぶ（#1160）。画面は、これが一定時間
    * 届かなければ配信が途絶えたとみなし、保存済みの会話を取り直す（`useChatProgressTracker` の `touch()`）。
    */
   onActivity?: () => void;
+  /** event の連番（`id:`）を受け取ったときに呼ぶ。再購読はこの次から（#1175）。 */
+  onEventId?: (id: number) => void;
 }
 
 /** 配信の終わり方。`completed` が false なら、`all_done` の前に接続が切れた（#1160）。 */
 export interface ChatStreamOutcome {
   completed: boolean;
+}
+
+/**
+ * 送る質問の id（32 桁の 16 進。#1175）。サーバーは同じ id で質問を保存し、画面は `start` の前でもこの id で
+ * 回答の作成を取り消せる。http（非 secure context）でも使えるよう `crypto.randomUUID` ではなく
+ * `crypto.getRandomValues` で作る。
+ */
+export function newChatClientMessageId(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+/** 回答の作成は続いているが、この接続では続きを購読できない（別の worker・再起動の後。#1175）。 */
+export function isChatStreamGone(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 404;
 }
 
 /** SSE の `event:`/`data:` ブロックを解析しながらハンドラへ流す。 */
@@ -73,10 +97,9 @@ export async function streamChatMessage(
   signal?: AbortSignal
 ): Promise<ChatStreamOutcome> {
   const path = `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/stream`;
-  const request = { method: "POST", path };
-  let res: Response;
-  try {
-    res = await fetch(path, {
+  return openChatStream(
+    path,
+    {
       method: "POST",
       // Cookie セッションの CSRF（#214）。
       headers: withCsrfHeaders("POST", {
@@ -86,7 +109,49 @@ export async function streamChatMessage(
       credentials: "same-origin",
       body: JSON.stringify(body),
       signal,
-    });
+    },
+    handlers
+  );
+}
+
+/**
+ * 作成中の回答の配信を、`lastEventId`（最後に受け取った event の連番）の次から購読し直す（#1175）。
+ * `messageId` は質問（USER のメッセージ）の id。このプロセスで作成していなければ 404（`isChatStreamGone`）。
+ */
+export async function resumeChatStream(
+  conversationId: string,
+  messageId: string,
+  lastEventId: number,
+  handlers: ChatStreamHandlers,
+  signal?: AbortSignal
+): Promise<ChatStreamOutcome> {
+  const path =
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}` +
+    `/messages/${encodeURIComponent(messageId)}/stream`;
+  return openChatStream(
+    path,
+    {
+      method: "GET",
+      headers: { Accept: "text/event-stream", "Last-Event-ID": String(lastEventId) },
+      credentials: "same-origin",
+      cache: "no-store",
+      signal,
+    },
+    handlers,
+    { requireEventStream: true }
+  );
+}
+
+async function openChatStream(
+  path: string,
+  init: RequestInit,
+  handlers: ChatStreamHandlers,
+  options: { requireEventStream?: boolean } = {}
+): Promise<ChatStreamOutcome> {
+  const request = { method: init.method ?? "GET", path };
+  let res: Response;
+  try {
+    res = await fetch(path, init);
   } catch (cause) {
     // 通信断（`TypeError: Failed to fetch`）は利用者向けの文の ApiError にする。中止はそのまま（#906）。
     throw apiErrorFromFetchFailure(cause, request) ?? cause;
@@ -110,6 +175,11 @@ export async function streamChatMessage(
       });
     }
     throw error;
+  }
+  if (options.requireEventStream && !(res.headers.get("content-type") ?? "").includes("text/event-stream")) {
+    // SSE ではない応答（中継の案内のページなど）は、続きを購読できないものとして扱う（保存済みの会話を取り直す）。
+    void res.body.cancel().catch(() => undefined);
+    throw new ApiError(404, [t("chat.stream.resumeUnavailable")]);
   }
 
   const reader = res.body.getReader();
@@ -154,10 +224,15 @@ export async function streamChatMessage(
 /** 1 つの event を解析してハンドラへ渡し、event 名を返す（コメント・空の data は null）。 */
 function dispatchEvent(block: string, handlers: ChatStreamHandlers): string | null {
   let event = "message";
+  let id: number | null = null;
   const dataLines: string[] = [];
   for (const line of block.split("\n")) {
     if (line.startsWith("event:")) event = line.slice(6).trim();
     else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+    else if (line.startsWith("id:")) {
+      const parsed = Number.parseInt(line.slice(3).trim(), 10);
+      if (Number.isFinite(parsed)) id = parsed;
+    }
   }
   if (dataLines.length === 0) return null;
 
@@ -205,11 +280,14 @@ function dispatchEvent(block: string, handlers: ChatStreamHandlers): string | nu
       handlers.onModelError?.({
         model_id: String(payload.model_id ?? ""),
         message: String(payload.message ?? t("chat.error.model")),
+        cancelled: payload.cancelled === true,
       });
       break;
     case "all_done":
       handlers.onAllDone?.();
       break;
   }
+  // 処理した後に連番を進める（処理の途中で切れたら、同じ event から購読し直す）。
+  if (id !== null) handlers.onEventId?.(id);
   return event;
 }

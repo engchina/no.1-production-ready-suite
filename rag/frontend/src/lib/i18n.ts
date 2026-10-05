@@ -2042,7 +2042,7 @@ export const ja = {
 
   // チャット（会話 / マルチモデル比較）
   "chat.title": "チャット",
-  "chat.subtitle": "検索・回答プロファイルの根拠をもとに会話形式で質問できます。複数モデルの回答を並べて比較もできます。",
+  "chat.subtitle": "検索・回答プロファイルの資料に質問し、根拠を確かめながら会話を続ける。複数のモデルの回答を並べて比べることもできる",
   "chat.searchAnswerProfile.empty": "公開済みの検索・回答プロファイルがありません。先に検索・回答プロファイルを作成してください。",
   "chat.searchAnswerProfile.required": "検索・回答プロファイルを選択するとチャットを始められます。",
   "chat.searchAnswerProfile.open": "検索・回答プロファイルを作成",
@@ -2073,7 +2073,8 @@ export const ja = {
   "chat.sessions.deleteError": "会話を削除できませんでした。時間をおいて再試行してください。",
   "chat.sessions.error": "会話一覧を読み込めませんでした。",
   "chat.sessions.pagination": "会話一覧のページ切替",
-  "chat.messages.empty": "最初のメッセージを送信して会話を始めましょう。",
+  "chat.messages.empty": "質問を入力して会話を始めます",
+  "chat.messages.emptyHint": "同じ会話の中では、前の質問と回答を踏まえて答えます。",
   "chat.messages.error": "会話を読み込めませんでした。",
   "chat.composer.label": "質問",
   "chat.composer.placeholder": "質問を入力（Enter で送信、Shift+Enter で改行）",
@@ -2089,7 +2090,8 @@ export const ja = {
   "chat.send.failed": "送信できませんでした",
   "chat.send.failedHint": "サーバーに届きませんでした。通信の状態を確かめて、再送信してください。",
   "chat.send.retry": "再送信",
-  "chat.stream.lost": "回答を受け取る途中で接続が切れ、回答を確かめられませんでした。通信の状態を確かめて、再送信してください。",
+  "chat.stream.lost": "回答を受け取る途中で接続が切れ、回答を確かめられませんでした。回答の作成は続いているので、通信が戻ったら会話を開き直して確かめてください。回答が無ければ再送信してください。",
+  "chat.stream.resumeUnavailable": "回答の配信を再開できません。保存済みの会話から回答を取り直します。",
   "chat.send.stopped": "回答の作成を停止しました。もう一度送ると、新しく回答を作成します。",
 
   "search.error.failed": "検索に失敗しました。再度お試しください。",
