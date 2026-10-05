@@ -3612,6 +3612,26 @@ def _log_job_stage_finished(
     )
 
 
+def _log_job_stage_step_finished(
+    job_id: str, stage: str, step: str, *, started: float, attempt: int
+) -> None:
+    """段階の中の処理ごとの所要時間（どの処理が遅いかを追う。#1155）。
+
+    質問・SQL の本文は出さない。
+    """
+
+    logger.info(
+        "nl2sql_job_stage_step_finished",
+        extra={
+            "job_id": job_id,
+            "stage": stage,
+            "step": step,
+            "elapsed_ms": _elapsed_ms(started),
+            "attempt": attempt,
+        },
+    )
+
+
 def _job_failure_step_index(steps: list[JobStepData]) -> int | None:
     for expected_status in (JobStepStatus.RUNNING, JobStepStatus.PENDING):
         for index, step in enumerate(steps):
@@ -20049,19 +20069,39 @@ class Nl2SqlService:
 
         self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
+        step_started = stage_started
         business_release_id = self._resolve_job_business_release(job_id, request)
+        _log_job_stage_step_finished(
+            job_id, "prepare_context", "business_release", started=step_started, attempt=attempt
+        )
+        step_started = time.monotonic()
         rewritten = self._rewrite_question_for_generation(
             request.question,
             profile,
             use_glossary=request.use_glossary,
         )
+        _log_job_stage_step_finished(
+            job_id, "prepare_context", "rewrite_question", started=step_started, attempt=attempt
+        )
+        step_started = time.monotonic()
         allowed = self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
+        _log_job_stage_step_finished(
+            job_id, "prepare_context", "allowed_objects", started=step_started, attempt=attempt
+        )
+        step_started = time.monotonic()
         row_limit = self._resolve_row_limit(request.profile_id, request.row_limit)
+        _log_job_stage_step_finished(
+            job_id, "prepare_context", "row_limit", started=step_started, attempt=attempt
+        )
+        step_started = time.monotonic()
         ontology_context = self._job_published_ontology_markdown(
             request=request,
             profile=profile,
             business_release_id=business_release_id,
             allowed=allowed,
+        )
+        _log_job_stage_step_finished(
+            job_id, "prepare_context", "ontology_context", started=step_started, attempt=attempt
         )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="prepare_context", elapsed_ms=stage_elapsed))
@@ -20180,6 +20220,7 @@ class Nl2SqlService:
                 ontology_graph: Nl2SqlOntologyGraphSnapshot | None = None
                 ontology_graph_warnings: list[str] = []
                 if request.use_ontology_context:
+                    step_started = time.monotonic()
                     ontology_graph, ontology_graph_warnings = (
                         self._build_interpretation_ontology_graph_snapshot(
                             profile=profile,
@@ -20192,6 +20233,13 @@ class Nl2SqlService:
                                 else ""
                             ),
                         )
+                    )
+                    _log_job_stage_step_finished(
+                        job_id,
+                        "format_results",
+                        "ontology_graph",
+                        started=step_started,
+                        attempt=attempt,
                     )
                 interpretation = self._build_interpretation_artifact(
                     request=request,
@@ -20400,18 +20448,14 @@ class Nl2SqlService:
                 return job.business_release_id
         release_id = ""
         if request.use_ontology_context:
-            from .ontology_markdown_workspace import MarkdownOntologyWorkspace
             from .ontology_router import ontology_runtime
 
             if ontology_runtime.legacy_service is self:
-                profile_id = request.profile_id or "default"
-                release_id = str(
-                    MarkdownOntologyWorkspace(ontology_runtime).head(profile_id)["snapshot_id"]
-                )
-                if not release_id:
-                    state = ontology_runtime.ontology_markdown_state(profile_id)
-                    if state.published_revision is not None:
-                        release_id = state.published_revision.id
+                # 成果物と版の header だけを読み、runtime の lock を取らない。
+                # `ontology_markdown_state` は版のグラフ（nodes / edges / embedding）を
+                # 版ごとに読み、lock を持ったまま待つため、共有の DB では準備の段階だけで
+                # 数分かかった（#1155）。
+                release_id = ontology_runtime.published_release_id(request.profile_id or "default")
         with self._lock:
             job = self._execution_job_locked(job_id)
             job.business_release_id = release_id
