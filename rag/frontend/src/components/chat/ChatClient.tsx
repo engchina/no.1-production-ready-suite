@@ -64,6 +64,7 @@ import type {
   ClarificationAnswer,
   ClarificationSuggestionData,
   ChatMessage,
+  ConversationDetail,
   ConversationSummary,
   RetrievedChunk,
 } from "@/lib/api";
@@ -560,7 +561,9 @@ export function ChatClient() {
   // 保存済みの会話を取り直して完了を待つ（#1175）。
   const conversationQuery = useConversation(activeId, { pollStreaming: !sending });
   // 画面の前提（検索・回答プロファイルの一覧・開いている会話の内容）が揃うまでは、会話の欄に空の状態を出さず
-  // 会話の形の Skeleton で覆い、入力欄・送信・新しい会話・履歴の開閉を無効にする（messaging.md §11.7、#1153）。
+  // 会話の形の Skeleton で覆い、送信を止める（messaging.md §11.7、#1153）。入力欄・新しい会話・履歴の開閉を
+  // 無効にするのは検索・回答プロファイルの一覧の読み込み中だけ。会話の内容の読み込み中は入力欄に書ける
+  // （書いている途中で無効にしてフォーカスと入力を失わせない。#1188）。
   // 会話の内容を読めなかったときも送信しない（内容の分からない会話に続けて送らない）。
   const conversationLoading = Boolean(activeId) && conversationQuery.isLoading;
   const conversationFailed = Boolean(activeId) && conversationQuery.isError && !conversationQuery.data;
@@ -793,6 +796,13 @@ export function ChatClient() {
       (conversation) => conversation.status === "ACTIVE" && conversation.message_count === 0
     );
     if (emptyConversation) {
+      // 空と分かっている会話なので、内容（空）を先に入れて読み込み中にしない（#1188）。
+      if (!queryClient.getQueryData(queryKeys.conversation(emptyConversation.id))) {
+        queryClient.setQueryData<ConversationDetail>(queryKeys.conversation(emptyConversation.id), {
+          ...emptyConversation,
+          messages: [],
+        });
+      }
       selectConversation(emptyConversation.id);
       focusComposer();
       return;
@@ -1548,7 +1558,8 @@ export function ChatClient() {
                     送信と停止は同じボタンで、生成中は同じ位置で「停止」になる（buttons.md §3.1、#413）。
                     生成中も入力できる（次の質問を書ける）。生成中の Enter は送らず、停止もしない（#413）。
                     IME の変換を確定する Enter では送信しない（#459）。会話を選んでいなくても入力でき、最初の送信で会話を作る（#664）。
-                    前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。 */}
+                    検索・回答プロファイルの一覧の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
+                    会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
                 <ChatComposer
                   id="chat-composer"
                   textareaRef={composerRef}
@@ -1558,8 +1569,13 @@ export function ChatClient() {
                   onStop={stop}
                   // 保存済みの作成中の回答（再読込の後など）がある間も「停止」（取消の API）にする（#1175）。
                   running={answerInProgress}
-                  submitBlocked={searchAnswerProfileWithoutKnowledgeBases || pendingChoice || conversationFailed}
-                  disabled={prerequisitesLoading}
+                  submitBlocked={
+                    searchAnswerProfileWithoutKnowledgeBases ||
+                    pendingChoice ||
+                    conversationLoading ||
+                    conversationFailed
+                  }
+                  disabled={searchAnswerProfileLoading}
                   label={t("chat.composer.label")}
                   placeholder={t("chat.composer.placeholder")}
                   sendLabel={t("chat.composer.send")}

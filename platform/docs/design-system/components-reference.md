@@ -2871,8 +2871,9 @@ import { ChatComposer, ChatComposerOption } from "@engchina/production-ready-ui"
   onSubmit={submit}
   onStop={stop}
   running={sending}                   // 送信の要求中・回答の作成中（同じボタンが「停止」）
-  submitBlocked={!target || waitingChoice}
-  disabled={prerequisitesLoading}       // 前提の読み込み中は書けない（#1153。書いた文字は残す）
+  submitBlocked={!target || waitingChoice || conversationLoading}
+  disabled={targetsLoading}            // 対象の一覧の読み込み中は書けない（#1153。書いた文字は残す）。
+                                      // 会話の内容の読み込み中は書けて、送信だけ止める（submitBlocked。#1188）
   label={t("chat.composer.label")}    // 「質問」（読み上げだけ）
   placeholder={t("chat.composer.placeholder")}  // 「質問を入力（Enter で送信、Shift+Enter で改行）」
   sendLabel={t("chat.send")}

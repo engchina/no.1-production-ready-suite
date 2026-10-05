@@ -5,7 +5,8 @@ import { mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
 /**
  * チャットの前提（検索・回答プロファイルの一覧・開いている会話の内容）の読み込み中・失敗の表示（#1153）。
  * 3 製品で同じ規則（UX 契約 messaging.md §11.7）: 前提が揃うまで会話の欄に空の状態を出さず、
- * 会話の形の Skeleton を出し、入力欄・送信・新しい会話・履歴の開閉を無効にする。
+ * 会話の形の Skeleton を出し、送信を止める。入力欄・新しい会話・履歴の開閉を無効にするのは対象の一覧の
+ * 読み込み中だけで、会話の内容の読み込み中は入力欄に書ける（#1188）。
  * desktop と mobile（375px）の 2 project で実行する。
  */
 
@@ -38,14 +39,26 @@ const COMPOSER = "質問";
 /** 取得の失敗は TanStack Query の既定の再試行（3 回・1 + 2 + 4 秒）の後に出る。 */
 const RETRY_TIMEOUT = 20_000;
 
-async function setup(page: Page, options: { conversationFails?: boolean } = {}) {
+async function setup(
+  page: Page,
+  options: { conversationFails?: boolean; noConversations?: boolean } = {}
+) {
   await mockLocalAuth(page);
   await page.route("**/api/chat/models", (route) => route.fulfill({ json: envelope([]) }));
+  // noConversations: 会話が無い状態から始め、「新しい会話」で作る（作成の応答は内容が空の会話）。
+  let created = !options.noConversations;
   await page.route("**/api/chat/conversations**", async (route) => {
-    const path = new URL(route.request().url()).pathname;
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path === "/api/chat/conversations" && request.method() === "POST") {
+      created = true;
+      await route.fulfill({ json: envelope({ ...conversation, title: null, messages: [] }) });
+      return;
+    }
     if (path === "/api/chat/conversations") {
+      const items = created ? [conversation] : [];
       await route.fulfill({
-        json: envelope({ items: [conversation], total: 1, limit: 10, offset: 0, has_next: false }),
+        json: envelope({ items, total: items.length, limit: 10, offset: 0, has_next: false }),
       });
       return;
     }
@@ -58,6 +71,18 @@ async function setup(page: Page, options: { conversationFails?: boolean } = {}) 
     }
     await route.fulfill({ json: envelope({ ...conversation, messages: [] }) });
   });
+}
+
+/** 会話（conv-1）の内容の取得を、戻り値の関数を呼ぶまで止める。 */
+async function holdConversation(page: Page) {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/chat/conversations/conv-1", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await released;
+    await route.fulfill({ json: envelope({ ...conversation, messages: [] }) });
+  });
+  return () => release();
 }
 
 /** 検索・回答プロファイルの一覧の応答を、戻り値の関数を呼ぶまで止める。 */
@@ -168,4 +193,74 @@ test("開いている会話の内容を読めなかったときは、失敗を�
   await expect(composer).toHaveValue("続きの質問");
   // 新しい会話には移れる（失敗の後も操作できる）。
   await expect(page.getByRole("button", { name: "新しい会話", exact: true })).toBeEnabled();
+});
+
+// 会話の内容の読み込み中も入力欄は書ける（書いている途中で無効にしてフォーカスと入力を失わせない）。
+// 送信・Enter だけを読み込み後まで止める（messaging.md §11.7、#1188）。
+test("開いている会話の内容の読み込み中も入力欄に書け、送信は読み込み後にできる", async ({ page }) => {
+  await setup(page);
+  await page.route("**/api/search-answer-profiles**", (route) => route.fulfill(profilesPage));
+  const release = await holdConversation(page);
+  await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
+  await expect(page.getByTestId("chat-messages-loading")).toContainText("会話の内容を読み込んでいます");
+  await expect(page.getByText(EMPTY_TEXT, { exact: true })).toHaveCount(0);
+  const composer = page.getByRole("textbox", { name: COMPOSER, exact: true });
+  await expect(composer).toBeEnabled();
+  await composer.fill("続きの質問");
+  await expect(composer).toHaveValue("続きの質問");
+  await expect(page.getByTestId("chat-run-stop")).toBeDisabled();
+  await composer.press("Enter");
+  await expect(composer).toHaveValue("続きの質問");
+  // 「新しい会話」と履歴の開閉は会話の内容の読み込み中も使える。
+  await expect(page.getByRole("button", { name: "新しい会話", exact: true })).toBeEnabled();
+
+  release();
+  await expect(page.getByTestId("chat-messages-loading")).toHaveCount(0);
+  await expect(page.getByText(EMPTY_TEXT, { exact: true })).toBeVisible();
+  await expect(composer).toHaveValue("続きの質問");
+  await expect(page.getByTestId("chat-run-stop")).toBeEnabled();
+});
+
+test("「新しい会話」で空の会話を開いた直後から入力でき、内容の取得を待たずに送れる", async ({ page }) => {
+  await setup(page);
+  await page.route("**/api/search-answer-profiles**", (route) => route.fulfill(profilesPage));
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, /経理アシスタント/);
+  // 履歴に空の会話（conv-1）があるので「新しい会話」はそれを開く。その内容の取得を止める。
+  const release = await holdConversation(page);
+  await page.getByRole("button", { name: "新しい会話", exact: true }).click();
+  const composer = page.getByRole("textbox", { name: COMPOSER, exact: true });
+  await expect(composer).toBeFocused();
+  await page.keyboard.type("新しい質問");
+  await expect(composer).toHaveValue("新しい質問");
+  await expect(composer).toBeEnabled();
+  // 空と分かっている会話なので、読み込み中の表示を出さず、すぐ送れる。
+  await expect(page.getByTestId("chat-messages-loading")).toHaveCount(0);
+  await expect(page.getByText(EMPTY_TEXT, { exact: true })).toBeVisible();
+  await expect(page.getByTestId("chat-run-stop")).toBeEnabled();
+  release();
+});
+
+test("「新しい会話」で会話を作った直後から入力でき、内容の取得を待たずに送れる", async ({ page }) => {
+  await setup(page, { noConversations: true });
+  await page.route("**/api/search-answer-profiles**", (route) => route.fulfill(profilesPage));
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, /経理アシスタント/);
+  const release = await holdConversation(page);
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === "/api/chat/conversations"
+  );
+  await page.getByRole("button", { name: "新しい会話", exact: true }).click();
+  const composer = page.getByRole("textbox", { name: COMPOSER, exact: true });
+  await composer.fill("新しい質問");
+  await createdResponse;
+  await expect(composer).toBeFocused();
+  await page.keyboard.type("の続き");
+  await expect(composer).toHaveValue("新しい質問の続き");
+  await expect(composer).toBeEnabled();
+  await expect(page.getByTestId("chat-messages-loading")).toHaveCount(0);
+  await expect(page.getByTestId("chat-run-stop")).toBeEnabled();
+  release();
 });

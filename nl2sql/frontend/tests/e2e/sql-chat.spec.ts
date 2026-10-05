@@ -884,9 +884,17 @@ test("会話の履歴と会話の読み込み中は、文言と経過時間を�
   await expect(
     conversationLoading.locator(".animate-pulse").first(),
   ).toBeVisible();
+  // 会話の内容の読み込み中も入力欄と生成方法は使える（書いている途中で無効にしない）。送信だけを止める（#1188）。
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
+  await expect(composer).toBeEnabled();
+  await expect(page.locator("#sql-chat-engine")).toBeEnabled();
+  await composer.fill("続きの質問");
+  await expect(page.getByTestId("sql-chat-send")).toBeDisabled();
   releaseConversation();
   await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
   await expect(conversationLoading).toHaveCount(0);
+  await expect(composer).toHaveValue("続きの質問");
+  await expect(page.getByTestId("sql-chat-send")).toBeEnabled();
 });
 
 // #1145: 回答の場所に backend の処理の段階を出す（3 製品共通の ChatProgress）。
