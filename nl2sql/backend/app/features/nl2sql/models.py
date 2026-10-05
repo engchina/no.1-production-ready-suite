@@ -1075,7 +1075,8 @@ class Nl2SqlInterpretationArtifact(BaseModel):
     question: Nl2SqlQuestionInterpretation = Field(default_factory=Nl2SqlQuestionInterpretation)
     sql: Nl2SqlSqlInterpretation = Field(default_factory=Nl2SqlSqlInterpretation)
     ontology_graph: Nl2SqlOntologyGraphSnapshot | None = None
-    # use_ontology_context のエコー。False のとき UI は Ontology 接地確認を表示しない。
+    # 接地確認をしたか（JobCreateRequest.ontology_grounding_requested のエコー。#1172）。
+    # False のとき UI は Ontology 接地確認を表示しない。
     # 既存永続 job(フィールド無し)は従来挙動を保つため default True。
     ontology_grounding_enabled: bool = True
     # 接地確認を有効にしたが行わなかった理由。"no_published_ontology" は、業務プロファイルに
@@ -1191,7 +1192,13 @@ class JobCreateRequest(BaseModel):
     row_limit: int | None = Field(default=None, ge=1, le=5000)
     select_ai_overrides: SelectAiRequestOverrides | None = None
     use_glossary: bool = False
+    # SQL の生成の prompt に公開版のオントロジーの文脈を入れる（公開版の確定もこれで決まる）。
     use_ontology_context: bool = True
+    # 生成後の接地確認（結果の整形の段階で公開版のグラフを読み、`interpretation.ontology_graph`
+    # を作る）の要否。未指定（None）は `use_ontology_context` に従う（SQL 生成の画面・MCP の既定）。
+    # 接地確認を表示しないチャットは false を送り、生成の文脈だけを使う（#1172）。
+    # 公開版の確定が前提のため、`use_ontology_context` が false なら指定にかかわらず行わない。
+    include_ontology_grounding: bool | None = None
     include_interpretation: bool = False
     include_show_prompt: bool = False
     # チャットは既存の非同期ジョブで生成・安全検査だけを行う。既存 API の既定は実行あり。
@@ -1221,6 +1228,12 @@ class JobCreateRequest(BaseModel):
         if self.previous_job_id and not self.generation_only:
             raise ValueError("会話の継続は SQL の生成だけのジョブで利用できます。")
         return self
+
+    @property
+    def ontology_grounding_requested(self) -> bool:
+        """生成後の接地確認をするか（#1172）。"""
+
+        return self.use_ontology_context and self.include_ontology_grounding is not False
 
 
 class JobCreateData(BaseModel):

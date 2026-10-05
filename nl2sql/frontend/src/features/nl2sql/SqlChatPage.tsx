@@ -135,7 +135,8 @@ async function submitChatJob(
   try {
     return await apiPost<JobCreateData>(
       "/api/nl2sql/jobs",
-      { ...request, generation_only: true, use_ontology_context: true },
+      // 生成の prompt には公開版のオントロジーを使い、画面に出さない生成後の接地確認は求めない（#1172）。
+      { ...request, generation_only: true, use_ontology_context: true, include_ontology_grounding: false },
       { timeoutMs: API_TIMEOUT_MS.jobSubmit },
     );
   } catch (cause) {
