@@ -159,6 +159,7 @@ export {
 } from "./components/ui/chat-message";
 export {
   ChatLayout,
+  type ChatLayoutLatest,
   type ChatLayoutNewConversation,
   type ChatLayoutProps,
   type ChatLayoutTestIds,
@@ -183,6 +184,12 @@ export {
   type ChatHistoryPanel,
   type UseChatHistoryPanelOptions,
 } from "./components/chat/use-chat-history-panel";
+export {
+  CHAT_AUTO_SCROLL_THRESHOLD_PX,
+  useChatAutoScroll,
+  type ChatAutoScroll,
+  type UseChatAutoScrollOptions,
+} from "./components/chat/use-chat-auto-scroll";
 export { Toaster, type ToasterProps } from "./components/ui/toast";
 export {
   ConfirmProvider,

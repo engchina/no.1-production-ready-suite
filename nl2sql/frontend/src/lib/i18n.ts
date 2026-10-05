@@ -72,6 +72,7 @@ const nl2sqlJa = {
   "chat.sendFailedStatus": "送信できませんでした",
   "chat.resend": "再送信",
   "chat.messages": "会話",
+  "chat.latest": "最新のメッセージへ",
   "chat.retry": "再読み込み",
   "chat.loadMore": "さらに読み込む",
   "chat.copySql": "SQL をコピー",

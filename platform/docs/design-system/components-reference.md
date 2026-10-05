@@ -2929,3 +2929,37 @@ import { ChatComposer, ChatComposerOption } from "@engchina/production-ready-ui"
 
 - 単体テストは `packages/ui/tests/chat-history-list.test.tsx`。
 - 使う所: RAG（名前の変更・削除・`Pagination`）、NL2SQL（「さらに読み込む」）、Agent（状態のバッジ）。
+
+## useChatAutoScroll — **新規**（#1161）
+
+チャットの会話の欄の自動スクロールと「最新へ」（3 製品共通）。`ChatLayout` の `logRef` と `latest` につなぐ。
+
+```tsx
+const autoScroll = useChatAutoScroll({
+  contentKey: `${turns.length}:${lastStatus}:${pending?.localId ?? ""}`,  // 内容が変わったことを表す値
+  resetKey: `${targetId}:${conversationId}`,                              // 会話が変わったら末尾から
+  enabled: active,                                                         // keep-alive で隠れている間は止める
+});
+
+function submit() {
+  setPending(createOptimisticChatMessage(draft));
+  autoScroll.scrollToLatest();          // 送信の瞬間は、上を読んでいても末尾へ（messaging.md §11.1）
+}
+
+<ChatLayout
+  logRef={autoScroll.logRef}
+  latest={{ visible: autoScroll.showLatest, label: t("chat.latest"), onClick: () => autoScroll.scrollToLatest("smooth") }}
+  …
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 末尾（48px 以内）を見ている間だけ、新しい内容に合わせて末尾へ追う | 3 製品とも内容が変わるたびに末尾へ動かしていて、回答の受信中・処理の段階の更新で、上の回答を読んでいる利用者が引き戻されていた |
+| 上を読んでいる間に新しい内容が届いたら、会話の欄の下端の中央に「最新のメッセージへ」（`ArrowDown`、secondary・sm）を重ねる。末尾まで戻ると消す | ChatGPT・Claude・Slack と同じ。新しい内容に気付けて、読む位置は利用者が決める |
+| ボタンは `role="log"` の外に置く | 会話の読み上げにボタンの文言を混ぜない |
+| 会話を開いた・変えた（`resetKey`）・画面に戻ったときと送信の瞬間は、上を読んでいても末尾へ | 新しい会話は最新から読む。送った質問がすぐ見える（messaging.md §11.1） |
+| 動かすのは会話の欄の `scrollTo` だけ | 祖先（ページ）を動かさない（README §4「AppShell」） |
+
+- 単体テストは `packages/ui/tests/chat-auto-scroll.test.tsx`。実ブラウザは NL2SQL `tests/e2e/sql-chat.spec.ts` の「#1161」。
+- 会話の欄の中の特定の位置へ動かすとき（RAG の `#message-{id}` の回答へ移る）は、`logElementRef` の `scrollTo` を使う。

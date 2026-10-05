@@ -509,6 +509,7 @@ const agentJa = {
   "chat.stop": "停止",
   "chat.stopFailed": "回答を停止できませんでした。もう一度「停止」を押してください。",
   "chat.messages": "会話",
+  "chat.latest": "最新のメッセージへ",
   "chat.sendFailed": "送信できませんでした",
   "chat.sendFailedHint": "サーバーに届きませんでした。通信の状態を確かめて、再送信してください。",
   "chat.resend": "再送信",

@@ -2086,6 +2086,7 @@ export const ja = {
   "chat.error.model": "エラーが発生しました。",
   "chat.error.retry": "もう一度送信",
   "chat.messages.label": "会話",
+  "chat.messages.latest": "最新のメッセージへ",
   "chat.send.failed": "送信できませんでした",
   "chat.send.failedHint": "サーバーに届きませんでした。通信の状態を確かめて、再送信してください。",
   "chat.send.retry": "再送信",
