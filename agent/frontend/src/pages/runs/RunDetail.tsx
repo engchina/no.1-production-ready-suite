@@ -20,7 +20,6 @@ import {
   ToggleChip,
   Tabs,
   TabPanel,
-  type DataTableColumn,
   type EntityAction,
   type StatusVariant,
 } from "@engchina/production-ready-ui";
@@ -32,12 +31,14 @@ import {
   type RunState,
   type ToolAuditRecord,
 } from "@/lib/api";
-import { PagedDataTable, QueryState } from "@/components/ListViews";
+import { QueryState } from "@/components/ListViews";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
+import { AnswerBody, ResultTable } from "@/components/chat/ResultTables";
 import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { type AgentCapabilities } from "@/lib/permissions";
+import { artifactTable, runToolResultTables, stepResultTable, type ToolResultTable } from "@/lib/run-tables";
 import {
   approvalStatusView,
   artifactKindView,
@@ -95,7 +96,7 @@ export function RunDetail({
   const [selectedTab, setTab] = useState("result");
   const tab = selectedTab === "audit" && !capabilities.viewAudit ? "result" : selectedTab;
   const queryClient = useQueryClient();
-  const structured = getStructuredResult(run);
+  const structured = structuredFallback(run);
   const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
   const canAddCase = useCanEditEvaluationSets();
 
@@ -160,7 +161,7 @@ export function RunDetail({
       />
       <TabPanel id="result" value={tab} className="space-y-5">
         <ArtifactsPanel run={run} onShowProcess={() => setTab("process")} />
-        {structured ? <StructuredResultTable key={run.id} result={structured} /> : null}
+        {structured ? <StructuredResultCard key={run.id} run={run} table={structured} /> : null}
         {capabilities.admin && run.status === "completed" && run.artifacts.some((item) => item.kind === "answer") ? (
           <Card>
             <CardHeader>
@@ -205,7 +206,14 @@ export function RunDetail({
                       {step.tool_result?.error ? (
                         <p className="mt-2 text-xs text-danger-fg">{step.tool_result.error}</p>
                       ) : null}
-                      {step.tool_result?.output ? <JsonPreview value={step.tool_result.output} /> : null}
+                      {step.tool_result?.output ? (
+                        <ToolOutput
+                          output={step.tool_result.output}
+                          table={stepResultTable(step)}
+                          name={t("resultTable.toolName", { tool: step.tool_call?.name ?? step.kind })}
+                          testId={`run-step-table-${step.id}`}
+                        />
+                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -697,15 +705,27 @@ function ArtifactsPanel({ run, onShowProcess }: { run: RunState; onShowProcess: 
                 <StatusBadge {...artifactKindView(artifact.kind)} icon={false} />
               </div>
               {artifact.kind === "answer" && typeof (artifact.content.text ?? artifact.content.answer) === "string" ? (
-                <p className="whitespace-pre-wrap break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">
-                  {String(artifact.content.text ?? artifact.content.answer)}
-                </p>
+                // 回答の Markdown の表は共通の結果の表で出す（チャットと同じ。#1158）。
+                <AnswerBody
+                  text={String(artifact.content.text ?? artifact.content.answer)}
+                  renderText={(text) => (
+                    <p className="whitespace-pre-wrap break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">
+                      {text}
+                    </p>
+                  )}
+                  testId={`run-answer-${artifact.id}`}
+                />
               ) : artifact.kind === "rag_evidence" ? (
                 <RagEvidenceArtifact artifact={artifact} />
               ) : artifact.kind === "structured_table" ? (
                 <StructuredArtifactSummary artifact={artifact} />
               ) : (
-                <JsonPreview value={artifact.content} />
+                <ToolOutput
+                  output={artifact.content}
+                  table={artifactTable(artifact)}
+                  name={artifact.name}
+                  testId={`run-artifact-table-${artifact.id}`}
+                />
               )}
             </div>
           ))
@@ -777,23 +797,26 @@ function RagEvidenceArtifact({ artifact }: { artifact: Artifact }) {
 }
 
 function StructuredArtifactSummary({ artifact }: { artifact: Artifact }) {
+  const table = artifactTable(artifact);
   const rowCount = numericValue(artifact.content.row_count);
   const truncated = typeof artifact.content.truncated === "boolean" ? artifact.content.truncated : null;
   const warnings = arrayOfText(artifact.content.warnings);
+  const sql = structuredSql(artifact.content);
 
   return (
     <div className="mt-3 space-y-3">
-      <div className="grid gap-2 text-sm sm:grid-cols-3">
-        <MetricPill label={t("run.rowCount")} value={rowCount === null ? "-" : String(rowCount)} />
-        <MetricPill
-          label={t("run.truncated")}
-          value={truncated === null ? "-" : truncated ? t("common.yes") : t("common.no")}
-        />
-        <MetricPill label={t("run.columns")} value={String(arrayOfRecords(artifact.content.columns).length)} />
-      </div>
-      {typeof artifact.content.sql === "string" ? (
-        <JsonPanel title={t("run.sql")} value={artifact.content.sql} />
-      ) : null}
+      {table ? null : (
+        // 表の形でない構造化データ（ジョブの実行中など）は、今までどおり件数の要約と JSON で出す。
+        <div className="grid gap-2 text-sm sm:grid-cols-3">
+          <MetricPill label={t("run.rowCount")} value={rowCount === null ? "-" : String(rowCount)} />
+          <MetricPill
+            label={t("run.truncated")}
+            value={truncated === null ? "-" : truncated ? t("common.yes") : t("common.no")}
+          />
+          <MetricPill label={t("run.columns")} value={String(arrayOfRecords(artifact.content.columns).length)} />
+        </div>
+      )}
+      {sql ? <JsonPanel title={t("run.sql")} value={sql} /> : null}
       {warnings.length ? (
         <Banner severity="warning">
           <div className="space-y-1">
@@ -803,7 +826,38 @@ function StructuredArtifactSummary({ artifact }: { artifact: Artifact }) {
           </div>
         </Banner>
       ) : null}
-      <JsonPreview value={artifact.content} />
+      <ToolOutput
+        output={artifact.content}
+        table={table}
+        name={artifact.name}
+        testId={`run-artifact-table-${artifact.id}`}
+      />
+    </div>
+  );
+}
+
+/**
+ * ツールの結果・成果物の内容。表の形なら共通の結果の表で出し、元の JSON は「元の JSON」に畳む。
+ * 表でなければ今までどおり JSON で出す（#1158）。
+ */
+function ToolOutput({
+  output,
+  table,
+  name,
+  testId,
+}: {
+  output: unknown;
+  table: ReturnType<typeof stepResultTable>;
+  name: string;
+  testId: string;
+}) {
+  if (!table) return <JsonPreview value={output} />;
+  return (
+    <div className="mt-3 min-w-0 space-y-2">
+      <ResultTable data={table} name={name} testId={testId} />
+      <Disclosure variant="plain" size="sm" summary={t("run.rawJson")}>
+        <JsonPreview value={output} />
+      </Disclosure>
     </div>
   );
 }
@@ -828,68 +882,37 @@ function EvidenceItem({
   );
 }
 
-/** Run の構造化結果。別の Run に切り替えると呼び出し側の key で作り直し、1 ページ目から出す。 */
-function StructuredResultTable({ result }: { result: StructuredResult }) {
+/**
+ * 「構造化データ」のカード。表の形の成果物（NL2SQL のツールの結果など）が無い Run で、表の形のツールの結果の
+ * 最後の 1 つを結果のタブに出す（成果物の表と同じものを二度出さない。#1158）。
+ */
+function StructuredResultCard({ run, table }: { run: RunState; table: ToolResultTable }) {
+  const output = run.steps.find((step) => step.id === table.stepId)?.tool_result?.output ?? {};
   return (
     <Card className="min-w-0">
       <CardHeader>
         <CardTitle>{t("run.structuredResult")}</CardTitle>
-        <CardDescription>{result.sql ?? t("run.sqlHidden")}</CardDescription>
+        <CardDescription>{structuredSql(output) ?? t("run.sqlHidden")}</CardDescription>
       </CardHeader>
       <CardContent>
-        <PagedDataTable
-          rows={result.rows}
-          columns={result.columns.map(
-            (column): DataTableColumn<Record<string, unknown>> => ({
-              key: column.name,
-              header: column.label ?? column.name,
-              render: (row) => formatValue(row[column.name]),
-            })
-          )}
-          getRowKey={(_, index) => index}
-          tableClassName="w-full min-w-[40rem]"
-          ariaLabel={t("run.structuredResult")}
-          empty={t("common.empty.title")}
+        <ResultTable
+          data={table.data}
+          name={t("resultTable.toolName", { tool: table.toolName })}
+          testId="run-structured-table"
         />
       </CardContent>
     </Card>
   );
 }
 
-interface StructuredColumn {
-  name: string;
-  type: string;
-  label?: string | null;
-  unit?: string | null;
+function structuredFallback(run: RunState): ToolResultTable | null {
+  if (run.artifacts.some((artifact) => artifactTable(artifact))) return null;
+  return runToolResultTables(run).at(-1) ?? null;
 }
 
-interface StructuredResult {
-  sql?: string | null;
-  columns: StructuredColumn[];
-  rows: Record<string, unknown>[];
-}
-
-function getStructuredResult(run: RunState): StructuredResult | null {
-  const output = run.steps
-    .map((step) => step.tool_result?.output)
-    .find((candidate) => candidate && Array.isArray(candidate.columns) && Array.isArray(candidate.rows));
-  if (!output) {
-    return null;
-  }
-  const columns = output.columns;
-  const rows = output.rows;
-  if (!Array.isArray(columns) || !Array.isArray(rows)) {
-    return null;
-  }
-  return {
-    sql: typeof output.sql === "string" ? output.sql : null,
-    columns: columns.filter(isStructuredColumn),
-    rows: rows.filter(isRecord),
-  };
-}
-
-function isStructuredColumn(value: unknown): value is StructuredColumn {
-  return isRecord(value) && typeof value.name === "string" && typeof value.type === "string";
+/** 構造化データの SQL（NL2SQL の MCP の出力は `executable_sql` / `generated_sql`）。 */
+function structuredSql(content: Record<string, unknown>): string | null {
+  return textValue(content.sql) ?? textValue(content.executable_sql) ?? textValue(content.generated_sql);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -924,14 +947,4 @@ function formatContextSubtitle(context: Record<string, unknown>): string | null 
     numericValue(context.score) === null ? null : `${t("run.score")}: ${numericValue(context.score)}`,
   ].filter((part): part is string => Boolean(part));
   return parts.length ? parts.join(" / ") : null;
-}
-
-function formatValue(value: unknown) {
-  if (value === null || value === undefined) {
-    return "";
-  }
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  return String(value);
 }
