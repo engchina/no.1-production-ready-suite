@@ -2898,3 +2898,34 @@ import { ChatComposer, ChatComposerOption } from "@engchina/production-ready-ui"
 
 - 単体テストは `packages/ui/tests/chat-composer.test.tsx`。
 - 使う所: RAG（設定の行は「回答するモデル」の `ToggleChip`）、NL2SQL（「生成方法」の `SelectField`、上限 10,000 文字）、Agent（設定の行なし）。
+
+## ChatHistoryList — **新規**（#1161）
+
+チャットの会話の履歴の一覧（3 製品共通）。`ChatLayout` の `historyContent` に渡す。製品は会話・スレッドの型を `ChatHistoryItem`（`{ id, title, meta?, badge? }`）に写す。
+
+```tsx
+<ChatHistoryList
+  items={conversations.map((c) => ({ id: c.id, title: c.title, meta: formatMeta(c), badge: statusBadge(c) }))}
+  currentId={conversationId}
+  onSelect={(item) => { history.closeSheet(); open(item.id); }}
+  waiting={targetsLoading}                 // 対象の一覧の読み込み中は形だけ（経過時間は対象のカード。#1153）
+  loading={query.isLoading}
+  error={query.isError ? query.error : null}
+  onRetry={() => void query.refetch()}
+  labels={{ list: "会話の履歴", loading: "会話を読み込んでいます", error: "会話の履歴を読み込めませんでした。", retry: "再試行", empty: "まだ会話がありません" }}
+  renderActions={(item) => <><Button iconOnly icon={Pencil} … /><Button iconOnly tone="danger" icon={Trash2} … /></>}  // API がある製品だけ
+  renderEditor={(item) => (editingId === item.id ? <TitleEditor … /> : null)}
+  footer={<Pagination … />}                                  // offset の API は Pagination、カーソルは「さらに読み込む」
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| 行は名前（1 行で省略し `title` で全文）・補足・状態のバッジ。高さは `INFORMATION_LIST_ROW_CLASS`（3.5rem 以上）。開いている会話は `bg-accent-subtle` と `aria-current="true"` | 3 製品で行の形・選択の示し方が違っていた（RAG は 1 行の名前と補足、NL2SQL は ghost のボタン、Agent は 2 行の名前） |
+| 行の操作（名前の変更・削除）は sm 以上ではホバー・フォーカスの間と開いている会話で出し、sm 未満は常に出す | 一覧を読みやすくし、タッチ端末ではホバーが無い |
+| 読み込み中は `TimedLoadingState` + 行の形の `ListSkeleton`、失敗は `ApiErrorBanner`（要約は `labels.error`）と再試行、0 件は短い文 | 読めていない一覧を 0 件と出さない（messaging.md §3.6）。失敗の詳細は「詳細」に畳む（§10.3） |
+| 「新しい会話」は一覧に置かない | 会話の領域の上端の行の 1 か所（#889） |
+| ページングは `footer` で製品が選ぶ | API に合わせる（page-archetypes.md「一覧の型と、基準から外す例外」） |
+
+- 単体テストは `packages/ui/tests/chat-history-list.test.tsx`。
+- 使う所: RAG（名前の変更・削除・`Pagination`）、NL2SQL（「さらに読み込む」）、Agent（状態のバッジ）。
