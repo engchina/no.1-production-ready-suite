@@ -2790,3 +2790,64 @@ splitMarkdownTables(answer).map((segment) =>
 - セルは文字列・数値・真偽値・null だけ。入れ子のオブジェクト・配列を持つ値、列の分からない 0 行、`columns: []` の 0 行（実行中のジョブ）は表にしない（`null`）。
 - Markdown の表は GFM の表頭・区切りの行・本文の行。セルの足りない行は空の文字列、`\|` は `|`、`**` と `` ` `` は除く。値がすべて数（桁区切り・小数・%）の列は `type: "number"`（右寄せ）。
 - 単体テストは `packages/ui/tests/tabular-data.test.ts`、実ブラウザは Agent の `e2e/run-result-tables.spec.ts`（チャットと実行履歴の詳細、desktop / 375px、light / dark、60 行・0 行・打ち切り・表でない JSON）。
+
+## ChatLayout / useChatHistoryPanel — **新規**（#1161）
+
+チャットの骨格（3 製品共通）。会話の履歴（lg 以上は本文の横の `<aside>`、未満はモーダルの `SideSheet`）と、会話の領域（上端の行・`role="log"` の会話の欄・入力欄の領域）を 1 つの部品で描く。画面の型は UX 契約 [page-archetypes.md §6](../ux-contracts/page-archetypes.md#6-チャット会話の画面1161)。製品は履歴の中身・往復の表示・入力欄・文言を渡す。
+
+```tsx
+import { ChatLayout, useChatHistoryPanel } from "@engchina/production-ready-ui";
+
+// lg 以上のインラインの開閉は製品の作業状態に残す（lg 未満のシートは残さない）。
+const [historyOpen, setHistoryOpen] = useWorkspaceState("chat.historyOpen", false);
+const history = useChatHistoryPanel({ inlineOpen: historyOpen, onInlineOpenChange: setHistoryOpen });
+
+<ChatLayout
+  history={history}
+  historyTitle={t("chat.history")}            // 「会話の履歴」
+  historyCloseLabel={t("chat.closeHistory")}  // 「会話の履歴を閉じる」
+  historyContent={<ConversationList onSelect={(id) => { history.closeSheet(); open(id); }} />}
+  label={t("chat.title")}
+  conversationTitle={conversation?.title}
+  conversationTitleLoading={Boolean(conversationId) && conversationQuery.isPending}
+  newConversation={{ label: t("chat.new"), onClick: startNew }}
+  logLabel={t("chat.messages")}               // 「会話」
+  logRef={logRef}                             // 自動スクロールはこの要素の scrollTo
+  composer={<FieldActionRow actions={<RunStopButton … />}><TextareaField … /></FieldActionRow>}
+  testIdPrefix="chat"
+>
+  {turns}
+</ChatLayout>
+```
+
+### ChatLayout の props
+
+| prop | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `history` | `ChatHistoryPanel` | — | `useChatHistoryPanel` の戻り値 |
+| `historyTitle` / `historyCloseLabel` | `string` | — | 履歴の見出し・名前（開閉ボタンの名前にも使う）と、シートを閉じるボタンの名前 |
+| `historyContent` | `ReactNode` | — | 履歴の中身（一覧・読み込み中・失敗・空・ページング） |
+| `label` | `string` | — | 会話の領域（`<section>`）の名前 |
+| `conversationTitle` / `conversationTitleLoading` | `string \| null` / `boolean` | — / `false` | 上端の行の会話の名前。名前が無く読み込み中なら `Skeleton`、どちらでもなければ何も出さない |
+| `newConversation` | `{ label, onClick, disabled? }` | — | 上端の行の右端の「新しい会話」（`MessageSquarePlus`） |
+| `historyToggleDisabled` | `boolean` | `false` | 履歴の開閉を押せない間（対象の一覧の読み込み中など。#1153） |
+| `logLabel` / `logRef` | `string` / `Ref<HTMLDivElement>` | — | 会話の欄（`role="log"`）の名前と要素 |
+| `children` | `ReactNode` | — | 会話の欄の中身 |
+| `composer` | `ReactNode` | — | 入力欄の領域の中身（設定の行・入力欄と送信・通知） |
+| `testIdPrefix` / `testIds` | `string` / `ChatLayoutTestIds` | `"chat"` | testid。既定は `<prefix>-history`・`-history-toggle`・`-panel`・`-conversation-title`・`-conversation`・`-composer-region`。シートの scrim は `<history>-scrim` |
+
+### useChatHistoryPanel
+
+`useChatHistoryPanel({ inlineOpen, onInlineOpenChange, id? })` → `{ inline, open, inlineOpen, sheetOpen, toggle, closeSheet, id, toggleRef }`。幅の判定は `useMediaQuery(CHAT_HISTORY_INLINE_QUERY)`（`(min-width: 1024px)`）。
+
+| 決めたこと | 理由 |
+|---|---|
+| 履歴は既定で閉じ、lg 以上は開くと 20rem の列で会話の左に並べる。閉じている間も `<aside hidden>` を描く | 多くの利用者は履歴を使わないので会話に面積を渡す（#664）。開閉ボタンの `aria-controls` の先を常に保つ |
+| lg 未満はモーダルの `SideSheet`。開閉は作業状態に残さず、幅が lg を越えたら閉じる | 戻ったとき・再読込でモーダルが画面を塞がない（workspace-state.md）。広げたときにモーダルが残らない |
+| 会話の領域は lg 未満で高さ 70dvh（最小 28rem）、lg 以上で残りの高さ。会話の欄だけがスクロールする | 長い会話でページを伸ばさず、入力欄を常に会話の領域の下に置く（README §4「AppShell」） |
+| 上端の行に履歴の開閉（左端）・会話の名前・「新しい会話」（右端）の 3 つだけを置く | 履歴を閉じていても会話の切り替え・新しい会話に届く。「新しい会話」は 1 か所（#889） |
+| 文言は翻訳済みを受け、往復の表示・入力欄・履歴の中身は持たない | 業務の語彙と API（SSE・ジョブ・Run）は製品ごとに違う（page-archetypes.md §6.2） |
+
+- 単体テストは `packages/ui/tests/chat-layout.test.tsx`。
+- 実ブラウザは RAG `e2e/chat.spec.ts`（#664 の履歴の開閉・375px のシート）、NL2SQL `tests/e2e/sql-chat.spec.ts`、Agent `e2e/chat.spec.ts`。
+- 使う所: RAG `components/chat/ChatClient.tsx`、NL2SQL `features/nl2sql/SqlChatPage.tsx`、Agent `pages/ChatPage.tsx`。

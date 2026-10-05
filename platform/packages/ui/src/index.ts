@@ -157,6 +157,19 @@ export {
   type ChatUserMessageProps,
   type ChatUserMessageStatus,
 } from "./components/ui/chat-message";
+export {
+  ChatLayout,
+  type ChatLayoutNewConversation,
+  type ChatLayoutProps,
+  type ChatLayoutTestIds,
+} from "./components/chat/chat-layout";
+export {
+  CHAT_HISTORY_INLINE_QUERY,
+  useChatHistoryPanel,
+  useMediaQuery,
+  type ChatHistoryPanel,
+  type UseChatHistoryPanelOptions,
+} from "./components/chat/use-chat-history-panel";
 export { Toaster, type ToasterProps } from "./components/ui/toast";
 export {
   ConfirmProvider,
