@@ -758,20 +758,24 @@ import { SearchField } from "@engchina/production-ready-ui";
 
 - 文言（`title` / `closeLabel`）は翻訳済みを渡す。開閉ボタンは製品の画面に置き、`aria-expanded`・`aria-controls`（`id` に渡した値）を付ける。Playwright では `data-testid`（シート）と `<testId>-scrim`、または role（`dialog` の名前）で操作する。
 
-- `size="wide"`（#1154）: 表など横に広い内容を見る大きなパネル。sm 以上は 64rem（画面幅 − 3.5rem まで）、sm 未満は全画面。チャットの結果の「すべての行を見る」（`ChatResultTable`）が使う。既定（`default`）は 22rem のまま。
+- `size="wide"`（#1154）: 表など横に広い内容を見る大きなパネル。sm 以上は 64rem（画面幅 − 3.5rem まで）、sm 未満は全画面。データの結果の「すべての行を見る」（`ResultTable`）が使う。既定（`default`）は 22rem のまま。
 
-### `ChatResultTable`（新規）— ★ チャットの回答の中の結果の表（#1154）
+### `ResultTable`（新規。旧名 `ChatResultTable`）— ★ データの結果の表（#1154 / #1178）
 
-チャットで SQL・ツールを実行した結果は、回答の吹き出しの中、SQL の下に出します。ChatGPT の Advanced Data Analysis・Databricks Genie・Snowflake Cortex Analyst・Amazon Q in QuickSight・BigQuery の結果の表に倣い、吹き出しの中は要約とプレビューに絞り、すべての行は別の面で見ます。製品で結果の表を組み立てない。
+データの結果（読み取りだけの行と列）は、どの画面でもこの部品で出します。チャットで SQL・ツールを実行した結果（回答の吹き出しの中、SQL の下）と、画面のクエリの結果・テーブルのデータの表示・取り込みのサンプル行が同じ形になります（#1178。どの画面が合うかの基準は UX 契約 [page-archetypes.md「データの結果の型」](../ux-contracts/page-archetypes.md#データの結果の型resulttable1178)）。ChatGPT の Advanced Data Analysis・Databricks Genie・Snowflake Cortex Analyst・Amazon Q in QuickSight・BigQuery の結果の表に倣い、その場は要約とプレビューに絞り、すべての行は別の面で見ます。製品で結果の表・ページング・CSV を組み立てない。行の操作・選択・編集のある一覧は対象外（`DataTable` / `PagedDataTable` の一覧の型）。
+
+- 旧名 `ChatResultTable` / `ChatResultTableProps` / `ChatResultTableColumn` / `ChatResultTableLabels` / `ChatResultFullResultLink` / `DEFAULT_CHAT_RESULT_TABLE_LABELS` / `CHAT_RESULT_PREVIEW_ROWS` / `CHAT_RESULT_PAGE_SIZES` / `chatResultSummaryText` は別名として残す（非推奨。新しいコードは `ResultTable` などの新しい名前）。
 
 | 決めたこと | 理由 |
 |---|---|
 | 1 行目に要約（「12 行・5 列・0.8 秒」。打ち切りは「先頭の 1,000 行を取得しました（さらに行があります）」、総件数が分かれば「（全 1,234 行）」、0 行は「該当する行はありません」） | 結果の大きさと完全さを最初に伝える。打ち切りを黙って隠さない（Genie・Cortex Analyst・BigQuery と同じ） |
-| プレビューは先頭の 50 行（`CHAT_RESULT_PREVIEW_ROWS`）を `DataTable` の `stickyHeader` + `visibleRows`（md 未満 5 行・md 以上 8 行）で描き、それを超える行と横に広い列は**表の中で**縦横にスクロールする | 吹き出し・会話の欄を伸ばさず、会話の流れを保つ。列名は固定 |
+| プレビューは先頭の 50 行（`RESULT_PREVIEW_ROWS`）を `DataTable` の `stickyHeader` + `visibleRows`（md 未満 5 行・md 以上 8 行）で描き、それを超える行と横に広い列は**表の中で**縦横にスクロールする | 吹き出し・会話の欄・画面のカードを伸ばさず、会話・作業の流れを保つ。列名は固定 |
 | NULL は斜体・淡色の「NULL」（空文字と区別。色だけに頼らない）。数値の列は右寄せ・`tabular-nums`。プレビューの長い値は 1 行で省略し title に全文、全行の表は折り返して 6 行で省略（最小幅 16rem、title に全文） | 値の種類を見分ける。長い値で列が潰れ行が極端に高くならない |
 | 「すべての行を見る」は `SideSheet` の `size="wide"`（sm 未満は全画面）で、`PagedDataTable`（既定 10 件/ページ、10 / 50 / 100 を選べる）。閉じている間は表を描かない | 取得の上限（NL2SQL は 1,000 行）までの行を、描く行をページで絞って見る。仮想化はしない（読み上げ・ブラウザの検索・既存の一覧の基準と同じ） |
 | 「CSV をダウンロード」は取得した行だけ（BOM・CRLF・RFC 4180、`=` `+` `-` `@` で始まる文字列に `'` を付ける）。打ち切ったときは案内（info の `Banner`）に「表示と CSV は取得した行だけ」と、製品が渡す全件の導線（`fullResult`）を出す | チャットで無制限に取得しない。全件は製品の実行の画面で（CSV injection は OWASP の推奨） |
 | 実行中・失敗・実行の操作は部品の外（製品が `ProcessingIndicator`・danger の `Banner`・`Button` で出す） | 実行の仕組み（同期の API・ジョブ）は製品ごとに違う |
+| 「CSV をダウンロード」は要約の行と、シートの見出しの右の 2 か所に出す（testid は `<testId>-csv` と `<testId>-all-csv`。#1178） | シートを開かなくても、開いた後でも出力できる |
+| 要約の文の右に、画面固有の補足を `meta` で置ける（NL2SQL の「取得上限 100 件」・実行した接続の `StatusBadge`。#1178）。行数・列数・打ち切りは部品の要約が出すので `meta` で重ねない | 画面で指定した条件は結果と並べて見せる。同じ数を 2 か所に出さない |
 | 表の形の JSON（ツールの結果・成果物）と回答の本文の Markdown の表は、`toTabularData` / `splitMarkdownTables` で列と行にしてから渡す（#1158）。表とみなすのは `{ columns, rows }`・`{ rows }`・オブジェクトの配列で、セルは文字列・数値・真偽値・null だけ。表でない値（入れ子の値・列の分からない 0 行など）は `null` で、製品は今の表示（JSON・本文）のまま出す。Markdown の表の値がすべて数の列は `type: "number"`（右寄せ） | 判定を製品ごとに書くと、同じ JSON が製品で表になったりならなかったりする。入れ子の値を 1 つのセルの JSON にすると読めないので、表にしない |
 
 ### `Toaster`（変更）— ★ 置き場所は上端の見出しの面（#411）
@@ -1077,6 +1081,8 @@ QA に事前共有してください。**71点あります。**
 | 73 | **Agent のチャットと実行履歴の詳細で、表の形のツールの結果（NL2SQL の SQL の実行の結果など）と回答の Markdown の表が `ChatResultTable` で出る**（#1158。`toTabularData` / `splitMarkdownTables`） | チャットは使ったツールの名前と状態だけで結果の行を出さず、回答の Markdown の表は `\|` の並んだ 1 行の文になった。実行履歴の詳細は表の形の結果も JSON（16rem の `<pre>`）で、「構造化データ」のカードは NL2SQL の MCP の出力（列名の文字列の配列）で列が 0 個になった → チャットは回答の下（同じ吹き出しの中）に、詳細は成果物・実行の経過のツールの結果の位置に `ChatResultTable`、元の JSON は「元の JSON」に畳む | 3 製品でデータの表を同じ見た目・振る舞いにする（NL2SQL のチャットと同じ部品）。表でない結果は今の表示のまま |
 | 74 | **チャットの回答の作成中に更新が途絶えると、今の段階の行に「接続を確認しています。」が出る**（#1160。`ChatProgress` の `reconnecting`・`useChatProgressTracker`） | 取得・配信が止まると、今の段階と経過時間が進み続けるだけで画面が更新されず、読み込み直すまで完了が出なかった → 配信が一定時間届かなければ取り直し、遅延の案内の行（最初から予約した行）に「接続を確認しています。」を出す。配信が届いたら消える。取り直しは終端まで backoff して続ける | 利用者が「止まっている」のか「待てばよい」のかを判断でき、完了した結果は読み込み直さずに出る。行を予約しているので、案内が出てもスピナーの行は動かない |
 | 75 | **3 製品のチャットの骨格が共通の `ChatLayout` になり、細部がそろう**（#1161） | 履歴のパネルの幅は RAG 280px・NL2SQL 17.5rem・Agent 20rem → 3 製品とも 20rem。NL2SQL の会話の領域は lg 未満でも高さの指定が無かった → 3 製品とも lg 未満は 70dvh（最小 28rem）。会話の欄の往復の間は RAG 1rem・NL2SQL 1.25rem・Agent 1.5rem → 1.25rem（`scrollbar-gutter: stable`）。「新しい会話」のアイコンは RAG・Agent が `Plus`、NL2SQL が `MessageSquarePlus` → `MessageSquarePlus`。RAG の会話の領域は 3 段（上端の行・会話の欄・入力欄）の間に 0.75rem の隙間があった → 隙間なし（区切り線だけ） | 骨格を 3 製品で書き写していて、写すたびに細部がずれていた（UX 契約 page-archetypes.md §6）。「新しい会話」は作成の汎用の `Plus` と分け、会話を足す操作と分かるアイコンにする |
+| 76 | **NL2SQL の画面のデータの結果（SQL 生成・SELECT SQL・管理 SQL の実行、テーブル・ビュー・メタデータ SQL の文の実行、データの表示、CSV 取り込みのプレビュー、合成データの結果、テーブルの取り込みのサンプル行）が、チャットの結果と同じ `ResultTable` で出る**（#1178） | SQL 生成・SELECT SQL は「取得件数 N 件」「取得上限 N 件」「上限到達」のバッジの下に 10 件/ページの表（`Nl2SqlResultTable`）。管理 SQL・データの表示などは同じバッジの下に、表頭の固定・表の中のスクロールの無い表と 10 件/ページ（`QueryResultsTable`）で、NULL は空のセル・数値は左寄せ。全行を広く見る手段・CSV は無かった（データの表示は XLSX だけ） → 要約の 1 行（「100 行・5 列」、打ち切りは「先頭の 100 行を取得しました（さらに行があります）」と info の案内）と「取得上限 N 件」・実行した接続のバッジ、先頭 50 行のプレビュー（表頭固定・表の中で縦横スクロール）、「すべての行を見る」（広い `SideSheet`・10 / 50 / 100 行/ページ）・「CSV をダウンロード」（取得した行だけ）。NULL は「NULL」、数値の列は右寄せ。データの表示の XLSX（サーバーの出力）は残す | 利用者の評価が高いチャットの結果の形に、同じデータの結果をそろえる（UX 契約 page-archetypes.md「データの結果の型」）。行の操作・選択のある一覧は変えない |
+| 77 | **3 製品のチャットの入力欄が共通の `ChatComposer` になり、名前と placeholder がそろう**（#1161） | 入力欄の名前（読み上げ）は RAG「メッセージを入力…（Enter で送信 / Shift+Enter で改行）」・NL2SQL「クエリ」・Agent「質問」 → 3 製品とも「質問」。placeholder は RAG「メッセージを入力…（Enter で送信 / Shift+Enter で改行）」・NL2SQL「クエリを入力（…）」 → 「質問を入力（Enter で送信、Shift+Enter で改行）」。Agent の停止の失敗は見出し付きの `Banner` → NL2SQL と同じ `ApiErrorBanner` | 同じ入力欄を 3 製品で書き写し、名前と文言が製品ごとに違っていた。チャットの 1 往復は利用者の「質問」と回答（UX 契約 page-archetypes.md §6） |
 
 ### API の非互換
 
@@ -1095,7 +1101,8 @@ QA に事前共有してください。**71点あります。**
 | `Tooltip` | **新規 export。** `Tooltip` / `TooltipProps` / `TooltipPlacement` |
 | `SideSheet`（#664） | **新規 export。** `SideSheet` / `SideSheetProps`。既存の部品の props は変えない |
 | `ChatResultTable`（#1154） | **新規 export。** `ChatResultTable` / `ChatResultTableProps` / `ChatResultTableColumn` / `ChatResultTableLabels` / `ChatResultFullResultLink` / `DEFAULT_CHAT_RESULT_TABLE_LABELS` / `ResultCell` / `isNumericResultColumn` / `isNullResultValue` / `resultValueText` / `resultRowsToCsv` / `chatResultSummaryText` / `CHAT_RESULT_PREVIEW_ROWS` / `CHAT_RESULT_PAGE_SIZES`。`SideSheet` に `size`（`"default" \| "wide"`）を追加（既定は今までどおり） |
-| 表の形の判定（#1158） | **新規 export。** `toTabularData` / `splitMarkdownTables` / `TabularData` / `TabularColumn`（= `ChatResultTableColumn`）/ `TabularCellValue` / `MarkdownTableSegment` |
+| `ResultTable`（#1178） | **新規 export（改名）。** `ResultTable` / `ResultTableProps` / `ResultTableColumn` / `ResultTableLabels` / `ResultFullResultLink` / `DEFAULT_RESULT_TABLE_LABELS` / `RESULT_PREVIEW_ROWS` / `RESULT_PAGE_SIZES` / `resultSummaryText`。`ChatResultTable` などの旧名は別名として残す（非推奨）。`meta`（要約の右の補足）を追加。シートの見出しの CSV のボタンの testid を `<testId>-all-csv` に分けた（以前は 2 つとも `<testId>-csv`） |
+| 表の形の判定（#1158） | **新規 export。** `toTabularData` / `splitMarkdownTables` / `TabularData` / `TabularColumn`（= `ResultTableColumn`）/ `TabularCellValue` / `MarkdownTableSegment` |
 | `AppShell`（#367） | `navDrawerLabels` プロップ新設（md 未満のドロワーの文言）。md 未満では `sidebar` をドロワーの中に描く。新規 export `useSidebarCollapsed`（サイドバーの `footer` の部品がドロワーの中で展開して描くためのフック）・`DEFAULT_NAV_DRAWER_LABELS`・`NAV_DRAWER_QUERY` |
 | `PagedDataTable`（#265） | **新規 export。** `PagedDataTable` / `PagedDataTableProps` / `PaginationLabels`。クライアント側で全件を持つ一覧の標準形（`stickyHeader` + `visibleRows` + 10 件/ページの `Pagination`）。文言は `paginationLabels` で渡す |
 | `@engchina/production-ready-system-settings`（#265） | `SECURITY_TABLE_VISIBLE_ROWS` / `SECURITY_TABLE_ROW_CLASS` / `SECURITY_LIST_SCROLL_CLASS` / `SECURITY_LIST_FOCUS_CLASS` の export を**削除。** 同じ値の `INFORMATION_TABLE_VISIBLE_ROWS` / `INFORMATION_TABLE_ROW_CLASS` / `INFORMATION_LIST_SCROLL_CLASS` / `INFORMATION_TABLE_FOCUS_CLASS`（`@engchina/production-ready-ui`）を使う |

@@ -2703,14 +2703,14 @@ const progress = useChatProgressTracker({
 - 製品のアダプタ: NL2SQL（会話の polling。`refresh` は応答しない取得を打ち切る `refetch({ cancelRefetch: true })`）、RAG（SSE。`touch()` は受け取ったバイトごと、`all_done` の前に終わったら `refreshNow()`。`refresh` は保存済みの会話から回答を取り直す。backend は event の無い間 10 秒ごとに heartbeat を送る）、Agent（Run の polling。`waiting_approval` の間は `enabled: false`）。
 - 実ブラウザは NL2SQL `tests/e2e/sql-chat-progress-refresh.spec.ts`・RAG `e2e/chat-progress-refresh.spec.ts`・Agent `e2e/chat-progress-refresh.spec.ts`。
 
-## ChatResultTable — **新規**（#1154）
+## ResultTable — **新規**（#1154 / #1178。旧名 ChatResultTable）
 
-チャットの回答の吹き出しの中に、SQL・ツールの実行の結果の表を出す部品です（3 製品で共通。NL2SQL のチャットの SQL の実行が最初の利用者）。振る舞いの表は README §4「`ChatResultTable`」。製品は列・取得した行・打ち切りの有無を渡すだけで、要約・プレビュー・打ち切りの明示・すべての行・CSV・NULL・数値の右寄せは部品が持ちます。実行中（`ProcessingIndicator`）・失敗（danger の `Banner`）・実行の操作（`Button`）は製品が部品の外に置きます。
+データの結果（読み取りだけの行と列）を出す部品です（3 製品で共通）。チャットの回答の吹き出しの中の SQL・ツールの実行の結果と、画面のクエリの結果・テーブルのデータの表示・取り込みのサンプル行に使います（#1178。合う画面の基準は UX 契約 `page-archetypes.md`「データの結果の型」）。振る舞いの表は README §4「`ResultTable`」。旧名 `ChatResultTable` などは別名として残しています（非推奨）。製品は列・取得した行・打ち切りの有無を渡すだけで、要約・プレビュー・打ち切りの明示・すべての行・CSV・NULL・数値の右寄せは部品が持ちます。実行中（`ProcessingIndicator`）・失敗（danger の `Banner`）・実行の操作（`Button`）は製品が部品の外に置きます。
 
 ```tsx
-import { ChatResultTable, toast } from "@engchina/production-ready-ui";
+import { ResultTable, toast } from "@engchina/production-ready-ui";
 
-<ChatResultTable
+<ResultTable
   columns={[{ name: "CATEGORY" }, { name: "AMOUNT", type: "number" }]}
   rows={[["家電", 1200], ["食品", null]]}      // 列の順の値の配列。NULL は null
   truncated={result.has_more}                  // 取得の上限で打ち切った
@@ -2728,12 +2728,12 @@ import { ChatResultTable, toast } from "@engchina/production-ready-ui";
 />
 ```
 
-### ChatResultTable の props
+### ResultTable の props
 
 ```ts
-export interface ChatResultTableColumn { name: string; type?: string }   // type が number 等なら右寄せ
-export interface ChatResultTableProps {
-  columns: readonly ChatResultTableColumn[];
+export interface ResultTableColumn { name: string; type?: string }   // type が number 等なら右寄せ
+export interface ResultTableProps {
+  columns: readonly ResultTableColumn[];
   rows: readonly (readonly unknown[])[];       // 取得した行（列の順）。NULL は null
   truncated?: boolean;                         // 上限（行数・応答の大きさ）で打ち切った
   totalRowCount?: number | null;               // 総件数が分かるときだけ（「全 N 行」）
@@ -2741,33 +2741,35 @@ export interface ChatResultTableProps {
   cellsTruncated?: boolean;                    // セルの文字数の上限で値を切った
   maxCellChars?: number | null;
   elapsedMs?: number | null;
-  previewRows?: number;                        // 吹き出しに描く行（既定 50 = CHAT_RESULT_PREVIEW_ROWS）
+  previewRows?: number;                        // プレビューに描く行（既定 50 = RESULT_PREVIEW_ROWS）
   pageSizeOptions?: readonly number[];         // すべての行の 1 ページの行数（既定 10 / 50 / 100）
   csvFilename?: string;                        // 既定 result.csv
   onDownloadCsv?: (csv: string, filename: string) => void;  // 省略時は部品がダウンロード
   onCsvDownloaded?: () => void;
   fullResult?: { href?: string; label?: string; linkComponent?: ButtonLinkComponent; hint?: string };
   actions?: React.ReactNode;                   // 要約の行の右に足す製品の操作
-  labels?: Partial<ChatResultTableLabels>;     // 既定は DEFAULT_CHAT_RESULT_TABLE_LABELS（日本語）
+  meta?: React.ReactNode;                      // 要約の文の右の画面固有の補足（取得上限・接続の StatusBadge。#1178）
+  labels?: Partial<ResultTableLabels>;     // 既定は DEFAULT_RESULT_TABLE_LABELS（日本語）
   className?: string;
-  testId?: string;  // <testId>-summary / -table / -scroll / -preview-note / -truncated / -cells-truncated / -view-all / -csv / -sheet / -all-table / -all-scroll / -all-pagination
+  testId?: string;  // <testId>-summary / -table / -scroll / -preview-note / -truncated / -cells-truncated / -view-all / -csv / -sheet / -all-csv / -all-table / -all-scroll / -all-pagination
 }
 ```
 
-- あわせて export: `ResultCell`（セルの表示。結果の画面の表も同じ表示にする）、`isNumericResultColumn`、`isNullResultValue`、`resultValueText`、`resultRowsToCsv`（BOM・CRLF・RFC 4180・式の無害化）、`chatResultSummaryText`、`CHAT_RESULT_PREVIEW_ROWS`、`CHAT_RESULT_PAGE_SIZES`、`DEFAULT_CHAT_RESULT_TABLE_LABELS`。
-- 単体テストは `packages/ui/tests/chat-result-table.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/sql-chat-execution.spec.ts`（desktop / 375px、プレビューの表の中の縦横のスクロール、打ち切り、シートのページ送り、CSV）。
+- あわせて export: `ResultCell`（セルの表示。結果の画面の表も同じ表示にする）、`isNumericResultColumn`、`isNullResultValue`、`resultValueText`、`resultRowsToCsv`（BOM・CRLF・RFC 4180・式の無害化）、`resultSummaryText`、`RESULT_PREVIEW_ROWS`、`RESULT_PAGE_SIZES`、`DEFAULT_RESULT_TABLE_LABELS`。
+- 画面での使い方（#1178）: NL2SQL は API の形（列名をキーにした行）を `features/nl2sql/queryResultTable.ts` の `toResultTableData` で変換し、`components/QueryResultTable.tsx`（表の名前・取得上限と接続の `meta`・CSV のファイル名を渡す薄いラッパー）から出す。製品で `DataTable` + `Pagination` の結果の表を書かない。
+- 単体テストは `packages/ui/tests/result-table.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/sql-chat-execution.spec.ts`（チャット。desktop / 375px、プレビューの表の中の縦横のスクロール、打ち切り、シートのページ送り、CSV）と `tests/e2e/nl2sql-workflows.spec.ts`（SQL 生成・SELECT SQL・管理 SQL・データの表示）。
 
 ### 表の形の判定（`toTabularData` / `splitMarkdownTables`。#1158）
 
-ツールの結果・成果物の JSON と、回答の本文の Markdown の表を `ChatResultTable` の列と行にします。製品に依存しない規則なので、製品で判定を書かず、この関数を通します（使う所: Agent のチャットと実行履歴の詳細）。
+ツールの結果・成果物の JSON と、回答の本文の Markdown の表を `ResultTable` の列と行にします。製品に依存しない規則なので、製品で判定を書かず、この関数を通します（使う所: Agent のチャットと実行履歴の詳細）。
 
 ```tsx
-import { ChatResultTable, MessageText, splitMarkdownTables, toTabularData } from "@engchina/production-ready-ui";
+import { MessageText, ResultTable, splitMarkdownTables, toTabularData } from "@engchina/production-ready-ui";
 
 // JSON: 表の形なら列と行、そうでなければ null（今の JSON の表示のまま）。
 const table = toTabularData(step.tool_result.output);
 {table ? (
-  <ChatResultTable
+  <ResultTable
     columns={table.columns}
     rows={table.rows}
     truncated={table.truncated}        // truncated / has_more
@@ -2780,7 +2782,7 @@ const table = toTabularData(step.tool_result.output);
 
 // 回答の本文: 表とそれ以外の文に分ける（コードブロックの中の表は表にしない）。
 splitMarkdownTables(answer).map((segment) =>
-  segment.kind === "table" ? <ChatResultTable {...segment.data} /> : <MessageText text={segment.text} />
+  segment.kind === "table" ? <ResultTable {...segment.data} /> : <MessageText text={segment.text} />
 );
 ```
 
@@ -2849,3 +2851,50 @@ const history = useChatHistoryPanel({ inlineOpen: historyOpen, onInlineOpenChang
 - 単体テストは `packages/ui/tests/chat-layout.test.tsx`。
 - 実ブラウザは RAG `e2e/chat.spec.ts`（#664 の履歴の開閉・375px のシート）、NL2SQL `tests/e2e/sql-chat.spec.ts`、Agent `e2e/chat.spec.ts`。
 - 使う所: RAG `components/chat/ChatClient.tsx`、NL2SQL `features/nl2sql/SqlChatPage.tsx`、Agent `pages/ChatPage.tsx`。
+
+## ChatComposer / ChatComposerOption — **新規**（#1161）
+
+チャットの入力欄の領域（3 製品共通）。`ChatLayout` の `composer` に渡す。入力欄（`TextareaField`、2 行）と送信 / 停止（`RunStopButton`、lg）を `FieldActionRow` で並べ、上に設定の行（`ChatComposerOption`）、下に通知を置く。
+
+```tsx
+import { ChatComposer, ChatComposerOption } from "@engchina/production-ready-ui";
+
+<ChatComposer
+  id="chat-composer"
+  textareaRef={composerRef}
+  value={draft}                       // 下書きは製品の作業状態
+  onValueChange={setDraft}
+  onSubmit={submit}
+  onStop={stop}
+  running={sending}                   // 送信の要求中・回答の作成中（同じボタンが「停止」）
+  submitBlocked={!target || waitingChoice}
+  disabled={prerequisitesLoading}       // 前提の読み込み中は書けない（#1153。書いた文字は残す）
+  label={t("chat.composer.label")}    // 「質問」（読み上げだけ）
+  placeholder={t("chat.composer.placeholder")}  // 「質問を入力（Enter で送信、Shift+Enter で改行）」
+  sendLabel={t("chat.send")}
+  stopLabel={t("chat.stop")}
+  sendTestId="chat-send"
+  options={
+    <ChatComposerOption
+      label={t("chat.engine")}        // 「生成方法」
+      labelDecorative                 // 中の SelectField が同じ名前を labelHidden で持つ
+      info={{ label: t("chat.engine.infoLabel"), content: description, contentId }}
+    >
+      <SelectField id="engine" label={t("chat.engine")} labelHidden size="sm" width="sm" … />
+    </ChatComposerOption>
+  }
+  footer={stopError ? <ApiErrorBanner error={stopError} fallback={t("chat.stopFailed")} /> : null}
+/>
+```
+
+| 決めたこと | 理由 |
+|---|---|
+| Enter で送信、Shift+Enter で改行、IME の変換を確定する Enter では送らない（`isSubmitEnter`） | 日本語の入力で変換の確定が送信にならない（#459） |
+| 実行中・送れない間（入力が空・`submitBlocked`）の Enter は何もしない。停止はボタンだけ | Enter の押し間違いで回答を止めない（buttons.md §3.1） |
+| 入力欄は回答の作成中も書ける。書けないのは前提（対象の一覧・会話の内容）の読み込み中（`disabled`）だけ。送れない間の送信のボタンは `aria-disabled`（フォーカスを受ける） | 次の質問を書ける（messaging.md §11.1）。送信の後に入力欄が空になってもフォーカスが外れない（#355） |
+| 入力欄の名前は「質問」に 3 製品でそろえ、画面には出さない（placeholder で目的を示す） | 製品ごとに「メッセージを入力…」「クエリ」「質問」と違っていた。目的は会話の領域から分かる |
+| 設定の行は「名前・info アイコン・選択」。説明は常設しない | 入力欄の上を説明の文で埋めない（#901） |
+| 停止の失敗などの通知は `footer`（入力欄の下）に出す | 起点の操作（送信 / 停止のボタン）の直下（messaging.md §10） |
+
+- 単体テストは `packages/ui/tests/chat-composer.test.tsx`。
+- 使う所: RAG（設定の行は「回答するモデル」の `ToggleChip`）、NL2SQL（「生成方法」の `SelectField`、上限 10,000 文字）、Agent（設定の行なし）。

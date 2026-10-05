@@ -147,7 +147,7 @@ async function setup(page: Page, options: { safe?: boolean; me?: Record<string, 
 
 async function sendQuestion(page: Page, question = "売上の明細") {
   await page.goto("/chat");
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill(question);
   await composer.press("Enter");
   await expect(page.getByText("安全検査済み・未実行")).toBeVisible();
@@ -359,7 +359,7 @@ test("安全検査で遮断した SQL（DML）は実行できない", async ({
 }) => {
   await setup(page, { safe: false });
   await page.goto("/chat");
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("売上を消して");
   await composer.press("Enter");
   const turn = page.getByTestId("sql-chat-turn").last();

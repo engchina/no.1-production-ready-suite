@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { draftKey, WORKSPACE_DRAFT_PREFIX } from "../../src/lib/workspace-drafts";
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "./_helpers/test";
@@ -4892,7 +4893,7 @@ for (const failure of [
     );
     await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
     await expect(page.getByText("検索結果（0件）")).toHaveCount(0);
-    await expect(page.getByText("該当するデータがありません。")).toHaveCount(0);
+    await expect(page.getByTestId("query-results")).toHaveCount(0);
   });
 }
 
@@ -5640,7 +5641,7 @@ test("参考履歴は管理者レビュー結果が良い履歴だけを表示�
   await expectNoElementHorizontalOverflow(similarQuestion);
 });
 
-test("検索結果は 10 件ごとにページングする", async ({ page }) => {
+test("検索結果は要約・表の中のスクロールのプレビューと、すべての行のシート（10 件ごとのページ送り）・CSV で出す（#1178）", async ({ page }) => {
   await mockNl2SqlApi(page);
   // 実行結果を 12 件へ上書き（後勝ちルートで mockNl2SqlApi の job result を差し替える）
   const rows = Array.from({ length: 12 }, (_, index) => ({
@@ -5686,30 +5687,44 @@ test("検索結果は 10 件ごとにページングする", async ({ page }) =>
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   await expect(page.getByText("検索結果（12件）")).toBeVisible();
-  // 1 ページ目 = 先頭 10 件。11 件目以降は次ページ。
-  await expect(page.getByRole("cell", { name: "顧客01" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "顧客10" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
-
-  // 表頭を固定し、md 未満 5 行・md 以上 8 行で表の中を縦スクロールにする（#265）。
-  const resultRegion = page.getByRole("region", { name: "検索結果。スクロールできます。" });
+  // 要約の 1 行（行数・列数）。共通の結果の表（ResultTable。#1178）。
+  await expect(page.getByTestId("query-results-summary")).toHaveText("12 行・2 列");
+  // プレビューは先頭の行（50 行まで）を表頭固定・表の中の縦スクロールで出す（ページ全体を伸ばさない）。
+  const resultRegion = page.getByRole("region", { name: "検索結果の表。スクロールできます。" });
   await expect(resultRegion).toBeVisible();
   await expect(resultRegion.locator("thead")).toHaveCSS("position", "sticky");
+  await expect(resultRegion.locator("tbody tr")).toHaveCount(12);
   expect(await resultRegion.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  // 数値の列は右寄せ。
+  await expect(resultRegion.getByRole("cell", { name: "3000", exact: true })).toHaveCSS("text-align", "right");
+  // CSV は取得した行（ヘッダー + 12 行）を、画面の接頭辞と時刻の名前でダウンロードする。
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByTestId("query-results-csv").click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/^nl2sql-sql-generation-result-\d{8}-\d{6}\.csv$/u);
+  const csv = await readFile((await download.path())!, "utf8");
+  expect(csv.trimEnd().split("\r\n")).toHaveLength(13);
 
-  const pagination = page.getByTestId("nl2sql-result-pagination");
+  // すべての行は広いシートで 10 件ごとにページを送る。
+  await page.getByTestId("query-results-view-all").click();
+  const sheet = page.getByRole("dialog", { name: "検索結果（12 行）" });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole("button", { name: "CSV をダウンロード" })).toBeVisible();
+  const pagination = page.getByTestId("query-results-all-pagination");
   await expect(pagination).toContainText("1-10 / 12 件");
   await expect(pagination).toContainText("1 / 2 ページ");
+  const allTable = page.getByTestId("query-results-all-table");
+  await expect(allTable.getByRole("cell", { name: "顧客10" })).toBeVisible();
+  await expect(allTable.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
 
   await pagination.getByRole("button", { name: "次へ" }).click();
   await expect(pagination).toContainText("11-12 / 12 件");
-  await expect(page.getByRole("cell", { name: "顧客11" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "顧客12" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "顧客01" })).toHaveCount(0);
+  await expect(allTable.getByRole("cell", { name: "顧客12" })).toBeVisible();
+  await expect(allTable.getByRole("cell", { name: "顧客01" })).toHaveCount(0);
 
-  await pagination.getByRole("button", { name: "前へ" }).click();
-  await expect(pagination).toContainText("1-10 / 12 件");
-  await expect(page.getByRole("cell", { name: "顧客01" })).toBeVisible();
+  await sheet.getByRole("button", { name: "検索結果を閉じる" }).click();
+  await expect(sheet).toBeHidden();
+  await expect(page.getByTestId("query-results-view-all")).toBeFocused();
 });
 
 test("プロファイルの読み込み中に入力した質問は、プロファイルの確定後も残り実行できる（#168）", async ({ page }) => {
@@ -6046,6 +6061,10 @@ test("結果整形が完了した job は SQL 実行ステップを処理中の�
   await expect(executeStep).toContainText("完了");
   await expect(formatStep).toHaveAttribute("data-step-status", "done");
   await expect(page.getByText("検索結果（0件）")).toBeVisible();
+  // 0 行は要約だけ（表・すべての行・CSV は出さない。#1178）。
+  await expect(page.getByTestId("query-results-summary")).toContainText("該当する行はありません");
+  await expect(page.getByTestId("query-results-view-all")).toHaveCount(0);
+  await expect(page.getByTestId("query-results-csv")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 });
 
@@ -7966,10 +7985,13 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
         }),
       });
     }
+    // 取得の上限が 1 行のときは、backend と同じく上限 + 1 行目があることを has_more で返す。
+    const rowLimit = Number(api.executePayload.row_limit ?? 0);
     return fulfillJson(route, {
       columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
       rows: [{ CUSTOMER_NAME: "架空商事", TOTAL_AMOUNT: 1200000 }],
       total: 1,
+      has_more: rowLimit === 1,
     });
   });
 
@@ -8021,8 +8043,9 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await page.getByRole("button", { name: "SQL 実行" }).click();
 
   await expect(page.getByText("検索結果（1件）")).toBeVisible();
-  await expect(directSql.getByTestId("query-result-summary")).toContainText("取得件数 1 件");
-  await expect(directSql.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
+  await expect(directSql.getByTestId("query-results-summary")).toHaveText("1 行・2 列");
+  await expect(directSql.getByTestId("query-results-meta")).toContainText("取得上限 100 件");
+  await expect(directSql.getByTestId("query-results-truncated")).toHaveCount(0);
   await expect(page.getByRole("cell", { name: "架空商事" })).toBeVisible();
   expect(api.executePayload).toEqual({
     sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
@@ -8061,11 +8084,13 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await rowLimitInput.fill("1");
   await sqlInput.fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
   await page.getByRole("button", { name: "SQL 実行" }).click();
-  await expect(directSql.getByTestId("query-result-summary")).toContainText("上限到達");
+  // 上限で打ち切った結果は、要約と案内で明示する（#1164 の規則。#1178）。
+  await expect(directSql.getByTestId("query-results-summary")).toContainText("先頭の 1 行を取得しました（さらに行があります）");
+  await expect(directSql.getByTestId("query-results-truncated")).toContainText("1 回に取得するのは先頭の 1 行までです。");
   await expectBoundedRowLimit(rowLimitInput, directSql.getByRole("button", { name: "SQL 実行" }));
   await rowLimitInput.fill("100000");
   await directSql.getByRole("button", { name: "SQL 実行" }).click();
-  await expect(directSql.getByTestId("query-result-summary")).toContainText("取得上限 100000 件");
+  await expect(directSql.getByTestId("query-results-meta")).toContainText("取得上限 100000 件");
 
   await clearButton.click();
   await rowLimitInput.fill("100");
@@ -8318,8 +8343,8 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
   ).toHaveCount(0);
   await adminSql.getByRole("button", { name: "SQL 実行" }).click();
   await expect(adminSql.getByTestId("query-results-table")).toBeVisible();
-  await expect(adminSql.getByTestId("query-result-summary")).toContainText("取得件数 1 件");
-  await expect(adminSql.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
+  await expect(adminSql.getByTestId("query-results-summary")).toContainText("1 行・");
+  await expect(adminSql.getByTestId("query-results-meta")).toContainText("取得上限 100 件");
   await expect(adminSql.getByRole("cell", { name: "架空商事" })).toBeVisible();
   await expect(
     adminSql.locator("code").filter({ hasText: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES" })
@@ -8340,7 +8365,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
   await expectBoundedRowLimit(rowLimitInput, adminSql.getByRole("button", { name: "SQL 実行" }));
   await rowLimitInput.fill("100000");
   await adminSql.getByRole("button", { name: "SQL 実行" }).click();
-  await expect(adminSql.getByTestId("query-result-summary")).toContainText("取得上限 100000 件");
+  await expect(adminSql.getByTestId("query-results-meta")).toContainText("取得上限 100000 件");
   expect(api.adminExecutePayload).toEqual({
     sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
     row_limit: 100000,
@@ -8357,7 +8382,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
   await expect(rowLimitInput).toBeVisible();
   await rowLimitInput.fill("250");
   await adminSql.getByRole("button", { name: "SQL 実行" }).click();
-  await expect(adminSql.getByTestId("query-result-summary")).toContainText("取得上限 250 件");
+  await expect(adminSql.getByTestId("query-results-meta")).toContainText("取得上限 250 件");
   expect(api.adminExecutePayload).toEqual({
     sql: literalSelectSql,
     row_limit: 250,
@@ -12733,8 +12758,8 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   expect(syntheticResultsRequests[0].searchParams.get("limit")).toBe("100000");
   resultsGate.release();
   await expect(syntheticPanel.getByRole("cell", { name: "synthetic-loading-customer" })).toBeVisible();
-  await expect(syntheticPanel.getByTestId("query-result-summary")).toContainText("取得件数 1 件");
-  await expect(syntheticPanel.getByTestId("query-result-summary")).toContainText("取得上限 100000 件");
+  await expect(syntheticPanel.getByTestId("query-results-summary")).toContainText("1 行・");
+  await expect(syntheticPanel.getByTestId("query-results-meta")).toContainText("取得上限 100000 件");
   await expect(page.getByRole("region", { name: "通知" })).toContainText("「APP.INVOICES」の生成結果データを表示しました。");
   await expectNoHorizontalScroll(page);
 
@@ -13513,13 +13538,22 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await previewShowButton.click();
   await expect(previewExportButton).toBeVisible();
   await expect(previewMoreButton).toBeVisible();
-  await expect(dataPreviewPanel.getByTestId("query-result-summary")).toContainText("取得件数 100 件");
-  await expect(dataPreviewPanel.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
-  await expect(dataPreviewPanel.getByTestId("query-results-pagination")).toContainText("1-10 / 100 件");
-  await expect(dataPreviewPanel.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
-  await dataPreviewPanel.getByRole("button", { name: "次へ" }).click();
-  await expect(dataPreviewPanel.getByRole("cell", { name: "顧客11" })).toBeVisible();
-  await dataPreviewPanel.getByRole("button", { name: "前へ" }).click();
+  await expect(dataPreviewPanel.getByTestId("query-results-summary")).toContainText("100 行・");
+  await expect(dataPreviewPanel.getByTestId("query-results-meta")).toContainText("取得上限 100 件");
+  // 表示結果は共通の結果の表（#1178）: 先頭 50 行のプレビューを表の中のスクロールで出し、すべての行はシートで送る。
+  await expect(dataPreviewPanel.getByTestId("query-results-table").locator("tbody tr")).toHaveCount(50);
+  await expect(dataPreviewPanel.getByTestId("query-results-preview-note")).toContainText("先頭の 50 行");
+  await expect(dataPreviewPanel.getByTestId("query-results-csv")).toBeVisible();
+  await dataPreviewPanel.getByTestId("query-results-view-all").click();
+  const previewSheet = page.getByRole("dialog", { name: "表示結果（100 行）" });
+  await expect(previewSheet).toBeVisible();
+  const previewSheetPagination = page.getByTestId("query-results-all-pagination");
+  await expect(previewSheetPagination).toContainText("1-10 / 100 件");
+  await expect(previewSheet.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
+  await previewSheetPagination.getByRole("button", { name: "次へ" }).click();
+  await expect(previewSheet.getByRole("cell", { name: "顧客11" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(previewSheet).toBeHidden();
   await previewClearButton.click();
   await expect(previewRowLimitInput).toHaveValue("100");
   await expect(dataPreviewPanel.getByText("データ未表示")).toBeVisible();
@@ -13608,9 +13642,11 @@ test("sample data and data management run imported workflows", async ({ page }) 
   api.previewDataPayload = null;
   await previewShowButton.click();
   await expect(page.getByRole("cell", { name: "顧客01" })).toBeVisible();
-  await expect(dataPreviewPanel.getByTestId("query-result-summary")).toContainText("取得上限 25 件");
-  await expect(page.getByTestId("query-results-pagination")).toContainText("1-10 / 25 件");
-  await expect(page.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
+  await expect(dataPreviewPanel.getByTestId("query-results-meta")).toContainText("取得上限 25 件");
+  await expect(dataPreviewPanel.getByTestId("query-results-summary")).toContainText("25 行・");
+  // 50 行以下はプレビューにすべての行を出す（補足の文は出さない）。
+  await expect(dataPreviewPanel.getByTestId("query-results-table").locator("tbody tr")).toHaveCount(25);
+  await expect(dataPreviewPanel.getByTestId("query-results-preview-note")).toHaveCount(0);
   await expect.poll(() => currentPreviewDataPayload()?.object_name).toBe("V_EMP_DEPT");
   expect(currentPreviewDataPayload()?.owner).toBe("APP");
   expect(currentPreviewDataPayload()?.limit).toBe(25);
@@ -16892,7 +16928,7 @@ test("SELECT SQL の上限だけの入力をクリアでき、上限変更は未
   await expect(activity).toHaveAttribute("data-execution-activity-status", "success");
   await limit.fill("200");
   await expect(activity).toContainText("現在の入力は未実行です");
-  await expect(page.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
+  await expect(page.getByTestId("query-results-meta")).toContainText("取得上限 100 件");
   await activity.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("direct-sql-limit-changed.png") });
   await limit.fill("100");
@@ -17004,7 +17040,7 @@ test("管理 SQL の上限変更はクリアでき前回結果の条件と区別
   await expect(activity).toHaveAttribute("data-execution-activity-status", "success");
   await limit.fill("200");
   await expect(activity).toContainText("現在の入力は未実行です");
-  await expect(scope.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
+  await expect(scope.getByTestId("query-results-meta")).toContainText("取得上限 100 件");
   await activity.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("admin-limit-changed.png") });
   await limit.fill("100");

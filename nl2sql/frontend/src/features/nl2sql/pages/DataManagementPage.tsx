@@ -48,11 +48,11 @@ import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import {
   DbAdminErrorNotice,
-  QueryResultsTable,
   downloadBlob,
   fileToBase64,
   runtimeLabel,
 } from "../components/DbAdminShared";
+import { QueryResultTable } from "../components/QueryResultTable";
 import {
   DEFAULT_SQL_ROW_LIMIT,
   RowLimitField,
@@ -1806,11 +1806,15 @@ function PreviewResultsPanel({
           {exportError && <ErrorState message={exportError} onRetry={onDownload} />}
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <StatusBadge icon={false} variant="neutral" label={runtimeLabel(preview.runtime)} />
-            <StatusBadge icon={false} variant="info" label={t("tableMgmt.importWizard.rows", { count: preview.results.total })} />
             <span className="break-all font-mono text-xs text-fg-muted">{preview.sql}</span>
           </div>
           <WarningsBanner warnings={preview.warnings} />
-          <QueryResultsTable results={preview.results} rowLimit={executedRowLimit} />
+          <QueryResultTable
+            results={preview.results}
+            rowLimit={executedRowLimit}
+            name={t("queryResults.name.preview")}
+            csvFilePrefix="nl2sql-data-preview"
+          />
         </div>
       ) : (
         <>
@@ -2109,12 +2113,15 @@ function CsvUploadWorkspace({
           {result.sample_rows.length > 0 && (
             <div className="grid gap-1">
               <p className="font-semibold text-fg">{t("dataMgmt.csv.preview")}</p>
-              <QueryResultsTable
+              <QueryResultTable
                 results={{
                   columns: Object.keys(result.sample_rows[0] ?? {}),
                   rows: result.sample_rows,
                   total: result.sample_rows.length,
                 }}
+                name={t("queryResults.name.importPreview")}
+                csvFilePrefix="nl2sql-csv-import-preview"
+                testId="csv-import-preview"
               />
             </div>
           )}
@@ -2560,7 +2567,12 @@ function SyntheticWorkspace({
               <StatusBadge icon={false} variant="neutral" label={syntheticDataResults.runtime} />
             </div>
             <WarningsBanner warnings={syntheticDataResults.warnings} />
-            <QueryResultsTable results={syntheticDataResults.results} rowLimit={executedSyntheticResultLimit} />
+            <QueryResultTable
+              results={syntheticDataResults.results}
+              rowLimit={executedSyntheticResultLimit}
+              name={t("queryResults.name.synthetic")}
+              csvFilePrefix="nl2sql-synthetic-data"
+            />
           </div>
         ) : (
           <EmptyState title={t("dataTools.syntheticData.noResultsTitle")} hint={t("dataTools.syntheticData.noResultsHint")} />
