@@ -1224,6 +1224,49 @@ class JobCreateData(BaseModel):
     steps: list[JobStepData] = Field(default_factory=list)
 
 
+class SqlChatExecutionSummary(BaseModel):
+    """チャットのターンの SQL を最後に実行したときの要約（#1154）。
+
+    結果の行は保存しない（会話は長く残るため、業務データの行を会話に残さない）。会話を開き直した
+    画面は、この要約と「もう一度実行」を出す。
+    """
+
+    status: Literal["done", "error"]
+    executed_at: str
+    elapsed_ms: int = 0
+    row_count: int = 0
+    column_count: int = 0
+    has_more: bool = False
+    error_code: str | None = None
+    # 実行を記録した実行履歴（監査）の ID。
+    history_id: str = ""
+
+
+class SqlChatExecuteData(BaseModel):
+    """チャットのターンの SQL の実行の結果（#1154）。
+
+    実行の失敗（Oracle のエラー・実行の時点の安全検査の不合格）は 200 で `status="error"` にし、
+    SQL 生成のジョブと同じく `error_message`（利用者向け）・`error_code`・`error_detail`（技術的な
+    詳細）に分ける。
+    """
+
+    job_id: str
+    status: Literal["done", "error"]
+    executed_at: str
+    elapsed_ms: int = 0
+    executable_sql: str = ""
+    results: QueryResults
+    # 1 回の実行で取得する行数の上限・セルの文字数の上限（設定値。画面の打ち切りの文言に使う）。
+    row_limit: int
+    max_cell_chars: int
+    # セルの文字数の上限で文字を切ったセルがあるか。
+    cells_truncated: bool = False
+    error_message: str | None = None
+    error_code: str | None = None
+    error_detail: str | None = None
+    history_id: str = ""
+
+
 class JobData(BaseModel):
     """非同期 job status response."""
 
@@ -1252,6 +1295,8 @@ class JobData(BaseModel):
     warning_message: str | None = None
     timing: TimingEnvelope | None = None
     steps: list[JobStepData] = Field(default_factory=list)
+    # チャットのターンの SQL を最後に実行したときの要約（行は持たない。#1154）。
+    last_execution: SqlChatExecutionSummary | None = None
 
 
 class SqlChatSummary(BaseModel):

@@ -80,6 +80,25 @@ const nl2sqlJa = {
   "chat.blocked": "安全検査でブロック",
   "chat.cancelled": "SQL の生成を停止しました",
   "chat.limit": "会話が長くなりました。新しい会話を始めてください。",
+  // チャットのターンの SQL の実行（#1154）。結果の表の文言は共通の ChatResultTable の既定。
+  "chat.safeExecuted": "安全検査済み・実行済み",
+  "chat.execute": "実行",
+  "chat.execute.again": "もう一度実行",
+  "chat.execute.region": "実行結果",
+  "chat.execute.running": "SQL を実行しています",
+  "chat.execute.failed": "SQL を実行できませんでした。",
+  "chat.execute.permissionRequired":
+    "SQL を実行するには「SELECT SQL 実行」の権限が必要です。SQL はコピーして確認できます。",
+  "chat.execute.openDirectSql": "SELECT SQL を実行で開く",
+  "chat.execute.fullResultHint":
+    "すべての行が必要なときは、「SELECT SQL を実行」で取得件数上限を指定して実行してください。",
+  "chat.execute.fullResultHintNoLink":
+    "すべての行が必要なときは、SQL をコピーして SQL の実行の権限のある利用者に実行を依頼してください。",
+  "chat.execute.last.done":
+    "前回の実行（{at}）: {rows} 行・{columns} 列。結果の行は保存していないため、見るにはもう一度実行してください。",
+  "chat.execute.last.truncated":
+    "前回の実行（{at}）: 先頭の {rows} 行を取得（さらに行があります）・{columns} 列。結果の行は保存していないため、見るにはもう一度実行してください。",
+  "chat.execute.last.failed": "前回の実行（{at}）は失敗しました。もう一度実行できます。",
   "security.deepsec.entitlements.expression.group": "条件グループ",
   "security.deepsec.entitlements.expression.match": "条件の組み合わせ",
   "security.deepsec.entitlements.expression.and": "すべて満たす（AND）",
@@ -575,6 +594,7 @@ const nl2sqlJa = {
   "queryResults.page": "{page} / {total} ページ",
   "queryResults.prev": "前へ",
   "queryResults.next": "次へ",
+  "queryResults.null": "NULL",
   "queryResults.rowLimit.label": "取得件数上限",
   "queryResults.rowLimit.helper": "1〜100000 の整数。取得上限を明示してください。",
   "queryResults.rowLimit.error": "取得件数上限は 1 以上 100000 以下の整数を入力してください。",

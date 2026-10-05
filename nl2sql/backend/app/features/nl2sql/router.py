@@ -157,6 +157,7 @@ from .models import (
     SimilarHistoryData,
     SimilarHistoryRequest,
     SqlChatData,
+    SqlChatExecuteData,
     SqlChatPage,
     StructureToSqlData,
     StructureToSqlRequest,
@@ -504,6 +505,44 @@ def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreate
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/execute", response_model=ApiResponse[SqlChatExecuteData])
+def execute_chat_turn(job_id: str, request: Request) -> ApiResponse[SqlChatExecuteData]:
+    """チャットのターンで生成した SQL を実行する（#1154）。
+
+    SQL は画面から受け取らず、ターンのジョブに保存した生成 SQL を、SQL 生成のジョブの実行の段階と
+    同じ経路（業務プロファイルの範囲・安全検査・接続の分離・実行履歴）で実行する。権限は SQL の実行
+    （route の権限）、本人の会話、ターンの業務プロファイルの利用権限を確かめる。
+    """
+    principal = getattr(request.state, "principal", None)
+    actor_user_uuid = str(getattr(principal, "user_uuid", ""))
+    try:
+        # 本人の会話のターンか（管理の権限でも他の利用者の会話は扱わない）と、業務プロファイルの
+        # 利用権限を、実行の前に確かめる。
+        job = nl2sql_service.get_job(job_id, actor_user_uuid=actor_user_uuid)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="他の利用者の会話は実行できません。") from exc
+    if job is None:
+        raise HTTPException(status_code=404, detail="指定された会話のターンが見つかりません。")
+    _assert_profile_access(request, job.profile_id)
+    try:
+        data = nl2sql_service.execute_chat_turn(
+            job_id,
+            actor_user_uuid=actor_user_uuid,
+            actor_is_system_admin=bool(getattr(principal, "is_system_admin", False)),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="他の利用者の会話は実行できません。") from exc
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=404, detail="指定された会話のターンが見つかりません。"
+        ) from exc
+    except SchemaCatalogEmptyError:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ApiResponse(data=data)
 
 
 @router.get("/chats", response_model=ApiResponse[SqlChatPage])

@@ -2345,6 +2345,8 @@ export interface SideSheetProps {
   closeLabel: string;
   /** 出す側（既定は左）。 */
   side?: "left" | "right";
+  /** 幅（#1154）。default は 22rem、wide は sm 以上 64rem（画面幅 − 3.5rem まで）・sm 未満は全画面。 */
+  size?: "default" | "wide";
   /** シートの要素の id（開くボタンの aria-controls に渡す）。 */
   id?: string;
   /** 閉じたときにフォーカスを戻す先。省略時は開く前にフォーカスがあった要素。 */
@@ -2660,3 +2662,57 @@ import { ChatProgress } from "@engchina/production-ready-ui";
 - 単体テストは `packages/ui/tests/chat-progress.test.tsx`。
 - 実ブラウザは NL2SQL `tests/e2e/sql-chat.spec.ts` の「#1145」のテスト（応答を遅らせて、送信・開始待ち・実行中・完了・失敗の段階を desktop / 375px・light / dark で確かめる）。
 - 使う所: NL2SQL の `features/nl2sql/SqlChatPage.tsx`（段階は `features/nl2sql/chatProgress.ts` がジョブの `steps` から作る）。RAG・Agent のチャットは別の Issue で同じ部品につなぐ。
+
+## ChatResultTable — **新規**（#1154）
+
+チャットの回答の吹き出しの中に、SQL・ツールの実行の結果の表を出す部品です（3 製品で共通。NL2SQL のチャットの SQL の実行が最初の利用者）。振る舞いの表は README §4「`ChatResultTable`」。製品は列・取得した行・打ち切りの有無を渡すだけで、要約・プレビュー・打ち切りの明示・すべての行・CSV・NULL・数値の右寄せは部品が持ちます。実行中（`ProcessingIndicator`）・失敗（danger の `Banner`）・実行の操作（`Button`）は製品が部品の外に置きます。
+
+```tsx
+import { ChatResultTable, toast } from "@engchina/production-ready-ui";
+
+<ChatResultTable
+  columns={[{ name: "CATEGORY" }, { name: "AMOUNT", type: "number" }]}
+  rows={[["家電", 1200], ["食品", null]]}      // 列の順の値の配列。NULL は null
+  truncated={result.has_more}                  // 取得の上限で打ち切った
+  rowLimit={1000}                              // 打ち切りの案内に出す上限
+  elapsedMs={800}
+  csvFilename="nl2sql-chat-result-20261005-140312.csv"
+  onCsvDownloaded={() => toast.success(t("common.action.downloaded"))}
+  fullResult={{                                 // 上限を超える全件の導線（製品の画面）
+    href: "/direct-sql",
+    label: "SELECT SQL を実行で開く",
+    linkComponent: DirectSqlLink,               // react-router の Link（state で SQL を渡す等）
+    hint: "すべての行が必要なときは、…で実行してください。",
+  }}
+  testId="sql-chat-result"
+/>
+```
+
+### ChatResultTable の props
+
+```ts
+export interface ChatResultTableColumn { name: string; type?: string }   // type が number 等なら右寄せ
+export interface ChatResultTableProps {
+  columns: readonly ChatResultTableColumn[];
+  rows: readonly (readonly unknown[])[];       // 取得した行（列の順）。NULL は null
+  truncated?: boolean;                         // 上限（行数・応答の大きさ）で打ち切った
+  totalRowCount?: number | null;               // 総件数が分かるときだけ（「全 N 行」）
+  rowLimit?: number | null;                    // 1 回の取得の上限（案内に出す）
+  cellsTruncated?: boolean;                    // セルの文字数の上限で値を切った
+  maxCellChars?: number | null;
+  elapsedMs?: number | null;
+  previewRows?: number;                        // 吹き出しに描く行（既定 50 = CHAT_RESULT_PREVIEW_ROWS）
+  pageSizeOptions?: readonly number[];         // すべての行の 1 ページの行数（既定 10 / 50 / 100）
+  csvFilename?: string;                        // 既定 result.csv
+  onDownloadCsv?: (csv: string, filename: string) => void;  // 省略時は部品がダウンロード
+  onCsvDownloaded?: () => void;
+  fullResult?: { href?: string; label?: string; linkComponent?: ButtonLinkComponent; hint?: string };
+  actions?: React.ReactNode;                   // 要約の行の右に足す製品の操作
+  labels?: Partial<ChatResultTableLabels>;     // 既定は DEFAULT_CHAT_RESULT_TABLE_LABELS（日本語）
+  className?: string;
+  testId?: string;  // <testId>-summary / -table / -scroll / -preview-note / -truncated / -cells-truncated / -view-all / -csv / -sheet / -all-table / -all-scroll / -all-pagination
+}
+```
+
+- あわせて export: `ResultCell`（セルの表示。結果の画面の表も同じ表示にする）、`isNumericResultColumn`、`isNullResultValue`、`resultValueText`、`resultRowsToCsv`（BOM・CRLF・RFC 4180・式の無害化）、`chatResultSummaryText`、`CHAT_RESULT_PREVIEW_ROWS`、`CHAT_RESULT_PAGE_SIZES`、`DEFAULT_CHAT_RESULT_TABLE_LABELS`。
+- 単体テストは `packages/ui/tests/chat-result-table.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/sql-chat-execution.spec.ts`（desktop / 375px、プレビューの表の中の縦横のスクロール、打ち切り、シートのページ送り、CSV）。
