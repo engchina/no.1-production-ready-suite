@@ -23,6 +23,14 @@ export {
   type OptimisticChatMessage,
   type OptimisticChatStatus,
 } from "./lib/chat-optimistic";
+export {
+  splitMarkdownTables,
+  toTabularData,
+  type MarkdownTableSegment,
+  type TabularCellValue,
+  type TabularColumn,
+  type TabularData,
+} from "./lib/tabular-data";
 
 // --- UI primitives ---
 export { Button, buttonVariants, type ButtonProps, type ButtonVariantToneProps } from "./components/ui/button";
