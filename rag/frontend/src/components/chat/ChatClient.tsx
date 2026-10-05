@@ -825,6 +825,9 @@ export function ChatClient() {
     }
     try {
       const created = await createConversation.mutateAsync({ search_answer_profile_id: searchAnswerProfileId });
+      // 作った会話の内容（空）を先に入れる。読み込み中の間だけ入力欄が無効になり、その間に書いた文字が
+      // 入らない（#413 の e2e の不安定の原因）ことを防ぐ（最初の送信で会話を作るときと同じ。#664）。
+      queryClient.setQueryData(queryKeys.conversation(created.id), created);
       // 新しい会話は一覧の先頭（更新日時の新しい順）に入るので、1 ページ目に戻して見せる。
       setConversationOffset(0);
       // 前の会話への送信・生成は、別の会話を選んだときと同じく止める（新しい会話を送信中のままにしない）。

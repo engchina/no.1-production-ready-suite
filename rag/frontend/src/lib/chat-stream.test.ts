@@ -164,7 +164,7 @@ describe("streamChatMessage", () => {
     ).rejects.toMatchObject({ status: 404, messages: ["チャット機能は現在無効です。"] });
   });
 
-  it("event の連番（id:）を処理の後に渡す（再購読の位置。#1175）", async () => {
+  it("event の連番（id:）を処理の後に渡す（再購読の位置。Issue 1175）", async () => {
     const body = [
       `id: 1\nevent: start\ndata: ${JSON.stringify({
         conversation_id: "c1",
