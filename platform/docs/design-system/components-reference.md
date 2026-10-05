@@ -2716,3 +2716,35 @@ export interface ChatResultTableProps {
 
 - あわせて export: `ResultCell`（セルの表示。結果の画面の表も同じ表示にする）、`isNumericResultColumn`、`isNullResultValue`、`resultValueText`、`resultRowsToCsv`（BOM・CRLF・RFC 4180・式の無害化）、`chatResultSummaryText`、`CHAT_RESULT_PREVIEW_ROWS`、`CHAT_RESULT_PAGE_SIZES`、`DEFAULT_CHAT_RESULT_TABLE_LABELS`。
 - 単体テストは `packages/ui/tests/chat-result-table.test.tsx`、実ブラウザは NL2SQL の `tests/e2e/sql-chat-execution.spec.ts`（desktop / 375px、プレビューの表の中の縦横のスクロール、打ち切り、シートのページ送り、CSV）。
+
+### 表の形の判定（`toTabularData` / `splitMarkdownTables`。#1158）
+
+ツールの結果・成果物の JSON と、回答の本文の Markdown の表を `ChatResultTable` の列と行にします。製品に依存しない規則なので、製品で判定を書かず、この関数を通します（使う所: Agent のチャットと実行履歴の詳細）。
+
+```tsx
+import { ChatResultTable, MessageText, splitMarkdownTables, toTabularData } from "@engchina/production-ready-ui";
+
+// JSON: 表の形なら列と行、そうでなければ null（今の JSON の表示のまま）。
+const table = toTabularData(step.tool_result.output);
+{table ? (
+  <ChatResultTable
+    columns={table.columns}
+    rows={table.rows}
+    truncated={table.truncated}        // truncated / has_more
+    totalRowCount={table.totalRowCount} // total / total_row_count / row_count
+    elapsedMs={table.elapsedMs}         // elapsed_ms
+  />
+) : (
+  <JsonPreview value={step.tool_result.output} />
+)}
+
+// 回答の本文: 表とそれ以外の文に分ける（コードブロックの中の表は表にしない）。
+splitMarkdownTables(answer).map((segment) =>
+  segment.kind === "table" ? <ChatResultTable {...segment.data} /> : <MessageText text={segment.text} />
+);
+```
+
+- 表とみなす形: `{ columns, rows }`（`columns` は列名の文字列か `{ name, label?, type? }`、`rows` はオブジェクトか配列の配列。列の指定があれば 0 行も表）、`{ rows }`（オブジェクトの配列。1 行以上）、オブジェクトの配列（1 行以上。key の和集合を列にする）。行に無い値は `null`。
+- セルは文字列・数値・真偽値・null だけ。入れ子のオブジェクト・配列を持つ値、列の分からない 0 行、`columns: []` の 0 行（実行中のジョブ）は表にしない（`null`）。
+- Markdown の表は GFM の表頭・区切りの行・本文の行。セルの足りない行は空の文字列、`\|` は `|`、`**` と `` ` `` は除く。値がすべて数（桁区切り・小数・%）の列は `type: "number"`（右寄せ）。
+- 単体テストは `packages/ui/tests/tabular-data.test.ts`、実ブラウザは Agent の `e2e/run-result-tables.spec.ts`（チャットと実行履歴の詳細、desktop / 375px、light / dark、60 行・0 行・打ち切り・表でない JSON）。

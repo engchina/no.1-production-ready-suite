@@ -4,14 +4,13 @@
  * LLM の Markdown の表を同じ規則で扱う）。表とみなさない値は null を返し、画面は今の表示（JSON・本文）のまま出す。
  */
 
+import type { ChatResultTableColumn } from "../components/data/chat-result-table";
+
 /** セルの値。null は「値が無い」（NULL）で、空の文字列と区別する。 */
 export type TabularCellValue = string | number | boolean | null;
 
-/** 列（`ChatResultTable` の列と同じ形。`name` を表頭に出す）。 */
-export interface TabularColumn {
-  name: string;
-  type?: string;
-}
+/** 列（`ChatResultTable` の列。`name` を表頭に出し、`type` が number 等なら右寄せ）。 */
+export type TabularColumn = ChatResultTableColumn;
 
 export interface TabularData {
   columns: TabularColumn[];
