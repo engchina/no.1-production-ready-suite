@@ -1025,3 +1025,74 @@ def test_create_session_rejects_publication_between_graph_and_head_reads(
 
     with pytest.raises(OntologyVersionConflictError):
         rt.create_session(QuerySessionApiCreate(profile_id="sales", question="受注の一覧"))
+
+
+def test_job_reads_published_snapshot_once_without_runtime_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """公開の snapshot の文脈は、snapshot を 1 回だけ読み、runtime の lock を待たずに作る。
+
+    #1155。
+    """
+    import threading
+
+    from app.features.nl2sql import ontology_router
+    from app.features.nl2sql.models import AllowedObjects, JobCreateRequest
+    from app.features.nl2sql.service import Nl2SqlService
+    from app.features.nl2sql.store import MemoryNl2SqlStore
+
+    rt, svc, _parser, preparation = prepared_workspace()
+    job = svc.publish(
+        "sales",
+        MarkdownConfirmRequest(
+            preparation_id=preparation["id"], draft_etag=preparation["draft_etag"], confirmed=True
+        ),
+        "publish-once",
+        None,
+    )
+    monkeypatch.setattr(ontology_router, "ontology_runtime", rt)
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    request = JobCreateRequest(profile_id="sales", question="q", use_ontology_context=True)
+    profile = rt._strict_profile("sales")
+    assert rt.published_release_id("sales") == job.id
+
+    reads: list[str] = []
+    original_get_artifact = rt.store.get_artifact
+
+    def get_artifact(artifact_id: str) -> Any:
+        reads.append(artifact_id)
+        return original_get_artifact(artifact_id)
+
+    monkeypatch.setattr(rt.store, "get_artifact", get_artifact)
+    outcome: dict[str, Any] = {}
+    done = threading.Event()
+
+    def render() -> None:
+        outcome["markdown"] = service._job_published_ontology_markdown(
+            request=request,
+            profile=profile,
+            business_release_id=job.id,
+            allowed=AllowedObjects(table_names=["APP.ORDERS", "APP.CUSTOMERS"]),
+        )
+        done.set()
+
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold() -> None:
+        with rt._lock:  # lock を持ったまま DB を読む別の処理の代わり
+            held.set()
+            release.wait(30)
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    assert held.wait(5)
+    try:
+        threading.Thread(target=render, daemon=True).start()
+        finished = done.wait(5)
+    finally:
+        release.set()
+        holder.join(5)
+    assert finished, "公開の snapshot の文脈がオントロジーの lock を待った"
+    assert outcome["markdown"]
+    assert reads.count(job.id) == 1

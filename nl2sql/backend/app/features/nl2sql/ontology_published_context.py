@@ -114,11 +114,8 @@ def published_context(
     record = runtime.store.get_artifact(release_id)
     if record and record.get("artifact_type") == SNAPSHOT:
         workspace = MarkdownOntologyWorkspace(runtime)
-        snapshot = workspace.snapshot(profile_id, release_id)
-        if snapshot is None:
-            raise OntologyGateBlockedError(
-                "MARKDOWN_SNAPSHOT_MISSING", "公開 Markdown が見つかりません。"
-            )
+        # 種類の判定で読んだ行をそのまま使う（大きい snapshot を読み直さない。#1155）。
+        snapshot = workspace.snapshot_from_record(profile_id, record)
         schema_context = workspace.scope_is_current(
             profile_id, snapshot["profile_hash"], snapshot["schema_hash"]
         )
