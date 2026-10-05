@@ -28,7 +28,7 @@ import type { SchemaCatalog, SchemaColumn, SchemaTable } from "../types";
 type SchemaInsertMode = "logical" | "physical";
 
 /**
- * 質問 / SQL への挿入補助に特化した compact なスキーマピッカー。
+ * クエリ/SQL への挿入補助に特化した compact なスキーマピッカー。
  * 業界のスキーマブラウザ慣行に合わせ、1 行密度のツリー + 行クリック=挿入 +
  * 詳細（型・サンプル・コメント）は tooltip、検索時は一致テーブルを自動展開する。
  */

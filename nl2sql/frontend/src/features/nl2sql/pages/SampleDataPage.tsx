@@ -449,7 +449,7 @@ export function SampleDataPage() {
           }
         />
 
-        {/* 種類の選択（1）と、その説明・質問の例（2）を同じ行に置き、選択欄だけを左に残さない。 */}
+        {/* 種類の選択（1）と、その説明・クエリ例（2）を同じ行に置き、選択欄だけを左に残さない。 */}
         <section className="grid min-w-0 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:items-end lg:gap-x-6" aria-label={t("dataTools.sample.dataset.label")}>
           <SelectField<SampleDataset>
             id="sample-data-dataset"

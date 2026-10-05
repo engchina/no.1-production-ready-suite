@@ -119,7 +119,7 @@ type PageErrorSource = "profile-load" | "schema-load" | "schema-refresh" | "samp
 type PageError = { source: PageErrorSource; message: string; code?: string } | null;
 
 const PROFILE_RECOMMENDATION_APPLY_THRESHOLD = 0.3;
-// URL で受け取る SQL 生成の画面の初期値（一度だけ適用して URL から消す）。
+// URL で受け取るクエリ画面の初期値（一度だけ適用して URL から消す）。
 const QUERY_PREFILL_KEYS = ["question", "engine", "profile_id"];
 /** 「スキーマを更新」の起点（SchemaRefreshCoordinator の start(origin)。押したボタンだけを回す。#821）。 */
 const WORKBENCH_SCHEMA_REFRESH_HEADER = "workbench-header";
@@ -1227,10 +1227,10 @@ function ExecutableNl2SqlWorkbench() {
                   )}
               </div>
 
-                  {/* 質問（左）× スキーマ参照（右・常時表示）: 書きながら参照して即クリック挿入。 */}
+                  {/* クエリ（左）× スキーマ参照（右・常時表示）: 書きながら参照して即クリック挿入。 */}
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start">
                     <div className="grid gap-2">
-                      {/* 質問の入力を補助するテンプレート行（選択時は全文置換）。 */}
+                      {/* クエリの入力を補助するテンプレート行（選択時は全文置換）。 */}
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs font-medium text-fg-muted">{t("dbAdmin.runner.templates")}</span>
                         {QUESTION_TEMPLATES.map((template) => (
