@@ -8,7 +8,6 @@ import {
   Clock3,
   Copy,
   Eye,
-  LoaderCircle,
   Play,
   Plus,
   RefreshCw,
@@ -553,11 +552,11 @@ function StepIcon({ step }: { step: DocumentRecipeStep | undefined }) {
 
 function RecipeStatusBadge({ recipe, spin = true }: { recipe: DocumentRecipeView; spin?: boolean }) {
   const status = recipeStatus(recipe);
-  // 回さないときは、止まった円弧（進捗の円に見える）ではなく実行中を示す静止アイコンにする。
-  const Icon = status.spin && !spin ? Play : status.icon;
+  // 実行中で回さないときは、実行中を示す静止アイコン（Play。status.icon）にする。
+  const Icon = status.icon;
   return (
     <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", status.className)}>
-      {/* 回すアイコンは共有の Spinner（全周トラック・reduced-motion 対応。#395） */}
+      {/* 回すアイコンは共有の Spinner（全周トラック・180 度対称のアーク・reduced-motion 対応。#395 / #1180） */}
       {status.spin && spin ? <Spinner size={14} /> : <Icon size={14} aria-hidden />}
       {t(status.label)}
     </span>
@@ -652,7 +651,8 @@ function recipeStatus(recipe: DocumentRecipeView) {
   if (stepStatuses.includes("RUNNING")) {
     return {
       label: "documents.recipes.status.running" as const,
-      icon: LoaderCircle,
+      // 回すときは Spinner（RecipeStatusBadge）。これは回さないときの静止アイコン。
+      icon: Play,
       className: "bg-info-subtle text-info-fg",
       spin: true,
     };
