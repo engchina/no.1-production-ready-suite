@@ -1,4 +1,4 @@
-import { useMemo, type ComponentProps } from "react";
+import { useEffect, useMemo, type ComponentProps } from "react";
 import { Link } from "react-router-dom";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -6,6 +6,8 @@ import {
   Banner,
   ChatResultTable,
   ProcessingIndicator,
+  TableSkeleton,
+  TimedLoadingState,
   toast,
   type ButtonLinkComponent,
   type ChatResultTableLabels,
@@ -40,19 +42,34 @@ const RESULT_TABLE_LABELS: Partial<ChatResultTableLabels> = {
 };
 
 export interface ChatSqlExecution {
-  /** この画面で実行した結果（行を持つ）。会話を開き直したときは無い（行は保存しない）。 */
+  /**
+   * この画面で受け取った結果（行を持つ）。送信のジョブの中で実行した結果（#1176）か、「もう一度実行」の結果。
+   * 会話を開き直したときは無い（行は会話に保存しない）。
+   */
   data: SqlChatExecuteData | undefined;
   running: boolean;
+  /** 送信のジョブの中で実行した結果の行を受け取っている（#1176）。 */
+  receiving: boolean;
   /** 実行の要求そのものの失敗（権限・通信・timeout）。SQL の実行の失敗は `data.status === "error"`。 */
   error: unknown;
   run: () => void;
 }
 
+/** 受け取りを始めたターン（再描画・作り直しで二重に受け取らない。行は 1 回だけ受け取れる）。 */
+const receivedResults = new Set<string>();
+
 /**
  * チャットのターンの SQL の実行（#1154）。結果は TanStack Query のキャッシュ（メモリ）に置き、会話を
  * 切り替えて戻っても同じ画面の中では出し直す。sessionStorage などには保存しない（業務データの行を残さない）。
+ *
+ * 送信のジョブの中で実行した結果（#1176）は、受け取りの期限（`resultExpiresAt`）の前に 1 回だけ受け取り、
+ * 同じキャッシュに置く（backend は受け取ったら行を消す）。受け取れなかった（期限切れ・受け取り済み）ときは
+ * 要約と「もう一度実行」。
  */
-export function useChatSqlExecution(jobId: string): ChatSqlExecution {
+export function useChatSqlExecution(
+  jobId: string,
+  resultExpiresAt?: string | null,
+): ChatSqlExecution {
   const identity = useWorkspaceIdentity();
   const queryClient = useQueryClient();
   const key = useMemo(
@@ -76,10 +93,35 @@ export function useChatSqlExecution(jobId: string): ChatSqlExecution {
       ),
     onSuccess: (data) => queryClient.setQueryData(key, data),
   });
-  const running = useIsMutating({ mutationKey: key }) > 0;
+  const running = useIsMutating({ mutationKey: key, exact: true }) > 0;
+  const receiveKey = useMemo(() => [...key, "receive"] as const, [key]);
+  const received = useMutation({
+    mutationKey: receiveKey,
+    mutationFn: () =>
+      apiPost<SqlChatExecuteData>(
+        `/api/nl2sql/jobs/${encodeURIComponent(jobId)}/execution-result`,
+        {},
+        { timeoutMs: API_TIMEOUT_MS.interactiveDetail },
+      ),
+    // 「もう一度実行」の結果が先に届いていれば、そちらを残す。
+    onSuccess: (data) =>
+      queryClient.setQueryData<SqlChatExecuteData | null>(key, (current) => current ?? data),
+  });
+  const receiving = useIsMutating({ mutationKey: receiveKey }) > 0;
+  const receiveId = key.join("/");
+  const hasData = Boolean(cached.data);
+  const startReceive = received.mutate;
+  useEffect(() => {
+    if (!resultExpiresAt || hasData || receivedResults.has(receiveId)) return;
+    // 期限を過ぎた行は backend が受け取らせない（要約と「もう一度実行」を出す）。
+    if (!(Date.parse(resultExpiresAt) > Date.now())) return;
+    receivedResults.add(receiveId);
+    startReceive();
+  }, [resultExpiresAt, hasData, receiveId, startReceive]);
   return {
     data: cached.data ?? undefined,
     running,
+    receiving: receiving && !hasData,
     error: mutation.isError ? mutation.error : null,
     run: () => {
       if (!running) mutation.mutate();
@@ -108,7 +150,7 @@ export function ChatSqlExecutionResult({
   execution: ChatSqlExecution;
   canOpenDirectSql: boolean;
 }) {
-  const { data, running, error } = execution;
+  const { data, running, receiving, error } = execution;
   const sql = turn.result?.generated_sql ?? "";
   const DirectSqlLink = useMemo(() => directSqlLink(sql), [sql]);
   const table = useMemo(
@@ -116,7 +158,7 @@ export function ChatSqlExecutionResult({
     [data],
   );
   const lastExecution = turn.last_execution;
-  if (!running && !error && !data && !lastExecution) return null;
+  if (!running && !receiving && !error && !data && !lastExecution) return null;
 
   return (
     <section
@@ -135,6 +177,17 @@ export function ChatSqlExecutionResult({
           activityIcon="none"
           testId="sql-chat-execution-running"
         />
+      ) : null}
+      {receiving && !running ? (
+        // 送信のジョブの中で実行した結果の行を受け取っている（#1176）。表の形の Skeleton で寸法を予約する。
+        <TimedLoadingState
+          label={t("chat.execute.receiving")}
+          operationKey={`sql-chat-receive-${turn.job_id}`}
+          framed={false}
+          testId="sql-chat-execution-receiving"
+        >
+          <TableSkeleton rows={3} columns={3} />
+        </TimedLoadingState>
       ) : null}
       {!running && error ? (
         <ApiErrorBanner
@@ -179,7 +232,7 @@ export function ChatSqlExecutionResult({
           testId="sql-chat-result"
         />
       ) : null}
-      {!running && !error && !data && lastExecution ? (
+      {!running && !receiving && !error && !data && lastExecution ? (
         <p className="text-sm text-fg-muted" data-testid="sql-chat-last-execution">
           {lastExecutionText(
             lastExecution,
