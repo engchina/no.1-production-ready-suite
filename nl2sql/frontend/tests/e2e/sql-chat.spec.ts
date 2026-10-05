@@ -142,15 +142,21 @@ for (const width of [1280, 375]) {
     await expect(page.locator("pre").last()).toContainText(
       "ORDER BY SUM(AMOUNT) DESC",
     );
+    // 生成の prompt には公開版のオントロジーの文脈を使い、画面に出さない生成後の接地確認は
+    // 求めない（#1172）。
     expect(state.requests[0]).toMatchObject({
       generation_only: true,
       profile_id: "sales",
       previous_job_id: null,
+      use_ontology_context: true,
+      include_ontology_grounding: false,
     });
     expect(state.requests[1]).toMatchObject({
       generation_only: true,
       previous_job_id: "chat-1",
       question: "多い順にして",
+      use_ontology_context: true,
+      include_ontology_grounding: false,
     });
     await page.reload();
     await expect(page.getByTestId("sql-chat-turn")).toHaveCount(2);
