@@ -10,6 +10,8 @@ RAG / NL2SQL / Agent の3製品に共通する「画面の振る舞い」の規�
 | [workspace-state.md](./workspace-state.md) | ページ遷移・再読込のときの作業状態の保持、未保存変更の離脱ガード |
 | [cross-cutting.md](./cross-cutting.md) | 横断的な保守・セキュリティ契約（更新 API の所有範囲、認可の server-side 強制、i18n と E2E locator） |
 
+節番号は、コードやテストのコメントが `§5.1` などで参照しているため変えない。
+
 ## 優先順位
 
 1. [デザインシステム](../design-system/README.md)（見た目・コンポーネントの振る舞い）
@@ -21,7 +23,3 @@ RAG / NL2SQL / Agent の3製品に共通する「画面の振る舞い」の規�
 ## 実装の置き場所
 
 - 規約に出てくる部品のうち、`@engchina/production-ready-ui`（`packages/ui`）にあるもの（`Button` / `PageHeader` / `Banner` / `FormStatus` / `FieldError` / `DataTable` / `Pagination` / `MessageText` / `useConfirm` / `toast` / `ContentActionBar` / `FormActionBar` / `BulkSelectionActions` / `ClearActionButton` / `ActionResultRegion` / `ProcessingIndicator` / `TimedLoadingState` / `RowActionMenu` / `ObjectActionBar` / `FloatingActionMenu` / `Disclosure` / `DisclosureChevron` / `FixedSplitPane` など）は、それを使う。処理中表示・分割ペインの文言は `labels`、`ObjectActionBar` / `FormActionBar` の「その他の操作」は `moreLabel`（いずれも既定は日本語）で製品の i18n から差し替える。分割ペインの比率の保存 key は `storagePrefix` で製品ごとに分けられる。並べ替えの列頭は `DataTable` の `sort` が持つ。
-
-## 経緯
-
-NL2SQL の `docs/frontend-*.md` と AGENTS.md「横断的な保守・セキュリティ契約」から、3製品に共通する部分を移した（engchina/no.1-production-ready-suite#118）。節番号は移設前の NL2SQL の文書にそろえている（コードやテストのコメントが `§5.1` などで参照しているため）。

@@ -21,7 +21,3 @@ Oracle / OCI 上で動く本番品質の AI 業務アプリ群（**RAG / NL2SQL 
 ## CI
 
 `.github/workflows/ci.yml` が変更のあった製品の job だけを実行します（`platform/` の変更時は全製品）。必須 check は `CI OK` です。
-
-## 経緯
-
-2026-09-25 に、旧4 repo（`engchina/no.1-production-ready-platform` / `-rag` / `-nl2sql` / `-agent`）を履歴ごと統合しました（[#71](https://github.com/engchina/no.1-production-ready-suite/issues/71)）。旧 platform repo を rename したのが本 repository で、旧 rag / nl2sql / agent repo は archive 済みです。
