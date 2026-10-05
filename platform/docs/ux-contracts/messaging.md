@@ -536,4 +536,6 @@ header           : StatusBadge（エンティティの状態の正本 = P1）
 - **補足に入れないもの**: SQL 全文・ORA コード・スタックトレース・request ID などの技術的な詳細。補足は対象の表の名前・使ったツール名・件数などの短い語だけ。
 - **読み上げ**: 段階の切り替わりだけを polite で読み上げる（経過時間は読み上げない）。状態はアイコンと文字で示す（色だけに頼らない）。
 - 段階の詳細さは製品の詳細な工程の表示（NL2SQL の SQL 生成の画面の `WorkflowProgressStrip`）より絞る。チャットの回答の場所を工程の一覧で埋めない。
-- 製品の対応: NL2SQL はジョブの `steps`（段階の開始・終了の時刻付き）から `features/nl2sql/chatProgress.ts` で作る。RAG・Agent は同じ形で backend から段階を出してつなぐ（別の Issue）。
+- 製品の対応: NL2SQL はジョブの `steps`（段階の開始・終了の時刻付き）から `features/nl2sql/chatProgress.ts` で作る。RAG は SSE の `progress`、Agent は Run から同じ形を作る。
+- **更新が途絶えたとき（#1160）**: 状態を追う処理は 3 製品共通の `useChatProgressTracker`（[components-reference.md](../design-system/components-reference.md)「useChatProgressTracker」）。配信（取得の成功・SSE のバイト）が一定時間届かなければ状態を取り直し、今の段階の行に「接続を確認しています。」を出す（遅延の案内と同じ予約した行）。失敗・時間切れは backoff して続け、完了・失敗の終端まで追う。読み込み直さないと結果が出ない状態を作らない。
+  - 配信が終端の前に切れた（SSE が `all_done` の前に終わった）ときは、保存済みの結果を取り直して置き換える。結果が無いまま上限を過ぎたら、理由と「再送信」を出す（§11.2 の送信の失敗と同じ形）。
