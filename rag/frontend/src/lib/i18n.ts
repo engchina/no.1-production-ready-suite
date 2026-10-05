@@ -2053,6 +2053,7 @@ export const ja = {
   "chat.sessions.close": "会話の履歴を閉じる",
   "chat.sessions.loading": "会話を読み込んでいます",
   "chat.searchAnswerProfile.loading": "検索・回答プロファイルを読み込んでいます",
+  "chat.searchAnswerProfile.error": "検索・回答プロファイルを読み込めませんでした。",
   "chat.messages.loading": "会話の内容を読み込んでいます",
   "chat.sessions.new": "新しい会話",
   "chat.sessions.empty": "まだ会話がありません。「新しい会話」から始めてください。",

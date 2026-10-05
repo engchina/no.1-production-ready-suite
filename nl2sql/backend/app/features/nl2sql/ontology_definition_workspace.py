@@ -53,7 +53,13 @@ def authorize_definition_operation(
 
 class ProfileOntologyWorkspaceService(ProfileOntologyDefinitionService):
     def document(self, profile_id: str, artifact_id: str, kind: str) -> dict[str, Any]:
-        record = self.store.get_artifact(artifact_id)
+        return self.checked_document(profile_id, self.store.get_artifact(artifact_id), kind)
+
+    def checked_document(
+        self, profile_id: str, record: dict[str, Any] | None, kind: str
+    ) -> dict[str, Any]:
+        """読んだ成果物が、この業務プロファイルの指定の種類のものか確かめる。"""
+
         if (
             record is None
             or record.get("session_id") != self._session(profile_id)

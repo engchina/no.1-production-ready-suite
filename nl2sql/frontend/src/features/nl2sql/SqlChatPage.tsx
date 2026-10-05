@@ -10,6 +10,7 @@ import {
   MessageSquarePlus,
   PanelLeftClose,
   PanelLeftOpen,
+  Play,
   RefreshCw,
   RotateCcw,
   Search,
@@ -22,6 +23,7 @@ import {
   Card,
   CardContent,
   ChatProgress,
+  ChatSkeleton,
   ChatUserMessage,
   EmptyState,
   FieldActionRow,
@@ -54,6 +56,15 @@ import { t } from "@/lib/i18n";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { randomUuid } from "@/lib/randomUuid";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
+import { useAuth } from "@/features/security/AuthProvider";
+import {
+  CAPABILITY_PERMISSIONS,
+  MENU_PERMISSIONS,
+} from "@/features/security/menu-permissions";
+import {
+  ChatSqlExecutionResult,
+  useChatSqlExecution,
+} from "./components/ChatSqlExecution";
 import { JobFailureBody } from "./components/JobFailureBody";
 import {
   useProfileUsageContext,
@@ -193,6 +204,10 @@ function useInlineHistory() {
 /** 1 往復を永続ジョブにし、前文はサーバーで復元する。送信では SQL を実行しない。 */
 export function SqlChatPage() {
   const active = useWorkspaceActive();
+  const { hasPermission } = useAuth();
+  // 生成した SQL の実行（#1154）は SQL 生成の画面・SELECT SQL の実行と同じ実行の権限が要る。
+  const canExecuteSql = hasPermission(CAPABILITY_PERMISSIONS.sqlExecute);
+  const canOpenDirectSql = hasPermission(MENU_PERMISSIONS.directSql);
   const identity = useWorkspaceIdentity();
   const queryClient = useQueryClient();
   const [profileId, setProfileId] = useWorkspaceState("profileId", "");
@@ -350,9 +365,20 @@ export function SqlChatPage() {
     profileOptions.length === 0 &&
     !profileSearch &&
     !selectedProfile;
+  // 業務プロファイルの一覧を読めなかった（最初の読み込み）。上のカードに失敗と再試行を出し、会話の欄は出さない
+  // （空の状態を出さない。messaging.md §11.7、#1153）。候補の検索の失敗は欄の中で示す。
+  const profilesFailed =
+    profiles.isError && !profiles.data && !profileSearch && !selectedProfile;
+  // 開いている会話の内容を読み込んでいる（送った質問を出している間は除く）。
+  const conversationLoading =
+    Boolean(conversationId) && conversation.isPending && !pending;
+  // 画面の前提（業務プロファイルの一覧・開いている会話の内容）が揃うまでは、会話の欄に空の状態を出さず
+  // 会話の形の Skeleton で覆い、入力欄・生成方法・送信・新しい会話・履歴の開閉を無効にする（#1153）。
+  const prerequisitesLoading = profilesLoading || conversationLoading;
   const blocked =
     busy ||
     generating ||
+    profilesLoading ||
     !selectedProfile ||
     detail.isError ||
     (Boolean(conversationId) &&
@@ -501,6 +527,24 @@ export function SqlChatPage() {
                   <Skeleton className="h-[var(--button-height-md)] w-full" />
                 </div>
               </TimedLoadingState>
+            ) : profilesFailed ? (
+              <ApiErrorBanner
+                error={profiles.error}
+                fallback={t("chat.profile.loadFailed")}
+                testId="sql-chat-profiles-error"
+                action={
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={RefreshCw}
+                    loading={profiles.isFetching}
+                    onClick={() => void profiles.refetch()}
+                  >
+                    {t("chat.retry")}
+                  </Button>
+                }
+              />
             ) : noProfiles ? (
               <EmptyState
                 title={t("chat.noProfiles")}
@@ -565,7 +609,7 @@ export function SqlChatPage() {
             )}
           </CardContent>
         </Card>
-        {noProfiles ? null : (
+        {noProfiles || profilesFailed ? null : (
           <div
             className={`grid min-h-0 min-w-0 flex-1 gap-4 ${inlineHistory && historyPanelOpen ? "lg:grid-cols-[minmax(0,17.5rem)_minmax(0,1fr)]" : ""}`}
           >
@@ -620,6 +664,7 @@ export function SqlChatPage() {
                   aria-controls="sql-chat-history"
                   aria-expanded={historyOpen}
                   data-testid="sql-chat-history-toggle"
+                  disabled={profilesLoading}
                   onClick={toggleHistory}
                 />
                 {/* 会話を選んでいる間は、履歴を閉じていても今の会話の名前を出す。 */}
@@ -641,7 +686,7 @@ export function SqlChatPage() {
                   variant="secondary"
                   size="sm"
                   icon={MessageSquarePlus}
-                  disabled={busy}
+                  disabled={busy || profilesLoading}
                   onClick={resetConversation}
                 >
                   {t("chat.new")}
@@ -655,19 +700,21 @@ export function SqlChatPage() {
                 className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]"
                 data-testid="sql-chat-conversation"
               >
-                {conversationId && conversation.isPending && !pending ? (
-                  // 読み込み中は文言と経過時間を出し、質問と回答の吹き出しの形の Skeleton で寸法を予約する
-                  // （RAG のチャットと同じ。messaging.md §3.6）。
+                {conversationLoading ? (
+                  // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する
+                  // （3 製品で同じ。messaging.md §3.6 / §11.7）。
                   <TimedLoadingState
                     label={t("chat.loading")}
                     operationKey="sql-chat-conversation-load"
                     framed={false}
                     testId="sql-chat-conversation-loading"
                   >
-                    <Skeleton className="ml-auto h-12 w-2/3" />
-                    <Skeleton className="h-32 w-5/6" />
-                    <Skeleton className="ml-auto h-12 w-1/2" />
+                    <ChatSkeleton />
                   </TimedLoadingState>
+                ) : profilesLoading ? (
+                  // 業務プロファイルの一覧の読み込み中は、空の状態（はじめの案内）を出さず会話の形の Skeleton で覆う。
+                  // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
+                  <ChatSkeleton testId="sql-chat-conversation-skeleton" />
                 ) : null}
                 {conversationId && conversation.isError ? (
                   <ApiErrorBanner
@@ -686,14 +733,19 @@ export function SqlChatPage() {
                     }
                   />
                 ) : null}
-                {!conversationId && !pending ? (
+                {!conversationId && !pending && !profilesLoading ? (
                   <EmptyState
                     title={t("chat.empty")}
                     hint={t("chat.emptyHint")}
                   />
                 ) : null}
                 {turns.map((turn) => (
-                  <ChatTurn key={turn.job_id} turn={turn} />
+                  <ChatTurn
+                    key={turn.job_id}
+                    turn={turn}
+                    canExecuteSql={canExecuteSql}
+                    canOpenDirectSql={canOpenDirectSql}
+                  />
                 ))}
                 {pending ? (
                   // 送った質問はジョブの投入の応答を待たずに出す。失敗しても残す（#907）。
@@ -777,7 +829,7 @@ export function SqlChatPage() {
                     value={engine}
                     size="sm"
                     width="sm"
-                    disabled={busy || generating}
+                    disabled={busy || generating || prerequisitesLoading}
                     onValueChange={setEngine}
                     describedBy={engineDescriptionId}
                     options={CHAT_ENGINES.map(({ value, label }) => ({
@@ -819,6 +871,8 @@ export function SqlChatPage() {
                     rows={2}
                     maxLength={10000}
                     placeholder={t("chat.placeholder")}
+                    // 前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
+                    disabled={prerequisitesLoading}
                     className="space-y-0"
                   />
                 </FieldActionRow>
@@ -840,9 +894,25 @@ export function SqlChatPage() {
     </div>
   );
 }
-function ChatTurn({ turn }: { turn: JobData }) {
+function ChatTurn({
+  turn,
+  canExecuteSql,
+  canOpenDirectSql,
+}: {
+  turn: JobData;
+  canExecuteSql: boolean;
+  canOpenDirectSql: boolean;
+}) {
   const [copyError, setCopyError] = useState("");
   const result = turn.result;
+  // 実行は明示の操作（送信では実行しない）。安全検査を通った生成 SQL だけを実行できる（#1154）。
+  const execution = useChatSqlExecution(turn.job_id);
+  const executable = Boolean(
+    turn.status === "done" &&
+      result?.safety.is_safe &&
+      result.generated_sql.trim(),
+  );
+  const executed = Boolean(execution.data || turn.last_execution);
   return (
     <article className="space-y-2" data-testid="sql-chat-turn">
       <ChatUserMessage>{turn.question || result?.original_question}</ChatUserMessage>
@@ -862,32 +932,64 @@ function ChatTurn({ turn }: { turn: JobData }) {
                 <StatusBadge
                   variant={result.safety.is_safe ? "success" : "danger"}
                   label={
-                    result.safety.is_safe ? t("chat.safe") : t("chat.blocked")
+                    !result.safety.is_safe
+                      ? t("chat.blocked")
+                      : executed
+                        ? t("chat.safeExecuted")
+                        : t("chat.safe")
                   }
                 />
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  icon={Copy}
-                  onClick={() => {
-                    void copyTextToClipboard(result.generated_sql).then(
-                      () => {
-                        setCopyError("");
-                        toast.success(t("common.action.copied"));
-                      },
-                      () => setCopyError(t("chat.copyFailed")),
-                    );
-                  }}
-                >
-                  {t("chat.copySql")}
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={Copy}
+                    onClick={() => {
+                      void copyTextToClipboard(result.generated_sql).then(
+                        () => {
+                          setCopyError("");
+                          toast.success(t("common.action.copied"));
+                        },
+                        () => setCopyError(t("chat.copyFailed")),
+                      );
+                    }}
+                  >
+                    {t("chat.copySql")}
+                  </Button>
+                  {executable && canExecuteSql ? (
+                    // 吹き出しの中の操作なので secondary。実行中はラベルを変えず、アイコンがスピナーになる。
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      icon={Play}
+                      loading={execution.running}
+                      onClick={execution.run}
+                      data-testid="sql-chat-execute"
+                    >
+                      {executed ? t("chat.execute.again") : t("chat.execute")}
+                    </Button>
+                  ) : null}
+                </div>
               </div>
               <pre className="max-w-full overflow-x-auto rounded-md border border-border bg-canvas p-3 text-sm [scrollbar-gutter:stable]">
                 <code>{result.generated_sql}</code>
               </pre>
               {result.explanation ? (
                 <MessageText text={result.explanation} />
+              ) : null}
+              {executable && !canExecuteSql ? (
+                <p className="text-xs text-fg-muted">
+                  {t("chat.execute.permissionRequired")}
+                </p>
+              ) : null}
+              {executable ? (
+                <ChatSqlExecutionResult
+                  turn={turn}
+                  execution={execution}
+                  canOpenDirectSql={canOpenDirectSql}
+                />
               ) : null}
             </>
           ) : null}

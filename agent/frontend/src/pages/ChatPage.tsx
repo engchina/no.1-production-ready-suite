@@ -19,6 +19,7 @@ import {
   Card,
   CardContent,
   ChatProgress,
+  ChatSkeleton,
   ChatUserMessage,
   Disclosure,
   EmptyState,
@@ -159,6 +160,13 @@ export function ChatPage() {
     if (threadMissing || threadOfOtherAgent) setThreadId(null);
   }, [threadMissing, threadOfOtherAgent, setThreadId]);
 
+  // 画面の前提（業務 Agent の一覧・開いている会話の内容）が揃うまでは、会話の欄に空の状態を出さず
+  // 会話の形の Skeleton で覆い、入力欄・送信・新しい会話・履歴の開閉を無効にする（messaging.md §11.7、#1153）。
+  // 会話の内容を読めなかった（一時的な失敗）ときも送信しない（内容の分からない会話に続けて送らない）。
+  const agentsLoading = agents.isLoading;
+  const threadLoading = Boolean(threadId) && thread.isLoading;
+  const threadFailed = Boolean(threadId) && thread.isError && !thread.data && !threadMissing;
+  const prerequisitesLoading = agentsLoading || threadLoading;
   const runs = threadId && !threadOfOtherAgent ? (thread.data?.runs ?? []) : [];
   const running = runs.some((run) => ACTIVE_STATUSES.has(run.status));
   const waitingApproval = runs.some((run) => run.status === "waiting_approval");
@@ -246,7 +254,16 @@ export function ChatPage() {
     const goal = draft.trim();
     // 実行中・承認待ちのあいだは次の質問を送らない（前の回答を会話の履歴に含めるため）。
     // 実行中の Enter でも停止しない（停止はボタンだけ。buttons.md §3.1）。
-    if (!goal || !selectedAgentId || running || waitingApproval || send.isPending) return;
+    if (
+      !goal ||
+      !selectedAgentId ||
+      running ||
+      waitingApproval ||
+      send.isPending ||
+      prerequisitesLoading ||
+      threadFailed
+    )
+      return;
     // 送った質問はすぐ会話の欄に出し、入力欄を空にする。回答の作成中も次の質問を書ける（#907）。
     setPending(createOptimisticChatMessage(goal));
     setDraft("");
@@ -304,6 +321,7 @@ export function ChatPage() {
     <ThreadList
       threads={threads.data?.threads ?? []}
       loading={threads.isLoading}
+      waiting={agentsLoading}
       error={threads.isError && !threads.data ? threads.error : null}
       retrying={threads.isFetching}
       onRetry={() => void threads.refetch()}
@@ -324,10 +342,31 @@ export function ChatPage() {
           <CardContent className="p-4 sm:p-5">
             {agents.isLoading ? (
               <TimedLoadingState label={t("chat.agent.loading")} framed={false} testId="chat-agents-loading">
-                <Skeleton className="h-10 w-full" />
+                {/* ラベルと欄の寸法を予約する（RAG・NL2SQL の対象の欄と同じ形。#1153）。 */}
+                <div className="space-y-1.5" aria-hidden="true">
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-[var(--button-height-md)] w-full" />
+                </div>
               </TimedLoadingState>
             ) : agents.isError ? (
-              <ApiErrorBanner error={agents.error} fallback={t("common.error.load")} />
+              // 読めなかったときは会話の欄を出さず（空の状態を出さない）、ここに失敗と再試行を出す（#1153）。
+              <ApiErrorBanner
+                error={agents.error}
+                fallback={t("common.error.load")}
+                testId="chat-agents-error"
+                action={
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={RefreshCw}
+                    loading={agents.isFetching}
+                    onClick={() => void agents.refetch()}
+                  >
+                    {t("common.retry")}
+                  </Button>
+                }
+              />
             ) : usableAgents.length === 0 ? (
               <EmptyState title={t("chat.agent.empty")} />
             ) : (
@@ -353,7 +392,8 @@ export function ChatPage() {
           </CardContent>
         </Card>
 
-        {selectedAgentId ? (
+        {/* 業務 Agent の読み込み中も会話の領域を描く（寸法を予約し、読み込み後に現れて押し下げない。#1153）。 */}
+        {agentsLoading || selectedAgentId ? (
           <div
             className={
               historyInline && historyPanelOpen
@@ -412,6 +452,7 @@ export function ChatPage() {
                   aria-expanded={historyOpen}
                   aria-controls={historyId}
                   data-testid="chat-history-toggle"
+                  disabled={agentsLoading}
                   onClick={toggleHistory}
                 />
                 <div className="min-w-0 flex-1">
@@ -427,7 +468,14 @@ export function ChatPage() {
                     <Skeleton className="h-4 w-40" />
                   )}
                 </div>
-                <Button type="button" variant="secondary" size="sm" icon={Plus} onClick={startNewThread}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  icon={Plus}
+                  disabled={agentsLoading}
+                  onClick={startNewThread}
+                >
                   {t("chat.threads.new")}
                 </Button>
               </div>
@@ -440,11 +488,16 @@ export function ChatPage() {
                 className="min-h-0 flex-1 space-y-6 overflow-y-auto p-4"
                 data-testid="chat-conversation"
               >
-                {threadId && thread.isLoading && !pending ? (
+                {threadLoading && !pending ? (
+                  // 会話の内容の読み込み中は文言と経過時間を出し、会話の形の Skeleton で寸法を予約する（3 製品で同じ。#1153）。
                   <TimedLoadingState label={t("chat.loading")} framed={false} testId="chat-thread-loading">
-                    <ListSkeleton rows={3} />
+                    <ChatSkeleton />
                   </TimedLoadingState>
-                ) : threadId && thread.isError && !thread.data && !threadMissing ? (
+                ) : agentsLoading ? (
+                  // 業務 Agent の一覧の読み込み中は空の状態を出さず、会話の形の Skeleton だけを出す。
+                  // 経過時間は上のカードが出しているので重ねない（同じ取得の経過時間は 1 か所。#1153）。
+                  <ChatSkeleton testId="chat-conversation-skeleton" />
+                ) : threadFailed ? (
                   // 会話を読めなかった（一時的な失敗）。選んだ会話のまま、理由と再試行を出す。
                   <ApiErrorBanner
                     error={thread.error}
@@ -501,7 +554,7 @@ export function ChatPage() {
                       runLabel={t("chat.send")}
                       stopLabel={t("chat.stop")}
                       runIcon={SendHorizontal}
-                      runDisabled={!draft.trim() || composerBlocked}
+                      runDisabled={!draft.trim() || composerBlocked || prerequisitesLoading || threadFailed}
                       size="lg"
                       testId="chat-send"
                     />
@@ -523,6 +576,8 @@ export function ChatPage() {
                     }}
                     rows={2}
                     placeholder={t("chat.composer.placeholder")}
+                    // 前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
+                    disabled={prerequisitesLoading}
                     className="space-y-0"
                   />
                 </FieldActionRow>
@@ -548,9 +603,15 @@ function ThreadList({
   onRetry,
   currentThreadId,
   onOpen,
+  waiting,
 }: {
   threads: ThreadSummary[];
   loading: boolean;
+  /**
+   * 業務 Agent の一覧を読み込んでいて、会話の一覧をまだ取得できない（#1153）。「まだ会話がありません」と出さず、
+   * 一覧の形の Skeleton だけを出す（経過時間は業務 Agent のカードが出しているので重ねない）。
+   */
+  waiting: boolean;
   /** 一覧を読めなかったときの失敗（読めていない一覧を「まだ会話がありません」と出さない）。 */
   error: unknown;
   retrying: boolean;
@@ -558,6 +619,7 @@ function ThreadList({
   currentThreadId: string | null;
   onOpen: (thread: ThreadSummary) => void;
 }) {
+  if (waiting) return <ListSkeleton rows={4} testId="chat-threads-skeleton" />;
   if (loading) {
     return (
       <TimedLoadingState label={t("chat.threads.loading")} framed={false} testId="chat-threads-loading">
