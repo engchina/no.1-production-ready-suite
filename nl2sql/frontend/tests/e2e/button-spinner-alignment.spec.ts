@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { expectSpinnerStable } from "./_helpers/spinner-stability";
 
 /**
  * ボタンの loading スピナーが「一定の中心」で回転することを実画面で検証する。
@@ -8,9 +9,9 @@ import { mockDatabaseGateReady } from "./_helpers/database-gate";
  * インクの重心とシルエットが回転角ごとに動き、中心がずれて上下に揺れて見えていた。
  * デザインシステム移行（#529）後は共有パッケージ `@engchina/production-ready-ui` の
  * `Spinner`（全周トラック circle + 270° arc、`svg.animate-spin`）を使う。
- * 旧 `StableLoadingIcon` 固有の「180° 対称 active arc の重心」検証は共有 Spinner の
- * 形状に当てはまらないため削除し、16px・中央配置・フレーム間ドリフトなし・
- * reduced motion でも回転を続ける（#440）、を共有 Spinner に対して維持する。
+ * 移行のときに旧 `StableLoadingIcon` の「180° 対称 active arc の重心」の検証を削除したため、共有 Spinner の
+ * 270° の 1 本のアークで重心が回り、上下に揺れて見える状態に戻っていた（#1180）。共有 Spinner を 180° 対称の
+ * 2 本のアークにし、角度ごとに撮った見た目の重心が動かないことをここで再び確かめる。
  */
 
 // 共有 Button の loading は先頭アイコンを共有 Spinner（svg.animate-spin）へ置き換える
@@ -193,7 +194,7 @@ test("スピナーは全周トラックを持ちシルエットが回転角に�
     };
   });
 
-  // 共有 Spinner: viewBox 中心に全周トラックを 1 本敷き、その上を arc 1 本が回る。
+  // 共有 Spinner: viewBox 中心に全周トラックを 1 本敷き、その上を 180° 対称の 2 本のアーク（1 つの path）が回る。
   // 閉じた円が常に外形を決めるため、回転角でシルエットが変わらない。
   expect(shape.trackCount).toBe(1);
   expect(shape.trackCenter).toEqual([["12", "12"]]);
@@ -203,6 +204,15 @@ test("スピナーは全周トラックを持ちシルエットが回転角に�
   // loading 中は aria-busy + disabled。先頭アイコンはスピナー 1 つだけ（二重表示しない）
   await expect(button).toHaveAttribute("aria-busy", "true");
   await expect(button.locator("svg:visible")).toHaveCount(1);
+});
+
+test("回転しても見た目の重心が上下・左右に動かず、箱とボタンの位置・高さも変わらない（#1180）", async ({ page }) => {
+  const { button } = await startPendingRun(page);
+  const box = button.locator(".pr-spinner");
+  await expectSpinnerStable(box);
+  // 箱はボタンの先頭アイコンと同じ 16px の正方形
+  await expect(box).toHaveCSS("width", "16px");
+  await expect(box).toHaveCSS("height", "16px");
 });
 
 test("スピナーはボタンの垂直中心に配置される", async ({ page }) => {

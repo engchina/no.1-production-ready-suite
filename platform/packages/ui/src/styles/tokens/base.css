@@ -184,10 +184,29 @@ body {
 }
 
 /*
- * 回転アイコン（animate-spin）は原点を viewBox 中心（= 図形中心）へ固定し、
+ * Spinner の箱（#1180）。回転しない固定の正方形（寸法は Spinner が inline style で渡す）で、中の svg だけが回る。
+ * - contain: strict（size / layout / paint / style）: 回転した正方形の外接矩形（最大 1.41 倍）を箱の外へ出さず、
+ *   周りの行の位置・高さ・スクロールの領域に回転を入れない（描画は箱で切られるが、円は内接円の中に収まる）。
+ * - inline-block + vertical-align: middle + line-height: 0: 文の中に置いてもベースライン・行の高さに乗らない。
+ *   flex / grid の中では flex: none で縮まない・伸びない。
+ */
+.pr-spinner {
+  display: inline-block;
+  flex: none;
+  line-height: 0;
+  vertical-align: middle;
+  contain: strict;
+}
+
+.pr-spinner > svg {
+  display: block;
+}
+
+/*
+ * 回転アイコン（animate-spin。共有の Spinner の内側の svg だけ）は原点を viewBox 中心（= 図形中心）へ固定し、
  * 継続回転する要素として独立レイヤーで合成させる（毎フレームの再ラスタライズを避ける）。
- * 「回転が中心からずれて見える」現象の主因は図形側（欠けた円弧はインクの重心が
- * 角度ごとに動く）なので、スピナーには全周トラックを持つ Spinner を使うこと。
+ * 「回転が中心からずれて見える」現象の主因は図形側（欠けた円弧・1 本のアークはインクの重心が
+ * 角度ごとに動く）なので、スピナーには 180 度対称のアークを持つ Spinner を使うこと（#1180）。
  */
 svg.animate-spin {
   transform-box: view-box;

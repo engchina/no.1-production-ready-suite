@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 import { expect, test, type MockApi } from "./fixtures/mock-api";
 import { expectProgressTimerMonotonic, startProgressTimerSampler } from "./fixtures/progress-timer";
+import { expectSpinnerStable } from "./fixtures/spinner-stability";
 
 // #1147: チャットの回答の場所に、Run の処理の段階（考えている・ツールの呼び出し・承認待ち・回答の作成）を
 // 共有の ChatProgress（3 製品共通。#1145）で出す。会話の取り直し（polling）で段階が進むことを確かめる。
@@ -95,8 +96,9 @@ for (const viewport of VIEWPORTS) {
       await expect(current).toHaveAttribute("data-step-id", "plan");
       await expect(current).toContainText("考えています");
       await expect(turn.getByTestId("chat-progress-timer")).toBeVisible();
-      // 動くスピナーは今の段階の 1 つだけ。
+      // 動くスピナーは今の段階の 1 つだけ。回転しても見た目の重心も箱・行も動かない（#1180）。
       await expect(turn.locator("svg.animate-spin:visible")).toHaveCount(1);
+      await expectSpinnerStable(current.locator(".pr-spinner"));
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`progress-plan-${viewport.name}-${theme}.png`) });
 
