@@ -77,9 +77,9 @@ def test_sql_row_limit_omitted_keeps_api_contract() -> None:
 @pytest.mark.parametrize(
     ("question", "message"),
     [
-        ("", "クエリを入力してください。"),
-        ("   \n\t", "クエリを入力してください。"),
-        ("a" * 10001, "クエリは 10000 文字以内で入力してください。"),
+        ("", "質問を入力してください。"),
+        ("   \n\t", "質問を入力してください。"),
+        ("a" * 10001, "質問は 10000 文字以内で入力してください。"),
     ],
     ids=["empty", "blank", "too-long"],
 )

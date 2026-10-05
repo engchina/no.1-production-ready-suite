@@ -76,7 +76,26 @@ test("一括選択は範囲が明確な共通文言を返す", () => {
   assert.equal(t("knowledgeBasePicker.clear"), "選択をすべて解除");
 });
 
-test("SQL生成画面の自然言語入力名は「クエリ」に統一されている", () => {
+test("利用者が入力する自然言語の呼び名は「質問」に統一されている", () => {
+  // 3 製品で利用者の自然言語の入力は「質問」と呼ぶ（#1183）。「クエリ」は SQL・技術の概念
+  // （サブクエリなど）にだけ使い、辞書の文言には書かない。旧称「検索クエリ」はコードにも残さない。
+  assert.equal(t("nl2sql.question.label"), "質問");
+  assert.equal(t("nl2sql.query.actions.startNew"), "新しい質問を開始");
+  assert.equal(t("nl2sql.result.rewritten"), "書き換えた質問");
+  assert.equal(t("history.rewritten"), "書き換えた質問");
+
+  const dictionaryViolations = dictionaryPaths.flatMap((path) => {
+    const source = readFileSync(path, "utf8");
+    return Array.from(source.matchAll(/(?<!サブ)クエリ/gu), (match) =>
+      `${relative(repositoryRoot, path)}:${lineNumber(source, match.index)}`
+    );
+  });
+  assert.equal(
+    dictionaryViolations.length,
+    0,
+    `利用者向けの文言に「クエリ」が残っています。利用者の自然言語の入力は「質問」と呼んでください:\n${dictionaryViolations.join("\n")}`
+  );
+
   const forbiddenTerm = /検索\s*クエリ/u;
   const checkedFiles = [
     ...filesMatching(sourceRoot, /\.tsx?$/u),
@@ -93,6 +112,6 @@ test("SQL生成画面の自然言語入力名は「クエリ」に統一され�
   assert.equal(
     violations.length,
     0,
-    `自然言語入力の旧称が残っています。正規名称「クエリ」へ変更してください:\n${violations.join("\n")}`
+    `自然言語入力の旧称が残っています。「質問」へ変更してください:\n${violations.join("\n")}`
   );
 });

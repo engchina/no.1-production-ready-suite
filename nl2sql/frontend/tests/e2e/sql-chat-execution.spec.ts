@@ -330,7 +330,7 @@ test("0 行は「該当する行はありません」、実行の失敗は吹き
         status: "error",
         results: { columns: [], rows: [], total: 0 },
         error_message:
-          "生成した SQL の実行に失敗しました。生成した SQL と「詳細」の Oracle のエラーを確認し、クエリを言い換えて実行し直してください。",
+          "生成した SQL の実行に失敗しました。生成した SQL と「詳細」の Oracle のエラーを確認し、質問を言い換えて実行し直してください。",
         error_code: "ORA-00942",
         error_detail: "SELECT の実行に失敗しました: ORA-00942: table or view does not exist",
       }),
