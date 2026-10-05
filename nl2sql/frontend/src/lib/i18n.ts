@@ -1575,7 +1575,6 @@ const nl2sqlJa = {
   "profiles.ontology.inspector": "業務定義の詳細",
   "profiles.ontology.usage": "表の用途",
   "profiles.ontology.cardinality": "関係の多重度",
-  "profiles.ontology.allowedPath": "検索で利用できる関係",
   "profiles.ontology.draftHint": "関係や業務名の変更は draft として保存され、公開済み定義を直接変更しません。",
   "profiles.ontology.unresolvedTitle": "公開オントロジーに解決できない対象オブジェクトがあります",
   "profiles.ontology.emptyTitle": "物理・業務モデルはまだ表示できません",
