@@ -478,7 +478,7 @@ def execute(req: ExecuteRequest, request: Request) -> ApiResponse[QueryResults]:
 
 @router.post("/jobs", response_model=ApiResponse[JobCreateData])
 def create_job(req: JobCreateRequest, request: Request) -> ApiResponse[JobCreateData]:
-    """NL2SQL 検索 job を開始する。"""
+    """NL2SQL の SQL 生成・実行の job を開始する。"""
     principal = getattr(request.state, "principal", None)
     # job は生成に加えて SQL を実行する。manifest（生成）に加えて実行の権限も要求する（#242）。
     if (
@@ -579,7 +579,7 @@ def get_sql_chat(conversation_id: str, request: Request) -> ApiResponse[SqlChatD
 
 @router.get("/jobs/{job_id}", response_model=ApiResponse[JobData])
 def get_job(job_id: str, request: Request) -> ApiResponse[JobData]:
-    """NL2SQL 検索 job の状態・結果を返す。"""
+    """NL2SQL の SQL 生成・実行の job の状態・結果を返す。"""
     try:
         access = _actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION)
         job = nl2sql_service.get_job(
@@ -601,7 +601,7 @@ def get_job(job_id: str, request: Request) -> ApiResponse[JobData]:
 
 @router.post("/jobs/{job_id}/cancel", response_model=ApiResponse[JobData])
 def cancel_job(job_id: str, request: Request) -> ApiResponse[JobData]:
-    """実行中の NL2SQL 検索 job の協調キャンセルを要求する。
+    """実行中の NL2SQL の SQL 生成・実行の job の協調キャンセルを要求する。
 
     worker は stage 境界で検出して停止する(実行中 stage の途中では止まらない)。
     terminal な job には no-op で現在の状態を返す。
@@ -1417,7 +1417,7 @@ def history(
     rating: str = "all",
     safety: str = "all",
 ) -> ApiResponse[HistoryData]:
-    """NL2SQL 検索履歴(新しい順の cursor page)。
+    """NL2SQL の実行履歴(新しい順の cursor page)。
 
     非 system admin は自分の履歴だけ。`next_cursor` が非空なら続きがある。
     """
@@ -1466,7 +1466,7 @@ def history(
 
 @router.post("/feedback", response_model=ApiResponse[FeedbackData])
 def feedback(req: FeedbackRequest, request: Request) -> ApiResponse[FeedbackData]:
-    """検索結果 feedback を保存する。"""
+    """実行結果への feedback を保存する。"""
     try:
         access = _actor_access_args(request, manage_permission=FEEDBACK_MANAGE_PERMISSION)
         data = nl2sql_service.save_feedback(

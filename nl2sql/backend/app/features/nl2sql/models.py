@@ -66,7 +66,7 @@ class JobStepStatus(StrEnum):
 
 
 class FeedbackRating(StrEnum):
-    """検索結果へのフィードバック。"""
+    """実行結果へのフィードバック。"""
 
     GOOD = "good"
     BAD = "bad"
@@ -997,7 +997,7 @@ class Nl2SqlResult(BaseModel):
 
 
 class Nl2SqlQuestionInterpretation(BaseModel):
-    """検索質問を業務実行向けに解釈した表示用 artifact。"""
+    """質問を業務実行向けに解釈した表示用 artifact。"""
 
     available: bool = False
     source: str = "deterministic"
@@ -1340,7 +1340,7 @@ class SqlChatData(BaseModel):
 
 
 class HistoryItem(BaseModel):
-    """検索履歴。"""
+    """実行履歴。"""
 
     generation_only: bool = False
 
@@ -1390,7 +1390,7 @@ class HistoryItem(BaseModel):
 
 
 class HistoryData(BaseModel):
-    """検索履歴 response(cursor pagination)。"""
+    """実行履歴 response(cursor pagination)。"""
 
     items: list[HistoryItem]
     # 続きがあるときだけ非空。UI は「さらに読み込む」でこの cursor を渡す。
@@ -1400,7 +1400,7 @@ class HistoryData(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    """検索結果への feedback request."""
+    """実行結果への feedback request."""
 
     history_id: str
     rating: FeedbackRating

@@ -246,7 +246,7 @@ def _render_clarified_question(
     resolution: str,
     summary_key: str = "",
 ) -> str:
-    """構造化 intent 全体を、利用者が確認できる自然な検索要求へ再構成する。"""
+    """構造化 intent 全体を、利用者が確認できる自然な質問へ再構成する。"""
 
     answer = resolution.strip().rstrip("。！？!?")
     target_names = _unique_business_names(item.name_ja for item in intent.entities)
@@ -310,7 +310,7 @@ def _render_clarified_question(
         scope = f"{scope}のうち、{condition_text}のデータ" if scope else f"{condition_text}のデータ"
 
     if output_names:
-        request = f"検索結果には{'、'.join(output_names)}を表示してください。"
+        request = f"結果には{'、'.join(output_names)}を表示してください。"
     else:
         original = _clean_question_text(intent.question_original)
         request = _request_sentence(original) if original else "該当する情報を表示してください。"
@@ -617,7 +617,7 @@ def _question_for_ambiguity(
         )
     ):
         # 埋め込み検索の列候補は「意味を一つ選ぶ」質問ではなく、利用者が
-        # 検索結果へ必要な項目を選ぶ質問として提示する。
+        # 結果へ必要な項目を選ぶ質問として提示する。
         category = ClarificationCategory.OUTPUT
     options = _options_for(category, ambiguity, intent, candidate_nodes)
     prompt, reason, answer_kind = _question_copy(category, candidate_nodes)
@@ -665,7 +665,7 @@ def _confirmation_question(item: IntentSummaryItem) -> ClarificationQuestion:
         "granularity": ClarificationCategory.GRANULARITY,
     }[item.key]
     prompt = {
-        "entities": f"検索対象は「{item.value_ja}」で合っていますか？",
+        "entities": f"対象は「{item.value_ja}」で合っていますか？",
         "metrics": f"集計する指標は「{item.value_ja}」で合っていますか？",
         "dimensions": f"表示する項目は「{item.value_ja}」で合っていますか？",
         "filters": f"絞り込み条件は「{item.value_ja}」で合っていますか？",
@@ -803,18 +803,18 @@ def _question_copy(
     if category == ClarificationCategory.FILTER_VALUE:
         return (
             "どの条件で絞り込みますか？",
-            "必要なデータだけを検索するため、絞り込み条件を確認します。",
+            "必要なデータだけを取り出すため、絞り込み条件を確認します。",
             ClarificationAnswerKind.SINGLE_SELECT,
         )
     if category == ClarificationCategory.OUTPUT:
         if candidate_nodes:
             return (
-                "検索結果に表示する項目を選んでください。",
+                "結果に表示する項目を選んでください。",
                 "質問だけでは必要な表示項目を絞れませんでした。必要な項目をすべて選んでください。",
                 ClarificationAnswerKind.MULTI_SELECT,
             )
         return (
-            "検索結果に何を表示しますか？",
+            "結果に何を表示しますか？",
             "必要な結果を作るため、表示内容を確認します。",
             ClarificationAnswerKind.SINGLE_SELECT,
         )
@@ -835,11 +835,11 @@ def _question_copy(
     }:
         return (
             "どの業務対象について調べますか？",
-            "検索対象の候補が複数あるため、意図した対象をすべて選んでください。",
+            "対象の候補が複数あるため、意図した対象をすべて選んでください。",
             ClarificationAnswerKind.MULTI_SELECT,
         )
     return (
-        "検索対象として意図しているものを選んでください。",
+        "対象として意図しているものを選んでください。",
         "質問だけでは必要な候補を絞れなかったため、意図したものをすべて選んでください。",
         ClarificationAnswerKind.MULTI_SELECT,
     )
@@ -860,11 +860,11 @@ def _node_option(
     category: ClarificationCategory,
 ) -> ClarificationOption:
     if category == ClarificationCategory.OUTPUT:
-        description = f"検索結果に「{node.business_name_ja}」を表示します。"
+        description = f"結果に「{node.business_name_ja}」を表示します。"
     elif node.kind == OntologyNodeKind.METRIC:
         description = f"「{node.business_name_ja}」の定義で集計します。"
     else:
-        description = f"「{node.business_name_ja}」を検索対象として扱います。"
+        description = f"「{node.business_name_ja}」を対象として扱います。"
     return ClarificationOption(
         id=stable_ontology_id("clarification_option", ambiguity.id, node.id),
         label_ja=node.business_name_ja,

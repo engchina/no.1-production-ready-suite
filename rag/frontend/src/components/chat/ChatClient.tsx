@@ -1606,7 +1606,7 @@ export function ChatClient() {
                 onRetry={() => void conversationQuery.refetch()}
               />
             ) : turns.length === 0 && !liveTurn && !pendingChoice ? (
-              <EmptyState title={t("chat.messages.empty")} />
+              <EmptyState title={t("chat.messages.empty")} hint={t("chat.messages.emptyHint")} />
             ) : (
               <>
                 {turns.map((turn) => (

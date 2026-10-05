@@ -71,7 +71,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await expect(panel).toBeVisible();
     await expect(page.getByTestId("sql-chat-conversation-skeleton")).toBeVisible();
     await expect(
-      page.getByText("どのような SQL を生成しますか？", { exact: true }),
+      page.getByText("質問を入力して会話を始めます", { exact: true }),
     ).toHaveCount(0);
     await expect(panel.getByRole("timer")).toHaveCount(0);
     await expect(page.getByRole("timer")).toHaveCount(1);
@@ -94,7 +94,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await expect(page.getByTestId("sql-chat-profiles-loading")).toHaveCount(0);
     await expect(page.getByTestId("sql-chat-conversation-skeleton")).toHaveCount(0);
     await expect(
-      page.getByText("どのような SQL を生成しますか？", { exact: true }),
+      page.getByText("質問を入力して会話を始めます", { exact: true }),
     ).toBeVisible();
     const composer = page.getByRole("textbox", { name: "質問", exact: true });
     await expect(composer).toBeEnabled();
@@ -150,7 +150,7 @@ test("業務プロファイルの一覧を読めなかったときは、空の�
   // 会話の欄（空の状態・入力欄）は出さない。
   await expect(page.getByTestId("sql-chat-panel")).toHaveCount(0);
   await expect(
-    page.getByText("どのような SQL を生成しますか？", { exact: true }),
+    page.getByText("質問を入力して会話を始めます", { exact: true }),
   ).toHaveCount(0);
   await expect(
     page.getByText("利用できる業務プロファイルがありません", { exact: true }),
@@ -160,6 +160,6 @@ test("業務プロファイルの一覧を読めなかったときは、空の�
   await error.getByRole("button", { name: "再読み込み" }).click();
   await expect(page.locator("#sql-chat-profile")).toContainText("売上分析");
   await expect(
-    page.getByText("どのような SQL を生成しますか？", { exact: true }),
+    page.getByText("質問を入力して会話を始めます", { exact: true }),
   ).toBeVisible();
 });
