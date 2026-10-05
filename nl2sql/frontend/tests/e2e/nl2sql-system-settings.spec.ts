@@ -1350,8 +1350,8 @@ test("DB パスワード表示ボタンの取得中 icon は上下に浮動し�
   await expect(revealButton).toHaveAttribute("aria-label", "DB パスワードを取得中");
   await expect(revealButton).toBeDisabled();
 
-  // 共有 Spinner（svg.animate-spin: 全周トラック circle + arc 1 本）。旧 StableLoadingIcon の
-  // 「対称 active arc 2 本」は共有 Spinner の形状に当てはまらないため、トラックの有無で検証する。
+  // 共有 Spinner（svg.animate-spin: 全周トラック circle + 180 度対称の 2 本のアーク。#1180）。
+  // 見た目の重心が動かないことは button-spinner-alignment.spec.ts で測る。ここではトラックの有無を確かめる。
   const loadingIcon = revealButton.locator("svg.animate-spin");
   await expect(loadingIcon).toBeVisible();
   await expect(revealButton.locator("svg:visible")).toHaveCount(1);

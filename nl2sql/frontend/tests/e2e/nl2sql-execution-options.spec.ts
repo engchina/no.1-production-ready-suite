@@ -683,10 +683,10 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
     use_ontology_context: false,
   });
   await expect(executionOptionsDisclosure).toContainText("条件あり");
-  const resetButton = page.getByRole("button", { name: "新しいクエリを開始", exact: true });
+  const resetButton = page.getByRole("button", { name: "新しい質問を開始", exact: true });
   await expect(resetButton).toBeEnabled();
   await resetButton.click();
-  await page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" }).getByRole("button", { name: "新しいクエリを開始" }).click();
+  await page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" }).getByRole("button", { name: "新しい質問を開始" }).click();
   await expect(executionOptionsDisclosure).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByLabel("公開版オントロジーを使う")).toBeHidden();
   await executionOptionsDisclosure.click();
@@ -764,14 +764,14 @@ test("AI要件確認は確認内容をクエリへ反映し、通常の検索実
   ).toBeVisible();
   await expect(panel.getByText("期間")).toBeVisible();
   await expect(panel.getByText("今月")).toBeVisible();
-  await page.getByRole("button", { name: "確認内容をクエリに反映" }).click();
+  await page.getByRole("button", { name: "確認内容を質問に反映" }).click();
 
   const questionInput = page.locator("#nl2sql-question-input");
   const clarifiedQuestion = "今月を対象に、受注件数を表示してください。";
   await expect(panel).toHaveCount(0);
   await expect(questionInput).toHaveValue(clarifiedQuestion);
   await expect(questionInput).toBeFocused();
-  await expect(page.getByText("確認内容をクエリに反映しました。内容を確認して「SQL を生成して実行」を押してください。")).toBeVisible();
+  await expect(page.getByText("確認内容を質問に反映しました。内容を確認して「SQL を生成して実行」を押してください。")).toBeVisible();
   await expect(page.getByText("生成したSQL")).toHaveCount(0);
   expect(api.jobPayload).toBeNull();
   await expectNoHorizontalOverflow(page);

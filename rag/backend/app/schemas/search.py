@@ -584,10 +584,10 @@ def format_search_id_filter(values: Sequence[str]) -> str:
 
 
 def normalize_query_text(query: str) -> str:
-    """検索・評価に使う自然言語クエリを正規化する。"""
+    """検索・評価に使う自然言語の質問を正規化する。"""
     cleaned = query.strip()
     if not cleaned:
-        raise ValueError("クエリを入力してください。")
+        raise ValueError("質問を入力してください。")
     return cleaned
 
 

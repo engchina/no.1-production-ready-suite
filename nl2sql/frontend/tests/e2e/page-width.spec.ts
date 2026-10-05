@@ -93,7 +93,7 @@ test("AI要件確認の未入力案内は補助テキストで、無効なボタ
   await expect(page.getByRole("alert")).toHaveCount(0);
   const button = page.getByRole("button", { name: "AI要件確認", exact: true });
   await expect(button).toBeDisabled();
-  await expect(button).toHaveAccessibleDescription("AI要件確認を始めるにはクエリを入力してください。");
+  await expect(button).toHaveAccessibleDescription("AI要件確認を始めるには質問を入力してください。");
   const colors = await hint.evaluate((node) => {
     const probe = document.createElement("span");
     probe.style.color = "var(--color-fg-muted)";

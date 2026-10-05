@@ -1895,8 +1895,8 @@ export const ja = {
   "flow.phase.startFailed": "{phase}を開始できませんでした。",
   "flow.indexed": "索引が完了し、RAG 検索の対象になりました。",
   "documents.experiment.compare.title": "検索結果を横並びで比較",
-  "documents.experiment.compare.queryLabel": "比較用の検索クエリ",
-  "documents.experiment.compare.placeholder": "この文書に投げたい検索クエリを入力",
+  "documents.experiment.compare.queryLabel": "比較する質問",
+  "documents.experiment.compare.placeholder": "この文書で試したい質問を入力",
   "documents.experiment.compare.run": "比較",
   "documents.experiment.compare.error": "比較検索に失敗しました。",
   "flow.preprocessed.description":
