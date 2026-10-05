@@ -145,7 +145,9 @@ export function ChatPage() {
   }, [threadMissing, threadOfOtherAgent, setThreadId]);
 
   // 画面の前提（業務 Agent の一覧・開いている会話の内容）が揃うまでは、会話の欄に空の状態を出さず
-  // 会話の形の Skeleton で覆い、入力欄・送信・新しい会話・履歴の開閉を無効にする（messaging.md §11.7、#1153）。
+  // 会話の形の Skeleton で覆い、送信を止める（messaging.md §11.7、#1153）。入力欄・新しい会話・履歴の開閉を
+  // 無効にするのは業務 Agent の一覧の読み込み中だけ。会話の内容の読み込み中は入力欄に書ける
+  // （書いている途中で無効にしてフォーカスと入力を失わせない。#1188）。
   // 会話の内容を読めなかった（一時的な失敗）ときも送信しない（内容の分からない会話に続けて送らない）。
   const agentsLoading = agents.isLoading;
   const threadLoading = Boolean(threadId) && thread.isLoading;
@@ -421,7 +423,8 @@ export function ChatPage() {
                 {/* 入力欄の領域（入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。送信と停止は同じボタンで、
                     送信の要求中・回答の作成中・承認待ちは同じ位置で「停止」になる（buttons.md §3.1、#805）。
                     IME の変換を確定する Enter では送信しない（#459）。Shift+Enter は改行。
-                    前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。 */}
+                    業務 Agent の一覧の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
+                    会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
                 <ChatComposer
                   id="chat-composer"
                   textareaRef={composerRef}
@@ -430,8 +433,8 @@ export function ChatPage() {
                   onSubmit={submit}
                   onStop={stop}
                   running={stoppable}
-                  submitBlocked={composerBlocked || threadFailed}
-                  disabled={prerequisitesLoading}
+                  submitBlocked={composerBlocked || threadLoading || threadFailed}
+                  disabled={agentsLoading}
                   label={t("chat.composer.label")}
                   placeholder={t("chat.composer.placeholder")}
                   sendLabel={t("chat.send")}

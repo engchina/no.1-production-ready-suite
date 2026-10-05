@@ -5,7 +5,8 @@ import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 /**
  * チャットの前提（業務 Agent の一覧・開いている会話の内容）の読み込み中・失敗の表示（#1153）。
  * 3 製品で同じ規則（UX 契約 messaging.md §11.7）: 前提が揃うまで会話の欄に空の状態を出さず、
- * 会話の形の Skeleton を出し、入力欄・送信・新しい会話・履歴の開閉を無効にする。
+ * 会話の形の Skeleton を出し、送信を止める。入力欄・新しい会話・履歴の開閉を無効にするのは対象の一覧の
+ * 読み込み中だけで、会話の内容の読み込み中は入力欄に書ける（#1188）。
  * desktop と mobile-375 の 2 project で実行する。
  */
 
@@ -132,14 +133,19 @@ test("会話の内容の読み込み中は会話の形の Skeleton と経過時�
   await expect(loading).toContainText("会話を読み込んでいます");
   await expect(loading.locator('[data-skeleton="chat"]')).toBeVisible();
   await expect(page.getByText("質問を入力して会話を始めます")).toHaveCount(0);
+  // 会話の内容の読み込み中も入力欄には書ける（書いている途中で無効にしない。#1188）。送信だけを止める。
   const composer = page.getByRole("textbox", { name: "質問" });
-  await expect(composer).toBeDisabled();
+  await expect(composer).toBeEnabled();
+  await composer.fill("続きの質問");
   await expect(page.getByTestId("chat-send")).toBeDisabled();
+  await composer.press("Enter");
+  await expect(page.getByTestId("chat-pending-turn")).toHaveCount(0);
+  await expect(composer).toHaveValue("続きの質問");
 
   release();
   await expect(page.getByTestId("chat-thread-error")).toContainText("会話を取得できません。");
   await expect(page.getByText("質問を入力して会話を始めます")).toHaveCount(0);
-  await composer.fill("続きの質問");
+  await expect(composer).toHaveValue("続きの質問");
   await expect(page.getByTestId("chat-send")).toBeDisabled();
   await composer.press("Enter");
   await expect(page.getByTestId("chat-pending-turn")).toHaveCount(0);

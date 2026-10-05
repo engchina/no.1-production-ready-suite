@@ -366,8 +366,9 @@ export function SqlChatPage() {
   const conversationLoading =
     Boolean(conversationId) && conversation.isPending && !pending;
   // 画面の前提（業務プロファイルの一覧・開いている会話の内容）が揃うまでは、会話の欄に空の状態を出さず
-  // 会話の形の Skeleton で覆い、入力欄・生成方法・送信・新しい会話・履歴の開閉を無効にする（#1153）。
-  const prerequisitesLoading = profilesLoading || conversationLoading;
+  // 会話の形の Skeleton で覆い、送信を止める（`blocked`。#1153）。入力欄・生成方法・新しい会話・履歴の開閉を
+  // 無効にするのは業務プロファイルの一覧の読み込み中だけ。会話の内容の読み込み中は入力欄に書ける
+  // （書いている途中で無効にしてフォーカスと入力を失わせない。messaging.md §11.7、#1188）。
   const blocked =
     busy ||
     generating ||
@@ -606,7 +607,8 @@ export function SqlChatPage() {
             composer={
               <>
                 {/* 入力欄の領域（設定の行・入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。
-                    前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。 */}
+                    業務プロファイルの一覧の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
+                    会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
                 <ChatComposer
                   id="sql-chat-composer"
                   value={draft}
@@ -617,7 +619,7 @@ export function SqlChatPage() {
                   }}
                   running={generating}
                   submitBlocked={blocked}
-                  disabled={prerequisitesLoading}
+                  disabled={profilesLoading}
                   label={t("chat.query")}
                   placeholder={t("chat.placeholder")}
                   sendLabel={t("chat.send")}
@@ -647,7 +649,7 @@ export function SqlChatPage() {
                         value={engine}
                         size="sm"
                         width="sm"
-                        disabled={busy || generating || prerequisitesLoading}
+                        disabled={busy || generating || profilesLoading}
                         onValueChange={setEngine}
                         describedBy={engineDescriptionId}
                         options={CHAT_ENGINES.map(({ value, label }) => ({
