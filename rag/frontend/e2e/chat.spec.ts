@@ -205,7 +205,7 @@ async function mockChat(
       if (conversationListMode === "error") {
         await route.fulfill({
           status: 500,
-          json: { data: null, error_messages: ["test error"], warning_messages: [] },
+          json: { data: null, error_messages: ["会話一覧を読み込めませんでした。"], warning_messages: [] },
         });
         return;
       }

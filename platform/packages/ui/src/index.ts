@@ -170,6 +170,13 @@ export {
   type ChatComposerProps,
 } from "./components/chat/chat-composer";
 export {
+  ChatHistoryList,
+  type ChatHistoryItem,
+  type ChatHistoryListLabels,
+  type ChatHistoryListProps,
+  type ChatHistoryListTestIds,
+} from "./components/chat/chat-history-list";
+export {
   CHAT_HISTORY_INLINE_QUERY,
   useChatHistoryPanel,
   useMediaQuery,
