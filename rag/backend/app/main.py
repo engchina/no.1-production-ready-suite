@@ -23,6 +23,7 @@ from app.api.router import api_router
 from app.clients.oracle import close_oracle_pool
 from app.config import Settings, get_settings
 from app.logging_config import configure_logging
+from app.rag.chat_answer_runs import get_chat_answer_run_service
 from app.rag.evaluation_jobs import get_evaluation_job_service
 from app.rag.observability import (
     close_trace_exporter,
@@ -113,6 +114,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # このプロセスで実行中の品質評価の job を打ち切り、失敗にする（#390。別のプロセスは
         # 引き継がない）。
         await get_evaluation_job_service().shutdown()
+        # このプロセスで作成中のチャットの回答を打ち切り、中断として保存する（#1175）。
+        await get_chat_answer_run_service().shutdown()
         if worker_task is not None:
             if worker_stop is not None:
                 worker_stop.set()

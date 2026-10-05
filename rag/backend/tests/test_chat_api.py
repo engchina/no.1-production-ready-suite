@@ -22,8 +22,9 @@ from app.clients.oracle import (
 )
 from app.config import EnterpriseAiConfiguredModel, Settings, get_settings
 from app.main import app
-from app.rag import oracle_schema
+from app.rag import chat_answer_runs, oracle_schema
 from app.rag.answer_timeout import answer_timeout_message
+from app.rag.chat_answer_runs import ChatAnswerRunService
 from app.rag.guardrails import GuardrailPolicy
 from app.rag.pipeline import (
     ChatTurn,
@@ -163,6 +164,9 @@ class FakeChatOracle:
             status=message.status,
             elapsed_ms=message.elapsed_ms,
             created_at=message.created_at or datetime(2026, 1, 1, tzinfo=UTC),
+            progress=message.progress,
+            lease_owner=message.lease_owner,
+            heartbeat_at=datetime.now(UTC) if message.lease_owner else None,
         )
         self.messages.setdefault(stored.conversation_id, []).append(stored)
         if stored.conversation_id in self.conversations:
@@ -182,6 +186,81 @@ class FakeChatOracle:
         self, conversation_id: str, *, limit: int | None = None
     ) -> list[StoredMessage]:
         return list(self.messages.get(conversation_id, []))
+
+    # --- 作成中の回答（#1175）。条件は OracleClient の SQL と同じ。 ---
+
+    def _find(self, message_id: str) -> StoredMessage | None:
+        for messages in self.messages.values():
+            for message in messages:
+                if message.id == message_id:
+                    return message
+        return None
+
+    async def update_chat_message_progress(
+        self, message_id: str, *, lease_owner: str, progress: list[dict[str, object]]
+    ) -> bool:
+        message = self._find(message_id)
+        if message is None or message.status != "STREAMING" or message.lease_owner != lease_owner:
+            return False
+        message.progress = progress
+        message.heartbeat_at = datetime.now(UTC)
+        return True
+
+    async def heartbeat_chat_message(self, message_id: str, *, lease_owner: str) -> bool:
+        message = self._find(message_id)
+        if message is None or message.status != "STREAMING" or message.lease_owner != lease_owner:
+            return False
+        message.heartbeat_at = datetime.now(UTC)
+        return True
+
+    async def finish_chat_message(self, message: StoredMessage, *, lease_owner: str) -> bool:
+        current = self._find(message.id)
+        if current is None or current.status != "STREAMING" or current.lease_owner != lease_owner:
+            return False
+        current.content = message.content
+        current.model = message.model
+        current.citations = message.citations
+        current.guardrail_warnings = message.guardrail_warnings
+        current.trace_id = message.trace_id
+        current.status = message.status
+        current.elapsed_ms = message.elapsed_ms
+        current.progress = message.progress
+        current.heartbeat_at = datetime.now(UTC)
+        return True
+
+    async def close_streaming_chat_message(
+        self,
+        message_id: str,
+        *,
+        status: str,
+        content: str,
+        lease_owner: str | None = None,
+        stale_seconds: float | None = None,
+        scoped: bool = True,
+    ) -> bool:
+        message = self._find(message_id)
+        if message is None or message.status != "STREAMING":
+            return False
+        if lease_owner is not None and stale_seconds is not None:
+            stale = (
+                message.heartbeat_at is None
+                or (datetime.now(UTC) - message.heartbeat_at).total_seconds() > stale_seconds
+            )
+            if message.lease_owner != lease_owner and not stale:
+                return False
+        elif lease_owner is not None and message.lease_owner != lease_owner:
+            return False
+        message.status = status
+        message.content = content
+        return True
+
+
+@pytest.fixture(autouse=True)
+def chat_answer_service(monkeypatch: MonkeyPatch) -> ChatAnswerRunService:
+    """テストごとに新しい回答の作成の service（作成中の run をテストの間で共有しない。#1175）。"""
+    service = ChatAnswerRunService(worker_id="pytest-worker")
+    monkeypatch.setattr(chat_answer_runs, "_SERVICE", service)
+    return service
 
 
 @pytest.fixture
@@ -619,9 +698,10 @@ def _sse_events(text: str, name: str) -> list[dict[str, object]]:
     events: list[dict[str, object]] = []
     for block in text.split("\n\n"):
         lines = block.strip().splitlines()
-        if not lines or lines[0] != f"event: {name}":
+        # `id:`（再購読の位置。#1175）は event の前に付く。
+        if f"event: {name}" not in lines:
             continue
-        data = "".join(line.removeprefix("data: ") for line in lines[1:])
+        data = "".join(line.removeprefix("data: ") for line in lines if line.startswith("data: "))
         events.append(json.loads(data))
     return events
 

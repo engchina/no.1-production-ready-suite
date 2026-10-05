@@ -114,6 +114,7 @@ Agent（Production Control Plane）は RAG を `POST /api/mcp`（MCP の Streama
 - 利用者: token の利用者の現在のロール・権限・検索・回答プロファイル / ナレッジベースの対象範囲を画面と同じ判定で使う。回答履歴・rate limit も同じ利用者。token の `agent_id` / `run_id` は hash して監査 context の agent / thread に入れる。
 - ツール: `rag_list_search_answer_profiles`（検索・回答プロファイル一覧と同じ権限）、`rag_search`（`menu.search`。`POST /api/search` と同じ処理）。入出力は [backend/README.md](../backend/README.md) の「MCP」を参照。
 - チャットは MCP で提供しない（#787）。チャットは画面（SSE の `POST /api/chat/conversations/{id}/messages/stream`）だけの機能で、MCP で提供するのは検索だけ。
+- チャットの回答の作成は SSE の接続から切り離している（#1175。`app/rag/chat_answer_runs.py`）。送信を受けたプロセスの中の task が作成し、作成中の回答（`STREAMING`）・段階・最終の回答は `rag_messages` に保存する。SSE はその task の event を購読するだけで、接続が切れても作成は続く。画面は `GET /api/chat/conversations/{id}/messages/{質問の id}/stream`（`Last-Event-ID`）で続きを購読し直し、できなければ保存済みの会話を取り直す。停止は `POST .../messages/{質問の id}/cancel` の明示の取消。
 
 ## Oracle AI Database DDL 例
 
