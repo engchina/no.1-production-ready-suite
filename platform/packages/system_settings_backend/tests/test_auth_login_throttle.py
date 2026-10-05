@@ -181,9 +181,11 @@ def test_zero_limits_disable_rate_limit(clock: _Clock) -> None:
 def test_throttle_prunes_expired_keys(clock: _Clock) -> None:
     throttle = LoginThrottle(clock=clock)
     limits = LoginThrottleLimits(per_login_and_ip=5, per_ip=20, window_seconds=60)
-    throttle.record_failure("a", IP, limits)
-    assert throttle.retry_after_seconds("a", IP, limits) is None
+    attempt = throttle.begin("a", IP, limits)
+    assert attempt.retry_after_seconds is None
+    throttle.record_failure(attempt)
+    assert not throttle.memory.is_empty()
     clock.now += 60
     # 窓を過ぎた失敗は数えず、鍵も消える。
-    assert throttle.retry_after_seconds("a", IP, limits) is None
-    assert throttle._failures == {}
+    assert throttle.memory.purge_expired(60) == 2
+    assert throttle.memory.is_empty()
