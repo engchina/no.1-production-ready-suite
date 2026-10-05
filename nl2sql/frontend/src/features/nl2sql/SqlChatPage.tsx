@@ -11,7 +11,6 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
-  SendHorizontal,
 } from "lucide-react";
 import {
   ApiErrorBanner,
@@ -19,27 +18,24 @@ import {
   Button,
   Card,
   CardContent,
+  ChatComposer,
+  ChatComposerOption,
   ChatLayout,
   ChatProgress,
   ChatSkeleton,
   ChatUserMessage,
   EmptyState,
-  FieldActionRow,
-  InfoTip,
   ListSkeleton,
   MessageText,
   PageBody,
   PageHeader,
-  RunStopButton,
   SearchableSelectField,
   SelectField,
   Skeleton,
   StatusBadge,
-  TextareaField,
   TimedLoadingState,
   createOptimisticChatMessage,
   useChatProgressTracker,
-  isSubmitEnter,
   toast,
   withOptimisticChatStatus,
   type OptimisticChatMessage,
@@ -628,92 +624,73 @@ export function SqlChatPage() {
             testIdPrefix="sql-chat"
             composer={
               <>
-                {/* 生成方法（#890）。RAG のチャットの「回答するモデル」と同じく、入力欄の直上の行に
-                    「ラベル・説明のアイコン・選択」を並べる。ラベルは隣の文言で読めるので欄のラベルは読み上げだけにする。
-                    選んだ生成方法の説明は常設せず、ラベルの横の info アイコンから出し、選択欄にも説明として結び付ける（#901）。 */}
-                <div
-                  className="flex flex-wrap items-center gap-2"
-                  data-testid="sql-chat-engine-row"
-                >
-                  <span className="inline-flex items-center gap-0.5">
-                    <span
-                      className="text-xs font-medium text-fg-muted"
-                      aria-hidden="true"
-                    >
-                      {t("chat.engine")}
-                    </span>
-                    <InfoTip
-                      label={t("chat.engine.infoLabel")}
-                      content={engineOption.description}
-                      contentId={engineDescriptionId}
-                      contentTestId="sql-chat-engine-description"
-                      data-testid="sql-chat-engine-info"
-                    />
-                  </span>
-                  <SelectField
-                    id="sql-chat-engine"
-                    label={t("chat.engine")}
-                    labelHidden
-                    value={engine}
-                    size="sm"
-                    width="sm"
-                    disabled={busy || generating || prerequisitesLoading}
-                    onValueChange={setEngine}
-                    describedBy={engineDescriptionId}
-                    options={CHAT_ENGINES.map(({ value, label }) => ({
-                      value,
-                      label,
-                    }))}
-                  />
-                </div>
-                <FieldActionRow
-                  actions={
-                    <RunStopButton
-                      running={generating}
-                      onRun={submit}
-                      onStop={() => {
-                        if (!stop.isPending && !conversation.isError)
-                          stop.mutate();
+                {/* 入力欄の領域（設定の行・入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。
+                    前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。 */}
+                <ChatComposer
+                  id="sql-chat-composer"
+                  value={draft}
+                  onValueChange={setDraft}
+                  onSubmit={submit}
+                  onStop={() => {
+                    if (!stop.isPending && !conversation.isError) stop.mutate();
+                  }}
+                  running={generating}
+                  submitBlocked={blocked}
+                  disabled={prerequisitesLoading}
+                  label={t("chat.query")}
+                  placeholder={t("chat.placeholder")}
+                  sendLabel={t("chat.send")}
+                  stopLabel={t("chat.stop")}
+                  maxLength={10000}
+                  sendTestId="sql-chat-send"
+                  options={
+                    // 生成方法（#890）。RAG のチャットの「回答するモデル」と同じく、入力欄の直上の行に
+                    // 「ラベル・説明のアイコン・選択」を並べる。ラベルは隣の文言で読めるので欄のラベルは読み上げだけにする。
+                    // 選んだ生成方法の説明は常設せず、ラベルの横の info アイコンから出し、選択欄にも説明として結び付ける（#901）。
+                    <ChatComposerOption
+                      label={t("chat.engine")}
+                      labelDecorative
+                      info={{
+                        label: t("chat.engine.infoLabel"),
+                        content: engineOption.description,
+                        contentId: engineDescriptionId,
+                        contentTestId: "sql-chat-engine-description",
+                        testId: "sql-chat-engine-info",
                       }}
-                      runLabel={t("chat.send")}
-                      stopLabel={t("chat.stop")}
-                      runIcon={SendHorizontal}
-                      runDisabled={!draft.trim() || blocked}
-                      size="lg"
-                      testId="sql-chat-send"
-                    />
+                      testId="sql-chat-engine-row"
+                    >
+                      <SelectField
+                        id="sql-chat-engine"
+                        label={t("chat.engine")}
+                        labelHidden
+                        value={engine}
+                        size="sm"
+                        width="sm"
+                        disabled={busy || generating || prerequisitesLoading}
+                        onValueChange={setEngine}
+                        describedBy={engineDescriptionId}
+                        options={CHAT_ENGINES.map(({ value, label }) => ({
+                          value,
+                          label,
+                        }))}
+                      />
+                    </ChatComposerOption>
                   }
-                >
-                  <TextareaField
-                    id="sql-chat-composer"
-                    label={t("chat.query")}
-                    labelHidden
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (isSubmitEnter(event) && !event.shiftKey) {
-                        event.preventDefault();
-                        submit();
-                      }
-                    }}
-                    rows={2}
-                    maxLength={10000}
-                    placeholder={t("chat.placeholder")}
-                    // 前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
-                    disabled={prerequisitesLoading}
-                    className="space-y-0"
-                  />
-                </FieldActionRow>
-                {stop.isError ? (
-                  <ApiErrorBanner
-                    error={stop.error}
-                    fallback={t("chat.stopFailed")}
-                    testId="sql-chat-stop-error"
-                  />
-                ) : null}
-                {turns.length >= 50 ? (
-                  <Banner severity="info">{t("chat.limit")}</Banner>
-                ) : null}
+                  footer={
+                    <>
+                      {stop.isError ? (
+                        <ApiErrorBanner
+                          error={stop.error}
+                          fallback={t("chat.stopFailed")}
+                          testId="sql-chat-stop-error"
+                        />
+                      ) : null}
+                      {turns.length >= 50 ? (
+                        <Banner severity="info">{t("chat.limit")}</Banner>
+                      ) : null}
+                    </>
+                  }
+                />
               </>
             }
           >

@@ -153,7 +153,7 @@ async function openSecondQuestion(page: Page) {
   await page.getByTestId("sql-chat-history").getByText("カテゴリ別売上", { exact: true }).click();
   if ((page.viewportSize()?.width ?? 1280) >= 1024) await page.getByTestId("sql-chat-history-toggle").click();
   await expect(page.getByTestId("sql-chat-turn")).toHaveCount(1);
-  const composer = page.getByRole("textbox", { name: "クエリ", exact: true });
+  const composer = page.getByRole("textbox", { name: "質問", exact: true });
   await composer.fill("多い順にして");
   await composer.press("Enter");
   const turn = page.getByTestId("sql-chat-turn").nth(1);

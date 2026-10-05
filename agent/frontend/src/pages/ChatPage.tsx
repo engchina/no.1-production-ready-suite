@@ -5,7 +5,6 @@ import {
   Check,
   RefreshCw,
   RotateCcw,
-  SendHorizontal,
   Square,
   Wrench,
   X,
@@ -15,6 +14,7 @@ import {
   Button,
   Card,
   CardContent,
+  ChatComposer,
   ChatLayout,
   ChatProgress,
   ChatSkeleton,
@@ -22,19 +22,15 @@ import {
   ChatUserMessage,
   Disclosure,
   EmptyState,
-  FieldActionRow,
   ListSkeleton,
   MessageText,
   PageBody,
   PageHeader,
-  RunStopButton,
   SearchableSelectField,
   Skeleton,
   StatusBadge,
-  TextareaField,
   TimedLoadingState,
   createOptimisticChatMessage,
-  isSubmitEnter,
   toast,
   withOptimisticChatStatus,
   type OptimisticChatMessage,
@@ -396,49 +392,32 @@ export function ChatPage() {
             logRef={conversationRef}
             composer={
               <>
-                {/* 入力欄と送信の行。送信は入力欄の下端にそろえ、375px では下に全幅で置く（#613）。 */}
-                <FieldActionRow
-                  actions={
-                    // 主な問い合わせの入力の行なので lg（README §4「操作部品の高さと幅」）。
-                    <RunStopButton
-                      running={stoppable}
-                      onRun={submit}
-                      onStop={stop}
-                      runLabel={t("chat.send")}
-                      stopLabel={t("chat.stop")}
-                      runIcon={SendHorizontal}
-                      runDisabled={!draft.trim() || composerBlocked || prerequisitesLoading || threadFailed}
-                      size="lg"
-                      testId="chat-send"
-                    />
+                {/* 入力欄の領域（入力欄と送信 / 停止）は 3 製品共通の ChatComposer（#1161）。送信と停止は同じボタンで、
+                    送信の要求中・回答の作成中・承認待ちは同じ位置で「停止」になる（buttons.md §3.1、#805）。
+                    IME の変換を確定する Enter では送信しない（#459）。Shift+Enter は改行。
+                    前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。 */}
+                <ChatComposer
+                  id="chat-composer"
+                  textareaRef={composerRef}
+                  value={draft}
+                  onValueChange={setDraft}
+                  onSubmit={submit}
+                  onStop={stop}
+                  running={stoppable}
+                  submitBlocked={composerBlocked || threadFailed}
+                  disabled={prerequisitesLoading}
+                  label={t("chat.composer.label")}
+                  placeholder={t("chat.composer.placeholder")}
+                  sendLabel={t("chat.send")}
+                  stopLabel={t("chat.stop")}
+                  sendTestId="chat-send"
+                  footer={
+                    cancel.error ? (
+                      // 停止の失敗は入力欄の下に出す（3 製品で同じ ApiErrorBanner。#1161）。
+                      <ApiErrorBanner error={cancel.error} fallback={t("chat.stopFailed")} testId="chat-stop-error" />
+                    ) : null
                   }
-                >
-                  <TextareaField
-                    ref={composerRef}
-                    id="chat-composer"
-                    label={t("chat.composer.label")}
-                    labelHidden
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      // IME の変換を確定する Enter では送信しない（#459）。Shift+Enter は改行。
-                      if (isSubmitEnter(event) && !event.shiftKey) {
-                        event.preventDefault();
-                        submit();
-                      }
-                    }}
-                    rows={2}
-                    placeholder={t("chat.composer.placeholder")}
-                    // 前提の読み込み中は書けない（書いた文字は作業状態に残す。#1153）。
-                    disabled={prerequisitesLoading}
-                    className="space-y-0"
-                  />
-                </FieldActionRow>
-                {cancel.error ? (
-                  <Banner severity="danger" title={t("chat.stopFailed")}>
-                    {apiErrorMessage(cancel.error, t("common.error.retryLater"))}
-                  </Banner>
-                ) : null}
+                />
               </>
             }
           >
