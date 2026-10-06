@@ -23,11 +23,17 @@ export function SavedAnswerRecord({
   traceId,
   searchAnswerProfileId,
   showAnswer = true,
+  showCitations = true,
+  detailsTitle,
   onDeleted,
 }: {
   traceId: string;
   searchAnswerProfileId: string;
   showAnswer?: boolean;
+  /** 引用の一覧を出すか。チャットは回答の枠に「根拠（引用）」の一覧を持つので出さない（#1202）。 */
+  showCitations?: boolean;
+  /** 根拠パネルの見出し。省略すると AnswerDetailsPanel の既定（回答の根拠と実行記録）。 */
+  detailsTitle?: string;
   onDeleted?: () => void;
 }) {
   const detail = useAnswerRecord(traceId);
@@ -113,8 +119,9 @@ export function SavedAnswerRecord({
         diagnostics={record.answer_diagnostics}
         traceId={record.evaluation_available ? record.trace_id : null}
         evaluation={record.evaluation}
+        title={detailsTitle}
       />
-      {record.citations.length > 0 ? (
+      {showCitations && record.citations.length > 0 ? (
         <ul className="space-y-2">
           {record.citations.map((chunk, index) => (
             <CitationCard

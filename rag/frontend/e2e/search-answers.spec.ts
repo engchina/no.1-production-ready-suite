@@ -177,6 +177,17 @@ test("RAG 検索画面には回答履歴の一覧を出さない（#444）", asy
   await expect(page.getByRole("navigation", { name: "回答履歴のページ" })).toHaveCount(0);
 });
 
+const citationChunk = {
+  document_id: "d1",
+  chunk_id: "ch1",
+  text: "経費の上限は 10 万円です。",
+  score: 0.91,
+  rerank_score: 0.82,
+  file_name: "経費規程.pdf",
+  category_name: null,
+  metadata: {},
+};
+
 function chatMessage(role: "USER" | "ASSISTANT", id: string, traceId: string | null) {
   return {
     message_id: id,
@@ -184,7 +195,7 @@ function chatMessage(role: "USER" | "ASSISTANT", id: string, traceId: string | n
     role,
     content: role === "USER" ? "経費の上限は？" : "経費の上限は 10 万円です。",
     model: role === "USER" ? null : "m1",
-    citations: [],
+    citations: role === "USER" ? [] : [citationChunk],
     guardrail_warnings: [],
     trace_id: traceId,
     status: "COMPLETE",
@@ -254,7 +265,7 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
           trace_id: "trace-chat",
           surface: "chat",
           answer: "経費の上限は 10 万円です。",
-          citations: [],
+          citations: [citationChunk],
           answer_diagnostics: {},
         })
       );
@@ -280,11 +291,22 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   await selectSearchAnswerProfile(page, "経理ビュー");
   const conversations = await openChatHistory(page);
   await conversations.getByRole("list", { name: "会話の履歴" }).getByRole("button").first().click();
-  await expect(page.getByText("この回答の根拠と実行記録", { exact: true })).toBeVisible();
+  await expect(page.getByText("この回答の実行記録", { exact: true })).toBeVisible();
   expect(requested).toContainEqual(["trace-chat"]);
 
-  // 保存された回答は、チャットの「この回答の根拠と実行記録」から確認を通して削除できる（#147）。
-  await page.getByText("この回答の根拠と実行記録", { exact: true }).click();
+  // 保存された回答の実行記録には引用の一覧を出さず、引用は「根拠（引用）」の 1 か所だけに出す（#1202）。
+  await page.getByText("この回答の実行記録", { exact: true }).click();
+  const citationSummary = page.locator("summary").filter({ hasText: "根拠（引用） 1 件" });
+  await citationSummary.click();
+  await expect(page.getByText("経費規程.pdf")).toHaveCount(1);
+  // 回答の評価は、根拠を確かめた後に答えられるよう「根拠（引用）」の後ろに出す（#1202）。
+  const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
+  await expect(feedback).toBeVisible();
+  const citationTop = (await citationSummary.boundingBox())?.y ?? Number.POSITIVE_INFINITY;
+  const feedbackTop = (await feedback.boundingBox())?.y ?? Number.NEGATIVE_INFINITY;
+  expect(feedbackTop).toBeGreaterThan(citationTop);
+
+  // 保存された回答は、チャットの「この回答の実行記録」から確認を通して削除できる（#147）。
   const answerActions = page.getByRole("group", { name: "保存された回答 の操作" });
   await answerActions.getByRole("button", { name: "その他の操作" }).click();
   await page.getByRole("menuitem", { name: "この回答を削除" }).click();
@@ -295,7 +317,7 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   // 削除の成功は Toast で知らせる（messaging.md §4.2。#285）。
   await expect(page.getByText("保存された回答を削除しました。")).toBeVisible();
   expect(deleted).toBe(true);
-  await expect(page.getByText("この回答の根拠と実行記録", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("この回答の実行記録", { exact: true })).toHaveCount(0);
 });
 
 // #635: RAG 検索とチャットの「対象の検索・回答プロファイル」は同じ部品・同じ文言・同じ幅（カードの幅いっぱい）。
