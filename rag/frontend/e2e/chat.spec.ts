@@ -26,7 +26,8 @@ const citationChunk = {
   rerank_score: 0.82,
   file_name: "経費規程.pdf",
   category_name: null,
-  metadata: {},
+  // 回答エンジンは回答に使った根拠かを記録する（#1208）。
+  metadata: { evidence_model_used: true },
 };
 
 const userMessage = {
@@ -348,7 +349,7 @@ for (const viewport of [
     }
     const citationSummary = page
       .locator("summary")
-      .filter({ hasText: "根拠（引用） 1 件" })
+      .filter({ hasText: "根拠 1 件（回答に使用 1 件）" })
       .first();
     const citationDetails = citationSummary.locator("..");
     await expect(citationSummary).toBeVisible();
@@ -359,6 +360,8 @@ for (const viewport of [
     await page.keyboard.press("Enter");
     await expect(citationDetails).toHaveAttribute("open", "");
     await expect(page.getByText("経費規程.pdf")).toBeVisible();
+    // 回答に使った根拠には「回答に使用」を出す（#1208）。
+    await expect(citationDetails.getByText("回答に使用", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /の引用箇所を表示$/ })).toBeVisible();
     await expect(page.getByRole("meter", { name: /取得スコア/ })).toHaveCount(0);
     await expect(page.getByRole("meter", { name: "Rerank スコア: 0.820" })).toBeVisible();
