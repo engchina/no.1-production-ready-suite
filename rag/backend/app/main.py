@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 
 # 共有 backend インフラ（CORS / request-id / エラー envelope）。
+from pr_backend_core import ApiResponse
 from pr_backend_core.api.errors import api_error_response, http_exception_messages
 from pr_backend_core.api.validation import validation_error_response
 from pr_backend_core.observability.metrics import MetricsMiddleware
@@ -19,6 +20,7 @@ from prometheus_client import make_asgi_app
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, Response
 
+from app.api.errors import DocumentFileMissingError
 from app.api.router import api_router
 from app.clients.oracle import close_oracle_pool
 from app.config import Settings, get_settings
@@ -192,6 +194,21 @@ def create_app() -> FastAPI:
             http_exception_messages(exc.detail, exc.status_code),
             headers=exc.headers,
             request_id=_response_request_id(request),
+        )
+
+    @app.exception_handler(DocumentFileMissingError)
+    async def document_file_missing_handler(
+        request: Request, exc: DocumentFileMissingError
+    ) -> JSONResponse:
+        """文書のファイルが保存先に無い（#1210）。画面が見分けられるよう `error_code` を足す。"""
+        body = ApiResponse[object](
+            data=None, error_messages=http_exception_messages(exc.detail, exc.status_code)
+        ).model_dump(mode="json")
+        body["error_code"] = exc.code
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=body,
+            headers={"X-Request-ID": _response_request_id(request)},
         )
 
     @app.exception_handler(SecurityApiError)

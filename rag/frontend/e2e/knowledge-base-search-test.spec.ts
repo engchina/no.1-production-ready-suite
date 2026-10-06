@@ -304,7 +304,12 @@ test("索引済み文書が無い KB は検索テストを促す空状態を出�
 const MISSING_ORIGINAL = "原本ファイルが保存先にありません。文書をアップロードし直してください。";
 const missingOriginal = {
   status: 404,
-  json: { data: null, error_messages: [MISSING_ORIGINAL], warning_messages: [] },
+  json: {
+    data: null,
+    error_messages: [MISSING_ORIGINAL],
+    warning_messages: [],
+    error_code: "RAG_DOCUMENT_FILE_MISSING",
+  },
 };
 
 for (const viewport of [

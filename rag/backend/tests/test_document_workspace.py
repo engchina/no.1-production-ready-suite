@@ -2625,6 +2625,9 @@ def test_document_content_missing_original_returns_reason_and_next_action(
         assert resp.json()["error_messages"] == [
             "原本ファイルが保存先にありません。文書をアップロードし直してください。"
         ]
+        # 画面はこの code のときだけ iframe に戻さず理由を出す。
+        assert resp.json()["error_code"] == "RAG_DOCUMENT_FILE_MISSING"
+        assert resp.headers["x-request-id"]
 
 
 def test_document_content_returns_404_for_unknown_document() -> None:

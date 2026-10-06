@@ -28,6 +28,7 @@ from fastapi import (
     UploadFile,
 )
 
+from app.api.errors import DocumentFileMissingError
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS
 from app.clients.oracle import (
@@ -5416,7 +5417,7 @@ async def _load_document_content(
     try:
         data = await ObjectStorageClient().get(path)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=not_found_message) from exc
+        raise DocumentFileMissingError(not_found_message) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=bad_path_message) from exc
     return data, file_name, content_type

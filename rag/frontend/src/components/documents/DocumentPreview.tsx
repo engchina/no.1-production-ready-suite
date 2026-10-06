@@ -294,8 +294,7 @@ function PdfPagesPreview({
     );
   }
   if (isMissingFileError(pagesQuery.error)) {
-    // 原本・文書が無い（backend が理由付きの 404 を返した）ときは、iframe に 404 の本文を出さず、
-    // 理由と対処を出す（#1210）。
+    // ファイルが保存先に無いときは、iframe に 404 の本文を出さず、理由と対処を出す（#1210）。
     return (
       <ApiErrorState
         error={pagesQuery.error}
@@ -328,9 +327,12 @@ function PdfPagesPreview({
   );
 }
 
-/** ページの一覧の失敗のうち、ファイルが無いこと（backend の理由付きの 404）による失敗か。理由の無い 404（古い backend）は除く。 */
+/** 文書のファイルが保存先に無い（backend の `error_code`。#1210）。 */
+const DOCUMENT_FILE_MISSING_CODE = "RAG_DOCUMENT_FILE_MISSING";
+
+/** ページの一覧の失敗のうち、ファイルが保存先に無いことによる失敗か。ほかの失敗は iframe の表示に戻す。 */
 function isMissingFileError(error: unknown): error is ApiError {
-  return error instanceof ApiError && error.status === 404 && !error.isFallbackMessage;
+  return error instanceof ApiError && error.errorCode === DOCUMENT_FILE_MISSING_CODE;
 }
 
 /**
