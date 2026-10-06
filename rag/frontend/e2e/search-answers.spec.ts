@@ -294,12 +294,12 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   await expect(page.getByText("この回答の実行記録", { exact: true })).toBeVisible();
   expect(requested).toContainEqual(["trace-chat"]);
 
-  // 保存された回答の実行記録には引用の一覧を出さず、引用は「根拠（引用）」の 1 か所だけに出す（#1202）。
+  // 保存された回答の実行記録には引用の一覧を出さず、引用は回答の枠の「根拠 N 件」の 1 か所だけに出す（#1202）。
   await page.getByText("この回答の実行記録", { exact: true }).click();
-  const citationSummary = page.locator("summary").filter({ hasText: "根拠（引用） 1 件" });
+  const citationSummary = page.locator("summary").filter({ hasText: "根拠 1 件" });
   await citationSummary.click();
   await expect(page.getByText("経費規程.pdf")).toHaveCount(1);
-  // 回答の評価は、根拠を確かめた後に答えられるよう「根拠（引用）」の後ろに出す（#1202）。
+  // 回答の評価は、根拠を確かめた後に答えられるよう「根拠 N 件」の後ろに出す（#1202）。
   const feedback = page.getByRole("group", { name: "この回答は役に立ちましたか？" });
   await expect(feedback).toBeVisible();
   const citationTop = (await citationSummary.boundingBox())?.y ?? Number.POSITIVE_INFINITY;

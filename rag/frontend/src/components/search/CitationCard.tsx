@@ -1,6 +1,6 @@
 import { FileText, Layers, LocateFixed } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@engchina/production-ready-ui";
+import { Button, StatusBadge } from "@engchina/production-ready-ui";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import type {
@@ -8,7 +8,11 @@ import type {
   FeedbackSourceSurface,
   RetrievedChunk,
 } from "@/lib/api";
-import { citationMetadataChips, type CitationMetadataChip } from "@/lib/chunk-metadata";
+import {
+  citationMetadataChips,
+  citationModelUsed,
+  type CitationMetadataChip,
+} from "@/lib/chunk-metadata";
 import { t } from "@/lib/i18n";
 import { integerMetadataValue } from "@/lib/table-cell-focus";
 
@@ -56,6 +60,10 @@ export function CitationCard({
                 {chunk.file_name ?? chunk.document_id}
               </span>
             </span>
+            {/* 回答の文脈に入れた根拠のうち、回答に使ったもの（#1208）。 */}
+            {citationModelUsed(chunk) ? (
+              <StatusBadge variant="info" label={t("search.answerDetails.modelUsed")} />
+            ) : null}
             {retrievalBadges.length ? (
               <span className="flex flex-wrap gap-1">
                 {retrievalBadges.map((badge) => (

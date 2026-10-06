@@ -51,6 +51,7 @@ import {
 import { streamSearch, type SearchStageEvent } from "@/lib/search-stream";
 import { answerStageLabel } from "@/lib/answer-progress";
 import { isSubmitEnter } from "@/lib/keyboard";
+import { citationCountLabel } from "@/lib/chunk-metadata";
 import { t } from "@/lib/i18n";
 import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { APP_ROUTES } from "@/lib/routes";
@@ -847,7 +848,9 @@ export function SearchClient() {
               ) : citations.length > 0 ? (
                 <section>
                   <h2 className={answerMode ? "mb-3 text-sm font-semibold text-fg" : "mb-1 text-sm font-semibold text-fg"}>
-                    {answerMode ? t("search.citations") : t("search.results")}（{citations.length}）
+                    {answerMode
+                      ? citationCountLabel(citations)
+                      : `${t("search.results")}（${citations.length}）`}
                   </h2>
                   {answerMode ? null : (
                     <p className="mb-3 text-xs leading-relaxed text-fg-muted">{t("search.results.hint")}</p>

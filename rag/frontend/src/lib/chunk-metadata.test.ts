@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { citationMetadataChips, firstCitationElementId } from "./chunk-metadata";
+import {
+  citationCountLabel,
+  citationMetadataChips,
+  citationModelUsed,
+  firstCitationElementId,
+} from "./chunk-metadata";
 
 describe("citationMetadataChips", () => {
   it("ページ範囲と構造 metadata を chip 化する", () => {
@@ -39,5 +44,28 @@ describe("citationMetadataChips", () => {
     expect(firstCitationElementId(42)).toBe("42");
     expect(firstCitationElementId([null, false, ""])).toBeNull();
     expect(firstCitationElementId(null)).toBeNull();
+  });
+});
+
+// 根拠の件数の表示（#1208）。
+describe("citationCountLabel", () => {
+  const chunk = (metadata: Record<string, boolean | string>) => ({ metadata });
+
+  it("回答に使ったかが分かるときは、使った件数を添える", () => {
+    expect(
+      citationCountLabel([
+        chunk({ evidence_model_used: true }),
+        chunk({ evidence_model_used: false }),
+        chunk({ evidence_model_used: false }),
+      ])
+    ).toBe("根拠 3 件（回答に使用 1 件）");
+    expect(citationCountLabel([chunk({ evidence_model_used: false })])).toBe(
+      "根拠 1 件（回答に使用 0 件）"
+    );
+  });
+
+  it("回答を作らない検索の結果（evidence_model_used が無い）は件数だけ", () => {
+    expect(citationCountLabel([chunk({}), chunk({ evidence_role: "anchor" })])).toBe("根拠 2 件");
+    expect(citationModelUsed(chunk({ evidence_model_used: "true" }))).toBeNull();
   });
 });

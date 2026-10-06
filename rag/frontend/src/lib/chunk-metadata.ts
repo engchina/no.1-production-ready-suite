@@ -1,4 +1,5 @@
 import type { RetrievedChunk } from "./api";
+import { t } from "./i18n";
 
 export type CitationMetadataChipId =
   | "page"
@@ -62,4 +63,25 @@ function stringMetadata(metadata: RetrievedChunk["metadata"], key: string): stri
 function firstNonEmptyToken(values: string[]): string | null {
   const first = values.map((item) => item.trim()).find(Boolean);
   return first ?? null;
+}
+
+/**
+ * 回答に使った根拠か（#1208）。回答エンジンは回答の文脈に入れた根拠の chunk を全件 citations にし、
+ * 回答に使ったものを `evidence_model_used` で示す。回答を作らない検索の結果は持たないので null。
+ */
+export function citationModelUsed(chunk: Pick<RetrievedChunk, "metadata">): boolean | null {
+  const value = chunk.metadata.evidence_model_used;
+  return typeof value === "boolean" ? value : null;
+}
+
+/** 根拠の件数の表示（#1208）。回答に使ったかが分かるときは「根拠 N 件（回答に使用 M 件）」、分からないときは「根拠 N 件」。 */
+export function citationCountLabel(citations: readonly Pick<RetrievedChunk, "metadata">[]): string {
+  const flags = citations.map(citationModelUsed);
+  if (flags.every((flag) => flag === null)) {
+    return t("citations.count", { count: citations.length });
+  }
+  return t("citations.countWithUsed", {
+    count: citations.length,
+    used: flags.filter((flag) => flag === true).length,
+  });
 }

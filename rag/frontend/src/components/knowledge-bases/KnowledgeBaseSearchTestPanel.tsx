@@ -18,6 +18,7 @@ import { EmptyState, ErrorState } from "@/components/StateViews";
 import { ApiError, type RetrievedChunk } from "@/lib/api";
 import { streamSearch, type SearchStageEvent } from "@/lib/search-stream";
 import { isSubmitEnter } from "@/lib/keyboard";
+import { citationCountLabel } from "@/lib/chunk-metadata";
 import { t } from "@/lib/i18n";
 
 type Phase = "idle" | "streaming" | "done" | "cancelled" | "error";
@@ -229,7 +230,10 @@ export function KnowledgeBaseSearchTestPanel({
                 ) : citations.length > 0 ? (
                   <section>
                     <h3 className="mb-3 text-sm font-semibold text-fg">
-                      {t("search.citations")}（{citations.length}）
+                      {/* 回答のときは回答の根拠、検索だけのときは検索結果（RAG 検索と同じ。#1208）。 */}
+                      {answer
+                        ? citationCountLabel(citations)
+                        : `${t("search.results")}（${citations.length}）`}
                     </h3>
                     <ul className="bounded-scroll-area-lg space-y-2 pr-1">
                       {citations.map((chunk, i) => (

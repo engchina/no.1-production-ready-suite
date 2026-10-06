@@ -84,6 +84,7 @@ import {
 } from "@/lib/chat-stream";
 import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { formatDateTime } from "@/lib/format";
+import { citationCountLabel } from "@/lib/chunk-metadata";
 import { t } from "@/lib/i18n";
 import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
 import {
@@ -333,7 +334,7 @@ function AssistantColumn({
           {guardrailWarnings.join(" / ")}
         </Banner>
       ) : null}
-      {/* 根拠の構成・工程などの実行記録。引用の一覧は下の「根拠（引用）」の 1 か所だけに出す（#1202）。 */}
+      {/* 根拠の構成・工程などの実行記録。引用の一覧は下の「根拠 N 件」の 1 か所だけに出す（#1202）。 */}
       {finished && answerDiagnostics ? (
         <AnswerDetailsPanel
           diagnostics={answerDiagnostics}
@@ -363,7 +364,7 @@ function AssistantColumn({
           {citations.length > 0 ? (
             <Disclosure
               variant="plain"
-              summary={t("chat.citations.summary", { count: citations.length })}
+              summary={citationCountLabel(citations)}
               className="border-t border-border px-2 pt-1"
             >
               <ul className="space-y-2">
