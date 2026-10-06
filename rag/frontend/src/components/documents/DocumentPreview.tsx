@@ -3,8 +3,12 @@
 import { Download, FileQuestion } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 
+import { ApiErrorState } from "@/components/StateViews";
 import {
   api,
+  ApiError,
+  apiErrorFromEnvelope,
+  apiErrorFromFetchFailure,
   notifyResponseAuthStatus,
   type DocumentPreprocessArtifact,
   type SourcePreviewKind,
@@ -289,6 +293,16 @@ function PdfPagesPreview({
       </TimedLoadingState>
     );
   }
+  if (isMissingFileError(pagesQuery.error)) {
+    // ファイルが保存先に無いときは、iframe に 404 の本文を出さず、理由と対処を出す（#1210）。
+    return (
+      <ApiErrorState
+        error={pagesQuery.error}
+        fallback={t("preview.fetchError")}
+        onRetry={() => void pagesQuery.refetch()}
+      />
+    );
+  }
   if (pagesQuery.isError || pages.length === 0) {
     return (
       <PreviewFrame className={className} sizing={sizing} {...focus}>
@@ -311,6 +325,14 @@ function PdfPagesPreview({
       highlights={highlights}
     />
   );
+}
+
+/** 文書のファイルが保存先に無い（backend の `error_code`。#1210）。 */
+const DOCUMENT_FILE_MISSING_CODE = "RAG_DOCUMENT_FILE_MISSING";
+
+/** ページの一覧の失敗のうち、ファイルが保存先に無いことによる失敗か。ほかの失敗は iframe の表示に戻す。 */
+function isMissingFileError(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.errorCode === DOCUMENT_FILE_MISSING_CODE;
 }
 
 /**
@@ -447,38 +469,49 @@ function BboxLocator({
 
 function TextPreview({ url }: { url: string }) {
   // 取得結果は URL ごとに持つ。URL が変わった直後は前の結果を使わず、読込中として扱う。
-  const [result, setResult] = useState<{ url: string; text: string | null; error: boolean } | null>(
+  const [result, setResult] = useState<{ url: string; text: string | null; error: unknown } | null>(
     null
   );
-  const text = result?.url === url ? result.text : null;
-  const error = result?.url === url ? result.error : false;
+  // 失敗のあとの再試行（同じ URL をもう一度取得する）。
+  const [attempt, setAttempt] = useState(0);
+  const current = result?.url === url ? result : null;
+  const text = current?.text ?? null;
+  const error = current?.error ?? null;
 
   useEffect(() => {
     const controller = new AbortController();
+    const request = { method: "GET", path: url.split("?")[0] };
     fetch(url, { signal: controller.signal, credentials: "same-origin" })
       .then(async (res) => {
         if (!res.ok) {
           // セッション切れはログインへ。経路の権限拒否以外の 403 はプレビュー内の失敗表示にとどめる（#224）。
           notifyResponseAuthStatus(res);
-          throw new Error(String(res.status));
+          // 原本が保存先に無いなど、backend が返した理由と対処を出す（#1210）。
+          const envelope: unknown = await res.json().catch(() => null);
+          throw apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
         }
         const charset = charsetFromContentType(res.headers.get("Content-Type"));
         return decodeText(await res.arrayBuffer(), charset);
       })
-      .then((decoded) => setResult({ url, text: decoded, error: false }))
+      .then((decoded) => setResult({ url, text: decoded, error: null }))
       .catch((e: unknown) => {
         if (!(e instanceof DOMException && e.name === "AbortError")) {
-          setResult({ url, text: null, error: true });
+          setResult({ url, text: null, error: apiErrorFromFetchFailure(e, request) ?? e });
         }
       });
     return () => controller.abort();
-  }, [url]);
+  }, [url, attempt]);
 
   if (error) {
     return (
-      <div className="rounded-md border border-border bg-surface p-4 text-sm text-fg-muted">
-        {t("preview.fetchError")}
-      </div>
+      <ApiErrorState
+        error={error}
+        fallback={t("preview.fetchError")}
+        onRetry={() => {
+          setResult(null);
+          setAttempt((value) => value + 1);
+        }}
+      />
     );
   }
   if (text === null) {

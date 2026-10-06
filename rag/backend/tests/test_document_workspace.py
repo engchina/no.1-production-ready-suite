@@ -2606,6 +2606,30 @@ def test_document_content_detects_non_utf8_charset() -> None:
     assert resp.content.decode(charset) == plain * 8
 
 
+def test_document_content_missing_original_returns_reason_and_next_action(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """保存先に原本が無いとき、プレビュー・ページ一覧は理由と対処を返す(#1210)。"""
+    document_id = _upload("policy.txt", b"body", "text/plain")
+    path = fake_document_dependencies.documents[document_id].object_storage_path
+    assert path is not None
+    assert anyio.run(ObjectStorageClient().delete, path)
+
+    for url in (
+        f"/api/documents/{document_id}/content",
+        f"/api/documents/{document_id}/preview-pages",
+    ):
+        resp = client.get(url)
+
+        assert resp.status_code == 404
+        assert resp.json()["error_messages"] == [
+            "原本ファイルが保存先にありません。文書をアップロードし直してください。"
+        ]
+        # 画面はこの code のときだけ iframe に戻さず理由を出す。
+        assert resp.json()["error_code"] == "RAG_DOCUMENT_FILE_MISSING"
+        assert resp.headers["x-request-id"]
+
+
 def test_document_content_returns_404_for_unknown_document() -> None:
     """存在しないドキュメントの原本配信は 404。"""
     resp = client.get("/api/documents/unknown/content")
