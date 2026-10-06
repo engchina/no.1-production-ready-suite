@@ -190,7 +190,7 @@ for (const viewport of [
 
       await expect(page.getByTestId("kb-search-test-meta")).toHaveText("2 件 / 120 ms");
       await expect(page.getByText("policy.pdf")).toBeVisible();
-      await expect(page.getByRole("heading", { name: "引用（根拠）（2）" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "検索結果（2）" })).toBeVisible();
       // 回答の欄は出さない（空の回答の枠を残さない）。
       await expect(page.getByRole("heading", { name: "回答", exact: true })).toHaveCount(0);
       await expectNoPageOverflow(page);

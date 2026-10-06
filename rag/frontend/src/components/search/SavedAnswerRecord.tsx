@@ -30,7 +30,7 @@ export function SavedAnswerRecord({
   traceId: string;
   searchAnswerProfileId: string;
   showAnswer?: boolean;
-  /** 引用の一覧を出すか。チャットは回答の枠に「根拠（引用）」の一覧を持つので出さない（#1202）。 */
+  /** 引用の一覧を出すか。チャットは回答の枠に「根拠 N 件」の一覧を持つので出さない（#1202）。 */
   showCitations?: boolean;
   /** 根拠パネルの見出し。省略すると AnswerDetailsPanel の既定（回答の根拠と実行記録）。 */
   detailsTitle?: string;
