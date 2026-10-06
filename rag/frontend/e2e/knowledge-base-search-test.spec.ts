@@ -300,6 +300,81 @@ test("索引済み文書が無い KB は検索テストを促す空状態を出�
   await expectNoPageOverflow(page);
 });
 
+// #1210: 原本が保存先に無いとき（保存先の変更・削除）、プレビューに backend の理由と対処を出し、再試行できる。
+const MISSING_ORIGINAL = "原本ファイルが保存先にありません。文書をアップロードし直してください。";
+const missingOriginal = {
+  status: 404,
+  json: { data: null, error_messages: [MISSING_ORIGINAL], warning_messages: [] },
+};
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`原本が無いテキストの引用プレビューは理由と対処を出し、再試行できる (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockKbPage(page, 1);
+    let originalRestored = false;
+    await page.route(/\/api\/documents\/doc-1\/content(?:\?|$)/, (route) =>
+      originalRestored
+        ? route.fulfill({
+            status: 200,
+            headers: { "content-type": "text/markdown; charset=utf-8" },
+            body: "# 経費精算マニュアル",
+          })
+        : route.fulfill(missingOriginal)
+    );
+    await page.route("**/api/search/stream", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: searchStreamBody("経費精算マニュアル.md"),
+      })
+    );
+
+    await page.goto("/knowledge-bases/kb-1");
+    await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("経費の上限は？");
+    await page.getByRole("button", { name: "検索テスト" }).click();
+    await page.getByRole("button", { name: /の引用箇所を表示$/ }).click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText(MISSING_ORIGINAL)).toBeVisible();
+    // 固定の文言だけにしない。状態コードなどは「詳細」に畳む。
+    await expect(dialog.getByText("プレビューを取得できませんでした。")).toHaveCount(0);
+    await expect(dialog.getByText("詳細", { exact: true })).toBeVisible();
+    await expectNoPageOverflow(page);
+
+    originalRestored = true;
+    await dialog.getByRole("button", { name: "再試行" }).click();
+    await expect(dialog.getByText("# 経費精算マニュアル")).toBeVisible();
+    await expect(dialog.getByText(MISSING_ORIGINAL)).toHaveCount(0);
+  });
+}
+
+test("原本が無い PDF の引用プレビューは 404 の本文を iframe に出さず、理由と対処を出す", async ({
+  page,
+}) => {
+  await mockKbPage(page, 1);
+  await page.route(/\/api\/documents\/doc-1\/preview-pages(?:\?|$)/, (route) =>
+    route.fulfill(missingOriginal)
+  );
+  await page.route("**/api/search/stream", (route) =>
+    route.fulfill({ status: 200, contentType: "text/event-stream", body: searchStreamBody("policy.pdf") })
+  );
+
+  await page.goto("/knowledge-bases/kb-1");
+  await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("有給休暇の付与日数は？");
+  await page.getByRole("button", { name: "検索テスト" }).click();
+  await page.getByRole("button", { name: /の引用箇所を表示$/ }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText(MISSING_ORIGINAL)).toBeVisible();
+  await expect(dialog.locator("iframe")).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "再試行" })).toBeVisible();
+});
+
 test("Office 引用プレビューの降格表示では原本をダウンロードできる", async ({ page }) => {
   await mockKbPage(page, 1);
   await page.route("**/api/documents/doc-1", (route) =>

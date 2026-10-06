@@ -5404,13 +5404,14 @@ async def _load_document_content(
         path = artifact.object_storage_path
         file_name = artifact.file_name
         content_type = artifact.content_type or _document_media_type(detail)
-        not_found_message = "処理後ファイルが見つかりません。"
+        not_found_message = "処理後ファイルが見つかりません。ファイル準備から再処理してください。"
         bad_path_message = "処理後ファイルの参照パスが不正です。"
     else:
         path = detail.object_storage_path
         file_name = detail.file_name
         content_type = _document_media_type(detail)
-        not_found_message = "原本ファイルが見つかりません。"
+        # 保存先の設定が変わった・ファイルが消えたなど、DB の参照先にファイルが無い（#1210）。
+        not_found_message = "原本ファイルが保存先にありません。文書をアップロードし直してください。"
         bad_path_message = "原本ファイルの参照パスが不正です。"
     try:
         data = await ObjectStorageClient().get(path)
