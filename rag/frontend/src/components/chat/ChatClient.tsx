@@ -251,7 +251,7 @@ function AssistantColumn({
   errorMessage: string | null;
   guardrailWarnings: string[];
   answerDiagnostics?: unknown;
-  /** 保存された回答がある(trace_id から根拠と実行記録を開ける)。 */
+  /** 保存された回答がある(trace_id から回答の実行記録を開ける)。 */
   savedAnswer?: boolean;
   /**
    * 処理の段階（#1146）。生成中は今の段階と経過時間、完了後は回答の上に「処理の経過」の 1 行を出す。
@@ -333,45 +333,64 @@ function AssistantColumn({
           {guardrailWarnings.join(" / ")}
         </Banner>
       ) : null}
-      {finished && answerDiagnostics ? <AnswerDetailsPanel diagnostics={answerDiagnostics} traceId={traceId} /> : null}
+      {/* 根拠の構成・工程などの実行記録。引用の一覧は下の「根拠（引用）」の 1 か所だけに出す（#1202）。 */}
+      {finished && answerDiagnostics ? (
+        <AnswerDetailsPanel
+          diagnostics={answerDiagnostics}
+          traceId={traceId}
+          title={t("chat.answerDetails.title")}
+        />
+      ) : null}
       {finished && !answerDiagnostics && savedAnswer && traceId ? (
         <Disclosure
           variant="plain"
           summary={t("chat.answerDetails.open")}
           className="border-t border-border px-2 pt-1"
         >
-          <SavedAnswerRecord traceId={traceId} searchAnswerProfileId={searchAnswerProfileId} showAnswer={false} />
+          <SavedAnswerRecord
+            traceId={traceId}
+            searchAnswerProfileId={searchAnswerProfileId}
+            showAnswer={false}
+            showCitations={false}
+            detailsTitle={t("chat.answerDetails.title")}
+          />
         </Disclosure>
       ) : null}
-      {finished ? (
-        <FeedbackControls
-          traceId={traceId}
-          searchAnswerProfileId={searchAnswerProfileId}
-          targetType="answer"
-          sourceSurface="chat"
-          messageId={messageId}
-        />
-      ) : null}
-      {citations.length > 0 ? (
-        <Disclosure
-          variant="plain"
-          summary={t("chat.citations.summary", { count: citations.length })}
-          className="mt-auto border-t border-border px-2 pt-1"
-        >
-          <ul className="space-y-2">
-            {citations.map((chunk, index) => (
-              <CitationCard
-                key={chunk.chunk_id}
-                chunk={chunk}
-                index={index}
-                traceId={traceId}
-                searchAnswerProfileId={searchAnswerProfileId}
-                sourceSurface="chat"
-                messageId={messageId}
-              />
-            ))}
-          </ul>
-        </Disclosure>
+      {citations.length > 0 || (finished && traceId) ? (
+        // 引用と評価は回答の枠の下端にそろえる（比較の列の高さをそろえる）。根拠を確かめてから評価できるよう、
+        // 評価は引用の後ろに置く（#1202）。
+        <div className="mt-auto flex flex-col gap-3">
+          {citations.length > 0 ? (
+            <Disclosure
+              variant="plain"
+              summary={t("chat.citations.summary", { count: citations.length })}
+              className="border-t border-border px-2 pt-1"
+            >
+              <ul className="space-y-2">
+                {citations.map((chunk, index) => (
+                  <CitationCard
+                    key={chunk.chunk_id}
+                    chunk={chunk}
+                    index={index}
+                    traceId={traceId}
+                    searchAnswerProfileId={searchAnswerProfileId}
+                    sourceSurface="chat"
+                    messageId={messageId}
+                  />
+                ))}
+              </ul>
+            </Disclosure>
+          ) : null}
+          {finished ? (
+            <FeedbackControls
+              traceId={traceId}
+              searchAnswerProfileId={searchAnswerProfileId}
+              targetType="answer"
+              sourceSurface="chat"
+              messageId={messageId}
+            />
+          ) : null}
+        </div>
       ) : null}
     </ChatAnswer>
   );
@@ -567,7 +586,7 @@ export function ChatClient() {
     () => conversationQuery.data?.messages ?? [],
     [conversationQuery.data]
   );
-  // 保存された回答がある回答(trace_id)。該当する回答だけ根拠と実行記録を開ける。
+  // 保存された回答がある回答(trace_id)。該当する回答だけ実行記録を開ける。
   // 回答履歴のページングに依存しないよう、開いている会話の回答の trace_id で引き当てる（#304）。
   const replyTraceIds = useMemo(
     () =>

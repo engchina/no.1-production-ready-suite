@@ -738,7 +738,7 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await page.getByRole("textbox").fill(userMessage.content);
   await page.getByRole("button", { name: "送信" }).click();
 
-  const panel = page.getByRole("region", { name: "回答の根拠と実行記録" });
+  const panel = page.getByRole("region", { name: "回答の実行記録" });
   await expect(panel).toBeVisible();
   await expect(panel.getByText("会話の流れから補った質問: 経費精算の上限額は？")).toBeVisible();
   await expect(panel.getByText("信頼度: high")).toBeVisible();
@@ -1064,7 +1064,7 @@ for (const viewport of [
     await page.getByRole("textbox").fill(userMessage.content);
     await page.getByRole("button", { name: "送信" }).click();
 
-    const panel = page.getByRole("region", { name: "回答の根拠と実行記録" });
+    const panel = page.getByRole("region", { name: "回答の実行記録" });
     await expect(panel.getByText("承認済み FAQ から回答")).toBeVisible();
     const source = panel.getByRole("region", { name: "回答の出典: 承認済み FAQ" });
     await expect(source).toContainText("経費精算の上限はいくらですか？");
