@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
 from time import perf_counter
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.clients.oracle import OracleClient
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
@@ -45,6 +45,12 @@ from app.rag.answer_timeout import (
 )
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
+from app.rag.evaluation_handling import (
+    condition_coverage,
+    forbidden_hits,
+    observed_outcome,
+    step_order_score,
+)
 from app.rag.file_processing_evaluation import citation_traceability_coverage
 from app.rag.guardrails import evaluate_groundedness
 from app.rag.observability import (
@@ -569,6 +575,7 @@ def _case_result(
         if case.expected_answer_keywords
         else None
     )
+    handling = _handling_scores(case, response, abstained=abstained)
     failure_reasons = _case_failure_reasons(
         answerable=answerable,
         has_relevant=bool(relevant),
@@ -578,7 +585,7 @@ def _case_result(
         keyword_hit=keyword_hit,
         guardrail_warnings=response.guardrail_warnings,
         judgement=judgement,
-    )
+    ) + _handling_failure_reasons(handling)
     return EvaluationCaseResult(
         case_id=case.id,
         trace_id=response.trace_id,
@@ -595,12 +602,58 @@ def _case_result(
         answer_keyword_hit=keyword_hit,
         abstained=abstained,
         refusal_correct=abstained != answerable,
+        **handling,
         answer_evaluation=judgement,
         guardrail_warnings=response.guardrail_warnings,
         failure_reasons=list(failure_reasons),
         diagnostics=response.diagnostics,
         elapsed_ms=response.elapsed_ms,
     )
+
+
+def _handling_scores(
+    case: EvaluationCase, response: SearchResponse, *, abstained: bool
+) -> dict[str, Any]:
+    """業務支援の採点（対応・手順・危険な回答・条件。#1231）。期待の無い項目は None / 空。"""
+    observed = observed_outcome(response.diagnostics.answer, abstained=abstained)
+    scores: dict[str, Any] = {
+        "observed_outcome": observed.outcome,
+        "outcome_source": observed.source,
+    }
+    if case.expected_outcomes:
+        scores["handling_correct"] = observed.outcome in case.expected_outcomes
+    if case.expected_steps:
+        score, missing = step_order_score(response.answer, case.expected_steps)
+        scores["step_order_score"] = _round(score)
+        scores["missing_steps"] = missing
+    if case.forbidden_phrases:
+        scores["forbidden_checked"] = True
+        scores["forbidden_hits"] = forbidden_hits(response.answer, case.forbidden_phrases)
+    if case.required_conditions:
+        coverage, missing = condition_coverage(response.answer, case.required_conditions)
+        scores["condition_coverage"] = _round(coverage)
+        scores["missing_conditions"] = missing
+    return scores
+
+
+def _handling_failure_reasons(scores: Mapping[str, Any]) -> list[EvaluationFailureReason]:
+    reasons: list[EvaluationFailureReason] = []
+    if scores.get("handling_correct") is False:
+        reasons.append("unexpected_handling")
+    step_score = scores.get("step_order_score")
+    if step_score is not None and step_score < 1.0:
+        reasons.append("step_missing")
+    if scores.get("forbidden_hits"):
+        reasons.append("forbidden_action")
+    if scores.get("missing_conditions"):
+        reasons.append("condition_missing")
+    return reasons
+
+
+def _safe_answer(result: EvaluationCaseResult, checked: bool) -> float | None:
+    if not checked:
+        return None
+    return 0.0 if result.forbidden_hits else 1.0
 
 
 def is_abstained(response: SearchResponse) -> bool:
@@ -624,6 +677,10 @@ def _accumulate_case_metrics(aggregate: _Aggregate, result: EvaluationCaseResult
         aggregate.add("claim_support_rate", _bool_value(judgement.claims_supported))
         aggregate.add("requirement_coverage", judgement.requirement_coverage)
         aggregate.add("answer_pass_rate", _bool_value(judgement.passed))
+    aggregate.add("handling_accuracy", _bool_value(result.handling_correct))
+    aggregate.add("step_order_score", result.step_order_score)
+    aggregate.add("safe_answer_rate", _safe_answer(result, result.forbidden_checked))
+    aggregate.add("condition_coverage", result.condition_coverage)
 
 
 def _experiment_progress(
@@ -893,6 +950,10 @@ def _rate(values: list[bool]) -> float | None:
     return round(sum(values) / len(values), 4) if values else None
 
 
+def _mean(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 4) if values else None
+
+
 def category_breakdown(
     results: list[EvaluationCaseResult],
 ) -> dict[str, EvaluationCategorySummary]:
@@ -932,6 +993,23 @@ def category_breakdown(
                     for result in succeeded
                     if result.refusal_correct is not None
                 ]
+            ),
+            handling_correct_rate=_rate(
+                [
+                    bool(result.handling_correct)
+                    for result in succeeded
+                    if result.handling_correct is not None
+                ]
+            ),
+            step_order_score=_mean(
+                [
+                    result.step_order_score
+                    for result in succeeded
+                    if result.step_order_score is not None
+                ]
+            ),
+            safe_answer_rate=_rate(
+                [not result.forbidden_hits for result in succeeded if result.forbidden_checked]
             ),
         )
     return breakdown

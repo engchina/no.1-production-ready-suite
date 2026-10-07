@@ -177,6 +177,10 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
         "refusal_accuracy": 1,
         "requirement_coverage": 0,
         "answer_pass_rate": 0,
+        "handling_accuracy": 0,
+        "step_order_score": 0,
+        "safe_answer_rate": 0,
+        "condition_coverage": 0,
     }
     assert metrics.passed is True
     assert metrics.threshold_failures == []
@@ -497,6 +501,9 @@ async def test_category_breakdown_summarizes_results_per_category() -> None:
         "answer_keyword_hit_rate": 1.0,
         "abstain_rate": 0.0,
         "refusal_correct_rate": 1.0,
+        "handling_correct_rate": None,
+        "step_order_score": None,
+        "safe_answer_rate": None,
     }
     # 資料に無い質問に答えたので、拒答の判断が期待と違う。
     assert breakdown["knowledge_missing"]["refusal_correct_rate"] == 0.0
@@ -1545,3 +1552,72 @@ def test_threshold_skips_unmeasured_metrics() -> None:
     )
 
     assert [(failure.metric, failure.actual) for failure in failures] == [("mrr", 0.4)]
+
+
+# ---- 業務支援の採点（#1231） ------------------------------------------------------------
+
+
+def test_handling_helpers_score_outcome_steps_forbidden_and_conditions() -> None:
+    from app.rag.evaluation_handling import (
+        condition_coverage,
+        forbidden_hits,
+        observed_outcome,
+        step_order_score,
+    )
+
+    assert observed_outcome({"outcome": "needs_human"}, abstained=True).source == "explicit"
+    assert observed_outcome({}, abstained=True).outcome == "insufficient_evidence"
+    assert observed_outcome({"external_data_required": True}, abstained=False).outcome == (
+        "needs_environment_data"
+    )
+    assert observed_outcome({"needs_human_review": True}, abstained=False).outcome == "conditional"
+    assert observed_outcome(None, abstained=False).outcome == "answered"
+    # 未知の対応の値は推定に戻す。
+    assert observed_outcome({"outcome": "other"}, abstained=False).source == "inferred"
+
+    answer = "1. アカウントを登録する。2. 権限を付与する。3. 通知を設定する。"
+    assert step_order_score(answer, ["登録", "権限", "通知"]) == (1.0, [])
+    score, missing = step_order_score(answer, ["通知", "登録", "承認"])
+    assert (round(score, 4), missing) == (0.3333, ["承認"])
+    assert step_order_score(answer, []) == (1.0, [])
+    assert forbidden_hits("グループ　に付与してください", ["グループに付与", "削除"]) == [
+        "グループに付与"
+    ]
+    assert condition_coverage(answer, ["権限", "対象の利用者"]) == (0.5, ["対象の利用者"])
+
+
+async def test_business_support_cases_score_handling_metrics_and_reasons() -> None:
+    cases = [
+        EvaluationCase(
+            id="steps",
+            query="承認条件",
+            expected_answer_keywords=["承認条件"],
+            category="document_answerable",
+            expected_outcomes=["answered"],
+            expected_steps=["承認条件", "120000"],
+            forbidden_phrases=["グループに付与"],
+            required_conditions=["承認条件", "対象の部署"],
+        ),
+        EvaluationCase(
+            id="clarify",
+            query="承認条件",
+            category="clarification_required",
+            expected_outcomes=["needs_clarification", "conditional"],
+        ),
+    ]
+    metrics = await EvaluationRunner(pipeline=StubPipeline()).run(cases=cases, top_k=5)
+
+    first, second = metrics.case_results
+    assert (first.observed_outcome, first.outcome_source) == ("answered", "inferred")
+    assert first.handling_correct is True
+    assert first.step_order_score == 1.0
+    assert first.forbidden_checked is True and first.forbidden_hits == []
+    assert (first.condition_coverage, first.missing_conditions) == (0.5, ["対象の部署"])
+    assert "condition_missing" in first.failure_reasons
+    assert second.handling_correct is False
+    assert "unexpected_handling" in second.failure_reasons
+    assert second.step_order_score is None and second.forbidden_checked is False
+    assert metrics.handling_accuracy == 0.5
+    assert metrics.safe_answer_rate == 1.0
+    assert metrics.metric_case_counts["safe_answer_rate"] == 1
+    assert metrics.category_breakdown["clarification_required"].handling_correct_rate == 0.0
