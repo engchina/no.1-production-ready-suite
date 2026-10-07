@@ -1621,3 +1621,40 @@ async def test_business_support_cases_score_handling_metrics_and_reasons() -> No
     assert metrics.safe_answer_rate == 1.0
     assert metrics.metric_case_counts["safe_answer_rate"] == 1
     assert metrics.category_breakdown["clarification_required"].handling_correct_rate == 0.0
+
+
+# ---- 検索・回答プロファイルを指定した評価（#1249） ------------------------------------------
+
+
+async def test_profile_evaluation_resolves_each_case_through_the_profile() -> None:
+    seen: list[tuple[str | None, str]] = []
+
+    async def resolver(request: Any, settings: Any) -> tuple[Any, Any]:
+        seen.append((request.search_answer_profile_id, request.query))
+        return request.model_copy(update={"knowledge_base_ids": ["kb-profile"]}), settings
+
+    pipeline = StubPipeline()
+    runner = EvaluationRunner(pipeline=pipeline, profile_resolver=resolver)
+    cases = [EvaluationCase(id="a", query="承認条件"), EvaluationCase(id="b", query="期限")]
+    metrics = await runner.run(cases=cases, top_k=5, search_answer_profile_id="bv-1")
+    assert seen == [("bv-1", "承認条件"), ("bv-1", "期限")]
+    assert metrics.error_count == 0
+
+    # 指定しなければ解決しない（全体の既定。#301）。
+    seen.clear()
+    await runner.run(cases=cases, top_k=5)
+    assert seen == []
+
+
+async def test_profile_resolution_failure_fails_only_that_case() -> None:
+    from fastapi import HTTPException
+
+    async def resolver(request: Any, settings: Any) -> tuple[Any, Any]:
+        raise HTTPException(status_code=409, detail="アーカイブ済み")
+
+    runner = EvaluationRunner(pipeline=StubPipeline(), profile_resolver=resolver)
+    metrics = await runner.run(
+        cases=[EvaluationCase(id="a", query="承認条件")], top_k=5, search_answer_profile_id="bv-x"
+    )
+    assert metrics.error_count == 1
+    assert metrics.case_results[0].status == "error"
