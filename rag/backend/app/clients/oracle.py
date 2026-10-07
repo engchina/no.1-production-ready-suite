@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Protocol, TypeVar, cast
 from uuid import uuid4
 
+from pr_backend_core.oracle_dsn import dsn_without_tns_retry
 from pr_backend_core.oracle_pool import (
     DEFAULT_WAIT_TIMEOUT_MS,
     PoolCloser,
@@ -12006,56 +12007,10 @@ def _oracle_connection_configured(client: OracleClient) -> bool:
 
 
 def _oracle_connection_test_dsn(settings: Settings) -> str:
-    """接続テストでは Wallet alias の長い retry 設定を外した descriptor を使う。"""
-    wallet_dir = settings.resolved_oracle_wallet_dir.strip()
-    if not wallet_dir:
-        return settings.oracle_dsn
-    descriptor = _tns_alias_descriptor(Path(wallet_dir).expanduser(), settings.oracle_dsn)
-    if not descriptor:
-        return settings.oracle_dsn
-    return _strip_tns_retry_settings(descriptor)
-
-
-def _tns_alias_descriptor(wallet_path: Path, alias: str) -> str | None:
-    """tnsnames.ora から指定 alias の connect descriptor を抜き出す。"""
-    tnsnames = wallet_path / "tnsnames.ora"
-    if not alias.strip() or not tnsnames.is_file():
-        return None
-    try:
-        content = tnsnames.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-
-    for match in re.finditer(r"(?im)^\s*([A-Za-z0-9_.-]+)\s*=\s*", content):
-        if match.group(1).lower() != alias.lower():
-            continue
-        descriptor_start = content.find("(", match.end())
-        if descriptor_start < 0:
-            return None
-        return _balanced_parenthesized_text(content, descriptor_start)
-    return None
-
-
-def _balanced_parenthesized_text(content: str, start: int) -> str | None:
-    """start 位置から始まる括弧式を top-level まで読み取る。"""
-    depth = 0
-    for index in range(start, len(content)):
-        char = content[index]
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-            if depth == 0:
-                return content[start : index + 1]
-        if depth < 0:
-            return None
-    return None
-
-
-def _strip_tns_retry_settings(descriptor: str) -> str:
-    """ADB Wallet の長い retry 設定を接続テスト用に取り除く。"""
-    without_retry_count = re.sub(r"\(\s*retry_count\s*=\s*\d+\s*\)", "", descriptor, flags=re.I)
-    return re.sub(r"\(\s*retry_delay\s*=\s*\d+\s*\)", "", without_retry_count, flags=re.I)
+    """接続テストでは Wallet alias の長い retry 設定を外した descriptor を使う（#1214）。"""
+    return dsn_without_tns_retry(
+        settings.oracle_dsn, settings.resolved_oracle_wallet_dir.strip() or None
+    )
 
 
 def _add_wallet_kwargs(settings: Settings, kwargs: dict[str, object]) -> None:
