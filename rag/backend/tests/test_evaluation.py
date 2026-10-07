@@ -1658,3 +1658,40 @@ async def test_profile_resolution_failure_fails_only_that_case() -> None:
     )
     assert metrics.error_count == 1
     assert metrics.case_results[0].status == "error"
+
+
+# ---- 確認の質問・引き継ぎは拒答・検索の取りこぼしではない（#1259） ---------------------------
+
+
+def _response_with_outcome(outcome: str | None, *, citations: bool) -> Any:
+    from app.schemas.search import SearchDiagnostics, SearchResponse
+
+    answer: dict[str, Any] = {"insufficient_reason": ""}
+    if outcome is not None:
+        answer["outcome"] = outcome
+    return SearchResponse(
+        answer="権限は個別の利用者とグループのどちらに付けますか？",
+        citations=[RetrievedChunk(document_id="doc-1", chunk_id="doc-1:0", text="本文", score=1.0)]
+        if citations
+        else [],
+        trace_id="t",
+        elapsed_ms=1.0,
+        diagnostics=SearchDiagnostics(answer=answer),
+    )
+
+
+def test_clarification_is_not_a_refusal_or_retrieval_miss() -> None:
+    from app.rag.evaluation import _case_result, is_abstained
+
+    case = EvaluationCase(id="c", query="権限を付与したい", relevant_document_ids=["doc-1"])
+    clarify = _response_with_outcome("needs_clarification", citations=False)
+    assert is_abstained(clarify) is False
+    result = _case_result(case, clarify, None)
+    assert (result.context_recall, result.refusal_correct) == (None, True)
+    assert "retrieval_miss" not in result.failure_reasons
+    assert "unexpected_refusal" not in result.failure_reasons
+
+    assert is_abstained(_response_with_outcome("insufficient_evidence", citations=False)) is True
+    assert is_abstained(_response_with_outcome("answered", citations=True)) is False
+    # 対応を持たない古い記録は、引用が無ければ拒答（今までどおり）。
+    assert is_abstained(_response_with_outcome(None, citations=False)) is True
