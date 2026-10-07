@@ -14,6 +14,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   MessageText,
   offsetForPage,
+  OffsetPagination,
   PageBody,
   PageHeader,
   RowTitleButton,
@@ -26,7 +27,7 @@ import {
   useActionPending,
 } from "@engchina/production-ready-ui";
 
-import { listScrollLabel, QueryState, ServerPagination, usePersistedPage } from "@/components/ListViews";
+import { agentPaginationLabels, listScrollLabel, QueryState, usePersistedPage } from "@/components/ListViews";
 import {
   agentApi,
   FEEDBACK_REASONS,
@@ -186,7 +187,6 @@ export function FeedbackPage() {
               filtered={filtered}
               onClearFilters={clearListFilters}
               onOpen={setSelected}
-              page={page}
               onPageChange={setPage}
             />
           ) : null}
@@ -242,14 +242,12 @@ function FeedbackContent({
   filtered,
   onClearFilters,
   onOpen,
-  page,
   onPageChange,
 }: {
   report: FeedbackReport;
   filtered: boolean;
   onClearFilters: () => void;
   onOpen: (item: FeedbackItem) => void;
-  page: number;
   onPageChange: (page: number) => void;
 }) {
   const { summary, previous } = report;
@@ -302,7 +300,7 @@ function FeedbackContent({
           <CardDescription>{t("feedback.list.description")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          {report.matched === 0 ? (
+          {report.total === 0 ? (
             <EmptyState
               title={t("feedback.noMatch.title")}
               action={
@@ -316,13 +314,13 @@ function FeedbackContent({
           ) : (
             <div className="grid min-w-0 gap-2">
               <FeedbackTable items={report.items} onOpen={onOpen} />
-              <ServerPagination
+              <OffsetPagination
                 offset={report.offset}
                 limit={report.limit}
-                total={report.matched}
+                total={report.total}
                 count={report.items.length}
-                page={page}
-                onPageChange={onPageChange}
+                onPageChange={(next) => onPageChange(next)}
+                labels={agentPaginationLabels()}
                 ariaLabel={t("feedback.pagerLabel")}
                 testId="feedback-pagination"
               />

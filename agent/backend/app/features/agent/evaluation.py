@@ -34,6 +34,8 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from agents import Agent, ModelSettings, Runner
+from pr_backend_core import Page
+from pr_backend_core.api import paginate
 from pydantic import BaseModel, Field, computed_field, field_validator
 
 from app.features.agent import builtin_runtime
@@ -399,12 +401,8 @@ class EvaluationJobItem(BaseModel):
     finished_at: datetime | None
 
 
-class EvaluationJobsData(BaseModel):
-    jobs: list[EvaluationJobItem] = Field(default_factory=list)
-    # 絞り込みに合う job の件数（ページングの総数）。
-    total: int = 0
-    offset: int = 0
-    limit: int = EVALUATION_JOBS_PAGE_SIZE
+class EvaluationJobsData(Page[EvaluationJobItem]):
+    """評価の履歴の 1 ページ（共通の `Page`。`total` は絞り込みに合う job の件数。#1266）。"""
 
 
 class EvaluationBusyError(RuntimeError):
@@ -653,7 +651,9 @@ class EvaluationStore:
                 if (set_id is None or job.set_id == set_id) and allowed(job.agent_id)
             ]
             items = [job_item(job) for job in matched[offset : offset + limit]]
-        return EvaluationJobsData(jobs=items, total=len(matched), offset=offset, limit=limit)
+        return EvaluationJobsData(
+            **dict(paginate(items, total=len(matched), limit=limit, offset=offset))
+        )
 
     def with_previous(self, job: EvaluationJob) -> EvaluationJob:
         """前回（同じ評価セット・同じ評価ケースで、この job より前に完了した job）の概要を入れる。

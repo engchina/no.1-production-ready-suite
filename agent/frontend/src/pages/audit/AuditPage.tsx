@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, RefreshCw } from "lucide-react";
 import {
@@ -15,8 +15,7 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
   offsetForPage,
-  offsetPagination,
-  Pagination,
+  OffsetPagination,
   TableSkeleton,
   PageHeader,
   ProcessingIndicator,
@@ -138,21 +137,20 @@ export function AuditPage() {
   const auditQueryClient = useQueryClient();
   const manualRefresh = useActionPending();
   const manualApply = useActionPending();
-  const auditPaging = audit.data
-    ? offsetPagination({
-        offset: audit.data.offset,
-        limit: audit.data.limit,
-        total: audit.data.total,
-        count: audit.data.records.length,
-      })
-    : null;
-  // 残していたページが記録の削除などで範囲外になったら、最後のページへ寄せる。
-  const lastAuditPage = auditPaging?.totalPages ?? null;
-  useEffect(() => {
-    if (lastAuditPage !== null && audit.data?.records.length === 0 && auditPage > lastAuditPage) {
-      setAuditPage(lastAuditPage);
-    }
-  }, [audit.data?.records.length, auditPage, lastAuditPage, setAuditPage]);
+  // 共通の OffsetPagination（#1266）。残していたページが記録の削除などで範囲外になり 0 件で返ったら、
+  // 最後のページへ寄せる（0 件の空の状態の下にも置いて、その移動を効かせる）。
+  const auditPager = audit.data ? (
+    <OffsetPagination
+      offset={audit.data.offset}
+      limit={audit.data.limit}
+      total={audit.data.total}
+      count={audit.data.items.length}
+      onPageChange={(page) => setAuditPage(page)}
+      labels={agentPaginationLabels()}
+      ariaLabel={t("audit.pagerLabel")}
+      testId="audit-pagination"
+    />
+  ) : null;
   const { runId, toolName, stepStatus, approvalStatus, errorCode, warnings, limit } = filterForm;
   // ツール名の選択肢は、登録済みのツール（`/api/tools`）と監査に記録されたツール名を合わせる。
   // MCP 接続のツール（`<接続>__<ツール>`）は `/api/tools` に出ない（#983）。選択中の値も残す。
@@ -342,25 +340,16 @@ export function AuditPage() {
               loadingLabel={t("loading.audit")}
               skeleton={<TableSkeleton columns={9} />}
             >
-              {audit.data?.records.length ? (
+              {audit.data?.items.length ? (
                 <div className="grid min-w-0 gap-2">
-                  <AuditRecordsTable records={audit.data.records} />
-                  {auditPaging ? (
-                    <Pagination
-                      page={auditPaging.page}
-                      totalPages={auditPaging.totalPages}
-                      onPageChange={setAuditPage}
-                      summary={agentPaginationLabels().summary(auditPaging.range)}
-                      pageIndicator={agentPaginationLabels().pageIndicator?.(auditPaging.page, auditPaging.totalPages)}
-                      prevLabel={t("pager.prev")}
-                      nextLabel={t("pager.next")}
-                      ariaLabel={t("audit.pagerLabel")}
-                      testId="audit-pagination"
-                    />
-                  ) : null}
+                  <AuditRecordsTable records={audit.data.items} />
+                  {auditPager}
                 </div>
               ) : (
-                <EmptyState title={t("audit.noRecords")} />
+                <>
+                  <EmptyState title={t("audit.noRecords")} />
+                  {auditPager}
+                </>
               )}
             </QueryState>
           </CardContent>

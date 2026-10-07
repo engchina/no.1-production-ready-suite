@@ -400,12 +400,12 @@ def test_history_is_kept_for_a_year_and_listed_page_by_page(agent: None) -> None
     latest = _job(_case("c1", "q", "x"), set_id="evset_history")
 
     first = client.get("/api/evaluations", params={"set_id": "evset_history"}).json()["data"]
-    assert (first["total"], first["offset"], first["limit"], len(first["jobs"])) == (61, 0, 10, 10)
-    assert first["jobs"][0]["id"] == latest.id
+    assert (first["total"], first["offset"], first["limit"], len(first["items"])) == (61, 0, 10, 10)
+    assert first["items"][0]["id"] == latest.id
     last = client.get(
         "/api/evaluations", params={"set_id": "evset_history", "offset": 60, "limit": 10}
     ).json()["data"]
-    assert [item["id"] for item in last["jobs"]] == [jobs[0].id]
+    assert [item["id"] for item in last["items"]] == [jobs[0].id]
     assert client.get("/api/evaluations", params={"limit": 101}).status_code == 422
     # 前回との比較は、残っているすべての履歴から探す。
     second = client.get(f"/api/evaluations/{jobs[1].id}").json()["data"]
@@ -546,7 +546,7 @@ def test_evaluation_permissions(
     assert evaluation_store.get(job_id).created_by_user_uuid == evaluator.user_uuid
     # 利用できない業務 Agent の評価セット・評価は一覧に出さず、読めない。
     assert client.get("/api/evaluation-sets", headers=other).json()["data"]["sets"] == []
-    assert client.get("/api/evaluations", headers=other).json()["data"]["jobs"] == []
+    assert client.get("/api/evaluations", headers=other).json()["data"]["items"] == []
     assert client.get(f"/api/evaluations/{job_id}", headers=other).status_code == 404
     assert client.get(f"/api/evaluation-sets/{set_id}", headers=other).status_code == 404
 
@@ -766,7 +766,7 @@ def test_evaluation_records_and_pins_the_agent_version(
     published = client.post("/api/evaluations", json={"set_id": set_id}).json()["data"]
     assert published["agent_version"] == 1
     client.post(f"/api/evaluations/{published['id']}/cancel")
-    listed = client.get("/api/evaluations").json()["data"]["jobs"]
+    listed = client.get("/api/evaluations").json()["data"]["items"]
     assert listed[0]["agent_version"] == 1
 
     # 公開していない変更があれば、既定は下書き。

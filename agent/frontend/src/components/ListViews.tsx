@@ -1,8 +1,6 @@
-import { useEffect, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import {
-  offsetPagination,
   PagedDataTable as SharedPagedDataTable,
-  Pagination,
   TimedLoadingState,
   type PagedDataTableProps as SharedPagedDataTableProps,
   type PaginationLabels,
@@ -14,7 +12,7 @@ import { useWorkspaceState, type WorkspaceField, type WorkspaceValidator } from 
 
 const numberFormat = new Intl.NumberFormat("ja-JP");
 
-/** 共通の Pagination に渡す Agent の文言（件数・ページ・前へ / 次へ）。 */
+/** 共通の Pagination / OffsetPagination / PagedDataTable に渡す Agent の文言（件数・ページ・前へ / 次へ。i18n）。 */
 export function agentPaginationLabels(): PaginationLabels {
   return {
     summary: ({ start, end, total }) =>
@@ -136,48 +134,4 @@ export function QueryState<T>({
 export function usePersistedPage(pageKey: ListPageKey): [number, (page: number) => void] {
   const [page, setPage] = useWorkspaceState("lists", pageKey, 1, isPageNumber);
   return [page, setPage];
-}
-
-/**
- * サーバー側でページングする一覧の下に置く共通の `Pagination`（#794。監査と同じ形）。
- * 1 ページしかないときは出さない。残していたページが範囲外（削除・期間の変更）になったら最後のページへ寄せる。
- */
-export function ServerPagination({
-  offset,
-  limit,
-  total,
-  count,
-  page,
-  onPageChange,
-  ariaLabel,
-  testId,
-}: {
-  offset: number;
-  limit: number;
-  total: number;
-  count: number;
-  page: number;
-  onPageChange: (page: number) => void;
-  ariaLabel: string;
-  testId: string;
-}) {
-  const paging = offsetPagination({ offset, limit, total, count });
-  const lastPage = paging.totalPages;
-  useEffect(() => {
-    if (count === 0 && page > lastPage) onPageChange(lastPage);
-  }, [count, page, lastPage, onPageChange]);
-  const labels = agentPaginationLabels();
-  return (
-    <Pagination
-      page={paging.page}
-      totalPages={paging.totalPages}
-      onPageChange={onPageChange}
-      summary={labels.summary(paging.range)}
-      pageIndicator={labels.pageIndicator?.(paging.page, paging.totalPages)}
-      prevLabel={labels.prev}
-      nextLabel={labels.next}
-      ariaLabel={ariaLabel}
-      testId={testId}
-    />
-  );
 }

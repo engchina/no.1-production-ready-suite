@@ -17,6 +17,7 @@ import {
   ListSkeleton,
   MessageText,
   offsetForPage,
+  OffsetPagination,
   PageBody,
   PageHeader,
   ProcessingIndicator,
@@ -37,7 +38,7 @@ import {
 } from "@engchina/production-ready-ui";
 
 import { MissingEditorTarget } from "@/components/EntityLayout";
-import { listScrollLabel, PagedDataTable, ServerPagination, usePersistedPage } from "@/components/ListViews";
+import { agentPaginationLabels, listScrollLabel, PagedDataTable, usePersistedPage } from "@/components/ListViews";
 import { EvaluationSetEditor, downloadBlob } from "@/components/evaluation/EvaluationSetEditor";
 import {
   EvaluationVersionField,
@@ -224,7 +225,7 @@ function EvaluationOverview({
     // 表示していない実行中の評価（前の評価を表示している間の最新の評価）は、ここで終わりを待つ。
     // 表示中の評価は `job` が取り直す（#965）。
     refetchInterval: (query) => {
-      const items = query.state.data?.jobs ?? [];
+      const items = query.state.data?.items ?? [];
       const shown = jobId ?? items[0]?.id;
       return items.some((item) => ACTIVE.has(item.status) && item.id !== shown) ? POLL_INTERVAL_MS : false;
     },
@@ -236,7 +237,7 @@ function EvaluationOverview({
     placeholderData: keepPreviousData,
   });
   // 表示する評価は、選んだ評価か、無ければ最新の評価。
-  const shownJobId = jobId ?? latest.data?.jobs[0]?.id ?? null;
+  const shownJobId = jobId ?? latest.data?.items[0]?.id ?? null;
   const job = useQuery({
     queryKey: ["evaluation", shownJobId],
     queryFn: () => agentApi.getEvaluation(shownJobId ?? ""),
@@ -257,7 +258,7 @@ function EvaluationOverview({
     }
   }, [shownStatus, queryClient]);
   // 最新の一覧の実行中の評価が終わったら、評価セット（前回の結果）と最近の評価の他のページも取り直す（#965）。
-  const latestActive = (latest.data?.jobs ?? []).some((item) => ACTIVE.has(item.status));
+  const latestActive = (latest.data?.items ?? []).some((item) => ACTIVE.has(item.status));
   const wasLatestActive = useRef(latestActive);
   useEffect(() => {
     if (wasLatestActive.current && !latestActive) {
@@ -447,18 +448,18 @@ function EvaluationOverview({
             ) : (
               <div className="grid min-w-0 gap-2">
                 <JobsTable
-                  jobs={jobs.data.jobs}
+                  jobs={jobs.data.items}
                   shownJobId={shownJobId}
                   onShow={(item) => onJobChange(item.id)}
                   onDelete={(item) => void confirmDeleteJob(item)}
                 />
-                <ServerPagination
+                <OffsetPagination
                   offset={jobs.data.offset}
                   limit={jobs.data.limit}
                   total={jobs.data.total}
-                  count={jobs.data.jobs.length}
-                  page={jobsPage}
-                  onPageChange={setJobsPage}
+                  count={jobs.data.items.length}
+                  onPageChange={(page) => setJobsPage(page)}
+                  labels={agentPaginationLabels()}
                   ariaLabel={t("evaluation.jobs.pagerLabel")}
                   testId="evaluation-jobs-pagination"
                 />
