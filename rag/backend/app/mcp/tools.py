@@ -35,6 +35,7 @@ from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.clients.oracle import OracleClient
 from app.config import get_settings
+from app.rag.answer_validation import EvidenceRef, validate_answer
 from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
 from app.schemas.search_answer_profile import SearchAnswerProfileStatus
@@ -112,6 +113,31 @@ class SearchInput(BaseModel):
         ge=1,
         le=EVIDENCE_LIMIT_MAX,
         description="返す根拠の最大件数（回答に使った根拠を先に返す）。",
+    )
+
+
+class EvidenceRefInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str = Field(..., min_length=1, max_length=128)
+    chunk_id: str = Field(..., min_length=1, max_length=512)
+
+
+class ValidateAnswerInput(BaseModel):
+    """回答の最終の検証の条件（#1246）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(..., min_length=1, max_length=8000, description="利用者の質問。")
+    answer: str = Field(..., min_length=1, max_length=20000, description="検証する回答の本文。")
+    evidence: list[EvidenceRefInput] = Field(
+        ...,
+        min_length=1,
+        max_length=30,
+        description=(
+            "回答の根拠（rag_search / rag_retrieve_evidence が返した document_id と chunk_id）。"
+            "本文はサーバーが今の権限と版で読み直す。"
+        ),
     )
 
 
@@ -237,6 +263,38 @@ class RetrieveEvidenceOutput(BaseModel):
         description="検索の順（rerank の順）の根拠。回答は作らないので used_in_answer は false。"
     )
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
+
+
+class ValidatedClaim(BaseModel):
+    answer_quote: str = Field(description="回答の段落（原文）。")
+    status: str = Field(
+        description=(
+            "supported=根拠で裏付けられる / unsupported=根拠で確かめられない / contradicted=根拠と"
+            "矛盾 / data_confirmation=実データの確認を促すだけ / unassessed=監査されなかった"
+        )
+    )
+    chunk_id: str | None = Field(default=None, description="裏付け・矛盾の根拠の chunk_id。")
+    reason: str
+
+
+class ValidateAnswerOutput(BaseModel):
+    valid: bool = Field(
+        description=(
+            "矛盾・裏付けの無い主張・読めない根拠が無く、裏付けのある主張が 1 つ以上あるか。"
+        )
+    )
+    status: str = Field(description="completed / no_claims / no_evidence / input_too_large。")
+    counts: dict[str, int] = Field(default_factory=dict, description="判定ごとの段落の数。")
+    claims: list[ValidatedClaim] = Field(default_factory=list)
+    missing_evidence: list[EvidenceRefInput] = Field(
+        default_factory=list, description="見つからない（削除・権限の外）根拠。"
+    )
+    stale_evidence: list[EvidenceRefInput] = Field(
+        default_factory=list, description="文書の古い版の根拠（検索し直す）。"
+    )
+    evidence_truncated: bool = Field(
+        default=False, description="根拠が多く、後ろの根拠を監査に渡しきれなかったか。"
+    )
 
 
 class ReadSourceOutput(BaseModel):
@@ -492,6 +550,38 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             evidence_omitted=max(0, len(result.citations) - limit),
         )
 
+    async def validate(arguments: ValidateAnswerInput) -> ValidateAnswerOutput:
+        enforce_rate_limit("search", http_request)
+        result = await validate_answer(
+            arguments.query,
+            arguments.answer,
+            [EvidenceRef(item.document_id, item.chunk_id) for item in arguments.evidence],
+            get_settings(),
+        )
+        return ValidateAnswerOutput(
+            valid=result.valid,
+            status=result.status,
+            counts=result.counts,
+            claims=[
+                ValidatedClaim(
+                    answer_quote=str(claim.get("answer_quote") or ""),
+                    status=str(claim.get("status") or ""),
+                    chunk_id=str(claim.get("source_id") or "") or None,
+                    reason=str(claim.get("reason") or ""),
+                )
+                for claim in result.claim_checks
+            ],
+            missing_evidence=[
+                EvidenceRefInput(document_id=ref.document_id, chunk_id=ref.chunk_id)
+                for ref in result.missing_evidence
+            ],
+            stale_evidence=[
+                EvidenceRefInput(document_id=ref.document_id, chunk_id=ref.chunk_id)
+                for ref in result.stale_evidence
+            ],
+            evidence_truncated=result.evidence_truncated,
+        )
+
     return McpServer(
         name=MCP_SERVER_NAME,
         version=get_settings().app_version,
@@ -525,6 +615,17 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=SearchInput,
                 handler=retrieve_evidence,
                 output_model=RetrieveEvidenceOutput,
+                permissions=(SEARCH_PERMISSIONS,),
+            ),
+            McpTool(
+                name="rag_validate_answer",
+                description=(
+                    "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。"
+                    "公開する前の最終の検証に使います（モデルを 1 回呼びます）。"
+                ),
+                input_model=ValidateAnswerInput,
+                handler=validate,
+                output_model=ValidateAnswerOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
             McpTool(
