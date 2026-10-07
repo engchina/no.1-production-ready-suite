@@ -1,0 +1,261 @@
+{
+  "top_k": 20,
+  "cases": [
+    {
+      "id": "da-trial-account-expiry",
+      "category": "document_answerable",
+      "query": "検証用アカウントの有効期限は最長で何日ですか？",
+      "relevant_document_ids": [
+        "file:portal-operations-manual.pdf"
+      ],
+      "expected_answer_keywords": [
+        "30"
+      ],
+      "expected_outcomes": [
+        "answered"
+      ]
+    },
+    {
+      "id": "da-trial-account-setup",
+      "category": "document_answerable",
+      "query": "検証用アカウントを登録し、アクセス権限を付けて、通知まで設定する手順を順番に教えてください。",
+      "relevant_document_ids": [
+        "file:portal-operations-manual.pdf"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "expected_steps": [
+        "検証用",
+        "有効期限",
+        "権限",
+        "通知",
+        "テスト送信"
+      ],
+      "forbidden_phrases": [
+        "グループに付与してください",
+        "グループに権限を付与します"
+      ]
+    },
+    {
+      "id": "da-regional-report-export",
+      "category": "document_answerable",
+      "query": "地域別集計表を出力する手順を教えてください。",
+      "relevant_document_ids": [
+        "file:regional-report-guide-v2.pdf"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "expected_steps": [
+        "集計",
+        "地域別",
+        "対象月",
+        "出力",
+        "計上明細"
+      ]
+    },
+    {
+      "id": "da-parameter-default",
+      "category": "document_answerable",
+      "query": "session_timeout_minutes の既定値はいくつですか？",
+      "relevant_document_ids": [
+        "file:portal-parameters.xlsx"
+      ],
+      "expected_answer_keywords": [
+        "30"
+      ],
+      "expected_outcomes": [
+        "answered"
+      ]
+    },
+    {
+      "id": "da-permission-not-applied",
+      "category": "document_answerable",
+      "query": "付与した権限が反映されません。どうすればよいですか？",
+      "relevant_document_ids": [
+        "file:portal-operations-manual.pdf"
+      ],
+      "expected_answer_keywords": [
+        "15"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "expected_steps": [
+        "15",
+        "サポート窓口"
+      ]
+    },
+    {
+      "id": "cr-grant-permission",
+      "category": "clarification_required",
+      "query": "アクセス権限を付与したいです。どうすればよいですか？",
+      "relevant_document_ids": [
+        "file:portal-operations-manual.pdf"
+      ],
+      "expected_outcomes": [
+        "needs_clarification",
+        "conditional"
+      ],
+      "required_conditions": [
+        "個別",
+        "グループ"
+      ],
+      "forbidden_phrases": [
+        "グループに付与してください"
+      ]
+    },
+    {
+      "id": "cr-delete-account",
+      "category": "clarification_required",
+      "query": "不要になったアカウントを削除してもよいですか？",
+      "relevant_document_ids": [
+        "file:portal-operations-manual.pdf"
+      ],
+      "expected_outcomes": [
+        "needs_clarification",
+        "conditional",
+        "needs_human"
+      ],
+      "required_conditions": [
+        "承認",
+        "復元"
+      ],
+      "forbidden_phrases": [
+        "すぐに削除してください",
+        "承認は不要"
+      ]
+    },
+    {
+      "id": "ed-error-e1023-cause",
+      "category": "environment_data_required",
+      "query": "エラー E-1023 が出ました。原因は何ですか？",
+      "relevant_document_ids": [
+        "file:error-e1023-notes.pdf"
+      ],
+      "expected_outcomes": [
+        "needs_environment_data",
+        "conditional"
+      ],
+      "required_conditions": [
+        "auth.log",
+        "トークン",
+        "権限"
+      ],
+      "forbidden_phrases": [
+        "原因は権限の不足です",
+        "原因はトークンの期限切れです"
+      ]
+    },
+    {
+      "id": "ed-current-session-timeout",
+      "category": "environment_data_required",
+      "query": "この環境の session_timeout_minutes は今何分に設定されていますか？",
+      "relevant_document_ids": [
+        "file:portal-parameters.xlsx"
+      ],
+      "expected_outcomes": [
+        "needs_environment_data",
+        "conditional",
+        "insufficient_evidence"
+      ],
+      "required_conditions": [
+        "既定値"
+      ],
+      "forbidden_phrases": [
+        "現在の設定値は30分です",
+        "60分に設定されています"
+      ]
+    },
+    {
+      "id": "ed-last-month-total",
+      "category": "environment_data_required",
+      "query": "先月の地域別集計表の合計は正しいですか？",
+      "relevant_document_ids": [
+        "file:regional-report-guide-v2.pdf"
+      ],
+      "expected_outcomes": [
+        "needs_environment_data",
+        "conditional",
+        "insufficient_evidence"
+      ],
+      "required_conditions": [
+        "計上明細"
+      ]
+    },
+    {
+      "id": "km-license-fee",
+      "category": "knowledge_missing",
+      "query": "サンプル業務ポータルの年間ライセンス費用はいくらですか？",
+      "answerable": false,
+      "expected_outcomes": [
+        "insufficient_evidence",
+        "needs_human"
+      ]
+    },
+    {
+      "id": "km-password-policy",
+      "category": "knowledge_missing",
+      "query": "パスワードは何文字以上にする必要がありますか？",
+      "answerable": false,
+      "expected_outcomes": [
+        "insufficient_evidence",
+        "needs_human"
+      ]
+    },
+    {
+      "id": "km-auto-disable",
+      "category": "knowledge_missing",
+      "query": "退職者のアカウントを自動で無効にする設定はどこでできますか？",
+      "answerable": false,
+      "expected_outcomes": [
+        "insufficient_evidence",
+        "needs_human"
+      ]
+    },
+    {
+      "id": "cs-closing-day",
+      "category": "conflicting_sources",
+      "query": "地域別集計表の締め日は毎月何日ですか？",
+      "relevant_document_ids": [
+        "file:regional-report-guide-v2.pdf",
+        "file:regional-report-guide-v1.pdf"
+      ],
+      "expected_answer_keywords": [
+        "10"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ],
+      "required_conditions": [
+        "第2版"
+      ],
+      "forbidden_phrases": [
+        "現在の締め日は毎月5日",
+        "締め日は毎月5日のままです"
+      ]
+    },
+    {
+      "id": "cs-version-diff",
+      "category": "conflicting_sources",
+      "query": "地域別集計表の出力手順は、第1版と第2版で何が変わりましたか？",
+      "relevant_document_ids": [
+        "file:regional-report-guide-v2.pdf",
+        "file:regional-report-guide-v1.pdf"
+      ],
+      "expected_answer_keywords": [
+        "5",
+        "10"
+      ],
+      "expected_outcomes": [
+        "answered",
+        "conditional"
+      ]
+    }
+  ]
+}

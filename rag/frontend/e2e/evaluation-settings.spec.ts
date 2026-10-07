@@ -24,10 +24,10 @@ for (const viewport of [
     // 選んだ基準の閾値を、検索・根拠・回答の観点ごとに指標の意味と一緒に出す。
     const metrics = page.getByTestId("settings-evaluation-metrics");
     await expect(metrics.getByRole("heading", { name: "標準の指標と閾値" })).toBeVisible();
-    for (const perspective of ["検索", "根拠", "回答"]) {
+    for (const perspective of ["検索", "根拠", "回答", "対応"]) {
       await expect(metrics.getByRole("heading", { name: perspective, exact: true })).toBeVisible();
     }
-    await expect(metrics.locator("[data-testid^='settings-evaluation-metric-']")).toHaveCount(9);
+    await expect(metrics.locator("[data-testid^='settings-evaluation-metric-']")).toHaveCount(13);
     await expect(page.getByTestId("settings-evaluation-metric-context_recall")).toContainText(
       "閾値 80%"
     );
@@ -153,6 +153,10 @@ function evaluationEnvelope(suite: string) {
     refusal_accuracy: strict ? 1 : 0.9,
     requirement_coverage: strict ? 0.9 : 0.8,
     answer_pass_rate: strict ? 0.8 : 0.7,
+    handling_accuracy: strict ? 0.85 : 0.7,
+    step_order_score: strict ? 0.85 : 0.7,
+    safe_answer_rate: 1,
+    condition_coverage: strict ? 0.8 : 0.6,
   });
   const specs = [
     { name: "standard", thresholds: thresholds(false) },

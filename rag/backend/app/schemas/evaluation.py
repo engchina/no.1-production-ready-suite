@@ -39,6 +39,23 @@ EvaluationCaseCategory = Literal[
 ]
 EVALUATION_UNCATEGORIZED = "uncategorized"
 
+# 回答の対応（#1231。業務支援の評価）。評価のケースは受け入れる対応を複数持てる
+# （例: 確認が要る質問は、確認の質問か、条件ごとに分けた回答のどちらでもよい）。
+# - answered: 資料にもとづいて答えた
+# - conditional: 条件・不足を示して答えた（一部に確認が要る）
+# - needs_clarification: 利用者に条件を確かめた
+# - needs_environment_data: 現場の値・記録が要ると示した
+# - needs_human: 人への引き継ぎを示した
+# - insufficient_evidence: 資料から答えられないと示した（拒答）
+EvaluationOutcome = Literal[
+    "answered",
+    "conditional",
+    "needs_clarification",
+    "needs_environment_data",
+    "needs_human",
+    "insufficient_evidence",
+]
+
 # 失敗理由(#591)。保存済みの結果には削除した理由(content_kind_miss など)が残るため、
 # 結果の model は str で受ける。
 EvaluationFailureReason = Literal[
@@ -53,10 +70,14 @@ EvaluationFailureReason = Literal[
     "answer_failed",
     "answer_evaluation_error",
     "guardrail_warning",
+    "unexpected_handling",
+    "step_missing",
+    "forbidden_action",
+    "condition_missing",
     "case_error",
 ]
 
-# 評価の指標(#591)。検索・根拠・回答の 3 つの観点に整理した 9 つ。
+# 評価の指標(#591)。検索・根拠・回答の 3 つの観点に整理した 9 つと、業務支援の対応の 4 つ（#1231）。
 EvaluationMetricName = Literal[
     "context_recall",
     "mrr",
@@ -67,6 +88,10 @@ EvaluationMetricName = Literal[
     "refusal_accuracy",
     "requirement_coverage",
     "answer_pass_rate",
+    "handling_accuracy",
+    "step_order_score",
+    "safe_answer_rate",
+    "condition_coverage",
 ]
 EVALUATION_METRIC_NAMES: tuple[EvaluationMetricName, ...] = (
     "context_recall",
@@ -78,6 +103,10 @@ EVALUATION_METRIC_NAMES: tuple[EvaluationMetricName, ...] = (
     "refusal_accuracy",
     "requirement_coverage",
     "answer_pass_rate",
+    "handling_accuracy",
+    "step_order_score",
+    "safe_answer_rate",
+    "condition_coverage",
 )
 
 
@@ -101,6 +130,15 @@ class EvaluationCase(BaseModel):
     answerable: bool | None = None
     # 分類（任意。#1226）。結果の分類ごとの内訳に使う。採点の方法は変えない。
     category: EvaluationCaseCategory | None = None
+    # 業務支援の採点（任意。#1231）。どれも空ならその指標の対象外。
+    # 受け入れる回答の対応（1 つでも一致すれば正しい）。
+    expected_outcomes: list[EvaluationOutcome] = Field(default_factory=list, max_length=6)
+    # 回答に出るべき手順の語（期待の順）。網羅と順序を採点する。
+    expected_steps: list[str] = Field(default_factory=list, max_length=30)
+    # 勧めてはいけない操作の表現（影響範囲を広げる操作など）。回答に含まれたら危険な回答。
+    forbidden_phrases: list[str] = Field(default_factory=list, max_length=30)
+    # 回答が触れるべき条件（確かめる条件・適用の前提）。
+    required_conditions: list[str] = Field(default_factory=list, max_length=30)
 
     @property
     def expects_answer(self) -> bool:
@@ -125,6 +163,12 @@ class EvaluationCase(BaseModel):
     def validate_query(cls, query: str) -> str:
         """SearchRequest と同じ規則で query を正規化する。"""
         return normalize_query_text(query)
+
+    @field_validator("expected_steps", "forbidden_phrases", "required_conditions")
+    @classmethod
+    def validate_phrases(cls, value: list[str]) -> list[str]:
+        """前後の空白を除き、空の語を捨てる。"""
+        return [item.strip() for item in value if item.strip()]
 
     @field_validator("standard_answer")
     @classmethod
@@ -172,6 +216,18 @@ class EvaluationCaseResult(BaseModel):
     # 回答が「資料から答えられない」旨だけだったか(拒答)と、それが期待どおりだったか。
     abstained: bool | None = None
     refusal_correct: bool | None = None
+    # 業務支援の採点（#1231）。ケースに期待が無い項目は None / 空。
+    observed_outcome: EvaluationOutcome | None = None
+    # explicit（回答の記録が対応を持っていた）/ inferred（診断から推定した）
+    outcome_source: str | None = None
+    handling_correct: bool | None = None
+    step_order_score: float | None = None
+    missing_steps: list[str] = Field(default_factory=list)
+    # 勧めてはいけない操作の表現を照合したか（ケースに forbidden_phrases があったか）。
+    forbidden_checked: bool = False
+    forbidden_hits: list[str] = Field(default_factory=list)
+    condition_coverage: float | None = None
+    missing_conditions: list[str] = Field(default_factory=list)
     answer_evaluation: EvaluationAnswerJudgement | None = None
     guardrail_warnings: list[str] = Field(default_factory=list)
     failure_reasons: list[str] = Field(default_factory=list)
@@ -202,6 +258,10 @@ class EvaluationCategorySummary(BaseModel):
     # 回答が「資料から答えられない」旨だけだった割合と、拒答の判断が期待どおりだった割合。
     abstain_rate: float | None = None
     refusal_correct_rate: float | None = None
+    # 業務支援の対応（#1231）。
+    handling_correct_rate: float | None = None
+    step_order_score: float | None = None
+    safe_answer_rate: float | None = None
 
 
 class EvaluationMetrics(BaseModel):
@@ -223,6 +283,10 @@ class EvaluationMetrics(BaseModel):
     refusal_accuracy: float | None = None
     requirement_coverage: float | None = None
     answer_pass_rate: float | None = None
+    handling_accuracy: float | None = None
+    step_order_score: float | None = None
+    safe_answer_rate: float | None = None
+    condition_coverage: float | None = None
     metric_case_counts: dict[str, int] = Field(default_factory=dict)
     passed: bool = True
     threshold_failures: list[EvaluationThresholdFailure] = Field(default_factory=list)
@@ -246,6 +310,10 @@ class EvaluationThresholds(BaseModel):
     refusal_accuracy: float | None = Field(default=None, ge=0.0, le=1.0)
     requirement_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
     answer_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    handling_accuracy: float | None = Field(default=None, ge=0.0, le=1.0)
+    step_order_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    safe_answer_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    condition_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class EvaluationRagOverrides(BaseModel):
