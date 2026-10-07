@@ -174,6 +174,7 @@ export {
   ChatHistoryList,
   type ChatHistoryItem,
   type ChatHistoryListLabels,
+  type ChatHistoryPagination,
   type ChatHistoryListProps,
   type ChatHistoryListTestIds,
 } from "./components/chat/chat-history-list";

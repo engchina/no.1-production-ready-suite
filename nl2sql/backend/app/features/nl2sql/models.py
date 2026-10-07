@@ -1342,7 +1342,10 @@ class SqlChatSummary(BaseModel):
 
 
 class SqlChatPage(CursorPage[SqlChatSummary]):
-    """本人の会話の一覧（カーソル型。総件数は数えない）。"""
+    """会話の履歴の 1 ページ（新しい順。カーソルと全件数。#1265）。"""
+
+    total: int = 0
+    limit: int = 10
 
 
 class SqlChatData(BaseModel):

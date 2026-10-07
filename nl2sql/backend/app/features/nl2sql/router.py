@@ -581,9 +581,12 @@ def take_chat_execution_result(job_id: str, request: Request) -> ApiResponse[Sql
 @router.get("/chats", response_model=ApiResponse[SqlChatPage])
 def list_sql_chats(
     request: Request,
-    paging: Annotated[CursorParams, Depends(cursor_params(default=50, max_limit=50))],
+    paging: Annotated[CursorParams, Depends(cursor_params(default=10, max_limit=100))],
 ) -> ApiResponse[SqlChatPage]:
-    """本人の会話だけを、現在利用できる業務プロファイルの範囲で返す（1 ページ 50 件固定）。"""
+    """本人の会話だけを、現在利用できる業務プロファイルの範囲で返す。
+
+    会話の履歴は 3 製品と同じく 1 ページずつ返す（新しい順、カーソルと全件数。#1265）。
+    """
     principal = getattr(request.state, "principal", None)
     try:
         return ApiResponse(

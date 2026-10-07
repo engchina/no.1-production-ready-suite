@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from "react";
 import {
-  useInfiniteQuery,
+  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
@@ -22,7 +22,6 @@ import {
   ChatComposerOption,
   ChatHistoryList,
   ChatLayout,
-  LoadMoreFooter,
   ChatProgress,
   ChatSkeleton,
   ChatAnswer,
@@ -44,6 +43,7 @@ import {
   type OptimisticChatMessage,
   useChatAutoScroll,
   useChatHistoryPanel,
+  DEFAULT_PAGE_SIZE,
 } from "@engchina/production-ready-ui";
 import {
   useWorkspaceActive,
@@ -52,6 +52,7 @@ import {
 } from "@/components/WorkspaceState";
 import { apiGet, apiPost, isTransportError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { randomUuid } from "@/lib/randomUuid";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
@@ -83,9 +84,12 @@ interface Conversation {
   profile_id: string;
   created_at: string;
 }
+/** 会話の履歴の 1 ページ（新しい順。カーソルと全件数。#1265）。 */
 interface ConversationPage {
   items: Conversation[];
   next_cursor: string | null;
+  total: number;
+  limit: number;
 }
 interface ConversationData {
   conversation: Conversation;
@@ -264,17 +268,38 @@ export function SqlChatPage() {
     identity.context,
   ] as const;
   const conversationKey = [...chatKey, conversationId] as const;
-  const history = useInfiniteQuery({
-    queryKey: chatKey,
+  // 会話の履歴は 3 製品と同じく 1 ページずつ出す（#1265）。API はカーソルなので、前へ戻るためのカーソルを積んで
+  // 作業状態に残す（再読込・画面の移動で同じページに戻る）。
+  const [historyCursors, setHistoryCursors] = useWorkspaceState<string[]>(
+    "historyCursors",
+    [],
+  );
+  const historyCursor = historyCursors.at(-1) ?? "";
+  const history = useQuery({
+    // 会話の key（[...chatKey, 会話の ID]）と重ならないよう、一覧は object の要素で分ける。
+    queryKey: [...chatKey, { list: historyCursor }],
     enabled: active,
-    initialPageParam: "",
-    queryFn: ({ pageParam, signal }) =>
-      apiGet<ConversationPage>(
-        `/api/nl2sql/chats${pageParam ? `?cursor=${encodeURIComponent(pageParam)}` : ""}`,
-        { signal, timeoutMs: API_TIMEOUT_MS.interactiveList },
-      ),
-    getNextPageParam: (page) => page.next_cursor ?? undefined,
+    queryFn: ({ signal }) => {
+      const params = new URLSearchParams({ limit: String(DEFAULT_PAGE_SIZE) });
+      if (historyCursor) params.set("cursor", historyCursor);
+      return apiGet<ConversationPage>(`/api/nl2sql/chats?${params.toString()}`, {
+        signal,
+        timeoutMs: API_TIMEOUT_MS.interactiveList,
+      });
+    },
+    // 次のページを取得している間は、表示中のページを出したままにする。
+    placeholderData: keepPreviousData,
   });
+  const historyItems = history.data?.items ?? [];
+  // 会話が減って今のページが空になったら（カーソルの先が無くなった）、1 ページ目へ戻す（空の案内を出さない）。
+  if (
+    history.data &&
+    !history.isPlaceholderData &&
+    historyCursors.length > 0 &&
+    historyItems.length === 0
+  ) {
+    setHistoryCursors([]);
+  }
   const conversation = useQuery({
     queryKey: conversationKey,
     enabled: active && Boolean(conversationId),
@@ -450,18 +475,16 @@ export function SqlChatPage() {
   // 一覧の行・読み込み中・失敗・0 件は 3 製品共通の ChatHistoryList（#1161）。カーソルの API なので「さらに読み込む」。
   const historyContent = (
     <ChatHistoryList
-      items={(history.data?.pages ?? [])
-        .flatMap((page) => page.items)
-        .map((item) => ({
-          id: item.id,
-          title: item.title,
-          meta: dateFormatter.format(new Date(item.created_at)),
-        }))}
+      items={historyItems.map((item) => ({
+        id: item.id,
+        title: item.title,
+        meta: dateFormatter.format(new Date(item.created_at)),
+      }))}
       currentId={conversationId || null}
       onSelect={(item) => {
-        const conversationItem = history.data?.pages
-          .flatMap((page) => page.items)
-          .find((candidate) => candidate.id === item.id);
+        const conversationItem = historyItems.find(
+          (candidate) => candidate.id === item.id,
+        );
         if (conversationItem) openConversation(conversationItem);
       }}
       disabled={busy}
@@ -481,19 +504,24 @@ export function SqlChatPage() {
         loading: "sql-chat-history-loading",
         error: "sql-chat-history-error",
         list: "sql-chat-history-list",
+        pagination: "sql-chat-history-pagination",
       }}
-      // 続きの読み込みは共通の LoadMoreFooter（#1266）。件数は API が返さないので summary は空。
-      footer={
-        history.hasNextPage ? (
-          <LoadMoreFooter
-            summary=""
-            hasMore
-            loadingMore={history.isFetchingNextPage}
-            onLoadMore={() => void history.fetchNextPage()}
-            loadMoreLabel={t("chat.loadMore")}
-            retryLabel={t("chat.retry")}
-          />
-        ) : null
+      // 3 製品共通の会話の履歴のページング（#1265 / #1266）。カーソルの API なので、移れるのは隣のページだけ。
+      pagination={
+        history.data
+          ? {
+              type: "cursor",
+              depth: historyCursors.length,
+              limit: DEFAULT_PAGE_SIZE,
+              total: history.data.total,
+              count: historyItems.length,
+              nextCursor: history.data.next_cursor,
+              onPrevious: () => setHistoryCursors((current) => current.slice(0, -1)),
+              onNext: (nextCursor) => setHistoryCursors((current) => [...current, nextCursor]),
+              labels: paginationLabels(),
+              ariaLabel: t("chat.historyPagination.label"),
+            }
+          : undefined
       }
     />
   );

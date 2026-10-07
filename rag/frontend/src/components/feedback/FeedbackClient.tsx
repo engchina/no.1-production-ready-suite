@@ -53,6 +53,7 @@ import {
 } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import {
   useSearchAnswerProfiles,
@@ -292,14 +293,10 @@ export function FeedbackClient() {
                     {t("feedback.list.title")}
                   </h2>
                   <p className="text-xs tabular-nums text-fg-muted">
-                    {t("feedback.list.range", {
-                      ...paginationRange(
-                        urlState.page,
-                        urlState.pageSize,
-                        page?.items.length ?? 0,
-                        page?.total ?? 0
-                      ),
-                    })}
+                    {/* 件数の範囲は 3 製品の一覧と同じ文言・桁区切り（「a - b / n 件」。#1266）。 */}
+                    {paginationLabels().summary(
+                      paginationRange(urlState.page, urlState.pageSize, page?.items.length ?? 0, page?.total ?? 0)
+                    )}
                   </p>
                 </div>
                 <PageSizeSelect

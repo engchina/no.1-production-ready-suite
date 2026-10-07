@@ -20,6 +20,8 @@ interface DocumentSummary {
   knowledge_bases: { id: string; name: string }[];
   source_profile: null;
   layers_rebuild_required?: boolean;
+  superseded_by_document_id?: string | null;
+  is_superseded?: boolean;
 }
 
 interface MockOptions {
@@ -380,6 +382,27 @@ for (const theme of ["light", "dark"] as const) {
     });
   });
 }
+
+test("新しい版に置き換えた文書（旧版）に印を出す（#1248）", async ({ page }) => {
+  const old = {
+    ...documentSummary("doc-v1", "manual-v1.pdf", "INDEXED"),
+    superseded_by_document_id: "doc-v2",
+    is_superseded: true,
+  };
+  const current = documentSummary("doc-v2", "manual-v2.pdf", "INDEXED");
+  await mockFileListApi(page, [old, current]);
+
+  await page.goto("/file-list");
+
+  // 状態（索引済み）はそのままに、旧版の印をアイコンと文言で添える。
+  const badge = page.getByTestId("file-list-superseded-doc-v1");
+  await expect(badge).toContainText("旧版");
+  await expect(badge.locator("svg")).toHaveCount(1);
+  await expect(badge).toHaveAttribute("title", /回答の検索の対象から外れています/);
+  await expect(badge.locator("..")).toContainText("索引済み");
+  await expect(page.getByTestId("file-list-superseded-doc-v2")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
 
 function documentSummary(id: string, fileName: string, status: FileStatus): DocumentSummary {
   return {

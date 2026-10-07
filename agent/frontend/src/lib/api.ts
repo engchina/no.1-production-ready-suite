@@ -981,9 +981,8 @@ export interface ThreadSummary {
   updated_at: string;
 }
 
-export interface ThreadsData {
-  threads: ThreadSummary[];
-}
+/** 会話の一覧の 1 ページ（新しい順。共通の Page。#1265 / #1266）。 */
+export type ThreadsData = Page<ThreadSummary>;
 
 export interface ThreadData {
   thread_id: string;
@@ -1307,10 +1306,11 @@ export const agentApi = {
       `/api/agents/${encodeURIComponent(agentId)}/versions/${version}/restore`,
       { method: "POST" },
     ),
-  listThreads: (agentId?: string) =>
-    request<ThreadsData>(
-      `/api/threads${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""}`,
-    ),
+  listThreads: (agentId: string | undefined, page: { limit: number; offset: number }) => {
+    const params = new URLSearchParams({ limit: String(page.limit), offset: String(page.offset) });
+    if (agentId) params.set("agent_id", agentId);
+    return request<ThreadsData>(`/api/threads?${params.toString()}`);
+  },
   /** チャットの回答への評価（#774）。会話をした利用者だけ。付け直すと上書きする。 */
   putRunFeedback: (runId: string, payload: RunFeedbackPayload) =>
     request<RunState>(`/api/runs/${encodeURIComponent(runId)}/feedback`, {

@@ -141,7 +141,12 @@ async function setup(
       json: {
         data:
           new URL(route.request().url()).pathname === "/api/nl2sql/chats"
-            ? { items: state.turns.length ? [conversation] : [], next_cursor: null }
+            ? {
+                items: state.turns.length ? [conversation] : [],
+                next_cursor: null,
+                total: state.turns.length ? 1 : 0,
+                limit: 10,
+              }
             : { conversation, turns: state.turns },
       },
     });

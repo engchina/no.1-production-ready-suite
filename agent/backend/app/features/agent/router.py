@@ -1839,12 +1839,20 @@ async def create_run(
         ) from exc
 
 
+_threads_paging = offset_params(default=10, max_limit=100)
+
+
 @router.get("/threads", response_model=ApiResponse[ThreadsData])
 async def list_threads(
     request: Request,
+    paging: Annotated[OffsetParams, Depends(_threads_paging)],
     agent_id: str | None = None,
 ) -> ApiResponse[ThreadsData]:
-    """ログイン中の利用者の会話（チャット。#768）。使えなくなった Agent の会話は出さない。"""
+    """ログイン中の利用者の会話（チャット。#768）。使えなくなった Agent の会話は出さない。
+
+    会話の履歴は 3 製品と同じく、サーバー側でページングする
+    （新しい順、共通の `offset_params` / `Page`。#1265 / #1266）。
+    """
     policy = _actor_policy(request)
     threads = [
         thread
@@ -1853,7 +1861,16 @@ async def list_threads(
         )
         if _policy_allows_agent(policy, thread.agent_id)
     ]
-    return ApiResponse(data=ThreadsData(threads=threads))
+    page = paginate_slice(threads, paging)
+    return ApiResponse(
+        data=ThreadsData(
+            items=page.items,
+            total=page.total,
+            limit=page.limit,
+            offset=page.offset,
+            has_next=page.has_next,
+        )
+    )
 
 
 @router.get("/threads/{thread_id}", response_model=ApiResponse[ThreadData])

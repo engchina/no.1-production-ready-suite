@@ -98,6 +98,26 @@ def test_chat_generates_without_execution_and_restores_across_workers(
     assert observer.list_sql_chats(actor="user-1", profile_ids=set()).items == []
 
 
+def test_chat_list_pages_with_cursor_and_total(chat: ChatFixture) -> None:
+    """会話の履歴は新しい順に 1 ページずつ返し、全件数とカーソルを返す（#1265）。"""
+    service, repository, _ = chat
+    first = run(service, request())
+    second = run(service, request("顧客の一覧"))
+    observer = _worker(repository)
+    page = observer.list_sql_chats(actor="user-1", profile_ids=None, limit=1)
+    assert [item.id for item in page.items] == [second.job_id]
+    assert (page.total, page.limit) == (2, 1)
+    assert page.next_cursor
+    rest = observer.list_sql_chats(
+        actor="user-1", profile_ids=None, cursor=page.next_cursor, limit=1
+    )
+    assert [item.id for item in rest.items] == [first.job_id]
+    assert rest.total == 2
+    assert rest.next_cursor is None
+    default = observer.list_sql_chats(actor="user-1", profile_ids=None)
+    assert default.limit == 10 and len(default.items) == 2
+
+
 def test_chat_rejects_other_user_even_system_admin_and_profile_changes(chat: ChatFixture) -> None:
     service, repository, _ = chat
     first = run(service, request())
@@ -207,7 +227,7 @@ def test_chat_route_accepts_generation_capability_without_execution(
     actor_request = api_request({"orders-profile"}, permissions={QUERY_GENERATE_PERMISSION})
     created = router.create_job(request(), actor_request).data
     assert created is not None
-    listed = router.list_sql_chats(actor_request, CursorParams(cursor=None, limit=50)).data
+    listed = router.list_sql_chats(actor_request, CursorParams(cursor=None, limit=10)).data
     assert listed is not None and listed.items[0].id == created.job_id
     assert router.get_sql_chat(created.job_id, actor_request).data is not None
     with pytest.raises(SecurityApiError):

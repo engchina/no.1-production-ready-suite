@@ -408,6 +408,18 @@ export interface DocumentSummary {
   source_profile: SourceProfile | null;
   /** 検索対象のレシピの派生情報レイヤーに、作り直しが必要なものがあるか（一覧だけが返す。#550）。 */
   layers_rebuild_required?: boolean;
+  /** この文書を置き換えた新しい版の文書（#1248）。null は今有効な版。 */
+  superseded_by_document_id?: string | null;
+  /** 新しい版の文書名（利用者が見られる文書のときだけ）。 */
+  superseded_by_file_name?: string | null;
+  superseded_at?: string | null;
+  /** 新しい版に置き換えた文書（旧版）か。旧版は既定で回答の検索の対象から外れる。 */
+  is_superseded?: boolean;
+}
+
+/** 文書を置き換えた新しい版の設定・解除（#1248）。null で解除。 */
+export interface DocumentSupersededByRequest {
+  superseded_by_document_id: string | null;
 }
 
 export interface DuplicateDocumentRef {
@@ -2639,6 +2651,12 @@ export const api = {
     request<DocumentClassificationOptions>("/api/documents/classification-options"),
   saveDocumentClassification: (id: string, body: DocumentClassification) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/classification`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  saveDocumentSupersededBy: (id: string, body: DocumentSupersededByRequest) =>
+    request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/superseded-by`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

@@ -341,5 +341,6 @@ PageBody wide
 
 - 対象の種類と選択の欄（RAG は検索・回答プロファイルの専用の欄、NL2SQL・Agent は `SearchableSelectField`）。
 - 入力欄の上の設定の行の中身（RAG「回答するモデル」、NL2SQL「生成方法」、Agent はなし）。
-- 履歴の一覧のページング（API に合わせる。offset の API は `Pagination`、カーソルの API は「さらに読み込む」、件数の少ない全件の API はページングなし。§2「一覧の型と、基準から外す例外」）と、名前の変更・削除（API がある製品だけ）。
+- 名前の変更・削除（API がある製品だけ）。
+- 履歴の一覧のページングは 3 製品で同じにする（#1265）。`ChatHistoryList` の `pagination` に渡し、一覧の下に共通の `Pagination`（10 件 / ページ、件数「a - b / n 件」と「前へ / N / M ページ / 次へ」。1 ページなら出さない）を常に見せる。製品で違うのは API の形だけで、offset の API（RAG・Agent）は `offsetPagination`、カーソルと全件数の API（NL2SQL）は前へ戻るカーソルを積んで `cursorPagination` で page / range を作る。ページは作業状態に残し、対象を変えたら 1 ページ目へ戻す。会話が減って今のページが空になったら、offset の API は最後のページ（`offsetAfterShrink`）、カーソルの API は 1 ページ目へ戻す（空の案内を出さない）。「さらに読み込む」は使わない。
 - 停止の方法（RAG は request の中断、NL2SQL・Agent はジョブ・Run の中止の API）。

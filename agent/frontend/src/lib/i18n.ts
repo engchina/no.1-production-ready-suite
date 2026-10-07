@@ -498,6 +498,7 @@ const agentJa = {
   "chat.threads.loading": "会話の履歴を読み込んでいます",
   "chat.threads.loadFailed": "会話の履歴を読み込めませんでした。",
   "chat.threads.turns": "{count} 往復",
+  "chat.threads.pagination": "会話の履歴のページ切替",
   "chat.conversation": "会話",
   "chat.loading": "会話を読み込んでいます",
   "chat.loadFailed": "会話を読み込めませんでした。",

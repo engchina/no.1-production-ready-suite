@@ -109,7 +109,11 @@ class SearchInput(BaseModel):
     )
     top_k: int | None = Field(default=None, ge=1, le=100, description="検索する件数。")
     filters: dict[str, str] = Field(
-        default_factory=dict, description="検索フィルター（例: category_name）。"
+        default_factory=dict,
+        description=(
+            "検索フィルター（例: category_name）。新しい版に置き換えた文書（旧版）は既定で"
+            "検索しない。旧版・変更点を尋ねるときは include_superseded に true を渡す。"
+        ),
     )
     evidence_limit: int = Field(
         default=EVIDENCE_LIMIT_DEFAULT,
@@ -242,6 +246,13 @@ class RagEvidence(BaseModel):
     )
     score: float | None = None
     rerank_score: float | None = None
+    superseded: bool = Field(
+        default=False,
+        description=(
+            "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない"
+            "（filters の include_superseded=true で含める）。"
+        ),
+    )
 
 
 AnswerOutcome = Literal[
@@ -417,6 +428,9 @@ class ReadSourceOutput(BaseModel):
         default=None, description="親の本文（前後の文脈。最大 max_chars 文字）。"
     )
     parent_truncated: bool = False
+    superseded: bool = Field(
+        default=False, description="新しい版に置き換えた文書（旧版）の根拠か。"
+    )
 
 
 def _metadata_str(metadata: dict[str, Any], key: str) -> str | None:
@@ -501,6 +515,7 @@ def _evidence(chunk: RetrievedChunk) -> RagEvidence:
         rerank_score=chunk.rerank_score
         if chunk.rerank_score is not None
         else _float_or_none(metadata.get("rerank_score")),
+        superseded=metadata.get("document_superseded") is True,
     )
 
 
@@ -618,6 +633,7 @@ async def read_source(arguments: ReadSourceInput) -> ReadSourceOutput:
         next_offset=next_offset,
         parent_text=parent_text[: arguments.max_chars] if parent_text else None,
         parent_truncated=bool(parent_text) and len(parent_text or "") > arguments.max_chars,
+        superseded=metadata.get("document_superseded") is True,
     )
 
 

@@ -59,9 +59,15 @@ MAX_EXTRACTION_FIELD_CONDITIONS = 10
 PAGE_RANGES_FILTER_KEY = "page_ranges"
 MAX_PAGE_RANGES = 20
 
+# 新しい版に置き換えた文書(旧版)を検索に含めるか(#1248)。既定では含めない。
+# 値は "true" / "false"(filters は dict[str, str] のため)。旧版・変更点を尋ねるときに
+# "true" にする。
+INCLUDE_SUPERSEDED_FILTER_KEY = "include_superseded"
+
 SUPPORTED_SEARCH_FILTER_KEYS = {
     EXTRACTION_FIELD_FILTER_KEY,
     PAGE_RANGES_FILTER_KEY,
+    INCLUDE_SUPERSEDED_FILTER_KEY,
     "document_id",
     "knowledge_base_id",
     "chunk_set_id",
@@ -402,6 +408,16 @@ class SearchResponse(BaseModel):
         return list(dict.fromkeys(value))
 
 
+def include_superseded_filter_value(value: str | None) -> bool:
+    """``include_superseded`` の値を読む("true" / "false"。大文字・小文字は問わない)。"""
+    cleaned = (value or "").strip().casefold()
+    if cleaned in {"", "false"}:
+        return False
+    if cleaned == "true":
+        return True
+    raise ValueError("include_superseded は true または false で指定してください。")
+
+
 def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
     """検索 filter key/value を検証・正規化する。"""
     unsupported = sorted(set(filters) - SUPPORTED_SEARCH_FILTER_KEYS)
@@ -436,6 +452,9 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
         elif key == PAGE_RANGES_FILTER_KEY:
             if formatted_ranges := format_page_ranges(parse_page_ranges(cleaned)):
                 normalized[key] = formatted_ranges
+        elif key == INCLUDE_SUPERSEDED_FILTER_KEY:
+            if include_superseded_filter_value(cleaned):
+                normalized[key] = "true"
         elif key in SUPPORTED_SEARCH_CLASSIFICATION_FILTERS:
             # 保存時と同じ表記の正規化(NFKC・空白)。番号の接頭辞は残し、比較の側で外す(#547)。
             if category := normalize_category_value(cleaned):

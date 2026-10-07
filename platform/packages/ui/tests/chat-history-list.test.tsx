@@ -50,7 +50,7 @@ afterEach(() => {
 describe("ChatHistoryList", () => {
   it("行は名前・補足・状態を出し、開いている会話に aria-current を付けて選べる", () => {
     const onSelect = vi.fn();
-    render({ currentId: "c2", onSelect, footer: <nav data-testid="pager" /> });
+    render({ currentId: "c2", onSelect });
     const list = host.querySelector('[data-testid="list"]')!;
     expect(list.getAttribute("aria-label")).toBe("会話の履歴");
     const buttons = list.querySelectorAll("button");
@@ -59,9 +59,47 @@ describe("ChatHistoryList", () => {
     expect(buttons[0].getAttribute("aria-current")).toBeNull();
     expect(buttons[1].getAttribute("aria-current")).toBe("true");
     expect(buttons[1].querySelector('[data-testid="badge"]')).not.toBeNull();
-    expect(host.querySelector('[data-testid="pager"]')).not.toBeNull();
     act(() => buttons[0].click());
     expect(onSelect).toHaveBeenCalledWith(items[0]);
+  });
+
+  it("2 ページ以上なら一覧の下に共通の件数と前へ / 次へを出し、1 ページなら出さない（#1265）", () => {
+    const onPageChange = vi.fn();
+    render({
+      testIds: { list: "list", pagination: "pager" },
+      pagination: { type: "offset", offset: 0, limit: 10, total: 14, count: 2, onPageChange, ariaLabel: "会話の履歴のページ" },
+    });
+    const pager = host.querySelector('[data-testid="pager"]')!;
+    expect(pager.getAttribute("aria-label")).toBe("会話の履歴のページ");
+    expect(pager.textContent).toContain("1 - 2 / 14 件");
+    expect(pager.textContent).toContain("1 / 2 ページ");
+    const [prev, next] = Array.from(pager.querySelectorAll("button"));
+    expect(prev.disabled).toBe(true);
+    act(() => next.click());
+    expect(onPageChange).toHaveBeenCalledWith(2, 10);
+
+    render({
+      testIds: { list: "list", pagination: "pager" },
+      pagination: { type: "offset", offset: 0, limit: 10, total: 2, count: 2, onPageChange },
+    });
+    expect(host.querySelector('[data-testid="pager"]')).toBeNull();
+  });
+
+  it("カーソルの API は前へ / 次へで隣のページだけに移る（#1265）", () => {
+    const onPrevious = vi.fn();
+    const onNext = vi.fn();
+    render({
+      testIds: { list: "list", pagination: "pager" },
+      pagination: { type: "cursor", depth: 1, total: 14, count: 2, nextCursor: null, onPrevious, onNext },
+    });
+    const pager = host.querySelector('[data-testid="pager"]')!;
+    expect(pager.textContent).toContain("11 - 12 / 14 件");
+    expect(pager.textContent).toContain("2 / 2 ページ");
+    const [prev, next] = Array.from(pager.querySelectorAll("button"));
+    expect(next.disabled).toBe(true);
+    act(() => prev.click());
+    expect(onPrevious).toHaveBeenCalledTimes(1);
+    expect(onNext).not.toHaveBeenCalled();
   });
 
   it("選べない間は行を押せない", () => {

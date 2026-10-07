@@ -18,7 +18,6 @@ import {
   ToggleChip,
   TimedLoadingState,
   DEFAULT_PAGE_SIZE,
-  OffsetPagination,
   toast,
   useConfirm,
   ChatUserMessage,
@@ -548,6 +547,7 @@ export function ChatClient() {
     offset: conversationOffset,
   });
   const conversations = conversationsQuery.data?.items ?? [];
+  // 会話が減って今のページが空になったら、ChatHistoryList の共通の OffsetPagination が最後のページへ戻す（#1265 / #1266）。
   const conversationsData = conversationsQuery.data;
 
   const [activeId, setActiveId] = useWorkspaceState<string | null>(
@@ -1351,6 +1351,7 @@ export function ChatClient() {
         loading: "chat-conversations-loading",
         error: "chat-conversations-error",
         list: "chat-conversation-list",
+        pagination: "chat-conversations-pagination",
       }}
       renderEditor={(item) =>
         editingId === item.id ? (
@@ -1428,21 +1429,20 @@ export function ChatClient() {
           </>
         );
       }}
-      footer={
-        // 会話が減って今のページが空になったら、OffsetPagination が最後のページへ戻す（空の案内を出さない）。
-        conversationsData && conversationsData.total > 0 ? (
-          <OffsetPagination
-            // 次のページを取得している間は、表示中のページ（前のページ）の範囲を出す。
-            offset={conversationsData.offset}
-            limit={DEFAULT_PAGE_SIZE}
-            total={conversationsData.total}
-            count={conversations.length}
-            onPageChange={(_page, nextOffset) => setConversationOffset(nextOffset)}
-            labels={paginationLabels()}
-            ariaLabel={t("chat.sessions.pagination")}
-            testId="chat-conversations-pagination"
-          />
-        ) : null
+      // 3 製品共通の会話の履歴のページング（#1265 / #1266）。次のページを取得している間は、表示中のページの範囲を出す。
+      pagination={
+        conversationsData
+          ? {
+              type: "offset",
+              offset: conversationsData.offset,
+              limit: DEFAULT_PAGE_SIZE,
+              total: conversationsData.total,
+              count: conversations.length,
+              onPageChange: (_page, nextOffset) => setConversationOffset(nextOffset),
+              labels: paginationLabels(),
+              ariaLabel: t("chat.sessions.pagination"),
+            }
+          : undefined
       }
     />
   );

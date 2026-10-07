@@ -84,7 +84,7 @@ const nl2sqlJa = {
   "chat.messages": "会話",
   "chat.latest": "最新のメッセージへ",
   "chat.retry": "再読み込み",
-  "chat.loadMore": "さらに読み込む",
+  "chat.historyPagination.label": "会話の履歴のページ切替",
   "chat.copySql": "SQL をコピー",
   "chat.copyFailed": "SQL をコピーできませんでした。",
   "history.notExecuted": "未実行",

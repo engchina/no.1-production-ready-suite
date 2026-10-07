@@ -26,7 +26,7 @@ import {
   ListToolbar,
 } from "@engchina/production-ready-ui";
 import { Link } from "react-router-dom";
-import { RefreshCw, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
+import { History, RefreshCw, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -744,6 +744,12 @@ function documentColumns({
       render: (doc) => (
         <div className="flex flex-wrap items-center gap-1.5">
           <StatusBadge status={doc.status} />
+          {/* 新しい版に置き換えた文書（旧版）は回答の検索の対象から外れる（#1248）。 */}
+          {doc.is_superseded ? (
+            <span title={t("fileList.supersededTitle")} data-testid={`file-list-superseded-${doc.id}`}>
+              <UiStatusBadge variant="warning" icon={History} label={t("fileList.superseded")} />
+            </span>
+          ) : null}
           {/* 作成後に項目の定義などが変わった派生情報がある（#550）。作り直しは文書の詳細の「再処理」。 */}
           {doc.layers_rebuild_required ? (
             <span title={t("fileList.layersRebuildTitle")} data-testid={`file-list-rebuild-${doc.id}`}>

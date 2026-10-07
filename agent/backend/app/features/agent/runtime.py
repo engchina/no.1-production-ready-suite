@@ -448,8 +448,11 @@ class ThreadSummary(BaseModel):
     updated_at: datetime
 
 
-class ThreadsData(BaseModel):
-    threads: list[ThreadSummary] = Field(default_factory=list)
+class ThreadsData(Page[ThreadSummary]):
+    """会話の一覧の 1 ページ（新しい順。共通の Page。#1265 / #1266）。
+
+    `total` は利用者が見られる会話の全件数。
+    """
 
 
 class ThreadData(BaseModel):
