@@ -57,9 +57,11 @@ from app.rag.observability import (
 from app.rag.pipeline import RagPipeline, SearchStageProgressCallback
 from app.schemas.evaluation import (
     EVALUATION_METRIC_NAMES,
+    EVALUATION_UNCATEGORIZED,
     EvaluationAnswerJudgement,
     EvaluationCase,
     EvaluationCaseResult,
+    EvaluationCategorySummary,
     EvaluationCompareResponse,
     EvaluationExperiment,
     EvaluationExperimentResult,
@@ -358,6 +360,7 @@ class EvaluationRunner:
         return EvaluationMetrics(
             case_count=len(cases),
             error_count=error_count,
+            category_breakdown=category_breakdown(case_results),
             # 失敗したケースや、標準回答で評価できなかったケースがあれば合格にしない。
             passed=not threshold_failures and error_count == 0 and judge_incomplete_count == 0,
             threshold_failures=threshold_failures,
@@ -579,6 +582,7 @@ def _case_result(
     return EvaluationCaseResult(
         case_id=case.id,
         trace_id=response.trace_id,
+        category=case.category,
         retrieved_document_ids=retrieved_ids,
         relevant_document_ids=list(case.relevant_document_ids),
         hit_document_ids=_unique_in_order(hits),
@@ -719,6 +723,7 @@ def _case_error_result(
     """評価 case の失敗を query 本文なしの診断結果に変換する。"""
     return EvaluationCaseResult(
         case_id=case.id,
+        category=case.category,
         trace_id=trace_id,
         status="error",
         relevant_document_ids=list(case.relevant_document_ids),
@@ -734,6 +739,7 @@ def _case_skipped_result(*, case: EvaluationCase, trace_id: str) -> EvaluationCa
     """評価全体の上限に達して実行しなかったケースを、失敗として記録する（#383）。"""
     return EvaluationCaseResult(
         case_id=case.id,
+        category=case.category,
         trace_id=trace_id,
         status="error",
         relevant_document_ids=list(case.relevant_document_ids),
@@ -881,3 +887,51 @@ def _bool_value(value: bool | None) -> float | None:
 
 def _round(value: float | None) -> float | None:
     return None if value is None else round(value, 4)
+
+
+def _rate(values: list[bool]) -> float | None:
+    return round(sum(values) / len(values), 4) if values else None
+
+
+def category_breakdown(
+    results: list[EvaluationCaseResult],
+) -> dict[str, EvaluationCategorySummary]:
+    """分類ごとの結果の内訳（#1226）。分類のあるケースが 1 つも無ければ空にする。"""
+    if not any(result.category for result in results):
+        return {}
+    grouped: dict[str, list[EvaluationCaseResult]] = {}
+    for result in results:
+        grouped.setdefault(result.category or EVALUATION_UNCATEGORIZED, []).append(result)
+    breakdown: dict[str, EvaluationCategorySummary] = {}
+    for category, members in grouped.items():
+        succeeded = [result for result in members if result.status == "success"]
+        breakdown[category] = EvaluationCategorySummary(
+            case_count=len(members),
+            error_count=len(members) - len(succeeded),
+            answer_pass_rate=_rate(
+                [
+                    bool(result.answer_evaluation.passed)
+                    for result in succeeded
+                    if result.answer_evaluation is not None
+                    and result.answer_evaluation.passed is not None
+                ]
+            ),
+            answer_keyword_hit_rate=_rate(
+                [
+                    bool(result.answer_keyword_hit)
+                    for result in succeeded
+                    if result.answer_keyword_hit is not None
+                ]
+            ),
+            abstain_rate=_rate(
+                [bool(result.abstained) for result in succeeded if result.abstained is not None]
+            ),
+            refusal_correct_rate=_rate(
+                [
+                    bool(result.refusal_correct)
+                    for result in succeeded
+                    if result.refusal_correct is not None
+                ]
+            ),
+        )
+    return breakdown

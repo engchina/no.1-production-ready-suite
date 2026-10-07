@@ -83,6 +83,8 @@ class SearchLoadCase(BaseModel):
     # 残っていても読み捨てる(pydantic の既定 extra="ignore")。
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
+    # 検索・回答プロファイル(#1226)。実際の検索・回答と同じ設定・参照 KB で測る。
+    search_answer_profile_id: str | None = Field(default=None, max_length=128)
 
     @model_validator(mode="after")
     def validate_search_request(self) -> SearchLoadCase:
@@ -90,12 +92,15 @@ class SearchLoadCase(BaseModel):
         return self
 
     def to_search_request(self) -> SearchRequest:
-        return SearchRequest(
-            query=self.query,
-            top_k=self.top_k,
-            filters=self.filters,
-            knowledge_base_ids=self.knowledge_base_ids,
-        )
+        payload: dict[str, Any] = {
+            "query": self.query,
+            "top_k": self.top_k,
+            "filters": self.filters,
+            "knowledge_base_ids": self.knowledge_base_ids,
+        }
+        if self.search_answer_profile_id:
+            payload["search_answer_profile_id"] = self.search_answer_profile_id
+        return SearchRequest.model_validate(payload)
 
 
 class SearchLoadScenario(BaseModel):
@@ -116,6 +121,8 @@ class SearchLoadRun:
     client_latency_ms: float
     server_latency_ms: float | None = None
     stage_timings: Mapping[str, float] | None = None
+    # 回答フローの工程ごとのモデル(LLM)の呼び出しの回数(#1226)。
+    stage_llm_calls: Mapping[str, int] | None = None
     error_type: str | None = None
     status_code: int | None = None
 
@@ -282,6 +289,7 @@ async def _run_one(
                 client_latency_ms=client_latency_ms,
                 server_latency_ms=_optional_float(data.get("elapsed_ms")),
                 stage_timings=_stage_timings(data),
+                stage_llm_calls=_stage_llm_calls(data),
             )
         except SearchLoadRunError as exc:
             return SearchLoadRun(
@@ -340,6 +348,35 @@ def _api_response_data(response_payload: Mapping[str, Any]) -> Mapping[str, Any]
     return data
 
 
+def _execution_steps(data: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    diagnostics = data.get("diagnostics")
+    if not isinstance(diagnostics, Mapping):
+        return []
+    answer = diagnostics.get("answer")
+    if not isinstance(answer, Mapping):
+        return []
+    steps = answer.get("execution_steps")
+    if not isinstance(steps, Sequence) or isinstance(steps, str):
+        return []
+    return [step for step in steps if isinstance(step, Mapping)]
+
+
+def _stage_llm_calls(data: Mapping[str, Any]) -> dict[str, int]:
+    """回答フローの工程ごとのモデル(LLM)の呼び出しの回数(#1226)。同じ名前の工程は合計する。
+
+    ``execution_steps`` の ``llm_calls``。入れ子の工程(回答生成フローとその中の工程)は、
+    それぞれの工程の回数をそのまま持つ(親の工程の回数は子の回数を含む)。
+    """
+    calls: dict[str, int] = {}
+    for step in _execution_steps(data):
+        name = str(step.get("name") or "").strip()
+        value = step.get("llm_calls")
+        if not name or isinstance(value, bool) or not isinstance(value, int):
+            continue
+        calls[name] = calls.get(name, 0) + value
+    return calls
+
+
 def _stage_timings(data: Mapping[str, Any]) -> dict[str, float]:
     """回答フローの工程ごとの時間(ms)。``diagnostics.answer.execution_steps`` から読む。
 
@@ -395,6 +432,8 @@ def _summarize_runs(
         "stage_latency_ms": {
             stage: _latency_summary(values) for stage, values in sorted(stage_values.items())
         },
+        # 工程ごとのモデルの呼び出しの回数の平均と最大(#1226。遅い工程と回数を合わせて見る)。
+        "stage_llm_calls": _llm_call_summary(success_runs),
         "cases": _case_summaries(runs),
         "error_type_counts": _error_type_counts(failed_runs),
         "threshold_failures": [],
@@ -403,6 +442,17 @@ def _summarize_runs(
     summary["threshold_failures"] = failures
     summary["passed"] = not failures
     return summary
+
+
+def _llm_call_summary(runs: Sequence[SearchLoadRun]) -> dict[str, dict[str, float]]:
+    values: dict[str, list[int]] = defaultdict(list)
+    for run in runs:
+        for stage, count in (run.stage_llm_calls or {}).items():
+            values[stage].append(count)
+    return {
+        stage: {"mean": round(sum(counts) / len(counts), 3), "max": float(max(counts))}
+        for stage, counts in sorted(values.items())
+    }
 
 
 def _stage_values(runs: Sequence[SearchLoadRun]) -> dict[str, list[float]]:

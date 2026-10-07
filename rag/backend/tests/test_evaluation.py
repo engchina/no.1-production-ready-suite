@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 import pytest
+from pydantic import ValidationError
 from pytest import LogCaptureFixture, MonkeyPatch
 
 from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
@@ -458,6 +459,56 @@ async def test_unanswerable_case_answered_counts_unexpected_answer() -> None:
 
     assert metrics.refusal_accuracy == 0.0
     assert metrics.case_results[0].failure_reasons == ["unexpected_answer"]
+
+
+async def test_category_breakdown_summarizes_results_per_category() -> None:
+    """ケースの分類ごとに件数・語の一致・拒答の内訳を出す（#1226）。
+
+    分類の無いケースは uncategorized。
+    """
+    runner = EvaluationRunner(pipeline=StubPipeline())
+
+    metrics = await runner.run(
+        cases=[
+            EvaluationCase(
+                id="doc-1",
+                query="承認条件",
+                expected_answer_keywords=["120000"],
+                category="document_answerable",
+            ),
+            EvaluationCase(
+                id="missing-1", query="承認条件", answerable=False, category="knowledge_missing"
+            ),
+            EvaluationCase(id="plain-1", query="承認条件", expected_answer_keywords=["無い語"]),
+        ],
+        top_k=5,
+    )
+
+    assert [result.category for result in metrics.case_results] == [
+        "document_answerable",
+        "knowledge_missing",
+        None,
+    ]
+    breakdown = {key: value.model_dump() for key, value in metrics.category_breakdown.items()}
+    assert breakdown["document_answerable"] == {
+        "case_count": 1,
+        "error_count": 0,
+        "answer_pass_rate": None,
+        "answer_keyword_hit_rate": 1.0,
+        "abstain_rate": 0.0,
+        "refusal_correct_rate": 1.0,
+    }
+    # 資料に無い質問に答えたので、拒答の判断が期待と違う。
+    assert breakdown["knowledge_missing"]["refusal_correct_rate"] == 0.0
+    assert breakdown["uncategorized"]["answer_keyword_hit_rate"] == 0.0
+
+
+async def test_category_breakdown_is_empty_without_categories() -> None:
+    runner = EvaluationRunner(pipeline=StubPipeline())
+    metrics = await runner.run(cases=[EvaluationCase(id="c", query="承認条件")], top_k=5)
+    assert metrics.category_breakdown == {}
+    with pytest.raises(ValidationError):
+        EvaluationCase(id="c", query="q", category="unknown")  # type: ignore[arg-type]
 
 
 def test_is_abstained_uses_answer_record_insufficient_reason() -> None:

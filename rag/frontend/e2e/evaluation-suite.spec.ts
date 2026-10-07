@@ -501,6 +501,25 @@ for (const viewport of [
         metric_case_counts: { ...evaluationMetrics("standard").metric_case_counts, answer_pass_rate: 0 },
         threshold_failures: [{ metric: "mrr", actual: 0.5, threshold: 0.6 }],
         failure_reason_counts: { partial_recall: 1 },
+        // 分類ごとの内訳（#1226）。
+        category_breakdown: {
+          document_answerable: {
+            case_count: 2,
+            error_count: 1,
+            answer_pass_rate: 0.5,
+            answer_keyword_hit_rate: 1,
+            abstain_rate: 0,
+            refusal_correct_rate: 1,
+          },
+          knowledge_missing: {
+            case_count: 1,
+            error_count: 0,
+            answer_pass_rate: null,
+            answer_keyword_hit_rate: null,
+            abstain_rate: 1,
+            refusal_correct_rate: 1,
+          },
+        },
       }),
       autoComplete: true,
     });
@@ -530,6 +549,10 @@ for (const viewport of [
     await expect(page.getByTestId("evaluation-failure-reasons")).toContainText(
       "正解の文書の一部だけ取れた: 1"
     );
+    const categories = page.getByTestId("evaluation-category-breakdown");
+    await expect(categories.getByRole("row", { name: /資料で答えられる/ })).toContainText("2（失敗 1）");
+    await expect(categories.getByRole("row", { name: /資料で答えられる/ })).toContainText("50%");
+    await expect(categories.getByRole("row", { name: /資料に答えが無い/ })).toContainText("—");
     const table = page.getByTestId("evaluation-case-scroll-region");
     await expect(table.getByTestId("evaluation-case-judgement").first()).toContainText(
       "合格"
