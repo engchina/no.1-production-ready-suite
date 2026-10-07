@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from pr_system_settings.auth.errors import SecurityApiError
 
 from app.clients.oracle import OracleClient
+from app.clients.support_guide_store import SupportGuideStore
 from app.config import (
     OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
     Settings,
@@ -38,6 +39,12 @@ from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
+from app.rag.support_guide_runtime import (
+    clarification_questions,
+    match_guide,
+    short_circuit_answer,
+    with_guide_rule,
+)
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search import (
     AnswerEvaluationRequest,
@@ -49,6 +56,7 @@ from app.schemas.search import (
     SearchResponse,
 )
 from app.schemas.settings import FieldDefinitionData, SearchExtractionFieldsData
+from app.schemas.support_guide import SupportGuideContent
 from app.security.permissions import SCOPE_FORBIDDEN_CODE
 
 router = APIRouter()
@@ -164,6 +172,9 @@ async def stream_search(
 async def _resolve_query_context(
     request: SearchRequest,
     global_settings: Settings,
+    *,
+    guide_context: Sequence[str] = (),
+    interactive: bool = False,
 ) -> tuple[SearchRequest, Settings, str | None, str | None]:
     """検索の有効 request / Settings と適用済みの Search Answer Profile id を返す。
 
@@ -171,6 +182,9 @@ async def _resolve_query_context(
     検索・回答プロファイル指定時は参照 KB 群を検索対象へ展開し、その回答の設定を適用する。
     KB はナレッジ構築設定だけを持つため、KB query legacy 値は検索 runtime へ反映しない。
     戻り値は (有効 request, 有効 Settings, 適用 KB id, 適用 Search Answer Profile id)。
+
+    業務ガイド（#1238）は ``guide_context``（チャットの前の発話）と質問で選ぶ。``interactive``
+    （チャット）は送信の前に確認の質問を出すので、残った不明の条件は分岐で答える。
     """
     oracle = OracleClient()
     settings = global_settings
@@ -203,6 +217,28 @@ async def _resolve_query_context(
         runtime_knowledge = await oracle.get_search_answer_profile_knowledge(
             view.id, RUNTIME_KNOWLEDGE_KIND
         )
+        # 公開した業務ガイドのうち、質問に合う 1 つを選ぶ（#1238）。
+        match = match_guide(
+            await _published_guides(oracle, view.id),
+            "\n".join([*guide_context, request.query]),
+            request.conditions,
+            interactive=interactive,
+        )
+        if match is not None:
+            runtime_knowledge = with_guide_rule(runtime_knowledge, match)
+            settings = settings.model_copy(
+                update={
+                    "rag_support_guide": {
+                        **match.summary(),
+                        "clarifications": clarification_questions(match),
+                        "short_answer": (
+                            short_circuit_answer(match)
+                            if match.decision in {"clarify", "handoff"}
+                            else ""
+                        ),
+                    }
+                }
+            )
         if runtime_knowledge:
             settings = settings.model_copy(update={"rag_runtime_knowledge": runtime_knowledge})
         applied_view = view.id if (applied or kb_ids) else None
@@ -210,6 +246,17 @@ async def _resolve_query_context(
 
     request = _scope_request_knowledge_bases(request)
     return request, settings, None, None
+
+
+async def _published_guides(
+    oracle: OracleClient, search_answer_profile_id: str
+) -> list[tuple[str, int, SupportGuideContent]]:
+    """公開した業務ガイド。読めなければ（表をまだ作っていない環境など）使わずに答える。"""
+    try:
+        return await SupportGuideStore(oracle).published_contents(search_answer_profile_id)
+    except Exception:  # noqa: BLE001 - 業務ガイドは補助。読めなくても検索・回答は続ける。
+        logger.warning("support guides load failed", exc_info=True)
+        return []
 
 
 def ensure_search_answer_profile_not_archived(view: object, search_answer_profile_id: str) -> None:

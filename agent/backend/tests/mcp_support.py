@@ -48,6 +48,13 @@ class RagSearchIn(_ContractInput):
     conditions: dict[str, str] | None = None
 
 
+class RagLookupGuidesIn(_ContractInput):
+    query: str
+    search_answer_profile_id: str
+    conditions: dict[str, str] | None = None
+    limit: int = Field(default=3, ge=1, le=10)
+
+
 class RagReadSourceIn(_ContractInput):
     document_id: str
     chunk_id: str
@@ -167,6 +174,34 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
             }
         ]
     },
+    "rag_lookup_guides": {
+        "guides": [
+            {
+                "guide_id": "guide-1",
+                "revision": 1,
+                "title": "契約の更新",
+                "decision": "clarify",
+                "known_conditions": [],
+                "unknown_conditions": [{"id": "kind", "label": "契約の種類", "handling": "ask"}],
+                "expected_result": "契約を更新できる",
+                "score": 2,
+                "clarifications": [
+                    {
+                        "condition_id": "kind",
+                        "label": "契約の種類",
+                        "question": "契約の種類は何ですか？",
+                        "options": ["年間", "月額"],
+                    }
+                ],
+                "steps": [
+                    {"id": "s1", "title": "契約を開く", "depends_on": [], "allowed_tools": []}
+                ],
+                "impact_scope": "individual",
+                "approval_required": False,
+                "handoff_contact": "",
+            }
+        ]
+    },
     "rag_retrieve_evidence": {
         "trace_id": "rag-trace-2",
         "guardrail_warnings": [],
@@ -231,6 +266,7 @@ class FakeProductMcp:
                     self._tool("rag_search", RagSearchIn),
                     self._tool("rag_list_search_answer_profiles", RagListSearchAnswerProfilesIn),
                     self._tool("rag_read_source", RagReadSourceIn),
+                    self._tool("rag_lookup_guides", RagLookupGuidesIn),
                     self._tool("rag_retrieve_evidence", RagSearchIn),
                     self._tool("rag_validate_answer", RagValidateAnswerIn),
                 ],

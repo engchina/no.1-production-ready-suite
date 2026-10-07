@@ -55,6 +55,7 @@ READ_ONLY = {
     "rag_search": True,
     "rag_list_search_answer_profiles": True,
     "rag_read_source": True,
+    "rag_lookup_guides": True,
     "rag_retrieve_evidence": True,
     "rag_validate_answer": True,
     "nl2sql_query": False,
