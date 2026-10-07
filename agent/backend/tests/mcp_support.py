@@ -44,6 +44,14 @@ class RagSearchIn(_ContractInput):
     knowledge_base_ids: list[str] | None = None
     top_k: int | None = Field(default=None, ge=1, le=100)
     filters: dict[str, str] | None = None
+    evidence_limit: int = Field(default=12, ge=1, le=50)
+
+
+class RagReadSourceIn(_ContractInput):
+    document_id: str
+    chunk_id: str
+    offset: int = Field(default=0, ge=0)
+    max_chars: int = Field(default=8000, ge=1, le=20000)
 
 
 class RagListSearchAnswerProfilesIn(_ContractInput):
@@ -83,12 +91,25 @@ def _job(status: str = "done") -> dict[str, Any]:
     }
 
 
-_CITATION = {
+_LOCATOR = {"section_path": ["契約書", "第5条（更新）"], "page_start": 3, "page_end": 3}
+
+# RAG の `rag_search` の根拠（platform/contracts/mcp/rag-tools.json の evidence。#1219）。
+_EVIDENCE = {
+    "evidence_id": "chunk-1",
     "document_id": "doc-1",
     "chunk_id": "chunk-1",
     "file_name": "契約書.pdf",
-    "text": "契約条項",
+    "chunk_set_id": "cs-1",
+    "recipe_id": "recipe-1",
+    "content_kind": "text",
+    "locator": _LOCATOR,
+    "excerpt": "契約条項",
+    "truncated": False,
+    "text_length": 4,
+    "used_in_answer": True,
+    "role": "retrieved_anchor",
     "score": 0.9,
+    "rerank_score": None,
 }
 
 DEFAULT_OUTPUTS: dict[str, Any] = {
@@ -96,7 +117,27 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "answer": "根拠付き回答",
         "trace_id": "rag-trace-1",
         "guardrail_warnings": [],
-        "citations": [_CITATION],
+        "insufficient_reason": None,
+        "needs_human_review": False,
+        "evidence": [_EVIDENCE],
+        "evidence_omitted": 0,
+    },
+    "rag_read_source": {
+        "evidence_id": "chunk-1",
+        "document_id": "doc-1",
+        "chunk_id": "chunk-1",
+        "file_name": "契約書.pdf",
+        "chunk_set_id": "cs-1",
+        "recipe_id": "recipe-1",
+        "content_kind": "text",
+        "locator": _LOCATOR,
+        "text": "契約条項の全文",
+        "offset": 0,
+        "text_length": 7,
+        "truncated": False,
+        "next_offset": None,
+        "parent_text": None,
+        "parent_truncated": False,
     },
     "rag_list_search_answer_profiles": {
         "search_answer_profiles": [
@@ -149,6 +190,7 @@ class FakeProductMcp:
                 tools=[
                     self._tool("rag_search", RagSearchIn),
                     self._tool("rag_list_search_answer_profiles", RagListSearchAnswerProfilesIn),
+                    self._tool("rag_read_source", RagReadSourceIn),
                 ],
             ),
             "nl2sql": McpServer(

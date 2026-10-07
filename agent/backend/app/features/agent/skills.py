@@ -144,14 +144,19 @@ skill_registry.register(
         name="業務 RAG 調査",
         description="業務 RAG（MCP 接続 rag）を使って根拠付き情報を検索する。",
         instructions=(
-            "ユーザーの目的を rag_search の query として扱い、引用と根拠を返す。"
+            "ユーザーの目的を rag_search の query として扱い、根拠（evidence）に基づいて答える。"
             "対象の検索・回答プロファイルが分からなければ "
             "rag_list_search_answer_profiles で確かめる。"
+            "回答に使った根拠（used_in_answer）を優先し、文書名と場所（locator の節・頁）を示す。"
+            "根拠の excerpt が切り詰められている（truncated）か、前後の条件・例外を確かめる必要が"
+            "あるときは、rag_read_source に document_id と chunk_id を渡して本文を読む。"
+            "insufficient_reason があるときや needs_human_review が true のときは、"
+            "資料で確かめられなかったことを伝え、推測で補わない。"
         ),
         mcp_requirements=[
             SkillMcpRequirement(
                 server_id="rag",
-                tool_names=["rag_search", "rag_list_search_answer_profiles"],
+                tool_names=["rag_search", "rag_list_search_answer_profiles", "rag_read_source"],
             )
         ],
         tags=["rag", "research", "business-data"],

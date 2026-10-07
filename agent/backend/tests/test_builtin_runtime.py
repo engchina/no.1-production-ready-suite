@@ -666,7 +666,7 @@ def test_mcp_connection_tools_are_given_to_the_model(
     assert step.status == "completed"
     # RAG の結果は根拠の成果物として残る。
     evidence = next(item for item in run.artifacts if item.kind == "rag_evidence")
-    assert evidence.content["citations"][0]["file_name"] == "契約書.pdf"
+    assert evidence.content["evidence"][0]["file_name"] == "契約書.pdf"
 
 
 def test_unavailable_mcp_connection_is_skipped_with_a_warning(

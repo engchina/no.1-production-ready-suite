@@ -518,6 +518,8 @@ const agentJa = {
   "chat.cancelled": "回答の作成を停止しました。もう一度送ると、新しく回答を作成します。",
   "chat.sources": "出典（{count}）",
   "chat.sourceUntitled": "無題の文書",
+  "evidence.page": "p.{page}",
+  "evidence.pageRange": "p.{start}–{end}",
   "chat.tools": "使ったツール（{count}）",
   // 回答の処理の段階（3 製品共通の ChatProgress。#1145 / #1147）。実行中は「〜しています」、完了は「〜しました」、未実行は名詞。
   "chat.progress.submit.running": "質問を送信しています",
@@ -886,6 +888,7 @@ const agentJa = {
   "run.auditErrorDetails": "詳細",
   "run.ragAnswer": "回答",
   "run.citations": "引用",
+  "run.evidenceUsed": "回答に使用",
   "run.contexts": "検索コンテキスト",
   "run.score": "スコア",
   "run.rowCount": "行数",

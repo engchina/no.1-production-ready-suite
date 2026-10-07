@@ -103,7 +103,7 @@
    - `/api/search`・`/api/search/stream`・チャットの送信は、回答を LLM で生成するため `RAG_ANSWER_TIMEOUT_SECONDS`（既定 300 秒）で pipeline 実行時間を制限する（#375。品質評価の 1 ケースも同じ上限で打ち切る。#383）。通常検索は timeout 時に 504 を返す。SSE は stream 開始後に timeout した場合、HTTP status は維持して `error` event（`message` に時間切れになった工程と再試行の案内、`stage` に工程名）を返し、どちらも `rag_search_audit.error_stage=timeout` を残す。
    - 進捗の stage は `history_rewrite`（会話履歴による質問の書き換え）・`answer`（回答フロー）と、その中の入れ子の工程 `answer_step:<工程名>`（「質問の理解」「文書検索（1回目）」など）、検索だけの経路の `retrieval` を通知する（#375 / #593）。画面（RAG 検索・チャット）は今の工程と経過時間を出す。
    - stage は `rag_search_stage_duration_seconds` で stage 別 latency を記録する。回答フローの工程ごとの時間は `diagnostics.answer.execution_steps` に残る（負荷試験 CLI `search_load_cli` はこれで工程の p95 を集計する）。
-   - レスポンスには `trace_id`、`citations`、`guardrail_warnings`、`diagnostics`、`elapsed_ms` を含める。
+   - レスポンスには `trace_id`、`citations`、`guardrail_warnings`、`diagnostics`、`elapsed_ms` を含める。MCP の `rag_search` は `citations` を根拠の `evidence[]`（場所・版・回答に使ったか・切り詰めの有無）に写し、本文の続きは `rag_read_source` で読む（#1219。契約は `platform/contracts/mcp/rag-tools.json`）。
    - `POST /api/search/stream` は SSE で `stage`、`metadata`、`delta`、`citations`、`done` を返す。`stage` event は工程ごとの `started` / `success` / `error` と低機密 attributes を表す。回答 token は完全生成、PII マスク、groundedness、回答検査の後にだけ `delta` 分割する。
 
 ## Agent からの呼び出し（MCP）

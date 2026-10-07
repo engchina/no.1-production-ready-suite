@@ -54,6 +54,7 @@ CONTRACTS = Path(__file__).resolve().parents[3] / "platform/contracts/mcp"
 READ_ONLY = {
     "rag_search": True,
     "rag_list_search_answer_profiles": True,
+    "rag_read_source": True,
     "nl2sql_query": False,
     "nl2sql_get_job": True,
 }
@@ -175,7 +176,8 @@ def test_initialize_session_id_and_headers(monkeypatch: MonkeyPatch) -> None:
     }
     assert result.output is not None
     assert result.output["answer"] == "根拠付き回答"
-    assert result.output["citations"][0]["file_name"] == "契約書.pdf"
+    assert result.output["evidence"][0]["file_name"] == "契約書.pdf"
+    assert result.output["evidence"][0]["locator"]["page_start"] == 3
     assert result.audit_metadata["tool_name"] == "rag__rag_search"
     assert result.audit_metadata["audit_tags"] == ["mcp", "rag"]
 

@@ -59,6 +59,7 @@ import { AnswerBody, ToolResultTable } from "@/components/chat/ResultTables";
 import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
+import { answerSources, type RagEvidenceView } from "@/lib/rag-evidence";
 import { runToolResultTables } from "@/lib/run-tables";
 import { runStatusView, stepStatusView } from "@/lib/status-labels";
 import { isNullableString, isString, useWorkspaceState } from "@/lib/workspace-state";
@@ -640,10 +641,15 @@ function RunChatTurn({
           >
             <ol className="space-y-2">
               {citations.map((citation, index) => (
-                <li key={`${citation.title}-${index}`} className="rounded-sm bg-surface-sunken p-2 text-xs">
+                <li key={citation.key} className="rounded-sm bg-surface-sunken p-2 text-xs">
                   <p className="font-medium text-fg">
                     {index + 1}. {citation.title}
                   </p>
+                  {citation.location ? (
+                    <p className="mt-0.5 break-words text-fg-muted" data-testid="chat-source-location">
+                      {citation.location}
+                    </p>
+                  ) : null}
                   {citation.text ? (
                     <p className="mt-1 line-clamp-3 break-words text-fg-muted">{citation.text}</p>
                   ) : null}
@@ -746,30 +752,9 @@ function answerText(artifacts: Artifact[]): string | null {
   return null;
 }
 
-interface CitationView {
-  title: string;
-  text: string;
-}
-
-/** RAG の結果（`rag_evidence` の成果物）の引用。 */
-function runCitations(artifacts: Artifact[]): CitationView[] {
-  const citations: CitationView[] = [];
-  for (const artifact of artifacts) {
-    if (artifact.kind !== "rag_evidence") continue;
-    const items = artifact.content.citations;
-    if (!Array.isArray(items)) continue;
-    for (const item of items) {
-      if (!item || typeof item !== "object") continue;
-      const record = item as Record<string, unknown>;
-      const title =
-        (typeof record.file_name === "string" && record.file_name) ||
-        (typeof record.title === "string" && record.title) ||
-        (typeof record.document_id === "string" && record.document_id) ||
-        t("chat.sourceUntitled");
-      citations.push({ title, text: typeof record.text === "string" ? record.text : "" });
-    }
-  }
-  return citations;
+/** RAG の結果（`rag_evidence` の成果物）のうち、回答の出典にする根拠（#1219）。 */
+function runCitations(artifacts: Artifact[]): RagEvidenceView[] {
+  return answerSources(artifacts.filter((artifact) => artifact.kind === "rag_evidence").map((artifact) => artifact.content));
 }
 
 /** 会話が消えた・読めなくなった失敗か（一時的な失敗ではなく、新しい会話に戻すもの）。 */

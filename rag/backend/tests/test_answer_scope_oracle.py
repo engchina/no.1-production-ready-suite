@@ -156,3 +156,74 @@ async def test_retrieval_screen_catalog_on_real_oracle() -> None:
         client, file_name=f"screen-{token}-other.pdf", chunks=[_chunk(0, "別文書", "（１）一覧")]
     )
     assert await client.retrieval_scope_state(filters) != state_before
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_retrievable_chunk_follows_search_visibility_on_real_oracle() -> None:
+    """MCP の rag_read_source が読む chunk は検索と同じ見え方の条件に従う（#1219）。
+
+    有効な chunk_set の chunk だけを返し、古い版・利用できる範囲の外は返さない。古い版は
+    ``accessible_chunk_exists`` で見分ける。
+    """
+    from dataclasses import replace
+
+    from app.rag.request_context import (
+        current_audit_request_context,
+        reset_audit_request_context,
+        set_audit_request_context,
+    )
+
+    client = OracleClient()
+    token = uuid4().hex[:12]
+    document_id = await _indexed_document(
+        client,
+        file_name=f"read-{token}.pdf",
+        chunks=[_chunk(0, "立替経費は翌月10日までに申請する。", "規程 > 第2条")],
+    )
+    [old] = await client.list_document_chunks(document_id)
+
+    chunk = await client.retrievable_chunk(document_id, old.chunk_id)
+    assert chunk is not None
+    assert chunk.text == "立替経費は翌月10日までに申請する。"
+    assert chunk.metadata["section_path"] == "規程 > 第2条"
+    assert chunk.metadata["chunk_set_id"]
+    assert await client.retrievable_chunk(document_id, "missing-chunk") is None
+    assert await client.accessible_chunk_exists(document_id, "missing-chunk") is False
+
+    # 利用できるナレッジベースの外の文書は、検索と同じく見えない。
+    scoped = set_audit_request_context(
+        replace(current_audit_request_context(), allowed_knowledge_base_ids=frozenset({"kb-none"}))
+    )
+    try:
+        assert await client.retrievable_chunk(document_id, old.chunk_id) is None
+        assert await client.accessible_chunk_exists(document_id, old.chunk_id) is False
+    finally:
+        reset_audit_request_context(scoped)
+
+    # 新しい版を有効にすると、古い版の chunk は検索では見えない（行が残っていれば stale）。
+    recipes = await client.list_document_recipes(document_id)
+    recipe_id = str(recipes[0]["recipe_id"])
+    new_chunk_set_id = f"cs_read_{uuid4().hex[:16]}"
+    await client.upsert_chunk_set(
+        chunk_set_id=new_chunk_set_id, document_id=document_id, recipe_id=recipe_id
+    )
+    await client.save_index(
+        document_id,
+        StructuredExtraction(raw_text="本文", confidence=0.9),
+        [_chunk(0, "改訂後の本文", "規程 > 第2条")],
+        [_EMBEDDING],
+        chunk_set_id=new_chunk_set_id,
+    )
+    await client.mark_chunk_set_indexed(
+        chunk_set_id=new_chunk_set_id, chunk_count=1, vector_count=1
+    )
+    await client.activate_recipe_chunk_set(
+        recipe_id=recipe_id,
+        chunk_set_id=new_chunk_set_id,
+        materialized_revision=int(str(recipes[0].get("config_revision") or 1)),
+    )
+    assert await client.retrievable_chunk(document_id, old.chunk_id) is None
+    remaining = {view.chunk_id for view in await client.list_document_chunks(document_id)}
+    assert await client.accessible_chunk_exists(document_id, old.chunk_id) is (
+        old.chunk_id in remaining
+    )
