@@ -206,6 +206,36 @@ def match_guide(
     return GuideMatch(guide_id, revision, content, score, tuple(states), decision, tuple(unknown))
 
 
+def rank_guides(
+    guides: Iterable[tuple[str, int, SupportGuideContent]],
+    text: str,
+    provided: Mapping[str, str] | None = None,
+    *,
+    limit: int = 3,
+    today: date | None = None,
+) -> list[GuideMatch]:
+    """質問に当たる公開の業務ガイドを点の高い順に（MCP の rag_lookup_guides）。"""
+    today = today or date.today()
+    scored = sorted(
+        (
+            (guide_score(content, text), guide_id, revision, content)
+            for guide_id, revision, content in guides
+            if _in_period(content, today)
+        ),
+        key=lambda item: (-item[0], item[1]),
+    )
+    result: list[GuideMatch] = []
+    for score, guide_id, revision, content in scored:
+        if score < MATCH_THRESHOLD or len(result) >= limit:
+            break
+        states = condition_states(content, text, provided or {})
+        decision, unknown = decide(states, interactive=False)
+        result.append(
+            GuideMatch(guide_id, revision, content, score, tuple(states), decision, tuple(unknown))
+        )
+    return result
+
+
 def _lines(match: GuideMatch) -> list[str]:
     content = match.content
     lines = [
@@ -470,6 +500,7 @@ __all__ = [
     "guide_rule",
     "guide_score",
     "match_guide",
+    "rank_guides",
     "short_circuit_answer",
     "with_guide_rule",
 ]

@@ -543,7 +543,7 @@ def _stub_stream(monkeypatch: MonkeyPatch, fake: FakeChatOracle, models: list[st
     monkeypatch.setattr(chat_route, "OracleClient", lambda *a, **k: fake)
     monkeypatch.setattr(chat_route, "RagPipeline", _FakePipeline)
 
-    async def fake_resolve(request, settings):  # type: ignore[no-untyped-def]
+    async def fake_resolve(request, settings, **_kwargs):  # type: ignore[no-untyped-def]
         return request, settings, None, None
 
     monkeypatch.setattr(chat_route, "_resolve_query_context", fake_resolve)

@@ -440,17 +440,14 @@ async def _prepare_chat_turn(
     scope: AnswerScope | None = None
     filters: dict[str, str] = {}
     conditions: dict[str, str] = {}
-    guides = await _published_guides(oracle, search_answer_profile_id)
-    guide_answer = (
-        resolve_guide_clarification(
-            guides, request.clarification.rule_id, request.clarification.option_ids
-        )
-        if request.clarification is not None
-        else None
-    )
     if request.clarification is not None and request.clarification.rule_id.startswith(
         GUIDE_CLARIFICATION_PREFIX
     ):
+        guide_answer = resolve_guide_clarification(
+            await _published_guides(oracle, search_answer_profile_id),
+            request.clarification.rule_id,
+            request.clarification.option_ids,
+        )
         # 業務ガイドの条件の確認（#1238）。答えは既知の条件として回答に渡す。
         if guide_answer is None:
             raise HTTPException(

@@ -32,7 +32,12 @@ from tests.test_security_scope import _captured_knowledge_base_ids, _install_sea
 
 client = AsgiTestClient(app)
 SECRET = "rag-mcp-test-secret-0123456789abcdef"  # nosec B105 - テスト用
-ALL_TOOLS = ["rag_list_search_answer_profiles", "rag_search", "rag_read_source"]
+ALL_TOOLS = [
+    "rag_list_search_answer_profiles",
+    "rag_search",
+    "rag_lookup_guides",
+    "rag_read_source",
+]
 
 
 @pytest.fixture
@@ -126,6 +131,7 @@ def test_initialize_and_tools_list_follow_user_permissions(auth: ProductionAuth)
     assert _tool_names(_token(searcher.user_uuid)) == [
         "rag_list_search_answer_profiles",
         "rag_search",
+        "rag_lookup_guides",
         "rag_read_source",
     ]
     # チャットは MCP で提供しない（#787）。チャット
