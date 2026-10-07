@@ -292,9 +292,9 @@ prop の妥当性（`Button` に存在しない prop を渡す等）は lint で
 ## 10. この文書の位置
 
 この文書はリポジトリの `docs/design-system/ARCHITECTURE.md` にあります。
-`AGENTS.md` の「デザインシステム / UI」節から参照されており、`CLAUDE.md` は
-`@AGENTS.md` で AGENTS.md を取り込むため、**Claude Code と Codex は UI に触るとき
-自動でこのルールを読みます**。zip を配布したりプロンプトを貼る運用は不要です。
+`AGENTS.md` の「デザインシステム / UI」節から参照されており、Claude Code（2.1.277
+以降）と Codex は `AGENTS.md` を直接読むため、**UI に触るとき自動でこのルールを
+読みます**。zip を配布したりプロンプトを貼る運用は不要です。
 
 デザインシステム側（Claude Design）で決定が変わったときは、`docs/design-system/` の
 該当ファイルを差分で更新する PR を出してください。**git の履歴が、誰がいつ何を

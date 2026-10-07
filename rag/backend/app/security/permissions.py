@@ -364,6 +364,22 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
         MENU_SEARCH_ANSWER_PROFILES
     ),
     ("POST", f"{_BV}/clarifications/suggest"): _any(MENU_CHAT, MENU_SEARCH_ANSWER_PROFILES),
+    # 業務ガイド（#1237）。他の知識と同じく、プロファイルの管理の画面の権限で扱う。
+    ("GET", f"{_BV}/support-guides"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/support-guides"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("GET", f"{_BV}/support-guides/export"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/support-guides/import/preview"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/support-guides/import"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("GET", f"{_BV}/support-guides/{{guide_id}}"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("PUT", f"{_BV}/support-guides/{{guide_id}}"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/support-guides/{{guide_id}}/validate"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/support-guides/{{guide_id}}/publish"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("GET", f"{_BV}/support-guides/{{guide_id}}/revisions/{{revision}}"): _any(
+        MENU_SEARCH_ANSWER_PROFILES
+    ),
+    ("POST", f"{_BV}/support-guides/{{guide_id}}/rollback"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/support-guides/{{guide_id}}/archive"): _any(MENU_SEARCH_ANSWER_PROFILES),
+    ("POST", f"{_BV}/support-guides/{{guide_id}}/restore"): _any(MENU_SEARCH_ANSWER_PROFILES),
     ("GET", f"{_BV}/query-suggestions"): _ANSWER_USE,
     # ---- 検索・回答プロファイル: チャット ----
     ("GET", "/chat/models"): _any(MENU_CHAT),

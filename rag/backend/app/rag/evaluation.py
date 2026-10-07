@@ -582,7 +582,7 @@ def _case_result(
     hits: list[str] = []
     context_recall: float | None = None
     reciprocal_rank: float | None = None
-    if relevant:
+    if relevant and not _skips_retrieval(response):
         hits = [doc_id for doc_id in retrieved_ids if doc_id in relevant]
         context_recall = len(set(hits)) / len(relevant)
         reciprocal_rank = _reciprocal_rank(retrieved_ids, relevant)
@@ -609,7 +609,7 @@ def _case_result(
     handling = _handling_scores(case, response, abstained=abstained)
     failure_reasons = _case_failure_reasons(
         answerable=answerable,
-        has_relevant=bool(relevant),
+        has_relevant=bool(relevant) and not _skips_retrieval(response),
         relevant_count=len(relevant),
         hit_count=len(set(hits)),
         abstained=abstained,
@@ -687,8 +687,30 @@ def _safe_answer(result: EvaluationCaseResult, checked: bool) -> float | None:
     return 0.0 if result.forbidden_hits else 1.0
 
 
+# 検索をせずに利用者へ確かめる・人へ引き継ぐ回答（#1259）。拒答でも検索の取りこぼしでもない。
+_NO_RETRIEVAL_OUTCOMES = frozenset({"needs_clarification", "needs_human"})
+
+
+def _explicit_outcome(response: SearchResponse) -> str | None:
+    details = response.diagnostics.answer or {}
+    outcome = details.get("outcome")
+    return outcome if isinstance(outcome, str) and outcome else None
+
+
+def _skips_retrieval(response: SearchResponse) -> bool:
+    """確認の質問・人への引き継ぎで引用の無い回答（検索の指標の対象外）。"""
+    return _explicit_outcome(response) in _NO_RETRIEVAL_OUTCOMES and not response.citations
+
+
 def is_abstained(response: SearchResponse) -> bool:
-    """回答が「資料から答えられない」旨だけか(拒答)を、回答の記録から判定する。"""
+    """回答が「資料から答えられない」旨だけか(拒答)を、回答の記録から判定する。
+
+    回答の記録が対応（outcome。#1235）を持つときは insufficient_evidence だけを拒答とする（確認の
+    質問・人への引き継ぎは拒答ではない。#1259）。持たない古い記録は本文・引用・不足の理由で判定する。
+    """
+    outcome = _explicit_outcome(response)
+    if outcome is not None:
+        return outcome == "insufficient_evidence"
     details = response.diagnostics.answer or {}
     return is_abstained_answer(
         response.answer, response.citations, str(details.get("insufficient_reason") or "")
