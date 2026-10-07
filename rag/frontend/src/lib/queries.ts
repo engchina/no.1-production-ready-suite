@@ -88,6 +88,8 @@ import {
   type ApprovedFaqListData,
   type ApprovedFaqMutationData,
   type RuntimeKnowledgeEditRequest,
+  type SupportGuideContent,
+  type SupportGuideDetail,
 } from "./api";
 import { t } from "./i18n";
 import {
@@ -1210,6 +1212,106 @@ export function useEditRuntimeKnowledge(searchAnswerProfileId: string) {
         ["search-answer-profiles", searchAnswerProfileId, "runtime-knowledge"],
         data,
       );
+    },
+  });
+}
+
+// --- 業務ガイド（#1237） ---
+
+function supportGuideKeys(searchAnswerProfileId: string) {
+  const root = ["search-answer-profiles", searchAnswerProfileId, "support-guides"] as const;
+  return {
+    root,
+    list: (includeArchived: boolean) => [...root, "list", includeArchived] as const,
+    detail: (guideId: string) => [...root, "detail", guideId] as const,
+    revision: (guideId: string, revision: number) =>
+      [...root, "revision", guideId, revision] as const,
+  };
+}
+
+/** 業務ガイドの一覧（アーカイブを含めるかを選べる）。 */
+export function useSupportGuides(searchAnswerProfileId: string, includeArchived: boolean) {
+  return useQuery({
+    queryKey: supportGuideKeys(searchAnswerProfileId).list(includeArchived),
+    queryFn: () => api.listSupportGuides(searchAnswerProfileId, includeArchived),
+  });
+}
+
+/** 業務ガイドの下書き・公開の版・履歴。 */
+export function useSupportGuide(searchAnswerProfileId: string, guideId: string | null) {
+  return useQuery({
+    queryKey: supportGuideKeys(searchAnswerProfileId).detail(guideId ?? ""),
+    queryFn: () => api.getSupportGuide(searchAnswerProfileId, guideId as string),
+    enabled: guideId != null,
+  });
+}
+
+/** 公開した版の内容（「この版を見る」）。 */
+export function useSupportGuideRevision(
+  searchAnswerProfileId: string,
+  guideId: string | null,
+  revision: number | null,
+) {
+  return useQuery({
+    queryKey: supportGuideKeys(searchAnswerProfileId).revision(guideId ?? "", revision ?? 0),
+    queryFn: () =>
+      api.getSupportGuideRevision(searchAnswerProfileId, guideId as string, revision as number),
+    enabled: guideId != null && revision != null,
+  });
+}
+
+/**
+ * 業務ガイドを変える操作（作成・下書きの保存・公開・ロールバック・アーカイブ）。
+ * 返った詳細を詳細の cache に入れ、一覧を読み直す。
+ */
+export function useSupportGuideMutation<TArgs>(
+  searchAnswerProfileId: string,
+  mutationFn: (args: TArgs) => Promise<SupportGuideDetail>,
+) {
+  const qc = useQueryClient();
+  const keys = supportGuideKeys(searchAnswerProfileId);
+  return useMutation({
+    mutationFn,
+    onSuccess: (data) => {
+      qc.setQueryData(keys.detail(data.guide_id), data);
+      void qc.invalidateQueries({ queryKey: [...keys.root, "list"] });
+    },
+  });
+}
+
+/** 下書きの保存（guideId が無ければ作成）。 */
+export function useSaveSupportGuide(searchAnswerProfileId: string) {
+  return useSupportGuideMutation(
+    searchAnswerProfileId,
+    ({
+      guideId,
+      draft,
+      baseRevision,
+    }: {
+      guideId: string | null;
+      draft: SupportGuideContent;
+      baseRevision: number | null;
+    }) =>
+      guideId && baseRevision != null
+        ? api.saveSupportGuideDraft(searchAnswerProfileId, guideId, draft, baseRevision)
+        : api.createSupportGuide(searchAnswerProfileId, draft),
+  );
+}
+
+/** 保存した下書きを公開の前と同じ規則で検証する（参照する資料も確かめる）。 */
+export function useValidateSupportGuide(searchAnswerProfileId: string) {
+  return useMutation({
+    mutationFn: (guideId: string) => api.validateSupportGuide(searchAnswerProfileId, guideId),
+  });
+}
+
+/** 取り込み（検証を通ったガイドを下書きとして作る）。 */
+export function useImportSupportGuides(searchAnswerProfileId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (guides: unknown[]) => api.importSupportGuides(searchAnswerProfileId, guides),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: [...supportGuideKeys(searchAnswerProfileId).root, "list"] });
     },
   });
 }

@@ -74,6 +74,19 @@ def _conflict(error: SupportGuideConflictError) -> HTTPException:
     )
 
 
+def _refused(message: str, issues: list[SupportGuideIssue]) -> HTTPException:
+    """公開・ロールバックを検証の問題で断る 422。
+
+    共通の envelope は detail の文字の配列を `error_messages` にする（dict は Python の表記の
+    文字 1 つにされて読めない）ので、1 つ目に要約、2 つ目以降に問題の文を並べる。
+    位置つきの一覧は「検証」（validate）で返す。
+    """
+    return HTTPException(
+        status_code=422,
+        detail=[message, *(issue.message for issue in issues if issue.severity == "error")],
+    )
+
+
 async def _publish_issues(
     oracle: OracleClient, profile: SearchAnswerProfileDetail, content: SupportGuideContent
 ) -> list[SupportGuideIssue]:
@@ -290,13 +303,7 @@ async def publish_support_guide(
         raise _conflict(SupportGuideConflictError(summary.draft_revision))
     issues = await _publish_issues(oracle, profile, draft)
     if has_errors(issues):
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "検証で問題が見つかったため公開できません。",
-                "issues": [issue.model_dump() for issue in issues if issue.severity == "error"],
-            },
-        )
+        raise _refused("検証で問題が見つかったため公開できません。", issues)
     try:
         await store.publish(
             search_answer_profile_id,
@@ -345,13 +352,7 @@ async def rollback_support_guide(
         raise HTTPException(status_code=409, detail="アーカイブした業務ガイドは公開できません。")
     issues = await _publish_issues(oracle, profile, target.content)
     if has_errors(issues):
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "戻す版は、今の資料の状態では検証に通りません。",
-                "issues": [issue.model_dump() for issue in issues if issue.severity == "error"],
-            },
-        )
+        raise _refused("戻す版は、今の資料の状態では検証に通りません。", issues)
     await store.publish(
         search_answer_profile_id,
         guide_id,
