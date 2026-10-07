@@ -819,6 +819,13 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
             "回答フローだけが使う。"
         ),
     )
+    rag_support_guide: dict[str, object] = Field(
+        default_factory=dict,
+        description=(
+            "リクエスト単位で検索・回答プロファイルの公開した業務ガイドから選んだ 1 つの要約"
+            "（guide_id・版・判断・既知 / 不明の条件・確認の質問。#1238）。回答フローだけが使う。"
+        ),
+    )
     rag_domain_keywords: list[str] = Field(
         default_factory=list,
         description=(

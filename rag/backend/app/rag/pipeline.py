@@ -34,6 +34,7 @@ from app.rag.observability import (
     record_trace_span,
 )
 from app.rag.query_history import record_query_history
+from app.rag.support_guide_runtime import apply_guide_to_diagnostics, guide_short_circuit_outcome
 from app.schemas.common import JsonValue
 from app.schemas.search import (
     ExtractionFieldCondition,
@@ -269,6 +270,7 @@ class RagPipeline:
                 self._read_field_conditions(request),
                 progress_callback=progress_callback,
             )
+        guide = dict(self._settings.rag_support_guide or {})
         engine = AnswerEngine(
             self._settings,
             oracle=self._oracle,
@@ -293,12 +295,21 @@ class RagPipeline:
         # 回答エンジンは検索と回答の生成（LLM）を中で行う。
         # 進捗には全体を 1 工程（#375）とし、その中の各工程（質問の理解・文書検索など）も
         # 入れ子の工程として出す（#593）。回答を作らない RAG 検索は「検索」の工程にする（#649）。
-        outcome = await _observe_stage(
-            trace_id,
-            "answer" if request.generate_answer else "retrieval",
-            engine.run(request, step_callback=emit_step if progress_callback is not None else None),
-            progress_callback=progress_callback,
-        )
+        if request.generate_answer and guide.get("short_answer") and self._approved_faq is None:
+            # 業務ガイドの必要な条件が分からず、確かめるか人へ引き継ぐ（#1238）。
+            # 回答（モデル）は作らない。
+            outcome = guide_short_circuit_outcome(guide)
+        else:
+            outcome = await _observe_stage(
+                trace_id,
+                "answer" if request.generate_answer else "retrieval",
+                engine.run(
+                    request, step_callback=emit_step if progress_callback is not None else None
+                ),
+                progress_callback=progress_callback,
+            )
+            if guide and request.generate_answer:
+                apply_guide_to_diagnostics(outcome.diagnostics, guide)
         if request.generate_answer:
             # 回答側の安全チェックも工程として計測し、進捗に出す
             # (チャットの「回答を確認しています」。#1146)。
