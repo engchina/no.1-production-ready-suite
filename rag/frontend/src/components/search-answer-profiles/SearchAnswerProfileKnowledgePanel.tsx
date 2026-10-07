@@ -20,7 +20,7 @@ import {
 import { ErrorState } from "@/components/StateViews";
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { useLeaveGuard } from "@/lib/leave-guard";
+import { confirmPendingLeave, useLeaveGuard } from "@/lib/leave-guard";
 import { useValuesChanged } from "@/lib/render-sync";
 import {
   initialLoadError,
@@ -31,8 +31,9 @@ import {
 
 import { ApprovedFaqManager } from "./ApprovedFaqManager";
 import { RuntimeKnowledgeManager, runtimeKindLabel } from "./RuntimeKnowledgeManager";
+import { SupportGuideManager } from "./SupportGuideManager";
 
-type KnowledgeTab = "approvedFaq" | "terms" | "domainKeywords" | "rules";
+type KnowledgeTab = "approvedFaq" | "terms" | "domainKeywords" | "rules" | "supportGuides";
 
 /** 検索・回答プロファイル単位の知識(ドメインキーワード等)。編集中の検索・回答プロファイルにだけ表示する。 */
 export function SearchAnswerProfileKnowledgePanel({
@@ -55,9 +56,14 @@ export function SearchAnswerProfileKnowledgePanel({
           idPrefix="search-answer-profile-knowledge"
           ariaLabel={t("searchAnswerProfiles.knowledge.title")}
           value={tab}
-          onChange={(value) => setTab(value as KnowledgeTab)}
+          onChange={async (value) => {
+            // 業務ガイドは編集中の入力が多いので、タブを離れる前に未保存の変更を確かめる。
+            if (tab === "supportGuides" && !(await confirmPendingLeave())) return;
+            setTab(value as KnowledgeTab);
+          }}
           // 回答フローで使う順に並べる（#682）: 類似問の提示 → 用語・同義語で質問を広げる →
-          // ドメインキーワードでキーワード検索の語を切り出す → 回答ルールを回答の生成に渡す。
+          // ドメインキーワードでキーワード検索の語を切り出す → 回答ルールを回答の生成に渡す →
+          // 業務ガイドで確かめる条件と手順を示す（#1237。回答への適用は別の Issue）。
           items={[
             { id: "approvedFaq", label: t("searchAnswerProfiles.faq.title") },
             { id: "terms", label: runtimeKindLabel("terms") },
@@ -66,6 +72,7 @@ export function SearchAnswerProfileKnowledgePanel({
               label: t("searchAnswerProfiles.domainKeywords.title"),
             },
             { id: "rules", label: runtimeKindLabel("rules") },
+            { id: "supportGuides", label: t("supportGuides.title") },
           ]}
         />
         <div
@@ -77,6 +84,8 @@ export function SearchAnswerProfileKnowledgePanel({
             <DomainKeywordsEditor searchAnswerProfileId={searchAnswerProfileId} />
           ) : tab === "approvedFaq" ? (
             <ApprovedFaqManager searchAnswerProfileId={searchAnswerProfileId} />
+          ) : tab === "supportGuides" ? (
+            <SupportGuideManager searchAnswerProfileId={searchAnswerProfileId} />
           ) : (
             // 種類ごとに編集中の入力を持つので、タブを切り替えたら作り直す。
             <RuntimeKnowledgeManager key={tab} searchAnswerProfileId={searchAnswerProfileId} kind={tab} />
