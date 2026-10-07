@@ -242,6 +242,15 @@ class SearchOutput(BaseModel):
     evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
 
 
+class RetrieveEvidenceOutput(BaseModel):
+    trace_id: str
+    guardrail_warnings: list[str]
+    evidence: list[RagEvidence] = Field(
+        description="検索の順（rerank の順）の根拠。回答は作らないので used_in_answer は false。"
+    )
+    evidence_omitted: int = Field(description="evidence_limit を超えて返さなかった根拠の数。")
+
+
 class ReadSourceOutput(BaseModel):
     evidence_id: str
     document_id: str
@@ -500,6 +509,19 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         result = await search_route._run_search_with_timeout(request)
         return SearchOutput(**_answer_fields(result, arguments.evidence_limit))
 
+    async def retrieve_evidence(arguments: SearchInput) -> RetrieveEvidenceOutput:
+        # 検索の画面と同じく質問の理解・拡張・検索・rerank まで行い、回答（CRAG・生成）は作らない。
+        request = _search_request(arguments).model_copy(update={"generate_answer": False})
+        enforce_rate_limit("search", http_request)
+        result = await search_route._run_search_with_timeout(request)
+        limit = arguments.evidence_limit
+        return RetrieveEvidenceOutput(
+            trace_id=result.trace_id,
+            guardrail_warnings=list(result.guardrail_warnings),
+            evidence=[_evidence(chunk) for chunk in result.citations[:limit]],
+            evidence_omitted=max(0, len(result.citations) - limit),
+        )
+
     return McpServer(
         name=MCP_SERVER_NAME,
         version=get_settings().app_version,
@@ -522,6 +544,17 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=SearchInput,
                 handler=search,
                 output_model=SearchOutput,
+                permissions=(SEARCH_PERMISSIONS,),
+            ),
+            McpTool(
+                name="rag_retrieve_evidence",
+                description=(
+                    "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。"
+                    "場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。"
+                ),
+                input_model=SearchInput,
+                handler=retrieve_evidence,
+                output_model=RetrieveEvidenceOutput,
                 permissions=(SEARCH_PERMISSIONS,),
             ),
             McpTool(

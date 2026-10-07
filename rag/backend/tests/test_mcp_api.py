@@ -32,7 +32,12 @@ from tests.test_security_scope import _captured_knowledge_base_ids, _install_sea
 
 client = AsgiTestClient(app)
 SECRET = "rag-mcp-test-secret-0123456789abcdef"  # nosec B105 - テスト用
-ALL_TOOLS = ["rag_list_search_answer_profiles", "rag_search", "rag_read_source"]
+ALL_TOOLS = [
+    "rag_list_search_answer_profiles",
+    "rag_search",
+    "rag_retrieve_evidence",
+    "rag_read_source",
+]
 
 
 @pytest.fixture
@@ -126,6 +131,7 @@ def test_initialize_and_tools_list_follow_user_permissions(auth: ProductionAuth)
     assert _tool_names(_token(searcher.user_uuid)) == [
         "rag_list_search_answer_profiles",
         "rag_search",
+        "rag_retrieve_evidence",
         "rag_read_source",
     ]
     # チャットは MCP で提供しない（#787）。チャット
@@ -395,6 +401,41 @@ def test_search_evidence_locates_spreadsheet_rows(
         "bbox": None,
         "bbox_unit": None,
     }
+
+
+def test_retrieve_evidence_skips_answer_generation(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """rag_retrieve_evidence は回答を作らずに根拠だけを検索の順で返す（#1241）。"""
+    captured: dict[str, Any] = {}
+
+    async def fake_run(request: SearchRequest) -> SearchResponse:
+        captured["generate_answer"] = request.generate_answer
+        captured["profile"] = request.search_answer_profile_id
+        return SearchResponse(
+            answer="",
+            citations=[_chunk(f"c{index}", used=False) for index in range(4)],
+            trace_id="trace-r",
+            guardrail_warnings=["注意"],
+            elapsed_ms=1.0,
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call(
+        "rag_retrieve_evidence",
+        {"query": "規程", "search_answer_profile_id": "bv-1", "evidence_limit": 3},
+        _token(user.user_uuid),
+    )["structuredContent"]
+    assert captured == {"generate_answer": False, "profile": "bv-1"}
+    assert [item["chunk_id"] for item in body["evidence"]] == ["c0", "c1", "c2"]
+    assert body["evidence_omitted"] == 1
+    assert (body["trace_id"], body["guardrail_warnings"]) == ("trace-r", ["注意"])
+    assert "answer" not in body
+    # 検索の権限が無ければ使えない。
+    chatter = auth.user_with_permissions("chatter", ["menu.chat"])
+    denied = _call("rag_retrieve_evidence", {"query": "規程"}, _token(chatter.user_uuid))
+    assert denied["isError"] is True
 
 
 def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) -> None:

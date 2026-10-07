@@ -422,6 +422,357 @@
       }
     },
     {
+      "name": "rag_retrieve_evidence",
+      "description": "回答を作らずに、検索・回答プロファイルのナレッジベースから根拠（evidence。場所・版付き）だけを返します。rag_search より速く、根拠を集める段で使います。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "description": "検索・回答の条件。旧 scope を含む未定義項目は拒否する。",
+        "properties": {
+          "query": {
+            "description": "質問文。",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "search_answer_profile_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "検索・回答プロファイルの id。参照するナレッジベースと検索・回答設定を使う。",
+            "title": "Search Answer Profile Id"
+          },
+          "knowledge_base_ids": {
+            "description": "検索するナレッジベースの id（省略時は検索・回答プロファイルの参照先）。",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Knowledge Base Ids",
+            "type": "array"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "検索する件数。",
+            "title": "Top K"
+          },
+          "filters": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "検索フィルター（例: category_name）。",
+            "title": "Filters",
+            "type": "object"
+          },
+          "evidence_limit": {
+            "default": 12,
+            "description": "返す根拠の最大件数（回答に使った根拠を先に返す）。",
+            "maximum": 50,
+            "minimum": 1,
+            "title": "Evidence Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "SearchInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "EvidenceLocator": {
+            "description": "根拠の場所（種類によって空の項目がある）。",
+            "properties": {
+              "section_path": {
+                "description": "節の見出しの列。",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Section Path",
+                "type": "array"
+              },
+              "page_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "開始の頁（PDF の物理頁）。",
+                "title": "Page Start"
+              },
+              "page_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "終了の頁（PDF の物理頁）。",
+                "title": "Page End"
+              },
+              "sheet_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表計算のシート名（#1221）。",
+                "title": "Sheet Name"
+              },
+              "row_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "シートの開始の行（1 始まり）。",
+                "title": "Row Start"
+              },
+              "row_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "シートの終了の行。",
+                "title": "Row End"
+              },
+              "cell_range": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "セル範囲（例: A3:F7）。",
+                "title": "Cell Range"
+              }
+            },
+            "title": "EvidenceLocator",
+            "type": "object"
+          },
+          "RagEvidence": {
+            "description": "検索・回答の根拠 1 件。",
+            "properties": {
+              "evidence_id": {
+                "description": "根拠の id（chunk_id と同じ）。",
+                "title": "Evidence Id",
+                "type": "string"
+              },
+              "document_id": {
+                "title": "Document Id",
+                "type": "string"
+              },
+              "chunk_id": {
+                "title": "Chunk Id",
+                "type": "string"
+              },
+              "file_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "File Name"
+              },
+              "chunk_set_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠を作った処理の版。",
+                "title": "Chunk Set Id"
+              },
+              "recipe_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠を作った処理レシピ。",
+                "title": "Recipe Id"
+              },
+              "content_kind": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "内容の種類（text / table など）。",
+                "title": "Content Kind"
+              },
+              "locator": {
+                "$ref": "#/$defs/EvidenceLocator"
+              },
+              "excerpt": {
+                "description": "本文の先頭（最大 1000 文字）。",
+                "title": "Excerpt",
+                "type": "string"
+              },
+              "truncated": {
+                "description": "excerpt が本文の一部だけか。",
+                "title": "Truncated",
+                "type": "boolean"
+              },
+              "text_length": {
+                "description": "本文の文字数。",
+                "title": "Text Length",
+                "type": "integer"
+              },
+              "used_in_answer": {
+                "description": "回答の生成に使った根拠か。",
+                "title": "Used In Answer",
+                "type": "boolean"
+              },
+              "role": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "根拠の役割（retrieved_anchor / parent_context など）。",
+                "title": "Role"
+              },
+              "score": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Score"
+              },
+              "rerank_score": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Rerank Score"
+              }
+            },
+            "required": [
+              "evidence_id",
+              "document_id",
+              "chunk_id",
+              "locator",
+              "excerpt",
+              "truncated",
+              "text_length",
+              "used_in_answer"
+            ],
+            "title": "RagEvidence",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "guardrail_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Guardrail Warnings",
+            "type": "array"
+          },
+          "evidence": {
+            "description": "検索の順（rerank の順）の根拠。回答は作らないので used_in_answer は false。",
+            "items": {
+              "$ref": "#/$defs/RagEvidence"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "evidence_omitted": {
+            "description": "evidence_limit を超えて返さなかった根拠の数。",
+            "title": "Evidence Omitted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "trace_id",
+          "guardrail_warnings",
+          "evidence",
+          "evidence_omitted"
+        ],
+        "title": "RetrieveEvidenceOutput",
+        "type": "object"
+      }
+    },
+    {
       "name": "rag_search",
       "description": "検索・回答プロファイルのナレッジベースを検索し、根拠（evidence。場所・版・回答に使ったか付き）と回答を返します。",
       "inputSchema": {
