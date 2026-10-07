@@ -1,5 +1,6 @@
 import { ListPlus, RefreshCw } from "lucide-react";
 
+import { isTimeoutError } from "../../lib/api-error";
 import { cn } from "../../lib/utils";
 import { Banner } from "../ui/banner";
 import { Button } from "../ui/button";
@@ -101,4 +102,16 @@ export function LoadMoreFooter({
       ) : null}
     </div>
   );
+}
+
+/**
+ * 続きの読み込みの失敗の文言（#1266。NL2SQL の `objectListLoadMoreErrorMessage` を共通にした）。
+ * 待ち時間の上限（`TimeoutError`）は `timeoutMessage`、ほかは例外の message、message が無ければ `fallback`。
+ */
+export function loadMoreErrorMessage(
+  error: unknown,
+  { timeoutMessage, fallback }: { timeoutMessage: string; fallback: string }
+) {
+  if (isTimeoutError(error)) return timeoutMessage;
+  return error instanceof Error && error.message ? error.message : fallback;
 }

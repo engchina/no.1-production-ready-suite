@@ -29,6 +29,18 @@ class Page[T](BaseModel):
     has_next: bool
 
 
+class CursorPage[T](BaseModel):
+    """カーソル型のページング済みレスポンス（任意のページへ移らない一覧。#1266）。
+
+    `next_cursor` は続きが無ければ None（空文字は使わない）。`total` は数えるのが重い一覧では None。
+    製品固有の付加情報（件数の内訳・version など）は、この class を継承して足す。
+    """
+
+    items: list[T]
+    next_cursor: str | None = None
+    total: int | None = None
+
+
 class HealthData(BaseModel):
     """ヘルスチェック結果。"""
 

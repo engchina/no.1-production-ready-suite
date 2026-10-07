@@ -129,6 +129,20 @@ in-process へ縮退せず、MCP の `rag_search` が止まった）。
 
 `X-Request-ID` ヘッダを常に付与（受信値を検証し、無ければ発行）。フロントの共通エラーハンドリングはこの形を前提にできる。
 
+### 一覧のページング（#1266）
+
+一覧の endpoint は `pr_backend_core.api` の部品で受け取り・返す。製品で `Page(...)` を手で組み立てない、limit を黙って clamp しない、カーソルの codec と `OFFSET … FETCH NEXT` の文を書き写さない。
+
+| 型 | query の受け取り | 応答 | 組み立て |
+|---|---|---|---|
+| offset 型（任意のページへ移る一覧） | `paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=200))]`（`limit` 1..max は `Query(le=)` で 422、`offset` 0 以上） | `Page[T]`（`items` / `total` / `limit` / `offset` / `has_next`） | DB のページ: `paginate(items, total=, limit=paging.limit, offset=paging.offset)`。メモリ上の全件: `paginate_slice(items, paging)`。縮退の fallback: `empty_page(paging)` |
+| カーソル型（「前へ / 次へ」と「さらに読み込む」） | `paging: Annotated[CursorParams, Depends(cursor_params(default=50, max_limit=100))]`（`cursor` は最初のページで None、最大 512 文字） | `CursorPage[T]`（`items` / `next_cursor: str \| None` / `total: int \| None`）。製品の付加情報（件数の内訳・version）は継承して足す | `cursor_page(items, next_cursor=, total=)`。`next_cursor` は続きが無ければ `None`（空文字は使わない） |
+
+- カーソルの文字列は `encode_cursor(dict)` / `decode_cursor(cursor, required=(...))`（base64url の JSON）か、offset をそのまま続きの印にする `encode_offset_cursor` / `decode_offset_cursor` / `next_offset_cursor`。壊れたカーソルは `InvalidCursorError` で、router が 422 にする。
+- Oracle の `OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY` は `offset_fetch_clause()`（bind 名は `offset_bind` / `limit_bind` で変えられる）と `offset_fetch_binds()`。
+- 権限管理の「利用できる対象」の一覧の上限は共通の `ACCESS_TARGET_PAGE_LIMIT_MAX`（100）。
+- frontend は共通の `OffsetPagination` / `CursorPagination`（ルートの AGENTS.md「読み込み中・一覧・ページング」）。
+
 ### 入力の検証エラー（422）の文（#1065）
 
 FastAPI / Pydantic の検証エラー（`RequestValidationError`）は、3 製品とも `pr_backend_core.api.validation` で整形する（共通の handler は `install_exception_handlers`。RAG は `validation_error_response`、NL2SQL は problem 契約の `api_problem_response` から同じ関数を使う）。

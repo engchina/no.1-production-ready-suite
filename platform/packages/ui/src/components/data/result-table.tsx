@@ -7,10 +7,10 @@ import { formatChatProgressDuration } from "../feedback/chat-progress";
 import { Banner } from "../ui/banner";
 import { Button } from "../ui/button";
 import { ButtonLink, type ButtonLinkComponent } from "../ui/button-link";
-import { SelectField } from "../ui/select-field";
 import { SideSheet } from "../ui/side-sheet";
 import { DataTable, type DataTableColumn } from "./data-table";
 import { PagedDataTable } from "./paged-data-table";
+import { PageSizeSelect } from "./page-size-select";
 import { DEFAULT_PAGE_SIZE, type PaginationRange } from "./pagination";
 
 /**
@@ -486,17 +486,14 @@ export function ResultTable({
               <div className="flex flex-wrap items-end justify-between gap-2">
                 <p className="text-sm text-fg">{summary}</p>
                 {rowCount > Math.min(...pageSizeOptions) ? (
-                  <SelectField
+                  <PageSizeSelect
                     id={pageSizeId}
-                    label={labels.pageSize}
-                    value={String(pageSize)}
+                    value={pageSize}
+                    options={pageSizeOptions}
+                    labels={{ label: labels.pageSize, option: labels.pageSizeOption }}
                     size="sm"
                     width="xs"
-                    options={pageSizeOptions.map((size) => ({
-                      value: String(size),
-                      label: labels.pageSizeOption(size),
-                    }))}
-                    onValueChange={(value) => setPageSize(Number(value))}
+                    onValueChange={setPageSize}
                   />
                 ) : null}
               </div>
