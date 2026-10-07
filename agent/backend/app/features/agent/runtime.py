@@ -34,6 +34,7 @@ from pydantic import (
 
 from app.features.agent import storage_backend
 from app.features.agent.config import runtime_config_store
+from app.features.agent.support_task import SUPPORT_TASK_KIND, SUPPORT_TASK_NAME
 from app.features.agent.tools import (
     ToolCall,
     ToolInvocationContext,
@@ -465,6 +466,14 @@ def run_answer_text(run: RunState) -> str | None:
     return None
 
 
+def run_support_task(run: RunState) -> JsonObject | None:
+    """Run の支援タスクの状態（`kind="support_task"` の成果物。#1243）。"""
+    for artifact in reversed(run.artifacts):
+        if artifact.kind == SUPPORT_TASK_KIND and isinstance(artifact.content, dict):
+            return artifact.content
+    return None
+
+
 class ApprovalDecisionRequest(BaseModel):
     approved: bool
     decided_by: str = "user"
@@ -629,6 +638,8 @@ class AgentRuntimeRepositoryContract(Protocol):
         self, run_id: str, feedback: RunFeedback, *, admin: bool = False
     ) -> RunState: ...
     def thread_history(self, run_id: str, *, limit: int) -> list[tuple[str, str]]: ...
+    def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]: ...
+    def save_support_task(self, run_id: str, content: JsonObject) -> None: ...
     def list_threads(
         self, *, user_uuid: str | None, agent_id: str | None = None
     ) -> list[ThreadSummary]: ...
@@ -1005,6 +1016,60 @@ class AgentRuntimeRepository:
                 and (answer := run_answer_text(previous)) is not None
             ]
             return turns[-limit:] if limit > 0 else []
+
+    def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]:
+        """支援タスクの目的（会話の最初の質問）と、前の完了した Run の状態（#1243）。
+
+        読むのは同じ会話で、同じ持ち主（Run を作った利用者）の、この Run より前の Run だけ。
+        会話は持ち主しか続けられない（#768）が、状態の持ち主も確かめる（別の利用者の状態を使わない）。
+        """
+        with self._lock:
+            run = self._require_run(run_id)
+            if run.thread_id is None:
+                return run.goal, None
+            owned = [
+                previous
+                for previous in self._thread_runs_locked(run.thread_id)
+                if previous.created_by_user_uuid == run.created_by_user_uuid
+                and previous.created_at <= run.created_at
+            ]
+            goal = owned[0].goal if owned else run.goal
+            for previous in reversed(owned):
+                if previous.id == run.id or previous.status != RunStatus.COMPLETED:
+                    continue
+                content = run_support_task(previous)
+                if (
+                    content is not None
+                    and content.get("thread_id") == run.thread_id
+                    and content.get("owner_user_uuid") == run.created_by_user_uuid
+                ):
+                    return goal, deepcopy(content)
+            return goal, None
+
+    def save_support_task(self, run_id: str, content: JsonObject) -> None:
+        """支援タスクの状態を Run の成果物に残す（同じ Run では 1 つを上書きする。#1243）。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            if _is_terminal(run.status):
+                return
+            existing = next(
+                (item for item in run.artifacts if item.kind == SUPPORT_TASK_KIND), None
+            )
+            if existing is not None:
+                existing.content = deepcopy(content)
+            else:
+                artifact = Artifact(
+                    name=SUPPORT_TASK_NAME, kind=SUPPORT_TASK_KIND, content=deepcopy(content)
+                )
+                run.artifacts.append(artifact)
+                self._append_event(
+                    run,
+                    RunEventType.ARTIFACT_CREATED,
+                    "支援タスクの状態を保存しました。",
+                    {"artifact_id": artifact.id, "kind": artifact.kind},
+                )
+            run.updated_at = _now()
+            self._persist_locked()
 
     def list_threads(
         self, *, user_uuid: str | None, agent_id: str | None = None
