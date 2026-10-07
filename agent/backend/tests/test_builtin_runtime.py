@@ -568,6 +568,7 @@ def test_model_failure_records_the_api_error_code(monkeypatch: MonkeyPatch, call
         async def get_response(self, *args: Any, **kwargs: Any) -> Any:
             raise error
 
+    _script(monkeypatch)  # モデルの接続の設定（CI には model-settings.json が無い）
     monkeypatch.setattr(builtin_runtime, "model_factory", lambda _target: _FailingModel([]))
     run_id = runtime_repository.create_builtin_run(
         RunCreateRequest(goal="規程を調べて", agent_id=AGENT_ID), created_by_user_uuid=USER_UUID
