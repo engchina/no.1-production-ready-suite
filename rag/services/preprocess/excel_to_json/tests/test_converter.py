@@ -276,6 +276,55 @@ def test_low_confidence_header_is_warned() -> None:
     assert sheet["diagnostics"][0]["code"] == "header_low_confidence"
 
 
+def test_ranges_limit_cells_used_for_header_and_records() -> None:
+    """読む範囲の外（表の下の集計・右のメモ）は表頭の推定にも記録にも使わない（#1229）。"""
+    workbook = _workbook(
+        {
+            "費目": [
+                ["費目の一覧", None, None, "メモ"],
+                ["コード", "名称", "上限", "担当: 経理"],
+                ["001", "交通費", 5000, None],
+                ["002", "宿泊費", 12000, None],
+                [None, None, None, None],
+                ["合計", None, 17000, None],
+            ],
+            "手順": [["番号", "作業"], ["1", "準備"], ["2", "確認"]],
+        }
+    )
+    workbook["費目"].merge_cells("A1:D1")
+    source = _bytes(workbook)
+
+    payload = _payload(source, ranges=["費目!A2:C4", "A1:B2"])
+    sheet = _sheet(payload)
+    assert [column["name"] for column in sheet["columns"]] == ["コード", "名称", "上限"]
+    assert [block["row_start"] for block in sheet["blocks"]] == [3, 4]
+    assert sheet["blocks"][0]["cell_range"] == "A3:C3"
+    assert sheet["preamble"] == []
+    # シート名の無い範囲は、シート名を付けた範囲の無いシートに当てる。
+    steps = _sheet(payload, 1)
+    assert [block["row_start"] for block in steps["blocks"]] == [2]
+
+    # 結合セルの左上が範囲の外でも、切り詰めた結合の左上へ値を移す。
+    merged = _sheet(_payload(source, sheets=["費目"], ranges=["B1:C4"], header_row=2))
+    assert merged["preamble"][0]["text"] == "費目の一覧"
+
+    outcome = convert(source, "", "excel_to_json", None, options={"ranges": ["無い!A1:B2"]})
+    assert "excel_range_sheet_not_found:無い" in outcome.warnings
+
+
+def test_invalid_ranges_are_rejected() -> None:
+    from rag_parser_core.sheet_records import ExcelOptions, parse_excel_range
+
+    assert parse_excel_range("'売上 ''26'!b2:a10").sheet == "売上 '26"
+    assert (parse_excel_range("C9:A1").min_row, parse_excel_range("C9:A1").max_col) == (1, 3)
+    for text in ("A1", "A0:B2", "1:3", "A1:B2:C3"):
+        with pytest.raises(ValueError):
+            ExcelOptions(ranges=[text])
+    outcome = convert(b"PK", "", "excel_to_json", None, options={"ranges": ["A1"]})
+    assert outcome.converted is False
+    assert "excel_options_invalid" in outcome.warnings
+
+
 def test_duplicate_and_blank_header_names() -> None:
     sheet = _sheet(_payload(_xlsx_bytes({"S": [["id", "id", None, "名前"], [1, 2, 3, 4]]})))
     # 空の表頭は column_<列>、重複は <名前>__<列>（no.1-rag と同じ）。

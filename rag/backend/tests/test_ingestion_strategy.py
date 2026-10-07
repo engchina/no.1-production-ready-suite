@@ -703,6 +703,59 @@ async def test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpo
     assert all(segment.artifact_path == artifact_path for segment in oracle.segments.values())
 
 
+async def test_low_confidence_excel_header_stops_at_review_even_when_gate_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """表頭の推定の信頼度が低いシートがあれば、全体のレビューの設定が off でも確認で止める。
+
+    #1229。
+    """
+    from app.rag import ingestion as ingestion_module
+    from app.rag.ingestion_quality import build_ingestion_quality_report, requires_review
+
+    def with_low_confidence_header(extraction: Any, **kwargs: Any) -> Any:
+        # parser のサービスが返す抽出の warning（sheet_records_extraction）の代わり。
+        extraction = extraction.model_copy(
+            update={"warnings": [*extraction.warnings, "excel_header_low_confidence:費目"]}
+        )
+        return build_ingestion_quality_report(extraction, **kwargs)
+
+    monkeypatch.setattr(
+        ingestion_module, "build_ingestion_quality_report", with_low_confidence_header
+    )
+    oracle = FakeOracle()
+    pipeline = IngestionPipeline(
+        vlm=CapturingVlm(),
+        genai=FakeEmbeddingClient(),
+        oracle=cast(Any, oracle),
+        object_storage=cast(Any, FakeObjectStorage()),
+        settings=Settings(
+            rag_parser_adapter_backend="local",
+            rag_review_gate_enabled=False,
+            rag_auto_parse_after_preprocess_enabled=True,
+        ),
+    )
+
+    detail = await pipeline.ingest(
+        "doc-low-header",
+        b"pdfdata",
+        "本文を抽出してください。",
+        content_type="application/pdf",
+        source_profile=_pdf_source_profile(file_size_bytes=7),
+    )
+
+    assert detail.status == FileStatus.REVIEW
+    assert oracle.saved_extraction is not None
+    report = oracle.saved_extraction.quality_report
+    assert report is not None
+    assert "excel_header_low_confidence:費目" in report.quality_warnings
+    assert report.risk_level == "medium"
+    assert requires_review(report) is True
+    other = report.model_copy(update={"quality_warnings": ["long_document"]})
+    assert requires_review(other) is False
+    assert requires_review(None) is False
+
+
 async def test_ingestion_pipeline_stops_at_preprocessed_when_parse_gate_off() -> None:
     """ファイル準備ゲート off では PREPROCESSED で停止し、抽出/索引へ進めない。"""
     oracle = FakeOracle()

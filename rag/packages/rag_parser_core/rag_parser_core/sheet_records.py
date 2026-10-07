@@ -17,9 +17,11 @@
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 
@@ -30,6 +32,54 @@ SHEET_RECORD_CONTENT_KIND = "record"
 SHEET_PREAMBLE_CONTENT_KIND = "text"
 # 1 つの要素の本文の上限（極端に長い行・手順で chunk を壊さない）。
 _BLOCK_TEXT_MAX_CHARS = 8000
+# 表頭の推定の信頼度が低いシートの warning（文書レシピを確認（REVIEW）で止める。#1229）。
+EXCEL_HEADER_LOW_CONFIDENCE_WARNING = "excel_header_low_confidence"
+# 範囲の指定（`A3:F200`、`手順!A1:D80`、`'売上 2026'!B2:H90`）。
+_RANGE = re.compile(
+    r"^(?:(?:'(?P<quoted>(?:[^']|'')+)'|(?P<sheet>[^!']+))!)?"
+    r"(?P<c1>[A-Za-z]{1,3})(?P<r1>\d{1,7}):(?P<c2>[A-Za-z]{1,3})(?P<r2>\d{1,7})$"
+)
+
+
+@dataclass(frozen=True)
+class ExcelRange:
+    """読む範囲（1 始まりの行・列。シート名が無ければ選んだすべてのシート）。"""
+
+    sheet: str | None
+    min_row: int
+    min_col: int
+    max_row: int
+    max_col: int
+
+    def contains(self, row: int, col: int) -> bool:
+        return self.min_row <= row <= self.max_row and self.min_col <= col <= self.max_col
+
+
+def _column_index(letters: str) -> int:
+    index = 0
+    for char in letters.upper():
+        index = index * 26 + (ord(char) - ord("A") + 1)
+    return index
+
+
+def parse_excel_range(text: str) -> ExcelRange:
+    """`[シート名!]A1:F20` を読む（不正なら ValueError）。"""
+    match = _RANGE.match(text.strip())
+    if match is None:
+        raise ValueError(f"範囲は「A3:F200」か「シート名!A3:F200」の形で指定してください: {text}")
+    sheet = match.group("quoted")
+    sheet = sheet.replace("''", "'") if sheet is not None else match.group("sheet")
+    rows = sorted((int(match.group("r1")), int(match.group("r2"))))
+    cols = sorted((_column_index(match.group("c1")), _column_index(match.group("c2"))))
+    if rows[0] < 1 or cols[1] > 16384 or rows[1] > 1048576:
+        raise ValueError(f"範囲が Excel のシートの外です: {text}")
+    return ExcelRange(
+        sheet=sheet.strip() if sheet and sheet.strip() else None,
+        min_row=rows[0],
+        min_col=cols[0],
+        max_row=rows[1],
+        max_col=cols[1],
+    )
 
 
 class ExcelOptions(BaseModel):
@@ -65,6 +115,25 @@ class ExcelOptions(BaseModel):
         max_length=200,
         description="読まない列（列名か列の記号。例: 備考、F）。",
     )
+    ranges: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description=(
+            "読む範囲（例: A3:F200＝選んだすべてのシート、手順!A1:D80＝そのシートだけ）。"
+            "範囲の外のセルは表頭の推定にも記録にも使わない。未指定はシート全体。"
+        ),
+    )
+
+    @field_validator("ranges")
+    @classmethod
+    def _valid_ranges(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value if item.strip()]
+        for item in cleaned:
+            parse_excel_range(item)
+        return cleaned
+
+    def parsed_ranges(self) -> list[ExcelRange]:
+        return [parse_excel_range(item) for item in self.ranges]
 
 
 class HeaderDetection(BaseModel):
@@ -241,10 +310,17 @@ def sheet_records_extraction(
         for sheet in document.sheets
         for item in sheet.diagnostics
     ]
+    # 表頭の推定の信頼度が低いシートは取込の品質の warning にし、文書レシピを確認で止める（#1229）。
+    warnings = [
+        f"{EXCEL_HEADER_LOW_CONFIDENCE_WARNING}:{sheet.name}"
+        for sheet in document.sheets
+        if any(item.code == "header_low_confidence" for item in sheet.diagnostics)
+    ]
     return StructuredExtraction(
         raw_text="\n".join(raw_lines),
         document_type="SPREADSHEET",
         confidence=1.0,
+        warnings=warnings,
         elements=elements,
         parser_artifacts={
             "source_parser": source_parser,
@@ -261,11 +337,13 @@ def sheet_records_extraction(
 
 
 __all__ = [
+    "EXCEL_HEADER_LOW_CONFIDENCE_WARNING",
     "SHEET_RECORDS_CONTENT_TYPE",
     "SHEET_RECORDS_FORMAT",
     "SHEET_RECORDS_FORMAT_VERSION",
     "SHEET_RECORD_CONTENT_KIND",
     "ExcelOptions",
+    "ExcelRange",
     "HeaderDetection",
     "SheetColumn",
     "SheetDiagnostic",
@@ -275,6 +353,7 @@ __all__ = [
     "SheetBlock",
     "SkippedSheet",
     "is_sheet_records_content_type",
+    "parse_excel_range",
     "parse_sheet_records",
     "sheet_records_extraction",
 ]

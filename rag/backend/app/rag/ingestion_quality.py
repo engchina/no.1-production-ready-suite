@@ -47,7 +47,11 @@ MEDIUM_RISK_WARNING_CODES = {
     "unstructured_adapter_empty",
     "docling_adapter_unsupported",
     "unstructured_adapter_unsupported",
+    "excel_header_low_confidence",
 }
+# 文書レシピを確認（REVIEW）で止める warning（全体のレビューの設定に関係なく止める。#1229）。
+# Excel の表頭の推定の信頼度が低いシートは、誤った表頭で黙って索引を作らない。
+REVIEW_REQUIRED_WARNING_CODES = {"excel_header_low_confidence"}
 HIGH_RISK_WARNING_CODES = {
     "no_structured_elements",
     "low_extraction_confidence",
@@ -424,3 +428,11 @@ def _risk_level(warnings: Sequence[str]) -> str:
     if warning_set.intersection(MEDIUM_RISK_WARNING_CODES):
         return "medium"
     return "low"
+
+
+def requires_review(report: IngestionQualityReport | None) -> bool:
+    """取込の品質に、確認（REVIEW）で止める warning があるか。"""
+    if report is None:
+        return False
+    codes = {warning.partition(":")[0].strip() for warning in report.quality_warnings}
+    return bool(codes & REVIEW_REQUIRED_WARNING_CODES)

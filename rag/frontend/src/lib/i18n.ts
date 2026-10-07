@@ -1830,6 +1830,19 @@ export const ja = {
   "documents.excelOptions.summary.headerDetected": "表頭は自動",
   "documents.excelOptions.summary.sheets": "シート: {names}",
   "documents.excelOptions.summary.excludeColumns": "除外する列: {names}",
+  "documents.excelOptions.ranges": "読む範囲",
+  "documents.excelOptions.ranges.hint":
+    "「A3:F200」（すべてのシート）か「シート名!A3:F200」を「、」で区切って入力します。範囲の外の行・列は読みません。空欄ならシート全体。",
+  "documents.excelOptions.summary.ranges": "範囲: {ranges}",
+  "documents.excelWarning.headerLowConfidence":
+    "シート「{sheet}」の表頭を推定できませんでした（信頼度が低い）。",
+  "documents.excelWarning.formulaWithoutValue":
+    "シート「{sheet}」の数式 {count} 件に保存された値がありません。Excel で開いて保存し直すと値が入ります。",
+  "documents.excelWarning.sheetNotFound": "読むシートに指定した「{sheet}」が見つかりません。",
+  "documents.excelWarning.rangeSheetNotFound": "読む範囲に指定したシート「{sheet}」が見つかりません。",
+  "documents.excelWarning.reviewTitle": "Excel の表頭を確認してください",
+  "documents.excelWarning.reviewBody":
+    "表頭を推定できなかったシートがあるため、索引を作る前に止めました（{sheets}）。抽出の内容が正しければ承認し、違えば文書レシピの「Excel の読み方」で表頭の行か読む範囲を指定して処理し直してください。",
   "documents.processingConfig.subtitle":
     "選択中のレシピだけの処理設定です。個別設定がない項目は検索・回答設定の既定値を使います。",
   "documents.processingConfig.editHint":
