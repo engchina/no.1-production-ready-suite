@@ -48,6 +48,14 @@ from pr_system_settings.model import (
 
 from app.features.agent.config import runtime_config_store
 from app.features.agent.skills import skill_registry
+from app.features.agent.support_task import (
+    BUDGET_EXCEEDED_CODE,
+    SupportTaskBudget,
+    budget_exceeded_message,
+    build_support_task,
+    has_support_task_activity,
+    support_task_instructions,
+)
 from app.features.agent.tools import (
     ExternalToolError,
     ToolCall,
@@ -56,6 +64,7 @@ from app.features.agent.tools import (
     ToolInvocationContext,
     ToolPolicy,
     ToolPolicyDecision,
+    ToolResult,
     list_mcp_connection_tools,
     mcp_tool_definition,
     mcp_tool_handler,
@@ -382,10 +391,15 @@ def _strict_schema(schema: dict[str, Any]) -> bool:
 
 
 class _ToolRecorder:
-    """function tool の実行を Run の step・イベント・成果物に記録する。"""
+    """function tool の実行を Run の step・イベント・成果物に記録する。
 
-    def __init__(self, run_id: str) -> None:
+    `budget` があれば、呼ぶ前に支援タスクの予算を数え、超える呼び出しは実行せずに
+    `budget_exceeded` の結果を返す（#1243）。
+    """
+
+    def __init__(self, run_id: str, budget: SupportTaskBudget | None = None) -> None:
         self.run_id = run_id
+        self.budget = budget
 
     async def invoke(
         self,
@@ -405,7 +419,26 @@ class _ToolRecorder:
         call = ToolCall(
             name=name, arguments=parsed if isinstance(parsed, dict) else {}, trace_id=call_id
         )
+        # 予算は await の前に数える（同じ応答の並列の呼び出しでも上限を超えない）。
+        exceeded = self.budget.reserve(name) if self.budget is not None else None
         step_id, context = runtime_repository.start_builtin_tool_step(self.run_id, call)
+        if exceeded is not None:
+            message = budget_exceeded_message(name, exceeded)
+            runtime_repository.finish_builtin_tool_step(
+                self.run_id,
+                step_id,
+                ToolResult(
+                    name=name,
+                    success=False,
+                    error=message,
+                    error_code=BUDGET_EXCEEDED_CODE,
+                    error_details={"budget": exceeded},
+                ),
+            )
+            return json.dumps(
+                {"error": message, "error_code": BUDGET_EXCEEDED_CODE, "budget": exceeded},
+                ensure_ascii=False,
+            )
         # 承認は SDK の needs_approval で済んでいる（拒否のツールは渡していない）。
         result = await asyncio.to_thread(
             tool_registry.invoke,
@@ -430,9 +463,10 @@ def build_function_tools(
     tool_names: list[str],
     mcp_tools: list[McpRuntimeTool] | None = None,
     resource_ids: list[str] | None = None,
+    budget: SupportTaskBudget | None = None,
 ) -> list[FunctionTool]:
     policy = _active_policy()
-    recorder = _ToolRecorder(run_id)
+    recorder = _ToolRecorder(run_id, budget)
     entries: list[tuple[ToolDefinition, ToolHandler | None]] = []
     for name in tool_names:
         registered = tool_registry.get(name)
@@ -496,8 +530,13 @@ def build_sdk_agent(
     model_id: str,
     agent_id: str | None = None,
     user_uuid: str | None = None,
+    budget: SupportTaskBudget | None = None,
+    support_task: str = "",
 ) -> Agent[Any]:
-    """SDK の Agent を作る（MCP 接続のツール一覧を HTTP で取るので、イベントループの外で呼ぶ）。"""
+    """SDK の Agent を作る（MCP 接続のツール一覧を HTTP で取るので、イベントループの外で呼ぶ）。
+
+    `support_task` は前の Run から引き継いだ支援タスクの状態（指示の末尾に足す。#1243）。
+    """
     from app.features.agent.runtime import runtime_repository
     from app.features.agent.skill_resources import skill_reference_ids
 
@@ -508,15 +547,19 @@ def build_sdk_agent(
     )
     for warning in warnings:
         runtime_repository.note_builtin_warning(run_id, warning)
+    composed = compose_instructions(instructions, skill_ids)
+    if support_task:
+        composed = f"{composed}\n\n{support_task}"
     return Agent(
         name=name or "agent",
-        instructions=compose_instructions(instructions, skill_ids),
+        instructions=composed,
         tools=list(
             build_function_tools(
                 run_id,
                 agent_tool_names(skill_ids),
                 mcp_tools,
                 resource_ids=skill_reference_ids(skill_ids),
+                budget=budget,
             )
         ),
         model=model_factory(target),
@@ -543,6 +586,78 @@ def conversation_input(run_id: str, goal: str) -> str | list[Any]:
     return items
 
 
+@dataclass
+class _SupportTaskRun:
+    """1 回の実行（開始・承認後の再開）の支援タスク（#1243）。"""
+
+    goal: str
+    previous: dict[str, Any] | None
+    budget: SupportTaskBudget
+    instructions: str
+    max_rag_calls_per_run: int
+    max_tool_calls_per_task: int
+
+
+def _support_task_run(run: Any) -> _SupportTaskRun:
+    """前の Run の状態と、この Run の step から予算の残りを作る。
+
+    再開した Run は、それまでの step を数えるので消費を 0 に戻さない。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    settings = get_settings()
+    max_rag = int(settings.agent_max_rag_calls_per_run)
+    max_task = int(settings.agent_max_tool_calls_per_task)
+    goal, previous = runtime_repository.support_task_context(run.id)
+    return _SupportTaskRun(
+        goal=goal,
+        previous=previous,
+        budget=SupportTaskBudget.for_run(
+            list(run.steps),
+            previous,
+            max_rag_calls_per_run=max_rag,
+            max_tool_calls_per_task=max_task,
+        ),
+        instructions=support_task_instructions(
+            previous,
+            goal=goal,
+            max_rag_calls_per_run=max_rag,
+            max_tool_calls_per_task=max_task,
+        ),
+        max_rag_calls_per_run=max_rag,
+        max_tool_calls_per_task=max_task,
+    )
+
+
+def _save_support_task(run_id: str, task: _SupportTaskRun) -> None:
+    """支援タスクの状態を Run の成果物に残す（ツールを呼ばず、引き継ぐ状態も無ければ残さない）。
+
+    状態は補助のため、作れなくても Run は止めない。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    try:
+        run = runtime_repository.get_run(run_id)
+        if task.previous is None and not has_support_task_activity(run.steps):
+            return
+        content = build_support_task(
+            task.previous,
+            steps=run.steps,
+            run_id=run.id,
+            thread_id=run.thread_id,
+            owner_user_uuid=run.created_by_user_uuid,
+            goal=task.goal,
+            max_rag_calls_per_run=task.max_rag_calls_per_run,
+            max_tool_calls_per_task=task.max_tool_calls_per_task,
+        )
+        runtime_repository.save_support_task(run_id, content)
+    except Exception as exc:  # noqa: BLE001 - 状態は補助。残せなくても回答は返す
+        logger.warning(
+            "builtin_runtime_support_task_failed",
+            extra={"run_id": run_id, "exception_type": type(exc).__name__},
+        )
+
+
 async def execute_run(run_id: str) -> None:
     """Run を最初から実行する（作成直後・dispatcher から呼ぶ）。"""
     with bind_log_context(run_id=run_id):
@@ -553,6 +668,7 @@ async def execute_run(run_id: str) -> None:
             return
         run, agent = started
         try:
+            task = _support_task_run(run)
             sdk_agent = await asyncio.to_thread(
                 build_sdk_agent,
                 run_id,
@@ -562,13 +678,15 @@ async def execute_run(run_id: str) -> None:
                 model_id=agent.model_id,
                 agent_id=agent.id,
                 user_uuid=run.created_by_user_uuid,
+                budget=task.budget,
+                support_task=task.instructions,
             )
             result = await Runner.run(
                 sdk_agent, conversation_input(run_id, run.goal), max_turns=_max_turns()
             )
             result = await _dry_run_approvals(run, sdk_agent, result)
             _record_usage(run_id, result, agent.model_id)
-            await _finish(run_id, result)
+            await _finish(run_id, result, task)
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
             _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
             _record_failure(run_id, exc)
@@ -584,6 +702,7 @@ async def resume_run(run_id: str) -> None:
             return
         run, agent, state_text, decisions = resumed
         try:
+            task = _support_task_run(run)
             sdk_agent = await asyncio.to_thread(
                 build_sdk_agent,
                 run_id,
@@ -593,6 +712,8 @@ async def resume_run(run_id: str) -> None:
                 model_id=agent.model_id,
                 agent_id=agent.id,
                 user_uuid=run.created_by_user_uuid,
+                budget=task.budget,
+                support_task=task.instructions,
             )
             state = await RunState.from_string(sdk_agent, state_text)
             for item in state.get_interruptions():
@@ -604,7 +725,7 @@ async def resume_run(run_id: str) -> None:
             result = await Runner.run(sdk_agent, state, max_turns=_max_turns())
             result = await _dry_run_approvals(run, sdk_agent, result)
             _record_usage(run_id, result, agent.model_id)
-            await _finish(run_id, result)
+            await _finish(run_id, result, task)
         except Exception as exc:  # noqa: BLE001 - 実行の境界では失敗を Run に記録する
             _record_usage(run_id, getattr(exc, "run_data", None), agent.model_id)
             _record_failure(run_id, exc)
@@ -646,9 +767,12 @@ async def _dry_run_approvals(run: Any, sdk_agent: Agent[Any], result: Any) -> An
     return result
 
 
-async def _finish(run_id: str, result: Any) -> None:
+async def _finish(run_id: str, result: Any, task: _SupportTaskRun | None = None) -> None:
     from app.features.agent.runtime import runtime_repository
 
+    # 承認待ちで止めるときも残す（再開した Run は同じ成果物を上書きする。#1243）。
+    if task is not None:
+        _save_support_task(run_id, task)
     interruptions = list(getattr(result, "interruptions", []) or [])
     if interruptions:
         calls = [

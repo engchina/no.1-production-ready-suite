@@ -45,6 +45,7 @@ class RagSearchIn(_ContractInput):
     top_k: int | None = Field(default=None, ge=1, le=100)
     filters: dict[str, str] | None = None
     evidence_limit: int = Field(default=12, ge=1, le=50)
+    conditions: dict[str, str] | None = None
 
 
 class RagReadSourceIn(_ContractInput):
