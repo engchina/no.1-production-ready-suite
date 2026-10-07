@@ -3,7 +3,7 @@
 > このファイルは **monorepo 全体に適用する共通ルールの正本**です。Claude Code と Codex の両方が参照します。
 > 製品固有のルールは各ディレクトリの `AGENTS.md`（`platform/` `rag/` `nl2sql/` `agent/`）にあり、**作業対象のディレクトリの `AGENTS.md` もあわせて適用**します。
 > 共通ルールと製品固有ルールが矛盾する場合は、製品固有ルールを優先します（ただし GitHub 運用と CI は本ファイルが優先）。
-> `CLAUDE.md` は各階層の `AGENTS.md` を `@AGENTS.md` で取り込みます。ルール変更は **AGENTS.md 側を編集**してください。
+> Claude Code（2.1.277 以降）と Codex は、この `AGENTS.md` を直接読みます。`CLAUDE.md` は置きません（#1263。以前は `@AGENTS.md` で取り込むだけの `CLAUDE.md` を置いていた）。
 
 ## 構成
 
@@ -23,6 +23,7 @@
 
 ## 言語
 
+- 応答・コミットメッセージ・コメントは日本語（技術用語・識別子は原語のまま）。ユーザーが会話で別の言語を指定した場合は、応答だけその言語に合わせる。
 - システムの主要言語は日本語。UI 文言・エラーメッセージ・通知・LLM への指示と出力は日本語を前提とし、ユーザー向け文言は i18n 経由で管理する。
 - Issue / PR / commit message / コードコメントは日本語で書く。code identifier、API path、file path、command、製品・ライブラリの固有名詞は英語のままでよい。
 - **利用者が入力する自然言語（チャット・SQL 生成・検索・回答の入力など）は、3 製品で「質問」と呼ぶ（#1183）。** 「クエリ」は SQL そのもの・技術の概念（サブクエリ・メディアクエリ・クエリ文字列など）にだけ使う。コードの識別子・API・i18n のキー（`question` / `query`）は変えなくてよい。
@@ -166,6 +167,12 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - RAG のマイクロサービス（`rag/services/*`）と `platform/scripts/` は、backend の job の対象外のため、`Lint / services & scripts` の job が venv を作らずに `ruff check` / `ruff format --check` だけを実行する（#517。設定は各サービスの `pyproject.toml` と `platform/scripts/ruff.toml`、版は `rag/backend/uv.lock` の ruff）。
 - pre-commit（`.pre-commit-config.yaml`）は gitleaks と、commit する backend の Python ファイルだけへの `ruff format --check` と `ruff check`（その backend の uv 環境と設定）を実行する。
 - Python の整形は `ruff format`（#345。black から置き換えた）。設定は各 backend の `pyproject.toml` の `[tool.ruff.format]`（black と同じ既定。行の長さは `[tool.ruff]` の 100 を共有）で、CI の `Format check` は `uv run ruff format --check .`。black は使わない。整形だけの commit は `.git-blame-ignore-revs` に載せる。
+
+## エージェントのメモ
+
+- UI/UX 作業では `ui-ux-pro-max` skill を必ず起動する（設計・実装・レビュー・改善のいずれも。詳細は「UI 変更の検証」）。
+- ドキュメント生成（.docx / .pptx / .xlsx / .pdf）が必要な場合は対応する skill（`document-skills:*` / `pdf`）を使う。
+- LLM/VLM = **OCI Enterprise AI**、embedding/rerank = **OCI Generative AI（Cohere Embed v4 / Rerank v4 fast）**、ベクトル DB = **Oracle AI Database**（Oracle AI Vector Search）という分担を取り違えないこと（「共通の技術方針」）。
 
 ## デザインシステム / UI（platform が正本）
 
