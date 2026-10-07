@@ -717,6 +717,60 @@ class OracleClient:
         )
         return [_retrieved_chunk_from_row(row) for row in rows]
 
+    async def retrievable_chunk(self, document_id: str, chunk_id: str) -> RetrievedChunk | None:
+        """検索と同じ見え方の条件で 1 件の chunk を返す（MCP の ``rag_read_source``。#1219）。
+
+        tenant・利用できるナレッジベース・INDEXED の文書・有効な chunk_set に限る。ID を知って
+        いても、検索で見えない chunk は返さない。
+        """
+        where_sql, binds = _oracle_retrieval_where({})
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT
+                c.document_id,
+                c.chunk_id,
+                c.chunk_text,
+                c.metadata_json,
+                c.chunk_index,
+                c.chunk_set_id,
+                d.file_name,
+                d.category_name,
+                0 AS score
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+              AND c.document_id = :read_document_id
+              AND c.chunk_id = :read_chunk_id
+            """,
+                where_sql=where_sql,
+            ),
+            {**binds, "read_document_id": document_id, "read_chunk_id": chunk_id},
+        )
+        return _retrieved_chunk_from_row(row) if row is not None else None
+
+    async def accessible_chunk_exists(self, document_id: str, chunk_id: str) -> bool:
+        """利用者が見られる文書に、その chunk の行が（古い版を含めて）残っているか（#1219）。
+
+        ``retrievable_chunk`` で見えないとき、古い版（有効でない chunk_set）か、無い・見えないかを
+        分けるために使う。
+        """
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT 1 AS found
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE c.document_id = :read_document_id
+              AND c.chunk_id = :read_chunk_id
+              AND {access_predicate}
+            """,
+                access_predicate=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind({"read_document_id": document_id, "read_chunk_id": chunk_id}),
+        )
+        return row is not None
+
     async def chunk_set_first_page_contexts(
         self, chunk_set_ids: Sequence[str]
     ) -> dict[str, dict[str, object]]:

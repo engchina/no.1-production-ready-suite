@@ -67,7 +67,7 @@ test.describe("Run の表のデータ（desktop）", () => {
   test("表の形の結果だけを呼んだ順に取り出す（表でない結果・失敗・未完了は含めない）", () => {
     const tables = runToolResultTables(
       run([
-        step("s1", "rag__rag_search", { answer: "回答", citations: [{ id: 1 }] }),
+        step("s1", "rag__rag_search", { answer: "回答", evidence: [{ evidence_id: "c1" }] }),
         step("s2", "nl2sql__nl2sql_query", JOB_DONE),
         step("s3", "custom__list", { rows: [{ a: 1 }] }, { status: "running" }),
         step("s4", "custom__failed", { rows: [{ a: 1 }] }, { status: "failed" }),

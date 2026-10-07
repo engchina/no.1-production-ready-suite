@@ -30,7 +30,10 @@ const QUERY_OUTPUT = {
   truncated: false,
 };
 const EMPTY_OUTPUT = { job_id: "job-empty", status: "done", columns: ["ID"], rows: [], total: 0, has_more: false };
-const RAG_OUTPUT = { answer: "根拠付き回答", citations: [{ file_name: "規程.pdf", text: "条文" }] };
+const RAG_OUTPUT = {
+  answer: "根拠付き回答",
+  evidence: [{ evidence_id: "c1", file_name: "規程.pdf", excerpt: "条文", used_in_answer: true }],
+};
 const ANSWER = [
   "部門別の売上をまとめました。",
   "",

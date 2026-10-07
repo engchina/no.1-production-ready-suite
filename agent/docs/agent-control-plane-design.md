@@ -58,7 +58,7 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
   "id": "business_rag_research",
   "instructions": "...",
   "mcp_requirements": [
-    {"server_id": "rag", "tool_names": ["rag_search", "rag_list_search_answer_profiles"]}
+    {"server_id": "rag", "tool_names": ["rag_search", "rag_list_search_answer_profiles", "rag_read_source"]}
   ],
   "resource_ids": []
 }
@@ -151,11 +151,15 @@ aud は製品名。削除できない）。外部の MCP は画面・`AGENT_EXTE
 
 | ツール（モデルに渡す名前） | readOnlyHint | 既定の policy |
 |---|---|---|
-| `rag__rag_search` / `rag__rag_list_search_answer_profiles` | true | 承認なし（回答生成に LLM を使う） |
+| `rag__rag_search` / `rag__rag_list_search_answer_profiles` / `rag__rag_read_source` | true | 承認なし（`rag_search` は回答生成に LLM を使う） |
 | `nl2sql__nl2sql_list_profiles` / `nl2sql__nl2sql_recommend_profile` / `nl2sql__nl2sql_get_job` | true | 承認なし |
 | `nl2sql__nl2sql_query` | false | 承認が必要（業務 DB へ SQL を実行する） |
 
-RAG のチャットは MCP で提供しない（#787）。RAG の MCP は検索（`rag_search`）と検索・回答プロファイルの一覧だけを持つ。
+RAG のチャットは MCP で提供しない（#787）。RAG の MCP は検索（`rag_search`）・根拠の読み取り（`rag_read_source`）・
+検索・回答プロファイルの一覧だけを持つ。`rag_search` の根拠は `evidence[]`（場所 `locator` の節・頁、版 `chunk_set_id` /
+`recipe_id`、回答に使ったか `used_in_answer`、切り詰めの有無 `truncated`）で返し、回答に使った根拠を先にして `evidence_limit`
+件まで返す。切り詰めた本文と親の本文は `rag_read_source`（検索と同じ見え方の条件。見えない根拠は `source_not_found`、古い版は
+`source_stale`）で読む（#1219）。チャットの出典は回答に使った根拠だけを、場所を添えて出す。
 
 ツール権限（`/settings/tool-policy`）は `<接続>__<ツール>` の名前で allow / ask / deny を上書きできる。
 NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_returned_as_audit_only` の警告を残す（実行はしない）。

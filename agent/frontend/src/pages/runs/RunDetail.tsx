@@ -38,6 +38,7 @@ import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/eval
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { type AgentCapabilities } from "@/lib/permissions";
+import { ragEvidenceItems } from "@/lib/rag-evidence";
 import { artifactTable, runToolResultTables, stepResultTable, type ToolResultTable } from "@/lib/run-tables";
 import {
   approvalStatusView,
@@ -747,7 +748,7 @@ function ArtifactsPanel({ run, onShowProcess }: { run: RunState; onShowProcess: 
 
 function RagEvidenceArtifact({ artifact }: { artifact: Artifact }) {
   const answer = typeof artifact.content.answer === "string" ? artifact.content.answer : null;
-  const citations = arrayOfRecords(artifact.content.citations);
+  const evidence = ragEvidenceItems(artifact.content);
   const contexts = arrayOfRecords(artifact.content.contexts);
 
   return (
@@ -758,19 +759,23 @@ function RagEvidenceArtifact({ artifact }: { artifact: Artifact }) {
           <p className="break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">{answer}</p>
         </section>
       ) : null}
-      {citations.length ? (
+      {evidence.length ? (
         <section className="space-y-2">
           <h3 className="flex items-center gap-2 text-sm font-medium text-fg">
             <FileText size={16} aria-hidden />
             {t("run.citations")}
           </h3>
           <div className="grid gap-2">
-            {citations.map((citation, index) => (
+            {evidence.map((item) => (
               <EvidenceItem
-                key={String(citation.id ?? citation.url ?? index)}
-                title={textValue(citation.title) ?? textValue(citation.source) ?? `#${index + 1}`}
-                subtitle={textValue(citation.url) ?? textValue(citation.source)}
-                detail={textValue(citation.snippet) ?? textValue(citation.text)}
+                key={item.key}
+                title={item.title}
+                subtitle={
+                  item.usedInAnswer
+                    ? [t("run.evidenceUsed"), item.location].filter(Boolean).join(" · ")
+                    : item.location
+                }
+                detail={item.text}
               />
             ))}
           </div>

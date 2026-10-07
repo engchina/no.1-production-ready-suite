@@ -182,7 +182,23 @@ test("回答の出典と使ったツールを畳んで出し、承認待ちは�
         kind: "rag_evidence",
         content: {
           answer: "第 5 条",
-          citations: [{ file_name: "契約書.pdf", text: "更新は 30 日前までに通知する。" }],
+          // rag_search の根拠（#1219）。回答に使った根拠だけを出典に出し、場所（頁・節）を添える。
+          evidence: [
+            {
+              evidence_id: "chunk-used",
+              file_name: "契約書.pdf",
+              locator: { section_path: ["契約書", "第5条（更新）"], page_start: 3, page_end: 3 },
+              excerpt: "更新は 30 日前までに通知する。",
+              used_in_answer: true,
+            },
+            {
+              evidence_id: "chunk-unused",
+              file_name: "別紙.pdf",
+              locator: { section_path: [], page_start: null, page_end: null },
+              excerpt: "回答に使っていない根拠",
+              used_in_answer: false,
+            },
+          ],
         },
       },
     ],
@@ -202,6 +218,8 @@ test("回答の出典と使ったツールを畳んで出し、承認待ちは�
 
   await turn.getByText("出典（1）").click();
   await expect(turn.getByText("1. 契約書.pdf")).toBeVisible();
+  await expect(turn.getByTestId("chat-source-location")).toHaveText("p.3 · 契約書 > 第5条（更新）");
+  await expect(turn.getByText("別紙.pdf")).toHaveCount(0);
   await turn.getByText("使ったツール（2）").click();
   await expect(turn.getByText("rag__rag_search", { exact: true })).toBeVisible();
 

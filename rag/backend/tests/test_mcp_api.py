@@ -19,9 +19,10 @@ from app.api.routes import search as search_route
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.config import get_settings
 from app.main import app
+from app.mcp import tools as mcp_tools
 from app.rag import request_context
 from app.rag.request_context import AuditRequestContext, current_audit_request_context
-from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
+from app.schemas.search import RetrievedChunk, SearchDiagnostics, SearchRequest, SearchResponse
 from app.security.permissions import SCOPE_FORBIDDEN_CODE, permission_for_route
 from tests.security_support import ProductionAuth, enable_production_auth, login
 from tests.support import AsgiTestClient
@@ -31,7 +32,7 @@ from tests.test_security_scope import _captured_knowledge_base_ids, _install_sea
 
 client = AsgiTestClient(app)
 SECRET = "rag-mcp-test-secret-0123456789abcdef"  # nosec B105 - テスト用
-ALL_TOOLS = ["rag_list_search_answer_profiles", "rag_search"]
+ALL_TOOLS = ["rag_list_search_answer_profiles", "rag_search", "rag_read_source"]
 
 
 @pytest.fixture
@@ -125,6 +126,7 @@ def test_initialize_and_tools_list_follow_user_permissions(auth: ProductionAuth)
     assert _tool_names(_token(searcher.user_uuid)) == [
         "rag_list_search_answer_profiles",
         "rag_search",
+        "rag_read_source",
     ]
     # チャットは MCP で提供しない（#787）。チャット
     # だけの利用者は検索・回答プロファイルの一覧だけを使える。
@@ -197,7 +199,7 @@ def test_search_uses_search_answer_profile_and_user_scope(
     ok = _call("rag_search", {"query": "規程", "search_answer_profile_id": "bv-1"}, headers)
     assert ok["isError"] is False, ok
     assert ok["structuredContent"]["answer"] == "ok"
-    assert ok["structuredContent"]["citations"] == []
+    assert ok["structuredContent"]["evidence"] == []
     assert _captured_knowledge_base_ids() == ["kb-1"]
 
     # 範囲外の検索・回答プロファイルは存在しないものとして 404。
@@ -221,9 +223,23 @@ def test_search_uses_search_answer_profile_and_user_scope(
     assert invalid["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
 
 
-def test_search_maps_citations_and_uses_token_user_context(
+def _chunk(chunk_id: str, *, text: str = "本文", used: bool | None = None, **metadata: Any) -> Any:
+    if used is not None:
+        metadata["evidence_model_used"] = used
+    return RetrievedChunk(
+        document_id="d1",
+        chunk_id=chunk_id,
+        text=text,
+        score=0.5,
+        file_name="規程.pdf",
+        metadata=metadata,
+    )
+
+
+def test_search_maps_evidence_and_uses_token_user_context(
     auth: ProductionAuth, monkeypatch: MonkeyPatch
 ) -> None:
+    """根拠は場所・版・回答に使ったか付きの evidence で返す（#1219）。"""
     captured: dict[str, Any] = {}
 
     async def fake_run(request: SearchRequest) -> SearchResponse:
@@ -232,17 +248,30 @@ def test_search_maps_citations_and_uses_token_user_context(
         return SearchResponse(
             answer="回答",
             citations=[
-                RetrievedChunk(
-                    document_id="d1",
-                    chunk_id="c1",
+                _chunk("c-unused", used=False, evidence_role="retrieved_anchor"),
+                _chunk(
+                    "c1",
                     text="長" * 1500,
-                    score=0.5,
-                    file_name="規程.pdf",
-                )
+                    used=True,
+                    evidence_role="retrieved_anchor",
+                    section_path="規程 > 第2条（精算の期限）",
+                    page_start=3,
+                    page_end=4,
+                    chunk_set_id="cs-1",
+                    recipe_id="r-1",
+                    content_kind="text",
+                    rerank_score=0.9,
+                ),
             ],
             trace_id="trace-1",
             guardrail_warnings=["注意"],
             elapsed_ms=1.0,
+            diagnostics=SearchDiagnostics(
+                answer={
+                    "insufficient_reason": " 期限の例外が資料に無い ",
+                    "needs_human_review": True,
+                }
+            ),
         )
 
     monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
@@ -256,11 +285,32 @@ def test_search_maps_citations_and_uses_token_user_context(
     assert body["answer"] == "回答"
     assert body["trace_id"] == "trace-1"
     assert body["guardrail_warnings"] == ["注意"]
-    citation = body["citations"][0]
-    assert citation["document_id"] == "d1"
-    assert citation["file_name"] == "規程.pdf"
-    assert citation["score"] == 0.5
-    assert len(citation["text"]) == 1000
+    assert body["insufficient_reason"] == "期限の例外が資料に無い"
+    assert body["needs_human_review"] is True
+    assert body["evidence_omitted"] == 0
+    # 回答に使った根拠を先にする。
+    assert [item["chunk_id"] for item in body["evidence"]] == ["c1", "c-unused"]
+    evidence = body["evidence"][0]
+    assert evidence["evidence_id"] == "c1"
+    assert evidence["document_id"] == "d1"
+    assert evidence["file_name"] == "規程.pdf"
+    assert (evidence["chunk_set_id"], evidence["recipe_id"]) == ("cs-1", "r-1")
+    assert evidence["content_kind"] == "text"
+    assert evidence["locator"] == {
+        "section_path": ["規程", "第2条（精算の期限）"],
+        "page_start": 3,
+        "page_end": 4,
+    }
+    assert len(evidence["excerpt"]) == 1000
+    assert evidence["truncated"] is True
+    assert evidence["text_length"] == 1500
+    assert evidence["used_in_answer"] is True
+    assert evidence["role"] == "retrieved_anchor"
+    assert (evidence["score"], evidence["rerank_score"]) == (0.5, 0.9)
+    unused = body["evidence"][1]
+    assert unused["used_in_answer"] is False
+    assert unused["truncated"] is False
+    assert unused["locator"] == {"section_path": [], "page_start": None, "page_end": None}
     request: SearchRequest = captured["request"]
     assert (request.query, request.top_k) == ("規程", 3)
     # 利用者・agent・thread は token から決める（header の agent は使わない）。
@@ -270,6 +320,116 @@ def test_search_maps_citations_and_uses_token_user_context(
     assert context.agent_id_hash == request_context._header_hash("agent-1", settings)
     assert context.thread_id_hash == request_context._header_hash("run-1", settings)
     assert context.tenant_id_hash is None
+
+
+def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) -> None:
+    async def fake_run(request: SearchRequest) -> SearchResponse:
+        del request
+        return SearchResponse(
+            answer="回答",
+            citations=[_chunk(f"c{index}", used=index % 3 == 0) for index in range(6)],
+            trace_id="trace-1",
+            elapsed_ms=1.0,
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call("rag_search", {"query": "規程", "evidence_limit": 3}, _token(user.user_uuid))[
+        "structuredContent"
+    ]
+    # 回答に使った c0・c3 を先に（検索の順のまま）、残りの枠に使っていない根拠を入れる。
+    assert [item["chunk_id"] for item in body["evidence"]] == ["c0", "c3", "c1"]
+    assert body["evidence_omitted"] == 3
+    assert (body["insufficient_reason"], body["needs_human_review"]) == (None, False)
+
+
+# ---------------------------------------------------------------------------
+# 根拠の読み取り（rag_read_source。#1219）
+# ---------------------------------------------------------------------------
+
+
+class _SourceOracle:
+    """検索で見える chunk（visible）と、見えるが古い版の chunk（stale）だけを持つ fake。"""
+
+    visible: dict[tuple[str, str], RetrievedChunk] = {}
+    stale: set[tuple[str, str]] = set()
+    contexts: list[AuditRequestContext] = []
+
+    async def retrievable_chunk(self, document_id: str, chunk_id: str) -> RetrievedChunk | None:
+        self.contexts.append(current_audit_request_context())
+        return self.visible.get((document_id, chunk_id))
+
+    async def accessible_chunk_exists(self, document_id: str, chunk_id: str) -> bool:
+        return (document_id, chunk_id) in self.stale
+
+
+@pytest.fixture
+def source_oracle(monkeypatch: MonkeyPatch) -> type[_SourceOracle]:
+    _SourceOracle.visible = {
+        ("d1", "c1"): _chunk(
+            "c1",
+            text="あいうえおかきくけこ",
+            section_path="規程 > 第2条",
+            page_start=2,
+            chunk_set_id="cs-1",
+            parent_text="親の本文" * 3,
+        )
+    }
+    _SourceOracle.stale = {("d1", "c-old")}
+    _SourceOracle.contexts = []
+    monkeypatch.setattr(mcp_tools, "OracleClient", _SourceOracle)
+    return _SourceOracle
+
+
+def test_read_source_returns_full_text_in_windows(
+    auth: ProductionAuth, source_oracle: type[_SourceOracle]
+) -> None:
+    user = auth.user_with_permissions("searcher", ["menu.search"], knowledge_base_ids=["kb-1"])
+    headers = _token(user.user_uuid)
+
+    first = _call(
+        "rag_read_source", {"document_id": "d1", "chunk_id": "c1", "max_chars": 4}, headers
+    )
+    assert first["isError"] is False, first
+    body = first["structuredContent"]
+    assert (body["text"], body["offset"], body["text_length"]) == ("あいうえ", 0, 10)
+    assert (body["truncated"], body["next_offset"]) == (True, 4)
+    assert body["locator"] == {"section_path": ["規程", "第2条"], "page_start": 2, "page_end": 2}
+    assert body["chunk_set_id"] == "cs-1"
+    assert (body["parent_text"], body["parent_truncated"]) == ("親の本文", True)
+
+    rest = _call(
+        "rag_read_source",
+        {"document_id": "d1", "chunk_id": "c1", "offset": 4, "max_chars": 100},
+        headers,
+    )["structuredContent"]
+    assert (rest["text"], rest["truncated"], rest["next_offset"]) == ("おかきくけこ", False, None)
+    # 読み取りは token の利用者の範囲（利用できるナレッジベース）で行う。
+    assert source_oracle.contexts[-1].allowed_knowledge_base_ids == frozenset({"kb-1"})
+
+
+def test_read_source_distinguishes_missing_and_stale(
+    auth: ProductionAuth, source_oracle: type[_SourceOracle]
+) -> None:
+    del source_oracle
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    headers = _token(user.user_uuid)
+
+    missing = _call("rag_read_source", {"document_id": "d1", "chunk_id": "nope"}, headers)
+    assert missing["isError"] is True
+    assert missing["structuredContent"]["error_code"] == mcp_tools.SOURCE_NOT_FOUND_CODE
+    stale = _call("rag_read_source", {"document_id": "d1", "chunk_id": "c-old"}, headers)
+    assert stale["structuredContent"]["error_code"] == mcp_tools.SOURCE_STALE_CODE
+    # 検索の権限が無い利用者は呼べない。
+    viewer = auth.user_with_permissions("viewer", ["menu.upload"])
+    denied = _call(
+        "rag_read_source", {"document_id": "d1", "chunk_id": "c1"}, _token(viewer.user_uuid)
+    )
+    assert denied["structuredContent"]["error_code"] == "MCP_TOOL_FORBIDDEN"
+    invalid = _call(
+        "rag_read_source", {"document_id": "d1", "chunk_id": "c1", "max_chars": 0}, headers
+    )
+    assert invalid["structuredContent"]["error_code"] == "MCP_TOOL_ARGUMENTS_INVALID"
 
 
 # ---------------------------------------------------------------------------
