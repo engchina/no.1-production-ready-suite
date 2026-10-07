@@ -475,11 +475,12 @@ def test_oci_model_omits_empty_tools_for_xai() -> None:
 
 
 def _bad_request(code: str, message: str) -> Any:
-    import httpx
+    # openai は httpx2 の Response を受け取る（httpx の Response は型が合わない）。
+    import httpx2
     from openai import BadRequestError
 
     body = {"code": code, "message": message, "param": None, "type": "invalid_request_error"}
-    response = httpx.Response(400, request=httpx.Request("POST", "https://oci.example/responses"))
+    response = httpx2.Response(400, request=httpx2.Request("POST", "https://oci.example/responses"))
     return BadRequestError(f"Error code: 400 - {body}", response=response, body=body)
 
 
