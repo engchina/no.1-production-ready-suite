@@ -180,6 +180,58 @@
                 "default": null,
                 "description": "終了の頁（PDF の物理頁）。",
                 "title": "Page End"
+              },
+              "sheet_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表計算のシート名（#1221）。",
+                "title": "Sheet Name"
+              },
+              "row_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "シートの開始の行（1 始まり）。",
+                "title": "Row Start"
+              },
+              "row_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "シートの終了の行。",
+                "title": "Row End"
+              },
+              "cell_range": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "セル範囲（例: A3:F7）。",
+                "title": "Cell Range"
               }
             },
             "title": "EvidenceLocator",
@@ -430,6 +482,58 @@
                 "default": null,
                 "description": "終了の頁（PDF の物理頁）。",
                 "title": "Page End"
+              },
+              "sheet_name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表計算のシート名（#1221）。",
+                "title": "Sheet Name"
+              },
+              "row_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "シートの開始の行（1 始まり）。",
+                "title": "Row Start"
+              },
+              "row_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "シートの終了の行。",
+                "title": "Row End"
+              },
+              "cell_range": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "セル範囲（例: A3:F7）。",
+                "title": "Cell Range"
               }
             },
             "title": "EvidenceLocator",

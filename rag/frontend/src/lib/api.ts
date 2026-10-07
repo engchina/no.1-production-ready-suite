@@ -759,8 +759,23 @@ export interface KnowledgeBaseSummary extends KnowledgeBaseRef {
 }
 
 /** KB 単位の取込上書き(Parser/Chunking)。null はグローバル継承。 */
+/** 前処理 excel_to_json の選択肢（#1221）。 */
+export interface ExcelOptions {
+  /** auto は手順書なら procedure、密な表なら table。 */
+  mode: "auto" | "table" | "procedure";
+  /** 表頭の行（1 始まり）。null は先頭の行から推定する。 */
+  header_row: number | null;
+  header_row_count: number;
+  sheets: string[];
+  exclude_sheets: string[];
+  include_hidden_sheets: boolean;
+  exclude_columns: string[];
+}
+
 export interface KnowledgeBaseIngestionConfig {
   preprocess_profile: PreprocessProfileName | null;
+  /** 前処理 excel_to_json の選択肢（#1221）。null は全体の既定に従う。 */
+  excel_options?: ExcelOptions | null;
   parser_adapter_backend: ParserAdapterBackend | null;
   parser_docling_enabled: boolean | null;
   parser_unstructured_enabled: boolean | null;
