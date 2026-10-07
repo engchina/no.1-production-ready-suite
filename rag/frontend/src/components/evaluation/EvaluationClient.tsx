@@ -71,6 +71,8 @@ import { evaluationCaseIdError, sampleOverwriteNeedsConfirm } from "./evaluation
 import {
   EVALUATION_METRIC_NAMES,
   EVALUATION_PERSPECTIVES,
+  isPerspectiveShown,
+  outcomeLabel,
   EVALUATION_SUITE_NAMES,
   STANDARD_ANSWER_METRICS,
   failureReasonLabel,
@@ -669,7 +671,7 @@ function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
         </div>
       </div>
 
-      {EVALUATION_PERSPECTIVES.map((perspective) => (
+      {EVALUATION_PERSPECTIVES.filter((perspective) => isPerspectiveShown(metrics, perspective)).map((perspective) => (
         <MetricGroup
           key={perspective.id}
           perspective={perspective}
@@ -809,6 +811,15 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
             className: "whitespace-nowrap",
             render: (result) => <AnswerCell result={result} />,
           },
+          ...(metrics.case_results.some((result) => result.handling_correct != null || result.missing_steps?.length || result.forbidden_hits?.length)
+            ? [
+                {
+                  key: "handling",
+                  header: t("evaluation.case.handling"),
+                  render: (result: EvaluationCaseResult) => <HandlingCell result={result} />,
+                },
+              ]
+            : []),
           {
             key: "judgement",
             header: t("evaluation.case.judgement"),
@@ -863,6 +874,51 @@ function CaseIdCell({ result }: { result: EvaluationCaseResult }) {
         ) : null}
       </div>
       <p className="break-words text-xs font-normal text-fg-muted">{error.message}</p>
+    </div>
+  );
+}
+
+/**
+ * 業務支援の採点（#1231）。回答の対応と期待どおりか（アイコンと文言）、不足の手順・危険な表現・
+ * 触れていない条件。推定した対応は「（推定）」を付ける。
+ */
+function HandlingCell({ result }: { result: EvaluationCaseResult }) {
+  const notes = [
+    result.missing_steps?.length ? t("evaluation.case.missingSteps", { steps: result.missing_steps.join("、") }) : null,
+    result.forbidden_hits?.length
+      ? t("evaluation.case.forbiddenHits", { phrases: result.forbidden_hits.join("、") })
+      : null,
+    result.missing_conditions?.length
+      ? t("evaluation.case.missingConditions", { conditions: result.missing_conditions.join("、") })
+      : null,
+  ].filter((note): note is string => Boolean(note));
+  if (!result.observed_outcome && !notes.length) return <>—</>;
+  const outcome = result.observed_outcome ? outcomeLabel(result.observed_outcome) : null;
+  const expected = result.handling_correct;
+  return (
+    <div className="grid min-w-0 gap-1" data-testid="evaluation-case-handling">
+      {outcome ? (
+        <span className="inline-flex items-center gap-1.5">
+          {expected === true ? (
+            <CheckCircle2 size={16} className="shrink-0 text-success-fg" aria-hidden />
+          ) : expected === false ? (
+            <XCircle size={16} className="shrink-0 text-danger-fg" aria-hidden />
+          ) : null}
+          <span>
+            {result.outcome_source === "inferred" ? t("evaluation.case.outcomeInferred", { outcome }) : outcome}
+          </span>
+          {expected != null ? (
+            <span className="sr-only">
+              {t(expected ? "evaluation.case.expected" : "evaluation.case.unexpected")}
+            </span>
+          ) : null}
+        </span>
+      ) : null}
+      {notes.map((note) => (
+        <p key={note} className="break-words text-xs text-fg-muted">
+          {note}
+        </p>
+      ))}
     </div>
   );
 }
@@ -1162,6 +1218,22 @@ function CategoryBreakdown({ metrics }: { metrics: EvaluationMetrics }) {
             className: "tnum",
             render: (row) => formatMetricValue(row.refusal_correct_rate),
           },
+          ...(rows.some((row) => row.handling_correct_rate != null || row.safe_answer_rate != null)
+            ? [
+                {
+                  key: "handling",
+                  header: t("evaluation.category.column.handling"),
+                  className: "tnum",
+                  render: (row: (typeof rows)[number]) => formatMetricValue(row.handling_correct_rate),
+                },
+                {
+                  key: "safe",
+                  header: t("evaluation.category.column.safe"),
+                  className: "tnum",
+                  render: (row: (typeof rows)[number]) => formatMetricValue(row.safe_answer_rate),
+                },
+              ]
+            : []),
         ]}
       />
     </div>

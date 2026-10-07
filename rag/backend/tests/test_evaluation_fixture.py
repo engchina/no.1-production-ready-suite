@@ -64,3 +64,34 @@ def test_search_load_example_matches_load_schema() -> None:
     assert scenario.thresholds.server_p95_ms is not None
     assert all(case.top_k > 0 for case in scenario.cases)
     assert all(value > 0 for value in scenario.thresholds.stage_p95_ms.values())
+
+
+def test_business_support_set_covers_every_category_and_its_corpus_exists() -> None:
+    """業務支援の合成の評価セット（#1231）は 5 分類をすべて持ち、参照する資料が同梱されている。"""
+    from app.rag.evaluation_corpus_cli import referenced_files
+
+    corpus = Path(__file__).resolve().parents[2] / "evaluation/business-support"
+    payload = json.loads((corpus / "business-support.json").read_text(encoding="utf-8"))
+    request = EvaluationRunRequest.model_validate(payload)
+
+    assert {case.category for case in request.cases} == {
+        "document_answerable",
+        "clarification_required",
+        "environment_data_required",
+        "knowledge_missing",
+        "conflicting_sources",
+    }
+    assert all(case.expected_outcomes for case in request.cases)
+    # 資料に答えの無い質問は、拒答か人への引き継ぎだけを正しいとする。
+    for case in request.cases:
+        if case.category == "knowledge_missing":
+            assert case.answerable is False
+            assert set(case.expected_outcomes) <= {"insufficient_evidence", "needs_human"}
+    names = referenced_files(payload)
+    assert names
+    assert all((corpus / name).is_file() for name in names)
+    assert all(
+        (corpus / "sources" / f"{Path(name).stem}.html").is_file()
+        for name in names
+        if name.endswith(".pdf")
+    )

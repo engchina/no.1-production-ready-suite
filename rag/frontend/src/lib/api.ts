@@ -180,8 +180,12 @@ export type EvaluationFailureReason =
   | "answer_failed"
   | "answer_evaluation_error"
   | "guardrail_warning"
+  | "unexpected_handling"
+  | "step_missing"
+  | "forbidden_action"
+  | "condition_missing"
   | "case_error";
-/** 評価の指標（#591）。検索・根拠・回答の 3 つの観点に整理した 9 つ。 */
+/** 評価の指標（#591）。検索・根拠・回答の 3 つの観点の 9 つと、業務支援の対応の 4 つ（#1231）。 */
 export type EvaluationMetricName =
   | "context_recall"
   | "mrr"
@@ -191,7 +195,20 @@ export type EvaluationMetricName =
   | "answer_keyword_hit_rate"
   | "refusal_accuracy"
   | "requirement_coverage"
-  | "answer_pass_rate";
+  | "answer_pass_rate"
+  | "handling_accuracy"
+  | "step_order_score"
+  | "safe_answer_rate"
+  | "condition_coverage";
+
+/** 回答の対応（#1231）。評価のケースは受け入れる対応を複数持てる。 */
+export type EvaluationOutcome =
+  | "answered"
+  | "conditional"
+  | "needs_clarification"
+  | "needs_environment_data"
+  | "needs_human"
+  | "insufficient_evidence";
 
 export type ParserAdapterBackend =
   | "local"
@@ -1363,6 +1380,11 @@ export interface EvaluationCase {
   answerable?: boolean | null;
   /** 分類（#1226）。結果の分類ごとの内訳に使う。 */
   category?: EvaluationCaseCategory | null;
+  /** 業務支援の採点（#1231）。受け入れる対応・手順の語（順）・勧めてはいけない表現・触れるべき条件。 */
+  expected_outcomes?: EvaluationOutcome[];
+  expected_steps?: string[];
+  forbidden_phrases?: string[];
+  required_conditions?: string[];
 }
 
 export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number | null>>;
@@ -1405,6 +1427,10 @@ export interface EvaluationCategorySummary {
   answer_keyword_hit_rate: number | null;
   abstain_rate: number | null;
   refusal_correct_rate: number | null;
+  /** 業務支援の対応（#1231。保存済みの古い結果には無い）。 */
+  handling_correct_rate?: number | null;
+  step_order_score?: number | null;
+  safe_answer_rate?: number | null;
 }
 
 /** 1 ケースの結果。測れない指標は null（保存済みの古い結果では欄が無いことがある）。 */
@@ -1423,6 +1449,16 @@ export interface EvaluationCaseResult {
   answer_keyword_hit?: boolean | null;
   abstained?: boolean | null;
   refusal_correct?: boolean | null;
+  /** 業務支援の採点（#1231）。observed_outcome は回答の対応、outcome_source は explicit / inferred。 */
+  observed_outcome?: EvaluationOutcome | null;
+  outcome_source?: string | null;
+  handling_correct?: boolean | null;
+  step_order_score?: number | null;
+  missing_steps?: string[];
+  forbidden_checked?: boolean;
+  forbidden_hits?: string[];
+  condition_coverage?: number | null;
+  missing_conditions?: string[];
   answer_evaluation?: EvaluationAnswerJudgement | null;
   guardrail_warnings: string[];
   failure_reasons: string[];

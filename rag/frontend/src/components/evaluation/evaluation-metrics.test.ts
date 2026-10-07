@@ -8,6 +8,8 @@ import {
   STANDARD_ANSWER_METRICS,
   failureReasonLabel,
   formatMetricValue,
+  isPerspectiveShown,
+  outcomeLabel,
   metricCaseCount,
   metricLabel,
   metricValue,
@@ -16,14 +18,15 @@ import {
 } from "./evaluation-metrics";
 
 describe("evaluation metrics (issue 591)", () => {
-  it("groups the nine metrics into retrieval / grounding / answer", () => {
+  it("groups the metrics into retrieval / grounding / answer / handling", () => {
     expect(EVALUATION_PERSPECTIVES.map((perspective) => perspective.id)).toEqual([
       "retrieval",
       "grounding",
       "answer",
+      "handling",
     ]);
-    expect(EVALUATION_METRIC_NAMES).toHaveLength(9);
-    expect(new Set(EVALUATION_METRIC_NAMES).size).toBe(9);
+    expect(EVALUATION_METRIC_NAMES).toHaveLength(13);
+    expect(new Set(EVALUATION_METRIC_NAMES).size).toBe(13);
     for (const name of STANDARD_ANSWER_METRICS) {
       expect(EVALUATION_METRIC_NAMES).toContain(name);
     }
@@ -71,3 +74,32 @@ describe("evaluation metrics (issue 591)", () => {
     ]);
   });
 });
+
+describe("business support handling (issue 1231)", () => {
+  const handling = EVALUATION_PERSPECTIVES.find((perspective) => perspective.id === "handling")!;
+  const answer = EVALUATION_PERSPECTIVES.find((perspective) => perspective.id === "answer")!;
+  const base = {
+    case_count: 1,
+    error_count: 0,
+    evaluation_suite: "standard",
+    passed: true,
+    threshold_failures: [],
+    failure_reason_counts: {},
+    case_results: [],
+  } satisfies EvaluationMetrics;
+
+  it("shows the handling perspective only when some case measured it", () => {
+    expect(isPerspectiveShown(base, handling)).toBe(false);
+    expect(isPerspectiveShown({ ...base, metric_case_counts: { handling_accuracy: 0 } }, handling)).toBe(false);
+    expect(isPerspectiveShown({ ...base, metric_case_counts: { safe_answer_rate: 2 } }, handling)).toBe(true);
+    expect(isPerspectiveShown(base, answer)).toBe(true);
+  });
+
+  it("labels outcomes and failure reasons in Japanese", () => {
+    expect(outcomeLabel("needs_environment_data")).toBe("現場のデータが必要");
+    expect(outcomeLabel("future_outcome")).toBe("future_outcome");
+    expect(failureReasonLabel("forbidden_action")).toBe("危険な操作を提示");
+    expect(metricLabel("safe_answer_rate")).toBe("危険な回答の無さ");
+  });
+});
+

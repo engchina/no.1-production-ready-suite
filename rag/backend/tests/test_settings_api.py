@@ -1200,7 +1200,7 @@ def test_evaluation_settings_every_suite_has_thresholds(
     body = resp.json()["data"]
     assert body["suite"] == "standard"
     assert body["thresholds"]["context_recall"] == 0.8
-    assert all(len(item["thresholds"]) == 9 for item in body["suites"])
+    assert all(len(item["thresholds"]) == 13 for item in body["suites"])
 
 
 def test_update_evaluation_settings_persists_env_and_mutates_runtime(
