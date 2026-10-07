@@ -1000,7 +1000,7 @@ def _stored_child(
         text=chunk.text,
         retrieval_text=engine_search_text(chunk.metadata) or chunk.text,
         source_run_id=ENGINE_SOURCE_RUN_ID,
-        source_file_name=chunk.file_name or "",
+        source_file_name=_source_file_name(chunk),
         source_engine_id="docling",
         source_engine_label="Docling",
         page_start=page_start,
@@ -1009,6 +1009,18 @@ def _stored_child(
         source_record_refs=tuple(_json_list(chunk.metadata.get("source_record_refs_json"))),
         metadata=metadata,
     )
+
+
+# 新しい版に置き換えた文書(旧版)の出典の文書名に付ける印(#1248)。
+SUPERSEDED_FILE_NAME_SUFFIX = "（旧版）"
+
+
+def _source_file_name(chunk: RetrievedChunk) -> str:
+    """回答の出典に出す文書名。旧版の文書は「(旧版)」を付け、今の版と区別できるようにする。"""
+    file_name = chunk.file_name or ""
+    if file_name and chunk.metadata.get("document_superseded") is True:
+        return f"{file_name}{SUPERSEDED_FILE_NAME_SUFFIX}"
+    return file_name
 
 
 _CELL_RANGE = re.compile(r"^([A-Z]+)(\d+):([A-Z]+)(\d+)$")

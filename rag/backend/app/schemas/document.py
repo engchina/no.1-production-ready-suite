@@ -5,7 +5,14 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
 
 from app.config import (
@@ -212,6 +219,18 @@ class DocumentSummary(BaseModel):
     # 検索対象(active)のレシピの派生情報レイヤーに、作り直しが必要なものがあるか(#550)。
     # 一覧の API だけが埋める(詳細はレイヤーごとの ``rebuild_required`` を見る)。
     layers_rebuild_required: bool = False
+    # 文書の版(#1248)。この文書を置き換えた新しい版の文書。NULL は今有効な版。
+    # 置き換え済み(旧版)の文書の chunk は、既定では回答の検索の対象から外す。
+    superseded_by_document_id: str | None = None
+    # 新しい版の文書名(利用者が見られる文書のときだけ埋める)。
+    superseded_by_file_name: str | None = None
+    superseded_at: datetime | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_superseded(self) -> bool:
+        """新しい版に置き換えた文書(旧版)か。"""
+        return self.superseded_by_document_id is not None
 
 
 class DuplicateDocumentRef(BaseModel):
@@ -255,6 +274,19 @@ class DocumentPreviewPages(BaseModel):
 
     page_count: int
     pages: list[DocumentPreviewPage] = Field(default_factory=list)
+
+
+class DocumentSupersededByRequest(BaseModel):
+    """文書を置き換えた新しい版の設定・解除(#1248)。null で解除(今有効な版に戻す)。"""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    superseded_by_document_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("superseded_by_document_id", mode="after")
+    @classmethod
+    def _blank_to_none(cls, value: str | None) -> str | None:
+        return value or None
 
 
 class DocumentDetail(DocumentSummary):

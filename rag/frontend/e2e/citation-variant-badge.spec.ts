@@ -12,7 +12,7 @@ const searchAnswerProfile = {
   archived_at: null,
 };
 
-function searchStreamBody(chunkId: string): string {
+function searchStreamBody(chunkId: string, extraMetadata: Record<string, unknown> = {}): string {
   const citation = {
     document_id: "doc-1",
     chunk_id: chunkId,
@@ -34,6 +34,7 @@ function searchStreamBody(chunkId: string): string {
       rerank_rank: 1,
       recipe_id: "recipe-1",
       recipe_slot_no: 1,
+      ...extraMetadata,
     },
   };
   const stage = (name: string, outcome: string, elapsed_ms: number) =>
@@ -196,4 +197,39 @@ test("引用カードに variant(chunk_set)バッジが出る", async ({ page },
   await page.screenshot({
     path: testInfo.outputPath(`citation-page-${testInfo.project.name}.png`),
   });
+});
+
+test("旧版の文書の根拠には、引用カードに旧版の印を出す（#1248）", async ({ page }) => {
+  await mockDatabaseReady(page);
+  await mockLocalAuth(page);
+  await page.route("**/api/search-answer-profiles**", (route) =>
+    route.fulfill({
+      json: {
+        data: { items: [searchAnswerProfile], total: 1, limit: 50, offset: 0, has_next: false },
+        error_messages: [],
+        warning_messages: [],
+      },
+    })
+  );
+  await page.route("**/api/search/stream", (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+      body: searchStreamBody("doc-1:cs_recipe1:1", {
+        document_superseded: true,
+        superseded_by_document_id: "doc-2",
+      }),
+    })
+  );
+
+  await page.goto("/search");
+  await selectSearchAnswerProfile(page, /経理ビュー/);
+  await page.keyboard.press("Escape");
+  await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限");
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+
+  const citation = page.getByTestId("citation-main");
+  await expect(citation.getByText("旧版", { exact: true })).toBeVisible();
+  await expect(citation.getByText("policy.txt")).toBeVisible();
+  await expectNoPageOverflow(page);
 });
