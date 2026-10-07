@@ -5711,14 +5711,14 @@ test("実行結果は要約・表の中のスクロールのプレビューと�
   await expect(sheet).toBeVisible();
   await expect(sheet.getByRole("button", { name: "CSV をダウンロード" })).toBeVisible();
   const pagination = page.getByTestId("query-results-all-pagination");
-  await expect(pagination).toContainText("1-10 / 12 件");
+  await expect(pagination).toContainText("1 - 10 / 12 件");
   await expect(pagination).toContainText("1 / 2 ページ");
   const allTable = page.getByTestId("query-results-all-table");
   await expect(allTable.getByRole("cell", { name: "顧客10" })).toBeVisible();
   await expect(allTable.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
 
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("11-12 / 12 件");
+  await expect(pagination).toContainText("11 - 12 / 12 件");
   await expect(allTable.getByRole("cell", { name: "顧客12" })).toBeVisible();
   await expect(allTable.getByRole("cell", { name: "顧客01" })).toHaveCount(0);
 

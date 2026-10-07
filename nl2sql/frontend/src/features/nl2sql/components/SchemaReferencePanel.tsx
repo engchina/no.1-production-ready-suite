@@ -258,20 +258,19 @@ export function SchemaReferencePanel({
           />
         ))}
         {/* 「さらに読み込む」と失敗の再試行は共通の LoadMoreFooter（#1266）。件数は見出しの側で出すので summary は空。
-            パネルが無効（実行中）の間は操作も無効にする（LoadMoreFooter に disabled が無いので fieldset）。 */}
+            パネルが無効（実行中）の間は操作も無効にする。 */}
         {((hasMore && onLoadMore) || loadMoreError) && (
-          <fieldset disabled={disabled} className="m-0 min-w-0 border-0 p-0">
-            <LoadMoreFooter
-              summary=""
-              hasMore={hasMore}
-              loadingMore={loadingMore}
-              loadMoreError={loadMoreError || undefined}
-              onLoadMore={onLoadMore}
-              onRetry={onRetryLoadMore}
-              loadMoreLabel={t("profiles.action.loadMore")}
-              retryLabel={t("common.retry")}
-            />
-          </fieldset>
+          <LoadMoreFooter
+            summary=""
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            loadMoreError={loadMoreError || undefined}
+            disabled={disabled}
+            onLoadMore={onLoadMore}
+            onRetry={onRetryLoadMore}
+            loadMoreLabel={t("profiles.action.loadMore")}
+            retryLabel={t("common.retry")}
+          />
         )}
       </div>
       )}

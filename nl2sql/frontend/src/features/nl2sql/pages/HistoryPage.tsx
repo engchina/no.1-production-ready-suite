@@ -400,25 +400,23 @@ function HistoryGrid({
           </div>
         </div>
       )}
-      {/* 件数と「さらに読み込む」は共通の LoadMoreFooter（#1266）。取り直し（表示を更新）の間は続きを読ませない
-          （LoadMoreFooter に disabled が無いので fieldset で無効にする。消すと高さが変わる）。 */}
+      {/* 件数と「さらに読み込む」は共通の LoadMoreFooter（#1266）。取り直し（表示を更新）の間は続きを読ませない。 */}
       {!unavailable && (
-        <fieldset disabled={refreshing} className="m-0 min-w-0 border-0 p-0">
-          <LoadMoreFooter
-            summary={
-              total === null
-                ? t("history.list.loadedUnknownTotal", { loaded: loadedCount })
-                : t("history.list.loaded", { loaded: loadedCount, total })
-            }
-            hasMore={hasMore}
-            loadingMore={loadingMore}
-            onLoadMore={onLoadMore}
-            loadMoreLabel={t("history.action.loadMore")}
-            retryLabel={t("common.action.retry")}
-            className="rounded-md border border-border bg-surface-sunken p-3"
-            testId="history-load-more"
-          />
-        </fieldset>
+        <LoadMoreFooter
+          summary={
+            total === null
+              ? t("history.list.loadedUnknownTotal", { loaded: loadedCount })
+              : t("history.list.loaded", { loaded: loadedCount, total })
+          }
+          hasMore={hasMore}
+          loadingMore={loadingMore}
+          disabled={refreshing}
+          onLoadMore={onLoadMore}
+          loadMoreLabel={t("history.action.loadMore")}
+          retryLabel={t("common.action.retry")}
+          className="rounded-md border border-border bg-surface-sunken p-3"
+          testId="history-load-more"
+        />
       )}
     </section>
   );

@@ -24,6 +24,8 @@ export interface LoadMoreFooterProps {
   refreshingLabel?: string;
   /** 件数を aria-live（polite）で伝えるか（既定 false。選択のたびに読み上げない）。 */
   announce?: boolean;
+  /** 条件の取り直し中・パネルが無効の間など、続きを読ませない（ボタンを無効にする。消すと高さが変わる。#1266）。 */
+  disabled?: boolean;
   className?: string;
   testId?: string;
 }
@@ -46,6 +48,7 @@ export function LoadMoreFooter({
   refreshing = false,
   refreshingLabel,
   announce = false,
+  disabled = false,
   className,
   testId,
 }: LoadMoreFooterProps) {
@@ -71,6 +74,7 @@ export function LoadMoreFooter({
             icon={ListPlus}
             className="w-full sm:w-auto"
             loading={loadingMore}
+            disabled={disabled}
             onClick={onLoadMore}
             data-testid={testId ? `${testId}-load-more` : undefined}
           >
@@ -90,6 +94,7 @@ export function LoadMoreFooter({
                 icon={RefreshCw}
                 className="w-full sm:w-auto"
                 loading={loadingMore}
+                disabled={disabled}
                 onClick={retry}
               >
                 <span>{retryLabel}</span>

@@ -322,14 +322,14 @@ test("「すべての行を見る」は広いシートでページを送り、CS
   if (viewport.width < 640) expect(sheetBox.width).toBeGreaterThanOrEqual(viewport.width - 1);
   else expect(sheetBox.width).toBeGreaterThan(viewport.width * 0.6);
   const pagination = sheet.getByTestId("sql-chat-result-all-pagination");
-  await expect(pagination).toContainText("1-10 / 60 件");
+  await expect(pagination).toContainText("1 - 10 / 60 件");
   await expect(sheet.getByTestId("sql-chat-result-all-table").locator("tbody tr")).toHaveCount(10);
   await pagination.getByRole("button", { name: "次へ" }).click();
-  await expect(pagination).toContainText("11-20 / 60 件");
+  await expect(pagination).toContainText("11 - 20 / 60 件");
   // 1 ページの行数を選べる（ページングで描く行を絞る。仮想化はしない）。
   await sheet.getByRole("combobox", { name: "1 ページの行数" }).click();
   await page.getByRole("option", { name: "50 行" }).click();
-  await expect(pagination).toContainText("1-50 / 60 件");
+  await expect(pagination).toContainText("1 - 50 / 60 件");
   // 表頭固定・表の中のスクロール。シートの中の全文は折り返して読める。
   const allScroll = sheet.getByTestId("sql-chat-result-all-scroll");
   expect(await allScroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
