@@ -84,8 +84,27 @@ class SupportGuideCondition(_Strict):
         default="ask", description="分からないとき: ask=確かめる / branch=分岐 / handoff=人へ。"
     )
     question: str = Field(default="", max_length=_SHORT, description="利用者に確かめる問い。")
+    value_aliases: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description=(
+            "選択肢の言い換え（選択肢 → 質問に出る語）。例: 個別 → 検証用アカウント。質問にこの語が"
+            "出れば、その選択肢が分かっているとみなし、聞き直さない。"
+        ),
+    )
 
     _clean = field_validator("allowed_values")(_clean_list)
+
+    @field_validator("value_aliases")
+    @classmethod
+    def _clean_aliases(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        cleaned = {
+            key.strip(): _clean_list(words)
+            for key, words in value.items()
+            if key.strip() and _clean_list(words)
+        }
+        if len(cleaned) > 20 or any(len(words) > 20 for words in cleaned.values()):
+            raise ValueError("言い換えは選択肢ごとに 20 語まで、20 個の選択肢までです。")
+        return cleaned
 
     @model_validator(mode="after")
     def _valid_values(self) -> SupportGuideCondition:
@@ -97,6 +116,11 @@ class SupportGuideCondition(_Strict):
             )
         if self.unknown_handling == "ask" and self.source == "user" and not self.question:
             raise ValueError(f"条件「{self.label}」に確かめる問いを入れてください。")
+        unknown = [key for key in self.value_aliases if key not in self.allowed_values]
+        if unknown:
+            raise ValueError(
+                f"条件「{self.label}」の言い換え「{'、'.join(unknown)}」は選択肢にありません。"
+            )
         return self
 
 

@@ -2965,6 +2965,9 @@ export const ja = {
   "supportGuides.field.conditionType": "型",
   "supportGuides.field.allowedValues": "選択肢",
   "supportGuides.field.allowedValuesHelp": "1 行に 1 つ、2 つ以上入れます。",
+  "supportGuides.field.valueAliases": "言い換え",
+  "supportGuides.field.valueAliasesHelp":
+    "質問に出る別の言い方を、1 行に「選択肢: 語、語」で入れます（例: 個別: 検証用アカウント）。質問にこの語が出れば、聞き直しません。",
   "supportGuides.field.required": "必須の条件にする",
   "supportGuides.field.source": "値の出所",
   "supportGuides.field.unknownHandling": "分からないとき",

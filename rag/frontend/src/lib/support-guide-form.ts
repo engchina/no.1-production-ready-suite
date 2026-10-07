@@ -39,6 +39,8 @@ export type ConditionForm = {
   source: SupportGuideConditionSource;
   unknownHandling: SupportGuideUnknownHandling;
   question: string;
+  /** 言い換え（1 行に「選択肢: 語、語」）。 */
+  valueAliases: string;
 };
 
 export type StepForm = {
@@ -168,6 +170,7 @@ export function guideFormFromContent(content: SupportGuideContent): GuideForm {
       source: condition.source,
       unknownHandling: condition.unknown_handling,
       question: condition.question,
+      valueAliases: aliasesToText(condition.value_aliases ?? {}),
     })),
     steps: content.steps.map((step) => ({
       key: newRowKey("step"),
@@ -237,6 +240,7 @@ export function guideContentFromForm(form: GuideForm): SupportGuideContent {
       source: condition.source,
       unknown_handling: condition.unknownHandling,
       question: condition.question.trim(),
+      value_aliases: condition.type === "enum" ? textToAliases(condition.valueAliases) : {},
     })),
     steps: form.steps.map((step) => ({
       id: step.id.trim(),
@@ -311,6 +315,7 @@ export function newConditionRow(form: GuideForm): ConditionForm {
     source: "user",
     unknownHandling: "ask",
     question: "",
+    valueAliases: "",
   };
 }
 
@@ -570,6 +575,7 @@ const FIELD_LABEL: Record<string, I18nKey> = {
   "conditions.label": "supportGuides.field.conditionLabel",
   "conditions.type": "supportGuides.field.conditionType",
   "conditions.allowed_values": "supportGuides.field.allowedValues",
+  "conditions.value_aliases": "supportGuides.field.valueAliases",
   "conditions.required": "supportGuides.field.required",
   "conditions.source": "supportGuides.field.source",
   "conditions.unknown_handling": "supportGuides.field.unknownHandling",
@@ -664,3 +670,28 @@ export function supportGuideExportFileName(searchAnswerProfileId: string, now: D
   const safeId = searchAnswerProfileId.replace(/[^A-Za-z0-9_-]/g, "_");
   return `support-guides-${safeId}-${date}.json`;
 }
+
+/** 言い換えを「選択肢: 語、語」の行にする。 */
+export function aliasesToText(aliases: Record<string, string[]>): string {
+  return Object.entries(aliases)
+    .filter(([, words]) => words.length)
+    .map(([value, words]) => `${value}: ${words.join("、")}`)
+    .join("\n");
+}
+
+/** 「選択肢: 語、語」の行を言い換えにする（「:」「：」の無い行・語の無い行は捨てる）。 */
+export function textToAliases(text: string): Record<string, string[]> {
+  const aliases: Record<string, string[]> = {};
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^([^:：]+)[:：](.*)$/.exec(line.trim());
+    if (!match) continue;
+    const value = match[1].trim();
+    const words = match[2]
+      .split(/[、,，]/)
+      .map((word) => word.trim())
+      .filter(Boolean);
+    if (value && words.length) aliases[value] = [...(aliases[value] ?? []), ...words];
+  }
+  return aliases;
+}
+

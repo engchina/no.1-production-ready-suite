@@ -673,18 +673,31 @@ function SupportGuideForm({
                   onValueChange={(value) => updateRow("conditions", index, { type: value })}
                 />
                 {row.type === "enum" ? (
-                  <TextareaField
-                    id={domId(path("allowed_values"))}
-                    label={t("supportGuides.field.allowedValues")}
-                    helper={t("supportGuides.field.allowedValuesHelp")}
-                    value={row.allowedValues}
-                    rows={3}
-                    required
-                    error={errorAt(path("allowed_values"))}
-                    onChange={(event) =>
-                      updateRow("conditions", index, { allowedValues: event.target.value })
-                    }
-                  />
+                  <>
+                    <TextareaField
+                      id={domId(path("allowed_values"))}
+                      label={t("supportGuides.field.allowedValues")}
+                      helper={t("supportGuides.field.allowedValuesHelp")}
+                      value={row.allowedValues}
+                      rows={3}
+                      required
+                      error={errorAt(path("allowed_values"))}
+                      onChange={(event) =>
+                        updateRow("conditions", index, { allowedValues: event.target.value })
+                      }
+                    />
+                    <TextareaField
+                      id={domId(path("value_aliases"))}
+                      label={t("supportGuides.field.valueAliases")}
+                      helper={t("supportGuides.field.valueAliasesHelp")}
+                      value={row.valueAliases}
+                      rows={2}
+                      error={errorAt(path("value_aliases"))}
+                      onChange={(event) =>
+                        updateRow("conditions", index, { valueAliases: event.target.value })
+                      }
+                    />
+                  </>
                 ) : null}
                 <SelectField<SupportGuideConditionSource>
                   id={domId(path("source"))}
