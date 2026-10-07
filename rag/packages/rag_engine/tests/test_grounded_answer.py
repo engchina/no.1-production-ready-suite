@@ -2507,3 +2507,26 @@ class DisplayedScreenQuoteTest(unittest.TestCase):
 
         self.assertNotIn("R06.04", text)
         self.assertIn("ボタン: 取込", text)  # 値を含まない引用は従来どおり
+
+
+def test_spreadsheet_evidence_cites_sheet_and_cell_range_instead_of_page() -> None:
+    """頁の無い Excel の行の記録の根拠は、出典の行にシートとセル範囲を出す（#1224）。"""
+    from types import SimpleNamespace
+
+    from rag_engine.generation.grounded import _citation, is_structural_line
+    from rag_engine.retrieval.evidence_selection import record_location_label
+
+    record = SimpleNamespace(
+        metadata={"sheet_location": {"sheet_name": "費目コード", "row_start": 3, "row_end": 6, "cell_range": "A3:D6"}}
+    )
+    location = record_location_label(record)
+    assert location == "シート「費目コード」A3:D6"
+    assert record_location_label(SimpleNamespace(metadata={})) is None
+
+    line = _citation({"source": "費目.xlsx", "page": 1, "location": location})
+    assert line == "根拠：費目.xlsx シート「費目コード」A3:D6"
+    assert is_structural_line(line)
+    # 頁のある根拠は今までどおり。
+    assert _citation({"source": "規程.pdf", "page": 3}) == "根拠：規程.pdf p.3"
+    assert is_structural_line("根拠：規程.pdf p.3")
+    assert not is_structural_line("根拠は規程にあります。")

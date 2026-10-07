@@ -249,6 +249,8 @@ def evidence_spans(question: str, records: Sequence[Any], *, budget: int = EVIDE
                 # 分類は v4 で document 配下 (#814)。
                 "business_scope": str((((getattr(record, 'metadata', {}) or {}).get('document') or {}).get('classification') or {}).get('large_category') or ''),
                 "source": getattr(record, "source", ""), "page": getattr(record, "page", 0),
+                # 頁の無い根拠（Excel の行の記録）の場所。出典の行・根拠の見出しは頁の代わりにこれを出す（#1224）。
+                "location": record_location_label(record),
                 # 本文位置から頁を確定できない span は親の先頭頁を page に持つ。親は複数頁にまたがるため、
                 # page だけを見ると span の出どころを実際より狭く見積もる。確定できた span は page_end == page。
                 "page_end": _record_page_end(record),
@@ -448,7 +450,7 @@ def format_evidence_packet(spans: Sequence[dict[str, Any]]) -> str:
     """選択済みの原文を再切出しせず、計画・生成・監査へ同じIDで渡す。"""
     return "\n\n".join(
         f"Source ID: {span['source_id']}\nEvidence ID: {span['evidence_id']}\n"
-        f"Document: {span['source']} / page {span['page']}\n"
+        f"Document: {span['source']} / {span.get('location') or 'page ' + str(span['page'])}\n"
         f"Section: {json.dumps(span['section_path'], ensure_ascii=False)}\n"
         f"Origin: {span.get('origin', 'unclassified')}\n"
         f"Value context: {span.get('value_context', 'reference_document')} (not verified as current case data)\n"
@@ -456,3 +458,18 @@ def format_evidence_packet(spans: Sequence[dict[str, Any]]) -> str:
         + (span.get('answer_context', '') + '\n' if span.get('answer_context') else '')
         + span['text']
         for span in spans)
+
+
+def record_location_label(record: Any) -> str | None:
+    """頁の無い根拠の場所の表示（例: 「シート「費目コード」A3:D6」。#1224）。無ければ None。
+
+    backend が Excel の行の記録（#1221）の chunk の場所を ``metadata["sheet_location"]`` に入れる。
+    """
+    location = (getattr(record, "metadata", {}) or {}).get("sheet_location")
+    if not isinstance(location, dict):
+        return None
+    sheet = str(location.get("sheet_name") or "").strip()
+    if not sheet:
+        return None
+    cell_range = str(location.get("cell_range") or "").strip()
+    return f"シート「{sheet}」{cell_range}"

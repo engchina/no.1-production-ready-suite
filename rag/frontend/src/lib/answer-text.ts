@@ -70,16 +70,38 @@ export function parseAnswerText(text: string): AnswerTextBlock[] | null {
   return blocks;
 }
 
-/** 根拠の行（「根拠：ファイル名 p.N」。rag_engine の grounded.py の `_citation`）のファイル名と頁（#657）。 */
+/**
+ * 根拠の行（「根拠：ファイル名 p.N」、表計算は「根拠：ファイル名 シート「名前」A3:D6」。rag_engine の
+ * grounded.py の `_citation`）のファイル名と頁・シート・行（#657 / #1224）。
+ */
 export interface AnswerCitationRef {
   fileName: string;
   page: number | null;
+  /** 表計算のシート名（#1224）。頁の根拠では null。 */
+  sheet?: string | null;
+  /** シートの行の範囲（セル範囲から読む）。 */
+  rowStart?: number | null;
+  rowEnd?: number | null;
 }
 
 const CITATION_LINE = /^根拠：(.+?)(?:\s+p\.(\d*))?$/;
+const SHEET_CITATION_LINE = /^根拠：(.+?)\s+シート「(.+)」(?:[A-Z]+(\d+):[A-Z]+(\d+))?$/;
 
 export function parseCitationLine(line: string): AnswerCitationRef | null {
-  const match = CITATION_LINE.exec(line.trim());
+  const trimmed = line.trim();
+  const sheet = SHEET_CITATION_LINE.exec(trimmed);
+  if (sheet) {
+    const fileName = sheet[1].trim();
+    if (!fileName) return null;
+    return {
+      fileName,
+      page: null,
+      sheet: sheet[2],
+      rowStart: sheet[3] ? Number(sheet[3]) : null,
+      rowEnd: sheet[4] ? Number(sheet[4]) : null,
+    };
+  }
+  const match = CITATION_LINE.exec(trimmed);
   if (!match) return null;
   const fileName = match[1].trim();
   if (!fileName) return null;
@@ -110,6 +132,7 @@ export function matchCitation(ref: AnswerCitationRef, citations: readonly Retrie
     .map((chunk, index) => ({ chunk, index }))
     .filter(({ chunk }) => normalizedFileName(chunk.file_name ?? "") === target);
   if (!candidates.length) return -1;
+  if (ref.sheet) return matchSheetCitation(ref, candidates);
   const page = ref.page;
   if (page == null) return candidates[0].index;
   let best = candidates[0];
@@ -123,4 +146,22 @@ export function matchCitation(ref: AnswerCitationRef, citations: readonly Retrie
     }
   }
   return best.index;
+}
+
+/** 表計算の根拠の行に当たる引用（同じシートで、行の範囲が重なる引用を順位の順に。#1224）。 */
+function matchSheetCitation(
+  ref: AnswerCitationRef,
+  candidates: { chunk: RetrievedChunk; index: number }[]
+): number {
+  const sameSheet = candidates.filter(({ chunk }) => chunk.metadata.sheet_name === ref.sheet);
+  if (!sameSheet.length) return candidates[0].index;
+  const start = ref.rowStart ?? null;
+  const end = ref.rowEnd ?? start;
+  if (start == null || end == null) return sameSheet[0].index;
+  const overlapping = sameSheet.find(({ chunk }) => {
+    const chunkStart = integerMetadataValue(chunk.metadata.row_start);
+    const chunkEnd = integerMetadataValue(chunk.metadata.row_end) ?? chunkStart;
+    return chunkStart != null && chunkEnd != null && chunkStart <= end && start <= chunkEnd;
+  });
+  return (overlapping ?? sameSheet[0]).index;
 }
