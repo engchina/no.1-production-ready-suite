@@ -263,6 +263,11 @@ def test_search_maps_evidence_and_uses_token_user_context(
                     section_path="規程 > 第2条（精算の期限）",
                     page_start=3,
                     page_end=4,
+                    # 印刷の頁番号と領域（#1244）。
+                    page_label_start="2-1",
+                    page_label_end="2-2",
+                    bbox="[10, 20, 110, 220]",
+                    bbox_unit="absolute",
                     chunk_set_id="cs-1",
                     recipe_id="r-1",
                     content_kind="text",
@@ -329,6 +334,10 @@ def test_search_maps_evidence_and_uses_token_user_context(
         "row_start": None,
         "row_end": None,
         "cell_range": None,
+        "page_label_start": "2-1",
+        "page_label_end": "2-2",
+        "bbox": [10.0, 20.0, 110.0, 220.0],
+        "bbox_unit": "absolute",
     }
     assert len(evidence["excerpt"]) == 1000
     assert evidence["truncated"] is True
@@ -387,6 +396,10 @@ def test_search_evidence_locates_spreadsheet_rows(
         "row_start": 3,
         "row_end": 6,
         "cell_range": "A3:C6",
+        "page_label_start": None,
+        "page_label_end": None,
+        "bbox": None,
+        "bbox_unit": None,
     }
 
 
