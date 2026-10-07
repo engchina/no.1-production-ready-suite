@@ -271,3 +271,27 @@ def test_recipe_excel_options_reach_the_preprocess_service(monkeypatch: Any) -> 
         DocumentProcessingConfig.model_validate({"excel_options": {"header_row": 0}})
     with pytest.raises(ValidationError):
         DocumentProcessingConfig.model_validate({"excel_options": {"unknown": 1}})
+
+
+def test_answer_records_carry_sheet_location_for_citations() -> None:
+    """回答フローへ渡す chunk に表計算の場所を入れ、親はシートの範囲をまとめる（#1224）。"""
+    from app.rag.answer_engine import _merged_sheet_location, _sheet_location
+
+    assert _sheet_location(
+        {"sheet_name": "費目コード", "row_start": 3, "row_end": 6, "cell_range": "A3:D6"}
+    ) == {"sheet_name": "費目コード", "row_start": 3, "row_end": 6, "cell_range": "A3:D6"}
+    assert _sheet_location({"page_start": 2}) is None
+    merged = _merged_sheet_location(
+        [
+            {"sheet_name": "費目コード", "cell_range": "B3:D4"},
+            {"sheet_name": "費目コード", "cell_range": "A6:C9"},
+        ]
+    )
+    assert merged == {
+        "sheet_name": "費目コード",
+        "row_start": 3,
+        "row_end": 9,
+        "cell_range": "A3:D9",
+    }
+    # 別のシートが混ざる親は場所をまとめない（頁と同じく、確かな場所だけを出す）。
+    assert _merged_sheet_location([{"sheet_name": "a"}, {"sheet_name": "b"}]) is None

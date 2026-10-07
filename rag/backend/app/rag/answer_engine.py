@@ -982,6 +982,9 @@ def _stored_child(
         document = document if isinstance(document, dict) else {}
         if "first_page_context" not in document:
             metadata["document"] = {**document, "first_page_context": dict(first_page_context)}
+    if location := _sheet_location(chunk.metadata):
+        # 表計算の根拠の場所(#1221)。回答の本文の出典を「シート・セル範囲」にする(#1224)。
+        metadata["sheet_location"] = location
     page_start = _int(chunk.metadata.get("page_start") or chunk.metadata.get("page_number"), 1)
     return StoredChunk(
         chunk_uid=chunk.chunk_id,
@@ -1005,6 +1008,58 @@ def _stored_child(
     )
 
 
+_CELL_RANGE = re.compile(r"^([A-Z]+)(\d+):([A-Z]+)(\d+)$")
+
+
+def _sheet_location(metadata: Mapping[str, object]) -> dict[str, object] | None:
+    """Excel の行の記録の chunk の場所(#1221 の sheet_name・row_start・row_end・cell_range)。"""
+    sheet = metadata.get("sheet_name")
+    if not isinstance(sheet, str) or not sheet.strip():
+        return None
+    location: dict[str, object] = {"sheet_name": sheet.strip()}
+    for key in ("row_start", "row_end"):
+        value = metadata.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            location[key] = value
+    cell_range = metadata.get("cell_range")
+    if isinstance(cell_range, str) and _CELL_RANGE.match(cell_range.strip()):
+        location["cell_range"] = cell_range.strip()
+    return location
+
+
+def _column_number(letters: str) -> int:
+    number = 0
+    for char in letters:
+        number = number * 26 + (ord(char) - 64)
+    return number
+
+
+def _merged_sheet_location(locations: list[object]) -> dict[str, object] | None:
+    """親の chunk の場所(子の場所が同じシートなら、行と列の範囲をまとめる。#1224)。"""
+    items = [item for item in locations if isinstance(item, dict)]
+    sheets = {item.get("sheet_name") for item in items}
+    if not items or len(sheets) != 1:
+        return None
+    ranges = [
+        match.groups()
+        for item in items
+        if isinstance(item.get("cell_range"), str)
+        and (match := _CELL_RANGE.match(str(item["cell_range"])))
+    ]
+    location: dict[str, object] = {"sheet_name": next(iter(sheets))}
+    if ranges:
+        first_column = min((r[0] for r in ranges), key=_column_number)
+        last_column = max((r[2] for r in ranges), key=_column_number)
+        row_start = min(int(r[1]) for r in ranges)
+        row_end = max(int(r[3]) for r in ranges)
+        location.update(
+            row_start=row_start,
+            row_end=row_end,
+            cell_range=f"{first_column}{row_start}:{last_column}{row_end}",
+        )
+    return location
+
+
 def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
     """子の metadata に保持した親本文から親 chunk を復元する。"""
     from rag_engine.models.storage import StoredChunk
@@ -1020,6 +1075,10 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
         text = parent_text or "\n\n".join(child.text for child in members)
         metadata = dict(members[0].metadata)
         metadata.pop("rrf_score", None)
+        if location := _merged_sheet_location(
+            [child.metadata.get("sheet_location") for child in members]
+        ):
+            metadata["sheet_location"] = location
         parents.append(
             StoredChunk(
                 chunk_uid=parent_uid,
