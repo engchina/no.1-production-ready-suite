@@ -23,6 +23,22 @@ EVALUATION_CASE_ID_MAX_CHARS = 200
 # 標準回答の長さの上限(文字)。標準回答による評価の入力の予算(48,000 bytes)に収まる長さにする。
 STANDARD_ANSWER_MAX_CHARS = 8000
 
+# 評価のケースの分類（#1226。業務支援の改修 #1218 の評価の契約）。答えられるかの種類で結果を
+# 分けて見る。
+# - document_answerable: 資料だけで答えられる
+# - clarification_required: 利用者に条件を確かめる必要がある
+# - environment_data_required: 現場の値・記録（参照の道具）が要る
+# - knowledge_missing: 資料に答えが無い（拒答・人への引き継ぎが正しい）
+# - conflicting_sources: 資料どうしが矛盾する
+EvaluationCaseCategory = Literal[
+    "document_answerable",
+    "clarification_required",
+    "environment_data_required",
+    "knowledge_missing",
+    "conflicting_sources",
+]
+EVALUATION_UNCATEGORIZED = "uncategorized"
+
 # 失敗理由(#591)。保存済みの結果には削除した理由(content_kind_miss など)が残るため、
 # 結果の model は str で受ける。
 EvaluationFailureReason = Literal[
@@ -83,6 +99,8 @@ class EvaluationCase(BaseModel):
     expected_answer_keywords: list[str] = Field(default_factory=list)
     standard_answer: str | None = Field(default=None, max_length=STANDARD_ANSWER_MAX_CHARS)
     answerable: bool | None = None
+    # 分類（任意。#1226）。結果の分類ごとの内訳に使う。採点の方法は変えない。
+    category: EvaluationCaseCategory | None = None
 
     @property
     def expects_answer(self) -> bool:
@@ -139,6 +157,7 @@ class EvaluationCaseResult(BaseModel):
 
     case_id: str
     trace_id: str
+    category: EvaluationCaseCategory | None = None
     status: Literal["success", "error"] = "success"
     retrieved_document_ids: list[str] = Field(default_factory=list)
     relevant_document_ids: list[str] = Field(default_factory=list)
@@ -173,6 +192,18 @@ class EvaluationThresholdFailure(BaseModel):
     threshold: float
 
 
+class EvaluationCategorySummary(BaseModel):
+    """分類ごとの結果の内訳（#1226）。率は測れるケースだけの割合で、測れなければ None。"""
+
+    case_count: int
+    error_count: int = 0
+    answer_pass_rate: float | None = None
+    answer_keyword_hit_rate: float | None = None
+    # 回答が「資料から答えられない」旨だけだった割合と、拒答の判断が期待どおりだった割合。
+    abstain_rate: float | None = None
+    refusal_correct_rate: float | None = None
+
+
 class EvaluationMetrics(BaseModel):
     """評価結果の集計指標(#591)。
 
@@ -196,6 +227,8 @@ class EvaluationMetrics(BaseModel):
     passed: bool = True
     threshold_failures: list[EvaluationThresholdFailure] = Field(default_factory=list)
     failure_reason_counts: dict[str, int] = Field(default_factory=dict)
+    # 分類ごとの内訳（ケースに分類があるときだけ。分類の無いケースは uncategorized。#1226）。
+    category_breakdown: dict[str, EvaluationCategorySummary] = Field(default_factory=dict)
     case_results: list[EvaluationCaseResult] = Field(default_factory=list)
 
 

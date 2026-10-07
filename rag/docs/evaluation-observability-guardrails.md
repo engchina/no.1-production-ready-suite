@@ -55,6 +55,7 @@ API: `POST /api/evaluation/jobs/run`・`POST /api/evaluation/jobs/compare`（job
 
 - 各指標は、その指標を測れるケースだけの平均にし、対象の件数を `metric_case_counts` に返す。対象のケースが無い指標は `null`（0 と区別する）。失敗したケース（検索失敗・時間切れ）は `error_count` で数え、指標の平均には入れない。
 - **答えるべきでない質問（#301）**: `answerable: false` のケース（省略時は、正解の文書・期待する語・標準回答のどれも無いケース）は、拒答の正しさだけを測る。拒答は、回答の本文か引用が無い回答と、回答エンジンが不足の理由を返しモデルが使った根拠が 1 つも無い回答。
+- **ケースの分類（#1226）**: ケースに任意の `category`（`document_answerable` 資料で答えられる / `clarification_required` 条件の確認が要る / `environment_data_required` 現場のデータが要る / `knowledge_missing` 資料に答えが無い / `conflicting_sources` 資料が矛盾する）を付けると、結果の `category_breakdown` と画面の「分類ごとの結果」に、分類ごとの件数・失敗・回答の合格率・期待する語の一致率・拒答の割合・拒答の判断の正しさを出す（分類の無いケースは `uncategorized`）。採点の方法と合否は変えない。基線と判断は [answer-baseline-2026-10.md](./answer-baseline-2026-10.md)。
 - **標準回答による評価**: `standard_answer` のあるケースは、回答の記録の評価の入力（根拠・引用）で、標準回答による評価（`evaluate_answer_payload` が標準回答から比較の範囲を固定 → 項目の照合・主張の監査を LLM で行い、`app/rag/answer_metrics.py` が評価の基準の指標と閾値で合否を付ける。#680）を行う。LLM を複数回呼ぶため、1 件の上限は 600 秒。比較できなかったケース（時間切れ・入力の上限・評価の記録が無い）は指標に入れず `answer_evaluation_error` とし、評価を合格にしない。
 - `passed`: 閾値をすべて満たし、`error_count=0` で、標準回答による評価がすべて終わったか。閾値は測れた指標だけに適用する。
 - `threshold_failures`: 閾値を下回った metric、実測値、閾値の一覧。CI gate ではこの配列を失敗理由として出力する。

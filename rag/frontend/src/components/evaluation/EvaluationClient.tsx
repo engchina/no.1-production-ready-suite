@@ -40,6 +40,7 @@ import {
   type EvaluationJobKind,
   type EvaluationJobStatus,
   type EvaluationCaseResult,
+  type EvaluationCategorySummary,
   type EvaluationCompareResponse,
   type EvaluationExperimentResult,
   type EvaluationExperiment,
@@ -110,11 +111,13 @@ const SAMPLE_REQUEST = JSON.stringify(
         expected_answer_keywords: ["部門長", "承認"],
         standard_answer:
           "経費申請は申請者が申請書を提出し、部門長が内容を確認して承認します。",
+        category: "document_answerable",
       },
       {
         id: "out-of-scope-refusal",
         query: "社員食堂の来月の献立を教えてください。",
         answerable: false,
+        category: "knowledge_missing",
       },
     ],
     top_k: 20,
@@ -688,6 +691,8 @@ function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
         </Banner>
       ) : null}
 
+      <CategoryBreakdown metrics={metrics} />
+
       {failureReasons.length ? (
         <div className="rounded-md border border-border bg-surface p-4 text-sm">
           <p className="font-medium text-fg">{t("evaluation.failureReasons")}</p>
@@ -1104,3 +1109,74 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/** 分類ごとの結果（#1226）。ケースに分類があるときだけ出す。 */
+function CategoryBreakdown({ metrics }: { metrics: EvaluationMetrics }) {
+  const rows = Object.entries(metrics.category_breakdown ?? {})
+    .filter((entry): entry is [string, EvaluationCategorySummary] => Boolean(entry[1]))
+    .map(([category, summary]) => ({ category, ...summary }));
+  if (!rows.length) return null;
+  return (
+    <div className="space-y-2" data-testid="evaluation-category-breakdown">
+      <p className="text-sm font-medium text-fg">{t("evaluation.category.title")}</p>
+      <DataTable
+        ariaLabel={t("evaluation.category.title")}
+        rows={rows}
+        getRowKey={(row) => row.category}
+        columns={[
+          {
+            key: "category",
+            header: t("evaluation.category.column.category"),
+            render: (row) => categoryLabel(row.category),
+          },
+          {
+            key: "count",
+            header: t("evaluation.category.column.count"),
+            className: "tnum",
+            render: (row) =>
+              row.error_count
+                ? t("evaluation.category.countWithErrors", { count: row.case_count, errors: row.error_count })
+                : String(row.case_count),
+          },
+          {
+            key: "pass",
+            header: t("evaluation.category.column.pass"),
+            className: "tnum",
+            render: (row) => formatMetricValue(row.answer_pass_rate),
+          },
+          {
+            key: "keyword",
+            header: t("evaluation.category.column.keyword"),
+            className: "tnum",
+            render: (row) => formatMetricValue(row.answer_keyword_hit_rate),
+          },
+          {
+            key: "abstain",
+            header: t("evaluation.category.column.abstain"),
+            className: "tnum",
+            render: (row) => formatMetricValue(row.abstain_rate),
+          },
+          {
+            key: "refusal",
+            header: t("evaluation.category.column.refusal"),
+            className: "tnum",
+            render: (row) => formatMetricValue(row.refusal_correct_rate),
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
+const CATEGORY_KEYS = {
+  document_answerable: "evaluation.category.document_answerable",
+  clarification_required: "evaluation.category.clarification_required",
+  environment_data_required: "evaluation.category.environment_data_required",
+  knowledge_missing: "evaluation.category.knowledge_missing",
+  conflicting_sources: "evaluation.category.conflicting_sources",
+  uncategorized: "evaluation.category.uncategorized",
+} as const;
+
+function categoryLabel(category: string): string {
+  return category in CATEGORY_KEYS ? t(CATEGORY_KEYS[category as keyof typeof CATEGORY_KEYS]) : category;
+}
