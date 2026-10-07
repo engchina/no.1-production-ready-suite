@@ -300,6 +300,10 @@ def test_search_maps_evidence_and_uses_token_user_context(
         "section_path": ["規程", "第2条（精算の期限）"],
         "page_start": 3,
         "page_end": 4,
+        "sheet_name": None,
+        "row_start": None,
+        "row_end": None,
+        "cell_range": None,
     }
     assert len(evidence["excerpt"]) == 1000
     assert evidence["truncated"] is True
@@ -310,7 +314,8 @@ def test_search_maps_evidence_and_uses_token_user_context(
     unused = body["evidence"][1]
     assert unused["used_in_answer"] is False
     assert unused["truncated"] is False
-    assert unused["locator"] == {"section_path": [], "page_start": None, "page_end": None}
+    assert unused["locator"]["section_path"] == []
+    assert unused["locator"]["page_start"] is None
     request: SearchRequest = captured["request"]
     assert (request.query, request.top_k) == ("規程", 3)
     # 利用者・agent・thread は token から決める（header の agent は使わない）。
@@ -320,6 +325,44 @@ def test_search_maps_evidence_and_uses_token_user_context(
     assert context.agent_id_hash == request_context._header_hash("agent-1", settings)
     assert context.thread_id_hash == request_context._header_hash("run-1", settings)
     assert context.tenant_id_hash is None
+
+
+def test_search_evidence_locates_spreadsheet_rows(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """Excel の行の記録（#1221）の根拠は、シート・行の範囲・セル範囲で場所を返す。"""
+
+    async def fake_run(request: SearchRequest) -> SearchResponse:
+        del request
+        return SearchResponse(
+            answer="回答",
+            citations=[
+                _chunk(
+                    "c-sheet",
+                    used=True,
+                    section_path="コード表",
+                    sheet_name="コード表",
+                    row_start=3,
+                    row_end=6,
+                    cell_range="A3:C6",
+                )
+            ],
+            trace_id="trace-1",
+            elapsed_ms=1.0,
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call("rag_search", {"query": "費目"}, _token(user.user_uuid))["structuredContent"]
+    assert body["evidence"][0]["locator"] == {
+        "section_path": ["コード表"],
+        "page_start": None,
+        "page_end": None,
+        "sheet_name": "コード表",
+        "row_start": 3,
+        "row_end": 6,
+        "cell_range": "A3:C6",
+    }
 
 
 def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) -> None:
@@ -394,7 +437,8 @@ def test_read_source_returns_full_text_in_windows(
     body = first["structuredContent"]
     assert (body["text"], body["offset"], body["text_length"]) == ("あいうえ", 0, 10)
     assert (body["truncated"], body["next_offset"]) == (True, 4)
-    assert body["locator"] == {"section_path": ["規程", "第2条"], "page_start": 2, "page_end": 2}
+    assert body["locator"]["section_path"] == ["規程", "第2条"]
+    assert (body["locator"]["page_start"], body["locator"]["page_end"]) == (2, 2)
     assert body["chunk_set_id"] == "cs-1"
     assert (body["parent_text"], body["parent_truncated"]) == ("親の本文", True)
 

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from rag_parser_core.sheet_records import ExcelOptions
+
 from app.config import PreprocessProfile, Settings
 
 PreprocessProfileName = PreprocessProfile
@@ -199,3 +201,15 @@ def preprocess_runtime_settings(settings: Settings) -> PreprocessRuntimeSettings
         ),
         profiles=statuses,
     )
+
+
+def preprocess_options(settings: object, profile: str) -> dict[str, object] | None:
+    """前処理のサービスへ渡す選択肢(選択肢を持つプリセットだけ。#1221)。
+
+    excel_to_json は ``rag_preprocess_excel_options``(global 既定を文書レシピの ``excel_options`` で
+    上書きした値。上書きは dict のこともある)を検証して渡す。
+    """
+    if profile != "excel_to_json":
+        return None
+    raw = getattr(settings, "rag_preprocess_excel_options", None)
+    return ExcelOptions.model_validate(raw or {}).model_dump(mode="json")

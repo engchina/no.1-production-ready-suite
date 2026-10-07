@@ -192,6 +192,13 @@ test("回答の出典と使ったツールを畳んで出し、承認待ちは�
               used_in_answer: true,
             },
             {
+              evidence_id: "chunk-sheet",
+              file_name: "費目コード.xlsx",
+              locator: { section_path: ["コード表"], sheet_name: "コード表", row_start: 3, row_end: 6, cell_range: "A3:C6" },
+              excerpt: "コード: A03 / 名称: 交通費",
+              used_in_answer: true,
+            },
+            {
               evidence_id: "chunk-unused",
               file_name: "別紙.pdf",
               locator: { section_path: [], page_start: null, page_end: null },
@@ -216,9 +223,13 @@ test("回答の出典と使ったツールを畳んで出し、承認待ちは�
   await expect(page.getByTestId("chat-send")).toHaveAccessibleName("停止");
   await expect(page.getByTestId("chat-send")).toHaveAttribute("data-state", "running");
 
-  await turn.getByText("出典（1）").click();
+  await turn.getByText("出典（2）").click();
   await expect(turn.getByText("1. 契約書.pdf")).toBeVisible();
-  await expect(turn.getByTestId("chat-source-location")).toHaveText("p.3 · 契約書 > 第5条（更新）");
+  // 表計算の根拠はシート・行・セル範囲で場所を出す（#1221）。
+  await expect(turn.getByTestId("chat-source-location")).toHaveText([
+    "p.3 · 契約書 > 第5条（更新）",
+    "コード表 · 3–6 行（A3:C6）",
+  ]);
   await expect(turn.getByText("別紙.pdf")).toHaveCount(0);
   await turn.getByText("使ったツール（2）").click();
   await expect(turn.getByText("rag__rag_search", { exact: true })).toBeVisible();

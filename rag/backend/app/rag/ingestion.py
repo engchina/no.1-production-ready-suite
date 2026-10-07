@@ -89,7 +89,7 @@ from app.rag.observability import (
     record_trace_span,
 )
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
-from app.rag.preprocess_strategy import resolve_preprocess_profile
+from app.rag.preprocess_strategy import preprocess_options, resolve_preprocess_profile
 from app.rag.variant_keys import (
     compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
@@ -1470,6 +1470,7 @@ class IngestionPipeline:
                 content_type=content_type,
                 source_profile=source_profile,
                 profile=profile,
+                options=preprocess_options(self._settings, profile),
             ),
             attributes={
                 "preprocess_profile": profile,

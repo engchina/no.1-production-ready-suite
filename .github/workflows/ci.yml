@@ -419,7 +419,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -440,6 +440,12 @@ jobs:
       # e2e の影響分析の選択の規則（platform/scripts/e2e_impact.py。#885）。標準ライブラリだけで動く。
       - name: Unit tests (platform/scripts)
         run: python3 -m unittest discover -s platform/scripts/tests -p 'test_*.py'
+
+      # Excel の前処理（表頭・元の行とセル・表示の値・手順書の読み方。#1221）。サービスの uv.lock の
+      # 依存（openpyxl / xlrd）で、pytest だけを足して実行する。
+      - name: Unit tests (rag/services/preprocess/excel_to_json)
+        working-directory: rag/services/preprocess/excel_to_json
+        run: uv run --locked --with pytest python -m pytest -q tests
 
   rag-frontend:
     name: RAG / Frontend

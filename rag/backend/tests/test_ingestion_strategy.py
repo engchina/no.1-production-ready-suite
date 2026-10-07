@@ -818,8 +818,9 @@ class _StubConvertingPreprocess:
         content_type: str,
         source_profile: Any = None,
         profile: Any = None,
+        options: Any = None,
     ) -> ConvertOutcome:
-        _ = source_bytes, content_type, source_profile, profile
+        _ = source_bytes, content_type, source_profile, profile, options
         return ConvertOutcome(
             converted=True,
             converter_name="stub",

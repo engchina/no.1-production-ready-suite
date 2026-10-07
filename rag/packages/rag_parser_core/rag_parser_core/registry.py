@@ -64,6 +64,11 @@ from rag_parser_core.result import (
 from rag_parser_core.result import (
     ParserRegistryResult as ParserRegistryResult,
 )
+from rag_parser_core.sheet_records import (
+    is_sheet_records_content_type,
+    parse_sheet_records,
+    sheet_records_extraction,
+)
 from rag_parser_core.source import (
     SourceModality,
     SourceProfile,
@@ -76,6 +81,8 @@ from rag_parser_core.source import (
 TABLE_PRESERVE_ROWS_TEMPLATE = "table_preserve_rows"
 
 logger = logging.getLogger(__name__)
+# 前処理の行の記録（excel_to_json v2）を要素にする処理の版（#1221）。
+SHEET_RECORDS_PARSER_VERSION = "sheet_records_v1"
 
 
 @dataclass(frozen=True)
@@ -922,6 +929,10 @@ def _external_adapter_result(
     content_type: str,
 ) -> ParserRegistryResult:
     """任意 parser adapter を呼び出し、失敗時は fallback 用 warning だけ返す。"""
+    if is_sheet_records_content_type(content_type):
+        # 前処理（excel_to_json）が作った行の記録は、どの adapter でも外部の parser に渡さず、
+        # 1 行 1 要素にする（行・セルの場所を chunk まで残す。#1221）。
+        return _sheet_records_result(backend, source_bytes, source_profile=source_profile)
     if not _external_adapter_package_available(backend):
         return _adapter_fallback_result(backend, f"{backend}_adapter_package_missing")
     try:
@@ -1098,6 +1109,39 @@ def _docling_adapter_result(
         parser_backend="docling",
         parser_version=version,
         template=template_for_source_profile(source_profile),
+    )
+
+
+def _sheet_records_result(
+    backend: str,
+    source_bytes: bytes,
+    *,
+    source_profile: SourceProfile | None,
+) -> ParserRegistryResult:
+    """前処理の行の記録（`sheet_records`）を抽出にする。読めなければ fallback の warning を返す。"""
+    document = parse_sheet_records(source_bytes)
+    if document is None:
+        return _adapter_fallback_result(backend, "sheet_records_invalid")
+    template = template_for_source_profile(source_profile)
+    extraction = sheet_records_extraction(
+        document,
+        source_parser="sheet_records",
+        parser_backend=backend,
+        parser_version=SHEET_RECORDS_PARSER_VERSION,
+    )
+    extraction = _adapter_extraction_with_source_lineage(
+        extraction,
+        source_profile=source_profile,
+        source_parser="sheet_records",
+        parser_backend=backend,
+        parser_version=SHEET_RECORDS_PARSER_VERSION,
+        template=template,
+    )
+    return ParserRegistryResult(
+        extraction=extraction,
+        parser_backend=backend,
+        parser_version=SHEET_RECORDS_PARSER_VERSION,
+        template=template,
     )
 
 

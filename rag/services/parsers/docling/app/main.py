@@ -13,8 +13,10 @@ import logging
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, UploadFile
+from rag_parser_core.registry import run_external_adapter
 from rag_parser_core.result import ParseHealth, ParseResponse, service_failure_warning
 from rag_parser_core.service import _detect_version, _parse_source_profile
+from rag_parser_core.sheet_records import is_sheet_records_content_type
 
 from app.extraction import analyze_source
 
@@ -52,6 +54,13 @@ async def parse(
     effective_content_type = content_type or (profile.content_type if profile else "")
     file_name = (profile.sanitized_file_name if profile else "") or (file.filename or "")
     _ = parser_options  # 旧 backend が送る Vision の指定(#497 で廃止)は使わない。
+    if is_sheet_records_content_type(effective_content_type):
+        # 前処理 excel_to_json の行の記録は Docling に渡さず、共通の rag_parser_core が
+        # 1 記録 1 要素にする(シート・行・セル範囲を chunk まで残す。#1221)。
+        result = await asyncio.to_thread(
+            run_external_adapter, _BACKEND, source_bytes, profile, effective_content_type
+        )
+        return ParseResponse.from_result(result)
     _, version = _detect_version("docling", ("docling",))
     try:
         extraction = await asyncio.to_thread(

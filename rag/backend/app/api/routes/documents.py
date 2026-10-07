@@ -212,7 +212,8 @@ SMALL_TO_BIG_PROCESSING_CONFIG_FIELDS: tuple[str, ...] = (
     "chunk_parent_max_children",
 )
 DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
-    "preprocess_profile": ("preprocess_profile",),
+    # 前処理 excel_to_json の選択肢(#1221)も前処理の出力を変える。
+    "preprocess_profile": ("preprocess_profile", "excel_options"),
     "parser_adapter_backend": (
         "parser_adapter_backend",
         "parser_docling_enabled",

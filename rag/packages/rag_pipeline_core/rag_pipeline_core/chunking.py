@@ -83,6 +83,12 @@ class _ElementSpan:
     table_column_count: int | None
     asset_id: str | None
     asset_kind: str | None
+    # 表計算の行の場所（前処理 excel_to_json の行の記録。#1221）。
+    sheet_name: str | None = None
+    sheet_row_start: int | None = None
+    sheet_row_end: int | None = None
+    sheet_column_start: str | None = None
+    sheet_column_end: str | None = None
 
 
 @dataclass(frozen=True)
@@ -767,9 +773,51 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
                 ),
                 asset_id=_metadata_label(element.metadata.get("asset_id"), max_length=80),
                 asset_kind=_metadata_label(element.metadata.get("asset_kind"), max_length=40),
+                sheet_name=_metadata_label(element.metadata.get("sheet_name"), max_length=120),
+                sheet_row_start=_metadata_positive_int(element.metadata.get("row_start")),
+                sheet_row_end=_metadata_positive_int(element.metadata.get("row_end")),
+                sheet_column_start=_metadata_label(
+                    element.metadata.get("cell_column_start"), max_length=4
+                ),
+                sheet_column_end=_metadata_label(
+                    element.metadata.get("cell_column_end"), max_length=4
+                ),
             )
         )
     return spans
+
+
+def _column_index(letters: str) -> int:
+    index = 0
+    for char in letters.upper():
+        index = index * 26 + (ord(char) - 64)
+    return index
+
+
+def _sheet_location_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
+    """表計算の行の要素の場所を chunk の場所（シート・行の範囲・セル範囲）にまとめる。
+
+    シートが 1 つのときだけ出す。セル範囲は行の範囲と、列の最も左・右（例: ``A3:F7``）。
+    """
+    sheets = {span.sheet_name for span in group if span.sheet_name}
+    starts = [span.sheet_row_start for span in group if span.sheet_row_start is not None]
+    row_ends = [span.sheet_row_end or span.sheet_row_start for span in group]
+    ends = [row for row in row_ends if row is not None]
+    if len(sheets) != 1 or not starts or not ends:
+        return {}
+    row_start, row_end = min(starts), max(ends)
+    metadata: ChunkMetadata = {
+        "sheet_name": next(iter(sheets)),
+        "row_start": row_start,
+        "row_end": row_end,
+    }
+    column_starts = [span.sheet_column_start for span in group if span.sheet_column_start]
+    column_ends = [span.sheet_column_end for span in group if span.sheet_column_end]
+    if column_starts and column_ends:
+        first = min(column_starts, key=_column_index)
+        last = max(column_ends, key=_column_index)
+        metadata["cell_range"] = f"{first}{row_start}:{last}{row_end}"
+    return metadata
 
 
 def _pending_table_vision_supplement(element: DocumentElement) -> str:
@@ -1827,6 +1875,7 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
     if pages:
         metadata["page_start"] = pages[0]
         metadata["page_end"] = pages[-1]
+    metadata.update(_sheet_location_metadata(group))
     return metadata
 
 
