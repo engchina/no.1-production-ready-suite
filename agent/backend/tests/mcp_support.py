@@ -191,6 +191,12 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
             }
         ]
     },
+    "rag_retrieve_evidence": {
+        "trace_id": "rag-trace-2",
+        "guardrail_warnings": [],
+        "evidence": [{**_EVIDENCE, "used_in_answer": False}],
+        "evidence_omitted": 0,
+    },
     "nl2sql_query": _job(),
     "nl2sql_get_job": _job(),
 }
@@ -233,6 +239,7 @@ class FakeProductMcp:
                     self._tool("rag_list_search_answer_profiles", RagListSearchAnswerProfilesIn),
                     self._tool("rag_read_source", RagReadSourceIn),
                     self._tool("rag_lookup_guides", RagLookupGuidesIn),
+                    self._tool("rag_retrieve_evidence", RagSearchIn),
                 ],
             ),
             "nl2sql": McpServer(

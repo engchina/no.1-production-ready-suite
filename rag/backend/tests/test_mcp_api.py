@@ -36,6 +36,7 @@ ALL_TOOLS = [
     "rag_list_search_answer_profiles",
     "rag_search",
     "rag_lookup_guides",
+    "rag_retrieve_evidence",
     "rag_read_source",
 ]
 
@@ -132,6 +133,7 @@ def test_initialize_and_tools_list_follow_user_permissions(auth: ProductionAuth)
         "rag_list_search_answer_profiles",
         "rag_search",
         "rag_lookup_guides",
+        "rag_retrieve_evidence",
         "rag_read_source",
     ]
     # チャットは MCP で提供しない（#787）。チャット
@@ -263,6 +265,11 @@ def test_search_maps_evidence_and_uses_token_user_context(
                     section_path="規程 > 第2条（精算の期限）",
                     page_start=3,
                     page_end=4,
+                    # 印刷の頁番号と領域（#1244）。
+                    page_label_start="2-1",
+                    page_label_end="2-2",
+                    bbox="[10, 20, 110, 220]",
+                    bbox_unit="absolute",
                     chunk_set_id="cs-1",
                     recipe_id="r-1",
                     content_kind="text",
@@ -329,6 +336,10 @@ def test_search_maps_evidence_and_uses_token_user_context(
         "row_start": None,
         "row_end": None,
         "cell_range": None,
+        "page_label_start": "2-1",
+        "page_label_end": "2-2",
+        "bbox": [10.0, 20.0, 110.0, 220.0],
+        "bbox_unit": "absolute",
     }
     assert len(evidence["excerpt"]) == 1000
     assert evidence["truncated"] is True
@@ -387,7 +398,46 @@ def test_search_evidence_locates_spreadsheet_rows(
         "row_start": 3,
         "row_end": 6,
         "cell_range": "A3:C6",
+        "page_label_start": None,
+        "page_label_end": None,
+        "bbox": None,
+        "bbox_unit": None,
     }
+
+
+def test_retrieve_evidence_skips_answer_generation(
+    auth: ProductionAuth, monkeypatch: MonkeyPatch
+) -> None:
+    """rag_retrieve_evidence は回答を作らずに根拠だけを検索の順で返す（#1241）。"""
+    captured: dict[str, Any] = {}
+
+    async def fake_run(request: SearchRequest) -> SearchResponse:
+        captured["generate_answer"] = request.generate_answer
+        captured["profile"] = request.search_answer_profile_id
+        return SearchResponse(
+            answer="",
+            citations=[_chunk(f"c{index}", used=False) for index in range(4)],
+            trace_id="trace-r",
+            guardrail_warnings=["注意"],
+            elapsed_ms=1.0,
+        )
+
+    monkeypatch.setattr(search_route, "_run_search_with_timeout", fake_run)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call(
+        "rag_retrieve_evidence",
+        {"query": "規程", "search_answer_profile_id": "bv-1", "evidence_limit": 3},
+        _token(user.user_uuid),
+    )["structuredContent"]
+    assert captured == {"generate_answer": False, "profile": "bv-1"}
+    assert [item["chunk_id"] for item in body["evidence"]] == ["c0", "c1", "c2"]
+    assert body["evidence_omitted"] == 1
+    assert (body["trace_id"], body["guardrail_warnings"]) == ("trace-r", ["注意"])
+    assert "answer" not in body
+    # 検索の権限が無ければ使えない。
+    chatter = auth.user_with_permissions("chatter", ["menu.chat"])
+    denied = _call("rag_retrieve_evidence", {"query": "規程"}, _token(chatter.user_uuid))
+    assert denied["isError"] is True
 
 
 def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) -> None:

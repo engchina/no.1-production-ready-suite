@@ -20,7 +20,7 @@ golden set の各ケースを回答エンジン(根拠付き回答。全体の�
 
 import asyncio
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
@@ -213,6 +213,19 @@ class _Aggregate:
         return {metric: len(self.values.get(metric, [])) for metric in EVALUATION_METRIC_NAMES}
 
 
+ProfileResolver = Callable[[SearchRequest, Settings], Awaitable[tuple[SearchRequest, Settings]]]
+
+
+async def _resolve_profile_context(
+    request: SearchRequest, settings: Settings
+) -> tuple[SearchRequest, Settings]:
+    """検索・回答と同じ解決で、プロファイルの KB・回答の設定・業務ガイドを当てる（#1249）。"""
+    from app.api.routes.search import _resolve_query_context
+
+    resolved, resolved_settings, _kb, _view = await _resolve_query_context(request, settings)
+    return resolved, resolved_settings
+
+
 class EvaluationRunner:
     """小規模な golden set を使って検索・根拠・回答の品質を評価する。"""
 
@@ -221,9 +234,11 @@ class EvaluationRunner:
         pipeline: SearchPipeline | None = None,
         settings: Settings | None = None,
         answer_judge: AnswerJudge | None = None,
+        profile_resolver: ProfileResolver | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._pipeline = pipeline
+        self._profile_resolver = profile_resolver or _resolve_profile_context
         # 既定の pipeline(実環境)では、標準回答のあるケースを LLM で評価する。
         # テストで pipeline を注入したときは、明示した judge だけを使う。
         self._answer_judge: AnswerJudge | None = answer_judge
@@ -239,6 +254,7 @@ class EvaluationRunner:
         thresholds: EvaluationThresholds | None = None,
         rag_overrides: EvaluationRagOverrides | None = None,
         *,
+        search_answer_profile_id: str | None = None,
         time_budget_seconds: float | None = None,
         progress: EvaluationProgressCallback | None = None,
     ) -> EvaluationMetrics:
@@ -249,6 +265,9 @@ class EvaluationRunner:
         その秒数で打ち切る（同期の HTTP の待ちを超えないため）。上限に達したら実行中のケースを
         打ち切り、残りのケースは実行せずに失敗として記録する。`progress` には、ケースを始める
         前と最後のケースの後に進捗を渡す（評価 job。#390）。
+
+        `search_answer_profile_id` を渡すと、ケースごとに検索・回答と同じ解決（参照 KB・回答の
+        設定・用語・ルール・業務ガイド）をしてから回答する（#1249）。渡さなければ全体の既定（#301）。
         """
         deadline = _deadline(time_budget_seconds)
         effective_settings = evaluation_settings(self._settings, rag_overrides)
@@ -286,9 +305,20 @@ class EvaluationRunner:
             limited_by_budget = remaining is not None and remaining < case_limit
             case_started_at = perf_counter()
             try:
+                run_case: Any = partial(pipeline.run, request, trace_id)
+                if search_answer_profile_id:
+                    # プロファイルの解決（KB・回答の設定・業務ガイド）。失敗はケースの失敗にする。
+                    request, case_settings = await self._profile_resolver(
+                        request.model_copy(
+                            update={"search_answer_profile_id": search_answer_profile_id}
+                        ),
+                        effective_settings,
+                    )
+                    case_pipeline = self._pipeline or RagPipeline(settings=case_settings)
+                    run_case = partial(case_pipeline.run, request, trace_id)
                 # 工程を記録する tracker は、3 番目の引数（progress_callback）として渡る。
                 response = await run_answer_with_timeout(
-                    partial(pipeline.run, request, trace_id),
+                    run_case,
                     effective_settings,
                     timeout_seconds=remaining if limited_by_budget else None,
                 )
@@ -402,6 +432,7 @@ class EvaluationRunner:
                 knowledge_base_ids=experiment.knowledge_base_ids,
                 thresholds=thresholds,
                 rag_overrides=experiment.rag_overrides,
+                search_answer_profile_id=experiment.search_answer_profile_id,
                 time_budget_seconds=None if remaining is None else max(0.0, remaining),
                 progress=_experiment_progress(
                     progress,

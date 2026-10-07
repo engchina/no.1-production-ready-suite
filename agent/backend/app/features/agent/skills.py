@@ -145,6 +145,8 @@ skill_registry.register(
         description="業務 RAG（MCP 接続 rag）を使って根拠付き情報を検索する。",
         instructions=(
             "ユーザーの目的を rag_search の query として扱い、根拠（evidence）に基づいて答える。"
+            "答える前に根拠だけを集める段（子目標ごとの調べ物など）では、回答を作らない"
+            " rag_retrieve_evidence を使い、最後に答えるときだけ rag_search を呼ぶ。"
             "対象の検索・回答プロファイルが分からなければ "
             "rag_list_search_answer_profiles で確かめる。"
             "回答に使った根拠（used_in_answer）を優先し、文書名と場所（locator の節・頁）を示す。"
@@ -170,6 +172,7 @@ skill_registry.register(
                     "rag_list_search_answer_profiles",
                     "rag_read_source",
                     "rag_lookup_guides",
+                    "rag_retrieve_evidence",
                 ],
             )
         ],

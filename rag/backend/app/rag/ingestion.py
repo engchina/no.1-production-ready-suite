@@ -88,6 +88,13 @@ from app.rag.observability import (
     record_ingestion_stage,
     record_trace_span,
 )
+from app.rag.page_labels import (
+    PAGE_LABELS_ARTIFACT_KEY,
+    apply_page_labels,
+    labels_from_artifacts,
+    page_labels_artifact,
+    pdf_page_labels,
+)
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
 from app.rag.preprocess_strategy import preprocess_options, resolve_preprocess_profile
 from app.rag.variant_keys import (
@@ -599,6 +606,8 @@ class IngestionPipeline:
             )
             # 派生系譜(溯源)を抽出 metadata へ刻む。artifact cache / document payload 経由で永続。
             extraction = _extraction_with_source_derivation(extraction, source_derivation)
+            # PDF の印刷の頁番号（ページラベル）を残し、chunk の場所に付ける（#1244）。
+            extraction = _extraction_with_page_labels(extraction, parse_bytes, parse_content_type)
             # 図・画像の読み取り(Vision)は解析エンジンに関係なくここで行う(#497)。抽出の cache より
             # 前に行い、後段の失敗から再開しても読み取り済みの図を読み直さない。
             extraction = await self._attach_vision(
@@ -1251,6 +1260,7 @@ class IngestionPipeline:
             raise IngestionUserError("索引用チャンクを作成できませんでした。")
         # RAPTOR 再帰要約索引(opt-in)。leaf に summary node を足して索引する。要約失敗は leaf のみ。
         chunks = await self._augment_with_raptor(trace_id, chunks, cancel_checker)
+        apply_page_labels(chunks, labels_from_artifacts(extraction.parser_artifacts))
         return _chunks_with_source_derivation(chunks, _source_derivation_id(extraction))
 
     async def _run_index_phase(
@@ -2755,6 +2765,19 @@ def _extraction_with_source_derivation(
         **extraction.parser_artifacts,
         "source_derivation": derivation.model_dump(mode="json"),
     }
+    return extraction.model_copy(update={"parser_artifacts": parser_artifacts})
+
+
+def _extraction_with_page_labels(
+    extraction: StructuredExtraction, source_bytes: bytes, content_type: str
+) -> StructuredExtraction:
+    """解析した PDF のページラベルを parser_artifacts に残す（物理頁と違うときだけ。#1244）。"""
+    if not source_bytes.startswith(b"%PDF") and "pdf" not in (content_type or "").casefold():
+        return extraction
+    artifact = page_labels_artifact(pdf_page_labels(source_bytes))
+    if artifact is None:
+        return extraction
+    parser_artifacts = {**extraction.parser_artifacts, PAGE_LABELS_ARTIFACT_KEY: artifact}
     return extraction.model_copy(update={"parser_artifacts": parser_artifacts})
 
 
