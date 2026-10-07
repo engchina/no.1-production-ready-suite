@@ -172,6 +172,33 @@ export function stabilizeMeasuredHeight(current: number | undefined, next: numbe
   return stabilizeMeasuredSize(current, next, { prefer: "larger" });
 }
 
+/**
+ * `ResizeObserver` の通知で測り直すか（#1232）。
+ *
+ * 測った高さは同じスクロール領域の `max-height` / `height` に書くので、スクロール領域の「高さ」の変化には
+ * 自分の書き込みが含まれる。それにも測り直すと、拡大 125% などの丸めで測り直しの値が前と 1〜2px 違う
+ * たびに書き直し → 測り直し … と循環し、下までスクロールした画面が揺れ続ける（#1222 のヒステリシスは
+ * 1px の往復しか止めない）。スクロール領域は幅が変わったとき（横スクロールバーの出入り・分割ペインの
+ * ドラッグ・サイドバーの開閉）だけ測り直し、行の追加・折り返しなど内容の変化は表の通知で測り直す。
+ * `widths.scroller` は前回の通知のスクロール領域の幅（content-box）で、この関数が更新する。
+ */
+export function shouldRemeasureOnResize(
+  entries: ReadonlyArray<{ target: unknown; contentRect: { width: number } }>,
+  scroller: unknown,
+  widths: { scroller?: number }
+) {
+  let remeasure = false;
+  for (const entry of entries) {
+    if (entry.target === scroller) {
+      const width = entry.contentRect.width;
+      if (widths.scroller !== undefined && widths.scroller === width) continue;
+      widths.scroller = width;
+    }
+    remeasure = true;
+  }
+  return remeasure;
+}
+
 function useMediaQuery(query: string) {
   const [matches, setMatches] = useState(false);
   useLayoutEffect(() => {
@@ -261,9 +288,14 @@ export function DataTable<T>({
   useLayoutEffect(() => {
     measure();
     if (rowLimit == null || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => measure());
+    const scroller = scrollRef.current;
+    // 自分で書いた高さの変化（スクロール領域の高さだけの変化）では測り直さない（#1232）。
+    const widths: { scroller?: number } = {};
+    const observer = new ResizeObserver((entries) => {
+      if (shouldRemeasureOnResize(entries, scroller, widths)) measure();
+    });
     if (tableRef.current) observer.observe(tableRef.current);
-    if (scrollRef.current) observer.observe(scrollRef.current);
+    if (scroller) observer.observe(scroller);
     return () => observer.disconnect();
   }, [measure, rowLimit, rows, loading]);
 
