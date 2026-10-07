@@ -114,9 +114,61 @@ export function offsetPagination({
   return { page, totalPages, range };
 }
 
+/**
+ * カーソル型の API（`next_cursor` と `total` を返す）のページを Pagination の page / totalPages / range に直す（#403。
+ * NL2SQL から移した。#1265）。前へ戻るためのカーソルは画面が積んで持ち、移動は隣のページだけ（前へ / 次へ）。
+ * - `depth`: 今までに「次へ」で進んだ回数（積んだカーソルの数）。
+ * - `total` がカーソルの位置と合わない（取得の間に件数が変わった）ときも、次のカーソルがあれば次のページを数える。
+ */
+export function cursorPagination({
+  depth,
+  limit,
+  total,
+  count,
+  hasNext,
+}: {
+  depth: number;
+  limit: number;
+  total: number;
+  count: number;
+  hasNext: boolean;
+}) {
+  const size = Math.max(1, limit);
+  const page = Math.max(0, depth) + 1;
+  const offset = (page - 1) * size;
+  const totalPages = Math.max(page + (hasNext ? 1 : 0), Math.ceil(Math.max(0, total) / size), 1);
+  const range: PaginationRange = {
+    start: count === 0 ? 0 : offset + 1,
+    end: count === 0 ? 0 : offset + count,
+    total: Math.max(total, offset + count),
+  };
+  return { page, totalPages, range };
+}
+
 /** 1-based のページ番号を offset に直す。 */
 export function offsetForPage(page: number, limit: number) {
   return (Math.max(1, Math.floor(page)) - 1) * Math.max(1, limit);
+}
+
+/**
+ * サーバー側のページングで、件数が減って今のページが空になったとき（削除・権限の変更など）に移る offset（最後のページ）。
+ * 移らなくてよいときは `null`。空のページに「まだ〜がありません」を出さないために使う（会話の履歴など。#1265）。
+ */
+export function offsetAfterShrink({
+  offset,
+  limit,
+  total,
+  count,
+}: {
+  offset: number;
+  limit: number;
+  total: number;
+  count: number;
+}): number | null {
+  if (count > 0 || offset <= 0) return null;
+  const size = Math.max(1, limit);
+  const last = total > 0 ? offsetForPage(Math.ceil(total / size), size) : 0;
+  return last === offset ? null : last;
 }
 
 export interface PaginationProps {

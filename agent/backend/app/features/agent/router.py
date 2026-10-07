@@ -1844,8 +1844,14 @@ async def create_run(
 async def list_threads(
     request: Request,
     agent_id: str | None = None,
+    limit: int = Query(default=10, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[ThreadsData]:
-    """ログイン中の利用者の会話（チャット。#768）。使えなくなった Agent の会話は出さない。"""
+    """ログイン中の利用者の会話（チャット。#768）。使えなくなった Agent の会話は出さない。
+
+    会話の履歴は 3 製品と同じく、サーバー側でページングする
+    （新しい順、`limit` / `offset` と全件数。#1265）。
+    """
     policy = _actor_policy(request)
     threads = [
         thread
@@ -1854,7 +1860,14 @@ async def list_threads(
         )
         if _policy_allows_agent(policy, thread.agent_id)
     ]
-    return ApiResponse(data=ThreadsData(threads=threads))
+    return ApiResponse(
+        data=ThreadsData(
+            threads=threads[offset : offset + limit],
+            total=len(threads),
+            limit=limit,
+            offset=offset,
+        )
+    )
 
 
 @router.get("/threads/{thread_id}", response_model=ApiResponse[ThreadData])

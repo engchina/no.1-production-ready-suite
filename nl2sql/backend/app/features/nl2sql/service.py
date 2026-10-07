@@ -8210,16 +8210,17 @@ class Nl2SqlService:
         actor: str,
         profile_ids: set[str] | None,
         cursor: str | None = None,
+        limit: int = 10,
     ) -> SqlChatPage:
         if not actor:
             raise PermissionError("会話には認証済みの利用者が必要です。")
         repository = self._incremental_repository
         if repository is not None:
             try:
-                documents, next_cursor, _ = repository.list_documents_page(
+                documents, next_cursor, total = repository.list_documents_page(
                     "jobs",
                     cursor=cursor,
-                    limit=50,
+                    limit=limit,
                     profile_ids=profile_ids,
                     payload_filters={"actor_user_uuid": actor, "chat_root": "1"},
                 )
@@ -8232,7 +8233,7 @@ class Nl2SqlService:
             jobs = [self._job_from_snapshot(document) for document in documents]
         else:
             with self._lock:
-                jobs = sorted(
+                matched = sorted(
                     (
                         job
                         for job in self._jobs.values()
@@ -8246,10 +8247,17 @@ class Nl2SqlService:
                     ),
                     key=lambda job: (job.created_at, job.job_id),
                     reverse=True,
-                )[:50]
-            next_cursor = None
+                )
+            # メモリの保存先（開発・テスト）は件数が少ないので、カーソルを位置（offset）で表す。
+            start = int(cursor) if cursor and cursor.isdigit() else 0
+            jobs = matched[start : start + limit]
+            total = len(matched)
+            next_cursor = str(start + limit) if start + limit < total else None
         return SqlChatPage(
-            items=[self._sql_chat_summary(job) for job in jobs], next_cursor=next_cursor
+            items=[self._sql_chat_summary(job) for job in jobs],
+            next_cursor=next_cursor,
+            total=total,
+            limit=limit,
         )
 
     @staticmethod

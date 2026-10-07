@@ -447,7 +447,12 @@ class ThreadSummary(BaseModel):
 
 
 class ThreadsData(BaseModel):
+    """会話の一覧の 1 ページ（新しい順。#1265）。`total` は利用者が見られる会話の全件数。"""
+
     threads: list[ThreadSummary] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 10
+    offset: int = 0
 
 
 class ThreadData(BaseModel):

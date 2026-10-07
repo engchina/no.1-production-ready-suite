@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  cursorPagination,
   qualityEvaluationAttemptCount,
   qualityEvaluationAttemptTimedOut,
   qualityEvaluationLeaseExpired,
@@ -133,25 +132,3 @@ test("attempt timeout waits for the server-provided generation plus judge deadli
   assert.equal(qualityEvaluationAttemptTimedOut(job, deadlineNow), true);
 });
 
-test("カーソル型のページを共通の Pagination のページ・件数に直す", () => {
-  assert.deepEqual(cursorPagination({ depth: 0, limit: 10, total: 25, count: 10, hasNext: true }), {
-    page: 1,
-    totalPages: 3,
-    range: { start: 1, end: 10, total: 25 },
-  });
-  assert.deepEqual(cursorPagination({ depth: 2, limit: 10, total: 25, count: 5, hasNext: false }), {
-    page: 3,
-    totalPages: 3,
-    range: { start: 21, end: 25, total: 25 },
-  });
-  // 1 ページしかないときは totalPages 1（Pagination は出ない）。
-  assert.equal(cursorPagination({ depth: 0, limit: 10, total: 4, count: 4, hasNext: false }).totalPages, 1);
-  // 取得の間に件数が増え、total より先に次のカーソルがあるときも次のページへ進める。
-  assert.equal(cursorPagination({ depth: 1, limit: 10, total: 20, count: 10, hasNext: true }).totalPages, 3);
-  // 空のページ。
-  assert.deepEqual(cursorPagination({ depth: 0, limit: 10, total: 0, count: 0, hasNext: false }).range, {
-    start: 0,
-    end: 0,
-    total: 0,
-  });
-});

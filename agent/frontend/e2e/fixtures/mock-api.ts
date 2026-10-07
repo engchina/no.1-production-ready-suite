@@ -1159,17 +1159,19 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (!agentAllowed(state, run.agent_id)) continue;
       grouped.set(run.thread_id, [...(grouped.get(run.thread_id) ?? []), run]);
     }
-    return {
-      threads: [...grouped.entries()].map(([threadId, runs]) => ({
-        thread_id: threadId,
-        agent_id: runs[0].agent_id,
-        title: String(runs[0].goal).split("\n")[0],
-        run_count: runs.length,
-        last_status: runs[runs.length - 1].status,
-        created_at: runs[0].created_at,
-        updated_at: runs[runs.length - 1].updated_at,
-      })).reverse(),
-    };
+    // 会話の履歴のページング（limit / offset と全件数。#1265）。
+    const limit = Number(query.get("limit") ?? 10);
+    const offset = Number(query.get("offset") ?? 0);
+    const threads = [...grouped.entries()].map(([threadId, runs]) => ({
+      thread_id: threadId,
+      agent_id: runs[0].agent_id,
+      title: String(runs[0].goal).split("\n")[0],
+      run_count: runs.length,
+      last_status: runs[runs.length - 1].status,
+      created_at: runs[0].created_at,
+      updated_at: runs[runs.length - 1].updated_at,
+    })).reverse();
+    return { threads: threads.slice(offset, offset + limit), total: threads.length, limit, offset };
   }
   if (method === "GET" && at("threads", "*")) {
     const runs = state.runs.filter((run) => run.thread_id === second);

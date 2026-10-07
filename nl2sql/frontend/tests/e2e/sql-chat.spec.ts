@@ -64,6 +64,8 @@ async function setup(page: Page) {
             ? {
                 items: state.turns.length ? [conversation] : [],
                 next_cursor: null,
+                total: state.turns.length ? 1 : 0,
+                limit: 10,
               }
             : { conversation, turns: state.turns },
       },

@@ -991,7 +991,12 @@ export interface ThreadSummary {
 }
 
 export interface ThreadsData {
+  /** 1 ページ分の会話（新しい順。#1265）。 */
   threads: ThreadSummary[];
+  /** 利用者が見られる会話の全件数。 */
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface ThreadData {
@@ -1313,10 +1318,11 @@ export const agentApi = {
       `/api/agents/${encodeURIComponent(agentId)}/versions/${version}/restore`,
       { method: "POST" },
     ),
-  listThreads: (agentId?: string) =>
-    request<ThreadsData>(
-      `/api/threads${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""}`,
-    ),
+  listThreads: (agentId: string | undefined, page: { limit: number; offset: number }) => {
+    const params = new URLSearchParams({ limit: String(page.limit), offset: String(page.offset) });
+    if (agentId) params.set("agent_id", agentId);
+    return request<ThreadsData>(`/api/threads?${params.toString()}`);
+  },
   /** チャットの回答への評価（#774）。会話をした利用者だけ。付け直すと上書きする。 */
   putRunFeedback: (runId: string, payload: RunFeedbackPayload) =>
     request<RunState>(`/api/runs/${encodeURIComponent(runId)}/feedback`, {
