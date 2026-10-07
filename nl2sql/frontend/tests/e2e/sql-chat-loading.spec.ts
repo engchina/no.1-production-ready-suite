@@ -30,7 +30,7 @@ async function setup(page: Page) {
     route.fulfill({ json: { data: profile } }),
   );
   await page.route("**/api/nl2sql/chats**", (route) =>
-    route.fulfill({ json: { data: { items: [], next_cursor: null } } }),
+    route.fulfill({ json: { data: { items: [], next_cursor: null, total: 0, limit: 10 } } }),
   );
 }
 

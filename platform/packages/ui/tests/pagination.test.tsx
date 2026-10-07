@@ -6,6 +6,8 @@ import {
   Pagination,
   offsetForPage,
   offsetPagination,
+  offsetAfterShrink,
+  cursorPagination,
   usePagination,
   type UsePaginationOptions,
 } from "../src/components/data/pagination";
@@ -93,5 +95,40 @@ describe("offsetPagination（サーバー側のページング）", () => {
     expect(offsetForPage(1, 10)).toBe(0);
     expect(offsetForPage(3, 10)).toBe(20);
     expect(offsetForPage(0, 10)).toBe(0);
+  });
+});
+
+describe("offsetAfterShrink（件数が減って今のページが空になったとき。#1265）", () => {
+  it("空のページなら最後のページへ、行がある・1 ページ目・すでに最後なら移らない", () => {
+    expect(offsetAfterShrink({ offset: 20, limit: 10, total: 14, count: 0 })).toBe(10);
+    expect(offsetAfterShrink({ offset: 10, limit: 10, total: 0, count: 0 })).toBe(0);
+    expect(offsetAfterShrink({ offset: 10, limit: 10, total: 14, count: 4 })).toBeNull();
+    expect(offsetAfterShrink({ offset: 0, limit: 10, total: 0, count: 0 })).toBeNull();
+    expect(offsetAfterShrink({ offset: 10, limit: 10, total: 20, count: 0 })).toBeNull();
+  });
+});
+
+describe("cursorPagination（カーソル型のサーバー側のページング。NL2SQL から移した。#1265）", () => {
+  it("積んだカーソルの数と次のカーソルから、ページ・ページ数・件数に直す", () => {
+    expect(cursorPagination({ depth: 0, limit: 10, total: 25, count: 10, hasNext: true })).toEqual({
+      page: 1,
+      totalPages: 3,
+      range: { start: 1, end: 10, total: 25 },
+    });
+    expect(cursorPagination({ depth: 2, limit: 10, total: 25, count: 5, hasNext: false })).toEqual({
+      page: 3,
+      totalPages: 3,
+      range: { start: 21, end: 25, total: 25 },
+    });
+    // 1 ページしかないときは totalPages 1（Pagination は出ない）。
+    expect(cursorPagination({ depth: 0, limit: 10, total: 4, count: 4, hasNext: false }).totalPages).toBe(1);
+    // 取得の間に件数が増え、total より先に次のカーソルがあるときも次のページへ進める。
+    expect(cursorPagination({ depth: 1, limit: 10, total: 20, count: 10, hasNext: true }).totalPages).toBe(3);
+    // 空のページ。
+    expect(cursorPagination({ depth: 0, limit: 10, total: 0, count: 0, hasNext: false }).range).toEqual({
+      start: 0,
+      end: 0,
+      total: 0,
+    });
   });
 });

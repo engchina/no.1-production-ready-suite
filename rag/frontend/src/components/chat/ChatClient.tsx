@@ -18,6 +18,7 @@ import {
   ToggleChip,
   TimedLoadingState,
   DEFAULT_PAGE_SIZE,
+  offsetAfterShrink,
   offsetForPage,
   offsetPagination,
   toast,
@@ -52,7 +53,7 @@ import {
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
-import { ListPagination } from "@/components/ListPagination";
+import { listPaginationLabels } from "@/components/ListPagination";
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
 import { CitationCard } from "@/components/search/CitationCard";
 import { SavedAnswerRecord } from "@/components/search/SavedAnswerRecord";
@@ -549,20 +550,19 @@ export function ChatClient() {
     offset: conversationOffset,
   });
   const conversations = conversationsQuery.data?.items ?? [];
-  // 会話が減って今のページが空になったら、最後のページへ戻す（空の案内を出さない）。
+  // 会話が減って今のページが空になったら、最後のページへ戻す（空の案内を出さない。3 製品共通。#1265）。
   const conversationsData = conversationsQuery.data;
-  const conversationsOutOfRange = Boolean(
-    conversationsData &&
-      conversationsData.offset === conversationOffset &&
-      conversationsData.items.length === 0 &&
-      conversationOffset > 0
-  );
-  const lastConversationsOffset =
-    conversationsData && conversationsData.total > 0
-      ? offsetForPage(Math.ceil(conversationsData.total / DEFAULT_PAGE_SIZE), DEFAULT_PAGE_SIZE)
-      : 0;
-  if (conversationsOutOfRange && lastConversationsOffset !== conversationOffset) {
-    setConversationOffset(lastConversationsOffset);
+  const shrunkConversationOffset =
+    conversationsData && conversationsData.offset === conversationOffset
+      ? offsetAfterShrink({
+          offset: conversationOffset,
+          limit: DEFAULT_PAGE_SIZE,
+          total: conversationsData.total,
+          count: conversationsData.items.length,
+        })
+      : null;
+  if (shrunkConversationOffset !== null) {
+    setConversationOffset(shrunkConversationOffset);
   }
 
   const [activeId, setActiveId] = useWorkspaceState<string | null>(
@@ -1366,6 +1366,7 @@ export function ChatClient() {
         loading: "chat-conversations-loading",
         error: "chat-conversations-error",
         list: "chat-conversation-list",
+        pagination: "chat-conversations-pagination",
       }}
       renderEditor={(item) =>
         editingId === item.id ? (
@@ -1443,21 +1444,20 @@ export function ChatClient() {
           </>
         );
       }}
-      footer={
-        conversationsData && conversations.length > 0 ? (
-          <ListPagination
-            {...offsetPagination({
-              // 次のページを取得している間は、表示中のページ（前のページ）の範囲を出す。
-              offset: conversationsData.offset,
-              limit: DEFAULT_PAGE_SIZE,
-              total: conversationsData.total,
-              count: conversations.length,
-            })}
-            onPageChange={(next) => setConversationOffset(offsetForPage(next, DEFAULT_PAGE_SIZE))}
-            ariaLabel={t("chat.sessions.pagination")}
-            testId="chat-conversations-pagination"
-          />
-        ) : null
+      // 3 製品共通の会話の履歴のページング（#1265）。次のページを取得している間は、表示中のページの範囲を出す。
+      pagination={
+        conversationsData && conversations.length > 0
+          ? {
+              ...offsetPagination({
+                offset: conversationsData.offset,
+                limit: DEFAULT_PAGE_SIZE,
+                total: conversationsData.total,
+                count: conversations.length,
+              }),
+              onPageChange: (next) => setConversationOffset(offsetForPage(next, DEFAULT_PAGE_SIZE)),
+              labels: { ...listPaginationLabels(), ariaLabel: t("chat.sessions.pagination") },
+            }
+          : undefined
       }
     />
   );

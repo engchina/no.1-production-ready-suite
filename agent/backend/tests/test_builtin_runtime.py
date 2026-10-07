@@ -787,6 +787,28 @@ def test_thread_belongs_to_its_user_and_agent(calls: _Calls) -> None:
     assert thread_id not in {item.thread_id for item in others}
 
 
+def test_thread_api_pages_conversations(monkeypatch: MonkeyPatch, calls: _Calls) -> None:
+    """会話の履歴は新しい順に limit / offset でページングし、全件数を返す（#1265）。"""
+    from security_support import client
+
+    monkeypatch.setattr("app.features.agent.router._schedule_builtin_run", lambda run: None)
+    before = client.get(f"/api/threads?agent_id={AGENT_ID}").json()["data"]["total"]
+    created = []
+    for index in range(12):
+        response = client.post("/api/runs", json={"goal": f"質問 {index}", "agent_id": AGENT_ID})
+        assert response.status_code == 200, response.text
+        created.append(response.json()["data"]["thread_id"])
+
+    first = client.get(f"/api/threads?agent_id={AGENT_ID}").json()["data"]
+    assert (first["total"], first["limit"], first["offset"]) == (before + 12, 10, 0)
+    assert [item["thread_id"] for item in first["threads"]] == created[::-1][:10]
+    second = client.get(f"/api/threads?agent_id={AGENT_ID}&limit=10&offset=10").json()["data"]
+    assert [item["thread_id"] for item in second["threads"]][:2] == created[1::-1]
+    assert second["total"] == before + 12
+    assert client.get("/api/threads?limit=0").status_code == 422
+    assert client.get("/api/threads?offset=-1").status_code == 422
+
+
 def test_thread_api_lists_and_continues_conversation(
     monkeypatch: MonkeyPatch, calls: _Calls
 ) -> None:
@@ -814,6 +836,10 @@ def test_thread_api_lists_and_continues_conversation(
     [thread] = [item for item in listed.json()["data"]["threads"] if item["thread_id"] == thread_id]
     assert thread["title"] == "最初の質問"
     assert thread["run_count"] == 2
+
+    assert listed.json()["data"]["total"] >= 1
+    assert listed.json()["data"]["limit"] == 10
+    assert listed.json()["data"]["offset"] == 0
 
     detail = client.get(f"/api/threads/{thread_id}")
     assert detail.status_code == 200

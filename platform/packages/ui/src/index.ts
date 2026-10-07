@@ -174,6 +174,7 @@ export {
   ChatHistoryList,
   type ChatHistoryItem,
   type ChatHistoryListLabels,
+  type ChatHistoryPagination,
   type ChatHistoryListProps,
   type ChatHistoryListTestIds,
 } from "./components/chat/chat-history-list";
@@ -325,6 +326,8 @@ export {
   usePagination,
   offsetPagination,
   offsetForPage,
+  cursorPagination,
+  offsetAfterShrink,
   DEFAULT_PAGE_SIZE,
   type PaginationProps,
   type PaginationRange,

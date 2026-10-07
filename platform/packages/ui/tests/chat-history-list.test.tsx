@@ -50,7 +50,7 @@ afterEach(() => {
 describe("ChatHistoryList", () => {
   it("行は名前・補足・状態を出し、開いている会話に aria-current を付けて選べる", () => {
     const onSelect = vi.fn();
-    render({ currentId: "c2", onSelect, footer: <nav data-testid="pager" /> });
+    render({ currentId: "c2", onSelect });
     const list = host.querySelector('[data-testid="list"]')!;
     expect(list.getAttribute("aria-label")).toBe("会話の履歴");
     const buttons = list.querySelectorAll("button");
@@ -59,9 +59,50 @@ describe("ChatHistoryList", () => {
     expect(buttons[0].getAttribute("aria-current")).toBeNull();
     expect(buttons[1].getAttribute("aria-current")).toBe("true");
     expect(buttons[1].querySelector('[data-testid="badge"]')).not.toBeNull();
-    expect(host.querySelector('[data-testid="pager"]')).not.toBeNull();
     act(() => buttons[0].click());
     expect(onSelect).toHaveBeenCalledWith(items[0]);
+  });
+
+  it("2 ページ以上なら一覧の下に件数と前へ / 次へを出し、1 ページなら出さない（#1265）", () => {
+    const onPageChange = vi.fn();
+    const paginationLabels = {
+      summary: (range: { start: number; end: number; total: number }) =>
+        `${range.start} - ${range.end} / ${range.total} 件`,
+      pageIndicator: (page: number, total: number) => `${page} / ${total} ページ`,
+      prev: "前へ",
+      next: "次へ",
+      ariaLabel: "会話の履歴のページ",
+    };
+    render({
+      testIds: { list: "list", pagination: "pager" },
+      pagination: {
+        page: 1,
+        totalPages: 2,
+        range: { start: 1, end: 10, total: 14 },
+        onPageChange,
+        labels: paginationLabels,
+      },
+    });
+    const pager = host.querySelector('[data-testid="pager"]')!;
+    expect(pager.getAttribute("aria-label")).toBe("会話の履歴のページ");
+    expect(pager.textContent).toContain("1 - 10 / 14 件");
+    expect(pager.textContent).toContain("1 / 2 ページ");
+    const [prev, next] = Array.from(pager.querySelectorAll("button"));
+    expect(prev.disabled).toBe(true);
+    act(() => next.click());
+    expect(onPageChange).toHaveBeenCalledWith(2);
+
+    render({
+      testIds: { list: "list", pagination: "pager" },
+      pagination: {
+        page: 1,
+        totalPages: 1,
+        range: { start: 1, end: 2, total: 2 },
+        onPageChange,
+        labels: paginationLabels,
+      },
+    });
+    expect(host.querySelector('[data-testid="pager"]')).toBeNull();
   });
 
   it("選べない間は行を押せない", () => {

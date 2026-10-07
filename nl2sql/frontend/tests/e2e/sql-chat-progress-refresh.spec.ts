@@ -124,7 +124,9 @@ async function setup(page: Page): Promise<State> {
   await page.route("**/api/nl2sql/chats**", (route) => {
     const conversation = { id: "chat-1", title: "カテゴリ別売上", profile_id: "sales", created_at: createdAt };
     if (new URL(route.request().url()).pathname === "/api/nl2sql/chats")
-      return route.fulfill({ json: { data: { items: [conversation], next_cursor: null } } });
+      return route.fulfill({
+        json: { data: { items: [conversation], next_cursor: null, total: 1, limit: 10 } },
+      });
     state.chatRequests += 1;
     if (state.hangChats > 0) {
       // 応答しない（route を終えない）。画面が取り直しで打ち切るまで返らない。

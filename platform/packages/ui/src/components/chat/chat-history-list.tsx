@@ -3,6 +3,8 @@ import type { ReactNode } from "react";
 
 import { INFORMATION_LIST_ROW_CLASS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
+import { Pagination, type PaginationRange } from "../data/pagination";
+import type { PaginationLabels } from "../data/paged-data-table";
 import { ApiErrorBanner } from "../feedback/api-error-banner";
 import { TimedLoadingState } from "../feedback/processing-state";
 import { Button } from "../ui/button";
@@ -32,12 +34,28 @@ export interface ChatHistoryListLabels {
   empty: string;
 }
 
+/**
+ * 会話の履歴のページング（3 製品共通。#1265）。サーバー側のページングの結果を渡す。
+ * offset の API は `offsetPagination`、カーソル（`next_cursor` と `total`）の API は前へ戻るカーソルを製品が積んで
+ * page / totalPages / range を作る。1 ページしかないときは出さない。
+ */
+export interface ChatHistoryPagination {
+  /** 1-based の今のページ。 */
+  page: number;
+  totalPages: number;
+  range: PaginationRange;
+  onPageChange: (page: number) => void;
+  /** 件数・ページ・前へ / 次へ の文言（翻訳済み）。 */
+  labels: PaginationLabels;
+}
+
 export interface ChatHistoryListTestIds {
   /** 対象の一覧を待っている間の形だけの Skeleton（`waiting`）。 */
   skeleton?: string;
   loading?: string;
   error?: string;
   list?: string;
+  pagination?: string;
 }
 
 export interface ChatHistoryListProps {
@@ -64,8 +82,8 @@ export interface ChatHistoryListProps {
   renderActions?: (item: ChatHistoryItem, current: boolean) => ReactNode;
   /** 行をその場で編集している間の中身（名前の変更の欄）。`null` なら通常の行。 */
   renderEditor?: (item: ChatHistoryItem) => ReactNode | null;
-  /** 一覧の下（`Pagination`・「さらに読み込む」）。 */
-  footer?: ReactNode;
+  /** 一覧の下のページング（共通の `Pagination`。#1265）。一覧の下に常に見せる。 */
+  pagination?: ChatHistoryPagination;
   testIds?: ChatHistoryListTestIds;
   /** 読み込み中の経過時間の key（同じ取得の経過時間を 1 か所に出す）。 */
   operationKey?: string;
@@ -77,8 +95,28 @@ export interface ChatHistoryListProps {
  * - 行は名前（1 行で省略し `title` で全文）・補足（更新日時・件数）・状態のバッジ。開いている会話は地の色と `aria-current`。
  * - 読み込み中は文言と経過時間と行の形の `Skeleton`、失敗は `ApiErrorBanner` と再試行、0 件は短い文（messaging.md §3.6）。
  * - 「新しい会話」は一覧に置かない（会話の領域の上端の行の 1 か所。#889）。
- * - パネル・シートの高さまで伸ばし、超えたら一覧の中をスクロールする。`footer` のページ送りは一覧の下に常に見せる。
+ * - パネル・シートの高さまで伸ばし、超えたら一覧の中をスクロールする。`pagination` のページ送りは一覧の下に常に見せる
+ *   （3 製品とも 10 件 / ページ。件数「a - b / n 件」と「前へ / N / M ページ / 次へ」。#1265）。
  */
+function HistoryPagination({ pagination, testId }: { pagination: ChatHistoryPagination; testId?: string }) {
+  const { page, totalPages, range, onPageChange, labels } = pagination;
+  if (totalPages <= 1) return null;
+  return (
+    <Pagination
+      className="shrink-0 border-t border-border pt-2"
+      page={page}
+      totalPages={totalPages}
+      onPageChange={onPageChange}
+      summary={labels.summary(range)}
+      pageIndicator={labels.pageIndicator?.(page, totalPages)}
+      prevLabel={labels.prev}
+      nextLabel={labels.next}
+      ariaLabel={labels.ariaLabel}
+      testId={testId}
+    />
+  );
+}
+
 export function ChatHistoryList({
   items,
   currentId,
@@ -92,7 +130,7 @@ export function ChatHistoryList({
   labels,
   renderActions,
   renderEditor,
-  footer,
+  pagination,
   testIds,
   operationKey,
 }: ChatHistoryListProps) {
@@ -124,7 +162,7 @@ export function ChatHistoryList({
     return (
       <>
         <p className="px-1 text-sm text-fg-muted">{labels.empty}</p>
-        {footer}
+        {pagination ? <HistoryPagination pagination={pagination} testId={testIds?.pagination} /> : null}
       </>
     );
   }
@@ -187,7 +225,7 @@ export function ChatHistoryList({
           );
         })}
       </ul>
-      {footer}
+      {pagination ? <HistoryPagination pagination={pagination} testId={testIds?.pagination} /> : null}
     </>
   );
 }

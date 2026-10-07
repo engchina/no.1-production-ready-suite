@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
   Check,
@@ -40,6 +40,10 @@ import {
   useChatHistoryPanel,
   ApiErrorBanner,
   apiErrorMessage,
+  DEFAULT_PAGE_SIZE,
+  offsetAfterShrink,
+  offsetForPage,
+  offsetPagination,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -55,6 +59,7 @@ import {
 import { isRunnableAgent } from "@/lib/agent-availability";
 import { chatSubmitProgressSteps, runProgressSteps } from "@/lib/chat-progress";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
+import { agentPaginationLabels } from "@/components/ListViews";
 import { AnswerBody, ToolResultTable } from "@/components/chat/ResultTables";
 import { useAuth } from "@/components/security/AuthProvider";
 import { t } from "@/lib/i18n";
@@ -82,6 +87,23 @@ const POLL_INTERVAL_MS = 1500;
 const CHAT_PROGRESS_STALE_AFTER_MS = 10_000;
 /** 会話の 1 回の取得の上限（応答が返らない取得で取り直しを止めない。#1160）。 */
 const THREAD_FETCH_TIMEOUT_MS = 30_000;
+
+/** 会話の履歴のページ（どの Agent の一覧の offset か）。 */
+interface HistoryPage {
+  agentId: string;
+  offset: number;
+}
+
+function isHistoryPage(value: unknown): value is HistoryPage {
+  const page = value as HistoryPage;
+  return (
+    typeof page === "object" &&
+    page !== null &&
+    typeof page.agentId === "string" &&
+    Number.isInteger(page.offset) &&
+    page.offset >= 0
+  );
+}
 
 export function ChatPage() {
   const queryClient = useQueryClient();
@@ -118,11 +140,35 @@ export function ChatPage() {
   const selectedAgent = usableAgents.find((agent) => agent.id === agentId) ?? usableAgents[0];
   const selectedAgentId = selectedAgent?.id ?? "";
 
+  // 会話の履歴はサーバー側でページングする（3 製品共通。#1265）。ページは作業状態に残し、別の Agent に移ったら 1 ページ目から。
+  const [historyPage, setHistoryPage] = useWorkspaceState<"chat", HistoryPage>(
+    "chat",
+    "historyPage",
+    { agentId: "", offset: 0 },
+    isHistoryPage
+  );
+  const threadsOffset = historyPage.agentId === selectedAgentId ? historyPage.offset : 0;
+  const setThreadsOffset = (offset: number) => setHistoryPage({ agentId: selectedAgentId, offset });
   const threads = useQuery({
-    queryKey: ["threads", selectedAgentId],
-    queryFn: () => agentApi.listThreads(selectedAgentId),
+    queryKey: ["threads", selectedAgentId, threadsOffset],
+    queryFn: () => agentApi.listThreads(selectedAgentId, { limit: DEFAULT_PAGE_SIZE, offset: threadsOffset }),
     enabled: Boolean(selectedAgentId),
+    // 次のページを取得している間は、表示中のページを出したままにする。
+    placeholderData: keepPreviousData,
   });
+  // 会話が減って今のページが空になったら、最後のページへ戻す（空の案内を出さない）。
+  const shrunkThreadsOffset =
+    threads.data && threads.data.offset === threadsOffset
+      ? offsetAfterShrink({
+          offset: threadsOffset,
+          limit: DEFAULT_PAGE_SIZE,
+          total: threads.data.total,
+          count: threads.data.threads.length,
+        })
+      : null;
+  if (shrunkThreadsOffset !== null) {
+    setThreadsOffset(shrunkThreadsOffset);
+  }
   const thread = useQuery({
     queryKey: ["thread", threadId],
     queryFn: ({ signal }) =>
@@ -342,7 +388,22 @@ export function ChatPage() {
         loading: "chat-threads-loading",
         error: "chat-threads-error",
         list: "chat-thread-list",
+        pagination: "chat-threads-pagination",
       }}
+      pagination={
+        threads.data && threads.data.threads.length > 0
+          ? {
+              ...offsetPagination({
+                offset: threads.data.offset,
+                limit: DEFAULT_PAGE_SIZE,
+                total: threads.data.total,
+                count: threads.data.threads.length,
+              }),
+              onPageChange: (next) => setThreadsOffset(offsetForPage(next, DEFAULT_PAGE_SIZE)),
+              labels: { ...agentPaginationLabels(), ariaLabel: t("chat.threads.pagination") },
+            }
+          : undefined
+      }
     />
   );
 

@@ -1346,8 +1346,12 @@ class SqlChatSummary(BaseModel):
 
 
 class SqlChatPage(BaseModel):
+    """会話の履歴の 1 ページ（新しい順。カーソルと全件数。#1265）。"""
+
     items: list[SqlChatSummary]
     next_cursor: str | None = None
+    total: int = 0
+    limit: int = 10
 
 
 class SqlChatData(BaseModel):
