@@ -232,6 +232,61 @@
                 "default": null,
                 "description": "セル範囲（例: A3:F7）。",
                 "title": "Cell Range"
+              },
+              "page_label_start": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ。#1244）。",
+                "title": "Page Label Start"
+              },
+              "page_label_end": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "終了の頁の印刷の頁番号。",
+                "title": "Page Label End"
+              },
+              "bbox": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "number"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "開始の頁の中の領域 [x0, y0, x1, y1]（分かるときだけ）。",
+                "title": "Bbox"
+              },
+              "bbox_unit": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "bbox の単位（absolute=頁の座標 / normalized=0〜1）。",
+                "title": "Bbox Unit"
               }
             },
             "title": "EvidenceLocator",
@@ -566,6 +621,61 @@
                 "default": null,
                 "description": "セル範囲（例: A3:F7）。",
                 "title": "Cell Range"
+              },
+              "page_label_start": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ。#1244）。",
+                "title": "Page Label Start"
+              },
+              "page_label_end": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "終了の頁の印刷の頁番号。",
+                "title": "Page Label End"
+              },
+              "bbox": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "number"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "開始の頁の中の領域 [x0, y0, x1, y1]（分かるときだけ）。",
+                "title": "Bbox"
+              },
+              "bbox_unit": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "bbox の単位（absolute=頁の座標 / normalized=0〜1）。",
+                "title": "Bbox Unit"
               }
             },
             "title": "EvidenceLocator",
