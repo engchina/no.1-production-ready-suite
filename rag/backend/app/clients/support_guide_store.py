@@ -45,7 +45,11 @@ class SupportGuideConflictError(RuntimeError):
 
 
 def oracle_support_guide_schema_sql() -> str:
-    """業務ガイドの頭（下書き・公開の版の番号）の DDL（#1237）。"""
+    """業務ガイドの頭（下書き・公開の版の番号）の DDL（#1237）。
+
+    検索・回答プロファイルは削除せずアーカイブするため、プロファイルへの FK は持たない
+    （プロファイルの表の改名の migration と FK の修復に巻き込まない）。
+    """
     return f"""
 CREATE TABLE {GUIDES_TABLE} (
     guide_id                  VARCHAR2(64) PRIMARY KEY,
@@ -60,9 +64,7 @@ CREATE TABLE {GUIDES_TABLE} (
     created_at                TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at                TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_by                VARCHAR2(256),
-    CONSTRAINT {GUIDES_TABLE}_status_ck CHECK (status IN ('active', 'archived')),
-    CONSTRAINT {GUIDES_TABLE}_profile_fk FOREIGN KEY (search_answer_profile_id)
-        REFERENCES rag_search_answer_profiles (search_answer_profile_id) ON DELETE CASCADE
+    CONSTRAINT {GUIDES_TABLE}_status_ck CHECK (status IN ('active', 'archived'))
 );
 CREATE INDEX {GUIDES_TABLE}_profile_idx ON {GUIDES_TABLE} (search_answer_profile_id, status);
 """.strip()
