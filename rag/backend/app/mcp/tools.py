@@ -19,7 +19,7 @@ RAG のチャットは画面の機能で、MCP では提供しない（#787）�
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, get_args
 
 from fastapi import HTTPException, Request
 from pr_backend_core.api.validation import validation_tool_errors
@@ -180,10 +180,48 @@ class RagEvidence(BaseModel):
     rerank_score: float | None = None
 
 
+AnswerOutcome = Literal[
+    "answered",
+    "conditional",
+    "needs_clarification",
+    "needs_environment_data",
+    "needs_human",
+    "insufficient_evidence",
+]
+
+
+class AnswerRequest(BaseModel):
+    id: str = Field(description="質問の要求単位の ID（Q1 など）。")
+    text: str = Field(description="要求の原文。")
+    status: Literal["addressed", "partial", "missing", "unknown"] = Field(
+        description=(
+            "充足（addressed=答えた / partial=一部 / missing=答えていない / unknown=未確認）。"
+        )
+    )
+
+
 class SearchOutput(BaseModel):
     answer: str
     trace_id: str
     guardrail_warnings: list[str]
+    outcome: AnswerOutcome = Field(
+        description=(
+            "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / "
+            "needs_environment_data=現場の値・記録の確認が要る / insufficient_evidence=資料から答え"
+            "られない。needs_clarification / needs_human は利用者への確認・人への引き継ぎ。"
+        )
+    )
+    requests: list[AnswerRequest] = Field(
+        default_factory=list, description="質問の要求単位ごとの充足（背景の文は含めない）。"
+    )
+    conditions: list[str] = Field(
+        default_factory=list,
+        description="回答の説明が成り立つ条件（原文の語句。質問から確かめられないもの）。",
+    )
+    gaps: list[str] = Field(default_factory=list, description="資料から確かめられない点。")
+    confirmations: list[str] = Field(
+        default_factory=list, description="回答を確定するために確かめる現場のデータ・別の資料。"
+    )
     insufficient_reason: str | None = Field(
         default=None, description="根拠が足りず答えきれなかった理由（無ければ null）。"
     )
@@ -293,15 +331,42 @@ def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any
     )
     answer = _answer_diagnostics(result)
     reason = answer.get("insufficient_reason")
+    raw_envelope = answer.get("envelope")
+    envelope: dict[str, Any] = raw_envelope if isinstance(raw_envelope, dict) else {}
+    outcome = envelope.get("outcome") or answer.get("outcome")
+    if outcome not in get_args(AnswerOutcome):
+        # 構造の無い回答（古い記録など）は、引用と人の確認の印から決める。
+        if not result.citations:
+            outcome = "insufficient_evidence"
+        else:
+            outcome = "conditional" if answer.get("needs_human_review") is True else "answered"
     return {
         "answer": result.answer,
         "trace_id": result.trace_id,
         "guardrail_warnings": list(result.guardrail_warnings),
+        "outcome": outcome,
+        "requests": [
+            request
+            for request in envelope.get("requests", [])
+            if isinstance(request, dict)
+            and request.get("status") in {"addressed", "partial", "missing", "unknown"}
+        ],
+        "conditions": _strings(envelope.get("conditions")),
+        "gaps": _strings(envelope.get("gaps")),
+        "confirmations": _strings(envelope.get("confirmations")),
         "insufficient_reason": reason.strip() or None if isinstance(reason, str) else None,
         "needs_human_review": answer.get("needs_human_review") is True,
         "evidence": [_evidence(chunk) for chunk in ordered[:evidence_limit]],
         "evidence_omitted": max(0, len(ordered) - evidence_limit),
     }
+
+
+def _strings(value: object) -> list[str]:
+    return (
+        [item for item in value if isinstance(item, str) and item]
+        if isinstance(value, list)
+        else []
+    )
 
 
 def _text_window(text: str, offset: int, max_chars: int) -> tuple[str, bool, int | None]:
