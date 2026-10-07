@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { Fragment, useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 
+import { stabilizeMeasuredSize } from "../../lib/measured-size";
 import { cn } from "../../lib/utils";
 import { SKELETON_CLASS } from "../ui/skeleton";
 
@@ -165,15 +166,10 @@ export function measureVisibleRowsHeight({
 
 /**
  * 測り直した高さを、今の値との差が 1px 以内なら大きい方に寄せて変えない（#1222）。
- *
- * 拡大 125% などで大きさが小数になると、`max-height` の書き換えで `offsetHeight` / `clientHeight`
- * の整数への丸めが変わり、次の測定が 1px 違う値になる。そのまま書くと 2 つの値を往復し、
- * 表とページの高さが 1px ずつ交互に変わって画面が揺れる。大きい方に寄せるので中身は欠けない。
- * 2px 以上の変化（行の追加・幅の変化）はそのまま反映する。
+ * 共通の `stabilizeMeasuredSize`（`larger`。中身を収める高さなので欠けさせない）を使う。
  */
 export function stabilizeMeasuredHeight(current: number | undefined, next: number | undefined) {
-  if (current == null || next == null) return next;
-  return Math.abs(current - next) <= 1 ? Math.max(current, next) : next;
+  return stabilizeMeasuredSize(current, next, { prefer: "larger" });
 }
 
 function useMediaQuery(query: string) {

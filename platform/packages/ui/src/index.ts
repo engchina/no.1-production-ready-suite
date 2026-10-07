@@ -413,6 +413,7 @@ export {
   type FixedSplitPaneLabels,
 } from "./components/app-shell/fixed-split-pane";
 export * from "./lib/fixed-split-pane";
+export * from "./lib/measured-size";
 export {
   Breadcrumbs,
   type BreadcrumbItem,

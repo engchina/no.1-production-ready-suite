@@ -8,6 +8,16 @@ export const FIXED_SPLIT_LEFT_WIDE_FRACTION = GOLDEN_RATIO / (GOLDEN_RATIO + 1);
 export const FIXED_SPLIT_RIGHT_WIDE_FRACTION = 1 / (GOLDEN_RATIO + 1);
 export const FIXED_SPLIT_DIVIDER_SIZE_PX = 14;
 export const FIXED_SPLIT_DEFAULT_MIN_PANE_WIDTH_PX = 320;
+/** 横並びから縦積みへ戻す幅の余裕（境目の近くで往復しない。スクロールバー 1 本分より広く。#1222）。 */
+export const FIXED_SPLIT_LAYOUT_HYSTERESIS_PX = 24;
+
+/**
+ * 横並びにできる幅か（#1222）。縦積みから横並びへは境目以上で、横並びから縦積みへは境目より
+ * `FIXED_SPLIT_LAYOUT_HYSTERESIS_PX` 狭くなったときだけ切り替える（幅の小さな揺れで往復しない）。
+ */
+export function nextFixedSplitWideEnough(current: boolean, width: number, threshold: number): boolean {
+  return current ? width >= threshold - FIXED_SPLIT_LAYOUT_HYSTERESIS_PX : width >= threshold;
+}
 export const FIXED_SPLIT_KEYBOARD_STEP_PX = 24;
 export const FIXED_SPLIT_KEYBOARD_FAST_STEP_PX = 72;
 

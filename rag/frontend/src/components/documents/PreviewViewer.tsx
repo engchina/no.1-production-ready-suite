@@ -44,7 +44,13 @@ import {
   previewLayout,
   steppedZoom,
 } from "@/lib/preview-viewer";
-import { Button, Skeleton, cn } from "@engchina/production-ready-ui";
+import {
+  Button,
+  MEASURED_SIZE_TOLERANCE_PX,
+  Skeleton,
+  cn,
+  stabilizeMeasuredBox,
+} from "@engchina/production-ready-ui";
 
 export type PreviewViewerPage = {
   pageNumber: number;
@@ -175,8 +181,12 @@ export function PreviewViewer({
         rotation,
         mode,
         zoomPercent,
-        availableWidth: viewportSize.width - stagePadding.x,
-        availableHeight: viewportSize.height - stagePadding.y,
+        // 拡大 125% などで clientWidth / clientHeight が実寸より大きく丸められても、ページがはみ出して
+        // スクロールバーが出入りしない（幅が変わってフィットの計算と往復しない）よう 1px の余裕を残す。
+        // フィットの表示でスクロールバーが出ないので、幅の予約（scrollbar-gutter）はしない（ページの幅を
+        // 狭めない。#1222）。
+        availableWidth: viewportSize.width - stagePadding.x - MEASURED_SIZE_TOLERANCE_PX,
+        availableHeight: viewportSize.height - stagePadding.y - MEASURED_SIZE_TOLERANCE_PX,
       })
     : null;
 
@@ -206,13 +216,16 @@ export function PreviewViewer({
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
+    // 測った大きさの 1px の揺れは小さい方に寄せて書き戻さない（ページはビューポートの内側に置くため、
+    // 大きい方に寄せるとはみ出す。#1222）。
     const measure = () =>
-      setViewportSize((current) => {
-        const next = { width: viewport.clientWidth, height: viewport.clientHeight };
-        return current && current.width === next.width && current.height === next.height
-          ? current
-          : next;
-      });
+      setViewportSize((current) =>
+        stabilizeMeasuredBox(
+          current,
+          { width: viewport.clientWidth, height: viewport.clientHeight },
+          { prefer: "smaller" }
+        )
+      );
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);

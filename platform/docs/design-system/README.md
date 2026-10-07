@@ -729,6 +729,7 @@ import { SearchField } from "@engchina/production-ready-ui";
 
 - 外枠は `fixed inset-0` で視口に収め、本文は `main#pr-main` の中でスクロールする（#855）。document 側に第2の縦スクロールを作らない。長い一覧・詳細・設定の本文は切り捨てず、main のスクロールを維持する。
 - **スクロールバーによる幅変更を防ぐ（#867）**: `AppShell` の本文・ナビ、`DataTable`、一覧・候補選択、SideSheet・Dialog の縦スクロール領域には `scrollbar-gutter: stable` を指定する。通常の scrollbar が出たり消えたりしても本文幅・折り返し・表示行数の測定を変えない。overlay scrollbar では余白は増えない。横だけをスクロールする Tabs や操作部品には追加しない。表の動的な高さは利用可能な内幅を一定にしたうえで測定する。
+- **測った大きさの書き戻し（#1222）**: DOM で測った大きさ（`ResizeObserver`・`getBoundingClientRect`・`offsetHeight` / `clientWidth` など）を state・style（高さ・幅・`max-height`・段組み）に書き戻す処理は、必ず `stabilizeMeasuredSize` / `stabilizeMeasuredBox`（`@engchina/production-ready-ui`）を通し、差が 1px 以内の測り直しでは値を変えない。拡大 125% などで大きさが小数になると、整数への丸めが書き換えのたびに変わり、測定が 2 つの値を往復して画面が揺れ続ける（RAG の利用者フィードバック画面で報告）。中身を収める大きさ（表の `max-height`）は `prefer: "larger"`、容れ物の内側に置く大きさの上限（プレビューのページ）は `prefer: "smaller"` にし、内側に置く大きさには 1px の余裕（`MEASURED_SIZE_TOLERANCE_PX`）を残す。測った幅で配置を切り替える処理（横並び / 縦積み）は、戻すときだけ境目より狭い値にする（`nextFixedSplitWideEnough`）。はみ出しの判定（`scrollHeight > clientHeight` など）は 1px の余裕を持たせる。
 - チャットは会話の内部スクロールと入力欄を分ける。自動移動・引用への移動は会話コンテナの `scrollTo` で行い、祖先まで動かす `scrollIntoView` を使わない。狭い画面では会話の高さを制限し、長い回答でページを無限に伸ばさない。
 
 - **`.pr-skip-link`（本文へスキップ）と `<main id="pr-main" tabIndex={-1}>` を出力。** サイドバーが20項目を超えるため、キーボード利用者が毎ページ全 nav を Tab 通過していました
