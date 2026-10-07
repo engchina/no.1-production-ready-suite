@@ -3573,6 +3573,8 @@ export interface SupportGuideCondition {
   source: SupportGuideConditionSource;
   unknown_handling: SupportGuideUnknownHandling;
   question: string;
+  /** 選択肢の言い換え（選択肢 → 質問に出る語）。質問にこの語が出れば聞き直さない。 */
+  value_aliases?: Record<string, string[]>;
 }
 
 export interface SupportGuideStep {

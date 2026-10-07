@@ -391,3 +391,32 @@ def test_import_preview_and_import_create_drafts_only(fakes: tuple[FakeStore, Fa
 
     imported = client.post(f"{BASE}/import", json={"guides": [guide()]}).json()["data"]
     assert imported["created"][0]["published_revision"] is None
+
+
+def test_condition_value_aliases_are_validated() -> None:
+    from pydantic import ValidationError
+
+    ok = content(
+        conditions=[
+            {
+                "id": "target",
+                "label": "付与先",
+                "allowed_values": ["個別", "グループ"],
+                "question": "どちらですか？",
+                "value_aliases": {"個別": [" 検証用アカウント ", ""], "グループ": []},
+            }
+        ]
+    )
+    assert ok.conditions[0].value_aliases == {"個別": ["検証用アカウント"]}
+    with pytest.raises(ValidationError):  # 選択肢に無い値の言い換え
+        content(
+            conditions=[
+                {
+                    "id": "target",
+                    "label": "付与先",
+                    "allowed_values": ["個別", "グループ"],
+                    "question": "どちらですか？",
+                    "value_aliases": {"全員": ["みんな"]},
+                }
+            ]
+        )

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { SupportGuideContent } from "./api";
 import {
+  aliasesToText,
+  textToAliases,
   emptyGuideForm,
   guideContentFromForm,
   guideFormFromContent,
@@ -49,6 +51,7 @@ const content: SupportGuideContent = {
       source: "user",
       unknown_handling: "ask",
       question: "アカウントの種類は？",
+      value_aliases: { 社員: ["正社員"] },
     },
   ],
   steps: [
@@ -254,3 +257,13 @@ it("書き出しのファイル名はプロファイルと日付を含む", () =
     "support-guides-bv_1-20261007.json",
   );
 });
+
+describe("言い換え（value_aliases）", () => {
+  it("「選択肢: 語、語」の行と言い換えを往復する", () => {
+    const aliases = textToAliases("個別: 検証用アカウント、利用者\nグループ：部署\n壊れた行\n空: ");
+    expect(aliases).toEqual({ 個別: ["検証用アカウント", "利用者"], グループ: ["部署"] });
+    expect(aliasesToText(aliases)).toBe("個別: 検証用アカウント、利用者\nグループ: 部署");
+    expect(textToAliases("")).toEqual({});
+  });
+});
+
