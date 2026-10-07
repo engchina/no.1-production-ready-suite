@@ -36,6 +36,7 @@ import {
   type QueryHistorySettingsData,
   type AnsweringSettingsUpdate,
   type DocumentKnowledgeBaseReplaceRequest,
+  type DocumentSupersededByRequest,
   type DocumentProcessingConfig,
   type DocumentExtractionExportFormat,
   type EvaluationCompareRequestBody,
@@ -322,9 +323,10 @@ export function useDocuments(
     limit?: number;
     offset?: number;
   },
-  options: { graceActive?: boolean } = {},
+  options: { graceActive?: boolean; enabled?: boolean } = {},
 ) {
   return useQuery({
+    enabled: options.enabled ?? true,
     queryKey: queryKeys.documents({
       status: params.status,
       q: params.q,
@@ -713,6 +715,25 @@ export function useSaveDocumentClassification() {
       qc.setQueryData(queryKeys.document(detail.id), detail);
       // 新しく入力した値を、次の入力の候補に出す。
       qc.invalidateQueries({ queryKey: queryKeys.documentClassificationOptions });
+    },
+  });
+}
+
+/** 文書を置き換えた新しい版を設定・解除する（#1248）。一覧の旧版の印も変わるので取り直す。 */
+export function useSaveDocumentSupersededBy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: DocumentSupersededByRequest }) =>
+      api.saveDocumentSupersededBy(id, payload),
+    onSuccess: (detail) => {
+      qc.setQueryData(queryKeys.document(detail.id), detail);
+      // 一覧（key の 2 番目が条件の object）だけを取り直す。開いている文書の詳細・レシピなどは取り直さない。
+      qc.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "documents" &&
+          typeof query.queryKey[1] === "object" &&
+          query.queryKey[1] !== null,
+      });
     },
   });
 }

@@ -514,6 +514,90 @@ test("章節を直し・追加・削除して保存し、抽出結果に戻せ�
   await expectNoHorizontalOverflow(page);
 });
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900, theme: "light" },
+  { name: "mobile", width: 375, height: 900, theme: "dark" },
+] as const) {
+  test(`文書詳細で新しい版を選んで保存し、解除できる (${viewport.name} / ${viewport.theme})`, async ({
+    page,
+  }, testInfo) => {
+    await page.addInitScript((theme) => {
+      window.localStorage.setItem(
+        "production-ready-rag.ui",
+        JSON.stringify({ state: { theme }, version: 0 }),
+      );
+    }, viewport.theme);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const state = await mockDocumentDetail(page);
+
+    await page.goto("/documents/doc-1");
+
+    const section = page.getByTestId("document-version");
+    await expect(section.getByRole("heading", { name: "版" })).toBeVisible();
+    await expect(section).toContainText("今有効な版です。");
+    const save = section.getByRole("button", { name: "版を保存" });
+    await expect(save).toBeDisabled();
+    // 候補は欄に触れるまで読まない（文書詳細を開くたびに一覧を読まない）。
+    expect(state.listQueries).toEqual([]);
+
+    const picker = section.getByRole("button", { name: /^この文書を置き換えた新しい版/ });
+    await picker.click();
+    // 文書自身と、この文書に置き換えられた文書（循環する）は候補に出さない。
+    const listbox = page.getByRole("listbox", { name: "この文書を置き換えた新しい版" });
+    await expect(listbox.getByRole("option")).toHaveCount(1);
+    await listbox.getByRole("option", { name: /経費精算規程/ }).click();
+    await expect(save).toBeEnabled();
+    await save.click();
+
+    await expect.poll(() => state.supersededPayloads).toEqual([{ superseded_by_document_id: "doc-2" }]);
+    await expect(section.getByText("新しい版を保存しました。", { exact: false })).toBeVisible();
+    // 旧版の印（アイコン + 文言）と、新しい版へのリンクを出す。
+    await expect(section.getByText("旧版", { exact: true })).toBeVisible();
+    const link = section.getByRole("link", { name: /経費精算規程/ });
+    await expect(link).toHaveAttribute("href", "/documents/doc-2");
+    await expectNoHorizontalOverflow(page);
+    await section.scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: testInfo.outputPath(`document-version-${viewport.name}-${viewport.theme}.png`),
+    });
+
+    await section.getByRole("button", { name: "置き換えを解除" }).click();
+    await expect
+      .poll(() => state.supersededPayloads.at(-1))
+      .toEqual({ superseded_by_document_id: null });
+    await expect(section.getByText("置き換えを解除しました。", { exact: false })).toBeVisible();
+    await expect(section).toContainText("今有効な版です。");
+    await expect(section.getByRole("button", { name: "置き換えを解除" })).toHaveCount(0);
+  });
+}
+
+test("文書詳細の版の保存の失敗は、操作の行に理由を出す", async ({ page }) => {
+  await mockDocumentDetail(page);
+  await page.route("**/api/documents/doc-1/superseded-by", async (route) => {
+    await route.fulfill({
+      status: 422,
+      json: {
+        data: null,
+        error_messages: ["新しい版の文書が、この文書に置き換えられています(版の置き換えが循環します)。"],
+        warning_messages: [],
+      },
+    });
+  });
+
+  await page.goto("/documents/doc-1");
+  const section = page.getByTestId("document-version");
+  await section.getByRole("button", { name: /^この文書を置き換えた新しい版/ }).click();
+  await page
+    .getByRole("listbox", { name: "この文書を置き換えた新しい版" })
+    .getByRole("option", { name: /経費精算規程/ })
+    .click();
+  await section.getByRole("button", { name: "版を保存" }).click();
+
+  await expect(section.getByText(/循環します/)).toBeVisible();
+  await expect(section).toContainText("今有効な版です。");
+  await expectNoHorizontalOverflow(page);
+});
+
 async function mockDocumentDetail(
   page: Page,
   overrides?: { extraction?: Record<string, unknown>; chunks?: unknown[] }
@@ -527,11 +611,23 @@ async function mockDocumentDetail(
     lastReplacePayload: { knowledge_base_ids: string[] } | null;
     lastClassificationPayload: Record<string, unknown> | null;
     classification: Record<string, unknown> | null;
+    supersededPayloads: Record<string, unknown>[];
+    supersededBy: string | null;
+    listQueries: string[];
   } = {
     lastReplacePayload: null,
     lastClassificationPayload: null,
     classification: null,
+    supersededPayloads: [],
+    supersededBy: null,
+    listQueries: [],
   };
+  // 文書の版の候補（#1248）。doc-0 は doc-1 に置き換えられた文書（選ぶと循環するので候補に出さない）。
+  const versionCandidates = [
+    { id: "doc-1", file_name: "policy.txt", superseded_by_document_id: null },
+    { id: "doc-2", file_name: "policy-2026年度改訂版_全社共通_経費精算規程.txt", superseded_by_document_id: null },
+    { id: "doc-0", file_name: "policy-2025.txt", superseded_by_document_id: "doc-1" },
+  ];
 
   await page.route("**/api/knowledge-bases**", async (route) => {
     await route.fulfill({
@@ -716,6 +812,42 @@ async function mockDocumentDetail(
         quality_warnings: [],
       },
       classification: state.classification,
+      superseded_by_document_id: state.supersededBy,
+      superseded_by_file_name: state.supersededBy
+        ? (versionCandidates.find((item) => item.id === state.supersededBy)?.file_name ?? null)
+        : null,
+      superseded_at: state.supersededBy ? "2026-10-07T01:00:00Z" : null,
+      is_superseded: state.supersededBy !== null,
+  });
+  await page.route(
+    (url) => url.pathname === "/api/documents",
+    async (route) => {
+      const url = new URL(route.request().url());
+      state.listQueries.push(url.search);
+      const q = url.searchParams.get("q") ?? "";
+      const items = versionCandidates
+        .filter((item) => !q || item.file_name.includes(q))
+        .map((item) => ({
+          ...documentData(),
+          ...item,
+          is_superseded: item.superseded_by_document_id !== null,
+        }));
+      await route.fulfill({
+        json: {
+          data: { items, total: items.length, limit: 50, offset: 0, has_next: false },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+    },
+  );
+  await page.route("**/api/documents/doc-1/superseded-by", async (route) => {
+    const payload = route.request().postDataJSON() as Record<string, unknown>;
+    state.supersededPayloads.push(payload);
+    state.supersededBy = (payload.superseded_by_document_id as string | null) ?? null;
+    await route.fulfill({
+      json: { data: documentData(), error_messages: [], warning_messages: [] },
+    });
   });
   await page.route("**/api/documents/classification-options", async (route) => {
     await route.fulfill({

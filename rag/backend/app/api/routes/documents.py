@@ -34,6 +34,7 @@ from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS
 from app.clients.oracle import (
     DocumentDeleteBlockedByRunningIngestionError,
     DocumentSectionsConflictError,
+    DocumentSupersessionError,
     OracleClient,
     is_transient_oracle_error,
     oracle_error_log_fields,
@@ -139,6 +140,7 @@ from app.schemas.document import (
     DocumentSectionsData,
     DocumentSectionsSaveRequest,
     DocumentSummary,
+    DocumentSupersededByRequest,
     DocumentTableCellTextEdit,
     DuplicateDocumentRef,
     FileStatus,
@@ -2584,6 +2586,28 @@ async def save_document_classification(
     """文書の分類と有効期間を保存する。検索の分類フィルタと基準日の絞り込みに使う。"""
     try:
         detail = await OracleClient().save_document_classification(document_id, body)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。") from exc
+    return ApiResponse(data=detail)
+
+
+@router.put("/{document_id}/superseded-by", response_model=ApiResponse[DocumentDetail])
+async def save_document_superseded_by(
+    document_id: str,
+    body: DocumentSupersededByRequest,
+) -> ApiResponse[DocumentDetail]:
+    """文書を置き換えた新しい版を設定・解除する(#1248)。
+
+    新しい版を設定した文書(旧版)の chunk は、既定では回答の検索の対象から外す
+    (filters の ``include_superseded=true`` で含める)。null で解除する。
+    自分自身・循環・見えない新しい版は 422。
+    """
+    try:
+        detail = await OracleClient().set_document_superseded_by(
+            document_id, body.superseded_by_document_id
+        )
+    except DocumentSupersessionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。") from exc
     return ApiResponse(data=detail)

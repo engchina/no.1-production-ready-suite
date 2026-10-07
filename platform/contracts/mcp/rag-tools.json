@@ -350,6 +350,12 @@
             "default": false,
             "title": "Parent Truncated",
             "type": "boolean"
+          },
+          "superseded": {
+            "default": false,
+            "description": "新しい版に置き換えた文書（旧版）の根拠か。",
+            "title": "Superseded",
+            "type": "boolean"
           }
         },
         "required": [
@@ -422,7 +428,7 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "検索フィルター（例: category_name）。",
+            "description": "検索フィルター（例: category_name）。新しい版に置き換えた文書（旧版）は既定で検索しない。旧版・変更点を尋ねるときは include_superseded に true を渡す。",
             "title": "Filters",
             "type": "object"
           },
@@ -665,6 +671,12 @@
                 ],
                 "default": null,
                 "title": "Rerank Score"
+              },
+              "superseded": {
+                "default": false,
+                "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（filters の include_superseded=true で含める）。",
+                "title": "Superseded",
+                "type": "boolean"
               }
             },
             "required": [
@@ -773,7 +785,7 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "検索フィルター（例: category_name）。",
+            "description": "検索フィルター（例: category_name）。新しい版に置き換えた文書（旧版）は既定で検索しない。旧版・変更点を尋ねるときは include_superseded に true を渡す。",
             "title": "Filters",
             "type": "object"
           },
@@ -1048,6 +1060,12 @@
                 ],
                 "default": null,
                 "title": "Rerank Score"
+              },
+              "superseded": {
+                "default": false,
+                "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（filters の include_superseded=true で含める）。",
+                "title": "Superseded",
+                "type": "boolean"
               }
             },
             "required": [

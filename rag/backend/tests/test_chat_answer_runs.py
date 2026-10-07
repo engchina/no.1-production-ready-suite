@@ -506,8 +506,11 @@ def test_message_schema_and_migration_add_answer_run_columns() -> None:
     for column in ("progress_json        JSON", "lease_owner", "heartbeat_at"):
         assert column in ddl
     assert "'STREAMING', 'COMPLETE', 'ERROR', 'CANCELLED'" in ddl
-    migration = oracle_schema.oracle_schema_migration_sections()[-1]
-    assert migration.name == "20261005_001_message_answer_runs"
+    migration = next(
+        section
+        for section in oracle_schema.oracle_schema_migration_sections()
+        if section.name == "20261005_001_message_answer_runs"
+    )
     assert not migration.destructive
     for column in ("PROGRESS_JSON", "LEASE_OWNER", "HEARTBEAT_AT"):
         assert f"column_name = '{column}'" in migration.sql

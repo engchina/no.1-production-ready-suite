@@ -125,6 +125,8 @@ Object Storage は `PLATFORM_OBJECT_STORAGE_REGION` / `PLATFORM_OBJECT_STORAGE_N
 
 RAG のチャット（会話の作成・送信・取得）は画面の機能で、MCP では提供しません（#787）。MCP で提供するのは検索（`rag_search`）と、その対象を選ぶための検索・回答プロファイルの一覧だけです。
 
+新しい版に置き換えた文書（旧版。#1248）は、既定では検索しません。旧版・変更点を尋ねるときは `filters` に `include_superseded: "true"` を渡します。旧版の根拠は `superseded: true` で返します（`rag_read_source` は旧版の根拠も読めます）。
+
 ツールの業務エラーは `isError: true` の `structuredContent` に `error_code` / `message` / `status` で返します（例: 範囲外の検索・回答プロファイルは `status: 404`、KB の範囲外は `error_code: RAG_SCOPE_FORBIDDEN`、タイムアウトは `status: 504`、rate limit は `status: 429`）。
 
 ## Readiness

@@ -42,7 +42,7 @@ from app.rag.search_answer_profile_migration import rename_sql as search_answer_
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "3"
-MIGRATION_ARTIFACT_VERSION = "20261005_001"
+MIGRATION_ARTIFACT_VERSION = "20261007_001"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -314,7 +314,40 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             sql=message_answer_runs_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261007_001_document_superseded",
+            table_name="rag_documents",
+            sql=document_superseded_migration_sql(),
+        )
+    )
     return sections
+
+
+def document_superseded_migration_sql() -> str:
+    """文書の版(置き換えた新しい版の文書と、置き換えた日時)の列を無ければ足す(#1248)。
+
+    列を足すだけでデータは変えない。自己参照の FK は付けない(存在・循環はアプリで検証する)。
+    """
+    columns = (
+        ("SUPERSEDED_BY_DOCUMENT_ID", "superseded_by_document_id VARCHAR2(64)"),
+        ("SUPERSEDED_AT", "superseded_at TIMESTAMP WITH TIME ZONE"),
+    )
+    column_blocks = "\n".join(
+        f"""    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS' AND column_name = '{name}';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD ({definition})';
+    END IF;
+"""
+        for name, definition in columns
+    )
+    return f"""DECLARE
+    v_count NUMBER;
+BEGIN
+{column_blocks}END;
+/"""
 
 
 def message_answer_runs_migration_sql() -> str:

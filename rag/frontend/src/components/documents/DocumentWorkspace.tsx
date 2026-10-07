@@ -22,6 +22,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { DocumentPreview } from "./DocumentPreview";
 import { DocumentRecipeManager } from "./DocumentRecipeManager";
+import { DocumentVersionEditor } from "./DocumentVersionEditor";
 import { DocumentExtraction, DocumentRawText } from "./DocumentExtraction";
 import {
   DocumentChunksJsonDownload,
@@ -1257,6 +1258,8 @@ export function DocumentWorkspace({
           documentId={documentId}
           classification={doc.classification ?? null}
         />
+
+        <DocumentVersionEditor document={doc} />
 
         {/* 左右の幅（#579）。ページの大きさは左ペインの幅で決まる（高さは幅とページの縦横比から。#559）。
             - xl（1280px〜）: 今までどおりほぼ半分ずつ。右ペインの幅（約 450px）をこれ以上削ると、右のタブが入り切らない。

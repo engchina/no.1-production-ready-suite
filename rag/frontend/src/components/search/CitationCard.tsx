@@ -1,4 +1,4 @@
-import { FileText, Layers, LocateFixed } from "lucide-react";
+import { FileText, History, Layers, LocateFixed } from "lucide-react";
 import { useState } from "react";
 import { Button, StatusBadge } from "@engchina/production-ready-ui";
 
@@ -60,6 +60,14 @@ export function CitationCard({
                 {chunk.file_name ?? chunk.document_id}
               </span>
             </span>
+            {/* 新しい版に置き換えた文書（旧版）の根拠（#1248。include_superseded で含めたときだけ出る）。 */}
+            {chunk.metadata.document_superseded === true ? (
+              <StatusBadge
+                variant="warning"
+                icon={History}
+                label={t("search.citation.superseded")}
+              />
+            ) : null}
             {/* 回答の文脈に入れた根拠のうち、回答に使ったもの（#1208）。 */}
             {citationModelUsed(chunk) ? (
               <StatusBadge variant="info" label={t("search.answerDetails.modelUsed")} />
