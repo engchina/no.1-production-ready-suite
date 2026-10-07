@@ -247,6 +247,12 @@ def _lines(match: GuideMatch) -> list[str]:
         lines.append(
             "分かっている条件: " + "、".join(f"{s.condition.label}={s.value}" for s in known)
         )
+        # 既知の条件に当たる場合だけを答える（別の場合の手順を並べない。#1238 の実環境の確認）。
+        lines.append(
+            "分かっている条件に当たる場合の手順・注意だけを答え、"
+            + "、".join(f"{s.condition.label}が「{s.value}」以外の場合" for s in known)
+            + "の手順は答えに含めない。"
+        )
     unknown = [state.condition for state in match.states if not state.known]
     if unknown:
         lines.append(

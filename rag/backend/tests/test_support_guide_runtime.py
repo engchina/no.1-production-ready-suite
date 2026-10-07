@@ -151,6 +151,7 @@ def test_guide_becomes_a_pinned_rule_with_steps_and_hints() -> None:
     assert rule["tags"] == ["pinned", "support_guide"]
     assert rule["triggers"] == ["権限タブ"]
     assert "分かっている条件: 付与先=グループ" in rule["content"]
+    assert "付与先が「グループ」以外の場合の手順は答えに含めない" in rule["content"]
     assert "手順 2. 権限を選んで付与する（open の後）" in rule["content"]
     assert "実施の前に承認が要る" in rule["content"]
     payload = with_guide_rule({"terms": [{"term": "x"}], "rules": [{"id": "r1"}]}, match)
