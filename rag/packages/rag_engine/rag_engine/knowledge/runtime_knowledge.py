@@ -435,10 +435,17 @@ def _matched_terms(question: str, terms: Sequence[RuntimeTerm], limit: int) -> l
     return [term for _, _, term in sorted(scored, key=lambda item: (-item[0], item[1]))[: max(1, limit)]]
 
 
+# 呼び出し元が質問に合うと決めて渡したルール（業務ガイド。#1238）。語の一致に関係なく必ず使う。
+PINNED_RULE_TAG = "pinned"
+
+
 def _matched_rules(question: str, rules: Sequence[RuntimeRule], limit: int) -> list[RuntimeRule]:
     scored: list[tuple[int, int, RuntimeRule]] = []
     for index, rule in enumerate(rules):
         if not rule.active:
+            continue
+        if PINNED_RULE_TAG in rule.tags:
+            scored.append((1_000, index, rule))
             continue
         score = 0
         for label in rule.labels():
@@ -460,6 +467,10 @@ def _expanded_question(
     for term in matched_terms:
         additions.extend(term.labels())
     for rule in matched_rules:
+        if PINNED_RULE_TAG in rule.tags:
+            # 業務ガイドの trigger は手順の検索の手がかり。検索文に足す（#1238）。
+            additions.extend(rule.triggers)
+            continue
         # trigger は別名ではない。ある条件の一致だけで他条件や業務IDを検索へ流さない。
         additions.extend(label for label in rule.labels() if _matches(question, label))
         if any(_matches(rule.title, label) for label in rule.labels() if _matches(question, label)) and not re.search(r'[A-Za-z]{2,}[\w-]*\d', rule.title):

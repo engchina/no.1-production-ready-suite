@@ -48,11 +48,29 @@ class RagSearchIn(_ContractInput):
     conditions: dict[str, str] | None = None
 
 
+class RagLookupGuidesIn(_ContractInput):
+    query: str
+    search_answer_profile_id: str
+    conditions: dict[str, str] | None = None
+    limit: int = Field(default=3, ge=1, le=10)
+
+
 class RagReadSourceIn(_ContractInput):
     document_id: str
     chunk_id: str
     offset: int = Field(default=0, ge=0)
     max_chars: int = Field(default=8000, ge=1, le=20000)
+
+
+class RagEvidenceRefIn(_ContractInput):
+    document_id: str = Field(min_length=1, max_length=128)
+    chunk_id: str = Field(min_length=1, max_length=512)
+
+
+class RagValidateAnswerIn(_ContractInput):
+    query: str = Field(min_length=1, max_length=8000)
+    answer: str = Field(min_length=1, max_length=20000)
+    evidence: list[RagEvidenceRefIn] = Field(min_length=1, max_length=30)
 
 
 class RagListSearchAnswerProfilesIn(_ContractInput):
@@ -156,11 +174,56 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
             }
         ]
     },
+    "rag_lookup_guides": {
+        "guides": [
+            {
+                "guide_id": "guide-1",
+                "revision": 1,
+                "title": "契約の更新",
+                "decision": "clarify",
+                "known_conditions": [],
+                "unknown_conditions": [{"id": "kind", "label": "契約の種類", "handling": "ask"}],
+                "expected_result": "契約を更新できる",
+                "score": 2,
+                "clarifications": [
+                    {
+                        "condition_id": "kind",
+                        "label": "契約の種類",
+                        "question": "契約の種類は何ですか？",
+                        "options": ["年間", "月額"],
+                    }
+                ],
+                "steps": [
+                    {"id": "s1", "title": "契約を開く", "depends_on": [], "allowed_tools": []}
+                ],
+                "impact_scope": "individual",
+                "approval_required": False,
+                "handoff_contact": "",
+            }
+        ]
+    },
     "rag_retrieve_evidence": {
         "trace_id": "rag-trace-2",
         "guardrail_warnings": [],
         "evidence": [{**_EVIDENCE, "used_in_answer": False}],
         "evidence_omitted": 0,
+    },
+    # 回答の最終の検証（#1246）。既定は根拠で裏付けられた回答。
+    "rag_validate_answer": {
+        "valid": True,
+        "status": "completed",
+        "counts": {"supported": 1, "unsupported": 0, "contradicted": 0},
+        "claims": [
+            {
+                "answer_quote": "根拠付き回答",
+                "status": "supported",
+                "chunk_id": "chunk-1",
+                "reason": "根拠の契約条項に書かれている。",
+            }
+        ],
+        "missing_evidence": [],
+        "stale_evidence": [],
+        "evidence_truncated": False,
     },
     "nl2sql_query": _job(),
     "nl2sql_get_job": _job(),
@@ -203,7 +266,9 @@ class FakeProductMcp:
                     self._tool("rag_search", RagSearchIn),
                     self._tool("rag_list_search_answer_profiles", RagListSearchAnswerProfilesIn),
                     self._tool("rag_read_source", RagReadSourceIn),
+                    self._tool("rag_lookup_guides", RagLookupGuidesIn),
                     self._tool("rag_retrieve_evidence", RagSearchIn),
+                    self._tool("rag_validate_answer", RagValidateAnswerIn),
                 ],
             ),
             "nl2sql": McpServer(
