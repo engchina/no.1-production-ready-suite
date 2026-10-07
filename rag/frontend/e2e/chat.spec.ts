@@ -695,6 +695,9 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
     reasoning_summary: "引用照合済みの説明 1 件、原文のみ提示 0 件、原文と一致せず除外 0 件。",
     external_data_required: true,
     external_data_items: ["申請者の役職"],
+    // 回答の対応と業務ガイド（#1252）。
+    outcome: "needs_environment_data",
+    guide: { guide_id: "g1", title: "経費の上限を確かめる", revision: 3 },
     question_type: ["規則"],
     auto_field_filter: {
       conditions: [{ name: "金額", value_type: "number", op: "gte", value: "100000" }],
@@ -745,6 +748,8 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await expect(panel).toBeVisible();
   await expect(panel.getByText("会話の流れから補った質問: 経費精算の上限額は？")).toBeVisible();
   await expect(panel.getByText("信頼度: high")).toBeVisible();
+  await expect(panel.getByTestId("answer-outcome-badge")).toHaveText("現場のデータが必要");
+  await expect(panel.getByTestId("answer-guide-badge")).toHaveText("業務ガイド: 経費の上限を確かめる（版 3）");
   // 1 列（既定のモデル）でも、どのモデルの回答か・使ったモデルを出す（#649）。
   await expect(page.getByRole("heading", { name: "回答モデル: MODEL 1" })).toBeVisible();
   const models = panel.getByTestId("answer-models");

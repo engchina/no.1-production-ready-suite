@@ -210,6 +210,7 @@ async def _execute_run(
         knowledge_base_ids=request.knowledge_base_ids,
         thresholds=effective_thresholds,
         rag_overrides=request.rag_overrides,
+        search_answer_profile_id=request.search_answer_profile_id,
         time_budget_seconds=time_budget_seconds,
         progress=progress,
     )
@@ -308,6 +309,7 @@ def _run_request_summary(request: EvaluationRunRequest) -> dict[str, Any]:
         "top_k": request.top_k,
         "filter_keys": sorted(request.filters),
         "knowledge_base_ids": request.knowledge_base_ids,
+        "search_answer_profile_id": request.search_answer_profile_id,
         "thresholds": (
             request.thresholds.model_dump(mode="json", exclude_none=True)
             if request.thresholds is not None
