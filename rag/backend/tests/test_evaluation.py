@@ -1621,4 +1621,3 @@ async def test_business_support_cases_score_handling_metrics_and_reasons() -> No
     assert metrics.safe_answer_rate == 1.0
     assert metrics.metric_case_counts["safe_answer_rate"] == 1
     assert metrics.category_breakdown["clarification_required"].handling_correct_rate == 0.0
-

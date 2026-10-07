@@ -164,6 +164,11 @@ test("評価のランキング指標も同じドロップダウン UI で選択�
     "拒答の正しさ",
     "標準回答の網羅",
     "標準回答での合格",
+    // 業務支援の対応（#1231）。
+    "対応の正しさ",
+    "手順の網羅と順序",
+    "危険な回答の無さ",
+    "条件への言及",
   ]);
 
   await listbox.getByRole("option", { name: "Faithfulness（根拠への忠実性）" }).click();
@@ -268,16 +273,17 @@ test("7 件以上の一覧でも、キーボードで強調した選択肢を表
   await expectActiveOptionInView(rankingMetric, listbox, "正解文書の再現率");
 
   await page.keyboard.press("End");
-  await expectActiveOptionInView(rankingMetric, listbox, "標準回答での合格");
+  await expectActiveOptionInView(rankingMetric, listbox, "条件への言及");
   await page.keyboard.press("Home");
   await expectActiveOptionInView(rankingMetric, listbox, "正解文書の再現率");
   for (let index = 0; index < 4; index += 1) await page.keyboard.press("ArrowDown");
   await expectActiveOptionInView(rankingMetric, listbox, "根拠との語句の一致率（参考）");
   // PageDown / PageUp は 10 件ずつ動き、端で止まる。
   await page.keyboard.press("PageDown");
-  await expectActiveOptionInView(rankingMetric, listbox, "標準回答での合格");
+  await expectActiveOptionInView(rankingMetric, listbox, "条件への言及");
   await page.keyboard.press("PageUp");
-  await expectActiveOptionInView(rankingMetric, listbox, "正解文書の再現率");
+  await expectActiveOptionInView(rankingMetric, listbox, "Faithfulness（根拠への忠実性）");
+  await page.keyboard.press("Home");
   for (let index = 0; index < 3; index += 1) await page.keyboard.press("ArrowDown");
   await expectActiveOptionInView(rankingMetric, listbox, "引用の追跡可能性");
 
