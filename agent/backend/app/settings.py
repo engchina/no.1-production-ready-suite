@@ -159,6 +159,12 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_runtime_projection_retention_days: int = 0
     agent_runtime_projection_write_mode: str = "replace"
     agent_max_tool_calls_per_run: int = 20
+    # 支援タスクの予算（#1243）。超える呼び出しは実行せず、ツールの結果（budget_exceeded）でモデルに
+    # 知らせる（Run は失敗にしない）。0 以下は上限なし。
+    # Run ごとの RAG の呼び出し（rag_search・rag_retrieve_evidence。1 回が重い検索と回答の生成）。
+    agent_max_rag_calls_per_run: int = 4
+    # 同じ会話（thread）の通しのツールの呼び出し。前の Run の支援タスクの状態に積む。
+    agent_max_tool_calls_per_task: int = 60
     agent_metrics_enabled: bool = True
     agent_trace_events_enabled: bool = True
     agent_trace_events_buffer_size: int = 500
