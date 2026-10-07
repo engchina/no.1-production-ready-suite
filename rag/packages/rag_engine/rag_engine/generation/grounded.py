@@ -51,7 +51,7 @@ OFF_GOAL_GAP = "取得した資料の手順が質問の対象・変更項目に�
 # render() が決定的に出力する見出し行と出典行。render の体裁を変えるときは一緒に直す。
 _STRUCTURAL_LINE = re.compile(
     "|".join(re.escape(title) for title in (RULES_SECTION_TITLE, QUOTE_ONLY_LABEL, GAPS_SECTION_TITLE))
-    + r"|(?:操作|確認)手順(?:（.+）)?|" + re.escape(CITATION_PREFIX) + r".* p\..*"
+    + r"|(?:操作|確認)手順(?:（.+）)?|" + re.escape(CITATION_PREFIX) + r".*(?: p\..*| シート「.+」.*)"
 )
 _COMPLETION = re.compile(
     r"(実行|保存|確定|登録|更新)[」』”\"']?(?:ボタン)?(?:を)?(?:押(?:す|し|下)[^。/\n]{0,16}?|で|して)[^。/\n]{0,16}?(?:確定|完了)")
@@ -1667,7 +1667,9 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
 # ---- 本文の組み立て -----------------------------------------------------------
 
 def _citation(span: dict) -> str:
-    return f"{CITATION_PREFIX}{span.get('source', '')} p.{span.get('page', '')}"
+    # 頁の無い根拠（Excel の行の記録）はシートとセル範囲を出す（#1224）。
+    location = span.get("location") or f"p.{span.get('page', '')}"
+    return f"{CITATION_PREFIX}{span.get('source', '')} {location}"
 
 
 def is_structural_line(text: str) -> bool:
@@ -1962,7 +1964,7 @@ def format_functions(spans: Sequence[dict]) -> str:
         # 文書の補助情報は原文照合の対象外。表示IDの行より前に置くと直前の Evidence の本文に見え、
         # そこからの引用は「原文と一致しない」として削除されるため、IDの後ろに範囲を明示して置く。
         body = "\n\n".join(
-            f"[{span['label']}] p.{span.get('page', '')} origin={span.get('origin', 'unclassified')}"
+            f"[{span['label']}] {span.get('location') or 'p.' + str(span.get('page', ''))} origin={span.get('origin', 'unclassified')}"
             + (f" tags={','.join(span['tags'])}" if span["tags"] else "") + (" pinned" if span["pinned"] else "")
             + (f"\n{CONTEXT_NOTE_BEGIN}\n{span['answer_context']}\n{CONTEXT_NOTE_END}" if span.get("answer_context") else "")
             + "\n" + span["text"] for span in members)
