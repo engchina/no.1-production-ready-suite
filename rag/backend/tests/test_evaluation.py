@@ -1621,3 +1621,77 @@ async def test_business_support_cases_score_handling_metrics_and_reasons() -> No
     assert metrics.safe_answer_rate == 1.0
     assert metrics.metric_case_counts["safe_answer_rate"] == 1
     assert metrics.category_breakdown["clarification_required"].handling_correct_rate == 0.0
+
+
+# ---- 検索・回答プロファイルを指定した評価（#1249） ------------------------------------------
+
+
+async def test_profile_evaluation_resolves_each_case_through_the_profile() -> None:
+    seen: list[tuple[str | None, str]] = []
+
+    async def resolver(request: Any, settings: Any) -> tuple[Any, Any]:
+        seen.append((request.search_answer_profile_id, request.query))
+        return request.model_copy(update={"knowledge_base_ids": ["kb-profile"]}), settings
+
+    pipeline = StubPipeline()
+    runner = EvaluationRunner(pipeline=pipeline, profile_resolver=resolver)
+    cases = [EvaluationCase(id="a", query="承認条件"), EvaluationCase(id="b", query="期限")]
+    metrics = await runner.run(cases=cases, top_k=5, search_answer_profile_id="bv-1")
+    assert seen == [("bv-1", "承認条件"), ("bv-1", "期限")]
+    assert metrics.error_count == 0
+
+    # 指定しなければ解決しない（全体の既定。#301）。
+    seen.clear()
+    await runner.run(cases=cases, top_k=5)
+    assert seen == []
+
+
+async def test_profile_resolution_failure_fails_only_that_case() -> None:
+    from fastapi import HTTPException
+
+    async def resolver(request: Any, settings: Any) -> tuple[Any, Any]:
+        raise HTTPException(status_code=409, detail="アーカイブ済み")
+
+    runner = EvaluationRunner(pipeline=StubPipeline(), profile_resolver=resolver)
+    metrics = await runner.run(
+        cases=[EvaluationCase(id="a", query="承認条件")], top_k=5, search_answer_profile_id="bv-x"
+    )
+    assert metrics.error_count == 1
+    assert metrics.case_results[0].status == "error"
+
+
+# ---- 確認の質問・引き継ぎは拒答・検索の取りこぼしではない（#1259） ---------------------------
+
+
+def _response_with_outcome(outcome: str | None, *, citations: bool) -> Any:
+    from app.schemas.search import SearchDiagnostics, SearchResponse
+
+    answer: dict[str, Any] = {"insufficient_reason": ""}
+    if outcome is not None:
+        answer["outcome"] = outcome
+    return SearchResponse(
+        answer="権限は個別の利用者とグループのどちらに付けますか？",
+        citations=[RetrievedChunk(document_id="doc-1", chunk_id="doc-1:0", text="本文", score=1.0)]
+        if citations
+        else [],
+        trace_id="t",
+        elapsed_ms=1.0,
+        diagnostics=SearchDiagnostics(answer=answer),
+    )
+
+
+def test_clarification_is_not_a_refusal_or_retrieval_miss() -> None:
+    from app.rag.evaluation import _case_result, is_abstained
+
+    case = EvaluationCase(id="c", query="権限を付与したい", relevant_document_ids=["doc-1"])
+    clarify = _response_with_outcome("needs_clarification", citations=False)
+    assert is_abstained(clarify) is False
+    result = _case_result(case, clarify, None)
+    assert (result.context_recall, result.refusal_correct) == (None, True)
+    assert "retrieval_miss" not in result.failure_reasons
+    assert "unexpected_refusal" not in result.failure_reasons
+
+    assert is_abstained(_response_with_outcome("insufficient_evidence", citations=False)) is True
+    assert is_abstained(_response_with_outcome("answered", citations=True)) is False
+    # 対応を持たない古い記録は、引用が無ければ拒答（今までどおり）。
+    assert is_abstained(_response_with_outcome(None, citations=False)) is True
