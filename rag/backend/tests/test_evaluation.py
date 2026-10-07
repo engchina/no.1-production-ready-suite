@@ -508,7 +508,7 @@ async def test_category_breakdown_is_empty_without_categories() -> None:
     metrics = await runner.run(cases=[EvaluationCase(id="c", query="承認条件")], top_k=5)
     assert metrics.category_breakdown == {}
     with pytest.raises(ValidationError):
-        EvaluationCase(id="c", query="q", category="unknown")  # type: ignore[arg-type]
+        EvaluationCase.model_validate({"id": "c", "query": "q", "category": "unknown"})
 
 
 def test_is_abstained_uses_answer_record_insufficient_reason() -> None:
