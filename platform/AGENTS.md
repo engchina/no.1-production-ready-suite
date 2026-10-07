@@ -1,7 +1,7 @@
 # AGENTS.md — Production Ready Platform
 
 > **共通基盤（`platform/`）固有のルール**です。GitHub 運用・Issue / PR 規約・CI・共通の技術方針は、monorepo 共通の [../AGENTS.md](../AGENTS.md) を正本として先に適用します。
-> Claude Code と Codex の両方が参照します。`CLAUDE.md` はこのファイルを `@AGENTS.md` で取り込みます。ルールを変更する際は **必ずこのファイル（共通ルールは ../AGENTS.md）を編集**してください。
+> Claude Code と Codex の両方がこのファイルを直接読みます（`CLAUDE.md` は置かない。#1263）。ルールを変更する際は **必ずこのファイル（共通ルールは ../AGENTS.md）を編集**してください。
 > 共有パッケージの運用ルール（版管理・変更時の確認範囲）は [CONTRIBUTING.md](./CONTRIBUTING.md) を参照。
 > Issue には `platform` label を付け、PR title の scope は `platform` にする。`platform/` の変更は統合 CI で全製品の job を実行する（frontend 側（`packages/ui`・`packages/system-settings`・`docs/design-system/`）の変更は各製品の frontend / e2e の job、backend 側（`packages/backend_core`・`packages/system_settings_backend`）の変更は各製品の backend の job。#339）。
 
