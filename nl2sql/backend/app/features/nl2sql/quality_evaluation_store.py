@@ -562,7 +562,8 @@ class OracleQualityEvaluationRepository:
             )
             total = int(cursor.fetchone()[0])
             cursor.execute(
-                "SELECT PAYLOAD_JSON FROM NL2SQL_EVALUATION_RESULTS WHERE JOB_ID = :job_id "
+                # offset_fetch_clause は bind 名だけの定数の文（利用者の入力は bind で渡す）。
+                "SELECT PAYLOAD_JSON FROM NL2SQL_EVALUATION_RESULTS WHERE JOB_ID = :job_id "  # nosec B608
                 "ORDER BY CASE_NO, ENGINE, REPETITION_NO " + offset_fetch_clause(),
                 {"job_id": job_id, **offset_fetch_binds(offset=offset, limit=limit)},
             )
