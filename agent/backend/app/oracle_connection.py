@@ -19,6 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from pr_backend_core.oracle_dsn import dsn_without_tns_retry
 from pr_backend_core.oracle_pool import OraclePoolSize, SharedOraclePool
 
 DEFAULT_POOL_MIN_CONNECTIONS = 1
@@ -33,10 +34,16 @@ _PLATFORM_POOL = SharedOraclePool(
 
 
 def oracle_connect_kwargs(settings: Any) -> dict[str, object]:
-    """`oracledb.connect` の引数（Thin mode。Wallet があれば mTLS）。"""
+    """`oracledb.connect` の引数（Thin mode。Wallet があれば mTLS）。
+
+    再試行しない（`retry_count=0`）。Wallet の別名の接続記述子の `(retry_count=20)(retry_delay=3)`
+    は引数より優先されるため、別名を再試行の設定を外した記述子に置き換える（DB の停止中に 1 回の
+    接続で 1 分以上待たない。RAG / NL2SQL の接続テストと同じ。#1212）。
+    """
+    wallet_dir = str(settings.oracle_wallet_dir or "").strip()
     kwargs: dict[str, object] = {
         "user": settings.oracle_user,
-        "dsn": settings.oracle_dsn,
+        "dsn": dsn_without_tns_retry(str(settings.oracle_dsn or ""), wallet_dir or None),
         "retry_count": 0,
         "retry_delay": 0,
     }
@@ -45,7 +52,6 @@ def oracle_connect_kwargs(settings: Any) -> dict[str, object]:
         kwargs["tcp_connect_timeout"] = tcp_connect_timeout
     if str(settings.oracle_password or "").strip():
         kwargs["password"] = settings.oracle_password
-    wallet_dir = str(settings.oracle_wallet_dir or "").strip()
     if wallet_dir:
         kwargs["config_dir"] = str(Path(wallet_dir).expanduser())
         kwargs["wallet_location"] = str(Path(wallet_dir).expanduser())

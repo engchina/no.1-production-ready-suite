@@ -3,7 +3,7 @@
 1 件の Run の不整合（終わった Run に残った pending の承認など）は直し、直せない Run は元の JSON
 ごと退避して、backend の起動（module の import）を止めない。snapshot 全体が読めないときだけ、
 `auto` は memory で起動して案内し、明示した `oracle_*` / `file` は直し方を書いて止める。
-起動時の DB の接続のエラーは上限付きで再試行する。
+DB に接続できないときは memory に縮退せず、次に使うときに読み込む（#1212）。
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from app.features.agent.runtime import (
     AgentRuntimeOracleCheckpointRepository,
     AgentRuntimeRepository,
     AgentRuntimeSnapshot,
+    AgentRuntimeStorageUnavailableError,
     ApprovalRequest,
     ApprovalStatus,
     RunEventType,
@@ -372,7 +373,7 @@ def test_dispatcher_claim_tolerates_an_inconsistent_run(monkeypatch: MonkeyPatch
 
 
 # --------------------------------------------------------------------------------------------
-# 起動時の DB の接続の再試行
+# DB に接続できないとき（#1212。memory に縮退せず、次に使うときに読み込む）
 # --------------------------------------------------------------------------------------------
 
 
@@ -391,54 +392,52 @@ class _FlakyConnect:
         return self._store.connect()
 
 
-def _record_sleeps(monkeypatch: MonkeyPatch) -> list[float]:
-    sleeps: list[float] = []
-    monkeypatch.setattr(runtime, "_retry_sleep", sleeps.append)
-    return sleeps
-
-
-def test_startup_retries_connection_errors_with_backoff(monkeypatch: MonkeyPatch) -> None:
+@pytest.mark.parametrize("backend", ["auto", "oracle_checkpoint"])
+def test_connection_error_reports_storage_unavailable_without_memory_fallback(
+    monkeypatch: MonkeyPatch, backend: str
+) -> None:
     store = _Checkpoints(_snapshot_json())
-    _oracle(monkeypatch, store, "oracle_checkpoint")
-    flaky = _FlakyConnect(store, failures=2)
+    _oracle(monkeypatch, store, backend)
+    flaky = _FlakyConnect(store, failures=99)
     monkeypatch.setattr(runtime, "connect_platform_oracle", flaky)
-    monkeypatch.setattr(get_settings(), "agent_runtime_storage_connect_retries", 2)
-    monkeypatch.setattr(get_settings(), "agent_runtime_storage_connect_retry_delay_seconds", 2.0)
-    sleeps = _record_sleeps(monkeypatch)
 
-    repository = runtime.build_runtime_repository()
-
-    assert isinstance(repository, AgentRuntimeOracleCheckpointRepository)
-    assert flaky.calls == 3
-    # 2 秒・4 秒の指数 backoff（後半を jitter）。
-    assert len(sleeps) == 2
-    assert 1.0 <= sleeps[0] <= 2.0
-    assert 2.0 <= sleeps[1] <= 4.0
-
-
-def test_startup_gives_up_after_the_retries(monkeypatch: MonkeyPatch) -> None:
-    store = _Checkpoints(_snapshot_json())
-    monkeypatch.setattr(get_settings(), "agent_runtime_storage_connect_retries", 1)
-    sleeps = _record_sleeps(monkeypatch)
-
-    _oracle(monkeypatch, store, "oracle_checkpoint")
-    monkeypatch.setattr(runtime, "connect_platform_oracle", _FlakyConnect(store, failures=99))
-    with pytest.raises(RuntimeError) as caught:
+    with pytest.raises(AgentRuntimeStorageUnavailableError) as caught:
         runtime.build_runtime_repository()
+
+    # 待って再試行しない（次に使うときに読み込む）。接続先・資格情報は出さない。
+    assert flaky.calls == 1
     assert "DPY-6005" in str(caught.value)
-    assert "PLATFORM_ORACLE_" in str(caught.value)
-    assert len(sleeps) == 1
+    assert "再起動せずに読み込みます" in str(caught.value)
+    assert storage_backend.fell_back_to_memory() is False
+    assert storage_backend.resolved_backend() == "oracle_checkpoint"
 
-    # auto は #851 のとおり memory で起動する。
-    storage_backend.reset()
+
+def test_lazy_repository_is_built_on_first_use_and_retried_after_failure(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    store = _Checkpoints(_snapshot_json(_approval_run("run_done", status=RunStatus.COMPLETED)))
     _oracle(monkeypatch, store, "auto")
-    monkeypatch.setattr(runtime, "connect_platform_oracle", _FlakyConnect(store, failures=99))
-    repository = runtime.build_runtime_repository()
-    assert type(repository) is AgentRuntimeRepository
-    assert storage_backend.fallback_reason() == "connection"
+    flaky = _FlakyConnect(store, failures=1)
+    monkeypatch.setattr(runtime, "connect_platform_oracle", flaky)
+    previous = runtime._repository
+    runtime.set_runtime_repository(None)
+    try:
+        # import しただけでは接続しない。
+        assert runtime.runtime_repository_loaded() is False
+        assert flaky.calls == 0
+        with pytest.raises(AgentRuntimeStorageUnavailableError):
+            runtime.runtime_repository.list_runs()
+        assert runtime.runtime_repository_loaded() is False
+
+        # DB が戻れば、再起動せずに次の利用で読み込む。
+        assert [run.id for run in runtime.runtime_repository.list_runs()] == ["run_done"]
+        assert isinstance(runtime.get_runtime_repository(), AgentRuntimeOracleCheckpointRepository)
+        assert flaky.calls > 1
+    finally:
+        runtime.set_runtime_repository(previous)
 
 
-def test_startup_does_not_retry_non_connection_errors(monkeypatch: MonkeyPatch) -> None:
+def test_non_connection_errors_are_not_reported_as_unavailable(monkeypatch: MonkeyPatch) -> None:
     calls: list[int] = []
 
     def denied() -> _Connection:
@@ -447,12 +446,11 @@ def test_startup_does_not_retry_non_connection_errors(monkeypatch: MonkeyPatch) 
 
     _oracle(monkeypatch, _Checkpoints(), "auto")
     monkeypatch.setattr(runtime, "connect_platform_oracle", denied)
-    sleeps = _record_sleeps(monkeypatch)
 
-    with pytest.raises(RuntimeError, match="ORA-01031"):
+    with pytest.raises(RuntimeError, match="ORA-01031") as caught:
         runtime.build_runtime_repository()
+    assert not isinstance(caught.value, AgentRuntimeStorageUnavailableError)
     assert calls == [1]
-    assert sleeps == []
 
 
 def test_storage_api_reports_repaired_and_skipped_runs(monkeypatch: MonkeyPatch) -> None:

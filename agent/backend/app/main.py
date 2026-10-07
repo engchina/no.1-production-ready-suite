@@ -14,6 +14,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, Response
 
 from app.api.router import api_router
+from app.features.agent import storage_bootstrap
+from app.features.agent.runtime import AgentRuntimeStorageUnavailableError
 from app.observability import (
     metrics_response,
     start_trace_export_retry_worker,
@@ -32,42 +34,11 @@ configure_logging(
 logger = logging.getLogger(__name__)
 
 
-def _restore_control_plane() -> None:
-    """画面・API で変えた定義（Skill・プラグイン・MCP 接続・ツール権限）を読み込む（#764）。"""
-    from app.features.agent.control_plane_store import restore_control_plane
-
-    try:
-        restored = restore_control_plane()
-    except Exception:  # noqa: BLE001 - DB の障害で起動を止めない（画面の DB の案内に任せる）
-        logger.exception("agent_control_plane_restore_failed")
-        return
-    logger.info("agent_control_plane_restored", extra={"restored": restored})
-
-
-def _prepare_history() -> None:
-    """評価の履歴の整理（保持期間）と、Run の事実の backfill（#794）。
-
-    Run の事実は Oracle の構成だけ保存する。Runtime repository にある Run の事実をすべて
-    キューに入れ、バックグラウンドで MERGE する（今見えている Run の集計を消さない）。
-    """
-    from app.features.agent import run_facts_store
-    from app.features.agent.evaluation import evaluation_store
-    from app.features.agent.runtime import runtime_repository
-
-    try:
-        evaluation_store.prune()
-    except Exception:  # noqa: BLE001 - 整理の失敗で起動を止めない
-        logger.exception("agent_evaluation_prune_failed")
-    try:
-        run_facts_store.backfill(runtime_repository)
-    except Exception:  # noqa: BLE001 - 集計用の事実の失敗で起動を止めない
-        logger.exception("agent_run_facts_backfill_failed")
-
-
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    await asyncio.to_thread(_restore_control_plane)
-    await asyncio.to_thread(_prepare_history)
+    # Run の repository・定義・履歴は DB を待たずにバックグラウンドで読み込む（DB に接続できない
+    # あいだも起動する。RAG / NL2SQL と同じ。#1212）。
+    storage_bootstrap.start_background_load()
     await start_trace_export_retry_worker()
     # 業務 Agent の自動実行のスケジューラ（#784。gunicorn は 1 worker のため 1 つだけ動く）。
     from app.features.agent.automations import run_scheduler
@@ -79,6 +50,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         scheduler.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await scheduler
+        storage_bootstrap.stop_background_load()
         await stop_trace_export_retry_worker()
         # キューに残った Run の事実を書いてから終える（間に合わない分は次の起動の backfill）。
         from app.features.agent import run_facts_store
@@ -134,6 +106,24 @@ async def project_http_exception_handler(
     if isinstance(request_id, str):
         headers["X-Request-ID"] = request_id
     return JSONResponse(status_code=exc.status_code, content=body, headers=headers)
+
+
+@app.exception_handler(AgentRuntimeStorageUnavailableError)
+async def storage_unavailable_handler(
+    request: Request, exc: AgentRuntimeStorageUnavailableError
+) -> JSONResponse:
+    """Run・定義の保存先を読み込めない（DB に接続できない）ときは 503（#1212）。
+
+    画面は DB ゲートで案内する。DB に接続できるようになれば、再起動せずに読み込む。
+    """
+    body = ApiResponse[object](data=None, error_messages=[str(exc)]).model_dump(mode="json")
+    body["error_code"] = "agent_storage_unavailable"
+    body["error_details"] = {}
+    headers = {"Retry-After": "15"}
+    request_id = getattr(request.state, "request_id", None)
+    if isinstance(request_id, str):
+        headers["X-Request-ID"] = request_id
+    return JSONResponse(status_code=503, content=body, headers=headers)
 
 
 def _security_error_response(

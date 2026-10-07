@@ -719,7 +719,7 @@ const agentJa = {
   "storage.notice.memoryBackend":
     "データベースは設定済みですが、保存先がメモリのため、業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・API キー・品質評価などをデータベースに保存していません。",
   "storage.notice.restartRequired":
-    "データベースは設定済みですが、バックエンドの起動時には使えなかったため、業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・API キー・品質評価などを保存していません。",
+    "データベースは設定済みですが、バックエンドの起動時には未設定だったため、業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・API キー・品質評価などを保存していません。",
   "storage.notice.databaseNotConfigured":
     "データベースが未設定のため、業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・API キー・品質評価などを保存していません。",
   "storage.notice.checkpointInvalid":
@@ -753,7 +753,7 @@ const agentJa = {
   "storage.fix.memoryBackend":
     "バックエンドの設定（agent/backend/.env）で保存先にメモリを指定しています。AGENT_RUNTIME_REPOSITORY_BACKEND の指定を消す（既定の auto）か、データベースにして、バックエンドを再起動してください。テーブルは運用設定 > システムテーブルで作成済みのものを使います。",
   "storage.fix.restartRequired":
-    "保存先はバックエンドの起動時に決まります。起動時はデータベースが未設定か接続できなかったため、メモリにしています。バックエンドを再起動すると、データベースに保存します。",
+    "保存先はバックエンドの起動時に決まります。起動時はデータベースが未設定だったため、メモリにしています。バックエンドを再起動すると、データベースに保存します。",
   "storage.fix.databaseNotConfigured":
     "システム設定 > データベースを設定し、運用設定 > システムテーブルでテーブルを作成してから、バックエンドを再起動してください。保存先は自動でデータベースになります。",
   "storage.fix.databaseNotConfiguredExplicit":

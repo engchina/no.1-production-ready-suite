@@ -200,32 +200,25 @@ class _UnreachableOracle:
         raise RuntimeError("DPY-6005: cannot connect to database")
 
 
-def test_auto_falls_back_to_memory_when_oracle_is_unreachable_at_startup(
-    monkeypatch: MonkeyPatch,
+@pytest.mark.parametrize("backend", ["auto", "oracle_checkpoint"])
+def test_unreachable_oracle_does_not_fall_back_to_memory(
+    monkeypatch: MonkeyPatch, backend: str
 ) -> None:
-    """ADB の停止中などでも起動を止めない（DB ゲートが案内し、再起動で Oracle になる）。"""
-    monkeypatch.setattr(get_settings(), "agent_runtime_repository_backend", "auto")
+    """ADB の停止中などは memory にせず、接続できた時点で Oracle を読み込む（#1212）。"""
+    monkeypatch.setattr(get_settings(), "agent_runtime_repository_backend", backend)
     _database(monkeypatch, configured=True)
     monkeypatch.setattr(runtime, "AgentRuntimeOracleCheckpointRepository", _UnreachableOracle)
 
-    repository = runtime.build_runtime_repository()
-
-    assert type(repository) is runtime.AgentRuntimeRepository
-    assert storage_backend.fell_back_to_memory() is True
-    # 定義の store も memory にそろう。
-    assert control_plane_store.build_control_plane_store().persistent is False
-
-
-def test_explicit_oracle_still_fails_when_unreachable(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "agent_runtime_repository_backend", "oracle_checkpoint")
-    monkeypatch.setattr(runtime, "AgentRuntimeOracleCheckpointRepository", _UnreachableOracle)
-
-    with pytest.raises(RuntimeError, match="DPY-6005"):
+    with pytest.raises(runtime.AgentRuntimeStorageUnavailableError, match="DPY-6005"):
         runtime.build_runtime_repository()
+
+    assert storage_backend.fell_back_to_memory() is False
+    # 定義の store も Oracle のまま（Run と定義の保存先がずれない）。
+    assert control_plane_store.build_control_plane_store().persistent is True
 
 
 def test_auto_does_not_hide_non_connection_errors(monkeypatch: MonkeyPatch) -> None:
-    """接続以外の失敗（SQL・データの不整合など）は memory にせず止める（黙って捨てない）。"""
+    """接続以外の失敗（SQL・データの不整合など）は memory にせず返す（黙って捨てない）。"""
 
     class _Broken:
         def __init__(self, *_args: object, **_kwargs: object) -> None:

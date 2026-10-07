@@ -488,9 +488,14 @@ async def run_scheduler() -> None:
     期限の判定と Run の作成（保存の I/O を含む）はスレッドで行い、作った Run の実行（in-process の
     モード）はこのイベントループで始める。
     """
+    from app.features.agent import storage_bootstrap
     from app.features.agent.runtime import runtime_repository
 
     while True:
+        # 自動実行の定義と Run の保存先を読み込むまで（DB の停止中など）は判定しない（#1212）。
+        if not storage_bootstrap.is_ready():
+            await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
+            continue
         try:
             fired = await asyncio.to_thread(scheduler_tick)
             for item in fired:

@@ -1014,7 +1014,11 @@ async def _test_oracle_connection(settings: SimpleNamespace) -> None:
     timeout_seconds = float(settings.oracle_db_test_timeout_seconds)
     try:
         with fail_after(timeout_seconds):
-            await anyio_to_thread.run_sync(_test_oracle_connection_sync, settings)
+            # 時間切れで待つのをやめる（スレッドの接続の待ちは打ち切れない。wallet の接続記述子の
+            # 再試行で 1 分以上かかることがある。NL2SQL の asyncio.wait_for と同じ。#1212）。
+            await anyio_to_thread.run_sync(
+                _test_oracle_connection_sync, settings, abandon_on_cancel=True
+            )
     except TimeoutError as exc:
         raise OracleConnectionTimeoutError(
             f"Oracle AI Database の接続テストが {timeout_seconds:g} 秒でタイムアウトしました。"
@@ -1031,7 +1035,10 @@ async def _test_database_status_connection(settings: Any) -> None:
     timeout_seconds = _settings_float_from(settings, "oracle_db_test_timeout_seconds", 15.0)
     try:
         with fail_after(timeout_seconds):
-            await anyio_to_thread.run_sync(_ping_platform_oracle_sync, settings)
+            # 時間切れで待つのをやめる（上と同じ。DB の停止中も DB ゲートが応答する。#1212）。
+            await anyio_to_thread.run_sync(
+                _ping_platform_oracle_sync, settings, abandon_on_cancel=True
+            )
     except TimeoutError as exc:
         raise OracleConnectionTimeoutError(
             f"Oracle AI Database の接続確認が {timeout_seconds:g} 秒でタイムアウトしました。"

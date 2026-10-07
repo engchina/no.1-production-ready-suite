@@ -11,8 +11,6 @@ import json
 import logging
 import os
 import re
-import secrets
-import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import suppress
 from copy import deepcopy
@@ -21,7 +19,7 @@ from enum import StrEnum
 from importlib import import_module
 from pathlib import Path
 from threading import Condition, Lock
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from pr_backend_core.oracle_errors import is_oracle_connection_error, oracle_error_codes
@@ -3269,93 +3267,51 @@ def _active_tool_policy() -> ToolPolicy:
     )
 
 
-# 起動時の保存先の DB の接続の再試行の待ち（テストは待たない関数に差し替える。#853）。
-_retry_sleep: Callable[[float], None] = time.sleep
-# 再試行の待ちの上限（秒）。
-_STORAGE_CONNECT_RETRY_MAX_DELAY_SECONDS = 30.0
-_jitter = secrets.SystemRandom()
+class AgentRuntimeStorageUnavailableError(RuntimeError):
+    """保存先のデータベースに接続できず、Run の repository を読み込めない（#1212）。
 
-
-def _storage_connect_delay(base_seconds: float, attempt: int) -> float:
-    """指数 backoff（base × 2^(attempt-1)、上限 30 秒）の後半をランダムにする（equal jitter）。"""
-    delay = min(base_seconds * (2.0 ** (attempt - 1)), _STORAGE_CONNECT_RETRY_MAX_DELAY_SECONDS)
-    return delay / 2 + _jitter.uniform(0, delay / 2)
-
-
-def _build_oracle_repository_with_retries(
-    factory: Callable[[], AgentRuntimeRepositoryContract],
-) -> AgentRuntimeRepositoryContract:
-    """保存先の DB の接続のエラーだけを、上限付きで待って再試行する（#853）。
-
-    1 回の接続は `PLATFORM_ORACLE_TCP_CONNECT_TIMEOUT_SECONDS` で区切られる。回数と待ちは
-    `AGENT_RUNTIME_STORAGE_CONNECT_RETRIES` / `AGENT_RUNTIME_STORAGE_CONNECT_RETRY_DELAY_SECONDS`。
-    接続以外のエラー（SQL・権限・snapshot の破損）は再試行しない。
+    起動は止めない。次に使うとき（API の要求・バックグラウンドの再試行・dispatcher の次の claim）に
+    読み込み直す。
     """
-    settings = get_settings()
-    retries = max(0, int(settings.agent_runtime_storage_connect_retries))
-    base_delay = max(0.0, float(settings.agent_runtime_storage_connect_retry_delay_seconds))
-    attempt = 0
-    while True:
-        try:
-            return factory()
-        except Exception as exc:
-            if attempt >= retries or not is_oracle_connection_error(exc):
-                raise
-            attempt += 1
-            delay = _storage_connect_delay(base_delay, attempt)
-            logger.warning(
-                "agent_runtime_repository_connect_retry",
-                extra={
-                    "attempt": attempt,
-                    "max_retries": retries,
-                    "delay_seconds": round(delay, 2),
-                    "error_codes": oracle_error_codes(exc),
-                },
-            )
-            _retry_sleep(delay)
+
+    safe_for_user = True
 
 
 def build_runtime_repository() -> AgentRuntimeRepositoryContract:
+    """設定の保存先の Run の repository を作る（Oracle・file は保存済みの状態を読み込む）。
+
+    Oracle に接続できないときは `AgentRuntimeStorageUnavailableError`（`auto` でも memory に縮退
+    しない。DB が戻れば次に使うときに読み込む。#1212）。
+    """
     settings = get_settings()
     # `auto`（既定）は DB の設定がそろっていれば oracle_checkpoint、無ければ memory（#839）。
     backend = storage_backend.resolved_backend()
     if backend in storage_backend.ORACLE_BACKENDS:
         # 共通の PLATFORM_ORACLE_* で接続する（#764。旧 AGENT_RUNTIME_ORACLE_* は読まない）。
-        def factory() -> AgentRuntimeRepositoryContract:
+        try:
             if backend == "oracle_normalized":
                 return AgentRuntimeOracleNormalizedRepository(
                     projection_retention_days=settings.agent_runtime_projection_retention_days,
                     projection_write_mode=settings.agent_runtime_projection_write_mode,
                 )
             return AgentRuntimeOracleCheckpointRepository()
-
-        try:
-            return _build_oracle_repository_with_retries(factory)
         except AgentRuntimeSnapshotCorruptError:
             # checkpoint 全体が読めない。明示した Oracle はデータを守って止める（直し方は
-            # 例外のメッセージ）。`auto` は checkpoint を上書きしないよう memory で起動し、
-            # 画面（保存先のカード）で案内する（再起動の繰り返しにしない。#853）。
+            # 例外のメッセージ）。`auto` は checkpoint を上書きしないよう memory にし、
+            # 画面（保存先のカード）で案内する（#853）。
             if not storage_backend.is_auto():
                 raise
             logger.error("agent_runtime_checkpoint_corrupt_use_memory", exc_info=True)
             storage_backend.fall_back_to_memory(reason=storage_backend.FALLBACK_CHECKPOINT_INVALID)
             backend = "memory"
         except Exception as exc:
-            # `auto` で選んだ Oracle に起動時に接続できない（ADB の停止中など）ときは、起動を
-            # 止めずに memory にする（画面は DB ゲートと保存先の案内で再起動を促す）。
-            # 明示した Oracle は止める。接続以外のエラーも止める。
             if not is_oracle_connection_error(exc):
                 raise
-            if not storage_backend.is_auto():
-                raise RuntimeError(
-                    f"Agent の保存先（AGENT_RUNTIME_REPOSITORY_BACKEND={backend}）のデータベースに"
-                    f"接続できません（{_oracle_error_summary(exc)}）。データベースが起動しているか、"
-                    "共通 .env の PLATFORM_ORACLE_* を確認して backend を再起動してください"
-                    "（AGENT_RUNTIME_REPOSITORY_BACKEND=auto なら、保存しない状態で起動します）。"
-                ) from exc
-            logger.warning("agent_runtime_repository_oracle_unavailable_use_memory", exc_info=True)
-            storage_backend.fall_back_to_memory()
-            backend = "memory"
+            raise AgentRuntimeStorageUnavailableError(
+                f"Agent の保存先のデータベースに接続できません（{_oracle_error_summary(exc)}）。"
+                "データベースが起動しているか、システム設定 > データベースを確認してください。"
+                "接続できるようになると、再起動せずに読み込みます。"
+            ) from exc
     if backend in {"memory", "in_memory", "file", "file_snapshot"}:
         snapshot_path = (
             settings.agent_runtime_snapshot_path
@@ -3372,4 +3328,62 @@ def _oracle_error_summary(exc: BaseException) -> str:
     return ", ".join(codes) if codes else type(exc).__name__
 
 
-runtime_repository: AgentRuntimeRepositoryContract = build_runtime_repository()
+# Run の repository は import 時に作らず、最初に使うときに作る（#1212）。import 時に Oracle の
+# checkpoint を読むと、DB に接続できないあいだ backend が起動しない（uvicorn は app の import の
+# 後に listen する）。作れなかったときは保持せず、次に使うときに作り直す。
+_repository_lock = Lock()
+_repository: AgentRuntimeRepositoryContract | None = None
+
+
+def get_runtime_repository() -> AgentRuntimeRepositoryContract:
+    """Run の repository（未作成なら作る）。
+
+    DB に接続できなければ `AgentRuntimeStorageUnavailableError`。
+    """
+    global _repository
+    repository = _repository
+    if repository is not None:
+        return repository
+    with _repository_lock:
+        if _repository is None:
+            _repository = build_runtime_repository()
+        return _repository
+
+
+def runtime_repository_loaded() -> bool:
+    """Run の repository を作り終えているか（作らない。接続を試さない）。"""
+    return _repository is not None
+
+
+def set_runtime_repository(repository: AgentRuntimeRepositoryContract | None) -> None:
+    """Run の repository を差し替える（テスト。None で次に使うときに設定から作り直す）。"""
+    global _repository
+    with _repository_lock:
+        _repository = repository
+
+
+class _LazyRuntimeRepository:
+    """`runtime_repository` の遅延の参照（属性の読み書きを、その時の repository へ渡す）。
+
+    利用側は今までどおり `from app.features.agent.runtime import runtime_repository` で使える。
+    """
+
+    __slots__ = ()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(get_runtime_repository(), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(get_runtime_repository(), name, value)
+
+    def __delattr__(self, name: str) -> None:
+        delattr(get_runtime_repository(), name)
+
+    def __repr__(self) -> str:
+        loaded = _repository
+        return f"<lazy runtime repository: {type(loaded).__name__ if loaded else 'not loaded'}>"
+
+
+runtime_repository: AgentRuntimeRepositoryContract = cast(
+    AgentRuntimeRepositoryContract, _LazyRuntimeRepository()
+)

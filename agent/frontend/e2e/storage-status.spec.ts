@@ -93,7 +93,7 @@ test("既定（auto）で起動の後に DB を設定したときは、再起動
     reason: "restart_required",
   };
   await page.goto("/agents");
-  await expect(page.getByTestId("storage-not-persistent-notice")).toContainText("バックエンドの起動時には使えなかった");
+  await expect(page.getByTestId("storage-not-persistent-notice")).toContainText("バックエンドの起動時には未設定だった");
 
   await page.goto("/runtimes");
   const fix = page.getByTestId("runtime-storage-fix");
