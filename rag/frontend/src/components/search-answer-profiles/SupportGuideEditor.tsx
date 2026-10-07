@@ -36,9 +36,10 @@ import {
   useConfirm,
   type SearchableSelectOption,
   type SelectFieldOption,
+  PagedDataTable,
 } from "@engchina/production-ready-ui";
 
-import { PagedDataTable } from "@/components/PagedDataTable";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { ErrorState } from "@/components/StateViews";
 import {
   api,
@@ -1387,6 +1388,7 @@ function SupportGuideHistory({
         <p className="text-xs leading-relaxed text-fg-muted">{t("supportGuides.history.hint")}</p>
       </div>
       <PagedDataTable<SupportGuideRevisionSummary>
+        paginationLabels={paginationLabels()}
         columns={[
           {
             key: "revision",

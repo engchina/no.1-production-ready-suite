@@ -551,7 +551,8 @@ class QualityEvaluationService:
         limit: int,
         allowed_profile_ids: set[str] | None = None,
     ) -> QualityEvaluationJobPage:
-        # カーソルは offset（共通の codec。#1266）。壊れたカーソルは InvalidCursorError（router が 422）。
+        # カーソルは offset（共通の codec。#1266）。壊れたカーソルは InvalidCursorError
+        # （router が 422 にする）。
         offset = decode_offset_cursor(cursor)
         jobs, total = self._repository.list_jobs(
             offset=offset,
