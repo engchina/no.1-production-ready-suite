@@ -5,6 +5,7 @@ import {
   DataTable,
   measureVisibleRowsHeight,
   resolveVisibleRows,
+  stabilizeMeasuredHeight,
   type DataTableColumn,
 } from "../src/components/data/data-table";
 
@@ -130,6 +131,19 @@ describe("表示行数の計算", () => {
     expect(measureVisibleRowsHeight({ tableTop: 0, headerBottom: 33, rowBottoms: bottoms, rows: 5, chrome: 2, fill: true })).toBe(133 + 49 * 3);
     expect(measureVisibleRowsHeight({ tableTop: 0, headerBottom: 33, rowBottoms: [82], rows: 5, chrome: 0, fill: true })).toBe(82 + 49 * 4);
     expect(measureVisibleRowsHeight({ tableTop: 0, headerBottom: 33, rowBottoms: [], rows: 5, chrome: 0, fill: true })).toBeUndefined();
+  });
+
+  it("測り直しが 1px を往復しても高さを変えない（拡大 125% の丸めで揺れない。#1222）", () => {
+    // 159 → 158 → 159 → 158 … と測れても、最初に大きい方へ寄せた後は動かない。
+    let height = stabilizeMeasuredHeight(undefined, 158);
+    for (const measured of [159, 158, 159, 158]) height = stabilizeMeasuredHeight(height, measured);
+    expect(height).toBe(159);
+    // 2px 以上の変化（行の追加・幅の変化による折り返し）はそのまま反映する。
+    expect(stabilizeMeasuredHeight(159, 210)).toBe(210);
+    expect(stabilizeMeasuredHeight(210, 159)).toBe(159);
+    // 未測定・測れないときは測定値に従う。
+    expect(stabilizeMeasuredHeight(undefined, 133)).toBe(133);
+    expect(stabilizeMeasuredHeight(133, undefined)).toBeUndefined();
   });
 });
 
