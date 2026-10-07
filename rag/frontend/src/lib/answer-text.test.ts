@@ -89,6 +89,23 @@ describe("parseCitationLine", () => {
     expect(parseCitationLine("根拠：規程.docx p.")).toEqual({ fileName: "規程.docx", page: null });
     expect(parseCitationLine("根拠です")).toBeNull();
   });
+
+  it("表計算の根拠の行のシートとセル範囲の行を読む（Issue 1224）", () => {
+    expect(parseCitationLine("根拠：経費 コード.xlsx シート「費目 コード」A3:D6")).toEqual({
+      fileName: "経費 コード.xlsx",
+      page: null,
+      sheet: "費目 コード",
+      rowStart: 3,
+      rowEnd: 6,
+    });
+    expect(parseCitationLine("根拠：a.xlsx シート「手順」")).toEqual({
+      fileName: "a.xlsx",
+      page: null,
+      sheet: "手順",
+      rowStart: null,
+      rowEnd: null,
+    });
+  });
 });
 
 describe("matchCitation", () => {
@@ -114,5 +131,27 @@ describe("matchCitation", () => {
   it("同じファイルの引用が無ければ -1", () => {
     expect(matchCitation({ fileName: "missing.pdf", page: 1 }, citations)).toBe(-1);
     expect(matchCitation({ fileName: "manual.pdf", page: 1 }, [])).toBe(-1);
+  });
+});
+
+describe("matchCitation（表計算）", () => {
+  function sheetChunk(sheet: string, rowStart: number, rowEnd: number): RetrievedChunk {
+    const base = chunk("book.xlsx");
+    return {
+      ...base,
+      chunk_id: `${sheet}:${rowStart}`,
+      metadata: { sheet_name: sheet, row_start: rowStart, row_end: rowEnd },
+    };
+  }
+  const citations = [sheetChunk("手順", 3, 5), sheetChunk("費目", 1, 1), sheetChunk("費目", 3, 6)];
+
+  it("同じシートで行の範囲が重なる引用を選ぶ", () => {
+    const ref = { fileName: "book.xlsx", page: null, sheet: "費目", rowStart: 4, rowEnd: 4 };
+    expect(matchCitation(ref, citations)).toBe(2);
+  });
+
+  it("行が重ならなければ同じシートの先頭、シートが無ければ同じファイルの先頭", () => {
+    expect(matchCitation({ fileName: "book.xlsx", page: null, sheet: "費目", rowStart: 20, rowEnd: 21 }, citations)).toBe(1);
+    expect(matchCitation({ fileName: "book.xlsx", page: null, sheet: "別", rowStart: 1, rowEnd: 1 }, citations)).toBe(0);
   });
 });
