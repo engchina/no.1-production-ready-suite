@@ -38,7 +38,7 @@ from agents import (
     set_tracing_disabled,
 )
 from agents.tool_context import ToolContext
-from openai import AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI, BadRequestError
 from pr_backend_core.observability.request_context import bind_log_context
 from pr_system_settings.model import (
     enterprise_ai_connection_for_model,
@@ -144,12 +144,62 @@ def _omit_empty_tools(kwargs: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
+def _omit_reasoning_text(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """`input` の reasoning item から本文（`content` の `reasoning_text`）を外す（#1215）。
+
+    SDK は前の応答の reasoning item をそのまま次の呼び出しの `input` に入れる。OCI Enterprise AI の
+    `openai.gpt-oss-120b` は、`input` の `reasoning_text` を「reasoning_text is not supported by
+    model」の 400 で拒否するため、ツールを呼んだ後の回答が作れない（2026-10-07 に実環境で確認）。
+    item（`id`・`summary`）は残す（item ごと除いても回答できることも確認した）。
+    """
+    items = kwargs.get("input")
+    if not isinstance(items, list):
+        return kwargs
+    changed = False
+    sanitized: list[Any] = []
+    for item in items:
+        data = item if isinstance(item, dict) else None
+        if data is None and hasattr(item, "model_dump"):
+            data = item.model_dump(exclude_none=True)
+        if isinstance(data, dict) and data.get("type") == "reasoning" and "content" in data:
+            sanitized.append({key: value for key, value in data.items() if key != "content"})
+            changed = True
+        else:
+            sanitized.append(item)
+    return {**kwargs, "input": sanitized} if changed else kwargs
+
+
+def _oci_request(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """`responses.create` の引数を OCI Enterprise AI が受け付ける形にする。"""
+    return _omit_reasoning_text(_omit_empty_tools(kwargs))
+
+
+# OCI が「再試行してください」と返す、モデルの出力の一時的な失敗（400 `model_output_invalid`）を
+# 同じ要求で再試行する回数（#1215）。
+MODEL_OUTPUT_INVALID_RETRIES = 2
+MODEL_OUTPUT_INVALID_CODE = "model_output_invalid"
+
+
+def model_error_code(exc: BaseException) -> str | None:
+    """OpenAI 互換 API のエラーの code（`invalid_value` など。無ければ None）。"""
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code:
+        return code
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        nested = body.get("error") if isinstance(body.get("error"), dict) else body
+        value = nested.get("code") if isinstance(nested, dict) else None
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 class _OciStreamingResponses:
     def __init__(self, inner: Any) -> None:
         self._inner = inner
 
     def create(self, **kwargs: Any) -> Any:
-        return self._inner.create(**_omit_empty_tools(kwargs))
+        return self._inner.create(**_oci_request(kwargs))
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -160,7 +210,22 @@ class _OciResponses:
         self._inner = inner
 
     async def create(self, **kwargs: Any) -> Any:
-        return await self._inner.create(**_omit_empty_tools(kwargs))
+        request = _oci_request(kwargs)
+        attempt = 0
+        while True:
+            try:
+                return await self._inner.create(**request)
+            except BadRequestError as exc:
+                if (
+                    model_error_code(exc) != MODEL_OUTPUT_INVALID_CODE
+                    or attempt >= MODEL_OUTPUT_INVALID_RETRIES
+                ):
+                    raise
+                attempt += 1
+                logger.warning(
+                    "builtin_runtime_model_output_invalid_retry",
+                    extra={"attempt": attempt, "max_retries": MODEL_OUTPUT_INVALID_RETRIES},
+                )
 
     @property
     def with_streaming_response(self) -> _OciStreamingResponses:
@@ -661,9 +726,34 @@ def _record_failure(run_id: str, exc: Exception) -> None:
         message = "ツールの呼び出しが上限の回数に達したため止めました。"
     else:
         code = "runtime.model_failed"
-        message = f"モデルの呼び出しに失敗しました（{type(exc).__name__}）。"
-    logger.warning("builtin_runtime_failed", extra={"run_id": run_id, "error_code": code})
+        # OCI の error code（`invalid_value` など）まで残す（型名だけでは原因が分からない。#1215）。
+        model_code = model_error_code(exc)
+        reason = f"{type(exc).__name__}: {model_code}" if model_code else type(exc).__name__
+        message = f"モデルの呼び出しに失敗しました（{reason}）。"
+    logger.warning(
+        "builtin_runtime_failed",
+        extra={
+            "run_id": run_id,
+            "error_code": code,
+            "exception_type": type(exc).__name__,
+            "model_error_code": model_error_code(exc),
+            # OCI の API のメッセージ（モデル名と理由。業務データ・資格情報は含まない）。
+            "model_error_message": _model_error_message(exc),
+        },
+    )
     runtime_repository.fail_builtin_run(run_id, code=code, detail=message)
+
+
+def _model_error_message(exc: BaseException) -> str | None:
+    if not isinstance(exc, APIStatusError):
+        return None
+    body = exc.body
+    if isinstance(body, dict):
+        nested = body.get("error") if isinstance(body.get("error"), dict) else body
+        message = nested.get("message") if isinstance(nested, dict) else None
+        if isinstance(message, str):
+            return message[:500]
+    return None
 
 
 def _max_turns() -> int:

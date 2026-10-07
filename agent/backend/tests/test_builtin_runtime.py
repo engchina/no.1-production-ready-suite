@@ -474,6 +474,115 @@ def test_oci_model_omits_empty_tools_for_xai() -> None:
     assert client.responses.calls[1]["tools"] == [{"type": "function"}]
 
 
+def _bad_request(code: str, message: str) -> Any:
+    # openai は httpx2 の Response を受け取る（httpx の Response は型が合わない）。
+    import httpx2
+    from openai import BadRequestError
+
+    body = {"code": code, "message": message, "param": None, "type": "invalid_request_error"}
+    response = httpx2.Response(400, request=httpx2.Request("POST", "https://oci.example/responses"))
+    return BadRequestError(f"Error code: 400 - {body}", response=response, body=body)
+
+
+class _RecordingResponses:
+    def __init__(self, failures: list[Exception] | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._failures = list(failures or [])
+
+    async def create(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        if self._failures:
+            raise self._failures.pop(0)
+        return {}
+
+
+class _RecordingClient:
+    def __init__(self, responses: _RecordingResponses) -> None:
+        self.responses = responses
+
+
+def _oci_client(responses: _RecordingResponses) -> Any:
+    model = builtin_runtime.OciResponsesModel(
+        model="openai.gpt-oss-120b",
+        openai_client=_RecordingClient(responses),  # type: ignore[arg-type]
+    )
+    return model._get_client()  # noqa: SLF001 - SDK の内部の差し替えを確かめる
+
+
+def test_oci_model_omits_reasoning_text_from_the_input() -> None:
+    """OCI の gpt-oss は input の reasoning_text を 400 で拒否する（#1215。実環境で確認）。"""
+    from openai.types.responses import ResponseReasoningItem
+
+    responses = _RecordingResponses()
+    wrapped = _oci_client(responses)
+    reasoning = {
+        "id": "rs_1",
+        "type": "reasoning",
+        "summary": [],
+        "content": [{"type": "reasoning_text", "text": "規程を検索する"}],
+    }
+    model_reasoning = ResponseReasoningItem.model_validate({**reasoning, "id": "rs_2"})
+    call = {"type": "function_call", "call_id": "c1", "name": "rag__rag_search", "arguments": "{}"}
+    output = {"type": "function_call_output", "call_id": "c1", "output": "{}"}
+    items = [{"role": "user", "content": "質問"}, reasoning, model_reasoning, call, output]
+
+    anyio.run(lambda: wrapped.responses.create(model="m", input=items))
+
+    sent = responses.calls[0]["input"]
+    assert sent[1] == {"id": "rs_1", "type": "reasoning", "summary": []}
+    assert sent[2] == {"id": "rs_2", "type": "reasoning", "summary": []}
+    assert sent[0] is items[0] and sent[3] is call and sent[4] is output
+    # 渡された input は変えない（SDK の状態に影響させない）。
+    assert reasoning["content"]
+
+    anyio.run(lambda: wrapped.responses.create(model="m", input="x"))
+    assert responses.calls[1]["input"] == "x"
+
+
+def test_oci_model_retries_model_output_invalid_only() -> None:
+    """OCI が再試行を求める `model_output_invalid` だけ、上限まで同じ要求で再試行する（#1215）。"""
+    invalid = _bad_request("model_output_invalid", "The selected model could not produce ...")
+    responses = _RecordingResponses([invalid, invalid])
+    wrapped = _oci_client(responses)
+
+    assert anyio.run(lambda: wrapped.responses.create(model="m", input="x")) == {}
+    assert len(responses.calls) == 3
+
+    exhausted = _RecordingResponses([invalid] * 3)
+    with pytest.raises(Exception, match="model_output_invalid"):
+        anyio.run(lambda: _oci_client(exhausted).responses.create(model="m", input="x"))
+    assert len(exhausted.calls) == 1 + builtin_runtime.MODEL_OUTPUT_INVALID_RETRIES
+
+    other = _RecordingResponses([_bad_request("invalid_value", "reasoning_text is not supported")])
+    with pytest.raises(Exception, match="invalid_value"):
+        anyio.run(lambda: _oci_client(other).responses.create(model="m", input="x"))
+    assert len(other.calls) == 1
+
+
+def test_model_failure_records_the_api_error_code(monkeypatch: MonkeyPatch, calls: _Calls) -> None:
+    """型名（BadRequestError）だけでは原因が分からないため、API の code まで残す（#1215）。"""
+    del calls
+    error = _bad_request("invalid_value", "reasoning_text is not supported by model m.")
+
+    class _FailingModel(ScriptedModel):
+        async def get_response(self, *args: Any, **kwargs: Any) -> Any:
+            raise error
+
+    _script(monkeypatch)  # モデルの接続の設定（CI には model-settings.json が無い）
+    monkeypatch.setattr(builtin_runtime, "model_factory", lambda _target: _FailingModel([]))
+    run_id = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="規程を調べて", agent_id=AGENT_ID), created_by_user_uuid=USER_UUID
+    ).id
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    assert run.status == RunStatus.FAILED
+    failed = run.events[-1]
+    assert failed.payload["error_code"] == "runtime.model_failed"
+    assert failed.message == "モデルの呼び出しに失敗しました（BadRequestError: invalid_value）。"
+
+
 # ---------------------------------------------------------------------------
 # MCP 接続のツール（RAG / NL2SQL。#757）
 # ---------------------------------------------------------------------------
