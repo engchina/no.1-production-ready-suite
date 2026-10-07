@@ -165,6 +165,11 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_max_rag_calls_per_run: int = 4
     # 同じ会話（thread）の通しのツールの呼び出し。前の Run の支援タスクの状態に積む。
     agent_max_tool_calls_per_task: int = 60
+    # 回答の最終の検証（#1246）。on のとき、RAG の根拠を使った Run の回答を、保存する前に
+    # Control Plane が RAG の MCP rag_validate_answer で検証する（RAG がモデルを 1 回呼ぶため
+    # 10〜20 秒増える）。
+    # 確かめられない主張は回答の末尾に示す。予算（上の 2 つ）には数えない。
+    agent_final_validation_enabled: bool = False
     agent_metrics_enabled: bool = True
     agent_trace_events_enabled: bool = True
     agent_trace_events_buffer_size: int = 500

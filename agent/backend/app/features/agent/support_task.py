@@ -41,6 +41,8 @@ RAG_RETRIEVE_EVIDENCE = "rag_retrieve_evidence"
 # （rag_search は 50〜110 秒）もの。rag_lookup_guides（業務ガイドの照合）と rag_read_source
 # （根拠の本文の読み取り）は軽いため数えない（タスクの通しの上限には数える）。
 RAG_BUDGET_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
+# Control Plane が自分で呼ぶ回答の最終の検証（#1246）。モデルの予算には数えない。
+_UNCOUNTED_TOOLS = frozenset({"rag_validate_answer"})
 # 根拠の参照を集める RAG のツール。
 _EVIDENCE_TOOLS = frozenset({RAG_SEARCH, RAG_RETRIEVE_EVIDENCE})
 
@@ -94,6 +96,8 @@ def _executed(step: RunStep) -> bool:
     if step.tool_call is None or step.tool_result is None:
         return False
     if step.status not in {"completed", "failed"}:
+        return False
+    if mcp_base_tool_name(step.tool_call.name) in _UNCOUNTED_TOOLS:
         return False
     return step.tool_result.error_code not in {_DRY_RUN_CODE, BUDGET_EXCEEDED_CODE}
 

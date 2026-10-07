@@ -64,6 +64,8 @@ const ARTIFACT_KIND: Record<string, StatusEntry> = {
   structured_table: { label: "status.artifact.structured_table", variant: "info" },
   // 支援タスクの状態（Run をまたいで引き継ぐ条件・確認・根拠の参照・予算の消費。#1243）。
   support_task: { label: "status.artifact.support_task", variant: "neutral" },
+  // 回答の最終の検証（rag_validate_answer の結果。#1246）。
+  answer_validation: { label: "status.artifact.answer_validation", variant: "neutral" },
   runtime_artifact: { label: "status.artifact.runtime_artifact", variant: "neutral" },
 };
 
