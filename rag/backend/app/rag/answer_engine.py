@@ -1180,6 +1180,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "confidence": result.confidence,
         "needs_human_review": result.needs_human_review,
         "insufficient_reason": result.insufficient_reason,
+        # 回答の構造（AnswerEnvelope。#1235）。outcome は回答の対応（answered / conditional / …）。
+        "outcome": (result.envelope or {}).get("outcome"),
+        "envelope": dict(result.envelope or {}),
         "reasoning_summary": result.reasoning_summary,
         # rag_poc の回答 viewer が出していた外部データの確認と問い合わせ型(#651)。
         "external_data_required": result.external_data_required,

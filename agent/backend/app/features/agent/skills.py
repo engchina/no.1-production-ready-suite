@@ -150,8 +150,12 @@ skill_registry.register(
             "回答に使った根拠（used_in_answer）を優先し、文書名と場所（locator の節・頁）を示す。"
             "根拠の excerpt が切り詰められている（truncated）か、前後の条件・例外を確かめる必要が"
             "あるときは、rag_read_source に document_id と chunk_id を渡して本文を読む。"
-            "insufficient_reason があるときや needs_human_review が true のときは、"
-            "資料で確かめられなかったことを伝え、推測で補わない。"
+            "rag_search の outcome で答え方を決める。answered は根拠に沿って答える。"
+            "conditional は conditions（説明が成り立つ条件）と gaps（資料で確かめられない点）を"
+            "示し、条件ごとに分けて答える。needs_environment_data は confirmations（確かめる"
+            "現場の値・記録）を挙げ、現場の値を推測で断定しない。insufficient_evidence は"
+            "資料で確かめられなかったことを伝え、推測で補わない。requests の missing は"
+            "答えていない要求として利用者に示す。"
         ),
         mcp_requirements=[
             SkillMcpRequirement(

@@ -208,6 +208,8 @@ class AnswerResponse:
     raw_text: str = ""
     evidence_facts: tuple[dict[str, str], ...] = ()
     generation_trace: dict[str, Any] = field(default_factory=dict)
+    # 回答の構造（AnswerEnvelope。#1235）。grounded の確定の段で組み立てる。無い経路は結果で補う。
+    envelope: dict[str, Any] = field(default_factory=dict)
 
 @dataclass(frozen=True)
 class QueryExpansionResult:
@@ -396,6 +398,8 @@ class AnswerQuestionResult:
     generation_trace: dict[str, Any] = field(default_factory=dict)
     task_contract: dict[str, Any] = field(default_factory=dict)
     rejected_queries: tuple[dict[str, str], ...] = ()
+    # 回答の構造（AnswerEnvelope。#1235）。
+    envelope: dict[str, Any] = field(default_factory=dict)
 
 @dataclass(frozen=True)
 class GroundedAnswer:
