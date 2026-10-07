@@ -35,6 +35,7 @@ from pr_system_settings.model import enterprise_ai_model_catalog as enterprise_a
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings
+from rag_parser_core.sheet_records import ExcelOptions
 from rag_pipeline_core.chunking import (
     CHUNK_OVERLAP_MAX_CHARS as CHUNK_OVERLAP_MAX_CHARS,
 )
@@ -985,9 +986,17 @@ class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
         default="http://127.0.0.1:18012",
         description="CSV→構造化 JSON 前処理マイクロサービスの base URL。",
     )
+    rag_preprocess_excel_options: ExcelOptions = Field(
+        default_factory=ExcelOptions,
+        description=(
+            "前処理 excel_to_json の選択肢(#1221。読み方 auto/table/procedure・表頭の行と行数・"
+            "読むシート・読まないシート・非表示のシート・読まない列)。文書レシピの excel_options で"
+            '上書きできる。環境変数は JSON(例: {"mode": "table", "header_row": 2})。'
+        ),
+    )
     rag_preprocess_excel_to_json_service_url: str = Field(
         default="http://127.0.0.1:18013",
-        description="Excel(.xls/.xlsx)→構造化 JSON 前処理マイクロサービスの base URL。",
+        description="Excel(.xls/.xlsx)→行の記録 JSON 前処理マイクロサービスの base URL。",
     )
     rag_preprocess_url_to_markdown_service_url: str = Field(
         default="http://127.0.0.1:18014",

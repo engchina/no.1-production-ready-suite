@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 
 import httpx
 from pr_backend_core.internal_http import http_client_options
@@ -47,8 +48,12 @@ class PreprocessServiceClient:
         content_type: str,
         source_profile: SourceProfile | None = None,
         profile: str | None = None,
+        options: Mapping[str, object] | None = None,
     ) -> ConvertOutcome:
-        """選択プリセットで原本を変換する。選択したサービス処理の失敗は例外にする。"""
+        """選択プリセットで原本を変換する。選択したサービス処理の失敗は例外にする。
+
+        ``options`` は選択肢を持つプリセット(excel_to_json。#1221)の値で、JSON で送る。
+        """
         resolved = normalize_preprocess_profile(
             profile
             if profile is not None
@@ -64,6 +69,7 @@ class PreprocessServiceClient:
             source_bytes,
             content_type=content_type,
             source_profile=source_profile,
+            options=options,
         )
 
     def _convert_via_service(
@@ -73,6 +79,7 @@ class PreprocessServiceClient:
         *,
         content_type: str,
         source_profile: SourceProfile | None,
+        options: Mapping[str, object] | None = None,
     ) -> ConvertOutcome:
         if not getattr(self._settings, "rag_preprocess_enabled", False):
             raise PreprocessServiceError(profile, "disabled")
@@ -93,6 +100,8 @@ class PreprocessServiceClient:
                 source_profile.model_dump_json() if source_profile is not None else "null"
             ),
         }
+        if options:
+            data["options"] = json.dumps(dict(options), ensure_ascii=False)
         try:
             with httpx.Client(timeout=self._timeout, **http_client_options(url)) as client:
                 response = request_with_retry(

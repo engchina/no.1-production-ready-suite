@@ -9,8 +9,10 @@ extra `service` でのみ要求し、契約 schema(`preprocess.py`)とは分離�
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
 import json
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import FastAPI, File, Form, UploadFile
 from pr_backend_core.logging import configure_http_logging
@@ -39,6 +41,25 @@ def _parse_source_profile(raw: str | None) -> SourceProfile | None:
         return None
 
 
+def _parse_options(raw: str | None) -> dict[str, Any]:
+    """前処理の選択肢（Document Recipe の値。JSON の object）。読めなければ空にする。"""
+    if raw is None or not raw.strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _accepts_options(converter: Converter) -> bool:
+    """converter が keyword の `options` を受け取るか（選択肢を持たない前処理は受け取らない）。"""
+    try:
+        return "options" in inspect.signature(converter).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def create_preprocess_app(
     *,
     converter: Converter,
@@ -53,6 +74,7 @@ def create_preprocess_app(
     # API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。
     app = FastAPI(title=title or "preprocess", docs_url=None, redoc_url=None, openapi_url=None)
     configure_http_logging(app, service_name=app.title)
+    accepts_options = _accepts_options(converter)
 
     @app.get("/health", response_model=ConvertHealth)
     def health() -> ConvertHealth:
@@ -68,14 +90,20 @@ def create_preprocess_app(
         content_type: Annotated[str, Form()] = "",
         preprocess_profile: Annotated[str, Form()] = DEFAULT_PREPROCESS_PROFILE,
         source_profile: Annotated[str | None, Form()] = None,
+        options: Annotated[str | None, Form()] = None,
     ) -> ConvertResponse:
         source_bytes = await file.read()
         profile = _parse_source_profile(source_profile)
         effective_content_type = content_type or (
             profile.content_type if profile is not None else ""
         )
+        run = (
+            functools.partial(converter, options=_parse_options(options))
+            if accepts_options
+            else converter
+        )
         outcome = await asyncio.to_thread(
-            converter,
+            run,
             source_bytes,
             effective_content_type,
             normalize_preprocess_profile(preprocess_profile),

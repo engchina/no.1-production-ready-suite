@@ -1,23 +1,38 @@
 # preprocess-excel-to-json
 
-parse の **前** に Excel(`.xls` / `.xlsx`)原本を決定論で構造化 JSON(シート単位の
-レコード配列)へ変換する前処理マイクロサービス。
+parse の **前** に Excel(`.xls` / `.xlsx`)原本を決定論で「行の記録」JSON(シートごとの表頭・元の行番号・
+セル範囲・表示の値)へ変換する前処理マイクロサービス(#1221)。読み方は engchina/no.1-rag の前処理
+(`utils/office_preprocess_util.py`)に合わせる。
 
-- 出力契約: `rag_parser_core` の `ConvertResponse`(`POST /convert`)
+- 出力契約: `rag_parser_core` の `ConvertResponse`(`POST /convert`)。派生物の content type は
+  `application/vnd.production-ready.sheet-records+json`(`rag_parser_core.sheet_records`)で、Docling /
+  Unstructured の parser のサービスが外部の parser に渡さずに 1 記録 1 要素にする。
+- 選択肢: `POST /convert` の form の `options`(JSON)。backend は文書レシピの `excel_options`(無ければ
+  `RAG_PREPROCESS_EXCEL_OPTIONS`)を渡す。
 - readiness: `GET /health`(openpyxl / xlrd 導入状況)
-- `.xlsx` は openpyxl(read_only / data_only)、`.xls` は xlrd で読む(形式は magic bytes 判定)
-- 依存(openpyxl / xlrd)は本サービス単独で upgrade 可能(他 parser / backend に非干渉)
-- 依存未導入・解析失敗・空のときは `converted=false`(passthrough)を返し、backend は原本のまま parse する
+- 依存未導入・解析失敗・空・選択肢の誤りのときは `converted=false`(passthrough)を返す
 
 ## 変換仕様
 
 | 項目 | 挙動 |
 |---|---|
-| 対応形式 | `.xlsx`(openpyxl)/ `.xls`(xlrd 2.x) |
-| シート | 複数シートをシート順に走査 |
-| 出力 | `{"sheets": [{"name", "columns", "row_count", "rows": [{列: 値}]}], "sheet_count": N}` |
-| セル値 | None→空文字、整数 float は小数点を落とす、日付は ISO 8601 |
-| 縮退 | 空・依存欠如・解析失敗・行 0 のときは passthrough |
+| 対応形式 | `.xlsx`(openpyxl。結合セル・書式を読むため read_only にしない)/ `.xls`(xlrd 2.x、formatting_info) |
+| 読み方(`mode`) | `table` は 1 行 1 記録。`procedure` は手順書(表頭の無い番号の列と、表頭のある最初の列=題名)を、番号と題名のある行から次の手順までで 1 記録にし、詳細の無い題名の行を章にする。`auto`(既定)は番号と題名の列があれば procedure、無ければデータの行の埋まり方(中央値 60% 以上)で table |
+| 表頭 | `header_row`(1 始まり)・`header_row_count`(1〜5)の指定を優先。無ければ先頭 30 行から採点して選び、信頼度と理由を残す(0.6 未満は警告 `excel_header_low_confidence`)。表頭より上の行は `preamble` |
+| 列名 | 複数行の表頭は「 / 」でつなぐ。空は `column_<列>`、重複は `<名前>__<列>` |
+| 行・場所 | 空行を除く前の元の行番号(`row_start` / `row_end`)とセル範囲(`A5:F5`) |
+| セル値 | 表示の書式(ゼロ埋め `000`・桁区切り・小数桁・百分率)で文字列にする。日付は ISO 8601、真偽は `TRUE` / `FALSE`。`.xls` の日付もシリアル値にしない |
+| 数式 | キャッシュ値を読む。キャッシュの無い数式は数式の文字列にし、セルの位置付きの診断(`formula_without_cached_value`)を残す。マクロは実行しない |
+| 結合セル | 表頭の中は結合の範囲を埋める。データは同じ行の横の結合だけを埋め、縦の結合の値は後の行へ漏らさない |
+| シート・列 | 既定は表示されているシート。`sheets`(読む)・`exclude_sheets`(読まない)・`include_hidden_sheets`・`exclude_columns`(列名か列の記号) |
+| 縮退 | 空・依存欠如・解析失敗・記録 0・選択肢の誤りのときは passthrough |
+
+## テスト
+
+```bash
+# CI(Lint / services & scripts)と同じ
+uv run --locked --with pytest python -m pytest -q tests
+```
 
 ## ローカル実行(開発)
 
