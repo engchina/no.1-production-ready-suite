@@ -1361,6 +1361,8 @@ export interface EvaluationCase {
   standard_answer?: string | null;
   /** false は答えるべきでない質問。省略時は期待値（文書・語・標準回答）の有無で決まる。 */
   answerable?: boolean | null;
+  /** 分類（#1226）。結果の分類ごとの内訳に使う。 */
+  category?: EvaluationCaseCategory | null;
 }
 
 export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number | null>>;
@@ -1387,10 +1389,29 @@ export interface EvaluationAnswerJudgement {
   message: string | null;
 }
 
+/** 評価のケースの分類（#1226。答えられるかの種類）。 */
+export type EvaluationCaseCategory =
+  | "document_answerable"
+  | "clarification_required"
+  | "environment_data_required"
+  | "knowledge_missing"
+  | "conflicting_sources";
+
+/** 分類ごとの結果の内訳（#1226）。率は測れたケースだけの割合で、測れなければ null。 */
+export interface EvaluationCategorySummary {
+  case_count: number;
+  error_count: number;
+  answer_pass_rate: number | null;
+  answer_keyword_hit_rate: number | null;
+  abstain_rate: number | null;
+  refusal_correct_rate: number | null;
+}
+
 /** 1 ケースの結果。測れない指標は null（保存済みの古い結果では欄が無いことがある）。 */
 export interface EvaluationCaseResult {
   case_id: string;
   trace_id: string;
+  category?: EvaluationCaseCategory | null;
   status: "success" | "error";
   retrieved_document_ids: string[];
   relevant_document_ids: string[];
@@ -1430,6 +1451,8 @@ export type EvaluationMetrics = Partial<Record<EvaluationMetricName, number | nu
   passed: boolean;
   threshold_failures: EvaluationThresholdFailure[];
   failure_reason_counts: Partial<Record<string, number>>;
+  /** 分類ごとの内訳（ケースに分類があるときだけ。分類の無いケースは uncategorized。#1226）。 */
+  category_breakdown?: Partial<Record<string, EvaluationCategorySummary>>;
   case_results: EvaluationCaseResult[];
 };
 

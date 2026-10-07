@@ -41,11 +41,13 @@ def test_search_load_cli_passes_and_writes_redacted_artifacts(
                 "diagnostics": {
                     "answer": {
                         "execution_steps": [
-                            {"name": "質問の理解", "elapsed_seconds": 0.012},
+                            {"name": "質問の理解", "elapsed_seconds": 0.012, "llm_calls": 0},
                             {"name": "文書検索", "elapsed_seconds": 0.024},
                             # 同じ工程が 2 回あれば合計する(補正検索の 2 回目など)。
                             {"name": "文書検索", "elapsed_seconds": 0.006},
-                            {"name": "回答生成", "elapsed_seconds": 0.046},
+                            {"name": "回答生成", "elapsed_seconds": 0.046, "llm_calls": 2},
+                            {"name": "根拠確認", "elapsed_seconds": 0.01, "llm_calls": 1},
+                            {"name": "根拠確認", "elapsed_seconds": 0.01, "llm_calls": 1},
                         ]
                     }
                 },
@@ -91,6 +93,12 @@ def test_search_load_cli_passes_and_writes_redacted_artifacts(
     assert result["data"]["server_latency_ms"]["p95"] == 140.0
     assert result["data"]["stage_latency_ms"]["質問の理解"]["p95"] == 12.0
     assert result["data"]["stage_latency_ms"]["文書検索"]["p95"] == 30.0
+    # 工程ごとのモデルの呼び出しの回数(#1226)。同じ工程は合計し、回数の無い工程は出さない。
+    assert result["data"]["stage_llm_calls"] == {
+        "回答生成": {"mean": 2.0, "max": 2.0},
+        "根拠確認": {"mean": 2.0, "max": 2.0},
+        "質問の理解": {"mean": 0.0, "max": 0.0},
+    }
     output_text = output.read_text(encoding="utf-8")
     trend_text = trend_output.read_text(encoding="utf-8")
     assert "秘密の承認条件" not in output_text
@@ -268,3 +276,14 @@ def _write_scenario(
         encoding="utf-8",
     )
     return scenario
+
+
+def test_case_can_target_a_search_answer_profile() -> None:
+    """負荷・基線の計測は検索・回答プロファイルを指定して実際の設定で測れる（#1226）。"""
+    case = search_load_cli.SearchLoadCase(
+        id="c", query="承認者は？", search_answer_profile_id="bv-1"
+    )
+    payload = case.to_search_request().model_dump(mode="json")
+    assert payload["search_answer_profile_id"] == "bv-1"
+    plain = search_load_cli.SearchLoadCase(id="c", query="承認者は？").to_search_request()
+    assert plain.search_answer_profile_id is None
