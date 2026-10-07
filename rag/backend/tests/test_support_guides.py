@@ -351,9 +351,9 @@ def test_publish_is_refused_when_validation_or_references_fail(
     guide_id = client.post(BASE, json={"draft": broken}).json()["data"]["guide_id"]
     refused = client.post(f"{BASE}/{guide_id}/publish", json={"base_revision": 1})
     assert refused.status_code == 422
-    body = refused.json()
-    detail = body.get("detail") or body
-    assert "self_dependency" in str(detail)
+    messages = refused.json()["error_messages"]
+    assert messages[0] == "検証で問題が見つかったため公開できません。"
+    assert any("自分自身に依存" in message for message in messages[1:])
 
     oracle.documents["doc-1"] = (FileStatus.REVIEW, ["kb-other"])
     ok_id = client.post(BASE, json={"draft": guide()}).json()["data"]["guide_id"]
