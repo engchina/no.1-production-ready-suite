@@ -1025,7 +1025,7 @@ export interface BuiltinRuntimeStatus {
 /**
  * 業務 Agent・スキル・MCP 接続・実行などの保存先（#839）。`persistent` が false なら再起動で消える。
  * `reason`: `memory_backend` は DB は設定済みで保存先にメモリを明示、`restart_required` は既定（auto）で DB も
- * 設定済みだが起動時は使えなかった（再起動で DB になる）、`database_not_configured` は DB が未設定、
+ * 設定済みだが起動時は未設定だった（再起動で DB になる）、`database_not_configured` は DB が未設定、
  * `checkpoint_invalid` は既定（auto）で保存済みの checkpoint 全体を読めず、上書きしないようメモリにした（#853）。
  */
 export interface RuntimeStorageStatus {

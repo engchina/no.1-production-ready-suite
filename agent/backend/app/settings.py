@@ -153,15 +153,9 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     # oracle_normalized）。Oracle は共通の PLATFORM_ORACLE_* で接続し、テーブルはシステムテーブルが
     # 作る（#764）。oracle_normalized は監査用の projection（AGENT_RUNTIME_RUNS など）も書く。
     # auto（既定。#839）は DB の設定がそろっていれば oracle_checkpoint、無ければ memory
-    # （起動時に判定）。
+    # （起動時に判定）。DB に接続できないあいだも起動し、接続できた時点で読み込む（#1212）。
     agent_runtime_repository_backend: str = "auto"
     agent_runtime_snapshot_path: str | None = None
-    # 起動時に保存先の DB へ接続できない（接続のエラー）ときの再試行の回数と、最初の待ち（秒。
-    # 指数 backoff + jitter、上限 30 秒）。1 回の接続の上限は
-    # PLATFORM_ORACLE_TCP_CONNECT_TIMEOUT_SECONDS。
-    # それでも接続できなければ auto は memory で起動し、明示した oracle_* は止まる（#853）。
-    agent_runtime_storage_connect_retries: int = Field(default=2, ge=0, le=10)
-    agent_runtime_storage_connect_retry_delay_seconds: float = Field(default=2.0, ge=0.0, le=30.0)
     agent_runtime_projection_retention_days: int = 0
     agent_runtime_projection_write_mode: str = "replace"
     agent_max_tool_calls_per_run: int = 20

@@ -6,11 +6,11 @@ Run の repository（`runtime`）・画面で変えた定義の store（`control
 - `auto`（既定）: 共通の `PLATFORM_ORACLE_*` の設定がそろっていれば `oracle_checkpoint`、
   そろっていなければ `memory`。判定は起動の後の最初の 1 回だけ行い、プロセスの間は変えない
   （Run と定義の保存先がずれないように）。起動の後に DB を設定したときは、再起動で Oracle になる。
-- `auto` で Oracle を選んだが、起動時に DB へ接続できなかったとき（ADB の停止中など）は、
-  起動を止めずに `memory` へ切り替える（`fall_back_to_memory`）。画面は再起動を案内する。
-- `auto` で Oracle を選んだが、checkpoint 全体が読めない（JSON の破損・未対応の版）ときも、
-  checkpoint を上書きしないよう `memory` で起動する（`fallback_reason()` が `checkpoint_invalid`。
-  #853）。1 件の Run の不整合では縮退しない（Run 単位で直す・退避する）。
+- `auto` で Oracle を選んだが DB に接続できない（ADB の停止中など）ときは、`memory` に縮退しない。
+  backend は起動し、Run の repository と定義は DB に接続できるようになった時点で読み込む（#1212）。
+- `auto` で Oracle を選んだが、checkpoint 全体が読めない（JSON の破損・未対応の版）ときは、
+  checkpoint を上書きしないよう `memory` にする（`fall_back_to_memory`。`fallback_reason()` が
+  `checkpoint_invalid`。#853）。1 件の Run の不整合では縮退しない（Run 単位で直す・退避する）。
 - `memory` / `file` / `oracle_checkpoint` / `oracle_normalized` を明示したときは、その値に従う
   （`file` は `AGENT_RUNTIME_SNAPSHOT_PATH` が要る）。
 """
@@ -34,10 +34,9 @@ MEMORY_BACKENDS = frozenset({"memory", "in_memory"})
 _lock = threading.Lock()
 # `auto` の判定の結果（None はまだ判定していない）。
 _auto_decision: str | None = None
-# `auto` で Oracle を選んだが起動時に使えず memory にしたか。
+# `auto` で Oracle を選んだが checkpoint が読めず memory にしたか。
 _fell_back = False
-# memory にした理由（接続できない / checkpoint が読めない。#853）。
-FALLBACK_CONNECTION = "connection"
+# memory にした理由（checkpoint が読めない。#853）。
 FALLBACK_CHECKPOINT_INVALID = "checkpoint_invalid"
 _fallback_reason: str | None = None
 
@@ -78,12 +77,12 @@ def fell_back_to_memory() -> bool:
 
 
 def fallback_reason() -> str | None:
-    """memory にした理由（`connection` / `checkpoint_invalid`。縮退していなければ None）。"""
+    """memory にした理由（`checkpoint_invalid`。縮退していなければ None）。"""
     return _fallback_reason if _fell_back else None
 
 
-def fall_back_to_memory(reason: str = FALLBACK_CONNECTION) -> None:
-    """`auto` で選んだ Oracle が起動時に使えなかった。以降はこのプロセスでは memory にする。"""
+def fall_back_to_memory(reason: str = FALLBACK_CHECKPOINT_INVALID) -> None:
+    """`auto` で選んだ Oracle の checkpoint が読めない。以降はこのプロセスでは memory にする。"""
     global _auto_decision, _fell_back, _fallback_reason
     with _lock:
         _auto_decision = "memory"

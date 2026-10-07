@@ -9,7 +9,8 @@
 - `database_configured` は共通の `PLATFORM_ORACLE_*` の設定がそろっているか（接続は試さない。
   システム設定と同じ `database_readiness` の判定）。
 - 既定の `auto` は起動時に DB の設定を見て決める（`storage_backend`）。起動の後に DB を設定した
-  ときは、再起動するまで memory のまま（`reason=restart_required`）。
+  ときは、再起動するまで memory のまま（`reason=restart_required`）。DB の設定はあるが接続できない
+  ときは memory にせず、接続できた時点で読み込む（#1212。それまで業務の API は 503）。
 - 起動時の読み込みで直した Run（`repaired_runs`）と、直せずに読み込まず保存先に元の JSON のまま
   残している Run・業務 Agent（`skipped_runs` / `skipped_agents`）の数を返す（#853）。
 - `auto` で checkpoint 全体が読めず memory で起動したときは `reason=checkpoint_invalid`（#853）。
@@ -30,8 +31,8 @@ StorageBackend = Literal["memory", "file", "oracle_checkpoint", "oracle_normaliz
 # 保存されない理由。
 # - `memory_backend`: DB は設定済みで、保存先に memory（または保存先のパスの無い file）を
 #   明示している
-# - `restart_required`: 保存先は `auto` で DB も設定済みだが、起動時は DB が未設定か接続できなかった
-#   （再起動で Oracle になる）
+# - `restart_required`: 保存先は `auto` で DB も設定済みだが、起動時は DB が未設定だった（再起動で
+#   Oracle になる。起動時に接続できなかっただけなら memory にせず、接続できた時点で読み込む。#1212）
 # - `database_not_configured`: DB の設定がそろっていない
 # - `checkpoint_invalid`: 保存先は `auto` で DB に接続できたが、保存済みの checkpoint 全体が読めず
 #   （JSON の破損・未対応の版）、上書きしないよう memory で起動した（#853）

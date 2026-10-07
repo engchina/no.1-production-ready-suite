@@ -9,6 +9,8 @@ import os
 import re
 import stat
 import sys
+import threading
+import time
 import zipfile
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -20,6 +22,7 @@ os.environ["AGENT_CORS_ORIGINS"] = '["http://localhost:3002"]'
 
 import anyio
 import httpx
+import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from mcp_support import fake_product_mcp
@@ -796,6 +799,26 @@ def test_database_status_connection_uses_the_pool(monkeypatch: MonkeyPatch) -> N
     assert executed == ["SELECT 1 FROM DUAL"] * 3
 
 
+def test_database_status_check_stops_waiting_at_the_timeout(monkeypatch: MonkeyPatch) -> None:
+    """DB の停止中に接続の待ちが長くても、DB ゲートの確認は timeout で返る（#1212）。"""
+    release = threading.Event()
+
+    def slow_ping(_settings: object) -> None:
+        # wallet の接続記述子の再試行で、1 回の接続に 1 分以上かかる状態を模す。
+        release.wait(10)
+
+    monkeypatch.setattr(agent_router, "_ping_platform_oracle_sync", slow_ping)
+    settings = SimpleNamespace(oracle_db_test_timeout_seconds=0.2)
+    started = time.monotonic()
+    try:
+        with pytest.raises(agent_router.OracleConnectionTimeoutError):
+            anyio.run(agent_router._test_database_status_connection, settings)
+    finally:
+        release.set()
+
+    assert time.monotonic() - started < 5
+
+
 def test_database_status_unreachable_does_not_leak_connection_details(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
@@ -1364,7 +1387,8 @@ def test_database_connection_test_uses_oracledb_like_rag(
     assert captured["connection_closed"] is True
     assert captured["connect_kwargs"] == {
         "user": "ADMIN",
-        "dsn": "mydb_high",
+        # Wallet の別名は、再試行の設定を外した接続記述子にする（RAG の接続テストと同じ。#1212）。
+        "dsn": "(DESCRIPTION=...)",
         "retry_count": 0,
         "retry_delay": 0,
         "tcp_connect_timeout": 3.0,

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -1055,6 +1056,36 @@ def test_platform_oracle_connection_uses_platform_settings() -> None:
     assert kwargs["wallet_password"] == "wallet-secret"  # nosec B105 - テスト用
     with pytest.raises(RuntimeError, match="PLATFORM_ORACLE_DSN"):
         platform_oracle_connect_kwargs(Settings(_env_file=None, oracle_dsn="", oracle_user=""))
+
+
+def test_wallet_alias_is_connected_without_the_descriptor_retry(tmp_path: Path) -> None:
+    """Wallet の別名の `(retry_count=20)(retry_delay=3)` で、DB の停止中に長く待たない（#1212）。"""
+    from app.oracle_connection import oracle_connect_kwargs
+
+    (tmp_path / "tnsnames.ora").write_text(
+        "suiteadb_high = (description= (retry_count=20)(retry_delay=3)"
+        "(address=(protocol=tcps)(port=1522)(host=adb.example.com))"
+        "(connect_data=(service_name=x_suiteadb_high.adb.oraclecloud.com)))\n",
+        encoding="utf-8",
+    )
+    kwargs = oracle_connect_kwargs(
+        SimpleNamespace(
+            oracle_user="ADMIN",
+            oracle_dsn="suiteadb_high",
+            oracle_password="",
+            oracle_wallet_dir=str(tmp_path),
+            oracle_wallet_password="",
+            oracle_tcp_connect_timeout_seconds=10.0,
+        )
+    )
+
+    dsn = str(kwargs["dsn"])
+    assert dsn.startswith("(description=")
+    assert "retry_count" not in dsn
+    assert "retry_delay" not in dsn
+    assert "service_name=x_suiteadb_high.adb.oraclecloud.com" in dsn
+    assert (kwargs["retry_count"], kwargs["retry_delay"]) == (0, 0)
+    assert kwargs["config_dir"] == str(tmp_path)
 
 
 def _read_missing_oci_config(headers: dict[str, str], tmp_path: Any) -> int:

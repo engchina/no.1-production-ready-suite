@@ -220,13 +220,13 @@ memory backend は process 間共有されないため production dispatcher に
 
 保存先は `AGENT_RUNTIME_REPOSITORY_BACKEND`（既定 `auto`。#839）。`auto` は起動時に 1 回だけ、共通の `PLATFORM_ORACLE_*` の
 設定がそろっていれば `oracle_checkpoint`、無ければ `memory` に決め（`app/features/agent/storage_backend.py`）、Run の repository・
-定義の store・Run の事実が同じ決定に従う。`auto` で選んだ Oracle に起動時に接続できない（接続のエラー）ときは memory で起動し、
-再起動を案内する（明示した `oracle_*` は従来どおり起動を止める。接続以外のエラーも止める）。今の保存先は `GET /api/runtime/storage`（`backend`・
+定義の store・Run の事実が同じ決定に従う。Oracle に接続できない（接続のエラー）ときも memory に縮退せず、backend は起動して
+接続できた時点で読み込む（#1212。§5.1.1）。今の保存先は `GET /api/runtime/storage`（`backend`・
 `persistent`・`database_configured`・`reason`。接続先は返さない。#839）で分かり、「運用設定 > 実行環境」の「保存先」の
 カードが `StatusBadge` と直し方を出す。保存していない（`persistent=false`）ときは、業務 Agent・スキル・プラグイン・
 マーケットプレイス・実行履歴・自動実行・品質評価・MCP 接続・API キー・ツール権限・バックアップと復元・システムテーブルの
 画面の先頭に warning の Banner（`NonPersistentStorageNotice`）を出し、実行環境へ案内する。理由は、DB の設定がそろって
-いれば `memory_backend`（memory などを明示。保存先の設定を直す）か `restart_required`（`auto` で起動時は DB を使えなかった。
+いれば `memory_backend`（memory などを明示。保存先の設定を直す）か `restart_required`（`auto` で起動時は DB が未設定だった。
 再起動する）、そろっていなければ `database_not_configured`（DB の設定から直す）。`auto` で保存済みの checkpoint 全体が読めず memory で
 起動したときは `checkpoint_invalid`（#853。§5.1.1）。
 
@@ -239,8 +239,8 @@ memory backend は process 間共有されないため production dispatcher に
 - Oracle は共通の `PLATFORM_ORACLE_*` で接続する（旧 `AGENT_RUNTIME_ORACLE_*` は読まない）。テーブルはシステムテーブル
   （`app.system_schema` の migration 006）が作り、アプリは DDL を実行しない。テーブルが無いあいだは空の状態で起動し、
   定義の保存は「システムテーブルで作成・更新してください」で断る。全再作成はこれらのテーブルも消す（Run の履歴も消える）。
-- 定義は API の変更の後に保存し（`control_plane_store.save_*`）、起動時（`app.main` の lifespan）に
-  `restore_control_plane()` で `.env` の宣言の後に重ねる。RAG / NL2SQL の接続は画面で変えた URL・タイムアウトだけを
+- 定義は API の変更の後に保存し（`control_plane_store.save_*`）、保存先の読み込み（`storage_bootstrap`。§5.1.1）で
+  `restore_control_plane()` を呼び、`.env` の宣言の後に重ねる。RAG / NL2SQL の接続は画面で変えた URL・タイムアウトだけを
   上書きする（認証方式は変えない）。`.env` の宣言・組み込みの定義は保存しない。
 - MCP 接続の API キー・OAuth の client secret・セッション ID は、`PLATFORM_SERVICE_TOKEN_SECRET` から HKDF-SHA256 で
   導いた鍵の Fernet で暗号化して保存する（`app.secret_box`。`enc:v1:...`）。署名鍵を変えると復号できないため、その接続の
@@ -254,9 +254,28 @@ memory backend は process 間共有されないため production dispatcher に
     読み続け、起動は止めない）。
 - 1 worker・`in_process` の前提は変えない（checkpoint は process 内の状態を丸ごと書くため）。
 
-### 5.1.1 起動時の読み込みと再試行（#853）
+### 5.1.1 保存先の読み込みと再試行（#853 / #1212）
 
-保存先の 1 件の不整合で backend（module の import）を止めない。読み込み（Oracle の checkpoint・file の snapshot・
+DB に接続できないあいだも backend は起動する（RAG / NL2SQL と同じ。#1212）。Run の repository は module の import 時に
+作らず（`runtime.runtime_repository` は遅延の参照。`get_runtime_repository()`）、`app.features.agent.storage_bootstrap` が
+Run の repository → 定義の復元 → 履歴の準備（評価の整理・Run の事実の backfill）の順に 1 回だけ読み込む。
+
+- 起動時（lifespan）はバックグラウンド（daemon thread）で読み込みを始め、済むまで 15 秒ごとに再試行する（ログ
+  `agent_storage_not_ready`。済んだらログ `agent_storage_ready`）。自動実行のスケジューラは読み込みが済むまで判定しない。
+- 業務の API は、読み込みが済むまで最初の要求で読み込みを試み（`app.api.router.require_agent_storage`。認証の前。API キーの
+  認証も読み込んだ定義を使う）、読み込めなければ 503（`error_code=agent_storage_unavailable`、`Retry-After: 15`）。
+  DB の状態・システム設定（データベース・システムテーブル・モデル・OCI・アップロード保存先）・認証・ユーザーとロールの API は待たない。
+  画面は DB ゲートで案内し、DB に接続できるようになれば再起動せずに読み込む。
+- DB に接続できない（`is_oracle_connection_error`）ときは memory に縮退しない（`AgentRuntimeStorageUnavailableError`）。
+  済んだ段階は持ち越す。失敗の直後 5 秒は接続を試さずに同じ理由を返す（wallet の接続記述子の `retry_count` /
+  `retry_delay` で 1 回の接続に 1 分以上かかることがあるため、要求ごとに接続を待たない）。別のスレッドが読み込んで
+  いるあいだの要求は 10 秒まで待ち、超えたら 503。
+- 定義の読み込みの接続以外の障害（権限など）は記録して先へ進む。Run の repository の接続以外の障害（明示した Oracle の
+  checkpoint の破損・SQL・権限）は 503 で返す（checkpoint の破損は直し方の文、それ以外はログ `agent_storage_load_failed`
+  への案内）。
+- runtime-dispatcher（別 process）は最初の claim で repository を作り、作れなければ下の backoff で続ける。
+
+保存先の 1 件の不整合で読み込みを止めない。読み込み（Oracle の checkpoint・file の snapshot・
 dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を JSON として読み、Run・業務 Agent を 1 件ずつ検証する。
 
 - **直す**（`_repair_run`。待ちを終わらせる方向だけで、承認・再開の方向には直さない）: 終わった Run に残った pending の承認 →
@@ -270,14 +289,9 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
 - 直した・退避したら、読み込みの直後に保存する（失敗しても起動は止めない）。件数は `GET /api/runtime/storage` の
   `repaired_runs`（この起動で直した Run）・`skipped_runs` / `skipped_agents`（退避している数）と「保存先」のカードに出す。
 - snapshot 全体が読めない（JSON の破損・object でない・未対応の版）ときだけ止める。`auto` は checkpoint を上書きしないよう
-  memory で起動し、`reason=checkpoint_invalid` で案内する。明示した `oracle_*` / `file` は、直し方（行・ファイルを退避して
-  削除するか、バックアップを戻す）を書いた例外で起動を止める（データの保護）。
+  memory にし（定義の store も memory にそろえる）、`reason=checkpoint_invalid` で案内する。明示した `oracle_*` / `file` は、
+  直し方（行・ファイルを退避して削除するか、バックアップを戻す）を書いた例外で業務の API を止める（データの保護）。
 - 利用者が明示的に行う復元（`replace_snapshot`）は今までどおり厳密に検証して拒否する。
-- 起動時の DB の接続のエラー（`is_oracle_connection_error`）は、`AGENT_RUNTIME_STORAGE_CONNECT_RETRIES`（既定 2）回まで、
-  `AGENT_RUNTIME_STORAGE_CONNECT_RETRY_DELAY_SECONDS`（既定 2 秒）から 2 倍ずつ（上限 30 秒、後半を jitter）待って再試行する。
-  1 回の接続の上限は `PLATFORM_ORACLE_TCP_CONNECT_TIMEOUT_SECONDS`。接続以外のエラーは再試行しない。それでも接続できなければ
-  `auto` は memory（#851）、明示した `oracle_*` は ORA / DPY のコードと直し方を書いた例外で止める。待ちは
-  `runtime._retry_sleep` で差し替える（テストは待たない）。
 - runtime-dispatcher は 1 回の claim・実行の失敗で止まらず、ログを残して poll の間隔から 2 倍ずつ（上限 60 秒）待って続ける。
 
 ### 5.2 Run の事実と集計（#794）

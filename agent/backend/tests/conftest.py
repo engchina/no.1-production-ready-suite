@@ -10,15 +10,20 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 
-# 保存先の既定は `auto`（#839）。開発機の共通 `.env` に DB の設定があると、`app` の import 時に
-# Run の repository が Oracle に接続するため、テストは memory に固定する（`auto` を確かめるテストは
-# settings を差し替えて `storage_backend.reset()` する）。`app` を import する前に設定する。
+# 保存先の既定は `auto`（#839）。開発機の共通 `.env` に DB の設定があると、Run の repository が
+# Oracle に接続するため、テストは memory に固定する（`auto` を確かめるテストは settings を差し替えて
+# `storage_backend.reset()` する）。`app` を import する前に設定する。
 os.environ["AGENT_RUNTIME_REPOSITORY_BACKEND"] = "memory"
 
 import pytest  # noqa: E402
 from pr_system_settings.database_status import clear_database_status_cache  # noqa: E402
 
-from app.features.agent import run_facts_store, runtime, storage_backend, tools  # noqa: E402
+from app.features.agent import (  # noqa: E402
+    run_facts_store,
+    storage_backend,
+    storage_bootstrap,
+    tools,
+)
 from app.security.service import SecurityService, set_security_service  # noqa: E402
 from app.security.store import InMemorySecurityStore  # noqa: E402
 from app.settings import get_settings  # noqa: E402
@@ -61,9 +66,14 @@ def _fresh_storage_backend_decision() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def _no_storage_connect_wait(monkeypatch: pytest.MonkeyPatch) -> None:
-    """起動時の保存先の DB の接続の再試行（#853）はテストでは待たない。"""
-    monkeypatch.setattr(runtime, "_retry_sleep", lambda _seconds: None)
+def _storage_loaded() -> Iterator[None]:
+    """Run・定義の保存先の読み込み（#1212）は済んだものとする（API の要求で定義を復元しない）。
+
+    読み込みを確かめるテストは `storage_bootstrap.reset()` で未読み込みに戻す。
+    """
+    storage_bootstrap.reset(ready=True)
+    yield
+    storage_bootstrap.reset(ready=True)
 
 
 @pytest.fixture(autouse=True)
