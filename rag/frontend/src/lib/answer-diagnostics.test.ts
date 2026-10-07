@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   confidenceVariant,
   evaluationOutcome,
+  outcomeBadge,
   parseAnswerEvaluation,
   parseAnswerDiagnostics,
 } from "./answer-diagnostics";
@@ -159,3 +160,31 @@ describe("parseAnswerEvaluation", () => {
     expect(parseAnswerEvaluation(null)).toBeNull();
   });
 });
+
+describe("回答の対応と業務ガイド（issue 1252）", () => {
+  it("回答の対応と業務ガイドを読み、未知の値・欠けた値は null にする", () => {
+    const parsed = parseAnswerDiagnostics({
+      outcome: "needs_clarification",
+      guide: { guide_id: "g1", title: "権限の付与", revision: 2 },
+    });
+    expect(parsed?.outcome).toBe("needs_clarification");
+    expect(parsed?.guide).toEqual({ title: "権限の付与", revision: 2 });
+    expect(parseAnswerDiagnostics({ outcome: "other", guide: { title: "x" } })).toMatchObject({
+      outcome: null,
+      guide: null,
+    });
+    expect(parseAnswerDiagnostics({})).toMatchObject({ outcome: null, guide: null });
+  });
+
+  it("「答えた」以外の対応だけをバッジにする", () => {
+    expect(outcomeBadge("answered")).toBeNull();
+    expect(outcomeBadge(null)).toBeNull();
+    expect(outcomeBadge("insufficient_evidence")).toEqual({
+      variant: "danger",
+      key: "search.answerDetails.outcome.insufficient_evidence",
+    });
+    expect(outcomeBadge("needs_clarification")?.variant).toBe("info");
+    expect(outcomeBadge("conditional")?.variant).toBe("warning");
+  });
+});
+
