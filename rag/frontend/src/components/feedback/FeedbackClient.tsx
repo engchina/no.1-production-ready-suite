@@ -10,6 +10,7 @@ import {
   type EntityAction,
   FormStatus,
   ObjectActionBar,
+  PageSizeSelect,
   RowTitleButton,
   SelectField,
   type SelectFieldOption,
@@ -22,6 +23,7 @@ import {
   useConfirm,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
+  paginationRange,
 } from "@engchina/production-ready-ui";
 import {
   BookmarkPlus,
@@ -291,21 +293,24 @@ export function FeedbackClient() {
                   </h2>
                   <p className="text-xs tabular-nums text-fg-muted">
                     {t("feedback.list.range", {
-                      start: page?.total ? (urlState.page - 1) * urlState.pageSize + 1 : 0,
-                      end: Math.min(urlState.page * urlState.pageSize, page?.total ?? 0),
-                      total: page?.total ?? 0,
+                      ...paginationRange(
+                        urlState.page,
+                        urlState.pageSize,
+                        page?.items.length ?? 0,
+                        page?.total ?? 0
+                      ),
                     })}
                   </p>
                 </div>
-                <SelectField
+                <PageSizeSelect
                   id="feedback-page-size"
-                  label={t("feedback.pager.pageSize")}
-                  value={String(urlState.pageSize)}
-                  options={FEEDBACK_PAGE_SIZES.map((size) => ({
-                    value: String(size),
-                    label: t("feedback.pager.pageSizeValue", { count: size }),
-                  }))}
-                  onValueChange={(value) => setParam("size", value)}
+                  value={urlState.pageSize}
+                  options={FEEDBACK_PAGE_SIZES}
+                  labels={{
+                    label: t("feedback.pager.pageSize"),
+                    option: (size) => t("feedback.pager.pageSizeValue", { count: size }),
+                  }}
+                  onValueChange={(size) => setParam("size", String(size))}
                   // 値（「25件」）とラベル（「1ページの表示件数」）が 1 行に収まる幅（#613）。
                   width="sm"
                 />

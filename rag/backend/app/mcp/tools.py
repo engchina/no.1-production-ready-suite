@@ -23,6 +23,7 @@ import json
 from typing import Annotated, Any, Literal, get_args
 
 from fastapi import HTTPException, Request
+from pr_backend_core.api import OffsetParams
 from pr_backend_core.api.validation import validation_tool_errors
 from pr_backend_core.mcp import (
     TOOL_ARGUMENTS_INVALID_CODE,
@@ -480,10 +481,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         arguments: ListSearchAnswerProfilesInput,
     ) -> ListSearchAnswerProfilesOutput:
         response = await search_answer_profiles_route.list_search_answer_profiles(
+            OffsetParams(limit=arguments.limit, offset=0),
             status=SearchAnswerProfileStatus.ACTIVE,
             q=arguments.query,
-            limit=arguments.limit,
-            offset=0,
         )
         if response.warning_messages:
             # DB 停止時の縮退（空一覧）は、Agent には「0 件」と区別できるエラーで返す。

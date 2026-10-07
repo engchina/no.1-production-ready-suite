@@ -18,8 +18,7 @@ import {
   ToggleChip,
   TimedLoadingState,
   DEFAULT_PAGE_SIZE,
-  offsetForPage,
-  offsetPagination,
+  OffsetPagination,
   toast,
   useConfirm,
   ChatUserMessage,
@@ -52,7 +51,6 @@ import {
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
-import { ListPagination } from "@/components/ListPagination";
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
 import { CitationCard } from "@/components/search/CitationCard";
 import { SavedAnswerRecord } from "@/components/search/SavedAnswerRecord";
@@ -86,6 +84,7 @@ import { answerModelHelpKey, answerModelLabel } from "@/lib/answer-models";
 import { formatDateTime } from "@/lib/format";
 import { citationCountLabel } from "@/lib/chunk-metadata";
 import { t } from "@/lib/i18n";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
 import {
   useSearchAnswerProfiles,
@@ -549,21 +548,7 @@ export function ChatClient() {
     offset: conversationOffset,
   });
   const conversations = conversationsQuery.data?.items ?? [];
-  // 会話が減って今のページが空になったら、最後のページへ戻す（空の案内を出さない）。
   const conversationsData = conversationsQuery.data;
-  const conversationsOutOfRange = Boolean(
-    conversationsData &&
-      conversationsData.offset === conversationOffset &&
-      conversationsData.items.length === 0 &&
-      conversationOffset > 0
-  );
-  const lastConversationsOffset =
-    conversationsData && conversationsData.total > 0
-      ? offsetForPage(Math.ceil(conversationsData.total / DEFAULT_PAGE_SIZE), DEFAULT_PAGE_SIZE)
-      : 0;
-  if (conversationsOutOfRange && lastConversationsOffset !== conversationOffset) {
-    setConversationOffset(lastConversationsOffset);
-  }
 
   const [activeId, setActiveId] = useWorkspaceState<string | null>(
     "chat.conversationId",
@@ -1444,16 +1429,16 @@ export function ChatClient() {
         );
       }}
       footer={
-        conversationsData && conversations.length > 0 ? (
-          <ListPagination
-            {...offsetPagination({
-              // 次のページを取得している間は、表示中のページ（前のページ）の範囲を出す。
-              offset: conversationsData.offset,
-              limit: DEFAULT_PAGE_SIZE,
-              total: conversationsData.total,
-              count: conversations.length,
-            })}
-            onPageChange={(next) => setConversationOffset(offsetForPage(next, DEFAULT_PAGE_SIZE))}
+        // 会話が減って今のページが空になったら、OffsetPagination が最後のページへ戻す（空の案内を出さない）。
+        conversationsData && conversationsData.total > 0 ? (
+          <OffsetPagination
+            // 次のページを取得している間は、表示中のページ（前のページ）の範囲を出す。
+            offset={conversationsData.offset}
+            limit={DEFAULT_PAGE_SIZE}
+            total={conversationsData.total}
+            count={conversations.length}
+            onPageChange={(_page, nextOffset) => setConversationOffset(nextOffset)}
+            labels={paginationLabels()}
             ariaLabel={t("chat.sessions.pagination")}
             testId="chat-conversations-pagination"
           />

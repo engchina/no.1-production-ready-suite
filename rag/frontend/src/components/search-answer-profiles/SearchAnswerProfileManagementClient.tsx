@@ -27,8 +27,7 @@ import {
   DEFAULT_PAGE_SIZE,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
-  offsetForPage,
-  offsetPagination,
+  OffsetPagination,
   RowTitleButton,
   ClearActionButton,
   SearchField,
@@ -39,7 +38,6 @@ import { Archive, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
-import { ListPagination } from "@/components/ListPagination";
 import { EmptyState, ApiErrorState } from "@/components/StateViews";
 import {
   KnowledgeBaseScopePicker,
@@ -72,6 +70,7 @@ import type { KnowledgeBaseSelectionHealth } from "@/lib/knowledge-base-refs";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { confirmPendingLeave } from "@/lib/leave-guard";
 import { t } from "@/lib/i18n";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import {
   firstInvalidFieldId,
@@ -320,13 +319,6 @@ function SearchAnswerProfileList({
   // 新規作成の下書きはエディタを閉じても同じタブに残る。一覧から再開できるようにする。
   const [newDraft] = useState(() => readEditorDraft("searchAnswerProfiles.draft", "new", isSearchAnswerProfileDraft));
 
-  // アーカイブなどで件数が減り、保存したページが範囲外になったら最後のページへ戻す（ナレッジベースの一覧と同じ）。
-  // 範囲外のまま「検索・回答プロファイルがありません」を出さない。
-  const outOfRange = Boolean(page && page.offset === offset && items.length === 0 && offset > 0);
-  const lastPageOffset = page && page.total > 0 ? Math.floor((page.total - 1) / LIMIT) * LIMIT : 0;
-  const movingToLastPage = outOfRange && lastPageOffset !== offset;
-  if (movingToLastPage) setOffset(lastPageOffset);
-
   return (
     <div>
       <PageHeader
@@ -412,7 +404,7 @@ function SearchAnswerProfileList({
             fallback={t("searchAnswerProfiles.error.title")}
             onRetry={() => void query.refetch()}
           />
-        ) : query.isPending || movingToLastPage ? (
+        ) : query.isPending ? (
           <TimedLoadingState
             label={t("searchAnswerProfiles.loading")}
             operationKey="search-answer-profiles-load"
@@ -420,7 +412,7 @@ function SearchAnswerProfileList({
           >
             <TableSkeleton columns={5} />
           </TimedLoadingState>
-        ) : items.length === 0 && !query.isFetching ? (
+        ) : (page?.total ?? 0) === 0 && !query.isFetching ? (
           <Card>
             {q ? (
               <EmptyState
@@ -457,6 +449,10 @@ function SearchAnswerProfileList({
             <DataTable<SearchAnswerProfileSummary>
               columns={searchAnswerProfileColumns({ onOpen, itemHref, actionsFor })}
               rows={items}
+              // アーカイブなどで件数が減り、保存したページが範囲外になったら OffsetPagination が最後のページへ戻す
+              // （ナレッジベースの一覧と同じ）。戻る間は「検索・回答プロファイルがありません」を出さず、
+              // 表の形の読み込み中にする。
+              loading={items.length === 0}
               getRowKey={(item) => item.id}
               // 行の操作以外の領域のクリックでエディタを開く（page-archetypes.md §0-7）。
               // アーカイブ済みは編集できないため開かない。
@@ -478,9 +474,13 @@ function SearchAnswerProfileList({
               tableClassName="w-full min-w-[51.43rem] text-sm"
               ariaLabel={t("searchAnswerProfiles.list.aria")}
             />
-            <ListPagination
-              {...offsetPagination({ offset, limit: LIMIT, total: page?.total ?? 0, count: items.length })}
-              onPageChange={(next) => setOffset(offsetForPage(next, LIMIT))}
+            <OffsetPagination
+              offset={offset}
+              limit={LIMIT}
+              total={page?.total ?? 0}
+              count={items.length}
+              onPageChange={(_page, nextOffset) => setOffset(nextOffset)}
+              labels={paginationLabels()}
               testId="search-answer-profiles-pagination"
             />
           </div>

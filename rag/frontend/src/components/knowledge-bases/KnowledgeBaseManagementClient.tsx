@@ -17,8 +17,7 @@ import {
   DEFAULT_PAGE_SIZE,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
-  offsetForPage,
-  offsetPagination,
+  OffsetPagination,
   ListToolbar,
 } from "@engchina/production-ready-ui";
 import { Plus } from "lucide-react";
@@ -26,7 +25,6 @@ import { useMemo, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
-import { ListPagination } from "@/components/ListPagination";
 import { EditorDraftNotice } from "@/components/layout/EntityLayout";
 import { readEditorDraft } from "@/components/layout/use-entity-editor-draft";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -35,6 +33,7 @@ import { type KnowledgeBaseStatus, type KnowledgeBaseSummary } from "@/lib/api";
 import { useEditorRoute } from "@/lib/editor-route";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { CAPABILITY_PERMISSIONS } from "@/lib/permissions";
 import { useKnowledgeBases } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
@@ -140,14 +139,6 @@ function KnowledgeBaseList({
     if (next !== q) resetView(() => setQ(next));
   };
 
-  // アーカイブなどで件数が減り、保存したページが範囲外になったら最後のページへ戻す。
-  // 範囲外のまま「ナレッジベースがありません」を出さない。
-  const outOfRange = Boolean(page && page.offset === offset && items.length === 0 && offset > 0);
-  const lastPageOffset =
-    page && page.total > 0 ? Math.floor((page.total - 1) / LIMIT) * LIMIT : 0;
-  const movingToLastPage = outOfRange && lastPageOffset !== offset;
-  if (movingToLastPage) setOffset(lastPageOffset);
-
   return (
     <div>
       <PageHeader
@@ -221,7 +212,7 @@ function KnowledgeBaseList({
             fallback={t("knowledgeBases.error.load")}
             onRetry={() => void query.refetch()}
           />
-        ) : query.isPending || movingToLastPage ? (
+        ) : query.isPending ? (
           <TimedLoadingState
             label={t("knowledgeBases.loading")}
             operationKey="knowledge-bases-load"
@@ -229,11 +220,14 @@ function KnowledgeBaseList({
           >
             <TableSkeleton columns={6} />
           </TimedLoadingState>
-        ) : items.length > 0 ? (
+        ) : (page?.total ?? 0) > 0 ? (
           <div className="grid gap-2">
             <DataTable<KnowledgeBaseSummary>
               columns={knowledgeBaseColumns({ actionsFor: knowledgeBaseActions })}
               rows={items}
+              // アーカイブなどで件数が減り、保存したページが範囲外になったら OffsetPagination が最後のページへ戻す。
+              // 戻る間は「ナレッジベースがありません」を出さず、表の形の読み込み中にする。
+              loading={items.length === 0}
               getRowKey={(knowledgeBase) => knowledgeBase.id}
               // 行の操作以外の領域のクリックで詳細を開く（page-archetypes.md §0-7。検索・回答プロファイルと同じ）。
               // キーボードでは先頭セルの名前のリンクで開く。アーカイブ済みも詳細は閲覧できる。
@@ -249,9 +243,13 @@ function KnowledgeBaseList({
               tableClassName="w-full min-w-[54.29rem] text-sm"
               ariaLabel={t("knowledgeBases.list.aria")}
             />
-            <ListPagination
-              {...offsetPagination({ offset, limit: LIMIT, total: page?.total ?? 0, count: items.length })}
-              onPageChange={(next) => setOffset(offsetForPage(next, LIMIT))}
+            <OffsetPagination
+              offset={offset}
+              limit={LIMIT}
+              total={page?.total ?? 0}
+              count={items.length}
+              onPageChange={(_page, nextOffset) => setOffset(nextOffset)}
+              labels={paginationLabels()}
               testId="knowledge-bases-pagination"
             />
           </div>

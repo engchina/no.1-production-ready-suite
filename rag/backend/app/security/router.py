@@ -13,8 +13,9 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pr_backend_core import ApiResponse, Page
+from pr_backend_core.api import ACCESS_TARGET_PAGE_LIMIT_MAX, OffsetParams, offset_params, paginate
 from pr_system_settings.auth.domain import Principal as PlatformPrincipal
 from pr_system_settings.auth.domain import RoleRecord as PlatformRoleRecord
 from pr_system_settings.auth.router import build_auth_router
@@ -70,17 +71,11 @@ def permission_catalog() -> ApiResponse[list[PermissionData]]:
     return ApiResponse(data=[PermissionData.from_definition(item) for item in PERMISSION_CATALOG])
 
 
-# 権限管理の「利用できる対象」の候補の 1 ページの上限（#608）。
-# 画面は 50 件ずつ読み、選択済みの名前は `ids` で読む。
-ACCESS_TARGET_PAGE_LIMIT_MAX = 100
-
-
-def _access_target_page(
-    items: list[AccessTargetData], *, total: int, limit: int, offset: int
-) -> Page[AccessTargetData]:
-    return Page(
-        items=items, total=total, limit=limit, offset=offset, has_next=offset + limit < total
-    )
+# 権限管理の「利用できる対象」の候補のページング（#608）。画面は 50 件ずつ読み、選択済みの名前は
+# `ids` で読む。1 ページの上限は 3 製品で同じ `ACCESS_TARGET_PAGE_LIMIT_MAX`（#1266）。
+AccessTargetPaging = Annotated[
+    OffsetParams, Depends(offset_params(default=50, max_limit=ACCESS_TARGET_PAGE_LIMIT_MAX))
+]
 
 
 def _access_target_data(
@@ -99,9 +94,8 @@ def _access_target_data(
     response_model=ApiResponse[Page[AccessTargetData]],
 )
 async def list_search_answer_profile_access_targets(
+    paging: AccessTargetPaging,
     q: str | None = Query(default=None, max_length=200),
-    limit: int = Query(default=50, ge=1, le=ACCESS_TARGET_PAGE_LIMIT_MAX),
-    offset: int = Query(default=0, ge=0),
     ids: Annotated[list[str] | None, Query(max_length=ACCESS_TARGET_PAGE_LIMIT_MAX)] = None,
 ) -> ApiResponse[Page[AccessTargetData]]:
     """権限管理画面で選べる検索・回答プロファイル（アーカイブ済みを含む）を、検索とページングで返す（#608）。
@@ -115,12 +109,15 @@ async def list_search_answer_profile_access_targets(
     oracle = OracleClient()
     query = (q or "").strip() or None
     views = await oracle.list_search_answer_profiles(
-        query=query, limit=limit, offset=offset, search_answer_profile_ids=ids
+        query=query, limit=paging.limit, offset=paging.offset, search_answer_profile_ids=ids
     )
     total = await oracle.count_search_answer_profiles(query=query, search_answer_profile_ids=ids)
     return ApiResponse(
-        data=_access_target_page(
-            [_access_target_data(view) for view in views], total=total, limit=limit, offset=offset
+        data=paginate(
+            [_access_target_data(view) for view in views],
+            total=total,
+            limit=paging.limit,
+            offset=paging.offset,
         )
     )
 
@@ -130,9 +127,8 @@ async def list_search_answer_profile_access_targets(
     response_model=ApiResponse[Page[AccessTargetData]],
 )
 async def list_knowledge_base_access_targets(
+    paging: AccessTargetPaging,
     q: str | None = Query(default=None, max_length=200),
-    limit: int = Query(default=50, ge=1, le=ACCESS_TARGET_PAGE_LIMIT_MAX),
-    offset: int = Query(default=0, ge=0),
     ids: Annotated[list[str] | None, Query(max_length=ACCESS_TARGET_PAGE_LIMIT_MAX)] = None,
 ) -> ApiResponse[Page[AccessTargetData]]:
     """権限管理画面で選べるナレッジベース（アーカイブ済みを含む）を、検索とページングで返す（#608）。
@@ -144,12 +140,15 @@ async def list_knowledge_base_access_targets(
     oracle = OracleClient()
     query = (q or "").strip() or None
     bases = await oracle.list_knowledge_bases(
-        query=query, limit=limit, offset=offset, knowledge_base_ids=ids
+        query=query, limit=paging.limit, offset=paging.offset, knowledge_base_ids=ids
     )
     total = await oracle.count_knowledge_bases(query=query, knowledge_base_ids=ids)
     return ApiResponse(
-        data=_access_target_page(
-            [_access_target_data(base) for base in bases], total=total, limit=limit, offset=offset
+        data=paginate(
+            [_access_target_data(base) for base in bases],
+            total=total,
+            limit=paging.limit,
+            offset=paging.offset,
         )
     )
 

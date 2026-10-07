@@ -4,7 +4,6 @@ import { FilePlus2, Files, Unlink, X } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { ListPagination } from "@/components/ListPagination";
 import { EmptyState, ApiErrorState } from "@/components/StateViews";
 import { StatusBadge } from "@/components/StatusBadge";
 import { EditorTargetState } from "@/components/layout/EntityLayout";
@@ -23,8 +22,7 @@ import {
   type ListPickerItem,
   ListSkeleton,
   ListToolbar,
-  offsetForPage,
-  offsetPagination,
+  OffsetPagination,
   RowActionMenu,
   SearchField,
   TimedLoadingState,
@@ -38,6 +36,7 @@ import {
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { listPickerLabels } from "@/lib/list-picker-labels";
+import { paginationLabels } from "@/lib/pagination-labels";
 import {
   AssignDocumentsPartialError,
   useAssignDocumentsToKnowledgeBase,
@@ -350,12 +349,6 @@ function KnowledgeBaseDocuments({
   const [assigning, setAssigning] = useState(false);
   const assignButtonRef = useRef<HTMLButtonElement | null>(null);
   const page = documents.data;
-  // 外した結果いまのページが空になったら、最後のページへ戻す（空の案内を出さない）。
-  const outOfRange = Boolean(page && page.offset === offset && page.items.length === 0 && offset > 0);
-  const lastPageOffset =
-    page && page.total > 0 ? Math.floor((page.total - 1) / DEFAULT_PAGE_SIZE) * DEFAULT_PAGE_SIZE : 0;
-  const movingToLastPage = outOfRange && lastPageOffset !== offset;
-  if (movingToLastPage) setOffset(lastPageOffset);
   const total = page?.total ?? 0;
 
   const closeAssignment = () => {
@@ -428,33 +421,37 @@ function KnowledgeBaseDocuments({
           fallback={t("knowledgeBases.error.documents")}
           onRetry={() => void documents.refetch()}
         />
-      ) : documents.isPending || movingToLastPage ? (
+      ) : documents.isPending ? (
         <KnowledgeBaseDocumentsSkeleton />
-      ) : documents.data.items.length > 0 ? (
+      ) : total > 0 ? (
         <>
-          <ul
-            className="bounded-scroll-area divide-y divide-border rounded-md border border-border"
-            aria-busy={documents.isPlaceholderData || undefined}
-            data-testid="knowledge-base-documents-list"
-          >
-            {documents.data.items.map((document) => (
-              <KnowledgeBaseDocumentRow
-                key={document.id}
-                document={document}
-                // アーカイブ済みは文書の追加・解除ができない（案内のとおり、「外す」も出さない）。
-                onRemove={canAssign ? () => void handleRemove(document) : undefined}
-                removing={remove.isPending && remove.variables?.documentId === document.id}
-              />
-            ))}
-          </ul>
-          <ListPagination
-            {...offsetPagination({
-              offset,
-              limit: DEFAULT_PAGE_SIZE,
-              total,
-              count: documents.data.items.length,
-            })}
-            onPageChange={(next) => setOffset(offsetForPage(next, DEFAULT_PAGE_SIZE))}
+          {documents.data.items.length === 0 ? (
+            // 外した結果いまのページが空になったら、OffsetPagination が最後のページへ戻す。戻る間は空の案内を出さない。
+            <KnowledgeBaseDocumentsSkeleton />
+          ) : (
+            <ul
+              className="bounded-scroll-area divide-y divide-border rounded-md border border-border"
+              aria-busy={documents.isPlaceholderData || undefined}
+              data-testid="knowledge-base-documents-list"
+            >
+              {documents.data.items.map((document) => (
+                <KnowledgeBaseDocumentRow
+                  key={document.id}
+                  document={document}
+                  // アーカイブ済みは文書の追加・解除ができない（案内のとおり、「外す」も出さない）。
+                  onRemove={canAssign ? () => void handleRemove(document) : undefined}
+                  removing={remove.isPending && remove.variables?.documentId === document.id}
+                />
+              ))}
+            </ul>
+          )}
+          <OffsetPagination
+            offset={offset}
+            limit={DEFAULT_PAGE_SIZE}
+            total={total}
+            count={documents.data.items.length}
+            onPageChange={(_page, nextOffset) => setOffset(nextOffset)}
+            labels={paginationLabels()}
             testId="knowledge-base-documents-pagination"
           />
         </>

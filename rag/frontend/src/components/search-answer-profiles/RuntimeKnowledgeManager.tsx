@@ -15,6 +15,7 @@ import {
   TimedLoadingState,
   toast,
   useConfirm,
+  PagedDataTable,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -24,7 +25,7 @@ import {
   type RuntimeKnowledgeKind,
   type RuntimeKnowledgePreviewData,
 } from "@/lib/api";
-import { PagedDataTable } from "@/components/PagedDataTable";
+import { paginationLabels } from "@/lib/pagination-labels";
 import { ErrorState } from "@/components/StateViews";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
@@ -241,6 +242,7 @@ export function RuntimeKnowledgeManager({
     />
   ) : (
     <PagedDataTable<Row>
+      paginationLabels={paginationLabels()}
       columns={[
         {
           key: "name",

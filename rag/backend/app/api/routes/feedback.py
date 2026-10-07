@@ -2,14 +2,16 @@
 
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pr_backend_core.api import OffsetParams, offset_params, paginate
 
 from app.clients.oracle import OracleClient
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import current_audit_request_context
 from app.rag.search_answer_profile_knowledge import import_approved_faq
-from app.schemas.common import ApiResponse, Page
+from app.schemas.common import ApiResponse
 from app.schemas.evaluation import STANDARD_ANSWER_MAX_CHARS, EvaluationCase
 from app.schemas.feedback import (
     CurrentFeedbackItem,
@@ -79,6 +81,7 @@ async def current_feedback(
 
 @router.get("", response_model=ApiResponse[FeedbackDashboard])
 async def list_feedback(
+    paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=100))],
     search_answer_profile_id: str | None = Query(default=None, min_length=1, max_length=64),
     target_type: FeedbackTargetType | None = None,
     rating: FeedbackRating | None = None,
@@ -87,8 +90,6 @@ async def list_feedback(
     period_days: int | None = Query(default=None, ge=1, le=3650),
     q: str | None = Query(default=None, max_length=200),
     sort_order: FeedbackSortOrder = FeedbackSortOrder.NEWEST,
-    limit: int = Query(default=50, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[FeedbackDashboard]:
     """有効な最新票を集計・一覧表示する。
 
@@ -103,8 +104,8 @@ async def list_feedback(
         period_days=period_days,
         search_query=q.strip() if q and q.strip() else None,
         sort_order=sort_order.value,
-        limit=limit,
-        offset=offset,
+        limit=paging.limit,
+        offset=paging.offset,
     )
     items = [FeedbackItem.model_validate(row) for row in rows]
     return ApiResponse(
@@ -113,13 +114,7 @@ async def list_feedback(
             previous_summary=(
                 _feedback_summary(previous_groups) if period_days is not None else None
             ),
-            items=Page(
-                items=items,
-                total=total,
-                limit=limit,
-                offset=offset,
-                has_next=offset + limit < total,
-            ),
+            items=paginate(items, total=total, limit=paging.limit, offset=paging.offset),
         )
     )
 

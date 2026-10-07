@@ -9,8 +9,9 @@ from datetime import UTC, datetime
 from time import perf_counter
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from pr_backend_core.api import OffsetParams, offset_params, paginate
 from pr_system_settings.auth.errors import SecurityApiError
 
 from app.clients.oracle import OracleClient
@@ -557,9 +558,8 @@ ANSWER_TRACE_ID_FILTER_MAX = 100
 
 @router.get("/answers", response_model=ApiResponse[Page[AnswerRecordSummary]])
 async def list_saved_answers(
+    paging: Annotated[OffsetParams, Depends(offset_params(default=10, max_limit=100))],
     search_answer_profile_id: str | None = Query(default=None, max_length=128),
-    limit: int = Query(default=10, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
     trace_id: Annotated[list[str] | None, Query(max_length=ANSWER_TRACE_ID_FILTER_MAX)] = None,
 ) -> ApiResponse[Page[AnswerRecordSummary]]:
     """保存された回答(回答の記録)を新しい順に返す(検索・回答プロファイルで絞り込み可。総件数つき。#304)。
@@ -571,20 +571,19 @@ async def list_saved_answers(
     oracle = OracleClient()
     rows = await oracle.list_answer_records(
         search_answer_profile_id=search_answer_profile_id,
-        limit=limit,
-        offset=offset,
+        limit=paging.limit,
+        offset=paging.offset,
         trace_ids=trace_ids,
     )
     total = await oracle.count_answer_records(
         search_answer_profile_id=search_answer_profile_id, trace_ids=trace_ids
     )
     return ApiResponse(
-        data=Page(
-            items=[AnswerRecordSummary.model_validate(row) for row in rows],
+        data=paginate(
+            [AnswerRecordSummary.model_validate(row) for row in rows],
             total=total,
-            limit=limit,
-            offset=offset,
-            has_next=offset + len(rows) < total,
+            limit=paging.limit,
+            offset=paging.offset,
         )
     )
 
