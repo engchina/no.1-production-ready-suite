@@ -179,6 +179,7 @@ import {
   type TableCellFocusTarget,
 } from "@/lib/table-cell-focus";
 import { cn } from "@/lib/utils";
+import { excelWarningLabel, lowConfidenceHeaderSheets } from "@/lib/excel-warnings";
 
 const DOCUMENT_WORKSPACE_REFETCH_INTERVAL_MS = 4000;
 
@@ -590,6 +591,10 @@ export function DocumentWorkspace({
         selectedRecipe ? (extractionJsonQuery.data?.payload ?? {}) : {}
       ),
     [extractionJsonQuery.data?.payload, selectedRecipe]
+  );
+  const reviewHeaderSheets = useMemo(
+    () => lowConfidenceHeaderSheets(parsedExtraction.warnings),
+    [parsedExtraction.warnings]
   );
   const latestChunkSet = selectedRecipe?.active_chunk_set_id ?? null;
   const handlePhaseRestart = async (
@@ -1211,6 +1216,11 @@ export function DocumentWorkspace({
               {preparedArtifact?.converted
                 ? t("flow.preprocessed.persistFailed")
                 : t("flow.preprocessed.preparedMissing")}
+            </Banner>
+          ) : statusMessageSlot.status === "REVIEW" && reviewHeaderSheets.length ? (
+            // 表頭を推定できなかった Excel のシートがあり、確認で止めた（#1229）。
+            <Banner severity="warning" title={t("documents.excelWarning.reviewTitle")}>
+              {t("documents.excelWarning.reviewBody", { sheets: reviewHeaderSheets.join("、") })}
             </Banner>
           ) : (
             <Banner severity="info">{t(GATE_MESSAGE_KEYS[statusMessageSlot.status])}</Banner>
@@ -2825,7 +2835,7 @@ function SourceDerivationPanel({
       {derivation.warnings.length > 0 ? (
         <ul className="mt-3 space-y-1 text-xs text-warning-fg">
           {derivation.warnings.map((warning) => (
-            <li key={warning}>{warning}</li>
+            <li key={warning}>{excelWarningLabel(warning) ?? warning}</li>
           ))}
         </ul>
       ) : null}

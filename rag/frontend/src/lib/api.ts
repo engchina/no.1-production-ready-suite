@@ -770,6 +770,8 @@ export interface ExcelOptions {
   exclude_sheets: string[];
   include_hidden_sheets: boolean;
   exclude_columns: string[];
+  /** 読む範囲（`A3:F200` か `シート名!A3:F200`。空はシート全体。#1229）。 */
+  ranges: string[];
 }
 
 export interface KnowledgeBaseIngestionConfig {

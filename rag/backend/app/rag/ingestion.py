@@ -67,7 +67,7 @@ from app.rag.extraction_field_adapter import (
 )
 from app.rag.graph_adapter import resolve_graph_adapter
 from app.rag.graph_index import GraphIndex, build_graph_index
-from app.rag.ingestion_quality import build_ingestion_quality_report
+from app.rag.ingestion_quality import build_ingestion_quality_report, requires_review
 from app.rag.ingestion_strategy import extraction_strategy_for_source
 from app.rag.layer_fingerprint import (
     FIELD_SCHEMA_HASH_ARTIFACT_KEY,
@@ -653,9 +653,9 @@ class IngestionPipeline:
             extraction_recipe_id = await self._persist_extraction_layer(
                 document_id, source_profile, extraction
             )
-            if (
-                manage_document_state or self._recipe_id is not None
-            ) and self._settings.rag_review_gate_enabled:
+            if (manage_document_state or self._recipe_id is not None) and (
+                self._settings.rag_review_gate_enabled or requires_review(quality_report)
+            ):
                 # REVIEW で停止する前に抽出本文を永続化し、プレビュー・後段 CHUNK で再利用する。
                 # candidate モードは REVIEW で止めず索引まで進める。
                 await _raise_if_cancelled(cancel_checker)

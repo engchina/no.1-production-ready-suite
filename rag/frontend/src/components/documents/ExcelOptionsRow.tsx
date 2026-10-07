@@ -15,6 +15,7 @@ export const DEFAULT_EXCEL_OPTIONS: ExcelOptions = {
   exclude_sheets: [],
   include_hidden_sheets: false,
   exclude_columns: [],
+  ranges: [],
 };
 
 const MODE_OPTIONS: SelectFieldOption<ExcelOptions["mode"]>[] = [
@@ -49,6 +50,9 @@ export function excelOptionsSummary(options: ExcelOptions | null | undefined): s
   if (value.exclude_columns.length) {
     parts.push(t("documents.excelOptions.summary.excludeColumns", { names: value.exclude_columns.join("、") }));
   }
+  if (value.ranges?.length) {
+    parts.push(t("documents.excelOptions.summary.ranges", { ranges: value.ranges.join("、") }));
+  }
   return parts.join(" · ");
 }
 
@@ -76,11 +80,12 @@ export function ExcelOptionsRow({
     sheets: current.sheets.join("、"),
     exclude_sheets: current.exclude_sheets.join("、"),
     exclude_columns: current.exclude_columns.join("、"),
+    ranges: (current.ranges ?? []).join("、"),
   }));
   const [headerRowText, setHeaderRowText] = useState(current.header_row ? String(current.header_row) : "");
   const labelId = `document-excel-options-${documentId}`;
   const update = (patch: Partial<ExcelOptions>) => onChange({ ...current, ...patch });
-  const updateList = (key: "sheets" | "exclude_sheets" | "exclude_columns", text: string) => {
+  const updateList = (key: "sheets" | "exclude_sheets" | "exclude_columns" | "ranges", text: string) => {
     setLists((previous) => ({ ...previous, [key]: text }));
     update({ [key]: parseNameList(text) });
   };
@@ -168,6 +173,17 @@ export function ExcelOptionsRow({
             disabled={disabled}
             onChange={(event) => updateList("exclude_columns", event.target.value)}
           />
+          <div className="sm:col-span-2">
+            <TextField
+              id={`${labelId}-ranges`}
+              label={t("documents.excelOptions.ranges")}
+              helper={t("documents.excelOptions.ranges.hint")}
+              value={lists.ranges}
+              disabled={disabled}
+              spellCheck={false}
+              onChange={(event) => updateList("ranges", event.target.value)}
+            />
+          </div>
           <div className="space-y-1 sm:col-span-2">
             <span id={`${labelId}-hidden`} className="text-sm font-medium text-fg">
               {t("documents.excelOptions.hiddenSheets")}
