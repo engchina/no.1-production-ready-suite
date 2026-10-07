@@ -1338,6 +1338,7 @@ const agentJa = {
   "status.artifact.rag_evidence": "検索の根拠",
   "status.artifact.structured_table": "構造化データ",
   "status.artifact.support_task": "支援タスクの状態",
+  "status.artifact.answer_validation": "回答の検証",
   "status.artifact.runtime_artifact": "実行環境の成果物",
   "status.event.created": "作成",
   "status.event.replayed": "再実行",

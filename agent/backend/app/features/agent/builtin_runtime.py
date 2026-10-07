@@ -46,7 +46,27 @@ from pr_system_settings.model import (
     enterprise_ai_model_catalog,
 )
 
-from app.features.agent.config import runtime_config_store
+from app.features.agent.answer_validation import (
+    ANSWER_VALIDATION_KIND,
+    ANSWER_VALIDATION_NAME,
+    MAX_ANSWER_CHARS,
+    MAX_QUERY_CHARS,
+    REASON_ANSWER_TOO_LONG,
+    REASON_CONNECTION_NOT_FOUND,
+    REASON_EMPTY_ANSWER,
+    REASON_NO_RAG_EVIDENCE,
+    REASON_VALIDATOR_UNAVAILABLE,
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    STATUS_SKIPPED,
+    VALIDATE_ANSWER_TOOL,
+    annotate_answer,
+    run_evidence_refs,
+    unverified_points,
+    validation_content,
+    with_unverified_notice,
+)
+from app.features.agent.config import McpConnectionConfig, runtime_config_store
 from app.features.agent.skills import skill_registry
 from app.features.agent.support_task import (
     BUDGET_EXCEEDED_CODE,
@@ -66,6 +86,8 @@ from app.features.agent.tools import (
     ToolPolicyDecision,
     ToolResult,
     list_mcp_connection_tools,
+    mcp_base_tool_name,
+    mcp_function_name,
     mcp_tool_definition,
     mcp_tool_handler,
     tool_registry,
@@ -440,6 +462,42 @@ class _ToolRecorder:
                 ensure_ascii=False,
             )
         # 承認は SDK の needs_approval で済んでいる（拒否のツールは渡していない）。
+        result = await self.execute(step_id, call, context, definition=definition, handler=handler)
+        if result.success:
+            return json.dumps(result.output or {}, ensure_ascii=False, default=str)
+        return json.dumps(
+            {"error": result.error or "tool failed", "error_code": result.error_code},
+            ensure_ascii=False,
+        )
+
+    async def call(
+        self,
+        call: ToolCall,
+        *,
+        definition: ToolDefinition | None = None,
+        handler: ToolHandler | None = None,
+    ) -> tuple[str, ToolResult]:
+        """Control Plane が自分で呼ぶツール（回答の最終の検証。#1246）を step に記録して呼ぶ。
+
+        予算は数えない。ポリシーの「拒否」は守り、「承認」は待たない（読み取りの検証のため）。
+        """
+        from app.features.agent.runtime import runtime_repository
+
+        step_id, context = runtime_repository.start_builtin_tool_step(self.run_id, call)
+        result = await self.execute(step_id, call, context, definition=definition, handler=handler)
+        return step_id, result
+
+    async def execute(
+        self,
+        step_id: str,
+        call: ToolCall,
+        context: ToolInvocationContext,
+        *,
+        definition: ToolDefinition | None = None,
+        handler: ToolHandler | None = None,
+    ) -> ToolResult:
+        from app.features.agent.runtime import runtime_repository
+
         result = await asyncio.to_thread(
             tool_registry.invoke,
             call,
@@ -450,12 +508,7 @@ class _ToolRecorder:
             handler=handler,
         )
         runtime_repository.finish_builtin_tool_step(self.run_id, step_id, result)
-        if result.success:
-            return json.dumps(result.output or {}, ensure_ascii=False, default=str)
-        return json.dumps(
-            {"error": result.error or "tool failed", "error_code": result.error_code},
-            ensure_ascii=False,
-        )
+        return result
 
 
 def build_function_tools(
@@ -791,7 +844,141 @@ async def _finish(run_id: str, result: Any, task: _SupportTaskRun | None = None)
     answer = (
         output if isinstance(output, str) else json.dumps(output, ensure_ascii=False, default=str)
     )
+    if get_settings().agent_final_validation_enabled:
+        try:
+            answer = await _validate_final_answer(run_id, answer)
+        except Exception as exc:  # noqa: BLE001 - 検証の失敗で回答を落とさない
+            logger.warning(
+                "builtin_runtime_answer_validation_failed",
+                extra={"run_id": run_id, "exception_type": type(exc).__name__},
+            )
+            answer = with_unverified_notice(answer)
     runtime_repository.complete_builtin_run(run_id, answer)
+
+
+def _validator_connection(evidence_tool: str) -> McpConnectionConfig | None:
+    """根拠を返したツール（`<接続>__rag_search` など）の MCP 接続。"""
+    base = mcp_base_tool_name(evidence_tool)
+    for config in runtime_config_store.list_mcp_servers():
+        if mcp_function_name(config.server_id, base) == evidence_tool:
+            return config
+    return None
+
+
+async def _validate_final_answer(run_id: str, answer: str) -> str:
+    """回答の最終の検証（#1246）。検証の結果を成果物に残し、利用者に見せる回答を返す。
+
+    モデルではなく Control Plane が、根拠を返した RAG の MCP 接続の `rag_validate_answer` を呼ぶ
+    （ポリシー・監査・Run の利用者のサービストークン・step はモデルのツールと同じ境界）。
+    valid でなければ「確かめられていない点」を、検証が失敗したら「検証できませんでした」を
+    末尾に足す（回答は消さない・作り直さない）。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    def save(content: dict[str, Any]) -> None:
+        runtime_repository.save_builtin_artifact(
+            run_id, kind=ANSWER_VALIDATION_KIND, name=ANSWER_VALIDATION_NAME, content=content
+        )
+
+    run = runtime_repository.get_run(run_id)
+    evidence_tool, refs = run_evidence_refs(run.steps)
+    if evidence_tool is None or not refs:
+        save(validation_content(STATUS_SKIPPED, reason=REASON_NO_RAG_EVIDENCE))
+        return answer
+    if not answer.strip():
+        save(validation_content(STATUS_SKIPPED, reason=REASON_EMPTY_ANSWER, evidence=refs))
+        return answer
+    config = _validator_connection(evidence_tool)
+    if config is None:
+        save(
+            validation_content(
+                STATUS_FAILED,
+                reason=REASON_CONNECTION_NOT_FOUND,
+                message="根拠を返した MCP 接続が見つかりません。",
+                evidence=refs,
+            )
+        )
+        return with_unverified_notice(answer)
+    if len(answer) > MAX_ANSWER_CHARS:
+        save(
+            validation_content(
+                STATUS_FAILED,
+                reason=REASON_ANSWER_TOO_LONG,
+                message=f"回答が長すぎるため検証できません（{MAX_ANSWER_CHARS} 文字まで）。",
+                connection=config.server_id,
+                evidence=refs,
+            )
+        )
+        return with_unverified_notice(answer)
+    context = ToolInvocationContext(
+        run_id=run_id, agent_id=run.agent_id, user_uuid=run.created_by_user_uuid
+    )
+    try:
+        listed = await asyncio.to_thread(
+            list_mcp_connection_tools, config.server_id, context=context
+        )
+    except KeyError:
+        save(
+            validation_content(
+                STATUS_FAILED,
+                reason=REASON_CONNECTION_NOT_FOUND,
+                message="根拠を返した MCP 接続が見つかりません。",
+                connection=config.server_id,
+                evidence=refs,
+            )
+        )
+        return with_unverified_notice(answer)
+    except ExternalToolError as exc:
+        save(
+            validation_content(
+                STATUS_FAILED,
+                reason=exc.code,
+                message=exc.message,
+                connection=config.server_id,
+                evidence=refs,
+            )
+        )
+        return with_unverified_notice(answer)
+    tool = next((item for item in listed.tools if item.name == VALIDATE_ANSWER_TOOL), None)
+    if tool is None:
+        # 検証のツールを持たない（#1246 より前の）RAG。検証せずに回答を出す。
+        save(
+            validation_content(
+                STATUS_SKIPPED,
+                reason=REASON_VALIDATOR_UNAVAILABLE,
+                message=(
+                    f"MCP 接続「{config.label or config.server_id}」は"
+                    "回答の検証を提供していません。"
+                ),
+                connection=config.server_id,
+                evidence=refs,
+            )
+        )
+        return answer
+    definition = mcp_tool_definition(config, tool)
+    step_id, result = await _ToolRecorder(run_id).call(
+        ToolCall(
+            name=definition.name,
+            arguments={"query": run.goal[:MAX_QUERY_CHARS], "answer": answer, "evidence": refs},
+            trace_id=f"answer_validation_{run_id}",
+        ),
+        definition=definition,
+        handler=mcp_tool_handler(config, tool),
+    )
+    common: dict[str, Any] = {
+        "connection": config.server_id,
+        "tool_name": definition.name,
+        "step_id": step_id,
+        "evidence": refs,
+    }
+    if not result.success or not isinstance(result.output, dict):
+        reason = result.error_code or (
+            "policy_denied" if result.policy_decision == ToolPolicyDecision.DENY else "tool_failed"
+        )
+        save(validation_content(STATUS_FAILED, reason=reason, message=result.error, **common))
+        return with_unverified_notice(answer)
+    save(validation_content(STATUS_COMPLETED, result=result.output, **common))
+    return annotate_answer(answer, unverified_points(result.output))
 
 
 def _record_usage(run_id: str, source: object, model_id: str) -> None:

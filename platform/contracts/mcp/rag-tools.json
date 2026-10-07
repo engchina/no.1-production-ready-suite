@@ -1797,6 +1797,195 @@
         "title": "SearchOutput",
         "type": "object"
       }
+    },
+    {
+      "name": "rag_validate_answer",
+      "description": "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。公開する前の最終の検証に使います（モデルを 1 回呼びます）。",
+      "inputSchema": {
+        "$defs": {
+          "EvidenceRefInput": {
+            "additionalProperties": false,
+            "properties": {
+              "document_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Document Id",
+                "type": "string"
+              },
+              "chunk_id": {
+                "maxLength": 512,
+                "minLength": 1,
+                "title": "Chunk Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "document_id",
+              "chunk_id"
+            ],
+            "title": "EvidenceRefInput",
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "description": "回答の最終の検証の条件（#1246）。",
+        "properties": {
+          "query": {
+            "description": "利用者の質問。",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "answer": {
+            "description": "検証する回答の本文。",
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Answer",
+            "type": "string"
+          },
+          "evidence": {
+            "description": "回答の根拠（rag_search / rag_retrieve_evidence が返した document_id と chunk_id）。本文はサーバーが今の権限と版で読み直す。",
+            "items": {
+              "$ref": "#/$defs/EvidenceRefInput"
+            },
+            "maxItems": 30,
+            "minItems": 1,
+            "title": "Evidence",
+            "type": "array"
+          }
+        },
+        "required": [
+          "query",
+          "answer",
+          "evidence"
+        ],
+        "title": "ValidateAnswerInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "$defs": {
+          "EvidenceRefInput": {
+            "additionalProperties": false,
+            "properties": {
+              "document_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "title": "Document Id",
+                "type": "string"
+              },
+              "chunk_id": {
+                "maxLength": 512,
+                "minLength": 1,
+                "title": "Chunk Id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "document_id",
+              "chunk_id"
+            ],
+            "title": "EvidenceRefInput",
+            "type": "object"
+          },
+          "ValidatedClaim": {
+            "properties": {
+              "answer_quote": {
+                "description": "回答の段落（原文）。",
+                "title": "Answer Quote",
+                "type": "string"
+              },
+              "status": {
+                "description": "supported=根拠で裏付けられる / unsupported=根拠で確かめられない / contradicted=根拠と矛盾 / data_confirmation=実データの確認を促すだけ / unassessed=監査されなかった",
+                "title": "Status",
+                "type": "string"
+              },
+              "chunk_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "裏付け・矛盾の根拠の chunk_id。",
+                "title": "Chunk Id"
+              },
+              "reason": {
+                "title": "Reason",
+                "type": "string"
+              }
+            },
+            "required": [
+              "answer_quote",
+              "status",
+              "reason"
+            ],
+            "title": "ValidatedClaim",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "valid": {
+            "description": "矛盾・裏付けの無い主張・読めない根拠が無く、裏付けのある主張が 1 つ以上あるか。",
+            "title": "Valid",
+            "type": "boolean"
+          },
+          "status": {
+            "description": "completed / no_claims / no_evidence / input_too_large。",
+            "title": "Status",
+            "type": "string"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "判定ごとの段落の数。",
+            "title": "Counts",
+            "type": "object"
+          },
+          "claims": {
+            "items": {
+              "$ref": "#/$defs/ValidatedClaim"
+            },
+            "title": "Claims",
+            "type": "array"
+          },
+          "missing_evidence": {
+            "description": "見つからない（削除・権限の外）根拠。",
+            "items": {
+              "$ref": "#/$defs/EvidenceRefInput"
+            },
+            "title": "Missing Evidence",
+            "type": "array"
+          },
+          "stale_evidence": {
+            "description": "文書の古い版の根拠（検索し直す）。",
+            "items": {
+              "$ref": "#/$defs/EvidenceRefInput"
+            },
+            "title": "Stale Evidence",
+            "type": "array"
+          },
+          "evidence_truncated": {
+            "default": false,
+            "description": "根拠が多く、後ろの根拠を監査に渡しきれなかったか。",
+            "title": "Evidence Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "valid",
+          "status"
+        ],
+        "title": "ValidateAnswerOutput",
+        "type": "object"
+      }
     }
   ]
 }
