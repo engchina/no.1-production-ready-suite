@@ -33,8 +33,8 @@ def pdf_page_labels(pdf_bytes: bytes) -> dict[int, str]:
         for index in range(min(len(document), MAX_LABELED_PAGES)):
             try:
                 label = (document.get_page_label(index) or "").strip()
-            except Exception:  # noqa: BLE001 - その頁のラベルだけ諦める
-                continue
+            except Exception:  # noqa: BLE001 - その頁のラベルだけ諦める（ラベル無しとして扱う）
+                label = ""
             if label and label != str(index + 1):
                 labels[index + 1] = label
     finally:
