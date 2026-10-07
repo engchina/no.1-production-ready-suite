@@ -270,6 +270,18 @@ def test_search_maps_evidence_and_uses_token_user_context(
                 answer={
                     "insufficient_reason": " 期限の例外が資料に無い ",
                     "needs_human_review": True,
+                    # 回答の構造（#1235）。
+                    "envelope": {
+                        "outcome": "conditional",
+                        "requests": [
+                            {"id": "Q1", "text": "期限", "status": "addressed"},
+                            {"id": "Q2", "text": "例外", "status": "missing"},
+                            {"id": "Q3", "text": "壊れた", "status": "other"},
+                        ],
+                        "conditions": ["承認済みの場合"],
+                        "gaps": ["期限の例外"],
+                        "confirmations": [],
+                    },
                 }
             ),
         )
@@ -287,6 +299,13 @@ def test_search_maps_evidence_and_uses_token_user_context(
     assert body["guardrail_warnings"] == ["注意"]
     assert body["insufficient_reason"] == "期限の例外が資料に無い"
     assert body["needs_human_review"] is True
+    assert body["outcome"] == "conditional"
+    assert [request["status"] for request in body["requests"]] == ["addressed", "missing"]
+    assert (body["conditions"], body["gaps"], body["confirmations"]) == (
+        ["承認済みの場合"],
+        ["期限の例外"],
+        [],
+    )
     assert body["evidence_omitted"] == 0
     # 回答に使った根拠を先にする。
     assert [item["chunk_id"] for item in body["evidence"]] == ["c1", "c-unused"]
@@ -384,6 +403,8 @@ def test_search_limits_evidence(auth: ProductionAuth, monkeypatch: MonkeyPatch) 
     assert [item["chunk_id"] for item in body["evidence"]] == ["c0", "c3", "c1"]
     assert body["evidence_omitted"] == 3
     assert (body["insufficient_reason"], body["needs_human_review"]) == (None, False)
+    # 構造の無い回答は、引用があり人の確認が要らなければ answered。
+    assert (body["outcome"], body["requests"], body["gaps"]) == ("answered", [], [])
 
 
 # ---------------------------------------------------------------------------
