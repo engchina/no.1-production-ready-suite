@@ -19,6 +19,7 @@ RAG のチャットは画面の機能で、MCP では提供しない（#787）�
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any, Literal, get_args
 
 from fastapi import HTTPException, Request
@@ -182,6 +183,17 @@ class EvidenceLocator(BaseModel):
     row_start: int | None = Field(default=None, description="シートの開始の行（1 始まり）。")
     row_end: int | None = Field(default=None, description="シートの終了の行。")
     cell_range: str | None = Field(default=None, description="セル範囲（例: A3:F7）。")
+    page_label_start: str | None = Field(
+        default=None,
+        description="開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ。#1244）。",
+    )
+    page_label_end: str | None = Field(default=None, description="終了の頁の印刷の頁番号。")
+    bbox: list[float] | None = Field(
+        default=None, description="開始の頁の中の領域 [x0, y0, x1, y1]（分かるときだけ）。"
+    )
+    bbox_unit: str | None = Field(
+        default=None, description="bbox の単位（absolute=頁の座標 / normalized=0〜1）。"
+    )
 
 
 class RagEvidence(BaseModel):
@@ -352,7 +364,25 @@ def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
         row_start=_metadata_int(metadata, "row_start") if sheet_name else None,
         row_end=_metadata_int(metadata, "row_end") if sheet_name else None,
         cell_range=_metadata_str(metadata, "cell_range") if sheet_name else None,
+        page_label_start=_metadata_str(metadata, "page_label_start") if page_start else None,
+        page_label_end=_metadata_str(metadata, "page_label_end") if page_start else None,
+        bbox=_bbox(metadata.get("bbox")),
+        bbox_unit=_metadata_str(metadata, "bbox_unit") if _bbox(metadata.get("bbox")) else None,
     )
+
+
+def _bbox(value: object) -> list[float] | None:
+    """chunk の metadata の bbox（JSON の文字列か list）を 4 つの数にする。"""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    if not isinstance(value, list) or len(value) != 4:
+        return None
+    if not all(isinstance(item, int | float) and not isinstance(item, bool) for item in value):
+        return None
+    return [float(item) for item in value]
 
 
 def _float_or_none(value: object) -> float | None:

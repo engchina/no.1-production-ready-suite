@@ -2319,6 +2319,21 @@ class AuditNeededEvidenceTest(unittest.TestCase):
         self.assertIn(grounded.QUOTE_ONLY_LABEL, text)
         self.assertIn("注意書欄の文言を修正し", text)  # 原文だけを示す
 
+    def test_audit_evidence_without_question_terms_is_not_shown_and_the_answer_is_refused(self):
+        """資料に答えの無い質問で、監査が挙げた関係の薄い原文（質問の語を含まない）は示さず拒答する (#1256)。"""
+        unrelated = "本書の操作ができるのは「ポータル管理者」ロールを持つ利用者だけです。"
+        question = "退職者のアカウントを自動で無効にする設定はどこでできますか？"
+        ctx = context(record(0, unrelated, "（１）前提"))
+        label = next(s["label"] for s in _grounded_spans(question, ctx, (), None) if s["text"] == unrelated)
+        needed = audit(requests=[("Q1", "missing")], unused=[label])
+        model = FakeModel([self._gap_only(), self._gap_only(), self._gap_only()], [needed, needed, needed])
+
+        result = run(model, ctx, question).response
+
+        self.assertTrue(result.answer_text.startswith("検索された資料に回答を裏付ける十分な根拠がないため"))
+        self.assertNotIn("ポータル管理者", result.answer_text)
+        self.assertEqual(result.envelope["outcome"], "insufficient_evidence")
+
     OTHER = "①別の架空一覧画面で抽出条件を入力します。\n②抽出ボタンを押します。"
 
     def _labels(self, ctx):

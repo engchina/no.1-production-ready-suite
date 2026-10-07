@@ -16,7 +16,7 @@ Oracle / OCI 上で動く本番品質の AI 業務アプリ群（**RAG / NL2SQL 
 
 - 共通ルール（GitHub 運用・Issue / PR 規約・CI・デザインシステム）: [AGENTS.md](./AGENTS.md)
 - 製品固有ルール: 各ディレクトリの `AGENTS.md`
-- Claude Code は `CLAUDE.md`、Codex は `AGENTS.md` を読み込みます。
+- Claude Code（2.1.277 以降）と Codex は `AGENTS.md` を直接読み込みます。`CLAUDE.md` は置いていません。
 
 ## CI
 

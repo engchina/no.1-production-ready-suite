@@ -1,7 +1,7 @@
 # AGENTS.md — Production Ready RAG
 
 > **RAG（`rag/`）固有のルール**です。GitHub 運用・Issue / PR 規約・CI・デザインシステム・共通の技術方針は、monorepo 共通の [../AGENTS.md](../AGENTS.md) を正本として先に適用します。
-> Claude Code と Codex の両方が参照します。`CLAUDE.md` はこのファイルを `@AGENTS.md` で取り込みます。ルールを変更する際は **必ずこのファイル（共通ルールは ../AGENTS.md）を編集**してください。
+> Claude Code と Codex の両方がこのファイルを直接読みます（`CLAUDE.md` は置かない。#1263）。ルールを変更する際は **必ずこのファイル（共通ルールは ../AGENTS.md）を編集**してください。
 
 ## GitHub 運用・Issue / PR 規約（RAG 固有の追加分）
 
@@ -16,6 +16,8 @@
 **A production-ready RAG reference implementation for enterprise knowledge search, document ingestion, grounding, answer generation, evaluation, observability, and deployment on Oracle / OCI.**
 
 本プロジェクトは、文書とナレッジベースを構築し、業務ごとの **Search Answer Profile** から検索・回答する RAG システムを本番品質で提供することを目標とする。SQL 専用の自然言語問い合わせプロダクトは同じ monorepo の `../nl2sql/` の責務であり、`rag/` へ機能・UI・設定を混在させない。
+
+SQL 専用プロダクトの設計・実装は `../nl2sql/` 側で扱い、`rag/` へ UI / API / 設定を混在させない。
 
 RAG の製品語は **ナレッジ構築**、**検索・回答プロファイル**、**検索・回答設定** を優先する。`producer / consumer / pipeline / adapter` などの工程語は、コード内部または開発者向け診断に限定する。
 

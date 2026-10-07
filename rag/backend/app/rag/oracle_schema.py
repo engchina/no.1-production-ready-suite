@@ -38,6 +38,10 @@ from app.clients.oracle import (
     oracle_search_audit_schema_sql,
     oracle_vector_schema_sql,
 )
+from app.clients.support_guide_store import (
+    oracle_support_guide_revision_schema_sql,
+    oracle_support_guide_schema_sql,
+)
 from app.rag.search_answer_profile_migration import rename_sql as search_answer_profile_rename_sql
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
@@ -196,6 +200,17 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="search_answer_profile_knowledge",
             table_name="rag_search_answer_profile_knowledge",
             sql=oracle_search_answer_profile_knowledge_schema_sql(),
+        ),
+        # 業務ガイド（#1237）。頭（下書き）と公開の版。
+        OracleSchemaSection(
+            name="support_guides",
+            table_name="rag_support_guides",
+            sql=oracle_support_guide_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="support_guide_revisions",
+            table_name="rag_support_guide_revisions",
+            sql=oracle_support_guide_revision_schema_sql(),
         ),
         OracleSchemaSection(
             name="document_sections",

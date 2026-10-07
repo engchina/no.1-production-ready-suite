@@ -72,6 +72,11 @@ CI / staging gate では `thresholds` か評価の基準（`suite`。`standard`�
 `answer_keyword_miss`・`low_groundedness`・`unsupported_claim`・`missing_content`・`answer_failed` などから、
 次に調整すべき工程（検索・根拠・回答）を切り分けます。
 
+検索・回答プロファイルの用語・ルール・業務ガイド・回答の設定を含めて評価するときは、`search_answer_profile_id`
+（`/run` の request と、比較の各 experiment）を指定します（#1249）。ケースごとに検索・回答と同じ解決（参照する
+ナレッジベース・回答の設定・業務ガイド）をしてから回答します。指定しなければ全体の既定で評価します（#301）。
+アーカイブ済み・参照するナレッジベースが無いプロファイルは、そのケースを失敗にします。
+
 単発の `/run` でも任意の `rag_overrides` を指定でき、回答エンジンの設定（`query_strategy`・`answer_flow`・
 `neighbor_child_count`・`rerank_enabled`）と、RRF 定数（`rrf_k`）・同じ group から足す child の上限
 （`context_group_max_chunks`）・Oracle vector target accuracy を一時的に上書きできます。

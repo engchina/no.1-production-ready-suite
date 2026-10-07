@@ -349,6 +349,9 @@ class EvaluationExperiment(BaseModel):
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
     rag_overrides: EvaluationRagOverrides | None = None
+    # 検索・回答プロファイル（任意。#1249）。指定すると、そのプロファイルの KB・回答の設定・
+    # 業務ガイドで答える。
+    search_answer_profile_id: str | None = Field(default=None, max_length=128)
 
     @field_validator("id")
     @classmethod
@@ -465,6 +468,8 @@ class EvaluationRunRequest(BaseModel):
     thresholds: EvaluationThresholds | None = None
     suite: EvaluationSuiteName | None = None
     rag_overrides: EvaluationRagOverrides | None = None
+    # 検索・回答プロファイル（任意。#1249）。指定しなければ全体の既定で評価する（#301）。
+    search_answer_profile_id: str | None = Field(default=None, max_length=128)
 
     @field_validator("filters")
     @classmethod
