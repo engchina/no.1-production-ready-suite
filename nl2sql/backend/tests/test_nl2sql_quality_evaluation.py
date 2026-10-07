@@ -1585,7 +1585,7 @@ async def test_quality_evaluation_http_statuses_for_missing_workbook_and_bad_cur
         )
 
     assert missing_workbook.status_code == 404
-    assert bad_cursor.status_code == 400
+    assert bad_cursor.status_code == 422
     assert completed_workbook.status_code == 200
 
 

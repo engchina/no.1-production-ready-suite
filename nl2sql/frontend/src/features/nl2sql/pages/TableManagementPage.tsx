@@ -23,6 +23,7 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { listLoadMoreErrorMessage } from "@/lib/load-more-error";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
@@ -339,15 +340,6 @@ function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
 function objectListErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
   if (isTimeoutError(error)) {
     return t("dataMgmt.objectList.timeout", {
-      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
-    });
-  }
-  return error instanceof Error ? error.message : t(fallbackKey);
-}
-
-function objectListLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
-  if (isTimeoutError(error)) {
-    return t("objectSelector.loadMoreTimeout", {
       seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
     });
   }
@@ -1026,7 +1018,7 @@ export function TableManagementPage() {
               loadingNextPage={tableObjectsQuery.isFetchingNextPage}
               loadMoreError={
                 tableObjectsQuery.isFetchNextPageError && tableObjectsQuery.error
-                  ? objectListLoadMoreErrorMessage(tableObjectsQuery.error, "tableMgmt.error.load")
+                  ? listLoadMoreErrorMessage(tableObjectsQuery.error, "tableMgmt.error.load")
                   : ""
               }
               labels={{

@@ -701,17 +701,17 @@ test("結果明細と最近の job は、カーソル型の API を共通の Pag
 
   const results = page.getByTestId("quality-evaluation-results-pagination");
   await expect(results).toHaveAttribute("aria-label", "結果明細のページ切替");
-  await expect(results).toContainText("1-10 / 23 件");
+  await expect(results).toContainText("1 - 10 / 23 件");
   await expect(results).toContainText("1 / 3 ページ");
   await expect(results.getByRole("button", { name: "前へ" })).toBeDisabled();
   await results.getByRole("button", { name: "次へ" }).click();
-  await expect(results).toContainText("11-20 / 23 件");
+  await expect(results).toContainText("11 - 20 / 23 件");
   await results.getByRole("button", { name: "次へ" }).click();
-  await expect(results).toContainText("21-23 / 23 件");
+  await expect(results).toContainText("21 - 23 / 23 件");
   await expect(results).toContainText("3 / 3 ページ");
   await expect(results.getByRole("button", { name: "次へ" })).toBeDisabled();
   await results.getByRole("button", { name: "前へ" }).click();
-  await expect(results).toContainText("11-20 / 23 件");
+  await expect(results).toContainText("11 - 20 / 23 件");
   // 結果表（min-w 74rem）があっても、ページ送りはセクションの枠の中に収まる（横に押し出さない）。
   const contained = await results.evaluate((nav) => {
     const section = nav.closest("section")!;
@@ -722,9 +722,9 @@ test("結果明細と最近の job は、カーソル型の API を共通の Pag
   expect(contained).toBe(true);
 
   const jobs = page.getByTestId("quality-evaluation-recent-jobs-pagination");
-  await expect(jobs).toContainText("1-10 / 12 件");
+  await expect(jobs).toContainText("1 - 10 / 12 件");
   await jobs.getByRole("button", { name: "次へ" }).click();
-  await expect(jobs).toContainText("11-12 / 12 件");
+  await expect(jobs).toContainText("11 - 12 / 12 件");
   await expect(page.getByTestId("quality-evaluation-recent-jobs-scroll-region").locator("article")).toHaveCount(2);
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1

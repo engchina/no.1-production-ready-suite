@@ -12,6 +12,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
+from pr_backend_core import CursorPage
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -243,12 +244,10 @@ class SchemaObjectSummary(BaseModel):
     last_ddl_at: str = ""
 
 
-class SchemaObjectPage(BaseModel):
-    """Keyset cursor で返す schema object page。"""
+class SchemaObjectPage(CursorPage[SchemaObjectSummary]):
+    """Keyset cursor で返す schema object page（共通の CursorPage に件数の内訳と版を足す）。"""
 
     items: list[SchemaObjectSummary] = Field(default_factory=list)
-    next_cursor: str | None = None
-    total: int | None = None
     table_count: int = 0
     view_count: int = 0
     counts_included: bool = True
@@ -384,12 +383,10 @@ class ProfileUsageContext(BaseModel):
     updated_at: str = ""
 
 
-class ProfileSummaryPage(BaseModel):
-    """業務 profile の keyset cursor page。"""
+class ProfileSummaryPage(CursorPage[ProfileSummary]):
+    """業務 profile の keyset cursor page（共通の CursorPage に change_token を足す）。"""
 
     items: list[ProfileSummary] = Field(default_factory=list)
-    next_cursor: str | None = None
-    total: int | None = None
     change_token: int = 0
 
 
@@ -718,7 +715,7 @@ class DbAdminObjectsData(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class DbAdminObjectPage(BaseModel):
+class DbAdminObjectPage(CursorPage[DbAdminObjectSummary]):
     """管理画面向けの軽量・keyset page。Catalog/CLOB は読み込まない。"""
 
     runtime: str = "deterministic"
@@ -728,7 +725,6 @@ class DbAdminObjectPage(BaseModel):
     table_count: int = 0
     view_count: int = 0
     counts_included: bool = True
-    next_cursor: str | None = None
     refreshed_at: str = ""
     catalog_version: int = 0
     warnings: list[str] = Field(default_factory=list)
@@ -1345,9 +1341,8 @@ class SqlChatSummary(BaseModel):
     created_at: str
 
 
-class SqlChatPage(BaseModel):
-    items: list[SqlChatSummary]
-    next_cursor: str | None = None
+class SqlChatPage(CursorPage[SqlChatSummary]):
+    """本人の会話の一覧（カーソル型。総件数は数えない）。"""
 
 
 class SqlChatData(BaseModel):
@@ -1405,14 +1400,12 @@ class HistoryItem(BaseModel):
         return value
 
 
-class HistoryData(BaseModel):
-    """実行履歴 response(cursor pagination)。"""
+class HistoryData(CursorPage[HistoryItem]):
+    """実行履歴 response(cursor pagination)。
 
-    items: list[HistoryItem]
-    # 続きがあるときだけ非空。UI は「さらに読み込む」でこの cursor を渡す。
-    next_cursor: str = ""
-    # フィルタ適用後の総件数(read model が数えられないときは None)。
-    total: int | None = None
+    `next_cursor` は続きがあるときだけ非 None（UI は「さらに読み込む」でこの cursor を渡す）。
+    `total` はフィルタ適用後の総件数(read model が数えられないときは None)。
+    """
 
 
 class FeedbackRequest(BaseModel):
@@ -1467,12 +1460,11 @@ class FeedbackRecord(HistoryItem):
     training_example_id: str = ""
 
 
-class FeedbackListData(BaseModel):
+class FeedbackListData(CursorPage[FeedbackRecord]):
     """Cursor pagination 対応のアプリ内 feedback 一覧。"""
 
     items: list[FeedbackRecord] = Field(default_factory=list)
     total: int = 0
-    next_cursor: str = ""
 
 
 class FeedbackIndexRequest(StrictMutationRequest):
@@ -1674,12 +1666,11 @@ class ClassifierTrainingCandidate(BaseModel):
     conflict_profile_ids: list[str] = Field(default_factory=list)
 
 
-class ClassifierTrainingCandidatesData(BaseModel):
-    """Cursor pagination 対応の feedback training 候補一覧。"""
+class ClassifierTrainingCandidatesData(CursorPage[ClassifierTrainingCandidate]):
+    """Cursor pagination 対応の feedback training 候補一覧（件数の内訳を足す）。"""
 
     items: list[ClassifierTrainingCandidate] = Field(default_factory=list)
     total: int = 0
-    next_cursor: str = ""
     pending_count: int = 0
     added_count: int = 0
     attention_count: int = 0

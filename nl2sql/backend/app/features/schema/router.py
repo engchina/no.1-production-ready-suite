@@ -2,9 +2,11 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pr_backend_core import ApiResponse
+from pr_backend_core.api import CursorParams, InvalidCursorError, cursor_params
 
+from app.api.problems import invalid_cursor_exception
 from app.features.nl2sql.models import (
     SchemaCatalog,
     SchemaCatalogHead,
@@ -54,8 +56,7 @@ def catalog_head(
 @router.get("/objects", response_model=ApiResponse[SchemaObjectPage])
 def search_objects(
     response: Response,
-    cursor: str | None = None,
-    limit: int = 50,
+    paging: Annotated[CursorParams, Depends(cursor_params(default=50, max_limit=100))],
     q: str = "",
     owner: str = "",
     type: str = "",  # noqa: A002 - public query parameter name
@@ -65,14 +66,12 @@ def search_objects(
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
 ) -> ApiResponse[SchemaObjectPage] | Response:
     """Schema picker 用 keyset page。"""
-    if limit < 1 or limit > 100:
-        raise HTTPException(status_code=422, detail="limit は 1 から 100 で指定してください。")
     if row_state not in {"", "all", "with_rows", "empty_rows", "unknown_rows"}:
         raise HTTPException(status_code=422, detail="row_state が不正です。")
     try:
         page = nl2sql_service.search_schema_objects(
-            cursor=cursor,
-            limit=limit,
+            cursor=paging.cursor,
+            limit=paging.limit,
             query=q,
             owner=owner,
             object_type=type,
@@ -80,6 +79,8 @@ def search_objects(
             row_state=row_state,
             include_counts=include_counts,
         )
+    except InvalidCursorError as exc:
+        raise invalid_cursor_exception(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     quoted_etag = f'"schema-{page.catalog_version}"'

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ListPlus,
+import {
   FileJson,
   Plus,
   RefreshCw,
@@ -12,7 +12,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import {
   Button,
-  Banner,
+  LoadMoreFooter,
   DataTable,
   EmptyState,
   FormStatus,
@@ -45,12 +45,12 @@ import { IdentifierText } from "@/components/IdentifierText";
 
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { PageNotice } from "@/components/page-notice";
-import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "@/lib/api";
+import { ApiError, apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { t } from "@/lib/i18n";
+import { listLoadMoreErrorMessage } from "@/lib/load-more-error";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useSchemaOwners } from "@/lib/queries";
-import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { useAuth } from "@/features/security/AuthProvider";
 import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
 import { securityApi } from "@/features/security/api";
@@ -241,15 +241,6 @@ function schemaObjectQueryTotal(
 ) {
   const total = pages?.[0]?.total;
   return typeof total === "number" ? Math.max(total, loadedCount) : loadedCount;
-}
-
-function listLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
-  if (isTimeoutError(error)) {
-    return t("objectSelector.loadMoreTimeout", {
-      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
-    });
-  }
-  return error instanceof Error ? error.message : t(fallbackKey);
 }
 
 function normalizeProfile(profile: Nl2SqlProfile): Nl2SqlProfile {
@@ -468,38 +459,19 @@ function ProfileList({
           visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
         />
       )}
+      {/* 「さらに読み込む」と失敗の再試行は共通の LoadMoreFooter（#1266）。件数は見出しのバッジで出すので summary は空。 */}
       {!loading && profiles.length > 0 && (hasNextPage || loadMoreError) && (
-        <div className="grid justify-items-end gap-2" data-testid="profile-management-load-more">
-          {loadMoreError ? (
-            <Banner
-              severity="danger"
-              action={
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  className="w-full sm:w-auto"
-                  loading={loadingNextPage}
-                  onClick={onRetryLoadMore} icon={RefreshCw}>
-                  <span>{t("common.retry")}</span>
-                </Button>
-              }
-            >
-              {loadMoreError}
-            </Banner>
-          ) : (
-            <Button icon={ListPlus}
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="w-full sm:w-auto"
-              loading={loadingNextPage}
-              onClick={onLoadMore}
-            >
-              {t("profiles.action.loadMore")}
-            </Button>
-          )}
-        </div>
+        <LoadMoreFooter
+          summary=""
+          hasMore={hasNextPage}
+          loadingMore={loadingNextPage}
+          loadMoreError={loadMoreError || undefined}
+          onLoadMore={onLoadMore}
+          onRetry={onRetryLoadMore}
+          loadMoreLabel={t("profiles.action.loadMore")}
+          retryLabel={t("common.retry")}
+          testId="profile-management-load-more"
+        />
       )}
     </section>
   );

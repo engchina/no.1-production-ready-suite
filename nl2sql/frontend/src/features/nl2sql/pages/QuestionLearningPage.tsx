@@ -11,6 +11,7 @@ import {
   SelectField,
   toast,
   usePagination,
+  CursorPagination,
   DEFAULT_PAGE_SIZE,
   StatusBadge,
   PageHeader,
@@ -54,6 +55,8 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPostForm, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { paginationLabels } from "@/lib/pagination-labels";
+import { useCursorPageNavigation } from "@/lib/use-cursor-page-navigation";
 import { APP_ROUTES } from "@/lib/routes";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { useRequestScope } from "@/lib/useRequestScope";
@@ -137,9 +140,6 @@ export function QuestionClassifierModelsPage() {
   const [candidateAppliedFilters, setCandidateAppliedFilters] = useState<CandidateFilters>({
     search: "", status: "all", profileId: "",
   });
-  const [candidateCursor, setCandidateCursor] = useState("");
-  const [candidateCursorStack, setCandidateCursorStack] = useState<string[]>([]);
-  const [candidatePage, setCandidatePage] = useState(1);
   const [candidateHasActiveFilters, setCandidateHasActiveFilters] = useState(false);
   const [candidateError, setCandidateError] = useState("");
   const [candidateActionError, setCandidateActionError] = useState("");
@@ -201,6 +201,56 @@ export function QuestionClassifierModelsPage() {
     if (focusedCandidateHistoryId) params.set("history_id", focusedCandidateHistoryId);
     return `/api/nl2sql/classifier/training-candidates?${params.toString()}`;
   };
+
+  /**
+   * 学習候補を取り直す。`cursor` が空なら絞り込みの変更、空でなければページ送り（useCursorPageNavigation が
+   * cursor の変化で呼ぶ）。成功したら `onLoaded` を呼び true を返す。
+   */
+  const loadCandidates = async (
+    cursor = "",
+    filters: CandidateFilters = {
+      search: candidateSearch,
+      status: candidateStatus,
+      profileId: candidateProfileId,
+    },
+    onLoaded?: () => void
+  ): Promise<boolean> => {
+    retryCandidates.current = () => void loadCandidates(cursor, filters, onLoaded);
+    // 条件を続けて変えたとき、遅れて返った古い条件の応答で新しい条件の一覧を上書きしない（#535）。
+    const sequence = ++candidateLoadSequence.current;
+    setLoading("candidates-load");
+    setCandidateError("");
+    setCandidateActionError("");
+    try {
+      const data = await apiGet<ClassifierTrainingCandidatesData>(candidateUrl(cursor, filters));
+      if (sequence !== candidateLoadSequence.current) return true;
+      setCandidateAppliedFilters(filters);
+      setCandidates(data);
+      setCandidateHasActiveFilters(
+        Boolean(filters.search.trim()) || filters.status !== "all" || Boolean(filters.profileId)
+      );
+      setSelectedCandidates(new Set());
+      onLoaded?.();
+      return true;
+    } catch (err) {
+      if (sequence !== candidateLoadSequence.current) return true;
+      setCandidateError(apiErrorMessage(err, t("qcm.candidates.error.load")));
+      return false;
+    } finally {
+      if (sequence === candidateLoadSequence.current) setLoading("");
+    }
+  };
+
+  // 学習候補の「前へ / 次へ」のカーソル（共通の useCursorPages。#1266）。cursor が変わったら適用中の絞り込みで
+  // 取り直し、失敗したら表示していたページに留まる。
+  const candidatePages = useCursorPageNavigation((cursor) =>
+    loadCandidates(cursor, candidateAppliedFilters)
+  );
+  const candidateCursor = candidatePages.cursor;
+
+  // 絞り込みを変えたら先頭のページから取り直す（成功したらカーソルも先頭へ戻す）。
+  const applyCandidateFilters = (filters: CandidateFilters) =>
+    void loadCandidates("", filters, candidatePages.resetToFirstPage);
 
   // 画面の情報をまとめて取り直す。loading / message は呼び出し側で先に設定しておく。
   // state の更新は応答の callback の中だけで行う（effect からも呼ぶため）。
@@ -275,67 +325,14 @@ export function QuestionClassifierModelsPage() {
     }
   };
 
-  const loadCandidates = async (
-    cursor = "",
-    direction: "reset" | "next" | "prev" = "reset",
-    filters: CandidateFilters = {
-      search: candidateSearch,
-      status: candidateStatus,
-      profileId: candidateProfileId,
-    }
-  ) => {
-    retryCandidates.current = () => void loadCandidates(cursor, direction, filters);
-    // 条件を続けて変えたとき、遅れて返った古い条件の応答で新しい条件の一覧を上書きしない（#535）。
-    const sequence = ++candidateLoadSequence.current;
-    setLoading("candidates-load");
-    setCandidateError("");
-    setCandidateActionError("");
-    try {
-      const data = await apiGet<ClassifierTrainingCandidatesData>(candidateUrl(cursor, filters));
-      if (sequence !== candidateLoadSequence.current) return;
-      setCandidateAppliedFilters(filters);
-      setCandidates(data);
-      setCandidateHasActiveFilters(
-        Boolean(filters.search.trim()) || filters.status !== "all" || Boolean(filters.profileId)
-      );
-      setSelectedCandidates(new Set());
-      if (direction === "reset") {
-        setCandidateCursor("");
-        setCandidateCursorStack([]);
-        setCandidatePage(1);
-      } else {
-        setCandidateCursorStack((current) =>
-          direction === "next" ? [...current, candidateCursor] : current.slice(0, -1)
-        );
-        setCandidateCursor(cursor);
-        setCandidatePage((current) => Math.max(1, current + (direction === "next" ? 1 : -1)));
-      }
-    } catch (err) {
-      if (sequence !== candidateLoadSequence.current) return;
-      setCandidateError(apiErrorMessage(err, t("qcm.candidates.error.load")));
-    } finally {
-      if (sequence === candidateLoadSequence.current) setLoading("");
-    }
-  };
-
   const resetCandidateFilters = () => {
     const filters: CandidateFilters = { search: "", status: "all", profileId: "" };
     setCandidateSearch(filters.search);
     setCandidateStatus(filters.status);
     setCandidateProfileId(filters.profileId);
-    void loadCandidates("", "reset", filters);
+    applyCandidateFilters(filters);
   };
 
-  const goToNextCandidatePage = () => {
-    if (!candidates?.next_cursor) return;
-    void loadCandidates(candidates.next_cursor, "next", candidateAppliedFilters);
-  };
-
-  const goToPreviousCandidatePage = () => {
-    const previous = candidateCursorStack.at(-1);
-    if (previous === undefined) return;
-    void loadCandidates(previous, "prev", candidateAppliedFilters);
-  };
 
   const importSelectedCandidates = async () => {
     if (loading) return;
@@ -693,8 +690,7 @@ export function QuestionClassifierModelsPage() {
               profileId={candidateProfileId}
               selected={selectedCandidates}
               profileOverrides={candidateProfileOverrides}
-              page={candidatePage}
-              canGoPrevious={candidateCursorStack.length > 0}
+              depth={candidatePages.depth}
               loading={loading}
               error={candidateError}
               actionError={candidateActionError}
@@ -702,25 +698,28 @@ export function QuestionClassifierModelsPage() {
               // 一覧の絞り込みは条件を変えたらすぐ適用する（検索語は SearchField の debounce・IME 対応。#535）。
               onSearchChange={(value) => {
                 setCandidateSearch(value);
-                void loadCandidates("", "reset", { search: value, status: candidateStatus, profileId: candidateProfileId });
+                applyCandidateFilters({ search: value, status: candidateStatus, profileId: candidateProfileId });
               }}
               onStatusChange={(value) => {
                 setCandidateStatus(value);
-                void loadCandidates("", "reset", { search: candidateSearch, status: value, profileId: candidateProfileId });
+                applyCandidateFilters({ search: candidateSearch, status: value, profileId: candidateProfileId });
               }}
               onProfileFilterChange={(value) => {
                 setCandidateProfileId(value);
-                void loadCandidates("", "reset", { search: candidateSearch, status: candidateStatus, profileId: value });
+                applyCandidateFilters({ search: candidateSearch, status: candidateStatus, profileId: value });
               }}
-              onRetry={() => retryCandidates.current?.()}
+              // ページ送りの失敗は同じ移動をやり直し、それ以外は同じ条件で取り直す。
+              onRetry={() => {
+                if (!candidatePages.retryNavigation()) retryCandidates.current?.();
+              }}
               onResetFilters={resetCandidateFilters}
               onSelectionChange={setSelectedCandidates}
               onProfileOverrideChange={(historyId, value) =>
                 setCandidateProfileOverrides((current) => ({ ...current, [historyId]: value }))
               }
               onAddSelected={() => void importSelectedCandidates()}
-              onPrevious={goToPreviousCandidatePage}
-              onNext={goToNextCandidatePage}
+              onPrevious={candidatePages.prev}
+              onNext={candidatePages.next}
             />
           </DbObjectManagementPanelShell>
         )}
@@ -1063,10 +1062,8 @@ function TrainingDataTable({
         page={currentPage}
         totalPages={totalPages}
         onPageChange={setPage}
-        summary={t("qcm.training.pagination.range", { start: range.start, end: range.end, total: range.total })}
-        pageIndicator={t("qcm.training.pagination.page", { page: currentPage, total: totalPages })}
-        prevLabel={t("qcm.training.pagination.prev")}
-        nextLabel={t("qcm.training.pagination.next")}
+        range={range}
+        labels={paginationLabels()}
         ariaLabel={t("qcm.training.pagination.label")}
         testId="qcm-training-data-pagination"
       />
@@ -1281,8 +1278,7 @@ function TrainingCandidatesPanel({
   profileId,
   selected,
   profileOverrides,
-  page,
-  canGoPrevious,
+  depth,
   loading,
   error,
   actionError,
@@ -1305,8 +1301,8 @@ function TrainingCandidatesPanel({
   profileId: string;
   selected: Set<string>;
   profileOverrides: Record<string, string>;
-  page: number;
-  canGoPrevious: boolean;
+  /** 「次へ」で進んだ回数（useCursorPages の depth）。 */
+  depth: number;
   loading: string;
   error: string;
   actionError: string;
@@ -1320,7 +1316,7 @@ function TrainingCandidatesPanel({
   onProfileOverrideChange: (historyId: string, value: string) => void;
   onAddSelected: () => void;
   onPrevious: () => void;
-  onNext: () => void;
+  onNext: (nextCursor: string) => void;
 }) {
   const activeProfiles = profiles.filter((profile) => !profile.archived);
   const items = data?.items ?? [];
@@ -1332,13 +1328,6 @@ function TrainingCandidatesPanel({
   const allSelected = selectable.length > 0 && selectable.every((item) => selected.has(item.history_id));
   const selectedOnPageCount = selectable.filter((item) => selected.has(item.history_id)).length;
   const isLoading = loading === "candidates-load" || (loading === "load" && data === null);
-  const totalPages = Math.max(
-    1,
-    Math.ceil((data?.total ?? 0) / CANDIDATE_PAGE_SIZE),
-    page + (data?.next_cursor ? 1 : 0)
-  );
-  const pageStart = items.length > 0 ? (page - 1) * CANDIDATE_PAGE_SIZE + 1 : 0;
-  const pageEnd = items.length > 0 ? pageStart + items.length - 1 : 0;
 
   const selectPage = () => {
     const next = new Set(selected);
@@ -1579,21 +1568,15 @@ function TrainingCandidatesPanel({
             })}
           </ul>
 
-          <Pagination
-            page={page}
-            totalPages={totalPages}
-            onPageChange={(nextPage) => {
-              if (nextPage > page && data?.next_cursor) onNext();
-              if (nextPage < page && canGoPrevious) onPrevious();
-            }}
-            summary={t("qcm.candidates.pagination.range", {
-              start: pageStart,
-              end: pageEnd,
-              total: data?.total ?? 0,
-            })}
-            pageIndicator={t("qcm.candidates.pagination.page", { page, total: totalPages })}
-            prevLabel={t("qcm.training.pagination.prev")}
-            nextLabel={t("qcm.training.pagination.next")}
+          <CursorPagination
+            depth={depth}
+            limit={CANDIDATE_PAGE_SIZE}
+            total={data?.total ?? 0}
+            count={items.length}
+            nextCursor={data?.next_cursor}
+            onPrevious={onPrevious}
+            onNext={onNext}
+            labels={paginationLabels()}
             ariaLabel={t("qcm.candidates.pagination.label")}
             testId="qcm-candidate-pagination"
             className="rounded-md border border-border bg-surface-sunken p-3"

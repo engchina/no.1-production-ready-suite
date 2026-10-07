@@ -23,6 +23,7 @@ import { PageNotice } from "@/components/page-notice";
 import { apiFetch, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { listLoadMoreErrorMessage } from "@/lib/load-more-error";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import {
@@ -308,15 +309,6 @@ function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
 function objectListErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
   if (isTimeoutError(error)) {
     return t("dataMgmt.objectList.timeout", {
-      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
-    });
-  }
-  return error instanceof Error ? error.message : t(fallbackKey);
-}
-
-function objectListLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
-  if (isTimeoutError(error)) {
-    return t("objectSelector.loadMoreTimeout", {
       seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
     });
   }
@@ -843,7 +835,7 @@ export function ViewManagementPage() {
               loadingNextPage={viewObjectsQuery.isFetchingNextPage}
               loadMoreError={
                 viewObjectsQuery.isFetchNextPageError && viewObjectsQuery.error
-                  ? objectListLoadMoreErrorMessage(viewObjectsQuery.error, "viewMgmt.error.load")
+                  ? listLoadMoreErrorMessage(viewObjectsQuery.error, "viewMgmt.error.load")
                   : ""
               }
               labels={{

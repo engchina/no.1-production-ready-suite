@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from typing import Annotated, Literal
 
+from pr_backend_core import CursorPage
 from pr_system_settings.auth.router import LoginRequest as LoginRequest
 from pr_system_settings.auth.router import PasswordChangeRequest as PasswordChangeRequest
 from pr_system_settings.auth.router import assigned_role_data as assigned_role_data
@@ -559,15 +560,13 @@ class DeepSecTargetObjectData(BaseModel):
         return self
 
 
-class DeepSecTargetObjectPageData(BaseModel):
-    """DeepSec Data Grant picker 用の keyset page。"""
+class DeepSecTargetObjectPageData(CursorPage[DeepSecTargetObjectData]):
+    """DeepSec Data Grant picker 用の keyset page（共通の CursorPage に件数の内訳と警告を足す）。"""
 
     runtime: str = "oracle"
     owner: str = ""
     items: list[DeepSecTargetObjectData] = Field(default_factory=list)
-    total: int | None = None
     counts_included: bool = False
-    next_cursor: str | None = None
     warnings: list[str] = Field(default_factory=list)
 
 

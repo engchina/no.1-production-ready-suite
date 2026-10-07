@@ -22,6 +22,7 @@ import {
   ChatComposerOption,
   ChatHistoryList,
   ChatLayout,
+  LoadMoreFooter,
   ChatProgress,
   ChatSkeleton,
   ChatAnswer,
@@ -481,17 +482,17 @@ export function SqlChatPage() {
         error: "sql-chat-history-error",
         list: "sql-chat-history-list",
       }}
+      // 続きの読み込みは共通の LoadMoreFooter（#1266）。件数は API が返さないので summary は空。
       footer={
         history.hasNextPage ? (
-          <Button
-            type="button"
-            variant="secondary"
-            icon={RefreshCw}
-            loading={history.isFetchingNextPage}
-            onClick={() => void history.fetchNextPage()}
-          >
-            {t("chat.loadMore")}
-          </Button>
+          <LoadMoreFooter
+            summary=""
+            hasMore
+            loadingMore={history.isFetchingNextPage}
+            onLoadMore={() => void history.fetchNextPage()}
+            loadMoreLabel={t("chat.loadMore")}
+            retryLabel={t("chat.retry")}
+          />
         ) : null
       }
     />

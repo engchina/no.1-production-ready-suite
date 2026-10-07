@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi import HTTPException, Request, Response
+from pr_backend_core.api import CursorParams
 from pydantic import ValidationError
 
 from app.features.nl2sql import ontology_router, profile_sync
@@ -32,6 +33,9 @@ from app.features.nl2sql.service import (
 )
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.security.domain import Principal
+
+# router を直接呼ぶときの既定の cursor / limit（HTTP では cursor_params の依存が作る）。
+_PAGING = CursorParams(cursor=None, limit=50)
 
 
 def _anon_request() -> Request:
@@ -190,7 +194,9 @@ def test_profile_search_invalid_cursor_returns_422_without_persistence_failure(
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        nl2sql_router.search_profiles(_anon_request(), Response(), cursor="not-a-cursor")
+        nl2sql_router.search_profiles(
+            _anon_request(), Response(), CursorParams(cursor="not-a-cursor", limit=50)
+        )
 
     assert exc_info.value.status_code == 422
     assert "cursor が不正" in str(exc_info.value.detail)
@@ -207,7 +213,7 @@ def test_profile_search_router_rejects_unknown_sort(
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
 
     with pytest.raises(HTTPException) as exc_info:
-        nl2sql_router.search_profiles(_anon_request(), Response(), sort="updated_at")
+        nl2sql_router.search_profiles(_anon_request(), Response(), _PAGING, sort="updated_at")
 
     assert exc_info.value.status_code == 422
 
@@ -215,6 +221,7 @@ def test_profile_search_router_rejects_unknown_sort(
     page = nl2sql_router.search_profiles(
         _anon_request(),
         response,
+        _PAGING,
         sort="tables",
         direction="desc",
     )
@@ -483,7 +490,7 @@ def test_restricted_profile_search_uses_current_summary_etag_after_update(
     request = _profile_user_request({"default"})
 
     first_response = Response()
-    first_result = nl2sql_router.search_profiles(request, first_response)
+    first_result = nl2sql_router.search_profiles(request, first_response, _PAGING)
     assert not isinstance(first_result, Response)
     first_page = first_result.data
     assert first_page is not None
@@ -500,6 +507,7 @@ def test_restricted_profile_search_uses_current_summary_etag_after_update(
     second_result = nl2sql_router.search_profiles(
         request,
         second_response,
+        _PAGING,
         if_none_match=first_etag,
     )
 

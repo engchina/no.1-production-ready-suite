@@ -18,6 +18,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request, Response
+from pr_backend_core.api import CursorParams
 
 from app.cli.nl2sql_migrate_state import (
     _decode_snapshot_value,
@@ -2162,13 +2163,13 @@ def test_profile_api_supports_summary_detail_etag_and_conflict(
     page = profile_router.search_profiles(
         anon_request,
         page_response,
-        limit=10,
+        CursorParams(cursor=None, limit=10),
         q="0007",
     )
     page_not_modified = profile_router.search_profiles(
         anon_request,
         Response(),
-        limit=10,
+        CursorParams(cursor=None, limit=10),
         q="0007",
         if_none_match=page_response.headers["etag"],
     )
@@ -2224,16 +2225,15 @@ def test_schema_api_supports_page_and_detail_etag(
     monkeypatch.setattr(schema_router, "nl2sql_service", service)
 
     page_response = Response()
-    page = schema_router.search_objects(page_response, limit=1)
+    page = schema_router.search_objects(page_response, CursorParams(cursor=None, limit=1))
     page_304 = schema_router.search_objects(
         Response(),
-        limit=1,
+        CursorParams(cursor=None, limit=1),
         if_none_match=page_response.headers["etag"],
     )
     cursor_page = schema_router.search_objects(
         Response(),
-        cursor=page.data.next_cursor,  # type: ignore[union-attr]
-        limit=1,
+        CursorParams(cursor=page.data.next_cursor, limit=1),  # type: ignore[union-attr]
         include_counts=False,
     )
     detail_response = Response()
@@ -2294,14 +2294,14 @@ def test_db_admin_object_page_is_lightweight_filterable_and_etagged(
     response = Response()
     result = nl2sql_router.db_admin_objects(
         response=response,
-        limit=1,
+        paging=CursorParams(cursor=None, limit=1),
         type="table",
         row_state="with_rows",
     )
     etag = response.headers["etag"]
     not_modified = nl2sql_router.db_admin_objects(
         response=Response(),
-        limit=1,
+        paging=CursorParams(cursor=None, limit=1),
         type="table",
         row_state="with_rows",
         if_none_match=etag,
@@ -2312,8 +2312,7 @@ def test_db_admin_object_page_is_lightweight_filterable_and_etagged(
     assert data is not None
     next_page = nl2sql_router.db_admin_objects(
         response=Response(),
-        cursor=data.next_cursor,
-        limit=1,
+        paging=CursorParams(cursor=data.next_cursor, limit=1),
         type="table",
         row_state="with_rows",
         include_counts=False,
@@ -2421,7 +2420,7 @@ def test_db_admin_objects_page_filters_by_owner_prefix(
 
     result = nl2sql_router.db_admin_objects(
         response=Response(),
-        limit=10,
+        paging=CursorParams(cursor=None, limit=10),
         q="",
         type="all",
         row_state="all",
@@ -2505,6 +2504,7 @@ def test_db_admin_objects_rejects_invalid_query_scope() -> None:
     with pytest.raises(HTTPException) as error:
         nl2sql_router.db_admin_objects(
             response=Response(),
+            paging=CursorParams(cursor=None, limit=50),
             query_scope="owner",  # type: ignore[arg-type]
         )
 

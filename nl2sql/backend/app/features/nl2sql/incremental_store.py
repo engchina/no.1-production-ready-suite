@@ -7,7 +7,6 @@ versioned migration が適用済みであることだけを確認する。
 
 from __future__ import annotations
 
-import base64
 import copy
 import hashlib
 import json
@@ -19,6 +18,8 @@ from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from importlib import import_module
 from typing import Any, Protocol, cast
+
+from pr_backend_core.api import InvalidCursorError, decode_cursor, encode_cursor
 
 from .incremental_observability import record_cache, record_repository
 from .models import (
@@ -396,22 +397,24 @@ def _etag(payload: Mapping[str, Any], version: int) -> str:
     return hashlib.sha256(_canonical_json(data).encode("utf-8")).hexdigest()
 
 
-def _encode_cursor(*parts: str) -> str:
-    raw = _canonical_json(list(parts)).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+def encode_keyset_cursor(*parts: str) -> str:
+    """keyset（並び順のキーの組）のカーソル。共通の codec（`encode_cursor`。#1266）で作る。"""
+    return encode_cursor({"after": list(parts)})
 
 
-def _decode_cursor(cursor: str | None, expected_parts: int) -> tuple[str, ...] | None:
-    if not cursor:
+def decode_keyset_cursor(cursor: str | None, expected_parts: int) -> tuple[str, ...] | None:
+    """`encode_keyset_cursor` の逆。None / 空は None（最初のページ）。
+
+    形が違う（JSON として読めない・キーの数が違う）ときは `InvalidCursorError`（ValueError の派生。
+    router は 422 にする）。
+    """
+    payload = decode_cursor(cursor, required=("after",))
+    if payload is None:
         return None
-    try:
-        padded = cursor + "=" * (-len(cursor) % 4)
-        decoded = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
-    except (ValueError, TypeError, json.JSONDecodeError) as exc:
-        raise ValueError("cursor が不正です。") from exc
-    if not isinstance(decoded, list) or len(decoded) != expected_parts:
-        raise ValueError("cursor が不正です。")
-    return tuple(str(value) for value in decoded)
+    parts = payload["after"]
+    if not isinstance(parts, list) or len(parts) != expected_parts:
+        raise InvalidCursorError("cursor が不正です。")
+    return tuple(str(value) for value in parts)
 
 
 def _schema_sort_key(owner: str, object_name: str) -> tuple[str, str, str, str]:
@@ -519,7 +522,7 @@ def paginate_sorted_profiles(
     next_cursor = None
     if has_more and selected:
         last = selected[-1]
-        next_cursor = _encode_cursor(profile_sort_key(last, sort_key), last.id)
+        next_cursor = encode_keyset_cursor(profile_sort_key(last, sort_key), last.id)
     return selected, next_cursor
 
 
@@ -826,7 +829,7 @@ class MemoryIncrementalNl2SqlRepository:
         sort_key: str = "name",
         direction: str = "asc",
     ) -> ProfileSummaryPage:
-        after = _decode_cursor(cursor, 2)
+        after = decode_keyset_cursor(cursor, 2)
         query_key = _profile_search_key(query.strip())
         with self._lock:
             profiles = [
@@ -933,7 +936,7 @@ class MemoryIncrementalNl2SqlRepository:
         row_state: str = "",
         include_counts: bool = True,
     ) -> SchemaObjectPage:
-        after = _decode_cursor(cursor, 2)
+        after = decode_keyset_cursor(cursor, 2)
         query_key = query.casefold().strip()
         query_scope_key = query_scope.lower().strip()
         # owner は辞書ビュー上の名前（大文字小文字を保持、#563）。
@@ -1003,7 +1006,7 @@ class MemoryIncrementalNl2SqlRepository:
             next_cursor = None
             if has_more and selected:
                 last = selected[-1]
-                next_cursor = _encode_cursor(last.owner, last.table_name)
+                next_cursor = encode_keyset_cursor(last.owner, last.table_name)
             return SchemaObjectPage(
                 items=[self._schema_summary(table) for table in selected],
                 next_cursor=next_cursor,
@@ -1394,7 +1397,7 @@ class MemoryIncrementalNl2SqlRepository:
         payload_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
     ) -> tuple[list[dict[str, Any]], str | None, int]:
-        decoded = _decode_cursor(cursor, 2)
+        decoded = decode_keyset_cursor(cursor, 2)
         query_key = query.casefold().strip()
         filters = {key: value for key, value in (payload_filters or {}).items() if value}
         scoped_profile_ids = _normalize_profile_id_filter(profile_ids)
@@ -1441,7 +1444,7 @@ class MemoryIncrementalNl2SqlRepository:
         next_cursor = None
         if has_more and selected:
             last = selected[-1]
-            next_cursor = _encode_cursor(
+            next_cursor = encode_keyset_cursor(
                 _state_document_sort_value(collection, last),
                 str(last.get("_entity_id") or ""),
             )
@@ -1518,7 +1521,7 @@ class OracleIncrementalNl2SqlRepository:
         sort_key: str = "name",
         direction: str = "asc",
     ) -> ProfileSummaryPage:
-        after = _decode_cursor(cursor, 2)
+        after = decode_keyset_cursor(cursor, 2)
         sort_key, direction = normalize_profile_sort(sort_key, direction)
         sort_expression = self._PROFILE_SORT_EXPRESSIONS[sort_key]
         descending = direction == "desc"
@@ -1575,7 +1578,7 @@ class OracleIncrementalNl2SqlRepository:
         next_cursor = None
         if has_more and items:
             last = items[-1]
-            next_cursor = _encode_cursor(_profile_summary_sort_key(last, sort_key), last.id)
+            next_cursor = encode_keyset_cursor(_profile_summary_sort_key(last, sort_key), last.id)
         return ProfileSummaryPage(
             items=items,
             next_cursor=next_cursor,
@@ -1835,7 +1838,7 @@ class OracleIncrementalNl2SqlRepository:
         row_state: str = "",
         include_counts: bool = True,
     ) -> SchemaObjectPage:
-        after = _decode_cursor(cursor, 2)
+        after = decode_keyset_cursor(cursor, 2)
         where = [
             "o.OWNER_NAME NOT LIKE '%$%'",
             "o.OWNER_NAME NOT LIKE '%#%'",
@@ -1965,7 +1968,7 @@ class OracleIncrementalNl2SqlRepository:
         next_cursor = None
         if has_more and items:
             last = items[-1]
-            next_cursor = _encode_cursor(last.owner, last.object_name)
+            next_cursor = encode_keyset_cursor(last.owner, last.object_name)
         return SchemaObjectPage(
             items=items,
             next_cursor=next_cursor,
@@ -2644,7 +2647,7 @@ class OracleIncrementalNl2SqlRepository:
         payload_filters: Mapping[str, str] | None = None,
         profile_ids: Iterable[str] | None = None,
     ) -> tuple[list[dict[str, Any]], str | None, int]:
-        decoded = _decode_cursor(cursor, 2)
+        decoded = decode_keyset_cursor(cursor, 2)
         where = ["COLLECTION = :collection"]
         filter_binds: dict[str, Any] = {"collection": collection}
         if profile_id:
@@ -2716,7 +2719,7 @@ class OracleIncrementalNl2SqlRepository:
         )
         next_cursor = None
         if has_more and rows:
-            next_cursor = _encode_cursor(str(rows[-1][1]), str(rows[-1][2]))
+            next_cursor = encode_keyset_cursor(str(rows[-1][1]), str(rows[-1][2]))
         return items, next_cursor, total
 
     def _load_catalog_subset(self, owner: str, object_name: str) -> SchemaCatalog:

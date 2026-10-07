@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
-from fastapi import Request
+from fastapi import HTTPException, Request
+from pr_backend_core.api import InvalidCursorError
 from pr_backend_core.api.validation import validation_field_errors
 from pr_backend_core.observability import generate_request_id
 from pydantic import BaseModel, Field
@@ -75,6 +76,15 @@ _STATUS_CODES: dict[int, str] = {
 }
 
 _RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
+
+
+def invalid_cursor_exception(exc: InvalidCursorError) -> HTTPException:
+    """壊れたページングの cursor（共通 codec の `InvalidCursorError`）を 422 にする（#1266）。
+
+    利用者の文言は製品の既存の形（「cursor が不正です。」）にそろえ、codec の理由は detail に
+    含めない。
+    """
+    return HTTPException(status_code=422, detail="cursor が不正です。")
 
 
 def request_id_for(request: Request) -> str:

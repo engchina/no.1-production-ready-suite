@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pr_backend_core import ApiResponse, Page
+from pr_backend_core.api import (
+    ACCESS_TARGET_PAGE_LIMIT_MAX,
+    CursorParams,
+    OffsetParams,
+    cursor_params,
+    offset_params,
+    paginate_slice,
+)
 from pr_system_settings.auth.domain import Principal as PlatformPrincipal
 from pr_system_settings.auth.domain import RoleRecord as PlatformRoleRecord
 from pr_system_settings.auth.router import build_auth_router
@@ -91,7 +99,6 @@ def update_role_permissions(
 
 # 権限管理の「利用できる対象」の候補の 1 ページの上限（#608）。
 # 画面は 50 件ずつ読み、選択済みの名前は `ids` で読む。
-ACCESS_TARGET_PAGE_LIMIT_MAX = 100
 
 
 def _matches_profile_query(query: str, *values: str) -> bool:
@@ -105,10 +112,11 @@ def _matches_profile_query(query: str, *values: str) -> bool:
     response_model=ApiResponse[Page[ProfileAccessProfileData]],
 )
 def list_profile_access_profiles(
+    paging: Annotated[
+        OffsetParams, Depends(offset_params(default=50, max_limit=ACCESS_TARGET_PAGE_LIMIT_MAX))
+    ],
     include_archived: Annotated[bool, Query()] = False,
     q: Annotated[str, Query(max_length=200)] = "",
-    limit: Annotated[int, Query(ge=1, le=ACCESS_TARGET_PAGE_LIMIT_MAX)] = 50,
-    offset: Annotated[int, Query(ge=0)] = 0,
     ids: Annotated[list[str] | None, Query(max_length=ACCESS_TARGET_PAGE_LIMIT_MAX)] = None,
 ) -> ApiResponse[Page[ProfileAccessProfileData]]:
     """権限管理画面向けに業務 profile の利用権限カタログを、検索とページングで返す（#608）。
@@ -127,8 +135,8 @@ def list_profile_access_profiles(
         if (selected is None or profile.id in selected)
         and _matches_profile_query(q, profile.name, profile.category, profile.description)
     ]
-    total = len(profiles)
-    page_profiles = profiles[offset : offset + limit]
+    page = paginate_slice(profiles, paging)
+    page_profiles = page.items
     profile_ids = {profile.id for profile in page_profiles}
     roles = get_security_service().list_roles(include_archived=True)
     allowed_roles_by_profile: dict[str, list[str]] = {profile_id: [] for profile_id in profile_ids}
@@ -155,10 +163,10 @@ def list_profile_access_profiles(
                 )
                 for profile in page_profiles
             ],
-            total=total,
-            limit=limit,
-            offset=offset,
-            has_next=offset + limit < total,
+            total=page.total,
+            limit=page.limit,
+            offset=page.offset,
+            has_next=page.has_next,
         )
     )
 
@@ -200,8 +208,7 @@ def list_deepsec_relations(
     response_model=ApiResponse[DeepSecTargetObjectPageData],
 )
 def list_deepsec_target_objects(
-    cursor: Annotated[str | None, Query(max_length=512)] = None,
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    paging: Annotated[CursorParams, Depends(cursor_params(default=50, max_limit=100))],
     q: Annotated[str, Query(max_length=128)] = "",
     owner_prefix: Annotated[str, Query(max_length=128)] = "",
     include_counts: bool = False,
@@ -209,8 +216,8 @@ def list_deepsec_target_objects(
 ) -> ApiResponse[DeepSecTargetObjectPageData]:
     return ApiResponse(
         data=get_deepsec_service().target_objects(
-            cursor=cursor,
-            limit=limit,
+            cursor=paging.cursor,
+            limit=paging.limit,
             q=q,
             owner_prefix=owner_prefix,
             include_counts=include_counts,

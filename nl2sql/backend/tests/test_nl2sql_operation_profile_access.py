@@ -10,6 +10,7 @@ from typing import cast
 
 import pytest
 from fastapi import HTTPException, Request
+from pr_backend_core.api import CursorParams
 
 from app.features.nl2sql import ontology_router
 from app.features.nl2sql import profile_sync as profile_sync_module
@@ -245,13 +246,15 @@ def test_quality_evaluation_routes_enforce_profile_access(
     monkeypatch.setattr(nl2sql_router, "quality_evaluation_service", service)
     request = _request({"profile-a"})
 
-    listed = nl2sql_router.list_quality_evaluations(request)
+    listed = nl2sql_router.list_quality_evaluations(request, CursorParams(cursor=None, limit=20))
     assert [item.profile_id for item in listed.data.items] == ["profile-a"]  # type: ignore[union-attr]
     assert listed.data.total == 1  # type: ignore[union-attr]
 
     for call in (
         lambda: nl2sql_router.get_quality_evaluation("job-b", request),
-        lambda: nl2sql_router.quality_evaluation_results("job-b", request),
+        lambda: nl2sql_router.quality_evaluation_results(
+            "job-b", request, CursorParams(cursor=None, limit=25)
+        ),
         lambda: nl2sql_router.quality_evaluation_results_xlsx("job-b", request),
         lambda: nl2sql_router.cancel_quality_evaluation("job-b", request),
         lambda: nl2sql_router.delete_quality_evaluation("job-b", request),
@@ -298,7 +301,7 @@ def test_feedback_learning_routes_enforce_profile_access(
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
     request = _request({"profile-a"})
 
-    feedback = nl2sql_router.list_feedback(request)
+    feedback = nl2sql_router.list_feedback(request, CursorParams(cursor=None, limit=20))
     assert [item.profile_id for item in feedback.data.items] == ["profile-a"]  # type: ignore[union-attr]
 
     entries = nl2sql_router.feedback_entries(request)

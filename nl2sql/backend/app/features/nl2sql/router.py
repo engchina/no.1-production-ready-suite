@@ -21,9 +21,11 @@ from fastapi import (
     UploadFile,
 )
 from pr_backend_core import ApiResponse
+from pr_backend_core.api import CursorParams, InvalidCursorError, cursor_params
 from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
 
 from app.api.concurrency import run_sync_io
+from app.api.problems import invalid_cursor_exception as _invalid_cursor
 from app.security.domain import Principal
 from app.security.permissions import (
     FEEDBACK_MANAGE_PERMISSION,
@@ -180,7 +182,6 @@ from .quality_evaluation_models import (
     QualityEvaluationResultPage,
 )
 from .quality_evaluation_service import (
-    QualityEvaluationCursorError,
     QualityEvaluationJobNotFoundError,
     QualityEvaluationJobStateError,
     QualityEvaluationValidationError,
@@ -578,17 +579,23 @@ def take_chat_execution_result(job_id: str, request: Request) -> ApiResponse[Sql
 
 
 @router.get("/chats", response_model=ApiResponse[SqlChatPage])
-def list_sql_chats(request: Request, cursor: str | None = None) -> ApiResponse[SqlChatPage]:
-    """本人の会話だけを、現在利用できる業務プロファイルの範囲で返す。"""
+def list_sql_chats(
+    request: Request,
+    paging: Annotated[CursorParams, Depends(cursor_params(default=50, max_limit=50))],
+) -> ApiResponse[SqlChatPage]:
+    """本人の会話だけを、現在利用できる業務プロファイルの範囲で返す（1 ページ 50 件固定）。"""
     principal = getattr(request.state, "principal", None)
     try:
         return ApiResponse(
             data=nl2sql_service.list_sql_chats(
                 actor=str(getattr(principal, "user_uuid", "")),
                 profile_ids=_allowed_profile_ids_for_request(request),
-                cursor=cursor,
+                cursor=paging.cursor,
+                limit=paging.limit,
             )
         )
+    except InvalidCursorError as exc:
+        raise _invalid_cursor(exc) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -674,8 +681,7 @@ def list_profiles(
 def search_profiles(
     request: Request,
     response: Response,
-    cursor: str | None = None,
-    limit: int = 50,
+    paging: Annotated[CursorParams, Depends(cursor_params(default=50, max_limit=100))],
     q: str = "",
     include_archived: bool = False,
     sort: str = "name",
@@ -683,18 +689,18 @@ def search_profiles(
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
 ) -> ApiResponse[ProfileSummaryPage] | Response:
     """Full payload を返さない業務 profile keyset page。"""
-    if limit < 1 or limit > 100:
-        raise HTTPException(status_code=422, detail="limit は 1 から 100 で指定してください。")
     try:
         page = nl2sql_service.search_profiles(
-            cursor=cursor,
-            limit=limit,
+            cursor=paging.cursor,
+            limit=paging.limit,
             query=q,
             include_archived=include_archived,
             allowed_profile_ids=_allowed_profile_ids_for_request(request),
             sort=sort,
             direction=direction,
         )
+    except InvalidCursorError as exc:
+        raise _invalid_cursor(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     # sort 指定ごとに並びが変わるため ETag にも含める。
@@ -1443,15 +1449,14 @@ def check_select_ai_agent_privileges() -> ApiResponse[AgentPrivilegeCheckData]:
 @router.get("/history", response_model=ApiResponse[HistoryData])
 def history(
     request: Request,
-    cursor: str | None = None,
-    limit: int = 50,
+    paging: Annotated[CursorParams, Depends(cursor_params(default=50, max_limit=200))],
     q: str = "",
     rating: str = "all",
     safety: str = "all",
 ) -> ApiResponse[HistoryData]:
     """NL2SQL の実行履歴(新しい順の cursor page)。
 
-    非 system admin は自分の履歴だけ。`next_cursor` が非空なら続きがある。
+    非 system admin は自分の履歴だけ。`next_cursor` が非 None なら続きがある。
     """
     if rating not in {"all", "good", "bad", "unrated"}:
         raise HTTPException(status_code=422, detail="rating が不正です。")
@@ -1466,8 +1471,8 @@ def history(
     try:
         data = nl2sql_service.list_history(
             actor_user_uuid=actor_user_uuid,
-            cursor=cursor,
-            limit=max(1, min(limit, 200)),
+            cursor=paging.cursor,
+            limit=paging.limit,
             rating=rating,
             safety=safety,
             query=q.strip(),
@@ -1492,6 +1497,8 @@ def history(
                 )
             )
         return ApiResponse(data=data.model_copy(update={"items": items}))
+    except InvalidCursorError as exc:
+        raise _invalid_cursor(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -1544,8 +1551,7 @@ def admin_review_feedback(
 @router.get("/feedback", response_model=ApiResponse[FeedbackListData])
 def list_feedback(
     request: Request,
-    cursor: str | None = None,
-    limit: int = 20,
+    paging: Annotated[CursorParams, Depends(cursor_params(default=20, max_limit=100))],
     rating: str = "all",
     profile_id: str = "",
     q: str = "",
@@ -1557,13 +1563,15 @@ def list_feedback(
         _assert_profile_access(request, profile_id.strip())
     try:
         data = nl2sql_service.list_feedback(
-            cursor=cursor,
-            limit=max(1, min(limit, 100)),
+            cursor=paging.cursor,
+            limit=paging.limit,
             rating=rating,
             profile_id=profile_id.strip(),
             query=q.strip(),
             allowed_profile_ids=_allowed_profile_ids_for_request(request),
         )
+    except InvalidCursorError as exc:
+        raise _invalid_cursor(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ApiResponse(data=data)
@@ -1725,8 +1733,7 @@ def classifier_training_data(request: Request) -> ApiResponse[ClassifierTraining
 )
 def classifier_training_candidates(
     request: Request,
-    cursor: str | None = None,
-    limit: int = 20,
+    paging: Annotated[CursorParams, Depends(cursor_params(default=20, max_limit=100))],
     status: str = "all",
     profile_id: str = "",
     q: str = "",
@@ -1748,14 +1755,16 @@ def classifier_training_candidates(
         _assert_profile_access(request, profile_id.strip())
     try:
         data = nl2sql_service.classifier_training_candidates(
-            cursor=cursor,
-            limit=max(1, min(limit, 100)),
+            cursor=paging.cursor,
+            limit=paging.limit,
             status=status,
             profile_id=profile_id.strip(),
             query=q.strip(),
             history_id=history_id.strip(),
             allowed_profile_ids=_allowed_profile_ids_for_request(request),
         )
+    except InvalidCursorError as exc:
+        raise _invalid_cursor(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ApiResponse(data=data)
@@ -2065,18 +2074,17 @@ async def create_quality_evaluation(
 )
 def list_quality_evaluations(
     request: Request,
-    cursor: str | None = None,
-    limit: int = 20,
+    paging: Annotated[CursorParams, Depends(cursor_params(default=20, max_limit=100))],
 ) -> ApiResponse[QualityEvaluationJobPage]:
     """最近の SQL生成評価 job をページ取得する。"""
     try:
         page = quality_evaluation_service.list_jobs(
-            cursor=cursor,
-            limit=limit,
+            cursor=paging.cursor,
+            limit=paging.limit,
             allowed_profile_ids=_allowed_profile_ids_for_request(request),
         )
-    except QualityEvaluationCursorError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except InvalidCursorError as exc:
+        raise _invalid_cursor(exc) from exc
     return ApiResponse(data=page)
 
 
@@ -2087,17 +2095,18 @@ def list_quality_evaluations(
 def quality_evaluation_results(
     job_id: str,
     request: Request,
-    cursor: str | None = None,
-    limit: int = 25,
+    paging: Annotated[CursorParams, Depends(cursor_params(default=25, max_limit=100))],
 ) -> ApiResponse[QualityEvaluationResultPage]:
     """SQL生成評価結果の明細をページ取得する。"""
     _quality_evaluation_job_for_access(job_id, request)
     try:
         return ApiResponse(
-            data=quality_evaluation_service.list_results(job_id=job_id, cursor=cursor, limit=limit)
+            data=quality_evaluation_service.list_results(
+                job_id=job_id, cursor=paging.cursor, limit=paging.limit
+            )
         )
-    except QualityEvaluationCursorError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except InvalidCursorError as exc:
+        raise _invalid_cursor(exc) from exc
     except QualityEvaluationJobNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -2317,8 +2326,7 @@ def db_admin_tables() -> ApiResponse[DbAdminObjectsData]:
 @router.get("/db-admin/objects", response_model=ApiResponse[DbAdminObjectPage])
 def db_admin_objects(
     response: Response,
-    cursor: str | None = None,
-    limit: int = 50,
+    paging: Annotated[CursorParams, Depends(cursor_params(default=50, max_limit=100))],
     q: str = "",
     owner: str = "",
     owner_prefix: str = "",
@@ -2329,25 +2337,26 @@ def db_admin_objects(
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
 ) -> ApiResponse[DbAdminObjectPage] | Response:
     """データ管理向け軽量 object page。全量 Catalog/CLOB は読み込まない。"""
-    if limit < 1 or limit > 100:
-        raise HTTPException(status_code=422, detail="limit は 1 から 100 で指定してください。")
     if type not in {"all", "table", "view"}:
         raise HTTPException(status_code=422, detail="type が不正です。")
     if row_state not in {"all", "with_rows", "empty_rows", "unknown_rows"}:
         raise HTTPException(status_code=422, detail="row_state が不正です。")
     if query_scope not in {"all", "name_comment"}:
         raise HTTPException(status_code=422, detail="query_scope が不正です。")
-    page = nl2sql_service.list_db_admin_objects_page(
-        cursor=cursor,
-        limit=limit,
-        query=q,
-        owner=owner,
-        owner_prefix=owner_prefix,
-        query_scope=query_scope,
-        object_type=type,
-        row_state=row_state,
-        include_counts=include_counts,
-    )
+    try:
+        page = nl2sql_service.list_db_admin_objects_page(
+            cursor=paging.cursor,
+            limit=paging.limit,
+            query=q,
+            owner=owner,
+            owner_prefix=owner_prefix,
+            query_scope=query_scope,
+            object_type=type,
+            row_state=row_state,
+            include_counts=include_counts,
+        )
+    except InvalidCursorError as exc:
+        raise _invalid_cursor(exc) from exc
     quoted_etag = f'"schema-{page.catalog_version}"'
     if if_none_match == quoted_etag:
         return Response(status_code=304, headers={"ETag": quoted_etag})

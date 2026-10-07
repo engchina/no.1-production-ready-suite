@@ -41,7 +41,7 @@ import {
   FormActionBar,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_VISIBLE_ROWS,
-  Pagination,
+  CursorPagination,
   RowTitleButton,
   FieldError,
   FieldLabel,
@@ -59,6 +59,8 @@ import { apiDelete, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { useValuesChanged } from "@/lib/render-sync";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { paginationLabels } from "@/lib/pagination-labels";
+import { useCursorPageNavigation } from "@/lib/use-cursor-page-navigation";
 import { APP_ROUTES } from "@/lib/routes";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
@@ -105,7 +107,8 @@ type AppFeedbackFilters = {
   profileId?: string;
   query?: string;
 };
-type AppFeedbackRefreshDirection = "reset" | "next" | "prev" | "current";
+/** 取り直しの契機。reset: 絞り込みの変更（先頭のページへ）、page: ページ送り、current: 同じページを取り直す。 */
+type AppFeedbackRefreshDirection = "reset" | "page" | "current";
 /**
  * 操作の結果（失敗・未実行・警告）を出す位置。起点の操作の直下に出し、ページ先頭へ送らない
  * （messaging.md §10.1、#724）。ページ先頭の PageNotice は画面全体の読み込みの失敗だけにする。
@@ -196,11 +199,8 @@ export function FeedbackManagementPage() {
   const [feedbackSearch, setFeedbackSearch] = useState("");
   const appFeedbackLoadSequence = useRef(0);
   const [appProfileFilter, setAppProfileFilter] = useState("");
-  const [feedbackCursor, setFeedbackCursor] = useState("");
-  const [feedbackCursorStack, setFeedbackCursorStack] = useState<string[]>([]);
-  const [feedbackPage, setFeedbackPage] = useState(1);
   const [feedbackTotal, setFeedbackTotal] = useState(0);
-  const [feedbackNextCursor, setFeedbackNextCursor] = useState("");
+  const [feedbackNextCursor, setFeedbackNextCursor] = useState<string | null>(null);
   const [feedbackConfig, setFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
   const [savedFeedbackConfig, setSavedFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
   const [savedReview, setSavedReview] = useState("");
@@ -237,15 +237,6 @@ export function FeedbackManagementPage() {
       (feedbackConfig.similarity_threshold !== savedFeedbackConfig.similarity_threshold ||
         feedbackConfig.match_limit !== savedFeedbackConfig.match_limit)
   );
-  const feedbackTotalPages = Math.max(
-    1,
-    Math.ceil(feedbackTotal / APP_FEEDBACK_PAGE_SIZE),
-    feedbackPage + (feedbackNextCursor ? 1 : 0)
-  );
-  const feedbackPageStart =
-    history.length > 0 ? (feedbackPage - 1) * APP_FEEDBACK_PAGE_SIZE + 1 : 0;
-  const feedbackPageEnd =
-    history.length > 0 ? feedbackPageStart + history.length - 1 : 0;
   const visibleSelectedFeedbackId = selectedVisibleStringKey(
     appFeedbackItems,
     selectedFeedbackId,
@@ -315,6 +306,53 @@ export function FeedbackManagementPage() {
       signal,
     });
   };
+
+  /**
+   * フィードバック履歴を取り直す。reset: 絞り込みの変更、page: ページ送り（useCursorPageNavigation が cursor の
+   * 変化で呼ぶ）、current: 同じページを取り直す。成功したら `onLoaded` を呼び true を返す。
+   */
+  const refreshAppFeedback = async (
+    cursor = "",
+    direction: AppFeedbackRefreshDirection = "reset",
+    filters: AppFeedbackFilters = {},
+    onLoaded?: () => void
+  ): Promise<boolean> => {
+    if (direction === "reset" && reviewDirty && !(await confirmDiscard())) return true;
+    // 条件を続けて変えたとき、遅れて返った古い条件の応答で新しい条件の一覧を上書きしない（#535）。
+    const sequence = ++appFeedbackLoadSequence.current;
+    setLoading("app-feedback-load");
+    setActionResult(null);
+    try {
+      const data = await fetchAppFeedback(cursor, undefined, filters);
+      if (sequence !== appFeedbackLoadSequence.current) return true;
+      reviewDirtyRef.current = false;
+      if (filters.rating !== undefined) setFeedbackFilter(filters.rating);
+      if (filters.profileId !== undefined) setAppProfileFilter(filters.profileId);
+      setHistory(data.items);
+      setFeedbackTotal(data.total);
+      setFeedbackNextCursor(data.next_cursor);
+      setSelectedFeedbackId((current) =>
+        data.items.some((item) => item.id === current) ? current : data.items[0]?.id || ""
+      );
+      onLoaded?.();
+      return true;
+    } catch (err) {
+      if (sequence !== appFeedbackLoadSequence.current) return true;
+      showActionError("appFeedbackList", err, t("feedbackManagement.error.load"));
+      return false;
+    } finally {
+      if (sequence === appFeedbackLoadSequence.current) setLoading("");
+    }
+  };
+
+  // フィードバック履歴の「前へ / 次へ」のカーソル（共通の useCursorPages。#1266）。cursor が変わったら取り直し、
+  // 失敗したら表示していたページに留まる（同じボタンでやり直せる）。
+  const feedbackPages = useCursorPageNavigation((cursor) => refreshAppFeedback(cursor, "page"));
+  const feedbackCursor = feedbackPages.cursor;
+
+  // 絞り込みを変えたら先頭のページから取り直す（成功したらカーソルも先頭へ戻す）。
+  const applyAppFeedbackFilters = (filters: AppFeedbackFilters) =>
+    void refreshAppFeedback("", "reset", filters, feedbackPages.resetToFirstPage);
 
   const load = async (announce = false, origin: "header" | "notice" = "header") => {
     if (loading) return;
@@ -413,58 +451,15 @@ export function FeedbackManagementPage() {
     }
   };
 
-  const refreshAppFeedback = async (
-    cursor = "",
-    direction: AppFeedbackRefreshDirection = "reset",
-    filters: AppFeedbackFilters = {}
-  ) => {
-    if (direction !== "current" && reviewDirty && !(await confirmDiscard())) return;
-    // 条件を続けて変えたとき、遅れて返った古い条件の応答で新しい条件の一覧を上書きしない（#535）。
-    const sequence = ++appFeedbackLoadSequence.current;
-    setLoading("app-feedback-load");
-    setActionResult(null);
-    try {
-      const data = await fetchAppFeedback(cursor, undefined, filters);
-      if (sequence !== appFeedbackLoadSequence.current) return;
-      reviewDirtyRef.current = false;
-      if (filters.rating !== undefined) setFeedbackFilter(filters.rating);
-      if (filters.profileId !== undefined) setAppProfileFilter(filters.profileId);
-      setHistory(data.items);
-      setFeedbackTotal(data.total);
-      setFeedbackNextCursor(data.next_cursor);
-      setSelectedFeedbackId((current) =>
-        data.items.some((item) => item.id === current) ? current : data.items[0]?.id || ""
-      );
-      if (direction === "reset") {
-        setFeedbackCursor("");
-        setFeedbackCursorStack([]);
-        setFeedbackPage(1);
-      } else if (direction === "current") {
-        setFeedbackCursor(cursor);
-      } else {
-        setFeedbackCursorStack((current) =>
-          direction === "next" ? [...current, feedbackCursor] : current.slice(0, -1)
-        );
-        setFeedbackCursor(cursor);
-        setFeedbackPage((current) => Math.max(1, current + (direction === "next" ? 1 : -1)));
-      }
-    } catch (err) {
-      if (sequence !== appFeedbackLoadSequence.current) return;
-      showActionError("appFeedbackList", err, t("feedbackManagement.error.load"));
-    } finally {
-      if (sequence === appFeedbackLoadSequence.current) setLoading("");
-    }
+  // ページ送り。編集中のレビューがあれば先に破棄の確認をしてから cursor を動かす（取り直しは hook が行う）。
+  const nextAppFeedbackPage = async (nextCursor: string) => {
+    if (reviewDirty && !(await confirmDiscard())) return;
+    feedbackPages.next(nextCursor);
   };
 
-  const nextAppFeedbackPage = () => {
-    if (!feedbackNextCursor) return;
-    void refreshAppFeedback(feedbackNextCursor, "next");
-  };
-
-  const previousAppFeedbackPage = () => {
-    const previous = feedbackCursorStack.at(-1);
-    if (previous === undefined) return;
-    void refreshAppFeedback(previous, "prev");
+  const previousAppFeedbackPage = async () => {
+    if (reviewDirty && !(await confirmDiscard())) return;
+    feedbackPages.prev();
   };
 
   const changeProfile = (nextProfile: string) => {
@@ -1041,7 +1036,7 @@ export function FeedbackManagementPage() {
                   value={feedbackSearch}
                   onChange={(value) => {
                     setFeedbackSearch(value);
-                    void refreshAppFeedback("", "reset", { query: value });
+                    applyAppFeedbackFilters({ query: value });
                   }}
                 />
                 <SelectField<AppFeedbackFilter>
@@ -1054,7 +1049,7 @@ export function FeedbackManagementPage() {
                     { value: "bad", label: t("nl2sql.feedback.bad") },
                     { value: "unrated", label: t("feedbackManagement.appFeedback.unrated") },
                   ]}
-                  onValueChange={(rating) => void refreshAppFeedback("", "reset", { rating })}
+                  onValueChange={(rating) => applyAppFeedbackFilters({ rating })}
                   className="min-w-0"
                 />
                 <SelectField
@@ -1067,7 +1062,7 @@ export function FeedbackManagementPage() {
                       .filter((profile) => !profile.archived)
                       .map((profile) => ({ value: profile.id, label: profileDisplayLabel(profile) })),
                   ]}
-                  onValueChange={(profileId) => void refreshAppFeedback("", "reset", { profileId })}
+                  onValueChange={(profileId) => applyAppFeedbackFilters({ profileId })}
                   className="min-w-0"
                 />
               </div>
@@ -1103,26 +1098,15 @@ export function FeedbackManagementPage() {
                   />
                 )}
               </div>
-              <Pagination
-                page={feedbackPage}
-                totalPages={feedbackTotalPages}
-                onPageChange={(nextPage) => {
-                  if (nextPage > feedbackPage && feedbackNextCursor) nextAppFeedbackPage();
-                  if (nextPage < feedbackPage && feedbackCursorStack.length > 0) {
-                    previousAppFeedbackPage();
-                  }
-                }}
-                summary={t("feedbackManagement.appFeedback.pagination.range", {
-                  start: feedbackPageStart,
-                  end: feedbackPageEnd,
-                  total: feedbackTotal,
-                })}
-                pageIndicator={t("feedbackManagement.appFeedback.pagination.page", {
-                  page: feedbackPage,
-                  total: feedbackTotalPages,
-                })}
-                prevLabel={t("feedbackManagement.appFeedback.pagination.prev")}
-                nextLabel={t("feedbackManagement.appFeedback.pagination.next")}
+              <CursorPagination
+                depth={feedbackPages.depth}
+                limit={APP_FEEDBACK_PAGE_SIZE}
+                total={feedbackTotal}
+                count={history.length}
+                nextCursor={feedbackNextCursor}
+                onPrevious={() => void previousAppFeedbackPage()}
+                onNext={(nextCursor) => void nextAppFeedbackPage(nextCursor)}
+                labels={paginationLabels()}
                 ariaLabel={t("feedbackManagement.appFeedback.pagination.label")}
                 testId="app-feedback-pagination"
               />

@@ -31,6 +31,7 @@ from typing import Any, Literal, NoReturn
 
 from charset_normalizer import from_bytes
 from dotenv import dotenv_values
+from pr_backend_core.api import decode_offset_cursor, next_offset_cursor
 from pr_backend_core.observability.request_context import bind_log_context
 from pr_backend_core.oracle_errors import oracle_error_codes
 from pydantic import BaseModel, ValidationError
@@ -76,10 +77,10 @@ from .incremental_store import (
     OracleIncrementalNl2SqlRepository,
     SchemaRefreshExecutionLost,
     VersionedTtlCache,
-    _decode_cursor,
     _profile_matches_query,
     _profile_search_key,
     _state_document_matches_fence,
+    decode_keyset_cursor,
     normalize_profile_sort,
     paginate_sorted_profiles,
 )
@@ -6964,7 +6965,7 @@ class Nl2SqlService:
         sort: str = "name",
         direction: str = "asc",
     ) -> ProfileSummaryPage:
-        _decode_cursor(cursor, 2)
+        decode_keyset_cursor(cursor, 2)
         sort_key, sort_direction = normalize_profile_sort(sort, direction)
         if allowed_profile_ids is not None:
             profiles = [
@@ -7025,7 +7026,7 @@ class Nl2SqlService:
         sort_key: str = "name",
         direction: str = "asc",
     ) -> ProfileSummaryPage:
-        after = _decode_cursor(cursor, 2)
+        after = decode_keyset_cursor(cursor, 2)
         query_key = _profile_search_key(query.strip())
         filtered = [
             profile
@@ -8210,6 +8211,7 @@ class Nl2SqlService:
         actor: str,
         profile_ids: set[str] | None,
         cursor: str | None = None,
+        limit: int = 50,
     ) -> SqlChatPage:
         if not actor:
             raise PermissionError("会話には認証済みの利用者が必要です。")
@@ -8219,7 +8221,7 @@ class Nl2SqlService:
                 documents, next_cursor, _ = repository.list_documents_page(
                     "jobs",
                     cursor=cursor,
-                    limit=50,
+                    limit=limit,
                     profile_ids=profile_ids,
                     payload_filters={"actor_user_uuid": actor, "chat_root": "1"},
                 )
@@ -8246,7 +8248,7 @@ class Nl2SqlService:
                     ),
                     key=lambda job: (job.created_at, job.job_id),
                     reverse=True,
-                )[:50]
+                )[:limit]
             next_cursor = None
         return SqlChatPage(
             items=[self._sql_chat_summary(job) for job in jobs], next_cursor=next_cursor
@@ -8890,18 +8892,6 @@ class Nl2SqlService:
             return self._enhance_sql_analysis_with_llm(data, sql, allowed, catalog=catalog)
         return data
 
-    def _decode_page_cursor(self, cursor: str | None) -> int:
-        if not cursor:
-            return 0
-        try:
-            padded = cursor + "=" * (-len(cursor) % 4)
-            return max(0, int(base64.urlsafe_b64decode(padded).decode("ascii")))
-        except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
-            raise ValueError("cursor が不正です。") from exc
-
-    def _encode_page_cursor(self, offset: int) -> str:
-        return base64.urlsafe_b64encode(str(offset).encode("ascii")).decode("ascii").rstrip("=")
-
     @staticmethod
     def _profile_in_allowed_profile_ids(
         profile_id: str, allowed_profile_ids: set[str] | None
@@ -8921,11 +8911,11 @@ class Nl2SqlService:
         actor_user_uuid: str = "",
         payload_filters: Mapping[str, str] | None = None,
         allowed_profile_ids: set[str] | None = None,
-    ) -> tuple[list[HistoryItem], str, int]:
+    ) -> tuple[list[HistoryItem], str | None, int]:
         if allowed_profile_ids is not None and not allowed_profile_ids:
-            return [], "", 0
+            return [], None, 0
         if profile_id and not self._profile_in_allowed_profile_ids(profile_id, allowed_profile_ids):
-            return [], "", 0
+            return [], None, 0
         filters = {key: value for key, value in (payload_filters or {}).items() if value}
         if actor_user_uuid:
             filters["actor_user_uuid"] = actor_user_uuid
@@ -8954,10 +8944,11 @@ class Nl2SqlService:
                 )
             return (
                 [HistoryItem.model_validate(document) for document in documents],
-                next_cursor or "",
+                next_cursor or None,
                 total,
             )
-        offset = self._decode_page_cursor(cursor)
+        # メモリの read model は offset をカーソルにする（共通の codec。#1266）。
+        offset = decode_offset_cursor(cursor)
         query_key = query.casefold().strip()
         with self._lock:
             items = [
@@ -8974,10 +8965,9 @@ class Nl2SqlService:
             ]
         total = len(items)
         selected = items[offset : offset + limit]
-        next_offset = offset + len(selected)
         return (
             [item.model_copy(deep=True) for item in selected],
-            self._encode_page_cursor(next_offset) if next_offset < total else "",
+            next_offset_cursor(offset=offset, count=len(selected), total=total),
             total,
         )
 
@@ -8997,7 +8987,7 @@ class Nl2SqlService:
                     and self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
                 ]
         items: list[HistoryItem] = []
-        cursor = ""
+        cursor: str | None = None
         while True:
             page, cursor, _total = self._history_page(
                 cursor=cursor or None,
@@ -10199,15 +10189,12 @@ class Nl2SqlService:
                 ).casefold()
             )
         ]
-        offset = self._decode_page_cursor(cursor)
+        offset = decode_offset_cursor(cursor)
         selected = filtered[offset : offset + limit]
-        next_offset = offset + len(selected)
         return ClassifierTrainingCandidatesData(
             items=selected,
             total=len(filtered),
-            next_cursor=(
-                self._encode_page_cursor(next_offset) if next_offset < len(filtered) else ""
-            ),
+            next_cursor=next_offset_cursor(offset=offset, count=len(selected), total=len(filtered)),
             pending_count=pending_count,
             added_count=added_count,
             attention_count=attention_count,
@@ -11591,7 +11578,7 @@ class Nl2SqlService:
                     and self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
                 ]
         indexable: list[HistoryItem] = []
-        cursor = ""
+        cursor: str | None = None
         while True:
             page, cursor, _total = self._history_page(
                 cursor=cursor or None,
@@ -19479,7 +19466,7 @@ class Nl2SqlService:
                 ]
             return items[:_SIMILAR_HISTORY_POOL_LIMIT]
         pool: list[HistoryItem] = []
-        cursor = ""
+        cursor: str | None = None
         page_profile_id = (
             next(iter(profile_scope)) if profile_scope and len(profile_scope) == 1 else ""
         )
