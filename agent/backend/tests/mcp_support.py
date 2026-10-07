@@ -62,6 +62,17 @@ class RagReadSourceIn(_ContractInput):
     max_chars: int = Field(default=8000, ge=1, le=20000)
 
 
+class RagEvidenceRefIn(_ContractInput):
+    document_id: str = Field(min_length=1, max_length=128)
+    chunk_id: str = Field(min_length=1, max_length=512)
+
+
+class RagValidateAnswerIn(_ContractInput):
+    query: str = Field(min_length=1, max_length=8000)
+    answer: str = Field(min_length=1, max_length=20000)
+    evidence: list[RagEvidenceRefIn] = Field(min_length=1, max_length=30)
+
+
 class RagListSearchAnswerProfilesIn(_ContractInput):
     query: str | None = None
     limit: int = Field(default=50, ge=1, le=200)
@@ -197,6 +208,23 @@ DEFAULT_OUTPUTS: dict[str, Any] = {
         "evidence": [{**_EVIDENCE, "used_in_answer": False}],
         "evidence_omitted": 0,
     },
+    # 回答の最終の検証（#1246）。既定は根拠で裏付けられた回答。
+    "rag_validate_answer": {
+        "valid": True,
+        "status": "completed",
+        "counts": {"supported": 1, "unsupported": 0, "contradicted": 0},
+        "claims": [
+            {
+                "answer_quote": "根拠付き回答",
+                "status": "supported",
+                "chunk_id": "chunk-1",
+                "reason": "根拠の契約条項に書かれている。",
+            }
+        ],
+        "missing_evidence": [],
+        "stale_evidence": [],
+        "evidence_truncated": False,
+    },
     "nl2sql_query": _job(),
     "nl2sql_get_job": _job(),
 }
@@ -240,6 +268,7 @@ class FakeProductMcp:
                     self._tool("rag_read_source", RagReadSourceIn),
                     self._tool("rag_lookup_guides", RagLookupGuidesIn),
                     self._tool("rag_retrieve_evidence", RagSearchIn),
+                    self._tool("rag_validate_answer", RagValidateAnswerIn),
                 ],
             ),
             "nl2sql": McpServer(

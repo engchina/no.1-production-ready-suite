@@ -640,6 +640,9 @@ class AgentRuntimeRepositoryContract(Protocol):
     def thread_history(self, run_id: str, *, limit: int) -> list[tuple[str, str]]: ...
     def support_task_context(self, run_id: str) -> tuple[str, JsonObject | None]: ...
     def save_support_task(self, run_id: str, content: JsonObject) -> None: ...
+    def save_builtin_artifact(
+        self, run_id: str, *, kind: str, name: str, content: JsonObject
+    ) -> None: ...
     def list_threads(
         self, *, user_uuid: str | None, agent_id: str | None = None
     ) -> list[ThreadSummary]: ...
@@ -1045,6 +1048,29 @@ class AgentRuntimeRepository:
                 ):
                     return goal, deepcopy(content)
             return goal, None
+
+    def save_builtin_artifact(
+        self, run_id: str, *, kind: str, name: str, content: JsonObject
+    ) -> None:
+        """Control Plane が作る成果物（回答の検証など。#1246）を残す（同じ Run・種類は上書き）。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            if _is_terminal(run.status):
+                return
+            existing = next((item for item in run.artifacts if item.kind == kind), None)
+            if existing is not None:
+                existing.content = deepcopy(content)
+            else:
+                artifact = Artifact(name=name, kind=kind, content=deepcopy(content))
+                run.artifacts.append(artifact)
+                self._append_event(
+                    run,
+                    RunEventType.ARTIFACT_CREATED,
+                    f"{name}を保存しました。",
+                    {"artifact_id": artifact.id, "kind": artifact.kind},
+                )
+            run.updated_at = _now()
+            self._persist_locked()
 
     def save_support_task(self, run_id: str, content: JsonObject) -> None:
         """支援タスクの状態を Run の成果物に残す（同じ Run では 1 つを上書きする。#1243）。"""

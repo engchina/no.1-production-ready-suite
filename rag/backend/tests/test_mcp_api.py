@@ -37,6 +37,7 @@ ALL_TOOLS = [
     "rag_search",
     "rag_lookup_guides",
     "rag_retrieve_evidence",
+    "rag_validate_answer",
     "rag_read_source",
 ]
 
@@ -134,6 +135,7 @@ def test_initialize_and_tools_list_follow_user_permissions(auth: ProductionAuth)
         "rag_search",
         "rag_lookup_guides",
         "rag_retrieve_evidence",
+        "rag_validate_answer",
         "rag_read_source",
     ]
     # チャットは MCP で提供しない（#787）。チャット
